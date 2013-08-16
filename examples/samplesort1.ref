@@ -1,0 +1,8 @@
+null
+true
+false
+10
+10.2
+"hello world"
+[ 200, 300 ]
+{ "key1" : 10, "key2" : [ 20, 30 ] }

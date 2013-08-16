@@ -1,0 +1,1 @@
+[ null, true, false, 10.2, 10, "hello world", { "key1" : 10, "key2" : [ 20, 30 ] } ]
