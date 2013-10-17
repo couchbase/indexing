@@ -1,0 +1,11 @@
+1. How to handle missing value ?
+
+2. Are we going to differentiate between float and integer ?
+
+3. JSON supports integers of arbitrary size ? If so how to do collation on
+   big-integers ?
+
+4. uint64 is converted to float64 and encoded during json collation.
+
+5. Sort order for arrays, should length of array be compared before comparing
+   elements of arrays.
