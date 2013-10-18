@@ -2,14 +2,12 @@ package main
 
 import (
     "fmt"
-    "github.com/prataprc/monster"
-    "github.com/prataprc/golib"
     "github.com/prataprc/collatejson"
+    "github.com/prataprc/golib"
+    "github.com/prataprc/monster"
     "math/rand"
     "time"
 )
-
-var _ = fmt.Sprintf("keep 'fmt' import during debugging");
 
 func main() {
     prodfile, count := "../prods/json.prod", 1000000
@@ -20,7 +18,7 @@ func main() {
     nonterminals, root := monster.Build(start)
     c["_nonterminals"] = nonterminals
     ins, outs := make([]int, 0, count), make([]int, 0, count)
-    for i:=1; i < count; i++ {
+    for i := 1; i < count; i++ {
         c["_random"] = rand.New(rand.NewSource(int64(time.Now().UnixNano())))
         monster.Initialize(c)
         text := root.Generate(c)
@@ -30,7 +28,7 @@ func main() {
     }
     inavg, outavg := 0, 0
     for i := range ins {
-        inavg, outavg = inavg + ins[i], outavg + outs[i]
+        inavg, outavg = inavg+ns[i], outavg+outs[i]
     }
     inavg = inavg / len(ins)
     outavg = outavg / len(outs)

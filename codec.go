@@ -1,25 +1,26 @@
 package collatejson
+
 import (
     "bytes"
     "fmt"
     "strconv"
 )
 
-var _ = fmt.Sprintf("keep 'fmt' import during debugging");
+var _ = fmt.Sprintf("keep 'fmt' import during debugging")
 
 const (
-    PLUS = 43
+    PLUS  = 43
     MINUS = 45
-    LT = 60
-    GT = 62
-    DOT = 46
-    ZERO = 48
+    LT    = 60
+    GT    = 62
+    DOT   = 46
+    ZERO  = 48
 )
 
 var negPrefix = byte(MINUS)
 var posPrefix = byte(GT)
 
-var negIntLookup = map[byte]byte {
+var negIntLookup = map[byte]byte{
     48: 57, // 0 - 9
     49: 56, // 1 - 8
     50: 55, // 2 - 7
@@ -31,13 +32,13 @@ var negIntLookup = map[byte]byte {
     56: 49, // 8 - 1
     57: 48, // 9 - 0
 }
-var prefixOpp = map[byte]byte {
+var prefixOpp = map[byte]byte{
     posPrefix: negPrefix,
     negPrefix: posPrefix,
 }
 
 // encode integer
-func encodeInt(text []byte) []byte{
+func encodeInt(text []byte) []byte {
     var acc [][]byte
     if len(text) == 0 { // empty input
         return []byte{}
@@ -57,28 +58,28 @@ func encodeInt(text []byte) []byte{
     // Handle positive or negative integers
     switch text[0] {
     case PLUS:
-        acc = _encodePosInt(text[1:], make([][]byte, 0, 10))
+        acc = encodePosInt(text[1:], make([][]byte, 0, 10))
     case MINUS:
-        acc = _encodeNegInt(text[1:], make([][]byte, 0, 10))
+        acc = encodeNegInt(text[1:], make([][]byte, 0, 10))
     default:
-        acc = _encodePosInt(text, make([][]byte, 0, 10))
+        acc = encodePosInt(text, make([][]byte, 0, 10))
     }
     return bytes.Join(acc, []byte{})
 }
 
-func _encodePosInt(text []byte, acc [][]byte) [][]byte {
+func encodePosInt(text []byte, acc [][]byte) [][]byte {
     acc = append(acc, []byte{posPrefix})
     if len(text) > 1 {
-        acc = _encodePosInt([]byte(strconv.Itoa(len(text))), acc)
+        acc = encodePosInt([]byte(strconv.Itoa(len(text))), acc)
     }
     acc = append(acc, text)
     return acc
 }
 
-func _encodeNegInt(text []byte, acc [][]byte) [][]byte {
+func encodeNegInt(text []byte, acc [][]byte) [][]byte {
     acc = append(acc, []byte{negPrefix})
     if len(text) > 1 {
-        acc = _encodeNegInt([]byte(strconv.Itoa(len(text))), acc)
+        acc = encodeNegInt([]byte(strconv.Itoa(len(text))), acc)
     }
     invert := make([]byte, 0, len(text))
     for _, x := range text {
@@ -98,7 +99,7 @@ func decodeInt(code []byte) []byte {
             return []byte{sign, ZERO}
         }
     }
-    val, text := _decodeInt(code)
+    val, text := doDecodeInt(code)
     if code[0] == posPrefix {
         return joinBytes([]byte{PLUS}, text[:val])
     } else {
@@ -110,15 +111,15 @@ func decodeInt(code []byte) []byte {
     }
 }
 
-func _decodeInt(code []byte) (int, []byte) {
+func doDecodeInt(code []byte) (int, []byte) {
     var val int
     code = code[1:]
     if code[0] == posPrefix {
-        val, code = _decodeInt(code)
+        val, code = doDecodeInt(code)
         vali, _ := strconv.Atoi(string(code[:val]))
         return vali, code[val:]
     } else if code[0] == negPrefix {
-        val, code = _decodeInt(code)
+        val, code = doDecodeInt(code)
         codeLen := make([]byte, 0, val)
         for _, x := range code[:val] {
             codeLen = append(codeLen, negIntLookup[x])
@@ -130,19 +131,16 @@ func _decodeInt(code []byte) (int, []byte) {
     }
 }
 
-
 // small-decimal conversions
 //
 // Caveats:
 //  -0.0, 0.0 and +0.0 must be filtered out as integer ZERO `0`.
 func encodeSD(text []byte) []byte {
     prefix, text := signPrefix(text)
-    //fmt.Println("sd", string(text))
 
     // Remove decimal point and all zeros before that.
     text = bytes.Split(text, []byte{DOT})[1]
     code := make([]byte, 0, len(text))
-    //fmt.Println("prefix", prefix == negPrefix, prefix, negPrefix)
     if prefix == negPrefix { // Do inversion if negative number
         for _, x := range text {
             code = append(code, negIntLookup[x])
@@ -151,12 +149,12 @@ func encodeSD(text []byte) []byte {
         code = code[:len(text)]
         copy(code, text)
     }
-    return _wrapSmallDec(prefix, code)
+    return wrapSmallDec(prefix, code)
 }
 
 func decodeSD(code []byte) []byte {
     prefix, sign := code[0], prefixSign(code)
-    code = code[1:len(code)-1]
+    code = code[1 : len(code)-1]
     text := make([]byte, 0, len(code))
 
     // If negative number invert the digits.
@@ -167,13 +165,12 @@ func decodeSD(code []byte) []byte {
     } else {
         text = code
     }
-    return joinBytes([]byte{sign,ZERO,DOT}, text)
+    return joinBytes([]byte{sign, ZERO, DOT}, text)
 }
 
-func _wrapSmallDec(prefix byte, code []byte) []byte {
+func wrapSmallDec(prefix byte, code []byte) []byte {
     return joinBytes([]byte{prefix}, code, []byte{prefixOpp[prefix]})
 }
-
 
 // large decimal conversions
 func encodeLD(text []byte) []byte {
@@ -192,7 +189,7 @@ func encodeLD(text []byte) []byte {
     } else {
         codeint = encodeInt(texts[0])
     }
-    codedec := encodeSD(joinBytes([]byte{text[0],ZERO,DOT}, texts[1]))
+    codedec := encodeSD(joinBytes([]byte{text[0], ZERO, DOT}, texts[1]))
     // Adjust the decimal part
     codedec = codedec[1:]
     codedec[len(codedec)-1] = prefixOpp[prefix]
@@ -201,11 +198,11 @@ func encodeLD(text []byte) []byte {
 
 func decodeLD(code []byte) []byte {
     prefix, sign := code[0], prefixSign(code)
-    val, code := _decodeInt(code)
+    val, code := doDecodeInt(code)
     textint := make([]byte, 0, len(code))
 
     // If negative number invert the digits.
-    if  sign == MINUS {
+    if sign == MINUS {
         for i := 0; i < val; i++ {
             textint = append(textint, negIntLookup[code[i]])
         }
@@ -231,15 +228,13 @@ func encodeFloat(exp []byte, mantissa []byte) []byte {
 
 func decodeFloat(code []byte) ([]byte, []byte) {
     sign := prefixSign(code)
-    val, code := _decodeInt(code[1:])
+    val, code := doDecodeInt(code[1:])
     textint := joinBytes([]byte{prefixSign(code[1:])}, code[:val])
     textdec := decodeSD(joinBytes([]byte{sign}, code[val:]))
     return textint, textdec
 }
 
-
 func signPrefix(text []byte) (byte, []byte) {
-    //fmt.Println("sing", string(text))
     switch text[0] {
     case PLUS:
         return posPrefix, text[1:]

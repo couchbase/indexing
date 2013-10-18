@@ -1,19 +1,10 @@
 package collatejson
+
 import (
-    "testing"
-    "fmt"
-    "os"
     "bufio"
+    "os"
+    "testing"
 )
-
-var _ = fmt.Sprintln("Dummy statement to use fmt")
-
-var sortable_files = []string {
-    "./examples/samplesort1",
-    "./examples/samplesort2",
-    "./examples/samplesort3",
-    "./examples/empty",
-}
 
 func TestParse(t *testing.T) {
     Parse(json1)
@@ -26,13 +17,17 @@ func BenchmarkParse(b *testing.B) {
 }
 
 //---- Local functions
-func readlines( filename string ) [][]byte {
-    var lines = make( [][]byte, 0 )
-    fd, _ := os.Open(filename)
-    defer func(){ fd.Close() }()
+func readlines(filename string) [][]byte {
+    var lines = make([][]byte, 0)
+    var fd *os.File
+    var err error
+    if fd, err = os.Open(filename); err != nil {
+        panic(err)
+    }
+    defer func() { fd.Close() }()
     scanner := bufio.NewScanner(fd)
     for scanner.Scan() {
-        lines = append( lines, scanner.Bytes() )
+        lines = append(lines, scanner.Bytes())
     }
     return lines
 }

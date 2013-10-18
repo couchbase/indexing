@@ -1,20 +1,19 @@
 package main
 
 import (
-    "time"
-    "flag"
-    "sort"
     "bytes"
+    "flag"
     "fmt"
-    "os"
-    "io/ioutil"
-    "runtime/pprof"
     "github.com/prataprc/collatejson"
+    "io/ioutil"
+    "os"
+    "runtime/pprof"
+    "sort"
+    "time"
 )
 
 var json = []byte(
-
-`{ "inelegant":27.53096820876087,
+    `{ "inelegant":27.53096820876087,
 "horridness":true,
 "iridodesis":[79.1253026404128,null],
 "arrogantness":null,
@@ -22,7 +21,7 @@ var json = []byte(
 }`)
 
 type Code struct {
-    off int
+    off  int
     code []byte
 }
 type Codes []Code
@@ -42,11 +41,7 @@ func (codes Codes) Swap(i, j int) {
 func main() {
     flag.Parse()
     what := flag.Args()[0]
-    if what == "profile" {
-        profile()
-    } else {
-        sortFile(what)
-    }
+    sortFile(what)
 }
 
 func sortFile(filename string) {
@@ -62,37 +57,10 @@ func sortFile(filename string) {
     sort.Sort(codes)
     for _, code := range codes {
         fmt.Println(string(texts[code.off]))
-        //fmt.Printf("%q\n", string(code.code))
     }
 }
 
 func lines(content []byte) [][]byte {
-    ls := make([][]byte, 0, 10)
-    start := 0
-    for i := 0; i < len(content); {
-        if content[i] == 10 {
-            ls = append(ls, content[start:i])
-            i++
-            start = i
-        } else {
-            i++
-        }
-    }
-    return ls
-}
-
-func profile() {
-    cpuproffile := "cpuprof"
-    os.Remove(cpuproffile)
-    cpuproffd, _ := os.Create(cpuproffile)
-    pprof.StartCPUProfile(cpuproffd)
-    defer pprof.StopCPUProfile()
-
-    count := int64(1000000)
-    t1 := time.Now().UnixNano()
-    for i := int64(0); i < count; i++ {
-        collatejson.Parse(json)
-    }
-    t2 := time.Now().UnixNano()
-    fmt.Printf("Time taken : %vns \n", (t2 - t1)/count)
+    content = bytes.Trim(content, "\r\n")
+    return bytes.Split(content, []byte("\n"))
 }

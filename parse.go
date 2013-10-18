@@ -1,8 +1,12 @@
+// parse.go is purely experimental stuff, wanted to see performance of JSON
+// parsing using parsec.
+
 package collatejson
+
 import (
     "fmt"
-    "io/ioutil"
     "github.com/prataprc/golib/parsec"
+    "io/ioutil"
 )
 
 type PropertyNode struct {
@@ -12,11 +16,14 @@ type PropertyNode struct {
 
 var _ = fmt.Sprintln("Dummy statement to use fmt")
 
-var EMPTY = parsec.Terminal{Name: "EMPTY", Value:""}
+var EMPTY = parsec.Terminal{Name: "EMPTY", Value: ""}
 
 func ParseFile(filename string) parsec.ParsecNode {
-    text, _ := ioutil.ReadFile(filename)
-    return Parse(text)
+    if text, err := ioutil.ReadFile(filename); err != nil {
+        panic(err.Error())
+    } else {
+        return Parse(text)
+    }
 }
 
 func Parse(text []byte) parsec.ParsecNode {
@@ -59,8 +66,8 @@ func object(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
 func properties(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
     nodify := func(ns []parsec.ParsecNode) parsec.ParsecNode {
         // Bubble sort properties based on property name.
-        for i:=0; i < len(ns)-1; i++ {
-            for j:=0; j < len(ns)-i-1; j++ {
+        for i := 0; i < len(ns)-1; i++ {
+            for j := 0; j < len(ns)-i-1; j++ {
                 x := ns[j].(*PropertyNode).propname
                 y := ns[j+1].(*PropertyNode).propname
                 if x <= y {
@@ -69,7 +76,7 @@ func properties(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
                 ns[j+1], ns[j] = ns[j], ns[j+1]
             }
         }
-        return &parsec.NonTerminal{Name: "PROPERTIES", Children:ns}
+        return &parsec.NonTerminal{Name: "PROPERTIES", Children: ns}
     }
     return parsec.Many(nodify, property, comma)(s)
 }
@@ -121,14 +128,14 @@ var closeparan = parsec.Token(`^\}`, "CLOSEPARAN")
 func Repr(tok parsec.ParsecNode, prefix string) string {
     if term, ok := tok.(*parsec.Terminal); ok {
         return fmt.Sprintf(prefix) +
-               fmt.Sprintf("%v : %v ", term.Name, term.Value)
+            fmt.Sprintf("%v : %v ", term.Name, term.Value)
     } else if propterm, ok := tok.(*PropertyNode); ok {
         return fmt.Sprintf(prefix) +
-               fmt.Sprintf("property : %v \n", propterm.propname)
+            fmt.Sprintf("property : %v \n", propterm.propname)
     } else {
         nonterm, _ := tok.(*parsec.NonTerminal)
         return fmt.Sprintf(prefix) +
-               fmt.Sprintf("%v : %v \n", nonterm.Name, nonterm.Value)
+            fmt.Sprintf("%v : %v \n", nonterm.Name, nonterm.Value)
     }
     panic("invalid parsecNode")
 }
@@ -138,11 +145,11 @@ func Show(tok parsec.ParsecNode, prefix string) {
         fmt.Println(Repr(term, prefix))
     } else if propterm, ok := tok.(*PropertyNode); ok {
         fmt.Printf("%v", Repr(propterm, prefix))
-        Show(propterm.ParsecNode, prefix + "  ")
+        Show(propterm.ParsecNode, prefix+"  ")
     } else if nonterm, ok := tok.(*parsec.NonTerminal); ok {
         fmt.Printf("%v", Repr(nonterm, prefix))
         for _, tok := range nonterm.Children {
-            Show(tok, prefix + "  ")
+            Show(tok, prefix+"  ")
         }
     }
 }

@@ -6,10 +6,8 @@ import (
     "testing"
 )
 
-var _ = fmt.Sprintf("keep 'fmt' import during debugging");
-
 var json1 = []byte(
-`{ "inelegant":27.53096820876087,
+    `{ "inelegant":27.53096820876087,
 "horridness":true,
 "iridodesis":[79.1253026404128,null],
 "arrogantness":null,
@@ -19,18 +17,18 @@ var json1 = []byte(
 func TestEncode(t *testing.T) {
     code := Encode(json1)
     ref := `\a` +
-           `>5\x05arrogantness\x01` +
-           `\x05horridness\x03` +
-           `\x05inelegant\x04>>22753096820876087-` +
-           `\x05iridodesis\x06` +
-             `>2\x04>>2791253026404128-` +
-             `\x01` +
-           `\x05unagrarian\x02`
+        `>5\x05arrogantness\x01` +
+        `\x05horridness\x03` +
+        `\x05inelegant\x04>>22753096820876087-` +
+        `\x05iridodesis\x06` +
+        `>2\x04>>2791253026404128-` +
+        `\x01` +
+        `\x05unagrarian\x02`
 
     out := fmt.Sprintf("%q", code)
-    out = out[1:len(out)-1]
+    out = out[1 : len(out)-1]
     if out != ref {
-        t.Fail()
+        t.Error("Encode fails, did you change the encoding format ?")
     }
 }
 

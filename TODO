@@ -9,3 +9,6 @@
 
 5. Sort order for arrays, should length of array be compared before comparing
    elements of arrays.
+
+6. In parse.go, using the parser combinator for builtin json parsing, use
+   built in sort instead of a dumb bubble sort.

@@ -1,17 +1,13 @@
 package collatejson
 
 import (
-    "fmt"
     "testing"
-    "math/rand"
 )
-
-var _ = fmt.Sprintf("keep 'fmt' import during debugging");
 
 // TODO:
 //  - add test cases for floating point encoding and decoding.
 
-func Test_integer(t *testing.T) {
+func TestInteger(t *testing.T) {
     var samples = []string{
         "+7",
         "+123",
@@ -25,19 +21,18 @@ func Test_integer(t *testing.T) {
     for _, sample := range samples {
         sampleE := string(decodeInt(encodeInt([]byte(sample))))
         if sampleE != sample {
-            fmt.Println("codec Int failed for", sample, sampleE)
-            t.Fail()
+            t.Error("codec Int failed for", sample, sampleE)
         }
     }
     if string(decodeInt(encodeInt([]byte("-0")))) != "0" {
-        t.Fail()
+        t.Error("codec fails on `-0`")
     }
     if string(decodeInt(encodeInt([]byte("+0")))) != "0" {
-        t.Fail()
+        t.Error("codec fails on `+0`")
     }
 }
 
-func Test_smallDecimal(t *testing.T) {
+func TestSmallDecimal(t *testing.T) {
     var samples = []string{
         "-0.9995",
         "-0.999",
@@ -55,22 +50,21 @@ func Test_smallDecimal(t *testing.T) {
     for _, sample := range samples {
         sampleE := string(decodeSD(encodeSD([]byte(sample))))
         if sampleE != sample {
-            fmt.Println("code small decimal failed for", sample, sampleE)
-            t.Fail()
+            t.Error("code small decimal failed for", sample, sampleE)
         }
     }
     if string(decodeSD(encodeSD([]byte("+.9995")))) != "+0.9995" {
-        t.Fail()
+        t.Error("codec fails on `+.9995`")
     }
     if string(decodeSD(encodeSD([]byte(".9995")))) != "+0.9995" {
-        t.Fail()
+        t.Error("codec fails on `.9995`")
     }
     if string(decodeSD(encodeSD([]byte("-.9995")))) != "-0.9995" {
-        t.Fail()
+        t.Error("codec fails on `-.9995`")
     }
 }
 
-func Test_largeDecimal(t *testing.T) {
+func TestLargeDecimal(t *testing.T) {
     var samples = []string{
         "-100.5",
         "-10.5",
@@ -86,13 +80,12 @@ func Test_largeDecimal(t *testing.T) {
     for _, sample := range samples {
         sampleE := string(decodeLD(encodeLD([]byte(sample))))
         if sampleE != sample {
-            fmt.Println("code large decimal failed for", sample, sampleE)
-            t.Fail()
+            t.Error("code large decimal failed for", sample, sampleE)
         }
     }
 }
 
-func Benchmark_encodeInt(b *testing.B) {
+func BenchmarkEncodeInt(b *testing.B) {
     var samples = [][]byte{
         []byte("+7"),
         []byte("+123"),
@@ -103,14 +96,14 @@ func Benchmark_encodeInt(b *testing.B) {
         []byte("0"),
         []byte("0"),
     }
+    ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        k := rand.Intn(len(samples))
-        encodeInt([]byte(samples[k]))
+        encodeInt([]byte(samples[i%ln]))
     }
 }
 
-func Benchmark_decodeInt(b *testing.B) {
+func BenchmarkDecodeInt(b *testing.B) {
     var samples = [][]byte{
         encodeInt([]byte("+7")),
         encodeInt([]byte("+123")),
@@ -121,14 +114,14 @@ func Benchmark_decodeInt(b *testing.B) {
         encodeInt([]byte("0")),
         encodeInt([]byte("0")),
     }
+    ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        k := rand.Intn(len(samples))
-        decodeInt(samples[k])
+        decodeInt(samples[i%ln])
     }
 }
 
-func Benchmark_encodeSD(b *testing.B) {
+func BenchmarkDncodeSD(b *testing.B) {
     var samples = [][]byte{
         []byte("-0.9995"),
         []byte("-0.999"),
@@ -143,14 +136,14 @@ func Benchmark_encodeSD(b *testing.B) {
         []byte("+0.999"),
         []byte("+0.9995"),
     }
+    ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        k := rand.Intn(len(samples))
-        encodeSD(samples[k])
+        encodeSD(samples[i%ln])
     }
 }
 
-func Benchmark_decodeSD(b *testing.B) {
+func BenchmarkDecodeSD(b *testing.B) {
     var samples = [][]byte{
         encodeSD([]byte("-0.9995")),
         encodeSD([]byte("-0.999")),
@@ -165,14 +158,14 @@ func Benchmark_decodeSD(b *testing.B) {
         encodeSD([]byte("+0.999")),
         encodeSD([]byte("+0.9995")),
     }
+    ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        k := rand.Intn(len(samples))
-        decodeSD(samples[k])
+        decodeSD(samples[i%ln])
     }
 }
 
-func Benchmark_encodeLD(b *testing.B) {
+func BenchmarkEncodeLD(b *testing.B) {
     var samples = [][]byte{
         []byte("-100.5"),
         []byte("-10.5"),
@@ -185,15 +178,15 @@ func Benchmark_encodeLD(b *testing.B) {
         []byte("+10.5"),
         []byte("+100.5"),
     }
+    ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        k := rand.Intn(len(samples))
-        encodeLD(samples[k])
+        encodeLD(samples[i%ln])
     }
 }
 
-func Benchmark_decodeLD(b *testing.B) {
-    var samples = [][]byte {
+func BenchmarkDecodeLD(b *testing.B) {
+    var samples = [][]byte{
         encodeLD([]byte("-100.5")),
         encodeLD([]byte("-10.5")),
         encodeLD([]byte("-3.145")),
@@ -205,9 +198,9 @@ func Benchmark_decodeLD(b *testing.B) {
         encodeLD([]byte("+10.5")),
         encodeLD([]byte("+100.5")),
     }
+    ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        k := rand.Intn(len(samples))
-        decodeLD(samples[k])
+        decodeLD(samples[i%ln])
     }
 }
