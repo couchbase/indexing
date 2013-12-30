@@ -1,21 +1,21 @@
-1. How to handle missing value ?
+* How to handle missing value ?
 
-2. Are we going to differentiate between float and integer ?
+* Are we going to differentiate between float and integer ?
+  Looks like dparval is parsing input json's number type as all float values.
 
-3. JSON supports integers of arbitrary size ? If so how to do collation on
-   big-integers ?
+* JSON supports integers of arbitrary size ? If so how to do collation on
+  big-integers ?
+  Even big-integers are parsed are returned as float by dparval.
 
-4. uint64 is converted to float64 and encoded during json collation.
+* Sort order for arrays, should length of array be compared before comparing
+  elements of arrays.
 
-5. Sort order for arrays, should length of array be compared before comparing
-   elements of arrays.
+* Encoding and decoding of utf8 strings.
 
-6. Encoding and decoding of utf8 strings.
+* In parse.go, using the parser combinator for builtin json parsing, use
+  built in sort instead of a dumb bubble sort.
 
-7. In parse.go, using the parser combinator for builtin json parsing, use
-   built in sort instead of a dumb bubble sort.
+* Remove CollateJSON code and create a dependancy on tuqtng
 
-8. Remove CollateJSON code and create a dependancy on tuqtng
-
-9. Write bench marks cases for worst case and best case endcoding and decoding
+* Write bench marks cases for worst case and best case endcoding and decoding
   for integer and float.
