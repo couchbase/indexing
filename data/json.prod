@@ -1,4 +1,5 @@
-json : "{" properties "}".
+json : "{" properties "}"
+     | value.
 
 properties : properties "," property {10}
            | property.
