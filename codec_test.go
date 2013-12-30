@@ -2,87 +2,178 @@ package collatejson
 
 import (
     "testing"
+    "strconv"
 )
 
 // TODO:
 //  - add test cases for floating point encoding and decoding.
 
 func TestInteger(t *testing.T) {
-    var samples = []string{
-        "+7",
-        "+123",
-        "+1234567890",
-        "-1234567891",
-        "-1234567890",
-        "-1234567889",
-        "0",
-        "0",
+    var samples = [][2]string{
+        {"+7",            ">7"},
+        {"+123",          ">>3123"},
+        {"+1234567890",   ">>>2101234567890"},
+        {"-10",           "--789"},
+        {"-11",           "--788"},
+        {"-1234567891",   "---7898765432108"},
+        {"-1234567890",   "---7898765432109"},
+        {"-1234567889",   "---7898765432110"},
+        {"0",             "0"},
+        {"+0",            "0"},
+        {"-0",            "0"},
     }
-    for _, sample := range samples {
-        sampleE := string(decodeInt(encodeInt([]byte(sample))))
-        if sampleE != sample {
-            t.Error("codec Int failed for", sample, sampleE)
+    for _, tcase := range samples {
+        sample, ref := tcase[0], tcase[1]
+        out := string(EncodeInt([]byte(sample)))
+        if out != ref {
+            t.Error("integer encode failed for:", sample, out, ref)
         }
-    }
-    if string(decodeInt(encodeInt([]byte("-0")))) != "0" {
-        t.Error("codec fails on `-0`")
-    }
-    if string(decodeInt(encodeInt([]byte("+0")))) != "0" {
-        t.Error("codec fails on `+0`")
+        out = string(DecodeInt(EncodeInt([]byte(sample))))
+        if atoi(out, t) != atoi(sample, t) {
+            t.Error("integer decode failed for:", sample, out)
+        }
     }
 }
 
+func atoi(text string, t *testing.T) int {
+    if val, err := strconv.Atoi(text); err == nil {
+        return val
+    }
+    t.Error("atoi: Unable to convert", text)
+    return 0
+}
+
+func atof(text string, t *testing.T) float64 {
+    if val, err := strconv.ParseFloat(text, 64); err == nil {
+        return val
+    }
+    t.Error("atof: Unable to convert", text)
+    return 0.0
+}
+
 func TestSmallDecimal(t *testing.T) {
-    var samples = []string{
-        "-0.9995",
-        "-0.999",
-        "-0.0123",
-        "-0.00123",
-        "-0.0001233",
-        "-0.000123",
-        "+0.000123",
-        "+0.0001233",
-        "+0.00123",
-        "+0.0123",
-        "+0.999",
-        "+0.9995",
+    var samples = [][2]string{
+        {"-0.9995",      "-0004>"},
+        {"-0.999",       "-000>"},
+        {"-0.0123",      "-9876>"},
+        {"-0.00123",     "-99876>"},
+        {"-0.0001233",   "-9998766>"},
+        {"-0.000123",    "-999876>"},
+        {"+0.000123",    ">000123-"},
+        {"+0.0001233",   ">0001233-"},
+        {"+0.00123",     ">00123-"},
+        {"+0.0123",      ">0123-"},
+        {"+0.999",       ">999-"},
+        {"+0.9995",      ">9995-"},
     }
-    for _, sample := range samples {
-        sampleE := string(decodeSD(encodeSD([]byte(sample))))
-        if sampleE != sample {
-            t.Error("code small decimal failed for", sample, sampleE)
+    for _, tcase := range samples {
+        sample, ref := tcase[0], tcase[1]
+        out := string(EncodeSD([]byte(sample)))
+        if out != ref {
+            t.Error("small decimal encode failed:", sample, out, ref)
         }
-    }
-    if string(decodeSD(encodeSD([]byte("+.9995")))) != "+0.9995" {
-        t.Error("codec fails on `+.9995`")
-    }
-    if string(decodeSD(encodeSD([]byte(".9995")))) != "+0.9995" {
-        t.Error("codec fails on `.9995`")
-    }
-    if string(decodeSD(encodeSD([]byte("-.9995")))) != "-0.9995" {
-        t.Error("codec fails on `-.9995`")
+        out = string(DecodeSD(EncodeSD([]byte(sample))))
+        if atof(out, t) != atof(sample, t) {
+            t.Error("small decimal decode failed:", sample, out)
+        }
     }
 }
 
 func TestLargeDecimal(t *testing.T) {
-    var samples = []string{
-        "-100.5",
-        "-10.5",
-        "-3.145",
-        "-3.14",
-        "-1.01",
-        "+1.01",
-        "+3.14",
-        "+3.145",
-        "+10.5",
-        "+100.5",
+    var samples = [][2]string{
+        {"-100.5",         "--68994>"},
+        {"-10.5",          "--7894>"},
+        {"-3.145",         "-6854>"},
+        {"-3.14",          "-685>"},
+        {"-1.01",          "-898>"},
+        {"-1",             "-89>"},
+        {"+1",             ">1-"},
+        {"+1.01",          ">101-"},
+        {"+3.14",          ">314-"},
+        {"+3.145",         ">3145-"},
+        {"+10.5",          ">>2105-"},
+        {"+100.5",         ">>31005-"},
     }
-    for _, sample := range samples {
-        sampleE := string(decodeLD(encodeLD([]byte(sample))))
-        if sampleE != sample {
-            t.Error("code large decimal failed for", sample, sampleE)
+    for _, tcase := range samples {
+        sample, ref := tcase[0], tcase[1]
+        out := string(EncodeLD([]byte(sample)))
+        if out != ref {
+            t.Error("small decimal encode failed:", sample, out, ref)
+        }
+        out = string(DecodeLD(EncodeLD([]byte(sample))))
+        if atof(out, t) != atof(sample, t) {
+            t.Error("small decimal decode failed:", sample, out)
         }
     }
+}
+
+func TestFloat(t *testing.T) {
+    var samples = [][2]string{
+        {"-10000000000.0",  "---7888>"},
+        {"-1000000000.0",   "---7898>"},
+        {"-1.4",            "--885>"},
+        {"-1.3",            "--886>"},
+        {"-1",              "--88>"},
+        {"-0.123",          "-0876>"},
+        {"-0.0123",         "->1876>"},
+        {"-0.001233",       "->28766>"},
+        {"-0.00123",        "->2876>"},
+        {"0",               "0"},
+        {"+0.00123",        ">-7123-"},
+        {"+0.001233",       ">-71233-"},
+        {"+0.0123",         ">-8123-"},
+        {"+0.123",          ">0123-"},
+        {"+1",              ">>11-"},
+        {"+1.3",            ">>113-"},
+        {"+1.4",            ">>114-"},
+        {"+1000000000.0",   ">>>2101-"},
+        {"+10000000000.0",  ">>>2111-"},
+    }
+    for _, tcase := range samples {
+        sample, ref := tcase[0], tcase[1]
+        f, _ := strconv.ParseFloat(sample, 64)
+        sampleF := strconv.FormatFloat(f, 'e', -1, 64)
+        out := string(EncodeFloat([]byte(sampleF)))
+        if out != ref {
+            t.Error("float encode failed:", sample, out, ref)
+        }
+        out = string(DecodeFloat(EncodeFloat([]byte(sampleF))))
+        if atof(out, t) != atof(sample, t) {
+            t.Error("float decode failed:", sample, out)
+        }
+    }
+}
+
+func BenchmarkEncodeInt0(b *testing.B) {
+    bEncodeInt(b, "0")
+}
+
+func BenchmarkEncodeInt7(b *testing.B) {
+    bEncodeInt(b, "+7")
+}
+
+func BenchmarkEncodeInt1234567890(b *testing.B) {
+    bEncodeInt(b, "+1234567890")
+}
+
+func BenchmarkEncodeInt1234567890Neg(b *testing.B) {
+    bEncodeInt(b, "-1234567890")
+}
+
+func BenchmarkDecodeInt0(b *testing.B) {
+    bDecodeInt(b, "0")
+}
+
+func BenchmarkDecodeInt7(b *testing.B) {
+    bDecodeInt(b, ">7")
+}
+
+func BenchmarkDecodeInt1234567890(b *testing.B) {
+    bDecodeInt(b, ">>>2101234567890")
+}
+
+func BenchmarkDecodeInt1234567891Neg(b *testing.B) {
+    bDecodeInt(b, "---7898765432108")
 }
 
 func BenchmarkEncodeInt(b *testing.B) {
@@ -99,25 +190,25 @@ func BenchmarkEncodeInt(b *testing.B) {
     ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        encodeInt([]byte(samples[i%ln]))
+        EncodeInt([]byte(samples[i%ln]))
     }
 }
 
 func BenchmarkDecodeInt(b *testing.B) {
     var samples = [][]byte{
-        encodeInt([]byte("+7")),
-        encodeInt([]byte("+123")),
-        encodeInt([]byte("+1234567890")),
-        encodeInt([]byte("-1234567891")),
-        encodeInt([]byte("-1234567890")),
-        encodeInt([]byte("-1234567889")),
-        encodeInt([]byte("0")),
-        encodeInt([]byte("0")),
+        EncodeInt([]byte("+7")),
+        EncodeInt([]byte("+123")),
+        EncodeInt([]byte("+1234567890")),
+        EncodeInt([]byte("-1234567891")),
+        EncodeInt([]byte("-1234567890")),
+        EncodeInt([]byte("-1234567889")),
+        EncodeInt([]byte("0")),
+        EncodeInt([]byte("0")),
     }
     ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        decodeInt(samples[i%ln])
+        DecodeInt(samples[i%ln])
     }
 }
 
@@ -139,29 +230,29 @@ func BenchmarkDncodeSD(b *testing.B) {
     ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        encodeSD(samples[i%ln])
+        EncodeSD(samples[i%ln])
     }
 }
 
 func BenchmarkDecodeSD(b *testing.B) {
     var samples = [][]byte{
-        encodeSD([]byte("-0.9995")),
-        encodeSD([]byte("-0.999")),
-        encodeSD([]byte("-0.0123")),
-        encodeSD([]byte("-0.00123")),
-        encodeSD([]byte("-0.0001233")),
-        encodeSD([]byte("-0.000123")),
-        encodeSD([]byte("+0.000123")),
-        encodeSD([]byte("+0.0001233")),
-        encodeSD([]byte("+0.00123")),
-        encodeSD([]byte("+0.0123")),
-        encodeSD([]byte("+0.999")),
-        encodeSD([]byte("+0.9995")),
+        EncodeSD([]byte("-0.9995")),
+        EncodeSD([]byte("-0.999")),
+        EncodeSD([]byte("-0.0123")),
+        EncodeSD([]byte("-0.00123")),
+        EncodeSD([]byte("-0.0001233")),
+        EncodeSD([]byte("-0.000123")),
+        EncodeSD([]byte("+0.000123")),
+        EncodeSD([]byte("+0.0001233")),
+        EncodeSD([]byte("+0.00123")),
+        EncodeSD([]byte("+0.0123")),
+        EncodeSD([]byte("+0.999")),
+        EncodeSD([]byte("+0.9995")),
     }
     ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        decodeSD(samples[i%ln])
+        DecodeSD(samples[i%ln])
     }
 }
 
@@ -181,26 +272,107 @@ func BenchmarkEncodeLD(b *testing.B) {
     ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        encodeLD(samples[i%ln])
+        EncodeLD(samples[i%ln])
     }
 }
 
 func BenchmarkDecodeLD(b *testing.B) {
     var samples = [][]byte{
-        encodeLD([]byte("-100.5")),
-        encodeLD([]byte("-10.5")),
-        encodeLD([]byte("-3.145")),
-        encodeLD([]byte("-3.14")),
-        encodeLD([]byte("-1.01")),
-        encodeLD([]byte("+1.01")),
-        encodeLD([]byte("+3.14")),
-        encodeLD([]byte("+3.145")),
-        encodeLD([]byte("+10.5")),
-        encodeLD([]byte("+100.5")),
+        EncodeLD([]byte("-100.5")),
+        EncodeLD([]byte("-10.5")),
+        EncodeLD([]byte("-3.145")),
+        EncodeLD([]byte("-3.14")),
+        EncodeLD([]byte("-1.01")),
+        EncodeLD([]byte("+1.01")),
+        EncodeLD([]byte("+3.14")),
+        EncodeLD([]byte("+3.145")),
+        EncodeLD([]byte("+10.5")),
+        EncodeLD([]byte("+100.5")),
     }
     ln := len(samples)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        decodeLD(samples[i%ln])
+        DecodeLD(samples[i%ln])
     }
 }
+
+func BenchmarkEncodeFloat(b *testing.B) {
+    var samples = [][]byte{
+        []byte("-10000000000.0"),
+        []byte("-1000000000.0"),
+        []byte("-1.4"),
+        []byte("-1.3"),
+        []byte("-1"),
+        []byte("-0.123"),
+        []byte("-0.0123"),
+        []byte("-0.001233"),
+        []byte("-0.00123"),
+        []byte("0"),
+        []byte("+0.00123"),
+        []byte("+0.001233"),
+        []byte("+0.0123"),
+        []byte("+0.123"),
+        []byte("+1"),
+        []byte("+1.3"),
+        []byte("+1.4"),
+        []byte("+1000000000.0"),
+        []byte("+10000000000.0"),
+    }
+    ln := len(samples)
+    for i := 0; i < ln; i++ {
+        f, _ := strconv.ParseFloat(string(samples[i]), 64)
+        samples[i] = []byte(strconv.FormatFloat(f, 'e', -1, 64))
+    }
+    b.ResetTimer()
+    for i := 0; i < b.N; i++ {
+        EncodeFloat(samples[i%ln])
+    }
+}
+
+func BenchmarkDecodeFloat(b *testing.B) {
+    var samples = [][]byte{
+        []byte("-10000000000.0"),
+        []byte("-1000000000.0"),
+        []byte("-1.4"),
+        []byte("-1.3"),
+        []byte("-1"),
+        []byte("-0.123"),
+        []byte("-0.0123"),
+        []byte("-0.001233"),
+        []byte("-0.00123"),
+        []byte("0"),
+        []byte("+0.00123"),
+        []byte("+0.001233"),
+        []byte("+0.0123"),
+        []byte("+0.123"),
+        []byte("+1"),
+        []byte("+1.3"),
+        []byte("+1.4"),
+        []byte("+1000000000.0"),
+        []byte("+10000000000.0"),
+    }
+    ln := len(samples)
+    for i := 0; i < ln; i++ {
+        f, _ := strconv.ParseFloat(string(samples[i]), 64)
+        samples[i] = EncodeFloat([]byte(strconv.FormatFloat(f, 'e', -1, 64)))
+    }
+    b.ResetTimer()
+    for i := 0; i < b.N; i++ {
+        DecodeFloat(samples[i%ln])
+    }
+}
+
+func bEncodeInt(b *testing.B, in string) {
+    inb := []byte(in)
+    for i := 0; i < b.N; i++ {
+        EncodeInt(inb)
+    }
+}
+
+func bDecodeInt(b *testing.B, in string) {
+    inb := []byte(in)
+    for i := 0; i < b.N; i++ {
+        DecodeInt(inb)
+    }
+}
+

@@ -14,8 +14,6 @@ type PropertyNode struct {
     parsec.ParsecNode
 }
 
-var _ = fmt.Sprintln("Dummy statement to use fmt")
-
 var EMPTY = parsec.Terminal{Name: "EMPTY", Value: ""}
 
 func ParseFile(filename string) parsec.ParsecNode {
