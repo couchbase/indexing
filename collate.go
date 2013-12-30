@@ -9,7 +9,8 @@ import (
 )
 
 const (
-    TYPE_MISSING byte = iota
+    TERMINATOR   byte = iota
+    TYPE_MISSING
     TYPE_NULL
     TYPE_FALSE
     TYPE_TRUE
@@ -33,31 +34,33 @@ func Encode(rawjson []byte) []byte {
 func json2code(val interface{}) []byte {
     var code []byte
     if val == nil {
-        return []byte{TYPE_NULL}
+        return []byte{TYPE_NULL, TERMINATOR}
     }
     switch value := val.(type) {
     case bool:
         if !value {
-            return []byte{TYPE_FALSE}
+            code = []byte{TYPE_FALSE}
+        } else {
+            code= []byte{TYPE_TRUE}
         }
-        return []byte{TYPE_TRUE}
+        return append(code, TERMINATOR)
     case float64:
         fvalue := strconv.FormatFloat(value, 'e', -1, 64)
         code = EncodeFloat([]byte(fvalue))
-        return joinBytes([]byte{TYPE_NUMBER}, code)
+        return append(joinBytes([]byte{TYPE_NUMBER}, code), TERMINATOR)
     case int:
-        return EncodeInt([]byte(strconv.Itoa(value)))
+        return append(EncodeInt([]byte(strconv.Itoa(value))), TERMINATOR)
     case uint64:
         return json2code(float64(value))
     case string:
-        return joinBytes([]byte{TYPE_STRING}, []byte(value))
+        return append(joinBytes([]byte{TYPE_STRING}, []byte(value)), TERMINATOR)
     case []interface{}:
         res := make([][]byte, 0)
         res = append(res, []byte{TYPE_ARRAY}, json2code(len(value)))
         for _, val := range value {
             res = append(res, json2code(val))
         }
-        return bytes.Join(res, []byte{})
+        return append(bytes.Join(res, []byte{}), TERMINATOR)
     case map[string]interface{}:
         res := make([][]byte, 0)
         res = append(res, []byte{TYPE_OBJ}, json2code(len(value)))
@@ -66,7 +69,7 @@ func json2code(val interface{}) []byte {
             res = append(
                 res, []byte{TYPE_STRING}, []byte(key), json2code(value[key]))
         }
-        return bytes.Join(res, []byte{})
+        return append(bytes.Join(res, []byte{}), TERMINATOR)
     }
     panic(fmt.Sprintf("collationType doesn't understand %+v of type %T", val, val))
 }

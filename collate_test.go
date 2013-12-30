@@ -16,14 +16,12 @@ var json1 = []byte(
 
 func TestEncode(t *testing.T) {
     code := Encode(json1)
-    ref := `\a` +
-        `>5\x05arrogantness\x01` +
-        `\x05horridness\x03` +
-        `\x05inelegant\x04>>22753096820876087-` +
-        `\x05iridodesis\x06` +
-        `>2\x04>>2791253026404128-` +
-        `\x01` +
-        `\x05unagrarian\x02`
+    ref := `\b` +
+        `>5\x00\x06arrogantness\x02\x00` +
+        `\x06horridness\x04\x00` +
+        `\x06inelegant\x05>>22753096820876087-\x00` +
+        `\x06iridodesis\a>2\x00\x05>>2791253026404128-\x00\x02\x00\x00\x06` +
+        `unagrarian\x03\x00\x00`
 
     out := fmt.Sprintf("%q", code)
     out = out[1 : len(out)-1]
