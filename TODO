@@ -10,5 +10,12 @@
 5. Sort order for arrays, should length of array be compared before comparing
    elements of arrays.
 
-6. In parse.go, using the parser combinator for builtin json parsing, use
+6. Encoding and decoding of utf8 strings.
+
+7. In parse.go, using the parser combinator for builtin json parsing, use
    built in sort instead of a dumb bubble sort.
+
+8. Remove CollateJSON code and create a dependancy on tuqtng
+
+9. Write bench marks cases for worst case and best case endcoding and decoding
+  for integer and float.
