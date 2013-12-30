@@ -19,9 +19,23 @@ type Code struct {
 }
 type Codes []Code
 
-func main() {
+var options struct {
+    lenprefix bool
+}
+
+func argParse() {
+    flag.BoolVar(&options.lenprefix, "lenprefix", false, "Show the ast of production")
     flag.Parse()
-    arg := flag.Args()[0]
+}
+
+func main() {
+    argParse()
+    args := flag.Args()
+    if len(args) < 1 {
+        flag.Usage()
+        os.Exit(64)
+    }
+    arg := args[0]
     if fi, err := os.Stat(arg); err != nil {
         panic(fmt.Errorf("Error stating %v", arg))
     } else if fi.IsDir() {
@@ -67,11 +81,31 @@ func sortFile(filename string) (outs []string) {
     if err != nil {
         panic(err.Error())
     }
+    codec := collatejson.NewCodec()
+    switch options.lenprefix {
+    case true:
+        codec.DoArrayLenPrefix(true)
+        codec.DoPropertyLenPrefix(true)
+        outs = encodeLines(codec, s)
+    case false:
+        codec.DoArrayLenPrefix(false)
+        codec.DoPropertyLenPrefix(false)
+        outs = encodeLines(codec, s)
+    }
+    return
+}
+
+func encodeLines(codec *collatejson.Codec, s []byte) []string {
     texts, codes := lines(s), make(Codes, 0)
     for i, x := range texts {
-        code := collatejson.Encode(x)
+        code := codec.Encode(x)
         codes = append(codes, Code{i, code})
     }
+    outs := doSort(texts, codes)
+    return outs
+}
+
+func doSort(texts [][]byte, codes Codes) (outs []string) {
     sort.Sort(codes)
     for _, code := range codes {
         outs = append(outs, string(texts[code.off]))
