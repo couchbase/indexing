@@ -15,7 +15,8 @@ var json1 = []byte(
 }`)
 
 func TestEncode(t *testing.T) {
-    code := Encode(json1)
+    codec := NewCodec()
+    code := codec.Encode(json1)
     ref := `\b` +
         `>5\x00\x06arrogantness\x02\x00` +
         `\x06horridness\x04\x00` +
@@ -31,13 +32,16 @@ func TestEncode(t *testing.T) {
 }
 
 func BenchmarkEncode(b *testing.B) {
+    codec := NewCodec()
+    b.ResetTimer()
     for i := 0; i < b.N; i++ {
-        Encode(json1)
+        codec.Encode(json1)
     }
 }
 
 func BenchmarkCompare(b *testing.B) {
-    code := Encode(json1)
+    codec := NewCodec()
+    code := codec.Encode(json1)
     b.ResetTimer()
     for i := 0; i < b.N; i++ {
         bytes.Compare(code, code)

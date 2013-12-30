@@ -20,9 +20,29 @@ const (
     TYPE_OBJ
 )
 
-func Encode(rawjson []byte) []byte {
+type Codec struct {
+    arrayLenPrefix    bool
+    propertyLenPrefix bool
+}
+
+func NewCodec() *Codec {
+    return &Codec{
+        arrayLenPrefix: true,
+        propertyLenPrefix: true,
+    }
+}
+
+func (codec *Codec) DoArrayLenPrefix(what bool) {
+    codec.arrayLenPrefix = what
+}
+
+func (codec *Codec) DoPropertyLenPrefix(what bool) {
+    codec.propertyLenPrefix = what
+}
+
+func (codec *Codec) Encode(rawjson []byte) []byte {
     doc := dparval.NewValueFromBytes(rawjson)
-    code := json2code(doc.Value())
+    code := json2code(codec, doc.Value())
     return code
 }
 
@@ -31,7 +51,7 @@ func Encode(rawjson []byte) []byte {
 //    return json
 //}
 
-func json2code(val interface{}) []byte {
+func json2code(codec *Codec, val interface{}) []byte {
     var code []byte
     if val == nil {
         return []byte{TYPE_NULL, TERMINATOR}
@@ -51,23 +71,30 @@ func json2code(val interface{}) []byte {
     case int:
         return append(EncodeInt([]byte(strconv.Itoa(value))), TERMINATOR)
     case uint64:
-        return json2code(float64(value))
+        return json2code(codec, float64(value))
     case string:
         return append(joinBytes([]byte{TYPE_STRING}, []byte(value)), TERMINATOR)
     case []interface{}:
         res := make([][]byte, 0)
-        res = append(res, []byte{TYPE_ARRAY}, json2code(len(value)))
+        res = append(res, []byte{TYPE_ARRAY})
+        if codec.arrayLenPrefix {
+            res = append(res, json2code(codec, len(value)))
+        }
         for _, val := range value {
-            res = append(res, json2code(val))
+            res = append(res, json2code(codec, val))
         }
         return append(bytes.Join(res, []byte{}), TERMINATOR)
     case map[string]interface{}:
         res := make([][]byte, 0)
-        res = append(res, []byte{TYPE_OBJ}, json2code(len(value)))
+        res = append(res, []byte{TYPE_OBJ})
+        if codec.propertyLenPrefix {
+            res = append(res, json2code(codec, len(value)))
+        }
         keys := sortProps(value)
         for _, key := range keys {
             res = append(
-                res, []byte{TYPE_STRING}, []byte(key), json2code(value[key]))
+                res, []byte{TYPE_STRING}, []byte(key),
+                json2code(codec, value[key]))
         }
         return append(bytes.Join(res, []byte{}), TERMINATOR)
     }
