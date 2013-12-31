@@ -212,6 +212,112 @@ func BenchmarkDecodeInt(b *testing.B) {
     }
 }
 
+func BenchmarkEncodeFloat10000000000(b *testing.B) {
+    bEncodeFloat(b, "+10000000000")
+}
+
+func BenchmarkEncodeFloat001233(b *testing.B) {
+    bEncodeFloat(b, "+0.001233")
+}
+
+func BenchmarkEncodeFloat001233Neg(b *testing.B) {
+    bEncodeFloat(b, "-0.001233")
+}
+
+func BenchmarkEncodeFloat1Neg(b *testing.B) {
+    bEncodeFloat(b, "-1")
+}
+
+func BenchmarkEncodeFloat10000000000Neg(b *testing.B) {
+    bEncodeFloat(b, "-10000000000")
+}
+
+func BenchmarkDecodeFloat10000000000(b *testing.B) {
+    bDecodeFloat(b, ">>>2111-")
+}
+
+func BenchmarkDecodeFloat001233(b *testing.B) {
+    bDecodeFloat(b, "->28766>")
+}
+
+func BenchmarkDecodeFloat001233Neg(b *testing.B) {
+    bDecodeFloat(b, "->28766>")
+}
+
+func BenchmarkDecodeFloat1Neg(b *testing.B) {
+    bDecodeFloat(b, "--88>")
+}
+
+func BenchmarkDecodeFloat10000000000Neg(b *testing.B) {
+    bDecodeFloat(b, "---7888>")
+}
+
+func BenchmarkEncodeFloat(b *testing.B) {
+    var samples = [][]byte{
+        []byte("-10000000000.0"),
+        []byte("-1000000000.0"),
+        []byte("-1.4"),
+        []byte("-1.3"),
+        []byte("-1"),
+        []byte("-0.123"),
+        []byte("-0.0123"),
+        []byte("-0.001233"),
+        []byte("-0.00123"),
+        []byte("0"),
+        []byte("+0.00123"),
+        []byte("+0.001233"),
+        []byte("+0.0123"),
+        []byte("+0.123"),
+        []byte("+1"),
+        []byte("+1.3"),
+        []byte("+1.4"),
+        []byte("+1000000000.0"),
+        []byte("+10000000000.0"),
+    }
+    ln := len(samples)
+    for i := 0; i < ln; i++ {
+        f, _ := strconv.ParseFloat(string(samples[i]), 64)
+        samples[i] = []byte(strconv.FormatFloat(f, 'e', -1, 64))
+    }
+    b.ResetTimer()
+    for i := 0; i < b.N; i++ {
+        EncodeFloat(samples[i%ln])
+    }
+}
+
+func BenchmarkDecodeFloat(b *testing.B) {
+    var samples = [][]byte{
+        []byte("-10000000000.0"),
+        []byte("-1000000000.0"),
+        []byte("-1.4"),
+        []byte("-1.3"),
+        []byte("-1"),
+        []byte("-0.123"),
+        []byte("-0.0123"),
+        []byte("-0.001233"),
+        []byte("-0.00123"),
+        []byte("0"),
+        []byte("+0.00123"),
+        []byte("+0.001233"),
+        []byte("+0.0123"),
+        []byte("+0.123"),
+        []byte("+1"),
+        []byte("+1.3"),
+        []byte("+1.4"),
+        []byte("+1000000000.0"),
+        []byte("+10000000000.0"),
+    }
+    ln := len(samples)
+    for i := 0; i < ln; i++ {
+        f, _ := strconv.ParseFloat(string(samples[i]), 64)
+        samples[i] = EncodeFloat([]byte(strconv.FormatFloat(f, 'e', -1, 64)))
+    }
+    b.ResetTimer()
+    for i := 0; i < b.N; i++ {
+        DecodeFloat(samples[i%ln])
+    }
+}
+
 func BenchmarkDncodeSD(b *testing.B) {
     var samples = [][]byte{
         []byte("-0.9995"),
@@ -296,72 +402,6 @@ func BenchmarkDecodeLD(b *testing.B) {
     }
 }
 
-func BenchmarkEncodeFloat(b *testing.B) {
-    var samples = [][]byte{
-        []byte("-10000000000.0"),
-        []byte("-1000000000.0"),
-        []byte("-1.4"),
-        []byte("-1.3"),
-        []byte("-1"),
-        []byte("-0.123"),
-        []byte("-0.0123"),
-        []byte("-0.001233"),
-        []byte("-0.00123"),
-        []byte("0"),
-        []byte("+0.00123"),
-        []byte("+0.001233"),
-        []byte("+0.0123"),
-        []byte("+0.123"),
-        []byte("+1"),
-        []byte("+1.3"),
-        []byte("+1.4"),
-        []byte("+1000000000.0"),
-        []byte("+10000000000.0"),
-    }
-    ln := len(samples)
-    for i := 0; i < ln; i++ {
-        f, _ := strconv.ParseFloat(string(samples[i]), 64)
-        samples[i] = []byte(strconv.FormatFloat(f, 'e', -1, 64))
-    }
-    b.ResetTimer()
-    for i := 0; i < b.N; i++ {
-        EncodeFloat(samples[i%ln])
-    }
-}
-
-func BenchmarkDecodeFloat(b *testing.B) {
-    var samples = [][]byte{
-        []byte("-10000000000.0"),
-        []byte("-1000000000.0"),
-        []byte("-1.4"),
-        []byte("-1.3"),
-        []byte("-1"),
-        []byte("-0.123"),
-        []byte("-0.0123"),
-        []byte("-0.001233"),
-        []byte("-0.00123"),
-        []byte("0"),
-        []byte("+0.00123"),
-        []byte("+0.001233"),
-        []byte("+0.0123"),
-        []byte("+0.123"),
-        []byte("+1"),
-        []byte("+1.3"),
-        []byte("+1.4"),
-        []byte("+1000000000.0"),
-        []byte("+10000000000.0"),
-    }
-    ln := len(samples)
-    for i := 0; i < ln; i++ {
-        f, _ := strconv.ParseFloat(string(samples[i]), 64)
-        samples[i] = EncodeFloat([]byte(strconv.FormatFloat(f, 'e', -1, 64)))
-    }
-    b.ResetTimer()
-    for i := 0; i < b.N; i++ {
-        DecodeFloat(samples[i%ln])
-    }
-}
-
 func bEncodeInt(b *testing.B, in string) {
     inb := []byte(in)
     for i := 0; i < b.N; i++ {
@@ -376,3 +416,17 @@ func bDecodeInt(b *testing.B, in string) {
     }
 }
 
+func bEncodeFloat(b *testing.B, in string) {
+    f, _ := strconv.ParseFloat(in, 64)
+    inb := []byte(strconv.FormatFloat(f, 'e', -1, 64))
+    for i := 0; i < b.N; i++ {
+        EncodeFloat(inb)
+    }
+}
+
+func bDecodeFloat(b *testing.B, in string) {
+    inb := []byte(in)
+    for i := 0; i < b.N; i++ {
+        DecodeFloat(inb)
+    }
+}

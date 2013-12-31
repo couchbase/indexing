@@ -7,15 +7,7 @@
   big-integers ?
   Even big-integers are parsed are returned as float by dparval.
 
-* Sort order for arrays, should length of array be compared before comparing
-  elements of arrays.
-
 * Encoding and decoding of utf8 strings.
 
 * In parse.go, using the parser combinator for builtin json parsing, use
   built in sort instead of a dumb bubble sort.
-
-* Remove CollateJSON code and create a dependancy on tuqtng
-
-* Write bench marks cases for worst case and best case endcoding and decoding
-  for integer and float.
