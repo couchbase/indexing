@@ -1,3 +1,6 @@
+* If a string contains escaped null values it will conflict with TERMINATOR
+  encoding. JSON strings must be byte stuffed for TERMINATOR byte.
+
 * How to handle missing value ?
 
 * Are we going to differentiate between float and integer ?
@@ -11,3 +14,6 @@
 
 * In parse.go, using the parser combinator for builtin json parsing, use
   built in sort instead of a dumb bubble sort.
+
+* Figure out a strategy for error handling in Encode() and Decode() execution
+  path.
