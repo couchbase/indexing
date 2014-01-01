@@ -4,7 +4,7 @@ json : "{" properties "}"
 properties : properties "," property {10}
            | property.
 
-property   : DQ bag("../prods/web2") DQ ":" value.
+property   : DQ bag("./data/web2") DQ ":" value.
 
 value   : TRUE
         | FALSE
@@ -14,7 +14,7 @@ value   : TRUE
         | array
         | json {2}.
 
-string  : DQ bag("../prods/web2") DQ.
+string  : DQ bag("./data/web2") DQ.
 
 number  : range(0, 100000)
         | rangef(0.0, 100.0) {900}.
