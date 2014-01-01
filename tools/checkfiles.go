@@ -84,12 +84,12 @@ func sortFile(filename string) (outs []string) {
 	codec := collatejson.NewCodec()
 	switch options.lenprefix {
 	case true:
-		codec.DoArrayLenPrefix(true)
-		codec.DoPropertyLenPrefix(true)
+		codec.SortbyArrayLen(true)
+		codec.SortbyPropertyLen(true)
 		outs = encodeLines(codec, s)
 	case false:
-		codec.DoArrayLenPrefix(false)
-		codec.DoPropertyLenPrefix(false)
+		codec.SortbyArrayLen(false)
+		codec.SortbyPropertyLen(false)
 		outs = encodeLines(codec, s)
 	}
 	return

@@ -1,3 +1,19 @@
+/*
+ * Encoding and Decoding functions to transform JSON text into a binary
+ * representation without loosing information. That is,
+ *
+ * - binary representation should preserve the sort order such that, sorting
+ *   binary encoded json documents much match sorting by functions that parse
+ *   and compare JSON documents.
+ * - it must be possible to get back the original documentation, in
+ *   semantically correct form, from its binary representation.
+ *
+ * Notes:
+ *
+ * - items in a property object are sorted by its property name before they
+ *   are compared with other property object.
+ */
+
 package collatejson
 
 import (
@@ -8,6 +24,8 @@ import (
 	"strconv"
 )
 
+// Every encoded data type, both basic and composite, are prefixed with a
+// type-byte. TERMINATOR terminates every encoded data item.
 const (
 	TERMINATOR byte = iota
 	TYPE_MISSING
@@ -20,11 +38,13 @@ const (
 	TYPE_OBJ
 )
 
+// Codec.
 type Codec struct {
-	arrayLenPrefix    bool
-	propertyLenPrefix bool
+	arrayLenPrefix    bool // if true, first sort arrays based on its length.
+	propertyLenPrefix bool // if true, first sort properties based on length.
 }
 
+// create a new codec object and return a reference to it.
 func NewCodec() *Codec {
 	return &Codec{
 		arrayLenPrefix:    true,
@@ -32,14 +52,19 @@ func NewCodec() *Codec {
 	}
 }
 
-func (codec *Codec) DoArrayLenPrefix(what bool) {
+// sort by array length before sorting by array elements. use `false` to sort
+// only by array elements
+func (codec *Codec) SortbyArrayLen(what bool) {
 	codec.arrayLenPrefix = what
 }
 
-func (codec *Codec) DoPropertyLenPrefix(what bool) {
+// sort by property length before sorting by property items. use `false`
+// to sort only by proprety items
+func (codec *Codec) SortbyPropertyLen(what bool) {
 	codec.propertyLenPrefix = what
 }
 
+// Encode json documents to order preserving binary representation.
 func (codec *Codec) Encode(rawjson []byte) []byte {
 	doc := dparval.NewValueFromBytes(rawjson)
 	code := json2code(codec, doc.Value())
@@ -51,6 +76,8 @@ func (codec *Codec) Encode(rawjson []byte) []byte {
 //    return json
 //}
 
+// local function that encodes basic json types to binary representation.
+// composite types recursively call this function.
 func json2code(codec *Codec, val interface{}) []byte {
 	var code []byte
 	if val == nil {
@@ -148,6 +175,7 @@ func json2code(codec *Codec, val interface{}) []byte {
 //    panic(fmt.Sprintf("collationType doesn't understand %+v of type %T", val, val))
 //}
 
+// local function that sorts JSON property objects based on property names.
 func sortProps(props map[string]interface{}) sort.StringSlice {
 	// collect all the keys
 	allkeys := make(sort.StringSlice, 0)
