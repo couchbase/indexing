@@ -11,6 +11,7 @@ import (
 	"strconv"
 )
 
+// Constants used in text representation of basic data types.
 const (
 	PLUS  = 43
 	MINUS = 45
@@ -20,9 +21,15 @@ const (
 	ZERO  = 48
 )
 
-var negPrefix = byte(MINUS)
-var posPrefix = byte(GT)
+// Constants used to represent positive and negative numbers while encoding
+// them.
+const (
+	negPrefix = byte(MINUS)
+	posPrefix = byte(GT)
+)
 
+// Negative integers, in its text representation are 10's complement. This map
+// provides the lookup table to generate the complements.
 var negIntLookup = map[byte]byte{
 	48: 57, // 0 - 9
 	49: 56, // 1 - 8
@@ -35,6 +42,8 @@ var negIntLookup = map[byte]byte{
 	56: 49, // 8 - 1
 	57: 48, // 9 - 0
 }
+
+// A simple lookup table to flip prefixes.
 var prefixOpp = map[byte]byte{
 	posPrefix: negPrefix,
 	negPrefix: posPrefix,
@@ -404,6 +413,8 @@ func DecodeLD(code []byte) []byte {
 	return joinBytes(textint, textdec[2:])
 }
 
+// local function that check the sign of the input number and returns the
+// encoding-prefix and remaining input. Used while encoding numbers.
 func signPrefix(text []byte) (byte, []byte) {
 	switch text[0] {
 	case PLUS:
@@ -415,6 +426,8 @@ func signPrefix(text []byte) (byte, []byte) {
 	}
 }
 
+// local function that check the encoded sign of the coded number and returns
+// the actual sign of the number. Used while decoding numbers.
 func prefixSign(code []byte) byte {
 	var sign byte
 	switch code[0] {
@@ -428,10 +441,14 @@ func prefixSign(code []byte) byte {
 	return sign
 }
 
+// join byte slices into single byte slice.
 func joinBytes(args ...[]byte) []byte {
 	return bytes.Join(args, []byte{})
 }
 
+// Check whether input is a representation of zero, like,
+//    0 +0 -0
+// return the normalized form of zero, which is just `0`.
 func isZero(text []byte) []byte {
 	// Handle different forms of zero.
 	if len(text) == 1 && text[0] == ZERO {
