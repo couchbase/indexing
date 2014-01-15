@@ -1,6 +1,9 @@
 * If a string contains escaped null values it will conflict with TERMINATOR
   encoding. JSON strings must be byte stuffed for TERMINATOR byte.
 
+* create a new directory examples_len/ that contains the sorted list of json
+  items without using `lenprefix`
+
 * How to handle missing value ?
 
 * Are we going to differentiate between float and integer ?

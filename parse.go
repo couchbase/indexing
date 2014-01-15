@@ -5,7 +5,7 @@ package collatejson
 
 import (
 	"fmt"
-	"github.com/prataprc/parsec"
+	"github.com/prataprc/goparsec"
 	"io/ioutil"
 )
 
@@ -26,12 +26,12 @@ func ParseFile(filename string) parsec.ParsecNode {
 
 func Parse(text []byte) parsec.ParsecNode {
 	s := parsec.NewScanner(text)
-	nt, _ := y(*s)
+	nt, _ := y(s)
 	return nt
 }
 
 // Construct parser-combinator for parsing JSON string.
-func y(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
+func y(s parsec.Scanner) (parsec.ParsecNode, parsec.Scanner) {
 	nodify := func(ns []parsec.ParsecNode) parsec.ParsecNode {
 		if ns == nil || len(ns) == 0 {
 			return nil
@@ -41,7 +41,7 @@ func y(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
 	return parsec.Maybe(nodify, value)(s)
 }
 
-func array(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
+func array(s parsec.Scanner) (parsec.ParsecNode, parsec.Scanner) {
 	nodify := func(ns []parsec.ParsecNode) parsec.ParsecNode {
 		if ns == nil || len(ns) == 0 {
 			return nil
@@ -51,7 +51,7 @@ func array(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
 	return parsec.And(nodify, opensqr, values, closesqr)(s)
 }
 
-func object(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
+func object(s parsec.Scanner) (parsec.ParsecNode, parsec.Scanner) {
 	nodify := func(ns []parsec.ParsecNode) parsec.ParsecNode {
 		if ns == nil || len(ns) == 0 {
 			return nil
@@ -61,7 +61,7 @@ func object(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
 	return parsec.And(nodify, openparan, properties, closeparan)(s)
 }
 
-func properties(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
+func properties(s parsec.Scanner) (parsec.ParsecNode, parsec.Scanner) {
 	nodify := func(ns []parsec.ParsecNode) parsec.ParsecNode {
 		// Bubble sort properties based on property name.
 		for i := 0; i < len(ns)-1; i++ {
@@ -79,7 +79,7 @@ func properties(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
 	return parsec.Many(nodify, property, comma)(s)
 }
 
-func property(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
+func property(s parsec.Scanner) (parsec.ParsecNode, parsec.Scanner) {
 	nodify := func(ns []parsec.ParsecNode) parsec.ParsecNode {
 		if ns == nil || len(ns) == 0 {
 			return nil
@@ -90,14 +90,14 @@ func property(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
 	return parsec.And(nodify, parsec.String(), colon, value)(s)
 }
 
-func values(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
+func values(s parsec.Scanner) (parsec.ParsecNode, parsec.Scanner) {
 	nodify := func(ns []parsec.ParsecNode) parsec.ParsecNode {
 		return &parsec.NonTerminal{Name: "VALUES", Children: ns}
 	}
 	return parsec.Many(nodify, value, comma)(s)
 }
 
-func value(s parsec.Scanner) (parsec.ParsecNode, *parsec.Scanner) {
+func value(s parsec.Scanner) (parsec.ParsecNode, parsec.Scanner) {
 	nodify := func(ns []parsec.ParsecNode) parsec.ParsecNode {
 		if ns == nil || len(ns) == 0 {
 			return nil
