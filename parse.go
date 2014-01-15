@@ -5,7 +5,7 @@ package collatejson
 
 import (
 	"fmt"
-	"github.com/prataprc/golib/parsec"
+	"github.com/prataprc/parsec"
 	"io/ioutil"
 )
 
