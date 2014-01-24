@@ -29,3 +29,5 @@ library and this library try,
     go test -test.bench=Sort
 
 examples/* contains reference sort ordering for different json elements.
+
+For known issues refer to `TODO.rst`
