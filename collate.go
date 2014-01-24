@@ -1,19 +1,17 @@
-/*
- * Encoding and Decoding functions to transform JSON text into a binary
- * representation without loosing information. That is,
- *
- * - binary representation should preserve the sort order such that, sorting
- *   binary encoded json documents much match sorting by functions that parse
- *   and compare JSON documents.
- * - it must be possible to get back the original documentation, in
- *   semantically correct form, from its binary representation.
- *
- * Notes:
- *
- * - items in a property object are sorted by its property name before they
- *   are compared with other property object.
- */
-
+// Encoding and Decoding function to transform JSON text into binary
+// representation without loosing information. That is,
+//
+// * binary representation should preserve the sort order such that, sorting
+// binary encoded json documents much match sorting by functions that parse
+// and compare JSON documents.
+//
+// * it must be possible to get back the original document, in semantically
+// correct form, from its binary representation.
+//
+// Notes:
+//
+// * items in a property object are sorted by its property name before they
+// are compared with other property object.
 package collatejson
 
 import (
@@ -25,8 +23,8 @@ import (
 	"strconv"
 )
 
-// Every encoded data type, both basic and composite, are prefixed with a
-// type-byte. TERMINATOR terminates every encoded data item.
+// While encoding JSON data-element, both basic and composite, encoded string
+// is prefixed with a type-byte. TERMINATOR terminates encoded datum.
 const (
 	TERMINATOR byte = iota
 	TYPE_MISSING

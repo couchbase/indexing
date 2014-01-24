@@ -1,8 +1,3 @@
-/*
- * textually representing basic data types such that their natural order is
- * preserved as a lexicographic order of their representations.
- */
-
 package collatejson
 
 import (
@@ -49,7 +44,7 @@ var prefixOpp = map[byte]byte{
 	negPrefix: posPrefix,
 }
 
-// Encode integer, such that their natural order is preserved as a
+// EncodeInt encodes integer such that their natural order is preserved as a
 // lexicographic order of their representation. Additionally it must be
 // possible to get back the natural representation from its lexical
 // representation.
@@ -114,8 +109,8 @@ func encodeNegInt(text []byte, acc [][]byte) [][]byte {
 	return acc
 }
 
-// Reverse of EncodeInt, returns integer in text that can be converted to
-// integer type using strconv.AtoI(return_value)
+// DecodeInt complements EncodeInt, it returns integer in text that can be
+// converted to integer value using strconv.AtoI(return_value)
 func DecodeInt(code []byte) []byte {
 	if len(code) == 0 { // empty input
 		return []byte{}
@@ -126,13 +121,12 @@ func DecodeInt(code []byte) []byte {
 	val, text := doDecodeInt(code)
 	if code[0] == posPrefix {
 		return joinBytes([]byte{PLUS}, text[:val])
-	} else {
-		invtext := make([]byte, 0, len(code))
-		for i := 0; i < val; i++ {
-			invtext = append(invtext, negIntLookup[text[i]])
-		}
-		return joinBytes([]byte{MINUS}, invtext)
 	}
+	invtext := make([]byte, 0, len(code))
+	for i := 0; i < val; i++ {
+		invtext = append(invtext, negIntLookup[text[i]])
+	}
+	return joinBytes([]byte{MINUS}, invtext)
 }
 
 // local function called by DecodeInt
@@ -156,9 +150,9 @@ func doDecodeInt(code []byte) (int, []byte) {
 	}
 }
 
-// Encode floating point number such that their natural order is preserved as a
-// lexicographic order of their representation. Additionally it must be
-// possible to get back the natural representation from its lexical
+// EncodeFloat encodes floating point number such that their natural order is
+// preserved as lexicographic order of their representation. Additionally it
+// must be possible to get back the natural representation from its lexical
 // representation.
 //
 // A floating point number f takes a mantissa m ∈ [1/10 , 1) and an integer
@@ -200,7 +194,8 @@ func EncodeFloat(text []byte) []byte {
 	return joinBytes([]byte{prefix}, codeint, codedec)
 }
 
-// Reverse of EncodeFloat, returns `exponent` and `mantissa` in text format.
+// DecodeFloat complements EncodeFloat, it returns `exponent` and `mantissa`
+// in text format.
 func DecodeFloat(code []byte) []byte {
 	if len(code) == 0 { // empty input
 		return []byte{}
@@ -251,14 +246,14 @@ func parseMantissa(text []byte) []byte {
 	case 2:
 		return joinBytes([]byte("0."), parts[0], parts[1])
 	default:
-		panic(fmt.Errorf("Invalid mantissa %v", string(text)))
+		panic(fmt.Errorf("invalid mantissa %v", string(text)))
 	}
 }
 
-// Encode small-decimal, such that their natural order is preserved as a
-// lexicographic order of their representation. Additionally it must be
-// possible to get back the natural representation from its lexical
-// representation.
+// EncodeSD encodes small-decimal, values that are greater than -1.0 and less
+// than +1.0,such that their natural order is preserved as lexicographic order
+// of their representation. Additionally it must be possible to get back the
+// natural representation from its lexical representation.
 //
 // Small decimals is greater than -1.0 and less than 1.0
 //
@@ -301,8 +296,8 @@ func EncodeSD(text []byte) []byte {
 	return wrapSmallDec(prefix, code)
 }
 
-// Reverse of EncodeSD, returns integer in text that can be converted to
-// integer type using strconv.ParseFloat(return_value, 64)
+// DecodeSD complements EncodeSD, it returns integer in text that can be
+// converted to integer type using strconv.ParseFloat(return_value, 64).
 func DecodeSD(code []byte) []byte {
 	if len(code) == 0 {
 		return []byte{}
@@ -328,12 +323,11 @@ func wrapSmallDec(prefix byte, code []byte) []byte {
 	return joinBytes([]byte{prefix}, code, []byte{prefixOpp[prefix]})
 }
 
-// Encode large-decimal, such that their natural order is preserved as a
-// lexicographic order of their representation. Additionally it must be
-// possible to get back the natural representation from its lexical
+// EncodeLD encodes large-decimal, values that are greater than or equal to
+// +1.0 and less than or equal to -1.0, such that their natural order is
+// preserved as a lexicographic order of their representation. Additionally
+// it must be possible to get back the natural representation from its lexical
 // representation.
-//
-// Large decimal is less than equal to -1.0 and greather than equal to +1.0
 //
 // Input `text` is also in textual representation, that is,
 // strconv.ParseFloat(text, 64) is the actual integer that is encoded.
@@ -388,8 +382,8 @@ func EncodeLD(text []byte) []byte {
 	return joinBytes(codeint, codedec)
 }
 
-// Reverse of DecodeLD, returns integer in text that can be converted to
-// integer type using strconv.ParseFloat(return_value, 64)
+// DecodeLD complements EncodeLD, it returns integer in text that can be
+// converted to integer type using strconv.ParseFloat(return_value, 64).
 func DecodeLD(code []byte) []byte {
 	if len(code) == 0 { // empty input
 		return []byte{}
@@ -457,7 +451,6 @@ func isZero(text []byte) []byte {
 		return []byte{ZERO}
 	} else if len(text) == 2 && text[0] == MINUS && text[1] == ZERO {
 		return []byte{ZERO}
-	} else {
-		return nil
 	}
+	return nil
 }
