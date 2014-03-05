@@ -30,10 +30,10 @@ This document describes the High Level Design for Secondary Indexes. It also des
 
 
 ###System Diagram
-![KV And Index Cluster](https://rawgithub.com/deepkaran/sandbox/master/indexing/images/SystemDiagram.svg)
+![KV And Index Cluster](https://rawgithub.com/couchbase/indexing/master/docs/design/images/SystemDiagram.svg)
 
 ###Deployment Diagram
-![](https://rawgithub.com/deepkaran/sandbox/master/indexing/images/Deployment.svg)
+![](https://rawgithub.com/couchbase/indexing/master/docs/design/images/Deployment.svg)
 
 ###Bootstrap Sequence
 
@@ -46,9 +46,9 @@ This document describes the High Level Design for Secondary Indexes. It also des
 ###Mutation Workflow
 
 * Insert/Update Mutation Workflow
-![](https://rawgithub.com/deepkaran/sandbox/master/indexing/images/InsertWorkflow.svg)
+![](https://rawgithub.com/couchbase/indexing/master/docs/design/images/InsertWorkflow.svg)
 * Delete Mutation Workflow
-![](https://rawgithub.com/deepkaran/sandbox/master/indexing/images/DeleteWorkflow.svg)
+![](https://rawgithub.com/couchbase/indexing/master/docs/design/images/DeleteWorkflow.svg)
 
 ###Query Workflow
 
