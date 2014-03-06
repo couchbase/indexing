@@ -30,10 +30,14 @@ This document describes the High Level Design for Secondary Indexes. It also des
 
 
 ###System Diagram
-![KV And Index Cluster](https://rawgithub.com/couchbase/indexing/master/secondary/docs/design/images/SystemDiagram.svg)
 
-###Deployment Diagram
-![](https://rawgithub.com/couchbase/indexing/master/secondary/docs/design/images/Deployment.svg)
+- [KV-Index System Diagram](markdown/system.md)
+- Query-Index System Diagram
+ 
+###Execution Flow
+
+* [Mutation Execution Flow](markdown/mutation.md)
+* [Query Execution Flow](markdown/query.md)
 
 ###Bootstrap Sequence
 
@@ -43,19 +47,9 @@ This document describes the High Level Design for Secondary Indexes. It also des
 * Router Restart Bootstrap
 * Index Manager Restart Bootstrap
 
-###Mutation Workflow
+###Deployment
 
-* Insert/Update Mutation Workflow
-![](https://rawgithub.com/couchbase/indexing/master/secondary/docs/design/images/InsertWorkflow.svg)
-* Delete Mutation Workflow
-![](https://rawgithub.com/couchbase/indexing/master/secondary/docs/design/images/DeleteWorkflow.svg)
-
-###Query Workflow
-
-* Create/Drop DDL Workflow
-* Scan Request Workflow
-* Stats Request Workflow
-* Nodes (Meta) Request Workflow
+- [Deployment Options](markdown/deployment.md)
 
 ###Partition Management
 * Milestone1 will have Key-based partitioning support. 
@@ -63,10 +57,8 @@ This document describes the High Level Design for Secondary Indexes. It also des
 
 ###Communication Protocols
 
-* Projector and Ep-Engine Protocol 
-
-  Projector will use the UPR protocol to talk to Ep-engine in KV. 
-  [UPR Design Specs](https://github.com/couchbaselabs/cbupr/blob/master/index.md) are here.
+* Projector and Ep-Engine Protocol
+  * [UPR protocol](https://github.com/couchbaselabs/cbupr/blob/master/index.md) will be used to talk to Ep-engine in KV. 
   
 * Router and Indexer Protocol
 * Query and Indexer Protocol
@@ -96,12 +88,4 @@ This document describes the High Level Design for Secondary Indexes. It also des
 
 ###Terminology
 
-- High-Watermark Timestamp
-- Stability Timestamp
-- Restart Timestamp
-- Mutation Queue
-- Catchup Queue
-- Stability Snapshot
-- Persistent Snapshot
-- Partition
-- Slice
+* [Terminology Document](markdown/terminology.md)
