@@ -1,4 +1,4 @@
 indexing
 ========
 
-Couchbase Indexes
+Couchbase Secondary Indexes
