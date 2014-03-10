@@ -112,22 +112,22 @@
     </g>
     <g text-rendering="geometricPrecision" stroke-miterlimit="1.45" shape-rendering="geometricPrecision" font-family="sans-serif" transform="matrix(1,0,0,1,-143,-88)" stroke-linecap="butt">
       <text x="215.8633" xml:space="preserve" y="235.7852" clip-path="url(#clipPath2)" stroke="none">2. Send to Router</text>
-      <text x="379.3" xml:space="preserve" y="296.1133" clip-path="url(#clipPath2)" stroke="none">5. Decide Indexers</text>
+      <text x="379.3" xml:space="preserve" y="296.1133" clip-path="url(#clipPath2)" stroke="none">3. Decide Indexers</text>
       <text x="379.3" xml:space="preserve" y="310.2461" clip-path="url(#clipPath2)" stroke="none">based on IndexId</text>
-      <text x="550.3486" xml:space="preserve" y="461.3438" clip-path="url(#clipPath2)" stroke="none">7. Add DELETE to </text>
+      <text x="550.3486" xml:space="preserve" y="461.3438" clip-path="url(#clipPath2)" stroke="none">5. Add DELETE to </text>
       <text x="555.9707" xml:space="preserve" y="475.4766" clip-path="url(#clipPath2)" stroke="none">Mutation Queue</text>
-      <text x="928.3096" xml:space="preserve" y="552.8516" clip-path="url(#clipPath2)" stroke="none">9. Stability Snapshot  </text>
+      <text x="928.3096" xml:space="preserve" y="552.8516" clip-path="url(#clipPath2)" stroke="none">7. Stability Snapshot  </text>
       <text x="928.3096" xml:space="preserve" y="566.9844" clip-path="url(#clipPath2)" stroke="none">Generation Decision </text>
       <text x="928.3096" xml:space="preserve" y="581.1172" clip-path="url(#clipPath2)" stroke="none">Reached</text>
-      <text x="549.2695" xml:space="preserve" y="506.9688" clip-path="url(#clipPath2)" stroke="none">8. Update High </text>
+      <text x="549.2695" xml:space="preserve" y="506.9688" clip-path="url(#clipPath2)" stroke="none">6. Update High </text>
       <text x="549.2695" xml:space="preserve" y="521.1016" clip-path="url(#clipPath2)" stroke="none">Watermark Timestamp</text>
-      <text x="548.9785" xml:space="preserve" y="686.9023" clip-path="url(#clipPath2)" stroke="none">11. Persist MutationQ.</text>
+      <text x="548.9785" xml:space="preserve" y="686.9023" clip-path="url(#clipPath2)" stroke="none">9. Persist MutationQ.</text>
       <text x="548.9785" xml:space="preserve" y="701.0352" clip-path="url(#clipPath2)" stroke="none">(Apply If Key Exists)</text>
       <text x="548.9785" xml:space="preserve" y="715.168" clip-path="url(#clipPath2)" stroke="none">Update Stability Timestamp</text>
-      <text x="923.7852" xml:space="preserve" y="613.2711" clip-path="url(#clipPath2)" stroke="none">10. Send message </text>
-      <text x="923.7852" xml:space="preserve" y="627.4039" clip-path="url(#clipPath2)" stroke="none">to all Indexers</text>
-      <text x="551.0498" xml:space="preserve" y="742.2852" clip-path="url(#clipPath2)" stroke="none">12. Send Ack to IM</text>
-      <text x="917.5605" xml:space="preserve" y="806.9688" clip-path="url(#clipPath2)" stroke="none">13. Update Stability </text>
+      <text x="927.5791" xml:space="preserve" y="613.2711" clip-path="url(#clipPath2)" stroke="none">8. Send message </text>
+      <text x="927.5791" xml:space="preserve" y="627.4039" clip-path="url(#clipPath2)" stroke="none">to all Indexers</text>
+      <text x="551.0498" xml:space="preserve" y="742.2852" clip-path="url(#clipPath2)" stroke="none">10. Send Ack to IM</text>
+      <text x="917.5605" xml:space="preserve" y="806.9688" clip-path="url(#clipPath2)" stroke="none">11. Update Stability </text>
       <text x="917.5605" xml:space="preserve" y="821.1016" clip-path="url(#clipPath2)" stroke="none">Timestamp</text>
     </g>
     <g fill="url(#linearGradient9)" text-rendering="geometricPrecision" shape-rendering="geometricPrecision" transform="matrix(1,0,0,1,-143,-88)" stroke="url(#linearGradient9)">
@@ -144,16 +144,16 @@
       <text x="694.6572" xml:space="preserve" y="128.0352" font-family="sans-serif" clip-path="url(#clipPath2)" stroke="none">Indexer2</text>
     </g>
     <g text-rendering="geometricPrecision" stroke-miterlimit="1.45" shape-rendering="geometricPrecision" font-family="sans-serif" transform="matrix(1,0,0,1,-143,-88)" stroke-linecap="butt">
-      <text x="733.4785" xml:space="preserve" y="688.1523" clip-path="url(#clipPath2)" stroke="none">11. Persist MutationQ.</text>
+      <text x="733.4785" xml:space="preserve" y="688.1523" clip-path="url(#clipPath2)" stroke="none">9. Persist MutationQ.</text>
       <text x="733.4785" xml:space="preserve" y="702.2852" clip-path="url(#clipPath2)" stroke="none">(Apply If Key Exists)</text>
       <text x="733.4785" xml:space="preserve" y="716.418" clip-path="url(#clipPath2)" stroke="none">Update Stability Timestamp</text>
-      <text x="730.5498" xml:space="preserve" y="739.7852" clip-path="url(#clipPath2)" stroke="none">12. Send Ack to IM</text>
-      <text x="379.0859" xml:space="preserve" y="343.6523" clip-path="url(#clipPath2)" stroke="none">6. Send DELETE message</text>
+      <text x="730.5498" xml:space="preserve" y="739.7852" clip-path="url(#clipPath2)" stroke="none">10. Send Ack to IM</text>
+      <text x="379.0859" xml:space="preserve" y="343.6523" clip-path="url(#clipPath2)" stroke="none">4. Send DELETE message</text>
       <text x="379.0859" xml:space="preserve" y="357.7852" clip-path="url(#clipPath2)" stroke="none">to all indexers</text>
       <text x="379.0859" xml:space="preserve" y="371.918" clip-path="url(#clipPath2)" stroke="none">for this index</text>
-      <text x="742.3486" xml:space="preserve" y="463.8438" clip-path="url(#clipPath2)" stroke="none">7. Add DELETE to </text>
+      <text x="742.3486" xml:space="preserve" y="463.8438" clip-path="url(#clipPath2)" stroke="none">5. Add DELETE to </text>
       <text x="747.9707" xml:space="preserve" y="477.9766" clip-path="url(#clipPath2)" stroke="none">Mutation Queue</text>
-      <text x="741.2695" xml:space="preserve" y="509.4688" clip-path="url(#clipPath2)" stroke="none">8. Update High </text>
+      <text x="741.2695" xml:space="preserve" y="509.4688" clip-path="url(#clipPath2)" stroke="none">6. Update High </text>
       <text x="741.2695" xml:space="preserve" y="523.6016" clip-path="url(#clipPath2)" stroke="none">Watermark Timestamp</text>
       <path fill="none" d="M202.0331 257.7794 L355.5002 258.8264" clip-path="url(#clipPath2)"/>
       <path d="M363.5 258.881 L351.5344 253.7993 L354.5002 258.8196 L351.4662 263.799 Z" clip-path="url(#clipPath2)" stroke="none"/>
