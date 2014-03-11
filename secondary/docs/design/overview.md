@@ -32,7 +32,7 @@ This document describes the High Level Design for Secondary Indexes. It also des
 ###System Diagram
 
 - [KV-Index System Diagram](markdown/system.md)
-- Query-Index System Diagram
+- [Query-Index System Diagram](markdown/system_query.md)
  
 ###Execution Flow
 
