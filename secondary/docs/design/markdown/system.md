@@ -21,10 +21,21 @@ B2 - I3, I4
 
 ####Annotations
 
-*HWT* - High-Watermark Timestamp<br>
-*ST* - Stability Timestamp<br>
-*FI* - Forward Index<br>
-*BI* - Back Index<br>
+*HWT* - [High-Watermark Timestamp](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md)<br>
+*ST* - [Stability Timestamp](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md)<br>
+*FI* - [Forward Index](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md)<br>
+*BI* - [Back Index](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md)<br>
+
+1. Data Mutations via [UPR](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md) are sent to [Projector](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/overview.md#components) which subscribes for the active vbuckets on a node. Projector runs map functions based on Index Definitions and outputs secondary key versions.
+2. Secondary Key versions are sent to [Router](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/overview.md#components) component. Based on index distribution/partitioning topology it determines which [Indexer](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/overview.md#components) node should receive the key version. 
+3. Router has a guaranted delivery component called Transporter which handles the actual network transport. A single mutation can result in multiple messages to be sent to multiple index nodes. [More Details](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/mutation.md).
+4. Router can occasionally send SYNC messages to [Index Manager](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/overview.md#components) which enables it to calculate next [Stability Timestamp](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md) for all Indexers.
+5. For normal workflow, Indexer will accept and store the mutations in [Mutation Queue](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md). These mutations get processed once Index Manager decides to generate a Stability Timestamp.
+6. For Rollback scenarios, Indexer will store the mutations in [CatchUp Queue](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md). For complete details of rollback workflow, see [Recovery](Add Link Here).
+7. Index Manager master synchronizes with its replica to synchronously replicate Index Definition metadata, Recovery context etc.
+8. Index Manager communicates with all Indexers to announce new Stability Timestamp, Rollback Mode Init, collect HW timestamps for recovery etc.
+9. Local Persistence for Index Manager. 
+10. Local Persistence for Indexer for all secondary key versions. All Persistent Snapshots are stored locally.
 
 ####Highlights
 - Indexer maintains HWT and ST at per bucket level on each node. In this case I1 and I2 share HWT+ST as these are from same bucket. I3 has its own copy. 
@@ -34,7 +45,7 @@ B2 - I3, I4
 
 ####Open Questions
 - How does Index Manager get the "Sync" messages to decide on the next Stability Timestamp
-- How does Indexer get the update topology information to service Scan request? Index Manager exposes an API or from the replicated metadata file directly?
+- How does Indexer get the updated topology information to service Scan request? Index Manager exposes an API or from the replicated metadata file directly?
 - Does the Mutation/Catchup Queue needs to be per bucket as well?
 
 

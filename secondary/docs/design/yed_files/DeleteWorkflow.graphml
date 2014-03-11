@@ -187,7 +187,7 @@ Manager<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="382.6604046242775" y="283.6445086705203"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="112.720703125" x="-5.3603515625" y="-1.1328125">5. Decide Indexers
+          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="112.720703125" x="-5.3603515625" y="-1.1328125">3. Decide Indexers
 based on IndexId<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
@@ -216,7 +216,7 @@ based on IndexId<y:LabelModel>
           <y:Geometry height="33.75" width="102.0" x="551.5" y="447.0"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="108.302734375" x="-3.1513671875" y="0.7421875">7. Add DELETE to 
+          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="108.302734375" x="-3.1513671875" y="0.7421875">5. Add DELETE to 
 Mutation Queue<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
@@ -234,7 +234,7 @@ Mutation Queue<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="940.5" y="535.25"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="46.3984375" modelName="custom" textColor="#000000" visible="true" width="130.380859375" x="-14.1904296875" y="4.0">9. Stability Snapshot  
+          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="46.3984375" modelName="custom" textColor="#000000" visible="true" width="130.380859375" x="-14.1904296875" y="4.0">7. Stability Snapshot  
 Generation Decision 
 Reached<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
@@ -253,7 +253,7 @@ Reached<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="564.0" y="494.5"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="135.4609375" x="-16.73046875" y="-1.1328125">8. Update High 
+          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="135.4609375" x="-16.73046875" y="-1.1328125">6. Update High 
 Watermark Timestamp<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
@@ -271,7 +271,7 @@ Watermark Timestamp<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="578.0" y="681.5"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="46.3984375" modelName="custom" textColor="#000000" visible="true" width="164.04296875" x="-31.021484375" y="-8.19921875">11. Persist MutationQ.
+          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="46.3984375" modelName="custom" textColor="#000000" visible="true" width="164.04296875" x="-31.021484375" y="-8.19921875">9. Persist MutationQ.
 (Apply If Key Exists)
 Update Stability Timestamp<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
@@ -290,7 +290,7 @@ Update Stability Timestamp<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="927.5" y="587.75"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="113.4296875" x="-5.71484375" y="11.919515069877093">10. Send message 
+          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="105.841796875" x="-1.9208984375" y="11.919515069877093">8. Send message 
 to all Indexers<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
@@ -308,7 +308,7 @@ to all Indexers<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="554.75" y="722.75"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="113.400390625" x="-5.7001953125" y="5.93359375">12. Send Ack to IM<y:LabelModel>
+          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="113.400390625" x="-5.7001953125" y="5.93359375">10. Send Ack to IM<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
             <y:ModelParameter>
@@ -325,7 +325,7 @@ to all Indexers<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="925.5" y="794.5"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="121.87890625" x="-9.939453125" y="-1.1328125">13. Update Stability 
+          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="121.87890625" x="-9.939453125" y="-1.1328125">11. Update Stability 
 Timestamp<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
@@ -376,7 +376,7 @@ Timestamp<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="762.5" y="682.75"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="46.3984375" modelName="custom" textColor="#000000" visible="true" width="164.04296875" x="-31.021484375" y="-8.19921875">11. Persist MutationQ.
+          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="46.3984375" modelName="custom" textColor="#000000" visible="true" width="164.04296875" x="-31.021484375" y="-8.19921875">9. Persist MutationQ.
 (Apply If Key Exists)
 Update Stability Timestamp<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
@@ -395,7 +395,7 @@ Update Stability Timestamp<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="734.25" y="720.25"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="113.400390625" x="-5.7001953125" y="5.93359375">12. Send Ack to IM<y:LabelModel>
+          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="113.400390625" x="-5.7001953125" y="5.93359375">10. Send Ack to IM<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
             <y:ModelParameter>
@@ -412,7 +412,7 @@ Update Stability Timestamp<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="393.25" y="338.25"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="46.3984375" modelName="custom" textColor="#000000" visible="true" width="148.328125" x="-16.1640625" y="-8.19921875">6. Send DELETE message
+          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="46.3984375" modelName="custom" textColor="#000000" visible="true" width="148.328125" x="-16.1640625" y="-8.19921875">4. Send DELETE message
 to all indexers
 for this index<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
@@ -431,7 +431,7 @@ for this index<y:LabelModel>
           <y:Geometry height="33.75" width="102.0" x="743.5" y="449.5"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="108.302734375" x="-3.1513671875" y="0.7421875">7. Add DELETE to 
+          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="108.302734375" x="-3.1513671875" y="0.7421875">5. Add DELETE to 
 Mutation Queue<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
@@ -449,7 +449,7 @@ Mutation Queue<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="756.0" y="497.0"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="135.4609375" x="-16.73046875" y="-1.1328125">8. Update High 
+          <y:NodeLabel alignment="left" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="135.4609375" x="-16.73046875" y="-1.1328125">6. Update High 
 Watermark Timestamp<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
