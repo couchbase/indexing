@@ -10,19 +10,19 @@ This document describes the High Level Design for Secondary Indexes. It also des
 
 - __Projector__
 
-  The projector is responsible for mapping mutations to a set of key version. The projector can reside within the master KV node in which the mutation is generated or it can reside in separate node. The projector receives mutations from ep-engine through UPR protocol. The projector sends the evaluated results to router. [Details.](markdown/projector.md)
+  The projector is responsible for mapping mutations to a set of key version. The projector can reside within the master KV node in which the mutation is generated or it can reside in separate node. The projector receives mutations from ep-engine through UPR protocol. The projector sends the evaluated results to router. 
 
 - __Router__
 
-  The router is responsible for sending key version to the index nodes. It relies on the index distribution/partitioning topology to determine the indexer which should receive the key version. The router resides in the same node as the projector. [Details.](markdown/router.md)
+  The router is responsible for sending key version to the index nodes. It relies on the index distribution/partitioning topology to determine the indexer which should receive the key version. The router resides in the same node as the projector. 
   
 - __Index Manager__
 
-  The index manager is responsible for receiving requests for indexing operations (creation, deletion, maintenance, scan/lookup). The Index Manager is located in the index node, which can be different from KV node. [Details.](markdown/index_manager.md)
+  The index manager is responsible for receiving requests for indexing operations (creation, deletion, maintenance, scan/lookup). The Index Manager is located in the index node, which can be different from KV node. 
   
 - __Indexer__
 
-  The indexer processes the key versions received from router and provides persistence support for the index. Indexer also provides the interface for query client to run index Scans and does scatter/gather for queries. The indexer would reside in index node.   [Details.](markdown/indexer.md)
+  The indexer processes the key versions received from router and provides persistence support for the index. Indexer also provides the interface for query client to run index Scans and does scatter/gather for queries. The indexer would reside in index node.
   
 - __Query Catalog__
 
