@@ -10,22 +10,41 @@ failure within the system. To avoid this, multiple instance of IndexManager
 will be running on different nodes, where one of them will be elected as
 master and others will act as replica to the current master.
 
+During system execution an instance of _IndexManager_ will reside in each index
+node. One of the instance will be picked as master, called _Index-Coordinator_,
+that will assume responsibilities to co-ordinate other components. Remaining
+instances will be called as _Index-Coordinator-Replica_ which will act as a
+replica for master to avoid single point of failure.
+
 From now on we will refer to each instance of IndexManager as a node.
 
 ### scope of IndexManager
 
-1. create or drop index DDLs.
-2. defining initial index topology, no. of indexer-nodes, partitions and
-   slices for an index.
-3. add, delete topics in pub-sub. subscribe, un-subscribe nodes from topics,
-   optionally based on predicates.
-4. provide network interface for other components to access index-metadata,
-   index topology, publish-subscribe framework.
-5. generate restart timestamp for upr-reconnection.
-6. create rollback context and update rollback context based on how rollback
-   evolves withing the system.
-7. generate stability timestamps for purpose of query and rollback. co-ordinate
-   with every indexer-node to generate stability snapshots.
+1. handle scan and query request from client SDKs and N1QL clients.
+2. co-operate with Index-Coordinator to generate stable scan.
+
+### scope of Index-Coordinator
+
+1.  process index DDLs.
+2.  manage distribution topology, partitions and slices across the cluster.
+3.  broadcast topology updates across the cluster.
+4.  index replication and re-balance.
+5.  add, delete topics in pub-sub. subscribe, un-subscribe nodes from topics,
+    optionally based on predicates.
+6.  provide network API for other components to access index-metadata,
+    index topology and publish-subscribe framework.
+7.  generate restart timestamp for upr-reconnection.
+8.  negotiation with UPR producer for failover-log and restart sequence number.
+9.  create rollback context and update rollback context based on how rollback
+    evolves within the system.
+10. generate stability timestamps for purpose of query and rollback. co-ordinate
+    with every indexer-node to generate stability snapshots.
+
+### scope of Index-Coordinator-Replica
+
+1. to maintain a replica of Index-Coordinator state.
+2. to take part in master election.
+3. scope of IndexManager is applicable to Index-Coordinator replica as well.
 
 ### scope of ns-server
 
@@ -44,13 +63,14 @@ From now on we will refer to each instance of IndexManager as a node.
 1. When a client is interfacing with a master, will there be a situation for
    ns-server to conduct a new master-election ?
 
-### client interfacing with IndexManager and typical update cycle
+### client interfacing with Index-Coordinator and typical update cycle
 
 1. a client must first get current master from ns-server. If it cannot get
    one, it must retry or fail.
-2. once network address of master is obtained from ns-server client can post
+2. once network address of master is obtained from ns-server, client can post
    update request to master.
-3. master should get the current list of replica from ns-server.
+3. master should get the current list of Index-Coordinator-Replica from
+   ns-server.
    * if ns-server is unreachable or doesn't respond, return error to client.
 4. master updates its local StateContext.
 5. synchronously replicate its local StateContext on all replicas. If one of
@@ -97,9 +117,9 @@ election process,
 
 ### failed, orphaned and outdated IndexManager
 
-1. when an instance of IndexManager fails, it shall be restarted by ns-server,
-   join the cluster, enter bootstrap state.
-2. when a master IndexManager becomes unreachable to ns-server, it shall
+1. when an IndexManager fails, it shall be restarted by ns-server, join the
+   cluster, enter bootstrap state.
+2. when a Index-Coordinator becomes unreachable to ns-server, it shall
    restart itself, by joining the cluster after a timeout period and enter
    bootstrap state.
 3. when ever IndexManager instance receives a request or response who's
@@ -145,7 +165,7 @@ IndexManager**
 
 * contains a CAS field that will be incremented for every mutation (insert,
   delete, update) that happen to the StateContext.
-* several API will be exposed by IndexManager to CREATE, READ, UPDATE and
+* several API will be exposed by Index-Coordinator to CREATE, READ, UPDATE and
   DELETE StateContext or portion of StateContext.
 
 ### bootstrap
@@ -215,8 +235,8 @@ IndexManager**
     }
 ```
 
-data structure is transient maintains the current state of the IndexManager
-cluster
+data structure is transient and maintains the current state of the
+secondary-index cluster
 
 **StateContext**
 
@@ -238,9 +258,6 @@ cluster
 ```
 
 ### IndexManager APIs
-
-API are defined and exposed by each and every IndexManager and explained with
-HTTP URL and JSON arguments
 
 #### /cluster/heartbeat
 request:
@@ -277,9 +294,12 @@ response:
       "status": ...
     }
 
+
 Once master election is completed ns-server will post the new master and
 election-term to the elected master and each of its new replica. After this,
 IndexManager node shall enter into `master` or `replica` state.
+
+### Index-Coordinator APIs
 
 #### /cluster/index
 request:
@@ -357,3 +377,7 @@ For a node to join the cluster
 #### Leave()
 
 For a node to leave the cluster
+
+Q:
+1) When do the index manager needs to subscribe/unsubcribe directly?
+   Should the router handles the change the subscriber based on the topology?
