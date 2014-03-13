@@ -89,3 +89,12 @@ This document describes the High Level Design for Secondary Indexes. It also des
 ###Terminology
 
 * [Terminology Document](markdown/terminology.md)
+
+###References
+1. [Distributed Indexing Design Proposal - Steve Yen](https://docs.google.com/document/d/1TEY_yjUMs3FT3FZkgqIZUiKziUUBGiCWFSjWOOj65Dw/edit?pli=1)
+2. [Distributed Range Partitioned Indexes – Steve Yen, Dustin Stallings](https://docs.google.com/presentation/d/161vtnjDFOpnliT0DA2k1-jCRKiB-eY9JZHhd0YQoAXo/edit#slide=id.p)
+3. [Index Consistency And Isolation - Steve Yen](https://docs.google.com/document/d/1Y_aXMUBzEvLf8PO8CJYv5eYiQmKsNYzMr6Fq30Cl6xg/edit?pli=1)
+4. [Recovery In Secondary Indexes - John Liang](https://docs.google.com/document/d/1rNJSVs80TtvY0gpoebsBwzhqWRBJnieSuLTnxuDzUTQ/edit) 
+5. [Consistency In Indexes - John Liang](https://docs.google.com/document/d/1VespzgCKgPLFwCGRrx0VW7RC_PkSXh6cU7FSaA9gjic/edit?pli=1)
+6. [Durable Transactions - John Liang](https://docs.google.com/document/d/11Rm2fW9Punx4tktUkK5Re9P87N8_aUwaEJw3u7XR_UY/edit?pli=1)
+
