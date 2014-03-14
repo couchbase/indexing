@@ -150,6 +150,12 @@ key can then be looked up and replaced/deleted based on the mutation.
 under concurrent modification. For a detailed explanation of the problem, please read
 [Reference 3](https://docs.google.com/document/d/1Y_aXMUBzEvLf8PO8CJYv5eYiQmKsNYzMr6Fq30Cl6xg/edit#heading=h.phqy8trsrvu4).
 
+**topology** - Collection of local-indexer nodes take part in building and
+servicing secondary index. For any given index a subset of local-indexer nodes
+will be responsible for building the index, some of them acting as master and
+few others acting as active replicas. Topology also defines partitions and
+slices for an index.
+
 **Point in time query** -
 
 **Stable scan** -
