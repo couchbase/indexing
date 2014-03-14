@@ -1,50 +1,49 @@
 ## IndexManager
 
 IndexManager is the component that co-ordinate other components - like
-projector, query, indexer and local-indexer nodes during bootstrap, rollback,
-reconnection, local-indexer-restart etc.
+projector, query, indexer nodes during bootstrap, rollback, reconnection,
+local-indexer-restart etc.
 
 Since rest of the system depends on IndexManager for both normal operation and
 for failure recovery, restart etc. it can end up becoming single-point-of
 failure within the system. To avoid this, multiple instance of IndexManager
 will be running on different nodes, where one of them will be elected as
-master and others will act as replica to the current master.
+master, called Index-Coordinator, and others will act as replica, called
+Index-Coordinator-Replica, to the current master.
 
-During system execution an instance of _IndexManager_ will reside in each index
-node. One of the instance will be picked as master, called _Index-Coordinator_,
-that will assume responsibilities to co-ordinate other components. Remaining
-instances will be called as _Index-Coordinator-Replica_ which will act as a
-replica for master to avoid single point of failure.
+### StateContext
 
-From now on we will refer to each instance of IndexManager as a node.
+State context acts as the reference point for rest of the system. Typically it
+contains fields to manage index DDLs, topology, event-publisher etc.
+Several API will be exposed by Index-Coordinator to update StateContext or
+portion of StateContext.
 
 ### scope of IndexManager
 
 1. handle scan and query request from client SDKs and N1QL clients.
 2. co-operate with Index-Coordinator to generate stable scan.
+3. co-operate with ns-server for master election and master notification.
 
 ### scope of Index-Coordinator
 
-1.  process index DDLs.
-2.  manage distribution topology, partitions and slices across the cluster.
-3.  broadcast topology updates across the cluster.
-4.  index replication and re-balance.
-5.  add, delete topics in pub-sub. subscribe, un-subscribe nodes from topics,
-    optionally based on predicates.
-6.  provide network API for other components to access index-metadata,
-    index topology and publish-subscribe framework.
-7.  generate restart timestamp for upr-reconnection.
-8.  negotiation with UPR producer for failover-log and restart sequence number.
-9.  create rollback context and update rollback context based on how rollback
-    evolves within the system.
-10. generate stability timestamps for purpose of query and rollback. co-ordinate
-    with every indexer-node to generate stability snapshots.
-
-### scope of Index-Coordinator-Replica
-
-1. to maintain a replica of Index-Coordinator state.
-2. to take part in master election.
-3. scope of IndexManager is applicable to Index-Coordinator replica as well.
+1. save and restore StateContext from persistent storage.
+2. hand-shake with local-indexer-nodes confirming the topology for each index.
+3. process index DDLs.
+4. for new index, generate a topology based on,
+   * administrator supplied configuration.
+   * list of local-indexer-nodes and load handled by each of them.
+5. co-ordinate index re-balance.
+6. generate and publish persistence timestamps to local-indexer-nodes.
+   * maintain a history of persistence timestamps for each bucket.
+7. replicate changes in StateContext to other Index-Coordinator-Replica.
+8. add, delete topics in pub-sub. subscribe, un-subscribe nodes from topics,
+   optionally based on predicates.
+9. provide network API to other components to access index-metadata,
+   index topology and publish-subscribe framework.
+10. generate restart timestamp for upr-reconnection.
+11. negotiation with UPR producer for failover-log and restart sequence number.
+12. create rollback context for kv-rollback and update rollback context based
+    on how rollback evolves within the system.
 
 ### scope of ns-server
 
@@ -55,30 +54,24 @@ From now on we will refer to each instance of IndexManager as a node.
    list of active replica and list of indexer-nodes.
 4. actively poll - master node, replica nodes and other local-indexer-nodes for
    its liveliness using `heartbeat` request.
-5. provide API for index-manager instances and index-nodes to join or leave
-   the cluster.
+5. provide API for IndexManagers and local-indexers to join or leave the cluster,
+   to fetch current Index-Coordinator, Index-Coordinator-Replicas and list of
+   indexer-nodes, and transaction API for updating StateContext.
 
-**Clarification needed**
+### a note on topology
 
-1. When a client is interfacing with a master, will there be a situation for
-   ns-server to conduct a new master-election ?
+A collection of local-indexer nodes take part in building and servicing
+secondary index. For any given index a subset of local-indexer nodes will be
+responsible for building the index, some of them acting as master and few others
+acting as active replicas.
 
-### client interfacing with Index-Coordinator and typical update cycle
+Topology of any given index consist of the following elements,
 
-1. a client must first get current master from ns-server. If it cannot get
-   one, it must retry or fail.
-2. once network address of master is obtained from ns-server, client can post
-   update request to master.
-3. master should get the current list of Index-Coordinator-Replica from
-   ns-server.
-   * if ns-server is unreachable or doesn't respond, return error to client.
-4. master updates its local StateContext.
-5. synchronously replicate its local StateContext on all replicas. If one of
-   the replica is not responding, skip the replica.
-6. notify ns-server about not responding replicas. If ns-server is unreachable
-   ignore.
-7. if master responds with anything other than SUCCESS to the client, retry from
-   step 1.
+* list of indexer-nodes, aka local-indexer-nodes, hosting the index.
+* index slice, where each slice will hold a subset of index.
+* index partition, where each partition is hosted by a master-local-indexer and
+  zero or more replica-local-indexer. Each partition contains a collection of
+  one or more slices.
 
 ### master election
 
@@ -88,296 +81,6 @@ We expect ns-server to elect a new master,
 * during a master crash (when master fails to respond for heartbeat request).
 * when a master voluntarily leaves the cluster.
 
-election process,
-
-1. ns-server will maintain a election-term number which shall be incremented
-   before every master-election.
-2. if ns-server cannot reach master, then it can retire master as failed node,
-   increment election-term, and start master election process
-3. ns-server polls for active replica.
-3. pick one of the replica as master node.
-4. post `bootstrap` request to each replica. If a replica is already in
-   `bootstrap` state, it will do nothing.
-   * an active replica shall cancel outstanding updates happening to its
-     replicated data structure, move to bootstrap state, and wait for new
-     master notification.
-6. post new master's connectionAddress to all active instance of IndexManagers
-   along with it the current election-term number.
-7. current election-term number will be preserved by all instances of
-   IndexManager and used in all request/response across the cluster.
-8. in case of unexpected behavior like,
-   * an active replica not responding
-   * `bootstrap` request is not responding
-   * `newmaster` request not responding
-
-   ns-server will restart from step-2.
-9. once an election is complete, with master and replicas identified,
-   ns-server act on join and leave request from IndexManager nodes and
-   indexer-nodes.
-
-### failed, orphaned and outdated IndexManager
-
-1. when an IndexManager fails, it shall be restarted by ns-server, join the
-   cluster, enter bootstrap state.
-2. when a Index-Coordinator becomes unreachable to ns-server, it shall
-   restart itself, by joining the cluster after a timeout period and enter
-   bootstrap state.
-3. when ever IndexManager instance receives a request or response who's
-   current-election-term is higher than the local value, it will restart
-   itself, join the cluster and enter bootstrap state.
-
-### false-positive
-
-false positive is a scenario when client thinks that an update request
-succeeded but the system is not yet updated. This can happen when
-master node is reachable to client but not reachable to its replicas and
-ns-server, leading to a master-election, and ns-server elects a new-master that
-has not received the updates from old-master.
-
-### false-negative
-
-false-negative is a scenario when client thinks that an update request has
-failed but the system has applied the update into StateContext. This can happen
-when client post an update to the StateContext which get persisted on
-master/replica, but before replying success to client - master node fails,
-there by leading to a situation where the client will re-post the same
-update to new master.
-
-## IndexManager design
-
-Each instance of IndexManager will be modeled as a state machine backed by a
-data structure, called StateContext, that contains meta-data about the secondary
-index, index topology, pub-sub data and meta-data for normal operation of
-IndexManager cluster. An instance of IndexManager can be a  `master` or a
-`replica` operating in `bootstrap`, `normal` or `rollback` state
-
-              | startup  |  master  | replica
-    ----------|----------|----------|---------
-    boostrap  |   yes    |          |
-    normal    |          |   yes    |  yes
-    rollback  |          |   yes    |
-
-**TODO: Since the system is still evolving we expect changes to design of
-IndexManager**
-**TODO: Convert above table to state diagram**
-
-### StateContext
-
-* contains a CAS field that will be incremented for every mutation (insert,
-  delete, update) that happen to the StateContext.
-* several API will be exposed by Index-Coordinator to CREATE, READ, UPDATE and
-  DELETE StateContext or portion of StateContext.
-
-### bootstrap
-
-* all nodes, when they start afresh, will be in bootstrap State.
-* from bootstrap State, a node can either move to master State or replica State.
-* sometimes moving to master State can be transient, that is, if system was
-  previously in rollback state and rollback context was replicated to other
-  nodes, then the new master shall immediately switch to rollback State and
-  continue co-ordinating system rollback activity.
-* while a node is in bootstrap State it will wait for new master's
-  connectionAddress to be posted via its API.
-* if connectionAddress same as the IndexManager instance, it will move to
-  master State.
-* otherwise the node will move to replica State.
-
-### master
-
-* when a node move to master State, its local StateContext is restored from
-  persistent storage and used as system-wide StateContext.
-
-* StateContext can be modified only by the master node. It is expected that
-  other components within the system should somehow learn the current master
-  (maybe from ns-server) and use master's API to modify StateContext.
-* upon receiving a new update to StateContext
-  * master will fetch the active list of replica from ns-server
-  * master will update its local StateContext and persist the StateContext
-    on durable media, then it will post an update to each of its replica.
-  * if one of the replica does not respond or respond back with failure,
-    master shall notify ns-server regarding the same
-  * master responds back to the original client that initiated the
-    update-request.
-* in case a master crashes, it shall start again from bootstrap State.
-
-### replica
-
-* when a node move to replica State, it will first fetch the latest
-  StateContext from the current master and persist as the local StateContext.
-* if replica's StateContext is newer than the master's StateContext
-  (detectable by comparing the CAS value), then latest mutations on the
-  replica will be lost.
-* replica can receive updates to StateContext only from master, if it receives
-  from other components in the system, it will respond with error.
-* upon receiving a new update to StateContext from master, replica will
-  update its StateContext and persist the StateContext on durable media.
-* in case if replica is unable to communicate with the master and comes back
-  alive while rest of the system have moved ahead, it shall go through
-  bootstrap state,
-    * due to hearbeat failures
-    * by detecting the CAS value in subsequent updates from master
-
-### rollback
-
-  * only master node can move to rollback mode.
-
-  TBD
-
-## Data structure
-
-**cluster data structure**
-
-```go
-    type Cluster struct {
-      masterAddr string   // connection address to master
-      replicas   []string // list of connection address to replica nodes
-      nodes      []string // list of connection address to indexer-nodes
-    }
-```
-
-data structure is transient and maintains the current state of the
-secondary-index cluster
-
-**StateContext**
-
-```go
-    type IndexInfo {
-        Name       string    `json:"name,omitempty"`       // Name of the index
-        Uuid       string    `json:"uuid,omitempty"`       // unique id for every index
-        Using      IndexType `json:"using,omitempty"`      // indexing algorithm
-        OnExprList []string  `json:"onExprList,omitempty"` // expression list
-        Bucket     string    `json:"bucket,omitempty"`     // bucket name
-        IsPrimary  bool      `json:"isPrimary,omitempty"`
-        Exprtype   ExprType  `json:"exprType,omitempty"`
-    }
-```
-
-```go
-    type StateContext struct {
-    }
-```
-
-### IndexManager APIs
-
-#### /cluster/heartbeat
-request:
-
-    { "current_term": <uint64> }
-
-response:
-
-    { "current_term": <uint64> }
-
-To be called by ns-server. Node will respond back with SUCCESS irrespective of
-role or state.
-
-* if replica node does not respond back, it will be removed from active list.
-* if master does not respond back, then ns-server can start a new
-  master-election.
-
-#### /cluster/bootstrap
-
-To be called by ns-server, ns-server is expected to make this request during
-master election.
-
-* replica will cancel all outstanding updates and move to `bootstrap` state.
-* master will cancel all outstanding updates and move to `bootstrap` state.
-
-#### /cluster/newmaster
-request:
-
-    { "current_term": <uint64> }
-
-response:
-
-    { "current_term": <uint64>
-      "status": ...
-    }
-
-
-Once master election is completed ns-server will post the new master and
-election-term to the elected master and each of its new replica. After this,
-IndexManager node shall enter into `master` or `replica` state.
-
-### Index-Coordinator APIs
-
-#### /cluster/index
-request:
-
-    { "current_term": <uint64>,
-      "command": CreateIndex,
-      "indexinfo": {},
-    }
-
-response:
-
-    { "current_term": <uint64>
-      "status": ...
-      "indexinfo": {},
-    }
-
-Create a new index specified by `indexinfo` field in request body. `indexinfo`
-property is same as defined by the `IndexInfo` structure above, except that
-`id` field will be generated by the master IndexManager and the same
-`indexinfo` structure will be sent back as response.
-
-#### /cluster/index
-request:
-
-    { "current_term": <uint64>,
-      "command": DropIndex,
-      "indexid": <list-of-uint64>,
-    }
-
-response:
-
-    { "current_term": <uint64>
-      "status": ...
-    }
-
-Drop all index listed in `indexid` field.
-
-#### /cluster/index
-request:
-
-    { "current_term": <uint64>,
-      "command": ListIndex,
-      "indexids": <list-of-uint64>,
-    }
-
-response:
-
-    { "current_term": <uint64>,
-      "status": ...
-      "indexinfo": <list-of-indexinfo-structure>,
-    }
-
-List index meta-data structures identified by `indexids` in request body. If
-it is empty, list all active indexes.
-
-### ns-server API requirements:
-
-#### GetClusterMaster()
-
-Returns connection address for current master. If no master is currently elected
-then return empty string.
-
-#### Replicas()
-
-Returns list of connection address for all active replicas in the system.
-
-#### IndexerNodes()
-
-Returns list of connection address for all active local-indexer-nodes in the system.
-
-#### Join()
-
-For a node to join the cluster
-
-#### Leave()
-
-For a node to leave the cluster
-
-Q:
-1) When do the index manager needs to subscribe/unsubcribe directly?
-   Should the router handles the change the subscriber based on the topology?
+after a new master is elected, ns-server should post a bootstrap request to
+each IndexManager. There after IndexManager can fetch the current master from
+ns-server and become an Index-Coordinator or Index-Coordinator-Replica.

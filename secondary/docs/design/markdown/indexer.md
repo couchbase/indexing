@@ -1,8 +1,7 @@
 ## Indexer
 
-Indexer is a node in secondary-index cluster that will host secondary-index
-components like IndexManager, Index-Coordinator, Index-Coordinator-Replica and
-Local-Indexer process.
+Indexer is a node in secondary-index cluster that will host IndexManager,
+Indexer process.
 
 ### Scope of local indexer
 
