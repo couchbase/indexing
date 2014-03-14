@@ -3,7 +3,7 @@
 Publisher-subscriber is an event framework across the network. It is based on
 `topics`, to which network subscriptions are allowed. The event framework is
 actively managed by Index-Coordinator, and for every topic created or delete
-and for every node subscribed or unsubscribed, Index-Coordinator will manage
+and for every node subscribed or un-subscribed, Index-Coordinator will manage
 them as part of its StateContext.
 
 #### Topic
@@ -31,9 +31,10 @@ upon the connection, transport and protocol details.
 **Note:** In future we might extend this definition to make it easy for
 third-party components to interplay with secondary indexing system
 
-### Topics and publishers
+### Special topic - TopicTopic
 
-Following are standard collection of topics and its publishers.
+TopicTopic is a special kind of topic than can selectively publish subscription
+changes on any other topic.
 
 #### /topic/_path_
 
@@ -43,8 +44,7 @@ process can subscribe to `/topic`, suffixed by the `path`.
 
 **Publisher: Index-Coordinator**, when ever Index-Coordinator makes a change
 to an active topic or to the list of Topics, it will check for a topic name
-`/topic/<mutating-topic>`, where mutating-topic is the topic to which a change
-is applied, and push those changes to the subscribers.
+`/topic/<path>`, and push those changes to topictopic's subscribers.
 
 event format,
 ```json
@@ -54,6 +54,10 @@ event format,
     "subscribers": <array-of-connection-string>
 }
 ```
+
+### Standard topics and publishers
+
+Following are standard collection of topics and its publishers.
 
 #### /indexinfos
 
@@ -76,8 +80,7 @@ Subscribers will be notified when index DDL for _indexid_ changes in the
 StateContext.
 
 **Publisher: Index-Coordinator**, when ever Index-Coordinator makes a change
-to an index or to the list of index-information, it will publish the following
-event,
+to index, `indexid`, it will publish the following event,
 
 ```json
 {
