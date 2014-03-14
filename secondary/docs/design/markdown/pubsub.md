@@ -3,7 +3,7 @@
 Publisher-subscriber is an event framework across the network. It is based on
 `topics`, to which network subscriptions are allowed. The event framework is
 actively managed by Index-Coordinator, and for every topic created or delete
-and for every node subscribed or un-subscribed, Index-Coordinator will manage
+and for every node subscribed or un-subscribed Index-Coordinator will manage
 them as part of its StateContext.
 
 #### Topic
@@ -49,8 +49,8 @@ to an active topic or to the list of Topics, it will check for a topic name
 event format,
 ```json
 {
-    "topic":       <name-string>,
-    "topic-name":  <name-string>,
+    "topic":       "/topic/<path>",
+    "topic-name":  "<path>",
     "subscribers": <array-of-connection-string>
 }
 ```
@@ -69,7 +69,7 @@ event,
 
 ```json
 {
-    "topic": "/indexinfos",
+    "topic":     "/indexinfos",
     "indexinfo": <property-of-index-information>,
 }
 ```
@@ -84,7 +84,7 @@ to index, `indexid`, it will publish the following event,
 
 ```json
 {
-    "topic": "/indexinfos",
+    "topic":     "/indexinfos/<indexid>",
     "indexinfo": <property-of-index-information>,
 }
 ```
