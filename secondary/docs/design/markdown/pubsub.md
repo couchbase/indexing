@@ -50,7 +50,7 @@ event format,
 ```json
 {
     "topic":       "/topic/<path>",
-    "topic-name":  "<path>",
+    "topic-name":  <path>,
     "subscribers": <array-of-connection-string>
 }
 ```
@@ -70,7 +70,7 @@ event,
 ```json
 {
     "topic":     "/indexinfos",
-    "indexinfo": <property-of-index-information>,
+    "indexinfo": <property-of-index-information>
 }
 ```
 
@@ -85,6 +85,6 @@ to index, `indexid`, it will publish the following event,
 ```json
 {
     "topic":     "/indexinfos/<indexid>",
-    "indexinfo": <property-of-index-information>,
+    "indexinfo": <property-of-index-information>
 }
 ```
