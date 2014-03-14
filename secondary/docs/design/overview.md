@@ -36,6 +36,7 @@ This document describes the High Level Design for Secondary Indexes. It also des
  
 ###Execution Flow
 
+* [Initial Index Build](markdown/initialbuild.md)
 * [Mutation Execution Flow](markdown/mutation.md)
 * [Query Execution Flow](markdown/query.md)
 
