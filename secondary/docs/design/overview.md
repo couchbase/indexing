@@ -10,17 +10,17 @@ This document describes the High Level Design for Secondary Indexes. It also des
 
 - __Projector__
 
-  The projector is responsible for mapping mutations to a set of key version. The projector can reside within the master KV node in which the mutation is generated or it can reside in separate node. The projector receives mutations from ep-engine through UPR protocol. The projector sends the evaluated results to router. 
+  The Projector is responsible for mapping mutations to a set of Secondary Key Versions. The Projector can reside within the master KV node in which the mutation is generated or it can reside in separate node. It receives mutations from ep-engine through UPR protocol and sends the evaluated results to Router. 
 
 - __Router__
 
-  The router is responsible for sending key version to the index nodes. It relies on the index distribution/partitioning topology to determine the indexer which should receive the key version. The router resides in the same node as the projector. 
+  The Router is responsible for sending Key Version to the index nodes. It relies on the index distribution/partitioning topology to determine the indexer which should receive the key version. The router resides in the same node as the projector. 
   
 - __Index Manager__
 
-  The index manager is responsible for receiving requests for indexing operations (creation, deletion, maintenance, scan/lookup). The Index Manager is located in the index node, which can be different from KV node. 
+  The index manager is responsible for receiving requests for indexing operations (creation, deletion, maintenance, scan/lookup). The Index Manager is located in the index node, which can be different from KV node. Index Manager runs in one indexer node as Index Coordinator Master and in few other configurable nodes as Index Coordinator Replica. In rest of the nodes, it runs in dormant mode.
   
-- __Indexer__
+- __Indexer__ (Local Indexer)
 
   The indexer processes the key versions received from router and provides persistence support for the index. Indexer also provides the interface for query client to run index Scans and does scatter/gather for queries. The indexer would reside in index node.
   
@@ -42,11 +42,7 @@ This document describes the High Level Design for Secondary Indexes. It also des
 
 ###Bootstrap Sequence
 
-* System Bootstrap
-* Indexer Restart Bootstrap
-* Projector Restart Bootstrap
-* Router Restart Bootstrap
-* Index Manager Restart Bootstrap
+* [System Bootstrap](markdown/bootstrap.md)
 
 ###Deployment
 
