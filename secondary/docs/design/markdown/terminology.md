@@ -102,6 +102,17 @@ timestamp, flushed to disk, snapshotted (hence it is sometimes referred as
 _snapshot timestamp_) and the snapshot preserves the persistent timestamp
 information along with it.
 
+**Scan Timestamp** - For every scan request which requires stability,
+Indexer will choose a Scan Timestamp from the available Stability Timestamps
+or KV timestamp(in case of session consistency). All Indexers participating
+in the scan, will return results from a snapshot which matches this Scan
+Timestamp.
+
+**Initial Build Timestamp** - For initial build of a newly created index,
+the current Timestamp of KV(when initial build starts) is choosen as
+Initial Build Timestamp. When index has processed mutations till this point,
+it is marked as initial build complete and ready for query.
+
 **Mutation Queue** - In memory queue per vbucket maintained inside
 local-indexer-node. System-wide UPR mutations will be gathered in this queue
 and flushed into the backend when the queue exactly matches the stability
@@ -113,6 +124,10 @@ failures in which case it could be falling behind the main stream of
 projected-mutations. In those cases, they can instantiate a separate data-path
 to KV-cluster via projector to get mutations that are required to catchup with
 main stream mutations.
+
+**Backfill Queue** - In memory queue per Bucket maintained inside
+local-indexer-node. This queue is used by Indexer to store mutations for
+the initial index build.
 
 **Stability Snapshot** - Tip of the backend that matches a stability
 timestamp.
@@ -156,8 +171,12 @@ will be responsible for building the index, some of them acting as master and
 few others acting as active replicas. Topology also defines partitions and
 slices for an index.
 
-**Point in time query** -
+**Topic** - Topic is a concept used in the pub-sub model followed by Router.
+Projector publishes key versions on "topics" which the Router can (based on topology)
+translate to a list of destinations this key version needs to be sent to.
+Typical topics are MaintenanceTopic, CatchupTopic, BackfillTopic.
 
-**Stable scan** -
-
-**Read your own write** -
+**Stable Scan** - A scan which is run against a Stability Timestamp(i.e. a
+snapshot of the data) across multiple Indexer nodes so it avoids problems
+such as `Tearing Reads`.  A Stable Scan is also repeatable(in case query is
+holding an open cursor on the results).
