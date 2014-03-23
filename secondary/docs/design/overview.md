@@ -66,18 +66,23 @@ This document describes the High Level Design for Secondary Indexes. It also des
   * [Existing REST Based Protocol](https://docs.google.com/document/d/1j9D4ryOi1d5CNY5EkoRuU_fc5Q3i_QwIs3zU9uObbJY/edit)
 
 ###Storage Management
-* Persistent Snapshot 
+ForestDB will be used as the persistent storage layer for secondary indexes for Beta release.
+The design is Storage Independent and other storage solutions can be plugged-in.
+Storage layer is expected to allow storage/read of snapshots to allow stable view of data.
+
+[John's ForestDB Requirement Doc](https://docs.google.com/document/d/1zUJDLSrX7PPNfWopyoY1QIm5Y6CQL0h9iueoTZJtbT8/edit#).
 
 ###Cluster Management
 * Master Election
 * Communication with ns_server
 
 ###Metadata Management
-* Metadata Replication
-* Metadata Recovery
+**Metadata(aka StateContext)** is managed by *Index Coordinator Master* and synchronously replicated to its *Replicas*
+for failure recovery. <br>
+As an illustration of synchronous replication, please see [Initial Index Build Prepare Phase](markdown/initialbuild.md)
 
 ###Recovery
-* [Recovery Document](https://docs.google.com/document/d/1rNJSVs80TtvY0gpoebsBwzhqWRBJnieSuLTnxuDzUTQ/edit) 
+* [John's Recovery Document](https://docs.google.com/document/d/1_zWRJ_VmbZZ1x925lUqunipuTzCJJMsqejtUrbtmVTA/edit)
 
 ###Replication
 * Replication Strategy
@@ -93,7 +98,7 @@ This document describes the High Level Design for Secondary Indexes. It also des
 
 ###References
 1. [Distributed Indexing Design Proposal - Steve Yen](https://docs.google.com/document/d/1TEY_yjUMs3FT3FZkgqIZUiKziUUBGiCWFSjWOOj65Dw/edit?pli=1)
-2. [Distributed Range Partitioned Indexes – Steve Yen, Dustin Stallings](https://docs.google.com/presentation/d/161vtnjDFOpnliT0DA2k1-jCRKiB-eY9JZHhd0YQoAXo/edit#slide=id.p)
+2. [Distributed Range Partitioned Indexes – Steve Yen, Dustin Sallings](https://docs.google.com/presentation/d/161vtnjDFOpnliT0DA2k1-jCRKiB-eY9JZHhd0YQoAXo/edit#slide=id.p)
 3. [Index Consistency And Isolation - Steve Yen](https://docs.google.com/document/d/1Y_aXMUBzEvLf8PO8CJYv5eYiQmKsNYzMr6Fq30Cl6xg/edit?pli=1)
 4. [Recovery In Secondary Indexes - John Liang](https://docs.google.com/document/d/1rNJSVs80TtvY0gpoebsBwzhqWRBJnieSuLTnxuDzUTQ/edit) 
 5. [Consistency In Indexes - John Liang](https://docs.google.com/document/d/1VespzgCKgPLFwCGRrx0VW7RC_PkSXh6cU7FSaA9gjic/edit?pli=1)
