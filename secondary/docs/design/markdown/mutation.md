@@ -43,8 +43,6 @@ This method ensures all Indexers have common stability points across which these
   These common timestamps are necessary to prevent problems such as [Tearing Reads](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md) while doing a distributed range scan.
 
 
-
-
 ####Delete Mutation
 ![](https://rawgithub.com/couchbase/indexing/master/secondary/docs/design/images/DeleteWorkflow.svg)
 
@@ -58,3 +56,5 @@ A notable point here is that _ALL_ Delete Mutations in KV will result in a broad
 to be sent to all Indexers. This is due to the fact that there is no
 way to determine the secondary key's location based on KV's DocId
 (which is the only information available in delete).
+
+*For more details, see [John's Execution Flow Document](https://docs.google.com/document/d/11IojzquMYrOO0NNu7P52oQb6lai0ooXrugcEMEyXsUc/edit#).*
