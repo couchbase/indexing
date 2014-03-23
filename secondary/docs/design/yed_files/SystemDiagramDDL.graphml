@@ -37,7 +37,7 @@
           <y:Geometry height="80.0" width="119.0625" x="1390.8291015624995" y="691.0143750000016"/>
           <y:Fill color="#FFCC00" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="90.4140625" x="14.32421875" y="4.0">Index Manager<y:LabelModel>
+          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="110.119140625" x="4.4716796875" y="4.0">Index Coordinator<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
             <y:ModelParameter>
@@ -222,7 +222,8 @@
           <y:Geometry height="80.0" width="119.0625" x="1395.8291015624995" y="1141.0143750000016"/>
           <y:Fill color="#808080" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="90.4140625" x="14.32421875" y="30.93359375">Index Manager<y:LabelModel>
+          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="110.119140625" x="4.4716796875" y="23.8671875">Index Coordinator
+Replica<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
             <y:ModelParameter>
@@ -1079,7 +1080,6 @@
       </data>
     </node>
     <node id="n63">
-      <data key="d5"/>
       <data key="d6">
         <y:ShapeNode>
           <y:Geometry height="119.0625" width="131.5625" x="792.607259114583" y="988.7459375000008"/>
@@ -1097,7 +1097,6 @@
       </data>
     </node>
     <node id="n64">
-      <data key="d5"/>
       <data key="d6">
         <y:ShapeNode>
           <y:Geometry height="269.0625" width="173.75" x="538.044759114583" y="918.4334375000008"/>
@@ -1116,7 +1115,6 @@ Component<y:LabelModel>
       </data>
     </node>
     <node id="n65">
-      <data key="d5"/>
       <data key="d6">
         <y:ShapeNode>
           <y:Geometry height="417.5" width="480.0" x="1243.3728841145826" y="630.0271875000008"/>
@@ -1139,7 +1137,7 @@ Component<y:LabelModel>
           <y:Geometry height="20.76589595375731" width="23.843930635838205" x="740.4287909064892" y="1002.8498934248555"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="11.587890625" x="6.128020005419103" y="1.3165417268787678">1<y:LabelModel>
+          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="11.587890625" x="6.128020005419103" y="1.3165417268786541">1<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
             <y:ModelParameter>
@@ -1173,7 +1171,7 @@ Component<y:LabelModel>
           <y:Geometry height="20.76589595375731" width="23.843930635838205" x="1920.6277612822078" y="969.4117611994202"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="11.587890625" x="6.128020005419103" y="1.3165417268786541">6<y:LabelModel>
+          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="11.587890625" x="6.128020005419103" y="1.3165417268786541">3<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
             <y:ModelParameter>
@@ -1326,7 +1324,7 @@ Component<y:LabelModel>
           <y:Geometry height="124.99999999999997" width="94.99999999999989" x="2277.51505533854" y="683.8535156250006"/>
           <y:Fill color="#FFCC00" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="64.3984375" x="15.300781249999773" y="4.0">ep-engine<y:LabelModel>
+          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="64.3984375" x="15.30078125" y="4.0">ep-engine<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
             <y:ModelParameter>
@@ -1343,7 +1341,7 @@ Component<y:LabelModel>
           <y:Geometry height="97.5" width="94.99999999999989" x="2128.06193033854" y="766.5097656250005"/>
           <y:Fill color="#FFCC00" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="56.166015625" x="19.416992187499886" y="4.0">Projector<y:LabelModel>
+          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="56.166015625" x="19.4169921875" y="4.0">Projector<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
             <y:ModelParameter>
@@ -1360,7 +1358,7 @@ Component<y:LabelModel>
           <y:Geometry height="72.5" width="94.99999999999989" x="1976.108805338541" y="677.4472656250007"/>
           <y:Fill color="#FFCC00" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="42.490234375" x="26.254882812499886" y="27.18359375">Router<y:LabelModel>
+          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="18.1328125" modelName="custom" textColor="#000000" visible="true" width="42.490234375" x="26.2548828125" y="27.18359375">Router<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
             <y:ModelParameter>
@@ -1582,7 +1580,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e7" source="n63" target="n63">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="0.0" ty="0.0">
@@ -1595,7 +1592,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e8" source="n64" target="n63">
-      <data key="d9"/>
       <data key="d10">
         <y:PolyLineEdge>
           <y:Path sx="0.0" sy="-19.53125" tx="0.0" ty="-14.84375"/>
@@ -1606,7 +1602,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e9" source="n13" target="n11">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="120.77815755208348" ty="-187.12260416666754">
@@ -1619,7 +1614,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e10" source="n65" target="n65">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="0.0" ty="0.0">
@@ -1632,7 +1626,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e11" source="n13" target="n13">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="0.0" ty="0.0">
@@ -1645,7 +1638,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e12" source="n13" target="n11">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="0.0" ty="0.0">
@@ -1658,7 +1650,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e13" source="n65" target="n65">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="0.0" ty="0.0">
@@ -1671,7 +1662,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e14" source="n56" target="n13">
-      <data key="d9"/>
       <data key="d10">
         <y:PolyLineEdge>
           <y:Path sx="0.0" sy="0.0" tx="-3.128629557291788" ty="53.38437500000009"/>
@@ -1682,7 +1672,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e15" source="n63" target="n1">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="7.698404947916401" sy="-7.550312499998995" tx="-48.360351562499545" ty="-19.373750000001337">
@@ -1695,7 +1684,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e16" source="n1" target="n63">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="-50.360351562499545" sy="4.626249999998663" tx="7.698404947916401" ty="11.980937500000891">
@@ -1708,7 +1696,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e17" source="n1" target="n2">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="0.0" ty="0.0">
@@ -1721,7 +1708,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e18" source="n1" target="n13">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="8.118815104166515" sy="1.7356249999982083" tx="66.13964843750045" ty="52.860624999998436">
@@ -1734,7 +1720,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e19" source="n2" target="n4">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="-90.20338234703968" sy="72.79148062334343" tx="-18.740478515624545" ty="-12.122287500001562">
@@ -1747,7 +1732,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e20" source="n2" target="n58">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="-18.744912502134184" ty="-12.100348995413128">
@@ -1760,7 +1744,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e21" source="n2" target="n60">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="91.6923567049771" sy="56.485624999998436" tx="-18.552490234374545" ty="-7.59463125000309">
@@ -1773,7 +1756,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e22" source="n13" target="n62">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.18395996093795475" sy="71.86062499999844" tx="-17.555053710937045" ty="-13.214631250001958">
@@ -1786,7 +1768,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e23" source="n1" target="n24">
-      <data key="d9"/>
       <data key="d10">
         <y:PolyLineEdge>
           <y:Path sx="-0.36035156249954525" sy="-16.014375000001564" tx="-13.0" ty="6.0">
@@ -1800,7 +1781,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e24" source="n12" target="n25">
-      <data key="d9"/>
       <data key="d10">
         <y:PolyLineEdge>
           <y:Path sx="0.0" sy="0.0" tx="0.0" ty="0.0"/>
@@ -1811,7 +1791,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e25" source="n1" target="n12">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="0.0" ty="0.0">
@@ -1836,7 +1815,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e27" source="n77" target="n78">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="0.0" ty="0.0">
@@ -1849,7 +1827,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e28" source="n78" target="n79">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="0.0" ty="0.0">
@@ -1862,7 +1839,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e29" source="n1" target="n78">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="0.0" sy="0.0" tx="0.0" ty="0.0">
@@ -1875,7 +1851,6 @@ Component<y:LabelModel>
       </data>
     </edge>
     <edge id="e30" source="n63" target="n64">
-      <data key="d9"/>
       <data key="d10">
         <y:PolyLineEdge>
           <y:Path sx="0.0" sy="10.644687499998781" tx="74.40836588541697" ty="5.957187499998781"/>

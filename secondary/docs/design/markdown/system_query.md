@@ -14,6 +14,8 @@ __Annotations__
 6. Scan Co-ordinator returns the results to requesting Index Client.
 7. Scan Results are returned to Query Server.
 
+*For detailed execution flow and time-ordering of events, see [Query Execution Flow](query.md).*
+
 ###Index-Query System Diagram For DDL Request
 
 
@@ -22,11 +24,13 @@ __Annotations__
 __Annotations__
 
 1. Index DDL Request from Query Server to Index Client.
-2. Index Client sends the DDL request to Master Index Manager.
-3. Index Manager decides the topology and informs participating Local Indexers to process DDL.
+2. Index Client sends the DDL request to Index Coordinator Master.
+3. Index Coordinator Master decides the topology and informs participating Local Indexers to process DDL.
 4. Local Indexers allocates/deallocates storage for new DDL request.
-5. Index Manager replicates the updated metadata.
-6. Metadata is persisted at both master and replica Index Manager.
-7. Index Manager notifies __ALL__ KV projectors for the new DDL request.
-8. Index Manager returns status of DDL request to Index Client.
+5. Index Coordinator Master replicates the updated metadata.
+6. Metadata is persisted at both master and replica Index Coordinator.
+7. Index Coordinator Master notifies __ALL__ KV projectors for the new DDL request.
+8. Index Coordinator returns status of DDL request to Index Client.
 9. DDL Request Status is returned to Query Server.
+
+*For detailed execution flow and time-ordering of events, see [Initial Index Build](initialbuild.md).*
