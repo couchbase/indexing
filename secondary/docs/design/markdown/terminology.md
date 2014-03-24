@@ -138,7 +138,7 @@ with the snapshot.
 
 **KV-reconnection** - A relative harmless scenario when one or more UPR
 connection with KV cluster is lost, or when one of the stateless component
-like projector or router crashes.
+like projector crashes.
 
 **KV-rollback** - A situation where KV has gone through unclean failover but
 secondary cluster is operating in normal mode.
@@ -146,10 +146,10 @@ secondary cluster is operating in normal mode.
 **Local indexer recovery** - When a participating indexer-node, that maintains
 a subset of index data crashes it will try to independently recover from its
 persistent snapshot and rejoin with rest of the system. Other crashes can also
-happen in secondary cluster. When a stateless component like projector or
-router crashes, they are restarted by monitor program and acquire the system
-state from index-manager. If master index-manager crashes, a new master is
-elected from other instances of it.
+happen in secondary cluster. When a stateless component like projector router
+crashes, they are restarted by monitor program and acquire the system state
+from index-manager. If master index-manager crashes, a new master is elected
+from other instances of it.
 
 **Forward Index** - Main persistence structure for secondary index. This typically
 has the format of <secondary_key, docid> and allows lookup/scan queries based on the
@@ -157,7 +157,7 @@ secondary key.
 
 **Back Index** - Auxiliary persistence structure for secondary index. This typically
 has the format of <doc_id, secondary_key>. The main usage of a back-index is in
-maintainence of the Forward Index when the source document gets mutated. It facilitates
+maintenance of the Forward Index when the source document gets mutated. It facilitates
 in looking up the old secondary key associated with a given document. This old secondary
 key can then be looked up and replaced/deleted based on the mutation.
 

@@ -7,27 +7,25 @@ This document describes the High Level Design for Secondary Indexes. It also des
 
 ###Components
 
-
 - __Projector__
 
-  The Projector is responsible for mapping mutations to a set of Secondary Key Versions. The Projector can reside within the master KV node in which the mutation is generated or it can reside in separate node. It receives mutations from ep-engine through UPR protocol and sends the evaluated results to Router. 
+  The Projector is responsible for mapping mutations to a set of Secondary Key Versions. The Projector can reside within the master KV node in which the mutation is generated or it can reside in separate node. It receives mutations from ep-engine through UPR protocol and sends the evaluated results to Router.  [Details](markdown/projector.md)
 
 - __Router__
 
-  The Router is responsible for sending Key Version to the index nodes. It relies on the index distribution/partitioning topology to determine the indexer which should receive the key version. The router resides in the same node as the projector. 
-  
+  The Router is responsible for sending Key Version to the index nodes. It relies on the index distribution/partitioning topology to determine the indexer which should receive the key version. The router resides in the same node as the projector.  [Details](markdown/router.md)
+
 - __Index Manager__
 
-  The index manager is responsible for receiving requests for indexing operations (creation, deletion, maintenance, scan/lookup). The Index Manager is located in the index node, which can be different from KV node. Index Manager runs in one indexer node as **Index Coordinator Master** and in few other configurable nodes as **Index Coordinator Replica**. In rest of the nodes, it runs in dormant mode.
-  
+  The index manager is responsible for receiving requests for indexing operations (creation, deletion, maintenance, scan/lookup). The Index Manager is located in the index node, which can be different from KV node. Index Manager runs in one indexer node as **Index Coordinator Master** and in few other configurable nodes as **Index Coordinator Replica**. In rest of the nodes, it runs in dormant mode.  [Details](markdown/index_manager.md)
+
 - __Indexer__ (Local Indexer)
 
   The indexer processes the key versions received from router and provides persistence support for the index. Indexer also provides the interface for query client to run index Scans and does scatter/gather for queries. The indexer would reside in index node.
-  
+
 - __Query Catalog__
 
   This component provides catalog implementation for the Query Server. This component resides in the same node Query Server is running and allows Query Server to perform Index DDL (Create, Drop) and Index Scan/Stats operations.
-
 
 ###System Diagram
 
