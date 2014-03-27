@@ -37,3 +37,5 @@ support new use-cases e.g. N1QL.
 - Active Replica for Query
 
 
+Please see [Design Documentation](overview.md) for more details.
+

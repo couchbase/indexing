@@ -18,7 +18,7 @@ This document describes the High Level Design for Secondary Indexes. It also des
   
 - __Index Manager__
 
-  The index manager is responsible for receiving requests for indexing operations (creation, deletion, maintenance, scan/lookup). The Index Manager is located in the index node, which can be different from KV node. Index Manager runs in one indexer node as Index Coordinator Master and in few other configurable nodes as Index Coordinator Replica. In rest of the nodes, it runs in dormant mode.
+  The index manager is responsible for receiving requests for indexing operations (creation, deletion, maintenance, scan/lookup). The Index Manager is located in the index node, which can be different from KV node. Index Manager runs in one indexer node as **Index Coordinator Master** and in few other configurable nodes as **Index Coordinator Replica**. In rest of the nodes, it runs in dormant mode.
   
 - __Indexer__ (Local Indexer)
 

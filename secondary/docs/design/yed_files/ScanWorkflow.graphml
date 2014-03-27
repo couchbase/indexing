@@ -226,8 +226,8 @@ based on topology<y:LabelModel>
           <y:Geometry height="40.0" width="80.0" x="744.5" y="102.5"/>
           <y:Fill color="#E8EEF7" color2="#B7C9E3" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
-          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="61.703125" x="9.1484375" y="3.8671875">Index
-Manager1<y:LabelModel>
+          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" height="32.265625" modelName="custom" textColor="#000000" visible="true" width="73.8203125" x="3.08984375" y="3.8671875">Index
+Coordinator<y:LabelModel>
               <y:SmartNodeLabelModel distance="4.0"/>
             </y:LabelModel>
             <y:ModelParameter>
@@ -243,6 +243,7 @@ Manager1<y:LabelModel>
           <y:Geometry height="30.0" width="102.0" x="762.5" y="762.75"/>
           <y:Fill hasColor="false" transparent="false"/>
           <y:BorderStyle color="#000000" type="line" width="1.0"/>
+          <y:NodeLabel alignment="center" autoSizePolicy="content" fontFamily="Dialog" fontSize="12" fontStyle="plain" hasBackgroundColor="false" hasLineColor="false" hasText="false" height="4.0" modelName="internal" modelPosition="c" textColor="#000000" visible="true" width="4.0" x="49.0" y="13.0"/>
           <y:Shape type="rectangle3d"/>
         </y:ShapeNode>
       </data>
@@ -284,7 +285,6 @@ participating Indexers<y:LabelModel>
       </data>
     </node>
     <node id="n16">
-      <data key="d5"/>
       <data key="d6">
         <y:ShapeNode>
           <y:Geometry height="12.0" width="10.0" x="386.0" y="682.0"/>
@@ -303,7 +303,6 @@ participating Indexers<y:LabelModel>
       </data>
     </node>
     <node id="n17">
-      <data key="d5"/>
       <data key="d6">
         <y:ShapeNode>
           <y:Geometry height="12.0" width="10.0" x="387.0" y="746.0"/>
@@ -494,7 +493,6 @@ Scan<y:LabelModel>
       </data>
     </edge>
     <edge id="e1" source="n2" target="n2">
-      <data key="d9"/>
       <data key="d10">
         <y:ArcEdge>
           <y:Path sx="-9.0" sy="123.29166666666663" tx="-4.513930613467323" ty="224.1215899836841">
@@ -507,7 +505,6 @@ Scan<y:LabelModel>
       </data>
     </edge>
     <edge id="e2" source="n2" target="n4">
-      <data key="d9"/>
       <data key="d10">
         <y:PolyLineEdge>
           <y:Path sx="4.512459215091781" sy="95.5590033587788" tx="4.478924701285109" ty="96.49900167136343">
@@ -520,12 +517,9 @@ Scan<y:LabelModel>
       </data>
     </edge>
     <edge id="e3" source="n4" target="n2">
-      <data key="d9"/>
       <data key="d10">
         <y:PolyLineEdge>
-          <y:Path sx="4.509928701404874" sy="244.34450368462205" tx="4.501218575492885" ty="244.20176191357007">
-            <y:Point x="474.0" y="821.4278370179553"/>
-          </y:Path>
+          <y:Path sx="-4.497967846820757" sy="244.34450368462205" tx="4.496522760115681" ty="244.20176191357007"/>
           <y:LineStyle color="#000000" type="line" width="1.0"/>
           <y:Arrows source="none" target="standard"/>
           <y:BendStyle smoothed="false"/>
@@ -533,7 +527,6 @@ Scan<y:LabelModel>
       </data>
     </edge>
     <edge id="e4" source="n11" target="n2">
-      <data key="d9"/>
       <data key="d10">
         <y:PolyLineEdge>
           <y:Path sx="-4.4775932020949085" sy="-334.38753280580966" tx="4.465211049612321" ty="-336.51253280580977">
@@ -543,6 +536,19 @@ Scan<y:LabelModel>
           <y:Arrows source="none" target="standard"/>
           <y:BendStyle smoothed="false"/>
         </y:PolyLineEdge>
+      </data>
+    </edge>
+    <edge id="e5" source="n2" target="n0">
+      <data key="d9"/>
+      <data key="d10">
+        <y:ArcEdge>
+          <y:Path sx="-4.504629777402897" sy="347.6872859577794" tx="4.480446170520253" ty="342.41141764322924">
+            <y:Point x="268.4879150390625" y="924.5701904296875"/>
+          </y:Path>
+          <y:LineStyle color="#000000" type="line" width="1.0"/>
+          <y:Arrows source="none" target="standard"/>
+          <y:Arc height="-6.276809926930582E-6" ratio="-1.300769696399584E-7" type="fixedRatio"/>
+        </y:ArcEdge>
       </data>
     </edge>
   </graph>

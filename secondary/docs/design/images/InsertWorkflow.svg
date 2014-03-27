@@ -105,7 +105,7 @@
     <g text-rendering="geometricPrecision" stroke-miterlimit="1.45" shape-rendering="geometricPrecision" transform="matrix(1,0,0,1,-118,-62)" stroke-linecap="butt">
       <path fill="none" d="M840 77.75 L920 77.75 L920 117.75 L840 117.75 Z" clip-path="url(#clipPath2)"/>
       <text x="863.749" xml:space="preserve" y="95.2188" font-family="sans-serif" clip-path="url(#clipPath2)" stroke="none">Index</text>
-      <text x="854.9424" xml:space="preserve" y="109.3516" font-family="sans-serif" clip-path="url(#clipPath2)" stroke="none">Manager</text>
+      <text x="845.0898" xml:space="preserve" y="109.3516" font-family="sans-serif" clip-path="url(#clipPath2)" stroke="none">Coordinator</text>
     </g>
     <g text-rendering="geometricPrecision" stroke-miterlimit="1.45" shape-rendering="geometricPrecision" font-family="sans-serif" transform="matrix(1,0,0,1,-118,-62)" stroke-linecap="butt">
       <text x="183.0713" xml:space="preserve" y="184.5352" clip-path="url(#clipPath2)" stroke="none">1. Subscribe UPR</text>

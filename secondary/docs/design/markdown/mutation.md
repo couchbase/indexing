@@ -30,13 +30,13 @@ The [High-Watermark Timestamp](https://github.com/couchbase/indexing/blob/master
 
 * __Stable Persistence Phase(Step 12-16)__
 
-  [Index Manager](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/overview.md#components) (based on the SYNC messages received and some algorithm) decides to create [Stability Timestamp](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md) (Step 12).
+  [Index Coordinator](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/overview.md#components) (based on the SYNC messages received and some algorithm) decides to create [Stability Timestamp](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md) (Step 12).
   This decision along with the timestamp is broadcasted to all Indexers(Step 13). This triggers the processing of Mutation Queue at Indexer. Message are applied/skipped as required. In this example, Indexer1 will skip the DELETE msg received in Step10 since it has applied the INSERT already.
 
   Messages from Mutation Queue are processed in order and applied as batch to the persistent storage(Step14).
 Indexer will process the messages for each vbucket only till the Max Sequence Number in Stability Timestamp.
 
-  Once all Indexers respond to Index Manager about successful Stability Timestamp creation(Step 15), Index Manager
+  Once all Indexers respond to Index Coordinator about successful Stability Timestamp creation(Step 15), Index Coordinator
 will update its Stability Timestamp(Step 16).
 This method ensures all Indexers have common stability points across which these can offer Index Scans.
 

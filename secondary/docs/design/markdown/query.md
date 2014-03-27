@@ -8,7 +8,7 @@ This document describes the flow of execution of a query engine request.
 
 **Description**
 
-1. Index Manager will periodically notify the Indexer about the latest changes in index toplogy. This enables Indexer to maintain a local copy of latest index topologies.
+1. Index Coordinator will periodically notify the Indexer about the latest changes in index toplogy. This enables Indexer to maintain a local copy of latest index topologies.
 2. Index Client(query catalog implementation which resides on query server) receives index scan request from the Query Server Component. 
 3. Index Client will choose a Indexer node to send this request to. Index Client will have a list of available indexer nodes.
 4. Index Client will choose(or will be provided by query engine) a Consistency/Stability option for the index scan. This is based on the consistency/latency requirements of the application issuing the query.
