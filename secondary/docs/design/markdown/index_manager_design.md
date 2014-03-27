@@ -1,7 +1,7 @@
 ## IndexManager design
 
 Each instance of IndexManager will be modeled as a state machine backed by a
-data structure, called StateContext, that contains meta-data about the secondary
+data structure, called StateContext, that contains meta-data about secondary
 index, index topology, and meta-data for normal operation of IndexManager
 cluster.
 
@@ -11,7 +11,6 @@ cluster.
     type Timestamp   []uint64 // timestamp vector for vbuckets
     type Projectorid byte     // range of projectors
     type Nodeid      byte     // defines the range of indexer-nodes
-    type Partitionid byte     // range of partition numbers
 
     type VbVector struct {
         vbuuid uint64   // vbucket unique id
@@ -53,13 +52,16 @@ cluster.
 
         // per index map of index topology
         indexesTopology  map[uint64]IndexTopology   // indexed by `indexid`
+
+        // per bucket rollback context
+        rollback         map[string]Rollback
     }
 ```
 
 ## topology
 
-Index-topology helps router to send key-versions to respective master
-indexer-nodes and its active replica.
+Index-topology helps router to send key-versions to local indexer nodes
+hosting the shard containing the key.
 
 Topology of any given index consist of the following elements,
 
@@ -75,17 +77,15 @@ Topology of any given index consist of the following elements,
 
         // number of re-balances active for this index
         rebalances    []Rebalance
-
-        rollback      Rollback
     }
 
     // TopologyProvider interface will encapsulate the partition algorithm and
     // required data structures. More APIs will be defined to educate the
     // algorithm about load distribution, rebalances etc..
     //
-    // A `Type` implementing this interface will be embedded inside index-topology
-    // structure and replicated across routers and indexers. `Type` depend on the
-    // choice of partition algorithm.
+    // A concrete `Type` implementing this interface will be embedded inside
+    // index-topology structure and replicated across routers and indexers.
+    // `Type` depend on the choice of partition algorithm.
     type TopologyProvider interface {
         // For given key-version identify the logical partition in which the
         // key is located.
@@ -135,7 +135,7 @@ Index-Coordinator shall wait for a handshake with all the replica.
 
 **bootstrap handshake with replica**, during this handshake the
 Index-Coordinator-Replicas will provide the CAS number of its local StateContext
-to Index-Coorindator, once Index-Coordinator receives handshake for each of
+to Index-Coordinator, once Index-Coordinator receives handshake for each of
 the listed replicas, it will determine the latest version of StateContext. If
 its local StateContext is not the latest one, it will fetch the latest
 StateContext from one of its replica and publish that to all of its other
@@ -144,34 +144,35 @@ replicas.
 **bootstrap handshake with local-indexer-node**, during this handshake
 Index-Coordinator will get topology details from each of its
 local-indexer-node and verify that with its StateContext. If there are any
-changes it will update the topology and post new topology projectors, routers
-and respective indexer nodes.
+changes it will update the topology and post new topology to projectors,
+routers and respective indexer nodes. Hanshake with indexer node will
+typically involve a list of following tuple,
+> {Indexid, Shard, []Slice}
 
 **currentTimestamp**, during the handshake with indexer-nodes, for each
-IndexTopology, Index-Coordinator will get latest snapshot-timestamp from each
-one of them as hw-timestamp and update its currentTimestamp by picking the
+IndexTopology, Index-Coordinator will get latest snapshot-timestamp /
+hw-timestamp from each one of them and update its currentTimestamp by picking the
 lowest of all sequence number.
 
 Index-Coordinator finally moves to `active` state. After moving to
 `active` state, whenever a new local indexer node registers with
-Index-Coordinator it will go through a handshake for topology verification.
+Index-Coordinator, or whenever ns-server adds an indexer node into the
+cluster, it will go through a handshake for topology verification.
 
 ## Index-Coordinator active state
 
 Any update made to its StateContext will increment the CAS field and replicated
 to Index-Coordinator replicas. If a modification is relevant for projectors
-and/or indexer-nodes post it to respective components.
+and/or indexer-nodes, the update will be posted to respective components.
 
 * accept DDL changes from administrator and updates IndexDefinition list.
 * accept local-indexer-node registration and gather topology information for
-  them. Another alternative is to get the list of local-indexer-nodes from
-  ns-server.
-* accept projector registration.
+  them.
 
 Index-Coordinator periodically receives SYNC message and update its
-`currentTimestamp` vector and `currentVbuuid` for each topology. If SYNC
-message for a vbucket does not arrive for a prescribed period of time, it will
-enquire for rollback.
+`currentTimestamp` vector and `currentVbuuid` for each bucket. If SYNC message
+for a vbucket does not arrive for a prescribed period of time, it will enquire
+for rollback.
 
 ### stability timestamp
 
@@ -185,25 +186,20 @@ for the vbucket and its `vbuuid`.
   indexes for that bucket.
 * local-indexer-nodes will queue up incoming stability-timestamp and when its
   mutation queue aligns with stabilityTimestamp it creates a snapshot.
-* if Index-Coordinator fails in between, new Index-Coordinator can either get
-  the last stability timestamp from indexer node or it can maintian a copy of
-  it in StateContext. As an optimization Index-Coordinator can use hash
-  value of stability timestamp to publish it to indexer node and for
-  replication.
 
-The mutations in a snapshot must be smaller or equal to the new stability
+Mutations in a snapshot must be smaller or equal to the new stability
 timestamp, hence it is also called as snapshot-timestamp. As an optimization,
-Index-Coordinator can consolidate stabilityTimestamp for all IndexTopologies
-and publish them as single message to local-indexer-node.
+Index-Coordinator can consolidate stabilityTimestamp for all buckets and publish
+them as single message to local-indexer-node.
 
 Another alternative is,
 
 Index-Coordinator will periodically recieve `HWHeartbeat` message from every
 local-indexer-node. Based on HWHeartbeat metrics and/or query requirements,
 Index-Coordinator will promote the currentTimestamp into a stability-timestamp
-and publish it to all index-nodes hosting a index for that bucket.
+and publish it to all index-nodes hosting an index for that bucket.
 
-This alternative is only going to handle the case when the coordinator is
+This alternative can be used to handle the case when the coordinator is
 running on a slow node.
 
 **algorithm to compute stability-timestamp based on hw-timestamp**
@@ -213,11 +209,11 @@ Algorithm takes following as inputs.
 - per bucket HighWatermark-timestamp from each of the local-indexer-node.
 - available free size in local-indexer's mutation-queue.
 
-* For each vbucket, compute the mean seqNo
-* Use the mean seqNo to create a stabilityTimestamp
+* For each vbucket, compute the mean seqNo.
+* Use the mean seqNo to create a stabilityTimestamp.
 * If heartbeat messages indicate that the faster indexer's mutation queue is
   growing rapidly, it is possible to use a seqNo that matches that fast indexer
-  closer
+  closer.
 * If the local indexer that has not sent heartbeat messages within a certain
   time, skip the local indexer, or consult the cluster mgr on the indexer
   availability.
@@ -235,10 +231,6 @@ Algorithm takes following as inputs.
     }
 ```
 
-A problem with this approach would be, if there is a slow indexer-node that has
-not yet caught up with stability-timestamps, it is possible that the indexer
-will no longer be able to service consistent query.
-
 
 ### client interfacing with Index-Coordinator
 
@@ -246,6 +238,8 @@ will no longer be able to service consistent query.
   cannot get one, it must retry or fail.
 * once network address of Index-Coordinator is obtained from ns-server, client
   can post update request to Index-Coordinator.
+* client will get a reponse for its update request only after the updated
+  StateContext is replicated across coordinator's replicas.
 
 ## index rebalance
 
@@ -254,7 +248,7 @@ will no longer be able to service consistent query.
         state              string // "start", "pending", "catchup", "done"
         slice_no           int // Slicen number undergoing rebalance
         srcShard           Shard // from this shard
-        dstPartition       Shard // to this shard
+        dstShard           Shard // to this shard
         // one of the stability-timestamp picked by Index-Coordinator
         rebalanceTimestamp Timestamp
     }
@@ -263,13 +257,11 @@ will no longer be able to service consistent query.
 Index-Coordinator to calculate re-balance strategy,
 * by figuring out the slices (identified by slice-nos) to move from one
   shard to another.
-* by identifying local-indexer-nodes hosting source and destination shards
-  and use one of the stability-timestamp as rebalance-timestamp.
+* after identifying local-indexer-nodes hosting source and destination shards,
+  use one of the stability-timestamp as rebalance-timestamp.
 * construct a rebalance structure for each migrating slices and add them to
   index-topology structure and index-topology is published to local-indexer-nodes
   participating in rebalance.
-
-Everytime IndexTopology is updated, it is broadcasted to all components.
 
 Process of rebalance,
 * Index-Coordinator instructs the index nodes to move the slices.
@@ -277,23 +269,11 @@ Process of rebalance,
 * local-indexer-node will scan the index data from the source node based on the
   rebalance timestamp and stream them across to destination node.
 * once a slice have been streamed to their corresponding destination,
-  destination node will intimate Index-Coordinator and request projector to
-  open a catch-up connection. The catch-up connection is for bringing the pending
-  slice up-to-date with the latest stability timestamp.
-  * Index-Coordinator will mark this rebalance as "catchup" state.
-* once destination node is caught-up with incremental index-stream it will
-  activate the slice and post a request to Index-Coordinator.
-* Index-Coordinator will update topology map and de-activate the slice in
-  the source node.
-  * mark rebalance as "done" state.
-  * removing the migrating slice's rebalance structure and
-  * updating the slice's partition map and removing the slice's rebalance
-    structure will be atomically done one after the other.
+  destination node will intimate Index-Coordinator.
+* coordinator will restart the stream with new topology.
+* meanwhile target indexer node will request projector to open a catch-up
+  connection to bring itself up to speed with the new "maintanence stream".
 * once a slice is de-activiate, it can be removed from the local indexer.
-
-Meanwhile, to route a stream, router will also check IndexTopology's rebalance
-list for migrating slice's destination Shard and route the messages to the
-new-destination as well.
 
 ### rebalance algorithm
 
@@ -302,7 +282,8 @@ TBD
 ### UPR connection coordination
 
 Index-Coordinator is responsible for starting the "maintanence stream" and
-"backfill stream". Subsequently it is responsible for restarting them when,
+"backfill stream". At any given time there can be only one "maintanence
+stream". Subsequently it is responsible for restarting them when,
 
 * connection between projector and KV fails, consequently downstream connections
   will be terminated.
@@ -321,7 +302,7 @@ Index-Coordinator will handshake with projectors for failover-log.
 Index-Coordinator should compute the restart-timestamp and use them to start
 the stream.
 
-* before computing the restart timestamp, the indexer manager pause processing
+* before computing the restart timestamp, the index manager pause processing
   any request that require membership change (e.g. startup/shutdown index nodes).
 * Index-Coordinator first need to generate a participant list of the active
   local indexer (aka index node).
@@ -341,22 +322,23 @@ The index manager will return the restart timestamp to projector.
 ## kv-rebalance
 
 KV rebalance happens when a vbucket is migrating from one node to another.
-On the projector side, one or more vbucket stream will end with a STREAM_END
+On the projector side, one or more vbucket-stream will end with a STREAM_END
 message.
 
-When a new stream starts on the projector, it will broadcast a STREAM_BEGIN
-message to all indexer nodes hosting an index for that bucket, it will also
-broadcast it to Index-Coordinator.
+When a new vbucket-stream starts on the projector, it will broadcast a
+STREAM_BEGIN message to all indexer nodes hosting an index for that bucket,
+it will also broadcast it to Index-Coordinator.
 
-When an active stream gracefully ends with STREAM_END, projector will
+When an active vbucket-stream gracefully ends with STREAM_END, projector will
 broadcast it to all indexer nodes hosting an index for that bucket, it will also
 broadcast it to Index-Coordinator.
 
 Index-Coordinator should expect a matching STREAM_END on the same connection
 until the connection is closed. It will honor a STREAM_BEGIN for a vbucket only
 after a STREAM_END is received. In case projector crashes before sending
-STREAM_END, restart-timestamp will be computed and stream request will be
-posted to projector.
+STREAM_END, or indexer receives a STREAM_BEGIN before receiving STREAM_END,
+it will compute the restart-timestamp for affected vbuckets and request
+will be posted to projector.
 
 ## kv-rollback
 
@@ -379,7 +361,8 @@ Rollback context,
         //               the index will be communicated.
         //   "restart",  means restart-timestamp is computed and nodes can
         //               rollback.
-        //   "rollback", means local-indexer-nodes are commanded to rollback.
+        //   "rollback", means local-indexer-nodes are commanded to rollback
+        //               by providing to them failover-timestamp and upr-timestamp.
         rollback          string
         failoverTimestamp Timestamp
         restartTimestamp  Timestamp
@@ -394,122 +377,3 @@ over from recovery mode to normal mode when the catch-up traffic has a seqNo
 that is equal or greater than the seqNo at the mutation queue.
 At any point during rollback, if there is any local indexer being restarted,
 the local indexer will enter into recovery mode.
-
-## IndexManager APIs
-
-### /cluster/heartbeat
-
-To be called by ns-server. Node will respond back with SUCCESS irrespective of
-role or state.
-
-* if replica node does not respond back, it should be removed from active list.
-* if master does not respond back, then ns-server can start a new
-  master-election.
-
-### /cluster/bootstrap
-
-To be called by ns-server, ns-server is expected to make this request during
-master election.
-
-### /cluster/newmaster
-
-**request:** <connectionAddr>
-
-Once master election is completed ns-server will post the new master's
-`connectionAddr` to the elected master and each of its new replica. After this,
-one of the IndexManager will become Index-Coordinator and rest of them will
-become Index-Coordinator's replicas
-
-
-
-## Index-Coordinator APIs
-
-### /coordinator/projector
-
-When a new projector starts-up it will post its `connectionAddr` on this API.
-
-**parameters**
-- _"AddProjector"_, command name.
-- _connectionAddr_, connection address to connect with the projector.
-
-### /coordinator/local-indexer-node
-
-When a new local-indexer-node starts-up it will post its `connectionAddr` on
-this API.
-
-**parameters**
-- _"AddLocalIndexer"_, command name.
-- _connectionAddr_, connection address to connect with local-indexer-node
-
-### /coordinator/index
-
-Create a new index specified by `IndexDefinition` field in request body.
-Index-Coordinator will initialize a topology for the index, co-ordinate with
-local-indexer-nodes hosting the new index.
-
-**parameters**
-- _"CreateIndex"_, command name.
-- _IndexDefinition_, meta data about new index.
-
-**response:**
-- _Status_, status code for CREATE DDL
-- _IndexDefinition_, returns back index meta-data along with `indexid` that can
-  uniquely identify the new index.
-
-### /coordinator/index
-
-Drop all index listed by `[]uint64` field.
-
-**parameters**
-- _"DropIndex"_, command name.
-- _[]indexid_, list of uint64 number that uniquely identifies an index.
-
-**response**
-- Status, status code for DROP DDL
-
-### /coordinator/index
-
-List index-info structures identified by `[]uint64` field. If it is empty,
-list all active indexes.
-
-**parameters:**
-- _"ListIndex"_, command name.
-- _[]indexid_, list of uint64 number that uniquely identifies an index.
-
-**response:**
-- _[]IndexDefinition_, list of index-meta data.
-
-### /index-coordinator/hwtimestamp
-
-Local-indexer-nodes can Periodically post its HW-timestamp to
-Index-Coordinator as HWHeartbeat message.
-
-### /index-coordinator/stabilityTimestamps
-
-Index-Coordinator will return a last N timestamps that we promoted as
-stability timestamps.
-
-
-
-## ns-server API requirements:
-
-### ns-server/indexCoordinator
-
-Returns connection address for current master. If no master is currently elected
-then return empty string.
-
-### ns-server/indexCoordinatorReplicas
-
-Returns list of connection address for all active replicas in the system.
-
-### ns-server/indexerNodes
-
-Returns list of connection address for all active local-indexer-nodes in the system.
-
-### ns-server/join
-
-For a node to join the cluster
-
-### ns-server/leave
-
-For a node to leave the cluster

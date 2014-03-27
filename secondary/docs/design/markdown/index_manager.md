@@ -38,7 +38,7 @@ by Index-Coordinator to update StateContext or portion of StateContext.
   promoted to rebalance-timestamp.
 * provide network API to other components to access index-metadata,
   index-topology etc.
-* negotiation with projector for failover-log for rollback.
+* negotiation with projector for failover-log during rollback.
 * create rollback context for kv-rollback and update rollback context based
   on how rollback evolves within the system.
 
