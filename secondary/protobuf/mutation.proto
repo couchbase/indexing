@@ -2,8 +2,8 @@ package protobuf;
 
 // List of possible mutation commands.
 enum Command {
-    UprMutation    = 1; // data command
-    UprDeletion    = 2; // data command
+    Upsert         = 1; // data command
+    Deletion       = 2; // data command
     UpsertDeletion = 3; // data command
     Sync           = 4; // control command
     DropData       = 5; // control command

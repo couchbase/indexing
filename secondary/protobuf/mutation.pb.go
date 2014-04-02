@@ -17,8 +17,8 @@ var _ = math.Inf
 type Command int32
 
 const (
-	Command_UprMutation    Command = 1
-	Command_UprDeletion    Command = 2
+	Command_Upsert         Command = 1
+	Command_Deletion       Command = 2
 	Command_UpsertDeletion Command = 3
 	Command_Sync           Command = 4
 	Command_DropData       Command = 5
@@ -27,8 +27,8 @@ const (
 )
 
 var Command_name = map[int32]string{
-	1: "UprMutation",
-	2: "UprDeletion",
+	1: "Upsert",
+	2: "Deletion",
 	3: "UpsertDeletion",
 	4: "Sync",
 	5: "DropData",
@@ -36,8 +36,8 @@ var Command_name = map[int32]string{
 	7: "StreamEnd",
 }
 var Command_value = map[string]int32{
-	"UprMutation":    1,
-	"UprDeletion":    2,
+	"Upsert":         1,
+	"Deletion":       2,
 	"UpsertDeletion": 3,
 	"Sync":           4,
 	"DropData":       5,
