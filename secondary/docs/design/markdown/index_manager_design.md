@@ -268,12 +268,20 @@ Process of rebalance,
   * mark rebalance as "pending" state.
 * local-indexer-node will scan the index data from the source node based on the
   rebalance timestamp and stream them across to destination node.
+  (This can also happen through a backfill connection).
 * once a slice have been streamed to their corresponding destination,
   destination node will intimate Index-Coordinator.
-* coordinator will restart the stream with new topology.
+  * coordinator will add the new node as part of index's topology.
+  * coordinator will publish the changes to both old and new indexer nodes.
+  * coordinator will restart the stream with new topology.
 * meanwhile target indexer node will request projector to open a catch-up
-  connection to bring itself up to speed with the new "maintanence stream".
-* once a slice is de-activiate, it can be removed from the local indexer.
+  connection to bring itself up to speed with the new "maintenance stream".
+* once target indexer as caught up with "maintenance stream" it will take part
+  in query and intimate coordinator.
+  * coordinator will remove the old node from index's topology.
+  * coordinator will publish the changes to both old and new indexer nodes.
+  * coordinator will restart the stream with new topology.
+* once a slice is de-activiate, it can be removed from the old indexer node.
 
 ### rebalance algorithm
 
@@ -335,22 +343,24 @@ broadcast it to Index-Coordinator.
 
 Index-Coordinator should expect a matching STREAM_END on the same connection
 until the connection is closed. It will honor a STREAM_BEGIN for a vbucket only
-after a STREAM_END is received. In case projector crashes before sending
-STREAM_END, or indexer receives a STREAM_BEGIN before receiving STREAM_END,
-it will compute the restart-timestamp for affected vbuckets and request
-will be posted to projector.
+after a STREAM_END is received. Coordinator will then compute the
+restart-timestamp for affected vbuckets and request will be posted to projector.
+
+In case projector crashes before sending STREAM_END, or indexer receives a
+STREAM_BEGIN before receiving STREAM_END, indexer can use catchup stream to
+get upto speed with new STREAM_BEGIN.
 
 ## kv-rollback
 
-As part of handshake with projector when starting a stream, Index-Coordinator
+As part of handshake with projector, while starting a stream, Index-Coordinator
 will get the failoverlog and check for vbucket branch histories. If it detects
 a branch history for a vbucket it will move the IndexTopology for all indexes
 defined on that bucket into `rollback` mode and replicates them to
 Index-Coordinator-Replicas.
 
-Changes to IndexTopology will also be published to projectors which will stop
-streaming UPR mutations for all the buckets. The reason we freeze entire
-secondary-index system is because all buckets are hosted by all kv-nodes.
+All on going streams are stopped on the projector for all buckets. The reason
+we freeze entire secondary-index system is because all buckets are hosted by all
+kv-nodes.
 
 Rollback context,
 ```go
