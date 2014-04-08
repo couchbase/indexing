@@ -90,6 +90,10 @@ As an illustration of synchronous replication, please see [Initial Index Build P
 
 * [Terminology Document](markdown/terminology.md)
 
+###Presentation
+* [John's Presentation Slides](other/presentation.pdf)
+
+
 ###References
 1. [Distributed Indexing Design Proposal - Steve Yen](https://docs.google.com/document/d/1TEY_yjUMs3FT3FZkgqIZUiKziUUBGiCWFSjWOOj65Dw/edit?pli=1)
 2. [Distributed Range Partitioned Indexes – Steve Yen, Dustin Sallings](https://docs.google.com/presentation/d/161vtnjDFOpnliT0DA2k1-jCRKiB-eY9JZHhd0YQoAXo/edit#slide=id.p)
