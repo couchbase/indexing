@@ -1,0 +1,101 @@
+// system request and administration request supported by coordinator's
+// admin-port.
+
+package protobuf;
+
+import "common.proto";
+import "index.proto";
+import "rollback.proto";
+
+
+// Requested by cluster manager to indicate a new coordinator. Error message
+// will be sent as reponse.
+message NewCoordinatorRequest {
+    required string connectionAddr = 1; // new coordinator's connection address
+}
+
+
+// Requested by Coordinator to Replica to fetch replica's StateContext version.
+message StateContextCasRequest {
+}
+
+message StateContextCasResponse {
+    required StateContextVersion version = 1;
+}
+
+// Requested by Coordinator for Replica's local StateContext.
+message StateContextRequest {
+    required StateContextVersion version = 1;
+}
+
+message StateContextReponse {
+    required StateContextVersion version = 1;
+    required bytes               data    = 2; // serialized StateContext
+}
+
+// Posted by Coordinator to Replica to update its local StateContext, response
+// would be StateContextCasResponse.
+message UpdateStateContext {
+    required StateContextVersion version = 1;
+    required bytes               data    = 2; // serialized StateContext
+}
+
+
+// Requested by cluster manager whenever a actor joins or leaves the cluster.
+message ActorClusterRequest {
+    repeated Actor actors = 1;
+}
+
+message ActorClusterResponse {
+    required Error err   = 1;
+    repeated Actor actors = 2;
+}
+
+
+// Requested by an indexer joining the cluster, for which coordinator responds
+// with list of indexes that are to be hosted by that indexer.
+message IndexerInitRequest {
+    required uint32 indexerid = 1;
+}
+
+message IndexerInitResponse {
+    repeated Index indexes = 1;
+}
+
+
+// Requested by an indexer once it is ready to receive mutation stream. Error
+// message will be returned as response.
+message IndexerReadyRequest {
+    repeated uint64         indexUuids = 1;
+}
+
+
+// Posted by indexer periodically to Coordinator, updating its high-watermark
+// timestamp. Error message will be sent as response.
+message NewHWTimestampRequest {
+    repeated string BranchTimestamp = 1;
+}
+
+
+// Requested by Indexer. When an index is in IndexLoading state, this request
+// will mean that it is done with initial-loading stream for the specified
+// indexes. Error message will be sent as response.
+message SwitchingToActiveRequest {
+    repeated uint64 indexUuids = 1;
+}
+
+
+// Requested by Indexer. When an index is in IndexActive state, this
+// request will mean that it is done with rebalance catchup for specified
+// index. Error message will be sent as response.
+message RebalanceToActiveRequest {
+    repeated uint64 indexUuids = 1;
+}
+
+
+// Requested by admin console to start index rebalance. Error message will be
+// sent as response.
+message IndexRebalanceRequest {
+    required uint64         indexUuid    = 1;
+    required IndexPartition newPartition = 2;
+}

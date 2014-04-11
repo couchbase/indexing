@@ -1,0 +1,87 @@
+// system request and administration request supported by projector's
+// admin-port.
+
+package protobuf;
+
+import "common.proto";
+import "index.proto";
+
+// Flag is applicable to all vbuckets in the request
+enum MutationStreamFlag {
+    // start vbucket-streams if it is not already active.
+    MutationStreamStart    = 0;
+
+    // start vbucket-streams whether it is already active or not.
+    MutationStreamRestart  = 1;
+
+    // shutdown vbucket-streams
+    MutationStreamShutdown = 2;
+
+    // whether projector should retry closed clonnection / stream with KV.
+    UpstreamRetry          = 4;
+
+    // whether router should retry closed clonnection with indexer endpoint.
+    DownstreamRetry        = 8;
+}
+
+// Requested by Coordinator or indexer to start a mutation stream.
+message MutationStreamRequest {
+    required string             topic          = 1; // topic name.
+    required MutationStreamFlag flag           = 2;
+
+    repeated BranchTimestamp restartTimestamps = 3; // list of timestamps, one per bucket
+
+    // list of index applicable for this stream
+    repeated Index indexes = 4;
+}
+
+message MutationStreamResponse {
+    required Error           err                = 1;
+    required string          topic              = 2;
+
+    // per bucket restart-timestamp, failover-timestamp, upr-timestamp
+    repeated BranchTimestamp restartTimestamps  = 3;
+    repeated BranchTimestamp failoverTimestamps = 4;
+    repeated BranchTimestamp uprTimestamps      = 5;
+
+    repeated uint64          indexes            = 6;
+}
+
+
+// Requested by coordinator to should down a mutation stream and all KV
+// connections active for that stream.
+message ShutdownMutationStreamRequest {
+    required string topic = 1;
+}
+
+
+// Requested by Coordinator during bootstrap handshake to get the current list
+// of active streams from projector
+message ActiveStreamRequest {
+}
+
+message ActiveStreamResponse {
+    required Error                  err     = 1;
+    repeated MutationStreamResponse streams = 2;
+}
+
+
+// Requested by Coordinator during initial index build, to calculate
+// initial-build-timestamp for each bucket.
+message CurrentTimestampRequest {
+    repeated string buckets = 1;
+}
+
+message CurrentTimestampResponse {
+    repeated BranchTimestamp currentTimestamps = 1;
+}
+
+
+// Requested by Coordinator to determine re-connect or rollback.
+message FailoverLogRequest {
+    repeated uint32 vbnos = 1; // vbuckets for which failover log is request
+}
+
+message FailoverLogResponse {
+    repeated FailoverLog logs = 1;
+}

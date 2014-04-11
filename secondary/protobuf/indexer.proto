@@ -1,0 +1,104 @@
+// system request and administration request supported by indexer's
+// admin-port.
+
+package protobuf;
+
+import "common.proto";
+import "index.proto";
+import "rollback.proto";
+
+// Requested by Coordinator during bootstrap to each indexer for each index,
+// to check its sanity with respect to indexer nodes.
+//
+// Similar handshake is expected when ever a new indexer node joins the
+// cluster.
+message GetIndexPartitionRequest {
+    required uint64 indexUuid = 1;
+}
+
+message GetIndexPartitionResponse {
+    required Error          err       = 1;
+    required IndexPartition partition = 2;
+}
+
+
+// Requested by Coordinator when ever an index's topology change. Error
+// message will be sent as response.
+// TBD: Should we use the same message for index-rebalance ?
+message UpdateIndexPartitionRequest {
+    required uint64         indexUuid     = 1;
+    required IndexPartition newParitition = 2;
+}
+
+
+// Requested by Coordinator when new index is created and before starting a
+// initial load stream.
+message LocalCreateIndexRequest {
+    // first request, state will be IndexInitial
+    // second request, state will be IndexLoading
+    required IndexState state = 1;
+    optional Index      index = 2; // will be valid only when state is IndexInitial
+}
+
+message LocalCreateIndexResponse {
+    // state will IndexPending for IndexInitial Request, and,
+    // state will be IndexLoading for IndexLoading request
+    required IndexState state = 1;
+    required Error      err = 2;
+}
+
+
+// Requested by Coordinator when existing index is deleted. Error message will
+// be set as reponse.
+message LocalDeleteIndexRequest {
+    required uint64 indexUuid = 1; // delete specified index.
+}
+
+
+// Posted by Coordinator while promoting timestamp to persistence timestamp.
+// Error message will be sent as response.
+message NewPersistenceTimestampRequest {
+    required Timestamp nextPersistenceTs = 1;
+}
+
+
+// Posted by Coordinator while promoting timestamp to stability timestamp.
+// Error message will be sent as response.
+message NewStabilityTimestampRequest {
+    required Timestamp nextStabilityTs = 1;
+}
+
+
+// Requested by Coordinator during KV-reconnection / rollback. Coordinator
+// requests a list of buckets for which it needs indexer's hw-timestamp.
+message HWTimestampRequest {
+    repeated string bucket = 1;
+    required string topic  = 2;
+}
+
+message HWTimestampResponse {
+    repeated string BranchTimestamp = 1;
+}
+
+
+// Requested by Coordinator to rollback to a snapshot such that its snapshot-timestamp
+// is less than failover-timestamp but greater than or equal to upr-timestamp.
+// This request will be sent twice to each indexer node.
+message RollbackRequest {
+    required string          bucket            = 1; // bucket name
+
+    // first as RollbackStart along with failoverTimestamp
+    // second as RollbackCommit along with failoverTimestamp and uprTimestamp
+    required RollbackState   state             = 2;
+    required BranchTimestamp failoverTimestamp = 3;
+    optional BranchTimestamp uprTimestamp      = 4;
+}
+
+message RollbackResponse {
+    required string bucket                     = 1;
+
+    // first as RollbackPrepare with snapshotTimestamp
+    // second as RollbackDone
+    required RollbackState state               = 2;
+    optional BranchTimestamp snapshotTimestamp = 3;
+}

@@ -1,0 +1,39 @@
+// system request and administration request supported by coordinator's
+// admin-port, specific to kv-rollback.
+
+package protobuf;
+
+import "common.proto";
+
+
+// Will be set by Index-Coordinator during kv-rollback.
+enum RollbackState {
+    // Rollback is detected, rollback context created, failover-timestamp and
+    // restart-timestamp computed, rollback context replicated with
+    // coordinator replicas, RollbackStart request is made to all indexer
+    // nodes.
+    RollbackStart   = 1;
+
+    // RollbackPrepare received from all indexers, rollback context
+    // replicated with coordinator replicas.
+    RollbackPrepare = 2;
+
+    // Projector handshake completed, gets back failover-timestamp and
+    // upr-timestamp, rollback context replicated with coordinator replicas,
+    // RollbackCommit request is made to all indexer nodes.
+    RollbackCommit  = 3;
+
+    // RollbackDone received from all indexers, rollback context replicated
+    // with coordinator replicas.
+    RollbackDone    = 4;
+}
+
+// Posted by Coordinator to its replica during the process of rollback. Error
+// message will be sent back as reponse.
+message UpdateRollbackContextRequest {
+    required string          bucket            = 1;
+    required RollbackState   state             = 2;
+    required BranchTimestamp failoverTimestamp = 3;
+    required BranchTimestamp restartTimestamp  = 4;
+    required BranchTimestamp uprTimestamp      = 5;
+}

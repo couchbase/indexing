@@ -1,0 +1,75 @@
+// messages that describe index definition.
+// Index definition is populated from DDL. Other than `IndexState` other fields
+// of this structure are immutable once the index definition structure is
+// created.
+
+package protobuf;
+
+// IndexDefinition will be in one of the following state
+enum IndexState {
+    // Create index accepted, replicated and reponse sent back to admin
+    // console.
+    IndexInitial     = 1;
+
+    // Index DDL replicated, and then communicated to participating indexers.
+    IndexPending     = 2;
+
+    // Initial-load request received from admin console, DDL replicated,
+    // loading status communicated with partiticipating indexer and
+    // initial-load request is posted to projector.
+    IndexLoading     = 3;
+
+    // Initial-loading is completed for this index from all partiticipating
+    // indexers, DDL replicated, and finaly initial-load stream is shutdown.
+    IndexActive      = 4;
+
+    // Delete index request is received, replicated and then communicated with
+    // each participating indexer nodes.
+    IndexDeleted     = 5;
+}
+
+// List of possible index storage algorithms.
+enum StorageType {
+    View    = 1;
+    Llrb    = 2;
+    LevelDB = 3;
+}
+
+// Type of expression used to evaluate document.
+enum ExprType {
+    Simple     = 1;
+    JavaScript = 2;
+    N1QL       = 3;
+}
+
+// Type of topology, including paritition type to be used for the index.
+enum  PartitionType {
+    SimpleKeyParitition = 1;
+}
+
+message IndexDefinition {
+    required string        bucket        = 1; // bucket on which index is defined
+    required bool          isPrimary     = 2; // whether index secondary-key == docid
+    required string        name          = 3; // Name of the index
+    required uint64        uuid          = 4; // unique index id across the secondary index cluster
+    required StorageType   using         = 5; // indexing algorithm
+    required ExprType      exprType      = 6; // how to interpret `expressions` strings
+    required PartitionType partitionType = 7;
+    repeated string        expressions   = 8; // use expressions to evaluate doc
+}
+
+message Index {
+    required IndexState      state     = 1;
+    required IndexDefinition indexinfo = 2; // contains DDL
+    required IndexPartition  partition = 3; // contains partition structure and topology
+}
+
+// container message for one of the many parition structures.
+message IndexPartition {
+    optional SimpleKeyPartition skp = 1;
+    // TBD: Add more types of parition structures.
+}
+
+message SimpleKeyPartition {
+    // TBD
+}

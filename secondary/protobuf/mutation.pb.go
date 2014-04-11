@@ -63,8 +63,8 @@ func (x *Command) UnmarshalJSON(data []byte) error {
 }
 
 // A single mutation message that will framed and transported by router.
-// For efficiency mutations from mutiple vbuckets can be packed into the same
-// message.
+// For efficiency mutations from mutiple vbuckets (bounded to same connection)
+// can be packed into the same message.
 type Mutation struct {
 	Version *uint32 `protobuf:"varint,1,req,name=version" json:"version,omitempty"`
 	// -- Following fields are mutually exclusive --
