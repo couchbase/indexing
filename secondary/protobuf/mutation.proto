@@ -12,14 +12,14 @@ enum Command {
 }
 
 // A single mutation message that will framed and transported by router.
-// For efficiency mutations from mutiple vbuckets can be packed into the same
-// message.
+// For efficiency mutations from mutiple vbuckets (bounded to same connection)
+// can be packed into the same message.
 message Mutation {
-    required uint32          version     = 1; // protocol version TBD
+    required uint32          version   = 1; // protocol version TBD
 
     // -- Following fields are mutually exclusive --
-    repeated VbucketMutation vbmutations = 2;
-    optional VbConnectionMap vbuckets    = 3;
+    repeated KeyVersions     keys      = 2;
+    optional VbConnectionMap vbuckets  = 3;
 }
 
 // Mutation per vbucket, mutations are broadly divided into data and
@@ -39,19 +39,19 @@ message Mutation {
 //
 // fields `docid`, `indexids`, `keys`, `oldkeys` are valid only for
 // Upsert, Deletion, UpsertDeletion messages.
-message VbucketMutation {
+message KeyVersions {
     required uint32 command  = 1;
     required uint32 vbucket  = 2; // 16 bit vbucket in which document is located
     required uint64 seqno    = 5; // sequence number corresponding to this mutation
     required uint64 vbuuid   = 3; // unique id to detect branch history
     optional bytes  docid    = 4; // primary document id
-    repeated uint32 indexids = 6; // indexids, hosting key-version
     repeated bytes  keys     = 7; // key-versions for each indexids listed above
+    repeated uint32 indexids = 6; // indexids, hosting key-version
     repeated bytes  oldkeys  = 8; // key-versions from old copy of the document
 }
 
 // List of vbuckets that will be streamed via a newly opened connection.
 message VbConnectionMap {
-    repeated uint32 vbno   = 1;
-    repeated uint64 vbuuid = 2;
+    repeated uint32 vbuckets = 1;
+    repeated uint64 vbuuids  = 2;
 }

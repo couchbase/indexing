@@ -68,9 +68,9 @@ func (x *Command) UnmarshalJSON(data []byte) error {
 type Mutation struct {
 	Version *uint32 `protobuf:"varint,1,req,name=version" json:"version,omitempty"`
 	// -- Following fields are mutually exclusive --
-	Vbmutations      []*VbucketMutation `protobuf:"bytes,2,rep,name=vbmutations" json:"vbmutations,omitempty"`
-	Vbuckets         *VbConnectionMap   `protobuf:"bytes,3,opt,name=vbuckets" json:"vbuckets,omitempty"`
-	XXX_unrecognized []byte             `json:"-"`
+	Keys             []*KeyVersions   `protobuf:"bytes,2,rep,name=keys" json:"keys,omitempty"`
+	Vbuckets         *VbConnectionMap `protobuf:"bytes,3,opt,name=vbuckets" json:"vbuckets,omitempty"`
+	XXX_unrecognized []byte           `json:"-"`
 }
 
 func (m *Mutation) Reset()         { *m = Mutation{} }
@@ -84,9 +84,9 @@ func (m *Mutation) GetVersion() uint32 {
 	return 0
 }
 
-func (m *Mutation) GetVbmutations() []*VbucketMutation {
+func (m *Mutation) GetKeys() []*KeyVersions {
 	if m != nil {
-		return m.Vbmutations
+		return m.Keys
 	}
 	return nil
 }
@@ -115,72 +115,72 @@ func (m *Mutation) GetVbuckets() *VbConnectionMap {
 //
 // fields `docid`, `indexids`, `keys`, `oldkeys` are valid only for
 // Upsert, Deletion, UpsertDeletion messages.
-type VbucketMutation struct {
+type KeyVersions struct {
 	Command          *uint32  `protobuf:"varint,1,req,name=command" json:"command,omitempty"`
 	Vbucket          *uint32  `protobuf:"varint,2,req,name=vbucket" json:"vbucket,omitempty"`
 	Seqno            *uint64  `protobuf:"varint,5,req,name=seqno" json:"seqno,omitempty"`
 	Vbuuid           *uint64  `protobuf:"varint,3,req,name=vbuuid" json:"vbuuid,omitempty"`
 	Docid            []byte   `protobuf:"bytes,4,opt,name=docid" json:"docid,omitempty"`
-	Indexids         []uint32 `protobuf:"varint,6,rep,name=indexids" json:"indexids,omitempty"`
 	Keys             [][]byte `protobuf:"bytes,7,rep,name=keys" json:"keys,omitempty"`
+	Indexids         []uint32 `protobuf:"varint,6,rep,name=indexids" json:"indexids,omitempty"`
 	Oldkeys          [][]byte `protobuf:"bytes,8,rep,name=oldkeys" json:"oldkeys,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
-func (m *VbucketMutation) Reset()         { *m = VbucketMutation{} }
-func (m *VbucketMutation) String() string { return proto.CompactTextString(m) }
-func (*VbucketMutation) ProtoMessage()    {}
+func (m *KeyVersions) Reset()         { *m = KeyVersions{} }
+func (m *KeyVersions) String() string { return proto.CompactTextString(m) }
+func (*KeyVersions) ProtoMessage()    {}
 
-func (m *VbucketMutation) GetCommand() uint32 {
+func (m *KeyVersions) GetCommand() uint32 {
 	if m != nil && m.Command != nil {
 		return *m.Command
 	}
 	return 0
 }
 
-func (m *VbucketMutation) GetVbucket() uint32 {
+func (m *KeyVersions) GetVbucket() uint32 {
 	if m != nil && m.Vbucket != nil {
 		return *m.Vbucket
 	}
 	return 0
 }
 
-func (m *VbucketMutation) GetSeqno() uint64 {
+func (m *KeyVersions) GetSeqno() uint64 {
 	if m != nil && m.Seqno != nil {
 		return *m.Seqno
 	}
 	return 0
 }
 
-func (m *VbucketMutation) GetVbuuid() uint64 {
+func (m *KeyVersions) GetVbuuid() uint64 {
 	if m != nil && m.Vbuuid != nil {
 		return *m.Vbuuid
 	}
 	return 0
 }
 
-func (m *VbucketMutation) GetDocid() []byte {
+func (m *KeyVersions) GetDocid() []byte {
 	if m != nil {
 		return m.Docid
 	}
 	return nil
 }
 
-func (m *VbucketMutation) GetIndexids() []uint32 {
-	if m != nil {
-		return m.Indexids
-	}
-	return nil
-}
-
-func (m *VbucketMutation) GetKeys() [][]byte {
+func (m *KeyVersions) GetKeys() [][]byte {
 	if m != nil {
 		return m.Keys
 	}
 	return nil
 }
 
-func (m *VbucketMutation) GetOldkeys() [][]byte {
+func (m *KeyVersions) GetIndexids() []uint32 {
+	if m != nil {
+		return m.Indexids
+	}
+	return nil
+}
+
+func (m *KeyVersions) GetOldkeys() [][]byte {
 	if m != nil {
 		return m.Oldkeys
 	}
@@ -189,8 +189,8 @@ func (m *VbucketMutation) GetOldkeys() [][]byte {
 
 // List of vbuckets that will be streamed via a newly opened connection.
 type VbConnectionMap struct {
-	Vbno             []uint32 `protobuf:"varint,1,rep,name=vbno" json:"vbno,omitempty"`
-	Vbuuid           []uint64 `protobuf:"varint,2,rep,name=vbuuid" json:"vbuuid,omitempty"`
+	Vbuckets         []uint32 `protobuf:"varint,1,rep,name=vbuckets" json:"vbuckets,omitempty"`
+	Vbuuids          []uint64 `protobuf:"varint,2,rep,name=vbuuids" json:"vbuuids,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -198,16 +198,16 @@ func (m *VbConnectionMap) Reset()         { *m = VbConnectionMap{} }
 func (m *VbConnectionMap) String() string { return proto.CompactTextString(m) }
 func (*VbConnectionMap) ProtoMessage()    {}
 
-func (m *VbConnectionMap) GetVbno() []uint32 {
+func (m *VbConnectionMap) GetVbuckets() []uint32 {
 	if m != nil {
-		return m.Vbno
+		return m.Vbuckets
 	}
 	return nil
 }
 
-func (m *VbConnectionMap) GetVbuuid() []uint64 {
+func (m *VbConnectionMap) GetVbuuids() []uint64 {
 	if m != nil {
-		return m.Vbuuid
+		return m.Vbuuids
 	}
 	return nil
 }
