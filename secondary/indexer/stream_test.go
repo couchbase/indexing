@@ -78,14 +78,14 @@ func BenchmarkClientRequest(b *testing.B) {
 	client.Stop()
 }
 
-func doServer(addr string, tb testing.TB) *StreamServer {
-	var server *StreamServer
+func doServer(addr string, tb testing.TB) *MutationStream {
+	var mStream *MutationStream
 	var err error
 
 	mutch := make(chan *common.Mutation, 1)
 	errch := make(chan error)
 
-	if server, err = NewStreamServer(addr, mutch, errch); err != nil {
+	if mStream, err = NewMutationStream(addr, mutch, errch); err != nil {
 		tb.Fatal(err)
 	}
 
@@ -99,7 +99,7 @@ func doServer(addr string, tb testing.TB) *StreamServer {
 				count++
 			case err, ok := <-errch:
 				if ok {
-					if err != io.EOF && err != StreamServerClosed {
+					if err != io.EOF && err != MutationStreamClosed {
 						tb.Fatal(err)
 					}
 				} else {
@@ -108,5 +108,5 @@ func doServer(addr string, tb testing.TB) *StreamServer {
 			}
 		}
 	}()
-	return server
+	return mStream
 }
