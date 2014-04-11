@@ -59,3 +59,59 @@ Typical flow of topic creation and subscription is as follows,
 1. indexer / coordinator request a stream to projector, associating a topic to it.
 2. projector will launch a router thread for each stream and pass on the
    topology information to new router thread.
+
+### flow control between router and indexer
+
+Router will publish mutations to indexer endpoints. Router client can open more
+than one connection for the same endpoint to speed up mutation transport.
+
+Indexer will have a server thread listening on its endpoint and router will
+connect with indexer's endpoint based on the supplied topology information
+from the stream-request.
+
+If a connection drops between indexer and router, router will retry a new
+connection with the endpoint until the stream is shutdown from the projector
+side. Additionally, stream request will specify a flag whether to retry
+downstream connection forever. In case of "catchup streams", respective
+indexer node shall shutdown / restart the stream with projector.
+
+Router will have an output queue for each endpoint and when ever the queue
+overflows it will cascade to upstream buffers and eventually will throttle the
+UPR streams.
+
+This can lead to system level (system is secondary index) slow down, actually
+the system level slow down is one of the many corner case. If the connection is
+open but router is not able to flush the mutation out to the other end, it is
+because the indexer node is slow. Again, it is possible that only this node is
+slow, or most of the other nodes are slow as well, and reason for slowness can
+be due to many things starting from heterogeneous indexer nodes, uneven data
+distribution to faulty network cables.
+
+The default behavior would be to allow a slow indexer node's slowness to
+cascade to upstream connections leading to system wide slowness.
+
+#### drop indicators
+
+Since router will know when the output queue for an endpoint will overflow, it
+can drop mutations when the buffer is _almost full_ and instead insert a
+`DropData` message into the stream that will provide the
+`{vbucket, indexid, vbuuid, seqno}` where seqno will indicate the first
+mutations that was dropped. `DropData` messages won't be inserted for subsequent
+mutations that are dropped. `StreamBegin` and `StreamEnd` messages will still
+be queued up until the queue gets fully filled up. This is to ensure that
+StreamBegin and StreamEnd messages will never be lost due to slow connections.
+
+Subsequently, when output queue gets emptied out, router will insert regular
+mutations into the queue. On the indexer side `DropData` message will trigger a
+catchup connection.
+
+#### smart throttling
+
+Smart throttling will selectively drop mutations based on transport statistics
+between router and indexer for a given window of time. Based on statistics we
+are hoping that router can detect the subset of indexer nodes that are slow,
+* if the subset is small then router will insert DROP mutation, there by
+  triggering catchup connection for slow indexer nodes.
+* If the subset is more than say half the total number of indexer nodes,
+  router won't drop mutation, leading to a slow secondary index until all the
+  slow index nodes come out of its slowness.

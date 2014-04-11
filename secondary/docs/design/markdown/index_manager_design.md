@@ -40,10 +40,13 @@ cluster.
         // will be identified from 0-250
         indexers         map[Nodeid]string          // indexed by indexer-id
 
-        // per bucket current timestamp continuously updated by SYNC message.
+        // per bucket, current timestamp continuously updated by SYNC message.
         mutationTimestamp map[string][MAX_VBUCKETS]VbVector // indexed by bucketname
 
-        // per bucket vector of vuuid corresponding to currentTimestamp and
+        // per bucket, stability timestamp that was last published to indexer nodes
+        currStabilityTs   map[string][MAX_VBUCKETS]VbVector // indexed by bucketname
+
+        // per bucket, current timestamp continuously updated by SYNC message.
         // continuously updated by SYNC message.
         backfillTimestamp map[string][MAX_VBUCKETS]VbVector // indexed by bucketname
 
