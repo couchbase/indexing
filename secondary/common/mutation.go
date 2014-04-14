@@ -50,6 +50,9 @@ type Mutation struct {
 	maxKeyvers int
 }
 
+// NewMutation creates internal mutation Mutation object that can be used to
+// compose or de-compose on the wire mutation messages.
+// Same object can be re-used to compose or de-compose messages.
 func NewMutation(maxKeyvers int) *Mutation {
 	m := &Mutation{
 		version:    ProtobufVersion(),
@@ -59,11 +62,15 @@ func NewMutation(maxKeyvers int) *Mutation {
 	return m
 }
 
+// NewPayload resets the mutation object for next payload.
 func (m *Mutation) NewPayload(payltyp byte) {
 	m.keys = m.keys[:0]
 	m.payltyp = payltyp
+	m.vbuckets = nil
+	m.vbuuids = nil
 }
 
+// AddKeyVersions will add a KeyVersions to current Mutation payload.
 func (m *Mutation) AddKeyVersions(k *KeyVersions) (err error) {
 	if m.payltyp != PAYLOAD_KEYVERSIONS {
 		return fmt.Errorf("expected key version for payload")
@@ -74,6 +81,9 @@ func (m *Mutation) AddKeyVersions(k *KeyVersions) (err error) {
 	return nil
 }
 
+// SetVbuckets will set a list of vbuckets and corresponding vbuuids as
+// payload for next Mutation Message. Note that SetVbuckets() and
+// AddKeyVersions() can be used together as payload.
 func (m *Mutation) SetVbuckets(vbuckets []uint16, vbuuids []uint64) (err error) {
 	if m.payltyp != PAYLOAD_VBMAP {
 		return fmt.Errorf("expected key version for payload")
@@ -83,7 +93,8 @@ func (m *Mutation) SetVbuckets(vbuckets []uint16, vbuuids []uint64) (err error) 
 	return nil
 }
 
-func (m *Mutation) GetKeyVersion() []*KeyVersions {
+// GetKeyVersions return the list of reference to current payload's KeyVersions.
+func (m *Mutation) GetKeyVersions() []*KeyVersions {
 	return m.keys
 }
 
