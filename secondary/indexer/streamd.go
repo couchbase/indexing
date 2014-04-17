@@ -1,185 +1,103 @@
-// transporting a mutation packet.
-//  { uint32(packetlen), uint16(flags), []byte(mutation) }
-//
-// `flags` can be used for specifying encoding format of mutation, type of
-// compression etc.
-//
-// packetlen == len(mutation)
-//
-// concurrency model:        *---------------*------------------*
-//                           | error channel | mutation channel |
-//      NewMutationStream()  *---------------*------------------*
-//              |                   ^  ^ .. ^
-//              |                   |  |    | (mutations & errors back to appl.)
-//              V                   |  |    |
-//        listener routine --*----> doReceive() per connection routine
-//                           |
-//                           *----> doReceive() per connection routine
-//                           ...
-//                           *----> doReceive() per connection routine
+// Daemon listens for new connections and spawns, indirectly, a reader routine
+// for each new connection.
 
 package indexer
 
 import (
-	"encoding/binary"
-	"errors"
-	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
-	"io"
+	"github.com/couchbase/indexing/secondary/protobuf"
 	"log"
 	"net"
-	"sync"
+	"time"
 )
 
-var MutationStreamClosed = errors.New("MutationStreamClosed")
-
-// MutationStream handles an active stream of mutation for all vbuckets.
-type MutationStream struct {
-	mu    sync.Mutex
-	laddr string                  // address to listen
-	mutch chan<- *common.Mutation // application channel to send mutations
-	errch chan<- error            // application channel to send error
-	ln    net.Listener
-}
-
-// NewMutationStream creates a new mutation stream.
-func NewMutationStream(laddr string, mutch chan<- *common.Mutation, errch chan<- error) (s *MutationStream, err error) {
-	killchs := make([]chan bool, 0) // kill switch for each connection
-
-	s = &MutationStream{laddr: laddr, mutch: mutch, errch: errch}
-	if s.ln, err = net.Listen("tcp", laddr); err != nil {
-		return nil, err
-	}
-
-	// Server routine
-	go func() {
-		for {
-			conn, err := s.ln.Accept() // wait for new client connection
-			if err != nil {
-				log.Printf("stream %v quiting due to %v ...\n", laddr, err)
-				errch <- MutationStreamClosed
-				break
-			}
-			// for a new client connection
-			killch := make(chan bool)
-			go s.doReceive(conn, killch)
-			killchs = append(killchs, killch)
-		}
-
-		s.mu.Lock()
-		defer s.mu.Unlock()
-
-		// when server exits kill all active connections.
-		s.ln = nil
-		for _, killch := range killchs {
-			close(killch)
-		}
+// go-routine to listen for new connections, if this routine goes down -
+// server is shutdown and reason notified back to application.
+func streamListen(laddr string, lis net.Listener, serverch chan streamServerMessage) {
+	defer func() {
+		log.Println("listener panic:", recover())
+		serverch <- streamServerMessage{cmd: streamgError, err: StreamDaemonExit}
 	}()
-	return s, nil
-}
-
-// Stop an active mutation stream. All active connections will be shutdown.
-func (s *MutationStream) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.ln != nil {
-		log.Printf("Stopping server %v\n", s.laddr)
-		s.ln.Close() // server routine will exit because of this
-		s.ln = nil
+	for {
+		// TODO: handle `err` for lis.Close() and avoid log.Panicln()
+		if conn, err := lis.Accept(); err != nil {
+			panic(err)
+		} else {
+			serverch <- streamServerMessage{
+				cmd:  streamgNewConnection,
+				args: []interface{}{conn},
+			}
+		}
 	}
 }
 
-func (s *MutationStream) doReceive(conn net.Conn, killSwitch chan bool) {
-	var m *common.Mutation
-	var err error
+// go-routine to just read VbConnectionMap map message, that provides a list
+// of vbuckets that be expected on this connection.
+//
+// routine exits after receiving the intended payload.
+func doReceiveVbmap(conn net.Conn, serverch chan streamServerMessage, timeout time.Duration) {
+	flags := streamTransportFlag(0).setProtobuf()
+	pkt := NewStreamTransportPacket(GetMaxStreamDataLen(), flags)
+	msg := streamServerMessage{raddr: conn.RemoteAddr().String()}
 
-	// reuse the buffer to receive packet
-	connBuf := make([]byte, GetMaxStreamDataLen())
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	if payload, err := pkt.Receive(conn); err != nil {
+		msg.cmd, msg.err = streamgError, err
+	} else if vbmap, ok := payload.(*protobuf.VbConnectionMap); ok == false {
+		msg.cmd, msg.err = streamgError, StreamPayloadError
+	} else {
+		msg.cmd, msg.args = streamgVbmap, []interface{}{vbmap}
+	}
+	serverch <- msg
+}
+
+// per connection go-routine to read KeyVersions and control messages like
+// DropData, StreamBegin and StreamEnd.
+//
+// go-routine will exit in case of error, or upon receiving control messages,
+// or upon receiving kill-command.
+func doReceiveKeyVersions(conn net.Conn, channels []interface{}, timeout time.Duration) {
+	mutch := channels[0].(chan<- interface{})
+	serverch := channels[1].(chan streamServerMessage)
+	killch := channels[2].(chan bool)
+
+	flags := streamTransportFlag(0).setProtobuf()
+	pkt := NewStreamTransportPacket(GetMaxStreamDataLen(), flags)
+	msg := streamServerMessage{raddr: conn.RemoteAddr().String()}
 
 loop:
 	for {
-		if m, err = readMutation(conn, connBuf); err != nil {
+		msg.cmd, msg.err, msg.args = 0, nil, nil
+		conn.SetReadDeadline(time.Now().Add(timeout))
+		if payload, err := pkt.Receive(conn); err != nil {
+			msg.cmd, msg.err = streamgError, err
+			serverch <- msg
+			break loop
+		} else if isControlMessage(payload) {
+			kvs := payload.([]*protobuf.KeyVersions)
+			msg.cmd, msg.args = streamgVbcontrol, []interface{}{kvs[0]}
+			serverch <- msg
+			break loop
+		} else {
+			kvs := payload.([]*protobuf.KeyVersions)
 			select {
-			case s.errch <- err:
-			case <-killSwitch:
+			case mutch <- kvs:
+			case <-killch:
+				msg.cmd, msg.err = streamgError, StreamWorkerKilled
+				serverch <- msg
 				break loop
 			}
-			if err == io.EOF {
-				break
-			}
-			continue
-		}
-		select {
-		case s.mutch <- m:
-		case <-killSwitch:
-			break loop
 		}
 	}
-	log.Println("Connection %v closing for stream %v", conn.RemoteAddr(), s.laddr)
 }
 
-// read a full mutation packet and decode it
-func readMutation(conn net.Conn, buf []byte) (*common.Mutation, error) {
-	var pktlen uint32
-	//var flags  uint16
-	var err error
-
-	if pktlen, err = readPacketLen(conn, buf[:4]); err != nil {
-		return nil, err
+func isControlMessage(payload interface{}) bool {
+	if kvs, ok := payload.([]*protobuf.KeyVersions); ok && len(kvs) == 1 {
+		c := byte(kvs[0].GetCommand())
+		if (c == common.DropData) || (c == common.StreamBegin) ||
+			(c == common.StreamEnd) {
+			return true
+		}
 	}
-	if _, err = readPacketFlag(conn, buf[:2]); err != nil { // TODO flags is unused
-		return nil, err
-	}
-	if pktlen > GetMaxStreamDataLen() {
-		err = fmt.Errorf("packet length is greater than %v", GetMaxStreamDataLen())
-		return nil, err
-	}
-
-	if err = readPacketData(conn, buf[:pktlen]); err != nil {
-		return nil, err
-	}
-
-	m := &common.Mutation{}
-	err = m.Decode(buf[:pktlen])
-	return m, nil
-}
-
-func readPacketLen(conn net.Conn, buf []byte) (pktlen uint32, err error) {
-	var n int
-
-	if n, err = conn.Read(buf); err != nil {
-		log.Printf("%v reading from %v: %v\n", conn.RemoteAddr(), conn.LocalAddr(), err)
-		return
-	} else if n != len(buf) {
-		err = fmt.Errorf("partially read %v, expected to read %v", n, len(buf))
-		return
-	}
-	pktlen = uint32(binary.BigEndian.Uint32(buf))
-	return
-}
-
-func readPacketFlag(conn net.Conn, buf []byte) (flags uint16, err error) {
-	var n int
-
-	if n, err = conn.Read(buf); err != nil {
-		log.Printf("%v reading from %v: %v\n", conn.RemoteAddr(), conn.LocalAddr(), err)
-		return
-	} else if n != len(buf) {
-		err = fmt.Errorf("partially read %v, expected to read %v", n, len(buf))
-		return
-	}
-	flags = uint16(binary.BigEndian.Uint16(buf))
-	return
-}
-
-func readPacketData(conn net.Conn, buf []byte) (err error) {
-	var n int
-	if n, err = conn.Read(buf); err != nil {
-		log.Printf("%v reading from %v: %v\n", conn.RemoteAddr(), conn.LocalAddr(), err)
-		return
-	} else if n != len(buf) {
-		err = fmt.Errorf("partially read %v, expected to read %v", n, len(buf))
-		return
-	}
-	return
+	return false
 }

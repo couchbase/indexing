@@ -1,112 +1,214 @@
 package indexer
 
 import (
-	"fmt"
+	"bytes"
 	"github.com/couchbase/indexing/secondary/common"
-	"io"
-	"io/ioutil"
-	"log"
-	"reflect"
+	"github.com/couchbase/indexing/secondary/protobuf"
 	"testing"
 )
 
-var addr = "localhost:8888"
-var msgch = make(chan *common.Mutation)
-var count = 0
+const stream_test_maxKeyvers = 1
 
-func TestLoopBack(t *testing.T) {
-	var client *StreamClient
-	var err error
-
-	log.SetOutput(ioutil.Discard)
-	doServer(addr, t)
-
-	if client, err = NewStreamClient(addr, 1); err != nil {
-		t.Fatal(err)
-	}
-
-	m := &common.Mutation{
-		Version:  byte(1),
-		Command:  byte(1),
-		Vbucket:  uint16(512),
-		Vbuuid:   uint64(0x1234567812345678),
-		Docid:    []byte("cities"),
-		Seqno:    uint64(10000000),
-		Keys:     [][]byte{[]byte("bangalore"), []byte("delhi"), []byte("jaipur")},
-		Oldkeys:  [][]byte{[]byte("varanasi"), []byte("pune"), []byte("mahe")},
-		Indexids: []uint32{uint32(1), uint32(2), uint32(3)},
-	}
-
-	if err := client.Send(m); err != nil {
-		t.Fatal(err)
-	}
-	mback := <-msgch
-	if reflect.DeepEqual(m, mback) == false {
-		t.Fatal(fmt.Errorf("unexpected response"))
-	}
-	client.Stop()
-	msgch = nil
+type testConnection struct {
+	rptr int
+	wptr int
+	buf  []byte
 }
 
-func BenchmarkClientRequest(b *testing.B) {
-	var client *StreamClient
+func newTestConnection() *testConnection {
+	return &testConnection{buf: make([]byte, 100000)}
+}
+
+func (tc *testConnection) Write(b []byte) (n int, err error) {
+	newptr := tc.wptr + len(b)
+	copy(tc.buf[tc.wptr:newptr], b)
+	tc.wptr = newptr
+	return len(b), nil
+}
+
+func (tc *testConnection) Read(b []byte) (n int, err error) {
+	newptr := tc.rptr + len(b)
+	copy(b, tc.buf[tc.rptr:newptr])
+	tc.rptr = newptr
+	return len(b), nil
+}
+
+func (tc *testConnection) reset() {
+	tc.wptr, tc.rptr = 0, 0
+}
+
+func TestPktKeyVersions(t *testing.T) {
+	var payload interface{}
 	var err error
 
-	log.SetOutput(ioutil.Discard)
+	k := common.NewUpsert(512, 0x1234567812345678, []byte("cities"), 10000000)
+	k.Keys = [][]byte{[]byte("bangalore"), []byte("delhi"), []byte("jaipur")}
+	k.Oldkeys = [][]byte{[]byte("varanasi"), []byte("pune"), []byte("mahe")}
+	k.Indexids = []uint32{1, 2, 3}
 
-	if client, err = NewStreamClient(addr, 24); err != nil {
-		b.Fatal(err)
+	ks := make([]*common.KeyVersions, 0, stream_test_maxKeyvers)
+	for i := 0; i < stream_test_maxKeyvers; i++ {
+		n := *k
+		ks = append(ks, &n)
 	}
 
-	m := &common.Mutation{
-		Version:  byte(1),
-		Command:  byte(1),
-		Vbucket:  uint16(512),
-		Vbuuid:   uint64(0x1234567812345678),
-		Docid:    []byte("cities"),
-		Seqno:    uint64(10000000),
-		Keys:     [][]byte{[]byte("bangalore"), []byte("delhi"), []byte("jaipur")},
-		Oldkeys:  [][]byte{[]byte("varanasi"), []byte("pune"), []byte("mahe")},
-		Indexids: []uint32{uint32(1), uint32(2), uint32(3)},
+	tc := newTestConnection()
+	tc.reset()
+	flags := streamTransportFlag(0).setProtobuf()
+	pkt := NewStreamTransportPacket(GetMaxStreamDataLen(), flags)
+	if err = pkt.Send(tc, ks); err != nil {
+		t.Fatal(err)
 	}
+	if payload, err = pkt.Receive(tc); err != nil {
+		t.Fatal(err)
+	}
+
+	n_ks, ok := payload.([]*protobuf.KeyVersions)
+	if ok == false {
+		t.Fatal("fail send/receive")
+	}
+	if len(n_ks) != stream_test_maxKeyvers {
+		t.Fatal("expected exact number of KeyVersions encoded")
+	}
+
+	Command := byte(n_ks[0].GetCommand())
+	Vbucket := uint16(n_ks[0].GetVbucket())
+	Vbuuid := n_ks[0].GetVbuuid()
+	Docid := n_ks[0].GetDocid()
+	Seqno := n_ks[0].GetSeqno()
+	Keys := n_ks[0].GetKeys()
+	Oldkeys := n_ks[0].GetOldkeys()
+	Indexids := n_ks[0].GetIndexids()
+
+	if ks[0].Vbucket != Vbucket || ks[0].Vbuuid != Vbuuid ||
+		bytes.Compare(Docid, ks[0].Docid) != 0 || Seqno != ks[0].Seqno ||
+		Command != ks[0].Command {
+		t.Fatal("Mistmatch between encode and decode")
+	}
+	for i, _ := range Keys {
+		if bytes.Compare(Keys[i], ks[0].Keys[i]) != 0 {
+			t.Fatal("Mismatch in keys")
+		}
+		if bytes.Compare(Oldkeys[i], ks[0].Oldkeys[i]) != 0 {
+			t.Fatal("Mismatch in old-keys")
+		}
+		if Indexids[i] != ks[0].Indexids[i] {
+			t.Fatal("Mismatch in indexids")
+		}
+	}
+}
+
+func TestPktVbmap(t *testing.T) {
+	vbuckets := []uint16{1, 2, 3, 4}
+	vbuuids := []uint64{10, 20, 30, 40}
+
+	vbmap := common.VbConnectionMap{Vbuckets: vbuckets, Vbuuids: vbuuids}
+	tc := newTestConnection()
+	tc.reset()
+	flags := streamTransportFlag(0).setProtobuf()
+	pkt := NewStreamTransportPacket(GetMaxStreamDataLen(), flags)
+	pkt.Send(tc, vbmap)
+	payload, _ := pkt.Receive(tc)
+
+	vbmap_p, ok := payload.(*protobuf.VbConnectionMap)
+	if ok == false {
+		t.Fatal("expected reference VbConnectionMap object")
+	}
+
+	n_vbuckets := vbmap_p.GetVbuckets()
+	n_vbuuids := vbmap_p.GetVbuuids()
+	if len(vbuckets) != len(n_vbuckets) {
+		t.Fatal("unexpected number of vbuckets")
+	}
+	for i, _ := range vbuckets {
+		if vbuckets[i] != uint16(n_vbuckets[i]) {
+			t.Fatal("unexpected vbucket number")
+		} else if vbuuids[i] != n_vbuuids[i] {
+			t.Fatal("unexpected vbuuid number")
+		}
+	}
+}
+
+func BenchmarkSendKeyVersions(b *testing.B) {
+	k := common.NewUpsert(512, 0x1234567812345678, []byte("cities"), 10000000)
+	k.Keys = [][]byte{[]byte("bangalore"), []byte("delhi"), []byte("jaipur")}
+	k.Oldkeys = [][]byte{[]byte("varanasi"), []byte("pune"), []byte("mahe")}
+	k.Indexids = []uint32{1, 2, 3}
+
+	ks := make([]*common.KeyVersions, 0, stream_test_maxKeyvers)
+	for i := 0; i < stream_test_maxKeyvers; i++ {
+		n := *k
+		ks = append(ks, &n)
+	}
+
+	tc := newTestConnection()
+	tc.reset()
+	flags := streamTransportFlag(0).setProtobuf()
+	pkt := NewStreamTransportPacket(GetMaxStreamDataLen(), flags)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		m.Vbucket = uint16(i % 1024)
-		client.Send(m)
+		tc.reset()
+		pkt.Send(tc, ks)
 	}
-	client.Stop()
 }
 
-func doServer(addr string, tb testing.TB) *MutationStream {
-	var mStream *MutationStream
-	var err error
+func BenchmarkReceiveKeyVersions(b *testing.B) {
+	k := common.NewUpsert(512, 0x1234567812345678, []byte("cities"), 10000000)
+	k.Keys = [][]byte{[]byte("bangalore"), []byte("delhi"), []byte("jaipur")}
+	k.Oldkeys = [][]byte{[]byte("varanasi"), []byte("pune"), []byte("mahe")}
+	k.Indexids = []uint32{1, 2, 3}
 
-	mutch := make(chan *common.Mutation, 1)
-	errch := make(chan error)
-
-	if mStream, err = NewMutationStream(addr, mutch, errch); err != nil {
-		tb.Fatal(err)
+	ks := make([]*common.KeyVersions, 0, stream_test_maxKeyvers)
+	for i := 0; i < stream_test_maxKeyvers; i++ {
+		n := *k
+		ks = append(ks, &n)
 	}
 
-	go func() {
-		for {
-			select {
-			case mutn, ok := <-mutch:
-				if ok && msgch != nil {
-					msgch <- mutn
-				}
-				count++
-			case err, ok := <-errch:
-				if ok {
-					if err != io.EOF && err != MutationStreamClosed {
-						tb.Fatal(err)
-					}
-				} else {
-					tb.Fatal(fmt.Errorf("error channel closed unexpected"))
-				}
-			}
-		}
-	}()
-	return mStream
+	tc := newTestConnection()
+	tc.reset()
+	flags := streamTransportFlag(0).setProtobuf()
+	pkt := NewStreamTransportPacket(GetMaxStreamDataLen(), flags)
+	pkt.Send(tc, ks)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tc.reset()
+		pkt.Receive(tc)
+	}
+}
+
+func BenchmarkSendVbmap(b *testing.B) {
+	vbuckets := []uint16{1, 2, 3, 4}
+	vbuuids := []uint64{10, 20, 30, 40}
+	vbmap := common.VbConnectionMap{Vbuckets: vbuckets, Vbuuids: vbuuids}
+
+	tc := newTestConnection()
+	tc.reset()
+	flags := streamTransportFlag(0).setProtobuf()
+	pkt := NewStreamTransportPacket(GetMaxStreamDataLen(), flags)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tc.reset()
+		pkt.Send(tc, vbmap)
+	}
+}
+
+func BenchmarkReceiveVbmap(b *testing.B) {
+	vbuckets := []uint16{1, 2, 3, 4}
+	vbuuids := []uint64{10, 20, 30, 40}
+	vbmap := common.VbConnectionMap{Vbuckets: vbuckets, Vbuuids: vbuuids}
+
+	tc := newTestConnection()
+	tc.reset()
+	flags := streamTransportFlag(0).setProtobuf()
+	pkt := NewStreamTransportPacket(GetMaxStreamDataLen(), flags)
+	pkt.Send(tc, vbmap)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tc.reset()
+		pkt.Receive(tc)
+	}
 }

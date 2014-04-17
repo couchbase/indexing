@@ -1,14 +1,13 @@
-// KV mutations are projected to secondary keys, based on index
-// definitions, for each bucket. Projected secondary keys are defined by
-// Mutation structure and transported as stream payload from,
-//   projector -> router -> indexers & coordinator.
+// Transport independent library for mutation streaming.
+//
+// Provide APIs to create KeyVersions.
+//
+// TODO: use slab allocated or memory pool to manage KeyVersions
 
 package common
 
 import (
-	"code.google.com/p/goprotobuf/proto"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
 const (
@@ -40,12 +39,15 @@ type KeyVersions struct {
 	Indexids []uint32 // each key-version is for an active index defined on this bucket.
 }
 
+type VbConnectionMap struct {
+	Vbuckets []uint16
+	Vbuuids  []uint64
+}
+
 // Mutation message either carrying KeyVersions or protobuf.VbConnectionMap
 type Mutation struct {
-	version    byte // protocol Version: TBD
 	keys       []*KeyVersions
-	vbuckets   []uint16
-	vbuuids    []uint64
+	vbmap      VbConnectionMap
 	payltyp    byte
 	maxKeyvers int
 }
@@ -55,7 +57,6 @@ type Mutation struct {
 // Same object can be re-used to compose or de-compose messages.
 func NewMutation(maxKeyvers int) *Mutation {
 	m := &Mutation{
-		version:    ProtobufVersion(),
 		keys:       make([]*KeyVersions, 0, maxKeyvers),
 		maxKeyvers: maxKeyvers,
 	}
@@ -66,11 +67,12 @@ func NewMutation(maxKeyvers int) *Mutation {
 func (m *Mutation) NewPayload(payltyp byte) {
 	m.keys = m.keys[:0]
 	m.payltyp = payltyp
-	m.vbuckets = nil
-	m.vbuuids = nil
+	m.vbmap.Vbuckets, m.vbmap.Vbuuids = nil, nil
 }
 
 // AddKeyVersions will add a KeyVersions to current Mutation payload.
+// Note that SetVbuckets() and AddKeyVersions() cannot be used together as
+// payload.
 func (m *Mutation) AddKeyVersions(k *KeyVersions) (err error) {
 	if m.payltyp != PAYLOAD_KEYVERSIONS {
 		return fmt.Errorf("expected key version for payload")
@@ -82,14 +84,15 @@ func (m *Mutation) AddKeyVersions(k *KeyVersions) (err error) {
 }
 
 // SetVbuckets will set a list of vbuckets and corresponding vbuuids as
-// payload for next Mutation Message. Note that SetVbuckets() and
-// AddKeyVersions() can be used together as payload.
+// payload for next Mutation Message.
+// Note that SetVbuckets() and AddKeyVersions() cannot be used together as
+// payload.
 func (m *Mutation) SetVbuckets(vbuckets []uint16, vbuuids []uint64) (err error) {
 	if m.payltyp != PAYLOAD_VBMAP {
 		return fmt.Errorf("expected key version for payload")
 	}
-	m.vbuckets = vbuckets
-	m.vbuuids = vbuuids
+	m.vbmap.Vbuckets = vbuckets
+	m.vbmap.Vbuuids = vbuuids
 	return nil
 }
 
@@ -98,78 +101,85 @@ func (m *Mutation) GetKeyVersions() []*KeyVersions {
 	return m.keys
 }
 
-// Encode Mutation structure into protobuf array of bytes. Returned `data` can
-// be transported to the other end and decoded back to Mutation structure.
-func (m *Mutation) Encode() (data []byte, err error) {
-	mp := protobuf.Mutation{
-		Version: proto.Uint32(uint32(m.version)),
-	}
-
-	switch m.payltyp {
-	case PAYLOAD_KEYVERSIONS:
-		mp.Keys = make([]*protobuf.KeyVersions, 0, len(m.keys))
-		if len(m.keys) == 0 {
-			err = fmt.Errorf("empty mutation")
-			break
-		}
-		for _, k := range m.keys {
-			kp := &protobuf.KeyVersions{
-				Command: proto.Uint32(uint32(k.Command)),
-				Vbucket: proto.Uint32(uint32(k.Vbucket)),
-				Vbuuid:  proto.Uint64(uint64(k.Vbuuid)),
-			}
-			if k.Docid != nil && len(k.Docid) > 0 {
-				kp.Docid = k.Docid
-			}
-			if k.Seqno > 0 {
-				kp.Seqno = proto.Uint64(k.Seqno)
-			}
-			if k.Keys != nil {
-				kp.Keys = k.Keys
-				kp.Oldkeys = k.Oldkeys
-				kp.Indexids = k.Indexids
-			}
-			mp.Keys = append(mp.Keys, kp)
-		}
-	case PAYLOAD_VBMAP:
-		vbuckets := make([]uint32, 0, len(m.vbuckets))
-		for _, vb := range m.vbuckets {
-			vbuckets = append(vbuckets, uint32(vb))
-		}
-		mp.Vbuckets = &protobuf.VbConnectionMap{
-			Vbuuids:  m.vbuuids,
-			Vbuckets: vbuckets,
-		}
-	}
-
-	if err == nil {
-		data, err = proto.Marshal(&mp)
-	}
-	return
+// GetVbuckets return the list of vbuckets and corresponding vbuuids on this
+func (m *Mutation) GetVbmap() VbConnectionMap {
+	return m.vbmap
 }
 
-// Decode complements Encode() API. `data` returned by encode can be converted
-// back to either *protobuf.VbConnectionMap, or []*protobuf.KeyVersions
-func (m *Mutation) Decode(data []byte) (interface{}, error) {
-	var err error
-
-	mp := protobuf.Mutation{}
-	if err = proto.Unmarshal(data, &mp); err != nil {
-		return nil, err
+// NewUpsert construct a Upsert message corresponding to KV's MUTATION
+// message. Caller's responsibility to initialize `Keys`, `Oldkeys` and
+// `Indexids`  as applicable.
+func NewUpsert(vb uint16, vbuuid uint64, docid []byte, seqno uint64) *KeyVersions {
+	return &KeyVersions{
+		Command: Upsert,
+		Vbucket: vb,
+		Vbuuid:  vbuuid,
+		Docid:   docid,
+		Seqno:   seqno,
 	}
-	if ver := byte(mp.GetVersion()); ver != ProtobufVersion() {
-		return nil, fmt.Errorf("mismatch in transport version %v", ver)
-	}
-
-	if vbuckets := mp.GetVbuckets(); vbuckets != nil {
-		return vbuckets, nil
-	} else if keys := mp.GetKeys(); keys != nil {
-		return keys, nil
-	}
-	return nil, fmt.Errorf("mutation does not have payload")
 }
 
-// TBD: Yet to be defined. Just a place holder for now.
-func ProtobufVersion() byte {
-	return 1
+// NewDeletion construct a Deletion message corresponding to KV's DELETION
+// message. Caller's responsibility to initialize `Indexids`.
+func NewDeletion(vb uint16, vbuuid uint64, docid []byte, seqno uint64) *KeyVersions {
+	return &KeyVersions{
+		Command: Deletion,
+		Vbucket: vb,
+		Vbuuid:  vbuuid,
+		Docid:   docid,
+		Seqno:   seqno,
+	}
+}
+
+// NewUpsertDeletion construct a UpsertDeletion message. It is locally
+// generated message to delete older key version. Caller's responsibility to
+// initialize `Keys` and `Indexids`
+func NewUpsertDeletion(vb uint16, vbuuid uint64, docid []byte, seqno uint64) *KeyVersions {
+	return &KeyVersions{
+		Command: UpsertDeletion,
+		Vbucket: vb,
+		Vbuuid:  vbuuid,
+		Docid:   docid,
+		Seqno:   seqno,
+	}
+}
+
+// NewSync construct a Sync control message.
+func NewSync(vb uint16, vbuuid uint64, seqno uint64) *KeyVersions {
+	return &KeyVersions{
+		Command: Sync,
+		Vbucket: vb,
+		Vbuuid:  vbuuid,
+		Seqno:   seqno,
+	}
+}
+
+// NewDropData construct a DropData control message.
+func NewDropData(vb uint16, vbuuid uint64, seqno uint64) *KeyVersions {
+	return &KeyVersions{
+		Command: DropData,
+		Vbucket: vb,
+		Vbuuid:  vbuuid,
+		Seqno:   seqno,
+	}
+}
+
+// NewStreamBegin construct a StreamBegin control message.
+func NewStreamBegin(vb uint16, vbuuid uint64, seqno uint64) *KeyVersions {
+	return &KeyVersions{
+		Command: StreamBegin,
+		Vbucket: vb,
+		Vbuuid:  vbuuid,
+		Seqno:   seqno,
+	}
+}
+
+// NewStreamEnd construct a StreamEnd control message.
+func NewStreamEnd(vb uint16, vbuuid uint64, seqno uint64) *KeyVersions {
+	return &KeyVersions{
+		Command: StreamEnd,
+		Vbucket: vb,
+		Vbuuid:  vbuuid,
+		Seqno:   seqno,
+	}
 }
