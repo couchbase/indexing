@@ -23,10 +23,14 @@ import (
 	"os"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
+
+var options struct {
+	prodfile string
+	count    int
+}
 
 type Codes struct {
 	kind  string
@@ -35,38 +39,20 @@ type Codes struct {
 
 var codec *collatejson.Codec
 
-func (codes Codes) Len() int {
-	return len(codes.jsons)
-}
-
-func (codes Codes) Less(i, j int) bool {
-	key1, key2 := codes.jsons[i], codes.jsons[j]
-	if codes.kind == "tuq" {
-		value1 := dparval.NewValueFromBytes([]byte(key1)).Value()
-		value2 := dparval.NewValueFromBytes([]byte(key2)).Value()
-		return tuqcollate.CollateJSON(value1, value2) < 0
-	} else if codes.kind == "binary" {
-		value1 := codec.Encode([]byte(key1))
-		value2 := codec.Encode([]byte(key2))
-		return bytes.Compare(value1, value2) < 0
-	} else {
-		panic(fmt.Errorf("Unknown kind"))
-	}
-	return false
-}
-
-func (codes Codes) Swap(i, j int) {
-	codes.jsons[i], codes.jsons[j] = codes.jsons[j], codes.jsons[i]
+func argParse() {
+	flag.StringVar(&options.prodfile, "p", "json.prod",
+		"production file to use")
+	flag.IntVar(&options.count, "c", 100,
+		"Number samples")
+	flag.Parse()
 }
 
 func main() {
-	flag.Parse()
-	prodfile := flag.Args()[0]
+	argParse()
 
 	codec = collatejson.NewCodec()
-	count, _ := strconv.Atoi(flag.Args()[1])
-	fmt.Printf("Generating %v json documents ...\n", count)
-	jsons := generateJsons(prodfile, count)
+	fmt.Printf("Generating %v json documents ...\n", options.count)
+	jsons := generateJsons(options.prodfile, options.count)
 	checkCodec(jsons)
 	fmt.Println("Done")
 }
@@ -121,4 +107,28 @@ func generateJsons(prodfile string, count int) (jsons []string) {
 		jsons = append(jsons, text)
 	}
 	return
+}
+
+func (codes Codes) Len() int {
+	return len(codes.jsons)
+}
+
+func (codes Codes) Less(i, j int) bool {
+	key1, key2 := codes.jsons[i], codes.jsons[j]
+	if codes.kind == "tuq" {
+		value1 := dparval.NewValueFromBytes([]byte(key1)).Value()
+		value2 := dparval.NewValueFromBytes([]byte(key2)).Value()
+		return tuqcollate.CollateJSON(value1, value2) < 0
+	} else if codes.kind == "binary" {
+		value1 := codec.Encode([]byte(key1))
+		value2 := codec.Encode([]byte(key2))
+		return bytes.Compare(value1, value2) < 0
+	} else {
+		panic(fmt.Errorf("Unknown kind"))
+	}
+	return false
+}
+
+func (codes Codes) Swap(i, j int) {
+	codes.jsons[i], codes.jsons[j] = codes.jsons[j], codes.jsons[i]
 }
