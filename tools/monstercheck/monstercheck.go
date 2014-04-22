@@ -17,9 +17,7 @@ import (
 	"github.com/couchbaselabs/dparval"
 	tuqcollate "github.com/couchbaselabs/tuqtng/ast"
 	"github.com/prataprc/collatejson"
-	"github.com/prataprc/golib"
 	"github.com/prataprc/monster"
-	"math/rand"
 	"os"
 	"reflect"
 	"sort"
@@ -95,18 +93,13 @@ func compareWithTuq(jsons []string, count int) {
 	fmt.Println()
 }
 
-func generateJsons(prodfile string, count int) (jsons []string) {
-	c, conf := make(monster.Context), make(golib.Config)
-	start := monster.Parse(prodfile, conf)
-	nonterminals, root := monster.Build(start)
-	c["_nonterminals"] = nonterminals
-	for i := 1; i < count; i++ {
-		c["_random"] = rand.New(rand.NewSource(int64(time.Now().UnixNano())))
-		monster.Initialize(c)
-		text := root.Generate(c)
-		jsons = append(jsons, text)
+func generateJsons(prodfile string, count int) []string {
+	jsons, err :=
+		monster.Generate(int(time.Now().UnixNano()), count, "", prodfile)
+	if err != nil {
+		panic(err)
 	}
-	return
+	return jsons
 }
 
 func (codes codeList) Len() int {
