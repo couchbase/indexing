@@ -25,6 +25,10 @@ package collatejson
 
 import (
 	"bytes"
+	"code.google.com/p/go.text/collate"
+	"code.google.com/p/go.text/collate/colltab"
+	"code.google.com/p/go.text/language"
+	"code.google.com/p/go.text/unicode/norm"
 	"fmt"
 	"github.com/couchbaselabs/dparval"
 	"math"
@@ -50,6 +54,15 @@ const (
 type Codec struct {
 	arrayLenPrefix    bool // if true, first sort arrays based on its length.
 	propertyLenPrefix bool // if true, first sort properties based on length.
+	strength          colltab.Level
+	alternate         collate.AlternateHandling
+	backwards         bool
+	hiraganaQ         bool
+	caseLevel         bool
+	numeric           bool
+	language          language.Tag
+	nfkd              bool
+	utf8              bool
 }
 
 // NewCodec creates a new codec object and returns a reference to it.
@@ -57,6 +70,12 @@ func NewCodec() *Codec {
 	return &Codec{
 		arrayLenPrefix:    true,
 		propertyLenPrefix: true,
+		strength:          colltab.Quaternary,
+		backwards:         false,
+		hiraganaQ:         false,
+		caseLevel:         true,
+		numeric:           false,
+		language:          language.En,
 	}
 }
 
@@ -70,6 +89,34 @@ func (codec *Codec) SortbyArrayLen(what bool) {
 // Use `false` to sort only by proprety items
 func (codec *Codec) SortbyPropertyLen(what bool) {
 	codec.propertyLenPrefix = what
+}
+
+// UnicodeCollationPriority sets collate.Collator properties for unicode
+// collation.
+func (codec *Codec) UnicodeCollationPriority(
+	strength colltab.Level, alternate collate.AlternateHandling,
+	backwards, hiraganaQ, caseLevel, numeric bool) {
+	codec.strength = strength
+	codec.alternate = alternate
+	codec.backwards = backwards
+	codec.hiraganaQ = hiraganaQ
+	codec.caseLevel = caseLevel
+	codec.numeric = numeric
+}
+
+// SetLanguage uses language tag while doing unicode collation.
+func (codec *Codec) SetLanguage(l language.Tag) {
+	codec.language = l
+}
+
+// SortbyNFKD will enable an alternate collation using NFKD unicode standard.
+func (codec *Codec) SortbyNFKD(what bool) {
+	codec.nfkd = what
+}
+
+// SortbyUTF8 will do plain binary comparision for strings.
+func (codec *Codec) SortbyUTF8(what bool) {
+	codec.utf8 = what
 }
 
 // Encode json documents to order preserving binary representation.
@@ -110,7 +157,9 @@ func json2code(codec *Codec, val interface{}) []byte {
 	case uint64:
 		return json2code(codec, float64(value))
 	case string:
-		return append(joinBytes([]byte{TypeString}, []byte(value)), Terminator)
+		code = suffixEncodeString(codec.EncodeString(value))
+		res := joinBytes([]byte{TypeString}, code)
+		return append(res, Terminator)
 	case []interface{}:
 		res := make([][]byte, 0)
 		res = append(res, []byte{TypeArray})
@@ -169,9 +218,9 @@ func code2json(codec *Codec, code []byte) ([]byte, []byte, error) {
 		}
 		return json, code, err
 	case TypeString:
-		datum, code = getDatum(code)
-		datum = datum[1:] // remove type encoding TYPE_STRING
-		json = joinBytes([]byte("\""), datum, []byte("\""))
+		var s string
+		s, code = suffixDecodeString(code[1:])
+		json = joinBytes([]byte("\""), []byte(s), []byte("\""))
 		return json, code, nil
 	case TypeArray:
 		var l int
@@ -219,7 +268,7 @@ func code2json(codec *Codec, code []byte) ([]byte, []byte, error) {
 		json = joinBytes(json, []byte("}"))
 		return json, code, err
 	}
-	panic(fmt.Sprintf("collationType doesn't understand %+v of type %T", code))
+	panic(fmt.Sprintf("collationType doesn't understand %+v of type %T", code, code))
 }
 
 // local function that sorts JSON property objects based on property names.
@@ -246,4 +295,28 @@ func getDatum(code []byte) ([]byte, []byte) {
 		}
 	}
 	return code[:i], code[i+1:]
+}
+
+// EncodeString encodes string in utf8 encoding to binary sequence based on
+// UTF8, NFKD or go.text/collate algorithms.
+func (codec *Codec) EncodeString(value string) (code []byte) {
+	bs := []byte(value)
+	if codec.utf8 {
+		code = []byte(bs)
+	} else if codec.nfkd {
+		code = norm.NFKD.Bytes([]byte(bs)) // canonical decomposed
+	} else {
+		// TODO: Try to understand the performance implication of collate.Buffer
+		// object
+		buf := &collate.Buffer{}
+		c := collate.New(codec.language)
+		c.Strength = codec.strength
+		c.Alternate = codec.alternate
+		c.Backwards = codec.backwards
+		c.HiraganaQuaternary = codec.hiraganaQ
+		c.CaseLevel = codec.caseLevel
+		c.Numeric = codec.numeric
+		code = c.Key(buf, []byte(bs))
+	}
+	return code
 }

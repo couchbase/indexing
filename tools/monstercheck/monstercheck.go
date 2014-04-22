@@ -15,8 +15,8 @@ import (
 	"flag"
 	"fmt"
 	"github.com/couchbaselabs/dparval"
+	"github.com/couchbaselabs/indexing/collatejson"
 	tuqcollate "github.com/couchbaselabs/tuqtng/ast"
-	"github.com/prataprc/collatejson"
 	"github.com/prataprc/monster"
 	"os"
 	"reflect"
@@ -28,6 +28,9 @@ import (
 var options struct {
 	prodfile string
 	count    int
+	seed     int
+	nfkd     bool
+	utf8     bool
 }
 
 type codeList struct {
@@ -42,21 +45,37 @@ func argParse() {
 		"production file to use")
 	flag.IntVar(&options.count, "c", 100,
 		"Number samples")
+	flag.IntVar(&options.seed, "seed", 0,
+		"Random seed")
+	flag.BoolVar(&options.nfkd, "nfkd", false,
+		"use decomposed canonical normalization for unicode collation")
+	flag.BoolVar(&options.utf8, "utf8", false,
+		"use plain string for unicode collation")
 	flag.Parse()
 }
 
 func main() {
 	argParse()
+	if options.seed == 0 {
+		options.seed = int(time.Now().UnixNano())
+	}
 
 	codec = collatejson.NewCodec()
+	if options.nfkd {
+		codec.SortbyNFKD(true)
+	}
+	if options.utf8 {
+		codec.SortbyUTF8(true)
+	}
+
 	fmt.Printf("Generating %v json documents ...\n", options.count)
-	jsons := generateJsons(options.prodfile, options.count)
+	jsons := generateJsons(options.prodfile, options.seed, options.count)
 	checkCodec(jsons)
 	fmt.Println("Done")
 }
 
 func checkCodec(jsons []string) {
-	var one, two map[string]interface{}
+	var one, two interface{}
 
 	fmt.Println("Checking Encoding and Decoding ...")
 	for _, j := range jsons {
@@ -93,9 +112,8 @@ func compareWithTuq(jsons []string, count int) {
 	fmt.Println()
 }
 
-func generateJsons(prodfile string, count int) []string {
-	jsons, err :=
-		monster.Generate(int(time.Now().UnixNano()), count, "", prodfile)
+func generateJsons(prodfile string, seed, count int) []string {
+	jsons, err := monster.Generate(seed, count, "", prodfile)
 	if err != nil {
 		panic(err)
 	}

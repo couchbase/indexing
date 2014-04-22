@@ -15,7 +15,7 @@ import (
 	"code.google.com/p/go.text/unicode/norm"
 	"flag"
 	"fmt"
-	"github.com/prataprc/collatejson"
+	"github.com/couchbaselabs/indexing/collatejson"
 	"strconv"
 	"unicode/utf8"
 )
@@ -44,19 +44,18 @@ func main() {
 	} else if options.intText != "" {
 		encodeInt(options.intText)
 	} else {
-		fmt.Println("composed:", []byte(options.stringText))
+		fmt.Printf("composed:(%v) %v\n", len(options.stringText), []byte(options.stringText))
 		b := norm.NFKD.Bytes([]byte(options.stringText))
-		fmt.Println("decomposed:", b)
+		fmt.Printf("decomposed:(%v) %v\n", len(b), b)
 		cl := collate.New(language.De)
 		buf := &collate.Buffer{}
 		rawkey := cl.Key(buf, b)
-		fmt.Println("rawkey:", rawkey)
+		fmt.Printf("rawkey:(%v) %v\n", len(rawkey), rawkey)
 
 		s, i := string(b), 0
 		for {
-			r, c := utf8.DecodeRune([]byte(s[i:]))
+			_, c := utf8.DecodeRune([]byte(s[i:]))
 			i += c
-			fmt.Printf("%c %v %v\n", r, r, c)
 			if len(s[i:]) == 0 {
 				break
 			}

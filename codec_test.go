@@ -10,6 +10,7 @@
 package collatejson
 
 import (
+	"bytes"
 	"strconv"
 	"testing"
 )
@@ -150,6 +151,19 @@ func TestFloat(t *testing.T) {
 		if atof(out, t) != atof(sample, t) {
 			t.Error("float decode failed:", sample, out)
 		}
+	}
+}
+
+func TestSuffixCoding(t *testing.T) {
+	bs := []byte("hello\x00wo\xffrld\x00")
+	code := suffixEncodeString(bs)
+	code = joinBytes(code, []byte{Terminator})
+	s, code := suffixDecodeString(code)
+	if bytes.Compare(bs, []byte(s)) != 0 {
+		t.Error("Suffix coding for strings failed")
+	}
+	if len(code) != 0 {
+		t.Error("Suffix coding for strings failed, residue found")
 	}
 }
 
@@ -408,6 +422,23 @@ func BenchmarkDecodeLD(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		DecodeLD(samples[i%ln])
+	}
+}
+
+func BenchmarkSuffixEncode(b *testing.B) {
+	bs := []byte("hello\x00wo\xffrld\x00")
+	for i := 0; i < b.N; i++ {
+		suffixEncodeString(bs)
+	}
+}
+
+func BenchmarkSuffixDecode(b *testing.B) {
+	bs := []byte("hello\x00wo\xffrld\x00")
+	code := suffixEncodeString(bs)
+	code = joinBytes(code, []byte{Terminator})
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		suffixDecodeString(code)
 	}
 }
 

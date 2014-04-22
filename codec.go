@@ -463,3 +463,45 @@ func isZero(text []byte) []byte {
 	}
 	return nil
 }
+
+func suffixEncodeString(s []byte) []byte {
+	bs := []byte(s)
+	newbs := make([]byte, 0, len(bs))
+	for _, x := range bs {
+		newbs = append(newbs, x)
+		if x == Terminator {
+			newbs = append(newbs, 1)
+		}
+	}
+	newbs = append(newbs, Terminator)
+	return newbs
+}
+
+func suffixDecodeString(bs []byte) (string, []byte) {
+	newbs := make([]byte, 0, len(bs))
+	if len(bs) < 2 && bs[0] == Terminator && bs[1] == Terminator { // Empty
+		return "", bs
+	} else if len(bs) < 2 {
+		e := fmt.Errorf("string could not have been encoded like this %v", bs)
+		panic(e)
+	}
+
+	for i := 0; i < len(bs)-1; {
+		if bs[i] == Terminator && bs[i+1] == Terminator {
+			if i < len(bs)-2 {
+				return string(newbs), bs[i+2:]
+			}
+			return string(newbs), []byte{}
+		} else if bs[i] == Terminator && bs[i+1] == 1 {
+			// TODO: second predicate can be optimized away
+			newbs = append(newbs, bs[i])
+			i += 2
+		} else if bs[i] == Terminator { // TODO: Can be optimized away
+			panic("Unable to decode string")
+		} else {
+			newbs = append(newbs, bs[i])
+			i++
+		}
+	}
+	panic("Can't find double terminator for string")
+}

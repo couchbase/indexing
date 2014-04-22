@@ -27,19 +27,22 @@ var json1 = []byte(
 
 func TestEncode(t *testing.T) {
 	codec := NewCodec()
+	codec.SortbyUTF8(true)
 	code := codec.Encode(json1)
 	ref := `\b` +
 		`\x05>5\x00` +
-		`\x06arrogantness\x00\x02\x00` +
-		`\x06horridness\x00\x04\x00` +
-		`\x06inelegant\x00\x05>>22753096820876087-\x00` +
-		`\x06iridodesis\x00\a\x05>2\x00\x05>>2791253026404128-\x00\x02\x00\x00\x06` +
-		`unagrarian\x00\x03\x00\x00`
+		`\x06arrogantness\x00\x00\x02\x00` +
+		`\x06horridness\x00\x00\x04\x00` +
+		`\x06inelegant\x00\x00\x05>>22753096820876087-\x00` +
+		`\x06iridodesis\x00\x00\a\x05>2\x00\x05>>2791253026404128-\x00\x02\x00\x00` +
+		`\x06unagrarian\x00\x00\x03\x00\x00`
 
 	out := fmt.Sprintf("%q", code)
 	out = out[1 : len(out)-1]
 	if out != ref {
 		t.Error("Encode fails, did you change the encoding format ?")
+		fmt.Println(ref)
+		fmt.Println(out)
 	}
 }
 
@@ -47,6 +50,7 @@ func TestDecode(t *testing.T) {
 	var one, two map[string]interface{}
 
 	codec := NewCodec()
+	codec.SortbyUTF8(true)
 	out := codec.Decode(codec.Encode(json1))
 
 	json.Unmarshal(json1, &one)
@@ -70,5 +74,31 @@ func BenchmarkCompare(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		bytes.Compare(code, code)
+	}
+}
+
+func BenchmarkUtf8(b *testing.B) {
+	s := "prográmming"
+	codec := NewCodec()
+	codec.SortbyUTF8(true)
+	for i := 0; i < b.N; i++ {
+		codec.EncodeString(s)
+	}
+}
+
+func BenchmarkNFKD(b *testing.B) {
+	s := "prográmming"
+	codec := NewCodec()
+	codec.SortbyNFKD(true)
+	for i := 0; i < b.N; i++ {
+		codec.EncodeString(s)
+	}
+}
+
+func BenchmarkStringCollate(b *testing.B) {
+	s := "prográmming"
+	codec := NewCodec()
+	for i := 0; i < b.N; i++ {
+		codec.EncodeString(s)
 	}
 }

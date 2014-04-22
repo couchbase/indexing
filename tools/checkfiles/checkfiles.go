@@ -13,7 +13,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"github.com/prataprc/collatejson"
+	"github.com/couchbaselabs/indexing/collatejson"
 	"io/ioutil"
 	"log"
 	"os"
@@ -91,6 +91,7 @@ func sortFile(filename string) (outs []string) {
 		panic(err.Error())
 	}
 	codec := collatejson.NewCodec()
+	codec.SortbyNFKD(true)
 	switch options.lenprefix {
 	case true:
 		codec.SortbyArrayLen(true)
