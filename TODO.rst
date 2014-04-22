@@ -1,3 +1,13 @@
+* Jens' comments,
+  * Also BTW, there’s a lot of appending of byte slices going on in
+    collate.go. I suspect this is inefficient, allocating lots of small slices
+    and then copying them together. It’s probably cheaper (and simpler) to use
+    an io.Writer instead.
+  * The CouchDB collation spec uses Unicode collation, and strangely enough
+    the collation order for ASCII characters is not the same as ASCII order. I
+    solved this by creating a mapping table that converts the bytes 0-127 into
+    their priority in the Unicode collation.
+
 * If a string contains escaped null values it will conflict with TERMINATOR
   encoding. JSON strings must be byte stuffed for TERMINATOR byte.
 
