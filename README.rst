@@ -11,7 +11,7 @@ That is,
 Notes:
 
 * items in a property object are sorted by its property name before they
-are compared with other property object.
+  are compared with other property object.
 
 for api documentation and bench marking try,
 
