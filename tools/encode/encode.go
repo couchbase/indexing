@@ -14,11 +14,13 @@ import (
 	"fmt"
 	"github.com/prataprc/collatejson"
 	"strconv"
+	"unicode/utf8"
 )
 
 var options struct {
-	floatText string
-	intText   string
+	floatText  string
+	intText    string
+	stringText string
 }
 
 func argParse() {
@@ -28,6 +30,7 @@ func argParse() {
 	//flag.StringVar(&options.outfile, "o", "-", "Specify an output file")
 	flag.StringVar(&options.floatText, "f", "", "encode floating point number")
 	flag.StringVar(&options.intText, "i", "", "encode integer number")
+	flag.StringVar(&options.stringText, "s", "", "encode string")
 	flag.Parse()
 }
 
@@ -37,6 +40,16 @@ func main() {
 		encodeFloat(options.floatText)
 	} else if options.intText != "" {
 		encodeInt(options.intText)
+	} else {
+		s, i := options.stringText, 0
+		for {
+			r, c := utf8.DecodeRune([]byte(s[i:]))
+			i += c
+			fmt.Println(r, c)
+			if len(s[i:]) == 0 {
+				break
+			}
+		}
 	}
 }
 
