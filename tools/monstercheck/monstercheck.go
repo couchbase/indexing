@@ -32,7 +32,7 @@ var options struct {
 	count    int
 }
 
-type Codes struct {
+type codeList struct {
 	kind  string
 	jsons []string
 }
@@ -80,13 +80,13 @@ func compareWithTuq(jsons []string, count int) {
 		binjsons := make([]string, len(jsons))
 		copy(binjsons, jsons)
 
-		tuqcodes := Codes{"tuq", tuqjsons}
+		tuqcodes := codeList{"tuq", tuqjsons}
 		sort.Sort(tuqcodes)
 		fd, _ := os.Create("a")
 		fd.Write([]byte(strings.Join(tuqcodes.jsons, "\n")))
 		fd.Close()
 
-		bincodes := Codes{"binary", binjsons}
+		bincodes := codeList{"binary", binjsons}
 		sort.Sort(bincodes)
 		fd, _ = os.Create("b")
 		fd.Write([]byte(strings.Join(bincodes.jsons, "\n")))
@@ -109,11 +109,11 @@ func generateJsons(prodfile string, count int) (jsons []string) {
 	return
 }
 
-func (codes Codes) Len() int {
+func (codes codeList) Len() int {
 	return len(codes.jsons)
 }
 
-func (codes Codes) Less(i, j int) bool {
+func (codes codeList) Less(i, j int) bool {
 	key1, key2 := codes.jsons[i], codes.jsons[j]
 	if codes.kind == "tuq" {
 		value1 := dparval.NewValueFromBytes([]byte(key1)).Value()
@@ -124,11 +124,11 @@ func (codes Codes) Less(i, j int) bool {
 		value2 := codec.Encode([]byte(key2))
 		return bytes.Compare(value1, value2) < 0
 	} else {
-		panic(fmt.Errorf("Unknown kind"))
+		panic(fmt.Errorf("unknown kind"))
 	}
 	return false
 }
 
-func (codes Codes) Swap(i, j int) {
+func (codes codeList) Swap(i, j int) {
 	codes.jsons[i], codes.jsons[j] = codes.jsons[j], codes.jsons[i]
 }

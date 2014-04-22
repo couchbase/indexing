@@ -22,11 +22,11 @@ import (
 	"strings"
 )
 
-type Code struct {
+type codeObj struct {
 	off  int
 	code []byte
 }
-type Codes []Code
+type codeList []codeObj
 
 var options struct {
 	lenprefix bool
@@ -46,7 +46,7 @@ func main() {
 	}
 	arg := args[0]
 	if fi, err := os.Stat(arg); err != nil {
-		panic(fmt.Errorf("Error stating %v", arg))
+		panic(fmt.Errorf("error stating %v", arg))
 	} else if fi.IsDir() {
 		runTests(arg)
 	} else {
@@ -62,9 +62,9 @@ func runTests(rootdir string) {
 				log.Println("Checking", file, "...")
 				out := strings.Join(sortFile(file), "\n")
 				if ref, err := ioutil.ReadFile(file + ".ref"); err != nil {
-					panic(fmt.Errorf("Error reading reference file %v", file))
+					panic(fmt.Errorf("error reading reference file %v", file))
 				} else if strings.Trim(string(ref), "\n") != out {
-					panic(fmt.Errorf("Sort mismatch in %v", file))
+					panic(fmt.Errorf("sort mismatch in %v", file))
 				}
 			}
 		}
@@ -73,15 +73,15 @@ func runTests(rootdir string) {
 	}
 }
 
-func (codes Codes) Len() int {
+func (codes codeList) Len() int {
 	return len(codes)
 }
 
-func (codes Codes) Less(i, j int) bool {
+func (codes codeList) Less(i, j int) bool {
 	return bytes.Compare(codes[i].code, codes[j].code) < 0
 }
 
-func (codes Codes) Swap(i, j int) {
+func (codes codeList) Swap(i, j int) {
 	codes[i], codes[j] = codes[j], codes[i]
 }
 
@@ -105,16 +105,16 @@ func sortFile(filename string) (outs []string) {
 }
 
 func encodeLines(codec *collatejson.Codec, s []byte) []string {
-	texts, codes := lines(s), make(Codes, 0)
+	texts, codes := lines(s), make(codeList, 0)
 	for i, x := range texts {
 		code := codec.Encode(x)
-		codes = append(codes, Code{i, code})
+		codes = append(codes, codeObj{i, code})
 	}
 	outs := doSort(texts, codes)
 	return outs
 }
 
-func doSort(texts [][]byte, codes Codes) (outs []string) {
+func doSort(texts [][]byte, codes codeList) (outs []string) {
 	sort.Sort(codes)
 	for _, code := range codes {
 		outs = append(outs, string(texts[code.off]))

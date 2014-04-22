@@ -72,7 +72,7 @@ func BenchmarkTuqCollateMap(b *testing.B) {
 	}
 }
 
-func BenchmarkJsonInt(b *testing.B) {
+func BenchmarkJSONTnt(b *testing.B) {
 	var value1, value2 interface{}
 	jsonb := []byte(`1234567890`)
 	json.Unmarshal([]byte(jsonb), &value1)
@@ -83,7 +83,7 @@ func BenchmarkJsonInt(b *testing.B) {
 	}
 }
 
-func BenchmarkJsonFloat(b *testing.B) {
+func BenchmarkJSONTloat(b *testing.B) {
 	var value1, value2 interface{}
 	jsonb := []byte(`1234567890.001234556`)
 	json.Unmarshal([]byte(jsonb), &value1)
@@ -94,7 +94,7 @@ func BenchmarkJsonFloat(b *testing.B) {
 	}
 }
 
-func BenchmarkJsonArray(b *testing.B) {
+func BenchmarkJSONTrray(b *testing.B) {
 	var value1, value2 interface{}
 	jsonb := []byte(
 		`[123456789, 123456789.1234567879, "hello world", true, false, null]`)
@@ -106,7 +106,7 @@ func BenchmarkJsonArray(b *testing.B) {
 	}
 }
 
-func BenchmarkJsonMap(b *testing.B) {
+func BenchmarkJSONTap(b *testing.B) {
 	var value1, value2 interface{}
 	json.Unmarshal([]byte(json1), &value1)
 	b.ResetTimer()
