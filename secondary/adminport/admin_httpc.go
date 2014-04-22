@@ -2,10 +2,12 @@
 //
 // clients can talk to server by doing,
 //
-//  client := NewHttpClient("http://localhost:8888")
-//  req := &protobuf.RequestMessage{}
-//  resp := &protobuf.ResponseMessage{}
-//  client.Request(req, resp)
+// Example client {
+//     client := NewHttpClient("http://localhost:9999")
+//     req := &protobuf.RequestMessage{}
+//     resp := &protobuf.ResponseMessage{}
+//     client.Request(req, resp)
+// }
 
 package adminport
 
@@ -40,7 +42,7 @@ func (c *httpClient) Request(msg, resp MessageMarshaller) (err error) {
 		if req, err = http.NewRequest("POST", url, bodybuf); err != nil {
 			return nil, err
 		}
-		req.Header.Add("Content-Type", "application/protobuf")
+		req.Header.Add("Content-Type", msg.ContentType())
 		return c.httpc.Do(req)
 	}, resp)
 }

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-var addr = "http://localhost:8888"
+var addr = "http://localhost:9999"
 
 type testMessage struct {
 	Bucket        string `json:"bucket"`
@@ -74,7 +74,7 @@ func BenchmarkClientRequest(b *testing.B) {
 
 func doServer(addr string, tb testing.TB, quit chan bool) Server {
 	reqch := make(chan Request, 10)
-	server := NewHttpServer("localhost:8888", 0, 0, reqch)
+	server := NewHttpServer("localhost:9999", 0, 0, reqch)
 	if err := server.Register(&testMessage{}); err != nil {
 		tb.Fatal(err)
 	}
@@ -116,4 +116,8 @@ func (tm *testMessage) Encode() (data []byte, err error) {
 func (tm *testMessage) Decode(data []byte) (err error) {
 	err = json.Unmarshal(data, tm)
 	return
+}
+
+func (tm *testMessage) ContentType() string {
+	return "application/json"
 }

@@ -1,25 +1,25 @@
 // admin server to handle admin and system messages.
 //
-// applications can spawn a server go-routine by doing,
+// Example server {
+//      reqch  := make(chan adminport.Request)
+//      server := NewHttpServer("localhost:9999", 0, 0, reqch)
+//      server.Register(&protobuf.RequestMessage{})
 //
-//  reqch  := make(chan adminport.Request)
-//  server := NewHttpServer("localhost:8888", 0, 0, reqch)
-//  server.Register(&protobuf.RequestMessage{})
-//
-//  loop:
-//  for {
-//      select {
-//      case req, ok := <-reqch:
-//          if ok {
-//              msg := req.GetMessage().(protobuf.RequestMessage)
-//              // interpret request and compose a response
-//              respMsg := protobuf.ResponseMessage{}
-//              err := req.Send(&respMsg)
-//          } else {
-//              break loop
+//      loop:
+//      for {
+//          select {
+//          case req, ok := <-reqch:
+//              if ok {
+//                  msg := req.GetMessage().(protobuf.RequestMessage)
+//                  // interpret request and compose a response
+//                  respMsg := protobuf.ResponseMessage{}
+//                  err := req.Send(&respMsg)
+//              } else {
+//                  break loop
+//              }
 //          }
 //      }
-//  }
+// }
 
 // TODO: IMPORTANT:
 //  Go 1.3 is supposed to have graceful shutdown of http server.
@@ -172,7 +172,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	respMsg := <-waitch
 	if data, err := respMsg.Encode(); err == nil {
 		header := w.Header()
-		header["Content-Type"] = []string{"application/protobuf"}
+		header["Content-Type"] = []string{respMsg.ContentType()}
 		w.Write(data)
 	} else {
 		log.Printf("error encoding response (%v) %v\n", r.URL.Path, err)

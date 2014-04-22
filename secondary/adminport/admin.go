@@ -16,6 +16,9 @@ type MessageMarshaller interface {
 	// Name of the message
 	Name() string
 
+	// Content type to be used in the transport layer.
+	ContentType() string
+
 	// Encode function marshal message to byte array.
 	Encode() (data []byte, err error)
 
