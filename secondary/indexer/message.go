@@ -19,6 +19,7 @@ const (
 
 	//Component specific messages
 	//TODO
+
 )
 
 type Message interface {
@@ -28,14 +29,14 @@ type Message interface {
 //Error Message
 type MsgError struct {
 	mType MsgType
-	err   error
+	err   Error
 }
 
 func (m *MsgError) GetMsgType() MsgType {
 	return m.mType
 }
 
-func (m *MsgError) GetError() error {
+func (m *MsgError) GetError() Error {
 	return m.err
 }
 
