@@ -9,6 +9,10 @@
 
 package indexer
 
+import (
+	"github.com/couchbase/indexing/secondary/common"
+)
+
 type MsgType int16
 
 const (
@@ -18,8 +22,14 @@ const (
 	ERROR
 
 	//Component specific messages
-	//TODO
 
+	//STREAM_READER
+	STREAM_READER_STREAM_SHUTDOWN
+	STREAM_READER_STREAM_DROP_DATA
+	STREAM_READER_STREAM_BEGIN
+	STREAM_READER_STREAM_END
+	STREAM_READER_PANIC
+	STREAM_READER_UPDATE_QUEUE_MAP
 )
 
 type Message interface {
@@ -46,4 +56,54 @@ type MsgSuccess struct {
 
 func (m *MsgSuccess) GetMsgType() MsgType {
 	return SUCCESS
+}
+
+//Stream Reader Message
+type MsgStream struct {
+	mType    MsgType
+	streamId StreamId
+	mutation *common.Mutation
+}
+
+func (m *MsgStream) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgStream) GetMutationMsg() *common.Mutation {
+	return m.mutation
+}
+
+func (m *MsgStream) GetStreamId() StreamId {
+	return m.streamId
+}
+
+//Stream Panic Message
+type MsgStreamPanic struct {
+	streamId StreamId
+	err      Error
+}
+
+func (m *MsgStreamPanic) GetMsgType() MsgType {
+	return STREAM_READER_PANIC
+}
+
+func (m *MsgStreamPanic) GetStreamId() StreamId {
+	return m.streamId
+}
+
+func (m *MsgStreamPanic) GetError() Error {
+	return m.err
+}
+
+//Stream Update Index Queue Message
+type MsgUpdateIndexQueue struct {
+	indexQueueMap IndexQueueMap
+}
+
+func (m *MsgUpdateIndexQueue) GetMsgType() MsgType {
+	return STREAM_READER_UPDATE_QUEUE_MAP
+}
+
+func (m *MsgUpdateIndexQueue) GetIndexQueueMap() IndexQueueMap {
+	return m.indexQueueMap
 }

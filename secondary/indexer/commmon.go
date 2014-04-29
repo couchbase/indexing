@@ -9,7 +9,13 @@
 
 package indexer
 
-// StreamId represents the possible mutation streams
+import (
+	"github.com/couchbase/indexing/secondary/common"
+)
+
+const MAX_NUM_VBUCKETS = 1024
+
+//StreamId represents the possible mutation streams
 type StreamId uint16
 
 const (
@@ -29,3 +35,15 @@ type StopChannel chan bool
 type DoneChannel chan bool
 
 type MsgChannel chan Message
+
+type MutationChannel chan *common.Mutation
+
+//IndexMutationQueue comprising of a mutation queue
+//and a slab manager
+type IndexerMutationQueue struct {
+	queue   MutationQueue
+	slabMgr SlabManager //slab allocator for mutation memory allocation
+}
+
+//IndexQueueMap is a map between IndexId and IndexerMutationQueue
+type IndexQueueMap map[uint16]IndexerMutationQueue
