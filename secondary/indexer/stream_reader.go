@@ -19,7 +19,6 @@ import (
 //MutationStreamReader reads a MutationStream and stores the incoming mutations
 //in mutation queue. This is the only component writing to a mutation queue.
 type MutationStreamReader interface {
-	Shutdown()
 }
 
 type mutationStreamReader struct {
@@ -31,6 +30,8 @@ type mutationStreamReader struct {
 
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any message to supervisor
+
+	shutdownCh DoneChannel //internal channel indicating shutdown
 
 	numWorkers int // number of workers to process mutation stream
 
@@ -46,6 +47,11 @@ const MAX_WORKER_BUFFER = 1000
 //CreateMutationStreamReader creates a new mutation stream and starts
 //a reader to listen and process the mutations.
 //In case returned MutationStreamReader is nil, Message will have the error msg.
+//supvCmdch is a synchronous channel and every request on this channel is followed
+//by a response on the same channel. Supervisor is expected to wait for the response
+//before issuing a new request on this channel.
+//supvRespch will be used by Stream Reader to send any async error/info messages
+//that may happen due to any downstream error or its own processing.
 func CreateMutationStreamReader(streamId StreamId, indexQueueMap IndexQueueMap,
 	supvCmdch MsgChannel, supvRespch MsgChannel, numWorkers int) (
 	MutationStreamReader, Message) {
@@ -74,11 +80,12 @@ func CreateMutationStreamReader(streamId StreamId, indexQueueMap IndexQueueMap,
 		numWorkers:    numWorkers,
 		workerch:      make([]MutationChannel, numWorkers),
 		workerStopCh:  make([]StopChannel, numWorkers),
+		shutdownCh:    make(DoneChannel),
 		indexQueueMap: indexQueueMap,
 	}
 
 	//start the main reader loop
-	r.run()
+	go r.run()
 
 	//init worker buffers
 	for w := 0; w < r.numWorkers; w++ {
@@ -93,69 +100,76 @@ func CreateMutationStreamReader(streamId StreamId, indexQueueMap IndexQueueMap,
 
 //Shutdown shuts down the mutation stream and all workers.
 //This call doesn't return till shutdown is complete.
-func (r *mutationStreamReader) Shutdown() {
+func (r *mutationStreamReader) shutdown() Message {
+
+	close(r.shutdownCh)
 
 	//close the mutation stream
-	r.stream.Shutdown()
+	r.stream.shutdown()
 
 	//stop all workers
 	r.stopWorkers()
+
+	return &MsgSuccess{}
 }
 
 //run starts the stream reader loop which listens to message from
 //mutation stream and the supervisor
 func (r *mutationStreamReader) run() {
 
-	go func() {
-		//panic handler
-		defer r.panicHandler()
+	//panic handler
+	defer r.panicHandler()
 
-		for {
-			select {
+loop:
+	for {
+		select {
 
-			case mut, ok := <-r.streamMutch:
-				if ok {
-					//TODO: Use Slab Manager here to allocate memory for mutation
-					//Mutation Stream should be free to reuse the underlying memory for mutation
-					r.handleMutation(mut)
-				} else {
-					//stream library has closed this channel indicating unexpected stream closure
-					//send the message to supervisor
-					msgErr := &MsgError{mType: ERROR,
-						err: Error{code: STREAM_READER_STREAM_SHUTDOWN,
-							severity: FATAL,
-							category: STREAM_READER}}
-					r.supvRespch <- msgErr
+		case mut, ok := <-r.streamMutch:
+			if ok {
+				//TODO: Use Slab Manager here to allocate memory for mutation
+				//Mutation Stream should be free to reuse the underlying memory for mutation
+				r.handleMutation(mut)
+			} else {
+				//stream library has closed this channel indicating unexpected stream closure
+				//send the message to supervisor
+				msgErr := &MsgStreamError{streamId: r.streamId,
+					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
+						severity: FATAL,
+						category: STREAM_READER}}
+				r.supvRespch <- msgErr
+
+			}
+
+		case msg, ok := <-r.streamRespch:
+			if ok {
+				r.handleStreamError(msg)
+			} else {
+				//stream library has closed this channel indicating unexpected stream closure
+				//send the message to supervisor
+				msgErr := &MsgStreamError{streamId: r.streamId,
+					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
+						severity: FATAL,
+						category: STREAM_READER}}
+				r.supvRespch <- msgErr
+
+			}
+
+		case cmd, ok := <-r.supvCmdch:
+			if ok {
+				msg := r.handleSupervisorCommands(cmd)
+				r.supvCmdch <- msg
+				if cmd.GetMsgType() == STREAM_READER_SHUTDOWN {
+					break loop
 				}
-
-			case msg, ok := <-r.streamRespch:
-				if ok {
-					r.handleStreamError(msg)
-				} else {
-					//stream library has closed this channel indicating unexpected stream closure
-					//send the message to supervisor
-					msgErr := &MsgError{mType: ERROR,
-						err: Error{code: STREAM_READER_STREAM_SHUTDOWN,
-							severity: FATAL,
-							category: STREAM_READER}}
-					r.supvRespch <- msgErr
-				}
-
-			case cmd, ok := <-r.supvCmdch:
-				if ok {
-					//handle commands from supervisor
-					msg := r.handleSupervisorCommands(cmd)
-					r.supvCmdch <- msg
-				} else {
-					//supervisor channel closed. Shutdown stream reader.
-					r.Shutdown()
-					return
-
-				}
+			} else {
+				//supervisor channel closed. Shutdown stream reader.
+				log.Println("Supervisor Channel Closed Unexpectedly."+
+					"Stream Reader for Stream %v Shutting Itself Down.", r.streamId)
+				r.shutdown()
+				return
 			}
 		}
-
-	}()
+	}
 
 }
 
@@ -245,6 +259,9 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 
 		return &MsgSuccess{}
 
+	case STREAM_READER_SHUTDOWN:
+		return r.shutdown()
+
 	default:
 		return &MsgError{mType: ERROR,
 			err: Error{code: ERROR_STREAM_READER_UNKNOWN_COMMAND,
@@ -268,11 +285,25 @@ func (r *mutationStreamReader) panicHandler() {
 		default:
 			err = errors.New("Unknown panic")
 		}
+
+		//shutdown the stream reader
+		select {
+		case <-r.shutdownCh:
+			//if the shutdown channel is closed, this means shutdown was in progress
+			//when panic happened, skip calling shutdown again
+		default:
+			r.shutdown()
+		}
+
 		//panic from stream library, propagate to supervisor
-		msg := &MsgStreamPanic{streamId: r.streamId,
-			err: Error{cause: err}}
+		msg := &MsgStreamError{streamId: r.streamId,
+			err: Error{code: ERROR_STREAM_READER_PANIC,
+				severity: FATAL,
+				category: STREAM_READER,
+				cause:    err}}
 		r.supvRespch <- msg
 	}
+
 }
 
 //startWorkers starts all stream workers and passes

@@ -46,4 +46,4 @@ type IndexerMutationQueue struct {
 }
 
 //IndexQueueMap is a map between IndexId and IndexerMutationQueue
-type IndexQueueMap map[uint16]IndexerMutationQueue
+type IndexQueueMap map[common.IndexInstId]IndexerMutationQueue

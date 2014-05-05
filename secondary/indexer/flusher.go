@@ -60,6 +60,12 @@ type Flusher interface {
 	//has mutation with Seqno lower than the corresponding Seqno present
 	//in the specified timestamp.
 	IsQueueLWTLowerThanTimestamp(q MutationQueue, ts Timestamp) bool
+
+	//GetQueueLWT returns the lowest seqno for each vbucket in the queue
+	GetQueueLWT(q MutationQueue) Timestamp
+
+	//GetQueueHWT returns the highest seqno for each vbucket in the queue
+	GetQueueHWT(q MutationQueue) Timestamp
 }
 
 type flusher struct {
@@ -290,4 +296,34 @@ func (f *flusher) IsQueueLWTLowerThanTimestamp(q MutationQueue, ts Timestamp) bo
 	}
 	return true
 
+}
+
+//GetQueueLWT returns the lowest seqno for each vbucket in the queue
+func (f *flusher) GetQueueLWT(q MutationQueue) Timestamp {
+
+	var ts Timestamp
+	var i uint16
+	for i = 0; i < q.GetNumVbuckets(); i++ {
+		if mut := q.PeekHead(i); mut != nil {
+			ts[i] = mut.Seqno
+		} else {
+			ts[i] = 0
+		}
+	}
+	return ts
+}
+
+//GetQueueHWT returns the highest seqno for each vbucket in the queue
+func (f *flusher) GetQueueHWT(q MutationQueue) Timestamp {
+
+	var ts Timestamp
+	var i uint16
+	for i = 0; i < q.GetNumVbuckets(); i++ {
+		if mut := q.PeekTail(i); mut != nil {
+			ts[i] = mut.Seqno
+		} else {
+			ts[i] = 0
+		}
+	}
+	return ts
 }
