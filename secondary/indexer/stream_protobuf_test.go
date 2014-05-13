@@ -1,256 +1,265 @@
 package indexer
 
 import (
-	"bytes"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
 	"testing"
 )
 
-const conf_maxKeyvers = 1
+const confMaxKeyvers = 10
 
-func TestNewUpsert(t *testing.T) {
-	k := common.NewUpsert(512, 0x1234567812345678, []byte("cities"), 10000000)
-	k.Keys = [][]byte{[]byte("bangalore"), []byte("delhi"), []byte("jaipur")}
-	k.Oldkeys = [][]byte{[]byte("varanasi"), []byte("pune"), []byte("mahe")}
-	k.Indexids = []uint32{1, 2, 3}
-
-	ks := make([]*common.KeyVersions, 0, conf_maxKeyvers)
-	for i := 0; i < conf_maxKeyvers; i++ {
-		n := *k
-		ks = append(ks, &n)
-	}
-	testKeyVersions(t, ks)
-
-	// Test VbConnectionMap
+func TestVbConnectionMap(t *testing.T) {
 	vbuckets := []uint16{1, 2, 3, 4}
 	vbuuids := []uint64{10, 20, 30, 40}
-	testVbConnectionMap(t, vbuckets, vbuuids)
-}
 
-func TestNewUpsertDeletion(t *testing.T) {
-	k := common.NewUpsertDeletion(512, 0x1234567812345678, []byte("cities"), 10000000)
-	k.Indexids = []uint32{1, 2, 3}
-
-	ks := make([]*common.KeyVersions, 0, conf_maxKeyvers)
-	for i := 0; i < conf_maxKeyvers; i++ {
-		n := *k
-		ks = append(ks, &n)
+	vbmap := &common.VbConnectionMap{
+		Bucket:   "default",
+		Vbuckets: vbuckets,
+		Vbuuids:  vbuuids,
 	}
-	testKeyVersions(t, ks)
-}
-
-func TestNewSync(t *testing.T) {
-	k := common.NewSync(512, 0x1234567812345678, 10000000)
-	k.Indexids = []uint32{1, 2, 3}
-
-	ks := make([]*common.KeyVersions, 0, conf_maxKeyvers)
-	for i := 0; i < conf_maxKeyvers; i++ {
-		n := *k
-		ks = append(ks, &n)
-	}
-	testKeyVersions(t, ks)
-}
-
-func TestNewStreamBegin(t *testing.T) {
-	k := common.NewStreamBegin(512, 0x1234567812345678, 1000000)
-	k.Indexids = []uint32{1, 2, 3}
-
-	ks := make([]*common.KeyVersions, 0, conf_maxKeyvers)
-	for i := 0; i < conf_maxKeyvers; i++ {
-		n := *k
-		ks = append(ks, &n)
-	}
-	testKeyVersions(t, ks)
-}
-
-func TestNewStreamEnd(t *testing.T) {
-	k := common.NewStreamEnd(512, 0x1234567812345678, 1000000)
-	k.Indexids = []uint32{1, 2, 3}
-
-	ks := make([]*common.KeyVersions, 0, conf_maxKeyvers)
-	for i := 0; i < conf_maxKeyvers; i++ {
-		n := *k
-		ks = append(ks, &n)
-	}
-	testKeyVersions(t, ks)
-}
-
-func testKeyVersions(t *testing.T, ks []*common.KeyVersions) {
-	var data []byte
-	var err error
-	var payload interface{}
-
-	if data, err = protobufEncode(ks); err != nil {
+	data, err := protobufEncode(vbmap)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if payload, err = protobufDecode(data); err != nil {
+	payload, err := protobufDecode(data)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	n_ks, ok := payload.([]*protobuf.KeyVersions)
-	if ok == false {
-		t.Fatal("expected slice of reference to KeyVersions object")
-	}
-	if len(n_ks) != conf_maxKeyvers {
-		t.Fatal("expected exact number of KeyVersions encoded")
-	}
-
-	Command := byte(n_ks[0].GetCommand())
-	Vbucket := uint16(n_ks[0].GetVbucket())
-	Vbuuid := n_ks[0].GetVbuuid()
-	Docid := n_ks[0].GetDocid()
-	Seqno := n_ks[0].GetSeqno()
-	Keys := n_ks[0].GetKeys()
-	Oldkeys := n_ks[0].GetOldkeys()
-	Indexids := n_ks[0].GetIndexids()
-
-	if ks[0].Vbucket != Vbucket || ks[0].Vbuuid != Vbuuid ||
-		bytes.Compare(Docid, ks[0].Docid) != 0 || Seqno != ks[0].Seqno ||
-		Command != ks[0].Command {
-		t.Fatal("Mistmatch between encode and decode")
-	}
-	for i, _ := range Keys {
-		if bytes.Compare(Keys[i], ks[0].Keys[i]) != 0 {
-			t.Fatal("Mismatch in keys")
-		}
-		if bytes.Compare(Oldkeys[i], ks[0].Oldkeys[i]) != 0 {
-			t.Fatal("Mismatch in old-keys")
-		}
-		if Indexids[i] != ks[0].Indexids[i] {
-			t.Fatal("Mismatch in indexids")
-		}
-	}
-}
-
-func testVbConnectionMap(t *testing.T, vbuckets []uint16, vbuuids []uint64) {
-	var data []byte
-	var err error
-	var payload interface{}
-
-	vbmap := common.VbConnectionMap{Vbuckets: vbuckets, Vbuuids: vbuuids}
-	if data, err = protobufEncode(vbmap); err != nil {
-		t.Fatal(err)
-	}
-	if payload, err = protobufDecode(data); err != nil {
-		t.Fatal(err)
-	}
-	vbmap_p, ok := payload.(*protobuf.VbConnectionMap)
+	vbmap1, ok := payload.(*protobuf.VbConnectionMap)
 	if ok == false {
 		t.Fatal("expected reference VbConnectionMap object")
 	}
-
-	n_vbuckets := vbmap_p.GetVbuckets()
-	n_vbuuids := vbmap_p.GetVbuuids()
-	if len(vbuckets) != len(n_vbuckets) {
-		t.Fatal("unexpected number of vbuckets")
+	if vbmap.Equal(protobuf2Vbmap(vbmap1)) == false {
+		t.Fatal("failed VbConnectionMap")
 	}
-	for i, _ := range vbuckets {
-		if vbuckets[i] != uint16(n_vbuckets[i]) {
-			t.Fatal("unexpected vbucket number")
-		} else if vbuuids[i] != n_vbuuids[i] {
-			t.Fatal("unexpected vbuuid number")
+}
+
+func TestAddUpsert(t *testing.T) {
+	kv := kvUpserts()
+	vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+	vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+	addKeyVersions(vb, []*common.KeyVersions{kv}, 1, nMuts)
+	testKeyVersions(t, vb)
+}
+
+func TestAddUpsertDeletion(t *testing.T) {
+	kv := kvUpsertDeletions()
+	vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+	vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+	addKeyVersions(vb, []*common.KeyVersions{kv}, 1, nMuts)
+	testKeyVersions(t, vb)
+}
+
+func TestAddDeletion(t *testing.T) {
+	kv := kvDeletions()
+	vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+	vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+	addKeyVersions(vb, []*common.KeyVersions{kv}, 1, nMuts)
+	testKeyVersions(t, vb)
+}
+
+func TestAddSync(t *testing.T) {
+	seqno, docid, maxCount := uint64(10), []byte(nil), 1
+	kv := common.NewKeyVersions(seqno, docid, maxCount)
+	kv.AddSync()
+	// add it to VbKeyVersions
+	vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+	vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+	vb.AddKeyVersions(kv)
+	testKeyVersions(t, vb)
+}
+
+func TestAddDropData(t *testing.T) {
+	seqno, docid, maxCount := uint64(10), []byte(nil), 1
+	kv := common.NewKeyVersions(seqno, docid, maxCount)
+	kv.AddDropData()
+	// add it to VbKeyVersions
+	vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+	vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+	vb.AddKeyVersions(kv)
+	testKeyVersions(t, vb)
+}
+
+func TestNewStreamBegin(t *testing.T) {
+	seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
+	kv := common.NewKeyVersions(seqno, docid, maxCount)
+	kv.AddStreamBegin()
+	// add it to VbKeyVersions
+	vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+	vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+	vb.AddKeyVersions(kv)
+	testKeyVersions(t, vb)
+}
+
+func TestNewStreamEnd(t *testing.T) {
+	seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
+	kv := common.NewKeyVersions(seqno, docid, maxCount)
+	kv.AddStreamEnd()
+	// add it to VbKeyVersions
+	vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+	vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+	vb.AddKeyVersions(kv)
+	testKeyVersions(t, vb)
+}
+
+func testKeyVersions(t *testing.T, vb *common.VbKeyVersions) {
+	var data []byte
+	var err error
+	var payload interface{}
+
+	vbsRef := []*common.VbKeyVersions{vb}
+	if data, err = protobufEncode(vbsRef); err != nil {
+		t.Fatal(err)
+	}
+	if payload, err = protobufDecode(data); err != nil {
+		t.Fatal(err)
+	}
+
+	val, ok := payload.([]*protobuf.VbKeyVersions)
+	if ok == false {
+		t.Fatal("expected slice of reference to KeyVersions object")
+	}
+	vbs := protobuf2VbKeyVersions(val)
+	for i, vb := range vbsRef {
+		if vb.Equal(vbs[i]) == false {
+			t.Fatal("failed protobuf encoding")
 		}
 	}
 }
 
-func BenchmarkNewUpsertEncode(b *testing.B) {
-	benchmarkMutationEncode(b, func() *common.KeyVersions {
-		k := common.NewUpsert(512, 0x1234567812345678, []byte("cities"), 10000000)
-		k.Keys = [][]byte{[]byte("bangalore"), []byte("delhi"), []byte("jaipur")}
-		k.Oldkeys = [][]byte{[]byte("varanasi"), []byte("pune"), []byte("mahe")}
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddUpsertEncode(b *testing.B) {
+	benchmarkMutationEncode(b, func() *common.VbKeyVersions {
+		kv := kvUpserts()
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		addKeyVersions(vb, []*common.KeyVersions{kv}, 1, nMuts)
+		return vb
 	})
 }
 
-func BenchmarkNewUpsertDecode(b *testing.B) {
-	benchmarkMutationDecode(b, func() *common.KeyVersions {
-		k := common.NewUpsert(512, 0x1234567812345678, []byte("cities"), 10000000)
-		k.Keys = [][]byte{[]byte("bangalore"), []byte("delhi"), []byte("jaipur")}
-		k.Oldkeys = [][]byte{[]byte("varanasi"), []byte("pune"), []byte("mahe")}
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddUpsertDecode(b *testing.B) {
+	benchmarkMutationDecode(b, func() *common.VbKeyVersions {
+		kv := kvUpserts()
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		addKeyVersions(vb, []*common.KeyVersions{kv}, 1, nMuts)
+		return vb
 	})
 }
 
-func BenchmarkNewDeletionEncode(b *testing.B) {
-	benchmarkMutationEncode(b, func() *common.KeyVersions {
-		k := common.NewDeletion(512, 0x1234567812345678, []byte("cities"), 10000000)
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddDeletionEncode(b *testing.B) {
+	benchmarkMutationEncode(b, func() *common.VbKeyVersions {
+		kv := kvDeletions()
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		addKeyVersions(vb, []*common.KeyVersions{kv}, 1, nMuts)
+		return vb
 	})
 }
 
-func BenchmarkNewDeletionDecode(b *testing.B) {
-	benchmarkMutationDecode(b, func() *common.KeyVersions {
-		k := common.NewDeletion(512, 0x1234567812345678, []byte("cities"), 10000000)
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddDeletionDecode(b *testing.B) {
+	benchmarkMutationDecode(b, func() *common.VbKeyVersions {
+		kv := kvDeletions()
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		addKeyVersions(vb, []*common.KeyVersions{kv}, 1, nMuts)
+		return vb
 	})
 }
 
-func BenchmarkNewUpsertDeletionEncode(b *testing.B) {
-	benchmarkMutationEncode(b, func() *common.KeyVersions {
-		k := common.NewUpsertDeletion(512, 0x1234567812345678, []byte("cities"), 10000000)
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddUpsertDeletionEncode(b *testing.B) {
+	benchmarkMutationEncode(b, func() *common.VbKeyVersions {
+		kv := kvUpsertDeletions()
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		addKeyVersions(vb, []*common.KeyVersions{kv}, 1, nMuts)
+		return vb
 	})
 }
 
-func BenchmarkNewUpsertDeletionDecode(b *testing.B) {
-	benchmarkMutationDecode(b, func() *common.KeyVersions {
-		k := common.NewUpsertDeletion(512, 0x1234567812345678, []byte("cities"), 10000000)
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddUpsertDeletionDecode(b *testing.B) {
+	benchmarkMutationDecode(b, func() *common.VbKeyVersions {
+		kv := kvUpsertDeletions()
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		addKeyVersions(vb, []*common.KeyVersions{kv}, 1, nMuts)
+		return vb
 	})
 }
 
-func BenchmarkNewSyncEncode(b *testing.B) {
-	benchmarkMutationEncode(b, func() *common.KeyVersions {
-		k := common.NewSync(512, 0x1234567812345678, 10000000)
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddSyncEncode(b *testing.B) {
+	benchmarkMutationEncode(b, func() *common.VbKeyVersions {
+		seqno, docid, maxCount := uint64(10), []byte(nil), 1
+		kv := common.NewKeyVersions(seqno, docid, maxCount)
+		kv.AddSync()
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		vb.AddKeyVersions(kv)
+		return vb
 	})
 }
 
-func BenchmarkNewSyncDecode(b *testing.B) {
-	benchmarkMutationDecode(b, func() *common.KeyVersions {
-		k := common.NewSync(512, 0x1234567812345678, 10000000)
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddSyncDecode(b *testing.B) {
+	benchmarkMutationDecode(b, func() *common.VbKeyVersions {
+		seqno, docid, maxCount := uint64(10), []byte(nil), 1
+		kv := common.NewKeyVersions(seqno, docid, maxCount)
+		kv.AddSync()
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		vb.AddKeyVersions(kv)
+		return vb
 	})
 }
 
-func BenchmarkNewStreamBeginEncode(b *testing.B) {
-	benchmarkMutationEncode(b, func() *common.KeyVersions {
-		k := common.NewStreamBegin(512, 0x1234567812345678, 1000000)
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddStreamBeginEncode(b *testing.B) {
+	benchmarkMutationEncode(b, func() *common.VbKeyVersions {
+		seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
+		kv := common.NewKeyVersions(seqno, docid, maxCount)
+		kv.AddStreamBegin()
+		// add it to VbKeyVersions
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		vb.AddKeyVersions(kv)
+		return vb
 	})
 }
 
-func BenchmarkNewStreamBeginDecode(b *testing.B) {
-	benchmarkMutationDecode(b, func() *common.KeyVersions {
-		k := common.NewStreamBegin(512, 0x1234567812345678, 1000000)
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddStreamBeginDecode(b *testing.B) {
+	benchmarkMutationDecode(b, func() *common.VbKeyVersions {
+		seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
+		kv := common.NewKeyVersions(seqno, docid, maxCount)
+		kv.AddStreamBegin()
+		// add it to VbKeyVersions
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		vb.AddKeyVersions(kv)
+		return vb
 	})
 }
 
-func BenchmarkNewStreamEndEncode(b *testing.B) {
-	benchmarkMutationEncode(b, func() *common.KeyVersions {
-		k := common.NewStreamEnd(512, 0x1234567812345678, 1000000)
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddStreamEndEncode(b *testing.B) {
+	benchmarkMutationEncode(b, func() *common.VbKeyVersions {
+		seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
+		kv := common.NewKeyVersions(seqno, docid, maxCount)
+		kv.AddStreamEnd()
+		// add it to VbKeyVersions
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		vb.AddKeyVersions(kv)
+		return vb
 	})
 }
 
-func BenchmarkNewStreamEndDecode(b *testing.B) {
-	benchmarkMutationDecode(b, func() *common.KeyVersions {
-		k := common.NewStreamEnd(512, 0x1234567812345678, 1000000)
-		k.Indexids = []uint32{1, 2, 3}
-		return k
+func BenchmarkAddStreamEndDecode(b *testing.B) {
+	benchmarkMutationDecode(b, func() *common.VbKeyVersions {
+		seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
+		kv := common.NewKeyVersions(seqno, docid, maxCount)
+		kv.AddStreamEnd()
+		// add it to VbKeyVersions
+		vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10
+		vb := common.NewVbKeyVersions("default", vbno, vbuuid, nMuts)
+		vb.AddKeyVersions(kv)
+		return vb
 	})
 }
 
@@ -261,7 +270,11 @@ func BenchmarkVbmapEncode1024(b *testing.B) {
 		vbuckets[i] = uint16(i)
 		vbuuids[i] = uint64(1000000 + i)
 	}
-	vbmap := common.VbConnectionMap{Vbuckets: vbuckets, Vbuuids: vbuuids}
+	vbmap := &common.VbConnectionMap{
+		Bucket:   "default",
+		Vbuckets: vbuckets,
+		Vbuuids:  vbuuids,
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -276,7 +289,11 @@ func BenchmarkVbmapDecode1024(b *testing.B) {
 		vbuckets[i] = uint16(i)
 		vbuuids[i] = uint64(1000000 + i)
 	}
-	vbmap := common.VbConnectionMap{Vbuckets: vbuckets, Vbuuids: vbuuids}
+	vbmap := &common.VbConnectionMap{
+		Bucket:   "default",
+		Vbuckets: vbuckets,
+		Vbuuids:  vbuuids,
+	}
 	data, _ := protobufEncode(vbmap)
 
 	b.ResetTimer()
@@ -285,21 +302,59 @@ func BenchmarkVbmapDecode1024(b *testing.B) {
 	}
 }
 
-func benchmarkMutationEncode(b *testing.B, fn func() *common.KeyVersions) {
-	k := fn()
+func benchmarkMutationEncode(b *testing.B, fn func() *common.VbKeyVersions) {
+	vb := fn()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		protobufEncode([]*common.KeyVersions{k})
+		protobufEncode([]*common.VbKeyVersions{vb})
 	}
 }
 
-func benchmarkMutationDecode(b *testing.B, fn func() *common.KeyVersions) {
-	k := fn()
-	data, _ := protobufEncode([]*common.KeyVersions{k})
+func benchmarkMutationDecode(b *testing.B, fn func() *common.VbKeyVersions) {
+	vb := fn()
+	data, _ := protobufEncode([]*common.VbKeyVersions{vb})
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		protobufDecode(data)
 	}
+}
+
+func kvUpserts() *common.KeyVersions {
+	seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
+	kv := common.NewKeyVersions(seqno, docid, maxCount)
+	kv.AddUpsert(1, []byte("bangalore"), []byte("varanasi"))
+	kv.AddUpsert(2, []byte("delhi"), []byte("pune"))
+	kv.AddUpsert(3, []byte("jaipur"), []byte("mahe"))
+	return kv
+}
+
+func kvUpsertDeletions() *common.KeyVersions {
+	seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
+	kv := common.NewKeyVersions(seqno, docid, maxCount)
+	kv.AddUpsertDeletion(1, []byte("varanasi"))
+	kv.AddUpsertDeletion(2, []byte("pune"))
+	kv.AddUpsertDeletion(3, []byte("mahe"))
+	return kv
+}
+
+func kvDeletions() *common.KeyVersions {
+	seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
+	kv := common.NewKeyVersions(seqno, docid, maxCount)
+	kv.AddDeletion(1, []byte("varanasi"))
+	kv.AddDeletion(2, []byte("pune"))
+	kv.AddDeletion(3, []byte("mahe"))
+	return kv
+}
+
+func addKeyVersions(vb *common.VbKeyVersions, kvs []*common.KeyVersions, seqno uint64, nMuts int) uint64 {
+	ln := len(kvs)
+	for i := 0; i < nMuts; i++ {
+		newkv := *kvs[i%ln]
+		newkv.Seqno = seqno
+		vb.AddKeyVersions(&newkv)
+		seqno++
+	}
+	return seqno
 }

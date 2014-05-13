@@ -14,16 +14,31 @@ enum Command {
 // A single mutation message that will framed and transported by router.
 // For efficiency mutations from mutiple vbuckets (bounded to same connection)
 // can be packed into the same message.
-message Mutation {
-    required uint32          version   = 1; // protocol version TBD
+message Payload {
+    required uint32          version = 1; // protocol version TBD
 
     // -- Following fields are mutually exclusive --
-    repeated KeyVersions     keys      = 2;
-    optional VbConnectionMap vbuckets  = 3;
+    repeated VbKeyVersions   vbkeys  = 2;
+    optional VbConnectionMap vbmap   = 3;
 }
 
-// Mutation per vbucket, mutations are broadly divided into data and
-// control messages. The division is based on the commands.
+
+// List of vbuckets that will be streamed via a newly opened connection.
+message VbConnectionMap {
+    required string bucket     = 1;
+    repeated uint32 vbuckets   = 3;
+    repeated uint64 vbuuids    = 4;
+}
+
+message VbKeyVersions {
+    required uint32      vbucket    = 2; // 16 bit vbucket in which document is located
+    required uint64      vbuuid     = 3; // unique id to detect branch history
+    optional string      bucketname = 4;
+    repeated KeyVersions kvs        = 5; // list of key-versions
+}
+
+// mutations are broadly divided into data and control messages. The division
+// is based on the commands.
 //
 // Interpreting seq.no:
 // 1. For Upsert, Deletion, UpsertDeletion messages, sequence number corresponds
@@ -37,21 +52,13 @@ message Mutation {
 // 5. For StreamEnd, it is the last kv mutation received before ending a vbucket
 //    stream with kv.
 //
-// fields `docid`, `indexids`, `keys`, `oldkeys` are valid only for
+// fields `docid`, `uuids`, `keys`, `oldkeys` are valid only for
 // Upsert, Deletion, UpsertDeletion messages.
 message KeyVersions {
-    required uint32 command  = 1;
-    required uint32 vbucket  = 2; // 16 bit vbucket in which document is located
-    required uint64 seqno    = 5; // sequence number corresponding to this mutation
-    required uint64 vbuuid   = 3; // unique id to detect branch history
-    optional bytes  docid    = 4; // primary document id
-    repeated bytes  keys     = 7; // key-versions for each indexids listed above
-    repeated uint32 indexids = 6; // indexids, hosting key-version
-    repeated bytes  oldkeys  = 8; // key-versions from old copy of the document
-}
-
-// List of vbuckets that will be streamed via a newly opened connection.
-message VbConnectionMap {
-    repeated uint32 vbuckets = 1;
-    repeated uint64 vbuuids  = 2;
+    required uint64 seqno    = 1; // sequence number corresponding to this mutation
+    optional bytes  docid    = 2; // primary document id
+    repeated uint64 uuids    = 3; // uuids, hosting key-version
+    repeated uint32 commands = 4; // list of command for each uuid
+    repeated bytes  keys     = 5; // key-versions for each uuids    listed above
+    repeated bytes  oldkeys  = 6; // key-versions from old copy of the document
 }

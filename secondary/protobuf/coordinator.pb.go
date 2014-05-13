@@ -13,7 +13,7 @@ var _ = proto.Marshal
 var _ = &json.SyntaxError{}
 var _ = math.Inf
 
-// Requested by cluster manager to indicate a new coordinator. Error message
+// Posted by cluster manager to indicate a new coordinator. Error message
 // will be sent as reponse.
 type NewCoordinatorRequest struct {
 	ConnectionAddr   *string `protobuf:"bytes,1,req,name=connectionAddr" json:"connectionAddr,omitempty"`
@@ -123,7 +123,7 @@ func (m *UpdateStateContext) GetData() []byte {
 	return nil
 }
 
-// Requested by cluster manager whenever a actor joins or leaves the cluster.
+// Requested by cluster manager whenever an actor joins or leaves the cluster.
 type ActorClusterRequest struct {
 	Actors           []*Actor `protobuf:"bytes,1,rep,name=actors" json:"actors,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`

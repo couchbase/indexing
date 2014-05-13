@@ -2,6 +2,8 @@ A list of invariants in the system.
 
 * gauranteed transmission of kv mutations across the system.
 * kv mutations within a vbucket is always ordered.
+* secondary-key versions for a single mutations will be sent as single
+  payload to indexer nodes.
 * the tip of indexer node across the index-cluster is always at a stable
   timestamp.
 * query is always based on a stable timestamp.

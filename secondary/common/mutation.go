@@ -1,18 +1,19 @@
-// Transport independent library for mutation streaming.
-//
-// Provide APIs to create KeyVersions.
+// - Transport independent library for mutation streaming.
+// - Provide APIs to create KeyVersions.
 //
 // TODO: use slab allocated or memory pool to manage KeyVersions
 
 package common
 
 import (
+	"bytes"
 	"fmt"
 )
 
+// types of payload
 const (
-	PAYLOAD_KEYVERSIONS byte = iota + 1
-	PAYLOAD_VBMAP
+	PayloadKeyVersions byte = iota + 1
+	PayloadVbmap
 )
 
 // List of possible mutation commands. Mutation messages are broadly divided
@@ -27,159 +28,234 @@ const (
 	StreamEnd                      // control command
 )
 
-// KeyVersions for each mutation from KV for a subset of index.
-type KeyVersions struct {
-	Command  byte
-	Vbucket  uint16   // vbucket number
-	Seqno    uint64   // vbucket sequence number for this mutation
-	Vbuuid   uint64   // unique id to detect branch history
-	Docid    []byte   // primary document id
-	Keys     [][]byte // list of key-versions
-	Oldkeys  [][]byte // previous key-versions, if available
-	Indexids []uint32 // each key-version is for an active index defined on this bucket.
+// Payload either carries `vbmap` or `vbs`.
+type Payload struct {
+	Payltyp byte
+	Vbmap   *VbConnectionMap
+	Vbs     []*VbKeyVersions // for N number of vbuckets
 }
 
+// ID is unique id for a vbucket across buckets.
+func ID(bucket string, vbno uint16) string {
+	return bucket + fmt.Sprintf("%v", vbno)
+}
+
+// NewStreamPayload returns a reference to payload, `nVb` provides the maximum
+// number of vbuckets that can be carried by a payload.
+func NewStreamPayload(payltyp byte, nVb int) *Payload {
+	p := &Payload{
+		Payltyp: payltyp,
+		Vbs:     make([]*VbKeyVersions, 0, nVb),
+	}
+	return p
+}
+
+// Reset the payload structure for next transport.
+func (p *Payload) Reset(payltyp byte) {
+	p.Payltyp = payltyp
+	p.Vbmap = nil
+	p.Vbs = p.Vbs[:0]
+}
+
+// AddVbKeyVersions add a VbKeyVersions as payload, one or more VbKeyVersions
+// can be added before transport.
+func (p *Payload) AddVbKeyVersions(vb *VbKeyVersions) (err error) {
+	if vb == nil || p.Payltyp != PayloadKeyVersions {
+		return ErrorUnexpectedPayload
+	}
+	p.Vbs = append(p.Vbs, vb)
+	return nil
+}
+
+// SetVbmap set vbmap as payload.
+func (p *Payload) SetVbmap(bucket string, vbnos []uint16, vbuuids []uint64) error {
+	if p.Payltyp != PayloadVbmap {
+		return ErrorUnexpectedPayload
+	}
+	p.Vbmap = &VbConnectionMap{
+		Bucket:   bucket,
+		Vbuckets: vbnos,
+		Vbuuids:  vbuuids,
+	}
+	return nil
+}
+
+// VbConnectionMap specifies list of vbuckets and current vbuuids for each
+// vbucket.
 type VbConnectionMap struct {
+	Bucket   string
 	Vbuckets []uint16
 	Vbuuids  []uint64
 }
 
-// Mutation message either carrying KeyVersions or protobuf.VbConnectionMap
-type Mutation struct {
-	keys       []*KeyVersions
-	vbmap      VbConnectionMap
-	payltyp    byte
-	maxKeyvers int
-}
-
-// NewMutation creates internal mutation Mutation object that can be used to
-// compose or de-compose on the wire mutation messages.
-// Same object can be re-used to compose or de-compose messages.
-func NewMutation(maxKeyvers int) *Mutation {
-	m := &Mutation{
-		keys:       make([]*KeyVersions, 0, maxKeyvers),
-		maxKeyvers: maxKeyvers,
+// Equal compares to VbConnectionMap objects.
+func (vbmap *VbConnectionMap) Equal(other *VbConnectionMap) bool {
+	if vbmap.Bucket != other.Bucket {
+		return false
 	}
-	return m
-}
-
-// NewPayload resets the mutation object for next payload.
-func (m *Mutation) NewPayload(payltyp byte) {
-	m.keys = m.keys[:0]
-	m.payltyp = payltyp
-	m.vbmap.Vbuckets, m.vbmap.Vbuuids = nil, nil
-}
-
-// AddKeyVersions will add a KeyVersions to current Mutation payload.
-// Note that SetVbuckets() and AddKeyVersions() cannot be used together as
-// payload.
-func (m *Mutation) AddKeyVersions(k *KeyVersions) (err error) {
-	if m.payltyp != PAYLOAD_KEYVERSIONS {
-		return fmt.Errorf("expected key version for payload")
-	} else if len(m.keys) == m.maxKeyvers {
-		return fmt.Errorf("cannot pack anymore key-versions")
+	if len(vbmap.Vbuckets) != len(other.Vbuckets) ||
+		len(vbmap.Vbuuids) != len(other.Vbuuids) {
+		return false
 	}
-	m.keys = append(m.keys, k)
+	for i, vbno := range vbmap.Vbuckets {
+		if vbno != other.Vbuckets[i] || vbmap.Vbuuids[i] != other.Vbuuids[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// GetVbuuid returns vbuuid for specified vbucket-number from VbConnectionMap
+// object.
+func (vbmap *VbConnectionMap) GetVbuuid(vbno uint16) (uint64, error) {
+	for i, num := range vbmap.Vbuckets {
+		if num == vbno {
+			return vbmap.Vbuuids[i], nil
+		}
+	}
+	return 0, ErrorNotMyVbucket
+}
+
+// VbKeyVersions carries per vbucket key-versions for one or more mutations.
+type VbKeyVersions struct {
+	Bucket  string
+	Vbucket uint16         // vbucket number
+	Vbuuid  uint64         // unique id to detect branch history
+	Kvs     []*KeyVersions // N number of mutations
+	Uuid    string
+}
+
+// NewVbKeyVersions return a reference to a single vbucket payload
+func NewVbKeyVersions(bucket string, vbno uint16, vbuuid uint64, maxMutations int) *VbKeyVersions {
+	vb := &VbKeyVersions{Bucket: bucket, Vbucket: vbno, Vbuuid: vbuuid}
+	vb.Kvs = make([]*KeyVersions, 0, maxMutations)
+	vb.Uuid = ID(bucket, vbno)
+	return vb
+}
+
+// AddKeyVersions will add KeyVersions for a single mutation.
+func (vb *VbKeyVersions) AddKeyVersions(kv *KeyVersions) error {
+	vb.Kvs = append(vb.Kvs, kv)
 	return nil
 }
 
-// SetVbuckets will set a list of vbuckets and corresponding vbuuids as
-// payload for next Mutation Message.
-// Note that SetVbuckets() and AddKeyVersions() cannot be used together as
-// payload.
-func (m *Mutation) SetVbuckets(vbuckets []uint16, vbuuids []uint64) (err error) {
-	if m.payltyp != PAYLOAD_VBMAP {
-		return fmt.Errorf("expected key version for payload")
+// Equal compare equality of two VbKeyVersions object.
+func (vb *VbKeyVersions) Equal(other *VbKeyVersions) bool {
+	if vb.Vbucket != other.Vbucket ||
+		vb.Vbuuid != other.Vbuuid {
+		return false
 	}
-	m.vbmap.Vbuckets = vbuckets
-	m.vbmap.Vbuuids = vbuuids
-	return nil
-}
-
-// GetKeyVersions return the list of reference to current payload's KeyVersions.
-func (m *Mutation) GetKeyVersions() []*KeyVersions {
-	return m.keys
-}
-
-// GetVbuckets return the list of vbuckets and corresponding vbuuids on this
-func (m *Mutation) GetVbmap() VbConnectionMap {
-	return m.vbmap
-}
-
-// NewUpsert construct a Upsert message corresponding to KV's MUTATION
-// message. Caller's responsibility to initialize `Keys`, `Oldkeys` and
-// `Indexids`  as applicable.
-func NewUpsert(vb uint16, vbuuid uint64, docid []byte, seqno uint64) *KeyVersions {
-	return &KeyVersions{
-		Command: Upsert,
-		Vbucket: vb,
-		Vbuuid:  vbuuid,
-		Docid:   docid,
-		Seqno:   seqno,
+	if len(vb.Kvs) != len(other.Kvs) {
+		return false
 	}
+	for i, kv := range vb.Kvs {
+		if kv.Equal(other.Kvs[i]) == false {
+			return false
+		}
+	}
+	return true
 }
 
-// NewDeletion construct a Deletion message corresponding to KV's DELETION
-// message. Caller's responsibility to initialize `Indexids`.
-func NewDeletion(vb uint16, vbuuid uint64, docid []byte, seqno uint64) *KeyVersions {
-	return &KeyVersions{
-		Command: Deletion,
-		Vbucket: vb,
-		Vbuuid:  vbuuid,
-		Docid:   docid,
-		Seqno:   seqno,
+// Free this object.
+func (vb *VbKeyVersions) Free() {
+	for _, kv := range vb.Kvs {
+		kv.Free()
 	}
+	vb.Kvs = vb.Kvs[:0]
+	// TODO: give `vb` back to pool
 }
 
-// NewUpsertDeletion construct a UpsertDeletion message. It is locally
-// generated message to delete older key version. Caller's responsibility to
-// initialize `Keys` and `Indexids`
-func NewUpsertDeletion(vb uint16, vbuuid uint64, docid []byte, seqno uint64) *KeyVersions {
-	return &KeyVersions{
-		Command: UpsertDeletion,
-		Vbucket: vb,
-		Vbuuid:  vbuuid,
-		Docid:   docid,
-		Seqno:   seqno,
+// FreeKeyVersions free mutations contained by this object.
+func (vb *VbKeyVersions) FreeKeyVersions() {
+	for _, kv := range vb.Kvs {
+		kv.Free()
 	}
+	vb.Kvs = vb.Kvs[:0]
 }
 
-// NewSync construct a Sync control message.
-func NewSync(vb uint16, vbuuid uint64, seqno uint64) *KeyVersions {
-	return &KeyVersions{
-		Command: Sync,
-		Vbucket: vb,
-		Vbuuid:  vbuuid,
-		Seqno:   seqno,
-	}
+// KeyVersions for a single mutation from KV for a subset of index.
+type KeyVersions struct {
+	Seqno    uint64   // vbucket sequence number for this mutation
+	Docid    []byte   // primary document id
+	Uuids    []uint64 // list of unique ids, like index-ids
+	Commands []byte   // list of commands for each index
+	Keys     [][]byte // list of key-versions for each index
+	Oldkeys  [][]byte // previous key-versions, if available
 }
 
-// NewDropData construct a DropData control message.
-func NewDropData(vb uint16, vbuuid uint64, seqno uint64) *KeyVersions {
-	return &KeyVersions{
-		Command: DropData,
-		Vbucket: vb,
-		Vbuuid:  vbuuid,
-		Seqno:   seqno,
-	}
+// NewKeyVersions return a reference KeyVersions for a single mutation.
+func NewKeyVersions(seqno uint64, docid []byte, maxCount int) *KeyVersions {
+	kv := &KeyVersions{Seqno: seqno, Docid: docid}
+	kv.Uuids = make([]uint64, 0, maxCount)
+	kv.Commands = make([]byte, 0, maxCount)
+	kv.Keys = make([][]byte, 0, maxCount)
+	kv.Oldkeys = make([][]byte, 0, maxCount)
+	return kv
 }
 
-// NewStreamBegin construct a StreamBegin control message.
-func NewStreamBegin(vb uint16, vbuuid uint64, seqno uint64) *KeyVersions {
-	return &KeyVersions{
-		Command: StreamBegin,
-		Vbucket: vb,
-		Vbuuid:  vbuuid,
-		Seqno:   seqno,
-	}
+// addKey will add key-version for a single index.
+func (kv *KeyVersions) addKey(uuid uint64, command byte, key, oldkey []byte) {
+	kv.Uuids = append(kv.Uuids, uuid)
+	kv.Commands = append(kv.Commands, command)
+	kv.Keys = append(kv.Keys, key)
+	kv.Oldkeys = append(kv.Oldkeys, oldkey)
 }
 
-// NewStreamEnd construct a StreamEnd control message.
-func NewStreamEnd(vb uint16, vbuuid uint64, seqno uint64) *KeyVersions {
-	return &KeyVersions{
-		Command: StreamEnd,
-		Vbucket: vb,
-		Vbuuid:  vbuuid,
-		Seqno:   seqno,
+// Equal compares for equality of two KeyVersions object.
+func (kv *KeyVersions) Equal(other *KeyVersions) bool {
+	if kv.Seqno != other.Seqno || bytes.Compare(kv.Docid, other.Docid) != 0 {
+		return false
 	}
+	if len(kv.Uuids) != len(other.Uuids) {
+		return false
+	}
+	for i, uuid := range kv.Uuids {
+		if uuid != other.Uuids[i] ||
+			kv.Commands[i] != other.Commands[i] ||
+			bytes.Compare(kv.Keys[i], other.Keys[i]) != 0 ||
+			bytes.Compare(kv.Oldkeys[i], other.Oldkeys[i]) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// Free this object.
+func (kv *KeyVersions) Free() {
+	// TODO: give `kv` back to pool
+}
+
+// AddUpsert add a new keyversion for same OpMutation.
+func (kv *KeyVersions) AddUpsert(uuid uint64, key, oldkey []byte) {
+	kv.addKey(uuid, Upsert, key, oldkey)
+}
+
+// AddDeletion add a new keyversion for same OpDeletion.
+func (kv *KeyVersions) AddDeletion(uuid uint64, oldkey []byte) {
+	kv.addKey(uuid, Deletion, nil, oldkey)
+}
+
+// AddUpsertDeletion add a keyversion command to delete old entry.
+func (kv *KeyVersions) AddUpsertDeletion(uuid uint64, oldkey []byte) {
+	kv.addKey(uuid, UpsertDeletion, nil, oldkey)
+}
+
+// AddSync add Sync command for vbucket heartbeat.
+func (kv *KeyVersions) AddSync() {
+	kv.addKey(0, Sync, nil, nil)
+}
+
+// AddDropData add DropData command for trigger downstream catchup.
+func (kv *KeyVersions) AddDropData() {
+	kv.addKey(0, DropData, nil, nil)
+}
+
+// AddStreamBegin add StreamBegin command for a new vbucket.
+func (kv *KeyVersions) AddStreamBegin() {
+	kv.addKey(0, StreamBegin, nil, nil)
+}
+
+// AddStreamEnd add StreamEnd command for a vbucket shutdown.
+func (kv *KeyVersions) AddStreamEnd() {
+	kv.addKey(0, StreamEnd, nil, nil)
 }

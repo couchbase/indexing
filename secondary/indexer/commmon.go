@@ -9,9 +9,7 @@
 
 package indexer
 
-const MAX_NUM_VBUCKETS = 1024
-
-//Stream represents the possible mutation streams
+// StreamId represents the possible mutation streams
 type StreamId uint16
 
 const (

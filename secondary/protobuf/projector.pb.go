@@ -13,61 +13,73 @@ var _ = proto.Marshal
 var _ = &json.SyntaxError{}
 var _ = math.Inf
 
-// Flag is applicable to all vbuckets in the request
-type MutationStreamFlag int32
-
-const (
-	// start vbucket-streams if it is not already active.
-	MutationStreamFlag_MutationStreamStart MutationStreamFlag = 0
-	// start vbucket-streams whether it is already active or not.
-	MutationStreamFlag_MutationStreamRestart MutationStreamFlag = 1
-	// shutdown vbucket-streams
-	MutationStreamFlag_MutationStreamShutdown MutationStreamFlag = 2
-	// whether projector should retry closed clonnection / stream with KV.
-	MutationStreamFlag_UpstreamRetry MutationStreamFlag = 4
-	// whether router should retry closed clonnection with indexer endpoint.
-	MutationStreamFlag_DownstreamRetry MutationStreamFlag = 8
-)
-
-var MutationStreamFlag_name = map[int32]string{
-	0: "MutationStreamStart",
-	1: "MutationStreamRestart",
-	2: "MutationStreamShutdown",
-	4: "UpstreamRetry",
-	8: "DownstreamRetry",
-}
-var MutationStreamFlag_value = map[string]int32{
-	"MutationStreamStart":    0,
-	"MutationStreamRestart":  1,
-	"MutationStreamShutdown": 2,
-	"UpstreamRetry":          4,
-	"DownstreamRetry":        8,
+// Requested by Coordinator during system-start, re-connect, rollback
+type FailoverLogRequest struct {
+	Pool             *string  `protobuf:"bytes,1,req,name=pool" json:"pool,omitempty"`
+	Bucket           *string  `protobuf:"bytes,2,req,name=bucket" json:"bucket,omitempty"`
+	Vbnos            []uint32 `protobuf:"varint,3,rep,name=vbnos" json:"vbnos,omitempty"`
+	XXX_unrecognized []byte   `json:"-"`
 }
 
-func (x MutationStreamFlag) Enum() *MutationStreamFlag {
-	p := new(MutationStreamFlag)
-	*p = x
-	return p
-}
-func (x MutationStreamFlag) String() string {
-	return proto.EnumName(MutationStreamFlag_name, int32(x))
-}
-func (x *MutationStreamFlag) UnmarshalJSON(data []byte) error {
-	value, err := proto.UnmarshalJSONEnum(MutationStreamFlag_value, data, "MutationStreamFlag")
-	if err != nil {
-		return err
+func (m *FailoverLogRequest) Reset()         { *m = FailoverLogRequest{} }
+func (m *FailoverLogRequest) String() string { return proto.CompactTextString(m) }
+func (*FailoverLogRequest) ProtoMessage()    {}
+
+func (m *FailoverLogRequest) GetPool() string {
+	if m != nil && m.Pool != nil {
+		return *m.Pool
 	}
-	*x = MutationStreamFlag(value)
+	return ""
+}
+
+func (m *FailoverLogRequest) GetBucket() string {
+	if m != nil && m.Bucket != nil {
+		return *m.Bucket
+	}
+	return ""
+}
+
+func (m *FailoverLogRequest) GetVbnos() []uint32 {
+	if m != nil {
+		return m.Vbnos
+	}
 	return nil
 }
 
-// Requested by Coordinator or indexer to start a mutation stream.
+type FailoverLogResponse struct {
+	Err              *Error         `protobuf:"bytes,1,req,name=err" json:"err,omitempty"`
+	Logs             []*FailoverLog `protobuf:"bytes,2,rep,name=logs" json:"logs,omitempty"`
+	XXX_unrecognized []byte         `json:"-"`
+}
+
+func (m *FailoverLogResponse) Reset()         { *m = FailoverLogResponse{} }
+func (m *FailoverLogResponse) String() string { return proto.CompactTextString(m) }
+func (*FailoverLogResponse) ProtoMessage()    {}
+
+func (m *FailoverLogResponse) GetErr() *Error {
+	if m != nil {
+		return m.Err
+	}
+	return nil
+}
+
+func (m *FailoverLogResponse) GetLogs() []*FailoverLog {
+	if m != nil {
+		return m.Logs
+	}
+	return nil
+}
+
+// Requested by Coordinator or indexer to start a new mutation stream.
+// BranchTimestamp.Vbnos should be in sort order
 type MutationStreamRequest struct {
-	Topic             *string             `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
-	Flag              *MutationStreamFlag `protobuf:"varint,2,req,name=flag,enum=protobuf.MutationStreamFlag" json:"flag,omitempty"`
-	RestartTimestamps []*BranchTimestamp  `protobuf:"bytes,3,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
-	// list of index applicable for this stream
-	Indexes          []*Index `protobuf:"bytes,4,rep,name=indexes" json:"indexes,omitempty"`
+	Topic             *string            `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	Flag              *uint32            `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
+	Pools             []string           `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
+	Buckets           []string           `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
+	RestartTimestamps []*BranchTimestamp `protobuf:"bytes,5,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
+	// list of index applicable for this stream, optional as well
+	Indexes          []*Index `protobuf:"bytes,6,rep,name=indexes" json:"indexes,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -82,11 +94,25 @@ func (m *MutationStreamRequest) GetTopic() string {
 	return ""
 }
 
-func (m *MutationStreamRequest) GetFlag() MutationStreamFlag {
+func (m *MutationStreamRequest) GetFlag() uint32 {
 	if m != nil && m.Flag != nil {
 		return *m.Flag
 	}
-	return MutationStreamFlag_MutationStreamStart
+	return 0
+}
+
+func (m *MutationStreamRequest) GetPools() []string {
+	if m != nil {
+		return m.Pools
+	}
+	return nil
+}
+
+func (m *MutationStreamRequest) GetBuckets() []string {
+	if m != nil {
+		return m.Buckets
+	}
+	return nil
 }
 
 func (m *MutationStreamRequest) GetRestartTimestamps() []*BranchTimestamp {
@@ -104,13 +130,16 @@ func (m *MutationStreamRequest) GetIndexes() []*Index {
 }
 
 type MutationStreamResponse struct {
-	Err   *Error  `protobuf:"bytes,1,req,name=err" json:"err,omitempty"`
-	Topic *string `protobuf:"bytes,2,req,name=topic" json:"topic,omitempty"`
-	// per bucket restart-timestamp, failover-timestamp, upr-timestamp
-	RestartTimestamps  []*BranchTimestamp `protobuf:"bytes,3,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
-	FailoverTimestamps []*BranchTimestamp `protobuf:"bytes,4,rep,name=failoverTimestamps" json:"failoverTimestamps,omitempty"`
-	UprTimestamps      []*BranchTimestamp `protobuf:"bytes,5,rep,name=uprTimestamps" json:"uprTimestamps,omitempty"`
-	Indexes            []uint64           `protobuf:"varint,6,rep,name=indexes" json:"indexes,omitempty"`
+	Err     *Error   `protobuf:"bytes,1,req,name=err" json:"err,omitempty"`
+	Topic   *string  `protobuf:"bytes,2,req,name=topic" json:"topic,omitempty"`
+	Flag    *uint32  `protobuf:"varint,3,req,name=flag" json:"flag,omitempty"`
+	Pools   []string `protobuf:"bytes,4,rep,name=pools" json:"pools,omitempty"`
+	Buckets []string `protobuf:"bytes,5,rep,name=buckets" json:"buckets,omitempty"`
+	// per bucket failover-timestamp, kv-timestamp for all active vbuckets,
+	// for each bucket, after executing the request.
+	FailoverTimestamps []*BranchTimestamp `protobuf:"bytes,6,rep,name=failoverTimestamps" json:"failoverTimestamps,omitempty"`
+	KvTimestamps       []*BranchTimestamp `protobuf:"bytes,7,rep,name=kvTimestamps" json:"kvTimestamps,omitempty"`
+	IndexUuids         []uint64           `protobuf:"varint,8,rep,name=indexUuids" json:"indexUuids,omitempty"`
 	XXX_unrecognized   []byte             `json:"-"`
 }
 
@@ -132,9 +161,23 @@ func (m *MutationStreamResponse) GetTopic() string {
 	return ""
 }
 
-func (m *MutationStreamResponse) GetRestartTimestamps() []*BranchTimestamp {
+func (m *MutationStreamResponse) GetFlag() uint32 {
+	if m != nil && m.Flag != nil {
+		return *m.Flag
+	}
+	return 0
+}
+
+func (m *MutationStreamResponse) GetPools() []string {
 	if m != nil {
-		return m.RestartTimestamps
+		return m.Pools
+	}
+	return nil
+}
+
+func (m *MutationStreamResponse) GetBuckets() []string {
+	if m != nil {
+		return m.Buckets
 	}
 	return nil
 }
@@ -146,32 +189,142 @@ func (m *MutationStreamResponse) GetFailoverTimestamps() []*BranchTimestamp {
 	return nil
 }
 
-func (m *MutationStreamResponse) GetUprTimestamps() []*BranchTimestamp {
+func (m *MutationStreamResponse) GetKvTimestamps() []*BranchTimestamp {
 	if m != nil {
-		return m.UprTimestamps
+		return m.KvTimestamps
 	}
 	return nil
 }
 
-func (m *MutationStreamResponse) GetIndexes() []uint64 {
+func (m *MutationStreamResponse) GetIndexUuids() []uint64 {
+	if m != nil {
+		return m.IndexUuids
+	}
+	return nil
+}
+
+// Requested by Coordinator or indexer to restart or shutdown vbuckets from an
+// active mutation stream. Returns back MutationStreamResponse.
+type UpdateMutationStreamRequest struct {
+	Topic             *string            `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	Flag              *uint32            `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
+	Pools             []string           `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
+	Buckets           []string           `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
+	RestartTimestamps []*BranchTimestamp `protobuf:"bytes,5,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
+	Indexes           []*Index           `protobuf:"bytes,6,rep,name=indexes" json:"indexes,omitempty"`
+	XXX_unrecognized  []byte             `json:"-"`
+}
+
+func (m *UpdateMutationStreamRequest) Reset()         { *m = UpdateMutationStreamRequest{} }
+func (m *UpdateMutationStreamRequest) String() string { return proto.CompactTextString(m) }
+func (*UpdateMutationStreamRequest) ProtoMessage()    {}
+
+func (m *UpdateMutationStreamRequest) GetTopic() string {
+	if m != nil && m.Topic != nil {
+		return *m.Topic
+	}
+	return ""
+}
+
+func (m *UpdateMutationStreamRequest) GetFlag() uint32 {
+	if m != nil && m.Flag != nil {
+		return *m.Flag
+	}
+	return 0
+}
+
+func (m *UpdateMutationStreamRequest) GetPools() []string {
+	if m != nil {
+		return m.Pools
+	}
+	return nil
+}
+
+func (m *UpdateMutationStreamRequest) GetBuckets() []string {
+	if m != nil {
+		return m.Buckets
+	}
+	return nil
+}
+
+func (m *UpdateMutationStreamRequest) GetRestartTimestamps() []*BranchTimestamp {
+	if m != nil {
+		return m.RestartTimestamps
+	}
+	return nil
+}
+
+func (m *UpdateMutationStreamRequest) GetIndexes() []*Index {
 	if m != nil {
 		return m.Indexes
 	}
 	return nil
 }
 
-// Requested by coordinator to should down a mutation stream and all KV
-// connections active for that stream.
-type ShutdownMutationStreamRequest struct {
+// Requested by third party component that wants to subscribe to a topic-name.
+// Error message will be sent as response
+type SubscribeStreamRequest struct {
+	Topic            *string  `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	Flag             *uint32  `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
+	Indexes          []*Index `protobuf:"bytes,3,rep,name=indexes" json:"indexes,omitempty"`
+	XXX_unrecognized []byte   `json:"-"`
+}
+
+func (m *SubscribeStreamRequest) Reset()         { *m = SubscribeStreamRequest{} }
+func (m *SubscribeStreamRequest) String() string { return proto.CompactTextString(m) }
+func (*SubscribeStreamRequest) ProtoMessage()    {}
+
+func (m *SubscribeStreamRequest) GetTopic() string {
+	if m != nil && m.Topic != nil {
+		return *m.Topic
+	}
+	return ""
+}
+
+func (m *SubscribeStreamRequest) GetFlag() uint32 {
+	if m != nil && m.Flag != nil {
+		return *m.Flag
+	}
+	return 0
+}
+
+func (m *SubscribeStreamRequest) GetIndexes() []*Index {
+	if m != nil {
+		return m.Indexes
+	}
+	return nil
+}
+
+// Requested by indexer / coordinator to inform router to re-connect with
+// downstream endpoint. Error message will be sent as response.
+type RepairDownstreamEndpoints struct {
 	Topic            *string `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
-func (m *ShutdownMutationStreamRequest) Reset()         { *m = ShutdownMutationStreamRequest{} }
-func (m *ShutdownMutationStreamRequest) String() string { return proto.CompactTextString(m) }
-func (*ShutdownMutationStreamRequest) ProtoMessage()    {}
+func (m *RepairDownstreamEndpoints) Reset()         { *m = RepairDownstreamEndpoints{} }
+func (m *RepairDownstreamEndpoints) String() string { return proto.CompactTextString(m) }
+func (*RepairDownstreamEndpoints) ProtoMessage()    {}
 
-func (m *ShutdownMutationStreamRequest) GetTopic() string {
+func (m *RepairDownstreamEndpoints) GetTopic() string {
+	if m != nil && m.Topic != nil {
+		return *m.Topic
+	}
+	return ""
+}
+
+// Requested by coordinator to should down a mutation stream and all KV
+// connections active for that stream. Error message will be sent as response.
+type ShutdownStreamRequest struct {
+	Topic            *string `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *ShutdownStreamRequest) Reset()         { *m = ShutdownStreamRequest{} }
+func (m *ShutdownStreamRequest) String() string { return proto.CompactTextString(m) }
+func (*ShutdownStreamRequest) ProtoMessage()    {}
+
+func (m *ShutdownStreamRequest) GetTopic() string {
 	if m != nil && m.Topic != nil {
 		return *m.Topic
 	}
@@ -246,39 +399,5 @@ func (m *CurrentTimestampResponse) GetCurrentTimestamps() []*BranchTimestamp {
 	return nil
 }
 
-// Requested by Coordinator to determine re-connect or rollback.
-type FailoverLogRequest struct {
-	Vbnos            []uint32 `protobuf:"varint,1,rep,name=vbnos" json:"vbnos,omitempty"`
-	XXX_unrecognized []byte   `json:"-"`
-}
-
-func (m *FailoverLogRequest) Reset()         { *m = FailoverLogRequest{} }
-func (m *FailoverLogRequest) String() string { return proto.CompactTextString(m) }
-func (*FailoverLogRequest) ProtoMessage()    {}
-
-func (m *FailoverLogRequest) GetVbnos() []uint32 {
-	if m != nil {
-		return m.Vbnos
-	}
-	return nil
-}
-
-type FailoverLogResponse struct {
-	Logs             []*FailoverLog `protobuf:"bytes,1,rep,name=logs" json:"logs,omitempty"`
-	XXX_unrecognized []byte         `json:"-"`
-}
-
-func (m *FailoverLogResponse) Reset()         { *m = FailoverLogResponse{} }
-func (m *FailoverLogResponse) String() string { return proto.CompactTextString(m) }
-func (*FailoverLogResponse) ProtoMessage()    {}
-
-func (m *FailoverLogResponse) GetLogs() []*FailoverLog {
-	if m != nil {
-		return m.Logs
-	}
-	return nil
-}
-
 func init() {
-	proto.RegisterEnum("protobuf.MutationStreamFlag", MutationStreamFlag_name, MutationStreamFlag_value)
 }

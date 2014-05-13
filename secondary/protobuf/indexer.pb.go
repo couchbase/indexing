@@ -236,15 +236,15 @@ func (m *HWTimestampResponse) GetBranchTimestamp() []string {
 }
 
 // Requested by Coordinator to rollback to a snapshot such that its snapshot-timestamp
-// is less than failover-timestamp but greater than or equal to upr-timestamp.
+// is less than failover-timestamp but greater than or equal to kv-timestamp.
 // This request will be sent twice to each indexer node.
 type RollbackRequest struct {
 	Bucket *string `protobuf:"bytes,1,req,name=bucket" json:"bucket,omitempty"`
 	// first as RollbackStart along with failoverTimestamp
-	// second as RollbackCommit along with failoverTimestamp and uprTimestamp
+	// second as RollbackCommit along with failoverTimestamp and kvTimestamp
 	State             *RollbackState   `protobuf:"varint,2,req,name=state,enum=protobuf.RollbackState" json:"state,omitempty"`
 	FailoverTimestamp *BranchTimestamp `protobuf:"bytes,3,req,name=failoverTimestamp" json:"failoverTimestamp,omitempty"`
-	UprTimestamp      *BranchTimestamp `protobuf:"bytes,4,opt,name=uprTimestamp" json:"uprTimestamp,omitempty"`
+	KvTimestamp       *BranchTimestamp `protobuf:"bytes,4,opt,name=kvTimestamp" json:"kvTimestamp,omitempty"`
 	XXX_unrecognized  []byte           `json:"-"`
 }
 
@@ -273,9 +273,9 @@ func (m *RollbackRequest) GetFailoverTimestamp() *BranchTimestamp {
 	return nil
 }
 
-func (m *RollbackRequest) GetUprTimestamp() *BranchTimestamp {
+func (m *RollbackRequest) GetKvTimestamp() *BranchTimestamp {
 	if m != nil {
-		return m.UprTimestamp
+		return m.KvTimestamp
 	}
 	return nil
 }

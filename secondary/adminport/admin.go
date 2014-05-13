@@ -1,28 +1,38 @@
 // Other than mutation path and query path, most of the components in secondary
 // index talk to each other via admin port. Admin port can also be used for
-// administering and managing the cluster.
+// collecting statistics, administering and managing cluster.
 //
 // An admin port is started as a server daemon and listens for request messages,
 // where every request is serviced by sending back a response to the client.
-// Request and Response messages are defined using protobuf and http is used as
-// the carrier.
 
 package adminport
 
+import (
+	"fmt"
+)
+
+// errors codes
+
+// ErrorRegisteringRequest shall be returned by adminport daemon
+var ErrorRegisteringRequest = fmt.Errorf("errorRegisteringRequest")
+
+// ErrorMessageUnknown shall returned by adminport daemon
+var ErrorMessageUnknown = fmt.Errorf("errorMessageUnknown")
+
 // MessageMarshaller API abstracts the underlying messaging format. For instance,
 // in case of protobuf defined structures, respective structure definition
-// should implement following methiod receivers.
+// should implement following method receivers.
 type MessageMarshaller interface {
 	// Name of the message
 	Name() string
 
-	// Content type to be used in the transport layer.
+	// Content type to be used by the transport layer.
 	ContentType() string
 
-	// Encode function marshal message to byte array.
+	// Encode function shall marshal message to byte array.
 	Encode() (data []byte, err error)
 
-	// Decode function unmarshal byte array to message.
+	// Decode function shall unmarshal byte array back to message.
 	Decode(data []byte) (err error)
 }
 
@@ -33,11 +43,14 @@ type Request interface {
 
 	// Send a response message back to the client.
 	Send(MessageMarshaller) error
+
+	// Send error back to the client.
+	SendError(error) error
 }
 
 // Server API for adminport
 type Server interface {
-	// Register a request message that will be valid for admin server
+	// Register a request message that shall be supported by adminport-server
 	Register(msg MessageMarshaller) error
 
 	// Unregister a previously registered request message
@@ -47,15 +60,15 @@ type Server interface {
 	// Unregister() APIs cannot be called after starting the server.
 	Start() error
 
-	// Stop server routine, server routine will quite only after outstanding
-	// requests are serviced.
+	// Stop server routine. TODO: server routine shall quite only after
+	// outstanding requests are serviced.
 	Stop()
 }
 
 // Client API for a remote adminport
 type Client interface {
-	// Request will post a `request` message to server, wait for response and
-	// decode response into `response` argument. `response` argument must be
+	// Request shall post a `request` message to server, wait for response and
+	// decode response into `response` argument. `response` argument must be a
 	// pointer to an object implementing `MessageMarshaller` interface.
 	Request(request, response MessageMarshaller) (err error)
 }

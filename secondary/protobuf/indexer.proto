@@ -82,16 +82,16 @@ message HWTimestampResponse {
 
 
 // Requested by Coordinator to rollback to a snapshot such that its snapshot-timestamp
-// is less than failover-timestamp but greater than or equal to upr-timestamp.
+// is less than failover-timestamp but greater than or equal to kv-timestamp.
 // This request will be sent twice to each indexer node.
 message RollbackRequest {
     required string          bucket            = 1; // bucket name
 
     // first as RollbackStart along with failoverTimestamp
-    // second as RollbackCommit along with failoverTimestamp and uprTimestamp
+    // second as RollbackCommit along with failoverTimestamp and kvTimestamp
     required RollbackState   state             = 2;
     required BranchTimestamp failoverTimestamp = 3;
-    optional BranchTimestamp uprTimestamp      = 4;
+    optional BranchTimestamp kvTimestamp       = 4;
 }
 
 message RollbackResponse {

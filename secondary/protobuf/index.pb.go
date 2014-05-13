@@ -17,13 +17,13 @@ var _ = math.Inf
 type IndexState int32
 
 const (
-	// Create index accepted, replicated and reponse sent back to admin
+	// Create index accepted, replicated and response sent back to admin
 	// console.
 	IndexState_IndexInitial IndexState = 1
 	// Index DDL replicated, and then communicated to participating indexers.
 	IndexState_IndexPending IndexState = 2
 	// Initial-load request received from admin console, DDL replicated,
-	// loading status communicated with partiticipating indexer and
+	// loading status communicated with participating indexer and
 	// initial-load request is posted to projector.
 	IndexState_IndexLoading IndexState = 3
 	// Initial-loading is completed for this index from all partiticipating
@@ -178,8 +178,8 @@ type IndexDefinition struct {
 	Uuid             *uint64        `protobuf:"varint,4,req,name=uuid" json:"uuid,omitempty"`
 	Using            *StorageType   `protobuf:"varint,5,req,name=using,enum=protobuf.StorageType" json:"using,omitempty"`
 	ExprType         *ExprType      `protobuf:"varint,6,req,name=exprType,enum=protobuf.ExprType" json:"exprType,omitempty"`
-	PartitionType    *PartitionType `protobuf:"varint,7,req,name=partitionType,enum=protobuf.PartitionType" json:"partitionType,omitempty"`
-	Expressions      []string       `protobuf:"bytes,8,rep,name=expressions" json:"expressions,omitempty"`
+	PartitionType    *PartitionType `protobuf:"varint,8,req,name=partitionType,enum=protobuf.PartitionType" json:"partitionType,omitempty"`
+	Expressions      []string       `protobuf:"bytes,9,rep,name=expressions" json:"expressions,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -293,12 +293,20 @@ func (m *IndexPartition) GetSkp() *SimpleKeyPartition {
 }
 
 type SimpleKeyPartition struct {
-	XXX_unrecognized []byte `json:"-"`
+	PartitionKey     *string `protobuf:"bytes,1,req,name=partitionKey" json:"partitionKey,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
 }
 
 func (m *SimpleKeyPartition) Reset()         { *m = SimpleKeyPartition{} }
 func (m *SimpleKeyPartition) String() string { return proto.CompactTextString(m) }
 func (*SimpleKeyPartition) ProtoMessage()    {}
+
+func (m *SimpleKeyPartition) GetPartitionKey() string {
+	if m != nil && m.PartitionKey != nil {
+		return *m.PartitionKey
+	}
+	return ""
+}
 
 func init() {
 	proto.RegisterEnum("protobuf.IndexState", IndexState_name, IndexState_value)

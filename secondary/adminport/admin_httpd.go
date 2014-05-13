@@ -2,7 +2,7 @@
 //
 // Example server {
 //      reqch  := make(chan adminport.Request)
-//      server := NewHttpServer("localhost:9999", 0, 0, reqch)
+//      server := adminport.NewHTTPServer("projector", "localhost:9999", reqch)
 //      server.Register(&protobuf.RequestMessage{})
 //
 //      loop:
@@ -10,10 +10,10 @@
 //          select {
 //          case req, ok := <-reqch:
 //              if ok {
-//                  msg := req.GetMessage().(protobuf.RequestMessage)
+//                  msg := req.GetMessage()
 //                  // interpret request and compose a response
-//                  respMsg := protobuf.ResponseMessage{}
-//                  err := req.Send(&respMsg)
+//                  respMsg := &protobuf.ResponseMessage{}
+//                  err := msg.Send(respMsg)
 //              } else {
 //                  break loop
 //              }
@@ -29,6 +29,7 @@ package adminport
 
 import (
 	"fmt"
+	c "github.com/couchbase/indexing/secondary/common"
 	"log"
 	"net"
 	"net/http"
@@ -40,64 +41,69 @@ import (
 
 // httpServer is a concrete type implementing adminport Server interface.
 type httpServer struct {
-	mu       sync.Mutex
-	lis      net.Listener                 // TCP listener
-	srv      *http.Server                 // http server
-	messages map[string]MessageMarshaller // map of registered requests
-	reqch    chan<- Request               // request channel back to application
+	mu       sync.Mutex   // handle concurrent updates to this object
+	module   string       // module hosting the adminport daemon
+	lis      net.Listener // TCP listener
+	srv      *http.Server // http server
+	messages map[string]MessageMarshaller
+	reqch    chan<- Request // request channel back to application
+
+	logPrefix string
 }
 
-// NewHttpServer creates an instance of admin-server. Start() will actually
+// NewHTTPServer creates an instance of admin-server. Start() will actually
 // start the server.
-//
-// Arguments,
-//  connAddr, <host:port> on which the server should listen
-//  rt,       read timeout for the server
-//  wt,       write timeout for the server
-//  reqch,    back channel to application for handling Requests
-func NewHttpServer(connAddr string, rt, wt time.Duration, reqch chan<- Request) Server {
+func NewHTTPServer(module, connAddr string, reqch chan<- Request) Server {
 	s := &httpServer{
-		reqch:    reqch,
-		messages: make(map[string]MessageMarshaller),
+		module:    module,
+		reqch:     reqch,
+		messages:  make(map[string]MessageMarshaller),
+		logPrefix: fmt.Sprintf("%s's adminport(%s)", module, connAddr),
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.systemHandler)
+	mux.HandleFunc(c.AdminportURLPrefix, s.systemHandler)
 	s.srv = &http.Server{
 		Addr:           connAddr,
 		Handler:        mux,
-		ReadTimeout:    rt * time.Second,
-		WriteTimeout:   wt * time.Second,
+		ReadTimeout:    c.AdminportReadTimeout * time.Millisecond,
+		WriteTimeout:   c.AdminportWriteTimeout * time.Millisecond,
 		MaxHeaderBytes: 1 << 20,
 	}
 	return s
 }
 
+// Register is part of Server interface.
 func (s *httpServer) Register(msg MessageMarshaller) (err error) {
-	if s.lis != nil {
-		return fmt.Errorf("Server is already running")
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.lis != nil {
+		return ErrorRegisteringRequest
+	}
 	s.messages[msg.Name()] = msg
+	log.Printf("%s: registered %s\n", s.logPrefix, s.getURL(msg))
 	return
 }
 
+// Unregister is part of Server interface.
 func (s *httpServer) Unregister(msg MessageMarshaller) (err error) {
-	if s.lis != nil {
-		return fmt.Errorf("server is already running")
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.lis != nil {
+		return ErrorRegisteringRequest
+	}
 	name := msg.Name()
 	if s.messages[name] == nil {
-		return fmt.Errorf("message name not registered")
+		return ErrorMessageUnknown
 	}
 	delete(s.messages, name)
+	log.Printf("%s: unregistered %s\n", s.logPrefix, s.getURL(msg))
 	return
 }
 
+// Start is part of Server interface.
 func (s *httpServer) Start() (err error) {
 	if s.lis, err = net.Listen("tcp", s.srv.Addr); err != nil {
 		return err
@@ -105,24 +111,21 @@ func (s *httpServer) Start() (err error) {
 
 	// Server routine
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("adminport %q: %v\n", s.srv.Addr, r)
-			}
-			s.shutdown()
-		}()
+		defer s.shutdown()
 
+		log.Printf("%s: starting ...\n", s.logPrefix)
 		err := s.srv.Serve(s.lis) // serve until listener is closed.
 		if err != nil {
-			panic(err)
+			log.Printf("%s: error - %v\n", s.logPrefix, err)
 		}
 	}()
 	return
 }
 
+// Stop is part of Server interface.
 func (s *httpServer) Stop() {
-	log.Println("Stopping server", s.srv.Addr)
 	s.shutdown()
+	log.Printf("%s: stopped\n", s.logPrefix)
 }
 
 func (s *httpServer) shutdown() {
@@ -136,63 +139,82 @@ func (s *httpServer) shutdown() {
 	}
 }
 
+func (s *httpServer) getURL(msg MessageMarshaller) string {
+	return c.AdminportURLPrefix + msg.Name()
+}
+
 // handle incoming request.
 func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
+	logPrefix := fmt.Sprintf("%s: request %q", s.logPrefix, r.URL.Path)
 	// Fault-tolerance. No need to crash the server in case of panic.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("error handling http request: %v\n", r)
+			log.Printf("%s, error %v\n", logPrefix, r)
 		}
 	}()
 
 	msg := s.messages[strings.Trim(r.URL.Path, "/")]
 	if msg == nil {
+		log.Printf("%s, path not found\n", s.logPrefix)
 		http.Error(w, "path not found", http.StatusNotFound)
 		return
 	}
 
-	log.Printf("admin server (%v) %v\n", s.srv.Addr, r.URL.Path)
+	log.Printf("%s\n", logPrefix)
 
-	data := make([]byte, r.ContentLength)
+	data := make([]byte, r.ContentLength, r.ContentLength)
 	r.Body.Read(data)
 
 	// Get an instance of message type and decode request into that.
 	typeOfMsg := reflect.ValueOf(msg).Elem().Type()
 	m := reflect.New(typeOfMsg).Interface().(MessageMarshaller)
 	if err := m.Decode(data); err != nil {
-		log.Printf("error decoding request: %v\n", err)
+		log.Printf("%s, error decoding request %v\n", logPrefix, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	waitch := make(chan MessageMarshaller, 1)
+	// send and wait
+	waitch := make(chan interface{}, 1)
 	s.reqch <- &httpAdminRequest{srv: s, msg: m, waitch: waitch}
+	switch val := (<-waitch).(type) {
+	case MessageMarshaller:
+		if data, err := val.Encode(); err == nil {
+			header := w.Header()
+			header["Content-Type"] = []string{val.ContentType()}
+			w.Write(data)
+		} else {
+			log.Printf("%s, error encoding response %v\n", logPrefix, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
 
-	// Wait for response message
-	respMsg := <-waitch
-	if data, err := respMsg.Encode(); err == nil {
-		header := w.Header()
-		header["Content-Type"] = []string{respMsg.ContentType()}
-		w.Write(data)
-	} else {
-		log.Printf("error encoding response (%v) %v\n", r.URL.Path, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+	case error:
+		http.Error(w, val.Error(), http.StatusInternalServerError)
 	}
 }
 
-// httpAdminRequest is a concrete type implementing Request interface.
+// concrete type implementing Request interface
 type httpAdminRequest struct {
 	srv    *httpServer
 	msg    MessageMarshaller
-	waitch chan MessageMarshaller
+	waitch chan interface{}
 }
 
+// GetMessage is part of Request interface.
 func (r *httpAdminRequest) GetMessage() MessageMarshaller {
 	return r.msg
 }
 
-func (r *httpAdminRequest) Send(msg MessageMarshaller) (err error) {
+// Send is part of Request interface.
+func (r *httpAdminRequest) Send(msg MessageMarshaller) error {
 	r.waitch <- msg
-	return
+	close(r.waitch)
+	return nil
+}
+
+// SendError is part of Request interface.
+func (r *httpAdminRequest) SendError(err error) error {
+	r.waitch <- err
+	close(r.waitch)
+	return nil
 }

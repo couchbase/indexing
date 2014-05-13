@@ -6,54 +6,73 @@ package protobuf;
 import "common.proto";
 import "index.proto";
 
-// Flag is applicable to all vbuckets in the request
-enum MutationStreamFlag {
-    // start vbucket-streams if it is not already active.
-    MutationStreamStart    = 0;
-
-    // start vbucket-streams whether it is already active or not.
-    MutationStreamRestart  = 1;
-
-    // shutdown vbucket-streams
-    MutationStreamShutdown = 2;
-
-    // whether projector should retry closed clonnection / stream with KV.
-    UpstreamRetry          = 4;
-
-    // whether router should retry closed clonnection with indexer endpoint.
-    DownstreamRetry        = 8;
+// Requested by Coordinator during system-start, re-connect, rollback
+message FailoverLogRequest {
+    required string pool   = 1;
+    required string bucket = 2;
+    repeated uint32 vbnos  = 3; // vbuckets for which failover log is request
 }
 
-// Requested by Coordinator or indexer to start a mutation stream.
+message FailoverLogResponse {
+    required Error       err  = 1;
+    repeated FailoverLog logs = 2;
+}
+
+// Requested by Coordinator or indexer to start a new mutation stream.
+// BranchTimestamp.Vbnos should be in sort order
 message MutationStreamRequest {
-    required string             topic          = 1; // topic name.
-    required MutationStreamFlag flag           = 2;
-
-    repeated BranchTimestamp restartTimestamps = 3; // list of timestamps, one per bucket
-
-    // list of index applicable for this stream
-    repeated Index indexes = 4;
+    required string             topic             = 1; // topic name.
+    required uint32             flag              = 2;
+    repeated string             pools             = 3;
+    repeated string             buckets           = 4;
+    repeated BranchTimestamp    restartTimestamps = 5; // list of timestamps, one per bucket
+    // list of index applicable for this stream, optional as well
+    repeated Index              indexes           = 6;
 }
 
 message MutationStreamResponse {
-    required Error           err                = 1;
-    required string          topic              = 2;
-
-    // per bucket restart-timestamp, failover-timestamp, upr-timestamp
-    repeated BranchTimestamp restartTimestamps  = 3;
-    repeated BranchTimestamp failoverTimestamps = 4;
-    repeated BranchTimestamp uprTimestamps      = 5;
-
-    repeated uint64          indexes            = 6;
+    required Error              err                = 1;
+    required string             topic              = 2;
+    required uint32             flag               = 3;
+    repeated string             pools              = 4;
+    repeated string             buckets            = 5;
+    // per bucket failover-timestamp, kv-timestamp for all active vbuckets,
+    // for each bucket, after executing the request.
+    repeated BranchTimestamp    failoverTimestamps = 6; // sort order
+    repeated BranchTimestamp    kvTimestamps       = 7; // sort order
+    repeated uint64             indexUuids         = 8;
 }
 
+// Requested by Coordinator or indexer to restart or shutdown vbuckets from an
+// active mutation stream. Returns back MutationStreamResponse.
+message UpdateMutationStreamRequest {
+    required string             topic             = 1; // topic name.
+    required uint32             flag              = 2;
+    repeated string             pools             = 3;
+    repeated string             buckets           = 4;
+    repeated BranchTimestamp    restartTimestamps = 5; // list of timestamps, one per bucket
+    repeated Index              indexes           = 6;
+}
+
+// Requested by third party component that wants to subscribe to a topic-name.
+// Error message will be sent as response
+message SubscribeStreamRequest {
+    required string topic   = 1; // must be an already started stream.
+    required uint32 flag    = 2;
+    repeated Index  indexes = 3;
+}
+
+// Requested by indexer / coordinator to inform router to re-connect with
+// downstream endpoint. Error message will be sent as response.
+message RepairDownstreamEndpoints {
+    required string topic     = 1; // must be an already started stream.
+}
 
 // Requested by coordinator to should down a mutation stream and all KV
-// connections active for that stream.
-message ShutdownMutationStreamRequest {
+// connections active for that stream. Error message will be sent as response.
+message ShutdownStreamRequest {
     required string topic = 1;
 }
-
 
 // Requested by Coordinator during bootstrap handshake to get the current list
 // of active streams from projector
@@ -74,14 +93,4 @@ message CurrentTimestampRequest {
 
 message CurrentTimestampResponse {
     repeated BranchTimestamp currentTimestamps = 1;
-}
-
-
-// Requested by Coordinator to determine re-connect or rollback.
-message FailoverLogRequest {
-    repeated uint32 vbnos = 1; // vbuckets for which failover log is request
-}
-
-message FailoverLogResponse {
-    repeated FailoverLog logs = 1;
 }

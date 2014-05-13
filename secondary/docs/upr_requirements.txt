@@ -1,0 +1,30 @@
+interfaces to UPR.
+
+- all interfaces are abstracted in projector/upr.go
+- upr.go references Timestamp structure defined in common/timestamp.go.
+
+Other than that, following are expectations from upr client,
+
+- when a new vbucket stream start, a MutationEvent with command as StreamBegin
+  is expected from upr.
+- similarly when a stream end, a MutationEvent with command as StreamEnd is
+  expected from upr.
+- in the latest iteration of projector code, I have incorporated OpSync
+  generation into projector, hence upr client don't have to worry about that.
+- StreamBegin and StreamEnd events are guaranteed by couchbase-client.
+- if channel with upr client is closed abruptly, then projector will take care
+  of generating StreamEnd for all active vbucket streams.
+- as per interface, failoverTimestamp and kvTimestamp are expected back from
+  upr-client, but I can help here once the protocol sequences are sorted out.
+- there seem to be some discussion around snapshot.
+- I am assuming that ADD_STREAM, CLOSE_STREAM, SET_VBUCKET_STATE are not
+  relevant for secondary index.
+- Right now the Opcommand for MutationEvent does not account for
+  SNAPSHOT_MARKER, if that is required you can add that and send it downstream
+  to projector, I will handle it.
+- EXPIRATION and FLUSH commands from UPR are not yet handled by secondary index.
+
+There seem to be some discussions around snapshot_start and snapshot_end for
+STREAM_REQUEST. This particular change will affect several parts of seconday
+index, hence John, Deep and Sarath will have to be involved in those
+discussions.

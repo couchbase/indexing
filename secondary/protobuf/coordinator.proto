@@ -8,7 +8,7 @@ import "index.proto";
 import "rollback.proto";
 
 
-// Requested by cluster manager to indicate a new coordinator. Error message
+// Posted by cluster manager to indicate a new coordinator. Error message
 // will be sent as reponse.
 message NewCoordinatorRequest {
     required string connectionAddr = 1; // new coordinator's connection address
@@ -41,7 +41,7 @@ message UpdateStateContext {
 }
 
 
-// Requested by cluster manager whenever a actor joins or leaves the cluster.
+// Requested by cluster manager whenever an actor joins or leaves the cluster.
 message ActorClusterRequest {
     repeated Actor actors = 1;
 }

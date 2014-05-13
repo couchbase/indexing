@@ -91,8 +91,8 @@ func (m *Error) GetError() string {
 // logical clock
 type Timestamp struct {
 	Bucket           *string  `protobuf:"bytes,1,req,name=bucket" json:"bucket,omitempty"`
-	Vbno             []uint32 `protobuf:"varint,2,rep,name=vbno" json:"vbno,omitempty"`
-	Seqno            []uint64 `protobuf:"varint,3,rep,name=seqno" json:"seqno,omitempty"`
+	Vbnos            []uint32 `protobuf:"varint,2,rep,name=vbnos" json:"vbnos,omitempty"`
+	Seqnos           []uint64 `protobuf:"varint,3,rep,name=seqnos" json:"seqnos,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -107,16 +107,16 @@ func (m *Timestamp) GetBucket() string {
 	return ""
 }
 
-func (m *Timestamp) GetVbno() []uint32 {
+func (m *Timestamp) GetVbnos() []uint32 {
 	if m != nil {
-		return m.Vbno
+		return m.Vbnos
 	}
 	return nil
 }
 
-func (m *Timestamp) GetSeqno() []uint64 {
+func (m *Timestamp) GetSeqnos() []uint64 {
 	if m != nil {
-		return m.Seqno
+		return m.Seqnos
 	}
 	return nil
 }
@@ -124,9 +124,9 @@ func (m *Timestamp) GetSeqno() []uint64 {
 // logical clock that also associate a vbucket branch for the specified sequence number
 type BranchTimestamp struct {
 	Bucket           *string  `protobuf:"bytes,1,req,name=bucket" json:"bucket,omitempty"`
-	Vbno             []uint32 `protobuf:"varint,2,rep,name=vbno" json:"vbno,omitempty"`
-	Seqno            []uint64 `protobuf:"varint,3,rep,name=seqno" json:"seqno,omitempty"`
-	Vbuuid           []uint64 `protobuf:"varint,4,rep,name=vbuuid" json:"vbuuid,omitempty"`
+	Vbnos            []uint32 `protobuf:"varint,2,rep,name=vbnos" json:"vbnos,omitempty"`
+	Seqnos           []uint64 `protobuf:"varint,3,rep,name=seqnos" json:"seqnos,omitempty"`
+	Vbuuids          []uint64 `protobuf:"varint,4,rep,name=vbuuids" json:"vbuuids,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -141,23 +141,23 @@ func (m *BranchTimestamp) GetBucket() string {
 	return ""
 }
 
-func (m *BranchTimestamp) GetVbno() []uint32 {
+func (m *BranchTimestamp) GetVbnos() []uint32 {
 	if m != nil {
-		return m.Vbno
+		return m.Vbnos
 	}
 	return nil
 }
 
-func (m *BranchTimestamp) GetSeqno() []uint64 {
+func (m *BranchTimestamp) GetSeqnos() []uint64 {
 	if m != nil {
-		return m.Seqno
+		return m.Seqnos
 	}
 	return nil
 }
 
-func (m *BranchTimestamp) GetVbuuid() []uint64 {
+func (m *BranchTimestamp) GetVbuuids() []uint64 {
 	if m != nil {
-		return m.Vbuuid
+		return m.Vbuuids
 	}
 	return nil
 }
@@ -199,8 +199,8 @@ func (m *Actor) GetRoles() []ActorRole {
 // failover log for a vbucket.
 type FailoverLog struct {
 	Vbno             *uint32  `protobuf:"varint,1,req,name=vbno" json:"vbno,omitempty"`
-	Vbuuid           []uint64 `protobuf:"varint,2,rep,name=vbuuid" json:"vbuuid,omitempty"`
-	Seqno            []uint64 `protobuf:"varint,3,rep,name=seqno" json:"seqno,omitempty"`
+	Vbuuids          []uint64 `protobuf:"varint,2,rep,name=vbuuids" json:"vbuuids,omitempty"`
+	Seqnos           []uint64 `protobuf:"varint,3,rep,name=seqnos" json:"seqnos,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -215,16 +215,16 @@ func (m *FailoverLog) GetVbno() uint32 {
 	return 0
 }
 
-func (m *FailoverLog) GetVbuuid() []uint64 {
+func (m *FailoverLog) GetVbuuids() []uint64 {
 	if m != nil {
-		return m.Vbuuid
+		return m.Vbuuids
 	}
 	return nil
 }
 
-func (m *FailoverLog) GetSeqno() []uint64 {
+func (m *FailoverLog) GetSeqnos() []uint64 {
 	if m != nil {
-		return m.Seqno
+		return m.Seqnos
 	}
 	return nil
 }

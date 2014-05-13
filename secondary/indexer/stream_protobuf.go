@@ -4,111 +4,137 @@ package indexer
 
 import (
 	"code.google.com/p/goprotobuf/proto"
-	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
+	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
-// protobufEncode Mutation structure into protobuf array of bytes. Returned
-// `data` can be transported to the other end and decoded back to Mutation
+// protobufEncode encode payload message into protobuf array of bytes. Return
+// `data` can be transported to the other end and decoded back to Payload
 // message.
 func protobufEncode(payload interface{}) (data []byte, err error) {
 	version := ProtobufVersion()
-	mp := protobuf.Mutation{Version: proto.Uint32(uint32(version))}
+	pl := protobuf.Payload{Version: proto.Uint32(uint32(version))}
 
 	switch val := payload.(type) {
-	case []*common.KeyVersions:
-		mp.Keys = make([]*protobuf.KeyVersions, 0, len(val))
-		if len(val) == 0 {
-			err = fmt.Errorf("empty mutation")
-			break
-		}
-		for _, k := range val {
-			kp := &protobuf.KeyVersions{
-				Command: proto.Uint32(uint32(k.Command)),
-				Vbucket: proto.Uint32(uint32(k.Vbucket)),
-				Vbuuid:  proto.Uint64(uint64(k.Vbuuid)),
+	case []*c.VbKeyVersions:
+		pl.Vbkeys = make([]*protobuf.VbKeyVersions, 0, len(val))
+		for _, vb := range val { // for each VbKeyVersions
+			pvb := &protobuf.VbKeyVersions{
+				Bucketname: proto.String(vb.Bucket),
+				Vbucket:    proto.Uint32(uint32(vb.Vbucket)),
+				Vbuuid:     proto.Uint64(vb.Vbuuid),
 			}
-			if k.Docid != nil && len(k.Docid) > 0 {
-				kp.Docid = k.Docid
+			pvb.Kvs = make([]*protobuf.KeyVersions, 0, len(vb.Kvs))
+			for _, kv := range vb.Kvs { // for each mutation
+				pkv := &protobuf.KeyVersions{
+					Seqno: proto.Uint64(kv.Seqno),
+				}
+				if kv.Docid != nil && len(kv.Docid) > 0 {
+					pkv.Docid = kv.Docid
+				}
+				if len(kv.Uuids) == 0 {
+					continue
+				}
+				l := len(kv.Uuids)
+				pkv.Uuids = make([]uint64, 0, l)
+				pkv.Commands = make([]uint32, 0, l)
+				pkv.Keys = make([][]byte, 0, l)
+				pkv.Oldkeys = make([][]byte, 0, l)
+				for i, uuid := range kv.Uuids { // for each key-version
+					pkv.Uuids = append(pkv.Uuids, uuid)
+					pkv.Commands = append(pkv.Commands, uint32(kv.Commands[i]))
+					pkv.Keys = append(pkv.Keys, kv.Keys[i])
+					pkv.Oldkeys = append(pkv.Oldkeys, kv.Oldkeys[i])
+				}
+				pvb.Kvs = append(pvb.Kvs, pkv)
 			}
-			if k.Seqno > 0 {
-				kp.Seqno = proto.Uint64(k.Seqno)
-			}
-			if k.Keys != nil {
-				kp.Keys = k.Keys
-				kp.Oldkeys = k.Oldkeys
-				kp.Indexids = k.Indexids
-			}
-			mp.Keys = append(mp.Keys, kp)
+			pl.Vbkeys = append(pl.Vbkeys, pvb)
 		}
 
-	case common.VbConnectionMap:
-		mp.Vbuckets = &protobuf.VbConnectionMap{
-			Vbuuids: val.Vbuuids, Vbuckets: vbno16to32(val.Vbuckets),
+	case *c.VbConnectionMap:
+		pl.Vbmap = &protobuf.VbConnectionMap{
+			Bucket:   proto.String(val.Bucket),
+			Vbuuids:  val.Vbuuids,
+			Vbuckets: c.Vbno16to32(val.Vbuckets),
 		}
 	}
 
 	if err == nil {
-		data, err = proto.Marshal(&mp)
+		data, err = proto.Marshal(&pl)
 	}
 	return
 }
 
 // protobufDecode complements protobufEncode() API. `data` returned by encode
-// is converted back to *protobuf.VbConnectionMap, or []*protobuf.KeyVersions
+// is converted back to *protobuf.VbConnectionMap, or []*protobuf.VbKeyVersions
 // and returns back the payload
 func protobufDecode(data []byte) (payload interface{}, err error) {
-	mp := protobuf.Mutation{}
-	if err = proto.Unmarshal(data, &mp); err != nil {
+	pl := protobuf.Payload{}
+	if err = proto.Unmarshal(data, &pl); err != nil {
 		return nil, err
 	}
-	if ver := byte(mp.GetVersion()); ver != ProtobufVersion() {
-		return nil, fmt.Errorf("mismatch in transport version %v", ver)
+	if ver := byte(pl.GetVersion()); ver != ProtobufVersion() {
+		return nil, ErrorTransportVersion
 	}
 
-	if vbmap := mp.GetVbuckets(); vbmap != nil {
-		return vbmap, nil
-	} else if keys := mp.GetKeys(); keys != nil {
-		return keys, nil
+	if pl.Vbmap != nil {
+		return pl.Vbmap, nil
+	} else if pl.Vbkeys != nil {
+		return pl.Vbkeys, nil
 	}
-	return nil, fmt.Errorf("mutation does not have payload")
+	return nil, ErrorMissingPayload
 }
 
-func vbno32to16(vbnos []uint32) []uint16 {
-	vbnos16 := make([]uint16, 0, len(vbnos))
-	for _, vb := range vbnos {
-		vbnos16 = append(vbnos16, uint16(vb))
+func protobuf2Vbmap(vbmap *protobuf.VbConnectionMap) *c.VbConnectionMap {
+	return &c.VbConnectionMap{
+		Bucket:   vbmap.GetBucket(),
+		Vbuckets: c.Vbno32to16(vbmap.GetVbuckets()),
+		Vbuuids:  vbmap.GetVbuuids(),
 	}
-	return vbnos16
 }
 
-func vbno16to32(vbnos []uint16) []uint32 {
-	vbnos32 := make([]uint32, 0, len(vbnos))
-	for _, vb := range vbnos {
-		vbnos32 = append(vbnos32, uint32(vb))
-	}
-	return vbnos32
-}
-
-func protobuf2KeyVersions(keys []*protobuf.KeyVersions) []*common.KeyVersions {
-	kvs := make([]*common.KeyVersions, 0, len(keys))
+func protobuf2KeyVersions(keys []*protobuf.KeyVersions) []*c.KeyVersions {
+	kvs := make([]*c.KeyVersions, 0, len(keys))
+	size := 10 // TODO: avoid magic numbers
 	for _, key := range keys {
-		kv := &common.KeyVersions{
-			Command:  byte(key.GetCommand()),
-			Vbucket:  uint16(key.GetVbucket()),
+		kv := &c.KeyVersions{
 			Seqno:    key.GetSeqno(),
-			Vbuuid:   key.GetVbuuid(),
 			Docid:    key.GetDocid(),
-			Keys:     key.GetKeys(),
-			Oldkeys:  key.GetOldkeys(),
-			Indexids: key.GetIndexids(),
+			Uuids:    make([]uint64, 0, size),
+			Commands: make([]byte, 0, size),
+			Keys:     make([][]byte, 0, size),
+			Oldkeys:  make([][]byte, 0, size),
+		}
+		commands := key.GetCommands()
+		newkeys := key.GetKeys()
+		oldkeys := key.GetOldkeys()
+		for i, uuid := range key.GetUuids() {
+			kv.Uuids = append(kv.Uuids, uuid)
+			kv.Commands = append(kv.Commands, byte(commands[i]))
+			kv.Keys = append(kv.Keys, newkeys[i])
+			kv.Oldkeys = append(kv.Oldkeys, oldkeys[i])
 		}
 		kvs = append(kvs, kv)
 	}
 	return kvs
 }
 
+func protobuf2VbKeyVersions(protovbs []*protobuf.VbKeyVersions) []*c.VbKeyVersions {
+	vbs := make([]*c.VbKeyVersions, 0, len(protovbs))
+	for _, protovb := range protovbs {
+		vb := &c.VbKeyVersions{
+			Bucket:  protovb.GetBucketname(),
+			Vbucket: uint16(protovb.GetVbucket()),
+			Vbuuid:  protovb.GetVbuuid(),
+			Kvs:     protobuf2KeyVersions(protovb.GetKvs()),
+		}
+		vbs = append(vbs, vb)
+	}
+	return vbs
+}
+
+// ProtobufVersion return version of protobuf schema used in packet transport.
+//
 // TBD: Yet to be defined. Just a place holder for now.
 func ProtobufVersion() byte {
 	return 1

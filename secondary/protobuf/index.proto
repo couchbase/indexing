@@ -7,7 +7,7 @@ package protobuf;
 
 // IndexDefinition will be in one of the following state
 enum IndexState {
-    // Create index accepted, replicated and reponse sent back to admin
+    // Create index accepted, replicated and response sent back to admin
     // console.
     IndexInitial     = 1;
 
@@ -15,7 +15,7 @@ enum IndexState {
     IndexPending     = 2;
 
     // Initial-load request received from admin console, DDL replicated,
-    // loading status communicated with partiticipating indexer and
+    // loading status communicated with participating indexer and
     // initial-load request is posted to projector.
     IndexLoading     = 3;
 
@@ -54,8 +54,8 @@ message IndexDefinition {
     required uint64        uuid          = 4; // unique index id across the secondary index cluster
     required StorageType   using         = 5; // indexing algorithm
     required ExprType      exprType      = 6; // how to interpret `expressions` strings
-    required PartitionType partitionType = 7;
-    repeated string        expressions   = 8; // use expressions to evaluate doc
+    required PartitionType partitionType = 8;
+    repeated string        expressions   = 9; // use expressions to evaluate doc
 }
 
 message Index {
@@ -71,5 +71,6 @@ message IndexPartition {
 }
 
 message SimpleKeyPartition {
+    required string partitionKey = 1; // partition key for key-partition
     // TBD
 }

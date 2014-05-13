@@ -19,7 +19,7 @@ enum RollbackState {
     RollbackPrepare = 2;
 
     // Projector handshake completed, gets back failover-timestamp and
-    // upr-timestamp, rollback context replicated with coordinator replicas,
+    // kv-timestamp, rollback context replicated with coordinator replicas,
     // RollbackCommit request is made to all indexer nodes.
     RollbackCommit  = 3;
 
@@ -35,5 +35,5 @@ message UpdateRollbackContextRequest {
     required RollbackState   state             = 2;
     required BranchTimestamp failoverTimestamp = 3;
     required BranchTimestamp restartTimestamp  = 4;
-    required BranchTimestamp uprTimestamp      = 5;
+    required BranchTimestamp kvTimestamp       = 5;
 }

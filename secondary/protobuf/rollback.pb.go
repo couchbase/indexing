@@ -26,7 +26,7 @@ const (
 	// replicated with coordinator replicas.
 	RollbackState_RollbackPrepare RollbackState = 2
 	// Projector handshake completed, gets back failover-timestamp and
-	// upr-timestamp, rollback context replicated with coordinator replicas,
+	// kv-timestamp, rollback context replicated with coordinator replicas,
 	// RollbackCommit request is made to all indexer nodes.
 	RollbackState_RollbackCommit RollbackState = 3
 	// RollbackDone received from all indexers, rollback context replicated
@@ -71,7 +71,7 @@ type UpdateRollbackContextRequest struct {
 	State             *RollbackState   `protobuf:"varint,2,req,name=state,enum=protobuf.RollbackState" json:"state,omitempty"`
 	FailoverTimestamp *BranchTimestamp `protobuf:"bytes,3,req,name=failoverTimestamp" json:"failoverTimestamp,omitempty"`
 	RestartTimestamp  *BranchTimestamp `protobuf:"bytes,4,req,name=restartTimestamp" json:"restartTimestamp,omitempty"`
-	UprTimestamp      *BranchTimestamp `protobuf:"bytes,5,req,name=uprTimestamp" json:"uprTimestamp,omitempty"`
+	KvTimestamp       *BranchTimestamp `protobuf:"bytes,5,req,name=kvTimestamp" json:"kvTimestamp,omitempty"`
 	XXX_unrecognized  []byte           `json:"-"`
 }
 
@@ -107,9 +107,9 @@ func (m *UpdateRollbackContextRequest) GetRestartTimestamp() *BranchTimestamp {
 	return nil
 }
 
-func (m *UpdateRollbackContextRequest) GetUprTimestamp() *BranchTimestamp {
+func (m *UpdateRollbackContextRequest) GetKvTimestamp() *BranchTimestamp {
 	if m != nil {
-		return m.UprTimestamp
+		return m.KvTimestamp
 	}
 	return nil
 }

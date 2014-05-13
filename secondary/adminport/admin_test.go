@@ -28,7 +28,7 @@ func TestLoopBack(t *testing.T) {
 
 	doServer(addr, t, q)
 
-	client := NewHttpClient(addr)
+	client := NewHTTPClient(addr)
 	req := &testMessage{
 		Bucket:        "default",
 		IsPrimary:     false,
@@ -51,7 +51,7 @@ func TestLoopBack(t *testing.T) {
 func BenchmarkClientRequest(b *testing.B) {
 	log.SetOutput(ioutil.Discard)
 
-	client := NewHttpClient(addr)
+	client := NewHTTPClient(addr)
 	req := &testMessage{
 		Bucket:        "default",
 		IsPrimary:     false,
@@ -74,7 +74,7 @@ func BenchmarkClientRequest(b *testing.B) {
 
 func doServer(addr string, tb testing.TB, quit chan bool) Server {
 	reqch := make(chan Request, 10)
-	server := NewHttpServer("localhost:9999", 0, 0, reqch)
+	server := NewHTTPServer("test", "localhost:9999", reqch)
 	if err := server.Register(&testMessage{}); err != nil {
 		tb.Fatal(err)
 	}

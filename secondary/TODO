@@ -1,0 +1,23 @@
+- use timer.Tick() instead of reloading with time.After().
+- throughput benchmark.
+- DropData and smart throttling, for slow indexer nodes.
+- statistics and logging.
+- adminport to get GetVbmap from go-couchbase for coordinator / indexer.
+- Handle EXPIRATION and FLUSH from upr-client.
+- Optimize the payload for Delete, UpsertDelete and Sync messages to
+  Coordinator.
+- add version field to all protobuf requests and response messages.
+- In case if we get older-document version from UPR, then,
+  * generate period Sync for all vbuckets irrespective of inactivity
+  * or, let endpoint routines generate Sync.
+- panic safe for all go-routines.
+- panic recovery at function level, where ever it make sense.
+- organize and document all error messages.
+- list non github.com/couchbase dependencies.
+- find a better name for `BranchTimestamp`.
+
+Tradeoff between latency and bandwidth:
+
+while transporting keyversions from router to indexer endpoint we can either
+transport keyversions as and when it arrives for better latency or we can batch
+them and process them to improve the payload size at the cost of latency.

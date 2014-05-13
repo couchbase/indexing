@@ -1,68 +1,84 @@
+// TODO: test case for, VbConnectionMap.Ids() VbConnectionMap.GetVbuuid()
+//  VbKeyVersions.Free(), VbKeyVersions.FreeKeyVersions(), KeyVersions.Free().
+
 package common
 
 import (
 	"testing"
 )
 
-const conf_maxKeyvers = 10
-
-func TestMutationKeyVersions(t *testing.T) {
-	m := NewMutation(conf_maxKeyvers)
-	// prepare
-	k := NewUpsert(512, 0x1234567812345678, []byte("cities"), 10000000)
-	k.Keys = [][]byte{[]byte("bangalore"), []byte("delhi"), []byte("jaipur")}
-	k.Oldkeys = [][]byte{[]byte("varanasi"), []byte("pune"), []byte("mahe")}
-	k.Indexids = []uint32{1, 2, 3}
-
-	ks := make([]*KeyVersions, 0, conf_maxKeyvers)
-	for i := 0; i < conf_maxKeyvers; i++ {
-		n := *k
-		ks = append(ks, &n)
-	}
-
-	m.NewPayload(PAYLOAD_KEYVERSIONS)
-
-	// test mixing payloads
-	if m.SetVbuckets(nil, nil) == nil {
-		t.Fatal("expected an error")
-	}
-	// test adding key-versions
-	for _, k := range ks {
-		if err := m.AddKeyVersions(k); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// test over adding key-version
-	if m.AddKeyVersions(ks[0]) == nil {
-		t.Fatal("expected an error")
-	}
-	// test getting back key-versions
-	for i, nks := range m.GetKeyVersions() {
-		if nks != ks[i] {
-			t.Fatal("mismatch while getting back keyversions")
-		}
-	}
-}
-
-func TestMutationVbmap(t *testing.T) {
-	m := NewMutation(conf_maxKeyvers)
-	m.NewPayload(PAYLOAD_VBMAP)
+func TestPayloadVbmap(t *testing.T) {
+	p := NewStreamPayload(PayloadVbmap, 3)
 
 	// test mixing payload
-	if m.AddKeyVersions(nil) == nil {
+	vb := NewVbKeyVersions("default", 1 /*vbno*/, 10 /*vbuuid*/, 1000)
+	if p.AddVbKeyVersions(vb) == nil {
 		t.Fatal("expected an error")
 	}
 	// test adding vbmap payload
 	vbuckets := []uint16{1, 2, 3, 4}
 	vbuuids := []uint64{10, 20, 30, 40}
-	if err := m.SetVbuckets(vbuckets, vbuuids); err != nil {
+	if err := p.SetVbmap("default", vbuckets, vbuuids); err != nil {
 		t.Fatal(err)
 	}
-	// test getting back vbmap
-	vbmap := m.GetVbmap()
-	for i, vbno := range vbmap.Vbuckets {
-		if vbno != vbuckets[i] || vbmap.Vbuuids[i] != vbuuids[i] {
-			t.Fatal("mismatch in vbmap")
+}
+
+func TestKVEqual(t *testing.T) {
+	seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
+	kv1 := NewKeyVersions(seqno, docid, maxCount)
+	kv2 := NewKeyVersions(seqno, docid, maxCount)
+	for i := 0; i < maxCount; i++ {
+		uuid := uint64(i * 10000)
+		kv1.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"))
+		kv2.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"))
+	}
+	if kv1.Equal(kv2) == false {
+		t.Fatal("failed KeyVersions equality")
+	}
+	kv2.AddSync()
+	if kv1.Equal(kv2) {
+		t.Fatal("failed KeyVersions equality")
+	}
+}
+
+func TestPayloadKeyVersions(t *testing.T) {
+	nVb := 3
+	p := NewStreamPayload(PayloadKeyVersions, nVb)
+
+	keys := [][]byte{[]byte("bangalore"), []byte("delhi"), []byte("jaipur")}
+	oldkeys := [][]byte{[]byte("varanasi"), []byte("pune"), []byte("mahe")}
+	uuids := []uint64{1, 2, 3}
+	nIndexes := 3
+	for i := 0; i < nVb; i++ { // for N vbuckets
+		vbno, vbuuid := uint16(i), uint64(i*10)
+		vb := NewVbKeyVersions("default", vbno, vbuuid, 1000)
+		for j := 0; j < 10; j++ { // for 10 mutations
+			kv := NewKeyVersions(512 /*seqno*/, []byte("Bourne"), nIndexes)
+			kv.AddUpsert(uuids[0], keys[0], oldkeys[0])
+			kv.AddUpsert(uuids[1], keys[1], oldkeys[1])
+			kv.AddUpsert(uuids[2], keys[2], oldkeys[2])
+			vb.AddKeyVersions(kv)
 		}
+		p.AddVbKeyVersions(vb)
+	}
+	// test mixing payloads
+	if p.SetVbmap("default", nil, nil) == nil {
+		t.Fatal("expected an error")
+	}
+}
+
+func BenchmarkKVEqual(b *testing.B) {
+	seqno, docid, maxCount := uint64(10), []byte("document-name"), 10
+	kv1 := NewKeyVersions(seqno, docid, maxCount)
+	kv2 := NewKeyVersions(seqno, docid, maxCount)
+	for i := 0; i < maxCount; i++ {
+		uuid := uint64(i * 10000)
+		kv1.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"))
+		kv2.AddUpsert(uuid, []byte("newkey"), []byte("oldkey"))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		kv1.Equal(kv2)
 	}
 }
