@@ -2,7 +2,7 @@
 // un-marshalling statistics for components across the network.
 //
 // Example client {
-//    client := NewHTTPClient("http://localhost:8888")
+//    client := NewHTTPClient("http://localhost:8888", "/adminport/")
 //    req  := &common.ComponentStat{"componentName": "indexer"}
 //    client.Request(req, req)
 // }

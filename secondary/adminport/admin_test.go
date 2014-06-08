@@ -3,6 +3,7 @@ package adminport
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/common"
 	"io/ioutil"
 	"log"
 	"reflect"
@@ -28,7 +29,7 @@ func TestLoopBack(t *testing.T) {
 
 	doServer(addr, t, q)
 
-	client := NewHTTPClient(addr)
+	client := NewHTTPClient(addr, common.AdminportURLPrefix)
 	req := &testMessage{
 		Bucket:        "default",
 		IsPrimary:     false,
@@ -51,7 +52,7 @@ func TestLoopBack(t *testing.T) {
 func BenchmarkClientRequest(b *testing.B) {
 	log.SetOutput(ioutil.Discard)
 
-	client := NewHTTPClient(addr)
+	client := NewHTTPClient(addr, common.AdminportURLPrefix)
 	req := &testMessage{
 		Bucket:        "default",
 		IsPrimary:     false,
@@ -73,8 +74,8 @@ func BenchmarkClientRequest(b *testing.B) {
 }
 
 func doServer(addr string, tb testing.TB, quit chan bool) Server {
-	reqch := make(chan Request, 10)
-	server := NewHTTPServer("test", "localhost:9999", reqch)
+	urlPrefix, reqch := common.AdminportURLPrefix, make(chan Request, 10)
+	server := NewHTTPServer("test", "localhost:9999", urlPrefix, reqch)
 	if err := server.Register(&testMessage{}); err != nil {
 		tb.Fatal(err)
 	}

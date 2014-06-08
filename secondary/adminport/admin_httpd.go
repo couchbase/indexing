@@ -2,7 +2,7 @@
 //
 // Example server {
 //      reqch  := make(chan adminport.Request)
-//      server := adminport.NewHTTPServer("projector", "localhost:9999", reqch)
+//      server := adminport.NewHTTPServer("projector", "localhost:9999", "/adminport", reqch)
 //      server.Register(&protobuf.RequestMessage{})
 //
 //      loop:
@@ -34,35 +34,36 @@ import (
 	"net"
 	"net/http"
 	"reflect"
-	"strings"
 	"sync"
 	"time"
 )
 
 // httpServer is a concrete type implementing adminport Server interface.
 type httpServer struct {
-	mu       sync.Mutex   // handle concurrent updates to this object
-	module   string       // module hosting the adminport daemon
-	lis      net.Listener // TCP listener
-	srv      *http.Server // http server
-	messages map[string]MessageMarshaller
-	reqch    chan<- Request // request channel back to application
+	mu        sync.Mutex   // handle concurrent updates to this object
+	module    string       // module hosting the adminport daemon
+	lis       net.Listener // TCP listener
+	srv       *http.Server // http server
+	urlPrefix string       // URL path prefix for adminport
+	messages  map[string]MessageMarshaller
+	reqch     chan<- Request // request channel back to application
 
 	logPrefix string
 }
 
 // NewHTTPServer creates an instance of admin-server. Start() will actually
 // start the server.
-func NewHTTPServer(module, connAddr string, reqch chan<- Request) Server {
+func NewHTTPServer(module, connAddr, urlPrefix string, reqch chan<- Request) Server {
 	s := &httpServer{
 		module:    module,
 		reqch:     reqch,
 		messages:  make(map[string]MessageMarshaller),
+		urlPrefix: urlPrefix,
 		logPrefix: fmt.Sprintf("%s's adminport(%s)", module, connAddr),
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(c.AdminportURLPrefix, s.systemHandler)
+	mux.HandleFunc(s.urlPrefix, s.systemHandler)
 	s.srv = &http.Server{
 		Addr:           connAddr,
 		Handler:        mux,
@@ -81,7 +82,8 @@ func (s *httpServer) Register(msg MessageMarshaller) (err error) {
 	if s.lis != nil {
 		return ErrorRegisteringRequest
 	}
-	s.messages[msg.Name()] = msg
+	key := fmt.Sprintf("%v%v", s.urlPrefix, msg.Name())
+	s.messages[key] = msg
 	log.Printf("%s: registered %s\n", s.logPrefix, s.getURL(msg))
 	return
 }
@@ -140,7 +142,7 @@ func (s *httpServer) shutdown() {
 }
 
 func (s *httpServer) getURL(msg MessageMarshaller) string {
-	return c.AdminportURLPrefix + msg.Name()
+	return s.urlPrefix + msg.Name()
 }
 
 // handle incoming request.
@@ -153,7 +155,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	msg := s.messages[strings.Trim(r.URL.Path, "/")]
+	msg := s.messages[r.URL.Path]
 	if msg == nil {
 		log.Printf("%s, path not found\n", s.logPrefix)
 		http.Error(w, "path not found", http.StatusNotFound)

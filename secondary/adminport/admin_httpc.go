@@ -3,7 +3,7 @@
 // clients can talk to server by doing,
 //
 // Example client {
-//     client := NewHTTPClient("http://localhost:9999")
+//     client := NewHTTPClient("http://localhost:9999", "/adminport/")
 //     req := &protobuf.RequestMessage{}
 //     resp := &protobuf.ResponseMessage{}
 //     client.Request(req, resp)
@@ -20,13 +20,15 @@ import (
 // httpClient is a concrete type implementing Client interface.
 type httpClient struct {
 	serverAddr string
+	urlPrefix  string
 	httpc      *http.Client
 }
 
 // NewHTTPClient returns a new instance of Client over HTTP.
-func NewHTTPClient(serverAddr string) Client {
+func NewHTTPClient(serverAddr, urlPrefix string) Client {
 	return &httpClient{
 		serverAddr: serverAddr,
+		urlPrefix:  urlPrefix,
 		httpc:      http.DefaultClient,
 	}
 }
@@ -41,7 +43,7 @@ func (c *httpClient) Request(msg, resp MessageMarshaller) (err error) {
 		}
 		// create request
 		bodybuf := bytes.NewBuffer(body)
-		url := c.serverAddr + "/" + msg.Name()
+		url := c.serverAddr + c.urlPrefix + msg.Name()
 		req, err := http.NewRequest("POST", url, bodybuf)
 		if err != nil {
 			return nil, err

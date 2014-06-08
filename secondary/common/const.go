@@ -74,6 +74,9 @@ const (
 	// endpoint-routine will commit harakiri.
 	EndpointHarakiriTimeout = 10 * 1000
 
+	// AdminportURLPrefix path prefix for adminport listening on http.
+	AdminportURLPrefix = "/adminport/"
+
 	// AdminportReadTimeout timeout, in milliseconds, is read timeout for
 	// golib's http server.
 	AdminportReadTimeout = 0
@@ -81,9 +84,6 @@ const (
 	// AdminportWriteTimeout timeout, in milliseconds, is write timeout for
 	// golib's http server.
 	AdminportWriteTimeout = 0
-
-	// AdminportURLPrefix is prefix string for HTTP url.
-	AdminportURLPrefix = "/"
 
 	// MaxIndexesPerBucket is maximum number of index supported per bucket.
 	MaxIndexesPerBucket = 64
