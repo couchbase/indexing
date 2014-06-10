@@ -31,3 +31,21 @@ func (ts Timestamp) Equals(ts1 Timestamp) bool {
 	}
 	return true
 }
+
+//GreaterThanEqual returns true if the given timestamp is matching or
+//greater
+func (ts Timestamp) GreaterThanEqual(ts1 Timestamp) bool {
+
+	//if length is not equal, no need to compare
+	if len(ts) != len(ts1) {
+		return false
+	}
+
+	//each individual seqno should be matching or greater
+	for i, t := range ts {
+		if t < ts1[i] {
+			return false
+		}
+	}
+	return true
+}

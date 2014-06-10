@@ -13,27 +13,21 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 )
 
-type SliceId uint64
+//Snapshot interface
+type Snapshot interface {
+	IndexReader
 
-type SliceStatus int16
+	Open() error
+	Close() error
+	IsOpen() bool
 
-const (
-	//Slice is warming up(open db files etc), not ready for operations
-	SLICE_STATUS_PREPARING SliceStatus = iota
-	//Ready for operations
-	SLICE_STATUS_ACTIVE
-	//Marked for deletion
-	SLICE_STATUS_TERMINATE
-)
-
-//Slice represents the unit of physical storage for index
-type Slice interface {
 	Id() SliceId
-	Status() SliceStatus
 	IndexInstId() common.IndexInstId
 	IndexDefnId() common.IndexDefnId
-	IsActive() bool
 
-	IndexWriter
-	SnapshotContainer
+	Timestamp() Timestamp
+	SetTimeStamp(Timestamp)
+
+	MainIndexSeqNum() SeqNum
+	BackIndexSeqNum() SeqNum
 }

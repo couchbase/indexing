@@ -9,31 +9,23 @@
 
 package indexer
 
-import (
-	"github.com/couchbase/indexing/secondary/common"
-)
+type IndexWriter interface {
 
-type SliceId uint64
+	//Persist a key/value pair
+	Insert(key Key, value Value) error
 
-type SliceStatus int16
+	//Delete a key/value pair by docId
+	Delete(docid string) error
 
-const (
-	//Slice is warming up(open db files etc), not ready for operations
-	SLICE_STATUS_PREPARING SliceStatus = iota
-	//Ready for operations
-	SLICE_STATUS_ACTIVE
-	//Marked for deletion
-	SLICE_STATUS_TERMINATE
-)
+	//Commit the pending operations
+	Commit() error
 
-//Slice represents the unit of physical storage for index
-type Slice interface {
-	Id() SliceId
-	Status() SliceStatus
-	IndexInstId() common.IndexInstId
-	IndexDefnId() common.IndexDefnId
-	IsActive() bool
+	//Snapshot
+	Snapshot() (Snapshot, error)
 
-	IndexWriter
-	SnapshotContainer
+	//Close the index. Should be able to reopen after this operation
+	Close() error
+
+	//Destroy/Wipe the index completely
+	Destroy() error
 }
