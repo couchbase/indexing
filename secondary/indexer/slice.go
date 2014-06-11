@@ -29,11 +29,16 @@ const (
 //Slice represents the unit of physical storage for index
 type Slice interface {
 	Id() SliceId
+	Name() string
 	Status() SliceStatus
 	IndexInstId() common.IndexInstId
 	IndexDefnId() common.IndexDefnId
 	IsActive() bool
 
+	SetActive(bool)
+	SetStatus(SliceStatus)
+
+	GetSnapshotContainer() SnapshotContainer
+
 	IndexWriter
-	SnapshotContainer
 }

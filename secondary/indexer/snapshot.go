@@ -13,6 +13,8 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 )
 
+type SeqNum uint16
+
 //Snapshot interface
 type Snapshot interface {
 	IndexReader
