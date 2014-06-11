@@ -71,4 +71,12 @@ type Client interface {
 	// decode response into `response` argument. `response` argument must be a
 	// pointer to an object implementing `MessageMarshaller` interface.
 	Request(request, response MessageMarshaller) (err error)
+
+	// RequestStat shall get ComponentStat for specified component-name and
+	// return back in response.
+	RequestStat(name string, response MessageMarshaller) (err error)
+
+	// RequestStats is plural form of RequestStat to retrieve statistics for
+	// all the components.
+	RequestStats(response MessageMarshaller) (err error)
 }

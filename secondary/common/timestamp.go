@@ -19,7 +19,7 @@ type Timestamp struct {
 	Vbuuids []uint64
 }
 
-// NewTimestamp returns reference to new instance of Timestamp
+// NewTimestamp returns reference to new instance of Timestamp.
 func NewTimestamp(bucket string, maxVbuckets int) *Timestamp {
 	return &Timestamp{
 		Bucket:  bucket,

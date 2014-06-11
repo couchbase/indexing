@@ -34,6 +34,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 )
@@ -41,7 +42,7 @@ import (
 // httpServer is a concrete type implementing adminport Server interface.
 type httpServer struct {
 	mu        sync.Mutex   // handle concurrent updates to this object
-	module    string       // module hosting the adminport daemon
+	component string       // module hosting the adminport daemon
 	lis       net.Listener // TCP listener
 	srv       *http.Server // http server
 	urlPrefix string       // URL path prefix for adminport
@@ -49,19 +50,19 @@ type httpServer struct {
 	reqch     chan<- Request // request channel back to application
 
 	logPrefix string
+	stats     *c.ComponentStat
 }
 
 // NewHTTPServer creates an instance of admin-server. Start() will actually
 // start the server.
-func NewHTTPServer(module, connAddr, urlPrefix string, reqch chan<- Request) Server {
+func NewHTTPServer(component, connAddr, urlPrefix string, reqch chan<- Request) Server {
 	s := &httpServer{
-		module:    module,
+		component: component,
 		reqch:     reqch,
 		messages:  make(map[string]MessageMarshaller),
 		urlPrefix: urlPrefix,
-		logPrefix: fmt.Sprintf("%s's adminport(%s)", module, connAddr),
+		logPrefix: fmt.Sprintf("%s's adminport(%s)", component, connAddr),
 	}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.urlPrefix, s.systemHandler)
 	s.srv = &http.Server{
@@ -107,6 +108,8 @@ func (s *httpServer) Unregister(msg MessageMarshaller) (err error) {
 
 // Start is part of Server interface.
 func (s *httpServer) Start() (err error) {
+	s.stats = s.newStats() // initialize statistics
+
 	if s.lis, err = net.Listen("tcp", s.srv.Addr); err != nil {
 		return err
 	}
@@ -147,51 +150,94 @@ func (s *httpServer) getURL(msg MessageMarshaller) string {
 
 // handle incoming request.
 func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
+	var err error
+	var statMsgName string
+
 	logPrefix := fmt.Sprintf("%s: request %q", s.logPrefix, r.URL.Path)
+
 	// Fault-tolerance. No need to crash the server in case of panic.
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("%s, error %v\n", logPrefix, r)
+			s.stats.Incrs(statMsgName, 0, 0, 1) // count error
+		} else if err != nil {
+			log.Println(err)
+			s.stats.Incrs(statMsgName, 0, 1, 1) // count response&error
+		} else {
+			s.stats.Incrs(statMsgName, 0, 1, 0) // count response
 		}
 	}()
 
-	msg := s.messages[r.URL.Path]
-	if msg == nil {
-		log.Printf("%s, path not found\n", s.logPrefix)
-		http.Error(w, "path not found", http.StatusNotFound)
-		return
+	var val interface{}
+	// check wether it is for statistics, TODO: avoid magic value
+	if r.URL.Path == (s.urlPrefix + "_stats") {
+		statMsgName = "message.stats"
+		s.stats.Incrs(statMsgName, 1, 0, 0) // count request
+		if val, err = c.StatsEncode(); err != nil {
+			http.Error(w, "StatsEncode failed", http.StatusInternalServerError)
+			return
+		}
+
+		// check wether it is for a component's stat, TODO: avoid magic value
+	} else if strings.HasPrefix(r.URL.Path, s.urlPrefix+"_stats") {
+		statMsgName = "message.stats"
+		s.stats.Incrs(statMsgName, 1, 0, 0) // count request
+		segs := strings.Split(r.URL.Path, "/")
+		val = c.GetStat(segs[len(segs)-1])
+
+	} else {
+		msg := s.messages[r.URL.Path]
+		statMsgName = "message." + msg.Name()
+		s.stats.Incrs(statMsgName, 1, 0, 0) // count request
+
+		if msg == nil {
+			err = fmt.Errorf("%s, path not found", s.logPrefix)
+			http.Error(w, "path not found", http.StatusNotFound)
+			return
+		}
+
+		log.Printf("%s\n", logPrefix)
+
+		data := make([]byte, r.ContentLength, r.ContentLength)
+		r.Body.Read(data)
+		s.stats.Incrs("payload", len(data), 0)
+
+		// Get an instance of message type and decode request into that.
+		typeOfMsg := reflect.ValueOf(msg).Elem().Type()
+		m := reflect.New(typeOfMsg).Interface().(MessageMarshaller)
+		if err = m.Decode(data); err != nil {
+			err = fmt.Errorf("%s, error: %v", logPrefix, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		waitch := make(chan interface{}, 1)
+		// send and wait
+		s.reqch <- &httpAdminRequest{srv: s, msg: m, waitch: waitch}
+		val = <-waitch
 	}
 
-	log.Printf("%s\n", logPrefix)
-
-	data := make([]byte, r.ContentLength, r.ContentLength)
-	r.Body.Read(data)
-
-	// Get an instance of message type and decode request into that.
-	typeOfMsg := reflect.ValueOf(msg).Elem().Type()
-	m := reflect.New(typeOfMsg).Interface().(MessageMarshaller)
-	if err := m.Decode(data); err != nil {
-		log.Printf("%s, error decoding request %v\n", logPrefix, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// send and wait
-	waitch := make(chan interface{}, 1)
-	s.reqch <- &httpAdminRequest{srv: s, msg: m, waitch: waitch}
-	switch val := (<-waitch).(type) {
+	switch v := (val).(type) {
 	case MessageMarshaller:
-		if data, err := val.Encode(); err == nil {
+		if data, err := v.Encode(); err == nil {
 			header := w.Header()
-			header["Content-Type"] = []string{val.ContentType()}
+			header["Content-Type"] = []string{v.ContentType()}
 			w.Write(data)
+			s.stats.Incrs("payload", 0, len(data))
 		} else {
-			log.Printf("%s, error encoding response %v\n", logPrefix, err)
+			err = fmt.Errorf("%s, error: %v", logPrefix, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 
+	case []byte:
+		header := w.Header()
+		header["Content-Type"] = []string{"application/json"} // TODO: no magic
+		w.Write(v)
+		s.stats.Incrs("payload", 0, len(v))
+
 	case error:
-		http.Error(w, val.Error(), http.StatusInternalServerError)
+		http.Error(w, v.Error(), http.StatusInternalServerError)
+		err = v
 	}
 }
 

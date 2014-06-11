@@ -23,7 +23,7 @@ type testMessage struct {
 	Expression    string `json:"expression"`
 }
 
-func TestLoopBack(t *testing.T) {
+func TestLoopback(t *testing.T) {
 	log.SetOutput(ioutil.Discard)
 	q := make(chan bool)
 
@@ -46,6 +46,13 @@ func TestLoopBack(t *testing.T) {
 	}
 	if reflect.DeepEqual(req, resp) == false {
 		t.Fatal(fmt.Errorf("unexpected response"))
+	}
+	stats := common.ComponentStat{}
+	if err := client.RequestStat("adminport", &stats); err != nil {
+		t.Fatal(err)
+	}
+	if stats["messages"].(float64) != float64(1) {
+		t.Fatal(stats["messages"])
 	}
 }
 
@@ -90,9 +97,11 @@ func doServer(addr string, tb testing.TB, quit chan bool) Server {
 			select {
 			case req, ok := <-reqch:
 				if ok {
-					msg := req.GetMessage().(*testMessage)
-					if err := req.Send(msg); err != nil {
-						tb.Fatal(err)
+					switch msg := req.GetMessage().(type) {
+					case *testMessage:
+						if err := req.Send(msg); err != nil {
+							tb.Fatal(err)
+						}
 					}
 				} else {
 					break loop

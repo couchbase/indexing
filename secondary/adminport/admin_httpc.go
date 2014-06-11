@@ -4,15 +4,19 @@
 //
 // Example client {
 //     client := NewHTTPClient("http://localhost:9999", "/adminport/")
-//     req := &protobuf.RequestMessage{}
+//     req  := &protobuf.RequestMessage{}
 //     resp := &protobuf.ResponseMessage{}
 //     client.Request(req, resp)
+//
+//     stats := &common.ComponentStat{}
+//     client.RequestStat("adminport", resp)
 // }
 
 package adminport
 
 import (
 	"bytes"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 )
@@ -49,6 +53,35 @@ func (c *httpClient) Request(msg, resp MessageMarshaller) (err error) {
 			return nil, err
 		}
 		req.Header.Add("Content-Type", msg.ContentType())
+		// POST request and return back the response
+		return c.httpc.Do(req)
+	}, resp)
+}
+
+// RequestStat is part of `Client` interface
+func (c *httpClient) RequestStat(name string, resp MessageMarshaller) (err error) {
+	return doResponse(func() (*http.Response, error) {
+		// create request, TODO: avoid magic value
+		url := fmt.Sprintf("%v%v_stats/%v", c.serverAddr, c.urlPrefix, name)
+		// TODO: avoid magic value
+		req, err := http.NewRequest("POST", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		// POST request and return back the response
+		return c.httpc.Do(req)
+	}, resp)
+}
+
+// RequestStats is part of `Client` interface
+func (c *httpClient) RequestStats(resp MessageMarshaller) (err error) {
+	return doResponse(func() (*http.Response, error) {
+		// create request, TODO: avoid magic value
+		url := fmt.Sprintf("%v%v_stats", c.serverAddr, c.urlPrefix)
+		req, err := http.NewRequest("POST", url, nil)
+		if err != nil {
+			return nil, err
+		}
 		// POST request and return back the response
 		return c.httpc.Do(req)
 	}, resp)

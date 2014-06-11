@@ -103,6 +103,7 @@ func (vr *VbucketRoutine) Close() error {
 func (vr *VbucketRoutine) run(reqch chan []interface{}, endpoints map[string]*Endpoint, engines map[uint64]*Engine) {
 	var seqno uint64
 	heartBeat := time.After(c.VbucketSyncTimeout * time.Millisecond)
+
 loop:
 	for {
 		select {

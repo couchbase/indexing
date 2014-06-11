@@ -314,7 +314,8 @@ func (s *MutationStream) jumboErrorHandler(
 
 	var whatJumbo string
 
-	// connection is already gone.
+	// connection is already gone. TODO: make the following error message as
+	// fatal.
 	if _, ok := s.conns[raddr]; ok == false {
 		log.Printf("%v, fatal remote %q already gone\n", s.logPrefix, raddr)
 		return nil
