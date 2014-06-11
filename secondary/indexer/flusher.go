@@ -175,7 +175,7 @@ func (f *flusher) flushQueue(q MutationQueue, streamId StreamId, sliceMap SliceM
 	select {
 	case <-stopch:
 		//stop all workers
-		for ch := range workerStopChannels {
+		for _, ch := range workerStopChannels {
 			close(ch)
 		}
 		//wait for all workers to stop
@@ -211,7 +211,7 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId StreamId,
 	}
 
 	ok := true
-	var mut *common.Mutation
+	var mut *common.KeyVersions
 
 	//Process till supervisor asks to stop on the channel
 	for ok {
@@ -245,7 +245,7 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId StreamId
 	}
 
 	ok := true
-	var mut *common.Mutation
+	var mut *common.KeyVersions
 
 	//Read till the channel is closed by queue indicating it has sent all the
 	//sequence numbers requested
@@ -265,7 +265,7 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId StreamId
 
 //flushSingleMutation talks to persistence layer to store the mutations
 //Any error from persistence layer is sent back on workerMsgCh
-func (f *flusher) flushSingleMutation(mut *common.Mutation, streamId StreamId,
+func (f *flusher) flushSingleMutation(mut *common.KeyVersions, streamId StreamId,
 	sliceMap SliceMap, workerMsgCh MsgChannel) {
 
 	//based on type of mutation message, take appropriate decision
