@@ -30,7 +30,6 @@ package adminport
 import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"log"
 	"net"
 	"net/http"
 	"reflect"
@@ -61,7 +60,7 @@ func NewHTTPServer(component, connAddr, urlPrefix string, reqch chan<- Request) 
 		reqch:     reqch,
 		messages:  make(map[string]MessageMarshaller),
 		urlPrefix: urlPrefix,
-		logPrefix: fmt.Sprintf("%s's adminport(%s)", component, connAddr),
+		logPrefix: fmt.Sprintf("[%s.adminport]", component),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.urlPrefix, s.systemHandler)
@@ -85,7 +84,7 @@ func (s *httpServer) Register(msg MessageMarshaller) (err error) {
 	}
 	key := fmt.Sprintf("%v%v", s.urlPrefix, msg.Name())
 	s.messages[key] = msg
-	log.Printf("%s: registered %s\n", s.logPrefix, s.getURL(msg))
+	c.Infof("%s registered %s\n", s.logPrefix, s.getURL(msg))
 	return
 }
 
@@ -102,7 +101,7 @@ func (s *httpServer) Unregister(msg MessageMarshaller) (err error) {
 		return ErrorMessageUnknown
 	}
 	delete(s.messages, name)
-	log.Printf("%s: unregistered %s\n", s.logPrefix, s.getURL(msg))
+	c.Infof("%s unregistered %s\n", s.logPrefix, s.getURL(msg))
 	return
 }
 
@@ -118,10 +117,10 @@ func (s *httpServer) Start() (err error) {
 	go func() {
 		defer s.shutdown()
 
-		log.Printf("%s: starting ...\n", s.logPrefix)
+		c.Infof("%s starting ...\n", s.logPrefix)
 		err := s.srv.Serve(s.lis) // serve until listener is closed.
 		if err != nil {
-			log.Printf("%s: error - %v\n", s.logPrefix, err)
+			c.Infof("%s error, %v\n", s.logPrefix, err)
 		}
 	}()
 	return
@@ -130,7 +129,7 @@ func (s *httpServer) Start() (err error) {
 // Stop is part of Server interface.
 func (s *httpServer) Stop() {
 	s.shutdown()
-	log.Printf("%s: stopped\n", s.logPrefix)
+	c.Infof("%s stopped\n", s.logPrefix)
 }
 
 func (s *httpServer) shutdown() {
@@ -153,15 +152,15 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
 	var statMsgName string
 
-	logPrefix := fmt.Sprintf("%s: request %q", s.logPrefix, r.URL.Path)
+	logPrefix := fmt.Sprintf("%s Request %q", s.logPrefix, r.URL.Path)
 
 	// Fault-tolerance. No need to crash the server in case of panic.
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("%s, error %v\n", logPrefix, r)
+			c.Warnf("%s, error %v\n", logPrefix, r)
 			s.stats.Incrs(statMsgName, 0, 0, 1) // count error
 		} else if err != nil {
-			log.Println(err)
+			c.Warnf("%s, error %v\n", logPrefix, err)
 			s.stats.Incrs(statMsgName, 0, 1, 1) // count response&error
 		} else {
 			s.stats.Incrs(statMsgName, 0, 1, 0) // count response
@@ -191,12 +190,12 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 		s.stats.Incrs(statMsgName, 1, 0, 0) // count request
 
 		if msg == nil {
-			err = fmt.Errorf("%s, path not found", s.logPrefix)
+			err = ErrorPathNotFound
 			http.Error(w, "path not found", http.StatusNotFound)
 			return
 		}
 
-		log.Printf("%s\n", logPrefix)
+		c.Infof("%s\n", logPrefix)
 
 		data := make([]byte, r.ContentLength, r.ContentLength)
 		r.Body.Read(data)
@@ -206,8 +205,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 		typeOfMsg := reflect.ValueOf(msg).Elem().Type()
 		m := reflect.New(typeOfMsg).Interface().(MessageMarshaller)
 		if err = m.Decode(data); err != nil {
-			err = fmt.Errorf("%s, error: %v", logPrefix, err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -225,8 +223,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 			w.Write(data)
 			s.stats.Incrs("payload", 0, len(data))
 		} else {
-			err = fmt.Errorf("%s, error: %v", logPrefix, err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 
 	case []byte:

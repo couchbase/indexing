@@ -8,16 +8,19 @@
 package adminport
 
 import (
-	"fmt"
+	"errors"
 )
 
 // errors codes
 
 // ErrorRegisteringRequest shall be returned by adminport daemon
-var ErrorRegisteringRequest = fmt.Errorf("errorRegisteringRequest")
+var ErrorRegisteringRequest = errors.New("adminport.errorRegisteringRequest")
 
 // ErrorMessageUnknown shall returned by adminport daemon
-var ErrorMessageUnknown = fmt.Errorf("errorMessageUnknown")
+var ErrorMessageUnknown = errors.New("adminport.errorMessageUnknown")
+
+// ErrorPathNotFound shall returned by adminport daemon
+var ErrorPathNotFound = errors.New("adminport.errorPathNotFound")
 
 // MessageMarshaller API abstracts the underlying messaging format. For instance,
 // in case of protobuf defined structures, respective structure definition

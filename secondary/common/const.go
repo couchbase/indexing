@@ -25,9 +25,6 @@ var ErrorInvalidRequest = fmt.Errorf("errorInvalidRequest")
 
 // TODO: ideally we would like to have these constants configurable.
 const (
-	// Debug boolean to enable debug mode
-	Debug = true
-
 	// MaxVbuckets is maximum number of vbuckets for any bucket in kv.
 	MaxVbuckets = 1024
 

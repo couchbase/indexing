@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
-	"io/ioutil"
-	"log"
 	"reflect"
 	"testing"
 )
@@ -24,7 +22,6 @@ type testMessage struct {
 }
 
 func TestLoopback(t *testing.T) {
-	log.SetOutput(ioutil.Discard)
 	q := make(chan bool)
 
 	doServer(addr, t, q)
@@ -42,23 +39,21 @@ func TestLoopback(t *testing.T) {
 	}
 	resp := &testMessage{}
 	if err := client.Request(req, resp); err != nil {
-		t.Fatal(err)
+		t.Error(err)
 	}
 	if reflect.DeepEqual(req, resp) == false {
-		t.Fatal(fmt.Errorf("unexpected response"))
+		t.Error(fmt.Errorf("unexpected response"))
 	}
 	stats := common.ComponentStat{}
 	if err := client.RequestStat("adminport", &stats); err != nil {
-		t.Fatal(err)
+		t.Error(err)
 	}
 	if stats["messages"].(float64) != float64(1) {
-		t.Fatal(stats["messages"])
+		t.Error("registered messages", stats["messages"])
 	}
 }
 
 func BenchmarkClientRequest(b *testing.B) {
-	log.SetOutput(ioutil.Discard)
-
 	client := NewHTTPClient(addr, common.AdminportURLPrefix)
 	req := &testMessage{
 		Bucket:        "default",
@@ -75,7 +70,7 @@ func BenchmarkClientRequest(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if err := client.Request(req, resp); err != nil {
-			b.Fatal(err)
+			b.Error(err)
 		}
 	}
 }
@@ -100,7 +95,7 @@ func doServer(addr string, tb testing.TB, quit chan bool) Server {
 					switch msg := req.GetMessage().(type) {
 					case *testMessage:
 						if err := req.Send(msg); err != nil {
-							tb.Fatal(err)
+							tb.Error(err)
 						}
 					}
 				} else {

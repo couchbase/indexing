@@ -15,6 +15,8 @@
 - organize and document all error messages.
 - list non github.com/couchbase dependencies.
 - find a better name for `BranchTimestamp`.
+- jsonpointer for updating statistics. Should we add this under go-jsonpointer ?
+  it might be more efficient if we do so.
 
 Tradeoff between latency and bandwidth:
 
