@@ -3,7 +3,7 @@
 package common
 
 import (
-	"fmt"
+	"errors"
 	"reflect"
 	"sort"
 	"testing"
@@ -21,7 +21,7 @@ func TestSortTimestamp(t *testing.T) {
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
 
 	if ts.CompareVbuckets(tsRef) == false {
-		t.Fatal(fmt.Errorf("expected true"))
+		t.Fatal("expected true")
 	}
 
 	if err := verifyTimestamp(ts, tsRef); err != nil {
@@ -41,13 +41,13 @@ func TestSelectByVbuckets(t *testing.T) {
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
 	ts = ts.SelectByVbuckets([]uint16{29, 41})
 	if reflect.DeepEqual(ts.Vbnos, []uint16{29, 42}) {
-		t.Fatal(fmt.Errorf("vbnos mismatch in selecting timestamps"))
+		t.Fatal("vbnos mismatch in selecting timestamps")
 	}
 	if reflect.DeepEqual(ts.Seqnos, []uint16{4, 5}) {
-		t.Fatal(fmt.Errorf("seqnos mismatch in selecting timestamps"))
+		t.Fatal("seqnos mismatch in selecting timestamps")
 	}
 	if reflect.DeepEqual(ts.Vbuuids, []uint16{40, 50}) {
-		t.Fatal(fmt.Errorf("vbuuids mismatch in selecting timestamps"))
+		t.Fatal("vbuuids mismatch in selecting timestamps")
 	}
 }
 
@@ -59,13 +59,13 @@ func TestFilterByVbuckets(t *testing.T) {
 
 	ts = ts.FilterByVbuckets([]uint16{21, 49})
 	if reflect.DeepEqual(ts.Vbnos, []uint16{11, 18, 62}) == false {
-		t.Fatal(fmt.Errorf("vbnos mismatch in filtering timestamps"))
+		t.Fatal("vbnos mismatch in filtering timestamps")
 	}
 	if reflect.DeepEqual(ts.Seqnos, []uint64{1, 2, 7}) == false {
-		t.Fatal(fmt.Errorf("seqnos mismatch in filtering timestamps"))
+		t.Fatal("seqnos mismatch in filtering timestamps")
 	}
 	if reflect.DeepEqual(ts.Vbuuids, []uint64{10, 20, 70}) == false {
-		t.Fatal(fmt.Errorf("vbuuids mismatch in filtering timestamps"))
+		t.Fatal("vbuuids mismatch in filtering timestamps")
 	}
 }
 
@@ -81,11 +81,11 @@ func TestCompareVbuckets(t *testing.T) {
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
 
 	if ts.CompareVbuckets(tsRef) == false {
-		t.Fatal(fmt.Errorf("expected true"))
+		t.Fatal("expected true")
 	}
 	ts.Vbnos[len(ts.Vbnos)-1]++
 	if ts.CompareVbuckets(tsRef) == true {
-		t.Fatal(fmt.Errorf("expected false"))
+		t.Fatal("expected false")
 	}
 }
 
@@ -101,11 +101,11 @@ func TestCompareVbuuids(t *testing.T) {
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
 
 	if ts.CompareVbuuids(tsRef) == false {
-		t.Fatal(fmt.Errorf("expected true"))
+		t.Fatal("expected true")
 	}
 	ts.Vbuuids[len(ts.Vbuuids)-1]++
 	if ts.CompareVbuuids(tsRef) == true {
-		t.Fatal(fmt.Errorf("expected false"))
+		t.Fatal("expected false")
 	}
 }
 
@@ -121,16 +121,16 @@ func TestAsRecent(t *testing.T) {
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
 
 	if ts.AsRecent(tsRef) == false {
-		t.Fatal(fmt.Errorf("expected true"))
+		t.Fatal("expected true")
 	}
 	ts.Seqnos[len(ts.Seqnos)-1]--
 	if ts.AsRecent(tsRef) == true {
-		t.Fatal(fmt.Errorf("expected false"))
+		t.Fatal("expected false")
 	}
 	ts.Seqnos[len(ts.Seqnos)-1]++
 	ts.Seqnos[0]++
 	if ts.AsRecent(tsRef) == false {
-		t.Fatal(fmt.Errorf("expected true"))
+		t.Fatal("expected true")
 	}
 }
 
@@ -262,13 +262,13 @@ func verifyTimestamp(ts, ref *Timestamp) (err error) {
 	sort.Sort(ref)
 	for i := range ref.Vbnos {
 		if ref.Vbnos[i] != ts.Vbnos[i] {
-			return fmt.Errorf("failed with Vbnos")
+			return errors.New("failed with Vbnos")
 		}
 		if ref.Seqnos[i] != ts.Seqnos[i] {
-			return fmt.Errorf("failed with Seqnos")
+			return errors.New("failed with Seqnos")
 		}
 		if ref.Vbuuids[i] != ts.Vbuuids[i] {
-			return fmt.Errorf("failed with Vbuuids")
+			return errors.New("failed with Vbuuids")
 		}
 	}
 	return

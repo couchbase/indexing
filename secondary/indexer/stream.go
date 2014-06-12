@@ -8,7 +8,7 @@ package indexer
 
 import (
 	"encoding/binary"
-	"fmt"
+	"errors"
 	c "github.com/couchbase/indexing/secondary/common"
 	"log"
 )
@@ -16,34 +16,34 @@ import (
 // error codes
 
 // ErrorDuplicateClient
-var ErrorDuplicateClient = fmt.Errorf("errorDuplicateClient")
+var ErrorDuplicateClient = errors.New("dataport.duplicateClient")
 
 // ErrorStreamPacketRead
-var ErrorStreamPacketRead = fmt.Errorf("errorStreamPacketRead")
+var ErrorStreamPacketRead = errors.New("dataport.packetRead")
 
 // ErrorStreamPacketWrite
-var ErrorStreamPacketWrite = fmt.Errorf("errorStreamPacketWrite")
+var ErrorStreamPacketWrite = errors.New("dataport.packetWrite")
 
 // ErrorStreamPacketOverflow
-var ErrorStreamPacketOverflow = fmt.Errorf("errorStreamPacketOverflow")
+var ErrorStreamPacketOverflow = errors.New("dataport.packetOverflow")
 
 // ErrorStreamdWorkerKilled
-var ErrorStreamdWorkerKilled = fmt.Errorf("errorStreamdWorkerKilled")
+var ErrorStreamdWorkerKilled = errors.New("dataport.workerKilled")
 
 // ErrorStreamdExit
-var ErrorStreamdExit = fmt.Errorf("errorStreamdExit")
+var ErrorStreamdExit = errors.New("dataport.daemonExit")
 
 // ErrorStreamcEmptyKeys
-var ErrorStreamcEmptyKeys = fmt.Errorf("errorStreamcEmptyKeys")
+var ErrorStreamcEmptyKeys = errors.New("dataport.clientEmptyKeys")
 
 // ErrorMissingPayload
-var ErrorMissingPayload = fmt.Errorf("errorMissingPlayload")
+var ErrorMissingPayload = errors.New("dataport.missingPlayload")
 
 // ErrorTransportVersion
-var ErrorTransportVersion = fmt.Errorf("errorTransportVersion")
+var ErrorTransportVersion = errors.New("dataport.transportVersion")
 
 // ErrorDuplicateStreamBegin
-var ErrorDuplicateStreamBegin = fmt.Errorf("errorDuplicateStreamBegin")
+var ErrorDuplicateStreamBegin = errors.New("dataport.duplicateStreamBegin")
 
 // packet field offset and size in bytes
 const (
@@ -106,9 +106,7 @@ func (pkt *StreamTransportPacket) Send(conn transporter, payload interface{}) (e
 	binary.BigEndian.PutUint32(pkt.buf[a:b], uint32(len(data)))
 	a, b = pktFlagOffset, pktFlagOffset+pktFlagSize
 	binary.BigEndian.PutUint16(pkt.buf[a:b], uint16(pkt.flags))
-	//fmt.Println("write", pkt.buf[:pktDataOffset])
 	if n, err = conn.Write(pkt.buf[:pktDataOffset]); err == nil {
-		//fmt.Println("write", data)
 		if n, err = conn.Write(data); err == nil && n != len(data) {
 			log.Printf("stream packet wrote only %v bytes for data\n", n)
 			err = ErrorStreamPacketWrite
@@ -139,7 +137,6 @@ func (pkt *StreamTransportPacket) Receive(conn transporter) (payload interface{}
 	var data []byte
 
 	// transport de-framing
-	//fmt.Println("read", pkt.buf[:pktDataOffset])
 	if err = fullRead(conn, pkt.buf[:pktDataOffset]); err != nil {
 		return
 	}
@@ -152,7 +149,6 @@ func (pkt *StreamTransportPacket) Receive(conn transporter) (payload interface{}
 		err = ErrorStreamPacketOverflow
 		return
 	}
-	//fmt.Println("read", pkt.buf[:pktlen])
 	if err = fullRead(conn, pkt.buf[:pktlen]); err != nil {
 		return
 	}

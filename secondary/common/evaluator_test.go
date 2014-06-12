@@ -1,7 +1,6 @@
 package common
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -18,7 +17,7 @@ func TestEvaluateWithN1QL(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(secKey) != `["Fireman's Pail Ale",0.5]` {
-		t.Fatal(fmt.Errorf("evaluation failed"))
+		t.Fatal("evaluation failed")
 	}
 }
 

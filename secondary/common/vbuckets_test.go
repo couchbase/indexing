@@ -1,7 +1,6 @@
 package common
 
 import (
-	"fmt"
 	"reflect"
 	"sort"
 	"testing"
@@ -17,7 +16,7 @@ func TestVbucketsSort(t *testing.T) {
 	x := vbuckets[0]
 	for _, y := range vbuckets[1:] {
 		if x >= y {
-			t.Fatal(fmt.Errorf("not sorted"))
+			t.Fatal("not sorted")
 		}
 		x = y
 	}
@@ -32,7 +31,7 @@ func TestVbucketsIntersection(t *testing.T) {
 	v2 := vbuckets[512:]
 	vbuckets = Intersection(v1, v2)
 	if len(vbuckets) != 0 {
-		t.Fatal(fmt.Errorf("exprected empty"))
+		t.Fatal("exprected empty")
 	}
 }
 
@@ -45,7 +44,7 @@ func TestVbucketsUnion(t *testing.T) {
 	v2 := ref[512:]
 	vbuckets := Union(v1, v2)
 	if reflect.DeepEqual(ref, vbuckets) == false {
-		t.Fatal(fmt.Errorf("exprected true"))
+		t.Fatal("exprected true")
 	}
 }
 
@@ -55,7 +54,7 @@ func TestVbucketConversion(t *testing.T) {
 		vbuckets = append(vbuckets, uint16(i))
 	}
 	if reflect.DeepEqual(vbuckets, Vbno32to16(Vbno16to32(vbuckets))) == false {
-		t.Fatal(fmt.Errorf("expected true"))
+		t.Fatal("expected true")
 	}
 }
 

@@ -3,25 +3,25 @@
 package common
 
 import (
-	"fmt"
+	"errors"
 )
 
 // error codes
 
-// ErrorEmptyN1QLExpression, returned by N1QL Evaluator for secondary keys.
-var ErrorEmptyN1QLExpression = fmt.Errorf("errorEmptyN1QLExpression")
+// ErrorEmptyN1QLExpression
+var ErrorEmptyN1QLExpression = errors.New("secondary.emptyN1QLExpression")
 
-// ErrorUnexpectedPayload, returned by mutation constructor.
-var ErrorUnexpectedPayload = fmt.Errorf("errorUnexpectedPayload")
+// ErrorUnexpectedPayload
+var ErrorUnexpectedPayload = errors.New("secondary.unexpectedPayload")
 
-// ErrorClosed, returned by gen-server APIs.
-var ErrorClosed = fmt.Errorf("errorClosed")
+// ErrorClosed
+var ErrorClosed = errors.New("secondary.closed")
 
-// ErrorNotMyVbucket, returned if vbucket is not found in VbConnectionMap.
-var ErrorNotMyVbucket = fmt.Errorf("errorNotMyVbucket")
+// ErrorNotMyVbucket
+var ErrorNotMyVbucket = errors.New("secondary.notMyVbucket")
 
 // ErrorInvalidRequest
-var ErrorInvalidRequest = fmt.Errorf("errorInvalidRequest")
+var ErrorInvalidRequest = errors.New("secondary.invalidRequest")
 
 // TODO: ideally we would like to have these constants configurable.
 const (

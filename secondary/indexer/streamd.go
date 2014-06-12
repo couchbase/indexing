@@ -46,6 +46,7 @@
 package indexer
 
 import (
+	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
@@ -58,10 +59,10 @@ import (
 // Error codes
 
 // ErrorStreamPayload
-var ErrorStreamPayload = fmt.Errorf("errorStreamPayload")
+var ErrorStreamPayload = errors.New("dataport.daemonPayload")
 
 // ErrorVbmap
-var ErrorVbmap = fmt.Errorf("errorVbmap")
+var ErrorVbmap = errors.New("dataport.vbmap")
 
 type bucketVbno struct {
 	bucket string

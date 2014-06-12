@@ -4,7 +4,7 @@ package projector
 
 import (
 	"code.google.com/p/goprotobuf/proto"
-	"fmt"
+	"errors"
 	ap "github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
@@ -14,10 +14,10 @@ import (
 // error codes
 
 // ErrorFeedAlreadyActive
-var ErrorFeedAlreadyActive = fmt.Errorf("errorFeedAlreadyActive")
+var ErrorFeedAlreadyActive = errors.New("projector.adminport.FeedAlreadyActive")
 
 // ErrorInvalidTopic
-var ErrorInvalidTopic = fmt.Errorf("errorInvalidTopic")
+var ErrorInvalidTopic = errors.New("projector.adminport.InvalidTopic")
 
 // list of requests handled by this adminport
 var reqFailoverLog = &protobuf.FailoverLogRequest{}

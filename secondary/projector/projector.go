@@ -62,6 +62,7 @@
 package projector
 
 import (
+	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	"log"
@@ -70,16 +71,16 @@ import (
 // error codes
 
 // ErrorInconsistentFeed
-var ErrorInconsistentFeed = fmt.Errorf("errorInconsistentFeed")
+var ErrorInconsistentFeed = errors.New("projector.inconsistentFeed")
 
 // ErrorTopicExist
-var ErrorTopicExist = fmt.Errorf("errorTopicExist")
+var ErrorTopicExist = errors.New("projector.topicExist")
 
 // ErrorTopicMissing
-var ErrorTopicMissing = fmt.Errorf("errorTopicMissing")
+var ErrorTopicMissing = errors.New("projector.topicMissing")
 
 // ErrorArgument
-var ErrorArgument = fmt.Errorf("errorArgument")
+var ErrorArgument = errors.New("projector.argument")
 
 // RequestReader interface abstract mutation stream requests
 type RequestReader interface {

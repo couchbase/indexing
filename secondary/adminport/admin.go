@@ -13,14 +13,14 @@ import (
 
 // errors codes
 
-// ErrorRegisteringRequest shall be returned by adminport daemon
-var ErrorRegisteringRequest = errors.New("adminport.errorRegisteringRequest")
+// ErrorRegisteringRequest
+var ErrorRegisteringRequest = errors.New("adminport.registeringRequest")
 
-// ErrorMessageUnknown shall returned by adminport daemon
-var ErrorMessageUnknown = errors.New("adminport.errorMessageUnknown")
+// ErrorMessageUnknown
+var ErrorMessageUnknown = errors.New("adminport.unknownMessage")
 
-// ErrorPathNotFound shall returned by adminport daemon
-var ErrorPathNotFound = errors.New("adminport.errorPathNotFound")
+// ErrorPathNotFound
+var ErrorPathNotFound = errors.New("adminport.pathNotFound")
 
 // MessageMarshaller API abstracts the underlying messaging format. For instance,
 // in case of protobuf defined structures, respective structure definition

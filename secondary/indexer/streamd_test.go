@@ -1,7 +1,6 @@
 package indexer
 
 import (
-	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
 	"io/ioutil"
@@ -71,7 +70,7 @@ func TestStreamTimeout(t *testing.T) {
 				}
 				wait = false
 			} else {
-				t.Fatal(fmt.Errorf("expected restart vbuckets"))
+				t.Fatal("expected restart vbuckets")
 			}
 		})
 	}
@@ -126,8 +125,7 @@ func TestStreamLoopback(t *testing.T) {
 					t.Fatal(err)
 				}
 				if pvbsSub, ok := mutn.([]*protobuf.VbKeyVersions); !ok {
-					err := fmt.Errorf("unexpected type in loopback %T", pvbsSub)
-					t.Fatal(err)
+					t.Fatalf("unexpected type in loopback %T", pvbsSub)
 				} else {
 					pvbs = append(pvbs, pvbsSub...)
 				}
@@ -139,13 +137,13 @@ func TestStreamLoopback(t *testing.T) {
 			for _, vb := range vbs {
 				if vb.Uuid == vbRef.Uuid {
 					if vb.Bucket != vbRef.Bucket {
-						t.Fatal(fmt.Errorf("unexpected response"))
+						t.Fatal("unexpected response")
 					} else if vb.Vbucket != vbRef.Vbucket {
-						t.Fatal(fmt.Errorf("unexpected response"))
+						t.Fatal("unexpected response")
 					} else if vb.Vbuuid != vbRef.Vbuuid {
-						t.Fatal(fmt.Errorf("unexpected response"))
+						t.Fatal("unexpected response")
 					} else if len(vb.Kvs) != nMuts {
-						t.Fatal(fmt.Errorf("unexpected response"))
+						t.Fatal("unexpected response")
 					}
 				}
 			}
@@ -194,12 +192,10 @@ func BenchmarkLoopback(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		verify(msgch, errch, func(mutn, err interface{}) {
 			if err != nil {
-				fmt.Printf("%T\n", err)
 				b.Fatal(err)
 			}
 			if pvbsSub, ok := mutn.([]*protobuf.VbKeyVersions); !ok {
-				err := fmt.Errorf("unexpected type in loopback %T", pvbsSub)
-				b.Fatal(err)
+				b.Fatalf("unexpected type in loopback %T", pvbsSub)
 			}
 		})
 	}

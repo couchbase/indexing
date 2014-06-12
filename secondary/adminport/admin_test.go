@@ -2,7 +2,6 @@ package adminport
 
 import (
 	"encoding/json"
-	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"reflect"
 	"testing"
@@ -42,7 +41,7 @@ func TestLoopback(t *testing.T) {
 		t.Error(err)
 	}
 	if reflect.DeepEqual(req, resp) == false {
-		t.Error(fmt.Errorf("unexpected response"))
+		t.Error("unexpected response")
 	}
 	stats := common.ComponentStat{}
 	if err := client.RequestStat("adminport", &stats); err != nil {

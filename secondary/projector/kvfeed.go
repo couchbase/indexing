@@ -42,6 +42,7 @@
 package projector
 
 import (
+	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	"log"
@@ -50,13 +51,13 @@ import (
 // error codes
 
 // ErrorVBmap
-var ErrorVBmap = fmt.Errorf("errorVBmap")
+var ErrorVBmap = errors.New("kvfeed.vbmap")
 
 // ErrorClientExited
-var ErrorClientExited = fmt.Errorf("errorClientExited")
+var ErrorClientExited = errors.New("kvfeed.clientExited")
 
 // ErrorShiftingVbucket
-var ErrorShiftingVbucket = fmt.Errorf("errorShiftingVbucket")
+var ErrorShiftingVbucket = errors.New("kvfeed.shiftingVbucket")
 
 // KVFeed is per bucket, per node feed for a subset of vbuckets
 type KVFeed struct {

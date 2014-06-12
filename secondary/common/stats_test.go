@@ -1,7 +1,6 @@
 package common
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 )
@@ -15,7 +14,7 @@ func TestComponentStat(t *testing.T) {
 		if err := out.Decode(data); err != nil {
 			t.Fatal(err)
 		} else if reflect.DeepEqual(ref, out) == false {
-			t.Fatal(fmt.Errorf("mistmatch in component stats"))
+			t.Fatal("mistmatch in component stats")
 		}
 	}
 }

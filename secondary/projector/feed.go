@@ -4,6 +4,7 @@
 package projector
 
 import (
+	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	"log"
@@ -13,13 +14,13 @@ import (
 // error codes
 
 // ErrorInvalidBucket
-var ErrorInvalidBucket = fmt.Errorf("errorInvalidBucket")
+var ErrorInvalidBucket = errors.New("feed.invalidBucket")
 
 // ErrorRequestNotSubscriber
-var ErrorRequestNotSubscriber = fmt.Errorf("errorRequestNotSubscriber")
+var ErrorRequestNotSubscriber = errors.New("feed.requestNotSubscriber")
 
 // ErrorStartingEndpoint
-var ErrorStartingEndpoint = fmt.Errorf("errorStartingEndpoint")
+var ErrorStartingEndpoint = errors.New("feed.startingEndpoint")
 
 // Feed is mutation stream - for maintenance, initial-load, catchup etc...
 type Feed struct {
