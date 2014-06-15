@@ -703,7 +703,7 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 	go func() {
 		defer m.flusherWaitGroup.Done()
 
-		msgch := m.flusher.FlushUptoTS(q.queue,
+		msgch := m.flusher.PersistUptoTS(q.queue,
 			streamId, m.indexInstMap, m.indexPartnMap, ts, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
@@ -755,7 +755,8 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 	go func() {
 		defer m.flusherWaitGroup.Done()
 
-		msgch := m.flusher.DrainUptoTS(q.queue, streamId, ts, stopch)
+		msgch := m.flusher.DrainUptoTS(q.queue, streamId,
+			ts, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
 

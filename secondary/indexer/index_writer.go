@@ -15,7 +15,7 @@ type IndexWriter interface {
 	Insert(key Key, value Value) error
 
 	//Delete a key/value pair by docId
-	Delete(docid string) error
+	Delete(docid []byte) error
 
 	//Commit the pending operations
 	Commit() error
