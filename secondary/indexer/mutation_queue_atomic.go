@@ -14,8 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
-
-	"github.com/couchbase/indexing/secondary/common"
 )
 
 //MutationQueue interface specifies methods which a mutation queue for indexer
@@ -23,22 +21,22 @@ import (
 type MutationQueue interface {
 
 	//enqueue a mutation reference based on vbucket
-	Enqueue(mutation *common.KeyVersions, vbucket uint16) error
+	Enqueue(mutation *MutationKeys, vbucket Vbucket) error
 
 	//dequeue a vbucket's mutation and keep sending on a channel until stop signal
-	Dequeue(vbucket uint16) (<-chan *common.KeyVersions, chan<- bool, error)
+	Dequeue(vbucket Vbucket) (<-chan *MutationKeys, chan<- bool, error)
 	//dequeue a vbucket's mutation upto seqno(wait if not available)
-	DequeueUptoSeqno(vbucket uint16, seqno uint64) (<-chan *common.KeyVersions, error)
+	DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (<-chan *MutationKeys, error)
 	//dequeue single element for a vbucket and return
-	DequeueSingleElement(vbucket uint16) *common.KeyVersions
+	DequeueSingleElement(vbucket Vbucket) *MutationKeys
 
 	//return reference to a vbucket's mutation at Tail of queue without dequeue
-	PeekTail(vbucket uint16) *common.KeyVersions
+	PeekTail(vbucket Vbucket) *MutationKeys
 	//return reference to a vbucket's mutation at Head of queue without dequeue
-	PeekHead(vbucket uint16) *common.KeyVersions
+	PeekHead(vbucket Vbucket) *MutationKeys
 
 	//return size of queue per vbucket
-	GetSize(vbucket uint16) int64
+	GetSize(vbucket Vbucket) int64
 
 	//returns the numbers of vbuckets for the queue
 	GetNumVbuckets() uint16
@@ -90,7 +88,7 @@ func NewAtomicMutationQueue(numVbuckets uint16) *atomicMutationQueue {
 
 //Node represents a single element in the queue
 type node struct {
-	mutation *common.KeyVersions
+	mutation *MutationKeys
 	next     *node
 }
 
@@ -100,9 +98,9 @@ const DEQUEUE_POLL_INTERVAL = 5
 //Enqueue will enqueue the mutation reference for given vbucket.
 //Caller should not free the mutation till it is dequeued.
 //Mutation will not be copied internally by the queue.
-func (q *atomicMutationQueue) Enqueue(mutation *common.KeyVersions, vbucket uint16) error {
+func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys, vbucket Vbucket) error {
 
-	if vbucket < 0 || vbucket > q.numVbuckets-1 {
+	if vbucket < 0 || vbucket > Vbucket(q.numVbuckets)-1 {
 		return errors.New("vbucket out of range")
 	}
 
@@ -130,10 +128,10 @@ func (q *atomicMutationQueue) Enqueue(mutation *common.KeyVersions, vbucket uint
 //the one specified as argument. This allow for multiple mutations with same
 //seqno (e.g. in case of multiple indexes)
 //It closes the mutation channel to indicate its done.
-func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket uint16, seqno uint64) (
-	<-chan *common.KeyVersions, error) {
+func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (
+	<-chan *MutationKeys, error) {
 
-	datach := make(chan *common.KeyVersions)
+	datach := make(chan *MutationKeys)
 
 	go q.dequeueUptoSeqno(vbucket, seqno, datach)
 
@@ -141,8 +139,8 @@ func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket uint16, seqno uint64) (
 
 }
 
-func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket uint16, seqno uint64,
-	datach chan *common.KeyVersions) {
+func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
+	datach chan *MutationKeys) {
 
 	//every DEQUEUE_POLL_INTERVAL milliseconds, check for new mutations
 	ticker := time.NewTicker(time.Millisecond * DEQUEUE_POLL_INTERVAL)
@@ -154,13 +152,16 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket uint16, seqno uint64,
 			head := (*node)(atomic.LoadPointer(&q.head[vbucket]))
 			//copy the mutation pointer
 			m := head.next.mutation
-			if seqno >= m.Seqno {
+			if seqno >= m.meta.seqno {
 				//move head to next
 				atomic.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
 				atomic.AddInt64(&q.size[vbucket], -1)
 				//send mutation to caller
 				datach <- m
-			} else {
+			}
+
+			//once the seqno is reached, close the channel
+			if seqno <= m.meta.seqno {
 				ticker.Stop()
 				close(datach)
 				return
@@ -172,10 +173,10 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket uint16, seqno uint64,
 //Dequeue returns a channel on which it will return mutation reference for specified vbucket.
 //This function will keep polling and send mutations as those become available.
 //It returns a stop channel on which caller can signal it to stop.
-func (q *atomicMutationQueue) Dequeue(vbucket uint16) (<-chan *common.KeyVersions,
+func (q *atomicMutationQueue) Dequeue(vbucket Vbucket) (<-chan *MutationKeys,
 	chan<- bool, error) {
 
-	datach := make(chan *common.KeyVersions)
+	datach := make(chan *MutationKeys)
 	stopch := make(chan bool)
 
 	//every DEQUEUE_POLL_INTERVAL milliseconds, check for new mutations
@@ -198,7 +199,7 @@ func (q *atomicMutationQueue) Dequeue(vbucket uint16) (<-chan *common.KeyVersion
 
 }
 
-func (q *atomicMutationQueue) dequeue(vbucket uint16, datach chan *common.KeyVersions) {
+func (q *atomicMutationQueue) dequeue(vbucket Vbucket, datach chan *MutationKeys) {
 
 	//keep dequeuing till list is empty
 	for {
@@ -214,7 +215,7 @@ func (q *atomicMutationQueue) dequeue(vbucket uint16, datach chan *common.KeyVer
 
 //DequeueSingleElement dequeues a single element and returns.
 //Returns nil in case of empty queue.
-func (q *atomicMutationQueue) DequeueSingleElement(vbucket uint16) *common.KeyVersions {
+func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) *MutationKeys {
 
 	if atomic.LoadPointer(&q.head[vbucket]) !=
 		atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
@@ -231,7 +232,7 @@ func (q *atomicMutationQueue) DequeueSingleElement(vbucket uint16) *common.KeyVe
 }
 
 //PeekTail returns reference to a vbucket's mutation at tail of queue without dequeue
-func (q *atomicMutationQueue) PeekTail(vbucket uint16) *common.KeyVersions {
+func (q *atomicMutationQueue) PeekTail(vbucket Vbucket) *MutationKeys {
 	if atomic.LoadPointer(&q.head[vbucket]) !=
 		atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
 		tail := (*node)(atomic.LoadPointer(&q.tail[vbucket]))
@@ -241,7 +242,7 @@ func (q *atomicMutationQueue) PeekTail(vbucket uint16) *common.KeyVersions {
 }
 
 //PeekHead returns reference to a vbucket's mutation at head of queue without dequeue
-func (q *atomicMutationQueue) PeekHead(vbucket uint16) *common.KeyVersions {
+func (q *atomicMutationQueue) PeekHead(vbucket Vbucket) *MutationKeys {
 	if atomic.LoadPointer(&q.head[vbucket]) !=
 		atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
 		head := (*node)(atomic.LoadPointer(&q.head[vbucket]))
@@ -251,7 +252,7 @@ func (q *atomicMutationQueue) PeekHead(vbucket uint16) *common.KeyVersions {
 }
 
 //GetSize returns the size of the vbucket queue
-func (q *atomicMutationQueue) GetSize(vbucket uint16) int64 {
+func (q *atomicMutationQueue) GetSize(vbucket Vbucket) int64 {
 	return atomic.LoadInt64(&q.size[vbucket])
 }
 
@@ -261,7 +262,7 @@ func (q *atomicMutationQueue) GetNumVbuckets() uint16 {
 }
 
 //allocNode tries to get node from freelist, otherwise allocates a new node and returns
-func (q *atomicMutationQueue) allocNode(vbucket uint16) *node {
+func (q *atomicMutationQueue) allocNode(vbucket Vbucket) *node {
 
 	//get node from freelist
 	n, err := q.popFreeList(vbucket)
@@ -276,7 +277,7 @@ func (q *atomicMutationQueue) allocNode(vbucket uint16) *node {
 
 //popFreeList removes a node from freelist and returns to caller.
 //if freelist is empty, it returns nil.
-func (q *atomicMutationQueue) popFreeList(vbucket uint16) (*node, error) {
+func (q *atomicMutationQueue) popFreeList(vbucket Vbucket) (*node, error) {
 
 	if q.free[vbucket] != (*node)(atomic.LoadPointer(&q.head[vbucket])) {
 		n := q.free[vbucket]

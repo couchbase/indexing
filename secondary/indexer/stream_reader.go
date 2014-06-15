@@ -14,31 +14,31 @@ import (
 	"log"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
 //MutationStreamReader reads a MutationStream and stores the incoming mutations
 //in mutation queue. This is the only component writing to a mutation queue.
 type MutationStreamReader interface {
+	Shutdown()
 }
 
 type mutationStreamReader struct {
 	streamId StreamId
 	stream   *MutationStream //handle to the MutationStream
 
-	streamMutch  MutationChannel //channel for mutations sent by MutationStream
-	streamRespch MsgChannel      //MutationStream side-band channel
+	streamMutch  chan []*protobuf.VbKeyVersions //channel for mutations sent by MutationStream
+	streamRespch chan interface{}               //MutationStream side-band channel
 
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any message to supervisor
-
-	shutdownCh DoneChannel //internal channel indicating shutdown
 
 	numWorkers int // number of workers to process mutation stream
 
 	workerch     []MutationChannel //buffered channel for each worker
 	workerStopCh []StopChannel     //stop channels of workers
 
-	indexQueueMap IndexQueueMap //indexId to mutation queue map
+	bucketQueueMap BucketQueueMap //indexId to mutation queue map
 
 }
 
@@ -47,18 +47,13 @@ const MAX_WORKER_BUFFER = 1000
 //CreateMutationStreamReader creates a new mutation stream and starts
 //a reader to listen and process the mutations.
 //In case returned MutationStreamReader is nil, Message will have the error msg.
-//supvCmdch is a synchronous channel and every request on this channel is followed
-//by a response on the same channel. Supervisor is expected to wait for the response
-//before issuing a new request on this channel.
-//supvRespch will be used by Stream Reader to send any async error/info messages
-//that may happen due to any downstream error or its own processing.
-func CreateMutationStreamReader(streamId StreamId, indexQueueMap IndexQueueMap,
+func CreateMutationStreamReader(streamId StreamId, bucketQueueMap BucketQueueMap,
 	supvCmdch MsgChannel, supvRespch MsgChannel, numWorkers int) (
 	MutationStreamReader, Message) {
 
 	//start a new mutation stream
-	streamMutch := make(MutationChannel)
-	streamRespch := make(MsgChannel)
+	streamMutch := make(chan []*protobuf.VbKeyVersions)
+	streamRespch := make(chan interface{})
 	stream, err := NewMutationStream(StreamAddrMap[streamId], streamMutch, streamRespch)
 	if err != nil {
 		//return stream init error
@@ -72,16 +67,15 @@ func CreateMutationStreamReader(streamId StreamId, indexQueueMap IndexQueueMap,
 
 	//init the reader
 	r := &mutationStreamReader{streamId: streamId,
-		stream:        stream,
-		streamMutch:   streamMutch,
-		streamRespch:  streamRespch,
-		supvCmdch:     supvCmdch,
-		supvRespch:    supvRespch,
-		numWorkers:    numWorkers,
-		workerch:      make([]MutationChannel, numWorkers),
-		workerStopCh:  make([]StopChannel, numWorkers),
-		shutdownCh:    make(DoneChannel),
-		indexQueueMap: indexQueueMap,
+		stream:         stream,
+		streamMutch:    streamMutch,
+		streamRespch:   streamRespch,
+		supvCmdch:      supvCmdch,
+		supvRespch:     supvRespch,
+		numWorkers:     numWorkers,
+		workerch:       make([]MutationChannel, numWorkers),
+		workerStopCh:   make([]StopChannel, numWorkers),
+		bucketQueueMap: bucketQueueMap,
 	}
 
 	//start the main reader loop
@@ -100,17 +94,13 @@ func CreateMutationStreamReader(streamId StreamId, indexQueueMap IndexQueueMap,
 
 //Shutdown shuts down the mutation stream and all workers.
 //This call doesn't return till shutdown is complete.
-func (r *mutationStreamReader) shutdown() Message {
-
-	close(r.shutdownCh)
+func (r *mutationStreamReader) Shutdown() {
 
 	//close the mutation stream
-	r.stream.shutdown()
+	r.stream.Close()
 
 	//stop all workers
 	r.stopWorkers()
-
-	return &MsgSuccess{}
 }
 
 //run starts the stream reader loop which listens to message from
@@ -120,24 +110,20 @@ func (r *mutationStreamReader) run() {
 	//panic handler
 	defer r.panicHandler()
 
-loop:
 	for {
 		select {
 
-		case mut, ok := <-r.streamMutch:
+		case vbKeyVer, ok := <-r.streamMutch:
 			if ok {
-				//TODO: Use Slab Manager here to allocate memory for mutation
-				//Mutation Stream should be free to reuse the underlying memory for mutation
-				r.handleMutation(mut)
+				r.handleVbKeyVersions(vbKeyVer)
 			} else {
 				//stream library has closed this channel indicating unexpected stream closure
 				//send the message to supervisor
-				msgErr := &MsgStreamError{streamId: r.streamId,
+				msgErr := &MsgError{mType: ERROR,
 					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
 						severity: FATAL,
 						category: STREAM_READER}}
 				r.supvRespch <- msgErr
-
 			}
 
 		case msg, ok := <-r.streamRespch:
@@ -146,66 +132,118 @@ loop:
 			} else {
 				//stream library has closed this channel indicating unexpected stream closure
 				//send the message to supervisor
-				msgErr := &MsgStreamError{streamId: r.streamId,
+				msgErr := &MsgError{mType: ERROR,
 					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
 						severity: FATAL,
 						category: STREAM_READER}}
 				r.supvRespch <- msgErr
-
 			}
 
 		case cmd, ok := <-r.supvCmdch:
 			if ok {
+				//handle commands from supervisor
 				msg := r.handleSupervisorCommands(cmd)
 				r.supvCmdch <- msg
-				if cmd.GetMsgType() == STREAM_READER_SHUTDOWN {
-					break loop
-				}
 			} else {
 				//supervisor channel closed. Shutdown stream reader.
-				log.Println("Supervisor Channel Closed Unexpectedly."+
-					"Stream Reader for Stream %v Shutting Itself Down.", r.streamId)
-				r.shutdown()
+				r.Shutdown()
 				return
+
 			}
 		}
 	}
 
 }
 
-//handleMutation processes a single mutation based on the command type
-//A mutation is put in a worker queue and control message is sent to supervisor
-func (r *mutationStreamReader) handleMutation(mut *common.Mutation) {
+func (r *mutationStreamReader) handleVbKeyVersions(vbKeyVers []*protobuf.VbKeyVersions) {
 
-	//based on the type of command take appropriate action
-	switch mut.Command {
+	for _, vb := range vbKeyVers {
 
-	case Upsert, Deletion, UpsertDeletion, Sync:
+		r.handleKeyVersions(vb.GetBucketname(), Vbucket(vb.GetVbucket()),
+			Vbuuid(vb.GetVbuuid()), vb.GetKvs())
 
-		//place mutation in the right worker's queue
-		r.workerch[mut.Vbucket%r.numWorkers] <- mut
-
-	case DropData:
-		//send message to supervisor to take decision
-		msg := &MsgStream{mType: STREAM_READER_STREAM_DROP_DATA,
-			streamId: r.streamId,
-			mutation: mut}
-		r.supvRespch <- msg
-
-	case StreamBegin:
-		//send message to supervisor to take decision
-		msg := &MsgStream{mType: STREAM_READER_STREAM_BEGIN,
-			streamId: r.streamId,
-			mutation: mut}
-		r.supvRespch <- msg
-
-	case StreamEnd:
-		//send message to supervisor to take decision
-		msg := &MsgStream{mType: STREAM_READER_STREAM_END,
-			streamId: r.streamId,
-			mutation: mut}
-		r.supvRespch <- msg
 	}
+
+}
+
+func (r *mutationStreamReader) handleKeyVersions(bucket string, vbucket Vbucket, vbuuid Vbuuid,
+	kvs []*protobuf.KeyVersions) {
+
+	for _, kv := range kvs {
+
+		r.handleSingleKeyVersion(bucket, vbucket, vbuuid, kv)
+	}
+
+}
+
+//handleSingleKeyVersion processes a single mutation based on the command type
+//A mutation is put in a worker queue and control message is sent to supervisor
+func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbucket, vbuuid Vbuuid,
+	kv *protobuf.KeyVersions) {
+
+	meta := &MutationMeta{}
+	meta.bucket = bucket
+	meta.vbucket = vbucket
+	meta.vbuuid = vbuuid
+	meta.seqno = Seqno(kv.GetSeqno())
+
+	var mut *MutationKeys
+
+	for i, cmd := range kv.GetCommands() {
+
+		//based on the type of command take appropriate action
+		switch byte(cmd) {
+
+		//case protobuf.Command_Upsert, protobuf.Command_Deletion, protobuf.Command_UpsertDeletion:
+		case common.Upsert, common.Deletion, common.UpsertDeletion:
+
+			//allocate new mutation first time
+			if mut == nil {
+				//TODO use free list here to reuse the struct and reduce garbage
+				mut := &MutationKeys{}
+				mut.meta = meta
+				mut.docid = kv.GetDocid()
+			}
+
+			//copy the mutation data so underlying stream library can reuse the
+			//KeyVersions structs
+			mut.uuids = append(mut.uuids, common.IndexInstId(kv.GetUuids()[i]))
+			mut.keys = append(mut.keys, kv.GetKeys()[i])
+			mut.oldkeys = append(mut.oldkeys, kv.GetOldkeys()[i])
+			mut.commands = append(mut.commands,
+				byte(kv.GetCommands()[i]))
+
+		case common.Sync:
+			msg := &MsgStream{mType: STREAM_READER_SYNC,
+				streamId: r.streamId,
+				meta:     meta}
+			r.supvRespch <- msg
+
+		case common.DropData:
+			//send message to supervisor to take decision
+			msg := &MsgStream{mType: STREAM_READER_STREAM_DROP_DATA,
+				streamId: r.streamId,
+				meta:     meta}
+			r.supvRespch <- msg
+
+		case common.StreamBegin:
+			//send message to supervisor to take decision
+			msg := &MsgStream{mType: STREAM_READER_STREAM_BEGIN,
+				streamId: r.streamId,
+				meta:     meta}
+			r.supvRespch <- msg
+
+		case common.StreamEnd:
+			//send message to supervisor to take decision
+			msg := &MsgStream{mType: STREAM_READER_STREAM_END,
+				streamId: r.streamId,
+				meta:     meta}
+			r.supvRespch <- msg
+		}
+	}
+
+	//place secKey in the right worker's queue
+	r.workerch[int(vbucket)%r.numWorkers] <- mut
 
 }
 
@@ -214,7 +252,7 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 
 	for {
 		select {
-		case mut := <-r.chworkers[workerId]:
+		case mut := <-r.workerch[workerId]:
 			r.handleSingleMutation(mut)
 		case <-stopch:
 			return
@@ -224,22 +262,44 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 }
 
 //handleSingleMutation enqueues mutation in the mutation queue
-func (r *mutationStreamReader) handleSingleMutation(mut *common.Mutation) {
+func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys) {
 
 	//based on the index, enqueue the mutation in the right queue
-	if q, ok := r.indexQueueMap[mut.IndexId]; ok {
-		q.queue.Enqueue(mut, mut.Vbucket)
+	if q, ok := r.bucketQueueMap[mut.meta.bucket]; ok {
+		q.queue.Enqueue(mut, mut.meta.vbucket)
 
 	} else {
-		log.Println("MutationStreamReader got mutation for unknown index %v", mut.IndexId)
+		log.Println("MutationStreamReader got mutation for unknown bucket", mut)
 	}
 
 }
 
 //handleStreamError handles the error messages from MutationStream
-func (r *mutationStreamReader) handleStreamError(msg Message) {
+func (r *mutationStreamReader) handleStreamError(msg interface{}) {
 
-	//TODO Handle errors other than panic from MutationStream here
+	var msgErr *MsgError
+	switch msg.(type) {
+
+	case ShutdownDaemon:
+		msgErr = &MsgError{mType: ERROR,
+			err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
+				severity: FATAL,
+				category: STREAM_READER}}
+
+		//TODO send more information upstream for RepairStream
+	case RestartVbuckets:
+		msgErr = &MsgError{mType: ERROR,
+			err: Error{code: ERROR_STREAM_READER_RESTART_VBUCKETS,
+				severity: FATAL,
+				category: STREAM_READER}}
+
+	default:
+		msgErr = &MsgError{mType: ERROR,
+			err: Error{code: ERROR_STREAM_READER_UNKNOWN_ERROR,
+				severity: FATAL,
+				category: STREAM_READER}}
+	}
+	r.supvRespch <- msgErr
 }
 
 //handleSupervisorCommands handles the messages from Supervisor
@@ -251,16 +311,13 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		//stop all workers
 		r.stopWorkers()
 
-		//store new indexQueueMap
-		r.indexQueueMap = cmd.(*MsgUpdateIndexQueue).GetIndexQueueMap()
+		//store new bucketQueueMap
+		r.bucketQueueMap = cmd.(*MsgUpdateBucketQueue).GetBucketQueueMap()
 
 		//start all workers again
 		r.startWorkers()
 
 		return &MsgSuccess{}
-
-	case STREAM_READER_SHUTDOWN:
-		return r.shutdown()
 
 	default:
 		return &MsgError{mType: ERROR,
@@ -285,16 +342,6 @@ func (r *mutationStreamReader) panicHandler() {
 		default:
 			err = errors.New("Unknown panic")
 		}
-
-		//shutdown the stream reader
-		select {
-		case <-r.shutdownCh:
-			//if the shutdown channel is closed, this means shutdown was in progress
-			//when panic happened, skip calling shutdown again
-		default:
-			r.shutdown()
-		}
-
 		//panic from stream library, propagate to supervisor
 		msg := &MsgStreamError{streamId: r.streamId,
 			err: Error{code: ERROR_STREAM_READER_PANIC,
@@ -303,7 +350,6 @@ func (r *mutationStreamReader) panicHandler() {
 				cause:    err}}
 		r.supvRespch <- msg
 	}
-
 }
 
 //startWorkers starts all stream workers and passes
@@ -320,7 +366,7 @@ func (r *mutationStreamReader) startWorkers() {
 func (r *mutationStreamReader) stopWorkers() {
 
 	//stop all workers
-	for ch := range r.workerStopCh {
+	for _, ch := range r.workerStopCh {
 		ch <- true
 	}
 }

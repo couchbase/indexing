@@ -10,7 +10,7 @@
 package indexer
 
 //list of seqno per vbucket
-type Timestamp []uint64
+type Timestamp []Seqno
 
 //Stability Timestamp
 type StabilityTimestamp Timestamp

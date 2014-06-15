@@ -24,7 +24,7 @@ type Key struct {
 
 type keydata struct {
 	keybytes Keybytes
-	docid    string
+	docid    []byte
 }
 
 // Value is the primary key of the relavent document
@@ -35,16 +35,16 @@ type Value struct {
 
 type valuedata struct {
 	Keybytes Keybytes
-	Docid    string
-	Vbucket  uint16
-	Seqno    uint64
+	Docid    []byte
+	Vbucket  Vbucket
+	Seqno    Seqno
 }
 
 type Keybytes [][]byte
 
 var KEY_SEPARATOR []byte = []byte{0xff, 0xff, 0xff, 0xff}
 
-func NewKey(data [][]byte, docid string) (Key, error) {
+func NewKey(data [][]byte, docid []byte) (Key, error) {
 
 	var err error
 	var key Key
@@ -63,7 +63,7 @@ func NewKey(data [][]byte, docid string) (Key, error) {
 		}
 	}
 	//write the docid in the end
-	if _, err = buf.Write([]byte(key.raw.docid)); err != nil {
+	if _, err = buf.Write(key.raw.docid); err != nil {
 		return key, err
 	}
 
@@ -73,7 +73,7 @@ func NewKey(data [][]byte, docid string) (Key, error) {
 
 }
 
-func NewValue(data [][]byte, docid string, vbucket uint16, seqno uint64) (Value, error) {
+func NewValue(data [][]byte, docid []byte, vbucket Vbucket, seqno Seqno) (Value, error) {
 
 	var val Value
 
@@ -138,7 +138,7 @@ func (k *Key) String() string {
 		}
 	}
 	buf.WriteString("]")
-	if k.raw.docid != "" {
+	if k.raw.docid != nil {
 		buf.WriteString(fmt.Sprintf(" Docid:%v ", k.raw.docid))
 	}
 	return buf.String()
@@ -155,7 +155,7 @@ func (v *Value) KeyBytes() Keybytes {
 	return v.raw.Keybytes
 }
 
-func (v *Value) Docid() string {
+func (v *Value) Docid() []byte {
 
 	return v.raw.Docid
 }

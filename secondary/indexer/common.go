@@ -26,6 +26,9 @@ const (
 	MAX_STREAMS
 )
 
+//TODO fill the map
+type StreamAddressMap map[StreamId]common.Endpoint
+
 // a generic channel which can be closed when you
 // want someone to stop doing something
 type StopChannel chan bool
@@ -36,7 +39,7 @@ type DoneChannel chan bool
 
 type MsgChannel chan Message
 
-type MutationChannel chan *common.Mutation
+type MutationChannel chan *MutationKeys
 
 //IndexMutationQueue comprising of a mutation queue
 //and a slab manager
@@ -47,3 +50,26 @@ type IndexerMutationQueue struct {
 
 //IndexQueueMap is a map between IndexId and IndexerMutationQueue
 type IndexQueueMap map[common.IndexInstId]IndexerMutationQueue
+
+type Vbucket uint32
+type Vbuuid uint64
+type Seqno uint64
+
+//MutationMeta represents meta information for a KV Mutation
+type MutationMeta struct {
+	bucket  string  //bucket for the mutation
+	vbucket Vbucket //vbucket
+	vbuuid  Vbuuid  //uuid for vbucket
+	seqno   Seqno   // vbucket sequence number for this mutation
+}
+
+//MutationKeys holds the Secondary Keys from a single KV Mutation
+type MutationKeys struct {
+	meta      *MutationMeta
+	docid     []byte               // primary document id
+	uuids     []common.IndexInstId // list of unique ids, like index-ids
+	commands  []byte               // list of commands for each index
+	keys      [][]byte             // list of key-versions for each index
+	oldkeys   [][]byte             // previous key-versions, if available
+	partnkeys [][]byte             //list of partition keys
+}

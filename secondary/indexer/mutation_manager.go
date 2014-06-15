@@ -10,6 +10,8 @@
 package indexer
 
 import (
+	"github.com/couchbase/indexing/secondary/common"
+
 	"errors"
 	"log"
 	"sync"
@@ -43,7 +45,8 @@ type mutationMgr struct {
 
 	shutdownCh DoneChannel //internal channel indicating shutdown
 
-	sliceMap SliceMap
+	indexInstMap  common.IndexInstMap
+	indexPartnMap common.IndexPartnMap
 
 	numVbuckets uint16 //number of vbuckets
 
@@ -247,8 +250,11 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 	case MUT_MGR_GET_MUTATION_QUEUE_LWT:
 		m.handleGetMutationQueueLWT(cmd)
 
-	case MUT_MGR_UPDATE_SLICE_MAP:
-		m.handleUpdateSliceMap(cmd)
+	case MUT_MGR_UPDATE_INSTANCE_MAP:
+		m.handleUpdateIndexInstMap(cmd)
+
+	case MUT_MGR_UPDATE_PARTITION_MAP:
+		m.handleUpdateIndexPartnMap(cmd)
 
 	default:
 		m.supvCmdch <- &MsgError{mType: ERROR,
@@ -333,7 +339,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	}
 	cmdCh := make(MsgChannel)
 
-	reader, errMsg := CreateMutationStreamReader(streamId, indexQueueMap,
+	reader, errMsg := CreateMutationStreamReader(streamId, bucketQueueMap,
 		cmdCh, m.mutMgrRecvCh, DEFAULT_NUM_STREAM_READER_WORKERS)
 
 	if reader == nil {
@@ -384,6 +390,7 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 	bucketQueueMap := m.streamBucketQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
 
+	var bucketMapDirty bool
 	for _, i := range indexList {
 		//if there is no mutation queue for this index, allocate a new one
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
@@ -410,21 +417,26 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 			bucketQueueMap[i.Defn.Bucket] = IndexerMutationQueue{
 				queue:   queue,
 				slabMgr: slabMgr}
+			bucketMapDirty = true
 		}
 		indexQueueMap[i.InstId] = bucketQueueMap[i.Defn.Bucket]
 	}
 
-	respMsg := m.sendMsgToStreamReader(streamId,
-		&MsgUpdateIndexQueue{indexQueueMap: indexQueueMap})
+	if bucketMapDirty {
+		respMsg := m.sendMsgToStreamReader(streamId,
+			&MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap})
 
-	if respMsg.GetMsgType() == SUCCESS {
-		//update internal structures
-		m.streamBucketQueueMap[streamId] = bucketQueueMap
-		m.streamIndexQueueMap[streamId] = indexQueueMap
+		if respMsg.GetMsgType() == SUCCESS {
+			//update internal structures
+			m.streamBucketQueueMap[streamId] = bucketQueueMap
+			m.streamIndexQueueMap[streamId] = indexQueueMap
+		}
+
+		//send the message back on supv channel
+		m.supvCmdch <- respMsg
+	} else {
+		m.supvCmdch <- &MsgSuccess{}
 	}
-
-	//send the message back on supv channel
-	m.supvCmdch <- respMsg
 
 }
 
@@ -457,30 +469,40 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 		delete(indexQueueMap, i.InstId)
 	}
 
-	respMsg := m.sendMsgToStreamReader(streamId,
-		&MsgUpdateIndexQueue{indexQueueMap: indexQueueMap})
-
-	if respMsg.GetMsgType() == SUCCESS {
-		//update internal structures
-		//if all indexes for a bucket have been removed, drop the mutation queue
-		for b, bq := range bucketQueueMap {
-			dropBucket := true
-			for i, iq := range indexQueueMap {
-				//bad check: if the queues match, it is still being used
-				//better way is to check with bucket
-				if bq == iq {
-					dropBucket = false
-					break
-				}
-			}
-			if dropBucket == true {
-				delete(m.streamBucketQueueMap[streamId], b)
+	var bucketMapDirty bool
+	//if all indexes for a bucket have been removed, drop the mutation queue
+	for b, bq := range bucketQueueMap {
+		dropBucket := true
+		for i, iq := range indexQueueMap {
+			//bad check: if the queues match, it is still being used
+			//better way is to check with bucket
+			if bq == iq {
+				dropBucket = false
+				break
 			}
 		}
-		m.streamIndexQueueMap[streamId] = indexQueueMap
+		if dropBucket == true {
+			delete(bucketQueueMap, b)
+			bucketMapDirty = true
+		}
 	}
-	//send the message back on supv channel
-	m.supvCmdch <- respMsg
+
+	if bucketMapDirty {
+		respMsg := m.sendMsgToStreamReader(streamId,
+			&MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap})
+
+		if respMsg.GetMsgType() == SUCCESS {
+			//update internal structures
+			m.streamBucketQueueMap[streamId] = bucketQueueMap
+			m.streamIndexQueueMap[streamId] = indexQueueMap
+		}
+
+		//send the message back on supv channel
+		m.supvCmdch <- respMsg
+	} else {
+		m.supvCmdch <- &MsgSuccess{}
+	}
+
 }
 
 //handleCloseStream closes MutationStreamReader for the specified stream.
@@ -681,8 +703,8 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 	go func() {
 		defer m.flusherWaitGroup.Done()
 
-		msgch := m.flusher.FlushQueueUptoTimestampWithoutPersistence(q.queue,
-			streamId, m.sliceMap, ts, stopch)
+		msgch := m.flusher.FlushUptoTS(q.queue,
+			streamId, m.indexInstMap, m.indexPartnMap, ts, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
 
@@ -733,8 +755,7 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 	go func() {
 		defer m.flusherWaitGroup.Done()
 
-		msgch := m.flusher.FlushQueueUptoTimestampWithoutPersistence(q.queue,
-			streamId, m.sliceMap, ts, stopch)
+		msgch := m.flusher.DrainUptoTS(q.queue, streamId, ts, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
 
@@ -789,12 +810,22 @@ func (m *mutationMgr) handleGetMutationQueueLWT(cmd Message) {
 	}()
 }
 
-//handleUpdateSliceMap updates the slice map
-func (m *mutationMgr) handleUpdateSliceMap(cmd Message) {
+//handleUpdateIndexInstMap updates the indexInstMap
+func (m *mutationMgr) handleUpdateIndexInstMap(cmd Message) {
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	m.sliceMap = cmd.(*MsgMutMgrUpdateSliceMap).GetSliceMap()
+	m.indexInstMap = cmd.(*MsgMutMgrUpdateInstMap).GetIndexInstMap()
+
+}
+
+//handleUpdateIndexPartnMap updates the indexPartnMap
+func (m *mutationMgr) handleUpdateIndexPartnMap(cmd Message) {
+
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	m.indexPartnMap = cmd.(*MsgMutMgrUpdatePartnMap).GetIndexPartnMap()
 
 }

@@ -28,6 +28,7 @@ const (
 	STREAM_READER_STREAM_DROP_DATA
 	STREAM_READER_STREAM_BEGIN
 	STREAM_READER_STREAM_END
+	STREAM_READER_SYNC
 	STREAM_READER_UPDATE_QUEUE_MAP
 	STREAM_READER_ERROR
 	STREAM_READER_SHUTDOWN
@@ -42,7 +43,8 @@ const (
 	MUT_MGR_DRAIN_MUTATION_QUEUE
 	MUT_MGR_GET_MUTATION_QUEUE_HWT
 	MUT_MGR_GET_MUTATION_QUEUE_LWT
-	MUT_MGR_UPDATE_SLICE_MAP
+	MUT_MGR_UPDATE_INSTANCE_MAP
+	MUT_MGR_UPDATE_PARTITION_MAP
 	MUT_MGR_SHUTDOWN
 )
 
@@ -98,22 +100,22 @@ func (m *MsgTimestamp) GetTimestamp() Timestamp {
 type MsgStream struct {
 	mType    MsgType
 	streamId StreamId
-	mutation *common.Mutation
+	meta     *MutationMeta
 }
 
 func (m *MsgStream) GetMsgType() MsgType {
 	return m.mType
 }
 
-func (m *MsgStream) GetMutationMsg() *common.Mutation {
-	return m.mutation
+func (m *MsgStream) GetMutationMeta() *MutationMeta {
+	return m.meta
 }
 
 func (m *MsgStream) GetStreamId() StreamId {
 	return m.streamId
 }
 
-//Stream Panic Message
+//Stream Error Message
 type MsgStreamError struct {
 	streamId StreamId
 	err      Error
@@ -132,16 +134,16 @@ func (m *MsgStreamError) GetError() Error {
 }
 
 //STREAM_READER_UPDATE_QUEUE_MAP
-type MsgUpdateIndexQueue struct {
-	indexQueueMap IndexQueueMap
+type MsgUpdateBucketQueue struct {
+	bucketQueueMap BucketQueueMap
 }
 
-func (m *MsgUpdateIndexQueue) GetMsgType() MsgType {
+func (m *MsgUpdateBucketQueue) GetMsgType() MsgType {
 	return STREAM_READER_UPDATE_QUEUE_MAP
 }
 
-func (m *MsgUpdateIndexQueue) GetIndexQueueMap() IndexQueueMap {
-	return m.indexQueueMap
+func (m *MsgUpdateBucketQueue) GetBucketQueueMap() BucketQueueMap {
+	return m.bucketQueueMap
 }
 
 //MUT_MGR_CREATE_STREAM
@@ -212,15 +214,28 @@ func (m *MsgMutMgrGetTimestamp) GetStreamId() StreamId {
 	return m.streamId
 }
 
-//MUT_MGR_UPDATE_SLICE_MAP
-type MsgMutMgrUpdateSliceMap struct {
-	sliceMap SliceMap
+//MUT_MGR_UPDATE_INSTANCE_MAP
+type MsgMutMgrUpdateInstMap struct {
+	indexInstMap common.IndexInstMap
 }
 
-func (m *MsgMutMgrUpdateSliceMap) GetMsgType() MsgType {
-	return MUT_MGR_UPDATE_SLICE_MAP
+func (m *MsgMutMgrUpdateInstMap) GetMsgType() MsgType {
+	return MUT_MGR_UPDATE_INSTANCE_MAP
 }
 
-func (m *MsgMutMgrUpdateSliceMap) GetSliceMap() SliceMap {
-	return m.sliceMap
+func (m *MsgMutMgrUpdateInstMap) GetIndexInstMap() common.IndexInstMap {
+	return m.indexInstMap
+}
+
+//MUT_MGR_UPDATE_PARTITION_MAP
+type MsgMutMgrUpdatePartnMap struct {
+	indexPartnMap common.IndexPartnMap
+}
+
+func (m *MsgMutMgrUpdatePartnMap) GetMsgType() MsgType {
+	return MUT_MGR_UPDATE_PARTITION_MAP
+}
+
+func (m *MsgMutMgrUpdatePartnMap) GetIndexPartnMap() common.IndexPartnMap {
+	return m.indexPartnMap
 }
