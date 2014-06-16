@@ -15,9 +15,13 @@ type Evaluator interface {
 	// (aka mutation-stream) is being setup.
 	Compile() error
 
-	// Evaluate document using DDL expressions for seconday-key. Will be
-	// called for every KV-mutation.
-	Evaluate(docid []byte, document []byte) (secKey []byte, err error)
+	// Transform for document using DDL expressions for seconday-key. Will
+	// be called for every KV-mutation.
+	Transform(docid []byte, document []byte) (secKey []byte, err error)
+
+	// PartitionKey for document using DDL expressions for seconday-key. Will
+	// be called for every KV-mutation.
+	PartitionKey(docid []byte, document []byte) (secKey []byte, err error)
 }
 
 // CompileN1QLExpression will take expressions defined in N1QL's DDL statement
@@ -34,10 +38,10 @@ func CompileN1QLExpression(expressions []string) ([]interface{}, error) {
 	return cExprs, nil
 }
 
-// EvaluateWithN1QL will use compile list of expression from N1QL's DDL
+// N1QLTransform will use compile list of expression from N1QL's DDL
 // statement and evaluate a document using them to return a secondary
 // key as JSON object.
-func EvaluateWithN1QL(document []byte, cExprs []interface{}) ([]byte, error) {
+func N1QLTransform(document []byte, cExprs []interface{}) ([]byte, error) {
 	arrValue := make([]*dparval.Value, 0, len(cExprs))
 	for _, cExpr := range cExprs {
 		expr := cExpr.(ast.Expression)

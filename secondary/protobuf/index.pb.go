@@ -13,7 +13,7 @@ var _ = proto.Marshal
 var _ = &json.SyntaxError{}
 var _ = math.Inf
 
-// IndexDefinition will be in one of the following state
+// IndexDefn will be in one of the following state
 type IndexState int32
 
 const (
@@ -141,134 +141,150 @@ func (x *ExprType) UnmarshalJSON(data []byte) error {
 }
 
 // Type of topology, including paritition type to be used for the index.
-type PartitionType int32
+type PartitionScheme int32
 
 const (
-	PartitionType_SimpleKeyParitition PartitionType = 1
+	PartitionScheme_SimpleKeyParitition PartitionScheme = 1
 )
 
-var PartitionType_name = map[int32]string{
+var PartitionScheme_name = map[int32]string{
 	1: "SimpleKeyParitition",
 }
-var PartitionType_value = map[string]int32{
+var PartitionScheme_value = map[string]int32{
 	"SimpleKeyParitition": 1,
 }
 
-func (x PartitionType) Enum() *PartitionType {
-	p := new(PartitionType)
+func (x PartitionScheme) Enum() *PartitionScheme {
+	p := new(PartitionScheme)
 	*p = x
 	return p
 }
-func (x PartitionType) String() string {
-	return proto.EnumName(PartitionType_name, int32(x))
+func (x PartitionScheme) String() string {
+	return proto.EnumName(PartitionScheme_name, int32(x))
 }
-func (x *PartitionType) UnmarshalJSON(data []byte) error {
-	value, err := proto.UnmarshalJSONEnum(PartitionType_value, data, "PartitionType")
+func (x *PartitionScheme) UnmarshalJSON(data []byte) error {
+	value, err := proto.UnmarshalJSONEnum(PartitionScheme_value, data, "PartitionScheme")
 	if err != nil {
 		return err
 	}
-	*x = PartitionType(value)
+	*x = PartitionScheme(value)
 	return nil
 }
 
-type IndexDefinition struct {
-	Bucket           *string        `protobuf:"bytes,1,req,name=bucket" json:"bucket,omitempty"`
-	IsPrimary        *bool          `protobuf:"varint,2,req,name=isPrimary" json:"isPrimary,omitempty"`
-	Name             *string        `protobuf:"bytes,3,req,name=name" json:"name,omitempty"`
-	Uuid             *uint64        `protobuf:"varint,4,req,name=uuid" json:"uuid,omitempty"`
-	Using            *StorageType   `protobuf:"varint,5,req,name=using,enum=protobuf.StorageType" json:"using,omitempty"`
-	ExprType         *ExprType      `protobuf:"varint,6,req,name=exprType,enum=protobuf.ExprType" json:"exprType,omitempty"`
-	PartitionType    *PartitionType `protobuf:"varint,8,req,name=partitionType,enum=protobuf.PartitionType" json:"partitionType,omitempty"`
-	Expressions      []string       `protobuf:"bytes,9,rep,name=expressions" json:"expressions,omitempty"`
-	XXX_unrecognized []byte         `json:"-"`
+type IndexDefn struct {
+	DefnId           *uint64          `protobuf:"varint,1,req,name=defnId" json:"defnId,omitempty"`
+	Bucket           *string          `protobuf:"bytes,2,req,name=bucket" json:"bucket,omitempty"`
+	IsPrimary        *bool            `protobuf:"varint,3,req,name=isPrimary" json:"isPrimary,omitempty"`
+	Name             *string          `protobuf:"bytes,4,req,name=name" json:"name,omitempty"`
+	Using            *StorageType     `protobuf:"varint,5,req,name=using,enum=protobuf.StorageType" json:"using,omitempty"`
+	PartitionScheme  *PartitionScheme `protobuf:"varint,6,req,name=partitionScheme,enum=protobuf.PartitionScheme" json:"partitionScheme,omitempty"`
+	PartnExpression  *string          `protobuf:"bytes,7,req,name=partnExpression" json:"partnExpression,omitempty"`
+	ExprType         *ExprType        `protobuf:"varint,8,req,name=exprType,enum=protobuf.ExprType" json:"exprType,omitempty"`
+	SecExpressions   []string         `protobuf:"bytes,9,rep,name=secExpressions" json:"secExpressions,omitempty"`
+	XXX_unrecognized []byte           `json:"-"`
 }
 
-func (m *IndexDefinition) Reset()         { *m = IndexDefinition{} }
-func (m *IndexDefinition) String() string { return proto.CompactTextString(m) }
-func (*IndexDefinition) ProtoMessage()    {}
+func (m *IndexDefn) Reset()         { *m = IndexDefn{} }
+func (m *IndexDefn) String() string { return proto.CompactTextString(m) }
+func (*IndexDefn) ProtoMessage()    {}
 
-func (m *IndexDefinition) GetBucket() string {
+func (m *IndexDefn) GetDefnId() uint64 {
+	if m != nil && m.DefnId != nil {
+		return *m.DefnId
+	}
+	return 0
+}
+
+func (m *IndexDefn) GetBucket() string {
 	if m != nil && m.Bucket != nil {
 		return *m.Bucket
 	}
 	return ""
 }
 
-func (m *IndexDefinition) GetIsPrimary() bool {
+func (m *IndexDefn) GetIsPrimary() bool {
 	if m != nil && m.IsPrimary != nil {
 		return *m.IsPrimary
 	}
 	return false
 }
 
-func (m *IndexDefinition) GetName() string {
+func (m *IndexDefn) GetName() string {
 	if m != nil && m.Name != nil {
 		return *m.Name
 	}
 	return ""
 }
 
-func (m *IndexDefinition) GetUuid() uint64 {
-	if m != nil && m.Uuid != nil {
-		return *m.Uuid
-	}
-	return 0
-}
-
-func (m *IndexDefinition) GetUsing() StorageType {
+func (m *IndexDefn) GetUsing() StorageType {
 	if m != nil && m.Using != nil {
 		return *m.Using
 	}
 	return StorageType_View
 }
 
-func (m *IndexDefinition) GetExprType() ExprType {
+func (m *IndexDefn) GetPartitionScheme() PartitionScheme {
+	if m != nil && m.PartitionScheme != nil {
+		return *m.PartitionScheme
+	}
+	return PartitionScheme_SimpleKeyParitition
+}
+
+func (m *IndexDefn) GetPartnExpression() string {
+	if m != nil && m.PartnExpression != nil {
+		return *m.PartnExpression
+	}
+	return ""
+}
+
+func (m *IndexDefn) GetExprType() ExprType {
 	if m != nil && m.ExprType != nil {
 		return *m.ExprType
 	}
 	return ExprType_Simple
 }
 
-func (m *IndexDefinition) GetPartitionType() PartitionType {
-	if m != nil && m.PartitionType != nil {
-		return *m.PartitionType
-	}
-	return PartitionType_SimpleKeyParitition
-}
-
-func (m *IndexDefinition) GetExpressions() []string {
+func (m *IndexDefn) GetSecExpressions() []string {
 	if m != nil {
-		return m.Expressions
+		return m.SecExpressions
 	}
 	return nil
 }
 
-type Index struct {
-	State            *IndexState      `protobuf:"varint,1,req,name=state,enum=protobuf.IndexState" json:"state,omitempty"`
-	Indexinfo        *IndexDefinition `protobuf:"bytes,2,req,name=indexinfo" json:"indexinfo,omitempty"`
-	Partition        *IndexPartition  `protobuf:"bytes,3,req,name=partition" json:"partition,omitempty"`
-	XXX_unrecognized []byte           `json:"-"`
+type IndexInst struct {
+	InstId           *uint64         `protobuf:"varint,1,req,name=instId" json:"instId,omitempty"`
+	State            *IndexState     `protobuf:"varint,2,req,name=state,enum=protobuf.IndexState" json:"state,omitempty"`
+	Definition       *IndexDefn      `protobuf:"bytes,3,req,name=definition" json:"definition,omitempty"`
+	Partition        *IndexPartition `protobuf:"bytes,4,req,name=partition" json:"partition,omitempty"`
+	XXX_unrecognized []byte          `json:"-"`
 }
 
-func (m *Index) Reset()         { *m = Index{} }
-func (m *Index) String() string { return proto.CompactTextString(m) }
-func (*Index) ProtoMessage()    {}
+func (m *IndexInst) Reset()         { *m = IndexInst{} }
+func (m *IndexInst) String() string { return proto.CompactTextString(m) }
+func (*IndexInst) ProtoMessage()    {}
 
-func (m *Index) GetState() IndexState {
+func (m *IndexInst) GetInstId() uint64 {
+	if m != nil && m.InstId != nil {
+		return *m.InstId
+	}
+	return 0
+}
+
+func (m *IndexInst) GetState() IndexState {
 	if m != nil && m.State != nil {
 		return *m.State
 	}
 	return IndexState_IndexInitial
 }
 
-func (m *Index) GetIndexinfo() *IndexDefinition {
+func (m *IndexInst) GetDefinition() *IndexDefn {
 	if m != nil {
-		return m.Indexinfo
+		return m.Definition
 	}
 	return nil
 }
 
-func (m *Index) GetPartition() *IndexPartition {
+func (m *IndexInst) GetPartition() *IndexPartition {
 	if m != nil {
 		return m.Partition
 	}
@@ -312,5 +328,5 @@ func init() {
 	proto.RegisterEnum("protobuf.IndexState", IndexState_name, IndexState_value)
 	proto.RegisterEnum("protobuf.StorageType", StorageType_name, StorageType_value)
 	proto.RegisterEnum("protobuf.ExprType", ExprType_name, ExprType_value)
-	proto.RegisterEnum("protobuf.PartitionType", PartitionType_name, PartitionType_value)
+	proto.RegisterEnum("protobuf.PartitionScheme", PartitionScheme_name, PartitionScheme_value)
 }

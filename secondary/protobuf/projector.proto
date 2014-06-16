@@ -27,7 +27,7 @@ message MutationStreamRequest {
     repeated string             buckets           = 4;
     repeated BranchTimestamp    restartTimestamps = 5; // list of timestamps, one per bucket
     // list of index applicable for this stream, optional as well
-    repeated Index              indexes           = 6;
+    repeated IndexInst          instances         = 6;
 }
 
 message MutationStreamResponse {
@@ -51,15 +51,15 @@ message UpdateMutationStreamRequest {
     repeated string             pools             = 3;
     repeated string             buckets           = 4;
     repeated BranchTimestamp    restartTimestamps = 5; // list of timestamps, one per bucket
-    repeated Index              indexes           = 6;
+    repeated IndexInst          instances         = 6;
 }
 
 // Requested by third party component that wants to subscribe to a topic-name.
 // Error message will be sent as response
 message SubscribeStreamRequest {
-    required string topic   = 1; // must be an already started stream.
-    required uint32 flag    = 2;
-    repeated Index  indexes = 3;
+    required string    topic     = 1; // must be an already started stream.
+    required uint32    flag      = 2;
+    repeated IndexInst instances = 3;
 }
 
 // Requested by indexer / coordinator to inform router to re-connect with

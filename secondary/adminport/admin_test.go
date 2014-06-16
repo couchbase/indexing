@@ -10,14 +10,14 @@ import (
 var addr = "http://localhost:9999"
 
 type testMessage struct {
-	Bucket        string `json:"bucket"`
-	IsPrimary     bool   `json:"isPrimary"`
-	IName         string `json:"name"`
-	Uuid          uint64 `json:"uuid"`
-	Using         string `json:"using"`
-	ExprType      string `json:"exprType"`
-	PartitionType string `json:"partitionType"`
-	Expression    string `json:"expression"`
+	DefnID          uint64 `json:"defnId"`
+	Bucket          string `json:"bucket"`
+	IsPrimary       bool   `json:"isPrimary"`
+	IName           string `json:"name"`
+	Using           string `json:"using"`
+	ExprType        string `json:"exprType"`
+	PartitionScheme string `json:"partitionType"`
+	Expression      string `json:"expression"`
 }
 
 func TestLoopback(t *testing.T) {
@@ -28,14 +28,14 @@ func TestLoopback(t *testing.T) {
 
 	client := NewHTTPClient(addr, common.AdminportURLPrefix)
 	req := &testMessage{
-		Bucket:        "default",
-		IsPrimary:     false,
-		IName:         "example-index",
-		Uuid:          uint64(0x1234567812345678),
-		Using:         "forrestdb",
-		ExprType:      "n1ql",
-		PartitionType: "simplekeypartition",
-		Expression:    "x+1",
+		DefnID:          uint64(0x1234567812345678),
+		Bucket:          "default",
+		IsPrimary:       false,
+		IName:           "example-index",
+		Using:           "forrestdb",
+		ExprType:        "n1ql",
+		PartitionScheme: "simplekeypartition",
+		Expression:      "x+1",
 	}
 	resp := &testMessage{}
 	if err := client.Request(req, resp); err != nil {
@@ -57,14 +57,14 @@ func TestLoopback(t *testing.T) {
 func BenchmarkClientRequest(b *testing.B) {
 	client := NewHTTPClient(addr, common.AdminportURLPrefix)
 	req := &testMessage{
-		Bucket:        "default",
-		IsPrimary:     false,
-		IName:         "example-index",
-		Uuid:          uint64(0x1234567812345678),
-		Using:         "forrestdb",
-		ExprType:      "n1ql",
-		PartitionType: "simplekeypartition",
-		Expression:    "x+1",
+		DefnID:          uint64(0x1234567812345678),
+		Bucket:          "default",
+		IsPrimary:       false,
+		IName:           "example-index",
+		Using:           "forrestdb",
+		ExprType:        "n1ql",
+		PartitionScheme: "simplekeypartition",
+		Expression:      "x+1",
 	}
 	resp := &testMessage{}
 

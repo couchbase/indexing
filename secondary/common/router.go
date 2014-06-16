@@ -20,13 +20,13 @@ type Router interface {
 
 	// UpsertEndpoints return a list of endpoints <host:port> to which Upserted
 	// secondary-key, for this uuid, need to be published.
-	UpsertEndpoints(vbno uint16, seqno uint64, docid, key, oldkey []byte) []string
+	UpsertEndpoints(vbno uint16, seqno uint64, docid, partKey, key, oldKey []byte) []string
 
 	// UpsertDeletionEndpoints return a list of endpoints <host:port> to which
 	// UpsertDeletion secondary-key, for this uuid, need to be published.
-	UpsertDeletionEndpoints(vbno uint16, seqno uint64, docid, key, oldkey []byte) []string
+	UpsertDeletionEndpoints(vbno uint16, seqno uint64, docid, partKey, key, oldKey []byte) []string
 
 	// DeletionEndpoints return a list of endpoints <host:port> to which
 	// Deletion docid/secondary-key, for this uuid,  need to be published.
-	DeletionEndpoints(vbno uint16, seqno uint64, docid, oldkey []byte) []string
+	DeletionEndpoints(vbno uint16, seqno uint64, docid, partKey, oldKey []byte) []string
 }

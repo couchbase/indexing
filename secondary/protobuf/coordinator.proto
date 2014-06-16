@@ -59,7 +59,7 @@ message IndexerInitRequest {
 }
 
 message IndexerInitResponse {
-    repeated Index indexes = 1;
+    repeated IndexInst instances = 1;
 }
 
 

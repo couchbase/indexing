@@ -31,57 +31,60 @@ func NewEngine(feed *Feed, uuid uint64, evaluator c.Evaluator, router c.Router) 
 // AddToEndpoints create KeyVersions for single `uuid`.
 func (engine *Engine) AddToEndpoints(m *MutationEvent, kvForEndpoints map[string]*c.KeyVersions) error {
 	uuid := engine.uuid
-	evaluator := engine.evaluator
-	router := engine.router
+	evaluator, router := engine.evaluator, engine.router
 
-	vbno, seqno, k := m.Vbucket, m.Seqno, m.Key // Key is Docid
+	vbno, seqno, docid := m.Vbucket, m.Seqno, m.Key // Key is Docid
 	switch m.Opcode {
 	case OpMutation:
-		sk, skold, err := doEvaluate(m, uuid, evaluator)
+		pkey, nkey, okey, err := doEvaluate(m, uuid, evaluator)
 		if err != nil {
 			return err
 		}
 		// Upsert
-		raddrs := router.UpsertEndpoints(vbno, seqno, k, sk, skold)
+		raddrs := router.UpsertEndpoints(vbno, seqno, docid, pkey, nkey, okey)
 		for _, raddr := range raddrs {
-			kvForEndpoints[raddr].AddUpsert(uuid, sk, skold)
+			kvForEndpoints[raddr].AddUpsert(uuid, nkey, okey)
 		}
 		// UpsertDeletion
-		raddrs = router.UpsertDeletionEndpoints(vbno, seqno, k, sk, skold)
+		raddrs =
+			router.UpsertDeletionEndpoints(vbno, seqno, docid, pkey, nkey, okey)
 		for _, raddr := range raddrs {
-			kvForEndpoints[raddr].AddUpsertDeletion(uuid, skold)
+			kvForEndpoints[raddr].AddUpsertDeletion(uuid, okey)
 		}
 
 	case OpDeletion:
-		_, skold, err := doEvaluate(m, uuid, evaluator)
+		pkey, _, okey, err := doEvaluate(m, uuid, evaluator)
 		if err != nil {
 			return err
 		}
 		// Deletion
-		raddrs := router.DeletionEndpoints(vbno, seqno, k, skold)
+		raddrs := router.DeletionEndpoints(vbno, seqno, docid, pkey, okey)
 		for _, raddr := range raddrs {
-			kvForEndpoints[raddr].AddDeletion(uuid, skold)
+			kvForEndpoints[raddr].AddDeletion(uuid, okey)
 		}
 	}
 	return nil
 }
 
-func doEvaluate(m *MutationEvent, uuid uint64, evaluator c.Evaluator) (seckeyN, seckeyO []byte, err error) {
+func doEvaluate(m *MutationEvent, uuid uint64, evaluator c.Evaluator) (pkey, nkey, okey []byte, err error) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			err = fmt.Errorf("%v", r)
 		}
 	}()
 
-	if len(m.OldValue) > 0 { // project old secondary key
-		if seckeyO, err = evaluator.Evaluate(m.Key, m.OldValue); err != nil {
-			return nil, nil, err
-		}
-	}
 	if len(m.Value) > 0 { // project new secondary key
-		if seckeyN, err = evaluator.Evaluate(m.Key, m.Value); err != nil {
-			return nil, nil, err
+		if pkey, err = evaluator.PartitionKey(m.Key, m.Value); err != nil {
+			return
+		}
+		if nkey, err = evaluator.Transform(m.Key, m.Value); err != nil {
+			return
 		}
 	}
-	return seckeyO, seckeyN, nil
+	if len(m.OldValue) > 0 { // project old secondary key
+		if okey, err = evaluator.Transform(m.Key, m.OldValue); err != nil {
+			return
+		}
+	}
+	return pkey, okey, nkey, nil
 }

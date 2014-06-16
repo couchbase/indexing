@@ -1,3 +1,5 @@
+- timestamp naming, TsVb, TsVbFull, TsVbuuid, TsVbuuidFull.
+- IndexInstance or IndexUUID for key-versions.
 - VbKeyVersions:Uuid leads to confusion. let it look same as VbKeyVersions
   defined in protobuf.
 - use timer.Tick() instead of reloading with time.After().

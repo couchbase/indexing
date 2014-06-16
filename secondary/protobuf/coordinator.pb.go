@@ -183,17 +183,17 @@ func (m *IndexerInitRequest) GetIndexerid() uint32 {
 }
 
 type IndexerInitResponse struct {
-	Indexes          []*Index `protobuf:"bytes,1,rep,name=indexes" json:"indexes,omitempty"`
-	XXX_unrecognized []byte   `json:"-"`
+	Instances        []*IndexInst `protobuf:"bytes,1,rep,name=instances" json:"instances,omitempty"`
+	XXX_unrecognized []byte       `json:"-"`
 }
 
 func (m *IndexerInitResponse) Reset()         { *m = IndexerInitResponse{} }
 func (m *IndexerInitResponse) String() string { return proto.CompactTextString(m) }
 func (*IndexerInitResponse) ProtoMessage()    {}
 
-func (m *IndexerInitResponse) GetIndexes() []*Index {
+func (m *IndexerInitResponse) GetInstances() []*IndexInst {
 	if m != nil {
-		return m.Indexes
+		return m.Instances
 	}
 	return nil
 }

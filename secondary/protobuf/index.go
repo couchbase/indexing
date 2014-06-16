@@ -1,10 +1,10 @@
 // support functions for index message
 
 // TODO: Evaluator and Router interface are not really dependant on protobuf
-// definition of an index. At later point we might want to abstract index
-// definitions, partition definitions into native structures, at which point
-// we shall move Evaluator and Router implementation to native structures as
-// well.
+// definition of an index instance. At later point we might want to abstract
+// index definitions, partition definitions into native structures, at which
+// point we shall move Evaluator and Router implementation to native structures
+// as well.
 
 package protobuf
 
@@ -13,75 +13,98 @@ import (
 )
 
 // IndexEvaluator implements `Evaluator` interface for protobuf definition of
-// an index.
+// an index instance.
 type IndexEvaluator struct {
-	c_exprs []interface{} // compiled expression
-	index   *Index
+	skExprs  []interface{} // compiled expression
+	pkExpr   interface{}   // compiled expression
+	instance *IndexInst
 }
 
 // NewIndexEvaluator returns a reference to a new instance of IndexEvaluator.
-func NewIndexEvaluator(index *Index) *IndexEvaluator {
-	return &IndexEvaluator{index: index}
+func NewIndexEvaluator(instance *IndexInst) *IndexEvaluator {
+	return &IndexEvaluator{instance: instance}
 }
 
 // Evaluator interface methods
 
 func (ie *IndexEvaluator) Bucket() string {
-	return ie.index.GetIndexinfo().GetBucket()
+	return ie.instance.GetDefinition().GetBucket()
 }
 
 func (ie *IndexEvaluator) Compile() (err error) {
-	info := ie.index.GetIndexinfo()
+	info := ie.instance.GetDefinition()
 	switch info.GetExprType() {
 	case ExprType_Simple:
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
-		ie.c_exprs, err = c.CompileN1QLExpression(info.GetExpressions())
+		ie.skExprs, err = c.CompileN1QLExpression(info.GetSecExpressions())
+		if err != nil {
+			return err
+		}
+		expr := info.GetPartnExpression()
+		cExprs, err := c.CompileN1QLExpression([]string{expr})
+		if err != nil {
+			return err
+		}
+		ie.pkExpr = cExprs[0]
 	}
 	return
 }
 
-func (ie *IndexEvaluator) Evaluate(docid []byte, document []byte) ([]byte, error) {
-	info := ie.index.GetIndexinfo()
+func (ie *IndexEvaluator) PartitionKey(docid []byte, document []byte) (partKey []byte, err error) {
+	info := ie.instance.GetDefinition()
 	if info.GetIsPrimary() {
-		return docid, nil
+		return nil, nil
 	}
 
-	var secKey []byte
-	var err error
-
-	exprType := ie.index.GetIndexinfo().GetExprType()
+	exprType := ie.instance.GetDefinition().GetExprType() // ???
 	switch exprType {
 	case ExprType_Simple:
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
-		secKey, err = c.EvaluateWithN1QL(document, ie.c_exprs)
+		partKey, err = c.N1QLTransform(document, []interface{}{ie.pkExpr})
+	}
+	return partKey, err
+}
+
+func (ie *IndexEvaluator) Transform(docid []byte, document []byte) (secKey []byte, err error) {
+	info := ie.instance.GetDefinition()
+	if info.GetIsPrimary() {
+		return docid, nil
+	}
+
+	exprType := ie.instance.GetDefinition().GetExprType()
+	switch exprType {
+	case ExprType_Simple:
+	case ExprType_JavaScript:
+	case ExprType_N1QL:
+		secKey, err = c.N1QLTransform(document, ie.skExprs)
 	}
 	return secKey, err
 }
 
 // Router interface methods
 
-func (index *Index) Bucket() string {
-	return index.GetIndexinfo().GetBucket()
+func (instance *IndexInst) Bucket() string {
+	return instance.GetDefinition().GetBucket()
 }
 
-func (index *Index) UuidEndpoints() []string {
+func (instance *IndexInst) UuidEndpoints() []string {
 	return []string{}
 }
 
-func (index *Index) CoordinatorEndpoint() string {
+func (instance *IndexInst) CoordinatorEndpoint() string {
 	return ""
 }
 
-func (index *Index) UpsertEndpoints(vbno uint16, seqno uint64, docid, key, oldkey []byte) []string {
+func (instance *IndexInst) UpsertEndpoints(vbno uint16, seqno uint64, docid, partKey, key, oldKey []byte) []string {
 	return []string{}
 }
 
-func (index *Index) UpsertDeletionEndpoints(vbno uint16, seqno uint64, docid, key, oldkey []byte) []string {
+func (instance *IndexInst) UpsertDeletionEndpoints(vbno uint16, seqno uint64, docid, partKey, key, oldKey []byte) []string {
 	return []string{}
 }
 
-func (index *Index) DeletionEndpoints(vbno uint16, seqno uint64, docid, oldkey []byte) []string {
+func (instance *IndexInst) DeletionEndpoints(vbno uint16, seqno uint64, docid, partKey, oldKey []byte) []string {
 	return []string{}
 }

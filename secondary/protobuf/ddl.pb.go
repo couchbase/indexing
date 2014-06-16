@@ -15,15 +15,15 @@ var _ = math.Inf
 
 // Requested by admin console to create a new index.
 type CreateIndexRequest struct {
-	Index            *IndexDefinition `protobuf:"bytes,1,req,name=index" json:"index,omitempty"`
-	XXX_unrecognized []byte           `json:"-"`
+	Index            *IndexDefn `protobuf:"bytes,1,req,name=index" json:"index,omitempty"`
+	XXX_unrecognized []byte     `json:"-"`
 }
 
 func (m *CreateIndexRequest) Reset()         { *m = CreateIndexRequest{} }
 func (m *CreateIndexRequest) String() string { return proto.CompactTextString(m) }
 func (*CreateIndexRequest) ProtoMessage()    {}
 
-func (m *CreateIndexRequest) GetIndex() *IndexDefinition {
+func (m *CreateIndexRequest) GetIndex() *IndexDefn {
 	if m != nil {
 		return m.Index
 	}
@@ -72,9 +72,9 @@ func (m *IndexesRequest) GetIndexUuids() []uint64 {
 }
 
 type IndexesResponse struct {
-	Err              *Error   `protobuf:"bytes,1,req,name=err" json:"err,omitempty"`
-	Indexes          []*Index `protobuf:"bytes,2,rep,name=indexes" json:"indexes,omitempty"`
-	XXX_unrecognized []byte   `json:"-"`
+	Err              *Error       `protobuf:"bytes,1,req,name=err" json:"err,omitempty"`
+	Instances        []*IndexInst `protobuf:"bytes,2,rep,name=instances" json:"instances,omitempty"`
+	XXX_unrecognized []byte       `json:"-"`
 }
 
 func (m *IndexesResponse) Reset()         { *m = IndexesResponse{} }
@@ -88,9 +88,9 @@ func (m *IndexesResponse) GetErr() *Error {
 	return nil
 }
 
-func (m *IndexesResponse) GetIndexes() []*Index {
+func (m *IndexesResponse) GetInstances() []*IndexInst {
 	if m != nil {
-		return m.Indexes
+		return m.Instances
 	}
 	return nil
 }

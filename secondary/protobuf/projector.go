@@ -10,10 +10,10 @@ func NewMutationStreamResponse(req interface{}) *MutationStreamResponse {
 	var m *MutationStreamResponse
 	switch val := req.(type) {
 	case *MutationStreamRequest:
-		indexes := val.GetIndexes()
+		indexes := val.GetInstances()
 		uuids := make([]uint64, 0, len(indexes))
 		for _, index := range indexes {
-			uuids = append(uuids, index.GetIndexinfo().GetUuid())
+			uuids = append(uuids, index.GetDefinition().GetDefnId())
 		}
 		m = &MutationStreamResponse{
 			Topic:      proto.String(val.GetTopic()),

@@ -79,8 +79,8 @@ type MutationStreamRequest struct {
 	Buckets           []string           `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
 	RestartTimestamps []*BranchTimestamp `protobuf:"bytes,5,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
 	// list of index applicable for this stream, optional as well
-	Indexes          []*Index `protobuf:"bytes,6,rep,name=indexes" json:"indexes,omitempty"`
-	XXX_unrecognized []byte   `json:"-"`
+	Instances        []*IndexInst `protobuf:"bytes,6,rep,name=instances" json:"instances,omitempty"`
+	XXX_unrecognized []byte       `json:"-"`
 }
 
 func (m *MutationStreamRequest) Reset()         { *m = MutationStreamRequest{} }
@@ -122,9 +122,9 @@ func (m *MutationStreamRequest) GetRestartTimestamps() []*BranchTimestamp {
 	return nil
 }
 
-func (m *MutationStreamRequest) GetIndexes() []*Index {
+func (m *MutationStreamRequest) GetInstances() []*IndexInst {
 	if m != nil {
-		return m.Indexes
+		return m.Instances
 	}
 	return nil
 }
@@ -211,7 +211,7 @@ type UpdateMutationStreamRequest struct {
 	Pools             []string           `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
 	Buckets           []string           `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
 	RestartTimestamps []*BranchTimestamp `protobuf:"bytes,5,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
-	Indexes           []*Index           `protobuf:"bytes,6,rep,name=indexes" json:"indexes,omitempty"`
+	Instances         []*IndexInst       `protobuf:"bytes,6,rep,name=instances" json:"instances,omitempty"`
 	XXX_unrecognized  []byte             `json:"-"`
 }
 
@@ -254,9 +254,9 @@ func (m *UpdateMutationStreamRequest) GetRestartTimestamps() []*BranchTimestamp 
 	return nil
 }
 
-func (m *UpdateMutationStreamRequest) GetIndexes() []*Index {
+func (m *UpdateMutationStreamRequest) GetInstances() []*IndexInst {
 	if m != nil {
-		return m.Indexes
+		return m.Instances
 	}
 	return nil
 }
@@ -264,10 +264,10 @@ func (m *UpdateMutationStreamRequest) GetIndexes() []*Index {
 // Requested by third party component that wants to subscribe to a topic-name.
 // Error message will be sent as response
 type SubscribeStreamRequest struct {
-	Topic            *string  `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
-	Flag             *uint32  `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
-	Indexes          []*Index `protobuf:"bytes,3,rep,name=indexes" json:"indexes,omitempty"`
-	XXX_unrecognized []byte   `json:"-"`
+	Topic            *string      `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	Flag             *uint32      `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
+	Instances        []*IndexInst `protobuf:"bytes,3,rep,name=instances" json:"instances,omitempty"`
+	XXX_unrecognized []byte       `json:"-"`
 }
 
 func (m *SubscribeStreamRequest) Reset()         { *m = SubscribeStreamRequest{} }
@@ -288,9 +288,9 @@ func (m *SubscribeStreamRequest) GetFlag() uint32 {
 	return 0
 }
 
-func (m *SubscribeStreamRequest) GetIndexes() []*Index {
+func (m *SubscribeStreamRequest) GetInstances() []*IndexInst {
 	if m != nil {
-		return m.Indexes
+		return m.Instances
 	}
 	return nil
 }

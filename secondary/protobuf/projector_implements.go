@@ -60,11 +60,11 @@ func (req *MutationStreamRequest) RestartTimestamp(bucket string) *c.Timestamp {
 }
 
 func (req *MutationStreamRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {
-	return getEvaluators(req.GetIndexes())
+	return getEvaluators(req.GetInstances())
 }
 
 func (req *MutationStreamRequest) GetRouters() (map[uint64]c.Router, error) {
-	return getRouters(req.GetIndexes())
+	return getRouters(req.GetInstances())
 }
 
 // interface API for RequestReader and Subscriber
@@ -105,11 +105,11 @@ func (req *UpdateMutationStreamRequest) RestartTimestamp(bucket string) *c.Times
 }
 
 func (req *UpdateMutationStreamRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {
-	return getEvaluators(req.GetIndexes())
+	return getEvaluators(req.GetInstances())
 }
 
 func (req *UpdateMutationStreamRequest) GetRouters() (map[uint64]c.Router, error) {
-	return getRouters(req.GetIndexes())
+	return getRouters(req.GetInstances())
 }
 
 // interface API for flags and Subscriber
@@ -125,35 +125,35 @@ func (req *SubscribeStreamRequest) IsDeleteSubscription() bool {
 }
 
 func (req *SubscribeStreamRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {
-	return getEvaluators(req.GetIndexes())
+	return getEvaluators(req.GetInstances())
 }
 
 func (req *SubscribeStreamRequest) GetRouters() (map[uint64]c.Router, error) {
-	return getRouters(req.GetIndexes())
+	return getRouters(req.GetInstances())
 }
 
 // TODO: add other types of entities
-func getEvaluators(indexes []*Index) (map[uint64]c.Evaluator, error) {
+func getEvaluators(instances []*IndexInst) (map[uint64]c.Evaluator, error) {
 	var err error
 
 	entities := make(map[uint64]c.Evaluator, 0)
-	for _, index := range indexes {
-		info := index.GetIndexinfo()
-		ie := NewIndexEvaluator(index)
+	for _, instance := range instances {
+		defn := instance.GetDefinition()
+		ie := NewIndexEvaluator(instance)
 		if err = ie.Compile(); err != nil {
 			return nil, err
 		}
-		entities[info.GetUuid()] = ie
+		entities[defn.GetDefnId()] = ie
 	}
 	return entities, nil
 }
 
 // TODO: add other types of entities
-func getRouters(indexes []*Index) (map[uint64]c.Router, error) {
+func getRouters(instances []*IndexInst) (map[uint64]c.Router, error) {
 	entities := make(map[uint64]c.Router, 0)
-	for _, index := range indexes {
-		info := index.GetIndexinfo()
-		entities[info.GetUuid()] = index
+	for _, instance := range instances {
+		defn := instance.GetDefinition()
+		entities[defn.GetDefnId()] = instance
 	}
 	return entities, nil
 }

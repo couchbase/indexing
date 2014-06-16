@@ -91,7 +91,7 @@ type LocalCreateIndexRequest struct {
 	// first request, state will be IndexInitial
 	// second request, state will be IndexLoading
 	State            *IndexState `protobuf:"varint,1,req,name=state,enum=protobuf.IndexState" json:"state,omitempty"`
-	Index            *Index      `protobuf:"bytes,2,opt,name=index" json:"index,omitempty"`
+	Instances        *IndexInst  `protobuf:"bytes,2,opt,name=instances" json:"instances,omitempty"`
 	XXX_unrecognized []byte      `json:"-"`
 }
 
@@ -106,9 +106,9 @@ func (m *LocalCreateIndexRequest) GetState() IndexState {
 	return IndexState_IndexInitial
 }
 
-func (m *LocalCreateIndexRequest) GetIndex() *Index {
+func (m *LocalCreateIndexRequest) GetInstances() *IndexInst {
 	if m != nil {
-		return m.Index
+		return m.Instances
 	}
 	return nil
 }

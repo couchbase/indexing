@@ -8,7 +8,7 @@ import "index.proto";
 
 // Requested by admin console to create a new index.
 message CreateIndexRequest {
-    required IndexDefinition index = 1; // will be valid only when state is IndexInitial
+    required IndexDefn index = 1; // will be valid only when state is IndexInitial
 }
 
 message CreateIndexResponse {
@@ -23,8 +23,8 @@ message IndexesRequest {
 }
 
 message IndexesResponse {
-    required Error  err     = 1;
-    repeated Index indexes = 2;
+    required Error     err     = 1;
+    repeated IndexInst instances = 2;
 }
 
 

@@ -36,8 +36,8 @@ message UpdateIndexPartitionRequest {
 message LocalCreateIndexRequest {
     // first request, state will be IndexInitial
     // second request, state will be IndexLoading
-    required IndexState state = 1;
-    optional Index      index = 2; // will be valid only when state is IndexInitial
+    required IndexState state     = 1;
+    optional IndexInst  instances = 2; // will be valid only when state is IndexInitial
 }
 
 message LocalCreateIndexResponse {
