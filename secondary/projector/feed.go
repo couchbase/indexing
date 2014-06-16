@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"log"
 	"sort"
 )
 
@@ -35,9 +34,11 @@ type Feed struct {
 	failoverTimestamps map[string]*c.Timestamp // indexed by bucket name
 	kvTimestamps       map[string]*c.Timestamp // indexed by bucket name
 	// gen-server
-	reqch     chan []interface{}
-	finch     chan bool
+	reqch chan []interface{}
+	finch chan bool
+	// misc.
 	logPrefix string
+	stats     *c.ComponentStat
 }
 
 // NewFeed creates a new instance of mutation stream for specified topic. Spawns
@@ -61,8 +62,10 @@ func NewFeed(p *Projector, topic string, request RequestReader) (*Feed, error) {
 		engines:            make(map[uint64]*Engine),
 		reqch:              make(chan []interface{}, c.GenserverChannelSize),
 		finch:              make(chan bool),
-		logPrefix:          fmt.Sprintf("feed %v", topic),
+		logPrefix:          fmt.Sprintf("[feed %q]", topic),
 	}
+	feed.stats = feed.newStats()
+
 	// fresh start of a mutation stream.
 	for i, bucket := range buckets {
 		// bucket-feed
@@ -78,7 +81,7 @@ func NewFeed(p *Projector, topic string, request RequestReader) (*Feed, error) {
 		feed.bfeeds[bucket] = bfeed
 	}
 	go feed.genServer(feed.reqch)
-	log.Printf("%v, initialized ...\n", feed.logPrefix)
+	c.Infof("%v activated ...\n", feed.logPrefix)
 	return feed, nil
 }
 
@@ -93,6 +96,7 @@ const (
 	fCmdUpdateEngines
 	fCmdDeleteEngines
 	fCmdRepairEndpoints
+	fCmdGetStatistics
 	fCmdCloseFeed
 )
 
@@ -174,6 +178,15 @@ func (feed *Feed) RepairEndpoints() error {
 	return c.OpError(err, resp, 0)
 }
 
+// GetStatistics will recursively get statistics for feed and its underlying
+// workers.
+func (feed *Feed) GetStatistics() map[string]interface{} {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdGetStatistics, respch}
+	resp, _ := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return resp[1].(map[string]interface{})
+}
+
 // CloseFeed will shutdown this feed and upstream and downstream instances,
 // synchronous call.
 func (feed *Feed) CloseFeed() error {
@@ -186,7 +199,7 @@ func (feed *Feed) CloseFeed() error {
 func (feed *Feed) genServer(reqch chan []interface{}) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			log.Printf("Feed:genServer() crashed `%v`\n", r)
+			c.Errorf("%v ... paniced %v !\n", feed.logPrefix, r)
 			feed.doClose()
 		}
 	}()
@@ -215,6 +228,10 @@ loop:
 			respch := msg[1].(chan []interface{})
 			respch <- []interface{}{feed.repairEndpoints()}
 
+		case fCmdGetStatistics:
+			respch := msg[1].(chan []interface{})
+			respch <- []interface{}{feed.getStatistics()}
+
 		case fCmdCloseFeed:
 			respch := msg[1].(chan []interface{})
 			respch <- []interface{}{feed.doClose()}
@@ -227,8 +244,8 @@ loop:
 func (feed *Feed) requestFeed(req RequestReader) (err error) {
 	engines := make(map[uint64]*Engine)
 	endpoints := make(map[string]*Endpoint)
-	endpoints, engines, err =
-		feed.buildEngines(req.(Subscriber), endpoints, engines)
+	subscr := req.(Subscriber)
+	endpoints, engines, err = feed.buildEngines(subscr, endpoints, engines)
 	if err != nil {
 		return err
 	}
@@ -253,7 +270,7 @@ func (feed *Feed) requestFeed(req RequestReader) (err error) {
 		sort.Sort(feed.kvTimestamps[bucket])
 	}
 	feed.resetEngines(endpoints, engines)
-	log.Printf("%v, started ...\n", feed.logPrefix)
+	c.Infof("%v started ...\n", feed.logPrefix)
 	return nil
 }
 
@@ -261,8 +278,8 @@ func (feed *Feed) requestFeed(req RequestReader) (err error) {
 // downstream engines and endpoints.
 func (feed *Feed) updateFeed(req RequestReader) (err error) {
 	engines, endpoints := feed.engines, feed.endpoints
-	endpoints, engines, err =
-		feed.buildEngines(req.(Subscriber), endpoints, engines)
+	subscr := req.(Subscriber)
+	endpoints, engines, err = feed.buildEngines(subscr, endpoints, engines)
 	if err != nil {
 		return err
 	}
@@ -292,14 +309,14 @@ func (feed *Feed) updateFeed(req RequestReader) (err error) {
 		sort.Sort(feed.kvTimestamps[bucket])
 	}
 	feed.resetEngines(endpoints, engines)
-	log.Printf("%v, updated ...\n", feed.logPrefix)
+	c.Infof("%v updated ...\n", feed.logPrefix)
 	return nil
 }
 
 // index topology has changed, update it.
 func (feed *Feed) updateEngines(req Subscriber) (err error) {
-	endpoints, engines, err :=
-		feed.buildEngines(req, feed.endpoints, feed.engines)
+	engines, endpoints := feed.engines, feed.endpoints
+	endpoints, engines, err = feed.buildEngines(req, endpoints, engines)
 	if err != nil {
 		return err
 	}
@@ -314,13 +331,14 @@ func (feed *Feed) updateEngines(req Subscriber) (err error) {
 		}
 	}
 	feed.resetEngines(endpoints, engines)
+	c.Infof("%v updated engines ...\n", feed.logPrefix)
 	return
 }
 
 // index is deleted, delete all of its downstream
 func (feed *Feed) deleteEngines(req Subscriber) (err error) {
-	endpoints, engines, err :=
-		feed.buildEngines(req, feed.endpoints, feed.engines)
+	engines, endpoints := feed.engines, feed.endpoints
+	endpoints, engines, err = feed.buildEngines(req, endpoints, engines)
 	if err != nil {
 		return err
 	}
@@ -339,34 +357,18 @@ func (feed *Feed) deleteEngines(req Subscriber) (err error) {
 		}
 	}
 	feed.resetEngines(endpoints, engines)
+	c.Infof("%v deleted engines ...\n", feed.logPrefix)
 	return
 }
 
 // repair endpoints, restart engines and update bucket-feed
 func (feed *Feed) repairEndpoints() (err error) {
-
-	startEndpoint := func(raddr string, coord bool) (*Endpoint, error) {
-		// ignore error while starting endpoint
-		endpoint, err := NewEndpoint(feed, raddr, c.ConnsPerEndpoint, coord)
-		if err != nil {
-			log.Printf("error starting endpoint %q: %v", raddr, err)
-			return nil, ErrorStartingEndpoint
-		}
-		// send the vbmap to the new endpoint.
-		emap := map[string]*Endpoint{raddr: endpoint}
-		for _, kvTs := range feed.kvTimestamps {
-			if err = feed.sendVbmap(emap, kvTs); err != nil {
-				return nil, err
-			}
-		}
-		return endpoint, nil
-	}
-
 	// repair endpoints
 	endpoints := make(map[string]*Endpoint)
 	for raddr, endpoint := range feed.endpoints {
 		if !endpoint.Ping() {
-			if endpoint, err = startEndpoint(raddr, endpoint.coord); err != nil {
+			endpoint, err = feed.startEndpoint(raddr, endpoint.coord)
+			if err != nil {
 				return err
 			}
 		}
@@ -391,13 +393,28 @@ func (feed *Feed) repairEndpoints() (err error) {
 		}
 	}
 	feed.resetEngines(endpoints, nil)
+	c.Infof("%v repaired endpoints ...\n", feed.logPrefix)
 	return nil
+}
+
+func (feed *Feed) getStatistics() map[string]interface{} {
+	bfeeds, _ := c.NewComponentStat(feed.stats.Get("/feeds"))
+	raddrs, _ := c.NewComponentStat(feed.stats.Get("/raddrs"))
+	feed.stats.Set("/engines", feed.engineNames())
+	feed.stats.Set("/endpoints", feed.endpointNames())
+	for bucketn, bfeed := range feed.bfeeds {
+		bfeeds.Set("/"+bucketn, bfeed.GetStatistics())
+	}
+	for raddr, endpoint := range feed.endpoints {
+		raddrs.Set("/"+raddr, endpoint.GetStatistics())
+	}
+	return feed.stats.ToMap()
 }
 
 func (feed *Feed) doClose() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Feed:doClose() paniced %q\n", feed.topic)
+			c.Errorf("%v doClose() paniced: %v !\n", feed.topic, r)
 		}
 	}()
 
@@ -410,7 +427,7 @@ func (feed *Feed) doClose() (err error) {
 	// shutdown
 	close(feed.finch)
 	feed.bfeeds, feed.endpoints, feed.engines = nil, nil, nil
-	log.Printf("%v, ... closed\n", feed.logPrefix)
+	c.Infof("%v ... stopped\n", feed.logPrefix)
 	return
 }
 
@@ -418,33 +435,35 @@ func (feed *Feed) resetEngines(endpoints map[string]*Endpoint, engines map[uint6
 	newendpoints := make(map[string]*Endpoint)
 	for raddr, endpoint := range endpoints {
 		if _, ok := feed.endpoints[raddr]; !ok {
-			log.Printf("%v, endpoint %q added\n", feed.logPrefix, raddr)
+			c.Infof("%v endpoint %q added ...\n", feed.logPrefix, raddr)
 			newendpoints[raddr] = endpoint
 		} else {
 			delete(feed.endpoints, raddr)
 		}
 	}
 	for raddr := range feed.endpoints {
-		log.Printf("%v, endpoint %q, deleted\n", feed.logPrefix, raddr)
+		c.Infof("%v endpoint %q ... deleted \n", feed.logPrefix, raddr)
 	}
 	feed.endpoints = newendpoints
 
-	if engines != nil {
-		newengines := make(map[uint64]*Engine)
-		for uuid, engine := range engines {
-			if _, ok := feed.engines[uuid]; !ok {
-				log.Printf("%v, engine %v added\n", feed.logPrefix, uuid)
-			} else {
-				log.Printf("%v, engine %v updated\n", feed.logPrefix, uuid)
-				delete(feed.engines, uuid)
-			}
-			newengines[uuid] = engine
-		}
-		for uuid := range feed.engines {
-			log.Printf("%v, engine %v, deleted\n", feed.logPrefix, uuid)
-		}
-		feed.engines = newengines
+	if engines == nil {
+		return
 	}
+
+	newengines := make(map[uint64]*Engine)
+	for uuid, engine := range engines {
+		if _, ok := feed.engines[uuid]; !ok {
+			c.Infof("%v engine %v added ...\n", feed.logPrefix, uuid)
+		} else {
+			c.Infof("%v engine %v updated ...\n", feed.logPrefix, uuid)
+			delete(feed.engines, uuid)
+		}
+		newengines[uuid] = engine
+	}
+	for uuid := range feed.engines {
+		c.Infof("%v engine %v ... deleted\n", feed.logPrefix, uuid)
+	}
+	feed.engines = newengines
 }
 
 // build per bucket uuid->engine map using Subscriber interface. `engines` and
@@ -454,7 +473,7 @@ func (feed *Feed) buildEngines(
 	endpoints map[string]*Endpoint,
 	engines map[uint64]*Engine) (map[string]*Endpoint, map[uint64]*Engine, error) {
 
-	evaluators, routers, err := validateSubscriber(subscriber)
+	evaluators, routers, err := feed.validateSubscriber(subscriber)
 	if err != nil {
 		return endpoints, engines, err
 	}
@@ -495,27 +514,11 @@ func (feed *Feed) buildEndpoints(
 
 	var err error
 
-	startEndpoint := func(raddr string, coord bool) (*Endpoint, error) {
-		// ignore error while starting endpoint
-		endpoint, err := NewEndpoint(feed, raddr, c.ConnsPerEndpoint, coord)
-		if err != nil {
-			fmtString := "%v, error starting endpoint %q: %v"
-			log.Printf(fmtString, feed.logPrefix, raddr, err)
-			return nil, ErrorStartingEndpoint
-		}
-		// send the vbmap to the new endpoint.
-		emap := map[string]*Endpoint{raddr: endpoint}
-		for _, kvTs := range feed.kvTimestamps {
-			if err = feed.sendVbmap(emap, kvTs); err != nil {
-				return nil, err
-			}
-		}
-		return endpoint, nil
-	}
 	for _, router := range routers {
 		for _, raddr := range router.UuidEndpoints() {
 			if endpoint, ok := endpoints[raddr]; (!ok) || (!endpoint.Ping()) {
-				if endpoint, err = startEndpoint(raddr, false); err != nil {
+				endpoint, err = feed.startEndpoint(raddr, false)
+				if err != nil {
 					return nil, err
 				} else if endpoint != nil {
 					endpoints[raddr] = endpoint
@@ -525,7 +528,8 @@ func (feed *Feed) buildEndpoints(
 		// endpoint for coordinator
 		coord := router.CoordinatorEndpoint()
 		if endpoint, ok := endpoints[coord]; (!ok) || (!endpoint.Ping()) {
-			if endpoint, err = startEndpoint(coord, true); err != nil {
+			endpoint, err = feed.startEndpoint(coord, true)
+			if err != nil {
 				return nil, err
 			} else if endpoint != nil {
 				endpoints[coord] = endpoint
@@ -535,7 +539,23 @@ func (feed *Feed) buildEndpoints(
 	return endpoints, nil
 }
 
-func validateSubscriber(subscriber Subscriber) (map[uint64]c.Evaluator, map[uint64]c.Router, error) {
+func (feed *Feed) startEndpoint(raddr string, coord bool) (endpoint *Endpoint, err error) {
+	// ignore error while starting endpoint
+	endpoint, err = NewEndpoint(feed, raddr, c.ConnsPerEndpoint, coord)
+	if err != nil {
+		return nil, err
+	}
+	// send vbmap to the new endpoint.
+	for _, kvTs := range feed.kvTimestamps {
+		vbmap := feed.vbTs2Vbmap(kvTs)
+		if err = endpoint.SendVbmap(vbmap); err != nil {
+			return nil, err
+		}
+	}
+	return endpoint, nil
+}
+
+func (feed *Feed) validateSubscriber(subscriber Subscriber) (map[uint64]c.Evaluator, map[uint64]c.Router, error) {
 	evaluators, err := subscriber.GetEvaluators()
 	if err != nil {
 		return nil, nil, err
@@ -545,18 +565,22 @@ func validateSubscriber(subscriber Subscriber) (map[uint64]c.Evaluator, map[uint
 		return nil, nil, err
 	}
 	if len(evaluators) != len(routers) {
-		return nil, nil, ErrorInconsistentFeed
+		err = ErrorInconsistentFeed
+		c.Errorf("%v error %v, len() mismatch", feed.logPrefix, err)
+		return nil, nil, err
 	}
 	for uuid := range evaluators {
 		if _, ok := routers[uuid]; ok == false {
-			return nil, nil, ErrorInconsistentFeed
+			err = ErrorInconsistentFeed
+			c.Errorf("%v error %v, uuid mismatch", feed.logPrefix, err)
+			return nil, nil, err
 		}
 	}
 	return evaluators, routers, nil
 }
 
-// sendVbmap for current set of vbuckets.
-func (feed *Feed) sendVbmap(endpoints map[string]*Endpoint, kvTs *c.Timestamp) error {
+// vbTs2Vbmap construct VbConnectionMap from Vbucket Timestamp.
+func (feed *Feed) vbTs2Vbmap(kvTs *c.Timestamp) *c.VbConnectionMap {
 	vbmap := &c.VbConnectionMap{
 		Bucket:   kvTs.Bucket,
 		Vbuckets: make([]uint16, 0),
@@ -566,13 +590,21 @@ func (feed *Feed) sendVbmap(endpoints map[string]*Endpoint, kvTs *c.Timestamp) e
 		vbmap.Vbuckets = append(vbmap.Vbuckets, vbno)
 		vbmap.Vbuuids = append(vbmap.Vbuuids, kvTs.Vbuuids[i])
 	}
-	// send to each endpoints.
-	for raddr, endpoint := range endpoints {
-		if err := endpoint.SendVbmap(vbmap); err != nil {
-			fmtString := "%v, error sending vbmap to endpoint %q: %v"
-			log.Printf(fmtString, feed.logPrefix, raddr, err)
-			return err
-		}
+	return vbmap
+}
+
+func (feed *Feed) engineNames() []string {
+	names := make([]string, 0, len(feed.engines))
+	for uuid := range feed.engines {
+		names = append(names, fmt.Sprintf("%v", uuid))
 	}
-	return nil
+	return names
+}
+
+func (feed *Feed) endpointNames() []string {
+	raddrs := make([]string, 0, len(feed.endpoints))
+	for raddr := range feed.endpoints {
+		raddrs = append(raddrs, raddr)
+	}
+	return raddrs
 }

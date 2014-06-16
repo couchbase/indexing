@@ -35,7 +35,6 @@ package projector
 import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"log"
 	"sort"
 )
 
@@ -47,9 +46,11 @@ type BucketFeed struct {
 	pooln   string
 	kvfeeds map[string]*KVFeed // kvaddr -> *KVFeed
 	// gen-server
-	reqch     chan []interface{}
-	finch     chan bool
+	reqch chan []interface{}
+	finch chan bool
+	// misc.
 	logPrefix string
+	stats     *c.ComponentStat
 }
 
 // NewBucketFeed creates a new instance of feed for specified bucket. Spawns a
@@ -69,8 +70,9 @@ func NewBucketFeed(
 		kvfeeds:   make(map[string]*KVFeed),
 		reqch:     make(chan []interface{}, c.GenserverChannelSize),
 		finch:     make(chan bool),
-		logPrefix: fmt.Sprintf("bucket-feed %v:%v", feed.topic, bucketn),
+		logPrefix: fmt.Sprintf("[bfeed %v:%v]", feed.topic, bucketn),
 	}
+	bfeed.stats = bfeed.newStats()
 
 	// initialize KVFeeds
 	for _, kvaddr := range kvaddrs {
@@ -82,7 +84,7 @@ func NewBucketFeed(
 		bfeed.kvfeeds[kvaddr] = kvfeed
 	}
 	go bfeed.genServer(bfeed.reqch)
-	log.Printf("%v, started ...\n", bfeed.logPrefix)
+	c.Infof("%v started ...\n", bfeed.logPrefix)
 	return bfeed, nil
 }
 
@@ -95,6 +97,7 @@ const (
 	bfCmdRequestFeed byte = iota + 1
 	bfCmdUpdateEngines
 	bfCmdDeleteEngines
+	bfCmdGetStatistics
 	bfCmdCloseFeed
 )
 
@@ -176,6 +179,15 @@ func (bfeed *BucketFeed) DeleteEngines(endpoints map[string]*Endpoint, engines [
 	return c.OpError(err, resp, 0)
 }
 
+// GetStatistics will recursively get statistics for bucket-feed and its
+// underlying workers.
+func (bfeed *BucketFeed) GetStatistics() map[string]interface{} {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{bfCmdGetStatistics, respch}
+	resp, _ := c.FailsafeOp(bfeed.reqch, respch, cmd, bfeed.finch)
+	return resp[1].(map[string]interface{})
+}
+
 // CloseFeed synchronous call.
 //
 // - error if BucketFeed is already closed.
@@ -190,7 +202,7 @@ func (bfeed *BucketFeed) CloseFeed() error {
 func (bfeed *BucketFeed) genServer(reqch chan []interface{}) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			log.Printf("%v, paniced: %v\n", bfeed.logPrefix, r)
+			c.Errorf("%v paniced: %v !\n", bfeed.logPrefix, r)
 			bfeed.doClose()
 		}
 	}()
@@ -224,6 +236,15 @@ loop:
 				kvfeed.DeleteEngines(endpoints, engines)
 			}
 			respch <- []interface{}{nil}
+
+		case bfCmdGetStatistics:
+			respch := msg[1].(chan []interface{})
+			m := bfeed.stats.Get("/kvfeeds").(map[string]interface{})
+			kvfeeds := c.ComponentStat(m)
+			for kvaddr, kvfeed := range bfeed.kvfeeds {
+				kvfeeds.Set("/"+kvaddr, kvfeed.GetStatistics())
+			}
+			respch <- []interface{}{map[string]interface{}(*bfeed.stats)}
 
 		case bfCmdCloseFeed:
 			respch := msg[1].(chan []interface{})
@@ -260,7 +281,7 @@ func (bfeed *BucketFeed) requestFeed(
 func (bfeed *BucketFeed) doClose() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("%v, paniced: %v\n", bfeed.logPrefix, r)
+			c.Errorf("%v doClose() paniced: %v !\n", bfeed.logPrefix, r)
 		}
 	}()
 
@@ -271,6 +292,6 @@ func (bfeed *BucketFeed) doClose() (err error) {
 	// close the gen-server
 	close(bfeed.finch)
 	bfeed.kvfeeds = nil
-	log.Printf("%v, ... closed\n", bfeed.logPrefix)
+	c.Infof("%v ... stopped\n", bfeed.logPrefix)
 	return
 }

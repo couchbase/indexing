@@ -8,16 +8,15 @@ import (
 	ap "github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
-	"log"
 )
 
 // error codes
 
 // ErrorFeedAlreadyActive
-var ErrorFeedAlreadyActive = errors.New("projector.adminport.FeedAlreadyActive")
+var ErrorFeedAlreadyActive = errors.New("projector.adminport.feedAlreadyActive")
 
 // ErrorInvalidTopic
-var ErrorInvalidTopic = errors.New("projector.adminport.InvalidTopic")
+var ErrorInvalidTopic = errors.New("projector.adminport.invalidTopic")
 
 // list of requests handled by this adminport
 var reqFailoverLog = &protobuf.FailoverLogRequest{}
@@ -26,19 +25,22 @@ var reqUpdateFeed = &protobuf.UpdateMutationStreamRequest{}
 var reqSubscribeFeed = &protobuf.SubscribeStreamRequest{}
 var reqRepairEndpoints = &protobuf.RepairDownstreamEndpoints{}
 var reqShutdownFeed = &protobuf.ShutdownStreamRequest{}
+var reqStats = &c.ComponentStat{}
 
 // admin-port entry point
 func mainAdminPort(laddr string, p *Projector) {
 	var err error
 
 	reqch := make(chan ap.Request)
-	server := ap.NewHTTPServer("projector", laddr, c.AdminportURLPrefix, reqch)
+	server := ap.NewHTTPServer(
+		c.ComponentProjector, laddr, c.AdminportURLPrefix, reqch)
 	server.Register(reqFailoverLog)
 	server.Register(reqMutationFeed)
 	server.Register(reqUpdateFeed)
 	server.Register(reqSubscribeFeed)
 	server.Register(reqRepairEndpoints)
 	server.Register(reqShutdownFeed)
+	server.Register(reqStats)
 
 	server.Start()
 
@@ -50,7 +52,7 @@ loop:
 				break loop
 			}
 			msg := req.GetMessage()
-			if response, err := p.handleRequest(msg); err == nil {
+			if response, err := p.handleRequest(msg, server); err == nil {
 				req.Send(response)
 			} else {
 				req.SendError(err)
@@ -58,36 +60,33 @@ loop:
 		}
 	}
 	if err != nil {
-		log.Printf("error: projector adminport %q exiting with %v\n", laddr, err)
-	} else {
-		log.Printf("projector adminport %q exiting\n", laddr)
+		c.Errorf("%v %v\n", p.logPrefix, err)
 	}
+	c.Infof("%v exited !\n", p.logPrefix)
 	server.Stop()
 }
 
-func (p *Projector) handleRequest(msg ap.MessageMarshaller) (response ap.MessageMarshaller, err error) {
+func (p *Projector) handleRequest(
+	msg ap.MessageMarshaller,
+	server ap.Server) (response ap.MessageMarshaller, err error) {
+
 	switch request := msg.(type) {
 	case *protobuf.FailoverLogRequest:
 		response = p.doFailoverLog(request)
-		p.statRequest(response, "failoverLogRequests")
 	case *protobuf.MutationStreamRequest:
 		response = p.doMutationFeed(request)
-		p.statRequest(response, "mutationStreamRequests")
 	case *protobuf.UpdateMutationStreamRequest:
 		response = p.doUpdateFeed(request)
-		p.statRequest(response, "updateMutationStreamRequests")
 	case *protobuf.SubscribeStreamRequest:
 		response = p.doSubscribeFeed(request)
-		p.statRequest(response, "subscribeStreamRequests")
 	case *protobuf.RepairDownstreamEndpoints:
 		response = p.doRepairEndpoints(request)
-		p.statRequest(response, "repairDownstreamEndpoints")
 	case *protobuf.ShutdownStreamRequest:
 		response = p.doShutdownFeed(request)
-		p.statRequest(response, "shutdownStreamRequests")
+	case *c.ComponentStat:
+		response = p.doComponentStat(request)
 	default:
 		err = c.ErrorInvalidRequest
-		p.stats.Incr("invalidRequests", 1)
 	}
 	return response, err
 }
@@ -97,6 +96,7 @@ func (p *Projector) doFailoverLog(request *protobuf.FailoverLogRequest) ap.Messa
 	var bucket BucketAccess
 	var err error
 
+	c.Tracef("%v doFailoverLog\n", p.logPrefix)
 	response := &protobuf.FailoverLogResponse{}
 
 	pooln := request.GetPool()
@@ -104,6 +104,7 @@ func (p *Projector) doFailoverLog(request *protobuf.FailoverLogRequest) ap.Messa
 	vbuckets := request.GetVbnos()
 
 	if bucket, err = p.getBucket(p.kvaddrs[0], pooln, bucketn); err != nil {
+		c.Errorf("%v %s, %v\n", p.logPrefix, bucketn, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -124,6 +125,7 @@ func (p *Projector) doFailoverLog(request *protobuf.FailoverLogRequest) ap.Messa
 			}
 			protoFlogs = append(protoFlogs, protoFlog)
 		} else {
+			c.Errorf("%v %s.GetFailoverLog() %v\n", p.logPrefix, bucketn, err)
 			response.Err = protobuf.NewError(err)
 			return response
 		}
@@ -136,6 +138,7 @@ func (p *Projector) doFailoverLog(request *protobuf.FailoverLogRequest) ap.Messa
 func (p *Projector) doMutationFeed(request *protobuf.MutationStreamRequest) ap.MessageMarshaller {
 	var err error
 
+	c.Tracef("%v doMutationFeed()\n", p.logPrefix)
 	response := protobuf.NewMutationStreamResponse(request)
 
 	topic := request.GetTopic()
@@ -143,6 +146,7 @@ func (p *Projector) doMutationFeed(request *protobuf.MutationStreamRequest) ap.M
 
 	feed, err := p.GetFeed(topic)
 	if err == nil { // only fresh feed to be started
+		c.Errorf("%v %v\n", p.logPrefix, ErrorTopicExist)
 		response.UpdateErr(ErrorFeedAlreadyActive)
 		return response
 	}
@@ -176,10 +180,12 @@ func (p *Projector) doMutationFeed(request *protobuf.MutationStreamRequest) ap.M
 // - start / restart / shutdown one or more vbucket streams
 // - update partition tables that will affect routing.
 // - update topology that will add or remove endpoints from existing list.
+//
 // upon error, it is left to the caller to shutdown the feed.
 func (p *Projector) doUpdateFeed(request *protobuf.UpdateMutationStreamRequest) ap.MessageMarshaller {
 	var err error
 
+	c.Tracef("%v doUpdateFeed()\n", p.logPrefix)
 	response := protobuf.NewMutationStreamResponse(request)
 
 	topic := request.GetTopic()
@@ -187,6 +193,7 @@ func (p *Projector) doUpdateFeed(request *protobuf.UpdateMutationStreamRequest) 
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
+		c.Errorf("%v %v\n", p.logPrefix, err)
 		response.UpdateErr(err)
 		return response
 	}
@@ -210,10 +217,12 @@ func (p *Projector) doUpdateFeed(request *protobuf.UpdateMutationStreamRequest) 
 
 // add or remove endpoints.
 func (p *Projector) doSubscribeFeed(request *protobuf.SubscribeStreamRequest) ap.MessageMarshaller {
+	c.Tracef("%v doSubscribeFeed()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
+		c.Errorf("%v %v\n", p.logPrefix, err)
 		return protobuf.NewError(err)
 	}
 
@@ -223,48 +232,43 @@ func (p *Projector) doSubscribeFeed(request *protobuf.SubscribeStreamRequest) ap
 		err = feed.DeleteEngines(request)
 	} else {
 		err = c.ErrorInvalidRequest
+		c.Errorf("%v %v\n", p.logPrefix, err)
 	}
 	return protobuf.NewError(err)
 }
 
 // restart connection with specified list of endpoints.
 func (p *Projector) doRepairEndpoints(request *protobuf.RepairDownstreamEndpoints) ap.MessageMarshaller {
+	c.Tracef("%v doRepairEndpoints()\n", p.logPrefix)
 	topic := request.GetTopic()
 
-	feed, err := p.GetFeed(topic) // only existing feed
-	if err != nil {
-		return protobuf.NewError(err)
+	feed, err := p.GetFeed(topic)
+	if err == nil { // only existing feed
+		err = feed.RepairEndpoints()
+	} else {
+		c.Errorf("%v %v\n", p.logPrefix, err)
 	}
-	return protobuf.NewError(feed.RepairEndpoints())
+	return protobuf.NewError(err)
 }
 
 // shutdown feed, all upstream vbuckets and downstream endpoints.
 func (p *Projector) doShutdownFeed(request *protobuf.ShutdownStreamRequest) ap.MessageMarshaller {
+	c.Tracef("%v doShutdownFeed()\n", p.logPrefix)
 	topic := request.GetTopic()
 
-	feed, err := p.GetFeed(topic) // only existing feed
-	if err != nil {
-		return protobuf.NewError(err)
+	feed, err := p.GetFeed(topic)
+	if err == nil { // only existing feed
+		feed.CloseFeed()
+		p.DelFeed(topic)
+	} else {
+		c.Errorf("%v %v\n", p.logPrefix, err)
 	}
-	response := protobuf.NewError(feed.CloseFeed())
-	p.DelFeed(topic)
-	return response
+	return protobuf.NewError(err)
 }
 
-func (p *Projector) statRequest(response interface{}, key string) {
-	var err string
-
-	requestStat, errStat := 1, 0
-	switch resp := response.(type) {
-	case *protobuf.FailoverLogResponse:
-		err = resp.Err.GetError()
-	case *protobuf.MutationStreamResponse:
-		err = resp.Err.GetError()
-	case *protobuf.Error:
-		err = resp.GetError()
-	}
-	if err != "" {
-		errStat = 1
-	}
-	p.stats.Incrs(key, requestStat, errStat)
+// get projector statistics.
+func (p *Projector) doComponentStat(request *c.ComponentStat) ap.MessageMarshaller {
+	c.Tracef("%v doComponentStat()\n", p.logPrefix)
+	stats := c.ComponentStat{}
+	return &stats
 }

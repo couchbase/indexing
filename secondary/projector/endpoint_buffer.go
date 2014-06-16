@@ -3,18 +3,16 @@ package projector
 import (
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/indexer"
-	"log"
 )
 
 type endpointBuffers struct {
-	endpoint *Endpoint
-	raddr    string
-	vbs      map[string]*c.VbKeyVersions
+	raddr string
+	vbs   map[string]*c.VbKeyVersions
 }
 
-func newEndpointBuffers(endpoint *Endpoint, raddr string) *endpointBuffers {
+func newEndpointBuffers(raddr string) *endpointBuffers {
 	vbs := make(map[string]*c.VbKeyVersions)
-	b := &endpointBuffers{endpoint, raddr, vbs}
+	b := &endpointBuffers{raddr, vbs}
 	return b
 }
 
@@ -36,8 +34,6 @@ func (b *endpointBuffers) flushBuffers(client *indexer.StreamClient) error {
 	}
 	b.vbs = make(map[string]*c.VbKeyVersions) // re-initialize
 	if err := client.SendKeyVersions(vbs); err != nil {
-		endp := b.endpoint
-		log.Printf("%v, error sending keyversions: %v\n", endp.logPrefix, err)
 		return err
 	}
 	return nil

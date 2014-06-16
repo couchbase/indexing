@@ -28,6 +28,7 @@
 package adminport
 
 import (
+	"encoding/json"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	"net"
@@ -41,7 +42,6 @@ import (
 // httpServer is a concrete type implementing adminport Server interface.
 type httpServer struct {
 	mu        sync.Mutex   // handle concurrent updates to this object
-	component string       // module hosting the adminport daemon
 	lis       net.Listener // TCP listener
 	srv       *http.Server // http server
 	urlPrefix string       // URL path prefix for adminport
@@ -54,13 +54,12 @@ type httpServer struct {
 
 // NewHTTPServer creates an instance of admin-server. Start() will actually
 // start the server.
-func NewHTTPServer(component, connAddr, urlPrefix string, reqch chan<- Request) Server {
+func NewHTTPServer(name, connAddr, urlPrefix string, reqch chan<- Request) Server {
 	s := &httpServer{
-		component: component,
 		reqch:     reqch,
 		messages:  make(map[string]MessageMarshaller),
 		urlPrefix: urlPrefix,
-		logPrefix: fmt.Sprintf("[%s.adminport]", component),
+		logPrefix: fmt.Sprintf("[%s:%s]", name, connAddr),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.urlPrefix, s.systemHandler)
@@ -120,16 +119,20 @@ func (s *httpServer) Start() (err error) {
 		c.Infof("%s starting ...\n", s.logPrefix)
 		err := s.srv.Serve(s.lis) // serve until listener is closed.
 		if err != nil {
-			c.Infof("%s error, %v\n", s.logPrefix, err)
+			c.Errorf("%s %v\n", s.logPrefix, err)
 		}
 	}()
 	return
 }
 
+func (s *httpServer) GetStatistics() *c.ComponentStat {
+	return s.stats
+}
+
 // Stop is part of Server interface.
 func (s *httpServer) Stop() {
 	s.shutdown()
-	c.Infof("%s stopped\n", s.logPrefix)
+	c.Infof("%s ... stopped\n", s.logPrefix)
 }
 
 func (s *httpServer) shutdown() {
@@ -150,91 +153,88 @@ func (s *httpServer) getURL(msg MessageMarshaller) string {
 // handle incoming request.
 func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
-	var statMsgName string
+	var statPath string
 
-	logPrefix := fmt.Sprintf("%s Request %q", s.logPrefix, r.URL.Path)
+	c.Infof("%s Request %q\n", s.logPrefix, r.URL.Path)
 
 	// Fault-tolerance. No need to crash the server in case of panic.
 	defer func() {
 		if r := recover(); r != nil {
-			c.Warnf("%s, error %v\n", logPrefix, r)
-			s.stats.Incrs(statMsgName, 0, 0, 1) // count error
+			c.Errorf("%s, adminport.request.recovered `%v`\n", s.logPrefix, r)
+			s.stats.Incrs(statPath, 0, 0, 1) // count error
 		} else if err != nil {
-			c.Warnf("%s, error %v\n", logPrefix, err)
-			s.stats.Incrs(statMsgName, 0, 1, 1) // count response&error
+			c.Errorf("%s %v\n", s.logPrefix, err)
+			s.stats.Incrs(statPath, 0, 1, 1) // count response&error
 		} else {
-			s.stats.Incrs(statMsgName, 0, 1, 0) // count response
+			s.stats.Incrs(statPath, 0, 1, 0) // count response
 		}
 	}()
 
-	var val interface{}
-	// check wether it is for statistics, TODO: avoid magic value
-	if r.URL.Path == (s.urlPrefix + "_stats") {
-		statMsgName = "message.stats"
-		s.stats.Incrs(statMsgName, 1, 0, 0) // count request
-		if val, err = c.StatsEncode(); err != nil {
-			http.Error(w, "StatsEncode failed", http.StatusInternalServerError)
-			return
-		}
+	var msg MessageMarshaller
 
-		// check wether it is for a component's stat, TODO: avoid magic value
-	} else if strings.HasPrefix(r.URL.Path, s.urlPrefix+"_stats") {
-		statMsgName = "message.stats"
-		s.stats.Incrs(statMsgName, 1, 0, 0) // count request
-		segs := strings.Split(r.URL.Path, "/")
-		val = c.GetStat(segs[len(segs)-1])
-
+	// check wether it is for stats.
+	prefix := c.StatsURLPath(s.urlPrefix, "")
+	if strings.HasPrefix(r.URL.Path, prefix) {
+		msg = &c.ComponentStat{}
 	} else {
-		msg := s.messages[r.URL.Path]
-		statMsgName = "message." + msg.Name()
-		s.stats.Incrs(statMsgName, 1, 0, 0) // count request
-
-		if msg == nil {
-			err = ErrorPathNotFound
-			http.Error(w, "path not found", http.StatusNotFound)
-			return
-		}
-
-		c.Infof("%s\n", logPrefix)
-
+		msg = s.messages[r.URL.Path]
 		data := make([]byte, r.ContentLength, r.ContentLength)
 		r.Body.Read(data)
-		s.stats.Incrs("payload", len(data), 0)
-
-		// Get an instance of message type and decode request into that.
+		// Get an instance of request type and decode request into that.
 		typeOfMsg := reflect.ValueOf(msg).Elem().Type()
-		m := reflect.New(typeOfMsg).Interface().(MessageMarshaller)
-		if err = m.Decode(data); err != nil {
+		msg = reflect.New(typeOfMsg).Interface().(MessageMarshaller)
+		if err = msg.Decode(data); err != nil {
+			err = fmt.Errorf("%v %v", ErrorDecodeRequest, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		waitch := make(chan interface{}, 1)
-		// send and wait
-		s.reqch <- &httpAdminRequest{srv: s, msg: m, waitch: waitch}
-		val = <-waitch
 	}
 
+	statPath = "/request." + msg.Name()
+	s.stats.Incrs(statPath, 1, 0, 0) // count request
+
+	if msg == nil {
+		err = ErrorPathNotFound
+		http.Error(w, "path not found", http.StatusNotFound)
+		return
+	}
+
+	waitch := make(chan interface{}, 1)
+	// send and wait
+	s.reqch <- &httpAdminRequest{srv: s, msg: msg, waitch: waitch}
+	val := <-waitch
+
 	switch v := (val).(type) {
+	case *c.ComponentStat:
+		val = v.Get(c.ParseStatsPath(r.URL.Path))
+		if data, err := json.Marshal(&val); err == nil {
+			header := w.Header()
+			// TODO: no magic
+			header["Content-Type"] = []string{"application/json"}
+			w.Write(data)
+			s.stats.Incrs("/payload", 0, len(data))
+		} else {
+			err = fmt.Errorf("%v %v", ErrorDecodeRequest, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			c.Errorf("%v %v", s.logPrefix, err)
+		}
+
 	case MessageMarshaller:
 		if data, err := v.Encode(); err == nil {
 			header := w.Header()
 			header["Content-Type"] = []string{v.ContentType()}
 			w.Write(data)
-			s.stats.Incrs("payload", 0, len(data))
+			s.stats.Incrs("/payload", 0, len(data))
 		} else {
+			err = fmt.Errorf("%v %v", ErrorDecodeRequest, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			c.Errorf("%v %v", s.logPrefix, err)
 		}
-
-	case []byte:
-		header := w.Header()
-		header["Content-Type"] = []string{"application/json"} // TODO: no magic
-		w.Write(v)
-		s.stats.Incrs("payload", 0, len(v))
 
 	case error:
 		http.Error(w, v.Error(), http.StatusInternalServerError)
-		err = v
+		err = fmt.Errorf("%v %v", ErrorInternal, v)
+		c.Errorf("%v %v", s.logPrefix, err)
 	}
 }
 

@@ -28,7 +28,6 @@ import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/indexer"
-	"log"
 	"time"
 )
 
@@ -39,10 +38,12 @@ type Endpoint struct {
 	client *indexer.StreamClient // immutable
 	coord  bool                  // whether this endpoint is coordinator
 	// gen-server
-	kvch      chan []interface{} // carries *c.KeyVersions
-	reqch     chan []interface{} // carries control commands
-	finch     chan bool
+	kvch  chan []interface{} // carries *c.KeyVersions
+	reqch chan []interface{} // carries control commands
+	finch chan bool
+	// misc.
 	logPrefix string
+	stats     *c.ComponentStat
 }
 
 // NewEndpoint instanstiat a new Endpoint routine and return its reference.
@@ -61,14 +62,15 @@ func NewEndpoint(feed *Feed, raddr string, n int, coord bool) (*Endpoint, error)
 		finch:  make(chan bool),
 	}
 	endpoint.logPrefix = endpoint.getLogPrefix(feed)
+	endpoint.stats = endpoint.newStats()
 
 	go endpoint.run(endpoint.kvch, endpoint.reqch)
-	log.Printf("%v, ... started (%v)\n", endpoint.logPrefix, n)
+	c.Infof("%v ... started (with %v conns)\n", endpoint.logPrefix, n)
 	return endpoint, nil
 }
 
 func (endpoint *Endpoint) getLogPrefix(feed *Feed) string {
-	return fmt.Sprintf("endpoint %v:%v", feed.topic, endpoint.raddr)
+	return fmt.Sprintf("[endpc %v:%v]", feed.topic, endpoint.raddr)
 }
 
 func (endpoint *Endpoint) isCoord() bool {
@@ -78,8 +80,9 @@ func (endpoint *Endpoint) isCoord() bool {
 // commands
 const (
 	endpCmdPing byte = iota + 1
-	endpCmdClose
 	endpCmdSendVbmap
+	endpCmdGetStatistics
+	endpCmdClose
 )
 
 // Ping whether endpoint is active, synchronous call.
@@ -102,6 +105,14 @@ func (endpoint *Endpoint) SendVbmap(vbmap *c.VbConnectionMap) error {
 	cmd := []interface{}{endpCmdSendVbmap, vbmap, respch}
 	resp, err := c.FailsafeOp(endpoint.reqch, respch, cmd, endpoint.finch)
 	return c.OpError(err, resp, 0)
+}
+
+// GetStatistics for this endpoint, synchronous call
+func (endpoint *Endpoint) GetStatistics() map[string]interface{} {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{endpCmdGetStatistics, respch}
+	resp, _ := c.FailsafeOp(endpoint.reqch, respch, cmd, endpoint.finch)
+	return resp[0].(map[string]interface{})
 }
 
 // Send KeyVersions to other end, asynchronous call.
@@ -127,19 +138,20 @@ func (endpoint *Endpoint) Close() error {
 func (endpoint *Endpoint) run(kvch chan []interface{}, reqch chan []interface{}) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			log.Printf("Endpoint:run() crashed `%v`\n", endpoint.raddr)
+			c.Errorf("%v ... crashed %v\n", endpoint.logPrefix, r)
 			endpoint.doClose()
 		}
 	}()
 
-	raddr := endpoint.raddr
-	client := endpoint.client
+	raddr, client, stats := endpoint.raddr, endpoint.client, endpoint.stats
 
 	flushTimeout := time.After(c.EndpointBufferTimeout * time.Millisecond)
-	buffers := newEndpointBuffers(endpoint, raddr)
+	buffers := newEndpointBuffers(raddr)
 
+	var err error
 loop:
 	for {
+		err = nil
 		harakiri := time.After(c.EndpointHarakiriTimeout * time.Millisecond)
 		select {
 		case msg := <-kvch:
@@ -148,6 +160,7 @@ loop:
 			vbuuid := msg[2].(uint64)
 			kv := msg[3].(*c.KeyVersions)
 			buffers.addKeyVersions(bucket, vbno, vbuuid, kv)
+			stats.Incr("/mutations", 1)
 
 		case msg := <-reqch:
 			switch msg[0].(byte) {
@@ -159,10 +172,15 @@ loop:
 				vbmap := msg[1].(*c.VbConnectionMap)
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{client.SendVbmap(vbmap)}
+				stats.Incr("/vbmap", 1)
+
+			case endpCmdGetStatistics:
+				respch := msg[1].(chan []interface{})
+				respch <- []interface{}{map[string]interface{}(*stats)}
 
 			case endpCmdClose:
 				respch := msg[1].(chan []interface{})
-				buffers.flushBuffers(client)
+				err = buffers.flushBuffers(client)
 				endpoint.doClose()
 				respch <- []interface{}{nil}
 				break loop
@@ -170,17 +188,21 @@ loop:
 
 		case <-flushTimeout:
 			flushTimeout = time.After(c.EndpointBufferTimeout * time.Millisecond)
-			if err := buffers.flushBuffers(client); err != nil {
+			if err = buffers.flushBuffers(client); err != nil {
 				endpoint.doClose()
 				break loop
 			}
-			buffers = newEndpointBuffers(endpoint, raddr)
+			buffers = newEndpointBuffers(raddr)
+			stats.Incr("/flushes", 1)
 
 		case <-harakiri:
-			buffers.flushBuffers(client)
+			c.Infof("%v committed harakiri\n", endpoint.logPrefix)
+			err = buffers.flushBuffers(client)
 			endpoint.doClose()
-			log.Printf("%v, committed harakiri\n", endpoint.logPrefix)
 			break loop
+		}
+		if err != nil {
+			c.Errorf("%v %v\n", endpoint.logPrefix, err)
 		}
 	}
 }
@@ -188,11 +210,11 @@ loop:
 func (endpoint *Endpoint) doClose() {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("%v, doClose() paniced: %v\n", endpoint.logPrefix, r)
+			c.Errorf("%v doClose() paniced, %v\n", endpoint.logPrefix, r)
 		}
 	}()
 
 	endpoint.client.Close()
 	close(endpoint.finch)
-	log.Printf("%v, ... closed\n", endpoint.logPrefix)
+	c.Infof("%v ... stopped\n", endpoint.logPrefix)
 }

@@ -1,6 +1,9 @@
+- VbKeyVersions:Uuid leads to confusion. let it look same as VbKeyVersions
+  defined in protobuf.
 - use timer.Tick() instead of reloading with time.After().
 - throughput benchmark.
 - DropData and smart throttling, for slow indexer nodes.
+- statistics for engines.
 - statistics and logging.
 - adminport to get GetVbmap from go-couchbase for coordinator / indexer.
 - Handle EXPIRATION and FLUSH from upr-client.

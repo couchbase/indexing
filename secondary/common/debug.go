@@ -5,6 +5,7 @@ import (
 	"os"
 )
 
+// Error, Warning, Fatal are always logged
 const (
 	// LogLevelInfo log messages for info
 	LogLevelInfo int = iota + 1
@@ -31,47 +32,33 @@ func SetLogLevel(level int) {
 	logLevel = level
 }
 
-//-----------------
-// Warning messages
-//-----------------
-
-// Warn similar to fmt.Print
-func Warn(v ...interface{}) {
-	logger.Print(v...)
-}
+//------------------------
+// Warning, Error, Fatal messages
+//------------------------
 
 // Warnf similar to fmt.Printf
 func Warnf(format string, v ...interface{}) {
-	logger.Printf(format, v...)
+	logger.Printf("[WARN] "+format, v...)
 }
 
-// Warnln similar to fmt.Println.
-func Warnln(v ...interface{}) {
-	logger.Println(v...)
+// Errorf similar to fmt.Printf
+func Errorf(format string, v ...interface{}) {
+	logger.Printf("[ERROR] "+format, v...)
+}
+
+// Fatalf similar to fmt.Fatalf
+func Fatalf(format string, v ...interface{}) {
+	logger.Printf("[FATAL] "+format, v...)
 }
 
 //------------------------
 // Informational debugging
 //------------------------
 
-// Info if logLevel >= Info
-func Info(v ...interface{}) {
-	if logLevel >= LogLevelInfo {
-		logger.Print(v...)
-	}
-}
-
 // Infof if logLevel >= Info
 func Infof(format string, v ...interface{}) {
 	if logLevel >= LogLevelInfo {
-		logger.Printf(format, v...)
-	}
-}
-
-// Infoln if logLevel >= Info
-func Infoln(v ...interface{}) {
-	if logLevel >= LogLevelInfo {
-		logger.Println(v...)
+		logger.Printf("[INFO] "+format, v...)
 	}
 }
 
@@ -79,24 +66,10 @@ func Infoln(v ...interface{}) {
 // Basic debugging
 //----------------
 
-// Debug if logLevel >= Debug
-func Debug(v ...interface{}) {
-	if logLevel >= LogLevelDebug {
-		logger.Print(v...)
-	}
-}
-
 // Debugf if logLevel >= Debug
 func Debugf(format string, v ...interface{}) {
 	if logLevel >= LogLevelDebug {
-		logger.Printf(format, v...)
-	}
-}
-
-// Debugln if logLevel >= Debug
-func Debugln(v ...interface{}) {
-	if logLevel >= LogLevelDebug {
-		logger.Println(v...)
+		logger.Printf("[DEBUG] "+format, v...)
 	}
 }
 
@@ -104,23 +77,9 @@ func Debugln(v ...interface{}) {
 // Trace-level debugging
 //----------------------
 
-// Trace if logLevel >= Trace
-func Trace(v ...interface{}) {
-	if logLevel >= LogLevelTrace {
-		logger.Print(v...)
-	}
-}
-
 // Tracef if logLevel >= Trace
 func Tracef(format string, v ...interface{}) {
 	if logLevel >= LogLevelTrace {
-		logger.Printf(format, v...)
-	}
-}
-
-// Traceln if logLevel >= Trace
-func Traceln(v ...interface{}) {
-	if logLevel >= LogLevelTrace {
-		logger.Println(v...)
+		logger.Printf("[TRACE] "+format, v...)
 	}
 }

@@ -49,10 +49,10 @@
 //
 // list of active vbuckets:
 // - Feed maintains a list of active vbuckets.
-// - a vbucket is marked active when Feed sees StreamBegin message from
-//   upstream for that vbucket.
+// - a vbucket is marked active, corresponding vbucket-routine is started,
+//   when Feed sees StreamBegin message from upstream.
 // - a vbucket is marked as inactive when Feed sees StreamEnd message from
-//   upstream for that vbucket.
+//   upstream for that vbucket and corresponding vbucket routine is killed.
 // - during normal operation StreamBegin and StreamEnd messages will be
 //   generate by couchbase-client.
 // - when KVFeed detects that its upstream connection is lost, it will
@@ -65,7 +65,6 @@ import (
 	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"log"
 )
 
 // error codes
@@ -141,7 +140,7 @@ type Projector struct {
 	testBuckets map[string]BucketAccess
 	// statistics
 	logPrefix string
-	stats     c.ComponentStat
+	stats     *c.ComponentStat
 }
 
 // NewProjector creates a news projector instance and starts a corresponding
@@ -153,23 +152,13 @@ func NewProjector(kvaddrs []string, adminport string) *Projector {
 		topics:    make(map[string]*Feed),
 		reqch:     make(chan []interface{}),
 		finch:     make(chan bool),
-		logPrefix: fmt.Sprintf("projector %q", adminport),
+		logPrefix: fmt.Sprintf("[projector:%s]", adminport),
 	}
-	p.stats = c.ComponentStat{
-		"componentName":                fmt.Sprintf("projector-%v", adminport),
-		"topics":                       make([]string, 0),
-		"kvaddrs":                      kvaddrs,
-		"invalidRequests":              0,
-		"failoverLogRequests":          []uint64{0, 0},
-		"mutationStreamRequests":       []uint64{0, 0},
-		"updateMutationStreamRequests": []uint64{0, 0},
-		"subscribeStreamRequests":      []uint64{0, 0},
-		"repairDownstreamEndpoints":    []uint64{0, 0},
-		"shutdownStreamRequests":       []uint64{0, 0},
-	}
+	p.stats = p.newStats()
+	p.stats.Set("/kvaddrs", kvaddrs)
 	go mainAdminPort(adminport, p)
 	go p.genServer(p.reqch)
-	log.Printf("%v, started ...\n", p.logPrefix)
+	c.Infof("%v started ...\n", p.logPrefix)
 	return p
 }
 
@@ -198,6 +187,8 @@ const (
 	pCmdGetFeed byte = iota + 1
 	pCmdAddFeed
 	pCmdDelFeed
+	pCmdListTopics
+	pCmdGetStatistics
 	pCmdClose
 )
 
@@ -228,6 +219,23 @@ func (p *Projector) DelFeed(topic string) error {
 	return c.OpError(err, resp, 0)
 }
 
+// ListTopics all topics as array of string.
+func (p *Projector) ListTopics() ([]string, error) {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{pCmdListTopics, respch}
+	resp, err := c.FailsafeOp(p.reqch, respch, cmd, p.finch)
+	err = c.OpError(err, resp, 1)
+	return resp[0].([]string), err
+}
+
+// GetStatistics will get all or subset of statistics from projector.
+func (p *Projector) GetStatistics() map[string]interface{} {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{pCmdGetStatistics, respch}
+	resp, _ := c.FailsafeOp(p.reqch, respch, cmd, p.finch)
+	return resp[1].(map[string]interface{})
+}
+
 // Close this projector.
 func (p *Projector) Close() error {
 	respch := make(chan []interface{}, 1)
@@ -241,9 +249,18 @@ loop:
 	for {
 		msg := <-reqch
 		switch msg[0].(byte) {
+		case pCmdListTopics:
+			respch := msg[1].(chan []interface{})
+			respch <- []interface{}{p.listTopics(), nil}
+
+		case pCmdGetStatistics:
+			respch := msg[1].(chan []interface{})
+			respch <- []interface{}{p.getStatistics()}
+
 		case pCmdGetFeed:
 			respch := msg[2].(chan []interface{})
-			respch <- []interface{}{p.getFeed(msg[1].(string)), nil}
+			feed, err := p.getFeed(msg[1].(string))
+			respch <- []interface{}{feed, err}
 
 		case pCmdAddFeed:
 			respch := msg[3].(chan []interface{})
@@ -260,14 +277,34 @@ loop:
 	}
 }
 
-func (p *Projector) getFeed(topic string) *Feed {
-	return p.topics[topic]
+func (p *Projector) listTopics() []string {
+	topics := make([]string, 0, len(p.topics))
+	for topic := range p.topics {
+		topics = append(topics, topic)
+	}
+	return topics
+}
+
+func (p *Projector) getStatistics() map[string]interface{} {
+	feeds, _ := c.NewComponentStat(p.stats.Get("/feeds"))
+	for topic, feed := range p.topics {
+		feeds.Set("/"+topic, feed.GetStatistics())
+	}
+	return p.stats.ToMap()
+}
+
+func (p *Projector) getFeed(topic string) (*Feed, error) {
+	if feed, ok := p.topics[topic]; ok {
+		return feed, nil
+	}
+	return nil, ErrorTopicMissing
 }
 
 func (p *Projector) addFeed(topic string, feed *Feed) (err error) {
 	if _, ok := p.topics[topic]; ok {
 		return ErrorTopicExist
 	}
+	c.Infof("%v %q feed added ...", p.logPrefix, topic)
 	p.topics[topic] = feed
 	return
 }
@@ -277,6 +314,7 @@ func (p *Projector) delFeed(topic string) (err error) {
 		return ErrorTopicMissing
 	}
 	delete(p.topics, topic)
+	c.Infof("%v ... %q feed deleted", p.logPrefix, topic)
 	return
 }
 
@@ -285,6 +323,6 @@ func (p *Projector) doClose() error {
 		feed.CloseFeed()
 	}
 	close(p.finch)
-	log.Printf("%v, ... stopped.\n", p.logPrefix)
+	c.Infof("%v ... stopped.\n", p.logPrefix)
 	return nil
 }

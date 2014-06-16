@@ -77,16 +77,13 @@ func NewStreamClient(raddr string, n int, flags StreamTransportFlag) (c *StreamC
 	size := common.KeyVersionsChannelSize
 	for i := 0; i < n; i++ {
 		if conn, err = net.Dial("tcp", raddr); err != nil {
-			break
+			common.Errorf("%v error %v Dialing to %q\n", c.logPrefix, raddr, err)
+			c.doClose()
+			return nil, err
 		}
 		c.conns[i] = conn
 		c.connChans[i] = make(chan interface{}, size)
 		c.conn2Vbs[i] = make([]string, 0, 4) // TODO: avoid magic numbers
-	}
-	// if err close connections
-	if err != nil {
-		c.doClose()
-		return nil, err
 	}
 	// spawn routines per connection.
 	quitch := make(chan []string, 10) // TODO: avoid magic numbers

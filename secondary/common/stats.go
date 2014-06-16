@@ -15,6 +15,8 @@ package common
 
 import (
 	"encoding/json"
+	"github.com/prataprc/go-jsonpointer"
+	"regexp"
 )
 
 // ComponentStat is unmarshalled JSON and represented using Golang's type
@@ -24,22 +26,9 @@ import (
 //  "componentName", name of the component that provide statistics for itself.
 type ComponentStat map[string]interface{}
 
-// componentName -> stat-structure.
-var statistics = make(map[string]*ComponentStat)
-
-// GetStat for registered name.
-func GetStat(name string) *ComponentStat {
-	return statistics[name]
-}
-
-// StatsEncode marshal all component's statistics.
-func StatsEncode() ([]byte, error) {
-	return json.Marshal(&statistics)
-}
-
 // NewComponentStat return a new instance of stat structure initialized with
-// data and the same will be registered under component-name `name`.
-func NewComponentStat(name string, data interface{}) (stat *ComponentStat, err error) {
+// data.
+func NewComponentStat(data interface{}) (stat *ComponentStat, err error) {
 	var statm ComponentStat
 
 	switch v := data.(type) {
@@ -54,13 +43,12 @@ func NewComponentStat(name string, data interface{}) (stat *ComponentStat, err e
 	case nil:
 		statm = make(ComponentStat)
 	}
-	statistics[name] = &statm
 	return &statm, err
 }
 
 // Name is part of MessageMarshaller interface.
 func (s *ComponentStat) Name() string {
-	return (*s)["componentName"].(string) + ".stat"
+	return "stats"
 }
 
 // Encode is part of MessageMarshaller interface.
@@ -82,22 +70,71 @@ func (s *ComponentStat) ContentType() string {
 // Statistic operations.
 
 // Incr increments stat value by `val`
-func (s *ComponentStat) Incr(key string, val int) {
-	sval := *s
-	sval[key] = sval[key].(float64) + float64(val)
+func (s *ComponentStat) Incr(path string, val int) {
+	m := map[string]interface{}(*s)
+	err := jsonpointer.Incr(m, path, val)
+	if err != nil {
+		Fatalf("error Incr() ComponentStat %v\n", err)
+	}
 }
 
 // Incrs increments an array of stat value by `val`
-func (s *ComponentStat) Incrs(key string, vals ...int) {
-	sval := *s
-	values := sval[key].([]float64)
-	for i, val := range vals {
-		values[i] += float64(val)
+func (s *ComponentStat) Incrs(path string, vals ...int) {
+	m := map[string]interface{}(*s)
+	err := jsonpointer.Incrs(m, path, vals...)
+	if err != nil {
+		Fatalf("error Incrs() ComponentStat %v\n", err)
 	}
 }
 
 // Decr increments stat value by `val`
-func (s *ComponentStat) Decr(key string, val int) {
-	sval := *s
-	sval[key] = sval[key].(float64) - float64(val)
+func (s *ComponentStat) Decr(path string, val int) {
+	m := map[string]interface{}(*s)
+	err := jsonpointer.Decr(m, path, val)
+	if err != nil {
+		Fatalf("error Decr() ComponentStat %v\n", err)
+	}
+}
+
+// Set stat value
+func (s *ComponentStat) Set(path string, val interface{}) {
+	m := map[string]interface{}(*s)
+	err := jsonpointer.Set(m, path, val)
+	if err != nil {
+		Fatalf("error Set() ComponentStat %v\n", err)
+	}
+}
+
+// Get stat value
+func (s *ComponentStat) Get(path string) interface{} {
+	m := map[string]interface{}(*s)
+	val, err := jsonpointer.Get(m, path)
+	if err != nil {
+		Fatalf("error Get() ComponentStat %v\n", err)
+	}
+	return val
+}
+
+// ToMap converts *ComponentStat to map.
+func (s *ComponentStat) ToMap() map[string]interface{} {
+	return map[string]interface{}(*s)
+}
+
+// StatsURLPath construct url path for component-stats using path json-pointer.
+func StatsURLPath(prefix, path string) string {
+	if prefix[len(prefix)-1] != '/' {
+		prefix = prefix + "/"
+	}
+	return prefix + "stats" + path
+}
+
+var regxStatPath, _ = regexp.Compile(`(.*)stats(.*)`)
+
+// ParseStatsPath is opposite StatsURLPath
+func ParseStatsPath(urlPath string) string {
+	matches := regxStatPath.FindStringSubmatch(urlPath)
+	if len(matches) != 3 {
+		Fatalf("ParseStatsPath() couldn't match %s\n", urlPath)
+	}
+	return matches[2]
 }

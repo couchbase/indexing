@@ -18,7 +18,6 @@ package projector
 import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"log"
 	"time"
 )
 
@@ -29,9 +28,11 @@ type VbucketRoutine struct {
 	vbno   uint16  // immutable
 	vbuuid uint64  // immutable
 	// gen-server
-	reqch     chan []interface{}
-	finch     chan bool
+	reqch chan []interface{}
+	finch chan bool
+	// misc.
 	logPrefix string
+	stats     *c.ComponentStat
 }
 
 // NewVbucketRoutine creates a new routine to handle this vbucket stream.
@@ -45,22 +46,24 @@ func NewVbucketRoutine(kvfeed *KVFeed, bucket string, vbno uint16, vbuuid uint64
 		finch:  make(chan bool),
 	}
 	vr.logPrefix = vr.getLogPrefix(kvfeed, vbno)
+	vr.stats = vr.newStats()
 
 	go vr.run(vr.reqch, nil, nil)
-	log.Printf("%v, ... started\n", vr.logPrefix)
+	c.Infof("%v ... started\n", vr.logPrefix)
 	return vr
 }
 
 func (vr *VbucketRoutine) getLogPrefix(kvfeed *KVFeed, vbno uint16) string {
 	bfeed := kvfeed.bfeed
 	feed := bfeed.feed
-	return fmt.Sprintf("vroutn %v:%v:%v", feed.topic, bfeed.bucketn, vbno)
+	return fmt.Sprintf("[vb %v:%v:%v]", feed.topic, bfeed.bucketn, vbno)
 }
 
 const (
 	vrCmdEvent byte = iota + 1
 	vrCmdUpdateEngines
 	vrCmdDeleteEngines
+	vrCmdGetStatistics
 	vrCmdClose
 )
 
@@ -91,6 +94,14 @@ func (vr *VbucketRoutine) DeleteEngines(endpoints map[string]*Endpoint, engines 
 	return err
 }
 
+// GetStatistics for this vbucket.
+func (vr *VbucketRoutine) GetStatistics() map[string]interface{} {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{vrCmdGetStatistics, respch}
+	resp, _ := c.FailsafeOp(vr.reqch, respch, cmd, vr.finch)
+	return resp[0].(map[string]interface{})
+}
+
 // Close this vbucket routine and free its resources, synchronous call.
 func (vr *VbucketRoutine) Close() error {
 	respch := make(chan []interface{}, 1)
@@ -102,7 +113,9 @@ func (vr *VbucketRoutine) Close() error {
 // routine handles data path for a single vbucket, never panics.
 func (vr *VbucketRoutine) run(reqch chan []interface{}, endpoints map[string]*Endpoint, engines map[uint64]*Engine) {
 	var seqno uint64
+
 	heartBeat := time.After(c.VbucketSyncTimeout * time.Millisecond)
+	stats := vr.stats
 
 loop:
 	for {
@@ -115,6 +128,7 @@ loop:
 				engines = msg[2].(map[uint64]*Engine)
 				respch := msg[3].(chan []interface{})
 				respch <- []interface{}{nil}
+				stats.Incr("/uEngines", 1)
 
 			case vrCmdDeleteEngines:
 				endpoints = msg[1].(map[string]*Endpoint)
@@ -123,6 +137,11 @@ loop:
 				}
 				respch := msg[3].(chan []interface{})
 				respch <- []interface{}{nil}
+				stats.Incr("/dEngines", 1)
+
+			case vrCmdGetStatistics:
+				respch := msg[1].(chan []interface{})
+				respch <- []interface{}{stats.ToMap()}
 
 			case vrCmdEvent:
 				m := msg[1].(*MutationEvent)
@@ -134,7 +153,8 @@ loop:
 						kv.AddStreamBegin()
 						return kv
 					})
-					break
+					stats.Incr("/begins", 1)
+					break // breaks out of select{}
 				}
 				// prepare a KeyVersions for each endpoint.
 				kvForEndpoints := make(map[string]*c.KeyVersions)
@@ -151,6 +171,7 @@ loop:
 					// send might fail, we don't care
 					endpoints[raddr].Send(vr.bucket, vr.vbno, vr.vbuuid, kv)
 				}
+				stats.Incr("/mutations", 1)
 
 			case vrCmdClose:
 				respch := msg[1].(chan []interface{})
@@ -168,6 +189,7 @@ loop:
 					kv.AddSync()
 					return kv
 				})
+				stats.Incr("/syncs", 1)
 			}
 		}
 	}
@@ -181,7 +203,7 @@ func (vr *VbucketRoutine) doClose(seqno uint64, endpoints map[string]*Endpoint) 
 		return kv
 	})
 	close(vr.finch)
-	log.Printf("%v, ... closed\n", vr.logPrefix)
+	c.Infof("%v ... stopped\n", vr.logPrefix)
 }
 
 // send to all endpoints

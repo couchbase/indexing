@@ -9,6 +9,7 @@ package adminport
 
 import (
 	"errors"
+	c "github.com/couchbase/indexing/secondary/common"
 )
 
 // errors codes
@@ -21,6 +22,15 @@ var ErrorMessageUnknown = errors.New("adminport.unknownMessage")
 
 // ErrorPathNotFound
 var ErrorPathNotFound = errors.New("adminport.pathNotFound")
+
+// ErrorDecodeRequest
+var ErrorDecodeRequest = errors.New("adminport.decodeRequest")
+
+// ErrorDecodeResponse
+var ErrorDecodeResponse = errors.New("adminport.decodeResponse")
+
+// ErrorInternal
+var ErrorInternal = errors.New("adminport.internal")
 
 // MessageMarshaller API abstracts the underlying messaging format. For instance,
 // in case of protobuf defined structures, respective structure definition
@@ -63,6 +73,9 @@ type Server interface {
 	// Unregister() APIs cannot be called after starting the server.
 	Start() error
 
+	// GetStatistics returns server statistics.
+	GetStatistics() *c.ComponentStat
+
 	// Stop server routine. TODO: server routine shall quite only after
 	// outstanding requests are serviced.
 	Stop()
@@ -75,11 +88,6 @@ type Client interface {
 	// pointer to an object implementing `MessageMarshaller` interface.
 	Request(request, response MessageMarshaller) (err error)
 
-	// RequestStat shall get ComponentStat for specified component-name and
-	// return back in response.
-	RequestStat(name string, response MessageMarshaller) (err error)
-
-	// RequestStats is plural form of RequestStat to retrieve statistics for
-	// all the components.
-	RequestStats(response MessageMarshaller) (err error)
+	// RequestStat shall get ComponentStat for specified path.
+	RequestStat(path string, response MessageMarshaller) (err error)
 }

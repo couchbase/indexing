@@ -1,14 +1,14 @@
 // concurrency model:
 //
-//                                           V0 V1 V2
-//                                            ^  ^  ^
-//                                            |  |  |
-//                                      Begin |  |  |
-//                                   Mutation |  |  |
-//                                   Deletion |  |  |
-//                                       Sync |  |  |
-//                      NewKVFeed()       End |  |  |
-//                           |  |             |  |  |
+//                                           V0 V1    Vn
+//                                            ^  ^ ..  ^
+//                                            |  |     |
+//                                      Begin |  |     |
+//                                   Mutation |  |     |
+//                                   Deletion |  |     |
+//                                       Sync |  |     |
+//                      NewKVFeed()       End |  |     |
+//                           |  |             |  |     |
 //                          (spawn)         MutationEvent
 //                           |  |             |
 //                           |  *----------- runScatter()
@@ -45,7 +45,6 @@ import (
 	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"log"
 )
 
 // error codes
@@ -68,12 +67,15 @@ type KVFeed struct {
 	bucketn string
 	bucket  BucketAccess
 	feeder  KVFeeder
-	// gen-server
-	reqch     chan []interface{}
-	finch     chan bool
-	logPrefix string
 	// data path
 	vbuckets map[uint16]*activeVbucket // mutable
+	// gen-server
+	reqch chan []interface{}
+	sbch  chan []interface{}
+	finch chan bool
+	// misc.
+	logPrefix string
+	stats     *c.ComponentStat
 }
 
 type activeVbucket struct {
@@ -86,6 +88,7 @@ type activeVbucket struct {
 
 type sbkvUpdateEngines []interface{}
 type sbkvDeleteEngines []interface{}
+type sbkvGetStatistics []interface{}
 
 // NewKVFeed create a new feed from `kvaddr` node for a single bucket. Uses
 // couchbase client API to identify the subset of vbuckets mapped to this
@@ -94,13 +97,18 @@ type sbkvDeleteEngines []interface{}
 // if error, KVFeed is not started
 // - error returned by couchbase client
 func NewKVFeed(bfeed *BucketFeed, kvaddr, pooln, bucketn string) (*KVFeed, error) {
-	p := bfeed.getFeed().getProjector()
+	feed := bfeed.getFeed()
+	logPrefix := fmt.Sprintf("[kvfeed %v:%v:%v]", feed.topic, bucketn, kvaddr)
+
+	p := feed.getProjector()
 	bucket, err := p.getBucket(kvaddr, pooln, bucketn)
 	if err != nil {
+		c.Errorf("%v getBucket(): %v\n", logPrefix, err)
 		return nil, err
 	}
 	feeder, err := bucket.OpenKVFeed(kvaddr)
 	if err != nil {
+		c.Errorf("%v OpenKVFeed(): %v\n", logPrefix, err)
 		return nil, err
 	}
 	kvfeed := &KVFeed{
@@ -110,30 +118,27 @@ func NewKVFeed(bfeed *BucketFeed, kvaddr, pooln, bucketn string) (*KVFeed, error
 		bucketn: bucketn,
 		bucket:  bucket,
 		feeder:  feeder.(KVFeeder),
-		// gen-server
-		reqch:    make(chan []interface{}, c.GenserverChannelSize),
-		finch:    make(chan bool),
+		// data-path
 		vbuckets: make(map[uint16]*activeVbucket),
+		// gen-server
+		reqch: make(chan []interface{}, c.GenserverChannelSize),
+		sbch:  make(chan []interface{}, c.GenserverChannelSize),
+		finch: make(chan bool),
+		// misc.
+		logPrefix: logPrefix,
 	}
-	kvfeed.logPrefix = kvfeed.getLogPrefix(bfeed, kvaddr)
+	kvfeed.stats = kvfeed.newStats()
 
-	sbch := make(chan []interface{}, c.GenserverChannelSize)
-	go kvfeed.genServer(kvfeed.reqch, sbch)
-	go kvfeed.runScatter(sbch)
-	log.Printf("%v, started ...\n", kvfeed.logPrefix)
+	go kvfeed.genServer(kvfeed.reqch, kvfeed.sbch)
+	go kvfeed.runScatter(kvfeed.sbch)
+	c.Infof("%v started ...\n", kvfeed.logPrefix)
 	return kvfeed, nil
-}
-
-func (kvfeed *KVFeed) getLogPrefix(bfeed *BucketFeed, kvaddr string) string {
-	feed := bfeed.feed
-	return fmt.Sprintf("kvfeed-feed %v:%v:%v", feed.topic, bfeed.bucketn, kvaddr)
 }
 
 // APIs to gen-server
 const (
 	kvfCmdRequestFeed byte = iota + 1
-	kvfCmdUpdateEngines
-	kvfCmdDeleteEngines
+	kvfCmdGetStatistics
 	kvfCmdCloseFeed
 )
 
@@ -163,18 +168,23 @@ func (kvfeed *KVFeed) RequestFeed(
 
 // UpdateEngines synchronous call.
 func (kvfeed *KVFeed) UpdateEngines(endpoints map[string]*Endpoint, engines map[uint64]*Engine) error {
-	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{kvfCmdUpdateEngines, endpoints, engines, respch}
-	resp, err := c.FailsafeOp(kvfeed.reqch, respch, cmd, kvfeed.finch)
-	return c.OpError(err, resp, 0)
+	kvfeed.sendSideband(sbkvUpdateEngines{endpoints, engines}, kvfeed.sbch)
+	return nil
 }
 
 // DeleteEngines synchronous call.
 func (kvfeed *KVFeed) DeleteEngines(endpoints map[string]*Endpoint, engines []uint64) error {
+	kvfeed.sendSideband(sbkvDeleteEngines{endpoints, engines}, kvfeed.sbch)
+	return nil
+}
+
+// GetStatistics will recursively get statistics for kv-feed and its
+// underlying workers.
+func (kvfeed *KVFeed) GetStatistics() map[string]interface{} {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{kvfCmdDeleteEngines, endpoints, engines, respch}
-	resp, err := c.FailsafeOp(kvfeed.reqch, respch, cmd, kvfeed.finch)
-	return c.OpError(err, resp, 0)
+	cmd := []interface{}{kvfCmdGetStatistics, respch}
+	resp, _ := c.FailsafeOp(kvfeed.reqch, respch, cmd, kvfeed.finch)
+	return resp[1].(map[string]interface{})
 }
 
 // CloseFeed synchronous call.
@@ -189,7 +199,7 @@ func (kvfeed *KVFeed) CloseFeed() error {
 func (kvfeed *KVFeed) genServer(reqch chan []interface{}, sbch chan []interface{}) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			log.Printf("%v, gen-server paniced: %v\n", kvfeed.logPrefix, r)
+			c.Errorf("%v paniced: %v !\n", kvfeed.logPrefix, r)
 			kvfeed.doClose()
 		}
 		close(sbch)
@@ -208,19 +218,17 @@ loop:
 			failTs, kvTs, err := kvfeed.requestFeed(req, endpoints, engines)
 			respch <- []interface{}{failTs, kvTs, err}
 
-		case kvfCmdUpdateEngines:
-			endpoints := msg[1].(map[string]*Endpoint)
-			engines := msg[2].(map[string]*Engine)
-			respch := msg[3].(chan []interface{})
-			kvfeed.sendSideband(sbkvUpdateEngines{endpoints, engines}, sbch)
-			respch <- []interface{}{nil}
-
-		case kvfCmdDeleteEngines:
-			endpoints := msg[1].(map[string]*Endpoint)
-			engines := msg[2].([]uint64)
-			respch := msg[3].(chan []interface{})
-			kvfeed.sendSideband(sbkvDeleteEngines{endpoints, engines}, sbch)
-			respch <- []interface{}{nil}
+		case kvfCmdGetStatistics:
+			respch := msg[1].(chan []interface{})
+			resp := kvfeed.sendSideband(sbkvGetStatistics{}, sbch)
+			for name, val := range resp[0].(map[string]interface{}) {
+				kvfeed.stats.Set("/"+name, val)
+			}
+			for vbno, v := range kvfeed.vbuckets {
+				s := fmt.Sprintf("%v", vbno)
+				kvfeed.stats.Set("/"+s, v.vr.GetStatistics())
+			}
+			respch <- []interface{}{kvfeed.stats.ToMap()}
 
 		case kvfCmdCloseFeed:
 			respch := msg[1].(chan []interface{})
@@ -236,16 +244,19 @@ func (kvfeed *KVFeed) requestFeed(
 	endpoints map[string]*Endpoint,
 	engines map[uint64]*Engine) (failTs, kvTs *c.Timestamp, err error) {
 
+	prefix := kvfeed.logPrefix
+
 	// fetch restart-timestamp from request
 	feeder := kvfeed.feeder
 	ts := req.RestartTimestamp(kvfeed.bucketn)
 	if ts == nil {
-		log.Printf("%v, error restartTimestamp is empty\n", kvfeed.logPrefix)
+		c.Errorf("%v restartTimestamp is empty\n", prefix)
 		return nil, nil, c.ErrorInvalidRequest
 	}
 	// fetch list of vbuckets mapped on this connection
 	m, err := kvfeed.bucket.GetVBmap([]string{kvfeed.kvaddr})
 	if err != nil {
+		c.Errorf("%v bucket.GetVBmap() %v \n", prefix, err)
 		return nil, nil, err
 	}
 	vbnos := m[kvfeed.kvaddr]
@@ -256,16 +267,25 @@ func (kvfeed *KVFeed) requestFeed(
 	// execute the request
 	ts = ts.SelectByVbuckets(vbnos)
 	if req.IsStart() { // start
-		failTs, kvTs, err = feeder.StartVbStreams(ts)
+		if failTs, kvTs, err = feeder.StartVbStreams(ts); err != nil {
+			c.Errorf("%v feeder.StartVbStreams() %v", prefix, err)
+		}
 	} else if req.IsRestart() { // restart implies a shutdown and start
 		if err = feeder.EndVbStreams(ts); err == nil {
-			failTs, kvTs, err = kvfeed.feeder.StartVbStreams(ts)
+			if failTs, kvTs, err = feeder.StartVbStreams(ts); err != nil {
+				c.Errorf("%v feeder.StartVbStreams() %v", prefix, err)
+			}
+		} else {
+			c.Errorf("%v feeder.EndVbStreams() %v", prefix, err)
 		}
 	} else if req.IsShutdown() { // shutdown
-		err = feeder.EndVbStreams(ts)
+		if err = feeder.EndVbStreams(ts); err != nil {
+			c.Errorf("%v feeder.EndVbStreams() %v", prefix, err)
+		}
 		failTs, kvTs = ts, ts
 	} else {
 		err = c.ErrorInvalidRequest
+		c.Errorf("%v %v", prefix, err)
 	}
 	return
 }
@@ -274,7 +294,7 @@ func (kvfeed *KVFeed) requestFeed(
 func (kvfeed *KVFeed) doClose() error {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("%v, doClose() paniced: %q\n", kvfeed.logPrefix, r)
+			c.Errorf("%v doClose() paniced: %v !\n", kvfeed.logPrefix, r)
 		}
 	}()
 
@@ -286,14 +306,16 @@ func (kvfeed *KVFeed) doClose() error {
 	// close upstream
 	kvfeed.feeder.CloseKVFeed()
 	close(kvfeed.finch)
-	log.Printf("%v, ... closed\n", kvfeed.logPrefix)
+	c.Infof("%v ... stopped\n", kvfeed.logPrefix)
 	return nil
 }
 
 // synchronous call to update runScatter via side-band channel.
-func (kvfeed *KVFeed) sendSideband(info interface{}, sbch chan []interface{}) {
+func (kvfeed *KVFeed) sendSideband(info interface{}, sbch chan []interface{}) []interface{} {
 	respch := make(chan []interface{}, 1)
-	c.FailsafeOp(sbch, respch, []interface{}{info, respch}, kvfeed.finch)
+	cmd := []interface{}{info, respch}
+	resp, _ := c.FailsafeOp(sbch, respch, cmd, kvfeed.finch)
+	return resp
 }
 
 // routine handles data path, never panics.
@@ -302,6 +324,7 @@ func (kvfeed *KVFeed) runScatter(sbch chan []interface{}) {
 	var endpoints map[string]*Endpoint
 	var engines map[uint64]*Engine
 
+	mutations := 0
 loop:
 	for {
 		select {
@@ -311,6 +334,7 @@ loop:
 				break loop
 			}
 			kvfeed.scatterMutation(m, endpoints, engines)
+			mutations++
 
 		case msg, ok := <-sbch:
 			if ok == false {
@@ -335,8 +359,14 @@ loop:
 				for _, engineKey := range engineKeys {
 					delete(engines, engineKey)
 				}
+			case sbkvGetStatistics:
+				stats := map[string]interface{}{
+					"mutations": mutations,
+				}
+				respch <- []interface{}{stats}
 			}
 			respch <- []interface{}{nil}
+
 		}
 	}
 }
@@ -348,8 +378,8 @@ func (kvfeed *KVFeed) scatterMutation(m *MutationEvent, endpoints map[string]*En
 	switch m.Opcode {
 	case OpStreamBegin:
 		if _, ok := kvfeed.vbuckets[vbno]; ok {
-			fmtstr := "%v, error duplicate OpStreamBegin for %v\n"
-			log.Printf(fmtstr, kvfeed.logPrefix, m.Vbucket)
+			fmtstr := "%v, duplicate OpStreamBegin for %v\n"
+			c.Errorf(fmtstr, kvfeed.logPrefix, m.Vbucket)
 		} else {
 			vr := NewVbucketRoutine(kvfeed, kvfeed.bucketn, vbno, m.Vbuuid)
 			vr.UpdateEngines(endpoints, engines)
@@ -365,8 +395,8 @@ func (kvfeed *KVFeed) scatterMutation(m *MutationEvent, endpoints map[string]*En
 
 	case OpStreamEnd:
 		if v, ok := kvfeed.vbuckets[vbno]; !ok {
-			fmtstr := "%v, error duplicate OpStreamEnd for %v\n"
-			log.Printf(fmtstr, kvfeed.logPrefix, m.Vbucket)
+			fmtstr := "%v, duplicate OpStreamEnd for %v\n"
+			c.Errorf(fmtstr, kvfeed.logPrefix, m.Vbucket)
 		} else {
 			v.vr.Close()
 			delete(kvfeed.vbuckets, vbno)
@@ -375,8 +405,8 @@ func (kvfeed *KVFeed) scatterMutation(m *MutationEvent, endpoints map[string]*En
 	case OpMutation, OpDeletion:
 		if v, ok := kvfeed.vbuckets[vbno]; ok {
 			if v.vbuuid != m.Vbuuid {
-				fmtstr := "%v, error vbuuid mismatch for vbucket %v\n"
-				log.Printf(fmtstr, kvfeed.logPrefix, m.Vbucket)
+				fmtstr := "%v, vbuuid mismatch for vbucket %v\n"
+				c.Errorf(fmtstr, kvfeed.logPrefix, m.Vbucket)
 				v.vr.Close()
 				delete(kvfeed.vbuckets, vbno)
 			} else {

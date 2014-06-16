@@ -21,6 +21,7 @@ type testMessage struct {
 }
 
 func TestLoopback(t *testing.T) {
+	//common.SetLogLevel(common.LogLevelTrace)
 	q := make(chan bool)
 
 	doServer(addr, t, q)
@@ -44,11 +45,12 @@ func TestLoopback(t *testing.T) {
 		t.Error("unexpected response")
 	}
 	stats := common.ComponentStat{}
-	if err := client.RequestStat("adminport", &stats); err != nil {
+	if err := client.RequestStat("/adminport", &stats); err != nil {
 		t.Error(err)
 	}
-	if stats["messages"].(float64) != float64(1) {
-		t.Error("registered messages", stats["messages"])
+	common.Infof("%v\n", stats)
+	if stats["requests"].(float64) != float64(2) {
+		t.Error("registered requests", stats["requests"])
 	}
 }
 
@@ -80,6 +82,9 @@ func doServer(addr string, tb testing.TB, quit chan bool) Server {
 	if err := server.Register(&testMessage{}); err != nil {
 		tb.Fatal(err)
 	}
+	if err := server.Register(&common.ComponentStat{}); err != nil {
+		tb.Fatal(err)
+	}
 
 	if err := server.Start(); err != nil {
 		tb.Fatal(err)
@@ -94,6 +99,13 @@ func doServer(addr string, tb testing.TB, quit chan bool) Server {
 					switch msg := req.GetMessage().(type) {
 					case *testMessage:
 						if err := req.Send(msg); err != nil {
+							tb.Error(err)
+						}
+					case *common.ComponentStat:
+						m := &common.ComponentStat{
+							"adminport": server.GetStatistics(),
+						}
+						if err := req.Send(m); err != nil {
 							tb.Error(err)
 						}
 					}
