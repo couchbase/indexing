@@ -63,3 +63,13 @@ func N1QLTransform(document []byte, cExprs []interface{}) ([]byte, error) {
 		return nil, ErrorEmptyN1QLExpression
 	}
 }
+
+// CompositeKeysToArray convert list of composite keys to JSON array of
+// values.
+func CompositeKeysToArray(keys []*dparval.Value) []byte {
+	secKey := dparval.NewValue(make([]interface{}, len(keys)))
+	for i, key := range keys {
+		secKey.SetIndex(i, key)
+	}
+	return secKey.Bytes()
+}
