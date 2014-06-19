@@ -9,6 +9,10 @@
 
 package indexer
 
+import (
+	"log"
+)
+
 //Counter interface
 func (s *fdbSnapshot) CountTotal() (uint64, error) {
 

@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"errors"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
 	"log"
@@ -21,8 +22,8 @@ type fdbSnapshot struct {
 
 	main       *forestdb.Database //db handle for forward index
 	back       *forestdb.Database //db handle for reverse index
-	mainSeqNum SeqNum
-	backSeqNum SeqNum
+	mainSeqNum forestdb.SeqNum
+	backSeqNum forestdb.SeqNum
 
 	idxDefnId common.IndexDefnId //index definition id
 	idxInstId common.IndexInstId //index instance id
@@ -34,20 +35,20 @@ type fdbSnapshot struct {
 
 func (s *fdbSnapshot) Open() error {
 
-	lock.Lock()
-	defer lock.Unlock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
 	if s.refCount > 0 {
 		s.refCount++
-		return
+		return nil
 	} else {
 		var err error
-		s.main, err = fdb.main.SnapshotOpen(s.mainSeqNum)
+		s.main, err = s.main.SnapshotOpen(s.mainSeqNum)
 		if err != nil {
 			log.Println("ForestDBSnapshot: Unexpected Error Opening Main DB Snapshot %v", err)
 			return err
 		}
-		s.back, err = fdb.back.SnapshotOpen(s.backSeqNum)
+		s.back, err = s.back.SnapshotOpen(s.backSeqNum)
 		if err != nil {
 			log.Println("ForestDBSnapshot: Unexpected Error Opening Back DB Snapshot %v", err)
 			return err
@@ -59,8 +60,8 @@ func (s *fdbSnapshot) Open() error {
 
 func (s *fdbSnapshot) IsOpen() bool {
 
-	lock.Lock()
-	defer lock.Unlock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
 	if s.refCount > 0 {
 		return true
@@ -90,19 +91,19 @@ func (s *fdbSnapshot) SetTimestamp(ts Timestamp) {
 	s.ts = ts
 }
 
-func (s *fdbSnapshot) MainIndexSeqNum() SeqNum {
+func (s *fdbSnapshot) MainIndexSeqNum() forestdb.SeqNum {
 	return s.mainSeqNum
 }
 
-func (s *fdbSnapshot) BackIndexSeqNum() SeqNum {
+func (s *fdbSnapshot) BackIndexSeqNum() forestdb.SeqNum {
 	return s.backSeqNum
 }
 
 //Close the snapshot
 func (s *fdbSnapshot) Close() error {
 
-	lock.Lock()
-	defer lock.Unlock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 
 	if s.refCount <= 0 {
 		log.Println("ForestDBSnapshot: Close operation requested on already" +

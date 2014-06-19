@@ -37,17 +37,17 @@ func NewForestDBSlice(name string, sliceId SliceId, idxDefnId common.IndexDefnId
 	slice := &fdbSlice{}
 
 	var err error
-	if slice.main, err = goforestdb.Open(name); err != nil {
+	if slice.main, err = forestdb.Open(name, nil); err != nil {
 		return nil, err
 	}
 
 	//create a separate back-index
-	if slice.back, err = goforestdb.Open(name + "_back"); err != nil {
+	if slice.back, err = forestdb.Open(name+"_back", nil); err != nil {
 		return nil, err
 	}
 
 	slice.name = name
-	slice.idxInstId = indexInstId
+	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefnId
 	slice.id = sliceId
 
@@ -136,7 +136,7 @@ func (fdb *fdbSlice) Insert(k Key, v Value) error {
 }
 
 //Delete a key/value pair by docId
-func (fdb *fdbSlice) Delete(docid string) error {
+func (fdb *fdbSlice) Delete(docid []byte) error {
 	log.Printf("ForestDBSlice: Delete Key - %s", docid)
 
 	var oldkey Key
@@ -154,7 +154,7 @@ func (fdb *fdbSlice) Delete(docid string) error {
 	}
 
 	//delete from the back index
-	if err = fdb.back.DeleteKV([]byte(docid)); err != nil {
+	if err = fdb.back.DeleteKV(docid); err != nil {
 		log.Printf("ForestDBSlice: Error deleting entry from back index %v", err)
 		return err
 	}
@@ -163,7 +163,7 @@ func (fdb *fdbSlice) Delete(docid string) error {
 }
 
 //Get an existing key/value pair by key
-func (fdb *fdbSlice) getBackIndexEntry(docid string) (Key, error) {
+func (fdb *fdbSlice) getBackIndexEntry(docid []byte) (Key, error) {
 
 	var k Key
 	var kbyte []byte
@@ -183,9 +183,9 @@ func (fdb *fdbSlice) getBackIndexEntry(docid string) (Key, error) {
 //Snapshot
 func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 
-	s := &fdbSnapshot{id: slice.Id(),
-		idxDefnId: slice.IndexDefnId(),
-		idxInstId: slice.IndexInstanceId()}
+	s := &fdbSnapshot{id: fdb.id,
+		idxDefnId: fdb.idxDefnId,
+		idxInstId: fdb.idxInstId}
 
 	//store snapshot seqnum for main index
 	{
@@ -194,7 +194,7 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 			return nil, err
 		}
 		seq := i.LastSeqNum()
-		s.mainSeqnum = seq
+		s.mainSeqNum = seq
 	}
 
 	//store snapshot seqnum for back index
@@ -204,9 +204,9 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 			return nil, err
 		}
 		seq := i.LastSeqNum()
-		s.backSeqnum = seq
+		s.backSeqNum = seq
 	}
-	return s, err
+	return s, nil
 }
 
 //Commit
@@ -214,12 +214,12 @@ func (fdb *fdbSlice) Commit() error {
 
 	var err error
 	//Commit the back index
-	if err = fdb.back.Commit(); err != nil {
+	if err = fdb.back.Commit(forestdb.COMMIT_NORMAL); err != nil {
 		//TODO: what else needs to be done here
 		return err
 	}
 	//Commit the main index
-	if err = fdb.main.Commit(); err != nil {
+	if err = fdb.main.Commit(forestdb.COMMIT_NORMAL); err != nil {
 		return err
 	}
 	return nil
@@ -237,4 +237,10 @@ func (fdb *fdbSlice) Close() error {
 		fdb.back.Close()
 	}
 	return nil
+}
+
+func (fdb *fdbSlice) Destroy() error {
+	//TODO
+	return nil
+
 }
