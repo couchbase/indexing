@@ -35,6 +35,9 @@ type SliceContainer interface {
 
 	//Return Slice for the given SliceId
 	GetSliceById(SliceId) Slice
+
+	//Return all Slices
+	GetAllSlices() []Slice
 }
 
 //hashedSliceContainer provides a hash based implementation
@@ -100,4 +103,17 @@ func (sc *HashedSliceContainer) GetSliceById(id SliceId) Slice {
 		log.Println("HashedSliceContainer: Invalid Slice Id %v", id)
 		return nil
 	}
+}
+
+//GetAllSlices returns all slices from the container
+func (sc *HashedSliceContainer) GetAllSlices() []Slice {
+
+	var sliceList []Slice
+
+	for _, slice := range sc.SliceMap {
+		sliceList = append(sliceList, slice)
+	}
+
+	return sliceList
+
 }

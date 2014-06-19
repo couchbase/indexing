@@ -17,12 +17,12 @@ import (
 //KeyPartitionDefn defines a key based partition in terms of topology
 //ie its Id and Indexer Endpoints hosting the partition
 type KeyPartitionDefn struct {
-	PartitionId PartitionId
-	Endpoints   []Endpoint
+	Id     PartitionId
+	Endpts []Endpoint
 }
 
-func (kp *KeyPartitionDefn) Endpoints() []Endpoint {
-	return kp.Endpoints
+func (kp KeyPartitionDefn) Endpoints() []Endpoint {
+	return kp.Endpts
 }
 
 //KeyPartitionContainer implements PartitionContainer interface
@@ -82,7 +82,7 @@ func (pc *KeyPartitionContainer) GetPartitionIdByPartitionKey(key PartitionKey) 
 func (pc *KeyPartitionContainer) GetEndpointsByPartitionId(id PartitionId) []Endpoint {
 
 	if p, ok := pc.PartitionMap[id]; ok {
-		return p.Endpoints
+		return p.Endpoints()
 	} else {
 		log.Println("KeyPartitionContainer: Invalid Partition Id %v", id)
 		return nil

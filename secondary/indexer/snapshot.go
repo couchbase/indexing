@@ -13,8 +13,6 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 )
 
-type SeqNum uint16
-
 //Snapshot interface
 type Snapshot interface {
 	IndexReader
@@ -28,8 +26,5 @@ type Snapshot interface {
 	IndexDefnId() common.IndexDefnId
 
 	Timestamp() Timestamp
-	SetTimeStamp(Timestamp)
-
-	MainIndexSeqNum() SeqNum
-	BackIndexSeqNum() SeqNum
+	SetTimestamp(Timestamp)
 }

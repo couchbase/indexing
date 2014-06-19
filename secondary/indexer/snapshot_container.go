@@ -21,8 +21,8 @@ type SnapshotContainer interface {
 	Len() int
 
 	GetLatestSnapshot() Snapshot
-	GetLatestSnapshotAboveTS(Timestamp) Snapshot
 	GetSnapshotEqualToTS(Timestamp) Snapshot
+	GetSnapshotRecentThanTS(Timestamp) Snapshot
 }
 
 type snapshotContainer struct {
