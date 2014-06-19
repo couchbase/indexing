@@ -43,9 +43,17 @@ const (
 	MUT_MGR_DRAIN_MUTATION_QUEUE
 	MUT_MGR_GET_MUTATION_QUEUE_HWT
 	MUT_MGR_GET_MUTATION_QUEUE_LWT
-	MUT_MGR_UPDATE_INSTANCE_MAP
-	MUT_MGR_UPDATE_PARTITION_MAP
 	MUT_MGR_SHUTDOWN
+	MUT_MGR_FLUSH_DONE
+
+	//TIMEKEEPER
+	TK_STREAM_START
+	TK_STREAM_SHOP
+	TK_SHUTDOWN
+	TK_STABILITY_TIMESTAMP
+
+	UPDATE_INDEX_INSTANCE_MAP
+	UPDATE_INDEX_PARTITION_MAP
 )
 
 type Message interface {
@@ -85,11 +93,12 @@ func (m *MsgSuccess) GetMsgType() MsgType {
 
 //Timestamp Message
 type MsgTimestamp struct {
-	ts Timestamp
+	mType MsgType
+	ts    Timestamp
 }
 
 func (m *MsgTimestamp) GetMsgType() MsgType {
-	return TIMESTAMP
+	return m.mType
 }
 
 func (m *MsgTimestamp) GetTimestamp() Timestamp {
@@ -214,28 +223,94 @@ func (m *MsgMutMgrGetTimestamp) GetStreamId() StreamId {
 	return m.streamId
 }
 
-//MUT_MGR_UPDATE_INSTANCE_MAP
-type MsgMutMgrUpdateInstMap struct {
+//UPDATE_INSTANCE_MAP
+type MsgUpdateInstMap struct {
 	indexInstMap common.IndexInstMap
 }
 
-func (m *MsgMutMgrUpdateInstMap) GetMsgType() MsgType {
-	return MUT_MGR_UPDATE_INSTANCE_MAP
+func (m *MsgUpdateInstMap) GetMsgType() MsgType {
+	return UPDATE_INDEX_INSTANCE_MAP
 }
 
-func (m *MsgMutMgrUpdateInstMap) GetIndexInstMap() common.IndexInstMap {
+func (m *MsgUpdateInstMap) GetIndexInstMap() common.IndexInstMap {
 	return m.indexInstMap
 }
 
-//MUT_MGR_UPDATE_PARTITION_MAP
-type MsgMutMgrUpdatePartnMap struct {
+//UPDATE_PARTITION_MAP
+type MsgUpdatePartnMap struct {
 	indexPartnMap common.IndexPartnMap
 }
 
-func (m *MsgMutMgrUpdatePartnMap) GetMsgType() MsgType {
-	return MUT_MGR_UPDATE_PARTITION_MAP
+func (m *MsgUpdatePartnMap) GetMsgType() MsgType {
+	return UPDATE_INDEX_PARTITION_MAP
 }
 
-func (m *MsgMutMgrUpdatePartnMap) GetIndexPartnMap() common.IndexPartnMap {
+func (m *MsgUpdatePartnMap) GetIndexPartnMap() common.IndexPartnMap {
 	return m.indexPartnMap
+}
+
+//MUT_MGR_FLUSH_DONE
+type MsgMutMgrFlushDone struct {
+	ts       Timestamp
+	streamId StreamId
+	bucket   string
+}
+
+func (m *MsgMutMgrFlushDone) GetMsgType() MsgType {
+	return MUT_MGR_FLUSH_DONE
+}
+
+func (m *MsgMutMgrFlushDone) GetTS() Timestamp {
+	return m.ts
+}
+
+func (m *MsgMutMgrFlushDone) GetStreamId() StreamId {
+	return m.streamId
+}
+
+func (m *MsgMutMgrFlushDone) GetBucket() string {
+	return m.bucket
+}
+
+//TK_STREAM_START
+//TK_STREAM_SHOP
+type MsgTKStreamUpdate struct {
+	mType         MsgType
+	streamId      StreamId
+	indexInstList []common.IndexInst
+}
+
+func (m *MsgTKStreamUpdate) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgTKStreamUpdate) GetStreamId() StreamId {
+	return m.streamId
+}
+
+func (m *MsgTKStreamUpdate) GetIndexList() []common.IndexInst {
+	return m.indexInstList
+}
+
+//TK_STABILITY_TIMESTAMP
+type MsgTKStabilityTS struct {
+	ts       Timestamp
+	streamId StreamId
+	bucket   string
+}
+
+func (m *MsgTKStabilityTS) GetMsgType() MsgType {
+	return TK_STABILITY_TIMESTAMP
+}
+
+func (m *MsgTKStabilityTS) GetStreamId() StreamId {
+	return m.streamId
+}
+
+func (m *MsgTKStabilityTS) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgTKStabilityTS) GetTimestamp() Timestamp {
+	return m.ts
 }

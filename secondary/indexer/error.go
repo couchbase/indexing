@@ -39,6 +39,9 @@ const (
 
 	//Mutation Queue
 	ERROR_MUTATION_QUEUE_INIT
+
+	//Timekeeper
+	ERROR_TK_UNKNOWN_STREAM
 )
 
 type errSeverity int16
@@ -58,6 +61,7 @@ const (
 	STREAM_READER
 	SLAB_MANAGER
 	MUTATION_MANAGER
+	TIMEKEEPER
 )
 
 type Error struct {

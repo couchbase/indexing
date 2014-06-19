@@ -61,7 +61,6 @@ const DEFAULT_NUM_STREAM_READER_WORKERS = 8
 const DEFAULT_START_CHUNK_SIZE = 256
 const DEFAULT_SLAB_SIZE = DEFAULT_START_CHUNK_SIZE * 1024
 const DEFAULT_MAX_SLAB_MEMORY = DEFAULT_SLAB_SIZE * 1024
-const WORKER_MSG_QUEUE_LEN = 100
 
 //NewMutationManager creates a new Mutation Manager which listens for commands from
 //Indexer.  In case returned MutationManager is nil, Message will have the error msg.
@@ -250,10 +249,10 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 	case MUT_MGR_GET_MUTATION_QUEUE_LWT:
 		m.handleGetMutationQueueLWT(cmd)
 
-	case MUT_MGR_UPDATE_INSTANCE_MAP:
+	case UPDATE_INDEX_INSTANCE_MAP:
 		m.handleUpdateIndexInstMap(cmd)
 
-	case MUT_MGR_UPDATE_PARTITION_MAP:
+	case UPDATE_INDEX_PARTITION_MAP:
 		m.handleUpdateIndexPartnMap(cmd)
 
 	default:
@@ -718,7 +717,13 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 		}()
 
 		//send the response to supervisor
-		m.supvRespch <- msg
+		if msg.GetMsgType() == SUCCESS {
+			m.supvRespch <- &MsgMutMgrFlushDone{streamId: streamId,
+				bucket: bucket,
+				ts:     ts}
+		} else {
+			m.supvRespch <- msg
+		}
 	}()
 
 }
@@ -817,7 +822,7 @@ func (m *mutationMgr) handleUpdateIndexInstMap(cmd Message) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	m.indexInstMap = cmd.(*MsgMutMgrUpdateInstMap).GetIndexInstMap()
+	m.indexInstMap = cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 
 }
 
@@ -827,6 +832,6 @@ func (m *mutationMgr) handleUpdateIndexPartnMap(cmd Message) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	m.indexPartnMap = cmd.(*MsgMutMgrUpdatePartnMap).GetIndexPartnMap()
+	m.indexPartnMap = cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 
 }

@@ -15,6 +15,11 @@ type Timestamp []Seqno
 //Stability Timestamp
 type StabilityTimestamp Timestamp
 
+func NewTimestamp() Timestamp {
+	ts := make([]Seqno, MAX_NUM_VBUCKETS)
+	return ts
+}
+
 //Equals returns true if both timestamps match, false otherwise
 func (ts Timestamp) Equals(ts1 Timestamp) bool {
 
@@ -44,6 +49,24 @@ func (ts Timestamp) GreaterThanEqual(ts1 Timestamp) bool {
 	//each individual seqno should be matching or greater
 	for i, t := range ts {
 		if t < ts1[i] {
+			return false
+		}
+	}
+	return true
+}
+
+//GreaterThan returns true if the timestamp is greater
+//than given timestamp
+func (ts Timestamp) GreaterThan(ts1 Timestamp) bool {
+
+	//if length is not equal, no need to compare
+	if len(ts) != len(ts1) {
+		return false
+	}
+
+	//each individual seqno should be greater
+	for i, t := range ts {
+		if t <= ts1[i] {
 			return false
 		}
 	}

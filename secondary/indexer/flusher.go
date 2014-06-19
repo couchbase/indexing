@@ -245,7 +245,6 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId StreamId,
 			return
 		}
 	}
-	workerMsgCh <- &MsgSuccess{}
 }
 
 //flushSingleVbucket is the actual implementation which flushes the given queue
@@ -278,7 +277,6 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId StreamId
 			}
 		}
 	}
-	workerMsgCh <- &MsgSuccess{}
 }
 
 //flushSingleMutation talks to persistence layer to store the mutations
@@ -349,7 +347,7 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 
 		log.Printf("flushMaintStreamMutation: Error Generating Key"+
 			"From Mutation %v. Skipped. Error : %v", mut.keys[i], err)
-		continue
+		return
 	}
 
 	if value, err = NewValue(mut.keys[i], mut.docid, mut.meta.vbucket,
@@ -357,7 +355,7 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 
 		log.Printf("flushMaintStreamMutation: Error Generating Value"+
 			"From Mutation %v. Skipped. Error : %v", mut.keys[i], err)
-		continue
+		return
 	}
 
 	var idxInst common.IndexInst
@@ -366,7 +364,7 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 	if idxInst, ok = f.indexInstMap[mut.uuids[i]]; !ok {
 		log.Printf("flushMaintStreamMutation: Unknown Index Instance Id %v."+
 			"Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
-		continue
+		return
 	}
 
 	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkeys[i])
@@ -375,7 +373,7 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 	if partnInstMap, ok = f.indexPartnMap[mut.uuids[i]]; !ok {
 		log.Printf("flushMaintStreamMutation: Missing Partition Instance Map"+
 			"for Index Inst Id %v. Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
-		continue
+		return
 	}
 
 	if partnInst := partnInstMap[partnId]; ok {
@@ -386,7 +384,7 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 		}
 	} else {
 		log.Printf("flushMaintStreamMutation: Partition Instance not found "+
-			"for Id %v", partnId)
+			"for Id %v Skipped Mutation Key %v", partnId, mut.keys[i])
 	}
 
 }
@@ -398,7 +396,7 @@ func (f *flusher) processDelete(mut *MutationKeys, i int) {
 	if idxInst, ok = f.indexInstMap[mut.uuids[i]]; !ok {
 		log.Printf("flushMaintStreamMutation: Unknown Index Instance Id %v."+
 			"Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
-		continue
+		return
 	}
 
 	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkeys[i])
@@ -407,7 +405,7 @@ func (f *flusher) processDelete(mut *MutationKeys, i int) {
 	if partnInstMap, ok = f.indexPartnMap[mut.uuids[i]]; !ok {
 		log.Printf("flushMaintStreamMutation: Missing Partition Instance Map"+
 			"for Index Inst Id %v. Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
-		continue
+		return
 	}
 
 	if partnInst := partnInstMap[partnId]; ok {
@@ -418,7 +416,7 @@ func (f *flusher) processDelete(mut *MutationKeys, i int) {
 		}
 	} else {
 		log.Printf("flushMaintStreamMutation: Partition Instance not found "+
-			"for Id %v", partnId)
+			"for Id %v. Skipped Mutation Key %v", partnId, mut.keys[i])
 	}
 }
 
