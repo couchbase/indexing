@@ -7,19 +7,21 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
-package common
+package indexer
 
-type PartitionId int
+import (
+	"github.com/couchbase/indexing/secondary/common"
+)
 
 //PartitionInst contains the partition definition and a SliceContainer
 //to manage all the slices storing the partition's data
 type PartitionInst struct {
-	Defn PartitionDefn
+	Defn common.PartitionDefn
 	Sc   SliceContainer
 }
 
 //IndexPartnMap maps a IndexInstId to PartitionInstMap
-type IndexPartnMap map[IndexInstId]PartitionInstMap
+type IndexPartnMap map[common.IndexInstId]PartitionInstMap
 
 //PartitionInstMap maps a PartitionId to PartitionInst
-type PartitionInstMap map[PartitionId]PartitionInst
+type PartitionInstMap map[common.PartitionId]PartitionInst

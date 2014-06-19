@@ -7,9 +7,10 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
-package common
+package indexer
 
 import (
+	"github.com/couchbase/indexing/secondary/common"
 	"hash/crc32"
 	"log"
 )
@@ -28,10 +29,10 @@ type SliceContainer interface {
 	RemoveSlice(SliceId)
 
 	//Return Slice for the given IndexKey
-	GetSliceByIndexKey(IndexKey) Slice
+	GetSliceByIndexKey(common.IndexKey) Slice
 
 	//Return SliceId for the given IndexKey
-	GetSliceIdByIndexKey(IndexKey) SliceId
+	GetSliceIdByIndexKey(common.IndexKey) SliceId
 
 	//Return Slice for the given SliceId
 	GetSliceById(SliceId) Slice
@@ -78,7 +79,7 @@ func (sc *HashedSliceContainer) RemoveSlice(id SliceId) {
 //This is a convenience method which calls other interface methods
 //to first determine the sliceId from IndexKey and then the slice from
 //sliceId
-func (sc *HashedSliceContainer) GetSliceByIndexKey(key IndexKey) Slice {
+func (sc *HashedSliceContainer) GetSliceByIndexKey(key common.IndexKey) Slice {
 
 	id := sc.GetSliceIdByIndexKey(key)
 	return sc.GetSliceById(id)
@@ -86,7 +87,7 @@ func (sc *HashedSliceContainer) GetSliceByIndexKey(key IndexKey) Slice {
 }
 
 //GetSliceIdByIndexKey returns SliceId for the given IndexKey
-func (sc *HashedSliceContainer) GetSliceIdByIndexKey(key IndexKey) SliceId {
+func (sc *HashedSliceContainer) GetSliceIdByIndexKey(key common.IndexKey) SliceId {
 
 	//run hash function on index key and return slice id
 	hash := crc32.ChecksumIEEE([]byte(key[0]))

@@ -46,7 +46,7 @@ type mutationMgr struct {
 	shutdownCh DoneChannel //internal channel indicating shutdown
 
 	indexInstMap  common.IndexInstMap
-	indexPartnMap common.IndexPartnMap
+	indexPartnMap IndexPartnMap
 
 	numVbuckets uint16 //number of vbuckets
 

@@ -28,7 +28,7 @@ type storageMgr struct {
 	supvRespch MsgChannel //channel to send any async message to supervisor
 
 	indexInstMap  common.IndexInstMap
-	indexPartnMap common.IndexPartnMap
+	indexPartnMap IndexPartnMap
 }
 
 //NewStorageManager returns an instance of storageMgr or err message

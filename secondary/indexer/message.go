@@ -241,14 +241,14 @@ func (m *MsgUpdateInstMap) GetIndexInstMap() common.IndexInstMap {
 
 //UPDATE_PARTITION_MAP
 type MsgUpdatePartnMap struct {
-	indexPartnMap common.IndexPartnMap
+	indexPartnMap IndexPartnMap
 }
 
 func (m *MsgUpdatePartnMap) GetMsgType() MsgType {
 	return UPDATE_INDEX_PARTITION_MAP
 }
 
-func (m *MsgUpdatePartnMap) GetIndexPartnMap() common.IndexPartnMap {
+func (m *MsgUpdatePartnMap) GetIndexPartnMap() IndexPartnMap {
 	return m.indexPartnMap
 }
 

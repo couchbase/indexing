@@ -27,7 +27,7 @@ type Flusher interface {
 	//Caller can wait on MsgChannel after closing StopChannel
 	//to get notified about shutdown completion.
 	PersistUptoTS(q MutationQueue, streamId StreamId, indexInstMap common.IndexInstMap,
-		indexPartnMap common.IndexPartnMap, ts Timestamp, stopch StopChannel) MsgChannel
+		indexPartnMap IndexPartnMap, ts Timestamp, stopch StopChannel) MsgChannel
 
 	//DrainUptoTS will flush the mutation queue upto Timestamp
 	//provided without actually persisting it.
@@ -45,7 +45,7 @@ type Flusher interface {
 	//Caller can wait on MsgChannel after closing StopChannel to get
 	//notified about shutdown completion.
 	Persist(q MutationQueue, streamId StreamId, indexInstMap common.IndexInstMap,
-		indexPartnMap common.IndexPartnMap, stopch StopChannel) MsgChannel
+		indexPartnMap IndexPartnMap, stopch StopChannel) MsgChannel
 
 	//Drain will keep flushing the mutation queue till caller closes
 	//the stop channel without actually persisting the mutations.
@@ -69,7 +69,7 @@ type Flusher interface {
 
 type flusher struct {
 	indexInstMap  common.IndexInstMap
-	indexPartnMap common.IndexPartnMap
+	indexPartnMap IndexPartnMap
 }
 
 //NewFlusher returns new instance of flusher
@@ -89,7 +89,7 @@ func NewFlusher() *flusher {
 //Caller can wait on MsgChannel after closing StopChannel to get notified
 //about shutdown completion.
 func (f *flusher) PersistUptoTS(q MutationQueue, streamId StreamId,
-	indexInstMap common.IndexInstMap, indexPartnMap common.IndexPartnMap,
+	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	ts Timestamp, stopch StopChannel) MsgChannel {
 
 	f.indexInstMap = indexInstMap
@@ -124,7 +124,7 @@ func (f *flusher) DrainUptoTS(q MutationQueue, streamId StreamId,
 //Caller can wait on MsgChannel after closing StopChannel to get notified
 //about shutdown completion.
 func (f *flusher) Persist(q MutationQueue, streamId StreamId,
-	indexInstMap common.IndexInstMap, indexPartnMap common.IndexPartnMap,
+	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	stopch StopChannel) MsgChannel {
 
 	f.indexInstMap = indexInstMap
@@ -369,7 +369,7 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 
 	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkeys[i])
 
-	var partnInstMap common.PartitionInstMap
+	var partnInstMap PartitionInstMap
 	if partnInstMap, ok = f.indexPartnMap[mut.uuids[i]]; !ok {
 		log.Printf("flushMaintStreamMutation: Missing Partition Instance Map"+
 			"for Index Inst Id %v. Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
@@ -401,7 +401,7 @@ func (f *flusher) processDelete(mut *MutationKeys, i int) {
 
 	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkeys[i])
 
-	var partnInstMap common.PartitionInstMap
+	var partnInstMap PartitionInstMap
 	if partnInstMap, ok = f.indexPartnMap[mut.uuids[i]]; !ok {
 		log.Printf("flushMaintStreamMutation: Missing Partition Instance Map"+
 			"for Index Inst Id %v. Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])

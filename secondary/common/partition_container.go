@@ -10,6 +10,7 @@
 package common
 
 type PartitionKey []byte
+type PartitionId int
 
 //Endpoint provides an Indexer address(host:port)
 //which is hosting a partition
