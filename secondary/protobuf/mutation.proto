@@ -61,4 +61,5 @@ message KeyVersions {
     repeated uint32 commands = 4; // list of command for each uuid
     repeated bytes  keys     = 5; // key-versions for each uuids    listed above
     repeated bytes  oldkeys  = 6; // key-versions from old copy of the document
+    repeated bytes  partnkeys = 7; // partition key for each key-version 
 }

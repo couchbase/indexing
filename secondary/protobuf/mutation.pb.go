@@ -189,13 +189,14 @@ func (m *VbKeyVersions) GetKvs() []*KeyVersions {
 // fields `docid`, `uuids`, `keys`, `oldkeys` are valid only for
 // Upsert, Deletion, UpsertDeletion messages.
 type KeyVersions struct {
-	Seqno            *uint64  `protobuf:"varint,1,req,name=seqno" json:"seqno,omitempty"`
-	Docid            []byte   `protobuf:"bytes,2,opt,name=docid" json:"docid,omitempty"`
-	Uuids            []uint64 `protobuf:"varint,3,rep,name=uuids" json:"uuids,omitempty"`
-	Commands         []uint32 `protobuf:"varint,4,rep,name=commands" json:"commands,omitempty"`
-	Keys             [][]byte `protobuf:"bytes,5,rep,name=keys" json:"keys,omitempty"`
-	Oldkeys          [][]byte `protobuf:"bytes,6,rep,name=oldkeys" json:"oldkeys,omitempty"`
-	XXX_unrecognized []byte   `json:"-"`
+	Seqno            *uint64    `protobuf:"varint,1,req,name=seqno" json:"seqno,omitempty"`
+	Docid            []byte     `protobuf:"bytes,2,opt,name=docid" json:"docid,omitempty"`
+	Uuids            []uint64   `protobuf:"varint,3,rep,name=uuids" json:"uuids,omitempty"`
+	Commands         []uint32   `protobuf:"varint,4,rep,name=commands" json:"commands,omitempty"`
+	Keys             [][][]byte `protobuf:"bytes,5,rep,name=keys" json:"keys,omitempty"`
+	Oldkeys          [][][]byte `protobuf:"bytes,6,rep,name=oldkeys" json:"oldkeys,omitempty"`
+	Partnkeys        [][]byte   `protobuf:"bytes,7,rep,name=partnkeys" json:'partnkeys,omitempty"`
+	XXX_unrecognized []byte     `json:"-"`
 }
 
 func (m *KeyVersions) Reset()         { *m = KeyVersions{} }
@@ -230,16 +231,23 @@ func (m *KeyVersions) GetCommands() []uint32 {
 	return nil
 }
 
-func (m *KeyVersions) GetKeys() [][]byte {
+func (m *KeyVersions) GetKeys() [][][]byte {
 	if m != nil {
 		return m.Keys
 	}
 	return nil
 }
 
-func (m *KeyVersions) GetOldkeys() [][]byte {
+func (m *KeyVersions) GetOldkeys() [][][]byte {
 	if m != nil {
 		return m.Oldkeys
+	}
+	return nil
+}
+
+func (m *KeyVersions) GetPartnkeys() [][]byte {
+	if m != nil {
+		return m.Partnkeys
 	}
 	return nil
 }
