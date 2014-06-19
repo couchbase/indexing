@@ -26,6 +26,9 @@ var ErrorPathNotFound = errors.New("adminport.pathNotFound")
 // ErrorDecodeRequest
 var ErrorDecodeRequest = errors.New("adminport.decodeRequest")
 
+// ErrorEncodeResponse
+var ErrorEncodeResponse = errors.New("adminport.encodeResponse")
+
 // ErrorDecodeResponse
 var ErrorDecodeResponse = errors.New("adminport.decodeResponse")
 

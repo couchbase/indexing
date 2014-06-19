@@ -184,7 +184,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 		typeOfMsg := reflect.ValueOf(msg).Elem().Type()
 		msg = reflect.New(typeOfMsg).Interface().(MessageMarshaller)
 		if err = msg.Decode(data); err != nil {
-			err = fmt.Errorf("%v %v", ErrorDecodeRequest, err)
+			err = fmt.Errorf("%v, %v", ErrorDecodeRequest, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -214,9 +214,9 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 			w.Write(data)
 			s.stats.Incrs("/payload", 0, len(data))
 		} else {
-			err = fmt.Errorf("%v %v", ErrorDecodeRequest, err)
+			err = fmt.Errorf("%v, %v", ErrorDecodeRequest, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			c.Errorf("%v %v", s.logPrefix, err)
+			c.Errorf("%v, %v", s.logPrefix, err)
 		}
 
 	case MessageMarshaller:
@@ -226,15 +226,15 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 			w.Write(data)
 			s.stats.Incrs("/payload", 0, len(data))
 		} else {
-			err = fmt.Errorf("%v %v", ErrorDecodeRequest, err)
+			err = fmt.Errorf("%v, %v", ErrorEncodeResponse, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			c.Errorf("%v %v", s.logPrefix, err)
+			c.Errorf("%v, %v", s.logPrefix, err)
 		}
 
 	case error:
 		http.Error(w, v.Error(), http.StatusInternalServerError)
-		err = fmt.Errorf("%v %v", ErrorInternal, v)
-		c.Errorf("%v %v", s.logPrefix, err)
+		err = fmt.Errorf("%v, %v", ErrorInternal, v)
+		c.Errorf("%v, %v", s.logPrefix, err)
 	}
 }
 
