@@ -47,8 +47,8 @@ func (m *FailoverLogRequest) GetVbnos() []uint32 {
 }
 
 type FailoverLogResponse struct {
-	Err              *Error         `protobuf:"bytes,1,req,name=err" json:"err,omitempty"`
-	Logs             []*FailoverLog `protobuf:"bytes,2,rep,name=logs" json:"logs,omitempty"`
+	Logs             []*FailoverLog `protobuf:"bytes,1,rep,name=logs" json:"logs,omitempty"`
+	Err              *Error         `protobuf:"bytes,2,opt,name=err" json:"err,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -56,16 +56,16 @@ func (m *FailoverLogResponse) Reset()         { *m = FailoverLogResponse{} }
 func (m *FailoverLogResponse) String() string { return proto.CompactTextString(m) }
 func (*FailoverLogResponse) ProtoMessage()    {}
 
-func (m *FailoverLogResponse) GetErr() *Error {
+func (m *FailoverLogResponse) GetLogs() []*FailoverLog {
 	if m != nil {
-		return m.Err
+		return m.Logs
 	}
 	return nil
 }
 
-func (m *FailoverLogResponse) GetLogs() []*FailoverLog {
+func (m *FailoverLogResponse) GetErr() *Error {
 	if m != nil {
-		return m.Logs
+		return m.Err
 	}
 	return nil
 }
@@ -130,29 +130,22 @@ func (m *MutationStreamRequest) GetInstances() []*IndexInst {
 }
 
 type MutationStreamResponse struct {
-	Err     *Error   `protobuf:"bytes,1,req,name=err" json:"err,omitempty"`
-	Topic   *string  `protobuf:"bytes,2,req,name=topic" json:"topic,omitempty"`
-	Flag    *uint32  `protobuf:"varint,3,req,name=flag" json:"flag,omitempty"`
-	Pools   []string `protobuf:"bytes,4,rep,name=pools" json:"pools,omitempty"`
-	Buckets []string `protobuf:"bytes,5,rep,name=buckets" json:"buckets,omitempty"`
+	Topic   *string  `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	Flag    *uint32  `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
+	Pools   []string `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
+	Buckets []string `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
 	// per bucket failover-timestamp, kv-timestamp for all active vbuckets,
 	// for each bucket, after executing the request.
-	FailoverTimestamps []*BranchTimestamp `protobuf:"bytes,6,rep,name=failoverTimestamps" json:"failoverTimestamps,omitempty"`
-	KvTimestamps       []*BranchTimestamp `protobuf:"bytes,7,rep,name=kvTimestamps" json:"kvTimestamps,omitempty"`
-	IndexUuids         []uint64           `protobuf:"varint,8,rep,name=indexUuids" json:"indexUuids,omitempty"`
+	FailoverTimestamps []*BranchTimestamp `protobuf:"bytes,5,rep,name=failoverTimestamps" json:"failoverTimestamps,omitempty"`
+	KvTimestamps       []*BranchTimestamp `protobuf:"bytes,6,rep,name=kvTimestamps" json:"kvTimestamps,omitempty"`
+	IndexUuids         []uint64           `protobuf:"varint,7,rep,name=indexUuids" json:"indexUuids,omitempty"`
+	Err                *Error             `protobuf:"bytes,8,opt,name=err" json:"err,omitempty"`
 	XXX_unrecognized   []byte             `json:"-"`
 }
 
 func (m *MutationStreamResponse) Reset()         { *m = MutationStreamResponse{} }
 func (m *MutationStreamResponse) String() string { return proto.CompactTextString(m) }
 func (*MutationStreamResponse) ProtoMessage()    {}
-
-func (m *MutationStreamResponse) GetErr() *Error {
-	if m != nil {
-		return m.Err
-	}
-	return nil
-}
 
 func (m *MutationStreamResponse) GetTopic() string {
 	if m != nil && m.Topic != nil {
@@ -199,6 +192,13 @@ func (m *MutationStreamResponse) GetKvTimestamps() []*BranchTimestamp {
 func (m *MutationStreamResponse) GetIndexUuids() []uint64 {
 	if m != nil {
 		return m.IndexUuids
+	}
+	return nil
+}
+
+func (m *MutationStreamResponse) GetErr() *Error {
+	if m != nil {
+		return m.Err
 	}
 	return nil
 }
@@ -342,8 +342,8 @@ func (m *ActiveStreamRequest) String() string { return proto.CompactTextString(m
 func (*ActiveStreamRequest) ProtoMessage()    {}
 
 type ActiveStreamResponse struct {
-	Err              *Error                    `protobuf:"bytes,1,req,name=err" json:"err,omitempty"`
-	Streams          []*MutationStreamResponse `protobuf:"bytes,2,rep,name=streams" json:"streams,omitempty"`
+	Streams          []*MutationStreamResponse `protobuf:"bytes,1,rep,name=streams" json:"streams,omitempty"`
+	Err              *Error                    `protobuf:"bytes,2,opt,name=err" json:"err,omitempty"`
 	XXX_unrecognized []byte                    `json:"-"`
 }
 
@@ -351,16 +351,16 @@ func (m *ActiveStreamResponse) Reset()         { *m = ActiveStreamResponse{} }
 func (m *ActiveStreamResponse) String() string { return proto.CompactTextString(m) }
 func (*ActiveStreamResponse) ProtoMessage()    {}
 
-func (m *ActiveStreamResponse) GetErr() *Error {
+func (m *ActiveStreamResponse) GetStreams() []*MutationStreamResponse {
 	if m != nil {
-		return m.Err
+		return m.Streams
 	}
 	return nil
 }
 
-func (m *ActiveStreamResponse) GetStreams() []*MutationStreamResponse {
+func (m *ActiveStreamResponse) GetErr() *Error {
 	if m != nil {
-		return m.Streams
+		return m.Err
 	}
 	return nil
 }

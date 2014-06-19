@@ -32,7 +32,7 @@ func (m *CreateIndexRequest) GetIndex() *IndexDefn {
 
 type CreateIndexResponse struct {
 	IndexUuid        *uint64 `protobuf:"varint,1,req,name=indexUuid" json:"indexUuid,omitempty"`
-	Err              *Error  `protobuf:"bytes,2,req,name=err" json:"err,omitempty"`
+	Err              *Error  `protobuf:"bytes,2,opt,name=err" json:"err,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
@@ -72,8 +72,8 @@ func (m *IndexesRequest) GetIndexUuids() []uint64 {
 }
 
 type IndexesResponse struct {
-	Err              *Error       `protobuf:"bytes,1,req,name=err" json:"err,omitempty"`
-	Instances        []*IndexInst `protobuf:"bytes,2,rep,name=instances" json:"instances,omitempty"`
+	Instances        []*IndexInst `protobuf:"bytes,1,rep,name=instances" json:"instances,omitempty"`
+	Err              *Error       `protobuf:"bytes,2,opt,name=err" json:"err,omitempty"`
 	XXX_unrecognized []byte       `json:"-"`
 }
 
@@ -81,16 +81,16 @@ func (m *IndexesResponse) Reset()         { *m = IndexesResponse{} }
 func (m *IndexesResponse) String() string { return proto.CompactTextString(m) }
 func (*IndexesResponse) ProtoMessage()    {}
 
-func (m *IndexesResponse) GetErr() *Error {
+func (m *IndexesResponse) GetInstances() []*IndexInst {
 	if m != nil {
-		return m.Err
+		return m.Instances
 	}
 	return nil
 }
 
-func (m *IndexesResponse) GetInstances() []*IndexInst {
+func (m *IndexesResponse) GetErr() *Error {
 	if m != nil {
-		return m.Instances
+		return m.Err
 	}
 	return nil
 }

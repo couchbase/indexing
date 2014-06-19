@@ -1,6 +1,7 @@
 package protobuf
 
 import (
+	"code.google.com/p/goprotobuf/proto"
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
@@ -47,6 +48,26 @@ func (req *MutationStreamRequest) IsUpdateSubscription() bool {
 func (req *MutationStreamRequest) IsDeleteSubscription() bool {
 	flag := req.GetFlag()
 	return (flag & maskDeleteStreamSubscription) > 0
+}
+
+func (req *MutationStreamRequest) SetStartFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamStart)
+}
+
+func (req *MutationStreamRequest) SetRestartFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamRestart)
+}
+
+func (req *MutationStreamRequest) SetShutdownFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamShutdown)
+}
+
+func (req *MutationStreamRequest) SetUpdateSubscriptionFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskUpdateStreamSubscription)
+}
+
+func (req *MutationStreamRequest) SetDeleteSubscriptionFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskDeleteStreamSubscription)
 }
 
 func (req *MutationStreamRequest) RestartTimestamp(bucket string) *c.Timestamp {
@@ -143,7 +164,7 @@ func getEvaluators(instances []*IndexInst) (map[uint64]c.Evaluator, error) {
 		if err = ie.Compile(); err != nil {
 			return nil, err
 		}
-		entities[defn.GetDefnId()] = ie
+		entities[defn.GetDefnID()] = ie
 	}
 	return entities, nil
 }
@@ -153,7 +174,7 @@ func getRouters(instances []*IndexInst) (map[uint64]c.Router, error) {
 	entities := make(map[uint64]c.Router, 0)
 	for _, instance := range instances {
 		defn := instance.GetDefinition()
-		entities[defn.GetDefnId()] = instance
+		entities[defn.GetDefnID()] = instance
 	}
 	return entities, nil
 }

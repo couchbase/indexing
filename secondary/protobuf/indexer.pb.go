@@ -18,42 +18,42 @@ var _ = math.Inf
 //
 // Similar handshake is expected when ever a new indexer node joins the
 // cluster.
-type GetIndexPartitionRequest struct {
+type GetIndexInstanceRequest struct {
 	IndexUuid        *uint64 `protobuf:"varint,1,req,name=indexUuid" json:"indexUuid,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
-func (m *GetIndexPartitionRequest) Reset()         { *m = GetIndexPartitionRequest{} }
-func (m *GetIndexPartitionRequest) String() string { return proto.CompactTextString(m) }
-func (*GetIndexPartitionRequest) ProtoMessage()    {}
+func (m *GetIndexInstanceRequest) Reset()         { *m = GetIndexInstanceRequest{} }
+func (m *GetIndexInstanceRequest) String() string { return proto.CompactTextString(m) }
+func (*GetIndexInstanceRequest) ProtoMessage()    {}
 
-func (m *GetIndexPartitionRequest) GetIndexUuid() uint64 {
+func (m *GetIndexInstanceRequest) GetIndexUuid() uint64 {
 	if m != nil && m.IndexUuid != nil {
 		return *m.IndexUuid
 	}
 	return 0
 }
 
-type GetIndexPartitionResponse struct {
-	Err              *Error          `protobuf:"bytes,1,req,name=err" json:"err,omitempty"`
-	Partition        *IndexPartition `protobuf:"bytes,2,req,name=partition" json:"partition,omitempty"`
-	XXX_unrecognized []byte          `json:"-"`
+type GetIndexInstanceResponse struct {
+	Instance         *IndexInst `protobuf:"bytes,1,req,name=instance" json:"instance,omitempty"`
+	Err              *Error     `protobuf:"bytes,2,opt,name=err" json:"err,omitempty"`
+	XXX_unrecognized []byte     `json:"-"`
 }
 
-func (m *GetIndexPartitionResponse) Reset()         { *m = GetIndexPartitionResponse{} }
-func (m *GetIndexPartitionResponse) String() string { return proto.CompactTextString(m) }
-func (*GetIndexPartitionResponse) ProtoMessage()    {}
+func (m *GetIndexInstanceResponse) Reset()         { *m = GetIndexInstanceResponse{} }
+func (m *GetIndexInstanceResponse) String() string { return proto.CompactTextString(m) }
+func (*GetIndexInstanceResponse) ProtoMessage()    {}
 
-func (m *GetIndexPartitionResponse) GetErr() *Error {
+func (m *GetIndexInstanceResponse) GetInstance() *IndexInst {
 	if m != nil {
-		return m.Err
+		return m.Instance
 	}
 	return nil
 }
 
-func (m *GetIndexPartitionResponse) GetPartition() *IndexPartition {
+func (m *GetIndexInstanceResponse) GetErr() *Error {
 	if m != nil {
-		return m.Partition
+		return m.Err
 	}
 	return nil
 }
@@ -61,26 +61,26 @@ func (m *GetIndexPartitionResponse) GetPartition() *IndexPartition {
 // Requested by Coordinator when ever an index's topology change. Error
 // message will be sent as response.
 // TBD: Should we use the same message for index-rebalance ?
-type UpdateIndexPartitionRequest struct {
-	IndexUuid        *uint64         `protobuf:"varint,1,req,name=indexUuid" json:"indexUuid,omitempty"`
-	NewParitition    *IndexPartition `protobuf:"bytes,2,req,name=newParitition" json:"newParitition,omitempty"`
-	XXX_unrecognized []byte          `json:"-"`
+type UpdateIndexInstanceRequest struct {
+	IndexUuid        *uint64    `protobuf:"varint,1,req,name=indexUuid" json:"indexUuid,omitempty"`
+	Instance         *IndexInst `protobuf:"bytes,2,req,name=instance" json:"instance,omitempty"`
+	XXX_unrecognized []byte     `json:"-"`
 }
 
-func (m *UpdateIndexPartitionRequest) Reset()         { *m = UpdateIndexPartitionRequest{} }
-func (m *UpdateIndexPartitionRequest) String() string { return proto.CompactTextString(m) }
-func (*UpdateIndexPartitionRequest) ProtoMessage()    {}
+func (m *UpdateIndexInstanceRequest) Reset()         { *m = UpdateIndexInstanceRequest{} }
+func (m *UpdateIndexInstanceRequest) String() string { return proto.CompactTextString(m) }
+func (*UpdateIndexInstanceRequest) ProtoMessage()    {}
 
-func (m *UpdateIndexPartitionRequest) GetIndexUuid() uint64 {
+func (m *UpdateIndexInstanceRequest) GetIndexUuid() uint64 {
 	if m != nil && m.IndexUuid != nil {
 		return *m.IndexUuid
 	}
 	return 0
 }
 
-func (m *UpdateIndexPartitionRequest) GetNewParitition() *IndexPartition {
+func (m *UpdateIndexInstanceRequest) GetInstance() *IndexInst {
 	if m != nil {
-		return m.NewParitition
+		return m.Instance
 	}
 	return nil
 }
@@ -117,7 +117,7 @@ type LocalCreateIndexResponse struct {
 	// state will IndexPending for IndexInitial Request, and,
 	// state will be IndexLoading for IndexLoading request
 	State            *IndexState `protobuf:"varint,1,req,name=state,enum=protobuf.IndexState" json:"state,omitempty"`
-	Err              *Error      `protobuf:"bytes,2,req,name=err" json:"err,omitempty"`
+	Err              *Error      `protobuf:"bytes,2,opt,name=err" json:"err,omitempty"`
 	XXX_unrecognized []byte      `json:"-"`
 }
 

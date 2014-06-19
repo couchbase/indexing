@@ -144,14 +144,14 @@ func (x *ExprType) UnmarshalJSON(data []byte) error {
 type PartitionScheme int32
 
 const (
-	PartitionScheme_SimpleKeyParitition PartitionScheme = 1
+	PartitionScheme_TestPartitionScheme PartitionScheme = 1
 )
 
 var PartitionScheme_name = map[int32]string{
-	1: "SimpleKeyParitition",
+	1: "TestPartitionScheme",
 }
 var PartitionScheme_value = map[string]int32{
-	"SimpleKeyParitition": 1,
+	"TestPartitionScheme": 1,
 }
 
 func (x PartitionScheme) Enum() *PartitionScheme {
@@ -171,8 +171,48 @@ func (x *PartitionScheme) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type IndexInst struct {
+	InstId           *uint64        `protobuf:"varint,1,req,name=instId" json:"instId,omitempty"`
+	State            *IndexState    `protobuf:"varint,2,req,name=state,enum=protobuf.IndexState" json:"state,omitempty"`
+	Definition       *IndexDefn     `protobuf:"bytes,3,req,name=definition" json:"definition,omitempty"`
+	Tp               *TestPartition `protobuf:"bytes,4,opt,name=tp" json:"tp,omitempty"`
+	XXX_unrecognized []byte         `json:"-"`
+}
+
+func (m *IndexInst) Reset()         { *m = IndexInst{} }
+func (m *IndexInst) String() string { return proto.CompactTextString(m) }
+func (*IndexInst) ProtoMessage()    {}
+
+func (m *IndexInst) GetInstId() uint64 {
+	if m != nil && m.InstId != nil {
+		return *m.InstId
+	}
+	return 0
+}
+
+func (m *IndexInst) GetState() IndexState {
+	if m != nil && m.State != nil {
+		return *m.State
+	}
+	return IndexState_IndexInitial
+}
+
+func (m *IndexInst) GetDefinition() *IndexDefn {
+	if m != nil {
+		return m.Definition
+	}
+	return nil
+}
+
+func (m *IndexInst) GetTp() *TestPartition {
+	if m != nil {
+		return m.Tp
+	}
+	return nil
+}
+
 type IndexDefn struct {
-	DefnId           *uint64          `protobuf:"varint,1,req,name=defnId" json:"defnId,omitempty"`
+	DefnID           *uint64          `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
 	Bucket           *string          `protobuf:"bytes,2,req,name=bucket" json:"bucket,omitempty"`
 	IsPrimary        *bool            `protobuf:"varint,3,req,name=isPrimary" json:"isPrimary,omitempty"`
 	Name             *string          `protobuf:"bytes,4,req,name=name" json:"name,omitempty"`
@@ -188,9 +228,9 @@ func (m *IndexDefn) Reset()         { *m = IndexDefn{} }
 func (m *IndexDefn) String() string { return proto.CompactTextString(m) }
 func (*IndexDefn) ProtoMessage()    {}
 
-func (m *IndexDefn) GetDefnId() uint64 {
-	if m != nil && m.DefnId != nil {
-		return *m.DefnId
+func (m *IndexDefn) GetDefnID() uint64 {
+	if m != nil && m.DefnID != nil {
+		return *m.DefnID
 	}
 	return 0
 }
@@ -227,7 +267,7 @@ func (m *IndexDefn) GetPartitionScheme() PartitionScheme {
 	if m != nil && m.PartitionScheme != nil {
 		return *m.PartitionScheme
 	}
-	return PartitionScheme_SimpleKeyParitition
+	return PartitionScheme_TestPartitionScheme
 }
 
 func (m *IndexDefn) GetPartnExpression() string {
@@ -251,77 +291,28 @@ func (m *IndexDefn) GetSecExpressions() []string {
 	return nil
 }
 
-type IndexInst struct {
-	InstId           *uint64         `protobuf:"varint,1,req,name=instId" json:"instId,omitempty"`
-	State            *IndexState     `protobuf:"varint,2,req,name=state,enum=protobuf.IndexState" json:"state,omitempty"`
-	Definition       *IndexDefn      `protobuf:"bytes,3,req,name=definition" json:"definition,omitempty"`
-	Partition        *IndexPartition `protobuf:"bytes,4,req,name=partition" json:"partition,omitempty"`
-	XXX_unrecognized []byte          `json:"-"`
+type TestPartition struct {
+	CoordEndpoint    *string  `protobuf:"bytes,1,req,name=coordEndpoint" json:"coordEndpoint,omitempty"`
+	Endpoints        []string `protobuf:"bytes,2,rep,name=endpoints" json:"endpoints,omitempty"`
+	XXX_unrecognized []byte   `json:"-"`
 }
 
-func (m *IndexInst) Reset()         { *m = IndexInst{} }
-func (m *IndexInst) String() string { return proto.CompactTextString(m) }
-func (*IndexInst) ProtoMessage()    {}
+func (m *TestPartition) Reset()         { *m = TestPartition{} }
+func (m *TestPartition) String() string { return proto.CompactTextString(m) }
+func (*TestPartition) ProtoMessage()    {}
 
-func (m *IndexInst) GetInstId() uint64 {
-	if m != nil && m.InstId != nil {
-		return *m.InstId
-	}
-	return 0
-}
-
-func (m *IndexInst) GetState() IndexState {
-	if m != nil && m.State != nil {
-		return *m.State
-	}
-	return IndexState_IndexInitial
-}
-
-func (m *IndexInst) GetDefinition() *IndexDefn {
-	if m != nil {
-		return m.Definition
-	}
-	return nil
-}
-
-func (m *IndexInst) GetPartition() *IndexPartition {
-	if m != nil {
-		return m.Partition
-	}
-	return nil
-}
-
-// container message for one of the many parition structures.
-type IndexPartition struct {
-	Skp              *SimpleKeyPartition `protobuf:"bytes,1,opt,name=skp" json:"skp,omitempty"`
-	XXX_unrecognized []byte              `json:"-"`
-}
-
-func (m *IndexPartition) Reset()         { *m = IndexPartition{} }
-func (m *IndexPartition) String() string { return proto.CompactTextString(m) }
-func (*IndexPartition) ProtoMessage()    {}
-
-func (m *IndexPartition) GetSkp() *SimpleKeyPartition {
-	if m != nil {
-		return m.Skp
-	}
-	return nil
-}
-
-type SimpleKeyPartition struct {
-	PartitionKey     *string `protobuf:"bytes,1,req,name=partitionKey" json:"partitionKey,omitempty"`
-	XXX_unrecognized []byte  `json:"-"`
-}
-
-func (m *SimpleKeyPartition) Reset()         { *m = SimpleKeyPartition{} }
-func (m *SimpleKeyPartition) String() string { return proto.CompactTextString(m) }
-func (*SimpleKeyPartition) ProtoMessage()    {}
-
-func (m *SimpleKeyPartition) GetPartitionKey() string {
-	if m != nil && m.PartitionKey != nil {
-		return *m.PartitionKey
+func (m *TestPartition) GetCoordEndpoint() string {
+	if m != nil && m.CoordEndpoint != nil {
+		return *m.CoordEndpoint
 	}
 	return ""
+}
+
+func (m *TestPartition) GetEndpoints() []string {
+	if m != nil {
+		return m.Endpoints
+	}
+	return nil
 }
 
 func init() {

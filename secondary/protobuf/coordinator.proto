@@ -47,8 +47,8 @@ message ActorClusterRequest {
 }
 
 message ActorClusterResponse {
-    required Error err   = 1;
-    repeated Actor actors = 2;
+    repeated Actor actors = 1;
+    optional Error err    = 2;
 }
 
 
@@ -96,6 +96,6 @@ message RebalanceToActiveRequest {
 // Requested by admin console to start index rebalance. Error message will be
 // sent as response.
 message IndexRebalanceRequest {
-    required uint64         indexUuid    = 1;
-    required IndexPartition newPartition = 2;
+    required uint64         indexUuid = 1;
+    optional TestPartition   tp       = 2;
 }

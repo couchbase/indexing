@@ -13,7 +13,7 @@ message CreateIndexRequest {
 
 message CreateIndexResponse {
     required uint64 indexUuid = 1;
-    required Error  err       = 2;
+    optional Error  err       = 2;
 }
 
 
@@ -23,8 +23,8 @@ message IndexesRequest {
 }
 
 message IndexesResponse {
-    required Error     err     = 1;
-    repeated IndexInst instances = 2;
+    repeated IndexInst instances = 1;
+    optional Error     err       = 2;
 }
 
 

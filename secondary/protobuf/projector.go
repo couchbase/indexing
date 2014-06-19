@@ -13,7 +13,7 @@ func NewMutationStreamResponse(req interface{}) *MutationStreamResponse {
 		indexes := val.GetInstances()
 		uuids := make([]uint64, 0, len(indexes))
 		for _, index := range indexes {
-			uuids = append(uuids, index.GetDefinition().GetDefnId())
+			uuids = append(uuids, index.GetDefinition().GetDefnID())
 		}
 		m = &MutationStreamResponse{
 			Topic:      proto.String(val.GetTopic()),

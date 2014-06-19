@@ -12,22 +12,22 @@ import "rollback.proto";
 //
 // Similar handshake is expected when ever a new indexer node joins the
 // cluster.
-message GetIndexPartitionRequest {
+message GetIndexInstanceRequest {
     required uint64 indexUuid = 1;
 }
 
-message GetIndexPartitionResponse {
-    required Error          err       = 1;
-    required IndexPartition partition = 2;
+message GetIndexInstanceResponse {
+    required IndexInst instance = 1;
+    optional Error     err      = 2;
 }
 
 
 // Requested by Coordinator when ever an index's topology change. Error
 // message will be sent as response.
 // TBD: Should we use the same message for index-rebalance ?
-message UpdateIndexPartitionRequest {
-    required uint64         indexUuid     = 1;
-    required IndexPartition newParitition = 2;
+message UpdateIndexInstanceRequest {
+    required uint64    indexUuid = 1;
+    required IndexInst instance  = 2;
 }
 
 
@@ -44,7 +44,7 @@ message LocalCreateIndexResponse {
     // state will IndexPending for IndexInitial Request, and,
     // state will be IndexLoading for IndexLoading request
     required IndexState state = 1;
-    required Error      err = 2;
+    optional Error      err   = 2;
 }
 
 

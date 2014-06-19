@@ -44,11 +44,18 @@ enum ExprType {
 
 // Type of topology, including paritition type to be used for the index.
 enum  PartitionScheme {
-    SimpleKeyParitition = 1;
+    TestPartitionScheme = 1;
+}
+
+message IndexInst {
+    required uint64          instId     = 1;
+    required IndexState      state      = 2;
+    required IndexDefn       definition = 3; // contains DDL
+    optional TestPartition   tp         = 4;
 }
 
 message IndexDefn {
-    required uint64          defnId          = 1; // unique index id across the secondary index cluster
+    required uint64          defnID          = 1; // unique index id across the secondary index cluster
     required string          bucket          = 2; // bucket on which index is defined
     required bool            isPrimary       = 3; // whether index secondary-key == docid
     required string          name            = 4; // Name of the index
@@ -59,20 +66,7 @@ message IndexDefn {
     repeated string          secExpressions  = 9; // use expressions to evaluate doc
 }
 
-message IndexInst {
-    required uint64          instId     = 1;
-    required IndexState      state      = 2;
-    required IndexDefn       definition = 3; // contains DDL
-    required IndexPartition  partition  = 4; // contains partition structure and topology
-}
-
-// container message for one of the many parition structures.
-message IndexPartition {
-    optional SimpleKeyPartition skp = 1;
-    // TBD: Add more types of parition structures.
-}
-
-message SimpleKeyPartition {
-    required string partitionKey = 1; // partition key for key-partition
-    // TBD
+message TestPartition {
+    required string coordEndpoint = 1;
+    repeated string endpoints     = 2; // endpoint address
 }

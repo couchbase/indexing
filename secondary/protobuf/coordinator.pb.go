@@ -141,8 +141,8 @@ func (m *ActorClusterRequest) GetActors() []*Actor {
 }
 
 type ActorClusterResponse struct {
-	Err              *Error   `protobuf:"bytes,1,req,name=err" json:"err,omitempty"`
-	Actors           []*Actor `protobuf:"bytes,2,rep,name=actors" json:"actors,omitempty"`
+	Actors           []*Actor `protobuf:"bytes,1,rep,name=actors" json:"actors,omitempty"`
+	Err              *Error   `protobuf:"bytes,2,opt,name=err" json:"err,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -150,16 +150,16 @@ func (m *ActorClusterResponse) Reset()         { *m = ActorClusterResponse{} }
 func (m *ActorClusterResponse) String() string { return proto.CompactTextString(m) }
 func (*ActorClusterResponse) ProtoMessage()    {}
 
-func (m *ActorClusterResponse) GetErr() *Error {
+func (m *ActorClusterResponse) GetActors() []*Actor {
 	if m != nil {
-		return m.Err
+		return m.Actors
 	}
 	return nil
 }
 
-func (m *ActorClusterResponse) GetActors() []*Actor {
+func (m *ActorClusterResponse) GetErr() *Error {
 	if m != nil {
-		return m.Actors
+		return m.Err
 	}
 	return nil
 }
@@ -275,9 +275,9 @@ func (m *RebalanceToActiveRequest) GetIndexUuids() []uint64 {
 // Requested by admin console to start index rebalance. Error message will be
 // sent as response.
 type IndexRebalanceRequest struct {
-	IndexUuid        *uint64         `protobuf:"varint,1,req,name=indexUuid" json:"indexUuid,omitempty"`
-	NewPartition     *IndexPartition `protobuf:"bytes,2,req,name=newPartition" json:"newPartition,omitempty"`
-	XXX_unrecognized []byte          `json:"-"`
+	IndexUuid        *uint64        `protobuf:"varint,1,req,name=indexUuid" json:"indexUuid,omitempty"`
+	Tp               *TestPartition `protobuf:"bytes,2,opt,name=tp" json:"tp,omitempty"`
+	XXX_unrecognized []byte         `json:"-"`
 }
 
 func (m *IndexRebalanceRequest) Reset()         { *m = IndexRebalanceRequest{} }
@@ -291,9 +291,9 @@ func (m *IndexRebalanceRequest) GetIndexUuid() uint64 {
 	return 0
 }
 
-func (m *IndexRebalanceRequest) GetNewPartition() *IndexPartition {
+func (m *IndexRebalanceRequest) GetTp() *TestPartition {
 	if m != nil {
-		return m.NewPartition
+		return m.Tp
 	}
 	return nil
 }

@@ -14,8 +14,8 @@ message FailoverLogRequest {
 }
 
 message FailoverLogResponse {
-    required Error       err  = 1;
-    repeated FailoverLog logs = 2;
+    repeated FailoverLog logs = 1;
+    optional Error       err  = 2;
 }
 
 // Requested by Coordinator or indexer to start a new mutation stream.
@@ -31,27 +31,27 @@ message MutationStreamRequest {
 }
 
 message MutationStreamResponse {
-    required Error              err                = 1;
-    required string             topic              = 2;
-    required uint32             flag               = 3;
-    repeated string             pools              = 4;
-    repeated string             buckets            = 5;
+    required string          topic              = 1;
+    required uint32          flag               = 2;
+    repeated string          pools              = 3;
+    repeated string          buckets            = 4;
     // per bucket failover-timestamp, kv-timestamp for all active vbuckets,
     // for each bucket, after executing the request.
-    repeated BranchTimestamp    failoverTimestamps = 6; // sort order
-    repeated BranchTimestamp    kvTimestamps       = 7; // sort order
-    repeated uint64             indexUuids         = 8;
+    repeated BranchTimestamp failoverTimestamps = 5; // sort order
+    repeated BranchTimestamp kvTimestamps       = 6; // sort order
+    repeated uint64          indexUuids         = 7;
+    optional Error           err                = 8;
 }
 
 // Requested by Coordinator or indexer to restart or shutdown vbuckets from an
 // active mutation stream. Returns back MutationStreamResponse.
 message UpdateMutationStreamRequest {
-    required string             topic             = 1; // topic name.
-    required uint32             flag              = 2;
-    repeated string             pools             = 3;
-    repeated string             buckets           = 4;
-    repeated BranchTimestamp    restartTimestamps = 5; // list of timestamps, one per bucket
-    repeated IndexInst          instances         = 6;
+    required string          topic             = 1; // topic name.
+    required uint32          flag              = 2;
+    repeated string          pools             = 3;
+    repeated string          buckets           = 4;
+    repeated BranchTimestamp restartTimestamps = 5; // list of timestamps, one per bucket
+    repeated IndexInst       instances         = 6;
 }
 
 // Requested by third party component that wants to subscribe to a topic-name.
@@ -80,8 +80,8 @@ message ActiveStreamRequest {
 }
 
 message ActiveStreamResponse {
-    required Error                  err     = 1;
-    repeated MutationStreamResponse streams = 2;
+    repeated MutationStreamResponse streams = 1;
+    optional Error                  err     = 2;
 }
 
 
