@@ -93,9 +93,6 @@ func (p *Projector) handleRequest(
 
 // handler neither use upstream connections nor disturbs upstream data path.
 func (p *Projector) doFailoverLog(request *protobuf.FailoverLogRequest) ap.MessageMarshaller {
-	var bucket BucketAccess
-	var err error
-
 	c.Tracef("%v doFailoverLog\n", p.logPrefix)
 	response := &protobuf.FailoverLogResponse{}
 
@@ -103,15 +100,17 @@ func (p *Projector) doFailoverLog(request *protobuf.FailoverLogRequest) ap.Messa
 	bucketn := request.GetBucket()
 	vbuckets := request.GetVbnos()
 
-	if bucket, err = p.getBucket(p.kvaddrs[0], pooln, bucketn); err != nil {
+	bucket, err := p.getBucket(p.kvaddrs[0], pooln, bucketn)
+	if err != nil {
 		c.Errorf("%v %s, %v\n", p.logPrefix, bucketn, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
 
 	protoFlogs := make([]*protobuf.FailoverLog, 0, len(vbuckets))
-	for _, vbno := range vbuckets {
-		if flog, err := bucket.GetFailoverLog(uint16(vbno)); err == nil {
+	vbnos := c.Vbno32to16(vbuckets)
+	if flogs, err := bucket.GetFailoverLogs(vbnos); err == nil {
+		for vbno, flog := range flogs {
 			vbuuids := make([]uint64, 0, len(flog))
 			seqnos := make([]uint64, 0, len(flog))
 			for _, x := range flog {
@@ -119,16 +118,16 @@ func (p *Projector) doFailoverLog(request *protobuf.FailoverLogRequest) ap.Messa
 				seqnos = append(seqnos, x[1])
 			}
 			protoFlog := &protobuf.FailoverLog{
-				Vbno:    proto.Uint32(vbno),
+				Vbno:    proto.Uint32(uint32(vbno)),
 				Vbuuids: vbuuids,
 				Seqnos:  seqnos,
 			}
 			protoFlogs = append(protoFlogs, protoFlog)
-		} else {
-			c.Errorf("%v %s.GetFailoverLog() %v\n", p.logPrefix, bucketn, err)
-			response.Err = protobuf.NewError(err)
-			return response
 		}
+	} else {
+		c.Errorf("%v %s.GetFailoverLogs() %v\n", p.logPrefix, bucketn, err)
+		response.Err = protobuf.NewError(err)
+		return response
 	}
 	response.Logs = protoFlogs
 	return response
@@ -142,7 +141,7 @@ func (p *Projector) doMutationFeed(request *protobuf.MutationStreamRequest) ap.M
 	response := protobuf.NewMutationStreamResponse(request)
 
 	topic := request.GetTopic()
-	buckets := request.GetBuckets()
+	bucketns := request.GetBuckets()
 
 	feed, err := p.GetFeed(topic)
 	if err == nil { // only fresh feed to be started
@@ -159,11 +158,11 @@ func (p *Projector) doMutationFeed(request *protobuf.MutationStreamRequest) ap.M
 
 	if err = feed.RequestFeed(request); err == nil {
 		// we expect failoverTimestamps and kvTimestamps to be populated.
-		failTss := make([]*protobuf.BranchTimestamp, 0, len(buckets))
-		kvTss := make([]*protobuf.BranchTimestamp, 0, len(buckets))
-		for _, bucket := range buckets {
-			failTs := protobuf.ToBranchTimestamp(feed.failoverTimestamps[bucket])
-			kvTs := protobuf.ToBranchTimestamp(feed.kvTimestamps[bucket])
+		failTss := make([]*protobuf.BranchTimestamp, 0, len(bucketns))
+		kvTss := make([]*protobuf.BranchTimestamp, 0, len(bucketns))
+		for _, bucketn := range bucketns {
+			failTs := protobuf.ToBranchTimestamp(feed.failoverTimestamps[bucketn])
+			kvTs := protobuf.ToBranchTimestamp(feed.kvTimestamps[bucketn])
 			failTss = append(failTss, failTs)
 			kvTss = append(kvTss, kvTs)
 		}
@@ -189,7 +188,7 @@ func (p *Projector) doUpdateFeed(request *protobuf.UpdateMutationStreamRequest) 
 	response := protobuf.NewMutationStreamResponse(request)
 
 	topic := request.GetTopic()
-	buckets := request.GetBuckets()
+	bucketns := request.GetBuckets()
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
@@ -200,11 +199,11 @@ func (p *Projector) doUpdateFeed(request *protobuf.UpdateMutationStreamRequest) 
 
 	if err = feed.UpdateFeed(request); err == nil {
 		// we expect failoverTimestamps and kvTimestamps to be re-populated.
-		failTss := make([]*protobuf.BranchTimestamp, 0, len(buckets))
-		kvTss := make([]*protobuf.BranchTimestamp, 0, len(buckets))
-		for _, bucket := range buckets {
-			failTs := protobuf.ToBranchTimestamp(feed.failoverTimestamps[bucket])
-			kvTs := protobuf.ToBranchTimestamp(feed.kvTimestamps[bucket])
+		failTss := make([]*protobuf.BranchTimestamp, 0, len(bucketns))
+		kvTss := make([]*protobuf.BranchTimestamp, 0, len(bucketns))
+		for _, bucketn := range bucketns {
+			failTs := protobuf.ToBranchTimestamp(feed.failoverTimestamps[bucketn])
+			kvTs := protobuf.ToBranchTimestamp(feed.kvTimestamps[bucketn])
 			failTss = append(failTss, failTs)
 			kvTss = append(kvTss, kvTs)
 		}

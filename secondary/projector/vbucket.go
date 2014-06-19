@@ -17,6 +17,7 @@ package projector
 
 import (
 	"fmt"
+	mc "github.com/couchbase/gomemcached/client"
 	c "github.com/couchbase/indexing/secondary/common"
 	"time"
 )
@@ -67,8 +68,8 @@ const (
 	vrCmdClose
 )
 
-// Event will post a MutationEvent event, asychronous call.
-func (vr *VbucketRoutine) Event(m *MutationEvent) error {
+// Event will post an UprEvent, asychronous call.
+func (vr *VbucketRoutine) Event(m *mc.UprEvent) error {
 	if m == nil {
 		return ErrorArgument
 	}
@@ -144,10 +145,10 @@ loop:
 				respch <- []interface{}{stats.ToMap()}
 
 			case vrCmdEvent:
-				m := msg[1].(*MutationEvent)
+				m := msg[1].(*mc.UprEvent)
 				seqno = m.Seqno
 				// broadcast StreamBegin
-				if m.Opcode == OpStreamBegin {
+				if m.Opcode == mc.UprStreamBegin {
 					vr.sendToEndpoints(endpoints, func() *c.KeyVersions {
 						kv := c.NewKeyVersions(seqno, m.Key, 1)
 						kv.AddStreamBegin()

@@ -17,7 +17,7 @@
 //
 // KVFeed
 // - per bucket, per kv-node collection of VbStreams for a subset of vbuckets.
-// - gathers MutationEvent from client and post them to vbucket routines.
+// - gathers UprEvent from client and post them to vbucket routines.
 //
 // Vbucket-routine
 // - projector scales with vbucket, that is, for every vbucket a go-routine is
@@ -48,10 +48,10 @@
 // - computed by the caller (coordinator/indexer)
 //
 // list of active vbuckets:
-// - Feed maintains a list of active vbuckets.
+// - KVFeed maintains a list of active vbuckets.
 // - a vbucket is marked active, corresponding vbucket-routine is started,
-//   when Feed sees StreamBegin message from upstream.
-// - a vbucket is marked as inactive when Feed sees StreamEnd message from
+//   when KVFeed sees StreamBegin message from upstream.
+// - a vbucket is marked as inactive when KVFeed sees StreamEnd message from
 //   upstream for that vbucket and corresponding vbucket routine is killed.
 // - during normal operation StreamBegin and StreamEnd messages will be
 //   generate by couchbase-client.
@@ -65,6 +65,7 @@ import (
 	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbaselabs/go-couchbase"
 )
 
 // error codes
@@ -130,14 +131,13 @@ type Subscriber interface {
 // kv-nodes.
 // TODO: support elastic set of kvnodes, right now they are immutable set.
 type Projector struct {
-	kvaddrs   []string         // immutable set of kv-nodes to connect with
-	adminport string           // <host:port> for projector's admin-port
-	topics    map[string]*Feed // active topics, mutable dictionary
+	kvaddrs   []string                     // immutable set of kv-nodes to connect with
+	adminport string                       // <host:port> for projector's admin-port
+	topics    map[string]*Feed             // active topics, mutable dictionary
+	buckets   map[string]*couchbase.Bucket // bucket instances
 	// gen-server
 	reqch chan []interface{}
 	finch chan bool
-	// used for unit-tesing, indexed by bucket name, immutable
-	testBuckets map[string]BucketAccess
 	// statistics
 	logPrefix string
 	stats     *c.ComponentStat
@@ -150,32 +150,25 @@ func NewProjector(kvaddrs []string, adminport string) *Projector {
 		kvaddrs:   kvaddrs,
 		adminport: adminport,
 		topics:    make(map[string]*Feed),
+		buckets:   make(map[string]*couchbase.Bucket),
 		reqch:     make(chan []interface{}),
 		finch:     make(chan bool),
 		logPrefix: fmt.Sprintf("[projector:%s]", adminport),
 	}
-	p.stats = p.newStats()
-	p.stats.Set("/kvaddrs", kvaddrs)
 	go mainAdminPort(adminport, p)
 	go p.genServer(p.reqch)
 	c.Infof("%v started ...\n", p.logPrefix)
+	p.stats = p.newStats()
+	p.stats.Set("/kvaddrs", kvaddrs)
 	return p
 }
 
-// NewTestProjector for unit testing.
-func NewTestProjector(kvaddrs []string, adminport string, buckets map[string]BucketAccess) *Projector {
-	p := NewProjector(kvaddrs, adminport)
-	p.testBuckets = buckets
-	return p
-}
-
-// TODO: should we avoid creating a bucket instance everytime for the same
-// bucket ? This will affect how we clean up the bucket in the upstream code.
-func (p *Projector) getBucket(kvaddr, pooln, bucketn string) (BucketAccess, error) {
-	if p.testBuckets != nil {
-		return p.testBuckets[bucketn], nil
+func (p *Projector) getBucket(kvaddr, pooln, bucketn string) (*couchbase.Bucket, error) {
+	bucket, ok := p.buckets[bucketn]
+	if !ok {
+		return c.ConnectBucket(kvaddr, pooln, bucketn)
 	}
-	return c.ConnectBucket(kvaddr, pooln, bucketn)
+	return bucket, nil
 }
 
 func (p *Projector) getKVNodes() []string {
@@ -321,6 +314,9 @@ func (p *Projector) delFeed(topic string) (err error) {
 func (p *Projector) doClose() error {
 	for _, feed := range p.topics {
 		feed.CloseFeed()
+	}
+	for _, bucket := range p.buckets {
+		bucket.Close()
 	}
 	close(p.finch)
 	c.Infof("%v ... stopped.\n", p.logPrefix)

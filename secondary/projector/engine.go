@@ -5,6 +5,7 @@ package projector
 
 import (
 	"fmt"
+	mc "github.com/couchbase/gomemcached/client"
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
@@ -29,13 +30,16 @@ func NewEngine(feed *Feed, uuid uint64, evaluator c.Evaluator, router c.Router) 
 }
 
 // AddToEndpoints create KeyVersions for single `uuid`.
-func (engine *Engine) AddToEndpoints(m *MutationEvent, kvForEndpoints map[string]*c.KeyVersions) error {
+func (engine *Engine) AddToEndpoints(
+	m *mc.UprEvent,
+	kvForEndpoints map[string]*c.KeyVersions) error {
+
 	uuid := engine.uuid
 	evaluator, router := engine.evaluator, engine.router
 
-	vbno, seqno, docid := m.Vbucket, m.Seqno, m.Key // Key is Docid
+	vbno, seqno, docid := m.VBucket, m.Seqno, m.Key // Key is Docid
 	switch m.Opcode {
-	case OpMutation:
+	case mc.UprMutation:
 		pkey, nkey, okey, err := doEvaluate(m, uuid, evaluator)
 		if err != nil {
 			return err
@@ -52,7 +56,7 @@ func (engine *Engine) AddToEndpoints(m *MutationEvent, kvForEndpoints map[string
 			kvForEndpoints[raddr].AddUpsertDeletion(uuid, okey)
 		}
 
-	case OpDeletion:
+	case mc.UprDeletion:
 		pkey, _, okey, err := doEvaluate(m, uuid, evaluator)
 		if err != nil {
 			return err
@@ -66,7 +70,11 @@ func (engine *Engine) AddToEndpoints(m *MutationEvent, kvForEndpoints map[string
 	return nil
 }
 
-func doEvaluate(m *MutationEvent, uuid uint64, evaluator c.Evaluator) (pkey, nkey, okey []byte, err error) {
+func doEvaluate(
+	m *mc.UprEvent,
+	uuid uint64,
+	evaluator c.Evaluator) (pkey, nkey, okey []byte, err error) {
+
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			err = fmt.Errorf("%v", r)

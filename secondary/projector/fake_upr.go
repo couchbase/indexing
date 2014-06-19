@@ -1,15 +1,17 @@
 package projector
 
 import (
+	mc "github.com/couchbase/gomemcached/client"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbaselabs/go-couchbase"
 )
 
 // FakeBucket fot unit testing.
 type FakeBucket struct {
 	bucket  string
 	vbmap   map[string][]uint16
-	flogs   map[uint16][][2]uint64
-	C       chan *MutationEvent
+	flogs   couchbase.FailoverLog
+	C       chan *mc.UprEvent
 	streams map[uint16]*FakeStream
 }
 
@@ -27,8 +29,8 @@ func NewFakeBuckets(buckets []string) map[string]*FakeBucket {
 		fakebuckets[bucket] = &FakeBucket{
 			bucket:  bucket,
 			vbmap:   make(map[string][]uint16),
-			flogs:   make(map[uint16][][2]uint64),
-			C:       make(chan *MutationEvent, c.MutationChannelSize),
+			flogs:   make(couchbase.FailoverLog),
+			C:       make(chan *mc.UprEvent, c.MutationChannelSize),
 			streams: make(map[uint16]*FakeStream),
 		}
 	}
@@ -46,9 +48,9 @@ func (b *FakeBucket) GetVBmap(kvaddrs []string) (map[string][]uint16, error) {
 	return m, nil
 }
 
-// GetFailoverLog is method receiver for BucketAccess interface
-func (b *FakeBucket) GetFailoverLog(vbno uint16) (flog [][2]uint64, err error) {
-	return b.flogs[vbno], nil
+// GetFailoverLogs is method receiver for BucketAccess interface
+func (b *FakeBucket) GetFailoverLogs(vbnos []uint16) (couchbase.FailoverLog, error) {
+	return b.flogs, nil
 }
 
 // OpenKVFeed is method receiver for BucketAccess interface
@@ -74,7 +76,7 @@ func (b *FakeBucket) SetFailoverLog(vbno uint16, flog [][2]uint64) {
 // KVFeeder interface
 
 // GetChannel is method receiver for KVFeeder interface
-func (b *FakeBucket) GetChannel() <-chan *MutationEvent {
+func (b *FakeBucket) GetChannel() <-chan *mc.UprEvent {
 	return b.C
 }
 
@@ -114,6 +116,6 @@ func (b *FakeBucket) CloseKVFeed() (err error) {
 	return
 }
 
-func (s *FakeStream) run(mutch chan<- *MutationEvent) {
+func (s *FakeStream) run(mutch chan *mc.UprEvent) {
 	// TODO: generate mutation events
 }

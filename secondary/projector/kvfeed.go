@@ -9,7 +9,7 @@
 //                                       Sync |  |     |
 //                      NewKVFeed()       End |  |     |
 //                           |  |             |  |     |
-//                          (spawn)         MutationEvent
+//                          (spawn)         ** UprEvent **
 //                           |  |             |
 //                           |  *----------- runScatter()
 //                           |                ^     ^
@@ -44,6 +44,7 @@ package projector
 import (
 	"errors"
 	"fmt"
+	mc "github.com/couchbase/gomemcached/client"
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
@@ -106,18 +107,12 @@ func NewKVFeed(bfeed *BucketFeed, kvaddr, pooln, bucketn string) (*KVFeed, error
 		c.Errorf("%v getBucket(): %v\n", logPrefix, err)
 		return nil, err
 	}
-	feeder, err := bucket.OpenKVFeed(kvaddr)
-	if err != nil {
-		c.Errorf("%v OpenKVFeed(): %v\n", logPrefix, err)
-		return nil, err
-	}
 	kvfeed := &KVFeed{
 		bfeed:   bfeed,
 		kvaddr:  kvaddr,
 		pooln:   pooln,
 		bucketn: bucketn,
 		bucket:  bucket,
-		feeder:  feeder.(KVFeeder),
 		// data-path
 		vbuckets: make(map[uint16]*activeVbucket),
 		// gen-server
@@ -127,6 +122,12 @@ func NewKVFeed(bfeed *BucketFeed, kvaddr, pooln, bucketn string) (*KVFeed, error
 		// misc.
 		logPrefix: logPrefix,
 	}
+	feeder, err := OpenKVFeed(bucket, kvaddr, kvfeed)
+	if err != nil {
+		c.Errorf("%v OpenKVFeed(): %v\n", logPrefix, err)
+		return nil, err
+	}
+	kvfeed.feeder = feeder.(KVFeeder)
 	kvfeed.stats = kvfeed.newStats()
 
 	go kvfeed.genServer(kvfeed.reqch, kvfeed.sbch)
@@ -372,46 +373,50 @@ loop:
 }
 
 // scatterMutation to vbuckets.
-func (kvfeed *KVFeed) scatterMutation(m *MutationEvent, endpoints map[string]*Endpoint, engines map[uint64]*Engine) {
-	vbno := m.Vbucket
+func (kvfeed *KVFeed) scatterMutation(
+	m *mc.UprEvent,
+	endpoints map[string]*Endpoint,
+	engines map[uint64]*Engine) {
+
+	vbno := m.VBucket
 
 	switch m.Opcode {
-	case OpStreamBegin:
+	case mc.UprStreamBegin:
 		if _, ok := kvfeed.vbuckets[vbno]; ok {
 			fmtstr := "%v, duplicate OpStreamBegin for %v\n"
-			c.Errorf(fmtstr, kvfeed.logPrefix, m.Vbucket)
+			c.Errorf(fmtstr, kvfeed.logPrefix, m.VBucket)
 		} else {
-			vr := NewVbucketRoutine(kvfeed, kvfeed.bucketn, vbno, m.Vbuuid)
+			vr := NewVbucketRoutine(kvfeed, kvfeed.bucketn, vbno, m.VBuuid)
 			vr.UpdateEngines(endpoints, engines)
 			kvfeed.vbuckets[vbno] = &activeVbucket{
 				bucket: kvfeed.bucketn,
 				vbno:   vbno,
-				vbuuid: m.Vbuuid,
+				vbuuid: m.VBuuid,
 				seqno:  m.Seqno,
 				vr:     vr,
 			}
 			vr.Event(m)
 		}
 
-	case OpStreamEnd:
+	case mc.UprStreamEnd:
 		if v, ok := kvfeed.vbuckets[vbno]; !ok {
 			fmtstr := "%v, duplicate OpStreamEnd for %v\n"
-			c.Errorf(fmtstr, kvfeed.logPrefix, m.Vbucket)
+			c.Errorf(fmtstr, kvfeed.logPrefix, m.VBucket)
 		} else {
 			v.vr.Close()
 			delete(kvfeed.vbuckets, vbno)
 		}
 
-	case OpMutation, OpDeletion:
+	case mc.UprMutation, mc.UprDeletion:
 		if v, ok := kvfeed.vbuckets[vbno]; ok {
-			if v.vbuuid != m.Vbuuid {
+			if v.vbuuid != m.VBuuid {
 				fmtstr := "%v, vbuuid mismatch for vbucket %v\n"
-				c.Errorf(fmtstr, kvfeed.logPrefix, m.Vbucket)
+				c.Errorf(fmtstr, kvfeed.logPrefix, m.VBucket)
 				v.vr.Close()
 				delete(kvfeed.vbuckets, vbno)
 			} else {
 				v.vr.Event(m)
-				v.vbuuid, v.seqno = m.Vbuuid, m.Seqno
+				v.vbuuid, v.seqno = m.VBuuid, m.Seqno
 			}
 		}
 	}
