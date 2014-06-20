@@ -30,6 +30,8 @@ const (
 //TODO fill the map
 type StreamAddressMap map[StreamId]common.Endpoint
 
+type StreamStatusMap map[StreamId]bool
+
 // a generic channel which can be closed when you
 // want someone to stop doing something
 type StopChannel chan bool
@@ -70,7 +72,7 @@ type MutationKeys struct {
 	docid     []byte               // primary document id
 	uuids     []common.IndexInstId // list of unique ids, like index-ids
 	commands  []byte               // list of commands for each index
-	keys      [][]byte             // list of key-versions for each index
-	oldkeys   [][]byte             // previous key-versions, if available
+	keys      [][][]byte           // list of key-versions for each index
+	oldkeys   [][][]byte           // previous key-versions, if available
 	partnkeys [][]byte             //list of partition keys
 }

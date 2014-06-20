@@ -50,9 +50,9 @@ type HashedSliceContainer struct {
 }
 
 //NewHashedSliceContainer initializes a new HashedSliceContainer and returns
-func NewHashedSliceContainer() HashedSliceContainer {
+func NewHashedSliceContainer() *HashedSliceContainer {
 
-	hsc := HashedSliceContainer{SliceMap: make(map[SliceId]Slice),
+	hsc := &HashedSliceContainer{SliceMap: make(map[SliceId]Slice),
 		NumSlices: 0}
 	return hsc
 

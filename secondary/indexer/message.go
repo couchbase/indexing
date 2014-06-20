@@ -48,12 +48,25 @@ const (
 
 	//TIMEKEEPER
 	TK_STREAM_START
-	TK_STREAM_SHOP
+	TK_STREAM_STOP
 	TK_SHUTDOWN
 	TK_STABILITY_TIMESTAMP
 
 	//STORAGE_MANAGER
 	STORAGE_MGR_SHUTDOWN
+
+	//KVSender
+	KV_SENDER_SHUTDOWN
+
+	//ADMIN_MGR
+	ADMIN_MGR_SHUTDOWN
+
+	//CLUSTER_MGR
+	CLUST_MGR_SENDER_SHUTDOWN
+
+	//INDEXER
+	INDEXER_CREATE_INDEX_DDL
+	INDEXER_DROP_INDEX_DDL
 
 	UPDATE_INDEX_INSTANCE_MAP
 	UPDATE_INDEX_PARTITION_MAP
@@ -276,7 +289,7 @@ func (m *MsgMutMgrFlushDone) GetBucket() string {
 }
 
 //TK_STREAM_START
-//TK_STREAM_SHOP
+//TK_STREAM_STOP
 type MsgTKStreamUpdate struct {
 	mType         MsgType
 	streamId      StreamId
@@ -316,4 +329,30 @@ func (m *MsgTKStabilityTS) GetBucket() string {
 
 func (m *MsgTKStabilityTS) GetTimestamp() Timestamp {
 	return m.ts
+}
+
+//INDEXER_CREATE_INDEX_DDL
+type MsgCreateIndex struct {
+	indexInst common.IndexInst
+}
+
+func (m *MsgCreateIndex) GetMsgType() MsgType {
+	return INDEXER_CREATE_INDEX_DDL
+}
+
+func (m *MsgCreateIndex) GetIndexInst() common.IndexInst {
+	return m.indexInst
+}
+
+//INDEXER_DROP_INDEX_DDL
+type MsgDropIndex struct {
+	indexInstId common.IndexInstId
+}
+
+func (m *MsgDropIndex) GetMsgType() MsgType {
+	return INDEXER_DROP_INDEX_DDL
+}
+
+func (m *MsgDropIndex) GetIndexInstId() common.IndexInstId {
+	return m.indexInstId
 }

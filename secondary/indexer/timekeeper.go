@@ -91,7 +91,7 @@ func (tk *timekeeper) handleSupvervisorCommands(cmd Message) {
 	case TK_STREAM_START:
 		tk.handleStreamStart(cmd)
 
-	case TK_STREAM_SHOP:
+	case TK_STREAM_STOP:
 		tk.handleStreamStop(cmd)
 
 	}
