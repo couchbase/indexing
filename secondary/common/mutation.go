@@ -226,6 +226,11 @@ func (kv *KeyVersions) Free() {
 	// TODO: give `kv` back to pool
 }
 
+// Length number of key-versions are stored.
+func (kv *KeyVersions) Length() int {
+	return len(kv.Uuids)
+}
+
 // AddUpsert add a new keyversion for same OpMutation.
 func (kv *KeyVersions) AddUpsert(uuid uint64, key, oldkey [][]byte) {
 	kv.addKey(uuid, Upsert, key, oldkey)

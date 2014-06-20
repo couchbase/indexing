@@ -148,7 +148,7 @@ loop:
 				m := msg[1].(*mc.UprEvent)
 				seqno = m.Seqno
 				// broadcast StreamBegin
-				if m.Opcode == mc.UprStreamBegin {
+				if m.Opcode == mc.UprStreamRequest {
 					vr.sendToEndpoints(endpoints, func() *c.KeyVersions {
 						kv := c.NewKeyVersions(seqno, m.Key, 1)
 						kv.AddStreamBegin()
@@ -169,6 +169,9 @@ loop:
 				}
 				// send kv to corresponding endpoint
 				for raddr, kv := range kvForEndpoints {
+					if kv.Length() == 0 {
+						continue
+					}
 					// send might fail, we don't care
 					endpoints[raddr].Send(vr.bucket, vr.vbno, vr.vbuuid, kv)
 				}

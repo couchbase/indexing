@@ -269,8 +269,12 @@ func (feed *Feed) requestFeed(req RequestReader) (err error) {
 		sort.Sort(feed.failoverTimestamps[bucket])
 		sort.Sort(feed.kvTimestamps[bucket])
 	}
-	feed.resetEngines(endpoints, engines)
-	c.Infof("%v started ...\n", feed.logPrefix)
+	if len(engines) == 0 {
+		c.Warnf("%v empty engines !\n", feed.logPrefix)
+	} else {
+		feed.resetEngines(endpoints, engines)
+		c.Infof("%v started ...\n", feed.logPrefix)
+	}
 	return nil
 }
 
@@ -487,7 +491,7 @@ func (feed *Feed) buildEngines(
 		engine := NewEngine(feed, uuid, evaluator, routers[uuid])
 		newengines[uuid] = engine
 	}
-	return endpoints, engines, nil
+	return endpoints, newengines, nil
 }
 
 // organize engines based on buckets, engine is associated with one bucket.

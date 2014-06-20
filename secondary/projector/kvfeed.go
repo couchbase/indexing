@@ -102,7 +102,7 @@ func NewKVFeed(bfeed *BucketFeed, kvaddr, pooln, bucketn string) (*KVFeed, error
 	logPrefix := fmt.Sprintf("[kvfeed %v:%v:%v]", feed.topic, bucketn, kvaddr)
 
 	p := feed.getProjector()
-	bucket, err := p.getBucket(kvaddr, pooln, bucketn)
+	bucket, err := p.getBucket(pooln, bucketn)
 	if err != nil {
 		c.Errorf("%v getBucket(): %v\n", logPrefix, err)
 		return nil, err
@@ -325,7 +325,7 @@ func (kvfeed *KVFeed) runScatter(sbch chan []interface{}) {
 	var endpoints map[string]*Endpoint
 	var engines map[uint64]*Engine
 
-	mutations := 0
+	events := 0
 loop:
 	for {
 		select {
@@ -335,7 +335,7 @@ loop:
 				break loop
 			}
 			kvfeed.scatterMutation(m, endpoints, engines)
-			mutations++
+			events++
 
 		case msg, ok := <-sbch:
 			if ok == false {
@@ -345,24 +345,25 @@ loop:
 			respch := msg[1].(chan []interface{})
 			switch vals := info.(type) {
 			case sbkvUpdateEngines:
-				endpoints = vals[1].(map[string]*Endpoint)
-				engines = vals[2].(map[uint64]*Engine)
+				endpoints = vals[0].(map[string]*Endpoint)
+				engines = vals[1].(map[uint64]*Engine)
 				for _, v := range kvfeed.vbuckets {
 					v.vr.UpdateEngines(endpoints, engines)
 				}
 
 			case sbkvDeleteEngines:
-				endpoints = vals[1].(map[string]*Endpoint)
-				engineKeys := vals[2].([]uint64)
+				endpoints = vals[0].(map[string]*Endpoint)
+				engineKeys := vals[1].([]uint64)
 				for _, v := range kvfeed.vbuckets {
 					v.vr.DeleteEngines(endpoints, engineKeys)
 				}
 				for _, engineKey := range engineKeys {
 					delete(engines, engineKey)
 				}
+
 			case sbkvGetStatistics:
 				stats := map[string]interface{}{
-					"mutations": mutations,
+					"events": events,
 				}
 				respch <- []interface{}{stats}
 			}
@@ -381,21 +382,27 @@ func (kvfeed *KVFeed) scatterMutation(
 	vbno := m.VBucket
 
 	switch m.Opcode {
-	case mc.UprStreamBegin:
+	case mc.UprStreamRequest:
 		if _, ok := kvfeed.vbuckets[vbno]; ok {
-			fmtstr := "%v, duplicate OpStreamBegin for %v\n"
+			fmtstr := "%v, duplicate OpStreamRequest for %v\n"
 			c.Errorf(fmtstr, kvfeed.logPrefix, m.VBucket)
 		} else {
-			vr := NewVbucketRoutine(kvfeed, kvfeed.bucketn, vbno, m.VBuuid)
-			vr.UpdateEngines(endpoints, engines)
-			kvfeed.vbuckets[vbno] = &activeVbucket{
-				bucket: kvfeed.bucketn,
-				vbno:   vbno,
-				vbuuid: m.VBuuid,
-				seqno:  m.Seqno,
-				vr:     vr,
+			var err error
+			m.VBuuid, m.Seqno, err = m.FailoverLog.Latest()
+			if err != nil {
+				c.Errorf("%v vbucket(%v) %v", kvfeed.logPrefix, m.VBucket, err)
+			} else {
+				vr := NewVbucketRoutine(kvfeed, kvfeed.bucketn, vbno, m.VBuuid)
+				vr.UpdateEngines(endpoints, engines)
+				kvfeed.vbuckets[vbno] = &activeVbucket{
+					bucket: kvfeed.bucketn,
+					vbno:   vbno,
+					vbuuid: m.VBuuid,
+					seqno:  m.Seqno,
+					vr:     vr,
+				}
+				vr.Event(m)
 			}
-			vr.Event(m)
 		}
 
 	case mc.UprStreamEnd:
@@ -410,8 +417,8 @@ func (kvfeed *KVFeed) scatterMutation(
 	case mc.UprMutation, mc.UprDeletion:
 		if v, ok := kvfeed.vbuckets[vbno]; ok {
 			if v.vbuuid != m.VBuuid {
-				fmtstr := "%v, vbuuid mismatch for vbucket %v\n"
-				c.Errorf(fmtstr, kvfeed.logPrefix, m.VBucket)
+				fmtstr := "%v, vbuuid mismatch (%v:%v) for vbucket %v\n"
+				c.Errorf(fmtstr, kvfeed.logPrefix, v.vbuuid, m.VBuuid, m.VBucket)
 				v.vr.Close()
 				delete(kvfeed.vbuckets, vbno)
 			} else {

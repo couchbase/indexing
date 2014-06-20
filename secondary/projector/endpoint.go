@@ -172,7 +172,7 @@ loop:
 				vbmap := msg[1].(*c.VbConnectionMap)
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{client.SendVbmap(vbmap)}
-				stats.Incr("/vbmap", 1)
+				stats.Incr("/vbmaps", 1)
 
 			case endpCmdGetStatistics:
 				respch := msg[1].(chan []interface{})
@@ -189,6 +189,7 @@ loop:
 		case <-flushTimeout:
 			flushTimeout = time.After(c.EndpointBufferTimeout * time.Millisecond)
 			if err = buffers.flushBuffers(client); err != nil {
+				c.Errorf("%v flushBuffers() %v", endpoint.logPrefix, err)
 				endpoint.doClose()
 				break loop
 			}

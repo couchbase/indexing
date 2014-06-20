@@ -94,5 +94,5 @@ func doEvaluate(
 			return
 		}
 	}
-	return pkey, okey, nkey, nil
+	return pkey, nkey, okey, nil
 }

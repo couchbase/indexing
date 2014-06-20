@@ -119,9 +119,9 @@ func OpError(err error, vals []interface{}, idx int) error {
 	return vals[idx].(error)
 }
 
-// ConnectBucket will instantiate a couchbase-bucket instance with kvaddr.
-func ConnectBucket(kvaddr, pooln, bucketn string) (*couchbase.Bucket, error) {
-	couch, err := couchbase.Connect("http://" + kvaddr)
+// ConnectBucket will instantiate a couchbase-bucket instance with cluster.
+func ConnectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
+	couch, err := couchbase.Connect("http://" + cluster)
 	if err != nil {
 		return nil, err
 	}

@@ -127,13 +127,14 @@ func NewMutationStream(
 		reqch:     make(chan []interface{}, c.GenserverChannelSize),
 		finch:     make(chan bool),
 		conns:     make(map[string]netConn),
-		logPrefix: fmt.Sprintf("endpoint %q", laddr),
+		logPrefix: fmt.Sprintf("[endpoint %q]", laddr),
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
 		return nil, err
 	}
 	go streamListener(laddr, s.lis, s.reqch) // spawn daemon
 	go s.genServer(s.reqch, sbch)            // spawn gen-server
+	c.Infof("%v started ...", s.logPrefix)
 	return s, nil
 }
 
@@ -301,7 +302,7 @@ func (s *MutationStream) handleClose(msg streamServerMessage) (appmsg interface{
 func (s *MutationStream) startWorker(raddr string) {
 	log.Printf("%v, starting worker for connection %q\n", s.logPrefix, raddr)
 	nc := s.conns[raddr]
-	go doReceive(nc, s.mutch, s.reqch)
+	go doReceive(s.logPrefix, nc, s.mutch, s.reqch)
 	nc.active = true
 }
 
@@ -465,7 +466,7 @@ func streamListener(laddr string, lis net.Listener, reqch chan []interface{}) {
 }
 
 // per connection go-routine to read []*VbKeyVersions.
-func doReceive(nc netConn, mutch chan<- []*protobuf.VbKeyVersions, reqch chan<- []interface{}) {
+func doReceive(prefix string, nc netConn, mutch chan<- []*protobuf.VbKeyVersions, reqch chan<- []interface{}) {
 	conn, worker := nc.conn, nc.worker
 	flags := StreamTransportFlag(0).SetProtobuf() // TODO: make it configurable
 	pkt := NewStreamTransportPacket(c.MaxStreamDataLen, flags)
@@ -473,6 +474,21 @@ func doReceive(nc netConn, mutch chan<- []*protobuf.VbKeyVersions, reqch chan<- 
 
 	started := make([]*bucketVbno, 0, 4)  // TODO: avoid magic numbers
 	finished := make([]*bucketVbno, 0, 4) // TODO: avoid magic numbers
+
+	// detect StreamBegin and StreamEnd messages.
+	// TODO: function uses 2 level of loops, figure out a smart way to identify
+	//       presence of StreamBegin/StreamEnd so that we can avoid looping.
+	updateActiveVbuckets := func(vbs []*protobuf.VbKeyVersions) {
+		for _, vb := range vbs {
+			bucket, vbno := vb.GetBucketname(), uint16(vb.GetVbucket())
+			s, e := vbucketSchedule(vb)
+			if s != nil {
+				started = append(started, &bucketVbno{bucket, vbno})
+			} else if e != nil {
+				finished = append(finished, &bucketVbno{bucket, vbno})
+			}
+		}
+	}
 
 loop:
 	for {
@@ -483,52 +499,50 @@ loop:
 		if payload, err := pkt.Receive(conn); err != nil {
 			msg.cmd, msg.err = streamgCmdError, err
 			reqch <- []interface{}{msg}
+			log.Printf(
+				"%v, worker %q exiting with error %v\n", prefix, msg.raddr, err)
 			break loop
 
 		} else if vbmap, ok := payload.(*protobuf.VbConnectionMap); ok {
 			msg.cmd, msg.args = streamgCmdVbmap, []interface{}{vbmap}
 			reqch <- []interface{}{msg}
+			log.Printf(
+				"%v, worker %q exiting with `streamgCmdVbmap`\n",
+				prefix, msg.raddr)
 			break loop
 
 		} else if vbs, ok := payload.([]*protobuf.VbKeyVersions); ok {
-			updateActiveVbuckets(vbs, started, finished)
+			updateActiveVbuckets(vbs)
 			select {
 			case mutch <- vbs:
 				if len(started) > 0 || len(finished) > 0 {
 					msg.cmd = streamgCmdVbcontrol
 					msg.args = []interface{}{started, finished}
 					reqch <- []interface{}{msg}
+					log.Printf(
+						"%v, worker %q exiting with `streamgCmdVbcontrol`\n",
+						prefix, msg.raddr)
 					break loop
 				}
 
 			case <-worker:
 				msg.cmd, msg.err = streamgCmdError, ErrorStreamdWorkerKilled
 				reqch <- []interface{}{msg}
+				log.Printf(
+					"%v, worker %q exiting with error %v\n",
+					prefix, msg.raddr, err)
 				break loop
 			}
 
 		} else {
 			msg.cmd, msg.err = streamgCmdError, ErrorStreamPayload
 			reqch <- []interface{}{msg}
+			log.Printf(
+				"%v, worker %q exiting with error %v\n", prefix, msg.raddr, err)
 			break loop
 		}
 	}
 	nc.active = false
-}
-
-// detect StreamBegin and StreamEnd messages.
-// TODO: function uses 2 level of loops, figure out a smart way to identify
-//       presence of StreamBegin/StreamEnd so that we can avoid looping.
-func updateActiveVbuckets(vbs []*protobuf.VbKeyVersions, started, finished []*bucketVbno) {
-	for _, vb := range vbs {
-		bucket, vbno := vb.GetBucketname(), uint16(vb.GetVbucket())
-		s, e := vbucketSchedule(vb)
-		if s != nil {
-			started = append(started, &bucketVbno{bucket, vbno})
-		} else if e != nil {
-			finished = append(finished, &bucketVbno{bucket, vbno})
-		}
-	}
 }
 
 func vbucketSchedule(vb *protobuf.VbKeyVersions) (s, e *protobuf.KeyVersions) {

@@ -28,6 +28,10 @@ func (b *endpointBuffers) addKeyVersions(bucket string, vbno uint16, vbuuid uint
 
 // flush the buffers to the other end.
 func (b *endpointBuffers) flushBuffers(client *indexer.StreamClient) error {
+	if len(b.vbs) == 0 {
+		return nil
+	}
+
 	vbs := make([]*c.VbKeyVersions, 0, len(b.vbs))
 	for _, vb := range b.vbs {
 		vbs = append(vbs, vb)

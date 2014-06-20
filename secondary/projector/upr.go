@@ -81,8 +81,12 @@ func (kv *kvUpr) GetChannel() (mutch <-chan *mc.UprEvent) {
 }
 
 func (kv *kvUpr) StartVbStreams(restartTs *c.Timestamp) (failoverTs, kvTs *c.Timestamp, err error) {
-	for _, vbno := range restartTs.Vbnos {
-		err = kv.uprFeed.UprRequestStream(vbno, 0, 0, 0, 0xFFFFFFFFFFFFFFFF, 0, 0)
+	for i, vbno := range restartTs.Vbnos {
+		flags, vbuuid := uint32(0), restartTs.Vbuuids[i]
+		start, end := uint64(0), uint64(0xFFFFFFFFFFFFFFFF)
+		snapStart, snapEnd := uint64(0), uint64(0)
+		err = kv.uprFeed.UprRequestStream(
+			vbno, flags, vbuuid, start, end, snapStart, snapEnd)
 		if err != nil {
 			c.Errorf("%v %v", kv.kvfeed.logPrefix, err)
 			return nil, nil, err

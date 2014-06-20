@@ -100,7 +100,7 @@ func (p *Projector) doFailoverLog(request *protobuf.FailoverLogRequest) ap.Messa
 	bucketn := request.GetBucket()
 	vbuckets := request.GetVbnos()
 
-	bucket, err := p.getBucket(p.kvaddrs[0], pooln, bucketn)
+	bucket, err := p.getBucket(pooln, bucketn)
 	if err != nil {
 		c.Errorf("%v %s, %v\n", p.logPrefix, bucketn, err)
 		response.Err = protobuf.NewError(err)

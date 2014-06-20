@@ -74,7 +74,7 @@ func (s *ComponentStat) Incr(path string, val int) {
 	m := map[string]interface{}(*s)
 	err := jsonpointer.Incr(m, path, val)
 	if err != nil {
-		Fatalf("error Incr() ComponentStat %v\n", err)
+		Fatalf("Incr(%q) ComponentStat %v\n", path, err)
 	}
 }
 
@@ -83,7 +83,7 @@ func (s *ComponentStat) Incrs(path string, vals ...int) {
 	m := map[string]interface{}(*s)
 	err := jsonpointer.Incrs(m, path, vals...)
 	if err != nil {
-		Fatalf("error Incrs() ComponentStat %v\n", err)
+		Fatalf("Incrs(%q) ComponentStat %v\n", path, err)
 	}
 }
 
@@ -92,7 +92,7 @@ func (s *ComponentStat) Decr(path string, val int) {
 	m := map[string]interface{}(*s)
 	err := jsonpointer.Decr(m, path, val)
 	if err != nil {
-		Fatalf("error Decr() ComponentStat %v\n", err)
+		Fatalf("Decr(%q) ComponentStat %v\n", path, err)
 	}
 }
 
@@ -101,16 +101,16 @@ func (s *ComponentStat) Set(path string, val interface{}) {
 	m := map[string]interface{}(*s)
 	err := jsonpointer.Set(m, path, val)
 	if err != nil {
-		Fatalf("error Set() ComponentStat %v\n", err)
+		Fatalf("Set(%q) ComponentStat %v\n", path, err)
 	}
 }
 
 // Get stat value
 func (s *ComponentStat) Get(path string) interface{} {
 	m := map[string]interface{}(*s)
-	val, err := jsonpointer.Get(m, path)
-	if err != nil {
-		Fatalf("error Get() ComponentStat %v\n", err)
+	val := jsonpointer.Get(m, path)
+	if val == nil {
+		Fatalf("for Get(%q) ComponentStat\n", path)
 	}
 	return val
 }
@@ -134,7 +134,7 @@ var regxStatPath, _ = regexp.Compile(`(.*)stats(.*)`)
 func ParseStatsPath(urlPath string) string {
 	matches := regxStatPath.FindStringSubmatch(urlPath)
 	if len(matches) != 3 {
-		Fatalf("ParseStatsPath() couldn't match %s\n", urlPath)
+		Fatalf("ParseStatsPath(%q)\n", urlPath)
 	}
 	return matches[2]
 }

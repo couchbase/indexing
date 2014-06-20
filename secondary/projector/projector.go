@@ -131,6 +131,7 @@ type Subscriber interface {
 // kv-nodes.
 // TODO: support elastic set of kvnodes, right now they are immutable set.
 type Projector struct {
+	cluster   string                       // cluster address to connect
 	kvaddrs   []string                     // immutable set of kv-nodes to connect with
 	adminport string                       // <host:port> for projector's admin-port
 	topics    map[string]*Feed             // active topics, mutable dictionary
@@ -145,15 +146,16 @@ type Projector struct {
 
 // NewProjector creates a news projector instance and starts a corresponding
 // adminport.
-func NewProjector(kvaddrs []string, adminport string) *Projector {
+func NewProjector(cluster string, kvaddrs []string, adminport string) *Projector {
 	p := &Projector{
+		cluster:   cluster,
 		kvaddrs:   kvaddrs,
 		adminport: adminport,
 		topics:    make(map[string]*Feed),
 		buckets:   make(map[string]*couchbase.Bucket),
 		reqch:     make(chan []interface{}),
 		finch:     make(chan bool),
-		logPrefix: fmt.Sprintf("[projector:%s]", adminport),
+		logPrefix: fmt.Sprintf("[projector %s]", adminport),
 	}
 	go mainAdminPort(adminport, p)
 	go p.genServer(p.reqch)
@@ -163,10 +165,10 @@ func NewProjector(kvaddrs []string, adminport string) *Projector {
 	return p
 }
 
-func (p *Projector) getBucket(kvaddr, pooln, bucketn string) (*couchbase.Bucket, error) {
+func (p *Projector) getBucket(pooln, bucketn string) (*couchbase.Bucket, error) {
 	bucket, ok := p.buckets[bucketn]
 	if !ok {
-		return c.ConnectBucket(kvaddr, pooln, bucketn)
+		return c.ConnectBucket(p.cluster, pooln, bucketn)
 	}
 	return bucket, nil
 }
