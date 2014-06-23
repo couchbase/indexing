@@ -33,9 +33,9 @@ type KeyPartitionContainer struct {
 }
 
 //NewKeyPartitionContainer initializes a new KeyPartitionContainer and returns
-func NewKeyPartitionContainer() KeyPartitionContainer {
+func NewKeyPartitionContainer() PartitionContainer {
 
-	kpc := KeyPartitionContainer{PartitionMap: make(map[PartitionId]KeyPartitionDefn),
+	kpc := &KeyPartitionContainer{PartitionMap: make(map[PartitionId]KeyPartitionDefn),
 		NumPartitions: 0}
 	return kpc
 

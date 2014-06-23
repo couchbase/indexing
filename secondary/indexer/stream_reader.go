@@ -54,7 +54,7 @@ func CreateMutationStreamReader(streamId StreamId, bucketQueueMap BucketQueueMap
 	//start a new mutation stream
 	streamMutch := make(chan []*protobuf.VbKeyVersions)
 	streamRespch := make(chan interface{})
-	stream, err := NewMutationStream(StreamAddrMap[streamId], streamMutch, streamRespch)
+	stream, err := NewMutationStream(string(StreamAddrMap[streamId]), streamMutch, streamRespch)
 	if err != nil {
 		//return stream init error
 		msgErr := &MsgError{mType: ERROR,
@@ -208,8 +208,8 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 			//copy the mutation data so underlying stream library can reuse the
 			//KeyVersions structs
 			mut.uuids = append(mut.uuids, common.IndexInstId(kv.GetUuids()[i]))
-			mut.keys = append(mut.keys, kv.GetKeys()[i])
-			mut.oldkeys = append(mut.oldkeys, kv.GetOldkeys()[i])
+			mut.keys = append(mut.keys, [][]byte{kv.GetKeys()[i]})
+			mut.oldkeys = append(mut.oldkeys, [][]byte{kv.GetOldkeys()[i]})
 			mut.commands = append(mut.commands,
 				byte(kv.GetCommands()[i]))
 

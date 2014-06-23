@@ -68,20 +68,23 @@ func (x *IndexState) UnmarshalJSON(data []byte) error {
 type StorageType int32
 
 const (
-	StorageType_View    StorageType = 1
-	StorageType_Llrb    StorageType = 2
-	StorageType_LevelDB StorageType = 3
+	StorageType_View     StorageType = 1
+	StorageType_Llrb     StorageType = 2
+	StorageType_LevelDB  StorageType = 3
+	StorageType_ForestDB StorageType = 4
 )
 
 var StorageType_name = map[int32]string{
 	1: "View",
 	2: "Llrb",
 	3: "LevelDB",
+	4: "ForestDB",
 }
 var StorageType_value = map[string]int32{
-	"View":    1,
-	"Llrb":    2,
-	"LevelDB": 3,
+	"View":     1,
+	"Llrb":     2,
+	"LevelDB":  3,
+	"ForestDB": 4,
 }
 
 func (x StorageType) Enum() *StorageType {
@@ -105,20 +108,17 @@ func (x *StorageType) UnmarshalJSON(data []byte) error {
 type ExprType int32
 
 const (
-	ExprType_Simple     ExprType = 1
-	ExprType_JavaScript ExprType = 2
-	ExprType_N1QL       ExprType = 3
+	ExprType_JavaScript ExprType = 1
+	ExprType_N1QL       ExprType = 2
 )
 
 var ExprType_name = map[int32]string{
-	1: "Simple",
-	2: "JavaScript",
-	3: "N1QL",
+	1: "JavaScript",
+	2: "N1QL",
 }
 var ExprType_value = map[string]int32{
-	"Simple":     1,
-	"JavaScript": 2,
-	"N1QL":       3,
+	"JavaScript": 1,
+	"N1QL":       2,
 }
 
 func (x ExprType) Enum() *ExprType {
@@ -142,14 +142,23 @@ func (x *ExprType) UnmarshalJSON(data []byte) error {
 type PartitionScheme int32
 
 const (
-	PartitionScheme_TestPartitionScheme PartitionScheme = 1
+	PartitionScheme_KEY   PartitionScheme = 1
+	PartitionScheme_HASH  PartitionScheme = 2
+	PartitionScheme_RANGE PartitionScheme = 3
+	PartitionScheme_TEST  PartitionScheme = 4
 )
 
 var PartitionScheme_name = map[int32]string{
-	1: "TestPartitionScheme",
+	1: "KEY",
+	2: "HASH",
+	3: "RANGE",
+	4: "TEST",
 }
 var PartitionScheme_value = map[string]int32{
-	"TestPartitionScheme": 1,
+	"KEY":   1,
+	"HASH":  2,
+	"RANGE": 3,
+	"TEST":  4,
 }
 
 func (x PartitionScheme) Enum() *PartitionScheme {
@@ -265,7 +274,7 @@ func (m *IndexDefn) GetPartitionScheme() PartitionScheme {
 	if m != nil && m.PartitionScheme != nil {
 		return *m.PartitionScheme
 	}
-	return PartitionScheme_TestPartitionScheme
+	return PartitionScheme_KEY
 }
 
 func (m *IndexDefn) GetPartnExpression() string {
@@ -279,7 +288,7 @@ func (m *IndexDefn) GetExprType() ExprType {
 	if m != nil && m.ExprType != nil {
 		return *m.ExprType
 	}
-	return ExprType_Simple
+	return ExprType_JavaScript
 }
 
 func (m *IndexDefn) GetSecExpressions() []string {

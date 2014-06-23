@@ -34,7 +34,6 @@ func (ie *IndexEvaluator) Bucket() string {
 func (ie *IndexEvaluator) Compile() (err error) {
 	defn := ie.instance.GetDefinition()
 	switch defn.GetExprType() {
-	case ExprType_Simple:
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		ie.skExprs, err = c.CompileN1QLExpression(defn.GetSecExpressions())
@@ -59,7 +58,6 @@ func (ie *IndexEvaluator) PartitionKey(docid []byte, document []byte) (partKey [
 
 	exprType := ie.instance.GetDefinition().GetExprType() // ???
 	switch exprType {
-	case ExprType_Simple:
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		partKey, err = c.N1QLTransform(document, []interface{}{ie.pkExpr})
@@ -75,7 +73,6 @@ func (ie *IndexEvaluator) Transform(docid []byte, document []byte) (secKey []byt
 
 	exprType := ie.instance.GetDefinition().GetExprType()
 	switch exprType {
-	case ExprType_Simple:
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		secKey, err = c.N1QLTransform(document, ie.skExprs)
@@ -128,7 +125,7 @@ func (instance *IndexInst) DeletionEndpoints(vbno uint16, seqno uint64, docid, p
 
 func (instance *IndexInst) getTestPartitionScheme() *TestPartition {
 	defn := instance.GetDefinition()
-	if defn.GetPartitionScheme() == PartitionScheme_TestPartitionScheme {
+	if defn.GetPartitionScheme() == PartitionScheme_TEST {
 		return instance.GetTp()
 	}
 	return nil

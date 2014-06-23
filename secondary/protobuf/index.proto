@@ -33,18 +33,21 @@ enum StorageType {
     View    = 1;
     Llrb    = 2;
     LevelDB = 3;
+    ForestDB = 4;
 }
 
 // Type of expression used to evaluate document.
 enum ExprType {
-    Simple     = 1;
-    JavaScript = 2;
-    N1QL       = 3;
+    JavaScript = 1;
+    N1QL       = 2;
 }
 
 // Type of topology, including paritition type to be used for the index.
 enum  PartitionScheme {
-    TestPartitionScheme = 1;
+    KEY = 1;
+    HASH = 2;
+    RANGE = 3;
+    TEST = 4;
 }
 
 message IndexInst {

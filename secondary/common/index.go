@@ -17,8 +17,8 @@ type IndexInstId uint64
 type ExprType string
 
 const (
-	JavaScript ExprType = "javascript"
-	N1QL                = "n1ql"
+	JavaScript ExprType = "JavaScript"
+	N1QL                = "N1QL"
 )
 
 type PartitionScheme string
@@ -27,15 +27,16 @@ const (
 	KEY   PartitionScheme = "KEY"
 	HASH                  = "HASH"
 	RANGE                 = "RANGE"
+	TEST                  = "TEST"
 )
 
 type IndexType string
 
 const (
-	View     IndexType = "view"
-	LevelDB            = "leveldb"
-	Llrb               = "llrb"
-	ForestDB           = "forestdb"
+	View     IndexType = "View"
+	Llrb               = "Llrb"
+	LevelDB            = "LevelDB"
+	ForestDB           = "ForestDB"
 )
 
 type IndexState int
@@ -57,7 +58,7 @@ type IndexDefn struct {
 	Bucket          string    // bucket name
 	IsPrimary       bool
 	OnExprList      []string // expression list
-	Exprtype        ExprType
+	ExprType        ExprType
 	PartitionScheme PartitionScheme
 	PartitionKey    string
 }

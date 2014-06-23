@@ -129,7 +129,7 @@ loop:
 				m.shutdown()
 				break loop
 			}
-		case msg, ok := <-m.internalRecvCh:
+		case msg, _ := <-m.internalRecvCh:
 			m.handleWorkerMessage(msg)
 		}
 	}
@@ -472,7 +472,7 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 	//if all indexes for a bucket have been removed, drop the mutation queue
 	for b, bq := range bucketQueueMap {
 		dropBucket := true
-		for i, iq := range indexQueueMap {
+		for _, iq := range indexQueueMap {
 			//bad check: if the queues match, it is still being used
 			//better way is to check with bucket
 			if bq == iq {
@@ -563,7 +563,7 @@ func (m *mutationMgr) shutdown() Message {
 		m.lock.Lock()
 		defer m.lock.Unlock()
 		//send shutdown message to all stream readers
-		for streamId, cmdCh := range m.streamReaderCmdChMap {
+		for streamId, _ := range m.streamReaderCmdChMap {
 
 			respMsg := m.sendMsgToStreamReader(streamId,
 				&MsgGeneral{mType: STREAM_READER_SHUTDOWN})

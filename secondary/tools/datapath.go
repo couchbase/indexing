@@ -88,7 +88,7 @@ func makeIndexInstances() []*protobuf.IndexInst {
 		Using:           protobuf.StorageType_View.Enum(),
 		ExprType:        protobuf.ExprType_N1QL.Enum(),
 		SecExpressions:  sExprs,
-		PartitionScheme: protobuf.PartitionScheme_TestPartitionScheme.Enum(),
+		PartitionScheme: protobuf.PartitionScheme_TEST.Enum(),
 		PartnExpression: proto.String(`{"type":"property","path":"type"}`),
 	}
 	instance1 := &protobuf.IndexInst{
@@ -109,7 +109,7 @@ func makeIndexInstances() []*protobuf.IndexInst {
 		Using:           protobuf.StorageType_View.Enum(),
 		ExprType:        protobuf.ExprType_N1QL.Enum(),
 		SecExpressions:  []string{`{"type":"property","path":"city"}`},
-		PartitionScheme: protobuf.PartitionScheme_TestPartitionScheme.Enum(),
+		PartitionScheme: protobuf.PartitionScheme_TEST.Enum(),
 		PartnExpression: proto.String(`{"type":"property","path":"type"}`),
 	}
 	instance2 := &protobuf.IndexInst{

@@ -97,7 +97,6 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 //after flush has completed
 func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
-	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	ts := cmd.(*MsgMutMgrFlushDone).GetTS()
 

@@ -42,6 +42,9 @@ const (
 
 	//Timekeeper
 	ERROR_TK_UNKNOWN_STREAM
+
+	//KVSender
+	ERROR_CREATE_INDEX_FAILED
 )
 
 type errSeverity int16

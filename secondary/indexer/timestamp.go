@@ -16,7 +16,7 @@ type Timestamp []Seqno
 type StabilityTimestamp Timestamp
 
 func NewTimestamp() Timestamp {
-	ts := make([]Seqno, MAX_NUM_VBUCKETS)
+	ts := make([]Seqno, NUM_VBUCKETS)
 	return ts
 }
 

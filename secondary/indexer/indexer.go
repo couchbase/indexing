@@ -65,7 +65,7 @@ type indexer struct {
 
 }
 
-func NewIndexer() (Indexer, Message) {
+func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 
 	idx := &indexer{
 		wrkrRecvCh:         make(MsgChannel),
@@ -89,6 +89,15 @@ func NewIndexer() (Indexer, Message) {
 
 	idx.state = INIT
 	log.Printf("Indexer: Status INIT")
+
+	//assume indexerId 1 for now
+	idx.id = 1
+
+	if numVbuckets == 0 {
+		NUM_VBUCKETS = numVbuckets
+	} else {
+		NUM_VBUCKETS = MAX_NUM_VBUCKETS
+	}
 
 	//init the stream address map
 	StreamAddrMap = make(StreamAddressMap)
@@ -154,7 +163,7 @@ func NewIndexer() (Indexer, Message) {
 
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh,
-		MAX_NUM_VBUCKETS)
+		NUM_VBUCKETS)
 	if res.GetMsgType() != SUCCESS {
 		log.Println("Indexer: Mutation Manager Init Error", res)
 		return nil, res

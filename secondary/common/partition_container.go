@@ -30,7 +30,7 @@ type PartitionContainer interface {
 
 	GetAllPartitions() []PartitionDefn
 	GetPartitionById(PartitionId) PartitionDefn
-	GetNumPartitions()
+	GetNumPartitions() int
 }
 
 //PartitionDefn is a generic interface which defines
