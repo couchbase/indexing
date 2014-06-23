@@ -175,13 +175,13 @@ func (vb *VbKeyVersions) FreeKeyVersions() {
 
 // KeyVersions for a single mutation from KV for a subset of index.
 type KeyVersions struct {
-	Seqno     uint64     // vbucket sequence number for this mutation
-	Docid     []byte     // primary document id
-	Uuids     []uint64   // list of unique ids, like index-ids
-	Commands  []byte     // list of commands for each index
-	Keys      [][][]byte // list of key-versions for each index
-	Oldkeys   [][][]byte // previous key-versions, if available
-	Partnkeys [][]byte   //partition key for each key-version
+	Seqno     uint64   // vbucket sequence number for this mutation
+	Docid     []byte   // primary document id
+	Uuids     []uint64 // list of unique ids, like index-ids
+	Commands  []byte   // list of commands for each index
+	Keys      [][]byte // list of key-versions for each index
+	Oldkeys   [][]byte // previous key-versions, if available
+	Partnkeys [][]byte // partition key for each key-version
 }
 
 // NewKeyVersions return a reference KeyVersions for a single mutation.
@@ -189,13 +189,13 @@ func NewKeyVersions(seqno uint64, docid []byte, maxCount int) *KeyVersions {
 	kv := &KeyVersions{Seqno: seqno, Docid: docid}
 	kv.Uuids = make([]uint64, 0, maxCount)
 	kv.Commands = make([]byte, 0, maxCount)
-	kv.Keys = make([][][]byte, 0, maxCount)
-	kv.Oldkeys = make([][][]byte, 0, maxCount)
+	kv.Keys = make([][]byte, 0, maxCount)
+	kv.Oldkeys = make([][]byte, 0, maxCount)
 	return kv
 }
 
 // addKey will add key-version for a single index.
-func (kv *KeyVersions) addKey(uuid uint64, command byte, key, oldkey [][]byte) {
+func (kv *KeyVersions) addKey(uuid uint64, command byte, key, oldkey []byte) {
 	kv.Uuids = append(kv.Uuids, uuid)
 	kv.Commands = append(kv.Commands, command)
 	kv.Keys = append(kv.Keys, key)
@@ -232,17 +232,17 @@ func (kv *KeyVersions) Length() int {
 }
 
 // AddUpsert add a new keyversion for same OpMutation.
-func (kv *KeyVersions) AddUpsert(uuid uint64, key, oldkey [][]byte) {
+func (kv *KeyVersions) AddUpsert(uuid uint64, key, oldkey []byte) {
 	kv.addKey(uuid, Upsert, key, oldkey)
 }
 
 // AddDeletion add a new keyversion for same OpDeletion.
-func (kv *KeyVersions) AddDeletion(uuid uint64, oldkey [][]byte) {
+func (kv *KeyVersions) AddDeletion(uuid uint64, oldkey []byte) {
 	kv.addKey(uuid, Deletion, nil, oldkey)
 }
 
 // AddUpsertDeletion add a keyversion command to delete old entry.
-func (kv *KeyVersions) AddUpsertDeletion(uuid uint64, oldkey [][]byte) {
+func (kv *KeyVersions) AddUpsertDeletion(uuid uint64, oldkey []byte) {
 	kv.addKey(uuid, UpsertDeletion, nil, oldkey)
 }
 
