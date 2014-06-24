@@ -53,6 +53,7 @@ type indexer struct {
 	adminMgrCmdCh       MsgChannel //channel to send commands to admin port manager
 	clustMgrSenderCmdCh MsgChannel //channel to send messages to index coordinator
 	kvSenderCmdCh       MsgChannel //channel to send messages to kv sender
+	cbqBridgeCmdCh      MsgChannel //channel to send message to cbq sender
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
 
@@ -62,6 +63,7 @@ type indexer struct {
 	adminMgr       AdminManager    //handle to admin port manager
 	clustMgrSender ClustMgrSender  //handle to ClustMgrSender
 	kvSender       KVSender        //handle to KVSender
+	cbqBridge      CbqBridge       //handle to CbqBridge
 
 }
 
@@ -80,6 +82,7 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 		adminMgrCmdCh:       make(MsgChannel),
 		clustMgrSenderCmdCh: make(MsgChannel),
 		kvSenderCmdCh:       make(MsgChannel),
+		cbqBridgeCmdCh:      make(MsgChannel),
 
 		mutMgrExitCh: make(MsgChannel),
 
@@ -169,13 +172,20 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 		return nil, res
 	}
 
-	//start the main indexer loop
-	go idx.run()
+	//Start CbqBridge
+	idx.mutMgr, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh)
+	if res.GetMsgType() != SUCCESS {
+		log.Println("Indexer: CbqBridge Init Error", res)
+		return nil, res
+	}
 
 	idx.state = ACTIVE
 	log.Println("Indexer: Status ACTIVE")
 
-	return idx, nil
+	//start the main indexer loop
+	idx.run()
+
+	return idx, &MsgSuccess{}
 
 }
 
@@ -338,7 +348,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	indexInst := msg.(*MsgCreateIndex).GetIndexInst()
 
-	log.Printf("Indexer received CreateIndex for Index %v", indexInst)
+	log.Printf("Indexer: Received CreateIndex for Index %v", indexInst)
 	idx.indexInstMap[indexInst.InstId] = indexInst
 
 	//initialize partitionInstMap for this index
@@ -351,10 +361,13 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		partnInst := PartitionInst{Defn: partnDefn,
 			Sc: NewHashedSliceContainer()}
 
+		log.Printf("Indexer: Initialized Partition %v for Index %v", partnInst, indexInst.InstId)
+
 		//add a single slice per partition for now
 		if slice, err := NewForestDBSlice(indexInst.Defn.Name, 1,
 			indexInst.Defn.DefnId, indexInst.InstId); err == nil {
 			partnInst.Sc.AddSlice(1, slice)
+			log.Printf("Indexer: Initialized Slice %v for Index %v", slice, indexInst.InstId)
 
 			partnInstMap[common.PartitionId(i)] = partnInst
 		} else {
