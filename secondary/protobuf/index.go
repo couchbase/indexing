@@ -88,7 +88,7 @@ func (instance *IndexInst) Bucket() string {
 
 func (instance *IndexInst) UuidEndpoints() []string {
 	if tp := instance.getTestPartitionScheme(); tp != nil {
-		return tp.Endpoints
+		return tp.GetEndpoints()
 	}
 	return []string{}
 }
@@ -102,21 +102,21 @@ func (instance *IndexInst) CoordinatorEndpoint() string {
 
 func (instance *IndexInst) UpsertEndpoints(vbno uint16, seqno uint64, docid, partKey, key, oldKey []byte) []string {
 	if tp := instance.getTestPartitionScheme(); tp != nil {
-		return tp.Endpoints
+		return tp.GetEndpoints()
 	}
 	return []string{}
 }
 
 func (instance *IndexInst) UpsertDeletionEndpoints(vbno uint16, seqno uint64, docid, partKey, key, oldKey []byte) []string {
 	if tp := instance.getTestPartitionScheme(); tp != nil {
-		return tp.Endpoints
+		return tp.GetEndpoints()
 	}
 	return []string{}
 }
 
 func (instance *IndexInst) DeletionEndpoints(vbno uint16, seqno uint64, docid, partKey, oldKey []byte) []string {
 	if tp := instance.getTestPartitionScheme(); tp != nil {
-		return tp.Endpoints
+		return tp.GetEndpoints()
 	}
 	return []string{}
 }

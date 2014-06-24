@@ -112,6 +112,7 @@ func (vr *VbucketRoutine) Close() error {
 }
 
 // routine handles data path for a single vbucket, never panics.
+// TODO: statistics on data path must be fast.
 func (vr *VbucketRoutine) run(reqch chan []interface{}, endpoints map[string]*Endpoint, engines map[uint64]*Engine) {
 	var seqno uint64
 

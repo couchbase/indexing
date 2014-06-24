@@ -23,11 +23,6 @@ var done = make(chan bool)
 
 var instances = []uint64{0x11, 0x12}
 
-var keys = map[uint64]map[string][]string{
-	0x11: make(map[string][]string),
-	0x12: make(map[string][]string),
-}
-
 func main() {
 	c.SetLogLevel(c.LogLevelTrace)
 	projector.NewProjector(cluster, kvaddrs, adminport)
@@ -134,12 +129,17 @@ func endpointServer(addr string) {
 	}
 	mutations, messages := 0, 0
 	commandWise := make(map[byte]int)
+	keys := map[uint64]map[string][]string{
+		0x11: make(map[string][]string),
+		0x12: make(map[string][]string),
+	}
+
 loop:
 	for {
 		select {
 		case vbs, ok := <-mutch:
 			if ok {
-				mutations += gatherKeys(vbs, commandWise)
+				mutations += gatherKeys(vbs, commandWise, keys)
 			} else {
 				break loop
 			}
@@ -157,12 +157,13 @@ loop:
 			break loop
 		}
 	}
+
 	log.Println(addr, "-- mutations", mutations, "-- messages", messages)
 	log.Println(addr, "-- commandWise", commandWise)
 	ks, ds := countKeysAndDocs(keys[0x11])
-	log.Printf("%v -- for instance 0x11, %v keys found in %v docs\n", addr, ks, ds)
+	log.Printf("%v -- for instance 0x11, %v unique keys found in %v docs\n", addr, ks, ds)
 	ks, ds = countKeysAndDocs(keys[0x12])
-	log.Printf("%v -- for instance 0x12, %v keys found in %v docs\n", addr, ks, ds)
+	log.Printf("%v -- for instance 0x12, %v unique keys found in %v docs\n", addr, ks, ds)
 	done <- true
 }
 
@@ -172,7 +173,12 @@ func printRestartVbuckets(addr string, rs []*indexer.RestartVbuckets) {
 	}
 }
 
-func gatherKeys(vbs []*protobuf.VbKeyVersions, commandWise map[byte]int) int {
+func gatherKeys(
+	vbs []*protobuf.VbKeyVersions,
+	commandWise map[byte]int,
+	keys map[uint64]map[string][]string,
+) int {
+
 	mutations := 0
 	for _, vb := range vbs {
 		kvs := vb.GetKvs()
