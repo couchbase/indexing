@@ -531,12 +531,14 @@ func (feed *Feed) buildEndpoints(
 		}
 		// endpoint for coordinator
 		coord := router.CoordinatorEndpoint()
-		if endpoint, ok := endpoints[coord]; (!ok) || (!endpoint.Ping()) {
-			endpoint, err = feed.startEndpoint(coord, true)
-			if err != nil {
-				return nil, err
-			} else if endpoint != nil {
-				endpoints[coord] = endpoint
+		if coord != "" {
+			if endpoint, ok := endpoints[coord]; (!ok) || (!endpoint.Ping()) {
+				endpoint, err = feed.startEndpoint(coord, true)
+				if err != nil {
+					return nil, err
+				} else if endpoint != nil {
+					endpoints[coord] = endpoint
+				}
 			}
 		}
 	}

@@ -74,5 +74,5 @@ type MutationKeys struct {
 	commands  []byte               // list of commands for each index
 	keys      [][][]byte           // list of key-versions for each index
 	oldkeys   [][][]byte           // previous key-versions, if available
-	partnkeys [][]byte             //list of partition keys
+	partnkeys [][]byte             // list of partition keys
 }

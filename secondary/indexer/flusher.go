@@ -170,10 +170,10 @@ func (f *flusher) flushQueue(q MutationQueue, streamId StreamId,
 		wg.Add(1)
 		if ts == nil {
 			go f.flushSingleVbucket(q, streamId, Vbucket(i),
-				persist, workerStopChannels[i], workerMsgCh, wg)
+				persist, workerStopChannels[i], workerMsgCh, &wg)
 		} else {
 			go f.flushSingleVbucketUptoSeqno(q, streamId, Vbucket(i),
-				ts[i], persist, workerStopChannels[i], workerMsgCh, wg)
+				ts[i], persist, workerStopChannels[i], workerMsgCh, &wg)
 		}
 	}
 
@@ -217,7 +217,7 @@ func (f *flusher) flushQueue(q MutationQueue, streamId StreamId,
 //for a single vbucket till stop signal
 func (f *flusher) flushSingleVbucket(q MutationQueue, streamId StreamId,
 	vbucket Vbucket, persist bool, stopch StopChannel,
-	workerMsgCh MsgChannel, wg sync.WaitGroup) {
+	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
@@ -251,7 +251,7 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId StreamId,
 //for a single vbucket till the given seqno or till the stop signal(whichever is earlier)
 func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId StreamId,
 	vbucket Vbucket, seqno Seqno, persist bool, stopch StopChannel,
-	workerMsgCh MsgChannel, wg sync.WaitGroup) {
+	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 

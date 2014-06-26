@@ -31,7 +31,7 @@ func NewAdminManager(supvCmdch MsgChannel, supvRespch MsgChannel) (
 	//start Admin Manager loop which listens to commands from its supervisor
 	go a.run()
 
-	return a, nil
+	return a, &MsgSuccess{}
 
 }
 

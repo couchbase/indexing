@@ -20,6 +20,12 @@ func NewTimestamp() Timestamp {
 	return ts
 }
 
+func CopyTimestamp(ts Timestamp) Timestamp {
+	newTs := make([]Seqno, len(ts))
+	copy(newTs, ts)
+	return newTs
+}
+
 //Equals returns true if both timestamps match, false otherwise
 func (ts Timestamp) Equals(ts1 Timestamp) bool {
 
@@ -64,11 +70,20 @@ func (ts Timestamp) GreaterThan(ts1 Timestamp) bool {
 		return false
 	}
 
-	//each individual seqno should be greater
+	//atleast one seqno should be greater and
+	//none should be less
+	var foundGreaterSeqNo bool
 	for i, t := range ts {
-		if t <= ts1[i] {
+		if t > ts1[i] {
+			foundGreaterSeqNo = true
+		} else if t < ts1[i] {
 			return false
 		}
 	}
-	return true
+
+	if foundGreaterSeqNo {
+		return true
+	} else {
+		return false
+	}
 }

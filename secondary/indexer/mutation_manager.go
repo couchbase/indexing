@@ -96,7 +96,7 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 	//start Mutation Manager loop which listens to commands from its supervisor
 	go m.run()
 
-	return m, nil
+	return m, &MsgSuccess{}
 
 }
 
@@ -271,7 +271,8 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 	case STREAM_READER_STREAM_DROP_DATA,
 		STREAM_READER_STREAM_BEGIN,
 		STREAM_READER_STREAM_END,
-		STREAM_READER_ERROR:
+		STREAM_READER_ERROR,
+		STREAM_READER_SYNC:
 		//send message to supervisor to take decision
 		m.supvRespch <- cmd
 
@@ -285,6 +286,8 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 //initializes it with the mutation queue to store the
 //mutations in.
 func (m *mutationMgr) handleOpenStream(cmd Message) {
+
+	log.Printf("MutationMgr: Received Open Stream from Indexer %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrStreamUpdate).GetStreamId()
 
@@ -370,6 +373,8 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 //be created.
 func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 
+	log.Printf("MutationMgr: Received Add Index from Indexer %v", cmd)
+
 	streamId := cmd.(*MsgMutMgrStreamUpdate).GetStreamId()
 
 	m.lock.Lock()
@@ -444,6 +449,8 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 //bucket get deleted, its mutation queue is dropped.
 func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 
+	log.Printf("MutationMgr: Received Remove Index from Indexer %v", cmd)
+
 	streamId := cmd.(*MsgMutMgrStreamUpdate).GetStreamId()
 
 	m.lock.Lock()
@@ -507,6 +514,8 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 //handleCloseStream closes MutationStreamReader for the specified stream.
 func (m *mutationMgr) handleCloseStream(cmd Message) {
 
+	log.Printf("MutationMgr: Received Close Stream from Indexer %v", cmd)
+
 	streamId := cmd.(*MsgMutMgrStreamUpdate).GetStreamId()
 
 	m.lock.Lock()
@@ -539,6 +548,8 @@ func (m *mutationMgr) handleCloseStream(cmd Message) {
 //abruptly. This method can be used to clean up internal
 //mutation manager structures.
 func (m *mutationMgr) handleCleanupStream(cmd Message) {
+
+	log.Printf("MutationMgr: Received Cleanup Stream from Indexer %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrStreamUpdate).GetStreamId()
 
@@ -675,6 +686,8 @@ func (m *mutationMgr) cleanupStream(streamId StreamId) {
 //status is sent on the supervisor Response channel.
 func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 
+	log.Printf("MutationMgr: Received Persist Queue from Indexer %v", cmd)
+
 	bucket := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
 	ts := cmd.(*MsgMutMgrFlushMutationQueue).GetTimestamp()
@@ -734,6 +747,8 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 //status is sent on the supervisor Response channel.
 func (m *mutationMgr) handleDrainMutationQueue(cmd Message) {
 
+	log.Printf("MutationMgr: Received Drain Queue from Indexer %v", cmd)
+
 	bucket := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
 	ts := cmd.(*MsgMutMgrFlushMutationQueue).GetTimestamp()
@@ -784,6 +799,8 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 //for a given stream and bucket
 func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 
+	log.Printf("MutationMgr: Received Get Queue HWT from Indexer %v", cmd)
+
 	bucket := cmd.(*MsgMutMgrGetTimestamp).GetBucket()
 	streamId := cmd.(*MsgMutMgrGetTimestamp).GetStreamId()
 
@@ -802,6 +819,7 @@ func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 //for a given stream and bucket
 func (m *mutationMgr) handleGetMutationQueueLWT(cmd Message) {
 
+	log.Printf("MutationMgr: Received Get Queue LWT from Indexer %v", cmd)
 	bucket := cmd.(*MsgMutMgrGetTimestamp).GetBucket()
 	streamId := cmd.(*MsgMutMgrGetTimestamp).GetStreamId()
 
@@ -819,19 +837,26 @@ func (m *mutationMgr) handleGetMutationQueueLWT(cmd Message) {
 //handleUpdateIndexInstMap updates the indexInstMap
 func (m *mutationMgr) handleUpdateIndexInstMap(cmd Message) {
 
+	log.Printf("MutationMgr: Received Update Instance Map from Indexer %v", cmd)
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
 	m.indexInstMap = cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+
+	m.supvCmdch <- &MsgSuccess{}
 
 }
 
 //handleUpdateIndexPartnMap updates the indexPartnMap
 func (m *mutationMgr) handleUpdateIndexPartnMap(cmd Message) {
 
+	log.Printf("MutationMgr: Received Update Partition Map from Indexer %v", cmd)
+
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
 	m.indexPartnMap = cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
+
+	m.supvCmdch <- &MsgSuccess{}
 
 }

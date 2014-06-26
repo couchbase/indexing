@@ -48,7 +48,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel) (
 	//start Storage Manager loop which listens to commands from its supervisor
 	go s.run()
 
-	return s, nil
+	return s, &MsgSuccess{}
 
 }
 
@@ -97,6 +97,8 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 //after flush has completed
 func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
+	log.Printf("StorageMgr: Received Command to Create Snapshot %v", cmd)
+
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	ts := cmd.(*MsgMutMgrFlushDone).GetTS()
 
@@ -108,7 +110,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		if idxInst.Defn.Bucket == bucket {
 
 			//for all partitions managed by this indexer
-			for _, partnInst := range partnMap {
+			for partnId, partnInst := range partnMap {
 				sc := partnInst.Sc
 
 				//create snapshot for all the slices
@@ -124,7 +126,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 					//if the flush TS is greater than the last snapshot TS
 					//TODO Is it better to have a IsDirty() in Slice interface
 					//rather than comparing the last snapshot?
-					if ts.GreaterThan(latestSnapshot.Timestamp()) {
+					if latestSnapshot == nil || ts.GreaterThan(latestSnapshot.Timestamp()) {
 						//commit the outstanding data
 
 						if err := slice.Commit(); err != nil {
@@ -135,13 +137,17 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							continue
 						}
 
+						log.Printf("StorageMgr: Creating New Snapshot for Index %v PartitionId %v SliceId %v",
+							idxInstId, partnId, slice.Id())
+
 						//create snapshot for slice
 						if newSnapshot, err := slice.Snapshot(); err == nil {
 
 							if snapContainer.Len() > MAX_SNAPSHOTS_PER_INDEX {
 								snapContainer.RemoveOldest()
 							}
-							newSnapshot.SetTimestamp(ts)
+							newTs := CopyTimestamp(ts)
+							newSnapshot.SetTimestamp(newTs)
 							snapContainer.Add(newSnapshot)
 
 						} else {
@@ -149,6 +155,9 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 								"for index %v slice %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 						}
+					} else {
+						log.Printf("StorageMgr: Skipped Creating New Snapshot for Index %v "+
+							"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
 					}
 				}
 			}
@@ -161,12 +170,16 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
+	log.Printf("StorageMgr: Received Command to Update InstanceMap%v", cmd)
 	s.indexInstMap = cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 
+	s.supvCmdch <- &MsgSuccess{}
 }
 
 func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
 
+	log.Printf("StorageMgr: Received Command to Partition Map %v", cmd)
 	s.indexPartnMap = cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 
+	s.supvCmdch <- &MsgSuccess{}
 }

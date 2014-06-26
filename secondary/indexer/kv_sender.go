@@ -31,7 +31,7 @@ type kvSender struct {
 }
 
 //TODO move to config
-const ADMIN_PORT_ENDPOINT = "http://localhost:9100"
+const PROJECTOR_ADMIN_PORT_ENDPOINT = "http://localhost:9999"
 const MAINT_TOPIC = "MAINT_STREAM_TOPIC"
 const DEFAULT_POOL = "default"
 
@@ -51,7 +51,7 @@ func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel) (
 	//start kvsender loop which listens to commands from its supervisor
 	go k.run()
 
-	return k, nil
+	return k, &MsgSuccess{}
 
 }
 
@@ -128,7 +128,7 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 	}
 	fRes := protobuf.FailoverLogResponse{}
 
-	ap := adminport.NewHTTPClient(ADMIN_PORT_ENDPOINT, "/adminport/")
+	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
 
 	if err := ap.Request(&fReq, &fRes); err != nil {
 
@@ -201,8 +201,7 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 
 		}
 		instance.Tp = &protobuf.TestPartition{
-			CoordEndpoint: nil,
-			Endpoints:     endpoints,
+			Endpoints: endpoints,
 		}
 	}
 
@@ -214,6 +213,8 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 		RestartTimestamps: []*protobuf.BranchTimestamp{bTs},
 		Instances:         []*protobuf.IndexInst{instance},
 	}
+
+	mReq.SetStartFlag()
 
 	mRes := protobuf.MutationStreamResponse{}
 	if err := ap.Request(&mReq, &mRes); err != nil {

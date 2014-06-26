@@ -89,7 +89,7 @@ func CreateMutationStreamReader(streamId StreamId, bucketQueueMap BucketQueueMap
 	//start stream workers
 	r.startWorkers()
 
-	return r, nil
+	return r, &MsgSuccess{}
 }
 
 //Shutdown shuts down the mutation stream and all workers.
@@ -189,6 +189,8 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 
 	var mut *MutationKeys
 
+	log.Printf("MutationStreamReader: handleSingleKeyVersion received KeyVersions %v", kv)
+
 	for i, cmd := range kv.GetCommands() {
 
 		//based on the type of command take appropriate action
@@ -200,7 +202,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 			//allocate new mutation first time
 			if mut == nil {
 				//TODO use free list here to reuse the struct and reduce garbage
-				mut := &MutationKeys{}
+				mut = &MutationKeys{}
 				mut.meta = meta
 				mut.docid = kv.GetDocid()
 			}
@@ -212,6 +214,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 			mut.oldkeys = append(mut.oldkeys, [][]byte{kv.GetOldkeys()[i]})
 			mut.commands = append(mut.commands,
 				byte(kv.GetCommands()[i]))
+			mut.partnkeys = append(mut.partnkeys, kv.GetKeys()[i])
 
 		case common.Sync:
 			msg := &MsgStream{mType: STREAM_READER_SYNC,
@@ -243,7 +246,9 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 	}
 
 	//place secKey in the right worker's queue
-	r.workerch[int(vbucket)%r.numWorkers] <- mut
+	if mut != nil {
+		r.workerch[int(vbucket)%r.numWorkers] <- mut
+	}
 
 }
 
@@ -263,6 +268,8 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 
 //handleSingleMutation enqueues mutation in the mutation queue
 func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys) {
+
+	log.Printf("MutationStreamReader: handleSingleMutation received mutation %v", mut)
 
 	//based on the index, enqueue the mutation in the right queue
 	if q, ok := r.bucketQueueMap[mut.meta.bucket]; ok {
@@ -308,6 +315,8 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 	switch cmd.GetMsgType() {
 
 	case STREAM_READER_UPDATE_QUEUE_MAP:
+
+		log.Printf("MutationStreamReader: Received Update Queue Map from Mutation Mgr %v", cmd)
 		//stop all workers
 		r.stopWorkers()
 

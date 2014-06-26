@@ -145,6 +145,8 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 	//every DEQUEUE_POLL_INTERVAL milliseconds, check for new mutations
 	ticker := time.NewTicker(time.Millisecond * DEQUEUE_POLL_INTERVAL)
 
+	dequeueCount := 0
+
 	for _ = range ticker.C {
 		for atomic.LoadPointer(&q.head[vbucket]) !=
 			atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
@@ -158,6 +160,7 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 				atomic.AddInt64(&q.size[vbucket], -1)
 				//send mutation to caller
 				datach <- m
+				dequeueCount++
 			}
 
 			//once the seqno is reached, close the channel
@@ -166,6 +169,16 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 				close(datach)
 				return
 			}
+		}
+		//if this list is empty, there is no seqno to compare and determine if
+		//new mutations are going to arrive. For now, return assuming the queue should
+		//have mutations before flush.
+		//TODO: make this an input parameter if this call should block and wait in case
+		//of empty queue or not
+		if dequeueCount == 0 {
+			ticker.Stop()
+			close(datach)
+			return
 		}
 	}
 }

@@ -96,7 +96,7 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	//assume indexerId 1 for now
 	idx.id = 1
 
-	if numVbuckets == 0 {
+	if numVbuckets > 0 {
 		NUM_VBUCKETS = numVbuckets
 	} else {
 		NUM_VBUCKETS = MAX_NUM_VBUCKETS
@@ -315,6 +315,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case MUT_MGR_FLUSH_DONE:
 
+		log.Printf("Indexer: Received Flush Done From Mutation Mgr %v", msg)
+
 		//fwd the message to storage manager
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
@@ -364,9 +366,9 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		log.Printf("Indexer: Initialized Partition %v for Index %v", partnInst, indexInst.InstId)
 
 		//add a single slice per partition for now
-		if slice, err := NewForestDBSlice(indexInst.Defn.Name, 1,
+		if slice, err := NewForestDBSlice(indexInst.Defn.Name, 0,
 			indexInst.Defn.DefnId, indexInst.InstId); err == nil {
-			partnInst.Sc.AddSlice(1, slice)
+			partnInst.Sc.AddSlice(0, slice)
 			log.Printf("Indexer: Initialized Slice %v for Index %v", slice, indexInst.InstId)
 
 			partnInstMap[common.PartitionId(i)] = partnInst

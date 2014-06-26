@@ -31,7 +31,7 @@ func NewClustMgrSender(supvCmdch MsgChannel, supvRespch MsgChannel) (
 	//start clustMgrSender loop which listens to commands from its supervisor
 	go c.run()
 
-	return c, nil
+	return c, &MsgSuccess{}
 
 }
 

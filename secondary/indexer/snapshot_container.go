@@ -50,7 +50,12 @@ func (sc *snapshotContainer) RemoveOldest() {
 	defer sc.lock.Unlock()
 
 	e := sc.snapshotList.Back()
-	sc.snapshotList.Remove(e)
+
+	if e == nil {
+		return
+	} else {
+		sc.snapshotList.Remove(e)
+	}
 }
 
 //Len returns the number of snapshots currently in container
@@ -68,7 +73,12 @@ func (sc *snapshotContainer) GetLatestSnapshot() Snapshot {
 	defer sc.lock.RUnlock()
 
 	e := sc.snapshotList.Front()
-	return e.Value.(Snapshot)
+
+	if e == nil {
+		return nil
+	} else {
+		return e.Value.(Snapshot)
+	}
 }
 
 //GetSnapshotEqualToTS returns the snapshot from container matching the

@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"errors"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
 	"log"
@@ -101,8 +102,11 @@ func (fdb *fdbSlice) Insert(k Key, v Value) error {
 
 	//check if the docid exists in the back index
 	if oldkey, err = fdb.getBackIndexEntry(v.Docid()); err != nil {
-		log.Printf("ForestDBSlice: Error locating backindex entry %v", err)
-		return err
+		//TODO ForestDB returns a missing key as an error. Fix this properly.
+		if err != errors.New("key not found") {
+			log.Printf("ForestDBSlice: Error locating backindex entry %v", err)
+			//return err
+		}
 	} else if oldkey.EncodedBytes() != nil {
 		//there is already an entry in main index for this docid
 		//delete from main index
@@ -206,6 +210,9 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 		seq := i.LastSeqNum()
 		s.backSeqNum = seq
 	}
+
+	log.Printf("ForestDB: Created New Snapshot %v", s)
+
 	return s, nil
 }
 

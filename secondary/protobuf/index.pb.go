@@ -299,8 +299,8 @@ func (m *IndexDefn) GetSecExpressions() []string {
 }
 
 type TestPartition struct {
-	CoordEndpoint    *string  `protobuf:"bytes,1,req,name=coordEndpoint" json:"coordEndpoint,omitempty"`
-	Endpoints        []string `protobuf:"bytes,2,rep,name=endpoints" json:"endpoints,omitempty"`
+	Endpoints        []string `protobuf:"bytes,1,rep,name=endpoints" json:"endpoints,omitempty"`
+	CoordEndpoint    *string  `protobuf:"bytes,2,opt,name=coordEndpoint" json:"coordEndpoint,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -308,18 +308,18 @@ func (m *TestPartition) Reset()         { *m = TestPartition{} }
 func (m *TestPartition) String() string { return proto.CompactTextString(m) }
 func (*TestPartition) ProtoMessage()    {}
 
-func (m *TestPartition) GetCoordEndpoint() string {
-	if m != nil && m.CoordEndpoint != nil {
-		return *m.CoordEndpoint
-	}
-	return ""
-}
-
 func (m *TestPartition) GetEndpoints() []string {
 	if m != nil {
 		return m.Endpoints
 	}
 	return nil
+}
+
+func (m *TestPartition) GetCoordEndpoint() string {
+	if m != nil && m.CoordEndpoint != nil {
+		return *m.CoordEndpoint
+	}
+	return ""
 }
 
 func init() {

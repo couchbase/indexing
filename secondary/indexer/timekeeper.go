@@ -22,7 +22,7 @@ type BucketHWTMap map[string]Timestamp
 type BucketSyncCountMap map[string]uint64
 type BucketNewTSReqdMap map[string]bool
 
-const SYNC_COUNT_TS_TRIGGER = 20
+const SYNC_COUNT_TS_TRIGGER = 100
 
 type timekeeper struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
@@ -53,7 +53,7 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel) (
 	//start timekeeper loop which listens to commands from its supervisor
 	go tk.run()
 
-	return tk, nil
+	return tk, &MsgSuccess{}
 
 }
 
@@ -94,11 +94,16 @@ func (tk *timekeeper) handleSupvervisorCommands(cmd Message) {
 	case TK_STREAM_STOP:
 		tk.handleStreamStop(cmd)
 
+	case MUT_MGR_FLUSH_DONE:
+		tk.handleFlushDone(cmd)
+
 	}
 
 }
 
 func (tk *timekeeper) handleSync(cmd Message) {
+
+	log.Printf("Timekeeper: Received Stream Reader Sync %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -120,7 +125,7 @@ func (tk *timekeeper) handleSync(cmd Message) {
 
 	//update HWT for this bucket
 	var ts Timestamp
-	if ts, ok := (*bucketHWTMap)[meta.bucket]; ok {
+	if ts, ok = (*bucketHWTMap)[meta.bucket]; ok {
 		//if seqno has incremented, update it
 		if meta.seqno > ts[meta.vbucket] {
 			(*bucketNewTSReqd)[meta.bucket] = true
@@ -135,16 +140,27 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	//update sync count for this bucket
 	if syncCount, ok := (*bucketSyncCountMap)[meta.bucket]; ok {
 		syncCount++
-		if syncCount > SYNC_COUNT_TS_TRIGGER &&
+		if syncCount >= SYNC_COUNT_TS_TRIGGER &&
 			(*bucketNewTSReqd)[meta.bucket] == true {
 			//generate new stability timestamp
+			log.Printf("Timekeeper: Generating new Stability TS %v for Bucket %v "+
+				"Stream %v. SyncCount is %v", ts, meta.bucket, streamId, syncCount)
 			go tk.generateNewStabilityTS(ts, meta.bucket, streamId)
 			(*bucketSyncCountMap)[meta.bucket] = 0
+			(*bucketNewTSReqd)[meta.bucket] = false
 		} else {
-			(*bucketSyncCountMap)[meta.bucket] = syncCount
+			log.Printf("Timekeeper: Updating Sync Count for Bucket %v "+
+				"Stream %v. SyncCount %v.", meta.bucket, streamId, syncCount)
+			//update only if its less than trigger count, otherwise it makes no
+			//difference. On long running systems, syncCount may overflow otherwise
+			if syncCount < SYNC_COUNT_TS_TRIGGER {
+				(*bucketSyncCountMap)[meta.bucket] = syncCount
+			}
 		}
 	} else {
 		//add a new counter for this bucket
+		log.Printf("Timekeeper: Adding new Sync Count for Bucket %v "+
+			"Stream %v. SyncCount %v.", meta.bucket, streamId, syncCount)
 		(*bucketSyncCountMap)[meta.bucket] = 1
 	}
 
@@ -152,6 +168,8 @@ func (tk *timekeeper) handleSync(cmd Message) {
 }
 
 func (tk *timekeeper) handleStreamStart(cmd Message) {
+
+	log.Printf("Timekeeper: Received Stream Start %v", cmd)
 
 	streamId := cmd.(*MsgTKStreamUpdate).GetStreamId()
 
@@ -169,6 +187,8 @@ func (tk *timekeeper) handleStreamStart(cmd Message) {
 
 func (tk *timekeeper) handleStreamStop(cmd Message) {
 
+	log.Printf("Timekeeper: Received Stream Stop %v", cmd)
+
 	streamId := cmd.(*MsgTKStreamUpdate).GetStreamId()
 
 	delete(tk.streamBucketHWTMap, streamId)
@@ -176,6 +196,16 @@ func (tk *timekeeper) handleStreamStop(cmd Message) {
 	delete(tk.streamBucketNewTSReqdMap, streamId)
 
 	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleFlushDone(cmd Message) {
+
+	log.Printf("Timekeeper: Received Flush Done %v", cmd)
+
+	//TODO
+
+	tk.supvCmdch <- &MsgSuccess{}
+
 }
 
 func (tk *timekeeper) generateNewStabilityTS(ts Timestamp, bucket string,

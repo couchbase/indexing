@@ -70,6 +70,6 @@ message IndexDefn {
 }
 
 message TestPartition {
-    required string coordEndpoint = 1;
-    repeated string endpoints     = 2; // endpoint address
+    repeated string endpoints     = 1; // endpoint address
+    optional string coordEndpoint = 2;
 }
