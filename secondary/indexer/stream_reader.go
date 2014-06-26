@@ -142,6 +142,12 @@ func (r *mutationStreamReader) run() {
 		case cmd, ok := <-r.supvCmdch:
 			if ok {
 				//handle commands from supervisor
+				if cmd.GetMsgType() == STREAM_READER_SHUTDOWN {
+					//shutdown and exit the stream reader loop
+					r.Shutdown()
+					r.supvCmdch <- &MsgSuccess{}
+					return
+				}
 				msg := r.handleSupervisorCommands(cmd)
 				r.supvCmdch <- msg
 			} else {
@@ -329,6 +335,7 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		return &MsgSuccess{}
 
 	default:
+		log.Printf("MutationStreamReader: handleSupervisorCommands Received Unknown Command %v", cmd)
 		return &MsgError{mType: ERROR,
 			err: Error{code: ERROR_STREAM_READER_UNKNOWN_COMMAND,
 				severity: NORMAL,

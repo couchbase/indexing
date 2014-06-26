@@ -423,20 +423,20 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		tkCmd = &MsgTKStreamUpdate{mType: TK_STREAM_START,
 			streamId:      MAINT_STREAM,
 			indexInstList: indexInstList}
-	}
 
-	idx.tkCmdCh <- tkCmd
-	if resp, ok := <-idx.tkCmdCh; ok {
+		idx.tkCmdCh <- tkCmd
+		if resp, ok := <-idx.tkCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
-			log.Printf("handleCreateIndex: Error received from Timekeeper"+
+			if resp.GetMsgType() != SUCCESS {
+				log.Printf("handleCreateIndex: Error received from Timekeeper"+
+					"processing Msg %v Err %v. Aborted.", tkCmd, resp)
+				return
+			}
+		} else {
+			log.Printf("handleCreateIndex: Error communicating with Timekeeper"+
 				"processing Msg %v Err %v. Aborted.", tkCmd, resp)
 			return
 		}
-	} else {
-		log.Printf("handleCreateIndex: Error communicating with Timekeeper"+
-			"processing Msg %v Err %v. Aborted.", tkCmd, resp)
-		return
 	}
 
 	//if this is first index, start the mutation stream
@@ -580,18 +580,18 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	if len(idx.indexInstMap) == 0 {
 		tkCmd = &MsgTKStreamUpdate{mType: TK_STREAM_STOP,
 			streamId: MAINT_STREAM}
-	}
 
-	idx.tkCmdCh <- tkCmd
-	if resp, ok := <-idx.tkCmdCh; ok {
+		idx.tkCmdCh <- tkCmd
+		if resp, ok := <-idx.tkCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
-			log.Printf("handleDropIndex: Error received from Timekeeper"+
+			if resp.GetMsgType() != SUCCESS {
+				log.Printf("handleDropIndex: Error received from Timekeeper"+
+					"processing Msg %v Err %v.", tkCmd, resp)
+			}
+		} else {
+			log.Printf("handleDropIndex: Error communicating with Timekeeper"+
 				"processing Msg %v Err %v.", tkCmd, resp)
 		}
-	} else {
-		log.Printf("handleDropIndex: Error communicating with Timekeeper"+
-			"processing Msg %v Err %v.", tkCmd, resp)
 	}
 
 	//if this is the last index, stop the mutation stream
@@ -600,7 +600,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		mutMgrCmd = &MsgMutMgrStreamUpdate{mType: MUT_MGR_CLOSE_STREAM,
 			streamId: MAINT_STREAM}
 	} else {
-		mutMgrCmd = &MsgMutMgrStreamUpdate{mType: MUT_MGR_ADD_INDEX_LIST_TO_STREAM,
+		mutMgrCmd = &MsgMutMgrStreamUpdate{mType: MUT_MGR_REMOVE_INDEX_LIST_FROM_STREAM,
 			streamId: MAINT_STREAM}
 	}
 

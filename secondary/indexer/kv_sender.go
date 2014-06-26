@@ -84,32 +84,129 @@ func (k *kvSender) handleSupvervisorCommands(cmd Message) {
 	switch cmd.GetMsgType() {
 
 	case INDEXER_CREATE_INDEX_DDL:
-
-		indexInst := cmd.(*MsgCreateIndex).GetIndexInst()
-
-		k.indexInstMap[indexInst.InstId] = indexInst
-
-		var newStreamRequest bool
-
-		if status, _ := k.streamStatus[MAINT_STREAM]; !status {
-			newStreamRequest = true
-		}
-
-		if newStreamRequest {
-			k.handleNewMutationStreamRequest(cmd)
-		} else {
-			k.handleUpdateMutationStreamRequest(cmd)
-		}
+		k.handleCreateIndex(cmd)
 
 	case INDEXER_DROP_INDEX_DDL:
+		k.handleDropIndex(cmd)
 
-		//TODO
-
+	default:
+		log.Printf("KVSender: Received Unknown Command %v", cmd)
 	}
 
 }
 
+func (k *kvSender) handleCreateIndex(cmd Message) {
+
+	log.Printf("KVSender: Received Create Index %v", cmd)
+
+	var newStreamRequest bool
+
+	if status, _ := k.streamStatus[MAINT_STREAM]; !status {
+		newStreamRequest = true
+	}
+
+	if newStreamRequest {
+		k.handleNewMutationStreamRequest(cmd)
+	} else {
+		k.handleUpdateMutationStreamRequest(cmd)
+	}
+}
+
+func (k *kvSender) handleDropIndex(cmd Message) {
+
+	log.Printf("KVSender: Received Drop Index %v", cmd)
+
+	indexInstId := cmd.(*MsgDropIndex).GetIndexInstId()
+
+	var indexInst common.IndexInst
+	var ok bool
+
+	if indexInst, ok = k.indexInstMap[indexInstId]; !ok {
+
+		log.Printf("KVSender: Unknown IndexInstId %v in Drop Index Request", indexInstId)
+
+		k.supvCmdch <- &MsgError{mType: ERROR,
+			err: Error{code: ERROR_DROP_INDEX_FAILED,
+				severity: FATAL}}
+		return
+	}
+
+	using := protobuf.StorageType(
+		protobuf.StorageType_value[string(indexInst.Defn.Using)]).Enum()
+	exprType := protobuf.ExprType(
+		protobuf.ExprType_value[string(indexInst.Defn.ExprType)]).Enum()
+	partnScheme := protobuf.PartitionScheme(
+		protobuf.PartitionScheme_value[string(indexInst.Defn.PartitionScheme)]).Enum()
+
+	defn := &protobuf.IndexDefn{
+		DefnID:          proto.Uint64(uint64(indexInst.Defn.DefnId)),
+		Bucket:          proto.String(indexInst.Defn.Bucket),
+		IsPrimary:       proto.Bool(indexInst.Defn.IsPrimary),
+		Name:            proto.String(indexInst.Defn.Name),
+		Using:           using,
+		ExprType:        exprType,
+		SecExpressions:  indexInst.Defn.OnExprList,
+		PartitionScheme: partnScheme,
+		PartnExpression: proto.String(indexInst.Defn.PartitionKey),
+	}
+
+	state := protobuf.IndexState(int32(indexInst.State)).Enum()
+	instance := &protobuf.IndexInst{
+		InstId:     proto.Uint64(uint64(indexInst.InstId)),
+		State:      state,
+		Definition: defn,
+	}
+
+	mReq := protobuf.SubscribeStreamRequest{
+		Topic:     proto.String(MAINT_TOPIC),
+		Instances: []*protobuf.IndexInst{instance},
+	}
+
+	mReq.SetDeleteSubscriptionFlag()
+
+	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
+
+	mRes := protobuf.Error{}
+	if err := ap.Request(&mReq, &mRes); err != nil {
+		log.Printf("Unexpected Error During Mutation Stream Request %v "+
+			"for Drop Index %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
+
+		k.supvCmdch <- &MsgError{mType: ERROR,
+			err: Error{code: ERROR_DROP_INDEX_FAILED,
+				severity: FATAL,
+				cause:    err}}
+		return
+	}
+
+	delete(k.indexInstMap, indexInstId)
+
+	//if this was the last index in the stream, close it
+	if len(k.indexInstMap) == 0 {
+
+		sReq := protobuf.ShutdownStreamRequest{
+			Topic: proto.String(MAINT_TOPIC),
+		}
+		sRes := protobuf.Error{}
+		if err := ap.Request(&sReq, &sRes); err != nil {
+			log.Printf("Unexpected Error During Close Mutation Stream Request %v "+
+				"Err %v. Resp %v.", mReq, indexInst, err, mRes)
+
+			k.supvCmdch <- &MsgError{mType: ERROR,
+				err: Error{code: ERROR_DROP_INDEX_FAILED,
+					severity: FATAL,
+					cause:    err}}
+			return
+		}
+		k.streamStatus[MAINT_STREAM] = false
+	}
+
+	k.supvCmdch <- &MsgSuccess{}
+}
+
 func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
+
+	log.Printf("KVSender: handleNewMutationStreamRequest Processing"+
+		"Create Index %v", cmd)
 
 	indexInst := cmd.(*MsgCreateIndex).GetIndexInst()
 
@@ -205,7 +302,6 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 		}
 	}
 
-	//TODO How to set the flags field
 	mReq := protobuf.MutationStreamRequest{
 		Topic:             proto.String(MAINT_TOPIC),
 		Pools:             []string{DEFAULT_POOL},
@@ -228,11 +324,68 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 		return
 	}
 
+	k.indexInstMap[indexInst.InstId] = indexInst
+
 	k.streamStatus[MAINT_STREAM] = true
 	k.supvCmdch <- &MsgSuccess{}
 
 }
 
-func (k *kvSender) handleUpdateMutationStreamRequest(msg Message) {
+func (k *kvSender) handleUpdateMutationStreamRequest(cmd Message) {
 
+	log.Printf("KVSender: handleUpdateMutationStreamRequest Processing"+
+		"Create Index %v", cmd)
+
+	indexInst := cmd.(*MsgCreateIndex).GetIndexInst()
+
+	using := protobuf.StorageType(
+		protobuf.StorageType_value[string(indexInst.Defn.Using)]).Enum()
+	exprType := protobuf.ExprType(
+		protobuf.ExprType_value[string(indexInst.Defn.ExprType)]).Enum()
+	partnScheme := protobuf.PartitionScheme(
+		protobuf.PartitionScheme_value[string(indexInst.Defn.PartitionScheme)]).Enum()
+
+	defn := &protobuf.IndexDefn{
+		DefnID:          proto.Uint64(uint64(indexInst.Defn.DefnId)),
+		Bucket:          proto.String(indexInst.Defn.Bucket),
+		IsPrimary:       proto.Bool(indexInst.Defn.IsPrimary),
+		Name:            proto.String(indexInst.Defn.Name),
+		Using:           using,
+		ExprType:        exprType,
+		SecExpressions:  indexInst.Defn.OnExprList,
+		PartitionScheme: partnScheme,
+		PartnExpression: proto.String(indexInst.Defn.PartitionKey),
+	}
+
+	state := protobuf.IndexState(int32(indexInst.State)).Enum()
+	instance := &protobuf.IndexInst{
+		InstId:     proto.Uint64(uint64(indexInst.InstId)),
+		State:      state,
+		Definition: defn,
+	}
+
+	mReq := protobuf.SubscribeStreamRequest{
+		Topic:     proto.String(MAINT_TOPIC),
+		Instances: []*protobuf.IndexInst{instance},
+	}
+
+	mReq.SetUpdateSubscriptionFlag()
+
+	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
+
+	mRes := protobuf.Error{}
+	if err := ap.Request(&mReq, &mRes); err != nil {
+		log.Printf("Unexpected Error During Mutation Stream Request %v "+
+			"for Create Index %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
+
+		k.supvCmdch <- &MsgError{mType: ERROR,
+			err: Error{code: ERROR_CREATE_INDEX_FAILED,
+				severity: FATAL,
+				cause:    err}}
+		return
+	}
+
+	k.indexInstMap[indexInst.InstId] = indexInst
+
+	k.supvCmdch <- &MsgSuccess{}
 }

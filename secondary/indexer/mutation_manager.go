@@ -373,12 +373,12 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 //be created.
 func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 
-	log.Printf("MutationMgr: Received Add Index from Indexer %v", cmd)
+	log.Printf("MutationMgr: handleAddIndexListToStream Received Add Index from Indexer %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrStreamUpdate).GetStreamId()
 
 	m.lock.Lock()
-	defer m.lock.Lock()
+	defer m.lock.Unlock()
 
 	//return error if this stream is already closed
 	if _, ok := m.streamReaderMap[streamId]; !ok {
@@ -454,7 +454,7 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 	streamId := cmd.(*MsgMutMgrStreamUpdate).GetStreamId()
 
 	m.lock.Lock()
-	defer m.lock.Lock()
+	defer m.lock.Unlock()
 
 	//return error if this stream is already closed
 	if _, ok := m.streamReaderMap[streamId]; !ok {
@@ -519,7 +519,7 @@ func (m *mutationMgr) handleCloseStream(cmd Message) {
 	streamId := cmd.(*MsgMutMgrStreamUpdate).GetStreamId()
 
 	m.lock.Lock()
-	defer m.lock.Lock()
+	defer m.lock.Unlock()
 
 	//return error if this stream is already closed
 	if _, ok := m.streamReaderMap[streamId]; !ok {

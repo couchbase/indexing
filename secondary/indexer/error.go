@@ -45,6 +45,7 @@ const (
 
 	//KVSender
 	ERROR_CREATE_INDEX_FAILED
+	ERROR_DROP_INDEX_FAILED
 )
 
 type errSeverity int16

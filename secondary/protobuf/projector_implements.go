@@ -145,6 +145,14 @@ func (req *SubscribeStreamRequest) IsDeleteSubscription() bool {
 	return (flag & maskDeleteStreamSubscription) > 0
 }
 
+func (req *SubscribeStreamRequest) SetUpdateSubscriptionFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskUpdateStreamSubscription)
+}
+
+func (req *SubscribeStreamRequest) SetDeleteSubscriptionFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskDeleteStreamSubscription)
+}
+
 func (req *SubscribeStreamRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {
 	return getEvaluators(req.GetInstances())
 }

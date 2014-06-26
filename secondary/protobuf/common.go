@@ -8,7 +8,10 @@ import (
 // NewError create a protobuf message `Error` and return its reference back to
 // the caller.
 func NewError(err error) *Error {
-	return &Error{Error: proto.String(err.Error())}
+	if err != nil {
+		return &Error{Error: proto.String(err.Error())}
+	}
+	return &Error{Error: proto.String("")}
 }
 
 // Error implement MessageMarshaller interface
