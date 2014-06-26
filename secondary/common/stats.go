@@ -69,28 +69,19 @@ func (s *ComponentStat) ContentType() string {
 
 // Statistic operations.
 
-// Incr increments stat value by `val`
-func (s *ComponentStat) Incr(path string, val int) {
+// Incr increments stat value(s) by `vals`.
+func (s *ComponentStat) Incr(path string, vals ...int) {
 	m := map[string]interface{}(*s)
-	err := jsonpointer.Incr(m, path, val)
+	err := jsonpointer.Incr(m, path, vals...)
 	if err != nil {
 		Fatalf("Incr(%q) ComponentStat %v\n", path, err)
 	}
 }
 
-// Incrs increments an array of stat value by `val`
-func (s *ComponentStat) Incrs(path string, vals ...int) {
+// Decr increments stat value(s) by `vals`.
+func (s *ComponentStat) Decr(path string, vals ...int) {
 	m := map[string]interface{}(*s)
-	err := jsonpointer.Incrs(m, path, vals...)
-	if err != nil {
-		Fatalf("Incrs(%q) ComponentStat %v\n", path, err)
-	}
-}
-
-// Decr increments stat value by `val`
-func (s *ComponentStat) Decr(path string, val int) {
-	m := map[string]interface{}(*s)
-	err := jsonpointer.Decr(m, path, val)
+	err := jsonpointer.Decr(m, path, vals...)
 	if err != nil {
 		Fatalf("Decr(%q) ComponentStat %v\n", path, err)
 	}

@@ -161,12 +161,12 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if r := recover(); r != nil {
 			c.Errorf("%s, adminport.request.recovered `%v`\n", s.logPrefix, r)
-			s.stats.Incrs(statPath, 0, 0, 1) // count error
+			s.stats.Incr(statPath, 0, 0, 1) // count error
 		} else if err != nil {
 			c.Errorf("%s %v\n", s.logPrefix, err)
-			s.stats.Incrs(statPath, 0, 1, 1) // count response&error
+			s.stats.Incr(statPath, 0, 1, 1) // count response&error
 		} else {
-			s.stats.Incrs(statPath, 0, 1, 0) // count response
+			s.stats.Incr(statPath, 0, 1, 0) // count response
 		}
 	}()
 
@@ -191,7 +191,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	statPath = "/request." + msg.Name()
-	s.stats.Incrs(statPath, 1, 0, 0) // count request
+	s.stats.Incr(statPath, 1, 0, 0) // count request
 
 	if msg == nil {
 		err = ErrorPathNotFound
@@ -212,7 +212,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 			// TODO: no magic
 			header["Content-Type"] = []string{"application/json"}
 			w.Write(data)
-			s.stats.Incrs("/payload", 0, len(data))
+			s.stats.Incr("/payload", 0, len(data))
 		} else {
 			err = fmt.Errorf("%v, %v", ErrorDecodeRequest, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -224,7 +224,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 			header := w.Header()
 			header["Content-Type"] = []string{v.ContentType()}
 			w.Write(data)
-			s.stats.Incrs("/payload", 0, len(data))
+			s.stats.Incr("/payload", 0, len(data))
 		} else {
 			err = fmt.Errorf("%v, %v", ErrorEncodeResponse, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
