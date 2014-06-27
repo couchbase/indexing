@@ -1,4 +1,6 @@
 - timestamp naming, TsVb, TsVbFull, TsVbuuid, TsVbuuidFull.
+- make dataport as a sub-package under indexing/secondary.
+- Stream nomenclature should be consistent with Feed nomenclature.
 - IndexInstance or IndexUUID for key-versions.
 - VbKeyVersions:Uuid leads to confusion. let it look same as VbKeyVersions
   defined in protobuf.
