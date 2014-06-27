@@ -134,6 +134,8 @@ func endpointServer(addr string) {
 		0x12: make(map[string][]string),
 	}
 
+	printTm := time.Tick(100 * time.Millisecond)
+
 loop:
 	for {
 		select {
@@ -155,6 +157,9 @@ loop:
 			}
 		case <-time.After(4 * time.Second):
 			break loop
+		case <-printTm:
+			log.Println(addr, "-- mutations", mutations)
+			log.Println(addr, "-- commandWise", commandWise)
 		}
 	}
 
