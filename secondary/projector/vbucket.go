@@ -131,6 +131,7 @@ loop:
 				respch := msg[3].(chan []interface{})
 				respch <- []interface{}{nil}
 				stats.Incr("/uEngines", 1)
+				vr.traceCtrlPath(endpoints, engines)
 
 			case vrCmdDeleteEngines:
 				endpoints = msg[1].(map[string]*Endpoint)
@@ -140,6 +141,7 @@ loop:
 				respch := msg[3].(chan []interface{})
 				respch <- []interface{}{nil}
 				stats.Incr("/dEngines", 1)
+				vr.traceCtrlPath(endpoints, engines)
 
 			case vrCmdGetStatistics:
 				respch := msg[1].(chan []interface{})
@@ -217,5 +219,14 @@ func (vr *VbucketRoutine) sendToEndpoints(endpoints map[string]*Endpoint, fn fun
 		kv := fn()
 		// send might fail, we don't care
 		endpoint.Send(vr.bucket, vr.vbno, vr.vbuuid, kv)
+	}
+}
+
+func (vr *VbucketRoutine) traceCtrlPath(endpoints map[string]*Endpoint, engines map[uint64]*Engine) {
+	for raddr := range endpoints {
+		c.Tracef("%v, knows enpdoint %q\n", vr.logPrefix, raddr)
+	}
+	for uuid := range engines {
+		c.Tracef("%v, knows engine %q\n", vr.logPrefix, uuid)
 	}
 }

@@ -451,7 +451,7 @@ func streamListener(laddr string, lis net.Listener, reqch chan []interface{}) {
 		reqch <- []interface{}{msg}
 	}()
 	for {
-		// TODO: handle `err` for lis.Close() and avoid panic(err
+		// TODO: handle `err` for lis.Close() and avoid panic(err)
 		if conn, err := lis.Accept(); err != nil {
 			panic(err)
 		} else {

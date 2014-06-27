@@ -23,6 +23,8 @@ func (b *endpointBuffers) addKeyVersions(bucket string, vbno uint16, vbuuid uint
 		nMuts := 10 // TODO: avoid magic numbers
 		b.vbs[uuid] = c.NewVbKeyVersions(bucket, vbno, vbuuid, nMuts)
 	}
+	c.Tracef("added %v keyversions for vbucket %v to %q",
+		len(kv.Commands), vbno, b.raddr)
 	b.vbs[uuid].AddKeyVersions(kv)
 }
 
@@ -40,5 +42,6 @@ func (b *endpointBuffers) flushBuffers(client *indexer.StreamClient) error {
 	if err := client.SendKeyVersions(vbs); err != nil {
 		return err
 	}
+	c.Tracef("sent %v vbuckets to %q", len(vbs), b.raddr)
 	return nil
 }

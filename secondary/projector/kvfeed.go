@@ -335,6 +335,8 @@ loop:
 				break loop
 			}
 			kvfeed.scatterMutation(m, endpoints, engines)
+			c.Tracef("%v, Mutation %v:%v:%v\n",
+				kvfeed.logPrefix, m.VBucket, m.Seqno, m.Opcode)
 			events++
 
 		case msg, ok := <-sbch:
@@ -359,6 +361,8 @@ loop:
 				}
 				for _, engineKey := range engineKeys {
 					delete(engines, engineKey)
+					c.Tracef("%v, deleted engine %v\n",
+						kvfeed.logPrefix, engineKey)
 				}
 
 			case sbkvGetStatistics:
@@ -402,6 +406,7 @@ func (kvfeed *KVFeed) scatterMutation(
 					vr:     vr,
 				}
 				vr.Event(m)
+				c.Tracef("%v, StreamRequest for %v\n", kvfeed.logPrefix, vbno)
 			}
 		}
 
@@ -412,6 +417,7 @@ func (kvfeed *KVFeed) scatterMutation(
 		} else {
 			v.vr.Close()
 			delete(kvfeed.vbuckets, vbno)
+			c.Tracef("%v, StreamRequest for %v\n", kvfeed.logPrefix, vbno)
 		}
 
 	case mc.UprMutation, mc.UprDeletion:

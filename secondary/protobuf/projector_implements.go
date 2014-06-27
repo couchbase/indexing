@@ -90,7 +90,7 @@ func (req *MutationStreamRequest) GetRouters() (map[uint64]c.Router, error) {
 
 // interface API for RequestReader and Subscriber
 
-func (req *UpdateMutationStreamRequest) SetAddStreamSubscription() {
+func (req *UpdateMutationStreamRequest) SetAddSubscriptionFlag() {
 	req.Flag = proto.Uint32(uint32(0x0) | maskAddStreamSubscription)
 }
 
@@ -152,7 +152,7 @@ func (req *UpdateMutationStreamRequest) GetRouters() (map[uint64]c.Router, error
 
 // interface API for flags and Subscriber
 
-func (req *SubscribeStreamRequest) SetAddStreamSubscription() {
+func (req *SubscribeStreamRequest) SetAddSubscriptionFlag() {
 	req.Flag = proto.Uint32(uint32(0x0) | maskAddStreamSubscription)
 }
 
