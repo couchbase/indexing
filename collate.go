@@ -75,7 +75,7 @@ func NewCodec() *Codec {
 		hiraganaQ:         false,
 		caseLevel:         true,
 		numeric:           false,
-		language:          language.En,
+		language:          language.English,
 	}
 }
 
