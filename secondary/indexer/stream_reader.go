@@ -82,6 +82,7 @@ func CreateMutationStreamReader(streamId StreamId, bucketQueueMap BucketQueueMap
 	//init worker buffers
 	for w := 0; w < r.numWorkers; w++ {
 		r.workerch[w] = make(MutationChannel, MAX_STREAM_READER_WORKER_BUFFER)
+		r.workerStopCh[w] = make(StopChannel)
 	}
 
 	//start stream workers
@@ -93,6 +94,8 @@ func CreateMutationStreamReader(streamId StreamId, bucketQueueMap BucketQueueMap
 //Shutdown shuts down the mutation stream and all workers.
 //This call doesn't return till shutdown is complete.
 func (r *mutationStreamReader) Shutdown() {
+
+	log.Printf("MutationStreamReader: Shutting down StreamReader %v", r.streamId)
 
 	//close the mutation stream
 	r.stream.Close()
@@ -378,6 +381,8 @@ func (r *mutationStreamReader) startWorkers() {
 //stopWorkers stops all stream workers. This call doesn't return till
 //all workers are stopped
 func (r *mutationStreamReader) stopWorkers() {
+
+	log.Printf("MutationStreamReader: Stopping All Workers")
 
 	//stop all workers
 	for _, ch := range r.workerStopCh {

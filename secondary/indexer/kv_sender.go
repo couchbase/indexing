@@ -360,6 +360,25 @@ func (k *kvSender) handleUpdateMutationStreamRequest(cmd Message) {
 		Definition: defn,
 	}
 
+	switch partn := indexInst.Pc.(type) {
+	case *common.KeyPartitionContainer:
+
+		//Right now the fill the TestPartition as that is the only
+		//partition structure supported
+		partnDefn := partn.GetAllPartitions()
+
+		var endpoints []string
+		for _, p := range partnDefn {
+			for _, e := range p.Endpoints() {
+				endpoints = append(endpoints, string(e))
+			}
+
+		}
+		instance.Tp = &protobuf.TestPartition{
+			Endpoints: endpoints,
+		}
+	}
+
 	mReq := protobuf.SubscribeStreamRequest{
 		Topic:     proto.String(MAINT_TOPIC),
 		Instances: []*protobuf.IndexInst{instance},
