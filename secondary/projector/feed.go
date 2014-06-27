@@ -93,6 +93,7 @@ func (feed *Feed) getProjector() *Projector {
 const (
 	fCmdRequestFeed byte = iota + 1
 	fCmdUpdateFeed
+	fCmdAddEngines
 	fCmdUpdateEngines
 	fCmdDeleteEngines
 	fCmdRepairEndpoints
@@ -136,6 +137,19 @@ func (feed *Feed) UpdateFeed(request RequestReader) error {
 	}
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{fCmdUpdateFeed, request, respch}
+	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return c.OpError(err, resp, 0)
+}
+
+// AddEngines will add new engines for this Feed, synchronous call.
+//
+// - error if Feed is already closed.
+func (feed *Feed) AddEngines(request Subscriber) error {
+	if request == nil {
+		return ErrorArgument
+	}
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdAddEngines, request, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
@@ -216,6 +230,10 @@ loop:
 			req, respch := msg[1].(RequestReader), msg[2].(chan []interface{})
 			respch <- []interface{}{feed.updateFeed(req)}
 
+		case fCmdAddEngines:
+			req, respch := msg[1].(Subscriber), msg[2].(chan []interface{})
+			respch <- []interface{}{feed.addEngines(req)}
+
 		case fCmdUpdateEngines:
 			req, respch := msg[1].(Subscriber), msg[2].(chan []interface{})
 			respch <- []interface{}{feed.updateEngines(req)}
@@ -242,11 +260,19 @@ loop:
 
 // start a new feed.
 func (feed *Feed) requestFeed(req RequestReader) (err error) {
-	engines := make(map[uint64]*Engine)
+	var engines map[uint64]*Engine
+
 	endpoints := make(map[string]*Endpoint)
 	subscr := req.(Subscriber)
-	endpoints, engines, err = feed.buildEngines(subscr, endpoints, engines)
+	evaluators, routers, err := feed.validateSubscriber(subscr)
 	if err != nil {
+		return err
+	}
+
+	if endpoints, err = feed.buildEndpoints(routers, endpoints); err != nil {
+		return err
+	}
+	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
 		return err
 	}
 
@@ -272,19 +298,28 @@ func (feed *Feed) requestFeed(req RequestReader) (err error) {
 	if len(engines) == 0 {
 		c.Warnf("%v empty engines !\n", feed.logPrefix)
 	} else {
-		feed.resetEngines(endpoints, engines)
 		c.Infof("%v started ...\n", feed.logPrefix)
 	}
+	feed.endpoints, feed.engines = endpoints, engines
 	return nil
 }
 
 // start, restart, shutdown vbuckets in an active feed and/or update
 // downstream engines and endpoints.
 func (feed *Feed) updateFeed(req RequestReader) (err error) {
-	engines, endpoints := feed.engines, feed.endpoints
+	var endpoints map[string]*Endpoint
+	var engines map[uint64]*Engine
+
 	subscr := req.(Subscriber)
-	endpoints, engines, err = feed.buildEngines(subscr, endpoints, engines)
+	evaluators, routers, err := feed.validateSubscriber(subscr)
 	if err != nil {
+		return err
+	}
+
+	if endpoints, err = feed.buildEndpoints(routers, feed.endpoints); err != nil {
+		return err
+	}
+	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
 		return err
 	}
 
@@ -312,16 +347,62 @@ func (feed *Feed) updateFeed(req RequestReader) (err error) {
 		sort.Sort(feed.failoverTimestamps[bucket])
 		sort.Sort(feed.kvTimestamps[bucket])
 	}
-	feed.resetEngines(endpoints, engines)
-	c.Infof("%v updated ...\n", feed.logPrefix)
+	feed.endpoints, feed.engines = endpoints, engines
+	c.Infof("%v update ... done\n", feed.logPrefix)
 	return nil
 }
 
 // index topology has changed, update it.
-func (feed *Feed) updateEngines(req Subscriber) (err error) {
-	engines, endpoints := feed.engines, feed.endpoints
-	endpoints, engines, err = feed.buildEngines(req, endpoints, engines)
+func (feed *Feed) addEngines(subscr Subscriber) (err error) {
+	var endpoints map[string]*Endpoint
+	var engines map[uint64]*Engine
+
+	evaluators, routers, err := feed.validateSubscriber(subscr)
 	if err != nil {
+		return err
+	}
+
+	if endpoints, err = feed.buildEndpoints(routers, feed.endpoints); err != nil {
+		return err
+	}
+	for raddr, endpoint := range feed.endpoints {
+		endpoints[raddr] = endpoint
+	}
+	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
+		return err
+	}
+	for uuid, engine := range feed.engines {
+		engines[uuid] = engine
+	}
+
+	for bucket, emap := range bucketWiseEngines(engines) {
+		if bfeed, ok := feed.bfeeds[bucket]; ok {
+			if err = bfeed.UpdateEngines(endpoints, emap); err != nil {
+				return
+			}
+		} else {
+			return c.ErrorInvalidRequest
+		}
+	}
+	feed.endpoints, feed.engines = endpoints, engines
+	c.Infof("%v add engines ... done\n", feed.logPrefix)
+	return
+}
+
+// index topology has changed, update it.
+func (feed *Feed) updateEngines(subscr Subscriber) (err error) {
+	var endpoints map[string]*Endpoint
+	var engines map[uint64]*Engine
+
+	evaluators, routers, err := feed.validateSubscriber(subscr)
+	if err != nil {
+		return err
+	}
+
+	if endpoints, err = feed.buildEndpoints(routers, feed.endpoints); err != nil {
+		return err
+	}
+	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
 		return err
 	}
 
@@ -334,16 +415,25 @@ func (feed *Feed) updateEngines(req Subscriber) (err error) {
 			return c.ErrorInvalidRequest
 		}
 	}
-	feed.resetEngines(endpoints, engines)
-	c.Infof("%v updated engines ...\n", feed.logPrefix)
+	feed.endpoints, feed.engines = endpoints, engines
+	c.Infof("%v update engines ... done\n", feed.logPrefix)
 	return
 }
 
 // index is deleted, delete all of its downstream
-func (feed *Feed) deleteEngines(req Subscriber) (err error) {
-	engines, endpoints := feed.engines, feed.endpoints
-	endpoints, engines, err = feed.buildEngines(req, endpoints, engines)
+func (feed *Feed) deleteEngines(subscr Subscriber) (err error) {
+	var engines map[uint64]*Engine
+
+	evaluators, routers, err := feed.validateSubscriber(subscr)
 	if err != nil {
+		return err
+	}
+
+	// we don't delete endpoints, since it might be shared with other engines.
+	// endpoint routine will commit harakiri if no engines are sending them
+	// data.
+
+	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
 		return err
 	}
 
@@ -353,15 +443,18 @@ func (feed *Feed) deleteEngines(req Subscriber) (err error) {
 			for uuid := range emap {
 				uuids = append(uuids, uuid)
 			}
-			if err = bfeed.DeleteEngines(endpoints, uuids); err != nil {
+			if err = bfeed.DeleteEngines(feed.endpoints, uuids); err != nil {
 				return
 			}
 		} else {
 			return c.ErrorInvalidRequest
 		}
 	}
-	feed.resetEngines(endpoints, engines)
-	c.Infof("%v deleted engines ...\n", feed.logPrefix)
+	for uuid := range engines {
+		c.Infof("%v engine %v deleted ...\n", feed.logPrefix, uuid)
+		delete(feed.engines, uuid)
+	}
+	c.Infof("%v delete engines ... done\n", feed.logPrefix)
 	return
 }
 
@@ -371,6 +464,7 @@ func (feed *Feed) repairEndpoints() (err error) {
 	endpoints := make(map[string]*Endpoint)
 	for raddr, endpoint := range feed.endpoints {
 		if !endpoint.Ping() {
+			c.Infof("%v restarting endpoint %q ...\n", feed.logPrefix, raddr)
 			endpoint, err = feed.startEndpoint(raddr, endpoint.coord)
 			if err != nil {
 				return err
@@ -396,8 +490,8 @@ func (feed *Feed) repairEndpoints() (err error) {
 			return c.ErrorInvalidRequest
 		}
 	}
-	feed.resetEngines(endpoints, nil)
-	c.Infof("%v repaired endpoints ...\n", feed.logPrefix)
+	feed.endpoints, feed.engines = endpoints, engines
+	c.Infof("%v repair endpoints ... done\n", feed.logPrefix)
 	return nil
 }
 
@@ -435,55 +529,11 @@ func (feed *Feed) doClose() (err error) {
 	return
 }
 
-func (feed *Feed) resetEngines(endpoints map[string]*Endpoint, engines map[uint64]*Engine) {
-	newendpoints := make(map[string]*Endpoint)
-	for raddr, endpoint := range endpoints {
-		if _, ok := feed.endpoints[raddr]; !ok {
-			c.Infof("%v endpoint %q added ...\n", feed.logPrefix, raddr)
-			newendpoints[raddr] = endpoint
-		} else {
-			delete(feed.endpoints, raddr)
-		}
-	}
-	for raddr := range feed.endpoints {
-		c.Infof("%v endpoint %q ... deleted \n", feed.logPrefix, raddr)
-	}
-	feed.endpoints = newendpoints
-
-	if engines == nil {
-		return
-	}
-
-	newengines := make(map[uint64]*Engine)
-	for uuid, engine := range engines {
-		if _, ok := feed.engines[uuid]; !ok {
-			c.Infof("%v engine %v added ...\n", feed.logPrefix, uuid)
-		} else {
-			c.Infof("%v engine %v updated ...\n", feed.logPrefix, uuid)
-			delete(feed.engines, uuid)
-		}
-		newengines[uuid] = engine
-	}
-	for uuid := range feed.engines {
-		c.Infof("%v engine %v ... deleted\n", feed.logPrefix, uuid)
-	}
-	feed.engines = newengines
-}
-
 // build per bucket uuid->engine map using Subscriber interface. `engines` and
 // `endpoints` are updated inplace.
 func (feed *Feed) buildEngines(
-	subscriber Subscriber,
-	endpoints map[string]*Endpoint,
-	engines map[uint64]*Engine) (map[string]*Endpoint, map[uint64]*Engine, error) {
-
-	evaluators, routers, err := feed.validateSubscriber(subscriber)
-	if err != nil {
-		return endpoints, engines, err
-	}
-	if endpoints, err = feed.buildEndpoints(routers, endpoints); err != nil {
-		return endpoints, engines, err
-	}
+	evaluators map[uint64]c.Evaluator,
+	routers map[uint64]c.Router) (map[uint64]*Engine, error) {
 
 	// Rebuild new set of engines
 	newengines := make(map[uint64]*Engine)
@@ -491,7 +541,7 @@ func (feed *Feed) buildEngines(
 		engine := NewEngine(feed, uuid, evaluator, routers[uuid])
 		newengines[uuid] = engine
 	}
-	return endpoints, newengines, nil
+	return newengines, nil
 }
 
 // organize engines based on buckets, engine is associated with one bucket.

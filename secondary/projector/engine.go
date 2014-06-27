@@ -26,6 +26,7 @@ func NewEngine(feed *Feed, uuid uint64, evaluator c.Evaluator, router c.Router) 
 		evaluator: evaluator,
 		router:    router,
 	}
+	c.Infof("%v new engine %v created ...\n", feed.logPrefix, uuid)
 	return engine
 }
 

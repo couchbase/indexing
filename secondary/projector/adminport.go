@@ -225,7 +225,9 @@ func (p *Projector) doSubscribeFeed(request *protobuf.SubscribeStreamRequest) ap
 		return protobuf.NewError(err)
 	}
 
-	if request.IsUpdateSubscription() {
+	if request.IsAddSubscription() {
+		err = feed.AddEngines(request)
+	} else if request.IsUpdateSubscription() {
 		err = feed.UpdateEngines(request)
 	} else if request.IsDeleteSubscription() {
 		err = feed.DeleteEngines(request)

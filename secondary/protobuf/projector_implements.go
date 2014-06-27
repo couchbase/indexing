@@ -16,14 +16,29 @@ const (
 	// shutdown vbucket-streams
 	maskMutationStreamShutdown = 0x00000004
 
+	// add subscription
+	maskAddStreamSubscription = 0x00000008
+
 	// update subscription
-	maskUpdateStreamSubscription = 0x00000020
+	maskUpdateStreamSubscription = 0x00000010
 
 	// delete subscription
-	maskDeleteStreamSubscription = 0x00000010
+	maskDeleteStreamSubscription = 0x00000020
 )
 
 // Interface API for RequestReader and Subscriber
+
+func (req *MutationStreamRequest) SetStartFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamStart)
+}
+
+func (req *MutationStreamRequest) SetRestartFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamRestart)
+}
+
+func (req *MutationStreamRequest) SetShutdownFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamShutdown)
+}
 
 func (req *MutationStreamRequest) IsStart() bool {
 	flag := req.GetFlag()
@@ -40,6 +55,11 @@ func (req *MutationStreamRequest) IsShutdown() bool {
 	return (flag & maskMutationStreamShutdown) > 0
 }
 
+func (req *MutationStreamRequest) IsAddSubscription() bool {
+	flag := req.GetFlag()
+	return (flag & maskAddStreamSubscription) > 0
+}
+
 func (req *MutationStreamRequest) IsUpdateSubscription() bool {
 	flag := req.GetFlag()
 	return (flag & maskUpdateStreamSubscription) > 0
@@ -48,26 +68,6 @@ func (req *MutationStreamRequest) IsUpdateSubscription() bool {
 func (req *MutationStreamRequest) IsDeleteSubscription() bool {
 	flag := req.GetFlag()
 	return (flag & maskDeleteStreamSubscription) > 0
-}
-
-func (req *MutationStreamRequest) SetStartFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamStart)
-}
-
-func (req *MutationStreamRequest) SetRestartFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamRestart)
-}
-
-func (req *MutationStreamRequest) SetShutdownFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamShutdown)
-}
-
-func (req *MutationStreamRequest) SetUpdateSubscriptionFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskUpdateStreamSubscription)
-}
-
-func (req *MutationStreamRequest) SetDeleteSubscriptionFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskDeleteStreamSubscription)
 }
 
 func (req *MutationStreamRequest) RestartTimestamp(bucket string) *c.Timestamp {
@@ -90,6 +90,18 @@ func (req *MutationStreamRequest) GetRouters() (map[uint64]c.Router, error) {
 
 // interface API for RequestReader and Subscriber
 
+func (req *UpdateMutationStreamRequest) SetAddStreamSubscription() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskAddStreamSubscription)
+}
+
+func (req *UpdateMutationStreamRequest) SetUpdateSubscriptionFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskUpdateStreamSubscription)
+}
+
+func (req *UpdateMutationStreamRequest) SetDeleteSubscriptionFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskDeleteStreamSubscription)
+}
+
 func (req *UpdateMutationStreamRequest) IsStart() bool {
 	flag := req.GetFlag()
 	return (flag & maskMutationStreamStart) > 0
@@ -105,14 +117,19 @@ func (req *UpdateMutationStreamRequest) IsShutdown() bool {
 	return (flag & maskMutationStreamShutdown) > 0
 }
 
-func (req *UpdateMutationStreamRequest) IsDeleteSubscription() bool {
+func (req *UpdateMutationStreamRequest) IsAddSubscription() bool {
 	flag := req.GetFlag()
-	return (flag & maskDeleteStreamSubscription) > 0
+	return (flag & maskAddStreamSubscription) > 0
 }
 
 func (req *UpdateMutationStreamRequest) IsUpdateSubscription() bool {
 	flag := req.GetFlag()
 	return (flag & maskUpdateStreamSubscription) > 0
+}
+
+func (req *UpdateMutationStreamRequest) IsDeleteSubscription() bool {
+	flag := req.GetFlag()
+	return (flag & maskDeleteStreamSubscription) > 0
 }
 
 func (req *UpdateMutationStreamRequest) RestartTimestamp(bucket string) *c.Timestamp {
@@ -135,14 +152,8 @@ func (req *UpdateMutationStreamRequest) GetRouters() (map[uint64]c.Router, error
 
 // interface API for flags and Subscriber
 
-func (req *SubscribeStreamRequest) IsUpdateSubscription() bool {
-	flag := req.GetFlag()
-	return (flag & maskUpdateStreamSubscription) > 0
-}
-
-func (req *SubscribeStreamRequest) IsDeleteSubscription() bool {
-	flag := req.GetFlag()
-	return (flag & maskDeleteStreamSubscription) > 0
+func (req *SubscribeStreamRequest) SetAddStreamSubscription() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskAddStreamSubscription)
 }
 
 func (req *SubscribeStreamRequest) SetUpdateSubscriptionFlag() {
@@ -151,6 +162,21 @@ func (req *SubscribeStreamRequest) SetUpdateSubscriptionFlag() {
 
 func (req *SubscribeStreamRequest) SetDeleteSubscriptionFlag() {
 	req.Flag = proto.Uint32(uint32(0x0) | maskDeleteStreamSubscription)
+}
+
+func (req *SubscribeStreamRequest) IsUpdateSubscription() bool {
+	flag := req.GetFlag()
+	return (flag & maskUpdateStreamSubscription) > 0
+}
+
+func (req *SubscribeStreamRequest) IsAddSubscription() bool {
+	flag := req.GetFlag()
+	return (flag & maskAddStreamSubscription) > 0
+}
+
+func (req *SubscribeStreamRequest) IsDeleteSubscription() bool {
+	flag := req.GetFlag()
+	return (flag & maskDeleteStreamSubscription) > 0
 }
 
 func (req *SubscribeStreamRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {

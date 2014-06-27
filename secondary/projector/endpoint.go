@@ -65,7 +65,8 @@ func NewEndpoint(feed *Feed, raddr string, n int, coord bool) (*Endpoint, error)
 	endpoint.stats = endpoint.newStats()
 
 	go endpoint.run(endpoint.kvch, endpoint.reqch)
-	c.Infof("%v ... started (with %v conns)\n", endpoint.logPrefix, n)
+	c.Infof("%v started (with %v conns) for feed %v ...\n",
+		endpoint.logPrefix, n, feed.topic)
 	return endpoint, nil
 }
 

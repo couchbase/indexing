@@ -93,6 +93,10 @@ type RequestReader interface {
 	//IsShutdown returns true if the request is to shutdown vbucket streams.
 	IsShutdown() bool
 
+	//IsAddSubscription returns true if an index (aka entities) need to be
+	//added.
+	IsAddSubscription() bool
+
 	//IsUpdateSubscription returns true if an index (aka entities) need to be
 	//updated.
 	IsUpdateSubscription() bool
