@@ -28,17 +28,12 @@ type kvSender struct {
 
 	indexInstMap common.IndexInstMap
 	streamStatus StreamStatusMap
+
+	numVbuckets uint16
 }
 
-//TODO move to config
-const PROJECTOR_ADMIN_PORT_ENDPOINT = "http://localhost:9999"
-const MAINT_TOPIC = "MAINT_STREAM_TOPIC"
-const DEFAULT_POOL = "default"
-
-var NUM_VBUCKETS uint16
-
-func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel) (
-	KVSender, Message) {
+func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
+	numVbuckets uint16) (KVSender, Message) {
 
 	//Init the clustMgrSender struct
 	k := &kvSender{
@@ -46,6 +41,7 @@ func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel) (
 		supvRespch:   supvRespch,
 		streamStatus: make(StreamStatusMap),
 		indexInstMap: make(common.IndexInstMap),
+		numVbuckets:  numVbuckets,
 	}
 
 	//start kvsender loop which listens to commands from its supervisor
@@ -214,7 +210,7 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 	//served from a projector, for now assume single projector and send
 	//list of all vbuckets
 	var vbnos []uint32
-	for i := 0; i < int(NUM_VBUCKETS); i++ {
+	for i := 0; i < int(k.numVbuckets); i++ {
 		vbnos = append(vbnos, uint32(i))
 	}
 
@@ -246,7 +242,7 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 
 	//seqnos
 	var seqnos []uint64
-	for i := 0; i < int(NUM_VBUCKETS); i++ {
+	for i := 0; i < int(k.numVbuckets); i++ {
 		seqnos = append(seqnos, 0)
 	}
 

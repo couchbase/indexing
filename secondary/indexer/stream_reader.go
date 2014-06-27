@@ -42,8 +42,6 @@ type mutationStreamReader struct {
 
 }
 
-const MAX_WORKER_BUFFER = 1000
-
 //CreateMutationStreamReader creates a new mutation stream and starts
 //a reader to listen and process the mutations.
 //In case returned MutationStreamReader is nil, Message will have the error msg.
@@ -83,7 +81,7 @@ func CreateMutationStreamReader(streamId StreamId, bucketQueueMap BucketQueueMap
 
 	//init worker buffers
 	for w := 0; w < r.numWorkers; w++ {
-		r.workerch[w] = make(MutationChannel, MAX_WORKER_BUFFER)
+		r.workerch[w] = make(MutationChannel, MAX_STREAM_READER_WORKER_BUFFER)
 	}
 
 	//start stream workers

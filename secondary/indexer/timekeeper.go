@@ -30,8 +30,6 @@ type BucketNewTSReqdMap map[string]bool
 type BucketTSListMap map[string]*list.List
 type BucketFlushInProgressMap map[string]bool
 
-const SYNC_COUNT_TS_TRIGGER = 100
-
 type timekeeper struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any async message to supervisor

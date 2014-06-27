@@ -13,9 +13,6 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 )
 
-const MAX_NUM_VBUCKETS = 1024
-const WORKER_MSG_QUEUE_LEN = 1000
-
 //StreamId represents the possible mutation streams
 type StreamId uint16
 

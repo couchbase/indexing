@@ -28,8 +28,6 @@ type cbqBridge struct {
 
 }
 
-const CBQ_BRIDGE_HTTP_ADDR = ":9101"
-
 func NewCbqBridge(supvCmdch MsgChannel, supvRespch MsgChannel) (
 	CbqBridge, Message) {
 
@@ -115,7 +113,7 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 	pc := common.NewKeyPartitionContainer()
 	//Add one partition for now
 
-	endpt := []common.Endpoint{"localhost:8100"}
+	endpt := []common.Endpoint{INDEXER_DATA_PORT_ENDPOINT}
 	partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
 		Endpts: endpt}
 	pc.AddPartition(common.PartitionId(1), partnDefn)

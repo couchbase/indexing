@@ -57,11 +57,6 @@ type mutationMgr struct {
 	flock sync.Mutex //fine-grain lock for streamFlusherStopChMap
 }
 
-const DEFAULT_NUM_STREAM_READER_WORKERS = 8
-const DEFAULT_START_CHUNK_SIZE = 256
-const DEFAULT_SLAB_SIZE = DEFAULT_START_CHUNK_SIZE * 1024
-const DEFAULT_MAX_SLAB_MEMORY = DEFAULT_SLAB_SIZE * 1024
-
 //NewMutationManager creates a new Mutation Manager which listens for commands from
 //Indexer.  In case returned MutationManager is nil, Message will have the error msg.
 //supvCmdch is a synchronous channel and every request on this channel is followed

@@ -30,6 +30,7 @@ type Indexer interface {
 type StreamStatus map[StreamId]bool
 
 //TODO move this to config
+var NUM_VBUCKETS uint16
 var StreamAddrMap StreamAddressMap
 
 type indexer struct {
@@ -105,7 +106,7 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	//init the stream address map
 	StreamAddrMap = make(StreamAddressMap)
 	//TODO move this to config
-	StreamAddrMap[MAINT_STREAM] = common.Endpoint("localhost:8100")
+	StreamAddrMap[MAINT_STREAM] = common.Endpoint(INDEXER_DATA_PORT_ENDPOINT)
 
 	//init stream status
 	idx.streamStatus = make(StreamStatus)
@@ -151,7 +152,7 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	}
 
 	//Start KV Sender
-	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh)
+	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, numVbuckets)
 	if res.GetMsgType() != SUCCESS {
 		log.Println("Indexer: KVSender Init Error", res)
 		return nil, res
@@ -166,7 +167,7 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh,
-		NUM_VBUCKETS)
+		numVbuckets)
 	if res.GetMsgType() != SUCCESS {
 		log.Println("Indexer: Mutation Manager Init Error", res)
 		return nil, res

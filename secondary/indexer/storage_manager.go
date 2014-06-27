@@ -21,8 +21,6 @@ import (
 type StorageManager interface {
 }
 
-const MAX_SNAPSHOTS_PER_INDEX = 100
-
 type storageMgr struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any async message to supervisor
