@@ -31,6 +31,7 @@ type StreamStatus map[StreamId]bool
 
 //TODO move this to config
 var NUM_VBUCKETS uint16
+var PROJECTOR_ADMIN_PORT_ENDPOINT string
 var StreamAddrMap StreamAddressMap
 
 type indexer struct {

@@ -18,7 +18,7 @@ const WORKER_MSG_QUEUE_LEN = 1000
 
 //Projector Admin Port Endpoint on which projector is
 //listening for admin requests
-const PROJECTOR_ADMIN_PORT_ENDPOINT = "http://localhost:9999"
+const DEFAULT_PROJECTOR_ADMIN_PORT_ENDPOINT = "http://localhost:9999"
 
 //Data Port Endpoint for Local Indexer on which projector
 //needs to send mutations
