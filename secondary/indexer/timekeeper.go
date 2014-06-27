@@ -7,9 +7,14 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
+//TODO Does timekeeper need to take into account all the indexes for a bucket getting dropped?
+//Right now it assumes for such a case there will be no SYNC message for that bucket, but doesn't
+//clean up its internal maps
+
 package indexer
 
 import (
+	"container/list"
 	"log"
 )
 
@@ -22,6 +27,9 @@ type BucketHWTMap map[string]Timestamp
 type BucketSyncCountMap map[string]uint64
 type BucketNewTSReqdMap map[string]bool
 
+type BucketTSListMap map[string]*list.List
+type BucketFlushInProgressMap map[string]bool
+
 const SYNC_COUNT_TS_TRIGGER = 100
 
 type timekeeper struct {
@@ -31,6 +39,9 @@ type timekeeper struct {
 	streamBucketHWTMap       map[StreamId]*BucketHWTMap
 	streamBucketSyncCountMap map[StreamId]*BucketSyncCountMap
 	streamBucketNewTSReqdMap map[StreamId]*BucketNewTSReqdMap
+
+	streamBucketTSListMap          map[StreamId]*BucketTSListMap
+	streamBucketFlushInProgressMap map[StreamId]*BucketFlushInProgressMap
 }
 
 //NewTimekeeper returns an instance of timekeeper or err message.
@@ -43,11 +54,13 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel) (
 
 	//Init the timekeeper struct
 	tk := &timekeeper{
-		supvCmdch:                supvCmdch,
-		supvRespch:               supvRespch,
-		streamBucketHWTMap:       make(map[StreamId]*BucketHWTMap),
-		streamBucketSyncCountMap: make(map[StreamId]*BucketSyncCountMap),
-		streamBucketNewTSReqdMap: make(map[StreamId]*BucketNewTSReqdMap),
+		supvCmdch:                      supvCmdch,
+		supvRespch:                     supvRespch,
+		streamBucketHWTMap:             make(map[StreamId]*BucketHWTMap),
+		streamBucketSyncCountMap:       make(map[StreamId]*BucketSyncCountMap),
+		streamBucketNewTSReqdMap:       make(map[StreamId]*BucketNewTSReqdMap),
+		streamBucketTSListMap:          make(map[StreamId]*BucketTSListMap),
+		streamBucketFlushInProgressMap: make(map[StreamId]*BucketFlushInProgressMap),
 	}
 
 	//start timekeeper loop which listens to commands from its supervisor
@@ -97,6 +110,9 @@ func (tk *timekeeper) handleSupvervisorCommands(cmd Message) {
 	case MUT_MGR_FLUSH_DONE:
 		tk.handleFlushDone(cmd)
 
+	default:
+		log.Printf("Timekeeper: Received Unknown Command %v", cmd)
+
 	}
 
 }
@@ -122,6 +138,8 @@ func (tk *timekeeper) handleSync(cmd Message) {
 
 	bucketSyncCountMap := tk.streamBucketSyncCountMap[streamId]
 	bucketNewTSReqd := tk.streamBucketNewTSReqdMap[streamId]
+	bucketFlushInProgressMap := tk.streamBucketFlushInProgressMap[streamId]
+	bucketTSListMap := tk.streamBucketTSListMap[streamId]
 
 	//update HWT for this bucket
 	var ts Timestamp
@@ -135,6 +153,9 @@ func (tk *timekeeper) handleSync(cmd Message) {
 		//allocate a new timestamp for this bucket
 		(*bucketHWTMap)[meta.bucket] = NewTimestamp()
 		(*bucketNewTSReqd)[meta.bucket] = false
+		(*bucketTSListMap)[meta.bucket] = list.New()
+		(*bucketFlushInProgressMap)[meta.bucket] = false
+
 	}
 
 	//update sync count for this bucket
@@ -145,7 +166,18 @@ func (tk *timekeeper) handleSync(cmd Message) {
 			//generate new stability timestamp
 			log.Printf("Timekeeper: Generating new Stability TS %v for Bucket %v "+
 				"Stream %v. SyncCount is %v", ts, meta.bucket, streamId, syncCount)
-			go tk.generateNewStabilityTS(ts, meta.bucket, streamId)
+
+			tsList := (*bucketTSListMap)[meta.bucket]
+
+			//if there is no flush already in progress for this bucket and no pending TS in list,
+			//send new TS
+			if (*bucketFlushInProgressMap)[meta.bucket] == false && tsList.Len() == 0 {
+				(*bucketFlushInProgressMap)[meta.bucket] = true
+				go tk.sendNewStabilityTS(ts, meta.bucket, streamId)
+			} else {
+				//store the ts in list
+				tsList.PushBack(ts)
+			}
 			(*bucketSyncCountMap)[meta.bucket] = 0
 			(*bucketNewTSReqd)[meta.bucket] = false
 		} else {
@@ -182,6 +214,12 @@ func (tk *timekeeper) handleStreamStart(cmd Message) {
 	bucketNewTSReqdMap := make(BucketNewTSReqdMap)
 	tk.streamBucketNewTSReqdMap[streamId] = &bucketNewTSReqdMap
 
+	bucketTSListMap := make(BucketTSListMap)
+	tk.streamBucketTSListMap[streamId] = &bucketTSListMap
+
+	bucketFlushInProgressMap := make(BucketFlushInProgressMap)
+	tk.streamBucketFlushInProgressMap[streamId] = &bucketFlushInProgressMap
+
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
@@ -194,6 +232,8 @@ func (tk *timekeeper) handleStreamStop(cmd Message) {
 	delete(tk.streamBucketHWTMap, streamId)
 	delete(tk.streamBucketSyncCountMap, streamId)
 	delete(tk.streamBucketNewTSReqdMap, streamId)
+	delete(tk.streamBucketTSListMap, streamId)
+	delete(tk.streamBucketFlushInProgressMap, streamId)
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -202,13 +242,28 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 	log.Printf("Timekeeper: Received Flush Done %v", cmd)
 
-	//TODO
+	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
+	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
+
+	//update internal map to reflect flush is done
+	bucketFlushInProgressMap := tk.streamBucketFlushInProgressMap[streamId]
+	(*bucketFlushInProgressMap)[bucket] = false
+
+	//if there are pending TS for this bucket, send New TS
+	bucketTSListMap := tk.streamBucketTSListMap[streamId]
+	tsList := (*bucketTSListMap)[bucket]
+	if tsList.Len() > 0 {
+		e := tsList.Front()
+		ts := e.Value.(Timestamp)
+		(*bucketFlushInProgressMap)[bucket] = true
+		go tk.sendNewStabilityTS(ts, bucket, streamId)
+	}
 
 	tk.supvCmdch <- &MsgSuccess{}
 
 }
 
-func (tk *timekeeper) generateNewStabilityTS(ts Timestamp, bucket string,
+func (tk *timekeeper) sendNewStabilityTS(ts Timestamp, bucket string,
 	streamId StreamId) {
 
 	tk.supvRespch <- &MsgTKStabilityTS{ts: ts,
