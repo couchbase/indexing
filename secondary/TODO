@@ -1,3 +1,6 @@
+- version numbering for protobuf messages. say it is a 1-byte value, where
+  Most-Significant 4 bits give major version and Least-significant 4 bits give
+  minor number.
 - timestamp naming, TsVb, TsVbFull, TsVbuuid, TsVbuuidFull.
 - make dataport as a sub-package under indexing/secondary.
 - Stream nomenclature should be consistent with Feed nomenclature.
