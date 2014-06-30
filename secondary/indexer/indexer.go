@@ -104,6 +104,8 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 		NUM_VBUCKETS = MAX_NUM_VBUCKETS
 	}
 
+	log.Printf("Indexer: Starting with Vbuckets %v", NUM_VBUCKETS)
+
 	//init the stream address map
 	StreamAddrMap = make(StreamAddressMap)
 	//TODO move this to config
@@ -327,6 +329,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 
+	default:
+		log.Printf("Indexer: Received Unknown Message from Worker %v", msg)
 	}
 
 }
@@ -342,6 +346,10 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 	case INDEXER_DROP_INDEX_DDL:
 
 		idx.handleDropIndex(msg)
+
+	default:
+
+		log.Printf("Indexer: Received Unknown Admin Message %v", msg)
 
 	}
 
@@ -679,8 +687,11 @@ func (idx *indexer) shutdownWorkers() {
 }
 
 func (idx *indexer) Shutdown() Message {
+
+	log.Printf("Indexer: Shutting Down")
 	//close the internal shutdown channel
 	close(idx.shutdownInitCh)
 	<-idx.shutdownCompleteCh
+	log.Printf("Indexer: Shutdown Complete")
 	return nil
 }

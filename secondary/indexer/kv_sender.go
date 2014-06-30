@@ -14,8 +14,6 @@ import (
 	"github.com/couchbase/indexing/secondary/adminport"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
-
-	"log"
 )
 
 //KVSender provides the mechanism to talk to KV(projector, router etc)
@@ -35,7 +33,7 @@ type kvSender struct {
 func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
 	numVbuckets uint16) (KVSender, Message) {
 
-	//Init the clustMgrSender struct
+	//Init the kvSender struct
 	k := &kvSender{
 		supvCmdch:    supvCmdch,
 		supvRespch:   supvRespch,
@@ -86,14 +84,14 @@ func (k *kvSender) handleSupvervisorCommands(cmd Message) {
 		k.handleDropIndex(cmd)
 
 	default:
-		log.Printf("KVSender: Received Unknown Command %v", cmd)
+		common.Errorf("KVSender: Received Unknown Command %v", cmd)
 	}
 
 }
 
 func (k *kvSender) handleCreateIndex(cmd Message) {
 
-	log.Printf("KVSender: Received Create Index %v", cmd)
+	common.Infof("KVSender: Received Create Index %v", cmd)
 
 	var newStreamRequest bool
 
@@ -110,7 +108,7 @@ func (k *kvSender) handleCreateIndex(cmd Message) {
 
 func (k *kvSender) handleDropIndex(cmd Message) {
 
-	log.Printf("KVSender: Received Drop Index %v", cmd)
+	common.Infof("KVSender: Received Drop Index %v", cmd)
 
 	indexInstId := cmd.(*MsgDropIndex).GetIndexInstId()
 
@@ -119,7 +117,7 @@ func (k *kvSender) handleDropIndex(cmd Message) {
 
 	if indexInst, ok = k.indexInstMap[indexInstId]; !ok {
 
-		log.Printf("KVSender: Unknown IndexInstId %v in Drop Index Request", indexInstId)
+		common.Errorf("KVSender: Unknown IndexInstId %v in Drop Index Request", indexInstId)
 
 		k.supvCmdch <- &MsgError{mType: ERROR,
 			err: Error{code: ERROR_DROP_INDEX_FAILED,
@@ -164,7 +162,7 @@ func (k *kvSender) handleDropIndex(cmd Message) {
 
 	mRes := protobuf.Error{}
 	if err := ap.Request(&mReq, &mRes); err != nil {
-		log.Printf("Unexpected Error During Mutation Stream Request %v "+
+		common.Errorf("Unexpected Error During Mutation Stream Request %v "+
 			"for Drop Index %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
 
 		k.supvCmdch <- &MsgError{mType: ERROR,
@@ -184,8 +182,8 @@ func (k *kvSender) handleDropIndex(cmd Message) {
 		}
 		sRes := protobuf.Error{}
 		if err := ap.Request(&sReq, &sRes); err != nil {
-			log.Printf("Unexpected Error During Close Mutation Stream Request %v "+
-				"Err %v. Resp %v.", mReq, indexInst, err, mRes)
+			common.Errorf("Unexpected Error During Close Mutation Stream Request %v "+
+				"Err %v. Resp %v.", mReq, err, mRes)
 
 			k.supvCmdch <- &MsgError{mType: ERROR,
 				err: Error{code: ERROR_DROP_INDEX_FAILED,
@@ -201,7 +199,7 @@ func (k *kvSender) handleDropIndex(cmd Message) {
 
 func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 
-	log.Printf("KVSender: handleNewMutationStreamRequest Processing"+
+	common.Infof("KVSender: handleNewMutationStreamRequest Processing"+
 		"Create Index %v", cmd)
 
 	indexInst := cmd.(*MsgCreateIndex).GetIndexInst()
@@ -225,7 +223,7 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 
 	if err := ap.Request(&fReq, &fRes); err != nil {
 
-		log.Printf("Unexpected Error During Failover Log Request %v "+
+		common.Errorf("Unexpected Error During Failover Log Request %v "+
 			"for Create Index %v. Err %v", fReq, indexInst, err)
 
 		k.supvCmdch <- &MsgError{mType: ERROR,
@@ -310,7 +308,7 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 
 	mRes := protobuf.MutationStreamResponse{}
 	if err := ap.Request(&mReq, &mRes); err != nil {
-		log.Printf("Unexpected Error During Mutation Stream Request %v "+
+		common.Errorf("Unexpected Error During Mutation Stream Request %v "+
 			"for Create Index %v. Err %v", mReq, indexInst, err)
 
 		k.supvCmdch <- &MsgError{mType: ERROR,
@@ -329,7 +327,7 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 
 func (k *kvSender) handleUpdateMutationStreamRequest(cmd Message) {
 
-	log.Printf("KVSender: handleUpdateMutationStreamRequest Processing"+
+	common.Infof("KVSender: handleUpdateMutationStreamRequest Processing"+
 		"Create Index %v", cmd)
 
 	indexInst := cmd.(*MsgCreateIndex).GetIndexInst()
@@ -384,13 +382,13 @@ func (k *kvSender) handleUpdateMutationStreamRequest(cmd Message) {
 		Instances: []*protobuf.IndexInst{instance},
 	}
 
-	mReq.SetUpdateSubscriptionFlag()
+	mReq.SetAddSubscriptionFlag()
 
 	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
 
 	mRes := protobuf.Error{}
 	if err := ap.Request(&mReq, &mRes); err != nil {
-		log.Printf("Unexpected Error During Mutation Stream Request %v "+
+		common.Errorf("Unexpected Error During Mutation Stream Request %v "+
 			"for Create Index %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
 
 		k.supvCmdch <- &MsgError{mType: ERROR,

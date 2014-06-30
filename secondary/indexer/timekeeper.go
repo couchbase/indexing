@@ -15,7 +15,7 @@ package indexer
 
 import (
 	"container/list"
-	"log"
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 //Timekeeper manages the Stability Timestamp Generation and also
@@ -109,7 +109,7 @@ func (tk *timekeeper) handleSupvervisorCommands(cmd Message) {
 		tk.handleFlushDone(cmd)
 
 	default:
-		log.Printf("Timekeeper: Received Unknown Command %v", cmd)
+		common.Errorf("Timekeeper: Received Unknown Command %v", cmd)
 
 	}
 
@@ -117,7 +117,7 @@ func (tk *timekeeper) handleSupvervisorCommands(cmd Message) {
 
 func (tk *timekeeper) handleSync(cmd Message) {
 
-	log.Printf("Timekeeper: Received Stream Reader Sync %v", cmd)
+	common.Tracef("Timekeeper: Received Stream Reader Sync %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -126,7 +126,7 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	var ok bool
 
 	if bucketHWTMap, ok = tk.streamBucketHWTMap[streamId]; !ok {
-		log.Println("Timekeeper: Got STREAM_READER_SYNC for unknown stream", streamId)
+		common.Fatalf("Timekeeper: Got STREAM_READER_SYNC for unknown stream %v", streamId)
 		tk.supvCmdch <- &MsgError{mType: ERROR,
 			err: Error{code: ERROR_TK_UNKNOWN_STREAM,
 				severity: FATAL,
@@ -162,7 +162,7 @@ func (tk *timekeeper) handleSync(cmd Message) {
 		if syncCount >= SYNC_COUNT_TS_TRIGGER &&
 			(*bucketNewTSReqd)[meta.bucket] == true {
 			//generate new stability timestamp
-			log.Printf("Timekeeper: Generating new Stability TS %v for Bucket %v "+
+			common.Infof("Timekeeper: Generating new Stability TS %v for Bucket %v "+
 				"Stream %v. SyncCount is %v", ts, meta.bucket, streamId, syncCount)
 
 			tsList := (*bucketTSListMap)[meta.bucket]
@@ -179,7 +179,7 @@ func (tk *timekeeper) handleSync(cmd Message) {
 			(*bucketSyncCountMap)[meta.bucket] = 0
 			(*bucketNewTSReqd)[meta.bucket] = false
 		} else {
-			log.Printf("Timekeeper: Updating Sync Count for Bucket %v "+
+			common.Tracef("Timekeeper: Updating Sync Count for Bucket %v "+
 				"Stream %v. SyncCount %v.", meta.bucket, streamId, syncCount)
 			//update only if its less than trigger count, otherwise it makes no
 			//difference. On long running systems, syncCount may overflow otherwise
@@ -189,7 +189,7 @@ func (tk *timekeeper) handleSync(cmd Message) {
 		}
 	} else {
 		//add a new counter for this bucket
-		log.Printf("Timekeeper: Adding new Sync Count for Bucket %v "+
+		common.Infof("Timekeeper: Adding new Sync Count for Bucket %v "+
 			"Stream %v. SyncCount %v.", meta.bucket, streamId, syncCount)
 		(*bucketSyncCountMap)[meta.bucket] = 1
 	}
@@ -199,7 +199,7 @@ func (tk *timekeeper) handleSync(cmd Message) {
 
 func (tk *timekeeper) handleStreamStart(cmd Message) {
 
-	log.Printf("Timekeeper: Received Stream Start %v", cmd)
+	common.Infof("Timekeeper: Received Stream Start %v", cmd)
 
 	streamId := cmd.(*MsgTKStreamUpdate).GetStreamId()
 
@@ -223,7 +223,7 @@ func (tk *timekeeper) handleStreamStart(cmd Message) {
 
 func (tk *timekeeper) handleStreamStop(cmd Message) {
 
-	log.Printf("Timekeeper: Received Stream Stop %v", cmd)
+	common.Infof("Timekeeper: Received Stream Stop %v", cmd)
 
 	streamId := cmd.(*MsgTKStreamUpdate).GetStreamId()
 
@@ -238,7 +238,7 @@ func (tk *timekeeper) handleStreamStop(cmd Message) {
 
 func (tk *timekeeper) handleFlushDone(cmd Message) {
 
-	log.Printf("Timekeeper: Received Flush Done %v", cmd)
+	common.Infof("Timekeeper: Received Flush Done %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -263,6 +263,9 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 func (tk *timekeeper) sendNewStabilityTS(ts Timestamp, bucket string,
 	streamId StreamId) {
+
+	common.Infof("Timekeeper: Sending new Stability TS %v for Bucket %v "+
+		"Stream %v", ts, bucket, streamId)
 
 	tk.supvRespch <- &MsgTKStabilityTS{ts: ts,
 		bucket:   bucket,

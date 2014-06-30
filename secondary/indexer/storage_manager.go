@@ -168,7 +168,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
-	log.Printf("StorageMgr: Received Command to Update InstanceMap%v", cmd)
+	log.Printf("StorageMgr: Received Command to Update InstanceMap %v", cmd)
 	s.indexInstMap = cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 
 	s.supvCmdch <- &MsgSuccess{}
