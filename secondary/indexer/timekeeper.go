@@ -127,7 +127,7 @@ func (tk *timekeeper) handleSync(cmd Message) {
 
 	if bucketHWTMap, ok = tk.streamBucketHWTMap[streamId]; !ok {
 		common.Fatalf("Timekeeper: Got STREAM_READER_SYNC for unknown stream %v", streamId)
-		tk.supvCmdch <- &MsgError{mType: ERROR,
+		tk.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_TK_UNKNOWN_STREAM,
 				severity: FATAL,
 				category: TIMEKEEPER}}

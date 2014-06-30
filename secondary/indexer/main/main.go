@@ -40,7 +40,7 @@ func main() {
 
 	_, msg := indexer.NewIndexer(uint16(*numVbuckets))
 
-	if msg.GetMsgType() != indexer.SUCCESS {
+	if msg.GetMsgType() != indexer.MSG_SUCCESS {
 		log.Printf("Indexer Failure to Init %v", msg)
 	}
 

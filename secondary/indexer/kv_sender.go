@@ -119,7 +119,7 @@ func (k *kvSender) handleDropIndex(cmd Message) {
 
 		common.Errorf("KVSender: Unknown IndexInstId %v in Drop Index Request", indexInstId)
 
-		k.supvCmdch <- &MsgError{mType: ERROR,
+		k.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_DROP_INDEX_FAILED,
 				severity: FATAL}}
 		return
@@ -165,7 +165,7 @@ func (k *kvSender) handleDropIndex(cmd Message) {
 		common.Errorf("Unexpected Error During Mutation Stream Request %v "+
 			"for Drop Index %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
 
-		k.supvCmdch <- &MsgError{mType: ERROR,
+		k.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_DROP_INDEX_FAILED,
 				severity: FATAL,
 				cause:    err}}
@@ -185,7 +185,7 @@ func (k *kvSender) handleDropIndex(cmd Message) {
 			common.Errorf("Unexpected Error During Close Mutation Stream Request %v "+
 				"Err %v. Resp %v.", mReq, err, mRes)
 
-			k.supvCmdch <- &MsgError{mType: ERROR,
+			k.supvCmdch <- &MsgError{
 				err: Error{code: ERROR_DROP_INDEX_FAILED,
 					severity: FATAL,
 					cause:    err}}
@@ -226,7 +226,7 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 		common.Errorf("Unexpected Error During Failover Log Request %v "+
 			"for Create Index %v. Err %v", fReq, indexInst, err)
 
-		k.supvCmdch <- &MsgError{mType: ERROR,
+		k.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_CREATE_INDEX_FAILED,
 				severity: FATAL,
 				cause:    err}}
@@ -311,7 +311,7 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 		common.Errorf("Unexpected Error During Mutation Stream Request %v "+
 			"for Create Index %v. Err %v", mReq, indexInst, err)
 
-		k.supvCmdch <- &MsgError{mType: ERROR,
+		k.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_CREATE_INDEX_FAILED,
 				severity: FATAL,
 				cause:    err}}
@@ -391,7 +391,7 @@ func (k *kvSender) handleUpdateMutationStreamRequest(cmd Message) {
 		common.Errorf("Unexpected Error During Mutation Stream Request %v "+
 			"for Create Index %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
 
-		k.supvCmdch <- &MsgError{mType: ERROR,
+		k.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_CREATE_INDEX_FAILED,
 				severity: FATAL,
 				cause:    err}}

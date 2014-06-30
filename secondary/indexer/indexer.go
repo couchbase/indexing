@@ -117,7 +117,7 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 
 	var res Message
 	idx.clustMgrSender, res = NewClustMgrSender(idx.clustMgrSenderCmdCh, idx.wrkrRecvCh)
-	if res.GetMsgType() != SUCCESS {
+	if res.GetMsgType() != MSG_SUCCESS {
 		log.Println("Indexer: ClusterMgrSender Init Error", res)
 		return nil, res
 	}
@@ -139,7 +139,7 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 
 	//Start Storage Manager
 	idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh)
-	if res.GetMsgType() != SUCCESS {
+	if res.GetMsgType() != MSG_SUCCESS {
 		log.Println("Indexer: Storage Manager Init Error", res)
 		return nil, res
 	}
@@ -149,21 +149,21 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 
 	//Start Timekeeper
 	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh)
-	if res.GetMsgType() != SUCCESS {
+	if res.GetMsgType() != MSG_SUCCESS {
 		log.Println("Indexer: Timekeeper Init Error", res)
 		return nil, res
 	}
 
 	//Start KV Sender
 	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, numVbuckets)
-	if res.GetMsgType() != SUCCESS {
+	if res.GetMsgType() != MSG_SUCCESS {
 		log.Println("Indexer: KVSender Init Error", res)
 		return nil, res
 	}
 
 	//Start Admin port listener
 	idx.adminMgr, res = NewAdminManager(idx.adminMgrCmdCh, idx.adminRecvCh)
-	if res.GetMsgType() != SUCCESS {
+	if res.GetMsgType() != MSG_SUCCESS {
 		log.Println("Indexer: Admin Manager Init Error", res)
 		return nil, res
 	}
@@ -171,14 +171,14 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh,
 		numVbuckets)
-	if res.GetMsgType() != SUCCESS {
+	if res.GetMsgType() != MSG_SUCCESS {
 		log.Println("Indexer: Mutation Manager Init Error", res)
 		return nil, res
 	}
 
 	//Start CbqBridge
 	idx.mutMgr, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh)
-	if res.GetMsgType() != SUCCESS {
+	if res.GetMsgType() != MSG_SUCCESS {
 		log.Println("Indexer: CbqBridge Init Error", res)
 		return nil, res
 	}
@@ -268,7 +268,7 @@ func (idx *indexer) listenWorkerMsgs() {
 			if ok {
 				//handle high priority messages
 				switch msg.GetMsgType() {
-				case ERROR:
+				case MSG_ERROR:
 					err := msg.(*MsgError).GetError()
 					if err.code == ERROR_MUT_MGR_PANIC {
 						close(idx.mutMgrExitCh)
@@ -397,7 +397,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	idx.storageMgrCmdCh <- msgUpdateIndexInstMap
 	if resp, ok := <-idx.storageMgrCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleCreateIndex: Error received from Storage Manager"+
 				"processing Msg %v Err %v. Aborted.", msgUpdateIndexInstMap, resp)
 			return
@@ -413,7 +413,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	idx.storageMgrCmdCh <- msgUpdateIndexPartnMap
 	if resp, ok := <-idx.storageMgrCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleCreateIndex: Error received from Storage Manager"+
 				"processing Msg %v Err %v. Aborted.", msgUpdateIndexPartnMap, resp)
 			return
@@ -437,7 +437,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		idx.tkCmdCh <- tkCmd
 		if resp, ok := <-idx.tkCmdCh; ok {
 
-			if resp.GetMsgType() != SUCCESS {
+			if resp.GetMsgType() != MSG_SUCCESS {
 				log.Printf("handleCreateIndex: Error received from Timekeeper"+
 					"processing Msg %v Err %v. Aborted.", tkCmd, resp)
 				return
@@ -468,7 +468,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	idx.mutMgrCmdCh <- mutMgrCmd
 	if resp, ok := <-idx.mutMgrCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleCreateIndex: Error received from Mutation Mgr "+
 				"processing Msg %v Err %v. Aborted.", mutMgrCmd, resp)
 			return
@@ -484,7 +484,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	idx.mutMgrCmdCh <- msgUpdateIndexInstMap
 	if resp, ok := <-idx.mutMgrCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleCreateIndex: Error received from Mutation Manager"+
 				"processing Msg %v Err %v. Aborted.", msgUpdateIndexInstMap, resp)
 			return
@@ -498,7 +498,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	idx.mutMgrCmdCh <- msgUpdateIndexPartnMap
 	if resp, ok := <-idx.mutMgrCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleCreateIndex: Error received from Mutation Manager"+
 				"processing Msg %v Err %v. Aborted.", msgUpdateIndexPartnMap, resp)
 			return
@@ -519,7 +519,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	if resp, ok := <-idx.kvSenderCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleCreateIndex: Error received from KV Sender"+
 				"processing Msg %v Err %v. Aborted.", msg, resp)
 			return
@@ -543,7 +543,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 
 	if resp, ok := <-idx.kvSenderCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleDropIndex: Error received from KV Sender"+
 				"processing Msg %v Err %v.", msg, resp)
 		}
@@ -562,7 +562,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	idx.storageMgrCmdCh <- msgUpdateIndexInstMap
 	if resp, ok := <-idx.storageMgrCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleDropIndex: Error received from Storage Manager"+
 				"processing Msg %v Err %v.", msgUpdateIndexInstMap, resp)
 		}
@@ -576,7 +576,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	idx.storageMgrCmdCh <- msgUpdateIndexPartnMap
 	if resp, ok := <-idx.storageMgrCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleDropIndex: Error received from Storage Manager"+
 				"processing Msg %v Err %v.", msgUpdateIndexPartnMap, resp)
 		}
@@ -594,7 +594,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		idx.tkCmdCh <- tkCmd
 		if resp, ok := <-idx.tkCmdCh; ok {
 
-			if resp.GetMsgType() != SUCCESS {
+			if resp.GetMsgType() != MSG_SUCCESS {
 				log.Printf("handleDropIndex: Error received from Timekeeper"+
 					"processing Msg %v Err %v.", tkCmd, resp)
 			}
@@ -618,7 +618,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	idx.mutMgrCmdCh <- mutMgrCmd
 	if resp, ok := <-idx.mutMgrCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleDropIndex: Error received from Mutation Mgr "+
 				"processing Msg %v Err %v.", mutMgrCmd, resp)
 		}
@@ -632,7 +632,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	idx.mutMgrCmdCh <- msgUpdateIndexInstMap
 	if resp, ok := <-idx.mutMgrCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleDropIndex: Error received from Mutation Manager"+
 				"processing Msg %v Err %v.", msgUpdateIndexInstMap, resp)
 		}
@@ -644,7 +644,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	idx.mutMgrCmdCh <- msgUpdateIndexPartnMap
 	if resp, ok := <-idx.mutMgrCmdCh; ok {
 
-		if resp.GetMsgType() != SUCCESS {
+		if resp.GetMsgType() != MSG_SUCCESS {
 			log.Printf("handleDropIndex: Error received from Mutation Manager"+
 				"processing Msg %v Err %v.", msgUpdateIndexPartnMap, resp)
 		}

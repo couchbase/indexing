@@ -72,7 +72,7 @@ func NewSlabManager(startChunkSize int, slabSize int, maxMemAlloc uint64) (SlabM
 
 	//init error from slab library
 	if sm.arena == nil {
-		return nil, &MsgError{mType: ERROR,
+		return nil, &MsgError{
 			err: Error{code: ERROR_SLAB_INIT,
 				severity: FATAL,
 				category: SLAB_MANAGER}}
@@ -90,7 +90,7 @@ func (sm *slabManager) AllocBuf(bufSize int) ([]byte, Message) {
 
 	//bad alloc request
 	if bufSize <= 0 {
-		return nil, &MsgError{mType: ERROR,
+		return nil, &MsgError{
 			err: Error{code: ERROR_SLAB_BAD_ALLOC_REQUEST,
 				severity: NORMAL,
 				category: SLAB_MANAGER}}
@@ -102,7 +102,7 @@ func (sm *slabManager) AllocBuf(bufSize int) ([]byte, Message) {
 	//if the underlying library is in bad shape, return internal error
 	//caller has to start a new slab manager
 	if sm.internalErr {
-		return nil, &MsgError{mType: ERROR,
+		return nil, &MsgError{
 			err: Error{code: ERROR_SLAB_INTERNAL_ERROR,
 				severity: FATAL,
 				category: SLAB_MANAGER}}
@@ -114,7 +114,7 @@ func (sm *slabManager) AllocBuf(bufSize int) ([]byte, Message) {
 
 	//return error if caller has exhausted quota
 	if sm.currUserAllocatedMemory >= sm.maxMemAlloc {
-		return nil, &MsgError{mType: ERROR,
+		return nil, &MsgError{
 			err: Error{code: ERROR_SLAB_MEM_LIMIT_EXCEED,
 				severity: NORMAL,
 				category: SLAB_MANAGER}}
@@ -124,7 +124,7 @@ func (sm *slabManager) AllocBuf(bufSize int) ([]byte, Message) {
 	buf := sm.arena.Alloc(bufSize)
 
 	if buf == nil {
-		return nil, &MsgError{mType: ERROR,
+		return nil, &MsgError{
 			err: Error{code: ERROR_SLAB_INTERNAL_ALLOC_ERROR,
 				severity: FATAL,
 				category: SLAB_MANAGER}}

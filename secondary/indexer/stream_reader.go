@@ -54,7 +54,7 @@ func CreateMutationStreamReader(streamId StreamId, bucketQueueMap BucketQueueMap
 	stream, err := NewMutationStream(string(StreamAddrMap[streamId]), streamMutch, streamRespch)
 	if err != nil {
 		//return stream init error
-		msgErr := &MsgError{mType: ERROR,
+		msgErr := &MsgError{
 			err: Error{code: ERROR_STREAM_INIT,
 				severity: FATAL,
 				category: STREAM_READER,
@@ -120,7 +120,7 @@ func (r *mutationStreamReader) run() {
 				//stream library has closed this channel indicating unexpected stream closure
 				//send the message to supervisor
 				common.Errorf("Unexpected Stream Client Mutation  Channel Close for Stream %v", r.streamId)
-				msgErr := &MsgError{mType: ERROR,
+				msgErr := &MsgError{
 					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
 						severity: FATAL,
 						category: STREAM_READER}}
@@ -134,7 +134,7 @@ func (r *mutationStreamReader) run() {
 				//stream library has closed this channel indicating unexpected stream closure
 				//send the message to supervisor
 				common.Errorf("Unexpected Stream Client Info Channel Close for Stream %v", r.streamId)
-				msgErr := &MsgError{mType: ERROR,
+				msgErr := &MsgError{
 					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
 						severity: FATAL,
 						category: STREAM_READER}}
@@ -300,7 +300,7 @@ func (r *mutationStreamReader) handleStreamError(msg interface{}) {
 
 	case ShutdownDaemon:
 		common.Infof("MutationStreamReader: Received ShutdownDaemon from Client for Stream %v.", r.streamId)
-		msgErr = &MsgError{mType: ERROR,
+		msgErr = &MsgError{
 			err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
 				severity: FATAL,
 				category: STREAM_READER}}
@@ -308,14 +308,14 @@ func (r *mutationStreamReader) handleStreamError(msg interface{}) {
 		//TODO send more information upstream for RepairStream
 	case RestartVbuckets:
 		common.Infof("MutationStreamReader: Received RestartVbuckets from Client for Stream %v.", r.streamId)
-		msgErr = &MsgError{mType: ERROR,
+		msgErr = &MsgError{
 			err: Error{code: ERROR_STREAM_READER_RESTART_VBUCKETS,
 				severity: FATAL,
 				category: STREAM_READER}}
 
 	default:
 		common.Errorf("MutationStreamReader: Received Unknown Message from Client for Stream %v.", r.streamId)
-		msgErr = &MsgError{mType: ERROR,
+		msgErr = &MsgError{
 			err: Error{code: ERROR_STREAM_READER_UNKNOWN_ERROR,
 				severity: FATAL,
 				category: STREAM_READER}}
@@ -344,7 +344,7 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 
 	default:
 		common.Errorf("MutationStreamReader: handleSupervisorCommands Received Unknown Command %v", cmd)
-		return &MsgError{mType: ERROR,
+		return &MsgError{
 			err: Error{code: ERROR_STREAM_READER_UNKNOWN_COMMAND,
 				severity: NORMAL,
 				category: STREAM_READER}}

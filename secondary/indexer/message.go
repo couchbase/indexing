@@ -18,9 +18,9 @@ type MsgType int16
 const (
 
 	//General Messages
-	SUCCESS = iota
-	ERROR
-	TIMESTAMP
+	MSG_SUCCESS = iota
+	MSG_ERROR
+	MSG_TIMESTAMP
 
 	//Component specific messages
 
@@ -90,12 +90,11 @@ func (m *MsgGeneral) GetMsgType() MsgType {
 
 //Error Message
 type MsgError struct {
-	mType MsgType
-	err   Error
+	err Error
 }
 
 func (m *MsgError) GetMsgType() MsgType {
-	return m.mType
+	return MSG_ERROR
 }
 
 func (m *MsgError) GetError() Error {
@@ -107,7 +106,7 @@ type MsgSuccess struct {
 }
 
 func (m *MsgSuccess) GetMsgType() MsgType {
-	return SUCCESS
+	return MSG_SUCCESS
 }
 
 //Timestamp Message
