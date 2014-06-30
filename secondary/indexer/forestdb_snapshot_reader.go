@@ -44,7 +44,7 @@ func (s *fdbSnapshot) Lookup(key Key) (chan Value, chan error) {
 	chval := make(chan Value)
 	cherr := make(chan error)
 
-	log.Println("Received Lookup Query for Key %s", key.String())
+	log.Printf("Received Lookup Query for Key %s", key.String())
 	go s.GetValueSetForKeyRange(key, key, Both, chval, cherr)
 	return chval, cherr
 }
@@ -109,7 +109,7 @@ func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 	}
 
 	var key Key
-	for it = it; it.Valid(); it.Next() {
+	for ; it.Valid(); it.Next() {
 		if key, err = NewKeyFromEncodedBytes(it.Key()); err != nil {
 			log.Printf("Error Converting from bytes %v to key %v. Skipping row", it.Key(), err)
 			continue
@@ -177,7 +177,7 @@ func (s *fdbSnapshot) GetValueSetForKeyRange(low Key, high Key,
 
 	var key Key
 	var val Value
-	for it = it; it.Valid(); it.Next() {
+	for ; it.Valid(); it.Next() {
 		if key, err = NewKeyFromEncodedBytes(it.Key()); err != nil {
 			log.Printf("Error Converting from bytes %v to key %v. Skipping row", it.Key(), err)
 			continue
@@ -249,7 +249,7 @@ func (s *fdbSnapshot) CountRange(low Key, high Key, inclusion Inclusion) (
 	}
 
 	var key Key
-	for it = it; it.Valid(); it.Next() {
+	for ; it.Valid(); it.Next() {
 		if key, err = NewKeyFromEncodedBytes(it.Key()); err != nil {
 			log.Printf("Error Converting from bytes %v to key %v. Skipping row", it.Key(), err)
 			continue

@@ -45,12 +45,12 @@ func (s *fdbSnapshot) Open() error {
 		var err error
 		s.main, err = s.main.SnapshotOpen(s.mainSeqNum)
 		if err != nil {
-			log.Println("ForestDBSnapshot: Unexpected Error Opening Main DB Snapshot %v", err)
+			log.Printf("ForestDBSnapshot: Unexpected Error Opening Main DB Snapshot %v", err)
 			return err
 		}
 		s.back, err = s.back.SnapshotOpen(s.backSeqNum)
 		if err != nil {
-			log.Println("ForestDBSnapshot: Unexpected Error Opening Back DB Snapshot %v", err)
+			log.Printf("ForestDBSnapshot: Unexpected Error Opening Back DB Snapshot %v", err)
 			return err
 		}
 	}
@@ -115,7 +115,7 @@ func (s *fdbSnapshot) Close() error {
 		if s.main != nil {
 			err := s.main.Close()
 			if err != nil {
-				log.Println("ForestDBSnapshot: Unexpected error closing Main DB Snapshot %v", err)
+				log.Printf("ForestDBSnapshot: Unexpected error closing Main DB Snapshot %v", err)
 				return err
 			}
 		} else {
@@ -127,7 +127,7 @@ func (s *fdbSnapshot) Close() error {
 		if s.back != nil {
 			err := s.back.Close()
 			if err != nil {
-				log.Println("ForestDBSnapshot: Unexpected error closing Back DB Snapshot %v", err)
+				log.Printf("ForestDBSnapshot: Unexpected error closing Back DB Snapshot %v", err)
 				return err
 			}
 		} else {

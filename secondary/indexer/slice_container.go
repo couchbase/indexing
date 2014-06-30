@@ -101,7 +101,7 @@ func (sc *HashedSliceContainer) GetSliceById(id SliceId) Slice {
 	if s, ok := sc.SliceMap[id]; ok {
 		return s
 	} else {
-		log.Println("HashedSliceContainer: Invalid Slice Id %v", id)
+		log.Printf("HashedSliceContainer: Invalid Slice Id %v", id)
 		return nil
 	}
 }

@@ -84,7 +84,7 @@ func (pc *KeyPartitionContainer) GetEndpointsByPartitionId(id PartitionId) []End
 	if p, ok := pc.PartitionMap[id]; ok {
 		return p.Endpoints()
 	} else {
-		log.Println("KeyPartitionContainer: Invalid Partition Id %v", id)
+		log.Printf("KeyPartitionContainer: Invalid Partition Id %v", id)
 		return nil
 	}
 }
@@ -105,7 +105,7 @@ func (pc *KeyPartitionContainer) GetPartitionById(id PartitionId) PartitionDefn 
 	if p, ok := pc.PartitionMap[id]; ok {
 		return p
 	} else {
-		log.Println("KeyPartitionContainer: Invalid Partition Id %v", id)
+		log.Printf("KeyPartitionContainer: Invalid Partition Id %v", id)
 		return nil
 	}
 }
