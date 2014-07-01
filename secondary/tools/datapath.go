@@ -14,17 +14,32 @@ import (
 var cluster = "localhost:9000"
 var pooln = "default"
 var bucketn = "beer-sample"
-var kvaddrs = []string{"127.0.0.1:12000"}
-var adminport = "localhost:9999"
-var endpoint = "localhost:9998"
-var coordEndpoint = "localhost:9997"
+var kvaddrs1 = []string{"127.0.0.1:12000"}
+var kvaddrs2 = []string{"127.0.0.1:12002"}
+var adminport1 = "localhost:9010"
+var adminport2 = "localhost:9011"
+var endpoint = "localhost:9020"
+var coordEndpoint = "localhost:9021"
 var vbnos = []uint16{0, 1, 2, 3, 4, 5, 6, 7}
 var done = make(chan bool)
 
 var instances = []uint64{0x11, 0x12}
 
 func main() {
-	c.SetLogLevel(c.LogLevelTrace)
+	c.SetLogLevel(c.LogLevelDebug)
+	go endpointServer(endpoint)
+	go endpointServer(coordEndpoint)
+
+	time.Sleep(100 * time.Millisecond)
+
+	doProjector(cluster, kvaddrs1, adminport1)
+	doProjector(cluster, kvaddrs2, adminport2)
+
+	<-done
+	<-done
+}
+
+func doProjector(cluster string, kvaddrs []string, adminport string) {
 	projector.NewProjector(cluster, kvaddrs, adminport)
 	aport := ap.NewHTTPClient("http://"+adminport, "/adminport/")
 	fReq := protobuf.FailoverLogRequest{
@@ -41,8 +56,6 @@ func main() {
 		vbuuids = append(vbuuids, flog.Vbuuids[len(flog.Vbuuids)-1])
 	}
 
-	go endpointServer(endpoint)
-	go endpointServer(coordEndpoint)
 	time.Sleep(100 * time.Millisecond)
 
 	mReq := makeStartRequest(vbuuids)
@@ -50,8 +63,6 @@ func main() {
 	if err := aport.Request(mReq, &mRes); err != nil {
 		log.Fatal(err)
 	}
-	<-done
-	<-done
 }
 
 func makeStartRequest(vbuuids []uint64) *protobuf.MutationStreamRequest {

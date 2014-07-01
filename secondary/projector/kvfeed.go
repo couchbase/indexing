@@ -264,6 +264,7 @@ func (kvfeed *KVFeed) requestFeed(
 	if vbnos == nil {
 		return nil, nil, ErrorVBmap
 	}
+	c.Debugf("%v vbuckets %v\n", prefix, vbnos)
 
 	// execute the request
 	ts = ts.SelectByVbuckets(vbnos)
