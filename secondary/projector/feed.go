@@ -601,13 +601,13 @@ func (feed *Feed) startEndpoint(raddr string, coord bool) (endpoint *Endpoint, e
 	if err != nil {
 		return nil, err
 	}
-	// send vbmap to the new endpoint.
-	for _, kvTs := range feed.kvTimestamps {
-		vbmap := feed.vbTs2Vbmap(kvTs)
-		if err = endpoint.SendVbmap(vbmap); err != nil {
-			return nil, err
-		}
-	}
+	// TODO: send vbmap to the new endpoint.
+	// for _, kvTs := range feed.kvTimestamps {
+	//     vbmap := feed.vbTs2Vbmap(kvTs)
+	//     if err = endpoint.SendVbmap(vbmap); err != nil {
+	//         return nil, err
+	//     }
+	// }
 	return endpoint, nil
 }
 

@@ -115,8 +115,8 @@ func (vr *VbucketRoutine) Close() error {
 // TODO: statistics on data path must be fast.
 func (vr *VbucketRoutine) run(reqch chan []interface{}, endpoints map[string]*Endpoint, engines map[uint64]*Engine) {
 	var seqno uint64
+	var heartBeat <-chan time.Time
 
-	heartBeat := time.After(c.VbucketSyncTimeout * time.Millisecond)
 	stats := vr.stats
 
 loop:
@@ -151,15 +151,19 @@ loop:
 				m := msg[1].(*mc.UprEvent)
 				seqno = m.Seqno
 				// broadcast StreamBegin
-				if m.Opcode == mc.UprStreamRequest {
+				switch m.Opcode {
+				case mc.UprStreamRequest:
 					vr.sendToEndpoints(endpoints, func() *c.KeyVersions {
 						kv := c.NewKeyVersions(seqno, m.Key, 1)
 						kv.AddStreamBegin()
 						return kv
 					})
+					tickTs := c.VbucketSyncTimeout * time.Millisecond
+					heartBeat = time.Tick(tickTs)
 					stats.Incr("/begins", 1)
 					break // breaks out of select{}
 				}
+
 				// prepare a KeyVersions for each endpoint.
 				kvForEndpoints := make(map[string]*c.KeyVersions)
 				for raddr := range endpoints {
@@ -188,8 +192,6 @@ loop:
 			}
 
 		case <-heartBeat:
-			// first reload downstream heart-beat.
-			heartBeat = time.After(c.VbucketSyncTimeout * time.Millisecond)
 			if endpoints != nil {
 				vr.sendToEndpoints(endpoints, func() *c.KeyVersions {
 					kv := c.NewKeyVersions(seqno, nil, 1)

@@ -23,8 +23,8 @@ func (b *endpointBuffers) addKeyVersions(bucket string, vbno uint16, vbuuid uint
 		nMuts := 10 // TODO: avoid magic numbers
 		b.vbs[uuid] = c.NewVbKeyVersions(bucket, vbno, vbuuid, nMuts)
 	}
-	c.Tracef("added %v keyversions for vbucket %v to %q",
-		len(kv.Commands), vbno, b.raddr)
+	c.Tracef("added %v keyversions <%v:%v:%v> to %q",
+		len(kv.Commands), vbno, kv.Seqno, kv.Commands, b.raddr)
 	b.vbs[uuid].AddKeyVersions(kv)
 }
 
