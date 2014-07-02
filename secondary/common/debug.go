@@ -1,6 +1,7 @@
 package common
 
 import (
+	"io/ioutil"
 	"log"
 	"os"
 )
@@ -25,6 +26,12 @@ func init() {
 // LogLevel returns current log level
 func LogLevel() int {
 	return logLevel
+}
+
+// LogIgnore all log messages.
+func LogIgnore() {
+	log.SetOutput(ioutil.Discard)
+	logger = log.New(ioutil.Discard, "", log.Lmicroseconds)
 }
 
 // SetLogLevel sets current log level
