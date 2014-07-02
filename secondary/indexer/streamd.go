@@ -51,7 +51,6 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
 	"io"
-	"log"
 	"net"
 	"time"
 )
@@ -127,7 +126,7 @@ func NewMutationStream(
 		reqch:     make(chan []interface{}, c.GenserverChannelSize),
 		finch:     make(chan bool),
 		conns:     make(map[string]netConn),
-		logPrefix: fmt.Sprintf("[endpoint %q]", laddr),
+		logPrefix: fmt.Sprintf("[dataport %q]", laddr),
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
 		return nil, err
@@ -142,10 +141,11 @@ func (s *MutationStream) addUuids(started, uuids []*bucketVbno) ([]*bucketVbno, 
 	for _, adduuid := range started {
 		for _, uuid := range uuids {
 			if uuid.bucket == adduuid.bucket && uuid.vbno == adduuid.vbno {
-				log.Printf("%v, error duplicate vbucket %v", s.logPrefix, uuid)
+				c.Errorf("%v duplicate vbucket %v\n", s.logPrefix, uuid)
 				return nil, ErrorDuplicateStreamBegin
 			}
 		}
+		c.Infof("%v added vbucket %v\n", s.logPrefix, adduuid)
 	}
 	uuids = append(uuids, started...)
 	return uuids, nil
@@ -193,7 +193,7 @@ func (s *MutationStream) genServer(reqch chan []interface{}, sbch chan<- interfa
 		if r := recover(); r != nil {
 			msg := streamServerMessage{cmd: streamgCmdClose}
 			s.handleClose(msg)
-			log.Printf("%v gen-server fatal panic: %v\n", s.logPrefix, r)
+			c.Errorf("%v gen-server fatal panic: %v\n", s.logPrefix, r)
 		}
 	}()
 
@@ -255,7 +255,7 @@ loop:
 			}
 			if appmsg != nil {
 				s.sbch <- appmsg
-				log.Printf("appmsg: %T:%+v\n", appmsg, appmsg)
+				c.Infof("appmsg: %T:%+v\n", appmsg, appmsg)
 			}
 		}
 	}
@@ -266,19 +266,19 @@ loop:
 // handle new connection
 func (s *MutationStream) handleNewConnection(msg streamServerMessage) (interface{}, error) {
 	conn := msg.args[0].(net.Conn)
-	log.Printf("%v, connection request from %q\n", s.logPrefix, msg.raddr)
+	c.Infof("%v connection request from %q\n", s.logPrefix, msg.raddr)
 	if _, _, err := net.SplitHostPort(msg.raddr); err != nil {
-		log.Printf("%v, error unable to parse %q\n", s.logPrefix, msg.raddr)
+		c.Errorf("%v unable to parse %q\n", s.logPrefix, msg.raddr)
 		return nil, err
 	}
 	if _, ok := s.conns[msg.raddr]; ok {
-		log.Printf("%v, error %q already active\n", s.logPrefix, msg.raddr)
+		c.Errorf("%v %q already active\n", s.logPrefix, msg.raddr)
 		return nil, ErrorDuplicateClient
 	}
 	// connection accepted
 	worker := make(chan interface{}, 10) // TODO: avoid magic numbers
 	s.conns[msg.raddr] = netConn{conn: conn, worker: worker, active: false}
-	log.Printf("%v, total active connections %v\n", s.logPrefix, len(s.conns))
+	c.Infof("%v total active connections %v\n", s.logPrefix, len(s.conns))
 	return nil, nil
 }
 
@@ -286,11 +286,11 @@ func (s *MutationStream) handleNewConnection(msg streamServerMessage) (interface
 func (s *MutationStream) handleClose(msg streamServerMessage) (appmsg interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("%v, handleClose fatal panic: %v\n", s.logPrefix, r)
+			c.Errorf("%v handleClose fatal panic: %v\n", s.logPrefix, r)
 		}
 	}()
 
-	log.Printf("%v, shutting down\n", s.logPrefix)
+	c.Infof("%v shutting down\n", s.logPrefix)
 	s.lis.Close()                          // close listener daemon
 	closeConnections(s.logPrefix, s.conns) // close workers
 	s.lis, s.conns = nil, nil
@@ -300,7 +300,7 @@ func (s *MutationStream) handleClose(msg streamServerMessage) (appmsg interface{
 
 // start a connection worker to read mutation message for a subset of vbuckets.
 func (s *MutationStream) startWorker(raddr string) {
-	log.Printf("%v, starting worker for connection %q\n", s.logPrefix, raddr)
+	c.Infof("%v startinr worker for connection %q\n", s.logPrefix, raddr)
 	nc := s.conns[raddr]
 	go doReceive(s.logPrefix, nc, s.mutch, s.reqch)
 	nc.active = true
@@ -319,21 +319,21 @@ func (s *MutationStream) jumboErrorHandler(
 	// connection is already gone. TODO: make the following error message as
 	// fatal.
 	if _, ok := s.conns[raddr]; ok == false {
-		log.Printf("%v, fatal remote %q already gone\n", s.logPrefix, raddr)
+		c.Errorf("%v fatal remote %q already gone\n", s.logPrefix, raddr)
 		return nil
 	}
 
 	if err == io.EOF {
-		log.Printf("%v, error remote %q closed\n", s.logPrefix, raddr)
+		c.Errorf("%v remote %q closed\n", s.logPrefix, raddr)
 		whatJumbo = "closeremote"
 	} else if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
-		log.Printf("%v, error remote %q timedout\n", s.logPrefix, raddr)
+		c.Errorf("%v remote %q timedout\n", s.logPrefix, raddr)
 		whatJumbo = "closeremote"
 	} else if err != nil {
-		log.Printf("%v, error `%v` from %q\n", s.logPrefix, err, raddr)
+		c.Errorf("%v `%v` from %q\n", s.logPrefix, err, raddr)
 		whatJumbo = "closeall"
 	} else {
-		log.Printf("no error, why did you call jumbo !!!\n")
+		c.Errorf("%v no error why did you call jumbo !!!\n", s.logPrefix)
 		return
 	}
 
@@ -372,7 +372,7 @@ func closeRemoteHost(prefix string, raddr string, conns map[string]netConn) ([]s
 	recoverClose := func(conn net.Conn, craddr string) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("%v, error closing connection %q", prefix, craddr)
+				c.Errorf("%v panic closing connection %q", prefix, craddr)
 			}
 			conn.Close()
 		}()
@@ -388,10 +388,10 @@ func closeRemoteHost(prefix string, raddr string, conns map[string]netConn) ([]s
 			close(nc.worker)
 			delete(conns, craddr)
 			clientRaddrs = append(clientRaddrs, craddr)
-			log.Printf("%v, closed connection %q\n", prefix, craddr)
+			c.Infof("%v closed connection %q\n", prefix, craddr)
 		}
 	} else {
-		log.Printf("%v, fatal unknown connection %q\n", prefix, raddr)
+		c.Errorf("%v fatal unknown connection %q\n", prefix, raddr)
 	}
 	return clientRaddrs, conns
 }
@@ -446,7 +446,7 @@ func vbucketsForRemote(uuids []*bucketVbno, buckets map[string]*RestartVbuckets)
 // server is shutdown and reason notified back to application.
 func streamListener(laddr string, lis net.Listener, reqch chan []interface{}) {
 	defer func() {
-		log.Printf("%v, listener fatal panic: %v", laddr, recover())
+		c.Errorf("%v listener fatal panic: %v", laddr, recover())
 		msg := streamServerMessage{cmd: streamgCmdError, err: ErrorStreamdExit}
 		reqch <- []interface{}{msg}
 	}()
@@ -481,33 +481,34 @@ func doReceive(prefix string, nc netConn, mutch chan<- []*protobuf.VbKeyVersions
 	updateActiveVbuckets := func(vbs []*protobuf.VbKeyVersions) {
 		for _, vb := range vbs {
 			bucket, vbno := vb.GetBucketname(), uint16(vb.GetVbucket())
-			s, e := vbucketSchedule(vb)
-			if s != nil {
-				started = append(started, &bucketVbno{bucket, vbno})
-			} else if e != nil {
-				finished = append(finished, &bucketVbno{bucket, vbno})
+			c.Tracef("%v {%v, %v}\n", prefix, bucket, vbno)
+			// TODO: optimize this.
+			for _, kv := range vb.GetKvs() {
+				if byte(kv.GetCommands()[0]) == c.StreamBegin {
+					started = append(started, &bucketVbno{bucket, vbno})
+				} else if byte(kv.GetCommands()[0]) == c.StreamEnd {
+					finished = append(finished, &bucketVbno{bucket, vbno})
+				}
 			}
 		}
 	}
 
 loop:
 	for {
-		started, finished = started[:0], finished[:0]
 		timeoutMs := c.StreamReadDeadline * time.Millisecond
 		conn.SetReadDeadline(time.Now().Add(timeoutMs))
 		msg.cmd, msg.err, msg.args = 0, nil, nil
 		if payload, err := pkt.Receive(conn); err != nil {
 			msg.cmd, msg.err = streamgCmdError, err
 			reqch <- []interface{}{msg}
-			log.Printf(
-				"%v, worker %q exiting with error %v\n", prefix, msg.raddr, err)
+			c.Errorf("%v worker %q exited %v\n", prefix, msg.raddr, err)
 			break loop
 
 		} else if vbmap, ok := payload.(*protobuf.VbConnectionMap); ok {
 			msg.cmd, msg.args = streamgCmdVbmap, []interface{}{vbmap}
 			reqch <- []interface{}{msg}
-			log.Printf(
-				"%v, worker %q exiting with `streamgCmdVbmap`\n",
+			c.Infof(
+				"%v worker %q exiting with `streamgCmdVbmap`\n",
 				prefix, msg.raddr)
 			break loop
 
@@ -519,26 +520,23 @@ loop:
 					msg.cmd = streamgCmdVbcontrol
 					msg.args = []interface{}{started, finished}
 					reqch <- []interface{}{msg}
-					log.Printf(
-						"%v, worker %q exiting with `streamgCmdVbcontrol`\n",
-						prefix, msg.raddr)
+					c.Infof(
+						"%v worker %q exiting with `streamgCmdVbcontrol` %v\n",
+						prefix, msg.raddr, len(started))
 					break loop
 				}
 
 			case <-worker:
 				msg.cmd, msg.err = streamgCmdError, ErrorStreamdWorkerKilled
 				reqch <- []interface{}{msg}
-				log.Printf(
-					"%v, worker %q exiting with error %v\n",
-					prefix, msg.raddr, err)
+				c.Errorf("%v worker %q exited %v\n", prefix, msg.raddr, err)
 				break loop
 			}
 
 		} else {
 			msg.cmd, msg.err = streamgCmdError, ErrorStreamPayload
 			reqch <- []interface{}{msg}
-			log.Printf(
-				"%v, worker %q exiting with error %v\n", prefix, msg.raddr, err)
+			c.Errorf("%v worker %q exited %v\n", prefix, msg.raddr, err)
 			break loop
 		}
 	}

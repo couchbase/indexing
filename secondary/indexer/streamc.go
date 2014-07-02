@@ -32,7 +32,6 @@ package indexer
 import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
-	"log"
 	"net"
 	"time"
 )
@@ -71,13 +70,13 @@ func NewStreamClient(raddr string, n int, flags StreamTransportFlag) (c *StreamC
 		conn2Vbs:  make(map[int][]string),
 		reqch:     make(chan []interface{}, common.KeyVersionsChannelSize),
 		finch:     make(chan bool),
-		logPrefix: fmt.Sprintf("StreamClient to %q", raddr),
+		logPrefix: fmt.Sprintf("[StreamClient:%q]", raddr),
 	}
 	// open connections with remote
 	size := common.KeyVersionsChannelSize
 	for i := 0; i < n; i++ {
 		if conn, err = net.Dial("tcp", raddr); err != nil {
-			common.Errorf("%v error %v Dialing to %q\n", c.logPrefix, raddr, err)
+			common.Errorf("%v %v Dialing to %q\n", c.logPrefix, raddr, err)
 			c.doClose()
 			return nil, err
 		}
@@ -98,6 +97,12 @@ func NewStreamClient(raddr string, n int, flags StreamTransportFlag) (c *StreamC
 func (c *StreamClient) addVbucket(uuid string) (chan interface{}, int) {
 	idx, min := 0, len(c.conn2Vbs[0])
 	for i, uuids := range c.conn2Vbs {
+		for _, activeUuid := range uuids { // error handling
+			if activeUuid == uuid {
+				err := fmt.Errorf("%v duplicated %v", c.logPrefix, uuid)
+				panic(err)
+			}
+		}
 		if len(uuids) < min {
 			idx, min = i, len(uuids)
 		}
@@ -164,7 +169,7 @@ func (c *StreamClient) Close() error {
 func (c *StreamClient) genServer(reqch chan []interface{}, quitch chan []string) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			log.Printf("%v has paniced: %v\n", c.logPrefix, r)
+			common.Errorf("%v has paniced: %v\n", c.logPrefix, r)
 		}
 		c.doClose()
 	}()
@@ -221,14 +226,20 @@ func (c *StreamClient) sendVbmap(
 	var idx int
 
 	// connection channels.
+	idxMap := make(map[int][]uint16)
 	for i, vbno := range vbmap.Vbuckets {
 		uuid := common.ID(vbmap.Bucket, vbno)
 		vbChans[uuid], idx = c.addVbucket(uuid)
 		vbmaps[idx].Vbuckets = append(vbmaps[idx].Vbuckets, vbno)
 		vbmaps[idx].Vbuuids = append(vbmaps[idx].Vbuuids, vbmap.Vbuuids[i])
-		log.Printf(
-			"%v, mapped vbucket {%v,%v} on conn%v\n",
-			c.logPrefix, vbmap.Bucket, vbno, idx)
+		if _, ok := idxMap[idx]; !ok {
+			idxMap[idx] = make([]uint16, 0)
+		}
+	}
+	for idx, vbnos := range idxMap {
+		common.Tracef(
+			"%v mapped vbucket {%v,%v} on conn%v\n",
+			c.logPrefix, vbmap.Bucket, vbnos, idx)
 	}
 
 	// send the new vbmap to the other end, for each connection.
@@ -249,7 +260,7 @@ func (c *StreamClient) sendKeyVersions(
 
 	for _, vb := range vbs {
 		if len(vb.Kvs) == 0 {
-			log.Printf("warning, empty mutations\n")
+			common.Warnf("%v empty mutations\n", c.logPrefix)
 			continue
 		}
 
@@ -257,10 +268,11 @@ func (c *StreamClient) sendKeyVersions(
 
 		if vb.Kvs[0].Commands[0] == common.StreamBegin { // first mutation
 			vbChans[vb.Uuid], idx = c.addVbucket(vb.Uuid)
-			log.Printf(
-				"%v, mapped vbucket {%v,%v} on conn%v\n",
+			common.Tracef(
+				"%v mapped vbucket {%v,%v} on conn%v\n",
 				c.logPrefix, vb.Bucket, vb.Vbucket, idx)
 		}
+
 		if vb.Kvs[l-1].Commands[0] == common.StreamEnd { // last mutation
 			fin = true
 		}
@@ -268,10 +280,11 @@ func (c *StreamClient) sendKeyVersions(
 		select {
 		case vbChans[vb.Uuid] <- vb:
 			if fin {
-				log.Printf(c.logPrefix, vb.Bucket, vb.Vbucket)
+				common.Infof("%v {%v,%v} ended\n", c.logPrefix, vb.Bucket, vb.Vbucket)
 				c.delVbucket(vb.Uuid)
 				delete(vbChans, vb.Uuid)
 			}
+
 		case msg := <-quitch:
 			return msg
 		}
@@ -284,7 +297,7 @@ func (c *StreamClient) doClose() (err error) {
 	recoverClose := func(conn net.Conn) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("%v\n", r)
+				common.Errorf("%v %v panic closing\n", r)
 				err = common.ErrorClosed
 			}
 		}()
@@ -295,7 +308,7 @@ func (c *StreamClient) doClose() (err error) {
 		recoverClose(conn)
 	}
 	close(c.finch)
-	log.Printf("%v, closed", c.logPrefix)
+	common.Infof("%v closed", c.logPrefix)
 	return
 }
 
@@ -309,7 +322,7 @@ func (c *StreamClient) runTransmitter(
 	laddr := conn.LocalAddr().String()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("%v, fatal %v panic\n", c.logPrefix, laddr)
+			common.Errorf("%v fatal %v panic\n", c.logPrefix, laddr)
 		}
 		quitch <- []string{"quit", laddr}
 	}()
@@ -317,7 +330,7 @@ func (c *StreamClient) runTransmitter(
 	pkt := NewStreamTransportPacket(common.MaxStreamDataLen, flags)
 	transmit := func(payload interface{}) bool {
 		if err := pkt.Send(conn, payload); err != nil {
-			log.Printf("%v, error transport %q `%v`\n", c.logPrefix, laddr, err)
+			common.Errorf("%v transport %q `%v`\n", c.logPrefix, laddr, err)
 			return false
 		}
 		return true
@@ -325,6 +338,14 @@ func (c *StreamClient) runTransmitter(
 
 	timeout := time.After(common.TransmitBufferTimeout * time.Millisecond)
 	vbs := make([]*common.VbKeyVersions, 0, 1000) // TODO: avoid magic numbers
+
+	resetAcc := func() {
+		for _, vb := range vbs {
+			vb.Free()
+		}
+		vbs = vbs[:0] // reset buffer
+	}
+
 loop:
 	for {
 		select {
@@ -334,12 +355,14 @@ loop:
 				if transmit(val) == false {
 					break loop
 				}
+
 			case *common.VbKeyVersions:
 				vbs = append(vbs, val)
 				if len(vbs) > 100 { // TODO: avoid magic number
 					if transmit(vbs) == false {
 						break loop
 					}
+					resetAcc()
 				}
 			}
 
@@ -349,10 +372,7 @@ loop:
 			if len(vbs) > 0 && transmit(vbs) == false {
 				break loop
 			}
-			for _, vb := range vbs {
-				vb.Free()
-			}
-			vbs = vbs[:0] // reset buffer
+			resetAcc()
 
 		case <-c.finch:
 			break loop

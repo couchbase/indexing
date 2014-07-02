@@ -10,7 +10,6 @@ import (
 	"encoding/binary"
 	"errors"
 	c "github.com/couchbase/indexing/secondary/common"
-	"log"
 )
 
 // error codes
@@ -97,7 +96,7 @@ func (pkt *StreamTransportPacket) Send(conn transporter, payload interface{}) (e
 	// transport framing
 	l := pktLenSize + pktFlagSize + len(data)
 	if maxLen := c.MaxStreamDataLen; l > maxLen {
-		log.Printf("sending packet length %v is > %v\n", l, maxLen)
+		c.Errorf("sending packet length %v is > %v\n", l, maxLen)
 		err = ErrorStreamPacketOverflow
 		return
 	}
@@ -108,11 +107,11 @@ func (pkt *StreamTransportPacket) Send(conn transporter, payload interface{}) (e
 	binary.BigEndian.PutUint16(pkt.buf[a:b], uint16(pkt.flags))
 	if n, err = conn.Write(pkt.buf[:pktDataOffset]); err == nil {
 		if n, err = conn.Write(data); err == nil && n != len(data) {
-			log.Printf("stream packet wrote only %v bytes for data\n", n)
+			c.Errorf("stream packet wrote only %v bytes for data\n", n)
 			err = ErrorStreamPacketWrite
 		}
 	} else if n != pktDataOffset {
-		log.Printf("stream packet wrote only %v bytes for header\n", n)
+		c.Errorf("stream packet wrote only %v bytes for header\n", n)
 		err = ErrorStreamPacketWrite
 	}
 	return
@@ -145,7 +144,7 @@ func (pkt *StreamTransportPacket) Receive(conn transporter) (payload interface{}
 	a, b = pktFlagOffset, pktFlagOffset+pktFlagSize
 	pkt.flags = StreamTransportFlag(binary.BigEndian.Uint16(pkt.buf[a:b]))
 	if maxLen := uint32(c.MaxStreamDataLen); pktlen > maxLen {
-		log.Printf("receiving packet length %v > %v\n", maxLen, pktlen)
+		c.Errorf("receiving packet length %v > %v\n", maxLen, pktlen)
 		err = ErrorStreamPacketOverflow
 		return
 	}
