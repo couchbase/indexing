@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
+	"io"
 	"net"
 	"net/http"
 	"reflect"
@@ -159,14 +160,19 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Fault-tolerance. No need to crash the server in case of panic.
 	defer func() {
+		var rsCount, erCount int
+
 		if r := recover(); r != nil {
 			c.Errorf("%s, adminport.request.recovered `%v`\n", s.logPrefix, r)
-			s.stats.Incr(statPath, 0, 0, 1) // count error
+			erCount = 1 // count error
 		} else if err != nil {
 			c.Errorf("%s %v\n", s.logPrefix, err)
-			s.stats.Incr(statPath, 0, 1, 1) // count response&error
+			rsCount, erCount = 1, 1 // count response&error
 		} else {
-			s.stats.Incr(statPath, 0, 1, 0) // count response
+			rsCount = 1 // count response
+		}
+		if statPath != "" {
+			s.stats.Incr(statPath, 0, rsCount, erCount)
 		}
 	}()
 
@@ -178,8 +184,12 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 		msg = &c.ComponentStat{}
 	} else {
 		msg = s.messages[r.URL.Path]
-		data := make([]byte, r.ContentLength, r.ContentLength)
-		r.Body.Read(data)
+		data := make([]byte, r.ContentLength)
+		if err := requestRead(r.Body, data); err != nil {
+			err = fmt.Errorf("%v, %v", ErrorRequest, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		// Get an instance of request type and decode request into that.
 		typeOfMsg := reflect.ValueOf(msg).Elem().Type()
 		msg = reflect.New(typeOfMsg).Interface().(MessageMarshaller)
@@ -236,6 +246,22 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("%v, %v", ErrorInternal, v)
 		c.Errorf("%v, %v", s.logPrefix, err)
 	}
+}
+
+func requestRead(r io.Reader, data []byte) error {
+	n, start := len(data), 0
+	for n > 0 {
+		c, err := r.Read(data[start:])
+		//Per http://golang.org/pkg/io/#Reader, it is valid for Read to
+		//return EOF with non-zero number of bytes at the end of the
+		//input stream
+		if err != nil && err != io.EOF {
+			return err
+		}
+		n -= c
+		start += c
+	}
+	return nil
 }
 
 // concrete type implementing Request interface

@@ -23,6 +23,9 @@ var ErrorMessageUnknown = errors.New("adminport.unknownMessage")
 // ErrorPathNotFound
 var ErrorPathNotFound = errors.New("adminport.pathNotFound")
 
+// ErrorRequest
+var ErrorRequest = errors.New("adminport.request")
+
 // ErrorDecodeRequest
 var ErrorDecodeRequest = errors.New("adminport.decodeRequest")
 
