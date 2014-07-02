@@ -20,13 +20,15 @@ var adminport1 = "localhost:9010"
 var adminport2 = "localhost:9011"
 var endpoint = "localhost:9020"
 var coordEndpoint = "localhost:9021"
-var vbnos = []uint16{0, 1, 2, 3, 4, 5, 6, 7}
+var vbMax = 1024
+var vbnos = vbucketsList()
+
 var done = make(chan bool)
 
 var instances = []uint64{0x11, 0x12}
 
 func main() {
-	c.SetLogLevel(c.LogLevelDebug)
+	c.SetLogLevel(c.LogLevelInfo)
 	go endpointServer(endpoint)
 	go endpointServer(coordEndpoint)
 
@@ -41,6 +43,7 @@ func main() {
 
 func doProjector(cluster string, kvaddrs []string, adminport string) {
 	projector.NewProjector(cluster, kvaddrs, adminport)
+	time.Sleep(100 * time.Millisecond)
 	aport := ap.NewHTTPClient("http://"+adminport, "/adminport/")
 	fReq := protobuf.FailoverLogRequest{
 		Pool:   proto.String(pooln),
@@ -51,9 +54,11 @@ func doProjector(cluster string, kvaddrs []string, adminport string) {
 	if err := aport.Request(&fReq, &fRes); err != nil {
 		log.Fatal(err)
 	}
-	vbuuids := make([]uint64, 0)
+	vbuuids := make(map[uint16]uint64)
 	for _, flog := range fRes.GetLogs() {
-		vbuuids = append(vbuuids, flog.Vbuuids[len(flog.Vbuuids)-1])
+		vbno := uint16(flog.GetVbno())
+		vbuuid := flog.Vbuuids[len(flog.Vbuuids)-1]
+		vbuuids[vbno] = vbuuid
 	}
 
 	time.Sleep(100 * time.Millisecond)
@@ -65,13 +70,8 @@ func doProjector(cluster string, kvaddrs []string, adminport string) {
 	}
 }
 
-func makeStartRequest(vbuuids []uint64) *protobuf.MutationStreamRequest {
-	bTs := &protobuf.BranchTimestamp{
-		Bucket:  proto.String(bucketn),
-		Vbnos:   []uint32{0, 1, 2, 3, 4, 5, 6, 7},
-		Seqnos:  []uint64{0, 0, 0, 0, 0, 0, 0, 0},
-		Vbuuids: vbuuids,
-	}
+func makeStartRequest(vbuuids map[uint16]uint64) *protobuf.MutationStreamRequest {
+	bTs := makeBranchTimestamp(vbuuids)
 	req := protobuf.MutationStreamRequest{
 		Topic:             proto.String("maintanence"),
 		Pools:             []string{pooln},
@@ -234,4 +234,26 @@ func countKeysAndDocs(keys map[string][]string) (int, int) {
 		countDs += len(docs)
 	}
 	return countKs, countDs
+}
+
+func vbucketsList() []uint16 {
+	vbnos := make([]uint16, 0, vbMax)
+	for i := 0; i < vbMax; i++ {
+		vbnos = append(vbnos, uint16(i))
+	}
+	return vbnos
+}
+
+func makeBranchTimestamp(vbuuids map[uint16]uint64) *protobuf.BranchTimestamp {
+	vbuuidsSorted := make([]uint64, 0, vbMax)
+	for vbno := range vbnos {
+		vbuuidsSorted = append(vbuuidsSorted, vbuuids[uint16(vbno)])
+	}
+	bTs := &protobuf.BranchTimestamp{
+		Bucket:  proto.String(bucketn),
+		Vbnos:   c.Vbno16to32(vbnos),
+		Seqnos:  make([]uint64, vbMax),
+		Vbuuids: vbuuidsSorted,
+	}
+	return bTs
 }
