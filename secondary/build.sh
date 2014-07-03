@@ -41,8 +41,18 @@ clean_projector(){
     rm -f bin/projector
 }
 
+build_protobuf(){
+
+    echo "Building Protobuf..."
+    cd protobuf
+    make
+    cd ..
+    echo "Done"
+}
+
 if [ -z "$1" ]
     then
+    build_protobuf
     build_indexer
     build_projector
 elif [ $1 == "indexer" ]
@@ -51,6 +61,9 @@ elif [ $1 == "indexer" ]
 elif [ $1 == "projector" ]
     then
     build_projector
+elif [ $1 == "protobuf" ]
+    then
+    build_protobuf
 elif [ $1 == "clean" ]
     then
     echo "Cleaning..."

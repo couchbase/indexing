@@ -12,6 +12,11 @@ All production secondary index related components (code, design, documentation) 
     $ go get -d -v ./...
     $ ./build.sh
 
+Note:
+Following dependencies need to be installed beforehand:
+- Protobuf: https://code.google.com/p/protobuf/
+- ForestDB: https://github.com/couchbaselabs/forestdb
+
 If build is successful, indexing/secondary/bin will have the binaries for projector and indexer.
 
 ####Starting Projector
