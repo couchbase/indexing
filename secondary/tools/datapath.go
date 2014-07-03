@@ -25,7 +25,7 @@ var vbnos = vbucketsList()
 
 var done = make(chan bool)
 
-var instances = []uint64{0x11, 0x12}
+var instances = []uint64{0x11, 0x12, 0x13}
 
 func main() {
 	c.SetLogLevel(c.LogLevelInfo)
@@ -45,38 +45,58 @@ func doProjector(cluster string, kvaddrs []string, adminport string) {
 	projector.NewProjector(cluster, kvaddrs, adminport)
 	time.Sleep(100 * time.Millisecond)
 	aport := ap.NewHTTPClient("http://"+adminport, "/adminport/")
+
+	// failover log for "default"
 	fReq := protobuf.FailoverLogRequest{
 		Pool:   proto.String(pooln),
-		Bucket: proto.String(bucketn),
+		Bucket: proto.String("default"),
 		Vbnos:  c.Vbno16to32(vbnos),
 	}
 	fRes := protobuf.FailoverLogResponse{}
 	if err := aport.Request(&fReq, &fRes); err != nil {
 		log.Fatal(err)
 	}
-	vbuuids := make(map[uint16]uint64)
+	vbuuids1 := make(map[uint16]uint64)
 	for _, flog := range fRes.GetLogs() {
 		vbno := uint16(flog.GetVbno())
 		vbuuid := flog.Vbuuids[len(flog.Vbuuids)-1]
-		vbuuids[vbno] = vbuuid
+		vbuuids1[vbno] = vbuuid
+	}
+
+	// failover log for "beer-sample"
+	fReq = protobuf.FailoverLogRequest{
+		Pool:   proto.String(pooln),
+		Bucket: proto.String("beer-sample"),
+		Vbnos:  c.Vbno16to32(vbnos),
+	}
+	fRes = protobuf.FailoverLogResponse{}
+	if err := aport.Request(&fReq, &fRes); err != nil {
+		log.Fatal(err)
+	}
+	vbuuids2 := make(map[uint16]uint64)
+	for _, flog := range fRes.GetLogs() {
+		vbno := uint16(flog.GetVbno())
+		vbuuid := flog.Vbuuids[len(flog.Vbuuids)-1]
+		vbuuids2[vbno] = vbuuid
 	}
 
 	time.Sleep(100 * time.Millisecond)
 
-	mReq := makeStartRequest(vbuuids)
+	mReq := makeStartRequest(vbuuids1, vbuuids2)
 	mRes := protobuf.MutationStreamResponse{}
 	if err := aport.Request(mReq, &mRes); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func makeStartRequest(vbuuids map[uint16]uint64) *protobuf.MutationStreamRequest {
-	bTs := makeBranchTimestamp(vbuuids)
+func makeStartRequest(vbuuids1, vbuuids2 map[uint16]uint64) *protobuf.MutationStreamRequest {
+	b1Ts := makeBranchTimestamp(vbuuids1)
+	b2Ts := makeBranchTimestamp(vbuuids2)
 	req := protobuf.MutationStreamRequest{
 		Topic:             proto.String("maintanence"),
-		Pools:             []string{pooln},
-		Buckets:           []string{bucketn},
-		RestartTimestamps: []*protobuf.BranchTimestamp{bTs},
+		Pools:             []string{pooln, pooln},
+		Buckets:           []string{"default", "beer-sample"},
+		RestartTimestamps: []*protobuf.BranchTimestamp{b1Ts, b2Ts},
 		Instances:         makeIndexInstances(),
 	}
 	req.SetStartFlag()
@@ -88,7 +108,7 @@ func makeIndexInstances() []*protobuf.IndexInst {
 		`{"type":"property","path":"abv"}`}
 	defn1 := &protobuf.IndexDefn{
 		DefnID:          proto.Uint64(instances[0]),
-		Bucket:          proto.String(bucketn),
+		Bucket:          proto.String("beer-sample"),
 		IsPrimary:       proto.Bool(false),
 		Name:            proto.String("index1"),
 		Using:           protobuf.StorageType_View.Enum(),
@@ -109,7 +129,7 @@ func makeIndexInstances() []*protobuf.IndexInst {
 
 	defn2 := &protobuf.IndexDefn{
 		DefnID:          proto.Uint64(instances[1]),
-		Bucket:          proto.String(bucketn),
+		Bucket:          proto.String("beer-sample"),
 		IsPrimary:       proto.Bool(false),
 		Name:            proto.String("index2"),
 		Using:           protobuf.StorageType_View.Enum(),
@@ -127,7 +147,28 @@ func makeIndexInstances() []*protobuf.IndexInst {
 			Endpoints:     []string{endpoint},
 		},
 	}
-	return []*protobuf.IndexInst{instance1, instance2}
+
+	defn3 := &protobuf.IndexDefn{
+		DefnID:          proto.Uint64(instances[2]),
+		Bucket:          proto.String("default"),
+		IsPrimary:       proto.Bool(false),
+		Name:            proto.String("index3"),
+		Using:           protobuf.StorageType_View.Enum(),
+		ExprType:        protobuf.ExprType_N1QL.Enum(),
+		SecExpressions:  []string{`{"type":"property","path":"age"}`},
+		PartitionScheme: protobuf.PartitionScheme_TEST.Enum(),
+		PartnExpression: proto.String(`{"type":"property","path":"index"}`),
+	}
+	instance3 := &protobuf.IndexInst{
+		InstId:     proto.Uint64(0x3),
+		State:      protobuf.IndexState_IndexInitial.Enum(),
+		Definition: defn3,
+		Tp: &protobuf.TestPartition{
+			CoordEndpoint: proto.String(coordEndpoint),
+			Endpoints:     []string{endpoint},
+		},
+	}
+	return []*protobuf.IndexInst{instance1, instance2, instance3}
 }
 
 func endpointServer(addr string) {
@@ -143,9 +184,10 @@ func endpointServer(addr string) {
 	keys := map[uint64]map[string][]string{
 		0x11: make(map[string][]string),
 		0x12: make(map[string][]string),
+		0x13: make(map[string][]string),
 	}
 
-	printTm := time.Tick(100 * time.Millisecond)
+	printTm := time.Tick(1000 * time.Millisecond)
 
 loop:
 	for {
