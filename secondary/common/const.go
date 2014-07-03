@@ -45,7 +45,7 @@ const (
 
 	// VbucketSyncTimeout timeout, in milliseconds, is for sending Sync
 	// messages for inactive vbuckets.
-	VbucketSyncTimeout = 5
+	VbucketSyncTimeout = 100
 
 	// EndpointBufferTimeout timeout, in milliseconds, is for endpoints to send
 	// buffered key-versions to downstream.
@@ -57,7 +57,7 @@ const (
 
 	// MaxStreamDataLen is maximum payload length, in bytes, for transporting
 	// data from router to indexer.
-	MaxStreamDataLen = 100 * 1024
+	MaxStreamDataLen = 1000 * 1024
 
 	// StreamReadDeadline timeout, in milliseconds, is timeout while reading
 	// from socket.

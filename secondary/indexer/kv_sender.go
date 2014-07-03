@@ -207,9 +207,9 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 	//TODO the vbNums should be based on the actual vbuckets being
 	//served from a projector, for now assume single projector and send
 	//list of all vbuckets
-	var vbnos []uint32
+	vbnos := make([]uint32, k.numVbuckets)
 	for i := 0; i < int(k.numVbuckets); i++ {
-		vbnos = append(vbnos, uint32(i))
+		vbnos[i] = uint32(i)
 	}
 
 	fReq := protobuf.FailoverLogRequest{
@@ -233,22 +233,25 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 
 		return
 	}
-	vbuuids := make([]uint64, 0)
+
+	vbuuids := make(map[uint32]uint64)
 	for _, flog := range fRes.GetLogs() {
-		vbuuids = append(vbuuids, flog.Vbuuids[len(flog.Vbuuids)-1])
+		vbno := uint32(flog.GetVbno())
+		vbuuid := flog.Vbuuids[len(flog.Vbuuids)-1]
+		vbuuids[vbno] = vbuuid
 	}
 
-	//seqnos
-	var seqnos []uint64
-	for i := 0; i < int(k.numVbuckets); i++ {
-		seqnos = append(seqnos, 0)
+	vbuuidsSorted := make([]uint64, k.numVbuckets)
+	for i, vbno := range vbnos {
+		vbuuidsSorted[i] = vbuuids[vbno]
 	}
+	seqnos := make([]uint64, k.numVbuckets)
 
 	bTs := &protobuf.BranchTimestamp{
 		Bucket:  proto.String(indexInst.Defn.Bucket),
 		Vbnos:   vbnos,
 		Seqnos:  seqnos,
-		Vbuuids: vbuuids,
+		Vbuuids: vbuuidsSorted,
 	}
 
 	using := protobuf.StorageType(

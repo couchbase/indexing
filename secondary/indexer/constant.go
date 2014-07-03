@@ -46,7 +46,7 @@ const MAX_STREAM_READER_WORKER_BUFFER = 1000
 
 //Number of Sync messages after which Timekeeper
 //triggers a new Stability Timestamp
-const SYNC_COUNT_TS_TRIGGER = 100
+const SYNC_COUNT_TS_TRIGGER = 1024
 
 //Max number of snapshot to be retained per index.
 //Older snapshots are deleted.
