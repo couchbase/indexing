@@ -320,8 +320,14 @@ func (kvfeed *KVFeed) sendSideband(info interface{}, sbch chan []interface{}) []
 	return resp
 }
 
-// routine handles data path, never panics.
+// routine handles data path.
 func (kvfeed *KVFeed) runScatter(sbch chan []interface{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.Errorf("%v runScatter() panic: %v\n", kvfeed.logPrefix, r)
+		}
+	}()
+
 	mutch := kvfeed.feeder.GetChannel()
 	var endpoints map[string]*Endpoint
 	var engines map[uint64]*Engine
@@ -335,9 +341,9 @@ loop:
 				kvfeed.CloseFeed()
 				break loop
 			}
+			c.Tracef("%v, Mutation %v:%v:%v <%v>\n",
+				kvfeed.logPrefix, m.VBucket, m.Seqno, m.Opcode, m.Key)
 			kvfeed.scatterMutation(m, endpoints, engines)
-			c.Tracef("%v, Mutation %v:%v:%v\n",
-				kvfeed.logPrefix, m.VBucket, m.Seqno, m.Opcode)
 			events++
 
 		case msg, ok := <-sbch:

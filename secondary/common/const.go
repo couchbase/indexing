@@ -61,7 +61,7 @@ const (
 
 	// StreamReadDeadline timeout, in milliseconds, is timeout while reading
 	// from socket.
-	StreamReadDeadline = 2000
+	StreamReadDeadline = 4000
 
 	// ConnsPerEndpoint number of parallel connections per endpoint.
 	ConnsPerEndpoint = 1

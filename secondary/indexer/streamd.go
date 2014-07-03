@@ -300,7 +300,7 @@ func (s *MutationStream) handleClose(msg streamServerMessage) (appmsg interface{
 
 // start a connection worker to read mutation message for a subset of vbuckets.
 func (s *MutationStream) startWorker(raddr string) {
-	c.Infof("%v startinr worker for connection %q\n", s.logPrefix, raddr)
+	c.Infof("%v starting worker for connection %q\n", s.logPrefix, raddr)
 	nc := s.conns[raddr]
 	go doReceive(s.logPrefix, nc, s.mutch, s.reqch)
 	nc.active = true
@@ -481,15 +481,24 @@ func doReceive(prefix string, nc netConn, mutch chan<- []*protobuf.VbKeyVersions
 	updateActiveVbuckets := func(vbs []*protobuf.VbKeyVersions) {
 		for _, vb := range vbs {
 			bucket, vbno := vb.GetBucketname(), uint16(vb.GetVbucket())
-			c.Tracef("%v {%v, %v}\n", prefix, bucket, vbno)
+			kvs := vb.GetKvs()
+
+			commands := make([]uint32, 0, len(kvs))
+			seqnos := make([]uint64, 0, len(kvs))
+
 			// TODO: optimize this.
-			for _, kv := range vb.GetKvs() {
+			for _, kv := range kvs {
+				seqnos = append(seqnos, kv.GetSeqno())
+				commands = append(commands, kv.GetCommands()...)
+				commands = append(commands, 17)
+
 				if byte(kv.GetCommands()[0]) == c.StreamBegin {
 					started = append(started, &bucketVbno{bucket, vbno})
 				} else if byte(kv.GetCommands()[0]) == c.StreamEnd {
 					finished = append(finished, &bucketVbno{bucket, vbno})
 				}
 			}
+			c.Tracef("%v {%v, %v}\n", prefix, bucket, vbno)
 		}
 	}
 
