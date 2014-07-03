@@ -165,16 +165,19 @@ func (tk *timekeeper) handleSync(cmd Message) {
 			common.Infof("Timekeeper: Generating new Stability TS %v for Bucket %v "+
 				"Stream %v. SyncCount is %v", ts, meta.bucket, streamId, syncCount)
 
+			newTs := CopyTimestamp(ts)
 			tsList := (*bucketTSListMap)[meta.bucket]
 
 			//if there is no flush already in progress for this bucket and no pending TS in list,
 			//send new TS
 			if (*bucketFlushInProgressMap)[meta.bucket] == false && tsList.Len() == 0 {
 				(*bucketFlushInProgressMap)[meta.bucket] = true
-				go tk.sendNewStabilityTS(ts, meta.bucket, streamId)
+				go tk.sendNewStabilityTS(newTs, meta.bucket, streamId)
 			} else {
 				//store the ts in list
-				tsList.PushBack(ts)
+				common.Infof("Timekeeper: Adding TS %v to Pending List for Bucket %v "+
+					"Stream %v.", ts, meta.bucket, streamId)
+				tsList.PushBack(newTs)
 			}
 			(*bucketSyncCountMap)[meta.bucket] = 0
 			(*bucketNewTSReqd)[meta.bucket] = false
@@ -254,6 +257,9 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 		e := tsList.Front()
 		ts := e.Value.(Timestamp)
 		(*bucketFlushInProgressMap)[bucket] = true
+		tsList.Remove(e)
+		common.Infof("Timekeeper: Found pending Stability TS %v for Bucket %v "+
+			"Stream %v", ts, bucket, streamId)
 		go tk.sendNewStabilityTS(ts, bucket, streamId)
 	}
 
