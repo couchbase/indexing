@@ -61,6 +61,8 @@ loop:
 		case cmd, ok := <-k.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == KV_SENDER_SHUTDOWN {
+					common.Infof("KVSender: Shutting Down")
+					k.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
 				k.handleSupvervisorCommands(cmd)
@@ -221,6 +223,8 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 
 	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
 
+	common.Debugf("Failover Log Request %v", fReq)
+
 	if err := ap.Request(&fReq, &fRes); err != nil {
 
 		common.Errorf("Unexpected Error During Failover Log Request %v "+
@@ -233,6 +237,7 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 
 		return
 	}
+	common.Debugf("Failover Log Response %v", fRes)
 
 	vbuuids := make(map[uint32]uint64)
 	for _, flog := range fRes.GetLogs() {
@@ -245,6 +250,7 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 	for i, vbno := range vbnos {
 		vbuuidsSorted[i] = vbuuids[vbno]
 	}
+
 	seqnos := make([]uint64, k.numVbuckets)
 
 	bTs := &protobuf.BranchTimestamp{
@@ -310,6 +316,9 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 	mReq.SetStartFlag()
 
 	mRes := protobuf.MutationStreamResponse{}
+
+	common.Debugf("MutationStream Request %v", mReq)
+
 	if err := ap.Request(&mReq, &mRes); err != nil {
 		common.Errorf("Unexpected Error During Mutation Stream Request %v "+
 			"for Create Index %v. Err %v", mReq, indexInst, err)

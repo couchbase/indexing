@@ -45,7 +45,7 @@ const (
 
 	// VbucketSyncTimeout timeout, in milliseconds, is for sending Sync
 	// messages for inactive vbuckets.
-	VbucketSyncTimeout = 100
+	VbucketSyncTimeout = 500
 
 	// EndpointBufferTimeout timeout, in milliseconds, is for endpoints to send
 	// buffered key-versions to downstream.

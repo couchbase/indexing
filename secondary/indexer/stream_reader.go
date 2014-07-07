@@ -22,6 +22,8 @@ type MutationStreamReader interface {
 	Shutdown()
 }
 
+var mutationCount uint64
+
 type mutationStreamReader struct {
 	streamId StreamId
 	stream   *MutationStream //handle to the MutationStream
@@ -54,6 +56,9 @@ func CreateMutationStreamReader(streamId StreamId, bucketQueueMap BucketQueueMap
 	stream, err := NewMutationStream(string(StreamAddrMap[streamId]), streamMutch, streamRespch)
 	if err != nil {
 		//return stream init error
+		common.Errorf("MutationStreamReader: Error returned from NewMutationStream."+
+			"StreamId: %v, Err: %v", streamId, err)
+
 		msgErr := &MsgError{
 			err: Error{code: ERROR_STREAM_INIT,
 				severity: FATAL,
@@ -207,6 +212,10 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 		//case protobuf.Command_Upsert, protobuf.Command_Deletion, protobuf.Command_UpsertDeletion:
 		case common.Upsert, common.Deletion, common.UpsertDeletion:
 
+			mutationCount++
+			if (mutationCount%10000 == 0) || mutationCount == 1 {
+				common.Infof("MutationCount %v", mutationCount)
+			}
 			//allocate new mutation first time
 			if mut == nil {
 				//TODO use free list here to reuse the struct and reduce garbage

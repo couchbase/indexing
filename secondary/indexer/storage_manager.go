@@ -11,7 +11,6 @@ package indexer
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
-	"log"
 )
 
 //StorageManager manages the snapshots for the indexes and responsible for storing
@@ -62,6 +61,8 @@ loop:
 		case cmd, ok := <-s.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == STORAGE_MGR_SHUTDOWN {
+					common.Infof("StorageManager: Shutting Down")
+					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
 				s.handleSupvervisorCommands(cmd)
@@ -95,7 +96,7 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 //after flush has completed
 func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
-	log.Printf("StorageMgr: Received Command to Create Snapshot %v", cmd)
+	common.Debugf("StorageMgr: Received Command to Create Snapshot %v", cmd)
 
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	ts := cmd.(*MsgMutMgrFlushDone).GetTS()
@@ -127,15 +128,18 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 					if latestSnapshot == nil || ts.GreaterThan(latestSnapshot.Timestamp()) {
 						//commit the outstanding data
 
+						common.Debugf("StorageMgr: Commit Data for Index %v PartitionId %v SliceId %v",
+							idxInstId, partnId, slice.Id())
+
 						if err := slice.Commit(); err != nil {
 
-							log.Printf("handleCreateSnapshot: Error Commiting Slice "+
+							common.Errorf("handleCreateSnapshot: Error Commiting Slice "+
 								"for index %v slice %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 							continue
 						}
 
-						log.Printf("StorageMgr: Creating New Snapshot for Index %v PartitionId %v SliceId %v",
+						common.Debugf("StorageMgr: Creating New Snapshot for Index %v PartitionId %v SliceId %v",
 							idxInstId, partnId, slice.Id())
 
 						//create snapshot for slice
@@ -149,12 +153,12 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							snapContainer.Add(newSnapshot)
 
 						} else {
-							log.Printf("handleCreateSnapshot: Error Creating Snapshot "+
+							common.Errorf("handleCreateSnapshot: Error Creating Snapshot "+
 								"for index %v slice %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 						}
 					} else {
-						log.Printf("StorageMgr: Skipped Creating New Snapshot for Index %v "+
+						common.Debugf("StorageMgr: Skipped Creating New Snapshot for Index %v "+
 							"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
 					}
 				}
@@ -168,7 +172,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
-	log.Printf("StorageMgr: Received Command to Update InstanceMap %v", cmd)
+	common.Infof("StorageMgr: Received Command to Update InstanceMap %v", cmd)
 	s.indexInstMap = cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 
 	s.supvCmdch <- &MsgSuccess{}
@@ -176,7 +180,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
 
-	log.Printf("StorageMgr: Received Command to Partition Map %v", cmd)
+	common.Infof("StorageMgr: Received Command to Partition Map %v", cmd)
 	s.indexPartnMap = cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 
 	s.supvCmdch <- &MsgSuccess{}

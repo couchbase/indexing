@@ -9,6 +9,10 @@
 
 package indexer
 
+import (
+	"github.com/couchbase/indexing/secondary/common"
+)
+
 //ClustMgrSender provides the mechanism to talk to Index Coordinator
 type ClustMgrSender interface {
 }
@@ -47,6 +51,8 @@ loop:
 		case cmd, ok := <-c.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == CLUST_MGR_SENDER_SHUTDOWN {
+					common.Infof("ClusterMgrSender: Shutting Down")
+					c.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
 				c.handleSupvervisorCommands(cmd)

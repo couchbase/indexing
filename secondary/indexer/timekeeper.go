@@ -80,6 +80,8 @@ loop:
 		case cmd, ok := <-tk.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == TK_SHUTDOWN {
+					common.Infof("Timekeeper: Shutting Down")
+					tk.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
 				tk.handleSupvervisorCommands(cmd)

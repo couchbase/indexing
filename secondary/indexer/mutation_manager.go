@@ -602,6 +602,7 @@ func (m *mutationMgr) shutdown() Message {
 
 	//wait for all readers to shutdown
 	<-donech
+	common.Infof("MutationStreamReader: All Stream Readers Shutdown")
 
 	//stop flushers
 	go func() {
@@ -618,6 +619,7 @@ func (m *mutationMgr) shutdown() Message {
 
 	//wait for all flushers to finish before returning
 	m.flusherWaitGroup.Wait()
+	common.Infof("MutationStreamReader: All Flushers Shutdown")
 
 	//return error in case of unclean shutdown
 	if uncleanShutdown {
@@ -627,7 +629,7 @@ func (m *mutationMgr) shutdown() Message {
 				severity: NORMAL,
 				category: MUTATION_MANAGER}}
 	} else {
-		common.Errorf("MutationMgr: Shutdown Complete")
+		common.Infof("MutationMgr: Shutdown Complete")
 		return &MsgSuccess{}
 	}
 

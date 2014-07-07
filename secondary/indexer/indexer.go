@@ -12,6 +12,7 @@ package indexer
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	"log"
+	"net"
 )
 
 type IndexerState int16
@@ -109,7 +110,12 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	//init the stream address map
 	StreamAddrMap = make(StreamAddressMap)
 	//TODO move this to config
-	StreamAddrMap[MAINT_STREAM] = common.Endpoint(INDEXER_DATA_PORT_ENDPOINT)
+	if _, port, err := net.SplitHostPort(INDEXER_DATA_PORT_ENDPOINT); err == nil {
+		StreamAddrMap[MAINT_STREAM] = common.Endpoint(":" + port)
+	} else {
+		log.Printf("Indexer: Unable to find address for Data Port. INDEXER_DATA_PORT_ENDPOINT "+
+			"not set properly. Err %v", err)
+	}
 
 	//init stream status
 	idx.streamStatus = make(StreamStatus)

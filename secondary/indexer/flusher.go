@@ -201,12 +201,14 @@ func (f *flusher) flushQueue(q MutationQueue, streamId StreamId,
 	//or workers to send any message
 	select {
 	case <-stopch:
+		common.Infof("Flusher: Stopping All Workers")
 		//stop all workers
 		for _, ch := range workerStopChannels {
 			close(ch)
 		}
 		//wait for all workers to stop
 		<-allWorkersDoneCh
+		common.Infof("Flusher: Stopped All Workers")
 
 		//wait for notification of all workers finishing
 	case <-allWorkersDoneCh:
