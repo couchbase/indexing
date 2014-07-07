@@ -248,20 +248,22 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func requestRead(r io.Reader, data []byte) error {
+func requestRead(r io.Reader, data []byte) (err error) {
+	var c int
+
 	n, start := len(data), 0
-	for n > 0 {
-		c, err := r.Read(data[start:])
-		//Per http://golang.org/pkg/io/#Reader, it is valid for Read to
-		//return EOF with non-zero number of bytes at the end of the
-		//input stream
-		if err != nil && err != io.EOF {
-			return err
-		}
+	for n > 0 && err == nil {
+		// Per http://golang.org/pkg/io/#Reader, it is valid for Read to
+		// return EOF with non-zero number of bytes at the end of the
+		// input stream
+		c, err = r.Read(data[start:])
 		n -= c
 		start += c
 	}
-	return nil
+	if n == 0 {
+		return nil
+	}
+	return err
 }
 
 // concrete type implementing Request interface
