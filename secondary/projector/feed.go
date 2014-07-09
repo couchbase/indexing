@@ -26,10 +26,10 @@ type Feed struct {
 	projector *Projector // immutable
 	topic     string     // immutable
 	// manage upstream
-	bfeeds map[string]*BucketFeed // immutable and indexed by bucket name
+	bfeeds map[string]*BucketFeed
 	// manage downstream
-	endpoints map[string]*Endpoint // mutable, indexed by remote-address
-	engines   map[uint64]*Engine   // immutable, indexed by uuid
+	endpoints map[string]*Endpoint
+	engines   map[uint64]*Engine
 	// timestamp feedback
 	failoverTimestamps map[string]*c.Timestamp // indexed by bucket name
 	kvTimestamps       map[string]*c.Timestamp // indexed by bucket name

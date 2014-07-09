@@ -297,7 +297,7 @@ func (c *StreamClient) doClose() (err error) {
 	recoverClose := func(conn net.Conn) {
 		defer func() {
 			if r := recover(); r != nil {
-				common.Errorf("%v %v panic closing\n", r)
+				common.Errorf("%v panic closing %v\n", c.logPrefix, r)
 				err = common.ErrorClosed
 			}
 		}()

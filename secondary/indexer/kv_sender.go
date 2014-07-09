@@ -158,7 +158,7 @@ func (k *kvSender) handleDropIndex(cmd Message) {
 		Instances: []*protobuf.IndexInst{instance},
 	}
 
-	mReq.SetDeleteSubscriptionFlag()
+	mReq.SetDeleteEnginesFlag()
 
 	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
 
@@ -394,7 +394,7 @@ func (k *kvSender) handleUpdateMutationStreamRequest(cmd Message) {
 		Instances: []*protobuf.IndexInst{instance},
 	}
 
-	mReq.SetAddSubscriptionFlag()
+	mReq.SetAddEnginesFlag()
 
 	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
 

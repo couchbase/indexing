@@ -1,7 +1,11 @@
+- move package dependencies to couchbase | couchbaselabs.
+- avoid go-jsonpointer for indexing-stats.
+- avoid go.text for unicode collation.
 - version numbering for protobuf messages. say it is a 1-byte value, where
   Most-Significant 4 bits give major version and Least-significant 4 bits give
   minor number.
 - timestamp naming, TsVb, TsVbFull, TsVbuuid, TsVbuuidFull.
+- merge timestamp and related data structure with indexer and coordinator.
 - make dataport as a sub-package under indexing/secondary.
 - Stream nomenclature should be consistent with Feed nomenclature.
 - IndexInstance or IndexUUID for key-versions.
