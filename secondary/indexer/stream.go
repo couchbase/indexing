@@ -117,19 +117,6 @@ func (pkt *StreamTransportPacket) Send(conn transporter, payload interface{}) (e
 	return
 }
 
-func fullRead(conn transporter, buf []byte) error {
-	size, start := 0, 0
-	for size < len(buf) {
-		n, err := conn.Read(buf[start:])
-		if err != nil {
-			return err
-		}
-		size += n
-		start += n
-	}
-	return nil
-}
-
 // Receive payload from remote, decode, decompress the payload and return the
 // payload
 func (pkt *StreamTransportPacket) Receive(conn transporter) (payload interface{}, err error) {
@@ -197,4 +184,18 @@ func (pkt *StreamTransportPacket) decompress(small []byte) (big []byte, err erro
 		big = small
 	}
 	return
+}
+
+// read len(buf) bytes from `conn`.
+func fullRead(conn transporter, buf []byte) error {
+	size, start := 0, 0
+	for size < len(buf) {
+		n, err := conn.Read(buf[start:])
+		if err != nil {
+			return err
+		}
+		size += n
+		start += n
+	}
+	return nil
 }

@@ -88,3 +88,9 @@ const (
 	// MaxIndexesPerBucket is maximum number of index supported per bucket.
 	MaxIndexesPerBucket = 64
 )
+
+// ProtobufDataPathMajorNum major version number for mutation data path.
+var ProtobufDataPathMajorNum byte = 0
+
+// ProtobufDataPathMinorNum minor version number for mutation data path.
+var ProtobufDataPathMinorNum byte = 1

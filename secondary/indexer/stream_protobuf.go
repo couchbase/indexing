@@ -12,8 +12,9 @@ import (
 // `data` can be transported to the other end and decoded back to Payload
 // message.
 func protobufEncode(payload interface{}) (data []byte, err error) {
-	version := ProtobufVersion()
-	pl := protobuf.Payload{Version: proto.Uint32(uint32(version))}
+	pl := protobuf.Payload{
+		Version: proto.Uint32(uint32(ProtobufVersion())),
+	}
 
 	switch val := payload.(type) {
 	case []*c.VbKeyVersions:
@@ -67,22 +68,25 @@ func protobufEncode(payload interface{}) (data []byte, err error) {
 
 // protobufDecode complements protobufEncode() API. `data` returned by encode
 // is converted back to *protobuf.VbConnectionMap, or []*protobuf.VbKeyVersions
-// and returns back the payload
-func protobufDecode(data []byte) (payload interface{}, err error) {
-	pl := protobuf.Payload{}
-	if err = proto.Unmarshal(data, &pl); err != nil {
+// and returns back the value inside the payload
+func protobufDecode(data []byte) (value interface{}, err error) {
+	pl := &protobuf.Payload{}
+	if err = proto.Unmarshal(data, pl); err != nil {
 		return nil, err
 	}
-	if ver := byte(pl.GetVersion()); ver != ProtobufVersion() {
+	currVer := ProtobufVersion()
+	if ver := byte(pl.GetVersion()); ver == currVer {
+		// do nothing
+	} else if ver > currVer {
 		return nil, ErrorTransportVersion
+	} else {
+		pl = protoMsgConvertor[ver](pl)
 	}
 
-	if pl.Vbmap != nil {
-		return pl.Vbmap, nil
-	} else if pl.Vbkeys != nil {
-		return pl.Vbkeys, nil
+	if value = pl.Value(); value == nil {
+		return nil, ErrorMissingPayload
 	}
-	return nil, ErrorMissingPayload
+	return value, nil
 }
 
 func protobuf2Vbmap(vbmap *protobuf.VbConnectionMap) *c.VbConnectionMap {
@@ -134,8 +138,8 @@ func protobuf2VbKeyVersions(protovbs []*protobuf.VbKeyVersions) []*c.VbKeyVersio
 }
 
 // ProtobufVersion return version of protobuf schema used in packet transport.
-//
-// TBD: Yet to be defined. Just a place holder for now.
 func ProtobufVersion() byte {
-	return 1
+	return (c.ProtobufDataPathMajorNum << 4) | c.ProtobufDataPathMinorNum
 }
+
+var protoMsgConvertor = map[byte]func(*protobuf.Payload) *protobuf.Payload{}
