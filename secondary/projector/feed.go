@@ -65,21 +65,11 @@ func NewFeed(p *Projector, topic string, request RequestReader) (*Feed, error) {
 		logPrefix:          fmt.Sprintf("[feed %q]", topic),
 	}
 	feed.stats = feed.newStats()
-
-	// fresh start of a mutation stream.
-	for i, bucket := range buckets {
-		// bucket-feed
-		kvaddrs := p.getKVNodes()
-		bfeed, err := NewBucketFeed(feed, kvaddrs, pools[i], bucket)
-		if err != nil {
-			feed.doClose()
-			return nil, err
-		}
-		// initialse empty Timestamps objects for return values.
-		feed.failoverTimestamps[bucket] = c.NewTimestamp(bucket, c.MaxVbuckets)
-		feed.kvTimestamps[bucket] = c.NewTimestamp(bucket, c.MaxVbuckets)
-		feed.bfeeds[bucket] = bfeed
+	if err := feed.spawnBucketFeeds(pools, buckets); err != nil {
+		feed.doClose()
+		return nil, err
 	}
+
 	go feed.genServer(feed.reqch)
 	c.Infof("%v activated ...\n", feed.logPrefix)
 	return feed, nil
@@ -87,6 +77,24 @@ func NewFeed(p *Projector, topic string, request RequestReader) (*Feed, error) {
 
 func (feed *Feed) getProjector() *Projector {
 	return feed.projector
+}
+
+func (feed *Feed) spawnBucketFeeds(pools, buckets []string) error {
+	kvaddrs := feed.projector.getKVNodes()
+
+	// fresh start of a mutation stream.
+	for i, bucket := range buckets {
+		// bucket-feed
+		bfeed, err := NewBucketFeed(feed, kvaddrs, pools[i], bucket)
+		if err != nil {
+			return err
+		}
+		// initialse empty Timestamps objects for return values.
+		feed.failoverTimestamps[bucket] = c.NewTimestamp(bucket, c.MaxVbuckets)
+		feed.kvTimestamps[bucket] = c.NewTimestamp(bucket, c.MaxVbuckets)
+		feed.bfeeds[bucket] = bfeed
+	}
+	return nil
 }
 
 // gen-server API commands
@@ -310,17 +318,47 @@ func (feed *Feed) updateFeed(req RequestReader) (err error) {
 	var endpoints map[string]*Endpoint
 	var engines map[uint64]*Engine
 
+	pools := req.GetPools()
+	buckets := req.GetBuckets()
+
 	subscr := req.(Subscriber)
 	evaluators, routers, err := feed.validateSubscriber(subscr)
 	if err != nil {
 		return err
 	}
 
+	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
+		return err
+	}
+
+	// whether to delete buckets from feed.
+	if req.IsDelBuckets() {
+		for _, bucket := range buckets {
+			feed.bfeeds[bucket].CloseFeed()
+			delete(feed.bfeeds, bucket)
+			delete(feed.failoverTimestamps, bucket)
+			delete(feed.kvTimestamps, bucket)
+			for uuid, engine := range feed.engines {
+				if engine.evaluator.Bucket() == bucket {
+					delete(feed.engines, uuid)
+				}
+			}
+			// endpoints are not deleted. if none of the active engines send
+			// data to an endpoint, endpoint commits harakiri.
+		}
+		return nil
+	}
+
 	if endpoints, err = feed.buildEndpoints(routers, feed.endpoints); err != nil {
 		return err
 	}
-	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
-		return err
+
+	// whether to add new buckets to feed.
+	if req.IsAddBuckets() {
+		if err := feed.spawnBucketFeeds(pools, buckets); err != nil {
+			feed.doClose()
+			return err
+		}
 	}
 
 	// order of bucket, restartTimestamp, failoverTimestamp and kvTimestamp
@@ -362,12 +400,15 @@ func (feed *Feed) addEngines(subscr Subscriber) (err error) {
 		return err
 	}
 
+	// union of existing endpoints and new endpoints, if any.
 	if endpoints, err = feed.buildEndpoints(routers, feed.endpoints); err != nil {
 		return err
 	}
 	for raddr, endpoint := range feed.endpoints {
 		endpoints[raddr] = endpoint
 	}
+
+	// union of existing engines and new engines.
 	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
 		return err
 	}
@@ -390,6 +431,8 @@ func (feed *Feed) addEngines(subscr Subscriber) (err error) {
 }
 
 // index topology has changed, update it.
+// TODO: Remove this - if update can be replace with delete and add, then that
+// should be the recommended way to update engines.
 func (feed *Feed) updateEngines(subscr Subscriber) (err error) {
 	var endpoints map[string]*Endpoint
 	var engines map[uint64]*Engine

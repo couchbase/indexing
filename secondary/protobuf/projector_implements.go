@@ -16,10 +16,16 @@ const (
 	// shutdown vbucket-streams
 	maskMutationStreamShutdown = 0x00000004
 
+	// add new buckets and its engines.
+	maskMutationStreamAddBuckets = 0x00000008
+
+	// remove an existing bucket and its engines.
+	maskMutationStreamDelBuckets = 0x00000010
+
 	// add / update / delete engines
-	maskAddEngines    = 0x00000008
-	maskUpdateEngines = 0x00000010
-	maskDeleteEngines = 0x00000020
+	maskAddEngines    = 0x00000020
+	maskUpdateEngines = 0x00000040
+	maskDeleteEngines = 0x00000080
 )
 
 // Interface API for RequestReader and Subscriber
@@ -41,15 +47,11 @@ func (req *MutationStreamRequest) IsShutdown() bool {
 	panic("MutationStreamRequest had to be a fresh start")
 }
 
-func (req *MutationStreamRequest) IsAddEngines() bool {
+func (req *MutationStreamRequest) IsAddBuckets() bool {
 	panic("MutationStreamRequest had to be a fresh start")
 }
 
-func (req *MutationStreamRequest) IsUpdateEngines() bool {
-	panic("MutationStreamRequest had to be a fresh start")
-}
-
-func (req *MutationStreamRequest) IsDeleteEngines() bool {
+func (req *MutationStreamRequest) IsDelBuckets() bool {
 	panic("MutationStreamRequest had to be a fresh start")
 }
 
@@ -73,6 +75,22 @@ func (req *MutationStreamRequest) GetRouters() (map[uint64]c.Router, error) {
 
 // interface API for RequestReader and Subscriber
 
+func (req *UpdateMutationStreamRequest) SetRestartFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamRestart)
+}
+
+func (req *UpdateMutationStreamRequest) SetShutdownFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamShutdown)
+}
+
+func (req *UpdateMutationStreamRequest) SetAddBucketFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamAddBuckets)
+}
+
+func (req *UpdateMutationStreamRequest) SetDelBucketFlag() {
+	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamDelBuckets)
+}
+
 func (req *UpdateMutationStreamRequest) IsStart() bool {
 	panic("UpdateMutationStreamRequest cannot be a fresh start")
 }
@@ -85,6 +103,16 @@ func (req *UpdateMutationStreamRequest) IsRestart() bool {
 func (req *UpdateMutationStreamRequest) IsShutdown() bool {
 	flag := req.GetFlag()
 	return (flag & maskMutationStreamShutdown) > 0
+}
+
+func (req *UpdateMutationStreamRequest) IsAddBuckets() bool {
+	flag := req.GetFlag()
+	return (flag & maskMutationStreamAddBuckets) > 0
+}
+
+func (req *UpdateMutationStreamRequest) IsDelBuckets() bool {
+	flag := req.GetFlag()
+	return (flag & maskMutationStreamDelBuckets) > 0
 }
 
 func (req *UpdateMutationStreamRequest) RestartTimestamp(bucket string) *c.Timestamp {

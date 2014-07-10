@@ -20,6 +20,9 @@ message FailoverLogResponse {
 
 // Requested by Coordinator or indexer to start a new mutation stream.
 // BranchTimestamp.Vbnos should be in sort order
+//
+// start,
+//      new-set of buckets, valid subset of restart-timestamps and engines.
 message MutationStreamRequest {
     required string             topic             = 1; // topic name.
     required uint32             flag              = 2;
@@ -45,6 +48,20 @@ message MutationStreamResponse {
 
 // Requested by Coordinator or indexer to restart or shutdown vbuckets from an
 // active mutation stream. Returns back MutationStreamResponse.
+//
+// restart,
+//      subset of buckets, valid subset of restart-timestamps for buckets and
+//      its engines.
+// shutdown,
+//      subset of active buckets, valid subset of restart-timestamps for buckets
+//      and its engines.
+// add-buckets,
+//      new sub-set of buckets, valid subset of restart-timestamps for buckets
+//      and its engines.
+// del-buckets,
+//      subset of buckets to shutdown.
+//
+// flags are mutually exclusive.
 message UpdateMutationStreamRequest {
     required string          topic             = 1; // topic name.
     required uint32          flag              = 2;
@@ -56,6 +73,17 @@ message UpdateMutationStreamRequest {
 
 // Requested by third party component that wants to subscribe to a topic-name.
 // Error message will be sent as response
+//
+// add-engines,
+//      add new set of engines for one or more active buckets.
+// update-engines,
+//      update an existing engines, for one or more active buckets,  with new
+//      definitions.
+//      TODO: replace update-engine request with delete and add.
+// del-engines,
+//      delete engines from one or more active buckets.
+//
+// flags are mutually exclusive.
 message SubscribeStreamRequest {
     required string    topic     = 1; // must be an already started stream.
     required uint32    flag      = 2;

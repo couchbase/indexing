@@ -84,14 +84,22 @@ var ErrorArgument = errors.New("projector.argument")
 
 // RequestReader interface abstract mutation stream requests
 type RequestReader interface {
-	//IsStart returns true if the request is to start vbucket streams.
+	//IsStart return true if the request is to start vbucket streams.
 	IsStart() bool
 
-	//IsRestart returns true if the request is to restart vbucket streams.
+	//IsRestart return true if the request is to restart vbucket streams.
 	IsRestart() bool
 
-	//IsShutdown returns true if the request is to shutdown vbucket streams.
+	//IsShutdown return true if the request is to shutdown vbucket streams.
 	IsShutdown() bool
+
+	//IsAddBuckets return true if the request is to add one or more buckets
+	//along with engines defined on that bucket.
+	IsAddBuckets() bool
+
+	//IsDelBuckets return true if the request is to delete one or more buckets
+	//along with engines defined on that bucket.
+	IsDelBuckets() bool
 
 	// GetTopic will return the name of this mutation stream.
 	GetTopic() string

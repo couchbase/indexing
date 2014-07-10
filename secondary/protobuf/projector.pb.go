@@ -70,6 +70,9 @@ func (m *FailoverLogResponse) GetErr() *Error {
 
 // Requested by Coordinator or indexer to start a new mutation stream.
 // BranchTimestamp.Vbnos should be in sort order
+//
+// start,
+//      new-set of buckets, valid subset of restart-timestamps and engines.
 type MutationStreamRequest struct {
 	Topic             *string            `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	Flag              *uint32            `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
@@ -203,6 +206,20 @@ func (m *MutationStreamResponse) GetErr() *Error {
 
 // Requested by Coordinator or indexer to restart or shutdown vbuckets from an
 // active mutation stream. Returns back MutationStreamResponse.
+//
+// restart,
+//      subset of buckets, valid subset of restart-timestamps for buckets and
+//      its engines.
+// shutdown,
+//      subset of active buckets, valid subset of restart-timestamps for buckets
+//      and its engines.
+// add-buckets,
+//      new sub-set of buckets, valid subset of restart-timestamps for buckets
+//      and its engines.
+// del-buckets,
+//      subset of buckets to shutdown.
+//
+// flags are mutually exclusive.
 type UpdateMutationStreamRequest struct {
 	Topic             *string            `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	Flag              *uint32            `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
@@ -261,6 +278,17 @@ func (m *UpdateMutationStreamRequest) GetInstances() []*IndexInst {
 
 // Requested by third party component that wants to subscribe to a topic-name.
 // Error message will be sent as response
+//
+// add-engines,
+//      add new set of engines for one or more active buckets.
+// update-engines,
+//      update an existing engines, for one or more active buckets,  with new
+//      definitions.
+//      TODO: replace update-engine request with delete and add.
+// del-engines,
+//      delete engines from one or more active buckets.
+//
+// flags are mutually exclusive.
 type SubscribeStreamRequest struct {
 	Topic            *string      `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	Flag             *uint32      `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
