@@ -14,7 +14,7 @@ const MAX_NUM_VBUCKETS = 1024
 
 //Supervisor's channel capacity to buffer requests
 //from workers
-const WORKER_MSG_QUEUE_LEN = 1000
+const WORKER_MSG_QUEUE_LEN = 100000
 
 //Projector Admin Port Endpoint on which projector is
 //listening for admin requests
@@ -56,3 +56,11 @@ const MAX_SNAPSHOTS_PER_INDEX = 100
 const DEFAULT_START_CHUNK_SIZE = 256
 const DEFAULT_SLAB_SIZE = DEFAULT_START_CHUNK_SIZE * 1024
 const DEFAULT_MAX_SLAB_MEMORY = DEFAULT_SLAB_SIZE * 1024
+
+//Internal Buffer Size for Each Slice to store incoming
+//requests
+const SLICE_COMMAND_BUFFER_SIZE = 10000
+
+//Time in milliseconds for a slice to poll for
+//any outstanding writes before commit
+const SLICE_COMMIT_POLL_INTERVAL = 20
