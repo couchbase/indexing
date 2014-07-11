@@ -49,11 +49,11 @@ func TestLoopback(t *testing.T) {
 	if reflect.DeepEqual(req, resp) == false {
 		t.Error("unexpected response")
 	}
-	stats := common.ComponentStat{}
-	if err := client.RequestStat("/adminport", &stats); err != nil {
+	stats := common.Statistics{}
+	if err := client.RequestStats(&stats); err != nil {
 		t.Error(err)
 	}
-	common.Infof("%v\n", stats)
+	stats = stats["adminport"].(map[string]interface{})
 	if stats["requests"].(float64) != float64(2) {
 		t.Error("registered requests", stats["requests"])
 	}
@@ -87,7 +87,7 @@ func doServer(addr string, quit chan bool) Server {
 	if err := server.Register(&testMessage{}); err != nil {
 		log.Fatal(err)
 	}
-	if err := server.Register(&common.ComponentStat{}); err != nil {
+	if err := server.Register(&common.Statistics{}); err != nil {
 		log.Fatal(err)
 	}
 
@@ -106,8 +106,8 @@ func doServer(addr string, quit chan bool) Server {
 						if err := req.Send(msg); err != nil {
 							log.Println(err)
 						}
-					case *common.ComponentStat:
-						m := &common.ComponentStat{
+					case common.Statistics:
+						m := &common.Statistics{
 							"adminport": server.GetStatistics(),
 						}
 						if err := req.Send(m); err != nil {

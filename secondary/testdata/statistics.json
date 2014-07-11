@@ -1,0 +1,97 @@
+{
+    "kvaddrs": ["192.168.0.1:12000", "192.168.0.2:12000", "192.168.0.3:12000",
+                "192.168.0.4:12000", "192.168.0.5:12000", "192.168.0.6:12000"],
+    "topics": ["backfill", "maintenance", "catchup"],
+    "adminport": {
+        "urlPrefix": "",
+        "payload": [0, 0],
+        "requests": [0, 0, 0]
+    }
+    "feeds": {
+        "engines": ["ABCD", "1234", "4567"],
+        "endpoints": {
+            "192.168.0.10:3000": {
+                "vbmaps": 0,
+                "mutations": 0,
+                "flushes": 0
+            },
+            "192.168.0.11:3001": {
+                "vbmaps": 0,
+                "mutations": 0,
+                "flushes": 0
+            },
+            "192.168.0.12:30002": {
+                "vbmaps": 0,
+                "mutations": 0,
+                "flushes": 0
+            }
+        }
+        "bfeeds": {
+            "default" : {
+                "kvfeeds": {
+                    "192.168.0.1:12000": {
+                        "mutations": 0,
+                        "vbuckets": {
+                            "0" : {
+                                "uEngines": 0,
+                                "dEngines": 0,
+                                "mutations": 0,
+                                "begins": 0,
+                                "syncs": 0
+                            },
+                            "1" : {
+                                "uEngines": 0,
+                                "dEngines": 0,
+                                "mutations": 0,
+                                "begins": 0,
+                                "syncs": 0
+                            },
+                            "2" : {
+                                "uEngines": 0,
+                                "dEngines": 0,
+                                "mutations": 0,
+                                "begins": 0,
+                                "syncs": 0
+                            },
+                            "3" : {
+                                "uEngines": 0,
+                                "dEngines": 0,
+                                "mutations": 0,
+                                "begins": 0,
+                                "syncs": 0
+                            },
+                            "4" : {
+                                "uEngines": 0,
+                                "dEngines": 0,
+                                "mutations": 0,
+                                "begins": 0,
+                                "syncs": 0
+                            },
+                            "5" : {
+                                "uEngines": 0,
+                                "dEngines": 0,
+                                "mutations": 0,
+                                "begins": 0,
+                                "syncs": 0
+                            },
+                            "6" : {
+                                "uEngines": 0,
+                                "dEngines": 0,
+                                "mutations": 0,
+                                "begins": 0,
+                                "syncs": 0
+                            },
+                            "7" : {
+                                "uEngines": 0,
+                                "dEngines": 0,
+                                "mutations": 0,
+                                "begins": 0,
+                                "syncs": 0
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

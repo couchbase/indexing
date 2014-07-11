@@ -94,3 +94,5 @@ var ProtobufDataPathMajorNum byte = 0
 
 // ProtobufDataPathMinorNum minor version number for mutation data path.
 var ProtobufDataPathMinorNum byte = 1
+
+const UrlSep = "/"

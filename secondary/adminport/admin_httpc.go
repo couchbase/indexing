@@ -8,8 +8,8 @@
 //     resp := &protobuf.ResponseMessage{}
 //     client.Request(req, resp)
 //
-//     stats := &common.ComponentStat{}
-//     client.RequestStat("", stats)
+//     stats := &common.Statistics{}
+//     client.RequestStats("", stats)
 // }
 
 package adminport
@@ -58,13 +58,11 @@ func (c *httpClient) Request(msg, resp MessageMarshaller) (err error) {
 	}, resp)
 }
 
-// RequestStat is part of `Client` interface.
-// path == "", returns full statistics.
-// path == "<json-pointer>", returns a subset of statistics.
-func (c *httpClient) RequestStat(path string, resp MessageMarshaller) (err error) {
+// RequestStats is part of `Client` interface.
+func (c *httpClient) RequestStats(resp MessageMarshaller) (err error) {
 	return doResponse(func() (*http.Response, error) {
 		// create request, TODO: avoid magic value
-		url := c.serverAddr + common.StatsURLPath(c.urlPrefix, path)
+		url := c.serverAddr + common.StatsURLPath(c.urlPrefix, "")
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			return nil, err

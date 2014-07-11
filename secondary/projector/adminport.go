@@ -25,7 +25,7 @@ var reqUpdateFeed = &protobuf.UpdateMutationStreamRequest{}
 var reqSubscribeFeed = &protobuf.SubscribeStreamRequest{}
 var reqRepairEndpoints = &protobuf.RepairDownstreamEndpoints{}
 var reqShutdownFeed = &protobuf.ShutdownStreamRequest{}
-var reqStats = &c.ComponentStat{}
+var reqStats = c.Statistics{}
 
 // admin-port entry point
 func mainAdminPort(laddr string, p *Projector) {
@@ -83,8 +83,8 @@ func (p *Projector) handleRequest(
 		response = p.doRepairEndpoints(request)
 	case *protobuf.ShutdownStreamRequest:
 		response = p.doShutdownFeed(request)
-	case *c.ComponentStat:
-		response = p.doComponentStat(request)
+	case c.Statistics:
+		response = p.doStatistics(request, server)
 	default:
 		err = c.ErrorInvalidRequest
 	}
@@ -272,8 +272,9 @@ func (p *Projector) doShutdownFeed(request *protobuf.ShutdownStreamRequest) ap.M
 }
 
 // get projector statistics.
-func (p *Projector) doComponentStat(request *c.ComponentStat) ap.MessageMarshaller {
-	c.Tracef("%v doComponentStat()\n", p.logPrefix)
-	stats := c.ComponentStat{}
-	return &stats
+func (p *Projector) doStatistics(request c.Statistics, adminport ap.Server) ap.MessageMarshaller {
+	c.Tracef("%v doStatistics()\n", p.logPrefix)
+	stats := p.GetStatistics()
+	stats.Set("adminport", adminport.GetStatistics())
+	return stats
 }

@@ -50,7 +50,7 @@ type BucketFeed struct {
 	finch chan bool
 	// misc.
 	logPrefix string
-	stats     *c.ComponentStat
+	stats     c.Statistics
 }
 
 // NewBucketFeed creates a new instance of feed for specified bucket. Spawns a
@@ -239,12 +239,12 @@ loop:
 
 		case bfCmdGetStatistics:
 			respch := msg[1].(chan []interface{})
-			m := bfeed.stats.Get("/kvfeeds").(map[string]interface{})
-			kvfeeds := c.ComponentStat(m)
+			kvfeeds, _ := c.NewStatistics(bfeed.stats.Get("kvfeeds"))
 			for kvaddr, kvfeed := range bfeed.kvfeeds {
-				kvfeeds.Set("/"+kvaddr, kvfeed.GetStatistics())
+				kvfeeds.Set(kvaddr, kvfeed.GetStatistics())
 			}
-			respch <- []interface{}{map[string]interface{}(*bfeed.stats)}
+			bfeed.stats.Set("kvfeeds", kvfeeds)
+			respch <- []interface{}{bfeed.stats.ToMap()}
 
 		case bfCmdCloseFeed:
 			respch := msg[1].(chan []interface{})

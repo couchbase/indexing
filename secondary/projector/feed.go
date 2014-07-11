@@ -38,7 +38,7 @@ type Feed struct {
 	finch chan bool
 	// misc.
 	logPrefix string
-	stats     *c.ComponentStat
+	stats     c.Statistics
 }
 
 // NewFeed creates a new instance of mutation stream for specified topic. Spawns
@@ -539,16 +539,17 @@ func (feed *Feed) repairEndpoints() (err error) {
 }
 
 func (feed *Feed) getStatistics() map[string]interface{} {
-	bfeeds, _ := c.NewComponentStat(feed.stats.Get("/feeds"))
-	raddrs, _ := c.NewComponentStat(feed.stats.Get("/raddrs"))
-	feed.stats.Set("/engines", feed.engineNames())
-	feed.stats.Set("/endpoints", feed.endpointNames())
+	bfeeds, _ := c.NewStatistics(feed.stats.Get("bfeeds"))
+	endpoints, _ := c.NewStatistics(feed.stats.Get("endpoints"))
+	feed.stats.Set("engines", feed.engineNames())
 	for bucketn, bfeed := range feed.bfeeds {
-		bfeeds.Set("/"+bucketn, bfeed.GetStatistics())
+		bfeeds.Set(bucketn, bfeed.GetStatistics())
 	}
 	for raddr, endpoint := range feed.endpoints {
-		raddrs.Set("/"+raddr, endpoint.GetStatistics())
+		endpoints.Set(raddr, endpoint.GetStatistics())
 	}
+	feed.stats.Set("bfeeds", bfeeds)
+	feed.stats.Set("endpoints", endpoints)
 	return feed.stats.ToMap()
 }
 

@@ -50,7 +50,7 @@ type httpServer struct {
 	reqch     chan<- Request // request channel back to application
 
 	logPrefix string
-	stats     *c.ComponentStat
+	stats     c.Statistics
 }
 
 // NewHTTPServer creates an instance of admin-server. Start() will actually
@@ -126,7 +126,7 @@ func (s *httpServer) Start() (err error) {
 	return
 }
 
-func (s *httpServer) GetStatistics() *c.ComponentStat {
+func (s *httpServer) GetStatistics() c.Statistics {
 	return s.stats
 }
 
@@ -181,7 +181,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	// check wether it is for stats.
 	prefix := c.StatsURLPath(s.urlPrefix, "")
 	if strings.HasPrefix(r.URL.Path, prefix) {
-		msg = &c.ComponentStat{}
+		msg = make(c.Statistics)
 	} else {
 		msg = s.messages[r.URL.Path]
 		data := make([]byte, r.ContentLength)
@@ -200,7 +200,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	statPath = "/request." + msg.Name()
+	statPath = "request." + msg.Name()
 	s.stats.Incr(statPath, 1, 0, 0) // count request
 
 	if msg == nil {
@@ -215,14 +215,13 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	val := <-waitch
 
 	switch v := (val).(type) {
-	case *c.ComponentStat:
-		val = v.Get(c.ParseStatsPath(r.URL.Path))
-		if data, err := json.Marshal(&val); err == nil {
+	case c.Statistics:
+		if data, err := json.Marshal(v); err == nil {
 			header := w.Header()
 			// TODO: no magic
 			header["Content-Type"] = []string{"application/json"}
 			w.Write(data)
-			s.stats.Incr("/payload", 0, len(data))
+			s.stats.Incr("payload", 0, len(data))
 		} else {
 			err = fmt.Errorf("%v, %v", ErrorDecodeRequest, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -234,7 +233,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 			header := w.Header()
 			header["Content-Type"] = []string{v.ContentType()}
 			w.Write(data)
-			s.stats.Incr("/payload", 0, len(data))
+			s.stats.Incr("payload", 0, len(data))
 		} else {
 			err = fmt.Errorf("%v, %v", ErrorEncodeResponse, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -7,13 +7,12 @@ import (
 var adminportStatsFormat = map[string]interface{}{
 	"urlPrefix": "",
 	"payload":   []float64{0, 0}, // [request,response] in Bytes
-	"requests":  float64(0),      // registered request types
+	"requests":  float64(0),      // number of registered request types
 	// for requests.*
 }
 
-func (s *httpServer) newStats() *c.ComponentStat {
-	statsp, _ := c.NewComponentStat(nil)
-	stats := *statsp
+func (s *httpServer) newStats() c.Statistics {
+	stats, _ := c.NewStatistics(nil)
 	stats["urlPrefix"] = s.urlPrefix
 	stats["payload"] = []float64{0, 0}
 	stats["requests"] = float64(len(s.messages))
@@ -21,5 +20,5 @@ func (s *httpServer) newStats() *c.ComponentStat {
 	for _, msg := range s.messages {
 		stats["request."+msg.Name()] = []float64{0, 0, 0}
 	}
-	return statsp
+	return stats
 }

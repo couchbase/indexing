@@ -43,7 +43,7 @@ type Endpoint struct {
 	finch chan bool
 	// misc.
 	logPrefix string
-	stats     *c.ComponentStat
+	stats     c.Statistics
 }
 
 // NewEndpoint instanstiat a new Endpoint routine and return its reference.
@@ -149,6 +149,10 @@ func (endpoint *Endpoint) run(kvch chan []interface{}, reqch chan []interface{})
 	flushTimeout := time.After(c.EndpointBufferTimeout * time.Millisecond)
 	buffers := newEndpointBuffers(raddr)
 
+	mutationCount := stats.Get("mutations").(float64)
+	vbmapCount := stats.Get("vbmaps").(float64)
+	flushCount := stats.Get("flushes").(float64)
+
 	var err error
 loop:
 	for {
@@ -161,7 +165,7 @@ loop:
 			vbuuid := msg[2].(uint64)
 			kv := msg[3].(*c.KeyVersions)
 			buffers.addKeyVersions(bucket, vbno, vbuuid, kv)
-			stats.Incr("/mutations", 1)
+			mutationCount++
 
 		case msg := <-reqch:
 			switch msg[0].(byte) {
@@ -173,11 +177,14 @@ loop:
 				vbmap := msg[1].(*c.VbConnectionMap)
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{client.SendVbmap(vbmap)}
-				stats.Incr("/vbmaps", 1)
+				vbmapCount++
 
 			case endpCmdGetStatistics:
 				respch := msg[1].(chan []interface{})
-				respch <- []interface{}{map[string]interface{}(*stats)}
+				stats.Set("mutations", mutationCount)
+				stats.Set("vbmaps", vbmapCount)
+				stats.Set("flushes", flushCount)
+				respch <- []interface{}{map[string]interface{}(stats)}
 
 			case endpCmdClose:
 				respch := msg[1].(chan []interface{})
@@ -195,7 +202,7 @@ loop:
 				break loop
 			}
 			buffers = newEndpointBuffers(raddr)
-			stats.Incr("/flushes", 1)
+			flushCount++
 
 		case <-harakiri:
 			c.Infof("%v committed harakiri\n", endpoint.logPrefix)

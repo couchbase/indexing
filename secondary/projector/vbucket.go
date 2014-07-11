@@ -33,7 +33,7 @@ type VbucketRoutine struct {
 	finch chan bool
 	// misc.
 	logPrefix string
-	stats     *c.ComponentStat
+	stats     c.Statistics
 }
 
 // NewVbucketRoutine creates a new routine to handle this vbucket stream.
@@ -118,6 +118,11 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, endpoints map[string]*En
 	var heartBeat <-chan time.Time
 
 	stats := vr.stats
+	uEngineCount := stats.Get("uEngines").(float64)
+	dEngineCount := stats.Get("dEngines").(float64)
+	beginCount := stats.Get("begins").(float64)
+	mutationCount := stats.Get("mutations").(float64)
+	syncCount := stats.Get("syncs").(float64)
 
 loop:
 	for {
@@ -130,7 +135,7 @@ loop:
 				engines = msg[2].(map[uint64]*Engine)
 				respch := msg[3].(chan []interface{})
 				respch <- []interface{}{nil}
-				stats.Incr("/uEngines", 1)
+				uEngineCount++
 				vr.traceCtrlPath(endpoints, engines)
 
 			case vrCmdDeleteEngines:
@@ -140,11 +145,16 @@ loop:
 				}
 				respch := msg[3].(chan []interface{})
 				respch <- []interface{}{nil}
-				stats.Incr("/dEngines", 1)
+				dEngineCount++
 				vr.traceCtrlPath(endpoints, engines)
 
 			case vrCmdGetStatistics:
 				respch := msg[1].(chan []interface{})
+				stats.Set("uEngines", uEngineCount)
+				stats.Set("dEngines", dEngineCount)
+				stats.Set("begins", beginCount)
+				stats.Set("mutations", mutationCount)
+				stats.Set("syncs", syncCount)
 				respch <- []interface{}{stats.ToMap()}
 
 			case vrCmdEvent:
@@ -160,7 +170,7 @@ loop:
 					})
 					tickTs := c.VbucketSyncTimeout * time.Millisecond
 					heartBeat = time.Tick(tickTs)
-					stats.Incr("/begins", 1)
+					beginCount++
 					break // breaks out of select{}
 				}
 
@@ -182,7 +192,7 @@ loop:
 					// send might fail, we don't care
 					endpoints[raddr].Send(vr.bucket, vr.vbno, vr.vbuuid, kv)
 				}
-				stats.Incr("/mutations", 1)
+				mutationCount++
 
 			case vrCmdClose:
 				respch := msg[1].(chan []interface{})
@@ -198,7 +208,7 @@ loop:
 					kv.AddSync()
 					return kv
 				})
-				stats.Incr("/syncs", 1)
+				syncCount++
 			}
 		}
 	}

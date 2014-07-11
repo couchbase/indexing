@@ -80,7 +80,7 @@ type Server interface {
 	Start() error
 
 	// GetStatistics returns server statistics.
-	GetStatistics() *c.ComponentStat
+	GetStatistics() c.Statistics
 
 	// Stop server routine. TODO: server routine shall quite only after
 	// outstanding requests are serviced.
@@ -94,6 +94,6 @@ type Client interface {
 	// pointer to an object implementing `MessageMarshaller` interface.
 	Request(request, response MessageMarshaller) (err error)
 
-	// RequestStat shall get ComponentStat for specified path.
-	RequestStat(path string, response MessageMarshaller) (err error)
+	// RequestStats shall get Statistics
+	RequestStats(response MessageMarshaller) (err error)
 }

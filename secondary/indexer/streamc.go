@@ -48,7 +48,7 @@ type StreamClient struct {
 	// gen-server
 	reqch chan []interface{}
 	finch chan bool
-	// statistics
+	// miscellaneous
 	logPrefix string
 }
 

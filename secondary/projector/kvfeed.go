@@ -76,7 +76,7 @@ type KVFeed struct {
 	finch chan bool
 	// misc.
 	logPrefix string
-	stats     *c.ComponentStat
+	stats     c.Statistics
 }
 
 type activeVbucket struct {
@@ -223,11 +223,11 @@ loop:
 			respch := msg[1].(chan []interface{})
 			resp := kvfeed.sendSideband(sbkvGetStatistics{}, sbch)
 			for name, val := range resp[0].(map[string]interface{}) {
-				kvfeed.stats.Set("/"+name, val)
+				kvfeed.stats.Set(name, val)
 			}
 			for vbno, v := range kvfeed.vbuckets {
 				s := fmt.Sprintf("%v", vbno)
-				kvfeed.stats.Set("/"+s, v.vr.GetStatistics())
+				kvfeed.stats.Set(s, v.vr.GetStatistics())
 			}
 			respch <- []interface{}{kvfeed.stats.ToMap()}
 
@@ -332,7 +332,7 @@ func (kvfeed *KVFeed) runScatter(sbch chan []interface{}) {
 	var endpoints map[string]*Endpoint
 	var engines map[uint64]*Engine
 
-	events := 0
+	eventCount := 0
 loop:
 	for {
 		select {
@@ -344,7 +344,7 @@ loop:
 			c.Tracef("%v, Mutation %v:%v:%v <%v>\n",
 				kvfeed.logPrefix, m.VBucket, m.Seqno, m.Opcode, m.Key)
 			kvfeed.scatterMutation(m, endpoints, engines)
-			events++
+			eventCount++
 
 		case msg, ok := <-sbch:
 			if ok == false {
@@ -373,9 +373,7 @@ loop:
 				}
 
 			case sbkvGetStatistics:
-				stats := map[string]interface{}{
-					"events": events,
-				}
+				stats := map[string]interface{}{"events": eventCount}
 				respch <- []interface{}{stats}
 			}
 			respch <- []interface{}{nil}

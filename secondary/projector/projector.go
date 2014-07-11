@@ -141,7 +141,7 @@ type Projector struct {
 	finch chan bool
 	// statistics
 	logPrefix string
-	stats     *c.ComponentStat
+	stats     c.Statistics
 }
 
 // NewProjector creates a news projector instance and starts a corresponding
@@ -161,7 +161,7 @@ func NewProjector(cluster string, kvaddrs []string, adminport string) *Projector
 	go p.genServer(p.reqch)
 	c.Infof("%v started ...\n", p.logPrefix)
 	p.stats = p.newStats()
-	p.stats.Set("/kvaddrs", kvaddrs)
+	p.stats.Set("kvaddrs", kvaddrs)
 	return p
 }
 
@@ -224,11 +224,11 @@ func (p *Projector) ListTopics() ([]string, error) {
 }
 
 // GetStatistics will get all or subset of statistics from projector.
-func (p *Projector) GetStatistics() map[string]interface{} {
+func (p *Projector) GetStatistics() c.Statistics {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{pCmdGetStatistics, respch}
 	resp, _ := c.FailsafeOp(p.reqch, respch, cmd, p.finch)
-	return resp[1].(map[string]interface{})
+	return resp[1].(c.Statistics)
 }
 
 // Close this projector.
@@ -280,12 +280,14 @@ func (p *Projector) listTopics() []string {
 	return topics
 }
 
-func (p *Projector) getStatistics() map[string]interface{} {
-	feeds, _ := c.NewComponentStat(p.stats.Get("/feeds"))
+func (p *Projector) getStatistics() c.Statistics {
+	feeds, _ := c.NewStatistics(p.stats.Get("feeds"))
 	for topic, feed := range p.topics {
-		feeds.Set("/"+topic, feed.GetStatistics())
+		feeds.Set(topic, feed.GetStatistics())
 	}
-	return p.stats.ToMap()
+	p.stats.Set("topics", p.topics)
+	p.stats.Set("feeds", feeds)
+	return p.stats
 }
 
 func (p *Projector) getFeed(topic string) (*Feed, error) {

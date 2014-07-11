@@ -1,127 +1,156 @@
-// ComponentStat provide a type and method receivers for marshalling and
-// un-marshalling statistics for components across the network.
 //
 // Example client {
 //    client := NewHTTPClient("http://localhost:8888", "/adminport/")
-//    req  := common.ComponentStat{"componentName": "indexer"}
+//    req  := common.Statistics{"componentName": "indexer"}
 //    client.Request(req, req)
 // }
 //
 // Note:
-//  - component statistics are marshalled and unmarshalled as JSON
-//  - JSON interprets integers as float.
+//  1. statistics key should not have "/" character.
 
 package common
 
 import (
 	"encoding/json"
-	"github.com/prataprc/go-jsonpointer"
 	"regexp"
+	"strings"
 )
 
-// ComponentStat is unmarshalled JSON and represented using Golang's type
-// system.
-//
-// Mandatory fields in ComponentStat,
-//  "componentName", name of the component that provide statistics for itself.
-type ComponentStat map[string]interface{}
+// Statistics provide a type and method receivers for marshalling and
+// un-marshalling statistics, as JSON, for components across the network.
+type Statistics map[string]interface{}
 
-// NewComponentStat return a new instance of stat structure initialized with
+// NewStatistics return a new instance of stat structure initialized with
 // data.
-func NewComponentStat(data interface{}) (stat *ComponentStat, err error) {
-	var statm ComponentStat
+func NewStatistics(data interface{}) (stat Statistics, err error) {
+	var statm Statistics
 
 	switch v := data.(type) {
 	case string:
-		statm = make(ComponentStat)
+		statm = make(Statistics)
 		err = json.Unmarshal([]byte(v), &statm)
 	case []byte:
-		statm = make(ComponentStat)
+		statm = make(Statistics)
 		err = json.Unmarshal(v, &statm)
 	case map[string]interface{}:
-		statm = ComponentStat(v)
+		statm = Statistics(v)
 	case nil:
-		statm = make(ComponentStat)
+		statm = make(Statistics)
 	}
-	return &statm, err
+	return statm, err
 }
 
 // Name is part of MessageMarshaller interface.
-func (s *ComponentStat) Name() string {
+func (s Statistics) Name() string {
 	return "stats"
 }
 
 // Encode is part of MessageMarshaller interface.
-func (s *ComponentStat) Encode() (data []byte, err error) {
+func (s Statistics) Encode() (data []byte, err error) {
 	data, err = json.Marshal(s)
 	return
 }
 
 // Decode is part of MessageMarshaller interface.
-func (s *ComponentStat) Decode(data []byte) (err error) {
-	return json.Unmarshal(data, s)
+func (s Statistics) Decode(data []byte) (err error) {
+	return json.Unmarshal(data, &s)
 }
 
 // ContentType is part of MessageMarshaller interface.
-func (s *ComponentStat) ContentType() string {
+func (s Statistics) ContentType() string {
 	return "application/json"
 }
 
 // Statistic operations.
 
 // Incr increments stat value(s) by `vals`.
-func (s *ComponentStat) Incr(path string, vals ...int) {
-	m := map[string]interface{}(*s)
-	err := jsonpointer.Incr(m, path, vals...)
-	if err != nil {
-		Fatalf("Incr(%q) ComponentStat %v\n", path, err)
+func (s Statistics) Incr(path string, vals ...int) {
+	l := len(vals)
+	if l == 0 {
+		Warnf("Incr called without value")
+		return
+	}
+
+	switch vs := s[path].(type) {
+	case float64:
+		s[path] = vs + float64(vals[0])
+
+	case []interface{}:
+		if l != len(vs) {
+			Warnf("Incr expected %v values, got %v", len(vs), l)
+			return
+		}
+		for i, v := range vs {
+			vs[i] = v.(float64) + float64(vals[i])
+		}
+
+	case []float64:
+		if l != len(vs) {
+			Warnf("Incr expected %v values, got %v", len(vs), l)
+			return
+		}
+		for i, v := range vs {
+			vs[i] = v + float64(vals[i])
+		}
 	}
 }
 
 // Decr increments stat value(s) by `vals`.
-func (s *ComponentStat) Decr(path string, vals ...int) {
-	m := map[string]interface{}(*s)
-	err := jsonpointer.Decr(m, path, vals...)
-	if err != nil {
-		Fatalf("Decr(%q) ComponentStat %v\n", path, err)
+func (s Statistics) Decr(path string, vals ...int) {
+	l := len(vals)
+	if l == 0 {
+		Warnf("Decr called without value")
+		return
+	}
+
+	switch vs := s[path].(type) {
+	case float64:
+		s[path] = vs - float64(vals[0])
+
+	case []interface{}:
+		if l != len(vs) {
+			Warnf("Decr expected %v values, got %v", len(vs), l)
+			return
+		}
+		for i, v := range vs {
+			vs[i] = v.(float64) - float64(vals[i])
+		}
+
+	case []float64:
+		if l != len(vs) {
+			Warnf("Incr expected %v values, got %v", len(vs), l)
+			return
+		}
+		for i, v := range vs {
+			vs[i] = v - float64(vals[i])
+		}
 	}
 }
 
 // Set stat value
-func (s *ComponentStat) Set(path string, val interface{}) {
-	m := map[string]interface{}(*s)
-	err := jsonpointer.Set(m, path, val)
-	if err != nil {
-		Fatalf("Set(%q) ComponentStat %v\n", path, err)
-	}
+func (s Statistics) Set(path string, val interface{}) {
+	s[path] = val
 }
 
 // Get stat value
-func (s *ComponentStat) Get(path string) interface{} {
-	m := map[string]interface{}(*s)
-	val := jsonpointer.Get(m, path)
-	if val == nil {
-		Fatalf("for Get(%q) ComponentStat\n", path)
-	}
-	return val
+func (s Statistics) Get(path string) interface{} {
+	return s[path]
 }
 
-// ToMap converts *ComponentStat to map.
-func (s *ComponentStat) ToMap() map[string]interface{} {
-	return map[string]interface{}(*s)
+// ToMap converts Statistics to map.
+func (s Statistics) ToMap() map[string]interface{} {
+	return map[string]interface{}(s)
 }
 
-// StatsURLPath construct url path for component-stats using path json-pointer.
+// StatsURLPath construct url path for statistics.
 func StatsURLPath(prefix, path string) string {
-	if prefix[len(prefix)-1] != '/' {
-		prefix = prefix + "/"
-	}
-	return prefix + "stats" + path
+	prefix = strings.TrimRight(prefix, UrlSep)
+	return strings.Join([]string{prefix, "stats", path}, UrlSep)
 }
 
-var regxStatPath, _ = regexp.Compile(`(.*)stats(.*)`)
+var regxStatPath, _ = regexp.Compile(`(.*)/stats/(.*)`)
 
-// ParseStatsPath is opposite StatsURLPath
+// ParseStatsPath is opposite of StatsURLPath
 func ParseStatsPath(urlPath string) string {
 	matches := regxStatPath.FindStringSubmatch(urlPath)
 	if len(matches) != 3 {
