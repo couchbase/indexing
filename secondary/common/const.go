@@ -23,9 +23,6 @@ var ErrorNotMyVbucket = errors.New("secondary.notMyVbucket")
 // ErrorInvalidRequest
 var ErrorInvalidRequest = errors.New("secondary.invalidRequest")
 
-// ComponentProjector
-var ComponentProjector = "projector"
-
 // TODO: ideally we would like to have these constants configurable.
 const (
 	// MaxVbuckets is maximum number of vbuckets for any bucket in kv.

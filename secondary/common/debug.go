@@ -1,6 +1,7 @@
 package common
 
 import (
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -17,10 +18,11 @@ const (
 )
 
 var logLevel int
+var logFile io.Writer = os.Stdout
 var logger *log.Logger
 
 func init() {
-	logger = log.New(os.Stdout, "", log.Lmicroseconds)
+	logger = log.New(logFile, "", log.Lmicroseconds)
 }
 
 // LogLevel returns current log level
@@ -28,10 +30,14 @@ func LogLevel() int {
 	return logLevel
 }
 
-// LogIgnore all log messages.
+// LogIgnore to ignore all log messages.
 func LogIgnore() {
-	log.SetOutput(ioutil.Discard)
 	logger = log.New(ioutil.Discard, "", log.Lmicroseconds)
+}
+
+// LogEnable to enable / re-enable log output.
+func LogEnable() {
+	logger = log.New(logFile, "", log.Lmicroseconds)
 }
 
 // SetLogLevel sets current log level
@@ -39,9 +45,15 @@ func SetLogLevel(level int) {
 	logLevel = level
 }
 
-//------------------------
+// SetLogWriter sets output file for log messages
+func SetLogWriter(w io.Writer) {
+	logger = log.New(w, "", log.Lmicroseconds)
+	logFile = w
+}
+
+//-------------------------------
 // Warning, Error, Fatal messages
-//------------------------
+//-------------------------------
 
 // Warnf similar to fmt.Printf
 func Warnf(format string, v ...interface{}) {
