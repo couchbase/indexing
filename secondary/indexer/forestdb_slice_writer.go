@@ -30,15 +30,20 @@ func NewForestDBSlice(name string, sliceId SliceId, idxDefnId common.IndexDefnId
 
 	config := forestdb.DefaultConfig()
 	config.SetDurabilityOpt(forestdb.DRB_ASYNC)
-	config.SetCompactionMode(forestdb.COMPACT_AUTO)
 
-	if slice.main, err = forestdb.Open(name, config); err != nil {
-		return nil, err
+	slice.main = make([]*forestdb.Database, NUM_WRITER_THREADS_PER_SLICE)
+	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+		if slice.main[i], err = forestdb.Open(name, config); err != nil {
+			return nil, err
+		}
 	}
 
 	//create a separate back-index
-	if slice.back, err = forestdb.Open(name+"_back", config); err != nil {
-		return nil, err
+	slice.back = make([]*forestdb.Database, NUM_WRITER_THREADS_PER_SLICE)
+	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+		if slice.back[i], err = forestdb.Open(name+"_back", config); err != nil {
+			return nil, err
+		}
 	}
 
 	slice.name = name
@@ -50,7 +55,12 @@ func NewForestDBSlice(name string, sliceId SliceId, idxDefnId common.IndexDefnId
 
 	slice.cmdCh = make(chan interface{}, SLICE_COMMAND_BUFFER_SIZE)
 
-	go slice.handleCommands()
+	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+		go slice.handleCommandsWorker(i)
+	}
+
+	common.Tracef("ForestDBSlice: Created New Slice Id %v IndexInstId %v "+
+		"WriterThreads %v", sliceId, idxInstId, NUM_WRITER_THREADS_PER_SLICE)
 
 	return slice, nil
 }
@@ -66,8 +76,8 @@ type fdbSlice struct {
 	name string
 	id   SliceId //slice id
 
-	main *forestdb.Database //db handle for forward index
-	back *forestdb.Database //db handle for reverse index
+	main []*forestdb.Database //db handle for forward index
+	back []*forestdb.Database //db handle for reverse index
 
 	idxDefnId common.IndexDefnId
 	idxInstId common.IndexInstId
@@ -81,6 +91,11 @@ type fdbSlice struct {
 	stopCh DoneChannel      //internal channel to signal shutdown
 
 	fatalDbErr error //store any fatal DB error
+
+	//TODO: Remove this once these stats are
+	//captured by the stats library
+	totalFlushTime  time.Duration
+	totalCommitTime time.Duration
 }
 
 //Insert will insert the given key/value pair from slice.
@@ -109,7 +124,7 @@ func (fdb *fdbSlice) Delete(docid []byte) error {
 //write requests for the slice and processes
 //those. This will shut itself down internal
 //shutdown channel is closed.
-func (fdb *fdbSlice) handleCommands() {
+func (fdb *fdbSlice) handleCommandsWorker(workerId int) {
 
 	for {
 		select {
@@ -117,13 +132,19 @@ func (fdb *fdbSlice) handleCommands() {
 			switch c.(type) {
 			case kv:
 				cmd := c.(kv)
-				fdb.insert(cmd.k, cmd.v)
+				start := time.Now()
+				fdb.insert(cmd.k, cmd.v, workerId)
+				elapsed := time.Since(start)
+				fdb.totalFlushTime += elapsed
 			case []byte:
+				start := time.Now()
 				cmd := c.([]byte)
-				fdb.delete(cmd)
+				fdb.delete(cmd, workerId)
+				elapsed := time.Since(start)
+				fdb.totalFlushTime += elapsed
 			default:
-				common.Errorf("ForestDBSlice: Received"+
-					"Unknown Command %v", c)
+				common.Errorf("ForestDBSlice: SliceId %v IndexInstId %v Received "+
+					"Unknown Command %v", fdb.id, fdb.idxInstId, c)
 			}
 
 		case <-fdb.stopCh:
@@ -135,17 +156,19 @@ func (fdb *fdbSlice) handleCommands() {
 }
 
 //insert does the actual insert in forestdb
-func (fdb *fdbSlice) insert(k Key, v Value) {
+func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 
 	var err error
 	var oldkey Key
 
-	common.Tracef("ForestDBSlice: Set Key - %s Value - %s", k, v)
+	common.Tracef("ForestDBSlice: SliceId %v IndexInstId %v Set Key - %s "+
+		"Value - %s", fdb.id, fdb.idxInstId, k, v)
 
 	//check if the docid exists in the back index
-	if oldkey, err = fdb.getBackIndexEntry(v.Docid()); err != nil {
+	if oldkey, err = fdb.getBackIndexEntry(v.Docid(), workerId); err != nil {
 		fdb.checkFatalDbError(err)
-		common.Errorf("ForestDBSlice: Error locating backindex entry %v", err)
+		common.Errorf("ForestDBSlice: SliceId %v IndexInstId %v Error locating "+
+			"backindex entry %v", fdb.id, fdb.idxInstId, err)
 		return
 	} else if oldkey.EncodedBytes() != nil {
 		//TODO: Handle the case if old-value from backindex matches with the
@@ -153,9 +176,10 @@ func (fdb *fdbSlice) insert(k Key, v Value) {
 
 		//there is already an entry in main index for this docid
 		//delete from main index
-		if err = fdb.main.DeleteKV(oldkey.EncodedBytes()); err != nil {
+		if err = fdb.main[workerId].DeleteKV(oldkey.EncodedBytes()); err != nil {
 			fdb.checkFatalDbError(err)
-			common.Errorf("ForestDBSlice: Error deleting entry from main index %v", err)
+			common.Errorf("ForestDBSlice: SliceId %v IndexInstId %v Error deleting "+
+				"entry from main index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
 	}
@@ -163,56 +187,59 @@ func (fdb *fdbSlice) insert(k Key, v Value) {
 	//if secondary-key is nil, no further processing is required. If this was a KV insert,
 	//nothing needs to be done./if this was a KV update, only delete old back/main index entry
 	if v.KeyBytes() == nil {
-		common.Errorf("ForestDBSlice: Received NIL secondary key. Skipping Index Insert.")
+		common.Errorf("ForestDBSlice: SliceId %v IndexInstId %v Received NIL secondary key. "+
+			"Skipped Key %s. Value %s.", fdb.id, fdb.idxInstId, k, v)
 		return
 	}
 
 	//set the back index entry <docid, encodedkey>
-	if err = fdb.back.SetKV([]byte(v.Docid()), k.EncodedBytes()); err != nil {
+	if err = fdb.back[workerId].SetKV([]byte(v.Docid()), k.EncodedBytes()); err != nil {
 		fdb.checkFatalDbError(err)
-		common.Errorf("ForestDBSlice: Error in Back Index Set. Key %s. Value %s. Error %v",
-			v, k, err)
+		common.Errorf("ForestDBSlice: SliceId %v IndexInstId %v Error in Back Index Set. "+
+			"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, v, k, err)
 		return
 	}
 
 	//set in main index
-	if err = fdb.main.SetKV(k.EncodedBytes(), v.EncodedBytes()); err != nil {
+	if err = fdb.main[workerId].SetKV(k.EncodedBytes(), v.EncodedBytes()); err != nil {
 		fdb.checkFatalDbError(err)
-		common.Errorf("ForestDBSlice: Error in Main Index Set. Key %s. Value %s. Error %v",
-			k, v, err)
+		common.Errorf("ForestDBSlice: SliceId %v IndexInstId %v Error in Main Index Set. "+
+			"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, k, v, err)
 		return
 	}
 
 }
 
 //delete does the actual delete in forestdb
-func (fdb *fdbSlice) delete(docid []byte) {
+func (fdb *fdbSlice) delete(docid []byte, workerId int) {
 
-	common.Tracef("ForestDBSlice: Delete Key - %s", docid)
+	common.Tracef("ForestDBSlice: SliceId %v IndexInstId %v. Delete Key - %s",
+		fdb.id, fdb.idxInstId, docid)
 
 	var oldkey Key
 	var err error
 
-	if oldkey, err = fdb.getBackIndexEntry(docid); err != nil {
+	if oldkey, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
 		fdb.checkFatalDbError(err)
-		common.Errorf("ForestDBSlice: Error locating backindex entry "+
-			"for Doc %s. Error %v", docid, err)
+		common.Errorf("ForestDBSlice: SliceId %v IndexInstId %v. Error locating "+
+			"backindex entry for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
 		return
 	}
 
 	//delete from main index
-	if err = fdb.main.DeleteKV(oldkey.EncodedBytes()); err != nil {
+	if err = fdb.main[workerId].DeleteKV(oldkey.EncodedBytes()); err != nil {
 		fdb.checkFatalDbError(err)
-		common.Errorf("ForestDBSlice: Error deleting entry from main "+
-			"index for Doc %s. Key %v. Error %v", docid, oldkey, err)
+		common.Errorf("ForestDBSlice: SliceId %v IndexInstId %v. Error deleting "+
+			"entry from main index for Doc %s. Key %v. Error %v", fdb.id, fdb.idxInstId,
+			docid, oldkey, err)
 		return
 	}
 
 	//delete from the back index
-	if err = fdb.back.DeleteKV(docid); err != nil {
+	if err = fdb.back[workerId].DeleteKV(docid); err != nil {
 		fdb.checkFatalDbError(err)
-		common.Errorf("ForestDBSlice: Error deleting entry from back "+
-			"index for Doc %s. Error %v", docid, err)
+		common.Errorf("ForestDBSlice: SliceId %v IndexInstId %v. Error deleting "+
+			"entry from back index for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
 		return
 	}
 
@@ -220,15 +247,16 @@ func (fdb *fdbSlice) delete(docid []byte) {
 
 //getBackIndexEntry returns an existing back index entry
 //given the docid
-func (fdb *fdbSlice) getBackIndexEntry(docid []byte) (Key, error) {
+func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) (Key, error) {
 
-	common.Tracef("ForestDBSlice: Get BackIndex Key - %s", docid)
+	common.Tracef("ForestDBSlice: SliceId %v IndexInstId %v Get BackIndex Key - %s",
+		fdb.id, fdb.idxInstId, docid)
 
 	var k Key
 	var kbyte []byte
 	var err error
 
-	kbyte, err = fdb.back.GetKV([]byte(docid))
+	kbyte, err = fdb.back[workerId].GetKV([]byte(docid))
 
 	//forestdb reports get in a non-existent key as an
 	//error, skip that
@@ -270,7 +298,7 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 
 	//store snapshot seqnum for main index
 	{
-		i, err := fdb.main.DbInfo()
+		i, err := fdb.main[0].DbInfo()
 		if err != nil {
 			return nil, err
 		}
@@ -280,7 +308,7 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 
 	//store snapshot seqnum for back index
 	{
-		i, err := fdb.back.DbInfo()
+		i, err := fdb.back[0].DbInfo()
 		if err != nil {
 			return nil, err
 		}
@@ -288,7 +316,8 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 		s.backSeqNum = seq
 	}
 
-	common.Infof("ForestDBSlice: Created New Snapshot %v", s)
+	common.Infof("ForestDBSlice: SliceId %v IndexInstId %v Created New "+
+		"Snapshot %v", fdb.id, fdb.idxInstId, s)
 
 	return s, nil
 }
@@ -311,27 +340,33 @@ func (fdb *fdbSlice) Commit() error {
 	var bErr, mErr error
 	statusCh := make(DoneChannel)
 
+	start := time.Now()
 	//Commit the back index
 	go func() {
-		bErr = fdb.back.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
+		bErr = fdb.back[0].Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
 		close(statusCh)
 	}()
 
 	//Commit the main index
-	mErr = fdb.main.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
+	mErr = fdb.main[0].Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
 
 	//wait for back index commit to finish
 	<-statusCh
 
+	elapsed := time.Since(start)
+	fdb.totalCommitTime += elapsed
+	common.Infof("ForestDBSlice: SliceId %v IndexInstId %v TotalFlushTime %v "+
+		"TotalCommitTime %v", fdb.id, fdb.idxInstId, fdb.totalFlushTime, fdb.totalCommitTime)
+
 	if bErr != nil {
-		common.Errorf("ForestDBSlice: Error in Back Index Commit "+
-			"%v", bErr)
+		common.Errorf("ForestDBSlice: SliceId %v IndexInstId %v Error in Back "+
+			"Index Commit %v", fdb.id, fdb.idxInstId, bErr)
 		return bErr
 	}
 
 	if mErr != nil {
-		common.Errorf("ForestDBSlice: Error in Main Index Commit "+
-			"%v", bErr)
+		common.Errorf("ForestDBSlice: SliceId %v IndexInstId %v Error in Main "+
+			"Index Commit %v", fdb.id, fdb.idxInstId, bErr)
 		return mErr
 	}
 
@@ -344,17 +379,19 @@ func (fdb *fdbSlice) Close() error {
 	common.Infof("ForestDBSlice: Closing Slice Id %v, IndexInstId %v, "+
 		"IndexDefnId %v", fdb.idxInstId, fdb.idxDefnId, fdb.id)
 
-	//signal shutdown for command handler
-	fdb.stopCh <- true
-	<-fdb.stopCh
+	//signal shutdown for command handler routines
+	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+		fdb.stopCh <- true
+		<-fdb.stopCh
+	}
 
 	//close the main index
-	if fdb.main != nil {
-		fdb.main.Close()
+	if fdb.main[0] != nil {
+		fdb.main[0].Close()
 	}
 	//close the back index
-	if fdb.back != nil {
-		fdb.back.Close()
+	if fdb.back[0] != nil {
+		fdb.back[0].Close()
 	}
 	return nil
 }

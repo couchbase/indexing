@@ -64,3 +64,6 @@ const SLICE_COMMAND_BUFFER_SIZE = 10000
 //Time in milliseconds for a slice to poll for
 //any outstanding writes before commit
 const SLICE_COMMIT_POLL_INTERVAL = 20
+
+//Default Number of threads for a Slice Writer
+const NUM_WRITER_THREADS_PER_SLICE = 2
