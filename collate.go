@@ -1,26 +1,27 @@
 //  Copyright (c) 2013 Couchbase, Inc.
-//  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
-//  except in compliance with the License. You may obtain a copy of the License at
-//    http://www.apache.org/licenses/LICENSE-2.0
-//  Unless required by applicable law or agreed to in writing, software distributed under the
-//  License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
-//  either express or implied. See the License for the specific language governing permissions
-//  and limitations under the License.
+//  Licensed under the Apache License, Version 2.0 (the "License"); you may not
+//  use this file except in compliance with the License. You may obtain a copy
+//  of the License at http://www.apache.org/licenses/LICENSE-2.0
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+//  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+//  License for the specific language governing permissions and limitations
+//  under the License.
 
 // Package collatejson supplies Encoding and Decoding function to transform
 // JSON text into binary representation without loosing information. That is,
 //
 // * binary representation should preserve the sort order such that, sorting
-// binary encoded json documents much match sorting by functions that parse
-// and compare JSON documents.
+//   binary encoded json documents much match sorting by functions that parse
+//   and compare JSON documents.
 //
 // * it must be possible to get back the original document, in semantically
-// correct form, from its binary representation.
+//   correct form, from its binary representation.
 //
 // Notes:
 //
 // * items in a property object are sorted by its property name before they
-// are compared with other property object.
+//   are compared with property's value.
 package collatejson
 
 import (
