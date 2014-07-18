@@ -26,10 +26,6 @@ package collatejson
 
 import (
 	"bytes"
-	"code.google.com/p/go.text/collate"
-	"code.google.com/p/go.text/collate/colltab"
-	"code.google.com/p/go.text/language"
-	"code.google.com/p/go.text/unicode/norm"
 	"fmt"
 	"github.com/couchbaselabs/dparval"
 	"math"
@@ -65,9 +61,9 @@ type Codec struct {
 	numeric   bool
 	nfkd      bool
 	utf8      bool
-	strength  colltab.Level
-	alternate collate.AlternateHandling
-	language  language.Tag
+	//strength  colltab.Level
+	//alternate collate.AlternateHandling
+	//language  language.Tag
 }
 
 // NewCodec creates a new codec object and returns a reference to it.
@@ -81,8 +77,6 @@ func NewCodec() *Codec {
 		hiraganaQ: false,
 		caseLevel: true,
 		numeric:   false,
-		strength:  colltab.Quaternary,
-		language:  language.English,
 	}
 }
 
@@ -100,24 +94,6 @@ func (codec *Codec) SortbyArrayLen(what bool) {
 // Use `false` to sort only by proprety items
 func (codec *Codec) SortbyPropertyLen(what bool) {
 	codec.propertyLenPrefix = what
-}
-
-// UnicodeCollationPriority sets collate.Collator properties for unicode
-// collation.
-func (codec *Codec) UnicodeCollationPriority(
-	strength colltab.Level, alternate collate.AlternateHandling,
-	backwards, hiraganaQ, caseLevel, numeric bool) {
-	codec.strength = strength
-	codec.alternate = alternate
-	codec.backwards = backwards
-	codec.hiraganaQ = hiraganaQ
-	codec.caseLevel = caseLevel
-	codec.numeric = numeric
-}
-
-// SetLanguage uses language tag while doing unicode collation.
-func (codec *Codec) SetLanguage(l language.Tag) {
-	codec.language = l
 }
 
 // SortbyNFKD will enable an alternate collation using NFKD unicode standard.
@@ -170,7 +146,7 @@ func json2code(codec *Codec, val interface{}) []byte {
 	case uint64:
 		return json2code(codec, float64(value))
 	case string:
-		code = suffixEncodeString(codec.EncodeString(value))
+		code = suffixEncodeString([]byte(value))
 		res := joinBytes([]byte{TypeString}, code)
 		return append(res, Terminator)
 	case []interface{}:
@@ -313,28 +289,4 @@ func getDatum(code []byte) ([]byte, []byte) {
 		}
 	}
 	return code[:i], code[i+1:]
-}
-
-// EncodeString encodes string in utf8 encoding to binary sequence based on
-// UTF8, NFKD or go.text/collate algorithms.
-func (codec *Codec) EncodeString(value string) (code []byte) {
-	bs := []byte(value)
-	if codec.utf8 {
-		code = []byte(bs)
-	} else if codec.nfkd {
-		code = norm.NFKD.Bytes([]byte(bs)) // canonical decomposed
-	} else {
-		// TODO: Try to understand the performance implication of collate.Buffer
-		// object
-		buf := &collate.Buffer{}
-		c := collate.New(codec.language)
-		c.Strength = codec.strength
-		c.Alternate = codec.alternate
-		c.Backwards = codec.backwards
-		c.HiraganaQuaternary = codec.hiraganaQ
-		c.CaseLevel = codec.caseLevel
-		c.Numeric = codec.numeric
-		code = c.Key(buf, []byte(bs))
-	}
-	return code
 }

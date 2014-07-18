@@ -77,29 +77,3 @@ func BenchmarkCompare(b *testing.B) {
 		bytes.Compare(code, code)
 	}
 }
-
-func BenchmarkUtf8(b *testing.B) {
-	s := "prográmming"
-	codec := NewCodec()
-	codec.SortbyUTF8(true)
-	for i := 0; i < b.N; i++ {
-		codec.EncodeString(s)
-	}
-}
-
-func BenchmarkNFKD(b *testing.B) {
-	s := "prográmming"
-	codec := NewCodec()
-	codec.SortbyNFKD(true)
-	for i := 0; i < b.N; i++ {
-		codec.EncodeString(s)
-	}
-}
-
-func BenchmarkStringCollate(b *testing.B) {
-	s := "prográmming"
-	codec := NewCodec()
-	for i := 0; i < b.N; i++ {
-		codec.EncodeString(s)
-	}
-}
