@@ -50,19 +50,23 @@ const (
 	TypeObj
 )
 
+var BufSize = 64
+
 // Codec structure
 type Codec struct {
 	arrayLenPrefix    bool // if true, first sort arrays based on its length.
 	propertyLenPrefix bool // if true, first sort properties based on length.
-	strength          colltab.Level
-	alternate         collate.AlternateHandling
-	backwards         bool
-	hiraganaQ         bool
-	caseLevel         bool
-	numeric           bool
-	language          language.Tag
-	nfkd              bool
-	utf8              bool
+	buffer            []byte
+	// unicode
+	backwards bool
+	hiraganaQ bool
+	caseLevel bool
+	numeric   bool
+	nfkd      bool
+	utf8      bool
+	strength  colltab.Level
+	alternate collate.AlternateHandling
+	language  language.Tag
 }
 
 // NewCodec creates a new codec object and returns a reference to it.
@@ -70,13 +74,19 @@ func NewCodec() *Codec {
 	return &Codec{
 		arrayLenPrefix:    true,
 		propertyLenPrefix: true,
-		strength:          colltab.Quaternary,
-		backwards:         false,
-		hiraganaQ:         false,
-		caseLevel:         true,
-		numeric:           false,
-		language:          language.English,
+		buffer:            make([]byte, 0, BufSize),
+		// unicode
+		backwards: false,
+		hiraganaQ: false,
+		caseLevel: true,
+		numeric:   false,
+		strength:  colltab.Quaternary,
+		language:  language.English,
 	}
+}
+
+func (codec *Codec) resetBuffer() {
+	codec.buffer = codec.buffer[:0]
 }
 
 // SortbyArrayLen sorts array by length before sorting by array elements. Use
@@ -149,10 +159,12 @@ func json2code(codec *Codec, val interface{}) []byte {
 		return append(code, Terminator)
 	case float64:
 		fvalue := strconv.FormatFloat(value, 'e', -1, 64)
-		code = EncodeFloat([]byte(fvalue))
+		code = EncodeFloat([]byte(fvalue), codec.buffer)
+		codec.resetBuffer()
 		return append(joinBytes([]byte{TypeNumber}, code), Terminator)
 	case int:
-		code = EncodeInt([]byte(strconv.Itoa(value)))
+		code = EncodeInt([]byte(strconv.Itoa(value)), codec.buffer)
+		codec.resetBuffer()
 		return append(joinBytes([]byte{TypeNumber}, code), Terminator)
 	case uint64:
 		return json2code(codec, float64(value))
@@ -209,7 +221,8 @@ func code2json(codec *Codec, code []byte) ([]byte, []byte, error) {
 		var fvalue float64
 		datum, code = getDatum(code)
 		datum = datum[1:] // remove type encoding TYPE_NUMBER
-		ftext := DecodeFloat(datum)
+		ftext := DecodeFloat(datum, codec.buffer)
+		codec.resetBuffer()
 		fvalue, err = strconv.ParseFloat(string(ftext), 64)
 		if math.Trunc(fvalue) == fvalue {
 			json = []byte(fmt.Sprintf("%v", int64(fvalue)))
@@ -219,7 +232,7 @@ func code2json(codec *Codec, code []byte) ([]byte, []byte, error) {
 		return json, code, err
 	case TypeString:
 		var s string
-		s, code = suffixDecodeString(code[1:])
+		s, code, _ = suffixDecodeString(code[1:])
 		json = joinBytes([]byte("\""), []byte(s), []byte("\""))
 		return json, code, nil
 	case TypeArray:
@@ -228,7 +241,9 @@ func code2json(codec *Codec, code []byte) ([]byte, []byte, error) {
 		if codec.arrayLenPrefix {
 			datum, code = getDatum(code)
 			datum = datum[1:] // remove TYPE_NUMBER for len encoding
-			l, err = strconv.Atoi(string(DecodeInt(datum)))
+			_, text := DecodeInt(datum, codec.buffer)
+			l, err = strconv.Atoi(string(text))
+			codec.resetBuffer()
 		}
 		json = []byte("[")
 		comma := []byte{}
@@ -250,7 +265,9 @@ func code2json(codec *Codec, code []byte) ([]byte, []byte, error) {
 		if codec.propertyLenPrefix {
 			datum, code = getDatum(code)
 			datum = datum[1:] // Remove TYPE_NUMBER for len encoding
-			l, err = strconv.Atoi(string(DecodeInt(datum)))
+			_, text := DecodeInt(datum, codec.buffer)
+			l, err = strconv.Atoi(string(text))
+			codec.resetBuffer()
 		}
 		json = []byte("{")
 		comma, name, value := []byte{}, []byte{}, []byte{}

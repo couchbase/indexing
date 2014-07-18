@@ -11,9 +11,15 @@ package collatejson
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"strconv"
 )
+
+// TODO: make the codec thread safe.
+// TODO: return error instead of panics and logging.
+
+// error codes
+var ErrorSuffixDecoding = errors.New("collatejson.suffixDecoding")
 
 // Constants used in text representation of basic data types.
 const (
@@ -62,38 +68,38 @@ var prefixOpp = map[byte]byte{
 // is the actual integer that is encoded.
 //
 // Zero is encoded as '0'
-func EncodeInt(text []byte) []byte {
+func EncodeInt(text, code []byte) []byte { // text -> code
 	if len(text) == 0 { // empty input
-		return []byte{}
+		return code
 	}
-	if val := isZero(text); val != nil {
-		return val
+	if code, ok := isZero(text, code); ok {
+		return code
 	}
 
-	// Handle positive or negative integers
-	var acc [][]byte
 	switch text[0] {
-	case PLUS:
-		acc = encodePosInt(text[1:], make([][]byte, 0, 16))
-	case MINUS:
-		acc = encodeNegInt(text[1:], make([][]byte, 0, 16))
+	case PLUS: // positive int
+		code = encodePosInt(text[1:], code)
+	case MINUS: // negative int
+		code = encodeNegInt(text[1:], code)
 	default:
-		acc = encodePosInt(text, make([][]byte, 0, 16))
+		code = encodePosInt(text, code)
 	}
-	return bytes.Join(acc, []byte{})
+	return code
 }
 
 // encode positive integer, local function gets called by EncodeInt
 //  encoding 7,          >7
 //  encoding 123,        >>3123
 //  encoding 1234567890, >>>2101234567890
-func encodePosInt(text []byte, acc [][]byte) [][]byte {
-	acc = append(acc, []byte{posPrefix})
+func encodePosInt(text []byte, code []byte) []byte {
+	code = append(code, posPrefix)
 	if len(text) > 1 {
-		acc = encodePosInt([]byte(strconv.Itoa(len(text))), acc)
+		// TODO: replace Itoa with more efficient function.
+		c := encodePosInt([]byte(strconv.Itoa(len(text))), code[1:])
+		code = code[:1+len(c)]
 	}
-	acc = append(acc, text)
-	return acc
+	code = append(code, text...)
+	return code
 }
 
 // encode positive integer, local function gets called by EncodeInt
@@ -105,57 +111,93 @@ func encodePosInt(text []byte, acc [][]byte) [][]byte {
 //  encoding -1234567891 ---7898765432108
 //  encoding -1234567890 ---7898765432109
 //  encoding -1234567889 ---7898765432110
-func encodeNegInt(text []byte, acc [][]byte) [][]byte {
-	acc = append(acc, []byte{negPrefix})
+func encodeNegInt(text []byte, code []byte) []byte {
+	code = append(code, negPrefix)
 	if len(text) > 1 {
-		acc = encodeNegInt([]byte(strconv.Itoa(len(text))), acc)
+		// TODO: replace Itoa with more efficient function.
+		c := encodeNegInt([]byte(strconv.Itoa(len(text))), code[1:])
+		code = code[:1+len(c)]
 	}
-	invert := make([]byte, 0, len(text))
 	for _, x := range text {
-		invert = append(invert, negIntLookup[x])
+		code = append(code, negIntLookup[x])
 	}
-	acc = append(acc, invert)
-	return acc
+	return code
+}
+
+// Check whether input is a representation of zero, like,
+//    0 +0 -0
+func isZero(text, code []byte) ([]byte, bool) {
+	// Handle different forms of zero.
+	if (len(text) == 1) && (text[0] == ZERO) {
+		code = append(code, ZERO)
+		return code, true
+
+	} else if (len(text) == 2) && ((text[0] == PLUS) || (text[0] == MINUS)) &&
+		(text[1] == ZERO) {
+
+		code = append(code, ZERO)
+		return code, true
+	}
+	return code, false
 }
 
 // DecodeInt complements EncodeInt, it returns integer in text that can be
 // converted to integer value using strconv.AtoI(return_value)
-func DecodeInt(code []byte) []byte {
+func DecodeInt(code, text []byte) (int, []byte) { // code -> text
 	if len(code) == 0 { // empty input
-		return []byte{}
-	} else if code[0] == ZERO {
-		return []byte{ZERO}
+		return 0, text
+	}
+	if code[0] == ZERO {
+		text = append(text, ZERO)
+		return 1, text
 	}
 
-	val, text := doDecodeInt(code)
-	if code[0] == posPrefix {
-		return joinBytes([]byte{PLUS}, text[:val])
+	var skip int
+	var final []byte
+
+	switch code[0] {
+	case posPrefix:
+		text = append(text, PLUS)
+		skip, final = doDecodeInt(code[1:], text[1:])
+		text = append(text, final...)
+
+	case negPrefix:
+		text = append(text, MINUS)
+		skip, final = doDecodeInt(code[1:], text[1:])
+		for _, x := range final {
+			text = append(text, negIntLookup[x])
+		}
+
+	default:
+		panic("Cannot reach here")
 	}
-	invtext := make([]byte, 0, len(code))
-	for i := 0; i < val; i++ {
-		invtext = append(invtext, negIntLookup[text[i]])
-	}
-	return joinBytes([]byte{MINUS}, invtext)
+	return skip + len(text), text
 }
 
 // local function called by DecodeInt
-func doDecodeInt(code []byte) (int, []byte) {
-	var val int
-	code = code[1:]
+func doDecodeInt(code, text []byte) (int, []byte) {
+	var skip int
+
 	if code[0] == posPrefix {
-		val, code = doDecodeInt(code)
-		vali, _ := strconv.Atoi(string(code[:val]))
-		return vali, code[val:]
+		skip, text = doDecodeInt(code[1:], text)
+		s := skip + len(text) + 1
+		l, _ := strconv.Atoi(string(text))
+		text = append(text[:0], code[s:s+l]...)
+		return s, text
+
 	} else if code[0] == negPrefix {
-		val, code = doDecodeInt(code)
-		codeLen := make([]byte, 0, val)
-		for _, x := range code[:val] {
-			codeLen = append(codeLen, negIntLookup[x])
+		skip, text = doDecodeInt(code[1:], text)
+		for i, x := range text {
+			text[i] = negIntLookup[x]
 		}
-		vali, _ := strconv.Atoi(string(codeLen))
-		return vali, code[val:]
+		s := skip + len(text) + 1
+		l, _ := strconv.Atoi(string(text))
+		text = append(text[:0], code[s:s+l]...)
+		return s, text
+
 	} else {
-		return 1, code
+		text = append(text, code[0])
+		return 0, text
 	}
 }
 
@@ -186,77 +228,92 @@ func doDecodeInt(code []byte) (int, []byte) {
 //  encoding +1.4            + +114-
 //  encoding +0.1 × 10^10    + ++2101-
 //  encoding +0.1 × 10^11    + ++2111-
-func EncodeFloat(text []byte) []byte {
+var mantissa = make([]byte, 0, 128)
+
+func EncodeFloat(text, code []byte) []byte {
 	if len(text) == 0 { // empty input
-		return []byte{}
+		return code
 	}
 	if val, e := strconv.ParseFloat(string(text), 64); e == nil && val == 0 {
-		return []byte{ZERO}
+		code = append(code, ZERO)
+		return code
 	}
 
 	prefix, text := signPrefix(text)
-	exp, mantissa := parseFloat(prefix, text)
-	// Encode integer and decimal part.
-	codeint, codedec := EncodeInt(exp), EncodeSD(mantissa)
-	// Adjust the decimal part
-	codedec = codedec[1:]
-	return joinBytes([]byte{prefix}, codeint, codedec)
+	code = append(code, prefix)
+
+	var exp, mant []byte
+	for i, x := range text {
+		if x == 'e' {
+			mant = text[:i]
+			exp = text[i+1:]
+			break
+		}
+	}
+
+	mantissa = mantissa[:0]
+	mantissa = append(mantissa, []byte{prefix, '0', '.'}...)
+	for _, x := range mant {
+		if x == '.' {
+			continue
+		}
+		mantissa = append(mantissa, x)
+	}
+
+	expi, _ := strconv.Atoi(string(exp))
+	if prefix == negPrefix {
+		exp = []byte(strconv.Itoa(-(expi + 1)))
+	} else {
+		exp = []byte(strconv.Itoa(expi + 1))
+	}
+
+	// Encode integer.
+	code = append(code, EncodeInt(exp, code[1:])...)
+	// Encode and adjust the decimal part.
+	code = append(code, EncodeSD(mantissa, code[len(code):])[1:]...)
+	return code
 }
 
 // DecodeFloat complements EncodeFloat, it returns `exponent` and `mantissa`
 // in text format.
-func DecodeFloat(code []byte) []byte {
+var exponent = make([]byte, 0, 128)
+var flipmap = map[byte]byte{PLUS: MINUS, MINUS: PLUS}
+
+func DecodeFloat(code, text []byte) []byte {
 	if len(code) == 0 { // empty input
-		return []byte{}
+		return text
 	} else if len(code) == 1 && code[0] == ZERO {
-		return code
+		text = append(text, ZERO)
+		return text
 	}
 
 	msign := code[0]
 
-	var val int
-	var icode, e []byte
+	var skip int
+	var final []byte
 
-	if code[1] != negPrefix && code[1] != posPrefix {
-		val, icode = 0, code[2:]
-		e = joinBytes([]byte{PLUS}, DecodeInt(code[1:]))
-	} else {
-		val, icode = doDecodeInt(code[1:])
-		e = DecodeInt(code[1:])
-	}
-	flipmap := map[byte]byte{PLUS: MINUS, MINUS: PLUS}
-	if msign == negPrefix {
-		e[0] = flipmap[e[0]]
-	}
+	exponent = exponent[:0] // initialize
+	switch code[1] {
+	case negPrefix, posPrefix:
+		skip, exponent = DecodeInt(code[1:], exponent)
 
-	m := DecodeSD(joinBytes([]byte{msign}, icode[val:]))
-	return joinBytes(m, []byte("e"), e)
-}
-
-func parseFloat(prefix byte, text []byte) ([]byte, []byte) {
-	var exp string
-	parts := bytes.Split(text, []byte("e"))
-	m := parseMantissa(parts[0])
-	expi, _ := strconv.Atoi(string(parts[1]))
-	if prefix == negPrefix {
-		exp = strconv.Itoa(-(expi + 1))
-	} else {
-		exp = strconv.Itoa(expi + 1)
-	}
-	mantissa := joinBytes([]byte{prefix}, []byte(m))
-	return []byte(exp), mantissa
-}
-
-func parseMantissa(text []byte) []byte {
-	parts := bytes.Split(text, []byte("."))
-	switch len(parts) {
-	case 1:
-		return joinBytes([]byte("0."), parts[0])
-	case 2:
-		return joinBytes([]byte("0."), parts[0], parts[1])
 	default:
-		panic(fmt.Errorf("invalid mantissa %v", string(text)))
+		exponent = append(exponent, PLUS)
+		skip, final = DecodeInt(code[1:], text)
+		exponent = append(exponent, final...)
 	}
+
+	if msign == negPrefix {
+		exponent[0] = flipmap[exponent[0]]
+	}
+
+	mantissa = mantissa[:0] // initialize
+	mantissa = append(mantissa, msign)
+	mantissa = append(mantissa, code[1+skip:]...)
+	text = append(text, DecodeSD(mantissa, text)...)
+	text = append(text, 'e')
+	text = append(text, exponent...)
+	return text
 }
 
 // EncodeSD encodes small-decimal, values that are greater than -1.0 and less
@@ -284,52 +341,52 @@ func parseMantissa(text []byte) []byte {
 //
 // Caveats:
 //  -0.0, 0.0 and +0.0 must be filtered out as integer ZERO `0`.
-func EncodeSD(text []byte) []byte {
+func EncodeSD(text, code []byte) []byte {
 	if len(text) == 0 { // empty input
-		return []byte{}
+		return code
 	}
 
-	prefix, text := signPrefix(text)
+	var prefix byte
+	prefix, text = signPrefix(text)
+	code = append(code, prefix)
 
 	// Remove decimal point and all zeros before that.
-	text = bytes.Split(text, []byte{DOT})[1]
-	code := make([]byte, 0, len(text))
+	for i, x := range text {
+		if x == '.' {
+			text = text[i+1:]
+			break
+		}
+	}
 	if prefix == negPrefix { // Do inversion if negative number
 		for _, x := range text {
 			code = append(code, negIntLookup[x])
 		}
 	} else { // if positive number just copy the text
-		code = code[:len(text)]
-		copy(code, text)
+		code = append(code, text...)
 	}
-	return wrapSmallDec(prefix, code)
+	code = append(code, prefixOpp[prefix])
+	return code
 }
 
 // DecodeSD complements EncodeSD, it returns integer in text that can be
 // converted to integer type using strconv.ParseFloat(return_value, 64).
-func DecodeSD(code []byte) []byte {
+func DecodeSD(code, text []byte) []byte {
 	if len(code) == 0 {
-		return []byte{}
+		return text
 	}
 
 	prefix, sign := code[0], prefixSign(code)
-	code = code[1 : len(code)-1]
-	text := make([]byte, 0, len(code))
+	text = append(text, []byte{sign, ZERO, DOT}...)
 
 	// If negative number invert the digits.
 	if prefix == negPrefix {
-		for _, x := range code {
+		for _, x := range code[1 : len(code)-1] {
 			text = append(text, negIntLookup[x])
 		}
 	} else {
-		text = code
+		text = append(text, code[1:len(code)-1]...)
 	}
-	return joinBytes([]byte{sign, ZERO, DOT}, text)
-}
-
-// local function
-func wrapSmallDec(prefix byte, code []byte) []byte {
-	return joinBytes([]byte{prefix}, code, []byte{prefixOpp[prefix]})
+	return text
 }
 
 // EncodeLD encodes large-decimal, values that are greater than or equal to
@@ -357,63 +414,73 @@ func wrapSmallDec(prefix byte, code []byte) []byte {
 //  encoding +3.145         >3145-
 //  encoding +10.5          >>2105-
 //  encoding +100.5         >>31005-
-func EncodeLD(text []byte) []byte {
+func EncodeLD(text, code []byte) []byte {
 	if len(text) == 0 { // empty input
-		return []byte{}
+		return code
 	}
 
-	var codeint, codedec []byte
 	prefix, _ := signPrefix(text)
+
 	// Encode integer and decimal part.
 	texts := bytes.Split(text, []byte{DOT})
 	if len(texts[0]) == 1 && texts[0][0] == ZERO {
-		codeint = []byte{prefix, ZERO}
+		code = append(code, prefix, ZERO)
 	} else if len(texts[0]) == 2 {
-		if (texts[0][0] == PLUS || texts[0][0] == MINUS) && texts[0][1] == ZERO {
-			codeint = []byte{prefix, ZERO}
+		if s := texts[0][0]; (s == PLUS || s == MINUS) && texts[0][1] == ZERO {
+			code = append(code, prefix, ZERO)
 		} else {
-			codeint = EncodeInt(texts[0])
+			l := len(EncodeInt(texts[0], code))
+			code = code[:l]
 		}
 	} else {
-		codeint = EncodeInt(texts[0])
+		l := len(EncodeInt(texts[0], code))
+		code = code[:l]
 	}
+
+	var codedec []byte
+	mantissa := mantissa[:0]
 	if len(texts) == 2 {
-		codedec = EncodeSD(joinBytes([]byte{text[0], ZERO, DOT}, texts[1]))
+		text = joinBytes([]byte{text[0], ZERO, DOT}, texts[1])
+		codedec = EncodeSD(text, mantissa)[1:]
 	} else {
-		codedec = EncodeSD(joinBytes([]byte{text[0], ZERO, DOT, ZERO}))
+		// TODO: This is constant, optimize away.
+		text = []byte{text[0], ZERO, DOT, ZERO}
+		codedec = EncodeSD(text, mantissa)[1:]
 	}
+
 	// Adjust the decimal part
-	codedec = codedec[1:]
 	codedec[len(codedec)-1] = prefixOpp[prefix]
 	if len(codedec) == 2 && codedec[0] == ZERO {
 		codedec = codedec[1:]
 	}
-	return joinBytes(codeint, codedec)
+	code = append(code, codedec...)
+	return code
 }
 
 // DecodeLD complements EncodeLD, it returns integer in text that can be
 // converted to integer type using strconv.ParseFloat(return_value, 64).
-func DecodeLD(code []byte) []byte {
+func DecodeLD(code, text []byte) []byte {
 	if len(code) == 0 { // empty input
-		return []byte{}
+		return text
 	}
 
 	prefix, sign := code[0], prefixSign(code)
-	val, code := doDecodeInt(code)
-	textint := make([]byte, 0, len(code))
+	text = append(text, sign)
+	skip, textint := doDecodeInt(code[1:], text[1:])
+	l := len(textint) + 1
+	text = text[:l]
 
 	// If negative number invert the digits.
 	if sign == MINUS {
-		for i := 0; i < val; i++ {
-			textint = append(textint, negIntLookup[code[i]])
+		for i, x := range text[1:] {
+			text[i+1] = negIntLookup[x]
 		}
-		textint = joinBytes([]byte{sign}, textint)
-	} else {
-		textint = joinBytes([]byte{sign}, code[:val])
 	}
 
-	textdec := DecodeSD(joinBytes([]byte{prefix}, code[val:]))
-	return joinBytes(textint, textdec[2:])
+	code = code[skip+l:]
+	textdec := DecodeSD(joinBytes([]byte{prefix}, code), text[len(text):])[2:]
+	text = append(text, textdec...)
+	return text
 }
 
 // local function that check the sign of the input number and returns the
@@ -449,59 +516,39 @@ func joinBytes(args ...[]byte) []byte {
 	return bytes.Join(args, []byte{})
 }
 
-// Check whether input is a representation of zero, like,
-//    0 +0 -0
-// return the normalized form of zero, which is just `0`.
-func isZero(text []byte) []byte {
-	// Handle different forms of zero.
-	if len(text) == 1 && text[0] == ZERO {
-		return []byte{ZERO}
-	} else if len(text) == 2 && text[0] == PLUS && text[1] == ZERO {
-		return []byte{ZERO}
-	} else if len(text) == 2 && text[0] == MINUS && text[1] == ZERO {
-		return []byte{ZERO}
-	}
-	return nil
-}
-
-func suffixEncodeString(s []byte) []byte {
-	bs := []byte(s)
-	newbs := make([]byte, 0, len(bs))
-	for _, x := range bs {
-		newbs = append(newbs, x)
+func suffixEncodeString(s []byte) (code []byte) {
+	text := []byte(s)
+	code = make([]byte, 0, len(text))
+	for _, x := range text {
+		code = append(code, x)
 		if x == Terminator {
-			newbs = append(newbs, 1)
+			code = append(code, 1)
 		}
 	}
-	newbs = append(newbs, Terminator)
-	return newbs
+	code = append(code, Terminator)
+	return
 }
 
-func suffixDecodeString(bs []byte) (string, []byte) {
-	newbs := make([]byte, 0, len(bs))
-	if len(bs) < 2 && bs[0] == Terminator && bs[1] == Terminator { // Empty
-		return "", bs
-	} else if len(bs) < 2 {
-		e := fmt.Errorf("string could not have been encoded like this %v", bs)
-		panic(e)
-	}
-
-	for i := 0; i < len(bs)-1; {
-		if bs[i] == Terminator && bs[i+1] == Terminator {
-			if i < len(bs)-2 {
-				return string(newbs), bs[i+2:]
-			}
-			return string(newbs), []byte{}
-		} else if bs[i] == Terminator && bs[i+1] == 1 {
-			// TODO: second predicate can be optimized away
-			newbs = append(newbs, bs[i])
-			i += 2
-		} else if bs[i] == Terminator { // TODO: Can be optimized away
-			panic("Unable to decode string")
-		} else {
-			newbs = append(newbs, bs[i])
+func suffixDecodeString(code []byte) (string, []byte, error) {
+	text := make([]byte, 0, len(code))
+	for i := 0; i < len(code); i++ {
+		x := code[i]
+		if x == Terminator {
 			i++
+			switch x = code[i]; x {
+			case 1:
+				text = append(text, 0)
+			case Terminator:
+				if i == (len(code) - 1) {
+					return string(text), nil, nil
+				}
+				return string(text), code[i+1:], nil
+			default:
+				return "", nil, ErrorSuffixDecoding
+			}
+			continue
 		}
+		text = append(text, x)
 	}
-	panic("Can't find double terminator for string")
+	return "", nil, ErrorSuffixDecoding
 }
