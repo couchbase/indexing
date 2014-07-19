@@ -26,12 +26,16 @@ package collatejson
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"github.com/couchbaselabs/dparval"
 	"math"
 	"sort"
 	"strconv"
 )
+
+// error codes
+var ErrorNumberType = errors.New("collatejson.numberType")
 
 // While encoding JSON data-element, both basic and composite, encoded string
 // is prefixed with a type-byte. `Terminator` terminates encoded datum.
@@ -47,36 +51,35 @@ const (
 	TypeObj
 )
 
-var BufSize = 64
-
 // Codec structure
 type Codec struct {
-	arrayLenPrefix    bool // if true, first sort arrays based on its length.
-	propertyLenPrefix bool // if true, first sort properties based on length.
-	buffer            []byte
+	arrayLenPrefix    bool        // if true, first sort arrays based on its length.
+	propertyLenPrefix bool        // if true, first sort properties based on length.
+	numberType        interface{} // "float64" | "int64" | "large" | "small"
+	buffer            []byte      // internal buffer to avoid heap allocation.
+	keys              []string
+	bufsize           int
 	// unicode
-	backwards bool
-	hiraganaQ bool
-	caseLevel bool
-	numeric   bool
-	nfkd      bool
-	utf8      bool
-	//strength  colltab.Level
-	//alternate collate.AlternateHandling
-	//language  language.Tag
+	// backwards        bool
+	// hiraganaQ        bool
+	// caseLevel        bool
+	// numeric          bool
+	//nfkd              bool
+	//utf8              bool
+	//strength          colltab.Level
+	//alternate         collate.AlternateHandling
+	//language          language.Tag
 }
 
 // NewCodec creates a new codec object and returns a reference to it.
-func NewCodec() *Codec {
+func NewCodec(bufsize int, propSize int) *Codec {
 	return &Codec{
 		arrayLenPrefix:    true,
 		propertyLenPrefix: true,
-		buffer:            make([]byte, 0, BufSize),
-		// unicode
-		backwards: false,
-		hiraganaQ: false,
-		caseLevel: true,
-		numeric:   false,
+		numberType:        float64(0.0),
+		buffer:            make([]byte, 0, bufsize),
+		bufsize:           bufsize,
+		keys:              make([]string, 0, propSize),
 	}
 }
 
@@ -85,202 +88,243 @@ func (codec *Codec) resetBuffer() {
 }
 
 // SortbyArrayLen sorts array by length before sorting by array elements. Use
-// `false` to sort only by array elements
+// `false` to sort only by array elements. Default is `true`.
 func (codec *Codec) SortbyArrayLen(what bool) {
 	codec.arrayLenPrefix = what
 }
 
 // SortbyPropertyLen sorts property by length before sorting by property items.
-// Use `false` to sort only by proprety items
+// Use `false` to sort only by proprety items. Default is `true`.
 func (codec *Codec) SortbyPropertyLen(what bool) {
 	codec.propertyLenPrefix = what
 }
 
-// SortbyNFKD will enable an alternate collation using NFKD unicode standard.
-func (codec *Codec) SortbyNFKD(what bool) {
-	codec.nfkd = what
-}
-
-// SortbyUTF8 will do plain binary comparision for strings.
-func (codec *Codec) SortbyUTF8(what bool) {
-	codec.utf8 = what
+// NumberType chooses type of encoding / decoding for JSON numbers. Can be
+// "float64", "int64", "large", "small". Default is "float64"
+func (codec *Codec) NumberType(what string) {
+	switch what {
+	case "float64":
+		codec.numberType = float64(0.0)
+	case "int64":
+		codec.numberType = int64(0)
+	case "large":
+		codec.numberType = "0"
+	case "small":
+		codec.numberType = byte(0)
+	}
 }
 
 // Encode json documents to order preserving binary representation.
-func (codec *Codec) Encode(rawjson []byte) []byte {
-	doc := dparval.NewValueFromBytes(rawjson)
-	code := json2code(codec, doc.Value())
-	return code
+func (codec *Codec) Encode(text, code []byte) ([]byte, error) {
+	doc := dparval.NewValueFromBytes(text)
+	return codec.json2code(doc.Value(), code)
 }
 
 // Decode a slice of byte into json string and return them as slice of byte.
-func (codec *Codec) Decode(code []byte) []byte {
-	json, _, _ := code2json(codec, code)
-	return json
+func (codec *Codec) Decode(code, text []byte) ([]byte, error) {
+	text, _, err := codec.code2json(code, text)
+	return text, err
 }
 
 // local function that encodes basic json types to binary representation.
 // composite types recursively call this function.
-func json2code(codec *Codec, val interface{}) []byte {
-	var code []byte
+func (codec *Codec) json2code(val interface{}, code []byte) ([]byte, error) {
 	if val == nil {
-		return []byte{TypeNull, Terminator}
+		code = append(code, TypeNull, Terminator)
 	}
-	switch value := val.(type) {
-	case bool:
-		if !value {
-			code = []byte{TypeFalse}
-		} else {
-			code = []byte{TypeTrue}
-		}
-		return append(code, Terminator)
-	case float64:
-		fvalue := strconv.FormatFloat(value, 'e', -1, 64)
-		code = EncodeFloat([]byte(fvalue), codec.buffer)
-		codec.resetBuffer()
-		return append(joinBytes([]byte{TypeNumber}, code), Terminator)
-	case int:
-		code = EncodeInt([]byte(strconv.Itoa(value)), codec.buffer)
-		codec.resetBuffer()
-		return append(joinBytes([]byte{TypeNumber}, code), Terminator)
-	case uint64:
-		return json2code(codec, float64(value))
-	case string:
-		code = suffixEncodeString([]byte(value))
-		res := joinBytes([]byte{TypeString}, code)
-		return append(res, Terminator)
-	case []interface{}:
-		res := make([][]byte, 0)
-		res = append(res, []byte{TypeArray})
-		if codec.arrayLenPrefix {
-			res = append(res, json2code(codec, len(value)))
-		}
-		for _, val := range value {
-			res = append(res, json2code(codec, val))
-		}
-		return append(bytes.Join(res, []byte{}), Terminator)
-	case map[string]interface{}:
-		res := make([][]byte, 0)
-		res = append(res, []byte{TypeObj})
-		if codec.propertyLenPrefix {
-			res = append(res, json2code(codec, len(value)))
-		}
-		keys := sortProps(value)
-		for _, key := range keys {
-			res = append(
-				res, json2code(codec, key), json2code(codec, value[key]))
-		}
-		return append(bytes.Join(res, []byte{}), Terminator)
-	}
-	panic(fmt.Sprintf("collationType doesn't understand %+v of type %T", val, val))
-}
 
-func code2json(codec *Codec, code []byte) ([]byte, []byte, error) {
-	var datum, json, tmp []byte
+	var cs []byte
 	var err error
 
-	if len(code) == 0 {
-		return []byte{}, code, nil
+	switch value := val.(type) {
+	case bool:
+		if value {
+			code = append(code, TypeTrue, Terminator)
+		} else {
+			code = append(code, TypeFalse, Terminator)
+		}
+
+	case float64:
+		code = append(code, TypeNumber)
+		cs, err = codec.normalizeFloat(value, code[1:])
+		if err == nil {
+			code = code[:len(code)+len(cs)]
+			code = append(code, Terminator)
+		}
+
+	case int:
+		code = append(code, TypeNumber)
+		cs = EncodeInt([]byte(strconv.Itoa(value)), code[1:])
+		code = code[:len(code)+len(cs)]
+		code = append(code, Terminator)
+
+	case string:
+		code = append(code, TypeString)
+		cs = suffixEncodeString([]byte(value), code[1:])
+		code = code[:len(code)+len(cs)]
+		code = append(code, Terminator)
+
+	case []interface{}:
+		code = append(code, TypeArray)
+		if codec.arrayLenPrefix {
+			if cs, err = codec.json2code(len(value), code[1:]); err == nil {
+				code = code[:len(code)+len(cs)]
+				for _, val := range value {
+					l := len(code)
+					cs, err = codec.json2code(val, code[l:])
+					if err == nil {
+						code = code[:l+len(cs)]
+						continue
+					}
+					break
+				}
+				code = append(code, Terminator)
+			}
+		}
+
+	case map[string]interface{}:
+		code = append(code, TypeObj)
+		if codec.propertyLenPrefix {
+			if cs, err = codec.json2code(len(value), code[1:]); err == nil {
+				code = code[:len(code)+len(cs)]
+				keys := codec.sortProps(value)
+				for _, key := range keys {
+					l := len(code)
+					// encode key
+					if cs, err = codec.json2code(key, code[l:]); err != nil {
+						break
+					}
+					code = code[:l+len(cs)]
+					l = len(code)
+					// encode value
+					if cs, err = codec.json2code(value[key], code[l:]); err != nil {
+						break
+					}
+					code = code[:l+len(cs)]
+				}
+				code = append(code, Terminator)
+			}
+		}
 	}
+	return code, err
+}
+
+var null = []byte("null")
+var boolTrue = []byte("true")
+var boolFalse = []byte("false")
+
+func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
+	if len(code) == 0 {
+		return text, code, nil
+	}
+
+	var ts, remaining, datum []byte
+	var err error
+
 	switch code[0] {
 	case TypeNull:
-		datum, code = getDatum(code)
-		return []byte("null"), code, nil
+		datum, remaining = getDatum(code)
+		text = append(text, null...)
+
 	case TypeTrue:
-		datum, code = getDatum(code)
-		json = []byte("true")
-		return json, code, nil
+		datum, remaining = getDatum(code)
+		text = append(text, boolTrue...)
+
 	case TypeFalse:
-		datum, code = getDatum(code)
-		json = []byte("false")
-		return json, code, nil
+		datum, remaining = getDatum(code)
+		text = append(text, boolFalse...)
+
 	case TypeNumber:
-		var fvalue float64
-		datum, code = getDatum(code)
-		datum = datum[1:] // remove type encoding TYPE_NUMBER
-		ftext := DecodeFloat(datum, codec.buffer)
-		codec.resetBuffer()
-		fvalue, err = strconv.ParseFloat(string(ftext), 64)
-		if math.Trunc(fvalue) == fvalue {
-			json = []byte(fmt.Sprintf("%v", int64(fvalue)))
-		} else {
-			json = []byte(fmt.Sprintf("%v", fvalue))
-		}
-		return json, code, err
+		datum, remaining = getDatum(code)
+		ts = DecodeFloat(datum[1:], text)
+		ts, err = codec.denormalizeFloat(ts)
+		ts = bytes.TrimLeft(ts, "+")
+		text = append(text, ts...)
+
 	case TypeString:
-		var s string
-		s, code, _ = suffixDecodeString(code[1:])
-		json = joinBytes([]byte("\""), []byte(s), []byte("\""))
-		return json, code, nil
+		text = append(text, '"')
+		ts, remaining, err = suffixDecodeString(code[1:], text[1:])
+		if err == nil {
+			text = text[:len(text)+len(ts)]
+			text = append(text, '"')
+		}
+
 	case TypeArray:
 		var l int
-		code = code[1:] // remove type encoding TYPE_ARRAY
+		text = append(text, '[')
 		if codec.arrayLenPrefix {
-			datum, code = getDatum(code)
-			datum = datum[1:] // remove TYPE_NUMBER for len encoding
-			_, text := DecodeInt(datum, codec.buffer)
-			l, err = strconv.Atoi(string(text))
-			codec.resetBuffer()
+			datum, code = getDatum(code[1:])
+			_, ts := DecodeInt(datum[1:], text[1:])
+			l, err = strconv.Atoi(string(ts))
+			if err == nil {
+				for ; l > 0; l-- {
+					ln := len(text)
+					ts, code, err = codec.code2json(code, text[ln:])
+					if err != nil {
+						break
+					}
+					text = text[:ln+len(ts)]
+					if l > 1 {
+						text = append(text, ',')
+					}
+				}
+				remaining = code[1:] // remove Terminator
+				text = append(text, ']')
+			}
 		}
-		json = []byte("[")
-		comma := []byte{}
-		for code[0] != Terminator {
-			tmp, code, err = code2json(codec, code)
-			json = joinBytes(json, comma, tmp)
-			comma = []byte(", ")
-			l--
-		}
-		code = code[1:] // remove Terminator
-		if l != 0 {
-			err = fmt.Errorf("can decode %v elements in array", l)
-		}
-		json = joinBytes(json, []byte("]"))
-		return json, code, err
+
 	case TypeObj:
 		var l int
-		code = code[1:] // remove type encoding TYPE_OBJ
+		var key []byte
+		text = append(text, '{')
 		if codec.propertyLenPrefix {
-			datum, code = getDatum(code)
-			datum = datum[1:] // Remove TYPE_NUMBER for len encoding
-			_, text := DecodeInt(datum, codec.buffer)
-			l, err = strconv.Atoi(string(text))
-			codec.resetBuffer()
+			datum, code = getDatum(code[1:])
+			_, ts := DecodeInt(datum[1:], text[1:])
+			l, err = strconv.Atoi(string(ts))
+			if err == nil {
+				for ; l > 0; l-- {
+					// decode key
+					ln := len(text)
+					key, code, err = codec.code2json(code, text[ln:])
+					if err != nil {
+						break
+					}
+					text = text[:len(text)+len(key)]
+					text = append(text, ' ', ':', ' ')
+					// decode value
+					ln = len(text)
+					key, code, err = codec.code2json(code, text[ln:])
+					if err != nil {
+						break
+					}
+					text = text[:len(text)+len(key)]
+					if l > 1 {
+						text = append(text, ',', ' ')
+					}
+				}
+				remaining = code[1:] // remove Terminator
+			}
+			text = append(text, '}')
 		}
-		json = []byte("{")
-		comma, name, value := []byte{}, []byte{}, []byte{}
-		for code[0] != Terminator {
-			name, code, err = code2json(codec, code)
-			value, code, err = code2json(codec, code)
-			json = joinBytes(json, comma, name, []byte(": "), value)
-			comma = []byte(", ")
-			l--
-		}
-		code = code[1:]
-		if l != 0 {
-			err = fmt.Errorf("can decode %v elements in property", l)
-		}
-		json = joinBytes(json, []byte("}"))
-		return json, code, err
 	}
-	panic(fmt.Sprintf("collationType doesn't understand %+v of type %T", code, code))
+	return text, remaining, err
 }
 
 // local function that sorts JSON property objects based on property names.
-func sortProps(props map[string]interface{}) sort.StringSlice {
-	// collect all the keys
-	allkeys := make(sort.StringSlice, 0)
+func (codec *Codec) sortProps(props map[string]interface{}) []string {
+	codec.keys = codec.keys[:0]
 	for k := range props {
-		allkeys = append(allkeys, k)
+		codec.keys = append(codec.keys, k)
 	}
-	// sort the keys
-	allkeys.Sort()
-	return allkeys
+	ss := sort.StringSlice(codec.keys)
+	ss.Sort()
+	return codec.keys
 }
 
-// Get the encoded datum (basic datatype) based on Terminator and return a
+// get the encoded datum (basic JSON datatype) based on Terminator and return a
 // tuple of, `encoded-datum`, `remaining-code`, where remaining-code starts
 // after the Terminator
-func getDatum(code []byte) ([]byte, []byte) {
+func getDatum(code []byte) (datum []byte, remaining []byte) {
 	var i int
 	var b byte
 	for i, b = range code {
@@ -289,4 +333,53 @@ func getDatum(code []byte) ([]byte, []byte) {
 		}
 	}
 	return code[:i], code[i+1:]
+}
+
+func (codec *Codec) normalizeFloat(value float64, code []byte) ([]byte, error) {
+	switch codec.numberType.(type) {
+	case float64:
+		cs := EncodeFloat([]byte(strconv.FormatFloat(value, 'e', -1, 64)), code)
+		return cs, nil
+
+	case int64:
+		return EncodeInt([]byte(strconv.Itoa(int(value))), code), nil
+
+	case string:
+		return EncodeLD([]byte(fmt.Sprintf("%v", value, code)), code), nil
+
+	case byte:
+		return EncodeSD([]byte(fmt.Sprintf("%v", value, code)), code), nil
+	}
+	return nil, ErrorNumberType
+}
+
+func (codec *Codec) denormalizeFloat(text []byte) ([]byte, error) {
+	var err error
+	var f float64
+
+	switch codec.numberType.(type) {
+	case float64:
+		return text, nil
+
+	case int64:
+		f, err = strconv.ParseFloat(string(text), 64)
+		if err == nil {
+			return []byte(fmt.Sprintf("%v", int64(f))), nil
+		}
+		return nil, err
+
+	case string:
+		f, err = strconv.ParseFloat(string(text), 64)
+		if err == nil {
+			if math.Trunc(f) == f {
+				return []byte(fmt.Sprintf("%v", int64(f))), nil
+			}
+			return []byte(fmt.Sprintf("%v", f)), nil
+		}
+		return nil, err
+
+	default:
+		return text, nil
+	}
+	return nil, ErrorNumberType
 }

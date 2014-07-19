@@ -16,8 +16,8 @@ import (
 	"testing"
 )
 
-var code = make([]byte, 0, 64)
-var text = make([]byte, 0, 64)
+var code = make([]byte, 0, 1024)
+var text = make([]byte, 0, 1024)
 
 func TestInteger(t *testing.T) {
 	var samples = [][2]string{
@@ -158,17 +158,17 @@ func TestFloat(t *testing.T) {
 
 func TestSuffixCoding(t *testing.T) {
 	bs := []byte("hello\x00wo\xffrld\x00")
-	code := suffixEncodeString(bs)
+	code := suffixEncodeString(bs, code[:0])
 	code = append(code, Terminator)
-	s, code, err := suffixDecodeString(code)
+	text, remn, err := suffixDecodeString(code, text[:0])
 	if err != nil {
 		t.Error(err)
 	}
-	if bytes.Compare(bs, []byte(s)) != 0 {
+	if bytes.Compare(bs, text) != 0 {
 		t.Error("Suffix coding for strings failed")
 	}
-	if len(code) != 0 {
-		t.Error("Suffix coding for strings failed, residue found")
+	if len(remn) != 0 {
+		t.Errorf("Suffix coding for strings failed, residue found %q", remn)
 	}
 }
 
@@ -438,17 +438,17 @@ func BenchmarkDecodeLD(b *testing.B) {
 func BenchmarkSuffixEncode(b *testing.B) {
 	bs := []byte("hello\x00wo\xffrld\x00")
 	for i := 0; i < b.N; i++ {
-		suffixEncodeString(bs)
+		suffixEncodeString(bs, code[:0])
 	}
 }
 
 func BenchmarkSuffixDecode(b *testing.B) {
 	bs := []byte("hello\x00wo\xffrld\x00")
-	code := suffixEncodeString(bs)
+	code := suffixEncodeString(bs, code[:0])
 	code = joinBytes(code, []byte{Terminator})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		suffixDecodeString(code)
+		suffixDecodeString(code, text[:])
 	}
 }
 

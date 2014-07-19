@@ -517,9 +517,8 @@ func joinBytes(args ...[]byte) []byte {
 	return bytes.Join(args, []byte{})
 }
 
-func suffixEncodeString(s []byte) (code []byte) {
+func suffixEncodeString(s []byte, code []byte) []byte {
 	text := []byte(s)
-	code = make([]byte, 0, len(text))
 	for _, x := range text {
 		code = append(code, x)
 		if x == Terminator {
@@ -527,11 +526,10 @@ func suffixEncodeString(s []byte) (code []byte) {
 		}
 	}
 	code = append(code, Terminator)
-	return
+	return code
 }
 
-func suffixDecodeString(code []byte) (string, []byte, error) {
-	text := make([]byte, 0, len(code))
+func suffixDecodeString(code []byte, text []byte) ([]byte, []byte, error) {
 	for i := 0; i < len(code); i++ {
 		x := code[i]
 		if x == Terminator {
@@ -541,15 +539,15 @@ func suffixDecodeString(code []byte) (string, []byte, error) {
 				text = append(text, 0)
 			case Terminator:
 				if i == (len(code) - 1) {
-					return string(text), nil, nil
+					return text, nil, nil
 				}
-				return string(text), code[i+1:], nil
+				return text, code[i+1:], nil
 			default:
-				return "", nil, ErrorSuffixDecoding
+				return nil, nil, ErrorSuffixDecoding
 			}
 			continue
 		}
 		text = append(text, x)
 	}
-	return "", nil, ErrorSuffixDecoding
+	return nil, nil, ErrorSuffixDecoding
 }

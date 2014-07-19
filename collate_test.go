@@ -27,9 +27,12 @@ var json1 = []byte(
 }`)
 
 func TestEncode(t *testing.T) {
-	codec := NewCodec()
-	codec.SortbyUTF8(true)
-	code := codec.Encode(json1)
+	codec := NewCodec(cap(code), 128)
+	code, err := codec.Encode(json1, code[:0])
+	if err != nil {
+		t.Error(err)
+	}
+
 	ref := `\b` +
 		`\x05>5\x00` +
 		`\x06arrogantness\x00\x00\x02\x00` +
@@ -42,38 +45,59 @@ func TestEncode(t *testing.T) {
 	out = out[1 : len(out)-1]
 	if out != ref {
 		t.Error("Encode fails, did you change the encoding format ?")
-		fmt.Println(ref)
-		fmt.Println(out)
+		fmt.Printf("%q\n\n%q\n", ref, out)
 	}
 }
 
 func TestDecode(t *testing.T) {
 	var one, two map[string]interface{}
 
-	codec := NewCodec()
-	codec.SortbyUTF8(true)
-	out := codec.Decode(codec.Encode(json1))
+	codec := NewCodec(cap(code), 128)
+	code, err := codec.Encode(json1, code[:0])
+	if err != nil {
+		t.Error(err)
+	}
+	text := make([]byte, 0, 1024)
+	text, err = codec.Decode(code, text)
+	if err != nil {
+		t.Error(err)
+	}
 
-	json.Unmarshal(json1, &one)
-	json.Unmarshal(out, &two)
+	if err := json.Unmarshal(json1, &one); err != nil {
+		t.Error("Unmarshaling reference")
+	}
+	if err := json.Unmarshal(text, &two); err != nil {
+		t.Error("Unmarshaling decoded text")
+	}
 	if !reflect.DeepEqual(one, two) {
 		t.Error("Decode fails, did you change the encoding format ?")
+		t.Log(one)
+		t.Log(two)
 	}
 }
 
 func BenchmarkEncode(b *testing.B) {
-	codec := NewCodec()
+	codec := NewCodec(cap(code), 128)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		codec.Encode(json1)
+		codec.Encode(json1, code[:0])
 	}
 }
 
 func BenchmarkCompare(b *testing.B) {
-	codec := NewCodec()
-	code := codec.Encode(json1)
+	codec := NewCodec(cap(code), 128)
+	code, _ := codec.Encode(json1, code[:0])
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		bytes.Compare(code, code)
+	}
+}
+
+func BenchmarkDecode(b *testing.B) {
+	codec := NewCodec(cap(code), 128)
+	code, _ := codec.Encode(json1, code[:0])
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		codec.Decode(code, text[:0])
 	}
 }

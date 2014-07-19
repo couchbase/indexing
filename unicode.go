@@ -60,3 +60,13 @@ func (codec *Codec) EncodeUnicodeString(value string) (code []byte) {
 	}
 	return code
 }
+
+// SortbyNFKD will enable an alternate collation using NFKD unicode standard.
+func (codec *Codec) SortbyNFKD(what bool) {
+	codec.nfkd = what
+}
+
+// SortbyUTF8 will do plain binary comparision for strings.
+func (codec *Codec) SortbyUTF8(what bool) {
+	codec.utf8 = what
+}
