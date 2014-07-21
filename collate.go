@@ -27,15 +27,15 @@ package collatejson
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"github.com/couchbaselabs/dparval"
-	"math"
 	"sort"
 	"strconv"
 )
 
 // error codes
 var ErrorNumberType = errors.New("collatejson.numberType")
+
+type Length int64
 
 // While encoding JSON data-element, both basic and composite, encoded string
 // is prefixed with a type-byte. `Terminator` terminates encoded datum.
@@ -47,6 +47,7 @@ const (
 	TypeTrue
 	TypeNumber
 	TypeString
+	TypeLength
 	TypeArray
 	TypeObj
 )
@@ -55,15 +56,13 @@ const (
 type Codec struct {
 	arrayLenPrefix    bool        // if true, first sort arrays based on its length.
 	propertyLenPrefix bool        // if true, first sort properties based on length.
-	numberType        interface{} // "float64" | "int64" | "large" | "small"
-	buffer            []byte      // internal buffer to avoid heap allocation.
+	numberType        interface{} // "float64" | "int64" | "decimal"
 	keys              []string
-	bufsize           int
-	// unicode
-	// backwards        bool
-	// hiraganaQ        bool
-	// caseLevel        bool
-	// numeric          bool
+	//-- unicode
+	//backwards        bool
+	//hiraganaQ        bool
+	//caseLevel        bool
+	//numeric          bool
 	//nfkd              bool
 	//utf8              bool
 	//strength          colltab.Level
@@ -72,19 +71,13 @@ type Codec struct {
 }
 
 // NewCodec creates a new codec object and returns a reference to it.
-func NewCodec(bufsize int, propSize int) *Codec {
+func NewCodec(propSize int) *Codec {
 	return &Codec{
 		arrayLenPrefix:    true,
 		propertyLenPrefix: true,
 		numberType:        float64(0.0),
-		buffer:            make([]byte, 0, bufsize),
-		bufsize:           bufsize,
 		keys:              make([]string, 0, propSize),
 	}
-}
-
-func (codec *Codec) resetBuffer() {
-	codec.buffer = codec.buffer[:0]
 }
 
 // SortbyArrayLen sorts array by length before sorting by array elements. Use
@@ -100,17 +93,15 @@ func (codec *Codec) SortbyPropertyLen(what bool) {
 }
 
 // NumberType chooses type of encoding / decoding for JSON numbers. Can be
-// "float64", "int64", "large", "small". Default is "float64"
+// "float64", "int64", "decimal". Default is "float64"
 func (codec *Codec) NumberType(what string) {
 	switch what {
 	case "float64":
 		codec.numberType = float64(0.0)
 	case "int64":
 		codec.numberType = int64(0)
-	case "large":
+	case "decimal":
 		codec.numberType = "0"
-	case "small":
-		codec.numberType = byte(0)
 	}
 }
 
@@ -158,6 +149,12 @@ func (codec *Codec) json2code(val interface{}, code []byte) ([]byte, error) {
 		code = code[:len(code)+len(cs)]
 		code = append(code, Terminator)
 
+	case Length:
+		code = append(code, TypeLength)
+		cs = EncodeInt([]byte(strconv.Itoa(int(value))), code[1:])
+		code = code[:len(code)+len(cs)]
+		code = append(code, Terminator)
+
 	case string:
 		code = append(code, TypeString)
 		cs = suffixEncodeString([]byte(value), code[1:])
@@ -167,43 +164,50 @@ func (codec *Codec) json2code(val interface{}, code []byte) ([]byte, error) {
 	case []interface{}:
 		code = append(code, TypeArray)
 		if codec.arrayLenPrefix {
-			if cs, err = codec.json2code(len(value), code[1:]); err == nil {
+			arrlen := Length(len(value))
+			if cs, err = codec.json2code(arrlen, code[1:]); err == nil {
 				code = code[:len(code)+len(cs)]
-				for _, val := range value {
-					l := len(code)
-					cs, err = codec.json2code(val, code[l:])
-					if err == nil {
-						code = code[:l+len(cs)]
-						continue
-					}
-					break
-				}
-				code = append(code, Terminator)
 			}
+		}
+		if err == nil {
+			for _, val := range value {
+				l := len(code)
+				cs, err = codec.json2code(val, code[l:])
+				if err == nil {
+					code = code[:l+len(cs)]
+					continue
+				}
+				break
+			}
+			code = append(code, Terminator)
 		}
 
 	case map[string]interface{}:
 		code = append(code, TypeObj)
 		if codec.propertyLenPrefix {
-			if cs, err = codec.json2code(len(value), code[1:]); err == nil {
+			proplen := Length(len(value))
+			if cs, err = codec.json2code(proplen, code[1:]); err == nil {
 				code = code[:len(code)+len(cs)]
-				keys := codec.sortProps(value)
-				for _, key := range keys {
-					l := len(code)
-					// encode key
-					if cs, err = codec.json2code(key, code[l:]); err != nil {
-						break
-					}
-					code = code[:l+len(cs)]
-					l = len(code)
-					// encode value
-					if cs, err = codec.json2code(value[key], code[l:]); err != nil {
-						break
-					}
-					code = code[:l+len(cs)]
-				}
-				code = append(code, Terminator)
 			}
+		}
+
+		if err == nil {
+			keys := codec.sortProps(value)
+			for _, key := range keys {
+				l := len(code)
+				// encode key
+				if cs, err = codec.json2code(key, code[l:]); err != nil {
+					break
+				}
+				code = code[:l+len(cs)]
+				l = len(code)
+				// encode value
+				if cs, err = codec.json2code(value[key], code[l:]); err != nil {
+					break
+				}
+				code = code[:l+len(cs)]
+			}
+			code = append(code, Terminator)
 		}
 	}
 	return code, err
@@ -222,6 +226,9 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 	var err error
 
 	switch code[0] {
+	case Terminator:
+		remaining = code
+
 	case TypeNull:
 		datum, remaining = getDatum(code)
 		text = append(text, null...)
@@ -233,6 +240,11 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 	case TypeFalse:
 		datum, remaining = getDatum(code)
 		text = append(text, boolFalse...)
+
+	case TypeLength:
+		datum, remaining = getDatum(code)
+		_, ts = DecodeInt(datum[1:], text)
+		text = text[:len(text)+len(ts)]
 
 	case TypeNumber:
 		datum, remaining = getDatum(code)
@@ -251,10 +263,10 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 
 	case TypeArray:
 		var l int
-		text = append(text, '[')
+		text = append(text, '[', ' ')
 		if codec.arrayLenPrefix {
 			datum, code = getDatum(code[1:])
-			_, ts := DecodeInt(datum[1:], text[1:])
+			_, ts := DecodeInt(datum[1:], text[2:])
 			l, err = strconv.Atoi(string(ts))
 			if err == nil {
 				for ; l > 0; l-- {
@@ -265,21 +277,36 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 					}
 					text = text[:ln+len(ts)]
 					if l > 1 {
-						text = append(text, ',')
+						text = append(text, ',', ' ')
 					}
 				}
-				remaining = code[1:] // remove Terminator
-				text = append(text, ']')
+			}
+		} else {
+			comma := false
+			code = code[1:]
+			for code[0] != Terminator {
+				if comma {
+					text = append(text, ',', ' ')
+				}
+				ln := len(text)
+				ts, code, err = codec.code2json(code, text[ln:])
+				if err != nil {
+					break
+				}
+				text = text[:ln+len(ts)]
+				comma = true
 			}
 		}
+		remaining = code[1:] // remove Terminator
+		text = append(text, ' ', ']')
 
 	case TypeObj:
 		var l int
-		var key []byte
-		text = append(text, '{')
+		var key, value []byte
+		text = append(text, '{', ' ')
 		if codec.propertyLenPrefix {
 			datum, code = getDatum(code[1:])
-			_, ts := DecodeInt(datum[1:], text[1:])
+			_, ts := DecodeInt(datum[1:], text[2:])
 			l, err = strconv.Atoi(string(ts))
 			if err == nil {
 				for ; l > 0; l-- {
@@ -289,7 +316,7 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 					if err != nil {
 						break
 					}
-					text = text[:len(text)+len(key)]
+					text = text[:ln+len(key)]
 					text = append(text, ' ', ':', ' ')
 					// decode value
 					ln = len(text)
@@ -297,15 +324,39 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 					if err != nil {
 						break
 					}
-					text = text[:len(text)+len(key)]
+					text = text[:ln+len(key)]
 					if l > 1 {
 						text = append(text, ',', ' ')
 					}
 				}
-				remaining = code[1:] // remove Terminator
 			}
-			text = append(text, '}')
+		} else {
+			comma := false
+			code = code[1:]
+			for code[0] != Terminator {
+				if comma {
+					text = append(text, ',', ' ')
+				}
+				// decode key
+				ln := len(text)
+				key, code, err = codec.code2json(code, text[ln:])
+				if err != nil {
+					break
+				}
+				text = text[:ln+len(key)]
+				text = append(text, ' ', ':', ' ')
+				// decode value
+				ln = len(text)
+				value, code, err = codec.code2json(code, text[ln:])
+				if err != nil {
+					break
+				}
+				text = text[:ln+len(value)]
+				comma = true
+			}
 		}
+		remaining = code[1:] // remove Terminator
+		text = append(text, ' ', '}')
 	}
 	return text, remaining, err
 }
@@ -345,10 +396,8 @@ func (codec *Codec) normalizeFloat(value float64, code []byte) ([]byte, error) {
 		return EncodeInt([]byte(strconv.Itoa(int(value))), code), nil
 
 	case string:
-		return EncodeLD([]byte(fmt.Sprintf("%v", value, code)), code), nil
-
-	case byte:
-		return EncodeSD([]byte(fmt.Sprintf("%v", value, code)), code), nil
+		cs := EncodeFloat([]byte(strconv.FormatFloat(value, 'e', -1, 64)), code)
+		return cs, nil
 	}
 	return nil, ErrorNumberType
 }
@@ -363,20 +412,13 @@ func (codec *Codec) denormalizeFloat(text []byte) ([]byte, error) {
 
 	case int64:
 		f, err = strconv.ParseFloat(string(text), 64)
-		if err == nil {
-			return []byte(fmt.Sprintf("%v", int64(f))), nil
-		}
-		return nil, err
+		return []byte(strconv.Itoa(int(f))), nil
 
 	case string:
 		f, err = strconv.ParseFloat(string(text), 64)
 		if err == nil {
-			if math.Trunc(f) == f {
-				return []byte(fmt.Sprintf("%v", int64(f))), nil
-			}
-			return []byte(fmt.Sprintf("%v", f)), nil
+			return []byte(strconv.FormatFloat(f, 'f', -1, 64)), nil
 		}
-		return nil, err
 
 	default:
 		return text, nil

@@ -110,11 +110,11 @@ func TestLargeDecimal(t *testing.T) {
 		sample, ref := tcase[0], tcase[1]
 		out := string(EncodeLD([]byte(sample), code[:0]))
 		if out != ref {
-			t.Error("small decimal encode failed:", sample, out, ref)
+			t.Error("large decimal encode failed:", sample, out, ref)
 		}
 		out = string(DecodeLD([]byte(out), text[:0]))
 		if atof(out, t) != atof(sample, t) {
-			t.Error("small decimal decode failed:", sample, out)
+			t.Error("large decimal decode failed:", sample, out)
 		}
 	}
 }
