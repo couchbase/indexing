@@ -16,9 +16,6 @@ import (
 	"strconv"
 )
 
-// TODO: make the codec thread safe.
-// TODO: return error instead of panics and logging.
-
 // error codes
 var ErrorSuffixDecoding = errors.New("collatejson.suffixDecoding")
 
@@ -168,9 +165,6 @@ func DecodeInt(code, text []byte) (int, []byte) { // code -> text
 		for _, x := range final {
 			text = append(text, negIntLookup[x])
 		}
-
-	default:
-		panic("Cannot reach here")
 	}
 	return skip + len(text), text
 }
@@ -229,8 +223,6 @@ func doDecodeInt(code, text []byte) (int, []byte) {
 //  encoding +1.4            + +114-
 //  encoding +0.1 × 10^10    + ++2101-
 //  encoding +0.1 × 10^11    + ++2111-
-var mantissa = make([]byte, 0, 128)
-
 func EncodeFloat(text, code []byte) []byte {
 	if len(text) == 0 { // empty input
 		return code
@@ -252,8 +244,8 @@ func EncodeFloat(text, code []byte) []byte {
 		}
 	}
 
-	mantissa = mantissa[:0]
-	mantissa = append(mantissa, []byte{prefix, '0', '.'}...)
+	x := [128]byte{}
+	mantissa := append(x[:0], prefix, '0', '.')
 	for _, x := range mant {
 		if x == '.' {
 			continue
@@ -277,7 +269,6 @@ func EncodeFloat(text, code []byte) []byte {
 
 // DecodeFloat complements EncodeFloat, it returns `exponent` and `mantissa`
 // in text format.
-var exponent = make([]byte, 0, 128)
 var flipmap = map[byte]byte{PLUS: MINUS, MINUS: PLUS}
 
 func DecodeFloat(code, text []byte) []byte {
@@ -291,15 +282,15 @@ func DecodeFloat(code, text []byte) []byte {
 	msign := code[0]
 
 	var skip int
-	var final []byte
+	var final, exponent []byte
 
-	exponent = exponent[:0] // initialize
+	x := [128]byte{}
 	switch code[1] {
 	case negPrefix, posPrefix:
-		skip, exponent = DecodeInt(code[1:], exponent)
+		skip, exponent = DecodeInt(code[1:], x[:0])
 
 	default:
-		exponent = append(exponent, PLUS)
+		exponent = append(x[:0], PLUS)
 		skip, final = DecodeInt(code[1:], text)
 		exponent = append(exponent, final...)
 	}
@@ -308,8 +299,8 @@ func DecodeFloat(code, text []byte) []byte {
 		exponent[0] = flipmap[exponent[0]]
 	}
 
-	mantissa = mantissa[:0] // initialize
-	mantissa = append(mantissa, msign)
+	y := [128]byte{}
+	mantissa := append(y[:0], msign)
 	mantissa = append(mantissa, code[1+skip:]...)
 	text = append(text, DecodeSD(mantissa, text)...)
 	text = append(text, 'e')
@@ -439,14 +430,14 @@ func EncodeLD(text, code []byte) []byte {
 	}
 
 	var codedec []byte
-	mantissa := mantissa[:0]
+	x := [128]byte{}
 	if len(texts) == 2 {
 		text = joinBytes([]byte{text[0], ZERO, DOT}, texts[1])
-		codedec = EncodeSD(text, mantissa)[1:]
+		codedec = EncodeSD(text, x[:0])[1:]
 	} else {
 		// TODO: This is constant, optimize away.
 		text = []byte{text[0], ZERO, DOT, ZERO}
-		codedec = EncodeSD(text, mantissa)[1:]
+		codedec = EncodeSD(text, x[:0])[1:]
 	}
 
 	// Adjust the decimal part
@@ -506,8 +497,6 @@ func prefixSign(code []byte) byte {
 		sign = PLUS
 	case negPrefix:
 		sign = MINUS
-	default:
-		panic("encoded json number must always have sign prefix")
 	}
 	return sign
 }
