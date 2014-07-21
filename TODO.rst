@@ -24,9 +24,3 @@
   Even big-integers are parsed are returned as float by dparval.
 
 * Encoding and decoding of utf8 strings.
-
-* In parse.go, using the parser combinator for builtin json parsing, use
-  built in sort instead of a dumb bubble sort.
-
-* Figure out a strategy for error handling in Encode() and Decode() execution
-  path.
