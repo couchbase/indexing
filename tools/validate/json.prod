@@ -1,0 +1,24 @@
+json : "{" properties "}".
+
+properties : properties "," property {10}
+           | property.
+
+property   : DQ bag("web2") DQ ":" value.
+
+value   : TRUE
+        | FALSE
+        | NULL
+        | number
+        | string
+        | array
+        | json {2}.
+
+string  : DQ bag("web2") DQ.
+
+number  : range(0, 100000)
+        | rangef(0.0, 100.0) {900}.
+
+array   : "[" values "]".
+
+values  : values "," value
+        | value.
