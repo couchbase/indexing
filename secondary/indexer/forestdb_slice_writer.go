@@ -54,6 +54,7 @@ func NewForestDBSlice(name string, sliceId SliceId, idxDefnId common.IndexDefnId
 	slice.sc = NewSnapshotContainer()
 
 	slice.cmdCh = make(chan interface{}, SLICE_COMMAND_BUFFER_SIZE)
+	slice.workerDone = make([]chan bool, NUM_WRITER_THREADS_PER_SLICE)
 
 	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
 		go slice.handleCommandsWorker(i)
@@ -89,6 +90,8 @@ type fdbSlice struct {
 
 	cmdCh  chan interface{} //internal channel to buffer commands
 	stopCh DoneChannel      //internal channel to signal shutdown
+
+	workerDone []chan bool //worker status check channel
 
 	fatalDbErr error //store any fatal DB error
 
@@ -137,8 +140,8 @@ func (fdb *fdbSlice) handleCommandsWorker(workerId int) {
 				elapsed := time.Since(start)
 				fdb.totalFlushTime += elapsed
 			case []byte:
-				start := time.Now()
 				cmd := c.([]byte)
+				start := time.Now()
 				fdb.delete(cmd, workerId)
 				elapsed := time.Since(start)
 				fdb.totalFlushTime += elapsed
@@ -150,6 +153,12 @@ func (fdb *fdbSlice) handleCommandsWorker(workerId int) {
 		case <-fdb.stopCh:
 			fdb.stopCh <- true
 			break
+
+			//worker gets a status check message on this channel, it responds
+			//when its not processing any mutation
+		case <-fdb.workerDone[workerId]:
+			fdb.workerDone[workerId] <- true
+
 		}
 	}
 
@@ -334,7 +343,7 @@ func (fdb *fdbSlice) Commit() error {
 	//none, proceed with the commit.
 	ticker := time.NewTicker(time.Millisecond * SLICE_COMMIT_POLL_INTERVAL)
 	for _ = range ticker.C {
-		if len(fdb.cmdCh) == 0 {
+		if fdb.checkAllWorkersDone() {
 			break
 		}
 	}
@@ -373,6 +382,25 @@ func (fdb *fdbSlice) Commit() error {
 	}
 
 	return nil
+}
+
+//checkAllWorkersDone return true if all workers have
+//finished processing
+func (fdb *fdbSlice) checkAllWorkersDone() bool {
+
+	//if there are mutations in the cmdCh, workers are
+	//not yet done
+	if len(fdb.cmdCh) > 0 {
+		return false
+	}
+
+	//worker queue is empty, make sure both workers are done
+	//processing the last mutation
+	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+		fdb.workerDone[i] <- true
+		<-fdb.workerDone[i]
+	}
+	return true
 }
 
 //Close the db. Should be able to reopen after this operation
