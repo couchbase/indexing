@@ -17,7 +17,7 @@ import (
 //SnapshotContainer manages snapshots for a Slice
 type SnapshotContainer interface {
 	Add(Snapshot)
-	RemoveOldest()
+	RemoveOldest() Snapshot
 	Len() int
 
 	GetLatestSnapshot() Snapshot
@@ -44,17 +44,20 @@ func (sc *snapshotContainer) Add(s Snapshot) {
 	sc.snapshotList.PushFront(s)
 }
 
-//Remove removes a snapshot from container
-func (sc *snapshotContainer) RemoveOldest() {
+//RemoveOldest removes the oldest snapshot from container
+//and returns it. Nil is returned in case there is no
+//snapshot.
+func (sc *snapshotContainer) RemoveOldest() Snapshot {
 	sc.lock.Lock()
 	defer sc.lock.Unlock()
 
 	e := sc.snapshotList.Back()
 
 	if e == nil {
-		return
+		return nil
 	} else {
 		sc.snapshotList.Remove(e)
+		return e.Value.(Snapshot)
 	}
 }
 

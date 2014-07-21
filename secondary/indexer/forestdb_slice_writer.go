@@ -294,7 +294,9 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 
 	s := &fdbSnapshot{id: fdb.id,
 		idxDefnId: fdb.idxDefnId,
-		idxInstId: fdb.idxInstId}
+		idxInstId: fdb.idxInstId,
+		main:      fdb.main[0],
+		back:      fdb.back[0]}
 
 	//store snapshot seqnum for main index
 	{

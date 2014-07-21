@@ -53,6 +53,7 @@ func (s *fdbSnapshot) Open() error {
 			log.Printf("ForestDBSnapshot: Unexpected Error Opening Back DB Snapshot %v", err)
 			return err
 		}
+		s.refCount = 1
 	}
 
 	return nil

@@ -146,11 +146,20 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 						if newSnapshot, err := slice.Snapshot(); err == nil {
 
 							if snapContainer.Len() > MAX_SNAPSHOTS_PER_INDEX {
-								snapContainer.RemoveOldest()
+								s := snapContainer.RemoveOldest()
+								if s != nil {
+									common.Debugf("StorageMgr: Removed Old Snapshot %v, Len %v",
+										s, snapContainer.Len())
+									//close the removed snapshot
+									s.Close()
+								}
 							}
 							newTs := CopyTimestamp(ts)
 							newSnapshot.SetTimestamp(newTs)
+							newSnapshot.Open()
 							snapContainer.Add(newSnapshot)
+							common.Debugf("StorageMgr: Added New Snapshot for Index %v PartitionId %v SliceId %v",
+								idxInstId, partnId, slice.Id())
 
 						} else {
 							common.Errorf("handleCreateSnapshot: Error Creating Snapshot "+
