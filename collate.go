@@ -26,8 +26,8 @@ package collatejson
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
-	"github.com/couchbaselabs/dparval"
 	"sort"
 	"strconv"
 )
@@ -107,8 +107,11 @@ func (codec *Codec) NumberType(what string) {
 
 // Encode json documents to order preserving binary representation.
 func (codec *Codec) Encode(text, code []byte) ([]byte, error) {
-	doc := dparval.NewValueFromBytes(text)
-	return codec.json2code(doc.Value(), code)
+	var m interface{}
+	if err := json.Unmarshal(text, &m); err != nil {
+		return nil, err
+	}
+	return codec.json2code(m, code)
 }
 
 // Decode a slice of byte into json string and return them as slice of byte.

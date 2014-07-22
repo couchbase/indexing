@@ -8,12 +8,14 @@
 //  License for the specific language governing permissions and limitations
 //  under the License.
 
+// +build ignore
+
 package collatejson
 
 import (
 	"encoding/json"
-	"github.com/couchbaselabs/dparval"
-	tuqcollate "github.com/couchbaselabs/tuqtng/ast"
+	//"github.com/couchbaselabs/dparval"
+	//tuqcollate "github.com/couchbaselabs/tuqtng/ast"
 	"reflect"
 	"testing"
 )
