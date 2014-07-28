@@ -1,4 +1,4 @@
-// A gen server behavior for stream consumer.
+// A gen server behavior for dataport consumer.
 //
 // Daemon listens for new connections and spawns a reader routine
 // for each new connection.
@@ -10,21 +10,21 @@
 //                          -----------------------------------------------
 //                                ^                      ^
 //                             (sideband)            (mutation)
-//     NewMutationStream() --*    |                      |
+//     NewServer() ----------*    |                      |
 //             |             |    |                      | []*VbKeyVersions
-//          (spawn)          |    | []*ShutdownDaemon    |
+//          (spawn)          |    | []*ShutdownDataport  |
 //             |             |    | []*RestartVbuckets   |
 //             |          (spawn) | error                |
-//       streamListener()    |    |                      |
+//           listener()      |    |                      |
 //                 |         |    |                      |
-//  streamgCmdNewConnection  |    |                      |
+//  serverCmdNewConnection   |    |                      |
 //                 |         |    |                      |
 //  Close() -------*------->gen-server()------*---- doReceive()----*
-//          streamgCmdClose       ^           |                    |
+//          serverCmdClose        ^           |                    |
 //                                |           *---- doReceive()----*
-//                streamgCmdVbmap |           |                    |
-//            streamgCmdVbcontrol |           *---- doReceive()----*
-//                streamgCmdError |                                |
+//                serverCmdVbmap  |           |                    |
+//            serverCmdVbcontrol  |           *---- doReceive()----*
+//                serverCmdError  |                                |
 //                                *--------------------------------*
 //                                          (control & faults)
 //
@@ -36,29 +36,30 @@
 //    application for catchup connection, using []*RestartVbuckets message.
 // 3. side band information to application,
 //    a. []*RestartVbuckets, connection with an upstream host is closed.
-//    b. []*ShutdownDaemon, all connections with an upstream host is closed.
+//    b. []*ShutdownDataport, all connections with an upstream host is closed.
 //    c. error string, describing the cause of the error.
 //    in case of b and c, all connections with all upstream host will be
-//    closed and stream-instance will be shutdown.
-// 4. when ever stream-instance shuts down it will signal application by
+//    closed and dataport-instance will be shutdown.
+// 4. when ever dataport-instance shuts down it will signal application by
 //    side-band channel.
 
-package indexer
+package dataport
 
 import (
 	"errors"
 	"fmt"
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
 	"io"
 	"net"
 	"time"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
 // Error codes
 
-// ErrorStreamPayload
-var ErrorStreamPayload = errors.New("dataport.daemonPayload")
+// ErrorPayload
+var ErrorPayload = errors.New("dataport.daemonPayload")
 
 // ErrorVbmap
 var ErrorVbmap = errors.New("dataport.vbmap")
@@ -76,14 +77,14 @@ type RestartVbuckets struct {
 	Vbuckets []uint16
 }
 
-// ShutdownDaemon tells daemon has shutdown, provides vbuckets to restart.
-type ShutdownDaemon struct {
+// ShutdownDataport tells daemon has shutdown, provides vbuckets to restart.
+type ShutdownDataport struct {
 	Bucket   string
 	Vbuckets []uint16
 }
 
 // messages to gen-server
-type streamServerMessage struct {
+type serverMessage struct {
 	cmd   byte          // gen server command
 	raddr string        // routine for remote connection, optional
 	args  []interface{} // command arguments
@@ -97,8 +98,8 @@ type netConn struct {
 	active bool
 }
 
-// MutationStream handles an active stream of mutation for all vbuckets.
-type MutationStream struct {
+// Server handles an active dataport server of mutation for all vbuckets.
+type Server struct {
 	laddr string // address to listen
 	lis   net.Listener
 	mutch chan<- []*protobuf.VbKeyVersions // backchannel to application
@@ -111,13 +112,13 @@ type MutationStream struct {
 	logPrefix string
 }
 
-// NewMutationStream creates a new mutation stream.
-func NewMutationStream(
+// NewServer creates a new dataport daemon.
+func NewServer(
 	laddr string,
 	mutch chan []*protobuf.VbKeyVersions,
-	sbch chan<- interface{}) (s *MutationStream, err error) {
+	sbch chan<- interface{}) (s *Server, err error) {
 
-	s = &MutationStream{
+	s = &Server{
 		laddr: laddr,
 		mutch: mutch,
 		sbch:  sbch,
@@ -131,13 +132,13 @@ func NewMutationStream(
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
 		return nil, err
 	}
-	go streamListener(laddr, s.lis, s.reqch) // spawn daemon
-	go s.genServer(s.reqch, sbch)            // spawn gen-server
+	go listener(laddr, s.lis, s.reqch) // spawn daemon
+	go s.genServer(s.reqch, sbch)      // spawn gen-server
 	c.Infof("%v started ...", s.logPrefix)
 	return s, nil
 }
 
-func (s *MutationStream) addUuids(started, uuids []*bucketVbno) ([]*bucketVbno, error) {
+func (s *Server) addUuids(started, uuids []*bucketVbno) ([]*bucketVbno, error) {
 	for _, adduuid := range started {
 		for _, uuid := range uuids {
 			if uuid.bucket == adduuid.bucket && uuid.vbno == adduuid.vbno {
@@ -151,7 +152,7 @@ func (s *MutationStream) addUuids(started, uuids []*bucketVbno) ([]*bucketVbno, 
 	return uuids, nil
 }
 
-func (s *MutationStream) delUuids(finished, uuids []*bucketVbno) ([]*bucketVbno, error) {
+func (s *Server) delUuids(finished, uuids []*bucketVbno) ([]*bucketVbno, error) {
 	newUuids := make([]*bucketVbno, 0, len(uuids))
 	for _, uuid := range uuids {
 		for _, finuuid := range finished {
@@ -168,30 +169,30 @@ func (s *MutationStream) delUuids(finished, uuids []*bucketVbno) ([]*bucketVbno,
 }
 
 // Close the daemon listening for new connections and shuts down all read
-// routines for the stream, synchronous call.
-func (s *MutationStream) Close() (err error) {
+// routines for this dataport server. synchronous call.
+func (s *Server) Close() (err error) {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{streamServerMessage{cmd: streamgCmdClose}, respch}
+	cmd := []interface{}{serverMessage{cmd: serverCmdClose}, respch}
 	resp, err := c.FailsafeOp(s.reqch, respch, cmd, s.finch)
 	return c.OpError(err, resp, 0)
 }
 
 // gen-server commands
 const (
-	streamgCmdNewConnection byte = iota + 1
-	streamgCmdVbmap
-	streamgCmdVbcontrol
-	streamgCmdError
-	streamgCmdClose
+	serverCmdNewConnection byte = iota + 1
+	serverCmdVbmap
+	serverCmdVbcontrol
+	serverCmdError
+	serverCmdClose
 )
 
-// gen server routine for stream server.
-func (s *MutationStream) genServer(reqch chan []interface{}, sbch chan<- interface{}) {
+// gen server routine for dataport server.
+func (s *Server) genServer(reqch chan []interface{}, sbch chan<- interface{}) {
 	var appmsg interface{}
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			msg := streamServerMessage{cmd: streamgCmdClose}
+			msg := serverMessage{cmd: serverCmdClose}
 			s.handleClose(msg)
 			c.Errorf("%v gen-server fatal panic: %v\n", s.logPrefix, r)
 		}
@@ -203,9 +204,9 @@ loop:
 		appmsg = nil
 		select {
 		case cmd := <-reqch:
-			msg := cmd[0].(streamServerMessage)
+			msg := cmd[0].(serverMessage)
 			switch msg.cmd {
-			case streamgCmdNewConnection:
+			case serverCmdNewConnection:
 				var err error
 				conn := msg.args[0].(net.Conn)
 				if appmsg, err = s.handleNewConnection(msg); err != nil {
@@ -216,7 +217,7 @@ loop:
 					s.startWorker(msg.raddr)
 				}
 
-			case streamgCmdVbmap:
+			case serverCmdVbmap:
 				vbmap := msg.args[0].(*protobuf.VbConnectionMap)
 				b, raddr := vbmap.GetBucket(), msg.raddr
 				for _, vbno := range vbmap.GetVbuckets() {
@@ -225,7 +226,7 @@ loop:
 				}
 				s.startWorker(msg.raddr)
 
-			case streamgCmdVbcontrol:
+			case serverCmdVbcontrol:
 				var err error
 				started := msg.args[0].([]*bucketVbno)
 				finished := msg.args[1].([]*bucketVbno)
@@ -243,13 +244,13 @@ loop:
 				remoteUuids[msg.raddr] = uuids
 				s.startWorker(msg.raddr)
 
-			case streamgCmdClose:
+			case serverCmdClose:
 				respch := cmd[1].(chan []interface{})
 				appmsg = s.handleClose(msg)
 				respch <- []interface{}{nil}
 				break loop
 
-			case streamgCmdError:
+			case serverCmdError:
 				raddr, err := msg.raddr, msg.err
 				appmsg = s.jumboErrorHandler(raddr, remoteUuids, err)
 			}
@@ -264,7 +265,7 @@ loop:
 /**** gen-server handlers ****/
 
 // handle new connection
-func (s *MutationStream) handleNewConnection(msg streamServerMessage) (interface{}, error) {
+func (s *Server) handleNewConnection(msg serverMessage) (interface{}, error) {
 	conn := msg.args[0].(net.Conn)
 	c.Infof("%v connection request from %q\n", s.logPrefix, msg.raddr)
 	if _, _, err := net.SplitHostPort(msg.raddr); err != nil {
@@ -283,7 +284,7 @@ func (s *MutationStream) handleNewConnection(msg streamServerMessage) (interface
 }
 
 // shutdown this gen server and all its routines.
-func (s *MutationStream) handleClose(msg streamServerMessage) (appmsg interface{}) {
+func (s *Server) handleClose(msg serverMessage) (appmsg interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			c.Errorf("%v handleClose fatal panic: %v\n", s.logPrefix, r)
@@ -299,7 +300,7 @@ func (s *MutationStream) handleClose(msg streamServerMessage) (appmsg interface{
 }
 
 // start a connection worker to read mutation message for a subset of vbuckets.
-func (s *MutationStream) startWorker(raddr string) {
+func (s *Server) startWorker(raddr string) {
 	c.Infof("%v starting worker for connection %q\n", s.logPrefix, raddr)
 	nc := s.conns[raddr]
 	go doReceive(s.logPrefix, nc, s.mutch, s.reqch)
@@ -309,7 +310,7 @@ func (s *MutationStream) startWorker(raddr string) {
 // jumbo size error handler, it either closes all connections and shutdown the
 // server or it closes all open connections with faulting remote-host and
 // returns back a message for application.
-func (s *MutationStream) jumboErrorHandler(
+func (s *Server) jumboErrorHandler(
 	raddr string,
 	remoteUuids map[string][]*bucketVbno,
 	err error) (msg interface{}) {
@@ -408,15 +409,15 @@ func remoteConnections(host string, conns map[string]netConn) []string {
 }
 
 // gather vbuckets to restart for all remote connections
-func vbucketsForRemotes(remotes map[string][]*bucketVbno) []*ShutdownDaemon {
+func vbucketsForRemotes(remotes map[string][]*bucketVbno) []*ShutdownDataport {
 	var rs []*RestartVbuckets
 	buckets := make(map[string]*RestartVbuckets)
 	for _, uuids := range remotes {
 		rs = vbucketsForRemote(uuids, buckets)
 	}
-	ss := make([]*ShutdownDaemon, 0, len(rs))
+	ss := make([]*ShutdownDataport, 0, len(rs))
 	for _, r := range rs {
-		s := &ShutdownDaemon{Bucket: r.Bucket, Vbuckets: r.Vbuckets}
+		s := &ShutdownDataport{Bucket: r.Bucket, Vbuckets: r.Vbuckets}
 		ss = append(ss, s)
 	}
 	return ss
@@ -444,10 +445,10 @@ func vbucketsForRemote(uuids []*bucketVbno, buckets map[string]*RestartVbuckets)
 
 // go-routine to listen for new connections, if this routine goes down -
 // server is shutdown and reason notified back to application.
-func streamListener(laddr string, lis net.Listener, reqch chan []interface{}) {
+func listener(laddr string, lis net.Listener, reqch chan []interface{}) {
 	defer func() {
 		c.Errorf("%v listener fatal panic: %v", laddr, recover())
-		msg := streamServerMessage{cmd: streamgCmdError, err: ErrorStreamdExit}
+		msg := serverMessage{cmd: serverCmdError, err: ErrorDaemonExit}
 		reqch <- []interface{}{msg}
 	}()
 	for {
@@ -455,8 +456,8 @@ func streamListener(laddr string, lis net.Listener, reqch chan []interface{}) {
 		if conn, err := lis.Accept(); err != nil {
 			panic(err)
 		} else {
-			msg := streamServerMessage{
-				cmd:   streamgCmdNewConnection,
+			msg := serverMessage{
+				cmd:   serverCmdNewConnection,
 				raddr: conn.RemoteAddr().String(),
 				args:  []interface{}{conn},
 			}
@@ -468,9 +469,9 @@ func streamListener(laddr string, lis net.Listener, reqch chan []interface{}) {
 // per connection go-routine to read []*VbKeyVersions.
 func doReceive(prefix string, nc netConn, mutch chan<- []*protobuf.VbKeyVersions, reqch chan<- []interface{}) {
 	conn, worker := nc.conn, nc.worker
-	flags := StreamTransportFlag(0).SetProtobuf() // TODO: make it configurable
-	pkt := NewStreamTransportPacket(c.MaxStreamDataLen, flags)
-	msg := streamServerMessage{raddr: conn.RemoteAddr().String()}
+	flags := TransportFlag(0).SetProtobuf() // TODO: make it configurable
+	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
+	msg := serverMessage{raddr: conn.RemoteAddr().String()}
 
 	started := make([]*bucketVbno, 0, 4)  // TODO: avoid magic numbers
 	finished := make([]*bucketVbno, 0, 4) // TODO: avoid magic numbers
@@ -504,20 +505,20 @@ func doReceive(prefix string, nc netConn, mutch chan<- []*protobuf.VbKeyVersions
 
 loop:
 	for {
-		timeoutMs := c.StreamReadDeadline * time.Millisecond
+		timeoutMs := c.DataportReadDeadline * time.Millisecond
 		conn.SetReadDeadline(time.Now().Add(timeoutMs))
 		msg.cmd, msg.err, msg.args = 0, nil, nil
 		if payload, err := pkt.Receive(conn); err != nil {
-			msg.cmd, msg.err = streamgCmdError, err
+			msg.cmd, msg.err = serverCmdError, err
 			reqch <- []interface{}{msg}
 			c.Errorf("%v worker %q exited %v\n", prefix, msg.raddr, err)
 			break loop
 
 		} else if vbmap, ok := payload.(*protobuf.VbConnectionMap); ok {
-			msg.cmd, msg.args = streamgCmdVbmap, []interface{}{vbmap}
+			msg.cmd, msg.args = serverCmdVbmap, []interface{}{vbmap}
 			reqch <- []interface{}{msg}
 			c.Infof(
-				"%v worker %q exiting with `streamgCmdVbmap`\n",
+				"%v worker %q exiting with `serverCmdVbmap`\n",
 				prefix, msg.raddr)
 			break loop
 
@@ -526,24 +527,24 @@ loop:
 			select {
 			case mutch <- vbs:
 				if len(started) > 0 || len(finished) > 0 {
-					msg.cmd = streamgCmdVbcontrol
+					msg.cmd = serverCmdVbcontrol
 					msg.args = []interface{}{started, finished}
 					reqch <- []interface{}{msg}
 					c.Infof(
-						"%v worker %q exiting with `streamgCmdVbcontrol` %v\n",
+						"%v worker %q exiting with `serverCmdVbcontrol` %v\n",
 						prefix, msg.raddr, len(started))
 					break loop
 				}
 
 			case <-worker:
-				msg.cmd, msg.err = streamgCmdError, ErrorStreamdWorkerKilled
+				msg.cmd, msg.err = serverCmdError, ErrorWorkerKilled
 				reqch <- []interface{}{msg}
 				c.Errorf("%v worker %q exited %v\n", prefix, msg.raddr, err)
 				break loop
 			}
 
 		} else {
-			msg.cmd, msg.err = streamgCmdError, ErrorStreamPayload
+			msg.cmd, msg.err = serverCmdError, ErrorPayload
 			reqch <- []interface{}{msg}
 			c.Errorf("%v worker %q exited %v\n", prefix, msg.raddr, err)
 			break loop

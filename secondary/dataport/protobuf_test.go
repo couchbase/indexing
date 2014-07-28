@@ -1,9 +1,10 @@
-package indexer
+package dataport
 
 import (
+	"testing"
+
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
-	"testing"
 )
 
 const confMaxKeyvers = 10

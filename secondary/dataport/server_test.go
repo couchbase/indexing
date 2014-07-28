@@ -1,11 +1,12 @@
-package indexer
+package dataport
 
 import (
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
 	"io/ioutil"
 	"log"
 	"testing"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
 // TODO:
@@ -13,7 +14,7 @@ import (
 
 var addrST = "localhost:8888"
 
-func TestStreamTimeout(t *testing.T) {
+func TestTimeout(t *testing.T) {
 	maxconns, maxvbuckets, mutChanSize := 2, 4, 100
 	log.SetOutput(ioutil.Discard)
 
@@ -21,10 +22,10 @@ func TestStreamTimeout(t *testing.T) {
 	msgch := make(chan interface{}, mutChanSize)
 	errch := make(chan interface{}, 1000)
 	daemon := doServer(addrST, t, msgch, errch, mutChanSize)
-	flags := StreamTransportFlag(0).SetProtobuf()
+	flags := TransportFlag(0).SetProtobuf()
 
 	// start client
-	client, _ := NewStreamClient(addrST, maxconns, flags)
+	client, _ := NewClient(addrST, maxconns, flags)
 	maxBuckets := 2
 	// test timeouts
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
@@ -79,8 +80,8 @@ func TestStreamTimeout(t *testing.T) {
 	daemon.Close()
 }
 
-func TestStreamLoopback(t *testing.T) {
-	var client *StreamClient
+func TestLoopback(t *testing.T) {
+	var client *Client
 	var err error
 
 	maxconns, maxvbuckets, mutChanSize := 8, 32, 100
@@ -90,12 +91,12 @@ func TestStreamLoopback(t *testing.T) {
 	msgch := make(chan interface{}, mutChanSize)
 	errch := make(chan interface{}, 1000)
 	daemon := doServer(addrST, t, msgch, errch, mutChanSize)
-	flags := StreamTransportFlag(0).SetProtobuf()
+	flags := TransportFlag(0).SetProtobuf()
 	maxBuckets := 2
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets)
 
 	// start client and test loopback
-	if client, err = NewStreamClient(addrST, maxconns, flags); err != nil {
+	if client, err = NewClient(addrST, maxconns, flags); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < maxBuckets; i++ {
@@ -155,7 +156,7 @@ func TestStreamLoopback(t *testing.T) {
 }
 
 func BenchmarkLoopback(b *testing.B) {
-	var client *StreamClient
+	var client *Client
 
 	maxconns, maxvbuckets, mutChanSize := 8, 32, 100
 	log.SetOutput(ioutil.Discard)
@@ -164,12 +165,12 @@ func BenchmarkLoopback(b *testing.B) {
 	msgch := make(chan interface{}, mutChanSize)
 	errch := make(chan interface{}, 1000)
 	daemon := doServer(addrST, b, msgch, errch, mutChanSize)
-	flags := StreamTransportFlag(0).SetProtobuf()
+	flags := TransportFlag(0).SetProtobuf()
 	maxBuckets := 2
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets)
 
 	// start client and test loopback
-	client, _ = NewStreamClient(addrST, maxconns, flags)
+	client, _ = NewClient(addrST, maxconns, flags)
 	for i := 0; i < maxBuckets; i++ {
 		client.SendVbmap(vbmaps[i])
 	}

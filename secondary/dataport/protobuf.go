@@ -1,9 +1,10 @@
 // Protobuf encoding scheme for payload
 
-package indexer
+package dataport
 
 import (
 	"code.google.com/p/goprotobuf/proto"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
 )

@@ -6,7 +6,7 @@
 //                                      *common.VbConnectionMap |
 //                                      []*common.VbKeyVersions |
 //                                                              |
-//                      NewStreamClient()                       |
+//                          NewClient()                         |
 //                           |     |                            |
 //                           (spawn)----------*--------- runTransmitter()
 //                           |                |
@@ -24,21 +24,22 @@
 // - client API to push mutation messages to the other end. This is an all or
 //   nothing client for each downstream host.
 // - If caller receives an error value while calling an exported method on
-//   StreamClient, it is adviced to stop the client, its connection pool, and
+//   Client, it is adviced to stop the client, its connection pool, and
 //   wait for a reconnect request.
 
-package indexer
+package dataport
 
 import (
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
 	"net"
 	"time"
+
+	"github.com/couchbase/indexing/secondary/common"
 )
 
-// StreamClient is an active client for each remote host, and there can be
+// Client is an active client for each remote host, and there can be
 // multiple connections opened with remote host for the same endpoint.
-type StreamClient struct {
+type Client struct {
 	// immutable fields
 	raddr     string
 	conns     map[int]net.Conn
@@ -52,25 +53,25 @@ type StreamClient struct {
 	logPrefix string
 }
 
-// NewStreamClient returns a pool of connection. Multiple connections, based
+// NewClient returns a pool of connection. Multiple connections, based
 // on parameter `n`, can be used to speed up mutation transport across network.
 // A vbucket is always binded to a connection and ensure that mutations within
 // a vbucket are serialized.
-func NewStreamClient(raddr string, n int, flags StreamTransportFlag) (c *StreamClient, err error) {
+func NewClient(raddr string, n int, flags TransportFlag) (c *Client, err error) {
 	var conn net.Conn
 
 	if n == 0 {
-		panic("fatal: cannot open stream-client with zero connections")
+		panic("fatal: cannot open dataport-client with zero connections")
 	}
 
-	c = &StreamClient{
+	c = &Client{
 		raddr:     raddr,
 		conns:     make(map[int]net.Conn),
 		connChans: make(map[int]chan interface{}),
 		conn2Vbs:  make(map[int][]string),
 		reqch:     make(chan []interface{}, common.KeyVersionsChannelSize),
 		finch:     make(chan bool),
-		logPrefix: fmt.Sprintf("[StreamClient:%q]", raddr),
+		logPrefix: fmt.Sprintf("[DataportClient:%q]", raddr),
 	}
 	// open connections with remote
 	size := common.KeyVersionsChannelSize
@@ -94,7 +95,7 @@ func NewStreamClient(raddr string, n int, flags StreamTransportFlag) (c *StreamC
 }
 
 // find the connection that has least number of vbuckets mapped.
-func (c *StreamClient) addVbucket(uuid string) (chan interface{}, int) {
+func (c *Client) addVbucket(uuid string) (chan interface{}, int) {
 	idx, min := 0, len(c.conn2Vbs[0])
 	for i, uuids := range c.conn2Vbs {
 		for _, activeUuid := range uuids { // error handling
@@ -111,7 +112,7 @@ func (c *StreamClient) addVbucket(uuid string) (chan interface{}, int) {
 	return c.connChans[idx], idx
 }
 
-func (c *StreamClient) delVbucket(uuid string) {
+func (c *Client) delVbucket(uuid string) {
 	nmap := make(map[int][]string)
 	for i, uuids := range c.conn2Vbs {
 		nmap[i] = common.RemoveString(uuid, uuids)
@@ -121,35 +122,35 @@ func (c *StreamClient) delVbucket(uuid string) {
 
 // gen-server commands
 const (
-	streamCmdSendVbmap byte = iota + 1
-	streamCmdSendKeyVersions
-	streamCmdGetcontext
-	streamCmdClose
+	clientCmdSendVbmap byte = iota + 1
+	clientCmdSendKeyVersions
+	clientCmdGetcontext
+	clientCmdClose
 )
 
 // SendVbmap vbmap for this connection to the other end, synchronous call.
-func (c *StreamClient) SendVbmap(vbmap *common.VbConnectionMap) error {
+func (c *Client) SendVbmap(vbmap *common.VbConnectionMap) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{streamCmdSendVbmap, vbmap, respch}
+	cmd := []interface{}{clientCmdSendVbmap, vbmap, respch}
 	resp, err := common.FailsafeOp(c.reqch, respch, cmd, c.finch)
 	return common.OpError(err, resp, 0)
 }
 
 // SendKeyVersions for one or more vbuckets to the other end, asynchronous call.
-func (c *StreamClient) SendKeyVersions(vbs []*common.VbKeyVersions) error {
+func (c *Client) SendKeyVersions(vbs []*common.VbKeyVersions) error {
 	if vbs == nil || len(vbs) == 0 {
-		return ErrorStreamcEmptyKeys
+		return ErrorClientEmptyKeys
 	}
 	var respch chan []interface{}
-	cmd := []interface{}{streamCmdSendKeyVersions, vbs}
+	cmd := []interface{}{clientCmdSendKeyVersions, vbs}
 	_, err := common.FailsafeOp(c.reqch, respch, cmd, c.finch)
 	return err
 }
 
-// Getcontext from stream client, synchronous call.
-func (c *StreamClient) Getcontext() ([]interface{}, error) {
+// Getcontext from dataport client, synchronous call.
+func (c *Client) Getcontext() ([]interface{}, error) {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{streamCmdGetcontext, respch}
+	cmd := []interface{}{clientCmdGetcontext, respch}
 	resp, err := common.FailsafeOp(c.reqch, respch, cmd, c.finch)
 	if err != nil {
 		return nil, err
@@ -158,15 +159,15 @@ func (c *StreamClient) Getcontext() ([]interface{}, error) {
 }
 
 // Close client and all its active connection with downstream, asynchronous call.
-func (c *StreamClient) Close() error {
+func (c *Client) Close() error {
 	var respch chan []interface{}
-	cmd := []interface{}{streamCmdClose}
+	cmd := []interface{}{clientCmdClose}
 	_, err := common.FailsafeOp(c.reqch, respch, cmd, c.finch)
 	return err
 }
 
 // gen-server
-func (c *StreamClient) genServer(reqch chan []interface{}, quitch chan []string) {
+func (c *Client) genServer(reqch chan []interface{}, quitch chan []string) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			common.Errorf("%v has paniced: %v\n", c.logPrefix, r)
@@ -181,24 +182,24 @@ loop:
 		select {
 		case msg := <-reqch: // from upstream
 			switch msg[0].(byte) {
-			case streamCmdSendVbmap:
+			case clientCmdSendVbmap:
 				vbmap := msg[1].(*common.VbConnectionMap)
 				respch := msg[2].(chan []interface{})
 				vbChans = c.sendVbmap(vbmap, vbChans)
 				respch <- []interface{}{nil}
 
-			case streamCmdSendKeyVersions:
+			case clientCmdSendKeyVersions:
 				vbs := msg[1].([]*common.VbKeyVersions)
 				quit := c.sendKeyVersions(vbs, vbChans, quitch)
 				if quit != nil && quit[0] == "quit" {
 					break loop
 				}
 
-			case streamCmdGetcontext:
+			case clientCmdGetcontext:
 				respch := msg[1].(chan []interface{})
 				respch <- []interface{}{vbChans, c.conn2Vbs}
 
-			case streamCmdClose:
+			case clientCmdClose:
 				break loop
 			}
 
@@ -211,7 +212,7 @@ loop:
 }
 
 // sendVbmap to the other end, carrying connection -> vbuckets map.
-func (c *StreamClient) sendVbmap(
+func (c *Client) sendVbmap(
 	vbmap *common.VbConnectionMap,
 	vbChans map[string]chan interface{}) map[string]chan interface{} {
 
@@ -251,7 +252,7 @@ func (c *StreamClient) sendVbmap(
 
 // send mutations for a set of vbuckets, update vbucket channels based on
 // StreamBegin and StreamEnd.
-func (c *StreamClient) sendKeyVersions(
+func (c *Client) sendKeyVersions(
 	vbs []*common.VbKeyVersions,
 	vbChans map[string]chan interface{},
 	quitch chan []string) []string {
@@ -293,7 +294,7 @@ func (c *StreamClient) sendKeyVersions(
 }
 
 // close all connections with downstream host.
-func (c *StreamClient) doClose() (err error) {
+func (c *Client) doClose() (err error) {
 	recoverClose := func(conn net.Conn) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -313,9 +314,9 @@ func (c *StreamClient) doClose() (err error) {
 }
 
 // per vbucket routine pushes *VbConnectionMap / *VbKeyVersions to other end.
-func (c *StreamClient) runTransmitter(
+func (c *Client) runTransmitter(
 	conn net.Conn,
-	flags StreamTransportFlag,
+	flags TransportFlag,
 	payloadch chan interface{},
 	quitch chan []string) {
 
@@ -327,7 +328,7 @@ func (c *StreamClient) runTransmitter(
 		quitch <- []string{"quit", laddr}
 	}()
 
-	pkt := NewStreamTransportPacket(common.MaxStreamDataLen, flags)
+	pkt := NewTransportPacket(common.MaxDataportPayload, flags)
 	transmit := func(payload interface{}) bool {
 		if err := pkt.Send(conn, payload); err != nil {
 			common.Errorf("%v transport %q `%v`\n", c.logPrefix, laddr, err)

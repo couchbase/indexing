@@ -6,7 +6,7 @@
 //                         (spawn)
 //                            |
 //                            |  (flushTimeout)
-//   SendVbmap() -----*----> run ----------> stream-client ---> TCP
+//   SendVbmap() -----*----> run ----------> dataport-client ---> TCP
 //                    |       ^
 //        Ping() -----*       |
 //                    |       |
@@ -27,16 +27,16 @@ package projector
 import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/indexer"
+	"github.com/couchbase/indexing/secondary/dataport"
 	"time"
 )
 
 // Endpoint structure to gather key-versions / mutations from one or more
 // vbuckets and push them downstream to a specific node.
 type Endpoint struct {
-	raddr  string                // immutable
-	client *indexer.StreamClient // immutable
-	coord  bool                  // whether this endpoint is coordinator
+	raddr  string           // immutable
+	client *dataport.Client // immutable
+	coord  bool             // whether this endpoint is coordinator
 	// gen-server
 	kvch  chan []interface{} // carries *c.KeyVersions
 	reqch chan []interface{} // carries control commands
@@ -48,8 +48,8 @@ type Endpoint struct {
 
 // NewEndpoint instanstiat a new Endpoint routine and return its reference.
 func NewEndpoint(feed *Feed, raddr string, n int, coord bool) (*Endpoint, error) {
-	flags := indexer.StreamTransportFlag(0).SetProtobuf() // TODO: configurable
-	client, err := indexer.NewStreamClient(raddr, n, flags)
+	flags := dataport.TransportFlag(0).SetProtobuf() // TODO: configurable
+	client, err := dataport.NewClient(raddr, n, flags)
 	if err != nil {
 		return nil, err
 	}

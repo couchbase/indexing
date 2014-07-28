@@ -1,17 +1,18 @@
-package indexer
+package dataport
 
 import (
 	"fmt"
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
 	"io/ioutil"
 	"log"
 	"testing"
+
+	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
 var addr = "localhost:8888"
 
-func TestStreamClient(t *testing.T) {
+func TestClient(t *testing.T) {
 	maxconns, maxvbuckets, mutChanSize := 2, 8, 100
 	log.SetOutput(ioutil.Discard)
 
@@ -19,18 +20,18 @@ func TestStreamClient(t *testing.T) {
 	msgch := make(chan interface{}, mutChanSize)
 	errch := make(chan interface{}, 1000)
 	daemon := doServer(addr, t, msgch, errch, 100)
-	flags := StreamTransportFlag(0).SetProtobuf()
+	flags := TransportFlag(0).SetProtobuf()
 
 	// start client and test number of connection.
-	client, err := NewStreamClient(addr, maxconns, flags)
+	client, err := NewClient(addr, maxconns, flags)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(client.conns) != maxconns {
-		t.Fatal("failed stream client connections")
+		t.Fatal("failed dataport client connections")
 	} else if len(client.conns) != len(client.connChans) {
-		t.Fatal("failed stream client connection channels")
+		t.Fatal("failed dataport client connection channels")
 	} else if len(client.conns) != len(client.conn2Vbs) {
-		t.Fatal("failed stream client connection channels")
+		t.Fatal("failed dataport client connection channels")
 	} else {
 		maxBuckets := 2
 		vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
@@ -45,7 +46,7 @@ func TestStreamClient(t *testing.T) {
 	daemon.Close()
 }
 
-func TestStreamClientBegin(t *testing.T) {
+func TestStreamBegin(t *testing.T) {
 	maxconns, maxvbuckets, mutChanSize := 2, 8, 100
 	log.SetOutput(ioutil.Discard)
 
@@ -53,10 +54,10 @@ func TestStreamClientBegin(t *testing.T) {
 	msgch := make(chan interface{}, mutChanSize)
 	errch := make(chan interface{}, 1000)
 	daemon := doServer(addr, t, msgch, errch, 100)
-	flags := StreamTransportFlag(0).SetProtobuf()
+	flags := TransportFlag(0).SetProtobuf()
 
 	// start client
-	client, _ := NewStreamClient(addr, maxconns, flags)
+	client, _ := NewClient(addr, maxconns, flags)
 	maxBuckets := 2
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {
@@ -89,7 +90,7 @@ func TestStreamClientBegin(t *testing.T) {
 	daemon.Close()
 }
 
-func TestStreamClientEnd(t *testing.T) {
+func TestStreamEnd(t *testing.T) {
 	maxconns, maxvbuckets, mutChanSize := 2, 8, 100
 	log.SetOutput(ioutil.Discard)
 
@@ -97,10 +98,10 @@ func TestStreamClientEnd(t *testing.T) {
 	msgch := make(chan interface{}, mutChanSize)
 	errch := make(chan interface{}, 1000)
 	daemon := doServer(addr, t, msgch, errch, 100)
-	flags := StreamTransportFlag(0).SetProtobuf()
+	flags := TransportFlag(0).SetProtobuf()
 
 	// start client
-	client, _ := NewStreamClient(addr, maxconns, flags)
+	client, _ := NewClient(addr, maxconns, flags)
 	maxBuckets := 2
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {
@@ -133,13 +134,13 @@ func TestStreamClientEnd(t *testing.T) {
 	daemon.Close()
 }
 
-func doServer(addr string, tb testing.TB, msgch, errch chan interface{}, mutChanSize int) *MutationStream {
-	var mStream *MutationStream
+func doServer(addr string, tb testing.TB, msgch, errch chan interface{}, mutChanSize int) *Server {
+	var mServer *Server
 	var err error
 
 	mutch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
 	sbch := make(chan interface{}, 100)
-	if mStream, err = NewMutationStream(addr, mutch, sbch); err != nil {
+	if mServer, err = NewServer(addr, mutch, sbch); err != nil {
 		tb.Fatal(err)
 	}
 
@@ -158,7 +159,7 @@ func doServer(addr string, tb testing.TB, msgch, errch chan interface{}, mutChan
 			}
 		}
 	}()
-	return mStream
+	return mServer
 }
 
 func makeVbmaps(maxvbuckets int, maxBuckets int) []*c.VbConnectionMap {
@@ -188,7 +189,7 @@ func verify(msgch, errch chan interface{}, fn func(mutn, err interface{})) {
 }
 
 func validateClientInstance(
-	client *StreamClient, maxvbuckets, maxconns, maxBuckets int, t *testing.T) {
+	client *Client, maxvbuckets, maxconns, maxBuckets int, t *testing.T) {
 
 	ref := ((maxvbuckets / maxconns) * maxBuckets)
 	vals, _ := client.Getcontext()
@@ -206,7 +207,7 @@ func validateClientInstance(
 	conn2Vbs := vals[1].(map[int][]string)
 	for _, ids := range conn2Vbs {
 		if len(ids) != ref {
-			t.Fatal("failed stream client, vbucket mapping")
+			t.Fatal("failed dataport client, vbucket mapping")
 		}
 	}
 }

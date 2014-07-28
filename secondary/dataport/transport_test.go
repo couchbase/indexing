@@ -1,21 +1,20 @@
-package indexer
+package dataport
 
 import (
 	"fmt"
+	"testing"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
-	"testing"
 )
-
-const streamTestMaxkeyvers = 1
 
 func TestPktKeyVersions(t *testing.T) {
 	seqno, nVbs, nMuts, nIndexes := 1, 20, 5, 5
 	vbsRef := constructVbKeyVersions("default", seqno, nVbs, nMuts, nIndexes)
 	tc := newTestConnection()
 	tc.reset()
-	flags := StreamTransportFlag(0).SetProtobuf()
-	pkt := NewStreamTransportPacket(c.MaxStreamDataLen, flags)
+	flags := TransportFlag(0).SetProtobuf()
+	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
 	if err := pkt.Send(tc, vbsRef); err != nil { // Send reference
 		t.Fatal(err)
 	}
@@ -43,8 +42,8 @@ func TestPktVbmap(t *testing.T) {
 	}
 	tc := newTestConnection()
 	tc.reset()
-	flags := StreamTransportFlag(0).SetProtobuf()
-	pkt := NewStreamTransportPacket(c.MaxStreamDataLen, flags)
+	flags := TransportFlag(0).SetProtobuf()
+	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
 	if err := pkt.Send(tc, vbmapRef); err != nil { // send reference
 		t.Fatal(err)
 	}
@@ -60,8 +59,8 @@ func BenchmarkSendVbKeyVersions(b *testing.B) {
 	seqno, nVbs, nMuts, nIndexes := 1, 20, 5, 5
 	vbs := constructVbKeyVersions("default", seqno, nVbs, nMuts, nIndexes)
 	tc := newTestConnection()
-	flags := StreamTransportFlag(0).SetProtobuf()
-	pkt := NewStreamTransportPacket(c.MaxStreamDataLen, flags)
+	flags := TransportFlag(0).SetProtobuf()
+	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -74,8 +73,8 @@ func BenchmarkReceiveKeyVersions(b *testing.B) {
 	seqno, nVbs, nMuts, nIndexes := 1, 20, 5, 5
 	vbs := constructVbKeyVersions("default", seqno, nVbs, nMuts, nIndexes)
 	tc := newTestConnection()
-	flags := StreamTransportFlag(0).SetProtobuf()
-	pkt := NewStreamTransportPacket(c.MaxStreamDataLen, flags)
+	flags := TransportFlag(0).SetProtobuf()
+	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -92,8 +91,8 @@ func BenchmarkSendVbmap(b *testing.B) {
 		Vbuuids:  []uint64{10, 20, 30, 40},
 	}
 	tc := newTestConnection()
-	flags := StreamTransportFlag(0).SetProtobuf()
-	pkt := NewStreamTransportPacket(c.MaxStreamDataLen, flags)
+	flags := TransportFlag(0).SetProtobuf()
+	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -109,8 +108,8 @@ func BenchmarkReceiveVbmap(b *testing.B) {
 		Vbuuids:  []uint64{10, 20, 30, 40},
 	}
 	tc := newTestConnection()
-	flags := StreamTransportFlag(0).SetProtobuf()
-	pkt := NewStreamTransportPacket(c.MaxStreamDataLen, flags)
+	flags := TransportFlag(0).SetProtobuf()
+	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

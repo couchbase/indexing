@@ -4,11 +4,12 @@
 // - `flags` used for specifying encoding format, compression etc.
 // - packetlen == len(mutation)
 
-package indexer
+package dataport
 
 import (
 	"encoding/binary"
 	"errors"
+
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
@@ -17,23 +18,20 @@ import (
 // ErrorDuplicateClient
 var ErrorDuplicateClient = errors.New("dataport.duplicateClient")
 
-// ErrorStreamPacketRead
-var ErrorStreamPacketRead = errors.New("dataport.packetRead")
+// ErrorPacketWrite
+var ErrorPacketWrite = errors.New("dataport.packetWrite")
 
-// ErrorStreamPacketWrite
-var ErrorStreamPacketWrite = errors.New("dataport.packetWrite")
+// ErrorPacketOverflow
+var ErrorPacketOverflow = errors.New("dataport.packetOverflow")
 
-// ErrorStreamPacketOverflow
-var ErrorStreamPacketOverflow = errors.New("dataport.packetOverflow")
+// ErrorWorkerKilled
+var ErrorWorkerKilled = errors.New("dataport.workerKilled")
 
-// ErrorStreamdWorkerKilled
-var ErrorStreamdWorkerKilled = errors.New("dataport.workerKilled")
+// ErrorDaemonExit
+var ErrorDaemonExit = errors.New("dataport.daemonExit")
 
-// ErrorStreamdExit
-var ErrorStreamdExit = errors.New("dataport.daemonExit")
-
-// ErrorStreamcEmptyKeys
-var ErrorStreamcEmptyKeys = errors.New("dataport.clientEmptyKeys")
+// ErrorClientEmptyKeys
+var ErrorClientEmptyKeys = errors.New("dataport.clientEmptyKeys")
 
 // ErrorMissingPayload
 var ErrorMissingPayload = errors.New("dataport.missingPlayload")
@@ -53,10 +51,10 @@ const (
 	pktDataOffset int = pktFlagOffset + pktFlagSize
 )
 
-// StreamTransportPacket to send and receive mutation packets between router
-// and indexer.
-type StreamTransportPacket struct {
-	flags StreamTransportFlag
+// TransportPacket to send and receive mutation packets between router
+// and downstream client.
+type TransportPacket struct {
+	flags TransportFlag
 	buf   []byte
 }
 
@@ -65,7 +63,7 @@ type transporter interface { // facilitates unit testing
 	Write(b []byte) (n int, err error)
 }
 
-// NewStreamTransportPacket creates a new StreamTransportPacket and return its
+// NewTransportPacket creates a new TransportPacket and return its
 // reference. Typically application should call this once and reuse it while
 // sending or receiving a sequence of packets, so that same buffer can be
 // reused.
@@ -73,15 +71,15 @@ type transporter interface { // facilitates unit testing
 // maxlen, maximum size of internal buffer used to marshal and unmarshal
 //         packets.
 // flags,  specifying encoding and compression.
-func NewStreamTransportPacket(maxlen int, flags StreamTransportFlag) *StreamTransportPacket {
-	return &StreamTransportPacket{
+func NewTransportPacket(maxlen int, flags TransportFlag) *TransportPacket {
+	return &TransportPacket{
 		flags: flags,
 		buf:   make([]byte, maxlen),
 	}
 }
 
 // Send payload to the other end using sufficient encoding and compression.
-func (pkt *StreamTransportPacket) Send(conn transporter, payload interface{}) (err error) {
+func (pkt *TransportPacket) Send(conn transporter, payload interface{}) (err error) {
 	var data []byte
 	var n int
 
@@ -95,9 +93,9 @@ func (pkt *StreamTransportPacket) Send(conn transporter, payload interface{}) (e
 	}
 	// transport framing
 	l := pktLenSize + pktFlagSize + len(data)
-	if maxLen := c.MaxStreamDataLen; l > maxLen {
+	if maxLen := c.MaxDataportPayload; l > maxLen {
 		c.Errorf("sending packet length %v is > %v\n", l, maxLen)
-		err = ErrorStreamPacketOverflow
+		err = ErrorPacketOverflow
 		return
 	}
 
@@ -107,19 +105,19 @@ func (pkt *StreamTransportPacket) Send(conn transporter, payload interface{}) (e
 	binary.BigEndian.PutUint16(pkt.buf[a:b], uint16(pkt.flags))
 	if n, err = conn.Write(pkt.buf[:pktDataOffset]); err == nil {
 		if n, err = conn.Write(data); err == nil && n != len(data) {
-			c.Errorf("stream packet wrote only %v bytes for data\n", n)
-			err = ErrorStreamPacketWrite
+			c.Errorf("dataport wrote only %v bytes for data\n", n)
+			err = ErrorPacketWrite
 		}
 	} else if n != pktDataOffset {
-		c.Errorf("stream packet wrote only %v bytes for header\n", n)
-		err = ErrorStreamPacketWrite
+		c.Errorf("dataport wrote only %v bytes for header\n", n)
+		err = ErrorPacketWrite
 	}
 	return
 }
 
 // Receive payload from remote, decode, decompress the payload and return the
 // payload
-func (pkt *StreamTransportPacket) Receive(conn transporter) (payload interface{}, err error) {
+func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err error) {
 	var data []byte
 
 	// transport de-framing
@@ -129,10 +127,10 @@ func (pkt *StreamTransportPacket) Receive(conn transporter) (payload interface{}
 	a, b := pktLenOffset, pktLenOffset+pktLenSize
 	pktlen := binary.BigEndian.Uint32(pkt.buf[a:b])
 	a, b = pktFlagOffset, pktFlagOffset+pktFlagSize
-	pkt.flags = StreamTransportFlag(binary.BigEndian.Uint16(pkt.buf[a:b]))
-	if maxLen := uint32(c.MaxStreamDataLen); pktlen > maxLen {
+	pkt.flags = TransportFlag(binary.BigEndian.Uint16(pkt.buf[a:b]))
+	if maxLen := uint32(c.MaxDataportPayload); pktlen > maxLen {
 		c.Errorf("receiving packet length %v > %v\n", maxLen, pktlen)
-		err = ErrorStreamPacketOverflow
+		err = ErrorPacketOverflow
 		return
 	}
 	if err = fullRead(conn, pkt.buf[:pktlen]); err != nil {
@@ -151,7 +149,7 @@ func (pkt *StreamTransportPacket) Receive(conn transporter) (payload interface{}
 }
 
 // encode payload to array of bytes.
-func (pkt *StreamTransportPacket) encode(payload interface{}) (data []byte, err error) {
+func (pkt *TransportPacket) encode(payload interface{}) (data []byte, err error) {
 	switch pkt.flags.GetEncoding() {
 	case encodingProtobuf:
 		data, err = protobufEncode(payload)
@@ -160,7 +158,7 @@ func (pkt *StreamTransportPacket) encode(payload interface{}) (data []byte, err 
 }
 
 // decode array of bytes back to payload.
-func (pkt *StreamTransportPacket) decode(data []byte) (payload interface{}, err error) {
+func (pkt *TransportPacket) decode(data []byte) (payload interface{}, err error) {
 	switch pkt.flags.GetEncoding() {
 	case encodingProtobuf:
 		payload, err = protobufDecode(data)
@@ -169,7 +167,7 @@ func (pkt *StreamTransportPacket) decode(data []byte) (payload interface{}, err 
 }
 
 // compress array of bytes.
-func (pkt *StreamTransportPacket) compress(big []byte) (small []byte, err error) {
+func (pkt *TransportPacket) compress(big []byte) (small []byte, err error) {
 	switch pkt.flags.GetCompression() {
 	case compressionNone:
 		small = big
@@ -178,7 +176,7 @@ func (pkt *StreamTransportPacket) compress(big []byte) (small []byte, err error)
 }
 
 // decompress array of bytes.
-func (pkt *StreamTransportPacket) decompress(small []byte) (big []byte, err error) {
+func (pkt *TransportPacket) decompress(small []byte) (big []byte, err error) {
 	switch pkt.flags.GetCompression() {
 	case compressionNone:
 		big = small

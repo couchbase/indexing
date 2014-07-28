@@ -2,7 +2,7 @@ package projector
 
 import (
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/indexer"
+	"github.com/couchbase/indexing/secondary/dataport"
 )
 
 type endpointBuffers struct {
@@ -29,7 +29,7 @@ func (b *endpointBuffers) addKeyVersions(bucket string, vbno uint16, vbuuid uint
 }
 
 // flush the buffers to the other end.
-func (b *endpointBuffers) flushBuffers(client *indexer.StreamClient) error {
+func (b *endpointBuffers) flushBuffers(client *dataport.Client) error {
 	if len(b.vbs) == 0 {
 		return nil
 	}

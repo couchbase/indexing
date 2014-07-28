@@ -13,10 +13,11 @@ import (
 	"errors"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
-//MutationStreamReader reads a MutationStream and stores the incoming mutations
+//MutationStreamReader reads a Dataport and stores the incoming mutations
 //in mutation queue. This is the only component writing to a mutation queue.
 type MutationStreamReader interface {
 	Shutdown()
@@ -26,10 +27,10 @@ var mutationCount uint64
 
 type mutationStreamReader struct {
 	streamId StreamId
-	stream   *MutationStream //handle to the MutationStream
+	stream   *dataport.Server //handle to the Dataport server
 
-	streamMutch  chan []*protobuf.VbKeyVersions //channel for mutations sent by MutationStream
-	streamRespch chan interface{}               //MutationStream side-band channel
+	streamMutch  chan []*protobuf.VbKeyVersions //channel for mutations sent by Dataport
+	streamRespch chan interface{}               //Dataport side-band channel
 
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any message to supervisor
@@ -53,10 +54,10 @@ func CreateMutationStreamReader(streamId StreamId, bucketQueueMap BucketQueueMap
 	//start a new mutation stream
 	streamMutch := make(chan []*protobuf.VbKeyVersions)
 	streamRespch := make(chan interface{})
-	stream, err := NewMutationStream(string(StreamAddrMap[streamId]), streamMutch, streamRespch)
+	stream, err := dataport.NewServer(string(StreamAddrMap[streamId]), streamMutch, streamRespch)
 	if err != nil {
 		//return stream init error
-		common.Errorf("MutationStreamReader: Error returned from NewMutationStream."+
+		common.Errorf("MutationStreamReader: Error returned from NewServer."+
 			"StreamId: %v, Err: %v", streamId, err)
 
 		msgErr := &MsgError{
@@ -301,21 +302,21 @@ func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys) {
 
 }
 
-//handleStreamError handles the error messages from MutationStream
+//handleStreamError handles the error messages from Dataport
 func (r *mutationStreamReader) handleStreamError(msg interface{}) {
 
 	var msgErr *MsgError
 	switch msg.(type) {
 
-	case ShutdownDaemon:
-		common.Infof("MutationStreamReader: Received ShutdownDaemon from Client for Stream %v.", r.streamId)
+	case dataport.ShutdownDataport:
+		common.Infof("MutationStreamReader: Received ShutdownDataport from Client for Stream %v.", r.streamId)
 		msgErr = &MsgError{
 			err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
 				severity: FATAL,
 				category: STREAM_READER}}
 
 		//TODO send more information upstream for RepairStream
-	case RestartVbuckets:
+	case dataport.RestartVbuckets:
 		common.Infof("MutationStreamReader: Received RestartVbuckets from Client for Stream %v.", r.streamId)
 		msgErr = &MsgError{
 			err: Error{code: ERROR_STREAM_READER_RESTART_VBUCKETS,

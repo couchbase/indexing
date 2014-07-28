@@ -52,13 +52,13 @@ const (
 	// buffered key-versions to downstream.
 	TransmitBufferTimeout = 1
 
-	// MaxStreamDataLen is maximum payload length, in bytes, for transporting
-	// data from router to indexer.
-	MaxStreamDataLen = 1000 * 1024
+	// MaxDataportPayload is maximum payload length, in bytes, for transporting
+	// data from router to downstream client.
+	MaxDataportPayload = 1000 * 1024
 
-	// StreamReadDeadline timeout, in milliseconds, is timeout while reading
+	// DataportReadDeadline timeout, in milliseconds, is timeout while reading
 	// from socket.
-	StreamReadDeadline = 4000
+	DataportReadDeadline = 4000
 
 	// ConnsPerEndpoint number of parallel connections per endpoint.
 	ConnsPerEndpoint = 1
