@@ -13,7 +13,7 @@ import (
 	"code.google.com/p/goprotobuf/proto"
 	ap "github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/indexer"
+	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/projector"
 	"github.com/couchbase/indexing/secondary/protobuf"
 	"github.com/couchbaselabs/go-couchbase"
@@ -53,7 +53,7 @@ func usage() {
 
 var done = make(chan bool)
 
-var iid = []uint64{0x11, 0x12, 0x13}
+var iid = []uint64{0x11, 0x12, 0x13, 0x14}
 
 func main() {
 	args := argParse()
@@ -176,6 +176,17 @@ func makeIndexInstances(buckets []string) []*protobuf.IndexInst {
 		PartitionScheme: protobuf.PartitionScheme_TEST.Enum(),
 		PartnExpression: proto.String(`{"type":"property","path":"language"}`),
 	}
+	defn4 := &protobuf.IndexDefn{
+		DefnID:          proto.Uint64(iid[3]),
+		Bucket:          proto.String("beer-sample"),
+		IsPrimary:       proto.Bool(false),
+		Name:            proto.String("index4"),
+		Using:           protobuf.StorageType_View.Enum(),
+		ExprType:        protobuf.ExprType_N1QL.Enum(),
+		SecExpressions:  []string{`{"type":"property","path":"name"}`},
+		PartitionScheme: protobuf.PartitionScheme_TEST.Enum(),
+		PartnExpression: proto.String(`{"type":"property","path":"type"}`),
+	}
 
 	makeInstance := func(id uint64, defn *protobuf.IndexDefn) *protobuf.IndexInst {
 		return &protobuf.IndexInst{
@@ -192,6 +203,7 @@ func makeIndexInstances(buckets []string) []*protobuf.IndexInst {
 	i1 := makeInstance(0x1, defn1)
 	i2 := makeInstance(0x2, defn2)
 	i3 := makeInstance(0x3, defn3)
+	i4 := makeInstance(0x4, defn4)
 
 	rs := make([]*protobuf.IndexInst, 0)
 	for _, bucket := range buckets {
@@ -200,6 +212,8 @@ func makeIndexInstances(buckets []string) []*protobuf.IndexInst {
 			rs = append(rs, i1, i2)
 		case "projects":
 			rs = append(rs, i3)
+		case "beer-sample":
+			rs = append(rs, i4)
 		}
 	}
 	return rs
@@ -209,16 +223,15 @@ func endpointServer(addr string) {
 	mutChanSize := 100
 	mutch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
 	sbch := make(chan interface{}, 100)
-	_, err := indexer.NewMutationStream(addr, mutch, sbch)
+	_, err := dataport.NewServer(addr, mutch, sbch)
 	if err != nil {
 		log.Fatal(err)
 	}
 	mutations, messages := 0, 0
 	commandWise := make(map[byte]int)
-	keys := map[uint64]map[string][]string{
-		0x11: make(map[string][]string),
-		0x12: make(map[string][]string),
-		0x13: make(map[string][]string),
+	keys := map[uint64]map[string][]string{}
+	for _, x := range iid {
+		keys[x] = make(map[string][]string)
 	}
 
 	printTm := time.Tick(1000 * time.Millisecond)
@@ -235,7 +248,7 @@ loop:
 		case s, ok := <-sbch:
 			if ok {
 				switch v := s.(type) {
-				case []*indexer.RestartVbuckets:
+				case []*dataport.RestartVbuckets:
 					printRestartVbuckets(addr, v)
 				}
 				messages++
@@ -259,7 +272,7 @@ loop:
 	done <- true
 }
 
-func printRestartVbuckets(addr string, rs []*indexer.RestartVbuckets) {
+func printRestartVbuckets(addr string, rs []*dataport.RestartVbuckets) {
 	for _, r := range rs {
 		log.Printf("restart: %s, %v %v\n", addr, r.Bucket, r.Vbuckets)
 	}
