@@ -240,6 +240,8 @@ loop:
 					if uuids, err = s.delUuids(finished, uuids); err != nil {
 						panic(err)
 					}
+					tmp := make(map[string]*RestartVbuckets)
+					appmsg = vbucketsForRemote(finished, tmp)
 				}
 				remoteUuids[msg.raddr] = uuids
 				s.startWorker(msg.raddr)
@@ -531,8 +533,9 @@ loop:
 					msg.args = []interface{}{started, finished}
 					reqch <- []interface{}{msg}
 					c.Infof(
-						"%v worker %q exiting with `serverCmdVbcontrol` %v\n",
-						prefix, msg.raddr, len(started))
+						"%v worker %q exit with %q {%v,%v} {%v, %v} \n",
+						prefix, msg.raddr, `serverCmdVbcontrol`,
+						len(started), started, len(finished), finished)
 					break loop
 				}
 
