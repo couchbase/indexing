@@ -73,3 +73,12 @@ type MutationKeys struct {
 	oldkeys   [][][]byte           // previous key-versions, if available
 	partnkeys [][]byte             // list of partition keys
 }
+
+type ScanParams struct {
+	scanType ScanType
+	low      Key
+	high     Key
+	partnKey []byte
+	incl     Inclusion
+	limit    int64
+}

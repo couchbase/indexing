@@ -71,6 +71,12 @@ const (
 	INDEXER_CREATE_INDEX_DDL
 	INDEXER_DROP_INDEX_DDL
 
+	//SCAN COORDINATOR
+	SCAN_COORD_SCAN_INDEX
+	SCAN_COORD_SCAN_PARTITION
+	SCAN_COORD_SCAN_SLICE
+	SCAN_COORD_SHUTDOWN
+
 	UPDATE_INDEX_INSTANCE_MAP
 	UPDATE_INDEX_PARTITION_MAP
 )
@@ -357,4 +363,47 @@ func (m *MsgDropIndex) GetMsgType() MsgType {
 
 func (m *MsgDropIndex) GetIndexInstId() common.IndexInstId {
 	return m.indexInstId
+}
+
+//SCAN_COORD_SCAN_INDEX
+type MsgScanIndex struct {
+	scanId      int64
+	indexInstId common.IndexInstId
+	stopch      StopChannel
+	p           ScanParams
+	resCh       chan Value
+	errCh       chan Message
+	countCh     chan uint64
+}
+
+func (m *MsgScanIndex) GetMsgType() MsgType {
+	return SCAN_COORD_SCAN_INDEX
+}
+
+func (m *MsgScanIndex) GetIndexInstId() common.IndexInstId {
+	return m.indexInstId
+}
+
+func (m *MsgScanIndex) GetScanId() int64 {
+	return m.scanId
+}
+
+func (m *MsgScanIndex) GetResultChannel() chan Value {
+	return m.resCh
+}
+
+func (m *MsgScanIndex) GetErrorChannel() chan Message {
+	return m.errCh
+}
+
+func (m *MsgScanIndex) GetCountChannel() chan uint64 {
+	return m.countCh
+}
+
+func (m *MsgScanIndex) GetStopChannel() StopChannel {
+	return m.stopch
+}
+
+func (m *MsgScanIndex) GetParams() ScanParams {
+	return m.p
 }

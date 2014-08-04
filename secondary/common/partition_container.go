@@ -36,5 +36,6 @@ type PartitionContainer interface {
 //PartitionDefn is a generic interface which defines
 //a partition
 type PartitionDefn interface {
+	GetPartitionId() PartitionId
 	Endpoints() []Endpoint
 }

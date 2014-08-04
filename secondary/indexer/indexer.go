@@ -57,6 +57,7 @@ type indexer struct {
 	clustMgrSenderCmdCh MsgChannel //channel to send messages to index coordinator
 	kvSenderCmdCh       MsgChannel //channel to send messages to kv sender
 	cbqBridgeCmdCh      MsgChannel //channel to send message to cbq sender
+	scanCoordCmdCh      MsgChannel //chhannel to send messages to scan coordinator
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
 
@@ -67,6 +68,7 @@ type indexer struct {
 	clustMgrSender ClustMgrSender  //handle to ClustMgrSender
 	kvSender       KVSender        //handle to KVSender
 	cbqBridge      CbqBridge       //handle to CbqBridge
+	scanCoord      ScanCoordinator //handle to ScanCoordinator
 
 }
 
@@ -86,6 +88,7 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 		clustMgrSenderCmdCh: make(MsgChannel),
 		kvSenderCmdCh:       make(MsgChannel),
 		cbqBridgeCmdCh:      make(MsgChannel),
+		scanCoordCmdCh:      make(MsgChannel),
 
 		mutMgrExitCh: make(MsgChannel),
 
@@ -182,8 +185,15 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 		return nil, res
 	}
 
+	//Start Scan Coordinator
+	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh)
+	if res.GetMsgType() != MSG_SUCCESS {
+		log.Println("Indexer: Scan Coordinator Init Error", res)
+		return nil, res
+	}
+
 	//Start CbqBridge
-	idx.mutMgr, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh)
+	idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
 		log.Println("Indexer: CbqBridge Init Error", res)
 		return nil, res
@@ -353,6 +363,10 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 
 		idx.handleDropIndex(msg)
 
+	case SCAN_COORD_SCAN_INDEX:
+
+		idx.handleScanIndex(msg)
+
 	default:
 
 		log.Printf("Indexer: Received Unknown Admin Message %v", msg)
@@ -376,6 +390,8 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	partnDefnList := indexInst.Pc.GetAllPartitions()
 
 	for i, partnDefn := range partnDefnList {
+		//TODO: Ignore partitions which do not belong to this
+		//indexer node(based on the endpoints)
 		partnInst := PartitionInst{Defn: partnDefn,
 			Sc: NewHashedSliceContainer()}
 
@@ -397,36 +413,12 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	//init index partition map for this index
 	idx.indexPartnMap[indexInst.InstId] = partnInstMap
 
-	//update index map in storage manager
 	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
-
-	idx.storageMgrCmdCh <- msgUpdateIndexInstMap
-	if resp, ok := <-idx.storageMgrCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleCreateIndex: Error received from Storage Manager"+
-				"processing Msg %v Err %v. Aborted.", msgUpdateIndexInstMap, resp)
-			return
-		}
-	} else {
-		log.Printf("handleCreateIndex: Error communicating with Storage Manager"+
-			"processing Msg %v Err %v. Aborted.", msgUpdateIndexInstMap, resp)
-		return
-	}
-
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
-	idx.storageMgrCmdCh <- msgUpdateIndexPartnMap
-	if resp, ok := <-idx.storageMgrCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleCreateIndex: Error received from Storage Manager"+
-				"processing Msg %v Err %v. Aborted.", msgUpdateIndexPartnMap, resp)
-			return
-		}
-	} else {
-		log.Printf("handleCreateIndex: Error communicating with Storage Manager"+
-			"processing Msg %v Err %v. Aborted.", msgUpdateIndexPartnMap, resp)
+	//update index map in storage manager
+	if ok := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
+		idx.storageMgrCmdCh, "StorageManager"); !ok {
 		return
 	}
 
@@ -486,32 +478,14 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	//update index map in mutation manager
-
-	idx.mutMgrCmdCh <- msgUpdateIndexInstMap
-	if resp, ok := <-idx.mutMgrCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleCreateIndex: Error received from Mutation Manager"+
-				"processing Msg %v Err %v. Aborted.", msgUpdateIndexInstMap, resp)
-			return
-		}
-	} else {
-		log.Printf("handleCreateIndex: Error communicating with Mutation Manager"+
-			"processing Msg %v Err %v. Aborted.", msgUpdateIndexInstMap, resp)
+	if ok := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
+		idx.mutMgrCmdCh, "MutationManager"); !ok {
 		return
 	}
 
-	idx.mutMgrCmdCh <- msgUpdateIndexPartnMap
-	if resp, ok := <-idx.mutMgrCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleCreateIndex: Error received from Mutation Manager"+
-				"processing Msg %v Err %v. Aborted.", msgUpdateIndexPartnMap, resp)
-			return
-		}
-	} else {
-		log.Printf("handleCreateIndex: Error communicating with Mutation Manager"+
-			"processing Msg %v Err %v. Aborted.", msgUpdateIndexPartnMap, resp)
+	//update index map in scan coordinator
+	if ok := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
+		idx.scanCoordCmdCh, "ScanCoordinator"); !ok {
 		return
 	}
 
@@ -538,11 +512,48 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 }
 
+func (idx *indexer) sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap Message,
+	msgUpdateIndexPartnMap Message, workerCmdCh chan Message, workerStr string) bool {
+
+	//update index map in scan coordinator
+	workerCmdCh <- msgUpdateIndexInstMap
+
+	if resp, ok := <-workerCmdCh; ok {
+
+		if resp.GetMsgType() != MSG_SUCCESS {
+			log.Printf("sendUpdatedIndexMapToWorker: Error received from %v processing "+
+				"Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexInstMap, resp)
+			return false
+		}
+	} else {
+		log.Printf("sendUpdatedIndexMapToWorker: Error communicating with %v "+
+			"processing Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexInstMap, resp)
+		return false
+	}
+
+	workerCmdCh <- msgUpdateIndexPartnMap
+	if resp, ok := <-workerCmdCh; ok {
+
+		if resp.GetMsgType() != MSG_SUCCESS {
+			log.Printf("sendUpdatedIndexMapToWorker: Error received from %v processing "+
+				"Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexPartnMap, resp)
+			return false
+		}
+	} else {
+		log.Printf("sendUpdatedIndexMapToWorker: Error communicating with %v "+
+			"processing Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexPartnMap, resp)
+		return false
+	}
+
+	return true
+
+}
+
 //TODO handle panic, otherwise main loop will get shutdown
 func (idx *indexer) handleDropIndex(msg Message) {
 
 	indexInstId := msg.(*MsgDropIndex).GetIndexInstId()
-	log.Printf("Indexer received DropIndex for Index %v", indexInstId)
+	common.Debugf("Indexer received DropIndex for Index %v", indexInstId)
 
 	//send the msg to KV
 	idx.kvSenderCmdCh <- msg
@@ -562,33 +573,14 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	delete(idx.indexInstMap, indexInstId)
 	delete(idx.indexPartnMap, indexInstId)
 
-	//update index map in storage manager
 	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
-
-	idx.storageMgrCmdCh <- msgUpdateIndexInstMap
-	if resp, ok := <-idx.storageMgrCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleDropIndex: Error received from Storage Manager"+
-				"processing Msg %v Err %v.", msgUpdateIndexInstMap, resp)
-		}
-	} else {
-		log.Printf("handleDropIndex: Error communicating with Storage Manager"+
-			"processing Msg %v Err %v.", msgUpdateIndexInstMap, resp)
-	}
-
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
-	idx.storageMgrCmdCh <- msgUpdateIndexPartnMap
-	if resp, ok := <-idx.storageMgrCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleDropIndex: Error received from Storage Manager"+
-				"processing Msg %v Err %v.", msgUpdateIndexPartnMap, resp)
-		}
-	} else {
-		log.Printf("handleDropIndex: Error communicating with Storage Manager"+
-			"processing Msg %v Err %v.", msgUpdateIndexPartnMap, resp)
+	//update index map in storage manager
+	if ok := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
+		idx.storageMgrCmdCh, "StorageManager"); !ok {
+		common.Errorf("Indexer: handleDropIndex failed to update IndexMap in " +
+			"StorageManager")
 	}
 
 	//send msg to timekeeper to stop stream if this was the last index
@@ -634,33 +626,37 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	}
 
 	//update index map in mutation manager
-
-	idx.mutMgrCmdCh <- msgUpdateIndexInstMap
-	if resp, ok := <-idx.mutMgrCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleDropIndex: Error received from Mutation Manager"+
-				"processing Msg %v Err %v.", msgUpdateIndexInstMap, resp)
-		}
-	} else {
-		log.Printf("handleDropIndex: Error communicating with Mutation Manager"+
-			"processing Msg %v Err %v.", msgUpdateIndexInstMap, resp)
-	}
-
-	idx.mutMgrCmdCh <- msgUpdateIndexPartnMap
-	if resp, ok := <-idx.mutMgrCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleDropIndex: Error received from Mutation Manager"+
-				"processing Msg %v Err %v.", msgUpdateIndexPartnMap, resp)
-		}
-	} else {
-		log.Printf("handleDropIndex: Error communicating with Mutation Manager"+
-			"processing Msg %v Err %v.", msgUpdateIndexPartnMap, resp)
+	if ok := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
+		idx.mutMgrCmdCh, "MutationManager"); !ok {
+		common.Errorf("Indexer: handleDropIndex failed to update IndexMap in " +
+			"MutationManager.")
 	}
 
 	if len(idx.indexInstMap) == 0 {
 		idx.streamStatus[MAINT_STREAM] = false
+	}
+
+}
+
+func (idx *indexer) handleScanIndex(msg Message) {
+
+	idxInstId := msg.(*MsgScanIndex).GetIndexInstId()
+	common.Debugf("Indexer received ScanIndex for Index %v", idxInstId)
+
+	//fwd the message to Scan Coordinator
+	idx.scanCoordCmdCh <- msg
+
+	if resp, ok := <-idx.scanCoordCmdCh; ok {
+
+		if resp.GetMsgType() != MSG_SUCCESS {
+			log.Printf("handleScanIndex: Error received from Scan Coordinator "+
+				"processing Msg %v Err %v. Aborted.", msg, resp)
+			return
+		}
+	} else {
+		log.Printf("handleScanIndex: Error communicating with Scan Coordinator "+
+			"processing Msg %v Err %v. Aborted.", msg, resp)
+		return
 	}
 
 }
@@ -670,6 +666,10 @@ func (idx *indexer) shutdownWorkers() {
 	//shutdown mutation manager
 	idx.mutMgrCmdCh <- &MsgGeneral{mType: MUT_MGR_SHUTDOWN}
 	<-idx.mutMgrCmdCh
+
+	//shutdown scan coordinator
+	idx.scanCoordCmdCh <- &MsgGeneral{mType: SCAN_COORD_SHUTDOWN}
+	<-idx.scanCoordCmdCh
 
 	//shutdown storage manager
 	idx.storageMgrCmdCh <- &MsgGeneral{mType: STORAGE_MGR_SHUTDOWN}

@@ -21,6 +21,10 @@ type KeyPartitionDefn struct {
 	Endpts []Endpoint
 }
 
+func (kp KeyPartitionDefn) GetPartitionId() PartitionId {
+	return kp.Id
+}
+
 func (kp KeyPartitionDefn) Endpoints() []Endpoint {
 	return kp.Endpts
 }

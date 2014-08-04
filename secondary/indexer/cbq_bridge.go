@@ -12,7 +12,6 @@ package indexer
 import (
 	"encoding/json"
 	"github.com/couchbase/indexing/secondary/common"
-	"log"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -26,6 +25,7 @@ type cbqBridge struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any message to supervisor
 
+	indexMap map[common.IndexInstId]IndexInfo
 }
 
 func NewCbqBridge(supvCmdch MsgChannel, supvRespch MsgChannel) (
@@ -35,6 +35,7 @@ func NewCbqBridge(supvCmdch MsgChannel, supvRespch MsgChannel) (
 	cbq := &cbqBridge{
 		supvCmdch:  supvCmdch,
 		supvRespch: supvRespch,
+		indexMap:   make(map[common.IndexInstId]IndexInfo),
 	}
 
 	go cbq.initCbqBridge()
@@ -81,21 +82,24 @@ func (cbq *cbqBridge) initCbqBridge() error {
 	http.HandleFunc("/create", cbq.handleCreate)
 	http.HandleFunc("/drop", cbq.handleDrop)
 	http.HandleFunc("/list", cbq.handleList)
+	http.HandleFunc("/scan", cbq.handleScan)
 
-	log.Println("CbqBridge: Indexer Listening on", CBQ_BRIDGE_HTTP_ADDR)
+	common.Infof("CbqBridge: Indexer Listening on %v", CBQ_BRIDGE_HTTP_ADDR)
 	if err := http.ListenAndServe(CBQ_BRIDGE_HTTP_ADDR, nil); err != nil {
-		log.Printf("CbqBridge: Error Starting Http Server: %v", err)
+		common.Errorf("CbqBridge: Error Starting Http Server: %v", err)
 		return err
 	}
 	return nil
 
 }
 
-// /create
+//create
 func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var res IndexMetaResponse
 
-	indexinfo := indexRequest(r).Index // Get IndexInfo
+	indexinfo := indexRequest(r).Index
+
+	common.Debugf("CbqBridge: Received CreateIndex %v", indexinfo)
 
 	//generate a new unique id
 	uuid := rand.Int()
@@ -111,8 +115,8 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 		PartitionKey:    indexinfo.OnExprList[0]}
 
 	pc := common.NewKeyPartitionContainer()
-	//Add one partition for now
 
+	//Add one partition for now
 	endpt := []common.Endpoint{INDEXER_DATA_PORT_ENDPOINT}
 	partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
 		Endpts: endpt}
@@ -134,6 +138,8 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 		ServerUuid: "",
 	}
 
+	cbq.indexMap[idxInst.InstId] = indexinfo
+
 	sendResponse(w, res)
 }
 
@@ -143,6 +149,8 @@ func (cbq *cbqBridge) handleDrop(w http.ResponseWriter, r *http.Request) {
 
 	indexinfo := indexRequest(r).Index
 
+	common.Debugf("CbqBridge: Received DropIndex %v", indexinfo)
+
 	uuid, _ := strconv.Atoi(indexinfo.Uuid)
 	cbq.supvRespch <- &MsgDropIndex{indexInstId: common.IndexInstId(uuid)}
 
@@ -150,20 +158,131 @@ func (cbq *cbqBridge) handleDrop(w http.ResponseWriter, r *http.Request) {
 		Status:     RESP_SUCCESS,
 		ServerUuid: "",
 	}
+
+	delete(cbq.indexMap, common.IndexInstId(uuid))
 	sendResponse(w, res)
 }
 
-// /list
+//list
 func (cbq *cbqBridge) handleList(w http.ResponseWriter, r *http.Request) {
 	var res IndexMetaResponse
 
 	serverUuid := indexRequest(r).ServerUuid
+
+	common.Debugf("CbqBridge: Received ListIndex")
+
+	var indexList []IndexInfo
+	for _, idx := range cbq.indexMap {
+		indexList = append(indexList, idx)
+	}
+
 	res = IndexMetaResponse{
 		Status:     RESP_SUCCESS,
-		Indexes:    nil,
+		Indexes:    indexList,
 		ServerUuid: serverUuid,
 	}
 	sendResponse(w, res)
+}
+
+//Scan
+func (cbq *cbqBridge) handleScan(w http.ResponseWriter, r *http.Request) {
+
+	indexreq := indexRequest(r)
+	uuid, _ := strconv.Atoi(indexreq.Index.Uuid)
+	qp := indexreq.Params
+
+	common.Debugf("CbqBridge: Received ScanIndex %v", indexreq)
+
+	var lowkey, highkey Key
+	var err error
+
+	if lowkey, err = NewKey(qp.Low, []byte("")); err != nil {
+		ierr := IndexError{Code: string(RESP_ERROR),
+			Msg: err.Error()}
+		sendScanResponse(w, nil, 0, []IndexError{ierr})
+		return
+	}
+
+	if highkey, err = NewKey(qp.High, []byte("")); err != nil {
+		ierr := IndexError{Code: string(RESP_ERROR),
+			Msg: err.Error()}
+		sendScanResponse(w, nil, 0, []IndexError{ierr})
+		return
+	}
+
+	p := ScanParams{scanType: qp.ScanType,
+		low:      lowkey,
+		high:     highkey,
+		partnKey: []byte("partnKey"), //dummy partn key for now
+		incl:     qp.Inclusion,
+		limit:    qp.Limit,
+	}
+
+	msgScan := &MsgScanIndex{scanId: rand.Int63(),
+		indexInstId: common.IndexInstId(uuid),
+		stopch:      make(StopChannel),
+		p:           p,
+		resCh:       make(chan Value),
+		errCh:       make(chan Message),
+		countCh:     make(chan uint64)}
+
+	//send scan request to Indexer
+	cbq.supvRespch <- msgScan
+
+	cbq.receiveValue(w, msgScan.scanId, msgScan.resCh,
+		msgScan.countCh, msgScan.errCh)
+
+}
+
+//receiveValue keeps listening to the response/error channels for results/errors
+//till any of the response/error channel is closed by the sender.
+//All results/errors received are appended to the response which will be
+//sent back to Cbq Engine.
+func (cbq *cbqBridge) receiveValue(w http.ResponseWriter, scanId int64,
+	chres chan Value, chcount chan uint64, cherr chan Message) {
+
+	var totalRows uint64
+	rows := make([]IndexRow, 0)
+	errors := make([]IndexError, 0)
+
+	ok := true
+	var value Value
+	var errMsg Message
+
+	for ok {
+		select {
+		case value, ok = <-chres:
+			if ok {
+				common.Tracef("CbqBridge: ScanId %v Received Value %s",
+					scanId, value.String())
+
+				row := IndexRow{
+					Key:   value.KeyBytes(),
+					Value: string(value.Docid()),
+				}
+				rows = append(rows, row)
+			}
+
+		case totalRows, ok = <-chcount:
+			if ok {
+				common.Tracef("CbqBridge: ScanId %v Received Count %s",
+					scanId, totalRows)
+			}
+
+		case errMsg, ok = <-cherr:
+			if ok {
+				err := errMsg.(*MsgError).GetError()
+				common.Tracef("CbqBridge: ScanId %v Received Error %s",
+					scanId, err.cause)
+				ierr := IndexError{Code: string(RESP_ERROR),
+					Msg: err.cause.Error()}
+				errors = append(errors, ierr)
+			}
+		}
+	}
+
+	sendScanResponse(w, rows, totalRows, errors)
+
 }
 
 // Parse HTTP Request to get IndexInfo.
@@ -192,7 +311,30 @@ func sendResponse(w http.ResponseWriter, res interface{}) {
 	header["Content-Type"] = []string{"application/json"}
 
 	if buf, err = json.Marshal(&res); err != nil {
-		log.Println("Unable to marshal response", res)
+		common.Errorf("Unable to marshal response", res)
 	}
 	w.Write(buf)
+}
+
+func sendScanResponse(w http.ResponseWriter, rows []IndexRow,
+	totalRows uint64, errors []IndexError) {
+
+	var res IndexScanResponse
+
+	if len(errors) == 0 {
+		res = IndexScanResponse{
+			Status:    RESP_SUCCESS,
+			TotalRows: totalRows,
+			Rows:      rows,
+			Errors:    nil,
+		}
+	} else {
+		res = IndexScanResponse{
+			Status:    RESP_ERROR,
+			TotalRows: uint64(0),
+			Rows:      nil,
+			Errors:    errors,
+		}
+	}
+	sendResponse(w, res)
 }
