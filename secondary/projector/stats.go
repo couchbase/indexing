@@ -53,6 +53,7 @@ func (vr *VbucketRoutine) newStats() c.Statistics {
 		"uEngines":  float64(0), // no. of update-engine commands
 		"dEngines":  float64(0), // no. of delete-engine commands
 		"begins":    float64(0), // no. of Begin
+		"snapshots": float64(0), // no. of Begin
 		"mutations": float64(0), // no. of Upsert, Delete
 		"syncs":     float64(0), // no. of Sync message generated
 	}

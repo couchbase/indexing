@@ -27,6 +27,9 @@ const (
 // BucketAccess interface manage a subset of vbucket streams with mutiple KV
 // nodes. To be implemented by couchbase.Bucket type.
 type BucketAccess interface {
+	// Refresh bucket meta information like vbmap
+	Refresh() error
+
 	// GetVBmap returns a map of `kvaddr` to list of vbuckets hosted in a kv
 	// node.
 	GetVBmap(kvaddrs []string) (map[string][]uint16, error)
@@ -85,9 +88,10 @@ func (kv *kvUpr) StartVbStreams(restartTs *c.Timestamp) (failoverTs, kvTs *c.Tim
 		return nil, nil, err
 	}
 	for i, vbno := range restartTs.Vbnos {
+		snapshots := restartTs.Snapshots
 		flags, vbuuid := uint32(0), restartTs.Vbuuids[i]
-		start, end := uint64(0), uint64(0xFFFFFFFFFFFFFFFF)
-		snapStart, snapEnd := uint64(0), uint64(0)
+		start, end := restartTs.Seqnos[i], uint64(0xFFFFFFFFFFFFFFFF)
+		snapStart, snapEnd := snapshots[i][0], snapshots[i][1]
 		err = kv.uprFeed.UprRequestStream(
 			vbno, flags, vbuuid, start, end, snapStart, snapEnd)
 		if err != nil {
@@ -110,16 +114,30 @@ func computeFailoverTs(
 	bucket *couchbase.Bucket,
 	restartTs *c.Timestamp) (failoverTs *c.Timestamp, err error) {
 
-	failoverTs = c.NewTimestamp(restartTs.Bucket, cap(restartTs.Vbnos))
 	flogs, err := bucket.GetFailoverLogs(restartTs.Vbnos)
 	if err != nil {
 		return nil, err
 	}
+
+	failoverTs = c.NewTimestamp(restartTs.Bucket, cap(restartTs.Vbnos))
+
 	for vbno, flog := range flogs {
 		x := flog[len(flog)-1]
-		failoverTs.Vbnos = append(failoverTs.Vbnos, vbno)
-		failoverTs.Vbuuids = append(failoverTs.Vbuuids, x[0])
-		failoverTs.Seqnos = append(failoverTs.Seqnos, x[1])
+		failoverTs.Append(vbno, x[0], x[1], 0, 0)
 	}
 	return failoverTs, nil
+}
+
+func computeRestartTs(
+	flogs map[uint16][][2]uint64, hwTs *c.Timestamp) (restartTs *c.Timestamp) {
+
+	restartTs = c.NewTimestamp(hwTs.Bucket, cap(hwTs.Vbnos))
+	i := 0
+	for vbno, flog := range flogs {
+		x := flog[len(flog)-1]
+		s := hwTs.Snapshots[i]
+		restartTs.Append(vbno, x[0], s[0], s[0], s[1])
+		i++
+	}
+	return restartTs
 }

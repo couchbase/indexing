@@ -3,8 +3,9 @@
 package projector
 
 import (
-	"code.google.com/p/goprotobuf/proto"
 	"errors"
+
+	"code.google.com/p/goprotobuf/proto"
 	ap "github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
@@ -19,6 +20,7 @@ var ErrorFeedAlreadyActive = errors.New("projector.adminport.feedAlreadyActive")
 var ErrorInvalidTopic = errors.New("projector.adminport.invalidTopic")
 
 // list of requests handled by this adminport
+var reqVbmap = &protobuf.VbmapRequest{}
 var reqFailoverLog = &protobuf.FailoverLogRequest{}
 var reqMutationFeed = &protobuf.MutationStreamRequest{}
 var reqUpdateFeed = &protobuf.UpdateMutationStreamRequest{}
@@ -33,6 +35,7 @@ func mainAdminPort(laddr string, p *Projector) {
 
 	reqch := make(chan ap.Request)
 	server := ap.NewHTTPServer("projector", laddr, c.AdminportURLPrefix, reqch)
+	server.Register(reqVbmap)
 	server.Register(reqFailoverLog)
 	server.Register(reqMutationFeed)
 	server.Register(reqUpdateFeed)
@@ -70,6 +73,8 @@ func (p *Projector) handleRequest(
 	server ap.Server) (response ap.MessageMarshaller, err error) {
 
 	switch request := msg.(type) {
+	case *protobuf.VbmapRequest:
+		response = p.doVbmapRequest(request)
 	case *protobuf.FailoverLogRequest:
 		response = p.doFailoverLog(request)
 	case *protobuf.MutationStreamRequest:
@@ -91,8 +96,42 @@ func (p *Projector) handleRequest(
 }
 
 // handler neither use upstream connections nor disturbs upstream data path.
+func (p *Projector) doVbmapRequest(request *protobuf.VbmapRequest) ap.MessageMarshaller {
+	c.Debugf("%v doVbmapRequest\n", p.logPrefix)
+	response := &protobuf.VbmapResponse{}
+
+	pooln := request.GetPool()
+	bucketn := request.GetBucket()
+	kvaddrs := request.GetKvaddrs()
+
+	bucket, err := p.getBucket(pooln, bucketn)
+	if err != nil {
+		c.Errorf("%v %s, %v\n", p.logPrefix, bucketn, err)
+		response.Err = protobuf.NewError(err)
+		return response
+	}
+
+	response.Kvaddrs = make([]string, 0, len(kvaddrs))
+	response.Kvvbnos = make([]*protobuf.Vbuckets, 0, len(kvaddrs))
+	bucket.Refresh()
+	m, err := bucket.GetVBmap(kvaddrs)
+	if err != nil {
+		c.Errorf("%v %s, %v\n", p.logPrefix, bucketn, err)
+		response.Err = protobuf.NewError(err)
+		return response
+	}
+
+	for kvaddr, vbnos := range m {
+		response.Kvaddrs = append(response.Kvaddrs, kvaddr)
+		response.Kvvbnos = append(
+			response.Kvvbnos, &protobuf.Vbuckets{Vbnos: c.Vbno16to32(vbnos)})
+	}
+	return response
+}
+
+// handler neither use upstream connections nor disturbs upstream data path.
 func (p *Projector) doFailoverLog(request *protobuf.FailoverLogRequest) ap.MessageMarshaller {
-	c.Tracef("%v doFailoverLog\n", p.logPrefix)
+	c.Debugf("%v doFailoverLog\n", p.logPrefix)
 	response := &protobuf.FailoverLogResponse{}
 
 	pooln := request.GetPool()
@@ -136,7 +175,7 @@ func (p *Projector) doFailoverLog(request *protobuf.FailoverLogRequest) ap.Messa
 func (p *Projector) doMutationFeed(request *protobuf.MutationStreamRequest) ap.MessageMarshaller {
 	var err error
 
-	c.Tracef("%v doMutationFeed()\n", p.logPrefix)
+	c.Debugf("%v doMutationFeed()\n", p.logPrefix)
 	response := protobuf.NewMutationStreamResponse(request)
 
 	topic := request.GetTopic()
@@ -183,7 +222,7 @@ func (p *Projector) doMutationFeed(request *protobuf.MutationStreamRequest) ap.M
 func (p *Projector) doUpdateFeed(request *protobuf.UpdateMutationStreamRequest) ap.MessageMarshaller {
 	var err error
 
-	c.Tracef("%v doUpdateFeed()\n", p.logPrefix)
+	c.Debugf("%v doUpdateFeed()\n", p.logPrefix)
 	response := protobuf.NewMutationStreamResponse(request)
 
 	topic := request.GetTopic()
@@ -219,7 +258,7 @@ func (p *Projector) doUpdateFeed(request *protobuf.UpdateMutationStreamRequest) 
 
 // add or remove endpoints.
 func (p *Projector) doSubscribeFeed(request *protobuf.SubscribeStreamRequest) ap.MessageMarshaller {
-	c.Tracef("%v doSubscribeFeed()\n", p.logPrefix)
+	c.Debugf("%v doSubscribeFeed()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
@@ -243,12 +282,12 @@ func (p *Projector) doSubscribeFeed(request *protobuf.SubscribeStreamRequest) ap
 
 // restart connection with specified list of endpoints.
 func (p *Projector) doRepairEndpoints(request *protobuf.RepairDownstreamEndpoints) ap.MessageMarshaller {
-	c.Tracef("%v doRepairEndpoints()\n", p.logPrefix)
+	c.Debugf("%v doRepairEndpoints()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic)
 	if err == nil { // only existing feed
-		err = feed.RepairEndpoints()
+		err = feed.RepairEndpoints(request.GetEndpoints())
 	} else {
 		c.Errorf("%v %v\n", p.logPrefix, err)
 	}
@@ -257,7 +296,7 @@ func (p *Projector) doRepairEndpoints(request *protobuf.RepairDownstreamEndpoint
 
 // shutdown feed, all upstream vbuckets and downstream endpoints.
 func (p *Projector) doShutdownFeed(request *protobuf.ShutdownStreamRequest) ap.MessageMarshaller {
-	c.Tracef("%v doShutdownFeed()\n", p.logPrefix)
+	c.Debugf("%v doShutdownFeed()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic)
@@ -272,7 +311,7 @@ func (p *Projector) doShutdownFeed(request *protobuf.ShutdownStreamRequest) ap.M
 
 // get projector statistics.
 func (p *Projector) doStatistics(request c.Statistics, adminport ap.Server) ap.MessageMarshaller {
-	c.Tracef("%v doStatistics()\n", p.logPrefix)
+	c.Debugf("%v doStatistics()\n", p.logPrefix)
 	stats := p.GetStatistics()
 	stats.Set("adminport", adminport.GetStatistics())
 	return stats

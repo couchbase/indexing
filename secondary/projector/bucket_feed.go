@@ -64,14 +64,14 @@ func NewBucketFeed(
 	pooln, bucketn string) (bfeed *BucketFeed, err error) {
 
 	bfeed = &BucketFeed{
-		feed:      feed,
-		bucketn:   bucketn,
-		pooln:     pooln,
-		kvfeeds:   make(map[string]*KVFeed),
-		reqch:     make(chan []interface{}, c.GenserverChannelSize),
-		finch:     make(chan bool),
-		logPrefix: fmt.Sprintf("[bfeed %v:%v]", feed.topic, bucketn),
+		feed:    feed,
+		bucketn: bucketn,
+		pooln:   pooln,
+		kvfeeds: make(map[string]*KVFeed),
+		reqch:   make(chan []interface{}, c.GenserverChannelSize),
+		finch:   make(chan bool),
 	}
+	bfeed.logPrefix = fmt.Sprintf("[%v]", bfeed.repr())
 	bfeed.stats = bfeed.newStats()
 
 	// initialize KVFeeds
@@ -86,6 +86,10 @@ func NewBucketFeed(
 	go bfeed.genServer(bfeed.reqch)
 	c.Infof("%v started ...\n", bfeed.logPrefix)
 	return bfeed, nil
+}
+
+func (bfeed *BucketFeed) repr() string {
+	return fmt.Sprintf("%v:%v", bfeed.feed.repr(), bfeed.bucketn)
 }
 
 func (bfeed *BucketFeed) getFeed() *Feed {
@@ -264,6 +268,9 @@ func (bfeed *BucketFeed) requestFeed(
 	var fTs, vTs *c.Timestamp
 	failTs = c.NewTimestamp(bfeed.bucketn, c.MaxVbuckets)
 	kvTs = c.NewTimestamp(bfeed.bucketn, c.MaxVbuckets)
+
+	c.Debugf("%v updating feed ...", bfeed.logPrefix)
+
 	for _, kvfeed := range bfeed.kvfeeds {
 		fTs, vTs, err = kvfeed.RequestFeed(req, endpoints, engines)
 		if err != nil {

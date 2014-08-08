@@ -26,14 +26,16 @@ package projector
 
 import (
 	"fmt"
+	"time"
+
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
-	"time"
 )
 
 // Endpoint structure to gather key-versions / mutations from one or more
 // vbuckets and push them downstream to a specific node.
 type Endpoint struct {
+	feed   *Feed
 	raddr  string           // immutable
 	client *dataport.Client // immutable
 	coord  bool             // whether this endpoint is coordinator
@@ -42,6 +44,7 @@ type Endpoint struct {
 	reqch chan []interface{} // carries control commands
 	finch chan bool
 	// misc.
+	timestamp int64
 	logPrefix string
 	stats     c.Statistics
 }
@@ -54,14 +57,16 @@ func NewEndpoint(feed *Feed, raddr string, n int, coord bool) (*Endpoint, error)
 		return nil, err
 	}
 	endpoint := &Endpoint{
-		raddr:  raddr,
-		client: client,
-		coord:  coord,
-		kvch:   make(chan []interface{}, c.KeyVersionsChannelSize),
-		reqch:  make(chan []interface{}, c.GenserverChannelSize),
-		finch:  make(chan bool),
+		feed:      feed,
+		raddr:     raddr,
+		client:    client,
+		coord:     coord,
+		kvch:      make(chan []interface{}, c.KeyVersionsChannelSize),
+		reqch:     make(chan []interface{}, c.GenserverChannelSize),
+		finch:     make(chan bool),
+		timestamp: time.Now().UnixNano(),
 	}
-	endpoint.logPrefix = endpoint.getLogPrefix(feed)
+	endpoint.logPrefix = fmt.Sprintf("[%v]", endpoint.repr())
 	endpoint.stats = endpoint.newStats()
 
 	go endpoint.run(endpoint.kvch, endpoint.reqch)
@@ -70,8 +75,9 @@ func NewEndpoint(feed *Feed, raddr string, n int, coord bool) (*Endpoint, error)
 	return endpoint, nil
 }
 
-func (endpoint *Endpoint) getLogPrefix(feed *Feed) string {
-	return fmt.Sprintf("[endpc %v:%v]", feed.topic, endpoint.raddr)
+func (endpoint *Endpoint) repr() string {
+	x, y := endpoint.timestamp, endpoint.feed.repr()
+	return fmt.Sprintf("endpc(%v) %v:%v", x, y, endpoint.raddr)
 }
 
 func (endpoint *Endpoint) isCoord() bool {
@@ -144,20 +150,31 @@ func (endpoint *Endpoint) run(kvch chan []interface{}, reqch chan []interface{})
 		}
 	}()
 
+	prefix := endpoint.logPrefix
 	raddr, client, stats := endpoint.raddr, endpoint.client, endpoint.stats
 
-	flushTimeout := time.After(c.EndpointBufferTimeout * time.Millisecond)
+	flushTimeout := time.Tick(c.EndpointBufferTimeout * time.Millisecond)
+	harakiri := time.After(c.EndpointHarakiriTimeout * time.Millisecond)
 	buffers := newEndpointBuffers(raddr)
 
 	mutationCount := stats.Get("mutations").(float64)
 	vbmapCount := stats.Get("vbmaps").(float64)
 	flushCount := stats.Get("flushes").(float64)
 
+	flushBuffers := func() error {
+		raddr, vbs := buffers.raddr, buffers.vbs
+		if len(vbs) == 0 {
+			c.Tracef("%v empty keyversions\n", prefix)
+			return nil
+		}
+		c.Tracef("%v sent %v vbuckets to %q\n", prefix, len(vbs), raddr)
+		return buffers.flushBuffers(client)
+	}
+
 	var err error
 loop:
 	for {
 		err = nil
-		harakiri := time.After(c.EndpointHarakiriTimeout * time.Millisecond)
 		select {
 		case msg := <-kvch:
 			bucket := msg[0].(string)
@@ -165,7 +182,11 @@ loop:
 			vbuuid := msg[2].(uint64)
 			kv := msg[3].(*c.KeyVersions)
 			buffers.addKeyVersions(bucket, vbno, vbuuid, kv)
+			c.Tracef("%v added %v keyversions <%v:%v:%v> to %q\n",
+				prefix, len(kv.Commands), vbno, kv.Seqno, kv.Commands,
+				buffers.raddr)
 			mutationCount++
+			harakiri = time.After(c.EndpointHarakiriTimeout * time.Millisecond)
 
 		case msg := <-reqch:
 			switch msg[0].(byte) {
@@ -188,16 +209,15 @@ loop:
 
 			case endpCmdClose:
 				respch := msg[1].(chan []interface{})
-				err = buffers.flushBuffers(client)
+				err = flushBuffers()
 				endpoint.doClose()
 				respch <- []interface{}{nil}
 				break loop
 			}
 
 		case <-flushTimeout:
-			flushTimeout = time.After(c.EndpointBufferTimeout * time.Millisecond)
-			if err = buffers.flushBuffers(client); err != nil {
-				c.Errorf("%v flushBuffers() %v", endpoint.logPrefix, err)
+			if err = flushBuffers(); err != nil {
+				c.Errorf("%v flushBuffers() %v", prefix, err)
 				endpoint.doClose()
 				break loop
 			}
@@ -205,13 +225,13 @@ loop:
 			flushCount++
 
 		case <-harakiri:
-			c.Infof("%v committed harakiri\n", endpoint.logPrefix)
-			err = buffers.flushBuffers(client)
+			c.Infof("%v committed harakiri\n", prefix)
+			err = flushBuffers()
 			endpoint.doClose()
 			break loop
 		}
 		if err != nil {
-			c.Errorf("%v %v\n", endpoint.logPrefix, err)
+			c.Errorf("%v %v\n", prefix, err)
 		}
 	}
 }

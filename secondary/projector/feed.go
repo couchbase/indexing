@@ -62,8 +62,8 @@ func NewFeed(p *Projector, topic string, request RequestReader) (*Feed, error) {
 		engines:            make(map[uint64]*Engine),
 		reqch:              make(chan []interface{}, c.GenserverChannelSize),
 		finch:              make(chan bool),
-		logPrefix:          fmt.Sprintf("[feed %q]", topic),
 	}
+	feed.logPrefix = fmt.Sprintf("[%v]", feed.repr())
 	feed.stats = feed.newStats()
 	if err := feed.spawnBucketFeeds(pools, buckets); err != nil {
 		feed.doClose()
@@ -79,7 +79,15 @@ func (feed *Feed) getProjector() *Projector {
 	return feed.projector
 }
 
+func (feed *Feed) repr() string {
+	return fmt.Sprintf("%v:%v", feed.projector.repr(), feed.topic)
+}
+
 func (feed *Feed) spawnBucketFeeds(pools, buckets []string) error {
+	if len(pools) != len(buckets) {
+		c.Errorf("%v pools and buckets mistmatch !", feed.logPrefix)
+	}
+
 	kvaddrs := feed.projector.getKVNodes()
 
 	// fresh start of a mutation stream.
@@ -193,9 +201,9 @@ func (feed *Feed) DeleteEngines(request Subscriber) error {
 
 // RepairEndpoints will restart downstream endpoints if it is already dead,
 // synchronous call.
-func (feed *Feed) RepairEndpoints() error {
+func (feed *Feed) RepairEndpoints(endpoints []string) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdRepairEndpoints, respch}
+	cmd := []interface{}{fCmdRepairEndpoints, endpoints, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
@@ -251,8 +259,9 @@ loop:
 			respch <- []interface{}{feed.deleteEngines(req)}
 
 		case fCmdRepairEndpoints:
-			respch := msg[1].(chan []interface{})
-			respch <- []interface{}{feed.repairEndpoints()}
+			endpoints := msg[1].([]string)
+			respch := msg[2].(chan []interface{})
+			respch <- []interface{}{feed.repairEndpoints(endpoints)}
 
 		case fCmdGetStatistics:
 			respch := msg[1].(chan []interface{})
@@ -358,6 +367,9 @@ func (feed *Feed) updateFeed(req RequestReader) (err error) {
 		if err := feed.spawnBucketFeeds(pools, buckets); err != nil {
 			feed.doClose()
 			return err
+		}
+		for uuid, engine := range engines {
+			feed.engines[uuid] = engine
 		}
 	}
 
@@ -502,27 +514,33 @@ func (feed *Feed) deleteEngines(subscr Subscriber) (err error) {
 }
 
 // repair endpoints, restart engines and update bucket-feed
-func (feed *Feed) repairEndpoints() (err error) {
+func (feed *Feed) repairEndpoints(raddrs []string) (err error) {
 	// repair endpoints
 	endpoints := make(map[string]*Endpoint)
 	for raddr, endpoint := range feed.endpoints {
-		if !endpoint.Ping() {
-			c.Infof("%v restarting endpoint %q ...\n", feed.logPrefix, raddr)
-			endpoint, err = feed.startEndpoint(raddr, endpoint.coord)
-			if err != nil {
-				return err
+		if raddrs != nil && len(raddrs) > 0 && !c.HasString(raddr, raddrs) {
+			if endpoint.Ping() {
+				endpoints[raddr] = endpoint
 			}
+			continue
+		}
+		c.Infof("%v restarting endpoint %q ...\n", feed.logPrefix, raddr)
+		endpoint, err = feed.startEndpoint(raddr, endpoint.coord)
+		if err != nil {
+			return err
 		}
 		if endpoint != nil {
 			endpoints[raddr] = endpoint
 		}
 	}
+
 	// new set of engines
 	engines := make(map[uint64]*Engine)
 	for uuid, engine := range feed.engines {
 		engine = NewEngine(feed, uuid, engine.evaluator, engine.router)
 		engines[uuid] = engine
 	}
+
 	// update Engines with BucketFeed
 	for bucket, emap := range bucketWiseEngines(engines) {
 		if bfeed, ok := feed.bfeeds[bucket]; ok {

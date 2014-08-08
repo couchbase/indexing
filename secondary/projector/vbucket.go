@@ -46,7 +46,7 @@ func NewVbucketRoutine(kvfeed *KVFeed, bucket string, vbno uint16, vbuuid uint64
 		reqch:  make(chan []interface{}, c.MutationChannelSize),
 		finch:  make(chan bool),
 	}
-	vr.logPrefix = vr.getLogPrefix(kvfeed, vbno)
+	vr.logPrefix = fmt.Sprintf("[%v]", vr.repr())
 	vr.stats = vr.newStats()
 
 	go vr.run(vr.reqch, nil, nil)
@@ -54,10 +54,8 @@ func NewVbucketRoutine(kvfeed *KVFeed, bucket string, vbno uint16, vbuuid uint64
 	return vr
 }
 
-func (vr *VbucketRoutine) getLogPrefix(kvfeed *KVFeed, vbno uint16) string {
-	bfeed := kvfeed.bfeed
-	feed := bfeed.feed
-	return fmt.Sprintf("[vb %v:%v:%v]", feed.topic, bfeed.bucketn, vbno)
+func (vr *VbucketRoutine) repr() string {
+	return fmt.Sprintf("vb %v:%v", vr.kvfeed.repr(), vr.vbno)
 }
 
 const (
@@ -121,22 +119,31 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, endpoints map[string]*En
 	uEngineCount := stats.Get("uEngines").(float64)
 	dEngineCount := stats.Get("dEngines").(float64)
 	beginCount := stats.Get("begins").(float64)
+	sshotCount := stats.Get("snapshots").(float64)
 	mutationCount := stats.Get("mutations").(float64)
 	syncCount := stats.Get("syncs").(float64)
 
 loop:
 	for {
+	inner:
 		select {
 		case msg := <-reqch:
 			cmd := msg[0].(byte)
 			switch cmd {
 			case vrCmdUpdateEngines:
-				endpoints = msg[1].(map[string]*Endpoint)
-				engines = msg[2].(map[uint64]*Engine)
+				if msg[1] != nil {
+					endpoints = msg[1].(map[string]*Endpoint)
+				}
+				if msg[2] != nil {
+					engines = msg[2].(map[uint64]*Engine)
+				}
 				respch := msg[3].(chan []interface{})
 				respch <- []interface{}{nil}
 				uEngineCount++
-				vr.traceCtrlPath(endpoints, engines)
+				vr.debugCtrlPath(
+					msg[1].(map[string]*Endpoint),
+					msg[2].(map[uint64]*Engine),
+				)
 
 			case vrCmdDeleteEngines:
 				endpoints = msg[1].(map[string]*Endpoint)
@@ -146,32 +153,50 @@ loop:
 				respch := msg[3].(chan []interface{})
 				respch <- []interface{}{nil}
 				dEngineCount++
-				vr.traceCtrlPath(endpoints, engines)
+				vr.debugCtrlPath(endpoints, engines)
 
 			case vrCmdGetStatistics:
 				respch := msg[1].(chan []interface{})
 				stats.Set("uEngines", uEngineCount)
 				stats.Set("dEngines", dEngineCount)
 				stats.Set("begins", beginCount)
+				stats.Set("snapshots", sshotCount)
 				stats.Set("mutations", mutationCount)
 				stats.Set("syncs", syncCount)
 				respch <- []interface{}{stats.ToMap()}
 
 			case vrCmdEvent:
 				m := msg[1].(*mc.UprEvent)
-				seqno = m.Seqno
 				// broadcast StreamBegin
 				switch m.Opcode {
 				case mc.UprStreamRequest:
-					vr.sendToEndpoints(endpoints, func() *c.KeyVersions {
-						kv := c.NewKeyVersions(seqno, m.Key, 1)
+					vr.sendToEndpoints(endpoints, func(raddr string) *c.KeyVersions {
+						kv := c.NewKeyVersions(0, m.Key, 1)
 						kv.AddStreamBegin()
 						return kv
 					})
 					tickTs := c.VbucketSyncTimeout * time.Millisecond
 					heartBeat = time.Tick(tickTs)
 					beginCount++
-					break // breaks out of select{}
+					break inner // breaks out of select{}
+
+				case mc.UprSnapshot:
+					c.Debugf("%v received snapshot %v %v (type %v)\n",
+						vr.logPrefix, m.SnapstartSeq, m.SnapendSeq, m.SnapshotType)
+					vr.sendToEndpoints(endpoints, func(raddr string) *c.KeyVersions {
+						kv := c.NewKeyVersions(0, m.Key, 1)
+						kv.AddSnapshot(m.SnapshotType, m.SnapstartSeq, m.SnapendSeq)
+						return kv
+					})
+					sshotCount++
+					break inner // breaks out of select
+				}
+
+				// UprMutation, UprDeletion, UprExpiration
+
+				seqno = m.Seqno
+				if vr.vbno == 7 && seqno == 0x4e4 {
+					fmt.Printf("%#v\n", m)
 				}
 
 				// prepare a KeyVersions for each endpoint.
@@ -203,7 +228,8 @@ loop:
 
 		case <-heartBeat:
 			if endpoints != nil {
-				vr.sendToEndpoints(endpoints, func() *c.KeyVersions {
+				vr.sendToEndpoints(endpoints, func(raddr string) *c.KeyVersions {
+					c.Tracef("%v sync %v to %q", vr.logPrefix, syncCount, raddr)
 					kv := c.NewKeyVersions(seqno, nil, 1)
 					kv.AddSync()
 					return kv
@@ -216,7 +242,7 @@ loop:
 
 // close this vbucket routine
 func (vr *VbucketRoutine) doClose(seqno uint64, endpoints map[string]*Endpoint) {
-	vr.sendToEndpoints(endpoints, func() *c.KeyVersions {
+	vr.sendToEndpoints(endpoints, func(raddr string) *c.KeyVersions {
 		kv := c.NewKeyVersions(seqno, nil, 1)
 		kv.AddStreamEnd()
 		return kv
@@ -226,19 +252,25 @@ func (vr *VbucketRoutine) doClose(seqno uint64, endpoints map[string]*Endpoint) 
 }
 
 // send to all endpoints
-func (vr *VbucketRoutine) sendToEndpoints(endpoints map[string]*Endpoint, fn func() *c.KeyVersions) {
-	for _, endpoint := range endpoints {
-		kv := fn()
+func (vr *VbucketRoutine) sendToEndpoints(
+	endpoints map[string]*Endpoint, fn func(string) *c.KeyVersions) {
+
+	for raddr, endpoint := range endpoints {
+		kv := fn(raddr)
 		// send might fail, we don't care
 		endpoint.Send(vr.bucket, vr.vbno, vr.vbuuid, kv)
 	}
 }
 
-func (vr *VbucketRoutine) traceCtrlPath(endpoints map[string]*Endpoint, engines map[uint64]*Engine) {
-	for raddr := range endpoints {
-		c.Tracef("%v, knows enpdoint %q\n", vr.logPrefix, raddr)
+func (vr *VbucketRoutine) debugCtrlPath(endpoints map[string]*Endpoint, engines map[uint64]*Engine) {
+	if endpoints != nil {
+		for _, endpoint := range endpoints {
+			c.Debugf("%v, knows endpoint %v\n", vr.logPrefix, endpoint.timestamp)
+		}
 	}
-	for uuid := range engines {
-		c.Tracef("%v, knows engine %q\n", vr.logPrefix, uuid)
+	if engines != nil {
+		for uuid := range engines {
+			c.Debugf("%v, knows engine %v\n", vr.logPrefix, uuid)
+		}
 	}
 }

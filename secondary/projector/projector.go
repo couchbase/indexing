@@ -155,14 +155,18 @@ func NewProjector(cluster string, kvaddrs []string, adminport string) *Projector
 		buckets:   make(map[string]*couchbase.Bucket),
 		reqch:     make(chan []interface{}),
 		finch:     make(chan bool),
-		logPrefix: fmt.Sprintf("[projector %s]", adminport),
 	}
+	p.logPrefix = fmt.Sprintf("[%v]", p.repr())
 	go mainAdminPort(adminport, p)
 	go p.genServer(p.reqch)
 	c.Infof("%v started ...\n", p.logPrefix)
 	p.stats = p.newStats()
 	p.stats.Set("kvaddrs", kvaddrs)
 	return p
+}
+
+func (p *Projector) repr() string {
+	return fmt.Sprintf("%s", p.adminport)
 }
 
 func (p *Projector) getBucket(pooln, bucketn string) (*couchbase.Bucket, error) {
