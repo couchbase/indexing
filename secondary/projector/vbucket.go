@@ -195,9 +195,6 @@ loop:
 				// UprMutation, UprDeletion, UprExpiration
 
 				seqno = m.Seqno
-				if vr.vbno == 7 && seqno == 0x4e4 {
-					fmt.Printf("%#v\n", m)
-				}
 
 				// prepare a KeyVersions for each endpoint.
 				kvForEndpoints := make(map[string]*c.KeyVersions)

@@ -51,17 +51,19 @@ func N1QLTransform(document []byte, cExprs []interface{}) ([]byte, error) {
 		}
 		arrValue = append(arrValue, key)
 	}
+
 	if len(arrValue) > 1 {
 		secKey := dparval.NewValue(make([]interface{}, len(cExprs)))
 		for i, key := range arrValue {
 			secKey.SetIndex(i, key)
 		}
-		return secKey.Bytes(), nil
+		return secKey.Bytes(), nil // [ seckey1, seckey2, ... ]
+
 	} else if len(arrValue) == 1 {
-		return arrValue[0].Bytes(), nil
-	} else {
-		return nil, ErrorEmptyN1QLExpression
+		return arrValue[0].Bytes(), nil // seckey1
+
 	}
+	return nil, ErrorEmptyN1QLExpression
 }
 
 // CompositeKeysToArray convert list of composite keys to JSON array of
