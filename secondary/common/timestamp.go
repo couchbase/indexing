@@ -13,20 +13,31 @@ import (
 
 // Timestamp is logical clock to coordinate secondary index cluster.
 type Timestamp struct {
-	Bucket  string
-	Vbnos   []uint16
-	Seqnos  []uint64
-	Vbuuids []uint64
+	Bucket    string
+	Vbnos     []uint16
+	Seqnos    []uint64
+	Vbuuids   []uint64
+	Snapshots [][2]uint64
 }
 
 // NewTimestamp returns reference to new instance of Timestamp.
 func NewTimestamp(bucket string, maxVbuckets int) *Timestamp {
 	return &Timestamp{
-		Bucket:  bucket,
-		Vbnos:   make([]uint16, 0, maxVbuckets),
-		Seqnos:  make([]uint64, 0, maxVbuckets),
-		Vbuuids: make([]uint64, 0, maxVbuckets),
+		Bucket:    bucket,
+		Vbnos:     make([]uint16, 0, maxVbuckets),
+		Seqnos:    make([]uint64, 0, maxVbuckets),
+		Vbuuids:   make([]uint64, 0, maxVbuckets),
+		Snapshots: make([][2]uint64, 0, maxVbuckets),
 	}
+}
+
+// Append adds a new set of vbno, seqno, vbuuid
+func (ts *Timestamp) Append(vbno uint16, vbuuid, seqno, start, end uint64) *Timestamp {
+	ts.Vbnos = append(ts.Vbnos, vbno)
+	ts.Vbuuids = append(ts.Vbuuids, vbuuid)
+	ts.Seqnos = append(ts.Seqnos, seqno)
+	ts.Snapshots = append(ts.Snapshots, [2]uint64{start, end})
+	return ts
 }
 
 // SelectByVbuckets will select vbuckets from `ts` for a subset of `vbuckets`,
@@ -41,15 +52,16 @@ func (ts *Timestamp) SelectByVbuckets(vbuckets []uint16) *Timestamp {
 		return newts
 	}
 
-	cache := make(map[uint16]bool)
+	cache := [MaxVbuckets]byte{} // TODO: optimize for GC
 	for _, vbno := range vbuckets {
-		cache[vbno] = true
+		cache[vbno] = 1
 	}
 	for i, vbno := range ts.Vbnos {
-		if _, ok := cache[vbno]; ok {
+		if cache[vbno] == 1 {
 			newts.Vbnos = append(newts.Vbnos, vbno)
-			newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
 			newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
+			newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
+			newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
 		}
 	}
 	return newts
@@ -67,17 +79,18 @@ func (ts *Timestamp) FilterByVbuckets(vbuckets []uint16) *Timestamp {
 		return newts
 	}
 
-	cache := make(map[uint16]bool)
+	cache := [MaxVbuckets]byte{}
 	for _, vbno := range vbuckets {
-		cache[vbno] = true
+		cache[vbno] = 1
 	}
 	for i, vbno := range ts.Vbnos {
-		if _, ok := cache[vbno]; ok {
+		if cache[vbno] == 1 {
 			continue
 		}
 		newts.Vbnos = append(newts.Vbnos, vbno)
 		newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
 		newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
+		newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
 	}
 	return newts
 }
@@ -111,7 +124,9 @@ func (ts *Timestamp) CompareVbuuids(other *Timestamp) bool {
 		return false
 	}
 	for i, vbuuid := range ts.Vbuuids {
-		if (ts.Vbnos[i] != other.Vbnos[i]) || (vbuuid != other.Vbuuids[i]) {
+		if (ts.Vbnos[i] != other.Vbnos[i]) || (vbuuid != other.Vbuuids[i]) ||
+			(ts.Snapshots[i][0] != other.Snapshots[i][0]) ||
+			(ts.Snapshots[i][1] != other.Snapshots[i][1]) {
 			return false
 		}
 	}
@@ -143,23 +158,28 @@ func (ts *Timestamp) Union(other *Timestamp) *Timestamp {
 	if ts == nil || other == nil {
 		return ts
 	}
-	cache := make(map[uint16]bool)
-	newts := NewTimestamp(ts.Bucket, 1024) // TODO: no magic numbers
+	newts := NewTimestamp(ts.Bucket, MaxVbuckets)
+
 	// copy from other
 	newts.Vbnos = append(newts.Vbnos, other.Vbnos...)
 	newts.Seqnos = append(newts.Seqnos, other.Seqnos...)
 	newts.Vbuuids = append(newts.Vbuuids, other.Vbuuids...)
+	newts.Snapshots = append(newts.Snapshots, other.Snapshots...)
+
+	cache := [MaxVbuckets]byte{}
 	for _, vbno := range other.Vbnos {
-		cache[vbno] = true
+		cache[vbno] = 1
 	}
+
 	// deduplicate this
 	for i, vbno := range ts.Vbnos {
-		if _, ok := cache[vbno]; ok {
+		if cache[vbno] == 1 {
 			continue
 		}
 		newts.Vbnos = append(newts.Vbnos, vbno)
 		newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
 		newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
+		newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
 	}
 	sort.Sort(newts)
 	return newts
@@ -187,4 +207,5 @@ func (ts *Timestamp) Swap(i, j int) {
 	ts.Vbnos[i], ts.Vbnos[j] = ts.Vbnos[j], ts.Vbnos[i]
 	ts.Seqnos[i], ts.Seqnos[j] = ts.Seqnos[j], ts.Seqnos[i]
 	ts.Vbuuids[i], ts.Vbuuids[j] = ts.Vbuuids[j], ts.Vbuuids[i]
+	ts.Snapshots[i], ts.Snapshots[j] = ts.Snapshots[j], ts.Snapshots[i]
 }

@@ -14,13 +14,21 @@ func TestSortTimestamp(t *testing.T) {
 	tsRef.Vbnos = []uint16{11, 18, 21, 29, 41, 49, 62}
 	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
 	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
+	tsRef.Snapshots = [][2]uint64{
+		{100, 200}, {101, 201}, {102, 202}, {103, 203},
+		{104, 204}, {105, 205}, {106, 206},
+	}
 
 	ts := NewTimestamp("default", 1024)
 	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
+	ts.Snapshots = [][2]uint64{
+		{102, 202}, {101, 201}, {103, 203}, {100, 200},
+		{105, 205}, {104, 204}, {106, 206},
+	}
 
-	if ts.CompareVbuckets(tsRef) == false {
+	if ts.CompareVbuuids(tsRef) == false {
 		t.Fatal("expected true")
 	}
 
@@ -30,15 +38,15 @@ func TestSortTimestamp(t *testing.T) {
 }
 
 func TestSelectByVbuckets(t *testing.T) {
-	tsRef := NewTimestamp("default", 1024)
-	tsRef.Vbnos = []uint16{11, 18, 21, 49, 62}
-	tsRef.Seqnos = []uint64{1, 2, 3, 6, 7}
-	tsRef.Vbuuids = []uint64{10, 20, 30, 60, 70}
-
 	ts := NewTimestamp("default", 1024)
 	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
+	ts.Snapshots = [][2]uint64{
+		{102, 202}, {100, 200}, {103, 203}, {101, 201},
+		{105, 205}, {104, 204}, {106, 206},
+	}
+
 	ts = ts.SelectByVbuckets([]uint16{29, 41})
 	if reflect.DeepEqual(ts.Vbnos, []uint16{29, 42}) {
 		t.Fatal("vbnos mismatch in selecting timestamps")
@@ -49,6 +57,9 @@ func TestSelectByVbuckets(t *testing.T) {
 	if reflect.DeepEqual(ts.Vbuuids, []uint16{40, 50}) {
 		t.Fatal("vbuuids mismatch in selecting timestamps")
 	}
+	if reflect.DeepEqual(ts.Snapshots, [][2]uint16{{103, 203}, {104, 204}}) {
+		t.Fatal("snapshot mismatch in selecting timestamps")
+	}
 }
 
 func TestFilterByVbuckets(t *testing.T) {
@@ -56,6 +67,9 @@ func TestFilterByVbuckets(t *testing.T) {
 	ts.Vbnos = []uint16{11, 18, 21, 49, 62}
 	ts.Seqnos = []uint64{1, 2, 3, 6, 7}
 	ts.Vbuuids = []uint64{10, 20, 30, 60, 70}
+	ts.Snapshots = [][2]uint64{
+		{100, 200}, {101, 201}, {102, 202}, {105, 205}, {106, 206},
+	}
 
 	ts = ts.FilterByVbuckets([]uint16{21, 49})
 	if reflect.DeepEqual(ts.Vbnos, []uint16{11, 18, 62}) == false {
@@ -67,6 +81,10 @@ func TestFilterByVbuckets(t *testing.T) {
 	if reflect.DeepEqual(ts.Vbuuids, []uint64{10, 20, 70}) == false {
 		t.Fatal("vbuuids mismatch in filtering timestamps")
 	}
+	ref := [][2]uint64{{100, 200}, {101, 201}, {106, 206}}
+	if reflect.DeepEqual(ts.Snapshots, ref) == false {
+		t.Fatal("snapshot mismatch in filtering timestamps")
+	}
 }
 
 func TestCompareVbuckets(t *testing.T) {
@@ -74,11 +92,19 @@ func TestCompareVbuckets(t *testing.T) {
 	tsRef.Vbnos = []uint16{11, 18, 21, 29, 41, 49, 62}
 	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
 	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
+	tsRef.Snapshots = [][2]uint64{
+		{100, 200}, {101, 201}, {102, 202}, {103, 203},
+		{104, 204}, {105, 205}, {106, 206},
+	}
 
 	ts := NewTimestamp("default", 1024)
 	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
+	ts.Snapshots = [][2]uint64{
+		{102, 202}, {100, 200}, {103, 203}, {101, 201},
+		{105, 205}, {104, 204}, {106, 206},
+	}
 
 	if ts.CompareVbuckets(tsRef) == false {
 		t.Fatal("expected true")
@@ -94,16 +120,29 @@ func TestCompareVbuuids(t *testing.T) {
 	tsRef.Vbnos = []uint16{11, 18, 21, 29, 41, 49, 62}
 	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
 	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
+	tsRef.Snapshots = [][2]uint64{
+		{100, 200}, {101, 201}, {102, 202}, {103, 203},
+		{104, 204}, {105, 205}, {106, 206},
+	}
 
 	ts := NewTimestamp("default", 1024)
 	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
+	ts.Snapshots = [][2]uint64{
+		{102, 202}, {101, 201}, {103, 203}, {100, 200},
+		{105, 205}, {104, 204}, {106, 206},
+	}
 
 	if ts.CompareVbuuids(tsRef) == false {
 		t.Fatal("expected true")
 	}
 	ts.Vbuuids[len(ts.Vbuuids)-1]++
+	if ts.CompareVbuuids(tsRef) == true {
+		t.Fatal("expected false")
+	}
+	ts.Vbuuids[len(ts.Vbuuids)-1]--
+	ts.Snapshots[len(ts.Snapshots)-1][0]++
 	if ts.CompareVbuuids(tsRef) == true {
 		t.Fatal("expected false")
 	}
@@ -114,11 +153,19 @@ func TestAsRecent(t *testing.T) {
 	tsRef.Vbnos = []uint16{11, 18, 21, 29, 41, 49, 62}
 	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
 	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
+	tsRef.Snapshots = [][2]uint64{
+		{100, 200}, {101, 201}, {102, 202}, {103, 203},
+		{104, 204}, {105, 205}, {106, 206},
+	}
 
 	ts := NewTimestamp("default", 1024)
 	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
+	ts.Snapshots = [][2]uint64{
+		{102, 202}, {100, 200}, {103, 203}, {101, 201},
+		{105, 205}, {104, 204}, {106, 206},
+	}
 
 	if ts.AsRecent(tsRef) == false {
 		t.Fatal("expected true")
@@ -139,16 +186,25 @@ func TestUnionTimestamp(t *testing.T) {
 	ts1.Vbnos = []uint16{11, 18, 22}
 	ts1.Seqnos = []uint64{1, 2, 4}
 	ts1.Vbuuids = []uint64{10, 20, 31}
+	ts1.Snapshots = [][2]uint64{{1000, 2000}, {1001, 2001}, {1002, 2002}}
 
 	ts2 := NewTimestamp("default", 1024)
 	ts2.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts2.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts2.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
+	ts2.Snapshots = [][2]uint64{
+		{102, 202}, {100, 200}, {103, 203}, {101, 201},
+		{105, 205}, {104, 204}, {106, 206},
+	}
 
 	tsref := NewTimestamp("default", 1024)
 	tsref.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62, 22}
 	tsref.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7, 4}
 	tsref.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70, 31}
+	tsref.Snapshots = [][2]uint64{
+		{102, 202}, {100, 200}, {103, 203}, {101, 201},
+		{105, 205}, {104, 204}, {106, 206}, {1002, 2002},
+	}
 	sort.Sort(tsref)
 
 	uts := ts1.Union(ts2)
