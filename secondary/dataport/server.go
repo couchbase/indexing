@@ -12,10 +12,10 @@
 //                             (sideband)            (mutation)
 //     NewServer() ----------*    |                      |
 //             |             |    |                      | []*VbKeyVersions
-//          (spawn)          |    | []*ShutdownDataport  |
-//             |             |    | []*RestartVbuckets   |
-//             |          (spawn) | error                |
-//           listener()      |    |                      |
+//          (spawn)          |    | ShutdownDataport     |
+//             |             |    | RestartVbuckets      |
+//             |          (spawn) | RepairVbuckets       |
+//           listener()      |    | error                |
 //                 |         |    |                      |
 //  serverCmdNewConnection   |    |                      |
 //                 |         |    |                      |
@@ -35,11 +35,10 @@
 //    that router will be closed and the same will be intimated to
 //    application for catchup connection, using []*RestartVbuckets message.
 // 3. side band information to application,
-//    a. []*RestartVbuckets, connection with an upstream host is closed.
-//    b. []*ShutdownDataport, all connections with an upstream host is closed.
-//    c. error string, describing the cause of the error.
-//    in case of b and c, all connections with all upstream host will be
-//    closed and dataport-instance will be shutdown.
+//    a. RestartVbuckets, vbucket streams have ended.
+//    b. RepairVbuckets, connection with an upstream host is closed.
+//    c. ShutdownDataport, all connections with an upstream host is closed.
+//    d. error string, describing the cause of the error.
 // 4. when ever dataport-instance shuts down it will signal application by
 //    side-band channel.
 
@@ -64,24 +63,25 @@ var ErrorPayload = errors.New("dataport.daemonPayload")
 // ErrorVbmap
 var ErrorVbmap = errors.New("dataport.vbmap")
 
-type bucketVbno struct {
+type activeVb struct {
 	bucket string
 	vbno   uint16
 }
 
+func (avb *activeVb) id() string {
+	return fmt.Sprintf("%v-%v", avb.bucket, avb.vbno)
+}
+
 // Side band information
 
-// RestartVbuckets to restart a subset of vuckets.
-type RestartVbuckets struct {
-	Bucket   string
-	Vbuckets []uint16
-}
+// RestartVbuckets to restart a subset of vuckets that has ended.
+type RestartVbuckets map[string][]uint16 // bucket -> []vbuckets
 
 // ShutdownDataport tells daemon has shutdown, provides vbuckets to restart.
-type ShutdownDataport struct {
-	Bucket   string
-	Vbuckets []uint16
-}
+type ShutdownDataport map[string][]uint16 // bucket -> []vbuckets
+
+// RepairVbuckets to restart vbuckets for closed connection.
+type RepairVbuckets map[string][]uint16 // bucket -> []vbuckets
 
 // messages to gen-server
 type serverMessage struct {
@@ -130,6 +130,7 @@ func NewServer(
 		logPrefix: fmt.Sprintf("[dataport %q]", laddr),
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
+		c.Errorf("%v failed starting ! %v", s.logPrefix, err)
 		return nil, err
 	}
 	go listener(laddr, s.lis, s.reqch) // spawn daemon
@@ -138,34 +139,31 @@ func NewServer(
 	return s, nil
 }
 
-func (s *Server) addUuids(started, uuids []*bucketVbno) ([]*bucketVbno, error) {
-	for _, adduuid := range started {
-		for _, uuid := range uuids {
-			if uuid.bucket == adduuid.bucket && uuid.vbno == adduuid.vbno {
-				c.Errorf("%v duplicate vbucket %v\n", s.logPrefix, uuid)
-				return nil, ErrorDuplicateStreamBegin
-			}
+func (s *Server) addUuids(started, avbs map[string]*activeVb) (map[string]*activeVb, error) {
+	for x, newvb := range started {
+		if avb, ok := avbs[x]; ok {
+			c.Errorf("%v duplicate vbucket %v\n", s.logPrefix, avb)
+			return nil, ErrorDuplicateStreamBegin
 		}
-		c.Infof("%v added vbucket %v\n", s.logPrefix, adduuid)
+		c.Infof("%v added vbucket %#v\n", s.logPrefix, newvb)
 	}
-	uuids = append(uuids, started...)
-	return uuids, nil
+	for x, newvb := range started {
+		avbs[x] = newvb
+	}
+	return avbs, nil
 }
 
-func (s *Server) delUuids(finished, uuids []*bucketVbno) ([]*bucketVbno, error) {
-	newUuids := make([]*bucketVbno, 0, len(uuids))
-	for _, uuid := range uuids {
-		for _, finuuid := range finished {
-			if uuid.bucket == finuuid.bucket && uuid.vbno == finuuid.vbno {
-				uuid = nil
-				break
-			}
-		}
-		if uuid != nil {
-			newUuids = append(newUuids, uuid)
+func (s *Server) delUuids(finished, avbs map[string]*activeVb) (map[string]*activeVb, error) {
+	for x, _ := range finished {
+		if avb, ok := avbs[x]; !ok {
+			c.Errorf("%v non-existent vbucket %v\n", s.logPrefix, avb)
+			return nil, ErrorMissingStreamBegin
 		}
 	}
-	return newUuids, nil
+	for x, _ := range finished {
+		delete(avbs, x)
+	}
+	return avbs, nil
 }
 
 // Close the daemon listening for new connections and shuts down all read
@@ -197,8 +195,8 @@ func (s *Server) genServer(reqch chan []interface{}, sbch chan<- interface{}) {
 			c.Errorf("%v gen-server fatal panic: %v\n", s.logPrefix, r)
 		}
 	}()
-
-	remoteUuids := make(map[string][]*bucketVbno) // indexed by `raddr`
+	// raddr -> id() -> activeVb
+	remoteUuids := make(map[string]map[string]*activeVb)
 loop:
 	for {
 		appmsg = nil
@@ -212,8 +210,7 @@ loop:
 				if appmsg, err = s.handleNewConnection(msg); err != nil {
 					conn.Close()
 				} else {
-					// TODO: avoid magic numbers.
-					remoteUuids[msg.raddr] = make([]*bucketVbno, 0, 4)
+					remoteUuids[msg.raddr] = make(map[string]*activeVb)
 					s.startWorker(msg.raddr)
 				}
 
@@ -221,29 +218,28 @@ loop:
 				vbmap := msg.args[0].(*protobuf.VbConnectionMap)
 				b, raddr := vbmap.GetBucket(), msg.raddr
 				for _, vbno := range vbmap.GetVbuckets() {
-					remoteUuids[raddr] =
-						append(remoteUuids[raddr], &bucketVbno{b, uint16(vbno)})
+					avb := &activeVb{b, uint16(vbno)}
+					remoteUuids[raddr][avb.id()] = avb
 				}
 				s.startWorker(msg.raddr)
 
 			case serverCmdVbcontrol:
 				var err error
-				started := msg.args[0].([]*bucketVbno)
-				finished := msg.args[1].([]*bucketVbno)
-				uuids := remoteUuids[msg.raddr]
+				started := msg.args[0].(map[string]*activeVb)
+				finished := msg.args[1].(map[string]*activeVb)
+				avbs := remoteUuids[msg.raddr]
 				if len(started) > 0 { // new vbucket stream(s) have started
-					if uuids, err = s.addUuids(started, uuids); err != nil {
+					if avbs, err = s.addUuids(started, avbs); err != nil {
 						panic(err)
 					}
 				}
 				if len(finished) > 0 { // vbucket stream(s) have finished
-					if uuids, err = s.delUuids(finished, uuids); err != nil {
+					if avbs, err = s.delUuids(finished, avbs); err != nil {
 						panic(err)
 					}
-					tmp := make(map[string]*RestartVbuckets)
-					appmsg = vbucketsForRemote(finished, tmp)
+					appmsg = vbucketsForRemote(finished) // RestartVbuckets{}
 				}
-				remoteUuids[msg.raddr] = uuids
+				remoteUuids[msg.raddr] = avbs
 				s.startWorker(msg.raddr)
 
 			case serverCmdClose:
@@ -258,7 +254,7 @@ loop:
 			}
 			if appmsg != nil {
 				s.sbch <- appmsg
-				c.Infof("appmsg: %T:%+v\n", appmsg, appmsg)
+				c.Debugf("appmsg: %T:%+v\n", appmsg, appmsg)
 			}
 		}
 	}
@@ -314,7 +310,7 @@ func (s *Server) startWorker(raddr string) {
 // returns back a message for application.
 func (s *Server) jumboErrorHandler(
 	raddr string,
-	remoteUuids map[string][]*bucketVbno,
+	remoteUuids map[string]map[string]*activeVb,
 	err error) (msg interface{}) {
 
 	var whatJumbo string
@@ -328,10 +324,10 @@ func (s *Server) jumboErrorHandler(
 
 	if err == io.EOF {
 		c.Errorf("%v remote %q closed\n", s.logPrefix, raddr)
-		whatJumbo = "closeremote"
+		whatJumbo = "closeconn"
 	} else if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
 		c.Errorf("%v remote %q timedout\n", s.logPrefix, raddr)
-		whatJumbo = "closeremote"
+		whatJumbo = "closeconn"
 	} else if err != nil {
 		c.Errorf("%v `%v` from %q\n", s.logPrefix, err, raddr)
 		whatJumbo = "closeall"
@@ -341,13 +337,10 @@ func (s *Server) jumboErrorHandler(
 	}
 
 	switch whatJumbo {
-	case "closeremote":
-		var closed []string
-		buckets := make(map[string]*RestartVbuckets)
-		closed, s.conns = closeRemoteHost(s.logPrefix, raddr, s.conns)
-		for _, raddr := range closed {
-			msg = vbucketsForRemote(remoteUuids[raddr], buckets)
-		}
+	case "closeconn":
+		m := vbucketsForRemote(remoteUuids[raddr]) // RepairVbuckets{}
+		msg = RepairVbuckets(m)
+		closeConnection(s.logPrefix, raddr, s.conns)
 
 	case "closeall":
 		msg = vbucketsForRemotes(remoteUuids)
@@ -370,26 +363,30 @@ func closeConnections(prefix string, conns map[string]netConn) {
 	}
 }
 
-// close all connections with remote host.
-func closeRemoteHost(prefix string, raddr string, conns map[string]netConn) ([]string, map[string]netConn) {
-	recoverClose := func(conn net.Conn, craddr string) {
+func closeConnection(prefix, raddr string, conns map[string]netConn) {
+	recoverClose := func(conn net.Conn) {
 		defer func() {
 			if r := recover(); r != nil {
-				c.Errorf("%v panic closing connection %q", prefix, craddr)
+				c.Errorf("%v panic closing connection %q", prefix, raddr)
 			}
 			conn.Close()
 		}()
 	}
+	nc := conns[raddr]
+	recoverClose(nc.conn)
+	close(nc.worker)
+	delete(conns, raddr)
+	c.Infof("%v closed connection %q\n", prefix, raddr)
+}
 
+// close all connections with remote host.
+func closeRemoteHost(prefix, raddr string, conns map[string]netConn) ([]string, map[string]netConn) {
 	clientRaddrs := make([]string, 0, len(conns))
 	if _, ok := conns[raddr]; ok {
 		host, _, _ := net.SplitHostPort(raddr)
 		// close all connections and worker routines for this remote host
 		for _, craddr := range remoteConnections(host, conns) {
-			nc := conns[craddr]
-			recoverClose(nc.conn, craddr)
-			close(nc.worker)
-			delete(conns, craddr)
+			closeConnection(prefix, craddr, conns)
 			clientRaddrs = append(clientRaddrs, craddr)
 			c.Infof("%v closed connection %q\n", prefix, craddr)
 		}
@@ -411,38 +408,33 @@ func remoteConnections(host string, conns map[string]netConn) []string {
 }
 
 // gather vbuckets to restart for all remote connections
-func vbucketsForRemotes(remotes map[string][]*bucketVbno) []*ShutdownDataport {
-	var rs []*RestartVbuckets
-	buckets := make(map[string]*RestartVbuckets)
-	for _, uuids := range remotes {
-		rs = vbucketsForRemote(uuids, buckets)
+func vbucketsForRemotes(remotes map[string]map[string]*activeVb) ShutdownDataport {
+	m := make(ShutdownDataport)
+	for _, avbs := range remotes {
+		for _, avb := range avbs {
+			vbs, ok := m[avb.bucket]
+			if !ok {
+				vbs = make([]uint16, 0, 4) // TODO: avoid magic numbers
+			}
+			vbs = append(vbs, avb.vbno)
+			m[avb.bucket] = vbs
+		}
 	}
-	ss := make([]*ShutdownDataport, 0, len(rs))
-	for _, r := range rs {
-		s := &ShutdownDataport{Bucket: r.Bucket, Vbuckets: r.Vbuckets}
-		ss = append(ss, s)
-	}
-	return ss
+	return m
 }
 
 // gather vbuckets to restart for a single remote-connection.
-func vbucketsForRemote(uuids []*bucketVbno, buckets map[string]*RestartVbuckets) []*RestartVbuckets {
-	for _, uuid := range uuids { // ids are from to remote-connection
-		r, ok := buckets[uuid.bucket]
+func vbucketsForRemote(avbs map[string]*activeVb) RestartVbuckets {
+	m := make(RestartVbuckets)
+	for _, avb := range avbs {
+		vbs, ok := m[avb.bucket]
 		if !ok {
-			r = &RestartVbuckets{
-				Bucket:   uuid.bucket,
-				Vbuckets: make([]uint16, 0, 4), // TODO: avoid magic numbers
-			}
-			buckets[uuid.bucket] = r
+			vbs = make([]uint16, 0, 4) // TODO: avoid magic numbers
 		}
-		r.Vbuckets = append(r.Vbuckets, uuid.vbno)
+		vbs = append(vbs, avb.vbno)
+		m[avb.bucket] = vbs
 	}
-	rs := make([]*RestartVbuckets, 0, 10) // TODO: avoid magic numbers
-	for _, r := range buckets {
-		rs = append(rs, r)
-	}
-	return rs
+	return m
 }
 
 // go-routine to listen for new connections, if this routine goes down -
@@ -475,8 +467,8 @@ func doReceive(prefix string, nc netConn, mutch chan<- []*protobuf.VbKeyVersions
 	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
 	msg := serverMessage{raddr: conn.RemoteAddr().String()}
 
-	started := make([]*bucketVbno, 0, 4)  // TODO: avoid magic numbers
-	finished := make([]*bucketVbno, 0, 4) // TODO: avoid magic numbers
+	started := make(map[string]*activeVb)  // TODO: avoid magic numbers
+	finished := make(map[string]*activeVb) // TODO: avoid magic numbers
 
 	// detect StreamBegin and StreamEnd messages.
 	// TODO: function uses 2 level of loops, figure out a smart way to identify
@@ -495,10 +487,11 @@ func doReceive(prefix string, nc netConn, mutch chan<- []*protobuf.VbKeyVersions
 				commands = append(commands, kv.GetCommands()...)
 				commands = append(commands, 17)
 
+				avb := &activeVb{bucket, vbno}
 				if byte(kv.GetCommands()[0]) == c.StreamBegin {
-					started = append(started, &bucketVbno{bucket, vbno})
+					started[avb.id()] = avb
 				} else if byte(kv.GetCommands()[0]) == c.StreamEnd {
-					finished = append(finished, &bucketVbno{bucket, vbno})
+					finished[avb.id()] = avb
 				}
 			}
 			c.Tracef("%v {%v, %v}\n", prefix, bucket, vbno)
@@ -533,9 +526,9 @@ loop:
 					msg.args = []interface{}{started, finished}
 					reqch <- []interface{}{msg}
 					c.Infof(
-						"%v worker %q exit with %q {%v,%v} {%v, %v} \n",
+						"%v worker %q exit with %q {%v,%v}\n",
 						prefix, msg.raddr, `serverCmdVbcontrol`,
-						len(started), started, len(finished), finished)
+						len(started), len(finished))
 					break loop
 				}
 

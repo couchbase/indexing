@@ -42,6 +42,9 @@ var ErrorTransportVersion = errors.New("dataport.transportVersion")
 // ErrorDuplicateStreamBegin
 var ErrorDuplicateStreamBegin = errors.New("dataport.duplicateStreamBegin")
 
+// ErrorMissingStreamBegin
+var ErrorMissingStreamBegin = errors.New("dataport.missingStreamBegin")
+
 // packet field offset and size in bytes
 const (
 	pktLenOffset  int = 0
