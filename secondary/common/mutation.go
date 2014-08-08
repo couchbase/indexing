@@ -2,11 +2,13 @@
 // - Provide APIs to create KeyVersions.
 //
 // TODO: use slab allocated or memory pool to manage KeyVersions
+// TODO: change KeyVersions command to a specific type.
 
 package common
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 )
 
@@ -26,6 +28,7 @@ const (
 	DropData                       // control command
 	StreamBegin                    // control command
 	StreamEnd                      // control command
+	Snapshot                       // control command
 )
 
 // Payload either carries `vbmap` or `vbs`.
@@ -264,4 +267,14 @@ func (kv *KeyVersions) AddStreamBegin() {
 // AddStreamEnd add StreamEnd command for a vbucket shutdown.
 func (kv *KeyVersions) AddStreamEnd() {
 	kv.addKey(0, StreamEnd, nil, nil)
+}
+
+// AddSnapshot add Snapshot command for a vbucket shutdown.
+// * type is sent via uuid field
+// * start and end values are big-ending encoded to as key and old-key
+func (kv *KeyVersions) AddSnapshot(typ uint32, start, end uint64) {
+	var key, okey [8]byte
+	binary.BigEndian.PutUint64(key[:8], start)
+	binary.BigEndian.PutUint64(okey[:8], end)
+	kv.addKey(uint64(typ), Snapshot, key[:8], okey[:8])
 }
