@@ -11,6 +11,71 @@ import math "math"
 var _ = proto.Marshal
 var _ = math.Inf
 
+// Requested by Coordinator/indexer to learn vbuckets hosted by kvnodes.
+type VbmapRequest struct {
+	Pool             *string  `protobuf:"bytes,1,req,name=pool" json:"pool,omitempty"`
+	Bucket           *string  `protobuf:"bytes,2,req,name=bucket" json:"bucket,omitempty"`
+	Kvaddrs          []string `protobuf:"bytes,3,rep,name=kvaddrs" json:"kvaddrs,omitempty"`
+	XXX_unrecognized []byte   `json:"-"`
+}
+
+func (m *VbmapRequest) Reset()         { *m = VbmapRequest{} }
+func (m *VbmapRequest) String() string { return proto.CompactTextString(m) }
+func (*VbmapRequest) ProtoMessage()    {}
+
+func (m *VbmapRequest) GetPool() string {
+	if m != nil && m.Pool != nil {
+		return *m.Pool
+	}
+	return ""
+}
+
+func (m *VbmapRequest) GetBucket() string {
+	if m != nil && m.Bucket != nil {
+		return *m.Bucket
+	}
+	return ""
+}
+
+func (m *VbmapRequest) GetKvaddrs() []string {
+	if m != nil {
+		return m.Kvaddrs
+	}
+	return nil
+}
+
+type VbmapResponse struct {
+	Kvaddrs          []string    `protobuf:"bytes,1,rep,name=kvaddrs" json:"kvaddrs,omitempty"`
+	Kvvbnos          []*Vbuckets `protobuf:"bytes,2,rep,name=kvvbnos" json:"kvvbnos,omitempty"`
+	Err              *Error      `protobuf:"bytes,3,opt,name=err" json:"err,omitempty"`
+	XXX_unrecognized []byte      `json:"-"`
+}
+
+func (m *VbmapResponse) Reset()         { *m = VbmapResponse{} }
+func (m *VbmapResponse) String() string { return proto.CompactTextString(m) }
+func (*VbmapResponse) ProtoMessage()    {}
+
+func (m *VbmapResponse) GetKvaddrs() []string {
+	if m != nil {
+		return m.Kvaddrs
+	}
+	return nil
+}
+
+func (m *VbmapResponse) GetKvvbnos() []*Vbuckets {
+	if m != nil {
+		return m.Kvvbnos
+	}
+	return nil
+}
+
+func (m *VbmapResponse) GetErr() *Error {
+	if m != nil {
+		return m.Err
+	}
+	return nil
+}
+
 // Requested by Coordinator during system-start, re-connect, rollback
 type FailoverLogRequest struct {
 	Pool             *string  `protobuf:"bytes,1,req,name=pool" json:"pool,omitempty"`
@@ -226,8 +291,9 @@ type UpdateMutationStreamRequest struct {
 	Pools             []string           `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
 	Buckets           []string           `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
 	RestartTimestamps []*BranchTimestamp `protobuf:"bytes,5,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
-	Instances         []*IndexInst       `protobuf:"bytes,6,rep,name=instances" json:"instances,omitempty"`
-	XXX_unrecognized  []byte             `json:"-"`
+	// list of index applicable for this stream, optional as well
+	Instances        []*IndexInst `protobuf:"bytes,6,rep,name=instances" json:"instances,omitempty"`
+	XXX_unrecognized []byte       `json:"-"`
 }
 
 func (m *UpdateMutationStreamRequest) Reset()         { *m = UpdateMutationStreamRequest{} }
@@ -324,8 +390,9 @@ func (m *SubscribeStreamRequest) GetInstances() []*IndexInst {
 // Requested by indexer / coordinator to inform router to re-connect with
 // downstream endpoint. Error message will be sent as response.
 type RepairDownstreamEndpoints struct {
-	Topic            *string `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
-	XXX_unrecognized []byte  `json:"-"`
+	Topic            *string  `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	Endpoints        []string `protobuf:"bytes,2,rep,name=endpoints" json:"endpoints,omitempty"`
+	XXX_unrecognized []byte   `json:"-"`
 }
 
 func (m *RepairDownstreamEndpoints) Reset()         { *m = RepairDownstreamEndpoints{} }
@@ -337,6 +404,13 @@ func (m *RepairDownstreamEndpoints) GetTopic() string {
 		return *m.Topic
 	}
 	return ""
+}
+
+func (m *RepairDownstreamEndpoints) GetEndpoints() []string {
+	if m != nil {
+		return m.Endpoints
+	}
+	return nil
 }
 
 // Requested by coordinator to should down a mutation stream and all KV

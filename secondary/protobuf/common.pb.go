@@ -17,6 +17,8 @@ It is generated from these files:
 
 It has these top-level messages:
 	Error
+	Vbuckets
+	Snapshot
 	Timestamp
 	BranchTimestamp
 	Actor
@@ -86,6 +88,48 @@ func (m *Error) GetError() string {
 	return ""
 }
 
+// list of vbucket numbers
+type Vbuckets struct {
+	Vbnos            []uint32 `protobuf:"varint,1,rep,name=vbnos" json:"vbnos,omitempty"`
+	XXX_unrecognized []byte   `json:"-"`
+}
+
+func (m *Vbuckets) Reset()         { *m = Vbuckets{} }
+func (m *Vbuckets) String() string { return proto.CompactTextString(m) }
+func (*Vbuckets) ProtoMessage()    {}
+
+func (m *Vbuckets) GetVbnos() []uint32 {
+	if m != nil {
+		return m.Vbnos
+	}
+	return nil
+}
+
+// Start and end of UPR snapshot
+type Snapshot struct {
+	Start            *uint64 `protobuf:"varint,1,req,name=start" json:"start,omitempty"`
+	End              *uint64 `protobuf:"varint,2,req,name=end" json:"end,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *Snapshot) Reset()         { *m = Snapshot{} }
+func (m *Snapshot) String() string { return proto.CompactTextString(m) }
+func (*Snapshot) ProtoMessage()    {}
+
+func (m *Snapshot) GetStart() uint64 {
+	if m != nil && m.Start != nil {
+		return *m.Start
+	}
+	return 0
+}
+
+func (m *Snapshot) GetEnd() uint64 {
+	if m != nil && m.End != nil {
+		return *m.End
+	}
+	return 0
+}
+
 // logical clock
 type Timestamp struct {
 	Bucket           *string  `protobuf:"bytes,1,req,name=bucket" json:"bucket,omitempty"`
@@ -121,11 +165,12 @@ func (m *Timestamp) GetSeqnos() []uint64 {
 
 // logical clock that also associate a vbucket branch for the specified sequence number
 type BranchTimestamp struct {
-	Bucket           *string  `protobuf:"bytes,1,req,name=bucket" json:"bucket,omitempty"`
-	Vbnos            []uint32 `protobuf:"varint,2,rep,name=vbnos" json:"vbnos,omitempty"`
-	Seqnos           []uint64 `protobuf:"varint,3,rep,name=seqnos" json:"seqnos,omitempty"`
-	Vbuuids          []uint64 `protobuf:"varint,4,rep,name=vbuuids" json:"vbuuids,omitempty"`
-	XXX_unrecognized []byte   `json:"-"`
+	Bucket           *string     `protobuf:"bytes,1,req,name=bucket" json:"bucket,omitempty"`
+	Vbnos            []uint32    `protobuf:"varint,2,rep,name=vbnos" json:"vbnos,omitempty"`
+	Seqnos           []uint64    `protobuf:"varint,3,rep,name=seqnos" json:"seqnos,omitempty"`
+	Vbuuids          []uint64    `protobuf:"varint,4,rep,name=vbuuids" json:"vbuuids,omitempty"`
+	Snapshots        []*Snapshot `protobuf:"bytes,5,rep,name=snapshots" json:"snapshots,omitempty"`
+	XXX_unrecognized []byte      `json:"-"`
 }
 
 func (m *BranchTimestamp) Reset()         { *m = BranchTimestamp{} }
@@ -156,6 +201,13 @@ func (m *BranchTimestamp) GetSeqnos() []uint64 {
 func (m *BranchTimestamp) GetVbuuids() []uint64 {
 	if m != nil {
 		return m.Vbuuids
+	}
+	return nil
+}
+
+func (m *BranchTimestamp) GetSnapshots() []*Snapshot {
+	if m != nil {
+		return m.Snapshots
 	}
 	return nil
 }

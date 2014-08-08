@@ -179,8 +179,7 @@ func (m *VbKeyVersions) GetKvs() []*KeyVersions {
 //   a vbucket.
 // 3. For DropData message, it is the first kv mutation that was dropped due
 //    to buffer overflow.
-// 4. For StreamBegin, it is the first kv mutation received after opening a
-//    vbucket stream with kv.
+// 4. For StreamBegin, it is zero.
 // 5. For StreamEnd, it is the last kv mutation received before ending a vbucket
 //    stream with kv.
 //

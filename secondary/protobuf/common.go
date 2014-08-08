@@ -32,21 +32,37 @@ func (req *Error) Decode(data []byte) (err error) {
 	return proto.Unmarshal(data, req)
 }
 
-// transform protobuf's BranchTimestamp to local timestamp.
+// transform protobuf's BranchTimestamp to native timestamp.
 func ToTimestamp(ts *BranchTimestamp) *c.Timestamp {
 	t := c.NewTimestamp(ts.GetBucket(), 1024) // TODO: no magic numbers
 	t.Vbnos = c.Vbno32to16(ts.GetVbnos())
 	t.Seqnos = ts.GetSeqnos()
 	t.Vbuuids = ts.GetVbuuids()
+
+	// convert snapshot {start, end} from protobuf to native golang.
+	snapshots := ts.GetSnapshots()
+	ss := make([][2]uint64, 0, len(snapshots))
+	for _, s := range snapshots {
+		ss = append(ss, [2]uint64{s.GetStart(), s.GetEnd()})
+	}
 	return t
 }
 
 // transform local timestamp to protobuf's BranchTimestamp
 func ToBranchTimestamp(ts *c.Timestamp) *BranchTimestamp {
-	return &BranchTimestamp{
+	bTs := &BranchTimestamp{
 		Bucket:  proto.String(ts.Bucket),
 		Vbnos:   c.Vbno16to32(ts.Vbnos),
 		Seqnos:  ts.Seqnos,
 		Vbuuids: ts.Vbuuids,
 	}
+
+	// convert native snapshot to protobuf format.
+	bTs.Snapshots = make([]*Snapshot, 0, len(ts.Snapshots))
+	for _, s := range ts.Snapshots {
+		bTs.Snapshots = append(
+			bTs.Snapshots,
+			&Snapshot{Start: proto.Uint64(s[0]), End: proto.Uint64(s[1])})
+	}
+	return bTs
 }

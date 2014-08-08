@@ -6,6 +6,17 @@ message Error {
     required string error = 1; // Empty string means success
 }
 
+// list of vbucket numbers
+message Vbuckets {
+    repeated uint32 vbnos = 1;
+}
+
+// Start and end of UPR snapshot
+message Snapshot {
+    required uint64 start = 1;
+    required uint64 end   = 2;
+}
+
 // logical clock
 message Timestamp {
     required string bucket = 1; // bucket name
@@ -15,10 +26,11 @@ message Timestamp {
 
 // logical clock that also associate a vbucket branch for the specified sequence number
 message BranchTimestamp {
-    required string bucket  = 1; // bucket name
-    repeated uint32 vbnos   = 2; // list of vbucket numbers
-    repeated uint64 seqnos  = 3; // corresponding sequence number for each vbucket listed above
-    repeated uint64 vbuuids = 4; // corresponding vbuuid for each vbucket listed above.
+    required string   bucket    = 1; // bucket name
+    repeated uint32   vbnos     = 2; // list of vbucket numbers
+    repeated uint64   seqnos    = 3; // corresponding sequence number for each vbucket listed above
+    repeated uint64   vbuuids   = 4; // corresponding vbuuid for each vbucket listed above
+    repeated Snapshot snapshots = 5; // [][2]uint64 - snapshot of {start, end}
 }
 
 // An actor is a process in secondary index cluster and can be one of the following.

@@ -40,19 +40,19 @@ func (req *MutationStreamRequest) IsStart() bool {
 }
 
 func (req *MutationStreamRequest) IsRestart() bool {
-	panic("MutationStreamRequest had to be a fresh start")
+	return false
 }
 
 func (req *MutationStreamRequest) IsShutdown() bool {
-	panic("MutationStreamRequest had to be a fresh start")
+	return false
 }
 
 func (req *MutationStreamRequest) IsAddBuckets() bool {
-	panic("MutationStreamRequest had to be a fresh start")
+	return false
 }
 
 func (req *MutationStreamRequest) IsDelBuckets() bool {
-	panic("MutationStreamRequest had to be a fresh start")
+	return false
 }
 
 func (req *MutationStreamRequest) RestartTimestamp(bucket string) *c.Timestamp {
@@ -92,7 +92,7 @@ func (req *UpdateMutationStreamRequest) SetDelBucketFlag() {
 }
 
 func (req *UpdateMutationStreamRequest) IsStart() bool {
-	panic("UpdateMutationStreamRequest cannot be a fresh start")
+	return false
 }
 
 func (req *UpdateMutationStreamRequest) IsRestart() bool {

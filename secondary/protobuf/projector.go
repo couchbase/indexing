@@ -1,7 +1,12 @@
 package protobuf
 
 import (
+	"fmt"
+	"sort"
+	"strings"
+
 	"code.google.com/p/goprotobuf/proto"
+	c "github.com/couchbase/indexing/secondary/common"
 )
 
 // NewMutationStreamResponse creates a new instance of MutationStreamResponse
@@ -45,8 +50,74 @@ func (m *MutationStreamResponse) UpdateTimestamps(failoverTs, kvTs []*BranchTime
 	m.KvTimestamps = kvTs
 }
 
-// FailoverLogRequest implement MessageMarshaller interface
+// VbmapRequest implement MessageMarshaller interface
+func (req *VbmapRequest) Name() string {
+	return "vbmapRequest"
+}
 
+func (req *VbmapRequest) ContentType() string {
+	return "application/protobuf"
+}
+
+func (req *VbmapRequest) Encode() (data []byte, err error) {
+	return proto.Marshal(req)
+}
+
+func (req *VbmapRequest) Decode(data []byte) (err error) {
+	return proto.Unmarshal(data, req)
+}
+
+// VbmapResponse implement MessageMarshaller interface
+func (res *VbmapResponse) Name() string {
+	return "vbmapResponse"
+}
+
+func (res *VbmapResponse) ContentType() string {
+	return "application/protobuf"
+}
+
+func (res *VbmapResponse) Encode() (data []byte, err error) {
+	return proto.Marshal(res)
+}
+
+func (res *VbmapResponse) Decode(data []byte) (err error) {
+	return proto.Unmarshal(data, res)
+}
+
+// LocateVbucket will identify the kvnode from VbmapResponse that is hosting
+// the vbucket `vbno`.
+// Return the address of the kvnode if vbucket is successfully located, else
+// return empty string.
+func (res *VbmapResponse) LocateVbucket(vbno uint32) string {
+	for i, kvaddr := range res.GetKvaddrs() {
+		for _, v := range res.GetKvvbnos()[i].Vbnos {
+			if v == vbno {
+				return kvaddr
+			}
+		}
+	}
+	return ""
+}
+
+func (res *VbmapResponse) Vbuckets32() []uint32 {
+	vbs := make([]uint32, 0)
+	for _, vs := range res.GetKvvbnos() {
+		vbs = append(vbs, vs.GetVbnos()...)
+	}
+	return vbs
+}
+
+func (res *VbmapResponse) Vbuckets16() []uint16 {
+	vbs := make([]uint16, 0)
+	for _, vs := range res.GetKvvbnos() {
+		for _, v := range vs.GetVbnos() {
+			vbs = append(vbs, uint16(v))
+		}
+	}
+	return vbs
+}
+
+// FailoverLogRequest implement MessageMarshaller interface
 func (req *FailoverLogRequest) Name() string {
 	return "failoverLogRequest"
 }
@@ -64,25 +135,63 @@ func (req *FailoverLogRequest) Decode(data []byte) (err error) {
 }
 
 // FailoverLogResponse implement MessageMarshaller interface
-
-func (req *FailoverLogResponse) Name() string {
+func (res *FailoverLogResponse) Name() string {
 	return "failoverLogResponse"
 }
 
-func (req *FailoverLogResponse) ContentType() string {
+func (res *FailoverLogResponse) ContentType() string {
 	return "application/protobuf"
 }
 
-func (req *FailoverLogResponse) Encode() (data []byte, err error) {
-	return proto.Marshal(req)
+func (res *FailoverLogResponse) Encode() (data []byte, err error) {
+	return proto.Marshal(res)
 }
 
-func (req *FailoverLogResponse) Decode(data []byte) (err error) {
-	return proto.Unmarshal(data, req)
+func (res *FailoverLogResponse) Decode(data []byte) (err error) {
+	return proto.Unmarshal(data, res)
+}
+
+func (res *FailoverLogResponse) LatestBranch() map[uint16]uint64 {
+	vbuuids := make(map[uint16]uint64)
+	for _, flog := range res.GetLogs() {
+		vbno := uint16(flog.GetVbno())
+		vbuuids[vbno] = flog.Vbuuids[len(flog.Vbuuids)-1]
+	}
+	return vbuuids
+}
+
+func (res *FailoverLogResponse) InitialBranchTimestamp(bucket string) *BranchTimestamp {
+	vbuuids := res.LatestBranch()
+
+	// sort vbuckets
+	vbnos := make(c.Vbuckets, 0, c.MaxVbuckets)
+	for vbno := range vbuuids {
+		vbnos = append(vbnos, vbno)
+	}
+	sort.Sort(vbnos)
+
+	// gather vbuuids
+	ts := c.NewTimestamp(bucket, c.MaxVbuckets)
+	for _, vbno := range vbnos {
+		ts.Append(vbno, vbuuids[vbno], 0, 0, 0)
+	}
+	return ToBranchTimestamp(ts)
+}
+
+func (res *FailoverLogResponse) FailoverLogs() map[uint16][][2]uint64 {
+	flogs := make(map[uint16][][2]uint64)
+	for _, f := range res.GetLogs() {
+		m := make([][2]uint64, 0)
+		seqnos := f.GetSeqnos()
+		for i, vbuuid := range f.GetVbuuids() {
+			m = append(m, [2]uint64{vbuuid, seqnos[i]})
+		}
+		flogs[uint16(f.GetVbno())] = m
+	}
+	return flogs
 }
 
 // MutationStreamRequest implement MessageMarshaller interface
-
 func (req *MutationStreamRequest) Name() string {
 	return "mutationStreamRequest"
 }
@@ -100,25 +209,41 @@ func (req *MutationStreamRequest) Decode(data []byte) (err error) {
 }
 
 // MutationStreamResponse implement MessageMarshaller interface
-
-func (req *MutationStreamResponse) Name() string {
+func (res *MutationStreamResponse) Name() string {
 	return "mutationStreamResponse"
 }
 
-func (req *MutationStreamResponse) ContentType() string {
+func (res *MutationStreamResponse) ContentType() string {
 	return "application/protobuf"
 }
 
-func (req *MutationStreamResponse) Encode() (data []byte, err error) {
-	return proto.Marshal(req)
+func (res *MutationStreamResponse) Encode() (data []byte, err error) {
+	return proto.Marshal(res)
 }
 
-func (req *MutationStreamResponse) Decode(data []byte) (err error) {
-	return proto.Unmarshal(data, req)
+func (res *MutationStreamResponse) Decode(data []byte) (err error) {
+	return proto.Unmarshal(data, res)
+}
+
+func (res *MutationStreamResponse) Repr() string {
+	err := res.GetErr().GetError()
+	topic := res.GetTopic()
+	if err != "" {
+		return fmt.Sprintf("[MutationStreamResponse:%s] error %q", topic, err)
+	}
+	buckets := res.GetBuckets()
+	kvtss := res.GetKvTimestamps()
+	lines := []string{}
+	for i, bucket := range buckets {
+		kvts := kvtss[i]
+		line := fmt.Sprintf(
+			"[MutationStreamResponse:%s:%s] %v", topic, bucket, kvts)
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // UpdateMutationStreamRequest implement MessageMarshaller interface
-
 func (req *UpdateMutationStreamRequest) Name() string {
 	return "updateMutationStreamRequest"
 }
@@ -136,7 +261,6 @@ func (req *UpdateMutationStreamRequest) Decode(data []byte) (err error) {
 }
 
 // SubscribeStreamRequest implement MessageMarshaller interface
-
 func (req *SubscribeStreamRequest) Name() string {
 	return "subscribeStreamRequest"
 }
@@ -154,7 +278,6 @@ func (req *SubscribeStreamRequest) Decode(data []byte) (err error) {
 }
 
 // RepairDownstreamEndpoints implement MessageMarshaller interface
-
 func (req *RepairDownstreamEndpoints) Name() string {
 	return "repairDownstreamEndpoints"
 }
@@ -172,7 +295,6 @@ func (req *RepairDownstreamEndpoints) Decode(data []byte) (err error) {
 }
 
 // ShutdownStreamRequest implement MessageMarshaller interface
-
 func (req *ShutdownStreamRequest) Name() string {
 	return "shutdownStreamRequest"
 }

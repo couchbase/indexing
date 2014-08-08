@@ -6,6 +6,19 @@ package protobuf;
 import "common.proto";
 import "index.proto";
 
+// Requested by Coordinator/indexer to learn vbuckets hosted by kvnodes.
+message VbmapRequest {
+    required string pool    = 1;
+    required string bucket  = 2;
+    repeated string kvaddrs = 3; // vbuckets for which failover log is request
+}
+
+message VbmapResponse {
+    repeated string   kvaddrs = 1;
+    repeated Vbuckets kvvbnos = 2;
+    optional Error    err     = 3;
+}
+
 // Requested by Coordinator during system-start, re-connect, rollback
 message FailoverLogRequest {
     required string pool   = 1;
@@ -61,13 +74,15 @@ message MutationStreamResponse {
 // del-buckets,
 //      subset of buckets to shutdown.
 //
-// flags are mutually exclusive.
+// restart/shutdown flags are mutually exclusive, likewise,
+// add-buckets/del-buckets flags are mutually exclusive.
 message UpdateMutationStreamRequest {
     required string          topic             = 1; // topic name.
     required uint32          flag              = 2;
     repeated string          pools             = 3;
     repeated string          buckets           = 4;
     repeated BranchTimestamp restartTimestamps = 5; // list of timestamps, one per bucket
+    // list of index applicable for this stream, optional as well
     repeated IndexInst       instances         = 6;
 }
 
@@ -94,6 +109,7 @@ message SubscribeStreamRequest {
 // downstream endpoint. Error message will be sent as response.
 message RepairDownstreamEndpoints {
     required string topic     = 1; // must be an already started stream.
+    repeated string endpoints = 2;
 }
 
 // Requested by coordinator to should down a mutation stream and all KV
