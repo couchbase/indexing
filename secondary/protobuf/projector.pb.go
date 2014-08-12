@@ -284,7 +284,8 @@ func (m *MutationStreamResponse) GetErr() *Error {
 // del-buckets,
 //      subset of buckets to shutdown.
 //
-// flags are mutually exclusive.
+// restart/shutdown flags are mutually exclusive, likewise,
+// add-buckets/del-buckets flags are mutually exclusive.
 type UpdateMutationStreamRequest struct {
 	Topic             *string            `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	Flag              *uint32            `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`

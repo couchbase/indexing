@@ -176,12 +176,20 @@ func (m *VbKeyVersions) GetKvs() []*KeyVersions {
 // 1. For Upsert, Deletion, UpsertDeletion messages, sequence number corresponds
 //    to kv mutation.
 // 2. For Sync message, it is the latest kv mutation sequence-no. received for
-//   a vbucket.
+//    a vbucket.
 // 3. For DropData message, it is the first kv mutation that was dropped due
 //    to buffer overflow.
 // 4. For StreamBegin, it is zero.
 // 5. For StreamEnd, it is the last kv mutation received before ending a vbucket
 //    stream with kv.
+//
+// Interpreting Snapshot marker:
+//    Key versions can contain snapshot-marker {start-seqno, end-seqno},
+//    instead of using separate field for them, following fields are
+//    mis-interpreted,
+//      uuid   - type  (8 byte)
+//      key    - start-seqno (8 byte)
+//      oldkey - end-seqno (8 byte)
 //
 // fields `docid`, `uuids`, `keys`, `oldkeys` are valid only for
 // Upsert, Deletion, UpsertDeletion messages.
