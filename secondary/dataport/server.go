@@ -133,8 +133,8 @@ func NewServer(
 		c.Errorf("%v failed starting ! %v", s.logPrefix, err)
 		return nil, err
 	}
-	go listener(laddr, s.lis, s.reqch) // spawn daemon
-	go s.genServer(s.reqch, sbch)      // spawn gen-server
+	go listener(s.logPrefix, s.lis, s.reqch) // spawn daemon
+	go s.genServer(s.reqch, sbch)            // spawn gen-server
 	c.Infof("%v started ...", s.logPrefix)
 	return s, nil
 }
@@ -154,13 +154,13 @@ func (s *Server) addUuids(started, avbs map[string]*activeVb) (map[string]*activ
 }
 
 func (s *Server) delUuids(finished, avbs map[string]*activeVb) (map[string]*activeVb, error) {
-	for x, _ := range finished {
+	for x := range finished {
 		if avb, ok := avbs[x]; !ok {
 			c.Errorf("%v non-existent vbucket %v\n", s.logPrefix, avb)
 			return nil, ErrorMissingStreamBegin
 		}
 	}
-	for x, _ := range finished {
+	for x := range finished {
 		delete(avbs, x)
 	}
 	return avbs, nil
@@ -326,7 +326,6 @@ func (s *Server) jumboErrorHandler(
 		c.Errorf("%v remote %q closed\n", s.logPrefix, raddr)
 		whatJumbo = "closeconn"
 	} else if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
-		c.Errorf("%v remote %q timedout\n", s.logPrefix, raddr)
 		whatJumbo = "closeconn"
 	} else if err != nil {
 		c.Errorf("%v `%v` from %q\n", s.logPrefix, err, raddr)
@@ -439,16 +438,26 @@ func vbucketsForRemote(avbs map[string]*activeVb) RestartVbuckets {
 
 // go-routine to listen for new connections, if this routine goes down -
 // server is shutdown and reason notified back to application.
-func listener(laddr string, lis net.Listener, reqch chan []interface{}) {
+func listener(prefix string, lis net.Listener, reqch chan []interface{}) {
 	defer func() {
-		c.Errorf("%v listener fatal panic: %v", laddr, recover())
-		msg := serverMessage{cmd: serverCmdError, err: ErrorDaemonExit}
-		reqch <- []interface{}{msg}
+		if r := recover(); r != nil {
+			c.Errorf("%v listener fatal panic: %v", prefix, r)
+			msg := serverMessage{cmd: serverCmdError, err: ErrorDaemonExit}
+			reqch <- []interface{}{msg}
+		}
 	}()
+
+loop:
 	for {
 		// TODO: handle `err` for lis.Close() and avoid panic(err)
 		if conn, err := lis.Accept(); err != nil {
-			panic(err)
+			if e, ok := err.(*net.OpError); ok && e.Op == "accept" {
+				c.Infof("%v ... stopped", prefix)
+				break loop
+			} else {
+				panic(err)
+			}
+
 		} else {
 			msg := serverMessage{
 				cmd:   serverCmdNewConnection,
@@ -535,7 +544,7 @@ loop:
 			case <-worker:
 				msg.cmd, msg.err = serverCmdError, ErrorWorkerKilled
 				reqch <- []interface{}{msg}
-				c.Errorf("%v worker %q exited %v\n", prefix, msg.raddr, err)
+				c.Errorf("%v worker %q exited %v\n", prefix, msg.raddr, msg.err)
 				break loop
 			}
 

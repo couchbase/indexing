@@ -23,6 +23,9 @@ var commandNames = map[byte]string{
 	c.Snapshot:       "Snapshot",
 }
 
+// Application starts a new dataport application to receive mutations from the
+// other end. Optionally it can print statistics and do callback for every
+// mutation received.
 func Application(
 	addr string, // data port address to listen for connections
 	stats int, // timeout to periodically display statistics
@@ -170,7 +173,7 @@ func sprintCommandCount(commandWise map[byte]int) string {
 
 func sortedBuckets(bucketWise map[string]map[byte]int) []string {
 	buckets := make([]string, 0, len(bucketWise))
-	for bucket, _ := range bucketWise {
+	for bucket := range bucketWise {
 		buckets = append(buckets, bucket)
 	}
 	sort.Sort(sort.StringSlice(buckets))

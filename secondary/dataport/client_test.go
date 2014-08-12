@@ -2,8 +2,6 @@ package dataport
 
 import (
 	"fmt"
-	"io/ioutil"
-	"log"
 	"testing"
 
 	c "github.com/couchbase/indexing/secondary/common"
@@ -13,16 +11,19 @@ import (
 var addr = "localhost:8888"
 
 func TestClient(t *testing.T) {
-	maxconns, maxvbuckets, mutChanSize := 2, 8, 100
-	log.SetOutput(ioutil.Discard)
+	maxBuckets, maxconns, maxvbuckets, mutChanSize := 2, 2, 8, 1000
+	c.LogIgnore()
 
 	// start server
-	msgch := make(chan interface{}, mutChanSize)
-	errch := make(chan interface{}, 1000)
-	daemon := doServer(addr, t, msgch, errch, 100)
-	flags := TransportFlag(0).SetProtobuf()
+	msgch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
+	errch := make(chan interface{}, mutChanSize)
+	daemon, err := NewServer(addr, msgch, errch)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// start client and test number of connection.
+	flags := TransportFlag(0).SetProtobuf()
 	client, err := NewClient(addr, maxconns, flags)
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +34,6 @@ func TestClient(t *testing.T) {
 	} else if len(client.conns) != len(client.conn2Vbs) {
 		t.Fatal("failed dataport client connection channels")
 	} else {
-		maxBuckets := 2
 		vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 		for i := 0; i < maxBuckets; i++ {
 			if err := client.SendVbmap(vbmaps[i]); err != nil {
@@ -47,24 +47,27 @@ func TestClient(t *testing.T) {
 }
 
 func TestStreamBegin(t *testing.T) {
-	maxconns, maxvbuckets, mutChanSize := 2, 8, 100
-	log.SetOutput(ioutil.Discard)
+	maxBuckets, maxconns, maxvbuckets, mutChanSize := 2, 2, 8, 1000
+	c.LogIgnore()
 
 	// start server
-	msgch := make(chan interface{}, mutChanSize)
-	errch := make(chan interface{}, 1000)
-	daemon := doServer(addr, t, msgch, errch, 100)
-	flags := TransportFlag(0).SetProtobuf()
+	msgch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
+	errch := make(chan interface{}, mutChanSize)
+	daemon, err := NewServer(addr, msgch, errch)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// start client
+	flags := TransportFlag(0).SetProtobuf()
 	client, _ := NewClient(addr, maxconns, flags)
-	maxBuckets := 2
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {
 		if err := client.SendVbmap(vbmaps[i]); err != nil {
 			t.Fatal(err)
 		}
 	}
+
 	// test a live StreamBegin
 	bucket, vbno, vbuuid := "default0", uint16(maxvbuckets), uint64(1111)
 	uuid := c.ID(bucket, vbno)
@@ -78,7 +81,7 @@ func TestStreamBegin(t *testing.T) {
 	kv := c.NewKeyVersions(seqno, docid, maxCount)
 	kv.AddStreamBegin()
 	vb.AddKeyVersions(kv)
-	err := client.SendKeyVersions([]*c.VbKeyVersions{vb})
+	err = client.SendKeyVersions([]*c.VbKeyVersions{vb})
 	client.Getcontext() // syncup
 	if err != nil {
 		t.Fatal(err)
@@ -91,18 +94,20 @@ func TestStreamBegin(t *testing.T) {
 }
 
 func TestStreamEnd(t *testing.T) {
-	maxconns, maxvbuckets, mutChanSize := 2, 8, 100
-	log.SetOutput(ioutil.Discard)
+	maxBuckets, maxconns, maxvbuckets, mutChanSize := 2, 2, 8, 100
+	c.LogIgnore()
 
 	// start server
-	msgch := make(chan interface{}, mutChanSize)
-	errch := make(chan interface{}, 1000)
-	daemon := doServer(addr, t, msgch, errch, 100)
-	flags := TransportFlag(0).SetProtobuf()
+	msgch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
+	errch := make(chan interface{}, mutChanSize)
+	daemon, err := NewServer(addr, msgch, errch)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// start client
+	flags := TransportFlag(0).SetProtobuf()
 	client, _ := NewClient(addr, maxconns, flags)
-	maxBuckets := 2
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {
 		if err := client.SendVbmap(vbmaps[i]); err != nil {
@@ -123,7 +128,7 @@ func TestStreamEnd(t *testing.T) {
 	kv := c.NewKeyVersions(seqno, docid, maxCount)
 	kv.AddStreamEnd()
 	vb.AddKeyVersions(kv)
-	err := client.SendKeyVersions([]*c.VbKeyVersions{vb})
+	err = client.SendKeyVersions([]*c.VbKeyVersions{vb})
 	client.Getcontext() // syncup
 	if err != nil {
 		t.Fatal(err)
@@ -132,34 +137,6 @@ func TestStreamEnd(t *testing.T) {
 	}
 	client.Close()
 	daemon.Close()
-}
-
-func doServer(addr string, tb testing.TB, msgch, errch chan interface{}, mutChanSize int) *Server {
-	var mServer *Server
-	var err error
-
-	mutch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
-	sbch := make(chan interface{}, 100)
-	if mServer, err = NewServer(addr, mutch, sbch); err != nil {
-		tb.Fatal(err)
-	}
-
-	go func() {
-		var mutn, err interface{}
-		var ok bool
-		for {
-			select {
-			case mutn, ok = <-mutch:
-				msgch <- mutn
-			case err, ok = <-sbch:
-				errch <- err
-			}
-			if ok == false {
-				return
-			}
-		}
-	}()
-	return mServer
 }
 
 func makeVbmaps(maxvbuckets int, maxBuckets int) []*c.VbConnectionMap {
@@ -179,7 +156,11 @@ func makeVbmaps(maxvbuckets int, maxBuckets int) []*c.VbConnectionMap {
 	return vbmaps
 }
 
-func verify(msgch, errch chan interface{}, fn func(mutn, err interface{})) {
+func verify(
+	msgch chan []*protobuf.VbKeyVersions,
+	errch chan interface{},
+	fn func(mutn, err interface{})) {
+
 	select {
 	case mutn := <-msgch:
 		fn(mutn, nil)

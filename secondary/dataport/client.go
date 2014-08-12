@@ -86,7 +86,7 @@ func NewClient(raddr string, n int, flags TransportFlag) (c *Client, err error) 
 		c.conn2Vbs[i] = make([]string, 0, 4) // TODO: avoid magic numbers
 	}
 	// spawn routines per connection.
-	quitch := make(chan []string, 10) // TODO: avoid magic numbers
+	quitch := make(chan []string, len(c.conns)*2)
 	for i, conn := range c.conns {
 		go c.runTransmitter(conn, flags, c.connChans[i], quitch)
 	}
@@ -295,18 +295,19 @@ func (c *Client) sendKeyVersions(
 
 // close all connections with downstream host.
 func (c *Client) doClose() (err error) {
-	recoverClose := func(conn net.Conn) {
+	recoverClose := func(payloadch chan interface{}, conn net.Conn) {
 		defer func() {
 			if r := recover(); r != nil {
 				common.Errorf("%v panic closing %v\n", c.logPrefix, r)
 				err = common.ErrorClosed
 			}
 		}()
+		close(payloadch)
 		conn.Close()
 	}
 	// close connections
-	for _, conn := range c.conns {
-		recoverClose(conn)
+	for i, payloadch := range c.connChans {
+		recoverClose(payloadch, c.conns[i])
 	}
 	close(c.finch)
 	common.Infof("%v closed", c.logPrefix)
@@ -337,7 +338,7 @@ func (c *Client) runTransmitter(
 		return true
 	}
 
-	timeout := time.After(common.TransmitBufferTimeout * time.Millisecond)
+	timeout := time.Tick(common.TransmitBufferTimeout * time.Millisecond)
 	vbs := make([]*common.VbKeyVersions, 0, 1000) // TODO: avoid magic numbers
 
 	resetAcc := func() {
@@ -350,7 +351,11 @@ func (c *Client) runTransmitter(
 loop:
 	for {
 		select {
-		case payload := <-payloadch:
+		case payload, ok := <-payloadch:
+			if !ok {
+				break loop
+			}
+
 			switch val := payload.(type) {
 			case *common.VbConnectionMap:
 				if transmit(val) == false {
@@ -368,8 +373,6 @@ loop:
 			}
 
 		case <-timeout:
-			// IMPORTANT: first reload the timer before doing anything else.
-			timeout = time.After(common.TransmitBufferTimeout * time.Millisecond)
 			if len(vbs) > 0 && transmit(vbs) == false {
 				break loop
 			}
