@@ -57,7 +57,6 @@ type Codec struct {
 	arrayLenPrefix    bool        // if true, first sort arrays based on its length.
 	propertyLenPrefix bool        // if true, first sort properties based on length.
 	numberType        interface{} // "float64" | "int64" | "decimal"
-	keys              []string
 	//-- unicode
 	//backwards        bool
 	//hiraganaQ        bool
@@ -76,7 +75,6 @@ func NewCodec(propSize int) *Codec {
 		arrayLenPrefix:    true,
 		propertyLenPrefix: true,
 		numberType:        float64(0.0),
-		keys:              make([]string, 0, propSize),
 	}
 }
 
@@ -366,13 +364,13 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 
 // local function that sorts JSON property objects based on property names.
 func (codec *Codec) sortProps(props map[string]interface{}) []string {
-	codec.keys = codec.keys[:0]
+	keys := make([]string, 0, len(props))
 	for k := range props {
-		codec.keys = append(codec.keys, k)
+		keys = append(keys, k)
 	}
-	ss := sort.StringSlice(codec.keys)
+	ss := sort.StringSlice(keys)
 	ss.Sort()
-	return codec.keys
+	return keys
 }
 
 // get the encoded datum (basic JSON datatype) based on Terminator and return a

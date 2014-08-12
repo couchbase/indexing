@@ -10,68 +10,30 @@
 package main
 
 import (
-	"code.google.com/p/go.text/collate"
-	"code.google.com/p/go.text/language"
-	"code.google.com/p/go.text/unicode/norm"
 	"flag"
 	"fmt"
-	"github.com/couchbaselabs/indexing/collatejson"
-	"strconv"
-	"unicode/utf8"
+	"log"
+
+	"github.com/prataprc/collatejson"
 )
 
 var options struct {
-	floatText  string
-	intText    string
-	stringText string
+	in string
 }
 
 func argParse() {
-	//flag.BoolVar(&options.ast, "ast", false, "Show the ast of production")
-	//flag.IntVar(&options.seed, "s", seed, "Seed value")
-	//flag.IntVar(&options.count, "n", 1, "Generate n combinations")
-	//flag.StringVar(&options.outfile, "o", "-", "Specify an output file")
-	flag.StringVar(&options.floatText, "f", "", "encode floating point number")
-	flag.StringVar(&options.intText, "i", "", "encode integer number")
-	flag.StringVar(&options.stringText, "s", "", "encode string")
+	flag.StringVar(&options.in, "in", "", "input to encode")
 	flag.Parse()
 }
 
 func main() {
 	argParse()
-	if options.floatText != "" {
-		encodeFloat(options.floatText)
-	} else if options.intText != "" {
-		encodeInt(options.intText)
-	} else {
-		fmt.Printf("composed:(%v) %v\n", len(options.stringText), []byte(options.stringText))
-		b := norm.NFKD.Bytes([]byte(options.stringText))
-		fmt.Printf("decomposed:(%v) %v\n", len(b), b)
-		cl := collate.New(language.De)
-		buf := &collate.Buffer{}
-		rawkey := cl.Key(buf, b)
-		fmt.Printf("rawkey:(%v) %v\n", len(rawkey), rawkey)
-
-		s, i := string(b), 0
-		for {
-			_, c := utf8.DecodeRune([]byte(s[i:]))
-			i += c
-			if len(s[i:]) == 0 {
-				break
-			}
-		}
+	codec := collatejson.NewCodec(len(options.in) * 2)
+	out := make([]byte, 0, len(options.in)*3)
+	out, err := codec.Encode([]byte(options.in), out)
+	if err != nil {
+		log.Fatal(err)
 	}
-}
-
-func encodeFloat(text string) {
-	if f, err := strconv.ParseFloat(text, 64); err != nil {
-		panic(err)
-	} else {
-		ftext := []byte(strconv.FormatFloat(f, 'e', -1, 64))
-		fmt.Printf("Encoding %v: %v\n", f, string(collatejson.EncodeFloat(ftext)))
-	}
-}
-
-func encodeInt(text string) {
-	fmt.Println(string(collatejson.EncodeInt([]byte(text))))
+	fmt.Printf("in : %q\n", options.in)
+	fmt.Printf("out: %q\n", string(out))
 }

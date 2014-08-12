@@ -14,15 +14,17 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/couchbaselabs/dparval"
-	"github.com/couchbaselabs/indexing/collatejson"
-	tuqcollate "github.com/couchbaselabs/tuqtng/ast"
-	"github.com/prataprc/monster"
+	"log"
 	"os"
 	"reflect"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/couchbaselabs/dparval"
+	tuqcollate "github.com/couchbaselabs/tuqtng/ast"
+	"github.com/prataprc/collatejson"
+	"github.com/prataprc/monster"
 )
 
 var options struct {
@@ -60,13 +62,13 @@ func main() {
 		options.seed = int(time.Now().UnixNano())
 	}
 
-	codec = collatejson.NewCodec()
-	if options.nfkd {
-		codec.SortbyNFKD(true)
-	}
-	if options.utf8 {
-		codec.SortbyUTF8(true)
-	}
+	codec = collatejson.NewCodec(100)
+	//if options.nfkd {
+	//    codec.SortbyNFKD(true)
+	//}
+	//if options.utf8 {
+	//    codec.SortbyUTF8(true)
+	//}
 
 	fmt.Printf("Generating %v json documents ...\n", options.count)
 	jsons := generateJsons(options.prodfile, options.seed, options.count)
@@ -79,14 +81,20 @@ func checkCodec(jsons []string) {
 
 	fmt.Println("Checking Encoding and Decoding ...")
 	for _, j := range jsons {
-		out := codec.Decode(codec.Encode([]byte(j)))
+		code, err := codec.Encode([]byte(j), make([]byte, 0, len(j)*3))
+		if err != nil {
+			log.Fatal(err)
+		}
+		text, err := codec.Decode(code, make([]byte, 0, len(j)*2))
+		if err != nil {
+			log.Fatal(err)
+		}
 		json.Unmarshal([]byte(j), &one)
-		json.Unmarshal(out, &two)
+		json.Unmarshal(text, &two)
 		if !reflect.DeepEqual(one, two) {
 			panic("monster check fails, did you change the encoding format ?")
 		}
 	}
-	fmt.Println()
 }
 
 func compareWithTuq(jsons []string, count int) {
@@ -127,13 +135,19 @@ func (codes codeList) Len() int {
 func (codes codeList) Less(i, j int) bool {
 	key1, key2 := codes.jsons[i], codes.jsons[j]
 	if codes.kind == "tuq" {
-		value1 := dparval.NewValueFromBytes([]byte(key1)).Value()
-		value2 := dparval.NewValueFromBytes([]byte(key2)).Value()
-		return tuqcollate.CollateJSON(value1, value2) < 0
+		v1 := dparval.NewValueFromBytes([]byte(key1)).Value()
+		v2 := dparval.NewValueFromBytes([]byte(key2)).Value()
+		return tuqcollate.CollateJSON(v1, v2) < 0
 	} else if codes.kind == "binary" {
-		value1 := codec.Encode([]byte(key1))
-		value2 := codec.Encode([]byte(key2))
-		return bytes.Compare(value1, value2) < 0
+		v1, err := codec.Encode([]byte(key1), make([]byte, 0, len(key1)*3))
+		if err != nil {
+			log.Fatal(err)
+		}
+		v2, err := codec.Encode([]byte(key2), make([]byte, 0, len(key2)*3))
+		if err != nil {
+			log.Fatal(err)
+		}
+		return bytes.Compare(v1, v2) < 0
 	} else {
 		panic(fmt.Errorf("unknown kind"))
 	}

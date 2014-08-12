@@ -10,7 +10,6 @@
 package main
 
 import (
-	collatejson "../.."
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/couchbaselabs/dparval"
 	tuqcollate "github.com/couchbaselabs/tuqtng/ast"
+	"github.com/prataprc/collatejson"
 	"github.com/prataprc/monster"
 )
 

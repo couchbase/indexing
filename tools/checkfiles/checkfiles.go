@@ -13,9 +13,10 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"github.com/couchbaselabs/indexing/collatejson"
+	"github.com/prataprc/collatejson"
 	"io/ioutil"
 	"log"
+
 	"os"
 	"path"
 	"sort"
@@ -32,25 +33,27 @@ var options struct {
 	lenprefix bool
 }
 
-func argParse() {
+func argParse() string {
 	flag.BoolVar(&options.lenprefix, "lenprefix", false, "Show the ast of production")
 	flag.Parse()
-}
 
-func main() {
-	argParse()
 	args := flag.Args()
 	if len(args) < 1 {
 		flag.Usage()
 		os.Exit(64)
 	}
-	arg := args[0]
-	if fi, err := os.Stat(arg); err != nil {
-		panic(fmt.Errorf("error stating %v", arg))
+
+	return args[0]
+}
+
+func main() {
+	file := argParse()
+	if fi, err := os.Stat(file); err != nil {
+		panic(fmt.Errorf("error stating %v", file))
 	} else if fi.IsDir() {
-		runTests(arg)
+		runTests(file)
 	} else {
-		fmt.Println(strings.Join(sortFile(arg), "\n"))
+		fmt.Println(strings.Join(sortFile(file), "\n"))
 	}
 }
 
@@ -90,8 +93,7 @@ func sortFile(filename string) (outs []string) {
 	if err != nil {
 		panic(err.Error())
 	}
-	codec := collatejson.NewCodec()
-	codec.SortbyNFKD(true)
+	codec := collatejson.NewCodec(100)
 	switch options.lenprefix {
 	case true:
 		codec.SortbyArrayLen(true)
@@ -106,9 +108,13 @@ func sortFile(filename string) (outs []string) {
 }
 
 func encodeLines(codec *collatejson.Codec, s []byte) []string {
+	var err error
 	texts, codes := lines(s), make(codeList, 0)
 	for i, x := range texts {
-		code := codec.Encode(x)
+		code := make([]byte, 0, len(x)*3)
+		if code, err = codec.Encode(x, code); err != nil {
+			log.Fatal(err)
+		}
 		codes = append(codes, codeObj{i, code})
 	}
 	outs := doSort(texts, codes)

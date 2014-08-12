@@ -1,6 +1,7 @@
 [ "hello", "world" ]
 [ 10.2 ]
 [ false ]
+[ "hello", "world", "fine" ]
 [ "hello", "python" ]
 [ 20, "hello", "perl" ]
 [ "hello", 10.2, "php" ]
@@ -10,3 +11,4 @@
 [ null ]
 [ true ]
 [ 10 ]
+[ "hello", "python", "perl" ]
