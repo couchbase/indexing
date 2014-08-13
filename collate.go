@@ -72,7 +72,7 @@ type Codec struct {
 // NewCodec creates a new codec object and returns a reference to it.
 func NewCodec(propSize int) *Codec {
 	return &Codec{
-		arrayLenPrefix:    true,
+		arrayLenPrefix:    false,
 		propertyLenPrefix: true,
 		numberType:        float64(0.0),
 	}
