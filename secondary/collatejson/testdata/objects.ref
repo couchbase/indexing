@@ -1,0 +1,3 @@
+{ "perl" : "cryptic" }
+{ "perl" : 20.2, "php" : [ 1, 2 ], "python" : 10 }
+{ "perl" : "ugly", "php" : "bad", "python" : "good" }
