@@ -14,7 +14,7 @@ var defn1 = &protobuf.IndexDefn{
 	ExprType:  protobuf.ExprType_N1QL.Enum(),
 	SecExpressions: []string{
 		`{"type":"property","path":"age"}`,
-		`{"type":"property","path":"firstname"}`},
+		`{"type":"property","path":"first-name"}`},
 	PartitionScheme: protobuf.PartitionScheme_TEST.Enum(),
 	PartnExpression: proto.String(`{"type":"property","path":"city"}`),
 }

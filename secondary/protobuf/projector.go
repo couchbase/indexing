@@ -178,15 +178,20 @@ func (res *FailoverLogResponse) InitialBranchTimestamp(bucket string) *BranchTim
 	return ToBranchTimestamp(ts)
 }
 
-func (res *FailoverLogResponse) FailoverLogs() map[uint16][][2]uint64 {
+func (res *FailoverLogResponse) FailoverLogs(vbnos []uint16) map[uint16][][2]uint64 {
 	flogs := make(map[uint16][][2]uint64)
 	for _, f := range res.GetLogs() {
-		m := make([][2]uint64, 0)
-		seqnos := f.GetSeqnos()
-		for i, vbuuid := range f.GetVbuuids() {
-			m = append(m, [2]uint64{vbuuid, seqnos[i]})
+		fvbno := uint16(f.GetVbno())
+		for _, vbno := range vbnos {
+			if fvbno == vbno {
+				seqnos := f.GetSeqnos()
+				m := make([][2]uint64, 0, len(seqnos))
+				for i, vbuuid := range f.GetVbuuids() {
+					m = append(m, [2]uint64{vbuuid, seqnos[i]})
+				}
+				flogs[vbno] = m
+			}
 		}
-		flogs[uint16(f.GetVbno())] = m
 	}
 	return flogs
 }

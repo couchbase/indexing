@@ -41,9 +41,9 @@ func ToTimestamp(ts *BranchTimestamp) *c.Timestamp {
 
 	// convert snapshot {start, end} from protobuf to native golang.
 	snapshots := ts.GetSnapshots()
-	ss := make([][2]uint64, 0, len(snapshots))
+	t.Snapshots = make([][2]uint64, 0, len(snapshots))
 	for _, s := range snapshots {
-		ss = append(ss, [2]uint64{s.GetStart(), s.GetEnd()})
+		t.Snapshots = append(t.Snapshots, [2]uint64{s.GetStart(), s.GetEnd()})
 	}
 	return t
 }

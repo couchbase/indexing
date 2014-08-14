@@ -3,10 +3,14 @@ package projector
 import (
 	"code.google.com/p/goprotobuf/proto"
 	"fmt"
+	"log"
+	"strconv"
+	"strings"
 
 	ap "github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
+	"github.com/couchbaselabs/go-couchbase"
 )
 
 func GetVbmap(
@@ -79,7 +83,7 @@ func InitialMutationStream(
 			ts = tss[bucketn]
 		}
 
-		ts = computeRestartTs(flogs.FailoverLogs(), ts)
+		ts = computeRestartTs(flogs.FailoverLogs(ts.Vbnos), ts)
 		bTs := protobuf.ToBranchTimestamp(ts)
 
 		req.Pools = append(req.Pools, pooln)
@@ -148,4 +152,77 @@ func ShutdownStream(client ap.Client, topic string) (*protobuf.Error, error) {
 		return nil, fmt.Errorf(err)
 	}
 	return res, nil
+}
+
+func SpawnProjectors(
+	cluster, pooln string, buckets []string,
+	projectors map[string]ap.Client) map[string]ap.Client {
+
+	var b *couchbase.Bucket
+	var err error
+
+	for _, bucketn := range buckets {
+		if b, err = c.ConnectBucket(cluster, pooln, bucketn); err != nil {
+			log.Fatal(err)
+		} else {
+			break
+		}
+	}
+
+	b.Refresh()
+	m, err := b.GetVBmap(nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	newkvaddrs := make(map[string]ap.Client)
+	for kvaddr := range m { // create a projector instance for each kvnode
+		if _, ok := projectors[kvaddr]; ok {
+			continue
+		}
+		ss := strings.Split(kvaddr, ":")
+		kport, err := strconv.Atoi(ss[1])
+		if err != nil {
+			log.Fatal(err)
+		}
+		adminport := ss[0] + ":" + strconv.Itoa(kport+500)
+		NewProjector(cluster, []string{kvaddr}, adminport)
+		c := ap.NewHTTPClient("http://"+adminport, c.AdminportURLPrefix)
+		projectors[kvaddr] = c
+		newkvaddrs[kvaddr] = c
+	}
+	return newkvaddrs
+}
+
+func ShutdownProjectors(
+	cluster, pooln string, buckets []string,
+	projectors map[string]ap.Client) map[string]ap.Client {
+
+	var b *couchbase.Bucket
+	var err error
+
+	for _, bucketn := range buckets {
+		if b, err = c.ConnectBucket(cluster, pooln, bucketn); err != nil {
+			log.Fatal(err)
+		} else {
+			break
+		}
+	}
+
+	b.Refresh()
+	m, err := b.GetVBmap(nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	newProjectors := make(map[string]ap.Client)
+	for kvaddr, c := range projectors {
+		if vbnos, ok := m[kvaddr]; !ok || (vbnos != nil && len(vbnos) == 0) {
+			ShutdownStream(c, "backfill")
+		} else if ok {
+			newProjectors[kvaddr] = c
+		}
+	}
+	projectors = newProjectors
+	return newProjectors
 }
