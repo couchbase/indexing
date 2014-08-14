@@ -1,3 +1,4 @@
+// Tool receives raw events from go-couchbase UPR client.
 package main
 
 import (
@@ -14,41 +15,53 @@ import (
 )
 
 var options struct {
-	buckets string
-	maxVbno int
+	buckets string // buckets to connect with
+	maxVbno int    // maximum number of vbuckets
+	stats   int    // periodic timeout(ms) to print stats, 0 will disable stats
+	flogs   bool
 }
 
 var done = make(chan bool, 16)
 var rch = make(chan []interface{}, 10000)
 
-func argParse() []string {
+func argParse() string {
 	buckets := "default"
-	flag.StringVar(&options.buckets, "buckets", buckets, "buckets to listen")
-	flag.IntVar(&options.maxVbno, "maxvb", 1024, "max number of vbuckets")
+	flag.StringVar(&options.buckets, "buckets", buckets,
+		"buckets to listen")
+	flag.IntVar(&options.maxVbno, "maxvb", 1024,
+		"maximum number of vbuckets")
+	flag.IntVar(&options.stats, "stats", 1000,
+		"periodic timeout in mS, to print statistics, `0` will disable stats")
+	flag.BoolVar(&options.flogs, "flogs", false,
+		"display failover logs")
 	flag.Parse()
-	return flag.Args()
-}
-
-func usage() {
-	fmt.Fprintf(os.Stderr, "Usage : %s [OPTIONS] <addr> \n", os.Args[0])
-	flag.PrintDefaults()
-}
-
-func main() {
-	args := argParse()
+	args := flag.Args()
 	if len(args) < 1 {
 		usage()
 		os.Exit(1)
 	}
+	return args[0]
+}
+
+func usage() {
+	fmt.Fprintf(os.Stderr, "Usage : %s [OPTIONS] <cluster-addr> \n", os.Args[0])
+	flag.PrintDefaults()
+}
+
+func main() {
+	cluster := argParse()
+	if !strings.HasPrefix(cluster, "http://") {
+		cluster = "http://" + cluster
+	}
 
 	for _, bucket := range strings.Split(options.buckets, ",") {
-		go startBucket(args[0], bucket)
+		go startBucket(cluster, bucket)
 	}
 	receive()
 }
 
-func startBucket(addr, bucket string) int {
-	u, err := url.Parse(addr)
+func startBucket(cluster, bucket string) int {
+	u, err := url.Parse(cluster)
 	mf(err, "parse")
 
 	c, err := couchbase.Connect(u.String())
@@ -93,6 +106,13 @@ func failoverLogs(b *couchbase.Bucket) couchbase.FailoverLog {
 		vbnos = append(vbnos, uint16(i))
 	}
 	flogs, err := b.GetFailoverLogs(vbnos)
+	if options.flogs {
+		for i, vbno := range vbnos {
+			fmt.Printf("Failover log for vbucket %v\n", vbno)
+			fmt.Printf("   %#v\n", flogs[uint16(i)])
+		}
+		fmt.Println()
+	}
 	mf(err, "- upr failoverlogs")
 	return flogs
 }
@@ -104,13 +124,20 @@ func mf(err error, msg string) {
 }
 
 func receive() {
+	// bucket -> Opcode -> #count
 	counts := make(map[string]map[mc.UprOpcode]int)
-	tick := time.Tick(time.Second * 2)
+
+	var tick <-chan time.Time
+	if options.stats > 0 {
+		tick = time.Tick(time.Millisecond * time.Duration(options.stats))
+	}
+
+loop:
 	for {
 		select {
 		case msg, ok := <-rch:
 			if ok == false {
-				break
+				break loop
 			}
 			bucket, e := msg[0].(string), msg[1].(*mc.UprEvent)
 			if _, ok := counts[bucket]; !ok {
@@ -120,13 +147,23 @@ func receive() {
 				counts[bucket][e.Opcode] = 0
 			}
 			counts[bucket][e.Opcode]++
+
 		case <-tick:
 			for bucket, m := range counts {
-				for opcode, n := range m {
-					log.Printf("%q %v: %v \n", bucket, opcode, n)
-				}
+				log.Printf("%q %s\n", bucket, sprintCounts(m))
 			}
 			fmt.Println()
 		}
 	}
+}
+
+func sprintCounts(counts map[mc.UprOpcode]int) string {
+	line := ""
+	for i := 0; i < 50; i++ {
+		opcode := mc.UprOpcode(i)
+		if n, ok := counts[opcode]; ok {
+			line += fmt.Sprintf("%s:%v ", mc.UprOpcodeNames[opcode], n)
+		}
+	}
+	return strings.TrimRight(line, " ")
 }

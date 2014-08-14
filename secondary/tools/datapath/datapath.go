@@ -4,46 +4,56 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
-	"sort"
+	"strconv"
 	"strings"
-	"time"
 
-	"code.google.com/p/goprotobuf/proto"
 	ap "github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/projector"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbaselabs/go-couchbase"
 )
 
 var pooln = "default"
 
 var options struct {
-	buckets       string
-	kvaddrs       string
-	adminports    string
-	endpoints     string
-	coordEndpoint string
-	maxVbno       int
+	buckets       []string // buckets to connect
+	endpoints     []string // list of endpoint daemon to start
+	coordEndpoint string   // co-ordinator endpoint
+	stat          string   // periodic timeout to print dataport statistics
+	timeout       string   // timeout for dataport to exit
+	maxVbno       int      // maximum number of vbuckets
 }
 
-func argParse() []string {
+func argParse() string {
 	buckets := "default"
-	kvaddrs := "127.0.0.1:12000"
-	adminports := "localhost:9010"
 	endpoints := "localhost:9020"
 	coordEndpoint := "localhost:9021"
-	flag.StringVar(&options.buckets, "buckets", buckets, "buckets to project")
-	flag.StringVar(&options.kvaddrs, "kvaddrs", kvaddrs, "kvaddrs to connect")
-	flag.StringVar(&options.adminports, "adminports", adminports, "adminports for projector")
-	flag.StringVar(&options.endpoints, "endpoints", endpoints, "endpoints for mutations stream")
-	flag.StringVar(&options.coordEndpoint, "coorendp", coordEndpoint, "coordinator endpoint")
-	flag.IntVar(&options.maxVbno, "maxvb", 1024, "max number of vbuckets")
+
+	flag.StringVar(&buckets, "buckets", buckets,
+		"buckets to connect")
+	flag.StringVar(&endpoints, "endpoints", endpoints,
+		"list of endpoint daemon to start")
+	flag.StringVar(&options.coordEndpoint, "coorendp", coordEndpoint,
+		"co-ordinator endpoint")
+	flag.StringVar(&options.stat, "stat", "0",
+		"periodic timeout to print dataport statistics")
+	flag.StringVar(&options.timeout, "timeout", "0",
+		"timeout for dataport to exit")
+	flag.IntVar(&options.maxVbno, "maxvb", 1024,
+		"maximum number of vbuckets")
+
 	flag.Parse()
-	return flag.Args()
+
+	options.buckets = strings.Split(buckets, ",")
+	options.endpoints = strings.Split(endpoints, ",")
+
+	args := flag.Args()
+	if len(args) < 1 {
+		usage()
+		os.Exit(1)
+	}
+	return args[0]
 }
 
 func usage() {
@@ -51,329 +61,50 @@ func usage() {
 	flag.PrintDefaults()
 }
 
-var done = make(chan bool)
-
 var iid = []uint64{0x11, 0x12, 0x13, 0x14}
+var projectors = make(map[string]ap.Client)
 
 func main() {
-	args := argParse()
-	if len(args) < 1 {
-		usage()
-		os.Exit(1)
-	}
-	cluster := args[0]
-
 	c.SetLogLevel(c.LogLevelInfo)
-	for _, endpoint := range strings.Split(options.endpoints, ",") {
-		go endpointServer(endpoint)
+
+	cluster := argParse()
+
+	// start dataport servers.
+	for _, endpoint := range options.endpoints {
+		stat, _ := strconv.Atoi(options.stat)
+		timeout, _ := strconv.Atoi(options.timeout)
+		go dataport.Application(
+			endpoint, stat, timeout,
+			func(addr string, msg interface{}) bool {
+				return true
+			})
 	}
-	go endpointServer(options.coordEndpoint)
+	go dataport.Application(options.coordEndpoint, 0, 0, nil)
 
-	time.Sleep(100 * time.Millisecond)
+	projector.SpawnProjectors(cluster, pooln, options.buckets, projectors)
 
-	kvaddrs := strings.Split(options.kvaddrs, ",")
-	adminports := strings.Split(options.adminports, ",")
-	buckets := strings.Split(options.buckets, ",")
-	if len(kvaddrs) != len(adminports) {
-		log.Fatal("mismatch in kvaddrs and adminports")
-	}
-	for i, kvaddr := range kvaddrs {
-		doProjector(cluster, buckets, []string{kvaddr}, adminports[i])
-	}
-
-	for i := 0; i < len(kvaddrs); i++ {
-		<-done
-	}
-}
-
-func doProjector(cluster string, buckets, kvaddrs []string, adminport string) {
-	projector.NewProjector(cluster, kvaddrs, adminport)
-	time.Sleep(100 * time.Millisecond)
-	aport := ap.NewHTTPClient("http://"+adminport, "/adminport/")
-
-	bucketinfo := make(map[string]map[uint16]uint64)
-	for _, bucket := range buckets {
-		b := couchbaseBucket("http://"+cluster, bucket)
-		fReq := protobuf.FailoverLogRequest{
-			Pool:   proto.String(pooln),
-			Bucket: proto.String(bucket),
-			Vbnos:  getvbmap(b, kvaddrs),
-		}
-		fRes := protobuf.FailoverLogResponse{}
-		if err := aport.Request(&fReq, &fRes); err != nil {
-			log.Fatal(err)
-		}
-		vbuuids := make(map[uint16]uint64)
-		for _, flog := range fRes.GetLogs() {
-			vbno := uint16(flog.GetVbno())
-			vbuuids[vbno] = flog.Vbuuids[len(flog.Vbuuids)-1]
-		}
-		bucketinfo[bucket] = vbuuids
+	// start backfill stream on each projector
+	for kvaddr, c := range projectors {
+		startTopic(kvaddr, c, nil)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
-	mReq := makeStartRequest(bucketinfo)
-	mRes := protobuf.MutationStreamResponse{}
-	if err := aport.Request(mReq, &mRes); err != nil {
-		log.Fatal(err)
-	}
-}
-
-func makeStartRequest(bucketinfo map[string]map[uint16]uint64) *protobuf.MutationStreamRequest {
-	req := protobuf.MutationStreamRequest{
-		Topic:             proto.String("maintanence"),
-		Pools:             []string{},
-		Buckets:           []string{},
-		RestartTimestamps: []*protobuf.BranchTimestamp{},
-	}
-	buckets := make([]string, 0, len(bucketinfo))
-	for bucket, vbuuids := range bucketinfo {
-		bTs := makeBranchTimestamp(bucket, vbuuids)
-		req.Pools = append(req.Pools, pooln)
-		req.Buckets = append(req.Buckets, bucket)
-		req.RestartTimestamps = append(req.RestartTimestamps, bTs)
-		buckets = append(buckets, bucket)
-	}
-	req.Instances = makeIndexInstances(buckets)
-	req.SetStartFlag()
-	return &req
-}
-
-func makeIndexInstances(buckets []string) []*protobuf.IndexInst {
-	sExprs := []string{`{"type":"property","path":"age"}`,
-		`{"type":"property","path":"firstname"}`}
-	defn1 := &protobuf.IndexDefn{
-		DefnID:          proto.Uint64(iid[0]),
-		Bucket:          proto.String("users"),
-		IsPrimary:       proto.Bool(false),
-		Name:            proto.String("index1"),
-		Using:           protobuf.StorageType_View.Enum(),
-		ExprType:        protobuf.ExprType_N1QL.Enum(),
-		SecExpressions:  sExprs,
-		PartitionScheme: protobuf.PartitionScheme_TEST.Enum(),
-		PartnExpression: proto.String(`{"type":"property","path":"city"}`),
-	}
-	defn2 := &protobuf.IndexDefn{
-		DefnID:          proto.Uint64(iid[1]),
-		Bucket:          proto.String("users"),
-		IsPrimary:       proto.Bool(false),
-		Name:            proto.String("index2"),
-		Using:           protobuf.StorageType_View.Enum(),
-		ExprType:        protobuf.ExprType_N1QL.Enum(),
-		SecExpressions:  []string{`{"type":"property","path":"city"}`},
-		PartitionScheme: protobuf.PartitionScheme_TEST.Enum(),
-		PartnExpression: proto.String(`{"type":"property","path":"gender"}`),
-	}
-	defn3 := &protobuf.IndexDefn{
-		DefnID:          proto.Uint64(iid[2]),
-		Bucket:          proto.String("projects"),
-		IsPrimary:       proto.Bool(false),
-		Name:            proto.String("index3"),
-		Using:           protobuf.StorageType_View.Enum(),
-		ExprType:        protobuf.ExprType_N1QL.Enum(),
-		SecExpressions:  []string{`{"type":"property","path":"name"}`},
-		PartitionScheme: protobuf.PartitionScheme_TEST.Enum(),
-		PartnExpression: proto.String(`{"type":"property","path":"language"}`),
-	}
-	defn4 := &protobuf.IndexDefn{
-		DefnID:          proto.Uint64(iid[3]),
-		Bucket:          proto.String("beer-sample"),
-		IsPrimary:       proto.Bool(false),
-		Name:            proto.String("index4"),
-		Using:           protobuf.StorageType_View.Enum(),
-		ExprType:        protobuf.ExprType_N1QL.Enum(),
-		SecExpressions:  []string{`{"type":"property","path":"name"}`},
-		PartitionScheme: protobuf.PartitionScheme_TEST.Enum(),
-		PartnExpression: proto.String(`{"type":"property","path":"type"}`),
-	}
-
-	makeInstance := func(id uint64, defn *protobuf.IndexDefn) *protobuf.IndexInst {
-		return &protobuf.IndexInst{
-			InstId:     proto.Uint64(id),
-			State:      protobuf.IndexState_IndexInitial.Enum(),
-			Definition: defn,
-			Tp: &protobuf.TestPartition{
-				CoordEndpoint: proto.String(options.coordEndpoint),
-				Endpoints:     strings.Split(options.endpoints, ","),
-			},
-		}
-	}
-
-	i1 := makeInstance(0x1, defn1)
-	i2 := makeInstance(0x2, defn2)
-	i3 := makeInstance(0x3, defn3)
-	i4 := makeInstance(0x4, defn4)
-
-	rs := make([]*protobuf.IndexInst, 0)
-	for _, bucket := range buckets {
-		switch bucket {
-		case "users":
-			rs = append(rs, i1, i2)
-		case "projects":
-			rs = append(rs, i3)
-		case "beer-sample":
-			rs = append(rs, i4)
-		}
-	}
-	return rs
-}
-
-func endpointServer(addr string) {
-	mutChanSize := 100
-	mutch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
-	sbch := make(chan interface{}, 100)
-	_, err := dataport.NewServer(addr, mutch, sbch)
-	if err != nil {
-		log.Fatal(err)
-	}
-	mutations, messages := 0, 0
-	commandWise := make(map[byte]int)
-	keys := map[uint64]map[string][]string{}
-	for _, x := range iid {
-		keys[x] = make(map[string][]string)
-	}
-
-	printTm := time.Tick(1000 * time.Millisecond)
-
-loop:
-	for {
-		select {
-		case vbs, ok := <-mutch:
-			if ok {
-				mutations += gatherKeys(vbs, commandWise, keys)
-			} else {
-				break loop
-			}
-		case s, ok := <-sbch:
-			if ok {
-				switch v := s.(type) {
-				case []*dataport.RestartVbuckets:
-					printRestartVbuckets(addr, v)
-				}
-				messages++
-			} else {
-				break loop
-			}
-		case <-time.After(4 * time.Second):
-			break loop
-		case <-printTm:
-			log.Println(addr, "-- mutations", mutations)
-			log.Println(addr, "-- commandWise", commandWise)
-		}
-	}
-
-	log.Println(addr, "-- mutations", mutations, "-- messages", messages)
-	log.Println(addr, "-- commandWise", commandWise)
-	ks, ds := countKeysAndDocs(keys[0x11])
-	log.Printf("%v -- for instance 0x11, %v unique keys found in %v docs\n", addr, ks, ds)
-	ks, ds = countKeysAndDocs(keys[0x12])
-	log.Printf("%v -- for instance 0x12, %v unique keys found in %v docs\n", addr, ks, ds)
-	done <- true
-}
-
-func printRestartVbuckets(addr string, rs []*dataport.RestartVbuckets) {
-	for _, r := range rs {
-		log.Printf("restart: %s, %v %v\n", addr, r.Bucket, r.Vbuckets)
-	}
-}
-
-func gatherKeys(
-	vbs []*protobuf.VbKeyVersions,
-	commandWise map[byte]int,
-	keys map[uint64]map[string][]string,
-) int {
-
-	mutations := 0
-	for _, vb := range vbs {
-		kvs := vb.GetKvs()
-		for _, kv := range kvs {
-			mutations++
-			docid := string(kv.GetDocid())
-			uuids, seckeys := kv.GetUuids(), kv.GetKeys()
-			for i, command := range kv.GetCommands() {
-				cmd := byte(command)
-				if _, ok := commandWise[cmd]; !ok {
-					commandWise[cmd] = 0
-				}
-				commandWise[cmd]++
-
-				if cmd == c.StreamBegin {
-					continue
-				}
-
-				if cmd == c.Upsert {
-					uuid := uuids[i]
-					key := string(seckeys[i])
-					if _, ok := keys[uuid][key]; !ok {
-						keys[uuid][key] = make([]string, 0)
-					}
-					keys[uuid][key] = append(keys[uuid][key], docid)
-				}
-			}
-		}
-	}
-	return mutations
-}
-
-func countKeysAndDocs(keys map[string][]string) (int, int) {
-	countKs, countDs := 0, 0
-	for _, docs := range keys {
-		countKs++
-		countDs += len(docs)
-	}
-	return countKs, countDs
-}
-
-func makeBranchTimestamp(bucket string, vbuuids map[uint16]uint64) *protobuf.BranchTimestamp {
-	vbnos := make(c.Vbuckets, 0, options.maxVbno)
-	for vbno := range vbuuids {
-		vbnos = append(vbnos, vbno)
-	}
-	sort.Sort(vbnos)
-	uuids := make([]uint64, 0, options.maxVbno)
-	for _, vbno := range vbnos {
-		uuids = append(uuids, vbuuids[vbno])
-	}
-
-	bTs := &protobuf.BranchTimestamp{
-		Bucket:  proto.String(bucket),
-		Vbnos:   c.Vbno16to32(vbnos),
-		Seqnos:  make([]uint64, len(vbnos)),
-		Vbuuids: uuids,
-	}
-	return bTs
-}
-
-func couchbaseBucket(addr, bucket string) *couchbase.Bucket {
-	u, err := url.Parse(addr)
-	mf(err, "parse")
-
-	c, err := couchbase.Connect(u.String())
-	mf(err, "connect - "+u.String())
-
-	p, err := c.GetPool("default")
-	mf(err, "pool")
-
-	b, err := p.GetBucket(bucket)
-	mf(err, "bucket")
-	return b
-}
-
-func getvbmap(b *couchbase.Bucket, kvaddrs []string) []uint32 {
-	vbnos := make([]uint32, 0, 1024)
-	kvbs, err := b.GetVBmap(kvaddrs)
-	mf(err, fmt.Sprintf("getvbmap - %s", b.Name))
-	for _, vbs := range kvbs {
-		for _, vb := range vbs {
-			vbnos = append(vbnos, uint32(vb))
-		}
-	}
-	return vbnos
+	<-make(chan bool) // wait for ever
 }
 
 func mf(err error, msg string) {
 	if err != nil {
 		log.Fatalf("%v: %v", msg, err)
+	}
+}
+
+func startTopic(kvaddr string, p ap.Client, tss map[string]*c.Timestamp) {
+	// start backfill stream on each projector
+	instances := projector.ExampleIndexInstances(
+		options.buckets, options.endpoints, options.coordEndpoint)
+	_, err := projector.InitialMutationStream(
+		p, "backfill" /*topic*/, "default" /*pooln*/, options.buckets,
+		[]string{kvaddr}, tss, instances)
+	if err != nil {
+		log.Fatal(err)
 	}
 }
