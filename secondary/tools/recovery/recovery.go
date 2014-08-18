@@ -67,7 +67,7 @@ var done = make(chan bool)
 var projectors = make(map[string]ap.Client)
 
 func main() {
-	c.SetLogLevel(c.LogLevelDebug)
+	c.SetLogLevel(c.LogLevelInfo)
 
 	cluster = argParse()
 

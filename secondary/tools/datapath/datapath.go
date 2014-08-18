@@ -75,9 +75,7 @@ func main() {
 		timeout, _ := strconv.Atoi(options.timeout)
 		go dataport.Application(
 			endpoint, stat, timeout,
-			func(addr string, msg interface{}) bool {
-				return true
-			})
+			func(addr string, msg interface{}) bool { return true })
 	}
 	go dataport.Application(options.coordEndpoint, 0, 0, nil)
 

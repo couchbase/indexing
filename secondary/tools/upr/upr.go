@@ -5,35 +5,39 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	mc "github.com/couchbase/gomemcached/client"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/go-couchbase"
 )
 
 var options struct {
-	buckets string // buckets to connect with
-	maxVbno int    // maximum number of vbuckets
-	stats   int    // periodic timeout(ms) to print stats, 0 will disable stats
-	flogs   bool
+	buckets    []string // buckets to connect with
+	maxVbno    int      // maximum number of vbuckets
+	stats      int      // periodic timeout(ms) to print stats, 0 will disable stats
+	printflogs bool
 }
 
 var done = make(chan bool, 16)
 var rch = make(chan []interface{}, 10000)
 
 func argParse() string {
-	buckets := "default"
-	flag.StringVar(&options.buckets, "buckets", buckets,
+	var buckets string
+
+	flag.StringVar(&buckets, "buckets", "default",
 		"buckets to listen")
 	flag.IntVar(&options.maxVbno, "maxvb", 1024,
 		"maximum number of vbuckets")
 	flag.IntVar(&options.stats, "stats", 1000,
 		"periodic timeout in mS, to print statistics, `0` will disable stats")
-	flag.BoolVar(&options.flogs, "flogs", false,
+	flag.BoolVar(&options.printflogs, "flogs", false,
 		"display failover logs")
+
+	options.buckets = strings.Split(buckets, ",")
+
 	flag.Parse()
 	args := flag.Args()
 	if len(args) < 1 {
@@ -50,27 +54,14 @@ func usage() {
 
 func main() {
 	cluster := argParse()
-	if !strings.HasPrefix(cluster, "http://") {
-		cluster = "http://" + cluster
-	}
-
-	for _, bucket := range strings.Split(options.buckets, ",") {
+	for _, bucket := range options.buckets {
 		go startBucket(cluster, bucket)
 	}
 	receive()
 }
 
-func startBucket(cluster, bucket string) int {
-	u, err := url.Parse(cluster)
-	mf(err, "parse")
-
-	c, err := couchbase.Connect(u.String())
-	mf(err, "connect - "+u.String())
-
-	p, err := c.GetPool("default")
-	mf(err, "pool")
-
-	b, err := p.GetBucket(bucket)
+func startBucket(cluster, bucketn string) int {
+	b, err := common.ConnectBucket(cluster, "default", bucketn)
 	mf(err, "bucket")
 
 	uprFeed, err := b.StartUprFeed("rawupr", uint32(0))
@@ -78,7 +69,22 @@ func startBucket(cluster, bucket string) int {
 
 	flogs := failoverLogs(b)
 
+	// list of vbuckets
+	vbnos := make([]uint16, 0, options.maxVbno)
+	for i := 0; i < options.maxVbno; i++ {
+		vbnos = append(vbnos, uint16(i))
+	}
+
+	if options.printflogs {
+		for i, vbno := range vbnos {
+			fmt.Printf("Failover log for vbucket %v\n", vbno)
+			fmt.Printf("   %#v\n", flogs[uint16(i)])
+		}
+		fmt.Println()
+	}
+
 	go startUpr(uprFeed, flogs)
+
 	for {
 		e, ok := <-uprFeed.C
 		if ok == false {
@@ -92,7 +98,7 @@ func startUpr(uprFeed *couchbase.UprFeed, flogs couchbase.FailoverLog) {
 	start, end := uint64(0), uint64(0xFFFFFFFFFFFFFFFF)
 	snapStart, snapEnd := uint64(0), uint64(0)
 	for vbno, flog := range flogs {
-		x := flog[len(flog)-1]
+		x := flog[len(flog)-1] // map[uint16][][2]uint64
 		flags, vbuuid := uint32(0), x[0]
 		err := uprFeed.UprRequestStream(
 			vbno, flags, vbuuid, start, end, snapStart, snapEnd)
@@ -101,18 +107,13 @@ func startUpr(uprFeed *couchbase.UprFeed, flogs couchbase.FailoverLog) {
 }
 
 func failoverLogs(b *couchbase.Bucket) couchbase.FailoverLog {
+	// list of vbuckets
 	vbnos := make([]uint16, 0, options.maxVbno)
 	for i := 0; i < options.maxVbno; i++ {
 		vbnos = append(vbnos, uint16(i))
 	}
+
 	flogs, err := b.GetFailoverLogs(vbnos)
-	if options.flogs {
-		for i, vbno := range vbnos {
-			fmt.Printf("Failover log for vbucket %v\n", vbno)
-			fmt.Printf("   %#v\n", flogs[uint16(i)])
-		}
-		fmt.Println()
-	}
 	mf(err, "- upr failoverlogs")
 	return flogs
 }
