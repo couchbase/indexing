@@ -55,11 +55,11 @@ func (req *MutationStreamRequest) IsDelBuckets() bool {
 	return false
 }
 
-func (req *MutationStreamRequest) RestartTimestamp(bucket string) *c.Timestamp {
+func (req *MutationStreamRequest) RestartTimestamp(bucket string) *TsVbuuid {
 	restartTimestamps := req.GetRestartTimestamps()
 	for i, b := range req.GetBuckets() {
 		if bucket == b {
-			return ToTimestamp(restartTimestamps[i])
+			return restartTimestamps[i]
 		}
 	}
 	return nil
@@ -76,19 +76,19 @@ func (req *MutationStreamRequest) GetRouters() (map[uint64]c.Router, error) {
 // interface API for RequestReader and Subscriber
 
 func (req *UpdateMutationStreamRequest) SetRestartFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamRestart)
+	req.Flag = proto.Uint32(req.GetFlag() | maskMutationStreamRestart)
 }
 
 func (req *UpdateMutationStreamRequest) SetShutdownFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamShutdown)
+	req.Flag = proto.Uint32(req.GetFlag() | maskMutationStreamShutdown)
 }
 
 func (req *UpdateMutationStreamRequest) SetAddBucketFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamAddBuckets)
+	req.Flag = proto.Uint32(req.GetFlag() | maskMutationStreamAddBuckets)
 }
 
 func (req *UpdateMutationStreamRequest) SetDelBucketFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskMutationStreamDelBuckets)
+	req.Flag = proto.Uint32(req.GetFlag() | maskMutationStreamDelBuckets)
 }
 
 func (req *UpdateMutationStreamRequest) IsStart() bool {
@@ -115,11 +115,11 @@ func (req *UpdateMutationStreamRequest) IsDelBuckets() bool {
 	return (flag & maskMutationStreamDelBuckets) > 0
 }
 
-func (req *UpdateMutationStreamRequest) RestartTimestamp(bucket string) *c.Timestamp {
+func (req *UpdateMutationStreamRequest) RestartTimestamp(bucket string) *TsVbuuid {
 	restartTimestamps := req.GetRestartTimestamps()
 	for i, b := range req.GetBuckets() {
 		if bucket == b {
-			return ToTimestamp(restartTimestamps[i])
+			return restartTimestamps[i]
 		}
 	}
 	return nil
@@ -136,15 +136,15 @@ func (req *UpdateMutationStreamRequest) GetRouters() (map[uint64]c.Router, error
 // interface API for flags and Subscriber
 
 func (req *SubscribeStreamRequest) SetAddEnginesFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskAddEngines)
+	req.Flag = proto.Uint32(req.GetFlag() | maskAddEngines)
 }
 
 func (req *SubscribeStreamRequest) SetUpdateEnginesFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskUpdateEngines)
+	req.Flag = proto.Uint32(req.GetFlag() | maskUpdateEngines)
 }
 
 func (req *SubscribeStreamRequest) SetDeleteEnginesFlag() {
-	req.Flag = proto.Uint32(uint32(0x0) | maskDeleteEngines)
+	req.Flag = proto.Uint32(req.GetFlag() | maskDeleteEngines)
 }
 
 func (req *SubscribeStreamRequest) IsAddEngines() bool {

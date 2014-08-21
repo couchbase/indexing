@@ -49,7 +49,7 @@ func argParse() string {
 	options.endpoints = strings.Split(endpoints, ",")
 
 	args := flag.Args()
-	if len(args) < 1 {
+	if len(args) < 1 || len(options.buckets) < 1 {
 		usage()
 		os.Exit(1)
 	}
@@ -61,7 +61,6 @@ func usage() {
 	flag.PrintDefaults()
 }
 
-var iid = []uint64{0x11, 0x12, 0x13, 0x14}
 var projectors = make(map[string]ap.Client)
 
 func main() {
@@ -79,11 +78,30 @@ func main() {
 	}
 	go dataport.Application(options.coordEndpoint, 0, 0, nil)
 
-	projector.SpawnProjectors(cluster, pooln, options.buckets, projectors)
+	// spawn initial set of projectors
+	kvaddrs, err := projector.GetKVAddrs(cluster, pooln, options.buckets[0])
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("found %v nodes\n", kvaddrs)
+	_, err = projector.SpawnProjectors(cluster, kvaddrs, projectors)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// index instances for specified buckets.
+	instances := projector.ExampleIndexInstances(
+		options.buckets, options.endpoints, options.coordEndpoint)
 
 	// start backfill stream on each projector
-	for kvaddr, c := range projectors {
-		startTopic(kvaddr, c, nil)
+	for kvaddr, client := range projectors {
+		// start backfill stream on each projector
+		_, err := projector.InitialMutationStream(
+			client, "backfill" /*topic*/, "default" /*pooln*/, kvaddr,
+			options.buckets, instances)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	<-make(chan bool) // wait for ever
@@ -92,17 +110,5 @@ func main() {
 func mf(err error, msg string) {
 	if err != nil {
 		log.Fatalf("%v: %v", msg, err)
-	}
-}
-
-func startTopic(kvaddr string, p ap.Client, tss map[string]*c.Timestamp) {
-	// start backfill stream on each projector
-	instances := projector.ExampleIndexInstances(
-		options.buckets, options.endpoints, options.coordEndpoint)
-	_, err := projector.InitialMutationStream(
-		p, "backfill" /*topic*/, "default" /*pooln*/, options.buckets,
-		[]string{kvaddr}, tss, instances)
-	if err != nil {
-		log.Fatal(err)
 	}
 }

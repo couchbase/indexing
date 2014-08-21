@@ -67,20 +67,13 @@ func startBucket(cluster, bucketn string) int {
 	uprFeed, err := b.StartUprFeed("rawupr", uint32(0))
 	mf(err, "- upr")
 
-	flogs := failoverLogs(b)
+	vbnos := listOfVbnos(options.maxVbno)
 
-	// list of vbuckets
-	vbnos := make([]uint16, 0, options.maxVbno)
-	for i := 0; i < options.maxVbno; i++ {
-		vbnos = append(vbnos, uint16(i))
-	}
+	flogs, err := b.GetFailoverLogs(vbnos)
+	mf(err, "- upr failoverlogs")
 
 	if options.printflogs {
-		for i, vbno := range vbnos {
-			fmt.Printf("Failover log for vbucket %v\n", vbno)
-			fmt.Printf("   %#v\n", flogs[uint16(i)])
-		}
-		fmt.Println()
+		printFlogs(vbnos, flogs)
 	}
 
 	go startUpr(uprFeed, flogs)
@@ -104,18 +97,6 @@ func startUpr(uprFeed *couchbase.UprFeed, flogs couchbase.FailoverLog) {
 			vbno, flags, vbuuid, start, end, snapStart, snapEnd)
 		mf(err, fmt.Sprintf("stream-req for %v failed", vbno))
 	}
-}
-
-func failoverLogs(b *couchbase.Bucket) couchbase.FailoverLog {
-	// list of vbuckets
-	vbnos := make([]uint16, 0, options.maxVbno)
-	for i := 0; i < options.maxVbno; i++ {
-		vbnos = append(vbnos, uint16(i))
-	}
-
-	flogs, err := b.GetFailoverLogs(vbnos)
-	mf(err, "- upr failoverlogs")
-	return flogs
 }
 
 func mf(err error, msg string) {
@@ -167,4 +148,21 @@ func sprintCounts(counts map[mc.UprOpcode]int) string {
 		}
 	}
 	return strings.TrimRight(line, " ")
+}
+
+func listOfVbnos(maxVbno int) []uint16 {
+	// list of vbuckets
+	vbnos := make([]uint16, 0, maxVbno)
+	for i := 0; i < maxVbno; i++ {
+		vbnos = append(vbnos, uint16(i))
+	}
+	return vbnos
+}
+
+func printFlogs(vbnos []uint16, flogs couchbase.FailoverLog) {
+	for i, vbno := range vbnos {
+		fmt.Printf("Failover log for vbucket %v\n", vbno)
+		fmt.Printf("   %#v\n", flogs[uint16(i)])
+	}
+	fmt.Println()
 }

@@ -58,14 +58,14 @@ message LocalDeleteIndexRequest {
 // Posted by Coordinator while promoting timestamp to persistence timestamp.
 // Error message will be sent as response.
 message NewPersistenceTimestampRequest {
-    required Timestamp nextPersistenceTs = 1;
+    required TsVbuuid nextPersistenceTs = 1;
 }
 
 
 // Posted by Coordinator while promoting timestamp to stability timestamp.
 // Error message will be sent as response.
 message NewStabilityTimestampRequest {
-    required Timestamp nextStabilityTs = 1;
+    required TsVbuuid nextStabilityTs = 1;
 }
 
 
@@ -77,7 +77,7 @@ message HWTimestampRequest {
 }
 
 message HWTimestampResponse {
-    repeated string BranchTimestamp = 1;
+    repeated string TsVbFull = 1;
 }
 
 
@@ -85,20 +85,20 @@ message HWTimestampResponse {
 // is less than failover-timestamp but greater than or equal to kv-timestamp.
 // This request will be sent twice to each indexer node.
 message RollbackRequest {
-    required string          bucket            = 1; // bucket name
+    required string        bucket            = 1; // bucket name
 
     // first as RollbackStart along with failoverTimestamp
     // second as RollbackCommit along with failoverTimestamp and kvTimestamp
-    required RollbackState   state             = 2;
-    required BranchTimestamp failoverTimestamp = 3;
-    optional BranchTimestamp kvTimestamp       = 4;
+    required RollbackState state             = 2;
+    required TsVbuuid      failoverTimestamp = 3;
+    optional TsVbuuid      kvTimestamp       = 4;
 }
 
 message RollbackResponse {
-    required string bucket                     = 1;
+    required string bucket                   = 1;
 
     // first as RollbackPrepare with snapshotTimestamp
     // second as RollbackDone
-    required RollbackState state               = 2;
-    optional BranchTimestamp snapshotTimestamp = 3;
+    required RollbackState state             = 2;
+    optional TsVbuuid      snapshotTimestamp = 3;
 }

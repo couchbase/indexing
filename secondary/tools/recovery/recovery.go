@@ -79,7 +79,10 @@ func main() {
 	}
 	go dataport.Application(options.coordEndpoint, 0, 0, nil)
 
-	projector.SpawnProjectors(cluster, pooln, options.buckets, projectors)
+	_, err := projector.SpawnProjectors(cluster, kvaddrs, projectors)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// start backfill stream on each projector
 	for kvaddr, c := range projectors {
@@ -132,9 +135,11 @@ func appHandler(endpoint string, msg interface{}) bool {
 				if m, ok := activity[bucket]; ok {
 					if n, ok := m[vbno]; ok {
 						if n[1] == n[3] || n[1] > n[2] {
-							ts.Append(vbno, n[0], n[1], n[1], n[1])
+							// seqno, vbuuid, start, end
+							ts.Append(vbno, n[1], n[0], n[1], n[1])
 						} else {
-							ts.Append(vbno, n[0], n[1], n[2], n[3])
+							// seqno, vbuuid, start, end
+							ts.Append(vbno, n[1], n[0], n[2], n[3])
 						}
 					}
 				}
@@ -143,8 +148,10 @@ func appHandler(endpoint string, msg interface{}) bool {
 			tss[ts.Bucket] = ts
 		}
 
-		newkvaddrs := projector.SpawnProjectors(
-			cluster, pooln, options.buckets, projectors)
+		newkvaddrs, err := projector.SpawnProjectors(cluster, kvaddrs, projectors)
+		if err != nil {
+			log.Fatal(err)
+		}
 
 		for kvaddr, c := range projectors {
 			if _, ok := newkvaddrs[kvaddr]; ok {
@@ -169,8 +176,11 @@ func appHandler(endpoint string, msg interface{}) bool {
 		log.Println(v)
 
 	case dataport.RepairVbuckets:
-		projectors = projector.ShutdownProjectors(
+		projectors, err = projector.ShutdownProjectors(
 			cluster, pooln, options.buckets, projectors)
+		if err != nil {
+			log.Fatal(err)
+		}
 		if v != nil && len(v) > 0 {
 			for _, c := range projectors {
 				projector.RepairEndpoints(c, "backfill", []string{endpoint})

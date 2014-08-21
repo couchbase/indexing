@@ -196,13 +196,11 @@ func (p *Projector) doMutationFeed(request *protobuf.MutationStreamRequest) ap.M
 
 	if err = feed.RequestFeed(request); err == nil {
 		// we expect failoverTimestamps and kvTimestamps to be populated.
-		failTss := make([]*protobuf.BranchTimestamp, 0, len(bucketns))
-		kvTss := make([]*protobuf.BranchTimestamp, 0, len(bucketns))
+		failTss := make([]*protobuf.TsVbuuid, 0, len(bucketns))
+		kvTss := make([]*protobuf.TsVbuuid, 0, len(bucketns))
 		for _, bucketn := range bucketns {
-			failTs := protobuf.ToBranchTimestamp(feed.failoverTimestamps[bucketn])
-			kvTs := protobuf.ToBranchTimestamp(feed.kvTimestamps[bucketn])
-			failTss = append(failTss, failTs)
-			kvTss = append(kvTss, kvTs)
+			failTss = append(failTss, feed.failoverTimestamps[bucketn])
+			kvTss = append(kvTss, feed.kvTimestamps[bucketn])
 		}
 		response.UpdateTimestamps(failTss, kvTss)
 	} else {
@@ -240,13 +238,11 @@ func (p *Projector) doUpdateFeed(request *protobuf.UpdateMutationStreamRequest) 
 		// is not for deleting the bucket.
 		if !request.IsDelBuckets() {
 			// we expect failoverTimestamps and kvTimestamps to be re-populated.
-			failTss := make([]*protobuf.BranchTimestamp, 0, len(bucketns))
-			kvTss := make([]*protobuf.BranchTimestamp, 0, len(bucketns))
+			failTss := make([]*protobuf.TsVbuuid, 0, len(bucketns))
+			kvTss := make([]*protobuf.TsVbuuid, 0, len(bucketns))
 			for _, bucketn := range bucketns {
-				failTs := protobuf.ToBranchTimestamp(feed.failoverTimestamps[bucketn])
-				kvTs := protobuf.ToBranchTimestamp(feed.kvTimestamps[bucketn])
-				failTss = append(failTss, failTs)
-				kvTss = append(kvTss, kvTs)
+				failTss = append(failTss, feed.failoverTimestamps[bucketn])
+				kvTss = append(kvTss, feed.kvTimestamps[bucketn])
 			}
 			response.UpdateTimestamps(failTss, kvTss)
 		}

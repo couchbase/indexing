@@ -49,8 +49,9 @@ func Application(
 		return
 	}
 
-	// bucket -> Command -> #int
+	// bucket -> Command -> #count(int)
 	bucketWise := make(map[string]map[byte]int)
+	// instance-uuid -> key -> #count(int)
 	keys := make(map[uint64]map[string]int)
 	mutations, messages := 0, 0
 
@@ -131,7 +132,7 @@ func processMutations(
 				}
 				commandWise[cmd]++
 
-				if command == 0 || uuid == 0 {
+				if cmd == 0 || cmd == c.Snapshot || uuid == 0 {
 					continue
 				}
 
@@ -157,7 +158,7 @@ func sprintKeyCount(id uint64, keys map[string]int) string {
 		countKs++
 		countDs += n
 	}
-	l := fmt.Sprintf("ii %v, %v unique keys in %v docs", id, countKs, countDs)
+	l := fmt.Sprintf("instance %v, %v unique keys in %v docs", id, countKs, countDs)
 	return l
 }
 

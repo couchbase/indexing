@@ -32,31 +32,31 @@ message FailoverLogResponse {
 }
 
 // Requested by Coordinator or indexer to start a new mutation stream.
-// BranchTimestamp.Vbnos should be in sort order
+// TsVbuuid. Vbnos should be in sort order
 //
 // start,
 //      new-set of buckets, valid subset of restart-timestamps and engines.
 message MutationStreamRequest {
-    required string             topic             = 1; // topic name.
-    required uint32             flag              = 2;
-    repeated string             pools             = 3;
-    repeated string             buckets           = 4;
-    repeated BranchTimestamp    restartTimestamps = 5; // list of timestamps, one per bucket
+    required string    topic             = 1; // topic name.
+    required uint32    flag              = 2;
+    repeated string    pools             = 3;
+    repeated string    buckets           = 4;
+    repeated TsVbuuid  restartTimestamps = 5; // list of timestamps, one per bucket
     // list of index applicable for this stream, optional as well
-    repeated IndexInst          instances         = 6;
+    repeated IndexInst instances         = 6;
 }
 
 message MutationStreamResponse {
-    required string          topic              = 1;
-    required uint32          flag               = 2;
-    repeated string          pools              = 3;
-    repeated string          buckets            = 4;
+    required string   topic              = 1;
+    required uint32   flag               = 2;
+    repeated string   pools              = 3;
+    repeated string   buckets            = 4;
     // per bucket failover-timestamp, kv-timestamp for all active vbuckets,
     // for each bucket, after executing the request.
-    repeated BranchTimestamp failoverTimestamps = 5; // sort order
-    repeated BranchTimestamp kvTimestamps       = 6; // sort order
-    repeated uint64          indexUuids         = 7;
-    optional Error           err                = 8;
+    repeated TsVbuuid failoverTimestamps = 5; // sort order
+    repeated TsVbuuid kvTimestamps       = 6; // sort order
+    repeated uint64   indexUuids         = 7;
+    optional Error    err                = 8;
 }
 
 // Requested by Coordinator or indexer to restart or shutdown vbuckets from an
@@ -77,13 +77,13 @@ message MutationStreamResponse {
 // restart/shutdown flags are mutually exclusive, likewise,
 // add-buckets/del-buckets flags are mutually exclusive.
 message UpdateMutationStreamRequest {
-    required string          topic             = 1; // topic name.
-    required uint32          flag              = 2;
-    repeated string          pools             = 3;
-    repeated string          buckets           = 4;
-    repeated BranchTimestamp restartTimestamps = 5; // list of timestamps, one per bucket
+    required string    topic             = 1; // topic name.
+    required uint32    flag              = 2;
+    repeated string    pools             = 3;
+    repeated string    buckets           = 4;
+    repeated TsVbuuid  restartTimestamps = 5; // list of timestamps, one per bucket
     // list of index applicable for this stream, optional as well
-    repeated IndexInst       instances         = 6;
+    repeated IndexInst instances         = 6;
 }
 
 // Requested by third party component that wants to subscribe to a topic-name.
@@ -136,5 +136,5 @@ message CurrentTimestampRequest {
 }
 
 message CurrentTimestampResponse {
-    repeated BranchTimestamp currentTimestamps = 1;
+    repeated TsVbuuid currentTimestamps = 1;
 }

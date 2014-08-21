@@ -3,7 +3,6 @@ package projector
 import (
 	"code.google.com/p/goprotobuf/proto"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 
@@ -30,6 +29,28 @@ func GetVbmap(
 	return res, nil
 }
 
+// Based on the latest vbmap gather the list of kvnode-address and return the
+// same.
+func GetKVAddrs(cluster, pooln, bucketn string) ([]string, error) {
+	b, err := c.ConnectBucket(cluster, pooln, bucketn)
+	if err != nil {
+		return nil, err
+	}
+	b.Close()
+
+	b.Refresh()
+	m, err := b.GetVBmap(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	kvaddrs := make([]string, 0, len(m))
+	for kvaddr := range m {
+		kvaddrs = append(kvaddrs, kvaddr)
+	}
+	return kvaddrs, nil
+}
+
 func GetFailoverLogs(
 	client ap.Client, pooln, bucketn string,
 	vbnos []uint32) (*protobuf.FailoverLogResponse, error) {
@@ -46,49 +67,30 @@ func GetFailoverLogs(
 	return res, nil
 }
 
+// Start Initial stream for a set of buckets hosted by `kvaddr`.
 func InitialMutationStream(
 	client ap.Client,
-	topic, pooln string,
-	buckets, kvaddrs []string,
-	tss map[string]*c.Timestamp,
+	topic, pooln, kvaddr string, buckets []string,
 	instances []*protobuf.IndexInst) (*protobuf.MutationStreamResponse, error) {
-
-	var ts *c.Timestamp
 
 	req := &protobuf.MutationStreamRequest{
 		Topic:             proto.String(topic),
 		Pools:             []string{},
 		Buckets:           []string{},
-		RestartTimestamps: []*protobuf.BranchTimestamp{},
+		RestartTimestamps: []*protobuf.TsVbuuid{},
 		Instances:         instances,
 	}
 	for _, bucketn := range buckets {
-		vbmap, err := GetVbmap(client, pooln, bucketn, kvaddrs)
+		vbnos, flogs, err := flogsFromKV(client, pooln, bucketn, kvaddr)
 		if err != nil {
 			return nil, err
 		}
-		vbnos := vbmap.Vbuckets32()
-
-		flogs, err := GetFailoverLogs(client, pooln, bucketn, vbnos)
-		if err != nil {
-			return nil, err
-		}
-
-		if tss == nil {
-			ts = c.NewTimestamp(bucketn, c.MaxVbuckets)
-			for _, vbno := range vbnos {
-				ts.Append(uint16(vbno), 0, 0, 0, 0)
-			}
-		} else {
-			ts = tss[bucketn]
-		}
-
-		ts = computeRestartTs(flogs.FailoverLogs(ts.Vbnos), ts)
-		bTs := protobuf.ToBranchTimestamp(ts)
+		ts := protobuf.NewTsVbuuid(bucketn, c.MaxVbuckets)
+		ts = ts.InitialRestartTs(vbnos).ComputeRestartTs(flogs)
 
 		req.Pools = append(req.Pools, pooln)
 		req.Buckets = append(req.Buckets, bucketn)
-		req.RestartTimestamps = append(req.RestartTimestamps, bTs)
+		req.RestartTimestamps = append(req.RestartTimestamps, ts)
 	}
 	req.SetStartFlag()
 	res := &protobuf.MutationStreamResponse{}
@@ -102,7 +104,7 @@ func InitialMutationStream(
 
 func RestartMutationStream(
 	client ap.Client,
-	topic, pooln string, tss map[string]*c.Timestamp,
+	topic, pooln string, tss map[string]*protobuf.TsVbuuid,
 	instances []*protobuf.IndexInst,
 	callb func(*protobuf.MutationStreamResponse, error) bool) {
 
@@ -110,14 +112,13 @@ func RestartMutationStream(
 		Topic:             proto.String(topic),
 		Pools:             []string{},
 		Buckets:           []string{},
-		RestartTimestamps: []*protobuf.BranchTimestamp{},
+		RestartTimestamps: []*protobuf.TsVbuuid{},
 		Instances:         instances,
 	}
 	for bucketn, ts := range tss {
 		req.Pools = append(req.Pools, pooln)
 		req.Buckets = append(req.Buckets, bucketn)
-		bTs := protobuf.ToBranchTimestamp(ts)
-		req.RestartTimestamps = append(req.RestartTimestamps, bTs)
+		req.RestartTimestamps = append(req.RestartTimestamps, ts)
 	}
 	req.SetRestartFlag()
 	res := &protobuf.MutationStreamResponse{}
@@ -154,65 +155,55 @@ func ShutdownStream(client ap.Client, topic string) (*protobuf.Error, error) {
 	return res, nil
 }
 
+// SpawnProjectors for each kvaddrs, provided they are not already spawned and
+// remembered in `projectors` parameter. return the new set of projectors that
+// were spawned.
+// adminport of the projector will be 500+kvport.
 func SpawnProjectors(
-	cluster, pooln string, buckets []string,
-	projectors map[string]ap.Client) map[string]ap.Client {
+	cluster string, kvaddrs []string,
+	projectors map[string]ap.Client) (map[string]ap.Client, error) {
 
-	var b *couchbase.Bucket
-	var err error
-
-	for _, bucketn := range buckets {
-		if b, err = c.ConnectBucket(cluster, pooln, bucketn); err != nil {
-			log.Fatal(err)
-		} else {
-			break
-		}
-	}
-
-	b.Refresh()
-	m, err := b.GetVBmap(nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	newkvaddrs := make(map[string]ap.Client)
-	for kvaddr := range m { // create a projector instance for each kvnode
+	newprojectors := make(map[string]ap.Client)
+	// create a projector instance for each kvnode
+	for _, kvaddr := range kvaddrs {
 		if _, ok := projectors[kvaddr]; ok {
 			continue
 		}
 		ss := strings.Split(kvaddr, ":")
 		kport, err := strconv.Atoi(ss[1])
 		if err != nil {
-			log.Fatal(err)
+			return nil, err
 		}
 		adminport := ss[0] + ":" + strconv.Itoa(kport+500)
 		NewProjector(cluster, []string{kvaddr}, adminport)
 		c := ap.NewHTTPClient("http://"+adminport, c.AdminportURLPrefix)
 		projectors[kvaddr] = c
-		newkvaddrs[kvaddr] = c
+		newprojectors[kvaddr] = c
 	}
-	return newkvaddrs
+	return newprojectors, nil
 }
 
 func ShutdownProjectors(
 	cluster, pooln string, buckets []string,
-	projectors map[string]ap.Client) map[string]ap.Client {
+	projectors map[string]ap.Client) (map[string]ap.Client, error) {
 
 	var b *couchbase.Bucket
 	var err error
 
 	for _, bucketn := range buckets {
 		if b, err = c.ConnectBucket(cluster, pooln, bucketn); err != nil {
-			log.Fatal(err)
+			return nil, err
 		} else {
 			break
 		}
 	}
 
+	defer b.Close()
+
 	b.Refresh()
 	m, err := b.GetVBmap(nil)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	newProjectors := make(map[string]ap.Client)
@@ -224,5 +215,73 @@ func ShutdownProjectors(
 		}
 	}
 	projectors = newProjectors
-	return newProjectors
+	return newProjectors, nil
+}
+
+func AddBuckets(
+	client ap.Client,
+	topic, kvaddr, pooln string, buckets []string,
+	tss map[string]*protobuf.TsVbuuid,
+	instances []*protobuf.IndexInst) error {
+
+	req := &protobuf.UpdateMutationStreamRequest{
+		Topic:             proto.String(topic),
+		Pools:             []string{},
+		Buckets:           []string{},
+		RestartTimestamps: []*protobuf.TsVbuuid{},
+		Instances:         instances,
+	}
+	for _, bucketn := range buckets {
+		var ts *protobuf.TsVbuuid
+		if tss == nil || tss[bucketn] == nil {
+			vbnos, flogs, err := flogsFromKV(client, pooln, bucketn, kvaddr)
+			if err != nil {
+				return err
+			}
+			ts = protobuf.NewTsVbuuid(bucketn, c.MaxVbuckets)
+			ts = ts.InitialRestartTs(vbnos).ComputeRestartTs(flogs)
+		} else {
+			ts = tss[bucketn]
+		}
+		req.Pools = append(req.Pools, pooln)
+		req.Buckets = append(req.Buckets, bucketn)
+		req.RestartTimestamps = append(req.RestartTimestamps, ts)
+	}
+	req.SetRestartFlag()
+	req.SetAddBucketFlag()
+	res := &protobuf.MutationStreamResponse{}
+	return client.Request(req, res)
+}
+
+func DelBuckets(client ap.Client, topic, pooln string, buckets []string) error {
+	req := &protobuf.UpdateMutationStreamRequest{
+		Topic:   proto.String(topic),
+		Pools:   []string{},
+		Buckets: []string{},
+	}
+	for _, bucket := range buckets {
+		req.Pools = append(req.Pools, pooln)
+		req.Buckets = append(req.Buckets, bucket)
+	}
+	req.SetRestartFlag()
+	req.SetDelBucketFlag()
+	res := &protobuf.MutationStreamResponse{}
+	return client.Request(req, res)
+}
+
+func flogsFromKV(
+	client ap.Client,
+	pooln, bucketn, kvaddr string) ([]uint16, couchbase.FailoverLog, error) {
+
+	// get subset of vbuckets hosted by `kvaddr`
+	vbmap, err := GetVbmap(client, pooln, bucketn, []string{kvaddr})
+	if err != nil {
+		return nil, nil, err
+	}
+	// get failover logs
+	flogs, err := GetFailoverLogs(client, pooln, bucketn, vbmap.Vbuckets32())
+	if err != nil {
+		return nil, nil, err
+	}
+	return vbmap.Vbuckets16(), flogs.ToFailoverLog(vbmap.Vbuckets16()), nil
 }

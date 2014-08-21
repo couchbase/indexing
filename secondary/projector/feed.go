@@ -6,8 +6,9 @@ package projector
 import (
 	"errors"
 	"fmt"
+
 	c "github.com/couchbase/indexing/secondary/common"
-	"sort"
+	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
 // error codes
@@ -31,8 +32,8 @@ type Feed struct {
 	endpoints map[string]*Endpoint
 	engines   map[uint64]*Engine
 	// timestamp feedback
-	failoverTimestamps map[string]*c.Timestamp // indexed by bucket name
-	kvTimestamps       map[string]*c.Timestamp // indexed by bucket name
+	failoverTimestamps map[string]*protobuf.TsVbuuid // indexed by bucket name
+	kvTimestamps       map[string]*protobuf.TsVbuuid // indexed by bucket name
 	// gen-server
 	reqch chan []interface{}
 	finch chan bool
@@ -56,8 +57,8 @@ func NewFeed(p *Projector, topic string, request RequestReader) (*Feed, error) {
 		projector:          p,
 		topic:              topic,
 		bfeeds:             make(map[string]*BucketFeed),
-		failoverTimestamps: make(map[string]*c.Timestamp),
-		kvTimestamps:       make(map[string]*c.Timestamp),
+		failoverTimestamps: make(map[string]*protobuf.TsVbuuid),
+		kvTimestamps:       make(map[string]*protobuf.TsVbuuid),
 		endpoints:          make(map[string]*Endpoint),
 		engines:            make(map[uint64]*Engine),
 		reqch:              make(chan []interface{}, c.GenserverChannelSize),
@@ -98,8 +99,8 @@ func (feed *Feed) spawnBucketFeeds(pools, buckets []string) error {
 			return err
 		}
 		// initialse empty Timestamps objects for return values.
-		feed.failoverTimestamps[bucket] = c.NewTimestamp(bucket, c.MaxVbuckets)
-		feed.kvTimestamps[bucket] = c.NewTimestamp(bucket, c.MaxVbuckets)
+		feed.failoverTimestamps[bucket] = protobuf.NewTsVbuuid(bucket, c.MaxVbuckets)
+		feed.kvTimestamps[bucket] = protobuf.NewTsVbuuid(bucket, c.MaxVbuckets)
 		feed.bfeeds[bucket] = bfeed
 	}
 	return nil
@@ -306,11 +307,9 @@ func (feed *Feed) requestFeed(req RequestReader) (err error) {
 		}
 		// aggregate failover-timestamps, kv-timestamps for all buckets
 		failTs = feed.failoverTimestamps[bucket].Union(failTs)
-		kvTs = feed.kvTimestamps[bucket].Union(kvTs)
 		feed.failoverTimestamps[bucket] = failTs
+		kvTs = feed.kvTimestamps[bucket].Union(kvTs)
 		feed.kvTimestamps[bucket] = kvTs
-		sort.Sort(feed.failoverTimestamps[bucket])
-		sort.Sort(feed.kvTimestamps[bucket])
 	}
 	if len(engines) == 0 {
 		c.Warnf("%v empty engines !\n", feed.logPrefix)
@@ -336,8 +335,10 @@ func (feed *Feed) updateFeed(req RequestReader) (err error) {
 		return err
 	}
 
-	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
-		return err
+	if evaluators != nil && routers != nil {
+		if engines, err = feed.buildEngines(evaluators, routers); err != nil {
+			return err
+		}
 	}
 
 	// whether to delete buckets from feed.
@@ -358,8 +359,12 @@ func (feed *Feed) updateFeed(req RequestReader) (err error) {
 		return nil
 	}
 
-	if endpoints, err = feed.buildEndpoints(routers, feed.endpoints); err != nil {
-		return err
+	if routers != nil {
+		endpoints, err = feed.buildEndpoints(routers, feed.endpoints)
+		if err != nil {
+			return err
+		}
+		feed.endpoints = endpoints
 	}
 
 	// whether to add new buckets to feed.
@@ -386,18 +391,17 @@ func (feed *Feed) updateFeed(req RequestReader) (err error) {
 		}
 		// update failover-timestamps, kv-timestamps
 		if req.IsShutdown() {
-			failTs = feed.failoverTimestamps[bucket].FilterByVbuckets(failTs.Vbnos)
-			kvTs = feed.kvTimestamps[bucket].FilterByVbuckets(kvTs.Vbnos)
+			failTs = feed.failoverTimestamps[bucket].FilterByVbuckets(
+				c.Vbno32to16(failTs.Vbnos))
+			kvTs = feed.kvTimestamps[bucket].FilterByVbuckets(
+				c.Vbno32to16(kvTs.Vbnos))
 		} else {
 			failTs = feed.failoverTimestamps[bucket].Union(failTs)
 			kvTs = feed.kvTimestamps[bucket].Union(kvTs)
 		}
 		feed.failoverTimestamps[bucket] = failTs
 		feed.kvTimestamps[bucket] = kvTs
-		sort.Sort(feed.failoverTimestamps[bucket])
-		sort.Sort(feed.kvTimestamps[bucket])
 	}
-	feed.endpoints, feed.engines = endpoints, engines
 	c.Infof("%v update ... done\n", feed.logPrefix)
 	return nil
 }
@@ -609,6 +613,10 @@ func (feed *Feed) buildEngines(
 // organize engines based on buckets, engine is associated with one bucket.
 func bucketWiseEngines(engines map[uint64]*Engine) map[string]map[uint64]*Engine {
 	bengines := make(map[string]map[uint64]*Engine)
+	if engines == nil {
+		return bengines
+	}
+
 	for uuid, engine := range engines {
 		bucket := engine.evaluator.Bucket()
 		emap, ok := bengines[bucket]
@@ -695,20 +703,6 @@ func (feed *Feed) validateSubscriber(subscriber Subscriber) (map[uint64]c.Evalua
 		}
 	}
 	return evaluators, routers, nil
-}
-
-// vbTs2Vbmap construct VbConnectionMap from Vbucket Timestamp.
-func (feed *Feed) vbTs2Vbmap(kvTs *c.Timestamp) *c.VbConnectionMap {
-	vbmap := &c.VbConnectionMap{
-		Bucket:   kvTs.Bucket,
-		Vbuckets: make([]uint16, 0),
-		Vbuuids:  make([]uint64, 0),
-	}
-	for i, vbno := range kvTs.Vbnos {
-		vbmap.Vbuckets = append(vbmap.Vbuckets, vbno)
-		vbmap.Vbuuids = append(vbmap.Vbuuids, kvTs.Vbuuids[i])
-	}
-	return vbmap
 }
 
 func (feed *Feed) engineNames() []string {

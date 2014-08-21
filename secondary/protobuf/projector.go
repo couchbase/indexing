@@ -2,11 +2,12 @@ package protobuf
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"code.google.com/p/goprotobuf/proto"
+	mc "github.com/couchbase/gomemcached/client"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbaselabs/go-couchbase"
 )
 
 // NewMutationStreamResponse creates a new instance of MutationStreamResponse
@@ -45,7 +46,7 @@ func (m *MutationStreamResponse) UpdateErr(err error) {
 }
 
 // UpdateTimestamps update timestamps value in response.
-func (m *MutationStreamResponse) UpdateTimestamps(failoverTs, kvTs []*BranchTimestamp) {
+func (m *MutationStreamResponse) UpdateTimestamps(failoverTs, kvTs []*TsVbuuid) {
 	m.FailoverTimestamps = failoverTs
 	m.KvTimestamps = kvTs
 }
@@ -108,13 +109,7 @@ func (res *VbmapResponse) Vbuckets32() []uint32 {
 }
 
 func (res *VbmapResponse) Vbuckets16() []uint16 {
-	vbs := make([]uint16, 0)
-	for _, vs := range res.GetKvvbnos() {
-		for _, v := range vs.GetVbnos() {
-			vbs = append(vbs, uint16(v))
-		}
-	}
-	return vbs
+	return c.Vbno32to16(res.Vbuckets32())
 }
 
 // FailoverLogRequest implement MessageMarshaller interface
@@ -160,32 +155,14 @@ func (res *FailoverLogResponse) LatestBranch() map[uint16]uint64 {
 	return vbuuids
 }
 
-func (res *FailoverLogResponse) InitialBranchTimestamp(bucket string) *BranchTimestamp {
-	vbuuids := res.LatestBranch()
-
-	// sort vbuckets
-	vbnos := make(c.Vbuckets, 0, c.MaxVbuckets)
-	for vbno := range vbuuids {
-		vbnos = append(vbnos, vbno)
-	}
-	sort.Sort(vbnos)
-
-	// gather vbuuids
-	ts := c.NewTimestamp(bucket, c.MaxVbuckets)
-	for _, vbno := range vbnos {
-		ts.Append(vbno, vbuuids[vbno], 0, 0, 0)
-	}
-	return ToBranchTimestamp(ts)
-}
-
-func (res *FailoverLogResponse) FailoverLogs(vbnos []uint16) map[uint16][][2]uint64 {
-	flogs := make(map[uint16][][2]uint64)
+func (res *FailoverLogResponse) ToFailoverLog(vbnos []uint16) couchbase.FailoverLog {
+	flogs := make(couchbase.FailoverLog)
 	for _, f := range res.GetLogs() {
 		fvbno := uint16(f.GetVbno())
 		for _, vbno := range vbnos {
 			if fvbno == vbno {
 				seqnos := f.GetSeqnos()
-				m := make([][2]uint64, 0, len(seqnos))
+				m := make(mc.FailoverLog, 0, len(seqnos))
 				for i, vbuuid := range f.GetVbuuids() {
 					m = append(m, [2]uint64{vbuuid, seqnos[i]})
 				}
@@ -193,7 +170,7 @@ func (res *FailoverLogResponse) FailoverLogs(vbnos []uint16) map[uint16][][2]uin
 			}
 		}
 	}
-	return flogs
+	return couchbase.FailoverLog(flogs)
 }
 
 // MutationStreamRequest implement MessageMarshaller interface

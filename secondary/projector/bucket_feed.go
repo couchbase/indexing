@@ -35,7 +35,7 @@ package projector
 import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"sort"
+	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
 // BucketFeed is per bucket, multiple kv-node feeds, for a subset of vbuckets.
@@ -114,7 +114,7 @@ const (
 func (bfeed *BucketFeed) RequestFeed(
 	request RequestReader,
 	endpoints map[string]*Endpoint,
-	engines map[uint64]*Engine) (*c.Timestamp, *c.Timestamp, error) {
+	engines map[uint64]*Engine) (*protobuf.TsVbuuid, *protobuf.TsVbuuid, error) {
 
 	if request == nil || engines == nil || len(engines) == 0 {
 		return nil, nil, ErrorArgument
@@ -126,7 +126,7 @@ func (bfeed *BucketFeed) RequestFeed(
 	if err = c.OpError(err, resp, 2); err != nil {
 		return nil, nil, err
 	}
-	failoverTs, kvTs := resp[0].(*c.Timestamp), resp[1].(*c.Timestamp)
+	failoverTs, kvTs := resp[0].(*protobuf.TsVbuuid), resp[1].(*protobuf.TsVbuuid)
 	return failoverTs, kvTs, nil
 }
 
@@ -139,7 +139,7 @@ func (bfeed *BucketFeed) RequestFeed(
 func (bfeed *BucketFeed) UpdateFeed(
 	request RequestReader,
 	endpoints map[string]*Endpoint,
-	engines map[uint64]*Engine) (failoverTs, kvTs *c.Timestamp, err error) {
+	engines map[uint64]*Engine) (failoverTs, kvTs *protobuf.TsVbuuid, err error) {
 
 	if request == nil || engines == nil || len(engines) == 0 {
 		return nil, nil, ErrorArgument
@@ -151,7 +151,7 @@ func (bfeed *BucketFeed) UpdateFeed(
 	if err = c.OpError(err, resp, 2); err != nil {
 		return nil, nil, err
 	}
-	failoverTs, kvTs = resp[0].(*c.Timestamp), resp[1].(*c.Timestamp)
+	failoverTs, kvTs = resp[0].(*protobuf.TsVbuuid), resp[1].(*protobuf.TsVbuuid)
 	return failoverTs, kvTs, nil
 }
 
@@ -263,11 +263,12 @@ loop:
 func (bfeed *BucketFeed) requestFeed(
 	req RequestReader,
 	endpoints map[string]*Endpoint,
-	engines map[uint64]*Engine) (failTs, kvTs *c.Timestamp, err error) {
+	engines map[uint64]*Engine) (failTs, kvTs *protobuf.TsVbuuid, err error) {
 
-	var fTs, vTs *c.Timestamp
-	failTs = c.NewTimestamp(bfeed.bucketn, c.MaxVbuckets)
-	kvTs = c.NewTimestamp(bfeed.bucketn, c.MaxVbuckets)
+	var fTs, vTs *protobuf.TsVbuuid
+
+	failTs = protobuf.NewTsVbuuid(bfeed.bucketn, c.MaxVbuckets)
+	kvTs = protobuf.NewTsVbuuid(bfeed.bucketn, c.MaxVbuckets)
 
 	c.Debugf("%v updating feed ...", bfeed.logPrefix)
 
@@ -279,8 +280,6 @@ func (bfeed *BucketFeed) requestFeed(
 		failTs = failTs.Union(fTs)
 		kvTs = kvTs.Union(vTs)
 	}
-	sort.Sort(failTs)
-	sort.Sort(kvTs)
 	return failTs, kvTs, nil
 }
 

@@ -158,15 +158,15 @@ func (m *LocalDeleteIndexRequest) GetIndexUuid() uint64 {
 // Posted by Coordinator while promoting timestamp to persistence timestamp.
 // Error message will be sent as response.
 type NewPersistenceTimestampRequest struct {
-	NextPersistenceTs *Timestamp `protobuf:"bytes,1,req,name=nextPersistenceTs" json:"nextPersistenceTs,omitempty"`
-	XXX_unrecognized  []byte     `json:"-"`
+	NextPersistenceTs *TsVbuuid `protobuf:"bytes,1,req,name=nextPersistenceTs" json:"nextPersistenceTs,omitempty"`
+	XXX_unrecognized  []byte    `json:"-"`
 }
 
 func (m *NewPersistenceTimestampRequest) Reset()         { *m = NewPersistenceTimestampRequest{} }
 func (m *NewPersistenceTimestampRequest) String() string { return proto.CompactTextString(m) }
 func (*NewPersistenceTimestampRequest) ProtoMessage()    {}
 
-func (m *NewPersistenceTimestampRequest) GetNextPersistenceTs() *Timestamp {
+func (m *NewPersistenceTimestampRequest) GetNextPersistenceTs() *TsVbuuid {
 	if m != nil {
 		return m.NextPersistenceTs
 	}
@@ -176,15 +176,15 @@ func (m *NewPersistenceTimestampRequest) GetNextPersistenceTs() *Timestamp {
 // Posted by Coordinator while promoting timestamp to stability timestamp.
 // Error message will be sent as response.
 type NewStabilityTimestampRequest struct {
-	NextStabilityTs  *Timestamp `protobuf:"bytes,1,req,name=nextStabilityTs" json:"nextStabilityTs,omitempty"`
-	XXX_unrecognized []byte     `json:"-"`
+	NextStabilityTs  *TsVbuuid `protobuf:"bytes,1,req,name=nextStabilityTs" json:"nextStabilityTs,omitempty"`
+	XXX_unrecognized []byte    `json:"-"`
 }
 
 func (m *NewStabilityTimestampRequest) Reset()         { *m = NewStabilityTimestampRequest{} }
 func (m *NewStabilityTimestampRequest) String() string { return proto.CompactTextString(m) }
 func (*NewStabilityTimestampRequest) ProtoMessage()    {}
 
-func (m *NewStabilityTimestampRequest) GetNextStabilityTs() *Timestamp {
+func (m *NewStabilityTimestampRequest) GetNextStabilityTs() *TsVbuuid {
 	if m != nil {
 		return m.NextStabilityTs
 	}
@@ -218,7 +218,7 @@ func (m *HWTimestampRequest) GetTopic() string {
 }
 
 type HWTimestampResponse struct {
-	BranchTimestamp  []string `protobuf:"bytes,1,rep" json:"BranchTimestamp,omitempty"`
+	TsVbFull         []string `protobuf:"bytes,1,rep" json:"TsVbFull,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -226,9 +226,9 @@ func (m *HWTimestampResponse) Reset()         { *m = HWTimestampResponse{} }
 func (m *HWTimestampResponse) String() string { return proto.CompactTextString(m) }
 func (*HWTimestampResponse) ProtoMessage()    {}
 
-func (m *HWTimestampResponse) GetBranchTimestamp() []string {
+func (m *HWTimestampResponse) GetTsVbFull() []string {
 	if m != nil {
-		return m.BranchTimestamp
+		return m.TsVbFull
 	}
 	return nil
 }
@@ -240,10 +240,10 @@ type RollbackRequest struct {
 	Bucket *string `protobuf:"bytes,1,req,name=bucket" json:"bucket,omitempty"`
 	// first as RollbackStart along with failoverTimestamp
 	// second as RollbackCommit along with failoverTimestamp and kvTimestamp
-	State             *RollbackState   `protobuf:"varint,2,req,name=state,enum=protobuf.RollbackState" json:"state,omitempty"`
-	FailoverTimestamp *BranchTimestamp `protobuf:"bytes,3,req,name=failoverTimestamp" json:"failoverTimestamp,omitempty"`
-	KvTimestamp       *BranchTimestamp `protobuf:"bytes,4,opt,name=kvTimestamp" json:"kvTimestamp,omitempty"`
-	XXX_unrecognized  []byte           `json:"-"`
+	State             *RollbackState `protobuf:"varint,2,req,name=state,enum=protobuf.RollbackState" json:"state,omitempty"`
+	FailoverTimestamp *TsVbuuid      `protobuf:"bytes,3,req,name=failoverTimestamp" json:"failoverTimestamp,omitempty"`
+	KvTimestamp       *TsVbuuid      `protobuf:"bytes,4,opt,name=kvTimestamp" json:"kvTimestamp,omitempty"`
+	XXX_unrecognized  []byte         `json:"-"`
 }
 
 func (m *RollbackRequest) Reset()         { *m = RollbackRequest{} }
@@ -264,14 +264,14 @@ func (m *RollbackRequest) GetState() RollbackState {
 	return RollbackState_RollbackStart
 }
 
-func (m *RollbackRequest) GetFailoverTimestamp() *BranchTimestamp {
+func (m *RollbackRequest) GetFailoverTimestamp() *TsVbuuid {
 	if m != nil {
 		return m.FailoverTimestamp
 	}
 	return nil
 }
 
-func (m *RollbackRequest) GetKvTimestamp() *BranchTimestamp {
+func (m *RollbackRequest) GetKvTimestamp() *TsVbuuid {
 	if m != nil {
 		return m.KvTimestamp
 	}
@@ -282,9 +282,9 @@ type RollbackResponse struct {
 	Bucket *string `protobuf:"bytes,1,req,name=bucket" json:"bucket,omitempty"`
 	// first as RollbackPrepare with snapshotTimestamp
 	// second as RollbackDone
-	State             *RollbackState   `protobuf:"varint,2,req,name=state,enum=protobuf.RollbackState" json:"state,omitempty"`
-	SnapshotTimestamp *BranchTimestamp `protobuf:"bytes,3,opt,name=snapshotTimestamp" json:"snapshotTimestamp,omitempty"`
-	XXX_unrecognized  []byte           `json:"-"`
+	State             *RollbackState `protobuf:"varint,2,req,name=state,enum=protobuf.RollbackState" json:"state,omitempty"`
+	SnapshotTimestamp *TsVbuuid      `protobuf:"bytes,3,opt,name=snapshotTimestamp" json:"snapshotTimestamp,omitempty"`
+	XXX_unrecognized  []byte         `json:"-"`
 }
 
 func (m *RollbackResponse) Reset()         { *m = RollbackResponse{} }
@@ -305,7 +305,7 @@ func (m *RollbackResponse) GetState() RollbackState {
 	return RollbackState_RollbackStart
 }
 
-func (m *RollbackResponse) GetSnapshotTimestamp() *BranchTimestamp {
+func (m *RollbackResponse) GetSnapshotTimestamp() *TsVbuuid {
 	if m != nil {
 		return m.SnapshotTimestamp
 	}

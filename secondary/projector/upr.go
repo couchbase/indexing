@@ -4,10 +4,12 @@ package projector
 
 import (
 	"fmt"
+	"time"
+
 	mc "github.com/couchbase/gomemcached/client"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/protobuf"
 	"github.com/couchbaselabs/go-couchbase"
-	"time"
 )
 
 // FailoverLog for a single vbucket.
@@ -49,10 +51,10 @@ type KVFeeder interface {
 	// StartVbStreams starts new vbucket streams on this feed.
 	// Return failover-timestamp and kv-timestamp for the newly started
 	// vbucket streams.
-	StartVbStreams(restartTs *c.Timestamp) (failoverTs, kvTs *c.Timestamp, err error)
+	StartVbStreams(couchbase.FailoverLog, *protobuf.TsVbuuid) (failoverTs, kvTs *protobuf.TsVbuuid, err error)
 
 	// EndVbStreams ends an existing vbucket stream from this feed.
-	EndVbStreams(endTs *c.Timestamp) (err error)
+	EndVbStreams(endTs *protobuf.TsVbuuid) (err error)
 
 	// CloseKVFeed ends all active streams on this feed and free its resources.
 	CloseKVFeed() (err error)
@@ -83,15 +85,17 @@ func (kv *kvUpr) GetChannel() (mutch <-chan *mc.UprEvent) {
 	return kv.uprFeed.C
 }
 
-func (kv *kvUpr) StartVbStreams(restartTs *c.Timestamp) (failoverTs, kvTs *c.Timestamp, err error) {
-	if failoverTs, err = computeFailoverTs(kv.bucket, restartTs); err != nil {
-		return nil, nil, err
-	}
-	for i, vbno := range restartTs.Vbnos {
+func (kv *kvUpr) StartVbStreams(
+	flogs couchbase.FailoverLog,
+	restartTs *protobuf.TsVbuuid) (failoverTs, kvTs *protobuf.TsVbuuid, err error) {
+
+	failoverTs = restartTs.ComputeFailoverTs(flogs)
+
+	for i, vbno := range c.Vbno32to16(restartTs.Vbnos) {
 		snapshots := restartTs.Snapshots
 		flags, vbuuid := uint32(0), restartTs.Vbuuids[i]
 		start, end := restartTs.Seqnos[i], uint64(0xFFFFFFFFFFFFFFFF)
-		snapStart, snapEnd := snapshots[i][0], snapshots[i][1]
+		snapStart, snapEnd := snapshots[i].GetStart(), snapshots[i].GetEnd()
 		err = kv.uprFeed.UprRequestStream(
 			vbno, flags, vbuuid, start, end, snapStart, snapEnd)
 		if err != nil {
@@ -102,42 +106,10 @@ func (kv *kvUpr) StartVbStreams(restartTs *c.Timestamp) (failoverTs, kvTs *c.Tim
 	return failoverTs, restartTs, nil
 }
 
-func (kv *kvUpr) EndVbStreams(endTs *c.Timestamp) (err error) {
+func (kv *kvUpr) EndVbStreams(endTs *protobuf.TsVbuuid) (err error) {
 	return
 }
 
 func (kv *kvUpr) CloseKVFeed() (err error) {
 	return nil
-}
-
-func computeFailoverTs(
-	bucket *couchbase.Bucket,
-	restartTs *c.Timestamp) (failoverTs *c.Timestamp, err error) {
-
-	flogs, err := bucket.GetFailoverLogs(restartTs.Vbnos)
-	if err != nil {
-		return nil, err
-	}
-
-	failoverTs = c.NewTimestamp(restartTs.Bucket, cap(restartTs.Vbnos))
-
-	for vbno, flog := range flogs {
-		x := flog[len(flog)-1]
-		failoverTs.Append(vbno, x[0], x[1], 0, 0)
-	}
-	return failoverTs, nil
-}
-
-func computeRestartTs(
-	flogs map[uint16][][2]uint64, hwTs *c.Timestamp) (restartTs *c.Timestamp) {
-
-	restartTs = c.NewTimestamp(hwTs.Bucket, cap(hwTs.Vbnos))
-	i := 0
-	for vbno, flog := range flogs {
-		x := flog[len(flog)-1]
-		s := hwTs.Snapshots[i]
-		restartTs.Append(vbno, x[0], s[0], s[0], s[1])
-		i++
-	}
-	return restartTs
 }

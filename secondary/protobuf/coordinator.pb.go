@@ -217,7 +217,7 @@ func (m *IndexerReadyRequest) GetIndexUuids() []uint64 {
 // Posted by indexer periodically to Coordinator, updating its high-watermark
 // timestamp. Error message will be sent as response.
 type NewHWTimestampRequest struct {
-	BranchTimestamp  []string `protobuf:"bytes,1,rep" json:"BranchTimestamp,omitempty"`
+	TsVbFull         []string `protobuf:"bytes,1,rep" json:"TsVbFull,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -225,9 +225,9 @@ func (m *NewHWTimestampRequest) Reset()         { *m = NewHWTimestampRequest{} }
 func (m *NewHWTimestampRequest) String() string { return proto.CompactTextString(m) }
 func (*NewHWTimestampRequest) ProtoMessage()    {}
 
-func (m *NewHWTimestampRequest) GetBranchTimestamp() []string {
+func (m *NewHWTimestampRequest) GetTsVbFull() []string {
 	if m != nil {
-		return m.BranchTimestamp
+		return m.TsVbFull
 	}
 	return nil
 }

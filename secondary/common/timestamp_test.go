@@ -10,7 +10,7 @@ import (
 )
 
 func TestSortTimestamp(t *testing.T) {
-	tsRef := NewTimestamp("default", 1024)
+	tsRef := NewTsVbuuid("default", 1024)
 	tsRef.Vbnos = []uint16{11, 18, 21, 29, 41, 49, 62}
 	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
 	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
@@ -19,7 +19,7 @@ func TestSortTimestamp(t *testing.T) {
 		{104, 204}, {105, 205}, {106, 206},
 	}
 
-	ts := NewTimestamp("default", 1024)
+	ts := NewTsVbuuid("default", 1024)
 	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
@@ -38,7 +38,7 @@ func TestSortTimestamp(t *testing.T) {
 }
 
 func TestSelectByVbuckets(t *testing.T) {
-	ts := NewTimestamp("default", 1024)
+	ts := NewTsVbuuid("default", 1024)
 	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
@@ -63,7 +63,7 @@ func TestSelectByVbuckets(t *testing.T) {
 }
 
 func TestFilterByVbuckets(t *testing.T) {
-	ts := NewTimestamp("default", 1024)
+	ts := NewTsVbuuid("default", 1024)
 	ts.Vbnos = []uint16{11, 18, 21, 49, 62}
 	ts.Seqnos = []uint64{1, 2, 3, 6, 7}
 	ts.Vbuuids = []uint64{10, 20, 30, 60, 70}
@@ -88,7 +88,7 @@ func TestFilterByVbuckets(t *testing.T) {
 }
 
 func TestCompareVbuckets(t *testing.T) {
-	tsRef := NewTimestamp("default", 1024)
+	tsRef := NewTsVbuuid("default", 1024)
 	tsRef.Vbnos = []uint16{11, 18, 21, 29, 41, 49, 62}
 	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
 	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
@@ -97,7 +97,7 @@ func TestCompareVbuckets(t *testing.T) {
 		{104, 204}, {105, 205}, {106, 206},
 	}
 
-	ts := NewTimestamp("default", 1024)
+	ts := NewTsVbuuid("default", 1024)
 	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
@@ -116,7 +116,7 @@ func TestCompareVbuckets(t *testing.T) {
 }
 
 func TestCompareVbuuids(t *testing.T) {
-	tsRef := NewTimestamp("default", 1024)
+	tsRef := NewTsVbuuid("default", 1024)
 	tsRef.Vbnos = []uint16{11, 18, 21, 29, 41, 49, 62}
 	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
 	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
@@ -125,7 +125,7 @@ func TestCompareVbuuids(t *testing.T) {
 		{104, 204}, {105, 205}, {106, 206},
 	}
 
-	ts := NewTimestamp("default", 1024)
+	ts := NewTsVbuuid("default", 1024)
 	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
@@ -149,7 +149,7 @@ func TestCompareVbuuids(t *testing.T) {
 }
 
 func TestAsRecent(t *testing.T) {
-	tsRef := NewTimestamp("default", 1024)
+	tsRef := NewTsVbuuid("default", 1024)
 	tsRef.Vbnos = []uint16{11, 18, 21, 29, 41, 49, 62}
 	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
 	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
@@ -158,7 +158,7 @@ func TestAsRecent(t *testing.T) {
 		{104, 204}, {105, 205}, {106, 206},
 	}
 
-	ts := NewTimestamp("default", 1024)
+	ts := NewTsVbuuid("default", 1024)
 	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
@@ -182,13 +182,13 @@ func TestAsRecent(t *testing.T) {
 }
 
 func TestUnionTimestamp(t *testing.T) {
-	ts1 := NewTimestamp("default", 1024)
+	ts1 := NewTsVbuuid("default", 1024)
 	ts1.Vbnos = []uint16{11, 18, 22}
 	ts1.Seqnos = []uint64{1, 2, 4}
 	ts1.Vbuuids = []uint64{10, 20, 31}
 	ts1.Snapshots = [][2]uint64{{1000, 2000}, {1001, 2001}, {1002, 2002}}
 
-	ts2 := NewTimestamp("default", 1024)
+	ts2 := NewTsVbuuid("default", 1024)
 	ts2.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
 	ts2.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
 	ts2.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
@@ -197,7 +197,7 @@ func TestUnionTimestamp(t *testing.T) {
 		{105, 205}, {104, 204}, {106, 206},
 	}
 
-	tsref := NewTimestamp("default", 1024)
+	tsref := NewTsVbuuid("default", 1024)
 	tsref.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62, 22}
 	tsref.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7, 4}
 	tsref.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70, 31}
@@ -214,7 +214,7 @@ func TestUnionTimestamp(t *testing.T) {
 }
 
 func BenchmarkSortTimestamp(b *testing.B) {
-	ts := NewTimestamp("default", 1024)
+	ts := NewTsVbuuid("default", 1024)
 	for i := uint64(1); i < uint64(512); i += 2 {
 		ts.Vbnos = append(ts.Vbnos, uint16(i))
 		ts.Seqnos = append(ts.Seqnos, i)
@@ -233,7 +233,7 @@ func BenchmarkSortTimestamp(b *testing.B) {
 }
 
 func BenchmarkSelectByVbuckets(b *testing.B) {
-	ts := NewTimestamp("default", 1024)
+	ts := NewTsVbuuid("default", 1024)
 	for i := uint64(1); i < uint64(1024); i++ {
 		ts.Vbnos = append(ts.Vbnos, uint16(i))
 		ts.Seqnos = append(ts.Seqnos, 1000000+i)
@@ -247,7 +247,7 @@ func BenchmarkSelectByVbuckets(b *testing.B) {
 }
 
 func BenchmarkFilterByVbuckets(b *testing.B) {
-	ts := NewTimestamp("default", 1024)
+	ts := NewTsVbuuid("default", 1024)
 	for i := uint64(1); i < uint64(1024); i++ {
 		ts.Vbnos = append(ts.Vbnos, uint16(i))
 		ts.Seqnos = append(ts.Seqnos, 1000000+i)
@@ -262,7 +262,7 @@ func BenchmarkFilterByVbuckets(b *testing.B) {
 }
 
 func BenchmarkCompareVbuckets(b *testing.B) {
-	ts1 := NewTimestamp("default", 1024)
+	ts1 := NewTsVbuuid("default", 1024)
 	for i := uint64(1); i < uint64(1024); i++ {
 		ts1.Vbnos = append(ts1.Vbnos, uint16(i))
 		ts1.Seqnos = append(ts1.Seqnos, 1000000+i)
@@ -270,7 +270,7 @@ func BenchmarkCompareVbuckets(b *testing.B) {
 		ts1.Snapshots = append(ts1.Snapshots, [2]uint64{i, i + 10})
 	}
 
-	ts2 := NewTimestamp("default", 1024)
+	ts2 := NewTsVbuuid("default", 1024)
 	for i := uint64(1); i < uint64(1024); i++ {
 		ts2.Vbnos = append(ts2.Vbnos, uint16(i))
 		ts2.Seqnos = append(ts2.Seqnos, 1000000+i)
@@ -284,7 +284,7 @@ func BenchmarkCompareVbuckets(b *testing.B) {
 }
 
 func BenchmarkCompareVbuuuids(b *testing.B) {
-	ts1 := NewTimestamp("default", 1024)
+	ts1 := NewTsVbuuid("default", 1024)
 	for i := uint64(1); i < uint64(1024); i++ {
 		ts1.Vbnos = append(ts1.Vbnos, uint16(i))
 		ts1.Seqnos = append(ts1.Seqnos, uint64(1000000+i))
@@ -292,7 +292,7 @@ func BenchmarkCompareVbuuuids(b *testing.B) {
 		ts1.Snapshots = append(ts1.Snapshots, [2]uint64{i, i + 10})
 	}
 
-	ts2 := NewTimestamp("default", 1024)
+	ts2 := NewTsVbuuid("default", 1024)
 	for i := uint64(1); i < uint64(1024); i++ {
 		ts2.Vbnos = append(ts2.Vbnos, uint16(i))
 		ts2.Seqnos = append(ts2.Seqnos, uint64(1000000+i))
@@ -306,14 +306,14 @@ func BenchmarkCompareVbuuuids(b *testing.B) {
 }
 
 func BenchmarkUnionTimestamp(b *testing.B) {
-	ts1 := NewTimestamp("default", 1024)
+	ts1 := NewTsVbuuid("default", 1024)
 	for i := uint64(1); i < uint64(1024); i++ {
 		ts1.Vbnos = append(ts1.Vbnos, uint16(i))
 		ts1.Seqnos = append(ts1.Seqnos, uint64(1000000+i))
 		ts1.Vbuuids = append(ts1.Vbuuids, uint64(2000000+i))
 		ts1.Snapshots = append(ts1.Snapshots, [2]uint64{i, i + 10})
 	}
-	ts2 := NewTimestamp("default", 1024)
+	ts2 := NewTsVbuuid("default", 1024)
 	for i := uint64(1); i < uint64(1024); i++ {
 		ts2.Vbnos = append(ts2.Vbnos, uint16(i))
 		ts2.Seqnos = append(ts2.Seqnos, uint64(1000000+i))
@@ -326,7 +326,7 @@ func BenchmarkUnionTimestamp(b *testing.B) {
 	}
 }
 
-func verifyTimestamp(ts, ref *Timestamp) (err error) {
+func verifyTimestamp(ts, ref *TsVbuuid) (err error) {
 	sort.Sort(ts)
 	sort.Sort(ref)
 	for i := range ref.Vbnos {

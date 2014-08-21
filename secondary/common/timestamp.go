@@ -1,4 +1,4 @@
-// defines Timestamp type to interface with go-coubhbase and also provides
+// defines timestamp types to interface with go-coubhbase and also provides
 // functions for set-operations on time-stamps.
 
 // TODO: move file to go-couchbase, if go-couchbase can only accept
@@ -11,8 +11,22 @@ import (
 	"sort"
 )
 
-// Timestamp is logical clock to coordinate secondary index cluster.
-type Timestamp struct {
+// TsVb is logical clock for a subset of vbuckets.
+type TsVb struct {
+	Bucket string
+	Vbnos  []uint16
+	Seqnos []uint64
+}
+
+// TsVbFull is logical clock for full set of vbuckets.
+type TsVbFull struct {
+	Bucket string
+	Seqnos []uint64
+}
+
+// TsVbuuid is logical clock for a subset of vbuckets along with branch value
+// and last seen snapshot.
+type TsVbuuid struct {
 	Bucket    string
 	Vbnos     []uint16
 	Seqnos    []uint64
@@ -20,9 +34,9 @@ type Timestamp struct {
 	Snapshots [][2]uint64
 }
 
-// NewTimestamp returns reference to new instance of Timestamp.
-func NewTimestamp(bucket string, maxVbuckets int) *Timestamp {
-	return &Timestamp{
+// NewTsVbuuid returns reference to new instance of TsVbuuid.
+func NewTsVbuuid(bucket string, maxVbuckets int) *TsVbuuid {
+	return &TsVbuuid{
 		Bucket:    bucket,
 		Vbnos:     make([]uint16, 0, maxVbuckets),
 		Seqnos:    make([]uint64, 0, maxVbuckets),
@@ -31,23 +45,14 @@ func NewTimestamp(bucket string, maxVbuckets int) *Timestamp {
 	}
 }
 
-// Append adds a new set of vbno, seqno, vbuuid
-func (ts *Timestamp) Append(vbno uint16, vbuuid, seqno, start, end uint64) *Timestamp {
-	ts.Vbnos = append(ts.Vbnos, vbno)
-	ts.Vbuuids = append(ts.Vbuuids, vbuuid)
-	ts.Seqnos = append(ts.Seqnos, seqno)
-	ts.Snapshots = append(ts.Snapshots, [2]uint64{start, end})
-	return ts
-}
-
 // SelectByVbuckets will select vbuckets from `ts` for a subset of `vbuckets`,
 // both `ts` and `vbuckets` are expected to be pre-sorted.
-func (ts *Timestamp) SelectByVbuckets(vbuckets []uint16) *Timestamp {
+func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
 	if ts == nil || vbuckets == nil {
 		return ts
 	}
 
-	newts := NewTimestamp(ts.Bucket, 1024) // TODO: avoid magic numbers
+	newts := NewTsVbuuid(ts.Bucket, 1024) // TODO: avoid magic numbers
 	if len(ts.Vbnos) == 0 {
 		return newts
 	}
@@ -69,12 +74,12 @@ func (ts *Timestamp) SelectByVbuckets(vbuckets []uint16) *Timestamp {
 
 // FilterByVbuckets will exclude `vbuckets` from `ts`, both `ts` and `vbuckets`
 // are expected to be pre-sorted. TODO: Write unit test case.
-func (ts *Timestamp) FilterByVbuckets(vbuckets []uint16) *Timestamp {
+func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
 	if ts == nil || vbuckets == nil {
 		return ts
 	}
 
-	newts := NewTimestamp(ts.Bucket, MaxVbuckets) // TODO: avoid magic numbers
+	newts := NewTsVbuuid(ts.Bucket, MaxVbuckets) // TODO: avoid magic numbers
 	if len(ts.Vbnos) == 0 {
 		return newts
 	}
@@ -96,7 +101,7 @@ func (ts *Timestamp) FilterByVbuckets(vbuckets []uint16) *Timestamp {
 }
 
 // CompareVbuckets will compare two timestamps for its bucket and vbuckets
-func (ts *Timestamp) CompareVbuckets(other *Timestamp) bool {
+func (ts *TsVbuuid) CompareVbuckets(other *TsVbuuid) bool {
 	if ts == nil || other == nil {
 		return false
 	}
@@ -114,7 +119,7 @@ func (ts *Timestamp) CompareVbuckets(other *Timestamp) bool {
 }
 
 // CompareVbuuids will compare two timestamps for its bucket and vbuuids
-func (ts *Timestamp) CompareVbuuids(other *Timestamp) bool {
+func (ts *TsVbuuid) CompareVbuuids(other *TsVbuuid) bool {
 	if ts == nil || other == nil {
 		return false
 	}
@@ -135,7 +140,7 @@ func (ts *Timestamp) CompareVbuuids(other *Timestamp) bool {
 
 // AsRecent will check whether timestamp `ts` is atleast as recent as
 // timestamp `other`.
-func (ts *Timestamp) AsRecent(other *Timestamp) bool {
+func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
 	if ts == nil || other == nil {
 		return false
 	}
@@ -154,11 +159,11 @@ func (ts *Timestamp) AsRecent(other *Timestamp) bool {
 
 // Union will return a union set of timestamps based on Vbuckets. Duplicate
 // vbucket entries in `other` timestamp will be skipped.
-func (ts *Timestamp) Union(other *Timestamp) *Timestamp {
+func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 	if ts == nil || other == nil {
 		return ts
 	}
-	newts := NewTimestamp(ts.Bucket, MaxVbuckets)
+	newts := NewTsVbuuid(ts.Bucket, MaxVbuckets)
 
 	// copy from other
 	newts.Vbnos = append(newts.Vbnos, other.Vbnos...)
@@ -187,7 +192,7 @@ func (ts *Timestamp) Union(other *Timestamp) *Timestamp {
 
 // Unions will return a union set of all timestamps arguments. First vbucket
 // entry from the list of timestamps will be picked and while rest are skipped.
-func (ts *Timestamp) Unions(timestamps ...*Timestamp) *Timestamp {
+func (ts *TsVbuuid) Unions(timestamps ...*TsVbuuid) *TsVbuuid {
 	for _, other := range timestamps {
 		ts = ts.Union(other)
 	}
@@ -195,15 +200,15 @@ func (ts *Timestamp) Unions(timestamps ...*Timestamp) *Timestamp {
 }
 
 // sort timestamp
-func (ts *Timestamp) Len() int {
+func (ts *TsVbuuid) Len() int {
 	return len(ts.Vbnos)
 }
 
-func (ts *Timestamp) Less(i, j int) bool {
+func (ts *TsVbuuid) Less(i, j int) bool {
 	return ts.Vbnos[i] < ts.Vbnos[j]
 }
 
-func (ts *Timestamp) Swap(i, j int) {
+func (ts *TsVbuuid) Swap(i, j int) {
 	ts.Vbnos[i], ts.Vbnos[j] = ts.Vbnos[j], ts.Vbnos[i]
 	ts.Seqnos[i], ts.Seqnos[j] = ts.Seqnos[j], ts.Seqnos[i]
 	ts.Vbuuids[i], ts.Vbuuids[j] = ts.Vbuuids[j], ts.Vbuuids[i]

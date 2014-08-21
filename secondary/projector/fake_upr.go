@@ -3,6 +3,7 @@ package projector
 import (
 	mc "github.com/couchbase/gomemcached/client"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/protobuf"
 	"github.com/couchbaselabs/go-couchbase"
 )
 
@@ -81,8 +82,11 @@ func (b *FakeBucket) GetChannel() <-chan *mc.UprEvent {
 }
 
 // StartVbStreams is method receiver for KVFeeder interface
-func (b *FakeBucket) StartVbStreams(restartTs *c.Timestamp) (failoverTs, kvTs *c.Timestamp, err error) {
-	for i, vbno := range restartTs.Vbnos {
+func (b *FakeBucket) StartVbStreams(
+	flogs couchbase.FailoverLog,
+	restartTs *protobuf.TsVbuuid) (failoverTs, kvTs *protobuf.TsVbuuid, err error) {
+
+	for i, vbno := range c.Vbno32to16(restartTs.Vbnos) {
 		if stream, ok := b.streams[vbno]; ok {
 			close(stream.killch)
 		}
@@ -98,8 +102,8 @@ func (b *FakeBucket) StartVbStreams(restartTs *c.Timestamp) (failoverTs, kvTs *c
 }
 
 // EndVbStreams is method receiver for KVFeeder interface
-func (b *FakeBucket) EndVbStreams(endTs *c.Timestamp) (err error) {
-	for _, vbno := range endTs.Vbnos {
+func (b *FakeBucket) EndVbStreams(endTs *protobuf.TsVbuuid) (err error) {
+	for _, vbno := range c.Vbno32to16(endTs.Vbnos) {
 		if stream, ok := b.streams[vbno]; ok {
 			close(stream.killch)
 			delete(b.streams, vbno)

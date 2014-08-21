@@ -46,6 +46,7 @@ import (
 	"fmt"
 	mc "github.com/couchbase/gomemcached/client"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
 // error codes
@@ -153,7 +154,7 @@ const (
 func (kvfeed *KVFeed) RequestFeed(
 	req RequestReader,
 	endpoints map[string]*Endpoint,
-	engines map[uint64]*Engine) (failoverTs, kvTs *c.Timestamp, err error) {
+	engines map[uint64]*Engine) (failoverTs, kvTs *protobuf.TsVbuuid, err error) {
 
 	if req == nil {
 		return nil, nil, ErrorArgument
@@ -164,7 +165,7 @@ func (kvfeed *KVFeed) RequestFeed(
 	if err = c.OpError(err, resp, 2); err != nil {
 		return nil, nil, err
 	}
-	failoverTs, kvTs = resp[0].(*c.Timestamp), resp[1].(*c.Timestamp)
+	failoverTs, kvTs = resp[0].(*protobuf.TsVbuuid), resp[1].(*protobuf.TsVbuuid)
 	return failoverTs, kvTs, nil
 }
 
@@ -241,8 +242,7 @@ loop:
 }
 
 // start, restart or shutdown streams
-func (kvfeed *KVFeed) requestFeed(req RequestReader) (failTs, kvTs *c.Timestamp, err error) {
-
+func (kvfeed *KVFeed) requestFeed(req RequestReader) (failTs, kvTs *protobuf.TsVbuuid, err error) {
 	prefix := kvfeed.logPrefix
 
 	c.Debugf("%v updating feed ...", kvfeed.logPrefix)
@@ -276,10 +276,15 @@ func (kvfeed *KVFeed) requestFeed(req RequestReader) (failTs, kvTs *c.Timestamp,
 	c.Debugf("start: %v restart: %v shutdown: %v\n",
 		req.IsStart(), req.IsRestart(), req.IsShutdown())
 
+	flogs, err := kvfeed.bucket.GetFailoverLogs(c.Vbno32to16(ts.Vbnos))
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// execute the request
 	if req.IsStart() { // start
 		c.Debugf("%v start-timestamp %#v\n", prefix, ts)
-		if failTs, kvTs, err = feeder.StartVbStreams(ts); err != nil {
+		if failTs, kvTs, err = feeder.StartVbStreams(flogs, ts); err != nil {
 			c.Errorf("%v feeder.StartVbStreams() %v", prefix, err)
 		}
 
@@ -287,7 +292,7 @@ func (kvfeed *KVFeed) requestFeed(req RequestReader) (failTs, kvTs *c.Timestamp,
 		c.Debugf("%v shutdown-timestamp %#v\n", prefix, ts)
 		if err = feeder.EndVbStreams(ts); err == nil {
 			c.Debugf("%v restart-timestamp %#v\n", prefix, ts)
-			if failTs, kvTs, err = feeder.StartVbStreams(ts); err != nil {
+			if failTs, kvTs, err = feeder.StartVbStreams(flogs, ts); err != nil {
 				c.Errorf("%v feeder.StartVbStreams() %v", prefix, err)
 			}
 		} else {

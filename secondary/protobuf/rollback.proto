@@ -31,9 +31,9 @@ enum RollbackState {
 // Posted by Coordinator to its replica during the process of rollback. Error
 // message will be sent back as reponse.
 message UpdateRollbackContextRequest {
-    required string          bucket            = 1;
-    required RollbackState   state             = 2;
-    required BranchTimestamp failoverTimestamp = 3;
-    required BranchTimestamp restartTimestamp  = 4;
-    required BranchTimestamp kvTimestamp       = 5;
+    required string        bucket            = 1;
+    required RollbackState state             = 2;
+    required TsVbuuid      failoverTimestamp = 3;
+    required TsVbuuid      restartTimestamp  = 4;
+    required TsVbuuid      kvTimestamp       = 5;
 }

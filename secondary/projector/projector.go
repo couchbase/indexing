@@ -64,7 +64,9 @@ package projector
 import (
 	"errors"
 	"fmt"
+
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/protobuf"
 	"github.com/couchbaselabs/go-couchbase"
 )
 
@@ -113,7 +115,7 @@ type RequestReader interface {
 
 	// RestartTimestamp specifies the a list of vbuckets, its corresponding
 	// vbuuid and sequence no, for specified bucket.
-	RestartTimestamp(bucket string) *c.Timestamp
+	RestartTimestamp(bucket string) *protobuf.TsVbuuid
 }
 
 // Subscriber interface abstracts evaluators and routers that are implemented

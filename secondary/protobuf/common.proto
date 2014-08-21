@@ -18,16 +18,21 @@ message Snapshot {
 }
 
 // logical clock
-message Timestamp {
+message TsVb {
     required string bucket = 1; // bucket name
-    repeated uint32 vbnos  = 2; // list of vbucket numbers
+    repeated uint32 vbnos  = 2; // a subset of vbucket-numbers
     repeated uint64 seqnos = 3; // corresponding sequence number for each vbucket listed above
 }
 
-// logical clock that also associate a vbucket branch for the specified sequence number
-message BranchTimestamp {
+message TsVbFull {
+    required string bucket = 1; // bucket name
+    repeated uint64 seqnos = 2; // sequence numbers for full set of vbuckets
+}
+
+// logical clock that will be used to interface with projector.
+message TsVbuuid {
     required string   bucket    = 1; // bucket name
-    repeated uint32   vbnos     = 2; // list of vbucket numbers
+    repeated uint32   vbnos     = 2; // subset of vbucket numbers
     repeated uint64   seqnos    = 3; // corresponding sequence number for each vbucket listed above
     repeated uint64   vbuuids   = 4; // corresponding vbuuid for each vbucket listed above
     repeated Snapshot snapshots = 5; // [][2]uint64 - snapshot of {start, end}
@@ -57,10 +62,10 @@ message FailoverLog {
 
 // Periodic Heartbeat from indexer to Coordinator, for each bucket.
 message HeartBeat {
-    required Timestamp hwTimestamp         = 1; // tip of the mutation queue
-    required uint32    lastPersistenceHash = 2; // tip of the storage
-    required uint32    lastStabilityHash   = 3; // tip of the snapshot
-    required uint32    freeQueue           = 4; // Mutation Queue Size
+    required TsVbFull hwTimestamp         = 1; // tip of the mutation queue
+    required uint32   lastPersistenceHash = 2; // tip of the storage
+    required uint32   lastStabilityHash   = 3; // tip of the snapshot
+    required uint32   freeQueue           = 4; // Mutation Queue Size
 }
 
 // Version information for Coordinator's StateContext

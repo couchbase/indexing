@@ -14,7 +14,6 @@ message NewCoordinatorRequest {
     required string connectionAddr = 1; // new coordinator's connection address
 }
 
-
 // Requested by Coordinator to Replica to fetch replica's StateContext version.
 message StateContextCasRequest {
 }
@@ -73,7 +72,7 @@ message IndexerReadyRequest {
 // Posted by indexer periodically to Coordinator, updating its high-watermark
 // timestamp. Error message will be sent as response.
 message NewHWTimestampRequest {
-    repeated string BranchTimestamp = 1;
+    repeated string TsVbFull = 1;
 }
 
 

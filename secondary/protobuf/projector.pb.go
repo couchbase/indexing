@@ -134,16 +134,16 @@ func (m *FailoverLogResponse) GetErr() *Error {
 }
 
 // Requested by Coordinator or indexer to start a new mutation stream.
-// BranchTimestamp.Vbnos should be in sort order
+// TsVbuuid. Vbnos should be in sort order
 //
 // start,
 //      new-set of buckets, valid subset of restart-timestamps and engines.
 type MutationStreamRequest struct {
-	Topic             *string            `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
-	Flag              *uint32            `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
-	Pools             []string           `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
-	Buckets           []string           `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
-	RestartTimestamps []*BranchTimestamp `protobuf:"bytes,5,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
+	Topic             *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	Flag              *uint32     `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
+	Pools             []string    `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
+	Buckets           []string    `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
+	RestartTimestamps []*TsVbuuid `protobuf:"bytes,5,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
 	// list of index applicable for this stream, optional as well
 	Instances        []*IndexInst `protobuf:"bytes,6,rep,name=instances" json:"instances,omitempty"`
 	XXX_unrecognized []byte       `json:"-"`
@@ -181,7 +181,7 @@ func (m *MutationStreamRequest) GetBuckets() []string {
 	return nil
 }
 
-func (m *MutationStreamRequest) GetRestartTimestamps() []*BranchTimestamp {
+func (m *MutationStreamRequest) GetRestartTimestamps() []*TsVbuuid {
 	if m != nil {
 		return m.RestartTimestamps
 	}
@@ -202,11 +202,11 @@ type MutationStreamResponse struct {
 	Buckets []string `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
 	// per bucket failover-timestamp, kv-timestamp for all active vbuckets,
 	// for each bucket, after executing the request.
-	FailoverTimestamps []*BranchTimestamp `protobuf:"bytes,5,rep,name=failoverTimestamps" json:"failoverTimestamps,omitempty"`
-	KvTimestamps       []*BranchTimestamp `protobuf:"bytes,6,rep,name=kvTimestamps" json:"kvTimestamps,omitempty"`
-	IndexUuids         []uint64           `protobuf:"varint,7,rep,name=indexUuids" json:"indexUuids,omitempty"`
-	Err                *Error             `protobuf:"bytes,8,opt,name=err" json:"err,omitempty"`
-	XXX_unrecognized   []byte             `json:"-"`
+	FailoverTimestamps []*TsVbuuid `protobuf:"bytes,5,rep,name=failoverTimestamps" json:"failoverTimestamps,omitempty"`
+	KvTimestamps       []*TsVbuuid `protobuf:"bytes,6,rep,name=kvTimestamps" json:"kvTimestamps,omitempty"`
+	IndexUuids         []uint64    `protobuf:"varint,7,rep,name=indexUuids" json:"indexUuids,omitempty"`
+	Err                *Error      `protobuf:"bytes,8,opt,name=err" json:"err,omitempty"`
+	XXX_unrecognized   []byte      `json:"-"`
 }
 
 func (m *MutationStreamResponse) Reset()         { *m = MutationStreamResponse{} }
@@ -241,14 +241,14 @@ func (m *MutationStreamResponse) GetBuckets() []string {
 	return nil
 }
 
-func (m *MutationStreamResponse) GetFailoverTimestamps() []*BranchTimestamp {
+func (m *MutationStreamResponse) GetFailoverTimestamps() []*TsVbuuid {
 	if m != nil {
 		return m.FailoverTimestamps
 	}
 	return nil
 }
 
-func (m *MutationStreamResponse) GetKvTimestamps() []*BranchTimestamp {
+func (m *MutationStreamResponse) GetKvTimestamps() []*TsVbuuid {
 	if m != nil {
 		return m.KvTimestamps
 	}
@@ -287,11 +287,11 @@ func (m *MutationStreamResponse) GetErr() *Error {
 // restart/shutdown flags are mutually exclusive, likewise,
 // add-buckets/del-buckets flags are mutually exclusive.
 type UpdateMutationStreamRequest struct {
-	Topic             *string            `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
-	Flag              *uint32            `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
-	Pools             []string           `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
-	Buckets           []string           `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
-	RestartTimestamps []*BranchTimestamp `protobuf:"bytes,5,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
+	Topic             *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	Flag              *uint32     `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
+	Pools             []string    `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
+	Buckets           []string    `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
+	RestartTimestamps []*TsVbuuid `protobuf:"bytes,5,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
 	// list of index applicable for this stream, optional as well
 	Instances        []*IndexInst `protobuf:"bytes,6,rep,name=instances" json:"instances,omitempty"`
 	XXX_unrecognized []byte       `json:"-"`
@@ -329,7 +329,7 @@ func (m *UpdateMutationStreamRequest) GetBuckets() []string {
 	return nil
 }
 
-func (m *UpdateMutationStreamRequest) GetRestartTimestamps() []*BranchTimestamp {
+func (m *UpdateMutationStreamRequest) GetRestartTimestamps() []*TsVbuuid {
 	if m != nil {
 		return m.RestartTimestamps
 	}
@@ -485,15 +485,15 @@ func (m *CurrentTimestampRequest) GetBuckets() []string {
 }
 
 type CurrentTimestampResponse struct {
-	CurrentTimestamps []*BranchTimestamp `protobuf:"bytes,1,rep,name=currentTimestamps" json:"currentTimestamps,omitempty"`
-	XXX_unrecognized  []byte             `json:"-"`
+	CurrentTimestamps []*TsVbuuid `protobuf:"bytes,1,rep,name=currentTimestamps" json:"currentTimestamps,omitempty"`
+	XXX_unrecognized  []byte      `json:"-"`
 }
 
 func (m *CurrentTimestampResponse) Reset()         { *m = CurrentTimestampResponse{} }
 func (m *CurrentTimestampResponse) String() string { return proto.CompactTextString(m) }
 func (*CurrentTimestampResponse) ProtoMessage()    {}
 
-func (m *CurrentTimestampResponse) GetCurrentTimestamps() []*BranchTimestamp {
+func (m *CurrentTimestampResponse) GetCurrentTimestamps() []*TsVbuuid {
 	if m != nil {
 		return m.CurrentTimestamps
 	}
