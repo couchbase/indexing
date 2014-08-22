@@ -32,8 +32,7 @@ func NewEngine(feed *Feed, uuid uint64, evaluator c.Evaluator, router c.Router) 
 
 // AddToEndpoints create KeyVersions for single `uuid`.
 func (engine *Engine) AddToEndpoints(
-	m *mc.UprEvent,
-	kvForEndpoints map[string]*c.KeyVersions) error {
+	m *mc.UprEvent, kvForEndpoints map[string]*c.KeyVersions) error {
 
 	uuid := engine.uuid
 	evaluator, router := engine.evaluator, engine.router

@@ -45,9 +45,10 @@ func N1QLTransform(document []byte, cExprs []interface{}) ([]byte, error) {
 	arrValue := make([]*dparval.Value, 0, len(cExprs))
 	for _, cExpr := range cExprs {
 		expr := cExpr.(ast.Expression)
+		// TODO: CBIDXT-133: needs to send nil secondary keys to indexer
 		key, err := expr.Evaluate(dparval.NewValueFromBytes(document))
 		if err != nil {
-			return nil, err
+			return nil, nil
 		}
 		arrValue = append(arrValue, key)
 	}
