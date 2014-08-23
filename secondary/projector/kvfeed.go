@@ -81,8 +81,6 @@ type KVFeed struct {
 }
 
 type activeVbucket struct {
-	bucket string
-	vbno   uint16
 	vbuuid uint64
 	seqno  uint64
 	vr     *VbucketRoutine
@@ -432,8 +430,6 @@ func (kvfeed *KVFeed) scatterMutation(
 				vr := NewVbucketRoutine(kvfeed, kvfeed.bucketn, vbno, m.VBuuid)
 				vr.UpdateEngines(endpoints, engines)
 				kvfeed.vbuckets[vbno] = &activeVbucket{
-					bucket: kvfeed.bucketn,
-					vbno:   vbno,
 					vbuuid: m.VBuuid,
 					seqno:  m.Seqno,
 					vr:     vr,
