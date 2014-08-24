@@ -9,6 +9,10 @@
 
 package common
 
+import (
+	"fmt"
+)
+
 type IndexKey [][]byte
 
 type IndexDefnId uint64
@@ -42,11 +46,16 @@ const (
 type IndexState int
 
 const (
-	INDEX_STATE_INITIAL IndexState = 0
-	INDEX_STATE_PENDING            = 1
-	INDEX_STATE_LOADING            = 2
-	INDEX_STATE_ACTIVE             = 3
-	INDEX_STATE_DELETED            = 4
+	//Create Index Processed
+	INDEX_STATE_CREATED IndexState = 0
+	//Initial Build In Progress
+	INDEX_STATE_INITIAL = 1
+	//Catchup In Progress
+	INDEX_STATE_CATCHUP = 2
+	//Maitenance Stream
+	INDEX_STATE_ACTIVE = 3
+	//Drop Index Processed
+	INDEX_STATE_DELETED = 4
 )
 
 //IndexDefn represents the index definition as specified
@@ -68,8 +77,60 @@ type IndexInst struct {
 	InstId IndexInstId
 	Defn   IndexDefn
 	State  IndexState
+	Stream StreamId
 	Pc     PartitionContainer
 }
 
 //IndexInstMap is a map from IndexInstanceId to IndexInstance
 type IndexInstMap map[IndexInstId]IndexInst
+
+func (idx IndexDefn) String() string {
+
+	str := fmt.Sprintf("DefnId: %v ", idx.DefnId)
+	str += fmt.Sprintf("Name: %v ", idx.Name)
+	str += fmt.Sprintf("Using: %v ", idx.Using)
+	str += fmt.Sprintf("Bucket: %v ", idx.Bucket)
+	str += fmt.Sprintf("IsPrimary: %v ", idx.IsPrimary)
+	str += fmt.Sprintf("\n\t\tOnExprList: %v ", idx.OnExprList)
+	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
+	str += fmt.Sprintf("PartitionKey: %v ", idx.PartitionKey)
+	return str
+
+}
+func (idx IndexInst) String() string {
+
+	str := "\n"
+	str += fmt.Sprintf("\tInstId: %v\n", idx.InstId)
+	str += fmt.Sprintf("\tDefn: %v\n", idx.Defn)
+	str += fmt.Sprintf("\tState: %v\n", idx.State)
+	str += fmt.Sprintf("\tStream: %v\n", idx.Stream)
+	str += fmt.Sprintf("\tPartitionContainer: %v", idx.Pc)
+	return str
+
+}
+
+//StreamId represents the possible mutation streams
+type StreamId uint16
+
+const (
+	MAINT_STREAM StreamId = iota
+	MAINT_CATCHUP_STREAM
+	INIT_STREAM
+	INIT_CATCHUP_STREAM
+	MAX_STREAMS
+)
+
+func (idx IndexInstMap) String() string {
+
+	str := "\n"
+	for i, index := range idx {
+		str += fmt.Sprintf("\tInstanceId: %v ", i)
+		str += fmt.Sprintf("Name: %v ", index.Defn.Name)
+		str += fmt.Sprintf("Bucket: %v ", index.Defn.Bucket)
+		str += fmt.Sprintf("State: %v ", index.State)
+		str += fmt.Sprintf("Stream: %v ", index.Stream)
+		str += "\n"
+	}
+	return str
+
+}

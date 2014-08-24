@@ -25,7 +25,7 @@ type Flusher interface {
 	//Any error condition is reported back on the MsgChannel.
 	//Caller can wait on MsgChannel after closing StopChannel
 	//to get notified about shutdown completion.
-	PersistUptoTS(q MutationQueue, streamId StreamId, indexInstMap common.IndexInstMap,
+	PersistUptoTS(q MutationQueue, streamId common.StreamId, indexInstMap common.IndexInstMap,
 		indexPartnMap IndexPartnMap, ts Timestamp, stopch StopChannel) MsgChannel
 
 	//DrainUptoTS will flush the mutation queue upto Timestamp
@@ -35,7 +35,7 @@ type Flusher interface {
 	//Any error condition is reported back on the MsgChannel.
 	//Caller can wait on MsgChannel after closing StopChannel
 	//to get notified about shutdown completion.
-	DrainUptoTS(q MutationQueue, streamId StreamId, ts Timestamp,
+	DrainUptoTS(q MutationQueue, streamId common.StreamId, ts Timestamp,
 		stopch StopChannel) MsgChannel
 
 	//Persist will keep flushing the mutation queue till caller closes
@@ -43,7 +43,7 @@ type Flusher interface {
 	//Any error condition is reported back on the MsgChannel.
 	//Caller can wait on MsgChannel after closing StopChannel to get
 	//notified about shutdown completion.
-	Persist(q MutationQueue, streamId StreamId, indexInstMap common.IndexInstMap,
+	Persist(q MutationQueue, streamId common.StreamId, indexInstMap common.IndexInstMap,
 		indexPartnMap IndexPartnMap, stopch StopChannel) MsgChannel
 
 	//Drain will keep flushing the mutation queue till caller closes
@@ -52,7 +52,7 @@ type Flusher interface {
 	//Any error condition is reported back on the MsgChannel.
 	//Caller can wait on MsgChannel after closing StopChannel to get
 	//notified about shutdown completion.
-	Drain(q MutationQueue, streamId StreamId, stopch StopChannel) MsgChannel
+	Drain(q MutationQueue, streamId common.StreamId, stopch StopChannel) MsgChannel
 
 	//IsTimestampGreaterThanQueueLWT checks if each Vbucket in the Queue
 	//has mutation with Seqno lower than the corresponding Seqno present
@@ -87,11 +87,11 @@ func NewFlusher() *flusher {
 //Any error condition is reported back on the MsgChannel.
 //Caller can wait on MsgChannel after closing StopChannel to get notified
 //about shutdown completion.
-func (f *flusher) PersistUptoTS(q MutationQueue, streamId StreamId,
+func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	ts Timestamp, stopch StopChannel) MsgChannel {
 
-	common.Infof("Flusher: PersistUptoTS StreamId %v Timestamp %v",
+	common.Infof("Flusher::PersistUptoTS StreamId: %v Timestamp: %v",
 		streamId, ts)
 
 	f.indexInstMap = indexInstMap
@@ -109,10 +109,10 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId StreamId,
 //Any error condition is reported back on the MsgChannel.
 //Caller can wait on MsgChannel after closing StopChannel to get notified
 //about shutdown completion.
-func (f *flusher) DrainUptoTS(q MutationQueue, streamId StreamId,
+func (f *flusher) DrainUptoTS(q MutationQueue, streamId common.StreamId,
 	ts Timestamp, stopch StopChannel) MsgChannel {
 
-	common.Infof("Flusher: DrainUptoTS StreamId %v Timestamp %v",
+	common.Infof("Flusher::DrainUptoTS StreamId: %v Timestamp: %v",
 		streamId, ts)
 
 	msgch := make(MsgChannel)
@@ -128,11 +128,11 @@ func (f *flusher) DrainUptoTS(q MutationQueue, streamId StreamId,
 //Any error condition is reported back on the MsgChannel.
 //Caller can wait on MsgChannel after closing StopChannel to get notified
 //about shutdown completion.
-func (f *flusher) Persist(q MutationQueue, streamId StreamId,
+func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	stopch StopChannel) MsgChannel {
 
-	common.Infof("Flusher: Persist StreamId %v", streamId)
+	common.Infof("Flusher::Persist StreamId: %v", streamId)
 
 	f.indexInstMap = indexInstMap
 	f.indexPartnMap = indexPartnMap
@@ -148,10 +148,10 @@ func (f *flusher) Persist(q MutationQueue, streamId StreamId,
 //Any error condition is reported back on the MsgChannel.
 //Caller can wait on MsgChannel after closing StopChannel to get notified
 //about shutdown completion.
-func (f *flusher) Drain(q MutationQueue, streamId StreamId,
+func (f *flusher) Drain(q MutationQueue, streamId common.StreamId,
 	stopch StopChannel) MsgChannel {
 
-	common.Infof("Flusher: Drain StreamId %v", streamId)
+	common.Infof("Flusher::Drain StreamId: %v", streamId)
 
 	msgch := make(MsgChannel)
 	go f.flushQueue(q, streamId, nil, false, stopch, msgch)
@@ -161,7 +161,7 @@ func (f *flusher) Drain(q MutationQueue, streamId StreamId,
 //flushQueue starts and waits for actual workers to flush the mutation queue.
 //This function will close the done channel once all workers have finished.
 //It also listens on the stop channel and will stop all workers if stop signal is received.
-func (f *flusher) flushQueue(q MutationQueue, streamId StreamId,
+func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId,
 	ts Timestamp, persist bool, stopch StopChannel, msgch MsgChannel) {
 
 	var wg sync.WaitGroup
@@ -190,10 +190,10 @@ func (f *flusher) flushQueue(q MutationQueue, streamId StreamId,
 
 	//wait for all workers to finish
 	go func() {
-		common.Tracef("Flusher: Waiting for workers to finish Stream %v", streamId)
+		common.Tracef("Flusher::flushQueue Waiting for workers to finish Stream %v", streamId)
 		wg.Wait()
 		//send signal on channel to indicate all workers have finished
-		common.Tracef("Flusher: All workers finished for Stream %v", streamId)
+		common.Tracef("Flusher::flushQueue All workers finished for Stream %v", streamId)
 		close(allWorkersDoneCh)
 	}()
 
@@ -201,14 +201,14 @@ func (f *flusher) flushQueue(q MutationQueue, streamId StreamId,
 	//or workers to send any message
 	select {
 	case <-stopch:
-		common.Infof("Flusher: Stopping All Workers")
+		common.Debugf("Flusher::flushQueue Stopping All Workers")
 		//stop all workers
 		for _, ch := range workerStopChannels {
 			close(ch)
 		}
 		//wait for all workers to stop
 		<-allWorkersDoneCh
-		common.Infof("Flusher: Stopped All Workers")
+		common.Debugf("Flusher::flushQueue Stopped All Workers")
 
 		//wait for notification of all workers finishing
 	case <-allWorkersDoneCh:
@@ -228,14 +228,14 @@ func (f *flusher) flushQueue(q MutationQueue, streamId StreamId,
 
 //flushSingleVbucket is the actual implementation which flushes the given queue
 //for a single vbucket till stop signal
-func (f *flusher) flushSingleVbucket(q MutationQueue, streamId StreamId,
+func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 	vbucket Vbucket, persist bool, stopch StopChannel,
 	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
-	common.Tracef("Flusher: Started worker to flush vbucket %v for stream %v",
-		vbucket, streamId)
+	common.Tracef("Flusher::flushSingleVbucket Started worker to flush vbucket: "+
+		"%v for stream: %v", vbucket, streamId)
 
 	mutch, qstopch, err := q.Dequeue(vbucket)
 	if err != nil {
@@ -265,14 +265,14 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId StreamId,
 
 //flushSingleVbucket is the actual implementation which flushes the given queue
 //for a single vbucket till the given seqno or till the stop signal(whichever is earlier)
-func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId StreamId,
+func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.StreamId,
 	vbucket Vbucket, seqno Seqno, persist bool, stopch StopChannel,
 	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
-	common.Tracef("Flusher: Started worker to flush vbucket %v till Seqno %v for stream %v",
-		vbucket, seqno, streamId)
+	common.Tracef("Flusher::flushSingleVbucketUptoSeqno Started worker to flush vbucket: "+
+		"%v till Seqno: %v for Stream: %v", vbucket, seqno, streamId)
 
 	mutch, err := q.DequeueUptoSeqno(vbucket, seqno)
 	if err != nil {
@@ -300,33 +300,40 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId StreamId
 
 //flushSingleMutation talks to persistence layer to store the mutations
 //Any error from persistence layer is sent back on workerMsgCh
-func (f *flusher) flushSingleMutation(mut *MutationKeys, streamId StreamId) {
+func (f *flusher) flushSingleMutation(mut *MutationKeys, streamId common.StreamId) {
 
 	switch streamId {
 
-	case MAINT_STREAM:
-		f.flushMaintStreamMutation(mut)
-
-	case MAINT_CATCHUP_STREAM:
-		f.flushMaintCatchupStreamMutation(mut)
-
-	case BACKFILL_STREAM:
-		f.flushBackfillStreamMutation(mut)
-
-	case BACKFILL_CATCHUP_STREAM:
-		f.flushBackfillCatchupStreamMutation(mut)
+	case common.MAINT_STREAM, common.INIT_STREAM:
+		f.flush(mut, streamId)
 
 	default:
-		common.Errorf("flushSingleMutation: Invalid StreamId received %v", streamId)
+		common.Errorf("Flusher::flushSingleMutation Invalid StreamId: %v", streamId)
 	}
 }
 
-func (f *flusher) flushMaintStreamMutation(mut *MutationKeys) {
+func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 
-	common.Tracef("Flusher: Flushing Maintenance Stream Mutations %v", mut)
+	common.Tracef("Flusher::flush Flushing Maintenance Stream Mutations %v", mut)
 
 	var processedUpserts []common.IndexInstId
 	for i, cmd := range mut.commands {
+
+		var idxInst common.IndexInst
+		var ok bool
+		if idxInst, ok = f.indexInstMap[mut.uuids[i]]; !ok {
+			common.Errorf("Flusher::flush Unknown Index Instance Id %v. "+
+				"Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
+			continue
+		}
+
+		//Skip this mutation if the index doesn't belong to the stream being flushed
+		if streamId != idxInst.Stream {
+			common.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v Stream: %v In "+
+				"Stream: %v. Skipped Mutation Key %v", idxInst.InstId, idxInst.Stream,
+				streamId, mut.keys[i])
+			continue
+		}
 
 		switch cmd {
 
@@ -356,7 +363,7 @@ func (f *flusher) flushMaintStreamMutation(mut *MutationKeys) {
 			}
 
 		default:
-			common.Errorf("Flusher: Unknown mutation type received. Skipped %v",
+			common.Errorf("Flusher::flush Unknown mutation type received. Skipped %v",
 				mut.keys[i])
 		}
 	}
@@ -370,91 +377,68 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 
 	if key, err = NewKey(mut.keys[i], mut.docid); err != nil {
 
-		common.Errorf("flushMaintStreamMutation: Error Generating Key"+
-			"From Mutation %v. Skipped. Error : %v", mut.keys[i], err)
+		common.Errorf("Flusher::processUpsert Error Generating Key"+
+			"From Mutation: %v. Skipped. Error: %v", mut.keys[i], err)
 		return
 	}
 
 	if value, err = NewValue(mut.keys[i], mut.docid, mut.meta.vbucket,
 		mut.meta.seqno); err != nil {
 
-		common.Errorf("flushMaintStreamMutation: Error Generating Value"+
-			"From Mutation %v. Skipped. Error : %v", mut.keys[i], err)
+		common.Errorf("Flusher::processUpsert Error Generating Value"+
+			"From Mutation: %v. Skipped. Error: %v", mut.keys[i], err)
 		return
 	}
 
-	var idxInst common.IndexInst
-	var ok bool
-
-	if idxInst, ok = f.indexInstMap[mut.uuids[i]]; !ok {
-		common.Errorf("flushMaintStreamMutation: Unknown Index Instance Id %v."+
-			"Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
-		return
-	}
+	idxInst, _ := f.indexInstMap[mut.uuids[i]]
 
 	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkeys[i])
 
 	var partnInstMap PartitionInstMap
+	var ok bool
 	if partnInstMap, ok = f.indexPartnMap[mut.uuids[i]]; !ok {
-		common.Errorf("flushMaintStreamMutation: Missing Partition Instance Map"+
-			"for Index Inst Id %v. Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
+		common.Errorf("Flusher::processUpsert Missing Partition Instance Map"+
+			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuids[i], mut.keys[i])
 		return
 	}
 
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.keys[i]))
 		if err := slice.Insert(key, value); err != nil {
-			common.Errorf("flushMaintStreamMutation: Error Inserting Key %v "+
-				"Value %v in Slice %v", key, value, slice.Id())
+			common.Errorf("Flusher::processUpsert Error Inserting Key: %v "+
+				"Value: %v in Slice: %v. Error: %v", key, value, slice.Id(), err)
 		}
 	} else {
-		common.Errorf("flushMaintStreamMutation: Partition Instance not found "+
-			"for Id %v Skipped Mutation Key %v", partnId, mut.keys[i])
+		common.Errorf("Flusher::processUpsert Partition Instance not found "+
+			"for Id: %v Skipped Mutation Key: %v", partnId, mut.keys[i])
 	}
 
 }
 
 func (f *flusher) processDelete(mut *MutationKeys, i int) {
-	var idxInst common.IndexInst
-	var ok bool
 
-	if idxInst, ok = f.indexInstMap[mut.uuids[i]]; !ok {
-		common.Errorf("flushMaintStreamMutation: Unknown Index Instance Id %v."+
-			"Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
-		return
-	}
+	idxInst, _ := f.indexInstMap[mut.uuids[i]]
 
 	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkeys[i])
 
 	var partnInstMap PartitionInstMap
+	var ok bool
 	if partnInstMap, ok = f.indexPartnMap[mut.uuids[i]]; !ok {
-		common.Errorf("flushMaintStreamMutation: Missing Partition Instance Map"+
-			"for Index Inst Id %v. Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
+		common.Errorf("Flusher:processDelete Missing Partition Instance Map"+
+			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuids[i], mut.keys[i])
 		return
 	}
 
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.keys[i]))
 		if err := slice.Delete(mut.docid); err != nil {
-			common.Errorf("flushMaintStreamMutation: Error Deleting DocId %v "+
-				"from Slice %v", mut.docid, slice.Id())
+			common.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
+				"from Slice: %v", mut.docid, slice.Id())
 		}
 	} else {
-		common.Errorf("flushMaintStreamMutation: Partition Instance not found "+
-			"for Id %v. Skipped Mutation Key %v", partnId, mut.keys[i])
+		common.Errorf("Flusher::processDelete Partition Instance not found "+
+			"for Id: %v. Skipped Mutation Key: %v", partnId, mut.keys[i])
 	}
-}
-
-func (f *flusher) flushMaintCatchupStreamMutation(mut *MutationKeys) {
-	//TODO
-}
-
-func (f *flusher) flushBackfillStreamMutation(mut *MutationKeys) {
-	//TODO
-}
-
-func (f *flusher) flushBackfillCatchupStreamMutation(mut *MutationKeys) {
-	//TODO
 }
 
 //IsTimestampGreaterThanQueueLWT checks if each Vbucket in the Queue has

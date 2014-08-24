@@ -87,3 +87,14 @@ func (ts Timestamp) GreaterThan(ts1 Timestamp) bool {
 		return false
 	}
 }
+
+//IsZeroTs return true if all seqno in TS are zero
+func (ts Timestamp) IsZeroTs() bool {
+
+	for _, t := range ts {
+		if t != Seqno(0) {
+			return false
+		}
+	}
+	return true
+}

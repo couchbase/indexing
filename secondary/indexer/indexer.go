@@ -10,9 +10,11 @@
 package indexer
 
 import (
+	"errors"
 	"github.com/couchbase/indexing/secondary/common"
-	"log"
 	"net"
+	"strconv"
+	"time"
 )
 
 type IndexerState int16
@@ -28,12 +30,14 @@ type Indexer interface {
 	Shutdown() Message
 }
 
-type StreamStatus map[StreamId]bool
+type StreamStatus map[common.StreamId]bool
 
 //TODO move this to config
 var NUM_VBUCKETS uint16
 var PROJECTOR_ADMIN_PORT_ENDPOINT string
 var StreamAddrMap StreamAddressMap
+
+type BucketIndexCountMap map[string]int
 
 type indexer struct {
 	id    IndexerId
@@ -42,7 +46,7 @@ type indexer struct {
 	indexInstMap  common.IndexInstMap //map of indexInstId to IndexInst
 	indexPartnMap IndexPartnMap       //map of indexInstId to PartitionInst
 
-	streamStatus StreamStatus //map of streamId to status
+	streamStatus StreamStatus //stream status map
 
 	wrkrRecvCh         MsgChannel //channel to receive messages from workers
 	internalRecvCh     MsgChannel //buffered channel to queue worker requests
@@ -94,10 +98,12 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 
 		indexInstMap:  make(common.IndexInstMap),
 		indexPartnMap: make(IndexPartnMap),
+
+		streamStatus: make(StreamStatus),
 	}
 
 	idx.state = INIT
-	log.Printf("Indexer: Status INIT")
+	common.Infof("Indexer::NewIndexer Status INIT")
 
 	//assume indexerId 1 for now
 	idx.id = 1
@@ -108,26 +114,14 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 		NUM_VBUCKETS = MAX_NUM_VBUCKETS
 	}
 
-	log.Printf("Indexer: Starting with Vbuckets %v", NUM_VBUCKETS)
+	common.Infof("Indexer::NewIndexer Starting with Vbuckets %v", NUM_VBUCKETS)
 
-	//init the stream address map
-	StreamAddrMap = make(StreamAddressMap)
-	//TODO move this to config
-	if _, port, err := net.SplitHostPort(INDEXER_DATA_PORT_ENDPOINT); err == nil {
-		StreamAddrMap[MAINT_STREAM] = common.Endpoint(":" + port)
-	} else {
-		log.Printf("Indexer: Unable to find address for Data Port. INDEXER_DATA_PORT_ENDPOINT "+
-			"not set properly. Err %v", err)
-	}
-
-	//init stream status
-	idx.streamStatus = make(StreamStatus)
-	idx.streamStatus[MAINT_STREAM] = false
+	idx.initStreamAddressMap()
 
 	var res Message
 	idx.clustMgrSender, res = NewClustMgrSender(idx.clustMgrSenderCmdCh, idx.wrkrRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
-		log.Println("Indexer: ClusterMgrSender Init Error", res)
+		common.Errorf("Indexer::NewIndexer ClusterMgrSender Init Error", res)
 		return nil, res
 	}
 
@@ -149,7 +143,7 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	//Start Storage Manager
 	idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
-		log.Println("Indexer: Storage Manager Init Error", res)
+		common.Errorf("Indexer::NewIndexer Storage Manager Init Error", res)
 		return nil, res
 	}
 
@@ -159,21 +153,21 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	//Start Timekeeper
 	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
-		log.Println("Indexer: Timekeeper Init Error", res)
+		common.Errorf("Indexer::NewIndexer Timekeeper Init Error", res)
 		return nil, res
 	}
 
 	//Start KV Sender
 	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, numVbuckets)
 	if res.GetMsgType() != MSG_SUCCESS {
-		log.Println("Indexer: KVSender Init Error", res)
+		common.Errorf("Indexer::NewIndexer KVSender Init Error", res)
 		return nil, res
 	}
 
 	//Start Admin port listener
 	idx.adminMgr, res = NewAdminManager(idx.adminMgrCmdCh, idx.adminRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
-		log.Println("Indexer: Admin Manager Init Error", res)
+		common.Errorf("Indexer::NewIndexer Admin Manager Init Error", res)
 		return nil, res
 	}
 
@@ -181,26 +175,26 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh,
 		numVbuckets)
 	if res.GetMsgType() != MSG_SUCCESS {
-		log.Println("Indexer: Mutation Manager Init Error", res)
+		common.Errorf("Indexer::NewIndexer Mutation Manager Init Error", res)
 		return nil, res
 	}
 
 	//Start Scan Coordinator
 	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
-		log.Println("Indexer: Scan Coordinator Init Error", res)
+		common.Errorf("Indexer::NewIndexer Scan Coordinator Init Error", res)
 		return nil, res
 	}
 
 	//Start CbqBridge
 	idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
-		log.Println("Indexer: CbqBridge Init Error", res)
+		common.Errorf("Indexer::NewIndexer CbqBridge Init Error", res)
 		return nil, res
 	}
 
 	idx.state = ACTIVE
-	log.Println("Indexer: Status ACTIVE")
+	common.Infof("Indexer::NewIndexer Status ACTIVE")
 
 	//start the main indexer loop
 	idx.run()
@@ -335,7 +329,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case MUT_MGR_FLUSH_DONE:
 
-		log.Printf("Indexer: Received Flush Done From Mutation Mgr %v", msg)
+		common.Debugf("Indexer::handleWorkerMsgs Received Flush Done "+
+			"From Mutation Mgr %v", msg)
 
 		//fwd the message to storage manager
 		idx.storageMgrCmdCh <- msg
@@ -345,8 +340,14 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 
+	case TK_INIT_BUILD_DONE:
+		idx.handleInitialBuildDone(msg)
+
+	case TK_MERGE_STREAM:
+		idx.handleMergeStream(msg)
+
 	default:
-		log.Printf("Indexer: Received Unknown Message from Worker %v", msg)
+		common.Errorf("Indexer::handleWorkerMsgs Unknown Message %v", msg)
 	}
 
 }
@@ -369,7 +370,7 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 
 	default:
 
-		log.Printf("Indexer: Received Unknown Admin Message %v", msg)
+		common.Errorf("Indexer::handleAdminMsgs Unknown Message %v", msg)
 
 	}
 
@@ -379,173 +380,93 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 func (idx *indexer) handleCreateIndex(msg Message) {
 
 	indexInst := msg.(*MsgCreateIndex).GetIndexInst()
+	respCh := msg.(*MsgCreateIndex).GetResponseChannel()
 
-	log.Printf("Indexer: Received CreateIndex for Index %v", indexInst)
-	idx.indexInstMap[indexInst.InstId] = indexInst
+	common.Infof("Indexer::handleCreateIndex %v", indexInst)
 
-	//initialize partitionInstMap for this index
-	partnInstMap := make(PartitionInstMap)
-
-	//get all partitions for this index
-	partnDefnList := indexInst.Pc.GetAllPartitions()
-
-	for i, partnDefn := range partnDefnList {
-		//TODO: Ignore partitions which do not belong to this
-		//indexer node(based on the endpoints)
-		partnInst := PartitionInst{Defn: partnDefn,
-			Sc: NewHashedSliceContainer()}
-
-		log.Printf("Indexer: Initialized Partition %v for Index %v", partnInst, indexInst.InstId)
-
-		//add a single slice per partition for now
-		if slice, err := NewForestDBSlice(indexInst.Defn.Name, 0,
-			indexInst.Defn.DefnId, indexInst.InstId); err == nil {
-			partnInst.Sc.AddSlice(0, slice)
-			log.Printf("Indexer: Initialized Slice %v for Index %v", slice, indexInst.InstId)
-
-			partnInstMap[common.PartitionId(i)] = partnInst
-		} else {
-			log.Printf("handleCreateIndex: Error creating slice %v. Abort.", err)
-			return
-		}
+	//check if this is duplicate index instance
+	if ok := idx.checkDuplicateIndex(indexInst, respCh); !ok {
+		return
 	}
 
-	//init index partition map for this index
+	//check if Initial Build is already running for this index's bucket
+	if ok := idx.checkDuplicateInitialBuildRequest(indexInst, respCh); !ok {
+		return
+	}
+
+	//allocate partition/slice
+	var partnInstMap PartitionInstMap
+	var ok bool
+	if partnInstMap, ok = idx.initPartnInstance(indexInst, respCh); !ok {
+		return
+	}
+
+	//if there is already an index for this bucket in MAINT_STREAM,
+	//add this index to INIT_STREAM
+	if idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.MAINT_STREAM) {
+		indexInst.Stream = common.INIT_STREAM
+	} else {
+		indexInst.Stream = common.MAINT_STREAM
+	}
+
+	//get current timestamp from KV and set it as Initial Build Timestamp
+	var clusterAddr string
+	if host, _, err := net.SplitHostPort(PROJECTOR_ADMIN_PORT_ENDPOINT); err == nil {
+		clusterAddr = host + ":" + KVPORT
+	}
+
+	buildTs := idx.getCurrentKVTs(clusterAddr, indexInst.Defn.Bucket)
+
+	//if initial build TS is zero, set index state to active and add it to
+	//MAINT_STREAM directly
+	initialBuildReqd := true
+	if buildTs.IsZeroTs() {
+		//set index state
+		indexInst.State = common.INDEX_STATE_ACTIVE
+		indexInst.Stream = common.MAINT_STREAM
+		initialBuildReqd = false
+	} else {
+		indexInst.State = common.INDEX_STATE_INITIAL
+	}
+
+	common.Debugf("Indexer::handleCreateIndex \n\tAdded Index: %v to Stream: %v State: %v",
+		indexInst.InstId, indexInst.Stream, indexInst.State)
+
+	//update index maps with this index
+	idx.indexInstMap[indexInst.InstId] = indexInst
 	idx.indexPartnMap[indexInst.InstId] = partnInstMap
 
 	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
 	//update index map in storage manager
-	if ok := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
-		idx.storageMgrCmdCh, "StorageManager"); !ok {
-		return
-	}
-
-	//send msg to timekeeper if stream is not started yet
-	var tkCmd Message
-	if status, _ := idx.streamStatus[MAINT_STREAM]; !status {
-		var indexInstList []common.IndexInst
-		indexInstList = append(indexInstList, indexInst)
-
-		tkCmd = &MsgTKStreamUpdate{mType: TK_STREAM_START,
-			streamId:      MAINT_STREAM,
-			indexInstList: indexInstList}
-
-		idx.tkCmdCh <- tkCmd
-		if resp, ok := <-idx.tkCmdCh; ok {
-
-			if resp.GetMsgType() != MSG_SUCCESS {
-				log.Printf("handleCreateIndex: Error received from Timekeeper"+
-					"processing Msg %v Err %v. Aborted.", tkCmd, resp)
-				return
-			}
-		} else {
-			log.Printf("handleCreateIndex: Error communicating with Timekeeper"+
-				"processing Msg %v Err %v. Aborted.", tkCmd, resp)
-			return
-		}
-	}
-
-	//if this is first index, start the mutation stream
-	var mutMgrCmd Message
-	var indexList []common.IndexInst
-	indexList = append(indexList, indexInst)
-
-	if status, _ := idx.streamStatus[MAINT_STREAM]; !status {
-		mutMgrCmd = &MsgMutMgrStreamUpdate{mType: MUT_MGR_OPEN_STREAM,
-			streamId:  MAINT_STREAM,
-			indexList: indexList}
-	} else {
-		mutMgrCmd = &MsgMutMgrStreamUpdate{mType: MUT_MGR_ADD_INDEX_LIST_TO_STREAM,
-			streamId:  MAINT_STREAM,
-			indexList: indexList}
-	}
-
-	//send message to mutation manager
-	idx.mutMgrCmdCh <- mutMgrCmd
-	if resp, ok := <-idx.mutMgrCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleCreateIndex: Error received from Mutation Mgr "+
-				"processing Msg %v Err %v. Aborted.", mutMgrCmd, resp)
-			return
-		}
-	} else {
-		log.Printf("handleCreateIndex: Error communicating with Mutation Mgr "+
-			"processing Msg %v Err %v. Aborted.", mutMgrCmd, resp)
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.storageMgrCmdCh,
+		"StorageMgr", respCh); !ok {
 		return
 	}
 
 	//update index map in mutation manager
-	if ok := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
-		idx.mutMgrCmdCh, "MutationManager"); !ok {
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.mutMgrCmdCh,
+		"MutationMgr", respCh); !ok {
 		return
 	}
 
 	//update index map in scan coordinator
-	if ok := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
-		idx.scanCoordCmdCh, "ScanCoordinator"); !ok {
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.scanCoordCmdCh,
+		"ScanCoordinator", respCh); !ok {
 		return
 	}
 
-	if status, _ := idx.streamStatus[MAINT_STREAM]; !status {
-		idx.streamStatus[MAINT_STREAM] = true
-	}
-
-	//send the msg to KV sender
-
-	idx.kvSenderCmdCh <- msg
-
-	if resp, ok := <-idx.kvSenderCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleCreateIndex: Error received from KV Sender"+
-				"processing Msg %v Err %v. Aborted.", msg, resp)
-			return
-		}
-	} else {
-		log.Printf("handleCreateIndex: Error communicating with KV Sender"+
-			"processing Msg %v Err %v. Aborted.", msg, resp)
+	//send Stream Update to workers
+	if ok := idx.sendStreamUpdateForCreateIndex(indexInst, buildTs, respCh); !ok {
 		return
 	}
 
-}
-
-func (idx *indexer) sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap Message,
-	msgUpdateIndexPartnMap Message, workerCmdCh chan Message, workerStr string) bool {
-
-	//update index map in scan coordinator
-	workerCmdCh <- msgUpdateIndexInstMap
-
-	if resp, ok := <-workerCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("sendUpdatedIndexMapToWorker: Error received from %v processing "+
-				"Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexInstMap, resp)
-			return false
-		}
-	} else {
-		log.Printf("sendUpdatedIndexMapToWorker: Error communicating with %v "+
-			"processing Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexInstMap, resp)
-		return false
+	//if initial build is not being done, send success response,
+	//otherwise success response will be sent when initial build gets done
+	if !initialBuildReqd {
+		respCh <- &MsgSuccess{}
 	}
-
-	workerCmdCh <- msgUpdateIndexPartnMap
-	if resp, ok := <-workerCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("sendUpdatedIndexMapToWorker: Error received from %v processing "+
-				"Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexPartnMap, resp)
-			return false
-		}
-	} else {
-		log.Printf("sendUpdatedIndexMapToWorker: Error communicating with %v "+
-			"processing Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexPartnMap, resp)
-		return false
-	}
-
-	return true
 
 }
 
@@ -553,89 +474,54 @@ func (idx *indexer) sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap Message,
 func (idx *indexer) handleDropIndex(msg Message) {
 
 	indexInstId := msg.(*MsgDropIndex).GetIndexInstId()
-	common.Debugf("Indexer received DropIndex for Index %v", indexInstId)
+	respCh := msg.(*MsgDropIndex).GetResponseChannel()
 
-	//send the msg to KV
-	idx.kvSenderCmdCh <- msg
+	common.Debugf("Indexer::handleDropIndex - IndexInstId %v", indexInstId)
 
-	if resp, ok := <-idx.kvSenderCmdCh; ok {
+	var indexInst common.IndexInst
+	var ok bool
+	if indexInst, ok = idx.indexInstMap[indexInstId]; !ok {
 
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleDropIndex: Error received from KV Sender"+
-				"processing Msg %v Err %v.", msg, resp)
-		}
-	} else {
-		log.Printf("handleDropIndex: Error communicating with KV Sender"+
-			"processing Msg %v Err %v.", msg, resp)
+		common.Errorf("Indexer::handleDropIndex Unknown IndexInstId", indexInstId)
+
+		respCh <- &MsgError{
+			err: Error{code: ERROR_INDEXER_UNKNOWN_INDEX,
+				severity: FATAL,
+				cause:    errors.New("Index Unknown"),
+				category: INDEXER}}
 	}
 
 	//update internal maps
 	delete(idx.indexInstMap, indexInstId)
 	delete(idx.indexPartnMap, indexInstId)
 
+	//send Stream update to workers
+	if ok := idx.sendStreamUpdateForDropIndex(indexInst, respCh); !ok {
+		return
+	}
+
 	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
 	//update index map in storage manager
-	if ok := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
-		idx.storageMgrCmdCh, "StorageManager"); !ok {
-		common.Errorf("Indexer: handleDropIndex failed to update IndexMap in " +
-			"StorageManager")
-	}
-
-	//send msg to timekeeper to stop stream if this was the last index
-	var tkCmd Message
-	if len(idx.indexInstMap) == 0 {
-		tkCmd = &MsgTKStreamUpdate{mType: TK_STREAM_STOP,
-			streamId: MAINT_STREAM}
-
-		idx.tkCmdCh <- tkCmd
-		if resp, ok := <-idx.tkCmdCh; ok {
-
-			if resp.GetMsgType() != MSG_SUCCESS {
-				log.Printf("handleDropIndex: Error received from Timekeeper"+
-					"processing Msg %v Err %v.", tkCmd, resp)
-			}
-		} else {
-			log.Printf("handleDropIndex: Error communicating with Timekeeper"+
-				"processing Msg %v Err %v.", tkCmd, resp)
-		}
-	}
-
-	//if this is the last index, stop the mutation stream
-	var mutMgrCmd Message
-	if len(idx.indexInstMap) == 0 {
-		mutMgrCmd = &MsgMutMgrStreamUpdate{mType: MUT_MGR_CLOSE_STREAM,
-			streamId: MAINT_STREAM}
-	} else {
-		mutMgrCmd = &MsgMutMgrStreamUpdate{mType: MUT_MGR_REMOVE_INDEX_LIST_FROM_STREAM,
-			streamId: MAINT_STREAM}
-	}
-
-	//send message to mutation manager
-	idx.mutMgrCmdCh <- mutMgrCmd
-	if resp, ok := <-idx.mutMgrCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleDropIndex: Error received from Mutation Mgr "+
-				"processing Msg %v Err %v.", mutMgrCmd, resp)
-		}
-	} else {
-		log.Printf("handleDropIndex: Error communicating with Mutation Mgr "+
-			"processing Msg %v Err %v.", mutMgrCmd, resp)
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.storageMgrCmdCh,
+		"StorageMgr", respCh); !ok {
+		return
 	}
 
 	//update index map in mutation manager
-	if ok := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
-		idx.mutMgrCmdCh, "MutationManager"); !ok {
-		common.Errorf("Indexer: handleDropIndex failed to update IndexMap in " +
-			"MutationManager.")
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.mutMgrCmdCh,
+		"MutationMgr", respCh); !ok {
+		return
 	}
 
-	if len(idx.indexInstMap) == 0 {
-		idx.streamStatus[MAINT_STREAM] = false
+	//update index map in scan coordinator
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.scanCoordCmdCh,
+		"ScanCoordinator", respCh); !ok {
+		return
 	}
 
+	respCh <- &MsgSuccess{}
 }
 
 func (idx *indexer) handleScanIndex(msg Message) {
@@ -649,12 +535,12 @@ func (idx *indexer) handleScanIndex(msg Message) {
 	if resp, ok := <-idx.scanCoordCmdCh; ok {
 
 		if resp.GetMsgType() != MSG_SUCCESS {
-			log.Printf("handleScanIndex: Error received from Scan Coordinator "+
+			common.Errorf("Indexer::handleScanIndex Error received from Scan Coordinator "+
 				"processing Msg %v Err %v. Aborted.", msg, resp)
 			return
 		}
 	} else {
-		log.Printf("handleScanIndex: Error communicating with Scan Coordinator "+
+		common.Errorf("Indexer::handleScanIndex Error communicating with Scan Coordinator "+
 			"processing Msg %v Err %v. Aborted.", msg, resp)
 		return
 	}
@@ -694,10 +580,610 @@ func (idx *indexer) shutdownWorkers() {
 
 func (idx *indexer) Shutdown() Message {
 
-	log.Printf("Indexer: Shutting Down")
+	common.Infof("Indexer::Shutdown -  Shutting Down")
 	//close the internal shutdown channel
 	close(idx.shutdownInitCh)
 	<-idx.shutdownCompleteCh
-	log.Printf("Indexer: Shutdown Complete")
+	common.Infof("Indexer:Shutdown - Shutdown Complete")
 	return nil
+}
+
+func (idx *indexer) sendStreamUpdateForCreateIndex(indexInst common.IndexInst,
+	buildTs Timestamp, respCh MsgChannel) bool {
+
+	var cmd Message
+	var indexList []common.IndexInst
+	indexList = append(indexList, indexInst)
+
+	//if stream is already running, add index
+	//to stream else open new stream
+	newStream := true
+	if status, ok := idx.streamStatus[indexInst.Stream]; ok && status {
+		newStream = false
+	}
+
+	if newStream {
+		cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
+			streamId:  indexInst.Stream,
+			indexList: indexList,
+			buildTs:   buildTs,
+			respCh:    respCh}
+	} else {
+		cmd = &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
+			streamId:  indexInst.Stream,
+			indexList: indexList,
+			buildTs:   buildTs,
+			respCh:    respCh}
+	}
+
+	//send stream update to timekeeper
+	if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
+		return false
+	}
+
+	//send stream update to mutation manager
+	if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", respCh); !ok {
+		return false
+	}
+
+	//send stream update to kv sender
+	if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", respCh); !ok {
+		return false
+	}
+
+	//For INIT_STREAM, add index is added to MAINT_STREAM in Catchup State,
+	//so mutations for this index are already in queue to allow convergence with INIT_STREAM.
+	if indexInst.Stream == common.INIT_STREAM {
+		//add indexes to MAINT_STREAM
+		cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
+			streamId:  common.MAINT_STREAM,
+			indexList: indexList}
+
+		//send stream update to mutation manager
+		if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", respCh); !ok {
+			return false
+		}
+
+		//send stream update to kv sender
+		if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", respCh); !ok {
+			return false
+		}
+	}
+
+	idx.streamStatus[indexInst.Stream] = true
+
+	return true
+
+}
+
+func (idx *indexer) sendStreamUpdateToWorker(cmd Message, workerCmdCh MsgChannel,
+	workerStr string, respCh MsgChannel) bool {
+
+	//send message to worker
+	workerCmdCh <- cmd
+	if resp, ok := <-workerCmdCh; ok {
+
+		if resp.GetMsgType() != MSG_SUCCESS {
+			common.Errorf("Indexer::sendStreamUpdateToWorker - Error received from %v "+
+				"processing Msg %v Err %v. Aborted.", workerStr, cmd, resp)
+
+			if respCh != nil {
+				respCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+						severity: FATAL,
+						cause:    errors.New("Indexer Internal Error"),
+						category: INDEXER}}
+				return false
+			}
+		}
+	} else {
+		common.Errorf("Indexer::sendStreamUpdateToWorker - Error communicating with %v "+
+			"processing Msg %v Err %v. Aborted.", workerStr, cmd, resp)
+
+		if respCh != nil {
+			respCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+					severity: FATAL,
+					cause:    errors.New("Indexer Internal Error"),
+					category: INDEXER}}
+		}
+		return false
+	}
+	return true
+}
+
+func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
+	respCh MsgChannel) bool {
+
+	var cmd Message
+	var indexList []common.IndexInst
+	indexList = append(indexList, indexInst)
+
+	cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
+		streamId:  indexInst.Stream,
+		indexList: indexList}
+
+	//send stream update to kv sender
+	if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", respCh); !ok {
+		return false
+	}
+
+	//send stream update to timekeeper
+	if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
+		return false
+	}
+
+	//send stream update to mutation manager
+	if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", respCh); !ok {
+		return false
+	}
+
+	//if there are no more indexes in the stream, generate CLOSE_STREAM
+	if idx.checkStreamEmpty(indexInst.Stream) {
+		cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
+			streamId: indexInst.Stream}
+		idx.streamStatus[indexInst.Stream] = false
+
+		//send stream update to timekeeper
+		if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
+			return false
+		}
+
+		//send stream update to mutation manager
+		if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", respCh); !ok {
+			return false
+		}
+	}
+
+	return true
+
+}
+
+func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
+	respCh MsgChannel) (PartitionInstMap, bool) {
+
+	//initialize partitionInstMap for this index
+	partnInstMap := make(PartitionInstMap)
+
+	//get all partitions for this index
+	partnDefnList := indexInst.Pc.GetAllPartitions()
+
+	for i, partnDefn := range partnDefnList {
+		//TODO: Ignore partitions which do not belong to this
+		//indexer node(based on the endpoints)
+		partnInst := PartitionInst{Defn: partnDefn,
+			Sc: NewHashedSliceContainer()}
+
+		common.Infof("Indexer::initPartnInstance Initialized Partition: \n\t Index: %v Partition: %v",
+			indexInst.InstId, partnInst)
+
+		//add a single slice per partition for now
+		if slice, err := NewForestDBSlice(indexInst.Defn.Bucket+"_"+indexInst.Defn.Name,
+			0, indexInst.Defn.DefnId, indexInst.InstId); err == nil {
+			partnInst.Sc.AddSlice(0, slice)
+			common.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
+				indexInst.InstId, slice)
+
+			partnInstMap[common.PartitionId(i)] = partnInst
+		} else {
+			common.Errorf("Indexer::initPartnInstance Error creating slice %v. Abort.",
+				err)
+
+			respCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+					severity: FATAL,
+					cause:    errors.New("Indexer Internal Error"),
+					category: INDEXER}}
+			return nil, false
+		}
+	}
+
+	return partnInstMap, true
+}
+
+func (idx *indexer) updateWorkerIndexMap(msgUpdateIndexInstMap Message,
+	msgUpdateIndexPartnMap Message, workerCmdCh MsgChannel, workerStr string,
+	respCh MsgChannel) bool {
+
+	if ok := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap,
+		workerCmdCh, workerStr); !ok {
+
+		if respCh != nil {
+			respCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+					severity: FATAL,
+					cause:    errors.New("Indexer Internal Error"),
+					category: INDEXER}}
+		}
+		return false
+	}
+
+	return true
+}
+
+func (idx *indexer) sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap Message,
+	msgUpdateIndexPartnMap Message, workerCmdCh chan Message, workerStr string) bool {
+
+	if msgUpdateIndexInstMap != nil {
+		workerCmdCh <- msgUpdateIndexInstMap
+
+		if resp, ok := <-workerCmdCh; ok {
+
+			if resp.GetMsgType() != MSG_SUCCESS {
+				common.Errorf("Indexer::sendUpdatedIndexMapToWorker - Error received from %v processing "+
+					"Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexInstMap, resp)
+				return false
+			}
+		} else {
+			common.Errorf("Indexer::sendUpdatedIndexMapToWorker - Error communicating with %v "+
+				"processing Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexInstMap, resp)
+			return false
+		}
+	}
+
+	if msgUpdateIndexPartnMap != nil {
+		workerCmdCh <- msgUpdateIndexPartnMap
+		if resp, ok := <-workerCmdCh; ok {
+
+			if resp.GetMsgType() != MSG_SUCCESS {
+				common.Errorf("Indexer::sendUpdatedIndexMapToWorker - Error received from %v processing "+
+					"Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexPartnMap, resp)
+				return false
+			}
+		} else {
+			common.Errorf("Indexer::sendUpdatedIndexMapToWorker - Error communicating with %v "+
+				"processing Msg %v Err %v. Aborted.", workerStr, msgUpdateIndexPartnMap, resp)
+			return false
+		}
+	}
+
+	return true
+
+}
+
+func (idx *indexer) initStreamAddressMap() {
+
+	//init the stream address map
+	StreamAddrMap = make(StreamAddressMap)
+
+	if _, port, err := net.SplitHostPort(INDEXER_MAINT_DATA_PORT_ENDPOINT); err == nil {
+		StreamAddrMap[common.MAINT_STREAM] = common.Endpoint(":" + port)
+	} else {
+		common.Errorf("Indexer::initStreamAddressMap Unable to find address for Maint Port. "+
+			"INDEXER_MAINT_DATA_PORT_ENDPOINT not set properly. Err %v", err)
+	}
+
+	if _, port, err := net.SplitHostPort(INDEXER_INIT_DATA_PORT_ENDPOINT); err == nil {
+		StreamAddrMap[common.INIT_STREAM] = common.Endpoint(":" + port)
+	} else {
+		common.Errorf("Indexer:initStreamAddressMap Unable to find address for Init Port. "+
+			"INDEXER_INIT_DATA_PORT_ENDPOINT not set properly. Err %v", err)
+	}
+}
+
+//checkDuplicateIndex checks if an index with the given indexInstId
+// or name already exists
+func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
+	respCh MsgChannel) bool {
+
+	//if the indexInstId already exists, return error
+	if index, ok := idx.indexInstMap[indexInst.InstId]; ok {
+		common.Errorf("Indexer::checkDuplicateIndex Duplicate Index Instance. "+
+			"IndexInstId: %v, Index: %v", indexInst.InstId, index)
+
+		respCh <- &MsgError{
+			err: Error{code: ERROR_INDEX_ALREADY_EXISTS,
+				severity: FATAL,
+				cause:    errors.New("Duplicate Index Instance"),
+				category: INDEXER}}
+		return false
+	}
+
+	//if the index name already exists for the same bucket,
+	//return error
+	for _, index := range idx.indexInstMap {
+
+		if index.Defn.Name == indexInst.Defn.Name &&
+			index.Defn.Bucket == indexInst.Defn.Bucket {
+
+			common.Errorf("Indexer::checkDuplicateIndex Duplicate Index Name. "+
+				"Name: %v, Duplicate Index: %v", indexInst.Defn.Name, index)
+
+			respCh <- &MsgError{
+				err: Error{code: ERROR_INDEX_ALREADY_EXISTS,
+					severity: FATAL,
+					cause:    errors.New("Duplicate Index Name"),
+					category: INDEXER}}
+			return false
+		}
+
+	}
+	return true
+}
+
+//checkDuplicateInitialBuildRequest check if INIT_STREAM is already running for the
+//bucket on the given index
+func (idx *indexer) checkDuplicateInitialBuildRequest(indexInst common.IndexInst,
+	respCh MsgChannel) bool {
+
+	//if initial build is already running for some other index on this bucket,
+	//cannot start another one
+	for _, index := range idx.indexInstMap {
+
+		if (index.State == common.INDEX_STATE_INITIAL ||
+			index.State == common.INDEX_STATE_CATCHUP) &&
+			indexInst.Defn.Bucket == index.Defn.Bucket {
+
+			errStr := "Index Build Already In Progress. Multiple Initial " +
+				"Builds On A Bucket Are Not Supported By Indexer."
+
+			common.Errorf(errStr)
+			respCh <- &MsgError{
+				err: Error{code: ERROR_INDEX_BUILD_IN_PROGRESS,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+			return false
+		}
+	}
+
+	return true
+}
+
+//TODO If this function gets error before its finished, the state
+//can be inconsistent. This needs to be fixed.
+func (idx *indexer) handleInitialBuildDone(msg Message) {
+
+	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
+	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
+	respCh := msg.(*MsgTKInitBuildDone).GetResponseChannel()
+
+	common.Debugf("Indexer::handleInitialBuildDone Bucket: %v Stream: %v", bucket, streamId)
+
+	//MAINT_STREAM should already be running for this bucket,
+	//as first index gets added to MAINT_STREAM always
+	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM) == false {
+		common.Errorf("Indexer::handleInitialBuildDone MAINT_STREAM not enabled for Bucket: %v. "+
+			"Cannot Process Initial Build Done.", bucket)
+		if respCh != nil {
+			respCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+					severity: FATAL,
+					cause:    errors.New("Indexer Internal Error"),
+					category: INDEXER}}
+		}
+		return
+	}
+
+	//get the list of indexes for this bucket and stream in INITIAL state
+	var indexList []common.IndexInst
+	for _, index := range idx.indexInstMap {
+		if index.Defn.Bucket == bucket && index.Stream == streamId &&
+			index.State == common.INDEX_STATE_INITIAL {
+			//index in INIT_STREAM move to Catchup state
+			if streamId == common.INIT_STREAM {
+				index.State = common.INDEX_STATE_CATCHUP
+			} else {
+				index.State = common.INDEX_STATE_ACTIVE
+			}
+			indexList = append(indexList, index)
+		}
+	}
+
+	//For MAINT_STREAM, only need to notify Timekeeper to update its maps
+	if streamId == common.MAINT_STREAM {
+		cmd := &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
+			streamId:  common.MAINT_STREAM,
+			indexList: indexList}
+
+		//send stream update to timekeeper
+		if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
+			return
+		}
+	}
+
+	//For INIT_STREAM, nothing needs to be done. Once Catchup gets done,
+	//stream update will happen.
+
+	//update the IndexInstMap
+	for _, index := range indexList {
+		idx.indexInstMap[index.InstId] = index
+	}
+
+	//send updated maps to all workers
+	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+
+	//update index map in storage manager
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, nil, idx.storageMgrCmdCh,
+		"StorageMgr", respCh); !ok {
+		return
+	}
+
+	//update index map in mutation manager
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, nil, idx.mutMgrCmdCh,
+		"MutationMgr", respCh); !ok {
+		return
+	}
+
+	//update index map in scan coordinator
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, nil, idx.scanCoordCmdCh,
+		"ScanCoordinator", respCh); !ok {
+		return
+	}
+
+	//send success to response channel
+	respCh <- &MsgSuccess{}
+}
+
+//TODO If this function gets error before its finished, the state
+//can be inconsistent. This needs to be fixed.
+func (idx *indexer) handleMergeStream(msg Message) {
+
+	bucket := msg.(*MsgTKMergeStream).GetBucket()
+	streamId := msg.(*MsgTKMergeStream).GetStreamId()
+
+	common.Debugf("Indexer::handleMergeStream Bucket: %v Stream: %v", bucket, streamId)
+
+	//For now, only INIT_STREAM can be merged into MAINT_STREAM
+	if streamId != common.INIT_STREAM {
+		common.Errorf("Indexer::handleMergeStream \n\tOnly INIT_STREAM can be merged "+
+			"to MAINT_STREAM. Found Stream: %v.", streamId)
+		return
+	}
+
+	//MAINT_STREAM should already be running for this bucket,
+	//as first index gets added to MAINT_STREAM always
+	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM) == false {
+		common.Errorf("Indexer::handleMergeStream \n\tMAINT_STREAM not enabled for Bucket: %v ."+
+			"Cannot Process Merge Stream", bucket)
+		return
+	}
+
+	//get the list of indexes for this bucket in CATCHUP state
+	var indexList []common.IndexInst
+	for _, index := range idx.indexInstMap {
+		if index.Defn.Bucket == bucket && index.Stream == streamId &&
+			index.State == common.INDEX_STATE_CATCHUP {
+
+			index.State = common.INDEX_STATE_ACTIVE
+			index.Stream = common.MAINT_STREAM
+			indexList = append(indexList, index)
+		}
+	}
+
+	//remove indexes from INIT_STREAM
+	cmd := &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
+		streamId:  common.INIT_STREAM,
+		indexList: indexList}
+
+	//send stream update to kv sender
+	if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", nil); !ok {
+		return
+	}
+
+	//send stream update to timekeeper
+	if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", nil); !ok {
+		return
+	}
+
+	//send stream update to mutation manager
+	if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", nil); !ok {
+		return
+	}
+
+	//update the IndexInstMap
+	for _, index := range indexList {
+		idx.indexInstMap[index.InstId] = index
+	}
+
+	if idx.checkStreamEmpty(streamId) {
+		cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
+			streamId: common.INIT_STREAM}
+
+		//send stream update to timekeeper
+		if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", nil); !ok {
+			return
+		}
+
+		//send stream update to mutation manager
+		if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", nil); !ok {
+			return
+		}
+
+		idx.streamStatus[common.INIT_STREAM] = false
+	}
+
+	//send updated maps to all workers
+	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+
+	//update index map in storage manager
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, nil, idx.storageMgrCmdCh,
+		"StorageMgr", nil); !ok {
+		return
+	}
+
+	//update index map in mutation manager
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, nil, idx.mutMgrCmdCh,
+		"MutationMgr", nil); !ok {
+		return
+	}
+
+	//update index map in scan coordinator
+	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, nil, idx.scanCoordCmdCh,
+		"ScanCoordinator", nil); !ok {
+		return
+	}
+
+	//enable flush for this bucket in MAINT_STREAM
+	idx.tkCmdCh <- &MsgTKEnableFlush{streamId: common.MAINT_STREAM,
+		bucket: bucket}
+	<-idx.tkCmdCh
+
+	common.Debugf("Indexer::handleMergeStream Merge Done Bucket: %v Stream: %v",
+		bucket, streamId)
+}
+
+func (idx *indexer) getCurrentKVTs(cluster, bucket string) Timestamp {
+
+	ts := NewTimestamp()
+
+	start := time.Now()
+	if b, err := common.ConnectBucket(cluster, "default", bucket); err == nil {
+		//get all the vb seqnum
+		stats := b.GetStats("vbucket-seqno")
+
+		//for all nodes in cluster
+		for _, nodestat := range stats {
+			//for all vbuckets
+			for i := 1; i <= int(NUM_VBUCKETS); i++ {
+				vbkey := "vb_" + strconv.Itoa(i) + ":high_seqno"
+				if highseqno, ok := nodestat[vbkey]; ok {
+					if s, err := strconv.Atoi(highseqno); err == nil {
+						ts[i] = Seqno(s)
+					}
+				}
+			}
+		}
+		elapsed := time.Since(start)
+		common.Debugf("Indexer::getCurrentKVTs Time Taken %v", elapsed)
+		return ts
+
+	} else {
+		common.Errorf("Indexer::getCurrentKVTs Error Connecting to KV Cluster %v", err)
+		return nil
+	}
+
+}
+
+//checkBucketExistsInStream returns true if there is no index in the given stream
+//which belongs to the given bucket, else false
+func (idx *indexer) checkBucketExistsInStream(bucket string, streamId common.StreamId) bool {
+
+	//check if any index of the given bucket is in the Stream
+	for _, index := range idx.indexInstMap {
+
+		if index.Defn.Bucket == bucket && index.Stream == streamId {
+			return true
+		}
+	}
+
+	return false
+
+}
+
+//checkStreamEmpty return true if there is no index currently in the
+//give stream, else false
+func (idx *indexer) checkStreamEmpty(streamId common.StreamId) bool {
+
+	for _, index := range idx.indexInstMap {
+		if index.Stream == streamId {
+			common.Tracef("Indexer::checkStreamEmpty Found Index %v Stream %v",
+				index.InstId, streamId)
+			return false
+		}
+	}
+	common.Tracef("Indexer::checkStreamEmpty Stream %v Empty", streamId)
+
+	return true
+
 }

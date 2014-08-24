@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 )
 
@@ -25,3 +26,26 @@ type IndexPartnMap map[common.IndexInstId]PartitionInstMap
 
 //PartitionInstMap maps a PartitionId to PartitionInst
 type PartitionInstMap map[common.PartitionId]PartitionInst
+
+func (pm IndexPartnMap) String() string {
+
+	str := "\n"
+	for i, pi := range pm {
+		str += fmt.Sprintf("\tInstanceId: %v ", i)
+		for j, p := range pi {
+			str += fmt.Sprintf("PartitionId: %v ", j)
+			str += fmt.Sprintf("Endpoints: %v ", p.Defn.Endpoints())
+		}
+		str += "\n"
+	}
+	return str
+}
+
+func (pi PartitionInst) String() string {
+
+	str := fmt.Sprintf("PartitionId: %v ", pi.Defn.GetPartitionId())
+	str += fmt.Sprintf("Endpoints: %v ", pi.Defn.Endpoints())
+
+	return str
+
+}

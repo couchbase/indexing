@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 )
 
@@ -106,4 +107,18 @@ type IndexScanResponse struct {
 //Indexer Node Info
 type NodeInfo struct {
 	IndexerURL string `json:"indexerURL,omitempty"`
+}
+
+func (idx IndexInfo) String() string {
+
+	str := "\n"
+	str += fmt.Sprintf("\tName : %v\n", idx.Name)
+	str += fmt.Sprintf("\tUuid : %v\n", idx.Uuid)
+	str += fmt.Sprintf("\tUsing: %v\n", idx.Using)
+	str += fmt.Sprintf("\tOnExprListName : %v\n", idx.OnExprList)
+	str += fmt.Sprintf("\tBucket: %v\n", idx.Bucket)
+	str += fmt.Sprintf("\tIsPrimary: %v\n", idx.IsPrimary)
+	str += fmt.Sprintf("\tExprtype: %v\n", idx.Exprtype)
+	return str
+
 }

@@ -17,21 +17,18 @@ import (
 	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
+var HTTP_PREFIX string = "http://"
+
 //KVSender provides the mechanism to talk to KV(projector, router etc)
 type KVSender interface {
 }
-
-//map from bucket name to index count
-type BucketIndexCountMap map[string]int
 
 type kvSender struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any message to supervisor
 
-	indexInstMap common.IndexInstMap
-	streamStatus StreamStatusMap
-
-	bucketIndexCountMap BucketIndexCountMap
+	streamStatus              StreamStatusMap
+	streamBucketIndexCountMap map[common.StreamId]BucketIndexCountMap
 
 	numVbuckets uint16
 }
@@ -41,12 +38,11 @@ func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
 
 	//Init the kvSender struct
 	k := &kvSender{
-		supvCmdch:           supvCmdch,
-		supvRespch:          supvRespch,
-		streamStatus:        make(StreamStatusMap),
-		indexInstMap:        make(common.IndexInstMap),
-		numVbuckets:         numVbuckets,
-		bucketIndexCountMap: make(BucketIndexCountMap),
+		supvCmdch:                 supvCmdch,
+		supvRespch:                supvRespch,
+		streamStatus:              make(StreamStatusMap),
+		numVbuckets:               numVbuckets,
+		streamBucketIndexCountMap: make(map[common.StreamId]BucketIndexCountMap),
 	}
 
 	//start kvsender loop which listens to commands from its supervisor
@@ -68,7 +64,7 @@ loop:
 		case cmd, ok := <-k.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == KV_SENDER_SHUTDOWN {
-					common.Infof("KVSender: Shutting Down")
+					common.Infof("KVSender::run Shutting Down")
 					k.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -86,47 +82,52 @@ func (k *kvSender) handleSupvervisorCommands(cmd Message) {
 
 	switch cmd.GetMsgType() {
 
-	case INDEXER_CREATE_INDEX_DDL:
-		k.handleCreateIndex(cmd)
+	case OPEN_STREAM:
+		k.handleOpenStream(cmd)
 
-	case INDEXER_DROP_INDEX_DDL:
-		k.handleDropIndex(cmd)
+	case ADD_INDEX_LIST_TO_STREAM:
+		k.handleAddIndexListToStream(cmd)
+
+	case REMOVE_INDEX_LIST_FROM_STREAM:
+		k.handleRemoveIndexListFromStream(cmd)
+
+	case CLOSE_STREAM:
+		k.handleCloseStream(cmd)
+
+	case KV_SENDER_GET_CURR_KV_TS:
+		k.handleGetCurrKVTimestamp(cmd)
 
 	default:
-		common.Errorf("KVSender: Received Unknown Command %v", cmd)
+		common.Errorf("KVSender::handleSupvervisorCommands "+
+			"Received Unknown Command %v", cmd)
 	}
 
 }
 
-func (k *kvSender) handleCreateIndex(cmd Message) {
+func (k *kvSender) handleOpenStream(cmd Message) {
 
-	common.Infof("KVSender: Received Create Index %v", cmd)
+	common.Infof("KVSender::handleOpenStream %v", cmd)
 
-	var newStreamRequest bool
+	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 
-	if status, _ := k.streamStatus[MAINT_STREAM]; !status {
-		newStreamRequest = true
+	if status, _ := k.streamStatus[streamId]; status {
+		k.supvCmdch <- &MsgError{
+			err: Error{code: ERROR_KVSENDER_STREAM_ALREADY_OPEN,
+				severity: FATAL}}
+		return
 	}
 
-	if newStreamRequest {
-		k.handleNewMutationStreamRequest(cmd)
-	} else {
-		k.handleUpdateMutationStreamRequest(cmd)
-	}
-}
+	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
 
-func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
+	//For now, only one index comes in the request
+	//TODO Add Batching support
+	indexInst := indexInstList[0]
 
-	common.Infof("KVSender: handleNewMutationStreamRequest Processing"+
-		"Create Index %v", cmd)
-
-	indexInst := cmd.(*MsgCreateIndex).GetIndexInst()
-
-	bTs, err := makeBranchTimestamp(indexInst.Defn.Bucket, k.numVbuckets)
+	bTs, err := makeBranchTimestamp(streamId, indexInst.Defn.Bucket, k.numVbuckets)
 
 	if err != nil {
 		k.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_CREATE_INDEX_FAILED,
+			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
 		return
@@ -135,10 +136,11 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 	protoDefn := convertIndexDefnToProtobuf(indexInst.Defn)
 	protoInst := convertIndexInstToProtobuf(indexInst, protoDefn)
 
-	addPartnInfoToProtoInst(indexInst, protoInst)
+	addPartnInfoToProtoInst(indexInst, streamId, protoInst)
 
+	topic := getTopicForStreamId(streamId)
 	mReq := protobuf.MutationStreamRequest{
-		Topic:             proto.String(MAINT_TOPIC),
+		Topic:             proto.String(topic),
 		Pools:             []string{DEFAULT_POOL},
 		Buckets:           []string{indexInst.Defn.Bucket},
 		RestartTimestamps: []*protobuf.BranchTimestamp{bTs},
@@ -147,73 +149,85 @@ func (k *kvSender) handleNewMutationStreamRequest(cmd Message) {
 
 	mReq.SetStartFlag()
 
-	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
+	ap := adminport.NewHTTPClient(HTTP_PREFIX+PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
 	mRes := protobuf.MutationStreamResponse{}
 
-	common.Debugf("KVSender: MutationStream Request %v", mReq)
+	common.Debugf("KVSender::handleOpenStream \n\tMutationStream Request %v", mReq)
 
 	if err := ap.Request(&mReq, &mRes); err != nil {
-		common.Errorf("KVSender: Unexpected Error During Mutation Stream Request %v "+
-			"for Create Index %v. Err %v", mReq, indexInst, err)
+		common.Errorf("KVSender::handleOpenStream \n\tUnexpected Error During Mutation Stream "+
+			"Request %v for Create Index %v. Err %v", mReq, indexInst, err)
 
 		k.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_CREATE_INDEX_FAILED,
+			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
 		return
 	} else if mRes.GetErr() != nil {
 		err := mRes.GetErr()
-		common.Errorf("KVSender: Unexpected Error During Mutation Stream Request %v "+
-			"for Create Index %v. Err %v", mReq, indexInst, err.GetError())
+		common.Errorf("KVSender::handleOpenStream \n\tUnexpected Error During Mutation Stream "+
+			"Request %v for Create Index %v. Err %v", mReq, indexInst, err.GetError())
 
 		k.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_CREATE_INDEX_FAILED,
+			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    errors.New(err.GetError())}}
 		return
 	}
 
-	common.Debugf("KVSender: MutationStream Response %v", mRes)
-
-	//update index map with new index
-	k.indexInstMap[indexInst.InstId] = indexInst
+	common.Debugf("KVSender:handleOpenStream \n\tMutationStream Response %v", mRes)
 
 	//increment index count for this bucket
-	k.bucketIndexCountMap[indexInst.Defn.Bucket]++
+	bucketIndexCountMap := make(BucketIndexCountMap)
+	bucketIndexCountMap[indexInst.Defn.Bucket] = 1
+	k.streamBucketIndexCountMap[streamId] = bucketIndexCountMap
 
-	k.streamStatus[MAINT_STREAM] = true
+	k.streamStatus[streamId] = true
 	k.supvCmdch <- &MsgSuccess{}
 
 }
 
-func (k *kvSender) handleUpdateMutationStreamRequest(cmd Message) {
+func (k *kvSender) handleAddIndexListToStream(cmd Message) {
 
-	common.Infof("KVSender: handleUpdateMutationStreamRequest Processing"+
-		"Create Index %v", cmd)
+	common.Debugf("KVSender::handleAddIndexListToStream %v", cmd)
 
-	indexInst := cmd.(*MsgCreateIndex).GetIndexInst()
+	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
+
+	//If Stream is not yet open, return an error
+	if status, _ := k.streamStatus[streamId]; !status {
+		k.supvCmdch <- &MsgError{
+			err: Error{code: ERROR_KV_SENDER_UNKNOWN_STREAM,
+				severity: FATAL}}
+		return
+	}
+
+	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
+	//For now, only one index comes in the request
+	//TODO Add Batching support
+	indexInst := indexInstList[0]
 
 	protoDefn := convertIndexDefnToProtobuf(indexInst.Defn)
 	protoInst := convertIndexInstToProtobuf(indexInst, protoDefn)
 
-	addPartnInfoToProtoInst(indexInst, protoInst)
+	addPartnInfoToProtoInst(indexInst, streamId, protoInst)
 
-	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
+	ap := adminport.NewHTTPClient(HTTP_PREFIX+PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
 
 	//if this is the first index for this bucket, add new bucket to stream
-	if c, ok := k.bucketIndexCountMap[indexInst.Defn.Bucket]; c == 0 || !ok {
-		bTs, err := makeBranchTimestamp(indexInst.Defn.Bucket, k.numVbuckets)
+	if c, ok := k.streamBucketIndexCountMap[streamId][indexInst.Defn.Bucket]; c == 0 || !ok {
+		bTs, err := makeBranchTimestamp(streamId, indexInst.Defn.Bucket, k.numVbuckets)
 
 		if err != nil {
 			k.supvCmdch <- &MsgError{
-				err: Error{code: ERROR_CREATE_INDEX_FAILED,
+				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 					severity: FATAL,
 					cause:    err}}
 			return
 		}
 
+		topic := getTopicForStreamId(streamId)
 		mReq := protobuf.UpdateMutationStreamRequest{
-			Topic:             proto.String(MAINT_TOPIC),
+			Topic:             proto.String(topic),
 			Pools:             []string{DEFAULT_POOL},
 			Buckets:           []string{indexInst.Defn.Bucket},
 			RestartTimestamps: []*protobuf.BranchTimestamp{bTs},
@@ -222,199 +236,257 @@ func (k *kvSender) handleUpdateMutationStreamRequest(cmd Message) {
 
 		mReq.SetAddBucketFlag()
 
-		common.Debugf("KVSender: UpdateMutationStreamRequest %v", mReq)
+		common.Debugf("KVSender::handleAddIndexListToStream \n\tUpdateMutationStreamRequest %v", mReq)
 
 		mRes := protobuf.MutationStreamResponse{}
 		if err := ap.Request(&mReq, &mRes); err != nil {
-			common.Errorf("KVSender: Unexpected Error During Mutation Stream Request %v "+
-				"for Create Index %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
+			common.Errorf("KVSender::handleAddIndexListToStream \n\tUnexpected Error During "+
+				"Mutation Stream Request %v for IndexInst %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
 
 			k.supvCmdch <- &MsgError{
-				err: Error{code: ERROR_CREATE_INDEX_FAILED,
+				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 					severity: FATAL,
 					cause:    err}}
 			return
 		} else if mRes.GetErr() != nil {
 			err := mRes.GetErr()
-			common.Errorf("KVSender: Unexpected Error During Mutation Stream Request %v "+
-				"for Create Index %v. Err %v", mReq, indexInst, err.GetError())
+			common.Errorf("KVSender::handleAddIndexListToStream \n\tUnexpected Error During "+
+				"Mutation Stream Request %v for IndexInst %v. Err %v", mReq, indexInst, err.GetError())
 
 			k.supvCmdch <- &MsgError{
-				err: Error{code: ERROR_CREATE_INDEX_FAILED,
+				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 					severity: FATAL,
 					cause:    errors.New(err.GetError())}}
 			return
 		}
-		common.Debugf("KVSender: MutationStreamResponse %v", mReq)
+		common.Debugf("KVSender::handleAddIndexListToStream \n\tMutationStreamResponse %v", mReq)
+
+		//increment index count for this bucket
+		bucketIndexCountMap := make(BucketIndexCountMap)
+		bucketIndexCountMap[indexInst.Defn.Bucket] = 1
+		k.streamBucketIndexCountMap[streamId] = bucketIndexCountMap
 
 	} else {
 		//add new engine(index) to existing stream
+		topic := getTopicForStreamId(streamId)
 		mReq := protobuf.SubscribeStreamRequest{
-			Topic:     proto.String(MAINT_TOPIC),
+			Topic:     proto.String(topic),
 			Instances: []*protobuf.IndexInst{protoInst},
 		}
 
 		mReq.SetAddEnginesFlag()
 
-		common.Debugf("KVSender: SubscribeStreamRequest %v", mReq)
+		common.Debugf("KVSender::handleAddIndexListToStream \n\tSubscribeStreamRequest %v", mReq)
 
 		mRes := protobuf.Error{}
 		if err := ap.Request(&mReq, &mRes); err != nil {
-			common.Errorf("KVSender: Unexpected Error During Mutation Stream Request %v "+
-				"for Create Index %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
+			common.Errorf("KVSender::handleAddIndexListToStream \n\tUnexpected Error During "+
+				"Mutation Stream Request %v for IndexInst %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
 
 			k.supvCmdch <- &MsgError{
-				err: Error{code: ERROR_CREATE_INDEX_FAILED,
+				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 					severity: FATAL,
 					cause:    err}}
 			return
 		} else if mRes.GetError() != "" {
-			common.Errorf("KVSender: Unexpected Error During Mutation Stream Request %v "+
-				"for Create Index %v. Err %v", mReq, indexInst, mRes.GetError())
+			common.Errorf("KVSender::handleAddIndexListToStream \n\tUnexpected Error During "+
+				"Mutation Stream Request %v for IndexInst %v. Err %v", mReq, indexInst, mRes.GetError())
 
 			k.supvCmdch <- &MsgError{
-				err: Error{code: ERROR_CREATE_INDEX_FAILED,
+				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 					severity: FATAL,
 					cause:    errors.New(mRes.GetError())}}
 			return
 		}
+		//increment index count for this bucket
+		k.streamBucketIndexCountMap[streamId][indexInst.Defn.Bucket]++
 	}
-
-	//update index map with new index
-	k.indexInstMap[indexInst.InstId] = indexInst
-
-	//increment index count for this bucket
-	k.bucketIndexCountMap[indexInst.Defn.Bucket]++
 
 	k.supvCmdch <- &MsgSuccess{}
 }
 
-func (k *kvSender) handleDropIndex(cmd Message) {
+func (k *kvSender) handleRemoveIndexListFromStream(cmd Message) {
 
-	common.Infof("KVSender: Received Drop Index %v", cmd)
+	common.Debugf("KVSender::handleRemoveIndexListFromStream %v", cmd)
 
-	indexInstId := cmd.(*MsgDropIndex).GetIndexInstId()
+	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 
-	var indexInst common.IndexInst
-	var ok bool
-
-	if indexInst, ok = k.indexInstMap[indexInstId]; !ok {
-
-		common.Errorf("KVSender: Unknown IndexInstId %v in Drop Index Request", indexInstId)
-
+	//if stream is not yet open, return an error
+	if status, _ := k.streamStatus[streamId]; !status {
 		k.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_DROP_INDEX_FAILED,
+			err: Error{code: ERROR_KV_SENDER_UNKNOWN_STREAM,
 				severity: FATAL}}
 		return
 	}
+
+	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
+	//For now, only one index comes in the request
+	//TODO Add Batching support
+	indexInst := indexInstList[0]
 
 	protoDefn := convertIndexDefnToProtobuf(indexInst.Defn)
 	protoInst := convertIndexInstToProtobuf(indexInst, protoDefn)
 
 	//delete engine(index) from the existing stream
+	topic := getTopicForStreamId(streamId)
 	mReq := protobuf.SubscribeStreamRequest{
-		Topic:     proto.String(MAINT_TOPIC),
+		Topic:     proto.String(topic),
 		Instances: []*protobuf.IndexInst{protoInst},
 	}
 
 	mReq.SetDeleteEnginesFlag()
 
-	common.Debugf("KVSender: SubscribeStreamRequest %v", mReq)
+	common.Debugf("KVSender::handleRemoveIndexListFromStream \n\tSubscribeStreamRequest %v", mReq)
 
-	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
+	ap := adminport.NewHTTPClient(HTTP_PREFIX+PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
 
 	mRes := protobuf.Error{}
 	if err := ap.Request(&mReq, &mRes); err != nil {
-		common.Errorf("KVSender: Unexpected Error During Mutation Stream Request %v "+
-			"for Drop Index %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
+		common.Errorf("KVSender::handleRemoveIndexListFromStream \n\tUnexpected Error During "+
+			"Mutation Stream Request %v for IndexInst %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
 
 		k.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_DROP_INDEX_FAILED,
+			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
 		return
 	} else if mRes.GetError() != "" {
-		common.Errorf("KVSender: Unexpected Error During Mutation Stream Request %v "+
-			"for Drop Index %v. Err %v. Resp %v.", mReq, indexInst, mRes.GetError(), mRes)
+		common.Errorf("KVSender::handleRemoveIndexListFromStream \n\tUnexpected Error During "+
+			"Mutation Stream Request %v for IndexInst %v. Err %v. Resp %v.", mReq,
+			indexInst, mRes.GetError(), mRes)
 
 		k.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_DROP_INDEX_FAILED,
+			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    errors.New(mRes.GetError())}}
 		return
 	}
 
-	delete(k.indexInstMap, indexInstId)
-	k.bucketIndexCountMap[indexInst.Defn.Bucket]--
+	k.streamBucketIndexCountMap[streamId][indexInst.Defn.Bucket]--
 
 	//if this is the last index for this bucket, delete bucket
 	//from the stream
-	if c, ok := k.bucketIndexCountMap[indexInst.Defn.Bucket]; c == 0 || !ok {
+	if c, ok := k.streamBucketIndexCountMap[streamId][indexInst.Defn.Bucket]; c == 0 || !ok {
 
+		topic := getTopicForStreamId(streamId)
 		mReq := protobuf.UpdateMutationStreamRequest{
-			Topic:   proto.String(MAINT_TOPIC),
+			Topic:   proto.String(topic),
 			Buckets: []string{indexInst.Defn.Bucket},
 		}
 
 		mReq.SetDelBucketFlag()
 
-		common.Debugf("KVSender: UpdateMutationStreamRequest %v", mReq)
+		common.Debugf("KVSender::handleRemoveIndexListFromStream \n\tUpdateMutationStreamRequest %v", mReq)
 
 		mRes := protobuf.MutationStreamResponse{}
 		if err := ap.Request(&mReq, &mRes); err != nil {
-			common.Errorf("KVSender: Unexpected Error During Mutation Stream Request %v "+
-				"for Drop Index %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
+			common.Errorf("KVSender::handleRemoveIndexListFromStream \n\tUnexpected Error During "+
+				"Mutation Stream Request %v for IndexInst %v. Err %v. Resp %v.", mReq, indexInst, err, mRes)
 
 			k.supvCmdch <- &MsgError{
-				err: Error{code: ERROR_DROP_INDEX_FAILED,
+				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 					severity: FATAL,
 					cause:    err}}
 			return
 		} else if mRes.GetErr() != nil {
 			err := mRes.GetErr()
-			common.Errorf("KVSender: Unexpected Error During Mutation Stream Request %v "+
-				"for Drop Index %v. Err %v. Resp %v.", mReq, indexInst, err.GetError(), mRes)
+			common.Errorf("KVSender::handleRemoveIndexListFromStream \n\tUnexpected Error During "+
+				"Mutation Stream Request %v for IndexInst %v. Err %v. Resp %v.", mReq,
+				indexInst, err.GetError(), mRes)
 
 			k.supvCmdch <- &MsgError{
-				err: Error{code: ERROR_DROP_INDEX_FAILED,
+				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 					severity: FATAL,
 					cause:    errors.New(err.GetError())}}
 			return
 		}
+		//TODO verify this
+		delete(k.streamBucketIndexCountMap[streamId], indexInst.Defn.Bucket)
 	}
 
 	//if this was the last index in the stream, close it
-	if len(k.indexInstMap) == 0 {
+	if len(k.streamBucketIndexCountMap[streamId]) == 0 {
 
+		topic := getTopicForStreamId(streamId)
 		sReq := protobuf.ShutdownStreamRequest{
-			Topic: proto.String(MAINT_TOPIC),
+			Topic: proto.String(topic),
 		}
-		common.Debugf("KVSender: ShutdownStreamRequest %v", mReq)
+		common.Debugf("KVSender::handleRemoveIndexListFromStream \n\tShutdownStreamRequest %v", mReq)
 
 		sRes := protobuf.Error{}
 		if err := ap.Request(&sReq, &sRes); err != nil {
-			common.Errorf("KVSender: Unexpected Error During Close Mutation Stream Request %v "+
-				"Err %v. Resp %v.", mReq, err, mRes)
+			common.Errorf("KVSender::handleRemoveIndexListFromStream \n\tUnexpected Error During "+
+				"Close Mutation Stream Request %v Err %v. Resp %v.", mReq, err, mRes)
 
 			k.supvCmdch <- &MsgError{
-				err: Error{code: ERROR_DROP_INDEX_FAILED,
+				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 					severity: FATAL,
 					cause:    err}}
 			return
 		} else if mRes.GetError() != "" {
-			common.Errorf("KVSender: Unexpected Error During Close Mutation Stream Request %v "+
-				"Err %v. Resp %v.", mReq, mRes.GetError(), mRes)
+			common.Errorf("KVSender::handleRemoveIndexListFromStream \n\tUnexpected Error During "+
+				"Close Mutation Stream Request %v Err %v. Resp %v.", mReq, mRes.GetError(), mRes)
 
 			k.supvCmdch <- &MsgError{
-				err: Error{code: ERROR_DROP_INDEX_FAILED,
+				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 					severity: FATAL,
 					cause:    errors.New(mRes.GetError())}}
 			return
 		}
-		k.streamStatus[MAINT_STREAM] = false
+		//clean internal maps
+		delete(k.streamBucketIndexCountMap, streamId)
+		k.streamStatus[streamId] = false
 	}
 
 	k.supvCmdch <- &MsgSuccess{}
+}
+
+func (k *kvSender) handleCloseStream(cmd Message) {
+
+	common.Infof("KVSender::handleCloseStream %v", cmd)
+
+	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
+
+	//if stream is already closed, return error
+	if status, _ := k.streamStatus[streamId]; !status {
+		k.supvCmdch <- &MsgError{
+			err: Error{code: ERROR_KVSENDER_STREAM_ALREADY_CLOSED,
+				severity: FATAL}}
+		return
+	}
+
+	topic := getTopicForStreamId(streamId)
+
+	sReq := protobuf.ShutdownStreamRequest{
+		Topic: proto.String(topic),
+	}
+	common.Debugf("KVSender::handleCloseStream \n\tShutdownStreamRequest %v", sReq)
+
+	ap := adminport.NewHTTPClient(HTTP_PREFIX+PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
+	sRes := protobuf.Error{}
+	if err := ap.Request(&sReq, &sRes); err != nil {
+		common.Errorf("KVSender::handleCloseStream \n\tUnexpected Error During "+
+			"Close Mutation Stream Request %v Err %v. Resp %v.", sReq, err, sRes)
+
+		k.supvCmdch <- &MsgError{
+			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
+				severity: FATAL,
+				cause:    err}}
+		return
+	} else if sRes.GetError() != "" {
+		common.Errorf("KVSender::handleCloseStream \n\tUnexpected Error During Close "+
+			"Mutation Stream Request %v Err %v. Resp %v.", sReq, sRes.GetError(), sRes)
+
+		k.supvCmdch <- &MsgError{
+			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
+				severity: FATAL,
+				cause:    errors.New(sRes.GetError())}}
+		return
+	}
+	//clean internal maps
+	delete(k.streamBucketIndexCountMap, streamId)
+	k.streamStatus[streamId] = false
+
 }
 
 func convertIndexDefnToProtobuf(indexDefn common.IndexDefn) *protobuf.IndexDefn {
@@ -455,7 +527,7 @@ func convertIndexInstToProtobuf(indexInst common.IndexInst,
 }
 
 func addPartnInfoToProtoInst(indexInst common.IndexInst,
-	protoInst *protobuf.IndexInst) {
+	streamId common.StreamId, protoInst *protobuf.IndexInst) {
 
 	switch partn := indexInst.Pc.(type) {
 	case *common.KeyPartitionContainer:
@@ -467,6 +539,13 @@ func addPartnInfoToProtoInst(indexInst common.IndexInst,
 		var endpoints []string
 		for _, p := range partnDefn {
 			for _, e := range p.Endpoints() {
+				//Set the right endpoint based on streamId
+				switch streamId {
+				case common.MAINT_STREAM:
+					e = common.Endpoint(INDEXER_MAINT_DATA_PORT_ENDPOINT)
+				case common.INIT_STREAM:
+					e = common.Endpoint(INDEXER_INIT_DATA_PORT_ENDPOINT)
+				}
 				endpoints = append(endpoints, string(e))
 			}
 
@@ -477,7 +556,8 @@ func addPartnInfoToProtoInst(indexInst common.IndexInst,
 	}
 }
 
-func makeBranchTimestamp(bucket string, numVbuckets uint16) (*protobuf.BranchTimestamp, error) {
+func makeBranchTimestamp(streamId common.StreamId, bucket string,
+	numVbuckets uint16) (*protobuf.BranchTimestamp, error) {
 
 	//TODO the vbNums should be based on the actual vbuckets being
 	//served from a projector, for now assume single projector and send
@@ -494,17 +574,17 @@ func makeBranchTimestamp(bucket string, numVbuckets uint16) (*protobuf.BranchTim
 	}
 	fRes := protobuf.FailoverLogResponse{}
 
-	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
+	ap := adminport.NewHTTPClient(HTTP_PREFIX+PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
 
-	common.Debugf("KVSender: Failover Log Request %v", fReq)
+	common.Debugf("KVSender::makeBranchTimestamp \n\tFailover Log Request %v", fReq)
 
 	if err := ap.Request(&fReq, &fRes); err != nil {
-		common.Errorf("KVSender: Unexpected Error During Failover Log Request %v "+
-			"for Bucket %v. Err %v", fReq, bucket, err)
+		common.Errorf("KVSender::makeBranchTimestamp \n\tUnexpected Error During Failover "+
+			"Log Request %v for Bucket %v. Err %v", fReq, bucket, err)
 		return nil, err
 	}
 
-	common.Debugf("KVSender: Failover Log Response %v", fRes)
+	common.Debugf("KVSender::makeBranchTimestamp \n\tFailover Log Response %v", fRes)
 
 	vbuuids := make(map[uint32]uint64)
 	for _, flog := range fRes.GetLogs() {
@@ -528,4 +608,25 @@ func makeBranchTimestamp(bucket string, numVbuckets uint16) (*protobuf.BranchTim
 	}
 
 	return bTs, nil
+}
+
+func (k *kvSender) handleGetCurrKVTimestamp(cmd Message) {
+
+	//TODO For now Indexer is getting the TS directly from
+	//KV. Once Projector API is ready, use that.
+
+}
+
+func getTopicForStreamId(streamId common.StreamId) string {
+
+	var topic string
+
+	switch streamId {
+	case common.MAINT_STREAM:
+		topic = MAINT_TOPIC
+	case common.INIT_STREAM:
+		topic = INIT_TOPIC
+	}
+
+	return topic
 }

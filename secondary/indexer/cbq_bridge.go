@@ -84,7 +84,7 @@ func (cbq *cbqBridge) initCbqBridge() error {
 	http.HandleFunc("/list", cbq.handleList)
 	http.HandleFunc("/scan", cbq.handleScan)
 
-	common.Infof("CbqBridge: Indexer Listening on %v", CBQ_BRIDGE_HTTP_ADDR)
+	common.Infof("CbqBridge::initCbqBridge Listening on %v", CBQ_BRIDGE_HTTP_ADDR)
 	if err := http.ListenAndServe(CBQ_BRIDGE_HTTP_ADDR, nil); err != nil {
 		common.Errorf("CbqBridge: Error Starting Http Server: %v", err)
 		return err
@@ -99,7 +99,7 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	indexinfo := indexRequest(r).Index
 
-	common.Debugf("CbqBridge: Received CreateIndex %v", indexinfo)
+	common.Debugf("CbqBridge::handleCreate Received CreateIndex %v", indexinfo)
 
 	//generate a new unique id
 	uuid := rand.Int()
@@ -117,7 +117,7 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 	pc := common.NewKeyPartitionContainer()
 
 	//Add one partition for now
-	endpt := []common.Endpoint{INDEXER_DATA_PORT_ENDPOINT}
+	endpt := []common.Endpoint{INDEXER_MAINT_DATA_PORT_ENDPOINT}
 	partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
 		Endpts: endpt}
 	pc.AddPartition(common.PartitionId(1), partnDefn)
@@ -130,16 +130,32 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	indexinfo.Uuid = strconv.Itoa(uuid)
 
-	cbq.supvRespch <- &MsgCreateIndex{indexInst: idxInst}
+	respCh := make(MsgChannel)
+	cbq.supvRespch <- &MsgCreateIndex{indexInst: idxInst,
+		respCh: respCh}
 
-	res = IndexMetaResponse{
-		Status:     RESP_SUCCESS,
-		Indexes:    []IndexInfo{indexinfo},
-		ServerUuid: "",
+	//wait for response from indexer
+	msg := <-respCh
+	if msg.GetMsgType() == MSG_SUCCESS {
+		res = IndexMetaResponse{
+			Status:     RESP_SUCCESS,
+			Indexes:    []IndexInfo{indexinfo},
+			ServerUuid: "",
+		}
+		cbq.indexMap[idxInst.InstId] = indexinfo
+	} else {
+		err := msg.(*MsgError).GetError()
+
+		common.Debugf("CbqBridge::handleCreate Received Error %s", err.cause)
+
+		ierr := IndexError{Code: string(RESP_ERROR),
+			Msg: err.cause.Error()}
+
+		res = IndexMetaResponse{
+			Status: RESP_ERROR,
+			Errors: []IndexError{ierr},
+		}
 	}
-
-	cbq.indexMap[idxInst.InstId] = indexinfo
-
 	sendResponse(w, res)
 }
 
@@ -149,18 +165,37 @@ func (cbq *cbqBridge) handleDrop(w http.ResponseWriter, r *http.Request) {
 
 	indexinfo := indexRequest(r).Index
 
-	common.Debugf("CbqBridge: Received DropIndex %v", indexinfo)
+	common.Debugf("CbqBridge::handleDrop Received DropIndex %v", indexinfo)
 
 	uuid, _ := strconv.Atoi(indexinfo.Uuid)
-	cbq.supvRespch <- &MsgDropIndex{indexInstId: common.IndexInstId(uuid)}
 
-	res = IndexMetaResponse{
-		Status:     RESP_SUCCESS,
-		ServerUuid: "",
+	respCh := make(MsgChannel)
+	cbq.supvRespch <- &MsgDropIndex{indexInstId: common.IndexInstId(uuid),
+		respCh: respCh}
+
+	//wait for response from indexer
+	msg := <-respCh
+	if msg.GetMsgType() == MSG_SUCCESS {
+		res = IndexMetaResponse{
+			Status:     RESP_SUCCESS,
+			ServerUuid: "",
+		}
+		delete(cbq.indexMap, common.IndexInstId(uuid))
+	} else {
+		err := msg.(*MsgError).GetError()
+
+		common.Debugf("CbqBridge: DropIndex Received Error %s", err.cause)
+
+		ierr := IndexError{Code: string(RESP_ERROR),
+			Msg: err.cause.Error()}
+
+		res = IndexMetaResponse{
+			Status: RESP_ERROR,
+			Errors: []IndexError{ierr},
+		}
 	}
-
-	delete(cbq.indexMap, common.IndexInstId(uuid))
 	sendResponse(w, res)
+
 }
 
 //list
@@ -169,7 +204,7 @@ func (cbq *cbqBridge) handleList(w http.ResponseWriter, r *http.Request) {
 
 	serverUuid := indexRequest(r).ServerUuid
 
-	common.Debugf("CbqBridge: Received ListIndex")
+	common.Debugf("CbqBridge::handleList Received ListIndex")
 
 	var indexList []IndexInfo
 	for _, idx := range cbq.indexMap {
@@ -191,7 +226,7 @@ func (cbq *cbqBridge) handleScan(w http.ResponseWriter, r *http.Request) {
 	uuid, _ := strconv.Atoi(indexreq.Index.Uuid)
 	qp := indexreq.Params
 
-	common.Debugf("CbqBridge: Received ScanIndex %v", indexreq)
+	common.Debugf("CbqBridge::handleScan Received ScanIndex %v", indexreq)
 
 	var lowkey, highkey Key
 	var err error
@@ -253,7 +288,7 @@ func (cbq *cbqBridge) receiveValue(w http.ResponseWriter, scanId int64,
 		select {
 		case value, ok = <-chres:
 			if ok {
-				common.Tracef("CbqBridge: ScanId %v Received Value %s",
+				common.Tracef("CbqBridge::receiveValue ScanId %v Received Value %s",
 					scanId, value.String())
 
 				row := IndexRow{
@@ -265,14 +300,14 @@ func (cbq *cbqBridge) receiveValue(w http.ResponseWriter, scanId int64,
 
 		case totalRows, ok = <-chcount:
 			if ok {
-				common.Tracef("CbqBridge: ScanId %v Received Count %s",
+				common.Tracef("CbqBridge::receiveValue ScanId %v Received Count %s",
 					scanId, totalRows)
 			}
 
 		case errMsg, ok = <-cherr:
 			if ok {
 				err := errMsg.(*MsgError).GetError()
-				common.Tracef("CbqBridge: ScanId %v Received Error %s",
+				common.Tracef("CbqBridge::receiveValue ScanId %v Received Error %s",
 					scanId, err.cause)
 				ierr := IndexError{Code: string(RESP_ERROR),
 					Msg: err.cause.Error()}
@@ -311,7 +346,7 @@ func sendResponse(w http.ResponseWriter, res interface{}) {
 	header["Content-Type"] = []string{"application/json"}
 
 	if buf, err = json.Marshal(&res); err != nil {
-		common.Errorf("Unable to marshal response", res)
+		common.Errorf("CbqBridge::sendResponse Unable to marshal response", res)
 	}
 	w.Write(buf)
 }

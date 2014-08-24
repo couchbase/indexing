@@ -607,7 +607,7 @@ func (s *scanCoordinator) receiveValue(cmd Message, chval chan Value, cherr chan
 
 func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 
-	common.Infof("ScanCoordinator: Received Command to Update InstanceMap %v", cmd)
+	common.Infof("ScanCoordinator::handleUpdateIndexInstMap %v", cmd)
 	s.indexInstMap = cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 
 	s.supvCmdch <- &MsgSuccess{}
@@ -615,7 +615,7 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 
 func (s *scanCoordinator) handleUpdateIndexPartnMap(cmd Message) {
 
-	common.Infof("ScanCoordinator: Received Command to Partition Map %v", cmd)
+	common.Infof("ScanCoordinator::handleUpdateIndexPartnMap %v", cmd)
 	s.indexPartnMap = cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 
 	s.supvCmdch <- &MsgSuccess{}

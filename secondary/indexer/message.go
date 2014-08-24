@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 )
 
@@ -34,11 +35,6 @@ const (
 	STREAM_READER_SHUTDOWN
 
 	//MUTATION_MANAGER
-	MUT_MGR_OPEN_STREAM
-	MUT_MGR_ADD_INDEX_LIST_TO_STREAM
-	MUT_MGR_REMOVE_INDEX_LIST_FROM_STREAM
-	MUT_MGR_CLOSE_STREAM
-	MUT_MGR_CLEANUP_STREAM
 	MUT_MGR_PERSIST_MUTATION_QUEUE
 	MUT_MGR_DRAIN_MUTATION_QUEUE
 	MUT_MGR_GET_MUTATION_QUEUE_HWT
@@ -47,16 +43,18 @@ const (
 	MUT_MGR_FLUSH_DONE
 
 	//TIMEKEEPER
-	TK_STREAM_START
-	TK_STREAM_STOP
 	TK_SHUTDOWN
 	TK_STABILITY_TIMESTAMP
+	TK_INIT_BUILD_DONE
+	TK_ENABLE_FLUSH
+	TK_MERGE_STREAM
 
 	//STORAGE_MANAGER
 	STORAGE_MGR_SHUTDOWN
 
 	//KVSender
 	KV_SENDER_SHUTDOWN
+	KV_SENDER_GET_CURR_KV_TS
 
 	//ADMIN_MGR
 	ADMIN_MGR_SHUTDOWN
@@ -77,8 +75,15 @@ const (
 	SCAN_COORD_SCAN_SLICE
 	SCAN_COORD_SHUTDOWN
 
+	//COMMON
 	UPDATE_INDEX_INSTANCE_MAP
 	UPDATE_INDEX_PARTITION_MAP
+
+	OPEN_STREAM
+	ADD_INDEX_LIST_TO_STREAM
+	REMOVE_INDEX_LIST_FROM_STREAM
+	CLOSE_STREAM
+	CLEANUP_STREAM
 )
 
 type Message interface {
@@ -132,7 +137,7 @@ func (m *MsgTimestamp) GetTimestamp() Timestamp {
 //Stream Reader Message
 type MsgStream struct {
 	mType    MsgType
-	streamId StreamId
+	streamId common.StreamId
 	meta     *MutationMeta
 }
 
@@ -144,13 +149,13 @@ func (m *MsgStream) GetMutationMeta() *MutationMeta {
 	return m.meta
 }
 
-func (m *MsgStream) GetStreamId() StreamId {
+func (m *MsgStream) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
 //Stream Error Message
 type MsgStreamError struct {
-	streamId StreamId
+	streamId common.StreamId
 	err      Error
 }
 
@@ -158,7 +163,7 @@ func (m *MsgStreamError) GetMsgType() MsgType {
 	return STREAM_READER_ERROR
 }
 
-func (m *MsgStreamError) GetStreamId() StreamId {
+func (m *MsgStreamError) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
@@ -179,27 +184,56 @@ func (m *MsgUpdateBucketQueue) GetBucketQueueMap() BucketQueueMap {
 	return m.bucketQueueMap
 }
 
-//MUT_MGR_CREATE_STREAM
-//MUT_MGR_ADD_INDEX_LIST_TO_STREAM
-//MUT_MGR_REMOVE_INDEX_LIST_FROM_STREAM
-//MUT_MGR_CLOSE_STREAM
-//MUT_MGR_CLEANUP_STREAM
-type MsgMutMgrStreamUpdate struct {
-	mType     MsgType
-	streamId  StreamId
-	indexList []common.IndexInst
+func (m *MsgUpdateBucketQueue) String() string {
+
+	str := "\n\tMessage: MsgUpdateBucketQueue"
+	str += fmt.Sprintf("\n\tBucketQueueMap: %v", m.bucketQueueMap)
+	return str
+
 }
 
-func (m *MsgMutMgrStreamUpdate) GetMsgType() MsgType {
+//OPEN_STREAM
+//ADD_INDEX_LIST_TO_STREAM
+//REMOVE_INDEX_LIST_FROM_STREAM
+//CLOSE_STREAM
+//CLEANUP_STREAM
+type MsgStreamUpdate struct {
+	mType     MsgType
+	streamId  common.StreamId
+	indexList []common.IndexInst
+	buildTs   Timestamp
+	respCh    MsgChannel
+}
+
+func (m *MsgStreamUpdate) GetMsgType() MsgType {
 	return m.mType
 }
 
-func (m *MsgMutMgrStreamUpdate) GetStreamId() StreamId {
+func (m *MsgStreamUpdate) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgMutMgrStreamUpdate) GetIndexList() []common.IndexInst {
+func (m *MsgStreamUpdate) GetIndexList() []common.IndexInst {
 	return m.indexList
+}
+
+func (m *MsgStreamUpdate) GetTimestamp() Timestamp {
+	return m.buildTs
+}
+
+func (m *MsgStreamUpdate) GetResponseChannel() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgStreamUpdate) String() string {
+
+	str := "\n\tMessage: MsgStreamUpdate"
+	str += fmt.Sprintf("\n\tType: %v", m.mType)
+	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
+	str += fmt.Sprintf("\n\tBuildTS: %v", m.buildTs)
+	str += fmt.Sprintf("\n\tIndexList: %v", m.indexList)
+	return str
+
 }
 
 //MUT_MGR_PERSIST_MUTATION_QUEUE
@@ -207,7 +241,7 @@ func (m *MsgMutMgrStreamUpdate) GetIndexList() []common.IndexInst {
 type MsgMutMgrFlushMutationQueue struct {
 	mType    MsgType
 	bucket   string
-	streamId StreamId
+	streamId common.StreamId
 	ts       Timestamp
 }
 
@@ -219,7 +253,7 @@ func (m *MsgMutMgrFlushMutationQueue) GetBucket() string {
 	return m.bucket
 }
 
-func (m *MsgMutMgrFlushMutationQueue) GetStreamId() StreamId {
+func (m *MsgMutMgrFlushMutationQueue) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
@@ -227,12 +261,23 @@ func (m *MsgMutMgrFlushMutationQueue) GetTimestamp() Timestamp {
 	return m.ts
 }
 
+func (m *MsgMutMgrFlushMutationQueue) String() string {
+
+	str := "\n\tMessage: MsgMutMgrFlushMutationQueue"
+	str += fmt.Sprintf("\n\tType: %v", m.mType)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
+	str += fmt.Sprintf("\n\tTS: %v", m.ts)
+	return str
+
+}
+
 //MUT_MGR_GET_MUTATION_QUEUE_HWT
 //MUT_MGR_GET_MUTATION_QUEUE_LWT
 type MsgMutMgrGetTimestamp struct {
 	mType    MsgType
 	bucket   string
-	streamId StreamId
+	streamId common.StreamId
 }
 
 func (m *MsgMutMgrGetTimestamp) GetMsgType() MsgType {
@@ -243,7 +288,7 @@ func (m *MsgMutMgrGetTimestamp) GetBucket() string {
 	return m.bucket
 }
 
-func (m *MsgMutMgrGetTimestamp) GetStreamId() StreamId {
+func (m *MsgMutMgrGetTimestamp) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
@@ -260,6 +305,13 @@ func (m *MsgUpdateInstMap) GetIndexInstMap() common.IndexInstMap {
 	return m.indexInstMap
 }
 
+func (m *MsgUpdateInstMap) String() string {
+
+	str := "\n\tMessage: MsgUpdateInstMap"
+	str += fmt.Sprintf("%v", m.indexInstMap)
+	return str
+}
+
 //UPDATE_PARTITION_MAP
 type MsgUpdatePartnMap struct {
 	indexPartnMap IndexPartnMap
@@ -273,10 +325,17 @@ func (m *MsgUpdatePartnMap) GetIndexPartnMap() IndexPartnMap {
 	return m.indexPartnMap
 }
 
+func (m *MsgUpdatePartnMap) String() string {
+
+	str := "\n\tMessage: MsgUpdatePartnMap"
+	str += fmt.Sprintf("%v", m.indexPartnMap)
+	return str
+}
+
 //MUT_MGR_FLUSH_DONE
 type MsgMutMgrFlushDone struct {
 	ts       Timestamp
-	streamId StreamId
+	streamId common.StreamId
 	bucket   string
 }
 
@@ -288,7 +347,7 @@ func (m *MsgMutMgrFlushDone) GetTS() Timestamp {
 	return m.ts
 }
 
-func (m *MsgMutMgrFlushDone) GetStreamId() StreamId {
+func (m *MsgMutMgrFlushDone) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
@@ -296,30 +355,20 @@ func (m *MsgMutMgrFlushDone) GetBucket() string {
 	return m.bucket
 }
 
-//TK_STREAM_START
-//TK_STREAM_STOP
-type MsgTKStreamUpdate struct {
-	mType         MsgType
-	streamId      StreamId
-	indexInstList []common.IndexInst
-}
+func (m *MsgMutMgrFlushDone) String() string {
 
-func (m *MsgTKStreamUpdate) GetMsgType() MsgType {
-	return m.mType
-}
+	str := "\n\tMessage: MsgMutMgrFlushDone"
+	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tTS: %v", m.ts)
+	return str
 
-func (m *MsgTKStreamUpdate) GetStreamId() StreamId {
-	return m.streamId
-}
-
-func (m *MsgTKStreamUpdate) GetIndexList() []common.IndexInst {
-	return m.indexInstList
 }
 
 //TK_STABILITY_TIMESTAMP
 type MsgTKStabilityTS struct {
 	ts       Timestamp
-	streamId StreamId
+	streamId common.StreamId
 	bucket   string
 }
 
@@ -327,7 +376,7 @@ func (m *MsgTKStabilityTS) GetMsgType() MsgType {
 	return TK_STABILITY_TIMESTAMP
 }
 
-func (m *MsgTKStabilityTS) GetStreamId() StreamId {
+func (m *MsgTKStabilityTS) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
@@ -339,9 +388,89 @@ func (m *MsgTKStabilityTS) GetTimestamp() Timestamp {
 	return m.ts
 }
 
+func (m *MsgTKStabilityTS) String() string {
+
+	str := "\n\tMessage: MsgTKStabilityTS"
+	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tTS: %v", m.ts)
+	return str
+
+}
+
+//TK_INIT_BUILD_DONE
+type MsgTKInitBuildDone struct {
+	streamId common.StreamId
+	buildTs  Timestamp
+	bucket   string
+	respCh   MsgChannel
+}
+
+func (m *MsgTKInitBuildDone) GetMsgType() MsgType {
+	return TK_INIT_BUILD_DONE
+}
+
+func (m *MsgTKInitBuildDone) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgTKInitBuildDone) GetTimestamp() Timestamp {
+	return m.buildTs
+}
+
+func (m *MsgTKInitBuildDone) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgTKInitBuildDone) GetResponseChannel() MsgChannel {
+	return m.respCh
+}
+
+//TK_MERGE_STREAM
+type MsgTKMergeStream struct {
+	streamId common.StreamId
+	bucket   string
+	mergeTs  Timestamp
+}
+
+func (m *MsgTKMergeStream) GetMsgType() MsgType {
+	return TK_MERGE_STREAM
+}
+
+func (m *MsgTKMergeStream) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgTKMergeStream) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgTKMergeStream) GetMergeTS() Timestamp {
+	return m.mergeTs
+}
+
+//TK_ENABLE_FLUSH
+type MsgTKEnableFlush struct {
+	streamId common.StreamId
+	bucket   string
+}
+
+func (m *MsgTKEnableFlush) GetMsgType() MsgType {
+	return TK_ENABLE_FLUSH
+}
+
+func (m *MsgTKEnableFlush) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgTKEnableFlush) GetBucket() string {
+	return m.bucket
+}
+
 //INDEXER_CREATE_INDEX_DDL
 type MsgCreateIndex struct {
 	indexInst common.IndexInst
+	respCh    MsgChannel
 }
 
 func (m *MsgCreateIndex) GetMsgType() MsgType {
@@ -352,9 +481,21 @@ func (m *MsgCreateIndex) GetIndexInst() common.IndexInst {
 	return m.indexInst
 }
 
+func (m *MsgCreateIndex) GetResponseChannel() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgCreateIndex) GetString() string {
+
+	str := "\n\tMessage: MsgCreateIndex"
+	str += fmt.Sprintf("\n\tIndex: %v", m.indexInst)
+	return str
+}
+
 //INDEXER_DROP_INDEX_DDL
 type MsgDropIndex struct {
 	indexInstId common.IndexInstId
+	respCh      MsgChannel
 }
 
 func (m *MsgDropIndex) GetMsgType() MsgType {
@@ -363,6 +504,17 @@ func (m *MsgDropIndex) GetMsgType() MsgType {
 
 func (m *MsgDropIndex) GetIndexInstId() common.IndexInstId {
 	return m.indexInstId
+}
+
+func (m *MsgDropIndex) GetResponseChannel() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgDropIndex) GetString() string {
+
+	str := "\n\tMessage: MsgDropIndex"
+	str += fmt.Sprintf("\n\tIndex: %v", m.indexInstId)
+	return str
 }
 
 //SCAN_COORD_SCAN_INDEX

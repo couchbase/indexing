@@ -61,7 +61,7 @@ loop:
 		case cmd, ok := <-s.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == STORAGE_MGR_SHUTDOWN {
-					common.Infof("StorageManager: Shutting Down")
+					common.Infof("StorageManager::run Shutting Down")
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -96,7 +96,7 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 //after flush has completed
 func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
-	common.Debugf("StorageMgr: Received Command to Create Snapshot %v", cmd)
+	common.Debugf("StorageMgr::handleCreateSnapshot %v", cmd)
 
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	ts := cmd.(*MsgMutMgrFlushDone).GetTS()
@@ -128,19 +128,19 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 					if latestSnapshot == nil || ts.GreaterThan(latestSnapshot.Timestamp()) {
 						//commit the outstanding data
 
-						common.Debugf("StorageMgr: Commit Data for Index %v PartitionId %v SliceId %v",
-							idxInstId, partnId, slice.Id())
+						common.Debugf("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
+							"%v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
 						if err := slice.Commit(); err != nil {
 
-							common.Errorf("handleCreateSnapshot: Error Commiting Slice "+
-								"for index %v slice %v. Skipped. Error %v", idxInstId,
+							common.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
+								"Commiting Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 							continue
 						}
 
-						common.Debugf("StorageMgr: Creating New Snapshot for Index %v PartitionId %v SliceId %v",
-							idxInstId, partnId, slice.Id())
+						common.Debugf("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
+							"Index: %v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
 						//create snapshot for slice
 						if newSnapshot, err := slice.Snapshot(); err == nil {
@@ -148,8 +148,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							if snapContainer.Len() > MAX_SNAPSHOTS_PER_INDEX {
 								s := snapContainer.RemoveOldest()
 								if s != nil {
-									common.Debugf("StorageMgr: Removed Old Snapshot %v, Len %v",
-										s, snapContainer.Len())
+									common.Debugf("StorageMgr::handleCreateSnapshot \n\tRemoved Old Snapshot %v, "+
+										"Len %v", s, snapContainer.Len())
 									//close the removed snapshot
 									s.Close()
 								}
@@ -158,16 +158,16 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							newSnapshot.SetTimestamp(newTs)
 							newSnapshot.Open()
 							snapContainer.Add(newSnapshot)
-							common.Debugf("StorageMgr: Added New Snapshot for Index %v PartitionId %v SliceId %v",
-								idxInstId, partnId, slice.Id())
+							common.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
+								"PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
 						} else {
-							common.Errorf("handleCreateSnapshot: Error Creating Snapshot "+
-								"for index %v slice %v. Skipped. Error %v", idxInstId,
+							common.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
+								"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 						}
 					} else {
-						common.Debugf("StorageMgr: Skipped Creating New Snapshot for Index %v "+
+						common.Debugf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
 							"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
 					}
 				}
@@ -181,7 +181,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
-	common.Infof("StorageMgr: Received Command to Update InstanceMap %v", cmd)
+	common.Infof("StorageMgr::handleUpdateIndexInstMap %v", cmd)
 	s.indexInstMap = cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 
 	s.supvCmdch <- &MsgSuccess{}
@@ -189,7 +189,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
 
-	common.Infof("StorageMgr: Received Command to Partition Map %v", cmd)
+	common.Infof("StorageMgr::handleUpdateIndexPartnMap %v", cmd)
 	s.indexPartnMap = cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 
 	s.supvCmdch <- &MsgSuccess{}

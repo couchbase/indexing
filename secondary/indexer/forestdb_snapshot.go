@@ -11,9 +11,9 @@ package indexer
 
 import (
 	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
-	"log"
 	"sync"
 )
 
@@ -45,12 +45,14 @@ func (s *fdbSnapshot) Open() error {
 		var err error
 		s.main, err = s.main.SnapshotOpen(s.mainSeqNum)
 		if err != nil {
-			log.Printf("ForestDBSnapshot: Unexpected Error Opening Main DB Snapshot %v", err)
+			common.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+				"Opening Main DB Snapshot %v", err)
 			return err
 		}
 		s.back, err = s.back.SnapshotOpen(s.backSeqNum)
 		if err != nil {
-			log.Printf("ForestDBSnapshot: Unexpected Error Opening Back DB Snapshot %v", err)
+			common.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+				"Opening Back DB Snapshot %v", err)
 			return err
 		}
 		s.refCount = 1
@@ -107,8 +109,8 @@ func (s *fdbSnapshot) Close() error {
 	defer s.lock.Unlock()
 
 	if s.refCount <= 0 {
-		log.Println("ForestDBSnapshot: Close operation requested on already" +
-			"closed snapshot")
+		common.Errorf("ForestDBSnapshot::Close Close operation requested " +
+			"on already closed snapshot")
 		return errors.New("Snapshot Already Closed")
 	} else {
 
@@ -116,11 +118,12 @@ func (s *fdbSnapshot) Close() error {
 		if s.main != nil {
 			err := s.main.Close()
 			if err != nil {
-				log.Printf("ForestDBSnapshot: Unexpected error closing Main DB Snapshot %v", err)
+				common.Errorf("ForestDBSnapshot::Close Unexpected error "+
+					"closing Main DB Snapshot %v", err)
 				return err
 			}
 		} else {
-			log.Println("ForestDBSnapshot: Main DB Handle Nil")
+			common.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
 			errors.New("Main DB Handle Nil")
 		}
 
@@ -128,15 +131,26 @@ func (s *fdbSnapshot) Close() error {
 		if s.back != nil {
 			err := s.back.Close()
 			if err != nil {
-				log.Printf("ForestDBSnapshot: Unexpected error closing Back DB Snapshot %v", err)
+				common.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
+					"Back DB Snapshot %v", err)
 				return err
 			}
 		} else {
-			log.Println("ForestDBSnapshot: Back DB Handle Nil")
+			common.Errorf("ForestDBSnapshot::Close Back DB Handle Nil")
 			errors.New("Back DB Handle Nil")
 		}
 		s.refCount--
 	}
 
 	return nil
+}
+
+func (s *fdbSnapshot) String() string {
+
+	str := fmt.Sprintf("Index: %v ", s.idxInstId)
+	str += fmt.Sprintf("SliceId: %v ", s.id)
+	str += fmt.Sprintf("MainSeqNum: %v ", s.mainSeqNum)
+	str += fmt.Sprintf("BackSeqNum: %v ", s.backSeqNum)
+	str += fmt.Sprintf("TS: %v ", s.ts)
+	return str
 }

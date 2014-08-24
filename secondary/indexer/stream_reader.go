@@ -26,8 +26,8 @@ type MutationStreamReader interface {
 var mutationCount uint64
 
 type mutationStreamReader struct {
-	streamId StreamId
 	stream   *dataport.Server //handle to the Dataport server
+	streamId common.StreamId
 
 	streamMutch  chan []*protobuf.VbKeyVersions //channel for mutations sent by Dataport
 	streamRespch chan interface{}               //Dataport side-band channel
@@ -47,7 +47,7 @@ type mutationStreamReader struct {
 //CreateMutationStreamReader creates a new mutation stream and starts
 //a reader to listen and process the mutations.
 //In case returned MutationStreamReader is nil, Message will have the error msg.
-func CreateMutationStreamReader(streamId StreamId, bucketQueueMap BucketQueueMap,
+func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQueueMap,
 	supvCmdch MsgChannel, supvRespch MsgChannel, numWorkers int) (
 	MutationStreamReader, Message) {
 
@@ -100,7 +100,7 @@ func CreateMutationStreamReader(streamId StreamId, bucketQueueMap BucketQueueMap
 //This call doesn't return till shutdown is complete.
 func (r *mutationStreamReader) Shutdown() {
 
-	common.Infof("MutationStreamReader: Shutting down StreamReader %v", r.streamId)
+	common.Infof("MutationStreamReader:Shutdown StreamReader %v", r.streamId)
 
 	//close the mutation stream
 	r.stream.Close()
@@ -123,9 +123,10 @@ func (r *mutationStreamReader) run() {
 			if ok {
 				r.handleVbKeyVersions(vbKeyVer)
 			} else {
-				//stream library has closed this channel indicating unexpected stream closure
-				//send the message to supervisor
-				common.Errorf("Unexpected Stream Client Mutation  Channel Close for Stream %v", r.streamId)
+				//stream library has closed this channel indicating
+				//unexpected stream closure send the message to supervisor
+				common.Errorf("MutationStreamReader::run Unexpected Mutation "+
+					"Channel Close for Stream %v", r.streamId)
 				msgErr := &MsgError{
 					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
 						severity: FATAL,
@@ -137,9 +138,10 @@ func (r *mutationStreamReader) run() {
 			if ok {
 				r.handleStreamError(msg)
 			} else {
-				//stream library has closed this channel indicating unexpected stream closure
-				//send the message to supervisor
-				common.Errorf("Unexpected Stream Client Info Channel Close for Stream %v", r.streamId)
+				//stream library has closed this channel indicating
+				//unexpected stream closure send the message to supervisor
+				common.Errorf("Unexpected Stream Client Info Channel Close "+
+					"for Stream %v", r.streamId)
 				msgErr := &MsgError{
 					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
 						severity: FATAL,
@@ -203,7 +205,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 
 	var mut *MutationKeys
 
-	common.Tracef("MutationStreamReader: handleSingleKeyVersion received KeyVersions %v", kv)
+	common.Tracef("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
 
 	for i, cmd := range kv.GetCommands() {
 
@@ -215,7 +217,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 
 			mutationCount++
 			if (mutationCount%10000 == 0) || mutationCount == 1 {
-				common.Infof("MutationCount %v", mutationCount)
+				common.Infof("MutationStreamReader:: MutationCount %v", mutationCount)
 			}
 			//allocate new mutation first time
 			if mut == nil {
@@ -273,14 +275,16 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 //startMutationStreamWorker is the worker which processes mutation in a worker queue
 func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch StopChannel) {
 
-	common.Infof("MutationStreamReader: Stream Worker %v Started for Stream %v.", workerId, r.streamId)
+	common.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
+		"Started for Stream %v.", workerId, r.streamId)
 
 	for {
 		select {
 		case mut := <-r.workerch[workerId]:
 			r.handleSingleMutation(mut)
 		case <-stopch:
-			common.Infof("MutationStreamReader: Stream Worker %v Stopped for Stream %v", workerId, r.streamId)
+			common.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
+				"Stopped for Stream %v", workerId, r.streamId)
 			return
 		}
 	}
@@ -290,14 +294,15 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 //handleSingleMutation enqueues mutation in the mutation queue
 func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys) {
 
-	common.Tracef("MutationStreamReader: handleSingleMutation received mutation %v", mut)
+	common.Tracef("MutationStreamReader::handleSingleMutation received mutation %v", mut)
 
 	//based on the index, enqueue the mutation in the right queue
 	if q, ok := r.bucketQueueMap[mut.meta.bucket]; ok {
 		q.queue.Enqueue(mut, mut.meta.vbucket)
 
 	} else {
-		common.Errorf("MutationStreamReader got mutation for unknown bucket. Skipped  %v", mut)
+		common.Errorf("MutationStreamReader::handleSingleMutation got mutation for "+
+			"unknown bucket. Skipped  %v", mut)
 	}
 
 }
@@ -309,7 +314,8 @@ func (r *mutationStreamReader) handleStreamError(msg interface{}) {
 	switch msg.(type) {
 
 	case dataport.ShutdownDataport:
-		common.Infof("MutationStreamReader: Received ShutdownDataport from Client for Stream %v.", r.streamId)
+		common.Infof("MutationStreamReader::handleStreamError \n\tReceived ShutdownDaemon "+
+			"from Client for Stream %v.", r.streamId)
 		msgErr = &MsgError{
 			err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
 				severity: FATAL,
@@ -317,14 +323,16 @@ func (r *mutationStreamReader) handleStreamError(msg interface{}) {
 
 		//TODO send more information upstream for RepairStream
 	case dataport.RestartVbuckets:
-		common.Infof("MutationStreamReader: Received RestartVbuckets from Client for Stream %v.", r.streamId)
+		common.Infof("MutationStreamReader::handleStreamError \n\tReceived RestartVbuckets "+
+			"from Client for Stream %v.", r.streamId)
 		msgErr = &MsgError{
 			err: Error{code: ERROR_STREAM_READER_RESTART_VBUCKETS,
 				severity: FATAL,
 				category: STREAM_READER}}
 
 	default:
-		common.Errorf("MutationStreamReader: Received Unknown Message from Client for Stream %v.", r.streamId)
+		common.Errorf("MutationStreamReader::handleStreamError \n\tReceived Unknown Message "+
+			"from Client for Stream %v.", r.streamId)
 		msgErr = &MsgError{
 			err: Error{code: ERROR_STREAM_READER_UNKNOWN_ERROR,
 				severity: FATAL,
@@ -340,7 +348,7 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 
 	case STREAM_READER_UPDATE_QUEUE_MAP:
 
-		common.Infof("MutationStreamReader: Received Update Queue Map from Mutation Mgr %v", cmd)
+		common.Debugf("MutationStreamReader::handleSupervisorCommands %v", cmd)
 		//stop all workers
 		r.stopWorkers()
 
@@ -353,7 +361,7 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		return &MsgSuccess{}
 
 	default:
-		common.Errorf("MutationStreamReader: handleSupervisorCommands Received Unknown Command %v", cmd)
+		common.Errorf("MutationStreamReader::handleSupervisorCommands \n\tReceived Unknown Command %v", cmd)
 		return &MsgError{
 			err: Error{code: ERROR_STREAM_READER_UNKNOWN_COMMAND,
 				severity: NORMAL,
@@ -367,7 +375,7 @@ func (r *mutationStreamReader) panicHandler() {
 
 	//panic recovery
 	if rc := recover(); rc != nil {
-		common.Fatalf("MutationStreamReader Received Panic for Stream %v", r.streamId)
+		common.Fatalf("MutationStreamReader::panicHandler \n\tReceived Panic for Stream %v", r.streamId)
 		var err error
 		switch x := rc.(type) {
 		case string:
@@ -391,7 +399,7 @@ func (r *mutationStreamReader) panicHandler() {
 //a StopChannel to each worker
 func (r *mutationStreamReader) startWorkers() {
 
-	common.Infof("MutationStreamReader: Starting All Stream Workers")
+	common.Debugf("MutationStreamReader::startWorkers Starting All Stream Workers")
 
 	//start worker goroutines to process incoming mutation concurrently
 	for w := 0; w < r.numWorkers; w++ {
@@ -403,7 +411,7 @@ func (r *mutationStreamReader) startWorkers() {
 //all workers are stopped
 func (r *mutationStreamReader) stopWorkers() {
 
-	common.Infof("MutationStreamReader: Stopping All Stream Workers")
+	common.Debugf("MutationStreamReader::stopWorkers Stopping All Stream Workers")
 
 	//stop all workers
 	for _, ch := range r.workerStopCh {

@@ -18,18 +18,27 @@ const WORKER_MSG_QUEUE_LEN = 100000
 
 //Projector Admin Port Endpoint on which projector is
 //listening for admin requests
-const DEFAULT_PROJECTOR_ADMIN_PORT_ENDPOINT = "http://localhost:9999"
+const DEFAULT_PROJECTOR_ADMIN_PORT_ENDPOINT = "localhost:9999"
 
 //Data Port Endpoint for Local Indexer on which projector
-//needs to send mutations
-const INDEXER_DATA_PORT_ENDPOINT = "localhost:8100"
+//needs to send mutations for maintenance stream
+const INDEXER_MAINT_DATA_PORT_ENDPOINT = "localhost:8100"
+
+//Data Port Endpoint for Local Indexer on which projector
+//needs to send mutations for initial build stream
+const INDEXER_INIT_DATA_PORT_ENDPOINT = "localhost:8101"
 
 //Cbq Bridge Http Address on which it listens
 //to messages from Cbq Server
 const CBQ_BRIDGE_HTTP_ADDR = ":9101"
 
+const KVPORT = "9000"
+
 //Maintenance Topic Name
 const MAINT_TOPIC = "MAINT_STREAM_TOPIC"
+
+//Initial Stream Topic Name
+const INIT_TOPIC = "INIT_STREAM_TOPIC"
 
 //Default Pool Name
 const DEFAULT_POOL = "default"

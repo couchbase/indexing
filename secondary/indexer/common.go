@@ -13,21 +13,9 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 )
 
-//StreamId represents the possible mutation streams
-type StreamId uint16
+type StreamAddressMap map[common.StreamId]common.Endpoint
 
-const (
-	MAINT_STREAM StreamId = iota
-	MAINT_CATCHUP_STREAM
-	BACKFILL_STREAM
-	BACKFILL_CATCHUP_STREAM
-	MAX_STREAMS
-)
-
-//TODO fill the map
-type StreamAddressMap map[StreamId]common.Endpoint
-
-type StreamStatusMap map[StreamId]bool
+type StreamStatusMap map[common.StreamId]bool
 
 // a generic channel which can be closed when you
 // want someone to stop doing something
