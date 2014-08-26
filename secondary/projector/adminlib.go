@@ -163,6 +163,7 @@ func SpawnProjectors(
 	cluster string, kvaddrs []string,
 	projectors map[string]ap.Client) (map[string]ap.Client, error) {
 
+	// kvaddr -> adminport-client
 	newprojectors := make(map[string]ap.Client)
 	// create a projector instance for each kvnode
 	for _, kvaddr := range kvaddrs {
