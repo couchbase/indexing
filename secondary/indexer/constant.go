@@ -34,6 +34,14 @@ const CBQ_BRIDGE_HTTP_ADDR = ":9101"
 
 const KVPORT = "9000"
 
+const KV_DCP_PORT = "11210"
+
+const KV_DCP_PORT_CLUSTER_RUN = "12000"
+
+const PROJECTOR_PORT = "9999"
+
+const LOCALHOST = "127.0.0.1"
+
 //Maintenance Topic Name
 const MAINT_TOPIC = "MAINT_STREAM_TOPIC"
 

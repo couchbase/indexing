@@ -203,6 +203,7 @@ type MsgStreamUpdate struct {
 	indexList []common.IndexInst
 	buildTs   Timestamp
 	respCh    MsgChannel
+	bucket    string
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -223,6 +224,10 @@ func (m *MsgStreamUpdate) GetTimestamp() Timestamp {
 
 func (m *MsgStreamUpdate) GetResponseChannel() MsgChannel {
 	return m.respCh
+}
+
+func (m *MsgStreamUpdate) GetBucket() string {
+	return m.bucket
 }
 
 func (m *MsgStreamUpdate) String() string {
