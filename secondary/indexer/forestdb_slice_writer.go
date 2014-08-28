@@ -131,6 +131,7 @@ func (fdb *fdbSlice) Delete(docid []byte) error {
 //shutdown channel is closed.
 func (fdb *fdbSlice) handleCommandsWorker(workerId int) {
 
+loop:
 	for {
 		select {
 		case c := <-fdb.cmdCh:
@@ -154,7 +155,7 @@ func (fdb *fdbSlice) handleCommandsWorker(workerId int) {
 
 		case <-fdb.stopCh:
 			fdb.stopCh <- true
-			break
+			break loop
 
 			//worker gets a status check message on this channel, it responds
 			//when its not processing any mutation
