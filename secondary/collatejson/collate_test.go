@@ -95,6 +95,7 @@ func TestCodecLength(t *testing.T) {
 	}
 	codec := NewCodec(128)
 	codec.NumberType("decimal")
+	codec.SortbyArrayLen(true)
 	for _, tcase := range samples {
 		sample, ref := tcase[0], tcase[1]
 
@@ -154,6 +155,7 @@ func TestCodecNoLength(t *testing.T) {
 
 func TestCodecJSON(t *testing.T) {
 	codec := NewCodec(128)
+	codec.SortbyArrayLen(true)
 	for _, tcase := range testcases {
 		var one, two map[string]interface{}
 
