@@ -182,7 +182,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 	common.Infof("StorageMgr::handleUpdateIndexInstMap %v", cmd)
-	s.indexInstMap = cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
 	s.supvCmdch <- &MsgSuccess{}
 }
@@ -190,7 +191,8 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
 
 	common.Infof("StorageMgr::handleUpdateIndexPartnMap %v", cmd)
-	s.indexPartnMap = cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
+	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
+	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	s.supvCmdch <- &MsgSuccess{}
 }

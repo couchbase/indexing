@@ -94,8 +94,8 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	common.Infof("Flusher::PersistUptoTS StreamId: %v Timestamp: %v",
 		streamId, ts)
 
-	f.indexInstMap = indexInstMap
-	f.indexPartnMap = indexPartnMap
+	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
+	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	msgch := make(MsgChannel)
 	go f.flushQueue(q, streamId, ts, true, stopch, msgch)
@@ -134,8 +134,8 @@ func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
 
 	common.Infof("Flusher::Persist StreamId: %v", streamId)
 
-	f.indexInstMap = indexInstMap
-	f.indexPartnMap = indexPartnMap
+	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
+	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	msgch := make(MsgChannel)
 	go f.flushQueue(q, streamId, nil, true, stopch, msgch)

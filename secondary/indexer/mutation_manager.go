@@ -866,7 +866,8 @@ func (m *mutationMgr) handleUpdateIndexInstMap(cmd Message) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	m.indexInstMap = cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+	m.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
 	m.supvCmdch <- &MsgSuccess{}
 
@@ -880,8 +881,18 @@ func (m *mutationMgr) handleUpdateIndexPartnMap(cmd Message) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	m.indexPartnMap = cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
+	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
+	m.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	m.supvCmdch <- &MsgSuccess{}
 
+}
+
+func CopyBucketQueueMap(inMap BucketQueueMap) BucketQueueMap {
+
+	outMap := make(BucketQueueMap)
+	for k, v := range inMap {
+		outMap[k] = v
+	}
+	return outMap
 }

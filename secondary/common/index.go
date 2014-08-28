@@ -134,3 +134,12 @@ func (idx IndexInstMap) String() string {
 	return str
 
 }
+
+func CopyIndexInstMap(inMap IndexInstMap) IndexInstMap {
+
+	outMap := make(IndexInstMap)
+	for k, v := range inMap {
+		outMap[k] = v
+	}
+	return outMap
+}

@@ -78,7 +78,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		numWorkers:     numWorkers,
 		workerch:       make([]MutationChannel, numWorkers),
 		workerStopCh:   make([]StopChannel, numWorkers),
-		bucketQueueMap: bucketQueueMap,
+		bucketQueueMap: CopyBucketQueueMap(bucketQueueMap),
 	}
 
 	//start the main reader loop
@@ -352,8 +352,9 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		//stop all workers
 		r.stopWorkers()
 
-		//store new bucketQueueMap
-		r.bucketQueueMap = cmd.(*MsgUpdateBucketQueue).GetBucketQueueMap()
+		//copy and store new bucketQueueMap
+		bucketQueueMap := cmd.(*MsgUpdateBucketQueue).GetBucketQueueMap()
+		r.bucketQueueMap = CopyBucketQueueMap(bucketQueueMap)
 
 		//start all workers again
 		r.startWorkers()

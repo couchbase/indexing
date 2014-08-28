@@ -49,3 +49,12 @@ func (pi PartitionInst) String() string {
 	return str
 
 }
+
+func CopyIndexPartnMap(inMap IndexPartnMap) IndexPartnMap {
+
+	outMap := make(IndexPartnMap)
+	for k, v := range inMap {
+		outMap[k] = v
+	}
+	return outMap
+}
