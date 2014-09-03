@@ -13,6 +13,7 @@ It is generated from these files:
 	indexer.proto
 	mutation.proto
 	projector.proto
+	query.proto
 	rollback.proto
 
 It has these top-level messages:

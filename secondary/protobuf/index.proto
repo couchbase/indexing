@@ -50,6 +50,7 @@ enum  PartitionScheme {
     TEST = 4;
 }
 
+// IndexInst message as payload between co-ordinator, projector, indexer.
 message IndexInst {
     required uint64          instId     = 1;
     required IndexState      state      = 2;
@@ -57,6 +58,7 @@ message IndexInst {
     optional TestPartition   tp         = 4;
 }
 
+// Index DDL from create index statement.
 message IndexDefn {
     required uint64          defnID          = 1; // unique index id across the secondary index cluster
     required string          bucket          = 2; // bucket on which index is defined
@@ -69,7 +71,17 @@ message IndexDefn {
     repeated string          secExpressions  = 9; // use expressions to evaluate doc
 }
 
+// Example TestPartition.
 message TestPartition {
     repeated string endpoints     = 1; // endpoint address
     optional string coordEndpoint = 2;
 }
+
+// Statistics of a given index.
+message IndexStatistics {
+    required uint64 count      = 1;
+    required uint64 uniqueKeys = 2;
+    required bytes  min        = 3;
+    required bytes  max        = 4;
+}
+
