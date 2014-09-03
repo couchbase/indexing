@@ -30,6 +30,7 @@ const (
 	STREAM_READER_STREAM_BEGIN
 	STREAM_READER_STREAM_END
 	STREAM_READER_SYNC
+	STREAM_READER_SNAPSHOT_MARKER
 	STREAM_READER_UPDATE_QUEUE_MAP
 	STREAM_READER_ERROR
 	STREAM_READER_SHUTDOWN
@@ -48,6 +49,7 @@ const (
 	TK_INIT_BUILD_DONE
 	TK_ENABLE_FLUSH
 	TK_MERGE_STREAM
+	TK_GET_BUCKET_HWT
 
 	//STORAGE_MANAGER
 	STORAGE_MGR_SHUTDOWN
@@ -139,6 +141,7 @@ type MsgStream struct {
 	mType    MsgType
 	streamId common.StreamId
 	meta     *MutationMeta
+	snapshot *MutationSnapshot
 }
 
 func (m *MsgStream) GetMsgType() MsgType {
@@ -151,6 +154,21 @@ func (m *MsgStream) GetMutationMeta() *MutationMeta {
 
 func (m *MsgStream) GetStreamId() common.StreamId {
 	return m.streamId
+}
+
+func (m *MsgStream) GetSnapshot() *MutationSnapshot {
+	return m.snapshot
+}
+
+func (m *MsgStream) String() string {
+
+	str := "\n\tMessage: MsgStream"
+	str += fmt.Sprintf("\n\tType: %v", m.mType)
+	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
+	str += fmt.Sprintf("\n\tMeta: %v", m.meta)
+	str += fmt.Sprintf("\n\tSnapshot: %v", m.snapshot)
+	return str
+
 }
 
 //Stream Error Message
@@ -563,4 +581,39 @@ func (m *MsgScanIndex) GetStopChannel() StopChannel {
 
 func (m *MsgScanIndex) GetParams() ScanParams {
 	return m.p
+}
+
+//TK_GET_BUCKET_HWT
+type MsgTKGetBucketHWT struct {
+	streamId common.StreamId
+	bucket   string
+	ts       *common.TsVbuuid
+}
+
+func (m *MsgTKGetBucketHWT) GetMsgType() MsgType {
+	return TK_GET_BUCKET_HWT
+}
+
+func (m *MsgTKGetBucketHWT) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgTKGetBucketHWT) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgTKGetBucketHWT) GetHWT() *common.TsVbuuid {
+	return m.ts
+}
+
+func (m *MsgTKGetBucketHWT) String() string {
+
+	str := "\n\tMessage: MsgTKGetBucketHWT"
+	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tTS Seqnos: %v", m.ts.Seqnos)
+	str += fmt.Sprintf("\n\tTS Vbuuids: %v", m.ts.Vbuuids)
+	str += fmt.Sprintf("\n\tTS Snapshots: %v", m.ts.Snapshots)
+	return str
+
 }

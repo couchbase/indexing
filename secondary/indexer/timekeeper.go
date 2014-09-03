@@ -27,21 +27,21 @@ type timekeeper struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any async message to supervisor
 
-	streamBucketHWTMap       map[common.StreamId]*BucketHWTMap
-	streamBucketSyncCountMap map[common.StreamId]*BucketSyncCountMap
-	streamBucketNewTsReqdMap map[common.StreamId]*BucketNewTsReqdMap
+	streamBucketHWTMap       map[common.StreamId]BucketHWTMap
+	streamBucketSyncCountMap map[common.StreamId]BucketSyncCountMap
+	streamBucketNewTsReqdMap map[common.StreamId]BucketNewTsReqdMap
 
-	streamBucketTsListMap          map[common.StreamId]*BucketTsListMap
-	streamBucketFlushInProgressMap map[common.StreamId]*BucketFlushInProgressMap
+	streamBucketTsListMap          map[common.StreamId]BucketTsListMap
+	streamBucketFlushInProgressMap map[common.StreamId]BucketFlushInProgressMap
 
-	streamBucketLastTsFlushedMap map[common.StreamId]*BucketLastTsFlushedMap
-	streamBucketFlushEnabledMap  map[common.StreamId]*BucketFlushEnabledMap
+	streamBucketLastTsFlushedMap map[common.StreamId]BucketLastTsFlushedMap
+	streamBucketFlushEnabledMap  map[common.StreamId]BucketFlushEnabledMap
 
 	//map of indexInstId to its Initial Build Info
 	indexBuildInfo map[common.IndexInstId]*InitialBuildInfo
 }
 
-type BucketHWTMap map[string]Timestamp
+type BucketHWTMap map[string]*common.TsVbuuid
 type BucketLastTsFlushedMap map[string]Timestamp
 type BucketSyncCountMap map[string]uint64
 type BucketNewTsReqdMap map[string]bool
@@ -68,13 +68,13 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel) (
 	tk := &timekeeper{
 		supvCmdch:                      supvCmdch,
 		supvRespch:                     supvRespch,
-		streamBucketHWTMap:             make(map[common.StreamId]*BucketHWTMap),
-		streamBucketSyncCountMap:       make(map[common.StreamId]*BucketSyncCountMap),
-		streamBucketNewTsReqdMap:       make(map[common.StreamId]*BucketNewTsReqdMap),
-		streamBucketTsListMap:          make(map[common.StreamId]*BucketTsListMap),
-		streamBucketFlushInProgressMap: make(map[common.StreamId]*BucketFlushInProgressMap),
-		streamBucketLastTsFlushedMap:   make(map[common.StreamId]*BucketLastTsFlushedMap),
-		streamBucketFlushEnabledMap:    make(map[common.StreamId]*BucketFlushEnabledMap),
+		streamBucketHWTMap:             make(map[common.StreamId]BucketHWTMap),
+		streamBucketSyncCountMap:       make(map[common.StreamId]BucketSyncCountMap),
+		streamBucketNewTsReqdMap:       make(map[common.StreamId]BucketNewTsReqdMap),
+		streamBucketTsListMap:          make(map[common.StreamId]BucketTsListMap),
+		streamBucketFlushInProgressMap: make(map[common.StreamId]BucketFlushInProgressMap),
+		streamBucketLastTsFlushedMap:   make(map[common.StreamId]BucketLastTsFlushedMap),
+		streamBucketFlushEnabledMap:    make(map[common.StreamId]BucketFlushEnabledMap),
 		indexBuildInfo:                 make(map[common.IndexInstId]*InitialBuildInfo),
 	}
 
@@ -136,6 +136,12 @@ func (tk *timekeeper) handleSupvervisorCommands(cmd Message) {
 	case TK_ENABLE_FLUSH:
 		tk.handleEnableFlush(cmd)
 
+	case STREAM_READER_SNAPSHOT_MARKER:
+		tk.handleSnapshotMarker(cmd)
+
+	case TK_GET_BUCKET_HWT:
+		tk.handleGetBucketHWT(cmd)
+
 	default:
 		common.Errorf("Timekeeper::handleSupvervisorCommands "+
 			"Received Unknown Command %v", cmd)
@@ -152,25 +158,25 @@ func (tk *timekeeper) handleStreamStart(cmd Message) {
 
 	//init all internal maps for this stream
 	bucketHWTMap := make(BucketHWTMap)
-	tk.streamBucketHWTMap[streamId] = &bucketHWTMap
+	tk.streamBucketHWTMap[streamId] = bucketHWTMap
 
 	bucketSyncCountMap := make(BucketSyncCountMap)
-	tk.streamBucketSyncCountMap[streamId] = &bucketSyncCountMap
+	tk.streamBucketSyncCountMap[streamId] = bucketSyncCountMap
 
 	bucketNewTsReqdMap := make(BucketNewTsReqdMap)
-	tk.streamBucketNewTsReqdMap[streamId] = &bucketNewTsReqdMap
+	tk.streamBucketNewTsReqdMap[streamId] = bucketNewTsReqdMap
 
 	bucketTsListMap := make(BucketTsListMap)
-	tk.streamBucketTsListMap[streamId] = &bucketTsListMap
+	tk.streamBucketTsListMap[streamId] = bucketTsListMap
 
 	bucketFlushInProgressMap := make(BucketFlushInProgressMap)
-	tk.streamBucketFlushInProgressMap[streamId] = &bucketFlushInProgressMap
+	tk.streamBucketFlushInProgressMap[streamId] = bucketFlushInProgressMap
 
 	bucketLastTsFlushedMap := make(BucketLastTsFlushedMap)
-	tk.streamBucketLastTsFlushedMap[streamId] = &bucketLastTsFlushedMap
+	tk.streamBucketLastTsFlushedMap[streamId] = bucketLastTsFlushedMap
 
 	bucketFlushEnabledMap := make(BucketFlushEnabledMap)
-	tk.streamBucketFlushEnabledMap[streamId] = &bucketFlushEnabledMap
+	tk.streamBucketFlushEnabledMap[streamId] = bucketFlushEnabledMap
 
 	//add the new indexes to internal maps
 	tk.addIndextoStream(cmd)
@@ -259,12 +265,18 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	}
 
 	//update HWT for the bucket
-	ts := tk.updateHWT(cmd)
+	tk.updateHWT(cmd)
+
+	meta := cmd.(*MsgStream).GetMutationMeta()
 
 	//update Sync Count for the bucket
-	tk.updateSyncCount(cmd, ts)
+	tk.incrSyncCount(streamId, meta.bucket)
+
+	//generate new StabilityTS if required
+	tk.generateNewStabilityTS(streamId, meta.bucket)
 
 	tk.supvCmdch <- &MsgSuccess{}
+
 }
 
 func (tk *timekeeper) handleFlushDone(cmd Message) {
@@ -276,7 +288,7 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 	//update internal map to reflect flush is done
 	bucketFlushInProgressMap := tk.streamBucketFlushInProgressMap[streamId]
-	(*bucketFlushInProgressMap)[bucket] = false
+	bucketFlushInProgressMap[bucket] = false
 
 	//check if any of the initial build index is past its Build TS.
 	//Generate msg for Build Done and change the state of the index.
@@ -308,12 +320,71 @@ func (tk *timekeeper) handleEnableFlush(cmd Message) {
 		"Bucket: %v StreamId: %v", bucket, streamId)
 
 	bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[streamId]
-	(*bucketFlushEnabledMap)[bucket] = true
+	bucketFlushEnabledMap[bucket] = true
 
 	//if there are any pending TS, send that
 	tk.checkPendingTS(streamId, bucket)
 
 	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
+
+	common.Debugf("Timekeeper::handleSnapshotMarker %v", cmd)
+
+	streamId := cmd.(*MsgStream).GetStreamId()
+	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	//check if stream is valid
+	if tk.checkStreamValid(streamId) == false {
+		return
+	}
+
+	//only SnapshotType 0 and 1 are processed for now,
+	//UPR can send other special snapshot markers, which
+	//need to be ignored.
+	snapshot := cmd.(*MsgStream).GetSnapshot()
+	if snapshot.snapType == 0 || snapshot.snapType == 1 {
+
+		bucketHWTMap := tk.streamBucketHWTMap[streamId]
+
+		//allocate a new timestamp for this bucket, if not
+		//already there
+		if _, ok := bucketHWTMap[meta.bucket]; !ok {
+			bucketHWTMap[meta.bucket] = common.NewTsVbuuid(meta.bucket, int(NUM_VBUCKETS))
+			tk.streamBucketNewTsReqdMap[streamId][meta.bucket] = false
+			tk.streamBucketTsListMap[streamId][meta.bucket] = list.New()
+			tk.streamBucketFlushInProgressMap[streamId][meta.bucket] = false
+			tk.streamBucketFlushEnabledMap[streamId][meta.bucket] = true
+		}
+
+		//update the snapshot seqno in internal map
+		ts := bucketHWTMap[meta.bucket]
+		ts.Snapshots[meta.vbucket][0] = snapshot.start
+		ts.Snapshots[meta.vbucket][1] = snapshot.end
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
+
+	common.Debugf("Timekeeper::handleGetBucketHWT %v", cmd)
+
+	streamId := cmd.(*MsgTKGetBucketHWT).GetStreamId()
+	bucket := cmd.(*MsgTKGetBucketHWT).GetBucket()
+
+	//set the return ts to nil
+	msg := cmd.(*MsgTKGetBucketHWT)
+	msg.ts = nil
+
+	if bucketHWTMap, ok := tk.streamBucketHWTMap[streamId]; ok {
+		if ts, ok := bucketHWTMap[bucket]; ok {
+			newTs := copyTsVbuuid(bucket, ts)
+			msg.ts = newTs
+		}
+	}
+	tk.supvCmdch <- msg
 }
 
 //checkInitialBuildDone checks if any of the index in Initial State is past its
@@ -375,13 +446,13 @@ func (tk *timekeeper) checkStreamReadyToMerge(cmd Message) bool {
 				//if the flushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
 				//this index can be merged to MAINT_STREAM
 				bucketLastTsFlushedMap := tk.streamBucketLastTsFlushedMap[common.MAINT_STREAM]
-				lastFlushedTs := (*bucketLastTsFlushedMap)[idx.Defn.Bucket]
+				lastFlushedTs := bucketLastTsFlushedMap[idx.Defn.Bucket]
 
 				if flushTs.GreaterThanEqual(lastFlushedTs) {
 					//disable flush for MAINT_STREAM for this bucket, so it doesn't
 					//move ahead till merge is complete
 					bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[common.MAINT_STREAM]
-					(*bucketFlushEnabledMap)[idx.Defn.Bucket] = false
+					bucketFlushEnabledMap[idx.Defn.Bucket] = false
 
 					//change state of all indexes of this bucket to ACTIVE
 					//these indexes get removed later as part of merge message
@@ -408,45 +479,62 @@ func (tk *timekeeper) checkStreamReadyToMerge(cmd Message) bool {
 
 //updateHWT will update the HW Timestamp for a bucket in the stream
 //based on the Sync message received.
-func (tk *timekeeper) updateHWT(cmd Message) Timestamp {
+func (tk *timekeeper) updateHWT(cmd Message) {
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
 	bucketHWTMap := tk.streamBucketHWTMap[streamId]
-	bucketNewTsReqd := tk.streamBucketNewTsReqdMap[streamId]
-	bucketFlushInProgressMap := tk.streamBucketFlushInProgressMap[streamId]
-	bucketTsListMap := tk.streamBucketTsListMap[streamId]
-	bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[streamId]
 
-	//update HWT for this bucket
-	var ts Timestamp
-	var ok bool
-	if ts, ok = (*bucketHWTMap)[meta.bucket]; ok {
-		//if seqno has incremented, update it
-		if meta.seqno > ts[meta.vbucket] {
-			(*bucketNewTsReqd)[meta.bucket] = true
-			ts[meta.vbucket] = meta.seqno
-		}
-	} else {
-		//allocate a new timestamp for this bucket
-		(*bucketHWTMap)[meta.bucket] = NewTimestamp()
-		(*bucketNewTsReqd)[meta.bucket] = false
-		(*bucketTsListMap)[meta.bucket] = list.New()
-		(*bucketFlushInProgressMap)[meta.bucket] = false
-		(*bucketFlushEnabledMap)[meta.bucket] = true
+	//allocate a new timestamp for this bucket, if not
+	//already there(on the first sync message for this bucket)
+	if _, ok := bucketHWTMap[meta.bucket]; !ok {
+		bucketHWTMap[meta.bucket] = common.NewTsVbuuid(meta.bucket, int(NUM_VBUCKETS))
+		tk.streamBucketNewTsReqdMap[streamId][meta.bucket] = false
+		tk.streamBucketFlushInProgressMap[streamId][meta.bucket] = false
+		tk.streamBucketTsListMap[streamId][meta.bucket] = list.New()
+		tk.streamBucketFlushEnabledMap[streamId][meta.bucket] = true
 	}
 
-	return ts
+	//if seqno has incremented, update it
+	ts := bucketHWTMap[meta.bucket]
+	if uint64(meta.seqno) > ts.Seqnos[meta.vbucket] {
+		tk.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
+		ts.Seqnos[meta.vbucket] = uint64(meta.seqno)
+		ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+	}
+
 }
 
-//updateSyncCount updates the sync count for a bucket in the stream
-//and generates a new Stability Timestamp if trigger value has
-//been reached.
-func (tk *timekeeper) updateSyncCount(cmd Message, ts Timestamp) {
+//incrSyncCount increment the sync count for a bucket in the stream
+func (tk *timekeeper) incrSyncCount(streamId common.StreamId, bucket string) {
 
-	streamId := cmd.(*MsgStream).GetStreamId()
-	meta := cmd.(*MsgStream).GetMutationMeta()
+	bucketSyncCountMap := tk.streamBucketSyncCountMap[streamId]
+
+	//update sync count for this bucket
+	if syncCount, ok := bucketSyncCountMap[bucket]; ok {
+		syncCount++
+
+		common.Tracef("Timekeeper::incrSyncCount \n\tUpdating Sync Count for Bucket: %v "+
+			"Stream: %v. SyncCount: %v.", bucket, streamId, syncCount)
+		//update only if its less than trigger count, otherwise it makes no
+		//difference. On long running systems, syncCount may overflow otherwise
+		if syncCount < SYNC_COUNT_TS_TRIGGER {
+			bucketSyncCountMap[bucket] = syncCount
+		}
+
+	} else {
+		//add a new counter for this bucket
+		common.Debugf("Timekeeper::incrSyncCount \n\tAdding new Sync Count for Bucket: %v "+
+			"Stream: %v. SyncCount: %v.", bucket, streamId, syncCount)
+		bucketSyncCountMap[bucket] = 1
+	}
+
+}
+
+//generates a new StabilityTS
+func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
+	bucket string) {
 
 	bucketNewTsReqd := tk.streamBucketNewTsReqdMap[streamId]
 	bucketFlushInProgressMap := tk.streamBucketFlushInProgressMap[streamId]
@@ -454,47 +542,32 @@ func (tk *timekeeper) updateSyncCount(cmd Message, ts Timestamp) {
 	bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[streamId]
 	bucketSyncCountMap := tk.streamBucketSyncCountMap[streamId]
 
-	//update sync count for this bucket
-	if syncCount, ok := (*bucketSyncCountMap)[meta.bucket]; ok {
-		syncCount++
-		if syncCount >= SYNC_COUNT_TS_TRIGGER &&
-			(*bucketNewTsReqd)[meta.bucket] == true {
-			//generate new stability timestamp
-			common.Debugf("Timekeeper::handleSync \n\tGenerating new Stability "+
-				"TS: %v Bucket: %v Stream: %v. SyncCount: %v", ts,
-				meta.bucket, streamId, syncCount)
+	if bucketSyncCountMap[bucket] >= SYNC_COUNT_TS_TRIGGER &&
+		bucketNewTsReqd[bucket] == true {
+		//generate new stability timestamp
 
-			newTs := CopyTimestamp(ts)
-			tsList := (*bucketTsListMap)[meta.bucket]
+		tsVbuuid := tk.streamBucketHWTMap[streamId][bucket]
+		newTs := getTSFromTsVbuuid(tsVbuuid)
 
-			//if there is no flush already in progress for this bucket
-			//no pending TS in list and flush is not disabled, send new TS
-			if (*bucketFlushInProgressMap)[meta.bucket] == false &&
-				(*bucketFlushEnabledMap)[meta.bucket] == true &&
-				tsList.Len() == 0 {
-				go tk.sendNewStabilityTS(newTs, meta.bucket, streamId)
-			} else {
-				//store the ts in list
-				common.Debugf("Timekeeper::handleSync \n\tAdding TS: %v to Pending "+
-					"List for Bucket: %v Stream: %v.", ts, meta.bucket, streamId)
-				tsList.PushBack(newTs)
-			}
-			(*bucketSyncCountMap)[meta.bucket] = 0
-			(*bucketNewTsReqd)[meta.bucket] = false
+		common.Debugf("Timekeeper::generateNewStabilityTS \n\tGenerating new Stability "+
+			"TS: %v Bucket: %v Stream: %v. SyncCount: %v", newTs,
+			bucket, streamId, bucketSyncCountMap[bucket])
+
+		//if there is no flush already in progress for this bucket
+		//no pending TS in list and flush is not disabled, send new TS
+		tsList := bucketTsListMap[bucket]
+		if bucketFlushInProgressMap[bucket] == false &&
+			bucketFlushEnabledMap[bucket] == true &&
+			tsList.Len() == 0 {
+			go tk.sendNewStabilityTS(newTs, bucket, streamId)
 		} else {
-			common.Tracef("Timekeeper::handleSync \n\tUpdating Sync Count for Bucket: %v "+
-				"Stream: %v. SyncCount: %v.", meta.bucket, streamId, syncCount)
-			//update only if its less than trigger count, otherwise it makes no
-			//difference. On long running systems, syncCount may overflow otherwise
-			if syncCount < SYNC_COUNT_TS_TRIGGER {
-				(*bucketSyncCountMap)[meta.bucket] = syncCount
-			}
+			//store the ts in list
+			common.Debugf("Timekeeper::generateNewStabilityTS \n\tAdding TS: %v to Pending "+
+				"List for Bucket: %v Stream: %v.", newTs, bucket, streamId)
+			tsList.PushBack(newTs)
 		}
-	} else {
-		//add a new counter for this bucket
-		common.Debugf("Timekeeper::handleSync \n\tAdding new Sync Count for Bucket: %v "+
-			"Stream: %v. SyncCount: %v.", meta.bucket, streamId, syncCount)
-		(*bucketSyncCountMap)[meta.bucket] = 1
+		bucketSyncCountMap[bucket] = 0
+		bucketNewTsReqd[bucket] = false
 	}
 }
 
@@ -507,14 +580,14 @@ func (tk *timekeeper) checkPendingTS(streamId common.StreamId, bucket string) {
 	bucketFlushInProgressMap := tk.streamBucketFlushInProgressMap[streamId]
 	bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[streamId]
 
-	if (*bucketFlushInProgressMap)[bucket] == true ||
-		(*bucketFlushEnabledMap)[bucket] == false {
+	if bucketFlushInProgressMap[bucket] == true ||
+		bucketFlushEnabledMap[bucket] == false {
 		return
 	}
 
 	//if there are pending TS for this bucket, send New TS
 	bucketTsListMap := tk.streamBucketTsListMap[streamId]
-	tsList := (*bucketTsListMap)[bucket]
+	tsList := bucketTsListMap[bucket]
 	if tsList.Len() > 0 {
 		e := tsList.Front()
 		ts := e.Value.(Timestamp)
@@ -534,10 +607,10 @@ func (tk *timekeeper) sendNewStabilityTS(ts Timestamp, bucket string,
 
 	//store the last flushed TS
 	bucketLastTsFlushedMap := tk.streamBucketLastTsFlushedMap[streamId]
-	(*bucketLastTsFlushedMap)[bucket] = ts
+	bucketLastTsFlushedMap[bucket] = ts
 
 	bucketFlushInProgressMap := tk.streamBucketFlushInProgressMap[streamId]
-	(*bucketFlushInProgressMap)[bucket] = true
+	bucketFlushInProgressMap[bucket] = true
 
 	tk.supvRespch <- &MsgTKStabilityTS{ts: ts,
 		bucket:   bucket,
@@ -573,4 +646,29 @@ func (tk *timekeeper) checkStreamValid(streamId common.StreamId) bool {
 		return false
 	}
 	return true
+}
+
+//helper function to extract Timestamp from TsVbuuid
+func getTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
+
+	ts := NewTimestamp()
+	for i, s := range tsVbuuid.Seqnos {
+		ts[i] = Seqno(s)
+	}
+	return ts
+}
+
+//helper function to copy TsVbuuid
+func copyTsVbuuid(bucket string, tsVbuuid *common.TsVbuuid) *common.TsVbuuid {
+
+	newTs := common.NewTsVbuuid(bucket, int(NUM_VBUCKETS))
+
+	for i := 0; i < int(NUM_VBUCKETS); i++ {
+		newTs.Seqnos[i] = tsVbuuid.Seqnos[i]
+		newTs.Vbuuids[i] = tsVbuuid.Vbuuids[i]
+		newTs.Snapshots[i] = tsVbuuid.Snapshots[i]
+	}
+
+	return newTs
+
 }

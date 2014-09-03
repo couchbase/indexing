@@ -306,12 +306,23 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case STREAM_READER_STREAM_BEGIN:
 		//ignore for now
+		common.Debugf("Indexer::handleWorkerMsgs Received Stream Begin "+
+			"From Mutation Mgr %v", msg)
 
 	case STREAM_READER_STREAM_END:
 		//TODO
+		common.Debugf("Indexer::handleWorkerMsgs Received Stream End "+
+			"From Mutation Mgr %v", msg)
 
 	case STREAM_READER_STREAM_DROP_DATA:
 		//TODO
+		common.Debugf("Indexer::handleWorkerMsgs Received Drop Data "+
+			"From Mutation Mgr %v", msg)
+
+	case STREAM_READER_SNAPSHOT_MARKER:
+		//fwd the message to timekeeper
+		idx.tkCmdCh <- msg
+		<-idx.tkCmdCh
 
 	case TK_STABILITY_TIMESTAMP:
 		//send TS to Mutation Manager
@@ -336,7 +347,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
-		//fwd the messate to timekeeper
+		//fwd the message to timekeeper
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 

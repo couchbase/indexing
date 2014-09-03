@@ -270,7 +270,8 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		STREAM_READER_STREAM_BEGIN,
 		STREAM_READER_STREAM_END,
 		STREAM_READER_ERROR,
-		STREAM_READER_SYNC:
+		STREAM_READER_SYNC,
+		STREAM_READER_SNAPSHOT_MARKER:
 		//send message to supervisor to take decision
 		common.Tracef("MutationMgr::handleWorkerMessage \n\tReceived %v from worker", cmd)
 		m.supvRespch <- cmd

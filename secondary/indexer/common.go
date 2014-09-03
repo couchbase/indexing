@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 )
 
@@ -51,6 +52,16 @@ type MutationMeta struct {
 	seqno   Seqno   // vbucket sequence number for this mutation
 }
 
+func (m MutationMeta) String() string {
+
+	str := fmt.Sprintf("Bucket: %v ", m.bucket)
+	str += fmt.Sprintf("Vbucket: %v ", m.vbucket)
+	str += fmt.Sprintf("Vbuuid: %v ", m.vbuuid)
+	str += fmt.Sprintf("Seqno: %v ", m.seqno)
+	return str
+
+}
+
 //MutationKeys holds the Secondary Keys from a single KV Mutation
 type MutationKeys struct {
 	meta      *MutationMeta
@@ -60,6 +71,23 @@ type MutationKeys struct {
 	keys      [][][]byte           // list of key-versions for each index
 	oldkeys   [][][]byte           // previous key-versions, if available
 	partnkeys [][]byte             // list of partition keys
+}
+
+//MutationSnapshot represents snapshot information of KV
+type MutationSnapshot struct {
+	snapType uint32
+	start    uint64
+	end      uint64
+}
+
+func (m MutationSnapshot) String() string {
+
+	str := fmt.Sprintf("Type: %v ", m.snapType)
+	str += fmt.Sprintf("Start: %v ", m.start)
+	str += fmt.Sprintf("End: %v ", m.end)
+
+	return str
+
 }
 
 type ScanParams struct {

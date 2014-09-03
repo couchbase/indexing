@@ -262,6 +262,23 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 				streamId: r.streamId,
 				meta:     meta}
 			r.supvRespch <- msg
+
+		case common.Snapshot:
+			//get snapshot information from message
+			typ, start, end := kv.Snapshot()
+
+			snapshot := &MutationSnapshot{
+				snapType: typ,
+				start:    start,
+				end:      end}
+
+			//send message to supervisor to take decision
+			msg := &MsgStream{mType: STREAM_READER_SNAPSHOT_MARKER,
+				streamId: r.streamId,
+				meta:     meta,
+				snapshot: snapshot}
+
+			r.supvRespch <- msg
 		}
 	}
 
