@@ -4,6 +4,7 @@ package common
 
 import (
 	"errors"
+	"time"
 )
 
 // error codes
@@ -60,6 +61,27 @@ const (
 	// from socket.
 	DataportReadDeadline = 4000
 
+	// MaxQueryportPayload is maximum payload length, in bytes, for transporting
+	// data from router to downstream client.
+	MaxQueryportPayload = 1000 * 1024
+
+	// QueryportReadDeadline timeout, in milliseconds, is timeout while reading
+	// from socket.
+	QueryportReadDeadline = 4000
+
+	// QueryportWriteDeadline timeout, in milliseconds, is timeout while writing
+	// from socket.
+	QueryportWriteDeadline = 4000
+
+	// QueryportConnPoolTimeout is default timeout for retrieving a connection
+	// from the pool.
+	QueryportConnPoolTimeout = time.Hour * 24 * 30
+
+	// QueryportConnPoolAvailWaitTime is the amount of time to wait for an
+	// existing connection from the pool before considering the creation of a
+	// new one.
+	QueryportConnPoolAvailWaitTime = time.Millisecond
+
 	// ConnsPerEndpoint number of parallel connections per endpoint.
 	ConnsPerEndpoint = 1
 
@@ -84,6 +106,10 @@ const (
 
 	// MaxIndexesPerBucket is maximum number of index supported per bucket.
 	MaxIndexesPerBucket = 64
+
+	// QueryportPageSize is number of index-entries that shall be returned as
+	// single payload.
+	QueryportPageSize = 100
 )
 
 // ProtobufDataPathMajorNum major version number for mutation data path.
