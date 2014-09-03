@@ -1,10 +1,11 @@
-// On the wire transport for mutation packet.
-//  { uint32(packetlen), uint16(flags), []byte(mutation) }
+// On the wire transport for custom packets packet.
 //
-// - `flags` used for specifying encoding format, compression etc.
-// - packetlen == len(mutation)
-
-package dataport
+//      { uint32(packetlen), uint16(flags), []byte(mutation) }
+//
+//      where, packetlen == len(mutation)
+//
+// `flags` used for specifying encoding format, compression etc.
+package transport
 
 import (
 	"encoding/binary"
@@ -15,35 +16,17 @@ import (
 
 // error codes
 
-// ErrorDuplicateClient
-var ErrorDuplicateClient = errors.New("dataport.duplicateClient")
+// ErrorPacketWrite is error writing packet on the wire.
+var ErrorPacketWrite = errors.New("transport.packetWrite")
 
-// ErrorPacketWrite
-var ErrorPacketWrite = errors.New("dataport.packetWrite")
+// ErrorPacketOverflow is input packet overflows maximum configured packet size.
+var ErrorPacketOverflow = errors.New("transport.packetOverflow")
 
-// ErrorPacketOverflow
-var ErrorPacketOverflow = errors.New("dataport.packetOverflow")
+// ErrorEncoderUnknown for unknown encoder.
+var ErrorEncoderUnknown = errors.New("transport.encoderUnknown")
 
-// ErrorWorkerKilled
-var ErrorWorkerKilled = errors.New("dataport.workerKilled")
-
-// ErrorDaemonExit
-var ErrorDaemonExit = errors.New("dataport.daemonExit")
-
-// ErrorClientEmptyKeys
-var ErrorClientEmptyKeys = errors.New("dataport.clientEmptyKeys")
-
-// ErrorMissingPayload
-var ErrorMissingPayload = errors.New("dataport.missingPlayload")
-
-// ErrorTransportVersion
-var ErrorTransportVersion = errors.New("dataport.transportVersion")
-
-// ErrorDuplicateStreamBegin
-var ErrorDuplicateStreamBegin = errors.New("dataport.duplicateStreamBegin")
-
-// ErrorMissingStreamBegin
-var ErrorMissingStreamBegin = errors.New("dataport.missingStreamBegin")
+// ErrorDecoderUnknown for unknown decoder.
+var ErrorDecoderUnknown = errors.New("transport.decoderUnknown")
 
 // packet field offset and size in bytes
 const (
@@ -54,17 +37,23 @@ const (
 	pktDataOffset int = pktFlagOffset + pktFlagSize
 )
 
-// TransportPacket to send and receive mutation packets between router
-// and downstream client.
-type TransportPacket struct {
-	flags TransportFlag
-	buf   []byte
-}
-
 type transporter interface { // facilitates unit testing
 	Read(b []byte) (n int, err error)
 	Write(b []byte) (n int, err error)
 }
+
+// TransportPacket to send and receive mutation packets between router
+// and downstream client.
+type TransportPacket struct {
+	flags    TransportFlag
+	buf      []byte
+	encoders map[byte]Encoder
+	decoders map[byte]Decoder
+}
+
+type Encoder func(payload interface{}) (data []byte, err error)
+
+type Decoder func(data []byte) (payload interface{}, err error)
 
 // NewTransportPacket creates a new TransportPacket and return its
 // reference. Typically application should call this once and reuse it while
@@ -75,10 +64,27 @@ type transporter interface { // facilitates unit testing
 //         packets.
 // flags,  specifying encoding and compression.
 func NewTransportPacket(maxlen int, flags TransportFlag) *TransportPacket {
-	return &TransportPacket{
-		flags: flags,
-		buf:   make([]byte, maxlen),
+	pkt := &TransportPacket{
+		flags:    flags,
+		buf:      make([]byte, maxlen),
+		encoders: make(map[byte]Encoder),
+		decoders: make(map[byte]Decoder),
 	}
+	pkt.encoders[EncodingNone] = nil
+	pkt.decoders[EncodingNone] = nil
+	return pkt
+}
+
+// SetEncoder callback function for `type`.
+func (pkt *TransportPacket) SetEncoder(typ byte, callb Encoder) *TransportPacket {
+	pkt.encoders[typ] = callb
+	return pkt
+}
+
+// SetDecoder callback function for `type`.
+func (pkt *TransportPacket) SetDecoder(typ byte, callb Decoder) *TransportPacket {
+	pkt.decoders[typ] = callb
+	return pkt
 }
 
 // Send payload to the other end using sufficient encoding and compression.
@@ -86,17 +92,17 @@ func (pkt *TransportPacket) Send(conn transporter, payload interface{}) (err err
 	var data []byte
 	var n int
 
-	// encoding
+	// encode
 	if data, err = pkt.encode(payload); err != nil {
 		return
 	}
-	// compression
+	// compress
 	if data, err = pkt.compress(data); err != nil {
 		return
 	}
 	// transport framing
 	l := pktLenSize + pktFlagSize + len(data)
-	if maxLen := c.MaxDataportPayload; l > maxLen {
+	if maxLen := len(pkt.buf); l > maxLen {
 		c.Errorf("sending packet length %v is > %v\n", l, maxLen)
 		err = ErrorPacketOverflow
 		return
@@ -108,18 +114,18 @@ func (pkt *TransportPacket) Send(conn transporter, payload interface{}) (err err
 	binary.BigEndian.PutUint16(pkt.buf[a:b], uint16(pkt.flags))
 	if n, err = conn.Write(pkt.buf[:pktDataOffset]); err == nil {
 		if n, err = conn.Write(data); err == nil && n != len(data) {
-			c.Errorf("dataport wrote only %v bytes for data\n", n)
+			c.Errorf("transport wrote only %v bytes for data\n", n)
 			err = ErrorPacketWrite
 		}
 	} else if n != pktDataOffset {
-		c.Errorf("dataport wrote only %v bytes for header\n", n)
+		c.Errorf("transport wrote only %v bytes for header\n", n)
 		err = ErrorPacketWrite
 	}
 	return
 }
 
 // Receive payload from remote, decode, decompress the payload and return the
-// payload
+// payload.
 func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err error) {
 	var data []byte
 
@@ -131,7 +137,7 @@ func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err 
 	pktlen := binary.BigEndian.Uint32(pkt.buf[a:b])
 	a, b = pktFlagOffset, pktFlagOffset+pktFlagSize
 	pkt.flags = TransportFlag(binary.BigEndian.Uint16(pkt.buf[a:b]))
-	if maxLen := uint32(c.MaxDataportPayload); pktlen > maxLen {
+	if maxLen := uint32(len(pkt.buf)); pktlen > maxLen {
 		c.Errorf("receiving packet length %v > %v\n", maxLen, pktlen)
 		err = ErrorPacketOverflow
 		return
@@ -151,28 +157,34 @@ func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err 
 	return
 }
 
-// encode payload to array of bytes.
+// encode payload to array of bytes, if callback was specified `nil` for a
+// valid type then return `payload` as `data`.
 func (pkt *TransportPacket) encode(payload interface{}) (data []byte, err error) {
-	switch pkt.flags.GetEncoding() {
-	case encodingProtobuf:
-		data, err = protobufEncode(payload)
+	typ := pkt.flags.GetEncoding()
+	if callb, ok := pkt.encoders[typ]; ok {
+		return callb(payload)
+	} else if callb == nil {
+		return payload.([]byte), nil
 	}
-	return
+	return nil, ErrorEncoderUnknown
 }
 
-// decode array of bytes back to payload.
+// decode array of bytes back to payload, if callback was specified `nil` for
+// a valid type then return `data` as `payload`.
 func (pkt *TransportPacket) decode(data []byte) (payload interface{}, err error) {
-	switch pkt.flags.GetEncoding() {
-	case encodingProtobuf:
-		payload, err = protobufDecode(data)
+	typ := pkt.flags.GetEncoding()
+	if callb, ok := pkt.decoders[typ]; ok {
+		return callb(data)
+	} else if callb == nil {
+		return data, nil
 	}
-	return
+	return nil, ErrorDecoderUnknown
 }
 
 // compress array of bytes.
 func (pkt *TransportPacket) compress(big []byte) (small []byte, err error) {
 	switch pkt.flags.GetCompression() {
-	case compressionNone:
+	case CompressionNone:
 		small = big
 	}
 	return
@@ -181,7 +193,7 @@ func (pkt *TransportPacket) compress(big []byte) (small []byte, err error) {
 // decompress array of bytes.
 func (pkt *TransportPacket) decompress(small []byte) (big []byte, err error) {
 	switch pkt.flags.GetCompression() {
-	case compressionNone:
+	case CompressionNone:
 		big = small
 	}
 	return

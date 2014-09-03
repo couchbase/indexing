@@ -6,6 +6,7 @@ import (
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
+	"github.com/couchbase/indexing/secondary/transport"
 )
 
 // TODO:
@@ -26,7 +27,7 @@ func TestTimeout(t *testing.T) {
 	}
 
 	// start client
-	flags := TransportFlag(0).SetProtobuf()
+	flags := transport.TransportFlag(0).SetProtobuf()
 	client, _ := NewClient(addr, maxconns, flags)
 
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
@@ -110,7 +111,7 @@ func TestLoopback(t *testing.T) {
 	}
 
 	// start client and test loopback
-	flags := TransportFlag(0).SetProtobuf()
+	flags := transport.TransportFlag(0).SetProtobuf()
 	client, err := NewClient(addr, maxconns, flags)
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +200,7 @@ func BenchmarkLoopback(b *testing.B) {
 	}
 
 	// start client and test loopback
-	flags := TransportFlag(0).SetProtobuf()
+	flags := transport.TransportFlag(0).SetProtobuf()
 	client, _ := NewClient(addr, maxconns, flags)
 
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets)

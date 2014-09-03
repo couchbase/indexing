@@ -53,6 +53,7 @@ import (
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
+	"github.com/couchbase/indexing/secondary/transport"
 )
 
 // Error codes
@@ -62,6 +63,21 @@ var ErrorPayload = errors.New("dataport.daemonPayload")
 
 // ErrorVbmap
 var ErrorVbmap = errors.New("dataport.vbmap")
+
+// ErrorDuplicateStreamBegin
+var ErrorDuplicateStreamBegin = errors.New("dataport.duplicateStreamBegin")
+
+// ErrorMissingStreamBegin
+var ErrorMissingStreamBegin = errors.New("dataport.missingStreamBegin")
+
+// ErrorDaemonExit
+var ErrorDaemonExit = errors.New("dataport.daemonExit")
+
+// ErrorDuplicateClient
+var ErrorDuplicateClient = errors.New("dataport.duplicateClient")
+
+// ErrorWorkerKilled
+var ErrorWorkerKilled = errors.New("dataport.workerKilled")
 
 type activeVb struct {
 	bucket string
@@ -472,8 +488,12 @@ loop:
 // per connection go-routine to read []*VbKeyVersions.
 func doReceive(prefix string, nc netConn, mutch chan<- []*protobuf.VbKeyVersions, reqch chan<- []interface{}) {
 	conn, worker := nc.conn, nc.worker
-	flags := TransportFlag(0).SetProtobuf() // TODO: make it configurable
-	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
+	// TODO: make it configurable
+	flags := transport.TransportFlag(0).SetProtobuf()
+	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
+
 	msg := serverMessage{raddr: conn.RemoteAddr().String()}
 
 	started := make(map[string]*activeVb)  // TODO: avoid magic numbers

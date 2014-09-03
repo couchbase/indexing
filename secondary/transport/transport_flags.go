@@ -6,18 +6,18 @@
 //           +-------+-------+---------------+  COMP. - Compression
 //          0| COMP. |  ENC. | undefined     |  ENC.  - Encoding
 //           +-------+-------+---------------+
-
-package dataport
+package transport
 
 const ( // types of encoding over the wire.
-	encodingProtobuf byte = 0
+	EncodingNone     byte = 0x00
+	EncodingProtobuf byte = 0x10
 )
 
 const ( // types of compression over the wire.
-	compressionNone   byte = 0
-	compressionSnappy      = 1
-	compressionGzip        = 2
-	compressionBzip2       = 3
+	CompressionNone   byte = 0
+	CompressionSnappy      = 1
+	CompressionGzip        = 2
+	CompressionBzip2       = 3
 )
 
 // TransportFlag tell packet encoding and compression formats.
@@ -30,17 +30,17 @@ func (flags TransportFlag) GetCompression() byte {
 
 // SetSnappy will set packet compression to snappy
 func (flags TransportFlag) SetSnappy() TransportFlag {
-	return (flags & TransportFlag(0xFFF0)) | TransportFlag(compressionSnappy)
+	return (flags & TransportFlag(0xFFF0)) | TransportFlag(CompressionSnappy)
 }
 
 // SetGzip will set packet compression to Gzip
 func (flags TransportFlag) SetGzip() TransportFlag {
-	return (flags & TransportFlag(0xFFF0)) | TransportFlag(compressionGzip)
+	return (flags & TransportFlag(0xFFF0)) | TransportFlag(CompressionGzip)
 }
 
 // SetBzip2 will set packet compression to bzip2
 func (flags TransportFlag) SetBzip2() TransportFlag {
-	return (flags & TransportFlag(0xFFF0)) | TransportFlag(compressionBzip2)
+	return (flags & TransportFlag(0xFFF0)) | TransportFlag(CompressionBzip2)
 }
 
 // GetEncoding will get the encoding bits from flags
@@ -50,5 +50,5 @@ func (flags TransportFlag) GetEncoding() byte {
 
 // SetProtobuf will set packet encoding to protobuf
 func (flags TransportFlag) SetProtobuf() TransportFlag {
-	return (flags & TransportFlag(0xFF0F)) | TransportFlag(encodingProtobuf)
+	return (flags & TransportFlag(0xFF0F)) | TransportFlag(EncodingProtobuf)
 }

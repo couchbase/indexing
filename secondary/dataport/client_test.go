@@ -6,6 +6,7 @@ import (
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
+	"github.com/couchbase/indexing/secondary/transport"
 )
 
 var addr = "localhost:8888"
@@ -23,7 +24,7 @@ func TestClient(t *testing.T) {
 	}
 
 	// start client and test number of connection.
-	flags := TransportFlag(0).SetProtobuf()
+	flags := transport.TransportFlag(0).SetProtobuf()
 	client, err := NewClient(addr, maxconns, flags)
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +60,7 @@ func TestStreamBegin(t *testing.T) {
 	}
 
 	// start client
-	flags := TransportFlag(0).SetProtobuf()
+	flags := transport.TransportFlag(0).SetProtobuf()
 	client, _ := NewClient(addr, maxconns, flags)
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {
@@ -71,7 +72,10 @@ func TestStreamBegin(t *testing.T) {
 	// test a live StreamBegin
 	bucket, vbno, vbuuid := "default0", uint16(maxvbuckets), uint64(1111)
 	uuid := c.ID(bucket, vbno)
-	vals, _ := client.Getcontext()
+	vals, err := client.Getcontext()
+	if err != nil {
+		t.Fatal(err)
+	}
 	vbChans := vals[0].(map[string]chan interface{})
 	if _, ok := vbChans[uuid]; ok {
 		t.Fatal("duplicate id")
@@ -106,7 +110,7 @@ func TestStreamEnd(t *testing.T) {
 	}
 
 	// start client
-	flags := TransportFlag(0).SetProtobuf()
+	flags := transport.TransportFlag(0).SetProtobuf()
 	client, _ := NewClient(addr, maxconns, flags)
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {

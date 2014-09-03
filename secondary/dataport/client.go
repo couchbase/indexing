@@ -1,3 +1,13 @@
+// client behavior:
+//
+// - client API to push mutation messages to the other end. This is an all or
+//   nothing client for each downstream host.
+// - If caller receives an error value while calling an exported method on
+//   Client, it is adviced to stop the client, its connection pool, and
+//   wait for a reconnect request.
+// - Connection pool is used to parallelize data transmission to downstream
+//   host.
+//
 // concurrency model:
 //
 //                                                    Network socket
@@ -19,23 +29,20 @@
 //                                  *common.VbKeyVersions
 //                                  *common.VbConnectionMap
 //
-// client behavior:
-//
-// - client API to push mutation messages to the other end. This is an all or
-//   nothing client for each downstream host.
-// - If caller receives an error value while calling an exported method on
-//   Client, it is adviced to stop the client, its connection pool, and
-//   wait for a reconnect request.
-
 package dataport
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/transport"
 )
+
+// ErrorClientEmptyKeys
+var ErrorClientEmptyKeys = errors.New("dataport.clientEmptyKeys")
 
 // Client is an active client for each remote host, and there can be
 // multiple connections opened with remote host for the same endpoint.
@@ -57,7 +64,7 @@ type Client struct {
 // on parameter `n`, can be used to speed up mutation transport across network.
 // A vbucket is always binded to a connection and ensure that mutations within
 // a vbucket are serialized.
-func NewClient(raddr string, n int, flags TransportFlag) (c *Client, err error) {
+func NewClient(raddr string, n int, flags transport.TransportFlag) (c *Client, err error) {
 	var conn net.Conn
 
 	if n == 0 {
@@ -317,7 +324,7 @@ func (c *Client) doClose() (err error) {
 // per vbucket routine pushes *VbConnectionMap / *VbKeyVersions to other end.
 func (c *Client) runTransmitter(
 	conn net.Conn,
-	flags TransportFlag,
+	flags transport.TransportFlag,
 	payloadch chan interface{},
 	quitch chan []string) {
 
@@ -329,7 +336,10 @@ func (c *Client) runTransmitter(
 		quitch <- []string{"quit", laddr}
 	}()
 
-	pkt := NewTransportPacket(common.MaxDataportPayload, flags)
+	pkt := transport.NewTransportPacket(common.MaxDataportPayload, flags)
+	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
+
 	transmit := func(payload interface{}) bool {
 		if err := pkt.Send(conn, payload); err != nil {
 			common.Errorf("%v transport %q `%v`\n", c.logPrefix, laddr, err)

@@ -6,6 +6,7 @@ import (
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
+	"github.com/couchbase/indexing/secondary/transport"
 )
 
 func TestPktKeyVersions(t *testing.T) {
@@ -13,8 +14,11 @@ func TestPktKeyVersions(t *testing.T) {
 	vbsRef := constructVbKeyVersions("default", seqno, nVbs, nMuts, nIndexes)
 	tc := newTestConnection()
 	tc.reset()
-	flags := TransportFlag(0).SetProtobuf()
-	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
+	flags := transport.TransportFlag(0).SetProtobuf()
+	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
+
 	if err := pkt.Send(tc, vbsRef); err != nil { // Send reference
 		t.Fatal(err)
 	}
@@ -42,8 +46,11 @@ func TestPktVbmap(t *testing.T) {
 	}
 	tc := newTestConnection()
 	tc.reset()
-	flags := TransportFlag(0).SetProtobuf()
-	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
+	flags := transport.TransportFlag(0).SetProtobuf()
+	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
+
 	if err := pkt.Send(tc, vbmapRef); err != nil { // send reference
 		t.Fatal(err)
 	}
@@ -59,8 +66,10 @@ func BenchmarkSendVbKeyVersions(b *testing.B) {
 	seqno, nVbs, nMuts, nIndexes := 1, 20, 5, 5
 	vbs := constructVbKeyVersions("default", seqno, nVbs, nMuts, nIndexes)
 	tc := newTestConnection()
-	flags := TransportFlag(0).SetProtobuf()
-	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
+	flags := transport.TransportFlag(0).SetProtobuf()
+	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -73,8 +82,10 @@ func BenchmarkReceiveKeyVersions(b *testing.B) {
 	seqno, nVbs, nMuts, nIndexes := 1, 20, 5, 5
 	vbs := constructVbKeyVersions("default", seqno, nVbs, nMuts, nIndexes)
 	tc := newTestConnection()
-	flags := TransportFlag(0).SetProtobuf()
-	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
+	flags := transport.TransportFlag(0).SetProtobuf()
+	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -91,8 +102,10 @@ func BenchmarkSendVbmap(b *testing.B) {
 		Vbuuids:  []uint64{10, 20, 30, 40},
 	}
 	tc := newTestConnection()
-	flags := TransportFlag(0).SetProtobuf()
-	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
+	flags := transport.TransportFlag(0).SetProtobuf()
+	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -108,8 +121,10 @@ func BenchmarkReceiveVbmap(b *testing.B) {
 		Vbuuids:  []uint64{10, 20, 30, 40},
 	}
 	tc := newTestConnection()
-	flags := TransportFlag(0).SetProtobuf()
-	pkt := NewTransportPacket(c.MaxDataportPayload, flags)
+	flags := transport.TransportFlag(0).SetProtobuf()
+	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
