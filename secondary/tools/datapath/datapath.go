@@ -23,6 +23,8 @@ var options struct {
 	stat          string   // periodic timeout to print dataport statistics
 	timeout       string   // timeout for dataport to exit
 	maxVbno       int      // maximum number of vbuckets
+	debug         bool
+	trace         bool
 }
 
 func argParse() string {
@@ -42,11 +44,23 @@ func argParse() string {
 		"timeout for dataport to exit")
 	flag.IntVar(&options.maxVbno, "maxvb", 1024,
 		"maximum number of vbuckets")
+	flag.BoolVar(&options.debug, "debug", false,
+		"run in debug mode")
+	flag.BoolVar(&options.trace, "trace", false,
+		"run in trace mode")
 
 	flag.Parse()
 
 	options.buckets = strings.Split(buckets, ",")
 	options.endpoints = strings.Split(endpoints, ",")
+
+	if options.debug {
+		c.SetLogLevel(c.LogLevelDebug)
+	} else if options.trace {
+		c.SetLogLevel(c.LogLevelTrace)
+	} else {
+		c.SetLogLevel(c.LogLevelInfo)
+	}
 
 	args := flag.Args()
 	if len(args) < 1 || len(options.buckets) < 1 {
@@ -64,8 +78,6 @@ func usage() {
 var projectors = make(map[string]ap.Client)
 
 func main() {
-	c.SetLogLevel(c.LogLevelInfo)
-
 	cluster := argParse()
 
 	// start dataport servers.
