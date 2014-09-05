@@ -251,7 +251,9 @@ func BenchmarkScan100(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 }
 
-func BenchmarkScanParallel(b *testing.B) {
+func BenchmarkScanParallel10(b *testing.B) {
+	par := 10
+
 	common.LogIgnore()
 	addr := "localhost:8888"
 	callb := func(
@@ -263,20 +265,15 @@ func BenchmarkScanParallel(b *testing.B) {
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	client := NewClient(addr, 2, 2)
+	client := NewClient(addr, par, par)
 
-	okch := make(chan int, b.N)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		go client.Scan(
+		client.Scan(
 			[]byte("aaaa"), []byte("zzzz"), 0, 100, true, 1000,
 			func(val interface{}) bool {
-				okch <- i
-				return true
+				return false
 			})
-	}
-	for i := 0; i < b.N; i++ {
-		<-okch
 	}
 	b.StopTimer()
 

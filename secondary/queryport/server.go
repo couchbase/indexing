@@ -26,7 +26,6 @@ type Server struct {
 	mu        sync.Mutex
 	lis       net.Listener
 	killch    chan bool
-	pkt       *transport.TransportPacket
 	logPrefix string
 }
 
@@ -42,11 +41,6 @@ func NewServer(laddr string, callb RequestHandler) (s *Server, err error) {
 		c.Errorf("%v failed starting %v !!", s.logPrefix, err)
 		return nil, err
 	}
-
-	flags := transport.TransportFlag(0).SetProtobuf()
-	s.pkt = transport.NewTransportPacket(c.MaxQueryportPayload, flags)
-	s.pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
-	s.pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
 	go s.listener()
 	c.Infof("%v started ...", s.logPrefix)
@@ -108,6 +102,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 	rcvch := make(chan interface{}, 16) // TODO: avoid magic number
 	go s.doReceive(conn, rcvch)
 
+	// transport buffer for transmission
+	flags := transport.TransportFlag(0).SetProtobuf()
+	tpkt := transport.NewTransportPacket(c.MaxQueryportPayload, flags)
+	tpkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+
 loop:
 	for {
 		select {
@@ -121,7 +120,7 @@ loop:
 			}
 			respch := make(chan interface{}, 16) // TODO: avoid magic number
 			quitch := make(chan interface{}, 16) // TODO: avoid magic number
-			go s.handleRequest(conn, respch, rcvch, quitch)
+			go s.handleRequest(conn, tpkt, respch, rcvch, quitch)
 			s.callb(req, respch, quitch) // blocking call
 
 		case <-s.killch:
@@ -131,13 +130,16 @@ loop:
 }
 
 func (s *Server) handleRequest(
-	conn net.Conn, respch, rcvch <-chan interface{}, quitch chan<- interface{}) {
+	conn net.Conn,
+	tpkt *transport.TransportPacket,
+	respch, rcvch <-chan interface{}, quitch chan<- interface{}) {
+
 	raddr := conn.RemoteAddr()
 
 	timeoutMs := c.QueryportWriteDeadline * time.Millisecond
 	transmit := func(resp interface{}) {
 		conn.SetWriteDeadline(time.Now().Add(timeoutMs))
-		if err := s.pkt.Send(conn, resp); err != nil {
+		if err := tpkt.Send(conn, resp); err != nil {
 			msg := "%v connection %v response transport failed `%v`\n"
 			c.Debugf(msg, s.logPrefix, raddr, err)
 		}
@@ -176,9 +178,10 @@ loop:
 func (s *Server) doReceive(conn net.Conn, rcvch chan<- interface{}) {
 	raddr := conn.RemoteAddr()
 
+	// transport buffer for receiving
 	flags := transport.TransportFlag(0).SetProtobuf()
-	pkt := transport.NewTransportPacket(c.MaxQueryportPayload, flags)
-	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
+	rpkt := transport.NewTransportPacket(c.MaxQueryportPayload, flags)
+	rpkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
 	c.Debugf("%v connection %q doReceive() ...\n", s.logPrefix, raddr)
 
@@ -186,7 +189,7 @@ func (s *Server) doReceive(conn net.Conn, rcvch chan<- interface{}) {
 loop:
 	for {
 		conn.SetReadDeadline(time.Now().Add(timeoutMs))
-		req, err := pkt.Receive(conn)
+		req, err := rpkt.Receive(conn)
 		// TODO: handle close-connection and don't print error message.
 		if err != nil {
 			c.Errorf("%v connection %q exited %v\n", s.logPrefix, raddr, err)

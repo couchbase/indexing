@@ -19,9 +19,8 @@ var ErrorProtocol = errors.New("queryport.protocol")
 
 // ResponseHandler shall interpret response packets from server
 // and handle them. If handler is not interested in receiving any
-// more response it shall return false, else to continue it shall
-// continue until *protobufEncode.StreamEndResponse message is
-// received.
+// more response it shall return false, else it shall continue
+// until *protobufEncode.StreamEndResponse message is received.
 type ResponseHandler func(resp interface{}) bool
 
 // Client structure.

@@ -2,6 +2,7 @@ package dataport
 
 import (
 	"fmt"
+	"net"
 	"testing"
 
 	c "github.com/couchbase/indexing/secondary/common"
@@ -155,9 +156,19 @@ func constructVbKeyVersions(bucket string, seqno, nVbs, nMuts, nIndexes int) []*
 }
 
 type testConnection struct {
-	roff int
-	woff int
-	buf  []byte
+	roff  int
+	woff  int
+	buf   []byte
+	laddr netAddr
+	raddr netAddr
+}
+
+func newTestConnection() *testConnection {
+	return &testConnection{
+		buf:   make([]byte, 100000),
+		laddr: netAddr("127.0.0.1:9998"),
+		raddr: netAddr("127.0.0.1:9999"),
+	}
 }
 
 func (tc *testConnection) Write(b []byte) (n int, err error) {
@@ -174,10 +185,24 @@ func (tc *testConnection) Read(b []byte) (n int, err error) {
 	return len(b), nil
 }
 
+func (tc *testConnection) LocalAddr() net.Addr {
+	return tc.laddr
+}
+
+func (tc *testConnection) RemoteAddr() net.Addr {
+	return tc.raddr
+}
+
 func (tc *testConnection) reset() {
 	tc.woff, tc.roff = 0, 0
 }
 
-func newTestConnection() *testConnection {
-	return &testConnection{buf: make([]byte, 100000)}
+type netAddr string
+
+func (addr netAddr) Network() string {
+	return "tcp"
+}
+
+func (addr netAddr) String() string {
+	return string(addr)
 }

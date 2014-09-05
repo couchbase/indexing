@@ -10,6 +10,7 @@ package transport
 import (
 	"encoding/binary"
 	"errors"
+	"net"
 
 	c "github.com/couchbase/indexing/secondary/common"
 )
@@ -40,6 +41,8 @@ const (
 type transporter interface { // facilitates unit testing
 	Read(b []byte) (n int, err error)
 	Write(b []byte) (n int, err error)
+	LocalAddr() net.Addr
+	RemoteAddr() net.Addr
 }
 
 // TransportPacket to send and receive mutation packets between router
@@ -117,6 +120,9 @@ func (pkt *TransportPacket) Send(conn transporter, payload interface{}) (err err
 			c.Errorf("transport wrote only %v bytes for data\n", n)
 			err = ErrorPacketWrite
 		}
+		laddr, raddr := conn.LocalAddr(), conn.RemoteAddr()
+		c.Tracef("wrote %v bytes on connection %v->%v", len(data), laddr, raddr)
+
 	} else if n != pktDataOffset {
 		c.Errorf("transport wrote only %v bytes for header\n", n)
 		err = ErrorPacketWrite
@@ -145,7 +151,11 @@ func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err 
 	if err = fullRead(conn, pkt.buf[:pktlen]); err != nil {
 		return
 	}
+
 	data = pkt.buf[:pktlen]
+	laddr, raddr := conn.LocalAddr(), conn.RemoteAddr()
+	c.Tracef("read %v bytes on connection %v<-%v", len(data), laddr, raddr)
+
 	// de-compression
 	if data, err = pkt.decompress(data); err != nil {
 		return
