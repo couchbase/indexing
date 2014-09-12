@@ -31,24 +31,36 @@ type timekeeper struct {
 	streamBucketSyncCountMap map[common.StreamId]BucketSyncCountMap
 	streamBucketNewTsReqdMap map[common.StreamId]BucketNewTsReqdMap
 
-	streamBucketTsListMap          map[common.StreamId]BucketTsListMap
-	streamBucketFlushInProgressMap map[common.StreamId]BucketFlushInProgressMap
+	streamBucketTsListMap            map[common.StreamId]BucketTsListMap
+	streamBucketFlushInProgressTsMap map[common.StreamId]BucketFlushInProgressTsMap
+	streamBucketAbortInProgressMap   map[common.StreamId]BucketAbortInProgressMap
 
-	streamBucketLastTsFlushedMap map[common.StreamId]BucketLastTsFlushedMap
+	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
 	streamBucketFlushEnabledMap  map[common.StreamId]BucketFlushEnabledMap
+	streamBucketDrainEnabledMap  map[common.StreamId]BucketDrainEnabledMap
+
+	streamBucketStreamBeginMap map[common.StreamId]BucketStreamBeginMap
+	streamState                map[common.StreamId]StreamState
 
 	//map of indexInstId to its Initial Build Info
 	indexBuildInfo map[common.IndexInstId]*InitialBuildInfo
 }
 
 type BucketHWTMap map[string]*common.TsVbuuid
-type BucketLastTsFlushedMap map[string]Timestamp
+type BucketLastFlushedTsMap map[string]*common.TsVbuuid
 type BucketSyncCountMap map[string]uint64
 type BucketNewTsReqdMap map[string]bool
 
 type BucketTsListMap map[string]*list.List
-type BucketFlushInProgressMap map[string]bool
+type BucketFlushInProgressTsMap map[string]*common.TsVbuuid
+type BucketAbortInProgressMap map[string]bool
 type BucketFlushEnabledMap map[string]bool
+type BucketDrainEnabledMap map[string]bool
+
+//Each location in TS represents the state of StreamBegin.
+//0 denotes no StreamBegin. 1 denotes StreamBegin.
+//2 denotes StreamEnd has been received.
+type BucketStreamBeginMap map[string]Timestamp
 
 type InitialBuildInfo struct {
 	indexInst common.IndexInst
@@ -66,16 +78,20 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel) (
 
 	//Init the timekeeper struct
 	tk := &timekeeper{
-		supvCmdch:                      supvCmdch,
-		supvRespch:                     supvRespch,
-		streamBucketHWTMap:             make(map[common.StreamId]BucketHWTMap),
-		streamBucketSyncCountMap:       make(map[common.StreamId]BucketSyncCountMap),
-		streamBucketNewTsReqdMap:       make(map[common.StreamId]BucketNewTsReqdMap),
-		streamBucketTsListMap:          make(map[common.StreamId]BucketTsListMap),
-		streamBucketFlushInProgressMap: make(map[common.StreamId]BucketFlushInProgressMap),
-		streamBucketLastTsFlushedMap:   make(map[common.StreamId]BucketLastTsFlushedMap),
-		streamBucketFlushEnabledMap:    make(map[common.StreamId]BucketFlushEnabledMap),
-		indexBuildInfo:                 make(map[common.IndexInstId]*InitialBuildInfo),
+		supvCmdch:                        supvCmdch,
+		supvRespch:                       supvRespch,
+		streamBucketHWTMap:               make(map[common.StreamId]BucketHWTMap),
+		streamBucketSyncCountMap:         make(map[common.StreamId]BucketSyncCountMap),
+		streamBucketNewTsReqdMap:         make(map[common.StreamId]BucketNewTsReqdMap),
+		streamBucketTsListMap:            make(map[common.StreamId]BucketTsListMap),
+		streamBucketFlushInProgressTsMap: make(map[common.StreamId]BucketFlushInProgressTsMap),
+		streamBucketAbortInProgressMap:   make(map[common.StreamId]BucketAbortInProgressMap),
+		streamBucketLastFlushedTsMap:     make(map[common.StreamId]BucketLastFlushedTsMap),
+		streamBucketFlushEnabledMap:      make(map[common.StreamId]BucketFlushEnabledMap),
+		streamBucketDrainEnabledMap:      make(map[common.StreamId]BucketDrainEnabledMap),
+		streamBucketStreamBeginMap:       make(map[common.StreamId]BucketStreamBeginMap),
+		streamState:                      make(map[common.StreamId]StreamState),
+		indexBuildInfo:                   make(map[common.IndexInstId]*InitialBuildInfo),
 	}
 
 	//start timekeeper loop which listens to commands from its supervisor
@@ -119,7 +135,7 @@ func (tk *timekeeper) handleSupvervisorCommands(cmd Message) {
 		tk.handleSync(cmd)
 
 	case OPEN_STREAM:
-		tk.handleStreamStart(cmd)
+		tk.handleStreamOpen(cmd)
 
 	case ADD_INDEX_LIST_TO_STREAM:
 		tk.handleAddIndextoStream(cmd)
@@ -128,19 +144,35 @@ func (tk *timekeeper) handleSupvervisorCommands(cmd Message) {
 		tk.handleRemoveIndexFromStream(cmd)
 
 	case CLOSE_STREAM:
-		tk.handleStreamStop(cmd)
+		tk.handleStreamClose(cmd)
 
 	case MUT_MGR_FLUSH_DONE:
 		tk.handleFlushDone(cmd)
 
+	case MUT_MGR_ABORT_DONE:
+		tk.handleFlushAbortDone(cmd)
+
 	case TK_ENABLE_FLUSH:
-		tk.handleEnableFlush(cmd)
+		tk.handleFlushStateChange(cmd)
+
+	case TK_DISABLE_FLUSH:
+		tk.handleFlushStateChange(cmd)
 
 	case STREAM_READER_SNAPSHOT_MARKER:
 		tk.handleSnapshotMarker(cmd)
 
 	case TK_GET_BUCKET_HWT:
 		tk.handleGetBucketHWT(cmd)
+
+	case STREAM_READER_STREAM_BEGIN:
+		tk.handleStreamBegin(cmd)
+
+	case STREAM_READER_STREAM_END:
+		tk.handleStreamEnd(cmd)
+
+	case STREAM_READER_STREAM_SHUTDOWN, STREAM_READER_RESTART_VBUCKETS,
+		STREAM_READER_REPAIR_VBUCKETS:
+		tk.handleStreamConnError(cmd)
 
 	default:
 		common.Errorf("Timekeeper::handleSupvervisorCommands "+
@@ -150,57 +182,99 @@ func (tk *timekeeper) handleSupvervisorCommands(cmd Message) {
 
 }
 
-func (tk *timekeeper) handleStreamStart(cmd Message) {
+func (tk *timekeeper) handleStreamOpen(cmd Message) {
 
-	common.Infof("Timekeeper::handleStreamStart %v", cmd)
+	common.Infof("Timekeeper::handleStreamOpen %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 
-	//init all internal maps for this stream
-	bucketHWTMap := make(BucketHWTMap)
-	tk.streamBucketHWTMap[streamId] = bucketHWTMap
+	//if stream is INACTIVE, move it to RECOVERY
+	if tk.streamState[streamId] == STREAM_INACTIVE {
 
-	bucketSyncCountMap := make(BucketSyncCountMap)
-	tk.streamBucketSyncCountMap[streamId] = bucketSyncCountMap
+		switch streamId {
+		case common.MAINT_STREAM:
+			tk.streamState[streamId] = STREAM_RECOVERY
 
-	bucketNewTsReqdMap := make(BucketNewTsReqdMap)
-	tk.streamBucketNewTsReqdMap[streamId] = bucketNewTsReqdMap
+		case common.CATCHUP_STREAM, common.INIT_STREAM:
+			tk.streamState[streamId] = STREAM_ACTIVE
+		}
 
-	bucketTsListMap := make(BucketTsListMap)
-	tk.streamBucketTsListMap[streamId] = bucketTsListMap
+	} else {
 
-	bucketFlushInProgressMap := make(BucketFlushInProgressMap)
-	tk.streamBucketFlushInProgressMap[streamId] = bucketFlushInProgressMap
+		//init all internal maps for this stream
+		bucketHWTMap := make(BucketHWTMap)
+		tk.streamBucketHWTMap[streamId] = bucketHWTMap
 
-	bucketLastTsFlushedMap := make(BucketLastTsFlushedMap)
-	tk.streamBucketLastTsFlushedMap[streamId] = bucketLastTsFlushedMap
+		bucketSyncCountMap := make(BucketSyncCountMap)
+		tk.streamBucketSyncCountMap[streamId] = bucketSyncCountMap
 
-	bucketFlushEnabledMap := make(BucketFlushEnabledMap)
-	tk.streamBucketFlushEnabledMap[streamId] = bucketFlushEnabledMap
+		bucketNewTsReqdMap := make(BucketNewTsReqdMap)
+		tk.streamBucketNewTsReqdMap[streamId] = bucketNewTsReqdMap
 
-	//add the new indexes to internal maps
-	tk.addIndextoStream(cmd)
+		bucketTsListMap := make(BucketTsListMap)
+		tk.streamBucketTsListMap[streamId] = bucketTsListMap
+
+		bucketFlushInProgressTsMap := make(BucketFlushInProgressTsMap)
+		tk.streamBucketFlushInProgressTsMap[streamId] = bucketFlushInProgressTsMap
+
+		bucketAbortInProgressMap := make(BucketAbortInProgressMap)
+		tk.streamBucketAbortInProgressMap[streamId] = bucketAbortInProgressMap
+
+		bucketLastFlushedTsMap := make(BucketLastFlushedTsMap)
+		tk.streamBucketLastFlushedTsMap[streamId] = bucketLastFlushedTsMap
+
+		bucketFlushEnabledMap := make(BucketFlushEnabledMap)
+		tk.streamBucketFlushEnabledMap[streamId] = bucketFlushEnabledMap
+
+		bucketDrainEnabledMap := make(BucketDrainEnabledMap)
+		tk.streamBucketDrainEnabledMap[streamId] = bucketDrainEnabledMap
+
+		bucketStreamBeginMap := make(BucketStreamBeginMap)
+		tk.streamBucketStreamBeginMap[streamId] = bucketStreamBeginMap
+
+		tk.streamState[streamId] = STREAM_ACTIVE
+
+		//add the new indexes to internal maps
+		tk.addIndextoStream(cmd)
+	}
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
-func (tk *timekeeper) handleStreamStop(cmd Message) {
+func (tk *timekeeper) handleStreamClose(cmd Message) {
 
-	common.Infof("Timekeeper::handleStreamStop %v", cmd)
+	common.Infof("Timekeeper::handleStreamClose %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 
-	//delete this stream from internal maps
-	delete(tk.streamBucketHWTMap, streamId)
-	delete(tk.streamBucketSyncCountMap, streamId)
-	delete(tk.streamBucketNewTsReqdMap, streamId)
-	delete(tk.streamBucketTsListMap, streamId)
-	delete(tk.streamBucketFlushInProgressMap, streamId)
-	delete(tk.streamBucketLastTsFlushedMap, streamId)
-	delete(tk.streamBucketFlushEnabledMap, streamId)
+	//if stream is in PREPARE_RECOVERY, check and init RECOVERY
+	if tk.streamState[streamId] == STREAM_PREPARE_RECOVERY {
 
-	//delete indexes from stream
-	tk.removeIndexFromStream(cmd)
+		tk.streamState[streamId] = STREAM_INACTIVE
+		switch streamId {
+		case common.MAINT_STREAM, common.INIT_STREAM:
+			if tk.checkStreamReadyForRecovery(streamId) {
+				tk.initiateRecovery(streamId)
+			}
+		}
+	} else {
+
+		//delete this stream from internal maps
+		delete(tk.streamBucketHWTMap, streamId)
+		delete(tk.streamBucketSyncCountMap, streamId)
+		delete(tk.streamBucketNewTsReqdMap, streamId)
+		delete(tk.streamBucketTsListMap, streamId)
+		delete(tk.streamBucketFlushInProgressTsMap, streamId)
+		delete(tk.streamBucketAbortInProgressMap, streamId)
+		delete(tk.streamBucketLastFlushedTsMap, streamId)
+		delete(tk.streamBucketFlushEnabledMap, streamId)
+		delete(tk.streamBucketDrainEnabledMap, streamId)
+		delete(tk.streamBucketStreamBeginMap, streamId)
+		tk.streamState[streamId] = STREAM_INACTIVE
+
+		//delete indexes from stream
+		tk.removeIndexFromStream(cmd)
+	}
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -258,21 +332,34 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	common.Tracef("Timekeeper::handleSync %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
+	meta := cmd.(*MsgStream).GetMutationMeta()
 
 	//check if stream is valid
 	if tk.checkStreamValid(streamId) == false {
 		return
 	}
 
+	if tk.streamState[streamId] == STREAM_PREPARE_RECOVERY ||
+		tk.streamState[streamId] == STREAM_INACTIVE {
+		common.Debugf("Timekeeper::handleSync \n\tIgnoring Sync Marker "+
+			"for StreamId %v. Current State %v", streamId, tk.streamState[streamId])
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	if _, ok := tk.streamBucketHWTMap[streamId][meta.bucket]; !ok {
+		common.Debugf("Timekeeper::handleSync \n\tIgnoring Sync Marker "+
+			"for StreamId %v Bucket %v. Bucket Not Found.", streamId, meta.bucket)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
 	//update HWT for the bucket
 	tk.updateHWT(cmd)
-
-	meta := cmd.(*MsgStream).GetMutationMeta()
 
 	//update Sync Count for the bucket
 	tk.incrSyncCount(streamId, meta.bucket)
 
-	//generate new StabilityTS if required
 	tk.generateNewStabilityTS(streamId, meta.bucket)
 
 	tk.supvCmdch <- &MsgSuccess{}
@@ -281,49 +368,275 @@ func (tk *timekeeper) handleSync(cmd Message) {
 
 func (tk *timekeeper) handleFlushDone(cmd Message) {
 
-	common.Debugf("Timekeeper:handleFlushDone %v", cmd)
+	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
+	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
+
+	bucketLastFlushedTsMap := tk.streamBucketLastFlushedTsMap[streamId]
+	bucketFlushInProgressTsMap := tk.streamBucketFlushInProgressTsMap[streamId]
+
+	//store the last flushed TS
+	bucketLastFlushedTsMap[bucket] = bucketFlushInProgressTsMap[bucket]
+	//update internal map to reflect flush is done
+	bucketFlushInProgressTsMap[bucket] = nil
+
+	switch streamId {
+
+	case common.MAINT_STREAM:
+		tk.handleFlushDoneMaintStream(cmd)
+
+	case common.INIT_STREAM:
+		tk.handleFlushDoneInitStream(cmd)
+
+	case common.CATCHUP_STREAM:
+		tk.handleFlushDoneCatchupStream(cmd)
+
+	default:
+		common.Errorf("Timekeeper::handleFlushDone \n\tInvalid StreamId %v ", streamId)
+	}
+
+}
+
+func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
+
+	common.Debugf("Timekeeper::handleFlushDoneMaintStream %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 
-	//update internal map to reflect flush is done
-	bucketFlushInProgressMap := tk.streamBucketFlushInProgressMap[streamId]
-	bucketFlushInProgressMap[bucket] = false
+	state := tk.streamState[streamId]
 
-	//check if any of the initial build index is past its Build TS.
-	//Generate msg for Build Done and change the state of the index.
-	tk.checkInitialBuildDone(cmd)
+	switch state {
 
-	//if flush is for INIT_STREAM, check if any index in CATCHUP has reached
-	//past the last flushed TS of the MAINT_STREAM for this bucket.
-	//In such case, all indexes of the bucket can merged to MAINT_STREAM.
-	if tk.checkStreamReadyToMerge(cmd) {
-		//if stream is ready to merge, further processing is
-		//not required, return from here.
-		return
+	case STREAM_ACTIVE:
+
+		//check if any of the initial build index is past its Build TS.
+		//Generate msg for Build Done and change the state of the index.
+		tk.checkInitialBuildDone(cmd)
+
+		//check if there is any pending TS for this bucket/stream.
+		//It can be processed now.
+		tk.processPendingTS(streamId, bucket)
+
+	case STREAM_PREPARE_RECOVERY:
+
+		//check if there is any pending TS for this bucket/stream.
+		//It can be processed now.
+		found := tk.processPendingTS(streamId, bucket)
+
+		//if no more pending TS were found and there is no abort or flush
+		//in progress recovery can be initiated
+		if !found {
+			if tk.checkStreamReadyForRecovery(streamId) {
+				tk.initiateRecovery(streamId)
+			}
+		}
+
+	case STREAM_RECOVERY:
+		common.Errorf("Timekeeper::handleFlushDoneMaintStream Invalid State Detected. " +
+			"MAINT_STREAM In Recovery Should Not Be Getting Flushed.")
+
+	case STREAM_INACTIVE:
+		common.Errorf("Timekeeper::handleFlushDoneMaintStream Unexpected Flush Done "+
+			"Received for Inactive StreamId %v.", streamId)
+
+	default:
+		common.Errorf("Timekeeper::handleFlushDoneMaintStream Invalid Stream State %v.", state)
+
 	}
 
-	//check if there is any pending TS for this bucket/stream.
-	//It can be processed now.
-	tk.checkPendingTS(streamId, bucket)
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleFlushDoneCatchupStream(cmd Message) {
+
+	common.Debugf("Timekeeper::handleFlushDoneCatchupStream %v", cmd)
+
+	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
+	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
+
+	state := tk.streamState[streamId]
+
+	switch state {
+
+	case STREAM_ACTIVE:
+
+		if tk.checkCatchupStreamReadyToMerge(cmd) {
+			//if stream is ready to merge, further processing is
+			//not required, return from here.
+			return
+		}
+
+		//check if there is any pending TS for this bucket/stream.
+		//It can be processed now.
+		tk.processPendingTS(streamId, bucket)
+
+	case STREAM_PREPARE_RECOVERY:
+
+		//check if there is any pending TS for this bucket/stream.
+		//It can be processed now.
+		found := tk.processPendingTS(streamId, bucket)
+
+		//if no more pending TS were found and there is no abort or flush
+		//in progress recovery can be initiated
+		if !found {
+			if tk.checkStreamReadyForRecovery(streamId) {
+				tk.initiateRecovery(streamId)
+			}
+		}
+
+	default:
+
+		common.Errorf("Timekeeper::handleFlushDoneCatchupStream Invalid State Detected. "+
+			"CATCHUP_STREAM Can Only Be Flushed in ACTIVE or PREPARE_RECOVERY state. "+
+			"Current State %v.", state)
+	}
 
 	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
+
+	common.Debugf("Timekeeper::handleFlushDoneInitStream %v", cmd)
+
+	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
+	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
+
+	state := tk.streamState[streamId]
+
+	switch state {
+
+	case STREAM_ACTIVE:
+
+		//check if any of the initial build index is past its Build TS.
+		//Generate msg for Build Done and change the state of the index.
+		tk.checkInitialBuildDone(cmd)
+
+		//if flush is for INIT_STREAM, check if any index in CATCHUP has reached
+		//past the last flushed TS of the MAINT_STREAM for this bucket.
+		//In such case, all indexes of the bucket can merged to MAINT_STREAM.
+		if tk.checkInitStreamReadyToMerge(cmd) {
+			//if stream is ready to merge, further STREAM_ACTIVE processing is
+			//not required, return from here.
+			return
+		}
+
+		//check if there is any pending TS for this bucket/stream.
+		//It can be processed now.
+		tk.processPendingTS(streamId, bucket)
+
+	case STREAM_PREPARE_RECOVERY:
+
+		//check if there is any pending TS for this bucket/stream.
+		//It can be processed now.
+		found := tk.processPendingTS(streamId, bucket)
+
+		//if no more pending TS were found and there is no abort or flush
+		//in progress recovery can be initiated
+		if !found {
+			if tk.checkStreamReadyForRecovery(streamId) {
+				tk.initiateRecovery(streamId)
+			}
+		}
+
+	default:
+
+		common.Errorf("Timekeeper::handleFlushDoneInitStream Invalid State Detected. "+
+			"INIT_STREAM Can Only Be Flushed in ACTIVE or PREPARE_RECOVERY state. "+
+			"Current State %v.", state)
+	}
 
 }
 
-func (tk *timekeeper) handleEnableFlush(cmd Message) {
+func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 
-	streamId := cmd.(*MsgTKEnableFlush).GetStreamId()
-	bucket := cmd.(*MsgTKEnableFlush).GetBucket()
+	common.Debugf("Timekeeper::handleFlushAbortDone %v", cmd)
 
-	common.Debugf("Timekeeper::handleEnableFlush \n\t Received Enable Flush for "+
-		"Bucket: %v StreamId: %v", bucket, streamId)
+	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
+	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 
-	bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[streamId]
-	bucketFlushEnabledMap[bucket] = true
+	state := tk.streamState[streamId]
 
-	//if there are any pending TS, send that
-	tk.checkPendingTS(streamId, bucket)
+	switch state {
+
+	case STREAM_ACTIVE:
+		common.Errorf("Timekeeper::handleFlushAbortDone Unexpected Flush Abort "+
+			"Received for Active StreamId %v.", streamId)
+
+	case STREAM_PREPARE_RECOVERY:
+		bucketFlushInProgressTsMap := tk.streamBucketFlushInProgressTsMap[streamId]
+		//if there is flush in progress, mark it as done
+		if bucketFlushInProgressTsMap[bucket] != nil {
+			bucketFlushInProgressTsMap[bucket] = nil
+		}
+
+		//update abort status and initiate recovery
+		bucketAbortInProgressMap := tk.streamBucketAbortInProgressMap[streamId]
+		bucketAbortInProgressMap[bucket] = false
+
+		//if flush for all buckets is done and no abort is in progress,
+		//recovery can be initiated
+		if tk.checkStreamReadyForRecovery(streamId) {
+			tk.initiateRecovery(streamId)
+		}
+
+	case STREAM_RECOVERY:
+		common.Errorf("Timekeeper::handleFlushAbortDone Unexpected Flush Abort "+
+			"Received for StreamId %v. State %v.", streamId, state)
+
+	case STREAM_INACTIVE:
+		common.Errorf("Timekeeper::handleFlushAbortDone Unexpected Flush Abort "+
+			"Received for Inactive StreamId %v.", streamId)
+
+	default:
+		common.Errorf("Timekeeper::handleFlushAbortDone Invalid Stream State %v "+
+			"for StreamId %v.", state, streamId)
+
+	}
+
+}
+
+func (tk *timekeeper) handleFlushStateChange(cmd Message) {
+
+	t := cmd.(*MsgTKToggleFlush).GetMsgType()
+	streamId := cmd.(*MsgTKToggleFlush).GetStreamId()
+	bucket := cmd.(*MsgTKToggleFlush).GetBucket()
+
+	common.Debugf("Timekeeper::handleFlushStateChange \n\t Received Flush State Change "+
+		"for Bucket: %v StreamId: %v Type: %v", bucket, streamId, t)
+
+	//TODO Check if stream is valid
+
+	switch t {
+
+	case TK_ENABLE_FLUSH:
+
+		//if bucket is empty, enable for all buckets in the stream
+		bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[streamId]
+		if bucket == "" {
+			for bucket, _ := range bucketFlushEnabledMap {
+				bucketFlushEnabledMap[bucket] = true
+				//if there are any pending TS, send that
+				tk.processPendingTS(streamId, bucket)
+			}
+		} else {
+			bucketFlushEnabledMap[bucket] = true
+			//if there are any pending TS, send that
+			tk.processPendingTS(streamId, bucket)
+		}
+
+	case TK_DISABLE_FLUSH:
+
+		//TODO What about the flush which is already in progress
+		//if bucket is empty, disable for all buckets in the stream
+		bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[streamId]
+		if bucket == "" {
+			for bucket, _ := range bucketFlushEnabledMap {
+				bucketFlushEnabledMap[bucket] = false
+			}
+		} else {
+			bucketFlushEnabledMap[bucket] = false
+		}
+	}
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -340,6 +653,21 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 		return
 	}
 
+	if tk.streamState[streamId] == STREAM_PREPARE_RECOVERY ||
+		tk.streamState[streamId] == STREAM_INACTIVE {
+		common.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker "+
+			"for StreamId %v State %v", streamId, tk.streamState[streamId])
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	if _, ok := tk.streamBucketHWTMap[streamId][meta.bucket]; !ok {
+		common.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker "+
+			"for StreamId %v Bucket %v", streamId, meta.bucket)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
 	//only SnapshotType 0 and 1 are processed for now,
 	//UPR can send other special snapshot markers, which
 	//need to be ignored.
@@ -349,22 +677,18 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 	if snapshot.snapType == 0 || snapshot.snapType == 1 ||
 		snapshot.snapType == 2 {
 
-		bucketHWTMap := tk.streamBucketHWTMap[streamId]
-
-		//allocate a new timestamp for this bucket, if not
-		//already there
-		if _, ok := bucketHWTMap[meta.bucket]; !ok {
-			bucketHWTMap[meta.bucket] = common.NewTsVbuuid(meta.bucket, int(NUM_VBUCKETS))
-			tk.streamBucketNewTsReqdMap[streamId][meta.bucket] = false
-			tk.streamBucketTsListMap[streamId][meta.bucket] = list.New()
-			tk.streamBucketFlushInProgressMap[streamId][meta.bucket] = false
-			tk.streamBucketFlushEnabledMap[streamId][meta.bucket] = true
-		}
-
 		//update the snapshot seqno in internal map
-		ts := bucketHWTMap[meta.bucket]
+		ts := tk.streamBucketHWTMap[streamId][meta.bucket]
 		ts.Snapshots[meta.vbucket][0] = snapshot.start
 		ts.Snapshots[meta.vbucket][1] = snapshot.end
+
+		//Once a new snapshot marker is received, new timestamp can
+		//be generated.
+		tk.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
+		common.Tracef("Timekeeper::handleSnapshotMarker \n\tUpdated TS %v", ts)
+	} else {
+		common.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker. "+
+			"Unknown Type %v.", snapshot.snapType)
 	}
 
 	tk.supvCmdch <- &MsgSuccess{}
@@ -388,6 +712,308 @@ func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
 		}
 	}
 	tk.supvCmdch <- msg
+}
+
+func (tk *timekeeper) handleStreamBegin(cmd Message) {
+
+	common.Debugf("Timekeeper::handleStreamBegin %v", cmd)
+
+	streamId := cmd.(*MsgStream).GetStreamId()
+	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	switch streamId {
+
+	case common.MAINT_STREAM:
+
+		switch tk.streamState[streamId] {
+
+		case STREAM_ACTIVE, STREAM_RECOVERY:
+			//update the HWT of this stream and bucket with the vbuuid
+			bucketHWTMap := tk.streamBucketHWTMap[streamId]
+
+			if _, ok := bucketHWTMap[meta.bucket]; !ok {
+				tk.initInternalStreamState(streamId, meta.bucket)
+			}
+
+			//TODO: Check if this is duplicate StreamBegin. Treat it as StreamEnd.
+			ts := bucketHWTMap[meta.bucket]
+			ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+
+			sb := tk.streamBucketStreamBeginMap[streamId][meta.bucket]
+			sb[meta.vbucket] = 1
+
+		case STREAM_PREPARE_RECOVERY, STREAM_INACTIVE:
+			//ignore stream end in prepare_recovery
+			common.Debugf("Timekeeper::handleStreamBegin \n\tIgnore StreamBegin for StreamId %v "+
+				"State %v MutationMeta %v", streamId, tk.streamState[streamId], meta)
+
+		default:
+			common.Errorf("Timekeeper::handleStreamBegin \n\tInvalid Stream State StreamId %v "+
+				"State %v", streamId, tk.streamState[streamId])
+		}
+
+	case common.INIT_STREAM:
+
+		switch tk.streamState[streamId] {
+
+		case STREAM_ACTIVE:
+			//update the HWT of this stream and bucket with the vbuuid
+			bucketHWTMap := tk.streamBucketHWTMap[streamId]
+
+			if _, ok := bucketHWTMap[meta.bucket]; !ok {
+				tk.initInternalStreamState(streamId, meta.bucket)
+			}
+
+			//TODO: Check if this is duplicate StreamBegin. Treat it as StreamEnd.
+			ts := bucketHWTMap[meta.bucket]
+			ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+
+			sb := tk.streamBucketStreamBeginMap[streamId][meta.bucket]
+			sb[meta.vbucket] = 1
+
+		default:
+			common.Errorf("Timekeeper::handleStreamBegin \n\tInvalid Stream State StreamId %v "+
+				"State %v", streamId, tk.streamState[streamId])
+		}
+
+	case common.CATCHUP_STREAM:
+
+		switch tk.streamState[streamId] {
+
+		case STREAM_ACTIVE:
+			//update the HWT of this stream and bucket with the vbuuid
+			bucketHWTMap := tk.streamBucketHWTMap[streamId]
+
+			if _, ok := bucketHWTMap[meta.bucket]; !ok {
+				tk.initInternalStreamState(streamId, meta.bucket)
+			}
+
+			//TODO: Check if this is duplicate StreamBegin. Treat it as StreamEnd.
+			ts := bucketHWTMap[meta.bucket]
+			ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+
+			sb := tk.streamBucketStreamBeginMap[streamId][meta.bucket]
+			sb[meta.vbucket] = 1
+
+		case STREAM_PREPARE_RECOVERY, STREAM_INACTIVE, STREAM_RECOVERY:
+			//ignore stream end in prepare_recovery
+			common.Debugf("Timekeeper::handleStreamBegin \n\tIgnore StreamBegin for StreamId %v "+
+				"State %v MutationMeta %v", streamId, tk.streamState[streamId], meta)
+
+		default:
+			common.Errorf("Timekeeper::handleStreamBegin \n\tInvalid Stream State StreamId %v "+
+				"State %v", streamId, tk.streamState[streamId])
+		}
+
+	default:
+		common.Errorf("Timekeeper::handleStreamBegin \n\tInvalid StreamId %v ", streamId)
+
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (tk *timekeeper) handleStreamEnd(cmd Message) {
+
+	common.Debugf("Timekeeper::handleStreamEnd %v", cmd)
+
+	streamId := cmd.(*MsgStream).GetStreamId()
+	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	switch streamId {
+
+	case common.MAINT_STREAM:
+
+		switch tk.streamState[streamId] {
+
+		case STREAM_ACTIVE, STREAM_RECOVERY:
+			ts := tk.streamBucketStreamBeginMap[streamId][meta.bucket]
+			ts[meta.vbucket] = 2
+
+			tk.prepareRecovery(streamId)
+
+		case STREAM_PREPARE_RECOVERY, STREAM_INACTIVE:
+			//ignore stream end in prepare_recovery
+			common.Debugf("Timekeeper::handleStreamEnd \n\tIgnore StreamEnd for StreamId %v "+
+				"State %v MutationMeta %v", streamId, tk.streamState[streamId], meta)
+
+		default:
+			common.Errorf("Timekeeper::handleStreamEnd \n\tInvalid Stream State StreamId %v "+
+				"State %v", streamId, tk.streamState[streamId])
+		}
+
+	case common.INIT_STREAM, common.CATCHUP_STREAM:
+
+		switch tk.streamState[streamId] {
+
+		case STREAM_ACTIVE:
+			ts := tk.streamBucketStreamBeginMap[streamId][meta.bucket]
+			ts[meta.vbucket] = 2
+
+			tk.prepareRecovery(streamId)
+
+		case STREAM_PREPARE_RECOVERY, STREAM_INACTIVE:
+			//ignore stream end in prepare_recovery
+			common.Debugf("Timekeeper::handleStreamEnd \n\tIgnore StreamEnd for StreamId %v "+
+				"State %v MutationMeta %v", streamId, tk.streamState[streamId], meta)
+
+		default:
+			common.Errorf("Timekeeper::handleStreamEnd \n\tInvalid Stream State StreamId %v "+
+				"State %v", streamId, tk.streamState[streamId])
+		}
+
+	default:
+		common.Errorf("Timekeeper::handleStreamEnd \n\tInvalid StreamId %v ", streamId)
+
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+func (tk *timekeeper) handleStreamConnError(cmd Message) {
+
+	common.Debugf("Timekeeper::handleStreamConnError %v", cmd)
+
+	streamId := cmd.(*MsgStreamInfo).GetStreamId()
+
+	switch streamId {
+
+	case common.MAINT_STREAM:
+
+		switch tk.streamState[streamId] {
+
+		case STREAM_ACTIVE, STREAM_RECOVERY:
+			tk.prepareRecovery(streamId)
+
+		case STREAM_PREPARE_RECOVERY, STREAM_INACTIVE:
+			//ignore stream end in prepare_recovery
+			common.Debugf("Timekeeper::handleStreamConnError \n\tIgnore Connection Error "+
+				"for StreamId %v State %v", streamId, tk.streamState[streamId])
+
+		default:
+			common.Errorf("Timekeeper::handleStreamConnError \n\tInvalid Stream State StreamId %v "+
+				"State %v", streamId, tk.streamState[streamId])
+		}
+
+	case common.INIT_STREAM, common.CATCHUP_STREAM:
+
+		switch tk.streamState[streamId] {
+
+		case STREAM_ACTIVE:
+			tk.prepareRecovery(streamId)
+
+		case STREAM_PREPARE_RECOVERY, STREAM_INACTIVE:
+			//ignore stream end in prepare_recovery
+			common.Debugf("Timekeeper::handleStreamConnError \n\tIgnore Connection Error "+
+				"for StreamId %v State %v", streamId, tk.streamState[streamId])
+
+		default:
+			common.Errorf("Timekeeper::handleStreamConnError \n\tInvalid Stream State StreamId %v "+
+				"State %v", streamId, tk.streamState[streamId])
+		}
+
+	default:
+		common.Errorf("Timekeeper::handleStreamConnError \n\tInvalid StreamId %v ", streamId)
+
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (tk *timekeeper) prepareRecovery(streamId common.StreamId) bool {
+
+	common.Debugf("Timekeeper::prepareRecovery StreamId %v", streamId)
+
+	//change to PREPARE_RECOVERY so that
+	//no more TS generation and flush happen.
+	switch streamId {
+
+	case common.MAINT_STREAM, common.CATCHUP_STREAM:
+
+		if tk.streamState[common.MAINT_STREAM] == STREAM_RECOVERY {
+			streamId = common.CATCHUP_STREAM
+			tk.streamState[common.MAINT_STREAM] = STREAM_PREPARE_RECOVERY
+			tk.streamState[common.CATCHUP_STREAM] = STREAM_PREPARE_RECOVERY
+		} else if tk.streamState[common.MAINT_STREAM] == STREAM_ACTIVE {
+			streamId = common.MAINT_STREAM
+			tk.streamState[common.MAINT_STREAM] = STREAM_PREPARE_RECOVERY
+		} else {
+			common.Errorf("Timekeeper::prepareRecovery Invalid Prepare Recovery Request")
+			return false
+		}
+
+		//send message to stop running stream
+		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
+			streamId: common.MAINT_STREAM}
+
+	case common.INIT_STREAM:
+
+		tk.streamState[streamId] = STREAM_PREPARE_RECOVERY
+
+		//send message to stop running stream
+		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
+			streamId: streamId}
+	}
+
+	//The existing mutations for which stability TS has already been generated
+	//can be safely flushed before initiating recovery. This can reduce the duration
+	//of recovery.
+	bucketFlushInProgressTsMap := tk.streamBucketFlushInProgressTsMap[streamId]
+	for bucket, ts := range bucketFlushInProgressTsMap {
+
+		if ts != nil {
+			//If Flush is in progress for the bucket, check if all the mutations
+			//required for this flush have already been received. If not, this flush
+			//needs to be aborted. Pending TS for the bucket can be discarded and
+			//all remaining mutations in queue can be drained.
+			//Stream can then be moved to RECOVERY
+
+			//TODO this check is best effort right now as there may be more
+			//mutations in the queue than what we have received the SYNC messages
+			//for. We may end up discarding one TS worth of mutations unnecessarily,
+			//but that is fine for now.
+			tsVbuuidHWT := tk.streamBucketHWTMap[streamId][bucket]
+			tsHWT := getTSFromTsVbuuid(tsVbuuidHWT)
+
+			flushTs := getTSFromTsVbuuid(ts)
+
+			//if HWT is greater than flush in progress TS, this means the flush
+			//in progress will finish.
+			if tsHWT.GreaterThanEqual(flushTs) {
+				common.Debugf("Timekeeper::handleStreamConnError \n\tProcessing Flush TS %v "+
+					"before recovery for bucket %v streamId %v", ts, bucket, streamId)
+			} else {
+				//else this flush needs to be aborted. Though some mutations may
+				//arrive and flush may get completed before this abort message
+				//reaches.
+				common.Debugf("Timekeeper::handleStreamConnError \n\tAborting Flush TS %v "+
+					"before recovery for bucket %v streamId %v", ts, bucket, streamId)
+
+				tk.supvRespch <- &MsgMutMgrFlushMutationQueue{mType: MUT_MGR_ABORT_PERSIST,
+					bucket:   bucket,
+					streamId: streamId}
+
+				//empty the TSList for this bucket and stream so
+				//there is no further processing for this bucket.
+				tsList := tk.streamBucketTsListMap[streamId][bucket]
+				tsList.Init()
+			}
+
+		} else {
+
+			//for the buckets where no flush is in progress, it implies
+			//there are no pending TS. So nothing needs to be done and
+			//recovery can be initiated.
+			common.Debugf("Timekeeper::handleStreamConnError \n\tRecovery can be initiated for "+
+				"Bucket %v Stream %v", bucket, streamId)
+		}
+
+	}
+
+	return true
+
 }
 
 //checkInitialBuildDone checks if any of the index in Initial State is past its
@@ -429,14 +1055,22 @@ func (tk *timekeeper) checkInitialBuildDone(cmd Message) {
 	}
 }
 
-//checkStreamReadyToMerge checks if any index in Catchup State in INIT_STREAM
+//checkInitStreamReadyToMerge checks if any index in Catchup State in INIT_STREAM
 //has reached past the last flushed TS of the MAINT_STREAM for this bucket.
 //In such case, all indexes of the bucket can merged to MAINT_STREAM.
-func (tk *timekeeper) checkStreamReadyToMerge(cmd Message) bool {
+func (tk *timekeeper) checkInitStreamReadyToMerge(cmd Message) bool {
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	flushTs := cmd.(*MsgMutMgrFlushDone).GetTS()
+
+	//INIT_STREAM cannot be merged to MAINT_STREAM in recovery
+	if tk.streamState[common.MAINT_STREAM] == STREAM_RECOVERY ||
+		tk.streamState[common.MAINT_STREAM] == STREAM_PREPARE_RECOVERY {
+		common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tMAINT_STREAM in Recovery. " +
+			"INIT_STREAM cannot be merged. Continue both streams.")
+		return false
+	}
 
 	if streamId == common.INIT_STREAM {
 
@@ -448,8 +1082,9 @@ func (tk *timekeeper) checkStreamReadyToMerge(cmd Message) bool {
 
 				//if the flushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
 				//this index can be merged to MAINT_STREAM
-				bucketLastTsFlushedMap := tk.streamBucketLastTsFlushedMap[common.MAINT_STREAM]
-				lastFlushedTs := bucketLastTsFlushedMap[idx.Defn.Bucket]
+				bucketLastFlushedTsMap := tk.streamBucketLastFlushedTsMap[common.MAINT_STREAM]
+				lastFlushedTsVbuuid := bucketLastFlushedTsMap[idx.Defn.Bucket]
+				lastFlushedTs := getTSFromTsVbuuid(lastFlushedTsVbuuid)
 
 				if flushTs.GreaterThanEqual(lastFlushedTs) {
 					//disable flush for MAINT_STREAM for this bucket, so it doesn't
@@ -462,7 +1097,7 @@ func (tk *timekeeper) checkStreamReadyToMerge(cmd Message) bool {
 					//from indexer
 					tk.changeIndexStateForBucket(bucket, common.INDEX_STATE_ACTIVE)
 
-					common.Debugf("Timekeeper::checkStreamReadyToMerge \n\tIndex Ready To Merge. "+
+					common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tIndex Ready To Merge. "+
 						"Index: %v Stream: %v Bucket: %v LastFlushTS: %v", idx.InstId, streamId,
 						bucket, lastFlushedTs)
 
@@ -471,10 +1106,56 @@ func (tk *timekeeper) checkStreamReadyToMerge(cmd Message) bool {
 						bucket:   bucket,
 						mergeTs:  flushTs}
 
+					tk.streamState[streamId] = STREAM_INACTIVE
 					tk.supvCmdch <- &MsgSuccess{}
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
+
+	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
+	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
+
+	if streamId == common.CATCHUP_STREAM {
+
+		//get the lowest TS for this bucket in MAINT_STREAM
+		bucketTsListMap := tk.streamBucketTsListMap[common.MAINT_STREAM]
+		tsList := bucketTsListMap[bucket]
+		var maintTs *common.TsVbuuid
+		if tsList.Len() > 0 {
+			e := tsList.Front()
+			maintTs = e.Value.(*common.TsVbuuid)
+		} else {
+			return false
+		}
+
+		//get the lastFlushedTs of CATCHUP_STREAM
+		bucketLastFlushedTsMap := tk.streamBucketLastFlushedTsMap[common.CATCHUP_STREAM]
+		lastFlushedTs := bucketLastFlushedTsMap[bucket]
+		if lastFlushedTs == nil {
+			return false
+		}
+
+		if compareTsSnapshot(lastFlushedTs, maintTs) {
+			//disable drain for MAINT_STREAM for this bucket, so it doesn't
+			//drop mutations till merge is complete
+			tk.streamBucketDrainEnabledMap[common.MAINT_STREAM][bucket] = false
+
+			common.Debugf("Timekeeper::checkCatchupStreamReadyToMerge \n\tBucket Ready To Merge. "+
+				"Stream: %v Bucket: %v ", streamId, bucket)
+
+			tk.supvRespch <- &MsgTKMergeStream{
+				streamId: streamId,
+				bucket:   bucket}
+
+			tk.streamState[streamId] = STREAM_INACTIVE
+			tk.supvCmdch <- &MsgSuccess{}
+			return true
 		}
 	}
 	return false
@@ -487,24 +1168,12 @@ func (tk *timekeeper) updateHWT(cmd Message) {
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
-	bucketHWTMap := tk.streamBucketHWTMap[streamId]
-
-	//allocate a new timestamp for this bucket, if not
-	//already there(on the first sync message for this bucket)
-	if _, ok := bucketHWTMap[meta.bucket]; !ok {
-		bucketHWTMap[meta.bucket] = common.NewTsVbuuid(meta.bucket, int(NUM_VBUCKETS))
-		tk.streamBucketNewTsReqdMap[streamId][meta.bucket] = false
-		tk.streamBucketFlushInProgressMap[streamId][meta.bucket] = false
-		tk.streamBucketTsListMap[streamId][meta.bucket] = list.New()
-		tk.streamBucketFlushEnabledMap[streamId][meta.bucket] = true
-	}
-
 	//if seqno has incremented, update it
-	ts := bucketHWTMap[meta.bucket]
+	ts := tk.streamBucketHWTMap[streamId][meta.bucket]
 	if uint64(meta.seqno) > ts.Seqnos[meta.vbucket] {
-		tk.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
 		ts.Seqnos[meta.vbucket] = uint64(meta.seqno)
 		ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+		common.Tracef("Timekeeper::updateHWT \n\tHWT Updated : %v", ts)
 	}
 
 }
@@ -540,7 +1209,7 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	bucket string) {
 
 	bucketNewTsReqd := tk.streamBucketNewTsReqdMap[streamId]
-	bucketFlushInProgressMap := tk.streamBucketFlushInProgressMap[streamId]
+	bucketFlushInProgressTsMap := tk.streamBucketFlushInProgressTsMap[streamId]
 	bucketTsListMap := tk.streamBucketTsListMap[streamId]
 	bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[streamId]
 	bucketSyncCountMap := tk.streamBucketSyncCountMap[streamId]
@@ -559,46 +1228,75 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 		//if there is no flush already in progress for this bucket
 		//no pending TS in list and flush is not disabled, send new TS
 		tsList := bucketTsListMap[bucket]
-		if bucketFlushInProgressMap[bucket] == false &&
+		if bucketFlushInProgressTsMap[bucket] == nil &&
 			bucketFlushEnabledMap[bucket] == true &&
+			tk.streamState[streamId] != STREAM_RECOVERY &&
 			tsList.Len() == 0 {
+			tk.streamBucketFlushInProgressTsMap[streamId][bucket] = tsVbuuid
 			go tk.sendNewStabilityTS(newTs, bucket, streamId)
 		} else {
 			//store the ts in list
 			common.Debugf("Timekeeper::generateNewStabilityTS \n\tAdding TS: %v to Pending "+
 				"List for Bucket: %v Stream: %v.", newTs, bucket, streamId)
-			tsList.PushBack(newTs)
+			tsList.PushBack(tsVbuuid)
+			tk.drainQueueIfOverflow(streamId, bucket)
 		}
 		bucketSyncCountMap[bucket] = 0
 		bucketNewTsReqd[bucket] = false
 	}
 }
 
-//checkPendingTS checks if there is any pending TS for the given stream and
+//processPendingTS checks if there is any pending TS for the given stream and
 //bucket. If any TS is found, it is sent to supervisor.
-func (tk *timekeeper) checkPendingTS(streamId common.StreamId, bucket string) {
+func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) bool {
 
 	//if there is a flush already in progress for this stream and bucket
 	//or flush is disabled, nothing to be done
-	bucketFlushInProgressMap := tk.streamBucketFlushInProgressMap[streamId]
+	bucketFlushInProgressTsMap := tk.streamBucketFlushInProgressTsMap[streamId]
 	bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[streamId]
 
-	if bucketFlushInProgressMap[bucket] == true ||
+	if bucketFlushInProgressTsMap[bucket] != nil ||
 		bucketFlushEnabledMap[bucket] == false {
-		return
+		return false
 	}
+
+	tsVbuuidHWT := tk.streamBucketHWTMap[streamId][bucket]
+	tsHWT := getTSFromTsVbuuid(tsVbuuidHWT)
 
 	//if there are pending TS for this bucket, send New TS
 	bucketTsListMap := tk.streamBucketTsListMap[streamId]
 	tsList := bucketTsListMap[bucket]
 	if tsList.Len() > 0 {
 		e := tsList.Front()
-		ts := e.Value.(Timestamp)
+		tsVbuuid := e.Value.(*common.TsVbuuid)
 		tsList.Remove(e)
-		common.Debugf("Timekeeper::checkPendingTS \n\tFound Pending Stability TS Bucket: %v "+
+		ts := getTSFromTsVbuuid(tsVbuuid)
+
+		if tk.streamState[streamId] == STREAM_PREPARE_RECOVERY {
+			//if HWT is greater than flush TS, this TS can be flush
+			if tsHWT.GreaterThanEqual(ts) {
+				common.Debugf("Timekeeper::processPendingTS \n\tProcessing Flush TS %v "+
+					"before recovery for bucket %v streamId %v", ts, bucket, streamId)
+			} else {
+				//empty the TSList for this bucket and stream so
+				//there is no further processing for this bucket.
+				common.Debugf("Timekeeper::processPendingTS \n\tCannot Flush TS %v "+
+					"before recovery for bucket %v streamId %v. Clearing Ts List", ts,
+					bucket, streamId)
+				tsList.Init()
+				return false
+			}
+
+		}
+		common.Debugf("Timekeeper::processPendingTS \n\tFound Pending Stability TS Bucket: %v "+
 			"Stream: %v TS: %v", bucket, streamId, ts)
+
+		tk.streamBucketFlushInProgressTsMap[streamId][bucket] = tsVbuuid
 		go tk.sendNewStabilityTS(ts, bucket, streamId)
+		return true
 	}
+
+	return false
 }
 
 //sendNewStabilityTS sends the given TS to supervisor
@@ -607,13 +1305,6 @@ func (tk *timekeeper) sendNewStabilityTS(ts Timestamp, bucket string,
 
 	common.Debugf("Timekeeper::sendNewStabilityTS \n\tBucket: %v "+
 		"Stream: %v TS: %v", bucket, streamId, ts)
-
-	//store the last flushed TS
-	bucketLastTsFlushedMap := tk.streamBucketLastTsFlushedMap[streamId]
-	bucketLastTsFlushedMap[bucket] = ts
-
-	bucketFlushInProgressMap := tk.streamBucketFlushInProgressMap[streamId]
-	bucketFlushInProgressMap[bucket] = true
 
 	tk.supvRespch <- &MsgTKStabilityTS{ts: ts,
 		bucket:   bucket,
@@ -640,8 +1331,7 @@ func (tk *timekeeper) changeIndexStateForBucket(bucket string, state common.Inde
 func (tk *timekeeper) checkStreamValid(streamId common.StreamId) bool {
 
 	if _, ok := tk.streamBucketHWTMap[streamId]; !ok {
-		common.Fatalf("Timekeeper::checkStreamValid \n\tGot STREAM_READER_SYNC "+
-			"For Unknown Stream: %v", streamId)
+		common.Fatalf("Timekeeper::checkStreamValid \n\tUnknown Stream: %v", streamId)
 		tk.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_TK_UNKNOWN_STREAM,
 				severity: FATAL,
@@ -655,8 +1345,8 @@ func (tk *timekeeper) checkStreamValid(streamId common.StreamId) bool {
 func getTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 
 	ts := NewTimestamp()
-	for i, s := range tsVbuuid.Seqnos {
-		ts[i] = Seqno(s)
+	for i, s := range tsVbuuid.Snapshots {
+		ts[i] = Seqno(s[1]) //high seq num in snapshot marker
 	}
 	return ts
 }
@@ -674,4 +1364,186 @@ func copyTsVbuuid(bucket string, tsVbuuid *common.TsVbuuid) *common.TsVbuuid {
 
 	return newTs
 
+}
+
+//if there are more mutations in this queue than configured,
+//drain the queue
+func (tk *timekeeper) drainQueueIfOverflow(streamId common.StreamId, bucket string) {
+
+	if !tk.streamBucketDrainEnabledMap[streamId][bucket] {
+		return
+	}
+
+	switch streamId {
+
+	case common.MAINT_STREAM:
+		//TODO
+
+		//if the number of mutation are more than configured
+
+		//if stream is in PREPARE_RECOVERY, nothing to do
+
+		//if RECOVERY, drain on TS from queue
+
+		//if stream is in ACTIVE state, flush the queue
+	}
+}
+
+func (tk *timekeeper) initiateRecovery(streamId common.StreamId) {
+
+	common.Debugf("Timekeeper::initiateRecovery Started")
+
+	switch streamId {
+
+	case common.CATCHUP_STREAM, common.MAINT_STREAM:
+
+		//check if Catchup is running, reset state for both maint and catchup
+		if state, ok := tk.streamState[common.CATCHUP_STREAM]; ok {
+
+			if state == STREAM_INACTIVE {
+				bucketRestartTs := tk.computeRestartTs(common.CATCHUP_STREAM)
+				tk.resetInternalStreamState(common.CATCHUP_STREAM)
+				tk.resetInternalStreamState(common.MAINT_STREAM)
+				//send message for recovery
+				tk.supvRespch <- &MsgRecovery{mType: INDEXER_INITIATE_RECOVERY,
+					streamId:        common.MAINT_STREAM,
+					bucketRestartTs: bucketRestartTs}
+				return
+			} else {
+				common.Errorf("Timekeeper::initiateRecovery Invalid State For CATCHUP "+
+					"Stream Detected. State %v", state)
+				return
+			}
+		}
+
+		if tk.streamState[common.MAINT_STREAM] == STREAM_INACTIVE {
+
+			bucketRestartTs := tk.computeRestartTs(common.MAINT_STREAM)
+			tk.resetInternalStreamState(common.MAINT_STREAM)
+
+			//send message for recovery
+			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INITIATE_RECOVERY,
+				streamId:        common.MAINT_STREAM,
+				bucketRestartTs: bucketRestartTs}
+		} else {
+			common.Errorf("Timekeeper::initiateRecovery Invalid State For MAINT "+
+				"Stream Detected. State %v", tk.streamState[common.MAINT_STREAM])
+		}
+
+	case common.INIT_STREAM:
+
+		if tk.streamState[streamId] == STREAM_PREPARE_RECOVERY {
+
+			bucketRestartTs := tk.computeRestartTs(streamId)
+			tk.resetInternalStreamState(streamId)
+
+			//send message for recovery
+			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INITIATE_RECOVERY,
+				streamId:        streamId,
+				bucketRestartTs: bucketRestartTs}
+		} else {
+			common.Errorf("Timekeeper::initiateRecovery Invalid State For INIT "+
+				"Stream Detected. State %v", tk.streamState[streamId])
+		}
+	}
+
+}
+
+//computes the restart Ts for all the buckets in a given stream
+func (tk *timekeeper) computeRestartTs(streamId common.StreamId) map[string]*common.TsVbuuid {
+
+	bucketRestartTs := make(map[string]*common.TsVbuuid)
+
+	for bucket, _ := range tk.streamBucketHWTMap[streamId] {
+
+		bucketRestartTs[bucket] = tk.streamBucketLastFlushedTsMap[streamId][bucket]
+	}
+
+	return bucketRestartTs
+
+}
+
+func (tk *timekeeper) initInternalStreamState(streamId common.StreamId,
+	bucket string) {
+
+	tk.streamBucketHWTMap[streamId][bucket] = common.NewTsVbuuid(bucket, int(NUM_VBUCKETS))
+	tk.streamBucketNewTsReqdMap[streamId][bucket] = false
+	tk.streamBucketFlushInProgressTsMap[streamId][bucket] = nil
+	tk.streamBucketTsListMap[streamId][bucket] = list.New()
+	tk.streamBucketFlushEnabledMap[streamId][bucket] = true
+	tk.streamBucketDrainEnabledMap[streamId][bucket] = true
+	tk.streamBucketStreamBeginMap[streamId][bucket] = NewTimestamp()
+
+	common.Debugf("Timekeeper::initInternalStreamState \n\tNew TS Allocated for Bucket %v "+
+		"Stream %v", bucket, streamId)
+}
+
+func (tk *timekeeper) resetInternalStreamState(streamId common.StreamId) {
+
+	for bucket, _ := range tk.streamBucketHWTMap[streamId] {
+		//reset all the internal structs
+		delete(tk.streamBucketHWTMap[streamId], bucket)
+		delete(tk.streamBucketSyncCountMap[streamId], bucket)
+		delete(tk.streamBucketNewTsReqdMap[streamId], bucket)
+		delete(tk.streamBucketTsListMap[streamId], bucket)
+		delete(tk.streamBucketStreamBeginMap[streamId], bucket)
+		delete(tk.streamBucketFlushEnabledMap[streamId], bucket)
+		delete(tk.streamBucketDrainEnabledMap[streamId], bucket)
+		delete(tk.streamBucketLastFlushedTsMap[streamId], bucket)
+	}
+
+}
+
+//checks if none of the buckets in this stream has any flush in progress
+func (tk *timekeeper) checkAnyFlushPending(streamId common.StreamId) bool {
+
+	bucketFlushInProgressTsMap := tk.streamBucketFlushInProgressTsMap[streamId]
+
+	//check if there is any flush in progress. No flush in progress implies
+	//there is no flush pending as well bcoz every flush done triggers
+	//the next flush.
+	for _, ts := range bucketFlushInProgressTsMap {
+		if ts != nil {
+			return true
+		}
+	}
+	return false
+}
+
+//checks if none of the buckets in this stream has any flush abort in progress
+func (tk *timekeeper) checkAnyAbortPending(streamId common.StreamId) bool {
+
+	bucketAbortInProgressMap := tk.streamBucketAbortInProgressMap[streamId]
+
+	//check if there is any flush in progress. No flush in progress implies
+	//there is no flush pending as well bcoz every flush done triggers
+	//the next flush.
+	for _, running := range bucketAbortInProgressMap {
+		if running {
+			return true
+		}
+	}
+	return false
+}
+
+//if End Snapshot Seqnum of each vbucket in sourceTs is greater than or equal
+//to Start Snapshot Seqnum in targetTs, return true
+func compareTsSnapshot(sourceTs, targetTs *common.TsVbuuid) bool {
+
+	for i, snap := range sourceTs.Snapshots {
+		if snap[1] < targetTs.Snapshots[i][0] {
+			return false
+		}
+	}
+	return true
+}
+
+func (tk *timekeeper) checkStreamReadyForRecovery(streamId common.StreamId) bool {
+
+	if !tk.checkAnyFlushPending(streamId) &&
+		!tk.checkAnyAbortPending(streamId) &&
+		tk.streamState[streamId] == STREAM_INACTIVE {
+		return true
+	}
+	return false
 }

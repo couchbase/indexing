@@ -16,7 +16,22 @@ import (
 
 type StreamAddressMap map[common.StreamId]common.Endpoint
 
-type StreamStatusMap map[common.StreamId]bool
+type StreamStateMap map[common.StreamId]StreamState
+
+type StreamState byte
+
+const (
+	//Stream is active i.e. processing mutations
+	STREAM_ACTIVE StreamState = 0
+	//Stream is inactive i.e. not processing mutations
+	STREAM_INACTIVE = 1
+	//Stream is preparing for recovery(i.e. it has received
+	//a control or error message and it is doing a cleanup
+	//before initiating Catchup
+	STREAM_PREPARE_RECOVERY = 2
+	//Stream is using a Catchup to recover
+	STREAM_RECOVERY = 3
+)
 
 // a generic channel which can be closed when you
 // want someone to stop doing something

@@ -250,6 +250,9 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 	case UPDATE_INDEX_PARTITION_MAP:
 		m.handleUpdateIndexPartnMap(cmd)
 
+	case MUT_MGR_ABORT_PERSIST:
+		m.handleAbortPersist(cmd)
+
 	default:
 		common.Errorf("MutationMgr::handleSupervisorCommands \n\tReceived Unknown Command %v", cmd)
 		m.supvCmdch <- &MsgError{
@@ -269,7 +272,10 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		STREAM_READER_STREAM_END,
 		STREAM_READER_ERROR,
 		STREAM_READER_SYNC,
-		STREAM_READER_SNAPSHOT_MARKER:
+		STREAM_READER_SNAPSHOT_MARKER,
+		STREAM_READER_STREAM_SHUTDOWN,
+		STREAM_READER_RESTART_VBUCKETS,
+		STREAM_READER_REPAIR_VBUCKETS:
 		//send message to supervisor to take decision
 		common.Tracef("MutationMgr::handleWorkerMessage \n\tReceived %v from worker", cmd)
 		m.supvRespch <- cmd
@@ -755,9 +761,10 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 
 		//send the response to supervisor
 		if msg.GetMsgType() == MSG_SUCCESS {
-			m.supvRespch <- &MsgMutMgrFlushDone{streamId: streamId,
-				bucket: bucket,
-				ts:     ts}
+			m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
+				streamId: streamId,
+				bucket:   bucket,
+				ts:       ts}
 		} else {
 			m.supvRespch <- msg
 		}
@@ -898,4 +905,32 @@ func CopyBucketQueueMap(inMap BucketQueueMap) BucketQueueMap {
 		outMap[k] = v
 	}
 	return outMap
+}
+
+func (m *mutationMgr) handleAbortPersist(cmd Message) {
+
+	common.Debugf("MutationMgr::handleAbortPersist %v", cmd)
+
+	bucket := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
+	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
+
+	go func() {
+		m.flock.Lock()
+		defer m.flock.Unlock()
+
+		//abort the flush for given stream and bucket, if its in progress
+		if bucketStopChMap, ok := m.streamFlusherStopChMap[streamId]; ok {
+			if stopch, ok := bucketStopChMap[bucket]; ok {
+				if stopch != nil {
+					close(stopch)
+				}
+			}
+		}
+		m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_ABORT_DONE,
+			bucket:   bucket,
+			streamId: streamId}
+	}()
+
+	m.supvCmdch <- &MsgSuccess{}
+
 }

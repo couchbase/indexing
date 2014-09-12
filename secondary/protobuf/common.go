@@ -265,9 +265,11 @@ func (ts *TsVbuuid) ComputeFailoverTs(flogs couchbase.FailoverLog) *TsVbuuid {
 }
 
 // InitialRestartTs for a subset of vbuckets.
-func (ts *TsVbuuid) InitialRestartTs(vbnos []uint16) *TsVbuuid {
-	for _, vbno := range vbnos {
-		ts.Append(vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0 /*start*/, 0 /*end*/)
+func (ts *TsVbuuid) InitialRestartTs(flogs couchbase.FailoverLog) *TsVbuuid {
+
+	for vbno, flog := range flogs {
+		x := flog[len(flog)-1]
+		ts.Append(vbno, 0, x[0], 0, 0)
 	}
 	return ts
 }

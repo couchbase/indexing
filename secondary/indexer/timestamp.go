@@ -54,6 +54,10 @@ func (ts Timestamp) GreaterThanEqual(ts1 Timestamp) bool {
 
 	//each individual seqno should be matching or greater
 	for i, t := range ts {
+		//0 means unutilized slot, ignore
+		if t == Seqno(0) {
+			continue
+		}
 		if t < ts1[i] {
 			return false
 		}
@@ -74,6 +78,10 @@ func (ts Timestamp) GreaterThan(ts1 Timestamp) bool {
 	//none should be less
 	var foundGreaterSeqNo bool
 	for i, t := range ts {
+		//0 means unutilized slot, ignore
+		if t == Seqno(0) {
+			continue
+		}
 		if t > ts1[i] {
 			foundGreaterSeqNo = true
 		} else if t < ts1[i] {

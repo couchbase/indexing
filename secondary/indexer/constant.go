@@ -25,8 +25,12 @@ const DEFAULT_PROJECTOR_ADMIN_PORT_ENDPOINT = "localhost:9999"
 const INDEXER_MAINT_DATA_PORT_ENDPOINT = "localhost:8100"
 
 //Data Port Endpoint for Local Indexer on which projector
+//needs to send mutations for maintenance stream
+const INDEXER_CATCHUP_DATA_PORT_ENDPOINT = "localhost:8101"
+
+//Data Port Endpoint for Local Indexer on which projector
 //needs to send mutations for initial build stream
-const INDEXER_INIT_DATA_PORT_ENDPOINT = "localhost:8101"
+const INDEXER_INIT_DATA_PORT_ENDPOINT = "localhost:8102"
 
 //Cbq Bridge Http Address on which it listens
 //to messages from Cbq Server
@@ -47,6 +51,9 @@ const LOCALHOST = "127.0.0.1"
 //Maintenance Topic Name
 const MAINT_TOPIC = "MAINT_STREAM_TOPIC"
 
+//Catchup Topic Name
+const CATCHUP_TOPIC = "CATCHUP_STREAM_TOPIC"
+
 //Initial Stream Topic Name
 const INIT_TOPIC = "INIT_STREAM_TOPIC"
 
@@ -65,7 +72,7 @@ const MAX_STREAM_READER_WORKER_BUFFER = 1000
 
 //Number of Sync messages after which Timekeeper
 //triggers a new Stability Timestamp
-const SYNC_COUNT_TS_TRIGGER = 1024 * 2
+const SYNC_COUNT_TS_TRIGGER = 8 * 2
 
 //Max number of snapshot to be retained per index.
 //Older snapshots are deleted.

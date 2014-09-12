@@ -304,7 +304,7 @@ func (f *flusher) flushSingleMutation(mut *MutationKeys, streamId common.StreamI
 
 	switch streamId {
 
-	case common.MAINT_STREAM, common.INIT_STREAM:
+	case common.MAINT_STREAM, common.INIT_STREAM, common.CATCHUP_STREAM:
 		f.flush(mut, streamId)
 
 	default:
@@ -314,7 +314,7 @@ func (f *flusher) flushSingleMutation(mut *MutationKeys, streamId common.StreamI
 
 func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 
-	common.Tracef("Flusher::flush Flushing Maintenance Stream Mutations %v", mut)
+	common.Tracef("Flusher::flush Flushing Stream %v Mutations %v", streamId, mut)
 
 	var processedUpserts []common.IndexInstId
 	for i, cmd := range mut.commands {
@@ -328,7 +328,7 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 		}
 
 		//Skip this mutation if the index doesn't belong to the stream being flushed
-		if streamId != idxInst.Stream {
+		if streamId != idxInst.Stream && streamId != common.CATCHUP_STREAM {
 			common.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v Stream: %v In "+
 				"Stream: %v. Skipped Mutation Key %v", idxInst.InstId, idxInst.Stream,
 				streamId, mut.keys[i])

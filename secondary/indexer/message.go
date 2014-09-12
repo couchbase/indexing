@@ -34,20 +34,26 @@ const (
 	STREAM_READER_UPDATE_QUEUE_MAP
 	STREAM_READER_ERROR
 	STREAM_READER_SHUTDOWN
+	STREAM_READER_STREAM_SHUTDOWN
+	STREAM_READER_RESTART_VBUCKETS
+	STREAM_READER_REPAIR_VBUCKETS
 
 	//MUTATION_MANAGER
 	MUT_MGR_PERSIST_MUTATION_QUEUE
+	MUT_MGR_ABORT_PERSIST
 	MUT_MGR_DRAIN_MUTATION_QUEUE
 	MUT_MGR_GET_MUTATION_QUEUE_HWT
 	MUT_MGR_GET_MUTATION_QUEUE_LWT
 	MUT_MGR_SHUTDOWN
 	MUT_MGR_FLUSH_DONE
+	MUT_MGR_ABORT_DONE
 
 	//TIMEKEEPER
 	TK_SHUTDOWN
 	TK_STABILITY_TIMESTAMP
 	TK_INIT_BUILD_DONE
 	TK_ENABLE_FLUSH
+	TK_DISABLE_FLUSH
 	TK_MERGE_STREAM
 	TK_GET_BUCKET_HWT
 
@@ -57,6 +63,7 @@ const (
 	//KVSender
 	KV_SENDER_SHUTDOWN
 	KV_SENDER_GET_CURR_KV_TS
+	KV_SENDER_RESTART_VBLIST
 
 	//ADMIN_MGR
 	ADMIN_MGR_SHUTDOWN
@@ -70,6 +77,8 @@ const (
 	//INDEXER
 	INDEXER_CREATE_INDEX_DDL
 	INDEXER_DROP_INDEX_DDL
+	INDEXER_PREPARE_RECOVERY
+	INDEXER_INITIATE_RECOVERY
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SCAN_INDEX
@@ -189,6 +198,42 @@ func (m *MsgStreamError) GetError() Error {
 	return m.err
 }
 
+//STREAM_READER_STREAM_SHUTDOWN
+//STREAM_READER_RESTART_VBUCKETS
+//STREAM_READER_REPAIR_VBUCKETS
+type MsgStreamInfo struct {
+	mType    MsgType
+	streamId common.StreamId
+	bucket   string
+	vbList   []Vbucket
+}
+
+func (m *MsgStreamInfo) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgStreamInfo) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgStreamInfo) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgStreamInfo) GetVbList() []Vbucket {
+	return m.vbList
+}
+
+func (m *MsgStreamInfo) String() string {
+
+	str := "\n\tMessage: MsgStreamInfo"
+	str += fmt.Sprintf("\n\tType: %v", m.mType)
+	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	str += fmt.Sprintf("\n\tVbList: %v", m.vbList)
+	return str
+}
+
 //STREAM_READER_UPDATE_QUEUE_MAP
 type MsgUpdateBucketQueue struct {
 	bucketQueueMap BucketQueueMap
@@ -216,12 +261,13 @@ func (m *MsgUpdateBucketQueue) String() string {
 //CLOSE_STREAM
 //CLEANUP_STREAM
 type MsgStreamUpdate struct {
-	mType     MsgType
-	streamId  common.StreamId
-	indexList []common.IndexInst
-	buildTs   Timestamp
-	respCh    MsgChannel
-	bucket    string
+	mType           MsgType
+	streamId        common.StreamId
+	indexList       []common.IndexInst
+	buildTs         Timestamp
+	respCh          MsgChannel
+	bucket          string
+	bucketRestartTs map[string]*common.TsVbuuid
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -248,6 +294,10 @@ func (m *MsgStreamUpdate) GetBucket() string {
 	return m.bucket
 }
 
+func (m *MsgStreamUpdate) GetBucketRestartTs() map[string]*common.TsVbuuid {
+	return m.bucketRestartTs
+}
+
 func (m *MsgStreamUpdate) String() string {
 
 	str := "\n\tMessage: MsgStreamUpdate"
@@ -260,7 +310,8 @@ func (m *MsgStreamUpdate) String() string {
 }
 
 //MUT_MGR_PERSIST_MUTATION_QUEUE
-//MUT_MGR_DISCARD_MUTATION_QUEUE
+//MUT_MGR_ABORT_PERSIST
+//MUT_MGR_DRAIN_MUTATION_QUEUE
 type MsgMutMgrFlushMutationQueue struct {
 	mType    MsgType
 	bucket   string
@@ -356,14 +407,16 @@ func (m *MsgUpdatePartnMap) String() string {
 }
 
 //MUT_MGR_FLUSH_DONE
+//MUT_MGR_ABORT_DONE
 type MsgMutMgrFlushDone struct {
+	mType    MsgType
 	ts       Timestamp
 	streamId common.StreamId
 	bucket   string
 }
 
 func (m *MsgMutMgrFlushDone) GetMsgType() MsgType {
-	return MUT_MGR_FLUSH_DONE
+	return m.mType
 }
 
 func (m *MsgMutMgrFlushDone) GetTS() Timestamp {
@@ -473,20 +526,22 @@ func (m *MsgTKMergeStream) GetMergeTS() Timestamp {
 }
 
 //TK_ENABLE_FLUSH
-type MsgTKEnableFlush struct {
+//TK_DISABLE_FLUSH
+type MsgTKToggleFlush struct {
+	mType    MsgType
 	streamId common.StreamId
 	bucket   string
 }
 
-func (m *MsgTKEnableFlush) GetMsgType() MsgType {
-	return TK_ENABLE_FLUSH
+func (m *MsgTKToggleFlush) GetMsgType() MsgType {
+	return m.mType
 }
 
-func (m *MsgTKEnableFlush) GetStreamId() common.StreamId {
+func (m *MsgTKToggleFlush) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgTKEnableFlush) GetBucket() string {
+func (m *MsgTKToggleFlush) GetBucket() string {
 	return m.bucket
 }
 
@@ -611,9 +666,78 @@ func (m *MsgTKGetBucketHWT) String() string {
 	str := "\n\tMessage: MsgTKGetBucketHWT"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
+	if m.ts != nil {
+		str += fmt.Sprintf("\n\tTS Seqnos: %v", m.ts.Seqnos)
+		str += fmt.Sprintf("\n\tTS Vbuuids: %v", m.ts.Vbuuids)
+		str += fmt.Sprintf("\n\tTS Snapshots: %v", m.ts.Snapshots)
+	}
+	return str
+
+}
+
+//KV_SENDER_RESTART_VBLIST
+type MsgRestartVbList struct {
+	streamId  common.StreamId
+	bucket    string
+	vbList    []Vbucket
+	ts        *common.TsVbuuid
+	indexList []common.IndexInst
+}
+
+func (m *MsgRestartVbList) GetMsgType() MsgType {
+	return KV_SENDER_RESTART_VBLIST
+}
+
+func (m *MsgRestartVbList) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgRestartVbList) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgRestartVbList) GetHWT() *common.TsVbuuid {
+	return m.ts
+}
+
+func (m *MsgRestartVbList) GetVbList() []Vbucket {
+	return m.vbList
+}
+
+func (m *MsgRestartVbList) GetIndexList() []common.IndexInst {
+	return m.indexList
+}
+
+func (m *MsgRestartVbList) String() string {
+
+	str := "\n\tMessage: MsgRestartVbList"
+	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	str += fmt.Sprintf("\n\tTS Seqnos: %v", m.ts.Seqnos)
 	str += fmt.Sprintf("\n\tTS Vbuuids: %v", m.ts.Vbuuids)
 	str += fmt.Sprintf("\n\tTS Snapshots: %v", m.ts.Snapshots)
+	str += fmt.Sprintf("\n\tVbList: %v", m.vbList)
+	str += fmt.Sprintf("\n\tInstances: %v", m.indexList)
 	return str
 
+}
+
+//INDEXER_PREPARE_RECOVERY
+//INDEXER_INITIATE_RECOVERY
+type MsgRecovery struct {
+	mType           MsgType
+	streamId        common.StreamId
+	bucketRestartTs map[string]*common.TsVbuuid
+}
+
+func (m *MsgRecovery) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgRecovery) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgRecovery) GetBucketRestartTs() map[string]*common.TsVbuuid {
+	return m.bucketRestartTs
 }
