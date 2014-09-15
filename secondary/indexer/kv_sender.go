@@ -396,6 +396,7 @@ func (k *kvSender) addIndexForNewBucket(streamId c.StreamId, indexInst c.IndexIn
 		}
 
 		mReq.SetAddBucketFlag()
+		mReq.SetRestartFlag()
 
 		if _, resp := sendUpdateMutationStreamRequest(ap, mReq); resp.GetMsgType() != MSG_SUCCESS {
 			//TODO send message to all KVs to revert the previous requests sent
@@ -538,6 +539,7 @@ func (k *kvSender) deleteBucketFromStream(streamId c.StreamId, bucket string) Me
 		}
 
 		mReq.SetDelBucketFlag()
+		mReq.SetRestartFlag()
 
 		if _, resp := sendUpdateMutationStreamRequest(ap, mReq); resp.GetMsgType() != MSG_SUCCESS {
 			//TODO send message to all KVs to revert the previous requests sent
