@@ -49,7 +49,6 @@ type mutationMgr struct {
 
 	numVbuckets uint16 //number of vbuckets
 
-	flusher          Flusher //handle to flusher
 	flusherWaitGroup sync.WaitGroup
 
 	lock  sync.Mutex //lock to protect this structure
@@ -84,7 +83,6 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		supvCmdch:              supvCmdch,
 		supvRespch:             supvRespch,
 		numVbuckets:            numVbuckets,
-		flusher:                NewFlusher(),
 	}
 
 	//start Mutation Manager loop which listens to commands from its supervisor
@@ -740,7 +738,8 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 	go func() {
 		defer m.flusherWaitGroup.Done()
 
-		msgch := m.flusher.PersistUptoTS(q.queue,
+		flusher := NewFlusher()
+		msgch := flusher.PersistUptoTS(q.queue,
 			streamId, m.indexInstMap, m.indexPartnMap, ts, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
@@ -800,7 +799,8 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 	go func() {
 		defer m.flusherWaitGroup.Done()
 
-		msgch := m.flusher.DrainUptoTS(q.queue, streamId,
+		flusher := NewFlusher()
+		msgch := flusher.DrainUptoTS(q.queue, streamId,
 			ts, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
@@ -835,7 +835,8 @@ func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 	q := m.streamBucketQueueMap[streamId][bucket]
 
 	go func() {
-		ts := m.flusher.GetQueueHWT(q.queue)
+		flusher := NewFlusher()
+		ts := flusher.GetQueueHWT(q.queue)
 		m.supvCmdch <- &MsgTimestamp{ts: ts}
 	}()
 }
@@ -854,7 +855,8 @@ func (m *mutationMgr) handleGetMutationQueueLWT(cmd Message) {
 	q := m.streamBucketQueueMap[streamId][bucket]
 
 	go func() {
-		ts := m.flusher.GetQueueLWT(q.queue)
+		flusher := NewFlusher()
+		ts := flusher.GetQueueLWT(q.queue)
 		m.supvCmdch <- &MsgTimestamp{ts: ts}
 	}()
 }
