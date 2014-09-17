@@ -1,0 +1,8 @@
+{
+	"Host" : {
+		"ElectionAddr" : "localhost:5000",
+		"MessageAddr"  : "localhost:5001",
+		"RequestAddr"  : "localhost:5002"
+	}
+}
+
