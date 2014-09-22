@@ -32,7 +32,9 @@ const INDEXER_INIT_DATA_PORT_ENDPOINT = "localhost:8101"
 //to messages from Cbq Server
 const CBQ_BRIDGE_HTTP_ADDR = ":9101"
 
-const KVPORT = "9000"
+const KVPORT_CLUSTER_RUN = "9000"
+
+const KVPORT = "8091"
 
 const KV_DCP_PORT = "11210"
 
@@ -67,7 +69,7 @@ const SYNC_COUNT_TS_TRIGGER = 1024 * 2
 
 //Max number of snapshot to be retained per index.
 //Older snapshots are deleted.
-const MAX_SNAPSHOTS_PER_INDEX = 100
+const MAX_SNAPSHOTS_PER_INDEX = 5
 
 //Slab Manager Specific constants
 const DEFAULT_START_CHUNK_SIZE = 256

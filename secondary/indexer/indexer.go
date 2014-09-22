@@ -423,7 +423,14 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	//get current timestamp from KV and set it as Initial Build Timestamp
 	var clusterAddr string
 	if host, _, err := net.SplitHostPort(PROJECTOR_ADMIN_PORT_ENDPOINT); err == nil {
-		clusterAddr = host + ":" + KVPORT
+		//TODO: Here it assumes a colocated topology implies cluster_run.
+		//The Initial Build calculation will be done in kv_sender eventually,
+		//which has better mechanism to detect a colocated yet production config.
+		if IsIPLocal(host) {
+			clusterAddr = host + ":" + KVPORT_CLUSTER_RUN
+		} else {
+			clusterAddr = host + ":" + KVPORT
+		}
 	}
 
 	buildTs := idx.getCurrentKVTs(clusterAddr, indexInst.Defn.Bucket)
