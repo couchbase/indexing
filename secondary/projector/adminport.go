@@ -5,7 +5,7 @@ package projector
 import (
 	"errors"
 
-	"code.google.com/p/goprotobuf/proto"
+	"github.com/couchbaselabs/goprotobuf/proto"
 	ap "github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"

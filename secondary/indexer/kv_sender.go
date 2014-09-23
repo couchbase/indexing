@@ -10,7 +10,7 @@
 package indexer
 
 import (
-	"code.google.com/p/goprotobuf/proto"
+	"github.com/couchbaselabs/goprotobuf/proto"
 	"errors"
 	"github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"

@@ -29,7 +29,7 @@ It has these top-level messages:
 */
 package protobuf
 
-import proto "code.google.com/p/goprotobuf/proto"
+import proto "github.com/couchbaselabs/goprotobuf/proto"
 import math "math"
 
 // Reference imports to suppress errors if they are not otherwise used.

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"code.google.com/p/goprotobuf/proto"
+	"github.com/couchbaselabs/goprotobuf/proto"
 	mc "github.com/couchbase/gomemcached/client"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/go-couchbase"

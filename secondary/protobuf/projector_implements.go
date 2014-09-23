@@ -1,7 +1,7 @@
 package protobuf
 
 import (
-	"code.google.com/p/goprotobuf/proto"
+	"github.com/couchbaselabs/goprotobuf/proto"
 	c "github.com/couchbase/indexing/secondary/common"
 )
 

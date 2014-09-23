@@ -1,7 +1,7 @@
 package projector
 
 import (
-	"code.google.com/p/goprotobuf/proto"
+	"github.com/couchbaselabs/goprotobuf/proto"
 	"fmt"
 	"strconv"
 	"strings"

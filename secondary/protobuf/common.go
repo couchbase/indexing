@@ -3,7 +3,7 @@ package protobuf
 import (
 	"sort"
 
-	"code.google.com/p/goprotobuf/proto"
+	"github.com/couchbaselabs/goprotobuf/proto"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/go-couchbase"
 )
