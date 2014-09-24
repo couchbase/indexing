@@ -343,8 +343,11 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 	//only SnapshotType 0 and 1 are processed for now,
 	//UPR can send other special snapshot markers, which
 	//need to be ignored.
+	//TODO: Use the same logic for processing the snapshot types
+	//as used by view-engine
 	snapshot := cmd.(*MsgStream).GetSnapshot()
-	if snapshot.snapType == 0 || snapshot.snapType == 1 {
+	if snapshot.snapType == 0 || snapshot.snapType == 1 ||
+		snapshot.snapType == 2 {
 
 		bucketHWTMap := tk.streamBucketHWTMap[streamId]
 
@@ -519,7 +522,7 @@ func (tk *timekeeper) incrSyncCount(streamId common.StreamId, bucket string) {
 			"Stream: %v. SyncCount: %v.", bucket, streamId, syncCount)
 		//update only if its less than trigger count, otherwise it makes no
 		//difference. On long running systems, syncCount may overflow otherwise
-		if syncCount < SYNC_COUNT_TS_TRIGGER {
+		if syncCount <= SYNC_COUNT_TS_TRIGGER {
 			bucketSyncCountMap[bucket] = syncCount
 		}
 
