@@ -4,14 +4,11 @@ package common
 
 import (
 	"errors"
-	"reflect"
-	"sort"
 	"testing"
 )
 
 func TestSortTimestamp(t *testing.T) {
 	tsRef := NewTsVbuuid("default", 1024)
-	tsRef.Vbnos = []uint16{11, 18, 21, 29, 41, 49, 62}
 	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
 	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
 	tsRef.Snapshots = [][2]uint64{
@@ -20,12 +17,11 @@ func TestSortTimestamp(t *testing.T) {
 	}
 
 	ts := NewTsVbuuid("default", 1024)
-	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
-	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
-	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
+	ts.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
+	ts.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
 	ts.Snapshots = [][2]uint64{
-		{102, 202}, {101, 201}, {103, 203}, {100, 200},
-		{105, 205}, {104, 204}, {106, 206},
+		{100, 200}, {101, 201}, {102, 202}, {103, 203},
+		{104, 204}, {105, 205}, {106, 206},
 	}
 
 	if ts.CompareVbuuids(tsRef) == false {
@@ -37,6 +33,106 @@ func TestSortTimestamp(t *testing.T) {
 	}
 }
 
+func TestCompareVbuuids(t *testing.T) {
+	tsRef := NewTsVbuuid("default", 1024)
+	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
+	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
+	tsRef.Snapshots = [][2]uint64{
+		{100, 200}, {101, 201}, {102, 202}, {103, 203},
+		{104, 204}, {105, 205}, {106, 206},
+	}
+
+	ts := NewTsVbuuid("default", 1024)
+	ts.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
+	ts.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
+	ts.Snapshots = [][2]uint64{
+		{100, 200}, {101, 201}, {102, 202}, {103, 203},
+		{104, 204}, {105, 205}, {106, 206},
+	}
+
+	if ts.CompareVbuuids(tsRef) == false {
+		t.Fatal("expected true")
+	}
+	ts.Vbuuids[len(ts.Vbuuids)-1]++
+	if ts.CompareVbuuids(tsRef) == true {
+		t.Fatal("expected false")
+	}
+	ts.Vbuuids[len(ts.Vbuuids)-1]--
+	ts.Snapshots[len(ts.Snapshots)-1][0]++
+	if ts.CompareVbuuids(tsRef) == true {
+		t.Fatal("expected false")
+	}
+}
+
+func TestAsRecent(t *testing.T) {
+	tsRef := NewTsVbuuid("default", 1024)
+	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
+	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
+	tsRef.Snapshots = [][2]uint64{
+		{100, 200}, {101, 201}, {102, 202}, {103, 203},
+		{104, 204}, {105, 205}, {106, 206},
+	}
+
+	ts := NewTsVbuuid("default", 1024)
+	ts.Seqnos = []uint64{10, 2, 3, 4, 5, 6, 7}
+	ts.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
+	ts.Snapshots = [][2]uint64{
+		{100, 200}, {101, 201}, {102, 202}, {103, 203},
+		{104, 204}, {105, 205}, {106, 206},
+	}
+
+	if ts.AsRecent(tsRef) == false {
+		t.Fatal("expected true")
+	}
+	ts.Seqnos[6]--
+	if ts.AsRecent(tsRef) == true {
+		t.Fatal("expected false")
+	}
+	ts.Seqnos[6]++
+	ts.Seqnos[1]++
+	if ts.AsRecent(tsRef) == false {
+		t.Fatal("expected true")
+	}
+}
+
+func BenchmarkCompareVbuuuids(b *testing.B) {
+	ts1 := NewTsVbuuid("default", 1024)
+	for i := uint64(1); i < uint64(1024); i++ {
+		ts1.Seqnos[i] = uint64(1000000 + i)
+		ts1.Vbuuids[i] = uint64(2000000 + i)
+		ts1.Snapshots[i] = [2]uint64{i, i + 10}
+	}
+
+	ts2 := NewTsVbuuid("default", 1024)
+	for i := uint64(1); i < uint64(1024); i++ {
+		ts2.Seqnos[i] = uint64(1000000 + i)
+		ts2.Vbuuids[i] = uint64(2000000 + i)
+		ts2.Snapshots[i] = [2]uint64{i, i + 10}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ts1.CompareVbuuids(ts2)
+	}
+}
+
+func verifyTimestamp(ts, ref *TsVbuuid) (err error) {
+	for i := range ref.Seqnos {
+		if ref.Seqnos[i] != ts.Seqnos[i] {
+			return errors.New("failed with Seqnos")
+		}
+		if ref.Vbuuids[i] != ts.Vbuuids[i] {
+			return errors.New("failed with Vbuuids")
+		}
+	}
+	return
+}
+
+//TODO: These tests have been commented out as the
+//functions tested by these methods are no longer
+//required. Once those functions get deleted, these
+//tests can be deleted as well.
+
+/*
 func TestSelectByVbuckets(t *testing.T) {
 	ts := NewTsVbuuid("default", 1024)
 	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
@@ -112,72 +208,6 @@ func TestCompareVbuckets(t *testing.T) {
 	ts.Vbnos[len(ts.Vbnos)-1]++
 	if ts.CompareVbuckets(tsRef) == true {
 		t.Fatal("expected false")
-	}
-}
-
-func TestCompareVbuuids(t *testing.T) {
-	tsRef := NewTsVbuuid("default", 1024)
-	tsRef.Vbnos = []uint16{11, 18, 21, 29, 41, 49, 62}
-	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
-	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
-	tsRef.Snapshots = [][2]uint64{
-		{100, 200}, {101, 201}, {102, 202}, {103, 203},
-		{104, 204}, {105, 205}, {106, 206},
-	}
-
-	ts := NewTsVbuuid("default", 1024)
-	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
-	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
-	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
-	ts.Snapshots = [][2]uint64{
-		{102, 202}, {101, 201}, {103, 203}, {100, 200},
-		{105, 205}, {104, 204}, {106, 206},
-	}
-
-	if ts.CompareVbuuids(tsRef) == false {
-		t.Fatal("expected true")
-	}
-	ts.Vbuuids[len(ts.Vbuuids)-1]++
-	if ts.CompareVbuuids(tsRef) == true {
-		t.Fatal("expected false")
-	}
-	ts.Vbuuids[len(ts.Vbuuids)-1]--
-	ts.Snapshots[len(ts.Snapshots)-1][0]++
-	if ts.CompareVbuuids(tsRef) == true {
-		t.Fatal("expected false")
-	}
-}
-
-func TestAsRecent(t *testing.T) {
-	tsRef := NewTsVbuuid("default", 1024)
-	tsRef.Vbnos = []uint16{11, 18, 21, 29, 41, 49, 62}
-	tsRef.Seqnos = []uint64{1, 2, 3, 4, 5, 6, 7}
-	tsRef.Vbuuids = []uint64{10, 20, 30, 40, 50, 60, 70}
-	tsRef.Snapshots = [][2]uint64{
-		{100, 200}, {101, 201}, {102, 202}, {103, 203},
-		{104, 204}, {105, 205}, {106, 206},
-	}
-
-	ts := NewTsVbuuid("default", 1024)
-	ts.Vbnos = []uint16{21, 18, 29, 11, 49, 41, 62}
-	ts.Seqnos = []uint64{3, 2, 4, 1, 6, 5, 7}
-	ts.Vbuuids = []uint64{30, 20, 40, 10, 60, 50, 70}
-	ts.Snapshots = [][2]uint64{
-		{102, 202}, {100, 200}, {103, 203}, {101, 201},
-		{105, 205}, {104, 204}, {106, 206},
-	}
-
-	if ts.AsRecent(tsRef) == false {
-		t.Fatal("expected true")
-	}
-	ts.Seqnos[len(ts.Seqnos)-1]--
-	if ts.AsRecent(tsRef) == true {
-		t.Fatal("expected false")
-	}
-	ts.Seqnos[len(ts.Seqnos)-1]++
-	ts.Seqnos[0]++
-	if ts.AsRecent(tsRef) == false {
-		t.Fatal("expected true")
 	}
 }
 
@@ -283,28 +313,6 @@ func BenchmarkCompareVbuckets(b *testing.B) {
 	}
 }
 
-func BenchmarkCompareVbuuuids(b *testing.B) {
-	ts1 := NewTsVbuuid("default", 1024)
-	for i := uint64(1); i < uint64(1024); i++ {
-		ts1.Vbnos = append(ts1.Vbnos, uint16(i))
-		ts1.Seqnos = append(ts1.Seqnos, uint64(1000000+i))
-		ts1.Vbuuids = append(ts1.Vbuuids, uint64(2000000+i))
-		ts1.Snapshots = append(ts1.Snapshots, [2]uint64{i, i + 10})
-	}
-
-	ts2 := NewTsVbuuid("default", 1024)
-	for i := uint64(1); i < uint64(1024); i++ {
-		ts2.Vbnos = append(ts2.Vbnos, uint16(i))
-		ts2.Seqnos = append(ts2.Seqnos, uint64(1000000+i))
-		ts2.Vbuuids = append(ts2.Vbuuids, uint64(2000000+i))
-		ts2.Snapshots = append(ts2.Snapshots, [2]uint64{i, i + 10})
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		ts1.CompareVbuuids(ts2)
-	}
-}
-
 func BenchmarkUnionTimestamp(b *testing.B) {
 	ts1 := NewTsVbuuid("default", 1024)
 	for i := uint64(1); i < uint64(1024); i++ {
@@ -325,20 +333,4 @@ func BenchmarkUnionTimestamp(b *testing.B) {
 		ts1.Union(ts2)
 	}
 }
-
-func verifyTimestamp(ts, ref *TsVbuuid) (err error) {
-	sort.Sort(ts)
-	sort.Sort(ref)
-	for i := range ref.Vbnos {
-		if ref.Vbnos[i] != ts.Vbnos[i] {
-			return errors.New("failed with Vbnos")
-		}
-		if ref.Seqnos[i] != ts.Seqnos[i] {
-			return errors.New("failed with Seqnos")
-		}
-		if ref.Vbuuids[i] != ts.Vbuuids[i] {
-			return errors.New("failed with Vbuuids")
-		}
-	}
-	return
-}
+*/

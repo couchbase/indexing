@@ -7,10 +7,6 @@
 
 package common
 
-import (
-	"sort"
-)
-
 // TsVb is logical clock for a subset of vbuckets.
 type TsVb struct {
 	Bucket string
@@ -24,27 +20,69 @@ type TsVbFull struct {
 	Seqnos []uint64
 }
 
-// TsVbuuid is logical clock for a subset of vbuckets along with branch value
+// TsVbuuid is logical clock for full set of vbuckets along with branch value
 // and last seen snapshot.
 type TsVbuuid struct {
 	Bucket    string
-	Vbnos     []uint16
 	Seqnos    []uint64
 	Vbuuids   []uint64
 	Snapshots [][2]uint64
 }
 
 // NewTsVbuuid returns reference to new instance of TsVbuuid.
-func NewTsVbuuid(bucket string, maxVbuckets int) *TsVbuuid {
+func NewTsVbuuid(bucket string, numVbuckets int) *TsVbuuid {
 	return &TsVbuuid{
 		Bucket:    bucket,
-		Vbnos:     make([]uint16, 0, maxVbuckets),
-		Seqnos:    make([]uint64, 0, maxVbuckets),
-		Vbuuids:   make([]uint64, 0, maxVbuckets),
-		Snapshots: make([][2]uint64, 0, maxVbuckets),
+		Seqnos:    make([]uint64, numVbuckets),
+		Vbuuids:   make([]uint64, numVbuckets),
+		Snapshots: make([][2]uint64, numVbuckets),
 	}
 }
 
+// CompareVbuuids will compare two timestamps for its bucket and vbuuids
+func (ts *TsVbuuid) CompareVbuuids(other *TsVbuuid) bool {
+	if ts == nil || other == nil {
+		return false
+	}
+	if ts.Bucket != other.Bucket || ts.Len() != other.Len() {
+		return false
+	}
+	for i, vbuuid := range ts.Vbuuids {
+		if (vbuuid != other.Vbuuids[i]) ||
+			(ts.Snapshots[i][0] != other.Snapshots[i][0]) ||
+			(ts.Snapshots[i][1] != other.Snapshots[i][1]) {
+			return false
+		}
+	}
+	return true
+}
+
+// AsRecent will check whether timestamp `ts` is atleast as recent as
+// timestamp `other`.
+func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
+	if ts == nil || other == nil {
+		return false
+	}
+	if ts.Bucket != other.Bucket || ts.Len() != other.Len() {
+		return false
+	}
+	for i, vbuuid := range ts.Vbuuids {
+		if vbuuid != other.Vbuuids[i] || ts.Seqnos[i] < other.Seqnos[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (ts *TsVbuuid) Len() int {
+	return len(ts.Seqnos)
+}
+
+//TODO: As TsVbuuid acts like a array now, the below helper functions are
+//no longer required. These can be deleted, once we are sure these are not
+//going to required.
+
+/*
 // SelectByVbuckets will select vbuckets from `ts` for a subset of `vbuckets`,
 // both `ts` and `vbuckets` are expected to be pre-sorted.
 func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
@@ -100,63 +138,6 @@ func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
 	return newts
 }
 
-// CompareVbuckets will compare two timestamps for its bucket and vbuckets
-func (ts *TsVbuuid) CompareVbuckets(other *TsVbuuid) bool {
-	if ts == nil || other == nil {
-		return false
-	}
-	sort.Sort(ts)
-	sort.Sort(other)
-	if ts.Bucket != other.Bucket || ts.Len() != other.Len() {
-		return false
-	}
-	for i, vbno := range ts.Vbnos {
-		if vbno != other.Vbnos[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// CompareVbuuids will compare two timestamps for its bucket and vbuuids
-func (ts *TsVbuuid) CompareVbuuids(other *TsVbuuid) bool {
-	if ts == nil || other == nil {
-		return false
-	}
-	sort.Sort(ts)
-	sort.Sort(other)
-	if ts.Bucket != other.Bucket || ts.Len() != other.Len() {
-		return false
-	}
-	for i, vbuuid := range ts.Vbuuids {
-		if (ts.Vbnos[i] != other.Vbnos[i]) || (vbuuid != other.Vbuuids[i]) ||
-			(ts.Snapshots[i][0] != other.Snapshots[i][0]) ||
-			(ts.Snapshots[i][1] != other.Snapshots[i][1]) {
-			return false
-		}
-	}
-	return true
-}
-
-// AsRecent will check whether timestamp `ts` is atleast as recent as
-// timestamp `other`.
-func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
-	if ts == nil || other == nil {
-		return false
-	}
-	sort.Sort(ts)
-	sort.Sort(other)
-	if ts.Bucket != other.Bucket || ts.Len() != other.Len() {
-		return false
-	}
-	for i, vbuuid := range ts.Vbuuids {
-		if vbuuid != other.Vbuuids[i] || ts.Seqnos[i] < other.Seqnos[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // Union will return a union set of timestamps based on Vbuckets. Duplicate
 // vbucket entries in `other` timestamp will be skipped.
 func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
@@ -199,9 +180,22 @@ func (ts *TsVbuuid) Unions(timestamps ...*TsVbuuid) *TsVbuuid {
 	return ts
 }
 
-// sort timestamp
-func (ts *TsVbuuid) Len() int {
-	return len(ts.Vbnos)
+// CompareVbuckets will compare two timestamps for its bucket and vbuckets
+func (ts *TsVbuuid) CompareVbuckets(other *TsVbuuid) bool {
+	if ts == nil || other == nil {
+		return false
+	}
+	sort.Sort(ts)
+	sort.Sort(other)
+	if ts.Bucket != other.Bucket || ts.Len() != other.Len() {
+		return false
+	}
+	for i, vbno := range ts.Vbnos {
+		if vbno != other.Vbnos[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (ts *TsVbuuid) Less(i, j int) bool {
@@ -214,3 +208,5 @@ func (ts *TsVbuuid) Swap(i, j int) {
 	ts.Vbuuids[i], ts.Vbuuids[j] = ts.Vbuuids[j], ts.Vbuuids[i]
 	ts.Snapshots[i], ts.Snapshots[j] = ts.Snapshots[j], ts.Snapshots[i]
 }
+
+*/
