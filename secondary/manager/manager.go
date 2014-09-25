@@ -19,10 +19,19 @@ import (
 // Type Definition
 ///////////////////////////////////////////////////////
 
+type RequestType string
 type IndexManager struct {
-	repo        *MetadataRepo
-	coordinator *Coordinator
+	repo        	*MetadataRepo
+	coordinator 	*Coordinator
+	reqHandler		*requestHandler
+	eventMgr		*eventManager
 }
+
+type EventType byte 
+const (
+	CREATE_INDEX EventType = itoa 
+	DROP_INDEX   EventType 
+)
 
 ///////////////////////////////////////////////////////
 // public function
@@ -36,14 +45,17 @@ func NewIndexManager(repoHost string,
 	config string) (mgr *IndexManager, err error) {
 
 	mgr = new(IndexManager)
-	mgr.repo, err = NewMetadataRepo(repoHost, leader)
+	mgr.repo, err = NewMetadataRepo(repoHost, leader, mgr)
 	if err != nil {
 		return nil, err
 	}
 
 	mgr.coordinator = NewCoordinator(mgr.repo)
 	go mgr.coordinator.Run(config)
-
+	
+	mgr.reqHandler = NewRequestHandler(mgr)
+	mgr.eventMgr = NewEventManager()
+	
 	return mgr, nil
 }
 
@@ -53,6 +65,7 @@ func NewIndexManager(repoHost string,
 func (m *IndexManager) Close() {
 	m.repo.Close()
 	m.coordinator.Terminate()
+	m.eventMgr.Close()
 }
 
 //
@@ -67,6 +80,34 @@ func (m *IndexManager) GetIndexDefnByName(name string) (*common.IndexDefn, error
 //
 func (m *IndexManager) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDefn, error) {
 	return m.repo.GetIndexDefnById(id)
+}
+
+//
+// Listen to create Index Request
+//
+func (m *IndexManager) StartListenIndexCreate(id string) (<- chan interface{}, err) {
+	return m.evtManager.register(id, CREATE_INDEX)
+}
+
+//
+// Stop Listen to create Index Request
+//
+func (m *IndexManager) StopListenIndexCreate(id string) {
+	m.evtManager.unregister(id, CREATE_INDEX)
+}
+
+//
+// Listen to delete Index Request
+//
+func (m *IndexManager) StartListenIndexDelete(id string) (<- chan interface{}, err) {
+	return m.evtManager.register(id, DELETE_INDEX)
+}
+
+//
+// Stop Listen to delete Index Request
+//
+func (m *IndexManager) StopListenIndexDelete(id string) { 
+	m.evtManager.unregister(id, DELETE_INDEX)
 }
 
 //
@@ -124,4 +165,15 @@ func (m *IndexManager) HandleDeleteIndexDDL(name string) error {
 	}
 
 	return nil
+}
+
+///////////////////////////////////////////////////////
+// package local function 
+///////////////////////////////////////////////////////
+
+//
+// Notify new event 
+//
+func (e *IndexManager) notify(evtType EventType, obj interface{}) {
+	m.evtManager.notify(evtType, obj)
 }

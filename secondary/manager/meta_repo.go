@@ -42,9 +42,10 @@ type Reply struct {
 ///////////////////////////////////////////////////////
 
 func NewMetadataRepo(repoHost string,
-	leader string) (*MetadataRepo, error) {
+					leader string,
+					mgr *IndexManager) (*MetadataRepo, error) {
 
-	watcher, err := startWatcher(leader)
+	watcher, err := startWatcher(mgr, leader)
 	if err != nil {
 		return nil, err
 	}

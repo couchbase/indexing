@@ -26,6 +26,7 @@ import (
 ///////////////////////////////////////////////////////
 
 type watcher struct {
+	mgr			*IndexManager
 	leaderAddr  string
 	watcherAddr string
 	repo        *repo.Repository
@@ -38,6 +39,7 @@ type watcher struct {
 	isClosed        bool
 	observePendings map[string]*observeHandle
 	observeProposed map[common.Txnid]*observeHandle
+	notifications	map[common.Txnid]*notificationHandle
 }
 
 type observeHandle struct {
@@ -50,18 +52,26 @@ type observeHandle struct {
 	done        bool
 }
 
+type notificationHandle struct {
+	key				string
+	content			[]byte
+	evtType			EventType
+}
+
 ///////////////////////////////////////////////////////
 // private function : Watcher
 ///////////////////////////////////////////////////////
 
-func startWatcher(leaderAddr string) (s *watcher, err error) {
+func startWatcher(mgr *IndexManager, leaderAddr string) (s *watcher, err error) {
 
 	s = new(watcher)
 
+	s.mgr = mgr
 	s.leaderAddr = leaderAddr
 	s.isClosed = false
 	s.observePendings = make(map[string]*observeHandle)
 	s.observeProposed = make(map[common.Txnid]*observeHandle)
+	s.notifications = make(map[common.Txnid]*notificationHandle)
 
 	s.watcherAddr, err = getWatcherAddr()
 	if err != nil {
@@ -200,6 +210,19 @@ func (o *observeHandle) signal(done bool) {
 }
 
 /////////////////////////////////////////////////////////////////////////////
+// Private Function : Metadata Notification 
+/////////////////////////////////////////////////////////////////////////////
+
+func newNotificationHandle(key string, evtType EventType, content []byte) *notificationHandle {
+	handle := new(notificationHandle)
+	handle.key = key
+	handle.evtType = evtType
+	handle.content = content 
+
+	return handle
+}
+
+/////////////////////////////////////////////////////////////////////////////
 // Private Function
 /////////////////////////////////////////////////////////////////////////////
 
@@ -249,6 +272,15 @@ func (s *watcher) UpdateStateOnNewProposal(proposal protocol.ProposalMsg) {
 		}
 		// TODO : raise error if the condition does not get satisfied?
 	}
+
+	// register the event for notification	
+	var evtType EventType
+	switch opCode {
+		case common.OPCODE_ADD : evtType = CREATE_INDEX
+		case common.OPCODE_DELETE : evtType = DELETE_INDEX
+	}
+	s.notifications[common.Txnid(proposal.GetTxnid())] = 
+		newNotificationHandle(proposal.GetKey(), evtType, proposal.GetContent())
 }
 
 func (s *watcher) UpdateStateOnCommit(txnid common.Txnid, key string) {
@@ -258,6 +290,11 @@ func (s *watcher) UpdateStateOnCommit(txnid common.Txnid, key string) {
 	handle, ok := s.observeProposed[txnid]
 	if ok && handle != nil {
 		handle.signal(true)
+	}
+	
+	notification, ok := s.notifications[txnid]
+	if ok && handle != nil {
+		s.mgr.notify(notification.evtType, notification.content)
 	}
 }
 
