@@ -16,19 +16,27 @@ import (
 	"time"
 )
 
+// For this test, use index definition id from 200 - 210
+
 func TestCoordinator(t *testing.T) {
 
-	var addr = "localhost:9885"
-	var leader = "localhost:9884"
+	common.LogEnable()
+	common.SetLogLevel(common.LogLevelDebug)
+
+	common.Infof("Start TestCoordinator *********************************************************")
+
+	var requestAddr = "localhost:9885"
+	var leaderAddr = "localhost:9884"
 	var config = "./config.json"
 
-	mgr, err := manager.NewIndexManager(addr, leader, config)
+	mgr, err := manager.NewIndexManager(requestAddr, leaderAddr, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer mgr.Close()
 
 	cleanup(mgr, t)
+	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Add a new index definition : 100
 	idxDefn := &common.IndexDefn{
@@ -46,7 +54,6 @@ func TestCoordinator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	idxDefn, err = mgr.GetIndexDefnByName("coordinator_test")
@@ -59,7 +66,10 @@ func TestCoordinator(t *testing.T) {
 	}
 
 	cleanup(mgr, t)
+	time.Sleep(time.Duration(1000) * time.Millisecond)
 
+	common.Infof("Done TestCoordinator. Tearing down *********************************************************")
+	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }
 

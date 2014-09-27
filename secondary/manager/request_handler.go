@@ -1,9 +1,13 @@
 package manager
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
-	"http"
 	"encoding/json"
+	gometa "github.com/couchbase/gometa/common"
+	"github.com/couchbase/indexing/secondary/common"
+	"math/rand"
+	"net"
+	"net/http"
+	"sync"
 )
 
 ///////////////////////////////////////////////////////
@@ -108,24 +112,49 @@ type NodeInfo struct {
 	IndexerURL string `json:"indexerURL,omitempty"`
 }
 
+// Inclusion
+type Inclusion int
+
+const (
+	Neither Inclusion = iota
+	Low
+	High
+	Both
+)
+
 type requestHandler struct {
-	mgr			*IndexManager
+	mgr      *IndexManager
+	listener net.Listener
+	mutex    sync.Mutex
+	isClosed bool
 }
 
 ///////////////////////////////////////////////////////
-// Package Local Function 
+// Package Local Function
 ///////////////////////////////////////////////////////
 
 func NewRequestHandler(mgr *IndexManager) (*requestHandler, error) {
 
-	r := &requestHandler{mgr : mgr}
-	http.HandleFunc("/createIndex", r.createIndexRequest)
-	
-	if err := http.ListenAndServe(INDEX_DDL_HTTP_ADDR, nil); err != nil {
-		return err, nil
-	}
-	
+	r := &requestHandler{mgr: mgr,
+		isClosed: false,
+		listener: nil}
+	go r.run()
 	return r, nil
+}
+
+func (m *requestHandler) close() {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if m.isClosed {
+		return
+	}
+
+	m.isClosed = true
+
+	if m.listener != nil {
+		m.listener.Close()
+	}
 }
 
 func (m *requestHandler) createIndexRequest(w http.ResponseWriter, r *http.Request) {
@@ -133,22 +162,22 @@ func (m *requestHandler) createIndexRequest(w http.ResponseWriter, r *http.Reque
 	// convert request
 	idxRequest := convertRequest(r)
 	if idxRequest == nil {
-		ierr := IndexError{	Code: string(RESP_ERROR),
-							Msg: "RequestHandler::createIndexRequest: Unable to convert request"}
+		ierr := IndexError{Code: string(RESP_ERROR),
+			Msg: "RequestHandler::createIndexRequest: Unable to convert request"}
 
 		res := IndexMetaResponse{
 			Status: RESP_ERROR,
 			Errors: []IndexError{ierr},
 		}
-		
+
 		sendResponse(w, res)
 		return
-	}	
+	}
 
 	// create an in-memory index definition
-	indexInfo := idxRequest.Index
-	idxDefn := common.IndexDefn{
-		DefnId: 		 common.IndexDefnId(rand.Int()),
+	indexinfo := idxRequest.Index
+	idxDefn := &common.IndexDefn{
+		DefnId:          common.IndexDefnId(rand.Int()),
 		Name:            indexinfo.Name,
 		Using:           common.ForestDB,
 		Bucket:          indexinfo.Bucket,
@@ -159,7 +188,7 @@ func (m *requestHandler) createIndexRequest(w http.ResponseWriter, r *http.Reque
 		PartitionKey:    indexinfo.OnExprList[0]}
 
 	// call the index manager to handle the DDL
-	err := mgr.HandleCreateIndexDDL(idxDefn) 
+	err := m.mgr.HandleCreateIndexDDL(idxDefn)
 	if err == nil {
 		// No error, return success
 		res := IndexMetaResponse{
@@ -170,8 +199,8 @@ func (m *requestHandler) createIndexRequest(w http.ResponseWriter, r *http.Reque
 		sendResponse(w, res)
 	} else {
 		// report failure
-		ierr := IndexError{	Code: string(RESP_ERROR),
-							Msg: err.cause.Error()}
+		ierr := IndexError{Code: string(RESP_ERROR),
+			Msg: err.Error()}
 
 		res := IndexMetaResponse{
 			Status: RESP_ERROR,
@@ -182,24 +211,24 @@ func (m *requestHandler) createIndexRequest(w http.ResponseWriter, r *http.Reque
 }
 
 ///////////////////////////////////////////////////////
-// Private Function 
+// Private Function
 ///////////////////////////////////////////////////////
 
 func convertRequest(r *http.Request) *IndexRequest {
 	indexreq := IndexRequest{}
 	buf := make([]byte, r.ContentLength, r.ContentLength)
-	
+
 	// Body will be non-null but can return EOF if being empty
 	if _, err := r.Body.Read(buf); err != nil {
-		log.Printf("RequestHandler::convertRequest: unable to read request body")
+		common.Debugf("RequestHandler::convertRequest: unable to read request body")
 		return nil
 	}
-	
+
 	if err := json.Unmarshal(buf, &indexreq); err != nil {
-		log.Printf("RequestHandler::convertRequest: unable to unmarshall request body. Buf = %s", buf)
+		common.Debugf("RequestHandler::convertRequest: unable to unmarshall request body. Buf = %s", buf)
 		return nil
 	}
-	
+
 	return &indexreq
 }
 
@@ -210,7 +239,7 @@ func sendResponse(w http.ResponseWriter, res interface{}) {
 	if buf, err := json.Marshal(&res); err == nil {
 		w.Write(buf)
 	} else {
-		// note : buf is nil if err != nil 
+		// note : buf is nil if err != nil
 		sendHttpError(w, "RequestHandler::sendResponse: Unable to marshall response", http.StatusInternalServerError)
 	}
 }
@@ -219,3 +248,22 @@ func sendHttpError(w http.ResponseWriter, reason string, code int) {
 	http.Error(w, reason, code)
 }
 
+func (r *requestHandler) run() {
+
+	gometa.SafeRun("requestHandler.run()",
+		func() {
+			http.HandleFunc("/createIndex", r.createIndexRequest)
+		})
+
+	li, err := net.Listen("tcp", INDEX_DDL_HTTP_ADDR)
+	if err != nil {
+		// TODO: abort
+		common.Warnf("EventManager.run() : HTTP Server fails")
+	}
+	r.listener = li
+
+	if err := http.Serve(li, nil); err != nil {
+		// TODO: abort
+		common.Warnf("EventManager.run() : HTTP Server fails")
+	}
+}

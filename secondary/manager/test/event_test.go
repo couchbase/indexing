@@ -14,25 +14,32 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	"testing"
 	"time"
-	"log"
 )
+
+// For this test, use Index Defn Id from 300 - 310
 
 func TestEventMgr(t *testing.T) {
 
-	var addr = "localhost:9885"
-	var leader = "localhost:9884"
+	common.LogEnable()
+	common.SetLogLevel(common.LogLevelDebug)
+
+	common.Infof("Start TestEventMgr *********************************************************")
+
+	var requestAddr = "localhost:9885"
+	var leaderAddr = "localhost:9884"
 	var config = "./config.json"
 
-	log.Printf("Start Index Manager")
-	mgr, err := manager.NewIndexManager(addr, leader, config)
+	common.Infof("Start Index Manager")
+	mgr, err := manager.NewIndexManager(requestAddr, leaderAddr, config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer mgr.Close()
 
 	cleanupEvtMgrTest(mgr, t)
-	
-	log.Printf("Start Listening to event")	
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+
+	common.Infof("Start Listening to event")
 	notifications, err := mgr.StartListenIndexCreate("TestEventMgr")
 	if err != nil {
 		t.Fatal(err)
@@ -49,21 +56,19 @@ func TestEventMgr(t *testing.T) {
 		ExprType:        common.N1QL,
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
-	
-	time.Sleep(time.Duration(1000) * time.Millisecond)
-	
-	log.Printf("Before DDL")	
+
+	common.Infof("Before DDL")
 	err = mgr.HandleCreateIndexDDL(idxDefn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	data := listen(notifications)
 	if data == nil {
 		t.Fatal("Does not receive notification from watcher")
 	}
-	
-	idxDefn, err = manager.UnmarshallIndexDefn(([]byte)(data)) 
+
+	idxDefn, err = manager.UnmarshallIndexDefn(([]byte)(data))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,40 +76,57 @@ func TestEventMgr(t *testing.T) {
 	if idxDefn == nil {
 		t.Fatal("Cannot unmarshall index definition")
 	}
-	
+
 	if idxDefn.Name != "event_mgr_test" {
 		t.Fatal("Index Definition Name mismatch")
 	}
 
 	cleanupEvtMgrTest(mgr, t)
-	mgr.Close()
+	time.Sleep(time.Duration(1000) * time.Millisecond)
 
+	common.Infof("Stop TestEventMgr. Tearing down *********************************************************")
+
+	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }
 
 // clean up
 func cleanupEvtMgrTest(mgr *manager.IndexManager, t *testing.T) {
 
-	err := mgr.HandleDeleteIndexDDL("event_mgr_test")
+	_, err := mgr.GetIndexDefnByName("event_mgr_test")
 	if err != nil {
-		t.Fatal(err)
+		common.Infof("EventMgrTest.cleanupEvtMgrTest() :  cannot find index defn event_mgr_test.  No cleanup ...")
+	} else {
+		common.Infof("EventMgrTest.cleanupEvtMgrTest() :  found index defn event_mgr_test.  Cleaning up ...")
+
+		err = mgr.HandleDeleteIndexDDL("event_mgr_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Duration(1000) * time.Millisecond)
+
+		// double check if we have really cleaned up
+		_, err := mgr.GetIndexDefnByName("event_mgr_test")
+		if err == nil {
+			t.Fatal("EventMgrTest.cleanupEvtMgrTest(): Cannot clean up index defn event_mgr_test")
+		}
 	}
 }
 
 // listen to an event
-func listen(notifications <- chan interface{}) []byte {
+func listen(notifications <-chan interface{}) []byte {
 
 	timer := time.After(time.Duration(20000) * time.Millisecond)
 	select {
-		case data, ok := <- notifications :
-			if !ok {
-				return nil
-			}
-			
-			return data.([]byte)
-		case <- timer :
+	case data, ok := <-notifications:
+		if !ok {
 			return nil
-	}		
-	
+		}
+
+		return data.([]byte)
+	case <-timer:
+		return nil
+	}
+
 	return nil
-} 
+}

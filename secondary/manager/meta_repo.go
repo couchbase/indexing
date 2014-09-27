@@ -10,21 +10,28 @@
 package manager
 
 import (
-	"github.com/couchbaselabs/goprotobuf/proto"
 	"fmt"
+	repo "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
-	"log"
+	"github.com/couchbaselabs/goprotobuf/proto"
 	"net/rpc"
 	"sync"
+	"strings"
 )
 
 type MetadataRepo struct {
-	metaRepoHost string
-	watcher      *watcher
+	remoteReqAddr string
+	repository    *repo.Repository
+	watcher       *watcher
 
 	mutex    sync.Mutex
 	isClosed bool
+}
+
+type MetaIterator struct {
+	repository		*repo.Repository
+	iterator		*repo.RepoIterator
 }
 
 type Request struct {
@@ -41,16 +48,28 @@ type Reply struct {
 //  MetadataRepo
 ///////////////////////////////////////////////////////
 
-func NewMetadataRepo(repoHost string,
-					leader string,
-					mgr *IndexManager) (*MetadataRepo, error) {
+func NewMetadataRepo(requestAddr string,
+	leaderAddr string,
+	mgr *IndexManager) (*MetadataRepo, error) {
 
-	watcher, err := startWatcher(mgr, leader)
+	// Initialize local repository
+	repository, err := repo.OpenRepository()
 	if err != nil {
 		return nil, err
 	}
 
-	meta := &MetadataRepo{metaRepoHost: repoHost, watcher: watcher, isClosed: false}
+	// This is a blocking call unit the watcher is ready.  This means
+	// the watcher has succesfully synchronized with the remote metadata
+	// repository.
+	watcher, err := startWatcher(mgr, repository, leaderAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	meta := &MetadataRepo{remoteReqAddr: requestAddr,
+		repository: repository,
+		watcher:    watcher,
+		isClosed:   false}
 	return meta, nil
 }
 
@@ -58,7 +77,7 @@ func (c *MetadataRepo) Close() {
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("panic in MetadataRepo.Close() : %s.  Ignored.\n", r)
+			common.Warnf("panic in MetadataRepo.Close() : %s.  Ignored.\n", r)
 		}
 	}()
 
@@ -67,6 +86,7 @@ func (c *MetadataRepo) Close() {
 
 	if !c.isClosed {
 		c.isClosed = true
+		c.repository.Close()
 		c.watcher.Close()
 	}
 }
@@ -94,7 +114,7 @@ func (c *MetadataRepo) GetIndexDefnByName(name string) (*common.IndexDefn, error
 		return nil, err
 	}
 
-	return unmarshallIndexDefn(data)
+	return UnmarshallIndexDefn(data)
 }
 
 func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDefn, error) {
@@ -104,7 +124,7 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 		return nil, err
 	}
 
-	return unmarshallIndexDefn(data)
+	return UnmarshallIndexDefn(data)
 }
 
 ///////////////////////////////////////////////////////
@@ -113,19 +133,19 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 
 //
 // TODO: This function is not transactional.
-// TODO: We need the mechansim for the other coordinator to get notified on new metadata.
 //
 func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 
 	// check if defn already exist
-	exist, err := c.GetIndexDefnById(defn.DefnId)
+	exist, err := c.GetIndexDefnByName(defn.Name)
 	if exist != nil {
 		// TODO: should not return error if not found (should return nil)
-		return fmt.Errorf("Index Definition '%s' already exist", defn.Name)
+		return NewError(ERROR_META_IDX_DEFN_EXIST, NORMAL, METADATA_REPO, nil, 
+				fmt.Sprintf("Index Definition '%s' already exist", defn.Name))
 	}
 
 	// marshall the defn
-	data, err := marshallIndexDefn(defn)
+	data, err := MarshallIndexDefn(defn)
 	if err != nil {
 		return err
 	}
@@ -151,7 +171,8 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 	exist, _ := c.GetIndexDefnById(id)
 	if exist == nil {
 		// TODO: should not return error if not found (should return nil)
-		return fmt.Errorf("Index Definition '%d' does not exist", id)
+		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil, 
+				fmt.Sprintf("Index Definition '%s' does not exist", id))
 	}
 
 	lookupName := indexDefnKeyById(id)
@@ -173,7 +194,8 @@ func (c *MetadataRepo) DropIndexByName(name string) error {
 	exist, _ := c.GetIndexDefnByName(name)
 	if exist == nil {
 		// TODO: should not return error if not found (should return nil)
-		return fmt.Errorf("Index Definition '%s' does not exist", name)
+		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil, 
+				fmt.Sprintf("Index Definition '%s' does not exist", name))
 	}
 
 	lookupName := indexDefnKeyByName(name)
@@ -205,16 +227,85 @@ func (c *MetadataRepo) ObserveForDelete(key string) *observeHandle {
 	return c.watcher.addObserveForDelete(lookupName)
 }
 
+/////////////////////////////////////////////////////////////////////////////
+// RepoIterator Public Function
+/////////////////////////////////////////////////////////////////////////////
+
+//
+// Create a new iterator
+//
+func (c *MetadataRepo) NewIterator() (*MetaIterator, error) {
+
+	iter, err := c.repository.NewIterator("/", "")
+	if err != nil {
+		return nil, err
+	}
+	
+	result := &MetaIterator{
+		iterator: iter,
+		repository: c.repository}
+
+	return result, nil
+}
+
+// Get value from iterator
+func (i *MetaIterator) Next() (key string, content []byte, err error) {
+
+	for {
+		key, content, err = i.iterator.Next()
+		if err != nil {
+			return "", nil, err
+		}
+		
+		if isIndexDefnKey(key) {
+			name := indexDefnNameFromKey(key) 
+			if name != "" {
+				return name, content, nil
+			}
+			return "", nil, NewError(ERROR_META_WRONG_KEY, NORMAL, METADATA_REPO, nil, 
+				fmt.Sprintf("Index Definition Key %s is mal-formed", key))
+		}
+	}
+}
+
+// close iterator
+func (i *MetaIterator) Close() {
+
+	i.iterator.Close()
+}
+
+///////////////////////////////////////////////////////
+// public function : Local Write
+///////////////////////////////////////////////////////
+
+func (c *MetadataRepo) SetLocalMeta(name string, value []byte) error {
+	key := LocalMetaKey(name)
+	return c.watcher.Set(key, value)
+}
+
+func (c *MetadataRepo) GetLocalMeta(name string) ([]byte, error) {
+	key := LocalMetaKey(name)
+	return c.GetMetaFromWatcher(key)
+}
+
+func (c *MetadataRepo) GetLocalRepo() *repo.Repository {
+	return c.repository
+}
+
+func LocalMetaKey(name string) string {
+	return fmt.Sprintf("LocalMetadata/%s", name)
+}
+
 ///////////////////////////////////////////////////////
 // private function : DDL
 ///////////////////////////////////////////////////////
 
-func (c *MetadataRepo) getMetaFromWatcher(name string) ([]byte, error) {
+func (c *MetadataRepo) GetMetaFromWatcher(name string) ([]byte, error) {
 
 	// Get the value from the local cache first
 	value, err := c.watcher.Get(name)
 	if err == nil && value != nil {
-		log.Printf("MetadataRepo.getMeta(): Found metadata in local repository for key %s", name)
+		common.Debugf("MetadataRepo.getMeta(): Found metadata in local repository for key %s", name)
 		return value, nil
 	}
 
@@ -224,7 +315,7 @@ func (c *MetadataRepo) getMetaFromWatcher(name string) ([]byte, error) {
 func (c *MetadataRepo) getMeta(name string) ([]byte, error) {
 
 	// Get the metadata locally from watcher first
-	value, err := c.getMetaFromWatcher(name)
+	value, err := c.GetMetaFromWatcher(name)
 	if err == nil && value != nil {
 		return value, nil
 	}
@@ -236,6 +327,7 @@ func (c *MetadataRepo) getMeta(name string) ([]byte, error) {
 		return nil, err
 	}
 
+	common.Debugf("MetadataRepo.getMeta(): remote metadata for key %s exist=%s", name, reply != nil && reply.Result != nil)
 	if reply != nil {
 		// reply.Result can be nil if metadata does not exist
 		return reply.Result, nil
@@ -268,13 +360,14 @@ func (c *MetadataRepo) deleteMeta(name string) error {
 
 func (c *MetadataRepo) newDictionaryRequest(request *Request, reply **Reply) error {
 
-	client, err := rpc.DialHTTP("tcp", c.metaRepoHost)
+	client, err := rpc.DialHTTP("tcp", c.remoteReqAddr)
 	if err != nil {
 		return err
 	}
 
 	err = client.Call("RequestReceiver.NewRequest", request, reply)
 	if err != nil {
+		common.Debugf("MetadataRepo.newDictionaryRequest(): Got Error = %s", err.Error())
 		return err
 	}
 
@@ -293,12 +386,26 @@ func indexDefnKeyById(id common.IndexDefnId) string {
 	return fmt.Sprintf("IndexDefintionId/%d", id)
 }
 
+func isIndexDefnKey(key string) bool {
+	return strings.Contains(key, "IndexDefinitionName/") 
+}
+
+func indexDefnNameFromKey(key string) string {
+
+	i := strings.LastIndex(key, "IndexDefinitionName/") 
+	if i != -1 {
+		return key[i + 20:]
+	}
+	
+	return "" 
+}
+
 //
 //
 // TODO: This function is copied from indexer.kv_sender.  It would be nice if this
 // go to common.
 //
-func marshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
+func MarshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
 
 	using := protobuf.StorageType(
 		protobuf.StorageType_value[string(defn.Using)]).Enum()
@@ -324,7 +431,7 @@ func marshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
 	return proto.Marshal(pDefn)
 }
 
-func unmarshallIndexDefn(data []byte) (*common.IndexDefn, error) {
+func UnmarshallIndexDefn(data []byte) (*common.IndexDefn, error) {
 
 	pDefn := new(protobuf.IndexDefn)
 	if err := proto.Unmarshal(data, pDefn); err != nil {

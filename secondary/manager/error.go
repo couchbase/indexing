@@ -4,32 +4,54 @@ import (
 	"fmt"
 )
 
-// The error handling has the same setup as the indexer. 
+// The error handling has the same setup as the indexer.
 // This is to help with consolidation on a common error facility
 // at a later point.
 
 type errCode int16
+
 const (
-	ERROR_PANIC errCode = 0 
+	// generic (0 - 50)
+	ERROR_PANIC errCode = 0
+	ERROR_ARGUMENTS = 1
+
+	// MetadataRepo (51-100)
+	ERROR_META_WRONG_KEY = 51
+	ERROR_META_IDX_DEFN_EXIST = 52
+	ERROR_META_IDX_DEFN_NOT_EXIST = 53
 	
-	// Event Manager (100)
-	ERROR_EVT_DUPLICATE_NOTIFIER = 100
+	// Event Manager (101-150)
+	ERROR_EVT_DUPLICATE_NOTIFIER = 101
+	
+	// Index Manager (151-200)
+	ERROR_MGR_DDL_CREATE_IDX = 151
+	ERROR_MGR_DDL_DROP_IDX = 152
+	
+	// Coordinator (201-250)
+	ERROR_COOR_LISTENER_FAIL = 201
+	ERROR_COOR_ELECTION_FAIL = 202
+	
+	// Watcher (251 - 300)
+	ERROR_WATCH_NO_ADDR_AVAIL = 251
 )
 
 type errSeverity int16
+
 const (
 	FATAL errSeverity = iota
 	NORMAL
 )
 
 type errCategory int16
+
 const (
-	COORDINATOR errCategory = iota
- 	INDEX_MANAGER	
-	METADATA_REPO	
-	REQUEST_HANDLER	
+	GENERIC errCategory = iota
+	COORDINATOR 
+	INDEX_MANAGER
+	METADATA_REPO
+	REQUEST_HANDLER
 	EVENT_MANAGER
-	WATCHER	
+	WATCHER
 )
 
 type Error struct {
@@ -41,32 +63,44 @@ type Error struct {
 }
 
 func NewError(code errCode, severity errSeverity, category errCategory, cause error, msg string) Error {
-	return Error{errCode: errCode,
-				 severity : severity,
-				 category : category,
-				 cause : cause,
-				 msg : msg}
+	return Error{code: code,
+		severity: severity,
+		category: category,
+		cause:    cause,
+		msg:      msg}
 }
 
-func (e *Error) Error() string {
-	return fmt.Printf("Error :: code= %d, severity= %s, category= %s, reason= %s, cause= %s, 
-			e.errCode, severity(e.severity), category(e.category), e.msg, e.cause)	
+func (e Error) Error() string {
+	return fmt.Sprintf("Error :: code= %d, severity= %s, category= %s, reason= %s, cause= %s",
+		e.code, severity(e.severity), category(e.category), e.msg, e.cause)
 }
 
 func category(category errCategory) string {
 	switch category {
-		case COORDINATOR : return "Coordinator" 
-		case INDEX_MANAGER : return "Index Manager" 
-		case METADATA_REPO : return "Metadata Repo" 
-		case REQUEST_HANDLER : return "Request Handler" 
-		case EVENT_MANAGER : return "Event Manager" 
-		case WATCHER : return "Watcher" 
+	case GENERIC:
+		return "Generic"
+	case COORDINATOR:
+		return "Coordinator"
+	case INDEX_MANAGER:
+		return "Index Manager"
+	case METADATA_REPO:
+		return "Metadata Repo"
+	case REQUEST_HANDLER:
+		return "Request Handler"
+	case EVENT_MANAGER:
+		return "Event Manager"
+	case WATCHER:
+		return "Watcher"
 	}
+	return ""
 }
 
 func severity(severity errSeverity) string {
 	switch severity {
-		case NORMAL: return "Normal" 
-		case FATAL:  return "Fatal" 
+	case NORMAL:
+		return "Normal"
+	case FATAL:
+		return "Fatal"
 	}
+	return ""
 }

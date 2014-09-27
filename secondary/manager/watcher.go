@@ -16,7 +16,7 @@ import (
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
-	"log"
+	c "github.com/couchbase/indexing/secondary/common"
 	"net"
 	"sync"
 )
@@ -26,9 +26,10 @@ import (
 ///////////////////////////////////////////////////////
 
 type watcher struct {
-	mgr			*IndexManager
+	mgr         *IndexManager
 	leaderAddr  string
 	watcherAddr string
+	txn         *common.TxnState
 	repo        *repo.Repository
 	factory     protocol.MsgFactory
 	handler     *action.ServerAction
@@ -39,7 +40,7 @@ type watcher struct {
 	isClosed        bool
 	observePendings map[string]*observeHandle
 	observeProposed map[common.Txnid]*observeHandle
-	notifications	map[common.Txnid]*notificationHandle
+	notifications   map[common.Txnid]*notificationHandle
 }
 
 type observeHandle struct {
@@ -53,21 +54,24 @@ type observeHandle struct {
 }
 
 type notificationHandle struct {
-	key				string
-	content			[]byte
-	evtType			EventType
+	key     string
+	content []byte
+	evtType EventType
 }
 
 ///////////////////////////////////////////////////////
 // private function : Watcher
 ///////////////////////////////////////////////////////
 
-func startWatcher(mgr *IndexManager, leaderAddr string) (s *watcher, err error) {
+func startWatcher(mgr *IndexManager,
+	repo *repo.Repository,
+	leaderAddr string) (s *watcher, err error) {
 
 	s = new(watcher)
 
 	s.mgr = mgr
 	s.leaderAddr = leaderAddr
+	s.repo = repo
 	s.isClosed = false
 	s.observePendings = make(map[string]*observeHandle)
 	s.observeProposed = make(map[common.Txnid]*observeHandle)
@@ -77,17 +81,12 @@ func startWatcher(mgr *IndexManager, leaderAddr string) (s *watcher, err error) 
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("watcher.startWatcher(): watcher follower ID %s", s.watcherAddr)
+	c.Debugf("watcher.startWatcher(): watcher follower ID %s", s.watcherAddr)
 
-	// Initialize repository service
-	s.repo, err = repo.OpenRepository()
-	if err != nil {
-		return nil, err
-	}
-
+	s.txn = common.NewTxnState()
 	s.factory = message.NewConcreteMsgFactory()
 	// TODO: Using DefaultServerAction, but need a callback on LogAndCommit
-	s.handler = action.NewDefaultServerAction(s.repo, s)
+	s.handler = action.NewDefaultServerAction(s.repo, s, s.txn)
 	s.killch = make(chan bool, 1) // make it buffered to unblock sender
 	s.status = protocol.ELECTING
 
@@ -112,13 +111,16 @@ func (s *watcher) Close() {
 
 	if !s.isClosed {
 		s.isClosed = true
-		s.repo.Close()
 		s.killch <- true
 	}
 }
 
 func (s *watcher) Get(key string) ([]byte, error) {
 	return s.handler.Get(key)
+}
+
+func (s *watcher) Set(key string, content []byte) error {
+	return s.handler.Set(key, content)
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -210,14 +212,14 @@ func (o *observeHandle) signal(done bool) {
 }
 
 /////////////////////////////////////////////////////////////////////////////
-// Private Function : Metadata Notification 
+// Private Function : Metadata Notification
 /////////////////////////////////////////////////////////////////////////////
 
 func newNotificationHandle(key string, evtType EventType, content []byte) *notificationHandle {
 	handle := new(notificationHandle)
 	handle.key = key
 	handle.evtType = evtType
-	handle.content = content 
+	handle.content = content
 
 	return handle
 }
@@ -234,7 +236,8 @@ func getWatcherAddr() (string, error) {
 	}
 
 	if len(addrs) == 0 {
-		return "", fmt.Errorf("watcher.getWatcherAddr() : No network address is available")
+		return "", NewError(ERROR_WATCH_NO_ADDR_AVAIL,	NORMAL, WATCHER, nil, 
+			fmt.Sprintf("watcher.getWatcherAddr() : No network address is available"))
 	}
 
 	for _, addr := range addrs {
@@ -250,7 +253,8 @@ func getWatcherAddr() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("watcher.getWatcherAddr() : Fail to find an IP address")
+	return "", NewError(ERROR_WATCH_NO_ADDR_AVAIL,	NORMAL, WATCHER, nil, 
+		fmt.Sprintf("watcher.getWatcherAddr() : Fail to find an IP address"))
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -273,13 +277,16 @@ func (s *watcher) UpdateStateOnNewProposal(proposal protocol.ProposalMsg) {
 		// TODO : raise error if the condition does not get satisfied?
 	}
 
-	// register the event for notification	
+	// register the event for notification
 	var evtType EventType
 	switch opCode {
-		case common.OPCODE_ADD : evtType = CREATE_INDEX
-		case common.OPCODE_DELETE : evtType = DELETE_INDEX
+	case common.OPCODE_ADD:
+		evtType = CREATE_INDEX
+	case common.OPCODE_DELETE:
+		evtType = DROP_INDEX
 	}
-	s.notifications[common.Txnid(proposal.GetTxnid())] = 
+	c.Debugf("Watcher.UpdateStateOnNewProposal(): register event for txid %d", proposal.GetTxnid())
+	s.notifications[common.Txnid(proposal.GetTxnid())] =
 		newNotificationHandle(proposal.GetKey(), evtType, proposal.GetContent())
 }
 
@@ -290,11 +297,14 @@ func (s *watcher) UpdateStateOnCommit(txnid common.Txnid, key string) {
 	handle, ok := s.observeProposed[txnid]
 	if ok && handle != nil {
 		handle.signal(true)
+		delete(s.observeProposed, txnid)
 	}
-	
+
 	notification, ok := s.notifications[txnid]
-	if ok && handle != nil {
+	if ok && notification != nil && s.mgr != nil {
+		c.Debugf("Watcher.UpdateStateOnCommit(): notify event for txid %d", txnid)
 		s.mgr.notify(notification.evtType, notification.content)
+		delete(s.notifications, txnid)
 	}
 }
 

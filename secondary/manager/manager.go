@@ -19,19 +19,12 @@ import (
 // Type Definition
 ///////////////////////////////////////////////////////
 
-type RequestType string
 type IndexManager struct {
-	repo        	*MetadataRepo
-	coordinator 	*Coordinator
-	reqHandler		*requestHandler
-	eventMgr		*eventManager
+	repo        *MetadataRepo
+	coordinator *Coordinator
+	reqHandler  *requestHandler
+	eventMgr    *eventManager
 }
-
-type EventType byte 
-const (
-	CREATE_INDEX EventType = itoa 
-	DROP_INDEX   EventType 
-)
 
 ///////////////////////////////////////////////////////
 // public function
@@ -40,22 +33,42 @@ const (
 //
 // Create a new IndexManager
 //
-func NewIndexManager(repoHost string,
-	leader string,
+func NewIndexManager(requestAddr string,
+	leaderAddr string,
 	config string) (mgr *IndexManager, err error) {
 
 	mgr = new(IndexManager)
-	mgr.repo, err = NewMetadataRepo(repoHost, leader, mgr)
+
+	// Initialize MetadataRepo.  This a blocking call until the
+	// the metadataRepo (including watcher) is operational (e.g.
+	// finish sync with remote metadata repo master).
+	mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, mgr)
 	if err != nil {
 		return nil, err
 	}
 
+	// Initialize Coordinator.  This is non-blocking.  The coordinator
+	// is operational only after it can syncrhonized with the majority
+	// of the indexers.   Any request made to the coordinator will be
+	// put in a channel for later processing (once leader election is done).
 	mgr.coordinator = NewCoordinator(mgr.repo)
 	go mgr.coordinator.Run(config)
-	
-	mgr.reqHandler = NewRequestHandler(mgr)
-	mgr.eventMgr = NewEventManager()
-	
+
+	// Initialize request handler.  This is non-blocking.  The index manager
+	// will not be able handle new request until request handler is done initialization.
+	mgr.reqHandler, err = NewRequestHandler(mgr)
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+
+	// Initialize the event manager.  This is blocking.
+	mgr.eventMgr, err = newEventManager()
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+
 	return mgr, nil
 }
 
@@ -63,10 +76,26 @@ func NewIndexManager(repoHost string,
 // Clean up the IndexManager
 //
 func (m *IndexManager) Close() {
-	m.repo.Close()
-	m.coordinator.Terminate()
-	m.eventMgr.Close()
+	if m.repo != nil {
+		m.repo.Close()
+	}
+
+	if m.coordinator != nil {
+		m.coordinator.Terminate()
+	}
+
+	if m.eventMgr != nil {
+		m.eventMgr.close()
+	}
+
+	if m.reqHandler != nil {
+		m.reqHandler.close()
+	}
 }
+
+///////////////////////////////////////////////////////
+// public function - Metadata Operation
+///////////////////////////////////////////////////////
 
 //
 // Get an index definiton by name
@@ -83,31 +112,38 @@ func (m *IndexManager) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 }
 
 //
+// Get Metadata Iterator for index definition
+//
+func (m *IndexManager) NewIndexDefnIterator() (*MetaIterator, error) {
+	return m.repo.NewIterator()
+}
+
+//
 // Listen to create Index Request
 //
-func (m *IndexManager) StartListenIndexCreate(id string) (<- chan interface{}, err) {
-	return m.evtManager.register(id, CREATE_INDEX)
+func (m *IndexManager) StartListenIndexCreate(id string) (<-chan interface{}, error) {
+	return m.eventMgr.register(id, CREATE_INDEX)
 }
 
 //
 // Stop Listen to create Index Request
 //
 func (m *IndexManager) StopListenIndexCreate(id string) {
-	m.evtManager.unregister(id, CREATE_INDEX)
+	m.eventMgr.unregister(id, CREATE_INDEX)
 }
 
 //
 // Listen to delete Index Request
 //
-func (m *IndexManager) StartListenIndexDelete(id string) (<- chan interface{}, err) {
-	return m.evtManager.register(id, DELETE_INDEX)
+func (m *IndexManager) StartListenIndexDelete(id string) (<-chan interface{}, error) {
+	return m.eventMgr.register(id, DROP_INDEX)
 }
 
 //
 // Stop Listen to delete Index Request
 //
-func (m *IndexManager) StopListenIndexDelete(id string) { 
-	m.evtManager.unregister(id, DELETE_INDEX)
+func (m *IndexManager) StopListenIndexDelete(id string) {
+	m.eventMgr.unregister(id, DROP_INDEX)
 }
 
 //
@@ -140,7 +176,7 @@ func (m *IndexManager) StopListenIndexDelete(id string) {
 //
 func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 
-	content, err := marshallIndexDefn(defn)
+	content, err := MarshallIndexDefn(defn)
 	if err != nil {
 		return err
 	}
@@ -149,7 +185,8 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 	id := uint64(time.Now().UnixNano())
 	if !m.coordinator.NewRequest(id, uint32(OPCODE_ADD_IDX_DEFN), defn.Name, content) {
 		// TODO: double check if it exists in the dictionary
-		return fmt.Errorf("Fail to complete processing create index statement for index '%s'", defn.Name)
+		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, INDEX_MANAGER, nil, 
+			fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
 	}
 
 	return nil
@@ -161,19 +198,20 @@ func (m *IndexManager) HandleDeleteIndexDDL(name string) error {
 	id := uint64(time.Now().UnixNano())
 	if !m.coordinator.NewRequest(id, uint32(OPCODE_DEL_IDX_DEFN), name, nil) {
 		// TODO: double check if it exists in the dictionary
-		return fmt.Errorf("Fail to complete processing delete index statement for index '%s'", name)
+		return NewError(ERROR_MGR_DDL_DROP_IDX, NORMAL, INDEX_MANAGER, nil, 
+			fmt.Sprintf("Fail to complete processing delete index statement for index '%s'", name))
 	}
 
 	return nil
 }
 
 ///////////////////////////////////////////////////////
-// package local function 
+// package local function
 ///////////////////////////////////////////////////////
 
 //
-// Notify new event 
+// Notify new event
 //
-func (e *IndexManager) notify(evtType EventType, obj interface{}) {
-	m.evtManager.notify(evtType, obj)
+func (m *IndexManager) notify(evtType EventType, obj interface{}) {
+	m.eventMgr.notify(evtType, obj)
 }

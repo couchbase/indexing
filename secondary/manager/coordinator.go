@@ -1,4 +1,5 @@
 // Copyright (c) 2014 Couchbase, Inc.
+
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
 // except in compliance with the License. You may obtain a copy of the License at
 //   http://www.apache.org/licenses/LICENSE-2.0
@@ -11,10 +12,11 @@ package manager
 
 import (
 	"fmt"
+	co "github.com/couchbase/indexing/secondary/common"
 	common "github.com/couchbase/gometa/common"
 	message "github.com/couchbase/gometa/message"
 	protocol "github.com/couchbase/gometa/protocol"
-	"log"
+	r "github.com/couchbase/gometa/repository"
 	"sync"
 	"time"
 )
@@ -23,19 +25,24 @@ import (
 // Type Declaration
 /////////////////////////////////////////////////////////////////////////////
 
+const COORDINATOR_CONFIG_STORE = "IndexCoordinatorConfigStore"
+
 const (
 	OPCODE_ADD_IDX_DEFN common.OpCode = iota
 	OPCODE_DEL_IDX_DEFN
 )
 
 type Coordinator struct {
-	state    *CoordinatorState
-	repo     *MetadataRepo
-	env      *env
-	site     *protocol.ElectionSite
-	listener *common.PeerListener
-	factory  protocol.MsgFactory
-	skillch  chan bool
+	state      *CoordinatorState
+	repo       *MetadataRepo
+	env        *env
+	txn        *common.TxnState
+	config     *r.ServerConfig
+	configRepo *r.Repository
+	site       *protocol.ElectionSite
+	listener   *common.PeerListener
+	factory    protocol.MsgFactory
+	skillch    chan bool
 
 	mutex sync.Mutex
 	cond  *sync.Cond
@@ -54,9 +61,6 @@ type CoordinatorState struct {
 	observes  map[string]*observeHandle                // key : metadata key
 }
 
-// TODO: CurrentEpoch needs to be persisted. For testing now, use a transient variable.
-var gEpoch uint32 = common.BOOTSTRAP_CURRENT_EPOCH
-
 /////////////////////////////////////////////////////////////////////////////
 // Public API
 /////////////////////////////////////////////////////////////////////////////
@@ -66,6 +70,7 @@ func NewCoordinator(repo *MetadataRepo) *Coordinator {
 	coordinator.repo = repo
 	coordinator.ready = false
 	coordinator.cond = sync.NewCond(&coordinator.mutex)
+
 	return coordinator
 }
 
@@ -95,7 +100,7 @@ func (s *Coordinator) Terminate() {
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("panic in MetadataRepo.Close() : %s.  Ignored.\n", r)
+			co.Warnf("panic in MetadataRepo.Close() : %s.  Ignored.\n", r)
 		}
 	}()
 
@@ -110,6 +115,9 @@ func (s *Coordinator) Terminate() {
 
 	s.site.Close()
 	s.site = nil
+
+	s.configRepo.Close()
+	s.configRepo = nil
 
 	s.skillch <- true // kill leader/follower server
 }
@@ -159,13 +167,13 @@ func (s *Coordinator) NewRequest(id uint64, opCode uint32, key string, content [
 //
 func (c *Coordinator) runOnce(config string) int {
 
-	log.Printf("Coordinator.runOnce() : Start Running Coordinator")
+	co.Debugf("Coordinator.runOnce() : Start Running Coordinator")
 
 	pauseTime := 0
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("panic in Coordinator.runOnce() : %s\n", r)
+			co.Warnf("panic in Coordinator.runOnce() : %s\n", r)
 		}
 
 		common.SafeRun("Coordinator.cleanupState()",
@@ -187,7 +195,7 @@ func (c *Coordinator) runOnce(config string) int {
 		// will continue to run to responds to other peer election request
 		leader, err := c.runElection()
 		if err != nil {
-			log.Printf("Coordinator.runOnce() : Error Encountered During Election : %s", err.Error())
+			co.Warnf("Coordinator.runOnce() : Error Encountered During Election : %s", err.Error())
 			pauseTime = 100
 		} else {
 
@@ -196,12 +204,12 @@ func (c *Coordinator) runOnce(config string) int {
 				// runCoordinator() is done if there is an error	or being terminated explicitly (killch)
 				err := c.runProtocol(leader)
 				if err != nil {
-					log.Printf("Coordinator.RunOnce() : Error Encountered From Coordinator : %s", err.Error())
+					co.Warnf("Coordinator.RunOnce() : Error Encountered From Coordinator : %s", err.Error())
 				}
 			}
 		}
 	} else {
-		log.Printf("Coordinator.RunOnce(): Coordinator has been terminated explicitly. Terminate.")
+		co.Infof("Coordinator.RunOnce(): Coordinator has been terminated explicitly. Terminate.")
 	}
 
 	return pauseTime
@@ -230,6 +238,22 @@ func (s *Coordinator) bootstrap(config string) (err error) {
 	s.skillch = make(chan bool, 1) // make it buffered to unblock sender
 	s.site = nil
 
+	// Create and initialize new txn state.
+	s.txn = common.NewTxnState()
+
+	// Initialize the state to enable voting
+	s.configRepo, err = r.OpenRepositoryWithName(COORDINATOR_CONFIG_STORE)
+	if err != nil {
+		return err
+	}
+
+	s.config = r.NewServerConfig(s.configRepo)
+	lastLoggedTxid, err := s.config.GetLastLoggedTxnId()
+	if err != nil {
+		return err
+	}
+	s.txn.InitCurrentTxnid(common.Txnid(lastLoggedTxid))
+
 	// Need to start the peer listener before election. A follower may
 	// finish its election before a leader finishes its election. Therefore,
 	// a follower node can request a connection to the leader node before that
@@ -238,7 +262,8 @@ func (s *Coordinator) bootstrap(config string) (err error) {
 	// connection at a later time (when it is ready to be a leader).
 	s.listener, err = common.StartPeerListener(s.getHostTCPAddr())
 	if err != nil {
-		return fmt.Errorf("Index Coordinator : Fail to start PeerListener: %s", err)
+		return  NewError(ERROR_COOR_LISTENER_FAIL, NORMAL, COORDINATOR, err, 
+			fmt.Sprintf("Index Coordinator : Fail to start PeerListener"))
 	}
 
 	// tell boostrap is ready
@@ -358,10 +383,10 @@ func (s *Coordinator) runElection() (leader string, err error) {
 	peers := s.getPeerUDPAddr()
 
 	// Create an election site to start leader election.
-	log.Printf("Coordinator.runElection(): Local Coordinator %s start election", host)
-	log.Printf("Coordinator.runElection(): Peer in election")
+	co.Debugf("Coordinator.runElection(): Local Coordinator %s start election", host)
+	co.Debugf("Coordinator.runElection(): Peer in election")
 	for _, peer := range peers {
-		log.Printf("	peer : %s", peer)
+		co.Debugf("	peer : %s", peer)
 	}
 
 	s.site, err = protocol.CreateElectionSite(host, peers, s.factory, s, false)
@@ -373,7 +398,8 @@ func (s *Coordinator) runElection() (leader string, err error) {
 	resultCh := s.site.StartElection()
 	leader, ok := <-resultCh
 	if !ok {
-		return "", fmt.Errorf("Index Coordinator Election Fails")
+		return "", NewError(ERROR_COOR_ELECTION_FAIL, NORMAL, COORDINATOR, nil, 
+					fmt.Sprintf("Index Coordinator Election Fails"))
 	}
 
 	return leader, nil
@@ -393,15 +419,16 @@ func (s *Coordinator) runProtocol(leader string) (err error) {
 	// If this host is the leader, then start the leader server.
 	// Otherwise, start the followerCoordinator.
 	if leader == host {
-		log.Printf("Coordinator.runServer() : Local Coordinator %s is elected as leader. Leading ...", leader)
+		co.Debugf("Coordinator.runServer() : Local Coordinator %s is elected as leader. Leading ...", leader)
 		s.state.setStatus(protocol.LEADING)
 		err = protocol.RunLeaderServer(s.getHostTCPAddr(), s.listener, s, s, s.factory, s.skillch)
 	} else {
-		log.Printf("Coordinator.runServer() : Remote Coordinator %s is elected as leader. Following ...", leader)
+		co.Debugf("Coordinator.runServer() : Remote Coordinator %s is elected as leader. Following ...", leader)
 		s.state.setStatus(protocol.FOLLOWING)
 		leaderAddr := s.findMatchingPeerTCPAddr(leader)
 		if len(leaderAddr) == 0 {
-			return fmt.Errorf("Index Coordinator cannot find matching TCP addr for leader " + leader)
+			return NewError(ERROR_COOR_ELECTION_FAIL, NORMAL, COORDINATOR, nil, 
+					fmt.Sprintf("Index Coordinator cannot find matching TCP addr for leader " + leader))
 		}
 		err = protocol.RunFollowerServer(s.getHostTCPAddr(), leaderAddr, s, s, s.factory, s.skillch)
 	}
@@ -454,11 +481,13 @@ func (c *Coordinator) GetEnsembleSize() uint64 {
 }
 
 func (c *Coordinator) GetLastLoggedTxid() (common.Txnid, error) {
-	return common.BOOTSTRAP_LAST_LOGGED_TXID, nil
+	val, err := c.config.GetLastLoggedTxnId()
+	return common.Txnid(val), err
 }
 
 func (c *Coordinator) GetLastCommittedTxid() (common.Txnid, error) {
-	return common.BOOTSTRAP_LAST_COMMITTED_TXID, nil
+	val, err := c.config.GetLastCommittedTxnId()
+	return common.Txnid(val), err
 }
 
 func (c *Coordinator) GetStatus() protocol.PeerStatus {
@@ -466,32 +495,56 @@ func (c *Coordinator) GetStatus() protocol.PeerStatus {
 }
 
 func (c *Coordinator) GetCurrentEpoch() (uint32, error) {
-	// TODO
-	return gEpoch, nil
+	return c.config.GetCurrentEpoch()
 }
 
 func (c *Coordinator) GetAcceptedEpoch() (uint32, error) {
-	return c.GetCurrentEpoch()
+	return c.config.GetAcceptedEpoch()
 }
 
 func (c *Coordinator) GetCommitedEntries(txid1, txid2 common.Txnid) (<-chan protocol.LogEntryMsg, <-chan error, chan<- bool, error) {
-	// TODO
+	// The coordinator does not use the commit log.  So nothing to stream.
 	return nil, nil, nil, nil
 }
 
 func (c *Coordinator) LogAndCommit(txid common.Txnid, op uint32, key string, content []byte, toCommit bool) error {
-	// Nothing to do : Coorindator does not have local repository
+	// The coordinator does not use the commit log. So nothing to log.
 	return nil
 }
 
-func (c *Coordinator) NotifyNewAcceptedEpoch(uint32) error {
-	// Nothing to do
+func (c *Coordinator) NotifyNewAcceptedEpoch(epoch uint32) error {
+
+	oldEpoch, _ := c.GetAcceptedEpoch()
+
+	// update only if the new epoch is larger
+	if oldEpoch < epoch {
+		err := c.config.SetAcceptedEpoch(epoch)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (c *Coordinator) NotifyNewCurrentEpoch(epoch uint32) error {
-	// TODO
-	gEpoch = epoch
+
+	oldEpoch, _ := c.GetCurrentEpoch()
+
+	// update only if the new epoch is larger
+	if oldEpoch < epoch {
+		err := c.config.SetCurrentEpoch(epoch)
+		if err != nil {
+			return err
+		}
+
+		// update the election site with the new epoch, such that
+		// for new incoming vote, the server can reply with the
+		// new and correct epoch
+		c.site.UpdateWinningEpoch(epoch)
+
+		// any new tnxid from now on will use the new epoch
+		c.txn.SetEpoch(epoch)
+	}
 
 	return nil
 }
@@ -507,10 +560,10 @@ func (c *Coordinator) LogProposal(proposal protocol.ProposalMsg) error {
 		switch common.OpCode(proposal.GetOpCode()) {
 		case OPCODE_ADD_IDX_DEFN:
 			success := c.createIndex(proposal.GetKey(), proposal.GetContent())
-			log.Printf("success", success)
+			co.Debugf("Coordinator.LogProposal(): (createIndex) success = %s", success)
 		case OPCODE_DEL_IDX_DEFN:
 			success := c.deleteIndex(proposal.GetKey())
-			log.Printf("success", success)
+			co.Debugf("Coordinator.LogProposal(): (deleteIndex) success = %s", success)
 		}
 	} /* else if c.GetStatus() == protocol.FOLLOWING {
 		switch common.OpCode(proposal.GetOpCode()) {
@@ -533,6 +586,10 @@ func (c *Coordinator) Commit(txid common.Txnid) error {
 
 func (c *Coordinator) GetQuorumVerifier() protocol.QuorumVerifier {
 	return c
+}
+
+func (c *Coordinator) GetNextTxnId() common.Txnid {
+	return c.txn.GetNextTxnId()
 }
 
 //  TODO : Quorum should be based on active participants
@@ -567,6 +624,9 @@ func (c *Coordinator) updateRequestOnNewProposal(proposal protocol.ProposalMsg) 
 	reqId := proposal.GetReqId()
 	txnid := proposal.GetTxnid()
 
+	co.Debugf("Coorindator.updateRequestOnNewProposal(): recieve proposal. Txnid %d, follower id %s, coorindator fid %s",
+		txnid, fid, c.GetFollowerId())
+
 	// If this host is the one that sends the request to the leader
 	if fid == c.GetFollowerId() {
 		c.state.mutex.Lock()
@@ -589,6 +649,9 @@ func (c *Coordinator) updateRequestOnCommit(txnid common.Txnid) {
 
 	c.state.mutex.Lock()
 	defer c.state.mutex.Unlock()
+
+	co.Debugf("Coorindator.updateRequestOnCommit(): recieve proposal. Txnid %d, coorindator fid %s",
+		txnid, c.GetFollowerId())
 
 	// If I can find the proposal based on the txnid in this host, this means
 	// that this host originates the request.   Get the request handle and
@@ -636,12 +699,13 @@ func (c *Coordinator) getPeerUDPAddr() []string {
 //
 func (c *Coordinator) createIndex(key string, content []byte) bool {
 
-	defn, err := unmarshallIndexDefn(content)
+	defn, err := UnmarshallIndexDefn(content)
 	if err != nil {
 		return false
 	}
 
 	if err = c.repo.CreateIndex(defn); err != nil {
+		co.Debugf("Coordinator.createIndex() : createIndex fails. Reason = %s", err.Error())
 		return false
 	}
 
@@ -657,6 +721,7 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 func (c *Coordinator) deleteIndex(key string) bool {
 
 	if err := c.repo.DropIndexByName(key); err != nil {
+		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}
 	return true

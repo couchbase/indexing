@@ -16,12 +16,19 @@ import (
 	"time"
 )
 
+// For this test, use index definition from 100 - 110
+
 func TestMetadataRepoForIndexDefn(t *testing.T) {
+
+	common.LogEnable()
+	common.SetLogLevel(common.LogLevelDebug)
+	
+	common.Infof("Start TestMetadataRepo *********************************************************")
 
 	var addr = "localhost:9885"
 	var leader = "localhost:9884"
 
-	repo, err := manager.NewMetadataRepo(addr, leader)
+	repo, err := manager.NewMetadataRepo(addr, leader, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,6 +36,8 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 	// clean up
 	repo.DropIndexByName("metadata_repo_test")
 	repo.DropIndexByName("metadata_repo_test_2")
+	repo.DropIndexByName("metadata_repo_test_3")
+	repo.DropIndexByName("metadata_repo_test_4")
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
@@ -101,7 +110,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 	if idxDefn == nil {
 		t.Fatal("Cannot find index definition")
 	}
-
+	
 	// Delete the index definition by Id
 	if err := repo.DropIndexById(common.IndexDefnId(101)); err != nil {
 		t.Fatal(err)
@@ -116,8 +125,74 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 		t.Fatal("Find deleted index definition")
 	}
 
+	// Add a new index definition : 102
+	idxDefn = &common.IndexDefn{
+		DefnId:          common.IndexDefnId(102),
+		Name:            "metadata_repo_test_3",
+		Using:           common.ForestDB,
+		Bucket:          "Default",
+		IsPrimary:       false,
+		OnExprList:      []string{"Testing"},
+		ExprType:        common.N1QL,
+		PartitionScheme: common.HASH,
+		PartitionKey:    "Testing"}
+
+	if err = repo.CreateIndex(idxDefn); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a new index definition : 103
+	idxDefn = &common.IndexDefn{
+		DefnId:          common.IndexDefnId(103),
+		Name:            "metadata_repo_test_4",
+		Using:           common.ForestDB,
+		Bucket:          "Default",
+		IsPrimary:       false,
+		OnExprList:      []string{"Testing"},
+		ExprType:        common.N1QL,
+		PartitionScheme: common.HASH,
+		PartitionKey:    "Testing"}
+
+	if err = repo.CreateIndex(idxDefn); err != nil {
+		t.Fatal(err)
+	}
+	
+	/*
+
+	// Test the iterator
+	iter, err := repo.NewIterator()
+	if err != nil {
+		t.Fatal("Fail to get the iterator")
+	}
+	
+	found := false
+	for !found {
+		key, _, err := iter.Next()
+		if err != nil {
+			common.Infof("error during iteration %s", err.Error())
+			break
+		}
+		
+		common.Infof("key during iteration %s", key)	
+		if key == "metadata_repo_test_3" {
+			found = true
+		}
+	}
+	
+	if !found {
+		t.Fatal("Cannot find index defn 'metadata_repo_test_3' in iterator")
+	}
+
+	*/
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+	
+	common.Infof("Stop TestMetadataRepo. Tearing down *********************************************************")
+
 	// clean up
 	repo.DropIndexByName("metadata_repo_test")
 	repo.DropIndexByName("metadata_repo_test_2")
+	repo.DropIndexByName("metadata_repo_test_3")
+	repo.DropIndexByName("metadata_repo_test_4")
 
+	time.Sleep(time.Duration(1000) * time.Millisecond)
 }
