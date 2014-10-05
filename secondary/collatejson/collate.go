@@ -35,6 +35,8 @@ import (
 // error codes
 var ErrorNumberType = errors.New("collatejson.numberType")
 
+// Length is an internal type used for prefixing length
+// of arrays and properties.
 type Length int64
 
 // While encoding JSON data-element, both basic and composite, encoded string

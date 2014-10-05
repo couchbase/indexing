@@ -22,8 +22,7 @@ import (
 	"path"
 	"runtime"
 
-	"github.com/couchbaselabs/dparval"
-	tuqcollate "github.com/couchbaselabs/tuqtng/ast"
+	"github.com/couchbaselabs/query/value"
 	"github.com/prataprc/collatejson"
 	"github.com/prataprc/monster"
 )
@@ -306,10 +305,10 @@ func (jsons *jsonList) Len() int {
 
 func (jsons *jsonList) Less(i, j int) bool {
 	key1, key2 := jsons.vals[i], jsons.vals[j]
-	value1 := dparval.NewValueFromBytes([]byte(key1)).Value()
-	value2 := dparval.NewValueFromBytes([]byte(key2)).Value()
+	value1 := value.NewValueFromBytes([]byte(key1))
+	value2 := value.NewValueFromBytes([]byte(key2))
 	jsons.compares++
-	return tuqcollate.CollateJSON(value1, value2) < 0
+	return value1.Collate(value2) < 0
 }
 
 func (jsons *jsonList) Swap(i, j int) {

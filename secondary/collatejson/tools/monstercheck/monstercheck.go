@@ -21,8 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/couchbaselabs/dparval"
-	tuqcollate "github.com/couchbaselabs/tuqtng/ast"
 	"github.com/prataprc/collatejson"
 	"github.com/prataprc/monster"
 )
@@ -134,11 +132,7 @@ func (codes codeList) Len() int {
 
 func (codes codeList) Less(i, j int) bool {
 	key1, key2 := codes.jsons[i], codes.jsons[j]
-	if codes.kind == "tuq" {
-		v1 := dparval.NewValueFromBytes([]byte(key1)).Value()
-		v2 := dparval.NewValueFromBytes([]byte(key2)).Value()
-		return tuqcollate.CollateJSON(v1, v2) < 0
-	} else if codes.kind == "binary" {
+	if codes.kind == "binary" {
 		v1, err := codec.Encode([]byte(key1), make([]byte, 0, len(key1)*3))
 		if err != nil {
 			log.Fatal(err)
@@ -148,10 +142,9 @@ func (codes codeList) Less(i, j int) bool {
 			log.Fatal(err)
 		}
 		return bytes.Compare(v1, v2) < 0
-	} else {
-		panic(fmt.Errorf("unknown kind"))
+
 	}
-	return false
+	panic(fmt.Errorf("unknown kind"))
 }
 
 func (codes codeList) Swap(i, j int) {

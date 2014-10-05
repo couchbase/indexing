@@ -267,10 +267,10 @@ func EncodeFloat(text, code []byte) []byte {
 	return code
 }
 
-// DecodeFloat complements EncodeFloat, it returns `exponent` and `mantissa`
-// in text format.
 var flipmap = map[byte]byte{PLUS: MINUS, MINUS: PLUS}
 
+// DecodeFloat complements EncodeFloat, it returns `exponent` and `mantissa`
+// in text format.
 func DecodeFloat(code, text []byte) []byte {
 	if len(code) == 0 { // empty input
 		return text

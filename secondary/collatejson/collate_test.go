@@ -70,7 +70,8 @@ func init() {
 		log.Fatal(err)
 	}
 
-	filenames := make([]string, 0)
+	var filenames []string
+
 	for _, f := range fs {
 		filenames = append(filenames, f.Name())
 	}
@@ -260,7 +261,9 @@ func readLines(filename string, t *testing.T) [][]byte {
 	if err != nil {
 		t.Error(err)
 	}
-	lines := make([][]byte, 0)
+
+	var lines [][]byte
+
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		if len(line) == 0 {
 			continue

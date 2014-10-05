@@ -14,6 +14,7 @@ package collatejson
 
 import "bytes"
 
+// ByteSlices to implement Sort interface.
 type ByteSlices [][]byte
 
 func (b ByteSlices) Len() int {
