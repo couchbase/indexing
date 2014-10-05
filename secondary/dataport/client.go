@@ -28,18 +28,17 @@
 //             Close() --*        *------------------------*---*---*
 //                                  *common.VbKeyVersions
 //                                  *common.VbConnectionMap
-//
+
 package dataport
 
-import (
-	"errors"
-	"fmt"
-	"net"
-	"time"
+import "errors"
+import "fmt"
+import "net"
+import "time"
+import "runtime/debug"
 
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/transport"
-)
+import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/transport"
 
 // ErrorClientEmptyKeys
 var ErrorClientEmptyKeys = errors.New("dataport.clientEmptyKeys")
@@ -135,7 +134,8 @@ const (
 	clientCmdClose
 )
 
-// SendVbmap vbmap for this connection to the other end, synchronous call.
+// SendVbmap vbmap for this connection to the other end,
+// synchronous call.
 func (c *Client) SendVbmap(vbmap *common.VbConnectionMap) error {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{clientCmdSendVbmap, vbmap, respch}
@@ -143,15 +143,17 @@ func (c *Client) SendVbmap(vbmap *common.VbConnectionMap) error {
 	return common.OpError(err, resp, 0)
 }
 
-// SendKeyVersions for one or more vbuckets to the other end, asynchronous call.
-func (c *Client) SendKeyVersions(vbs []*common.VbKeyVersions) error {
+// SendKeyVersions for one or more vbuckets to the other end,
+// asynchronous call.
+func (c *Client) SendKeyVersions(vbs []*common.VbKeyVersions, block bool) error {
 	if vbs == nil || len(vbs) == 0 {
 		return ErrorClientEmptyKeys
 	}
-	var respch chan []interface{}
 	cmd := []interface{}{clientCmdSendKeyVersions, vbs}
-	_, err := common.FailsafeOp(c.reqch, respch, cmd, c.finch)
-	return err
+	if block {
+		return common.FailsafeOpAsync(c.reqch, cmd, c.finch)
+	}
+	return common.FailsafeOpNoblock(c.reqch, cmd, c.finch)
 }
 
 // Getcontext from dataport client, synchronous call.
@@ -165,19 +167,19 @@ func (c *Client) Getcontext() ([]interface{}, error) {
 	return resp, nil
 }
 
-// Close client and all its active connection with downstream, asynchronous call.
+// Close client and all its active connection with downstream.
+// asynchronous call.
 func (c *Client) Close() error {
-	var respch chan []interface{}
 	cmd := []interface{}{clientCmdClose}
-	_, err := common.FailsafeOp(c.reqch, respch, cmd, c.finch)
-	return err
+	return common.FailsafeOpAsync(c.reqch, cmd, c.finch)
 }
 
 // gen-server
 func (c *Client) genServer(reqch chan []interface{}, quitch chan []string) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			common.Errorf("%v has paniced: %v\n", c.logPrefix, r)
+			common.Errorf("%v gen-server crashed: %v\n", c.logPrefix, r)
+			common.StackTrace(string(debug.Stack()))
 		}
 		c.doClose()
 	}()
@@ -236,7 +238,7 @@ func (c *Client) sendVbmap(
 	// connection channels.
 	idxMap := make(map[int][]uint16)
 	for i, vbno := range vbmap.Vbuckets {
-		uuid := common.ID(vbmap.Bucket, vbno)
+		uuid := common.StreamID(vbmap.Bucket, vbno)
 		vbChans[uuid], idx = c.addVbucket(uuid)
 		vbmaps[idx].Vbuckets = append(vbmaps[idx].Vbuckets, vbno)
 		vbmaps[idx].Vbuuids = append(vbmaps[idx].Vbuuids, vbmap.Vbuuids[i])
@@ -305,7 +307,8 @@ func (c *Client) doClose() (err error) {
 	recoverClose := func(payloadch chan interface{}, conn net.Conn) {
 		defer func() {
 			if r := recover(); r != nil {
-				common.Errorf("%v panic closing %v\n", c.logPrefix, r)
+				common.Errorf("%v doClose() crashed: %v\n", c.logPrefix, r)
+				common.StackTrace(string(debug.Stack()))
 				err = common.ErrorClosed
 			}
 		}()
@@ -331,7 +334,9 @@ func (c *Client) runTransmitter(
 	laddr := conn.LocalAddr().String()
 	defer func() {
 		if r := recover(); r != nil {
-			common.Errorf("%v fatal %v panic\n", c.logPrefix, laddr)
+			common.Errorf(
+				"%v runTransmitter(%q) crashed: %v\n", c.logPrefix, laddr, r)
+			common.StackTrace(string(debug.Stack()))
 		}
 		quitch <- []string{"quit", laddr}
 	}()

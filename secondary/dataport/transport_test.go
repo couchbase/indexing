@@ -1,14 +1,12 @@
 package dataport
 
-import (
-	"fmt"
-	"net"
-	"testing"
+import "fmt"
+import "net"
+import "testing"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbase/indexing/secondary/transport"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
+import "github.com/couchbase/indexing/secondary/transport"
 
 func TestPktKeyVersions(t *testing.T) {
 	seqno, nVbs, nMuts, nIndexes := 1, 20, 5, 5

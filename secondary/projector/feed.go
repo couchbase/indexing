@@ -1,695 +1,812 @@
-// Feed is the central program around which adminport, bucket_feed, kvfeed,
-// engines and endpoint algorithms are organized.
-
 package projector
 
-import (
-	"errors"
-	"fmt"
+import "errors"
+import "fmt"
+import "time"
+import "encoding/json"
+import "runtime/debug"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-)
+import mcd "github.com/couchbase/gomemcached"
+import mc "github.com/couchbase/gomemcached/client"
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
+import "github.com/couchbaselabs/go-couchbase"
+import "github.com/couchbaselabs/goprotobuf/proto"
 
 // error codes
 
 // ErrorInvalidBucket
 var ErrorInvalidBucket = errors.New("feed.invalidBucket")
 
-// ErrorRequestNotSubscriber
-var ErrorRequestNotSubscriber = errors.New("feed.requestNotSubscriber")
+// ErrorInvalidVbucketBranch
+var ErrorInvalidVbucketBranch = errors.New("feed.invalidVbucketBranch")
 
-// ErrorStartingEndpoint
-var ErrorStartingEndpoint = errors.New("feed.startingEndpoint")
+// ErrorInconsistentFeed
+var ErrorInconsistentFeed = errors.New("feed.inconsistentFeed")
+
+// ErrorResponseTimeout
+var ErrorResponseTimeout = errors.New("feed.responseTimeout")
 
 // Feed is mutation stream - for maintenance, initial-load, catchup etc...
 type Feed struct {
-	projector *Projector // immutable
-	topic     string     // immutable
-	// manage upstream
-	bfeeds map[string]*BucketFeed
-	// manage downstream
-	endpoints map[string]*Endpoint
-	engines   map[uint64]*Engine
-	// timestamp feedback
-	failoverTimestamps map[string]*protobuf.TsVbuuid // indexed by bucket name
-	kvTimestamps       map[string]*protobuf.TsVbuuid // indexed by bucket name
-	// gen-server
-	reqch chan []interface{}
-	finch chan bool
+	cluster string   // immutable
+	topic   string   // immutable
+	kvaddrs []string // immutable
+
+	buckets map[string]*couchbase.Bucket // cache of buckets
+	// upstream
+	reqTss  map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
+	rollTss map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
+	feeders map[string]BucketFeeder       // bucket -> BucketFeeder{}
+	// downstream
+	kvdata       map[string]map[string]*KVData // bucket -> kvaddr -> kvdata
+	epFactory    c.RouterEndpointFactory
+	endpSettings map[string]interface{}
+	engines      map[string]map[uint64]*Engine // bucket -> uuid -> engine
+	endpoints    map[string]c.RouterEndpoint
+	// genServer channel
+	reqch  chan []interface{}
+	backch chan []interface{}
+	finch  chan bool
 	// misc.
 	logPrefix string
-	stats     c.Statistics
 }
 
-// NewFeed creates a new instance of mutation stream for specified topic. Spawns
-// a routine for gen-server
-//
-// if error, Feed is not created.
-// - error returned by couchbase client
-func NewFeed(p *Projector, topic string, request RequestReader) (*Feed, error) {
-	var feed *Feed
+// NewFeed creates a new topic feed.
+func NewFeed(topic string, settings map[string]interface{}) *Feed {
+	cluster, _ := settings["cluster"].(string)     // kv-cluster address to connect
+	localAddr, _ := settings["localAddr"].(string) // localAddr for this feed
+	kvaddrs, _ := settings["kvaddrs"].([]string)   // list of kvnodes to connect
+	epFactory, _ := settings["endpointFactory"].(c.RouterEndpointFactory)
 
-	pools := request.GetPools()
-	buckets := request.GetBuckets()
+	feed := &Feed{
+		cluster: cluster,
+		topic:   topic,
+		kvaddrs: kvaddrs,
 
-	feed = &Feed{
-		projector:          p,
-		topic:              topic,
-		bfeeds:             make(map[string]*BucketFeed),
-		failoverTimestamps: make(map[string]*protobuf.TsVbuuid),
-		kvTimestamps:       make(map[string]*protobuf.TsVbuuid),
-		endpoints:          make(map[string]*Endpoint),
-		engines:            make(map[uint64]*Engine),
-		reqch:              make(chan []interface{}, c.GenserverChannelSize),
-		finch:              make(chan bool),
+		buckets: make(map[string]*couchbase.Bucket),
+		// upstream
+		reqTss:  make(map[string]*protobuf.TsVbuuid),
+		rollTss: make(map[string]*protobuf.TsVbuuid),
+		feeders: make(map[string]BucketFeeder),
+		// downstream
+		kvdata:    make(map[string]map[string]*KVData),
+		epFactory: epFactory,
+		engines:   make(map[string]map[uint64]*Engine),
+		endpoints: make(map[string]c.RouterEndpoint),
+		// genServer channel
+		reqch:  make(chan []interface{}, 10000), // TODO: no magic
+		backch: make(chan []interface{}, 10000), // TODO: no magic
+		finch:  make(chan bool),
 	}
-	feed.logPrefix = fmt.Sprintf("[%v]", feed.repr())
-	feed.stats = feed.newStats()
-	if err := feed.spawnBucketFeeds(pools, buckets); err != nil {
-		feed.doClose()
-		return nil, err
-	}
-
-	go feed.genServer(feed.reqch)
-	c.Infof("%v activated ...\n", feed.logPrefix)
-	return feed, nil
+	feed.logPrefix = fmt.Sprintf("[%v->%v]", localAddr, topic)
+	go feed.genServer()
+	c.Infof("%v started ...\n", feed.logPrefix)
+	return feed
 }
 
-func (feed *Feed) getProjector() *Projector {
-	return feed.projector
-}
-
-func (feed *Feed) repr() string {
-	return fmt.Sprintf("%v:%v", feed.projector.repr(), feed.topic)
-}
-
-func (feed *Feed) spawnBucketFeeds(pools, buckets []string) error {
-	if len(pools) != len(buckets) {
-		c.Errorf("%v pools and buckets mistmatch !", feed.logPrefix)
-	}
-
-	kvaddrs := feed.projector.getKVNodes()
-
-	// fresh start of a mutation stream.
-	for i, bucket := range buckets {
-		// bucket-feed
-		bfeed, err := NewBucketFeed(feed, kvaddrs, pools[i], bucket)
-		if err != nil {
-			return err
-		}
-		// initialse empty Timestamps objects for return values.
-		feed.failoverTimestamps[bucket] = protobuf.NewTsVbuuid(bucket, c.MaxVbuckets)
-		feed.kvTimestamps[bucket] = protobuf.NewTsVbuuid(bucket, c.MaxVbuckets)
-		feed.bfeeds[bucket] = bfeed
-	}
-	return nil
-}
-
-// gen-server API commands
 const (
-	fCmdRequestFeed byte = iota + 1
-	fCmdUpdateFeed
-	fCmdAddEngines
-	fCmdUpdateEngines
-	fCmdDeleteEngines
+	fCmdStart byte = iota + 1
+	fCmdRestartVbuckets
+	fCmdShutdownVbuckets
+	fCmdAddBuckets
+	fCmdDelBuckets
+	fCmdAddInstances
+	fCmdDelInstances
 	fCmdRepairEndpoints
+	fCmdShutdown
 	fCmdGetStatistics
-	fCmdCloseFeed
 )
 
-// RequestFeed to start a new mutation stream, synchronous call.
-//
-// if error is returned then upstream instances of BucketFeed and KVFeed are
-// shutdown and application must retry the request or fall-back.
-// - ErrorInvalidRequest if request is malformed.
-// - error returned by couchbase client.
-// - error if KVFeed is already closed.
-func (feed *Feed) RequestFeed(request RequestReader) error {
-	if request == nil {
-		return ErrorArgument
-	} else if _, ok := request.(Subscriber); ok == false {
-		return ErrorRequestNotSubscriber
-	}
+// MutationTopic will start the feed.
+// Synchronous call.
+func (feed *Feed) MutationTopic(
+	req *protobuf.MutationTopicRequest) (*protobuf.TopicResponse, error) {
 
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdRequestFeed, request, respch}
+	cmd := []interface{}{fCmdStart, req, respch}
+	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return resp[0].(*protobuf.TopicResponse), c.OpError(err, resp, 1)
+}
+
+// RestartVbuckets will restart upstream vbuckets for specified buckets.
+// Synchronous call.
+func (feed *Feed) RestartVbuckets(
+	req *protobuf.RestartVbucketsRequest) (*protobuf.TopicResponse, error) {
+
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdRestartVbuckets, req, respch}
+	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return resp[0].(*protobuf.TopicResponse), c.OpError(err, resp, 1)
+}
+
+// ShutdownVbuckets will shutdown streams for
+// specified buckets.
+// Synchronous call.
+func (feed *Feed) ShutdownVbuckets(req *protobuf.ShutdownVbucketsRequest) error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdShutdownVbuckets, req, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
 
-// UpdateFeed will start / restart / shutdown upstream vbuckets and update
-// downstream engines and endpoints, synchronous call.
-//
-// returns failover-timetamp and kv-timestamp (restart seqno. after honoring
-// rollback)
-// - ErrorInvalidRequest if request is malformed.
-// - error returned by couchbase client.
-// - error if Feed is already closed.
-func (feed *Feed) UpdateFeed(request RequestReader) error {
-	if request == nil {
-		return ErrorArgument
-	} else if _, ok := request.(Subscriber); ok == false {
-		return ErrorRequestNotSubscriber
-	}
+// AddBuckets will remove buckets and all its upstream
+// and downstream elements, except endpoints.
+// Synchronous call.
+func (feed *Feed) AddBuckets(
+	req *protobuf.AddBucketsRequest) (*protobuf.TopicResponse, error) {
+
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdUpdateFeed, request, respch}
+	cmd := []interface{}{fCmdAddBuckets, req, respch}
+	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return resp[0].(*protobuf.TopicResponse), c.OpError(err, resp, 1)
+}
+
+// DelBuckets will remove buckets and all its upstream
+// and downstream elements, except endpoints.
+// Synchronous call.
+func (feed *Feed) DelBuckets(req *protobuf.DelBucketsRequest) error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdDelBuckets, req, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
 
-// AddEngines will add new engines for this Feed, synchronous call.
-//
-// - error if Feed is already closed.
-func (feed *Feed) AddEngines(request Subscriber) error {
-	if request == nil {
-		return ErrorArgument
-	}
+// AddInstances will restart specified endpoint-address if
+// it is not active already.
+// Synchronous call.
+func (feed *Feed) AddInstances(req *protobuf.AddInstancesRequest) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdAddEngines, request, respch}
+	cmd := []interface{}{fCmdAddInstances, req, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
 
-// UpdateEngines will update active engines for this Feed. This happens when
-// routing algorithm is affected or topology changes for one or more entities,
-// synchronous call.
-//
-// - error if Feed is already closed.
-func (feed *Feed) UpdateEngines(request Subscriber) error {
-	if request == nil {
-		return ErrorArgument
-	}
+// DelInstances will restart specified endpoint-address if
+// it is not active already.
+// Synchronous call.
+func (feed *Feed) DelInstances(req *protobuf.DelInstancesRequest) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdUpdateEngines, request, respch}
+	cmd := []interface{}{fCmdDelInstances, req, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
 
-// DeleteEngines from active set of engines for this Feed. This happens when
-// one or more entities are deleted, synchronous call.
-//
-// - error if Feed is already closed.
-func (feed *Feed) DeleteEngines(request Subscriber) error {
-	if request == nil {
-		return ErrorArgument
-	}
+// RepairEndpoints will restart specified endpoint-address if
+// it is not active already.
+// Synchronous call.
+func (feed *Feed) RepairEndpoints(req *protobuf.RepairEndpointsRequest) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdDeleteEngines, request, respch}
+	cmd := []interface{}{fCmdRepairEndpoints, req, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
 
-// RepairEndpoints will restart downstream endpoints if it is already dead,
-// synchronous call.
-func (feed *Feed) RepairEndpoints(endpoints []string) error {
+// Shutdown feed, its upstream connection with kv and downstream endpoints.
+// Synchronous call.
+func (feed *Feed) Shutdown() error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdRepairEndpoints, endpoints, respch}
-	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
-	return c.OpError(err, resp, 0)
+	cmd := []interface{}{fCmdShutdown, respch}
+	_, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return err
 }
 
-// GetStatistics will recursively get statistics for feed and its underlying
-// workers.
-func (feed *Feed) GetStatistics() map[string]interface{} {
+// GetStatistics for this feed. Synchronous call.
+func (feed *Feed) GetStatistics() c.Statistics {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{fCmdGetStatistics, respch}
 	resp, _ := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
-	return resp[1].(map[string]interface{})
+	return resp[0].(c.Statistics)
 }
 
-// CloseFeed will shutdown this feed and upstream and downstream instances,
-// synchronous call.
-func (feed *Feed) CloseFeed() error {
-	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdCloseFeed, respch}
-	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
-	return c.OpError(err, resp, 0)
+type controlStreamRequest struct {
+	bucket string
+	kvaddr string
+	opaque uint32
+	status mcd.Status
+	vbno   uint16
+	vbuuid uint64
+	seqno  uint64
 }
 
-func (feed *Feed) genServer(reqch chan []interface{}) {
+// PostStreamRequest feedback from data-path.
+// Asynchronous call.
+func (feed *Feed) PostStreamRequest(bucket, kvaddr string, m *mc.UprEvent) {
+	var respch chan []interface{}
+	cmd := &controlStreamRequest{
+		bucket: bucket,
+		kvaddr: kvaddr,
+		opaque: m.Opaque,
+		status: m.Status,
+		vbno:   m.VBucket,
+		vbuuid: m.VBuuid,
+		seqno:  m.Seqno,
+	}
+	c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
+}
+
+type controlStreamEnd struct {
+	bucket string
+	kvaddr string
+	opaque uint32
+	status mcd.Status
+	vbno   uint16
+}
+
+// PostStreamEnd feedback from data-path.
+// Asynchronous call.
+func (feed *Feed) PostStreamEnd(bucket, kvaddr string, m *mc.UprEvent) {
+	var respch chan []interface{}
+	cmd := &controlStreamEnd{
+		bucket: bucket,
+		kvaddr: kvaddr,
+		opaque: m.Opaque,
+		status: m.Status,
+		vbno:   m.VBucket,
+	}
+	c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
+}
+
+func (feed *Feed) genServer() {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			c.Errorf("%v ... paniced %v !\n", feed.logPrefix, r)
-			feed.doClose()
+			c.Errorf("%v gen-server crashed: %v\n", feed.logPrefix, r)
+			c.StackTrace(string(debug.Stack()))
+			feed.shutdown()
 		}
 	}()
 
+	var msg []interface{}
+
+	timeout := time.After(1000 * time.Millisecond)
+	ctrlMsg := "%v control channel has %v messages"
+
 loop:
 	for {
-		msg := <-reqch
-		switch msg[0].(byte) {
-		case fCmdRequestFeed:
-			req, respch := msg[1].(RequestReader), msg[2].(chan []interface{})
-			respch <- []interface{}{feed.requestFeed(req)}
+		select {
+		case msg = <-feed.reqch:
+			if feed.handleCommand(msg) {
+				break loop
+			}
 
-		case fCmdUpdateFeed:
-			req, respch := msg[1].(RequestReader), msg[2].(chan []interface{})
-			respch <- []interface{}{feed.updateFeed(req)}
-
-		case fCmdAddEngines:
-			req, respch := msg[1].(Subscriber), msg[2].(chan []interface{})
-			respch <- []interface{}{feed.addEngines(req)}
-
-		case fCmdUpdateEngines:
-			req, respch := msg[1].(Subscriber), msg[2].(chan []interface{})
-			respch <- []interface{}{feed.updateEngines(req)}
-
-		case fCmdDeleteEngines:
-			req, respch := msg[1].(Subscriber), msg[2].(chan []interface{})
-			respch <- []interface{}{feed.deleteEngines(req)}
-
-		case fCmdRepairEndpoints:
-			endpoints := msg[1].([]string)
-			respch := msg[2].(chan []interface{})
-			respch <- []interface{}{feed.repairEndpoints(endpoints)}
-
-		case fCmdGetStatistics:
-			respch := msg[1].(chan []interface{})
-			respch <- []interface{}{feed.getStatistics()}
-
-		case fCmdCloseFeed:
-			respch := msg[1].(chan []interface{})
-			respch <- []interface{}{feed.doClose()}
-			break loop
+		case <-timeout:
+			c.Debugf(ctrlMsg, feed.logPrefix, len(feed.backch))
 		}
 	}
+}
+
+func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
+	exit = false
+
+	switch cmd := msg[0].(byte); cmd {
+	case fCmdStart:
+		req := msg[1].(*protobuf.MutationTopicRequest)
+		respch := msg[2].(chan []interface{})
+		feed.endpSettings = feed.endpointSettings(req.GetEndpointSettings())
+		err := feed.start(req)
+		response := feed.topicResponse()
+		respch <- []interface{}{response, err}
+
+	case fCmdRestartVbuckets:
+		req := msg[1].(*protobuf.RestartVbucketsRequest)
+		respch := msg[2].(chan []interface{})
+		err := feed.restartVbuckets(req)
+		response := feed.topicResponse()
+		respch <- []interface{}{response, err}
+
+	case fCmdShutdownVbuckets:
+		req := msg[1].(*protobuf.ShutdownVbucketsRequest)
+		respch := msg[2].(chan []interface{})
+		respch <- []interface{}{feed.shutdownVbuckets(req)}
+
+	case fCmdAddBuckets:
+		req := msg[1].(*protobuf.AddBucketsRequest)
+		respch := msg[2].(chan []interface{})
+		err := feed.addBuckets(req)
+		response := feed.topicResponse()
+		respch <- []interface{}{response, err}
+
+	case fCmdDelBuckets:
+		req := msg[1].(*protobuf.DelBucketsRequest)
+		respch := msg[2].(chan []interface{})
+		respch <- []interface{}{feed.delBuckets(req)}
+
+	case fCmdAddInstances:
+		req := msg[1].(*protobuf.AddInstancesRequest)
+		respch := msg[2].(chan []interface{})
+		respch <- []interface{}{feed.addInstances(req)}
+
+	case fCmdDelInstances:
+		req := msg[1].(*protobuf.DelInstancesRequest)
+		respch := msg[2].(chan []interface{})
+		respch <- []interface{}{feed.delInstances(req)}
+
+	case fCmdRepairEndpoints:
+		req := msg[1].(*protobuf.RepairEndpointsRequest)
+		respch := msg[2].(chan []interface{})
+		respch <- []interface{}{feed.repairEndpoints(req)}
+
+	case fCmdGetStatistics:
+		respch := msg[1].(chan []interface{})
+		respch <- []interface{}{feed.getStatistics()}
+
+	case fCmdShutdown:
+		// Never panics !!
+		respch := msg[1].(chan []interface{})
+		respch <- []interface{}{feed.shutdown()}
+		exit = true
+	}
+	return exit
 }
 
 // start a new feed.
-func (feed *Feed) requestFeed(req RequestReader) (err error) {
-	var engines map[uint64]*Engine
-
-	endpoints := make(map[string]*Endpoint)
-	subscr := req.(Subscriber)
-	evaluators, routers, err := feed.validateSubscriber(subscr)
-	if err != nil {
+func (feed *Feed) start(req *protobuf.MutationTopicRequest) error {
+	// update engines and endpoints
+	if err := feed.processSubscribers(req); err != nil { // :SideEffect:
 		return err
 	}
-
-	if endpoints, err = feed.buildEndpoints(routers, endpoints); err != nil {
-		return err
-	}
-	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
-		return err
-	}
-
-	// order of bucket, restartTimestamp, failoverTimestamp and kvTimestamp
-	// are preserved
-	for bucket, emap := range bucketWiseEngines(engines) {
-		bfeed := feed.bfeeds[bucket]
-		if bfeed == nil {
-			return ErrorInvalidBucket
-		}
-		failTs, kvTs, err := bfeed.RequestFeed(req, endpoints, emap)
+	// iterate request-timestamp for each bucket.
+	opaque := newOpaque()
+	for _, reqTs := range req.GetReqTimestamps() {
+		pooln, bucketn := reqTs.GetBucket(), reqTs.GetBucket()
+		// start upstream
+		feeder, err := feed.bucketFeed(opaque, false, true, reqTs)
 		if err != nil {
 			return err
 		}
-		// aggregate failover-timestamps, kv-timestamps for all buckets
-		failTs = feed.failoverTimestamps[bucket].Union(failTs)
-		feed.failoverTimestamps[bucket] = failTs
-		kvTs = feed.kvTimestamps[bucket].Union(kvTs)
-		feed.kvTimestamps[bucket] = kvTs
+		// open data-path
+		m := feed.startDataPath(bucketn, feeder, reqTs)
+		// wait ....
+		vbnos := c.Vbno32to16(reqTs.GetVbnos())
+		rollTs, err := feed.waitStreamRequests(opaque, pooln, bucketn, vbnos)
+		if err != nil {
+			return err
+		}
+		c.Infof("%v stream-request completed with %v, for vbnos %v #%x\n",
+			feed.logPrefix, rollTs, vbnos, opaque)
+		feed.reqTss[bucketn] = reqTs   // :SideEffect:
+		feed.rollTss[bucketn] = rollTs // :SideEffect:
+		feed.feeders[bucketn] = feeder // :SideEffect:
+		feed.kvdata[bucketn] = m       // :SideEffect:
 	}
-	if len(engines) == 0 {
-		c.Warnf("%v empty engines !\n", feed.logPrefix)
-	} else {
-		c.Infof("%v started ...\n", feed.logPrefix)
-	}
-	feed.endpoints, feed.engines = endpoints, engines
 	return nil
 }
 
-// start, restart, shutdown vbuckets in an active feed and/or update
-// downstream engines and endpoints.
-func (feed *Feed) updateFeed(req RequestReader) (err error) {
-	var endpoints map[string]*Endpoint
-	var engines map[uint64]*Engine
-
-	pools := req.GetPools()
-	buckets := req.GetBuckets()
-
-	subscr := req.(Subscriber)
-	evaluators, routers, err := feed.validateSubscriber(subscr)
-	if err != nil {
-		return err
-	}
-
-	if evaluators != nil && routers != nil {
-		if engines, err = feed.buildEngines(evaluators, routers); err != nil {
-			return err
+// a subset of upstreams are restarted.
+func (feed *Feed) restartVbuckets(req *protobuf.RestartVbucketsRequest) error {
+	// iterate request-timestamp for each bucket.
+	opaque := newOpaque()
+	for _, restartTs := range req.GetRestartTimestamps() {
+		pooln, bucketn := restartTs.GetPool(), restartTs.GetBucket()
+		reqTs, ok1 := feed.reqTss[bucketn]
+		kvdata, ok2 := feed.kvdata[bucketn]
+		if !ok1 || !ok2 {
+			msg := "%v restartVbuckets() invalid bucket %v\n"
+			c.Errorf(msg, feed.logPrefix, bucketn)
+			return ErrorInvalidBucket
 		}
-	}
-
-	// whether to delete buckets from feed.
-	if req.IsDelBuckets() {
-		for _, bucket := range buckets {
-			feed.bfeeds[bucket].CloseFeed()
-			delete(feed.bfeeds, bucket)
-			delete(feed.failoverTimestamps, bucket)
-			delete(feed.kvTimestamps, bucket)
-			for uuid, engine := range feed.engines {
-				if engine.evaluator.Bucket() == bucket {
-					delete(feed.engines, uuid)
-				}
-			}
-			// endpoints are not deleted. if none of the active engines send
-			// data to an endpoint, endpoint commits harakiri.
-		}
-		return nil
-	}
-
-	if routers != nil {
-		endpoints, err = feed.buildEndpoints(routers, feed.endpoints)
+		// first shutdown upstream
+		_, err := feed.bucketFeed(opaque, true, false, restartTs)
 		if err != nil {
 			return err
 		}
-		feed.endpoints = endpoints
-	}
-
-	// whether to add new buckets to feed.
-	if req.IsAddBuckets() {
-		if err := feed.spawnBucketFeeds(pools, buckets); err != nil {
-			feed.doClose()
+		// wait for stream to shutdown ...
+		vbnos := c.Vbno32to16(restartTs.GetVbnos())
+		if err := feed.waitStreamEnds(opaque, bucketn, vbnos); err != nil {
 			return err
 		}
+
+		for _, kvaddr := range feed.kvaddrs { // update with new start-sequence
+			kvdata[kvaddr].UpdateTs(restartTs)
+		}
+
+		// then restart the upstream
+		_, err = feed.bucketFeed(opaque, false, true, restartTs)
+		if err != nil {
+			return err
+		}
+		// wait for stream to start ...
+		rollTs, err := feed.waitStreamRequests(opaque, pooln, bucketn, vbnos)
+		if err != nil {
+			return err
+		}
+		c.Infof("%v stream-request completed with %v, for vbnos %v #%x\n",
+			feed.logPrefix, rollTs, vbnos, opaque)
+		// update vbnos that are shutdown
+		feed.reqTss[bucketn] = reqTs.Union(restartTs) // :SideEffect:
+		feed.rollTss[bucketn] = rollTs                // :SideEffect:
+	}
+	return nil
+}
+
+// a subset of upstreams are closed.
+func (feed *Feed) shutdownVbuckets(
+	req *protobuf.ShutdownVbucketsRequest) (err error) {
+	// iterate request-timestamp for each bucket.
+	opaque := newOpaque()
+	for _, shutTs := range req.GetShutdownTimestamps() {
+		bucketn := shutTs.GetBucket()
+		reqTs, ok := feed.reqTss[bucketn]
+		if !ok {
+			return ErrorInvalidBucket
+		}
+		// shutdown upstream
+		_, err := feed.bucketFeed(opaque, true, false, shutTs)
+		if err != nil {
+			return err
+		}
+		// wait ...
+		vbnos := c.Vbno32to16(shutTs.GetVbnos())
+		err = feed.waitStreamEnds(opaque, bucketn, vbnos)
+		if err != nil {
+			return err
+		}
+		c.Infof("%v stream-end completed for bucket %v, vbnos %v #%x\n",
+			feed.logPrefix, bucketn, vbnos, opaque)
+		// forget vbnos that are shutdown
+		feed.reqTss[bucketn] = reqTs.FilterByVbuckets(vbnos) // :SideEffect:
+	}
+	return nil
+}
+
+// upstreams are added for buckets
+// data-path opened and vbucket-routines started.
+func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) error {
+	// update engines and endpoints
+	if err := feed.processSubscribers(req); err != nil { // :SideEffect:
+		return err
+	}
+
+	// iterate request-timestamp for each bucket.
+	opaque := newOpaque()
+	for _, reqTs := range req.GetReqTimestamps() {
+		pooln, bucketn := reqTs.GetPool(), reqTs.GetBucket()
+		// start upstream
+		feeder, err := feed.bucketFeed(opaque, false, true, reqTs)
+		if err != nil {
+			return err
+		}
+		// open data-path
+		m := feed.startDataPath(bucketn, feeder, reqTs)
+		// wait ....
+		vbnos := c.Vbno32to16(reqTs.GetVbnos())
+		rollTs, err := feed.waitStreamRequests(opaque, pooln, bucketn, vbnos)
+		if err != nil {
+			return err
+		}
+		c.Infof("%v stream-request completed with %v, for vbnos %v #%x\n",
+			feed.logPrefix, rollTs, vbnos, opaque)
+		feed.reqTss[bucketn] = reqTs   // :SideEffect:
+		feed.rollTss[bucketn] = rollTs // :SideEffect:
+		feed.feeders[bucketn] = feeder // :SideEffect:
+		feed.kvdata[bucketn] = m       // :SideEffect:
+	}
+	return nil
+}
+
+// upstreams are closed for buckets
+// data-path is closed for downstream
+// vbucket-routines exits on StreamEnd
+func (feed *Feed) delBuckets(req *protobuf.DelBucketsRequest) error {
+	opaque := newOpaque()
+	for _, bucketn := range req.GetBuckets() {
+		if _, ok := feed.kvdata[bucketn]; !ok {
+			feed.errorf("no bucket", bucketn, nil)
+			return ErrorInvalidBucket
+		}
+		// stop upstream
+		_, err := feed.bucketFeed(opaque, true, false, feed.reqTss[bucketn])
+		if err != nil {
+			return err
+		}
+		// wait ...
+		vbnos := c.Vbno32to16(feed.reqTss[bucketn].GetVbnos())
+		err = feed.waitStreamEnds(opaque, bucketn, vbnos)
+		if err != nil {
+			return err
+		}
+		c.Infof("%v stream-end completed for bucket %v, vbnos %v #%x\n",
+			feed.logPrefix, bucketn, vbnos, opaque)
+		// close data-path
+		for _, kvdata := range feed.kvdata[bucketn] {
+			kvdata.Close()
+		}
+		// cleanup data structures.
+		delete(feed.reqTss, bucketn)  // :SideEffect:
+		delete(feed.rollTss, bucketn) // :SideEffect:
+		delete(feed.feeders, bucketn) // :SideEffect:
+		delete(feed.kvdata, bucketn)  // :SideEffect:
+		delete(feed.engines, bucketn) // :SideEffect:
+	}
+	return nil
+}
+
+// only data-path shall be updated.
+func (feed *Feed) addInstances(req *protobuf.AddInstancesRequest) error {
+	// update engines and endpoints
+	if err := feed.processSubscribers(req); err != nil { // :SideEffect:
+		return err
+	}
+	// post to kv data-path
+	for bucketn, engines := range feed.engines {
+		for _, kvdata := range feed.kvdata[bucketn] {
+			kvdata.AddEngines(engines, feed.endpoints)
+		}
+	}
+	return nil
+}
+
+// only data-path shall be updated.
+func (feed *Feed) delInstances(req *protobuf.DelInstancesRequest) error {
+	// reconstruct instance uuids bucket-wise.
+	instanceIds := req.GetInstanceIds()
+	bucknIds := make(map[string][]uint64)           // bucket -> []instance
+	fengines := make(map[string]map[uint64]*Engine) // bucket-> uuid-> instance
+	for bucketn, engines := range feed.engines {
+		uuids := make([]uint64, 0)
+		m := make(map[uint64]*Engine)
 		for uuid, engine := range engines {
-			feed.engines[uuid] = engine
+			if c.HasUint64(uuid, instanceIds) {
+				uuids = append(uuids, uuid)
+			} else {
+				m[uuid] = engine
+			}
+		}
+		bucknIds[bucketn] = uuids
+		fengines[bucketn] = m
+	}
+	// posted post to kv data-path.
+	for bucketn, uuids := range bucknIds {
+		for _, kvdata := range feed.kvdata[bucketn] {
+			kvdata.DeleteEngines(uuids)
 		}
 	}
-
-	// order of bucket, restartTimestamp, failoverTimestamp and kvTimestamp
-	// are preserved
-	for bucket, emap := range bucketWiseEngines(engines) {
-		bfeed := feed.bfeeds[bucket]
-		if bfeed == nil {
-			return ErrorInvalidBucket
-		}
-		failTs, kvTs, err := bfeed.UpdateFeed(req, endpoints, emap)
-		if err != nil {
-			return err
-		}
-		// update failover-timestamps, kv-timestamps
-		if req.IsShutdown() {
-			failTs = feed.failoverTimestamps[bucket].FilterByVbuckets(
-				c.Vbno32to16(failTs.Vbnos))
-			kvTs = feed.kvTimestamps[bucket].FilterByVbuckets(
-				c.Vbno32to16(kvTs.Vbnos))
-		} else {
-			failTs = feed.failoverTimestamps[bucket].Union(failTs)
-			kvTs = feed.kvTimestamps[bucket].Union(kvTs)
-		}
-		feed.failoverTimestamps[bucket] = failTs
-		feed.kvTimestamps[bucket] = kvTs
-	}
-	c.Infof("%v update ... done\n", feed.logPrefix)
+	feed.engines = fengines // :SideEffect:
 	return nil
 }
 
-// index topology has changed, update it.
-func (feed *Feed) addEngines(subscr Subscriber) (err error) {
-	var endpoints map[string]*Endpoint
-	var engines map[uint64]*Engine
-
-	evaluators, routers, err := feed.validateSubscriber(subscr)
-	if err != nil {
-		return err
-	}
-
-	// union of existing endpoints and new endpoints, if any.
-	if endpoints, err = feed.buildEndpoints(routers, feed.endpoints); err != nil {
-		return err
-	}
-	for raddr, endpoint := range feed.endpoints {
-		endpoints[raddr] = endpoint
-	}
-
-	// union of existing engines and new engines.
-	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
-		return err
-	}
-	for uuid, engine := range feed.engines {
-		engines[uuid] = engine
-	}
-
-	for bucket, emap := range bucketWiseEngines(engines) {
-		if bfeed, ok := feed.bfeeds[bucket]; ok {
-			if err = bfeed.UpdateEngines(endpoints, emap); err != nil {
-				return
-			}
-		} else {
-			return c.ErrorInvalidRequest
-		}
-	}
-	feed.endpoints, feed.engines = endpoints, engines
-	c.Infof("%v add engines ... done\n", feed.logPrefix)
-	return
-}
-
-// index topology has changed, update it.
-// TODO: Remove this - if update can be replace with delete and add, then that
-// should be the recommended way to update engines.
-func (feed *Feed) updateEngines(subscr Subscriber) (err error) {
-	var endpoints map[string]*Endpoint
-	var engines map[uint64]*Engine
-
-	evaluators, routers, err := feed.validateSubscriber(subscr)
-	if err != nil {
-		return err
-	}
-
-	if endpoints, err = feed.buildEndpoints(routers, feed.endpoints); err != nil {
-		return err
-	}
-	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
-		return err
-	}
-
-	for bucket, emap := range bucketWiseEngines(engines) {
-		if bfeed, ok := feed.bfeeds[bucket]; ok {
-			if err = bfeed.UpdateEngines(endpoints, emap); err != nil {
-				return
-			}
-		} else {
-			return c.ErrorInvalidRequest
-		}
-	}
-	feed.endpoints, feed.engines = endpoints, engines
-	c.Infof("%v update engines ... done\n", feed.logPrefix)
-	return
-}
-
-// index is deleted, delete all of its downstream
-func (feed *Feed) deleteEngines(subscr Subscriber) (err error) {
-	var engines map[uint64]*Engine
-
-	evaluators, routers, err := feed.validateSubscriber(subscr)
-	if err != nil {
-		return err
-	}
-
-	// we don't delete endpoints, since it might be shared with other engines.
-	// endpoint routine will commit harakiri if no engines are sending them
-	// data.
-
-	if engines, err = feed.buildEngines(evaluators, routers); err != nil {
-		return err
-	}
-
-	for bucket, emap := range bucketWiseEngines(engines) {
-		if bfeed, ok := feed.bfeeds[bucket]; ok {
-			uuids := make([]uint64, 0, len(emap))
-			for uuid := range emap {
-				uuids = append(uuids, uuid)
-			}
-			if err = bfeed.DeleteEngines(feed.endpoints, uuids); err != nil {
-				return
-			}
-		} else {
-			return c.ErrorInvalidRequest
-		}
-	}
-	for uuid := range engines {
-		c.Infof("%v engine %v deleted ...\n", feed.logPrefix, uuid)
-		delete(feed.engines, uuid)
-	}
-	c.Infof("%v delete engines ... done\n", feed.logPrefix)
-	return
-}
-
-// repair endpoints, restart engines and update bucket-feed
-func (feed *Feed) repairEndpoints(raddrs []string) (err error) {
-	// repair endpoints
-	endpoints := make(map[string]*Endpoint)
-	for raddr, endpoint := range feed.endpoints {
-		if raddrs != nil && len(raddrs) > 0 && !c.HasString(raddr, raddrs) {
-			if endpoint.Ping() {
-				endpoints[raddr] = endpoint
-			}
-			continue
-		}
-		c.Infof("%v restarting endpoint %q ...\n", feed.logPrefix, raddr)
-		endpoint, err = feed.startEndpoint(raddr, endpoint.coord)
-		if err != nil {
-			return err
-		}
-		if endpoint != nil {
-			endpoints[raddr] = endpoint
-		}
-	}
-
-	// new set of engines
-	engines := make(map[uint64]*Engine)
-	for uuid, engine := range feed.engines {
-		engine = NewEngine(feed, uuid, engine.evaluator, engine.router)
-		engines[uuid] = engine
-	}
-
-	// update Engines with BucketFeed
-	for bucket, emap := range bucketWiseEngines(engines) {
-		if bfeed, ok := feed.bfeeds[bucket]; ok {
-			if err = bfeed.UpdateEngines(endpoints, emap); err != nil {
+// endpoints are independent.
+func (feed *Feed) repairEndpoints(req *protobuf.RepairEndpointsRequest) error {
+	for _, raddr := range req.GetEndpoints() {
+		endpoint, ok := feed.endpoints[raddr]
+		if (!ok) || (!endpoint.Ping()) {
+			// ignore error while starting endpoint
+			setts := feed.endpSettings
+			endpoint, err := feed.epFactory(feed.topic, raddr, setts)
+			if err != nil {
 				return err
+			} else if endpoint != nil {
+				feed.endpoints[raddr] = endpoint // :SideEffect:
 			}
-		} else {
-			return c.ErrorInvalidRequest
 		}
 	}
-	feed.endpoints, feed.engines = endpoints, engines
-	c.Infof("%v repair endpoints ... done\n", feed.logPrefix)
+
+	// posted to each kv data-path
+	for bucketn, kvdatas := range feed.kvdata {
+		for _, kvdata := range kvdatas {
+			// though only endpoints have been updated
+			kvdata.AddEngines(feed.engines[bucketn], feed.endpoints)
+		}
+	}
 	return nil
 }
 
 func (feed *Feed) getStatistics() map[string]interface{} {
-	bfeeds, _ := c.NewStatistics(feed.stats.Get("bfeeds"))
-	endpoints, _ := c.NewStatistics(feed.stats.Get("endpoints"))
-	feed.stats.Set("engines", feed.engineNames())
-	for bucketn, bfeed := range feed.bfeeds {
-		bfeeds.Set(bucketn, bfeed.GetStatistics())
+	stats, _ := c.NewStatistics(nil)
+	stats.Set("engines", feed.engineNames())
+	for bucketn, kvnodes := range feed.kvdata {
+		bstats, _ := c.NewStatistics(nil)
+		for kvaddr, kv := range kvnodes {
+			bstats.Set("node-"+kvaddr, kv.GetStatistics())
+		}
+		stats.Set("bucket-"+bucketn, bstats)
 	}
+	endStats, _ := c.NewStatistics(nil)
 	for raddr, endpoint := range feed.endpoints {
-		endpoints.Set(raddr, endpoint.GetStatistics())
+		endStats.Set(raddr, endpoint.GetStatistics())
 	}
-	feed.stats.Set("bfeeds", bfeeds)
-	feed.stats.Set("endpoints", endpoints)
-	return feed.stats.ToMap()
+	stats.Set("endpoint", endStats)
+	return map[string]interface{}(stats)
 }
 
-func (feed *Feed) doClose() (err error) {
+func (feed *Feed) shutdown() error {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v doClose() paniced: %v !\n", feed.topic, r)
+			c.Errorf("%v shutdown() crashed: %v\n", feed.logPrefix, r)
+			c.StackTrace(string(debug.Stack()))
 		}
 	}()
 
-	for _, bfeed := range feed.bfeeds { // shutdown upstream
-		bfeed.CloseFeed()
+	// close upstream
+	for _, feeder := range feed.feeders {
+		feeder.CloseFeed()
 	}
-	for _, endpoint := range feed.endpoints { // shutdown downstream
+	// close data-path
+	for _, xs := range feed.kvdata {
+		for _, x := range xs {
+			x.Close()
+		}
+	}
+	// close downstream
+	for _, endpoint := range feed.endpoints {
 		endpoint.Close()
 	}
-	// shutdown
+	// cleanup
 	close(feed.finch)
-	feed.bfeeds, feed.endpoints, feed.engines = nil, nil, nil
 	c.Infof("%v ... stopped\n", feed.logPrefix)
-	return
+	return nil
 }
 
-// build per bucket uuid->engine map using Subscriber interface. `engines` and
-// `endpoints` are updated inplace.
-func (feed *Feed) buildEngines(
-	evaluators map[uint64]c.Evaluator,
-	routers map[uint64]c.Router) (map[uint64]*Engine, error) {
+// start a feed for a bucket with a set of kvfeeder,
+// based on vbmap and failover-logs.
+func (feed *Feed) bucketFeed(
+	opaque uint32,
+	stop, start bool,
+	reqTs *protobuf.TsVbuuid) (BucketFeeder, error) {
 
-	// Rebuild new set of engines
-	newengines := make(map[uint64]*Engine)
-	for uuid, evaluator := range evaluators {
-		engine := NewEngine(feed, uuid, evaluator, routers[uuid])
-		newengines[uuid] = engine
-	}
-	return newengines, nil
-}
-
-// organize engines based on buckets, engine is associated with one bucket.
-func bucketWiseEngines(engines map[uint64]*Engine) map[string]map[uint64]*Engine {
-	bengines := make(map[string]map[uint64]*Engine)
-	if engines == nil {
-		return bengines
-	}
-
-	for uuid, engine := range engines {
-		bucket := engine.evaluator.Bucket()
-		emap, ok := bengines[bucket]
-		if !ok {
-			emap = make(map[uint64]*Engine)
-			bengines[bucket] = emap
-		}
-		emap[uuid] = engine
-	}
-	return bengines
-}
-
-// start endpoints for listed topology, an endpoint is not started if it is
-// already active (ping-ok).
-// btw, we don't close endpoints, instead we let go of them.
-func (feed *Feed) buildEndpoints(
-	routers map[uint64]c.Router,
-	endpoints map[string]*Endpoint) (map[string]*Endpoint, error) {
-
-	var err error
-
-	for _, router := range routers {
-		for _, raddr := range router.UuidEndpoints() {
-			if endpoint, ok := endpoints[raddr]; (!ok) || (!endpoint.Ping()) {
-				endpoint, err = feed.startEndpoint(raddr, false)
-				if err != nil {
-					return nil, err
-				} else if endpoint != nil {
-					endpoints[raddr] = endpoint
-				}
-			}
-		}
-		// endpoint for coordinator
-		coord := router.CoordinatorEndpoint()
-		if coord != "" {
-			if endpoint, ok := endpoints[coord]; (!ok) || (!endpoint.Ping()) {
-				endpoint, err = feed.startEndpoint(coord, true)
-				if err != nil {
-					return nil, err
-				} else if endpoint != nil {
-					endpoints[coord] = endpoint
-				}
-			}
-		}
-	}
-	return endpoints, nil
-}
-
-func (feed *Feed) startEndpoint(raddr string, coord bool) (endpoint *Endpoint, err error) {
-	// ignore error while starting endpoint
-	endpoint, err = NewEndpoint(feed, raddr, c.ConnsPerEndpoint, coord)
+	pooln, bucketn := reqTs.GetPool(), reqTs.GetBucket()
+	vbnos, vbuuids, err := feed.bucketDetails(pooln, bucketn)
 	if err != nil {
 		return nil, err
 	}
-	// TODO: send vbmap to the new endpoint.
-	// for _, kvTs := range feed.kvTimestamps {
-	//     vbmap := feed.vbTs2Vbmap(kvTs)
-	//     if err = endpoint.SendVbmap(vbmap); err != nil {
-	//         return nil, err
-	//     }
-	// }
-	return endpoint, nil
+	if start {
+		// if streams need to be started, make sure
+		// that branch histories are the same.
+		if reqTs.VerifyBranch(vbnos, vbuuids) == false {
+			feed.errorf("VerifyBranch()", bucketn, vbuuids)
+			return nil, ErrorInvalidVbucketBranch
+		}
+	}
+
+	reqTs = reqTs.SelectByVbuckets(vbnos) // filter vbuckets
+
+	feeder, ok := feed.feeders[bucketn]
+	if !ok { // the feed is being started for the first time
+		bucket, err := feed.getBucket(pooln, bucketn)
+		if err != nil {
+			return nil, err
+		}
+		feeder, err = OpenBucketFeed(bucket)
+		if err != nil {
+			feed.errorf("OpenBucketFeed()", bucketn, err)
+			return nil, err
+		}
+	}
+
+	if stop {
+		feed.infof("stop-timestamp", bucketn, reqTs)
+		if err = feeder.EndVbStreams(opaque, reqTs); err != nil {
+			feed.errorf("EndVbStreams()", bucketn, err)
+			return nil, err
+		}
+	}
+
+	if start {
+		feed.infof("start-timestamp", bucketn, reqTs)
+		if err = feeder.StartVbStreams(opaque, reqTs); err != nil {
+			feed.errorf("StartVbStreams()", bucketn, err)
+			return nil, err
+		}
+	}
+	return feeder, nil
 }
 
-func (feed *Feed) validateSubscriber(subscriber Subscriber) (map[uint64]c.Evaluator, map[uint64]c.Router, error) {
-	evaluators, err := subscriber.GetEvaluators()
+func (feed *Feed) bucketDetails(pooln, bucketn string) ([]uint16, []uint64, error) {
+	bucket, err := feed.getBucket(pooln, bucketn)
 	if err != nil {
 		return nil, nil, err
 	}
-	routers, err := subscriber.GetRouters()
+
+	// refresh vbmap before gathering vbucket-numbers hosted
+	// by set of feed.kvaddrs.
+	if err = bucket.Refresh(); err != nil {
+		feed.errorf("bucket.Refresh()", bucketn, err)
+		return nil, nil, err
+	}
+	m, err := bucket.GetVBmap(feed.kvaddrs)
+	if err != nil {
+		feed.errorf("bucket.GetVBmap()", bucketn, err)
+		return nil, nil, err
+	}
+	vbnos := make([]uint16, 0, 32) // TODO: no magic numbers
+	for _, ns := range m {
+		vbnos = append(vbnos, ns...)
+	}
+
+	// failover-logs
+	flogs, err := bucket.GetFailoverLogs(vbnos)
+	if err != nil {
+		feed.errorf("bucket.GetFailoverLogs()", bucketn, err)
+		return nil, nil, err
+	}
+	vbuuids := make([]uint64, len(vbnos))
+	for i, vbno := range vbnos {
+		flog := flogs[vbno]
+		if len(flog) < 1 {
+			feed.errorf("bucket.FailoverLog empty", bucketn, err)
+			return nil, nil, err
+		}
+		vbuuids[i] = flog[len(flog)-1][0]
+	}
+
+	return vbnos, vbuuids, nil
+}
+
+// start data-path each kvaddr
+func (feed *Feed) startDataPath(
+	bucketn string, feeder BucketFeeder, reqTs *protobuf.TsVbuuid) map[string]*KVData {
+
+	mutch := feeder.GetChannel()
+	m := make(map[string]*KVData) // kvaddr -> kvdata
+	for _, kvaddr := range feed.kvaddrs {
+		// pass engines & endpoints to kvdata.
+		kvdata := NewKVData(
+			feed, bucketn, kvaddr, reqTs,
+			feed.engines[bucketn], feed.endpoints, mutch)
+		m[kvaddr] = kvdata
+	}
+	return m
+}
+
+func (feed *Feed) processSubscribers(req Subscriber) error {
+	evaluators, routers, err := feed.subscribers(req)
+	if err != nil {
+		return err
+	}
+
+	// start fresh set of all endpoints from routers.
+	if err = feed.startEndpoints(routers); err != nil {
+		return err
+	}
+	// update feed engines.
+	for uuid, evaluator := range evaluators {
+		bucketn := evaluator.Bucket()
+		m, ok := feed.engines[bucketn]
+		if !ok {
+			m = make(map[uint64]*Engine)
+		}
+		engine := NewEngine(uuid, evaluator, routers[uuid])
+		c.Infof("%v new engine %v created ...\n", feed.logPrefix, uuid)
+		m[uuid] = engine
+		feed.engines[bucketn] = m
+	}
+	return nil
+}
+
+// feed.endpoints is updated with fresh started endpoint
+// if an endpoint is already present and active it is
+// reused.
+func (feed *Feed) startEndpoints(routers map[uint64]c.Router) error {
+	for _, router := range routers {
+		for _, raddr := range router.Endpoints() {
+			endpoint, ok := feed.endpoints[raddr]
+			if (!ok) || (!endpoint.Ping()) {
+				// ignore error while starting endpoint
+				setts := feed.endpSettings
+				endpoint, err := feed.epFactory(feed.topic, raddr, setts)
+				if err != nil {
+					return err
+				} else if endpoint != nil {
+					feed.endpoints[raddr] = endpoint
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (feed *Feed) subscribers(
+	req Subscriber) (map[uint64]c.Evaluator, map[uint64]c.Router, error) {
+
+	evaluators, err := req.GetEvaluators()
 	if err != nil {
 		return nil, nil, err
 	}
+	routers, err := req.GetRouters()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	if len(evaluators) != len(routers) {
 		err = ErrorInconsistentFeed
 		c.Errorf("%v error %v, len() mismatch", feed.logPrefix, err)
@@ -713,10 +830,151 @@ func (feed *Feed) engineNames() []string {
 	return names
 }
 
-func (feed *Feed) endpointNames() []string {
-	raddrs := make([]string, 0, len(feed.endpoints))
-	for raddr := range feed.endpoints {
-		raddrs = append(raddrs, raddr)
+// wait for kvdata to post StreamRequest.
+func (feed *Feed) waitStreamRequests(
+	opaque uint32,
+	pooln, bucketn string, vbnos []uint16) (*protobuf.TsVbuuid, error) {
+
+	rollTs := protobuf.NewTsVbuuid(pooln, bucketn, c.MaxVbuckets)
+
+	if len(vbnos) == 0 {
+		return rollTs, nil
 	}
-	return raddrs
+
+	timeout := time.After(c.FeedWaitStreamReqTimeout * time.Millisecond)
+
+	err := feed.waitOnFeedback(timeout, func(msg interface{}) string {
+		if val, ok := msg.(*controlStreamRequest); ok {
+			if val.bucket == bucketn && val.opaque == opaque {
+				if val.status == mcd.ROLLBACK {
+					rollTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
+				}
+				vbnos = c.RemoveUint16(val.vbno, vbnos)
+				if len(vbnos) == 0 {
+					return "done"
+				}
+				return "ok"
+			}
+		}
+		return "skip"
+	})
+	return rollTs, err
+}
+
+// wait for kvdata to post StreamEnd.
+func (feed *Feed) waitStreamEnds(
+	opaque uint32, bucketn string, vbnos []uint16) error {
+
+	if len(vbnos) == 0 {
+		return nil
+	}
+	timeout := time.After(c.FeedWaitStreamEndTimeout * time.Millisecond)
+	err := feed.waitOnFeedback(timeout, func(msg interface{}) string {
+		if val, ok := msg.(*controlStreamEnd); ok {
+			if val.bucket == bucketn && val.opaque == opaque {
+				vbnos = c.RemoveUint16(val.vbno, vbnos)
+				if len(vbnos) == 0 {
+					return "done"
+				}
+				return "ok"
+			}
+		}
+		return "skip"
+	})
+	return err
+}
+
+// block feed until feedback posted back from kvdata.
+func (feed *Feed) waitOnFeedback(
+	timeout <-chan time.Time, callb func(msg interface{}) string) (err error) {
+
+	msgs := make([][]interface{}, 0)
+loop:
+	for {
+		select {
+		case msg := <-feed.backch:
+			c.Infof("%v back channel %T %v", feed.logPrefix, msg[0], msg[0])
+			switch callb(msg[0]) {
+			case "skip":
+				msgs = append(msgs, msg)
+			case "done":
+				break loop
+			default:
+			}
+
+		case <-timeout:
+			err = ErrorResponseTimeout
+			c.Errorf("%v feedback timeout %v\n", feed.logPrefix, err)
+			break loop
+		}
+	}
+	for _, msg := range msgs {
+		feed.backch <- []interface{}{msg}
+	}
+	return
+}
+
+// compose topic-response for caller
+func (feed *Feed) topicResponse() *protobuf.TopicResponse {
+	uuids := make([]uint64, 0)
+	for _, engines := range feed.engines {
+		for uuid := range engines {
+			uuids = append(uuids, uuid)
+		}
+	}
+	xs := make([]*protobuf.TsVbuuid, 0, len(feed.reqTss))
+	for _, ts := range feed.reqTss {
+		xs = append(xs, ts)
+	}
+	ys := make([]*protobuf.TsVbuuid, 0, len(feed.rollTss))
+	for _, ts := range feed.rollTss {
+		ys = append(ys, ts)
+	}
+	return &protobuf.TopicResponse{
+		Topic:              proto.String(feed.topic),
+		InstanceIds:        uuids,
+		ReqTimestamps:      xs,
+		RollbackTimestamps: ys,
+	}
+}
+
+// generate a new 16 bit opaque value set as MSB.
+func newOpaque() uint32 {
+	return uint32(time.Now().UnixNano()>>32) & 0xFFFF0000
+}
+
+//---- local function
+
+func (feed *Feed) getBucket(pooln, bucketn string) (*couchbase.Bucket, error) {
+	bucket, ok := feed.buckets[bucketn]
+	if !ok {
+		b, err := c.ConnectBucket(feed.cluster, pooln, bucketn)
+		if err != nil {
+			feed.errorf("ConnectBucket()", bucketn, err)
+		}
+		return b, err
+	}
+	return bucket, nil
+}
+
+func (feed *Feed) endpointSettings(setts []byte) map[string]interface{} {
+	settings := make(map[string]interface{})
+	if len(setts) > 0 {
+		if err := json.Unmarshal(setts, &settings); err != nil {
+			c.Errorf("%v endpointSettings(): %v\n", feed.logPrefix, err)
+		}
+	}
+	return settings
+}
+
+func (feed *Feed) errorf(prefix, bucketn string, val interface{}) {
+	c.Errorf("%v %v for %q: %v\n", feed.logPrefix, prefix, bucketn, val)
+}
+
+func (feed *Feed) debugf(prefix, bucketn string, val interface{}) {
+	c.Debugf("%v %v for %q: %v\n", feed.logPrefix, prefix, bucketn, val)
+}
+
+func (feed *Feed) infof(prefix, bucketn string, val interface{}) {
+	c.Infof("%v %v for %q: %v\n", feed.logPrefix, prefix, bucketn, val)
 }

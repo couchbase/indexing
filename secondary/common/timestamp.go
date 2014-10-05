@@ -86,127 +86,127 @@ func (ts *TsVbuuid) Len() int {
 // SelectByVbuckets will select vbuckets from `ts` for a subset of `vbuckets`,
 // both `ts` and `vbuckets` are expected to be pre-sorted.
 func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
-	if ts == nil || vbuckets == nil {
-		return ts
-	}
+    if ts == nil || vbuckets == nil {
+        return ts
+    }
 
-	newts := NewTsVbuuid(ts.Bucket, 1024) // TODO: avoid magic numbers
-	if len(ts.Vbnos) == 0 {
-		return newts
-	}
+    newts := NewTsVbuuid(ts.Bucket, 1024) // TODO: avoid magic numbers
+    if len(ts.Vbnos) == 0 {
+        return newts
+    }
 
-	cache := [MaxVbuckets]byte{} // TODO: optimize for GC
-	for _, vbno := range vbuckets {
-		cache[vbno] = 1
-	}
-	for i, vbno := range ts.Vbnos {
-		if cache[vbno] == 1 {
-			newts.Vbnos = append(newts.Vbnos, vbno)
-			newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
-			newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
-			newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
-		}
-	}
-	return newts
+    cache := [MaxVbuckets]byte{} // TODO: optimize for GC
+    for _, vbno := range vbuckets {
+        cache[vbno] = 1
+    }
+    for i, vbno := range ts.Vbnos {
+        if cache[vbno] == 1 {
+            newts.Vbnos = append(newts.Vbnos, vbno)
+            newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
+            newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
+            newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
+        }
+    }
+    return newts
 }
 
 // FilterByVbuckets will exclude `vbuckets` from `ts`, both `ts` and `vbuckets`
 // are expected to be pre-sorted. TODO: Write unit test case.
 func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
-	if ts == nil || vbuckets == nil {
-		return ts
-	}
+    if ts == nil || vbuckets == nil {
+        return ts
+    }
 
-	newts := NewTsVbuuid(ts.Bucket, MaxVbuckets) // TODO: avoid magic numbers
-	if len(ts.Vbnos) == 0 {
-		return newts
-	}
+    newts := NewTsVbuuid(ts.Bucket, MaxVbuckets) // TODO: avoid magic numbers
+    if len(ts.Vbnos) == 0 {
+        return newts
+    }
 
-	cache := [MaxVbuckets]byte{}
-	for _, vbno := range vbuckets {
-		cache[vbno] = 1
-	}
-	for i, vbno := range ts.Vbnos {
-		if cache[vbno] == 1 {
-			continue
-		}
-		newts.Vbnos = append(newts.Vbnos, vbno)
-		newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
-		newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
-		newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
-	}
-	return newts
+    cache := [MaxVbuckets]byte{}
+    for _, vbno := range vbuckets {
+        cache[vbno] = 1
+    }
+    for i, vbno := range ts.Vbnos {
+        if cache[vbno] == 1 {
+            continue
+        }
+        newts.Vbnos = append(newts.Vbnos, vbno)
+        newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
+        newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
+        newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
+    }
+    return newts
 }
 
 // Union will return a union set of timestamps based on Vbuckets. Duplicate
 // vbucket entries in `other` timestamp will be skipped.
 func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
-	if ts == nil || other == nil {
-		return ts
-	}
-	newts := NewTsVbuuid(ts.Bucket, MaxVbuckets)
+    if ts == nil || other == nil {
+        return ts
+    }
+    newts := NewTsVbuuid(ts.Bucket, MaxVbuckets)
 
-	// copy from other
-	newts.Vbnos = append(newts.Vbnos, other.Vbnos...)
-	newts.Seqnos = append(newts.Seqnos, other.Seqnos...)
-	newts.Vbuuids = append(newts.Vbuuids, other.Vbuuids...)
-	newts.Snapshots = append(newts.Snapshots, other.Snapshots...)
+    // copy from other
+    newts.Vbnos = append(newts.Vbnos, other.Vbnos...)
+    newts.Seqnos = append(newts.Seqnos, other.Seqnos...)
+    newts.Vbuuids = append(newts.Vbuuids, other.Vbuuids...)
+    newts.Snapshots = append(newts.Snapshots, other.Snapshots...)
 
-	cache := [MaxVbuckets]byte{}
-	for _, vbno := range other.Vbnos {
-		cache[vbno] = 1
-	}
+    cache := [MaxVbuckets]byte{}
+    for _, vbno := range other.Vbnos {
+        cache[vbno] = 1
+    }
 
-	// deduplicate this
-	for i, vbno := range ts.Vbnos {
-		if cache[vbno] == 1 {
-			continue
-		}
-		newts.Vbnos = append(newts.Vbnos, vbno)
-		newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
-		newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
-		newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
-	}
-	sort.Sort(newts)
-	return newts
+    // deduplicate this
+    for i, vbno := range ts.Vbnos {
+        if cache[vbno] == 1 {
+            continue
+        }
+        newts.Vbnos = append(newts.Vbnos, vbno)
+        newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
+        newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
+        newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
+    }
+    sort.Sort(newts)
+    return newts
 }
 
 // Unions will return a union set of all timestamps arguments. First vbucket
 // entry from the list of timestamps will be picked and while rest are skipped.
 func (ts *TsVbuuid) Unions(timestamps ...*TsVbuuid) *TsVbuuid {
-	for _, other := range timestamps {
-		ts = ts.Union(other)
-	}
-	return ts
+    for _, other := range timestamps {
+        ts = ts.Union(other)
+    }
+    return ts
 }
 
 // CompareVbuckets will compare two timestamps for its bucket and vbuckets
 func (ts *TsVbuuid) CompareVbuckets(other *TsVbuuid) bool {
-	if ts == nil || other == nil {
-		return false
-	}
-	sort.Sort(ts)
-	sort.Sort(other)
-	if ts.Bucket != other.Bucket || ts.Len() != other.Len() {
-		return false
-	}
-	for i, vbno := range ts.Vbnos {
-		if vbno != other.Vbnos[i] {
-			return false
-		}
-	}
-	return true
+    if ts == nil || other == nil {
+        return false
+    }
+    sort.Sort(ts)
+    sort.Sort(other)
+    if ts.Bucket != other.Bucket || ts.Len() != other.Len() {
+        return false
+    }
+    for i, vbno := range ts.Vbnos {
+        if vbno != other.Vbnos[i] {
+            return false
+        }
+    }
+    return true
 }
 
 func (ts *TsVbuuid) Less(i, j int) bool {
-	return ts.Vbnos[i] < ts.Vbnos[j]
+    return ts.Vbnos[i] < ts.Vbnos[j]
 }
 
 func (ts *TsVbuuid) Swap(i, j int) {
-	ts.Vbnos[i], ts.Vbnos[j] = ts.Vbnos[j], ts.Vbnos[i]
-	ts.Seqnos[i], ts.Seqnos[j] = ts.Seqnos[j], ts.Seqnos[i]
-	ts.Vbuuids[i], ts.Vbuuids[j] = ts.Vbuuids[j], ts.Vbuuids[i]
-	ts.Snapshots[i], ts.Snapshots[j] = ts.Snapshots[j], ts.Snapshots[i]
+    ts.Vbnos[i], ts.Vbnos[j] = ts.Vbnos[j], ts.Vbnos[i]
+    ts.Seqnos[i], ts.Seqnos[j] = ts.Seqnos[j], ts.Seqnos[i]
+    ts.Vbuuids[i], ts.Vbuuids[j] = ts.Vbuuids[j], ts.Vbuuids[i]
+    ts.Snapshots[i], ts.Snapshots[j] = ts.Snapshots[j], ts.Snapshots[i]
 }
 
 */

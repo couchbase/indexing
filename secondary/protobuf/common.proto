@@ -2,6 +2,8 @@
 
 package protobuf;
 
+// Error message can be sent back as response or
+// encapsulated in response packets.
 message Error {
     required string error = 1; // Empty string means success
 }
@@ -17,59 +19,35 @@ message Snapshot {
     required uint64 end   = 2;
 }
 
-// logical clock
+// logical clock for a subset of vbuckets
 message TsVb {
-    required string bucket = 1; // bucket name
-    repeated uint32 vbnos  = 2; // a subset of vbucket-numbers
-    repeated uint64 seqnos = 3; // corresponding sequence number for each vbucket listed above
+    required string pool   = 1; // pool name
+    required string bucket = 2; // bucket name
+    repeated uint32 vbnos  = 3; // a subset of vbucket-numbers
+    repeated uint64 seqnos = 4; // corresponding sequence number for each vbucket listed above
 }
 
+// logical clock for full set of vbuckets, starting from 0 to MaxVbucket.
 message TsVbFull {
-    required string bucket = 1; // bucket name
-    repeated uint64 seqnos = 2; // sequence numbers for full set of vbuckets
+    required string pool   = 1; // pool name
+    required string bucket = 2; // bucket name
+    repeated uint64 seqnos = 3; // sequence numbers for full set of vbuckets
 }
 
-// logical clock that will be used to interface with projector.
+// logical clock for a subset of vbuckets along with branch-id and snapshot
+// information.
 message TsVbuuid {
-    required string   bucket    = 1; // bucket name
-    repeated uint32   vbnos     = 2; // subset of vbucket numbers
-    repeated uint64   seqnos    = 3; // corresponding sequence number for each vbucket listed above
-    repeated uint64   vbuuids   = 4; // corresponding vbuuid for each vbucket listed above
-    repeated Snapshot snapshots = 5; // [][2]uint64 - snapshot of {start, end}
-}
-
-// An actor is a process in secondary index cluster and can be one of the following.
-enum ActorRole {
-    Projector        = 1;
-    Indexer          = 2;
-    IndexCoordinator = 3;
-}
-
-// Actors joining or leaving the topology. An actor is identified using its
-// admin-port's connection-address <host:port>.
-message Actor {
-    required bool      active         = 1;  // whether actor is joining or leaving.
-    required string    connectionAddr = 2;  // connectionAddr for actor.
-    repeated ActorRole roles          = 3; // roles actor can perform.
+    required string   pool      = 1; // pool name
+    required string   bucket    = 2; // bucket name
+    repeated uint32   vbnos     = 3; // subset of vbucket numbers
+    repeated uint64   seqnos    = 4; // corresponding seqno. for each vbucket
+    repeated uint64   vbuuids   = 5; // corresponding vbuuid for each vbucket
+    repeated Snapshot snapshots = 6; // list of snapshot {start, end}
 }
 
 // failover log for a vbucket.
 message FailoverLog {
     required uint32 vbno    = 1;
     repeated uint64 vbuuids = 2; // list of vbuuid for each branch history
-    repeated uint64 seqnos  = 3; // corresponding high sequence no for each vbuuid listed above.
-}
-
-// Periodic Heartbeat from indexer to Coordinator, for each bucket.
-message HeartBeat {
-    required TsVbFull hwTimestamp         = 1; // tip of the mutation queue
-    required uint32   lastPersistenceHash = 2; // tip of the storage
-    required uint32   lastStabilityHash   = 3; // tip of the snapshot
-    required uint32   freeQueue           = 4; // Mutation Queue Size
-}
-
-// Version information for Coordinator's StateContext
-message StateContextVersion {
-    required uint64 cas      = 1; // monotonically increasing number for every update
-    required uint32 checksum = 2;
+    repeated uint64 seqnos  = 3; // corresponding high seqno for each vbuuid
 }

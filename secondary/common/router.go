@@ -1,32 +1,34 @@
 package common
 
-// Router defines is per uuid router interface, where uuid might refer to an
-// index or similar entities.
-//
-// TODO:
-// - Differentiate between downstream endpoints and coordinator endpoint, so
-//   as to optimize the payload size to coordinator endpoint.
+import mc "github.com/couchbase/gomemcached/client"
+
+// Router defines is per instance (aka engine) router
+// interface, where an instance might refer to an index
+// or similar entities.
 type Router interface {
-	// Bucket will return the bucket name for which this router instance is
-	// applicable.
+	// Bucket will return the bucket name for which this
+	// router instance is applicable.
 	Bucket() string
 
-	// UuidEndpoints return a list of endpoints <host:port> that are
-	// associated with unique id `uuid`. Uuid can be an index-uuid.
-	UuidEndpoints() []string
+	// Endpoints return full list of endpoints <host:port>
+	// that are listening for this instance.
+	Endpoints() []string
 
-	// Coordinator endpoint
-	CoordinatorEndpoint() string
+	// UpsertEndpoints return a list of endpoints <host:port>
+	// to which Upsert message will be published.
+	// * m.VBucket, m.Seqno, m.Key - carry {vbno, seqno, docid}
+	UpsertEndpoints(m *mc.UprEvent, partKey, key, oldKey []byte) []string
 
-	// UpsertEndpoints return a list of endpoints <host:port> to which Upserted
-	// secondary-key, for this uuid, need to be published.
-	UpsertEndpoints(vbno uint16, seqno uint64, docid, partKey, key, oldKey []byte) []string
+	// UpsertDeletionEndpoints return a list of endpoints
+	// <host:port> to which UpsertDeletion message will be
+	// published.
+	// * oldPartKey and oldKey will be computed based on m.OldValue
+	// * m.VBucket, m.Seqno, m.Key - carry {vbno, seqno, docid}
+	UpsertDeletionEndpoints(m *mc.UprEvent, oldPartKey, key, oldKey []byte) []string
 
-	// UpsertDeletionEndpoints return a list of endpoints <host:port> to which
-	// UpsertDeletion secondary-key, for this uuid, need to be published.
-	UpsertDeletionEndpoints(vbno uint16, seqno uint64, docid, partKey, key, oldKey []byte) []string
-
-	// DeletionEndpoints return a list of endpoints <host:port> to which
-	// Deletion docid/secondary-key, for this uuid,  need to be published.
-	DeletionEndpoints(vbno uint16, seqno uint64, docid, partKey, oldKey []byte) []string
+	// DeletionEndpoints return a list of endpoints
+	// <host:port> to which Deletion message will be published.
+	// * partKey and oldKey will be computed based on m.OldValue
+	// * m.VBucket, m.Seqno, m.Key - carry {vbno, seqno, docid}
+	DeletionEndpoints(m *mc.UprEvent, oldPartKey, oldKey []byte) []string
 }

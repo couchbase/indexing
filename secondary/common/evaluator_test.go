@@ -3,6 +3,8 @@ package common
 import (
 	"compress/bzip2"
 	"encoding/json"
+	qe "github.com/couchbaselabs/query/expression"
+	query "github.com/couchbaselabs/query/expression/parser"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -51,17 +53,27 @@ func init() {
 }
 
 func TestN1QLTransform(t *testing.T) {
-	exprs := []string{`{"type":"property","path":"name"}`, `{"type":"property","path":"abv"}`}
+	expr1, err := query.Parse("name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expr2, err := query.Parse("abv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stringer := qe.NewStringer()
+	exprs := []string{stringer.Visit(expr1), stringer.Visit(expr2)}
 	cExpr, err := CompileN1QLExpression(exprs)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	secKey, err := N1QLTransform(doc, cExpr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(secKey) != `["Fireman's Pail Ale",0.5]` {
-		t.Fatal("evaluation failed")
+		t.Fatalf("evaluation failed %v", string(secKey))
 	}
 }
 

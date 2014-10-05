@@ -6,6 +6,7 @@ import (
 	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
+// Application is example application logic that uses query-port server
 func Application() {
 	killch := make(chan bool)
 	s, err := NewServer(

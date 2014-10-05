@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"code.google.com/p/goprotobuf/proto"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
+	"github.com/couchbaselabs/goprotobuf/proto"
 )
 
 var testStatisticsResponse = &protobuf.StatisticsResponse{

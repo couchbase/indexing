@@ -38,8 +38,8 @@ type Payload struct {
 	Vbs     []*VbKeyVersions // for N number of vbuckets
 }
 
-// ID is unique id for a vbucket across buckets.
-func ID(bucket string, vbno uint16) string {
+// StreamID is unique id for a vbucket across buckets.
+func StreamID(bucket string, vbno uint16) string {
 	return bucket + fmt.Sprintf("%v", vbno)
 }
 
@@ -132,7 +132,7 @@ type VbKeyVersions struct {
 func NewVbKeyVersions(bucket string, vbno uint16, vbuuid uint64, maxMutations int) *VbKeyVersions {
 	vb := &VbKeyVersions{Bucket: bucket, Vbucket: vbno, Vbuuid: vbuuid}
 	vb.Kvs = make([]*KeyVersions, 0, maxMutations)
-	vb.Uuid = ID(bucket, vbno)
+	vb.Uuid = StreamID(bucket, vbno)
 	return vb
 }
 
@@ -277,4 +277,12 @@ func (kv *KeyVersions) AddSnapshot(typ uint32, start, end uint64) {
 	binary.BigEndian.PutUint64(key[:8], start)
 	binary.BigEndian.PutUint64(okey[:8], end)
 	kv.addKey(uint64(typ), Snapshot, key[:8], okey[:8])
+}
+
+// DataportKeyVersions accepted by this endpoint.
+type DataportKeyVersions struct {
+	Bucket string
+	Vbno   uint16
+	Vbuuid uint64
+	Kv     *KeyVersions
 }

@@ -1,25 +1,19 @@
-// admin client to talk to the server
-//
-// clients can talk to server by doing,
-//
 // Example client {
 //     client := NewHTTPClient("http://localhost:9999", "/adminport/")
 //     req  := &protobuf.RequestMessage{}
 //     resp := &protobuf.ResponseMessage{}
 //     client.Request(req, resp)
 //
+//     // get statistics from server
 //     stats := &common.Statistics{}
-//     client.RequestStats("", stats)
+//     client.Request(stats, stats)
 // }
 
 package adminport
 
-import (
-	"bytes"
-	"github.com/couchbase/indexing/secondary/common"
-	"io/ioutil"
-	"net/http"
-)
+import "bytes"
+import "io/ioutil"
+import "net/http"
 
 // httpClient is a concrete type implementing Client interface.
 type httpClient struct {
@@ -53,20 +47,6 @@ func (c *httpClient) Request(msg, resp MessageMarshaller) (err error) {
 			return nil, err
 		}
 		req.Header.Add("Content-Type", msg.ContentType())
-		// POST request and return back the response
-		return c.httpc.Do(req)
-	}, resp)
-}
-
-// RequestStats is part of `Client` interface.
-func (c *httpClient) RequestStats(resp MessageMarshaller) (err error) {
-	return doResponse(func() (*http.Response, error) {
-		// create request, TODO: avoid magic value
-		url := c.serverAddr + common.StatsURLPath(c.urlPrefix, "")
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			return nil, err
-		}
 		// POST request and return back the response
 		return c.httpc.Do(req)
 	}, resp)

@@ -1,5 +1,5 @@
-// Package provides a simple library to spawn a queryport and access queryport
-// via passive client API.
+// Package queryport provides a simple library to spawn a queryport and access
+// queryport via passive client API.
 package queryport
 
 import (
@@ -9,12 +9,13 @@ import (
 	"net"
 	"time"
 
-	"code.google.com/p/goprotobuf/proto"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
 	"github.com/couchbase/indexing/secondary/transport"
+	"github.com/couchbaselabs/goprotobuf/proto"
 )
 
+// ErrorProtocol
 var ErrorProtocol = errors.New("queryport.protocol")
 
 // ResponseHandler shall interpret response packets from server
@@ -133,6 +134,7 @@ func (c *Client) Scan(
 	return nil
 }
 
+// ScanAll for full table scan.
 func (c *Client) ScanAll(pageSize int64, limit int64, callb func(interface{}) bool) error {
 	connectn, err := c.pool.Get()
 	if err != nil {

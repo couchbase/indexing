@@ -2,15 +2,13 @@
 
 package dataport
 
-import (
-	"fmt"
-	"sort"
-	"strings"
-	"time"
+import "fmt"
+import "sort"
+import "strings"
+import "time"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
 
 var commandNames = map[byte]string{
 	c.Upsert:         "Upsert",
@@ -42,9 +40,8 @@ func Application(
 		return true
 	}
 
-	mutch := make(chan []*protobuf.VbKeyVersions, c.MutationChannelSize)
-	sbch := make(chan interface{}, 100)
-	_, err := NewServer(addr, mutch, sbch)
+	appch := make(chan interface{}, c.MutationChannelSize)
+	_, err := NewServer(addr, appch)
 	if err != nil && doCallb(err) == false {
 		return
 	}
@@ -66,25 +63,19 @@ func Application(
 loop:
 	for {
 		select {
-		case vbs, ok := <-mutch:
-			if ok {
-				mutations += processMutations(vbs, bucketWise, keys)
-				if doCallb(vbs) == false {
-					break loop
-				}
-			} else {
+		case msg, ok := <-appch:
+			if !ok {
 				doCallb(nil)
 				break loop
 			}
 
-		case sb, ok := <-sbch:
+			vbs, ok := msg.([]*protobuf.VbKeyVersions)
 			if ok {
-				messages++
-				if doCallb(sb) == false {
-					break loop
-				}
+				mutations += processMutations(vbs, bucketWise, keys)
 			} else {
-				doCallb(nil)
+				messages++
+			}
+			if doCallb(msg) == false {
 				break loop
 			}
 

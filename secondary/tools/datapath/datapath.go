@@ -1,18 +1,16 @@
 package main
 
-import (
-	"flag"
-	"fmt"
-	"log"
-	"os"
-	"strconv"
-	"strings"
+import "flag"
+import "fmt"
+import "log"
+import "os"
+import "strconv"
+import "strings"
 
-	ap "github.com/couchbase/indexing/secondary/adminport"
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/dataport"
-	"github.com/couchbase/indexing/secondary/projector"
-)
+import common "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/dataport"
+import "github.com/couchbase/indexing/secondary/projector"
+import "github.com/couchbase/indexing/secondary/protobuf"
 
 var pooln = "default"
 
@@ -38,7 +36,7 @@ func argParse() string {
 		"list of endpoint daemon to start")
 	flag.StringVar(&options.coordEndpoint, "coorendp", coordEndpoint,
 		"co-ordinator endpoint")
-	flag.StringVar(&options.stat, "stat", "0",
+	flag.StringVar(&options.stat, "stat", "1000",
 		"periodic timeout to print dataport statistics")
 	flag.StringVar(&options.timeout, "timeout", "0",
 		"timeout for dataport to exit")
@@ -53,13 +51,12 @@ func argParse() string {
 
 	options.buckets = strings.Split(buckets, ",")
 	options.endpoints = strings.Split(endpoints, ",")
-
 	if options.debug {
-		c.SetLogLevel(c.LogLevelDebug)
+		common.SetLogLevel(common.LogLevelDebug)
 	} else if options.trace {
-		c.SetLogLevel(c.LogLevelTrace)
+		common.SetLogLevel(common.LogLevelTrace)
 	} else {
-		c.SetLogLevel(c.LogLevelInfo)
+		common.SetLogLevel(common.LogLevelInfo)
 	}
 
 	args := flag.Args()
@@ -75,7 +72,7 @@ func usage() {
 	flag.PrintDefaults()
 }
 
-var projectors = make(map[string]ap.Client)
+var projectors = make(map[string]*projector.Client)
 
 func main() {
 	cluster := argParse()
@@ -90,27 +87,38 @@ func main() {
 	}
 	go dataport.Application(options.coordEndpoint, 0, 0, nil)
 
-	// spawn initial set of projectors
-	kvaddrs, err := projector.GetKVAddrs(cluster, pooln, options.buckets[0])
+	kvaddrs, err := common.GetKVAddrs(cluster, pooln, options.buckets[0])
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("found %v nodes\n", kvaddrs)
-	_, err = projector.SpawnProjectors(cluster, kvaddrs, projectors)
-	if err != nil {
-		log.Fatal(err)
+
+	for _, kvaddr := range kvaddrs {
+		adminport := kvaddr2adminport(kvaddr, 500)
+		settings := map[string]interface{}{
+			"cluster":   cluster,
+			"adminport": adminport,
+			"kvaddrs":   []string{kvaddr},
+			"epfactory": common.RouterEndpointFactory(EndpointFactory),
+		}
+		projector.NewProjector(settings) // start projector daemon
+		projectors[kvaddr] = projector.NewClient(adminport)
+	}
+
+	endpointSettings := map[string]interface{}{
+		"type": "dataport",
 	}
 
 	// index instances for specified buckets.
-	instances := projector.ExampleIndexInstances(
+	instances := protobuf.ExampleIndexInstances(
 		options.buckets, options.endpoints, options.coordEndpoint)
 
 	// start backfill stream on each projector
 	for kvaddr, client := range projectors {
 		// start backfill stream on each projector
-		_, err := projector.InitialMutationStream(
-			client, "backfill" /*topic*/, "default" /*pooln*/, kvaddr,
-			options.buckets, instances)
+		_, err := client.InitialTopicRequest(
+			"backfill" /*topic*/, "default" /*pooln*/, kvaddr,
+			endpointSettings, instances)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -119,8 +127,31 @@ func main() {
 	<-make(chan bool) // wait for ever
 }
 
+func kvaddr2adminport(kvaddr string, offset int) string {
+	ss := strings.Split(kvaddr, ":")
+	kport, err := strconv.Atoi(ss[1])
+	if err != nil {
+		log.Fatal(err)
+	}
+	return ss[0] + ":" + strconv.Itoa(kport+offset)
+}
+
 func mf(err error, msg string) {
 	if err != nil {
 		log.Fatalf("%v: %v", msg, err)
 	}
+}
+
+// EndpointFactory to create endpoint instances based on settings.
+func EndpointFactory(
+	topic, addr string,
+	settings map[string]interface{}) (common.RouterEndpoint, error) {
+
+	switch v := settings["type"].(string); v {
+	case "dataport":
+		return dataport.NewRouterEndpoint(topic, addr, settings)
+	default:
+		log.Fatal("Unknown endpoint type")
+	}
+	return nil, nil
 }

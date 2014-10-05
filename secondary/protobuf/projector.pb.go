@@ -11,7 +11,8 @@ import math "math"
 var _ = proto.Marshal
 var _ = math.Inf
 
-// Requested by Coordinator/indexer to learn vbuckets hosted by kvnodes.
+// Requested by Coordinator/indexer to learn vbuckets
+// hosted by kvnodes.
 type VbmapRequest struct {
 	Pool             *string  `protobuf:"bytes,1,req,name=pool" json:"pool,omitempty"`
 	Bucket           *string  `protobuf:"bytes,2,req,name=bucket" json:"bucket,omitempty"`
@@ -76,7 +77,8 @@ func (m *VbmapResponse) GetErr() *Error {
 	return nil
 }
 
-// Requested by Coordinator during system-start, re-connect, rollback
+// Requested by Coordinator during system-start,
+// re-connect, rollback
 type FailoverLogRequest struct {
 	Pool             *string  `protobuf:"bytes,1,req,name=pool" json:"pool,omitempty"`
 	Bucket           *string  `protobuf:"bytes,2,req,name=bucket" json:"bucket,omitempty"`
@@ -133,369 +135,325 @@ func (m *FailoverLogResponse) GetErr() *Error {
 	return nil
 }
 
-// Requested by Coordinator or indexer to start a new mutation stream.
-// TsVbuuid. Vbnos should be in sort order
-//
-// start,
-//      new-set of buckets, valid subset of restart-timestamps and engines.
-type MutationStreamRequest struct {
-	Topic             *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
-	Flag              *uint32     `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
-	Pools             []string    `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
-	Buckets           []string    `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
-	RestartTimestamps []*TsVbuuid `protobuf:"bytes,5,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
-	// list of index applicable for this stream, optional as well
-	Instances        []*IndexInst `protobuf:"bytes,6,rep,name=instances" json:"instances,omitempty"`
-	XXX_unrecognized []byte       `json:"-"`
+// Requested by Coordinator or indexer to start a
+// new mutation topic. Responds back with TopicResponse.
+type MutationTopicRequest struct {
+	Topic            *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	EndpointSettings []byte      `protobuf:"bytes,2,req,name=endpointSettings" json:"endpointSettings,omitempty"`
+	ReqTimestamps    []*TsVbuuid `protobuf:"bytes,3,rep,name=reqTimestamps" json:"reqTimestamps,omitempty"`
+	// initial list of instances applicable for this topic
+	Instances        []*Instance `protobuf:"bytes,4,rep,name=instances" json:"instances,omitempty"`
+	XXX_unrecognized []byte      `json:"-"`
 }
 
-func (m *MutationStreamRequest) Reset()         { *m = MutationStreamRequest{} }
-func (m *MutationStreamRequest) String() string { return proto.CompactTextString(m) }
-func (*MutationStreamRequest) ProtoMessage()    {}
+func (m *MutationTopicRequest) Reset()         { *m = MutationTopicRequest{} }
+func (m *MutationTopicRequest) String() string { return proto.CompactTextString(m) }
+func (*MutationTopicRequest) ProtoMessage()    {}
 
-func (m *MutationStreamRequest) GetTopic() string {
+func (m *MutationTopicRequest) GetTopic() string {
 	if m != nil && m.Topic != nil {
 		return *m.Topic
 	}
 	return ""
 }
 
-func (m *MutationStreamRequest) GetFlag() uint32 {
-	if m != nil && m.Flag != nil {
-		return *m.Flag
-	}
-	return 0
-}
-
-func (m *MutationStreamRequest) GetPools() []string {
+func (m *MutationTopicRequest) GetEndpointSettings() []byte {
 	if m != nil {
-		return m.Pools
+		return m.EndpointSettings
 	}
 	return nil
 }
 
-func (m *MutationStreamRequest) GetBuckets() []string {
+func (m *MutationTopicRequest) GetReqTimestamps() []*TsVbuuid {
 	if m != nil {
-		return m.Buckets
+		return m.ReqTimestamps
 	}
 	return nil
 }
 
-func (m *MutationStreamRequest) GetRestartTimestamps() []*TsVbuuid {
-	if m != nil {
-		return m.RestartTimestamps
-	}
-	return nil
-}
-
-func (m *MutationStreamRequest) GetInstances() []*IndexInst {
+func (m *MutationTopicRequest) GetInstances() []*Instance {
 	if m != nil {
 		return m.Instances
 	}
 	return nil
 }
 
-type MutationStreamResponse struct {
-	Topic   *string  `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
-	Flag    *uint32  `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
-	Pools   []string `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
-	Buckets []string `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
-	// per bucket failover-timestamp, kv-timestamp for all active vbuckets,
-	// for each bucket, after executing the request.
-	FailoverTimestamps []*TsVbuuid `protobuf:"bytes,5,rep,name=failoverTimestamps" json:"failoverTimestamps,omitempty"`
-	KvTimestamps       []*TsVbuuid `protobuf:"bytes,6,rep,name=kvTimestamps" json:"kvTimestamps,omitempty"`
-	IndexUuids         []uint64    `protobuf:"varint,7,rep,name=indexUuids" json:"indexUuids,omitempty"`
-	Err                *Error      `protobuf:"bytes,8,opt,name=err" json:"err,omitempty"`
+// Response back for
+//      MutationTopicRequest, RestartVbucketsRequest, ShutdownVbucketsRequest
+type TopicResponse struct {
+	Topic              *string     `protobuf:"bytes,1,opt,name=topic" json:"topic,omitempty"`
+	InstanceIds        []uint64    `protobuf:"varint,2,rep,name=instanceIds" json:"instanceIds,omitempty"`
+	ReqTimestamps      []*TsVbuuid `protobuf:"bytes,3,rep,name=reqTimestamps" json:"reqTimestamps,omitempty"`
+	RollbackTimestamps []*TsVbuuid `protobuf:"bytes,4,rep,name=rollbackTimestamps" json:"rollbackTimestamps,omitempty"`
+	Err                *Error      `protobuf:"bytes,5,opt,name=err" json:"err,omitempty"`
 	XXX_unrecognized   []byte      `json:"-"`
 }
 
-func (m *MutationStreamResponse) Reset()         { *m = MutationStreamResponse{} }
-func (m *MutationStreamResponse) String() string { return proto.CompactTextString(m) }
-func (*MutationStreamResponse) ProtoMessage()    {}
+func (m *TopicResponse) Reset()         { *m = TopicResponse{} }
+func (m *TopicResponse) String() string { return proto.CompactTextString(m) }
+func (*TopicResponse) ProtoMessage()    {}
 
-func (m *MutationStreamResponse) GetTopic() string {
+func (m *TopicResponse) GetTopic() string {
 	if m != nil && m.Topic != nil {
 		return *m.Topic
 	}
 	return ""
 }
 
-func (m *MutationStreamResponse) GetFlag() uint32 {
-	if m != nil && m.Flag != nil {
-		return *m.Flag
-	}
-	return 0
-}
-
-func (m *MutationStreamResponse) GetPools() []string {
+func (m *TopicResponse) GetInstanceIds() []uint64 {
 	if m != nil {
-		return m.Pools
+		return m.InstanceIds
 	}
 	return nil
 }
 
-func (m *MutationStreamResponse) GetBuckets() []string {
+func (m *TopicResponse) GetReqTimestamps() []*TsVbuuid {
 	if m != nil {
-		return m.Buckets
+		return m.ReqTimestamps
 	}
 	return nil
 }
 
-func (m *MutationStreamResponse) GetFailoverTimestamps() []*TsVbuuid {
+func (m *TopicResponse) GetRollbackTimestamps() []*TsVbuuid {
 	if m != nil {
-		return m.FailoverTimestamps
+		return m.RollbackTimestamps
 	}
 	return nil
 }
 
-func (m *MutationStreamResponse) GetKvTimestamps() []*TsVbuuid {
-	if m != nil {
-		return m.KvTimestamps
-	}
-	return nil
-}
-
-func (m *MutationStreamResponse) GetIndexUuids() []uint64 {
-	if m != nil {
-		return m.IndexUuids
-	}
-	return nil
-}
-
-func (m *MutationStreamResponse) GetErr() *Error {
+func (m *TopicResponse) GetErr() *Error {
 	if m != nil {
 		return m.Err
 	}
 	return nil
 }
 
-// Requested by Coordinator or indexer to restart or shutdown vbuckets from an
-// active mutation stream. Returns back MutationStreamResponse.
-//
-// restart,
-//      subset of buckets, valid subset of restart-timestamps for buckets and
-//      its engines.
-// shutdown,
-//      subset of active buckets, valid subset of restart-timestamps for buckets
-//      and its engines.
-// add-buckets,
-//      new sub-set of buckets, valid subset of restart-timestamps for buckets
-//      and its engines.
-// del-buckets,
-//      subset of buckets to shutdown.
-//
-// restart/shutdown flags are mutually exclusive, likewise,
-// add-buckets/del-buckets flags are mutually exclusive.
-type UpdateMutationStreamRequest struct {
+// RestartVbucketsRequest will restart a subset
+// of vbuckets for each specified buckets.
+// Responds back with TopicResponse
+type RestartVbucketsRequest struct {
 	Topic             *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
-	Flag              *uint32     `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
-	Pools             []string    `protobuf:"bytes,3,rep,name=pools" json:"pools,omitempty"`
-	Buckets           []string    `protobuf:"bytes,4,rep,name=buckets" json:"buckets,omitempty"`
-	RestartTimestamps []*TsVbuuid `protobuf:"bytes,5,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
-	// list of index applicable for this stream, optional as well
-	Instances        []*IndexInst `protobuf:"bytes,6,rep,name=instances" json:"instances,omitempty"`
-	XXX_unrecognized []byte       `json:"-"`
+	RestartTimestamps []*TsVbuuid `protobuf:"bytes,2,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
+	XXX_unrecognized  []byte      `json:"-"`
 }
 
-func (m *UpdateMutationStreamRequest) Reset()         { *m = UpdateMutationStreamRequest{} }
-func (m *UpdateMutationStreamRequest) String() string { return proto.CompactTextString(m) }
-func (*UpdateMutationStreamRequest) ProtoMessage()    {}
+func (m *RestartVbucketsRequest) Reset()         { *m = RestartVbucketsRequest{} }
+func (m *RestartVbucketsRequest) String() string { return proto.CompactTextString(m) }
+func (*RestartVbucketsRequest) ProtoMessage()    {}
 
-func (m *UpdateMutationStreamRequest) GetTopic() string {
+func (m *RestartVbucketsRequest) GetTopic() string {
 	if m != nil && m.Topic != nil {
 		return *m.Topic
 	}
 	return ""
 }
 
-func (m *UpdateMutationStreamRequest) GetFlag() uint32 {
-	if m != nil && m.Flag != nil {
-		return *m.Flag
-	}
-	return 0
-}
-
-func (m *UpdateMutationStreamRequest) GetPools() []string {
-	if m != nil {
-		return m.Pools
-	}
-	return nil
-}
-
-func (m *UpdateMutationStreamRequest) GetBuckets() []string {
-	if m != nil {
-		return m.Buckets
-	}
-	return nil
-}
-
-func (m *UpdateMutationStreamRequest) GetRestartTimestamps() []*TsVbuuid {
+func (m *RestartVbucketsRequest) GetRestartTimestamps() []*TsVbuuid {
 	if m != nil {
 		return m.RestartTimestamps
 	}
 	return nil
 }
 
-func (m *UpdateMutationStreamRequest) GetInstances() []*IndexInst {
-	if m != nil {
-		return m.Instances
-	}
-	return nil
+// ShutdownVbucketsRequest will shutdown a subset of vbuckets
+// for each specified buckets. Responds back with TopicResponse
+type ShutdownVbucketsRequest struct {
+	Topic              *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	ShutdownTimestamps []*TsVbuuid `protobuf:"bytes,2,rep,name=shutdownTimestamps" json:"shutdownTimestamps,omitempty"`
+	XXX_unrecognized   []byte      `json:"-"`
 }
 
-// Requested by third party component that wants to subscribe to a topic-name.
-// Error message will be sent as response
-//
-// add-engines,
-//      add new set of engines for one or more active buckets.
-// update-engines,
-//      update an existing engines, for one or more active buckets,  with new
-//      definitions.
-//      TODO: replace update-engine request with delete and add.
-// del-engines,
-//      delete engines from one or more active buckets.
-//
-// flags are mutually exclusive.
-type SubscribeStreamRequest struct {
-	Topic            *string      `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
-	Flag             *uint32      `protobuf:"varint,2,req,name=flag" json:"flag,omitempty"`
-	Instances        []*IndexInst `protobuf:"bytes,3,rep,name=instances" json:"instances,omitempty"`
-	XXX_unrecognized []byte       `json:"-"`
-}
+func (m *ShutdownVbucketsRequest) Reset()         { *m = ShutdownVbucketsRequest{} }
+func (m *ShutdownVbucketsRequest) String() string { return proto.CompactTextString(m) }
+func (*ShutdownVbucketsRequest) ProtoMessage()    {}
 
-func (m *SubscribeStreamRequest) Reset()         { *m = SubscribeStreamRequest{} }
-func (m *SubscribeStreamRequest) String() string { return proto.CompactTextString(m) }
-func (*SubscribeStreamRequest) ProtoMessage()    {}
-
-func (m *SubscribeStreamRequest) GetTopic() string {
+func (m *ShutdownVbucketsRequest) GetTopic() string {
 	if m != nil && m.Topic != nil {
 		return *m.Topic
 	}
 	return ""
 }
 
-func (m *SubscribeStreamRequest) GetFlag() uint32 {
-	if m != nil && m.Flag != nil {
-		return *m.Flag
+func (m *ShutdownVbucketsRequest) GetShutdownTimestamps() []*TsVbuuid {
+	if m != nil {
+		return m.ShutdownTimestamps
 	}
-	return 0
+	return nil
 }
 
-func (m *SubscribeStreamRequest) GetInstances() []*IndexInst {
+// AddBucketsRequest will start vbucket-streams
+// specified buckets and add them to the topic that
+// has already started.
+// Responds back with TopicResponse
+type AddBucketsRequest struct {
+	Topic         *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	ReqTimestamps []*TsVbuuid `protobuf:"bytes,2,rep,name=reqTimestamps" json:"reqTimestamps,omitempty"`
+	// list of instances applicable for buckets.
+	Instances        []*Instance `protobuf:"bytes,3,rep,name=instances" json:"instances,omitempty"`
+	XXX_unrecognized []byte      `json:"-"`
+}
+
+func (m *AddBucketsRequest) Reset()         { *m = AddBucketsRequest{} }
+func (m *AddBucketsRequest) String() string { return proto.CompactTextString(m) }
+func (*AddBucketsRequest) ProtoMessage()    {}
+
+func (m *AddBucketsRequest) GetTopic() string {
+	if m != nil && m.Topic != nil {
+		return *m.Topic
+	}
+	return ""
+}
+
+func (m *AddBucketsRequest) GetReqTimestamps() []*TsVbuuid {
+	if m != nil {
+		return m.ReqTimestamps
+	}
+	return nil
+}
+
+func (m *AddBucketsRequest) GetInstances() []*Instance {
 	if m != nil {
 		return m.Instances
+	}
+	return nil
+}
+
+// DelBucketsRequest will shutdown vbucket-streams
+// for specified buckets and remove the buckets from topic.
+// Responds back with TopicResponse
+type DelBucketsRequest struct {
+	Topic            *string  `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	Buckets          []string `protobuf:"bytes,2,rep,name=buckets" json:"buckets,omitempty"`
+	XXX_unrecognized []byte   `json:"-"`
+}
+
+func (m *DelBucketsRequest) Reset()         { *m = DelBucketsRequest{} }
+func (m *DelBucketsRequest) String() string { return proto.CompactTextString(m) }
+func (*DelBucketsRequest) ProtoMessage()    {}
+
+func (m *DelBucketsRequest) GetTopic() string {
+	if m != nil && m.Topic != nil {
+		return *m.Topic
+	}
+	return ""
+}
+
+func (m *DelBucketsRequest) GetBuckets() []string {
+	if m != nil {
+		return m.Buckets
+	}
+	return nil
+}
+
+// AddInstancesRequest to add index-instances to a topic.
+// Responds back with TopicResponse
+type AddInstancesRequest struct {
+	Topic            *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	Instances        []*Instance `protobuf:"bytes,2,rep,name=instances" json:"instances,omitempty"`
+	XXX_unrecognized []byte      `json:"-"`
+}
+
+func (m *AddInstancesRequest) Reset()         { *m = AddInstancesRequest{} }
+func (m *AddInstancesRequest) String() string { return proto.CompactTextString(m) }
+func (*AddInstancesRequest) ProtoMessage()    {}
+
+func (m *AddInstancesRequest) GetTopic() string {
+	if m != nil && m.Topic != nil {
+		return *m.Topic
+	}
+	return ""
+}
+
+func (m *AddInstancesRequest) GetInstances() []*Instance {
+	if m != nil {
+		return m.Instances
+	}
+	return nil
+}
+
+// DelInstancesRequest to add index-instances to a topic.
+// Responds back with TopicResponse
+type DelInstancesRequest struct {
+	Topic            *string  `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	InstanceIds      []uint64 `protobuf:"varint,2,rep,name=instanceIds" json:"instanceIds,omitempty"`
+	XXX_unrecognized []byte   `json:"-"`
+}
+
+func (m *DelInstancesRequest) Reset()         { *m = DelInstancesRequest{} }
+func (m *DelInstancesRequest) String() string { return proto.CompactTextString(m) }
+func (*DelInstancesRequest) ProtoMessage()    {}
+
+func (m *DelInstancesRequest) GetTopic() string {
+	if m != nil && m.Topic != nil {
+		return *m.Topic
+	}
+	return ""
+}
+
+func (m *DelInstancesRequest) GetInstanceIds() []uint64 {
+	if m != nil {
+		return m.InstanceIds
 	}
 	return nil
 }
 
 // Requested by indexer / coordinator to inform router to re-connect with
 // downstream endpoint. Error message will be sent as response.
-type RepairDownstreamEndpoints struct {
+type RepairEndpointsRequest struct {
 	Topic            *string  `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	Endpoints        []string `protobuf:"bytes,2,rep,name=endpoints" json:"endpoints,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
-func (m *RepairDownstreamEndpoints) Reset()         { *m = RepairDownstreamEndpoints{} }
-func (m *RepairDownstreamEndpoints) String() string { return proto.CompactTextString(m) }
-func (*RepairDownstreamEndpoints) ProtoMessage()    {}
+func (m *RepairEndpointsRequest) Reset()         { *m = RepairEndpointsRequest{} }
+func (m *RepairEndpointsRequest) String() string { return proto.CompactTextString(m) }
+func (*RepairEndpointsRequest) ProtoMessage()    {}
 
-func (m *RepairDownstreamEndpoints) GetTopic() string {
+func (m *RepairEndpointsRequest) GetTopic() string {
 	if m != nil && m.Topic != nil {
 		return *m.Topic
 	}
 	return ""
 }
 
-func (m *RepairDownstreamEndpoints) GetEndpoints() []string {
+func (m *RepairEndpointsRequest) GetEndpoints() []string {
 	if m != nil {
 		return m.Endpoints
 	}
 	return nil
 }
 
-// Requested by coordinator to should down a mutation stream and all KV
-// connections active for that stream. Error message will be sent as response.
-type ShutdownStreamRequest struct {
+// Requested by coordinator to should down a mutation topic and all KV
+// connections active for that topic. Error message will be sent as response.
+type ShutdownTopicRequest struct {
 	Topic            *string `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
-func (m *ShutdownStreamRequest) Reset()         { *m = ShutdownStreamRequest{} }
-func (m *ShutdownStreamRequest) String() string { return proto.CompactTextString(m) }
-func (*ShutdownStreamRequest) ProtoMessage()    {}
+func (m *ShutdownTopicRequest) Reset()         { *m = ShutdownTopicRequest{} }
+func (m *ShutdownTopicRequest) String() string { return proto.CompactTextString(m) }
+func (*ShutdownTopicRequest) ProtoMessage()    {}
 
-func (m *ShutdownStreamRequest) GetTopic() string {
+func (m *ShutdownTopicRequest) GetTopic() string {
 	if m != nil && m.Topic != nil {
 		return *m.Topic
 	}
 	return ""
 }
 
-// Requested by Coordinator during bootstrap handshake to get the current list
-// of active streams from projector
-type ActiveStreamRequest struct {
-	XXX_unrecognized []byte `json:"-"`
+// Generic instance, can be an index instance, xdcr, search etc ...
+type Instance struct {
+	IndexInstance    *IndexInst `protobuf:"bytes,1,opt,name=indexInstance" json:"indexInstance,omitempty"`
+	XXX_unrecognized []byte     `json:"-"`
 }
 
-func (m *ActiveStreamRequest) Reset()         { *m = ActiveStreamRequest{} }
-func (m *ActiveStreamRequest) String() string { return proto.CompactTextString(m) }
-func (*ActiveStreamRequest) ProtoMessage()    {}
+func (m *Instance) Reset()         { *m = Instance{} }
+func (m *Instance) String() string { return proto.CompactTextString(m) }
+func (*Instance) ProtoMessage()    {}
 
-type ActiveStreamResponse struct {
-	Streams          []*MutationStreamResponse `protobuf:"bytes,1,rep,name=streams" json:"streams,omitempty"`
-	Err              *Error                    `protobuf:"bytes,2,opt,name=err" json:"err,omitempty"`
-	XXX_unrecognized []byte                    `json:"-"`
-}
-
-func (m *ActiveStreamResponse) Reset()         { *m = ActiveStreamResponse{} }
-func (m *ActiveStreamResponse) String() string { return proto.CompactTextString(m) }
-func (*ActiveStreamResponse) ProtoMessage()    {}
-
-func (m *ActiveStreamResponse) GetStreams() []*MutationStreamResponse {
+func (m *Instance) GetIndexInstance() *IndexInst {
 	if m != nil {
-		return m.Streams
-	}
-	return nil
-}
-
-func (m *ActiveStreamResponse) GetErr() *Error {
-	if m != nil {
-		return m.Err
-	}
-	return nil
-}
-
-// Requested by Coordinator during initial index build, to calculate
-// initial-build-timestamp for each bucket.
-type CurrentTimestampRequest struct {
-	Buckets          []string `protobuf:"bytes,1,rep,name=buckets" json:"buckets,omitempty"`
-	XXX_unrecognized []byte   `json:"-"`
-}
-
-func (m *CurrentTimestampRequest) Reset()         { *m = CurrentTimestampRequest{} }
-func (m *CurrentTimestampRequest) String() string { return proto.CompactTextString(m) }
-func (*CurrentTimestampRequest) ProtoMessage()    {}
-
-func (m *CurrentTimestampRequest) GetBuckets() []string {
-	if m != nil {
-		return m.Buckets
-	}
-	return nil
-}
-
-type CurrentTimestampResponse struct {
-	CurrentTimestamps []*TsVbuuid `protobuf:"bytes,1,rep,name=currentTimestamps" json:"currentTimestamps,omitempty"`
-	XXX_unrecognized  []byte      `json:"-"`
-}
-
-func (m *CurrentTimestampResponse) Reset()         { *m = CurrentTimestampResponse{} }
-func (m *CurrentTimestampResponse) String() string { return proto.CompactTextString(m) }
-func (*CurrentTimestampResponse) ProtoMessage()    {}
-
-func (m *CurrentTimestampResponse) GetCurrentTimestamps() []*TsVbuuid {
-	if m != nil {
-		return m.CurrentTimestamps
+		return m.IndexInstance
 	}
 	return nil
 }

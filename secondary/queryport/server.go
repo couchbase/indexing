@@ -3,6 +3,7 @@ package queryport
 import (
 	"fmt"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -51,8 +52,9 @@ func NewServer(laddr string, callb RequestHandler) (s *Server, err error) {
 func (s *Server) Close() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v Close fatal panic: %v\n", s.logPrefix, r)
+			c.Errorf("%v Close() crashed: %v\n", s.logPrefix, r)
 			err = fmt.Errorf("%v", r)
+			c.StackTrace(string(debug.Stack()))
 		}
 	}()
 
@@ -72,7 +74,8 @@ func (s *Server) Close() (err error) {
 func (s *Server) listener() {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v listener fatal panic: %v", s.logPrefix, r)
+			c.Errorf("%v listener() crashed: %v", s.logPrefix, r)
+			c.StackTrace(string(debug.Stack()))
 		}
 		go s.Close()
 	}()

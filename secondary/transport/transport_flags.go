@@ -6,18 +6,25 @@
 //           +-------+-------+---------------+  COMP. - Compression
 //          0| COMP. |  ENC. | undefined     |  ENC.  - Encoding
 //           +-------+-------+---------------+
+
 package transport
 
 const ( // types of encoding over the wire.
-	EncodingNone     byte = 0x00
+	// EncodingNone place holder.
+	EncodingNone byte = 0x00
+	// EncodingProtobuf uses protobuf as coding format.
 	EncodingProtobuf byte = 0x10
 )
 
 const ( // types of compression over the wire.
-	CompressionNone   byte = 0
-	CompressionSnappy      = 1
-	CompressionGzip        = 2
-	CompressionBzip2       = 3
+	// CompressionNone does not apply compression on the payload.
+	CompressionNone byte = 0
+	// CompressionSnappy apply snappy compression on payload.
+	CompressionSnappy = 1
+	// CompressionGzip apply gzip compression on payload.
+	CompressionGzip = 2
+	// CompressionBzip2 apply bzip2 compression on the payload.
+	CompressionBzip2 = 3
 )
 
 // TransportFlag tell packet encoding and compression formats.

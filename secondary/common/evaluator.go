@@ -1,27 +1,31 @@
 package common
 
-import (
-	"github.com/couchbaselabs/dparval"
-	"github.com/couchbaselabs/tuqtng/ast"
-)
+import mc "github.com/couchbase/gomemcached/client"
+import qexpr "github.com/couchbaselabs/query/expression"
+import qparser "github.com/couchbaselabs/query/expression/parser"
+import qvalue "github.com/couchbaselabs/query/value"
 
-// Evaluator interface for projector, to be implemented by secondary-index or
-// other entities.
+// Evaluator interface for projector, to be implemented by
+// secondary-index or other entities.
 type Evaluator interface {
-	// Return the bucket name for which this evaluator is applicable
+	// Return the bucket name for which this evaluator is applicable.
 	Bucket() string
 
-	// Compile expressions defined for an index. Will be called when a feed
-	// (aka mutation-stream) is being setup.
-	Compile() error
+	// StreamBeginData is generated for downstream.
+	StreamBeginData(vbno uint16, vbuuid, seqno uint64) (data interface{})
 
-	// Transform for document using DDL expressions for seconday-key. Will
-	// be called for every KV-mutation.
-	Transform(docid []byte, document []byte) (secKey []byte, err error)
+	// Sync is generated for downstream.
+	SyncData(vbno uint16, vbuuid, seqno uint64) (data interface{})
 
-	// PartitionKey for document using DDL expressions for seconday-key. Will
-	// be called for every KV-mutation.
-	PartitionKey(docid []byte, document []byte) (secKey []byte, err error)
+	// SnapshotData is generated for downstream.
+	SnapshotData(m *mc.UprEvent, vbno uint16, vbuuid, seqno uint64) interface{}
+
+	// StreamEnd is generated for downstream.
+	StreamEndData(vbno uint16, vbuuid, seqno uint64) (data interface{})
+
+	// TransformRoute will transform document consumable by
+	// downstream, returns data to be published to endpoints.
+	TransformRoute(vbuuid uint64, m *mc.UprEvent) (endpoints map[string]interface{}, err error)
 }
 
 // CompileN1QLExpression will take expressions defined in N1QL's DDL statement
@@ -29,8 +33,9 @@ type Evaluator interface {
 func CompileN1QLExpression(expressions []string) ([]interface{}, error) {
 	cExprs := make([]interface{}, 0, len(expressions))
 	for _, expr := range expressions {
-		cExpr, err := ast.UnmarshalExpression([]byte(expr))
+		cExpr, err := qparser.Parse(expr)
 		if err != nil {
+			Errorf("CompileN1QLExpression() %v: %v", expr, err)
 			return nil, err
 		}
 		cExprs = append(cExprs, cExpr)
@@ -42,11 +47,12 @@ func CompileN1QLExpression(expressions []string) ([]interface{}, error) {
 // statement and evaluate a document using them to return a secondary
 // key as JSON object.
 func N1QLTransform(document []byte, cExprs []interface{}) ([]byte, error) {
-	arrValue := make([]*dparval.Value, 0, len(cExprs))
+	arrValue := make([]qvalue.Value, 0, len(cExprs))
+	context := qexpr.NewIndexContext()
 	for _, cExpr := range cExprs {
-		expr := cExpr.(ast.Expression)
+		expr := cExpr.(qexpr.Expression)
 		// TODO: CBIDXT-133: needs to send nil secondary keys to indexer
-		key, err := expr.Evaluate(dparval.NewValueFromBytes(document))
+		key, err := expr.Evaluate(qvalue.NewValueFromBytes(document), context)
 		if err != nil {
 			return nil, nil
 		}
@@ -54,7 +60,7 @@ func N1QLTransform(document []byte, cExprs []interface{}) ([]byte, error) {
 	}
 
 	if len(arrValue) > 1 {
-		secKey := dparval.NewValue(make([]interface{}, len(cExprs)))
+		secKey := qvalue.NewValue(make([]interface{}, len(cExprs)))
 		for i, key := range arrValue {
 			secKey.SetIndex(i, key)
 		}
@@ -65,14 +71,4 @@ func N1QLTransform(document []byte, cExprs []interface{}) ([]byte, error) {
 
 	}
 	return nil, ErrorEmptyN1QLExpression
-}
-
-// CompositeKeysToArray convert list of composite keys to JSON array of
-// values.
-func CompositeKeysToArray(keys []*dparval.Value) []byte {
-	secKey := dparval.NewValue(make([]interface{}, len(keys)))
-	for i, key := range keys {
-		secKey.SetIndex(i, key)
-	}
-	return secKey.Bytes()
 }

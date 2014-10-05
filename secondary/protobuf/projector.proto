@@ -1,12 +1,13 @@
-// system request and administration request supported by projector's
-// admin-port.
+// system request and administration request supported
+// by projector's admin-port.
 
 package protobuf;
 
 import "common.proto";
 import "index.proto";
 
-// Requested by Coordinator/indexer to learn vbuckets hosted by kvnodes.
+// Requested by Coordinator/indexer to learn vbuckets
+// hosted by kvnodes.
 message VbmapRequest {
     required string pool    = 1;
     required string bucket  = 2;
@@ -19,7 +20,8 @@ message VbmapResponse {
     optional Error    err     = 3;
 }
 
-// Requested by Coordinator during system-start, re-connect, rollback
+// Requested by Coordinator during system-start,
+// re-connect, rollback
 message FailoverLogRequest {
     required string pool   = 1;
     required string bucket = 2;
@@ -31,110 +33,88 @@ message FailoverLogResponse {
     optional Error       err  = 2;
 }
 
-// Requested by Coordinator or indexer to start a new mutation stream.
-// TsVbuuid. Vbnos should be in sort order
-//
-// start,
-//      new-set of buckets, valid subset of restart-timestamps and engines.
-message MutationStreamRequest {
-    required string    topic             = 1; // topic name.
-    required uint32    flag              = 2;
-    repeated string    pools             = 3;
-    repeated string    buckets           = 4;
-    repeated TsVbuuid  restartTimestamps = 5; // list of timestamps, one per bucket
-    // list of index applicable for this stream, optional as well
-    repeated IndexInst instances         = 6;
+// Requested by Coordinator or indexer to start a
+// new mutation topic. Responds back with TopicResponse.
+message MutationTopicRequest {
+    required string   topic            = 1;
+    required bytes    endpointSettings = 2; // settings to RouterEndpointFactory
+    repeated TsVbuuid reqTimestamps    = 3; // list of timestamps, per bucket
+    // initial list of instances applicable for this topic
+    repeated Instance instances        = 4;
 }
 
-message MutationStreamResponse {
+// Response back for
+//      MutationTopicRequest, RestartVbucketsRequest, ShutdownVbucketsRequest
+message TopicResponse {
+    optional string   topic              = 1;
+    repeated uint64   instanceIds        = 2;
+    repeated TsVbuuid reqTimestamps      = 3; // original requested timestamp
+    repeated TsVbuuid rollbackTimestamps = 4; // sort order
+    optional Error    err                = 5;
+}
+
+// RestartVbucketsRequest will restart a subset
+// of vbuckets for each specified buckets.
+// Responds back with TopicResponse
+message RestartVbucketsRequest {
     required string   topic              = 1;
-    required uint32   flag               = 2;
-    repeated string   pools              = 3;
-    repeated string   buckets            = 4;
-    // per bucket failover-timestamp, kv-timestamp for all active vbuckets,
-    // for each bucket, after executing the request.
-    repeated TsVbuuid failoverTimestamps = 5; // sort order
-    repeated TsVbuuid kvTimestamps       = 6; // sort order
-    repeated uint64   indexUuids         = 7;
-    optional Error    err                = 8;
+    repeated TsVbuuid restartTimestamps  = 2; // per bucket timestamps
 }
 
-// Requested by Coordinator or indexer to restart or shutdown vbuckets from an
-// active mutation stream. Returns back MutationStreamResponse.
-//
-// restart,
-//      subset of buckets, valid subset of restart-timestamps for buckets and
-//      its engines.
-// shutdown,
-//      subset of active buckets, valid subset of restart-timestamps for buckets
-//      and its engines.
-// add-buckets,
-//      new sub-set of buckets, valid subset of restart-timestamps for buckets
-//      and its engines.
-// del-buckets,
-//      subset of buckets to shutdown.
-//
-// restart/shutdown flags are mutually exclusive, likewise,
-// add-buckets/del-buckets flags are mutually exclusive.
-message UpdateMutationStreamRequest {
-    required string    topic             = 1; // topic name.
-    required uint32    flag              = 2;
-    repeated string    pools             = 3;
-    repeated string    buckets           = 4;
-    repeated TsVbuuid  restartTimestamps = 5; // list of timestamps, one per bucket
-    // list of index applicable for this stream, optional as well
-    repeated IndexInst instances         = 6;
+// ShutdownVbucketsRequest will shutdown a subset of vbuckets
+// for each specified buckets. Responds back with TopicResponse
+message ShutdownVbucketsRequest {
+    required string   topic              = 1;
+    repeated TsVbuuid shutdownTimestamps = 2; // per bucket timestamps
 }
 
-// Requested by third party component that wants to subscribe to a topic-name.
-// Error message will be sent as response
-//
-// add-engines,
-//      add new set of engines for one or more active buckets.
-// update-engines,
-//      update an existing engines, for one or more active buckets,  with new
-//      definitions.
-//      TODO: replace update-engine request with delete and add.
-// del-engines,
-//      delete engines from one or more active buckets.
-//
-// flags are mutually exclusive.
-message SubscribeStreamRequest {
-    required string    topic     = 1; // must be an already started stream.
-    required uint32    flag      = 2;
-    repeated IndexInst instances = 3;
+// AddBucketsRequest will start vbucket-streams
+// specified buckets and add them to the topic that
+// has already started.
+// Responds back with TopicResponse
+message AddBucketsRequest {
+    required string   topic         = 1;
+    repeated TsVbuuid reqTimestamps = 2; // per bucket timestamps
+    // list of instances applicable for buckets.
+    repeated Instance instances     = 3;
+}
+
+// DelBucketsRequest will shutdown vbucket-streams
+// for specified buckets and remove the buckets from topic.
+// Responds back with TopicResponse
+message DelBucketsRequest {
+    required string topic   = 1;
+    repeated string buckets = 2;
+}
+
+// AddInstancesRequest to add index-instances to a topic.
+// Responds back with TopicResponse
+message AddInstancesRequest {
+    required string   topic     = 1;
+    repeated Instance instances = 2; // instances to be added to this topic
+}
+
+// DelInstancesRequest to add index-instances to a topic.
+// Responds back with TopicResponse
+message DelInstancesRequest {
+    required string topic       = 1;
+    repeated uint64 instanceIds = 2; // instances to be deleted from this topic
 }
 
 // Requested by indexer / coordinator to inform router to re-connect with
 // downstream endpoint. Error message will be sent as response.
-message RepairDownstreamEndpoints {
-    required string topic     = 1; // must be an already started stream.
+message RepairEndpointsRequest {
+    required string topic     = 1; // must be an already started topic.
     repeated string endpoints = 2;
 }
 
-// Requested by coordinator to should down a mutation stream and all KV
-// connections active for that stream. Error message will be sent as response.
-message ShutdownStreamRequest {
+// Requested by coordinator to should down a mutation topic and all KV
+// connections active for that topic. Error message will be sent as response.
+message ShutdownTopicRequest {
     required string topic = 1;
 }
 
-// Requested by Coordinator during bootstrap handshake to get the current list
-// of active streams from projector
-message ActiveStreamRequest {
-}
-
-message ActiveStreamResponse {
-    repeated MutationStreamResponse streams = 1;
-    optional Error                  err     = 2;
-}
-
-
-// Requested by Coordinator during initial index build, to calculate
-// initial-build-timestamp for each bucket.
-message CurrentTimestampRequest {
-    repeated string buckets = 1;
-}
-
-message CurrentTimestampResponse {
-    repeated TsVbuuid currentTimestamps = 1;
+// Generic instance, can be an index instance, xdcr, search etc ...
+message Instance {
+    optional IndexInst indexInstance = 1;
 }

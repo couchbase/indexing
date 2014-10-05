@@ -143,6 +143,7 @@ func (s Statistics) ToMap() map[string]interface{} {
 }
 
 // StatsURLPath construct url path for statistics.
+// TODO: make stats-path configurable.
 func StatsURLPath(prefix, path string) string {
 	prefix = strings.TrimRight(prefix, UrlSep)
 	return strings.Join([]string{prefix, "stats", path}, UrlSep)

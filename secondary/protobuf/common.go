@@ -3,13 +3,17 @@ package protobuf
 import (
 	"sort"
 
-	"github.com/couchbaselabs/goprotobuf/proto"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/go-couchbase"
+	"github.com/couchbaselabs/goprotobuf/proto"
 )
 
-// NewError create a protobuf message `Error` and return its reference back to
-// the caller.
+// *****
+// Error
+// *****
+
+// NewError create a protobuf message `Error` and return its
+// reference back to the caller.
 func NewError(err error) *Error {
 	if err != nil {
 		return &Error{Error: proto.String(err.Error())}
@@ -17,22 +21,48 @@ func NewError(err error) *Error {
 	return &Error{Error: proto.String("")}
 }
 
-// Error implement MessageMarshaller interface
-
+// Name implement MessageMarshaller{} interface
 func (req *Error) Name() string {
 	return "Error"
 }
 
+// ContentType implement MessageMarshaller{} interface
 func (req *Error) ContentType() string {
 	return "application/protobuf"
 }
 
+// Encode implement MessageMarshaller{} interface
 func (req *Error) Encode() (data []byte, err error) {
 	return proto.Marshal(req)
 }
 
+// Decode implement MessageMarshaller{} interface
 func (req *Error) Decode(data []byte) (err error) {
 	return proto.Unmarshal(data, req)
+}
+
+// ********
+// Snapshot
+// ********
+
+func NewSnapshot(start, end uint64) *Snapshot {
+	return &Snapshot{
+		Start: proto.Uint64(start),
+		End:   proto.Uint64(end),
+	}
+}
+
+// ****
+// TsVb
+// ****
+
+func NewTsVb(pool, bucket string) *TsVb {
+	return &TsVb{
+		Pool:   proto.String(pool),
+		Bucket: proto.String(bucket),
+		Vbnos:  make([]uint32, 0),
+		Seqnos: make([]uint64, 0),
+	}
 }
 
 // Append a vbucket detail to TsVb
@@ -42,29 +72,38 @@ func (ts *TsVb) Append(vbno uint16, seqno uint64) *TsVb {
 	return ts
 }
 
-// Append a vbucket detail to TsVbFull
-func (ts *TsVbFull) Append(seqno uint64) *TsVbFull {
-	ts.Seqnos = append(ts.Seqnos, seqno)
-	return ts
+// ********
+// TsVbFull
+// ********
+
+func NewTsVbFull(pool, bucket string, seqnos []uint64) *TsVbFull {
+	return &TsVbFull{
+		Pool:   proto.String(pool),
+		Bucket: proto.String(bucket),
+		Seqnos: seqnos,
+	}
 }
 
+// ********
 // TsVbuuid
-func NewTsVbuuid(bucket string, maxVbuckets int) *TsVbuuid {
+// ********
+
+func NewTsVbuuid(pool, bucket string, maxvb int) *TsVbuuid {
 	return &TsVbuuid{
+		Pool:      proto.String(pool),
 		Bucket:    proto.String(bucket),
-		Vbnos:     make([]uint32, 0, maxVbuckets),
-		Seqnos:    make([]uint64, 0, maxVbuckets),
-		Vbuuids:   make([]uint64, 0, maxVbuckets),
-		Snapshots: make([]*Snapshot, 0, maxVbuckets),
+		Vbnos:     make([]uint32, 0, maxvb),
+		Seqnos:    make([]uint64, 0, maxvb),
+		Vbuuids:   make([]uint64, 0, maxvb),
+		Snapshots: make([]*Snapshot, 0, maxvb),
 	}
 }
 
 // Append a vbucket detail to TsVbuuid
-func (ts *TsVbuuid) Append(vbno uint16, seqno, vbuuid, start, end uint64) *TsVbuuid {
-	snapshot := &Snapshot{
-		Start: proto.Uint64(start),
-		End:   proto.Uint64(end),
-	}
+func (ts *TsVbuuid) Append(
+	vbno uint16, seqno, vbuuid, start, end uint64) *TsVbuuid {
+
+	snapshot := NewSnapshot(start, end)
 	ts.Vbnos = append(ts.Vbnos, uint32(vbno))
 	ts.Seqnos = append(ts.Seqnos, seqno)
 	ts.Vbuuids = append(ts.Vbuuids, vbuuid)
@@ -72,13 +111,49 @@ func (ts *TsVbuuid) Append(vbno uint16, seqno, vbuuid, start, end uint64) *TsVbu
 	return ts
 }
 
-// Union will return a union set of timestamps based on Vbuckets. Duplicate
-// vbucket entries in `other` timestamp will be skipped.
+// FromTsVbuuid converts timestamp from common.TsVbuuid to protobuf
+// format.
+func (ts *TsVbuuid) FromTsVbuuid(nativeTs *c.TsVbuuid) *TsVbuuid {
+	for vbno, seqno := range nativeTs.Seqnos {
+		s := nativeTs.Snapshots[vbno]
+		snapshot := NewSnapshot(s[0], s[1])
+		ts.Vbnos = append(ts.Vbnos, uint32(vbno))
+		ts.Seqnos = append(ts.Seqnos, seqno)
+		ts.Vbuuids = append(ts.Vbuuids, nativeTs.Vbuuids[vbno])
+		ts.Snapshots = append(ts.Snapshots, snapshot)
+	}
+	return ts
+}
+
+// ToTsVbuuid converts timestamp from protobuf format to common.TsVbuuid.
+// TODO: semantics of c.TsVbuuid has changed.
+//func (ts *TsVbuuid) ToTsVbuuid() *c.TsVbuuid {
+//    vbnos := make([]uint16, len(
+//    ss := make([][2]uint64, 0)
+//    for _, s := range ts.GetSnapshots() {
+//        ss = append(ss, [2]uint64{s.GetStart(), s.GetEnd()})
+//    }
+//    nativeTs := &c.TsVbuuid{
+//        Bucket:    ts.GetBucket(),
+//        Vbnos:     c.Vbno32to16(ts.GetVbnos()),
+//        Seqnos:    ts.GetSeqnos(),
+//        Vbuuids:   ts.GetVbuuids(),
+//        Snapshots: ss,
+//    }
+//    return nativeTs
+//}
+
+// Union will return a union set of timestamps based on
+// Vbuckets. Duplicate vbucket entries in `other` timestamp
+// will be skipped.
 func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
-	if ts == nil || other == nil {
+	if ts == nil {
+		return other
+	} else if other == nil {
 		return ts
 	}
-	newts := NewTsVbuuid(ts.GetBucket(), c.MaxVbuckets)
+
+	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), c.MaxVbuckets)
 
 	// copy from other
 	newts.Vbnos = append(newts.Vbnos, other.Vbnos...)
@@ -105,14 +180,15 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 	return newts
 }
 
-// SelectByVbuckets will select vbuckets from `ts` for a subset of `vbuckets`,
-// both `ts` and `vbuckets` are expected to be pre-sorted.
+// SelectByVbuckets will select vbuckets from `ts`
+// for a subset of `vbuckets`, both `ts` and `vbuckets`
+// are expected to be pre-sorted.
 func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
 	if ts == nil || vbuckets == nil {
 		return ts
 	}
 
-	newts := NewTsVbuuid(ts.GetBucket(), c.MaxVbuckets)
+	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), c.MaxVbuckets)
 	if len(ts.Vbnos) == 0 {
 		return newts
 	}
@@ -132,14 +208,14 @@ func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
 	return newts
 }
 
-// FilterByVbuckets will exclude `vbuckets` from `ts`, both `ts` and `vbuckets`
-// are expected to be pre-sorted.
+// FilterByVbuckets will exclude `vbuckets` from `ts`,
+// both `ts` and `vbuckets` are expected to be pre-sorted.
 func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
 	if ts == nil || vbuckets == nil {
 		return ts
 	}
 
-	newts := NewTsVbuuid(ts.GetBucket(), c.MaxVbuckets)
+	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), c.MaxVbuckets)
 	if len(ts.Vbnos) == 0 {
 		return newts
 	}
@@ -160,18 +236,46 @@ func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
 	return newts
 }
 
+// VerifyBranch shall verify whether the timestamp
+// branch-id for each vbucket matches with input arguments.
+func (ts *TsVbuuid) VerifyBranch(vbnos []uint16, vbuuids []uint64) bool {
+	tsVbuuids := ts.GetVbuuids()
+	for i, vbno := range vbnos {
+		for j, tsVbno := range ts.GetVbnos() {
+			if vbno == uint16(tsVbno) {
+				if vbuuids[i] != tsVbuuids[j] {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+// ComputeFailoverTs computes TsVbuuid timestamp using
+// failover logs obtained from ns_server.
 func (ts *TsVbuuid) ComputeFailoverTs(flogs couchbase.FailoverLog) *TsVbuuid {
-	failoverTs := NewTsVbuuid(ts.GetBucket(), cap(ts.Vbnos))
+	failoverTs := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), cap(ts.Vbnos))
 	for vbno, flog := range flogs {
 		x := flog[len(flog)-1]
-		failoverTs.Append(vbno, x[1], x[0], 0, 0)
+		vbuuid, seqno := x[0], x[1]
+		failoverTs.Append(vbno, seqno, vbuuid, seqno, seqno)
 	}
 	return failoverTs
 }
 
-// compute restart timestamp from high-water mark timestamp.
+// InitialRestartTs for a subset of vbuckets.
+func (ts *TsVbuuid) InitialRestartTs(vbnos []uint16) *TsVbuuid {
+	for _, vbno := range vbnos {
+		ts.Append(vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0 /*start*/, 0 /*end*/)
+	}
+	return ts
+}
+
+// TODO: Once we confirm to use seqno as snapshot-start
+// and snapshot-end we can let go of this function.
 func (ts *TsVbuuid) ComputeRestartTs(flogs couchbase.FailoverLog) *TsVbuuid {
-	restartTs := NewTsVbuuid(ts.GetBucket(), cap(ts.Vbnos))
+	restartTs := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), cap(ts.Vbnos))
 	i := 0
 	for vbno, flog := range flogs {
 		x := flog[len(flog)-1]
@@ -183,12 +287,14 @@ func (ts *TsVbuuid) ComputeRestartTs(flogs couchbase.FailoverLog) *TsVbuuid {
 	return restartTs
 }
 
-// InitialRestartTs for a subset of vbuckets.
-func (ts *TsVbuuid) InitialRestartTs(vbnos []uint16) *TsVbuuid {
-	for _, vbno := range vbnos {
-		ts.Append(vbno, 0, 0, 0, 0)
+func (ts *TsVbuuid) SeqnoFor(vbno uint16) (uint64, error) {
+	seqnos := ts.GetSeqnos()
+	for i, x := range ts.GetVbnos() {
+		if vbno == uint16(x) {
+			return seqnos[i], nil
+		}
 	}
-	return ts
+	return 0, c.ErrorNotFound
 }
 
 // Sort TsVbuuid

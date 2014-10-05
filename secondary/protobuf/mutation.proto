@@ -33,7 +33,7 @@ message VbConnectionMap {
 message VbKeyVersions {
     required uint32      vbucket    = 2; // 16 bit vbucket in which document is located
     required uint64      vbuuid     = 3; // unique id to detect branch history
-    optional string      bucketname = 4;
+    required string      bucketname = 4;
     repeated KeyVersions kvs        = 5; // list of key-versions
 }
 

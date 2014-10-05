@@ -1,16 +1,12 @@
-// Other than mutation path and query path, most of the components in secondary
-// index talk to each other via admin port. Admin port can also be used for
-// collecting statistics, administering and managing cluster.
-//
-// An admin port is started as a server daemon and listens for request messages,
-// where every request is serviced by sending back a response to the client.
-
+// Package adminport provides admin-port client/server library that can be
+// used by system components to talk with each other. It is based on
+// request/response protocol, by default used http for transport and protobuf,
+// JSON for payload. Admin port can typically be used for collecting
+// statistics, administering and managing cluster.
 package adminport
 
-import (
-	"errors"
-	c "github.com/couchbase/indexing/secondary/common"
-)
+import "errors"
+import c "github.com/couchbase/indexing/secondary/common"
 
 // errors codes
 
@@ -26,6 +22,9 @@ var ErrorPathNotFound = errors.New("adminport.pathNotFound")
 // ErrorRequest
 var ErrorRequest = errors.New("adminport.request")
 
+// ErrorServerStarted
+var ErrorServerStarted = errors.New("adminport.serverStarted")
+
 // ErrorDecodeRequest
 var ErrorDecodeRequest = errors.New("adminport.decodeRequest")
 
@@ -38,9 +37,7 @@ var ErrorDecodeResponse = errors.New("adminport.decodeResponse")
 // ErrorInternal
 var ErrorInternal = errors.New("adminport.internal")
 
-// MessageMarshaller API abstracts the underlying messaging format. For instance,
-// in case of protobuf defined structures, respective structure definition
-// should implement following method receivers.
+// MessageMarshaller APIs message format.
 type MessageMarshaller interface {
 	// Name of the message
 	Name() string
@@ -82,8 +79,7 @@ type Server interface {
 	// GetStatistics returns server statistics.
 	GetStatistics() c.Statistics
 
-	// Stop server routine. TODO: server routine shall quite only after
-	// outstanding requests are serviced.
+	// Stop server routine.
 	Stop()
 }
 
@@ -93,7 +89,4 @@ type Client interface {
 	// decode response into `response` argument. `response` argument must be a
 	// pointer to an object implementing `MessageMarshaller` interface.
 	Request(request, response MessageMarshaller) (err error)
-
-	// RequestStats shall get Statistics
-	RequestStats(response MessageMarshaller) (err error)
 }

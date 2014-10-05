@@ -1,79 +1,14 @@
-// Nomenclature:
-//
-// Adminport
-// - entry point for all access to projector.
-//
-// Feed
-// - a feed aggregates all mutations from a subset of kv-node for all buckets.
-// - the list of kv-nodes and buckets are provided while starting the feed and
-//   cannot be changed there after.
-//
-// Uuid
-// - to uniquely identify the index or similar entity requesting document
-//   evaluation and routing for mutation stream.
-//
-// BucketFeed
-// - per bucket collection of KVFeed for a subset of vbuckets.
-//
-// KVFeed
-// - per bucket, per kv-node collection of VbStreams for a subset of vbuckets.
-// - gathers UprEvent from client and post them to vbucket routines.
-//
-// Vbucket-routine
-// - projector scales with vbucket, that is, for every vbucket a go-routine is
-//   spawned.
-//
-// VbStream
-// - stream of mutations from a single vbucket.
-//
-// failoverTimestamp for each vbucket,
-// - latest vbuuid and its high-sequence-number based on failover-log for each
-//   vbucket.
-// - caller (coordinator/indexer) should make sure that failoverTimestamp is
-//   consistent with its original calculations.
-//
-// kvTimestamp for each vbucket,
-// - specifies the vbuuid of the master that is going to stream the mutations.
-// - specifies the actual start of the sequence number, like for instance
-//   after a rollback.
-// - starting sequence number must be less than or equal to sequence number
-//   specified in failoverTimestamp.
-// - caller (coordinator/indexer) should make sure that kvTimestamp is
-//   consistent with requested restartTimestamp.
-//
-// restartTimestamp for each vbucket,
-// - vbuuid must be same as the vbuuid found in kvTimestamp.
-// - sequence number must be less than that of failoverTimestamp but greater
-//   than that of kvTimestamp
-// - computed by the caller (coordinator/indexer)
-//
-// list of active vbuckets:
-// - KVFeed maintains a list of active vbuckets.
-// - a vbucket is marked active, corresponding vbucket-routine is started,
-//   when KVFeed sees StreamBegin message from upstream.
-// - a vbucket is marked as inactive when KVFeed sees StreamEnd message from
-//   upstream for that vbucket and corresponding vbucket routine is killed.
-// - during normal operation StreamBegin and StreamEnd messages will be
-//   generate by couchbase-client.
-// - when KVFeed detects that its upstream connection is lost, it will
-//   generate StreamEnd message for the subset of vbuckets mapped to that
-//   connection.
-
 package projector
 
-import (
-	"errors"
-	"fmt"
+import "errors"
+import "fmt"
+import "sync"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbaselabs/go-couchbase"
-)
-
-// error codes
-
-// ErrorInconsistentFeed
-var ErrorInconsistentFeed = errors.New("projector.inconsistentFeed")
+import ap "github.com/couchbase/indexing/secondary/adminport"
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
+import "github.com/couchbaselabs/go-couchbase"
+import "github.com/couchbaselabs/goprotobuf/proto"
 
 // ErrorTopicExist
 var ErrorTopicExist = errors.New("projector.topicExist")
@@ -81,238 +16,78 @@ var ErrorTopicExist = errors.New("projector.topicExist")
 // ErrorTopicMissing
 var ErrorTopicMissing = errors.New("projector.topicMissing")
 
-// ErrorArgument
-var ErrorArgument = errors.New("projector.argument")
-
-// RequestReader interface abstract mutation stream requests
-type RequestReader interface {
-	//IsStart return true if the request is to start vbucket streams.
-	IsStart() bool
-
-	//IsRestart return true if the request is to restart vbucket streams.
-	IsRestart() bool
-
-	//IsShutdown return true if the request is to shutdown vbucket streams.
-	IsShutdown() bool
-
-	//IsAddBuckets return true if the request is to add one or more buckets
-	//along with engines defined on that bucket.
-	IsAddBuckets() bool
-
-	//IsDelBuckets return true if the request is to delete one or more buckets
-	//along with engines defined on that bucket.
-	IsDelBuckets() bool
-
-	// GetTopic will return the name of this mutation stream.
-	GetTopic() string
-
-	// GetPools returns a list of pool, one for each bucket listed by
-	// GetBuckets()
-	GetPools() []string
-
-	// GetBuckets will return a list of buckets relevant for this mutation feed.
-	GetBuckets() []string
-
-	// RestartTimestamp specifies the a list of vbuckets, its corresponding
-	// vbuuid and sequence no, for specified bucket.
-	RestartTimestamp(bucket string) *protobuf.TsVbuuid
-}
-
-// Subscriber interface abstracts evaluators and routers that are implemented
-// by mutation-stream requests and subscription requests.
-// TODO: Subscriber interface name does not describe the intention adequately.
-type Subscriber interface {
-	// GetEvaluators will return a map of uuid to Evaluator interface.
-	GetEvaluators() (map[uint64]c.Evaluator, error)
-
-	// GetRouters will return a map of uuid to Router interface.
-	GetRouters() (map[uint64]c.Router, error)
-}
-
-// Projector data structure, a projector is connected to one or more upstream
-// kv-nodes.
-// TODO: support elastic set of kvnodes, right now they are immutable set.
+// Projector data structure, a projector is connected to
+// one or more upstream kv-nodes. Works in tandem with
+// projector's adminport.
 type Projector struct {
-	cluster   string                       // cluster address to connect
-	kvaddrs   []string                     // immutable set of kv-nodes to connect with
-	adminport string                       // <host:port> for projector's admin-port
-	topics    map[string]*Feed             // active topics, mutable dictionary
-	buckets   map[string]*couchbase.Bucket // bucket instances
-	// gen-server
-	reqch chan []interface{}
-	finch chan bool
+	mu          sync.RWMutex
+	clusterAddr string    // kv cluster's address to connect
+	adminport   string    // projector listens on this adminport
+	admind      ap.Server // admin-port server
+	kvset       []string  // set of kv-nodes to connect with
+	epfactory   c.RouterEndpointFactory
+	topics      map[string]*Feed             // active topics
+	buckets     map[string]*couchbase.Bucket // bucket instances
 	// statistics
 	logPrefix string
-	stats     c.Statistics
 }
 
-// NewProjector creates a news projector instance and starts a corresponding
-// adminport.
-func NewProjector(cluster string, kvaddrs []string, adminport string) *Projector {
+// NewProjector creates a news projector instance and
+// starts a corresponding adminport.
+func NewProjector(settings map[string]interface{}) *Projector {
+	clusterAddr := settings["cluster"].(string)
+	adminport := settings["adminport"].(string)
+	kvset := settings["kvaddrs"].([]string)
+	epfactory := settings["epfactory"].(c.RouterEndpointFactory)
+
 	p := &Projector{
-		cluster:   cluster,
-		kvaddrs:   kvaddrs,
-		adminport: adminport,
-		topics:    make(map[string]*Feed),
-		buckets:   make(map[string]*couchbase.Bucket),
-		reqch:     make(chan []interface{}),
-		finch:     make(chan bool),
+		clusterAddr: clusterAddr,
+		adminport:   adminport,
+		kvset:       kvset,
+		epfactory:   epfactory,
+		topics:      make(map[string]*Feed),
+		buckets:     make(map[string]*couchbase.Bucket),
 	}
-	p.logPrefix = fmt.Sprintf("[%v]", p.repr())
-	go mainAdminPort(adminport, p)
-	go p.genServer(p.reqch)
+	p.logPrefix = fmt.Sprintf("[projector(%s)]", p.adminport)
+
+	reqch := make(chan ap.Request)
+	urlPrefix := c.AdminportURLPrefix
+	p.admind = ap.NewHTTPServer("projector", adminport, urlPrefix, reqch)
+
+	go p.mainAdminPort(reqch)
 	c.Infof("%v started ...\n", p.logPrefix)
-	p.stats = p.newStats()
-	p.stats.Set("kvaddrs", kvaddrs)
 	return p
 }
 
-func (p *Projector) repr() string {
-	return fmt.Sprintf("%s", p.adminport)
-}
-
-func (p *Projector) getBucket(pooln, bucketn string) (*couchbase.Bucket, error) {
-	bucket, ok := p.buckets[bucketn]
-	if !ok {
-		return c.ConnectBucket(p.cluster, pooln, bucketn)
-	}
-	return bucket, nil
-}
-
-func (p *Projector) getKVNodes() []string {
-	return p.kvaddrs
-}
-
-// gen-server commands
-const (
-	pCmdGetFeed byte = iota + 1
-	pCmdAddFeed
-	pCmdDelFeed
-	pCmdListTopics
-	pCmdGetStatistics
-	pCmdClose
-)
-
-// GetFeed get feed instance for `topic`.
+// GetFeed object for `topic`
 func (p *Projector) GetFeed(topic string) (*Feed, error) {
-	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{pCmdGetFeed, topic, respch}
-	resp, err := c.FailsafeOp(p.reqch, respch, cmd, p.finch)
-	if err = c.OpError(err, resp, 1); err != nil {
-		return nil, err
-	}
-	return resp[0].(*Feed), nil
-}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 
-// AddFeed save `feed` for `topic` for this projector.
-func (p *Projector) AddFeed(topic string, feed *Feed) error {
-	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{pCmdAddFeed, topic, feed, respch}
-	resp, err := c.FailsafeOp(p.reqch, respch, cmd, p.finch)
-	return c.OpError(err, resp, 0)
-}
-
-// DelFeed delete feed for `topic`.
-func (p *Projector) DelFeed(topic string) error {
-	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{pCmdDelFeed, topic, respch}
-	resp, err := c.FailsafeOp(p.reqch, respch, cmd, p.finch)
-	return c.OpError(err, resp, 0)
-}
-
-// ListTopics all topics as array of string.
-func (p *Projector) ListTopics() ([]string, error) {
-	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{pCmdListTopics, respch}
-	resp, err := c.FailsafeOp(p.reqch, respch, cmd, p.finch)
-	err = c.OpError(err, resp, 1)
-	return resp[0].([]string), err
-}
-
-// GetStatistics will get all or subset of statistics from projector.
-func (p *Projector) GetStatistics() c.Statistics {
-	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{pCmdGetStatistics, respch}
-	resp, _ := c.FailsafeOp(p.reqch, respch, cmd, p.finch)
-	return resp[1].(c.Statistics)
-}
-
-// Close this projector.
-func (p *Projector) Close() error {
-	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{pCmdClose, respch}
-	resp, err := c.FailsafeOp(p.reqch, respch, cmd, p.finch)
-	return c.OpError(err, resp, 0)
-}
-
-func (p *Projector) genServer(reqch chan []interface{}) {
-loop:
-	for {
-		msg := <-reqch
-		switch msg[0].(byte) {
-		case pCmdListTopics:
-			respch := msg[1].(chan []interface{})
-			respch <- []interface{}{p.listTopics(), nil}
-
-		case pCmdGetStatistics:
-			respch := msg[1].(chan []interface{})
-			respch <- []interface{}{p.getStatistics()}
-
-		case pCmdGetFeed:
-			respch := msg[2].(chan []interface{})
-			feed, err := p.getFeed(msg[1].(string))
-			respch <- []interface{}{feed, err}
-
-		case pCmdAddFeed:
-			respch := msg[3].(chan []interface{})
-			respch <- []interface{}{p.addFeed(msg[1].(string), msg[2].(*Feed))}
-
-		case pCmdDelFeed:
-			respch := msg[2].(chan []interface{})
-			respch <- []interface{}{p.delFeed(msg[1].(string))}
-
-		case pCmdClose:
-			p.doClose()
-			break loop
-		}
-	}
-}
-
-func (p *Projector) listTopics() []string {
-	topics := make([]string, 0, len(p.topics))
-	for topic := range p.topics {
-		topics = append(topics, topic)
-	}
-	return topics
-}
-
-func (p *Projector) getStatistics() c.Statistics {
-	feeds, _ := c.NewStatistics(p.stats.Get("feeds"))
-	for topic, feed := range p.topics {
-		feeds.Set(topic, feed.GetStatistics())
-	}
-	p.stats.Set("topics", p.topics)
-	p.stats.Set("feeds", feeds)
-	return p.stats
-}
-
-func (p *Projector) getFeed(topic string) (*Feed, error) {
 	if feed, ok := p.topics[topic]; ok {
 		return feed, nil
 	}
 	return nil, ErrorTopicMissing
 }
 
-func (p *Projector) addFeed(topic string, feed *Feed) (err error) {
+// AddFeed object for `topic`
+func (p *Projector) AddFeed(topic string, feed *Feed) (err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if _, ok := p.topics[topic]; ok {
 		return ErrorTopicExist
 	}
-	c.Infof("%v %q feed added ...", p.logPrefix, topic)
 	p.topics[topic] = feed
+	c.Infof("%v %q feed added ...", p.logPrefix, topic)
 	return
 }
 
-func (p *Projector) delFeed(topic string) (err error) {
+// DelFeed object for `topic`
+func (p *Projector) DelFeed(topic string) (err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if _, ok := p.topics[topic]; ok == false {
 		return ErrorTopicMissing
 	}
@@ -321,14 +96,289 @@ func (p *Projector) delFeed(topic string) (err error) {
 	return
 }
 
-func (p *Projector) doClose() error {
-	for _, feed := range p.topics {
-		feed.CloseFeed()
+//---- handler for admin-port request
+
+func (p *Projector) doVbmapRequest(
+	request *protobuf.VbmapRequest) ap.MessageMarshaller {
+
+	c.Debugf("%v doVbmapRequest\n", p.logPrefix)
+	response := &protobuf.VbmapResponse{}
+
+	pooln := request.GetPool()
+	bucketn := request.GetBucket()
+	kvaddrs := request.GetKvaddrs()
+
+	// get vbmap from bucket connection.
+	bucket, err := p.getBucket(pooln, bucketn)
+	if err != nil {
+		c.Errorf("%v for bucket %q, %v\n", p.logPrefix, bucketn, err)
+		response.Err = protobuf.NewError(err)
+		return response
 	}
-	for _, bucket := range p.buckets {
-		bucket.Close()
+	bucket.Refresh()
+	m, err := bucket.GetVBmap(kvaddrs)
+	if err != nil {
+		c.Errorf("%v for bucket %q, %v\n", p.logPrefix, bucketn, err)
+		response.Err = protobuf.NewError(err)
+		return response
 	}
-	close(p.finch)
-	c.Infof("%v ... stopped.\n", p.logPrefix)
-	return nil
+
+	// compose response
+	response.Kvaddrs = make([]string, 0, len(kvaddrs))
+	response.Kvvbnos = make([]*protobuf.Vbuckets, 0, len(kvaddrs))
+	for kvaddr, vbnos := range m {
+		response.Kvaddrs = append(response.Kvaddrs, kvaddr)
+		response.Kvvbnos = append(
+			response.Kvvbnos, &protobuf.Vbuckets{Vbnos: c.Vbno16to32(vbnos)})
+	}
+	return response
+}
+
+func (p *Projector) doFailoverLog(
+	request *protobuf.FailoverLogRequest) ap.MessageMarshaller {
+
+	c.Debugf("%v doFailoverLog\n", p.logPrefix)
+	response := &protobuf.FailoverLogResponse{}
+
+	pooln := request.GetPool()
+	bucketn := request.GetBucket()
+	vbuckets := request.GetVbnos()
+
+	bucket, err := p.getBucket(pooln, bucketn)
+	if err != nil {
+		c.Errorf("%v %s, %v\n", p.logPrefix, bucketn, err)
+		response.Err = protobuf.NewError(err)
+		return response
+	}
+
+	protoFlogs := make([]*protobuf.FailoverLog, 0, len(vbuckets))
+	vbnos := c.Vbno32to16(vbuckets)
+	if flogs, err := bucket.GetFailoverLogs(vbnos); err == nil {
+		for vbno, flog := range flogs {
+			vbuuids := make([]uint64, 0, len(flog))
+			seqnos := make([]uint64, 0, len(flog))
+			for _, x := range flog {
+				vbuuids = append(vbuuids, x[0])
+				seqnos = append(seqnos, x[1])
+			}
+			protoFlog := &protobuf.FailoverLog{
+				Vbno:    proto.Uint32(uint32(vbno)),
+				Vbuuids: vbuuids,
+				Seqnos:  seqnos,
+			}
+			protoFlogs = append(protoFlogs, protoFlog)
+		}
+	} else {
+		c.Errorf("%v %s.GetFailoverLogs() %v\n", p.logPrefix, bucketn, err)
+		response.Err = protobuf.NewError(err)
+		return response
+	}
+	response.Logs = protoFlogs
+	return response
+}
+
+func (p *Projector) doMutationTopic(
+	request *protobuf.MutationTopicRequest) ap.MessageMarshaller {
+
+	c.Debugf("%v doMutationTopic()\n", p.logPrefix)
+	topic := request.GetTopic()
+
+	feed, err := p.GetFeed(topic)
+	if err == nil { // only fresh feed to be started
+		c.Errorf("%v %v\n", p.logPrefix, ErrorTopicExist)
+		return (&protobuf.TopicResponse{}).SetErr(ErrorTopicExist)
+	}
+
+	settings := map[string]interface{}{
+		"cluster":         p.clusterAddr,
+		"localAddr":       p.adminport,
+		"kvaddrs":         p.kvset,
+		"endpointFactory": p.epfactory,
+	}
+
+	feed = NewFeed(topic, settings)
+	response, err := feed.MutationTopic(request)
+	if err == nil {
+		p.AddFeed(topic, feed)
+		return response
+	}
+	if feed != nil {
+		feed.Shutdown() // on error close the feed
+	}
+	response.SetErr(err)
+	return (&protobuf.TopicResponse{}).SetErr(err)
+}
+
+func (p *Projector) doRestartVbuckets(
+	request *protobuf.RestartVbucketsRequest) ap.MessageMarshaller {
+
+	c.Debugf("%v doRestartVbuckets()\n", p.logPrefix)
+	topic := request.GetTopic()
+
+	feed, err := p.GetFeed(topic) // only existing feed
+	if err != nil {
+		c.Errorf("%v %v\n", p.logPrefix, err)
+		return (&protobuf.TopicResponse{}).SetErr(err)
+	}
+
+	response, err := feed.RestartVbuckets(request)
+	if err == nil {
+		return response
+	}
+	return (&protobuf.TopicResponse{}).SetErr(err)
+}
+
+func (p *Projector) doShutdownVbuckets(
+	request *protobuf.ShutdownVbucketsRequest) ap.MessageMarshaller {
+
+	c.Debugf("%v doShutdownVbuckets()\n", p.logPrefix)
+	topic := request.GetTopic()
+
+	feed, err := p.GetFeed(topic) // only existing feed
+	if err != nil {
+		c.Errorf("%v %v\n", p.logPrefix, err)
+		return protobuf.NewError(err)
+	}
+
+	err = feed.ShutdownVbuckets(request)
+	return protobuf.NewError(err)
+}
+
+func (p *Projector) doAddBuckets(
+	request *protobuf.AddBucketsRequest) ap.MessageMarshaller {
+
+	c.Debugf("%v doAddBuckets()\n", p.logPrefix)
+	topic := request.GetTopic()
+
+	feed, err := p.GetFeed(topic) // only existing feed
+	if err != nil {
+		c.Errorf("%v %v\n", p.logPrefix, err)
+		return (&protobuf.TopicResponse{}).SetErr(err)
+	}
+
+	response, err := feed.AddBuckets(request)
+	if err == nil {
+		return response
+	}
+	return (&protobuf.TopicResponse{}).SetErr(err)
+}
+
+func (p *Projector) doDelBuckets(
+	request *protobuf.DelBucketsRequest) ap.MessageMarshaller {
+
+	c.Debugf("%v doDelBuckets()\n", p.logPrefix)
+	topic := request.GetTopic()
+
+	feed, err := p.GetFeed(topic) // only existing feed
+	if err != nil {
+		c.Errorf("%v %v\n", p.logPrefix, err)
+		return protobuf.NewError(err)
+	}
+
+	err = feed.DelBuckets(request)
+	return protobuf.NewError(err)
+}
+
+func (p *Projector) doAddInstances(
+	request *protobuf.AddInstancesRequest) ap.MessageMarshaller {
+
+	c.Debugf("%v doAddInstances()\n", p.logPrefix)
+	topic := request.GetTopic()
+
+	feed, err := p.GetFeed(topic) // only existing feed
+	if err != nil {
+		c.Errorf("%v %v\n", p.logPrefix, err)
+		return protobuf.NewError(err)
+	}
+
+	err = feed.AddInstances(request)
+	return protobuf.NewError(err)
+}
+
+func (p *Projector) doDelInstances(
+	request *protobuf.DelInstancesRequest) ap.MessageMarshaller {
+
+	c.Debugf("%v doDelInstances()\n", p.logPrefix)
+	topic := request.GetTopic()
+
+	feed, err := p.GetFeed(topic) // only existing feed
+	if err != nil {
+		c.Errorf("%v %v\n", p.logPrefix, err)
+		return protobuf.NewError(err)
+	}
+
+	err = feed.DelInstances(request)
+	return protobuf.NewError(err)
+}
+
+func (p *Projector) doRepairEndpoints(
+	request *protobuf.RepairEndpointsRequest) ap.MessageMarshaller {
+
+	c.Debugf("%v doRepairEndpoints()\n", p.logPrefix)
+	topic := request.GetTopic()
+
+	feed, err := p.GetFeed(topic) // only existing feed
+	if err != nil {
+		c.Errorf("%v %v\n", p.logPrefix, err)
+		return protobuf.NewError(err)
+	}
+
+	err = feed.RepairEndpoints(request)
+	return protobuf.NewError(err)
+}
+
+func (p *Projector) doShutdownTopic(
+	request *protobuf.ShutdownTopicRequest) ap.MessageMarshaller {
+
+	c.Debugf("%v doShutdownTopic()\n", p.logPrefix)
+	topic := request.GetTopic()
+
+	feed, err := p.GetFeed(topic) // only existing feed
+	if err != nil {
+		c.Errorf("%v %v\n", p.logPrefix, err)
+		return protobuf.NewError(err)
+	}
+
+	p.DelFeed(topic)
+	feed.Shutdown()
+	return protobuf.NewError(err)
+}
+
+func (p *Projector) doStatistics(request c.Statistics) ap.MessageMarshaller {
+
+	c.Debugf("%v doStatistics()\n", p.logPrefix)
+
+	m := map[string]interface{}{
+		"clusterAddr": p.clusterAddr,
+		"adminport":   p.adminport,
+		"kvset":       p.kvset,
+		"topics":      p.listTopics(),
+	}
+	stats, _ := c.NewStatistics(m)
+
+	feeds, _ := c.NewStatistics(nil)
+	for topic, feed := range p.topics {
+		feeds.Set(topic, feed.GetStatistics())
+	}
+	stats.Set("feeds", feeds)
+	stats.Set("adminport", p.admind.GetStatistics())
+	return stats
+}
+
+// return list of active topics
+func (p *Projector) listTopics() []string {
+	topics := make([]string, 0, len(p.topics))
+	for topic := range p.topics {
+		topics = append(topics, topic)
+	}
+	return topics
+}
+
+// get couchbase bucket from SDK.
+func (p *Projector) getBucket(pooln, bucketn string) (*couchbase.Bucket, error) {
+	bucket, ok := p.buckets[bucketn]
+	if !ok {
+		return c.ConnectBucket(p.clusterAddr, pooln, bucketn)
+	}
+	return bucket, nil
 }

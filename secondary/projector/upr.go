@@ -2,29 +2,13 @@
 
 package projector
 
-import (
-	"fmt"
-	"time"
+import "fmt"
+import "time"
 
-	mc "github.com/couchbase/gomemcached/client"
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbaselabs/go-couchbase"
-)
-
-// FailoverLog for a single vbucket.
-type FailoverLog [][2]uint64
-
-const (
-	// OpStreamBegin for a new vbucket stream on an UPR connection.
-	OpStreamBegin byte = iota + 1
-	// OpMutation message on an UPR connection.
-	OpMutation
-	// OpDeletion message on an UPR connection.
-	OpDeletion
-	// OpStreamEnd for a closing vbucket stream on an UPR connection.
-	OpStreamEnd
-)
+import mc "github.com/couchbase/gomemcached/client"
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
+import "github.com/couchbaselabs/go-couchbase"
 
 // BucketAccess interface manage a subset of vbucket streams with mutiple KV
 // nodes. To be implemented by couchbase.Bucket type.
@@ -43,73 +27,74 @@ type BucketAccess interface {
 	Close()
 }
 
-// KVFeeder interface from a BucketAccess object.
-type KVFeeder interface {
+// BucketFeeder interface from a BucketAccess object.
+type BucketFeeder interface {
 	// GetChannel return a mutation channel.
 	GetChannel() (mutch <-chan *mc.UprEvent)
 
-	// StartVbStreams starts new vbucket streams on this feed.
-	// Return failover-timestamp and kv-timestamp for the newly started
-	// vbucket streams.
-	StartVbStreams(couchbase.FailoverLog, *protobuf.TsVbuuid) (failoverTs, kvTs *protobuf.TsVbuuid, err error)
+	// StartVbStreams starts a set of vbucket streams on this feed.
+	StartVbStreams(opaque uint32, ts *protobuf.TsVbuuid) error
 
 	// EndVbStreams ends an existing vbucket stream from this feed.
-	EndVbStreams(endTs *protobuf.TsVbuuid) (err error)
+	EndVbStreams(opaque uint32, endTs *protobuf.TsVbuuid) (err error)
 
-	// CloseKVFeed ends all active streams on this feed and free its resources.
-	CloseKVFeed() (err error)
+	// CloseFeed ends all active streams on this feed and free its resources.
+	CloseFeed() (err error)
 }
 
-// concrete type implementing KVFeeder
-type kvUpr struct {
-	bucket  *couchbase.Bucket
-	kvaddr  string
+// concrete type implementing BucketFeeder
+type bucketUpr struct {
 	uprFeed *couchbase.UprFeed
-	kvfeed  *KVFeed
 }
 
-// OpenKVFeed opens feed with `kvaddr` for a subset of vbucket, specified by
-// `restartTs`. Implementer will compute the failoverTs and actual restartTs,
-// and return back the same to projector.
-func OpenKVFeed(b *couchbase.Bucket, kvaddr string, kvfeed *KVFeed) (kvf KVFeeder, err error) {
-	kv := &kvUpr{b, kvaddr, nil, kvfeed}
+// OpenBucketFeed opens feed for bucket.
+func OpenBucketFeed(b *couchbase.Bucket) (feeder BucketFeeder, err error) {
 	name := fmt.Sprintf("%v", time.Now().UnixNano())
-	kv.uprFeed, err = b.StartUprFeed(name, uint32(0))
-	if err != nil {
+	bupr := &bucketUpr{}
+	if bupr.uprFeed, err = b.StartUprFeed(name, uint32(0)); err != nil {
 		return nil, err
 	}
-	return kv, nil
+	return bupr, nil
 }
 
-func (kv *kvUpr) GetChannel() (mutch <-chan *mc.UprEvent) {
-	return kv.uprFeed.C
+// GetChannel implements Feeder{} interface.
+func (bupr *bucketUpr) GetChannel() (mutch <-chan *mc.UprEvent) {
+	return bupr.uprFeed.C
 }
 
-func (kv *kvUpr) StartVbStreams(
-	flogs couchbase.FailoverLog,
-	restartTs *protobuf.TsVbuuid) (failoverTs, kvTs *protobuf.TsVbuuid, err error) {
+// StartVbStreams implements Feeder{} interface.
+func (bupr *bucketUpr) StartVbStreams(
+	opaque uint32, ts *protobuf.TsVbuuid) error {
 
-	failoverTs = restartTs.ComputeFailoverTs(flogs)
-
-	for i, vbno := range c.Vbno32to16(restartTs.Vbnos) {
-		snapshots := restartTs.Snapshots
-		flags, vbuuid := uint32(0), restartTs.Vbuuids[i]
-		start, end := restartTs.Seqnos[i], uint64(0xFFFFFFFFFFFFFFFF)
+	for i, vbno := range c.Vbno32to16(ts.Vbnos) {
+		snapshots := ts.Snapshots
+		flags, vbuuid := uint32(0), ts.Vbuuids[i]
+		start, end := ts.Seqnos[i], uint64(0xFFFFFFFFFFFFFFFF)
 		snapStart, snapEnd := snapshots[i].GetStart(), snapshots[i].GetEnd()
-		err = kv.uprFeed.UprRequestStream(
-			vbno, flags, vbuuid, start, end, snapStart, snapEnd)
+		err := bupr.uprFeed.UprRequestStream(
+			vbno, opaque, flags, vbuuid, start, end, snapStart, snapEnd)
 		if err != nil {
-			c.Errorf("%v %v", kv.kvfeed.logPrefix, err)
-			return nil, nil, err
+			return err
 		}
 	}
-	return failoverTs, restartTs, nil
+	return nil
 }
 
-func (kv *kvUpr) EndVbStreams(endTs *protobuf.TsVbuuid) (err error) {
-	return
+// EndVbStreams implements Feeder{} interface.
+func (bupr *bucketUpr) EndVbStreams(
+	opaque uint32, ts *protobuf.TsVbuuid) error {
+
+	//for _, vbno := range c.Vbno32to16(ts.GetVbnos()) {
+	//    err = bupr.uprFeed.UprEndStream(vbno, opaque, 0 /*flag*/)
+	//    if err != nil {
+	//        return err
+	//    }
+	//}
+	return nil
 }
 
-func (kv *kvUpr) CloseKVFeed() (err error) {
+// CloseFeed implements Feeder{} interface.
+func (bupr *bucketUpr) CloseFeed() error {
+	bupr.uprFeed.Close()
 	return nil
 }

@@ -4,14 +4,20 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime/debug"
 	"time"
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/transport"
 )
 
+// ErrorClosedPool
 var ErrorClosedPool = errors.New("queryport.closedPool")
+
+// ErrorNoPool
 var ErrorNoPool = errors.New("queryport.errorNoPool")
+
+// ErrorPoolTimeout
 var ErrorPoolTimeout = errors.New("queryport.connPoolTimeout")
 
 type connectionPool struct {
@@ -58,7 +64,8 @@ func (cp *connectionPool) defaultMkConn(host string) (*connection, error) {
 func (cp *connectionPool) Close() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v closing connection pool %v\n", cp.logPrefix, r)
+			c.Errorf("%v Close() crashed: %v\n", cp.logPrefix, r)
+			c.StackTrace(string(debug.Stack()))
 		}
 	}()
 	close(cp.connections)

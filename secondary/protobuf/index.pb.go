@@ -226,10 +226,11 @@ type IndexDefn struct {
 	IsPrimary        *bool            `protobuf:"varint,3,req,name=isPrimary" json:"isPrimary,omitempty"`
 	Name             *string          `protobuf:"bytes,4,req,name=name" json:"name,omitempty"`
 	Using            *StorageType     `protobuf:"varint,5,req,name=using,enum=protobuf.StorageType" json:"using,omitempty"`
-	PartitionScheme  *PartitionScheme `protobuf:"varint,6,req,name=partitionScheme,enum=protobuf.PartitionScheme" json:"partitionScheme,omitempty"`
-	PartnExpression  *string          `protobuf:"bytes,7,req,name=partnExpression" json:"partnExpression,omitempty"`
-	ExprType         *ExprType        `protobuf:"varint,8,req,name=exprType,enum=protobuf.ExprType" json:"exprType,omitempty"`
-	SecExpressions   []string         `protobuf:"bytes,9,rep,name=secExpressions" json:"secExpressions,omitempty"`
+	ExprType         *ExprType        `protobuf:"varint,6,req,name=exprType,enum=protobuf.ExprType" json:"exprType,omitempty"`
+	SecExpressions   []string         `protobuf:"bytes,7,rep,name=secExpressions" json:"secExpressions,omitempty"`
+	PartitionScheme  *PartitionScheme `protobuf:"varint,8,opt,name=partitionScheme,enum=protobuf.PartitionScheme" json:"partitionScheme,omitempty"`
+	PartnExpression  *string          `protobuf:"bytes,9,opt,name=partnExpression" json:"partnExpression,omitempty"`
+	WhereExpression  *string          `protobuf:"bytes,10,opt,name=whereExpression" json:"whereExpression,omitempty"`
 	XXX_unrecognized []byte           `json:"-"`
 }
 
@@ -272,6 +273,20 @@ func (m *IndexDefn) GetUsing() StorageType {
 	return StorageType_View
 }
 
+func (m *IndexDefn) GetExprType() ExprType {
+	if m != nil && m.ExprType != nil {
+		return *m.ExprType
+	}
+	return ExprType_JavaScript
+}
+
+func (m *IndexDefn) GetSecExpressions() []string {
+	if m != nil {
+		return m.SecExpressions
+	}
+	return nil
+}
+
 func (m *IndexDefn) GetPartitionScheme() PartitionScheme {
 	if m != nil && m.PartitionScheme != nil {
 		return *m.PartitionScheme
@@ -286,18 +301,11 @@ func (m *IndexDefn) GetPartnExpression() string {
 	return ""
 }
 
-func (m *IndexDefn) GetExprType() ExprType {
-	if m != nil && m.ExprType != nil {
-		return *m.ExprType
+func (m *IndexDefn) GetWhereExpression() string {
+	if m != nil && m.WhereExpression != nil {
+		return *m.WhereExpression
 	}
-	return ExprType_JavaScript
-}
-
-func (m *IndexDefn) GetSecExpressions() []string {
-	if m != nil {
-		return m.SecExpressions
-	}
-	return nil
+	return ""
 }
 
 // Example TestPartition.

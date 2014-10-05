@@ -1,11 +1,9 @@
 package dataport
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-)
+import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
 
 const confMaxKeyvers = 10
 

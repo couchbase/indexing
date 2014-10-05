@@ -132,7 +132,7 @@ func (m *VbConnectionMap) GetVbuuids() []uint64 {
 type VbKeyVersions struct {
 	Vbucket          *uint32        `protobuf:"varint,2,req,name=vbucket" json:"vbucket,omitempty"`
 	Vbuuid           *uint64        `protobuf:"varint,3,req,name=vbuuid" json:"vbuuid,omitempty"`
-	Bucketname       *string        `protobuf:"bytes,4,opt,name=bucketname" json:"bucketname,omitempty"`
+	Bucketname       *string        `protobuf:"bytes,4,req,name=bucketname" json:"bucketname,omitempty"`
 	Kvs              []*KeyVersions `protobuf:"bytes,5,rep,name=kvs" json:"kvs,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }

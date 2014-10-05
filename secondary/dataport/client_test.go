@@ -1,13 +1,10 @@
 package dataport
 
-import (
-	"fmt"
-	"testing"
+import "fmt"
+import "testing"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbase/indexing/secondary/transport"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/transport"
 
 var addr = "localhost:8888"
 
@@ -16,9 +13,8 @@ func TestClient(t *testing.T) {
 	c.LogIgnore()
 
 	// start server
-	msgch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
-	errch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, msgch, errch)
+	appch := make(chan interface{}, mutChanSize)
+	daemon, err := NewServer(addr, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,9 +48,8 @@ func TestStreamBegin(t *testing.T) {
 	c.LogIgnore()
 
 	// start server
-	msgch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
-	errch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, msgch, errch)
+	appch := make(chan interface{}, mutChanSize)
+	daemon, err := NewServer(addr, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +66,7 @@ func TestStreamBegin(t *testing.T) {
 
 	// test a live StreamBegin
 	bucket, vbno, vbuuid := "default0", uint16(maxvbuckets), uint64(1111)
-	uuid := c.ID(bucket, vbno)
+	uuid := c.StreamID(bucket, vbno)
 	vals, err := client.Getcontext()
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +80,7 @@ func TestStreamBegin(t *testing.T) {
 	kv := c.NewKeyVersions(seqno, docid, maxCount)
 	kv.AddStreamBegin()
 	vb.AddKeyVersions(kv)
-	err = client.SendKeyVersions([]*c.VbKeyVersions{vb})
+	err = client.SendKeyVersions([]*c.VbKeyVersions{vb}, true)
 	client.Getcontext() // syncup
 	if err != nil {
 		t.Fatal(err)
@@ -102,9 +97,8 @@ func TestStreamEnd(t *testing.T) {
 	c.LogIgnore()
 
 	// start server
-	msgch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
-	errch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, msgch, errch)
+	appch := make(chan interface{}, mutChanSize)
+	daemon, err := NewServer(addr, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +115,7 @@ func TestStreamEnd(t *testing.T) {
 	// test a live StreamEnd
 	bucket, vbno := "default0", vbmaps[0].Vbuckets[0]
 	vbuuid := uint64(vbmaps[0].Vbuuids[0])
-	uuid := c.ID(bucket, vbno)
+	uuid := c.StreamID(bucket, vbno)
 	vals, _ := client.Getcontext()
 	vbChans := vals[0].(map[string]chan interface{})
 	if _, ok := vbChans[uuid]; !ok {
@@ -132,7 +126,7 @@ func TestStreamEnd(t *testing.T) {
 	kv := c.NewKeyVersions(seqno, docid, maxCount)
 	kv.AddStreamEnd()
 	vb.AddKeyVersions(kv)
-	err = client.SendKeyVersions([]*c.VbKeyVersions{vb})
+	err = client.SendKeyVersions([]*c.VbKeyVersions{vb}, true)
 	client.Getcontext() // syncup
 	if err != nil {
 		t.Fatal(err)
@@ -158,19 +152,6 @@ func makeVbmaps(maxvbuckets int, maxBuckets int) []*c.VbConnectionMap {
 		vbmaps = append(vbmaps, vbmap)
 	}
 	return vbmaps
-}
-
-func verify(
-	msgch chan []*protobuf.VbKeyVersions,
-	errch chan interface{},
-	fn func(mutn, err interface{})) {
-
-	select {
-	case mutn := <-msgch:
-		fn(mutn, nil)
-	case err := <-errch:
-		fn(nil, err)
-	}
 }
 
 func validateClientInstance(

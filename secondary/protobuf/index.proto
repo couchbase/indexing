@@ -65,10 +65,11 @@ message IndexDefn {
     required bool            isPrimary       = 3; // whether index secondary-key == docid
     required string          name            = 4; // Name of the index
     required StorageType     using           = 5; // indexing algorithm
-    required PartitionScheme partitionScheme = 6;
-    required string          partnExpression = 7; // use expressions to evaluate doc
-    required ExprType        exprType        = 8; // how to interpret `expressions` strings
-    repeated string          secExpressions  = 9; // use expressions to evaluate doc
+    required ExprType        exprType        = 6; // how to interpret `expressions` strings
+    repeated string          secExpressions  = 7; // use expressions to evaluate doc
+    optional PartitionScheme partitionScheme = 8;
+    optional string          partnExpression = 9; // use expressions to evaluate doc
+    optional string          whereExpression = 10; // where predicate
 }
 
 // Example TestPartition.

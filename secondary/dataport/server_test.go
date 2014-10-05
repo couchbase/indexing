@@ -1,27 +1,24 @@
 package dataport
 
-import (
-	"testing"
-	"time"
+import "testing"
+import "time"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbase/indexing/secondary/transport"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
+import "github.com/couchbase/indexing/secondary/transport"
 
 // TODO:
 // - test live StreamBegin and StreamEnd.
 
 func TestTimeout(t *testing.T) {
-	c.LogIgnore()
+	//c.LogIgnore()
 
 	addr := "localhost:8888"
-	maxBuckets, maxconns, maxvbuckets, mutChanSize := 2, 2, 4, 100
+	maxBuckets, maxvbuckets, maxconns, mutChanSize := 2, 4, 2, 100
 
 	// start server
-	msgch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
-	errch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, msgch, errch)
+	appch := make(chan interface{}, mutChanSize)
+	daemon, err := NewServer(addr, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +41,7 @@ func TestTimeout(t *testing.T) {
 			vbs = append(vbs, vb)
 		}
 	}
-	client.SendKeyVersions(vbs)
+	client.SendKeyVersions(vbs, true)
 
 	go func() { // this routine will keep one connection alive
 		for i := 0; ; i++ {
@@ -55,38 +52,39 @@ func TestTimeout(t *testing.T) {
 			kv := c.NewKeyVersions(10, nil, 1)
 			kv.AddSync()
 			vb.AddKeyVersions(kv)
-			client.SendKeyVersions([]*c.VbKeyVersions{vb})
+			client.SendKeyVersions([]*c.VbKeyVersions{vb}, true)
 			<-time.After(c.DataportReadDeadline * time.Millisecond)
 		}
 	}()
 
 	wait := true
 	for wait {
-		verify(msgch, errch, func(mutn, err interface{}) {
-			if err == nil {
-				return
-			}
-			ref := maxvbuckets / maxconns
-			if rs, ok := (err).(RepairVbuckets); ok { // check
-				t.Logf("%T %v \n", rs, rs)
-				if len(rs) != 2 {
-					t.Fatal("mismatch in repair vbuckets")
+		select {
+		case msg := <-appch:
+			switch ce := msg.(type) {
+			case []*protobuf.VbKeyVersions:
+			case ConnectionError:
+				ref := maxvbuckets
+				t.Logf("%T %v \n", ce, ce, ref)
+				if len(ce) != 2 {
+					t.Fatal("mismatch in ConnectionError")
 				}
 				refBuckets := map[string]bool{"default0": true, "default1": true}
-				for bucket, vbnos := range rs {
+				for bucket, vbnos := range ce {
 					delete(refBuckets, bucket)
 					if len(vbnos) != ref {
-						t.Fatalf("mismatch in repair vbuckets %v %v", vbnos, ref)
+						t.Fatalf("mismatch in ConnectionError %v %v", vbnos, ref)
 					}
 				}
 				if len(refBuckets) > 0 {
-					t.Fatalf("mismatch in repair vbuckets %v", refBuckets)
+					t.Fatalf("mismatch in ConnectionError %v", refBuckets)
 				}
 				wait = false
-			} else {
-				t.Fatalf("expected repair vbuckets %T", err)
+
+			default:
+				t.Fatalf("expected connection error %T", msg)
 			}
-		})
+		}
 	}
 
 	<-time.After(100 * time.Millisecond)
@@ -103,9 +101,8 @@ func TestLoopback(t *testing.T) {
 	maxBuckets, maxconns, maxvbuckets, mutChanSize := 2, 8, 32, 100
 
 	// start server
-	msgch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
-	errch := make(chan interface{}, 1000)
-	daemon, err := NewServer(addr, msgch, errch)
+	appch := make(chan interface{}, mutChanSize)
+	daemon, err := NewServer(addr, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +128,7 @@ func TestLoopback(t *testing.T) {
 			vbs = append(vbs, vb)
 		}
 	}
-	client.SendKeyVersions(vbs)
+	client.SendKeyVersions(vbs, true)
 
 	count, seqno := 200, 1
 	for i := 1; i <= count; i += 2 {
@@ -141,7 +138,7 @@ func TestLoopback(t *testing.T) {
 		vbsRef = append(
 			vbsRef,
 			constructVbKeyVersions("default1", seqno, nVbs, nMuts, nIndexes)...)
-		err := client.SendKeyVersions(vbsRef)
+		err := client.SendKeyVersions(vbsRef, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -150,17 +147,15 @@ func TestLoopback(t *testing.T) {
 		// gather
 		pvbs := make([]*protobuf.VbKeyVersions, 0)
 		for len(pvbs) < nVbs*2 {
-			verify(msgch, errch, func(mutn, err interface{}) {
-				t.Logf("%T %v\n", err, err)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if pvbsSub, ok := mutn.([]*protobuf.VbKeyVersions); !ok {
-					t.Fatalf("unexpected type in loopback %T", pvbsSub)
+			select {
+			case msg := <-appch:
+				t.Logf("%T %v\n", msg, msg)
+				if pvbsSub, ok := msg.([]*protobuf.VbKeyVersions); !ok {
+					t.Fatalf("unexpected type in loopback %T", msg)
 				} else {
 					pvbs = append(pvbs, pvbsSub...)
 				}
-			})
+			}
 		}
 		vbs := protobuf2VbKeyVersions(pvbs)
 		for _, vbRef := range vbsRef {
@@ -192,9 +187,8 @@ func BenchmarkLoopback(b *testing.B) {
 	maxBuckets, maxconns, maxvbuckets, mutChanSize := 2, 8, 32, 100
 
 	// start server
-	msgch := make(chan []*protobuf.VbKeyVersions, mutChanSize)
-	errch := make(chan interface{}, 1000)
-	daemon, err := NewServer(addr, msgch, errch)
+	appch := make(chan interface{}, mutChanSize)
+	daemon, err := NewServer(addr, appch)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -217,7 +211,7 @@ func BenchmarkLoopback(b *testing.B) {
 			vbs = append(vbs, vb)
 		}
 	}
-	client.SendKeyVersions(vbs)
+	client.SendKeyVersions(vbs, true)
 
 	go func() {
 		nVbs, nMuts, nIndexes := maxvbuckets, 5, 5
@@ -228,21 +222,19 @@ func BenchmarkLoopback(b *testing.B) {
 			vbs :=
 				constructVbKeyVersions("default1", seqno, nVbs, nMuts, nIndexes)
 			vbsRef = append(vbsRef, vbs...)
-			client.SendKeyVersions(vbsRef)
+			client.SendKeyVersions(vbsRef, true)
 			seqno += nMuts
 		}
 	}()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		verify(msgch, errch, func(mutn, err interface{}) {
-			if err != nil {
-				b.Fatal(err)
-			}
-			if pvbsSub, ok := mutn.([]*protobuf.VbKeyVersions); !ok {
+		select {
+		case msg := <-appch:
+			if pvbsSub, ok := msg.([]*protobuf.VbKeyVersions); !ok {
 				b.Fatalf("unexpected type in loopback %T", pvbsSub)
 			}
-		})
+		}
 	}
 
 	client.Close()

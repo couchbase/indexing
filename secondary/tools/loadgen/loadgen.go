@@ -26,6 +26,7 @@ var options struct {
 	buckets  []string // buckets to populate
 	parallel int      // number of parallel routines per bucket
 	count    int      // number of documents to be generated per routine
+	expiry   int      // set expiry for the document, in seconds
 }
 
 var testDir string
@@ -49,6 +50,8 @@ func argParse() string {
 		"number of parallel routines per bucket")
 	flag.IntVar(&options.count, "count", 0,
 		"number of documents to be generated per routine")
+	flag.IntVar(&options.expiry, "expiry", 0,
+		"expiry duration for a document (TTL)")
 
 	flag.Parse()
 
@@ -128,7 +131,7 @@ func genDocuments(b *couchbase.Bucket, prodfile string, idx, n int) {
 		monster.Initialize(c)
 		doc := root.Generate(c)
 		key := fmt.Sprintf("%s-%v-%v", b.Name, idx, i+1)
-		err = b.SetRaw(key, 0, []byte(doc))
+		err = b.SetRaw(key, options.expiry, []byte(doc))
 		if err != nil {
 			fmt.Printf("%T %v\n", err, err)
 		}

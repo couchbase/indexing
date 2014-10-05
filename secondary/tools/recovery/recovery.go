@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	ap "github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/projector"
@@ -16,7 +15,6 @@ import (
 )
 
 var pooln = "default"
-var cluster = "locahost:9000"
 
 var options struct {
 	buckets       []string
@@ -25,30 +23,42 @@ var options struct {
 	stat          string // periodic timeout to print dataport statistics
 	timeout       string // timeout for dataport to exit
 	maxVbno       int
+	debug         bool
+	trace         bool
 }
 
 func argParse() string {
 	buckets := "default"
 	endpoints := "localhost:9020"
-	coordEndpoint := "localhost:9021"
 
 	flag.StringVar(&buckets, "buckets", buckets,
 		"buckets to project")
 	flag.StringVar(&endpoints, "endpoints", endpoints,
 		"endpoints for mutations stream")
-	flag.StringVar(&options.coordEndpoint, "coorendp", coordEndpoint,
+	flag.StringVar(&options.coordEndpoint, "coorendp", "localhost:9021",
 		"coordinator endpoint")
-	flag.StringVar(&options.stat, "stat", "0",
+	flag.StringVar(&options.stat, "stat", "1000",
 		"periodic timeout to print dataport statistics")
 	flag.StringVar(&options.timeout, "timeout", "0",
 		"timeout for dataport to exit")
 	flag.IntVar(&options.maxVbno, "maxvb", 1024,
 		"max number of vbuckets")
+	flag.BoolVar(&options.debug, "debug", false,
+		"run in debug mode")
+	flag.BoolVar(&options.trace, "trace", false,
+		"run in trace mode")
 
 	flag.Parse()
 
 	options.buckets = strings.Split(buckets, ",")
 	options.endpoints = strings.Split(endpoints, ",")
+	if options.debug {
+		c.SetLogLevel(c.LogLevelDebug)
+	} else if options.trace {
+		c.SetLogLevel(c.LogLevelTrace)
+	} else {
+		c.SetLogLevel(c.LogLevelInfo)
+	}
 
 	args := flag.Args()
 	if len(args) < 1 {
@@ -64,12 +74,10 @@ func usage() {
 }
 
 var done = make(chan bool)
-var projectors = make(map[string]ap.Client)
+var projectors = make(map[string]*projector.Client)
 
 func main() {
-	c.SetLogLevel(c.LogLevelInfo)
-
-	cluster = argParse()
+	cluster := argParse()
 
 	// start dataport servers.
 	for _, endpoint := range options.endpoints {
@@ -79,14 +87,43 @@ func main() {
 	}
 	go dataport.Application(options.coordEndpoint, 0, 0, nil)
 
-	_, err := projector.SpawnProjectors(cluster, kvaddrs, projectors)
+	kvaddrs, err := c.GetKVAddrs(cluster, pooln, "default" /*bucket*/)
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Printf("found %v nodes\n", kvaddrs)
+
+	// spawn initial set of projectors
+	for _, kvaddr := range kvaddrs {
+		adminport := kvaddr2adminport(kvaddr, 500)
+		settings := map[string]interface{}{
+			"cluster":   cluster,
+			"adminport": adminport,
+			"kvaddrs":   []string{kvaddr},
+			"epfactory": c.RouterEndpointFactory(EndpointFactory),
+		}
+		projector.NewProjector(settings) // start projector daemon
+		projectors[kvaddr] = projector.NewClient(adminport)
+	}
+
+	// index instances for initial bucket []string{default}.
+	instances := protobuf.ExampleIndexInstances(
+		[]string{"default", "beer-sample", "users"}, options.endpoints,
+		options.coordEndpoint)
+
+	endpointSettings := map[string]interface{}{
+		"type": "dataport",
+	}
 
 	// start backfill stream on each projector
-	for kvaddr, c := range projectors {
-		startTopic(kvaddr, c, nil)
+	for kvaddr, client := range projectors {
+		// start backfill stream on each projector
+		_, err := client.InitialTopicRequest(
+			"backfill" /*topic*/, "default" /*pooln*/, kvaddr,
+			endpointSettings, instances)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	<-make(chan bool) // wait for ever
@@ -126,11 +163,11 @@ func appHandler(endpoint string, msg interface{}) bool {
 			activity[bucket] = m
 		}
 
-	case dataport.RestartVbuckets:
-		tss := make(map[string]*c.Timestamp)
-		fmt.Println(".....", activity)
+	case dataport.ConnectionError:
+		fmt.Println("RestartVbuckets ....", activity)
+		tss := make([]*protobuf.TsVbuuid, 0)
 		for bucket, vbnos := range v {
-			ts := c.NewTimestamp(bucket, c.MaxVbuckets)
+			ts := protobuf.NewTsVbuuid("default", bucket, c.MaxVbuckets)
 			for _, vbno := range vbnos {
 				if m, ok := activity[bucket]; ok {
 					if n, ok := m[vbno]; ok {
@@ -145,46 +182,11 @@ func appHandler(endpoint string, msg interface{}) bool {
 				}
 			}
 			fmt.Println(ts)
-			tss[ts.Bucket] = ts
+			tss = append(tss, ts)
 		}
 
-		newkvaddrs, err := projector.SpawnProjectors(cluster, kvaddrs, projectors)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		for kvaddr, c := range projectors {
-			if _, ok := newkvaddrs[kvaddr]; ok {
-				startTopic(kvaddr, c, tss)
-				continue
-			}
-			instances := projector.ExampleIndexInstances(
-				options.buckets, options.endpoints, options.coordEndpoint)
-			projector.RestartMutationStream(
-				c, "backfill", "default", tss, instances,
-				func(res *protobuf.MutationStreamResponse, err error) bool {
-					if err != nil {
-						log.Println("restart error", err)
-					} else {
-						// log.Printf("%s\n", res.Repr())
-					}
-					return true
-				})
-		}
-
-	case dataport.ShutdownDataport:
-		log.Println(v)
-
-	case dataport.RepairVbuckets:
-		projectors, err = projector.ShutdownProjectors(
-			cluster, pooln, options.buckets, projectors)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if v != nil && len(v) > 0 {
-			for _, c := range projectors {
-				projector.RepairEndpoints(c, "backfill", []string{endpoint})
-			}
+		for _, client := range projectors {
+			client.RestartVbuckets("backfill", tss)
 		}
 
 	case error:
@@ -201,14 +203,25 @@ func mf(err error, msg string) {
 	}
 }
 
-func startTopic(kvaddr string, p ap.Client, tss map[string]*c.Timestamp) {
-	// start backfill stream on each projector
-	instances := projector.ExampleIndexInstances(
-		options.buckets, options.endpoints, options.coordEndpoint)
-	_, err := projector.InitialMutationStream(
-		p, "backfill" /*topic*/, "default" /*pooln*/, options.buckets,
-		[]string{kvaddr}, tss, instances)
+func kvaddr2adminport(kvaddr string, offset int) string {
+	ss := strings.Split(kvaddr, ":")
+	kport, err := strconv.Atoi(ss[1])
 	if err != nil {
 		log.Fatal(err)
 	}
+	return ss[0] + ":" + strconv.Itoa(kport+offset)
+}
+
+// EndpointFactory to create endpoint instances based on settings.
+func EndpointFactory(
+	topic, addr string,
+	settings map[string]interface{}) (c.RouterEndpoint, error) {
+
+	switch v := settings["type"].(string); v {
+	case "dataport":
+		return dataport.NewRouterEndpoint(topic, addr, settings)
+	default:
+		log.Fatal("Unknown endpoint type")
+	}
+	return nil, nil
 }

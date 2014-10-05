@@ -18,11 +18,17 @@ var ErrorUnexpectedPayload = errors.New("secondary.unexpectedPayload")
 // ErrorClosed
 var ErrorClosed = errors.New("secondary.closed")
 
+// ErrorChannelFull
+var ErrorChannelFull = errors.New("secondary.channelFull")
+
 // ErrorNotMyVbucket
 var ErrorNotMyVbucket = errors.New("secondary.notMyVbucket")
 
 // ErrorInvalidRequest
 var ErrorInvalidRequest = errors.New("secondary.invalidRequest")
+
+// ErrorNotFound
+var ErrorNotFound = errors.New("secondary.notFound")
 
 // TODO: ideally we would like to have these constants configurable.
 const (
@@ -40,6 +46,14 @@ const (
 	// KeyVersionsChannelSize is typical channel size for channels that carry
 	// projected key-versions.
 	KeyVersionsChannelSize = 10000
+
+	// FeedWaitStreamReqTimeout in milliseconds, will force feed to timeout
+	// while waiting for StreamRequest's response
+	FeedWaitStreamReqTimeout = 10000
+
+	// FeedWaitStreamEndTimeout in milliseconds, will force feed to timeout
+	// while waiting for StreamEnd's response
+	FeedWaitStreamEndTimeout = 10000
 
 	// VbucketSyncTimeout timeout, in milliseconds, is for sending Sync
 	// messages for inactive vbuckets.
@@ -113,9 +127,10 @@ const (
 )
 
 // ProtobufDataPathMajorNum major version number for mutation data path.
-var ProtobufDataPathMajorNum byte = 0
+var ProtobufDataPathMajorNum byte // = 0
 
 // ProtobufDataPathMinorNum minor version number for mutation data path.
 var ProtobufDataPathMinorNum byte = 1
 
+// UrlSep for web.
 const UrlSep = "/"

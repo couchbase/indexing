@@ -1,11 +1,9 @@
 package projector
 
-import (
-	mc "github.com/couchbase/gomemcached/client"
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbaselabs/go-couchbase"
-)
+import mc "github.com/couchbase/gomemcached/client"
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
+import "github.com/couchbaselabs/go-couchbase"
 
 // FakeBucket fot unit testing.
 type FakeBucket struct {
@@ -55,7 +53,7 @@ func (b *FakeBucket) GetFailoverLogs(vbnos []uint16) (couchbase.FailoverLog, err
 }
 
 // OpenKVFeed is method receiver for BucketAccess interface
-func (b *FakeBucket) OpenKVFeed(kvaddr string) (KVFeeder, error) {
+func (b *FakeBucket) OpenKVFeed(kvaddr string) (BucketFeeder, error) {
 	return b, nil
 }
 
@@ -74,49 +72,29 @@ func (b *FakeBucket) SetFailoverLog(vbno uint16, flog [][2]uint64) {
 	b.flogs[vbno] = flog
 }
 
-// KVFeeder interface
+// BucketFeeder interface
 
-// GetChannel is method receiver for KVFeeder interface
+// GetChannel is method receiver for BucketFeeder interface
 func (b *FakeBucket) GetChannel() <-chan *mc.UprEvent {
 	return b.C
 }
 
-// StartVbStreams is method receiver for KVFeeder interface
+// StartVbStreams is method receiver for BucketFeeder interface
 func (b *FakeBucket) StartVbStreams(
-	flogs couchbase.FailoverLog,
-	restartTs *protobuf.TsVbuuid) (failoverTs, kvTs *protobuf.TsVbuuid, err error) {
+	opaque uint32, ts *protobuf.TsVbuuid) (err error) {
 
-	for i, vbno := range c.Vbno32to16(restartTs.Vbnos) {
-		if stream, ok := b.streams[vbno]; ok {
-			close(stream.killch)
-		}
-		stream := &FakeStream{
-			seqno:  restartTs.Seqnos[i],
-			vbuuid: restartTs.Vbuuids[i],
-			killch: make(chan bool),
-		}
-		b.streams[vbno] = stream
-		go stream.run(b.C)
-	}
-	return restartTs, restartTs, nil
-}
-
-// EndVbStreams is method receiver for KVFeeder interface
-func (b *FakeBucket) EndVbStreams(endTs *protobuf.TsVbuuid) (err error) {
-	for _, vbno := range c.Vbno32to16(endTs.Vbnos) {
-		if stream, ok := b.streams[vbno]; ok {
-			close(stream.killch)
-			delete(b.streams, vbno)
-		}
-	}
 	return
 }
 
-// CloseKVFeed is method receiver for KVFeeder interface
-func (b *FakeBucket) CloseKVFeed() (err error) {
-	for _, stream := range b.streams {
-		close(stream.killch)
-	}
+// EndVbStreams is method receiver for BucketFeeder interface
+func (b *FakeBucket) EndVbStreams(
+	opaque uint32, ts *protobuf.TsVbuuid) (err error) {
+
+	return
+}
+
+// CloseFeed is method receiver for BucketFeeder interface
+func (b *FakeBucket) CloseFeed() (err error) {
 	return
 }
 

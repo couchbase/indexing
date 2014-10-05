@@ -1,12 +1,11 @@
 package adminport
 
-import (
-	"encoding/json"
-	"github.com/couchbase/indexing/secondary/common"
-	"log"
-	"reflect"
-	"testing"
-)
+import "encoding/json"
+import "log"
+import "reflect"
+import "testing"
+
+import "github.com/couchbase/indexing/secondary/common"
 
 var addr = "http://localhost:9999"
 
@@ -26,6 +25,7 @@ var server Server
 
 func init() {
 	server = doServer(addr, q)
+	//common.SetLogLevel(common.LogLevelDebug)
 }
 
 func TestLoopback(t *testing.T) {
@@ -50,12 +50,12 @@ func TestLoopback(t *testing.T) {
 		t.Error("unexpected response")
 	}
 	stats := common.Statistics{}
-	if err := client.RequestStats(&stats); err != nil {
+	if err := client.Request(&stats, &stats); err != nil {
 		t.Error(err)
 	}
-	stats = stats["adminport"].(map[string]interface{})
-	if stats["requests"].(float64) != float64(2) {
-		t.Error("registered requests", stats["requests"])
+	refstats := interface{}([]interface{}{float64(1), float64(1), float64(0)})
+	if reflect.DeepEqual(stats["/adminport/testMessage"], refstats) == false {
+		t.Errorf("%v", stats["/adminport/testMessage"])
 	}
 }
 
@@ -106,10 +106,8 @@ func doServer(addr string, quit chan bool) Server {
 						if err := req.Send(msg); err != nil {
 							log.Println(err)
 						}
-					case common.Statistics:
-						m := &common.Statistics{
-							"adminport": server.GetStatistics(),
-						}
+					case *common.Statistics:
+						m := server.GetStatistics()
 						if err := req.Send(m); err != nil {
 							log.Println(err)
 						}

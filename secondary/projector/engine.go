@@ -3,16 +3,14 @@
 
 package projector
 
-import (
-	"fmt"
-	mc "github.com/couchbase/gomemcached/client"
-	c "github.com/couchbase/indexing/secondary/common"
-)
+import mc "github.com/couchbase/gomemcached/client"
+import c "github.com/couchbase/indexing/secondary/common"
 
 // IMPORTANT: concurrent access to be expected for Engine object.
 
-// Engine is immutable structure defined for each index, or any other entity
-// that wants projection and routing over kv-mutations.
+// Engine is immutable structure defined for each index,
+// or any other entity that wants projection and routing
+// over kv-mutations.
 type Engine struct {
 	uuid      uint64
 	evaluator c.Evaluator // do document projection
@@ -20,79 +18,51 @@ type Engine struct {
 }
 
 // NewEngine creates a new engine instance for `uuid`.
-func NewEngine(feed *Feed, uuid uint64, evaluator c.Evaluator, router c.Router) *Engine {
+func NewEngine(uuid uint64, evaluator c.Evaluator, router c.Router) *Engine {
 	engine := &Engine{
 		uuid:      uuid,
 		evaluator: evaluator,
 		router:    router,
 	}
-	c.Infof("%v new engine %v created ...\n", feed.logPrefix, uuid)
 	return engine
 }
 
-// AddToEndpoints create KeyVersions for single `uuid`.
-func (engine *Engine) AddToEndpoints(
-	m *mc.UprEvent, kvForEndpoints map[string]*c.KeyVersions) error {
-
-	uuid := engine.uuid
-	evaluator, router := engine.evaluator, engine.router
-
-	vbno, seqno, docid := m.VBucket, m.Seqno, m.Key // Key is Docid
-	switch m.Opcode {
-	case mc.UprMutation:
-		pkey, nkey, okey, err := doEvaluate(m, uuid, evaluator)
-		if err != nil {
-			return err
-		}
-		// Upsert
-		raddrs := router.UpsertEndpoints(vbno, seqno, docid, pkey, nkey, okey)
-		for _, raddr := range raddrs {
-			kvForEndpoints[raddr].AddUpsert(uuid, nkey, okey)
-		}
-		// UpsertDeletion
-		raddrs =
-			router.UpsertDeletionEndpoints(vbno, seqno, docid, pkey, nkey, okey)
-		for _, raddr := range raddrs {
-			kvForEndpoints[raddr].AddUpsertDeletion(uuid, okey)
-		}
-
-	case mc.UprDeletion:
-		pkey, _, okey, err := doEvaluate(m, uuid, evaluator)
-		if err != nil {
-			return err
-		}
-		// Deletion
-		raddrs := router.DeletionEndpoints(vbno, seqno, docid, pkey, okey)
-		for _, raddr := range raddrs {
-			kvForEndpoints[raddr].AddDeletion(uuid, okey)
-		}
-	}
-	return nil
+// Endpoints hosting this engine.
+func (engine *Engine) Endpoints() []string {
+	return engine.router.Endpoints()
 }
 
-func doEvaluate(
-	m *mc.UprEvent,
-	uuid uint64,
-	evaluator c.Evaluator) (pkey, nkey, okey []byte, err error) {
+// StreamBeginData from this engine.
+func (engine *Engine) StreamBeginData(
+	vbno uint16, vbuuid, seqno uint64) interface{} {
 
-	defer func() { // panic safe
-		if r := recover(); r != nil {
-			err = fmt.Errorf("%v", r)
-		}
-	}()
+	return engine.evaluator.StreamBeginData(vbno, vbuuid, seqno)
+}
 
-	if len(m.Value) > 0 { // project new secondary key
-		if pkey, err = evaluator.PartitionKey(m.Key, m.Value); err != nil {
-			return
-		}
-		if nkey, err = evaluator.Transform(m.Key, m.Value); err != nil {
-			return
-		}
-	}
-	if len(m.OldValue) > 0 { // project old secondary key
-		if okey, err = evaluator.Transform(m.Key, m.OldValue); err != nil {
-			return
-		}
-	}
-	return pkey, nkey, okey, nil
+// SyncData from this engine.
+func (engine *Engine) SyncData(
+	vbno uint16, vbuuid, seqno uint64) interface{} {
+
+	return engine.evaluator.SyncData(vbno, vbuuid, seqno)
+}
+
+// SnapshotData from this engine.
+func (engine *Engine) SnapshotData(
+	m *mc.UprEvent, vbno uint16, vbuuid, seqno uint64) interface{} {
+
+	return engine.evaluator.SnapshotData(m, vbno, vbuuid, seqno)
+}
+
+// StreamEndData from this engine.
+func (engine *Engine) StreamEndData(
+	vbno uint16, vbuuid, seqno uint64) interface{} {
+
+	return engine.evaluator.StreamEndData(vbno, vbuuid, seqno)
+}
+
+// TransformRoute data to endpoints.
+func (engine *Engine) TransformRoute(
+	vbuuid uint64, m *mc.UprEvent) (map[string]interface{}, error) {
+
+	return engine.evaluator.TransformRoute(vbuuid, m)
 }

@@ -5,6 +5,7 @@
 //      where, packetlen == len(mutation)
 //
 // `flags` used for specifying encoding format, compression etc.
+
 package transport
 
 import (
@@ -54,8 +55,10 @@ type TransportPacket struct {
 	decoders map[byte]Decoder
 }
 
+// Encoder callback
 type Encoder func(payload interface{}) (data []byte, err error)
 
+// Decoder callback
 type Decoder func(data []byte) (payload interface{}, err error)
 
 // NewTransportPacket creates a new TransportPacket and return its

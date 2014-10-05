@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strings"
 )
 
 // Error, Warning, Fatal are always logged
@@ -100,5 +101,12 @@ func Debugf(format string, v ...interface{}) {
 func Tracef(format string, v ...interface{}) {
 	if logLevel >= LogLevelTrace {
 		logger.Printf("[TRACE] "+format, v...)
+	}
+}
+
+// StackTrace formats the output of debug.Stack()
+func StackTrace(s string) {
+	for _, line := range strings.Split(s, "\n") {
+		Errorf("%s\n", line)
 	}
 }
