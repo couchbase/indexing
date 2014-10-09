@@ -63,16 +63,16 @@ func TestN1QLTransform(t *testing.T) {
 	}
 	stringer := qe.NewStringer()
 	exprs := []string{stringer.Visit(expr1), stringer.Visit(expr2)}
-	cExpr, err := CompileN1QLExpression(exprs)
+	cExprs, err := CompileN1QLExpression(exprs)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	secKey, err := N1QLTransform(doc, cExpr)
+	secKey, err := N1QLTransform([]byte("docid"), doc, cExprs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(secKey) != `["Fireman's Pail Ale",0.5]` {
+	if string(secKey) != `["Fireman's Pail Ale",0.5,"docid"]` {
 		t.Fatalf("evaluation failed %v", string(secKey))
 	}
 }
@@ -86,9 +86,9 @@ func BenchmarkCompileN1QLExpression(b *testing.B) {
 
 func BenchmarkN1QLTransform(b *testing.B) {
 	expr := `{"type":"property","path":"city"}`
-	cExpr, _ := CompileN1QLExpression([]string{expr})
+	cExprs, _ := CompileN1QLExpression([]string{expr})
 	l := len(testJSON[usersBzip2])
 	for i := 0; i < b.N; i++ {
-		N1QLTransform(testJSON[usersBzip2][i%l], cExpr)
+		N1QLTransform([]byte("docid"), testJSON[usersBzip2][i%l], cExprs)
 	}
 }

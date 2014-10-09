@@ -16,19 +16,29 @@ type Router interface {
 
 	// UpsertEndpoints return a list of endpoints <host:port>
 	// to which Upsert message will be published.
-	// * m.VBucket, m.Seqno, m.Key - carry {vbno, seqno, docid}
+	//   * `key` == nil, implies missing secondary key
+	//   * `partKey` == nil, implies missing partition key
+	//   * m.VBucket, m.Seqno, m.Key - carry {vbno, seqno, docid}
 	UpsertEndpoints(m *mc.UprEvent, partKey, key, oldKey []byte) []string
 
 	// UpsertDeletionEndpoints return a list of endpoints
 	// <host:port> to which UpsertDeletion message will be
 	// published.
-	// * oldPartKey and oldKey will be computed based on m.OldValue
-	// * m.VBucket, m.Seqno, m.Key - carry {vbno, seqno, docid}
+	//   * `oldPartKey` and `oldKey` will be computed based on m.OldValue
+	//   * `oldKey` == nil, implies old document is not available
+	//   * `oldPartKey` == nil, implies old document is not available
+	//   * m.VBucket, m.Seqno, m.Key - carry {vbno, seqno, docid}
+	// TODO: differentiate between, missing old document and missing
+	//       secondary-key
 	UpsertDeletionEndpoints(m *mc.UprEvent, oldPartKey, key, oldKey []byte) []string
 
 	// DeletionEndpoints return a list of endpoints
 	// <host:port> to which Deletion message will be published.
-	// * partKey and oldKey will be computed based on m.OldValue
-	// * m.VBucket, m.Seqno, m.Key - carry {vbno, seqno, docid}
+	//   * `oldPartKey` and `oldKey` will be computed based on m.OldValue
+	//   * `oldKey` == nil, implies old document is not available
+	//   * `oldPartKey` == nil, implies old document is not available
+	//   * m.VBucket, m.Seqno, m.Key - carry {vbno, seqno, docid}
+	// TODO: differentiate between, missing old document and missing
+	//       secondary-key
 	DeletionEndpoints(m *mc.UprEvent, oldPartKey, oldKey []byte) []string
 }

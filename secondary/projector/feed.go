@@ -940,7 +940,8 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 
 // generate a new 16 bit opaque value set as MSB.
 func newOpaque() uint32 {
-	return uint32(time.Now().UnixNano()>>32) & 0xFFFF0000
+	// bit 40 ... 56 from UnixNano().
+	return uint32((uint64(time.Now().UnixNano()) >> 40) << 16)
 }
 
 //---- local function

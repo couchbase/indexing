@@ -119,7 +119,7 @@ func (ie *IndexEvaluator) TransformRoute(
 	}
 
 	if where && len(m.Value) > 0 { // project new secondary key
-		if npkey, err = ie.partitionKey(m.Key, m.Value); err != nil {
+		if npkey, err = ie.partitionKey(m.Value); err != nil {
 			return nil, err
 		}
 		if nkey, err = ie.evaluate(m.Key, m.Value); err != nil {
@@ -127,7 +127,7 @@ func (ie *IndexEvaluator) TransformRoute(
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
-		if opkey, err = ie.partitionKey(m.Key, m.OldValue); err != nil {
+		if opkey, err = ie.partitionKey(m.OldValue); err != nil {
 			return nil, err
 		}
 		if okey, err = ie.evaluate(m.Key, m.OldValue); err != nil {
@@ -143,6 +143,8 @@ func (ie *IndexEvaluator) TransformRoute(
 	endpoints = make(map[string]interface{})
 	bucket := ie.Bucket()
 
+	c.Tracef("inst: %v where: %v (pkey: %v) key: %v\n",
+		uuid, where, string(npkey), string(nkey))
 	switch m.Opcode {
 	case mcd.UPR_MUTATION:
 		if where { // WHERE predicate
@@ -192,12 +194,12 @@ func (ie *IndexEvaluator) evaluate(docid, doc []byte) ([]byte, error) {
 	switch exprType {
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
-		return c.N1QLTransform(doc, ie.skExprs)
+		return c.N1QLTransform(docid, doc, ie.skExprs)
 	}
 	return nil, nil
 }
 
-func (ie *IndexEvaluator) partitionKey(docid, doc []byte) ([]byte, error) {
+func (ie *IndexEvaluator) partitionKey(doc []byte) ([]byte, error) {
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // TODO: strategy for primary index ???
 		return nil, nil
@@ -209,7 +211,7 @@ func (ie *IndexEvaluator) partitionKey(docid, doc []byte) ([]byte, error) {
 	switch exprType {
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
-		return c.N1QLTransform(doc, []interface{}{ie.pkExpr})
+		return c.N1QLTransform(nil, doc, []interface{}{ie.pkExpr})
 	}
 	return nil, nil
 }
@@ -225,12 +227,15 @@ func (ie *IndexEvaluator) wherePredicate(doc []byte) (bool, error) {
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
-		out, err := c.N1QLTransform(doc, []interface{}{ie.whExpr})
-		s := string(out)
-		if err == nil && s == "true" {
+		out, err := c.N1QLTransform(nil, doc, []interface{}{ie.whExpr})
+		if out == nil { // missing is treated as false
+			return false, err
+		} else if err != nil { // errors are treated as false
+			return false, err
+		} else if string(out) == "true" {
 			return true, nil
 		}
-		return false, err
+		return false, nil // predicate is false
 	}
 	return true, nil
 }

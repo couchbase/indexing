@@ -105,11 +105,8 @@ func (c *Client) Scan(
 
 	conn, pkt := connectn.conn, connectn.pkt
 
-	r := &protobuf.Range{
-		Low:       []byte(low),
-		High:      []byte(high),
-		Inclusion: proto.Uint32(inclusion),
-	}
+	incl := proto.Uint32(inclusion)
+	r := &protobuf.Range{Low: low, High: high, Inclusion: incl}
 	req := &protobuf.ScanRequest{
 		Span:     &protobuf.Span{Range: r},
 		Distinct: proto.Bool(distinct),
