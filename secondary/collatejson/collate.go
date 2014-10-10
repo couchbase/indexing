@@ -39,6 +39,15 @@ var ErrorNumberType = errors.New("collatejson.numberType")
 // of arrays and properties.
 type Length int64
 
+// Missing denotes a special type for an item that evaluates
+// to _nothing_.
+type Missing string
+
+// MissingLiteral is special string to denote missing item.
+// IMPORTANT: we are assuming that MissingLiteral will not
+// occur in the keyspace.
+var MissingLiteral = Missing("~[]{}falsenilNA~")
+
 // While encoding JSON data-element, both basic and composite, encoded string
 // is prefixed with a type-byte. `Terminator` terminates encoded datum.
 const (
@@ -56,8 +65,9 @@ const (
 
 // Codec structure
 type Codec struct {
-	arrayLenPrefix    bool        // if true, first sort arrays based on its length.
-	propertyLenPrefix bool        // if true, first sort properties based on length.
+	arrayLenPrefix    bool        // if true, first sort arrays based on its length
+	propertyLenPrefix bool        // if true, first sort properties based on length
+	doMissing         bool        // if true, handle missing values (for N1QL)
 	numberType        interface{} // "float64" | "int64" | "decimal"
 	//-- unicode
 	//backwards        bool
@@ -76,6 +86,7 @@ func NewCodec(propSize int) *Codec {
 	return &Codec{
 		arrayLenPrefix:    false,
 		propertyLenPrefix: true,
+		doMissing:         true,
 		numberType:        float64(0.0),
 	}
 }
@@ -90,6 +101,12 @@ func (codec *Codec) SortbyArrayLen(what bool) {
 // Use `false` to sort only by proprety items. Default is `true`.
 func (codec *Codec) SortbyPropertyLen(what bool) {
 	codec.propertyLenPrefix = what
+}
+
+// UseMissing will interpret special string MissingLiteral and encode them
+// as TypeMissing. Default is `true`.
+func (codec *Codec) UseMissing(what bool) {
+	codec.doMissing = what
 }
 
 // NumberType chooses type of encoding / decoding for JSON numbers. Can be
@@ -159,10 +176,15 @@ func (codec *Codec) json2code(val interface{}, code []byte) ([]byte, error) {
 		code = append(code, Terminator)
 
 	case string:
-		code = append(code, TypeString)
-		cs = suffixEncodeString([]byte(value), code[1:])
-		code = code[:len(code)+len(cs)]
-		code = append(code, Terminator)
+		if codec.doMissing && MissingLiteral.Equal(value) {
+			code = append(code, TypeMissing)
+			code = append(code, Terminator)
+		} else {
+			code = append(code, TypeString)
+			cs = suffixEncodeString([]byte(value), code[1:])
+			code = code[:len(code)+len(cs)]
+			code = append(code, Terminator)
+		}
 
 	case []interface{}:
 		code = append(code, TypeArray)
@@ -231,6 +253,10 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 	switch code[0] {
 	case Terminator:
 		remaining = code
+
+	case TypeMissing:
+		datum, remaining = getDatum(code)
+		text = append(text, []byte(MissingLiteral)...)
 
 	case TypeNull:
 		datum, remaining = getDatum(code)
@@ -427,4 +453,13 @@ func (codec *Codec) denormalizeFloat(text []byte) ([]byte, error) {
 		return text, nil
 	}
 	return nil, ErrorNumberType
+}
+
+// Equal checks wether n is MissingLiteral
+func (m Missing) Equal(n string) bool {
+	s := string(m)
+	if len(n) == len(s) && n[0] == '~' && n[1] == '[' {
+		return s == n
+	}
+	return false
 }
