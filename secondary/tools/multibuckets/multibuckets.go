@@ -19,13 +19,18 @@ var options struct {
 	endpoints     []string // list of endpoint daemon to start
 	coordEndpoint string   // co-ordinator endpoint
 	stat          string   // periodic timeout to print dataport statistics
-	timeout       string   // timeout for dataport to exit
+	timeout       string   // timeout to loop
 	maxVbno       int      // maximum number of vbuckets
+	addBuckets    []string
+	delBuckets    []string
+	loop          int
 	debug         bool
 	trace         bool
 }
 
 func argParse() string {
+	addBuckets := "default"
+	delBuckets := "default"
 	endpoints := "localhost:9020"
 
 	flag.StringVar(&endpoints, "endpoints", endpoints,
@@ -35,9 +40,15 @@ func argParse() string {
 	flag.StringVar(&options.stat, "stat", "1000",
 		"periodic timeout to print dataport statistics")
 	flag.StringVar(&options.timeout, "timeout", "0",
-		"timeout for dataport to exit")
+		"timeout to loop")
 	flag.IntVar(&options.maxVbno, "maxvb", 1024,
 		"maximum number of vbuckets")
+	flag.StringVar(&addBuckets, "addBuckets", addBuckets,
+		"buckets to add")
+	flag.StringVar(&delBuckets, "delBuckets", addBuckets,
+		"buckets to del")
+	flag.IntVar(&options.loop, "loop", 10,
+		"repeat bucket-add and bucket-del loop number of times")
 	flag.BoolVar(&options.debug, "debug", false,
 		"run in debug mode")
 	flag.BoolVar(&options.trace, "trace", false,
@@ -45,6 +56,8 @@ func argParse() string {
 
 	flag.Parse()
 
+	options.addBuckets = strings.Split(addBuckets, ",")
+	options.delBuckets = strings.Split(delBuckets, ",")
 	options.endpoints = strings.Split(endpoints, ",")
 	if options.debug {
 		common.SetLogLevel(common.LogLevelDebug)
@@ -75,12 +88,16 @@ func main() {
 	// start dataport servers.
 	for _, endpoint := range options.endpoints {
 		stat, _ := strconv.Atoi(options.stat)
-		timeout, _ := strconv.Atoi(options.timeout)
 		go dataport.Application(
-			endpoint, stat, timeout,
+			endpoint, stat, 0,
 			func(addr string, msg interface{}) bool { return true })
 	}
 	go dataport.Application(options.coordEndpoint, 0, 0, nil)
+
+	timeout, err := strconv.Atoi(options.timeout)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	kvaddrs, err := common.GetKVAddrs(cluster, pooln, "default" /*bucket*/)
 	if err != nil {
@@ -103,7 +120,7 @@ func main() {
 
 	// index instances for initial bucket []string{default}.
 	instances := protobuf.ExampleIndexInstances(
-		[]string{"default"}, options.endpoints, options.coordEndpoint)
+		[]string{"beer-sample"}, options.endpoints, options.coordEndpoint)
 
 	endpointSettings := map[string]interface{}{
 		"type": "dataport",
@@ -113,33 +130,26 @@ func main() {
 	for kvaddr, client := range projectors {
 		// start backfill stream on each projector
 		_, err := client.InitialTopicRequest(
-			"backfill" /*topic*/, "default" /*pooln*/, kvaddr,
-			endpointSettings, instances)
+			"backfill", "default", kvaddr, endpointSettings, instances)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	buckets := []string{"users", "beer-sample"}
-
-	for {
+loop:
+	if options.addBuckets != nil {
 		// add `buckets` and its instances after few seconds
-		<-time.After(10 * time.Second)
+		<-time.After(time.Duration(timeout) * time.Millisecond)
 		instances = protobuf.ExampleIndexInstances(
-			buckets, options.endpoints, options.coordEndpoint)
+			options.addBuckets, options.endpoints, options.coordEndpoint)
 		for kvaddr, client := range projectors {
-			ts1, err := client.InitialRestartTimestamp(
-				pooln, "users", []string{kvaddr})
+			ts, err := client.InitialRestartTimestamp(
+				pooln, "default", []string{kvaddr})
 			if err != nil {
 				log.Fatal(err)
 			}
-			ts2, err := client.InitialRestartTimestamp(
-				pooln, "beer-sample", []string{kvaddr})
-			if err != nil {
-				log.Fatal(err)
-			}
-			reqTss := []*protobuf.TsVbuuid{ts1, ts2}
-			res, err := client.AddBuckets("backfill" /*topic*/, reqTss, instances)
+			reqTss := []*protobuf.TsVbuuid{ts}
+			res, err := client.AddBuckets("backfill", reqTss, instances)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -147,15 +157,22 @@ func main() {
 				log.Fatal(err)
 			}
 		}
+	}
 
-		// del "beer-sample" bucket and its instances after few seconds
-		<-time.After(10 * time.Second)
+	if options.delBuckets != nil {
+		// del `buckets` and its instances after few seconds
+		<-time.After(time.Duration(timeout) * time.Millisecond)
 		for _, client := range projectors {
-			err := client.DelBuckets("backfill", []string{"beer-sample"})
+			err := client.DelBuckets("backfill", options.delBuckets)
 			if err != nil {
 				log.Fatal(err)
 			}
 		}
+	}
+
+	options.loop--
+	if options.loop > 0 {
+		goto loop
 	}
 
 	<-make(chan bool) // wait for ever

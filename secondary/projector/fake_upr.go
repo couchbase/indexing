@@ -81,14 +81,13 @@ func (b *FakeBucket) GetChannel() <-chan *mc.UprEvent {
 
 // StartVbStreams is method receiver for BucketFeeder interface
 func (b *FakeBucket) StartVbStreams(
-	opaque uint32, ts *protobuf.TsVbuuid) (err error) {
-
+	opaque uint16, ts *protobuf.TsVbuuid) (err error) {
 	return
 }
 
 // EndVbStreams is method receiver for BucketFeeder interface
 func (b *FakeBucket) EndVbStreams(
-	opaque uint32, ts *protobuf.TsVbuuid) (err error) {
+	opaque uint16, ts *protobuf.TsVbuuid) (err error) {
 
 	return
 }

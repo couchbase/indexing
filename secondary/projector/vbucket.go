@@ -54,7 +54,7 @@ func NewVbucketRoutine(
 	vr.logPrefix = fmt.Sprintf("[%v->%v->%v->%v]", topic, bucket, kvaddr, vbno)
 
 	go vr.run(vr.reqch, startSeqno)
-	c.Infof("%v ... started\n", vr.logPrefix)
+	c.Infof("%v started ...\n", vr.logPrefix)
 	return vr
 }
 

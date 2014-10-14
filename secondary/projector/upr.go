@@ -33,10 +33,10 @@ type BucketFeeder interface {
 	GetChannel() (mutch <-chan *mc.UprEvent)
 
 	// StartVbStreams starts a set of vbucket streams on this feed.
-	StartVbStreams(opaque uint32, ts *protobuf.TsVbuuid) error
+	StartVbStreams(opaque uint16, ts *protobuf.TsVbuuid) error
 
 	// EndVbStreams ends an existing vbucket stream from this feed.
-	EndVbStreams(opaque uint32, endTs *protobuf.TsVbuuid) (err error)
+	EndVbStreams(opaque uint16, endTs *protobuf.TsVbuuid) (err error)
 
 	// CloseFeed ends all active streams on this feed and free its resources.
 	CloseFeed() (err error)
@@ -64,7 +64,7 @@ func (bupr *bucketUpr) GetChannel() (mutch <-chan *mc.UprEvent) {
 
 // StartVbStreams implements Feeder{} interface.
 func (bupr *bucketUpr) StartVbStreams(
-	opaque uint32, ts *protobuf.TsVbuuid) error {
+	opaque uint16, ts *protobuf.TsVbuuid) error {
 
 	for i, vbno := range c.Vbno32to16(ts.Vbnos) {
 		snapshots := ts.Snapshots
@@ -82,14 +82,13 @@ func (bupr *bucketUpr) StartVbStreams(
 
 // EndVbStreams implements Feeder{} interface.
 func (bupr *bucketUpr) EndVbStreams(
-	opaque uint32, ts *protobuf.TsVbuuid) error {
+	opaque uint16, ts *protobuf.TsVbuuid) error {
 
-	//for _, vbno := range c.Vbno32to16(ts.GetVbnos()) {
-	//    err = bupr.uprFeed.UprEndStream(vbno, opaque, 0 /*flag*/)
-	//    if err != nil {
-	//        return err
-	//    }
-	//}
+	for _, vbno := range c.Vbno32to16(ts.GetVbnos()) {
+		if err := bupr.uprFeed.UprCloseStream(vbno, opaque); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

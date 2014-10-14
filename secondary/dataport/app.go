@@ -123,7 +123,7 @@ func processMutations(
 				}
 				commandWise[cmd]++
 
-				if cmd == 0 || cmd == c.Snapshot || uuid == 0 {
+				if cmd == 0 || cmd == c.Snapshot || uuid == 0 || key == "" {
 					continue
 				}
 

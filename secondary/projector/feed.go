@@ -202,7 +202,7 @@ func (feed *Feed) GetStatistics() c.Statistics {
 type controlStreamRequest struct {
 	bucket string
 	kvaddr string
-	opaque uint32
+	opaque uint16
 	status mcd.Status
 	vbno   uint16
 	vbuuid uint64
@@ -228,7 +228,7 @@ func (feed *Feed) PostStreamRequest(bucket, kvaddr string, m *mc.UprEvent) {
 type controlStreamEnd struct {
 	bucket string
 	kvaddr string
-	opaque uint32
+	opaque uint16
 	status mcd.Status
 	vbno   uint16
 }
@@ -258,7 +258,7 @@ func (feed *Feed) genServer() {
 
 	var msg []interface{}
 
-	timeout := time.After(1000 * time.Millisecond)
+	timeout := time.Tick(1000 * time.Millisecond)
 	ctrlMsg := "%v control channel has %v messages"
 
 loop:
@@ -640,7 +640,7 @@ func (feed *Feed) shutdown() error {
 // start a feed for a bucket with a set of kvfeeder,
 // based on vbmap and failover-logs.
 func (feed *Feed) bucketFeed(
-	opaque uint32,
+	opaque uint16,
 	stop, start bool,
 	reqTs *protobuf.TsVbuuid) (BucketFeeder, error) {
 
@@ -832,7 +832,7 @@ func (feed *Feed) engineNames() []string {
 
 // wait for kvdata to post StreamRequest.
 func (feed *Feed) waitStreamRequests(
-	opaque uint32,
+	opaque uint16,
 	pooln, bucketn string, vbnos []uint16) (*protobuf.TsVbuuid, error) {
 
 	rollTs := protobuf.NewTsVbuuid(pooln, bucketn, c.MaxVbuckets)
@@ -863,7 +863,7 @@ func (feed *Feed) waitStreamRequests(
 
 // wait for kvdata to post StreamEnd.
 func (feed *Feed) waitStreamEnds(
-	opaque uint32, bucketn string, vbnos []uint16) error {
+	opaque uint16, bucketn string, vbnos []uint16) error {
 
 	if len(vbnos) == 0 {
 		return nil
@@ -939,9 +939,9 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 }
 
 // generate a new 16 bit opaque value set as MSB.
-func newOpaque() uint32 {
-	// bit 40 ... 56 from UnixNano().
-	return uint32((uint64(time.Now().UnixNano()) >> 40) << 16)
+func newOpaque() uint16 {
+	// bit 26 ... 42 from UnixNano().
+	return uint16((uint64(time.Now().UnixNano()) >> 26) & 0xFFFF)
 }
 
 //---- local function
