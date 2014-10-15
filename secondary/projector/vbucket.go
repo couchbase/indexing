@@ -161,7 +161,6 @@ loop:
 					delete(vr.engines, uuid)
 					c.Debugf("%v DelEngine %v\n", vr.logPrefix, uuid)
 				}
-				vr.updateEndpoints(msg[2].(map[string]c.RouterEndpoint))
 
 				c.Debugf("%v deleted engines %v\n", engineKeys)
 				respch := msg[2].(chan []interface{})

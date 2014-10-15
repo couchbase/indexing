@@ -117,7 +117,7 @@ loop:
 					tk.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
-				tk.handleSupvervisorCommands(cmd)
+				tk.handleSupervisorCommands(cmd)
 			} else {
 				//supervisor channel closed. exit
 				break loop
@@ -127,7 +127,7 @@ loop:
 	}
 }
 
-func (tk *timekeeper) handleSupvervisorCommands(cmd Message) {
+func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 
 	switch cmd.GetMsgType() {
 
@@ -170,8 +170,7 @@ func (tk *timekeeper) handleSupvervisorCommands(cmd Message) {
 	case STREAM_READER_STREAM_END:
 		tk.handleStreamEnd(cmd)
 
-	case STREAM_READER_STREAM_SHUTDOWN, STREAM_READER_RESTART_VBUCKETS,
-		STREAM_READER_REPAIR_VBUCKETS:
+	case STREAM_READER_CONN_ERROR:
 		tk.handleStreamConnError(cmd)
 
 	default:
@@ -270,7 +269,7 @@ func (tk *timekeeper) handleStreamClose(cmd Message) {
 		delete(tk.streamBucketFlushEnabledMap, streamId)
 		delete(tk.streamBucketDrainEnabledMap, streamId)
 		delete(tk.streamBucketStreamBeginMap, streamId)
-		tk.streamState[streamId] = STREAM_INACTIVE
+		delete(tk.streamState, streamId)
 
 		//delete indexes from stream
 		tk.removeIndexFromStream(cmd)
@@ -721,6 +720,11 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
+	//check if stream is valid
+	if tk.checkStreamValid(streamId) == false {
+		return
+	}
+
 	switch streamId {
 
 	case common.MAINT_STREAM:
@@ -821,6 +825,11 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
+	//check if stream is valid
+	if tk.checkStreamValid(streamId) == false {
+		return
+	}
+
 	switch streamId {
 
 	case common.MAINT_STREAM:
@@ -876,6 +885,11 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 	common.Debugf("Timekeeper::handleStreamConnError %v", cmd)
 
 	streamId := cmd.(*MsgStreamInfo).GetStreamId()
+
+	//check if stream is valid
+	if tk.checkStreamValid(streamId) == false {
+		return
+	}
 
 	switch streamId {
 
@@ -1331,10 +1345,10 @@ func (tk *timekeeper) changeIndexStateForBucket(bucket string, state common.Inde
 func (tk *timekeeper) checkStreamValid(streamId common.StreamId) bool {
 
 	if _, ok := tk.streamBucketHWTMap[streamId]; !ok {
-		common.Fatalf("Timekeeper::checkStreamValid \n\tUnknown Stream: %v", streamId)
+		common.Errorf("Timekeeper::checkStreamValid \n\tUnknown Stream: %v", streamId)
 		tk.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_TK_UNKNOWN_STREAM,
-				severity: FATAL,
+				severity: NORMAL,
 				category: TIMEKEEPER}}
 		return false
 	}

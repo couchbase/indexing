@@ -10,11 +10,11 @@
 package indexer
 
 import (
-	"github.com/couchbaselabs/goprotobuf/proto"
-	"errors"
 	"github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/projector"
 	"github.com/couchbase/indexing/secondary/protobuf"
+	"github.com/couchbaselabs/goprotobuf/proto"
 	"net"
 	"strconv"
 	"strings"
@@ -175,9 +175,7 @@ func (k *kvSender) handleAddIndexListToStream(cmd Message) {
 		}
 
 		//increment index count for this bucket
-		bucketIndexCountMap := make(BucketIndexCountMap)
-		bucketIndexCountMap[indexInst.Defn.Bucket] = 1
-		k.streamBucketIndexCountMap[streamId] = bucketIndexCountMap
+		k.streamBucketIndexCountMap[streamId][indexInst.Defn.Bucket] = 1
 
 	} else {
 		resp := k.addIndexForExistingBucket(streamId, indexInst)
@@ -211,39 +209,46 @@ func (k *kvSender) handleRemoveIndexListFromStream(cmd Message) {
 	//TODO Add Batching support
 	indexInst := indexInstList[0]
 
-	resp := k.deleteIndexFromStream(streamId, indexInst)
-	if resp.GetMsgType() != MSG_SUCCESS {
-		k.supvCmdch <- resp
-		return
-	}
-	k.streamBucketIndexCountMap[streamId][indexInst.Defn.Bucket]--
+	bucketIndexCountMap := k.streamBucketIndexCountMap[streamId]
+	bucketIndexCountMap[indexInst.Defn.Bucket]--
 
-	//if this is the last index for this bucket, delete bucket
-	//from the stream
-	if c, ok := k.streamBucketIndexCountMap[streamId][indexInst.Defn.Bucket]; c == 0 || !ok {
-
-		resp := k.deleteBucketFromStream(streamId, indexInst.Defn.Bucket)
-		if resp.GetMsgType() != MSG_SUCCESS {
-			k.supvCmdch <- resp
-			return
-		}
-
-		//TODO verify this
-		delete(k.streamBucketIndexCountMap[streamId], indexInst.Defn.Bucket)
+	//if this is the last bucket in stream, delete bucket from map
+	if bucketIndexCountMap[indexInst.Defn.Bucket] == 0 {
+		delete(bucketIndexCountMap, indexInst.Defn.Bucket)
 	}
 
-	//if this was the last index in the stream, close it
-	if len(k.streamBucketIndexCountMap[streamId]) == 0 {
+	//if this is the last index in the stream, the stream needs to be closed.
+	//projector cannot work with empty streams. deleting an instance
+	//or bucket in this case would result in problem.
+	if len(bucketIndexCountMap) == 0 {
 
 		resp := k.closeMutationStream(streamId, indexInst.Defn.Bucket)
 		if resp.GetMsgType() != MSG_SUCCESS {
 			k.supvCmdch <- resp
 			return
 		}
-
 		//clean internal maps
 		delete(k.streamBucketIndexCountMap, streamId)
 		k.streamStatus[streamId] = false
+	} else {
+		//if this is the last index for this bucket, the bucket needs to be deleted
+		//from stream. projector cannot work with empty bucket in a stream.
+		//deleting an index instance in this case would result in problem.
+		if c, ok := bucketIndexCountMap[indexInst.Defn.Bucket]; c == 0 || !ok {
+			resp := k.deleteBucketFromStream(streamId, indexInst.Defn.Bucket)
+			if resp.GetMsgType() != MSG_SUCCESS {
+				k.supvCmdch <- resp
+				return
+			}
+
+		} else { //there are more indexes for this bucket in stream
+			resp := k.deleteIndexFromStream(streamId, indexInst)
+			if resp.GetMsgType() != MSG_SUCCESS {
+				k.supvCmdch <- resp
+				return
+
+			}
+		}
 	}
 
 	k.supvCmdch <- &MsgSuccess{}
@@ -294,7 +299,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		return &MsgSuccess{}
 	}
 
-	var protoInstList []*protobuf.IndexInst
+	var protoInstList []*protobuf.Instance
 	for _, indexInst := range indexInstList {
 		protoInstList = append(protoInstList, convertIndexInstToProtoInst(indexInst, streamId))
 	}
@@ -319,12 +324,11 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := adminport.NewHTTPClient(HTTP_PREFIX+projAddr, "/adminport/")
+		ap := projector.NewClient(projAddr)
 
 		//get the list of vbnos for this kv
 		vbnos := vbnosList[i].GetVbnos()
 
-		var bucketList []string
 		var restartTsList []*protobuf.TsVbuuid
 		var err error
 		for bucket, tsVbuuid := range bucketRestartTs {
@@ -340,24 +344,15 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 						severity: FATAL,
 						cause:    err}}
 			}
-			bucketList = append(bucketList, bucket)
 			restartTsList = append(restartTsList, ts)
 		}
 
 		topic := getTopicForStreamId(streamId)
-		mReq := protobuf.MutationStreamRequest{
-			Topic:             proto.String(topic),
-			Pools:             []string{DEFAULT_POOL},
-			Buckets:           bucketList,
-			RestartTimestamps: restartTsList,
-			Instances:         protoInstList,
-		}
-
-		mReq.SetStartFlag()
-
-		if _, resp := sendMutationStreamRequest(ap, mReq); resp.GetMsgType() != MSG_SUCCESS {
+		if _, errMsg := sendMutationTopicRequest(ap, topic, restartTsList, protoInstList); errMsg.GetMsgType() != MSG_SUCCESS {
 			//TODO send message to all KVs to revert the previous requests sent
-			return resp
+			return errMsg
+		} else {
+			//TODO check if KV has asked us to rollback. Construct rollbackTs to be sent back to Indexer.
 		}
 
 	}
@@ -388,7 +383,7 @@ func (k *kvSender) addIndexForNewBucket(streamId c.StreamId, indexInst c.IndexIn
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := adminport.NewHTTPClient(HTTP_PREFIX+projAddr, "/adminport/")
+		ap := projector.NewClient(projAddr)
 
 		//get the list of vbnos for this kv
 		vbnos := vbnosList[i].GetVbnos()
@@ -401,20 +396,12 @@ func (k *kvSender) addIndexForNewBucket(streamId c.StreamId, indexInst c.IndexIn
 					cause:    err}}
 		}
 		topic := getTopicForStreamId(streamId)
-		mReq := protobuf.UpdateMutationStreamRequest{
-			Topic:             proto.String(topic),
-			Pools:             []string{DEFAULT_POOL},
-			Buckets:           []string{indexInst.Defn.Bucket},
-			RestartTimestamps: []*protobuf.TsVbuuid{ts},
-			Instances:         []*protobuf.IndexInst{protoInst},
-		}
+		restartTs := []*protobuf.TsVbuuid{ts}
+		instances := []*protobuf.Instance{protoInst}
 
-		mReq.SetAddBucketFlag()
-		mReq.SetRestartFlag()
-
-		if _, resp := sendUpdateMutationStreamRequest(ap, mReq); resp.GetMsgType() != MSG_SUCCESS {
+		if _, errMsg := sendAddBucketsRequest(ap, topic, restartTs, instances); errMsg.GetMsgType() != MSG_SUCCESS {
 			//TODO send message to all KVs to revert the previous requests sent
-			return resp
+			return errMsg
 		}
 	}
 
@@ -442,20 +429,15 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInst c.In
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := adminport.NewHTTPClient(HTTP_PREFIX+projAddr, "/adminport/")
+		ap := projector.NewClient(projAddr)
 
 		//add new engine(index) to existing stream
 		topic := getTopicForStreamId(streamId)
-		mReq := protobuf.SubscribeStreamRequest{
-			Topic:     proto.String(topic),
-			Instances: []*protobuf.IndexInst{protoInst},
-		}
+		instances := []*protobuf.Instance{protoInst}
 
-		mReq.SetAddEnginesFlag()
-
-		if _, resp := sendSubscribeStreamRequest(ap, mReq); resp.GetMsgType() != MSG_SUCCESS {
+		if errMsg := sendAddInstancesRequest(ap, topic, instances); errMsg.GetMsgType() != MSG_SUCCESS {
 			//TODO send message to all KVs to revert the previous requests sent
-			return resp
+			return errMsg
 		}
 	}
 
@@ -463,8 +445,6 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInst c.In
 }
 
 func (k *kvSender) deleteIndexFromStream(streamId c.StreamId, indexInst c.IndexInst) Message {
-
-	protoInst := convertIndexInstToProtoInst(indexInst, streamId)
 
 	//Get the Vbmap of all nodes in the cluster
 	vbmap, err := k.getVbmap(indexInst.Defn.Bucket, nil)
@@ -483,20 +463,15 @@ func (k *kvSender) deleteIndexFromStream(streamId c.StreamId, indexInst c.IndexI
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := adminport.NewHTTPClient(HTTP_PREFIX+projAddr, "/adminport/")
+		ap := projector.NewClient(projAddr)
 
 		//delete engine(index) from the existing stream
 		topic := getTopicForStreamId(streamId)
-		mReq := protobuf.SubscribeStreamRequest{
-			Topic:     proto.String(topic),
-			Instances: []*protobuf.IndexInst{protoInst},
-		}
+		uuids := []uint64{uint64(indexInst.InstId)}
 
-		mReq.SetDeleteEnginesFlag()
-
-		if _, resp := sendSubscribeStreamRequest(ap, mReq); resp.GetMsgType() != MSG_SUCCESS {
+		if errMsg := sendDelInstancesRequest(ap, topic, uuids); errMsg.GetMsgType() != MSG_SUCCESS {
 			//TODO send message to all KVs to revert the previous requests sent
-			return resp
+			return errMsg
 		}
 
 	}
@@ -523,20 +498,14 @@ func (k *kvSender) deleteBucketFromStream(streamId c.StreamId, bucket string) Me
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := adminport.NewHTTPClient(HTTP_PREFIX+projAddr, "/adminport/")
+		ap := projector.NewClient(projAddr)
 
 		topic := getTopicForStreamId(streamId)
-		mReq := protobuf.UpdateMutationStreamRequest{
-			Topic:   proto.String(topic),
-			Buckets: []string{bucket},
-		}
+		buckets := []string{bucket}
 
-		mReq.SetDelBucketFlag()
-		mReq.SetRestartFlag()
-
-		if _, resp := sendUpdateMutationStreamRequest(ap, mReq); resp.GetMsgType() != MSG_SUCCESS {
+		if errMsg := sendDelBucketsRequest(ap, topic, buckets); errMsg.GetMsgType() != MSG_SUCCESS {
 			//TODO send message to all KVs to revert the previous requests sent
-			return resp
+			return errMsg
 		}
 
 	}
@@ -563,14 +532,11 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string) Messa
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := adminport.NewHTTPClient(HTTP_PREFIX+projAddr, "/adminport/")
+		ap := projector.NewClient(projAddr)
 
 		topic := getTopicForStreamId(streamId)
-		sReq := protobuf.ShutdownStreamRequest{
-			Topic: proto.String(topic),
-		}
-		if _, resp := sendShutdownStreamRequest(ap, sReq); resp.GetMsgType() != MSG_SUCCESS {
-			return resp
+		if errMsg := sendShutdownTopic(ap, topic); errMsg.GetMsgType() != MSG_SUCCESS {
+			return errMsg
 		}
 
 	}
@@ -580,183 +546,223 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string) Messa
 }
 
 //send the actual MutationStreamRequest on adminport
-func sendMutationStreamRequest(ap adminport.Client,
-	mReq protobuf.MutationStreamRequest) (protobuf.MutationStreamResponse, Message) {
+func sendMutationTopicRequest(ap *projector.Client, topic string,
+	reqTimestamps []*protobuf.TsVbuuid,
+	instances []*protobuf.Instance) (*protobuf.TopicResponse, Message) {
 
-	c.Debugf("KVSender::sendMutationStreamRequest \n\t%v", mReq)
-	mRes := protobuf.MutationStreamResponse{}
+	c.Debugf("KVSender::sendMutationTopicRequest Projector %v Topic %v Instances %v",
+		ap, topic, instances)
 
 	sleepTime := 1
 	retry := 0
+	eps := map[string]interface{}{
+		"type": "dataport",
+	}
+
 	for {
-		if err := ap.Request(&mReq, &mRes); err != nil {
+		if res, err := ap.MutationTopicRequest(topic, eps, reqTimestamps, instances); err != nil {
 			if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
-				c.Errorf("KVSender::sendMutationStreamRequest \n\tError Connecting to Projector %v. "+
-					"Retry in %v seconds...", ap, sleepTime)
+				c.Errorf("KVSender::sendMutationTopicRequest \n\tError Connecting to Projector %v. "+
+					"Retry in %v seconds...\n\t Err %v", ap, sleepTime, err)
 				time.Sleep(time.Duration(sleepTime) * time.Second)
 				sleepTime *= 2
 				retry++
 			} else {
-				c.Errorf("KVSender::sendMutationStreamRequest \n\tUnexpected Error During Mutation Stream "+
-					"Request %v for IndexInst %v. Err %v", mReq, mReq.GetInstances(), err)
+				c.Errorf("KVSender::sendMutationTopicRequest \n\tUnexpected Error During Mutation Stream "+
+					"Request %v for IndexInst %v. Err %v", topic, instances, err)
 
-				return mRes, &MsgError{
+				return res, &MsgError{
 					err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 						severity: FATAL,
 						cause:    err}}
 			}
-		} else if err := mRes.GetErr(); err != nil {
-			c.Errorf("KVSender::sendMutationStreamRequest \n\tUnexpected Error During Mutation Stream "+
-				"Request %v for IndexInst %v. Err %v", mReq, mReq.GetInstances(), err.GetError())
-
-			return mRes, &MsgError{
-				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
-					severity: FATAL,
-					cause:    errors.New(err.GetError())}}
 		} else {
-			break
+			c.Debugf("KVSender::sendMutationTopicRequest \n\tMutationStream Response %v", res)
+			return res, &MsgSuccess{}
 		}
 	}
-
-	c.Debugf("KVSender::sendMutationStreamRequest \n\tMutationStream Response %v", mRes)
-
-	return mRes, &MsgSuccess{}
 }
 
 //send the actual UpdateMutationStreamRequest on adminport
-//TODO Should mReq be a pointer
-func sendUpdateMutationStreamRequest(ap adminport.Client,
-	mReq protobuf.UpdateMutationStreamRequest) (protobuf.MutationStreamResponse, Message) {
+func sendAddBucketsRequest(ap *projector.Client,
+	topic string,
+	restartTs []*protobuf.TsVbuuid,
+	instances []*protobuf.Instance) (*protobuf.TopicResponse, Message) {
 
-	c.Debugf("KVSender::sendUpdateMutationStreamRequest \n\t%v", mReq)
-
-	mRes := protobuf.MutationStreamResponse{}
+	c.Debugf("KVSender::sendAddBucketsRequest Projector %v Topic %v Instances %v",
+		ap, topic, instances)
 
 	sleepTime := 1
 	retry := 0
+
 	for {
-		if err := ap.Request(&mReq, &mRes); err != nil {
+		if res, err := ap.AddBuckets(topic, restartTs, instances); err != nil {
 			if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
-				c.Errorf("KVSender::sendUpdateMutationStreamRequest \n\tError Connecting to Projector %v. "+
-					"Retry in %v seconds...", ap, sleepTime)
+				c.Errorf("KVSender::sendAddBucketsRequest \n\tError Connecting to Projector %v. "+
+					"Retry in %v seconds... \n\t Error %v ", ap, sleepTime, err)
 				time.Sleep(time.Duration(sleepTime) * time.Second)
 				sleepTime *= 2
 				retry++
 			} else {
-				c.Errorf("KVSender::sendUpdateMutationStreamRequest \n\tUnexpected Error During "+
-					"Mutation Stream Request %v for IndexInst %v. Err %v. Resp %v.",
-					mReq, mReq.GetInstances(), err, mRes)
+				c.Errorf("KVSender::sendAddBucketsRequest \n\tUnexpected Error During "+
+					"Mutation Stream Request %v for IndexInst %v. Err %v.",
+					topic, instances, err)
 
-				return mRes, &MsgError{
+				return res, &MsgError{
 					err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 						severity: FATAL,
 						cause:    err}}
 			}
-		} else if mRes.GetErr() != nil {
-			err := mRes.GetErr()
-			c.Errorf("KVSender::sendUpdateMutationStreamRequest \n\tUnexpected Error During "+
-				"Mutation Stream Request %v for IndexInst %v. Err %v",
-				mReq, mReq.GetInstances(), err.GetError())
-
-			return mRes, &MsgError{
-				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
-					severity: FATAL,
-					cause:    errors.New(err.GetError())}}
 		} else {
-			break
+
+			c.Debugf("KVSender::sendAddBucketsRequest \n\tMutationStreamResponse %v", res)
+
+			return res, &MsgSuccess{}
 		}
 	}
-
-	c.Debugf("KVSender::sendUpdateMutationStreamRequest \n\tMutationStreamResponse %v", mReq)
-
-	return mRes, &MsgSuccess{}
 }
 
-//send the actual UpdateMutationStreamRequest on adminport
-func sendSubscribeStreamRequest(ap adminport.Client,
-	mReq protobuf.SubscribeStreamRequest) (protobuf.Error, Message) {
+//send the actual AddInstances request on adminport
+func sendAddInstancesRequest(ap *projector.Client,
+	topic string,
+	instances []*protobuf.Instance) Message {
 
-	c.Debugf("KVSender::sendSubscribeStreamRequest \n\t%v", mReq)
+	c.Debugf("KVSender::sendAddInstancesRequest Projector %v Topic %v Instances %v",
+		ap, topic, instances)
 
-	mRes := protobuf.Error{}
 	sleepTime := 1
 	retry := 0
+
 	for {
-		if err := ap.Request(&mReq, &mRes); err != nil {
+		if err := ap.AddInstances(topic, instances); err != nil {
 			if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
-				c.Errorf("KVSender::sendSubscribeStreamRequest \n\tError Connecting to Projector %v. "+
-					"Retry in %v seconds...", ap, sleepTime)
+				c.Errorf("KVSender::sendAddInstancesRequest \n\tError Connecting to Projector %v. "+
+					"Retry in %v seconds... \n\t Err %v", ap, sleepTime, err)
 				time.Sleep(time.Duration(sleepTime) * time.Second)
 				sleepTime *= 2
 				retry++
 			} else {
-				c.Errorf("KVSender::sendSubscribeStreamRequest \n\tUnexpected Error During "+
-					"Subscribe Stream Request %v for IndexInst %v. Err %v. Resp %v.",
-					mReq, mReq.GetInstances(), err, mRes)
+				c.Errorf("KVSender::sendAddInstancesRequest \n\tUnexpected Error During "+
+					"Add Instances Request Topic %v IndexInst %v. Err %v",
+					topic, instances, err)
 
-				return mRes, &MsgError{
+				return &MsgError{
 					err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 						severity: FATAL,
 						cause:    err}}
 			}
-		} else if mRes.GetError() != "" {
-			c.Errorf("KVSender::sendSubscribeStreamRequest \n\tUnexpected Error During "+
-				"Subscribe Stream Request %v for IndexInst %v. Err %v",
-				mReq, mReq.GetInstances(), mRes.GetError())
-
-			return mRes, &MsgError{
-				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
-					severity: FATAL,
-					cause:    errors.New(mRes.GetError())}}
 		} else {
-			break
+			return &MsgSuccess{}
+
 		}
 	}
 
-	return mRes, &MsgSuccess{}
+}
+
+//send the actual DelInstances request on adminport
+func sendDelInstancesRequest(ap *projector.Client,
+	topic string,
+	uuids []uint64) Message {
+
+	c.Debugf("KVSender::sendDelInstancesRequest Projector %v Topic %v Instances %v",
+		ap, topic, uuids)
+
+	sleepTime := 1
+	retry := 0
+
+	for {
+		if err := ap.DelInstances(topic, uuids); err != nil {
+			if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
+				c.Errorf("KVSender::sendDelInstancesRequest \n\tError Connecting to Projector %v. "+
+					"Retry in %v seconds... \n\t Err %v", ap, sleepTime, err)
+				time.Sleep(time.Duration(sleepTime) * time.Second)
+				sleepTime *= 2
+				retry++
+			} else {
+				c.Errorf("KVSender::sendDelInstancesRequest \n\tUnexpected Error During "+
+					"Del Instances Request Topic %v Instances %v. Err %v",
+					topic, uuids, err)
+
+				return &MsgError{
+					err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
+						severity: FATAL,
+						cause:    err}}
+			}
+		} else {
+			return &MsgSuccess{}
+
+		}
+	}
+
+}
+
+//send the actual DelBuckets request on adminport
+func sendDelBucketsRequest(ap *projector.Client,
+	topic string,
+	buckets []string) Message {
+
+	c.Debugf("KVSender::sendDelBucketsRequest Projector %v Topic %v Buckets %v",
+		ap, topic, buckets)
+
+	sleepTime := 1
+	retry := 0
+
+	for {
+		if err := ap.DelBuckets(topic, buckets); err != nil {
+			if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
+				c.Errorf("KVSender::sendDelBucketsRequest \n\tError Connecting to Projector %v. "+
+					"Retry in %v seconds... \n\t Err %v", ap, sleepTime, err)
+				time.Sleep(time.Duration(sleepTime) * time.Second)
+				sleepTime *= 2
+				retry++
+			} else {
+				c.Errorf("KVSender::sendDelBucketsRequest \n\tUnexpected Error During "+
+					"Del Buckets Request Topic %v Buckets %v. Err %v",
+					topic, buckets, err)
+
+				return &MsgError{
+					err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
+						severity: FATAL,
+						cause:    err}}
+			}
+		} else {
+			return &MsgSuccess{}
+
+		}
+	}
+
 }
 
 //send the actual ShutdownStreamRequest on adminport
-func sendShutdownStreamRequest(ap adminport.Client,
-	sReq protobuf.ShutdownStreamRequest) (protobuf.Error, Message) {
+func sendShutdownTopic(ap *projector.Client,
+	topic string) Message {
 
-	c.Debugf("KVSender::sendShutdownStreamRequest \n\t%v", sReq)
+	c.Debugf("KVSender::sendShutdownTopic Projector %v Topic %v", ap, topic)
 
-	sRes := protobuf.Error{}
 	sleepTime := 1
 	retry := 0
 	for {
-		if err := ap.Request(&sReq, &sRes); err != nil {
+		if err := ap.ShutdownTopic(topic); err != nil {
 			if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
-				c.Errorf("KVSender::sendShutdownStreamRequest \n\tError Connecting to Projector %v. "+
-					"Retry in %v seconds...", ap, sleepTime)
+				c.Errorf("KVSender::sendShutdownTopic \n\tError Connecting to Projector %v. "+
+					"Retry in %v seconds... \n\tErr %v", ap, sleepTime, err)
 				time.Sleep(time.Duration(sleepTime) * time.Second)
 				sleepTime *= 2
 				retry++
 			} else {
-				c.Errorf("KVSender::sendShutdownStreamRequest \n\tUnexpected Error During "+
-					"Close Mutation Stream Request %v. Err %v. Resp %v.",
-					sReq, err, sRes)
+				c.Errorf("KVSender::sendShutdownTopic \n\tUnexpected Error During "+
+					"Shutdown Topic %v. Err %v", topic, err)
 
-				return sRes, &MsgError{
+				return &MsgError{
 					err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 						severity: FATAL,
 						cause:    err}}
 			}
-		} else if sRes.GetError() != "" {
-			c.Errorf("KVSender::sendShutdownStreamRequest \n\tUnexpected Error During "+
-				"Close Mutation Stream Request %v. Err %v. Resp %v.", sReq, sRes.GetError(), sRes)
-
-			return sRes, &MsgError{
-				err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
-					severity: FATAL,
-					cause:    errors.New(sRes.GetError())}}
 		} else {
-			break
+
+			return &MsgSuccess{}
 		}
 	}
-
-	return sRes, &MsgSuccess{}
 }
 
 func getTopicForStreamId(streamId c.StreamId) string {
@@ -785,7 +791,7 @@ func (k *kvSender) makeInitialTs(bucket string,
 		return nil, err
 	}
 
-	ts := protobuf.NewTsVbuuid(bucket, len(vbnos))
+	ts := protobuf.NewTsVbuuid(DEFAULT_POOL, bucket, len(vbnos))
 	ts = ts.InitialRestartTs(flogs.ToFailoverLog(c.Vbno32to16(vbnos)))
 
 	return ts, nil
@@ -801,7 +807,7 @@ func (k *kvSender) makeRestartTsFromKV(bucket string,
 		return nil, err
 	}
 
-	ts := protobuf.NewTsVbuuid(bucket, len(vbnos))
+	ts := protobuf.NewTsVbuuid(DEFAULT_POOL, bucket, len(vbnos))
 	ts = ts.ComputeRestartTs(flogs.ToFailoverLog(c.Vbno32to16(vbnos)))
 
 	return ts, nil
@@ -810,7 +816,7 @@ func (k *kvSender) makeRestartTsFromKV(bucket string,
 func makeRestartTsFromTsVbuuid(bucket string, tsVbuuid *c.TsVbuuid,
 	vbnos []uint32) (*protobuf.TsVbuuid, error) {
 
-	ts := protobuf.NewTsVbuuid(bucket, len(vbnos))
+	ts := protobuf.NewTsVbuuid(DEFAULT_POOL, bucket, len(vbnos))
 	for _, vbno := range vbnos {
 		ts.Append(uint16(vbno), tsVbuuid.Seqnos[vbno],
 			tsVbuuid.Vbuuids[vbno], tsVbuuid.Snapshots[vbno][0],
@@ -824,14 +830,6 @@ func makeRestartTsFromTsVbuuid(bucket string, tsVbuuid *c.TsVbuuid,
 func (k *kvSender) getVbmap(bucket string,
 	kvaddrs []string) (*protobuf.VbmapResponse, error) {
 
-	req := &protobuf.VbmapRequest{
-		Pool:    proto.String(DEFAULT_POOL),
-		Bucket:  proto.String(bucket),
-		Kvaddrs: kvaddrs,
-	}
-
-	c.Debugf("KVSender::getVbmap \n\tVbMap Request %v", req)
-
 	//if list of KVs is not there yet, build it
 	if len(k.kvListCache) == 0 {
 		if err := k.initKVListCache(bucket); err != nil {
@@ -840,22 +838,22 @@ func (k *kvSender) getVbmap(bucket string,
 		}
 	}
 
-	res := &protobuf.VbmapResponse{}
 	var err error
+	var res *protobuf.VbmapResponse
 
 outerloop:
 	for _, kv := range k.kvListCache {
 		c.Debugf("KVSender::getVbmap \n\tSending Request to KV %v", kv)
 		projAddr := getProjectorAddrFromKVAddr(kv)
-		ap := adminport.NewHTTPClient(HTTP_PREFIX+projAddr, "/adminport/")
+		client := projector.NewClient(projAddr)
 		sleepTime := 1
 		retry := 0
 	innerloop:
 		for {
-			if err := ap.Request(req, res); err != nil {
+			if res, err = client.GetVbmap(DEFAULT_POOL, bucket, kvaddrs); err != nil {
 				if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
-					c.Errorf("KVSender::getVbmap Error Connecting to Projector %v. "+
-						"Retry in %v seconds...", projAddr, sleepTime)
+					c.Errorf("KVSender::getVbmap \n\tError Connecting to Projector %v. "+
+						"Retry in %v seconds... \n\tError Details %v", projAddr, sleepTime, err)
 					time.Sleep(time.Duration(sleepTime) * time.Second)
 					sleepTime *= 2
 					retry++
@@ -880,31 +878,23 @@ outerloop:
 func (k *kvSender) getFailoverLogs(bucket string,
 	vbnos []uint32) (*protobuf.FailoverLogResponse, error) {
 
-	req := &protobuf.FailoverLogRequest{
-		Pool:   proto.String(DEFAULT_POOL),
-		Bucket: proto.String(bucket),
-		Vbnos:  vbnos,
-	}
-
-	c.Debugf("KVSender::getFailoverLogs \n\tFailover Log Request %v", req)
-
-	res := &protobuf.FailoverLogResponse{}
 	var err error
+	var res *protobuf.FailoverLogResponse
 
 	//get failover log from any node
 outerloop:
 	for _, kv := range k.kvListCache {
 		c.Debugf("KVSender::getFailoverLogs \n\tSending Request to KV %v", kv)
 		projAddr := getProjectorAddrFromKVAddr(kv)
-		ap := adminport.NewHTTPClient(HTTP_PREFIX+projAddr, "/adminport/")
+		client := projector.NewClient(projAddr)
 		sleepTime := 1
 		retry := 0
 	innerloop:
 		for {
-			if err = ap.Request(req, res); err != nil {
+			if res, err = client.GetFailoverLogs(DEFAULT_POOL, bucket, vbnos); err != nil {
 				if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
 					c.Errorf("KVSender::getFailoverLogs \n\tError Connecting to Projector %v. "+
-						"Retry in %v seconds...", projAddr, sleepTime)
+						"Retry in %v seconds... \n\tError Details %v", projAddr, sleepTime, err)
 					time.Sleep(time.Duration(sleepTime) * time.Second)
 					sleepTime *= 2
 					retry++
@@ -986,9 +976,9 @@ func getProjectorAddrFromKVAddr(kv string) string {
 }
 
 //convert IndexInst to protobuf format
-func convertIndexListToProto(indexList []c.IndexInst, streamId c.StreamId) []*protobuf.IndexInst {
+func convertIndexListToProto(indexList []c.IndexInst, streamId c.StreamId) []*protobuf.Instance {
 
-	protoList := make([]*protobuf.IndexInst, 0)
+	protoList := make([]*protobuf.Instance, 0)
 	for _, index := range indexList {
 		protoInst := convertIndexInstToProtoInst(index, streamId)
 		protoList = append(protoList, protoInst)
@@ -999,14 +989,14 @@ func convertIndexListToProto(indexList []c.IndexInst, streamId c.StreamId) []*pr
 }
 
 //convert IndexInst to protobuf format
-func convertIndexInstToProtoInst(indexInst c.IndexInst, streamId c.StreamId) *protobuf.IndexInst {
+func convertIndexInstToProtoInst(indexInst c.IndexInst, streamId c.StreamId) *protobuf.Instance {
 
 	protoDefn := convertIndexDefnToProtobuf(indexInst.Defn)
 	protoInst := convertIndexInstToProtobuf(indexInst, protoDefn)
 
 	addPartnInfoToProtoInst(indexInst, streamId, protoInst)
 
-	return protoInst
+	return &protobuf.Instance{IndexInstance: protoInst}
 }
 
 func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {

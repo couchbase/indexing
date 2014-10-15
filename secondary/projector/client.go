@@ -250,5 +250,5 @@ func (client *Client) InitialRestartTimestamp(
 	flogs := pflogs.ToFailoverLog(vbnos)
 
 	ts := protobuf.NewTsVbuuid(pooln, bucketn, c.MaxVbuckets)
-	return ts.InitialRestartTs(vbnos).ComputeRestartTs(flogs), nil
+	return ts.InitialRestartTs(flogs), nil
 }

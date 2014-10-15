@@ -325,13 +325,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 
-	case STREAM_READER_STREAM_SHUTDOWN:
-
-		//fwd the message to timekeeper
-		idx.tkCmdCh <- msg
-		<-idx.tkCmdCh
-
-	case STREAM_READER_RESTART_VBUCKETS, STREAM_READER_REPAIR_VBUCKETS:
+	case STREAM_READER_CONN_ERROR:
 
 		//fwd the message to timekeeper
 		idx.tkCmdCh <- msg

@@ -29,8 +29,7 @@ type mutationStreamReader struct {
 	stream   *dataport.Server //handle to the Dataport server
 	streamId common.StreamId
 
-	streamMutch  chan []*protobuf.VbKeyVersions //channel for mutations sent by Dataport
-	streamRespch chan interface{}               //Dataport side-band channel
+	streamMutch chan interface{} //Dataport channel
 
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any message to supervisor
@@ -52,9 +51,8 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	MutationStreamReader, Message) {
 
 	//start a new mutation stream
-	streamMutch := make(chan []*protobuf.VbKeyVersions)
-	streamRespch := make(chan interface{})
-	stream, err := dataport.NewServer(string(StreamAddrMap[streamId]), streamMutch, streamRespch)
+	streamMutch := make(chan interface{})
+	stream, err := dataport.NewServer(string(StreamAddrMap[streamId]), streamMutch)
 	if err != nil {
 		//return stream init error
 		common.Errorf("MutationStreamReader: Error returned from NewServer."+
@@ -72,7 +70,6 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	r := &mutationStreamReader{streamId: streamId,
 		stream:         stream,
 		streamMutch:    streamMutch,
-		streamRespch:   streamRespch,
 		supvCmdch:      supvCmdch,
 		supvRespch:     supvRespch,
 		numWorkers:     numWorkers,
@@ -119,29 +116,23 @@ func (r *mutationStreamReader) run() {
 	for {
 		select {
 
-		case vbKeyVer, ok := <-r.streamMutch:
+		case msg, ok := <-r.streamMutch:
+
 			if ok {
-				r.handleVbKeyVersions(vbKeyVer)
+				switch msg.(type) {
+				case []*protobuf.VbKeyVersions:
+					vbKeyVer := msg.([]*protobuf.VbKeyVersions)
+					r.handleVbKeyVersions(vbKeyVer)
+
+				default:
+					r.handleStreamInfoMsg(msg)
+				}
+
 			} else {
 				//stream library has closed this channel indicating
 				//unexpected stream closure send the message to supervisor
 				common.Errorf("MutationStreamReader::run Unexpected Mutation "+
 					"Channel Close for Stream %v", r.streamId)
-				msgErr := &MsgError{
-					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
-						severity: FATAL,
-						category: STREAM_READER}}
-				r.supvRespch <- msgErr
-			}
-
-		case msg, ok := <-r.streamRespch:
-			if ok {
-				r.handleStreamInfoMsg(msg)
-			} else {
-				//stream library has closed this channel indicating
-				//unexpected stream closure send the message to supervisor
-				common.Errorf("Unexpected Stream Client Info Channel Close "+
-					"for Stream %v", r.streamId)
 				msgErr := &MsgError{
 					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
 						severity: FATAL,
@@ -331,41 +322,13 @@ func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 
 	switch msg.(type) {
 
-	case dataport.ShutdownDataport:
-		common.Debugf("MutationStreamReader::handleStreamInfoMsg \n\tReceived ShutdownDaemon "+
+	case dataport.ConnectionError:
+		common.Debugf("MutationStreamReader::handleStreamInfoMsg \n\tReceived ConnectionError "+
 			"from Client for Stream %v.", r.streamId)
 
 		//send a separate message for each bucket
-		for bucket, vbList := range msg.(dataport.ShutdownDataport) {
-			supvMsg = &MsgStreamInfo{mType: STREAM_READER_STREAM_SHUTDOWN,
-				streamId: r.streamId,
-				bucket:   bucket,
-				vbList:   copyVbList(vbList),
-			}
-			r.supvRespch <- supvMsg
-		}
-
-	case dataport.RestartVbuckets:
-		common.Debugf("MutationStreamReader::handleStreamInfoMsg \n\tReceived RestartVbuckets "+
-			"from Client for Stream %v.", r.streamId)
-
-		//send a separate message for each bucket
-		for bucket, vbList := range msg.(dataport.RestartVbuckets) {
-			supvMsg = &MsgStreamInfo{mType: STREAM_READER_RESTART_VBUCKETS,
-				streamId: r.streamId,
-				bucket:   bucket,
-				vbList:   copyVbList(vbList),
-			}
-			r.supvRespch <- supvMsg
-		}
-
-	case dataport.RepairVbuckets:
-		common.Debugf("MutationStreamReader::handleStreamInfoMsg \n\tReceived RepairVbuckets "+
-			"from Client for Stream %v.", r.streamId)
-
-		//send a separate message for each bucket
-		for bucket, vbList := range msg.(dataport.RepairVbuckets) {
-			supvMsg = &MsgStreamInfo{mType: STREAM_READER_REPAIR_VBUCKETS,
+		for bucket, vbList := range msg.(dataport.ConnectionError) {
+			supvMsg = &MsgStreamInfo{mType: STREAM_READER_CONN_ERROR,
 				streamId: r.streamId,
 				bucket:   bucket,
 				vbList:   copyVbList(vbList),
