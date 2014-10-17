@@ -1,6 +1,8 @@
-package projector
+package client
 
 import "fmt"
+import "time"
+import "strings"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -13,17 +15,30 @@ type Client struct {
 	adminport string
 	ap        ap.Client
 	// config
-	maxVbuckets int
+	maxVbuckets   int
+	retryInterval int
+	maxRetries    int
+	expBackoff    int
 }
 
 // NewClient connect with projector identified by `adminport`.
+// - `retryInterval` is specified in milliseconds.
+//   if retryInterval is ZERO, API will not perform retry.
+// - if `maxRetries` is ZERO, will perform indefinite retry.
 func NewClient(adminport string, config c.Config) *Client {
+	retryInterval := config["projector.client.retryInterval"].Int()
+	maxRetries := config["projector.client.maxRetries"].Int()
+	expBackoff := config["projector.client.exponentialBackoff"].Int()
+
 	urlPrefix := config["projector.adminport.urlPrefix"].String()
 	ap := ap.NewHTTPClient(adminport, urlPrefix)
 	client := &Client{
-		adminport:   adminport,
-		ap:          ap,
-		maxVbuckets: config["maxVbuckets"].Int(),
+		adminport:     adminport,
+		ap:            ap,
+		maxVbuckets:   config["maxVbuckets"].Int(),
+		retryInterval: retryInterval,
+		maxRetries:    maxRetries,
+		expBackoff:    expBackoff,
 	}
 	return client
 }
@@ -38,7 +53,17 @@ func (client *Client) GetVbmap(
 		Kvaddrs: kvaddrs,
 	}
 	res := &protobuf.VbmapResponse{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if protoerr := res.GetErr(); protoerr != nil {
+				return fmt.Errorf(protoerr.GetError())
+			}
+			return err // nil
+		})
+	if err != nil {
 		return nil, err
 	}
 	return res, nil
@@ -55,13 +80,24 @@ func (client *Client) GetFailoverLogs(
 		Vbnos:  vbnos,
 	}
 	res := &protobuf.FailoverLogResponse{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if protoerr := res.GetErr(); protoerr != nil {
+				return fmt.Errorf(protoerr.GetError())
+			}
+			return err // nil
+		})
+	if err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-// InitialTopicRequest topic from a kvnode, for an initial set of instances.
+// InitialTopicRequest topic from a kvnode, for an initial set
+// of instances.
 func (client *Client) InitialTopicRequest(
 	topic, pooln, kvaddr, endpointType string,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
@@ -81,15 +117,24 @@ func (client *Client) InitialTopicRequest(
 		req.Append(ts)
 	}
 	res := &protobuf.TopicResponse{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if protoerr := res.GetErr(); protoerr != nil {
+				return fmt.Errorf(protoerr.GetError())
+			}
+			return err // nil
+		})
+	if err != nil {
 		return nil, err
-	} else if err := res.GetErr(); err != nil {
-		return nil, fmt.Errorf(err.GetError())
 	}
 	return res, nil
 }
 
-// MutationTopicRequest topic from a kvnode, for an initial set of instances.
+// MutationTopicRequest topic from a kvnode, for an initial set of
+// instances.
 func (client *Client) MutationTopicRequest(
 	topic, endpointType string,
 	reqTimestamps []*protobuf.TsVbuuid,
@@ -98,10 +143,18 @@ func (client *Client) MutationTopicRequest(
 	req := protobuf.NewMutationTopicRequest(topic, endpointType, instances)
 	req.ReqTimestamps = reqTimestamps
 	res := &protobuf.TopicResponse{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if protoerr := res.GetErr(); protoerr != nil {
+				return fmt.Errorf(protoerr.GetError())
+			}
+			return err // nil
+		})
+	if err != nil {
 		return nil, err
-	} else if err := res.GetErr(); err != nil {
-		return nil, fmt.Errorf(err.GetError())
 	}
 	return res, nil
 }
@@ -116,10 +169,18 @@ func (client *Client) RestartVbuckets(
 		req.Append(restartTs)
 	}
 	res := &protobuf.TopicResponse{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if protoerr := res.GetErr(); protoerr != nil {
+				return fmt.Errorf(protoerr.GetError())
+			}
+			return err // nil
+		})
+	if err != nil {
 		return nil, err
-	} else if err := res.GetErr(); err != nil {
-		return nil, fmt.Errorf(err.GetError())
 	}
 	return res, nil
 }
@@ -133,10 +194,18 @@ func (client *Client) ShutdownVbuckets(
 		req.Append(shutTs)
 	}
 	res := &protobuf.Error{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if s := res.GetError(); s != "" {
+				return fmt.Errorf(s)
+			}
+			return err // nil
+		})
+	if err != nil {
 		return err
-	} else if err := res.GetError(); err != "" {
-		return fmt.Errorf(err)
 	}
 	return nil
 }
@@ -149,10 +218,18 @@ func (client *Client) AddBuckets(
 	req := protobuf.NewAddBucketsRequest(topic, instances)
 	req.ReqTimestamps = reqTimestamps
 	res := &protobuf.TopicResponse{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if protoerr := res.GetErr(); protoerr != nil {
+				return fmt.Errorf(protoerr.GetError())
+			}
+			return err // nil
+		})
+	if err != nil {
 		return nil, err
-	} else if err := res.GetErr(); err != nil {
-		return nil, fmt.Errorf(err.GetError())
 	}
 	return res, nil
 }
@@ -161,24 +238,41 @@ func (client *Client) AddBuckets(
 func (client *Client) DelBuckets(topic string, buckets []string) error {
 	req := protobuf.NewDelBucketsRequest(topic, buckets)
 	res := &protobuf.Error{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if s := res.GetError(); s != "" {
+				return fmt.Errorf(s)
+			}
+			return err // nil
+		})
+	if err != nil {
 		return err
-	} else if err := res.GetError(); err != "" {
-		return fmt.Errorf(err)
 	}
 	return nil
 }
 
-// AddInstances will add one or more instances to one or more buckets.
+// AddInstances will add one or more instances to one or more
+// buckets.
 func (client *Client) AddInstances(
 	topic string, instances []*protobuf.Instance) error {
 
 	req := protobuf.NewAddInstancesRequest(topic, instances)
 	res := &protobuf.Error{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if s := res.GetError(); s != "" {
+				return fmt.Errorf(s)
+			}
+			return err // nil
+		})
+	if err != nil {
 		return err
-	} else if err := res.GetError(); err != "" {
-		return fmt.Errorf(err)
 	}
 	return nil
 }
@@ -187,10 +281,18 @@ func (client *Client) AddInstances(
 func (client *Client) DelInstances(topic string, uuids []uint64) error {
 	req := protobuf.NewDelInstancesRequest(topic, uuids)
 	res := &protobuf.Error{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if s := res.GetError(); s != "" {
+				return fmt.Errorf(s)
+			}
+			return err // nil
+		})
+	if err != nil {
 		return err
-	} else if err := res.GetError(); err != "" {
-		return fmt.Errorf(err)
 	}
 	return nil
 }
@@ -201,10 +303,18 @@ func (client *Client) RepairEndpoints(
 
 	req := protobuf.NewRepairEndpointsRequest(topic, endpoints)
 	res := &protobuf.Error{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if s := res.GetError(); s != "" {
+				return fmt.Errorf(s)
+			}
+			return err // nil
+		})
+	if err != nil {
 		return err
-	} else if err := res.GetError(); err != "" {
-		return fmt.Errorf(err)
 	}
 	return nil
 }
@@ -213,10 +323,18 @@ func (client *Client) RepairEndpoints(
 func (client *Client) ShutdownTopic(topic string) error {
 	req := protobuf.NewShutdownTopicRequest(topic)
 	res := &protobuf.Error{}
-	if err := client.ap.Request(req, res); err != nil {
+	err := client.withRetry(
+		func() error {
+			err := client.ap.Request(req, res)
+			if err != nil {
+				return err
+			} else if s := res.GetError(); s != "" {
+				return fmt.Errorf(s)
+			}
+			return err // nil
+		})
+	if err != nil {
 		return err
-	} else if err := res.GetError(); err != "" {
-		return fmt.Errorf(err)
 	}
 	return nil
 }
@@ -241,4 +359,30 @@ func (client *Client) InitialRestartTimestamp(
 
 	ts := protobuf.NewTsVbuuid(pooln, bucketn, client.maxVbuckets)
 	return ts.InitialRestartTs(flogs), nil
+}
+
+func (client *Client) withRetry(fn func() error) (err error) {
+	interval := client.retryInterval
+	maxRetries := client.maxRetries
+	for {
+		err = fn()
+		if err == nil {
+			return err
+		} else if strings.Contains(err.Error(), "connection refused") == false {
+			return err
+		} else if interval <= 0 { // No retry
+			return err
+		}
+		if maxRetries > 0 { // applicable only if greater than ZERO
+			maxRetries--
+			if maxRetries == 0 { // maxRetry expired
+				return err
+			}
+		}
+		c.Debugf("Retrying %q after %v mS\n", client.adminport, interval)
+		time.Sleep(time.Duration(interval) * time.Millisecond)
+		if client.expBackoff > 0 {
+			interval *= client.expBackoff
+		}
+	}
 }

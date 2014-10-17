@@ -94,6 +94,22 @@ var SystemConfig = Config{
 		"timeout, in milliseconds, is for sending periodic Sync messages for",
 		500,
 	},
+	// projector's adminport client
+	"projector.client.retryInterval": ConfigValue{
+		16,
+		"retryInterval, in milliseconds, when connection refused by server",
+		16,
+	},
+	"projector.client.maxRetries": ConfigValue{
+		5,
+		"maximum number of timest to retry",
+		5,
+	},
+	"projector.client.exponentialBackoff": ConfigValue{
+		2,
+		"multiplying factor on retryInterval for every attempt with server",
+		2,
+	},
 	// projector adminport parameters
 	"projector.adminport.name": ConfigValue{
 		"projector.adminport",
