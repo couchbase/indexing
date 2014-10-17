@@ -1,7 +1,6 @@
 package projector
 
 import "fmt"
-import "encoding/json"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -13,14 +12,18 @@ import "github.com/couchbaselabs/goprotobuf/proto"
 type Client struct {
 	adminport string
 	ap        ap.Client
+	// config
+	maxVbuckets int
 }
 
 // NewClient connect with projector identified by `adminport`.
-func NewClient(adminport string) *Client {
-	ap := ap.NewHTTPClient("http://"+adminport, c.AdminportURLPrefix)
+func NewClient(adminport string, config c.Config) *Client {
+	urlPrefix := config["projector.adminport.urlPrefix"].String()
+	ap := ap.NewHTTPClient(adminport, urlPrefix)
 	client := &Client{
-		adminport: adminport,
-		ap:        ap,
+		adminport:   adminport,
+		ap:          ap,
+		maxVbuckets: config["maxVbuckets"].Int(),
 	}
 	return client
 }
@@ -60,7 +63,7 @@ func (client *Client) GetFailoverLogs(
 
 // InitialTopicRequest topic from a kvnode, for an initial set of instances.
 func (client *Client) InitialTopicRequest(
-	topic, pooln, kvaddr string, endpointSettings map[string]interface{},
+	topic, pooln, kvaddr, endpointType string,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
 
 	buckets := make(map[string]bool, 0)
@@ -68,13 +71,7 @@ func (client *Client) InitialTopicRequest(
 		buckets[instance.GetBucket()] = true
 	}
 
-	// marshal encoding settings to json property
-	setts, err := json.Marshal(endpointSettings)
-	if err != nil {
-		return nil, err
-	}
-
-	req := protobuf.NewMutationTopicRequest(topic, setts, instances)
+	req := protobuf.NewMutationTopicRequest(topic, endpointType, instances)
 	kvaddrs := []string{kvaddr}
 	for bucketn := range buckets {
 		ts, err := client.InitialRestartTimestamp(pooln, bucketn, kvaddrs)
@@ -94,18 +91,11 @@ func (client *Client) InitialTopicRequest(
 
 // MutationTopicRequest topic from a kvnode, for an initial set of instances.
 func (client *Client) MutationTopicRequest(
-	topic string,
-	endpointSettings map[string]interface{},
+	topic, endpointType string,
 	reqTimestamps []*protobuf.TsVbuuid,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
 
-	// marshal encoding settings to json property
-	setts, err := json.Marshal(endpointSettings)
-	if err != nil {
-		return nil, err
-	}
-
-	req := protobuf.NewMutationTopicRequest(topic, setts, instances)
+	req := protobuf.NewMutationTopicRequest(topic, endpointType, instances)
 	req.ReqTimestamps = reqTimestamps
 	res := &protobuf.TopicResponse{}
 	if err := client.ap.Request(req, res); err != nil {
@@ -249,6 +239,6 @@ func (client *Client) InitialRestartTimestamp(
 	vbnos := vbmap.AllVbuckets16()
 	flogs := pflogs.ToFailoverLog(vbnos)
 
-	ts := protobuf.NewTsVbuuid(pooln, bucketn, c.MaxVbuckets)
+	ts := protobuf.NewTsVbuuid(pooln, bucketn, client.maxVbuckets)
 	return ts.InitialRestartTs(flogs), nil
 }

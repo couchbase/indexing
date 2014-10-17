@@ -1,7 +1,6 @@
 package projector
 
 import mc "github.com/couchbase/gomemcached/client"
-import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/protobuf"
 import "github.com/couchbaselabs/go-couchbase"
 
@@ -29,7 +28,7 @@ func NewFakeBuckets(buckets []string) map[string]*FakeBucket {
 			bucket:  bucket,
 			vbmap:   make(map[string][]uint16),
 			flogs:   make(couchbase.FailoverLog),
-			C:       make(chan *mc.UprEvent, c.MutationChannelSize),
+			C:       make(chan *mc.UprEvent, 10000),
 			streams: make(map[uint16]*FakeStream),
 		}
 	}

@@ -32,6 +32,8 @@ var testResponseStream = &protobuf.ResponseStream{
 
 func TestStatistics(t *testing.T) {
 	common.LogIgnore()
+	//common.SetLogLevel(common.LogLevelDebug)
+
 	addr := "localhost:8888"
 	serverCallb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -54,7 +56,7 @@ func TestStatistics(t *testing.T) {
 	s := startServer(t, addr, serverCallb)
 	time.Sleep(100 * time.Millisecond)
 
-	client := NewClient(addr, 1, 1)
+	client := NewClient(addr, common.SystemConfig)
 
 	out, err := client.Statistics([]byte("aaaa"), []byte("zzzz"), 0)
 	if err != nil {
@@ -83,7 +85,7 @@ func TestScan(t *testing.T) {
 	s := startServer(t, addr, serverCallb)
 	time.Sleep(100 * time.Millisecond)
 
-	client := NewClient(addr, 1, 1)
+	client := NewClient(addr, common.SystemConfig)
 
 	count := 0
 	client.Scan(
@@ -133,7 +135,7 @@ func TestScanAll(t *testing.T) {
 	s := startServer(t, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	client := NewClient(addr, 1, 2)
+	client := NewClient(addr, common.SystemConfig)
 
 	count := 0
 	client.ScanAll(
@@ -179,7 +181,7 @@ func BenchmarkStatistics(b *testing.B) {
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	client := NewClient(addr, 1, 1)
+	client := NewClient(addr, common.SystemConfig)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -203,7 +205,7 @@ func BenchmarkScan1(b *testing.B) {
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	client := NewClient(addr, 1, 1)
+	client := NewClient(addr, common.SystemConfig)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -234,7 +236,7 @@ func BenchmarkScan100(b *testing.B) {
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	client := NewClient(addr, 1, 1)
+	client := NewClient(addr, common.SystemConfig)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -252,8 +254,6 @@ func BenchmarkScan100(b *testing.B) {
 }
 
 func BenchmarkScanParallel10(b *testing.B) {
-	par := 10
-
 	common.LogIgnore()
 	addr := "localhost:8888"
 	callb := func(
@@ -265,7 +265,7 @@ func BenchmarkScanParallel10(b *testing.B) {
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	client := NewClient(addr, par, par)
+	client := NewClient(addr, common.SystemConfig)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -294,7 +294,7 @@ func BenchmarkScanAll(b *testing.B) {
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	client := NewClient(addr, 1, 1)
+	client := NewClient(addr, common.SystemConfig)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -312,7 +312,7 @@ func BenchmarkScanAll(b *testing.B) {
 }
 
 func startServer(tb testing.TB, laddr string, callb RequestHandler) *Server {
-	s, err := NewServer(laddr, callb)
+	s, err := NewServer(laddr, callb, common.SystemConfig)
 	if err != nil {
 		tb.Fatal(err)
 	}

@@ -40,8 +40,8 @@ func Application(
 		return true
 	}
 
-	appch := make(chan interface{}, c.MutationChannelSize)
-	_, err := NewServer(addr, appch)
+	appch := make(chan interface{}, 10000)
+	_, err := NewServer(addr, c.SystemConfig, appch)
 	if err != nil && doCallb(err) == false {
 		return
 	}

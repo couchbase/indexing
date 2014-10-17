@@ -36,11 +36,11 @@ message FailoverLogResponse {
 // Requested by Coordinator or indexer to start a
 // new mutation topic. Responds back with TopicResponse.
 message MutationTopicRequest {
-    required string   topic            = 1;
-    required bytes    endpointSettings = 2; // settings to RouterEndpointFactory
-    repeated TsVbuuid reqTimestamps    = 3; // list of timestamps, per bucket
+    required string   topic         = 1;
+    required string   endpointType  = 2; // settings to RouterEndpointFactory
+    repeated TsVbuuid reqTimestamps = 3; // list of timestamps, per bucket
     // initial list of instances applicable for this topic
-    repeated Instance instances        = 4;
+    repeated Instance instances     = 4;
 }
 
 // Response back for

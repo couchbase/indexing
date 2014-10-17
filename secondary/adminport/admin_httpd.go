@@ -1,9 +1,8 @@
 // Example server {
-//      name := "projector"
-//      addr := "localhost:9999"
-//      urlPrefix := "/adminport"
+//      config := c.SystemConfig.SectionConfig("projector.adminport.")
+//      config.Set("name", "projector").Set("listenAddr", "localhost:9999")
 //      reqch := make(chan adminport.Request)
-//      server := adminport.NewHTTPServer(name, addr, urlPrefix, reqch)
+//      server := adminport.NewHTTPServer(config, reqch)
 //
 //      server.Register(&protobuf.RequestMessage{})
 //      server.Start()
@@ -41,14 +40,22 @@ import c "github.com/couchbase/indexing/secondary/common"
 // httpServer is a concrete type implementing adminport Server
 // interface.
 type httpServer struct {
-	mu        sync.Mutex   // handle concurrent updates to this object
-	lis       net.Listener // TCP listener
-	srv       *http.Server // http server
-	urlPrefix string       // URL path prefix for adminport
-	messages  map[string]MessageMarshaller
-	conns     []net.Conn
-	reqch     chan<- Request // request channel back to application
+	mu       sync.Mutex   // handle concurrent updates to this object
+	lis      net.Listener // TCP listener
+	srv      *http.Server // http server
+	messages map[string]MessageMarshaller
+	conns    []net.Conn
+	reqch    chan<- Request // request channel back to application
 
+	// config params
+	name      string // human readable name for this server
+	laddr     string // address to bind and listen
+	urlPrefix string // URL path prefix for adminport
+	rtimeout  time.Duration
+	wtimeout  time.Duration
+	maxHdrlen int
+
+	// local
 	logPrefix     string
 	statsInBytes  uint64
 	statsOutBytes uint64
@@ -57,27 +64,33 @@ type httpServer struct {
 
 // NewHTTPServer creates an instance of admin-server.
 // Start() will actually start the server.
-func NewHTTPServer(name, addr, urlPrefix string, reqch chan<- Request) Server {
+func NewHTTPServer(config c.Config, reqch chan<- Request) Server {
 	s := &httpServer{
-		urlPrefix:     urlPrefix,
 		messages:      make(map[string]MessageMarshaller),
 		conns:         make([]net.Conn, 0),
 		reqch:         reqch,
-		logPrefix:     fmt.Sprintf("[%s:%s]", name, addr),
 		statsInBytes:  0.0,
 		statsOutBytes: 0.0,
 		statsMessages: make(map[string][3]uint64),
+
+		name:      config["name"].String(),
+		laddr:     config["listenAddr"].String(),
+		urlPrefix: config["urlPrefix"].String(),
+		rtimeout:  time.Duration(config["readTimeout"].Int()),
+		wtimeout:  time.Duration(config["writeTimeout"].Int()),
+		maxHdrlen: config["maxHeaderBytes"].Int(),
 	}
+	s.logPrefix = fmt.Sprintf("[%s:%s]", s.name, s.laddr)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.urlPrefix, s.systemHandler)
 	s.srv = &http.Server{
-		Addr:      addr,
-		Handler:   mux,
-		ConnState: s.connState,
-		// TODO: supply this configuration via constrcutor.
-		ReadTimeout:    c.AdminportReadTimeout * time.Millisecond,
-		WriteTimeout:   c.AdminportWriteTimeout * time.Millisecond,
-		MaxHeaderBytes: 1 << 20, // 1 MegaByte
+		Addr:           s.laddr,
+		Handler:        mux,
+		ConnState:      s.connState,
+		ReadTimeout:    s.rtimeout * time.Millisecond,
+		WriteTimeout:   s.wtimeout * time.Millisecond,
+		MaxHeaderBytes: s.maxHdrlen,
 	}
 	return s
 }

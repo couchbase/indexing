@@ -153,7 +153,8 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 		return ts
 	}
 
-	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), c.MaxVbuckets)
+	maxVbuckets := len(ts.Seqnos)
+	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), maxVbuckets)
 
 	// copy from other
 	newts.Vbnos = append(newts.Vbnos, other.Vbnos...)
@@ -161,7 +162,7 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 	newts.Vbuuids = append(newts.Vbuuids, other.Vbuuids...)
 	newts.Snapshots = append(newts.Snapshots, other.Snapshots...)
 
-	cache := [c.MaxVbuckets]byte{}
+	cache := make([]byte, maxVbuckets)
 	for _, vbno := range other.Vbnos {
 		cache[vbno] = 1
 	}
@@ -188,12 +189,13 @@ func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
 		return ts
 	}
 
-	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), c.MaxVbuckets)
+	maxVbuckets := len(ts.Seqnos)
+	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), maxVbuckets)
 	if len(ts.Vbnos) == 0 {
 		return newts
 	}
 
-	cache := [c.MaxVbuckets]byte{} // TODO: optimize for GC
+	cache := make([]byte, maxVbuckets)
 	for _, vbno := range vbuckets {
 		cache[vbno] = 1
 	}
@@ -215,12 +217,13 @@ func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
 		return ts
 	}
 
-	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), c.MaxVbuckets)
+	maxVbuckets := len(ts.Seqnos)
+	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), maxVbuckets)
 	if len(ts.Vbnos) == 0 {
 		return newts
 	}
 
-	cache := [c.MaxVbuckets]byte{}
+	cache := make([]byte, maxVbuckets)
 	for _, vbno := range vbuckets {
 		cache[vbno] = 1
 	}

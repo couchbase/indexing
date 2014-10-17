@@ -222,8 +222,9 @@ func (kvdata *KVData) scatterMutation(
 			if m.VBuuid, m.Seqno, err = m.FailoverLog.Latest(); err == nil {
 				topic, bucket, kv := kvdata.topic, kvdata.bucket, kvdata.kvaddr
 				startSeqno, _ := ts.SeqnoFor(vbno)
+				config := kvdata.feed.config
 				vr := NewVbucketRoutine(
-					topic, bucket, kv, vbno, m.VBuuid, startSeqno)
+					topic, bucket, kv, vbno, m.VBuuid, startSeqno, config)
 				vr.AddEngines(kvdata.engines, kvdata.endpoints)
 				vr.Event(m)
 				kvdata.vrs[vbno] = vr

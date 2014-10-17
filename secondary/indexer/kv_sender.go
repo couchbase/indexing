@@ -924,7 +924,7 @@ func (k *kvSender) initKVListCache(bucket string) error {
 
 	res := &protobuf.VbmapResponse{}
 
-	ap := adminport.NewHTTPClient(HTTP_PREFIX+PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
+	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
 	if err := ap.Request(req, res); err != nil {
 		c.Errorf("KVSender::initKVListCache \n\tError Connecting to Projector %v. ",
 			PROJECTOR_ADMIN_PORT_ENDPOINT)

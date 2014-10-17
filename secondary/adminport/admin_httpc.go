@@ -1,5 +1,5 @@
 // Example client {
-//     client := NewHTTPClient("http://localhost:9999", "/adminport/")
+//     client := NewHTTPClient("localhost:9999", "/adminport/")
 //     req  := &protobuf.RequestMessage{}
 //     resp := &protobuf.ResponseMessage{}
 //     client.Request(req, resp)
@@ -23,9 +23,9 @@ type httpClient struct {
 }
 
 // NewHTTPClient returns a new instance of Client over HTTP.
-func NewHTTPClient(serverAddr, urlPrefix string) Client {
+func NewHTTPClient(listenAddr, urlPrefix string) Client {
 	return &httpClient{
-		serverAddr: serverAddr,
+		serverAddr: "http://" + listenAddr,
 		urlPrefix:  urlPrefix,
 		httpc:      http.DefaultClient,
 	}

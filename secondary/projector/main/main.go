@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
@@ -16,18 +15,16 @@ var done = make(chan bool)
 
 var options struct {
 	adminport string
-	kvaddrs   []string
+	kvaddrs   string
 	info      bool
 	debug     bool
 	trace     bool
 }
 
 func argParse() string {
-	var kvaddrs string
-
 	flag.StringVar(&options.adminport, "adminport", "localhost:9999",
 		"adminport address")
-	flag.StringVar(&kvaddrs, "kvaddrs", "127.0.0.1:12000",
+	flag.StringVar(&options.kvaddrs, "kvaddrs", "127.0.0.1:12000",
 		"comma separated list of kvaddrs")
 	flag.BoolVar(&options.info, "info", false,
 		"enable info level logging")
@@ -37,8 +34,6 @@ func argParse() string {
 		"enable trace level logging")
 
 	flag.Parse()
-
-	options.kvaddrs = strings.Split(kvaddrs, ",")
 
 	args := flag.Args()
 	if len(args) == 0 {
@@ -62,26 +57,25 @@ func main() {
 	} else if options.info {
 		c.SetLogLevel(c.LogLevelInfo)
 	}
-	settings := map[string]interface{}{
-		"cluster":   cluster,
-		"adminport": options.adminport,
-		"kvaddrs":   options.kvaddrs,
-		"epfactory": c.RouterEndpointFactory(EndpointFactory),
-	}
-	projector.NewProjector(settings)
+	config := c.SystemConfig.Clone()
+	config.SetValue("projector.clusterAddr", cluster)
+	config.SetValue("projector.kvAddrs", options.kvaddrs)
+	config.SetValue("projector.adminport.listenAddr", options.adminport)
+	config.SetValue(
+		"projector.routerEndpointFactory", NewEndpointFactory(config))
+	projector.NewProjector(config)
 	<-done
 }
 
-// EndpointFactory to create endpoint instances based on settings.
-func EndpointFactory(
-	topic, addr string,
-	settings map[string]interface{}) (c.RouterEndpoint, error) {
-
-	switch v := settings["type"].(string); v {
-	case "dataport":
-		return dataport.NewRouterEndpoint(topic, addr, settings)
-	default:
-		log.Fatal("Unknown endpoint type")
+// NewEndpointFactory to create endpoint instances based on config.
+func NewEndpointFactory(config c.Config) c.RouterEndpointFactory {
+	return func(topic, endpointType, addr string) (c.RouterEndpoint, error) {
+		switch endpointType {
+		case "dataport":
+			return dataport.NewRouterEndpoint(topic, addr, config)
+		default:
+			log.Fatal("Unknown endpoint type")
+		}
+		return nil, nil
 	}
-	return nil, nil
 }

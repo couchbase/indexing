@@ -35,7 +35,7 @@ func (vbuckets Vbuckets) To32() []uint32 {
 // Intersection operation on two sets of vbuckets, return a sorted list of
 // vbuckets present in both set.
 func Intersection(this, other []uint16) []uint16 {
-	vbuckets := make([]uint16, 0, MaxVbuckets)
+	vbuckets := make([]uint16, 0, 32)
 	cache := make(map[uint16]bool)
 	for _, vbno := range this {
 		cache[vbno] = true
@@ -51,7 +51,7 @@ func Intersection(this, other []uint16) []uint16 {
 // Union set operation on two sets of vbuckets, return a sorted list of
 // vbuckets present in atleast one set.
 func Union(this, other []uint16) []uint16 {
-	vbuckets := make([]uint16, 0, MaxVbuckets)
+	vbuckets := make([]uint16, 0, 32)
 	cache := make(map[uint16]bool)
 	for _, vbno := range this {
 		cache[vbno] = true

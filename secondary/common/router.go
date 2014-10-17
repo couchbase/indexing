@@ -2,9 +2,8 @@ package common
 
 import mc "github.com/couchbase/gomemcached/client"
 
-// Router defines is per instance (aka engine) router
-// interface, where an instance might refer to an index
-// or similar entities.
+// Router definition for each instance (aka engine),
+// where an instance might refer to an index or similar entities.
 type Router interface {
 	// Bucket will return the bucket name for which this
 	// router instance is applicable.
@@ -41,4 +40,30 @@ type Router interface {
 	// TODO: differentiate between, missing old document and missing
 	//       secondary-key
 	DeletionEndpoints(m *mc.UprEvent, oldPartKey, oldKey []byte) []string
+}
+
+// RouterEndpointFactory will create a new endpoint instance for
+// {topic, remote-address}
+type RouterEndpointFactory func(
+	topic, endpointType, raddr string) (RouterEndpoint, error)
+
+// RouterEndpoint abstracts downstream for feed.
+type RouterEndpoint interface {
+	// Ping will check whether endpoint is active, synchronous call.
+	Ping() bool
+
+	// SetConfig will live update configuration parameters for endpoint,
+	// synchronous call.
+	SetConfig(config Config) error
+
+	// Send will post data to endpoint client, asynchronous call.
+	Send(data interface{}) error
+
+	// GetStatistics to gather statistics information from endpoint,
+	// synchronous call.
+	GetStatistics() map[string]interface{}
+
+	// Close will shutdown this endpoint and release its resources,
+	// synchronous call.
+	Close() error
 }

@@ -236,14 +236,13 @@ func (resp *FailoverLogResponse) ToFailoverLog(vbnos []uint16) couchbase.Failove
 // NewMutationTopicRequest creates a new MutationTopicRequest
 // for `topic`.
 func NewMutationTopicRequest(
-	topic string,
-	endpointSettings []byte, instances []*Instance) *MutationTopicRequest {
+	topic, endpointType string, instances []*Instance) *MutationTopicRequest {
 
 	return &MutationTopicRequest{
-		Topic:            proto.String(topic),
-		EndpointSettings: endpointSettings,
-		ReqTimestamps:    make([]*TsVbuuid, 0),
-		Instances:        instances,
+		Topic:         proto.String(topic),
+		EndpointType:  proto.String(endpointType),
+		ReqTimestamps: make([]*TsVbuuid, 0),
+		Instances:     instances,
 	}
 }
 

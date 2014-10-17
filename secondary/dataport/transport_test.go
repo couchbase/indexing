@@ -14,7 +14,7 @@ func TestPktKeyVersions(t *testing.T) {
 	tc := newTestConnection()
 	tc.reset()
 	flags := transport.TransportFlag(0).SetProtobuf()
-	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt := transport.NewTransportPacket(1000*1024, flags)
 	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
@@ -46,7 +46,7 @@ func TestPktVbmap(t *testing.T) {
 	tc := newTestConnection()
 	tc.reset()
 	flags := transport.TransportFlag(0).SetProtobuf()
-	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt := transport.NewTransportPacket(1000*1024, flags)
 	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
@@ -66,7 +66,7 @@ func BenchmarkSendVbKeyVersions(b *testing.B) {
 	vbs := constructVbKeyVersions("default", seqno, nVbs, nMuts, nIndexes)
 	tc := newTestConnection()
 	flags := transport.TransportFlag(0).SetProtobuf()
-	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt := transport.NewTransportPacket(1000*1024, flags)
 	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
@@ -82,7 +82,7 @@ func BenchmarkReceiveKeyVersions(b *testing.B) {
 	vbs := constructVbKeyVersions("default", seqno, nVbs, nMuts, nIndexes)
 	tc := newTestConnection()
 	flags := transport.TransportFlag(0).SetProtobuf()
-	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt := transport.NewTransportPacket(1000*1024, flags)
 	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
@@ -102,7 +102,7 @@ func BenchmarkSendVbmap(b *testing.B) {
 	}
 	tc := newTestConnection()
 	flags := transport.TransportFlag(0).SetProtobuf()
-	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt := transport.NewTransportPacket(1000*1024, flags)
 	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
@@ -121,7 +121,7 @@ func BenchmarkReceiveVbmap(b *testing.B) {
 	}
 	tc := newTestConnection()
 	flags := transport.TransportFlag(0).SetProtobuf()
-	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt := transport.NewTransportPacket(1000*1024, flags)
 	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 

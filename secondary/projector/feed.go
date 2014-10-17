@@ -3,7 +3,6 @@ package projector
 import "errors"
 import "fmt"
 import "time"
-import "encoding/json"
 import "runtime/debug"
 
 import mcd "github.com/couchbase/gomemcached"
@@ -29,9 +28,10 @@ var ErrorResponseTimeout = errors.New("feed.responseTimeout")
 
 // Feed is mutation stream - for maintenance, initial-load, catchup etc...
 type Feed struct {
-	cluster string   // immutable
-	topic   string   // immutable
-	kvaddrs []string // immutable
+	cluster      string   // immutable
+	topic        string   // immutable
+	endpointType string   // immutable
+	kvaddrs      []string // immutable
 
 	buckets map[string]*couchbase.Bucket // cache of buckets
 	// upstream
@@ -39,30 +39,38 @@ type Feed struct {
 	rollTss map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
 	feeders map[string]BucketFeeder       // bucket -> BucketFeeder{}
 	// downstream
-	kvdata       map[string]map[string]*KVData // bucket -> kvaddr -> kvdata
-	epFactory    c.RouterEndpointFactory
-	endpSettings map[string]interface{}
-	engines      map[string]map[uint64]*Engine // bucket -> uuid -> engine
-	endpoints    map[string]c.RouterEndpoint
+	kvdata    map[string]map[string]*KVData // bucket -> kvaddr -> kvdata
+	engines   map[string]map[uint64]*Engine // bucket -> uuid -> engine
+	endpoints map[string]c.RouterEndpoint
 	// genServer channel
 	reqch  chan []interface{}
 	backch chan []interface{}
 	finch  chan bool
-	// misc.
-	logPrefix string
+
+	// config params
+	maxVbuckets int
+	reqTimeout  time.Duration
+	endTimeout  time.Duration
+	epFactory   c.RouterEndpointFactory
+	config      c.Config
+	logPrefix   string
 }
 
 // NewFeed creates a new topic feed.
-func NewFeed(topic string, settings map[string]interface{}) *Feed {
-	cluster, _ := settings["cluster"].(string)     // kv-cluster address to connect
-	localAddr, _ := settings["localAddr"].(string) // localAddr for this feed
-	kvaddrs, _ := settings["kvaddrs"].([]string)   // list of kvnodes to connect
-	epFactory, _ := settings["endpointFactory"].(c.RouterEndpointFactory)
-
+// `config` contains following keys.
+//    name:        human readable name for this feed.
+//    maxVbuckets: configured number vbuckets per bucket.
+//    clusterAddr: KV cluster address <host:port>.
+//    kvAddrs:     list of kvnodes to watch for mutations.
+//    feedWaitStreamReqTimeout: wait for a response to StreamRequest
+//    feedWaitStreamEndTimeout: wait for a response to StreamEnd
+//    routerEndpointFactory:    endpoint factory
+func NewFeed(topic string, config c.Config) *Feed {
+	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
 	feed := &Feed{
-		cluster: cluster,
+		cluster: config["clusterAddr"].String(),
 		topic:   topic,
-		kvaddrs: kvaddrs,
+		kvaddrs: config["kvAddrs"].Strings(),
 
 		buckets: make(map[string]*couchbase.Bucket),
 		// upstream
@@ -71,15 +79,21 @@ func NewFeed(topic string, settings map[string]interface{}) *Feed {
 		feeders: make(map[string]BucketFeeder),
 		// downstream
 		kvdata:    make(map[string]map[string]*KVData),
-		epFactory: epFactory,
 		engines:   make(map[string]map[uint64]*Engine),
 		endpoints: make(map[string]c.RouterEndpoint),
 		// genServer channel
 		reqch:  make(chan []interface{}, 10000), // TODO: no magic
 		backch: make(chan []interface{}, 10000), // TODO: no magic
 		finch:  make(chan bool),
+
+		maxVbuckets: config["maxVbuckets"].Int(),
+		reqTimeout:  time.Duration(config["feedWaitStreamReqTimeout"].Int()),
+		endTimeout:  time.Duration(config["feedWaitStreamEndTimeout"].Int()),
+		epFactory:   epf,
+		config:      config,
 	}
-	feed.logPrefix = fmt.Sprintf("[%v->%v]", localAddr, topic)
+	feed.logPrefix = fmt.Sprintf("[%v->%v]", config["name"].String(), topic)
+
 	go feed.genServer()
 	c.Infof("%v started ...\n", feed.logPrefix)
 	return feed
@@ -282,7 +296,6 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 	case fCmdStart:
 		req := msg[1].(*protobuf.MutationTopicRequest)
 		respch := msg[2].(chan []interface{})
-		feed.endpSettings = feed.endpointSettings(req.GetEndpointSettings())
 		err := feed.start(req)
 		response := feed.topicResponse()
 		respch <- []interface{}{response, err}
@@ -341,6 +354,8 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 
 // start a new feed.
 func (feed *Feed) start(req *protobuf.MutationTopicRequest) error {
+	feed.endpointType = req.GetEndpointType()
+
 	// update engines and endpoints
 	if err := feed.processSubscribers(req); err != nil { // :SideEffect:
 		return err
@@ -571,8 +586,8 @@ func (feed *Feed) repairEndpoints(req *protobuf.RepairEndpointsRequest) error {
 		endpoint, ok := feed.endpoints[raddr]
 		if (!ok) || (!endpoint.Ping()) {
 			// ignore error while starting endpoint
-			setts := feed.endpSettings
-			endpoint, err := feed.epFactory(feed.topic, raddr, setts)
+			topic, typ := feed.topic, feed.endpointType
+			endpoint, err := feed.epFactory(topic, typ, raddr)
 			if err != nil {
 				return err
 			} else if endpoint != nil {
@@ -782,8 +797,8 @@ func (feed *Feed) startEndpoints(routers map[uint64]c.Router) error {
 			endpoint, ok := feed.endpoints[raddr]
 			if (!ok) || (!endpoint.Ping()) {
 				// ignore error while starting endpoint
-				setts := feed.endpSettings
-				endpoint, err := feed.epFactory(feed.topic, raddr, setts)
+				topic, typ := feed.topic, feed.endpointType
+				endpoint, err := feed.epFactory(topic, typ, raddr)
 				if err != nil {
 					return err
 				} else if endpoint != nil {
@@ -835,13 +850,13 @@ func (feed *Feed) waitStreamRequests(
 	opaque uint16,
 	pooln, bucketn string, vbnos []uint16) (*protobuf.TsVbuuid, error) {
 
-	rollTs := protobuf.NewTsVbuuid(pooln, bucketn, c.MaxVbuckets)
+	rollTs := protobuf.NewTsVbuuid(pooln, bucketn, feed.maxVbuckets)
 
 	if len(vbnos) == 0 {
 		return rollTs, nil
 	}
 
-	timeout := time.After(c.FeedWaitStreamReqTimeout * time.Millisecond)
+	timeout := time.After(feed.reqTimeout * time.Millisecond)
 
 	err := feed.waitOnFeedback(timeout, func(msg interface{}) string {
 		if val, ok := msg.(*controlStreamRequest); ok {
@@ -868,7 +883,7 @@ func (feed *Feed) waitStreamEnds(
 	if len(vbnos) == 0 {
 		return nil
 	}
-	timeout := time.After(c.FeedWaitStreamEndTimeout * time.Millisecond)
+	timeout := time.After(feed.endTimeout * time.Millisecond)
 	err := feed.waitOnFeedback(timeout, func(msg interface{}) string {
 		if val, ok := msg.(*controlStreamEnd); ok {
 			if val.bucket == bucketn && val.opaque == opaque {
@@ -956,16 +971,6 @@ func (feed *Feed) getBucket(pooln, bucketn string) (*couchbase.Bucket, error) {
 		return b, err
 	}
 	return bucket, nil
-}
-
-func (feed *Feed) endpointSettings(setts []byte) map[string]interface{} {
-	settings := make(map[string]interface{})
-	if len(setts) > 0 {
-		if err := json.Unmarshal(setts, &settings); err != nil {
-			c.Errorf("%v endpointSettings(): %v\n", feed.logPrefix, err)
-		}
-	}
-	return settings
 }
 
 func (feed *Feed) errorf(prefix, bucketn string, val interface{}) {

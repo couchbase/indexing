@@ -138,9 +138,9 @@ func (m *FailoverLogResponse) GetErr() *Error {
 // Requested by Coordinator or indexer to start a
 // new mutation topic. Responds back with TopicResponse.
 type MutationTopicRequest struct {
-	Topic            *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
-	EndpointSettings []byte      `protobuf:"bytes,2,req,name=endpointSettings" json:"endpointSettings,omitempty"`
-	ReqTimestamps    []*TsVbuuid `protobuf:"bytes,3,rep,name=reqTimestamps" json:"reqTimestamps,omitempty"`
+	Topic         *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	EndpointType  *string     `protobuf:"bytes,2,req,name=endpointType" json:"endpointType,omitempty"`
+	ReqTimestamps []*TsVbuuid `protobuf:"bytes,3,rep,name=reqTimestamps" json:"reqTimestamps,omitempty"`
 	// initial list of instances applicable for this topic
 	Instances        []*Instance `protobuf:"bytes,4,rep,name=instances" json:"instances,omitempty"`
 	XXX_unrecognized []byte      `json:"-"`
@@ -157,11 +157,11 @@ func (m *MutationTopicRequest) GetTopic() string {
 	return ""
 }
 
-func (m *MutationTopicRequest) GetEndpointSettings() []byte {
-	if m != nil {
-		return m.EndpointSettings
+func (m *MutationTopicRequest) GetEndpointType() string {
+	if m != nil && m.EndpointType != nil {
+		return *m.EndpointType
 	}
-	return nil
+	return ""
 }
 
 func (m *MutationTopicRequest) GetReqTimestamps() []*TsVbuuid {

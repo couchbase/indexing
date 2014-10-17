@@ -7,25 +7,23 @@ import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/protobuf"
 import "github.com/couchbase/indexing/secondary/transport"
 
-// TODO:
-// - test live StreamBegin and StreamEnd.
-
 func TestTimeout(t *testing.T) {
-	//c.LogIgnore()
+	c.LogIgnore()
+	//c.SetLogLevel(c.LogLevelDebug)
 
 	addr := "localhost:8888"
-	maxBuckets, maxvbuckets, maxconns, mutChanSize := 2, 4, 2, 100
+	maxBuckets, maxvbuckets, mutChanSize := 2, 4, 100
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, appch)
+	daemon, err := NewServer(addr, c.SystemConfig, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// start client
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, _ := NewClient(addr, maxconns, flags)
+	client, _ := NewClient(addr, flags, c.SystemConfig)
 
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 
@@ -53,7 +51,7 @@ func TestTimeout(t *testing.T) {
 			kv.AddSync()
 			vb.AddKeyVersions(kv)
 			client.SendKeyVersions([]*c.VbKeyVersions{vb}, true)
-			<-time.After(c.DataportReadDeadline * time.Millisecond)
+			<-time.After(6000 * time.Millisecond)
 		}
 	}()
 
@@ -65,7 +63,7 @@ func TestTimeout(t *testing.T) {
 			case []*protobuf.VbKeyVersions:
 			case ConnectionError:
 				ref := maxvbuckets
-				t.Logf("%T %v \n", ce, ce, ref)
+				t.Logf("%T %v \n", ce, ref)
 				if len(ce) != 2 {
 					t.Fatal("mismatch in ConnectionError")
 				}
@@ -96,20 +94,21 @@ func TestTimeout(t *testing.T) {
 
 func TestLoopback(t *testing.T) {
 	c.LogIgnore()
+	//c.SetLogLevel(c.LogLevelDebug)
 
 	addr := "localhost:8888"
-	maxBuckets, maxconns, maxvbuckets, mutChanSize := 2, 8, 32, 100
+	maxBuckets, maxvbuckets, mutChanSize := 2, 32, 100
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, appch)
+	daemon, err := NewServer(addr, c.SystemConfig, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// start client and test loopback
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, err := NewClient(addr, maxconns, flags)
+	client, err := NewClient(addr, flags, c.SystemConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,18 +183,18 @@ func BenchmarkLoopback(b *testing.B) {
 	c.LogIgnore()
 
 	addr := "localhost:8888"
-	maxBuckets, maxconns, maxvbuckets, mutChanSize := 2, 8, 32, 100
+	maxBuckets, maxvbuckets, mutChanSize := 2, 32, 100
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, appch)
+	daemon, err := NewServer(addr, c.SystemConfig, appch)
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	// start client and test loopback
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, _ := NewClient(addr, maxconns, flags)
+	client, _ := NewClient(addr, flags, c.SystemConfig)
 
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets)
 

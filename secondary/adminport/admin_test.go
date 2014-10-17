@@ -7,7 +7,7 @@ import "testing"
 
 import "github.com/couchbase/indexing/secondary/common"
 
-var addr = "http://localhost:9999"
+var addr = "localhost:9999"
 
 type testMessage struct {
 	DefnID          uint64 `json:"defnId"`
@@ -24,14 +24,15 @@ var q = make(chan bool)
 var server Server
 
 func init() {
-	server = doServer(addr, q)
+	server = doServer("http://"+addr, q)
 	//common.SetLogLevel(common.LogLevelDebug)
 }
 
 func TestLoopback(t *testing.T) {
 	common.LogIgnore()
 
-	client := NewHTTPClient(addr, common.AdminportURLPrefix)
+	urlPrefix := common.SystemConfig["projector.adminport.urlPrefix"].String()
+	client := NewHTTPClient(addr, urlPrefix)
 	req := &testMessage{
 		DefnID:          uint64(0x1234567812345678),
 		Bucket:          "default",
@@ -60,7 +61,8 @@ func TestLoopback(t *testing.T) {
 }
 
 func BenchmarkClientRequest(b *testing.B) {
-	client := NewHTTPClient(addr, common.AdminportURLPrefix)
+	urlPrefix := common.SystemConfig["projector.adminport.urlPrefix"].String()
+	client := NewHTTPClient(addr, urlPrefix)
 	req := &testMessage{
 		DefnID:          uint64(0x1234567812345678),
 		Bucket:          "default",
@@ -82,8 +84,11 @@ func BenchmarkClientRequest(b *testing.B) {
 }
 
 func doServer(addr string, quit chan bool) Server {
-	urlPrefix, reqch := common.AdminportURLPrefix, make(chan Request, 10)
-	server := NewHTTPServer("test", "localhost:9999", urlPrefix, reqch)
+	apConfig := common.SystemConfig.SectionConfig("projector.adminport.", true)
+	apConfig.SetValue("name", "test-adminport")
+	apConfig.SetValue("listenAddr", "localhost:9999")
+	reqch := make(chan Request, 10)
+	server := NewHTTPServer(apConfig, reqch)
 	if err := server.Register(&testMessage{}); err != nil {
 		log.Fatal(err)
 	}

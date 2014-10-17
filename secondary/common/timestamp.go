@@ -30,6 +30,7 @@ type TsVbuuid struct {
 }
 
 // NewTsVbuuid returns reference to new instance of TsVbuuid.
+// `numVbuckets` is same as `maxVbuckets`.
 func NewTsVbuuid(bucket string, numVbuckets int) *TsVbuuid {
 	return &TsVbuuid{
 		Bucket:    bucket,
@@ -90,12 +91,13 @@ func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
         return ts
     }
 
-    newts := NewTsVbuuid(ts.Bucket, 1024) // TODO: avoid magic numbers
+    maxVbuckets := len(ts.Seqnos)
+    newts := NewTsVbuuid(ts.Bucket, maxVbuckets)
     if len(ts.Vbnos) == 0 {
         return newts
     }
 
-    cache := [MaxVbuckets]byte{} // TODO: optimize for GC
+    cache := [maxVbuckets]byte{}
     for _, vbno := range vbuckets {
         cache[vbno] = 1
     }
@@ -117,12 +119,13 @@ func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
         return ts
     }
 
-    newts := NewTsVbuuid(ts.Bucket, MaxVbuckets) // TODO: avoid magic numbers
+    maxVbuckets := len(ts.Seqnos)
+    newts := NewTsVbuuid(ts.Bucket, maxVbuckets)
     if len(ts.Vbnos) == 0 {
         return newts
     }
 
-    cache := [MaxVbuckets]byte{}
+    cache := [maxVbuckets]byte{}
     for _, vbno := range vbuckets {
         cache[vbno] = 1
     }
@@ -144,7 +147,9 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
     if ts == nil || other == nil {
         return ts
     }
-    newts := NewTsVbuuid(ts.Bucket, MaxVbuckets)
+
+    maxVbuckets := len(ts.Seqnos)
+    newts := NewTsVbuuid(ts.Bucket, maxVbuckets)
 
     // copy from other
     newts.Vbnos = append(newts.Vbnos, other.Vbnos...)
@@ -152,7 +157,7 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
     newts.Vbuuids = append(newts.Vbuuids, other.Vbuuids...)
     newts.Snapshots = append(newts.Snapshots, other.Snapshots...)
 
-    cache := [MaxVbuckets]byte{}
+    cache := [maxVbuckets]byte{}
     for _, vbno := range other.Vbnos {
         cache[vbno] = 1
     }

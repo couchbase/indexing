@@ -29,61 +29,67 @@ import "github.com/couchbase/indexing/secondary/transport"
 // from one or more vbuckets and push them downstream to a
 // specific node.
 type RouterEndpoint struct {
-	topic       string
-	timestamp   int64   // immutable
-	raddr       string  // immutable
-	client      *Client // immutable
-	bufferBlock bool
+	topic     string
+	timestamp int64   // immutable
+	raddr     string  // immutable
+	client    *Client // immutable
 	// gen-server
 	kvch  chan []interface{} // carries *c.KeyVersions
 	reqch chan []interface{} // carries control commands
 	finch chan bool
-	// misc.
+
+	// config params
 	logPrefix string
+	parConns  int // number of parallel connection with remote
+	genChSize int // channel size for genServer routine
+	keyChSize int // channel size for key-versions
+	// live update is possible
+	noblock    bool          // should endpoint block when remote is slow
+	bufferTm   time.Duration // timeout to flush endpoint-buffer
+	harakiriTm time.Duration // timeout after which endpoint commits harakiri
 }
 
 // NewRouterEndpoint instantiate a new RouterEndpoint
 // routine and return its reference.
 func NewRouterEndpoint(
-	topic, raddr string,
-	settings map[string]interface{}) (*RouterEndpoint, error) {
+	topic, raddr string, config c.Config) (*RouterEndpoint, error) {
 
-	// settings
-	n, ok := settings["numConns"].(int)
-	if !ok {
-		n = 1
-	}
-	bufferBlock, ok := settings["noblock"].(bool)
-	if !ok {
-		bufferBlock = true
-	}
+	econf := config.SectionConfig("projector.dataport.client.", true)
+	parConns := econf["parConnections"].Int()
 
+	// TODO: add configuration params for transport flags.
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, err := NewClient(raddr, n, flags)
+	client, err := NewClient(raddr, flags, config)
 	if err != nil {
 		return nil, err
 	}
 	endpoint := &RouterEndpoint{
-		topic:       topic,
-		raddr:       raddr,
-		client:      client,
-		bufferBlock: bufferBlock,
-		kvch:        make(chan []interface{}, c.KeyVersionsChannelSize),
-		reqch:       make(chan []interface{}, c.GenserverChannelSize),
-		finch:       make(chan bool),
-		timestamp:   time.Now().UnixNano(),
+		topic:      topic,
+		raddr:      raddr,
+		client:     client,
+		finch:      make(chan bool),
+		timestamp:  time.Now().UnixNano(),
+		parConns:   parConns,
+		genChSize:  econf["genServerChanSize"].Int(),
+		keyChSize:  econf["keyChanSize"].Int(),
+		noblock:    econf["noRemoteBlock"].Bool(),
+		bufferTm:   time.Duration(econf["bufferTimeout"].Int()),
+		harakiriTm: time.Duration(econf["harakiriTimeout"].Int()),
 	}
 	endpoint.logPrefix = fmt.Sprintf(
 		"[%v->endpc(%v) %v]", topic, endpoint.timestamp, endpoint.raddr)
+	endpoint.kvch = make(chan []interface{}, endpoint.genChSize)
+	endpoint.reqch = make(chan []interface{}, endpoint.keyChSize)
 
 	go endpoint.run(endpoint.kvch, endpoint.reqch)
-	c.Infof("%v started (with %v conns) ...\n", endpoint.logPrefix, n)
+	c.Infof("%v started (with %v conns) ...\n", endpoint.logPrefix, parConns)
 	return endpoint, nil
 }
 
 // commands
 const (
 	endpCmdPing byte = iota + 1
+	endpCmdSetConfig
 	endpCmdGetStatistics
 	endpCmdClose
 )
@@ -97,6 +103,14 @@ func (endpoint *RouterEndpoint) Ping() bool {
 		return false
 	}
 	return resp[0].(bool)
+}
+
+// SetConfig synchronous call.
+func (endpoint *RouterEndpoint) SetConfig(config c.Config) error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{endpCmdSetConfig, config, respch}
+	_, err := c.FailsafeOp(endpoint.reqch, respch, cmd, endpoint.finch)
+	return err
 }
 
 // Send KeyVersions to other end, asynchronous call.
@@ -138,8 +152,8 @@ func (endpoint *RouterEndpoint) run(
 
 	raddr, client := endpoint.raddr, endpoint.client
 
-	flushTimeout := time.Tick(c.EndpointBufferTimeout * time.Millisecond)
-	harakiri := time.After(c.EndpointHarakiriTimeout * time.Millisecond)
+	flushTimeout := time.Tick(endpoint.bufferTm * time.Millisecond)
+	harakiri := time.After(endpoint.harakiriTm * time.Millisecond)
 	buffers := newEndpointBuffers(raddr)
 
 	stats, _ := c.NewStatistics(nil)
@@ -154,7 +168,7 @@ func (endpoint *RouterEndpoint) run(
 			return nil
 		}
 		c.Tracef("%v sent %v vbuckets to %q\n", endpoint.logPrefix, l, raddr)
-		err := buffers.flushBuffers(client, endpoint.bufferBlock)
+		err := buffers.flushBuffers(client, endpoint.noblock)
 		if err != nil {
 			c.Errorf("%v flushBuffers() %v", endpoint.logPrefix, err)
 		}
@@ -177,13 +191,24 @@ loop:
 				kv.Commands, buffers.raddr)
 			mutationCount++
 			// reload harakiri
-			harakiri = time.After(c.EndpointHarakiriTimeout * time.Millisecond)
+			harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
 
 		case msg := <-reqch:
 			switch msg[0].(byte) {
 			case endpCmdPing:
 				respch := msg[1].(chan []interface{})
 				respch <- []interface{}{true}
+
+			case endpCmdSetConfig:
+				config := msg[1].(c.Config)
+				econf := config.SectionConfig("projector.dataport.client.", true)
+				endpoint.noblock = econf["noRemoteBlock"].Bool()
+				endpoint.bufferTm = time.Duration(econf["bufferTimeout"].Int())
+				endpoint.harakiriTm = time.Duration(econf["harakiriTimeout"].Int())
+				flushTimeout = time.Tick(endpoint.bufferTm * time.Millisecond)
+				harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
+				respch := msg[2].(chan []interface{})
+				respch <- []interface{}{nil}
 
 			case endpCmdGetStatistics:
 				respch := msg[1].(chan []interface{})

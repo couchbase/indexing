@@ -25,7 +25,11 @@ type connectionPool struct {
 	mkConn      func(host string) (*connection, error)
 	connections chan *connection
 	createsem   chan bool
-	logPrefix   string
+	// config params
+	maxPayload   int
+	timeout      time.Duration
+	availTimeout time.Duration
+	logPrefix    string
 }
 
 type connection struct {
@@ -33,12 +37,19 @@ type connection struct {
 	pkt  *transport.TransportPacket
 }
 
-func newConnectionPool(host string, poolSize, poolOverflow int) *connectionPool {
+func newConnectionPool(
+	host string,
+	poolSize, poolOverflow, maxPayload int,
+	timeout, availTimeout time.Duration) *connectionPool {
+
 	cp := &connectionPool{
-		host:        host,
-		connections: make(chan *connection, poolSize),
-		createsem:   make(chan bool, poolSize+poolOverflow),
-		logPrefix:   fmt.Sprintf("[Queryport-connpool:%v]", host),
+		host:         host,
+		connections:  make(chan *connection, poolSize),
+		createsem:    make(chan bool, poolSize+poolOverflow),
+		maxPayload:   maxPayload,
+		timeout:      timeout,
+		availTimeout: availTimeout,
+		logPrefix:    fmt.Sprintf("[Queryport-connpool:%v]", host),
 	}
 	cp.mkConn = cp.defaultMkConn
 	c.Infof("%v started ...\n", cp.logPrefix)
@@ -55,7 +66,7 @@ func (cp *connectionPool) defaultMkConn(host string) (*connection, error) {
 		return nil, err
 	}
 	flags := transport.TransportFlag(0).SetProtobuf()
-	pkt := transport.NewTransportPacket(c.MaxQueryportPayload, flags)
+	pkt := transport.NewTransportPacket(cp.maxPayload, flags)
 	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 	return &connection{conn, pkt}, nil
@@ -97,11 +108,12 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 		if !ok {
 			return nil, ErrorClosedPool
 		}
+		c.Debugf("%v new connection from pool", cp.logPrefix)
 		return connectn, nil
 	default:
 	}
 
-	t := time.NewTimer(c.QueryportConnPoolAvailWaitTime)
+	t := time.NewTimer(cp.availTimeout * time.Millisecond)
 	defer t.Stop()
 
 	// Try to grab an available connection within 1ms
@@ -111,6 +123,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 		if !ok {
 			return nil, ErrorClosedPool
 		}
+		c.Debugf("%v new connection (avail1) from pool", cp.logPrefix)
 		return connectn, nil
 
 	case <-t.C:
@@ -123,6 +136,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 			if !ok {
 				return nil, ErrorClosedPool
 			}
+			c.Debugf("%v new connection (avail2) from pool", cp.logPrefix)
 			return connectn, nil
 
 		case cp.createsem <- true:
@@ -135,6 +149,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 				// On error, release our create hold
 				<-cp.createsem
 			}
+			c.Debugf("%v new connection (create) from pool", cp.logPrefix)
 			return connectn, err
 
 		case <-t.C:
@@ -144,7 +159,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 }
 
 func (cp *connectionPool) Get() (*connection, error) {
-	return cp.GetWithTimeout(c.QueryportConnPoolTimeout)
+	return cp.GetWithTimeout(cp.timeout * time.Millisecond)
 }
 
 func (cp *connectionPool) Return(connectn *connection, healthy bool) {

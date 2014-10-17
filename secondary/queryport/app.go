@@ -3,6 +3,7 @@ package queryport
 import (
 	"log"
 
+	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
@@ -14,7 +15,7 @@ func Application() {
 		func(req interface{},
 			respch chan<- interface{}, quitch <-chan interface{}) {
 			requestHandler(req, respch, quitch, killch)
-		})
+		}, c.SystemConfig)
 
 	if err != nil {
 		log.Fatal(err)

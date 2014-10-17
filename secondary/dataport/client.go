@@ -56,39 +56,51 @@ type Client struct {
 	reqch chan []interface{}
 	finch chan bool
 	// miscellaneous
-	logPrefix string
+	mutChanSize   int
+	maxPayload    int
+	bufferTimeout time.Duration
+	logPrefix     string
 }
 
 // NewClient returns a pool of connection. Multiple connections, based
 // on parameter `n`, can be used to speed up mutation transport across network.
 // A vbucket is always binded to a connection and ensure that mutations within
 // a vbucket are serialized.
-func NewClient(raddr string, n int, flags transport.TransportFlag) (c *Client, err error) {
+func NewClient(
+	raddr string, flags transport.TransportFlag,
+	config common.Config) (c *Client, err error) {
+
 	var conn net.Conn
 
-	if n == 0 {
+	econf := config.SectionConfig("projector.dataport.client.", true)
+
+	mutChanSize := econf["mutationChanSize"].Int()
+	parConns := econf["parConnections"].Int()
+	if parConns == 0 {
 		panic("fatal: cannot open dataport-client with zero connections")
 	}
 
 	c = &Client{
-		raddr:     raddr,
-		conns:     make(map[int]net.Conn),
-		connChans: make(map[int]chan interface{}),
-		conn2Vbs:  make(map[int][]string),
-		reqch:     make(chan []interface{}, common.KeyVersionsChannelSize),
-		finch:     make(chan bool),
-		logPrefix: fmt.Sprintf("[DataportClient:%q]", raddr),
+		raddr:         raddr,
+		conns:         make(map[int]net.Conn),
+		connChans:     make(map[int]chan interface{}),
+		conn2Vbs:      make(map[int][]string),
+		reqch:         make(chan []interface{}, mutChanSize),
+		finch:         make(chan bool),
+		mutChanSize:   mutChanSize,
+		maxPayload:    econf["maxPayload"].Int(),
+		bufferTimeout: time.Duration(econf["bufferTimeout"].Int()),
+		logPrefix:     fmt.Sprintf("[DataportClient:%q]", raddr),
 	}
 	// open connections with remote
-	size := common.KeyVersionsChannelSize
-	for i := 0; i < n; i++ {
+	for i := 0; i < parConns; i++ {
 		if conn, err = net.Dial("tcp", raddr); err != nil {
 			common.Errorf("%v %v Dialing to %q\n", c.logPrefix, raddr, err)
 			c.doClose()
 			return nil, err
 		}
 		c.conns[i] = conn
-		c.connChans[i] = make(chan interface{}, size)
+		c.connChans[i] = make(chan interface{}, mutChanSize)
 		c.conn2Vbs[i] = make([]string, 0, 4) // TODO: avoid magic numbers
 	}
 	// spawn routines per connection.
@@ -290,7 +302,8 @@ func (c *Client) sendKeyVersions(
 		select {
 		case vbChans[vb.Uuid] <- vb:
 			if fin {
-				common.Infof("%v {%v,%v} ended\n", c.logPrefix, vb.Bucket, vb.Vbucket)
+				common.Infof(
+					"%v {%v,%v} ended\n", c.logPrefix, vb.Bucket, vb.Vbucket)
 				c.delVbucket(vb.Uuid)
 				delete(vbChans, vb.Uuid)
 			}
@@ -341,7 +354,7 @@ func (c *Client) runTransmitter(
 		quitch <- []string{"quit", laddr}
 	}()
 
-	pkt := transport.NewTransportPacket(common.MaxDataportPayload, flags)
+	pkt := transport.NewTransportPacket(c.maxPayload, flags)
 	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
@@ -353,7 +366,7 @@ func (c *Client) runTransmitter(
 		return true
 	}
 
-	timeout := time.Tick(common.TransmitBufferTimeout * time.Millisecond)
+	timeout := time.Tick(c.bufferTimeout * time.Millisecond)
 	vbs := make([]*common.VbKeyVersions, 0, 1000) // TODO: avoid magic numbers
 
 	resetAcc := func() {

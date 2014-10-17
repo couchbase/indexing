@@ -20,39 +20,39 @@ var ErrorTopicMissing = errors.New("projector.topicMissing")
 // one or more upstream kv-nodes. Works in tandem with
 // projector's adminport.
 type Projector struct {
-	mu          sync.RWMutex
-	clusterAddr string    // kv cluster's address to connect
-	adminport   string    // projector listens on this adminport
-	admind      ap.Server // admin-port server
-	kvset       []string  // set of kv-nodes to connect with
-	epfactory   c.RouterEndpointFactory
-	topics      map[string]*Feed             // active topics
-	buckets     map[string]*couchbase.Bucket // bucket instances
-	// statistics
-	logPrefix string
+	mu      sync.RWMutex
+	admind  ap.Server                    // admin-port server
+	topics  map[string]*Feed             // active topics
+	buckets map[string]*couchbase.Bucket // bucket instances
+
+	// config params
+	name        string   // human readable name of the projector
+	clusterAddr string   // kv cluster's address to connect
+	adminport   string   // projector listens on this adminport
+	kvset       []string // set of kv-nodes to connect with
+	logPrefix   string
+	config      c.Config // full configuration information.
 }
 
 // NewProjector creates a news projector instance and
 // starts a corresponding adminport.
-func NewProjector(settings map[string]interface{}) *Projector {
-	clusterAddr := settings["cluster"].(string)
-	adminport := settings["adminport"].(string)
-	kvset := settings["kvaddrs"].([]string)
-	epfactory := settings["epfactory"].(c.RouterEndpointFactory)
-
+func NewProjector(config c.Config) *Projector {
+	pconf := config.SectionConfig("projector.", true)
 	p := &Projector{
-		clusterAddr: clusterAddr,
-		adminport:   adminport,
-		kvset:       kvset,
-		epfactory:   epfactory,
+		name:        pconf["name"].String(),
+		clusterAddr: pconf["clusterAddr"].String(),
+		kvset:       pconf["kvAddrs"].Strings(),
+		adminport:   pconf["adminport.listenAddr"].String(),
 		topics:      make(map[string]*Feed),
 		buckets:     make(map[string]*couchbase.Bucket),
 	}
-	p.logPrefix = fmt.Sprintf("[projector(%s)]", p.adminport)
+	p.logPrefix = fmt.Sprintf("[%s(%s)]", p.name, p.kvset)
+	p.config = config
 
+	apConfig := pconf.SectionConfig("adminport.", true)
+	apConfig = apConfig.SetValue("name", p.name+"-adminport")
 	reqch := make(chan ap.Request)
-	urlPrefix := c.AdminportURLPrefix
-	p.admind = ap.NewHTTPServer("projector", adminport, urlPrefix, reqch)
+	p.admind = ap.NewHTTPServer(apConfig, reqch)
 
 	go p.mainAdminPort(reqch)
 	c.Infof("%v started ...\n", p.logPrefix)
@@ -189,14 +189,17 @@ func (p *Projector) doMutationTopic(
 		return (&protobuf.TopicResponse{}).SetErr(ErrorTopicExist)
 	}
 
-	settings := map[string]interface{}{
-		"cluster":         p.clusterAddr,
-		"localAddr":       p.adminport,
-		"kvaddrs":         p.kvset,
-		"endpointFactory": p.epfactory,
-	}
+	pconf := p.config.SectionConfig("projector.", true)
+	config, _ := c.NewConfig(map[string]interface{}{})
+	config.SetValue("name", p.adminport)
+	config.Set("maxVbuckets", p.config["maxVbuckets"])
+	config.Set("clusterAddr", pconf["clusterAddr"])
+	config.Set("kvAddrs", pconf["kvAddrs"])
+	config.Set("feedWaitStreamReqTimeout", pconf["feedWaitStreamReqTimeout"])
+	config.Set("feedWaitStreamEndTimeout", pconf["feedWaitStreamEndTimeout"])
+	config.Set("routerEndpointFactory", pconf["routerEndpointFactory"])
 
-	feed = NewFeed(topic, settings)
+	feed = NewFeed(topic, config)
 	response, err := feed.MutationTopic(request)
 	if err == nil {
 		p.AddFeed(topic, feed)

@@ -24,19 +24,29 @@ type Server struct {
 	laddr string         // address to listen
 	callb RequestHandler // callback to application on incoming request.
 	// local fields
-	mu        sync.Mutex
-	lis       net.Listener
-	killch    chan bool
-	logPrefix string
+	mu     sync.Mutex
+	lis    net.Listener
+	killch chan bool
+	// config params
+	maxPayload    int
+	readDeadline  time.Duration
+	writeDeadline time.Duration
+	logPrefix     string
 }
 
 // NewServer creates a new queryport daemon.
-func NewServer(laddr string, callb RequestHandler) (s *Server, err error) {
+func NewServer(
+	laddr string, callb RequestHandler, config c.Config) (s *Server, err error) {
+
+	sconf := config.SectionConfig("queryport.indexer.", true)
 	s = &Server{
-		laddr:     laddr,
-		callb:     callb,
-		killch:    make(chan bool),
-		logPrefix: fmt.Sprintf("[Queryport %q]", laddr),
+		laddr:         laddr,
+		callb:         callb,
+		killch:        make(chan bool),
+		maxPayload:    sconf["maxPayload"].Int(),
+		readDeadline:  time.Duration(sconf["readDeadline"].Int()),
+		writeDeadline: time.Duration(sconf["writeDeadline"].Int()),
+		logPrefix:     fmt.Sprintf("[Queryport %q]", laddr),
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
 		c.Errorf("%v failed starting %v !!", s.logPrefix, err)
@@ -107,7 +117,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	// transport buffer for transmission
 	flags := transport.TransportFlag(0).SetProtobuf()
-	tpkt := transport.NewTransportPacket(c.MaxQueryportPayload, flags)
+	tpkt := transport.NewTransportPacket(s.maxPayload, flags)
 	tpkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 
 loop:
@@ -139,7 +149,7 @@ func (s *Server) handleRequest(
 
 	raddr := conn.RemoteAddr()
 
-	timeoutMs := c.QueryportWriteDeadline * time.Millisecond
+	timeoutMs := s.writeDeadline * time.Millisecond
 	transmit := func(resp interface{}) {
 		conn.SetWriteDeadline(time.Now().Add(timeoutMs))
 		if err := tpkt.Send(conn, resp); err != nil {
@@ -183,12 +193,12 @@ func (s *Server) doReceive(conn net.Conn, rcvch chan<- interface{}) {
 
 	// transport buffer for receiving
 	flags := transport.TransportFlag(0).SetProtobuf()
-	rpkt := transport.NewTransportPacket(c.MaxQueryportPayload, flags)
+	rpkt := transport.NewTransportPacket(s.maxPayload, flags)
 	rpkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
 	c.Debugf("%v connection %q doReceive() ...\n", s.logPrefix, raddr)
 
-	timeoutMs := c.QueryportReadDeadline * time.Millisecond
+	timeoutMs := s.readDeadline * time.Millisecond
 loop:
 	for {
 		conn.SetReadDeadline(time.Now().Add(timeoutMs))

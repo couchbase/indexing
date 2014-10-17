@@ -114,24 +114,39 @@ type Server struct {
 	appch chan<- interface{} // backchannel to application
 
 	// gen-server management
-	conns     map[string]*netConn // resolve <host:port> to conn. obj
-	reqch     chan []interface{}
-	finch     chan bool
-	logPrefix string
+	conns map[string]*netConn // resolve <host:port> to conn. obj
+	reqch chan []interface{}
+	finch chan bool
+
+	// config parameters
+	logPrefix    string
+	genChSize    int           // channel size for genServer routine
+	maxPayload   int           // maximum payload length from router
+	readDeadline time.Duration // timeout, in millisecond, reading from socket
 }
 
 // NewServer creates a new dataport daemon.
-func NewServer(laddr string, appch chan<- interface{}) (s *Server, err error) {
+func NewServer(
+	laddr string,
+	config c.Config,
+	appch chan<- interface{}) (s *Server, err error) {
+
+	sconf := config.SectionConfig("projector.dataport.indexer.", true)
+	genChSize := sconf["genServerChanSize"].Int()
+
 	s = &Server{
 		laddr: laddr,
 		appch: appch,
-
 		// Managing vbuckets and connections for all routers
-		reqch:     make(chan []interface{}, c.GenserverChannelSize),
-		finch:     make(chan bool),
-		conns:     make(map[string]*netConn),
-		logPrefix: fmt.Sprintf("[dataport %q]", laddr),
+		reqch: make(chan []interface{}, genChSize),
+		finch: make(chan bool),
+		conns: make(map[string]*netConn),
+		// config parameters
+		genChSize:    genChSize,
+		maxPayload:   sconf["maxPayload"].Int(),
+		readDeadline: time.Duration(sconf["tcpReadDeadline"].Int()),
 	}
+	s.logPrefix = fmt.Sprintf("[dataport %q]", laddr)
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
 		c.Errorf("%v failed starting ! %v", s.logPrefix, err)
 		return nil, err
@@ -294,7 +309,7 @@ func (s *Server) handleClose() {
 func (s *Server) startWorker(raddr string) {
 	c.Infof("%v starting worker for connection %q\n", s.logPrefix, raddr)
 	nc := s.conns[raddr]
-	go doReceive(s.logPrefix, nc, s.appch, s.reqch)
+	go doReceive(s.logPrefix, nc, s.maxPayload, s.readDeadline, s.appch, s.reqch)
 	nc.active = true
 }
 
@@ -411,6 +426,7 @@ loop:
 func doReceive(
 	prefix string,
 	nc *netConn,
+	maxPayload int, readDeadline time.Duration,
 	appch chan<- interface{},
 	reqch chan<- []interface{}) {
 
@@ -418,7 +434,7 @@ func doReceive(
 
 	// TODO: make it configurable
 	flags := transport.TransportFlag(0).SetProtobuf()
-	pkt := transport.NewTransportPacket(c.MaxDataportPayload, flags)
+	pkt := transport.NewTransportPacket(maxPayload, flags)
 	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
 
@@ -452,7 +468,7 @@ func doReceive(
 
 loop:
 	for {
-		timeoutMs := c.DataportReadDeadline * time.Millisecond
+		timeoutMs := readDeadline * time.Millisecond
 		conn.SetReadDeadline(time.Now().Add(timeoutMs))
 		msg.cmd, msg.err, msg.args = 0, nil, nil
 		if payload, err := pkt.Receive(conn); err != nil {

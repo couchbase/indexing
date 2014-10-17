@@ -1,12 +1,4 @@
-//
-// Example client {
-//    client := NewHTTPClient("http://localhost:8888", "/adminport/")
-//    req  := common.Statistics{"componentName": "indexer"}
-//    client.Request(req, req)
-// }
-//
-// Note:
-//  1. statistics key should not have "/" character.
+// TODO: clean up this file
 
 package common
 

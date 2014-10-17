@@ -9,19 +9,20 @@ import "github.com/couchbase/indexing/secondary/transport"
 var addr = "localhost:8888"
 
 func TestClient(t *testing.T) {
-	maxBuckets, maxconns, maxvbuckets, mutChanSize := 2, 2, 8, 1000
+	maxBuckets, maxvbuckets, mutChanSize := 2, 8, 1000
 	c.LogIgnore()
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, appch)
+	daemon, err := NewServer(addr, c.SystemConfig, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	maxconns := c.SystemConfig["projector.dataport.client.parConnections"].Int()
 	// start client and test number of connection.
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, err := NewClient(addr, maxconns, flags)
+	client, err := NewClient(addr, flags, c.SystemConfig)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(client.conns) != maxconns {
@@ -44,19 +45,19 @@ func TestClient(t *testing.T) {
 }
 
 func TestStreamBegin(t *testing.T) {
-	maxBuckets, maxconns, maxvbuckets, mutChanSize := 2, 2, 8, 1000
+	maxBuckets, maxvbuckets, mutChanSize := 2, 8, 1000
 	c.LogIgnore()
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, appch)
+	daemon, err := NewServer(addr, c.SystemConfig, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// start client
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, _ := NewClient(addr, maxconns, flags)
+	client, _ := NewClient(addr, flags, c.SystemConfig)
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {
 		if err := client.SendVbmap(vbmaps[i]); err != nil {
@@ -93,19 +94,19 @@ func TestStreamBegin(t *testing.T) {
 }
 
 func TestStreamEnd(t *testing.T) {
-	maxBuckets, maxconns, maxvbuckets, mutChanSize := 2, 2, 8, 100
+	maxBuckets, maxvbuckets, mutChanSize := 2, 8, 100
 	c.LogIgnore()
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, appch)
+	daemon, err := NewServer(addr, c.SystemConfig, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// start client
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, _ := NewClient(addr, maxconns, flags)
+	client, _ := NewClient(addr, flags, c.SystemConfig)
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {
 		if err := client.SendVbmap(vbmaps[i]); err != nil {

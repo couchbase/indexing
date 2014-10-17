@@ -33,14 +33,19 @@ type VbucketRoutine struct {
 	// gen-server
 	reqch chan []interface{}
 	finch chan bool
-	// misc.
-	logPrefix string
+	// config params
+	mutChanSize int
+	syncTimeout time.Duration
+	logPrefix   string
 }
 
 // NewVbucketRoutine creates a new routine to handle this vbucket stream.
 func NewVbucketRoutine(
 	topic, bucket, kvaddr string,
-	vbno uint16, vbuuid, startSeqno uint64) *VbucketRoutine {
+	vbno uint16, vbuuid, startSeqno uint64, config c.Config) *VbucketRoutine {
+
+	mutChanSize := config["projector.mutationChanSize"].Int()
+	syncTimeout := time.Duration(config["projector.vbucketSyncTimeout"].Int())
 
 	vr := &VbucketRoutine{
 		bucket:    bucket,
@@ -48,10 +53,12 @@ func NewVbucketRoutine(
 		vbuuid:    vbuuid,
 		engines:   make(map[uint64]*Engine),
 		endpoints: make(map[string]c.RouterEndpoint),
-		reqch:     make(chan []interface{}, c.MutationChannelSize),
+		reqch:     make(chan []interface{}, mutChanSize),
 		finch:     make(chan bool),
 	}
 	vr.logPrefix = fmt.Sprintf("[%v->%v->%v->%v]", topic, bucket, kvaddr, vbno)
+	vr.mutChanSize = mutChanSize
+	vr.syncTimeout = syncTimeout
 
 	go vr.run(vr.reqch, startSeqno)
 	c.Infof("%v started ...\n", vr.logPrefix)
@@ -180,10 +187,9 @@ loop:
 			case vrCmdEvent:
 				m := msg[1].(*mc.UprEvent)
 				if m.Opcode == mcd.UPR_STREAMREQ { // opens up the path
-					syncTm := time.Duration(c.VbucketSyncTimeout)
-					heartBeat = time.Tick(syncTm * time.Millisecond)
+					heartBeat = time.Tick(vr.syncTimeout * time.Millisecond)
 					format := "%v heartbeat (%v) loaded ...\n"
-					c.Debugf(format, vr.logPrefix, syncTm)
+					c.Debugf(format, vr.logPrefix, vr.syncTimeout)
 				}
 
 				// count statistics
