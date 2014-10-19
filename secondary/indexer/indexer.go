@@ -1246,7 +1246,7 @@ func (idx *indexer) getCurrentKVTs(cluster, bucket string) Timestamp {
 			}
 		}
 		elapsed := time.Since(start)
-		common.Debugf("Indexer::getCurrentKVTs Time Taken %v", elapsed)
+		common.Debugf("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
 		return ts
 
 	} else {

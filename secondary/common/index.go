@@ -58,6 +58,24 @@ const (
 	INDEX_STATE_DELETED = 4
 )
 
+func (s IndexState) String() string {
+
+	switch s {
+	case INDEX_STATE_CREATED:
+		return "INDEX_STATE_CREATED"
+	case INDEX_STATE_INITIAL:
+		return "INDEX_STATE_INITIAL"
+	case INDEX_STATE_CATCHUP:
+		return "INDEX_STATE_CATCHUP"
+	case INDEX_STATE_ACTIVE:
+		return "INDEX_STATE_ACTIVE"
+	case INDEX_STATE_DELETED:
+		return "INDEX_STATE_DELETED"
+	default:
+		return "INDEX_STATE_UNKNOWN"
+	}
+}
+
 //IndexDefn represents the index definition as specified
 //during CREATE INDEX
 type IndexDefn struct {
@@ -118,6 +136,20 @@ const (
 	INIT_STREAM
 	MAX_STREAMS
 )
+
+func (s StreamId) String() string {
+
+	switch s {
+	case MAINT_STREAM:
+		return "MAINT_STREAM"
+	case CATCHUP_STREAM:
+		return "CATCHUP_STREAM"
+	case INIT_STREAM:
+		return "INIT_STREAM"
+	default:
+		return "INVALID_STREAM"
+	}
+}
 
 func (idx IndexInstMap) String() string {
 

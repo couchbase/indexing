@@ -205,16 +205,38 @@ func (k *kvSender) handleRemoveIndexListFromStream(cmd Message) {
 	}
 
 	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
-	//For now, only one index comes in the request
-	//TODO Add Batching support
-	indexInst := indexInstList[0]
+
+	if len(indexInstList) == 0 {
+		//nothing to do
+		k.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
+	var emptyBucketList []string
 
 	bucketIndexCountMap := k.streamBucketIndexCountMap[streamId]
-	bucketIndexCountMap[indexInst.Defn.Bucket]--
+	for _, index := range indexInstList {
+		bucketIndexCountMap[index.Defn.Bucket]--
+		if bucketIndexCountMap[index.Defn.Bucket] == 0 {
+			//add this bucket to list of empty buckets
+			emptyBucketList = append(emptyBucketList, index.Defn.Bucket)
+			delete(bucketIndexCountMap, index.Defn.Bucket)
+		}
+	}
 
-	//if this is the last bucket in stream, delete bucket from map
-	if bucketIndexCountMap[indexInst.Defn.Bucket] == 0 {
-		delete(bucketIndexCountMap, indexInst.Defn.Bucket)
+	//for any empty bucket, delete the indexes from the list of to-be-deleted indexes
+	//as the bucket itself is going to be deleted from the stream anyway
+	var delIndexList []c.IndexInst
+	for _, index := range indexInstList {
+		exclude := false
+		for _, bucket := range emptyBucketList {
+			if bucket == index.Defn.Bucket {
+				exclude = true
+			}
+		}
+		if !exclude {
+			delIndexList = append(delIndexList, index)
+		}
 	}
 
 	//if this is the last index in the stream, the stream needs to be closed.
@@ -222,7 +244,7 @@ func (k *kvSender) handleRemoveIndexListFromStream(cmd Message) {
 	//or bucket in this case would result in problem.
 	if len(bucketIndexCountMap) == 0 {
 
-		resp := k.closeMutationStream(streamId, indexInst.Defn.Bucket)
+		resp := k.closeMutationStream(streamId, indexInstList[0].Defn.Bucket)
 		if resp.GetMsgType() != MSG_SUCCESS {
 			k.supvCmdch <- resp
 			return
@@ -231,18 +253,21 @@ func (k *kvSender) handleRemoveIndexListFromStream(cmd Message) {
 		delete(k.streamBucketIndexCountMap, streamId)
 		k.streamStatus[streamId] = false
 	} else {
-		//if this is the last index for this bucket, the bucket needs to be deleted
-		//from stream. projector cannot work with empty bucket in a stream.
+		//for all the buckets where no more index is left, the bucket needs to be
+		//delete from stream. projector cannot work with empty bucket in a stream.
 		//deleting an index instance in this case would result in problem.
-		if c, ok := bucketIndexCountMap[indexInst.Defn.Bucket]; c == 0 || !ok {
-			resp := k.deleteBucketFromStream(streamId, indexInst.Defn.Bucket)
+		if len(emptyBucketList) != 0 {
+			resp := k.deleteBucketsFromStream(streamId, emptyBucketList)
 			if resp.GetMsgType() != MSG_SUCCESS {
 				k.supvCmdch <- resp
 				return
 			}
 
-		} else { //there are more indexes for this bucket in stream
-			resp := k.deleteIndexFromStream(streamId, indexInst)
+		}
+
+		//for the remaining ones, delete the indexes
+		if len(delIndexList) != 0 {
+			resp := k.deleteIndexesFromStream(streamId, delIndexList)
 			if resp.GetMsgType() != MSG_SUCCESS {
 				k.supvCmdch <- resp
 				return
@@ -444,10 +469,10 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInst c.In
 	return &MsgSuccess{}
 }
 
-func (k *kvSender) deleteIndexFromStream(streamId c.StreamId, indexInst c.IndexInst) Message {
+func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []c.IndexInst) Message {
 
 	//Get the Vbmap of all nodes in the cluster
-	vbmap, err := k.getVbmap(indexInst.Defn.Bucket, nil)
+	vbmap, err := k.getVbmap(indexInstList[0].Defn.Bucket, nil)
 	if err != nil {
 		c.Errorf("KVSender::deleteIndexFromStream \n\t Error In GetVbMap %v", err)
 		return &MsgError{
@@ -467,7 +492,11 @@ func (k *kvSender) deleteIndexFromStream(streamId c.StreamId, indexInst c.IndexI
 
 		//delete engine(index) from the existing stream
 		topic := getTopicForStreamId(streamId)
-		uuids := []uint64{uint64(indexInst.InstId)}
+
+		var uuids []uint64
+		for _, indexInst := range indexInstList {
+			uuids = append(uuids, uint64(indexInst.InstId))
+		}
 
 		if errMsg := sendDelInstancesRequest(ap, topic, uuids); errMsg.GetMsgType() != MSG_SUCCESS {
 			//TODO send message to all KVs to revert the previous requests sent
@@ -479,10 +508,10 @@ func (k *kvSender) deleteIndexFromStream(streamId c.StreamId, indexInst c.IndexI
 	return &MsgSuccess{}
 }
 
-func (k *kvSender) deleteBucketFromStream(streamId c.StreamId, bucket string) Message {
+func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string) Message {
 
 	//Get the Vbmap of all nodes in the cluster
-	vbmap, err := k.getVbmap(bucket, nil)
+	vbmap, err := k.getVbmap(buckets[0], nil)
 	if err != nil {
 		c.Errorf("KVSender::deleteBucketFromStream \n\t Error In GetVbMap %v", err)
 		return &MsgError{
@@ -501,7 +530,6 @@ func (k *kvSender) deleteBucketFromStream(streamId c.StreamId, bucket string) Me
 		ap := projector.NewClient(projAddr)
 
 		topic := getTopicForStreamId(streamId)
-		buckets := []string{bucket}
 
 		if errMsg := sendDelBucketsRequest(ap, topic, buckets); errMsg.GetMsgType() != MSG_SUCCESS {
 			//TODO send message to all KVs to revert the previous requests sent

@@ -33,6 +33,22 @@ const (
 	STREAM_RECOVERY = 3
 )
 
+func (s StreamState) String() string {
+
+	switch s {
+	case STREAM_ACTIVE:
+		return "STREAM_ACTIVE"
+	case STREAM_INACTIVE:
+		return "STREAM_INACTIVE"
+	case STREAM_PREPARE_RECOVERY:
+		return "STREAM_PREPARE_RECOVERY"
+	case STREAM_RECOVERY:
+		return "STREAM_RECOVERY"
+	default:
+		return "STREAM_STATE_INVALID"
+	}
+}
+
 // a generic channel which can be closed when you
 // want someone to stop doing something
 type StopChannel chan bool
