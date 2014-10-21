@@ -23,6 +23,12 @@ type IndexWriter interface {
 	//Snapshot
 	Snapshot() (Snapshot, error)
 
+	//Rollback to given snapshot
+	Rollback(s Snapshot) error
+
+	//Rollback to initial state
+	RollbackToZero() error
+
 	//Close the index. Should be able to reopen after this operation
 	Close() error
 

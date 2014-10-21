@@ -27,7 +27,7 @@ type fdbSnapshot struct {
 
 	idxDefnId common.IndexDefnId //index definition id
 	idxInstId common.IndexInstId //index instance id
-	ts        Timestamp          //timestamp
+	ts        *common.TsVbuuid   //timestamp
 
 	refCount int          //Reader count for this snapshot
 	lock     sync.RWMutex //lock to atomically increment the refCount
@@ -86,11 +86,11 @@ func (s *fdbSnapshot) IndexDefnId() common.IndexDefnId {
 	return s.idxDefnId
 }
 
-func (s *fdbSnapshot) Timestamp() Timestamp {
+func (s *fdbSnapshot) Timestamp() *common.TsVbuuid {
 	return s.ts
 }
 
-func (s *fdbSnapshot) SetTimestamp(ts Timestamp) {
+func (s *fdbSnapshot) SetTimestamp(ts *common.TsVbuuid) {
 	s.ts = ts
 }
 

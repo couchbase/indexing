@@ -665,23 +665,23 @@ func (idx *indexer) sendStreamUpdateForCreateIndex(indexInst common.IndexInst,
 		newStream = false
 	}
 
-	bucketRestartTs := make(map[string]*common.TsVbuuid)
-	bucketRestartTs[indexInst.Defn.Bucket] = nil
+	restartTs := make(map[string]*common.TsVbuuid)
+	restartTs[indexInst.Defn.Bucket] = nil
 
 	if newStream {
 		cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
-			streamId:        indexInst.Stream,
-			indexList:       indexList,
-			buildTs:         buildTs,
-			respCh:          respCh,
-			bucketRestartTs: bucketRestartTs}
+			streamId:  indexInst.Stream,
+			indexList: indexList,
+			buildTs:   buildTs,
+			respCh:    respCh,
+			restartTs: restartTs}
 	} else {
 		cmd = &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
-			streamId:        indexInst.Stream,
-			indexList:       indexList,
-			buildTs:         buildTs,
-			respCh:          respCh,
-			bucketRestartTs: bucketRestartTs}
+			streamId:  indexInst.Stream,
+			indexList: indexList,
+			buildTs:   buildTs,
+			respCh:    respCh,
+			restartTs: restartTs}
 	}
 
 	//send stream update to timekeeper
@@ -695,18 +695,26 @@ func (idx *indexer) sendStreamUpdateForCreateIndex(indexInst common.IndexInst,
 	}
 
 	//send stream update to kv sender
-	if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", respCh); !ok {
-		return false
-	}
+	idx.kvSenderCmdCh <- cmd
+	if resp, ok := <-idx.kvSenderCmdCh; ok {
 
-	//enable flush after KV message is successful
-	/*
-		if newStream {
-			idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
-				streamId: indexInst.Stream}
-			<-idx.tkCmdCh
+		switch resp.GetMsgType() {
+
+		case INDEXER_ROLLBACK:
+			common.Errorf("Indexer::sendStreamUpdateForCreateIndex \n\tUnexpected Rollback from "+
+				"Projector during Initial Stream Request %v", resp)
+
+		case MSG_SUCCESS:
+			//nothing to do
+
+		default:
+			common.Errorf("Indexer::sendStreamUpdateForCreateIndex - Error from Projector %v", resp)
+
 		}
-	*/
+	} else {
+		common.Errorf("Indexer::handleInitRecovery - Error communicating with KVSender "+
+			"processing Msg %v. Aborted.", resp)
+	}
 
 	//For INIT_STREAM, add index is added to MAINT_STREAM in Catchup State,
 	//so mutations for this index are already in queue to allow convergence with INIT_STREAM.
@@ -1436,7 +1444,7 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 
 	common.Debugf("Indexer::handleInitRecovery Stream: %v", streamId)
 
-	bucketRestartTs := msg.(*MsgRecovery).GetBucketRestartTs()
+	restartTs := msg.(*MsgRecovery).GetRestartTs()
 	var restartStreamIds []common.StreamId
 	var indexList []common.IndexInst
 
@@ -1473,9 +1481,9 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 	for _, streamId := range restartStreamIds {
 
 		cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
-			streamId:        streamId,
-			indexList:       indexList,
-			bucketRestartTs: bucketRestartTs}
+			streamId:  streamId,
+			indexList: indexList,
+			restartTs: restartTs}
 
 		//send stream update to timekeeper
 		if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", nil); !ok {
@@ -1488,16 +1496,73 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 		}
 
 		//send stream update to kv sender
-		if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", nil); !ok {
-			return
-		}
+		idx.kvSenderCmdCh <- cmd
+		if resp, ok := <-idx.kvSenderCmdCh; ok {
 
-		//now enable flush for the timekeeper as KV communication has been successful
-		/*
-			idx.tkCmdCh <- &MsgTKToggleFlush{mType: TK_ENABLE_FLUSH,
-				streamId: streamId}
-			<-idx.tkCmdCh
-		*/
+			switch resp.GetMsgType() {
+
+			case INDEXER_ROLLBACK:
+				idx.processRollback(resp)
+
+			case MSG_SUCCESS:
+				//nothing to do
+
+			default:
+				common.Errorf("Indexer::handleInitRecovery - Error from Projector %v", resp)
+
+			}
+		} else {
+			common.Errorf("Indexer::handleInitRecovery - Error communicating with KVSender "+
+				"processing Msg %v. Aborted.", resp)
+		}
+	}
+}
+
+func (idx *indexer) processRollback(msg Message) {
+
+	streamId := msg.(*MsgRollback).GetStreamId()
+
+	for {
+
+		switch streamId {
+
+		case common.CATCHUP_STREAM, common.INIT_STREAM:
+
+			//send to storage manager to rollback
+			idx.storageMgrCmdCh <- msg
+			res := <-idx.storageMgrCmdCh
+			//TODO check the message type to make sure there is no error
+			if res.GetMsgType() != MSG_ERROR {
+				rollbackTs := res.(*MsgRollback).GetRollbackTs()
+
+				//send to kv sender to restart vbucket
+				idx.kvSenderCmdCh <- &MsgRestartVbuckets{streamId: streamId,
+					restartTs: rollbackTs}
+				msg = <-idx.kvSenderCmdCh
+				if msg.GetMsgType() == MSG_SUCCESS {
+					//if KV sends success, we are done
+					return
+				}
+			} else {
+				common.Errorf("Indexer::processRollback Error during Rollback %v", res)
+			}
+
+		case common.MAINT_STREAM:
+
+			//send the rollbackTs in RestartVbuckets message
+			rollbackTs := msg.(*MsgRollback).GetRollbackTs()
+
+			//send to kv sender to restart vbucket
+			idx.kvSenderCmdCh <- &MsgRestartVbuckets{streamId: streamId,
+				restartTs: rollbackTs}
+			msg = <-idx.kvSenderCmdCh
+
+			if msg.GetMsgType() == MSG_SUCCESS {
+				return
+			}
+			//TODO right now this is infinite try, till KV agress to start the
+			//stream
+		}
 	}
 
 }

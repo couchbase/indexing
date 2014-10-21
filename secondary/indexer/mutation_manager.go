@@ -730,7 +730,7 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 
 //persistMutationQueue implements the actual persist for the queue
 func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
-	streamId common.StreamId, bucket string, ts Timestamp) {
+	streamId common.StreamId, bucket string, ts *common.TsVbuuid) {
 
 	m.flock.Lock()
 	defer m.flock.Unlock()
@@ -743,8 +743,9 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 		defer m.flusherWaitGroup.Done()
 
 		flusher := NewFlusher()
+		sts := getStabilityTSFromTsVbuuid(ts)
 		msgch := flusher.PersistUptoTS(q.queue,
-			streamId, m.indexInstMap, m.indexPartnMap, ts, stopch)
+			streamId, m.indexInstMap, m.indexPartnMap, sts, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
 
@@ -792,7 +793,7 @@ func (m *mutationMgr) handleDrainMutationQueue(cmd Message) {
 
 //drainMutationQueue implements the actual drain for the queue
 func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
-	streamId common.StreamId, bucket string, ts Timestamp) {
+	streamId common.StreamId, bucket string, ts *common.TsVbuuid) {
 
 	m.flock.Lock()
 	defer m.flock.Unlock()
@@ -805,8 +806,9 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 		defer m.flusherWaitGroup.Done()
 
 		flusher := NewFlusher()
+		sts := getStabilityTSFromTsVbuuid(ts)
 		msgch := flusher.DrainUptoTS(q.queue, streamId,
-			ts, stopch)
+			sts, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
 

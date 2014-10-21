@@ -82,6 +82,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case MUT_MGR_FLUSH_DONE:
 		s.handleCreateSnapshot(cmd)
 
+	case INDEXER_ROLLBACK:
+		s.handleRollback(cmd)
+
 	case UPDATE_INDEX_INSTANCE_MAP:
 		s.handleUpdateIndexInstMap(cmd)
 
@@ -99,7 +102,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	common.Debugf("StorageMgr::handleCreateSnapshot %v", cmd)
 
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
-	ts := cmd.(*MsgMutMgrFlushDone).GetTS()
+	tsVbuuid := cmd.(*MsgMutMgrFlushDone).GetTS()
 
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range s.indexPartnMap {
@@ -122,10 +125,18 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 					latestSnapshot := snapContainer.GetLatestSnapshot()
 
+					snapTs := NewTimestamp()
+					if latestSnapshot != nil {
+						snapTsVbuuid := latestSnapshot.Timestamp()
+						snapTs = getStabilityTSFromTsVbuuid(snapTsVbuuid)
+					}
+
+					ts := getStabilityTSFromTsVbuuid(tsVbuuid)
+
 					//if the flush TS is greater than the last snapshot TS
 					//TODO Is it better to have a IsDirty() in Slice interface
 					//rather than comparing the last snapshot?
-					if latestSnapshot == nil || ts.GreaterThan(latestSnapshot.Timestamp()) {
+					if latestSnapshot == nil || ts.GreaterThan(snapTs) {
 						//commit the outstanding data
 
 						common.Debugf("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
@@ -154,8 +165,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 									s.Close()
 								}
 							}
-							newTs := CopyTimestamp(ts)
-							newSnapshot.SetTimestamp(newTs)
+							newTsVbuuid := tsVbuuid.Copy()
+							newSnapshot.SetTimestamp(newTsVbuuid)
 							newSnapshot.Open()
 							snapContainer.Add(newSnapshot)
 							common.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
@@ -177,6 +188,78 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	s.supvCmdch <- &MsgSuccess{}
 
+}
+
+//handleRollback will rollback to given timestamp
+func (sm *storageMgr) handleRollback(cmd Message) {
+
+	streamId := cmd.(*MsgRollback).GetStreamId()
+	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
+
+	respTs := make(map[string]*common.TsVbuuid)
+
+	//for every index managed by this indexer
+	for idxInstId, partnMap := range sm.indexPartnMap {
+		idxInst := sm.indexInstMap[idxInstId]
+
+		//if this bucket needs to be rolled back
+		if ts, ok := rollbackTs[idxInst.Defn.Bucket]; ok {
+
+			//for all partitions managed by this indexer
+			for partnId, partnInst := range partnMap {
+				sc := partnInst.Sc
+
+				//rollback all slices
+				for _, slice := range sc.GetAllSlices() {
+					s := slice.GetSnapshotContainer()
+					snap := s.GetSnapshotOlderThanTS(ts)
+					if snap != nil {
+						err := slice.Rollback(snap)
+						if err == nil {
+							//remove all the snapshots recent than the TS rolled back to
+							s.RemoveRecentThanTS(snap.Timestamp())
+							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
+								"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
+								slice.Id(), snap)
+							respTs[idxInst.Defn.Bucket] = snap.Timestamp()
+						} else {
+							//send error response back
+							//TODO handle the case where some of the slices fail to rollback
+							sm.supvCmdch <- &MsgError{err: Error{code: STORAGE_MGR_ROLLBACK_FAIL,
+								severity: FATAL,
+								category: STORAGE_MGR,
+								cause:    err}}
+							return
+
+						}
+
+					} else {
+						//if there is no snapshot available, rollback to zero
+						err := slice.RollbackToZero()
+						if err == nil {
+							//remove all snapshots in container
+							s.RemoveAll()
+							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
+								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
+								slice.Id())
+							respTs[idxInst.Defn.Bucket] = common.NewTsVbuuid(idxInst.Defn.Bucket, int(NUM_VBUCKETS))
+						} else {
+							//send error response back
+							//TODO handle the case where some of the slices fail to rollback
+							sm.supvCmdch <- &MsgError{err: Error{code: STORAGE_MGR_ROLLBACK_FAIL,
+								severity: FATAL,
+								category: STORAGE_MGR,
+								cause:    err}}
+							return
+						}
+					}
+
+				}
+			}
+		}
+	}
+	sm.supvCmdch <- &MsgRollback{streamId: streamId,
+		rollbackTs: respTs}
 }
 
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {

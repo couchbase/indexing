@@ -126,22 +126,18 @@ func (ts *TsVbuuid) FromTsVbuuid(nativeTs *c.TsVbuuid) *TsVbuuid {
 }
 
 // ToTsVbuuid converts timestamp from protobuf format to common.TsVbuuid.
-// TODO: semantics of c.TsVbuuid has changed.
-//func (ts *TsVbuuid) ToTsVbuuid() *c.TsVbuuid {
-//    vbnos := make([]uint16, len(
-//    ss := make([][2]uint64, 0)
-//    for _, s := range ts.GetSnapshots() {
-//        ss = append(ss, [2]uint64{s.GetStart(), s.GetEnd()})
-//    }
-//    nativeTs := &c.TsVbuuid{
-//        Bucket:    ts.GetBucket(),
-//        Vbnos:     c.Vbno32to16(ts.GetVbnos()),
-//        Seqnos:    ts.GetSeqnos(),
-//        Vbuuids:   ts.GetVbuuids(),
-//        Snapshots: ss,
-//    }
-//    return nativeTs
-//}
+func (ts *TsVbuuid) ToTsVbuuid() *c.TsVbuuid {
+	ss := make([][2]uint64, 0)
+	for _, s := range ts.GetSnapshots() {
+		ss = append(ss, [2]uint64{s.GetStart(), s.GetEnd()})
+	}
+	nativeTs := c.NewTsVbuuid(ts.GetBucket(), len(ts.GetSeqnos()))
+	nativeTs.Bucket = ts.GetBucket()
+	nativeTs.Seqnos = ts.GetSeqnos()
+	nativeTs.Vbuuids = ts.GetVbuuids()
+	nativeTs.Snapshots = ss
+	return nativeTs
+}
 
 // Union will return a union set of timestamps based on
 // Vbuckets. Duplicate vbucket entries in `other` timestamp

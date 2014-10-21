@@ -61,7 +61,8 @@ const (
 	//KVSender
 	KV_SENDER_SHUTDOWN
 	KV_SENDER_GET_CURR_KV_TS
-	KV_SENDER_RESTART_VBLIST
+	KV_SENDER_RESTART_VBUCKETS
+	KV_SENDER_REPAIR_ENDPOINTS
 
 	//ADMIN_MGR
 	ADMIN_MGR_SHUTDOWN
@@ -77,6 +78,7 @@ const (
 	INDEXER_DROP_INDEX_DDL
 	INDEXER_PREPARE_RECOVERY
 	INDEXER_INITIATE_RECOVERY
+	INDEXER_ROLLBACK
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SCAN_INDEX
@@ -259,13 +261,13 @@ func (m *MsgUpdateBucketQueue) String() string {
 //CLOSE_STREAM
 //CLEANUP_STREAM
 type MsgStreamUpdate struct {
-	mType           MsgType
-	streamId        common.StreamId
-	indexList       []common.IndexInst
-	buildTs         Timestamp
-	respCh          MsgChannel
-	bucket          string
-	bucketRestartTs map[string]*common.TsVbuuid
+	mType     MsgType
+	streamId  common.StreamId
+	indexList []common.IndexInst
+	buildTs   Timestamp
+	respCh    MsgChannel
+	bucket    string
+	restartTs map[string]*common.TsVbuuid
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -292,8 +294,8 @@ func (m *MsgStreamUpdate) GetBucket() string {
 	return m.bucket
 }
 
-func (m *MsgStreamUpdate) GetBucketRestartTs() map[string]*common.TsVbuuid {
-	return m.bucketRestartTs
+func (m *MsgStreamUpdate) GetRestartTs() map[string]*common.TsVbuuid {
+	return m.restartTs
 }
 
 func (m *MsgStreamUpdate) String() string {
@@ -314,7 +316,7 @@ type MsgMutMgrFlushMutationQueue struct {
 	mType    MsgType
 	bucket   string
 	streamId common.StreamId
-	ts       Timestamp
+	ts       *common.TsVbuuid
 }
 
 func (m *MsgMutMgrFlushMutationQueue) GetMsgType() MsgType {
@@ -329,7 +331,7 @@ func (m *MsgMutMgrFlushMutationQueue) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgMutMgrFlushMutationQueue) GetTimestamp() Timestamp {
+func (m *MsgMutMgrFlushMutationQueue) GetTimestamp() *common.TsVbuuid {
 	return m.ts
 }
 
@@ -408,7 +410,7 @@ func (m *MsgUpdatePartnMap) String() string {
 //MUT_MGR_ABORT_DONE
 type MsgMutMgrFlushDone struct {
 	mType    MsgType
-	ts       Timestamp
+	ts       *common.TsVbuuid
 	streamId common.StreamId
 	bucket   string
 }
@@ -417,7 +419,7 @@ func (m *MsgMutMgrFlushDone) GetMsgType() MsgType {
 	return m.mType
 }
 
-func (m *MsgMutMgrFlushDone) GetTS() Timestamp {
+func (m *MsgMutMgrFlushDone) GetTS() *common.TsVbuuid {
 	return m.ts
 }
 
@@ -441,7 +443,7 @@ func (m *MsgMutMgrFlushDone) String() string {
 
 //TK_STABILITY_TIMESTAMP
 type MsgTKStabilityTS struct {
-	ts       Timestamp
+	ts       *common.TsVbuuid
 	streamId common.StreamId
 	bucket   string
 }
@@ -458,7 +460,7 @@ func (m *MsgTKStabilityTS) GetBucket() string {
 	return m.bucket
 }
 
-func (m *MsgTKStabilityTS) GetTimestamp() Timestamp {
+func (m *MsgTKStabilityTS) GetTimestamp() *common.TsVbuuid {
 	return m.ts
 }
 
@@ -673,59 +675,62 @@ func (m *MsgTKGetBucketHWT) String() string {
 
 }
 
-//KV_SENDER_RESTART_VBLIST
-type MsgRestartVbList struct {
+//KV_SENDER_RESTART_VBUCKETS
+type MsgRestartVbuckets struct {
 	streamId  common.StreamId
-	bucket    string
-	vbList    []Vbucket
-	ts        *common.TsVbuuid
-	indexList []common.IndexInst
+	restartTs map[string]*common.TsVbuuid
 }
 
-func (m *MsgRestartVbList) GetMsgType() MsgType {
-	return KV_SENDER_RESTART_VBLIST
+func (m *MsgRestartVbuckets) GetMsgType() MsgType {
+	return KV_SENDER_RESTART_VBUCKETS
 }
 
-func (m *MsgRestartVbList) GetStreamId() common.StreamId {
+func (m *MsgRestartVbuckets) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRestartVbList) GetBucket() string {
-	return m.bucket
+func (m *MsgRestartVbuckets) GetRestartTs() map[string]*common.TsVbuuid {
+	return m.restartTs
 }
 
-func (m *MsgRestartVbList) GetHWT() *common.TsVbuuid {
-	return m.ts
-}
-
-func (m *MsgRestartVbList) GetVbList() []Vbucket {
-	return m.vbList
-}
-
-func (m *MsgRestartVbList) GetIndexList() []common.IndexInst {
-	return m.indexList
-}
-
-func (m *MsgRestartVbList) String() string {
-
-	str := "\n\tMessage: MsgRestartVbList"
+func (m *MsgRestartVbuckets) String() string {
+	str := "\n\tMessage: MsgRestartVbuckets"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
-	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
-	str += fmt.Sprintf("\n\tTS Seqnos: %v", m.ts.Seqnos)
-	str += fmt.Sprintf("\n\tTS Vbuuids: %v", m.ts.Vbuuids)
-	str += fmt.Sprintf("\n\tTS Snapshots: %v", m.ts.Snapshots)
-	str += fmt.Sprintf("\n\tVbList: %v", m.vbList)
-	str += fmt.Sprintf("\n\tInstances: %v", m.indexList)
+	str += fmt.Sprintf("\n\tRestartTS: %v", m.restartTs)
 	return str
+}
 
+//KV_SENDER_REPAIR_ENDPOINTS
+type MsgRepairEndpoints struct {
+	streamId  common.StreamId
+	endpoints []string
+}
+
+func (m *MsgRepairEndpoints) GetMsgType() MsgType {
+	return KV_SENDER_REPAIR_ENDPOINTS
+}
+
+func (m *MsgRepairEndpoints) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgRepairEndpoints) GetEndpoints() []string {
+	return m.endpoints
+}
+
+func (m *MsgRepairEndpoints) String() string {
+	str := "\n\tMessage: MsgRepairEndpoints"
+	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
+	str += fmt.Sprintf("\n\tEndpoints: %v", m.endpoints)
+	return str
 }
 
 //INDEXER_PREPARE_RECOVERY
 //INDEXER_INITIATE_RECOVERY
 type MsgRecovery struct {
-	mType           MsgType
-	streamId        common.StreamId
-	bucketRestartTs map[string]*common.TsVbuuid
+	mType     MsgType
+	streamId  common.StreamId
+	restartTs map[string]*common.TsVbuuid
 }
 
 func (m *MsgRecovery) GetMsgType() MsgType {
@@ -736,8 +741,25 @@ func (m *MsgRecovery) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRecovery) GetBucketRestartTs() map[string]*common.TsVbuuid {
-	return m.bucketRestartTs
+func (m *MsgRecovery) GetRestartTs() map[string]*common.TsVbuuid {
+	return m.restartTs
+}
+
+type MsgRollback struct {
+	streamId   common.StreamId
+	rollbackTs map[string]*common.TsVbuuid
+}
+
+func (m *MsgRollback) GetMsgType() MsgType {
+	return INDEXER_ROLLBACK
+}
+
+func (m *MsgRollback) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgRollback) GetRollbackTs() map[string]*common.TsVbuuid {
+	return m.rollbackTs
 }
 
 //Helper function to return string for message type
@@ -811,8 +833,6 @@ func (m MsgType) String() string {
 		return "KV_SENDER_SHUTDOWN"
 	case KV_SENDER_GET_CURR_KV_TS:
 		return "KV_SENDER_GET_CURR_KV_TS"
-	case KV_SENDER_RESTART_VBLIST:
-		return "KV_SENDER_RESTART_VBLIST"
 
 	case ADMIN_MGR_SHUTDOWN:
 		return "ADMIN_MGR_SHUTDOWN"
@@ -829,6 +849,8 @@ func (m MsgType) String() string {
 		return "INDEXER_PREPARE_RECOVERY"
 	case INDEXER_INITIATE_RECOVERY:
 		return "INDEXER_INITIATE_RECOVERY"
+	case INDEXER_ROLLBACK:
+		return "INDEXER_ROLLBACK"
 
 	case SCAN_COORD_SCAN_INDEX:
 		return "SCAN_COORD_SCAN_INDEX"
@@ -854,6 +876,11 @@ func (m MsgType) String() string {
 		return "CLOSE_STREAM"
 	case CLEANUP_STREAM:
 		return "CLEANUP_STREAM"
+
+	case KV_SENDER_RESTART_VBUCKETS:
+		return "KV_SENDER_RESTART_VBUCKETS"
+	case KV_SENDER_REPAIR_ENDPOINTS:
+		return "KV_SENDER_REPAIR_ENDPOINTS"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

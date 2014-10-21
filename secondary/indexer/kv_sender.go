@@ -104,6 +104,12 @@ func (k *kvSender) handleSupvervisorCommands(cmd Message) {
 	case KV_SENDER_GET_CURR_KV_TS:
 		k.handleGetCurrKVTimestamp(cmd)
 
+	case KV_SENDER_RESTART_VBUCKETS:
+		k.handleRestartVbuckets(cmd)
+
+	case KV_SENDER_REPAIR_ENDPOINTS:
+		k.handleRepairEndpoints(cmd)
+
 	default:
 		c.Errorf("KVSender::handleSupvervisorCommands "+
 			"Received Unknown Command %v", cmd)
@@ -125,24 +131,26 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 	}
 
 	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
-	bucketRestartTs := cmd.(*MsgStreamUpdate).GetBucketRestartTs()
+	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
 
 	//start mutation stream, if error return to supervisor
-	resp := k.openMutationStream(streamId, indexInstList, bucketRestartTs)
-	if resp.GetMsgType() != MSG_SUCCESS {
+	resp := k.openMutationStream(streamId, indexInstList, restartTs)
+	if resp.GetMsgType() == MSG_SUCCESS ||
+		resp.GetMsgType() == INDEXER_ROLLBACK {
+		//increment index count for this bucket
+		bucketIndexCountMap := make(BucketIndexCountMap)
+		for _, indexInst := range indexInstList {
+			bucketIndexCountMap[indexInst.Defn.Bucket] += 1
+		}
+		k.streamBucketIndexCountMap[streamId] = bucketIndexCountMap
+
+		k.streamStatus[streamId] = true
 		k.supvCmdch <- resp
 		return
 	}
 
-	//increment index count for this bucket
-	bucketIndexCountMap := make(BucketIndexCountMap)
-	for _, indexInst := range indexInstList {
-		bucketIndexCountMap[indexInst.Defn.Bucket] += 1
-	}
-	k.streamBucketIndexCountMap[streamId] = bucketIndexCountMap
-
-	k.streamStatus[streamId] = true
-	k.supvCmdch <- &MsgSuccess{}
+	k.supvCmdch <- resp
+	return
 
 }
 
@@ -309,6 +317,44 @@ func (k *kvSender) handleCloseStream(cmd Message) {
 	k.supvCmdch <- resp
 }
 
+func (k *kvSender) handleRestartVbuckets(cmd Message) {
+
+	c.Infof("KVSender::handleRestartVbuckets %v", cmd)
+
+	streamId := cmd.(*MsgRestartVbuckets).GetStreamId()
+
+	if status, _ := k.streamStatus[streamId]; !status {
+		k.supvCmdch <- &MsgError{
+			err: Error{code: ERROR_KV_SENDER_UNKNOWN_STREAM,
+				severity: FATAL}}
+		return
+	}
+
+	restartTs := cmd.(*MsgRestartVbuckets).GetRestartTs()
+
+	resp := k.restartVbuckets(streamId, restartTs)
+	k.supvCmdch <- resp
+}
+
+func (k *kvSender) handleRepairEndpoints(cmd Message) {
+
+	c.Infof("KVSender::handleRepairEndpoints %v", cmd)
+
+	streamId := cmd.(*MsgRepairEndpoints).GetStreamId()
+
+	if status, _ := k.streamStatus[streamId]; !status {
+		k.supvCmdch <- &MsgError{
+			err: Error{code: ERROR_KV_SENDER_UNKNOWN_STREAM,
+				severity: FATAL}}
+		return
+	}
+
+	endpoints := cmd.(*MsgRepairEndpoints).GetEndpoints()
+
+	resp := k.repairEndpoints(streamId, endpoints)
+	k.supvCmdch <- resp
+}
+
 func (k *kvSender) handleGetCurrKVTimestamp(cmd Message) {
 
 	//TODO For now Indexer is getting the TS directly from
@@ -342,6 +388,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 
 	vbnosList := vbmap.GetKvvbnos()
 
+	rollbackTs := make(map[string]*protobuf.TsVbuuid)
 	//for all the nodes in vbmap
 	for i, kv := range vbmap.GetKvaddrs() {
 
@@ -373,13 +420,32 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		}
 
 		topic := getTopicForStreamId(streamId)
-		if _, errMsg := sendMutationTopicRequest(ap, topic, restartTsList, protoInstList); errMsg.GetMsgType() != MSG_SUCCESS {
+		if res, errMsg := sendMutationTopicRequest(ap, topic, restartTsList, protoInstList); errMsg.GetMsgType() != MSG_SUCCESS {
 			//TODO send message to all KVs to revert the previous requests sent
 			return errMsg
 		} else {
-			//TODO check if KV has asked us to rollback. Construct rollbackTs to be sent back to Indexer.
+			respTsList := res.GetRollbackTimestamps()
+			for _, respTs := range respTsList {
+				if respTs != nil {
+					if ts, ok := rollbackTs[respTs.GetBucket()]; ok {
+						ts.Union(respTs)
+					} else {
+						rollbackTs[respTs.GetBucket()] = respTs
+					}
+				}
+			}
+		}
+	}
+
+	if len(rollbackTs) != 0 {
+		//convert from protobuf to native format
+		nativeTs := make(map[string]*c.TsVbuuid)
+		for bucket, ts := range rollbackTs {
+			nativeTs[bucket] = ts.ToTsVbuuid()
 		}
 
+		return &MsgRollback{streamId: streamId,
+			rollbackTs: nativeTs}
 	}
 
 	return &MsgSuccess{}
@@ -573,6 +639,99 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string) Messa
 
 }
 
+func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs map[string]*c.TsVbuuid) Message {
+
+	//Get the Vbmap of all nodes in the cluster
+	vbmap, err := k.getVbmap(k.getAnyBucketName(), nil)
+	if err != nil {
+		c.Errorf("KVSender::restartVbuckets \n\t Error In GetVbMap %v", err)
+		return &MsgError{
+			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
+				severity: FATAL,
+				cause:    err}}
+	}
+
+	rollbackTs := make(map[string]*protobuf.TsVbuuid)
+	//for all the nodes in vbmap
+	for _, kv := range vbmap.GetKvaddrs() {
+
+		//get projector address from kv address
+		projAddr := getProjectorAddrFromKVAddr(kv)
+
+		//create client for node's projectors
+		ap := projector.NewClient(projAddr)
+
+		topic := getTopicForStreamId(streamId)
+
+		//convert TS to protobuf format
+		var protoRestartTs []*protobuf.TsVbuuid
+		for _, ts := range restartTs {
+			protoTs := protobuf.NewTsVbuuid(DEFAULT_POOL, ts.Bucket, int(NUM_VBUCKETS))
+			protoRestartTs = append(protoRestartTs, protoTs.FromTsVbuuid(ts))
+		}
+
+		if res, errMsg := sendRestartVbuckets(ap, topic, protoRestartTs); errMsg.GetMsgType() != MSG_SUCCESS {
+			//TODO send message to all KVs to revert the previous requests sent
+			return errMsg
+		} else {
+			respTsList := res.GetRollbackTimestamps()
+			for _, respTs := range respTsList {
+				if respTs != nil {
+					if ts, ok := rollbackTs[respTs.GetBucket()]; ok {
+						ts.Union(respTs)
+					} else {
+						rollbackTs[respTs.GetBucket()] = respTs
+					}
+				}
+			}
+		}
+	}
+
+	if len(rollbackTs) != 0 {
+		//convert from protobuf to native format
+		nativeTs := make(map[string]*c.TsVbuuid)
+		for bucket, ts := range rollbackTs {
+			nativeTs[bucket] = ts.ToTsVbuuid()
+		}
+		return &MsgRollback{streamId: streamId,
+			rollbackTs: nativeTs}
+	} else {
+		return &MsgSuccess{}
+	}
+}
+
+func (k *kvSender) repairEndpoints(streamId c.StreamId, endpoints []string) Message {
+
+	//Get the Vbmap of all nodes in the cluster
+	vbmap, err := k.getVbmap(k.getAnyBucketName(), nil)
+	if err != nil {
+		c.Errorf("KVSender::repairEndpoints \n\t Error In GetVbMap %v", err)
+		return &MsgError{
+			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
+				severity: FATAL,
+				cause:    err}}
+	}
+
+	//for all the nodes in vbmap
+	for _, kv := range vbmap.GetKvaddrs() {
+
+		//get projector address from kv address
+		projAddr := getProjectorAddrFromKVAddr(kv)
+
+		//create client for node's projectors
+		ap := projector.NewClient(projAddr)
+
+		topic := getTopicForStreamId(streamId)
+
+		if errMsg := sendRepairEndpoints(ap, topic, endpoints); errMsg.GetMsgType() != MSG_SUCCESS {
+			return errMsg
+		}
+
+	}
+
+	return &MsgSuccess{}
+}
+
 //send the actual MutationStreamRequest on adminport
 func sendMutationTopicRequest(ap *projClient.Client, topic string,
 	reqTimestamps []*protobuf.TsVbuuid,
@@ -757,6 +916,78 @@ func sendDelBucketsRequest(ap *projClient.Client,
 		}
 	}
 
+}
+
+func sendRestartVbuckets(ap *projector.Client,
+	topic string,
+	restartTs []*protobuf.TsVbuuid) (*protobuf.TopicResponse, Message) {
+
+	c.Debugf("KVSender::sendRestartVbuckets Projector %v Topic %v RestartTs %v",
+		ap, topic, restartTs)
+
+	sleepTime := 1
+	retry := 0
+
+	for {
+		if res, err := ap.RestartVbuckets(topic, restartTs); err != nil {
+			if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
+				c.Errorf("KVSender::sendRestartVbuckets \n\tError Connecting to Projector %v. "+
+					"Retry in %v seconds... \n\t Error %v ", ap, sleepTime, err)
+				time.Sleep(time.Duration(sleepTime) * time.Second)
+				sleepTime *= 2
+				retry++
+			} else {
+				c.Errorf("KVSender::sendRestartVbuckets \n\tUnexpected Error During "+
+					"Restart Vbuckets Request for Topic %v. Err %v.",
+					topic, err)
+
+				return res, &MsgError{
+					err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
+						severity: FATAL,
+						cause:    err}}
+			}
+		} else {
+
+			c.Debugf("KVSender::sendRestartVbuckets \n\tRestartVbuckets Response %v", res)
+
+			return res, &MsgSuccess{}
+		}
+	}
+}
+
+func sendRepairEndpoints(ap *projector.Client,
+	topic string,
+	endpoints []string) Message {
+
+	c.Debugf("KVSender::sendRepairEndpoints Projector %v Topic %v Endpoints %v",
+		ap, topic, endpoints)
+
+	sleepTime := 1
+	retry := 0
+
+	for {
+		if err := ap.RepairEndpoints(topic, endpoints); err != nil {
+			if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
+				c.Errorf("KVSender::sendRepairEndpoints \n\tError Connecting to Projector %v. "+
+					"Retry in %v seconds... \n\t Err %v", ap, sleepTime, err)
+				time.Sleep(time.Duration(sleepTime) * time.Second)
+				sleepTime *= 2
+				retry++
+			} else {
+				c.Errorf("KVSender::sendRepairEndpoints \n\tUnexpected Error During "+
+					"Repair Endpoints Request Topic %v Endpoints %v. Err %v",
+					topic, endpoints, err)
+
+				return &MsgError{
+					err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
+						severity: FATAL,
+						cause:    err}}
+			}
+		} else {
+			return &MsgSuccess{}
+
+		}
+	}
 }
 
 //send the actual ShutdownStreamRequest on adminport

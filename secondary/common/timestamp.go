@@ -79,6 +79,15 @@ func (ts *TsVbuuid) Len() int {
 	return len(ts.Seqnos)
 }
 
+func (ts *TsVbuuid) Copy() *TsVbuuid {
+
+	newTs := NewTsVbuuid(ts.Bucket, len(ts.Seqnos))
+	copy(newTs.Seqnos, ts.Seqnos)
+	copy(newTs.Vbuuids, ts.Vbuuids)
+	copy(newTs.Snapshots, ts.Snapshots)
+	return newTs
+}
+
 //TODO: As TsVbuuid acts like a array now, the below helper functions are
 //no longer required. These can be deleted, once we are sure these are not
 //going to required.
