@@ -225,7 +225,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
-							sm.supvCmdch <- &MsgError{err: Error{code: STORAGE_MGR_ROLLBACK_FAIL,
+							sm.supvCmdch <- &MsgError{err: Error{code: ERROR_STORAGE_MGR_ROLLBACK_FAIL,
 								severity: FATAL,
 								category: STORAGE_MGR,
 								cause:    err}}
@@ -246,7 +246,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
-							sm.supvCmdch <- &MsgError{err: Error{code: STORAGE_MGR_ROLLBACK_FAIL,
+							sm.supvCmdch <- &MsgError{err: Error{code: ERROR_STORAGE_MGR_ROLLBACK_FAIL,
 								severity: FATAL,
 								category: STORAGE_MGR,
 								cause:    err}}

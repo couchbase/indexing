@@ -659,7 +659,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs map[string]*c.
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := projector.NewClient(projAddr)
+		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
 
 		topic := getTopicForStreamId(streamId)
 
@@ -719,7 +719,7 @@ func (k *kvSender) repairEndpoints(streamId c.StreamId, endpoints []string) Mess
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := projector.NewClient(projAddr)
+		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
 
 		topic := getTopicForStreamId(streamId)
 
@@ -918,7 +918,7 @@ func sendDelBucketsRequest(ap *projClient.Client,
 
 }
 
-func sendRestartVbuckets(ap *projector.Client,
+func sendRestartVbuckets(ap *projClient.Client,
 	topic string,
 	restartTs []*protobuf.TsVbuuid) (*protobuf.TopicResponse, Message) {
 
@@ -955,7 +955,7 @@ func sendRestartVbuckets(ap *projector.Client,
 	}
 }
 
-func sendRepairEndpoints(ap *projector.Client,
+func sendRepairEndpoints(ap *projClient.Client,
 	topic string,
 	endpoints []string) Message {
 

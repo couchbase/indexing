@@ -53,25 +53,25 @@ type indexer struct {
 	shutdownInitCh     MsgChannel //internal shutdown channel for indexer
 	shutdownCompleteCh MsgChannel //indicate shutdown completion
 
-	mutMgrCmdCh         MsgChannel //channel to send commands to mutation manager
-	storageMgrCmdCh     MsgChannel //channel to send commands to storage manager
-	tkCmdCh             MsgChannel //channel to send commands to timekeeper
-	adminMgrCmdCh       MsgChannel //channel to send commands to admin port manager
-	clustMgrSenderCmdCh MsgChannel //channel to send messages to index coordinator
-	kvSenderCmdCh       MsgChannel //channel to send messages to kv sender
-	cbqBridgeCmdCh      MsgChannel //channel to send message to cbq sender
-	scanCoordCmdCh      MsgChannel //chhannel to send messages to scan coordinator
+	mutMgrCmdCh        MsgChannel //channel to send commands to mutation manager
+	storageMgrCmdCh    MsgChannel //channel to send commands to storage manager
+	tkCmdCh            MsgChannel //channel to send commands to timekeeper
+	adminMgrCmdCh      MsgChannel //channel to send commands to admin port manager
+	clustMgrAgentCmdCh MsgChannel //channel to send messages to index coordinator
+	kvSenderCmdCh      MsgChannel //channel to send messages to kv sender
+	cbqBridgeCmdCh     MsgChannel //channel to send message to cbq sender
+	scanCoordCmdCh     MsgChannel //chhannel to send messages to scan coordinator
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
 
-	tk             Timekeeper      //handle to timekeeper
-	storageMgr     StorageManager  //handle to storage manager
-	mutMgr         MutationManager //handle to mutation manager
-	adminMgr       AdminManager    //handle to admin port manager
-	clustMgrSender ClustMgrSender  //handle to ClustMgrSender
-	kvSender       KVSender        //handle to KVSender
-	cbqBridge      CbqBridge       //handle to CbqBridge
-	scanCoord      ScanCoordinator //handle to ScanCoordinator
+	tk            Timekeeper      //handle to timekeeper
+	storageMgr    StorageManager  //handle to storage manager
+	mutMgr        MutationManager //handle to mutation manager
+	adminMgr      AdminManager    //handle to admin port manager
+	clustMgrAgent ClustMgrAgent   //handle to ClustMgrAgent
+	kvSender      KVSender        //handle to KVSender
+	cbqBridge     CbqBridge       //handle to CbqBridge
+	scanCoord     ScanCoordinator //handle to ScanCoordinator
 
 }
 
@@ -80,18 +80,18 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	idx := &indexer{
 		wrkrRecvCh:         make(MsgChannel),
 		internalRecvCh:     make(MsgChannel, WORKER_MSG_QUEUE_LEN),
-		adminRecvCh:        make(MsgChannel),
+		adminRecvCh:        make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		shutdownInitCh:     make(MsgChannel),
 		shutdownCompleteCh: make(MsgChannel),
 
-		mutMgrCmdCh:         make(MsgChannel),
-		storageMgrCmdCh:     make(MsgChannel),
-		tkCmdCh:             make(MsgChannel),
-		adminMgrCmdCh:       make(MsgChannel),
-		clustMgrSenderCmdCh: make(MsgChannel),
-		kvSenderCmdCh:       make(MsgChannel),
-		cbqBridgeCmdCh:      make(MsgChannel),
-		scanCoordCmdCh:      make(MsgChannel),
+		mutMgrCmdCh:        make(MsgChannel),
+		storageMgrCmdCh:    make(MsgChannel),
+		tkCmdCh:            make(MsgChannel),
+		adminMgrCmdCh:      make(MsgChannel),
+		clustMgrAgentCmdCh: make(MsgChannel),
+		kvSenderCmdCh:      make(MsgChannel),
+		cbqBridgeCmdCh:     make(MsgChannel),
+		scanCoordCmdCh:     make(MsgChannel),
 
 		mutMgrExitCh: make(MsgChannel),
 
@@ -118,9 +118,9 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	idx.initStreamAddressMap()
 
 	var res Message
-	idx.clustMgrSender, res = NewClustMgrSender(idx.clustMgrSenderCmdCh, idx.wrkrRecvCh)
+	idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
-		common.Errorf("Indexer::NewIndexer ClusterMgrSender Init Error", res)
+		common.Errorf("Indexer::NewIndexer ClusterMgrAgent Init Error", res)
 		return nil, res
 	}
 
@@ -382,11 +382,35 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 
 	switch msg.GetMsgType() {
 
-	case INDEXER_CREATE_INDEX_DDL:
+	case CBQ_CREATE_INDEX_DDL:
+
+		//send the msg to cluster mgr
+		idx.clustMgrAgentCmdCh <- msg
+		res := <-idx.clustMgrAgentCmdCh
+
+		//send response
+		respCh := msg.(*MsgCreateIndex).GetResponseChannel()
+		if respCh != nil {
+			respCh <- res
+		}
+
+	case CBQ_DROP_INDEX_DDL:
+
+		//send the msg to cluster mgr
+		idx.clustMgrAgentCmdCh <- msg
+		res := <-idx.clustMgrAgentCmdCh
+
+		//send response
+		respCh := msg.(*MsgDropIndex).GetResponseChannel()
+		if respCh != nil {
+			respCh <- res
+		}
+
+	case CLUST_MGR_CREATE_INDEX_DDL:
 
 		idx.handleCreateIndex(msg)
 
-	case INDEXER_DROP_INDEX_DDL:
+	case CLUST_MGR_DROP_INDEX_DDL:
 
 		idx.handleDropIndex(msg)
 
@@ -395,7 +419,6 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 		idx.handleScanIndex(msg)
 
 	default:
-
 		common.Errorf("Indexer::handleAdminMsgs Unknown Message %v", msg)
 
 	}
@@ -547,11 +570,13 @@ func (idx *indexer) handleDropIndex(msg Message) {
 
 		common.Errorf("Indexer::handleDropIndex Unknown IndexInstId", indexInstId)
 
-		respCh <- &MsgError{
-			err: Error{code: ERROR_INDEXER_UNKNOWN_INDEX,
-				severity: FATAL,
-				cause:    errors.New("Index Unknown"),
-				category: INDEXER}}
+		if respCh != nil {
+			respCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_UNKNOWN_INDEX,
+					severity: FATAL,
+					cause:    errors.New("Index Unknown"),
+					category: INDEXER}}
+		}
 	}
 
 	//update internal maps
@@ -633,8 +658,8 @@ func (idx *indexer) shutdownWorkers() {
 	<-idx.adminMgrCmdCh
 
 	//shutdown cluster manager
-	idx.clustMgrSenderCmdCh <- &MsgGeneral{mType: CLUST_MGR_SENDER_SHUTDOWN}
-	<-idx.clustMgrSenderCmdCh
+	idx.clustMgrAgentCmdCh <- &MsgGeneral{mType: CLUST_MGR_AGENT_SHUTDOWN}
+	<-idx.clustMgrAgentCmdCh
 
 	//shutdown kv sender
 	idx.kvSenderCmdCh <- &MsgGeneral{mType: KV_SENDER_SHUTDOWN}
@@ -855,12 +880,14 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			common.Errorf("Indexer::initPartnInstance Error creating slice %v. Abort.",
 				err)
 
-			respCh <- &MsgError{
-				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
-					severity: FATAL,
-					cause:    errors.New("Indexer Internal Error"),
-					category: INDEXER}}
-			return nil, false
+			if respCh != nil {
+				respCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+						severity: FATAL,
+						cause:    errors.New("Indexer Internal Error"),
+						category: INDEXER}}
+				return nil, false
+			}
 		}
 	}
 
@@ -964,11 +991,13 @@ func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 		common.Errorf("Indexer::checkDuplicateIndex Duplicate Index Instance. "+
 			"IndexInstId: %v, Index: %v", indexInst.InstId, index)
 
-		respCh <- &MsgError{
-			err: Error{code: ERROR_INDEX_ALREADY_EXISTS,
-				severity: FATAL,
-				cause:    errors.New("Duplicate Index Instance"),
-				category: INDEXER}}
+		if respCh != nil {
+			respCh <- &MsgError{
+				err: Error{code: ERROR_INDEX_ALREADY_EXISTS,
+					severity: FATAL,
+					cause:    errors.New("Duplicate Index Instance"),
+					category: INDEXER}}
+		}
 		return false
 	}
 
@@ -982,11 +1011,13 @@ func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 			common.Errorf("Indexer::checkDuplicateIndex Duplicate Index Name. "+
 				"Name: %v, Duplicate Index: %v", indexInst.Defn.Name, index)
 
-			respCh <- &MsgError{
-				err: Error{code: ERROR_INDEX_ALREADY_EXISTS,
-					severity: FATAL,
-					cause:    errors.New("Duplicate Index Name"),
-					category: INDEXER}}
+			if respCh != nil {
+				respCh <- &MsgError{
+					err: Error{code: ERROR_INDEX_ALREADY_EXISTS,
+						severity: FATAL,
+						cause:    errors.New("Duplicate Index Name"),
+						category: INDEXER}}
+			}
 			return false
 		}
 
@@ -1011,11 +1042,13 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(indexInst common.IndexInst
 				"Builds On A Bucket Are Not Supported By Indexer."
 
 			common.Errorf(errStr)
-			respCh <- &MsgError{
-				err: Error{code: ERROR_INDEX_BUILD_IN_PROGRESS,
-					severity: FATAL,
-					cause:    errors.New(errStr),
-					category: INDEXER}}
+			if respCh != nil {
+				respCh <- &MsgError{
+					err: Error{code: ERROR_INDEX_BUILD_IN_PROGRESS,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+			}
 			return false
 		}
 	}
@@ -1105,7 +1138,10 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	}
 
 	//send success to response channel
-	respCh <- &MsgSuccess{}
+
+	if respCh != nil {
+		respCh <- &MsgSuccess{}
+	}
 }
 
 func (idx *indexer) handleMergeStream(msg Message) {

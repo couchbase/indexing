@@ -114,25 +114,28 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 		PartitionScheme: common.TEST,
 		PartitionKey:    indexinfo.OnExprList[0]}
 
-	pc := common.NewKeyPartitionContainer()
+	/*
+		pc := common.NewKeyPartitionContainer()
 
-	//Add one partition for now
-	endpt := []common.Endpoint{INDEXER_MAINT_DATA_PORT_ENDPOINT}
-	partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
-		Endpts: endpt}
-	pc.AddPartition(common.PartitionId(1), partnDefn)
+		//Add one partition for now
+		endpt := []common.Endpoint{INDEXER_MAINT_DATA_PORT_ENDPOINT}
+		partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
+			Endpts: endpt}
+		pc.AddPartition(common.PartitionId(1), partnDefn)
+	*/
 
 	idxInst := common.IndexInst{InstId: common.IndexInstId(uuid),
 		Defn:  idxDefn,
 		State: common.INDEX_STATE_INITIAL,
-		Pc:    pc,
+		//Pc:    pc,
 	}
 
 	indexinfo.Uuid = strconv.Itoa(uuid)
 
 	respCh := make(MsgChannel)
-	cbq.supvRespch <- &MsgCreateIndex{indexInst: idxInst,
-		respCh: respCh}
+	cbq.supvRespch <- &MsgCreateIndex{mType: CBQ_CREATE_INDEX_DDL,
+		indexInst: idxInst,
+		respCh:    respCh}
 
 	//wait for response from indexer
 	msg := <-respCh
@@ -170,8 +173,9 @@ func (cbq *cbqBridge) handleDrop(w http.ResponseWriter, r *http.Request) {
 	uuid, _ := strconv.Atoi(indexinfo.Uuid)
 
 	respCh := make(MsgChannel)
-	cbq.supvRespch <- &MsgDropIndex{indexInstId: common.IndexInstId(uuid),
-		respCh: respCh}
+	cbq.supvRespch <- &MsgDropIndex{mType: CBQ_DROP_INDEX_DDL,
+		indexInstId: common.IndexInstId(uuid),
+		respCh:      respCh}
 
 	//wait for response from indexer
 	msg := <-respCh

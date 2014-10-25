@@ -183,9 +183,9 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 
 	// TODO: Make request id a string
 	id := uint64(time.Now().UnixNano())
-	if !m.coordinator.NewRequest(id, uint32(OPCODE_ADD_IDX_DEFN), defn.Name, content) {
+	if !m.coordinator.NewRequest(id, uint32(OPCODE_ADD_IDX_DEFN), defn.Bucket+"/"+defn.Name, content) {
 		// TODO: double check if it exists in the dictionary
-		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, INDEX_MANAGER, nil, 
+		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, INDEX_MANAGER, nil,
 			fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
 	}
 
@@ -198,7 +198,7 @@ func (m *IndexManager) HandleDeleteIndexDDL(name string) error {
 	id := uint64(time.Now().UnixNano())
 	if !m.coordinator.NewRequest(id, uint32(OPCODE_DEL_IDX_DEFN), name, nil) {
 		// TODO: double check if it exists in the dictionary
-		return NewError(ERROR_MGR_DDL_DROP_IDX, NORMAL, INDEX_MANAGER, nil, 
+		return NewError(ERROR_MGR_DDL_DROP_IDX, NORMAL, INDEX_MANAGER, nil,
 			fmt.Sprintf("Fail to complete processing delete index statement for index '%s'", name))
 	}
 

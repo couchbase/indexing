@@ -68,14 +68,16 @@ const (
 	ADMIN_MGR_SHUTDOWN
 
 	//CLUSTER_MGR
-	CLUST_MGR_SENDER_SHUTDOWN
+	CLUST_MGR_AGENT_SHUTDOWN
+	CLUST_MGR_CREATE_INDEX_DDL
+	CLUST_MGR_DROP_INDEX_DDL
 
 	//CBQ_BRIDGE_SHUTDOWN
 	CBQ_BRIDGE_SHUTDOWN
+	CBQ_CREATE_INDEX_DDL
+	CBQ_DROP_INDEX_DDL
 
 	//INDEXER
-	INDEXER_CREATE_INDEX_DDL
-	INDEXER_DROP_INDEX_DDL
 	INDEXER_PREPARE_RECOVERY
 	INDEXER_INITIATE_RECOVERY
 	INDEXER_ROLLBACK
@@ -545,14 +547,16 @@ func (m *MsgTKToggleFlush) GetBucket() string {
 	return m.bucket
 }
 
-//INDEXER_CREATE_INDEX_DDL
+//CBQ_CREATE_INDEX_DDL
+//CLUST_MGR_CREATE_INDEX_DDL
 type MsgCreateIndex struct {
+	mType     MsgType
 	indexInst common.IndexInst
 	respCh    MsgChannel
 }
 
 func (m *MsgCreateIndex) GetMsgType() MsgType {
-	return INDEXER_CREATE_INDEX_DDL
+	return m.mType
 }
 
 func (m *MsgCreateIndex) GetIndexInst() common.IndexInst {
@@ -566,18 +570,21 @@ func (m *MsgCreateIndex) GetResponseChannel() MsgChannel {
 func (m *MsgCreateIndex) GetString() string {
 
 	str := "\n\tMessage: MsgCreateIndex"
+	str += fmt.Sprintf("\n\tType: %v", m.mType)
 	str += fmt.Sprintf("\n\tIndex: %v", m.indexInst)
 	return str
 }
 
-//INDEXER_DROP_INDEX_DDL
+//CBQ_DROP_INDEX_DDL
+//CLUST_MGR_DROP_INDEX_DDL
 type MsgDropIndex struct {
+	mType       MsgType
 	indexInstId common.IndexInstId
 	respCh      MsgChannel
 }
 
 func (m *MsgDropIndex) GetMsgType() MsgType {
-	return INDEXER_DROP_INDEX_DDL
+	return m.mType
 }
 
 func (m *MsgDropIndex) GetIndexInstId() common.IndexInstId {
@@ -591,6 +598,7 @@ func (m *MsgDropIndex) GetResponseChannel() MsgChannel {
 func (m *MsgDropIndex) GetString() string {
 
 	str := "\n\tMessage: MsgDropIndex"
+	str += fmt.Sprintf("\n\tType: %v", m.mType)
 	str += fmt.Sprintf("\n\tIndex: %v", m.indexInstId)
 	return str
 }
@@ -836,15 +844,11 @@ func (m MsgType) String() string {
 
 	case ADMIN_MGR_SHUTDOWN:
 		return "ADMIN_MGR_SHUTDOWN"
-	case CLUST_MGR_SENDER_SHUTDOWN:
-		return "CLUST_MGR_SENDER_SHUTDOWN"
+	case CLUST_MGR_AGENT_SHUTDOWN:
+		return "CLUST_MGR_AGENT_SHUTDOWN"
 	case CBQ_BRIDGE_SHUTDOWN:
 		return "CBQ_BRIDGE_SHUTDOWN"
 
-	case INDEXER_CREATE_INDEX_DDL:
-		return "INDEXER_CREATE_INDEX_DDL"
-	case INDEXER_DROP_INDEX_DDL:
-		return "INDEXER_DROP_INDEX_DDL"
 	case INDEXER_PREPARE_RECOVERY:
 		return "INDEXER_PREPARE_RECOVERY"
 	case INDEXER_INITIATE_RECOVERY:
@@ -881,6 +885,16 @@ func (m MsgType) String() string {
 		return "KV_SENDER_RESTART_VBUCKETS"
 	case KV_SENDER_REPAIR_ENDPOINTS:
 		return "KV_SENDER_REPAIR_ENDPOINTS"
+
+	case CLUST_MGR_CREATE_INDEX_DDL:
+		return "CLUST_MGR_CREATE_INDEX_DDL"
+	case CLUST_MGR_DROP_INDEX_DDL:
+		return "CLUST_MGR_DROP_INDEX_DDL"
+
+	case CBQ_CREATE_INDEX_DDL:
+		return "CBQ_CREATE_INDEX_DDL"
+	case CBQ_DROP_INDEX_DDL:
+		return "CBQ_DROP_INDEX_DDL"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

@@ -93,3 +93,10 @@ const SLICE_COMMIT_POLL_INTERVAL = 20
 
 //Default Number of threads for a Slice Writer
 const NUM_WRITER_THREADS_PER_SLICE = 2
+
+//GoMeta specific
+const GOMETA_REQUEST_ADDR = "localhost:9885"
+const GOMETA_LEADER_ADDR = "localhost:9884"
+
+//Index Manager
+const INDEX_MANAGER_CONFIG = "./config.json"
