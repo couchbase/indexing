@@ -18,6 +18,8 @@ import (
 	"net/rpc"
 	"sync"
 	"strings"
+	"strconv"
+	"math/rand"
 )
 
 type MetadataRepo struct {
@@ -50,6 +52,7 @@ type Reply struct {
 
 func NewMetadataRepo(requestAddr string,
 	leaderAddr string,
+	config string,
 	mgr *IndexManager) (*MetadataRepo, error) {
 
 	// Initialize local repository
@@ -61,7 +64,13 @@ func NewMetadataRepo(requestAddr string,
 	// This is a blocking call unit the watcher is ready.  This means
 	// the watcher has succesfully synchronized with the remote metadata
 	// repository.
-	watcher, err := startWatcher(mgr, repository, leaderAddr)
+	var watcherId string = strconv.FormatUint(uint64(rand.Uint32()), 10)
+	env, err := newEnv(config)
+	if err == nil {
+		watcherId = env.getHostElectionPort()
+	}
+
+	watcher, err := startWatcher(mgr, repository, leaderAddr, watcherId)
 	if err != nil {
 		return nil, err
 	}

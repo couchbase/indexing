@@ -60,6 +60,17 @@ func (e *env) getHostUDPAddr() string {
 	return e.hostUDPAddr.String()
 }
 
+func (e *env) getHostElectionPort() string {
+
+	_, port, err := net.SplitHostPort(e.hostUDPAddr.String())
+	if err != nil {
+		port = e.hostUDPAddr.String()
+	}
+
+	return port
+}
+
+
 func (e *env) getHostTCPAddr() string {
 	return e.hostTCPAddr.String()
 }

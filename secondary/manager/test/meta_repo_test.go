@@ -28,7 +28,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 	var addr = "localhost:9885"
 	var leader = "localhost:9884"
 
-	repo, err := manager.NewMetadataRepo(addr, leader, nil)
+	repo, err := manager.NewMetadataRepo(addr, leader, "./config.json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

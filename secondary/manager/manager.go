@@ -42,7 +42,7 @@ func NewIndexManager(requestAddr string,
 	// Initialize MetadataRepo.  This a blocking call until the
 	// the metadataRepo (including watcher) is operational (e.g.
 	// finish sync with remote metadata repo master).
-	mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, mgr)
+	mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, config, mgr)
 	if err != nil {
 		return nil, err
 	}

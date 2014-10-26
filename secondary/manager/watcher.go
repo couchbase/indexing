@@ -65,7 +65,8 @@ type notificationHandle struct {
 
 func startWatcher(mgr *IndexManager,
 	repo *repo.Repository,
-	leaderAddr string) (s *watcher, err error) {
+	leaderAddr string,
+	watcherId string) (s *watcher, err error) {
 
 	s = new(watcher)
 
@@ -77,7 +78,7 @@ func startWatcher(mgr *IndexManager,
 	s.observeProposed = make(map[common.Txnid]*observeHandle)
 	s.notifications = make(map[common.Txnid]*notificationHandle)
 
-	s.watcherAddr, err = getWatcherAddr()
+	s.watcherAddr, err = getWatcherAddr(watcherId)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +229,7 @@ func newNotificationHandle(key string, evtType EventType, content []byte) *notif
 // Private Function
 /////////////////////////////////////////////////////////////////////////////
 
-func getWatcherAddr() (string, error) {
+func getWatcherAddr(watcherId string) (string, error) {
 
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -244,11 +245,11 @@ func getWatcherAddr() (string, error) {
 		switch s := addr.(type) {
 		case *net.IPAddr:
 			if s.IP.IsGlobalUnicast() {
-				return fmt.Sprintf("%s:indexer:watcher", addr.String()), nil
+				return fmt.Sprintf("%s:indexer:watcher:%s", addr.String(), watcherId), nil
 			}
 		case *net.IPNet:
 			if s.IP.IsGlobalUnicast() {
-				return fmt.Sprintf("%s:indexer:watcher", addr.String()), nil
+				return fmt.Sprintf("%s:indexer:watcher:%s", addr.String(), watcherId), nil
 			}
 		}
 	}
