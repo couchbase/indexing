@@ -197,6 +197,7 @@ func (p *Projector) doMutationTopic(
 	config.Set("kvAddrs", pconf["kvAddrs"])
 	config.Set("feedWaitStreamReqTimeout", pconf["feedWaitStreamReqTimeout"])
 	config.Set("feedWaitStreamEndTimeout", pconf["feedWaitStreamEndTimeout"])
+	config.Set("feedChanSize", pconf["feedChanSize"])
 	config.Set("routerEndpointFactory", pconf["routerEndpointFactory"])
 
 	feed = NewFeed(topic, config)

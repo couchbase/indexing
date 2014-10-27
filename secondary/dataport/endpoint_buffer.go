@@ -20,7 +20,7 @@ func (b *endpointBuffers) addKeyVersions(
 	if kv != nil && kv.Length() > 0 {
 		uuid := c.StreamID(bucket, vbno)
 		if _, ok := b.vbs[uuid]; !ok {
-			nMuts := 10 // TODO: avoid magic numbers
+			nMuts := 16 // to avoid reallocs.
 			b.vbs[uuid] = c.NewVbKeyVersions(bucket, vbno, vbuuid, nMuts)
 		}
 		b.vbs[uuid].AddKeyVersions(kv)

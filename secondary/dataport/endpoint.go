@@ -161,6 +161,7 @@ func (endpoint *RouterEndpoint) run(
 	vbmapCount := float64(0)
 	flushCount := float64(0)
 
+	// TODO: implement flow control by checking for ErrorChannelFull.
 	flushBuffers := func() error {
 		l := len(buffers.vbs)
 		if l == 0 {

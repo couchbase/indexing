@@ -56,8 +56,10 @@ type Client struct {
 	reqch chan []interface{}
 	finch chan bool
 	// miscellaneous
+	maxVbuckets   int
 	mutChanSize   int
 	maxPayload    int
+	bufferSize    int
 	bufferTimeout time.Duration
 	logPrefix     string
 }
@@ -81,14 +83,17 @@ func NewClient(
 	}
 
 	c = &Client{
-		raddr:         raddr,
-		conns:         make(map[int]net.Conn),
-		connChans:     make(map[int]chan interface{}),
-		conn2Vbs:      make(map[int][]string),
-		reqch:         make(chan []interface{}, mutChanSize),
-		finch:         make(chan bool),
+		raddr:     raddr,
+		conns:     make(map[int]net.Conn),
+		connChans: make(map[int]chan interface{}),
+		conn2Vbs:  make(map[int][]string),
+		reqch:     make(chan []interface{}, mutChanSize),
+		finch:     make(chan bool),
+		// configuration parameters
+		maxVbuckets:   config["maxVbuckets"].Int(),
 		mutChanSize:   mutChanSize,
 		maxPayload:    econf["maxPayload"].Int(),
+		bufferSize:    econf["bufferSize"].Int(),
 		bufferTimeout: time.Duration(econf["bufferTimeout"].Int()),
 		logPrefix:     fmt.Sprintf("[DataportClient:%q]", raddr),
 	}
@@ -101,7 +106,7 @@ func NewClient(
 		}
 		c.conns[i] = conn
 		c.connChans[i] = make(chan interface{}, mutChanSize)
-		c.conn2Vbs[i] = make([]string, 0, 4) // TODO: avoid magic numbers
+		c.conn2Vbs[i] = make([]string, 0, c.maxVbuckets/10)
 	}
 	// spawn routines per connection.
 	quitch := make(chan []string, len(c.conns)*2)
@@ -367,7 +372,7 @@ func (c *Client) runTransmitter(
 	}
 
 	timeout := time.Tick(c.bufferTimeout * time.Millisecond)
-	vbs := make([]*common.VbKeyVersions, 0, 1000) // TODO: avoid magic numbers
+	vbs := make([]*common.VbKeyVersions, 0, c.bufferSize)
 
 	resetAcc := func() {
 		for _, vb := range vbs {
@@ -392,7 +397,7 @@ loop:
 
 			case *common.VbKeyVersions:
 				vbs = append(vbs, val)
-				if len(vbs) > 100 { // TODO: avoid magic number
+				if len(vbs) > c.bufferSize {
 					if transmit(vbs) == false {
 						break loop
 					}

@@ -89,26 +89,15 @@ var SystemConfig = Config{
 		"channel size of projector's data path routine",
 		10000,
 	},
+	"projector.feedChanSize": ConfigValue{
+		100,
+		"channel size of projector's control path and feed back path",
+		100,
+	},
 	"projector.vbucketSyncTimeout": ConfigValue{
 		500,
 		"timeout, in milliseconds, is for sending periodic Sync messages for",
 		500,
-	},
-	// projector's adminport client
-	"projector.client.retryInterval": ConfigValue{
-		16,
-		"retryInterval, in milliseconds, when connection refused by server",
-		16,
-	},
-	"projector.client.maxRetries": ConfigValue{
-		5,
-		"maximum number of timest to retry",
-		5,
-	},
-	"projector.client.exponentialBackoff": ConfigValue{
-		2,
-		"multiplying factor on retryInterval for every attempt with server",
-		2,
 	},
 	// projector adminport parameters
 	"projector.adminport.name": ConfigValue{
@@ -144,6 +133,22 @@ var SystemConfig = Config{
 			"used by projector",
 		1 << 20, // 1 MegaByte
 	},
+	// projector's adminport client
+	"projector.client.retryInterval": ConfigValue{
+		16,
+		"retryInterval, in milliseconds, when connection refused by server",
+		16,
+	},
+	"projector.client.maxRetries": ConfigValue{
+		5,
+		"maximum number of timest to retry",
+		5,
+	},
+	"projector.client.exponentialBackoff": ConfigValue{
+		2,
+		"multiplying factor on retryInterval for every attempt with server",
+		2,
+	},
 	// projector dataport client parameters
 	"projector.dataport.client.parConnections": ConfigValue{
 		1,
@@ -172,9 +177,16 @@ var SystemConfig = Config{
 		"channel size of dataport endpoints data input",
 		10000,
 	},
+	"projector.dataport.client.bufferSize": ConfigValue{
+		100,
+		"number of entries to buffer before flushing it, where each entry " +
+			"is for a vbucket's set of mutations that was flushed by the endpoint.",
+		100,
+	},
 	"projector.dataport.client.bufferTimeout": ConfigValue{
 		1,
-		"timeout in milliseconds, to flush endpoint buffer to remote",
+		"timeout in milliseconds, to flush vbucket-mutations from endpoint " +
+			"buffer to dataport-client, again from dataport-client to socket.",
 		1, // 1ms
 	},
 	"projector.dataport.client.harakiriTimeout": ConfigValue{
@@ -225,6 +237,11 @@ var SystemConfig = Config{
 		1,
 		"number of index-entries that shall be returned as single payload",
 		1,
+	},
+	"queryport.indexer.streamChanSize": ConfigValue{
+		16,
+		"size of the buffered channels used to stream request and response.",
+		16,
 	},
 	// queryport client configuration
 	"queryport.client.maxPayload": ConfigValue{

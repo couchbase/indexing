@@ -119,10 +119,11 @@ type Server struct {
 	finch chan bool
 
 	// config parameters
-	logPrefix    string
+	maxVbuckets  int
 	genChSize    int           // channel size for genServer routine
 	maxPayload   int           // maximum payload length from router
 	readDeadline time.Duration // timeout, in millisecond, reading from socket
+	logPrefix    string
 }
 
 // NewServer creates a new dataport daemon.
@@ -142,6 +143,7 @@ func NewServer(
 		finch: make(chan bool),
 		conns: make(map[string]*netConn),
 		// config parameters
+		maxVbuckets:  config["maxVbuckets"].Int(),
 		genChSize:    genChSize,
 		maxPayload:   sconf["maxPayload"].Int(),
 		readDeadline: time.Duration(sconf["tcpReadDeadline"].Int()),
@@ -226,7 +228,7 @@ loop:
 				} else { // connection accepted
 					n := len(s.conns)
 					c.Infof("%v new connection %q +%d\n", s.logPrefix, raddr, n)
-					worker := make(chan interface{}, 10) // TODO: no magic num.
+					worker := make(chan interface{}, s.maxVbuckets)
 					s.conns[raddr] = &netConn{conn: conn, worker: worker}
 					s.startWorker(raddr)
 				}
@@ -278,7 +280,7 @@ func (s *Server) handleNewConnection(conn net.Conn, raddr string) error {
 		return ErrorDuplicateClient
 	}
 	// connection accepted
-	worker := make(chan interface{}, 10) // TODO: avoid magic numbers
+	worker := make(chan interface{}, s.maxVbuckets)
 	s.conns[raddr] = &netConn{conn: conn, worker: worker, active: false}
 	c.Debugf("%v total active connections %v\n", s.logPrefix, len(s.conns))
 	return nil
@@ -545,7 +547,7 @@ func (ce ConnectionError) Append(hostUuids keeper, raddr string) {
 		}
 		vbs, ok := ce[avb.bucket]
 		if !ok {
-			vbs = make([]uint16, 0, 4) // TODO: avoid magic numbers
+			vbs = make([]uint16, 0, 4)
 		}
 		vbs = append(vbs, avb.vbno)
 		ce[avb.bucket] = vbs

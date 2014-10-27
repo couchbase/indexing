@@ -67,6 +67,7 @@ type Feed struct {
 //    routerEndpointFactory:    endpoint factory
 func NewFeed(topic string, config c.Config) *Feed {
 	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
+	chsize := config["feedChanSize"].Int()
 	feed := &Feed{
 		cluster: config["clusterAddr"].String(),
 		topic:   topic,
@@ -82,8 +83,8 @@ func NewFeed(topic string, config c.Config) *Feed {
 		engines:   make(map[string]map[uint64]*Engine),
 		endpoints: make(map[string]c.RouterEndpoint),
 		// genServer channel
-		reqch:  make(chan []interface{}, 10000), // TODO: no magic
-		backch: make(chan []interface{}, 10000), // TODO: no magic
+		reqch:  make(chan []interface{}, chsize),
+		backch: make(chan []interface{}, chsize),
 		finch:  make(chan bool),
 
 		maxVbuckets: config["maxVbuckets"].Int(),
@@ -723,7 +724,7 @@ func (feed *Feed) bucketDetails(pooln, bucketn string) ([]uint16, []uint64, erro
 		feed.errorf("bucket.GetVBmap()", bucketn, err)
 		return nil, nil, err
 	}
-	vbnos := make([]uint16, 0, 32) // TODO: no magic numbers
+	vbnos := make([]uint16, 0, feed.maxVbuckets/10)
 	for _, ns := range m {
 		vbnos = append(vbnos, ns...)
 	}

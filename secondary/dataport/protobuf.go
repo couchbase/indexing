@@ -105,7 +105,7 @@ func protobuf2Vbmap(vbmap *protobuf.VbConnectionMap) *c.VbConnectionMap {
 
 func protobuf2KeyVersions(keys []*protobuf.KeyVersions) []*c.KeyVersions {
 	kvs := make([]*c.KeyVersions, 0, len(keys))
-	size := 10 // TODO: avoid magic numbers
+	size := 4 // To avoid reallocs
 	for _, key := range keys {
 		kv := &c.KeyVersions{
 			Seqno:    key.GetSeqno(),

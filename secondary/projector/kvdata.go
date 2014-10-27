@@ -59,7 +59,9 @@ func NewKVData(
 		vrs:       make(map[uint16]*VbucketRoutine),
 		engines:   make(map[uint64]*Engine),
 		endpoints: make(map[string]c.RouterEndpoint),
-		sbch:      make(chan []interface{}, 16), // TODO: avoid magic number
+		// 16 is enough, there can't be more than that many out-standing
+		// control calls on this feed.
+		sbch:      make(chan []interface{}, 16),
 		finch:     make(chan bool),
 		logPrefix: fmt.Sprintf("[%v->%v->%v]", feed.topic, bucket, kvaddr),
 	}

@@ -272,7 +272,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 			}
 			// send data to corresponding endpoint.
 			for raddr, data := range edata {
-				// send might fail, we don't care, TODO: implement flow control
+				// send might fail, we don't care
 				vr.endpoints[raddr].Send(data)
 			}
 		}
@@ -280,7 +280,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 	return seqno
 }
 
-// send to all endpoints, TODO: implement flow control.
+// send to all endpoints.
 func (vr *VbucketRoutine) sendToEndpoints(data interface{}) {
 	for _, endpoint := range vr.endpoints {
 		// send might fail, we don't care

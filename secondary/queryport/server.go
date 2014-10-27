@@ -28,10 +28,11 @@ type Server struct {
 	lis    net.Listener
 	killch chan bool
 	// config params
-	maxPayload    int
-	readDeadline  time.Duration
-	writeDeadline time.Duration
-	logPrefix     string
+	maxPayload     int
+	readDeadline   time.Duration
+	writeDeadline  time.Duration
+	streamChanSize int
+	logPrefix      string
 }
 
 // NewServer creates a new queryport daemon.
@@ -40,13 +41,14 @@ func NewServer(
 
 	sconf := config.SectionConfig("queryport.indexer.", true)
 	s = &Server{
-		laddr:         laddr,
-		callb:         callb,
-		killch:        make(chan bool),
-		maxPayload:    sconf["maxPayload"].Int(),
-		readDeadline:  time.Duration(sconf["readDeadline"].Int()),
-		writeDeadline: time.Duration(sconf["writeDeadline"].Int()),
-		logPrefix:     fmt.Sprintf("[Queryport %q]", laddr),
+		laddr:          laddr,
+		callb:          callb,
+		killch:         make(chan bool),
+		maxPayload:     sconf["maxPayload"].Int(),
+		readDeadline:   time.Duration(sconf["readDeadline"].Int()),
+		writeDeadline:  time.Duration(sconf["writeDeadline"].Int()),
+		streamChanSize: sconf["streamChanSize"].Int(),
+		logPrefix:      fmt.Sprintf("[Queryport %q]", laddr),
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
 		c.Errorf("%v failed starting %v !!", s.logPrefix, err)
@@ -112,7 +114,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}()
 
 	// start a receive routine.
-	rcvch := make(chan interface{}, 16) // TODO: avoid magic number
+	rcvch := make(chan interface{}, s.streamChanSize)
 	go s.doReceive(conn, rcvch)
 
 	// transport buffer for transmission
@@ -131,8 +133,8 @@ loop:
 			} else if !ok {
 				break loop
 			}
-			respch := make(chan interface{}, 16) // TODO: avoid magic number
-			quitch := make(chan interface{}, 16) // TODO: avoid magic number
+			respch := make(chan interface{}, s.streamChanSize)
+			quitch := make(chan interface{}, s.streamChanSize)
 			go s.handleRequest(conn, tpkt, respch, rcvch, quitch)
 			s.callb(req, respch, quitch) // blocking call
 
