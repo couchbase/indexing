@@ -14,6 +14,7 @@ package common
 
 import "encoding/json"
 import "strings"
+import "fmt"
 
 // Config is a key, value map with key always being a string
 // represents a config-parameter.
@@ -322,6 +323,21 @@ func (config Config) Clone() Config {
 		clone[key] = value
 	}
 	return clone
+}
+
+// Override will update values in `config` instance with values found in
+// `other` instance. `config` is expected to contain all the keys from
+// `other`.
+func (config Config) Override(other Config) Config {
+	for key, cv := range other {
+		if ocv, ok := config[key]; !ok {
+			panic(fmt.Errorf("override key %v not found\n", key))
+		} else {
+			ocv.Value = cv.Value
+			config[key] = ocv
+		}
+	}
+	return config
 }
 
 // SectionConfig will gather only those parameters whose
