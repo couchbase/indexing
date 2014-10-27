@@ -52,7 +52,8 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 
 	//start a new mutation stream
 	streamMutch := make(chan interface{})
-	stream, err := dataport.NewServer(string(StreamAddrMap[streamId]), streamMutch)
+	stream, err := dataport.NewServer(string(StreamAddrMap[streamId]),
+		common.SystemConfig.Clone(), streamMutch)
 	if err != nil {
 		//return stream init error
 		common.Errorf("MutationStreamReader: Error returned from NewServer."+

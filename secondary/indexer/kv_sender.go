@@ -12,7 +12,7 @@ package indexer
 import (
 	"github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/projector"
+	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	"github.com/couchbase/indexing/secondary/protobuf"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"net"
@@ -349,7 +349,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := projector.NewClient(projAddr)
+		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
 
 		//get the list of vbnos for this kv
 		vbnos := vbnosList[i].GetVbnos()
@@ -408,7 +408,7 @@ func (k *kvSender) addIndexForNewBucket(streamId c.StreamId, indexInst c.IndexIn
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := projector.NewClient(projAddr)
+		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
 
 		//get the list of vbnos for this kv
 		vbnos := vbnosList[i].GetVbnos()
@@ -454,7 +454,7 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInst c.In
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := projector.NewClient(projAddr)
+		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
 
 		//add new engine(index) to existing stream
 		topic := getTopicForStreamId(streamId)
@@ -488,7 +488,7 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := projector.NewClient(projAddr)
+		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
 
 		//delete engine(index) from the existing stream
 		topic := getTopicForStreamId(streamId)
@@ -527,7 +527,7 @@ func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := projector.NewClient(projAddr)
+		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
 
 		topic := getTopicForStreamId(streamId)
 
@@ -560,7 +560,7 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string) Messa
 		projAddr := getProjectorAddrFromKVAddr(kv)
 
 		//create client for node's projectors
-		ap := projector.NewClient(projAddr)
+		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
 
 		topic := getTopicForStreamId(streamId)
 		if errMsg := sendShutdownTopic(ap, topic); errMsg.GetMsgType() != MSG_SUCCESS {
@@ -574,7 +574,7 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string) Messa
 }
 
 //send the actual MutationStreamRequest on adminport
-func sendMutationTopicRequest(ap *projector.Client, topic string,
+func sendMutationTopicRequest(ap *projClient.Client, topic string,
 	reqTimestamps []*protobuf.TsVbuuid,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, Message) {
 
@@ -583,12 +583,10 @@ func sendMutationTopicRequest(ap *projector.Client, topic string,
 
 	sleepTime := 1
 	retry := 0
-	eps := map[string]interface{}{
-		"type": "dataport",
-	}
+	endpointType := "dataport"
 
 	for {
-		if res, err := ap.MutationTopicRequest(topic, eps, reqTimestamps, instances); err != nil {
+		if res, err := ap.MutationTopicRequest(topic, endpointType, reqTimestamps, instances); err != nil {
 			if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
 				c.Errorf("KVSender::sendMutationTopicRequest \n\tError Connecting to Projector %v. "+
 					"Retry in %v seconds...\n\t Err %v", ap, sleepTime, err)
@@ -612,7 +610,7 @@ func sendMutationTopicRequest(ap *projector.Client, topic string,
 }
 
 //send the actual UpdateMutationStreamRequest on adminport
-func sendAddBucketsRequest(ap *projector.Client,
+func sendAddBucketsRequest(ap *projClient.Client,
 	topic string,
 	restartTs []*protobuf.TsVbuuid,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, Message) {
@@ -651,7 +649,7 @@ func sendAddBucketsRequest(ap *projector.Client,
 }
 
 //send the actual AddInstances request on adminport
-func sendAddInstancesRequest(ap *projector.Client,
+func sendAddInstancesRequest(ap *projClient.Client,
 	topic string,
 	instances []*protobuf.Instance) Message {
 
@@ -688,7 +686,7 @@ func sendAddInstancesRequest(ap *projector.Client,
 }
 
 //send the actual DelInstances request on adminport
-func sendDelInstancesRequest(ap *projector.Client,
+func sendDelInstancesRequest(ap *projClient.Client,
 	topic string,
 	uuids []uint64) Message {
 
@@ -725,7 +723,7 @@ func sendDelInstancesRequest(ap *projector.Client,
 }
 
 //send the actual DelBuckets request on adminport
-func sendDelBucketsRequest(ap *projector.Client,
+func sendDelBucketsRequest(ap *projClient.Client,
 	topic string,
 	buckets []string) Message {
 
@@ -762,7 +760,7 @@ func sendDelBucketsRequest(ap *projector.Client,
 }
 
 //send the actual ShutdownStreamRequest on adminport
-func sendShutdownTopic(ap *projector.Client,
+func sendShutdownTopic(ap *projClient.Client,
 	topic string) Message {
 
 	c.Debugf("KVSender::sendShutdownTopic Projector %v Topic %v", ap, topic)
@@ -873,7 +871,7 @@ outerloop:
 	for _, kv := range k.kvListCache {
 		c.Debugf("KVSender::getVbmap \n\tSending Request to KV %v", kv)
 		projAddr := getProjectorAddrFromKVAddr(kv)
-		client := projector.NewClient(projAddr)
+		client := projClient.NewClient(projAddr, c.SystemConfig.Clone())
 		sleepTime := 1
 		retry := 0
 	innerloop:
@@ -914,7 +912,7 @@ outerloop:
 	for _, kv := range k.kvListCache {
 		c.Debugf("KVSender::getFailoverLogs \n\tSending Request to KV %v", kv)
 		projAddr := getProjectorAddrFromKVAddr(kv)
-		client := projector.NewClient(projAddr)
+		client := projClient.NewClient(projAddr, c.SystemConfig.Clone())
 		sleepTime := 1
 		retry := 0
 	innerloop:
