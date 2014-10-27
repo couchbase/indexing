@@ -45,12 +45,13 @@ type BucketFeeder interface {
 // concrete type implementing BucketFeeder
 type bucketUpr struct {
 	uprFeed *couchbase.UprFeed
+	bucket  *couchbase.Bucket
 }
 
 // OpenBucketFeed opens feed for bucket.
 func OpenBucketFeed(b *couchbase.Bucket) (feeder BucketFeeder, err error) {
 	name := fmt.Sprintf("%v", time.Now().UnixNano())
-	bupr := &bucketUpr{}
+	bupr := &bucketUpr{bucket: b}
 	if bupr.uprFeed, err = b.StartUprFeed(name, uint32(0)); err != nil {
 		return nil, err
 	}
@@ -95,5 +96,6 @@ func (bupr *bucketUpr) EndVbStreams(
 // CloseFeed implements Feeder{} interface.
 func (bupr *bucketUpr) CloseFeed() error {
 	bupr.uprFeed.Close()
+	bupr.bucket.Close()
 	return nil
 }

@@ -1,10 +1,6 @@
 // defines timestamp types to interface with go-coubhbase and also provides
 // functions for set-operations on time-stamps.
 
-// TODO: move file to go-couchbase, if go-couchbase can only accept
-// Timestamp type definition, the we may need to do some rework to avoid
-// namespace issues.
-
 package common
 
 // TsVb is logical clock for a subset of vbuckets.

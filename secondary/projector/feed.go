@@ -33,7 +33,6 @@ type Feed struct {
 	endpointType string   // immutable
 	kvaddrs      []string // immutable
 
-	buckets map[string]*couchbase.Bucket // cache of buckets
 	// upstream
 	reqTss  map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
 	rollTss map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
@@ -74,7 +73,6 @@ func NewFeed(topic string, config c.Config) *Feed {
 		topic:   topic,
 		kvaddrs: config["kvAddrs"].Strings(),
 
-		buckets: make(map[string]*couchbase.Bucket),
 		// upstream
 		reqTss:  make(map[string]*protobuf.TsVbuuid),
 		rollTss: make(map[string]*protobuf.TsVbuuid),
@@ -528,6 +526,9 @@ func (feed *Feed) delBuckets(req *protobuf.DelBucketsRequest) error {
 		for _, kvdata := range feed.kvdata[bucketn] {
 			kvdata.Close()
 		}
+
+		feed.feeders[bucketn].CloseFeed()
+
 		// cleanup data structures.
 		delete(feed.reqTss, bucketn)  // :SideEffect:
 		delete(feed.rollTss, bucketn) // :SideEffect:
@@ -679,8 +680,9 @@ func (feed *Feed) bucketFeed(
 
 	feeder, ok := feed.feeders[bucketn]
 	if !ok { // the feed is being started for the first time
-		bucket, err := feed.getBucket(pooln, bucketn)
+		bucket, err := c.ConnectBucket(feed.cluster, pooln, bucketn)
 		if err != nil {
+			feed.errorf("ConnectBucket()", bucketn, err)
 			return nil, err
 		}
 		feeder, err = OpenBucketFeed(bucket)
@@ -709,10 +711,12 @@ func (feed *Feed) bucketFeed(
 }
 
 func (feed *Feed) bucketDetails(pooln, bucketn string) ([]uint16, []uint64, error) {
-	bucket, err := feed.getBucket(pooln, bucketn)
+	bucket, err := c.ConnectBucket(feed.cluster, pooln, bucketn)
 	if err != nil {
+		feed.errorf("ConnectBucket()", bucketn, err)
 		return nil, nil, err
 	}
+	defer bucket.Close()
 
 	// refresh vbmap before gathering vbucket-numbers hosted
 	// by set of feed.kvaddrs.
@@ -964,18 +968,6 @@ func newOpaque() uint16 {
 }
 
 //---- local function
-
-func (feed *Feed) getBucket(pooln, bucketn string) (*couchbase.Bucket, error) {
-	bucket, ok := feed.buckets[bucketn]
-	if !ok {
-		b, err := c.ConnectBucket(feed.cluster, pooln, bucketn)
-		if err != nil {
-			feed.errorf("ConnectBucket()", bucketn, err)
-		}
-		return b, err
-	}
-	return bucket, nil
-}
 
 func (feed *Feed) errorf(prefix, bucketn string, val interface{}) {
 	c.Errorf("%v %v for %q: %v\n", feed.logPrefix, prefix, bucketn, val)

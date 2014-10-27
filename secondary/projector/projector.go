@@ -20,10 +20,9 @@ var ErrorTopicMissing = errors.New("projector.topicMissing")
 // one or more upstream kv-nodes. Works in tandem with
 // projector's adminport.
 type Projector struct {
-	mu      sync.RWMutex
-	admind  ap.Server                    // admin-port server
-	topics  map[string]*Feed             // active topics
-	buckets map[string]*couchbase.Bucket // bucket instances
+	mu     sync.RWMutex
+	admind ap.Server        // admin-port server
+	topics map[string]*Feed // active topics
 
 	// config params
 	name        string   // human readable name of the projector
@@ -44,7 +43,6 @@ func NewProjector(config c.Config) *Projector {
 		kvset:       pconf["kvAddrs"].Strings(),
 		adminport:   pconf["adminport.listenAddr"].String(),
 		topics:      make(map[string]*Feed),
-		buckets:     make(map[string]*couchbase.Bucket),
 	}
 	p.logPrefix = fmt.Sprintf("[%s(%s)]", p.name, p.kvset)
 	p.config = config
@@ -109,12 +107,14 @@ func (p *Projector) doVbmapRequest(
 	kvaddrs := request.GetKvaddrs()
 
 	// get vbmap from bucket connection.
-	bucket, err := p.getBucket(pooln, bucketn)
+	bucket, err := c.ConnectBucket(p.clusterAddr, pooln, bucketn)
 	if err != nil {
 		c.Errorf("%v for bucket %q, %v\n", p.logPrefix, bucketn, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
+	defer bucket.Close()
+
 	bucket.Refresh()
 	m, err := bucket.GetVBmap(kvaddrs)
 	if err != nil {
@@ -144,12 +144,13 @@ func (p *Projector) doFailoverLog(
 	bucketn := request.GetBucket()
 	vbuckets := request.GetVbnos()
 
-	bucket, err := p.getBucket(pooln, bucketn)
+	bucket, err := c.ConnectBucket(p.clusterAddr, pooln, bucketn)
 	if err != nil {
 		c.Errorf("%v %s, %v\n", p.logPrefix, bucketn, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
+	defer bucket.Close()
 
 	protoFlogs := make([]*protobuf.FailoverLog, 0, len(vbuckets))
 	vbnos := c.Vbno32to16(vbuckets)
@@ -376,13 +377,4 @@ func (p *Projector) listTopics() []string {
 		topics = append(topics, topic)
 	}
 	return topics
-}
-
-// get couchbase bucket from SDK.
-func (p *Projector) getBucket(pooln, bucketn string) (*couchbase.Bucket, error) {
-	bucket, ok := p.buckets[bucketn]
-	if !ok {
-		return c.ConnectBucket(p.clusterAddr, pooln, bucketn)
-	}
-	return bucket, nil
 }
