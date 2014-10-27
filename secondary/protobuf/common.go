@@ -99,7 +99,12 @@ func NewTsVbuuid(pool, bucket string, maxvb int) *TsVbuuid {
 	}
 }
 
-// Append a vbucket detail to TsVbuuid
+// IsEmpty returns true if the timestamp does not contain any vbucket entries.
+func (ts *TsVbuuid) IsEmpty() bool {
+	return len(ts.Vbnos) == 0
+}
+
+// Append a vbucket detail to TsVbuuid.
 func (ts *TsVbuuid) Append(
 	vbno uint16, seqno, vbuuid, start, end uint64) *TsVbuuid {
 

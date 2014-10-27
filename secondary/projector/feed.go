@@ -64,7 +64,8 @@ type Feed struct {
 //    kvAddrs:     list of kvnodes to watch for mutations.
 //    feedWaitStreamReqTimeout: wait for a response to StreamRequest
 //    feedWaitStreamEndTimeout: wait for a response to StreamEnd
-//    routerEndpointFactory:    endpoint factory
+//    feedChanSize: channel size for feed's control path and back path
+//    routerEndpointFactory: endpoint factory
 func NewFeed(topic string, config c.Config) *Feed {
 	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
 	chsize := config["feedChanSize"].Int()
@@ -944,7 +945,9 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 	}
 	ys := make([]*protobuf.TsVbuuid, 0, len(feed.rollTss))
 	for _, ts := range feed.rollTss {
-		ys = append(ys, ts)
+		if !ts.IsEmpty() {
+			ys = append(ys, ts)
+		}
 	}
 	return &protobuf.TopicResponse{
 		Topic:              proto.String(feed.topic),
