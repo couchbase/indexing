@@ -9,7 +9,6 @@ import mcd "github.com/couchbase/gomemcached"
 import mc "github.com/couchbase/gomemcached/client"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/protobuf"
-import "github.com/couchbaselabs/go-couchbase"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
 // error codes
@@ -906,6 +905,7 @@ func (feed *Feed) waitStreamEnds(
 }
 
 // block feed until feedback posted back from kvdata.
+// returns ErrorResponseTimeout
 func (feed *Feed) waitOnFeedback(
 	timeout <-chan time.Time, callb func(msg interface{}) string) (err error) {
 
@@ -920,7 +920,7 @@ loop:
 				msgs = append(msgs, msg)
 			case "done":
 				break loop
-			default:
+			case "ok":
 			}
 
 		case <-timeout:

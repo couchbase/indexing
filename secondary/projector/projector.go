@@ -7,7 +7,6 @@ import "sync"
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/protobuf"
-import "github.com/couchbaselabs/go-couchbase"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
 // ErrorTopicExist

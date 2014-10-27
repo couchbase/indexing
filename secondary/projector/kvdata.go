@@ -131,7 +131,6 @@ func (kvdata *KVData) Close() error {
 func (kvdata *KVData) runScatter(
 	ts *protobuf.TsVbuuid, mutch <-chan *mc.UprEvent) {
 
-	kvdata.vrs = make(map[uint16]*VbucketRoutine)
 	stats := kvdata.newStats()
 
 	defer func() {
@@ -139,6 +138,7 @@ func (kvdata *KVData) runScatter(
 			c.Errorf("%v runScatter() crashed: %v\n", kvdata.logPrefix, r)
 			c.StackTrace(string(debug.Stack()))
 		}
+		kvdata.publishStreamEnd()
 		close(kvdata.finch)
 		c.Infof("%v for %q ... stopped\n", kvdata.logPrefix, kvdata.kvaddr)
 	}()
@@ -268,6 +268,13 @@ func (kvdata *KVData) scatterMutation(
 		}
 	}
 	return
+}
+
+func (kvdata *KVData) publishStreamEnd() {
+	m := &mc.UprEvent{Opcode: mcd.UPR_STREAMEND}
+	for _, vr := range kvdata.vrs {
+		vr.Event(m)
+	}
 }
 
 func (kvdata *KVData) newStats() c.Statistics {
