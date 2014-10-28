@@ -44,7 +44,7 @@ func CompileN1QLExpression(expressions []string) ([]interface{}, error) {
 	return cExprs, nil
 }
 
-var missing = string(collatejson.MissingLiteral)
+var missing = qvalue.NewValue(string(collatejson.MissingLiteral))
 
 // N1QLTransform will use compile list of expression from N1QL's DDL
 // statement and evaluate a document using them to return a secondary
@@ -64,7 +64,7 @@ func N1QLTransform(docid, doc []byte, cExprs []interface{}) ([]byte, error) {
 			return nil, nil
 
 		} else if key.Type() == qvalue.MISSING {
-			arrValue = append(arrValue, key)
+			arrValue = append(arrValue, missing)
 			continue
 		}
 		skip = false
