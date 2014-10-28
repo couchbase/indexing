@@ -24,6 +24,7 @@ import (
 var logLevel = flag.Int("log", common.LogLevelInfo, "Log Level - 1(Info), 2(Debug), 3(Trace)")
 var numVbuckets = flag.Int("vbuckets", indexer.MAX_NUM_VBUCKETS, "Number of vbuckets configured in Couchbase")
 var projector = flag.String("projector", indexer.DEFAULT_PROJECTOR_ADMIN_PORT_ENDPOINT, "Projector Admin Port Address")
+var enableManager = flag.Bool("enable_manager", false, "Enable Index Manager")
 
 func main() {
 
@@ -38,6 +39,7 @@ func main() {
 		indexer.PROJECTOR_ADMIN_PORT_ENDPOINT = *projector
 	}
 
+	indexer.ENABLE_MANAGER = *enableManager
 	_, msg := indexer.NewIndexer(uint16(*numVbuckets))
 
 	if msg.GetMsgType() != indexer.MSG_SUCCESS {

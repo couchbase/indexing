@@ -114,7 +114,12 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 		PartitionScheme: common.TEST,
 		PartitionKey:    indexinfo.OnExprList[0]}
 
-	/*
+	idxInst := common.IndexInst{InstId: common.IndexInstId(uuid),
+		Defn:  idxDefn,
+		State: common.INDEX_STATE_INITIAL,
+	}
+
+	if !ENABLE_MANAGER {
 		pc := common.NewKeyPartitionContainer()
 
 		//Add one partition for now
@@ -122,12 +127,8 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 		partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
 			Endpts: endpt}
 		pc.AddPartition(common.PartitionId(1), partnDefn)
-	*/
 
-	idxInst := common.IndexInst{InstId: common.IndexInstId(uuid),
-		Defn:  idxDefn,
-		State: common.INDEX_STATE_INITIAL,
-		//Pc:    pc,
+		idxInst.Pc = pc
 	}
 
 	indexinfo.Uuid = strconv.Itoa(uuid)

@@ -33,6 +33,7 @@ type Indexer interface {
 //TODO move this to config
 var NUM_VBUCKETS uint16
 var PROJECTOR_ADMIN_PORT_ENDPOINT string
+var ENABLE_MANAGER bool
 var StreamAddrMap StreamAddressMap
 
 type BucketIndexCountMap map[string]int
@@ -118,10 +119,12 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	idx.initStreamAddressMap()
 
 	var res Message
-	idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh)
-	if res.GetMsgType() != MSG_SUCCESS {
-		common.Errorf("Indexer::NewIndexer ClusterMgrAgent Init Error", res)
-		return nil, res
+	if ENABLE_MANAGER {
+		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh)
+		if res.GetMsgType() != MSG_SUCCESS {
+			common.Errorf("Indexer::NewIndexer ClusterMgrAgent Init Error", res)
+			return nil, res
+		}
 	}
 
 	//read persisted indexer state
@@ -384,26 +387,34 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 
 	case CBQ_CREATE_INDEX_DDL:
 
-		//send the msg to cluster mgr
-		idx.clustMgrAgentCmdCh <- msg
-		res := <-idx.clustMgrAgentCmdCh
+		if ENABLE_MANAGER {
+			//send the msg to cluster mgr
+			idx.clustMgrAgentCmdCh <- msg
+			res := <-idx.clustMgrAgentCmdCh
 
-		//send response
-		respCh := msg.(*MsgCreateIndex).GetResponseChannel()
-		if respCh != nil {
-			respCh <- res
+			//send response
+			respCh := msg.(*MsgCreateIndex).GetResponseChannel()
+			if respCh != nil {
+				respCh <- res
+			}
+		} else {
+			idx.handleCreateIndex(msg)
 		}
 
 	case CBQ_DROP_INDEX_DDL:
 
-		//send the msg to cluster mgr
-		idx.clustMgrAgentCmdCh <- msg
-		res := <-idx.clustMgrAgentCmdCh
+		if ENABLE_MANAGER {
+			//send the msg to cluster mgr
+			idx.clustMgrAgentCmdCh <- msg
+			res := <-idx.clustMgrAgentCmdCh
 
-		//send response
-		respCh := msg.(*MsgDropIndex).GetResponseChannel()
-		if respCh != nil {
-			respCh <- res
+			//send response
+			respCh := msg.(*MsgDropIndex).GetResponseChannel()
+			if respCh != nil {
+				respCh <- res
+			}
+		} else {
+			idx.handleDropIndex(msg)
 		}
 
 	case CLUST_MGR_CREATE_INDEX_DDL:
@@ -657,9 +668,11 @@ func (idx *indexer) shutdownWorkers() {
 	idx.adminMgrCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
 	<-idx.adminMgrCmdCh
 
-	//shutdown cluster manager
-	idx.clustMgrAgentCmdCh <- &MsgGeneral{mType: CLUST_MGR_AGENT_SHUTDOWN}
-	<-idx.clustMgrAgentCmdCh
+	if ENABLE_MANAGER {
+		//shutdown cluster manager
+		idx.clustMgrAgentCmdCh <- &MsgGeneral{mType: CLUST_MGR_AGENT_SHUTDOWN}
+		<-idx.clustMgrAgentCmdCh
+	}
 
 	//shutdown kv sender
 	idx.kvSenderCmdCh <- &MsgGeneral{mType: KV_SENDER_SHUTDOWN}
