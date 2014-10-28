@@ -12,11 +12,11 @@ package manager
 
 import (
 	"fmt"
-	co "github.com/couchbase/indexing/secondary/common"
 	common "github.com/couchbase/gometa/common"
 	message "github.com/couchbase/gometa/message"
 	protocol "github.com/couchbase/gometa/protocol"
 	r "github.com/couchbase/gometa/repository"
+	co "github.com/couchbase/indexing/secondary/common"
 	"sync"
 	"time"
 )
@@ -25,11 +25,10 @@ import (
 // Type Declaration
 /////////////////////////////////////////////////////////////////////////////
 
-const COORDINATOR_CONFIG_STORE = "IndexCoordinatorConfigStore"
-
 const (
 	OPCODE_ADD_IDX_DEFN common.OpCode = iota
 	OPCODE_DEL_IDX_DEFN
+	OPCODE_NOTIFY_TIMESTAMP
 )
 
 type Coordinator struct {
@@ -43,6 +42,7 @@ type Coordinator struct {
 	listener   *common.PeerListener
 	factory    protocol.MsgFactory
 	skillch    chan bool
+	idxMgr     *IndexManager
 
 	mutex sync.Mutex
 	cond  *sync.Cond
@@ -65,11 +65,12 @@ type CoordinatorState struct {
 // Public API
 /////////////////////////////////////////////////////////////////////////////
 
-func NewCoordinator(repo *MetadataRepo) *Coordinator {
+func NewCoordinator(repo *MetadataRepo, idxMgr *IndexManager) *Coordinator {
 	coordinator := new(Coordinator)
 	coordinator.repo = repo
 	coordinator.ready = false
 	coordinator.cond = sync.NewCond(&coordinator.mutex)
+	coordinator.idxMgr = idxMgr
 
 	return coordinator
 }
@@ -262,7 +263,7 @@ func (s *Coordinator) bootstrap(config string) (err error) {
 	// connection at a later time (when it is ready to be a leader).
 	s.listener, err = common.StartPeerListener(s.getHostTCPAddr())
 	if err != nil {
-		return  NewError(ERROR_COOR_LISTENER_FAIL, NORMAL, COORDINATOR, err, 
+		return NewError(ERROR_COOR_LISTENER_FAIL, NORMAL, COORDINATOR, err,
 			fmt.Sprintf("Index Coordinator : Fail to start PeerListener"))
 	}
 
@@ -398,8 +399,8 @@ func (s *Coordinator) runElection() (leader string, err error) {
 	resultCh := s.site.StartElection()
 	leader, ok := <-resultCh
 	if !ok {
-		return "", NewError(ERROR_COOR_ELECTION_FAIL, NORMAL, COORDINATOR, nil, 
-					fmt.Sprintf("Index Coordinator Election Fails"))
+		return "", NewError(ERROR_COOR_ELECTION_FAIL, NORMAL, COORDINATOR, nil,
+			fmt.Sprintf("Index Coordinator Election Fails"))
 	}
 
 	return leader, nil
@@ -427,8 +428,8 @@ func (s *Coordinator) runProtocol(leader string) (err error) {
 		s.state.setStatus(protocol.FOLLOWING)
 		leaderAddr := s.findMatchingPeerTCPAddr(leader)
 		if len(leaderAddr) == 0 {
-			return NewError(ERROR_COOR_ELECTION_FAIL, NORMAL, COORDINATOR, nil, 
-					fmt.Sprintf("Index Coordinator cannot find matching TCP addr for leader " + leader))
+			return NewError(ERROR_COOR_ELECTION_FAIL, NORMAL, COORDINATOR, nil,
+				fmt.Sprintf("Index Coordinator cannot find matching TCP addr for leader "+leader))
 		}
 		err = protocol.RunFollowerServer(s.getHostTCPAddr(), leaderAddr, s, s, s.factory, s.skillch)
 	}
@@ -564,6 +565,13 @@ func (c *Coordinator) LogProposal(proposal protocol.ProposalMsg) error {
 		case OPCODE_DEL_IDX_DEFN:
 			success := c.deleteIndex(proposal.GetKey())
 			co.Debugf("Coordinator.LogProposal(): (deleteIndex) success = %s", success)
+		case OPCODE_NOTIFY_TIMESTAMP:
+			timestamp, err := unmarshallTimestamp(proposal.GetContent())
+			if err == nil {
+				c.idxMgr.notifyNewTimestamp(timestamp)
+			} else {
+				co.Debugf("Coordinator.LogProposal(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
+			}
 		}
 	} /* else if c.GetStatus() == protocol.FOLLOWING {
 		switch common.OpCode(proposal.GetOpCode()) {
@@ -694,8 +702,7 @@ func (c *Coordinator) getPeerUDPAddr() []string {
 //
 // Handle create Index request in the dictionary.  If this function
 // returns true, it means createIndex request completes successfully.
-// If this function returns false, then the result is unknown.  The
-// request may still being completed (by some other nodes).
+// If this function returns false, then the result is unknown.
 //
 func (c *Coordinator) createIndex(key string, content []byte) bool {
 
@@ -709,14 +716,18 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 		return false
 	}
 
+	if err = c.addIndexToTopology(defn); err != nil {
+		co.Debugf("Coordinator.createIndex() : setTopology fails. Reason = %s", err.Error())
+		return false
+	}
+
 	return true
 }
 
 //
 // Handle delete Index request in the dictionary.  If this function
 // returns true, it means deleteIndex request completes successfully.
-// If this function returns false, then the result is unknown.  The
-// request may still being completed (by some other nodes).
+// If this function returns false, then the result is unknown.
 //
 func (c *Coordinator) deleteIndex(key string) bool {
 
@@ -724,12 +735,68 @@ func (c *Coordinator) deleteIndex(key string) bool {
 		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}
+
+	// TODO: get the bucket name from key
+	bucket := "Default"
+	if err := c.removeIndexFromTopology(bucket, key); err != nil {
+		co.Debugf("Coordinator.deleteIndex() : setTopology fails. Reason = %s", err.Error())
+		return false
+	}
+
 	return true
 }
 
 //
+// Add Index to Topology
 //
+func (c *Coordinator) addIndexToTopology(defn *co.IndexDefn) error {
+
+	// get existing topology
+	topology, err := c.repo.GetTopologyByBucket(defn.Bucket)
+	if err != nil {
+		// TODO: Need to check what type of error before creating a new topologyi
+		topology = new(IndexTopology)
+		topology.Bucket = defn.Bucket
+	}
+
+	// TODO: Get the host name from the indexDefn.  For now, use local host.
+	host, err := co.GetLocalIP()
+	if err != nil {
+		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, COORDINATOR, nil,
+			fmt.Sprintf("Fail to resolve local host for index '%s'", defn.Name))
+	}
+
+	id := c.repo.GetNextIndexInstId()
+	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
+		uint64(id), uint32(co.INDEX_STATE_CREATED), host.String())
+
+	if err = c.repo.SetTopologyByBucket(topology.Bucket, topology); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 //
+// Delete Index from Topology
+//
+func (c *Coordinator) removeIndexFromTopology(bucket string, name string) error {
+
+	// get existing topology
+	topology, err := c.repo.GetTopologyByBucket(bucket)
+	if err != nil {
+		return err
+	}
+
+	topology.RemoveIndexDefinition(bucket, name)
+
+	if err = c.repo.SetTopologyByBucket(topology.Bucket, topology); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *Coordinator) observeForAdd(key string) bool {
 
 	handle, ok := c.state.observes[key]

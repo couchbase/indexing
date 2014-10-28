@@ -1,8 +1,8 @@
 package manager
 
 import (
-	c "github.com/couchbase/indexing/secondary/common"
 	"fmt"
+	c "github.com/couchbase/indexing/secondary/common"
 	"sync"
 )
 
@@ -27,9 +27,6 @@ type notifier struct {
 	id            string
 	notifications chan interface{}
 }
-
-const DEFAULT_EVT_QUEUE_SIZE = 20
-const DEFAULT_NOTIFIER_QUEUE_SIZE = 5
 
 ///////////////////////////////////////////////////////
 // Package Local Function

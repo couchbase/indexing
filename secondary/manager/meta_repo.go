@@ -10,16 +10,18 @@
 package manager
 
 import (
+	"encoding/json"
 	"fmt"
 	repo "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/protobuf"
 	"github.com/couchbaselabs/goprotobuf/proto"
-	"net/rpc"
-	"sync"
-	"strings"
-	"strconv"
 	"math/rand"
+	"net/rpc"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 type MetadataRepo struct {
@@ -32,8 +34,8 @@ type MetadataRepo struct {
 }
 
 type MetaIterator struct {
-	repository		*repo.Repository
-	iterator		*repo.RepoIterator
+	repository *repo.Repository
+	iterator   *repo.RepoIterator
 }
 
 type Request struct {
@@ -47,7 +49,7 @@ type Reply struct {
 }
 
 ///////////////////////////////////////////////////////
-//  MetadataRepo
+//  Public Function : MetadataRepo
 ///////////////////////////////////////////////////////
 
 func NewMetadataRepo(requestAddr string,
@@ -101,19 +103,23 @@ func (c *MetadataRepo) Close() {
 }
 
 ///////////////////////////////////////////////////////
-//
+// Public Function : ID generation
 ///////////////////////////////////////////////////////
 
 func (c *MetadataRepo) GetNextPartitionId() common.PartitionId {
-	return common.PartitionId(0)
+	// TODO : Make it globally unique
+	id := uint64(time.Now().UnixNano())
+	return common.PartitionId(id)
 }
 
 func (c *MetadataRepo) GetNextIndexInstId() common.IndexInstId {
-	return common.IndexInstId(0)
+	// TODO : Make it globally unique
+	id := uint64(time.Now().UnixNano())
+	return common.IndexInstId(id)
 }
 
 ///////////////////////////////////////////////////////
-//  Index Definition : Lookup
+//  Public Function : Index Defnition Lookup
 ///////////////////////////////////////////////////////
 
 func (c *MetadataRepo) GetIndexDefnByName(name string) (*common.IndexDefn, error) {
@@ -137,7 +143,33 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 }
 
 ///////////////////////////////////////////////////////
-//  Index Definition : DDL
+//  Public Function : Index Topology
+///////////////////////////////////////////////////////
+
+func (c *MetadataRepo) GetTopologyByBucket(bucket string) (*IndexTopology, error) {
+
+	lookupName := indexTopologyKey(bucket)
+	data, err := c.getMeta(lookupName)
+	if err != nil {
+		return nil, err
+	}
+
+	return unmarshallIndexTopology(data)
+}
+
+func (c *MetadataRepo) SetTopologyByBucket(bucket string, topology *IndexTopology) error {
+
+	data, err := MarshallIndexTopology(topology)
+	if err != nil {
+		return err
+	}
+
+	lookupName := indexTopologyKey(bucket)
+	return c.setMeta(lookupName, data)
+}
+
+///////////////////////////////////////////////////////
+//  Public Function : Index DDL
 ///////////////////////////////////////////////////////
 
 //
@@ -149,12 +181,12 @@ func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 	exist, err := c.GetIndexDefnByName(defn.Name)
 	if exist != nil {
 		// TODO: should not return error if not found (should return nil)
-		return NewError(ERROR_META_IDX_DEFN_EXIST, NORMAL, METADATA_REPO, nil, 
-				fmt.Sprintf("Index Definition '%s' already exist", defn.Name))
+		return NewError(ERROR_META_IDX_DEFN_EXIST, NORMAL, METADATA_REPO, nil,
+			fmt.Sprintf("Index Definition '%s' already exist", defn.Name))
 	}
 
 	// marshall the defn
-	data, err := MarshallIndexDefn(defn)
+	data, err := marshallIndexDefn(defn)
 	if err != nil {
 		return err
 	}
@@ -180,8 +212,8 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 	exist, _ := c.GetIndexDefnById(id)
 	if exist == nil {
 		// TODO: should not return error if not found (should return nil)
-		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil, 
-				fmt.Sprintf("Index Definition '%s' does not exist", id))
+		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil,
+			fmt.Sprintf("Index Definition '%s' does not exist", id))
 	}
 
 	lookupName := indexDefnKeyById(id)
@@ -203,8 +235,8 @@ func (c *MetadataRepo) DropIndexByName(name string) error {
 	exist, _ := c.GetIndexDefnByName(name)
 	if exist == nil {
 		// TODO: should not return error if not found (should return nil)
-		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil, 
-				fmt.Sprintf("Index Definition '%s' does not exist", name))
+		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil,
+			fmt.Sprintf("Index Definition '%s' does not exist", name))
 	}
 
 	lookupName := indexDefnKeyByName(name)
@@ -237,7 +269,7 @@ func (c *MetadataRepo) ObserveForDelete(key string) *observeHandle {
 }
 
 /////////////////////////////////////////////////////////////////////////////
-// RepoIterator Public Function
+// Public Function : RepoIterator
 /////////////////////////////////////////////////////////////////////////////
 
 //
@@ -249,9 +281,9 @@ func (c *MetadataRepo) NewIterator() (*MetaIterator, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	result := &MetaIterator{
-		iterator: iter,
+		iterator:   iter,
 		repository: c.repository}
 
 	return result, nil
@@ -265,13 +297,13 @@ func (i *MetaIterator) Next() (key string, content []byte, err error) {
 		if err != nil {
 			return "", nil, err
 		}
-		
+
 		if isIndexDefnKey(key) {
-			name := indexDefnNameFromKey(key) 
+			name := indexDefnNameFromKey(key)
 			if name != "" {
 				return name, content, nil
 			}
-			return "", nil, NewError(ERROR_META_WRONG_KEY, NORMAL, METADATA_REPO, nil, 
+			return "", nil, NewError(ERROR_META_WRONG_KEY, NORMAL, METADATA_REPO, nil,
 				fmt.Sprintf("Index Definition Key %s is mal-formed", key))
 		}
 	}
@@ -294,7 +326,7 @@ func (c *MetadataRepo) SetLocalMeta(name string, value []byte) error {
 
 func (c *MetadataRepo) GetLocalMeta(name string) ([]byte, error) {
 	key := LocalMetaKey(name)
-	return c.GetMetaFromWatcher(key)
+	return c.getMetaFromWatcher(key)
 }
 
 func (c *MetadataRepo) GetLocalRepo() *repo.Repository {
@@ -309,7 +341,7 @@ func LocalMetaKey(name string) string {
 // private function : DDL
 ///////////////////////////////////////////////////////
 
-func (c *MetadataRepo) GetMetaFromWatcher(name string) ([]byte, error) {
+func (c *MetadataRepo) getMetaFromWatcher(name string) ([]byte, error) {
 
 	// Get the value from the local cache first
 	value, err := c.watcher.Get(name)
@@ -324,7 +356,7 @@ func (c *MetadataRepo) GetMetaFromWatcher(name string) ([]byte, error) {
 func (c *MetadataRepo) getMeta(name string) ([]byte, error) {
 
 	// Get the metadata locally from watcher first
-	value, err := c.GetMetaFromWatcher(name)
+	value, err := c.getMetaFromWatcher(name)
 	if err == nil && value != nil {
 		return value, nil
 	}
@@ -384,7 +416,7 @@ func (c *MetadataRepo) newDictionaryRequest(request *Request, reply **Reply) err
 }
 
 ///////////////////////////////////////////////////////
-// private function : Index Definition
+// package local function : Index Definition
 ///////////////////////////////////////////////////////
 
 func indexDefnKeyByName(name string) string {
@@ -396,17 +428,17 @@ func indexDefnKeyById(id common.IndexDefnId) string {
 }
 
 func isIndexDefnKey(key string) bool {
-	return strings.Contains(key, "IndexDefinitionName/") 
+	return strings.Contains(key, "IndexDefinitionName/")
 }
 
 func indexDefnNameFromKey(key string) string {
 
-	i := strings.LastIndex(key, "IndexDefinitionName/") 
+	i := strings.LastIndex(key, "IndexDefinitionName/")
 	if i != -1 {
-		return key[i + 20:]
+		return key[i+20:]
 	}
-	
-	return "" 
+
+	return ""
 }
 
 //
@@ -414,7 +446,7 @@ func indexDefnNameFromKey(key string) string {
 // TODO: This function is copied from indexer.kv_sender.  It would be nice if this
 // go to common.
 //
-func MarshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
+func marshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
 
 	using := protobuf.StorageType(
 		protobuf.StorageType_value[string(defn.Using)]).Enum()
@@ -440,6 +472,9 @@ func MarshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
 	return proto.Marshal(pDefn)
 }
 
+//
+// !! This function is made public only for testing purpose.
+//
 func UnmarshallIndexDefn(data []byte) (*common.IndexDefn, error) {
 
 	pDefn := new(protobuf.IndexDefn)
@@ -463,4 +498,32 @@ func UnmarshallIndexDefn(data []byte) (*common.IndexDefn, error) {
 		PartitionKey:    pDefn.GetPartnExpression()}
 
 	return idxDefn, nil
+}
+
+///////////////////////////////////////////////////////
+// package local function : Index Topology
+///////////////////////////////////////////////////////
+
+func indexTopologyKey(bucket string) string {
+	return fmt.Sprintf("IndexTopology/%s", bucket)
+}
+
+func MarshallIndexTopology(topology *IndexTopology) ([]byte, error) {
+
+	buf, err := json.Marshal(&topology)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func unmarshallIndexTopology(data []byte) (*IndexTopology, error) {
+
+	topology := new(IndexTopology)
+	if err := json.Unmarshal(data, topology); err != nil {
+		return nil, err
+	}
+
+	return topology, nil
 }

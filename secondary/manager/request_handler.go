@@ -17,8 +17,6 @@ import (
 // to narrow down only for DDL.
 ///////////////////////////////////////////////////////
 
-const INDEX_DDL_HTTP_ADDR = ":9102"
-
 // Every index ever created and maintained by this package will have an
 // associated index-info structure.
 type IndexInfo struct {

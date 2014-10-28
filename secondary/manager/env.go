@@ -12,8 +12,8 @@ package manager
 import (
 	"bytes"
 	json "encoding/json"
-	co "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/gometa/common"
+	co "github.com/couchbase/indexing/secondary/common"
 	"net"
 	"os"
 	"strings"
@@ -69,7 +69,6 @@ func (e *env) getHostElectionPort() string {
 
 	return port
 }
-
 
 func (e *env) getHostTCPAddr() string {
 	return e.hostTCPAddr.String()
@@ -163,8 +162,8 @@ func (e *env) initWithConfig(path string) error {
 
 func (e *env) initWithArgs() error {
 	if len(os.Args) < 3 {
-		return NewError(ERROR_ARGUMENTS, NORMAL, GENERIC, nil, 
-					"Missing command line argument")
+		return NewError(ERROR_ARGUMENTS, NORMAL, GENERIC, nil,
+			"Missing command line argument")
 	}
 
 	err := e.resolveHostAddr()

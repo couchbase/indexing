@@ -12,27 +12,34 @@ type errCode int16
 
 const (
 	// generic (0 - 50)
-	ERROR_PANIC errCode = 0
-	ERROR_ARGUMENTS = 1
+	ERROR_PANIC     errCode = 0
+	ERROR_ARGUMENTS         = 1
 
 	// MetadataRepo (51-100)
-	ERROR_META_WRONG_KEY = 51
-	ERROR_META_IDX_DEFN_EXIST = 52
+	ERROR_META_WRONG_KEY          = 51
+	ERROR_META_IDX_DEFN_EXIST     = 52
 	ERROR_META_IDX_DEFN_NOT_EXIST = 53
-	
+
 	// Event Manager (101-150)
 	ERROR_EVT_DUPLICATE_NOTIFIER = 101
-	
+
 	// Index Manager (151-200)
 	ERROR_MGR_DDL_CREATE_IDX = 151
-	ERROR_MGR_DDL_DROP_IDX = 152
-	
+	ERROR_MGR_DDL_DROP_IDX   = 152
+
 	// Coordinator (201-250)
 	ERROR_COOR_LISTENER_FAIL = 201
 	ERROR_COOR_ELECTION_FAIL = 202
-	
+
 	// Watcher (251 - 300)
 	ERROR_WATCH_NO_ADDR_AVAIL = 251
+
+	// Stream (301-350)
+	ERROR_STREAM_INVALID_ARGUMENT    = 301
+	ERROR_STREAM_REQUEST_ERROR       = 302
+	ERROR_STREAM_ALREADY_OPEN        = 303
+	ERROR_STREAM_NOT_OPEN            = 304
+	ERROR_STREAM_BUCKET_ALREADY_OPEN = 304
 )
 
 type errSeverity int16
@@ -46,12 +53,13 @@ type errCategory int16
 
 const (
 	GENERIC errCategory = iota
-	COORDINATOR 
+	COORDINATOR
 	INDEX_MANAGER
 	METADATA_REPO
 	REQUEST_HANDLER
 	EVENT_MANAGER
 	WATCHER
+	STREAM
 )
 
 type Error struct {
@@ -68,6 +76,30 @@ func NewError(code errCode, severity errSeverity, category errCategory, cause er
 		category: category,
 		cause:    cause,
 		msg:      msg}
+}
+
+func NewError4(code errCode, severity errSeverity, category errCategory, msg string) Error {
+	return Error{code: code,
+		severity: severity,
+		category: category,
+		cause:    nil,
+		msg:      msg}
+}
+
+func NewError3(code errCode, severity errSeverity, category errCategory) Error {
+	return Error{code: code,
+		severity: severity,
+		category: category,
+		cause:    nil,
+		msg:      ""}
+}
+
+func NewError2(code errCode, category errCategory) Error {
+	return Error{code: code,
+		severity: NORMAL,
+		category: category,
+		cause:    nil,
+		msg:      ""}
 }
 
 func (e Error) Error() string {
@@ -91,6 +123,8 @@ func category(category errCategory) string {
 		return "Event Manager"
 	case WATCHER:
 		return "Watcher"
+	case STREAM:
+		return "Stream"
 	}
 	return ""
 }

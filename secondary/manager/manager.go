@@ -11,7 +11,9 @@ package manager
 
 import (
 	"fmt"
+	gometa "github.com/couchbase/gometa/common"
 	"github.com/couchbase/indexing/secondary/common"
+	"sync"
 	"time"
 )
 
@@ -24,6 +26,15 @@ type IndexManager struct {
 	coordinator *Coordinator
 	reqHandler  *requestHandler
 	eventMgr    *eventManager
+	streamMgr   *StreamManager
+	timer       *Timer
+
+	// timestamp management
+	timestampCh      chan *common.TsVbuuid
+	timekeeperStopCh chan bool
+
+	mutex    sync.Mutex
+	isClosed bool
 }
 
 ///////////////////////////////////////////////////////
@@ -38,6 +49,7 @@ func NewIndexManager(requestAddr string,
 	config string) (mgr *IndexManager, err error) {
 
 	mgr = new(IndexManager)
+	mgr.isClosed = false
 
 	// Initialize MetadataRepo.  This a blocking call until the
 	// the metadataRepo (including watcher) is operational (e.g.
@@ -47,11 +59,17 @@ func NewIndexManager(requestAddr string,
 		return nil, err
 	}
 
+	// Initialize the timer
+	mgr.timestampCh = make(chan *common.TsVbuuid, TIMESTAMP_NOTIFY_CH_SIZE)
+	mgr.timer = newTimer()
+	mgr.timekeeperStopCh = make(chan bool)
+	go mgr.runTimestampKeeper()
+
 	// Initialize Coordinator.  This is non-blocking.  The coordinator
 	// is operational only after it can syncrhonized with the majority
 	// of the indexers.   Any request made to the coordinator will be
 	// put in a channel for later processing (once leader election is done).
-	mgr.coordinator = NewCoordinator(mgr.repo)
+	mgr.coordinator = NewCoordinator(mgr.repo, mgr)
 	go mgr.coordinator.Run(config)
 
 	// Initialize request handler.  This is non-blocking.  The index manager
@@ -69,13 +87,38 @@ func NewIndexManager(requestAddr string,
 		return nil, err
 	}
 
+	// Initialize the stream manager.
+	admin := newProjectorAdmin()
+	handler := NewMgrMutHandler(mgr, admin)
+	mgr.streamMgr, err = NewStreamManager(mgr, handler, admin)
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+
 	return mgr, nil
+}
+
+func (m *IndexManager) IsClose() bool {
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	return m.isClosed
 }
 
 //
 // Clean up the IndexManager
 //
 func (m *IndexManager) Close() {
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if m.isClosed {
+		return
+	}
+
 	if m.repo != nil {
 		m.repo.Close()
 	}
@@ -91,6 +134,19 @@ func (m *IndexManager) Close() {
 	if m.reqHandler != nil {
 		m.reqHandler.close()
 	}
+
+	if m.streamMgr != nil {
+		m.streamMgr.Close()
+	}
+
+	if m.timer != nil {
+		m.timer.stopAll()
+
+		// use timekeeperStopCh to close the timekeeper gorountime right away
+		close(m.timekeeperStopCh)
+	}
+
+	m.isClosed = true
 }
 
 ///////////////////////////////////////////////////////
@@ -176,7 +232,10 @@ func (m *IndexManager) StopListenIndexDelete(id string) {
 //
 func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 
-	content, err := MarshallIndexDefn(defn)
+	//
+	// Save the index definition
+	//
+	content, err := marshallIndexDefn(defn)
 	if err != nil {
 		return err
 	}
@@ -203,6 +262,73 @@ func (m *IndexManager) HandleDeleteIndexDDL(name string) error {
 	}
 
 	return nil
+}
+
+//
+// Get Topology from dictionary
+//
+func (m *IndexManager) GetTopologyByBucket(bucket string) (*IndexTopology, error) {
+
+	return m.repo.GetTopologyByBucket(bucket)
+}
+
+//
+// Set Topology to dictionary
+//
+func (m *IndexManager) SetTopologyByBucket(bucket string, topology *IndexTopology) error {
+
+	return m.repo.SetTopologyByBucket(bucket, topology)
+}
+
+///////////////////////////////////////////////////////
+// public function - Timestamp Operation
+///////////////////////////////////////////////////////
+
+func (m *IndexManager) GetStabilityTimestampChannel() chan *common.TsVbuuid {
+
+	return m.timestampCh
+}
+
+func (m *IndexManager) runTimestampKeeper() {
+
+	defer common.Debugf("IndexManager.runTimestampKeeper() : terminate")
+
+	inboundch := m.timer.getOutputChannel()
+	for {
+		select {
+		case <-m.timekeeperStopCh:
+			return
+
+		case timestamp, ok := <-inboundch:
+
+			if !ok {
+				return
+			}
+
+			gometa.SafeRun("IndexManager.runTimestampKeeper()",
+				func() {
+					data, err := marshallTimestamp(timestamp)
+					if err != nil {
+						common.Debugf(
+							"IndexManager.runTimestampKeeper(): error when marshalling timestamp. Ignore timestamp.  Error=%s",
+							err.Error())
+					} else {
+						id := uint64(time.Now().UnixNano())
+						m.coordinator.NewRequest(id, uint32(OPCODE_NOTIFY_TIMESTAMP), "Stability Timestamp", data)
+					}
+				})
+		}
+	}
+}
+
+func (m *IndexManager) notifyNewTimestamp(timestamp *common.TsVbuuid) {
+
+	common.Debugf("IndexManager.notifyNewTimestamp(): receive new timestamp, notifying to listener")
+	m.timestampCh <- timestamp
+}
+
+func (m *IndexManager) getTimer() *Timer {
+	return m.timer
 }
 
 ///////////////////////////////////////////////////////

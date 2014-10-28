@@ -237,7 +237,7 @@ func getWatcherAddr(watcherId string) (string, error) {
 	}
 
 	if len(addrs) == 0 {
-		return "", NewError(ERROR_WATCH_NO_ADDR_AVAIL,	NORMAL, WATCHER, nil, 
+		return "", NewError(ERROR_WATCH_NO_ADDR_AVAIL, NORMAL, WATCHER, nil,
 			fmt.Sprintf("watcher.getWatcherAddr() : No network address is available"))
 	}
 
@@ -254,7 +254,7 @@ func getWatcherAddr(watcherId string) (string, error) {
 		}
 	}
 
-	return "", NewError(ERROR_WATCH_NO_ADDR_AVAIL,	NORMAL, WATCHER, nil, 
+	return "", NewError(ERROR_WATCH_NO_ADDR_AVAIL, NORMAL, WATCHER, nil,
 		fmt.Sprintf("watcher.getWatcherAddr() : Fail to find an IP address"))
 }
 

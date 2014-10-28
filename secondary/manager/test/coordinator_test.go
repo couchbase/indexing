@@ -64,6 +64,16 @@ func TestCoordinator(t *testing.T) {
 	if idxDefn == nil {
 		t.Fatal("Cannot find index definition")
 	}
+	
+	topology, err := mgr.GetTopologyByBucket("Default") 
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := manager.MarshallIndexTopology(topology) 
+	if err != nil {
+		t.Fatal(err)
+	}
+	common.Infof("Topology after index creation : %s", string(content))
 
 	cleanup(mgr, t)
 	time.Sleep(time.Duration(1000) * time.Millisecond)
