@@ -24,8 +24,8 @@ type SnapshotContainer interface {
 	GetSnapshotEqualToTS(*common.TsVbuuid) Snapshot
 	GetSnapshotOlderThanTS(*common.TsVbuuid) Snapshot
 
+	RemoveOldest() error
 	RemoveRecentThanTS(*common.TsVbuuid) error
-	RemoveOldest() Snapshot
 	RemoveAll() error
 }
 
@@ -48,25 +48,26 @@ func (sc *snapshotContainer) Add(s Snapshot) {
 	sc.snapshotList.PushFront(s)
 }
 
-//RemoveOldest removes the oldest snapshot from container
-//and returns it. Nil is returned in case there is no
-//snapshot.
-func (sc *snapshotContainer) RemoveOldest() Snapshot {
+//RemoveOldest removes the oldest snapshot from container.
+//Return any error that happened.
+func (sc *snapshotContainer) RemoveOldest() error {
 	sc.lock.Lock()
 	defer sc.lock.Unlock()
 
 	e := sc.snapshotList.Back()
 
-	if e == nil {
-		return nil
-	} else {
+	if e != nil {
+		snapshot := e.Value.(Snapshot)
+		snapshot.Close()
 		sc.snapshotList.Remove(e)
-		return e.Value.(Snapshot)
 	}
+
+	return nil
 }
 
-//RemoveRecentThanTS removes all the snapshots from container
-//which are more recent than the given timestamp.
+//RemoveRecentThanTS discards all the snapshots from container
+//which are more recent than the given timestamp. The snaphots
+//being removed are closed as well.
 func (sc *snapshotContainer) RemoveRecentThanTS(tsVbuuid *common.TsVbuuid) error {
 
 	sc.lock.Lock()
@@ -78,6 +79,8 @@ func (sc *snapshotContainer) RemoveRecentThanTS(tsVbuuid *common.TsVbuuid) error
 		snapTsVbuuid := snapshot.Timestamp()
 		snapTs := getStabilityTSFromTsVbuuid(snapTsVbuuid)
 		if snapTs.GreaterThan(ts) {
+			//Close the snapshot
+			snapshot.Close()
 			sc.snapshotList.Remove(e)
 		}
 	}
@@ -86,12 +89,20 @@ func (sc *snapshotContainer) RemoveRecentThanTS(tsVbuuid *common.TsVbuuid) error
 
 }
 
-//RemoveAll removes all the snapshost from container.
+//RemoveAll discards all the snapshosts from container.
+//All snapshots will be closed before being discarded.
 //Return any error that happened.
 func (sc *snapshotContainer) RemoveAll() error {
 	sc.lock.Lock()
 	defer sc.lock.Unlock()
 
+	//close all snapshots
+	for e := sc.snapshotList.Front(); e != nil; e = e.Next() {
+		snapshot := e.Value.(Snapshot)
+		snapshot.Close()
+	}
+
+	//clear the snapshot list
 	sc.snapshotList.Init()
 	return nil
 }

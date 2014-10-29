@@ -590,6 +590,8 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		}
 	}
 
+	idxPartnInfo := idx.indexPartnMap[indexInstId]
+
 	//update internal maps
 	delete(idx.indexInstMap, indexInstId)
 	delete(idx.indexPartnMap, indexInstId)
@@ -618,6 +620,24 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	if ok := idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.scanCoordCmdCh,
 		"ScanCoordinator", respCh); !ok {
 		return
+	}
+
+	//for all partitions managed by this indexer
+	for _, partnInst := range idxPartnInfo {
+		sc := partnInst.Sc
+
+		//close all the slices
+		for _, slice := range sc.GetAllSlices() {
+			snapContainer := slice.GetSnapshotContainer()
+			//discard all the snapshots for this slice
+			snapContainer.RemoveAll()
+
+			//close the slice
+			slice.Close()
+
+			//TODO call slice.Destroy() when its ready
+		}
+
 	}
 
 	respCh <- &MsgSuccess{}

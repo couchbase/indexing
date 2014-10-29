@@ -157,12 +157,10 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 						if newSnapshot, err := slice.Snapshot(); err == nil {
 
 							if snapContainer.Len() > MAX_SNAPSHOTS_PER_INDEX {
-								s := snapContainer.RemoveOldest()
-								if s != nil {
-									common.Debugf("StorageMgr::handleCreateSnapshot \n\tRemoved Old Snapshot %v, "+
-										"Len %v", s, snapContainer.Len())
-									//close the removed snapshot
-									s.Close()
+								serr := snapContainer.RemoveOldest()
+								if serr != nil {
+									common.Debugf("StorageMgr::handleCreateSnapshot \n\tRemoved Oldest Snapshot, "+
+										"Container Len %v", snapContainer.Len())
 								}
 							}
 							newTsVbuuid := tsVbuuid.Copy()
@@ -216,7 +214,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 					if snap != nil {
 						err := slice.Rollback(snap)
 						if err == nil {
-							//remove all the snapshots recent than the TS rolled back to
+							//discard all the snapshots recent than the TS rolled back to
 							s.RemoveRecentThanTS(snap.Timestamp())
 							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
@@ -237,7 +235,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						//if there is no snapshot available, rollback to zero
 						err := slice.RollbackToZero()
 						if err == nil {
-							//remove all snapshots in container
+							//discard all snapshots in container
 							s.RemoveAll()
 							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,

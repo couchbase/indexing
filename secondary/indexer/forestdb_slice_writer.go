@@ -56,8 +56,10 @@ func NewForestDBSlice(name string, sliceId SliceId, idxDefnId common.IndexDefnId
 
 	slice.cmdCh = make(chan interface{}, SLICE_COMMAND_BUFFER_SIZE)
 	slice.workerDone = make([]chan bool, NUM_WRITER_THREADS_PER_SLICE)
+	slice.stopCh = make([]DoneChannel, NUM_WRITER_THREADS_PER_SLICE)
 
 	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+		slice.stopCh[i] = make(DoneChannel)
 		slice.workerDone[i] = make(chan bool)
 		go slice.handleCommandsWorker(i)
 	}
@@ -91,7 +93,7 @@ type fdbSlice struct {
 	sc SnapshotContainer //snapshot container
 
 	cmdCh  chan interface{} //internal channel to buffer commands
-	stopCh DoneChannel      //internal channel to signal shutdown
+	stopCh []DoneChannel    //internal channel to signal shutdown
 
 	workerDone []chan bool //worker status check channel
 
@@ -153,8 +155,8 @@ loop:
 					"Unknown Command %v", fdb.id, fdb.idxInstId, c)
 			}
 
-		case <-fdb.stopCh:
-			fdb.stopCh <- true
+		case <-fdb.stopCh[workerId]:
+			fdb.stopCh[workerId] <- true
 			break loop
 
 			//worker gets a status check message on this channel, it responds
@@ -470,8 +472,8 @@ func (fdb *fdbSlice) Close() error {
 
 	//signal shutdown for command handler routines
 	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
-		fdb.stopCh <- true
-		<-fdb.stopCh
+		fdb.stopCh[i] <- true
+		<-fdb.stopCh[i]
 	}
 
 	//close the main index
