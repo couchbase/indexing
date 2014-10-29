@@ -73,7 +73,7 @@ func N1QLTransform(docid, doc []byte, cExprs []interface{}) ([]byte, error) {
 
 	if len(cExprs) == 1 && len(arrValue) == 1 && docid == nil {
 		// used for partition-key evaluation and where predicate.
-		return arrValue[0].Bytes(), nil
+		return arrValue[0].MarshalJSON()
 
 	} else if len(arrValue) > 0 {
 		// A strictly internal hack to make secondary keys unique by
@@ -89,7 +89,7 @@ func N1QLTransform(docid, doc []byte, cExprs []interface{}) ([]byte, error) {
 		for i, key := range arrValue {
 			secKey.SetIndex(i, key)
 		}
-		return secKey.Bytes(), nil // return as JSON array
+		return secKey.MarshalJSON() // return as JSON array
 	}
 	return nil, nil
 }
