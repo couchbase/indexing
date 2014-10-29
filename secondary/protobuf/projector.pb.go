@@ -136,7 +136,7 @@ func (m *FailoverLogResponse) GetErr() *Error {
 }
 
 // Requested by Coordinator or indexer to start a
-// new mutation topic. Responds back with TopicResponse.
+// new mutation topic. Respond back with TopicResponse.
 type MutationTopicRequest struct {
 	Topic         *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	EndpointType  *string     `protobuf:"bytes,2,req,name=endpointType" json:"endpointType,omitempty"`
@@ -179,7 +179,7 @@ func (m *MutationTopicRequest) GetInstances() []*Instance {
 }
 
 // Response back for
-//      MutationTopicRequest, RestartVbucketsRequest, ShutdownVbucketsRequest
+// MutationTopicRequest, RestartVbucketsRequest, AddBucketsRequest
 type TopicResponse struct {
 	Topic              *string     `protobuf:"bytes,1,opt,name=topic" json:"topic,omitempty"`
 	InstanceIds        []uint64    `protobuf:"varint,2,rep,name=instanceIds" json:"instanceIds,omitempty"`
@@ -230,7 +230,7 @@ func (m *TopicResponse) GetErr() *Error {
 
 // RestartVbucketsRequest will restart a subset
 // of vbuckets for each specified buckets.
-// Responds back with TopicResponse
+// Respond back with TopicResponse
 type RestartVbucketsRequest struct {
 	Topic             *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	RestartTimestamps []*TsVbuuid `protobuf:"bytes,2,rep,name=restartTimestamps" json:"restartTimestamps,omitempty"`
@@ -256,7 +256,7 @@ func (m *RestartVbucketsRequest) GetRestartTimestamps() []*TsVbuuid {
 }
 
 // ShutdownVbucketsRequest will shutdown a subset of vbuckets
-// for each specified buckets. Responds back with TopicResponse
+// for each specified buckets. Respond back with TopicResponse
 type ShutdownVbucketsRequest struct {
 	Topic              *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	ShutdownTimestamps []*TsVbuuid `protobuf:"bytes,2,rep,name=shutdownTimestamps" json:"shutdownTimestamps,omitempty"`
@@ -284,7 +284,7 @@ func (m *ShutdownVbucketsRequest) GetShutdownTimestamps() []*TsVbuuid {
 // AddBucketsRequest will start vbucket-streams
 // specified buckets and add them to the topic that
 // has already started.
-// Responds back with TopicResponse
+// Respond back with TopicResponse
 type AddBucketsRequest struct {
 	Topic         *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	ReqTimestamps []*TsVbuuid `protobuf:"bytes,2,rep,name=reqTimestamps" json:"reqTimestamps,omitempty"`
@@ -320,7 +320,7 @@ func (m *AddBucketsRequest) GetInstances() []*Instance {
 
 // DelBucketsRequest will shutdown vbucket-streams
 // for specified buckets and remove the buckets from topic.
-// Responds back with TopicResponse
+// Respond back with TopicResponse
 type DelBucketsRequest struct {
 	Topic            *string  `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	Buckets          []string `protobuf:"bytes,2,rep,name=buckets" json:"buckets,omitempty"`
@@ -346,7 +346,7 @@ func (m *DelBucketsRequest) GetBuckets() []string {
 }
 
 // AddInstancesRequest to add index-instances to a topic.
-// Responds back with TopicResponse
+// Respond back with TopicResponse
 type AddInstancesRequest struct {
 	Topic            *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	Instances        []*Instance `protobuf:"bytes,2,rep,name=instances" json:"instances,omitempty"`
@@ -372,7 +372,7 @@ func (m *AddInstancesRequest) GetInstances() []*Instance {
 }
 
 // DelInstancesRequest to add index-instances to a topic.
-// Responds back with TopicResponse
+// Respond back with TopicResponse
 type DelInstancesRequest struct {
 	Topic            *string  `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	InstanceIds      []uint64 `protobuf:"varint,2,rep,name=instanceIds" json:"instanceIds,omitempty"`

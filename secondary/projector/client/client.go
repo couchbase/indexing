@@ -44,6 +44,8 @@ func NewClient(adminport string, config c.Config) *Client {
 }
 
 // GetVbmap from projector, for a set of kvnodes.
+// - return http errors for transport related failures.
+// - return couchbase SDK error if any.
 func (client *Client) GetVbmap(
 	pooln, bucketn string, kvaddrs []string) (*protobuf.VbmapResponse, error) {
 
@@ -70,6 +72,8 @@ func (client *Client) GetVbmap(
 }
 
 // GetFailoverLogs from projector, for a set vbuckets.
+// - return http errors for transport related failures.
+// - return couchbase SDK error if any.
 func (client *Client) GetFailoverLogs(
 	pooln, bucketn string,
 	vbnos []uint32) (*protobuf.FailoverLogResponse, error) {
@@ -97,7 +101,14 @@ func (client *Client) GetFailoverLogs(
 }
 
 // InitialTopicRequest topic from a kvnode, for an initial set
-// of instances.
+// of instances. Initial will topic always start vbucket bucket
+// streams from seqno number ZERO using the latest-vbuuid.
+// - return http errors for transport related failures.
+// - return ErrorTopicExist if feed is already started.
+// - return ErrorInconsistentFeed for malformed feed request.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if request is not completed within timeout.
 func (client *Client) InitialTopicRequest(
 	topic, pooln, kvaddr, endpointType string,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
@@ -135,6 +146,12 @@ func (client *Client) InitialTopicRequest(
 
 // MutationTopicRequest topic from a kvnode, for an initial set of
 // instances.
+// - return http errors for transport related failures.
+// - return ErrorTopicExist if feed is already started.
+// - return ErrorInconsistentFeed for malformed feed request.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if request is not completed within timeout.
 func (client *Client) MutationTopicRequest(
 	topic, endpointType string,
 	reqTimestamps []*protobuf.TsVbuuid,
@@ -160,6 +177,12 @@ func (client *Client) MutationTopicRequest(
 }
 
 // RestartVbuckets for topic.
+// - return http errors for transport related failures.
+// - return ErrorTopicMissing if feed is not started.
+// - return ErrorInvalidBucket if bucket is not added.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if request is not completed within timeout.
 func (client *Client) RestartVbuckets(
 	topic string,
 	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
@@ -186,6 +209,12 @@ func (client *Client) RestartVbuckets(
 }
 
 // ShutdownVbuckets for topic.
+// - return http errors for transport related failures.
+// - return ErrorTopicMissing if feed is not started.
+// - return ErrorInvalidBucket if bucket is not added.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if request is not completed within timeout.
 func (client *Client) ShutdownVbuckets(
 	topic string, shutdownTimestamps []*protobuf.TsVbuuid) error {
 
@@ -211,6 +240,12 @@ func (client *Client) ShutdownVbuckets(
 }
 
 // AddBuckets will add buckets and its instances to a topic.
+// - return http errors for transport related failures.
+// - return ErrorTopicMissing if feed is not started.
+// - return ErrorInconsistentFeed for malformed feed request
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if request is not completed within timeout.
 func (client *Client) AddBuckets(
 	topic string, reqTimestamps []*protobuf.TsVbuuid,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
@@ -235,6 +270,12 @@ func (client *Client) AddBuckets(
 }
 
 // DelBuckets will del buckets and all its instances from a topic.
+// - return http errors for transport related failures.
+// - return ErrorTopicMissing if feed is not started.
+// - return ErrorInvalidBucket if bucket is not added.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if request is not completed within timeout.
 func (client *Client) DelBuckets(topic string, buckets []string) error {
 	req := protobuf.NewDelBucketsRequest(topic, buckets)
 	res := &protobuf.Error{}
@@ -256,6 +297,9 @@ func (client *Client) DelBuckets(topic string, buckets []string) error {
 
 // AddInstances will add one or more instances to one or more
 // buckets.
+// - return http errors for transport related failures.
+// - return ErrorTopicMissing if feed is not started.
+// - return ErrorInconsistentFeed for malformed feed request
 func (client *Client) AddInstances(
 	topic string, instances []*protobuf.Instance) error {
 
@@ -278,6 +322,8 @@ func (client *Client) AddInstances(
 }
 
 // DelInstances will del buckets and all its instances from a topic.
+// - return http errors for transport related failures.
+// - return ErrorTopicMissing if feed is not started.
 func (client *Client) DelInstances(topic string, uuids []uint64) error {
 	req := protobuf.NewDelInstancesRequest(topic, uuids)
 	res := &protobuf.Error{}
@@ -298,6 +344,8 @@ func (client *Client) DelInstances(topic string, uuids []uint64) error {
 }
 
 // RepairEndpoints will restart endpoints.
+// - return http errors for transport related failures.
+// - return ErrorTopicMissing if feed is not started.
 func (client *Client) RepairEndpoints(
 	topic string, endpoints []string) error {
 
@@ -320,6 +368,8 @@ func (client *Client) RepairEndpoints(
 }
 
 // ShutdownTopic will stop the feed for topic.
+// - return http errors for transport related failures.
+// - return ErrorTopicMissing if feed is not started.
 func (client *Client) ShutdownTopic(topic string) error {
 	req := protobuf.NewShutdownTopicRequest(topic)
 	res := &protobuf.Error{}
@@ -341,6 +391,7 @@ func (client *Client) ShutdownTopic(topic string) error {
 
 // InitialRestartTimestamp will compose the initial set of timestamp
 // for a subset of vbuckets (hosted by `kvaddrs`) in `bucket`.
+// - return http errors for transport related failures.
 func (client *Client) InitialRestartTimestamp(
 	pooln, bucketn string, kvaddrs []string) (*protobuf.TsVbuuid, error) {
 

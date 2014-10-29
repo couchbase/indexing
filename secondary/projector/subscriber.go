@@ -8,8 +8,10 @@ import c "github.com/couchbase/indexing/secondary/common"
 // for custom-messages.
 type Subscriber interface {
 	// GetEvaluators will return a map of uuid to Evaluator interface.
+	// - return ErrorInconsistentFeed for malformed tables.
 	GetEvaluators() (map[uint64]c.Evaluator, error)
 
 	// GetRouters will return a map of uuid to Router interface.
+	// - return ErrorInconsistentFeed for malformed tables.
 	GetRouters() (map[uint64]c.Router, error)
 }

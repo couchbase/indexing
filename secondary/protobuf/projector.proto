@@ -34,7 +34,7 @@ message FailoverLogResponse {
 }
 
 // Requested by Coordinator or indexer to start a
-// new mutation topic. Responds back with TopicResponse.
+// new mutation topic. Respond back with TopicResponse.
 message MutationTopicRequest {
     required string   topic         = 1;
     required string   endpointType  = 2; // settings to RouterEndpointFactory
@@ -44,7 +44,7 @@ message MutationTopicRequest {
 }
 
 // Response back for
-//      MutationTopicRequest, RestartVbucketsRequest, ShutdownVbucketsRequest
+// MutationTopicRequest, RestartVbucketsRequest, AddBucketsRequest
 message TopicResponse {
     optional string   topic              = 1;
     repeated uint64   instanceIds        = 2;
@@ -55,14 +55,14 @@ message TopicResponse {
 
 // RestartVbucketsRequest will restart a subset
 // of vbuckets for each specified buckets.
-// Responds back with TopicResponse
+// Respond back with TopicResponse
 message RestartVbucketsRequest {
     required string   topic              = 1;
     repeated TsVbuuid restartTimestamps  = 2; // per bucket timestamps
 }
 
 // ShutdownVbucketsRequest will shutdown a subset of vbuckets
-// for each specified buckets. Responds back with TopicResponse
+// for each specified buckets. Respond back with TopicResponse
 message ShutdownVbucketsRequest {
     required string   topic              = 1;
     repeated TsVbuuid shutdownTimestamps = 2; // per bucket timestamps
@@ -71,7 +71,7 @@ message ShutdownVbucketsRequest {
 // AddBucketsRequest will start vbucket-streams
 // specified buckets and add them to the topic that
 // has already started.
-// Responds back with TopicResponse
+// Respond back with TopicResponse
 message AddBucketsRequest {
     required string   topic         = 1;
     repeated TsVbuuid reqTimestamps = 2; // per bucket timestamps
@@ -81,21 +81,21 @@ message AddBucketsRequest {
 
 // DelBucketsRequest will shutdown vbucket-streams
 // for specified buckets and remove the buckets from topic.
-// Responds back with TopicResponse
+// Respond back with TopicResponse
 message DelBucketsRequest {
     required string topic   = 1;
     repeated string buckets = 2;
 }
 
 // AddInstancesRequest to add index-instances to a topic.
-// Responds back with TopicResponse
+// Respond back with TopicResponse
 message AddInstancesRequest {
     required string   topic     = 1;
     repeated Instance instances = 2; // instances to be added to this topic
 }
 
 // DelInstancesRequest to add index-instances to a topic.
-// Responds back with TopicResponse
+// Respond back with TopicResponse
 message DelInstancesRequest {
     required string topic       = 1;
     repeated uint64 instanceIds = 2; // instances to be deleted from this topic

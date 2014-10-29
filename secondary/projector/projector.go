@@ -56,7 +56,8 @@ func NewProjector(config c.Config) *Projector {
 	return p
 }
 
-// GetFeed object for `topic`
+// GetFeed object for `topic`.
+// - return ErrorTopicMissing if topic is not started.
 func (p *Projector) GetFeed(topic string) (*Feed, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -67,7 +68,8 @@ func (p *Projector) GetFeed(topic string) (*Feed, error) {
 	return nil, ErrorTopicMissing
 }
 
-// AddFeed object for `topic`
+// AddFeed object for `topic`.
+// - return ErrorTopicExist if topic is duplicate.
 func (p *Projector) AddFeed(topic string, feed *Feed) (err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -80,7 +82,8 @@ func (p *Projector) AddFeed(topic string, feed *Feed) (err error) {
 	return
 }
 
-// DelFeed object for `topic`
+// DelFeed object for `topic`.
+// - return ErrorTopicMissing if topic is not started.
 func (p *Projector) DelFeed(topic string) (err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -95,6 +98,7 @@ func (p *Projector) DelFeed(topic string) (err error) {
 
 //---- handler for admin-port request
 
+// - return couchbase SDK error if any.
 func (p *Projector) doVbmapRequest(
 	request *protobuf.VbmapRequest) ap.MessageMarshaller {
 
@@ -133,6 +137,7 @@ func (p *Projector) doVbmapRequest(
 	return response
 }
 
+// - return couchbase SDK error if any.
 func (p *Projector) doFailoverLog(
 	request *protobuf.FailoverLogRequest) ap.MessageMarshaller {
 
@@ -177,6 +182,11 @@ func (p *Projector) doFailoverLog(
 	return response
 }
 
+// - return ErrorTopicExist if feed is already started.
+// - return ErrorInconsistentFeed for malformed feed request.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doMutationTopic(
 	request *protobuf.MutationTopicRequest) ap.MessageMarshaller {
 
@@ -213,6 +223,11 @@ func (p *Projector) doMutationTopic(
 	return (&protobuf.TopicResponse{}).SetErr(err)
 }
 
+// - return ErrorTopicMissing if feed is not started.
+// - return ErrorInvalidBucket if bucket is not added.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doRestartVbuckets(
 	request *protobuf.RestartVbucketsRequest) ap.MessageMarshaller {
 
@@ -232,6 +247,11 @@ func (p *Projector) doRestartVbuckets(
 	return (&protobuf.TopicResponse{}).SetErr(err)
 }
 
+// - return ErrorTopicMissing if feed is not started.
+// - return ErrorInvalidBucket if bucket is not added.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doShutdownVbuckets(
 	request *protobuf.ShutdownVbucketsRequest) ap.MessageMarshaller {
 
@@ -248,6 +268,11 @@ func (p *Projector) doShutdownVbuckets(
 	return protobuf.NewError(err)
 }
 
+// - return ErrorTopicMissing if feed is not started.
+// - return ErrorInconsistentFeed for malformed feed request
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doAddBuckets(
 	request *protobuf.AddBucketsRequest) ap.MessageMarshaller {
 
@@ -267,6 +292,11 @@ func (p *Projector) doAddBuckets(
 	return (&protobuf.TopicResponse{}).SetErr(err)
 }
 
+// - return ErrorTopicMissing if feed is not started.
+// - return ErrorInvalidBucket if bucket is not added.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doDelBuckets(
 	request *protobuf.DelBucketsRequest) ap.MessageMarshaller {
 
@@ -283,6 +313,9 @@ func (p *Projector) doDelBuckets(
 	return protobuf.NewError(err)
 }
 
+// - return ErrorTopicMissing if feed is not started.
+// - return ErrorInconsistentFeed for malformed feed request
+// - otherwise, error is empty string.
 func (p *Projector) doAddInstances(
 	request *protobuf.AddInstancesRequest) ap.MessageMarshaller {
 
@@ -299,6 +332,8 @@ func (p *Projector) doAddInstances(
 	return protobuf.NewError(err)
 }
 
+// - return ErrorTopicMissing if feed is not started.
+// - otherwise, error is empty string.
 func (p *Projector) doDelInstances(
 	request *protobuf.DelInstancesRequest) ap.MessageMarshaller {
 
@@ -315,6 +350,8 @@ func (p *Projector) doDelInstances(
 	return protobuf.NewError(err)
 }
 
+// - return ErrorTopicMissing if feed is not started.
+// - otherwise, error is empty string.
 func (p *Projector) doRepairEndpoints(
 	request *protobuf.RepairEndpointsRequest) ap.MessageMarshaller {
 
@@ -331,6 +368,8 @@ func (p *Projector) doRepairEndpoints(
 	return protobuf.NewError(err)
 }
 
+// - return ErrorTopicMissing if feed is not started.
+// - otherwise, error is empty string.
 func (p *Projector) doShutdownTopic(
 	request *protobuf.ShutdownTopicRequest) ap.MessageMarshaller {
 
@@ -349,7 +388,6 @@ func (p *Projector) doShutdownTopic(
 }
 
 func (p *Projector) doStatistics(request c.Statistics) ap.MessageMarshaller {
-
 	c.Debugf("%v doStatistics()\n", p.logPrefix)
 
 	m := map[string]interface{}{

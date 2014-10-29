@@ -19,6 +19,9 @@ var ErrorInvalidBucket = errors.New("feed.invalidBucket")
 // ErrorInvalidVbucketBranch
 var ErrorInvalidVbucketBranch = errors.New("feed.invalidVbucketBranch")
 
+// ErrorInvalidVbucket
+var ErrorInvalidVbucket = errors.New("feed.invalidVbucket")
+
 // ErrorInconsistentFeed
 var ErrorInconsistentFeed = errors.New("feed.inconsistentFeed")
 
@@ -352,6 +355,10 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 }
 
 // start a new feed.
+// - return ErrorInconsistentFeed for malformed feed request
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if feedback is not completed within timeout.
 func (feed *Feed) start(req *protobuf.MutationTopicRequest) error {
 	feed.endpointType = req.GetEndpointType()
 
@@ -387,6 +394,10 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) error {
 }
 
 // a subset of upstreams are restarted.
+// - return ErrorInvalidBucket if bucket is not added.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if feedback is not completed within timeout.
 func (feed *Feed) restartVbuckets(req *protobuf.RestartVbucketsRequest) error {
 	// iterate request-timestamp for each bucket.
 	opaque := newOpaque()
@@ -434,6 +445,10 @@ func (feed *Feed) restartVbuckets(req *protobuf.RestartVbucketsRequest) error {
 }
 
 // a subset of upstreams are closed.
+// - return ErrorInvalidBucket if bucket is not added.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if feedback is not completed within timeout.
 func (feed *Feed) shutdownVbuckets(
 	req *protobuf.ShutdownVbucketsRequest) (err error) {
 	// iterate request-timestamp for each bucket.
@@ -463,8 +478,12 @@ func (feed *Feed) shutdownVbuckets(
 	return nil
 }
 
-// upstreams are added for buckets
-// data-path opened and vbucket-routines started.
+// upstreams are added for buckets data-path opened and
+// vbucket-routines started.
+// - return ErrorInconsistentFeed for malformed feed request
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if feedback is not completed within timeout.
 func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) error {
 	// update engines and endpoints
 	if err := feed.processSubscribers(req); err != nil { // :SideEffect:
@@ -498,9 +517,12 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) error {
 	return nil
 }
 
-// upstreams are closed for buckets
-// data-path is closed for downstream
+// upstreams are closed for buckets, data-path is closed for downstream,
 // vbucket-routines exits on StreamEnd
+// - return ErrorInvalidBucket if bucket is not added.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
+// - return go-couchbase failures.
+// - return ErrorResponseTimeout if feedback is not completed within timeout.
 func (feed *Feed) delBuckets(req *protobuf.DelBucketsRequest) error {
 	opaque := newOpaque()
 	for _, bucketn := range req.GetBuckets() {
@@ -539,6 +561,7 @@ func (feed *Feed) delBuckets(req *protobuf.DelBucketsRequest) error {
 }
 
 // only data-path shall be updated.
+// - return ErrorInconsistentFeed for malformed feed request
 func (feed *Feed) addInstances(req *protobuf.AddInstancesRequest) error {
 	// update engines and endpoints
 	if err := feed.processSubscribers(req); err != nil { // :SideEffect:
@@ -554,6 +577,8 @@ func (feed *Feed) addInstances(req *protobuf.AddInstancesRequest) error {
 }
 
 // only data-path shall be updated.
+// - if it is the last instance defined on the bucket, then
+//   use delBuckets() API to delete the bucket.
 func (feed *Feed) delInstances(req *protobuf.DelInstancesRequest) error {
 	// reconstruct instance uuids bucket-wise.
 	instanceIds := req.GetInstanceIds()
@@ -656,6 +681,8 @@ func (feed *Feed) shutdown() error {
 
 // start a feed for a bucket with a set of kvfeeder,
 // based on vbmap and failover-logs.
+// - return go-couchbase failures.
+// - return ErrorInvalidVbucketBranch for malformed vbuuid.
 func (feed *Feed) bucketFeed(
 	opaque uint16,
 	stop, start bool,
@@ -709,6 +736,7 @@ func (feed *Feed) bucketFeed(
 	return feeder, nil
 }
 
+// - return go-couchbase failures.
 func (feed *Feed) bucketDetails(pooln, bucketn string) ([]uint16, []uint64, error) {
 	bucket, err := c.ConnectBucket(feed.cluster, pooln, bucketn)
 	if err != nil {
@@ -743,8 +771,8 @@ func (feed *Feed) bucketDetails(pooln, bucketn string) ([]uint16, []uint64, erro
 	for i, vbno := range vbnos {
 		flog := flogs[vbno]
 		if len(flog) < 1 {
-			feed.errorf("bucket.FailoverLog empty", bucketn, err)
-			return nil, nil, err
+			feed.errorf("bucket.FailoverLog empty", bucketn, nil)
+			return nil, nil, ErrorInvalidVbucket
 		}
 		vbuuids[i] = flog[len(flog)-1][0]
 	}
@@ -768,6 +796,7 @@ func (feed *Feed) startDataPath(
 	return m
 }
 
+// - return ErrorInconsistentFeed for malformed feed request
 func (feed *Feed) processSubscribers(req Subscriber) error {
 	evaluators, routers, err := feed.subscribers(req)
 	if err != nil {
@@ -793,7 +822,7 @@ func (feed *Feed) processSubscribers(req Subscriber) error {
 	return nil
 }
 
-// feed.endpoints is updated with fresh started endpoint
+// feed.endpoints is updated with freshly started endpoint,
 // if an endpoint is already present and active it is
 // reused.
 func (feed *Feed) startEndpoints(routers map[uint64]c.Router) error {
@@ -815,16 +844,17 @@ func (feed *Feed) startEndpoints(routers map[uint64]c.Router) error {
 	return nil
 }
 
+// - return ErrorInconsistentFeed for malformed feeds.
 func (feed *Feed) subscribers(
 	req Subscriber) (map[uint64]c.Evaluator, map[uint64]c.Router, error) {
 
 	evaluators, err := req.GetEvaluators()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, ErrorInconsistentFeed
 	}
 	routers, err := req.GetRouters()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, ErrorInconsistentFeed
 	}
 
 	if len(evaluators) != len(routers) {
@@ -851,6 +881,7 @@ func (feed *Feed) engineNames() []string {
 }
 
 // wait for kvdata to post StreamRequest.
+// - return ErrorResponseTimeout if feedback is not completed within timeout
 func (feed *Feed) waitStreamRequests(
 	opaque uint16,
 	pooln, bucketn string, vbnos []uint16) (*protobuf.TsVbuuid, error) {
@@ -882,6 +913,7 @@ func (feed *Feed) waitStreamRequests(
 }
 
 // wait for kvdata to post StreamEnd.
+// - return ErrorResponseTimeout if feedback is not completed within timeout
 func (feed *Feed) waitStreamEnds(
 	opaque uint16, bucketn string, vbnos []uint16) error {
 
@@ -905,7 +937,7 @@ func (feed *Feed) waitStreamEnds(
 }
 
 // block feed until feedback posted back from kvdata.
-// returns ErrorResponseTimeout
+// - return ErrorResponseTimeout if feedback is not completed within timeout
 func (feed *Feed) waitOnFeedback(
 	timeout <-chan time.Time, callb func(msg interface{}) string) (err error) {
 
