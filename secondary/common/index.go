@@ -13,7 +13,7 @@ import (
 	"fmt"
 )
 
-type IndexKey [][]byte
+type IndexKey []byte
 
 type IndexDefnId uint64
 type IndexInstId uint64

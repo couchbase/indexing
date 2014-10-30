@@ -375,14 +375,14 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 	var value Value
 	var err error
 
-	if key, err = NewKey(mut.keys[i], mut.docid); err != nil {
+	if key, err = NewKey(mut.keys[i]); err != nil {
 
 		common.Errorf("Flusher::processUpsert Error Generating Key"+
 			"From Mutation: %v. Skipped. Error: %v", mut.keys[i], err)
 		return
 	}
 
-	if value, err = NewValue(mut.keys[i], mut.docid, mut.meta.vbucket,
+	if value, err = NewValue(mut.docid, mut.meta.vbucket,
 		mut.meta.seqno); err != nil {
 
 		common.Errorf("Flusher::processUpsert Error Generating Value"+

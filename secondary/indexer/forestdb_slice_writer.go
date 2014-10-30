@@ -184,13 +184,13 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 		common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error locating "+
 			"backindex entry %v", fdb.id, fdb.idxInstId, err)
 		return
-	} else if oldkey.EncodedBytes() != nil {
+	} else if oldkey.Encoded() != nil {
 		//TODO: Handle the case if old-value from backindex matches with the
 		//new-value(false mutation). Skip It.
 
 		//there is already an entry in main index for this docid
 		//delete from main index
-		if err = fdb.main[workerId].DeleteKV(oldkey.EncodedBytes()); err != nil {
+		if err = fdb.main[workerId].DeleteKV(oldkey.Encoded()); err != nil {
 			fdb.checkFatalDbError(err)
 			common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
 				"entry from main index %v", fdb.id, fdb.idxInstId, err)
@@ -198,16 +198,8 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 		}
 	}
 
-	//If secondary-key is nil, no further processing is required. If this was a KV insert,
-	//nothing needs to be done. If this was a KV update, only delete old back/main index entry
-	if v.KeyBytes() == nil {
-		common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Received NIL secondary key. "+
-			"Skipped Key %s. Value %s.", fdb.id, fdb.idxInstId, k, v)
-		return
-	}
-
 	//set the back index entry <docid, encodedkey>
-	if err = fdb.back[workerId].SetKV([]byte(v.Docid()), k.EncodedBytes()); err != nil {
+	if err = fdb.back[workerId].SetKV([]byte(v.Docid()), k.Encoded()); err != nil {
 		fdb.checkFatalDbError(err)
 		common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Back Index Set. "+
 			"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, v, k, err)
@@ -215,7 +207,7 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 	}
 
 	//set in main index
-	if err = fdb.main[workerId].SetKV(k.EncodedBytes(), v.EncodedBytes()); err != nil {
+	if err = fdb.main[workerId].SetKV(k.Encoded(), v.Encoded()); err != nil {
 		fdb.checkFatalDbError(err)
 		common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
 			"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, k, v, err)
@@ -241,7 +233,7 @@ func (fdb *fdbSlice) delete(docid []byte, workerId int) {
 	}
 
 	//delete from main index
-	if err = fdb.main[workerId].DeleteKV(oldkey.EncodedBytes()); err != nil {
+	if err = fdb.main[workerId].DeleteKV(oldkey.Encoded()); err != nil {
 		fdb.checkFatalDbError(err)
 		common.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error deleting "+
 			"entry from main index for Doc %s. Key %v. Error %v", fdb.id, fdb.idxInstId,

@@ -106,7 +106,7 @@ func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 	var lowkey []byte
 	var err error
 
-	if lowkey = low.EncodedBytes(); lowkey == nil {
+	if lowkey = low.Encoded(); lowkey == nil {
 		it.SeekFirst()
 	} else {
 		it.Seek(lowkey)
@@ -131,14 +131,14 @@ func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 			common.Tracef("ForestDB Got Key - %s", key.String())
 
 			var highcmp int
-			if high.EncodedBytes() == nil {
+			if high.Encoded() == nil {
 				highcmp = -1 //if high key is nil, iterate through the fullset
 			} else {
 				highcmp = key.Compare(high)
 			}
 
 			var lowcmp int
-			if low.EncodedBytes() == nil {
+			if low.Encoded() == nil {
 				lowcmp = 1 //all keys are greater than nil
 			} else {
 				lowcmp = key.Compare(low)
@@ -184,7 +184,7 @@ func (s *fdbSnapshot) GetValueSetForKeyRange(low Key, high Key,
 	var lowkey []byte
 	var err error
 
-	if lowkey = low.EncodedBytes(); lowkey == nil {
+	if lowkey = low.Encoded(); lowkey == nil {
 		it.SeekFirst()
 	} else {
 		it.Seek(lowkey)
@@ -216,14 +216,14 @@ func (s *fdbSnapshot) GetValueSetForKeyRange(low Key, high Key,
 			common.Tracef("ForestDB Got Value - %s", val.String())
 
 			var highcmp int
-			if high.EncodedBytes() == nil {
+			if high.Encoded() == nil {
 				highcmp = -1 //if high key is nil, iterate through the fullset
 			} else {
 				highcmp = key.Compare(high)
 			}
 
 			var lowcmp int
-			if low.EncodedBytes() == nil {
+			if low.Encoded() == nil {
 				lowcmp = 1 //all keys are greater than nil
 			} else {
 				lowcmp = key.Compare(low)
@@ -269,7 +269,7 @@ func (s *fdbSnapshot) CountRange(low Key, high Key, inclusion Inclusion,
 	var lowkey []byte
 	var err error
 
-	if lowkey = low.EncodedBytes(); lowkey == nil {
+	if lowkey = low.Encoded(); lowkey == nil {
 		it.SeekFirst()
 	} else {
 		it.Seek(lowkey)
@@ -294,14 +294,14 @@ func (s *fdbSnapshot) CountRange(low Key, high Key, inclusion Inclusion,
 			common.Tracef("ForestDB Got Key - %s", key.String())
 
 			var highcmp int
-			if high.EncodedBytes() == nil {
+			if high.Encoded() == nil {
 				highcmp = -1 //if high key is nil, iterate through the fullset
 			} else {
 				highcmp = key.Compare(high)
 			}
 
 			var lowcmp int
-			if low.EncodedBytes() == nil {
+			if low.Encoded() == nil {
 				lowcmp = 1 //all keys are greater than nil
 			} else {
 				lowcmp = key.Compare(low)

@@ -90,7 +90,7 @@ func (sc *HashedSliceContainer) GetSliceByIndexKey(key common.IndexKey) Slice {
 func (sc *HashedSliceContainer) GetSliceIdByIndexKey(key common.IndexKey) SliceId {
 
 	//run hash function on index key and return slice id
-	hash := crc32.ChecksumIEEE([]byte(key[0]))
+	hash := crc32.ChecksumIEEE([]byte(key))
 	sliceId := int(hash) % sc.NumSlices
 	return SliceId(sliceId)
 }

@@ -100,3 +100,6 @@ const GOMETA_LEADER_ADDR = "localhost:9884"
 
 //Index Manager
 const INDEX_MANAGER_CONFIG = "./config.json"
+
+//Max Length of Secondary Key
+const MAX_SEC_KEY_LEN = 1024

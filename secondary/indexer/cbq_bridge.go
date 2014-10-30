@@ -236,14 +236,14 @@ func (cbq *cbqBridge) handleScan(w http.ResponseWriter, r *http.Request) {
 	var lowkey, highkey Key
 	var err error
 
-	if lowkey, err = NewKey(qp.Low, []byte("")); err != nil {
+	if lowkey, err = NewKey(qp.Low); err != nil {
 		ierr := IndexError{Code: string(RESP_ERROR),
 			Msg: err.Error()}
 		sendScanResponse(w, nil, 0, []IndexError{ierr})
 		return
 	}
 
-	if highkey, err = NewKey(qp.High, []byte("")); err != nil {
+	if highkey, err = NewKey(qp.High); err != nil {
 		ierr := IndexError{Code: string(RESP_ERROR),
 			Msg: err.Error()}
 		sendScanResponse(w, nil, 0, []IndexError{ierr})
@@ -297,7 +297,7 @@ func (cbq *cbqBridge) receiveValue(w http.ResponseWriter, scanId int64,
 					scanId, value.String())
 
 				row := IndexRow{
-					Key:   value.KeyBytes(),
+					Key:   value.Encoded(), //This is dummy, scan requests go to queryport
 					Value: string(value.Docid()),
 				}
 				rows = append(rows, row)

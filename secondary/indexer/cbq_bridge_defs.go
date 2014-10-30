@@ -53,8 +53,8 @@ type IndexRequest struct {
 // URL encoded query params
 type QueryParams struct {
 	ScanType  ScanType  `json:"scanType,omitempty"`
-	Low       [][]byte  `json:"low,omitempty"`
-	High      [][]byte  `json:"high,omitempty"`
+	Low       []byte    `json:"low,omitempty"`
+	High      []byte    `json:"high,omitempty"`
 	Inclusion Inclusion `json:"inclusion,omitempty"`
 	Limit     int64     `json:"limit,omitempty"`
 }
@@ -80,8 +80,8 @@ const (
 )
 
 type IndexRow struct {
-	Key   [][]byte `json:"key,omitempty"`
-	Value string   `json:"value,omitempty"`
+	Key   []byte `json:"key,omitempty"`
+	Value string `json:"value,omitempty"`
 }
 
 type IndexError struct {

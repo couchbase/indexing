@@ -13,63 +13,46 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/prataprc/collatejson"
+	"github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 // Key is an array of JSON objects, per encoding/json
 type Key struct {
-	raw     keydata
+	raw     []byte //raw key received from KV
 	encoded []byte //collatejson byte representation of the key
-}
-
-type keydata struct {
-	keybytes Keybytes
-	docid    []byte
 }
 
 // Value is the primary key of the relavent document
 type Value struct {
-	raw     valuedata
+	raw     Valuedata
 	encoded []byte
 }
 
-type valuedata struct {
-	Keybytes Keybytes
-	Docid    []byte
-	Vbucket  Vbucket
-	Seqno    Seqno
+type Valuedata struct {
+	Docid   []byte
+	Vbucket Vbucket //useful for debugging, can be removed to optimize space
+	Seqno   Seqno   //useful for debugging, can be removed to optimize space
 }
-
-type Keybytes [][]byte
 
 var KEY_SEPARATOR []byte = []byte{0xff, 0xff, 0xff, 0xff}
 
-func NewKey(data [][]byte, docid []byte) (Key, error) {
+func NewKey(data []byte) (Key, error) {
 
 	var err error
 	var key Key
 	var code []byte
 
-	key.raw.keybytes = data
-	key.raw.docid = docid
+	key.raw = data
 
 	jsoncodec := collatejson.NewCodec(16)
 	//convert key to its collatejson encoded byte representation
 	buf := new(bytes.Buffer)
-	bufcode := [1024]byte{} // TODO: avoid magic numbers
-	for _, k := range key.raw.keybytes {
-		if code, err = jsoncodec.Encode(k, bufcode[:0]); err != nil {
-			return key, err
-		}
-		if _, err = buf.Write(code); err != nil {
-			return key, err
-		}
-		if _, err = buf.Write(KEY_SEPARATOR); err != nil {
-			return key, err
-		}
+	bufcode := make([]byte, MAX_SEC_KEY_LEN)
+	if code, err = jsoncodec.Encode(data, bufcode); err != nil {
+		return key, err
 	}
-	//write the docid in the end
-	if _, err = buf.Write(key.raw.docid); err != nil {
+	if _, err = buf.Write(code); err != nil {
 		return key, err
 	}
 
@@ -79,11 +62,10 @@ func NewKey(data [][]byte, docid []byte) (Key, error) {
 
 }
 
-func NewValue(data [][]byte, docid []byte, vbucket Vbucket, seqno Seqno) (Value, error) {
+func NewValue(docid []byte, vbucket Vbucket, seqno Seqno) (Value, error) {
 
 	var val Value
 
-	val.raw.Keybytes = data
 	val.raw.Docid = docid
 	val.raw.Vbucket = vbucket
 	val.raw.Seqno = seqno
@@ -95,11 +77,10 @@ func NewValue(data [][]byte, docid []byte, vbucket Vbucket, seqno Seqno) (Value,
 	return val, nil
 }
 
-func NewKeyFromEncodedBytes(b []byte) (Key, error) {
+func NewKeyFromEncodedBytes(encoded []byte) (Key, error) {
 
 	var k Key
-	//TODO Add decoding for bytes for k.raw
-	k.encoded = b
+	k.encoded = encoded
 	return k, nil
 
 }
@@ -118,64 +99,52 @@ func NewValueFromEncodedBytes(b []byte) (Value, error) {
 
 func (k *Key) Compare(than Key) int {
 
-	//strip the docid before bytewise comparison
-	i1 := bytes.LastIndex(k.encoded, KEY_SEPARATOR)
-	b1 := k.encoded[0:i1]
-
-	b2 := than.EncodedBytes()
-	i2 := bytes.LastIndex(b2, KEY_SEPARATOR)
-	b2 = b2[0:i2]
-
+	b1 := k.encoded
+	b2 := than.Encoded()
 	return bytes.Compare(b1, b2)
 }
 
-func (k *Key) EncodedBytes() []byte {
+func (k *Key) Encoded() []byte {
 
 	return k.encoded
 }
 
+func (k *Key) Raw() []byte {
+
+	var err error
+	if k.raw == nil {
+		jsoncodec := collatejson.NewCodec(16)
+		buf := make([]byte, MAX_SEC_KEY_LEN)
+		if buf, err = jsoncodec.Decode(k.encoded, buf); err != nil {
+			common.Errorf("KV::Raw Error Decoding Key %v, Err %v", k.encoded,
+				err)
+			return nil
+		}
+		k.raw = buf
+	}
+	return k.raw
+}
+
 func (k *Key) String() string {
 	var buf bytes.Buffer
-	buf.WriteString("Key:[")
-	for i, key := range k.raw.keybytes {
-		buf.WriteString(fmt.Sprintf("%v", string(key)))
-		if i < len(k.raw.keybytes)-1 {
-			buf.WriteString(" ")
-		}
-	}
-	buf.WriteString("]")
-	if k.raw.docid != nil {
-		buf.WriteString(fmt.Sprintf(" Docid:%v ", k.raw.docid))
-	}
+	buf.WriteString(fmt.Sprintf("%v", string(k.raw)))
 	return buf.String()
 }
 
-func (v *Value) EncodedBytes() []byte {
-
+func (v *Value) Encoded() []byte {
 	return v.encoded
-
 }
 
-func (v *Value) KeyBytes() Keybytes {
-
-	return v.raw.Keybytes
+func (v *Value) Raw() Valuedata {
+	return v.raw
 }
 
 func (v *Value) Docid() []byte {
-
 	return v.raw.Docid
 }
 
 func (v *Value) String() string {
 	var buf bytes.Buffer
-	buf.WriteString("Key:[")
-	for i, key := range v.raw.Keybytes {
-		buf.WriteString(fmt.Sprintf("%v", string(key)))
-		if i < len(v.raw.Keybytes)-1 {
-			buf.WriteString(" ")
-		}
-	}
-	buf.WriteString("]")
 	buf.WriteString(fmt.Sprintf("Docid:%v ", v.raw.Docid))
 	buf.WriteString(fmt.Sprintf("Vbucket:%d ", v.raw.Vbucket))
 	buf.WriteString(fmt.Sprintf("Seqno:%d", v.raw.Seqno))
