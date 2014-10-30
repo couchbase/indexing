@@ -36,6 +36,7 @@ type timekeeper struct {
 	streamBucketAbortInProgressMap   map[common.StreamId]BucketAbortInProgressMap
 
 	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
+	streamBucketRestartTsMap     map[common.StreamId]BucketRestartTsMap
 	streamBucketFlushEnabledMap  map[common.StreamId]BucketFlushEnabledMap
 	streamBucketDrainEnabledMap  map[common.StreamId]BucketDrainEnabledMap
 
@@ -48,6 +49,7 @@ type timekeeper struct {
 
 type BucketHWTMap map[string]*common.TsVbuuid
 type BucketLastFlushedTsMap map[string]*common.TsVbuuid
+type BucketRestartTsMap map[string]*common.TsVbuuid
 type BucketSyncCountMap map[string]uint64
 type BucketNewTsReqdMap map[string]bool
 
@@ -87,6 +89,7 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel) (
 		streamBucketFlushInProgressTsMap: make(map[common.StreamId]BucketFlushInProgressTsMap),
 		streamBucketAbortInProgressMap:   make(map[common.StreamId]BucketAbortInProgressMap),
 		streamBucketLastFlushedTsMap:     make(map[common.StreamId]BucketLastFlushedTsMap),
+		streamBucketRestartTsMap:         make(map[common.StreamId]BucketRestartTsMap),
 		streamBucketFlushEnabledMap:      make(map[common.StreamId]BucketFlushEnabledMap),
 		streamBucketDrainEnabledMap:      make(map[common.StreamId]BucketDrainEnabledMap),
 		streamBucketStreamBeginMap:       make(map[common.StreamId]BucketStreamBeginMap),
@@ -697,8 +700,10 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 		ts.Snapshots[meta.vbucket][1] = snapshot.end
 
 		//Once a new snapshot marker is received, new timestamp can
-		//be generated.
-		tk.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
+		//be generated if all stream begins have been received
+		if tk.allStreamBeginsReceived(streamId, meta.bucket) {
+			tk.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
+		}
 		common.Tracef("Timekeeper::handleSnapshotMarker \n\tUpdated TS %v", ts)
 	} else {
 		common.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker. "+
@@ -765,6 +770,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 			//disable flush for MAINT_STREAM in Recovery
 			if tk.streamState[streamId] == STREAM_RECOVERY {
+				tk.setHWTFromRestartTs(streamId, meta.bucket)
 				tk.disableStreamFlush(streamId)
 			}
 
@@ -820,6 +826,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 			sb := tk.streamBucketStreamBeginMap[streamId][meta.bucket]
 			sb[meta.vbucket] = 1
+			tk.setHWTFromRestartTs(streamId, meta.bucket)
 
 		case STREAM_PREPARE_RECOVERY, STREAM_INACTIVE, STREAM_RECOVERY:
 			//ignore stream end in prepare_recovery
@@ -1290,7 +1297,7 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 		bucketNewTsReqd[bucket] == true {
 		//generate new stability timestamp
 
-		tsVbuuid := tk.streamBucketHWTMap[streamId][bucket]
+		tsVbuuid := copyTsVbuuid(bucket, tk.streamBucketHWTMap[streamId][bucket])
 		newTs := getStabilityTSFromTsVbuuid(tsVbuuid)
 
 		common.Debugf("Timekeeper::generateNewStabilityTS \n\tGenerating new Stability "+
@@ -1489,6 +1496,8 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId) {
 				tk.supvRespch <- &MsgRecovery{mType: INDEXER_INITIATE_RECOVERY,
 					streamId:  common.MAINT_STREAM,
 					restartTs: bucketRestartTs}
+				tk.streamBucketRestartTsMap[common.CATCHUP_STREAM] = bucketRestartTs
+				tk.streamBucketRestartTsMap[common.MAINT_STREAM] = bucketRestartTs
 				return
 			} else {
 				common.Errorf("Timekeeper::initiateRecovery Invalid State For CATCHUP "+
@@ -1506,6 +1515,7 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId) {
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INITIATE_RECOVERY,
 				streamId:  common.MAINT_STREAM,
 				restartTs: bucketRestartTs}
+			tk.streamBucketRestartTsMap[common.MAINT_STREAM] = bucketRestartTs
 		} else {
 			common.Errorf("Timekeeper::initiateRecovery Invalid State For MAINT "+
 				"Stream Detected. State %v", tk.streamState[common.MAINT_STREAM])
@@ -1522,6 +1532,7 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId) {
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_INITIATE_RECOVERY,
 				streamId:  streamId,
 				restartTs: bucketRestartTs}
+			tk.streamBucketRestartTsMap[streamId] = bucketRestartTs
 		} else {
 			common.Errorf("Timekeeper::initiateRecovery Invalid State For INIT "+
 				"Stream Detected. State %v", tk.streamState[streamId])
@@ -1537,7 +1548,7 @@ func (tk *timekeeper) computeRestartTs(streamId common.StreamId) map[string]*com
 
 	for bucket, _ := range tk.streamBucketHWTMap[streamId] {
 
-		bucketRestartTs[bucket] = tk.streamBucketLastFlushedTsMap[streamId][bucket]
+		bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketLastFlushedTsMap[streamId][bucket])
 	}
 
 	return bucketRestartTs
@@ -1663,5 +1674,57 @@ func (tk *timekeeper) disableStreamFlush(streamId common.StreamId) {
 	bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[streamId]
 	for bucket, _ := range bucketFlushEnabledMap {
 		bucketFlushEnabledMap[bucket] = false
+	}
+}
+
+func (tk *timekeeper) allStreamBeginsReceived(streamId common.StreamId, bucket string) bool {
+
+	if bucketStreamBeginMap, ok := tk.streamBucketStreamBeginMap[streamId]; ok {
+		if ts, ok := bucketStreamBeginMap[bucket]; ok {
+			for _, v := range ts {
+				if v != 1 { //1 denotes StreamBegin
+					return false
+				}
+			}
+		} else {
+			return false
+		}
+	} else {
+		return false
+	}
+	return true
+}
+
+func (tk *timekeeper) setHWTFromRestartTs(streamId common.StreamId, bucket string) {
+
+	//if no flush has been done for Catchup Stream yet, use RestartTs from Maint Stream
+	fromStream := streamId
+	if streamId == common.CATCHUP_STREAM {
+		if bucketRestartTsMap, ok := tk.streamBucketRestartTsMap[streamId]; ok {
+			if _, ok := bucketRestartTsMap[bucket]; ok {
+			} else {
+				fromStream = common.MAINT_STREAM
+			}
+		} else {
+			fromStream = common.MAINT_STREAM
+		}
+	}
+
+	if bucketRestartTs, ok := tk.streamBucketRestartTsMap[fromStream]; ok {
+
+		if restartTs, ok := bucketRestartTs[bucket]; ok {
+
+			//update HWT
+			tk.streamBucketHWTMap[streamId][bucket] = copyTsVbuuid(bucket, restartTs)
+
+			//update Last Flushed Ts
+			tk.streamBucketLastFlushedTsMap[streamId][bucket] = copyTsVbuuid(bucket, restartTs)
+
+		} else {
+			common.Warnf("Timekeeper::setHWTFromRestartTs RestartTs Not Found For "+
+				"Bucket %v StreamId %v. No Value Set.", bucket, streamId)
+
+		}
+
 	}
 }

@@ -426,7 +426,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		} else {
 			respTsList := res.GetRollbackTimestamps()
 			for _, respTs := range respTsList {
-				if respTs != nil {
+				if respTs != nil && !respTs.IsEmpty() {
 					if ts, ok := rollbackTs[respTs.GetBucket()]; ok {
 						ts.Union(respTs)
 					} else {
@@ -676,7 +676,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs map[string]*c.
 		} else {
 			respTsList := res.GetRollbackTimestamps()
 			for _, respTs := range respTsList {
-				if respTs != nil {
+				if respTs != nil && !respTs.IsEmpty() {
 					if ts, ok := rollbackTs[respTs.GetBucket()]; ok {
 						ts.Union(respTs)
 					} else {
@@ -737,8 +737,8 @@ func sendMutationTopicRequest(ap *projClient.Client, topic string,
 	reqTimestamps []*protobuf.TsVbuuid,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, Message) {
 
-	c.Debugf("KVSender::sendMutationTopicRequest Projector %v Topic %v Instances %v",
-		ap, topic, instances)
+	c.Debugf("KVSender::sendMutationTopicRequest Projector %v Topic %v Instances %v RequestTS %v",
+		ap, topic, instances, reqTimestamps)
 
 	sleepTime := 1
 	retry := 0
@@ -1075,7 +1075,7 @@ func makeRestartTsFromTsVbuuid(bucket string, tsVbuuid *c.TsVbuuid,
 
 	ts := protobuf.NewTsVbuuid(DEFAULT_POOL, bucket, len(vbnos))
 	for _, vbno := range vbnos {
-		ts.Append(uint16(vbno), tsVbuuid.Seqnos[vbno],
+		ts.Append(uint16(vbno), tsVbuuid.Snapshots[vbno][1],
 			tsVbuuid.Vbuuids[vbno], tsVbuuid.Snapshots[vbno][0],
 			tsVbuuid.Snapshots[vbno][1])
 	}

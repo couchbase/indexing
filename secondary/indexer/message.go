@@ -307,6 +307,7 @@ func (m *MsgStreamUpdate) String() string {
 	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
 	str += fmt.Sprintf("\n\tBuildTS: %v", m.buildTs)
 	str += fmt.Sprintf("\n\tIndexList: %v", m.indexList)
+	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
 	return str
 
 }

@@ -750,7 +750,7 @@ func (idx *indexer) sendStreamUpdateForCreateIndex(indexInst common.IndexInst,
 
 		}
 	} else {
-		common.Errorf("Indexer::handleInitRecovery - Error communicating with KVSender "+
+		common.Errorf("Indexer::sendStreamUpdateForCreateIndex - Error communicating with KVSender "+
 			"processing Msg %v. Aborted.", resp)
 	}
 
@@ -1443,8 +1443,8 @@ func (idx *indexer) handlePrepareRecovery(msg Message) {
 
 		case RECOVERY:
 
-			terminateStreamIds = append(terminateStreamIds, common.MAINT_STREAM)
 			terminateStreamIds = append(terminateStreamIds, common.CATCHUP_STREAM)
+			terminateStreamIds = append(terminateStreamIds, common.MAINT_STREAM)
 			common.Infof("Indexer::handlePrepareRecovery Restart RECOVERY")
 
 		default:
