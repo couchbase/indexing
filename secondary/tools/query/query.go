@@ -91,7 +91,7 @@ loop:
 
 		default:
 			client.Scan(
-				[]byte("aaaa"), []byte("zzzz"), 0, 100, true, 1000,
+				"idx", "bkt", []byte("aaaa"), []byte("zzzz"), 0, 100, true, 1000,
 				func(val interface{}) bool {
 					switch v := val.(type) {
 					case *protobuf.ResponseStream:

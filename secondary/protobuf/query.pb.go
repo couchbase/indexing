@@ -86,8 +86,10 @@ func (m *QueryPayload) GetStreamEnd() *StreamEndResponse {
 
 // Get Index statistics. StatisticsResponse is returned back from indexer.
 type StatisticsRequest struct {
-	Span             *Span  `protobuf:"bytes,1,req,name=span" json:"span,omitempty"`
-	XXX_unrecognized []byte `json:"-"`
+	Span             *Span   `protobuf:"bytes,1,req,name=span" json:"span,omitempty"`
+	IndexName        *string `protobuf:"bytes,3,req,name=indexName" json:"indexName,omitempty"`
+	Bucket           *string `protobuf:"bytes,4,req,name=bucket" json:"bucket,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
 }
 
 func (m *StatisticsRequest) Reset()         { *m = StatisticsRequest{} }
@@ -99,6 +101,20 @@ func (m *StatisticsRequest) GetSpan() *Span {
 		return m.Span
 	}
 	return nil
+}
+
+func (m *StatisticsRequest) GetIndexName() string {
+	if m != nil && m.IndexName != nil {
+		return *m.IndexName
+	}
+	return ""
+}
+
+func (m *StatisticsRequest) GetBucket() string {
+	if m != nil && m.Bucket != nil {
+		return *m.Bucket
+	}
+	return ""
 }
 
 type StatisticsResponse struct {
@@ -127,11 +143,13 @@ func (m *StatisticsResponse) GetErr() *Error {
 
 // Scan request to indexer.
 type ScanRequest struct {
-	Span             *Span  `protobuf:"bytes,1,req,name=span" json:"span,omitempty"`
-	Distinct         *bool  `protobuf:"varint,2,req,name=distinct" json:"distinct,omitempty"`
-	PageSize         *int64 `protobuf:"varint,4,req,name=pageSize" json:"pageSize,omitempty"`
-	Limit            *int64 `protobuf:"varint,3,req,name=limit" json:"limit,omitempty"`
-	XXX_unrecognized []byte `json:"-"`
+	Span             *Span   `protobuf:"bytes,1,req,name=span" json:"span,omitempty"`
+	Distinct         *bool   `protobuf:"varint,2,req,name=distinct" json:"distinct,omitempty"`
+	Limit            *int64  `protobuf:"varint,3,req,name=limit" json:"limit,omitempty"`
+	PageSize         *int64  `protobuf:"varint,4,req,name=pageSize" json:"pageSize,omitempty"`
+	IndexName        *string `protobuf:"bytes,5,req,name=indexName" json:"indexName,omitempty"`
+	Bucket           *string `protobuf:"bytes,6,req,name=bucket" json:"bucket,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
 }
 
 func (m *ScanRequest) Reset()         { *m = ScanRequest{} }
@@ -152,13 +170,6 @@ func (m *ScanRequest) GetDistinct() bool {
 	return false
 }
 
-func (m *ScanRequest) GetPageSize() int64 {
-	if m != nil && m.PageSize != nil {
-		return *m.PageSize
-	}
-	return 0
-}
-
 func (m *ScanRequest) GetLimit() int64 {
 	if m != nil && m.Limit != nil {
 		return *m.Limit
@@ -166,11 +177,34 @@ func (m *ScanRequest) GetLimit() int64 {
 	return 0
 }
 
+func (m *ScanRequest) GetPageSize() int64 {
+	if m != nil && m.PageSize != nil {
+		return *m.PageSize
+	}
+	return 0
+}
+
+func (m *ScanRequest) GetIndexName() string {
+	if m != nil && m.IndexName != nil {
+		return *m.IndexName
+	}
+	return ""
+}
+
+func (m *ScanRequest) GetBucket() string {
+	if m != nil && m.Bucket != nil {
+		return *m.Bucket
+	}
+	return ""
+}
+
 // Full table scan request from indexer.
 type ScanAllRequest struct {
-	PageSize         *int64 `protobuf:"varint,1,req,name=pageSize" json:"pageSize,omitempty"`
-	Limit            *int64 `protobuf:"varint,2,req,name=limit" json:"limit,omitempty"`
-	XXX_unrecognized []byte `json:"-"`
+	PageSize         *int64  `protobuf:"varint,1,req,name=pageSize" json:"pageSize,omitempty"`
+	Limit            *int64  `protobuf:"varint,2,req,name=limit" json:"limit,omitempty"`
+	IndexName        *string `protobuf:"bytes,3,req,name=indexName" json:"indexName,omitempty"`
+	Bucket           *string `protobuf:"bytes,4,req,name=bucket" json:"bucket,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
 }
 
 func (m *ScanAllRequest) Reset()         { *m = ScanAllRequest{} }
@@ -189,6 +223,20 @@ func (m *ScanAllRequest) GetLimit() int64 {
 		return *m.Limit
 	}
 	return 0
+}
+
+func (m *ScanAllRequest) GetIndexName() string {
+	if m != nil && m.IndexName != nil {
+		return *m.IndexName
+	}
+	return ""
+}
+
+func (m *ScanAllRequest) GetBucket() string {
+	if m != nil && m.Bucket != nil {
+		return *m.Bucket
+	}
+	return ""
 }
 
 // Request by client to stop streaming the query results.

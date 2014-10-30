@@ -17,7 +17,9 @@ message QueryPayload {
 
 // Get Index statistics. StatisticsResponse is returned back from indexer.
 message StatisticsRequest {
-    required Span   span     = 1;
+    required Span   span      = 1;
+    required string indexName = 3;
+    required string bucket    = 4;
 }
 
 message StatisticsResponse {
@@ -27,16 +29,20 @@ message StatisticsResponse {
 
 // Scan request to indexer.
 message ScanRequest {
-    required Span   span     = 1;
-    required bool   distinct = 2;
-    required int64  pageSize = 4;
-    required int64  limit    = 3;
+    required Span   span      = 1;
+    required bool   distinct  = 2;
+    required int64  limit     = 3;
+    required int64  pageSize  = 4;
+    required string indexName = 5;
+    required string bucket    = 6;
 }
 
 // Full table scan request from indexer.
 message ScanAllRequest {
-    required int64 pageSize = 1;
-    required int64 limit    = 2;
+    required int64  pageSize  = 1;
+    required int64  limit     = 2;
+    required string indexName = 3;
+    required string bucket    = 4;
 }
 
 // Request by client to stop streaming the query results.

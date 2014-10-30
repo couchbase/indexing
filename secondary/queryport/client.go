@@ -68,7 +68,10 @@ func (c *Client) Close() {
 }
 
 // Statistics for index range.
-func (c *Client) Statistics(low, high []byte, inclusion uint32) (*protobuf.IndexStatistics, error) {
+func (c *Client) Statistics(
+	index, bucket string, low, high []byte,
+	inclusion uint32) (*protobuf.IndexStatistics, error) {
+
 	connectn, err := c.pool.Get()
 	if err != nil {
 		return nil, err
@@ -83,7 +86,13 @@ func (c *Client) Statistics(low, high []byte, inclusion uint32) (*protobuf.Index
 		High:      high,
 		Inclusion: proto.Uint32(inclusion),
 	}
-	req := &protobuf.StatisticsRequest{Span: &protobuf.Span{Range: r}}
+
+	req := &protobuf.StatisticsRequest{
+		Span:      &protobuf.Span{Range: r},
+		IndexName: proto.String(index),
+		Bucket:    proto.String(bucket),
+	}
+
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		msg := "%v Statistics() request transport failed `%v`\n"
 		common.Errorf(msg, c.logPrefix, err)
@@ -112,7 +121,7 @@ func (c *Client) Statistics(low, high []byte, inclusion uint32) (*protobuf.Index
 
 // Scan index for a range.
 func (c *Client) Scan(
-	low, high []byte, inclusion uint32, pageSize int64,
+	index, bucket string, low, high []byte, inclusion uint32, pageSize int64,
 	distinct bool, limit int64, callb ResponseHandler) error {
 
 	connectn, err := c.pool.Get()
@@ -127,10 +136,12 @@ func (c *Client) Scan(
 	incl := proto.Uint32(inclusion)
 	r := &protobuf.Range{Low: low, High: high, Inclusion: incl}
 	req := &protobuf.ScanRequest{
-		Span:     &protobuf.Span{Range: r},
-		Distinct: proto.Bool(distinct),
-		PageSize: proto.Int64(pageSize),
-		Limit:    proto.Int64(limit),
+		Span:      &protobuf.Span{Range: r},
+		Distinct:  proto.Bool(distinct),
+		PageSize:  proto.Int64(pageSize),
+		Limit:     proto.Int64(limit),
+		IndexName: proto.String(index),
+		Bucket:    proto.String(bucket),
 	}
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		msg := "%v Scan() request transport failed `%v`\n"
@@ -151,7 +162,9 @@ func (c *Client) Scan(
 }
 
 // ScanAll for full table scan.
-func (c *Client) ScanAll(pageSize int64, limit int64, callb func(interface{}) bool) error {
+func (c *Client) ScanAll(index, bucket string, pageSize int64, limit int64,
+	callb func(interface{}) bool) error {
+
 	connectn, err := c.pool.Get()
 	if err != nil {
 		return err
@@ -162,8 +175,10 @@ func (c *Client) ScanAll(pageSize int64, limit int64, callb func(interface{}) bo
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanAllRequest{
-		PageSize: proto.Int64(pageSize),
-		Limit:    proto.Int64(limit),
+		PageSize:  proto.Int64(pageSize),
+		Limit:     proto.Int64(limit),
+		IndexName: proto.String(index),
+		Bucket:    proto.String(bucket),
 	}
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		common.Errorf(
