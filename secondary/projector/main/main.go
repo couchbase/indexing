@@ -63,6 +63,8 @@ func main() {
 	config.SetValue("projector.adminport.listenAddr", options.adminport)
 	config.SetValue(
 		"projector.routerEndpointFactory", NewEndpointFactory(config))
+
+	go c.ExitOnStdinClose()
 	projector.NewProjector(config)
 	<-done
 }

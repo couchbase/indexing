@@ -1,9 +1,12 @@
 package common
 
 import (
-	"github.com/couchbaselabs/go-couchbase"
-	"net"
 	"errors"
+	"fmt"
+	"github.com/couchbaselabs/go-couchbase"
+	"io"
+	"net"
+	"os"
 )
 
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the
@@ -227,46 +230,60 @@ func GetKVAddrs(cluster, pooln, bucketn string) ([]string, error) {
 
 func IsIPLocal(ip string) bool {
 
-    netIP := net.ParseIP(ip)
+	netIP := net.ParseIP(ip)
 
-    //if loopback address, return true
-    if netIP.IsLoopback() {
-        return true
-    }
+	//if loopback address, return true
+	if netIP.IsLoopback() {
+		return true
+	}
 
-    //compare with the local ip
-    if localIP, err := GetLocalIP(); err == nil {
-        if localIP.Equal(netIP) {
-            return true
-        }
-    }
+	//compare with the local ip
+	if localIP, err := GetLocalIP(); err == nil {
+		if localIP.Equal(netIP) {
+			return true
+		}
+	}
 
-    return false
+	return false
 
 }
 
 func GetLocalIP() (net.IP, error) {
 
-    tt, err := net.Interfaces()
-    if err != nil {
-        return nil, err
-    }
-    for _, t := range tt {
-        aa, err := t.Addrs()
-        if err != nil {
-            return nil, err
-        }
-        for _, a := range aa {
-            ipnet, ok := a.(*net.IPNet)
-            if !ok {
-                continue
-            }
-            v4 := ipnet.IP.To4()
-            if v4 == nil || v4[0] == 127 { // loopback address
-                continue
-            }
-            return v4, nil
-        }
-    }
-    return nil, errors.New("cannot find local IP address")
+	tt, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tt {
+		aa, err := t.Addrs()
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range aa {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			v4 := ipnet.IP.To4()
+			if v4 == nil || v4[0] == 127 { // loopback address
+				continue
+			}
+			return v4, nil
+		}
+	}
+	return nil, errors.New("cannot find local IP address")
+}
+
+func ExitOnStdinClose() {
+	buf := make([]byte, 4)
+	for {
+		_, err := os.Stdin.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				os.Exit(0)
+			}
+
+			panic(fmt.Sprintf("Stdin: Unexpected error occured ", err))
+		}
+	}
 }
