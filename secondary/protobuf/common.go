@@ -1,12 +1,10 @@
 package protobuf
 
-import (
-	"sort"
+import "sort"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbaselabs/go-couchbase"
-	"github.com/couchbaselabs/goprotobuf/proto"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbaselabs/go-couchbase"
+import "github.com/couchbaselabs/goprotobuf/proto"
 
 // *****
 // Error
@@ -163,14 +161,14 @@ func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
 	newts.Vbuuids = append(newts.Vbuuids, other.Vbuuids...)
 	newts.Snapshots = append(newts.Snapshots, other.Snapshots...)
 
-	cache := make([]byte, maxVbuckets)
+	cache := make(map[uint32]bool)
 	for _, vbno := range other.Vbnos {
-		cache[vbno] = 1
+		cache[vbno] = true
 	}
 
 	// deduplicate this
 	for i, vbno := range ts.Vbnos {
-		if cache[vbno] == 1 {
+		if _, ok := cache[vbno]; ok {
 			continue
 		}
 		newts.Vbnos = append(newts.Vbnos, vbno)
@@ -196,12 +194,12 @@ func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
 		return newts
 	}
 
-	cache := make([]byte, maxVbuckets)
+	cache := make(map[uint32]bool)
 	for _, vbno := range vbuckets {
-		cache[vbno] = 1
+		cache[uint32(vbno)] = true
 	}
 	for i, vbno := range ts.Vbnos {
-		if cache[vbno] == 1 {
+		if _, ok := cache[vbno]; ok {
 			newts.Vbnos = append(newts.Vbnos, vbno)
 			newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
 			newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
@@ -224,12 +222,12 @@ func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
 		return newts
 	}
 
-	cache := make([]byte, maxVbuckets)
+	cache := make(map[uint32]bool)
 	for _, vbno := range vbuckets {
-		cache[vbno] = 1
+		cache[uint32(vbno)] = true
 	}
 	for i, vbno := range ts.Vbnos {
-		if cache[vbno] == 1 {
+		if _, ok := cache[vbno]; ok {
 			continue
 		}
 		newts.Vbnos = append(newts.Vbnos, vbno)

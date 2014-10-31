@@ -1,33 +1,57 @@
 package main
 
-import (
-	"flag"
-	"fmt"
-	"log"
-	"os"
-	"reflect"
-	"time"
+import "flag"
+import "fmt"
+import "log"
+import "os"
+import "reflect"
+import "time"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbase/indexing/secondary/queryport"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
+import "github.com/couchbase/indexing/secondary/queryport"
+import "github.com/couchbaselabs/goprotobuf/proto"
+
+var testStatisticsResponse = &protobuf.StatisticsResponse{
+	Stats: &protobuf.IndexStatistics{
+		Count:      proto.Uint64(100),
+		UniqueKeys: proto.Uint64(100),
+		Min:        []byte(`"aaaaa"`),
+		Max:        []byte(`"zzzzz"`),
+	},
+}
+var testResponseStream = &protobuf.ResponseStream{
+	Entries: []*protobuf.IndexEntry{
+		&protobuf.IndexEntry{
+			EntryKey: []byte(`["aaaaa"]`), PrimaryKey: []byte("key1"),
+		},
+		&protobuf.IndexEntry{
+			EntryKey: []byte(`["aaaaa"]`), PrimaryKey: []byte("key2"),
+		},
+	},
+}
 
 var options struct {
-	server  string
-	par     int
-	seconds int
-	debug   bool
-	trace   bool
+	server   string
+	par      int
+	seconds  int
+	loopback bool
+	mock     bool
+	debug    bool
+	trace    bool
 }
 
 func argParse() {
-	flag.StringVar(&options.server, "server", "localhost:8888",
-		"query server address")
+	flag.StringVar(&options.server, "server", "localhost:9998",
+		"queryport server address")
 	flag.IntVar(&options.par, "par", 1,
 		"maximum number of vbuckets")
 	flag.IntVar(&options.seconds, "seconds", 1,
 		"seconds to run")
+	flag.BoolVar(&options.loopback, "loopback", true,
+		"run queryport in loopback")
+	flag.BoolVar(&options.mock, "mock", false,
+		"run queryport as mock scan coordinator")
 	flag.BoolVar(&options.debug, "debug", false,
 		"run in debug mode")
 	flag.BoolVar(&options.trace, "trace", false,
@@ -51,17 +75,25 @@ func usage() {
 
 func main() {
 	argParse()
-
 	s, err := queryport.NewServer(options.server, serverCallb, c.SystemConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond)
 
+	if options.mock {
+		blockForever := make(chan bool)
+		<-blockForever
+
+	} else if options.loopback {
+		loopback()
+	}
+	s.Close()
+}
+
+func loopback() {
 	config := c.SystemConfig.Clone().SetValue("queryport.client.poolSize", 10)
 	config = config.SetValue("queryport.client.poolOverflow", options.par)
 	client := queryport.NewClient(options.server, config)
-
 	quitch := make(chan int)
 	for i := 0; i < options.par; i++ {
 		t := time.After(time.Duration(options.seconds) * time.Second)
@@ -75,7 +107,6 @@ func main() {
 	}
 
 	client.Close()
-	s.Close()
 	fmt.Printf("Completed %v queries in %v seconds\n", count, options.seconds)
 }
 
@@ -113,26 +144,37 @@ func serverCallb(
 	req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
 
 	switch req.(type) {
-	case *protobuf.ScanRequest:
-	default:
-		log.Fatalf("unknown request %v\n", req)
-	}
+	case *protobuf.StatisticsRequest:
+		resp := testStatisticsResponse
+		select {
+		case respch <- resp:
+			close(respch)
 
-	select {
-	case respch <- testResponseStream:
-	case <-quitch:
-		log.Fatal("Unexpected quit")
+		case <-quitch:
+			log.Fatal("unexpected quit", req)
+		}
+
+	case *protobuf.ScanRequest:
+		sendResponse(1, respch, quitch)
+		close(respch)
+
+	case *protobuf.ScanAllRequest:
+		sendResponse(1, respch, quitch)
+		close(respch)
+
+	default:
+		log.Fatal("unknown request", req)
 	}
-	close(respch)
 }
 
-var testResponseStream = &protobuf.ResponseStream{
-	Entries: []*protobuf.IndexEntry{
-		&protobuf.IndexEntry{
-			EntryKey: []byte("aaaaa"), PrimaryKey: []byte("key"),
-		},
-		&protobuf.IndexEntry{
-			EntryKey: []byte("aaaaa"), PrimaryKey: []byte("key"),
-		},
-	},
+func sendResponse(count int, respch chan<- interface{}, quitch <-chan interface{}) {
+	i := 0
+loop:
+	for ; i < count; i++ {
+		select {
+		case respch <- testResponseStream:
+		case <-quitch:
+			break loop
+		}
+	}
 }

@@ -198,6 +198,15 @@ func (feed *Feed) RepairEndpoints(req *protobuf.RepairEndpointsRequest) error {
 	return c.OpError(err, resp, 0)
 }
 
+// GetStatistics for this feed.
+// Synchronous call.
+func (feed *Feed) GetStatistics() c.Statistics {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdGetStatistics, respch}
+	resp, _ := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return resp[0].(c.Statistics)
+}
+
 // Shutdown feed, its upstream connection with kv and downstream endpoints.
 // Synchronous call.
 func (feed *Feed) Shutdown() error {
@@ -205,14 +214,6 @@ func (feed *Feed) Shutdown() error {
 	cmd := []interface{}{fCmdShutdown, respch}
 	_, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return err
-}
-
-// GetStatistics for this feed. Synchronous call.
-func (feed *Feed) GetStatistics() c.Statistics {
-	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdGetStatistics, respch}
-	resp, _ := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
-	return resp[0].(c.Statistics)
 }
 
 type controlStreamRequest struct {
@@ -263,6 +264,19 @@ func (feed *Feed) PostStreamEnd(bucket, kvaddr string, m *mc.UprEvent) {
 	c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
 }
 
+type controlFinKVData struct {
+	bucket string
+	kvaddr string
+}
+
+// PostFinKVdata feedback from data-path.
+// Asynchronous call.
+func (feed *Feed) PostFinKVdata(bucket, kvaddr string) {
+	var respch chan []interface{}
+	cmd := &controlFinKVData{bucket: bucket, kvaddr: kvaddr}
+	c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
+}
+
 func (feed *Feed) genServer() {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -283,6 +297,41 @@ loop:
 		case msg = <-feed.reqch:
 			if feed.handleCommand(msg) {
 				break loop
+			}
+
+		case msg = <-feed.backch:
+			if v, ok := msg[0].(*controlStreamEnd); ok {
+				c.Infof("%v back channel flushed %T %v", feed.logPrefix, v, v)
+				reqTs := feed.reqTss[v.bucket]
+				reqTs = reqTs.FilterByVbuckets([]uint16{v.vbno})
+				feed.reqTss[v.bucket] = reqTs
+
+				rollTs := feed.rollTss[v.bucket]
+				rollTs = rollTs.FilterByVbuckets([]uint16{v.vbno})
+				feed.rollTss[v.bucket] = rollTs
+
+			} else if v, ok := msg[0].(*controlFinKVData); ok {
+				reqTs, ok := feed.reqTss[v.bucket]
+				if ok && reqTs.Len() == 0 { // bucket is done
+					format := "%v self deleting bucket %v"
+					c.Infof(format, feed.logPrefix, v.bucket)
+
+					feed.feeders[v.bucket].CloseFeed()
+					// cleanup data structures.
+					delete(feed.reqTss, v.bucket)  // :SideEffect:
+					delete(feed.rollTss, v.bucket) // :SideEffect:
+					delete(feed.feeders, v.bucket) // :SideEffect:
+					delete(feed.kvdata, v.bucket)  // :SideEffect:
+					delete(feed.engines, v.bucket) // :SideEffect:
+
+				} else if ok { // only a single kvnode for this bucket is done
+					format := "%v self deleting kvdata {%v, %v}"
+					c.Infof(format, feed.logPrefix, v.bucket, v.kvaddr)
+					delete(feed.kvdata[v.bucket], v.kvaddr)
+				}
+
+			} else {
+				c.Errorf("%v back channel flushed %T %v", feed.logPrefix, v, v)
 			}
 
 		case <-timeout:
@@ -346,10 +395,10 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 		respch <- []interface{}{feed.getStatistics()}
 
 	case fCmdShutdown:
-		// Never panics !!
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.shutdown()}
 		exit = true
+
 	}
 	return exit
 }
@@ -561,6 +610,7 @@ func (feed *Feed) delBuckets(req *protobuf.DelBucketsRequest) error {
 }
 
 // only data-path shall be updated.
+// TODO: update ?
 // - return ErrorInconsistentFeed for malformed feed request
 func (feed *Feed) addInstances(req *protobuf.AddInstancesRequest) error {
 	// update engines and endpoints
