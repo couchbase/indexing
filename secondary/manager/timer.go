@@ -15,6 +15,7 @@ import (
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"sync"
 	"time"
+	"encoding/json"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -36,10 +37,15 @@ type Timer struct {
 	timestamps map[common.StreamId]timestampHistoryBucketMap
 	tickers    map[common.StreamId]tickerBucketMap
 	stopchs    map[common.StreamId]stopchBucketMap
-	outch      chan *common.TsVbuuid
+	outch      chan *timestampWrapper
 
 	mutex    sync.Mutex
 	isClosed bool
+}
+
+type timestampWrapper struct {
+	StreamId		uint16		`json:"streamId,omitempty"`
+	Timestamp 		[]byte 		`json:"timestamp,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -54,7 +60,7 @@ func newTimer() *Timer {
 	timestamps := make(map[common.StreamId]timestampHistoryBucketMap)
 	tickers := make(map[common.StreamId]tickerBucketMap)
 	stopchs := make(map[common.StreamId]stopchBucketMap)
-	outch := make(chan *common.TsVbuuid, TIMESTAMP_CHANNEL_SIZE)
+	outch := make(chan *timestampWrapper, TIMESTAMP_CHANNEL_SIZE)
 
 	timer := &Timer{timestamps: timestamps,
 		tickers:  tickers,
@@ -68,7 +74,7 @@ func newTimer() *Timer {
 //
 // Get Output Channel
 //
-func (t *Timer) getOutputChannel() <-chan *common.TsVbuuid {
+func (t *Timer) getOutputChannel() <-chan *timestampWrapper {
 
 	return t.outch
 }
@@ -294,10 +300,27 @@ func (t *Timer) run(streamId common.StreamId, bucket string, ticker *time.Ticker
 			return
 
 		case <-ticker.C:
-			ts, ok := t.advance(streamId, bucket)
-			if ok {
-				t.outch <- ts
-			}
+			// wrap it around a function just to make sure panic is caught so the timer go-routine does
+			// not die unexpectedly.
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						common.Debugf("panic in Timer.run() : error ignored.  Error = %v\n", r)
+					}
+				}()	
+				
+				ts, ok := t.advance(streamId, bucket)
+				if ok && len(t.outch) < TIMESTAMP_CHANNEL_SIZE {
+					// Make sure that this call is not blocking.  It is OK to drop
+					// the timestamp is the channel receiver is slow.
+					wrapper, err := createTimestampWrapper(ts, streamId) 
+					if err != nil {
+						common.Debugf("timer.run(): Unable to create wrapper for timestamp.  Skip timestamp.")
+					} else {
+						t.outch <- wrapper 
+					}
+				}
+			}()
 		}
 	}
 }
@@ -381,11 +404,9 @@ func (t *timestampHistory) increment(vbucket uint32, vbuuid uint64, seqno uint64
 
 	timestamp := t.history[t.current]
 
-	/*
-		if timestamp.Vbuuids[vbucket] != 0 && timestamp.Vbuuids[vbucket] != vbuuid {
-			// TODO : throw error
-		}
-	*/
+	// TODO : If the vbuuid has changed, advance the tiemstamp automatically
+	//if timestamp.Vbuuids[vbucket] != 0 && timestamp.Vbuuids[vbucket] != vbuuid {
+	//}
 
 	timestamp.Seqnos[vbucket] = seqno
 	timestamp.Vbuuids[vbucket] = vbuuid
@@ -400,6 +421,14 @@ func (t *timestampHistory) advance() (*common.TsVbuuid, bool) {
 
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
+	
+	return t.advanceNoLock()
+}
+
+//
+// Get the next timestamp
+//
+func (t *timestampHistory) advanceNoLock() (*common.TsVbuuid, bool) {
 
 	result := t.history[t.current]
 	t.current = t.current + 1
@@ -429,6 +458,36 @@ func (t *timestampHistory) getLatest() *common.TsVbuuid {
 // Private Utility Function
 /////////////////////////////////////////////////////////////////////////
 
+func createTimestampWrapper(ts *common.TsVbuuid, streamId common.StreamId) (*timestampWrapper, error) {
+
+	data, err := marshallTimestamp(ts)
+	if err != nil {
+		return nil, err
+	}	
+	
+	return &timestampWrapper{StreamId : uint16(streamId), Timestamp : data}, nil
+}
+
+func marshallTimestampWrapper(wrapper *timestampWrapper) ([]byte, error) {
+
+	buf, err := json.Marshal(&wrapper)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func unmarshallTimestampWrapper(data []byte) (*timestampWrapper, error) {
+
+	wrapper := new(timestampWrapper)
+	if err := json.Unmarshal(data, wrapper); err != nil {
+		return nil, err
+	}
+
+	return wrapper, nil
+}
+
 func marshallTimestamp(input *common.TsVbuuid) ([]byte, error) {
 
 	ts := protobuf.NewTsVbuuid(COUCHBASE_DEFAULT_POOL_NAME, input.Bucket, NUM_VB)
@@ -443,7 +502,6 @@ func marshallTimestamp(input *common.TsVbuuid) ([]byte, error) {
 
 func unmarshallTimestamp(data []byte) (*common.TsVbuuid, error) {
 
-	//source := protobuf.NewTsVbuuid(COUCHBASE_DEFAULT_POOL_NAME, "", NUM_VB)
 	source := new(protobuf.TsVbuuid)
 	if err := proto.Unmarshal(data, source); err != nil {
 		return nil, err

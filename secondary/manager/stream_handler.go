@@ -6,17 +6,6 @@ import (
 	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
-/*
-message KeyVersions {
-    required uint64 seqno    = 1; // sequence number corresponding to this mutation
-    optional bytes  docid    = 2; // primary document id
-    repeated uint64 uuids    = 3; // uuids, hosting key-version
-    repeated uint32 commands = 4; // list of command for each uuid
-    repeated bytes  keys     = 5; // key-versions for each uuids listed above
-    repeated bytes  oldkeys  = 6; // key-versions from old copy of the document
-    repeated bytes  partnkeys = 7; // partition key for each key-version
-}
-*/
 type mgrMutHandler struct {
 	indexMgr *IndexManager
 	admin    StreamAdmin
@@ -34,7 +23,7 @@ func (m *mgrMutHandler) HandleSync(streamId common.StreamId,
 	kv *protobuf.KeyVersions,
 	offset int) {
 
-	common.Debugf("mgrMutHandler.HandleSync: receive Sync: bucket %s, vbucket %d, vbuuid %d, seqno %d",
+	common.Debugf("mgrMutHandler.HandleSync: bucket %s, vbucket %d, vbuuid %d, seqno %d",
 		bucket, vbucket, vbuuid, kv.GetSeqno())
 
 	// update the timer
@@ -48,7 +37,7 @@ func (m *mgrMutHandler) HandleStreamBegin(streamId common.StreamId,
 	kv *protobuf.KeyVersions,
 	offset int) {
 
-	common.Debugf("mgrMutHandler.HandleSync: receive StreamBegin")
+	common.Debugf("mgrMutHandler.StreamBegin")
 
 }
 
@@ -59,7 +48,9 @@ func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
 	kv *protobuf.KeyVersions,
 	offset int) {
 
-	common.Debugf("mgrMutHandler.HandleSync: receive StreamEnd")
+	common.Debugf("mgrMutHandler.StreamEnd")
+	
+	// A stream has terminated.  Need to restart. 
 }
 
 func (m *mgrMutHandler) HandleUpsert(streamId common.StreamId,
@@ -68,8 +59,9 @@ func (m *mgrMutHandler) HandleUpsert(streamId common.StreamId,
 	vbuuid uint64,
 	kv *protobuf.KeyVersions,
 	offset int) {
+
 	// Ignore any mutation
-	common.Debugf("mgrMutHandler.HandleSync: receive HandleUpsert")
+	common.Debugf("mgrMutHandler.HandleUpsert")
 }
 
 func (m *mgrMutHandler) HandleDeletion(streamId common.StreamId,
@@ -78,8 +70,9 @@ func (m *mgrMutHandler) HandleDeletion(streamId common.StreamId,
 	vbuuid uint64,
 	kv *protobuf.KeyVersions,
 	offset int) {
+
 	// Ignore any mutation
-	common.Debugf("mgrMutHandler.HandleSync: receive HandleDeletion")
+	common.Debugf("mgrMutHandler.HandleDeletion")
 }
 
 func (m *mgrMutHandler) HandleUpsertDeletion(streamId common.StreamId,
@@ -88,8 +81,9 @@ func (m *mgrMutHandler) HandleUpsertDeletion(streamId common.StreamId,
 	vbuuid uint64,
 	kv *protobuf.KeyVersions,
 	offset int) {
+
 	// Ignore any mutation
-	common.Debugf("mgrMutHandler.HandleSync: receive HandleUpsertDeletion")
+	common.Debugf("mgrMutHandler.HandleUpsertDeletion")
 }
 
 func (m *mgrMutHandler) HandleDropData(streamId common.StreamId,
@@ -98,8 +92,9 @@ func (m *mgrMutHandler) HandleDropData(streamId common.StreamId,
 	vbuuid uint64,
 	kv *protobuf.KeyVersions,
 	offset int) {
+
 	// TODO
-	common.Debugf("mgrMutHandler.HandleSync: receive HandleDropData")
+	common.Debugf("mgrMutHandler.HandleDropData")
 }
 
 func (m *mgrMutHandler) HandleSnapshot(streamId common.StreamId,
@@ -109,7 +104,7 @@ func (m *mgrMutHandler) HandleSnapshot(streamId common.StreamId,
 	kv *protobuf.KeyVersions,
 	offset int) {
 
-	common.Debugf("mgrMutHandler.HandleConnectionError: receive Snapshot")
+	common.Debugf("mgrMutHandler.Snapshot")
 
 	snapshotType, _, end := kv.Snapshot()
 
@@ -121,7 +116,7 @@ func (m *mgrMutHandler) HandleSnapshot(streamId common.StreamId,
 
 func (m *mgrMutHandler) HandleConnectionError(streamId common.StreamId, err dataport.ConnectionError) {
 
-	common.Debugf("mgrMutHandler.HandleConnectionError: receive ConnectionError")
+	common.Debugf("mgrMutHandler.ConnectionError")
 
 	// ConnectionError happens in 3 cases:
 	// 	1) Projector goes down for a specific node

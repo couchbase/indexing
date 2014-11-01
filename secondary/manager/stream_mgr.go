@@ -22,16 +22,17 @@ import (
 // Type Definition
 ///////////////////////////////////////////////////////
 
-/*
-	Upsert         byte = iota + 1 // data command
-	Deletion                       // data command
-	UpsertDeletion                 // data command
-	Sync                           // control command
-	DropData                       // control command
-	StreamBegin                    // control command
-	StreamEnd                      // control command
-	Snapshot                       // control command
-*/
+//
+// Callback function for handling mutation commands from the mutation source (projector). 
+//	Upsert         		- data command
+//	Deletion            - data command
+//	UpsertDeletion      - data command
+//	Sync                - control command
+//	DropData            - control command
+//	StreamBegin         - control command
+//	StreamEnd           - control command
+//	Snapshot            - control command
+//
 type MutationHandler interface {
 	HandleUpsert(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *protobuf.KeyVersions, offset int)
 	HandleDeletion(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *protobuf.KeyVersions, offset int)
@@ -44,6 +45,10 @@ type MutationHandler interface {
 	HandleConnectionError(streamId common.StreamId, err dataport.ConnectionError)
 }
 
+//
+// Callback for handling stream administration for the remote mutation source (projector).   There are mutliple 
+// mutation sources per stream.   The StreamAdmin needs to encapsulate topology of the mutation sources.
+//
 type StreamAdmin interface {
 	OpenStreamForBucket(streamId common.StreamId, bucket string, topology []*protobuf.Instance, requestTs *common.TsVbuuid) error
 	RepairStreamForEndpoint(streamId common.StreamId, bucketVbnosMap map[string][]uint16, endpoint string) error
@@ -51,6 +56,9 @@ type StreamAdmin interface {
 	DeleteIndexFromStream(streamId common.StreamId, bucket string, instances []uint64) error
 }
 
+//
+// StreamManager for managing stream for mutation consumer.  
+//
 type StreamManager struct {
 	streams  map[common.StreamId]*Stream
 	handler  MutationHandler
@@ -61,6 +69,16 @@ type StreamManager struct {
 	isClosed bool
 }
 
+//
+// Stream represents a specific flow of mutations for consumption.  There are 3 types of stream:
+// 1) Incremental Stream for live mutation update.   This is primarily used for index maintenance.
+// 2) Init Stream for initial index build.   This is essentially a backfill stream.
+// 3) Catch-up Stream is a dedicated stream for each index node.  This is used when indexer is in recovery
+//		or being slow.  So catch-up stream allows independent flow control for the specific node.
+// A stream aggregates mutations across all buckets as well as all vbuckets.   All the KV nodes will send
+// the mutation through the stream.   The mutation itself (VbKeyVersions) has metadata to differentiate the
+// origination of the mutation (bucket, vbucket, vbuuid).
+//
 type Stream struct {
 	id common.StreamId
 
@@ -100,7 +118,8 @@ func NewStreamManager(indexMgr *IndexManager, handler MutationHandler, admin Str
 }
 
 //
-// Close all the streams
+// Close all the streams.  This will close the connection to the mutation source and subsequently,
+// each mutation source will clean up on their side. 
 //
 func (s *StreamManager) Close() {
 
@@ -132,17 +151,9 @@ func (s *StreamManager) IsClosed() bool {
 }
 
 //
-// Get the stream
-//
-func (s *StreamManager) getStream(streamId common.StreamId) *Stream {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	return s.streams[streamId]
-}
-
-//
-// Start a stream
+// Start a stream for listening only.  This will not trigger the mutation source to start
+// streaming mutations.   Need to call OpenStreamForBucket() or OpenStreamsForAllBuckets()
+// to kick off the mutation source.
 //
 func (s *StreamManager) StartStream(streamId common.StreamId, port string) error {
 
@@ -164,14 +175,18 @@ func (s *StreamManager) StartStream(streamId common.StreamId, port string) error
 		return err
 	}
 
+	err = stream.start()
+	if err != nil {
+		return err
+	}
+	
 	s.streams[streamId] = stream
-	stream.start()
-
 	return nil
 }
 
 //
-// Start Streaming for specific bucket
+// Kick off the mutation source to start streaming mutation for specific bucket.  If the stream is
+// already open, this will return an error.
 //
 func (s *StreamManager) OpenStreamForBucket(streamId common.StreamId, bucket string, port string) error {
 
@@ -182,11 +197,13 @@ func (s *StreamManager) OpenStreamForBucket(streamId common.StreamId, bucket str
 		return nil
 	}
 
+	// Verify if the stream is already open
 	stream, ok := s.streams[streamId]
 	if !ok || stream.status {
 		return NewError2(ERROR_STREAM_NOT_OPEN, STREAM)
 	}
 
+	// Verify if the stream is already open for this bucket
 	if _, ok := stream.indexCountMap[bucket]; ok {
 		return NewError2(ERROR_STREAM_BUCKET_ALREADY_OPEN, STREAM)
 	}
@@ -195,12 +212,14 @@ func (s *StreamManager) OpenStreamForBucket(streamId common.StreamId, bucket str
 	s.indexMgr.getTimer().start(streamId, bucket)
 
 	// Genereate the index instance protobuf messages based on distribution topology
+	// TODO: if instnaces is nil - no index has been created yet
 	instances, err := GetTopologyAsInstanceProtoMsg(s.indexMgr, bucket, port)
 	if err != nil {
 		return err
 	}
 
 	// Open the mutation stream for the specific bucket
+	// TODO: Get the restart TS
 	if err = s.admin.OpenStreamForBucket(streamId, bucket, instances, nil); err != nil {
 		return err
 	}
@@ -213,7 +232,9 @@ func (s *StreamManager) OpenStreamForBucket(streamId common.StreamId, bucket str
 }
 
 //
-// Open stream for all the buckets
+// Kick off the mutation source to start streaming mutation for all buckets.
+// If stream has already open for a specific bucket, then this function will
+// ignore this error.
 //
 func (s *StreamManager) OpenStreamForAllBuckets(streamId common.StreamId) error {
 
@@ -237,8 +258,11 @@ func (s *StreamManager) OpenStreamForAllBuckets(streamId common.StreamId) error 
 	port := getPortForStreamId(streamId)
 	for bucket, _ := range pool.BucketMap {
 		if err := s.OpenStreamForBucket(streamId, bucket, port); err != nil {
-			// TODO: We may get error saying that the stream has already been opened.  Need to
-			// figure out the error code from projector.
+			if myErr, ok := err.(Error); ok {
+				if myErr.code != ERROR_STREAM_BUCKET_ALREADY_OPEN {
+					return err
+				}
+			}
 			return err
 		}
 	}
@@ -247,18 +271,22 @@ func (s *StreamManager) OpenStreamForAllBuckets(streamId common.StreamId) error 
 }
 
 //
-// Close a stream
+// Close a particular stream. - todo
 //
 func (s *StreamManager) CloseStream(streamId common.StreamId) error {
 
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
+	if s.isClosed {
+		return nil
+	}
+
 	return s.closeStreamNoLock(streamId)
 }
 
 //
-// Add an index to a stream
+// Add an index to a stream - todo
 //
 func (s *StreamManager) AddIndexToStream(streamId common.StreamId, bucket string, indexId common.IndexDefnId, port string) error {
 
@@ -275,13 +303,14 @@ func (s *StreamManager) AddIndexToStream(streamId common.StreamId, bucket string
 		return NewError2(ERROR_STREAM_NOT_OPEN, STREAM)
 	}
 
-	// Re-generate the full distribution topology as protobuf message
+	// Get the index instances associated with the new index definition 
 	instances, err := GetIndexInstanceAsProtoMsg(s.indexMgr, bucket, indexId, port)
 	if err != nil {
 		return err
 	}
 
 	// Pass the new topology to the projector
+	// TOOD: What to do with error when some mutation source has applied the changes?
 	if err := s.admin.AddIndexToStream(streamId, bucket, instances); err != nil {
 		return err
 	}
@@ -293,7 +322,7 @@ func (s *StreamManager) AddIndexToStream(streamId common.StreamId, bucket string
 }
 
 //
-// Remove an index from a stream
+// Remove an index from a stream - todo
 //
 func (s *StreamManager) RemoveIndexFromStream(streamId common.StreamId, bucket string, indexId common.IndexDefnId) error {
 
@@ -330,22 +359,33 @@ func (s *StreamManager) RemoveIndexFromStream(streamId common.StreamId, bucket s
 }
 
 ///////////////////////////////////////////////////////
+// package-local function - Stream Manager
+///////////////////////////////////////////////////////
+
+//
+// Get the stream
+//
+func (s *StreamManager) getStream(streamId common.StreamId) *Stream {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	return s.streams[streamId]
+}
+
+///////////////////////////////////////////////////////
 // private function - StreamManager
 ///////////////////////////////////////////////////////
 
 func (s *StreamManager) closeStreamNoLock(streamId common.StreamId) error {
 
-	if s.isClosed {
-		return nil
-	}
-
 	//if stream not open, return error
 	stream, ok := s.streams[streamId]
 	if !ok || !stream.status {
-		return NewError2(ERROR_STREAM_NOT_OPEN, STREAM)
+		// return no error if the stream already closed -- no-op
+		return nil 
 	}
 
-	// Start the timer before start the stream.  Once the stream comes, the timer needs to be ready.
+	// Stop the timer for all the bucket for this stream 
 	s.indexMgr.getTimer().stopForStream(streamId)
 
 	/*
@@ -354,9 +394,8 @@ func (s *StreamManager) closeStreamNoLock(streamId common.StreamId) error {
 		}
 	*/
 
-	// book keeping
-	stream.indexCountMap = make(map[string]int)
-	stream.status = false
+	// book keeping 
+	delete(s.streams, streamId)
 
 	return nil
 }
@@ -387,12 +426,14 @@ func (s *Stream) getEndpoint() string {
 
 func (s *Stream) start() (err error) {
 
-	// start the listening go-routine
+	// Start the listening go-routine.  Run this before starting the dataport server,
+	// as to eliminate raceful condition.
 	go s.run()
 
 	// start dataport stream
 	if s.receiver, err = dataport.NewServer(s.hostStr, common.SystemConfig, s.mutch); err != nil {
 		common.Errorf("StreamManager: Error returned from dataport.NewServer = %s.", err.Error())
+		close(s.stopch)  
 		return err
 	}
 	common.Debugf("Stream.run(): dataport server started on addr %s", s.hostStr)
@@ -413,14 +454,24 @@ func (s *Stream) run() {
 	for {
 		select {
 		case mut := <-s.mutch:
-			switch d := mut.(type) {
-			case ([]*protobuf.VbKeyVersions):
-				common.Debugf("Stream.run(): recieve VbKeyVersion")
-				s.handleVbKeyVersions(d)
-			case dataport.ConnectionError:
-				common.Debugf("Stream.run(): recieve ConnectionError")
-				s.handler.HandleConnectionError(s.id, d)
-			}
+		
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						common.Debugf("panic in Stream.run() : error ignored.  Error = %v\n", r)
+					}
+				}()	
+					
+				switch d := mut.(type) {
+				case ([]*protobuf.VbKeyVersions):
+					common.Debugf("Stream.run(): recieve VbKeyVersion")
+					s.handleVbKeyVersions(d)
+				case dataport.ConnectionError:
+					common.Debugf("Stream.run(): recieve ConnectionError")
+					s.handler.HandleConnectionError(s.id, d)
+				}
+			}()	
+		
 		case <-s.stopch:
 			common.Debugf("Stream.run(): stop")
 			return

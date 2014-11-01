@@ -277,18 +277,33 @@ func (s *watcher) UpdateStateOnNewProposal(proposal protocol.ProposalMsg) {
 		}
 		// TODO : raise error if the condition does not get satisfied?
 	}
+	c.Debugf("Watcher.UpdateStateOnNewProposal(): receive proposal on metadata kind %d", findTypeFromKey(proposal.GetKey())) 
 
 	// register the event for notification
-	var evtType EventType
+	var evtType EventType = EVENT_NONE
 	switch opCode {
 	case common.OPCODE_ADD:
-		evtType = CREATE_INDEX
+		if findTypeFromKey(proposal.GetKey()) == KIND_INDEX_DEFN {
+			evtType = EVENT_CREATE_INDEX
+		} 
+	case common.OPCODE_SET:
+		if findTypeFromKey(proposal.GetKey()) == KIND_INDEX_DEFN {
+			evtType = EVENT_CREATE_INDEX
+		} 
 	case common.OPCODE_DELETE:
-		evtType = DROP_INDEX
+		if findTypeFromKey(proposal.GetKey()) == KIND_INDEX_DEFN {
+			evtType = EVENT_DROP_INDEX
+		}
+	default: 
+		c.Debugf("Watcher.UpdateStateOnNewProposal(): recieve proposal with opcode %d.  Skip convert proposal to event.", opCode) 
 	}
-	c.Debugf("Watcher.UpdateStateOnNewProposal(): register event for txid %d", proposal.GetTxnid())
-	s.notifications[common.Txnid(proposal.GetTxnid())] =
-		newNotificationHandle(proposal.GetKey(), evtType, proposal.GetContent())
+	
+	c.Debugf("Watcher.UpdateStateOnNewProposal(): convert metadata type to event  %d", evtType) 
+	if evtType != EVENT_NONE {
+		c.Debugf("Watcher.UpdateStateOnNewProposal(): register event for txid %d", proposal.GetTxnid())
+		s.notifications[common.Txnid(proposal.GetTxnid())] =
+			newNotificationHandle(proposal.GetKey(), evtType, proposal.GetContent())
+	}
 }
 
 func (s *watcher) UpdateStateOnCommit(txnid common.Txnid, key string) {

@@ -13,8 +13,9 @@ import (
 type EventType byte
 
 const (
-	CREATE_INDEX EventType = iota
-	DROP_INDEX
+	EVENT_NONE EventType = iota
+    EVENT_CREATE_INDEX 
+	EVENT_DROP_INDEX
 )
 
 type eventManager struct {

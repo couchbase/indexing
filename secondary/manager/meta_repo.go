@@ -48,6 +48,14 @@ type Reply struct {
 	Result []byte
 }
 
+type MetadataKind byte
+const (
+	KIND_UNKNOWN MetadataKind = iota
+	KIND_INDEX_DEFN
+	KIND_TOPOLOGY
+	KIND_GLOBAL_TOPOLOGY
+)
+
 ///////////////////////////////////////////////////////
 //  Public Function : MetadataRepo
 ///////////////////////////////////////////////////////
@@ -165,6 +173,28 @@ func (c *MetadataRepo) SetTopologyByBucket(bucket string, topology *IndexTopolog
 	}
 
 	lookupName := indexTopologyKey(bucket)
+	return c.setMeta(lookupName, data)
+}
+
+func (c *MetadataRepo) GetGlobalTopology() (*GlobalTopology, error) {
+
+	lookupName := globalTopologyKey()
+	data, err := c.getMeta(lookupName)
+	if err != nil {
+		return nil, err
+	}
+
+	return unmarshallGlobalTopology(data)
+}
+
+func (c *MetadataRepo) SetGlobalTopology(topology *GlobalTopology) error {
+
+	data, err := marshallGlobalTopology(topology)
+	if err != nil {
+		return err
+	}
+
+	lookupName := globalTopologyKey()
 	return c.setMeta(lookupName, data)
 }
 
@@ -354,6 +384,7 @@ func (c *MetadataRepo) getMetaFromWatcher(name string) ([]byte, error) {
 }
 
 func (c *MetadataRepo) getMeta(name string) ([]byte, error) {
+	common.Debugf("MetadataRepo.getMeta(): key=%s", name)
 
 	// Get the metadata locally from watcher first
 	value, err := c.getMetaFromWatcher(name)
@@ -368,7 +399,7 @@ func (c *MetadataRepo) getMeta(name string) ([]byte, error) {
 		return nil, err
 	}
 
-	common.Debugf("MetadataRepo.getMeta(): remote metadata for key %s exist=%s", name, reply != nil && reply.Result != nil)
+	common.Debugf("MetadataRepo.getMeta(): remote metadata for key %s exist=%v", name, reply != nil && reply.Result != nil)
 	if reply != nil {
 		// reply.Result can be nil if metadata does not exist
 		return reply.Result, nil
@@ -415,16 +446,28 @@ func (c *MetadataRepo) newDictionaryRequest(request *Request, reply **Reply) err
 	return nil
 }
 
+func findTypeFromKey(key string) MetadataKind {
+
+	if isIndexDefnKey(key) {
+		return KIND_INDEX_DEFN
+	} else if isIndexTopologyKey(key) {
+		return KIND_TOPOLOGY
+	} else if isGlobalTopologyKey(key) {
+		return KIND_GLOBAL_TOPOLOGY
+	}
+	return KIND_UNKNOWN
+}
+
 ///////////////////////////////////////////////////////
 // package local function : Index Definition
 ///////////////////////////////////////////////////////
 
 func indexDefnKeyByName(name string) string {
-	return fmt.Sprintf("IndexDefintionName/%s", name)
+	return fmt.Sprintf("IndexDefinitionName/%s", name)
 }
 
 func indexDefnKeyById(id common.IndexDefnId) string {
-	return fmt.Sprintf("IndexDefintionId/%d", id)
+	return fmt.Sprintf("IndexDefinitionId/%d", id)
 }
 
 func isIndexDefnKey(key string) bool {
@@ -433,9 +476,9 @@ func isIndexDefnKey(key string) bool {
 
 func indexDefnNameFromKey(key string) string {
 
-	i := strings.LastIndex(key, "IndexDefinitionName/")
+	i := strings.Index(key, "IndexDefinitionName/")
 	if i != -1 {
-		return key[i+20:]
+		return key[i+len("IndexDefinitionName/"):]
 	}
 
 	return ""
@@ -508,6 +551,19 @@ func indexTopologyKey(bucket string) string {
 	return fmt.Sprintf("IndexTopology/%s", bucket)
 }
 
+func getBucketFromTopologyKey(key string) string {
+	i := strings.Index(key, "IndexTopology/")
+	if i != -1 {
+		return key[i+len("IndexTopology/"):]
+	}
+
+	return ""
+}
+
+func isIndexTopologyKey(key string) bool {
+	return strings.Contains(key, "IndexTopology/")
+}
+
 func MarshallIndexTopology(topology *IndexTopology) ([]byte, error) {
 
 	buf, err := json.Marshal(&topology)
@@ -521,6 +577,34 @@ func MarshallIndexTopology(topology *IndexTopology) ([]byte, error) {
 func unmarshallIndexTopology(data []byte) (*IndexTopology, error) {
 
 	topology := new(IndexTopology)
+	if err := json.Unmarshal(data, topology); err != nil {
+		return nil, err
+	}
+
+	return topology, nil
+}
+
+func globalTopologyKey() string {
+	return "GlobalIndexTopology"
+}
+
+func isGlobalTopologyKey(key string) bool {
+	return strings.Contains(key, "GlobalIndexTopology/")
+}
+
+func marshallGlobalTopology(topology *GlobalTopology) ([]byte, error) {
+
+	buf, err := json.Marshal(&topology)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func unmarshallGlobalTopology(data []byte) (*GlobalTopology, error) {
+
+	topology := new(GlobalTopology)
 	if err := json.Unmarshal(data, topology); err != nil {
 		return nil, err
 	}

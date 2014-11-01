@@ -86,6 +86,26 @@ func (e *env) getPeerTCPAddr() []string {
 	return e.peerTCPAddr
 }
 
+func (e *env) getPeerHost() ([]string, error) {
+	var result []string = nil
+	for _, addr := range e.peerUDPAddr {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, host)
+	}	
+	return result, nil
+}
+
+func (e *env) getLocalHost() (string, error) {
+	host, _, err := net.SplitHostPort(e.getHostUDPAddr())
+	if err != nil {
+		return "", err
+	}
+	return host, nil
+}
+
 func (e *env) findMatchingPeerTCPAddr(updAddr string) string {
 	for i := 0; i < len(e.peerUDPAddr); i++ {
 		if e.peerUDPAddr[i] == updAddr {

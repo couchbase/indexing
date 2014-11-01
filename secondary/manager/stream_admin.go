@@ -71,6 +71,9 @@ func (p *ProjectorAdmin) OpenStreamForBucket(streamId common.StreamId,
 
 		} else if err := response.GetErr(); err != nil {
 
+			// TODO: We may get error saying that the stream has already been opened.  Need to
+			// figure out the error code from projector.
+			
 			// Encounter an error.  For those projectors that have already been opened, let's leave it open.
 			// Eventually those projectors will fill up the buffer and terminate the connection by itself.
 			common.Errorf("streamProxy::OpenStreamRequestForBucket(): Error encountered when sending adminport request. Error=%v",

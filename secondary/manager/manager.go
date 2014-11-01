@@ -30,7 +30,7 @@ type IndexManager struct {
 	timer       *Timer
 
 	// timestamp management
-	timestampCh      chan *common.TsVbuuid
+	timestampCh      map[common.StreamId]chan *common.TsVbuuid
 	timekeeperStopCh chan bool
 
 	mutex    sync.Mutex
@@ -60,7 +60,7 @@ func NewIndexManager(requestAddr string,
 	}
 
 	// Initialize the timer
-	mgr.timestampCh = make(chan *common.TsVbuuid, TIMESTAMP_NOTIFY_CH_SIZE)
+	mgr.timestampCh = make(map[common.StreamId]chan *common.TsVbuuid)
 	mgr.timer = newTimer()
 	mgr.timekeeperStopCh = make(chan bool)
 	go mgr.runTimestampKeeper()
@@ -178,28 +178,28 @@ func (m *IndexManager) NewIndexDefnIterator() (*MetaIterator, error) {
 // Listen to create Index Request
 //
 func (m *IndexManager) StartListenIndexCreate(id string) (<-chan interface{}, error) {
-	return m.eventMgr.register(id, CREATE_INDEX)
+	return m.eventMgr.register(id, EVENT_CREATE_INDEX)
 }
 
 //
 // Stop Listen to create Index Request
 //
 func (m *IndexManager) StopListenIndexCreate(id string) {
-	m.eventMgr.unregister(id, CREATE_INDEX)
+	m.eventMgr.unregister(id, EVENT_CREATE_INDEX)
 }
 
 //
 // Listen to delete Index Request
 //
 func (m *IndexManager) StartListenIndexDelete(id string) (<-chan interface{}, error) {
-	return m.eventMgr.register(id, DROP_INDEX)
+	return m.eventMgr.register(id, EVENT_DROP_INDEX)
 }
 
 //
 // Stop Listen to delete Index Request
 //
 func (m *IndexManager) StopListenIndexDelete(id string) {
-	m.eventMgr.unregister(id, DROP_INDEX)
+	m.eventMgr.unregister(id, EVENT_DROP_INDEX)
 }
 
 //
@@ -284,9 +284,15 @@ func (m *IndexManager) SetTopologyByBucket(bucket string, topology *IndexTopolog
 // public function - Timestamp Operation
 ///////////////////////////////////////////////////////
 
-func (m *IndexManager) GetStabilityTimestampChannel() chan *common.TsVbuuid {
+func (m *IndexManager) GetStabilityTimestampChannel(streamId common.StreamId) chan *common.TsVbuuid {
 
-	return m.timestampCh
+	ch, ok := m.timestampCh[streamId]
+	if !ok {
+		ch = make(chan *common.TsVbuuid, TIMESTAMP_NOTIFY_CH_SIZE)	
+		m.timestampCh[streamId] = ch
+	}
+
+	return ch
 }
 
 func (m *IndexManager) runTimestampKeeper() {
@@ -307,7 +313,7 @@ func (m *IndexManager) runTimestampKeeper() {
 
 			gometa.SafeRun("IndexManager.runTimestampKeeper()",
 				func() {
-					data, err := marshallTimestamp(timestamp)
+					data, err := marshallTimestampWrapper(timestamp)
 					if err != nil {
 						common.Debugf(
 							"IndexManager.runTimestampKeeper(): error when marshalling timestamp. Ignore timestamp.  Error=%s",
@@ -321,10 +327,21 @@ func (m *IndexManager) runTimestampKeeper() {
 	}
 }
 
-func (m *IndexManager) notifyNewTimestamp(timestamp *common.TsVbuuid) {
+func (m *IndexManager) notifyNewTimestamp(wrapper *timestampWrapper) {
 
 	common.Debugf("IndexManager.notifyNewTimestamp(): receive new timestamp, notifying to listener")
-	m.timestampCh <- timestamp
+ 	streamId := common.StreamId(wrapper.StreamId)
+ 	timestamp, err := unmarshallTimestamp(wrapper.Timestamp)
+ 	if err != nil {
+		common.Debugf("IndexManager.notifyNewTimestamp(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
+ 	} else {
+ 		ch, ok := m.timestampCh[streamId]
+ 		if ok {
+ 			if len(ch) < TIMESTAMP_NOTIFY_CH_SIZE {
+ 				ch <- timestamp
+ 			}
+ 		}
+ 	}
 }
 
 func (m *IndexManager) getTimer() *Timer {

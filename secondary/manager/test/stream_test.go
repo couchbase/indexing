@@ -67,9 +67,10 @@ func TestStreamMgr(t *testing.T) {
 	}
 	
 	common.Infof("Run Test")
+   	ch := mgr.GetStabilityTimestampChannel(common.MAINT_STREAM) 
 	donech := make(chan bool)
 	go runTestSender("6579", donech, t)
-	runTestReceiver(mgr, donech, t)
+	runTestReceiver(ch, donech, t)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
 	
 	////////////////////////////////////////////////////	
@@ -101,7 +102,7 @@ func runTestSender(port string, donech chan bool, t *testing.T) {
 	payload.AddKeyVersions(kv)
 	payloads = append(payloads, payload)
 	
-	for i:=0; i < 100; i++ {
+	for i:=0; i < 1; i++ {
 		payload := common.NewVbKeyVersions("Default", 10, 1, 10)
    		kv := common.NewKeyVersions(uint64(100 + i), []byte("document-name"), 1)
    		kv.AddSync()
@@ -120,7 +121,7 @@ func runTestSender(port string, donech chan bool, t *testing.T) {
 }
 
 // run test
-func runTestReceiver(mgr *manager.IndexManager, donech chan bool, t *testing.T) {
+func runTestReceiver(ch chan*common.TsVbuuid, donech chan bool, t *testing.T) {
 
 	defer func() {
 		common.Infof("runTestReceiver() done")
@@ -128,7 +129,6 @@ func runTestReceiver(mgr *manager.IndexManager, donech chan bool, t *testing.T) 
 	}()
 
    	// wait for the sync message to arrive
-   	ch := mgr.GetStabilityTimestampChannel() 
    	ticker := time.NewTicker(time.Duration(30) * time.Second)
    	for { 
   		select {
