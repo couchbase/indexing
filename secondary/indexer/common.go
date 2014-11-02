@@ -120,12 +120,3 @@ func (m MutationSnapshot) String() string {
 	return str
 
 }
-
-type ScanParams struct {
-	scanType ScanType
-	low      Key
-	high     Key
-	partnKey []byte
-	incl     Inclusion
-	limit    int64
-}

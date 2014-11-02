@@ -36,8 +36,6 @@ const (
 	LIST   RequestType = "list"
 	NOTIFY RequestType = "notify"
 	NODES  RequestType = "nodes"
-	SCAN   RequestType = "scan"
-	STATS  RequestType = "stats"
 )
 
 // All API accept IndexRequest structure and returns IndexResponse structure.
@@ -47,28 +45,7 @@ type IndexRequest struct {
 	Type       RequestType `json:"type,omitempty"`
 	Index      IndexInfo   `json:"index,omitempty"`
 	ServerUuid string      `json:"serverUuid,omitempty"`
-	Params     QueryParams `json:"params,omitempty"`
 }
-
-// URL encoded query params
-type QueryParams struct {
-	ScanType  ScanType  `json:"scanType,omitempty"`
-	Low       []byte    `json:"low,omitempty"`
-	High      []byte    `json:"high,omitempty"`
-	Inclusion Inclusion `json:"inclusion,omitempty"`
-	Limit     int64     `json:"limit,omitempty"`
-}
-
-type ScanType string
-
-const (
-	COUNT      ScanType = "count"
-	EXISTS     ScanType = "exists"
-	LOOKUP     ScanType = "lookup"
-	RANGESCAN  ScanType = "rangeScan"
-	FULLSCAN   ScanType = "fullScan"
-	RANGECOUNT ScanType = "rangeCount"
-)
 
 //RESPONSE DATA FORMATS
 type ResponseStatus string

@@ -82,7 +82,6 @@ func (cbq *cbqBridge) initCbqBridge() error {
 	http.HandleFunc("/create", cbq.handleCreate)
 	http.HandleFunc("/drop", cbq.handleDrop)
 	http.HandleFunc("/list", cbq.handleList)
-	http.HandleFunc("/scan", cbq.handleScan)
 
 	common.Infof("CbqBridge::initCbqBridge Listening on %v", CBQ_BRIDGE_HTTP_ADDR)
 	if err := http.ListenAndServe(CBQ_BRIDGE_HTTP_ADDR, nil); err != nil {
@@ -224,107 +223,6 @@ func (cbq *cbqBridge) handleList(w http.ResponseWriter, r *http.Request) {
 	sendResponse(w, res)
 }
 
-//Scan
-func (cbq *cbqBridge) handleScan(w http.ResponseWriter, r *http.Request) {
-
-	indexreq := indexRequest(r)
-	uuid, _ := strconv.Atoi(indexreq.Index.Uuid)
-	qp := indexreq.Params
-
-	common.Debugf("CbqBridge::handleScan Received ScanIndex %v", indexreq)
-
-	var lowkey, highkey Key
-	var err error
-
-	if lowkey, err = NewKey(qp.Low); err != nil {
-		ierr := IndexError{Code: string(RESP_ERROR),
-			Msg: err.Error()}
-		sendScanResponse(w, nil, 0, []IndexError{ierr})
-		return
-	}
-
-	if highkey, err = NewKey(qp.High); err != nil {
-		ierr := IndexError{Code: string(RESP_ERROR),
-			Msg: err.Error()}
-		sendScanResponse(w, nil, 0, []IndexError{ierr})
-		return
-	}
-
-	p := ScanParams{scanType: qp.ScanType,
-		low:      lowkey,
-		high:     highkey,
-		partnKey: []byte("partnKey"), //dummy partn key for now
-		incl:     qp.Inclusion,
-		limit:    qp.Limit,
-	}
-
-	msgScan := &MsgScanIndex{scanId: rand.Int63(),
-		indexInstId: common.IndexInstId(uuid),
-		stopch:      make(StopChannel),
-		p:           p,
-		resCh:       make(chan Value),
-		errCh:       make(chan Message),
-		countCh:     make(chan uint64)}
-
-	//send scan request to Indexer
-	cbq.supvRespch <- msgScan
-
-	cbq.receiveValue(w, msgScan.scanId, msgScan.resCh,
-		msgScan.countCh, msgScan.errCh)
-
-}
-
-//receiveValue keeps listening to the response/error channels for results/errors
-//till any of the response/error channel is closed by the sender.
-//All results/errors received are appended to the response which will be
-//sent back to Cbq Engine.
-func (cbq *cbqBridge) receiveValue(w http.ResponseWriter, scanId int64,
-	chres chan Value, chcount chan uint64, cherr chan Message) {
-
-	var totalRows uint64
-	rows := make([]IndexRow, 0)
-	errors := make([]IndexError, 0)
-
-	ok := true
-	var value Value
-	var errMsg Message
-
-	for ok {
-		select {
-		case value, ok = <-chres:
-			if ok {
-				common.Tracef("CbqBridge::receiveValue ScanId %v Received Value %s",
-					scanId, value.String())
-
-				row := IndexRow{
-					Key:   value.Encoded(), //This is dummy, scan requests go to queryport
-					Value: string(value.Docid()),
-				}
-				rows = append(rows, row)
-			}
-
-		case totalRows, ok = <-chcount:
-			if ok {
-				common.Tracef("CbqBridge::receiveValue ScanId %v Received Count %s",
-					scanId, totalRows)
-			}
-
-		case errMsg, ok = <-cherr:
-			if ok {
-				err := errMsg.(*MsgError).GetError()
-				common.Tracef("CbqBridge::receiveValue ScanId %v Received Error %s",
-					scanId, err.cause)
-				ierr := IndexError{Code: string(RESP_ERROR),
-					Msg: err.cause.Error()}
-				errors = append(errors, ierr)
-			}
-		}
-	}
-
-	sendScanResponse(w, rows, totalRows, errors)
-
-}
-
 // Parse HTTP Request to get IndexInfo.
 func indexRequest(r *http.Request) *IndexRequest {
 	indexreq := IndexRequest{}
@@ -354,27 +252,4 @@ func sendResponse(w http.ResponseWriter, res interface{}) {
 		common.Errorf("CbqBridge::sendResponse Unable to marshal response", res)
 	}
 	w.Write(buf)
-}
-
-func sendScanResponse(w http.ResponseWriter, rows []IndexRow,
-	totalRows uint64, errors []IndexError) {
-
-	var res IndexScanResponse
-
-	if len(errors) == 0 {
-		res = IndexScanResponse{
-			Status:    RESP_SUCCESS,
-			TotalRows: totalRows,
-			Rows:      rows,
-			Errors:    nil,
-		}
-	} else {
-		res = IndexScanResponse{
-			Status:    RESP_ERROR,
-			TotalRows: uint64(0),
-			Rows:      nil,
-			Errors:    errors,
-		}
-	}
-	sendResponse(w, res)
 }

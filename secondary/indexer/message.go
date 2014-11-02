@@ -83,9 +83,6 @@ const (
 	INDEXER_ROLLBACK
 
 	//SCAN COORDINATOR
-	SCAN_COORD_SCAN_INDEX
-	SCAN_COORD_SCAN_PARTITION
-	SCAN_COORD_SCAN_SLICE
 	SCAN_COORD_SHUTDOWN
 
 	//COMMON
@@ -604,49 +601,6 @@ func (m *MsgDropIndex) GetString() string {
 	return str
 }
 
-//SCAN_COORD_SCAN_INDEX
-type MsgScanIndex struct {
-	scanId      int64
-	indexInstId common.IndexInstId
-	stopch      StopChannel
-	p           ScanParams
-	resCh       chan Value
-	errCh       chan Message
-	countCh     chan uint64
-}
-
-func (m *MsgScanIndex) GetMsgType() MsgType {
-	return SCAN_COORD_SCAN_INDEX
-}
-
-func (m *MsgScanIndex) GetIndexInstId() common.IndexInstId {
-	return m.indexInstId
-}
-
-func (m *MsgScanIndex) GetScanId() int64 {
-	return m.scanId
-}
-
-func (m *MsgScanIndex) GetResultChannel() chan Value {
-	return m.resCh
-}
-
-func (m *MsgScanIndex) GetErrorChannel() chan Message {
-	return m.errCh
-}
-
-func (m *MsgScanIndex) GetCountChannel() chan uint64 {
-	return m.countCh
-}
-
-func (m *MsgScanIndex) GetStopChannel() StopChannel {
-	return m.stopch
-}
-
-func (m *MsgScanIndex) GetParams() ScanParams {
-	return m.p
-}
-
 //TK_GET_BUCKET_HWT
 type MsgTKGetBucketHWT struct {
 	streamId common.StreamId
@@ -857,12 +811,6 @@ func (m MsgType) String() string {
 	case INDEXER_ROLLBACK:
 		return "INDEXER_ROLLBACK"
 
-	case SCAN_COORD_SCAN_INDEX:
-		return "SCAN_COORD_SCAN_INDEX"
-	case SCAN_COORD_SCAN_PARTITION:
-		return "SCAN_COORD_SCAN_PARTITION"
-	case SCAN_COORD_SCAN_SLICE:
-		return "SCAN_COORD_SCAN_SLICE"
 	case SCAN_COORD_SHUTDOWN:
 		return "SCAN_COORD_SHUTDOWN"
 

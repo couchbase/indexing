@@ -425,10 +425,6 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 
 		idx.handleDropIndex(msg)
 
-	case SCAN_COORD_SCAN_INDEX:
-
-		idx.handleScanIndex(msg)
-
 	default:
 		common.Errorf("Indexer::handleAdminMsgs Unknown Message %v", msg)
 
@@ -641,29 +637,6 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	}
 
 	respCh <- &MsgSuccess{}
-}
-
-func (idx *indexer) handleScanIndex(msg Message) {
-
-	idxInstId := msg.(*MsgScanIndex).GetIndexInstId()
-	common.Debugf("Indexer received ScanIndex for Index %v", idxInstId)
-
-	//fwd the message to Scan Coordinator
-	idx.scanCoordCmdCh <- msg
-
-	if resp, ok := <-idx.scanCoordCmdCh; ok {
-
-		if resp.GetMsgType() != MSG_SUCCESS {
-			common.Errorf("Indexer::handleScanIndex Error received from Scan Coordinator "+
-				"processing Msg %v Err %v. Aborted.", msg, resp)
-			return
-		}
-	} else {
-		common.Errorf("Indexer::handleScanIndex Error communicating with Scan Coordinator "+
-			"processing Msg %v Err %v. Aborted.", msg, resp)
-		return
-	}
-
 }
 
 func (idx *indexer) shutdownWorkers() {
