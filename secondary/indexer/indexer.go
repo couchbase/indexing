@@ -38,6 +38,8 @@ var StreamAddrMap StreamAddressMap
 
 type BucketIndexCountMap map[string]int
 type StreamStatusMap map[common.StreamId]bool
+type BucketFlushInProgressMap map[string]bool
+type BucketObserveFlushDoneMap map[string]MsgChannel
 
 type indexer struct {
 	id    IndexerId
@@ -47,6 +49,9 @@ type indexer struct {
 	indexPartnMap IndexPartnMap       //map of indexInstId to PartitionInst
 
 	streamStatus StreamStatusMap //stream status map
+
+	streamBucketFlushInProgress  map[common.StreamId]BucketFlushInProgressMap
+	streamBucketObserveFlushDone map[common.StreamId]BucketObserveFlushDoneMap
 
 	wrkrRecvCh         MsgChannel //channel to receive messages from workers
 	internalRecvCh     MsgChannel //buffered channel to queue worker requests
@@ -100,6 +105,9 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 		indexPartnMap: make(IndexPartnMap),
 
 		streamStatus: make(StreamStatusMap),
+
+		streamBucketFlushInProgress:  make(map[common.StreamId]BucketFlushInProgressMap),
+		streamBucketObserveFlushDone: make(map[common.StreamId]BucketObserveFlushDoneMap),
 	}
 
 	idx.state = INIT
@@ -117,6 +125,7 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	common.Infof("Indexer::NewIndexer Starting with Vbuckets %v", NUM_VBUCKETS)
 
 	idx.initStreamAddressMap()
+	idx.initStreamFlushMap()
 
 	var res Message
 	if ENABLE_MANAGER {
@@ -340,6 +349,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		bucket := msg.(*MsgTKStabilityTS).GetBucket()
 		streamId := msg.(*MsgTKStabilityTS).GetStreamId()
 
+		idx.streamBucketFlushInProgress[streamId][bucket] = true
+
 		idx.mutMgrCmdCh <- &MsgMutMgrFlushMutationQueue{
 			mType:    MUT_MGR_PERSIST_MUTATION_QUEUE,
 			bucket:   bucket,
@@ -355,9 +366,17 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case MUT_MGR_FLUSH_DONE, MUT_MGR_ABORT_DONE:
 
+		bucket := msg.(*MsgMutMgrFlushDone).GetBucket()
+		streamId := msg.(*MsgMutMgrFlushDone).GetStreamId()
+
 		//fwd the message to storage manager
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
+
+		idx.streamBucketFlushInProgress[streamId][bucket] = false
+
+		//if there is any observer for flush done, notify
+		idx.notifyFlushObserver(msg)
 
 		//fwd the message to timekeeper
 		idx.tkCmdCh <- msg
@@ -557,7 +576,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	common.Debugf("Indexer::handleDropIndex - IndexInstId %v", indexInstId)
 
 	if idx.state == RECOVERY {
-		common.Errorf("Indexer::handleCreateIndex Cannot Process Drop Index " +
+		common.Errorf("Indexer::handleDropIndex Cannot Process Drop Index " +
 			"In Recovery Mode.")
 
 		if respCh != nil {
@@ -584,9 +603,33 @@ func (idx *indexer) handleDropIndex(msg Message) {
 					cause:    errors.New("Index Unknown"),
 					category: INDEXER}}
 		}
+		return
 	}
 
-	idxPartnInfo := idx.indexPartnMap[indexInstId]
+	//check if there is already a drop request waiting on this bucket
+	if ok := idx.checkDuplicateDropRequest(indexInst, respCh); ok {
+		return
+	}
+
+	//if there is a flush in progress for this index's bucket and stream
+	//wait for the flush to finish before drop
+	streamId := indexInst.Stream
+	bucket := indexInst.Defn.Bucket
+
+	if ok, _ := idx.streamBucketFlushInProgress[streamId][bucket]; ok {
+		notifyCh := make(MsgChannel)
+		idx.streamBucketObserveFlushDone[streamId][bucket] = notifyCh
+		go idx.processDropAfterFlushDone(indexInst, notifyCh, respCh)
+	} else {
+		idx.cleanupIndex(indexInst, respCh)
+	}
+
+}
+
+func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
+	respCh MsgChannel) {
+
+	indexInstId := indexInst.InstId
 
 	//update internal maps
 	delete(idx.indexInstMap, indexInstId)
@@ -618,6 +661,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		return
 	}
 
+	idxPartnInfo := idx.indexPartnMap[indexInstId]
 	//for all partitions managed by this indexer
 	for _, partnInst := range idxPartnInfo {
 		sc := partnInst.Sc
@@ -1630,5 +1674,72 @@ func (idx *indexer) cleanupStream(streamId common.StreamId) {
 		streamId: streamId}
 
 	idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", nil)
+}
 
+//helper function to init streamFlush map for all streams
+func (idx *indexer) initStreamFlushMap() {
+
+	for i := 0; i < int(common.MAX_STREAMS); i++ {
+		idx.streamBucketFlushInProgress[common.StreamId(i)] = make(BucketFlushInProgressMap)
+		idx.streamBucketObserveFlushDone[common.StreamId(i)] = make(BucketObserveFlushDoneMap)
+	}
+}
+
+func (idx *indexer) notifyFlushObserver(msg Message) {
+
+	//if there is any observer for flush, notify
+	bucket := msg.(*MsgMutMgrFlushDone).GetBucket()
+	streamId := msg.(*MsgMutMgrFlushDone).GetStreamId()
+
+	if notifyCh, ok := idx.streamBucketObserveFlushDone[streamId][bucket]; ok {
+		if notifyCh != nil {
+			notifyCh <- msg
+			//wait for a sync response that cleanup is done.
+			//notification is sent one by one as there is no lock
+			<-notifyCh
+		}
+	}
+	return
+}
+
+func (idx *indexer) processDropAfterFlushDone(indexInst common.IndexInst,
+	notifyCh MsgChannel, respCh MsgChannel) {
+
+	select {
+	case <-notifyCh:
+		idx.cleanupIndex(indexInst, respCh)
+	}
+
+	streamId := indexInst.Stream
+	bucket := indexInst.Defn.Bucket
+	idx.streamBucketObserveFlushDone[streamId][bucket] = nil
+
+	//indicate done
+	close(notifyCh)
+}
+
+func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
+	respCh MsgChannel) bool {
+
+	//if there is any observer for flush done for this bucket,
+	//drop is already in progress
+	for _, bucketObserver := range idx.streamBucketObserveFlushDone {
+
+		if _, ok := bucketObserver[indexInst.Defn.Bucket]; ok {
+			errStr := "Index Drop Already In Progress. Multiple Drop " +
+				"Request On A Bucket Are Not Supported By Indexer."
+
+			common.Errorf(errStr)
+			if respCh != nil {
+				respCh <- &MsgError{
+					err: Error{code: ERROR_INDEX_DROP_IN_PROGRESS,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+
+			}
+			return true
+		}
+	}
+	return false
 }
