@@ -1549,40 +1549,45 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 	//restart the streams
 	for _, streamId := range restartStreamIds {
 
-		cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
-			streamId:  streamId,
-			indexList: indexList,
-			restartTs: restartTs}
+		//retry till success
+	retryloop:
+		for {
+			cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
+				streamId:  streamId,
+				indexList: indexList,
+				restartTs: restartTs}
 
-		//send stream update to timekeeper
-		if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", nil); !ok {
-			return
-		}
-
-		//send stream update to mutation manager
-		if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", nil); !ok {
-			return
-		}
-
-		//send stream update to kv sender
-		idx.kvSenderCmdCh <- cmd
-		if resp, ok := <-idx.kvSenderCmdCh; ok {
-
-			switch resp.GetMsgType() {
-
-			case INDEXER_ROLLBACK:
-				idx.processRollback(resp)
-
-			case MSG_SUCCESS:
-				//nothing to do
-
-			default:
-				common.Errorf("Indexer::handleInitRecovery - Error from Projector %v", resp)
-
+			//send stream update to timekeeper
+			if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", nil); !ok {
+				return
 			}
-		} else {
-			common.Errorf("Indexer::handleInitRecovery - Error communicating with KVSender "+
-				"processing Msg %v. Aborted.", resp)
+
+			//send stream update to mutation manager
+			if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", nil); !ok {
+				return
+			}
+
+			//send stream update to kv sender
+			idx.kvSenderCmdCh <- cmd
+			if resp, ok := <-idx.kvSenderCmdCh; ok {
+
+				switch resp.GetMsgType() {
+
+				case INDEXER_ROLLBACK:
+					idx.processRollback(resp)
+					break retryloop
+
+				case MSG_SUCCESS:
+					break retryloop
+
+				default:
+					common.Errorf("Indexer::handleInitRecovery - Error from Projector %v", resp)
+					idx.cleanupStream(streamId)
+				}
+			} else {
+				common.Errorf("Indexer::handleInitRecovery - Error communicating with KVSender "+
+					"processing Msg %v. Aborted.", resp)
+			}
 		}
 	}
 }
@@ -1633,5 +1638,24 @@ func (idx *indexer) processRollback(msg Message) {
 			//stream
 		}
 	}
+
+}
+
+func (idx *indexer) cleanupStream(streamId common.StreamId) {
+
+	cmd := &MsgStreamUpdate{mType: CLOSE_STREAM,
+		streamId: streamId}
+
+	//close stream in KVSender
+	idx.kvSenderCmdCh <- cmd
+	<-idx.kvSenderCmdCh
+
+	//close stream in Mutation Manager
+	idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", nil)
+
+	cmd = &MsgStreamUpdate{mType: CLEANUP_STREAM,
+		streamId: streamId}
+
+	idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", nil)
 
 }

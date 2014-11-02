@@ -135,19 +135,15 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 
 	//start mutation stream, if error return to supervisor
 	resp := k.openMutationStream(streamId, indexInstList, restartTs)
-	if resp.GetMsgType() == MSG_SUCCESS ||
-		resp.GetMsgType() == INDEXER_ROLLBACK {
-		//increment index count for this bucket
-		bucketIndexCountMap := make(BucketIndexCountMap)
-		for _, indexInst := range indexInstList {
-			bucketIndexCountMap[indexInst.Defn.Bucket] += 1
-		}
-		k.streamBucketIndexCountMap[streamId] = bucketIndexCountMap
 
-		k.streamStatus[streamId] = true
-		k.supvCmdch <- resp
-		return
+	//increment index count for this bucket
+	bucketIndexCountMap := make(BucketIndexCountMap)
+	for _, indexInst := range indexInstList {
+		bucketIndexCountMap[indexInst.Defn.Bucket] += 1
 	}
+	k.streamBucketIndexCountMap[streamId] = bucketIndexCountMap
+
+	k.streamStatus[streamId] = true
 
 	k.supvCmdch <- resp
 	return
@@ -294,14 +290,6 @@ func (k *kvSender) handleCloseStream(cmd Message) {
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
 
-	//if stream is already closed, return error
-	if status, _ := k.streamStatus[streamId]; !status {
-		k.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_KVSENDER_STREAM_ALREADY_CLOSED,
-				severity: FATAL}}
-		return
-	}
-
 	//if no bucket has been specified, use any bucket name
 	//it doesn't matter while closing the stream
 	if bucket == "" {
@@ -400,6 +388,13 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 
 		//get the list of vbnos for this kv
 		vbnos := vbnosList[i].GetVbnos()
+
+		//check if there are any vbuckets on this KV. After rebalance out,
+		//vbmap can have the name of a KV node but no vbuckets on it.
+		//Skip sending stream request in such a case.
+		if len(vbnos) == 0 {
+			continue
+		}
 
 		var restartTsList []*protobuf.TsVbuuid
 		var err error
@@ -629,9 +624,7 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string) Messa
 		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
 
 		topic := getTopicForStreamId(streamId)
-		if errMsg := sendShutdownTopic(ap, topic); errMsg.GetMsgType() != MSG_SUCCESS {
-			return errMsg
-		}
+		sendShutdownTopic(ap, topic)
 
 	}
 
