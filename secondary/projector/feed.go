@@ -25,7 +25,18 @@ var ErrorInvalidVbucket = errors.New("feed.invalidVbucket")
 // ErrorInconsistentFeed
 var ErrorInconsistentFeed = errors.New("feed.inconsistentFeed")
 
-// ErrorResponseTimeout
+// ErrorNotMyVbucket
+var ErrorNotMyVbucket = errors.New("feed.notMyVbucket")
+
+// ErrorStreamRequest
+var ErrorStreamRequest = errors.New("feed.streamRequest")
+
+// ErrorStreamEnd
+var ErrorStreamEnd = errors.New("feed.streamEnd")
+
+// ErrorResponseTimeout is sent when projector does not recieve
+// expected control message like StreamBegin (when stream is started)
+// and StreamEnd (when stream is closed).
 var ErrorResponseTimeout = errors.New("feed.responseTimeout")
 
 // Feed is mutation stream - for maintenance, initial-load, catchup etc...
@@ -331,7 +342,7 @@ loop:
 				}
 
 			} else {
-				c.Errorf("%v back channel flushed %T %v", feed.logPrefix, v, v)
+				c.Warnf("%v back channel flushed %T %v", feed.logPrefix, v, v)
 			}
 
 		case <-timeout:
@@ -407,37 +418,50 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 // - return ErrorInconsistentFeed for malformed feed request
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
 // - return go-couchbase failures.
+// - return ErrorNotMyVbucket due to rebalances and failures.
+// - return ErrorStreamRequest if StreamRequest failed for some reason
 // - return ErrorResponseTimeout if feedback is not completed within timeout.
-func (feed *Feed) start(req *protobuf.MutationTopicRequest) error {
+func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 	feed.endpointType = req.GetEndpointType()
 
 	// update engines and endpoints
-	if err := feed.processSubscribers(req); err != nil { // :SideEffect:
+	if err = feed.processSubscribers(req); err != nil { // :SideEffect:
 		return err
 	}
 	// iterate request-timestamp for each bucket.
 	opaque := newOpaque()
 	for _, reqTs := range req.GetReqTimestamps() {
-		pooln, bucketn := reqTs.GetBucket(), reqTs.GetBucket()
+		pooln, bucketn := reqTs.GetPool(), reqTs.GetBucket()
+		// for retry logic, don't start already started vbuckets.
+		reqTs_, ok := feed.reqTss[bucketn]
+		if ok {
+			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(reqTs_.GetVbnos()))
+		}
 		// start upstream
-		feeder, err := feed.bucketFeed(opaque, false, true, reqTs)
-		if err != nil {
-			return err
+		feeder, err_ := feed.bucketFeed(opaque, false, true, reqTs)
+		if feeder != nil {
+			feed.feeders[bucketn] = feeder // :SideEffect:
+		}
+		if err_ != nil {
+			err = err_
+			continue
 		}
 		// open data-path
 		m := feed.startDataPath(bucketn, feeder, reqTs)
+		feed.kvdata[bucketn] = m // :SideEffect:
 		// wait ....
-		vbnos := c.Vbno32to16(reqTs.GetVbnos())
-		rollTs, err := feed.waitStreamRequests(opaque, pooln, bucketn, vbnos)
-		if err != nil {
-			return err
+		rollTs, ts, err_ := feed.waitStreamRequests(opaque, pooln, bucketn, reqTs)
+		feed.reqTss[bucketn] = reqTs_.Union(ts) // :SideEffect:
+		feed.rollTss[bucketn] = rollTs          // :SideEffect:
+		if err_ != nil {
+			err = err_
+			// for ErrorResponseTimeout error, bucket is shutdown
+			if err == ErrorResponseTimeout {
+				feed.cleanupBucket(bucketn)
+			}
 		}
-		c.Infof("%v stream-request completed with %v, for vbnos %v #%x\n",
-			feed.logPrefix, rollTs, vbnos, opaque)
-		feed.reqTss[bucketn] = reqTs   // :SideEffect:
-		feed.rollTss[bucketn] = rollTs // :SideEffect:
-		feed.feeders[bucketn] = feeder // :SideEffect:
-		feed.kvdata[bucketn] = m       // :SideEffect:
+		c.Infof("%v stream-request rollback: %v, success: vbnos %v #%x\n",
+			feed.logPrefix, rollTs, reqTs, opaque)
 	}
 	return nil
 }
@@ -446,8 +470,13 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) error {
 // - return ErrorInvalidBucket if bucket is not added.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
 // - return go-couchbase failures.
+// - return ErrorNotMyVbucket due to rebalances and failures.
+// - return ErrorStreamRequest if StreamRequest failed for some reason
+// - return ErrorStreamEnd if StreamEnd failed for some reason
 // - return ErrorResponseTimeout if feedback is not completed within timeout.
-func (feed *Feed) restartVbuckets(req *protobuf.RestartVbucketsRequest) error {
+func (feed *Feed) restartVbuckets(
+	req *protobuf.RestartVbucketsRequest) (err error) {
+
 	// iterate request-timestamp for each bucket.
 	opaque := newOpaque()
 	for _, restartTs := range req.GetRestartTimestamps() {
@@ -457,46 +486,44 @@ func (feed *Feed) restartVbuckets(req *protobuf.RestartVbucketsRequest) error {
 		if !ok1 || !ok2 {
 			msg := "%v restartVbuckets() invalid bucket %v\n"
 			c.Errorf(msg, feed.logPrefix, bucketn)
-			return ErrorInvalidBucket
+			err = ErrorInvalidBucket
+			continue
 		}
-		// first shutdown upstream
-		_, err := feed.bucketFeed(opaque, true, false, restartTs)
-		if err != nil {
-			return err
-		}
-		// wait for stream to shutdown ...
-		vbnos := c.Vbno32to16(restartTs.GetVbnos())
-		if err := feed.waitStreamEnds(opaque, bucketn, vbnos); err != nil {
-			return err
-		}
-
-		for _, kvaddr := range feed.kvaddrs { // update with new start-sequence
+		// convert already active streams into no-op
+		restartTs = restartTs.FilterByVbuckets(c.Vbno32to16(reqTs.GetVbnos()))
+		for _, kvaddr := range feed.kvaddrs { // send seqno. to datapath
 			kvdata[kvaddr].UpdateTs(restartTs)
 		}
-
-		// then restart the upstream
-		_, err = feed.bucketFeed(opaque, false, true, restartTs)
-		if err != nil {
-			return err
+		// (re)start the upstream
+		_, err_ := feed.bucketFeed(opaque, false, true, restartTs)
+		if err_ != nil {
+			err = err_
+			continue
 		}
 		// wait for stream to start ...
-		rollTs, err := feed.waitStreamRequests(opaque, pooln, bucketn, vbnos)
-		if err != nil {
-			return err
+		rollTs, ts, err_ :=
+			feed.waitStreamRequests(opaque, pooln, bucketn, restartTs)
+		feed.reqTss[bucketn] = reqTs.Union(ts) // :SideEffect:
+		feed.rollTss[bucketn] = rollTs         // :SideEffect:
+		if err_ != nil {                       // only return error after updating the local structure
+			err = err_
+			// for ErrorResponseTimeout error, bucket is shutdown
+			if err == ErrorResponseTimeout {
+				feed.cleanupBucket(bucketn)
+			}
 		}
-		c.Infof("%v stream-request completed with %v, for vbnos %v #%x\n",
-			feed.logPrefix, rollTs, vbnos, opaque)
-		// update vbnos that are shutdown
-		feed.reqTss[bucketn] = reqTs.Union(restartTs) // :SideEffect:
-		feed.rollTss[bucketn] = rollTs                // :SideEffect:
+		c.Infof("%v stream-request rollback: %v, success: vbnos %v #%x\n",
+			feed.logPrefix, rollTs, ts, opaque)
 	}
-	return nil
+	return err
 }
 
 // a subset of upstreams are closed.
 // - return ErrorInvalidBucket if bucket is not added.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
 // - return go-couchbase failures.
+// - return ErrorNotMyVbucket due to rebalances and failures.
+// - return ErrorStreamEnd if StreamEnd failed for some reason
 // - return ErrorResponseTimeout if feedback is not completed within timeout.
 func (feed *Feed) shutdownVbuckets(
 	req *protobuf.ShutdownVbucketsRequest) (err error) {
@@ -504,27 +531,34 @@ func (feed *Feed) shutdownVbuckets(
 	opaque := newOpaque()
 	for _, shutTs := range req.GetShutdownTimestamps() {
 		bucketn := shutTs.GetBucket()
-		reqTs, ok := feed.reqTss[bucketn]
-		if !ok {
-			return ErrorInvalidBucket
+		reqTs, ok1 := feed.reqTss[bucketn]
+		rollTs, ok2 := feed.rollTss[bucketn]
+		if !ok1 || !ok2 {
+			msg := "%v shutdownVbuckets() invalid bucket %v\n"
+			c.Errorf(msg, feed.logPrefix, bucketn)
+			err = ErrorInvalidBucket
+			continue
 		}
+		// StreamEnd can asynchronously happen on the server side as well.
+		shutTs = shutTs.SelectByVbuckets(c.Vbno32to16(reqTs.GetVbnos()))
 		// shutdown upstream
-		_, err := feed.bucketFeed(opaque, true, false, shutTs)
-		if err != nil {
-			return err
+		_, err_ := feed.bucketFeed(opaque, true, false, shutTs)
+		if err_ != nil {
+			err = err_
+			continue
 		}
-		// wait ...
+		shutTs, err_ = feed.waitStreamEnds(opaque, bucketn, shutTs)
 		vbnos := c.Vbno32to16(shutTs.GetVbnos())
-		err = feed.waitStreamEnds(opaque, bucketn, vbnos)
-		if err != nil {
-			return err
+		feed.reqTss[bucketn] = reqTs.FilterByVbuckets(vbnos)   // :SideEffect:
+		feed.rollTss[bucketn] = rollTs.FilterByVbuckets(vbnos) // :SideEffect:
+		if err_ != nil {
+			err = err_
 		}
 		c.Infof("%v stream-end completed for bucket %v, vbnos %v #%x\n",
-			feed.logPrefix, bucketn, vbnos, opaque)
+			feed.logPrefix, bucketn, shutTs, opaque)
 		// forget vbnos that are shutdown
-		feed.reqTss[bucketn] = reqTs.FilterByVbuckets(vbnos) // :SideEffect:
 	}
-	return nil
+	return err
 }
 
 // upstreams are added for buckets data-path opened and
@@ -532,10 +566,12 @@ func (feed *Feed) shutdownVbuckets(
 // - return ErrorInconsistentFeed for malformed feed request
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
 // - return go-couchbase failures.
+// - return ErrorNotMyVbucket due to rebalances and failures.
+// - return ErrorStreamRequest if StreamRequest failed for some reason
 // - return ErrorResponseTimeout if feedback is not completed within timeout.
-func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) error {
+func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 	// update engines and endpoints
-	if err := feed.processSubscribers(req); err != nil { // :SideEffect:
+	if err = feed.processSubscribers(req); err != nil { // :SideEffect:
 		return err
 	}
 
@@ -543,74 +579,50 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) error {
 	opaque := newOpaque()
 	for _, reqTs := range req.GetReqTimestamps() {
 		pooln, bucketn := reqTs.GetPool(), reqTs.GetBucket()
+		// for retry logic, don't start already started vbuckets.
+		reqTs_, ok := feed.reqTss[bucketn]
+		if ok {
+			reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(reqTs_.GetVbnos()))
+		}
 		// start upstream
-		feeder, err := feed.bucketFeed(opaque, false, true, reqTs)
-		if err != nil {
-			return err
+		feeder, err_ := feed.bucketFeed(opaque, false, true, reqTs)
+		if feeder != nil {
+			feed.feeders[bucketn] = feeder // :SideEffect:
+		}
+		if err_ != nil {
+			err = err_
+			continue
 		}
 		// open data-path
 		m := feed.startDataPath(bucketn, feeder, reqTs)
+		feed.kvdata[bucketn] = m // :SideEffect:
 		// wait ....
-		vbnos := c.Vbno32to16(reqTs.GetVbnos())
-		rollTs, err := feed.waitStreamRequests(opaque, pooln, bucketn, vbnos)
-		if err != nil {
-			return err
+		rollTs, ts, err_ := feed.waitStreamRequests(opaque, pooln, bucketn, reqTs)
+		feed.reqTss[bucketn] = reqTs_.Union(ts) // :SideEffect:
+		feed.rollTss[bucketn] = rollTs          // :SideEffect:
+		if err_ != nil {
+			err = err_
+			// for ErrorResponseTimeout error, bucket is shutdown
+			if err == ErrorResponseTimeout {
+				feed.cleanupBucket(bucketn)
+			}
 		}
-		c.Infof("%v stream-request completed with %v, for vbnos %v #%x\n",
-			feed.logPrefix, rollTs, vbnos, opaque)
-		feed.reqTss[bucketn] = reqTs   // :SideEffect:
-		feed.rollTss[bucketn] = rollTs // :SideEffect:
-		feed.feeders[bucketn] = feeder // :SideEffect:
-		feed.kvdata[bucketn] = m       // :SideEffect:
+		c.Infof("%v stream-request rollback: %v, success: vbnos %v #%x\n",
+			feed.logPrefix, rollTs, reqTs, opaque)
 	}
-	return nil
+	return err
 }
 
 // upstreams are closed for buckets, data-path is closed for downstream,
 // vbucket-routines exits on StreamEnd
-// - return ErrorInvalidBucket if bucket is not added.
-// - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return go-couchbase failures.
-// - return ErrorResponseTimeout if feedback is not completed within timeout.
 func (feed *Feed) delBuckets(req *protobuf.DelBucketsRequest) error {
-	opaque := newOpaque()
 	for _, bucketn := range req.GetBuckets() {
-		if _, ok := feed.kvdata[bucketn]; !ok {
-			feed.errorf("no bucket", bucketn, nil)
-			return ErrorInvalidBucket
-		}
-		// stop upstream
-		_, err := feed.bucketFeed(opaque, true, false, feed.reqTss[bucketn])
-		if err != nil {
-			return err
-		}
-		// wait ...
-		vbnos := c.Vbno32to16(feed.reqTss[bucketn].GetVbnos())
-		err = feed.waitStreamEnds(opaque, bucketn, vbnos)
-		if err != nil {
-			return err
-		}
-		c.Infof("%v stream-end completed for bucket %v, vbnos %v #%x\n",
-			feed.logPrefix, bucketn, vbnos, opaque)
-		// close data-path
-		for _, kvdata := range feed.kvdata[bucketn] {
-			kvdata.Close()
-		}
-
-		feed.feeders[bucketn].CloseFeed()
-
-		// cleanup data structures.
-		delete(feed.reqTss, bucketn)  // :SideEffect:
-		delete(feed.rollTss, bucketn) // :SideEffect:
-		delete(feed.feeders, bucketn) // :SideEffect:
-		delete(feed.kvdata, bucketn)  // :SideEffect:
-		delete(feed.engines, bucketn) // :SideEffect:
+		feed.cleanupBucket(bucketn)
 	}
 	return nil
 }
 
 // only data-path shall be updated.
-// TODO: update ?
 // - return ErrorInconsistentFeed for malformed feed request
 func (feed *Feed) addInstances(req *protobuf.AddInstancesRequest) error {
 	// update engines and endpoints
@@ -627,7 +639,7 @@ func (feed *Feed) addInstances(req *protobuf.AddInstancesRequest) error {
 }
 
 // only data-path shall be updated.
-// - if it is the last instance defined on the bucket, then
+// * if it is the last instance defined on the bucket, then
 //   use delBuckets() API to delete the bucket.
 func (feed *Feed) delInstances(req *protobuf.DelInstancesRequest) error {
 	// reconstruct instance uuids bucket-wise.
@@ -729,6 +741,27 @@ func (feed *Feed) shutdown() error {
 	return nil
 }
 
+// shutdown upstream, data-path and remove data-structure for this bucket.
+func (feed *Feed) cleanupBucket(bucketn string) {
+	delete(feed.engines, bucketn) // :SideEffect:
+	delete(feed.reqTss, bucketn)  // :SideEffect:
+	delete(feed.rollTss, bucketn) // :SideEffect:
+	// close upstream
+	feeder, ok := feed.feeders[bucketn]
+	if ok {
+		feeder.CloseFeed()
+	}
+	delete(feed.feeders, bucketn) // :SideEffect:
+	// cleanup data structures.
+	kvdatas, ok := feed.kvdata[bucketn]
+	if ok {
+		for _, kvdata := range kvdatas {
+			kvdata.Close()
+		}
+	}
+	delete(feed.kvdata, bucketn) // :SideEffect:
+}
+
 // start a feed for a bucket with a set of kvfeeder,
 // based on vbmap and failover-logs.
 // - return go-couchbase failures.
@@ -752,7 +785,7 @@ func (feed *Feed) bucketFeed(
 		}
 	}
 
-	reqTs = reqTs.SelectByVbuckets(vbnos) // filter vbuckets
+	reqTs = reqTs.SelectByVbuckets(vbnos) // only vbuckets relevant to kvaddrs.
 
 	feeder, ok := feed.feeders[bucketn]
 	if !ok { // the feed is being started for the first time
@@ -768,19 +801,19 @@ func (feed *Feed) bucketFeed(
 		}
 	}
 
+	// stop and start are mutually exclusive
 	if stop {
 		feed.infof("stop-timestamp", bucketn, reqTs)
 		if err = feeder.EndVbStreams(opaque, reqTs); err != nil {
 			feed.errorf("EndVbStreams()", bucketn, err)
-			return nil, err
+			return feeder, err
 		}
-	}
 
-	if start {
+	} else if start {
 		feed.infof("start-timestamp", bucketn, reqTs)
 		if err = feeder.StartVbStreams(opaque, reqTs); err != nil {
 			feed.errorf("StartVbStreams()", bucketn, err)
-			return nil, err
+			return feeder, err
 		}
 	}
 	return feeder, nil
@@ -837,6 +870,10 @@ func (feed *Feed) startDataPath(
 	mutch := feeder.GetChannel()
 	m := make(map[string]*KVData) // kvaddr -> kvdata
 	for _, kvaddr := range feed.kvaddrs {
+		// spawn only when it is not already active
+		if kvdata, ok := feed.kvdata[bucketn][kvaddr]; ok {
+			m[kvaddr] = kvdata
+		}
 		// pass engines & endpoints to kvdata.
 		kvdata := NewKVData(
 			feed, bucketn, kvaddr, reqTs,
@@ -867,7 +904,7 @@ func (feed *Feed) processSubscribers(req Subscriber) error {
 		engine := NewEngine(uuid, evaluator, routers[uuid])
 		c.Infof("%v new engine %v created ...\n", feed.logPrefix, uuid)
 		m[uuid] = engine
-		feed.engines[bucketn] = m
+		feed.engines[bucketn] = m // :SideEffect:
 	}
 	return nil
 }
@@ -930,25 +967,35 @@ func (feed *Feed) engineNames() []string {
 	return names
 }
 
-// wait for kvdata to post StreamRequest.
+// wait for kvdata to post StreamRequest. failed StreamRequest are pruned
+// from request-timestamp and return back.
 // - return ErrorResponseTimeout if feedback is not completed within timeout
 func (feed *Feed) waitStreamRequests(
 	opaque uint16,
-	pooln, bucketn string, vbnos []uint16) (*protobuf.TsVbuuid, error) {
+	pooln, bucketn string,
+	ts *protobuf.TsVbuuid) (*protobuf.TsVbuuid, *protobuf.TsVbuuid, error) {
 
+	var err error
+
+	vbnos := c.Vbno32to16(ts.GetVbnos())
 	rollTs := protobuf.NewTsVbuuid(pooln, bucketn, feed.maxVbuckets)
 
 	if len(vbnos) == 0 {
-		return rollTs, nil
+		return rollTs, ts, nil
 	}
 
 	timeout := time.After(feed.reqTimeout * time.Millisecond)
-
-	err := feed.waitOnFeedback(timeout, func(msg interface{}) string {
+	err1 := feed.waitOnFeedback(timeout, func(msg interface{}) string {
 		if val, ok := msg.(*controlStreamRequest); ok {
 			if val.bucket == bucketn && val.opaque == opaque {
 				if val.status == mcd.ROLLBACK {
 					rollTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
+				} else if val.status == mcd.NOT_MY_VBUCKET {
+					ts = ts.FilterByVbuckets([]uint16{val.vbno})
+					err = ErrorNotMyVbucket
+				} else if val.status != mcd.SUCCESS {
+					ts = ts.FilterByVbuckets([]uint16{val.vbno})
+					err = ErrorStreamRequest
 				}
 				vbnos = c.RemoveUint16(val.vbno, vbnos)
 				if len(vbnos) == 0 {
@@ -959,21 +1006,36 @@ func (feed *Feed) waitStreamRequests(
 		}
 		return "skip"
 	})
-	return rollTs, err
+	if err == nil {
+		err = err1
+	}
+	return rollTs, ts, err
 }
 
-// wait for kvdata to post StreamEnd.
+// wait for kvdata to post StreamEnd. failed StreamEnd are pruned
+// from request-timestamp and return back.
 // - return ErrorResponseTimeout if feedback is not completed within timeout
 func (feed *Feed) waitStreamEnds(
-	opaque uint16, bucketn string, vbnos []uint16) error {
+	opaque uint16,
+	bucketn string, ts *protobuf.TsVbuuid) (*protobuf.TsVbuuid, error) {
 
+	vbnos := c.Vbno32to16(ts.GetVbnos())
 	if len(vbnos) == 0 {
-		return nil
+		return ts, nil
 	}
+
 	timeout := time.After(feed.endTimeout * time.Millisecond)
-	err := feed.waitOnFeedback(timeout, func(msg interface{}) string {
+	var err error
+	err1 := feed.waitOnFeedback(timeout, func(msg interface{}) string {
 		if val, ok := msg.(*controlStreamEnd); ok {
 			if val.bucket == bucketn && val.opaque == opaque {
+				if val.status == mcd.NOT_MY_VBUCKET {
+					ts = ts.FilterByVbuckets([]uint16{val.vbno})
+					err = ErrorNotMyVbucket
+				} else if val.status != mcd.SUCCESS {
+					ts = ts.FilterByVbuckets([]uint16{val.vbno})
+					err = ErrorStreamEnd
+				}
 				vbnos = c.RemoveUint16(val.vbno, vbnos)
 				if len(vbnos) == 0 {
 					return "done"
@@ -983,7 +1045,10 @@ func (feed *Feed) waitStreamEnds(
 		}
 		return "skip"
 	})
-	return err
+	if err == nil {
+		err = err1
+	}
+	return ts, err
 }
 
 // block feed until feedback posted back from kvdata.

@@ -196,7 +196,7 @@ loop:
 				respch <- []interface{}{nil}
 
 			case kvCmdTs:
-				ts = msg[1].(*protobuf.TsVbuuid)
+				ts = ts.Union(msg[1].(*protobuf.TsVbuuid))
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{nil}
 

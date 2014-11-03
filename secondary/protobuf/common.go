@@ -114,6 +114,16 @@ func (ts *TsVbuuid) Append(
 	return ts
 }
 
+// Contains with check whether `vbno` has an entry in the timestamp.
+func (ts *TsVbuuid) Contains(vbno uint16) bool {
+	for _, vbno := range ts.GetVbnos() {
+		if vbno == vbno {
+			return true
+		}
+	}
+	return false
+}
+
 // FromTsVbuuid converts timestamp from common.TsVbuuid to protobuf
 // format.
 func (ts *TsVbuuid) FromTsVbuuid(nativeTs *c.TsVbuuid) *TsVbuuid {
