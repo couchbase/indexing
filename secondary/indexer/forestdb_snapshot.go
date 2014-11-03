@@ -90,10 +90,6 @@ func (s *fdbSnapshot) Timestamp() *common.TsVbuuid {
 	return s.ts
 }
 
-func (s *fdbSnapshot) SetTimestamp(ts *common.TsVbuuid) {
-	s.ts = ts
-}
-
 func (s *fdbSnapshot) MainIndexSeqNum() forestdb.SeqNum {
 	return s.mainSeqNum
 }

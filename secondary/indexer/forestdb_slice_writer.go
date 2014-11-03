@@ -10,11 +10,15 @@
 package indexer
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
 	"time"
 )
+
+//TODO Choose a unique key name
+const STABILITY_TS_KEY_NAME = "StabilityTimstamp%$#"
 
 //NewForestDBSlice initiailizes a new slice with forestdb backend.
 //Both main and back index gets initialized with default config.
@@ -98,6 +102,8 @@ type fdbSlice struct {
 	workerDone []chan bool //worker status check channel
 
 	fatalDbErr error //store any fatal DB error
+
+	ts *common.TsVbuuid //timestamp for this slice
 
 	//TODO: Remove this once these stats are
 	//captured by the stats library
@@ -302,7 +308,8 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 		idxDefnId: fdb.idxDefnId,
 		idxInstId: fdb.idxInstId,
 		main:      fdb.main[0],
-		back:      fdb.back[0]}
+		back:      fdb.back[0],
+		ts:        fdb.ts}
 
 	//store snapshot seqnum for main index
 	{
@@ -536,6 +543,43 @@ func (fdb *fdbSlice) IndexDefnId() common.IndexDefnId {
 //this slice
 func (fdb *fdbSlice) GetSnapshotContainer() SnapshotContainer {
 	return fdb.sc
+}
+
+func (fdb *fdbSlice) Timestamp() *common.TsVbuuid {
+
+	return fdb.ts
+}
+
+func (fdb *fdbSlice) SetTimestamp(ts *common.TsVbuuid) error {
+
+	common.Debugf("ForestDBSlice::SetTimestamp \n\tSliceId %v IndexInstId %v. TS - %s",
+		fdb.id, fdb.idxInstId, ts)
+
+	//marshal TS
+	var tsVal []byte
+	var err error
+	if tsVal, err = json.Marshal(ts); err != nil {
+		common.Errorf("ForestDBSlice::SetTimestamp \n\t Error Marshalling TS %v. Err %v", ts, err)
+		return err
+	}
+
+	//set the back index entry
+	if err = fdb.back[0].SetKV([]byte(STABILITY_TS_KEY_NAME), tsVal); err != nil {
+		common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Back Index Set. "+
+			"TS %s. Error %v", fdb.id, fdb.idxInstId, tsVal, err)
+		return err
+	}
+
+	//set in main index
+	if err = fdb.main[0].SetKV([]byte(STABILITY_TS_KEY_NAME), tsVal); err != nil {
+		common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
+			"TS %s. Error %v", fdb.id, fdb.idxInstId, tsVal, err)
+		return err
+	}
+
+	fdb.ts = ts
+
+	return nil
 }
 
 func (fdb *fdbSlice) String() string {

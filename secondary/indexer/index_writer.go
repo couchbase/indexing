@@ -9,6 +9,10 @@
 
 package indexer
 
+import (
+	"github.com/couchbase/indexing/secondary/common"
+)
+
 type IndexWriter interface {
 
 	//Persist a key/value pair
@@ -28,6 +32,9 @@ type IndexWriter interface {
 
 	//Rollback to initial state
 	RollbackToZero() error
+
+	//Set Timestamp
+	SetTimestamp(*common.TsVbuuid) error
 
 	//Close the index. Should be able to reopen after this operation
 	Close() error

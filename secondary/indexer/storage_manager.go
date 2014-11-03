@@ -153,6 +153,9 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 						common.Debugf("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
 							"Index: %v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
+						newTsVbuuid := tsVbuuid.Copy()
+						slice.SetTimestamp(newTsVbuuid)
+
 						//create snapshot for slice
 						if newSnapshot, err := slice.Snapshot(); err == nil {
 
@@ -163,8 +166,6 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 										"Container Len %v", snapContainer.Len())
 								}
 							}
-							newTsVbuuid := tsVbuuid.Copy()
-							newSnapshot.SetTimestamp(newTsVbuuid)
 							newSnapshot.Open()
 							snapContainer.Add(newSnapshot)
 							common.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+

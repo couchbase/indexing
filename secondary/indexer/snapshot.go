@@ -26,5 +26,4 @@ type Snapshot interface {
 	IndexDefnId() common.IndexDefnId
 
 	Timestamp() *common.TsVbuuid
-	SetTimestamp(*common.TsVbuuid)
 }

@@ -40,5 +40,7 @@ type Slice interface {
 
 	GetSnapshotContainer() SnapshotContainer
 
+	Timestamp() *common.TsVbuuid
+
 	IndexWriter
 }
