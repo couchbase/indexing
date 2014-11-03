@@ -58,7 +58,8 @@ func TestStatistics(t *testing.T) {
 
 	client := NewClient(addr, common.SystemConfig)
 
-	out, err := client.Statistics("idx", "bkt", []byte("aaaa"), []byte("zzzz"), 0)
+	out, err := client.Statistics("idx", "bkt", []byte("aaaa"), []byte("zzzz"),
+		[][]byte{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +90,7 @@ func TestScan(t *testing.T) {
 
 	count := 0
 	client.Scan(
-		"idx", "bkt", []byte("aaaa"), []byte("zzzz"), 0, 100, true, 1000,
+		"idx", "bkt", []byte("aaaa"), []byte("zzzz"), [][]byte{}, 0, 100, true, 1000,
 		func(val interface{}) bool {
 			switch v := val.(type) {
 			case *protobuf.ResponseStream:
@@ -106,7 +107,7 @@ func TestScan(t *testing.T) {
 
 	count = 0
 	client.Scan(
-		"idx", "bkt", []byte("aaaa"), []byte("zzzz"), 0, 100, true, 1000,
+		"idx", "bkt", []byte("aaaa"), []byte("zzzz"), [][]byte{}, 0, 100, true, 1000,
 		func(val interface{}) bool {
 			count++
 			if count == 2 {
@@ -186,7 +187,8 @@ func BenchmarkStatistics(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client.Statistics("idx", "bkt", []byte("aaaa"), []byte("zzzz"), 0)
+		client.Statistics("idx", "bkt", []byte("aaaa"), []byte("zzzz"),
+			[][]byte{}, 0)
 	}
 	b.StopTimer()
 	s.Close()
@@ -211,7 +213,8 @@ func BenchmarkScan1(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		client.Scan(
-			"idx", "bkt", []byte("aaaa"), []byte("zzzz"), 0, 100, true, 1000,
+			"idx", "bkt", []byte("aaaa"), []byte("zzzz"), [][]byte{}, 0, 100,
+			true, 1000,
 			func(val interface{}) bool {
 				return true
 			})
@@ -242,7 +245,8 @@ func BenchmarkScan100(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		client.Scan(
-			"idx", "bkt", []byte("aaaa"), []byte("zzzz"), 0, 100, true, 1000,
+			"idx", "bkt", []byte("aaaa"), []byte("zzzz"), [][]byte{}, 0, 100,
+			true, 1000,
 			func(val interface{}) bool {
 				return true
 			})
@@ -271,7 +275,7 @@ func BenchmarkScanParallel10(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		client.Scan(
-			"idx", "bkt", []byte("aaaa"), []byte("zzzz"), 0, 100, true, 1000,
+			"idx", "bkt", []byte("aaaa"), []byte("zzzz"), [][]byte{}, 0, 100, true, 1000,
 			func(val interface{}) bool {
 				return false
 			})

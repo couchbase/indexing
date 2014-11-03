@@ -69,7 +69,7 @@ func (c *Client) Close() {
 
 // Statistics for index range.
 func (c *Client) Statistics(
-	index, bucket string, low, high []byte,
+	index, bucket string, low, high []byte, equal [][]byte,
 	inclusion uint32) (*protobuf.IndexStatistics, error) {
 
 	connectn, err := c.pool.Get()
@@ -88,7 +88,10 @@ func (c *Client) Statistics(
 	}
 
 	req := &protobuf.StatisticsRequest{
-		Span:      &protobuf.Span{Range: r},
+		Span: &protobuf.Span{
+			Range: r,
+			Equal: equal,
+		},
 		IndexName: proto.String(index),
 		Bucket:    proto.String(bucket),
 	}
@@ -121,8 +124,8 @@ func (c *Client) Statistics(
 
 // Scan index for a range.
 func (c *Client) Scan(
-	index, bucket string, low, high []byte, inclusion uint32, pageSize int64,
-	distinct bool, limit int64, callb ResponseHandler) error {
+	index, bucket string, low, high []byte, equal [][]byte, inclusion uint32,
+	pageSize int64, distinct bool, limit int64, callb ResponseHandler) error {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -136,7 +139,10 @@ func (c *Client) Scan(
 	incl := proto.Uint32(inclusion)
 	r := &protobuf.Range{Low: low, High: high, Inclusion: incl}
 	req := &protobuf.ScanRequest{
-		Span:      &protobuf.Span{Range: r},
+		Span: &protobuf.Span{
+			Range: r,
+			Equal: equal,
+		},
 		Distinct:  proto.Bool(distinct),
 		PageSize:  proto.Int64(pageSize),
 		Limit:     proto.Int64(limit),

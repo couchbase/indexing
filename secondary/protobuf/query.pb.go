@@ -291,7 +291,7 @@ func (m *StreamEndResponse) GetErr() *Error {
 
 type Span struct {
 	Range            *Range   `protobuf:"bytes,1,req,name=range" json:"range,omitempty"`
-	Equal            []string `protobuf:"bytes,2,rep,name=equal" json:"equal,omitempty"`
+	Equal            [][]byte `protobuf:"bytes,2,rep,name=equal" json:"equal,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -306,7 +306,7 @@ func (m *Span) GetRange() *Range {
 	return nil
 }
 
-func (m *Span) GetEqual() []string {
+func (m *Span) GetEqual() [][]byte {
 	if m != nil {
 		return m.Equal
 	}

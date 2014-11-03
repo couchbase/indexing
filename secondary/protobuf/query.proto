@@ -63,7 +63,7 @@ message StreamEndResponse {
 
 message Span {
     required Range  range = 1;
-    repeated string equal = 2;
+    repeated bytes  equal = 2;
 }
 
 message Range {
