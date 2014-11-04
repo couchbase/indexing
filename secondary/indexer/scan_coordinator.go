@@ -10,9 +10,208 @@
 package indexer
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/protobuf"
+	"github.com/couchbase/indexing/secondary/queryport"
+	"github.com/couchbaselabs/goprotobuf/proto"
 	"sync"
+	"sync/atomic"
 )
+
+// TODO:
+// 1. Add distinct unsupported error
+// 2. Add unique count unsupported error
+
+// Errors
+var (
+	ErrUnsupportedRequest = errors.New("Unsupported query request")
+	ErrIndexNotFound      = errors.New("Index not found")
+	ErrNotMyIndex         = errors.New("Not my index")
+	ErrInternal           = errors.New("Internal server error occured")
+)
+
+type scanType string
+
+const (
+	queryStats   scanType = "stats"
+	queryScan    scanType = "scan"
+	queryScanAll scanType = "scanall"
+)
+
+// Internal scan handle for a request
+type scanDescriptor struct {
+	scanId uint64
+	p      *scanParams
+	stopch StopChannel
+
+	respch chan interface{}
+}
+
+func (sd scanDescriptor) String() string {
+	var incl, span string
+
+	switch sd.p.incl {
+	case Low:
+		incl = "incl:low"
+	case High:
+		incl = "incl:high"
+	case Both:
+		incl = "incl:both"
+	default:
+		incl = "incl:none"
+	}
+
+	if len(sd.p.keys) == 0 {
+		if sd.p.scanType == queryStats || sd.p.scanType == queryScan {
+			span = fmt.Sprintf("range (%s,%s %s)", string(sd.p.low.Raw()),
+				string(sd.p.high.Raw()), incl)
+		} else {
+			span = "all"
+		}
+	} else {
+		span = "keys ( "
+		for _, k := range sd.p.keys {
+			span = span + string(k.Raw()) + " "
+		}
+		span = span + ")"
+	}
+
+	str := fmt.Sprintf("scan id: %v, index: %v/%v, type: %v, span: %s", sd.scanId,
+		sd.p.bucket, sd.p.indexName, sd.p.scanType, span)
+
+	if sd.p.pageSize > 0 {
+		str += fmt.Sprintf(" pagesize: %d", sd.p.pageSize)
+	}
+
+	if sd.p.limit > 0 {
+		str += fmt.Sprintf(" limit: %d", sd.p.limit)
+	}
+
+	return str
+}
+
+type scanParams struct {
+	scanType  scanType
+	indexName string
+	bucket    string
+	low       Key
+	high      Key
+	keys      []Key
+	partnKey  []byte
+	incl      Inclusion
+	limit     int64
+	pageSize  int64
+}
+
+type statsResponse struct {
+	min, max Key
+	unique   uint64
+	count    uint64
+}
+
+// Streaming scan results reader helper
+// Used for:
+// - Reading batched entries of page size from scan res stream
+// - To apply limit clause on streaming scan results
+// - To perform graceful termination of stream scanning
+type scanStreamReader struct {
+	sd      *scanDescriptor
+	keysBuf *[]Key
+	bufSize int64
+	count   int64
+	hasNext bool
+}
+
+func newResponseReader(sd *scanDescriptor) *scanStreamReader {
+	r := new(scanStreamReader)
+	r.sd = sd
+	r.keysBuf = new([]Key)
+	r.hasNext = true
+	r.bufSize = 0
+	return r
+}
+
+// Read a chunk of keys from scan results with a maximum batch size equals page size
+func (r *scanStreamReader) ReadKeyBatch() (keys *[]Key, done bool, err error) {
+	var resp interface{}
+	done = false
+
+loop:
+	for r.hasNext {
+		resp, r.hasNext = <-r.sd.respch
+		if r.hasNext {
+			switch resp.(type) {
+			case Key:
+				// Limit constraint
+				if r.sd.p.limit > 0 && r.sd.p.limit == r.count {
+					r.Done()
+					break loop
+				}
+
+				k := resp.(Key)
+				sz := int64(len(k.Raw()))
+				// Page size constraint
+				if r.bufSize > 0 && r.bufSize+sz > r.sd.p.pageSize {
+					keys = r.keysBuf
+					r.bufSize = sz
+					r.keysBuf = new([]Key)
+					*r.keysBuf = append(*r.keysBuf, k)
+					r.count++
+					return
+				}
+
+				r.bufSize += sz
+				*r.keysBuf = append(*r.keysBuf, k)
+				r.count++
+			case error:
+				err = resp.(error)
+				r.Done()
+				return
+			}
+		}
+	}
+
+	// No more item left to be read from buffer
+	if len(*r.keysBuf) == 0 {
+		done = true
+	}
+
+	keys = r.keysBuf
+	r.keysBuf = new([]Key)
+
+	return
+}
+
+func (r *scanStreamReader) ReadStat() (stat statsResponse, err error) {
+	resp := <-r.sd.respch
+	switch resp.(type) {
+	case statsResponse:
+		stat = resp.(statsResponse)
+	case error:
+		err = resp.(error)
+	}
+
+	return
+}
+
+func (r *scanStreamReader) Done() {
+	r.hasNext = false
+	close(r.sd.stopch)
+
+	// Drain any leftover responses when client requests for graceful
+	// termination
+	go func() {
+		for {
+			_, closed := <-r.sd.respch
+			if closed {
+				break
+			}
+		}
+	}()
+}
 
 //TODO
 //For any query request, check if the replica is available. And use replica in case
@@ -26,46 +225,60 @@ type ScanCoordinator interface {
 
 type scanCoordinator struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
-	supvRespch MsgChannel //channel to send any async message to supervisor
+	supvMsgch  MsgChannel //channel to send any async message to supervisor
+	serv       *queryport.Server
+	logPrefix  string
+	reqCounter uint64
 
+	mu            sync.RWMutex
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 }
 
-//NewStorageManager returns an instance of scanCoordinator or err message
-//It listens on supvCmdch for command and every command is followed
-//by a synchronous response on the supvCmdch.
-//Any async response to supervisor is sent to supvRespch.
-//If supvCmdch get closed, ScanCoordinator will shut itself down.
-func NewScanCoordinator(supvCmdch MsgChannel, supvRespch MsgChannel) (
+// NewScanCoordinator returns an instance of scanCoordinator or err message
+// It listens on supvCmdch for command and every command is followed
+// by a synchronous response on the supvCmdch.
+// Any async message to supervisor is sent to supvMsgch.
+// If supvCmdch get closed, ScanCoordinator will shut itself down.
+func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel) (
 	ScanCoordinator, Message) {
+	var err error
 
-	//Init the scanCoordinator struct
 	s := &scanCoordinator{
-		supvCmdch:  supvCmdch,
-		supvRespch: supvRespch,
+		supvCmdch: supvCmdch,
+		supvMsgch: supvMsgch,
+		logPrefix: "ScanCoordinator",
 	}
 
-	//start ScanCoordinator loop which listens to commands from its supervisor
+	s.serv, err = queryport.NewServer(QUERY_PORT_ADDR, s.requestHandler,
+		common.SystemConfig)
+
+	if err != nil {
+		errMsg := &MsgError{err: Error{code: ERROR_SCAN_COORD_QUERYPORT_FAIL,
+			severity: FATAL,
+			category: SCAN_COORD,
+			cause:    err,
+		},
+		}
+		return nil, errMsg
+	}
+
+	// main loop
 	go s.run()
 
 	return s, &MsgSuccess{}
 
 }
 
-//run starts the storage manager loop which listens to messages
-//from its supervisor(indexer)
 func (s *scanCoordinator) run() {
-
-	//main ScanCoordinator loop
 loop:
 	for {
 		select {
-
 		case cmd, ok := <-s.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == SCAN_COORD_SHUTDOWN {
 					common.Infof("ScanCoordinator: Shutting Down")
+					s.serv.Close()
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -74,18 +287,12 @@ loop:
 				//supervisor channel closed. exit
 				break loop
 			}
-
 		}
 	}
 }
 
 func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
-
 	switch cmd.GetMsgType() {
-
-	case SCAN_COORD_SCAN_INDEX:
-		s.handleScanIndex(cmd)
-
 	case UPDATE_INDEX_INSTANCE_MAP:
 		s.handleUpdateIndexInstMap(cmd)
 
@@ -102,209 +309,325 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 
 }
 
-//handleScanIndex will scan the index and return the
-//results/errors on the channels provided in the scan request.
-func (s *scanCoordinator) handleScanIndex(cmd Message) {
+// Parse scan params from queryport request
+func (s *scanCoordinator) parseScanParams(
+	req interface{}) (p *scanParams, err error) {
 
-	common.Debugf("ScanCoordinator: Received Command to Scan Index %v", cmd)
+	p = new(scanParams)
+	p.partnKey = []byte("default")
 
-	idxInstId := cmd.(*MsgScanIndex).GetIndexInstId()
-	p := cmd.(*MsgScanIndex).GetParams()
+	fillRanges := func(low, high []byte, keys [][]byte) error {
+		var err error
+		var key Key
 
-	//error if indexInstId is unknown
-	if _, ok := s.indexInstMap[idxInstId]; !ok {
-		common.Errorf("ScanCoordinator: Unable to find Index Instance for "+
-			"InstanceId %v", idxInstId)
+		// range
+		if p.low, err = NewKey(low); err != nil {
+			return err
+		}
 
-		errCh := cmd.(*MsgScanIndex).GetErrorChannel()
-		errMsg := &MsgError{
-			err: Error{code: ERROR_SCAN_COORD_INTERNAL_ERROR,
-				severity: NORMAL,
-				category: SCAN_COORD}}
+		if p.high, err = NewKey(high); err != nil {
+			return err
+		}
 
-		errCh <- errMsg
+		// point query for keys
+		for _, k := range keys {
+			if key, err = NewKey(k); err != nil {
+				return err
+			}
 
-		//close the channel to indicate the caller that no further
-		//processing will be done for this scan request
-		close(errCh)
+			p.keys = append(p.keys, key)
+		}
 
-		//send error to supervisor as well
-		s.supvCmdch <- errMsg
-		return
+		return nil
 	}
 
-	//if partnKey is present in query params,
-	//scan the matching partition only
-	if p.partnKey != nil {
-		go s.scanSinglePartition(cmd, s.indexInstMap, s.indexPartnMap)
-	} else {
-		go s.scanAllPartitions(cmd, s.indexInstMap, s.indexPartnMap)
+	switch req.(type) {
+	case *protobuf.StatisticsRequest:
+		r := req.(*protobuf.StatisticsRequest)
+		p.scanType = queryStats
+		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
+		err = fillRanges(
+			r.GetSpan().GetRange().GetLow(),
+			r.GetSpan().GetRange().GetHigh(),
+			r.GetSpan().GetEqual())
+		p.indexName = r.GetIndexName()
+		p.bucket = r.GetBucket()
+	case *protobuf.ScanRequest:
+		r := req.(*protobuf.ScanRequest)
+		p.scanType = queryScan
+		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
+		err = fillRanges(
+			r.GetSpan().GetRange().GetLow(),
+			r.GetSpan().GetRange().GetHigh(),
+			r.GetSpan().GetEqual())
+		p.limit = r.GetLimit()
+		p.indexName = r.GetIndexName()
+		p.bucket = r.GetBucket()
+		p.pageSize = r.GetPageSize()
+	case *protobuf.ScanAllRequest:
+		p.scanType = queryScanAll
+		r := req.(*protobuf.ScanAllRequest)
+		p.limit = r.GetLimit()
+		p.indexName = r.GetIndexName()
+		p.bucket = r.GetBucket()
+		p.pageSize = r.GetPageSize()
+	default:
+		err = ErrUnsupportedRequest
 	}
 
-	s.supvCmdch <- &MsgSuccess{}
-
+	return
 }
 
-//scanSinglePartition scans the single partition for the index
-//based on the partition key. The partition can be local,
-//remote or have multiple endpoints(either local or remote),
-//The results/errors are sent on result/err channel provided
-//in the scan request,
-func (s *scanCoordinator) scanSinglePartition(cmd Message,
-	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap) {
+// Handle query requests arriving through queryport
+func (s *scanCoordinator) requestHandler(
+	req interface{},
+	respch chan<- interface{},
+	quitch <-chan interface{}) {
 
-	common.Debugf("ScanCoordinator: ScanSinglePartition %v", cmd)
+	var indexInst *common.IndexInst
+	var partnInstMap *PartitionInstMap
 
-	idxInstId := cmd.(*MsgScanIndex).GetIndexInstId()
+	p, err := s.parseScanParams(req)
+	if err != nil {
+		// TODO: Add error response for invalid queryport reqs
+		panic(err)
+	}
 
-	var idxInst common.IndexInst
-	var ok bool
-	if idxInst, ok = indexInstMap[idxInstId]; !ok {
+	scanId := atomic.AddUint64(&s.reqCounter, 1)
+	sd := &scanDescriptor{
+		scanId: scanId,
+		p:      p,
+		stopch: make(StopChannel),
+		respch: make(chan interface{}),
+	}
 
-		common.Errorf("ScanCoordinator: Unable to find Index Instance for "+
-			"InstanceId %v", idxInstId)
-
-		errCh := cmd.(*MsgScanIndex).GetErrorChannel()
-		errCh <- &MsgError{
-			err: Error{code: ERROR_SCAN_COORD_INTERNAL_ERROR,
-				severity: NORMAL,
-				category: SCAN_COORD}}
-
-		//close the channel to indicate the caller that no further
-		//processing will be done for this scan request
-		close(errCh)
+	common.Infof("%v: SCAN_REQ %v", s.logPrefix, sd)
+	indexInst, partnInstMap, err = s.getIndexDS(p.indexName, p.bucket)
+	if err != nil {
+		common.Infof("%v: SCAN_ID: %v, Error (%v)", s.logPrefix, sd.scanId, err)
+		respch <- s.makeResponseMessage(sd, err)
+		close(respch)
 		return
 	}
 
-	//get partitioncontainer for this index
-	pc := idxInst.Pc
+	partnDefs := s.findPartitionDefsForScan(sd, indexInst)
+	go s.scanPartitions(sd, partnDefs, partnInstMap)
 
-	//figure out the partition this query needs to run on
-	p := cmd.(*MsgScanIndex).GetParams()
-	partnId := pc.GetPartitionIdByPartitionKey(p.partnKey)
-
-	var partnInstMap PartitionInstMap
-	if partnInstMap, ok = indexPartnMap[idxInstId]; !ok {
-
-		common.Errorf("ScanCoordinator: Unable to find partition map for "+
-			"Index InstanceId %v", idxInstId)
-
-		errCh := cmd.(*MsgScanIndex).GetErrorChannel()
-		errCh <- &MsgError{
-			err: Error{code: ERROR_SCAN_COORD_INTERNAL_ERROR,
-				severity: FATAL,
-				category: SCAN_COORD}}
-
-		//close the channel to indicate the caller that no further
-		//processing will be done for this scan request
-		close(errCh)
-		return
-	}
-
-	var wg sync.WaitGroup
-	workerStopChannel := make([]StopChannel, 1)
-
-	var partnInst PartitionInst
-	wg.Add(1)
-	if partnInst, ok = partnInstMap[partnId]; ok {
-		//run local scan for partition
-		go s.scanLocalPartition(cmd, partnInst, workerStopChannel[0], &wg)
-
-	} else {
-		//partition doesn't exist on this node,
-		//run remote scan
-		go s.scanRemotePartition(cmd, pc.GetPartitionById(partnId),
-			workerStopChannel[0], &wg)
-	}
-
-	stopch := cmd.(*MsgScanIndex).GetStopChannel()
-	s.monitorWorkers(&wg, stopch, workerStopChannel, "scanSinglePartition")
-
-	//close error channel to indicate scan is done
-	errCh := cmd.(*MsgScanIndex).GetErrorChannel()
-	close(errCh)
-
-}
-
-//scanAllPartitions scans all the partitions for the index
-//for the scan params. The partitions can be local,
-//remote or have multiple endpoints(either local or remote),
-//The results/errors are sent on result/err channel provided
-//in the scan request,
-func (s *scanCoordinator) scanAllPartitions(cmd Message,
-	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap) {
-
-	common.Debugf("ScanCoordinator: ScanAllPartitions %v", cmd)
-
-	idxInstId := cmd.(*MsgScanIndex).GetIndexInstId()
-
-	var idxInst common.IndexInst
-	var ok bool
-	if idxInst, ok = indexInstMap[idxInstId]; !ok {
-
-		common.Errorf("ScanCoordinator: Unable to find Index Instance for "+
-			"InstanceId %v", idxInstId)
-
-		errCh := cmd.(*MsgScanIndex).GetErrorChannel()
-		errCh <- &MsgError{
-			err: Error{code: ERROR_SCAN_COORD_INTERNAL_ERROR,
-				severity: NORMAL,
-				category: SCAN_COORD}}
-
-		//close the channel to indicate the caller that no further
-		//processing will be done for this scan request
-		close(errCh)
-
-	}
-
-	var partnInstMap PartitionInstMap
-	if partnInstMap, ok = indexPartnMap[idxInstId]; !ok {
-		common.Errorf("ScanCoordinator: Unable to find partition map for "+
-			"Index InstanceId %v", idxInstId)
-
-		errCh := cmd.(*MsgScanIndex).GetErrorChannel()
-		errCh <- &MsgError{
-			err: Error{code: ERROR_SCAN_COORD_INTERNAL_ERROR,
-				severity: FATAL,
-				category: SCAN_COORD}}
-
-		//close the channel to indicate the caller that no further
-		//processing will be done for this scan request
-		close(errCh)
-	}
-
-	//get partitioncontainer for this index
-	pc := idxInst.Pc
-
-	var wg sync.WaitGroup
-	workerStopChannels := make([]StopChannel, pc.GetNumPartitions())
-
-	//for all the partitions of this index
-	for i, partnDefn := range pc.GetAllPartitions() {
-
-		wg.Add(1)
-		var partnInst PartitionInst
-		if partnInst, ok = partnInstMap[partnDefn.GetPartitionId()]; !ok {
-			//partition doesn't exist on this node, run remote scan
-			go s.scanRemotePartition(cmd, partnDefn, workerStopChannels[i], &wg)
+	rdr := newResponseReader(sd)
+	switch sd.p.scanType {
+	case queryStats:
+		var msg interface{}
+		stat, err := rdr.ReadStat()
+		if err != nil {
+			msg = s.makeResponseMessage(sd, err)
 		} else {
-			//run local scan for local partition
-			go s.scanLocalPartition(cmd, partnInst, workerStopChannels[i], &wg)
+			msg = s.makeResponseMessage(sd, stat)
+		}
+
+		respch <- msg
+		close(respch)
+
+	case queryScan:
+		fallthrough
+	case queryScanAll:
+		var keys *[]Key
+		var msg interface{}
+		var done bool
+
+		// Read scan entries and send it to the client
+		// Closing respch indicates that we have no more messages to be sent
+	loop:
+		for {
+			keys, done, err = rdr.ReadKeyBatch()
+			// We have already finished reading from response stream
+			if done {
+				break loop
+			}
+
+			if err != nil {
+				msg = s.makeResponseMessage(sd, err)
+			} else {
+				msg = s.makeResponseMessage(sd, keys)
+			}
+
+			// Send protobuf message response to queryport
+			select {
+			case _, ok := <-quitch:
+				if !ok {
+					rdr.Done()
+					break loop
+				}
+			case respch <- msg:
+			}
+		}
+		close(respch)
+	}
+}
+
+func ProtoIndexEntryFromKey(k Key) *protobuf.IndexEntry {
+	// TODO: Return error instead of panic
+	var tmp []interface{}
+	var err error
+	var secKeyBytes, pKeyBytes []byte
+
+	kbytes := k.Raw()
+	err = json.Unmarshal(kbytes, &tmp)
+	if err != nil {
+		panic("corruption detected " + err.Error())
+	}
+
+	l := len(tmp)
+	if l < 2 {
+		panic("corruption detected")
+	}
+
+	secKey := tmp[:l-1]
+	pKey := tmp[l-1]
+
+	secKeyBytes, err = json.Marshal(secKey)
+	if err != nil {
+		panic("corruption detected " + err.Error())
+	}
+
+	pKeyBytes, err = json.Marshal(pKey)
+	if err != nil {
+		panic("corruption detected " + err.Error())
+	}
+
+	entry := &protobuf.IndexEntry{
+		EntryKey: secKeyBytes, PrimaryKey: pKeyBytes,
+	}
+
+	return entry
+}
+
+// Create a queryport response message
+// Response message can be StreamResponse or StatisticsResponse
+func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
+	payload interface{}) (r interface{}) {
+
+	switch payload.(type) {
+	case error:
+		err := payload.(error)
+		protoErr := &protobuf.Error{Error: proto.String(err.Error())}
+		switch sd.p.scanType {
+		case queryStats:
+			r = &protobuf.StatisticsResponse{
+				Err: protoErr,
+			}
+		case queryScan:
+			fallthrough
+		case queryScanAll:
+			r = &protobuf.ResponseStream{
+				Err: protoErr,
+			}
+		}
+	case *[]Key:
+		var entries []*protobuf.IndexEntry
+		keys := *payload.(*[]Key)
+		for _, k := range keys {
+			entry := ProtoIndexEntryFromKey(k)
+			entries = append(entries, entry)
+		}
+		r = &protobuf.ResponseStream{Entries: entries}
+	case statsResponse:
+		stats := payload.(statsResponse)
+		r = &protobuf.StatisticsResponse{
+			Stats: &protobuf.IndexStatistics{
+				Count:      proto.Uint64(stats.count),
+				UniqueKeys: proto.Uint64(stats.unique),
+				Min:        stats.min.Raw(),
+				Max:        stats.max.Raw(),
+			},
+		}
+	}
+	return
+}
+
+// Find and return data structures for the specified index
+func (s *scanCoordinator) getIndexDS(indexName, bucket string) (indexInst *common.IndexInst,
+	partnInstMap *PartitionInstMap, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, inst := range s.indexInstMap {
+		if inst.Defn.Name == indexName && inst.Defn.Bucket == bucket {
+			indexInst = &inst
+			if pmap, ok := s.indexPartnMap[inst.InstId]; ok {
+				partnInstMap = &pmap
+				return
+			}
+
+			err = ErrNotMyIndex
+			return
 		}
 	}
 
-	stopch := cmd.(*MsgScanIndex).GetStopChannel()
-	s.monitorWorkers(&wg, stopch, workerStopChannels, "scanAllPartitions")
-
-	//close error channel to indicate scan is done
-	errCh := cmd.(*MsgScanIndex).GetErrorChannel()
-	close(errCh)
+	err = ErrIndexNotFound
+	return
 }
 
-//monitorWorkers waits for the provided workers to finish and returns.
-//It also listens to the stop channel and if that gets closed, all workers
-//are stopped using workerStopChannels. Once all workers stop, the
-//method retuns.
+// Get defs of necessary partitions required for serving the scan request
+func (s *scanCoordinator) findPartitionDefsForScan(sd *scanDescriptor,
+	indexInst *common.IndexInst) []common.PartitionDefn {
+
+	var partnDefs []common.PartitionDefn
+
+	// Scan request has specified the specific partition to be scanned
+	if string(sd.p.partnKey) != "" {
+		id := indexInst.Pc.GetPartitionIdByPartitionKey(sd.p.partnKey)
+		partnDefs = []common.PartitionDefn{indexInst.Pc.GetPartitionById(id)}
+	} else {
+		partnDefs = indexInst.Pc.GetAllPartitions()
+	}
+
+	return partnDefs
+}
+
+func (s *scanCoordinator) isLocalEndpoint(endpoint common.Endpoint) bool {
+	// TODO: Detect local endpoint correctly
+	// Since the current indexer supports only single partition, this assumption
+	// holds true
+	return true
+}
+
+// Scan entries from the target partitions for index query
+// Scan will be distributed across all the endpoints of the target partitions
+// Scan entries/errors are written back into sd.respch channel
+func (s *scanCoordinator) scanPartitions(sd *scanDescriptor,
+	partDefs []common.PartitionDefn, partnInstMap *PartitionInstMap) {
+	// TODO: Multiple partition scanner needs a stream merger/stats reducer to
+	// work with multiple partitions and slices.
+	common.Debugf("%v: scanParitions: SCAN_ID: %v partitions: %v", s.logPrefix,
+		sd.scanId, partDefs)
+
+	var wg sync.WaitGroup
+	var workerStopChannels []StopChannel
+
+	for _, partnDefn := range partDefs {
+		for _, endpoint := range partnDefn.Endpoints() {
+			wg.Add(1)
+			stopch := make(StopChannel)
+			workerStopChannels = append(workerStopChannels, stopch)
+			id := partnDefn.GetPartitionId()
+			if s.isLocalEndpoint(endpoint) {
+				// run local scan for local partition
+				go s.scanLocalPartitionEndpoint(sd, id, partnInstMap, stopch, &wg)
+			} else {
+				go s.scanRemotePartitionEndpoint(sd, endpoint, id, stopch, &wg)
+			}
+		}
+	}
+
+	s.monitorWorkers(&wg, sd.stopch, workerStopChannels, "scanPartitions")
+	// We have no more responses to be sent
+	close(sd.respch)
+}
+
+// Waits for the provided workers to finish and return
+// It also listens to the stop channel and if that gets closed, all workers
+// are stopped using workerStopChannels. Once all workers stop, the
+// method retuns.
 func (s *scanCoordinator) monitorWorkers(wg *sync.WaitGroup,
 	stopch StopChannel, workerStopChannels []StopChannel, debugStr string) {
 
@@ -338,29 +661,25 @@ func (s *scanCoordinator) monitorWorkers(wg *sync.WaitGroup,
 
 }
 
-//scanLocalPartition scan a local partition. Some slices of the
-//partition may be present on remote node. For those slices
-//request is sent to remote indexer and results are returned.
-func (s *scanCoordinator) scanLocalPartition(cmd Message,
-	partnInst PartitionInst, stopch StopChannel,
+// Locate the slices for the local partition endpoint and scan them
+func (s *scanCoordinator) scanLocalPartitionEndpoint(sd *scanDescriptor,
+	partnId common.PartitionId, partnInstMap *PartitionInstMap, stopch StopChannel,
 	wg *sync.WaitGroup) {
 
-	defer wg.Done()
+	var partnInst PartitionInst
+	var ok bool
 
-	common.Debugf("ScanCoordinator: ScanLocalPartition %v", cmd)
+	defer wg.Done()
+	common.Debugf("%v: scanLocalParitionEndpoint: SCAN_ID: %v partition: %v",
+		s.logPrefix, sd.scanId, partnId)
+
+	// TODO: Crash or return error to the client ?
+	if partnInst, ok = (*partnInstMap)[partnId]; !ok {
+		panic("Partition cannot be found in partition instance map")
+	}
 
 	var workerWg sync.WaitGroup
 	var workerStopChannels []StopChannel
-
-	//if this partition has multiple endpoints, then remote
-	//slices of the partition need to be scanned as well
-	partnDefn := partnInst.Defn
-	if len(partnDefn.Endpoints()) > 1 {
-		workerWg.Add(1)
-		workerStopCh := make(StopChannel)
-		workerStopChannels = append(workerStopChannels, workerStopCh)
-		go s.scanRemoteSlice(cmd, partnDefn, workerStopCh, &workerWg)
-	}
 
 	sliceList := partnInst.Sc.GetAllSlices()
 
@@ -368,244 +687,111 @@ func (s *scanCoordinator) scanLocalPartition(cmd Message,
 		workerWg.Add(1)
 		workerStopCh := make(StopChannel)
 		workerStopChannels = append(workerStopChannels, workerStopCh)
-		go s.scanLocalSlice(cmd, slice, workerStopCh, &workerWg)
+		go s.scanLocalSlice(sd, slice, workerStopCh, &workerWg)
 	}
 
 	s.monitorWorkers(&workerWg, stopch, workerStopChannels, "scanLocalPartition")
 }
 
-//scanRemotePartition request remote indexer to scan a partition
-//and return results based on scan params.
-func (s *scanCoordinator) scanRemotePartition(cmd Message,
-	partnDefn common.PartitionDefn, stopch StopChannel,
+func (s *scanCoordinator) scanRemotePartitionEndpoint(sd *scanDescriptor,
+	endpoint common.Endpoint,
+	partnId common.PartitionId, stopch StopChannel,
 	wg *sync.WaitGroup) {
 
 	defer wg.Done()
-
-	common.Debugf("ScanCoordinator: ScanRemotePartition %v", cmd)
-
-	//TODO Send request to remote indexer's admin-port
-	//to fulfill the scan request
+	panic("not implemented")
 }
 
-//scanLocalSlice scans a local slice based on latest snapshot
-//and returns results on the channels provided in request.
-func (s *scanCoordinator) scanLocalSlice(cmd Message,
+// Scan a snapshot from a local slice
+// Snapshot to be scanned is determined by query parameters
+func (s *scanCoordinator) scanLocalSlice(sd *scanDescriptor,
 	slice Slice, stopch StopChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()
-
-	common.Debugf("ScanCoordinator: ScanLocalSlice %v. SliceId %v", cmd, slice.Id())
+	common.Debugf("%v: scanLocalSlice: SCAN_ID: %v Slice : %v",
+		s.logPrefix, sd.scanId, slice.Id())
 
 	snapContainer := slice.GetSnapshotContainer()
 	snap := snapContainer.GetLatestSnapshot()
 
 	if snap != nil {
-		s.executeLocalScan(cmd, snap, stopch)
+		s.executeLocalScan(sd, snap, stopch)
 	} else {
-		scanId := cmd.(*MsgScanIndex).GetScanId()
-		idxInstId := cmd.(*MsgScanIndex).GetIndexInstId()
-		common.Infof("ScanCoordinator: No Snapshot Available for ScanId %v "+
-			"IndexInstId %v, SliceId %v", scanId, idxInstId, slice.Id())
+		common.Infof("%v: SCAN_ID: %v Slice: %v Error (No snapshot available for scan)",
+			s.logPrefix, sd.scanId, slice.Id())
 	}
 }
 
-//scanRemoteSlice requests remote indexer to scan a slice
-//and return results based on scan params.
-func (s *scanCoordinator) scanRemoteSlice(cmd Message,
-	partnDefn common.PartitionDefn, stopch StopChannel,
-	wg *sync.WaitGroup) {
-
-	defer wg.Done()
-
-	common.Debugf("ScanCoordinator: ScanRemoteSlice %v", cmd)
-
-	//TODO Send request to remote indexer's admin-port
-	//to fulfill the scan request
-}
-
-//executeLocalScan executes the actual scan of the snapshot.
-//Scan can be stopped anytime by closing the stop channel.
-func (s *scanCoordinator) executeLocalScan(cmd Message, snap Snapshot, stopch StopChannel) {
-
-	q := cmd.(*MsgScanIndex).GetParams()
-
-	switch q.scanType {
-
-	case COUNT:
-		s.countQuery(cmd, snap, stopch)
-
-	case EXISTS:
-		s.existsQuery(cmd, snap, stopch)
-
-	case LOOKUP:
-		s.lookupQuery(cmd, snap, stopch)
-
-	case RANGESCAN:
-		s.rangeQuery(cmd, snap, stopch)
-
-	case FULLSCAN:
-		s.scanQuery(cmd, snap, stopch)
-
-	case RANGECOUNT:
-		s.rangeCountQuery(cmd, snap, stopch)
-
+// Executes the actual scan of the snapshot
+// Scan can be stopped anytime by closing the stop channel
+func (s *scanCoordinator) executeLocalScan(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+	switch sd.p.scanType {
+	case queryStats:
+		s.statsQuery(sd, snap, stopch)
+	case queryScan:
+		s.scanQuery(sd, snap, stopch)
+	case queryScanAll:
+		s.scanAllQuery(sd, snap, stopch)
 	}
 }
 
-//executeRemoteScan sends the scan request to admin port of remote
-//indexer and gets the results
-func (s *scanCoordinator) executeRemoteScan() {
-
-}
-
-//countQuery executes countTotal method of snapshot and returns result/error
-//on channel provided in scan request.
-func (s *scanCoordinator) countQuery(cmd Message, snap Snapshot, stopch StopChannel) {
-
-	id := cmd.(*MsgScanIndex).GetScanId()
-	countCh := cmd.(*MsgScanIndex).GetCountChannel()
-	errCh := cmd.(*MsgScanIndex).GetErrorChannel()
-
-	common.Debugf("ScanCoordinator: CountQuery ScanId %v", id)
-
-	count, err := snap.CountTotal(stopch)
+func (s *scanCoordinator) statsQuery(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+	totalRows, err := snap.CountRange(sd.p.low, sd.p.high, sd.p.incl, stopch)
+	// TODO: Implement min, max, unique (maybe)
 	if err != nil {
-		common.Errorf("ScanCoordinator: ScanId %v CountQuery Got Error %v", id, err)
-		errCh <- &MsgError{
-			err: Error{code: ERROR_SCAN_COORD_INTERNAL_ERROR,
-				severity: NORMAL,
-				cause:    err,
-				category: SCAN_COORD}}
+		sd.respch <- err
 	} else {
-		countCh <- count
+		min, _ := NewKey([]byte("min"))
+		max, _ := NewKey([]byte("max"))
+		sd.respch <- statsResponse{count: totalRows, min: min, max: max}
 	}
-
 }
 
-//existsQuery executes Exists method of snapshot and returns result/error
-//on channel provided in scan request.
-func (s *scanCoordinator) existsQuery(cmd Message, snap Snapshot, stopch StopChannel) {
-
-	id := cmd.(*MsgScanIndex).GetScanId()
-	p := cmd.(*MsgScanIndex).GetParams()
-	countCh := cmd.(*MsgScanIndex).GetCountChannel()
-	errCh := cmd.(*MsgScanIndex).GetErrorChannel()
-
-	common.Debugf("ScanCoordinator: ExistsQuery ScanId %v", id)
-
-	exists, err := snap.Exists(p.low, stopch)
-	if err != nil {
-		common.Errorf("ScanCoordinator: ScanId %v ExistsQuery Got Error %v", id, err)
-		errCh <- &MsgError{
-			err: Error{code: ERROR_SCAN_COORD_INTERNAL_ERROR,
-				severity: NORMAL,
-				cause:    err,
-				category: SCAN_COORD}}
-	} else {
-		if exists {
-			countCh <- 1
-		} else {
-			countCh <- 0
+func (s *scanCoordinator) scanQuery(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+	// TODO: Decide whether a missing response should be provided point query for keys
+	if len(sd.p.keys) != 0 {
+		for _, k := range sd.p.keys {
+			ch, cherr, _ := snap.KeyRange(k, k, Both, stopch)
+			s.receiveKeys(sd, ch, cherr)
 		}
-	}
-}
-
-//lookupQuery executes Lookup method of snapshot and returns result/error
-//on channel provided in scan request.
-func (s *scanCoordinator) lookupQuery(cmd Message, snap Snapshot, stopch StopChannel) {
-
-	id := cmd.(*MsgScanIndex).GetScanId()
-	p := cmd.(*MsgScanIndex).GetParams()
-
-	common.Debugf("ScanCoordinator: LookupQuery ScanId %v", id)
-
-	ch, cherr := snap.Lookup(p.low, stopch)
-	s.receiveValue(cmd, ch, cherr)
-}
-
-//rangeQuery executes ValueRange method of snapshot and returns result/error
-//on channel provided in scan request.
-func (s *scanCoordinator) rangeQuery(cmd Message, snap Snapshot, stopch StopChannel) {
-
-	id := cmd.(*MsgScanIndex).GetScanId()
-	p := cmd.(*MsgScanIndex).GetParams()
-
-	common.Debugf("ScanCoordinator: RangeQuery ScanId %v", id)
-
-	ch, cherr, _ := snap.ValueRange(p.low, p.high, p.incl, stopch)
-	s.receiveValue(cmd, ch, cherr)
-}
-
-//lookupQuery executes ValueSet method of snapshot and returns result/error
-//on channel provided in scan request.
-func (s *scanCoordinator) scanQuery(cmd Message, snap Snapshot, stopch StopChannel) {
-
-	id := cmd.(*MsgScanIndex).GetScanId()
-
-	common.Debugf("ScanCoordinator: ScanQuery ScanId %v", id)
-
-	ch, cherr := snap.ValueSet(stopch)
-	s.receiveValue(cmd, ch, cherr)
-}
-
-//lookupQuery executes CountRange method of snapshot and returns result/error
-//on channel provided in scan request.
-func (s *scanCoordinator) rangeCountQuery(cmd Message, snap Snapshot, stopch StopChannel) {
-
-	id := cmd.(*MsgScanIndex).GetScanId()
-	p := cmd.(*MsgScanIndex).GetParams()
-	countCh := cmd.(*MsgScanIndex).GetCountChannel()
-	errCh := cmd.(*MsgScanIndex).GetErrorChannel()
-
-	common.Debugf("ScanCoordinator: RangeCountQuery ScanId %v", id)
-
-	totalRows, err := snap.CountRange(p.low, p.high, p.incl, stopch)
-	if err != nil {
-		common.Errorf("ScanCoordinator: ScanId %v RangeCountQuery Got Error %v", id, err)
-		errCh <- &MsgError{
-			err: Error{code: ERROR_SCAN_COORD_INTERNAL_ERROR,
-				severity: NORMAL,
-				cause:    err,
-				category: SCAN_COORD}}
 	} else {
-		countCh <- totalRows
+		ch, cherr, _ := snap.KeyRange(sd.p.low, sd.p.high, sd.p.incl, stopch)
+		s.receiveKeys(sd, ch, cherr)
 	}
+
 }
 
-//receiveValue receives results/errors from snapshot reader and forwards it to
-//the caller till the result channel is closed by the snapshot reader
-func (s *scanCoordinator) receiveValue(cmd Message, chval chan Value, cherr chan error) {
+func (s *scanCoordinator) scanAllQuery(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+	ch, cherr := snap.KeySet(stopch)
+	s.receiveKeys(sd, ch, cherr)
+}
 
-	id := cmd.(*MsgScanIndex).GetScanId()
-	resCh := cmd.(*MsgScanIndex).GetResultChannel()
-	resErrCh := cmd.(*MsgScanIndex).GetErrorChannel()
-
+// receiveKeys receives results/errors from snapshot reader and forwards it to
+// the caller till the result channel is closed by the snapshot reader
+func (s *scanCoordinator) receiveKeys(sd *scanDescriptor, chkey chan Key, cherr chan error) {
 	ok := true
-	var value Value
+	var key Key
 	var err error
+
 	for ok {
 		select {
-		case value, ok = <-chval:
+		case key, ok = <-chkey:
 			if ok {
-				common.Tracef("ScanCoordinator: ScanId %v Received Value %s", id, value.String())
-				resCh <- value
+				common.Tracef("%v: SCAN_ID: %v Received key: %v)",
+					s.logPrefix, sd.scanId, string(key.Raw()))
+				sd.respch <- key
 			}
 		case err, _ = <-cherr:
 			if err != nil {
-				common.Errorf("ScanCoordinator: ScanId %v Received Error %s", id, err)
-				resErrCh <- &MsgError{
-					err: Error{code: ERROR_SCAN_COORD_INTERNAL_ERROR,
-						severity: NORMAL,
-						cause:    err,
-						category: SCAN_COORD}}
+				sd.respch <- err
 			}
 		}
 	}
-
 }
 
 func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	common.Infof("ScanCoordinator::handleUpdateIndexInstMap %v", cmd)
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
@@ -615,6 +801,8 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 }
 
 func (s *scanCoordinator) handleUpdateIndexPartnMap(cmd Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	common.Infof("ScanCoordinator::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
