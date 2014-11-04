@@ -152,12 +152,14 @@ func (s *Server) handleRequest(
 	raddr := conn.RemoteAddr()
 
 	timeoutMs := s.writeDeadline * time.Millisecond
-	transmit := func(resp interface{}) {
+	transmit := func(resp interface{}) error {
 		conn.SetWriteDeadline(time.Now().Add(timeoutMs))
-		if err := tpkt.Send(conn, resp); err != nil {
+		err := tpkt.Send(conn, resp)
+		if err != nil {
 			msg := "%v connection %v response transport failed `%v`\n"
 			c.Debugf(msg, s.logPrefix, raddr, err)
 		}
+		return err
 	}
 
 	defer close(quitch)
@@ -167,18 +169,25 @@ loop:
 		select {
 		case resp, ok := <-respch:
 			if !ok {
-				transmit(&protobuf.StreamEndResponse{})
-				msg := "%v connection %q transmitted protobuf.StreamEndResponse"
-				c.Debugf(msg, s.logPrefix, raddr)
+				if err := transmit(&protobuf.StreamEndResponse{}); err == nil {
+					msg := "%v connection %q transmitted protobuf.StreamEndResponse"
+					c.Debugf(msg, s.logPrefix, raddr)
+				}
 				break loop
 			}
-			transmit(resp)
+			if err := transmit(resp); err != nil {
+				break loop
+			}
 
 		case req, ok := <-rcvch:
 			if _, yes := req.(*protobuf.EndStreamRequest); ok && yes {
-				transmit(&protobuf.StreamEndResponse{})
-				msg := "%v connection %q transmitted protobuf.StreamEndResponse"
-				c.Debugf(msg, s.logPrefix, raddr)
+				if err := transmit(&protobuf.StreamEndResponse{}); err == nil {
+					msg := "%v connection %q transmitted protobuf.StreamEndResponse"
+					c.Debugf(msg, s.logPrefix, raddr)
+				}
+				break loop
+
+			} else if !ok {
 				break loop
 			}
 

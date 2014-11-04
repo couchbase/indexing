@@ -1,5 +1,13 @@
 // Package queryport provides a simple library to spawn a queryport and access
 // queryport via passive client API.
+//
+// ---> Request                 ---> Request
+//      <--- Response                <--- Response
+//      <--- Response                <--- Response
+//      ...                     ---> EndStreamRequest
+//      <--- StreamEndResponse       <--- Response (residue)
+//                                   <--- StreamEndResponse
+
 package queryport
 
 import (
@@ -29,7 +37,7 @@ type Client struct {
 	raddr string
 	pool  *connectionPool
 	// config params
-	maxPayload         int
+	maxPayload         int // TODO: what if it exceeds ?
 	readDeadline       time.Duration
 	writeDeadline      time.Duration
 	poolSize           int
@@ -95,7 +103,7 @@ func (c *Client) Statistics(
 		IndexName: proto.String(index),
 		Bucket:    proto.String(bucket),
 	}
-
+	// ---> protobuf.StatisticsRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		msg := "%v Statistics() request transport failed `%v`\n"
 		common.Errorf(msg, c.logPrefix, err)
@@ -105,6 +113,7 @@ func (c *Client) Statistics(
 
 	timeoutMs := c.readDeadline * time.Millisecond
 	conn.SetReadDeadline(time.Now().Add(timeoutMs))
+	// <--- protobuf.StatisticsResponse
 	resp, err := pkt.Receive(conn)
 	if err != nil {
 		msg := "%v Statistics() response transport failed `%v`\n"
@@ -113,8 +122,8 @@ func (c *Client) Statistics(
 		return nil, err
 	}
 
-	// skip StreamEndResponse
 	conn.SetReadDeadline(time.Now().Add(timeoutMs))
+	// <--- protobuf.StreamEndResponse (skipped)
 	endResp, err := pkt.Receive(conn)
 	if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
 		return nil, ErrorProtocol
@@ -139,16 +148,14 @@ func (c *Client) Scan(
 	incl := proto.Uint32(inclusion)
 	r := &protobuf.Range{Low: low, High: high, Inclusion: incl}
 	req := &protobuf.ScanRequest{
-		Span: &protobuf.Span{
-			Range: r,
-			Equal: equal,
-		},
+		Span:      &protobuf.Span{Range: r, Equal: equal},
 		Distinct:  proto.Bool(distinct),
 		PageSize:  proto.Int64(pageSize),
 		Limit:     proto.Int64(limit),
 		IndexName: proto.String(index),
 		Bucket:    proto.String(bucket),
 	}
+	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		msg := "%v Scan() request transport failed `%v`\n"
 		common.Errorf(msg, c.logPrefix, err)
@@ -158,6 +165,7 @@ func (c *Client) Scan(
 
 	cont := true
 	for cont {
+		// <--- protobuf.ResponseStream
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
 		if err != nil {
 			msg := "%v Scan() response failed `%v`\n"
@@ -226,7 +234,7 @@ func (c *Client) streamResponse(
 	conn.SetReadDeadline(time.Now().Add(timeoutMs))
 	resp, err = pkt.Receive(conn)
 	if err != nil {
-		callb(err)
+		callb(err) // callback with error
 		cont, healthy = false, false
 		if err != io.EOF {
 			msg := "%v connection %q response transport failed `%v`\n"
