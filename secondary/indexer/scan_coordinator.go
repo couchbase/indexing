@@ -513,6 +513,12 @@ func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
 		switch sd.p.scanType {
 		case queryStats:
 			r = &protobuf.StatisticsResponse{
+				Stats: &protobuf.IndexStatistics{
+					Count:      proto.Uint64(0),
+					UniqueKeys: proto.Uint64(0),
+					Min:        []byte{},
+					Max:        []byte{},
+				},
 				Err: protoErr,
 			}
 		case queryScan:

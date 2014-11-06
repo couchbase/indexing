@@ -230,12 +230,18 @@ func (s *mockSnapshot) CountRange(low Key, high Key, inclusion Inclusion,
 	s.errch = make(chan error)
 	s.count = 0
 	go s.feeder(s.keych, nil, s.errch)
-	for _ = range s.keych {
-		s.count++
-	}
-	select {
-	case s.err, _ = <-s.errch:
-	default:
+
+loop:
+	for {
+		select {
+		case s.err, _ = <-s.errch:
+			break loop
+		case _, ok := <-s.keych:
+			if !ok {
+				break loop
+			}
+			s.count++
+		}
 	}
 
 	return s.count, s.err
