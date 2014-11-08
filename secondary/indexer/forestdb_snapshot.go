@@ -20,8 +20,8 @@ import (
 type fdbSnapshot struct {
 	id SliceId //slice id
 
-	main       *forestdb.Database //db handle for forward index
-	back       *forestdb.Database //db handle for reverse index
+	main       *forestdb.KVStore // handle for forward index
+	back       *forestdb.KVStore // handle for reverse index
 	mainSeqNum forestdb.SeqNum
 	backSeqNum forestdb.SeqNum
 

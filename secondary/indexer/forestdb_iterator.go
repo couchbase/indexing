@@ -16,13 +16,13 @@ import (
 //ForestDBIterator taken from
 //https://github.com/couchbaselabs/bleve/blob/master/index/store/goforestdb/iterator.go
 type ForestDBIterator struct {
-	db    *forestdb.Database
+	db    *forestdb.KVStore
 	valid bool
 	curr  *forestdb.Doc
 	iter  *forestdb.Iterator
 }
 
-func newForestDBIterator(db *forestdb.Database) *ForestDBIterator {
+func newForestDBIterator(db *forestdb.KVStore) *ForestDBIterator {
 	rv := ForestDBIterator{
 		db: db,
 	}

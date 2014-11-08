@@ -35,18 +35,23 @@ func NewForestDBSlice(name string, sliceId SliceId, idxDefnId common.IndexDefnId
 
 	config := forestdb.DefaultConfig()
 	config.SetDurabilityOpt(forestdb.DRB_ASYNC)
+	kvconfig := forestdb.DefaultKVStoreConfig()
 
-	slice.main = make([]*forestdb.Database, NUM_WRITER_THREADS_PER_SLICE)
+	if slice.dbfile, err = forestdb.Open(name, config); err != nil {
+		return nil, err
+	}
+
+	slice.main = make([]*forestdb.KVStore, NUM_WRITER_THREADS_PER_SLICE)
 	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
-		if slice.main[i], err = forestdb.Open(name, config); err != nil {
+		if slice.main[i], err = slice.dbfile.OpenKVStore("main", kvconfig); err != nil {
 			return nil, err
 		}
 	}
 
 	//create a separate back-index
-	slice.back = make([]*forestdb.Database, NUM_WRITER_THREADS_PER_SLICE)
+	slice.back = make([]*forestdb.KVStore, NUM_WRITER_THREADS_PER_SLICE)
 	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
-		if slice.back[i], err = forestdb.Open(name+"_back", config); err != nil {
+		if slice.back[i], err = slice.dbfile.OpenKVStore("back", kvconfig); err != nil {
 			return nil, err
 		}
 	}
@@ -85,8 +90,9 @@ type fdbSlice struct {
 	name string
 	id   SliceId //slice id
 
-	main []*forestdb.Database //db handle for forward index
-	back []*forestdb.Database //db handle for reverse index
+	dbfile *forestdb.File
+	main   []*forestdb.KVStore // handle for forward index
+	back   []*forestdb.KVStore // handle for reverse index
 
 	idxDefnId common.IndexDefnId
 	idxInstId common.IndexInstId
@@ -313,7 +319,7 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 
 	//store snapshot seqnum for main index
 	{
-		i, err := fdb.main[0].DbInfo()
+		i, err := fdb.main[0].Info()
 		if err != nil {
 			return nil, err
 		}
@@ -323,7 +329,7 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 
 	//store snapshot seqnum for back index
 	{
-		i, err := fdb.back[0].DbInfo()
+		i, err := fdb.back[0].Info()
 		if err != nil {
 			return nil, err
 		}
@@ -408,37 +414,19 @@ func (fdb *fdbSlice) Commit() error {
 		}
 	}
 
-	var bErr, mErr error
-	statusCh := make(DoneChannel)
-
+	// Commit database file
 	start := time.Now()
-	//Commit the back index
-	go func() {
-		bErr = fdb.back[0].Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
-		close(statusCh)
-	}()
-
-	//Commit the main index
-	mErr = fdb.main[0].Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
-
-	//wait for back index commit to finish
-	<-statusCh
-
+	err := fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
 	elapsed := time.Since(start)
+
 	fdb.totalCommitTime += elapsed
 	common.Debugf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v TotalFlushTime %v "+
 		"TotalCommitTime %v", fdb.id, fdb.idxInstId, fdb.totalFlushTime, fdb.totalCommitTime)
 
-	if bErr != nil {
-		common.Errorf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v Error in Back "+
-			"Index Commit %v", fdb.id, fdb.idxInstId, bErr)
-		return bErr
-	}
-
-	if mErr != nil {
-		common.Errorf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v Error in Main "+
-			"Index Commit %v", fdb.id, fdb.idxInstId, bErr)
-		return mErr
+	if err != nil {
+		common.Errorf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v Error in "+
+			"Index Commit %v", fdb.id, fdb.idxInstId, err)
+		return err
 	}
 
 	return nil
@@ -483,6 +471,8 @@ func (fdb *fdbSlice) Close() error {
 	if fdb.back[0] != nil {
 		fdb.back[0].Close()
 	}
+
+	fdb.dbfile.Close()
 	return nil
 }
 
