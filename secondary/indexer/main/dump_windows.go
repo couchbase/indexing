@@ -9,7 +9,7 @@
 
 // +build windows !darwin !freebsd !linux !openbsd !netbsd
 
-package indexer
+package main
 
 func dumpOnSignalForPlatform() {
 	// not sure whats best here
