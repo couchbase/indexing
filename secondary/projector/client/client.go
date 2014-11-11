@@ -109,15 +109,18 @@ func (client *Client) GetFailoverLogs(
 // - return ErrorTopicExist if feed is already started.
 // - return ErrorInconsistentFeed for malformed feed request.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return go-couchbase failures.
+// - return ErrorFeeder if upstream connection has failures.
+//      upstream connection is closed for the bucket, the bucket needs to be
+//      newly added.
 // - return ErrorNotMyVbucket due to rebalances and failures.
 // - return ErrorStreamRequest if StreamRequest failed for some reason
 // - return ErrorResponseTimeout if request is not completed within timeout.
 //
-// * when error is returned, it is implied that the feed is automatically
-//   shutdown and resources are closed, freed and forgotten.
-// * request-timestamp returned in TopicResponse response contain
-//   entries only for successfully started vbuckets.
+// * except of ErrorFeeder, projector feed will book-keep oustanding request,
+//   active vbuckets. Caller should observe mutation feed for
+//   StreamBegin and retry until all vbuckets are started.
+// * active-timestamps returned in TopicResponse response contain
+//   entries only for successfully started {buckets,vbuckets}
 // * rollback-timestamp contains vbucket entries that need rollback.
 func (client *Client) InitialTopicRequest(
 	topic, pooln, kvaddr, endpointType string,
@@ -161,19 +164,19 @@ func (client *Client) InitialTopicRequest(
 // - return ErrorTopicExist if feed is already started.
 // - return ErrorInconsistentFeed for malformed feed request.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return go-couchbase failures.
+// - return ErrorFeeder if upstream connection has failures.
+//      upstream connection is closed for the bucket, the bucket needs to be
+//      newly added.
 // - return ErrorNotMyVbucket due to rebalances and failures.
 // - return ErrorStreamRequest if StreamRequest failed for some reason
 // - return ErrorResponseTimeout if request is not completed within timeout.
 //
-// * requestTimestamps returned in TopicResponse contain entries for active
-//   vbuckets for all active buckets.
-// * rollbackTimestamps contains vbucket entries that need rollback, for all
-//   active buckets.
-// * for all errors, caller should check requestTimestamps and
-//   rollbackTimestamps and retry.
-// * for ErrorResponseTimeout error, bucket is shutdown and requestTimestamps
-//   and rollbackTimestamps won't have an entry for that bucket.
+// * except of ErrorFeeder, projector feed will book-keep oustanding request,
+//   active vbuckets. Caller should observe mutation feed for
+//   StreamBegin and retry until all vbuckets are started.
+// * active-timestamps returned in TopicResponse response contain
+//   entries only for successfully started {bucket,vbuckets}.
+// * rollback-timestamp contains vbucket entries that need rollback.
 func (client *Client) MutationTopicRequest(
 	topic, endpointType string,
 	reqTimestamps []*protobuf.TsVbuuid,
@@ -209,24 +212,22 @@ func (client *Client) MutationTopicRequest(
 // - return ErrorTopicMissing if feed is not started.
 // - return ErrorInvalidBucket if bucket is not added.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return go-couchbase failures.
+// - return ErrorFeeder if upstream connection has failures.
+//      upstream connection is closed for the bucket, the bucket needs to be
+//      newly added.
 // - return ErrorNotMyVbucket due to rebalances and failures.
 // - return ErrorStreamRequest if StreamRequest failed for some reason
 // - return ErrorStreamEnd if StreamEnd failed for some reason
 // - return ErrorResponseTimeout if request is not completed within timeout.
 //
-// * IMPORTANT, it is strongly advised to restart vbuckets for one bucket at
-//   a time since this API might enforce that rule in future.
 // * if vbucket is already active and to force restart a vbucket stream,
 //   use ShutdownVbuckets().
-// * requestTimestamps returned in TopicResponse contain entries for active
-//   vbuckets for all active buckets.
-// * rollbackTimestamps contains vbucket entries that need rollback, for all
-//   active buckets.
-// * for all errors, caller should check requestTimestamps and
-//   rollbackTimestamps and retry.
-// * for ErrorResponseTimeout error, bucket is shutdown and requestTimestamps
-//   and rollbackTimestamps won't have an entry for that bucket.
+// * except of ErrorFeeder, projector feed will book-keep oustanding request,
+//   active vbuckets. Caller should observe mutation feed for
+//   StreamBegin and retry until all vbuckets are started.
+// * active-timestamps returned in TopicResponse response contain
+//   entries only for successfully started {bucket,vbuckets}.
+// * rollback-timestamp contains vbucket entries that need rollback.
 func (client *Client) RestartVbuckets(
 	topic string,
 	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
@@ -263,15 +264,17 @@ func (client *Client) RestartVbuckets(
 // - return ErrorTopicMissing if feed is not started.
 // - return ErrorInvalidBucket if bucket is not added.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return go-couchbase failures.
+// - return ErrorFeeder if upstream connection has failures.
+//      upstream connection is closed for the bucket, the bucket needs to be
+//      newly added.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 //
-// * IMPORTANT, it is strongly advised to shutdown vbuckets for one bucket at
-//   a time since this API might enforce that rule in future.
-// * for all errors, should check requestTimestamps and retry.
-// * meanwhile, if caller finds that requestTimestamp does not have an entry
-//   for a vbucket and dataport server has received StreamEnd for that
-//   vbucket, a retry is not required for that vbucket.
+// * except of ErrorFeeder, projector feed will book-keep oustanding request,
+//   active vbuckets. Caller should observe mutation feed for
+//   StreamEnd and retry until all vbuckets are started.
+// * active-timestamps returned in TopicResponse response contain
+//   entries only for successfully started {bucket,vbuckets}.
+// * rollback-timestamp contains vbucket entries that need rollback.
 func (client *Client) ShutdownVbuckets(
 	topic string, shutdownTimestamps []*protobuf.TsVbuuid) error {
 
@@ -308,19 +311,17 @@ func (client *Client) ShutdownVbuckets(
 // - return ErrorTopicMissing if feed is not started.
 // - return ErrorInconsistentFeed for malformed feed request
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return go-couchbase failures.
+// - return ErrorFeeder if upstream connection has failures.
+//      upstream connection is closed for the bucket, the bucket needs to be
+//      newly added.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 //
-// * IMPORTANT, it is strongly advised to add one bucket at a time since
-//   this API might enforce that rule in future.
-// * requestTimestamps returned in TopicResponse contain entries for active
-//   vbuckets for all active buckets.
-// * rollbackTimestamps contains vbucket entries that need rollback, for all
-//   active buckets.
-// * for all errors, caller should check requestTimestamps and
-//   rollbackTimestamps and retry.
-// * for ErrorResponseTimeout error, bucket is shutdown and requestTimestamps
-//   and rollbackTimestamps won't have an entry for that bucket.
+// * except of ErrorFeeder, projector feed will book-keep oustanding request,
+//   active vbuckets. Caller should observe mutation feed for
+//   StreamBegin and retry until all vbuckets are started.
+// * active-timestamps returned in TopicResponse response contain
+//   entries only for successfully started {bucket,vbuckets}.
+// * rollback-timestamp contains vbucket entries that need rollback.
 func (client *Client) AddBuckets(
 	topic string, reqTimestamps []*protobuf.TsVbuuid,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
@@ -348,9 +349,6 @@ func (client *Client) AddBuckets(
 // Idempotent API
 // - return http errors for transport related failures.
 // - return ErrorTopicMissing if feed is not started.
-//
-// * IMPORTANT, it is strongly advised to add one bucket at a time since
-//   this API might enforce that rule in future.
 func (client *Client) DelBuckets(topic string, buckets []string) error {
 	req := protobuf.NewDelBucketsRequest(topic, buckets)
 	res := &protobuf.Error{}

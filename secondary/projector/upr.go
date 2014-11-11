@@ -33,10 +33,12 @@ type BucketFeeder interface {
 	GetChannel() (mutch <-chan *mc.UprEvent)
 
 	// StartVbStreams starts a set of vbucket streams on this feed.
+	// returns list of vbuckets for which StreamRequest is successfully
+	// posted.
 	StartVbStreams(opaque uint16, ts *protobuf.TsVbuuid) error
 
 	// EndVbStreams ends an existing vbucket stream from this feed.
-	EndVbStreams(opaque uint16, endTs *protobuf.TsVbuuid) (err error)
+	EndVbStreams(opaque uint16, endTs *protobuf.TsVbuuid) error
 
 	// CloseFeed ends all active streams on this feed and free its resources.
 	CloseFeed() (err error)
@@ -65,32 +67,37 @@ func (bupr *bucketUpr) GetChannel() (mutch <-chan *mc.UprEvent) {
 
 // StartVbStreams implements Feeder{} interface.
 func (bupr *bucketUpr) StartVbStreams(
-	opaque uint16, ts *protobuf.TsVbuuid) error {
+	opaque uint16, reqTs *protobuf.TsVbuuid) error {
 
-	for i, vbno := range c.Vbno32to16(ts.Vbnos) {
-		snapshots := ts.Snapshots
-		flags, vbuuid := uint32(0), ts.Vbuuids[i]
-		start, end := ts.Seqnos[i], uint64(0xFFFFFFFFFFFFFFFF)
+	var err error
+
+	vbnos := c.Vbno32to16(reqTs.GetVbnos())
+	vbuuids, seqnos := reqTs.GetVbuuids(), reqTs.GetSeqnos()
+	for i, vbno := range vbnos {
+		snapshots := reqTs.GetSnapshots()
+		flags, vbuuid := uint32(0), vbuuids[i]
+		start, end := seqnos[i], uint64(0xFFFFFFFFFFFFFFFF)
 		snapStart, snapEnd := snapshots[i].GetStart(), snapshots[i].GetEnd()
-		err := bupr.uprFeed.UprRequestStream(
+		e := bupr.uprFeed.UprRequestStream(
 			vbno, opaque, flags, vbuuid, start, end, snapStart, snapEnd)
-		if err != nil {
-			return err
+		if e != nil {
+			err = e
 		}
 	}
-	return nil
+	return err
 }
 
 // EndVbStreams implements Feeder{} interface.
 func (bupr *bucketUpr) EndVbStreams(
-	opaque uint16, ts *protobuf.TsVbuuid) error {
+	opaque uint16, ts *protobuf.TsVbuuid) (err error) {
 
-	for _, vbno := range c.Vbno32to16(ts.GetVbnos()) {
-		if err := bupr.uprFeed.UprCloseStream(vbno, opaque); err != nil {
-			return err
+	vbnos := c.Vbno32to16(ts.GetVbnos())
+	for _, vbno := range vbnos {
+		if e := bupr.uprFeed.UprCloseStream(vbno, opaque); e != nil {
+			err = e
 		}
 	}
-	return nil
+	return err
 }
 
 // CloseFeed implements Feeder{} interface.

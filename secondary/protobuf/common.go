@@ -1,6 +1,7 @@
 package protobuf
 
 import "sort"
+import "errors"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbaselabs/go-couchbase"
@@ -111,7 +112,65 @@ func (ts *TsVbuuid) Append(
 	ts.Seqnos = append(ts.Seqnos, seqno)
 	ts.Vbuuids = append(ts.Vbuuids, vbuuid)
 	ts.Snapshots = append(ts.Snapshots, snapshot)
+	sort.Sort(ts)
 	return ts
+}
+
+// Clone creates new copy of timestamp.
+func (ts *TsVbuuid) Clone() *TsVbuuid {
+	vbnos := ts.GetVbnos()
+	seqnos := ts.GetSeqnos()
+	vbuuids := ts.GetVbuuids()
+	snapshots := ts.GetSnapshots()
+	newts := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), len(vbnos))
+	for i, vbno := range vbnos {
+		newts.Vbnos = append(newts.Vbnos, vbno)
+		newts.Seqnos = append(newts.Seqnos, seqnos[i])
+		newts.Vbuuids = append(newts.Vbuuids, vbuuids[i])
+		newts.Snapshots = append(newts.Snapshots, snapshots[i])
+	}
+	return newts
+}
+
+// Get entry details like seqno, vbuuid, snapshot for `vbno`.
+func (ts *TsVbuuid) Get(
+	vbno uint16) (seqno, vbuuid, sStart, sEnd uint64, err error) {
+
+	if ts == nil {
+		return seqno, vbuuid, sStart, sEnd, errors.New("timestamp empty")
+	}
+
+	seqnos, vbuuids := ts.GetSeqnos(), ts.GetVbuuids()
+	snapshots := ts.GetSnapshots()
+	for i, x := range ts.GetVbnos() {
+		if x == uint32(vbno) {
+			seqno, vbuuid, snapshot := seqnos[i], vbuuids[i], snapshots[i]
+			sStart, sEnd = snapshot.GetStart(), snapshot.GetEnd()
+			return seqno, vbuuid, sStart, sEnd, nil
+		}
+	}
+	return seqno, vbuuid, sStart, sEnd, errors.New("Not Found")
+}
+
+// Set entry details like seqno, vbuuid, snapshot for `vbno`.
+func (ts *TsVbuuid) Set(
+	vbno uint16, seqno, vbuuid, sStart, sEnd uint64) (err error) {
+
+	if ts == nil {
+		return errors.New("bucket-timestamp empty")
+	}
+
+	snapshot := NewSnapshot(sStart, sEnd)
+	seqnos, vbuuids := ts.GetSeqnos(), ts.GetVbuuids()
+	snapshots := ts.GetSnapshots()
+	for i, x := range ts.GetVbnos() {
+		if x == uint32(vbno) {
+			seqnos[i], vbuuids[i], snapshots[i] = seqno, vbuuid, snapshot
+			ts.Seqnos, ts.Vbuuids, ts.Snapshots = seqnos, vbuuids, snapshots
+			return nil
+		}
+	}
+	return errors.New("Not Found")
 }
 
 // Contains with check whether `vbno` has an entry in the timestamp.
@@ -127,13 +186,13 @@ func (ts *TsVbuuid) Contains(vbno uint16) bool {
 // FromTsVbuuid converts timestamp from common.TsVbuuid to protobuf
 // format.
 func (ts *TsVbuuid) FromTsVbuuid(nativeTs *c.TsVbuuid) *TsVbuuid {
-	for vbno, seqno := range nativeTs.Seqnos {
-		s := nativeTs.Snapshots[vbno]
+	for i, vbno := range nativeTs.GetVbnos() {
+		s := nativeTs.Snapshots[i]
 		snapshot := NewSnapshot(s[0], s[1])
-		ts.Vbnos = append(ts.Vbnos, uint32(vbno))
-		ts.Seqnos = append(ts.Seqnos, seqno)
-		ts.Vbuuids = append(ts.Vbuuids, nativeTs.Vbuuids[vbno])
 		ts.Snapshots = append(ts.Snapshots, snapshot)
+		ts.Vbnos = append(ts.Vbnos, uint32(vbno))
+		ts.Seqnos = append(ts.Seqnos, nativeTs.Seqnos[i])
+		ts.Vbuuids = append(ts.Vbuuids, nativeTs.Vbuuids[i])
 	}
 	return ts
 }
@@ -278,7 +337,6 @@ func (ts *TsVbuuid) ComputeFailoverTs(flogs couchbase.FailoverLog) *TsVbuuid {
 
 // InitialRestartTs for a subset of vbuckets.
 func (ts *TsVbuuid) InitialRestartTs(flogs couchbase.FailoverLog) *TsVbuuid {
-
 	for vbno, flog := range flogs {
 		x := flog[len(flog)-1]
 		ts.Append(vbno, 0, x[0], 0, 0)

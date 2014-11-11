@@ -225,49 +225,51 @@ func (kvdata *KVData) scatterMutation(
 
 	switch m.Opcode {
 	case mcd.UPR_STREAMREQ:
-		c.Debugf("%v StreamRequest %v\n", kvdata.logPrefix, m)
-		if _, ok := kvdata.vrs[vbno]; !ok {
-			if m.VBuuid, m.Seqno, err = m.FailoverLog.Latest(); err == nil {
-				topic, bucket, kv := kvdata.topic, kvdata.bucket, kvdata.kvaddr
-				startSeqno, _ := ts.SeqnoFor(vbno)
-				config := kvdata.feed.config
-				vr := NewVbucketRoutine(
-					topic, bucket, kv, vbno, m.VBuuid, startSeqno, config)
-				vr.AddEngines(kvdata.engines, kvdata.endpoints)
-				vr.Event(m)
-				kvdata.vrs[vbno] = vr
+		if m.Status == mcd.ROLLBACK {
+			c.Infof("%v StreamRequest ROLLBACK: %v\n", kvdata.logPrefix, m)
 
-			} else {
-				c.Errorf("%v vbucket(%v) %v", kvdata.logPrefix, vbno, err)
-			}
-			kvdata.feed.PostStreamRequest(kvdata.bucket, kvdata.kvaddr, m)
+		} else if m.Status != mcd.SUCCESS {
+			msg := "%v StreamRequest Status: %s, %v\n"
+			c.Errorf(msg, kvdata.logPrefix, m.Status, m)
 
-		} else {
+		} else if _, ok := kvdata.vrs[vbno]; ok {
 			msg := "%v duplicate OpStreamRequest for %v\n"
 			c.Errorf(msg, kvdata.logPrefix, vbno)
-		}
 
-	case mcd.UPR_STREAMEND:
-		c.Debugf("%v StreamEnd %v\n", kvdata.logPrefix, m)
-		if vr, ok := kvdata.vrs[vbno]; ok {
-			vr.Event(m)
-			delete(kvdata.vrs, vbno)
-			kvdata.feed.PostStreamEnd(kvdata.bucket, kvdata.kvaddr, m)
+		} else if m.VBuuid, _, err = m.FailoverLog.Latest(); err != nil {
+			panic(err)
 
 		} else {
-			c.Errorf("%v duplicate OpStreamEnd for %v\n", kvdata.logPrefix, vbno)
+			c.Debugf("%v StreamRequest %v\n", kvdata.logPrefix, m)
+			topic, bucket, kv := kvdata.topic, kvdata.bucket, kvdata.kvaddr
+			m.Seqno, _ = ts.SeqnoFor(vbno)
+			config := kvdata.feed.config
+			vr := NewVbucketRoutine(
+				topic, bucket, kv, vbno, m.VBuuid, m.Seqno, config)
+			vr.AddEngines(kvdata.engines, kvdata.endpoints)
+			vr.Event(m)
+			kvdata.vrs[vbno] = vr
 		}
+		kvdata.feed.PostStreamRequest(kvdata.bucket, kvdata.kvaddr, m)
+
+	case mcd.UPR_STREAMEND:
+		if vr, ok := kvdata.vrs[vbno]; !ok {
+			c.Errorf("%v duplicate OpStreamEnd for %v\n", kvdata.logPrefix, vbno)
+
+		} else if m.Status != mcd.SUCCESS {
+			msg := "%v StreamEnd Status: %s, %v\n"
+			c.Errorf(msg, kvdata.logPrefix, m.Status, m)
+
+		} else {
+			c.Debugf("%v StreamEnd %v\n", kvdata.logPrefix, m)
+			vr.Event(m)
+			delete(kvdata.vrs, vbno)
+		}
+		kvdata.feed.PostStreamEnd(kvdata.bucket, kvdata.kvaddr, m)
 
 	case mcd.UPR_MUTATION, mcd.UPR_DELETION, mcd.UPR_SNAPSHOT, mcd.UPR_EXPIRATION:
 		if vr, ok := kvdata.vrs[vbno]; ok {
-			if vr.vbuuid == m.VBuuid {
-				vr.Event(m)
-
-			} else {
-				msg := "%v vbuuid mismatch (%v:%v) for vbucket %v\n"
-				c.Errorf(msg, kvdata.logPrefix, vr.vbuuid, m.VBuuid, vbno)
-				delete(kvdata.vrs, vbno)
-			}
+			vr.Event(m)
 
 		} else {
 			c.Errorf("%v unknown vbucket %v\n", kvdata.logPrefix, vbno)
@@ -277,7 +279,7 @@ func (kvdata *KVData) scatterMutation(
 }
 
 func (kvdata *KVData) publishStreamEnd() {
-	m := &mc.UprEvent{Opcode: mcd.UPR_STREAMEND}
+	m := &mc.UprEvent{Opcode: mcd.UPR_STREAMEND, Status: mcd.SUCCESS}
 	for _, vr := range kvdata.vrs {
 		vr.Event(m)
 	}

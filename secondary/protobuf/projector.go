@@ -277,25 +277,6 @@ func (req *MutationTopicRequest) Append(reqTs *TsVbuuid) *MutationTopicRequest {
 //    return nil
 //}
 
-// MakeResponse will return a new TopicResponse
-// based on request fields.
-func (req *MutationTopicRequest) MakeResponse() *TopicResponse {
-	instances := req.GetInstances()
-	uuids := make([]uint64, 0, len(instances))
-	for _, instance := range instances {
-		uuids = append(uuids, instance.GetUuid())
-	}
-	m := &TopicResponse{
-		Topic:         proto.String(req.GetTopic()),
-		InstanceIds:   uuids,
-		ReqTimestamps: req.GetReqTimestamps(),
-	}
-	// create an empty array of rollback-timestamps that
-	// will be populated later on based start stream response.
-	m.RollbackTimestamps = make([]*TsVbuuid, 0)
-	return m
-}
-
 // GetEvaluators impelement Subscriber{} interface
 func (req *MutationTopicRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {
 	return getEvaluators(req.GetInstances())
@@ -363,17 +344,17 @@ func (resp *TopicResponse) AddRollbackTimestamp(
 	resp.RollbackTimestamps = append(
 		resp.RollbackTimestamps, ts.FromTsVbuuid(rollbTs))
 
-	// prune request timestamp, that received rollback.
-	reqTimestamps := make([]*TsVbuuid, len(resp.GetReqTimestamps()))
-	for i, reqTs := range resp.GetReqTimestamps() {
-		if reqTs.GetBucket() == bucket {
+	// prune active timestamp, that received rollback.
+	actTss := make([]*TsVbuuid, len(resp.GetActiveTimestamps()))
+	for i, actTs := range resp.GetActiveTimestamps() {
+		if actTs.GetBucket() == bucket {
 			vbnos := c.Vbno32to16(ts.GetVbnos())
-			reqTimestamps[i] = reqTs.FilterByVbuckets(vbnos)
+			actTss[i] = actTs.FilterByVbuckets(vbnos)
 		} else {
-			reqTimestamps[i] = reqTs
+			actTss[i] = actTs
 		}
 	}
-	resp.ReqTimestamps = reqTimestamps
+	resp.ActiveTimestamps = actTss
 	return resp
 }
 
@@ -451,24 +432,6 @@ func (req *RestartVbucketsRequest) Append(
 //    return nil
 //}
 
-// UpdateResponse will update previous response for this feed
-// with request and return a new TopicResponse.
-func (req *RestartVbucketsRequest) UpdateResponse(
-	resp *TopicResponse) *TopicResponse {
-
-	reqTimestamps := make([]*TsVbuuid, len(resp.GetReqTimestamps()))
-	for _, ts := range req.GetRestartTimestamps() {
-		b := ts.GetBucket()
-		for i, reqTs := range resp.GetReqTimestamps() {
-			if reqTs.GetBucket() == b {
-				reqTimestamps[i] = reqTs.Union(ts)
-			}
-		}
-	}
-	resp.ReqTimestamps = reqTimestamps
-	return resp
-}
-
 // ***********************
 // ShutdownVbucketsRequest
 // ***********************
@@ -536,25 +499,6 @@ func (req *ShutdownVbucketsRequest) AddStreams(
 //    }
 //    return nil
 //}
-
-// UpdateResponse will update previous response for this feed
-// with request and return a new TopicResponse.
-func (req *ShutdownVbucketsRequest) UpdateResponse(
-	resp *TopicResponse) *TopicResponse {
-
-	reqTimestamps := make([]*TsVbuuid, len(resp.GetReqTimestamps()))
-	for _, ts := range req.GetShutdownTimestamps() {
-		b := ts.GetBucket()
-		for i, reqTs := range resp.GetReqTimestamps() {
-			if reqTs.GetBucket() == b {
-				vbnos := c.Vbno32to16(ts.GetVbnos())
-				reqTimestamps[i] = reqTs.FilterByVbuckets(vbnos)
-			}
-		}
-	}
-	resp.ReqTimestamps = reqTimestamps
-	return resp
-}
 
 // *****************
 // AddBucketsRequest

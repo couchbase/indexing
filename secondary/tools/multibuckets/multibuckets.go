@@ -7,6 +7,7 @@ import "os"
 import "strconv"
 import "strings"
 import "time"
+import "sync"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dataport"
@@ -83,15 +84,32 @@ func usage() {
 
 var projectors = make(map[string]*projc.Client)
 
+var mutations struct {
+	mu        sync.Mutex
+	seqnos    map[string][]uint64    // bucket -> vbno -> seqno
+	snapshots map[string][][2]uint64 // bucket -> vbno -> snapshot
+}
+
 func main() {
 	cluster := argParse()
+
+	mutations.seqnos = map[string][]uint64{
+		"beer-sample": make([]uint64, options.maxVbno),
+		"default":     make([]uint64, options.maxVbno),
+		"users":       make([]uint64, options.maxVbno),
+		"project":     make([]uint64, options.maxVbno),
+	}
+	mutations.snapshots = map[string][][2]uint64{
+		"beer-sample": make([][2]uint64, options.maxVbno),
+		"default":     make([][2]uint64, options.maxVbno),
+		"users":       make([][2]uint64, options.maxVbno),
+		"project":     make([][2]uint64, options.maxVbno),
+	}
 
 	// start dataport servers.
 	for _, endpoint := range options.endpoints {
 		stat, _ := strconv.Atoi(options.stat)
-		go dataport.Application(
-			endpoint, stat, 0,
-			func(addr string, msg interface{}) bool { return true })
+		go dataport.Application(endpoint, stat, 0, endpointCallback)
 	}
 	go dataport.Application(options.coordEndpoint, 0, 0, nil)
 
@@ -141,12 +159,12 @@ loop:
 		instances = protobuf.ExampleIndexInstances(
 			options.addBuckets, options.endpoints, options.coordEndpoint)
 		for kvaddr, client := range projectors {
-			ts, err := client.InitialRestartTimestamp(
-				pooln, "default", []string{kvaddr})
+			kvaddrs := []string{kvaddr}
+			ts, err := client.InitialRestartTimestamp(pooln, "default", kvaddrs)
 			if err != nil {
 				log.Fatal(err)
 			}
-			reqTss := []*protobuf.TsVbuuid{ts}
+			reqTss := []*protobuf.TsVbuuid{bucketTimestamp("default", ts)}
 			res, err := client.AddBuckets("backfill", reqTss, instances)
 			if err != nil {
 				log.Fatal(err)
@@ -202,4 +220,37 @@ func NewEndpointFactory(config c.Config) c.RouterEndpointFactory {
 		}
 		return nil, nil
 	}
+}
+
+func endpointCallback(addr string, msg interface{}) bool {
+	mutations.mu.Lock()
+	defer mutations.mu.Unlock()
+	if vbs, ok := msg.([]*protobuf.VbKeyVersions); ok {
+		for _, vb := range vbs {
+			bucket, kvs := vb.GetBucketname(), vb.GetKvs()
+			vbno := vb.GetVbucket()
+			for _, kv := range kvs {
+				for _, command := range kv.GetCommands() {
+					cmd := byte(command)
+					switch cmd {
+					case c.Snapshot:
+						_, start, end := kv.Snapshot()
+						mutations.snapshots[bucket][vbno] = [2]uint64{start, end}
+					case c.Upsert, c.UpsertDeletion, c.Deletion:
+						mutations.seqnos[bucket][vbno] = kv.GetSeqno()
+					}
+				}
+			}
+		}
+	}
+	return true
+}
+
+func bucketTimestamp(bucketn string, ts *protobuf.TsVbuuid) *protobuf.TsVbuuid {
+	for i, vbno := range ts.GetVbnos() {
+		ts.Seqnos[i] = mutations.seqnos[bucketn][vbno]
+		ss := mutations.snapshots[bucketn][vbno]
+		ts.Snapshots[i] = protobuf.NewSnapshot(ss[0], ss[1])
+	}
+	return ts
 }

@@ -212,15 +212,11 @@ func (p *Projector) doMutationTopic(
 
 	feed = NewFeed(topic, config)
 	response, err := feed.MutationTopic(request)
-	if err == nil {
-		p.AddFeed(topic, feed)
-		return response
+	if err != nil {
+		response.SetErr(err)
 	}
-	if feed != nil {
-		feed.Shutdown() // on error close the feed
-	}
-	response.SetErr(err)
-	return (&protobuf.TopicResponse{}).SetErr(err)
+	p.AddFeed(topic, feed)
+	return response
 }
 
 // - return ErrorTopicMissing if feed is not started.

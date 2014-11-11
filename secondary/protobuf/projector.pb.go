@@ -183,7 +183,7 @@ func (m *MutationTopicRequest) GetInstances() []*Instance {
 type TopicResponse struct {
 	Topic              *string     `protobuf:"bytes,1,opt,name=topic" json:"topic,omitempty"`
 	InstanceIds        []uint64    `protobuf:"varint,2,rep,name=instanceIds" json:"instanceIds,omitempty"`
-	ReqTimestamps      []*TsVbuuid `protobuf:"bytes,3,rep,name=reqTimestamps" json:"reqTimestamps,omitempty"`
+	ActiveTimestamps   []*TsVbuuid `protobuf:"bytes,3,rep,name=activeTimestamps" json:"activeTimestamps,omitempty"`
 	RollbackTimestamps []*TsVbuuid `protobuf:"bytes,4,rep,name=rollbackTimestamps" json:"rollbackTimestamps,omitempty"`
 	Err                *Error      `protobuf:"bytes,5,opt,name=err" json:"err,omitempty"`
 	XXX_unrecognized   []byte      `json:"-"`
@@ -207,9 +207,9 @@ func (m *TopicResponse) GetInstanceIds() []uint64 {
 	return nil
 }
 
-func (m *TopicResponse) GetReqTimestamps() []*TsVbuuid {
+func (m *TopicResponse) GetActiveTimestamps() []*TsVbuuid {
 	if m != nil {
-		return m.ReqTimestamps
+		return m.ActiveTimestamps
 	}
 	return nil
 }

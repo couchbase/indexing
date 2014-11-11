@@ -48,7 +48,7 @@ message MutationTopicRequest {
 message TopicResponse {
     optional string   topic              = 1;
     repeated uint64   instanceIds        = 2;
-    repeated TsVbuuid reqTimestamps      = 3; // original requested timestamp
+    repeated TsVbuuid activeTimestamps   = 3; // original requested timestamp
     repeated TsVbuuid rollbackTimestamps = 4; // sort order
     optional Error    err                = 5;
 }

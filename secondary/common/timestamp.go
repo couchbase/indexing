@@ -36,6 +36,15 @@ func NewTsVbuuid(bucket string, numVbuckets int) *TsVbuuid {
 	}
 }
 
+// GetVbnos() will return the list of all vbnos.
+func (ts *TsVbuuid) GetVbnos() []uint16 {
+	vbnos := make([]uint16, 0, len(ts.Seqnos))
+	for i := 0; i < len(ts.Seqnos); i++ {
+		vbnos = append(vbnos, uint16(i))
+	}
+	return vbnos
+}
+
 // CompareVbuuids will compare two timestamps for its bucket and vbuuids
 func (ts *TsVbuuid) CompareVbuuids(other *TsVbuuid) bool {
 	if ts == nil || other == nil {

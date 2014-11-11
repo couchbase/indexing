@@ -118,8 +118,9 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 
 		if data := vr.makeStreamEndData(seqno); data == nil {
 			c.Errorf("%v StreamEnd NOT PUBLISHED\n", vr.logPrefix)
+
 		} else { // publish stream-end
-			c.Debugf("%v StreamEnd\n", vr.logPrefix)
+			c.Debugf("%v StreamEnd for vbucket %v\n", vr.logPrefix, vr.vbno)
 			vr.sendToEndpoints(data)
 		}
 
