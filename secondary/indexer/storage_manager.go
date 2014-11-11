@@ -26,6 +26,36 @@ type storageMgr struct {
 
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
+
+	// Latest readable timestamps for each index instance
+	tsMap map[common.IndexInstId]*common.TsVbuuid
+	// List of waiters waiting for a snapshot to be created with expected
+	// atleast-timestamp
+	waitersMap map[common.IndexInstId][]*snapshotWaiter
+}
+
+type snapshotWaiter struct {
+	wch       chan interface{}
+	ts        *common.TsVbuuid
+	idxInstId common.IndexInstId
+}
+
+func newSnapshotWaiter(idxId common.IndexInstId, ts *common.TsVbuuid,
+	ch chan interface{}) *snapshotWaiter {
+
+	return &snapshotWaiter{
+		ts:        ts,
+		wch:       ch,
+		idxInstId: idxId,
+	}
+}
+
+func (w *snapshotWaiter) Notify(ts *common.TsVbuuid) {
+	w.wch <- ts
+}
+
+func (w *snapshotWaiter) Error(err error) {
+	w.wch <- err
 }
 
 //NewStorageManager returns an instance of storageMgr or err message
@@ -40,6 +70,8 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel) (
 	s := &storageMgr{
 		supvCmdch:  supvCmdch,
 		supvRespch: supvRespch,
+		tsMap:      make(map[common.IndexInstId]*common.TsVbuuid),
+		waitersMap: make(map[common.IndexInstId][]*snapshotWaiter),
 	}
 
 	//start Storage Manager loop which listens to commands from its supervisor
@@ -90,9 +122,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case UPDATE_INDEX_PARTITION_MAP:
 		s.handleUpdateIndexPartnMap(cmd)
-
+	case STORAGE_TS_REQUEST:
+		s.handleGetTSForIndex(cmd)
 	}
-
 }
 
 //handleCreateSnapshot will create the necessary snapshots
@@ -183,6 +215,20 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 				}
 			}
 		}
+
+		// Update index-timestamp map whenever a snapshot is created for an index
+		// Also notify any waiters for snapshots creation
+		s.tsMap[idxInstId] = tsVbuuid
+		var newWaiters []*snapshotWaiter
+		for _, w := range s.waitersMap[idxInstId] {
+			if w.ts == nil || tsVbuuid.AsRecent(w.ts) {
+				w.Notify(tsVbuuid)
+			} else {
+				newWaiters = append(newWaiters, w)
+			}
+		}
+
+		s.waitersMap[idxInstId] = newWaiters
 	}
 
 	s.supvCmdch <- &MsgSuccess{}
@@ -267,6 +313,16 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
+	// Remove all snapshot waiters for indexes that do not exist anymore
+	for id, ws := range s.waitersMap {
+		if _, ok := s.indexInstMap[id]; !ok {
+			for _, w := range ws {
+				w.Error(ErrIndexNotFound)
+			}
+			delete(s.waitersMap, id)
+		}
+	}
+
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -277,4 +333,36 @@ func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
 	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	s.supvCmdch <- &MsgSuccess{}
+}
+
+// Process req for providing a timestamp for index scan.
+// The request contains atleast-timestamp and the storage
+// manager will return consistent timestamp soon after
+// a snapshot meeting requested criteria is available.
+// The requester will block wait until the response is
+// available.
+func (s *storageMgr) handleGetTSForIndex(cmd Message) {
+	s.supvCmdch <- &MsgSuccess{}
+
+	req := cmd.(*MsgTSRequest)
+	_, found := s.indexInstMap[req.GetIndexId()]
+	if !found {
+		req.respch <- ErrIndexNotFound
+	}
+
+	// Return timestamp immediately if a matching snapshot exists already
+	// Otherwise add into waiters list so that next snapshot creation event
+	// can notify the requester with matching timestamp.
+	ts, ok := s.tsMap[req.GetIndexId()]
+	if ok && (req.GetTS() == nil || ts.AsRecent(req.GetTS())) {
+		req.respch <- ts
+	} else {
+		w := newSnapshotWaiter(req.GetIndexId(), req.GetTS(), req.GetReplyChannel())
+		ws, exists := s.waitersMap[req.GetIndexId()]
+		if exists {
+			s.waitersMap[req.idxInstId] = append(ws, w)
+		} else {
+			s.waitersMap[req.idxInstId] = []*snapshotWaiter{w}
+		}
+	}
 }

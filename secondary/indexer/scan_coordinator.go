@@ -97,6 +97,7 @@ type scanParams struct {
 	scanType  scanType
 	indexName string
 	bucket    string
+	ts        *common.TsVbuuid
 	low       Key
 	high      Key
 	keys      []Key
@@ -414,6 +415,37 @@ func (s *scanCoordinator) requestHandler(
 	}
 
 	common.Infof("%v: SCAN_REQ %v", s.logPrefix, sd)
+	// Before starting the index scan, we have to find out the snapshot timestamp
+	// that can fullfil this query by considering atleast-timestamp provided in
+	// the query request. A timestamp request message is sent to the storage
+	// manager. The storage manager will respond immediately if a snapshot
+	// is available, otherwise it will wait until a matching snapshot is
+	// available and return the timestamp. Util then, the query processor
+	// will block wait.
+	// This mechanism can be used to implement RYOW.
+
+	tsch := make(chan interface{}, 1)
+	tsReqMsg := &MsgTSRequest{
+		ts:        sd.p.ts,
+		respch:    tsch,
+		idxInstId: indexInst.InstId,
+	}
+
+	// Block wait until a ts is available for fullfilling the request
+	s.supvMsgch <- tsReqMsg
+	msg := <-tsch
+
+	switch msg.(type) {
+	case *common.TsVbuuid:
+		sd.p.ts = msg.(*common.TsVbuuid)
+	case error:
+		respch <- s.makeResponseMessage(sd, msg.(error))
+		close(respch)
+		return
+	}
+
+	common.Infof("%v: SCAN_ID: %v scan timestamp: %v", s.logPrefix, sd.scanId, ScanTStoString(sd.p.ts))
+
 	partnDefs := s.findPartitionDefsForScan(sd, indexInst)
 	go s.scanPartitions(sd, partnDefs, partnInstMap)
 
@@ -716,13 +748,18 @@ func (s *scanCoordinator) scanRemotePartitionEndpoint(sd *scanDescriptor,
 // Snapshot to be scanned is determined by query parameters
 func (s *scanCoordinator) scanLocalSlice(sd *scanDescriptor,
 	slice Slice, stopch StopChannel, wg *sync.WaitGroup) {
+	var snap Snapshot
 
 	defer wg.Done()
 	common.Debugf("%v: scanLocalSlice: SCAN_ID: %v Slice : %v",
 		s.logPrefix, sd.scanId, slice.Id())
 
 	snapContainer := slice.GetSnapshotContainer()
-	snap := snapContainer.GetLatestSnapshot()
+	if sd.p.ts == nil {
+		snap = snapContainer.GetLatestSnapshot()
+	} else {
+		snap = snapContainer.GetSnapshotEqualToTS(sd.p.ts)
+	}
 
 	if snap != nil {
 		s.executeLocalScan(sd, snap, stopch)
@@ -819,4 +856,20 @@ func (s *scanCoordinator) handleUpdateIndexPartnMap(cmd Message) {
 	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	s.supvCmdch <- &MsgSuccess{}
+}
+
+// Helper method to pretty print timestamp
+func ScanTStoString(ts *common.TsVbuuid) string {
+	var seqsStr string = "["
+
+	for i, s := range ts.Snapshots {
+		if i > 0 {
+			seqsStr += ","
+		}
+		seqsStr += fmt.Sprintf("%d=%d", i, s[1])
+	}
+
+	seqsStr += "]"
+
+	return seqsStr
 }

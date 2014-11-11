@@ -394,6 +394,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_INITIATE_RECOVERY:
 		idx.handleInitRecovery(msg)
 
+	case STORAGE_TS_REQUEST:
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
 	default:
 		common.Errorf("Indexer::handleWorkerMsgs Unknown Message %v", msg)
 	}

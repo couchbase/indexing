@@ -57,6 +57,7 @@ const (
 
 	//STORAGE_MANAGER
 	STORAGE_MGR_SHUTDOWN
+	STORAGE_TS_REQUEST
 
 	//KVSender
 	KV_SENDER_SHUTDOWN
@@ -723,6 +724,31 @@ func (m *MsgRollback) GetStreamId() common.StreamId {
 
 func (m *MsgRollback) GetRollbackTs() map[string]*common.TsVbuuid {
 	return m.rollbackTs
+}
+
+// STORAGE_TS_REQUEST
+type MsgTSRequest struct {
+	ts        *common.TsVbuuid
+	idxInstId common.IndexInstId
+
+	// Send error or timestamp
+	respch chan interface{}
+}
+
+func (m *MsgTSRequest) GetMsgType() MsgType {
+	return STORAGE_TS_REQUEST
+}
+
+func (m *MsgTSRequest) GetTS() *common.TsVbuuid {
+	return m.ts
+}
+
+func (m *MsgTSRequest) GetReplyChannel() chan interface{} {
+	return m.respch
+}
+
+func (m *MsgTSRequest) GetIndexId() common.IndexInstId {
+	return m.idxInstId
 }
 
 //Helper function to return string for message type

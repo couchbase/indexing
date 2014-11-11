@@ -8,6 +8,7 @@ import (
 type scannerTestHarness struct {
 	scanner    *scanCoordinator
 	indexCount int
+	scanTS     *c.TsVbuuid
 
 	cmdch, msgch MsgChannel
 }
@@ -42,6 +43,8 @@ func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFee
 
 	snapc := NewSnapshotContainer()
 	snap := &mockSnapshot{feeder: feeder}
+	snap.SetTimestamp(s.scanTS)
+
 	snapc.Add(Snapshot(snap))
 	slice := &mockSlice{sc: snapc}
 	slId := SliceId(0)
@@ -51,6 +54,7 @@ func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFee
 }
 
 func newScannerTestHarness() (*scannerTestHarness, error) {
+	NUM_VBUCKETS = 8
 	h := new(scannerTestHarness)
 	h.cmdch = make(chan Message)
 	h.msgch = make(chan Message)
@@ -63,13 +67,51 @@ func newScannerTestHarness() (*scannerTestHarness, error) {
 	h.scanner.indexInstMap = make(c.IndexInstMap)
 	h.scanner.indexPartnMap = make(IndexPartnMap)
 
+	// FIXME:
+	// This is hack to comply with existing timestamp datastructure
+	// We need to come up with right timestamp datastructrue to be
+	// used to index queries.
+	h.scanTS = c.NewTsVbuuid("default", 8)
+	h.scanTS.Snapshots = [][2]uint64{
+		[2]uint64{0, 1},
+		[2]uint64{0, 2},
+		[2]uint64{0, 3},
+		[2]uint64{0, 4},
+		[2]uint64{0, 5},
+		[2]uint64{0, 6},
+		[2]uint64{0, 7},
+		[2]uint64{0, 8},
+	}
+
+	go h.handleScanTimestamps()
 	return h, nil
+}
+
+func (s *scannerTestHarness) handleScanTimestamps() {
+loop:
+	for {
+		select {
+		case msg, ok := <-s.msgch:
+			if !ok {
+				break loop
+			}
+
+			if msg.GetMsgType() == STORAGE_TS_REQUEST {
+				req := msg.(*MsgTSRequest)
+				ch := req.GetReplyChannel()
+				ch <- s.scanTS
+			}
+		}
+	}
 }
 
 // Cleanup test harness resources
 func (s *scannerTestHarness) Shutdown() {
 	s.cmdch <- &MsgGeneral{mType: SCAN_COORD_SHUTDOWN}
 	<-s.cmdch
+
+	close(s.cmdch)
+	close(s.msgch)
 }
 
 type mockSlice struct {
