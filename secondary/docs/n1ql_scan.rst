@@ -40,7 +40,7 @@ IndexEntry:EntryKey will be constructed using,
 * query.value.sliceValue(val) for `array`
 * query.value.objectValue(val) for `property`
 
-IndexEntry:PrimaryKey will consucted using query.value.NewValueFromBytes(val)
+IndexEntry:PrimaryKey will consucted using query.value.NewValue(val)
 
 **behaviour for missing secondary-key**
 

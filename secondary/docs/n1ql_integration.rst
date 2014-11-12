@@ -7,7 +7,7 @@ For composite-keys, the document will be evaluated for every expression
 supplied in the DDL statement.
 
 .. code-block::
-    key, err := expr.Evaluate(qvalue.NewValueFromBytes(document), context)
+    key, err := expr.Evaluate(qvalue.NewValue(document), context)
     if err != nil {
         return nil, nil
     }

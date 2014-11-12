@@ -1,13 +1,12 @@
 package common
 
-import (
-	"errors"
-	"fmt"
-	"github.com/couchbaselabs/go-couchbase"
-	"io"
-	"net"
-	"os"
-)
+import "errors"
+import "fmt"
+import "io"
+import "net"
+import "os"
+
+import "github.com/couchbaselabs/go-couchbase"
 
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the
 // order of `strs` in the result.
@@ -229,7 +228,6 @@ func GetKVAddrs(cluster, pooln, bucketn string) ([]string, error) {
 }
 
 func IsIPLocal(ip string) bool {
-
 	netIP := net.ParseIP(ip)
 
 	//if loopback address, return true
@@ -249,7 +247,6 @@ func IsIPLocal(ip string) bool {
 }
 
 func GetLocalIP() (net.IP, error) {
-
 	tt, err := net.Interfaces()
 	if err != nil {
 		return nil, err

@@ -53,7 +53,7 @@ func N1QLTransform(docid, doc []byte, cExprs []interface{}) ([]byte, error) {
 	arrValue := make([]qvalue.Value, 0, len(cExprs))
 	context := qexpr.NewIndexContext()
 	skip := true
-	docval := qvalue.NewValueFromBytes(doc)
+	docval := qvalue.NewValue(doc)
 	for _, cExpr := range cExprs {
 		expr := cExpr.(qexpr.Expression)
 		key, err := expr.Evaluate(docval, context)

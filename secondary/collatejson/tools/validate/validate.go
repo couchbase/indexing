@@ -22,7 +22,7 @@ import (
 	"path"
 	"runtime"
 
-	"github.com/couchbaselabs/query/value"
+	qv "github.com/couchbaselabs/query/value"
 	"github.com/prataprc/collatejson"
 	"github.com/prataprc/monster"
 )
@@ -305,8 +305,8 @@ func (jsons *jsonList) Len() int {
 
 func (jsons *jsonList) Less(i, j int) bool {
 	key1, key2 := jsons.vals[i], jsons.vals[j]
-	value1 := value.NewValueFromBytes([]byte(key1))
-	value2 := value.NewValueFromBytes([]byte(key2))
+	value1 := qv.NewValue([]byte(key1))
+	value2 := qv.NewValue([]byte(key2))
 	jsons.compares++
 	return value1.Collate(value2) < 0
 }
