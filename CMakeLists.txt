@@ -11,7 +11,7 @@ PROJECT (indexing)
 # CMAKE_INSTALL_PREFIX - should point to a directory where the bin/ output
 #      directory will be placed
 #
-# GODEPSPATH - should point to a Go workspace directory containing all
+# GODEPSDIR - should point to a Go workspace directory containing all
 #      transitive Go dependencies
 #
 # FORESTDB_INCLUDE_DIR - should point to where libforestdb/forestdb.h exists
