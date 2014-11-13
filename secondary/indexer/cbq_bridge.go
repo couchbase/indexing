@@ -122,10 +122,11 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 		pc := common.NewKeyPartitionContainer()
 
 		//Add one partition for now
+		partnId := common.PartitionId(0)
 		endpt := []common.Endpoint{INDEXER_MAINT_DATA_PORT_ENDPOINT}
-		partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
+		partnDefn := common.KeyPartitionDefn{Id: partnId,
 			Endpts: endpt}
-		pc.AddPartition(common.PartitionId(1), partnDefn)
+		pc.AddPartition(partnId, partnDefn)
 
 		idxInst.Pc = pc
 	}
