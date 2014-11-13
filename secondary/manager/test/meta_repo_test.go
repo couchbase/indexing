@@ -22,7 +22,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 
 	common.LogEnable()
 	common.SetLogLevel(common.LogLevelDebug)
-	
+
 	common.Infof("Start TestMetadataRepo *********************************************************")
 
 	var addr = "localhost:9885"
@@ -48,7 +48,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 		Using:           common.ForestDB,
 		Bucket:          "Default",
 		IsPrimary:       false,
-		OnExprList:      []string{"Testing"},
+		SecExprs:        []string{"Testing"},
 		ExprType:        common.N1QL,
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
@@ -59,7 +59,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	// Get the index definition	by name
+	// Get the index definition by name
 	idxDefn, err = repo.GetIndexDefnByName("metadata_repo_test")
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	// Get the index definition	by name
+	// Get the index definition by name
 	idxDefn, err = repo.GetIndexDefnByName("metadata_repo_test")
 
 	if idxDefn != nil {
@@ -90,7 +90,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 		Using:           common.ForestDB,
 		Bucket:          "Default",
 		IsPrimary:       false,
-		OnExprList:      []string{"Testing"},
+		SecExprs:        []string{"Testing"},
 		ExprType:        common.N1QL,
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
@@ -110,7 +110,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 	if idxDefn == nil {
 		t.Fatal("Cannot find index definition")
 	}
-	
+
 	// Delete the index definition by Id
 	if err := repo.DropIndexById(common.IndexDefnId(101)); err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 		Using:           common.ForestDB,
 		Bucket:          "Default",
 		IsPrimary:       false,
-		OnExprList:      []string{"Testing"},
+		SecExprs:        []string{"Testing"},
 		ExprType:        common.N1QL,
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
@@ -148,7 +148,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 		Using:           common.ForestDB,
 		Bucket:          "Default",
 		IsPrimary:       false,
-		OnExprList:      []string{"Testing"},
+		SecExprs:        []string{"Testing"},
 		ExprType:        common.N1QL,
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
@@ -156,36 +156,36 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 	if err = repo.CreateIndex(idxDefn); err != nil {
 		t.Fatal(err)
 	}
-	
+
 	/*
 
-	// Test the iterator
-	iter, err := repo.NewIterator()
-	if err != nil {
-		t.Fatal("Fail to get the iterator")
-	}
-	
-	found := false
-	for !found {
-		key, _, err := iter.Next()
-		if err != nil {
-			common.Infof("error during iteration %s", err.Error())
-			break
-		}
-		
-		common.Infof("key during iteration %s", key)	
-		if key == "metadata_repo_test_3" {
-			found = true
-		}
-	}
-	
-	if !found {
-		t.Fatal("Cannot find index defn 'metadata_repo_test_3' in iterator")
-	}
+	   // Test the iterator
+	   iter, err := repo.NewIterator()
+	   if err != nil {
+	       t.Fatal("Fail to get the iterator")
+	   }
+
+	   found := false
+	   for !found {
+	       key, _, err := iter.Next()
+	       if err != nil {
+	           common.Infof("error during iteration %s", err.Error())
+	           break
+	       }
+
+	       common.Infof("key during iteration %s", key)
+	       if key == "metadata_repo_test_3" {
+	           found = true
+	       }
+	   }
+
+	   if !found {
+	       t.Fatal("Cannot find index defn 'metadata_repo_test_3' in iterator")
+	   }
 
 	*/
 	time.Sleep(time.Duration(1000) * time.Millisecond)
-	
+
 	common.Infof("Stop TestMetadataRepo. Tearing down *********************************************************")
 
 	// clean up

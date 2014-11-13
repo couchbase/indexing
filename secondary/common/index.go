@@ -84,7 +84,7 @@ type IndexDefn struct {
 	Using           IndexType // indexing algorithm
 	Bucket          string    // bucket name
 	IsPrimary       bool
-	OnExprList      []string // expression list
+	SecExprs        []string // expression list
 	ExprType        ExprType
 	PartitionScheme PartitionScheme
 	PartitionKey    string
@@ -109,7 +109,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("Using: %v ", idx.Using)
 	str += fmt.Sprintf("Bucket: %v ", idx.Bucket)
 	str += fmt.Sprintf("IsPrimary: %v ", idx.IsPrimary)
-	str += fmt.Sprintf("\n\t\tOnExprList: %v ", idx.OnExprList)
+	str += fmt.Sprintf("\n\t\tSecExprs: %v ", idx.SecExprs)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	str += fmt.Sprintf("PartitionKey: %v ", idx.PartitionKey)
 	return str

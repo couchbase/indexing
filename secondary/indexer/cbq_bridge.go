@@ -101,19 +101,19 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 	common.Debugf("CbqBridge::handleCreate Received CreateIndex %v", indexinfo)
 
 	//generate a new unique id
-	uuid := rand.Int()
+	defnID := rand.Int()
 
-	idxDefn := common.IndexDefn{DefnId: common.IndexDefnId(uuid),
+	idxDefn := common.IndexDefn{DefnId: common.IndexDefnId(defnID),
 		Name:            indexinfo.Name,
 		Using:           common.ForestDB,
 		Bucket:          indexinfo.Bucket,
 		IsPrimary:       indexinfo.IsPrimary,
-		OnExprList:      indexinfo.OnExprList,
+		SecExprs:        indexinfo.SecExprs,
 		ExprType:        common.N1QL,
 		PartitionScheme: common.TEST,
-		PartitionKey:    indexinfo.OnExprList[0]}
+		PartitionKey:    indexinfo.PartnExpr}
 
-	idxInst := common.IndexInst{InstId: common.IndexInstId(uuid),
+	idxInst := common.IndexInst{InstId: common.IndexInstId(defnID),
 		Defn:  idxDefn,
 		State: common.INDEX_STATE_INITIAL,
 	}
@@ -130,7 +130,7 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 		idxInst.Pc = pc
 	}
 
-	indexinfo.Uuid = strconv.Itoa(uuid)
+	indexinfo.DefnID = strconv.Itoa(defnID)
 
 	respCh := make(MsgChannel)
 	cbq.supvRespch <- &MsgCreateIndex{mType: CBQ_CREATE_INDEX_DDL,
@@ -141,9 +141,8 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 	msg := <-respCh
 	if msg.GetMsgType() == MSG_SUCCESS {
 		res = IndexMetaResponse{
-			Status:     RESP_SUCCESS,
-			Indexes:    []IndexInfo{indexinfo},
-			ServerUuid: "",
+			Status:  RESP_SUCCESS,
+			Indexes: []IndexInfo{indexinfo},
 		}
 		cbq.indexMap[idxInst.InstId] = indexinfo
 	} else {
@@ -170,21 +169,20 @@ func (cbq *cbqBridge) handleDrop(w http.ResponseWriter, r *http.Request) {
 
 	common.Debugf("CbqBridge::handleDrop Received DropIndex %v", indexinfo)
 
-	uuid, _ := strconv.Atoi(indexinfo.Uuid)
+	defnID, _ := strconv.Atoi(indexinfo.DefnID)
 
 	respCh := make(MsgChannel)
 	cbq.supvRespch <- &MsgDropIndex{mType: CBQ_DROP_INDEX_DDL,
-		indexInstId: common.IndexInstId(uuid),
+		indexInstId: common.IndexInstId(defnID),
 		respCh:      respCh}
 
 	//wait for response from indexer
 	msg := <-respCh
 	if msg.GetMsgType() == MSG_SUCCESS {
 		res = IndexMetaResponse{
-			Status:     RESP_SUCCESS,
-			ServerUuid: "",
+			Status: RESP_SUCCESS,
 		}
-		delete(cbq.indexMap, common.IndexInstId(uuid))
+		delete(cbq.indexMap, common.IndexInstId(defnID))
 	} else {
 		err := msg.(*MsgError).GetError()
 
@@ -206,8 +204,6 @@ func (cbq *cbqBridge) handleDrop(w http.ResponseWriter, r *http.Request) {
 func (cbq *cbqBridge) handleList(w http.ResponseWriter, r *http.Request) {
 	var res IndexMetaResponse
 
-	serverUuid := indexRequest(r).ServerUuid
-
 	common.Debugf("CbqBridge::handleList Received ListIndex")
 
 	var indexList []IndexInfo
@@ -216,9 +212,8 @@ func (cbq *cbqBridge) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res = IndexMetaResponse{
-		Status:     RESP_SUCCESS,
-		Indexes:    indexList,
-		ServerUuid: serverUuid,
+		Status:  RESP_SUCCESS,
+		Indexes: indexList,
 	}
 	sendResponse(w, res)
 }

@@ -49,6 +49,7 @@ type Reply struct {
 }
 
 type MetadataKind byte
+
 const (
 	KIND_UNKNOWN MetadataKind = iota
 	KIND_INDEX_DEFN
@@ -507,7 +508,7 @@ func marshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
 		Name:            proto.String(defn.Name),
 		Using:           using,
 		ExprType:        exprType,
-		SecExpressions:  defn.OnExprList,
+		SecExpressions:  defn.SecExprs,
 		PartitionScheme: partnScheme,
 		PartnExpression: proto.String(defn.PartitionKey),
 	}
@@ -535,7 +536,7 @@ func UnmarshallIndexDefn(data []byte) (*common.IndexDefn, error) {
 		Using:           using,
 		Bucket:          pDefn.GetBucket(),
 		IsPrimary:       pDefn.GetIsPrimary(),
-		OnExprList:      pDefn.GetSecExpressions(),
+		SecExprs:        pDefn.GetSecExpressions(),
 		ExprType:        exprType,
 		PartitionScheme: partnScheme,
 		PartitionKey:    pDefn.GetPartnExpression()}

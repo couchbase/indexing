@@ -20,13 +20,13 @@ import (
 // Every index ever created and maintained by this package will have an
 // associated index-info structure.
 type IndexInfo struct {
-	Name       string           `json:"name,omitempty"`       // Name of the index
-	Uuid       string           `json:"uuid,omitempty"`       // unique id for every index
-	Using      common.IndexType `json:"using,omitempty"`      // indexing algorithm
-	OnExprList []string         `json:"onExprList,omitempty"` // expression list
-	Bucket     string           `json:"bucket,omitempty"`     // bucket name
-	IsPrimary  bool             `json:"isPrimary,omitempty"`
-	Exprtype   common.ExprType  `json:"exprType,omitempty"`
+	Name      string           `json:"name,omitempty"`       // Name of the index
+	Uuid      string           `json:"uuid,omitempty"`       // unique id for every index
+	Using     common.IndexType `json:"using,omitempty"`      // indexing algorithm
+	SecExprs  []string         `json:"onExprList,omitempty"` // expression list
+	Bucket    string           `json:"bucket,omitempty"`     // bucket name
+	IsPrimary bool             `json:"isPrimary,omitempty"`
+	Exprtype  common.ExprType  `json:"exprType,omitempty"`
 }
 
 type RequestType string
@@ -180,10 +180,10 @@ func (m *requestHandler) createIndexRequest(w http.ResponseWriter, r *http.Reque
 		Using:           common.ForestDB,
 		Bucket:          indexinfo.Bucket,
 		IsPrimary:       indexinfo.IsPrimary,
-		OnExprList:      indexinfo.OnExprList,
+		SecExprs:        indexinfo.SecExprs,
 		ExprType:        common.N1QL,
 		PartitionScheme: common.TEST,
-		PartitionKey:    indexinfo.OnExprList[0]}
+		PartitionKey:    ""}
 
 	// call the index manager to handle the DDL
 	err := m.mgr.HandleCreateIndexDDL(idxDefn)

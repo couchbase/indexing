@@ -52,7 +52,7 @@ func TestEventMgr(t *testing.T) {
 		Using:           common.ForestDB,
 		Bucket:          "Default",
 		IsPrimary:       false,
-		OnExprList:      []string{"Testing"},
+		SecExprs:        []string{"Testing"},
 		ExprType:        common.N1QL,
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}

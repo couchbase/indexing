@@ -21,7 +21,7 @@ import (
 ////////////////////////////////////////////////////////////////////////
 
 type GlobalTopology struct {
-	TopologyKeys	[]string            `json:"topologyKeys,omitempty"`
+	TopologyKeys []string `json:"topologyKeys,omitempty"`
 }
 
 type IndexTopology struct {
@@ -63,7 +63,7 @@ type IndexSliceLocator struct {
 }
 
 /////////////////////////////////////////////////////////////////////////
-// Global Topology Maintenance 
+// Global Topology Maintenance
 ////////////////////////////////////////////////////////////////////////
 
 // Add a topology key
@@ -73,7 +73,7 @@ func (g *GlobalTopology) AddTopologyKeyIfNecessary(key string) bool {
 			return false
 		}
 	}
-	
+
 	g.TopologyKeys = append(g.TopologyKeys, key)
 	return true
 }
@@ -82,7 +82,7 @@ func (g *GlobalTopology) AddTopologyKeyIfNecessary(key string) bool {
 func (g *GlobalTopology) RemoveTopologyKey(key string) {
 	for i, topkey := range g.TopologyKeys {
 		if topkey == key {
-			if i < len(g.TopologyKeys) - 1 {
+			if i < len(g.TopologyKeys)-1 {
 				g.TopologyKeys = append(g.TopologyKeys[:i], g.TopologyKeys[i+1:]...)
 			} else {
 				g.TopologyKeys = g.TopologyKeys[:i]
@@ -93,7 +93,7 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 }
 
 /////////////////////////////////////////////////////////////////////////
-// Topology Maintenance 
+// Topology Maintenance
 ////////////////////////////////////////////////////////////////////////
 
 //
@@ -141,7 +141,7 @@ func (t *IndexTopology) RemoveIndexDefinition(bucket string, name string) {
 }
 
 //
-// Get all index instance Id's for a specific defnition 
+// Get all index instance Id's for a specific defnition
 //
 func GetIndexInstancesByDefn(mgr *IndexManager, bucket string, defnId common.IndexDefnId) ([]uint64, error) {
 	// Get the topology from the dictionary
@@ -215,7 +215,7 @@ func GetIndexInstanceAsProtoMsg(mgr *IndexManager,
 			defn, err := mgr.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId))
 			if err != nil {
 				common.Debugf("GetIndexInstanceAsProtoMsg(): Cannot find definition id = %v.", defnId)
-				return nil, err 
+				return nil, err
 			}
 
 			// Convert definition to protobuf msg
@@ -246,7 +246,7 @@ func convertTopologyToIndexInstProtoMsg(mgr *IndexManager,
 		defn, err := mgr.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId))
 		if err != nil {
 			common.Debugf("convertTopologyToIndexInstProtoMsg(): Cannot find definition id = %v. Skip", defnRef.DefnId)
-			continue			
+			continue
 		}
 
 		// Convert definition to protobuf msg
@@ -275,15 +275,15 @@ func convertIndexDefnToProtoMsg(indexDefn *common.IndexDefn) *protobuf.IndexDefn
 
 	//
 	// message IndexDefn {
-	//	required uint64          defnID          = 1; // unique index id across the secondary index cluster
-	//	required string          bucket          = 2; // bucket on which index is defined
-	//	required bool            isPrimary       = 3; // whether index secondary-key == docid
-	//	required string          name            = 4; // Name of the index
-	//	required StorageType     using           = 5; // indexing algorithm
-	//	required PartitionScheme partitionScheme = 6;
-	//	required string          partnExpression = 7; // use expressions to evaluate doc
-	//	required ExprType        exprType        = 8; // how to interpret `expressions` strings
-	//	repeated string          secExpressions  = 9; // use expressions to evaluate doc
+	//  required uint64          defnID          = 1; // unique index id across the secondary index cluster
+	//  required string          bucket          = 2; // bucket on which index is defined
+	//  required bool            isPrimary       = 3; // whether index secondary-key == docid
+	//  required string          name            = 4; // Name of the index
+	//  required StorageType     using           = 5; // indexing algorithm
+	//  required PartitionScheme partitionScheme = 6;
+	//  required string          partnExpression = 7; // use expressions to evaluate doc
+	//  required ExprType        exprType        = 8; // how to interpret `expressions` strings
+	//  repeated string          secExpressions  = 9; // use expressions to evaluate doc
 	//
 	defn := &protobuf.IndexDefn{
 		DefnID:          proto.Uint64(uint64(indexDefn.DefnId)),
@@ -292,7 +292,7 @@ func convertIndexDefnToProtoMsg(indexDefn *common.IndexDefn) *protobuf.IndexDefn
 		Name:            proto.String(indexDefn.Name),
 		Using:           using,
 		ExprType:        exprType,
-		SecExpressions:  indexDefn.OnExprList,
+		SecExpressions:  indexDefn.SecExprs,
 		PartitionScheme: partnScheme,
 		PartnExpression: proto.String(indexDefn.PartitionKey),
 	}
@@ -309,10 +309,10 @@ func convertIndexInstToProtoMsg(inst *IndexInstDistribution,
 
 	//
 	// message IndexInst {
-	//	required uint64          instId     = 1;
-	//	required IndexState      state      = 2;
-	//	required IndexDefn       definition = 3; // contains DDL
-	//	optional TestPartition   tp         = 4;
+	//  required uint64          instId     = 1;
+	//  required IndexState      state      = 2;
+	//  required IndexDefn       definition = 3; // contains DDL
+	//  optional TestPartition   tp         = 4;
 	//
 	instance := &protobuf.IndexInst{
 		InstId:     proto.Uint64(uint64(inst.InstId)),
@@ -328,9 +328,9 @@ func convertIndexInstToProtoMsg(inst *IndexInstDistribution,
 	}
 
 	//
-	//	message TestPartition {
-	//		repeated string endpoints     = 1; // endpoint address
-	//		optional string coordEndpoint = 2;
+	//  message TestPartition {
+	//      repeated string endpoints     = 1; // endpoint address
+	//      optional string coordEndpoint = 2;
 	//
 	instance.Tp = &protobuf.TestPartition{
 		Endpoints: endpoints,
@@ -338,4 +338,3 @@ func convertIndexInstToProtoMsg(inst *IndexInstDistribution,
 
 	return &protobuf.Instance{IndexInstance: instance}
 }
-

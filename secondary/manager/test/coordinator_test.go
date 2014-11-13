@@ -45,7 +45,7 @@ func TestCoordinator(t *testing.T) {
 		Using:           common.ForestDB,
 		Bucket:          "Default",
 		IsPrimary:       false,
-		OnExprList:      []string{"Testing"},
+		SecExprs:        []string{"Testing"},
 		ExprType:        common.N1QL,
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
@@ -64,12 +64,12 @@ func TestCoordinator(t *testing.T) {
 	if idxDefn == nil {
 		t.Fatal("Cannot find index definition")
 	}
-	
-	topology, err := mgr.GetTopologyByBucket("Default") 
+
+	topology, err := mgr.GetTopologyByBucket("Default")
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := manager.MarshallIndexTopology(topology) 
+	content, err := manager.MarshallIndexTopology(topology)
 	if err != nil {
 		t.Fatal(err)
 	}

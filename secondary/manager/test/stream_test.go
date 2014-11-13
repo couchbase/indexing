@@ -11,13 +11,13 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/transport"
+	"net"
 	"testing"
 	"time"
-	"net"
 	//"runtime/pprof"
 	//"os"
 )
@@ -44,36 +44,36 @@ func TestStreamMgr(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Test cleanup and setup	
+	// Test cleanup and setup
 	common.Infof("Setup test data")
 	cleanupStreamMgrTest(mgr, t)
-	setupStreamMgrTest(mgr, t) 
+	setupStreamMgrTest(mgr, t)
 
-	// Start Stream Manager	
+	// Start Stream Manager
 	common.Infof("Start Stream Manager for testing")
-	admin := new(testStreamAdmin) 
+	admin := new(testStreamAdmin)
 	handler := manager.NewMgrMutHandler(mgr, admin)
 	streamMgr, err := manager.NewStreamManager(mgr, handler, admin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	if err := streamMgr.StartStream(common.MAINT_STREAM, "6579"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := streamMgr.OpenStreamForBucket(common.MAINT_STREAM, "Default",  "6579"); err != nil {
+	if err := streamMgr.OpenStreamForBucket(common.MAINT_STREAM, "Default", "6579"); err != nil {
 		t.Fatal(err)
 	}
-	
+
 	common.Infof("Run Test")
-   	ch := mgr.GetStabilityTimestampChannel(common.MAINT_STREAM) 
+	ch := mgr.GetStabilityTimestampChannel(common.MAINT_STREAM)
 	donech := make(chan bool)
 	go runTestSender("6579", donech, t)
 	runTestReceiver(ch, donech, t)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
-	
-	////////////////////////////////////////////////////	
+
+	////////////////////////////////////////////////////
 	common.Infof("Stop TestStreamMgr. Tearing down *********************************************************")
 	cleanupStreamMgrTest(mgr, t)
 	time.Sleep(time.Duration(1000) * time.Millisecond)
@@ -86,60 +86,60 @@ func TestStreamMgr(t *testing.T) {
 // run test
 func runTestSender(port string, donech chan bool, t *testing.T) {
 
-   	// start client
-	addr := net.JoinHostPort("127.0.0.1", port)	
+	// start client
+	addr := net.JoinHostPort("127.0.0.1", port)
 	client, err := dataport.NewClient(addr, transport.TransportFlag(0).SetProtobuf(), common.SystemConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
 
-	payloads := make([]*common.VbKeyVersions, 0, 200)  
-	
+	payloads := make([]*common.VbKeyVersions, 0, 200)
+
 	payload := common.NewVbKeyVersions("Default", 10, 1, 10)
-   	kv := common.NewKeyVersions(100, []byte("document-name"), 1)
+	kv := common.NewKeyVersions(100, []byte("document-name"), 1)
 	kv.AddStreamBegin()
 	payload.AddKeyVersions(kv)
 	payloads = append(payloads, payload)
-	
-	for i:=0; i < 1; i++ {
+
+	for i := 0; i < 1; i++ {
 		payload := common.NewVbKeyVersions("Default", 10, 1, 10)
-   		kv := common.NewKeyVersions(uint64(100 + i), []byte("document-name"), 1)
-   		kv.AddSync()
+		kv := common.NewKeyVersions(uint64(100+i), []byte("document-name"), 1)
+		kv.AddSync()
 		payload.AddKeyVersions(kv)
 		payloads = append(payloads, payload)
 	}
-	
-	// send payload	
+
+	// send payload
 	err = client.SendKeyVersions(payloads, true)
 	if err != nil {
 		t.Fatal(err)
-	} 
-	
-  	<- donech
+	}
+
+	<-donech
 	common.Infof("runTestSender() done")
 }
 
 // run test
-func runTestReceiver(ch chan*common.TsVbuuid, donech chan bool, t *testing.T) {
+func runTestReceiver(ch chan *common.TsVbuuid, donech chan bool, t *testing.T) {
 
 	defer func() {
 		common.Infof("runTestReceiver() done")
 		close(donech)
 	}()
 
-   	// wait for the sync message to arrive
-   	ticker := time.NewTicker(time.Duration(30) * time.Second)
-   	for { 
-  		select {
-  			case ts := <- ch :
-  				if ts.Seqnos[10] >= 100 {
-  					return
-  				}
-  			case <- ticker.C :
-  				t.Fatal("Timeout waiting to receive timestamp to arrive")
-  		}
-   	}
+	// wait for the sync message to arrive
+	ticker := time.NewTicker(time.Duration(30) * time.Second)
+	for {
+		select {
+		case ts := <-ch:
+			if ts.Seqnos[10] >= 100 {
+				return
+			}
+		case <-ticker.C:
+			t.Fatal("Timeout waiting to receive timestamp to arrive")
+		}
+	}
 }
 
 // start up
@@ -152,7 +152,7 @@ func setupStreamMgrTest(mgr *manager.IndexManager, t *testing.T) {
 		Using:           common.ForestDB,
 		Bucket:          "Default",
 		IsPrimary:       false,
-		OnExprList:      []string{"Testing"},
+		SecExprs:        []string{"Testing"},
 		ExprType:        common.N1QL,
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
@@ -184,28 +184,27 @@ func cleanupStreamMgrTest(mgr *manager.IndexManager, t *testing.T) {
 			t.Fatal("StreamMgrTest.cleanupStreamMgrTest(): Cannot clean up index defn stream_mgr_test")
 		}
 	}
-	
+
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// testStreamAdmin 
+// testStreamAdmin
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func (a *testStreamAdmin) OpenStreamForBucket(streamId common.StreamId, bucket string, 
-								topology []*protobuf.Instance, requestTs *common.TsVbuuid) error {
-	return nil			
+func (a *testStreamAdmin) OpenStreamForBucket(streamId common.StreamId, bucket string,
+	topology []*protobuf.Instance, requestTs *common.TsVbuuid) error {
+	return nil
 }
 
 func (a *testStreamAdmin) RepairStreamForEndpoint(streamId common.StreamId, bucketVbnosMap map[string][]uint16, endpoint string) error {
-	return nil			
+	return nil
 }
 
 func (a *testStreamAdmin) AddIndexToStream(streamId common.StreamId, bucket string, instances []*protobuf.Instance) error {
-	return nil			
+	return nil
 }
 
 func (a *testStreamAdmin) DeleteIndexFromStream(streamId common.StreamId, bucket string, instances []uint64) error {
-	return nil			
+	return nil
 }
-	
