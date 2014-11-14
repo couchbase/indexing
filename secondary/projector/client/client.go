@@ -106,7 +106,6 @@ func (client *Client) GetFailoverLogs(
 // Idempotent API.
 //
 // - return http errors for transport related failures.
-// - return ErrorTopicExist if feed is already started.
 // - return ErrorInconsistentFeed for malformed feed request.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
 // - return ErrorFeeder if upstream connection has failures.
@@ -161,7 +160,6 @@ func (client *Client) InitialTopicRequest(
 // instances. Idempotent API.
 //
 // - return http errors for transport related failures.
-// - return ErrorTopicExist if feed is already started.
 // - return ErrorInconsistentFeed for malformed feed request.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
 // - return ErrorFeeder if upstream connection has failures.
@@ -314,6 +312,8 @@ func (client *Client) ShutdownVbuckets(
 // - return ErrorFeeder if upstream connection has failures.
 //      upstream connection is closed for the bucket, the bucket needs to be
 //      newly added.
+// - return ErrorNotMyVbucket due to rebalances and failures.
+// - return ErrorStreamRequest if StreamRequest failed for some reason
 // - return ErrorResponseTimeout if request is not completed within timeout.
 //
 // * except of ErrorFeeder, projector feed will book-keep oustanding request,

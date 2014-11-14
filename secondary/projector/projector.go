@@ -182,7 +182,6 @@ func (p *Projector) doFailoverLog(
 	return response
 }
 
-// - return ErrorTopicExist if feed is already started.
 // - return ErrorInconsistentFeed for malformed feed request.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
 // - return go-couchbase failures.
@@ -192,12 +191,6 @@ func (p *Projector) doMutationTopic(
 
 	c.Debugf("%v doMutationTopic()\n", p.logPrefix)
 	topic := request.GetTopic()
-
-	feed, err := p.GetFeed(topic)
-	if err == nil { // only fresh feed to be started
-		c.Errorf("%v %v\n", p.logPrefix, ErrorTopicExist)
-		return (&protobuf.TopicResponse{}).SetErr(ErrorTopicExist)
-	}
 
 	pconf := p.config.SectionConfig("projector.", true)
 	config, _ := c.NewConfig(map[string]interface{}{})
@@ -210,7 +203,10 @@ func (p *Projector) doMutationTopic(
 	config.Set("feedChanSize", pconf["feedChanSize"])
 	config.Set("routerEndpointFactory", pconf["routerEndpointFactory"])
 
-	feed = NewFeed(topic, config)
+	feed, _ := p.GetFeed(topic)
+	if feed == nil {
+		feed = NewFeed(topic, config)
+	}
 	response, err := feed.MutationTopic(request)
 	if err != nil {
 		response.SetErr(err)
@@ -233,14 +229,15 @@ func (p *Projector) doRestartVbuckets(
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
 		c.Errorf("%v %v\n", p.logPrefix, err)
-		return (&protobuf.TopicResponse{}).SetErr(err)
+		response := feed.GetTopicResponse()
+		return response.SetErr(err)
 	}
 
 	response, err := feed.RestartVbuckets(request)
 	if err == nil {
 		return response
 	}
-	return (&protobuf.TopicResponse{}).SetErr(err)
+	return response.SetErr(err)
 }
 
 // - return ErrorTopicMissing if feed is not started.
@@ -278,14 +275,15 @@ func (p *Projector) doAddBuckets(
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
 		c.Errorf("%v %v\n", p.logPrefix, err)
-		return (&protobuf.TopicResponse{}).SetErr(err)
+		response := feed.GetTopicResponse()
+		return response.SetErr(err)
 	}
 
 	response, err := feed.AddBuckets(request)
 	if err == nil {
 		return response
 	}
-	return (&protobuf.TopicResponse{}).SetErr(err)
+	return response.SetErr(err)
 }
 
 // - return ErrorTopicMissing if feed is not started.

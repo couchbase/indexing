@@ -135,6 +135,7 @@ const (
 	fCmdDelInstances
 	fCmdRepairEndpoints
 	fCmdShutdown
+	fCmdGetTopicResponse
 	fCmdGetStatistics
 )
 
@@ -220,6 +221,15 @@ func (feed *Feed) RepairEndpoints(req *protobuf.RepairEndpointsRequest) error {
 	cmd := []interface{}{fCmdRepairEndpoints, req, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
+}
+
+// GetTopicResponse for this feed.
+// Synchronous call.
+func (feed *Feed) GetTopicResponse() *protobuf.TopicResponse {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdGetTopicResponse, respch}
+	resp, _ := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return resp[0].(*protobuf.TopicResponse)
 }
 
 // GetStatistics for this feed.
@@ -373,7 +383,7 @@ loop:
 				}
 
 			} else {
-				c.Warnf("%v back channel flushed %T %v", feed.logPrefix, v, v)
+				c.Errorf("%v back channel flushed %T %v", feed.logPrefix, v, v)
 			}
 
 		case <-timeout:
@@ -432,6 +442,10 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 		respch := msg[2].(chan []interface{})
 		respch <- []interface{}{feed.repairEndpoints(req)}
 
+	case fCmdGetTopicResponse:
+		respch := msg[1].(chan []interface{})
+		respch <- []interface{}{feed.topicResponse()}
+
 	case fCmdGetStatistics:
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.getStatistics()}
@@ -472,9 +486,12 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 			rollTs = rollTs.FilterByVbuckets(c.Vbno32to16(ts.GetVbnos()))
 		}
 		reqTs, ok := feed.reqTss[bucketn]
-		if ok { // book-keeping of out-standing request
-			reqTs = reqTs.Union(ts)
+		// book-keeping of out-standing request, vbuckets that have
+		// out-standing request will be ignored.
+		if ok {
+			ts = ts.FilterByVbuckets(c.Vbno32to16(reqTs.GetVbnos()))
 		}
+		reqTs = ts.Union(reqTs)
 		// start upstream
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
 		if e != nil { // all feed errors are fatal, skip this bucket.
@@ -518,34 +535,39 @@ func (feed *Feed) restartVbuckets(
 	opaque := newOpaque()
 	for _, ts := range req.GetRestartTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
-		actTs, ok1 := feed.actTss[bucketn]
-		if ok1 { // don't re-request for already active vbuckets
+		actTs, ok := feed.actTss[bucketn]
+		if ok { // don't re-request for already active vbuckets
 			ts = ts.FilterByVbuckets(c.Vbno32to16(actTs.GetVbnos()))
 		}
-		rollTs, ok2 := feed.rollTss[bucketn]
-		if ok2 { // forget previous rollback for the current set of vbuckets
+		rollTs, ok := feed.rollTss[bucketn]
+		if ok { // forget previous rollback for the current set of vbuckets
 			rollTs = rollTs.FilterByVbuckets(c.Vbno32to16(ts.GetVbnos()))
 		}
-		reqTs, ok3 := feed.reqTss[bucketn]
-		if ok3 { // book-keeping for out-standing request
-			reqTs = reqTs.Union(ts)
+		reqTs, ok := feed.reqTss[bucketn]
+		// book-keeping of out-standing request, vbuckets that have
+		// out-standing request will be ignored.
+		if ok {
+			ts = ts.FilterByVbuckets(c.Vbno32to16(reqTs.GetVbnos()))
 		}
-		_, ok4 := feed.kvdata[bucketn]
-		if !ok1 || !ok2 || !ok3 || !ok4 {
-			msg := "%v restartVbuckets() invalid bucket %v\n"
-			c.Errorf(msg, feed.logPrefix, bucketn)
-			err = ErrorInvalidBucket
-			continue
-		}
-		for _, kvaddr := range feed.kvaddrs { // send seqno. to datapath
-			feed.kvdata[bucketn][kvaddr].UpdateTs(ts)
+		reqTs = ts.Union(ts)
+		// if bucket already present update kvdata first.
+		if _, ok := feed.kvdata[bucketn]; ok {
+			for _, kvaddr := range feed.kvaddrs { // send seqno. to datapath
+				feed.kvdata[bucketn][kvaddr].UpdateTs(ts)
+			}
 		}
 		// (re)start the upstream
-		_, e := feed.bucketFeed(opaque, false, true, ts)
-		if e != nil {
+		feeder, e := feed.bucketFeed(opaque, false, true, ts)
+		if e != nil { // all feed errors are fatal, skip this bucket.
 			feed.cleanupBucket(bucketn)
 			err = ErrorFeeder
 			continue
+		}
+		feed.feeders[bucketn] = feeder // :SideEffect:
+		// open data-path, if not already open.
+		if _, ok := feed.kvdata[bucketn]; !ok {
+			m := feed.startDataPath(bucketn, feeder, ts)
+			feed.kvdata[bucketn] = m // :SideEffect:
 		}
 		// wait stream to start ...
 		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
@@ -636,9 +658,12 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 			rollTs = rollTs.FilterByVbuckets(c.Vbno32to16(ts.GetVbnos()))
 		}
 		reqTs, ok := feed.reqTss[bucketn]
-		if ok { // book-keeping of out-standing request
-			reqTs = reqTs.Union(ts)
+		// book-keeping of out-standing request, vbuckets that have
+		// out-standing request will be ignored.
+		if ok {
+			ts = ts.FilterByVbuckets(c.Vbno32to16(reqTs.GetVbnos()))
 		}
+		reqTs = ts.Union(ts)
 		// start upstream
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
 		if e != nil { // all feed errors are fatal, skip this bucket.
@@ -658,6 +683,7 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(r.GetVbnos()))
 		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(a.GetVbnos()))
 		reqTs = reqTs.FilterByVbuckets(c.Vbno32to16(f.GetVbnos()))
+		feed.reqTss[bucketn] = reqTs // :SideEffect:
 		if e != nil {
 			err = e
 		}
@@ -936,11 +962,13 @@ func (feed *Feed) startDataPath(
 	ts *protobuf.TsVbuuid) map[string]*KVData {
 
 	mutch := feeder.GetChannel()
-	m := make(map[string]*KVData) // kvaddr -> kvdata
+	m, ok := feed.kvdata[bucketn]
+	if !ok {
+		m = make(map[string]*KVData) // kvaddr -> kvdata
+	}
 	for _, kvaddr := range feed.kvaddrs {
 		// spawn only when it is not already active
-		if kvdata, ok := feed.kvdata[bucketn][kvaddr]; ok {
-			m[kvaddr] = kvdata
+		if kvdata, ok := m[kvaddr]; ok {
 			kvdata.UpdateTs(ts)
 
 		} else {
@@ -1056,25 +1084,25 @@ func (feed *Feed) waitStreamRequests(
 
 	timeout := time.After(feed.reqTimeout * time.Millisecond)
 	err1 := feed.waitOnFeedback(timeout, func(msg interface{}) string {
-		if val, ok := msg.(*controlStreamRequest); ok {
-			if val.bucket == bucketn && val.opaque == opaque {
-				if val.status == mcd.SUCCESS {
-					actTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
-				} else if val.status == mcd.ROLLBACK {
-					rollTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
-				} else if val.status == mcd.NOT_MY_VBUCKET {
-					failTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
-					err = ErrorNotMyVbucket
-				} else {
-					failTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
-					err = ErrorStreamRequest
-				}
-				vbnos = c.RemoveUint16(val.vbno, vbnos)
-				if len(vbnos) == 0 {
-					return "done"
-				}
-				return "ok"
+		if val, ok := msg.(*controlStreamRequest); ok && val.bucket == bucketn && val.opaque == opaque &&
+			ts.Contains(val.vbno) {
+
+			if val.status == mcd.SUCCESS {
+				actTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
+			} else if val.status == mcd.ROLLBACK {
+				rollTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
+			} else if val.status == mcd.NOT_MY_VBUCKET {
+				failTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
+				err = ErrorNotMyVbucket
+			} else {
+				failTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
+				err = ErrorStreamRequest
 			}
+			vbnos = c.RemoveUint16(val.vbno, vbnos)
+			if len(vbnos) == 0 {
+				return "done"
+			}
+			return "ok"
 		}
 		return "skip"
 	})
@@ -1102,23 +1130,23 @@ func (feed *Feed) waitStreamEnds(
 
 	timeout := time.After(feed.endTimeout * time.Millisecond)
 	err1 := feed.waitOnFeedback(timeout, func(msg interface{}) string {
-		if val, ok := msg.(*controlStreamEnd); ok {
-			if val.bucket == bucketn && val.opaque == opaque {
-				if val.status == mcd.SUCCESS {
-					endTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
-				} else if val.status == mcd.NOT_MY_VBUCKET {
-					failTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
-					err = ErrorNotMyVbucket
-				} else {
-					failTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
-					err = ErrorStreamEnd
-				}
-				vbnos = c.RemoveUint16(val.vbno, vbnos)
-				if len(vbnos) == 0 {
-					return "done"
-				}
-				return "ok"
+		if val, ok := msg.(*controlStreamEnd); ok && val.bucket == bucketn && val.opaque == opaque &&
+			ts.Contains(val.vbno) {
+
+			if val.status == mcd.SUCCESS {
+				endTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
+			} else if val.status == mcd.NOT_MY_VBUCKET {
+				failTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
+				err = ErrorNotMyVbucket
+			} else {
+				failTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
+				err = ErrorStreamEnd
 			}
+			vbnos = c.RemoveUint16(val.vbno, vbnos)
+			if len(vbnos) == 0 {
+				return "done"
+			}
+			return "ok"
 		}
 		return "skip"
 	})
@@ -1153,6 +1181,7 @@ loop:
 			break loop
 		}
 	}
+	// re-populate in the same order.
 	for _, msg := range msgs {
 		feed.backch <- []interface{}{msg}
 	}
