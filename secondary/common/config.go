@@ -156,7 +156,8 @@ var SystemConfig = Config{
 		"number of parallel connections to open with remote",
 		1,
 	},
-	"projector.dataport.client.noRemoteBlock": ConfigValue{
+	// TODO: this configuration option should be tunnable for each feed.
+	"projector.dataport.client.remoteBlock": ConfigValue{
 		false,
 		"should dataport endpoint block when remote is slow ?",
 		false,

@@ -44,7 +44,7 @@ type RouterEndpoint struct {
 	genChSize int // channel size for genServer routine
 	keyChSize int // channel size for key-versions
 	// live update is possible
-	noblock    bool          // should endpoint block when remote is slow
+	block      bool          // should endpoint block when remote is slow
 	bufferTm   time.Duration // timeout to flush endpoint-buffer
 	harakiriTm time.Duration // timeout after which endpoint commits harakiri
 }
@@ -72,7 +72,7 @@ func NewRouterEndpoint(
 		parConns:   parConns,
 		genChSize:  econf["genServerChanSize"].Int(),
 		keyChSize:  econf["keyChanSize"].Int(),
-		noblock:    econf["noRemoteBlock"].Bool(),
+		block:      econf["remoteBlock"].Bool(),
 		bufferTm:   time.Duration(econf["bufferTimeout"].Int()),
 		harakiriTm: time.Duration(econf["harakiriTimeout"].Int()),
 	}
@@ -169,7 +169,7 @@ func (endpoint *RouterEndpoint) run(
 			return nil
 		}
 		c.Tracef("%v sent %v vbuckets to %q\n", endpoint.logPrefix, l, raddr)
-		err := buffers.flushBuffers(client, endpoint.noblock)
+		err := buffers.flushBuffers(client, endpoint.block)
 		if err != nil {
 			c.Errorf("%v flushBuffers() %v", endpoint.logPrefix, err)
 		}
@@ -203,11 +203,13 @@ loop:
 			case endpCmdSetConfig:
 				config := msg[1].(c.Config)
 				econf := config.SectionConfig("projector.dataport.client.", true)
-				endpoint.noblock = econf["noRemoteBlock"].Bool()
+				endpoint.block = econf["remoteBlock"].Bool()
 				endpoint.bufferTm = time.Duration(econf["bufferTimeout"].Int())
 				endpoint.harakiriTm = time.Duration(econf["harakiriTimeout"].Int())
 				flushTimeout = time.Tick(endpoint.bufferTm * time.Millisecond)
-				harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
+				if harakiri != nil {
+					harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
+				}
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{nil}
 
