@@ -1,8 +1,6 @@
 package common
 
-import (
-	"testing"
-)
+import "testing"
 
 func TestExcludeStrings(t *testing.T) {
 	a := []string{"1", "2", "3", "4"}
@@ -50,6 +48,20 @@ func TestRemoveUint32(t *testing.T) {
 	b := RemoveUint32(4, a)
 	if len(b) != 3 || b[0] != 1 || b[1] != 2 || b[2] != 3 {
 		t.Fatal("failed RemoveUint32")
+	}
+}
+
+func TestIP(t *testing.T) {
+	if IsIPLocal("127.0.0.1") != true {
+		t.Fatal(`failed IsIPLocal("127.0.0.1")`)
+	}
+	if IsIPLocal("localhost") == true {
+		t.Fatal(`failed IsIPLocal("localhost")`)
+	}
+	if ip, err := GetLocalIP(); err != nil {
+		t.Fatal(err)
+	} else if IsIPLocal(ip.String()) != true {
+		t.Fatal(`failed IsIPLocal(GetLocalIP())`)
 	}
 }
 

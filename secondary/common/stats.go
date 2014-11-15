@@ -4,8 +4,6 @@ package common
 
 import (
 	"encoding/json"
-	"regexp"
-	"strings"
 )
 
 // Statistics provide a type and method receivers for marshalling and
@@ -132,22 +130,4 @@ func (s Statistics) Get(path string) interface{} {
 // ToMap converts Statistics to map.
 func (s Statistics) ToMap() map[string]interface{} {
 	return map[string]interface{}(s)
-}
-
-// StatsURLPath construct url path for statistics.
-// TODO: make stats-path configurable.
-func StatsURLPath(prefix, path string) string {
-	prefix = strings.TrimRight(prefix, UrlSep)
-	return strings.Join([]string{prefix, "stats", path}, UrlSep)
-}
-
-var regxStatPath, _ = regexp.Compile(`(.*)/stats/(.*)`)
-
-// ParseStatsPath is opposite of StatsURLPath
-func ParseStatsPath(urlPath string) string {
-	matches := regxStatPath.FindStringSubmatch(urlPath)
-	if len(matches) != 3 {
-		Fatalf("ParseStatsPath(%q)\n", urlPath)
-	}
-	return matches[2]
 }

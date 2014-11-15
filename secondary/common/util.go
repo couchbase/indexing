@@ -227,50 +227,62 @@ func GetKVAddrs(cluster, pooln, bucketn string) ([]string, error) {
 	return kvaddrs, nil
 }
 
+// IsIPLocal return whether `ip` address is loopback address or
+// compares equal with local-IP-address.
 func IsIPLocal(ip string) bool {
 	netIP := net.ParseIP(ip)
 
-	//if loopback address, return true
+	// if loopback address, return true
 	if netIP.IsLoopback() {
 		return true
 	}
 
-	//compare with the local ip
+	// compare with the local ip
 	if localIP, err := GetLocalIP(); err == nil {
 		if localIP.Equal(netIP) {
 			return true
 		}
 	}
-
 	return false
-
 }
 
+// GetLocalIP return the first external-IP4 configured for the first
+// interface connected to this node.
 func GetLocalIP() (net.IP, error) {
-	tt, err := net.Interfaces()
+	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil, err
 	}
-	for _, t := range tt {
-		aa, err := t.Addrs()
+	for _, iface := range interfaces {
+		if (iface.Flags & net.FlagUp) == 0 {
+			continue // interface down
+		}
+		if (iface.Flags & net.FlagLoopback) != 0 {
+			continue // loopback interface
+		}
+		addrs, err := iface.Addrs()
 		if err != nil {
 			return nil, err
 		}
-		for _, a := range aa {
-			ipnet, ok := a.(*net.IPNet)
-			if !ok {
-				continue
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
 			}
-			v4 := ipnet.IP.To4()
-			if v4 == nil || v4[0] == 127 { // loopback address
-				continue
+			if ip != nil && !ip.IsLoopback() {
+				if ip = ip.To4(); ip != nil {
+					return ip, nil
+				}
 			}
-			return v4, nil
 		}
 	}
 	return nil, errors.New("cannot find local IP address")
 }
 
+// ExitOnStdinClose is exit handler to be used with ns-server.
 func ExitOnStdinClose() {
 	buf := make([]byte, 4)
 	for {
@@ -280,7 +292,7 @@ func ExitOnStdinClose() {
 				os.Exit(0)
 			}
 
-			panic(fmt.Sprintf("Stdin: Unexpected error occured ", err))
+			panic(fmt.Sprintf("Stdin: Unexpected error occured %v", err))
 		}
 	}
 }

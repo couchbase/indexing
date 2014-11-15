@@ -36,7 +36,7 @@ func NewTsVbuuid(bucket string, numVbuckets int) *TsVbuuid {
 	}
 }
 
-// GetVbnos() will return the list of all vbnos.
+// GetVbnos will return the list of all vbnos.
 func (ts *TsVbuuid) GetVbnos() []uint16 {
 	vbnos := make([]uint16, 0, len(ts.Seqnos))
 	for i := 0; i < len(ts.Seqnos); i++ {
@@ -80,12 +80,13 @@ func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
 	return true
 }
 
+// Len return number of entries in the timestamp.
 func (ts *TsVbuuid) Len() int {
 	return len(ts.Seqnos)
 }
 
+// Copy will return a clone of this timestamp.
 func (ts *TsVbuuid) Copy() *TsVbuuid {
-
 	newTs := NewTsVbuuid(ts.Bucket, len(ts.Seqnos))
 	copy(newTs.Seqnos, ts.Seqnos)
 	copy(newTs.Vbuuids, ts.Vbuuids)
@@ -93,6 +94,7 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 	return newTs
 }
 
+// Equal returns whether `ts` and `other` compare equal.
 func (ts *TsVbuuid) Equal(other *TsVbuuid) bool {
 	if ts != nil && other == nil ||
 		ts == nil && other != nil {
@@ -132,9 +134,7 @@ func (ts *TsVbuuid) Equal(other *TsVbuuid) bool {
 	return true
 }
 
-//
-// Create a clone of TsVbuuid
-//
+// Clone of TsVbuuid
 func (ts *TsVbuuid) Clone() *TsVbuuid {
 
 	other := NewTsVbuuid(ts.Bucket, len(ts.Seqnos))
@@ -154,6 +154,7 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 	return other
 }
 
+// DebugPrint to log this timestamp using Debugf.
 func (ts *TsVbuuid) DebugPrint() {
 
 	Debugf("TsVbuuid : bucket = %s", ts.Bucket)
@@ -163,6 +164,7 @@ func (ts *TsVbuuid) DebugPrint() {
 	}
 }
 
+// DebugPrintDiff logs the difference between two timestamps using Debugf.
 func (ts *TsVbuuid) DebugPrintDiff(other *TsVbuuid) {
 
 	if ts.Equal(other) {
@@ -185,7 +187,7 @@ func (ts *TsVbuuid) DebugPrintDiff(other *TsVbuuid) {
 		return
 	}
 
-	for i, _ := range ts.Seqnos {
+	for i := range ts.Seqnos {
 		if ts.Seqnos[i] != other.Seqnos[i] || ts.Vbuuids[i] != other.Vbuuids[i] ||
 			ts.Snapshots[i][0] != other.Snapshots[i][0] || ts.Snapshots[i][1] != other.Snapshots[i][1] {
 
