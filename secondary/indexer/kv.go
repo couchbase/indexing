@@ -38,28 +38,20 @@ type Valuedata struct {
 var KEY_SEPARATOR []byte = []byte{0xff, 0xff, 0xff, 0xff}
 
 func NewKey(data []byte) (Key, error) {
-
 	var err error
 	var key Key
-	var code []byte
 
 	key.raw = data
 
+	// TODO: Refactor to reuse tmp buffer
 	jsoncodec := collatejson.NewCodec(16)
-	//convert key to its collatejson encoded byte representation
-	buf := new(bytes.Buffer)
-	bufcode := make([]byte, MAX_SEC_KEY_LEN)
-	if code, err = jsoncodec.Encode(data, bufcode); err != nil {
-		return key, err
-	}
-	if _, err = buf.Write(code); err != nil {
+	buf := make([]byte, 0, MAX_SEC_KEY_LEN)
+	if buf, err = jsoncodec.Encode(data, buf); err != nil {
 		return key, err
 	}
 
-	key.encoded = buf.Bytes()
-
+	key.encoded = append([]byte(nil), buf...)
 	return key, nil
-
 }
 
 func NewValue(docid []byte, vbucket Vbucket, seqno Seqno) (Value, error) {
@@ -114,14 +106,16 @@ func (k *Key) Raw() []byte {
 	var err error
 	if k.raw == nil {
 		jsoncodec := collatejson.NewCodec(16)
-		buf := make([]byte, MAX_SEC_KEY_LEN)
+		// TODO: Refactor to reuse tmp buffer
+		buf := make([]byte, 0, MAX_SEC_KEY_LEN)
 		if buf, err = jsoncodec.Decode(k.encoded, buf); err != nil {
 			common.Errorf("KV::Raw Error Decoding Key %v, Err %v", k.encoded,
 				err)
 			return nil
 		}
-		k.raw = buf
+		k.raw = append([]byte(nil), buf...)
 	}
+
 	return k.raw
 }
 
