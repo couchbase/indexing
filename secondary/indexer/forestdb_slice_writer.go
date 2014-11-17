@@ -17,8 +17,7 @@ import (
 	"time"
 )
 
-//TODO Choose a unique key name
-const STABILITY_TS_KEY_NAME = "StabilityTimstamp%$#"
+const STABILITY_TS_KEY_NAME = "stability-ts"
 
 //NewForestDBSlice initiailizes a new slice with forestdb backend.
 //Both main and back index gets initialized with default config.
@@ -56,6 +55,11 @@ func NewForestDBSlice(name string, sliceId SliceId, idxDefnId common.IndexDefnId
 		}
 	}
 
+	// Make use of default kvstore provided by forestdb
+	if slice.meta, err = slice.dbfile.OpenKVStore("default", kvconfig); err != nil {
+		return nil, err
+	}
+
 	slice.name = name
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefnId
@@ -91,6 +95,7 @@ type fdbSlice struct {
 	id   SliceId //slice id
 
 	dbfile *forestdb.File
+	meta   *forestdb.KVStore   // handle for index meta
 	main   []*forestdb.KVStore // handle for forward index
 	back   []*forestdb.KVStore // handle for reverse index
 
@@ -472,6 +477,10 @@ func (fdb *fdbSlice) Close() error {
 		fdb.back[0].Close()
 	}
 
+	if fdb.meta != nil {
+		fdb.meta.Close()
+	}
+
 	fdb.dbfile.Close()
 	return nil
 }
@@ -553,17 +562,9 @@ func (fdb *fdbSlice) SetTimestamp(ts *common.TsVbuuid) error {
 		return err
 	}
 
-	//set the back index entry
-	if err = fdb.back[0].SetKV([]byte(STABILITY_TS_KEY_NAME), tsVal); err != nil {
-		common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Back Index Set. "+
-			"TS %s. Error %v", fdb.id, fdb.idxInstId, tsVal, err)
-		return err
-	}
-
-	//set in main index
-	if err = fdb.main[0].SetKV([]byte(STABILITY_TS_KEY_NAME), tsVal); err != nil {
-		common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
-			"TS %s. Error %v", fdb.id, fdb.idxInstId, tsVal, err)
+	if err = fdb.meta.SetKV([]byte(STABILITY_TS_KEY_NAME), tsVal); err != nil {
+		common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error"+
+			"in storing timestamp %s (%v)", fdb.id, fdb.idxInstId, tsVal, err)
 		return err
 	}
 
