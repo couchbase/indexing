@@ -31,12 +31,12 @@ func parseArgs() {
 	flag.StringVar(&scanType, "type", "scanAll", "Scan command")
 	flag.StringVar(&indexName, "index", "", "Index name")
 	flag.StringVar(&bucket, "bucket", "default", "Bucket name")
-	flag.StringVar(&low, "low", "", "Range: low")
-	flag.StringVar(&high, "high", "", "Range: high")
-	flag.StringVar(&equal, "equal", "", "Range: equal")
-	flag.UintVar(&incl, "incl", 0, "Range: inclusive")
+	flag.StringVar(&low, "low", "[]", "Range: []")
+	flag.StringVar(&high, "high", "[]", "Range: []")
+	flag.StringVar(&equal, "equal", "", "Range: \"\"")
+	flag.UintVar(&incl, "incl", 0, "Range: 0|1|2|3")
 	flag.Int64Var(&limit, "limit", 10, "Row limit")
-	flag.Int64Var(&pageSize, "buffersz", 4092, "Buffer rows size per internal message")
+	flag.Int64Var(&pageSize, "buffersz", 0, "Rows buffer size per internal message")
 
 	flag.Parse()
 }
@@ -70,7 +70,9 @@ func main() {
 		err = client.ScanAll(indexName, bucket, pageSize, limit, scanCallback)
 	case "stats":
 		statsResp, err = client.Statistics(indexName, bucket, []byte(low), []byte(high), keys, uint32(incl))
-		fmt.Println("Stats: ", statsResp.String())
+		if err == nil {
+			fmt.Println("Stats: ", statsResp)
+		}
 	}
 
 	if err != nil {
@@ -83,7 +85,7 @@ func main() {
 func scanCallback(res interface{}) bool {
 	switch r := res.(type) {
 	case *protobuf.ResponseStream:
-		fmt.Println("Entry: ", res.(*protobuf.ResponseStream).String())
+		fmt.Println("StreamResponse: ", res.(*protobuf.ResponseStream).String())
 	case error:
 		fmt.Println("Error: ", r)
 	}
