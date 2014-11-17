@@ -11,6 +11,8 @@ It is generated from these files:
 	index.proto
 	indexer.proto
 	mutation.proto
+	partn_single.proto
+	partn_tp.proto
 	projector.proto
 	query.proto
 	rollback.proto

@@ -5,6 +5,9 @@
 
 package protobuf;
 
+import "partn_tp.proto";
+import "partn_single.proto";
+
 // IndexDefn will be in one of the following state
 enum IndexState {
     // Create index accepted, replicated and response sent back to admin
@@ -44,18 +47,23 @@ enum ExprType {
 
 // Type of topology, including paritition type to be used for the index.
 enum  PartitionScheme {
-    KEY = 1;
-    HASH = 2;
-    RANGE = 3;
-    TEST = 4;
+    TEST = 1;
+    SINGLE = 2;
+    KEY = 3;
+    HASH = 4;
+    RANGE = 5;
 }
 
 // IndexInst message as payload between co-ordinator, projector, indexer.
 message IndexInst {
-    required uint64          instId     = 1;
-    required IndexState      state      = 2;
-    required IndexDefn       definition = 3; // contains DDL
-    optional TestPartition   tp         = 4;
+    required uint64           instId      = 1;
+    required IndexState       state       = 2;
+    required IndexDefn        definition  = 3; // contains DDL
+    optional TestPartition    tp          = 4;
+    optional SinglePartition  singlePartn = 5;
+    //optional KeyPartition   keyPartn    = 6;
+    //optional HashPartition  hashPartn   = 7;
+    //optional RangePartition rangePartn  = 8;
 }
 
 // Index DDL from create index statement.
@@ -70,12 +78,6 @@ message IndexDefn {
     optional PartitionScheme partitionScheme = 8;
     optional string          partnExpression = 9; // use expressions to evaluate doc
     optional string          whereExpression = 10; // where predicate
-}
-
-// Example TestPartition.
-message TestPartition {
-    repeated string endpoints     = 1; // endpoint address
-    optional string coordEndpoint = 2;
 }
 
 // Statistics of a given index.

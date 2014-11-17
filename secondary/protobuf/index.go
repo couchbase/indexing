@@ -8,6 +8,88 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 )
 
+type Partition interface {
+	// Hosts return full list of endpoints <host:port>
+	// that are listening for this instance.
+	Hosts(*IndexInst) []string
+
+	// UpsertEndpoints return a list of endpoints <host:port>
+	// to which Upsert message will be published.
+	UpsertEndpoints(i *IndexInst, m *mc.UprEvent, partKey, key, oldKey []byte) []string
+
+	// UpsertDeletionEndpoints return a list of endpoints
+	// <host:port> to which UpsertDeletion message will be
+	// published.
+	UpsertDeletionEndpoints(i *IndexInst, m *mc.UprEvent, partKey, key, oldKey []byte) []string
+
+	// DeletionEndpoints return a list of endpoints
+	// <host:port> to which Deletion message will be published.
+	DeletionEndpoints(i *IndexInst, m *mc.UprEvent, partKey, oldKey []byte) []string
+}
+
+// Bucket implements Router{} interface.
+func (instance *IndexInst) Bucket() string {
+	return instance.GetDefinition().GetBucket()
+}
+
+// Endpoints implements Router{} interface.
+func (instance *IndexInst) Endpoints() []string {
+	p := instance.GetPartitionObject()
+	if p == nil {
+		return nil
+	}
+	return p.Hosts(instance)
+}
+
+// UpsertEndpoints implements Router{} interface.
+func (instance *IndexInst) UpsertEndpoints(
+	m *mc.UprEvent, partKey, key, oldKey []byte) []string {
+
+	p := instance.GetPartitionObject()
+	if p == nil {
+		return nil
+	}
+	return p.UpsertEndpoints(instance, m, partKey, key, oldKey)
+}
+
+// UpsertDeletionEndpoints implements Router{} interface.
+func (instance *IndexInst) UpsertDeletionEndpoints(
+	m *mc.UprEvent, partKey, key, oldKey []byte) []string {
+
+	p := instance.GetPartitionObject()
+	if p == nil {
+		return nil
+	}
+	return p.UpsertDeletionEndpoints(instance, m, partKey, key, oldKey)
+}
+
+// DeletionEndpoints implements Router{} interface.
+func (instance *IndexInst) DeletionEndpoints(
+	m *mc.UprEvent, partKey, oldKey []byte) []string {
+
+	p := instance.GetPartitionObject()
+	if p == nil {
+		return nil
+	}
+	return p.DeletionEndpoints(instance, m, partKey, oldKey)
+}
+
+func (instance *IndexInst) GetPartitionObject() Partition {
+	switch instance.GetDefinition().GetPartitionScheme() {
+	case PartitionScheme_TEST:
+		return instance.GetTp()
+	case PartitionScheme_SINGLE:
+		return instance.GetSinglePartn()
+	case PartitionScheme_KEY:
+		// return instance.GetKeyPartn()
+	case PartitionScheme_HASH:
+		// return instance.GetHashPartn()
+	case PartitionScheme_RANGE:
+		// return instance.GetRangePartn()
+	}
+	return nil
+}
+
 // IndexEvaluator implements `Evaluator` interface for protobuf
 // definition of an index instance.
 type IndexEvaluator struct {
@@ -28,10 +110,13 @@ func NewIndexEvaluator(instance *IndexInst) (*IndexEvaluator, error) {
 	switch defn.GetExprType() {
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
-		ie.skExprs, err = c.CompileN1QLExpression(defn.GetSecExpressions())
+		// expressions to evaluate secondary-key
+		exprs := defn.GetSecExpressions()
+		ie.skExprs, err = c.CompileN1QLExpression(exprs)
 		if err != nil {
 			return nil, err
 		}
+		// expression to evaluate partition key
 		expr := defn.GetPartnExpression()
 		if len(expr) > 0 {
 			cExprs, err := c.CompileN1QLExpression([]string{expr})
@@ -41,6 +126,7 @@ func NewIndexEvaluator(instance *IndexInst) (*IndexEvaluator, error) {
 				ie.pkExpr = cExprs[0]
 			}
 		}
+		// expression to evaluate where clause
 		expr = defn.GetWhereExpression()
 		if len(expr) > 0 {
 			cExprs, err := c.CompileN1QLExpression([]string{expr})
@@ -148,7 +234,8 @@ func (ie *IndexEvaluator) TransformRoute(
 	switch m.Opcode {
 	case mcd.UPR_MUTATION:
 		if where { // WHERE predicate
-			// NOTE: Upsert shall be targeted to indexer node hosting the key.
+			// NOTE: Upsert shall be targeted to indexer node hosting the
+			// key.
 			raddrs := instn.UpsertEndpoints(m, npkey, nkey, okey)
 			for _, raddr := range raddrs {
 				if _, ok := endpoints[raddr]; !ok {
@@ -238,57 +325,4 @@ func (ie *IndexEvaluator) wherePredicate(doc []byte) (bool, error) {
 		return false, nil // predicate is false
 	}
 	return true, nil
-}
-
-// Bucket implements Router{} interface.
-func (instance *IndexInst) Bucket() string {
-	return instance.GetDefinition().GetBucket()
-}
-
-// Endpoints implements Router{} interface.
-func (instance *IndexInst) Endpoints() []string {
-	if tp := instance.getTestPartitionScheme(); tp != nil {
-		return tp.GetEndpoints()
-	}
-	return []string{}
-}
-
-// UpsertEndpoints implements Router{} interface.
-func (instance *IndexInst) UpsertEndpoints(
-	m *mc.UprEvent, partKey, key, oldKey []byte) []string {
-
-	if tp := instance.getTestPartitionScheme(); tp != nil {
-		return tp.GetEndpoints()
-	}
-	return []string{}
-}
-
-// UpsertDeletionEndpoints implements Router{} interface.
-func (instance *IndexInst) UpsertDeletionEndpoints(
-	m *mc.UprEvent, partKey, key, oldKey []byte) []string {
-
-	if tp := instance.getTestPartitionScheme(); tp != nil {
-		return tp.GetEndpoints()
-	}
-	return []string{}
-}
-
-// DeletionEndpoints implements Router{} interface.
-func (instance *IndexInst) DeletionEndpoints(
-	m *mc.UprEvent, partKey, oldKey []byte) []string {
-
-	if tp := instance.getTestPartitionScheme(); tp != nil {
-		return tp.GetEndpoints()
-	}
-	return []string{}
-}
-
-// -----
-
-func (instance *IndexInst) getTestPartitionScheme() *TestPartition {
-	defn := instance.GetDefinition()
-	if defn.GetPartitionScheme() == PartitionScheme_TEST {
-		return instance.GetTp()
-	}
-	return nil
 }

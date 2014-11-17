@@ -142,23 +142,26 @@ func (x *ExprType) UnmarshalJSON(data []byte) error {
 type PartitionScheme int32
 
 const (
-	PartitionScheme_KEY   PartitionScheme = 1
-	PartitionScheme_HASH  PartitionScheme = 2
-	PartitionScheme_RANGE PartitionScheme = 3
-	PartitionScheme_TEST  PartitionScheme = 4
+	PartitionScheme_TEST   PartitionScheme = 1
+	PartitionScheme_SINGLE PartitionScheme = 2
+	PartitionScheme_KEY    PartitionScheme = 3
+	PartitionScheme_HASH   PartitionScheme = 4
+	PartitionScheme_RANGE  PartitionScheme = 5
 )
 
 var PartitionScheme_name = map[int32]string{
-	1: "KEY",
-	2: "HASH",
-	3: "RANGE",
-	4: "TEST",
+	1: "TEST",
+	2: "SINGLE",
+	3: "KEY",
+	4: "HASH",
+	5: "RANGE",
 }
 var PartitionScheme_value = map[string]int32{
-	"KEY":   1,
-	"HASH":  2,
-	"RANGE": 3,
-	"TEST":  4,
+	"TEST":   1,
+	"SINGLE": 2,
+	"KEY":    3,
+	"HASH":   4,
+	"RANGE":  5,
 }
 
 func (x PartitionScheme) Enum() *PartitionScheme {
@@ -180,11 +183,12 @@ func (x *PartitionScheme) UnmarshalJSON(data []byte) error {
 
 // IndexInst message as payload between co-ordinator, projector, indexer.
 type IndexInst struct {
-	InstId           *uint64        `protobuf:"varint,1,req,name=instId" json:"instId,omitempty"`
-	State            *IndexState    `protobuf:"varint,2,req,name=state,enum=protobuf.IndexState" json:"state,omitempty"`
-	Definition       *IndexDefn     `protobuf:"bytes,3,req,name=definition" json:"definition,omitempty"`
-	Tp               *TestPartition `protobuf:"bytes,4,opt,name=tp" json:"tp,omitempty"`
-	XXX_unrecognized []byte         `json:"-"`
+	InstId           *uint64          `protobuf:"varint,1,req,name=instId" json:"instId,omitempty"`
+	State            *IndexState      `protobuf:"varint,2,req,name=state,enum=protobuf.IndexState" json:"state,omitempty"`
+	Definition       *IndexDefn       `protobuf:"bytes,3,req,name=definition" json:"definition,omitempty"`
+	Tp               *TestPartition   `protobuf:"bytes,4,opt,name=tp" json:"tp,omitempty"`
+	SinglePartn      *SinglePartition `protobuf:"bytes,5,opt,name=singlePartn" json:"singlePartn,omitempty"`
+	XXX_unrecognized []byte           `json:"-"`
 }
 
 func (m *IndexInst) Reset()         { *m = IndexInst{} }
@@ -215,6 +219,13 @@ func (m *IndexInst) GetDefinition() *IndexDefn {
 func (m *IndexInst) GetTp() *TestPartition {
 	if m != nil {
 		return m.Tp
+	}
+	return nil
+}
+
+func (m *IndexInst) GetSinglePartn() *SinglePartition {
+	if m != nil {
+		return m.SinglePartn
 	}
 	return nil
 }
@@ -291,7 +302,7 @@ func (m *IndexDefn) GetPartitionScheme() PartitionScheme {
 	if m != nil && m.PartitionScheme != nil {
 		return *m.PartitionScheme
 	}
-	return PartitionScheme_KEY
+	return PartitionScheme_TEST
 }
 
 func (m *IndexDefn) GetPartnExpression() string {
@@ -304,31 +315,6 @@ func (m *IndexDefn) GetPartnExpression() string {
 func (m *IndexDefn) GetWhereExpression() string {
 	if m != nil && m.WhereExpression != nil {
 		return *m.WhereExpression
-	}
-	return ""
-}
-
-// Example TestPartition.
-type TestPartition struct {
-	Endpoints        []string `protobuf:"bytes,1,rep,name=endpoints" json:"endpoints,omitempty"`
-	CoordEndpoint    *string  `protobuf:"bytes,2,opt,name=coordEndpoint" json:"coordEndpoint,omitempty"`
-	XXX_unrecognized []byte   `json:"-"`
-}
-
-func (m *TestPartition) Reset()         { *m = TestPartition{} }
-func (m *TestPartition) String() string { return proto.CompactTextString(m) }
-func (*TestPartition) ProtoMessage()    {}
-
-func (m *TestPartition) GetEndpoints() []string {
-	if m != nil {
-		return m.Endpoints
-	}
-	return nil
-}
-
-func (m *TestPartition) GetCoordEndpoint() string {
-	if m != nil && m.CoordEndpoint != nil {
-		return *m.CoordEndpoint
 	}
 	return ""
 }
