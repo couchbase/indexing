@@ -69,6 +69,12 @@ var SystemConfig = Config{
 			"exactly match with KV-node's configured address",
 		"127.0.0.1:9000",
 	},
+	"projector.colocate": ConfigValue{
+		true,
+		"Whether projector will be colocated with KV. In which case " +
+			"`kvaddrs` specified above will be discarded",
+		true,
+	},
 	"projector.routerEndpointFactory": ConfigValue{
 		RouterEndpointFactory(nil),
 		"RouterEndpointFactory callback to generate endpoint instances " +

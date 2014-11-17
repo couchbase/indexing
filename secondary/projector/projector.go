@@ -43,6 +43,7 @@ func NewProjector(config c.Config) *Projector {
 		adminport:   pconf["adminport.listenAddr"].String(),
 		topics:      make(map[string]*Feed),
 	}
+
 	p.logPrefix = fmt.Sprintf("[%s(%s)]", p.name, p.kvset)
 	p.config = config
 

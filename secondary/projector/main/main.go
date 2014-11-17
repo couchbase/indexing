@@ -16,6 +16,7 @@ var done = make(chan bool)
 var options struct {
 	adminport string
 	kvaddrs   string
+	colocate  bool
 	info      bool
 	debug     bool
 	trace     bool
@@ -26,6 +27,8 @@ func argParse() string {
 		"adminport address")
 	flag.StringVar(&options.kvaddrs, "kvaddrs", "127.0.0.1:12000",
 		"comma separated list of kvaddrs")
+	flag.BoolVar(&options.colocate, "colocate", true,
+		"whether projector will be colocated with KV")
 	flag.BoolVar(&options.info, "info", false,
 		"enable info level logging")
 	flag.BoolVar(&options.debug, "debug", false,
@@ -57,12 +60,22 @@ func main() {
 	} else if options.info {
 		c.SetLogLevel(c.LogLevelInfo)
 	}
+
 	config := c.SystemConfig.Clone()
 	config.SetValue("projector.clusterAddr", cluster)
-	config.SetValue("projector.kvAddrs", options.kvaddrs)
 	config.SetValue("projector.adminport.listenAddr", options.adminport)
 	config.SetValue(
 		"projector.routerEndpointFactory", NewEndpointFactory(config))
+
+	if options.colocate || config["projector.colocate"].Bool() {
+		server, err := c.GetColocatedHost(cluster)
+		if err != nil {
+			log.Fatal(err)
+		}
+		config.SetValue("projector.kvAddrs", server)
+	} else {
+		config.SetValue("projector.kvAddrs", options.kvaddrs)
+	}
 
 	go c.ExitOnStdinClose()
 	projector.NewProjector(config)

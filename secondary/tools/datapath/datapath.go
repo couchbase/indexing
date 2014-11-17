@@ -98,10 +98,14 @@ func main() {
 		adminport := kvaddr2adminport(kvaddr, 500)
 		config := c.SystemConfig.Clone()
 		config.SetValue("projector.clusterAddr", cluster)
-		config.SetValue("projector.kvAddrs", kvaddr)
 		config.SetValue("projector.adminport.listenAddr", adminport)
 		config.SetValue(
 			"projector.routerEndpointFactory", NewEndpointFactory(config))
+		server, err := c.GetColocatedHost(cluster)
+		if err != nil {
+			log.Fatal(err)
+		}
+		config.SetValue("projector.kvAddrs", server)
 		projector.NewProjector(config) // start projector daemon
 		projectors[kvaddr] = projc.NewClient(adminport, config)
 	}
@@ -111,10 +115,10 @@ func main() {
 		options.buckets, options.endpoints, options.coordEndpoint)
 
 	// start backfill stream on each projector
-	for kvaddr, client := range projectors {
+	for _, client := range projectors {
 		// start backfill stream on each projector
 		_, err := client.InitialTopicRequest(
-			"backfill" /*topic*/, "default" /*pooln*/, kvaddr,
+			"backfill" /*topic*/, "default", /*pooln*/
 			"dataport" /*endpointType*/, instances)
 		if err != nil {
 			log.Fatal(err)

@@ -190,7 +190,7 @@ func (client *Client) GetFailoverLogs(
 //   only for successfully started {buckets,vbuckets}.
 // * rollback-timestamps contain vbucket entries that need rollback.
 func (client *Client) InitialTopicRequest(
-	topic, pooln, kvaddr, endpointType string,
+	topic, pooln, endpointType string,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
 
 	buckets := make(map[string]bool, 0)
@@ -199,9 +199,8 @@ func (client *Client) InitialTopicRequest(
 	}
 
 	req := protobuf.NewMutationTopicRequest(topic, endpointType, instances)
-	kvaddrs := []string{kvaddr}
 	for bucketn := range buckets {
-		ts, err := client.InitialRestartTimestamp(pooln, bucketn, kvaddrs)
+		ts, err := client.InitialRestartTimestamp(pooln, bucketn)
 		if err != nil {
 			return nil, err
 		}
@@ -565,13 +564,13 @@ func (client *Client) ShutdownTopic(topic string) error {
 }
 
 // InitialRestartTimestamp will compose the initial set of timestamp
-// for a subset of vbuckets (hosted by `kvaddrs`) in `bucket`.
+// for a subset of vbuckets in `bucket`.
 // - return http errors for transport related failures.
 func (client *Client) InitialRestartTimestamp(
-	pooln, bucketn string, kvaddrs []string) (*protobuf.TsVbuuid, error) {
+	pooln, bucketn string) (*protobuf.TsVbuuid, error) {
 
-	// get vbuckets hosted by `kvaddr`
-	vbmap, err := client.GetVbmap(pooln, bucketn, kvaddrs)
+	// get vbucket map.
+	vbmap, err := client.GetVbmap(pooln, bucketn, nil)
 	if err != nil {
 		return nil, err
 	}

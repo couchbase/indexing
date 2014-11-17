@@ -296,3 +296,38 @@ func ExitOnStdinClose() {
 		}
 	}
 }
+
+// GetColocatedHost find the server addr for localhost and return the same.
+func GetColocatedHost(cluster string) (string, error) {
+	// get vbmap from bucket connection.
+	bucket, err := ConnectBucket(cluster, "default", "default")
+	if err != nil {
+		return "", err
+	}
+	defer bucket.Close()
+
+	hostports := bucket.NodeAddresses()
+	serversM := make(map[string]string)
+	servers := make([]string, 0)
+	for _, hostport := range hostports {
+		host, _, err := net.SplitHostPort(hostport)
+		if err != nil {
+			return "", err
+		}
+		serversM[host] = hostport
+		servers = append(servers, host)
+	}
+
+	for _, server := range servers {
+		addrs, err := net.LookupIP(server)
+		if err != nil {
+			return "", err
+		}
+		for _, addr := range addrs {
+			if IsIPLocal(addr.String()) {
+				return serversM[server], nil
+			}
+		}
+	}
+	return "", errors.New("unknown host")
+}

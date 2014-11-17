@@ -142,11 +142,10 @@ func main() {
 		[]string{"beer-sample"}, options.endpoints, options.coordEndpoint)
 
 	// start backfill stream on each projector
-	for kvaddr, client := range projectors {
+	for _, client := range projectors {
 		// start backfill stream on each projector
 		_, err := client.InitialTopicRequest(
-			"backfill", "default", kvaddr, "dataport", /*endpointType*/
-			instances)
+			"backfill", "default", "dataport" /*endpointType*/, instances)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -158,9 +157,8 @@ loop:
 		<-time.After(time.Duration(timeout) * time.Millisecond)
 		instances = protobuf.ExampleIndexInstances(
 			options.addBuckets, options.endpoints, options.coordEndpoint)
-		for kvaddr, client := range projectors {
-			kvaddrs := []string{kvaddr}
-			ts, err := client.InitialRestartTimestamp(pooln, "default", kvaddrs)
+		for _, client := range projectors {
+			ts, err := client.InitialRestartTimestamp(pooln, "default")
 			if err != nil {
 				log.Fatal(err)
 			}

@@ -10,7 +10,7 @@ var defn1 = &IndexDefn{
 	Using:           StorageType_View.Enum(),
 	ExprType:        ExprType_N1QL.Enum(),
 	SecExpressions:  []string{`age`, `"first-name"`},
-	PartitionScheme: PartitionScheme_TEST.Enum(),
+	PartitionScheme: PartitionScheme_SINGLE.Enum(),
 	PartnExpression: proto.String(`city`),
 	WhereExpression: proto.String(`age > 30`),
 }
@@ -23,7 +23,7 @@ var defn2 = &IndexDefn{
 	Using:           StorageType_View.Enum(),
 	ExprType:        ExprType_N1QL.Enum(),
 	SecExpressions:  []string{`city`},
-	PartitionScheme: PartitionScheme_TEST.Enum(),
+	PartitionScheme: PartitionScheme_SINGLE.Enum(),
 	PartnExpression: proto.String(`gender`),
 }
 
@@ -35,7 +35,7 @@ var defn3 = &IndexDefn{
 	Using:           StorageType_View.Enum(),
 	ExprType:        ExprType_N1QL.Enum(),
 	SecExpressions:  []string{`name`},
-	PartitionScheme: PartitionScheme_TEST.Enum(),
+	PartitionScheme: PartitionScheme_SINGLE.Enum(),
 	PartnExpression: proto.String(`language`),
 }
 
@@ -47,23 +47,21 @@ var defn4 = &IndexDefn{
 	Using:           StorageType_View.Enum(),
 	ExprType:        ExprType_N1QL.Enum(),
 	SecExpressions:  []string{`name`},
-	PartitionScheme: PartitionScheme_TEST.Enum(),
+	PartitionScheme: PartitionScheme_SINGLE.Enum(),
 }
 
 // ExampleIndexInstances on buckets and documents created by tools/loadgen.
 func ExampleIndexInstances(
 	buckets, endpoints []string, coordEndpoint string) []*Instance {
 
+	partn := NewSinglePartition(endpoints).SetCoordinatorEndpoint(coordEndpoint)
 	makeInstance := func(id uint64, defn *IndexDefn, bucket string) *Instance {
 		defn.Bucket = proto.String(bucket)
 		ii := &IndexInst{
-			InstId:     proto.Uint64(id),
-			State:      IndexState_IndexInitial.Enum(),
-			Definition: defn,
-			Tp: &TestPartition{
-				CoordEndpoint: proto.String(coordEndpoint),
-				Endpoints:     endpoints,
-			},
+			InstId:      proto.Uint64(id),
+			State:       IndexState_IndexInitial.Enum(),
+			Definition:  defn,
+			SinglePartn: partn,
 		}
 		return &Instance{IndexInstance: ii}
 	}
