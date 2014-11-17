@@ -322,19 +322,21 @@ func (s *scanCoordinator) parseScanParams(
 
 		// range
 		if p.low, err = NewKey(low); err != nil {
-			return err
+			msg := fmt.Sprintf("Invalid low key %s (%s)", string(low), err.Error())
+			return errors.New(msg)
 		}
 
 		if p.high, err = NewKey(high); err != nil {
-			return err
+			msg := fmt.Sprintf("Invalid high key %s (%s)", string(high), err.Error())
+			return errors.New(msg)
 		}
 
 		// point query for keys
 		for _, k := range keys {
 			if key, err = NewKey(k); err != nil {
-				return err
+				msg := fmt.Sprintf("Invalid equal key %s (%s)", string(k), err.Error())
+				return errors.New(msg)
 			}
-
 			p.keys = append(p.keys, key)
 		}
 
@@ -388,7 +390,7 @@ func (s *scanCoordinator) requestHandler(
 	var partnInstMap *PartitionInstMap
 
 	p, err := s.parseScanParams(req)
-	if err != nil {
+	if err == ErrUnsupportedRequest {
 		// TODO: Add error response for invalid queryport reqs
 		panic(err)
 	}
@@ -401,15 +403,17 @@ func (s *scanCoordinator) requestHandler(
 		respch: make(chan interface{}),
 	}
 
-	common.Infof("%v: SCAN_REQ %v", s.logPrefix, sd)
-	indexInst, partnInstMap, err = s.getIndexDS(p.indexName, p.bucket)
+	if err == nil {
+		indexInst, partnInstMap, err = s.getIndexDS(p.indexName, p.bucket)
+	}
 	if err != nil {
-		common.Infof("%v: SCAN_ID: %v, Error (%v)", s.logPrefix, sd.scanId, err)
+		common.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
 		respch <- s.makeResponseMessage(sd, err)
 		close(respch)
 		return
 	}
 
+	common.Infof("%v: SCAN_REQ %v", s.logPrefix, sd)
 	partnDefs := s.findPartitionDefsForScan(sd, indexInst)
 	go s.scanPartitions(sd, partnDefs, partnInstMap)
 
