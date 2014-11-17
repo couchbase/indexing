@@ -1,3 +1,65 @@
+// Client for projector's adminport.
+//
+// Client APIs:
+//   - start a new feed for one or more buckets with one or more instances.
+//   - restart one or more {bucket,vbuckets}.
+//   - shutdown one or more {bucket,buckets}.
+//   - add one or more buckets to existing feed.
+//   - del one or more buckets from an existing feed.
+//   - add one or more instances to existing feed.
+//   - del one or more instances from an existing feed.
+//   - repair one or more endpoints for an existing feed, to restart
+//     an endpoint client that experienced transient connection problems.
+//
+// what is an instance ?
+//   An instance is an abstraction implementing Evaluator{} and Router{}
+//   interface, the primary function is to transform KV documents to custom
+//   data and route them to one or more endpoints.
+//
+// General notes on client APIs:
+//   - if returned error value is nil or empty-string, then the call is
+//     considered as SUCCESS.
+//   - since APIs accept request-timestamps for more than one bucket, and
+//     it is designed to continue with next request-timestamp even in case
+//     of an error, there can be multiple errors and only the last error
+//     is return back to the caller.
+//   - if an expected bucket is missing in TopicResponse:activeTimestamps,
+//     it means it is shutdown and all its data structures are cleaned-up
+//     due to upstream errors.
+//   - while adding a bucket in MutationTopicRequest(), RestartVbuckets(),
+//     AddBuckets(), atleast one valid instance must be defined for each
+//     bucket.
+//   - to delete the last instance for a bucket, use DelBucket() to delete
+//     the bucket itself, because projector does not encourage a bucket
+//     with ZERO instance.
+//
+// Idempotent retry MutationTopicRequest(), RestartVbuckets(), AddBuckets():
+//   - Before attempting a retry, caller should cross-check with cluster
+//     manager (eg. ns_server) for,
+//     * bucket's sanity
+//     * latest VBMap
+//   - Caller should check that union of activeTimestamps from all
+//     projectors should contain full set of vbuckets and then post a
+//     SUCCESS to dataport-receiver.
+//   - It is okay to pass the full set of vbuckets in requestTimestamps
+//     for each projector, projector will filter out relevant
+//     vbuckets that are co-located and further filter out active-vbuckets
+//     and outstanding requests, before posting a StreamRequest for
+//     vbuckets.
+//   - Dataport-receiver shall cross check its active list of vbuckets
+//     with activeTimestamps from all projectors.
+//
+// Idempotent retry RepairEndpoints():
+//   - Caller should book-keep following information via a monitor routine.
+//     * ControlSuccess, for vbuckets that have successfully completed
+//       StreamRequest.
+//     * ConnectionError
+//     * StreamBegin
+//     * StreamEnd
+//   - In case of ConnectionError, StreamEnd, absence of StreamBegin or
+//     absence of Sync message for a period of time, monitor-routine shall
+//     post RepairEndpoints to projector hosting the vbucket.
+
 package client
 
 import "fmt"
@@ -103,24 +165,30 @@ func (client *Client) GetFailoverLogs(
 // InitialTopicRequest topic from a kvnode, for an initial set
 // of instances. Initial topic will always start vbucket
 // streams from seqno number ZERO using the latest-vbuuid.
+//
 // Idempotent API.
+// - return TopicResponse that contain current set of
+//   active-timestamps and rollback-timestamps reflected from
+//   projector, even in case of error.
 //
-// - return http errors for transport related failures.
-// - return ErrorInconsistentFeed for malformed feed request.
-// - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return ErrorFeeder if upstream connection has failures.
-//      upstream connection is closed for the bucket, the bucket needs to be
-//      newly added.
-// - return ErrorNotMyVbucket due to rebalances and failures.
-// - return ErrorStreamRequest if StreamRequest failed for some reason
-// - return ErrorResponseTimeout if request is not completed within timeout.
+// Possible errors returned,
+// - http errors for transport related failures.
+// - ErrorInconsistentFeed for malformed feed request.
+// - ErrorInvalidVbucketBranch for malformed vbuuid.
+// - ErrorFeeder if upstream connection has failures.
+//      upstream connection is closed for the bucket, the bucket
+//      needs to be newly added.
+// - ErrorNotMyVbucket due to rebalances and failures.
+// - ErrorStreamRequest if StreamRequest failed for some reason
+// - ErrorResponseTimeout if request is not completed within timeout.
 //
-// * except of ErrorFeeder, projector feed will book-keep oustanding request,
-//   active vbuckets. Caller should observe mutation feed for
-//   StreamBegin and retry until all vbuckets are started.
-// * active-timestamps returned in TopicResponse response contain
-//   entries only for successfully started {buckets,vbuckets}
-// * rollback-timestamp contains vbucket entries that need rollback.
+// * except of ErrorFeeder, projector feed will book-keep oustanding
+//   request for vbuckets and active vbuckets. Caller should observe
+//   mutation feed for StreamBegin and retry until all vbuckets are
+//   started.
+// * active-timestamps returned in TopicResponse contain entries
+//   only for successfully started {buckets,vbuckets}.
+// * rollback-timestamps contain vbucket entries that need rollback.
 func (client *Client) InitialTopicRequest(
 	topic, pooln, kvaddr, endpointType string,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
@@ -156,22 +224,31 @@ func (client *Client) InitialTopicRequest(
 	return res, nil
 }
 
-// MutationTopicRequest topic from a kvnode, for an initial set of
-// instances. Idempotent API.
+// MutationTopicRequest topic from a kvnode, with initial set
+// of instances.
 //
-// - return http errors for transport related failures.
-// - return ErrorInconsistentFeed for malformed feed request.
-// - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return ErrorFeeder if upstream connection has failures.
-//      upstream connection is closed for the bucket, the bucket needs to be
-//      newly added.
-// - return ErrorNotMyVbucket due to rebalances and failures.
-// - return ErrorStreamRequest if StreamRequest failed for some reason
-// - return ErrorResponseTimeout if request is not completed within timeout.
+// Idempotent API.
+// - return TopicResponse that contain current set of
+//   active-timestamps and rollback-timestamps reflected from
+//   projector, even in case of error.
+// - Since the API is idempotent, it can be called repeatedly until
+//   all requested vbuckets are started and returns SUCCESS to caller.
 //
-// * except of ErrorFeeder, projector feed will book-keep oustanding request,
-//   active vbuckets. Caller should observe mutation feed for
-//   StreamBegin and retry until all vbuckets are started.
+// Possible errors returned,
+// - http errors for transport related failures.
+// - ErrorInconsistentFeed for malformed feed request.
+// - ErrorInvalidVbucketBranch for malformed vbuuid.
+// - ErrorFeeder if upstream connection has failures.
+//      upstream connection is closed for the bucket, the bucket
+//      needs to be newly added.
+// - ErrorNotMyVbucket due to rebalances and failures.
+// - ErrorStreamRequest if StreamRequest failed for some reason
+// - ErrorResponseTimeout if request is not completed within timeout.
+//
+// * except of ErrorFeeder, projector feed will book-keep oustanding
+//   request for vbuckets and active vbuckets. Caller should observe
+//   mutation feed for StreamBegin and retry until all vbuckets are
+//   started.
 // * active-timestamps returned in TopicResponse response contain
 //   entries only for successfully started {bucket,vbuckets}.
 // * rollback-timestamp contains vbucket entries that need rollback.
@@ -199,30 +276,36 @@ func (client *Client) MutationTopicRequest(
 	return res, nil
 }
 
-// RestartVbuckets for topic. Idempotent API, though it is
-// advised that the caller check with cluster manager for,
-//   * bucket's sanity
-//   * latest VBMap
-//   * StreamEnd / StreamBegin message from dataport server.
-// before repeating this call.
+// RestartVbuckets for one or more {bucket, vbuckets}. If a vbucket
+// is already active or if there is an outstanding StreamRequset
+// for a vbucket, then that vbucket is ignored.
 //
-// - return http errors for transport related failures.
-// - return ErrorTopicMissing if feed is not started.
-// - return ErrorInvalidBucket if bucket is not added.
-// - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return ErrorFeeder if upstream connection has failures.
-//      upstream connection is closed for the bucket, the bucket needs to be
-//      newly added.
-// - return ErrorNotMyVbucket due to rebalances and failures.
-// - return ErrorStreamRequest if StreamRequest failed for some reason
-// - return ErrorStreamEnd if StreamEnd failed for some reason
-// - return ErrorResponseTimeout if request is not completed within timeout.
+// Idempotent API.
+// - return TopicResponse that contain current set of
+//   active-timestamps and rollback-timestamps reflected from
+//   projector, even in case of error.
+// - Since the API is idempotent, it can be called repeatedly until
+//   all requested vbuckets are started and returns SUCCESS to caller.
 //
-// * if vbucket is already active and to force restart a vbucket stream,
-//   use ShutdownVbuckets().
-// * except of ErrorFeeder, projector feed will book-keep oustanding request,
-//   active vbuckets. Caller should observe mutation feed for
-//   StreamBegin and retry until all vbuckets are started.
+// Possible errors returned,
+// - http errors for transport related failures.
+// - ErrorTopicMissing if feed is not started.
+// - ErrorInvalidBucket if bucket is not added.
+// - ErrorInvalidVbucketBranch for malformed vbuuid.
+// - ErrorFeeder if upstream connection has failures.
+//      upstream connection is closed for the bucket, the bucket
+//      needs to be newly added.
+// - ErrorNotMyVbucket due to rebalances and failures.
+// - ErrorStreamRequest if StreamRequest failed for some reason
+// - ErrorStreamEnd if StreamEnd failed for some reason
+// - ErrorResponseTimeout if request is not completed within timeout.
+//
+// * if vbucket is already active and to force restart a vbucket
+//   stream, use ShutdownVbuckets().
+// * except of ErrorFeeder, projector feed will book-keep oustanding
+//   request for vbuckets and active vbuckets. Caller should observe
+//   mutation feed for StreamBegin and retry until all vbuckets are
+//   started.
 // * active-timestamps returned in TopicResponse response contain
 //   entries only for successfully started {bucket,vbuckets}.
 // * rollback-timestamp contains vbucket entries that need rollback.
@@ -251,25 +334,29 @@ func (client *Client) RestartVbuckets(
 	return res, nil
 }
 
-// ShutdownVbuckets for topic. Idempotent API, though it is
-// advised that the caller check with cluster manager for,
-//   * bucket's sanity
-//   * latest VBMap
-//   * StreamEnd / StreamBegin message from dataport server.
-// before repeating this call.
+// ShutdownVbuckets for one or more {bucket, vbuckets}.
 //
-// - return http errors for transport related failures.
-// - return ErrorTopicMissing if feed is not started.
-// - return ErrorInvalidBucket if bucket is not added.
-// - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return ErrorFeeder if upstream connection has failures.
-//      upstream connection is closed for the bucket, the bucket needs to be
-//      newly added.
-// - return ErrorResponseTimeout if request is not completed within timeout.
+// Idempotent API
+// - return TopicResponse that contain current set of
+//   active-timestamps, after shutting down all vbuckets or partial set
+//   of vbuckets.
+// - Since the API is idempotent, it can be called repeatedly until
+//   all requested vbuckets have ended and returns SUCCESS to caller.
 //
-// * except of ErrorFeeder, projector feed will book-keep oustanding request,
-//   active vbuckets. Caller should observe mutation feed for
-//   StreamEnd and retry until all vbuckets are started.
+// Possible errors returned,
+// - errors for transport related failures.
+// - ErrorTopicMissing if feed is not started.
+// - ErrorInvalidBucket if bucket is not added.
+// - ErrorInvalidVbucketBranch for malformed vbuuid.
+// - ErrorFeeder if upstream connection has failures.
+//      upstream connection is closed for the bucket, the bucket
+//      needs to be newly added.
+// - ErrorResponseTimeout if request is not completed within timeout.
+//
+// * except of ErrorFeeder, projector feed will book-keep oustanding
+//   request for vbuckets and active vbuckets. Caller should observe
+//   mutation feed for StreamBegin and retry until all vbuckets are
+//   started.
 // * active-timestamps returned in TopicResponse response contain
 //   entries only for successfully started {bucket,vbuckets}.
 // * rollback-timestamp contains vbucket entries that need rollback.
@@ -297,28 +384,31 @@ func (client *Client) ShutdownVbuckets(
 	return nil
 }
 
-// AddBuckets will add buckets and its instances to a topic.
-// Idempotent API, though it is advised that the caller check with
-// cluster manager for,
-//   * bucket's sanity
-//   * latest VBMap
-//   * StreamEnd / StreamBegin message from dataport server.
-// before repeating this call.
+// AddBuckets will add one or more buckets to an active-feed.
 //
-// - return http errors for transport related failures.
-// - return ErrorTopicMissing if feed is not started.
-// - return ErrorInconsistentFeed for malformed feed request
-// - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return ErrorFeeder if upstream connection has failures.
+// Idempotent API.
+// - return TopicResponse that contain current set of
+//   active-timestamps and rollback-timestamps reflected from
+//   projector, even in case of error.
+// - Since the API is idempotent, it can be called repeatedly until
+//   all requested vbuckets are started and returns SUCCESS to caller.
+//
+// Possible errors returned,
+// - http errors for transport related failures.
+// - ErrorTopicMissing if feed is not started.
+// - ErrorInconsistentFeed for malformed feed request
+// - ErrorInvalidVbucketBranch for malformed vbuuid.
+// - ErrorFeeder if upstream connection has failures.
 //      upstream connection is closed for the bucket, the bucket needs to be
 //      newly added.
-// - return ErrorNotMyVbucket due to rebalances and failures.
-// - return ErrorStreamRequest if StreamRequest failed for some reason
-// - return ErrorResponseTimeout if request is not completed within timeout.
+// - ErrorNotMyVbucket due to rebalances and failures.
+// - ErrorStreamRequest if StreamRequest failed for some reason
+// - ErrorResponseTimeout if request is not completed within timeout.
 //
-// * except of ErrorFeeder, projector feed will book-keep oustanding request,
-//   active vbuckets. Caller should observe mutation feed for
-//   StreamBegin and retry until all vbuckets are started.
+// * except of ErrorFeeder, projector feed will book-keep oustanding
+//   request for vbuckets and active vbuckets. Caller should observe
+//   mutation feed for StreamBegin and retry until all vbuckets are
+//   started.
 // * active-timestamps returned in TopicResponse response contain
 //   entries only for successfully started {bucket,vbuckets}.
 // * rollback-timestamp contains vbucket entries that need rollback.
@@ -345,10 +435,12 @@ func (client *Client) AddBuckets(
 	return res, nil
 }
 
-// DelBuckets will del buckets and all its instances from a topic.
-// Idempotent API
-// - return http errors for transport related failures.
-// - return ErrorTopicMissing if feed is not started.
+// DelBuckets will delete one or more buckets, and all of its instances,
+// from a feed. Idempotent API.
+//
+// Possible errors returned,
+// - http errors for transport related failures.
+// - ErrorTopicMissing if feed is not started.
 func (client *Client) DelBuckets(topic string, buckets []string) error {
 	req := protobuf.NewDelBucketsRequest(topic, buckets)
 	res := &protobuf.Error{}
@@ -372,9 +464,10 @@ func (client *Client) DelBuckets(topic string, buckets []string) error {
 // buckets. Idempotent API, provided ErrorInconsistentFeed is
 // addressed.
 //
-// - return http errors for transport related failures.
-// - return ErrorTopicMissing if feed is not started.
-// - return ErrorInconsistentFeed for malformed feed request.
+// Possible errors returned,
+// - http errors for transport related failures.
+// - ErrorTopicMissing if feed is not started.
+// - ErrorInconsistentFeed for malformed feed request.
 func (client *Client) AddInstances(
 	topic string, instances []*protobuf.Instance) error {
 
@@ -396,11 +489,14 @@ func (client *Client) AddInstances(
 	return nil
 }
 
-// DelInstances will del buckets and all its instances from a topic.
-// Idempotent API.
+// DelInstances will delete one or more instances from one or more buckets.
+// If the deleted instance is the last instance for bucket, then caller
+// should have used DelBuckets() to delete the bucket. Projector does not
+// encourage a bucket with ZERO instance. Idempotent API.
 //
-// - return http errors for transport related failures.
-// - return ErrorTopicMissing if feed is not started.
+// Possible errors returned,
+// - http errors for transport related failures.
+// - ErrorTopicMissing if feed is not started.
 func (client *Client) DelInstances(topic string, uuids []uint64) error {
 	req := protobuf.NewDelInstancesRequest(topic, uuids)
 	res := &protobuf.Error{}
