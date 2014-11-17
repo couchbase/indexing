@@ -128,7 +128,14 @@ func (c *Client) Statistics(
 	if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
 		return nil, ErrorProtocol
 	}
-	return (resp.(*protobuf.StatisticsResponse)).GetStats(), nil
+
+	statResp := resp.(*protobuf.StatisticsResponse)
+	if statResp.GetErr() != nil {
+		err = errors.New(statResp.GetErr().GetError())
+		return nil, err
+	}
+
+	return statResp.GetStats(), nil
 }
 
 // Scan index for a range.
