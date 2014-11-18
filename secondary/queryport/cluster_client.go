@@ -105,6 +105,9 @@ func (c *ClusterClient) CreateIndex(
 	name, bucket, using, exprType, partnExpr, whereExpr string,
 	secExprs []string, isPrimary bool) (*IndexInfo, error) {
 
+	var resp *http.Response
+	var mresp IndexMetaResponse
+
 	// Construct request body.
 	info := IndexInfo{
 		Name:      name,
@@ -122,10 +125,10 @@ func (c *ClusterClient) CreateIndex(
 		bodybuf := bytes.NewBuffer(body)
 		url := c.addr + "/create"
 		common.Infof("%v posting %v to URL %v", c.logPrefix, bodybuf, url)
-		resp, err := c.httpc.Post(url, "application/json", bodybuf)
+		resp, err = c.httpc.Post(url, "application/json", bodybuf)
 		if err == nil {
 			defer resp.Body.Close()
-			mresp, err := c.metaResponse(resp)
+			mresp, err = c.metaResponse(resp)
 			if err == nil {
 				return &mresp.Indexes[0], nil
 			}
@@ -137,6 +140,8 @@ func (c *ClusterClient) CreateIndex(
 
 // DropIndex `DefnID` identifies the index to be dropped but is unique-id.
 func (c *ClusterClient) DropIndex(defnID string) error {
+	var resp *http.Response
+
 	// Construct request body.
 	req := IndexRequest{Type: Drop, Index: IndexInfo{DefnID: defnID}}
 	body, err := json.Marshal(req)
@@ -145,10 +150,10 @@ func (c *ClusterClient) DropIndex(defnID string) error {
 		bodybuf := bytes.NewBuffer(body)
 		url := c.addr + "/drop"
 		common.Infof("%v posting %v to URL %v", c.logPrefix, bodybuf, url)
-		resp, err := c.httpc.Post(url, "application/json", bodybuf)
+		resp, err = c.httpc.Post(url, "application/json", bodybuf)
 		if err == nil {
 			defer resp.Body.Close()
-			_, err := c.metaResponse(resp)
+			_, err = c.metaResponse(resp)
 			if err == nil {
 				return nil
 			}
@@ -160,6 +165,9 @@ func (c *ClusterClient) DropIndex(defnID string) error {
 
 // List all indexes.
 func (c *ClusterClient) List() ([]IndexInfo, error) {
+	var resp *http.Response
+	var mresp IndexMetaResponse
+
 	// Construct request body.
 	req := IndexRequest{Type: List}
 	body, err := json.Marshal(req)
@@ -167,10 +175,10 @@ func (c *ClusterClient) List() ([]IndexInfo, error) {
 		bodybuf := bytes.NewBuffer(body)
 		url := c.addr + "/list"
 		common.Infof("%v posting %v to URL %v", c.logPrefix, bodybuf, url)
-		resp, err := c.httpc.Post(url, "application/json", bodybuf)
+		resp, err = c.httpc.Post(url, "application/json", bodybuf)
 		if err == nil {
 			defer resp.Body.Close()
-			mresp, err := c.metaResponse(resp)
+			mresp, err = c.metaResponse(resp)
 			if err == nil {
 				return mresp.Indexes, nil
 			}
