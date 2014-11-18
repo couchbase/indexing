@@ -14,7 +14,6 @@
 // * binary representation should preserve the sort order such that, sorting
 //   binary encoded json documents much match sorting by functions that parse
 //   and compare JSON documents.
-//
 // * it must be possible to get back the original document, in semantically
 //   correct form, from its binary representation.
 //
@@ -32,8 +31,11 @@ import (
 	"strconv"
 )
 
-// error codes
+// ErrorNumberType means configured number type is not supported by codec.
 var ErrorNumberType = errors.New("collatejson.numberType")
+
+// ErrorOutputLen means output buffer has insufficient length.
+var ErrorOutputLen = errors.New("collatejson.outputLen")
 
 // Length is an internal type used for prefixing length
 // of arrays and properties.
@@ -123,7 +125,14 @@ func (codec *Codec) NumberType(what string) {
 }
 
 // Encode json documents to order preserving binary representation.
+// `code` is the output buffer for encoding and expected to have
+// enough capacity, atleast 3x of input `text`.
 func (codec *Codec) Encode(text, code []byte) ([]byte, error) {
+	code = code[:0]
+	if cap(code) < (3 * len(text)) {
+		return nil, ErrorOutputLen
+	}
+
 	var m interface{}
 	if err := json.Unmarshal(text, &m); err != nil {
 		return nil, err
@@ -131,8 +140,14 @@ func (codec *Codec) Encode(text, code []byte) ([]byte, error) {
 	return codec.json2code(m, code)
 }
 
-// Decode a slice of byte into json string and return them as slice of byte.
+// Decode a slice of byte into json string and return them as
+// slice of byte. `text` is the output buffer for decoding and
+// expected to have enough capacity, atleast 3x of input `code`,
 func (codec *Codec) Decode(code, text []byte) ([]byte, error) {
+	text = text[:0]
+	if cap(text) < len(code) {
+		return nil, ErrorOutputLen
+	}
 	text, _, err := codec.code2json(code, text)
 	return text, err
 }
