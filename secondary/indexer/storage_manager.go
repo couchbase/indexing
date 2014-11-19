@@ -348,13 +348,17 @@ func (s *storageMgr) handleGetTSForIndex(cmd Message) {
 	_, found := s.indexInstMap[req.GetIndexId()]
 	if !found {
 		req.respch <- ErrIndexNotFound
+		return
 	}
 
 	// Return timestamp immediately if a matching snapshot exists already
 	// Otherwise add into waiters list so that next snapshot creation event
 	// can notify the requester with matching timestamp.
-	ts, ok := s.tsMap[req.GetIndexId()]
-	if ok && (req.GetTS() == nil || ts.AsRecent(req.GetTS())) {
+	ts := s.tsMap[req.GetIndexId()]
+	// - If atleast-ts is nil and no timestamp is available, send nil ts
+	// - If atleast-ts is not-nil and no timestamp is available, wait until
+	// it is available.
+	if req.GetTS() == nil || ts.AsRecent(req.GetTS()) {
 		req.respch <- ts
 	} else {
 		w := newSnapshotWaiter(req.GetIndexId(), req.GetTS(), req.GetReplyChannel())

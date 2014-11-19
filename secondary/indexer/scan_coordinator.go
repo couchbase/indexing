@@ -30,6 +30,7 @@ var (
 	ErrUnsupportedRequest = errors.New("Unsupported query request")
 	ErrIndexNotFound      = errors.New("Index not found")
 	ErrNotMyIndex         = errors.New("Not my index")
+	ErrIndexNotReady      = errors.New("Index not ready")
 	ErrInternal           = errors.New("Internal server error occured")
 )
 
@@ -407,6 +408,11 @@ func (s *scanCoordinator) requestHandler(
 	if err == nil {
 		indexInst, partnInstMap, err = s.getIndexDS(p.indexName, p.bucket)
 	}
+
+	if err == nil && indexInst.State != common.INDEX_STATE_ACTIVE {
+		err = ErrIndexNotReady
+	}
+
 	if err != nil {
 		common.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
 		respch <- s.makeResponseMessage(sd, err)
@@ -445,6 +451,11 @@ func (s *scanCoordinator) requestHandler(
 	}
 
 	common.Infof("%v: SCAN_ID: %v scan timestamp: %v", s.logPrefix, sd.scanId, ScanTStoString(sd.p.ts))
+	// Index has no scannable snapshot available
+	if sd.p.ts == nil {
+		close(respch)
+		return
+	}
 
 	partnDefs := s.findPartitionDefsForScan(sd, indexInst)
 	go s.scanPartitions(sd, partnDefs, partnInstMap)
@@ -862,11 +873,13 @@ func (s *scanCoordinator) handleUpdateIndexPartnMap(cmd Message) {
 func ScanTStoString(ts *common.TsVbuuid) string {
 	var seqsStr string = "["
 
-	for i, s := range ts.Snapshots {
-		if i > 0 {
-			seqsStr += ","
+	if ts != nil {
+		for i, s := range ts.Snapshots {
+			if i > 0 {
+				seqsStr += ","
+			}
+			seqsStr += fmt.Sprintf("%d=%d", i, s[1])
 		}
-		seqsStr += fmt.Sprintf("%d=%d", i, s[1])
 	}
 
 	seqsStr += "]"
