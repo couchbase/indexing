@@ -61,6 +61,7 @@ func NewForestDBSlice(name string, sliceId SliceId, idxDefnId common.IndexDefnId
 	}
 
 	slice.name = name
+	slice.config = config
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefnId
 	slice.id = sliceId
@@ -98,6 +99,8 @@ type fdbSlice struct {
 	meta   *forestdb.KVStore   // handle for index meta
 	main   []*forestdb.KVStore // handle for forward index
 	back   []*forestdb.KVStore // handle for reverse index
+
+	config *forestdb.Config
 
 	idxDefnId common.IndexDefnId
 	idxInstId common.IndexInstId
@@ -513,9 +516,15 @@ func (fdb *fdbSlice) Close() error {
 func (fdb *fdbSlice) Destroy() error {
 
 	common.Infof("ForestDBSlice::Destroy \n\tDestroying Slice Id %v, IndexInstId %v, "+
-		"IndexDefnId %v", fdb.idxInstId, fdb.idxDefnId, fdb.id)
+		"IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 
-	//TODO
+	if err := forestdb.Destroy(fdb.name, fdb.config); err != nil {
+
+		common.Errorf("ForestDBSlice::Destroy \n\t Error Destroying  Slice Id %v, "+
+			"IndexInstId %v, IndexDefnId %v. Error %v", fdb.id, fdb.idxInstId, fdb.idxDefnId, err)
+		return err
+	}
+
 	return nil
 }
 

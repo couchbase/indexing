@@ -634,6 +634,7 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 	respCh MsgChannel) {
 
 	indexInstId := indexInst.InstId
+	idxPartnInfo := idx.indexPartnMap[indexInstId]
 
 	//update internal maps
 	delete(idx.indexInstMap, indexInstId)
@@ -665,7 +666,6 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 		return
 	}
 
-	idxPartnInfo := idx.indexPartnMap[indexInstId]
 	//for all partitions managed by this indexer
 	for _, partnInst := range idxPartnInfo {
 		sc := partnInst.Sc
@@ -679,7 +679,8 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 			//close the slice
 			slice.Close()
 
-			//TODO call slice.Destroy() when its ready
+			//wipe the physical files
+			slice.Destroy()
 		}
 
 	}
