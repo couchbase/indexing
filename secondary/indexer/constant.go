@@ -46,7 +46,7 @@ const KV_DCP_PORT_CLUSTER_RUN = "12000"
 
 const PROJECTOR_PORT = "9999"
 
-const QUERY_PORT_ADDR = ":9998"
+const QUERY_PORT_ADDR = ":7000"
 
 const LOCALHOST = "127.0.0.1"
 

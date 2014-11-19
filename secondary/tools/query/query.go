@@ -42,7 +42,7 @@ var options struct {
 }
 
 func argParse() {
-	flag.StringVar(&options.server, "server", "localhost:9998",
+	flag.StringVar(&options.server, "server", "localhost:7000",
 		"queryport server address")
 	flag.IntVar(&options.par, "par", 1,
 		"maximum number of vbuckets")
