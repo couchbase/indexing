@@ -110,7 +110,7 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 		IsPrimary:       indexinfo.IsPrimary,
 		SecExprs:        indexinfo.SecExprs,
 		ExprType:        common.N1QL,
-		PartitionScheme: common.TEST,
+		PartitionScheme: common.SINGLE,
 		PartitionKey:    indexinfo.PartnExpr}
 
 	idxInst := common.IndexInst{InstId: common.IndexInstId(defnID),

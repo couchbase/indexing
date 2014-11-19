@@ -28,10 +28,11 @@ const (
 type PartitionScheme string
 
 const (
-	KEY   PartitionScheme = "KEY"
-	HASH                  = "HASH"
-	RANGE                 = "RANGE"
-	TEST                  = "TEST"
+	KEY    PartitionScheme = "KEY"
+	HASH                   = "HASH"
+	RANGE                  = "RANGE"
+	TEST                   = "TEST"
+	SINGLE                 = "SINGLE"
 )
 
 type IndexType string

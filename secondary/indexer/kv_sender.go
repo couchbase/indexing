@@ -1292,7 +1292,7 @@ func addPartnInfoToProtoInst(indexInst c.IndexInst,
 	switch partn := indexInst.Pc.(type) {
 	case *c.KeyPartitionContainer:
 
-		//Right now the fill the TestPartition as that is the only
+		//Right now the fill the SinglePartition as that is the only
 		//partition structure supported
 		partnDefn := partn.GetAllPartitions()
 
@@ -1312,7 +1312,7 @@ func addPartnInfoToProtoInst(indexInst c.IndexInst,
 			}
 
 		}
-		protoInst.Tp = &protobuf.TestPartition{
+		protoInst.SinglePartn = &protobuf.SinglePartition{
 			Endpoints: endpoints,
 		}
 	}
