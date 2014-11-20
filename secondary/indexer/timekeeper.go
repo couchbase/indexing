@@ -704,11 +704,7 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 		ts.Snapshots[meta.vbucket][0] = snapshot.start
 		ts.Snapshots[meta.vbucket][1] = snapshot.end
 
-		//Once a new snapshot marker is received, new timestamp can
-		//be generated if all stream begins have been received
-		if tk.allStreamBeginsReceived(streamId, meta.bucket) {
-			tk.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
-		}
+		tk.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
 		common.Tracef("Timekeeper::handleSnapshotMarker \n\tUpdated TS %v", ts)
 	} else {
 		common.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker. "+
@@ -1298,10 +1294,12 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	bucketFlushEnabledMap := tk.streamBucketFlushEnabledMap[streamId]
 	bucketSyncCountMap := tk.streamBucketSyncCountMap[streamId]
 
+	//new timestamp can be generated if all stream begins have been received
 	if bucketSyncCountMap[bucket] >= SYNC_COUNT_TS_TRIGGER &&
-		bucketNewTsReqd[bucket] == true {
-		//generate new stability timestamp
+		bucketNewTsReqd[bucket] == true &&
+		tk.allStreamBeginsReceived(streamId, bucket) == true {
 
+		//generate new stability timestamp
 		tsVbuuid := copyTsVbuuid(bucket, tk.streamBucketHWTMap[streamId][bucket])
 
 		//HWT may have less Seqno than Snapshot marker as mutation come later than
