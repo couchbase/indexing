@@ -32,8 +32,13 @@ func (p *SinglePartition) SetCoordinatorEndpoint(endpoint string) *SinglePartiti
 
 // Hosts implements Partition{} interface.
 func (p *SinglePartition) Hosts(inst *IndexInst) []string {
-	endpoints := p.GetEndpoints()
-	endpoints = append(endpoints, p.GetCoordEndpoint())
+	endpoints := make([]string, 0)
+	for _, endpoint := range p.GetEndpoints() {
+		endpoints = append(endpoints, endpoint)
+	}
+	if p.GetCoordEndpoint() != "" {
+		endpoints = append(endpoints, p.GetCoordEndpoint())
+	}
 	return endpoints
 }
 

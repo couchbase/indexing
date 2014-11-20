@@ -15,8 +15,8 @@ var _ = math.Inf
 // scale-out, but using this partition-scheme for an index means the full
 // data set is kept on the same node.
 type SinglePartition struct {
-	Endpoints        []string `protobuf:"bytes,2,rep,name=endpoints" json:"endpoints,omitempty"`
-	CoordEndpoint    *string  `protobuf:"bytes,3,opt,name=coordEndpoint" json:"coordEndpoint,omitempty"`
+	Endpoints        []string `protobuf:"bytes,1,rep,name=endpoints" json:"endpoints,omitempty"`
+	CoordEndpoint    *string  `protobuf:"bytes,2,opt,name=coordEndpoint" json:"coordEndpoint,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
