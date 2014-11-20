@@ -66,13 +66,10 @@ func main() {
 	config.SetValue("projector.adminport.listenAddr", options.adminport)
 	config.SetValue(
 		"projector.routerEndpointFactory", NewEndpointFactory(config))
+	config.SetValue("projector.colocate", options.colocate)
 
-	if options.colocate || config["projector.colocate"].Bool() {
-		server, err := c.GetColocatedHost(cluster)
-		if err != nil {
-			log.Fatal(err)
-		}
-		config.SetValue("projector.kvAddrs", server)
+	if config["projector.colocate"].Bool() {
+		config.SetValue("projector.kvAddrs", "")
 	} else {
 		config.SetValue("projector.kvAddrs", options.kvaddrs)
 	}

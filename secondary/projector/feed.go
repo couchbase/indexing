@@ -16,6 +16,9 @@ import "github.com/couchbaselabs/goprotobuf/proto"
 // ErrorInvalidBucket
 var ErrorInvalidBucket = errors.New("feed.invalidBucket")
 
+// ErrorInvalidKVaddrs
+var ErrorInvalidKVaddrs = errors.New("feed.invalidKVaddrs")
+
 // ErrorInvalidVbucketBranch
 var ErrorInvalidVbucketBranch = errors.New("feed.invalidVbucketBranch")
 
@@ -90,7 +93,7 @@ type Feed struct {
 //    feedWaitStreamEndTimeout: wait for a response to StreamEnd
 //    feedChanSize: channel size for feed's control path and back path
 //    routerEndpointFactory: endpoint factory
-func NewFeed(topic string, config c.Config) *Feed {
+func NewFeed(topic string, config c.Config) (*Feed, error) {
 	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
 	chsize := config["feedChanSize"].Int()
 	feed := &Feed{
@@ -120,9 +123,18 @@ func NewFeed(topic string, config c.Config) *Feed {
 	}
 	feed.logPrefix = fmt.Sprintf("[%v->%v]", config["name"].String(), topic)
 
+	if len(feed.kvaddrs) == 0 {
+		kvaddr, err := c.GetColocatedHost(feed.cluster)
+		if err != nil {
+			c.Errorf("%v error getting colocated host: %v", feed.logPrefix, err)
+			return nil, ErrorInvalidKVaddrs
+		}
+		feed.kvaddrs = []string{kvaddr}
+	}
+
 	go feed.genServer()
 	c.Infof("%v started ...\n", feed.logPrefix)
-	return feed
+	return feed, nil
 }
 
 const (

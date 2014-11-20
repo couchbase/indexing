@@ -183,6 +183,7 @@ func (p *Projector) doFailoverLog(
 	return response
 }
 
+// - return ErrorInvalidKVaddrs for malformed vbuuid.
 // - return ErrorInconsistentFeed for malformed feed request.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
 // - return go-couchbase failures.
@@ -204,9 +205,14 @@ func (p *Projector) doMutationTopic(
 	config.Set("feedChanSize", pconf["feedChanSize"])
 	config.Set("routerEndpointFactory", pconf["routerEndpointFactory"])
 
+	var err error
+
 	feed, _ := p.GetFeed(topic)
 	if feed == nil {
-		feed = NewFeed(topic, config)
+		feed, err = NewFeed(topic, config)
+		if err != nil {
+			return (&protobuf.TopicResponse{}).SetErr(err)
+		}
 	}
 	response, err := feed.MutationTopic(request)
 	if err != nil {

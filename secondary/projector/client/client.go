@@ -173,6 +173,7 @@ func (client *Client) GetFailoverLogs(
 //
 // Possible errors returned,
 // - http errors for transport related failures.
+// - ErrorInvalidKVaddrs if projector unable to find colocated host.
 // - ErrorInconsistentFeed for malformed feed request.
 // - ErrorInvalidVbucketBranch for malformed vbuuid.
 // - ErrorFeeder if upstream connection has failures.
@@ -235,6 +236,7 @@ func (client *Client) InitialTopicRequest(
 //
 // Possible errors returned,
 // - http errors for transport related failures.
+// - ErrorInvalidKVaddrs if projector unable to find colocated host.
 // - ErrorInconsistentFeed for malformed feed request.
 // - ErrorInvalidVbucketBranch for malformed vbuuid.
 // - ErrorFeeder if upstream connection has failures.
