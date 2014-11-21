@@ -43,6 +43,11 @@ func NewKey(data []byte) (Key, error) {
 
 	key.raw = data
 
+	if len(data) == 0 {
+		key.encoded = nil
+		return key, nil
+	}
+
 	// TODO: Refactor to reuse tmp buffer
 	jsoncodec := collatejson.NewCodec(16)
 	buf := make([]byte, 0, MAX_SEC_KEY_LEN)
