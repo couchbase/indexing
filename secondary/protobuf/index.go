@@ -274,7 +274,7 @@ func (ie *IndexEvaluator) TransformRoute(
 func (ie *IndexEvaluator) evaluate(docid, doc []byte) ([]byte, error) {
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // primary index supported !!
-		return docid, nil // by saying primary-key is secondary-key
+		return []byte(`["` + string(docid) + `"]`), nil
 	}
 
 	exprType := defn.GetExprType()
