@@ -130,6 +130,7 @@ func NewFeed(topic string, config c.Config) (*Feed, error) {
 			return nil, ErrorInvalidKVaddrs
 		}
 		feed.kvaddrs = []string{kvaddr}
+		c.Infof("%v kvaddrs %v\n", feed.logPrefix, feed.kvaddrs)
 	}
 
 	go feed.genServer()

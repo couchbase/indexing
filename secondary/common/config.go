@@ -397,7 +397,10 @@ func (cv ConfigValue) String() string {
 func (cv ConfigValue) Strings() []string {
 	ss := make([]string, 0)
 	for _, s := range strings.Split(cv.Value.(string), ",") {
-		ss = append(ss, strings.Trim(s, " \t\r\n"))
+		s = strings.Trim(s, " \t\r\n")
+		if len(s) > 0 {
+			ss = append(ss, s)
+		}
 	}
 	return ss
 }
