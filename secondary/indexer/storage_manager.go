@@ -174,6 +174,9 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 						common.Debugf("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
 							"%v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
+						newTsVbuuid := tsVbuuid.Copy()
+						slice.SetTimestamp(newTsVbuuid)
+
 						if err := slice.Commit(); err != nil {
 
 							common.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
@@ -184,9 +187,6 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 						common.Debugf("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
 							"Index: %v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
-
-						newTsVbuuid := tsVbuuid.Copy()
-						slice.SetTimestamp(newTsVbuuid)
 
 						//create snapshot for slice
 						if newSnapshot, err := slice.Snapshot(); err == nil {
