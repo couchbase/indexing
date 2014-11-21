@@ -520,7 +520,7 @@ func ProtoIndexEntryFromKey(k Key) *protobuf.IndexEntry {
 	kbytes := k.Raw()
 	err = json.Unmarshal(kbytes, &tmp)
 	if err != nil {
-		panic("corruption detected " + err.Error())
+		panic("corruption detected " + string(kbytes) + " " + err.Error())
 	}
 
 	l := len(tmp)

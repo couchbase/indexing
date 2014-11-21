@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"bytes"
 	"github.com/couchbase/indexing/secondary/common"
 )
 
@@ -91,6 +92,9 @@ func (s *fdbSnapshot) ValueRange(low, high Key, inclusion Inclusion,
 	return chval, cherr, Asc
 }
 
+// TODO: Refactor db scan to support inclusion options
+// Currently, for the given low, high predicates, it will return rows
+// for which row >= low and row < high
 func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 	inclusion Inclusion, chkey chan Key, cherr chan error, stopch StopChannel) {
 
@@ -103,67 +107,54 @@ func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 	it := newForestDBIterator(s.main)
 	defer it.Close()
 
-	var lowkey []byte
+	var lowkey, highkey []byte
 	var err error
 
 	if lowkey = low.Encoded(); lowkey == nil {
 		it.SeekFirst()
 	} else {
+		lowkey = lowkey[:len(lowkey)-1]
 		it.Seek(lowkey)
 	}
 
+	highkey = high.Encoded()
+	if highkey != nil {
+		highkey = highkey[:len(highkey)]
+	}
+
 	var key Key
+loop:
 	for ; it.Valid(); it.Next() {
 
 		select {
 
 		case <-stopch:
-			//stop signalled, end processing
+			// stop signalled, end processing
 			return
 
 		default:
+			common.Tracef("ForestDB Got Key - %s", string(it.Key()))
+
+			var highcmp int
+			if highkey == nil {
+				highcmp = -1 // if high key is nil, iterate through the fullset
+			} else {
+				highcmp = bytes.Compare(it.Key(), highkey)
+			}
+
 			if key, err = NewKeyFromEncodedBytes(it.Key()); err != nil {
 				common.Errorf("Error Converting from bytes %v to key %v. Skipping row",
 					it.Key(), err)
-				continue
+				panic(err)
 			}
 
-			common.Tracef("ForestDB Got Key - %s", key.String())
-
-			var highcmp int
-			if high.Encoded() == nil {
-				highcmp = -1 //if high key is nil, iterate through the fullset
-			} else {
-				highcmp = key.Compare(high)
+			// if we have reached past the high key, no need to scan further
+			if highcmp > 0 {
+				common.Tracef("ForestDB Discarding Key - %s since >= high", string(it.Key()))
+				break loop
 			}
 
-			var lowcmp int
-			if low.Encoded() == nil {
-				lowcmp = 1 //all keys are greater than nil
-			} else {
-				lowcmp = key.Compare(low)
-			}
-
-			if highcmp == 0 && (inclusion == Both || inclusion == High) {
-				common.Tracef("ForestDB Sending Key Equal to High Key")
-				chkey <- key
-			} else if lowcmp == 0 && (inclusion == Both || inclusion == Low) {
-				common.Tracef("ForestDB Sending Key Equal to Low Key")
-				chkey <- key
-			} else if (highcmp == -1) && (lowcmp == 1) { //key is between high and low
-				if highcmp == -1 {
-					common.Tracef("ForestDB Sending Key Lesser Than High Key")
-				} else if lowcmp == 1 {
-					common.Tracef("ForestDB Sending Key Greater Than Low Key")
-				}
-				chkey <- key
-			} else {
-				common.Tracef("ForestDB not Sending Key")
-				//if we have reached past the high key, no need to scan further
-				if highcmp == 1 {
-					break
-				}
-			}
+			chkey <- key
 		}
 	}
 
