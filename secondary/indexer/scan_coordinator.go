@@ -554,12 +554,8 @@ func ProtoIndexEntryFromKey(k Key, isPrimary bool) *protobuf.IndexEntry {
 		}
 	}
 
-	pKey := tmp[l-1]
-	pKeyBytes, err = json.Marshal(pKey)
-	if err != nil {
-		panic("corruption detected " + err.Error())
-	}
-
+	// Primary key should be in raw bytes
+	pKeyBytes = []byte(tmp[l-1].(string))
 	entry := &protobuf.IndexEntry{
 		EntryKey: secKeyBytes, PrimaryKey: pKeyBytes,
 	}
