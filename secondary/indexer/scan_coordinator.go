@@ -484,6 +484,8 @@ func (s *scanCoordinator) requestHandler(
 		var keys *[]Key
 		var msg interface{}
 		var done bool
+		var reqquit bool = false
+		var status string
 
 		// Read scan entries and send it to the client
 		// Closing respch indicates that we have no more messages to be sent
@@ -505,6 +507,7 @@ func (s *scanCoordinator) requestHandler(
 			select {
 			case _, ok := <-quitch:
 				if !ok {
+					reqquit = true
 					rdr.Done()
 					break loop
 				}
@@ -512,6 +515,15 @@ func (s *scanCoordinator) requestHandler(
 			}
 		}
 		close(respch)
+		if reqquit {
+			status = "client requested quit"
+		} else if err != nil {
+			status = "error occured " + err.Error()
+		} else {
+			status = "successful"
+		}
+
+		common.Infof("%v: SCAN_ID: %v finished scan (%s)", s.logPrefix, sd.scanId, status)
 	}
 }
 
