@@ -209,10 +209,12 @@ func (s *Server) doReceive(conn net.Conn, rcvch chan<- interface{}) {
 
 	c.Debugf("%v connection %q doReceive() ...\n", s.logPrefix, raddr)
 
-	timeoutMs := s.readDeadline * time.Millisecond
 loop:
 	for {
-		conn.SetReadDeadline(time.Now().Add(timeoutMs))
+		// TODO: Fix read timeout correctly
+		// timeoutMs := s.readDeadline * time.Millisecond
+		// conn.SetReadDeadline(time.Now().Add(timeoutMs))
+
 		req, err := rpkt.Receive(conn)
 		// TODO: handle close-connection and don't print error message.
 		if err != nil {
