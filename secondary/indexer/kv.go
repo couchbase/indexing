@@ -109,7 +109,7 @@ func (k *Key) Encoded() []byte {
 func (k *Key) Raw() []byte {
 
 	var err error
-	if k.raw == nil {
+	if k.raw == nil && k.encoded != nil {
 		jsoncodec := collatejson.NewCodec(16)
 		// TODO: Refactor to reuse tmp buffer
 		buf := make([]byte, 0, MAX_SEC_KEY_LEN)

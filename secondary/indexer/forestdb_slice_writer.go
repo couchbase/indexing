@@ -213,6 +213,21 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 				"entry from main index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
+
+		//delete from back index
+		if err = fdb.back[workerId].DeleteKV(v.Docid()); err != nil {
+			fdb.checkFatalDbError(err)
+			common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
+				"entry from back index %v", fdb.id, fdb.idxInstId, err)
+			return
+		}
+	}
+
+	//if the Key is nil, nothing needs to be done
+	if k.Encoded() == nil {
+		common.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Received NIL Key for "+
+			"Doc Id %v. Skipped.", fdb.id, fdb.idxInstId, v.Docid())
+		return
 	}
 
 	//set the back index entry <docid, encodedkey>
@@ -246,6 +261,14 @@ func (fdb *fdbSlice) delete(docid []byte, workerId int) {
 		fdb.checkFatalDbError(err)
 		common.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error locating "+
 			"backindex entry for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
+		return
+	}
+
+	//if the oldkey is nil, nothing needs to be done. This is the case of deletes
+	//which happened before index was created.
+	if oldkey.Encoded() == nil {
+		common.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v Received NIL Key for "+
+			"Doc Id %v. Skipped.", fdb.id, fdb.idxInstId, docid)
 		return
 	}
 
