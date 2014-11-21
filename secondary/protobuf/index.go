@@ -187,8 +187,7 @@ func (ie *IndexEvaluator) StreamEndData(
 
 // TransformRoute implement Evaluator{} interface.
 func (ie *IndexEvaluator) TransformRoute(
-	vbuuid uint64,
-	m *mc.UprEvent) (endpoints map[string]interface{}, err error) {
+	vbuuid uint64, m *mc.UprEvent, data map[string]interface{}) (err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -201,32 +200,29 @@ func (ie *IndexEvaluator) TransformRoute(
 
 	where, err := ie.wherePredicate(m.Value)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if where && len(m.Value) > 0 { // project new secondary key
 		if npkey, err = ie.partitionKey(m.Value); err != nil {
-			return nil, err
+			return err
 		}
 		if nkey, err = ie.evaluate(m.Key, m.Value); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
 		if opkey, err = ie.partitionKey(m.OldValue); err != nil {
-			return nil, err
+			return err
 		}
 		if okey, err = ie.evaluate(m.Key, m.OldValue); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	vbno, seqno := m.VBucket, m.Seqno
 	uuid := instn.GetInstId()
 
-	var kv *c.KeyVersions
-
-	endpoints = make(map[string]interface{})
 	bucket := ie.Bucket()
 
 	c.Tracef("inst: %v where: %v (pkey: %v) key: %v\n",
@@ -238,37 +234,48 @@ func (ie *IndexEvaluator) TransformRoute(
 			// key.
 			raddrs := instn.UpsertEndpoints(m, npkey, nkey, okey)
 			for _, raddr := range raddrs {
-				if _, ok := endpoints[raddr]; !ok {
-					kv = c.NewKeyVersions(seqno, m.Key, 4)
+				dkv, ok := data[raddr].(*c.DataportKeyVersions)
+				if !ok {
+					kv := c.NewKeyVersions(seqno, m.Key, 4)
+					kv.AddUpsert(uuid, nkey, okey)
+					dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+				} else {
+					dkv.Kv.AddUpsert(uuid, nkey, okey)
 				}
-				kv.AddUpsert(uuid, nkey, okey)
-				endpoints[raddr] =
-					&c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+				data[raddr] = dkv
 			}
 		}
 		// NOTE: UpsertDeletion shall be broadcasted if old-key is not
 		// available.
 		raddrs := instn.UpsertDeletionEndpoints(m, opkey, nkey, okey)
 		for _, raddr := range raddrs {
-			if _, ok := endpoints[raddr]; !ok {
-				kv = c.NewKeyVersions(seqno, m.Key, 4)
+			dkv, ok := data[raddr].(*c.DataportKeyVersions)
+			if !ok {
+				kv := c.NewKeyVersions(seqno, m.Key, 4)
+				kv.AddUpsertDeletion(uuid, okey)
+				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+			} else {
+				dkv.Kv.AddUpsertDeletion(uuid, okey)
 			}
-			kv.AddUpsertDeletion(uuid, okey)
-			endpoints[raddr] = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+			data[raddr] = dkv
 		}
 
 	case mcd.UPR_DELETION, mcd.UPR_EXPIRATION:
 		// Delete shall be broadcasted if old-key is not available.
 		raddrs := instn.DeletionEndpoints(m, opkey, okey)
 		for _, raddr := range raddrs {
-			if _, ok := endpoints[raddr]; !ok {
-				kv = c.NewKeyVersions(seqno, m.Key, 4)
+			dkv, ok := data[raddr].(*c.DataportKeyVersions)
+			if !ok {
+				kv := c.NewKeyVersions(seqno, m.Key, 4)
+				kv.AddDeletion(uuid, okey)
+				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+			} else {
+				dkv.Kv.AddDeletion(uuid, okey)
 			}
-			kv.AddDeletion(uuid, okey)
-			endpoints[raddr] = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+			data[raddr] = dkv
 		}
 	}
-	return endpoints, nil
+	return nil
 }
 
 func (ie *IndexEvaluator) evaluate(docid, doc []byte) ([]byte, error) {

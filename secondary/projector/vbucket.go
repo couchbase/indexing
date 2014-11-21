@@ -261,18 +261,15 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 		seqno = m.Seqno
 		// prepare a data for each endpoint.
 		dataForEndpoints := make(map[string]interface{})
-		for raddr := range vr.endpoints {
-			dataForEndpoints[raddr] = nil
-		}
 		// for each engine distribute transformations to endpoints.
 		for _, engine := range vr.engines {
-			edata, err := engine.TransformRoute(vr.vbuuid, m)
+			err := engine.TransformRoute(vr.vbuuid, m, dataForEndpoints)
 			if err != nil {
 				c.Errorf("%v TransformRoute %v\n", vr.logPrefix, err)
 				continue
 			}
 			// send data to corresponding endpoint.
-			for raddr, data := range edata {
+			for raddr, data := range dataForEndpoints {
 				// send might fail, we don't care
 				vr.endpoints[raddr].Send(data)
 			}

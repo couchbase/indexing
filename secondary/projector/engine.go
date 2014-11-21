@@ -62,7 +62,7 @@ func (engine *Engine) StreamEndData(
 
 // TransformRoute data to endpoints.
 func (engine *Engine) TransformRoute(
-	vbuuid uint64, m *mc.UprEvent) (map[string]interface{}, error) {
+	vbuuid uint64, m *mc.UprEvent, data map[string]interface{}) error {
 
-	return engine.evaluator.TransformRoute(vbuuid, m)
+	return engine.evaluator.TransformRoute(vbuuid, m, data)
 }

@@ -26,7 +26,7 @@ type Evaluator interface {
 
 	// TransformRoute will transform document consumable by
 	// downstream, returns data to be published to endpoints.
-	TransformRoute(vbuuid uint64, m *mc.UprEvent) (endpoints map[string]interface{}, err error)
+	TransformRoute(vbuuid uint64, m *mc.UprEvent, data map[string]interface{}) error
 }
 
 // CompileN1QLExpression will take expressions defined in N1QL's DDL statement
