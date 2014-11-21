@@ -44,9 +44,10 @@ const (
 
 // Internal scan handle for a request
 type scanDescriptor struct {
-	scanId uint64
-	p      *scanParams
-	stopch StopChannel
+	scanId    uint64
+	p         *scanParams
+	isPrimary bool
+	stopch    StopChannel
 
 	respch chan interface{}
 }
@@ -420,6 +421,9 @@ func (s *scanCoordinator) requestHandler(
 		return
 	}
 
+	// Its a primary index scan
+	sd.isPrimary = indexInst.Defn.IsPrimary
+
 	common.Infof("%v: SCAN_REQ %v", s.logPrefix, sd)
 	// Before starting the index scan, we have to find out the snapshot timestamp
 	// that can fullfil this query by considering atleast-timestamp provided in
@@ -511,7 +515,7 @@ func (s *scanCoordinator) requestHandler(
 	}
 }
 
-func ProtoIndexEntryFromKey(k Key) *protobuf.IndexEntry {
+func ProtoIndexEntryFromKey(k Key, isPrimary bool) *protobuf.IndexEntry {
 	// TODO: Return error instead of panic
 	var tmp []interface{}
 	var err error
@@ -524,18 +528,21 @@ func ProtoIndexEntryFromKey(k Key) *protobuf.IndexEntry {
 	}
 
 	l := len(tmp)
-	if l < 2 {
+	if l == 0 || (isPrimary == false && l == 1) {
 		panic("corruption detected")
 	}
 
-	secKey := tmp[:l-1]
-	pKey := tmp[l-1]
-
-	secKeyBytes, err = json.Marshal(secKey)
-	if err != nil {
-		panic("corruption detected " + err.Error())
+	if isPrimary == true {
+		secKeyBytes = []byte{}
+	} else {
+		secKey := tmp[:l-1]
+		secKeyBytes, err = json.Marshal(secKey)
+		if err != nil {
+			panic("corruption detected " + err.Error())
+		}
 	}
 
+	pKey := tmp[l-1]
 	pKeyBytes, err = json.Marshal(pKey)
 	if err != nil {
 		panic("corruption detected " + err.Error())
@@ -579,7 +586,7 @@ func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
 		var entries []*protobuf.IndexEntry
 		keys := *payload.(*[]Key)
 		for _, k := range keys {
-			entry := ProtoIndexEntryFromKey(k)
+			entry := ProtoIndexEntryFromKey(k, sd.isPrimary)
 			entries = append(entries, entry)
 		}
 		r = &protobuf.ResponseStream{Entries: entries}
