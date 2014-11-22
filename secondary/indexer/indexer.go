@@ -560,6 +560,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	//send Stream Update to workers
 	if ok := idx.sendStreamUpdateForCreateIndex(indexInst, buildTs, respCh); !ok {
+		indexInst.State = common.INDEX_STATE_ERROR
 		return
 	}
 

@@ -57,6 +57,8 @@ const (
 	INDEX_STATE_ACTIVE = 3
 	//Drop Index Processed
 	INDEX_STATE_DELETED = 4
+	//Error State
+	INDEX_STATE_ERROR = 4
 )
 
 func (s IndexState) String() string {
