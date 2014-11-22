@@ -33,7 +33,9 @@ func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFee
 
 	instId := c.IndexInstId(s.indexCount)
 	indDefn := c.IndexDefn{Name: name, Bucket: bucket}
-	indInst := c.IndexInst{InstId: instId, Defn: indDefn, Pc: pc}
+	indInst := c.IndexInst{InstId: instId, State: c.INDEX_STATE_ACTIVE,
+		Defn: indDefn, Pc: pc,
+	}
 	// TODO: Use cmdch to update map
 	s.scanner.indexInstMap[instId] = indInst
 

@@ -85,7 +85,7 @@ func verifyIndexScanAll(val interface{}) bool {
 			nmesgs++
 			for _, entry := range entries {
 				sk, _ := json.Marshal(testSK(count))
-				pk, _ := json.Marshal(testPK(count))
+				pk := testPK(count)
 				if string(sk) != string(entry.GetEntryKey()) {
 					tst.Error("Invalid sec key received")
 				}
