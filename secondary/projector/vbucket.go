@@ -268,11 +268,11 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 				c.Errorf("%v TransformRoute %v\n", vr.logPrefix, err)
 				continue
 			}
-			// send data to corresponding endpoint.
-			for raddr, data := range dataForEndpoints {
-				// send might fail, we don't care
-				vr.endpoints[raddr].Send(data)
-			}
+		}
+		// send data to corresponding endpoint.
+		for raddr, data := range dataForEndpoints {
+			// send might fail, we don't care
+			vr.endpoints[raddr].Send(data)
 		}
 	}
 	return seqno

@@ -279,6 +279,15 @@ func (kv *KeyVersions) AddSnapshot(typ uint32, start, end uint64) {
 	kv.addKey(uint64(typ), Snapshot, key[:8], okey[:8])
 }
 
+func (kv *KeyVersions) String() string {
+	s := fmt.Sprintf("`%s` - Seqno:%v\n", string(kv.Docid), kv.Seqno)
+	for i, uuid := range kv.Uuids {
+		s += fmt.Sprintf("    %v Cmd(%v) `%s`",
+			uuid, kv.Commands[i], string(kv.Keys[i]))
+	}
+	return s
+}
+
 // DataportKeyVersions accepted by this endpoint.
 type DataportKeyVersions struct {
 	Bucket string
