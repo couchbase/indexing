@@ -10,12 +10,17 @@
 package indexer
 
 import (
+	"bytes"
+	"encoding/gob"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbaselabs/goforestdb"
 )
 
 //StorageManager manages the snapshots for the indexes and responsible for storing
 //indexer metadata in a config database
 //TODO - Add config database storage
+
+const INST_MAP_KEY_NAME = "IndexInstMap"
 
 type StorageManager interface {
 }
@@ -32,6 +37,9 @@ type storageMgr struct {
 	// List of waiters waiting for a snapshot to be created with expected
 	// atleast-timestamp
 	waitersMap map[common.IndexInstId][]*snapshotWaiter
+
+	dbfile *forestdb.File
+	meta   *forestdb.KVStore // handle for index meta
 }
 
 type snapshotWaiter struct {
@@ -63,7 +71,8 @@ func (w *snapshotWaiter) Error(err error) {
 //by a synchronous response of the supvCmdch.
 //Any async response to supervisor is sent to supvRespch.
 //If supvCmdch get closed, storageMgr will shut itself down.
-func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel) (
+func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
+	indexPartnMap IndexPartnMap) (
 	StorageManager, Message) {
 
 	//Init the storageMgr struct
@@ -72,6 +81,23 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel) (
 		supvRespch: supvRespch,
 		tsMap:      make(map[common.IndexInstId]*common.TsVbuuid),
 		waitersMap: make(map[common.IndexInstId][]*snapshotWaiter),
+	}
+
+	config := forestdb.DefaultConfig()
+	kvconfig := forestdb.DefaultKVStoreConfig()
+	var err error
+
+	if s.dbfile, err = forestdb.Open("meta", config); err != nil {
+		return nil, &MsgError{err: Error{cause: err}}
+	}
+
+	// Make use of default kvstore provided by forestdb
+	if s.meta, err = s.dbfile.OpenKVStore("default", kvconfig); err != nil {
+		return nil, &MsgError{err: Error{cause: err}}
+	}
+
+	if len(indexPartnMap) != 0 {
+		s.initTsMap(indexPartnMap)
 	}
 
 	//start Storage Manager loop which listens to commands from its supervisor
@@ -122,6 +148,7 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case UPDATE_INDEX_PARTITION_MAP:
 		s.handleUpdateIndexPartnMap(cmd)
+
 	case STORAGE_TS_REQUEST:
 		s.handleGetTSForIndex(cmd)
 	}
@@ -323,6 +350,31 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 		}
 	}
 
+	instMap := common.CopyIndexInstMap(s.indexInstMap)
+
+	for id, inst := range instMap {
+		inst.Pc = nil
+		instMap[id] = inst
+	}
+
+	//store indexInstMap in metadata store
+	var instBytes bytes.Buffer
+	var err error
+
+	enc := gob.NewEncoder(&instBytes)
+	err = enc.Encode(instMap)
+	if err != nil {
+		common.Errorf("StorageMgr::handleUpdateIndexInstMap \n\t Error Marshalling "+
+			"IndexInstMap %v. Err %v", instMap, err)
+	}
+
+	if err = s.meta.SetKV([]byte(INST_MAP_KEY_NAME), instBytes.Bytes()); err != nil {
+		common.Errorf("StorageMgr::handleUpdateIndexInstMap \n\tError "+
+			"Storing IndexInstMap %v", err)
+	}
+
+	s.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
+
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -368,5 +420,22 @@ func (s *storageMgr) handleGetTSForIndex(cmd Message) {
 		} else {
 			s.waitersMap[req.idxInstId] = []*snapshotWaiter{w}
 		}
+	}
+}
+
+//Init the TS Map from already available snapshot information.
+//This function is used in indexer restart to recover on disk indexes.
+func (s *storageMgr) initTsMap(indexPartnMap IndexPartnMap) {
+
+	for idxInstId, partnMap := range indexPartnMap {
+
+		//there is only one partition for now
+		partnInst := partnMap[0]
+		sc := partnInst.Sc
+
+		//there is only one slice for now
+		slice := sc.GetSliceById(0)
+
+		s.tsMap[idxInstId] = slice.Timestamp()
 	}
 }

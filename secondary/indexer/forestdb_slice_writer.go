@@ -341,6 +341,31 @@ func (fdb *fdbSlice) checkFatalDbError(err error) {
 //received from forestdb.
 func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 
+	//if ts is nil, read from DB. This is to handle the case
+	//when indexer restarts
+	if fdb.ts == nil {
+
+		var tsb []byte
+		var err error
+
+		tsb, err = fdb.meta.GetKV([]byte(STABILITY_TS_KEY_NAME))
+
+		if err != nil {
+			common.Errorf("ForestDBSlice::Snapshot \n\t Error Reading TS from Slice Id %v "+
+				"IndexInstId %v. Err %v", fdb.id, fdb.idxInstId, err)
+		} else {
+			var ts common.TsVbuuid
+			err = json.Unmarshal(tsb, &ts)
+			if err != nil {
+				common.Errorf("ForestDBSlice::Snapshot \n\t Error Unmarshall TS From SliceId %v"+
+					"IndexInstId %v. Err %v", fdb.id, fdb.idxInstId, err)
+			} else {
+				fdb.ts = &ts
+			}
+		}
+
+	}
+
 	s := &fdbSnapshot{id: fdb.id,
 		idxDefnId: fdb.idxDefnId,
 		idxInstId: fdb.idxInstId,

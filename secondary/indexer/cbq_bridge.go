@@ -28,7 +28,8 @@ type cbqBridge struct {
 	indexMap map[common.IndexInstId]IndexInfo
 }
 
-func NewCbqBridge(supvCmdch MsgChannel, supvRespch MsgChannel) (
+func NewCbqBridge(supvCmdch MsgChannel, supvRespch MsgChannel,
+	indexInstMap common.IndexInstMap) (
 	CbqBridge, Message) {
 
 	//Init the cbqBridge struct
@@ -37,6 +38,8 @@ func NewCbqBridge(supvCmdch MsgChannel, supvRespch MsgChannel) (
 		supvRespch: supvRespch,
 		indexMap:   make(map[common.IndexInstId]IndexInfo),
 	}
+
+	cbq.updateIndexMap(indexInstMap)
 
 	go cbq.initCbqBridge()
 
@@ -217,6 +220,35 @@ func (cbq *cbqBridge) handleList(w http.ResponseWriter, r *http.Request) {
 		Indexes: indexList,
 	}
 	sendResponse(w, res)
+}
+
+//handleUpdateIndexInstMap updates the indexInstMap
+func (cbq *cbqBridge) updateIndexMap(indexInstMap common.IndexInstMap) {
+
+	common.Debugf("CbqBridge::updateIndexMap %v", indexInstMap)
+
+	for id, inst := range indexInstMap {
+		cbq.indexMap[id] = getIndexInfoFromInst(inst)
+	}
+
+}
+
+func getIndexInfoFromInst(inst common.IndexInst) IndexInfo {
+
+	var idx IndexInfo
+
+	idx.Name = inst.Defn.Name
+	idx.Bucket = inst.Defn.Name
+	idx.DefnID = strconv.Itoa(int(inst.Defn.DefnId))
+	idx.Using = string(inst.Defn.Using)
+	idx.Exprtype = string(inst.Defn.ExprType)
+	idx.PartnExpr = inst.Defn.PartitionKey
+	idx.SecExprs = inst.Defn.SecExprs
+	idx.WhereExpr = ""
+	idx.IsPrimary = inst.Defn.IsPrimary
+
+	return idx
+
 }
 
 // Parse HTTP Request to get IndexInfo.

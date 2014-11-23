@@ -10,8 +10,11 @@
 package indexer
 
 import (
+	"bytes"
+	"encoding/gob"
 	"errors"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbaselabs/goforestdb"
 	"net"
 	"strconv"
 	"time"
@@ -136,9 +139,45 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 		}
 	}
 
+	//Start Mutation Manager
+	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh,
+		numVbuckets)
+	if res.GetMsgType() != MSG_SUCCESS {
+		common.Errorf("Indexer::NewIndexer Mutation Manager Init Error", res)
+		return nil, res
+	}
+
+	//Start KV Sender
+	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, numVbuckets)
+	if res.GetMsgType() != MSG_SUCCESS {
+		common.Errorf("Indexer::NewIndexer KVSender Init Error", res)
+		return nil, res
+	}
+
+	//Start Timekeeper
+	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh)
+	if res.GetMsgType() != MSG_SUCCESS {
+		common.Errorf("Indexer::NewIndexer Timekeeper Init Error", res)
+		return nil, res
+	}
+
+	//Start Scan Coordinator
+	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh)
+	if res.GetMsgType() != MSG_SUCCESS {
+		common.Errorf("Indexer::NewIndexer Scan Coordinator Init Error", res)
+		return nil, res
+	}
+
 	//read persisted indexer state
-	if err := idx.initFromPersistedState(); err != nil {
+	if err := idx.bootstrap(); err != nil {
 		//log error and exit
+	}
+
+	//Start CbqBridge
+	idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh, idx.indexInstMap)
+	if res.GetMsgType() != MSG_SUCCESS {
+		common.Errorf("Indexer::NewIndexer CbqBridge Init Error", res)
+		return nil, res
 	}
 
 	//Register with Index Coordinator
@@ -151,56 +190,10 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 		//log error and exit
 	}
 
-	//Start Storage Manager
-	idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh)
-	if res.GetMsgType() != MSG_SUCCESS {
-		common.Errorf("Indexer::NewIndexer Storage Manager Init Error", res)
-		return nil, res
-	}
-
-	//Recover Persisted Snapshots
-	idx.recoverPersistedSnapshots()
-
-	//Start Timekeeper
-	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh)
-	if res.GetMsgType() != MSG_SUCCESS {
-		common.Errorf("Indexer::NewIndexer Timekeeper Init Error", res)
-		return nil, res
-	}
-
-	//Start KV Sender
-	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, numVbuckets)
-	if res.GetMsgType() != MSG_SUCCESS {
-		common.Errorf("Indexer::NewIndexer KVSender Init Error", res)
-		return nil, res
-	}
-
 	//Start Admin port listener
 	idx.adminMgr, res = NewAdminManager(idx.adminMgrCmdCh, idx.adminRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
 		common.Errorf("Indexer::NewIndexer Admin Manager Init Error", res)
-		return nil, res
-	}
-
-	//Start Mutation Manager
-	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh,
-		numVbuckets)
-	if res.GetMsgType() != MSG_SUCCESS {
-		common.Errorf("Indexer::NewIndexer Mutation Manager Init Error", res)
-		return nil, res
-	}
-
-	//Start Scan Coordinator
-	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh)
-	if res.GetMsgType() != MSG_SUCCESS {
-		common.Errorf("Indexer::NewIndexer Scan Coordinator Init Error", res)
-		return nil, res
-	}
-
-	//Start CbqBridge
-	idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh)
-	if res.GetMsgType() != MSG_SUCCESS {
-		common.Errorf("Indexer::NewIndexer CbqBridge Init Error", res)
 		return nil, res
 	}
 
@@ -220,13 +213,6 @@ func (idx *indexer) registerWithCoordinator() error {
 
 	//if there is no IndexerId, send an empty one. Coordinator will assign
 	//a new IndexerId in that case and treat this as a fresh node.
-	return nil
-
-}
-
-func (idx *indexer) initFromPersistedState() error {
-
-	//read indexer state and local state context
 	return nil
 
 }
@@ -490,8 +476,8 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	//allocate partition/slice
 	var partnInstMap PartitionInstMap
-	var ok bool
-	if partnInstMap, ok = idx.initPartnInstance(indexInst, respCh); !ok {
+	var err error
+	if partnInstMap, err = idx.initPartnInstance(indexInst, respCh); err != nil {
 		return
 	}
 
@@ -907,7 +893,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 }
 
 func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
-	respCh MsgChannel) (PartitionInstMap, bool) {
+	respCh MsgChannel) (PartitionInstMap, error) {
 
 	//initialize partitionInstMap for this index
 	partnInstMap := make(PartitionInstMap)
@@ -942,12 +928,12 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 						severity: FATAL,
 						cause:    errors.New("Indexer Internal Error"),
 						category: INDEXER}}
-				return nil, false
+				return nil, err
 			}
 		}
 	}
 
-	return partnInstMap, true
+	return partnInstMap, nil
 }
 
 func (idx *indexer) updateWorkerIndexMap(msgUpdateIndexInstMap Message,
@@ -1748,4 +1734,260 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 		}
 	}
 	return false
+}
+
+func (idx *indexer) bootstrap() error {
+
+	//recover indexes from local metadata
+	if err := idx.initFromPersistedState(); err != nil {
+		return err
+	}
+
+	idx.recoverSnapshots()
+
+	//Start Storage Manager
+	var res Message
+	idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh, idx.indexPartnMap)
+	if res.GetMsgType() == MSG_ERROR {
+		err := res.(*MsgError).GetError()
+		common.Errorf("Indexer::NewIndexer Storage Manager Init Error %v", err)
+		return err.cause
+	}
+
+	//if there are no indexes, return from here
+	if len(idx.indexInstMap) == 0 {
+		return nil
+	}
+	//send updated maps
+	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+
+	//update index map in storage manager
+	idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.storageMgrCmdCh,
+		"StorageMgr", nil)
+
+	//update index map in mutation manager
+	idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.mutMgrCmdCh,
+		"MutationMgr", nil)
+
+	//update index map in scan coordinator
+	idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.scanCoordCmdCh,
+		"ScanCoordinator", nil)
+
+	//close any old streams with projector
+	idx.closeAllStreams()
+
+	idx.startStreams()
+
+	return nil
+
+}
+
+func (idx *indexer) initFromPersistedState() error {
+
+	var dbfile *forestdb.File
+	var meta *forestdb.KVStore
+	var err error
+
+	//read indexer state and local state context
+	config := forestdb.DefaultConfig()
+
+	if dbfile, err = forestdb.Open("meta", config); err != nil {
+		return err
+	}
+	defer dbfile.Close()
+
+	kvconfig := forestdb.DefaultKVStoreConfig()
+	// Make use of default kvstore provided by forestdb
+	if meta, err = dbfile.OpenKVStore("default", kvconfig); err != nil {
+		return err
+	}
+
+	defer meta.Close()
+
+	//read the instance map
+	var instBytes []byte
+	instBytes, err = meta.GetKV([]byte(INST_MAP_KEY_NAME))
+
+	//forestdb reports get in a non-existent key as an
+	//error, skip that
+	if err != nil && err.Error() != "key not found" {
+		return err
+	}
+
+	//if there is no instance map available, proceed with
+	//normal init
+	if len(instBytes) == 0 {
+		return nil
+	}
+
+	decBuf := bytes.NewBuffer(instBytes)
+	dec := gob.NewDecoder(decBuf)
+	err = dec.Decode(&idx.indexInstMap)
+
+	if err != nil {
+		common.Errorf("Indexer::initFromPersistedState Decode Error %v", err)
+		return err
+	}
+
+	common.Debugf("Indexer::initFromPersistedState Recovered IndexInstMap %v", idx.indexInstMap)
+
+	for _, inst := range idx.indexInstMap {
+
+		newpc := common.NewKeyPartitionContainer()
+
+		//Add one partition for now
+		partnId := common.PartitionId(0)
+		endpt := []common.Endpoint{INDEXER_MAINT_DATA_PORT_ENDPOINT}
+		partnDefn := common.KeyPartitionDefn{Id: partnId,
+			Endpts: endpt}
+		newpc.AddPartition(partnId, partnDefn)
+
+		inst.Pc = newpc
+
+		//allocate partition/slice
+		var partnInstMap PartitionInstMap
+		var err error
+		if partnInstMap, err = idx.initPartnInstance(inst, nil); err != nil {
+			return err
+		}
+
+		idx.indexInstMap[inst.InstId] = inst
+		idx.indexPartnMap[inst.InstId] = partnInstMap
+
+	}
+
+	return nil
+
+}
+
+func (idx *indexer) recoverSnapshots() {
+
+	//for every index managed by this indexer
+	for idxInstId, partnMap := range idx.indexPartnMap {
+
+		//for all partitions managed by this indexer
+		for partnId, partnInst := range partnMap {
+			sc := partnInst.Sc
+
+			//recover snapshot for slice
+			for _, slice := range sc.GetAllSlices() {
+
+				snapContainer := slice.GetSnapshotContainer()
+
+				//TODO right now we recover the last snapshot, all
+				//snapshots need to be recovered
+				if lastSnapshot, err := slice.Snapshot(); err == nil {
+					lastSnapshot.Open()
+					snapContainer.Add(lastSnapshot)
+					common.Debugf("StorageMgr::recoverSnapshots \n\tAdded New Snapshot Index: %v "+
+						"PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
+
+				} else {
+					common.Errorf("StorageMgr::recoverSnapshots \n\tError Recovering Snapshot "+
+						"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
+						slice.Id(), err)
+				}
+			}
+		}
+	}
+}
+
+func (idx *indexer) closeAllStreams() {
+
+	var bucket string
+	for _, inst := range idx.indexInstMap {
+		bucket = inst.Defn.Bucket
+		break
+	}
+
+	for i := 0; i < int(common.MAX_STREAMS); i++ {
+
+		cmd := &MsgStreamUpdate{mType: CLOSE_STREAM,
+			streamId: common.StreamId(i),
+			bucket:   bucket,
+		}
+
+		//send stream update to kv_sender
+		if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", nil); !ok {
+			//it is ok for this message to fail as projector might have failed and this topic
+			//got closed automatically
+		}
+	}
+}
+
+func (idx *indexer) startStreams() {
+
+	restartTs := idx.makeRestartTs()
+
+	var indexList []common.IndexInst
+
+	for _, inst := range idx.indexInstMap {
+		indexList = append(indexList, inst)
+	}
+
+	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
+		streamId:  common.MAINT_STREAM,
+		indexList: indexList,
+		respCh:    nil,
+		restartTs: restartTs}
+
+	//send stream update to timekeeper
+	idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", nil)
+
+	//send stream update to mutation manager
+	idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", nil)
+
+	//send stream update to kv sender
+	idx.kvSenderCmdCh <- cmd
+	if resp, ok := <-idx.kvSenderCmdCh; ok {
+
+		switch resp.GetMsgType() {
+
+		case INDEXER_ROLLBACK:
+			common.Errorf("Indexer::startStream \n\tUnexpected Rollback from "+
+				"Projector during Initial Stream Request %v", resp)
+
+		case MSG_SUCCESS:
+			//nothing to do
+
+		default:
+			common.Errorf("Indexer::startStream - Error from Projector %v", resp)
+
+		}
+	} else {
+		common.Errorf("Indexer::startStream - Error communicating with KVSender "+
+			"processing Msg %v. Aborted.", resp)
+	}
+
+}
+
+func (idx *indexer) makeRestartTs() map[string]*common.TsVbuuid {
+
+	restartTs := make(map[string]*common.TsVbuuid)
+
+	for idxInstId, partnMap := range idx.indexPartnMap {
+		idxInst := idx.indexInstMap[idxInstId]
+
+		//there is only one partition for now
+		partnInst := partnMap[0]
+		sc := partnInst.Sc
+
+		//there is only one slice for now
+		slice := sc.GetSliceById(0)
+
+		ts := slice.Timestamp()
+
+		if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
+			if !ts.AsRecent(oldTs) {
+				restartTs[idxInst.Defn.Bucket] = ts
+			}
+		} else {
+			restartTs[idxInst.Defn.Bucket] = ts
+		}
+
+	}
+
+	return restartTs
+
 }
