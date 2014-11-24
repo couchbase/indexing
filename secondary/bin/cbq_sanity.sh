@@ -18,7 +18,9 @@ run_query 'DROP INDEX default:`beer-sample`.myindex'    'grep "error\|cause\|suc
 run_query 'CREATE PRIMARY INDEX ON default:default USING LSM'       'grep "error\|cause\|success" -i'
 run_query 'CREATE PRIMARY INDEX ON default:`beer-sample` USING LSM' 'grep "error\|cause\|success" -i'
 
-sleep 10
+SLEEP=10
+echo "Sleeping for $SLEEP seconds ..."
+sleep $SLEEP
 
 # query
 run_query 'SELECT \* FROM system:indexes'                             'cat'
