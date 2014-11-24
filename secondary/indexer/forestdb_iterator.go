@@ -35,7 +35,7 @@ func (f *ForestDBIterator) SeekFirst() {
 		f.iter = nil
 	}
 	var err error
-	f.iter, err = f.db.IteratorInit([]byte{}, nil, forestdb.ITR_NONE)
+	f.iter, err = f.db.IteratorInit([]byte{}, nil, forestdb.ITR_NONE|forestdb.ITR_NO_DELETES)
 	if err != nil {
 		f.valid = false
 		return
@@ -50,7 +50,7 @@ func (f *ForestDBIterator) Seek(key []byte) {
 		f.iter = nil
 	}
 	var err error
-	f.iter, err = f.db.IteratorInit(key, nil, forestdb.ITR_NONE)
+	f.iter, err = f.db.IteratorInit(key, nil, forestdb.ITR_NONE|forestdb.ITR_NO_DELETES)
 	if err != nil {
 		f.valid = false
 		return
