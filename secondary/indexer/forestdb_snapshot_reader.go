@@ -11,7 +11,12 @@ package indexer
 
 import (
 	"bytes"
+	"errors"
 	"github.com/couchbase/indexing/secondary/common"
+)
+
+var (
+	ErrUnsupportedInclusion = errors.New("Unsupported range inclusion option")
 )
 
 //Counter interface
@@ -58,7 +63,9 @@ func (s *fdbSnapshot) KeySet(stopch StopChannel) (chan Key, chan error) {
 	cherr := make(chan error)
 
 	nilKey, _ := NewKeyFromEncodedBytes(nil)
-	go s.GetKeySetForKeyRange(nilKey, nilKey, Both, chkey, cherr, stopch)
+	// TODO: Change incl to Both when incl is supported
+	incl := Low
+	go s.GetKeySetForKeyRange(nilKey, nilKey, incl, chkey, cherr, stopch)
 	return chkey, cherr
 }
 
@@ -103,6 +110,11 @@ func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 
 	common.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
 		low.String(), high.String())
+
+	if inclusion != Low {
+		cherr <- ErrUnsupportedInclusion
+		return
+	}
 
 	it := newForestDBIterator(s.main)
 	defer it.Close()
