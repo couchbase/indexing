@@ -400,7 +400,9 @@ loop:
 			}
 
 		case <-timeout:
-			c.Debugf(ctrlMsg, feed.logPrefix, len(feed.backch))
+			if len(feed.backch) > 0 {
+				c.Debugf(ctrlMsg, feed.logPrefix, len(feed.backch))
+			}
 		}
 	}
 }
