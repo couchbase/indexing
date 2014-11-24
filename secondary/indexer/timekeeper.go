@@ -1271,7 +1271,7 @@ func (tk *timekeeper) incrSyncCount(streamId common.StreamId, bucket string) {
 			"Stream: %v. SyncCount: %v.", bucket, streamId, syncCount)
 		//update only if its less than trigger count, otherwise it makes no
 		//difference. On long running systems, syncCount may overflow otherwise
-		if syncCount <= SYNC_COUNT_TS_TRIGGER {
+		if syncCount <= uint64(SYNC_COUNT_TS_TRIGGER*NUM_VBUCKETS) {
 			bucketSyncCountMap[bucket] = syncCount
 		}
 
@@ -1295,7 +1295,7 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	bucketSyncCountMap := tk.streamBucketSyncCountMap[streamId]
 
 	//new timestamp can be generated if all stream begins have been received
-	if bucketSyncCountMap[bucket] >= SYNC_COUNT_TS_TRIGGER &&
+	if bucketSyncCountMap[bucket] >= uint64(SYNC_COUNT_TS_TRIGGER*NUM_VBUCKETS) &&
 		bucketNewTsReqd[bucket] == true &&
 		tk.allStreamBeginsReceived(streamId, bucket) == true {
 

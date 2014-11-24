@@ -72,9 +72,9 @@ const DEFAULT_NUM_STREAM_READER_WORKERS = 8
 //up mutations before processing
 const MAX_STREAM_READER_WORKER_BUFFER = 1000
 
-//Number of Sync messages after which Timekeeper
-//triggers a new Stability Timestamp
-const SYNC_COUNT_TS_TRIGGER = 8 * 2
+//Number of Sync messages from each vbucket after
+//which Timekeeper triggers a new Stability Timestamp
+const SYNC_COUNT_TS_TRIGGER uint16 = 2
 
 //Max number of snapshot to be retained per index.
 //Older snapshots are deleted.
