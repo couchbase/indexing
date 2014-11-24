@@ -1138,21 +1138,6 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		}
 	}
 
-	//For MAINT_STREAM, only need to notify Timekeeper to update its maps
-	if streamId == common.MAINT_STREAM {
-		cmd := &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
-			streamId:  common.MAINT_STREAM,
-			indexList: indexList}
-
-		//send stream update to timekeeper
-		if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
-			return
-		}
-	}
-
-	//For INIT_STREAM, nothing needs to be done. Once Catchup gets done,
-	//stream update will happen.
-
 	//update the IndexInstMap
 	for _, index := range indexList {
 		idx.indexInstMap[index.InstId] = index

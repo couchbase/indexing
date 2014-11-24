@@ -43,6 +43,8 @@ type timekeeper struct {
 	streamBucketStreamBeginMap map[common.StreamId]BucketStreamBeginMap
 	streamState                map[common.StreamId]StreamState
 
+	streamBucketIndexCountMap map[common.StreamId]BucketIndexCountMap
+
 	//map of indexInstId to its Initial Build Info
 	indexBuildInfo map[common.IndexInstId]*InitialBuildInfo
 }
@@ -94,6 +96,7 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel) (
 		streamBucketDrainEnabledMap:      make(map[common.StreamId]BucketDrainEnabledMap),
 		streamBucketStreamBeginMap:       make(map[common.StreamId]BucketStreamBeginMap),
 		streamState:                      make(map[common.StreamId]StreamState),
+		streamBucketIndexCountMap:        make(map[common.StreamId]BucketIndexCountMap),
 		indexBuildInfo:                   make(map[common.IndexInstId]*InitialBuildInfo),
 	}
 
@@ -241,6 +244,9 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 		bucketStreamBeginMap := make(BucketStreamBeginMap)
 		tk.streamBucketStreamBeginMap[streamId] = bucketStreamBeginMap
 
+		bucketIndexCountMap := make(BucketIndexCountMap)
+		tk.streamBucketIndexCountMap[streamId] = bucketIndexCountMap
+
 		common.Debugf("Timekeeper::handleStreamOpen \n\t Stream %v "+
 			"State Changed to ACTIVE", streamId)
 		tk.streamState[streamId] = STREAM_ACTIVE
@@ -273,6 +279,9 @@ func (tk *timekeeper) handleStreamClose(cmd Message) {
 		}
 	} else {
 
+		//delete indexes from stream
+		tk.removeIndexFromStream(cmd)
+
 		//delete this stream from internal maps
 		delete(tk.streamBucketHWTMap, streamId)
 		delete(tk.streamBucketSyncCountMap, streamId)
@@ -285,9 +294,8 @@ func (tk *timekeeper) handleStreamClose(cmd Message) {
 		delete(tk.streamBucketDrainEnabledMap, streamId)
 		delete(tk.streamBucketStreamBeginMap, streamId)
 		delete(tk.streamState, streamId)
+		delete(tk.streamBucketIndexCountMap, streamId)
 
-		//delete indexes from stream
-		tk.removeIndexFromStream(cmd)
 	}
 
 	tk.supvCmdch <- &MsgSuccess{}
@@ -310,6 +318,7 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 
 	//If the index is in INITIAL state, store it in initialbuild map
 	for _, idx := range indexInstList {
+		tk.streamBucketIndexCountMap[idx.Stream][idx.Defn.Bucket] += 1
 		if idx.State == common.INDEX_STATE_INITIAL {
 			tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
 				indexInst: idx,
@@ -338,6 +347,16 @@ func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 		if _, ok := tk.indexBuildInfo[idx.InstId]; ok {
 			delete(tk.indexBuildInfo, idx.InstId)
 		}
+		if tk.streamBucketIndexCountMap[idx.Stream][idx.Defn.Bucket] == 0 {
+			common.Fatalf("Timekeeper::removeIndexFromStream Invalid Internal "+
+				"State Detected. Index Count Underflow. Stream %s. Bucket %s.", idx.State,
+				idx.Defn.Bucket)
+		} else {
+			tk.streamBucketIndexCountMap[idx.Stream][idx.Defn.Bucket] -= 1
+			if tk.streamBucketIndexCountMap[idx.Stream][idx.Defn.Bucket] == 0 {
+				tk.cleanupBucketFromStream(idx.Stream, idx.Defn.Bucket)
+			}
+		}
 	}
 }
 
@@ -352,6 +371,14 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	if tk.checkStreamValid(streamId) == false {
 		common.Warnf("Timekeeper::handleSync \n\tReceived Sync for "+
 			"Invalid Stream %v. Ignored.", streamId)
+		return
+	}
+
+	//if there are no indexes for this bucket and stream, ignore
+	if c, ok := tk.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
+		common.Tracef("Timekeeper::handleSync \n\tIgnore Sync for StreamId %v "+
+			"Bucket %v. IndexCount %v. ", streamId, tk.streamState[streamId], c)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -390,10 +417,19 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 	bucketLastFlushedTsMap := tk.streamBucketLastFlushedTsMap[streamId]
 	bucketFlushInProgressTsMap := tk.streamBucketFlushInProgressTsMap[streamId]
 
-	//store the last flushed TS
-	bucketLastFlushedTsMap[bucket] = bucketFlushInProgressTsMap[bucket]
-	//update internal map to reflect flush is done
-	bucketFlushInProgressTsMap[bucket] = nil
+	if _, ok := bucketFlushInProgressTsMap[bucket]; ok {
+		//store the last flushed TS
+		bucketLastFlushedTsMap[bucket] = bucketFlushInProgressTsMap[bucket]
+		//update internal map to reflect flush is done
+		bucketFlushInProgressTsMap[bucket] = nil
+	} else {
+		//this bucket is already gone from this stream, may be because
+		//the index were dropped. Log and ignore.
+		common.Debugf("Timekeeper::handleFlushDone Ignore Flush Done for Stream %v "+
+			"Bucket %v. Bucket Info Not Found", streamId, bucket)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
 
 	switch streamId {
 
@@ -577,9 +613,18 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 
 	case STREAM_PREPARE_RECOVERY:
 		bucketFlushInProgressTsMap := tk.streamBucketFlushInProgressTsMap[streamId]
-		//if there is flush in progress, mark it as done
-		if bucketFlushInProgressTsMap[bucket] != nil {
-			bucketFlushInProgressTsMap[bucket] = nil
+		if _, ok := bucketFlushInProgressTsMap[bucket]; ok {
+			//if there is flush in progress, mark it as done
+			if bucketFlushInProgressTsMap[bucket] != nil {
+				bucketFlushInProgressTsMap[bucket] = nil
+			}
+		} else {
+			//this bucket is already gone from this stream, may be because
+			//the index were dropped. Log and ignore.
+			common.Debugf("Timekeeper::handleFlushDone Ignore Flush Abort for Stream %v "+
+				"Bucket %v. Bucket Info Not Found", streamId, bucket)
+			tk.supvCmdch <- &MsgSuccess{}
+			return
 		}
 
 		//update abort status and initiate recovery
@@ -675,6 +720,14 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 		return
 	}
 
+	//if there are no indexes for this bucket and stream, ignore
+	if c, ok := tk.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
+		common.Warnf("Timekeeper::handleSnapshotMarker \n\tIgnore Snapshot for StreamId %v "+
+			"Bucket %v. IndexCount %v. ", streamId, tk.streamState[streamId], c)
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
 	if tk.streamState[streamId] == STREAM_PREPARE_RECOVERY ||
 		tk.streamState[streamId] == STREAM_INACTIVE {
 		common.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker "+
@@ -738,6 +791,14 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 	if tk.checkStreamValid(streamId) == false {
 		common.Warnf("Timekeeper::handleStreamBegin \n\tReceived Stream Begin for "+
 			"Invalid Stream %v. Ignored.", streamId)
+		return
+	}
+
+	//if there are no indexes for this bucket and stream, ignore
+	if c, ok := tk.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
+		common.Warnf("Timekeeper::handleStreamBegin \n\tIgnore StreamBegin for StreamId %v "+
+			"Bucket %v. IndexCount %v. ", streamId, tk.streamState[streamId], c)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -852,6 +913,14 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 	if tk.checkStreamValid(streamId) == false {
 		common.Warnf("Timekeeper::handleStreamEnd \n\tReceived Stream End for "+
 			"Invalid Stream %v. Ignored.", streamId)
+		return
+	}
+
+	//if there are no indexes for this bucket and stream, ignore
+	if c, ok := tk.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
+		common.Warnf("Timekeeper::handleStreamEnd \n\tIgnore StreamEnd for StreamId %v "+
+			"Bucket %v. IndexCount %v. ", streamId, tk.streamState[streamId], c)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -1105,6 +1174,11 @@ func (tk *timekeeper) checkInitialBuildDone(cmd Message) {
 				//is for INIT_STREAM
 				if streamId == common.INIT_STREAM {
 					tk.changeIndexStateForBucket(bucket, common.INDEX_STATE_CATCHUP)
+				} else {
+					//cleanup the index as build is done
+					if _, ok := tk.indexBuildInfo[idx.InstId]; ok {
+						delete(tk.indexBuildInfo, idx.InstId)
+					}
 				}
 
 				common.Debugf("Timekeeper::checkInitialBuildDone \n\tInitial Build Done Index: %v "+
@@ -1758,5 +1832,22 @@ func (tk *timekeeper) handleStreamCleanup(cmd Message) {
 	tk.streamState[streamId] = STREAM_INACTIVE
 
 	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (tk *timekeeper) cleanupBucketFromStream(streamId common.StreamId,
+	bucket string) {
+
+	delete(tk.streamBucketHWTMap[streamId], bucket)
+	delete(tk.streamBucketSyncCountMap[streamId], bucket)
+	delete(tk.streamBucketNewTsReqdMap[streamId], bucket)
+	delete(tk.streamBucketTsListMap[streamId], bucket)
+	delete(tk.streamBucketFlushInProgressTsMap[streamId], bucket)
+	delete(tk.streamBucketAbortInProgressMap[streamId], bucket)
+	delete(tk.streamBucketLastFlushedTsMap[streamId], bucket)
+	delete(tk.streamBucketFlushEnabledMap[streamId], bucket)
+	delete(tk.streamBucketDrainEnabledMap[streamId], bucket)
+	delete(tk.streamBucketStreamBeginMap[streamId], bucket)
+	delete(tk.streamBucketIndexCountMap[streamId], bucket)
 
 }
