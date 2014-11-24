@@ -241,21 +241,21 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 					}
 				}
 			}
-		}
 
-		// Update index-timestamp map whenever a snapshot is created for an index
-		// Also notify any waiters for snapshots creation
-		s.tsMap[idxInstId] = tsVbuuid
-		var newWaiters []*snapshotWaiter
-		for _, w := range s.waitersMap[idxInstId] {
-			if w.ts == nil || tsVbuuid.AsRecent(w.ts) {
-				w.Notify(tsVbuuid)
-			} else {
-				newWaiters = append(newWaiters, w)
+			// Update index-timestamp map whenever a snapshot is created for an index
+			// Also notify any waiters for snapshots creation
+			s.tsMap[idxInstId] = tsVbuuid
+			var newWaiters []*snapshotWaiter
+			for _, w := range s.waitersMap[idxInstId] {
+				if w.ts == nil || tsVbuuid.AsRecent(w.ts) {
+					w.Notify(tsVbuuid)
+				} else {
+					newWaiters = append(newWaiters, w)
+				}
 			}
-		}
 
-		s.waitersMap[idxInstId] = newWaiters
+			s.waitersMap[idxInstId] = newWaiters
+		}
 	}
 
 	s.supvCmdch <- &MsgSuccess{}
