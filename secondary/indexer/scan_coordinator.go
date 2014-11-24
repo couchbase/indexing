@@ -32,6 +32,7 @@ var (
 	ErrNotMyIndex         = errors.New("Not my index")
 	ErrIndexNotReady      = errors.New("Index not ready")
 	ErrInternal           = errors.New("Internal server error occured")
+	ErrSnapNotAvailable   = errors.New("No snapshot available for scan")
 )
 
 type scanType string
@@ -790,8 +791,9 @@ func (s *scanCoordinator) scanLocalSlice(sd *scanDescriptor,
 	if snap != nil {
 		s.executeLocalScan(sd, snap, stopch)
 	} else {
-		common.Infof("%v: SCAN_ID: %v Slice: %v Error (No snapshot available for scan)",
-			s.logPrefix, sd.scanId, slice.Id())
+		common.Infof("%v: SCAN_ID: %v Slice: %v Error (%v)",
+			s.logPrefix, sd.scanId, slice.Id(), ErrSnapNotAvailable)
+		sd.respch <- ErrSnapNotAvailable
 	}
 }
 
