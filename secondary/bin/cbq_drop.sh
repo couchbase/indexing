@@ -28,3 +28,11 @@ run_query 'DROP INDEX default:`beer-sample`.idx2'       'grep "error\|cause\|suc
 # create
 run_query 'CREATE INDEX idx1 ON default:default(age) USING LSM'       'grep "error\|cause\|success" -i'
 run_query 'CREATE INDEX idx2 ON default:`beer-sample`(abv) USING LSM' 'grep "error\|cause\|success" -i'
+
+# drop
+run_query 'DROP INDEX default:default.idx1'             'grep "error\|cause\|success" -i'
+run_query 'DROP INDEX default:`beer-sample`.idx2'       'grep "error\|cause\|success" -i'
+
+# create
+run_query 'CREATE INDEX idx1 ON default:default(age) USING LSM'       'grep "error\|cause\|success" -i'
+run_query 'CREATE INDEX idx2 ON default:`beer-sample`(abv) USING LSM' 'grep "error\|cause\|success" -i'

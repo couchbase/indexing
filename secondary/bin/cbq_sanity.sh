@@ -28,12 +28,3 @@ run_query 'SELECT \* FROM default:`beer-sample` LIMIT 2'              'cat'
 run_query 'SELECT count(*) FROM default:`beer-sample` WHERE abv > 10' 'cat'
 run_query 'SELECT \* FROM default:default LIMIT 2'                    'cat'
 run_query 'SELECT count(*) FROM default:default WHERE age > 10'       'cat'
-
-#curl -X POST -H "Content-Type: text/plain" --data 'DROP INDEX default:`beer-sample`.#primary;'
-#curl -X POST -H "Content-Type: text/plain" --data 'CREATE PRIMARY INDEX ON default:`beer-sample`;'
-#curl -X POST -H "Content-Type: text/plain" --data 'SELECT * FROM default:`beer-sample` LIMIT 2;'
-#curl -X POST -H "Content-Type: text/plain" --data 'SELECT count(*) FROM default:`beer-sample` WHERE abv > 10;'
-#
-#curl -X POST -H "Content-Type: text/plain" --data 'CREATE INDEX myindex ON default:`beer-sample`(age) USING LSM;'
-#curl -X POST -H "Content-Type: text/plain" --data 'DROP INDEX default:`beer-sample`.myindex;'
-#curl -X POST -H "Content-Type: text/plain" --data 'CREATE INDEX myindex ON default:`beer-sample`(abv) USING LSM;'
