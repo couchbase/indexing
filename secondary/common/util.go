@@ -6,7 +6,7 @@ import "io"
 import "net"
 import "os"
 
-import "github.com/couchbaselabs/go-couchbase"
+import "github.com/couchbase/indexing/secondary/dcp"
 
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the
 // order of `strs` in the result.

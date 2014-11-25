@@ -3,7 +3,7 @@
 
 package projector
 
-import mc "github.com/couchbase/gomemcached/client"
+import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
 
 // IMPORTANT: concurrent access to be expected for Engine object.

@@ -1,6 +1,6 @@
 package common
 
-import mc "github.com/couchbase/gomemcached/client"
+import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 
 // Router definition for each instance (aka engine),
 // where an instance might refer to an index or similar entities.

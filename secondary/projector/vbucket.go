@@ -19,8 +19,8 @@ import "fmt"
 import "time"
 import "runtime/debug"
 
-import mcd "github.com/couchbase/gomemcached"
-import mc "github.com/couchbase/gomemcached/client"
+import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
 
 // VbucketRoutine is immutable structure defined for each vbucket.

@@ -1,7 +1,7 @@
 package common
 
 import "github.com/couchbase/indexing/secondary/collatejson"
-import mc "github.com/couchbase/gomemcached/client"
+import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import qexpr "github.com/couchbaselabs/query/expression"
 import qparser "github.com/couchbaselabs/query/expression/parser"
 import qvalue "github.com/couchbaselabs/query/value"

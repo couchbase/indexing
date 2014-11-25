@@ -10,12 +10,13 @@
 package manager
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
-	projector "github.com/couchbase/indexing/secondary/projector/client"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	couchbase "github.com/couchbaselabs/go-couchbase"
 	"net"
 	"strconv"
+
+	"github.com/couchbase/indexing/secondary/common"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	projector "github.com/couchbase/indexing/secondary/projector/client"
+	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -73,7 +74,7 @@ func (p *ProjectorAdmin) OpenStreamForBucket(streamId common.StreamId,
 
 			// TODO: We may get error saying that the stream has already been opened.  Need to
 			// figure out the error code from projector.
-			
+
 			// Encounter an error.  For those projectors that have already been opened, let's leave it open.
 			// Eventually those projectors will fill up the buffer and terminate the connection by itself.
 			common.Errorf("streamProxy::OpenStreamRequestForBucket(): Error encountered when sending adminport request. Error=%v",
@@ -156,28 +157,28 @@ func (p *ProjectorAdmin) RepairStreamForEndpoint(streamId common.StreamId,
 /*
 func CloseStreamFor(streamId StreamId) error {
 
-	common.Infof("StreamAdmin::CloseStream(): streamId = %d, bucket = %s", streamId.String(), bucket)
+    common.Infof("StreamAdmin::CloseStream(): streamId = %d, bucket = %s", streamId.String(), bucket)
 
-	// get the vbmap
-	vbMap, err := getVbMap(bucket)
-	if err != nil {
-		return err
-	}
+    // get the vbmap
+    vbMap, err := getVbMap(bucket)
+    if err != nil {
+        return err
+    }
 
-	// For all the nodes in vbmap, start a stream
-	for server, vbnos := range vbMap {
+    // For all the nodes in vbmap, start a stream
+    for server, vbnos := range vbMap {
 
-		//get projector client for the particular node
-		client := getClientForNode(server)
+        //get projector client for the particular node
+        client := getClientForNode(server)
 
-		topic := getTopicForStreamId(streamId)
+        topic := getTopicForStreamId(streamId)
 
-		if err := client.ShutdownTopic(topic); err != nil {
-			return err
-		}
-	}
+        if err := client.ShutdownTopic(topic); err != nil {
+            return err
+        }
+    }
 
-	return nil
+    return nil
 }
 */
 

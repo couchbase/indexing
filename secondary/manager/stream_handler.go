@@ -49,8 +49,8 @@ func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
 	offset int) {
 
 	common.Debugf("mgrMutHandler.StreamEnd")
-	
-	// A stream has terminated.  Need to restart. 
+
+	// A stream has terminated.  Need to restart.
 }
 
 func (m *mgrMutHandler) HandleUpsert(streamId common.StreamId,

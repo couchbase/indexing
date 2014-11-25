@@ -4,7 +4,7 @@ import "sort"
 import "errors"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbaselabs/go-couchbase"
+import "github.com/couchbase/indexing/secondary/dcp"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
 // *****

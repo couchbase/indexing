@@ -3,9 +3,9 @@ package protobuf
 import (
 	"fmt"
 
-	mcd "github.com/couchbase/gomemcached"
-	mc "github.com/couchbase/gomemcached/client"
 	c "github.com/couchbase/indexing/secondary/common"
+	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 )
 
 type Partition interface {

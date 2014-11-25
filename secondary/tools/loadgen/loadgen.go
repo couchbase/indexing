@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/couchbaselabs/go-couchbase"
+	"github.com/couchbase/indexing/secondary/dcp"
 	"github.com/prataprc/monster"
 )
 

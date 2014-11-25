@@ -10,12 +10,13 @@
 package manager
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/dataport"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	couchbase "github.com/couchbaselabs/go-couchbase"
 	"net"
 	"sync"
+
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/dataport"
+	couchbase "github.com/couchbase/indexing/secondary/dcp"
+	"github.com/couchbase/indexing/secondary/protobuf"
 )
 
 ///////////////////////////////////////////////////////
@@ -23,15 +24,15 @@ import (
 ///////////////////////////////////////////////////////
 
 //
-// Callback function for handling mutation commands from the mutation source (projector). 
-//	Upsert         		- data command
-//	Deletion            - data command
-//	UpsertDeletion      - data command
-//	Sync                - control command
-//	DropData            - control command
-//	StreamBegin         - control command
-//	StreamEnd           - control command
-//	Snapshot            - control command
+// Callback function for handling mutation commands from the mutation source (projector).
+//  Upsert              - data command
+//  Deletion            - data command
+//  UpsertDeletion      - data command
+//  Sync                - control command
+//  DropData            - control command
+//  StreamBegin         - control command
+//  StreamEnd           - control command
+//  Snapshot            - control command
 //
 type MutationHandler interface {
 	HandleUpsert(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *protobuf.KeyVersions, offset int)
@@ -46,7 +47,7 @@ type MutationHandler interface {
 }
 
 //
-// Callback for handling stream administration for the remote mutation source (projector).   There are mutliple 
+// Callback for handling stream administration for the remote mutation source (projector).   There are mutliple
 // mutation sources per stream.   The StreamAdmin needs to encapsulate topology of the mutation sources.
 //
 type StreamAdmin interface {
@@ -57,7 +58,7 @@ type StreamAdmin interface {
 }
 
 //
-// StreamManager for managing stream for mutation consumer.  
+// StreamManager for managing stream for mutation consumer.
 //
 type StreamManager struct {
 	streams  map[common.StreamId]*Stream
@@ -74,7 +75,7 @@ type StreamManager struct {
 // 1) Incremental Stream for live mutation update.   This is primarily used for index maintenance.
 // 2) Init Stream for initial index build.   This is essentially a backfill stream.
 // 3) Catch-up Stream is a dedicated stream for each index node.  This is used when indexer is in recovery
-//		or being slow.  So catch-up stream allows independent flow control for the specific node.
+//      or being slow.  So catch-up stream allows independent flow control for the specific node.
 // A stream aggregates mutations across all buckets as well as all vbuckets.   All the KV nodes will send
 // the mutation through the stream.   The mutation itself (VbKeyVersions) has metadata to differentiate the
 // origination of the mutation (bucket, vbucket, vbuuid).
@@ -119,7 +120,7 @@ func NewStreamManager(indexMgr *IndexManager, handler MutationHandler, admin Str
 
 //
 // Close all the streams.  This will close the connection to the mutation source and subsequently,
-// each mutation source will clean up on their side. 
+// each mutation source will clean up on their side.
 //
 func (s *StreamManager) Close() {
 
@@ -179,7 +180,7 @@ func (s *StreamManager) StartStream(streamId common.StreamId, port string) error
 	if err != nil {
 		return err
 	}
-	
+
 	s.streams[streamId] = stream
 	return nil
 }
@@ -303,7 +304,7 @@ func (s *StreamManager) AddIndexToStream(streamId common.StreamId, bucket string
 		return NewError2(ERROR_STREAM_NOT_OPEN, STREAM)
 	}
 
-	// Get the index instances associated with the new index definition 
+	// Get the index instances associated with the new index definition
 	instances, err := GetIndexInstanceAsProtoMsg(s.indexMgr, bucket, indexId, port)
 	if err != nil {
 		return err
@@ -382,19 +383,19 @@ func (s *StreamManager) closeStreamNoLock(streamId common.StreamId) error {
 	stream, ok := s.streams[streamId]
 	if !ok || !stream.status {
 		// return no error if the stream already closed -- no-op
-		return nil 
+		return nil
 	}
 
-	// Stop the timer for all the bucket for this stream 
+	// Stop the timer for all the bucket for this stream
 	s.indexMgr.getTimer().stopForStream(streamId)
 
 	/*
-		if err := CloseStreamForBucket(streamId); err != nil {
-			return err
-		}
+	   if err := CloseStreamForBucket(streamId); err != nil {
+	       return err
+	   }
 	*/
 
-	// book keeping 
+	// book keeping
 	delete(s.streams, streamId)
 
 	return nil
@@ -433,7 +434,7 @@ func (s *Stream) start() (err error) {
 	// start dataport stream
 	if s.receiver, err = dataport.NewServer(s.hostStr, common.SystemConfig, s.mutch); err != nil {
 		common.Errorf("StreamManager: Error returned from dataport.NewServer = %s.", err.Error())
-		close(s.stopch)  
+		close(s.stopch)
 		return err
 	}
 	common.Debugf("Stream.run(): dataport server started on addr %s", s.hostStr)
@@ -454,14 +455,14 @@ func (s *Stream) run() {
 	for {
 		select {
 		case mut := <-s.mutch:
-		
+
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
 						common.Debugf("panic in Stream.run() : error ignored.  Error = %v\n", r)
 					}
-				}()	
-					
+				}()
+
 				switch d := mut.(type) {
 				case ([]*protobuf.VbKeyVersions):
 					common.Debugf("Stream.run(): recieve VbKeyVersion")
@@ -470,8 +471,8 @@ func (s *Stream) run() {
 					common.Debugf("Stream.run(): recieve ConnectionError")
 					s.handler.HandleConnectionError(s.id, d)
 				}
-			}()	
-		
+			}()
+
 		case <-s.stopch:
 			common.Debugf("Stream.run(): stop")
 			return

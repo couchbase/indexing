@@ -1,8 +1,8 @@
 package projector
 
-import mc "github.com/couchbase/gomemcached/client"
+import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import "github.com/couchbase/indexing/secondary/protobuf"
-import "github.com/couchbaselabs/go-couchbase"
+import "github.com/couchbase/indexing/secondary/dcp"
 
 // FakeBucket fot unit testing.
 type FakeBucket struct {

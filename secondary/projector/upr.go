@@ -5,10 +5,10 @@ package projector
 import "fmt"
 import "time"
 
-import mc "github.com/couchbase/gomemcached/client"
+import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/protobuf"
-import "github.com/couchbaselabs/go-couchbase"
+import "github.com/couchbase/indexing/secondary/dcp"
 
 // BucketAccess interface manage a subset of vbucket streams with mutiple KV
 // nodes. To be implemented by couchbase.Bucket type.
