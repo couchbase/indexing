@@ -331,7 +331,9 @@ func getClientForNode(server string) *projector.Client {
 	}
 
 	//create client for node's projectors
-	ap := projector.NewClient(HTTP_PREFIX+projAddr+"/adminport/", common.SystemConfig)
+	config := common.SystemConfig.SectionConfig("projector.client.", true)
+	maxvbs := common.SystemConfig["maxVbuckets"].Int()
+	ap := projector.NewClient(HTTP_PREFIX+projAddr+"/adminport/", maxvbs, config)
 	return ap
 }
 

@@ -75,7 +75,8 @@ func usage() {
 
 func main() {
 	argParse()
-	s, err := queryport.NewServer(options.server, serverCallb, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.indexer.", true)
+	s, err := queryport.NewServer(options.server, serverCallb, config)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -91,8 +92,8 @@ func main() {
 }
 
 func loopback() {
-	config := c.SystemConfig.Clone().SetValue("queryport.client.poolSize", 10)
-	config = config.SetValue("queryport.client.poolOverflow", options.par)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	config.SetValue("poolSize", 10).SetValue("poolOverflow", options.par)
 	client := queryport.NewClient(options.server, config)
 	quitch := make(chan int)
 	for i := 0; i < options.par; i++ {

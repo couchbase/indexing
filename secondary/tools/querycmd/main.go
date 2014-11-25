@@ -58,7 +58,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	client := queryport.NewClient(server, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client := queryport.NewClient(server, config)
 	if equal != "" {
 		keys = append(keys, []byte(equal))
 	}

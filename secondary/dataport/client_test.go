@@ -14,15 +14,19 @@ func TestClient(t *testing.T) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, c.SystemConfig, appch)
+	prefix := "projector.dataport.indexer."
+	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	daemon, err := NewServer(addr, maxvbuckets, config, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	maxconns := c.SystemConfig["projector.dataport.client.parConnections"].Int()
 	// start client and test number of connection.
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, err := NewClient(addr, flags, c.SystemConfig)
+	prefix = "projector.dataport.client."
+	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	maxconns := config["parConnections"].Int()
+	client, err := NewClient(addr, flags, maxvbuckets, config)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(client.conns) != maxconns {
@@ -50,14 +54,18 @@ func TestStreamBegin(t *testing.T) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, c.SystemConfig, appch)
+	prefix := "projector.dataport.indexer."
+	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	daemon, err := NewServer(addr, maxvbuckets, config, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// start client
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, _ := NewClient(addr, flags, c.SystemConfig)
+	prefix = "projector.dataport.client."
+	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	client, _ := NewClient(addr, flags, maxvbuckets, config)
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {
 		if err := client.SendVbmap(vbmaps[i]); err != nil {
@@ -99,14 +107,18 @@ func TestStreamEnd(t *testing.T) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, c.SystemConfig, appch)
+	prefix := "projector.dataport.indexer."
+	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	daemon, err := NewServer(addr, maxvbuckets, config, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// start client
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, _ := NewClient(addr, flags, c.SystemConfig)
+	prefix = "projector.dataport.client."
+	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	client, _ := NewClient(addr, flags, maxvbuckets, config)
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {
 		if err := client.SendVbmap(vbmaps[i]); err != nil {

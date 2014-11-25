@@ -28,26 +28,27 @@ type Projector struct {
 	clusterAddr string   // kv cluster's address to connect
 	adminport   string   // projector listens on this adminport
 	kvset       []string // set of kv-nodes to connect with
-	logPrefix   string
+	maxvbs      int
 	config      c.Config // full configuration information.
+	logPrefix   string
 }
 
 // NewProjector creates a news projector instance and
 // starts a corresponding adminport.
-func NewProjector(config c.Config) *Projector {
-	pconf := config.SectionConfig("projector.", true)
+func NewProjector(maxvbs int, config c.Config) *Projector {
 	p := &Projector{
-		name:        pconf["name"].String(),
-		clusterAddr: pconf["clusterAddr"].String(),
-		kvset:       pconf["kvAddrs"].Strings(),
-		adminport:   pconf["adminport.listenAddr"].String(),
+		name:        config["name"].String(),
+		clusterAddr: config["clusterAddr"].String(),
+		kvset:       config["kvAddrs"].Strings(),
+		adminport:   config["adminport.listenAddr"].String(),
 		topics:      make(map[string]*Feed),
+		maxvbs:      maxvbs,
+		config:      config,
 	}
 
 	p.logPrefix = fmt.Sprintf("[%s(%s)]", p.name, p.kvset)
-	p.config = config
 
-	apConfig := pconf.SectionConfig("adminport.", true)
+	apConfig := config.SectionConfig("adminport.", true)
 	apConfig = apConfig.SetValue("name", p.name+"-adminport")
 	reqch := make(chan ap.Request)
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
@@ -194,16 +195,17 @@ func (p *Projector) doMutationTopic(
 	c.Debugf("%v doMutationTopic()\n", p.logPrefix)
 	topic := request.GetTopic()
 
-	pconf := p.config.SectionConfig("projector.", true)
 	config, _ := c.NewConfig(map[string]interface{}{})
 	config.SetValue("name", p.adminport)
-	config.Set("maxVbuckets", p.config["maxVbuckets"])
-	config.Set("clusterAddr", pconf["clusterAddr"])
-	config.Set("kvAddrs", pconf["kvAddrs"])
-	config.Set("feedWaitStreamReqTimeout", pconf["feedWaitStreamReqTimeout"])
-	config.Set("feedWaitStreamEndTimeout", pconf["feedWaitStreamEndTimeout"])
-	config.Set("feedChanSize", pconf["feedChanSize"])
-	config.Set("routerEndpointFactory", pconf["routerEndpointFactory"])
+	config.SetValue("maxVbuckets", p.maxvbs)
+	config.Set("clusterAddr", p.config["clusterAddr"])
+	config.Set("kvAddrs", p.config["kvAddrs"])
+	config.Set("feedWaitStreamReqTimeout", p.config["feedWaitStreamReqTimeout"])
+	config.Set("feedWaitStreamEndTimeout", p.config["feedWaitStreamEndTimeout"])
+	config.Set("feedChanSize", p.config["feedChanSize"])
+	config.Set("mutationChanSize", p.config["mutationChanSize"])
+	config.Set("vbucketSyncTimeout", p.config["vbucketSyncTimeout"])
+	config.Set("routerEndpointFactory", p.config["routerEndpointFactory"])
 
 	var err error
 

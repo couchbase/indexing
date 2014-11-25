@@ -129,11 +129,11 @@ type Server struct {
 // NewServer creates a new dataport daemon.
 func NewServer(
 	laddr string,
+	maxvbs int,
 	config c.Config,
 	appch chan<- interface{}) (s *Server, err error) {
 
-	sconf := config.SectionConfig("projector.dataport.indexer.", true)
-	genChSize := sconf["genServerChanSize"].Int()
+	genChSize := config["genServerChanSize"].Int()
 
 	s = &Server{
 		laddr: laddr,
@@ -143,10 +143,10 @@ func NewServer(
 		finch: make(chan bool),
 		conns: make(map[string]*netConn),
 		// config parameters
-		maxVbuckets:  config["maxVbuckets"].Int(),
+		maxVbuckets:  maxvbs,
 		genChSize:    genChSize,
-		maxPayload:   sconf["maxPayload"].Int(),
-		readDeadline: time.Duration(sconf["tcpReadDeadline"].Int()),
+		maxPayload:   config["maxPayload"].Int(),
+		readDeadline: time.Duration(config["tcpReadDeadline"].Int()),
 	}
 	s.logPrefix = fmt.Sprintf("[dataport %q]", laddr)
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {

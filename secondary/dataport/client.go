@@ -69,15 +69,15 @@ type Client struct {
 // A vbucket is always binded to a connection and ensure that mutations within
 // a vbucket are serialized.
 func NewClient(
-	raddr string, flags transport.TransportFlag,
+	raddr string,
+	flags transport.TransportFlag,
+	maxvbs int,
 	config common.Config) (c *Client, err error) {
 
 	var conn net.Conn
 
-	econf := config.SectionConfig("projector.dataport.client.", true)
-
-	mutChanSize := econf["mutationChanSize"].Int()
-	parConns := econf["parConnections"].Int()
+	mutChanSize := config["mutationChanSize"].Int()
+	parConns := config["parConnections"].Int()
 	if parConns == 0 {
 		panic("fatal: cannot open dataport-client with zero connections")
 	}
@@ -90,11 +90,11 @@ func NewClient(
 		reqch:     make(chan []interface{}, mutChanSize),
 		finch:     make(chan bool),
 		// configuration parameters
-		maxVbuckets:   config["maxVbuckets"].Int(),
+		maxVbuckets:   maxvbs,
 		mutChanSize:   mutChanSize,
-		maxPayload:    econf["maxPayload"].Int(),
-		bufferSize:    econf["bufferSize"].Int(),
-		bufferTimeout: time.Duration(econf["bufferTimeout"].Int()),
+		maxPayload:    config["maxPayload"].Int(),
+		bufferSize:    config["bufferSize"].Int(),
+		bufferTimeout: time.Duration(config["bufferTimeout"].Int()),
 		logPrefix:     fmt.Sprintf("[DataportClient:%q]", raddr),
 	}
 	// open connections with remote

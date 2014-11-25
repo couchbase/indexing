@@ -44,8 +44,8 @@ func NewVbucketRoutine(
 	topic, bucket, kvaddr string,
 	vbno uint16, vbuuid, startSeqno uint64, config c.Config) *VbucketRoutine {
 
-	mutChanSize := config["projector.mutationChanSize"].Int()
-	syncTimeout := time.Duration(config["projector.vbucketSyncTimeout"].Int())
+	mutChanSize := config["mutationChanSize"].Int()
+	syncTimeout := time.Duration(config["vbucketSyncTimeout"].Int())
 
 	vr := &VbucketRoutine{
 		bucket:    bucket,

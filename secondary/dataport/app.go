@@ -28,6 +28,8 @@ func Application(
 	addr string, // data port address to listen for connections
 	stats int, // timeout to periodically display statistics
 	timeout int, // timeout to break out of this function
+	maxvbs int,
+	config c.Config,
 	callb func(string, interface{}) bool, // callback for mutations, messages
 ) {
 
@@ -41,7 +43,7 @@ func Application(
 	}
 
 	appch := make(chan interface{}, 10000)
-	_, err := NewServer(addr, c.SystemConfig, appch)
+	_, err := NewServer(addr, maxvbs, config, appch)
 	if err != nil && doCallb(err) == false {
 		return
 	}

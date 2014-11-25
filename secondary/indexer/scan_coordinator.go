@@ -257,8 +257,8 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel) (
 		logPrefix: "ScanCoordinator",
 	}
 
-	s.serv, err = queryport.NewServer(QUERY_PORT_ADDR, s.requestHandler,
-		common.SystemConfig)
+	config := common.SystemConfig.SectionConfig("queryport.indexer.", true)
+	s.serv, err = queryport.NewServer(QUERY_PORT_ADDR, s.requestHandler, config)
 
 	if err != nil {
 		errMsg := &MsgError{err: Error{code: ERROR_SCAN_COORD_QUERYPORT_FAIL,

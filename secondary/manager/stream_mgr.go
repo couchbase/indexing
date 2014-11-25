@@ -433,7 +433,10 @@ func (s *Stream) start() (err error) {
 	go s.run()
 
 	// start dataport stream
-	if s.receiver, err = dataport.NewServer(s.hostStr, common.SystemConfig, s.mutch); err != nil {
+	config := common.SystemConfig.SectionConfig("projector.dataport.indexer.", true)
+	maxvbs := common.SystemConfig["maxVbuckets"].Int()
+	s.receiver, err = dataport.NewServer(s.hostStr, maxvbs, config, s.mutch)
+	if err != nil {
 		common.Errorf("StreamManager: Error returned from dataport.NewServer = %s.", err.Error())
 		close(s.stopch)
 		return err

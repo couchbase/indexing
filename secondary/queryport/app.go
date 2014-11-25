@@ -6,14 +6,15 @@ import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 
 // Application is example application logic that uses query-port server
-func Application() {
+func Application(config c.Config) {
 	killch := make(chan bool)
 	s, err := NewServer(
 		"localhost:9990",
 		func(req interface{},
 			respch chan<- interface{}, quitch <-chan interface{}) {
 			requestHandler(req, respch, quitch, killch)
-		}, c.SystemConfig)
+		},
+		config)
 
 	if err != nil {
 		log.Fatal(err)

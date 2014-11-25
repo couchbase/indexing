@@ -47,16 +47,15 @@ type Client struct {
 
 // NewClient instance with `raddr` pointing to queryport server.
 func NewClient(raddr string, config common.Config) (c *Client) {
-	cconf := config.SectionConfig("queryport.client.", true)
-	t := time.Duration(cconf["connPoolAvailWaitTimeout"].Int())
+	t := time.Duration(config["connPoolAvailWaitTimeout"].Int())
 	c = &Client{
 		raddr:              raddr,
-		maxPayload:         cconf["maxPayload"].Int(),
-		readDeadline:       time.Duration(cconf["readDeadline"].Int()),
-		writeDeadline:      time.Duration(cconf["writeDeadline"].Int()),
-		poolSize:           cconf["poolSize"].Int(),
-		poolOverflow:       cconf["poolOverflow"].Int(),
-		cpTimeout:          time.Duration(cconf["connPoolTimeout"].Int()),
+		maxPayload:         config["maxPayload"].Int(),
+		readDeadline:       time.Duration(config["readDeadline"].Int()),
+		writeDeadline:      time.Duration(config["writeDeadline"].Int()),
+		poolSize:           config["poolSize"].Int(),
+		poolOverflow:       config["poolOverflow"].Int(),
+		cpTimeout:          time.Duration(config["connPoolTimeout"].Int()),
 		cpAvailWaitTimeout: t,
 		logPrefix:          fmt.Sprintf("[QueryPortClient:%q]", raddr),
 	}

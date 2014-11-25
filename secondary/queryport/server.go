@@ -35,17 +35,17 @@ type Server struct {
 
 // NewServer creates a new queryport daemon.
 func NewServer(
-	laddr string, callb RequestHandler, config c.Config) (s *Server, err error) {
+	laddr string, callb RequestHandler,
+	config c.Config) (s *Server, err error) {
 
-	sconf := config.SectionConfig("queryport.indexer.", true)
 	s = &Server{
 		laddr:          laddr,
 		callb:          callb,
 		killch:         make(chan bool),
-		maxPayload:     sconf["maxPayload"].Int(),
-		readDeadline:   time.Duration(sconf["readDeadline"].Int()),
-		writeDeadline:  time.Duration(sconf["writeDeadline"].Int()),
-		streamChanSize: sconf["streamChanSize"].Int(),
+		maxPayload:     config["maxPayload"].Int(),
+		readDeadline:   time.Duration(config["readDeadline"].Int()),
+		writeDeadline:  time.Duration(config["writeDeadline"].Int()),
+		streamChanSize: config["streamChanSize"].Int(),
 		logPrefix:      fmt.Sprintf("[Queryport %q]", laddr),
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {

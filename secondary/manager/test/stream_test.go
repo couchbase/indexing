@@ -88,7 +88,11 @@ func runTestSender(port string, donech chan bool, t *testing.T) {
 
 	// start client
 	addr := net.JoinHostPort("127.0.0.1", port)
-	client, err := dataport.NewClient(addr, transport.TransportFlag(0).SetProtobuf(), common.SystemConfig)
+	prefix := "projector.dataport.client."
+	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	maxvbs := c.SystemConfig["maxVbuckets"].Int()
+	flag := transport.TransportFlag(0).SetProtobuf()
+	client, err := dataport.NewClient(addr, flag, maxvbs, config)
 	if err != nil {
 		t.Fatal(err)
 	}
