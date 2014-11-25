@@ -331,6 +331,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 			}
 		}
 	}
+	//reinit the index ts map after rollback
+	sm.initTsMap(sm.indexPartnMap)
+
 	sm.supvCmdch <- &MsgRollback{streamId: streamId,
 		rollbackTs: respTs}
 }

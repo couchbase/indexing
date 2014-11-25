@@ -353,6 +353,7 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 		if err != nil {
 			common.Errorf("ForestDBSlice::Snapshot \n\t Error Reading TS from Slice Id %v "+
 				"IndexInstId %v. Err %v", fdb.id, fdb.idxInstId, err)
+			return nil, err
 		} else {
 			var ts common.TsVbuuid
 			err = json.Unmarshal(tsb, &ts)

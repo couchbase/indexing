@@ -170,7 +170,9 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 
 	//read persisted indexer state
 	if err := idx.bootstrap(); err != nil {
-		//log error and exit
+		common.Fatalf("Indexer::Unable to Bootstrap Indexer from Meta File. " +
+			"Remove the file and try again.")
+		return nil, &MsgError{err: Error{cause: err}}
 	}
 
 	//Start CbqBridge
@@ -1762,7 +1764,9 @@ func (idx *indexer) bootstrap() error {
 	//close any old streams with projector
 	idx.closeAllStreams()
 
-	idx.startStreams()
+	if ok := idx.startStreams(); !ok {
+		return errors.New("Unable To Start DCP Streams")
+	}
 
 	return nil
 
@@ -1818,6 +1822,14 @@ func (idx *indexer) initFromPersistedState() error {
 	common.Debugf("Indexer::initFromPersistedState Recovered IndexInstMap %v", idx.indexInstMap)
 
 	for _, inst := range idx.indexInstMap {
+
+		//For now, initial stream indexes cannot be recovered. Change state to error.
+		//These indexes need to be dropped and recreated.
+		if inst.Stream == common.INIT_STREAM {
+			inst.State = common.INDEX_STATE_ERROR
+			common.Fatalf("Indexer::initFromPersistedState Found Index For INIT_STREAM. "+
+				"Recovery Not Supported. Index Needs To Be Recreated. Details %v", inst)
+		}
 
 		newpc := common.NewKeyPartitionContainer()
 
@@ -1901,14 +1913,16 @@ func (idx *indexer) closeAllStreams() {
 	}
 }
 
-func (idx *indexer) startStreams() {
+func (idx *indexer) startStreams() bool {
 
 	restartTs := idx.makeRestartTs()
 
 	var indexList []common.IndexInst
 
 	for _, inst := range idx.indexInstMap {
-		indexList = append(indexList, inst)
+		if inst.State != common.INDEX_STATE_ERROR {
+			indexList = append(indexList, inst)
+		}
 	}
 
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
@@ -1930,11 +1944,14 @@ func (idx *indexer) startStreams() {
 		switch resp.GetMsgType() {
 
 		case INDEXER_ROLLBACK:
-			common.Errorf("Indexer::startStream \n\tUnexpected Rollback from "+
+			common.Debugf("Indexer::startStreams \n\tRollback from "+
 				"Projector during Initial Stream Request %v", resp)
+			if !idx.processRollbackDuringBootstrap(resp) {
+				return false
+			}
 
 		case MSG_SUCCESS:
-			//nothing to do
+			return true
 
 		default:
 			common.Errorf("Indexer::startStream - Error from Projector %v", resp)
@@ -1945,6 +1962,28 @@ func (idx *indexer) startStreams() {
 			"processing Msg %v. Aborted.", resp)
 	}
 
+	return false
+
+}
+
+func (idx *indexer) processRollbackDuringBootstrap(msg Message) bool {
+	//send to storage manager to rollback
+	idx.storageMgrCmdCh <- msg
+	res := <-idx.storageMgrCmdCh
+	//TODO check the message type to make sure there is no error
+	if res.GetMsgType() != MSG_ERROR {
+		rollbackTs := res.(*MsgRollback).GetRollbackTs()
+		streamId := res.(*MsgRollback).GetStreamId()
+
+		//send to kv sender to restart vbucket
+		idx.kvSenderCmdCh <- &MsgRestartVbuckets{streamId: streamId,
+			restartTs: rollbackTs}
+		msg = <-idx.kvSenderCmdCh
+		if msg.GetMsgType() == MSG_SUCCESS {
+			return true
+		}
+	}
+	return false
 }
 
 func (idx *indexer) makeRestartTs() map[string]*common.TsVbuuid {
