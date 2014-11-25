@@ -315,10 +315,11 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
 	buildTs := cmd.(*MsgStreamUpdate).GetTimestamp()
+	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 
 	//If the index is in INITIAL state, store it in initialbuild map
 	for _, idx := range indexInstList {
-		tk.streamBucketIndexCountMap[idx.Stream][idx.Defn.Bucket] += 1
+		tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] += 1
 		if idx.State == common.INDEX_STATE_INITIAL {
 			tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
 				indexInst: idx,
@@ -341,20 +342,21 @@ func (tk *timekeeper) handleRemoveIndexFromStream(cmd Message) {
 func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 
 	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
+	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 
 	for _, idx := range indexInstList {
 		//if the index in internal map, delete it
 		if _, ok := tk.indexBuildInfo[idx.InstId]; ok {
 			delete(tk.indexBuildInfo, idx.InstId)
 		}
-		if tk.streamBucketIndexCountMap[idx.Stream][idx.Defn.Bucket] == 0 {
+		if tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
 			common.Fatalf("Timekeeper::removeIndexFromStream Invalid Internal "+
-				"State Detected. Index Count Underflow. Stream %s. Bucket %s.", idx.State,
+				"State Detected. Index Count Underflow. Stream %s. Bucket %s.", streamId,
 				idx.Defn.Bucket)
 		} else {
-			tk.streamBucketIndexCountMap[idx.Stream][idx.Defn.Bucket] -= 1
-			if tk.streamBucketIndexCountMap[idx.Stream][idx.Defn.Bucket] == 0 {
-				tk.cleanupBucketFromStream(idx.Stream, idx.Defn.Bucket)
+			tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] -= 1
+			if tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
+				tk.cleanupBucketFromStream(streamId, idx.Defn.Bucket)
 			}
 		}
 	}

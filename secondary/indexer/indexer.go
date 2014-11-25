@@ -789,9 +789,15 @@ func (idx *indexer) sendStreamUpdateForCreateIndex(indexInst common.IndexInst,
 	//so mutations for this index are already in queue to allow convergence with INIT_STREAM.
 	if indexInst.Stream == common.INIT_STREAM {
 		//add indexes to MAINT_STREAM
+		indexList[0].State = common.INDEX_STATE_CATCHUP
 		cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
 			streamId:  common.MAINT_STREAM,
 			indexList: indexList}
+
+		//send stream update to timekeeper
+		if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
+			return false
+		}
 
 		//send stream update to mutation manager
 		if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", respCh); !ok {
@@ -802,6 +808,7 @@ func (idx *indexer) sendStreamUpdateForCreateIndex(indexInst common.IndexInst,
 		if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", respCh); !ok {
 			return false
 		}
+
 	}
 
 	idx.streamStatus[indexInst.Stream] = true
@@ -1356,6 +1363,11 @@ func (idx *indexer) handleMergeCatchupStream(msg Message) {
 
 	//send stream update to mutation manager
 	if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", nil); !ok {
+		return
+	}
+
+	//send stream update to timekeeper
+	if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", nil); !ok {
 		return
 	}
 
