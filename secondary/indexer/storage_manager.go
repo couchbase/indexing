@@ -220,7 +220,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 							if snapContainer.Len() > MAX_SNAPSHOTS_PER_INDEX {
 								serr := snapContainer.RemoveOldest()
-								if serr != nil {
+								if serr == nil {
 									common.Debugf("StorageMgr::handleCreateSnapshot \n\tRemoved Oldest Snapshot, "+
 										"Container Len %v", snapContainer.Len())
 								}
@@ -230,31 +230,32 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							common.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
 								"PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
+							// Update index-timestamp map whenever a snapshot is created for an index
+							// Also notify any waiters for snapshots creation
+							s.tsMap[idxInstId] = tsVbuuid
+							var newWaiters []*snapshotWaiter
+							for _, w := range s.waitersMap[idxInstId] {
+								if w.ts == nil || tsVbuuid.AsRecent(w.ts) {
+									w.Notify(tsVbuuid)
+								} else {
+									newWaiters = append(newWaiters, w)
+								}
+							}
+
+							s.waitersMap[idxInstId] = newWaiters
 						} else {
 							common.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
 								"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
+							continue
 						}
 					} else {
 						common.Debugf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
 							"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
+						continue
 					}
 				}
 			}
-
-			// Update index-timestamp map whenever a snapshot is created for an index
-			// Also notify any waiters for snapshots creation
-			s.tsMap[idxInstId] = tsVbuuid
-			var newWaiters []*snapshotWaiter
-			for _, w := range s.waitersMap[idxInstId] {
-				if w.ts == nil || tsVbuuid.AsRecent(w.ts) {
-					w.Notify(tsVbuuid)
-				} else {
-					newWaiters = append(newWaiters, w)
-				}
-			}
-
-			s.waitersMap[idxInstId] = newWaiters
 		}
 	}
 
