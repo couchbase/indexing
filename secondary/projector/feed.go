@@ -402,6 +402,7 @@ loop:
 			}
 
 		case <-timeout:
+			// TODO: should this be ERROR ?
 			if len(feed.backch) > 0 {
 				c.Debugf(ctrlMsg, feed.logPrefix, len(feed.backch))
 			}
