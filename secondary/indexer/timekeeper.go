@@ -690,15 +690,8 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 		return
 	}
 
-	//only SnapshotType 0 and 1 are processed for now,
-	//UPR can send other special snapshot markers, which
-	//need to be ignored.
-	//TODO: Use the same logic for processing the snapshot types
-	//as used by view-engine
 	snapshot := cmd.(*MsgStream).GetSnapshot()
-	if snapshot.snapType == 0 || snapshot.snapType == 1 ||
-		snapshot.snapType == 2 {
-
+	if snapshot.CanProcess() == true {
 		//update the snapshot seqno in internal map
 		ts := tk.streamBucketHWTMap[streamId][meta.bucket]
 		ts.Snapshots[meta.vbucket][0] = snapshot.start

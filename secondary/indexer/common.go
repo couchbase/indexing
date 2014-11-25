@@ -120,3 +120,13 @@ func (m MutationSnapshot) String() string {
 	return str
 
 }
+
+func (m MutationSnapshot) CanProcess() bool {
+	// Snapshot marker can be processed only if
+	// they belong to ondisk type or inmemory type.
+	if m.snapType&(0x1|0x2) != 0 {
+		return true
+	}
+
+	return false
+}
