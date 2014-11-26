@@ -34,7 +34,7 @@ func parseArgs() {
 	flag.StringVar(&low, "low", "", "Range: [low]")
 	flag.StringVar(&high, "high", "", "Range: [high]")
 	flag.StringVar(&equal, "equal", "", "Range: [key]")
-	flag.UintVar(&incl, "incl", 1, "Range: 0|1|2|3")
+	flag.UintVar(&incl, "incl", 0, "Range: 0|1|2|3")
 	flag.Int64Var(&limit, "limit", 10, "Row limit")
 	flag.Int64Var(&pageSize, "buffersz", 0, "Rows buffer size per internal message")
 

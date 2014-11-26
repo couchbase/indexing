@@ -829,9 +829,7 @@ func (s *scanCoordinator) scanQuery(sd *scanDescriptor, snap Snapshot, stopch St
 	// TODO: Decide whether a missing response should be provided point query for keys
 	if len(sd.p.keys) != 0 {
 		for _, k := range sd.p.keys {
-			// TODO: Change this to Both when inclusion support is added
-			incl := Low
-			ch, cherr, _ := snap.KeyRange(k, k, incl, stopch)
+			ch, cherr, _ := snap.KeyRange(k, k, Both, stopch)
 			s.receiveKeys(sd, ch, cherr)
 		}
 	} else {
