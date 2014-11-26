@@ -203,14 +203,17 @@ func (r *scanStreamReader) ReadStat() (stat statsResponse, err error) {
 
 func (r *scanStreamReader) Done() {
 	r.hasNext = false
-	close(r.sd.stopch)
+	if r.sd.stopch != nil {
+		close(r.sd.stopch)
+		r.sd.stopch = nil
+	}
 
 	// Drain any leftover responses when client requests for graceful
 	// termination
 	go func() {
 		for {
-			_, closed := <-r.sd.respch
-			if closed {
+			_, ok := <-r.sd.respch
+			if !ok {
 				break
 			}
 		}
