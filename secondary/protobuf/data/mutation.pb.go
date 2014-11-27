@@ -2,6 +2,18 @@
 // source: mutation.proto
 // DO NOT EDIT!
 
+/*
+Package protobuf is a generated protocol buffer package.
+
+It is generated from these files:
+	mutation.proto
+
+It has these top-level messages:
+	Payload
+	VbConnectionMap
+	VbKeyVersions
+	KeyVersions
+*/
 package protobuf
 
 import proto "github.com/couchbaselabs/goprotobuf/proto"

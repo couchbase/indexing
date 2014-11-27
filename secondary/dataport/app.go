@@ -8,7 +8,7 @@ import "strings"
 import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 
 var commandNames = map[byte]string{
 	c.Upsert:         "Upsert",

@@ -5,7 +5,7 @@ import "testing"
 import "time"
 
 import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
 var testStatisticsResponse = &protobuf.StatisticsResponse{

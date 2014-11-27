@@ -16,7 +16,8 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	data "github.com/couchbase/indexing/secondary/protobuf/data"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 )
 
 ///////////////////////////////////////////////////////
@@ -35,14 +36,14 @@ import (
 //  Snapshot            - control command
 //
 type MutationHandler interface {
-	HandleUpsert(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *protobuf.KeyVersions, offset int)
-	HandleDeletion(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *protobuf.KeyVersions, offset int)
-	HandleUpsertDeletion(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *protobuf.KeyVersions, offset int)
-	HandleSync(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *protobuf.KeyVersions, offset int)
-	HandleDropData(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *protobuf.KeyVersions, offset int)
-	HandleStreamBegin(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *protobuf.KeyVersions, offset int)
-	HandleStreamEnd(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *protobuf.KeyVersions, offset int)
-	HandleSnapshot(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *protobuf.KeyVersions, offset int)
+	HandleUpsert(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *data.KeyVersions, offset int)
+	HandleDeletion(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *data.KeyVersions, offset int)
+	HandleUpsertDeletion(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *data.KeyVersions, offset int)
+	HandleSync(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *data.KeyVersions, offset int)
+	HandleDropData(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *data.KeyVersions, offset int)
+	HandleStreamBegin(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *data.KeyVersions, offset int)
+	HandleStreamEnd(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *data.KeyVersions, offset int)
+	HandleSnapshot(streamId common.StreamId, bucket string, vbucket uint32, vbuuid uint64, kv *data.KeyVersions, offset int)
 	HandleConnectionError(streamId common.StreamId, err dataport.ConnectionError)
 }
 
@@ -464,7 +465,7 @@ func (s *Stream) run() {
 				}()
 
 				switch d := mut.(type) {
-				case ([]*protobuf.VbKeyVersions):
+				case ([]*data.VbKeyVersions):
 					common.Debugf("Stream.run(): recieve VbKeyVersion")
 					s.handleVbKeyVersions(d)
 				case dataport.ConnectionError:
@@ -488,7 +489,7 @@ message VbKeyVersions {
     repeated KeyVersions kvs        = 5; // list of key-versions
 }
 */
-func (s *Stream) handleVbKeyVersions(vbKeyVers []*protobuf.VbKeyVersions) {
+func (s *Stream) handleVbKeyVersions(vbKeyVers []*data.VbKeyVersions) {
 	for _, vb := range vbKeyVers {
 		s.handleKeyVersions(vb.GetBucketname(), vb.GetVbucket(),
 			vb.GetVbuuid(), vb.GetKvs())
@@ -498,7 +499,7 @@ func (s *Stream) handleVbKeyVersions(vbKeyVers []*protobuf.VbKeyVersions) {
 func (s *Stream) handleKeyVersions(bucket string,
 	vbucket uint32,
 	vbuuid uint64,
-	kvs []*protobuf.KeyVersions) {
+	kvs []*data.KeyVersions) {
 	for _, kv := range kvs {
 		s.handleSingleKeyVersion(bucket, vbucket, vbuuid, kv)
 	}
@@ -518,7 +519,7 @@ message KeyVersions {
 func (s *Stream) handleSingleKeyVersion(bucket string,
 	vbucket uint32,
 	vbuuid uint64,
-	kv *protobuf.KeyVersions) {
+	kv *data.KeyVersions) {
 
 	for i, cmd := range kv.GetCommands() {
 		common.Debugf("Stream.handleSingleKeyVersion(): recieve command %v", cmd)

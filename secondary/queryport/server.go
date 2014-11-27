@@ -7,7 +7,7 @@ import "sync"
 import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbase/indexing/secondary/transport"
 
 // RequestHandler shall interpret the request message

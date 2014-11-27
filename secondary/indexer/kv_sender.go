@@ -13,7 +13,7 @@ import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"strings"
 	"time"

@@ -14,7 +14,7 @@ import (
 	"fmt"
 	repo "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"math/rand"
 	"net/rpc"

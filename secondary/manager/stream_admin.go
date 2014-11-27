@@ -16,7 +16,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	projector "github.com/couchbase/indexing/secondary/projector/client"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 )
 
 /////////////////////////////////////////////////////////////////////////

@@ -2,6 +2,27 @@
 // source: query.proto
 // DO NOT EDIT!
 
+/*
+Package protobuf is a generated protocol buffer package.
+
+It is generated from these files:
+	query.proto
+
+It has these top-level messages:
+	Error
+	QueryPayload
+	StatisticsRequest
+	StatisticsResponse
+	ScanRequest
+	ScanAllRequest
+	EndStreamRequest
+	ResponseStream
+	StreamEndResponse
+	Span
+	Range
+	IndexEntry
+	IndexStatistics
+*/
 package protobuf
 
 import proto "github.com/couchbaselabs/goprotobuf/proto"
@@ -10,6 +31,24 @@ import math "math"
 // Reference imports to suppress errors if they are not otherwise used.
 var _ = proto.Marshal
 var _ = math.Inf
+
+// Error message can be sent back as response or
+// encapsulated in response packets.
+type Error struct {
+	Error            *string `protobuf:"bytes,1,req,name=error" json:"error,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *Error) Reset()         { *m = Error{} }
+func (m *Error) String() string { return proto.CompactTextString(m) }
+func (*Error) ProtoMessage()    {}
+
+func (m *Error) GetError() string {
+	if m != nil && m.Error != nil {
+		return *m.Error
+	}
+	return ""
+}
 
 // Request can be one of the optional field.
 type QueryPayload struct {
@@ -365,6 +404,47 @@ func (m *IndexEntry) GetEntryKey() []byte {
 func (m *IndexEntry) GetPrimaryKey() []byte {
 	if m != nil {
 		return m.PrimaryKey
+	}
+	return nil
+}
+
+// Statistics of a given index.
+type IndexStatistics struct {
+	Count            *uint64 `protobuf:"varint,1,req,name=count" json:"count,omitempty"`
+	UniqueKeys       *uint64 `protobuf:"varint,2,req,name=uniqueKeys" json:"uniqueKeys,omitempty"`
+	Min              []byte  `protobuf:"bytes,3,req,name=min" json:"min,omitempty"`
+	Max              []byte  `protobuf:"bytes,4,req,name=max" json:"max,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *IndexStatistics) Reset()         { *m = IndexStatistics{} }
+func (m *IndexStatistics) String() string { return proto.CompactTextString(m) }
+func (*IndexStatistics) ProtoMessage()    {}
+
+func (m *IndexStatistics) GetCount() uint64 {
+	if m != nil && m.Count != nil {
+		return *m.Count
+	}
+	return 0
+}
+
+func (m *IndexStatistics) GetUniqueKeys() uint64 {
+	if m != nil && m.UniqueKeys != nil {
+		return *m.UniqueKeys
+	}
+	return 0
+}
+
+func (m *IndexStatistics) GetMin() []byte {
+	if m != nil {
+		return m.Min
+	}
+	return nil
+}
+
+func (m *IndexStatistics) GetMax() []byte {
+	if m != nil {
+		return m.Max
 	}
 	return nil
 }

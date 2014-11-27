@@ -23,7 +23,7 @@ import "runtime/debug"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 
 // KVData captures an instance of data-path for single kv-node
 // from upstream connection.

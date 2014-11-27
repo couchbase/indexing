@@ -1,18 +1,15 @@
 .PHONY: clean build fiximport
 
-all: build fiximport
-
-fiximport: $(patsubst %.proto,%.pb.go,$(wildcard *.proto))
-
 build:
-	@echo "Compiling *.proto files ..."
-	@protoc --go_out=. *.proto
+	make -C data
+	@echo
+	make -C query
+	@echo
+	make -C projector
 
 clean:
-	@rm *.pb.go
-
-%.pb.go: FORCE
-	@echo "Fixing import for $@ ..."
-	@sed 's:import proto "code.google.com/p/goprotobuf/proto":import proto "github.com/couchbaselabs/goprotobuf/proto":' < $@  > tmpfile; mv tmpfile $@
-
-FORCE:
+	make -C data clean
+	@echo
+	make -C query clean
+	@echo
+	make -C projector clean

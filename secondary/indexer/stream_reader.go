@@ -14,7 +14,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 )
 
 //MutationStreamReader reads a Dataport and stores the incoming mutations

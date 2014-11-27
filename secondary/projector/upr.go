@@ -7,7 +7,7 @@ import "time"
 
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/couchbase/indexing/secondary/dcp"
 
 // BucketAccess interface manage a subset of vbucket streams with mutiple KV

@@ -3,7 +3,7 @@ package dataport
 import "testing"
 
 import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 
 const confMaxKeyvers = 10
 

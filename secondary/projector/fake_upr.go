@@ -1,7 +1,7 @@
 package projector
 
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/couchbase/indexing/secondary/dcp"
 
 // FakeBucket fot unit testing.

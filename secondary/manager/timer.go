@@ -10,12 +10,12 @@
 package manager
 
 import (
+	"encoding/json"
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"sync"
 	"time"
-	"encoding/json"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -44,8 +44,8 @@ type Timer struct {
 }
 
 type timestampWrapper struct {
-	StreamId		uint16		`json:"streamId,omitempty"`
-	Timestamp 		[]byte 		`json:"timestamp,omitempty"`
+	StreamId  uint16 `json:"streamId,omitempty"`
+	Timestamp []byte `json:"timestamp,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -307,17 +307,17 @@ func (t *Timer) run(streamId common.StreamId, bucket string, ticker *time.Ticker
 					if r := recover(); r != nil {
 						common.Debugf("panic in Timer.run() : error ignored.  Error = %v\n", r)
 					}
-				}()	
-				
+				}()
+
 				ts, ok := t.advance(streamId, bucket)
 				if ok && len(t.outch) < TIMESTAMP_CHANNEL_SIZE {
 					// Make sure that this call is not blocking.  It is OK to drop
 					// the timestamp is the channel receiver is slow.
-					wrapper, err := createTimestampWrapper(ts, streamId) 
+					wrapper, err := createTimestampWrapper(ts, streamId)
 					if err != nil {
 						common.Debugf("timer.run(): Unable to create wrapper for timestamp.  Skip timestamp.")
 					} else {
-						t.outch <- wrapper 
+						t.outch <- wrapper
 					}
 				}
 			}()
@@ -421,7 +421,7 @@ func (t *timestampHistory) advance() (*common.TsVbuuid, bool) {
 
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
-	
+
 	return t.advanceNoLock()
 }
 
@@ -463,9 +463,9 @@ func createTimestampWrapper(ts *common.TsVbuuid, streamId common.StreamId) (*tim
 	data, err := marshallTimestamp(ts)
 	if err != nil {
 		return nil, err
-	}	
-	
-	return &timestampWrapper{StreamId : uint16(streamId), Timestamp : data}, nil
+	}
+
+	return &timestampWrapper{StreamId: uint16(streamId), Timestamp: data}, nil
 }
 
 func marshallTimestampWrapper(wrapper *timestampWrapper) ([]byte, error) {

@@ -15,7 +15,7 @@ import (
 //  1. add benchmark for different size of documents (small, medium, large)
 //     and complex expressions.
 
-var testdata = "../testdata"
+var testdata = "../../testdata"
 var usersBzip2 = filepath.Join(testdata, "users.json.bz2")
 var projectsBzip2 = filepath.Join(testdata, "projects.json.bz2")
 

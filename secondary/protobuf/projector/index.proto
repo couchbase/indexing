@@ -79,12 +79,3 @@ message IndexDefn {
     optional string          partnExpression = 9; // use expressions to evaluate doc
     optional string          whereExpression = 10; // where predicate
 }
-
-// Statistics of a given index.
-message IndexStatistics {
-    required uint64 count      = 1;
-    required uint64 uniqueKeys = 2;
-    required bytes  min        = 3;
-    required bytes  max        = 4;
-}
-

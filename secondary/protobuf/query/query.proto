@@ -1,7 +1,10 @@
 package protobuf;
 
-import "common.proto";
-import "index.proto";
+// Error message can be sent back as response or
+// encapsulated in response packets.
+message Error {
+    required string error = 1; // Empty string means success
+}
 
 // Request can be one of the optional field.
 message QueryPayload {
@@ -76,3 +79,12 @@ message IndexEntry {
     required bytes  entryKey   = 1;
     required bytes  primaryKey = 2;
 }
+
+// Statistics of a given index.
+message IndexStatistics {
+    required uint64 count      = 1;
+    required uint64 uniqueKeys = 2;
+    required bytes  min        = 3;
+    required bytes  max        = 4;
+}
+

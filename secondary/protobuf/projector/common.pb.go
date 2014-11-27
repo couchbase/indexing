@@ -7,15 +7,10 @@ Package protobuf is a generated protocol buffer package.
 
 It is generated from these files:
 	common.proto
-	ddl.proto
 	index.proto
-	indexer.proto
-	mutation.proto
 	partn_single.proto
 	partn_tp.proto
 	projector.proto
-	query.proto
-	rollback.proto
 
 It has these top-level messages:
 	Error

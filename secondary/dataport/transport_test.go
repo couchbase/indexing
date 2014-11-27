@@ -5,7 +5,7 @@ import "net"
 import "testing"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 import "github.com/couchbase/indexing/secondary/transport"
 
 func TestPktKeyVersions(t *testing.T) {

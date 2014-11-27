@@ -4,7 +4,7 @@ import "testing"
 import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 import "github.com/couchbase/indexing/secondary/transport"
 
 func TestTimeout(t *testing.T) {

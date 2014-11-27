@@ -48,7 +48,7 @@ import "time"
 import "runtime/debug"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 import "github.com/couchbase/indexing/secondary/transport"
 
 // Error codes

@@ -5,7 +5,7 @@ package queryport
 import "errors"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
 // ErrorTransportVersion

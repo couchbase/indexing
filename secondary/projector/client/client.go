@@ -68,7 +68,7 @@ import "strings"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
 // Client connects with a projector's adminport to

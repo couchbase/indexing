@@ -17,7 +17,7 @@ import "net"
 import "time"
 
 import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbase/indexing/secondary/transport"
 import "github.com/couchbaselabs/goprotobuf/proto"
 

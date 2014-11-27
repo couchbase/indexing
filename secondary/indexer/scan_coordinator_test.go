@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"reflect"

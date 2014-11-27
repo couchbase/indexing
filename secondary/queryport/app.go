@@ -3,7 +3,7 @@ package queryport
 import "log"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 
 // Application is example application logic that uses query-port server
 func Application() {
