@@ -1,4 +1,4 @@
-package common
+package protobuf
 
 import (
 	"compress/bzip2"

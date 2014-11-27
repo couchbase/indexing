@@ -110,14 +110,14 @@ func NewIndexEvaluator(instance *IndexInst) (*IndexEvaluator, error) {
 	case ExprType_N1QL:
 		// expressions to evaluate secondary-key
 		exprs := defn.GetSecExpressions()
-		ie.skExprs, err = c.CompileN1QLExpression(exprs)
+		ie.skExprs, err = CompileN1QLExpression(exprs)
 		if err != nil {
 			return nil, err
 		}
 		// expression to evaluate partition key
 		expr := defn.GetPartnExpression()
 		if len(expr) > 0 {
-			cExprs, err := c.CompileN1QLExpression([]string{expr})
+			cExprs, err := CompileN1QLExpression([]string{expr})
 			if err != nil {
 				return nil, err
 			} else if len(cExprs) > 0 {
@@ -127,7 +127,7 @@ func NewIndexEvaluator(instance *IndexInst) (*IndexEvaluator, error) {
 		// expression to evaluate where clause
 		expr = defn.GetWhereExpression()
 		if len(expr) > 0 {
-			cExprs, err := c.CompileN1QLExpression([]string{expr})
+			cExprs, err := CompileN1QLExpression([]string{expr})
 			if err != nil {
 				return nil, err
 			} else if len(cExprs) > 0 {
@@ -286,7 +286,7 @@ func (ie *IndexEvaluator) evaluate(docid, doc []byte) ([]byte, error) {
 	switch exprType {
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
-		return c.N1QLTransform(docid, doc, ie.skExprs)
+		return N1QLTransform(docid, doc, ie.skExprs)
 	}
 	return nil, nil
 }
@@ -303,7 +303,7 @@ func (ie *IndexEvaluator) partitionKey(doc []byte) ([]byte, error) {
 	switch exprType {
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
-		return c.N1QLTransform(nil, doc, []interface{}{ie.pkExpr})
+		return N1QLTransform(nil, doc, []interface{}{ie.pkExpr})
 	}
 	return nil, nil
 }
@@ -319,7 +319,7 @@ func (ie *IndexEvaluator) wherePredicate(doc []byte) (bool, error) {
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
-		out, err := c.N1QLTransform(nil, doc, []interface{}{ie.whExpr})
+		out, err := N1QLTransform(nil, doc, []interface{}{ie.whExpr})
 		if out == nil { // missing is treated as false
 			return false, err
 		} else if err != nil { // errors are treated as false
