@@ -10,7 +10,6 @@
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/adminport"
 	c "github.com/couchbase/indexing/secondary/common"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	"github.com/couchbase/indexing/secondary/protobuf"
@@ -1162,28 +1161,9 @@ outerloop:
 	return res, err
 }
 
-func (k *kvSender) initKVListCache(bucket string) error {
-
-	//TODO Is there a better way to do this rather than send
-	//a vbmap request
-	req := &protobuf.VbmapRequest{
-		Pool:    proto.String(DEFAULT_POOL),
-		Bucket:  proto.String(bucket),
-		Kvaddrs: nil,
-	}
-
-	res := &protobuf.VbmapResponse{}
-
-	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
-	if err := ap.Request(req, res); err != nil {
-		c.Errorf("KVSender::initKVListCache \n\tError Connecting to Projector %v. ",
-			PROJECTOR_ADMIN_PORT_ENDPOINT)
-		return err
-	}
-
-	k.updateKVListCache(res)
-	return nil
-
+func (k *kvSender) initKVListCache(bucket string) (err error) {
+	k.kvListCache, err = c.GetKVAddrs(CLUSTER_ENDPOINT, DEFAULT_POOL, bucket)
+	return
 }
 
 //update the server list cache

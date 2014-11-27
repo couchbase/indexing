@@ -35,7 +35,7 @@ type Indexer interface {
 
 //TODO move this to config
 var NUM_VBUCKETS uint16
-var PROJECTOR_ADMIN_PORT_ENDPOINT string
+var CLUSTER_ENDPOINT string
 var ENABLE_MANAGER bool
 var StreamAddrMap StreamAddressMap
 
@@ -492,19 +492,8 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	//get current timestamp from KV and set it as Initial Build Timestamp
-	var clusterAddr string
-	if host, _, err := net.SplitHostPort(PROJECTOR_ADMIN_PORT_ENDPOINT); err == nil {
-		//TODO: Here it assumes a colocated topology implies cluster_run.
-		//The Initial Build calculation will be done in kv_sender eventually,
-		//which has better mechanism to detect a colocated yet production config.
-		if IsIPLocal(host) {
-			clusterAddr = host + ":" + KVPORT_CLUSTER_RUN
-		} else {
-			clusterAddr = host + ":" + KVPORT
-		}
-	}
 
-	buildTs := idx.getCurrentKVTs(clusterAddr, indexInst.Defn.Bucket)
+	buildTs := idx.getCurrentKVTs(CLUSTER_ENDPOINT, indexInst.Defn.Bucket)
 
 	//if initial build TS is zero, set index state to active and add it to
 	//MAINT_STREAM directly
