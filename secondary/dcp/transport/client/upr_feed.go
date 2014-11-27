@@ -91,7 +91,7 @@ func init() {
 func (flogp *FailoverLog) Latest() (vbuuid, seqno uint64, err error) {
 	if flogp != nil {
 		flog := *flogp
-		latest := flog[len(flog)-1]
+		latest := flog[0]
 		return latest[0], latest[1], nil
 	}
 	return vbuuid, seqno, ErrorInvalidLog
