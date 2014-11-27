@@ -1,5 +1,5 @@
-// Package gomemcached is binary protocol packet formats and constants.
-package gomemcached
+// Package transport is binary protocol packet formats and constants.
+package transport
 
 import (
 	"fmt"

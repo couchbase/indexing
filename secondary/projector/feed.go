@@ -925,7 +925,7 @@ func (feed *Feed) bucketFeed(
 	return feeder, nil
 }
 
-// - return go-couchbase failures.
+// - return dcp-client failures.
 func (feed *Feed) bucketDetails(
 	pooln, bucketn string) ([]uint16, []uint64, error) {
 

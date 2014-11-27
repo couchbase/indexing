@@ -8,9 +8,9 @@ import (
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 )
 
-type funcHandler func(io.Writer, *gomemcached.MCRequest) *gomemcached.MCResponse
+type funcHandler func(io.Writer, *transport.MCRequest) *transport.MCResponse
 
-func (fh funcHandler) HandleMessage(w io.Writer, msg *gomemcached.MCRequest) *gomemcached.MCResponse {
+func (fh funcHandler) HandleMessage(w io.Writer, msg *transport.MCRequest) *transport.MCResponse {
 	return fh(w, msg)
 }
 
@@ -23,11 +23,11 @@ type RequestHandler interface {
 	//
 	// Most clients should ignore the io.Writer unless they want
 	// complete control over the response.
-	HandleMessage(io.Writer, *gomemcached.MCRequest) *gomemcached.MCResponse
+	HandleMessage(io.Writer, *transport.MCRequest) *transport.MCResponse
 }
 
 // FuncHandler to convert a request handler function as a RequestHandler.
-func FuncHandler(f func(io.Writer, *gomemcached.MCRequest) *gomemcached.MCResponse) RequestHandler {
+func FuncHandler(f func(io.Writer, *transport.MCRequest) *transport.MCResponse) RequestHandler {
 	return funcHandler(f)
 }
 
@@ -75,11 +75,11 @@ func HandleMessage(r io.Reader, w io.Writer, handler RequestHandler) error {
 }
 
 // ReadPacket returns a new memcached Request from a reader.
-func ReadPacket(r io.Reader) (rv gomemcached.MCRequest, err error) {
+func ReadPacket(r io.Reader) (rv transport.MCRequest, err error) {
 	_, err = rv.Receive(r, nil)
 	return
 }
 
-func transmitResponse(o io.Writer, res *gomemcached.MCResponse) (int, error) {
+func transmitResponse(o io.Writer, res *transport.MCResponse) (int, error) {
 	return res.Transmit(o)
 }

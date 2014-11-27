@@ -15,8 +15,8 @@ func TestTransmitRes(t *testing.T) {
 	b := &bytes.Buffer{}
 	buf := bufio.NewWriter(b)
 
-	res := gomemcached.MCResponse{
-		Opcode: gomemcached.SET,
+	res := transport.MCResponse{
+		Opcode: transport.SET,
 		Cas:    938424885,
 		Opaque: 7242,
 		Status: 0x338,
@@ -32,7 +32,7 @@ func TestTransmitRes(t *testing.T) {
 	buf.Flush()
 
 	expected := []byte{
-		gomemcached.RES_MAGIC, byte(gomemcached.SET),
+		transport.RES_MAGIC, byte(transport.SET),
 		0x0, 0x7, // length of key
 		0x0,       // extra length
 		0x0,       // reserved
@@ -79,8 +79,8 @@ func TestHandleIO(t *testing.T) {
 func BenchmarkTransmitRes(b *testing.B) {
 	bout := &bytes.Buffer{}
 
-	res := gomemcached.MCResponse{
-		Opcode: gomemcached.SET,
+	res := transport.MCResponse{
+		Opcode: transport.SET,
 		Cas:    938424885,
 		Opaque: 7242,
 		Status: 824,
@@ -103,8 +103,8 @@ func BenchmarkTransmitRes(b *testing.B) {
 func BenchmarkTransmitResLarge(b *testing.B) {
 	bout := &bytes.Buffer{}
 
-	res := gomemcached.MCResponse{
-		Opcode: gomemcached.SET,
+	res := transport.MCResponse{
+		Opcode: transport.SET,
 		Cas:    938424885,
 		Opaque: 7242,
 		Status: 824,
@@ -125,8 +125,8 @@ func BenchmarkTransmitResLarge(b *testing.B) {
 }
 
 func BenchmarkTransmitResNull(b *testing.B) {
-	res := gomemcached.MCResponse{
-		Opcode: gomemcached.SET,
+	res := transport.MCResponse{
+		Opcode: transport.SET,
 		Cas:    938424885,
 		Opaque: 7242,
 		Status: 824,
@@ -149,13 +149,13 @@ func TestMust(t *testing.T) {
 	errored := false
 	func() {
 		defer func() { _, errored = recover().(error) }()
-		must(&gomemcached.MCResponse{})
+		must(&transport.MCResponse{})
 	}()
 }
 
 func TestFuncHandler(t *testing.T) {
 	ran := false
-	h := FuncHandler(func(io.Writer, *gomemcached.MCRequest) *gomemcached.MCResponse {
+	h := FuncHandler(func(io.Writer, *transport.MCRequest) *transport.MCResponse {
 		ran = true
 		return nil
 	})
@@ -166,8 +166,8 @@ func TestFuncHandler(t *testing.T) {
 }
 
 func BenchmarkReceive(b *testing.B) {
-	res := gomemcached.MCResponse{
-		Opcode: gomemcached.SET,
+	res := transport.MCResponse{
+		Opcode: transport.SET,
 		Cas:    938424885,
 		Opaque: 7242,
 		Status: 824,
@@ -176,7 +176,7 @@ func BenchmarkReceive(b *testing.B) {
 	}
 
 	datum := res.Bytes()
-	datum[0] = gomemcached.REQ_MAGIC
+	datum[0] = transport.REQ_MAGIC
 	b.SetBytes(int64(len(datum)))
 
 	b.ResetTimer()

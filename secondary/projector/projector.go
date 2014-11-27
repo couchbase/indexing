@@ -186,7 +186,7 @@ func (p *Projector) doFailoverLog(
 // - return ErrorInvalidKVaddrs for malformed vbuuid.
 // - return ErrorInconsistentFeed for malformed feed request.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return go-couchbase failures.
+// - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doMutationTopic(
 	request *protobuf.MutationTopicRequest) ap.MessageMarshaller {
@@ -225,7 +225,7 @@ func (p *Projector) doMutationTopic(
 // - return ErrorTopicMissing if feed is not started.
 // - return ErrorInvalidBucket if bucket is not added.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return go-couchbase failures.
+// - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doRestartVbuckets(
 	request *protobuf.RestartVbucketsRequest) ap.MessageMarshaller {
@@ -250,7 +250,7 @@ func (p *Projector) doRestartVbuckets(
 // - return ErrorTopicMissing if feed is not started.
 // - return ErrorInvalidBucket if bucket is not added.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return go-couchbase failures.
+// - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doShutdownVbuckets(
 	request *protobuf.ShutdownVbucketsRequest) ap.MessageMarshaller {
@@ -271,7 +271,7 @@ func (p *Projector) doShutdownVbuckets(
 // - return ErrorTopicMissing if feed is not started.
 // - return ErrorInconsistentFeed for malformed feed request
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return go-couchbase failures.
+// - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doAddBuckets(
 	request *protobuf.AddBucketsRequest) ap.MessageMarshaller {
@@ -296,7 +296,7 @@ func (p *Projector) doAddBuckets(
 // - return ErrorTopicMissing if feed is not started.
 // - return ErrorInvalidBucket if bucket is not added.
 // - return ErrorInvalidVbucketBranch for malformed vbuuid.
-// - return go-couchbase failures.
+// - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doDelBuckets(
 	request *protobuf.DelBucketsRequest) ap.MessageMarshaller {

@@ -1,4 +1,4 @@
-// Tool receives raw events from go-couchbase UPR client.
+// Tool receives raw events from dcp-client.
 package main
 
 import (

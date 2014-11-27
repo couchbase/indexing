@@ -1,4 +1,4 @@
-// To be moved to go-couchbase.
+// To be moved to dcp-client
 
 package projector
 
