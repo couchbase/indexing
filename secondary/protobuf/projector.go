@@ -1,14 +1,12 @@
 package protobuf
 
-import (
-	"errors"
-	"sort"
+import "errors"
+import "sort"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/dcp"
-	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-	"github.com/couchbaselabs/goprotobuf/proto"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/dcp"
+import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+import "github.com/couchbaselabs/goprotobuf/proto"
 
 var ErrorInvalidVbmap = errors.New("protobuf.errorInvalidVbmap")
 

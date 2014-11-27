@@ -1,11 +1,9 @@
 package queryport
 
-import (
-	"log"
+import "log"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
 
 // Application is example application logic that uses query-port server
 func Application() {

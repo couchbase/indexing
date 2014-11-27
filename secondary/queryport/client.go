@@ -10,18 +10,16 @@
 
 package queryport
 
-import (
-	"errors"
-	"fmt"
-	"io"
-	"net"
-	"time"
+import "errors"
+import "fmt"
+import "io"
+import "net"
+import "time"
 
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbase/indexing/secondary/transport"
-	"github.com/couchbaselabs/goprotobuf/proto"
-)
+import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
+import "github.com/couchbase/indexing/secondary/transport"
+import "github.com/couchbaselabs/goprotobuf/proto"
 
 // ErrorProtocol
 var ErrorProtocol = errors.New("queryport.protocol")

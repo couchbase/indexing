@@ -1,16 +1,14 @@
 package queryport
 
-import (
-	"fmt"
-	"net"
-	"runtime/debug"
-	"sync"
-	"time"
+import "fmt"
+import "net"
+import "runtime/debug"
+import "sync"
+import "time"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbase/indexing/secondary/transport"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
+import "github.com/couchbase/indexing/secondary/transport"
 
 // RequestHandler shall interpret the request message
 // from client and post response message(s) on `respch`

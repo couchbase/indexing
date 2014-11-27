@@ -1,14 +1,12 @@
 package queryport
 
-import (
-	"reflect"
-	"testing"
-	"time"
+import "reflect"
+import "testing"
+import "time"
 
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbaselabs/goprotobuf/proto"
-)
+import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
+import "github.com/couchbaselabs/goprotobuf/proto"
 
 var testStatisticsResponse = &protobuf.StatisticsResponse{
 	Stats: &protobuf.IndexStatistics{

@@ -1,10 +1,7 @@
 package protobuf
 
-import (
-	"encoding/binary"
-
-	c "github.com/couchbase/indexing/secondary/common"
-)
+import "encoding/binary"
+import c "github.com/couchbase/indexing/secondary/common"
 
 func (pl *Payload) Value() interface{} {
 	if pl.Vbmap != nil {

@@ -2,13 +2,11 @@
 
 package queryport
 
-import (
-	"errors"
+import "errors"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbaselabs/goprotobuf/proto"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/protobuf"
+import "github.com/couchbaselabs/goprotobuf/proto"
 
 // ErrorTransportVersion
 var ErrorTransportVersion = errors.New("dataport.transportVersion")

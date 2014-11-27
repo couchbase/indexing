@@ -1,15 +1,13 @@
 package queryport
 
-import (
-	"errors"
-	"fmt"
-	"net"
-	"runtime/debug"
-	"time"
+import "errors"
+import "fmt"
+import "net"
+import "runtime/debug"
+import "time"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/transport"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/transport"
 
 // ErrorClosedPool
 var ErrorClosedPool = errors.New("queryport.closedPool")

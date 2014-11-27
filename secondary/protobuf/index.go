@@ -1,12 +1,10 @@
 package protobuf
 
-import (
-	"fmt"
+import "fmt"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
-	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 
 type Partition interface {
 	// Hosts return full list of endpoints <host:port>
