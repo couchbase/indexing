@@ -1213,7 +1213,7 @@ func getProjectorAddrFromKVAddr(kv string) string {
 
 				//In cluster_run, port number increments by 2
 				nodeNum := (iportKV - iportKV0) / 2
-				p := iportProj + nodeNum
+				p := iportProj - nodeNum //ns_server decrements projector port by 1
 				projAddr = LOCALHOST + ":" + strconv.Itoa(p)
 			}
 			c.Debugf("KVSender::getProjectorAddrFromKVAddr \n\t Local Projector Addr: %v", projAddr)
