@@ -1,4 +1,4 @@
-package queryport
+package client
 
 import "net/http"
 import "encoding/json"

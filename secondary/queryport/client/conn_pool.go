@@ -1,4 +1,4 @@
-package queryport
+package client
 
 import "errors"
 import "fmt"
@@ -8,6 +8,7 @@ import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 
 // ErrorClosedPool
 var ErrorClosedPool = errors.New("queryport.closedPool")
@@ -65,8 +66,8 @@ func (cp *connectionPool) defaultMkConn(host string) (*connection, error) {
 	}
 	flags := transport.TransportFlag(0).SetProtobuf()
 	pkt := transport.NewTransportPacket(cp.maxPayload, flags)
-	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
-	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
+	pkt.SetEncoder(transport.EncodingProtobuf, protobuf.ProtobufEncode)
+	pkt.SetDecoder(transport.EncodingProtobuf, protobuf.ProtobufDecode)
 	return &connection{conn, pkt}, nil
 }
 

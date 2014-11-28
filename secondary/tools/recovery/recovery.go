@@ -11,7 +11,8 @@ import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dataport"
 import "github.com/couchbase/indexing/secondary/projector"
 import projc "github.com/couchbase/indexing/secondary/projector/client"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+import data "github.com/couchbase/indexing/secondary/protobuf/data"
 
 var pooln = "default"
 
@@ -133,7 +134,7 @@ var activity = make(map[string]map[uint16][4]uint64)
 
 func appHandler(endpoint string, msg interface{}) bool {
 	switch v := msg.(type) {
-	case []*protobuf.VbKeyVersions:
+	case []*data.VbKeyVersions:
 		for _, vb := range v {
 			bucket := vb.GetBucketname()
 			m, ok := activity[bucket]

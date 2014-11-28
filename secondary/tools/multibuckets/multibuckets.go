@@ -13,7 +13,8 @@ import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dataport"
 import "github.com/couchbase/indexing/secondary/projector"
 import projc "github.com/couchbase/indexing/secondary/projector/client"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+import data "github.com/couchbase/indexing/secondary/protobuf/data"
 
 var pooln = "default"
 
@@ -228,7 +229,7 @@ func NewEndpointFactory(maxvbs int, config c.Config) c.RouterEndpointFactory {
 func endpointCallback(addr string, msg interface{}) bool {
 	mutations.mu.Lock()
 	defer mutations.mu.Unlock()
-	if vbs, ok := msg.([]*protobuf.VbKeyVersions); ok {
+	if vbs, ok := msg.([]*data.VbKeyVersions); ok {
 		for _, vb := range vbs {
 			bucket, kvs := vb.GetBucketname(), vb.GetKvs()
 			vbno := vb.GetVbucket()

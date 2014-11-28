@@ -8,7 +8,7 @@
 //      <--- StreamEndResponse       <--- Response (residue)
 //                                   <--- StreamEndResponse
 
-package queryport
+package client
 
 import "errors"
 import "fmt"

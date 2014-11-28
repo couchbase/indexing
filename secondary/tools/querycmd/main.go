@@ -6,8 +6,8 @@ import (
 	"os"
 
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbase/indexing/secondary/queryport"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	queryclient "github.com/couchbase/indexing/secondary/queryport/client"
 )
 
 var (
@@ -59,7 +59,7 @@ func main() {
 	}
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client := queryport.NewClient(server, config)
+	client := queryclient.NewClient(server, config)
 	if equal != "" {
 		keys = append(keys, []byte(equal))
 	}

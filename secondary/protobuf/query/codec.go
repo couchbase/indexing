@@ -1,11 +1,10 @@
 // Protobuf encoding scheme for payload
 
-package queryport
+package protobuf
 
 import "errors"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
 // ErrorTransportVersion
@@ -14,35 +13,33 @@ var ErrorTransportVersion = errors.New("dataport.transportVersion")
 // ErrorMissingPayload
 var ErrorMissingPayload = errors.New("dataport.missingPlayload")
 
-// protobufEncode encode payload message into protobuf array of bytes. Return
+// ProtobufEncode encode payload message into protobuf array of bytes. Return
 // `data` can be transported to the other end and decoded back to Payload
 // message.
-func protobufEncode(payload interface{}) (data []byte, err error) {
-	pl := &protobuf.QueryPayload{
-		Version: proto.Uint32(uint32(ProtobufVersion())),
-	}
+func ProtobufEncode(payload interface{}) (data []byte, err error) {
+	pl := &QueryPayload{Version: proto.Uint32(uint32(ProtobufVersion()))}
 	switch val := payload.(type) {
 	// request
-	case *protobuf.StatisticsRequest:
+	case *StatisticsRequest:
 		pl.StatisticsRequest = val
 
-	case *protobuf.ScanRequest:
+	case *ScanRequest:
 		pl.ScanRequest = val
 
-	case *protobuf.ScanAllRequest:
+	case *ScanAllRequest:
 		pl.ScanAllRequest = val
 
-	case *protobuf.EndStreamRequest:
+	case *EndStreamRequest:
 		pl.EndStream = val
 
 	// response
-	case *protobuf.StatisticsResponse:
+	case *StatisticsResponse:
 		pl.Statistics = val
 
-	case *protobuf.ResponseStream:
+	case *ResponseStream:
 		pl.Stream = val
 
-	case *protobuf.StreamEndResponse:
+	case *StreamEndResponse:
 		pl.StreamEnd = val
 
 	default:
@@ -53,10 +50,10 @@ func protobufEncode(payload interface{}) (data []byte, err error) {
 	return
 }
 
-// protobufDecode complements protobufEncode() API. `data` returned by encode
+// ProtobufDecode complements ProtobufEncode() API. `data` returned by encode
 // is converted back to protobuf message structure.
-func protobufDecode(data []byte) (value interface{}, err error) {
-	pl := &protobuf.QueryPayload{}
+func ProtobufDecode(data []byte) (value interface{}, err error) {
+	pl := &QueryPayload{}
 	if err = proto.Unmarshal(data, pl); err != nil {
 		return nil, err
 	}
@@ -94,4 +91,4 @@ func ProtobufVersion() byte {
 	return (c.ProtobufDataPathMajorNum << 4) | c.ProtobufDataPathMinorNum
 }
 
-var protoMsgConvertor = map[byte]func(*protobuf.QueryPayload) *protobuf.QueryPayload{}
+var protoMsgConvertor = map[byte]func(*QueryPayload) *QueryPayload{}

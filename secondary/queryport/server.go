@@ -118,7 +118,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// transport buffer for transmission
 	flags := transport.TransportFlag(0).SetProtobuf()
 	tpkt := transport.NewTransportPacket(s.maxPayload, flags)
-	tpkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	tpkt.SetEncoder(transport.EncodingProtobuf, protobuf.ProtobufEncode)
 
 loop:
 	for {
@@ -203,7 +203,7 @@ func (s *Server) doReceive(conn net.Conn, rcvch chan<- interface{}) {
 	// transport buffer for receiving
 	flags := transport.TransportFlag(0).SetProtobuf()
 	rpkt := transport.NewTransportPacket(s.maxPayload, flags)
-	rpkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
+	rpkt.SetDecoder(transport.EncodingProtobuf, protobuf.ProtobufDecode)
 
 	c.Debugf("%v connection %q doReceive() ...\n", s.logPrefix, raddr)
 

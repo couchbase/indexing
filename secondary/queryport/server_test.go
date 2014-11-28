@@ -5,6 +5,7 @@ import "testing"
 import "time"
 
 import "github.com/couchbase/indexing/secondary/common"
+import client "github.com/couchbase/indexing/secondary/queryport/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
@@ -55,7 +56,7 @@ func TestStatistics(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := NewClient(addr, config)
+	client := client.NewClient(addr, config)
 
 	out, err := client.Statistics("idx", "bkt", []byte("aaaa"), []byte("zzzz"),
 		[][]byte{}, 0)
@@ -86,7 +87,7 @@ func TestScan(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := NewClient(addr, config)
+	client := client.NewClient(addr, config)
 
 	count := 0
 	client.Scan(
@@ -137,7 +138,7 @@ func TestScanAll(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := NewClient(addr, config)
+	client := client.NewClient(addr, config)
 
 	count := 0
 	client.ScanAll(
@@ -185,7 +186,7 @@ func BenchmarkStatistics(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := NewClient(addr, config)
+	client := client.NewClient(addr, config)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -211,7 +212,7 @@ func BenchmarkScan1(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := NewClient(addr, config)
+	client := client.NewClient(addr, config)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -244,7 +245,7 @@ func BenchmarkScan100(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := NewClient(addr, config)
+	client := client.NewClient(addr, config)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -275,7 +276,7 @@ func BenchmarkScanParallel10(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := NewClient(addr, config)
+	client := client.NewClient(addr, config)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -305,7 +306,7 @@ func BenchmarkScanAll(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := NewClient(addr, config)
+	client := client.NewClient(addr, config)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
