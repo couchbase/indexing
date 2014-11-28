@@ -358,6 +358,15 @@ func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 			if tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
 				tk.cleanupBucketFromStream(streamId, idx.Defn.Bucket)
 			}
+			//for indexes in INIT_STREAM, the index is present in MAINT_STREAM
+			//as well in catchup state. Cleanup that entry.
+			if streamId == common.INIT_STREAM {
+				streamId = common.MAINT_STREAM
+				tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] -= 1
+				if tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
+					tk.cleanupBucketFromStream(streamId, idx.Defn.Bucket)
+				}
+			}
 		}
 	}
 }

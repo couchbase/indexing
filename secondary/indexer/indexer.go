@@ -849,30 +849,30 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 	var indexList []common.IndexInst
 	indexList = append(indexList, indexInst)
 
-	cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
-		streamId:  indexInst.Stream,
-		indexList: indexList}
+	var indexStreamIds []common.StreamId
 
-	//send stream update to kv sender
-	if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", respCh); !ok {
-		return false
+	//index in INIT_STREAM needs to be removed from MAINT_STREAM as well
+	switch indexInst.Stream {
+
+	case common.MAINT_STREAM:
+		indexStreamIds = append(indexStreamIds, common.MAINT_STREAM)
+
+	case common.INIT_STREAM:
+		indexStreamIds = append(indexStreamIds, common.INIT_STREAM)
+		indexStreamIds = append(indexStreamIds, common.MAINT_STREAM)
+
 	}
 
-	//send stream update to mutation manager
-	if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", respCh); !ok {
-		return false
-	}
+	for _, streamId := range indexStreamIds {
 
-	//send stream update to timekeeper
-	if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
-		return false
-	}
+		cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
+			streamId:  streamId,
+			indexList: indexList}
 
-	//if there are no more indexes in the stream, generate CLOSE_STREAM
-	if idx.checkStreamEmpty(indexInst.Stream) {
-		cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
-			streamId: indexInst.Stream}
-		idx.streamStatus[indexInst.Stream] = false
+		//send stream update to kv sender
+		if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", respCh); !ok {
+			return false
+		}
 
 		//send stream update to mutation manager
 		if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", respCh); !ok {
@@ -882,6 +882,24 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 		//send stream update to timekeeper
 		if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
 			return false
+		}
+
+		//if there are no more indexes in the stream, generate CLOSE_STREAM
+		if idx.checkStreamEmpty(indexInst.Stream) {
+			cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
+				streamId: streamId}
+			idx.streamStatus[streamId] = false
+
+			//send stream update to mutation manager
+			if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", respCh); !ok {
+				return false
+			}
+
+			//send stream update to timekeeper
+			if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
+				return false
+			}
+
 		}
 
 	}
