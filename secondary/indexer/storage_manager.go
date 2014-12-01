@@ -12,8 +12,13 @@ package indexer
 import (
 	"bytes"
 	"encoding/gob"
+	"errors"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
+)
+
+var (
+	ErrIndexRollback = errors.New("Indexer rollback")
 )
 
 //StorageManager manages the snapshots for the indexes and responsible for storing
@@ -331,6 +336,17 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 			}
 		}
 	}
+
+	// Notify all scan waiters for all indexes with error
+	for idxInstId, waiters := range sm.waitersMap {
+		idxInst := sm.indexInstMap[idxInstId]
+		if _, ok := rollbackTs[idxInst.Defn.Bucket]; ok {
+			for _, w := range waiters {
+				w.Error(ErrIndexRollback)
+			}
+		}
+	}
+
 	//reinit the index ts map after rollback
 	sm.initTsMap(sm.indexPartnMap)
 
