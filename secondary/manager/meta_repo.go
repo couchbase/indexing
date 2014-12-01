@@ -131,8 +131,8 @@ func (c *MetadataRepo) GetNextIndexInstId() common.IndexInstId {
 //  Public Function : Index Defnition Lookup
 ///////////////////////////////////////////////////////
 
-func (c *MetadataRepo) GetIndexDefnByName(name string) (*common.IndexDefn, error) {
-	lookupName := indexDefnKeyByName(name)
+func (c *MetadataRepo) GetIndexDefnByName(bucket string, name string) (*common.IndexDefn, error) {
+	lookupName := indexDefnKeyByName(indexName(bucket, name))
 	data, err := c.getMeta(lookupName)
 	if err != nil {
 		return nil, err
@@ -167,6 +167,8 @@ func (c *MetadataRepo) GetTopologyByBucket(bucket string) (*IndexTopology, error
 }
 
 func (c *MetadataRepo) SetTopologyByBucket(bucket string, topology *IndexTopology) error {
+
+	topology.Version = topology.Version + 1
 
 	data, err := MarshallIndexTopology(topology)
 	if err != nil {
@@ -209,7 +211,7 @@ func (c *MetadataRepo) SetGlobalTopology(topology *GlobalTopology) error {
 func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 
 	// check if defn already exist
-	exist, err := c.GetIndexDefnByName(defn.Name)
+	exist, err := c.GetIndexDefnByName(defn.Bucket, defn.Name)
 	if exist != nil {
 		// TODO: should not return error if not found (should return nil)
 		return NewError(ERROR_META_IDX_DEFN_EXIST, NORMAL, METADATA_REPO, nil,
@@ -223,7 +225,7 @@ func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 	}
 
 	// save by defn name
-	lookupName := indexDefnKeyByName(defn.Name)
+	lookupName := indexDefnKeyByName(indexName(defn.Bucket, defn.Name))
 	if err := c.setMeta(lookupName, data); err != nil {
 		return err
 	}
@@ -252,7 +254,7 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 		return err
 	}
 
-	lookupName = indexDefnKeyByName(exist.Name)
+	lookupName = indexDefnKeyByName(indexName(exist.Bucket, exist.Name))
 	if err := c.deleteMeta(lookupName); err != nil {
 		return err
 	}
@@ -260,17 +262,17 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 	return nil
 }
 
-func (c *MetadataRepo) DropIndexByName(name string) error {
+func (c *MetadataRepo) DropIndexByName(bucket string, name string) error {
 
 	// check if defn already exist
-	exist, _ := c.GetIndexDefnByName(name)
+	exist, _ := c.GetIndexDefnByName(bucket, name)
 	if exist == nil {
 		// TODO: should not return error if not found (should return nil)
 		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil,
 			fmt.Sprintf("Index Definition '%s' does not exist", name))
 	}
 
-	lookupName := indexDefnKeyByName(name)
+	lookupName := indexDefnKeyByName(indexName(bucket, name))
 	if err := c.deleteMeta(lookupName); err != nil {
 		return err
 	}
@@ -287,16 +289,15 @@ func (c *MetadataRepo) DropIndexByName(name string) error {
 // public function : Observe
 ///////////////////////////////////////////////////////
 
-func (c *MetadataRepo) ObserveForAdd(key string) *observeHandle {
-
-	lookupName := indexDefnKeyByName(key)
-	return c.watcher.addObserveForAdd(lookupName)
+func (c *MetadataRepo) ObserveAddIndexDefn(bucket string, key string) (*common.IndexDefn, error) {
+	lookupName := indexDefnKeyByName(indexName(bucket, key))
+	c.watcher.observeForAdd(lookupName)
+	return c.GetIndexDefnByName(bucket, key)
 }
 
-func (c *MetadataRepo) ObserveForDelete(key string) *observeHandle {
-
-	lookupName := indexDefnKeyByName(key)
-	return c.watcher.addObserveForDelete(lookupName)
+func (c *MetadataRepo) ObserveDeleteIndexDefn(bucket string, key string) {
+	lookupName := indexDefnKeyByName(indexName(bucket, key))
+	c.watcher.observeForDelete(lookupName)
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -462,6 +463,38 @@ func findTypeFromKey(key string) MetadataKind {
 ///////////////////////////////////////////////////////
 // package local function : Index Definition
 ///////////////////////////////////////////////////////
+
+func bucketFromIndexDefnRepoKey(key string) string {
+	name := indexDefnNameFromKey(key)
+	return bucketFromIndexDefnName(name)
+}
+
+func nameFromIndexDefnRepoKey(key string) string {
+	name := indexDefnNameFromKey(key)
+	return nameFromIndexDefnName(name)
+}
+
+func bucketFromIndexDefnName(name string) string {
+	i := strings.Index(name, "/")
+	if i != -1 {
+		return name[:i]
+	}
+
+	return ""
+}
+
+func nameFromIndexDefnName(name string) string {
+	i := strings.Index(name, "/")
+	if i != -1 && i < len(name)-1 {
+		return name[i+1:]
+	}
+
+	return ""
+}
+
+func indexName(bucket string, name string) string {
+	return bucket + "/" + name
+}
 
 func indexDefnKeyByName(name string) string {
 	return fmt.Sprintf("IndexDefinitionName/%s", name)

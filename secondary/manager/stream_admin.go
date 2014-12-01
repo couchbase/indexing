@@ -10,13 +10,14 @@
 package manager
 
 import (
-	"net"
-	"strconv"
-
 	"github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	projector "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"net"
+	"strconv"
+	"strings"
+	"time"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -25,72 +26,226 @@ import (
 
 type VbMap map[string][]uint16
 
+//
+// ProjectorAdmin handles interaction with projector w.r.t streaming admin functions.
+// The interaction with projector are based on the following rules:
+// 1) Each stream has a <state>
+//    - A timestmap for each bucket.   A timestamp is an array of seqno for each vbucket.
+//    - A set of index instances.  Each instance contains a index definition and a set of endpoints.
+// 2) A projector consumer/client can start a stream based on its own <local state>, without having to
+//    know whether the projector is going to accept the request based on that <local state>.
+// 3) When projector recieves a request to start a stream, it uses its own <local state> to filter out the
+//    the <client request state>.  The resulting <active state> is
+//    - timestamp filtered by <bucket, vbucket> that is applicable for that projector
+//    - the set of index instances as proposed in the client <local state>
+// 4)  Projector client can augment existing <state> by proposing new <state> to projector. Agumentation allows
+//    - adding new instance
+//    - changing endpoint of an instance?
+//    - activate new vbucket
+// 5) State agumentation will not allow
+//    - remove instance
+//    - deactive vbucket
+//    - restart vbucket
+//    - repair connection
+//
 type ProjectorAdmin struct {
+	activeTimestamps map[string][]*protobuf.TsVbuuid
+	factory          ProjectorStreamClientFactory
+	env              ProjectorClientEnv
+}
+
+type adminWorker struct {
+	admin            *ProjectorAdmin
+	server           string
+	streamId         common.StreamId
+	activeTimestamps []*protobuf.TsVbuuid
+	err              error
+	killch           chan bool
+}
+
+type ProjectorStreamClient interface {
+	MutationTopicRequest(topic, endpointType string, reqTimestamps []*protobuf.TsVbuuid,
+		instances []*protobuf.Instance) (*protobuf.TopicResponse, error)
+	DelInstances(topic string, uuids []uint64) error
+	RepairEndpoints(topic string, endpoints []string) error
+	InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error)
+}
+
+type ProjectorStreamClientFactory interface {
+	GetClientForNode(server string) ProjectorStreamClient
+}
+
+type ProjectorStreamClientFactoryImpl struct {
+}
+
+type ProjectorClientEnv interface {
+	GetNodeList(buckets []string) (map[string]string, error)
+}
+
+type ProjectorClientEnvImpl struct {
 }
 
 /////////////////////////////////////////////////////////////////////////
-// Public Function
+// ProjectorAdmin - Public Function
 /////////////////////////////////////////////////////////////////////////
 
-func newProjectorAdmin() *ProjectorAdmin {
-	return new(ProjectorAdmin)
+func NewProjectorAdmin(factory ProjectorStreamClientFactory, env ProjectorClientEnv) *ProjectorAdmin {
+	if factory == nil {
+		factory = newProjectorStreamClientFactoryImpl()
+	}
+	if env == nil {
+		env = newProjectorClientEnvImpl()
+	}
+	return &ProjectorAdmin{activeTimestamps: make(map[string][]*protobuf.TsVbuuid),
+		factory: factory,
+		env:     env}
 }
 
 //
-// Start a new stream for the current index topology
+// Add new index instances to a stream
 //
-func (p *ProjectorAdmin) OpenStreamForBucket(streamId common.StreamId,
-	bucket string,
-	topology []*protobuf.Instance,
-	requestTs *common.TsVbuuid) error {
+func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
+	buckets []string,
+	instances []*protobuf.Instance,
+	requestTimestamps []*common.TsVbuuid) error {
 
-	common.Infof("StreamAdmin::OpenStreamRequestForBucket(): streamId=%d, bucket=%s", streamId.String(), bucket)
+	common.Debugf("ProjectorAdmin::AddIndexToStream(): streamId=%v", streamId)
 
-	// Get the vbmap
-	vbMap, err := getVbMap(bucket)
-	if err != nil {
-		return err
+	// If there is no bucket or index instances, nothing to start.
+	if len(buckets) == 0 || len(instances) == 0 {
+		common.Debugf("ProjectorAdmin::AddIndexToStream(): len(buckets)=%v, len(instances)=%v",
+			len(buckets), len(instances))
+		return nil
 	}
 
-	// For all the nodes in vbmap, start a stream
-	for server, vbnos := range vbMap {
+	shouldRetry := true
+	for shouldRetry {
+		shouldRetry = false
 
-		//get projector client for the particular node
-		client := getClientForNode(server)
-
-		ts, err := makeRestartTimestamp(client, bucket, vbnos, requestTs)
+		nodes, err := p.env.GetNodeList(buckets)
 		if err != nil {
-			return NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
+			return err
+		}
+		common.Debugf("ProjectorAdmin::AddIndexToStream(): len(nodes)=%v", len(nodes))
+
+		// start worker to create mutation stream
+		workers := make(map[string]*adminWorker)
+		donech := make(chan *adminWorker, len(nodes))
+
+		for _, server := range nodes {
+			worker := &adminWorker{
+				admin:            p,
+				server:           server,
+				streamId:         streamId,
+				killch:           make(chan bool, 1),
+				activeTimestamps: nil,
+				err:              nil}
+			workers[server] = worker
+			go worker.addInstances(instances, buckets, requestTimestamps, donech)
 		}
 
-		topic := getTopicForStreamId(streamId)
-		response, err := client.MutationTopicRequest(topic, "dataport", []*protobuf.TsVbuuid{ts}, topology)
+		common.Debugf("ProjectorAdmin::AddIndexToStream(): len(workers)=%v", len(workers))
+
+		// now wait for the worker to be done
+		// TODO: timeout?
+		for len(workers) != 0 {
+			worker := <-donech
+
+			common.Debugf("ProjectorAdmin::AddIndexToStream(): worker %v done", worker.server)
+			p.activeTimestamps[worker.server] = worker.activeTimestamps
+			delete(workers, worker.server)
+
+			if worker.err != nil {
+				common.Debugf("ProjectorAdmin::AddIndexToStream(): worker % has error=%v", worker.server, worker.err)
+
+				// cleanup : kill the other workers
+				for _, worker := range workers {
+					worker.killch <- true
+				}
+
+				// if it is not a recoverable error, then just return
+				if worker.err.(Error).code != ERROR_STREAM_WRONG_VBUCKET &&
+					worker.err.(Error).code != ERROR_STREAM_INVALID_TIMESTAMP &&
+					worker.err.(Error).code != ERROR_STREAM_PROJECTOR_TIMEOUT {
+					return worker.err
+				}
+
+				common.Debugf("ProjectorAdmin::AddIndexToStream(): retry adding instances to nodes")
+				shouldRetry = true
+				break
+			}
+		}
+	}
+
+	return nil
+}
+
+//
+// Delete Index from stream
+//
+func (p *ProjectorAdmin) DeleteIndexFromStream(streamId common.StreamId, buckets []string, instances []uint64) error {
+
+	common.Debugf("StreamAdmin::DeleteIndexFromStream(): streamId=%d", streamId.String())
+
+	// If there is no bucket or index instances, nothing to start.
+	if len(buckets) == 0 || len(instances) == 0 {
+		common.Debugf("ProjectorAdmin::DeleteIndexToStream(): len(buckets)=%v, len(instances)=%v",
+			len(buckets), len(instances))
+		return nil
+	}
+
+	shouldRetry := true
+	for shouldRetry {
+		shouldRetry = false
+
+		nodes, err := p.env.GetNodeList(buckets)
 		if err != nil {
-			// Encounter an error.  For those projectors that have already been opened, let's leave it open.
-			// Eventually those projectors will fill up the buffer and terminate the connection by itself.
 			return err
-
-		} else if err := response.GetErr(); err != nil {
-
-			// TODO: We may get error saying that the stream has already been opened.  Need to
-			// figure out the error code from projector.
-
-			// Encounter an error.  For those projectors that have already been opened, let's leave it open.
-			// Eventually those projectors will fill up the buffer and terminate the connection by itself.
-			common.Errorf("streamProxy::OpenStreamRequestForBucket(): Error encountered when sending adminport request. Error=%v",
-				err.GetError())
-
-			return NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, nil, err.GetError())
-
 		}
 
-		// Projector may reject the restart timestamp for some vbucket.  In this case, will need to restart those
-		// vb using the timestamp provided by the projector.
-		if err := restartVBIfNecessary(client, topic, bucket, "dataport", topology,
-			response.GetRollbackTimestamps(), 0); err != nil {
-			// Encounter an error.  For those projectors that have already been opened, let's leave it open.
-			// Eventually those projectors will fill up the buffer and terminate the connection by itself.
-			return err
+		// start worker to create mutation stream
+		workers := make(map[string]*adminWorker)
+		donech := make(chan *adminWorker, len(nodes))
+
+		for _, server := range nodes {
+			worker := &adminWorker{
+				admin:            p,
+				server:           server,
+				streamId:         streamId,
+				killch:           make(chan bool, 1),
+				activeTimestamps: nil,
+				err:              nil}
+			workers[server] = worker
+			go worker.deleteInstances(instances, donech)
+		}
+
+		common.Debugf("ProjectorAdmin::DeleteIndexToStream(): len(workers)=%v", len(workers))
+
+		// now wait for the worker to be done
+		// TODO: timeout?
+		for len(workers) != 0 {
+			worker := <-donech
+
+			common.Debugf("ProjectorAdmin::DeleteIndexToStream(): worker %v done", worker.server)
+			delete(workers, worker.server)
+
+			if worker.err != nil {
+				common.Debugf("ProjectorAdmin::DeleteIndexFromStream(): worker % has error=%v", worker.server, worker.err)
+
+				// cleanup : kill the other workers
+				for _, worker := range workers {
+					worker.killch <- true
+				}
+
+				// if it is not a recoverable error, then just return
+				if worker.err.(Error).code != ERROR_STREAM_PROJECTOR_TIMEOUT {
+					return worker.err
+				}
+
+				common.Debugf("ProjectorAdmin::DeleteIndexToStream(): retry adding instances to nodes")
+				shouldRetry = true
+				break
+			}
 		}
 	}
 
@@ -102,48 +257,68 @@ func (p *ProjectorAdmin) OpenStreamForBucket(streamId common.StreamId,
 // Once connected, the provider will stream mutations from the current vbucket seqno.
 // In other words, the provider will not reset the seqno.
 //
-func (p *ProjectorAdmin) RepairStreamForEndpoint(streamId common.StreamId,
+func (p *ProjectorAdmin) RepairEndpointForStream(streamId common.StreamId,
 	bucketVbnosMap map[string][]uint16,
 	endpoint string) error {
 
-	common.Infof("StreamAdmin::RepairStreamForEndpoint(): streamId = %d", streamId.String())
+	common.Debugf("ProjectorAdmin::RepairStreamForEndpoint(): streamId = %d", streamId.String())
 
-	serverList := make(map[string]string)
-
-	for bucket, repairVbnos := range bucketVbnosMap {
-		if len(repairVbnos) > 0 {
-
-			// Get the vbmap
-			vbMap, err := getVbMap(bucket)
-			if err != nil {
-				return err
-			}
-
-			// from the bucket vbmap, find the server that contain vb that requires repair
-			for server, serverVbnos := range vbMap {
-				intersect := common.Intersection(repairVbnos, serverVbnos)
-				if intersect != nil && len(intersect) > 0 {
-					serverList[server] = server
-				}
-			}
-		}
+	// If there is no bucket, nothing to start.
+	if len(bucketVbnosMap) == 0 {
+		return nil
 	}
 
-	// Now given the list of server, call each one of them to repair endpoint.
-	if serverList != nil && len(serverList) > 0 {
+	shouldRetry := true
+	for shouldRetry {
+		shouldRetry = false
 
-		topic := getTopicForStreamId(streamId)
+		var buckets []string = nil
+		for bucket, _ := range bucketVbnosMap {
+			buckets = append(buckets, bucket)
+		}
 
-		for server, _ := range serverList {
-			//get projector client for the particular node
-			client := getClientForNode(server)
+		nodes, err := p.env.GetNodeList(buckets)
+		if err != nil {
+			return err
+		}
 
-			// call projector to repair endpoint
-			if err := client.RepairEndpoints(topic, []string{endpoint}); err != nil {
-				// TODO: It is expected that the projector will return an error if the
-				// stream has not yet started -- this will indicate that the projector
-				// may have terminated unexpectedly.
-				return err
+		// start worker to create mutation stream
+		workers := make(map[string]*adminWorker)
+		donech := make(chan *adminWorker, len(nodes))
+
+		for _, server := range nodes {
+			worker := &adminWorker{
+				admin:            p,
+				server:           server,
+				streamId:         streamId,
+				killch:           make(chan bool, 1),
+				activeTimestamps: nil,
+				err:              nil}
+			workers[server] = worker
+			go worker.repairEndpoint(endpoint, donech)
+		}
+
+		// now wait for the worker to be done
+		// TODO: timeout?
+		for len(workers) != 0 {
+			worker := <-donech
+			delete(workers, worker.server)
+
+			if worker.err != nil {
+				common.Debugf("ProjectorAdmin::RepairEndpointFromStream(): worker % has error=%v", worker.server, worker.err)
+
+				// cleanup : kill the other workers
+				for _, worker := range workers {
+					worker.killch <- true
+				}
+
+				// if it is not a recoverable error, then just return
+				if worker.err.(Error).code != ERROR_STREAM_PROJECTOR_TIMEOUT {
+					return worker.err
+				}
+
+				shouldRetry = true
+				break
 			}
 		}
 	}
@@ -182,127 +357,363 @@ func CloseStreamFor(streamId StreamId) error {
 }
 */
 
-//
-// Add Index to stream
-//
-func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId, bucket string, instances []*protobuf.Instance) error {
-
-	common.Infof("StreamAdmin::AddIndexToStream(): streamId=%d, bucket=%s", streamId.String(), bucket)
-
-	// Get the vbmap
-	vbMap, err := getVbMap(bucket)
-	if err != nil {
-		return err
-	}
-
-	// For all the nodes in vbmap, start a stream
-	for server, _ := range vbMap {
-
-		//get projector client for the particular node
-		client := getClientForNode(server)
-
-		topic := getTopicForStreamId(streamId)
-		if err := client.AddInstances(topic, instances); err != nil {
-			// Encounter an error.  For those projectors that have already been opened, let's leave it open.
-			// Eventually those projectors will fill up the buffer and terminate the connection by itself.
-			return err
-		}
-	}
-
-	return nil
-}
-
-//
-// Delete Index to stream
-//
-func (p *ProjectorAdmin) DeleteIndexFromStream(streamId common.StreamId, bucket string, instances []uint64) error {
-
-	common.Infof("StreamAdmin::DeleteIndexFromStream(): streamId=%d, bucket=%s", streamId.String(), bucket)
-
-	// Get the vbmap
-	vbMap, err := getVbMap(bucket)
-	if err != nil {
-		return err
-	}
-
-	// For all the nodes in vbmap, start a stream
-	for server, _ := range vbMap {
-
-		//get projector client for the particular node
-		client := getClientForNode(server)
-
-		topic := getTopicForStreamId(streamId)
-		if err := client.DelInstances(topic, instances); err != nil {
-			// Encounter an error.  For those projectors that have already been opened, let's leave it open.
-			// Eventually those projectors will fill up the buffer and terminate the connection by itself.
-			return err
-		}
-	}
-
-	return nil
-}
-
 /////////////////////////////////////////////////////////////////////////
-// Private Function - Messaging Support Function
+// Private Function - Worker
 /////////////////////////////////////////////////////////////////////////
 
-func restartVBIfNecessary(client *projector.Client,
-	topic string,
-	bucket string,
-	setting string,
-	topology []*protobuf.Instance,
-	rollbackTimestamps []*protobuf.TsVbuuid,
-	counter int) error {
+//
+// Add index instances to a specific projector node
+//
+func (worker *adminWorker) addInstances(instances []*protobuf.Instance,
+	buckets []string,
+	requestTimestamps []*common.TsVbuuid,
+	doneCh chan *adminWorker) {
 
-	if len(rollbackTimestamps) != 0 {
-		for _, rollbackTs := range rollbackTimestamps {
-			if rollbackTs.GetBucket() == bucket {
+	defer func() {
+		doneCh <- worker
+	}()
 
-				result := protobuf.NewTsVbuuid(COUCHBASE_DEFAULT_POOL_NAME, bucket, 1024)
-				for i, vbno := range rollbackTs.GetVbnos() {
-					result.Vbnos[vbno] = vbno
-					result.Seqnos[vbno] = rollbackTs.GetSeqnos()[i]
-					result.Vbuuids[vbno] = rollbackTs.GetVbuuids()[i]
-				}
+	common.Debugf("adminWorker::addInstances(): start")
 
-				response, err := client.MutationTopicRequest(topic, setting, []*protobuf.TsVbuuid{result}, topology)
-				if err != nil && counter < MAX_TOPIC_REQUEST_RETRY_COUNT {
-					return restartVBIfNecessary(client, topic, bucket, setting, topology,
-						response.GetRollbackTimestamps(), counter+1)
-				}
+	// Get projector client for the particular node.  This function does not
+	// return an error even if the server is an invalid host name, but subsequent
+	// call to client may fail.  Also note that there is no method to close the client
+	// (no need to close upon termination).
+	client := worker.admin.factory.GetClientForNode(worker.server)
+	if client == nil {
+		common.Debugf("adminWorker::addInstances(): no client returns from factory")
+		return
+	}
+
+	// compute the restart timestamp for each bucket.  If there is a request timestamp for the
+	// bucket, it will just convert it to protobuf format.  If the bucket does not have a request
+	// timestamp (nil), it will use the failover log to compute the timestamp.
+	var timestamps []*protobuf.TsVbuuid = nil
+	for _, bucket := range buckets {
+
+		var bucketTs *common.TsVbuuid = nil
+		for _, requestTs := range requestTimestamps {
+			if requestTs.Bucket == bucket {
+				bucketTs = requestTs
+				break
 			}
 		}
+
+		ts, err := makeRestartTimestamp(client, bucket, bucketTs)
+		if err != nil {
+			// udpate the error string and put myself in the done channel
+			worker.err = NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "Unable to make restart timestamp")
+			return
+		}
+		timestamps = append(timestamps, ts)
+	}
+
+	// open the stream for the specific node for the set of <bucket, timestamp>
+	topic := getTopicForStreamId(worker.streamId)
+
+	retry := true
+	startTime := time.Now().Unix()
+	for retry {
+		select {
+		case <-worker.killch:
+			return
+		default:
+			response, err := client.MutationTopicRequest(topic, "dataport", timestamps, instances)
+			if err == nil {
+				// no error, it is successful for this node
+				// TODO: Get the active timestamp from the response
+				//worker.activeTimestamps = nil
+				worker.err = nil
+				return
+			}
+
+			timestamps, err = worker.shouldRetryAddInstances(timestamps, response, err)
+			if err != nil {
+				// Either it is a non-recoverable error or an error that cannot be retry by this worker.
+				// Terminate this worker.
+				// TODO: Get the active timestamp from the response
+				//worker.activeTimestamps = nil
+				worker.err = err
+				return
+			}
+
+			retry = time.Now().Unix()-startTime < MAX_PROJECTOR_RETRY_ELAPSED_TIME
+		}
+	}
+
+	// When we reach here, it passes the elaspse time that the projector is supposed to response.
+	// Projector may die or it can be a network partition, need to return an error since it may
+	// require another worker to retry.
+	worker.err = NewError4(ERROR_STREAM_PROJECTOR_TIMEOUT, NORMAL, STREAM, "Projector Call timeout after retry.")
+}
+
+//
+// Handle error for adding instance.  The following error can be returned from projector:
+// 1) Unconditional Recoverable error by worker
+// 		* generic http error
+// 		* ErrorStreamRequest
+// 		* ErrorResposneTimeout
+// 		* ErrorFeeder
+// 2) Non Recoverable error
+// 		* ErrorInconsistentFeed
+// 3) Recoverable error by other worker
+// 		* ErrorInvalidVbucketBranch
+// 		* ErrorNotMyVbucket
+// 4) Error that may not need retry
+//		* ErrorTopicExist
+//
+func (worker *adminWorker) shouldRetryAddInstances(requestTs []*protobuf.TsVbuuid,
+	response *protobuf.TopicResponse,
+	err error) ([]*protobuf.TsVbuuid, error) {
+
+	common.Infof("adminWorker::shouldRetryAddInstances(): start")
+
+	// First of all, let's check for any non-recoverable error.
+	errStr := err.Error()
+	common.Debugf("adminWorker::shouldRetryAddInstances(): Error encountered when calling MutationTopicRequest. Error=%v", errStr)
+
+	if strings.Contains(errStr, "ErrorTopicExist") {
+		// TODO: Need pratap to define the semantic of ErrorTopExist.   Right now return as an non-recoverable error.
+		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
+
+	} else if strings.Contains(errStr, "ErrorInconsistentFeed") {
+		// This is fatal error.  Should only happen due to coding error.   Need to return this error.
+		// For those projectors that have already been opened, let's leave it open. Eventually those
+		// projectors will fill up the buffer and terminate the connection by itself.
+		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
+
+	} else if strings.Contains(errStr, "ErrorNotMyVbucket") {
+		return nil, NewError(ERROR_STREAM_WRONG_VBUCKET, NORMAL, STREAM, err, "")
+
+	} else if strings.Contains(errStr, "ErrorInvalidVbucketBranch") {
+		return nil, NewError(ERROR_STREAM_INVALID_TIMESTAMP, NORMAL, STREAM, err, "")
+	}
+
+	// There is no non-recoverable error, so we can retry.  For retry, recompute the new set of timestamps based on the response.
+	rollbackTimestamps := response.GetRollbackTimestamps()
+	var newRequestTs []*protobuf.TsVbuuid = nil
+	for _, ts := range requestTs {
+		ts = recomputeRequestTimestamp(ts, rollbackTimestamps)
+		newRequestTs = append(newRequestTs, ts)
+	}
+
+	return newRequestTs, nil
+}
+
+//
+// Delete index instances from a specific projector node
+//
+func (worker *adminWorker) deleteInstances(instances []uint64, doneCh chan *adminWorker) {
+
+	defer func() {
+		doneCh <- worker
+	}()
+
+	common.Infof("adminWorker::deleteInstances(): start")
+
+	// Get projector client for the particular node.  This function does not
+	// return an error even if the server is an invalid host name, but subsequent
+	// call to client may fail.  Also note that there is no method to close the client
+	// (no need to close upon termination).
+	client := worker.admin.factory.GetClientForNode(worker.server)
+	if client == nil {
+		common.Debugf("adminWorker::deleteInstances(): no client returns from factory")
+		return
+	}
+
+	// open the stream for the specific node for the set of <bucket, timestamp>
+	topic := getTopicForStreamId(worker.streamId)
+
+	retry := true
+	startTime := time.Now().Unix()
+	for retry {
+		select {
+		case <-worker.killch:
+			return
+		default:
+			err := client.DelInstances(topic, instances)
+			if err == nil {
+				// no error, it is successful for this node
+				worker.err = nil
+				return
+			}
+
+			common.Debugf("adminWorker::deleteInstances(): Error encountered when calling DelInstances. Error=%v", err.Error())
+			if strings.Contains(err.Error(), "ErrorTopicMissing") {
+				// It is OK if topic is missing
+				worker.err = nil
+				return
+			}
+
+			retry = time.Now().Unix()-startTime < MAX_PROJECTOR_RETRY_ELAPSED_TIME
+		}
+	}
+
+	// When we reach here, it passes the elaspse time that the projector is supposed to response.
+	// Projector may die or it can be a network partition, need to return an error since it may
+	// require another worker to retry.
+	worker.err = NewError4(ERROR_STREAM_PROJECTOR_TIMEOUT, NORMAL, STREAM, "Projector Call timeout after retry.")
+}
+
+//
+// Repair endpoint for a specific projector node
+//
+func (worker *adminWorker) repairEndpoint(endpoint string, doneCh chan *adminWorker) {
+
+	defer func() {
+		doneCh <- worker
+	}()
+
+	common.Infof("adminWorker::repairEndpoint(): start")
+
+	// Get projector client for the particular node.  This function does not
+	// return an error even if the server is an invalid host name, but subsequent
+	// call to client may fail.  Also note that there is no method to close the client
+	// (no need to close upon termination).
+	client := worker.admin.factory.GetClientForNode(worker.server)
+	if client == nil {
+		common.Debugf("adminWorker::repairEndpoints(): no client returns from factory")
+		return
+	}
+
+	// open the stream for the specific node for the set of <bucket, timestamp>
+	topic := getTopicForStreamId(worker.streamId)
+
+	retry := true
+	startTime := time.Now().Unix()
+	for retry {
+		select {
+		case <-worker.killch:
+			return
+		default:
+
+			err := client.RepairEndpoints(topic, []string{endpoint})
+			if err == nil {
+				// no error, it is successful for this node
+				worker.err = nil
+				return
+			}
+
+			common.Debugf("adminWorker::repairEndpiont(): Error encountered when calling RepairEndpoint. Error=%v", err.Error())
+			if strings.Contains(err.Error(), "ErrorTopicMissing") {
+				// It is OK if topic is missing
+				worker.err = nil
+				return
+			}
+
+			retry = time.Now().Unix()-startTime < MAX_PROJECTOR_RETRY_ELAPSED_TIME
+		}
+	}
+
+	// When we reach here, it passes the elaspse time that the projector is supposed to response.
+	// Projector may die or it can be a network partition, need to return an error since it may
+	// require another worker to retry.
+	worker.err = NewError4(ERROR_STREAM_PROJECTOR_TIMEOUT, NORMAL, STREAM, "Projector Call timeout after retry.")
+}
+
+/////////////////////////////////////////////////////////////////////////
+// Private Function - Timestamp
+/////////////////////////////////////////////////////////////////////////
+
+//
+// Create the restart timetamp
+//
+func makeRestartTimestamp(client ProjectorStreamClient,
+	bucket string,
+	requestTs *common.TsVbuuid) (*protobuf.TsVbuuid, error) {
+
+	if requestTs == nil {
+		// Get the request timestamp from each server that has the bucket (last arg is nil).
+		// This should return a full timestamp of all the vbuckets. There is no guarantee that this
+		// method will get the latest seqno though (it computes the timestamp from failover log).
+		//
+		// If the cluster configuration changes:
+		// 1) rebalancing - should be fine since vbuuid remains unchanged
+		// 2) failover.  This can mean that the timestamp can have stale vbuuid.   Subsequent
+		//    call to projector will detect this.
+		return client.InitialRestartTimestamp(DEFAULT_POOL_NAME, bucket)
+
+	} else {
+		newTs := protobuf.NewTsVbuuid(DEFAULT_POOL_NAME, requestTs.Bucket, len(requestTs.Seqnos))
+		for i, _ := range requestTs.Seqnos {
+			newTs.Append(uint16(i), requestTs.Seqnos[i], requestTs.Vbuuids[i],
+				requestTs.Snapshots[i][0], requestTs.Snapshots[i][1])
+		}
+		return newTs, nil
+	}
+}
+
+//
+// Compute a new request timestamp based on the response from projector.
+// If all the vb is active for the given requestTs, then this function returns nil.
+//
+func recomputeRequestTimestamp(requestTs *protobuf.TsVbuuid,
+	rollbackTimestamps []*protobuf.TsVbuuid) *protobuf.TsVbuuid {
+
+	newTs := protobuf.NewTsVbuuid(DEFAULT_POOL_NAME, requestTs.GetBucket(), len(requestTs.GetVbnos()))
+	rollbackTs := findTimestampForBucket(rollbackTimestamps, requestTs.GetBucket())
+
+	for i, vbno := range requestTs.GetVbnos() {
+		offset := findTimestampOffsetForVb(rollbackTs, vbno)
+		if offset != -1 {
+			// there is a failover Ts for this vbno.  Use that one for retry.
+			newTs.Append(uint16(vbno), rollbackTs.Seqnos[offset], rollbackTs.Vbuuids[offset],
+				rollbackTs.Snapshots[offset].GetStart(), rollbackTs.Snapshots[offset].GetEnd())
+		} else {
+			// the vb is not active, just copy from the original requestTS
+			newTs.Append(uint16(vbno), requestTs.Seqnos[i], requestTs.Vbuuids[i],
+				requestTs.Snapshots[i].GetStart(), requestTs.Snapshots[i].GetEnd())
+		}
+	}
+
+	return newTs
+}
+
+//
+// Find timestamp for the corresponding bucket withing the array of timestamps
+//
+func findTimestampForBucket(timestamps []*protobuf.TsVbuuid, bucket string) *protobuf.TsVbuuid {
+
+	for _, ts := range timestamps {
+		if ts.GetBucket() == bucket {
+			return ts
+		}
 	}
 
 	return nil
 }
 
-/////////////////////////////////////////////////////////////////////////
-// Private Function
-/////////////////////////////////////////////////////////////////////////
-
 //
-// Get the VB Map
+// Find the offset/index in the timestamp for the given vbucket no.  Return
+// -1 if no matching vbno being found.
 //
-func getVbMap(bucket string) (VbMap, error) {
+func findTimestampOffsetForVb(ts *protobuf.TsVbuuid, vbno uint32) int {
 
-	// TODO: figure out security in a trusted domain
-	bucketRef, err := couchbase.GetBucket(COUCHBASE_INTERNAL_BUCKET_URL, COUCHBASE_DEFAULT_POOL_NAME, bucket)
-	if err != nil {
-		return nil, err
+	if ts == nil {
+		return -1
 	}
-	defer bucketRef.Close()
 
-	bucketRef.Refresh()
-	result, err := bucketRef.GetVBmap(nil)
+	for i, ts_vbno := range ts.GetVbnos() {
+		if ts_vbno == vbno {
+			return i
+		}
+	}
 
-	return VbMap(result), err
+	return -1
+}
+
+/////////////////////////////////////////////////////////////////////////
+// Private Function -  ProjectorStreamClientFactory
+/////////////////////////////////////////////////////////////////////////
+
+func newProjectorStreamClientFactoryImpl() ProjectorStreamClientFactory {
+	return new(ProjectorStreamClientFactoryImpl)
 }
 
 //
 // Get the projector client for the given node
 //
-func getClientForNode(server string) *projector.Client {
+func (p *ProjectorStreamClientFactoryImpl) GetClientForNode(server string) ProjectorStreamClient {
 
 	var projAddr string
 
@@ -322,11 +733,11 @@ func getClientForNode(server string) *projector.Client {
 				p := iportProj + nodeNum
 				projAddr = LOCALHOST + ":" + strconv.Itoa(p)
 			}
-			common.Debugf("StreamAdmin::getClientForNode(): Local Projector Addr: %v", projAddr)
+			common.Debugf("StreamAdmin::GetClientForNode(): Local Projector Addr: %v", projAddr)
 
 		} else {
 			projAddr = host + ":" + PROJECTOR_PORT
-			common.Debugf("StreamAdmin::getClientForNode(): Remote Projector Addr: %v", projAddr)
+			common.Debugf("StreamAdmin::GetClientForNode(): Remote Projector Addr: %v", projAddr)
 		}
 	}
 
@@ -337,6 +748,48 @@ func getClientForNode(server string) *projector.Client {
 	return ap
 }
 
+/////////////////////////////////////////////////////////////////////////
+// Private Function -  ProjectorClientEnv
+/////////////////////////////////////////////////////////////////////////
+
+func newProjectorClientEnvImpl() ProjectorClientEnv {
+	return new(ProjectorClientEnvImpl)
+}
+
+//
+// Get the set of nodes for all the given buckets
+//
+func (p *ProjectorClientEnvImpl) GetNodeList(buckets []string) (map[string]string, error) {
+
+	common.Debugf("ProjectorCLientEnvImpl::getNodeList(): start")
+
+	nodes := make(map[string]string)
+
+	for _, bucket := range buckets {
+
+		bucketRef, err := couchbase.GetBucket(COUCHBASE_INTERNAL_BUCKET_URL, DEFAULT_POOL_NAME, bucket)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := bucketRef.Refresh(); err != nil {
+			return nil, err
+		}
+
+		for _, node := range bucketRef.NodeAddresses() {
+			// TODO: This may not work for cluster_run when all processes are run in the same node.  Need to check.
+			common.Debugf("ProjectorCLientEnvImpl::getNodeList(): node=%v for bucket %v", node, bucket)
+			nodes[node] = node
+		}
+	}
+
+	return nodes, nil
+}
+
+/////////////////////////////////////////////////////////////////////////
+// Private Function - Utilty
+/////////////////////////////////////////////////////////////////////////
+
 //
 // Convert StreamId into topic string
 //
@@ -346,9 +799,17 @@ func getTopicForStreamId(streamId common.StreamId) string {
 
 	switch streamId {
 	case common.MAINT_STREAM:
-		topic = MAINT_TOPIC
+		if !TESTING {
+			topic = MAINT_TOPIC
+		} else {
+			topic = "testing " + MAINT_TOPIC
+		}
 	case common.INIT_STREAM:
-		topic = INIT_TOPIC
+		if !TESTING {
+			topic = INIT_TOPIC
+		} else {
+			topic = "testing " + INIT_TOPIC
+		}
 	}
 
 	return topic
@@ -369,36 +830,4 @@ func getPortForStreamId(streamId common.StreamId) string {
 	}
 
 	return port
-}
-
-//
-// Create the restart timetamp
-//
-func makeRestartTimestamp(client *projector.Client,
-	bucket string,
-	vbnos []uint16,
-	requestTs *common.TsVbuuid) (*protobuf.TsVbuuid, error) {
-
-	ts := protobuf.NewTsVbuuid(COUCHBASE_DEFAULT_POOL_NAME, bucket, len(vbnos))
-
-	if requestTs == nil {
-		newVbnos := common.Vbno16to32(vbnos)
-		flogs, err := client.GetFailoverLogs(COUCHBASE_DEFAULT_POOL_NAME, bucket, newVbnos)
-		if err != nil {
-			common.Errorf("StreamAdmin::makeRestartTimestamp(): Unexpected Error for retrieving failover log for bucket %s = %s ",
-				bucket, err.Error())
-			return nil, err
-		}
-
-		ts = ts.ComputeFailoverTs(flogs.ToFailoverLog(vbnos))
-
-	} else {
-
-		for _, vbno := range vbnos {
-			ts.Append(uint16(vbno), requestTs.Seqnos[vbno], requestTs.Vbuuids[vbno],
-				requestTs.Snapshots[vbno][0], requestTs.Snapshots[vbno][1])
-		}
-	}
-
-	return ts, nil
 }

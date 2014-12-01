@@ -14,8 +14,9 @@ type EventType byte
 
 const (
 	EVENT_NONE EventType = iota
-    EVENT_CREATE_INDEX 
+	EVENT_CREATE_INDEX
 	EVENT_DROP_INDEX
+	EVENT_UPDATE_TOPOLOGY
 )
 
 type eventManager struct {

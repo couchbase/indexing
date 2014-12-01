@@ -29,7 +29,10 @@ func TestCoordinator(t *testing.T) {
 	var leaderAddr = "localhost:9884"
 	var config = "./config.json"
 
-	mgr, err := manager.NewIndexManager(requestAddr, leaderAddr, config)
+	factory := new(testDefaultClientFactory)
+	env := new(testDefaultClientEnv)
+	admin := manager.NewProjectorAdmin(factory, env)
+	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +59,7 @@ func TestCoordinator(t *testing.T) {
 	}
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	idxDefn, err = mgr.GetIndexDefnByName("coordinator_test")
+	idxDefn, err = mgr.GetIndexDefnByName("Default", "coordinator_test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +89,7 @@ func TestCoordinator(t *testing.T) {
 // clean up
 func cleanup(mgr *manager.IndexManager, t *testing.T) {
 
-	err := mgr.HandleDeleteIndexDDL("coordinator_test")
+	err := mgr.HandleDeleteIndexDDL("Default", "coordinator_test")
 	if err != nil {
 		t.Fatal(err)
 	}

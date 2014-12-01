@@ -39,8 +39,8 @@ type Timer struct {
 	stopchs    map[common.StreamId]stopchBucketMap
 	outch      chan *timestampWrapper
 
-	mutex    sync.Mutex
-	isClosed bool
+	mutex sync.Mutex
+	ready bool
 }
 
 type timestampWrapper struct {
@@ -63,10 +63,10 @@ func newTimer() *Timer {
 	outch := make(chan *timestampWrapper, TIMESTAMP_CHANNEL_SIZE)
 
 	timer := &Timer{timestamps: timestamps,
-		tickers:  tickers,
-		stopchs:  stopchs,
-		outch:    outch,
-		isClosed: false}
+		tickers: tickers,
+		stopchs: stopchs,
+		outch:   outch,
+		ready:   false}
 
 	return timer
 }
@@ -87,8 +87,8 @@ func (t *Timer) stopAll() {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 
-	if !t.isClosed {
-		t.isClosed = true
+	if t.ready {
+		t.ready = false
 
 		// Stop the timer goroutine
 		for streamId, stopchMap := range t.stopchs {
@@ -145,6 +145,8 @@ func (t *Timer) start(streamId common.StreamId, bucket string) {
 		tickerMap.set(bucket, ticker)
 		go t.run(streamId, bucket, ticker, stopch)
 	}
+
+	t.ready = true
 }
 
 //
@@ -216,7 +218,7 @@ func (t *Timer) getLatest(streamId common.StreamId, bucket string) *common.TsVbu
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 
-	if t.isClosed {
+	if !t.ready {
 		return nil
 	}
 
@@ -241,7 +243,7 @@ func (t *Timer) increment(streamId common.StreamId, bucket string, vbucket uint3
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 
-	if t.isClosed {
+	if !t.ready {
 		return
 	}
 
@@ -268,7 +270,7 @@ func (t *Timer) advance(streamId common.StreamId, bucket string) (*common.TsVbuu
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 
-	if t.isClosed {
+	if !t.ready {
 		return nil, false
 	}
 
@@ -290,13 +292,15 @@ func (t *Timer) advance(streamId common.StreamId, bucket string) (*common.TsVbuu
 //
 func (t *Timer) run(streamId common.StreamId, bucket string, ticker *time.Ticker, stopch chan bool) {
 
+	common.Debugf("timer.run(): Start for bucket %v", bucket)
+
 	defer ticker.Stop()
 
 	for {
 		select {
 		// Make sure the stopch is the first one in select.
 		case <-stopch:
-			common.Debugf("timer.run(): Coordinator timer being explicitly stopped by supervisor.")
+			common.Debugf("timer.run(): Coordinator timer for bucket %v being explicitly stopped by supervisor.", bucket)
 			return
 
 		case <-ticker.C:
@@ -310,6 +314,7 @@ func (t *Timer) run(streamId common.StreamId, bucket string, ticker *time.Ticker
 				}()
 
 				ts, ok := t.advance(streamId, bucket)
+				common.Debugf("timer.run(): Advancing timestamp for bucket %v", bucket)
 				if ok && len(t.outch) < TIMESTAMP_CHANNEL_SIZE {
 					// Make sure that this call is not blocking.  It is OK to drop
 					// the timestamp is the channel receiver is slow.
@@ -317,6 +322,7 @@ func (t *Timer) run(streamId common.StreamId, bucket string, ticker *time.Ticker
 					if err != nil {
 						common.Debugf("timer.run(): Unable to create wrapper for timestamp.  Skip timestamp.")
 					} else {
+						common.Debugf("timer.run(): Sending timestamp to channel for bucket %v", bucket)
 						t.outch <- wrapper
 					}
 				}
@@ -411,7 +417,8 @@ func (t *timestampHistory) increment(vbucket uint32, vbuuid uint64, seqno uint64
 	timestamp.Seqnos[vbucket] = seqno
 	timestamp.Vbuuids[vbucket] = vbuuid
 
-	common.Debugf("timestampHistory.increment(): increment timestamp: vb id : %d, seqno : %d, vbuuid : %d", vbucket, seqno, vbuuid)
+	common.Debugf("timestampHistory.increment(): increment timestamp: bucket %v : vb id : %d, seqno : %d, vbuuid : %d",
+		timestamp.Bucket, vbucket, seqno, vbuuid)
 }
 
 //
@@ -490,7 +497,7 @@ func unmarshallTimestampWrapper(data []byte) (*timestampWrapper, error) {
 
 func marshallTimestamp(input *common.TsVbuuid) ([]byte, error) {
 
-	ts := protobuf.NewTsVbuuid(COUCHBASE_DEFAULT_POOL_NAME, input.Bucket, NUM_VB)
+	ts := protobuf.NewTsVbuuid(DEFAULT_POOL_NAME, input.Bucket, NUM_VB)
 	ts = ts.FromTsVbuuid(input)
 	buf, err := proto.Marshal(ts)
 	if err != nil {

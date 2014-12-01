@@ -26,10 +26,13 @@ type IndexManager struct {
 	coordinator *Coordinator
 	reqHandler  *requestHandler
 	eventMgr    *eventManager
-	streamMgr   *StreamManager
-	timer       *Timer
+
+	// stream management
+	streamMgr *StreamManager
+	admin     StreamAdmin
 
 	// timestamp management
+	timer            *Timer
 	timestampCh      map[common.StreamId]chan *common.TsVbuuid
 	timekeeperStopCh chan bool
 
@@ -48,8 +51,28 @@ func NewIndexManager(requestAddr string,
 	leaderAddr string,
 	config string) (mgr *IndexManager, err error) {
 
+	return NewIndexManagerInternal(requestAddr, leaderAddr, config, nil)
+}
+
+//
+// Create a new IndexManager
+//
+func NewIndexManagerInternal(requestAddr string,
+	leaderAddr string,
+	config string,
+	admin StreamAdmin) (mgr *IndexManager, err error) {
+
 	mgr = new(IndexManager)
 	mgr.isClosed = false
+
+	// stream mgmt	- stream services will start if the indexer node becomes master
+	mgr.streamMgr = nil
+	mgr.admin = admin
+
+	// timestamp mgmt	- timestamp servcie will start if indexer node becomes master
+	mgr.timestampCh = make(map[common.StreamId]chan *common.TsVbuuid)
+	mgr.timer = nil
+	mgr.timekeeperStopCh = nil
 
 	// Initialize MetadataRepo.  This a blocking call until the
 	// the metadataRepo (including watcher) is operational (e.g.
@@ -59,19 +82,6 @@ func NewIndexManager(requestAddr string,
 		return nil, err
 	}
 
-	// Initialize the timer
-	mgr.timestampCh = make(map[common.StreamId]chan *common.TsVbuuid)
-	mgr.timer = newTimer()
-	mgr.timekeeperStopCh = make(chan bool)
-	go mgr.runTimestampKeeper()
-
-	// Initialize Coordinator.  This is non-blocking.  The coordinator
-	// is operational only after it can syncrhonized with the majority
-	// of the indexers.   Any request made to the coordinator will be
-	// put in a channel for later processing (once leader election is done).
-	mgr.coordinator = NewCoordinator(mgr.repo, mgr)
-	go mgr.coordinator.Run(config)
-
 	// Initialize request handler.  This is non-blocking.  The index manager
 	// will not be able handle new request until request handler is done initialization.
 	mgr.reqHandler, err = NewRequestHandler(mgr)
@@ -80,21 +90,23 @@ func NewIndexManager(requestAddr string,
 		return nil, err
 	}
 
-	// Initialize the event manager.  This is blocking.
+	// Initialize the event manager.  This is non-blocking.  The event manager can be
+	// called indirectly by watcher/meta-repo when new metadata changes are sent
+	// from gometa master to the indexer node.
 	mgr.eventMgr, err = newEventManager()
 	if err != nil {
 		mgr.Close()
 		return nil, err
 	}
 
-	// Initialize the stream manager.
-	admin := newProjectorAdmin()
-	handler := NewMgrMutHandler(mgr, admin)
-	mgr.streamMgr, err = NewStreamManager(mgr, handler, admin)
-	if err != nil {
-		mgr.Close()
-		return nil, err
-	}
+	// Initialize Coordinator.  This is non-blocking.  The coordinator
+	// is operational only after it can syncrhonized with the majority
+	// of the indexers.   Any request made to the coordinator will be
+	// put in a channel for later processing (once leader election is done).
+	// Once the coordinator becomes the leader, it will invoke teh stream
+	// manager.
+	mgr.coordinator = NewCoordinator(mgr.repo, mgr)
+	go mgr.coordinator.Run(config)
 
 	return mgr, nil
 }
@@ -119,6 +131,8 @@ func (m *IndexManager) Close() {
 		return
 	}
 
+	m.stopMasterServiceNoLock()
+
 	if m.repo != nil {
 		m.repo.Close()
 	}
@@ -135,17 +149,6 @@ func (m *IndexManager) Close() {
 		m.reqHandler.close()
 	}
 
-	if m.streamMgr != nil {
-		m.streamMgr.Close()
-	}
-
-	if m.timer != nil {
-		m.timer.stopAll()
-
-		// use timekeeperStopCh to close the timekeeper gorountime right away
-		close(m.timekeeperStopCh)
-	}
-
 	m.isClosed = true
 }
 
@@ -156,8 +159,8 @@ func (m *IndexManager) Close() {
 //
 // Get an index definiton by name
 //
-func (m *IndexManager) GetIndexDefnByName(name string) (*common.IndexDefn, error) {
-	return m.repo.GetIndexDefnByName(name)
+func (m *IndexManager) GetIndexDefnByName(bucket string, name string) (*common.IndexDefn, error) {
+	return m.repo.GetIndexDefnByName(bucket, name)
 }
 
 //
@@ -203,6 +206,20 @@ func (m *IndexManager) StopListenIndexDelete(id string) {
 }
 
 //
+// Listen to update Topology Request
+//
+func (m *IndexManager) StartListenTopologyUpdate(id string) (<-chan interface{}, error) {
+	return m.eventMgr.register(id, EVENT_UPDATE_TOPOLOGY)
+}
+
+//
+// Stop Listen to update Topology Request
+//
+func (m *IndexManager) StopListenTopologyUpdate(id string) {
+	m.eventMgr.unregister(id, EVENT_UPDATE_TOPOLOGY)
+}
+
+//
 // Handle Create Index DDL.  This function will block until
 // 1) The index defn is persisted durably in the dictionary
 // 2) The index defn is applied locally to each "active" indexer
@@ -242,7 +259,7 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 
 	// TODO: Make request id a string
 	id := uint64(time.Now().UnixNano())
-	if !m.coordinator.NewRequest(id, uint32(OPCODE_ADD_IDX_DEFN), defn.Bucket+"/"+defn.Name, content) {
+	if !m.coordinator.NewRequest(id, uint32(OPCODE_ADD_IDX_DEFN), indexName(defn.Bucket, defn.Name), content) {
 		// TODO: double check if it exists in the dictionary
 		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, INDEX_MANAGER, nil,
 			fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
@@ -251,11 +268,11 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 	return nil
 }
 
-func (m *IndexManager) HandleDeleteIndexDDL(name string) error {
+func (m *IndexManager) HandleDeleteIndexDDL(bucket string, name string) error {
 
 	// TODO: Make request id a string
 	id := uint64(time.Now().UnixNano())
-	if !m.coordinator.NewRequest(id, uint32(OPCODE_DEL_IDX_DEFN), name, nil) {
+	if !m.coordinator.NewRequest(id, uint32(OPCODE_DEL_IDX_DEFN), indexName(bucket, name), nil) {
 		// TODO: double check if it exists in the dictionary
 		return NewError(ERROR_MGR_DDL_DROP_IDX, NORMAL, INDEX_MANAGER, nil,
 			fmt.Sprintf("Fail to complete processing delete index statement for index '%s'", name))
@@ -280,6 +297,14 @@ func (m *IndexManager) SetTopologyByBucket(bucket string, topology *IndexTopolog
 	return m.repo.SetTopologyByBucket(bucket, topology)
 }
 
+//
+// Get the global topology
+//
+func (m *IndexManager) GetGlobalTopology() (*GlobalTopology, error) {
+
+	return m.repo.GetGlobalTopology()
+}
+
 ///////////////////////////////////////////////////////
 // public function - Timestamp Operation
 ///////////////////////////////////////////////////////
@@ -288,7 +313,7 @@ func (m *IndexManager) GetStabilityTimestampChannel(streamId common.StreamId) ch
 
 	ch, ok := m.timestampCh[streamId]
 	if !ok {
-		ch = make(chan *common.TsVbuuid, TIMESTAMP_NOTIFY_CH_SIZE)	
+		ch = make(chan *common.TsVbuuid, TIMESTAMP_NOTIFY_CH_SIZE)
 		m.timestampCh[streamId] = ch
 	}
 
@@ -330,18 +355,18 @@ func (m *IndexManager) runTimestampKeeper() {
 func (m *IndexManager) notifyNewTimestamp(wrapper *timestampWrapper) {
 
 	common.Debugf("IndexManager.notifyNewTimestamp(): receive new timestamp, notifying to listener")
- 	streamId := common.StreamId(wrapper.StreamId)
- 	timestamp, err := unmarshallTimestamp(wrapper.Timestamp)
- 	if err != nil {
+	streamId := common.StreamId(wrapper.StreamId)
+	timestamp, err := unmarshallTimestamp(wrapper.Timestamp)
+	if err != nil {
 		common.Debugf("IndexManager.notifyNewTimestamp(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
- 	} else {
- 		ch, ok := m.timestampCh[streamId]
- 		if ok {
- 			if len(ch) < TIMESTAMP_NOTIFY_CH_SIZE {
- 				ch <- timestamp
- 			}
- 		}
- 	}
+	} else {
+		ch, ok := m.timestampCh[streamId]
+		if ok {
+			if len(ch) < TIMESTAMP_NOTIFY_CH_SIZE {
+				ch <- timestamp
+			}
+		}
+	}
 }
 
 func (m *IndexManager) getTimer() *Timer {
@@ -357,4 +382,61 @@ func (m *IndexManager) getTimer() *Timer {
 //
 func (m *IndexManager) notify(evtType EventType, obj interface{}) {
 	m.eventMgr.notify(evtType, obj)
+}
+
+func (m *IndexManager) startMasterService() error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	// Initialize the timer.   The timer will be activated by the
+	// stream manager when the stream manager opens the stream
+	// during initialization.  The stream manager, in turn, is
+	// started when the coordinator becomes the master.   There
+	// is gorounine in index manager that will listen to the
+	// timer and broadcast the stability timestamp to all the
+	// listening node.   This goroutine will be started when
+	// the indexer node becomes the coordinator master.
+	m.timer = newTimer()
+	m.timekeeperStopCh = make(chan bool)
+	go m.runTimestampKeeper()
+
+	// Initialize the stream manager.
+	admin := m.admin
+	if admin == nil {
+		admin = NewProjectorAdmin(nil, nil)
+	}
+	handler := NewMgrMutHandler(m, admin)
+	var err error
+	m.streamMgr, err = NewStreamManager(m, handler, admin)
+	if err != nil {
+		return err
+	}
+	m.streamMgr.StartHandlingTopologyChange()
+	return nil
+}
+
+func (m *IndexManager) stopMasterService() {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	m.stopMasterServiceNoLock()
+}
+
+func (m *IndexManager) stopMasterServiceNoLock() {
+
+	if m.streamMgr != nil {
+		m.streamMgr.Close()
+		m.streamMgr = nil
+	}
+
+	if m.timer != nil {
+		m.timer.stopAll()
+		m.timer = nil
+
+		// use timekeeperStopCh to close the timekeeper gorountime right away
+		if m.timekeeperStopCh != nil {
+			close(m.timekeeperStopCh)
+			m.timekeeperStopCh = nil
+		}
+	}
 }

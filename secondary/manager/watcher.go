@@ -36,16 +36,14 @@ type watcher struct {
 	killch      chan bool
 	status      protocol.PeerStatus
 
-	mutex           sync.Mutex
-	isClosed        bool
-	observePendings map[string]*observeHandle
-	observeProposed map[common.Txnid]*observeHandle
-	notifications   map[common.Txnid]*notificationHandle
+	mutex         sync.Mutex
+	isClosed      bool
+	observes      map[string]*observeHandle
+	notifications map[common.Txnid]*notificationHandle
 }
 
 type observeHandle struct {
 	key         string
-	txnid       common.Txnid
 	w           *watcher
 	mutex       sync.Mutex
 	condVar     *sync.Cond
@@ -74,8 +72,7 @@ func startWatcher(mgr *IndexManager,
 	s.leaderAddr = leaderAddr
 	s.repo = repo
 	s.isClosed = false
-	s.observePendings = make(map[string]*observeHandle)
-	s.observeProposed = make(map[common.Txnid]*observeHandle)
+	s.observes = make(map[string]*observeHandle)
 	s.notifications = make(map[common.Txnid]*notificationHandle)
 
 	s.watcherAddr, err = getWatcherAddr(watcherId)
@@ -93,6 +90,7 @@ func startWatcher(mgr *IndexManager,
 
 	readych := make(chan bool)
 
+	// TODO: call Close() to cleanup the state upon retry by the watcher server
 	go protocol.RunWatcherServer(
 		leaderAddr,
 		s.handler,
@@ -114,6 +112,10 @@ func (s *watcher) Close() {
 		s.isClosed = true
 		s.killch <- true
 	}
+
+	for _, handle := range s.observes {
+		handle.signal(false)
+	}
 }
 
 func (s *watcher) Get(key string) ([]byte, error) {
@@ -132,67 +134,101 @@ func (s *watcher) Set(key string, content []byte) error {
 // Observe will first for existence of the local repository in the watcher.
 // If the condition is satisied, then this function will just return.  Otherwise,
 // this function will wait until condition arrives when dictionary notifies the
-// watcher on new metadata update.   If the watcher looses contact with the dictionary
-// leader,
+// watcher on new metadata update.
+// TODO: Support timeout
 //
-func (s *watcher) addObserveForAdd(key string) *observeHandle {
+func (s *watcher) observeForAdd(key string) {
 
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	handle := func() *observeHandle {
+		s.mutex.Lock()
+		defer s.mutex.Unlock()
 
-	value, err := s.Get(key)
-	if err == nil && value != nil {
-		return nil
+		// This function now has the mutex.  Check if the key if it already exists.
+		value, err := s.Get(key)
+		if err == nil && value != nil {
+			return nil
+		}
+
+		// Create a handle to observe the key when it is committed.  Note that the watcher
+		// will need to acquire the mutex for processing the commit.  Therefore, we don't
+		// have to worry about race condition.
+		handle, ok := s.observes[key]
+		if !ok {
+			handle = newObserveHandle(key)
+			s.observes[key] = handle
+		}
+
+		return handle
+	}()
+
+	if handle != nil {
+		// wait to get notified
+		handle.wait()
+
+		// Double check if the key exist
+		value, err := s.Get(key)
+		if err == nil && value != nil {
+			return
+		}
+
+		// If key still does not exist, then continue to wait
+		s.observeForAdd(key)
 	}
-
-	handle := newObserveHandle(key, true, s)
-	s.observePendings[key] = handle
-
-	return handle
 }
 
-func (s *watcher) addObserveForDelete(key string) *observeHandle {
+func (s *watcher) observeForDelete(key string) {
 
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	handle := func() *observeHandle {
+		s.mutex.Lock()
+		defer s.mutex.Unlock()
 
-	// TODO : Check for the real error for non-existence (from goforestDB)
-	value, err := s.Get(key)
-	if err != nil || value == nil {
-		return nil
+		// TODO : Check for the real error for non-existence (from goforestDB)
+		value, err := s.Get(key)
+		if err != nil || value == nil {
+			return nil
+		}
+
+		// Create a handle to observe the key when it is committed.  Note that the watcher
+		// will need to acquire the mutex for processing the commit.  Therefore, we don't
+		// have to worry about race condition.
+		handle, ok := s.observes[key]
+		if !ok {
+			handle = newObserveHandle(key)
+			s.observes[key] = handle
+		}
+
+		return handle
+	}()
+
+	if handle != nil {
+		handle.wait()
+
+		// Double check if the key exist
+		value, err := s.Get(key)
+		if err != nil || value == nil {
+			return
+		}
+
+		// If key still exist, then continue to wait
+		s.observeForDelete(key)
 	}
-
-	handle := newObserveHandle(key, false, s)
-	s.observePendings[key] = handle
-
-	return handle
 }
 
 func (s *watcher) removeObserve(handle *observeHandle) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	h, ok := s.observePendings[handle.key]
+	h, ok := s.observes[handle.key]
 	if ok && h == handle {
-		delete(s.observePendings, handle.key)
-	}
-
-	if handle.txnid != 0 {
-		h, ok = s.observeProposed[handle.txnid]
-		if ok && h == handle {
-			delete(s.observeProposed, handle.txnid)
-		}
+		delete(s.observes, handle.key)
 	}
 }
 
-func newObserveHandle(key string, isAdd bool, w *watcher) *observeHandle {
+func newObserveHandle(key string) *observeHandle {
 	handle := new(observeHandle)
 	handle.condVar = sync.NewCond(&handle.mutex)
 	handle.key = key
-	handle.txnid = 0
-	handle.checkForAdd = isAdd
 	handle.done = false
-	handle.w = w
 
 	return handle
 }
@@ -209,7 +245,7 @@ func (o *observeHandle) signal(done bool) {
 	o.condVar.L.Lock()
 	defer o.condVar.L.Unlock()
 	o.done = done
-	o.condVar.Signal()
+	o.condVar.Broadcast()
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -267,38 +303,34 @@ func (s *watcher) UpdateStateOnNewProposal(proposal protocol.ProposalMsg) {
 	defer s.mutex.Unlock()
 
 	opCode := common.OpCode(proposal.GetOpCode())
-	handle, ok := s.observePendings[proposal.GetKey()]
-	if ok {
-		if opCode == common.OPCODE_ADD && handle.checkForAdd ||
-			opCode == common.OPCODE_DELETE && !handle.checkForAdd {
-			delete(s.observePendings, proposal.GetKey())
-			handle.txnid = common.Txnid(proposal.GetTxnid())
-			s.observeProposed[common.Txnid(proposal.GetTxnid())] = handle
-		}
-		// TODO : raise error if the condition does not get satisfied?
-	}
-	c.Debugf("Watcher.UpdateStateOnNewProposal(): receive proposal on metadata kind %d", findTypeFromKey(proposal.GetKey())) 
+	c.Debugf("Watcher.UpdateStateOnNewProposal(): receive proposal on metadata kind %d", findTypeFromKey(proposal.GetKey()))
 
 	// register the event for notification
 	var evtType EventType = EVENT_NONE
 	switch opCode {
 	case common.OPCODE_ADD:
-		if findTypeFromKey(proposal.GetKey()) == KIND_INDEX_DEFN {
+		metaType := findTypeFromKey(proposal.GetKey())
+		if metaType == KIND_INDEX_DEFN {
 			evtType = EVENT_CREATE_INDEX
-		} 
+		} else if metaType == KIND_TOPOLOGY {
+			evtType = EVENT_UPDATE_TOPOLOGY
+		}
 	case common.OPCODE_SET:
-		if findTypeFromKey(proposal.GetKey()) == KIND_INDEX_DEFN {
+		metaType := findTypeFromKey(proposal.GetKey())
+		if metaType == KIND_INDEX_DEFN {
 			evtType = EVENT_CREATE_INDEX
-		} 
+		} else if metaType == KIND_TOPOLOGY {
+			evtType = EVENT_UPDATE_TOPOLOGY
+		}
 	case common.OPCODE_DELETE:
 		if findTypeFromKey(proposal.GetKey()) == KIND_INDEX_DEFN {
 			evtType = EVENT_DROP_INDEX
 		}
-	default: 
-		c.Debugf("Watcher.UpdateStateOnNewProposal(): recieve proposal with opcode %d.  Skip convert proposal to event.", opCode) 
+	default:
+		c.Debugf("Watcher.UpdateStateOnNewProposal(): recieve proposal with opcode %d.  Skip convert proposal to event.", opCode)
 	}
-	
-	c.Debugf("Watcher.UpdateStateOnNewProposal(): convert metadata type to event  %d", evtType) 
+
+	c.Debugf("Watcher.UpdateStateOnNewProposal(): convert metadata type to event  %d", evtType)
 	if evtType != EVENT_NONE {
 		c.Debugf("Watcher.UpdateStateOnNewProposal(): register event for txid %d", proposal.GetTxnid())
 		s.notifications[common.Txnid(proposal.GetTxnid())] =
@@ -310,10 +342,10 @@ func (s *watcher) UpdateStateOnCommit(txnid common.Txnid, key string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	handle, ok := s.observeProposed[txnid]
+	handle, ok := s.observes[key]
 	if ok && handle != nil {
+		// Signal will remove observeHandle from watcher
 		handle.signal(true)
-		delete(s.observeProposed, txnid)
 	}
 
 	notification, ok := s.notifications[txnid]

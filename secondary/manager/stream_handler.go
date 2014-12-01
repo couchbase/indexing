@@ -49,8 +49,8 @@ func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
 	offset int) {
 
 	common.Debugf("mgrMutHandler.StreamEnd")
-
-	// A stream has terminated.  Need to restart.
+	// The stream for <bucket, vbucket, vbuuid> has ended.   Need
+	// to restart the stream using
 }
 
 func (m *mgrMutHandler) HandleUpsert(streamId common.StreamId,
@@ -126,14 +126,15 @@ func (m *mgrMutHandler) HandleConnectionError(streamId common.StreamId, err data
 	// For (2) and (3),  the coordinator can call projector to repairEndpoints, without
 	// interrupting the shared stream. If we get an error from projector on repair endpoints,
 	// it will need to restart the stream.
+	// TODO: Need to see if repair endpiont needs to return TopicNotExist
 	//
 	stream := m.indexMgr.streamMgr.getStream(streamId)
 	if stream != nil {
 		endpoint := stream.getEndpoint()
 		// TODO : handle error
-		if err := m.admin.RepairStreamForEndpoint(streamId, (map[string][]uint16)(err), endpoint); err != nil {
+		if err := m.admin.RepairEndpointForStream(streamId, (map[string][]uint16)(err), endpoint); err != nil {
 			// TODO: differentiate the error for "stream not exist"
-			if err := m.indexMgr.streamMgr.OpenStreamForAllBuckets(streamId); err != nil {
+			if err := m.indexMgr.streamMgr.AddIndexForAllBuckets(streamId); err != nil {
 				// TODO : return error
 			}
 		}

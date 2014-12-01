@@ -17,9 +17,9 @@ import (
 	protocol "github.com/couchbase/gometa/protocol"
 	r "github.com/couchbase/gometa/repository"
 	co "github.com/couchbase/indexing/secondary/common"
+	"math"
 	"sync"
 	"time"
-	"math"
 )
 
 /////////////////////////////////////////////////////////////////////////////
@@ -59,7 +59,6 @@ type CoordinatorState struct {
 	status    protocol.PeerStatus
 	pendings  map[uint64]*protocol.RequestHandle       // key : request id
 	proposals map[common.Txnid]*protocol.RequestHandle // key : txnid
-	observes  map[string]*observeHandle                // key : metadata key
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -332,13 +331,6 @@ func (s *Coordinator) cleanupState() {
 				request.CondVar.Signal()
 			})
 	}
-
-	for _, observe := range s.state.observes {
-		common.SafeRun("Coordinator.cleanupState()",
-			func() {
-				observe.signal(false)
-			})
-	}
 }
 
 func (s *Coordinator) markReady() {
@@ -423,6 +415,11 @@ func (s *Coordinator) runProtocol(leader string) (err error) {
 	if leader == host {
 		co.Debugf("Coordinator.runServer() : Local Coordinator %s is elected as leader. Leading ...", leader)
 		s.state.setStatus(protocol.LEADING)
+
+		// start other master services if this node is a candidate as master
+		s.idxMgr.startMasterService()
+		defer s.idxMgr.stopMasterService()
+
 		err = protocol.RunLeaderServer(s.getHostTCPAddr(), s.listener, s, s, s.factory, s.skillch)
 	} else {
 		co.Debugf("Coordinator.runServer() : Remote Coordinator %s is elected as leader. Following ...", leader)
@@ -566,22 +563,18 @@ func (c *Coordinator) LogProposal(proposal protocol.ProposalMsg) error {
 		case OPCODE_DEL_IDX_DEFN:
 			success := c.deleteIndex(proposal.GetKey())
 			co.Debugf("Coordinator.LogProposal(): (deleteIndex) success = %s", success)
-		case OPCODE_NOTIFY_TIMESTAMP:
-			timestamp, err := unmarshallTimestampWrapper(proposal.GetContent())
-			if err == nil {
-				c.idxMgr.notifyNewTimestamp(timestamp)
-			} else {
-				co.Debugf("Coordinator.LogProposal(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
-			}
 		}
-	} /* else if c.GetStatus() == protocol.FOLLOWING {
-		switch common.OpCode(proposal.GetOpCode()) {
-			case OPCODE_ADD_IDX_DEFN:
-				c.observeForAdd(proposal.GetKey())
-			case OPCODE_DEL_IDX_DEFN:
-				c.observeForDelete(proposal.GetKey())
+	}
+
+	switch common.OpCode(proposal.GetOpCode()) {
+	case OPCODE_NOTIFY_TIMESTAMP:
+		timestamp, err := unmarshallTimestampWrapper(proposal.GetContent())
+		if err == nil {
+			c.idxMgr.notifyNewTimestamp(timestamp)
+		} else {
+			co.Debugf("Coordinator.LogProposal(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
 		}
-	} */
+	}
 
 	c.updateRequestOnNewProposal(proposal)
 
@@ -712,17 +705,13 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 		return false
 	}
 
-	// Create the topology before creating the index defn.   In case index defn fails,
-	// the topology will have a dangling reference to a non-existent index defn.  If 
-	// the other way around, it is harder to detect an index defn with a missing
-	// topology entry.
-	if err = c.addIndexToTopology(defn); err != nil {
-		co.Debugf("Coordinator.createIndex() : setTopology fails. Reason = %s", err.Error())
-		return false
-	}
-	
 	if err = c.repo.CreateIndex(defn); err != nil {
 		co.Debugf("Coordinator.createIndex() : createIndex fails. Reason = %s", err.Error())
+		return false
+	}
+
+	if err = c.addIndexToTopology(defn); err != nil {
+		co.Debugf("Coordinator.createIndex() : setTopology fails. Reason = %s", err.Error())
 		return false
 	}
 
@@ -736,17 +725,19 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 //
 func (c *Coordinator) deleteIndex(key string) bool {
 
-	// Drop the index defnition before removing it from the topology.  If it fails to 
-	// remove the index defn from topology, it can mean that there is a dangling reference 
+	bucket := bucketFromIndexDefnName(key)
+	name := nameFromIndexDefnName(key)
+	co.Debugf("Coordinator.deleteIndex() : index to delete = %s, bucket = %s, name = %s", key)
+
+	// Drop the index defnition before removing it from the topology.  If it fails to
+	// remove the index defn from topology, it can mean that there is a dangling reference
 	// in the topology with a deleted index defn, but it is easier to detect.
-	if err := c.repo.DropIndexByName(key); err != nil {
+	if err := c.repo.DropIndexByName(bucket, name); err != nil {
 		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}
 
-	// TODO: get the bucket name from key
-	bucket := "Default"
-	if err := c.removeIndexFromTopology(bucket, key); err != nil {
+	if err := c.deleteIndexFromTopology(bucket, name); err != nil {
 		co.Debugf("Coordinator.deleteIndex() : setTopology fails. Reason = %s", err.Error())
 		return false
 	}
@@ -765,10 +756,11 @@ func (c *Coordinator) addIndexToTopology(defn *co.IndexDefn) error {
 		// TODO: Need to check what type of error before creating a new topologyi
 		topology = new(IndexTopology)
 		topology.Bucket = defn.Bucket
+		topology.Version = 0
 	}
 
-	// TODO: Get the host name from the indexDefn.   
-	host, err := c.findNextAvailNodeForIndex() 
+	// TODO: Get the host name from the indexDefn.
+	host, err := c.findNextAvailNodeForIndex()
 	if err != nil {
 		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, COORDINATOR, nil,
 			fmt.Sprintf("Fail to find a host to store the index '%s'", defn.Name))
@@ -777,11 +769,11 @@ func (c *Coordinator) addIndexToTopology(defn *co.IndexDefn) error {
 	id := c.repo.GetNextIndexInstId()
 	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
 		uint64(id), uint32(co.INDEX_STATE_CREATED), host)
-	
+
 	// Add a reference of the bucket-level topology to the global topology.
 	// If it fails later to create bucket-level topology, it will have
 	// a dangling reference, but it is easier to discover this issue.  Otherwise,
-	// we can end up having a bucket-level topology without being referenced. 
+	// we can end up having a bucket-level topology without being referenced.
 	if err = c.addToGlobalTopologyIfNecessary(topology.Bucket); err != nil {
 		return err
 	}
@@ -794,7 +786,11 @@ func (c *Coordinator) addIndexToTopology(defn *co.IndexDefn) error {
 }
 
 //
-// Find next available node to host a new index for a particular bucket.  
+// Find next available node to host a new index for a particular bucket.
+// This is purely only look at number of index definitons deployed for each
+// node.  This does not take into account node availability as well as
+// working set.  The node to deploy an index should really come from the
+// DBA based on index runtime statistics.
 //
 func (c *Coordinator) findNextAvailNodeForIndex() (string, error) {
 
@@ -808,13 +804,13 @@ func (c *Coordinator) findNextAvailNodeForIndex() (string, error) {
 	// initialize a map of indexCount per node
 	indexCount := make(map[string]int)
 
-	// Initialize the map with local index node 
+	// Initialize the map with local index node
 	host, err := c.env.getLocalHost()
 	if err != nil {
 		return "", err
 	}
 	indexCount[host] = 0
-	
+
 	// Intialize the map with peer index node
 	hosts, err := c.env.getPeerHost()
 	if err != nil {
@@ -825,45 +821,45 @@ func (c *Coordinator) findNextAvailNodeForIndex() (string, error) {
 	}
 
 	// Iterate through the topology for each bucket.  From the slice locator,
-	// find out the node that host the index.   Increment the indexCount accordingly.	
+	// find out the node that host the index.   Increment the indexCount accordingly.
 	for _, key := range globalTop.TopologyKeys {
 		t, err := c.repo.GetTopologyByBucket(getBucketFromTopologyKey(key))
 		if err != nil {
 			return "", err
 		}
-		
-		for _, defnRef := range t.Definitions {	
+
+		for _, defnRef := range t.Definitions {
 			for _, inst := range defnRef.Instances {
 				for _, partition := range inst.Partitions {
-				 	singlePart := partition.SinglePartition
-				 	for _, slice := range singlePart.Slices {
-				 		count, ok := indexCount[slice.Host]
-				 		if ok {
-				 			indexCount[slice.Host] = count + 1
-				 		}
-				 	}	
+					singlePart := partition.SinglePartition
+					for _, slice := range singlePart.Slices {
+						count, ok := indexCount[slice.Host]
+						if ok {
+							indexCount[slice.Host] = count + 1
+						}
+					}
 				}
 			}
 		}
-	}	
+	}
 
 	// look for the host with the smallest count (least populated).
-	minCount := math.MaxInt32 
-	chosenHost := "" 
+	minCount := math.MaxInt32
+	chosenHost := ""
 	for host, count := range indexCount {
 		if count < minCount {
 			minCount = count
 			chosenHost = host
 		}
 	}
-	
+
 	return chosenHost, nil
 }
 
 //
 // Delete Index from Topology
 //
-func (c *Coordinator) removeIndexFromTopology(bucket string, name string) error {
+func (c *Coordinator) deleteIndexFromTopology(bucket string, name string) error {
 
 	// get existing topology
 	topology, err := c.repo.GetTopologyByBucket(bucket)
@@ -871,69 +867,31 @@ func (c *Coordinator) removeIndexFromTopology(bucket string, name string) error 
 		return err
 	}
 
-	topology.RemoveIndexDefinition(bucket, name)
-
-	if err = c.repo.SetTopologyByBucket(topology.Bucket, topology); err != nil {
-		return err
+	defn := topology.FindIndexDefinition(bucket, name)
+	if defn != nil {
+		topology.UpdateStateForIndexInstByDefn(co.IndexDefnId(defn.DefnId), co.INDEX_STATE_DELETED)
+		if err = c.repo.SetTopologyByBucket(topology.Bucket, topology); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
 //
-// Add a reference of the bucket-level index topology to global topology.  
+// Add a reference of the bucket-level index topology to global topology.
 // If not exist, create a new one.
 //
 func (c *Coordinator) addToGlobalTopologyIfNecessary(bucket string) error {
 
 	globalTop, err := c.repo.GetGlobalTopology()
 	if err != nil {
-		globalTop = new(GlobalTopology)	
+		globalTop = new(GlobalTopology)
 	}
-	
-	if globalTop.AddTopologyKeyIfNecessary(indexTopologyKey(bucket))	{
+
+	if globalTop.AddTopologyKeyIfNecessary(indexTopologyKey(bucket)) {
 		return c.repo.SetGlobalTopology(globalTop)
 	}
-	
+
 	return nil
-}
-
-/////////////////////////////////////////////////////////////////////////////
-//  Observe Operations
-/////////////////////////////////////////////////////////////////////////////
-
-func (c *Coordinator) observeForAdd(key string) bool {
-
-	handle, ok := c.state.observes[key]
-	if !ok {
-		handle = c.repo.ObserveForAdd(key)
-		if handle != nil {
-			c.state.observes[key] = handle
-		}
-	}
-
-	if handle != nil {
-		handle.wait()
-		return handle.done
-	}
-
-	return true
-}
-
-func (c *Coordinator) observeForDelete(key string) bool {
-
-	handle, ok := c.state.observes[key]
-	if !ok {
-		handle := c.repo.ObserveForDelete(key)
-		if handle != nil {
-			c.state.observes[key] = handle
-		}
-	}
-
-	if handle != nil {
-		handle.wait()
-		return handle.done
-	}
-
-	return true
 }
