@@ -825,6 +825,11 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 			if _, ok := bucketHWTMap[meta.bucket]; !ok {
 				tk.initInternalStreamState(streamId, meta.bucket)
+				//disable flush for MAINT_STREAM in Recovery
+				if tk.streamState[streamId] == STREAM_RECOVERY {
+					tk.setHWTFromRestartTs(streamId, meta.bucket)
+					tk.disableStreamFlush(streamId)
+				}
 			}
 
 			//TODO: Check if this is duplicate StreamBegin. Treat it as StreamEnd.
@@ -833,12 +838,6 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 			sb := tk.streamBucketStreamBeginMap[streamId][meta.bucket]
 			sb[meta.vbucket] = 1
-
-			//disable flush for MAINT_STREAM in Recovery
-			if tk.streamState[streamId] == STREAM_RECOVERY {
-				tk.setHWTFromRestartTs(streamId, meta.bucket)
-				tk.disableStreamFlush(streamId)
-			}
 
 		case STREAM_PREPARE_RECOVERY, STREAM_INACTIVE:
 			//ignore stream end in prepare_recovery
@@ -884,6 +883,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 			if _, ok := bucketHWTMap[meta.bucket]; !ok {
 				tk.initInternalStreamState(streamId, meta.bucket)
+				tk.setHWTFromRestartTs(streamId, meta.bucket)
 			}
 
 			//TODO: Check if this is duplicate StreamBegin. Treat it as StreamEnd.
@@ -892,7 +892,6 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 			sb := tk.streamBucketStreamBeginMap[streamId][meta.bucket]
 			sb[meta.vbucket] = 1
-			tk.setHWTFromRestartTs(streamId, meta.bucket)
 
 		case STREAM_PREPARE_RECOVERY, STREAM_INACTIVE, STREAM_RECOVERY:
 			//ignore stream end in prepare_recovery
