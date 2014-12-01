@@ -1526,6 +1526,10 @@ func getTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 //helper function to copy TsVbuuid
 func copyTsVbuuid(bucket string, tsVbuuid *common.TsVbuuid) *common.TsVbuuid {
 
+	if tsVbuuid == nil {
+		return nil
+	}
+
 	newTs := common.NewTsVbuuid(bucket, int(NUM_VBUCKETS))
 
 	for i := 0; i < int(NUM_VBUCKETS); i++ {
@@ -1646,13 +1650,24 @@ func (tk *timekeeper) computeRestartTs(streamId common.StreamId) map[string]*com
 
 	bucketRestartTs := make(map[string]*common.TsVbuuid)
 
-	for bucket, _ := range tk.streamBucketLastFlushedTsMap[streamId] {
-
-		bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketLastFlushedTsMap[streamId][bucket])
+	for bucket, cnt := range tk.streamBucketIndexCountMap[streamId] {
+		//for all the buckets with index count > 0 for the stream, use last flushed TS
+		//to restart the stream
+		if cnt > 0 {
+			if _, ok := tk.streamBucketLastFlushedTsMap[streamId][bucket]; ok {
+				bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketLastFlushedTsMap[streamId][bucket])
+			} else if ts, ok := tk.streamBucketRestartTsMap[streamId][bucket]; ok && ts != nil {
+				//if no flush has been done yet, use restart TS
+				bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketRestartTsMap[streamId][bucket])
+			} else {
+				//for CATCHUP_STREAM, use the restart TS of MAINT_STREAM
+				if streamId == common.CATCHUP_STREAM {
+					bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketRestartTsMap[common.MAINT_STREAM][bucket])
+				}
+			}
+		}
 	}
-
 	return bucketRestartTs
-
 }
 
 func (tk *timekeeper) initInternalStreamState(streamId common.StreamId,
