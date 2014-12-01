@@ -18,8 +18,6 @@ import (
 	"net"
 	"testing"
 	"time"
-	//"runtime/pprof"
-	//"os"
 )
 
 // For this test, use Index Defn Id from 400 - 410

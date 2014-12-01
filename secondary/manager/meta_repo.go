@@ -11,6 +11,7 @@ package manager
 
 import (
 	"encoding/json"
+	"encoding/binary"
 	"fmt"
 	repo "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/common"
@@ -21,7 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 type MetadataRepo struct {
@@ -55,6 +55,8 @@ const (
 	KIND_INDEX_DEFN
 	KIND_TOPOLOGY
 	KIND_GLOBAL_TOPOLOGY
+	KIND_INDEX_INSTANCE_ID
+	KIND_INDEX_PARTITION_ID
 )
 
 ///////////////////////////////////////////////////////
@@ -115,16 +117,34 @@ func (c *MetadataRepo) Close() {
 // Public Function : ID generation
 ///////////////////////////////////////////////////////
 
-func (c *MetadataRepo) GetNextPartitionId() common.PartitionId {
-	// TODO : Make it globally unique
-	id := uint64(time.Now().UnixNano())
-	return common.PartitionId(id)
+func (c *MetadataRepo) GetNextPartitionId() (common.PartitionId, error) {
+
+	id, err := c.GetIndexPartitionId()
+	if err != nil {
+		return common.PartitionId(0), err
+	}
+
+	id = id + 1	
+	if err := c.SetIndexPartitionId(id); err != nil {
+		return common.PartitionId(0), err
+	}
+	
+	return common.PartitionId(id), nil
 }
 
-func (c *MetadataRepo) GetNextIndexInstId() common.IndexInstId {
-	// TODO : Make it globally unique
-	id := uint64(time.Now().UnixNano())
-	return common.IndexInstId(id)
+func (c *MetadataRepo) GetNextIndexInstId() (common.IndexInstId, error) {
+
+	id, err := c.GetIndexInstanceId()
+	if err != nil {
+		return common.IndexInstId(0), err
+	}
+
+	id = id + 1	
+	if err := c.SetIndexInstanceId(id); err != nil {
+		return common.IndexInstId(0), err
+	}
+	
+	return common.IndexInstId(id), nil
 }
 
 ///////////////////////////////////////////////////////
@@ -456,6 +476,10 @@ func findTypeFromKey(key string) MetadataKind {
 		return KIND_TOPOLOGY
 	} else if isGlobalTopologyKey(key) {
 		return KIND_GLOBAL_TOPOLOGY
+	} else if isIndexInstanceIdKey(key) {
+		return KIND_INDEX_INSTANCE_ID
+	} else if isIndexPartitionIdKey(key) {
+		return KIND_INDEX_PARTITION_ID
 	}
 	return KIND_UNKNOWN
 }
@@ -644,4 +668,80 @@ func unmarshallGlobalTopology(data []byte) (*GlobalTopology, error) {
 	}
 
 	return topology, nil
+}
+
+///////////////////////////////////////////////////////
+// package local function : Index Instance Id 
+///////////////////////////////////////////////////////
+
+func (c *MetadataRepo) GetIndexInstanceId() (uint64, error) {
+
+	lookupName := indexInstanceIdKey()
+	data, err := c.getMeta(lookupName)
+	if err != nil {
+		// TODO : Differentiate the case for real error
+		return 0, nil 
+	}
+	
+	id, read := binary.Uvarint(data)
+	if read < 0 {
+		return 0, NewError2(ERROR_META_FAIL_TO_PARSE_INT, METADATA_REPO)
+	}
+	
+	return id, nil
+}
+
+func (c *MetadataRepo) SetIndexInstanceId(id uint64) error {
+
+	data := make([]byte, 8)
+	binary.PutUvarint(data, id)
+
+	lookupName := indexInstanceIdKey()
+	return c.setMeta(lookupName, data)
+}
+
+func indexInstanceIdKey() string {
+	return "IndexInstanceId" 
+}
+
+func isIndexInstanceIdKey(key string) bool {
+	return strings.Contains(key, "IndexInstanceId/")
+}
+
+///////////////////////////////////////////////////////
+// package local function : Index Partition Id 
+///////////////////////////////////////////////////////
+
+func (c *MetadataRepo) GetIndexPartitionId() (uint64, error) {
+
+	lookupName := indexPartitionIdKey()
+	data, err := c.getMeta(lookupName)
+	if err != nil {
+		// TODO : Differentiate the case for real error
+		return 0, nil	
+	}
+	
+	id, read := binary.Uvarint(data)
+	if read < 0 {
+		return 0, NewError2(ERROR_META_FAIL_TO_PARSE_INT, METADATA_REPO)
+	}
+	
+	return id, nil
+}
+
+func (c *MetadataRepo) SetIndexPartitionId(id uint64) error {
+
+	data := make([]byte, 8)
+	binary.PutUvarint(data, id)
+
+	lookupName := indexPartitionIdKey()
+	return c.setMeta(lookupName, data)
+}
+
+func indexPartitionIdKey() string {
+	return "IndexPartitionId" 
+}
+
+func isIndexPartitionIdKey(key string) bool {
+	return strings.Contains(key, "IndexPartitionId/")
 }

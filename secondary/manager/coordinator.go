@@ -766,7 +766,11 @@ func (c *Coordinator) addIndexToTopology(defn *co.IndexDefn) error {
 			fmt.Sprintf("Fail to find a host to store the index '%s'", defn.Name))
 	}
 
-	id := c.repo.GetNextIndexInstId()
+	id, err := c.repo.GetNextIndexInstId()
+	if err != nil {
+		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, COORDINATOR, nil,
+			fmt.Sprintf("Fail to generate unique instance id for index '%s'", defn.Name))
+	}
 	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
 		uint64(id), uint32(co.INDEX_STATE_CREATED), host)
 
