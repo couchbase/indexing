@@ -345,9 +345,9 @@ func (s *fdbSnapshot) CountRange(low Key, high Key, inclusion Inclusion,
 }
 
 // Keys are encoded in the form of an array [..., primaryKey]
-// Scannable key is the subarray with primary key removed
+// Scannable key is the subarray with [0:l] where l is the max prefix fields
 // This method is used to transform key bytes received from index storage
-func ReadScanKey(kbytes []byte) (k []byte, err error) {
+func ReadScanKey(kbytes []byte, nfields int) (k []byte, err error) {
 	var tmp []interface{}
 
 	err = json.Unmarshal(kbytes, &tmp)
@@ -363,10 +363,7 @@ func ReadScanKey(kbytes []byte) (k []byte, err error) {
 		return
 	}
 
-	// For secondary key, we need to remove primary key from the array
-	if l > 1 {
-		tmp = tmp[:l-1]
-	}
+	tmp = tmp[:nfields]
 
 	k, err = json.Marshal(tmp)
 	return
@@ -379,7 +376,16 @@ func readEqualKeys(k Key, kPrefix []byte, it *ForestDBIterator,
 	chkey chan Key, cherr chan error, stopch StopChannel, discard bool) {
 
 	var err error
+	var t []interface{}
 	jsonKey := k.Raw()
+	err = json.Unmarshal(jsonKey, &t)
+	if err != nil {
+		cherr <- err
+		return
+	}
+
+	// Number of interested prefix fields for scan
+	nfields := len(t)
 
 loop:
 	for ; it.Valid(); it.Next() {
@@ -401,7 +407,7 @@ loop:
 					cherr <- err1
 					return
 				}
-				jsonCurrKey, err2 := ReadScanKey(key.Raw())
+				jsonCurrKey, err2 := ReadScanKey(key.Raw(), nfields)
 				if err != nil {
 					cherr <- err2
 					return
