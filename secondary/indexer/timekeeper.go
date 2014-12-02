@@ -320,6 +320,7 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 	//If the index is in INITIAL state, store it in initialbuild map
 	for _, idx := range indexInstList {
 		tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] += 1
+		common.Debugf("Timekeeper::addIndextoStream IndexCount %v", tk.streamBucketIndexCountMap)
 		if idx.State == common.INDEX_STATE_INITIAL {
 			tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
 				indexInst: idx,
@@ -355,17 +356,9 @@ func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 				idx.Defn.Bucket)
 		} else {
 			tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] -= 1
+			common.Debugf("Timekeeper::addIndextoStream IndexCount %v", tk.streamBucketIndexCountMap)
 			if tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
 				tk.cleanupBucketFromStream(streamId, idx.Defn.Bucket)
-			}
-			//for indexes in INIT_STREAM, the index is present in MAINT_STREAM
-			//as well in catchup state. Cleanup that entry.
-			if streamId == common.INIT_STREAM {
-				streamId = common.MAINT_STREAM
-				tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] -= 1
-				if tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
-					tk.cleanupBucketFromStream(streamId, idx.Defn.Bucket)
-				}
 			}
 		}
 	}
