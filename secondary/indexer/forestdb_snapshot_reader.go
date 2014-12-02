@@ -11,7 +11,9 @@ package indexer
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 )
 
@@ -111,11 +113,6 @@ func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 	common.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
 		low.String(), high.String())
 
-	if inclusion != Low {
-		cherr <- ErrUnsupportedInclusion
-		return
-	}
-
 	it := newForestDBIterator(s.main)
 	defer it.Close()
 
@@ -125,13 +122,20 @@ func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 	if lowkey = low.Encoded(); lowkey == nil {
 		it.SeekFirst()
 	} else {
+		// Low key prefix computed by removing last byte
 		lowkey = lowkey[:len(lowkey)-1]
 		it.Seek(lowkey)
+
+		// Discard equal keys if low inclusion is requested
+		if inclusion == Neither || inclusion == High {
+			readEqualKeys(low, lowkey, it, chkey, cherr, stopch, true)
+		}
 	}
 
 	highkey = high.Encoded()
 	if highkey != nil {
-		highkey = highkey[:len(highkey)]
+		// High key prefix computed by removing last byte
+		highkey = highkey[:len(highkey)-1]
 	}
 
 	var key Key
@@ -170,6 +174,10 @@ loop:
 		}
 	}
 
+	// Include equal keys if high inclusion is requested
+	if inclusion == Both || inclusion == High {
+		readEqualKeys(high, highkey, it, chkey, cherr, stopch, false)
+	}
 }
 
 func (s *fdbSnapshot) GetValueSetForKeyRange(low Key, high Key,
@@ -334,4 +342,89 @@ func (s *fdbSnapshot) CountRange(low Key, high Key, inclusion Inclusion,
 	}
 
 	return count, nil
+}
+
+// Keys are encoded in the form of an array [..., primaryKey]
+// Scannable key is the subarray with [0:l] where l is the max prefix fields
+// This method is used to transform key bytes received from index storage
+func ReadScanKey(kbytes []byte, nfields int) (k []byte, err error) {
+	var tmp []interface{}
+
+	err = json.Unmarshal(kbytes, &tmp)
+	if err != nil {
+		err = errors.New(fmt.Sprintf("Decode failed: %v (%v)", string(kbytes), err))
+		return
+	}
+
+	l := len(tmp)
+
+	if l == 0 {
+		err = errors.New("Decode failed: Invalid key")
+		return
+	}
+
+	tmp = tmp[:nfields]
+
+	k, err = json.Marshal(tmp)
+	return
+}
+
+// For checking equality, its a two step operation:
+// 1. Compare jsoncollate encoded prefix
+// 2. If encoded prefix is equal, compare decoded full keys
+func readEqualKeys(k Key, kPrefix []byte, it *ForestDBIterator,
+	chkey chan Key, cherr chan error, stopch StopChannel, discard bool) {
+
+	var err error
+	var t []interface{}
+	jsonKey := k.Raw()
+	err = json.Unmarshal(jsonKey, &t)
+	if err != nil {
+		cherr <- err
+		return
+	}
+
+	// Number of interested prefix fields for scan
+	nfields := len(t)
+
+loop:
+	for ; it.Valid(); it.Next() {
+		l := len(kPrefix)
+		if len(it.Key()) < l {
+			break loop
+		}
+
+		currKeyPrefix := it.Key()[:l]
+		cmp := bytes.Compare(currKeyPrefix, kPrefix)
+		select {
+		case <-stopch:
+			return
+		default:
+			// Is prefix equal ?
+			if cmp == 0 {
+				key, err1 := NewKeyFromEncodedBytes(it.Key())
+				if err1 != nil {
+					cherr <- err1
+					return
+				}
+				jsonCurrKey, err2 := ReadScanKey(key.Raw(), nfields)
+				if err != nil {
+					cherr <- err2
+					return
+				}
+
+				// Compare full json key
+				cmp = bytes.Compare(jsonKey, jsonCurrKey)
+				if cmp == 0 {
+					if !discard {
+						chkey <- key
+					}
+				} else {
+					break loop
+				}
+			} else {
+				break loop
+			}
+		}
+	}
 }

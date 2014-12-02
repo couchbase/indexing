@@ -1,7 +1,0 @@
-package protobuf;
-
-// Example TestPartition, can be used during development.
-message TestPartition {
-    repeated string endpoints     = 1; // endpoint address
-    optional string coordEndpoint = 2;
-}

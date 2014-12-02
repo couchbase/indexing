@@ -7,22 +7,27 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
+// TODO:
+// 1. functions in this package directly access SystemConfig, instead it
+//    is suggested to pass config via function argument.
+
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/adminport"
+	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
-	"net"
-	"strconv"
 	"strings"
 	"time"
 )
 
-var HTTP_PREFIX string = "http://"
-var MAX_KV_REQUEST_RETRY int = 5
+const (
+	HTTP_PREFIX             string = "http://"
+	MAX_KV_REQUEST_RETRY    int    = 5
+	MAX_CLUSTER_FETCH_RETRY int    = 600
+)
 
 //KVSender provides the mechanism to talk to KV(projector, router etc)
 type KVSender interface {
@@ -36,22 +41,25 @@ type kvSender struct {
 	streamBucketIndexCountMap map[c.StreamId]BucketIndexCountMap
 
 	numVbuckets uint16
-	kvListCache []string
+	cInfoCache  *c.ClusterInfoCache
 }
 
 func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
 	numVbuckets uint16) (KVSender, Message) {
 
 	//Init the kvSender struct
+	url := fmt.Sprintf("http://%s", CLUSTER_ENDPOINT)
 	k := &kvSender{
 		supvCmdch:                 supvCmdch,
 		supvRespch:                supvRespch,
 		streamStatus:              make(StreamStatusMap),
 		numVbuckets:               numVbuckets,
 		streamBucketIndexCountMap: make(map[c.StreamId]BucketIndexCountMap),
-		kvListCache:               make([]string, 0),
+		cInfoCache:                c.NewClusterInfoCache(url, DEFAULT_POOL),
 	}
 
+	k.cInfoCache.SetMaxRetries(MAX_CLUSTER_FETCH_RETRY)
+	k.cInfoCache.SetLogPrefix("KVSender: ")
 	//start kvsender loop which listens to commands from its supervisor
 	go k.run()
 
@@ -363,38 +371,32 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		protoInstList = append(protoInstList, convertIndexInstToProtoInst(indexInst, streamId))
 	}
 
-	//Get the Vbmap of all nodes in the cluster. As vbmap is symmetric for all buckets,
-	//choose any bucket to get the map.
-	vbmap, err := k.getVbmap(indexInstList[0].Defn.Bucket, nil)
+	err := k.cInfoCache.Fetch()
 	if err != nil {
-		c.Errorf("KVSender::openMutationStream \n\t Error In GetVbMap %v", err)
+		c.Errorf("KVSender::openMutationStream \n\t Error in fetching cluster info", err)
 		return &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
 	}
 
-	vbnosList := vbmap.GetKvvbnos()
+	bucket := indexInstList[0].Defn.Bucket
+	nodes, _ := k.cInfoCache.GetNodesByBucket(bucket)
 
 	rollbackTs := make(map[string]*protobuf.TsVbuuid)
-	//for all the nodes in vbmap
-	for i, kv := range vbmap.GetKvaddrs() {
-
-		//get projector address from kv address
-		projAddr := getProjectorAddrFromKVAddr(kv)
-
-		//create client for node's projectors
-		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
+	for _, nid := range nodes {
 
 		//get the list of vbnos for this kv
-		vbnos := vbnosList[i].GetVbnos()
-
-		//check if there are any vbuckets on this KV. After rebalance out,
-		//vbmap can have the name of a KV node but no vbuckets on it.
-		//Skip sending stream request in such a case.
+		vbnos, _ := k.cInfoCache.GetVBuckets(nid, bucket)
 		if len(vbnos) == 0 {
 			continue
 		}
+
+		addr, _ := k.cInfoCache.GetServiceAddress(nid, "projector")
+		//create client for node's projectors
+		config := c.SystemConfig.SectionConfig("projector.client.", true)
+		maxvbs := c.SystemConfig["maxVbuckets"].Int()
+		ap := projClient.NewClient(addr, maxvbs, config)
 
 		var restartTsList []*protobuf.TsVbuuid
 		var err error
@@ -450,29 +452,26 @@ func (k *kvSender) addIndexForNewBucket(streamId c.StreamId, indexInst c.IndexIn
 
 	protoInst := convertIndexInstToProtoInst(indexInst, streamId)
 
-	//Get the Vbmap of all nodes in the cluster
-	vbmap, err := k.getVbmap(indexInst.Defn.Bucket, nil)
+	err := k.cInfoCache.Fetch()
 	if err != nil {
-		c.Errorf("KVSender::addIndexForNewBucket \n\t Error In GetVbMap %v", err)
+		c.Errorf("KVSender::addIndexForNewBucket \n\t Error in fetching cluster info", err)
 		return &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
 	}
+	bucket := indexInst.Defn.Bucket
+	nodes, _ := k.cInfoCache.GetNodesByBucket(bucket)
 
-	vbnosList := vbmap.GetKvvbnos()
-
-	//for all the nodes in vbmap
-	for i, kv := range vbmap.GetKvaddrs() {
-
-		//get projector address from kv address
-		projAddr := getProjectorAddrFromKVAddr(kv)
-
+	for _, nid := range nodes {
+		addr, _ := k.cInfoCache.GetServiceAddress(nid, "projector")
 		//create client for node's projectors
-		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
+		config := c.SystemConfig.SectionConfig("projector.client.", true)
+		maxvbs := c.SystemConfig["maxVbuckets"].Int()
+		ap := projClient.NewClient(addr, maxvbs, config)
 
 		//get the list of vbnos for this kv
-		vbnos := vbnosList[i].GetVbnos()
+		vbnos, _ := k.cInfoCache.GetVBuckets(nid, bucket)
 
 		ts, err := k.makeInitialTs(indexInst.Defn.Bucket, vbnos)
 		if err != nil {
@@ -498,24 +497,24 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInst c.In
 
 	protoInst := convertIndexInstToProtoInst(indexInst, streamId)
 
-	//Get the Vbmap of all nodes in the cluster
-	vbmap, err := k.getVbmap(indexInst.Defn.Bucket, nil)
+	err := k.cInfoCache.Fetch()
 	if err != nil {
-		c.Errorf("KVSender::addIndexForExistingBucket \n\t Error In GetVbMap %v", err)
+		c.Errorf("KVSender::addIndexForExistingBucket \n\t Error in fetching cluster info", err)
 		return &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
 	}
 
-	//for all the nodes in vbmap
-	for _, kv := range vbmap.GetKvaddrs() {
+	bucket := indexInst.Defn.Bucket
+	nodes, _ := k.cInfoCache.GetNodesByBucket(bucket)
 
-		//get projector address from kv address
-		projAddr := getProjectorAddrFromKVAddr(kv)
-
+	for _, nid := range nodes {
+		addr, _ := k.cInfoCache.GetServiceAddress(nid, "projector")
 		//create client for node's projectors
-		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
+		config := c.SystemConfig.SectionConfig("projector.client.", true)
+		maxvbs := c.SystemConfig["maxVbuckets"].Int()
+		ap := projClient.NewClient(addr, maxvbs, config)
 
 		//add new engine(index) to existing stream
 		topic := getTopicForStreamId(streamId)
@@ -531,25 +530,31 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInst c.In
 }
 
 func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []c.IndexInst) Message {
-
-	//Get the Vbmap of all nodes in the cluster
-	vbmap, err := k.getVbmap(indexInstList[0].Defn.Bucket, nil)
+	err := k.cInfoCache.Fetch()
 	if err != nil {
-		c.Errorf("KVSender::deleteIndexFromStream \n\t Error In GetVbMap %v", err)
+		c.Errorf("KVSender::deleteIndexesFromStream \n\t Error in fetching cluster info", err)
 		return &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
 	}
 
-	//for all the nodes in vbmap
-	for _, kv := range vbmap.GetKvaddrs() {
+	bucket := indexInstList[0].Defn.Bucket
+	nodes, _ := k.cInfoCache.GetNodesByBucket(bucket)
 
-		//get projector address from kv address
-		projAddr := getProjectorAddrFromKVAddr(kv)
+	for _, nid := range nodes {
 
+		//get the list of vbnos for this kv
+		vbnos, _ := k.cInfoCache.GetVBuckets(nid, bucket)
+		if len(vbnos) == 0 {
+			continue
+		}
+
+		addr, _ := k.cInfoCache.GetServiceAddress(nid, "projector")
 		//create client for node's projectors
-		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
+		config := c.SystemConfig.SectionConfig("projector.client.", true)
+		maxvbs := c.SystemConfig["maxVbuckets"].Int()
+		ap := projClient.NewClient(addr, maxvbs, config)
 
 		//delete engine(index) from the existing stream
 		topic := getTopicForStreamId(streamId)
@@ -570,25 +575,29 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []
 }
 
 func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string) Message {
-
-	//Get the Vbmap of all nodes in the cluster
-	vbmap, err := k.getVbmap(buckets[0], nil)
+	err := k.cInfoCache.Fetch()
 	if err != nil {
-		c.Errorf("KVSender::deleteBucketFromStream \n\t Error In GetVbMap %v", err)
+		c.Errorf("KVSender::deleteBucketsFromStream \n\t Error in fetching cluster info", err)
 		return &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
 	}
 
-	//for all the nodes in vbmap
-	for _, kv := range vbmap.GetKvaddrs() {
+	nodes := k.cInfoCache.GetNodesByServiceType("projector")
+	for _, nid := range nodes {
 
-		//get projector address from kv address
-		projAddr := getProjectorAddrFromKVAddr(kv)
+		//get the list of vbnos for this kv
+		vbnos, _ := k.cInfoCache.GetVBuckets(nid, buckets[0])
+		if len(vbnos) == 0 {
+			continue
+		}
 
+		addr, _ := k.cInfoCache.GetServiceAddress(nid, "projector")
 		//create client for node's projectors
-		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
+		config := c.SystemConfig.SectionConfig("projector.client.", true)
+		maxvbs := c.SystemConfig["maxVbuckets"].Int()
+		ap := projClient.NewClient(addr, maxvbs, config)
 
 		topic := getTopicForStreamId(streamId)
 
@@ -603,29 +612,32 @@ func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string
 }
 
 func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string) Message {
-
-	//Get the Vbmap of all nodes in the cluster
-	vbmap, err := k.getVbmap(bucket, nil)
+	err := k.cInfoCache.Fetch()
 	if err != nil {
-		c.Errorf("KVSender::closeMutationStream \n\t Error In GetVbMap %v", err)
+		c.Errorf("KVSender::closeMutationStream \n\t Error in fetching cluster info", err)
 		return &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
 	}
+	var nodes []c.NodeId
+	// All projectors
+	if bucket == "" {
+		nodes = k.cInfoCache.GetNodesByServiceType("projector")
+	} else {
+		nodes, _ = k.cInfoCache.GetNodesByBucket(bucket)
+	}
 
-	//for all the nodes in vbmap
-	for _, kv := range vbmap.GetKvaddrs() {
+	for _, nid := range nodes {
 
-		//get projector address from kv address
-		projAddr := getProjectorAddrFromKVAddr(kv)
-
+		addr, _ := k.cInfoCache.GetServiceAddress(nid, "projector")
 		//create client for node's projectors
-		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
+		config := c.SystemConfig.SectionConfig("projector.client.", true)
+		maxvbs := c.SystemConfig["maxVbuckets"].Int()
+		ap := projClient.NewClient(addr, maxvbs, config)
 
 		topic := getTopicForStreamId(streamId)
 		sendShutdownTopic(ap, topic)
-
 	}
 
 	return &MsgSuccess{}
@@ -633,26 +645,23 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string) Messa
 }
 
 func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs map[string]*c.TsVbuuid) Message {
-
-	//Get the Vbmap of all nodes in the cluster
-	vbmap, err := k.getVbmap(k.getAnyBucketName(), nil)
+	err := k.cInfoCache.Fetch()
 	if err != nil {
-		c.Errorf("KVSender::restartVbuckets \n\t Error In GetVbMap %v", err)
+		c.Errorf("KVSender::restartVbuckets \n\t Error in fetching cluster info", err)
 		return &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
 	}
-
+	nodes := k.cInfoCache.GetNodesByServiceType("projector")
 	rollbackTs := make(map[string]*protobuf.TsVbuuid)
-	//for all the nodes in vbmap
-	for _, kv := range vbmap.GetKvaddrs() {
 
-		//get projector address from kv address
-		projAddr := getProjectorAddrFromKVAddr(kv)
-
+	for _, nid := range nodes {
+		addr, _ := k.cInfoCache.GetServiceAddress(nid, "projector")
 		//create client for node's projectors
-		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
+		config := c.SystemConfig.SectionConfig("projector.client.", true)
+		maxvbs := c.SystemConfig["maxVbuckets"].Int()
+		ap := projClient.NewClient(addr, maxvbs, config)
 
 		topic := getTopicForStreamId(streamId)
 
@@ -694,25 +703,22 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs map[string]*c.
 }
 
 func (k *kvSender) repairEndpoints(streamId c.StreamId, endpoints []string) Message {
-
-	//Get the Vbmap of all nodes in the cluster
-	vbmap, err := k.getVbmap(k.getAnyBucketName(), nil)
+	err := k.cInfoCache.Fetch()
 	if err != nil {
-		c.Errorf("KVSender::repairEndpoints \n\t Error In GetVbMap %v", err)
+		c.Errorf("KVSender::closeMutationStream \n\t Error in fetching cluster info", err)
 		return &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
 	}
 
-	//for all the nodes in vbmap
-	for _, kv := range vbmap.GetKvaddrs() {
-
-		//get projector address from kv address
-		projAddr := getProjectorAddrFromKVAddr(kv)
-
+	nodes := k.cInfoCache.GetNodesByServiceType("projector")
+	for _, nid := range nodes {
+		addr, _ := k.cInfoCache.GetServiceAddress(nid, "projector")
 		//create client for node's projectors
-		ap := projClient.NewClient(projAddr, c.SystemConfig.Clone())
+		config := c.SystemConfig.SectionConfig("projector.client.", true)
+		maxvbs := c.SystemConfig["maxVbuckets"].Int()
+		ap := projClient.NewClient(addr, maxvbs, config)
 
 		topic := getTopicForStreamId(streamId)
 
@@ -1077,54 +1083,6 @@ func makeRestartTsFromTsVbuuid(bucket string, tsVbuuid *c.TsVbuuid,
 
 }
 
-func (k *kvSender) getVbmap(bucket string,
-	kvaddrs []string) (*protobuf.VbmapResponse, error) {
-
-	//if list of KVs is not there yet, build it
-	if len(k.kvListCache) == 0 {
-		if err := k.initKVListCache(bucket); err != nil {
-			c.Errorf("KVSender::getVbmap Error in Init Cache")
-			return nil, err
-		}
-	}
-
-	var err error
-	var res *protobuf.VbmapResponse
-
-outerloop:
-	for _, kv := range k.kvListCache {
-		c.Debugf("KVSender::getVbmap \n\tSending Request to KV %v", kv)
-		projAddr := getProjectorAddrFromKVAddr(kv)
-		client := projClient.NewClient(projAddr, c.SystemConfig.Clone())
-		sleepTime := 1
-		retry := 0
-	innerloop:
-		for {
-			if res, err = client.GetVbmap(DEFAULT_POOL, bucket, kvaddrs); err != nil {
-				if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
-					c.Errorf("KVSender::getVbmap \n\tError Connecting to Projector %v. "+
-						"Retry in %v seconds... \n\tError Details %v", projAddr, sleepTime, err)
-					time.Sleep(time.Duration(sleepTime) * time.Second)
-					sleepTime *= 2
-					retry++
-				} else {
-					break innerloop
-				}
-			} else {
-				break outerloop
-			}
-		}
-	}
-
-	c.Debugf("KVSender::getVbmap \n\tVbMap Response %v", res)
-
-	if err == nil {
-		k.updateKVListCache(res)
-	}
-
-	return res, err
-}
-
 func (k *kvSender) getFailoverLogs(bucket string,
 	vbnos []uint32) (*protobuf.FailoverLogResponse, error) {
 
@@ -1132,11 +1090,21 @@ func (k *kvSender) getFailoverLogs(bucket string,
 	var res *protobuf.FailoverLogResponse
 
 	//get failover log from any node
+	err = k.cInfoCache.Fetch()
+	if err != nil {
+		err = fmt.Errorf("Error in fetching cluster info %v", err)
+		c.Errorf("KVSender::getFailoverLogs \n\t %v", err)
+		return nil, err
+	}
+
+	nodes := k.cInfoCache.GetNodesByServiceType("projector")
 outerloop:
-	for _, kv := range k.kvListCache {
-		c.Debugf("KVSender::getFailoverLogs \n\tSending Request to KV %v", kv)
-		projAddr := getProjectorAddrFromKVAddr(kv)
-		client := projClient.NewClient(projAddr, c.SystemConfig.Clone())
+	for _, nid := range nodes {
+		addr, _ := k.cInfoCache.GetServiceAddress(nid, "projector")
+		//create client for node's projectors
+		config := c.SystemConfig.SectionConfig("projector.client.", true)
+		maxvbs := c.SystemConfig["maxVbuckets"].Int()
+		client := projClient.NewClient(addr, maxvbs, config)
 		sleepTime := 1
 		retry := 0
 	innerloop:
@@ -1144,7 +1112,7 @@ outerloop:
 			if res, err = client.GetFailoverLogs(DEFAULT_POOL, bucket, vbnos); err != nil {
 				if isRetryReqd(err) && retry < MAX_KV_REQUEST_RETRY {
 					c.Errorf("KVSender::getFailoverLogs \n\tError Connecting to Projector %v. "+
-						"Retry in %v seconds... \n\tError Details %v", projAddr, sleepTime, err)
+						"Retry in %v seconds... \n\tError Details %v", addr, sleepTime, err)
 					time.Sleep(time.Duration(sleepTime) * time.Second)
 					sleepTime *= 2
 					retry++
@@ -1160,69 +1128,6 @@ outerloop:
 	c.Debugf("KVSender::getFailoverLogs \n\tFailover Log Response %v", res)
 
 	return res, err
-}
-
-func (k *kvSender) initKVListCache(bucket string) error {
-
-	//TODO Is there a better way to do this rather than send
-	//a vbmap request
-	req := &protobuf.VbmapRequest{
-		Pool:    proto.String(DEFAULT_POOL),
-		Bucket:  proto.String(bucket),
-		Kvaddrs: nil,
-	}
-
-	res := &protobuf.VbmapResponse{}
-
-	ap := adminport.NewHTTPClient(PROJECTOR_ADMIN_PORT_ENDPOINT, "/adminport/")
-	if err := ap.Request(req, res); err != nil {
-		c.Errorf("KVSender::initKVListCache \n\tError Connecting to Projector %v. ",
-			PROJECTOR_ADMIN_PORT_ENDPOINT)
-		return err
-	}
-
-	k.updateKVListCache(res)
-	return nil
-
-}
-
-//update the server list cache
-func (k *kvSender) updateKVListCache(vbmap *protobuf.VbmapResponse) {
-
-	//clear the cache
-	k.kvListCache = k.kvListCache[:0]
-
-	//update the cache
-	for _, kv := range vbmap.GetKvaddrs() {
-		k.kvListCache = append(k.kvListCache, kv)
-	}
-
-}
-
-func getProjectorAddrFromKVAddr(kv string) string {
-	var projAddr string
-	if host, port, err := net.SplitHostPort(kv); err == nil {
-		if IsIPLocal(host) {
-
-			if port == KV_DCP_PORT {
-				projAddr = LOCALHOST + ":" + PROJECTOR_PORT
-			} else {
-				iportProj, _ := strconv.Atoi(PROJECTOR_PORT)
-				iportKV, _ := strconv.Atoi(port)
-				iportKV0, _ := strconv.Atoi(KV_DCP_PORT_CLUSTER_RUN)
-
-				//In cluster_run, port number increments by 2
-				nodeNum := (iportKV - iportKV0) / 2
-				p := iportProj + nodeNum
-				projAddr = LOCALHOST + ":" + strconv.Itoa(p)
-			}
-			c.Debugf("KVSender::getProjectorAddrFromKVAddr \n\t Local Projector Addr: %v", projAddr)
-		} else {
-			projAddr = host + ":" + PROJECTOR_PORT
-			c.Debugf("KVSender::getProjectorAddrFromKVAddr \n\t Remote Projector Addr: %v", projAddr)
-		}
-	}
-	return projAddr
 }
 
 //convert IndexInst to protobuf format

@@ -19,7 +19,7 @@ func addToMap(m map[string]uint64, i int, counters [257]uint64) {
 	if v > 0 {
 		k := "unknown"
 		if i < 256 {
-			k = gomemcached.CommandCode(i).String()
+			k = transport.CommandCode(i).String()
 		}
 		m[k] = v
 		m["total"] += v
@@ -56,7 +56,7 @@ func (m *mcops) count(i, n int, err error) {
 	atomic.AddUint64(&m.moved[i], uint64(n))
 }
 
-func (m *mcops) countReq(req *gomemcached.MCRequest, n int, err error) {
+func (m *mcops) countReq(req *transport.MCRequest, n int, err error) {
 	i := 256
 	if req != nil {
 		i = int(req.Opcode)
@@ -64,7 +64,7 @@ func (m *mcops) countReq(req *gomemcached.MCRequest, n int, err error) {
 	m.count(i, n, err)
 }
 
-func (m *mcops) countRes(res *gomemcached.MCResponse, n int, err error) {
+func (m *mcops) countRes(res *transport.MCResponse, n int, err error) {
 	i := 256
 	if res != nil {
 		i = int(res.Opcode)

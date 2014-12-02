@@ -3,16 +3,20 @@ package main
 import (
 	"flag"
 	"fmt"
+
 	"os"
+	"strings"
 
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbase/indexing/secondary/queryport"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	queryclient "github.com/couchbase/indexing/secondary/queryport/client"
+	"github.com/couchbaselabs/query/expression"
+	"github.com/couchbaselabs/query/parser/n1ql"
 )
 
 var (
-	server   string
-	scanType string
+	server string
+	opType string
 
 	indexName string
 	bucket    string
@@ -24,19 +28,33 @@ var (
 
 	limit    int64
 	pageSize int64
+
+	fields     string
+	isPrimary  bool
+	instanceId string
+)
+
+const (
+	using    = "lsm"
+	exprType = "N1QL"
+	partnExp = ""
+	where    = ""
 )
 
 func parseArgs() {
-	flag.StringVar(&server, "server", "localhost:7000", "query server address")
-	flag.StringVar(&scanType, "type", "scanAll", "Scan command")
+	flag.StringVar(&server, "server", "localhost:7000", "index server or scan server address")
+	flag.StringVar(&opType, "type", "scanAll", "Index command (scan|stats|scanAll|create|drop|list)")
 	flag.StringVar(&indexName, "index", "", "Index name")
 	flag.StringVar(&bucket, "bucket", "default", "Bucket name")
 	flag.StringVar(&low, "low", "", "Range: [low]")
 	flag.StringVar(&high, "high", "", "Range: [high]")
 	flag.StringVar(&equal, "equal", "", "Range: [key]")
-	flag.UintVar(&incl, "incl", 1, "Range: 0|1|2|3")
+	flag.UintVar(&incl, "incl", 0, "Range: 0|1|2|3")
 	flag.Int64Var(&limit, "limit", 10, "Row limit")
 	flag.Int64Var(&pageSize, "buffersz", 0, "Rows buffer size per internal message")
+	flag.StringVar(&fields, "fields", "", "Comma separated on-index fields")
+	flag.BoolVar(&isPrimary, "primary", false, "Is primary index")
+	flag.StringVar(&instanceId, "instanceid", "", "Index instanceId")
 
 	flag.Parse()
 }
@@ -53,33 +71,91 @@ func main() {
 
 	parseArgs()
 
-	if indexName == "" {
-		usage()
-		os.Exit(1)
-	}
+	switch opType {
 
-	client := queryport.NewClient(server, c.SystemConfig)
-	if equal != "" {
-		keys = append(keys, []byte(equal))
-	}
+	case "create":
 
-	switch scanType {
-	case "scan":
-		err = client.Scan(indexName, bucket, []byte(low), []byte(high), keys, uint32(incl), pageSize, false, limit, scanCallback)
-	case "scanAll":
-		err = client.ScanAll(indexName, bucket, pageSize, limit, scanCallback)
-	case "stats":
-		statsResp, err = client.Statistics(indexName, bucket, []byte(low), []byte(high), keys, uint32(incl))
-		if err == nil {
-			fmt.Println("Stats: ", statsResp)
+		if !isPrimary && (fields == "" || indexName == "") {
+			fmt.Println("Invalid fields or index name")
+			usage()
+			os.Exit(1)
 		}
-	}
 
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
-	}
+		client := queryclient.NewClusterClient(server)
+		var secExprs []string
+		fields := strings.Split(fields, ",")
+		for _, field := range fields {
+			expr, err := n1ql.ParseExpression(field)
+			if err != nil {
+				fmt.Printf("Error occured: Invalid field (%v) %v ", field, err)
+			}
 
-	client.Close()
+			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
+		}
+
+		info, err := client.CreateIndex(indexName, bucket, using, exprType, partnExp, where, secExprs, isPrimary)
+		if err == nil {
+			fmt.Println("Index created")
+			printIndexInfo(*info)
+		} else {
+			fmt.Println("Error occured:", err)
+		}
+
+	case "drop":
+		if instanceId == "" {
+			fmt.Println("Invalid instanceId")
+			usage()
+			os.Exit(1)
+		}
+
+		client := queryclient.NewClusterClient(server)
+		err := client.DropIndex(instanceId)
+		if err == nil {
+			fmt.Println("Index dropped")
+		} else {
+			fmt.Println("Error occured:", err)
+		}
+	case "list":
+		client := queryclient.NewClusterClient(server)
+		infos, err := client.List()
+		if err != nil {
+			fmt.Println("Error occured:", err)
+		}
+
+		fmt.Println("Indexes:")
+		for _, info := range infos {
+			printIndexInfo(info)
+		}
+
+	default:
+		if indexName == "" {
+			usage()
+			os.Exit(1)
+		}
+		config := c.SystemConfig.SectionConfig("queryport.client.", true)
+		client := queryclient.NewClient(server, config)
+		if equal != "" {
+			keys = append(keys, []byte(equal))
+		}
+
+		switch opType {
+		case "scan":
+			err = client.Scan(indexName, bucket, []byte(low), []byte(high), keys, uint32(incl), pageSize, false, limit, scanCallback)
+		case "scanAll":
+			err = client.ScanAll(indexName, bucket, pageSize, limit, scanCallback)
+		case "stats":
+			statsResp, err = client.Statistics(indexName, bucket, []byte(low), []byte(high), keys, uint32(incl))
+			if err == nil {
+				fmt.Println("Stats: ", statsResp)
+			}
+		}
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
+		}
+
+		client.Close()
+	}
 }
 
 func scanCallback(res interface{}) bool {
@@ -90,4 +166,9 @@ func scanCallback(res interface{}) bool {
 		fmt.Println("Error: ", r)
 	}
 	return true
+}
+
+func printIndexInfo(info queryclient.IndexInfo) {
+	fmt.Printf("Index:%s/%s, Id:%s, Using:%s, Exprs:%v, isPrimary:%v\n",
+		info.Name, info.Bucket, info.DefnID, info.Using, info.SecExprs, info.IsPrimary)
 }

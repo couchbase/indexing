@@ -1,4 +1,4 @@
-package gomemcached
+package transport
 
 import (
 	"encoding/binary"

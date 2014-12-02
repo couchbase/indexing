@@ -61,44 +61,44 @@ type TapEvent struct {
 	Cas        uint64
 }
 
-func makeTapEvent(req gomemcached.MCRequest) *TapEvent {
+func makeTapEvent(req transport.MCRequest) *TapEvent {
 	event := TapEvent{
 		VBucket: req.VBucket,
 	}
 	switch req.Opcode {
-	case gomemcached.TAP_MUTATION:
+	case transport.TAP_MUTATION:
 		event.Opcode = TapMutation
 		event.Key = req.Key
 		event.Value = req.Body
 		event.Cas = req.Cas
-	case gomemcached.TAP_DELETE:
+	case transport.TAP_DELETE:
 		event.Opcode = TapDeletion
 		event.Key = req.Key
 		event.Cas = req.Cas
-	case gomemcached.TAP_CHECKPOINT_START:
+	case transport.TAP_CHECKPOINT_START:
 		event.Opcode = TapCheckpointStart
-	case gomemcached.TAP_CHECKPOINT_END:
+	case transport.TAP_CHECKPOINT_END:
 		event.Opcode = TapCheckpointEnd
-	case gomemcached.TAP_OPAQUE:
+	case transport.TAP_OPAQUE:
 		if len(req.Extras) < 8+4 {
 			return nil
 		}
 		switch op := int(binary.BigEndian.Uint32(req.Extras[8:])); op {
-		case gomemcached.TAP_OPAQUE_INITIAL_VBUCKET_STREAM:
+		case transport.TAP_OPAQUE_INITIAL_VBUCKET_STREAM:
 			event.Opcode = TapBeginBackfill
-		case gomemcached.TAP_OPAQUE_CLOSE_BACKFILL:
+		case transport.TAP_OPAQUE_CLOSE_BACKFILL:
 			event.Opcode = TapEndBackfill
-		case gomemcached.TAP_OPAQUE_CLOSE_TAP_STREAM:
+		case transport.TAP_OPAQUE_CLOSE_TAP_STREAM:
 			event.Opcode = tapEndStream
-		case gomemcached.TAP_OPAQUE_ENABLE_AUTO_NACK:
+		case transport.TAP_OPAQUE_ENABLE_AUTO_NACK:
 			return nil
-		case gomemcached.TAP_OPAQUE_ENABLE_CHECKPOINT_SYNC:
+		case transport.TAP_OPAQUE_ENABLE_CHECKPOINT_SYNC:
 			return nil
 		default:
 			log.Printf("TapFeed: Ignoring TAP_OPAQUE/%d", op)
 			return nil // unknown opaque event
 		}
-	case gomemcached.NOOP:
+	case transport.NOOP:
 		return nil // ignore
 	default:
 		log.Printf("TapFeed: Ignoring %s", req.Opcode)
@@ -166,30 +166,30 @@ func DefaultTapArguments() TapArguments {
 }
 
 func (args *TapArguments) flags() []byte {
-	var flags gomemcached.TapConnectFlag
+	var flags transport.TapConnectFlag
 	if args.Backfill != 0 {
-		flags |= gomemcached.BACKFILL
+		flags |= transport.BACKFILL
 	}
 	if args.Dump {
-		flags |= gomemcached.DUMP
+		flags |= transport.DUMP
 	}
 	if len(args.VBuckets) > 0 {
-		flags |= gomemcached.LIST_VBUCKETS
+		flags |= transport.LIST_VBUCKETS
 	}
 	if args.Takeover {
-		flags |= gomemcached.TAKEOVER_VBUCKETS
+		flags |= transport.TAKEOVER_VBUCKETS
 	}
 	if args.SupportAck {
-		flags |= gomemcached.SUPPORT_ACK
+		flags |= transport.SUPPORT_ACK
 	}
 	if args.KeysOnly {
-		flags |= gomemcached.REQUEST_KEYS_ONLY
+		flags |= transport.REQUEST_KEYS_ONLY
 	}
 	if args.Checkpoint {
-		flags |= gomemcached.CHECKPOINT
+		flags |= transport.CHECKPOINT
 	}
 	if args.RegisteredClient {
-		flags |= gomemcached.REGISTERED_CLIENT
+		flags |= transport.REGISTERED_CLIENT
 	}
 	encoded := make([]byte, 4)
 	binary.BigEndian.PutUint32(encoded, uint32(flags))
@@ -232,8 +232,8 @@ type TapFeed struct {
 // receiving the TAP messages. To stop receiving events, close the
 // client connection.
 func (mc *Client) StartTapFeed(args TapArguments) (*TapFeed, error) {
-	rq := &gomemcached.MCRequest{
-		Opcode: gomemcached.TAP_CONNECT,
+	rq := &transport.MCRequest{
+		Opcode: transport.TAP_CONNECT,
 		Key:    []byte(args.ClientName),
 		Extras: args.flags(),
 		Body:   args.bytes()}
@@ -253,20 +253,20 @@ func (mc *Client) StartTapFeed(args TapArguments) (*TapFeed, error) {
 }
 
 // TapRecvHook is called after every incoming tap packet is received.
-var TapRecvHook func(*gomemcached.MCRequest, int, error)
+var TapRecvHook func(*transport.MCRequest, int, error)
 
 // Internal goroutine that reads from the socket and writes events to
 // the channel
 func (mc *Client) runFeed(ch chan TapEvent, feed *TapFeed) {
 	defer close(ch)
-	var headerBuf [gomemcached.HDR_LEN]byte
+	var headerBuf [transport.HDR_LEN]byte
 loop:
 	for {
 		// Read the next request from the server.
 		//
 		//  (Can't call mc.Receive() because it reads a
 		//  _response_ not a request.)
-		var pkt gomemcached.MCRequest
+		var pkt transport.MCRequest
 		n, err := pkt.Receive(mc.conn, headerBuf[:])
 		if TapRecvHook != nil {
 			TapRecvHook(&pkt, n, err)
@@ -281,7 +281,7 @@ loop:
 
 		//log.Printf("** TapFeed received %#v : %q", pkt, pkt.Body)
 
-		if pkt.Opcode == gomemcached.TAP_CONNECT {
+		if pkt.Opcode == transport.TAP_CONNECT {
 			// This is not an event from the server; it's
 			// an error response to my connect request.
 			feed.Error = fmt.Errorf("tap connection failed: %s", pkt.Body)
@@ -303,7 +303,7 @@ loop:
 
 		if len(pkt.Extras) >= 4 {
 			reqFlags := binary.BigEndian.Uint16(pkt.Extras[2:])
-			if reqFlags&gomemcached.TAP_ACK != 0 {
+			if reqFlags&transport.TAP_ACK != 0 {
 				if _, err := mc.sendAck(&pkt); err != nil {
 					feed.Error = err
 					break loop
@@ -316,11 +316,11 @@ loop:
 	}
 }
 
-func (mc *Client) sendAck(pkt *gomemcached.MCRequest) (int, error) {
-	res := gomemcached.MCResponse{
+func (mc *Client) sendAck(pkt *transport.MCRequest) (int, error) {
+	res := transport.MCResponse{
 		Opcode: pkt.Opcode,
 		Opaque: pkt.Opaque,
-		Status: gomemcached.SUCCESS,
+		Status: transport.SUCCESS,
 	}
 	return res.Transmit(mc.conn)
 }

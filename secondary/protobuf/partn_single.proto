@@ -1,9 +1,0 @@
-package protobuf;
-
-// SinglePartition is an oxymoron - the purpose of partition is to
-// scale-out, but using this partition-scheme for an index means the full
-// data set is kept on the same node.
-message SinglePartition {
-    repeated string endpoints     = 1;
-    optional string coordEndpoint = 2;
-}

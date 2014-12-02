@@ -8,7 +8,7 @@ import "runtime/debug"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
 // error codes
@@ -92,6 +92,8 @@ type Feed struct {
 //    feedWaitStreamReqTimeout: wait for a response to StreamRequest
 //    feedWaitStreamEndTimeout: wait for a response to StreamEnd
 //    feedChanSize: channel size for feed's control path and back path
+//    mutationChanSize: channel size of projector's data path routine
+//    vbucketSyncTimeout: timeout, in ms, for sending periodic Sync messages
 //    routerEndpointFactory: endpoint factory
 func NewFeed(topic string, config c.Config) (*Feed, error) {
 	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
@@ -400,6 +402,7 @@ loop:
 			}
 
 		case <-timeout:
+			// TODO: should this be ERROR ?
 			if len(feed.backch) > 0 {
 				c.Debugf(ctrlMsg, feed.logPrefix, len(feed.backch))
 			}
@@ -925,7 +928,7 @@ func (feed *Feed) bucketFeed(
 	return feeder, nil
 }
 
-// - return go-couchbase failures.
+// - return dcp-client failures.
 func (feed *Feed) bucketDetails(
 	pooln, bucketn string) ([]uint16, []uint64, error) {
 

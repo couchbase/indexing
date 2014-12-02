@@ -35,7 +35,7 @@ type Indexer interface {
 
 //TODO move this to config
 var NUM_VBUCKETS uint16
-var PROJECTOR_ADMIN_PORT_ENDPOINT string
+var CLUSTER_ENDPOINT string
 var ENABLE_MANAGER bool
 var StreamAddrMap StreamAddressMap
 
@@ -492,19 +492,8 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	//get current timestamp from KV and set it as Initial Build Timestamp
-	var clusterAddr string
-	if host, _, err := net.SplitHostPort(PROJECTOR_ADMIN_PORT_ENDPOINT); err == nil {
-		//TODO: Here it assumes a colocated topology implies cluster_run.
-		//The Initial Build calculation will be done in kv_sender eventually,
-		//which has better mechanism to detect a colocated yet production config.
-		if IsIPLocal(host) {
-			clusterAddr = host + ":" + KVPORT_CLUSTER_RUN
-		} else {
-			clusterAddr = host + ":" + KVPORT
-		}
-	}
 
-	buildTs := idx.getCurrentKVTs(clusterAddr, indexInst.Defn.Bucket)
+	buildTs := idx.getCurrentKVTs(CLUSTER_ENDPOINT, indexInst.Defn.Bucket)
 
 	//if initial build TS is zero, set index state to active and add it to
 	//MAINT_STREAM directly
@@ -860,30 +849,30 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 	var indexList []common.IndexInst
 	indexList = append(indexList, indexInst)
 
-	cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
-		streamId:  indexInst.Stream,
-		indexList: indexList}
+	var indexStreamIds []common.StreamId
 
-	//send stream update to kv sender
-	if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", respCh); !ok {
-		return false
+	//index in INIT_STREAM needs to be removed from MAINT_STREAM as well
+	switch indexInst.Stream {
+
+	case common.MAINT_STREAM:
+		indexStreamIds = append(indexStreamIds, common.MAINT_STREAM)
+
+	case common.INIT_STREAM:
+		indexStreamIds = append(indexStreamIds, common.INIT_STREAM)
+		indexStreamIds = append(indexStreamIds, common.MAINT_STREAM)
+
 	}
 
-	//send stream update to mutation manager
-	if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", respCh); !ok {
-		return false
-	}
+	for _, streamId := range indexStreamIds {
 
-	//send stream update to timekeeper
-	if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
-		return false
-	}
+		cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
+			streamId:  streamId,
+			indexList: indexList}
 
-	//if there are no more indexes in the stream, generate CLOSE_STREAM
-	if idx.checkStreamEmpty(indexInst.Stream) {
-		cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
-			streamId: indexInst.Stream}
-		idx.streamStatus[indexInst.Stream] = false
+		//send stream update to kv sender
+		if ok := idx.sendStreamUpdateToWorker(cmd, idx.kvSenderCmdCh, "KVSender", respCh); !ok {
+			return false
+		}
 
 		//send stream update to mutation manager
 		if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", respCh); !ok {
@@ -893,6 +882,24 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 		//send stream update to timekeeper
 		if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
 			return false
+		}
+
+		//if there are no more indexes in the stream, generate CLOSE_STREAM
+		if idx.checkStreamEmpty(indexInst.Stream) {
+			cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
+				streamId: streamId}
+			idx.streamStatus[streamId] = false
+
+			//send stream update to mutation manager
+			if ok := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh, "MutationMgr", respCh); !ok {
+				return false
+			}
+
+			//send stream update to timekeeper
+			if ok := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper", respCh); !ok {
+				return false
+			}
+
 		}
 
 	}
@@ -1737,6 +1744,9 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 
 func (idx *indexer) bootstrap() error {
 
+	//close any old streams with projector
+	idx.closeAllStreams()
+
 	//recover indexes from local metadata
 	if err := idx.initFromPersistedState(); err != nil {
 		return err
@@ -1772,9 +1782,6 @@ func (idx *indexer) bootstrap() error {
 	//update index map in scan coordinator
 	idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.scanCoordCmdCh,
 		"ScanCoordinator", nil)
-
-	//close any old streams with projector
-	idx.closeAllStreams()
 
 	if ok := idx.startStreams(); !ok {
 		return errors.New("Unable To Start DCP Streams")
@@ -1837,7 +1844,8 @@ func (idx *indexer) initFromPersistedState() error {
 
 		//For now, initial stream indexes cannot be recovered. Change state to error.
 		//These indexes need to be dropped and recreated.
-		if inst.Stream == common.INIT_STREAM {
+		if inst.Stream == common.INIT_STREAM ||
+			(inst.Stream == common.MAINT_STREAM && inst.State == common.INDEX_STATE_INITIAL) {
 			inst.State = common.INDEX_STATE_ERROR
 			common.Fatalf("Indexer::initFromPersistedState Found Index For INIT_STREAM. "+
 				"Recovery Not Supported. Index Needs To Be Recreated. Details %v", inst)
@@ -1904,17 +1912,10 @@ func (idx *indexer) recoverSnapshots() {
 
 func (idx *indexer) closeAllStreams() {
 
-	var bucket string
-	for _, inst := range idx.indexInstMap {
-		bucket = inst.Defn.Bucket
-		break
-	}
-
 	for i := 0; i < int(common.MAX_STREAMS); i++ {
 
 		cmd := &MsgStreamUpdate{mType: CLOSE_STREAM,
 			streamId: common.StreamId(i),
-			bucket:   bucket,
 		}
 
 		//send stream update to kv_sender
@@ -1963,6 +1964,7 @@ func (idx *indexer) startStreams() bool {
 			}
 
 		case MSG_SUCCESS:
+			idx.streamStatus[common.MAINT_STREAM] = true
 			return true
 
 		default:

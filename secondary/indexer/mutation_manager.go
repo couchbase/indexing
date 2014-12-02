@@ -713,7 +713,7 @@ func (m *mutationMgr) cleanupStream(streamId common.StreamId) {
 //status is sent on the supervisor Response channel.
 func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 
-	common.Infof("MutationMgr::handlePersistMutationQueue %v", cmd)
+	common.Tracef("MutationMgr::handlePersistMutationQueue %v", cmd)
 
 	bucket := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
@@ -777,7 +777,7 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 //status is sent on the supervisor Response channel.
 func (m *mutationMgr) handleDrainMutationQueue(cmd Message) {
 
-	common.Infof("MutationMgr::handleDrainMutationQueue %v", cmd)
+	common.Tracef("MutationMgr::handleDrainMutationQueue %v", cmd)
 
 	bucket := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
@@ -831,7 +831,7 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 //for a given stream and bucket
 func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 
-	common.Infof("MutationMgr::handleGetMutationQueueHWT %v", cmd)
+	common.Tracef("MutationMgr::handleGetMutationQueueHWT %v", cmd)
 
 	bucket := cmd.(*MsgMutMgrGetTimestamp).GetBucket()
 	streamId := cmd.(*MsgMutMgrGetTimestamp).GetStreamId()
@@ -852,7 +852,7 @@ func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 //for a given stream and bucket
 func (m *mutationMgr) handleGetMutationQueueLWT(cmd Message) {
 
-	common.Infof("MutationMgr::handleGetMutationQueueLWT %v", cmd)
+	common.Tracef("MutationMgr::handleGetMutationQueueLWT %v", cmd)
 	bucket := cmd.(*MsgMutMgrGetTimestamp).GetBucket()
 	streamId := cmd.(*MsgMutMgrGetTimestamp).GetStreamId()
 

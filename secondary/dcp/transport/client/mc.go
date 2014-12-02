@@ -40,7 +40,7 @@ func Wrap(rwc io.ReadWriteCloser) (rv *Client, err error) {
 	return &Client{
 		conn:    rwc,
 		healthy: true,
-		hdrBuf:  make([]byte, gomemcached.HDR_LEN),
+		hdrBuf:  make([]byte, transport.HDR_LEN),
 	}, nil
 }
 
@@ -59,19 +59,19 @@ func (c Client) IsHealthy() bool {
 }
 
 // Send a custom request and get the response.
-func (c *Client) Send(req *gomemcached.MCRequest) (rv *gomemcached.MCResponse, err error) {
+func (c *Client) Send(req *transport.MCRequest) (rv *transport.MCResponse, err error) {
 	_, err = transmitRequest(c.conn, req)
 	if err != nil {
 		c.healthy = false
 		return
 	}
 	resp, _, err := getResponse(c.conn, c.hdrBuf)
-	c.healthy = !gomemcached.IsFatal(err)
+	c.healthy = !transport.IsFatal(err)
 	return resp, err
 }
 
 // Transmit send a request, but does not wait for a response.
-func (c *Client) Transmit(req *gomemcached.MCRequest) error {
+func (c *Client) Transmit(req *transport.MCRequest) error {
 	_, err := transmitRequest(c.conn, req)
 	if err != nil {
 		c.healthy = false
@@ -80,7 +80,7 @@ func (c *Client) Transmit(req *gomemcached.MCRequest) error {
 }
 
 // Receive a response
-func (c *Client) Receive() (*gomemcached.MCResponse, error) {
+func (c *Client) Receive() (*transport.MCResponse, error) {
 	resp, _, err := getResponse(c.conn, c.hdrBuf)
 	if err != nil {
 		c.healthy = false
@@ -89,30 +89,30 @@ func (c *Client) Receive() (*gomemcached.MCResponse, error) {
 }
 
 // Get the value for a key.
-func (c *Client) Get(vb uint16, key string) (*gomemcached.MCResponse, error) {
-	return c.Send(&gomemcached.MCRequest{
-		Opcode:  gomemcached.GET,
+func (c *Client) Get(vb uint16, key string) (*transport.MCResponse, error) {
+	return c.Send(&transport.MCRequest{
+		Opcode:  transport.GET,
 		VBucket: vb,
 		Key:     []byte(key),
 	})
 }
 
 // Del deletes a key.
-func (c *Client) Del(vb uint16, key string) (*gomemcached.MCResponse, error) {
-	return c.Send(&gomemcached.MCRequest{
-		Opcode:  gomemcached.DELETE,
+func (c *Client) Del(vb uint16, key string) (*transport.MCResponse, error) {
+	return c.Send(&transport.MCRequest{
+		Opcode:  transport.DELETE,
 		VBucket: vb,
 		Key:     []byte(key)})
 }
 
 // AuthList lists SASL auth mechanisms.
-func (c *Client) AuthList() (*gomemcached.MCResponse, error) {
-	return c.Send(&gomemcached.MCRequest{
-		Opcode: gomemcached.SASL_LIST_MECHS})
+func (c *Client) AuthList() (*transport.MCResponse, error) {
+	return c.Send(&transport.MCRequest{
+		Opcode: transport.SASL_LIST_MECHS})
 }
 
 // Auth performs SASL PLAIN authentication against the server.
-func (c *Client) Auth(user, pass string) (*gomemcached.MCResponse, error) {
+func (c *Client) Auth(user, pass string) (*transport.MCResponse, error) {
 	res, err := c.AuthList()
 
 	if err != nil {
@@ -121,18 +121,18 @@ func (c *Client) Auth(user, pass string) (*gomemcached.MCResponse, error) {
 
 	authMech := string(res.Body)
 	if strings.Index(authMech, "PLAIN") != -1 {
-		return c.Send(&gomemcached.MCRequest{
-			Opcode: gomemcached.SASL_AUTH,
+		return c.Send(&transport.MCRequest{
+			Opcode: transport.SASL_AUTH,
 			Key:    []byte("PLAIN"),
 			Body:   []byte(fmt.Sprintf("\x00%s\x00%s", user, pass))})
 	}
 	return res, fmt.Errorf("auth mechanism PLAIN not supported")
 }
 
-func (c *Client) store(opcode gomemcached.CommandCode, vb uint16,
-	key string, flags int, exp int, body []byte) (*gomemcached.MCResponse, error) {
+func (c *Client) store(opcode transport.CommandCode, vb uint16,
+	key string, flags int, exp int, body []byte) (*transport.MCResponse, error) {
 
-	req := &gomemcached.MCRequest{
+	req := &transport.MCRequest{
 		Opcode:  opcode,
 		VBucket: vb,
 		Key:     []byte(key),
@@ -145,10 +145,10 @@ func (c *Client) store(opcode gomemcached.CommandCode, vb uint16,
 	return c.Send(req)
 }
 
-func (c *Client) storeCas(opcode gomemcached.CommandCode, vb uint16,
-	key string, flags int, exp int, cas uint64, body []byte) (*gomemcached.MCResponse, error) {
+func (c *Client) storeCas(opcode transport.CommandCode, vb uint16,
+	key string, flags int, exp int, cas uint64, body []byte) (*transport.MCResponse, error) {
 
-	req := &gomemcached.MCRequest{
+	req := &transport.MCRequest{
 		Opcode:  opcode,
 		VBucket: vb,
 		Key:     []byte(key),
@@ -165,8 +165,8 @@ func (c *Client) storeCas(opcode gomemcached.CommandCode, vb uint16,
 func (c *Client) Incr(vb uint16, key string,
 	amt, def uint64, exp int) (uint64, error) {
 
-	req := &gomemcached.MCRequest{
-		Opcode:  gomemcached.INCREMENT,
+	req := &transport.MCRequest{
+		Opcode:  transport.INCREMENT,
 		VBucket: vb,
 		Key:     []byte(key),
 		Extras:  make([]byte, 8+8+4),
@@ -185,26 +185,26 @@ func (c *Client) Incr(vb uint16, key string,
 
 // Add a value for a key (store if not exists).
 func (c *Client) Add(vb uint16, key string, flags int, exp int,
-	body []byte) (*gomemcached.MCResponse, error) {
-	return c.store(gomemcached.ADD, vb, key, flags, exp, body)
+	body []byte) (*transport.MCResponse, error) {
+	return c.store(transport.ADD, vb, key, flags, exp, body)
 }
 
 // Set the value for a key.
 func (c *Client) Set(vb uint16, key string, flags int, exp int,
-	body []byte) (*gomemcached.MCResponse, error) {
-	return c.store(gomemcached.SET, vb, key, flags, exp, body)
+	body []byte) (*transport.MCResponse, error) {
+	return c.store(transport.SET, vb, key, flags, exp, body)
 }
 
 // SetCas set the value for a key with cas
 func (c *Client) SetCas(vb uint16, key string, flags int, exp int, cas uint64,
-	body []byte) (*gomemcached.MCResponse, error) {
-	return c.storeCas(gomemcached.SET, vb, key, flags, exp, cas, body)
+	body []byte) (*transport.MCResponse, error) {
+	return c.storeCas(transport.SET, vb, key, flags, exp, cas, body)
 }
 
 // Append data to the value of a key.
-func (c *Client) Append(vb uint16, key string, data []byte) (*gomemcached.MCResponse, error) {
-	req := &gomemcached.MCRequest{
-		Opcode:  gomemcached.APPEND,
+func (c *Client) Append(vb uint16, key string, data []byte) (*transport.MCResponse, error) {
+	req := &transport.MCRequest{
+		Opcode:  transport.APPEND,
 		VBucket: vb,
 		Key:     []byte(key),
 		Cas:     0,
@@ -215,8 +215,8 @@ func (c *Client) Append(vb uint16, key string, data []byte) (*gomemcached.MCResp
 }
 
 // GetBulk gets keys in bulk
-func (c *Client) GetBulk(vb uint16, keys []string) (map[string]*gomemcached.MCResponse, error) {
-	rv := map[string]*gomemcached.MCResponse{}
+func (c *Client) GetBulk(vb uint16, keys []string) (map[string]*transport.MCResponse, error) {
+	rv := map[string]*transport.MCResponse{}
 	going := true
 
 	defer func() {
@@ -234,9 +234,9 @@ func (c *Client) GetBulk(vb uint16, keys []string) (map[string]*gomemcached.MCRe
 				return
 			}
 			switch res.Opcode {
-			case gomemcached.GET:
+			case transport.GET:
 				going = false
-			case gomemcached.GETQ:
+			case transport.GETQ:
 			default:
 				log.Panicf("Unexpected opcode in GETQ response: %+v",
 					res)
@@ -246,11 +246,11 @@ func (c *Client) GetBulk(vb uint16, keys []string) (map[string]*gomemcached.MCRe
 	}()
 
 	for i, k := range keys {
-		op := gomemcached.GETQ
+		op := transport.GETQ
 		if i == len(keys)-1 {
-			op = gomemcached.GET
+			op = transport.GET
 		}
-		err := c.Transmit(&gomemcached.MCRequest{
+		err := c.Transmit(&transport.MCRequest{
 			Opcode:  op,
 			VBucket: vb,
 			Key:     []byte(k),
@@ -291,8 +291,8 @@ func (c *Client) Observe(vb uint16, key string) (result ObserveResult, err error
 	binary.BigEndian.PutUint16(body[2:4], uint16(len(key)))
 	copy(body[4:4+len(key)], key)
 
-	res, err := c.Send(&gomemcached.MCRequest{
-		Opcode:  gomemcached.OBSERVE,
+	res, err := c.Send(&transport.MCRequest{
+		Opcode:  transport.OBSERVE,
 		VBucket: vb,
 		Body:    body,
 	})
@@ -373,7 +373,7 @@ type CASState struct {
 	Cas         uint64 // Current CAS value of key
 	Exists      bool   // Does a value exist for the key? (If not, Value will be nil)
 	Err         error  // Error, if any, after CASNext returns false
-	resp        *gomemcached.MCResponse
+	resp        *transport.MCResponse
 }
 
 // CASNext is a non-callback, loop-based version of CAS method.
@@ -396,13 +396,13 @@ func (c *Client) CASNext(vb uint16, k string, exp int, state *CASState) bool {
 			state.resp, state.Err = c.Add(vb, k, 0, exp, state.Value)
 		} else {
 			// Updating / deleting a key:
-			req := &gomemcached.MCRequest{
-				Opcode:  gomemcached.DELETE,
+			req := &transport.MCRequest{
+				Opcode:  transport.DELETE,
 				VBucket: vb,
 				Key:     []byte(k),
 				Cas:     state.Cas}
 			if state.Value != nil {
-				req.Opcode = gomemcached.SET
+				req.Opcode = transport.SET
 				req.Opaque = 0
 				req.Extras = []byte{0, 0, 0, 0, 0, 0, 0, 0}
 				req.Body = state.Value
@@ -416,8 +416,8 @@ func (c *Client) CASNext(vb uint16, k string, exp int, state *CASState) bool {
 
 		// If the response status is KEY_EEXISTS or NOT_STORED there's a conflict and we'll need to
 		// get the new value (below). Otherwise, we're done (either success or failure) so return:
-		if !(state.resp != nil && (state.resp.Status == gomemcached.KEY_EEXISTS ||
-			state.resp.Status == gomemcached.NOT_STORED)) {
+		if !(state.resp != nil && (state.resp.Status == transport.KEY_EEXISTS ||
+			state.resp.Status == transport.NOT_STORED)) {
 			state.Cas = state.resp.Cas
 			return false // either success or fatal error
 		}
@@ -429,7 +429,7 @@ func (c *Client) CASNext(vb uint16, k string, exp int, state *CASState) bool {
 		state.Exists = true
 		state.Value = state.resp.Body
 		state.Cas = state.resp.Cas
-	} else if state.resp != nil && state.resp.Status == gomemcached.KEY_ENOENT {
+	} else if state.resp != nil && state.resp.Status == transport.KEY_ENOENT {
 		state.Err = nil
 		state.Exists = false
 		state.Value = nil
@@ -450,7 +450,7 @@ type CasFunc func(current []byte) ([]byte, CasOp)
 //
 // If the value does not exist, a nil current value will be sent to f.
 func (c *Client) CAS(vb uint16, k string, f CasFunc,
-	initexp int) (*gomemcached.MCResponse, error) {
+	initexp int) (*transport.MCResponse, error) {
 	var state CASState
 	for c.CASNext(vb, k, initexp, &state) {
 		newValue, operation := f(state.Value)
@@ -476,8 +476,8 @@ type StatValue struct {
 func (c *Client) Stats(key string) ([]StatValue, error) {
 	rv := make([]StatValue, 0, 128)
 
-	req := &gomemcached.MCRequest{
-		Opcode: gomemcached.STAT,
+	req := &transport.MCRequest{
+		Opcode: transport.STAT,
 		Key:    []byte(key),
 		Opaque: 918494,
 	}

@@ -1,0 +1,53 @@
+// Common set of definitions.
+
+package protobuf;
+
+// Error message can be sent back as response or
+// encapsulated in response packets.
+message Error {
+    required string error = 1; // Empty string means success
+}
+
+// list of vbucket numbers
+message Vbuckets {
+    repeated uint32 vbnos = 1;
+}
+
+// Start and end of UPR snapshot
+message Snapshot {
+    required uint64 start = 1;
+    required uint64 end   = 2;
+}
+
+// logical clock for a subset of vbuckets
+message TsVb {
+    required string pool   = 1; // pool name
+    required string bucket = 2; // bucket name
+    repeated uint32 vbnos  = 3; // a subset of vbucket-numbers
+    repeated uint64 seqnos = 4; // corresponding sequence number for each vbucket listed above
+}
+
+// logical clock for full set of vbuckets, starting from 0 to MaxVbucket.
+message TsVbFull {
+    required string pool   = 1; // pool name
+    required string bucket = 2; // bucket name
+    repeated uint64 seqnos = 3; // sequence numbers for full set of vbuckets
+}
+
+// logical clock for a subset of vbuckets along with branch-id and snapshot
+// information.
+message TsVbuuid {
+    required string   pool      = 1; // pool name
+    required string   bucket    = 2; // bucket name
+    repeated uint32   vbnos     = 3; // subset of vbucket numbers
+    repeated uint64   seqnos    = 4; // corresponding seqno. for each vbucket
+    repeated uint64   vbuuids   = 5; // corresponding vbuuid for each vbucket
+    repeated Snapshot snapshots = 6; // list of snapshot {start, end}
+}
+
+// failover log for a vbucket.
+message FailoverLog {
+    required uint32 vbno    = 1;
+    repeated uint64 vbuuids = 2; // list of vbuuid for each branch history
+    repeated uint64 seqnos  = 3; // corresponding high seqno for each vbuuid
+}

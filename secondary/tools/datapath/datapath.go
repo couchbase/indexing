@@ -11,7 +11,7 @@ import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dataport"
 import "github.com/couchbase/indexing/secondary/projector"
 import projc "github.com/couchbase/indexing/secondary/projector/client"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 
 var pooln = "default"
 
@@ -78,15 +78,17 @@ var projectors = make(map[string]*projc.Client)
 func main() {
 	cluster := argParse()
 
+	maxvbs := c.SystemConfig["maxVbuckets"].Int()
+	dconf := c.SystemConfig.SectionConfig("projector.dataport.indexer.", true)
 	// start dataport servers.
 	for _, endpoint := range options.endpoints {
 		stat, _ := strconv.Atoi(options.stat)
 		timeout, _ := strconv.Atoi(options.timeout)
 		go dataport.Application(
-			endpoint, stat, timeout,
+			endpoint, stat, timeout, maxvbs, dconf,
 			func(addr string, msg interface{}) bool { return true })
 	}
-	go dataport.Application(options.coordEndpoint, 0, 0, nil)
+	go dataport.Application(options.coordEndpoint, 0, 0, maxvbs, dconf, nil)
 
 	kvaddrs, err := c.GetKVAddrs(cluster, pooln, options.buckets[0])
 	if err != nil {
@@ -96,18 +98,21 @@ func main() {
 
 	for _, kvaddr := range kvaddrs {
 		adminport := kvaddr2adminport(kvaddr, 500)
-		config := c.SystemConfig.Clone()
-		config.SetValue("projector.clusterAddr", cluster)
-		config.SetValue("projector.adminport.listenAddr", adminport)
-		config.SetValue(
-			"projector.routerEndpointFactory", NewEndpointFactory(config))
+		config := c.SystemConfig.SectionConfig("projector.", true)
+		config.SetValue("clusterAddr", cluster)
+		config.SetValue("adminport.listenAddr", adminport)
+		epfactory := NewEndpointFactory(maxvbs, config)
+		config.SetValue("routerEndpointFactory", epfactory)
 		server, err := c.GetColocatedHost(cluster)
 		if err != nil {
 			log.Fatal(err)
 		}
-		config.SetValue("projector.kvAddrs", server)
-		projector.NewProjector(config) // start projector daemon
-		projectors[kvaddr] = projc.NewClient(adminport, config)
+		config.SetValue("kvAddrs", server)
+		projector.NewProjector(maxvbs, config) // start projector daemon
+
+		// projector-client
+		cconfig := c.SystemConfig.SectionConfig("projector.client.", true)
+		projectors[kvaddr] = projc.NewClient(adminport, maxvbs, cconfig)
 	}
 
 	// index instances for specified buckets.
@@ -144,11 +149,12 @@ func mf(err error, msg string) {
 }
 
 // NewEndpointFactory to create endpoint instances based on config.
-func NewEndpointFactory(config c.Config) c.RouterEndpointFactory {
+func NewEndpointFactory(maxvbs int, config c.Config) c.RouterEndpointFactory {
+	econf := config.SectionConfig("dataport.client.", true)
 	return func(topic, endpointType, addr string) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":
-			return dataport.NewRouterEndpoint(topic, addr, config)
+			return dataport.NewRouterEndpoint(topic, addr, maxvbs, econf)
 		default:
 			log.Fatal("Unknown endpoint type")
 		}

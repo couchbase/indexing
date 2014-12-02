@@ -320,6 +320,7 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 	//If the index is in INITIAL state, store it in initialbuild map
 	for _, idx := range indexInstList {
 		tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] += 1
+		common.Debugf("Timekeeper::addIndextoStream IndexCount %v", tk.streamBucketIndexCountMap)
 		if idx.State == common.INDEX_STATE_INITIAL {
 			tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
 				indexInst: idx,
@@ -355,6 +356,7 @@ func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 				idx.Defn.Bucket)
 		} else {
 			tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] -= 1
+			common.Debugf("Timekeeper::addIndextoStream IndexCount %v", tk.streamBucketIndexCountMap)
 			if tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
 				tk.cleanupBucketFromStream(streamId, idx.Defn.Bucket)
 			}
@@ -452,7 +454,7 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 
-	common.Debugf("Timekeeper::handleFlushDoneMaintStream %v", cmd)
+	common.Tracef("Timekeeper::handleFlushDoneMaintStream %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -499,7 +501,7 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 
 func (tk *timekeeper) handleFlushDoneCatchupStream(cmd Message) {
 
-	common.Debugf("Timekeeper::handleFlushDoneCatchupStream %v", cmd)
+	common.Tracef("Timekeeper::handleFlushDoneCatchupStream %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -546,7 +548,7 @@ func (tk *timekeeper) handleFlushDoneCatchupStream(cmd Message) {
 
 func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 
-	common.Debugf("Timekeeper::handleFlushDoneInitStream %v", cmd)
+	common.Tracef("Timekeeper::handleFlushDoneInitStream %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -600,7 +602,7 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 
 func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 
-	common.Debugf("Timekeeper::handleFlushAbortDone %v", cmd)
+	common.Tracef("Timekeeper::handleFlushAbortDone %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -710,7 +712,7 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 
 func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 
-	common.Debugf("Timekeeper::handleSnapshotMarker %v", cmd)
+	common.Tracef("Timekeeper::handleSnapshotMarker %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -784,7 +786,7 @@ func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
 
 func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
-	common.Debugf("Timekeeper::handleStreamBegin %v", cmd)
+	common.Tracef("Timekeeper::handleStreamBegin %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -816,6 +818,11 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 			if _, ok := bucketHWTMap[meta.bucket]; !ok {
 				tk.initInternalStreamState(streamId, meta.bucket)
+				//disable flush for MAINT_STREAM in Recovery
+				if tk.streamState[streamId] == STREAM_RECOVERY {
+					tk.setHWTFromRestartTs(streamId, meta.bucket)
+					tk.disableStreamFlush(streamId)
+				}
 			}
 
 			//TODO: Check if this is duplicate StreamBegin. Treat it as StreamEnd.
@@ -824,12 +831,6 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 			sb := tk.streamBucketStreamBeginMap[streamId][meta.bucket]
 			sb[meta.vbucket] = 1
-
-			//disable flush for MAINT_STREAM in Recovery
-			if tk.streamState[streamId] == STREAM_RECOVERY {
-				tk.setHWTFromRestartTs(streamId, meta.bucket)
-				tk.disableStreamFlush(streamId)
-			}
 
 		case STREAM_PREPARE_RECOVERY, STREAM_INACTIVE:
 			//ignore stream end in prepare_recovery
@@ -875,6 +876,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 			if _, ok := bucketHWTMap[meta.bucket]; !ok {
 				tk.initInternalStreamState(streamId, meta.bucket)
+				tk.setHWTFromRestartTs(streamId, meta.bucket)
 			}
 
 			//TODO: Check if this is duplicate StreamBegin. Treat it as StreamEnd.
@@ -883,7 +885,6 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 			sb := tk.streamBucketStreamBeginMap[streamId][meta.bucket]
 			sb[meta.vbucket] = 1
-			tk.setHWTFromRestartTs(streamId, meta.bucket)
 
 		case STREAM_PREPARE_RECOVERY, STREAM_INACTIVE, STREAM_RECOVERY:
 			//ignore stream end in prepare_recovery
@@ -906,7 +907,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
-	common.Debugf("Timekeeper::handleStreamEnd %v", cmd)
+	common.Tracef("Timekeeper::handleStreamEnd %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -1518,6 +1519,10 @@ func getTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 //helper function to copy TsVbuuid
 func copyTsVbuuid(bucket string, tsVbuuid *common.TsVbuuid) *common.TsVbuuid {
 
+	if tsVbuuid == nil {
+		return nil
+	}
+
 	newTs := common.NewTsVbuuid(bucket, int(NUM_VBUCKETS))
 
 	for i := 0; i < int(NUM_VBUCKETS); i++ {
@@ -1638,13 +1643,24 @@ func (tk *timekeeper) computeRestartTs(streamId common.StreamId) map[string]*com
 
 	bucketRestartTs := make(map[string]*common.TsVbuuid)
 
-	for bucket, _ := range tk.streamBucketLastFlushedTsMap[streamId] {
-
-		bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketLastFlushedTsMap[streamId][bucket])
+	for bucket, cnt := range tk.streamBucketIndexCountMap[streamId] {
+		//for all the buckets with index count > 0 for the stream, use last flushed TS
+		//to restart the stream
+		if cnt > 0 {
+			if _, ok := tk.streamBucketLastFlushedTsMap[streamId][bucket]; ok {
+				bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketLastFlushedTsMap[streamId][bucket])
+			} else if ts, ok := tk.streamBucketRestartTsMap[streamId][bucket]; ok && ts != nil {
+				//if no flush has been done yet, use restart TS
+				bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketRestartTsMap[streamId][bucket])
+			} else {
+				//for CATCHUP_STREAM, use the restart TS of MAINT_STREAM
+				if streamId == common.CATCHUP_STREAM {
+					bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketRestartTsMap[common.MAINT_STREAM][bucket])
+				}
+			}
+		}
 	}
-
 	return bucketRestartTs
-
 }
 
 func (tk *timekeeper) initInternalStreamState(streamId common.StreamId,

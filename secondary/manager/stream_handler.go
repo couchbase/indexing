@@ -3,7 +3,7 @@ package manager
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 )
 
 type mgrMutHandler struct {
@@ -119,9 +119,9 @@ func (m *mgrMutHandler) HandleConnectionError(streamId common.StreamId, err data
 	common.Debugf("mgrMutHandler.ConnectionError")
 
 	// ConnectionError happens in 3 cases:
-	// 	1) Projector goes down for a specific node
-	// 	2) Network error that forces the connection to terminate for the coordinator
-	// 	3) Projector buffer is full and forces projector to terminate the connection
+	//  1) Projector goes down for a specific node
+	//  2) Network error that forces the connection to terminate for the coordinator
+	//  3) Projector buffer is full and forces projector to terminate the connection
 	//
 	// For (2) and (3),  the coordinator can call projector to repairEndpoints, without
 	// interrupting the shared stream. If we get an error from projector on repair endpoints,

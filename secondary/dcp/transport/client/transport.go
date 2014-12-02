@@ -14,8 +14,8 @@ var errNoConn = errors.New("no connection")
 // If the error is a memcached response, declare the error to be nil
 // so a client can handle the status without worrying about whether it
 // indicates success or failure.
-func UnwrapMemcachedError(rv *gomemcached.MCResponse,
-	err error) (*gomemcached.MCResponse, error) {
+func UnwrapMemcachedError(rv *transport.MCResponse,
+	err error) (*transport.MCResponse, error) {
 
 	if rv == err {
 		return rv, nil
@@ -24,30 +24,30 @@ func UnwrapMemcachedError(rv *gomemcached.MCResponse,
 }
 
 // ReceiveHook is called after every packet is received (or attempted to be)
-var ReceiveHook func(*gomemcached.MCResponse, int, error)
+var ReceiveHook func(*transport.MCResponse, int, error)
 
-func getResponse(s io.Reader, hdrBytes []byte) (rv *gomemcached.MCResponse, n int, err error) {
+func getResponse(s io.Reader, hdrBytes []byte) (rv *transport.MCResponse, n int, err error) {
 	if s == nil {
 		return nil, 0, errNoConn
 	}
 
-	rv = &gomemcached.MCResponse{}
+	rv = &transport.MCResponse{}
 	n, err = rv.Receive(s, hdrBytes)
 
 	if ReceiveHook != nil {
 		ReceiveHook(rv, n, err)
 	}
 
-	if err == nil && rv.Status != gomemcached.SUCCESS {
+	if err == nil && rv.Status != transport.SUCCESS {
 		err = rv
 	}
 	return rv, n, err
 }
 
 // TransmitHook is called after each packet is transmitted.
-var TransmitHook func(*gomemcached.MCRequest, int, error)
+var TransmitHook func(*transport.MCRequest, int, error)
 
-func transmitRequest(o io.Writer, req *gomemcached.MCRequest) (int, error) {
+func transmitRequest(o io.Writer, req *transport.MCRequest) (int, error) {
 	if o == nil {
 		return 0, errNoConn
 	}

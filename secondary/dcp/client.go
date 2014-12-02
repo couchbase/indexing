@@ -50,7 +50,7 @@ func slowLog(startTime time.Time, format string, args ...interface{}) {
 	if elapsed := time.Now().Sub(startTime); elapsed > SlowServerCallWarningThreshold {
 		pc, _, _, _ := runtime.Caller(2)
 		caller := runtime.FuncForPC(pc).Name()
-		log.Printf("go-couchbase: "+format+" in "+caller+" took "+elapsed.String(), args...)
+		log.Printf("dcp-client: "+format+" in "+caller+" took "+elapsed.String(), args...)
 	}
 }
 
@@ -88,9 +88,9 @@ func (b *Bucket) Do(k string, f func(mc *memcached.Client, vb uint16) error) (er
 			}
 
 			err = f(conn, uint16(vb))
-			if i, ok := err.(*gomemcached.MCResponse); ok {
+			if i, ok := err.(*transport.MCResponse); ok {
 				st := i.Status
-				retry = st == gomemcached.NOT_MY_VBUCKET
+				retry = st == transport.NOT_MY_VBUCKET
 			}
 			return
 		}()
@@ -179,12 +179,12 @@ func isConnError(err error) bool {
 }
 
 func (b *Bucket) doBulkGet(vb uint16, keys []string,
-	ch chan<- map[string]*gomemcached.MCResponse, ech chan error) {
+	ch chan<- map[string]*transport.MCResponse, ech chan error) {
 	if SlowServerCallWarningThreshold > 0 {
 		defer slowLog(time.Now(), "call to doBulkGet(%d, %d keys)", vb, len(keys))
 	}
 
-	rv := map[string]*gomemcached.MCResponse{}
+	rv := map[string]*transport.MCResponse{}
 
 	attempts := 0
 	done := false
@@ -209,9 +209,9 @@ func (b *Bucket) doBulkGet(vb uint16, keys []string,
 
 			m, err := conn.GetBulk(vb, keys)
 			switch err.(type) {
-			case *gomemcached.MCResponse:
-				st := err.(*gomemcached.MCResponse).Status
-				if st == gomemcached.NOT_MY_VBUCKET {
+			case *transport.MCResponse:
+				st := err.(*transport.MCResponse).Status
+				if st == transport.NOT_MY_VBUCKET {
 					b.Refresh()
 					// retry
 					err = nil
@@ -255,7 +255,7 @@ func (b *Bucket) doBulkGet(vb uint16, keys []string,
 }
 
 func (b *Bucket) processBulkGet(kdm map[uint16][]string,
-	ch chan map[string]*gomemcached.MCResponse, ech chan error) {
+	ch chan map[string]*transport.MCResponse, ech chan error) {
 	wch := make(chan uint16)
 	defer close(ch)
 	defer close(ech)
@@ -312,7 +312,7 @@ func errorCollector(ech <-chan error, eout chan<- error) {
 // Unlike more convenient GETs, the entire response is returned in the
 // map for each key.  Keys that were not found will not be included in
 // the map.
-func (b *Bucket) GetBulk(keys []string) (map[string]*gomemcached.MCResponse, error) {
+func (b *Bucket) GetBulk(keys []string) (map[string]*transport.MCResponse, error) {
 	// Organize by vbucket
 	kdm := map[uint16][]string{}
 	for _, k := range keys {
@@ -328,13 +328,13 @@ func (b *Bucket) GetBulk(keys []string) (map[string]*gomemcached.MCResponse, err
 
 	// processBulkGet will own both of these channels and
 	// guarantee they're closed before it returns.
-	ch := make(chan map[string]*gomemcached.MCResponse)
+	ch := make(chan map[string]*transport.MCResponse)
 	ech := make(chan error)
 	go b.processBulkGet(kdm, ch, ech)
 
 	go errorCollector(ech, eout)
 
-	rv := map[string]*gomemcached.MCResponse{}
+	rv := map[string]*transport.MCResponse{}
 	for m := range ch {
 		for k, v := range m {
 			rv[k] = v
@@ -419,13 +419,13 @@ func (b *Bucket) Write(k string, flags, exp int, v interface{},
 		data = v.([]byte)
 	}
 
-	var res *gomemcached.MCResponse
+	var res *transport.MCResponse
 	err = b.Do(k, func(mc *memcached.Client, vb uint16) error {
 		if opt&AddOnly != 0 {
 			res, err = memcached.UnwrapMemcachedError(
 				mc.Add(vb, k, flags, exp, data))
-			if err == nil && res.Status != gomemcached.SUCCESS {
-				if res.Status == gomemcached.KEY_EEXISTS {
+			if err == nil && res.Status != transport.SUCCESS {
+				if res.Status == transport.KEY_EEXISTS {
 					err = ErrKeyExists
 				} else {
 					err = res
@@ -467,7 +467,7 @@ func (b *Bucket) WriteCas(k string, flags, exp int, cas uint64, v interface{},
 		data = v.([]byte)
 	}
 
-	var res *gomemcached.MCResponse
+	var res *transport.MCResponse
 	err = b.Do(k, func(mc *memcached.Client, vb uint16) error {
 		res, err = mc.SetCas(vb, k, flags, exp, cas, data)
 		return err

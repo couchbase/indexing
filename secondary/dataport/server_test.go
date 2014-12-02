@@ -4,7 +4,7 @@ import "testing"
 import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 import "github.com/couchbase/indexing/secondary/transport"
 
 func TestTimeout(t *testing.T) {
@@ -16,14 +16,18 @@ func TestTimeout(t *testing.T) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, c.SystemConfig, appch)
+	prefix := "projector.dataport.indexer."
+	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	daemon, err := NewServer(addr, maxvbuckets, config, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// start client
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, _ := NewClient(addr, flags, c.SystemConfig)
+	prefix = "projector.dataport.client."
+	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	client, _ := NewClient(addr, flags, maxvbuckets, config)
 
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 
@@ -101,14 +105,18 @@ func TestLoopback(t *testing.T) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, c.SystemConfig, appch)
+	prefix := "projector.dataport.indexer."
+	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	daemon, err := NewServer(addr, maxvbuckets, config, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// start client and test loopback
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, err := NewClient(addr, flags, c.SystemConfig)
+	prefix = "projector.dataport.client."
+	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	client, err := NewClient(addr, flags, maxvbuckets, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,14 +195,18 @@ func BenchmarkLoopback(b *testing.B) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	daemon, err := NewServer(addr, c.SystemConfig, appch)
+	prefix := "projector.dataport.indexer."
+	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	daemon, err := NewServer(addr, maxvbuckets, config, appch)
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	// start client and test loopback
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, _ := NewClient(addr, flags, c.SystemConfig)
+	prefix = "projector.dataport.client."
+	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	client, _ := NewClient(addr, flags, maxvbuckets, config)
 
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets)
 

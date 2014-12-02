@@ -94,7 +94,7 @@ func TestConnPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error getting a connection: %v", err)
 	}
-	err = sc.Transmit(&gomemcached.MCRequest{})
+	err = sc.Transmit(&transport.MCRequest{})
 	if err == nil {
 		t.Fatalf("Expected error sending a request")
 	}
@@ -247,7 +247,7 @@ func TestConnPoolWaitFailFull(t *testing.T) {
 	}
 
 	// causes failure
-	aClient.Transmit(&gomemcached.MCRequest{})
+	aClient.Transmit(&transport.MCRequest{})
 	time.AfterFunc(2*time.Millisecond, func() { cp.Return(aClient) })
 
 	sc, err := cp.Get()
@@ -282,7 +282,7 @@ func TestConnPoolWaitDoubleFailFull(t *testing.T) {
 	}
 
 	// causes failure
-	aClient.Transmit(&gomemcached.MCRequest{})
+	aClient.Transmit(&transport.MCRequest{})
 	time.AfterFunc(2*time.Millisecond, func() { cp.Return(aClient) })
 
 	sc, err := cp.Get()

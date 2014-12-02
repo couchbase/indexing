@@ -8,8 +8,9 @@ import "reflect"
 import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbase/indexing/secondary/queryport"
+import queryc "github.com/couchbase/indexing/secondary/queryport/client"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
 var testStatisticsResponse = &protobuf.StatisticsResponse{
@@ -75,7 +76,8 @@ func usage() {
 
 func main() {
 	argParse()
-	s, err := queryport.NewServer(options.server, serverCallb, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.indexer.", true)
+	s, err := queryport.NewServer(options.server, serverCallb, config)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -91,9 +93,9 @@ func main() {
 }
 
 func loopback() {
-	config := c.SystemConfig.Clone().SetValue("queryport.client.poolSize", 10)
-	config = config.SetValue("queryport.client.poolOverflow", options.par)
-	client := queryport.NewClient(options.server, config)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	config.SetValue("poolSize", 10).SetValue("poolOverflow", options.par)
+	client := queryc.NewClient(options.server, config)
 	quitch := make(chan int)
 	for i := 0; i < options.par; i++ {
 		t := time.After(time.Duration(options.seconds) * time.Second)
@@ -110,7 +112,7 @@ func loopback() {
 	fmt.Printf("Completed %v queries in %v seconds\n", count, options.seconds)
 }
 
-func runClient(client *queryport.Client, t <-chan time.Time, quitch chan<- int) {
+func runClient(client *queryc.Client, t <-chan time.Time, quitch chan<- int) {
 	count := 0
 
 loop:

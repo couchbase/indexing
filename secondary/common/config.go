@@ -14,7 +14,6 @@ package common
 
 import "encoding/json"
 import "strings"
-import "fmt"
 
 // Config is a key, value map with key always being a string
 // represents a config-parameter.
@@ -103,7 +102,7 @@ var SystemConfig = Config{
 	},
 	"projector.vbucketSyncTimeout": ConfigValue{
 		500,
-		"timeout, in milliseconds, is for sending periodic Sync messages for",
+		"timeout, in milliseconds, for sending periodic Sync messages",
 		500,
 	},
 	// projector adminport parameters
@@ -155,6 +154,12 @@ var SystemConfig = Config{
 		2,
 		"multiplying factor on retryInterval for every attempt with server",
 		2,
+	},
+	// TODO: This configuration param is same as the above.
+	"projector.client.urlPrefix": ConfigValue{
+		"/adminport/",
+		"url prefix (script-path) for adminport used by projector",
+		"/adminport/",
 	},
 	// projector dataport client parameters
 	"projector.dataport.client.parConnections": ConfigValue{
@@ -291,23 +296,23 @@ var SystemConfig = Config{
 	},
 }
 
-// NewConfig from another Config object (clone) or from
-// map[string]interface{} object or from []byte slice, a byte-slice
-// will be interpreted as JSON string.
+// NewConfig from another
+// Config object or from map[string]interface{} object
+// or from []byte slice, a byte-slice of JSON string.
 func NewConfig(data interface{}) (Config, error) {
 	config := SystemConfig.Clone()
 	switch v := data.(type) {
-	case Config:
+	case Config: // Clone
 		for key, value := range v {
 			config.Set(key, value)
 		}
 
-	case map[string]interface{}:
+	case map[string]interface{}: // transform
 		for key, value := range v {
 			config.SetValue(key, value)
 		}
 
-	case []byte: // assume this to be in JSON
+	case []byte: // parse JSON
 		m := make(map[string]interface{})
 		if err := json.Unmarshal(v, m); err != nil {
 			return nil, err
@@ -332,23 +337,26 @@ func (config Config) Clone() Config {
 	return clone
 }
 
-// Override will update values in `config` instance with values found in
-// `other` instance. `config` is expected to contain all the keys from
-// `other`.
-func (config Config) Override(other Config) Config {
-	for key, cv := range other {
-		if ocv, ok := config[key]; !ok {
-			panic(fmt.Errorf("override key %v not found\n", key))
-		} else {
-			ocv.Value = cv.Value
+// Override will clone `config` object and update parameters with
+// values from `others` instance.
+func (config Config) Override(others ...Config) Config {
+	newconfig := config.Clone()
+	for _, other := range others {
+		for key, cv := range other {
+			ocv, ok := newconfig[key]
+			if !ok {
+				ocv = cv
+			} else {
+				ocv.Value = cv.Value
+			}
 			config[key] = ocv
 		}
 	}
 	return config
 }
 
-// SectionConfig will gather only those parameters whose
-// key starts with `prefix`. If `trim` is true, then config
+// SectionConfig will create a new config object with parameters
+// starting with `prefix`. If `trim` is true, then config
 // parameter will be trimmed with the prefix string.
 func (config Config) SectionConfig(prefix string, trim bool) Config {
 	section := make(Config)
@@ -364,13 +372,13 @@ func (config Config) SectionConfig(prefix string, trim bool) Config {
 	return section
 }
 
-// Set ConfigValue for parameter.
+// Set ConfigValue for parameter. Mutates the config object.
 func (config Config) Set(key string, cv ConfigValue) Config {
 	config[key] = cv
 	return config
 }
 
-// SetValue config parameter with value.
+// SetValue config parameter with value. Mutates the config object.
 func (config Config) SetValue(key string, value interface{}) Config {
 	cv := config[key]
 	cv.Value = value

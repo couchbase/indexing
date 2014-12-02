@@ -52,14 +52,15 @@ type RouterEndpoint struct {
 // NewRouterEndpoint instantiate a new RouterEndpoint
 // routine and return its reference.
 func NewRouterEndpoint(
-	topic, raddr string, config c.Config) (*RouterEndpoint, error) {
+	topic, raddr string,
+	maxvbs int,
+	config c.Config) (*RouterEndpoint, error) {
 
-	econf := config.SectionConfig("projector.dataport.client.", true)
-	parConns := econf["parConnections"].Int()
+	parConns := config["parConnections"].Int()
 
 	// TODO: add configuration params for transport flags.
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, err := NewClient(raddr, flags, config)
+	client, err := NewClient(raddr, flags, maxvbs, config)
 	if err != nil {
 		return nil, err
 	}
@@ -70,11 +71,11 @@ func NewRouterEndpoint(
 		finch:      make(chan bool),
 		timestamp:  time.Now().UnixNano(),
 		parConns:   parConns,
-		genChSize:  econf["genServerChanSize"].Int(),
-		keyChSize:  econf["keyChanSize"].Int(),
-		block:      econf["remoteBlock"].Bool(),
-		bufferTm:   time.Duration(econf["bufferTimeout"].Int()),
-		harakiriTm: time.Duration(econf["harakiriTimeout"].Int()),
+		genChSize:  config["genServerChanSize"].Int(),
+		keyChSize:  config["keyChanSize"].Int(),
+		block:      config["remoteBlock"].Bool(),
+		bufferTm:   time.Duration(config["bufferTimeout"].Int()),
+		harakiriTm: time.Duration(config["harakiriTimeout"].Int()),
 	}
 	endpoint.logPrefix = fmt.Sprintf(
 		"[%v->endpc(%v) %v]", topic, endpoint.timestamp, endpoint.raddr)
@@ -202,10 +203,9 @@ loop:
 
 			case endpCmdSetConfig:
 				config := msg[1].(c.Config)
-				econf := config.SectionConfig("projector.dataport.client.", true)
-				endpoint.block = econf["remoteBlock"].Bool()
-				endpoint.bufferTm = time.Duration(econf["bufferTimeout"].Int())
-				endpoint.harakiriTm = time.Duration(econf["harakiriTimeout"].Int())
+				endpoint.block = config["remoteBlock"].Bool()
+				endpoint.bufferTm = time.Duration(config["bufferTimeout"].Int())
+				endpoint.harakiriTm = time.Duration(config["harakiriTimeout"].Int())
 				flushTimeout = time.Tick(endpoint.bufferTm * time.Millisecond)
 				if harakiri != nil {
 					harakiri = time.After(endpoint.harakiriTm * time.Millisecond)

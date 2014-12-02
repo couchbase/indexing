@@ -13,7 +13,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/manager"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbase/indexing/secondary/transport"
 	"net"
 	"testing"
@@ -88,7 +88,11 @@ func runTestSender(port string, donech chan bool, t *testing.T) {
 
 	// start client
 	addr := net.JoinHostPort("127.0.0.1", port)
-	client, err := dataport.NewClient(addr, transport.TransportFlag(0).SetProtobuf(), common.SystemConfig)
+	prefix := "projector.dataport.client."
+	config := common.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	maxvbs := common.SystemConfig["maxVbuckets"].Int()
+	flag := transport.TransportFlag(0).SetProtobuf()
+	client, err := dataport.NewClient(addr, flag, maxvbs, config)
 	if err != nil {
 		t.Fatal(err)
 	}

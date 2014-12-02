@@ -67,7 +67,7 @@ func TestHealthy(t *testing.T) {
 		t.Errorf("Expected healthy.  Wasn't.")
 	}
 
-	res, err := c.Send(&gomemcached.MCRequest{})
+	res, err := c.Send(&transport.MCRequest{})
 	if err == nil {
 		t.Errorf("Expected error transmitting, got %v", res)
 	}
@@ -81,8 +81,8 @@ func TestTransmitReq(t *testing.T) {
 	b := bytes.NewBuffer([]byte{})
 	buf := bufio.NewWriter(b)
 
-	req := gomemcached.MCRequest{
-		Opcode:  gomemcached.SET,
+	req := transport.MCRequest{
+		Opcode:  transport.SET,
 		Cas:     938424885,
 		Opaque:  7242,
 		VBucket: 824,
@@ -105,7 +105,7 @@ func TestTransmitReq(t *testing.T) {
 	buf.Flush()
 
 	expected := []byte{
-		gomemcached.REQ_MAGIC, byte(gomemcached.SET),
+		transport.REQ_MAGIC, byte(transport.SET),
 		0x0, 0x7, // length of key
 		0x0,       // extra length
 		0x0,       // reserved
@@ -130,8 +130,8 @@ func TestTransmitReq(t *testing.T) {
 func BenchmarkTransmitReq(b *testing.B) {
 	bout := bytes.NewBuffer([]byte{})
 
-	req := gomemcached.MCRequest{
-		Opcode:  gomemcached.SET,
+	req := transport.MCRequest{
+		Opcode:  transport.SET,
 		Cas:     938424885,
 		Opaque:  7242,
 		VBucket: 824,
@@ -155,8 +155,8 @@ func BenchmarkTransmitReq(b *testing.B) {
 func BenchmarkTransmitReqLarge(b *testing.B) {
 	bout := bytes.NewBuffer([]byte{})
 
-	req := gomemcached.MCRequest{
-		Opcode:  gomemcached.SET,
+	req := transport.MCRequest{
+		Opcode:  transport.SET,
 		Cas:     938424885,
 		Opaque:  7242,
 		VBucket: 824,
@@ -178,8 +178,8 @@ func BenchmarkTransmitReqLarge(b *testing.B) {
 }
 
 func BenchmarkTransmitReqNull(b *testing.B) {
-	req := gomemcached.MCRequest{
-		Opcode:  gomemcached.SET,
+	req := transport.MCRequest{
+		Opcode:  transport.SET,
 		Cas:     938424885,
 		Opaque:  7242,
 		VBucket: 824,
@@ -250,14 +250,14 @@ func TestDecodeSpecSample(t *testing.T) {
 		0x64, // 32
 	}
 
-	buf := make([]byte, gomemcached.HDR_LEN)
+	buf := make([]byte, transport.HDR_LEN)
 	res, _, err := getResponse(bytes.NewReader(data), buf)
 	if err != nil {
 		t.Fatalf("Error parsing response: %v", err)
 	}
 
-	expected := &gomemcached.MCResponse{
-		Opcode: gomemcached.GET,
+	expected := &transport.MCResponse{
+		Opcode: transport.GET,
 		Status: 0,
 		Opaque: 0,
 		Cas:    1,
@@ -282,7 +282,7 @@ func TestNilReader(t *testing.T) {
 
 func TestDecode(t *testing.T) {
 	data := []byte{
-		gomemcached.RES_MAGIC, byte(gomemcached.SET),
+		transport.RES_MAGIC, byte(transport.SET),
 		0x0, 0x7, // length of key
 		0x0,       // extra length
 		0x0,       // reserved
@@ -293,15 +293,15 @@ func TestDecode(t *testing.T) {
 		's', 'o', 'm', 'e', 'k', 'e', 'y',
 		's', 'o', 'm', 'e', 'v', 'a', 'l', 'u', 'e'}
 
-	buf := make([]byte, gomemcached.HDR_LEN)
+	buf := make([]byte, transport.HDR_LEN)
 	res, _, err := getResponse(bytes.NewReader(data), buf)
 	res, err = UnwrapMemcachedError(res, err)
 	if err != nil {
 		t.Fatalf("Error parsing response: %v", err)
 	}
 
-	expected := &gomemcached.MCResponse{
-		Opcode: gomemcached.SET,
+	expected := &transport.MCResponse{
+		Opcode: transport.SET,
 		Status: 1582,
 		Opaque: 7242,
 		Cas:    938424885,
@@ -318,7 +318,7 @@ func TestDecode(t *testing.T) {
 
 func BenchmarkDecodeResponse(b *testing.B) {
 	data := []byte{
-		gomemcached.RES_MAGIC, byte(gomemcached.SET),
+		transport.RES_MAGIC, byte(transport.SET),
 		0x0, 0x7, // length of key
 		0x0,       // extra length
 		0x0,       // reserved
@@ -328,7 +328,7 @@ func BenchmarkDecodeResponse(b *testing.B) {
 		0x0, 0x0, 0x0, 0x0, 0x37, 0xef, 0x3a, 0x35, // CAS
 		's', 'o', 'm', 'e', 'k', 'e', 'y',
 		's', 'o', 'm', 'e', 'v', 'a', 'l', 'u', 'e'}
-	buf := make([]byte, gomemcached.HDR_LEN)
+	buf := make([]byte, transport.HDR_LEN)
 	b.SetBytes(int64(len(buf)))
 
 	for i := 0; i < b.N; i++ {
@@ -337,7 +337,7 @@ func BenchmarkDecodeResponse(b *testing.B) {
 }
 
 func TestUnwrap(t *testing.T) {
-	res := &gomemcached.MCResponse{}
+	res := &transport.MCResponse{}
 
 	_, e := UnwrapMemcachedError(res, res)
 	if e != nil {

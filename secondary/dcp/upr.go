@@ -206,7 +206,7 @@ func (feed *UprFeed) run() {
 		}
 
 		// On error, try to refresh the bucket in case the list of nodes changed:
-		log.Printf("go-couchbase: UPR connection lost; reconnecting to bucket %q in %v",
+		log.Printf("dcp-client: UPR connection lost; reconnecting to bucket %q in %v",
 			feed.bucket.Name, retryInterval)
 
 		if err := feed.bucket.Refresh(); err != nil {
@@ -250,7 +250,7 @@ func (feed *UprFeed) connectToNodes() (err error) {
 		}
 		singleFeed, err = serverConn.StartUprFeed(name, feed.sequence)
 		if err != nil {
-			log.Printf("go-couchbase: Error connecting to upr feed of %s: %v", serverConn.host, err)
+			log.Printf("dcp-client: Error connecting to upr feed of %s: %v", serverConn.host, err)
 			feed.closeNodeFeeds()
 			return
 		}
@@ -285,13 +285,13 @@ func (feed *UprFeed) forwardUprEvents(nodeFeed *FeedInfo, killSwitch chan bool, 
 		case event, ok := <-singleFeed.C:
 			if !ok {
 				if singleFeed.Error != nil {
-					log.Printf("go-couchbase: Upr feed from %s failed: %v", host, singleFeed.Error)
+					log.Printf("dcp-client: Upr feed from %s failed: %v", host, singleFeed.Error)
 				}
 				killSwitch <- true
 				return
 			}
 			feed.output <- event
-			if event.Status == gomemcached.NOT_MY_VBUCKET {
+			if event.Status == transport.NOT_MY_VBUCKET {
 				log.Printf(" Got a not my vbucket error !! ")
 				if err := feed.bucket.Refresh(); err != nil {
 					log.Printf("Unable to refresh bucket %s ", err.Error())

@@ -12,8 +12,13 @@ package indexer
 import (
 	"bytes"
 	"encoding/gob"
+	"errors"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
+)
+
+var (
+	ErrIndexRollback = errors.New("Indexer rollback")
 )
 
 //StorageManager manages the snapshots for the indexes and responsible for storing
@@ -158,7 +163,7 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 //after flush has completed
 func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
-	common.Debugf("StorageMgr::handleCreateSnapshot %v", cmd)
+	common.Tracef("StorageMgr::handleCreateSnapshot %v", cmd)
 
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	tsVbuuid := cmd.(*MsgMutMgrFlushDone).GetTS()
@@ -198,7 +203,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 					if latestSnapshot == nil || ts.GreaterThan(snapTs) {
 						//commit the outstanding data
 
-						common.Debugf("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
+						common.Tracef("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
 							"%v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
 						newTsVbuuid := tsVbuuid.Copy()
@@ -212,7 +217,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							continue
 						}
 
-						common.Debugf("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
+						common.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
 							"Index: %v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
 						//create snapshot for slice
@@ -221,7 +226,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							if snapContainer.Len() > MAX_SNAPSHOTS_PER_INDEX {
 								serr := snapContainer.RemoveOldest()
 								if serr == nil {
-									common.Debugf("StorageMgr::handleCreateSnapshot \n\tRemoved Oldest Snapshot, "+
+									common.Tracef("StorageMgr::handleCreateSnapshot \n\tRemoved Oldest Snapshot, "+
 										"Container Len %v", snapContainer.Len())
 								}
 							}
@@ -331,6 +336,17 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 			}
 		}
 	}
+
+	// Notify all scan waiters for all indexes with error
+	for idxInstId, waiters := range sm.waitersMap {
+		idxInst := sm.indexInstMap[idxInstId]
+		if _, ok := rollbackTs[idxInst.Defn.Bucket]; ok {
+			for _, w := range waiters {
+				w.Error(ErrIndexRollback)
+			}
+		}
+	}
+
 	//reinit the index ts map after rollback
 	sm.initTsMap(sm.indexPartnMap)
 

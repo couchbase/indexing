@@ -10,13 +10,13 @@ run_query(){
 }
 
 # cleanup
-run_query 'DROP PRIMARY INDEX ON default:default'       'grep "error\|cause\|success" -i'
-run_query 'DROP PRIMARY INDEX ON default:`beer-sample`' 'grep "error\|cause\|success" -i'
-run_query 'DROP INDEX default:`beer-sample`.myindex'    'grep "error\|cause\|success" -i'
+run_query 'DROP PRIMARY INDEX ON default:default'       'grep "error\|cause\|msg\|success" -i'
+run_query 'DROP PRIMARY INDEX ON default:`beer-sample`' 'grep "error\|cause\|msg\|success" -i'
+run_query 'DROP INDEX default:`beer-sample`.myindex'    'grep "error\|cause\|msg\|success" -i'
 
 # create-index
-run_query 'CREATE PRIMARY INDEX ON default:default USING LSM'       'grep "error\|cause\|success" -i'
-run_query 'CREATE PRIMARY INDEX ON default:`beer-sample` USING LSM' 'grep "error\|cause\|success" -i'
+run_query 'CREATE PRIMARY INDEX ON default:default USING LSM'       'grep "error\|cause\|msg\|success" -i'
+run_query 'CREATE PRIMARY INDEX ON default:`beer-sample` USING LSM' 'grep "error\|cause\|msg\|success" -i'
 
 SLEEP=10
 echo "Sleeping for $SLEEP seconds ..."

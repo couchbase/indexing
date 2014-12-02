@@ -1,16 +1,14 @@
 package queryport
 
-import (
-	"fmt"
-	"net"
-	"runtime/debug"
-	"sync"
-	"time"
+import "fmt"
+import "net"
+import "runtime/debug"
+import "sync"
+import "time"
 
-	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbase/indexing/secondary/transport"
-)
+import c "github.com/couchbase/indexing/secondary/common"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+import "github.com/couchbase/indexing/secondary/transport"
 
 // RequestHandler shall interpret the request message
 // from client and post response message(s) on `respch`
@@ -37,17 +35,17 @@ type Server struct {
 
 // NewServer creates a new queryport daemon.
 func NewServer(
-	laddr string, callb RequestHandler, config c.Config) (s *Server, err error) {
+	laddr string, callb RequestHandler,
+	config c.Config) (s *Server, err error) {
 
-	sconf := config.SectionConfig("queryport.indexer.", true)
 	s = &Server{
 		laddr:          laddr,
 		callb:          callb,
 		killch:         make(chan bool),
-		maxPayload:     sconf["maxPayload"].Int(),
-		readDeadline:   time.Duration(sconf["readDeadline"].Int()),
-		writeDeadline:  time.Duration(sconf["writeDeadline"].Int()),
-		streamChanSize: sconf["streamChanSize"].Int(),
+		maxPayload:     config["maxPayload"].Int(),
+		readDeadline:   time.Duration(config["readDeadline"].Int()),
+		writeDeadline:  time.Duration(config["writeDeadline"].Int()),
+		streamChanSize: config["streamChanSize"].Int(),
 		logPrefix:      fmt.Sprintf("[Queryport %q]", laddr),
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
@@ -120,7 +118,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// transport buffer for transmission
 	flags := transport.TransportFlag(0).SetProtobuf()
 	tpkt := transport.NewTransportPacket(s.maxPayload, flags)
-	tpkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	tpkt.SetEncoder(transport.EncodingProtobuf, protobuf.ProtobufEncode)
 
 loop:
 	for {
@@ -205,7 +203,7 @@ func (s *Server) doReceive(conn net.Conn, rcvch chan<- interface{}) {
 	// transport buffer for receiving
 	flags := transport.TransportFlag(0).SetProtobuf()
 	rpkt := transport.NewTransportPacket(s.maxPayload, flags)
-	rpkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
+	rpkt.SetDecoder(transport.EncodingProtobuf, protobuf.ProtobufDecode)
 
 	c.Debugf("%v connection %q doReceive() ...\n", s.logPrefix, raddr)
 

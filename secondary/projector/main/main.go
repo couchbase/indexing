@@ -61,30 +61,32 @@ func main() {
 		c.SetLogLevel(c.LogLevelInfo)
 	}
 
-	config := c.SystemConfig.Clone()
-	config.SetValue("projector.clusterAddr", cluster)
-	config.SetValue("projector.adminport.listenAddr", options.adminport)
-	config.SetValue(
-		"projector.routerEndpointFactory", NewEndpointFactory(config))
-	config.SetValue("projector.colocate", options.colocate)
+	maxvbs := c.SystemConfig["maxVbuckets"].Int()
+	config := c.SystemConfig.SectionConfig("projector.", true)
+	config.SetValue("clusterAddr", cluster)
+	config.SetValue("adminport.listenAddr", options.adminport)
+	epfactory := NewEndpointFactory(maxvbs, config)
+	config.SetValue("routerEndpointFactory", epfactory)
+	config.SetValue("colocate", options.colocate)
 
-	if config["projector.colocate"].Bool() {
-		config.SetValue("projector.kvAddrs", "")
+	if config["colocate"].Bool() {
+		config.SetValue("kvAddrs", "")
 	} else {
-		config.SetValue("projector.kvAddrs", options.kvaddrs)
+		config.SetValue("kvAddrs", options.kvaddrs)
 	}
 
 	go c.ExitOnStdinClose()
-	projector.NewProjector(config)
+	projector.NewProjector(maxvbs, config)
 	<-done
 }
 
 // NewEndpointFactory to create endpoint instances based on config.
-func NewEndpointFactory(config c.Config) c.RouterEndpointFactory {
+func NewEndpointFactory(maxvbs int, config c.Config) c.RouterEndpointFactory {
+	econf := config.SectionConfig("dataport.client.", true)
 	return func(topic, endpointType, addr string) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":
-			return dataport.NewRouterEndpoint(topic, addr, config)
+			return dataport.NewRouterEndpoint(topic, addr, maxvbs, econf)
 		default:
 			log.Fatal("Unknown endpoint type")
 		}

@@ -88,7 +88,7 @@ loop:
 			break loop
 		}
 
-		if f.Opcode == gomemcached.UPR_MUTATION {
+		if f.Opcode == transport.UPR_MUTATION {
 			vbseqNo[f.VBucket][0] = f.Seqno
 			e = f
 			mutations += 1
@@ -129,12 +129,12 @@ loop:
 			break loop
 		}
 
-		if e.Opcode == gomemcached.UPR_MUTATION {
+		if e.Opcode == transport.UPR_MUTATION {
 			vbseqNo[e.VBucket][0] = e.Seqno
 			mutations += 1
 		}
 
-		if e.Opcode == gomemcached.UPR_MUTATION {
+		if e.Opcode == transport.UPR_MUTATION {
 			vbseqNo[e.VBucket][1] = e.SnapendSeq
 			ssMarkers += 1
 		}

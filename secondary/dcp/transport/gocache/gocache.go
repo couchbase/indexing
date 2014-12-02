@@ -14,18 +14,18 @@ import (
 var port = flag.Int("port", 11212, "Port on which to listen")
 
 type chanReq struct {
-	req *gomemcached.MCRequest
-	res chan *gomemcached.MCResponse
+	req *transport.MCRequest
+	res chan *transport.MCResponse
 }
 
 type reqHandler struct {
 	ch chan chanReq
 }
 
-func (rh *reqHandler) HandleMessage(w io.Writer, req *gomemcached.MCRequest) *gomemcached.MCResponse {
+func (rh *reqHandler) HandleMessage(w io.Writer, req *transport.MCRequest) *transport.MCResponse {
 	cr := chanReq{
 		req,
-		make(chan *gomemcached.MCResponse),
+		make(chan *transport.MCResponse),
 	}
 
 	rh.ch <- cr

@@ -14,7 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"sync"
@@ -257,8 +257,8 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel) (
 		logPrefix: "ScanCoordinator",
 	}
 
-	s.serv, err = queryport.NewServer(QUERY_PORT_ADDR, s.requestHandler,
-		common.SystemConfig)
+	config := common.SystemConfig.SectionConfig("queryport.indexer.", true)
+	s.serv, err = queryport.NewServer(QUERY_PORT_ADDR, s.requestHandler, config)
 
 	if err != nil {
 		errMsg := &MsgError{err: Error{code: ERROR_SCAN_COORD_QUERYPORT_FAIL,
@@ -829,9 +829,7 @@ func (s *scanCoordinator) scanQuery(sd *scanDescriptor, snap Snapshot, stopch St
 	// TODO: Decide whether a missing response should be provided point query for keys
 	if len(sd.p.keys) != 0 {
 		for _, k := range sd.p.keys {
-			// TODO: Change this to Both when inclusion support is added
-			incl := Low
-			ch, cherr, _ := snap.KeyRange(k, k, incl, stopch)
+			ch, cherr, _ := snap.KeyRange(k, k, Both, stopch)
 			s.receiveKeys(sd, ch, cherr)
 		}
 	} else {

@@ -11,7 +11,7 @@ package manager
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"net"
 )

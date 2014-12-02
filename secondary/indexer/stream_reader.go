@@ -14,7 +14,7 @@ import (
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
-	"github.com/couchbase/indexing/secondary/protobuf"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 )
 
 //MutationStreamReader reads a Dataport and stores the incoming mutations
@@ -52,8 +52,12 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 
 	//start a new mutation stream
 	streamMutch := make(chan interface{})
-	stream, err := dataport.NewServer(string(StreamAddrMap[streamId]),
-		common.SystemConfig.Clone(), streamMutch)
+	config := common.SystemConfig.SectionConfig(
+		"projector.dataport.indexer.", true /*trim*/)
+	stream, err := dataport.NewServer(
+		string(StreamAddrMap[streamId]),
+		common.SystemConfig["maxVbuckets"].Int(),
+		config, streamMutch)
 	if err != nil {
 		//return stream init error
 		common.Errorf("MutationStreamReader: Error returned from NewServer."+

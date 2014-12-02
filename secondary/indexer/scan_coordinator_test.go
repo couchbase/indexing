@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/protobuf"
-	"github.com/couchbase/indexing/secondary/queryport"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+	queryclient "github.com/couchbase/indexing/secondary/queryport/client"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"reflect"
 	"testing"
@@ -124,7 +124,8 @@ func TestInvalidIndexScan(t *testing.T) {
 
 	tst = t
 	h.createIndex("idx", "default", simpleKeyFeeder)
-	client := queryport.NewClient(QUERY_PORT_ADDR, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
 	client.ScanAll("invalid", "default", 1, 40, verifyInvalidIndex)
 	client.Close()
 
@@ -143,7 +144,8 @@ func TestIndexScan(t *testing.T) {
 	count = 0
 	nkeys = 100
 	h.createIndex("idx", "default", simpleKeyFeeder)
-	client := queryport.NewClient(QUERY_PORT_ADDR, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
 	low, _ := json.Marshal([]string{"low"})
 	high, _ := json.Marshal([]string{"high"})
 	keys := [][]byte{}
@@ -167,7 +169,8 @@ func TestIndexScanAll(t *testing.T) {
 	count = 0
 	nkeys = 100
 	h.createIndex("idx", "default", simpleKeyFeeder)
-	client := queryport.NewClient(QUERY_PORT_ADDR, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
 	client.ScanAll("idx", "default", 0, 0, verifyIndexScanAll)
 	client.Close()
 	if count != nkeys {
@@ -187,7 +190,8 @@ func TestIndexScanAllLimit(t *testing.T) {
 	count = 0
 	nkeys = 10000
 	h.createIndex("idx", "default", simpleKeyFeeder)
-	client := queryport.NewClient(QUERY_PORT_ADDR, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
 	client.ScanAll("idx", "default", 0, 100, verifyIndexScanAll)
 	client.Close()
 	if count != 100 {
@@ -207,7 +211,8 @@ func TestScanEmptyIndex(t *testing.T) {
 	count = 0
 	nkeys = 0
 	h.createIndex("idx", "default", simpleKeyFeeder)
-	client := queryport.NewClient(QUERY_PORT_ADDR, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
 	client.ScanAll("idx", "default", 0, 0, verifyIndexScanAll)
 	client.Close()
 	if count != 0 {
@@ -228,7 +233,8 @@ func TestIndexScanErrors(t *testing.T) {
 	nkeys = 100
 	nerrors = 0
 	h.createIndex("idx", "default", simpleErrorFeeder)
-	client := queryport.NewClient(QUERY_PORT_ADDR, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
 	client.ScanAll("idx", "default", 0, 0, verifyIndexScanAll)
 
 	if count != 100 {
@@ -272,7 +278,8 @@ func TestScanPageSize(t *testing.T) {
 	nkeys = 10000
 
 	h.createIndex("idx", "default", simpleKeyFeeder)
-	client := queryport.NewClient(QUERY_PORT_ADDR, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
 	client.ScanAll("idx", "default", 4092, 0, verifyIndexScanAll)
 	client.Close()
 	if count != nkeys {
@@ -304,7 +311,8 @@ func TestStatistics(t *testing.T) {
 	}
 
 	h.createIndex("idx", "default", simpleKeyFeeder)
-	client := queryport.NewClient(QUERY_PORT_ADDR, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
 	low, _ := json.Marshal([]string{"low"})
 	high, _ := json.Marshal([]string{"high"})
 	keys := [][]byte{}
@@ -329,7 +337,8 @@ func TestStatisticsError(t *testing.T) {
 	nkeys = 1000
 
 	h.createIndex("idx", "default", simpleErrorFeeder)
-	client := queryport.NewClient(QUERY_PORT_ADDR, c.SystemConfig)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
 	low, _ := json.Marshal([]string{"low"})
 	high, _ := json.Marshal([]string{"high"})
 	keys := [][]byte{}

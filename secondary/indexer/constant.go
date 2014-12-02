@@ -16,9 +16,8 @@ const MAX_NUM_VBUCKETS = 1024
 //from workers
 const WORKER_MSG_QUEUE_LEN = 100000
 
-//Projector Admin Port Endpoint on which projector is
-//listening for admin requests
-const DEFAULT_PROJECTOR_ADMIN_PORT_ENDPOINT = "localhost:9999"
+// Default cluster address
+const DEFAULT_CLUSTER_ENDPOINT = "localhost:9000"
 
 //Data Port Endpoint for Local Indexer on which projector
 //needs to send mutations for maintenance stream

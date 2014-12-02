@@ -140,12 +140,12 @@ loop:
 		case <-time.After(time.Second):
 			break loop
 		}
-		if event.Opcode == gomemcached.UPR_MUTATION {
+		if event.Opcode == transport.UPR_MUTATION {
 			//log.Printf(" got mutation %s", e.Value)
 			mutations += 1
 		}
 
-		if event.Opcode == gomemcached.UPR_STREAMEND {
+		if event.Opcode == transport.UPR_STREAMEND {
 			log.Printf(" Received Stream end for vbucket %d", event.VBucket)
 		}
 

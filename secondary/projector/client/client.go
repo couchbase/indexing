@@ -68,7 +68,7 @@ import "strings"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/protobuf"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
 // Client connects with a projector's adminport to
@@ -87,17 +87,17 @@ type Client struct {
 // - `retryInterval` is specified in milliseconds.
 //   if retryInterval is ZERO, API will not perform retry.
 // - if `maxRetries` is ZERO, will perform indefinite retry.
-func NewClient(adminport string, config c.Config) *Client {
-	retryInterval := config["projector.client.retryInterval"].Int()
-	maxRetries := config["projector.client.maxRetries"].Int()
-	expBackoff := config["projector.client.exponentialBackoff"].Int()
+func NewClient(adminport string, maxvbs int, config c.Config) *Client {
+	retryInterval := config["retryInterval"].Int()
+	maxRetries := config["maxRetries"].Int()
+	expBackoff := config["exponentialBackoff"].Int()
 
-	urlPrefix := config["projector.adminport.urlPrefix"].String()
+	urlPrefix := config["urlPrefix"].String()
 	ap := ap.NewHTTPClient(adminport, urlPrefix)
 	client := &Client{
 		adminport:     adminport,
 		ap:            ap,
-		maxVbuckets:   config["maxVbuckets"].Int(),
+		maxVbuckets:   maxvbs,
 		retryInterval: retryInterval,
 		maxRetries:    maxRetries,
 		expBackoff:    expBackoff,
