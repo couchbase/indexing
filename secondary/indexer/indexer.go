@@ -1744,6 +1744,9 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 
 func (idx *indexer) bootstrap() error {
 
+	//close any old streams with projector
+	idx.closeAllStreams()
+
 	//recover indexes from local metadata
 	if err := idx.initFromPersistedState(); err != nil {
 		return err
@@ -1779,9 +1782,6 @@ func (idx *indexer) bootstrap() error {
 	//update index map in scan coordinator
 	idx.updateWorkerIndexMap(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.scanCoordCmdCh,
 		"ScanCoordinator", nil)
-
-	//close any old streams with projector
-	idx.closeAllStreams()
 
 	if ok := idx.startStreams(); !ok {
 		return errors.New("Unable To Start DCP Streams")
@@ -1844,7 +1844,8 @@ func (idx *indexer) initFromPersistedState() error {
 
 		//For now, initial stream indexes cannot be recovered. Change state to error.
 		//These indexes need to be dropped and recreated.
-		if inst.Stream == common.INIT_STREAM {
+		if inst.Stream == common.INIT_STREAM ||
+			(inst.Stream == common.MAINT_STREAM && inst.State == common.INDEX_STATE_INITIAL) {
 			inst.State = common.INDEX_STATE_ERROR
 			common.Fatalf("Indexer::initFromPersistedState Found Index For INIT_STREAM. "+
 				"Recovery Not Supported. Index Needs To Be Recreated. Details %v", inst)
@@ -1911,17 +1912,10 @@ func (idx *indexer) recoverSnapshots() {
 
 func (idx *indexer) closeAllStreams() {
 
-	var bucket string
-	for _, inst := range idx.indexInstMap {
-		bucket = inst.Defn.Bucket
-		break
-	}
-
 	for i := 0; i < int(common.MAX_STREAMS); i++ {
 
 		cmd := &MsgStreamUpdate{mType: CLOSE_STREAM,
 			streamId: common.StreamId(i),
-			bucket:   bucket,
 		}
 
 		//send stream update to kv_sender
@@ -1970,6 +1964,7 @@ func (idx *indexer) startStreams() bool {
 			}
 
 		case MSG_SUCCESS:
+			idx.streamStatus[common.MAINT_STREAM] = true
 			return true
 
 		default:

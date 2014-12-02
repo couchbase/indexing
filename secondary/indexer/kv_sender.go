@@ -630,12 +630,6 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string) Messa
 
 	for _, nid := range nodes {
 
-		//get the list of vbnos for this kv
-		vbnos, _ := k.cInfoCache.GetVBuckets(nid, bucket)
-		if len(vbnos) == 0 {
-			continue
-		}
-
 		addr, _ := k.cInfoCache.GetServiceAddress(nid, "projector")
 		//create client for node's projectors
 		config := c.SystemConfig.SectionConfig("projector.client.", true)

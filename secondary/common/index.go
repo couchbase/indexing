@@ -74,6 +74,8 @@ func (s IndexState) String() string {
 		return "INDEX_STATE_ACTIVE"
 	case INDEX_STATE_DELETED:
 		return "INDEX_STATE_DELETED"
+	case INDEX_STATE_ERROR:
+		return "INDEX_STATE_ERROR"
 	default:
 		return "INDEX_STATE_UNKNOWN"
 	}
