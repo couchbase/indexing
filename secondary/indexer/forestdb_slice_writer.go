@@ -609,7 +609,7 @@ func (fdb *fdbSlice) Timestamp() *common.TsVbuuid {
 
 func (fdb *fdbSlice) SetTimestamp(ts *common.TsVbuuid) error {
 
-	common.Debugf("ForestDBSlice::SetTimestamp \n\tSliceId %v IndexInstId %v. TS - %s",
+	common.Tracef("ForestDBSlice::SetTimestamp \n\tSliceId %v IndexInstId %v. TS - %s",
 		fdb.id, fdb.idxInstId, ts)
 
 	//marshal TS

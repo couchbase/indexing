@@ -163,7 +163,7 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 //after flush has completed
 func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
-	common.Debugf("StorageMgr::handleCreateSnapshot %v", cmd)
+	common.Tracef("StorageMgr::handleCreateSnapshot %v", cmd)
 
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	tsVbuuid := cmd.(*MsgMutMgrFlushDone).GetTS()
@@ -203,7 +203,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 					if latestSnapshot == nil || ts.GreaterThan(snapTs) {
 						//commit the outstanding data
 
-						common.Debugf("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
+						common.Tracef("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
 							"%v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
 						newTsVbuuid := tsVbuuid.Copy()
@@ -217,7 +217,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							continue
 						}
 
-						common.Debugf("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
+						common.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
 							"Index: %v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
 						//create snapshot for slice
@@ -226,7 +226,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							if snapContainer.Len() > MAX_SNAPSHOTS_PER_INDEX {
 								serr := snapContainer.RemoveOldest()
 								if serr == nil {
-									common.Debugf("StorageMgr::handleCreateSnapshot \n\tRemoved Oldest Snapshot, "+
+									common.Tracef("StorageMgr::handleCreateSnapshot \n\tRemoved Oldest Snapshot, "+
 										"Container Len %v", snapContainer.Len())
 								}
 							}

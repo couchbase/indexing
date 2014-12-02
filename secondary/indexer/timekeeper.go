@@ -461,7 +461,7 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 
-	common.Debugf("Timekeeper::handleFlushDoneMaintStream %v", cmd)
+	common.Tracef("Timekeeper::handleFlushDoneMaintStream %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -508,7 +508,7 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 
 func (tk *timekeeper) handleFlushDoneCatchupStream(cmd Message) {
 
-	common.Debugf("Timekeeper::handleFlushDoneCatchupStream %v", cmd)
+	common.Tracef("Timekeeper::handleFlushDoneCatchupStream %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -555,7 +555,7 @@ func (tk *timekeeper) handleFlushDoneCatchupStream(cmd Message) {
 
 func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 
-	common.Debugf("Timekeeper::handleFlushDoneInitStream %v", cmd)
+	common.Tracef("Timekeeper::handleFlushDoneInitStream %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -609,7 +609,7 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 
 func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 
-	common.Debugf("Timekeeper::handleFlushAbortDone %v", cmd)
+	common.Tracef("Timekeeper::handleFlushAbortDone %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -719,7 +719,7 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 
 func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 
-	common.Debugf("Timekeeper::handleSnapshotMarker %v", cmd)
+	common.Tracef("Timekeeper::handleSnapshotMarker %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -793,7 +793,7 @@ func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
 
 func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
-	common.Debugf("Timekeeper::handleStreamBegin %v", cmd)
+	common.Tracef("Timekeeper::handleStreamBegin %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -914,7 +914,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
-	common.Debugf("Timekeeper::handleStreamEnd %v", cmd)
+	common.Tracef("Timekeeper::handleStreamEnd %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
