@@ -45,10 +45,16 @@ type deleteTestProjectorClient struct {
 	server string
 }
 
+// projector client specific for STREAM_END_TEST
+// implement ProjectorStreamClient
+type streamEndTestProjectorClient struct {
+}
+
 const (
 	NO_TEST     uint8 = 0
 	SYNC_TEST         = 1
 	DELETE_TEST       = 2
+	STREAM_END_TEST   = 3
 )
 
 var TT *testing.T
@@ -86,6 +92,7 @@ func TestStreamMgr(t *testing.T) {
 	// Running test
 	runSyncTest(mgr)
 	runDeleteTest(mgr)
+	runStreamEndTest(mgr)
 
 	////////////////////////////////////////////////////
 	common.Infof("Stop TestStreamMgr. Tearing down *********************************************************")
@@ -298,9 +305,14 @@ func (c *syncTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string)
 	return newTs, nil
 }
 
+func (c *syncTestProjectorClient) RestartVbuckets(topic string, 
+	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
+	return nil, nil
+}
+	
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Delete Test
-// This test deletes creates 3 index on 2 different buckets across 2 different (fake) projectors.j
+// This test deletes creates 3 index on 2 different buckets across 2 different (fake) projectors.
 // One index will then be deleted.  A sync message is sent after the index is deleted.  The
 // stabiltiy timestamp should have the seqno for both buckets and from the two remaining indexes.
 // This test covers the following functions:
@@ -669,6 +681,248 @@ func (c *deleteTestProjectorClient) InitialRestartTimestamp(pooln, bucketn strin
 	return newTs, nil
 }
 
+func (c *deleteTestProjectorClient) RestartVbuckets(topic string, 
+	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
+	return nil, nil
+}
+	
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// StreamEnd Test
+// 1) This test will create a new index.  
+// 2) Upon notifying of the new index, the fake projector will push a StreamEnd message to the stream manager.  
+// 3) The stream manager will then call back to the fake projector to repair the vubcket.  If the correct vbucket 
+//    is received, the fake projector will return without error.   
+// 4) The fake projector will also push a sync message to the data port for the coordinator to broadcast a timestamp. 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+func runStreamEndTest(mgr *manager.IndexManager) {
+	defer func() { test = NO_TEST }()
+
+	common.Infof("**** Run StreamEnd Test *****")
+	common.Infof("StreamEnd Test Cleanup ...")
+	test = STREAM_END_TEST
+
+	cleanupStreamMgrStreamEndTest(mgr)
+
+	common.Infof("***** Run StreamEnd Test ...")
+	donech = make(chan bool)
+	ch := mgr.GetStabilityTimestampChannel(common.MAINT_STREAM)
+	go runStreamEndTestReceiver(ch, donech)
+
+	common.Infof("Setup data for StreamEnd Test")
+	changeTopologyForStreamEndTest(mgr)
+	<-donech
+
+	common.Infof("**** StreamEnd Test Cleanup ...")
+	cleanupStreamMgrStreamEndTest(mgr)
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+
+	common.Infof("**** Finish StreamEnd Test *****")
+}
+
+// clean up
+func cleanupStreamMgrStreamEndTest(mgr *manager.IndexManager) {
+
+	_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_stream_end_test")
+	if err != nil {
+		common.Infof("StreamMgrTest.cleanupStreamMgrStreamEndTest() :  cannot find index defn stream_mgr_stream_end_test.  No cleanup ...")
+	} else {
+		common.Infof("StreamMgrTest.cleanupStreamMgrStreamEndTest() :  found index defn stream_mgr_stream_end_test.  Cleaning up ...")
+
+		err = mgr.HandleDeleteIndexDDL("Default", "stream_mgr_stream_end_test")
+		if err != nil {
+			TT.Fatal(err)
+		}
+		time.Sleep(time.Duration(1000) * time.Millisecond)
+
+		// double check if we have really cleaned up
+		_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_stream_end_test")
+		if err == nil {
+			TT.Fatal("StreamMgrTest.cleanupStreamMgrStreamEndTest(): Cannot clean up index defn stream_mgr_stream_end_test")
+		}
+	}
+
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+}
+
+// run test
+func runStreamEndTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
+
+	common.Infof("Run StreamEnd Test Receiver")
+	defer close(donech)
+
+	// wait for the sync message to arrive
+	ticker := time.NewTicker(time.Duration(60) * time.Second)
+	for {
+		select {
+		case ts := <-ch:
+			common.Infof("****** runStreamEndTestReceiver() receive correct stability timestamp")
+			if ts.Seqnos[10] >= 404 {
+				return
+			}
+		case <-ticker.C:
+			common.Infof("****** runStreamEndTestReceiver() : timeout")
+			TT.Fatal("runSyncTestReceiver(): Timeout waiting to receive timestamp to arrive")
+		}
+	}
+
+	common.Infof("runStreamEndTestReceiver() done")
+}
+
+// start up
+func changeTopologyForStreamEndTest(mgr *manager.IndexManager) {
+
+	// Add a new index definition : 404
+	idxDefn := &common.IndexDefn{
+		DefnId:          common.IndexDefnId(404),
+		Name:            "stream_mgr_stream_end_test",
+		Using:           common.ForestDB,
+		Bucket:          "Default",
+		IsPrimary:       false,
+		SecExprs:        []string{"Testing"},
+		ExprType:        common.N1QL,
+		PartitionScheme: common.HASH,
+		PartitionKey:    "Testing"}
+
+	common.Infof("Run Sync Test : Create Index Defn 404")
+	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
+		TT.Fatal(err)
+	}
+	// Wait so there is no race condition.
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+
+	// Update the index definition to ready
+	common.Infof("Run Sync Test : Update Index Defn 404 to READY")
+	topology, err := mgr.GetTopologyByBucket("Default")
+	if err != nil {
+		TT.Fatal(err)
+	}
+	topology.ChangeStateForIndexInstByDefn(common.IndexDefnId(404), common.INDEX_STATE_CREATED, common.INDEX_STATE_READY)
+	if err := mgr.SetTopologyByBucket("Default", topology); err != nil {
+		TT.Fatal(err)
+	}
+}
+
+func (c *streamEndTestProjectorClient) sendSync(timestamps []*protobuf.TsVbuuid) {
+
+	common.Infof("streamEndTestProjectorClient.sendSync() ")
+
+	if len(timestamps) != 1 {
+		TT.Fatal("streamEndTestProjectorClient.sendSync(): More than one timestamp sent to fake projector. Num = %v", len(timestamps))
+	}
+
+	seqno, _, _, _, err := timestamps[0].Get(uint16(10))
+	if err != nil {
+		TT.Fatal(err)
+	}
+	
+	p := newFakeProjector(manager.COORD_MAINT_STREAM_PORT)
+	go p.run(donech)
+
+	payloads := make([]*common.VbKeyVersions, 0, 200)
+	payload := common.NewVbKeyVersions("Default", 10, 1, 10)
+	payloads = append(payloads, payload)
+	
+	kv := common.NewKeyVersions(seqno, []byte("document-name"), 1)
+	kv.AddStreamBegin()
+	kv.AddSync()
+	payload.AddKeyVersions(kv)
+	
+	// send payload
+	if err := p.client.SendKeyVersions(payloads, true); err != nil {
+		TT.Fatal(err)
+	}
+}
+
+func (c *streamEndTestProjectorClient) sendStreamEnd(instances []*protobuf.Instance) {
+
+	common.Infof("streamEndTestProjectorClient.sendStreamEnd() ")
+
+	if len(instances) != 1 {
+		TT.Fatal("streamEndTestProjectorClient.sendStreamEnd(): More than one index instance sent to fake projector")
+	}
+
+	for _, inst := range instances {
+		if inst.GetIndexInstance().GetDefinition().GetDefnID() == uint64(404) {
+
+			p := newFakeProjector(manager.COORD_MAINT_STREAM_PORT)
+			go p.run(donech)
+
+			payloads := make([]*common.VbKeyVersions, 0, 200)
+			payload := common.NewVbKeyVersions("Default", 10, 1, 10)
+			payloads = append(payloads, payload)
+			
+			kv := common.NewKeyVersions(404, []byte("document-name"), 1)
+			kv.AddStreamBegin()
+			kv.AddSync()
+			kv.AddStreamEnd()
+			payload.AddKeyVersions(kv)
+
+			// send payload
+			err := p.client.SendKeyVersions(payloads, true)
+			if err != nil {
+				TT.Fatal(err)
+			}
+		}
+	}
+}
+
+func (c *streamEndTestProjectorClient) MutationTopicRequest(topic, endpointType string,
+	reqTimestamps []*protobuf.TsVbuuid, instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
+
+	if len(reqTimestamps) == 0 {
+		TT.Fatal("testProjectorClient.MutationTopicRequest(): reqTimestamps is nil")
+	}
+
+	c.sendStreamEnd(instances)
+
+	response := new(protobuf.TopicResponse)
+	response.Topic = &topic
+	response.InstanceIds = make([]uint64, len(instances))
+	for i, inst := range instances {
+		response.InstanceIds[i] = inst.GetIndexInstance().GetInstId()
+	}
+	response.ActiveTimestamps = make([]*protobuf.TsVbuuid, 1)
+	response.ActiveTimestamps[0] = reqTimestamps[0]
+	response.RollbackTimestamps = nil
+	response.Err = nil
+
+	return response, nil
+}
+
+func (c *streamEndTestProjectorClient) DelInstances(topic string, uuids []uint64) error {
+	return nil
+}
+
+func (c *streamEndTestProjectorClient) RepairEndpoints(topic string, endpoints []string) error {
+	return nil
+}
+
+func (c *streamEndTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
+
+	newTs := protobuf.NewTsVbuuid("default", "Default", 1024)
+	for i := 0; i < 1024; i++ {
+		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
+	}
+	return newTs, nil
+}
+
+func (c *streamEndTestProjectorClient) RestartVbuckets(topic string, 
+	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
+	
+	c.sendSync(restartTimestamps)
+	
+	response := new(protobuf.TopicResponse)
+	response.Topic = &topic
+	response.InstanceIds = nil 
+	response.ActiveTimestamps = make([]*protobuf.TsVbuuid, 1)
+	response.ActiveTimestamps[0] = restartTimestamps[0]
+	response.RollbackTimestamps = nil
+	response.Err = nil
+
+	return response, nil
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Retry Test
 // This test exercise the following error handling functions:
@@ -688,8 +942,13 @@ func newFakeProjector(port string) *fakeProjector {
 	p := new(fakeProjector)
 
 	addr := net.JoinHostPort("127.0.0.1", port)
+	prefix := "projector.dataport.client."
+    config := common.SystemConfig.SectionConfig(prefix, true /*trim*/)
+    maxvbs := common.SystemConfig["maxVbuckets"].Int()
+    flag := transport.TransportFlag(0).SetProtobuf()
+    
 	var err error
-	p.client, err = dataport.NewClient(addr, transport.TransportFlag(0).SetProtobuf(), common.SystemConfig)
+	p.client, err = dataport.NewClient(addr, flag, maxvbs, config)
 	if err != nil {
 		TT.Fatal(err)
 	}
@@ -718,6 +977,8 @@ func (p *testProjectorClientFactory) GetClientForNode(server string) manager.Pro
 		client := new(deleteTestProjectorClient)
 		client.server = server
 		return client
+	case STREAM_END_TEST:
+		return new(streamEndTestProjectorClient)
 	}
 	return nil
 }
@@ -726,9 +987,9 @@ func (p *testProjectorClientFactory) GetClientForNode(server string) manager.Pro
 // testProjectorClientFactory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func (p *testProjectorClientEnv) GetNodeList(buckets []string) (map[string]string, error) {
+func (p *testProjectorClientEnv) GetNodeListForBuckets(buckets []string) (map[string]string, error) {
 
-	common.Infof("testProjectorClientEnv.GetNodeList() ")
+	common.Infof("testProjectorClientEnv.GetNodeListForBuckets() ")
 	switch test {
 	case SYNC_TEST:
 		nodes := make(map[string]string)
@@ -738,6 +999,31 @@ func (p *testProjectorClientEnv) GetNodeList(buckets []string) (map[string]strin
 		nodes := make(map[string]string)
 		nodes["127.0.0.1"] = "127.0.0.1"
 		nodes["127.0.0.2"] = "127.0.0.2"
+		return nodes, nil
+	case STREAM_END_TEST:
+		nodes := make(map[string]string)
+		nodes["127.0.0.1"] = "127.0.0.1"
+		return nodes, nil
+	}
+
+	return nil, nil
+}
+
+func (p *testProjectorClientEnv) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
+
+	common.Infof("testProjectorClientEnv.GetNodeListForTimestamps() ")
+	switch test {
+	case STREAM_END_TEST:
+		nodes := make(map[string][]*protobuf.TsVbuuid)
+		nodes["127.0.0.1"] = nil 
+		
+		newTs := protobuf.NewTsVbuuid("default", "Default", 1)
+		for i, _ := range timestamps[0].Seqnos {
+			newTs.Append(uint16(i), timestamps[0].Seqnos[i], timestamps[0].Vbuuids[i],
+				timestamps[0].Snapshots[i][0], timestamps[0].Snapshots[i][1])
+		}
+		
+		nodes["127.0.0.1"] = append(nodes["127.0.0.1"], newTs)	
 		return nodes, nil
 	}
 

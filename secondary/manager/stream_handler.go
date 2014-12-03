@@ -49,8 +49,23 @@ func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
 	offset int) {
 
 	common.Debugf("mgrMutHandler.StreamEnd")
-	// The stream for <bucket, vbucket, vbuuid> has ended.   Need
-	// to restart the stream using
+
+	lastTs := m.indexMgr.getTimer().getLatest(streamId, bucket)
+	if lastTs != nil {
+		ts := common.NewTsVbuuid(bucket, NUM_VB)
+		ts.Seqnos[vbucket] = lastTs.Seqnos[vbucket] 
+		ts.Vbuuids[vbucket] = lastTs.Vbuuids[vbucket] 
+		ts.Snapshots[vbucket][0] = lastTs.Snapshots[vbucket][0] 
+		ts.Snapshots[vbucket][1] = lastTs.Snapshots[vbucket][1] 
+	
+		err := m.indexMgr.streamMgr.RestartStreamIfNecessary(streamId, []*common.TsVbuuid{ts})
+		if err != nil {
+			common.Errorf("mgrMutHandler.HandleStreamEnd(): error encounterd %v", err)
+		}
+	} else {
+		// TODO: Handle race condition - get stream end before the first sync message is received.
+		common.Errorf("mgrMutHandler.HandleStreamEnd(): stability timestamp is not available")
+	}
 }
 
 func (m *mgrMutHandler) HandleUpsert(streamId common.StreamId,

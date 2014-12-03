@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
-	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	data "github.com/couchbase/indexing/secondary/protobuf/data"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"net"
@@ -55,6 +54,7 @@ type StreamAdmin interface {
 	AddIndexToStream(streamId common.StreamId, bucket []string, instances []*protobuf.Instance, requestTs []*common.TsVbuuid) error
 	DeleteIndexFromStream(streamId common.StreamId, bucket []string, instances []uint64) error
 	RepairEndpointForStream(streamId common.StreamId, bucketVbnosMap map[string][]uint16, endpoint string) error
+	RestartStreamIfNecessary(streamId common.StreamId, timestamps []*common.TsVbuuid) error
 }
 
 //
@@ -305,6 +305,21 @@ func (s *StreamManager) DeleteIndexForBuckets(streamId common.StreamId, buckets 
 	}
 
 	return nil
+}
+
+//
+// Restart specific vbucket in the stream based on the given timestamp. 
+//
+func (s *StreamManager) RestartStreamIfNecessary(streamId common.StreamId, timestamps []*common.TsVbuuid) error {
+
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	if s.isClosed {
+		return nil
+	}
+
+	return s.admin.RestartStreamIfNecessary(streamId, timestamps)
 }
 
 //
