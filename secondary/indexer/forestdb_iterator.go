@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"errors"
 	"github.com/couchbaselabs/goforestdb"
 )
 
@@ -22,11 +23,17 @@ type ForestDBIterator struct {
 	iter  *forestdb.Iterator
 }
 
-func newForestDBIterator(db *forestdb.KVStore) *ForestDBIterator {
+func newForestDBIterator(db *forestdb.KVStore,
+	seq forestdb.SeqNum) (*ForestDBIterator, error) {
+	dbInst, err := db.SnapshotOpen(seq)
 	rv := ForestDBIterator{
-		db: db,
+		db: dbInst,
 	}
-	return &rv
+
+	if err != nil {
+		err = errors.New("ForestDB iterator: alloc failed " + err.Error())
+	}
+	return &rv, err
 }
 
 func (f *ForestDBIterator) SeekFirst() {
@@ -92,8 +99,18 @@ func (f *ForestDBIterator) Valid() bool {
 	return f.valid
 }
 
-func (f *ForestDBIterator) Close() {
+func (f *ForestDBIterator) Close() error {
+	var err error
 	f.valid = false
-	f.iter.Close()
+	err = f.iter.Close()
+	if err != nil {
+		return err
+	}
 	f.iter = nil
+	err = f.db.Close()
+	if err != nil {
+		return err
+	}
+	f.db = nil
+	return nil
 }

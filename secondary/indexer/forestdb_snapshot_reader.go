@@ -113,11 +113,14 @@ func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 	common.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
 		low.String(), high.String())
 
-	it := newForestDBIterator(s.main)
-	defer it.Close()
+	it, err := newForestDBIterator(s.main, s.mainSeqNum)
+	if err != nil {
+		cherr <- err
+		return
+	}
+	defer closeIterator(it)
 
 	var lowkey, highkey []byte
-	var err error
 
 	if lowkey = low.Encoded(); lowkey == nil {
 		it.SeekFirst()
@@ -189,11 +192,14 @@ func (s *fdbSnapshot) GetValueSetForKeyRange(low Key, high Key,
 	common.Debugf("ForestDB Received Key Low - %s High - %s Inclusion - %v for Scan",
 		low.String(), high.String(), inclusion)
 
-	it := newForestDBIterator(s.main)
-	defer it.Close()
+	it, err := newForestDBIterator(s.main, s.mainSeqNum)
+	if err != nil {
+		cherr <- err
+		return
+	}
+	defer closeIterator(it)
 
 	var lowkey []byte
-	var err error
 
 	if lowkey = low.Encoded(); lowkey == nil {
 		it.SeekFirst()
@@ -274,11 +280,13 @@ func (s *fdbSnapshot) CountRange(low Key, high Key, inclusion Inclusion,
 
 	var count uint64
 
-	it := newForestDBIterator(s.main)
-	defer it.Close()
+	it, err := newForestDBIterator(s.main, s.mainSeqNum)
+	if err != nil {
+		return 0, err
+	}
+	defer closeIterator(it)
 
 	var lowkey []byte
-	var err error
 
 	if lowkey = low.Encoded(); lowkey == nil {
 		it.SeekFirst()
@@ -426,5 +434,12 @@ loop:
 				break loop
 			}
 		}
+	}
+}
+
+func closeIterator(it *ForestDBIterator) {
+	err := it.Close()
+	if err != nil {
+		common.Errorf("ForestDB iterator: dealloc failed (%v)", err)
 	}
 }
