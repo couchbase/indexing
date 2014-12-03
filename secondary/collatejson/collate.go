@@ -298,11 +298,13 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 		text = append(text, ts...)
 
 	case TypeString:
-		text = append(text, '"')
-		ts, remaining, err = suffixDecodeString(code[1:], text[1:])
+		s := make([]byte, 0)
+		s, remaining, err = suffixDecodeString(code[1:], s)
 		if err == nil {
-			text = text[:len(text)+len(ts)]
-			text = append(text, '"')
+			s, err = json.Marshal(string(s))
+			if err == nil {
+				text = append(text, s...)
+			}
 		}
 
 	case TypeArray:

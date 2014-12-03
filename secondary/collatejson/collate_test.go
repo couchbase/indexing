@@ -120,6 +120,22 @@ func TestCodecLength(t *testing.T) {
 	}
 }
 
+func TestSpecialString(t *testing.T) {
+	var err error
+
+	jsoncodec := NewCodec(16)
+	data := []byte(`"\n"`)
+	code := make([]byte, 0, 1024)
+	code, err = jsoncodec.Encode(data, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := make([]byte, 0, 1024)
+	if text, err = jsoncodec.Decode(code, text); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCodecNoLength(t *testing.T) {
 	var samples = [][2]string{
 		{"[  ]", `\b\x00`},

@@ -29,6 +29,7 @@ func argParse() {
 func main() {
 	argParse()
 	codec := collatejson.NewCodec(len(options.in) * 2)
+	fmt.Printf("%q \n", options.in)
 	out := make([]byte, 0, len(options.in)*3)
 	out, err := codec.Encode([]byte(options.in), out)
 	if err != nil {
