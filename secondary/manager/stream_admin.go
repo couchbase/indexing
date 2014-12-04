@@ -383,8 +383,7 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 			worker := <-donech
 
 			common.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): worker %v done", worker.server)
-			// TODO: update active timestamp
-			//p.activeTimestamps[worker.server] = worker.activeTimestamps
+			p.activeTimestamps[worker.server] = worker.activeTimestamps
 			delete(workers, worker.server)
 
 			if worker.err != nil {
@@ -510,8 +509,7 @@ func (worker *adminWorker) addInstances(instances []*protobuf.Instance,
 			response, err := client.MutationTopicRequest(topic, "dataport", timestamps, instances)
 			if err == nil {
 				// no error, it is successful for this node
-				// TODO: Get the active timestamp from the response
-				//worker.activeTimestamps = nil
+				worker.activeTimestamps = response.GetActiveTimestamps()
 				worker.err = nil
 				return
 			}
@@ -520,8 +518,7 @@ func (worker *adminWorker) addInstances(instances []*protobuf.Instance,
 			if err != nil {
 				// Either it is a non-recoverable error or an error that cannot be retry by this worker.
 				// Terminate this worker.
-				// TODO: Get the active timestamp from the response
-				//worker.activeTimestamps = nil
+				worker.activeTimestamps = response.GetActiveTimestamps()
 				worker.err = err
 				return
 			}
@@ -738,8 +735,7 @@ func (worker *adminWorker) restartStream(timestamps []*protobuf.TsVbuuid, doneCh
 			response, err := client.RestartVbuckets(topic, timestamps)
 			if err == nil {
 				// no error, it is successful for this node
-				// TODO: Get the active timestamp from the response
-				//worker.activeTimestamps = nil
+				worker.activeTimestamps = response.GetActiveTimestamps()
 				worker.err = nil
 				return
 			}
@@ -748,8 +744,7 @@ func (worker *adminWorker) restartStream(timestamps []*protobuf.TsVbuuid, doneCh
 			if err != nil {
 				// Either it is a non-recoverable error or an error that cannot be retry by this worker.
 				// Terminate this worker.
-				// TODO: Get the active timestamp from the response
-				//worker.activeTimestamps = nil
+				worker.activeTimestamps = response.GetActiveTimestamps()
 				worker.err = err
 				return
 			}

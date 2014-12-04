@@ -124,7 +124,8 @@ func (m *mgrMutHandler) HandleSnapshot(streamId common.StreamId,
 	snapshotType, _, end := kv.Snapshot()
 
 	// Update the timer based on the snapshot marker.
-	if snapshotType == 0 || snapshotType == 1 || snapshotType == 2 {
+    // Update the timer based on the snapshot marker (ondisk and inmemory snapshot).
+    if snapshotType&(0x1|0x2) != 0 {
 		m.indexMgr.getTimer().increment(streamId, bucket, vbucket, vbuuid, end)
 	}
 }
