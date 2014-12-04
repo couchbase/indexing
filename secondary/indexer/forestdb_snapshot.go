@@ -34,7 +34,6 @@ type fdbSnapshot struct {
 }
 
 func (s *fdbSnapshot) Open() error {
-
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -109,33 +108,34 @@ func (s *fdbSnapshot) Close() error {
 			"on already closed snapshot")
 		return errors.New("Snapshot Already Closed")
 	} else {
-
-		//close the main index
-		if s.main != nil {
-			err := s.main.Close()
-			if err != nil {
-				common.Errorf("ForestDBSnapshot::Close Unexpected error "+
-					"closing Main DB Snapshot %v", err)
-				return err
-			}
-		} else {
-			common.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
-			errors.New("Main DB Handle Nil")
-		}
-
-		//close the back index
-		if s.back != nil {
-			err := s.back.Close()
-			if err != nil {
-				common.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
-					"Back DB Snapshot %v", err)
-				return err
-			}
-		} else {
-			common.Errorf("ForestDBSnapshot::Close Back DB Handle Nil")
-			errors.New("Back DB Handle Nil")
-		}
 		s.refCount--
+		if s.refCount == 0 {
+			//close the main index
+			if s.main != nil {
+				err := s.main.Close()
+				if err != nil {
+					common.Errorf("ForestDBSnapshot::Close Unexpected error "+
+						"closing Main DB Snapshot %v", err)
+					return err
+				}
+			} else {
+				common.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
+				errors.New("Main DB Handle Nil")
+			}
+
+			//close the back index
+			if s.back != nil {
+				err := s.back.Close()
+				if err != nil {
+					common.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
+						"Back DB Snapshot %v", err)
+					return err
+				}
+			} else {
+				common.Errorf("ForestDBSnapshot::Close Back DB Handle Nil")
+				errors.New("Back DB Handle Nil")
+			}
+		}
 	}
 
 	return nil
