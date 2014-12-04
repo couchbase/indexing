@@ -4,34 +4,34 @@ import "reflect"
 import "testing"
 import "time"
 
-import "github.com/couchbase/indexing/secondary/common"
-import client "github.com/couchbase/indexing/secondary/queryport/client"
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/queryport/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbaselabs/goprotobuf/proto"
 
 var testStatisticsResponse = &protobuf.StatisticsResponse{
 	Stats: &protobuf.IndexStatistics{
-		Count:      proto.Uint64(100),
-		UniqueKeys: proto.Uint64(100),
-		Min:        []byte("aaaaa"),
-		Max:        []byte("zzzzz"),
+		KeysCount:       proto.Uint64(100),
+		UniqueKeysCount: proto.Uint64(100),
+		KeyMin:          []byte("aaaaa"),
+		KeyMax:          []byte("zzzzz"),
 	},
 }
 
 var testResponseStream = &protobuf.ResponseStream{
-	Entries: []*protobuf.IndexEntry{
+	IndexEntries: []*protobuf.IndexEntry{
 		&protobuf.IndexEntry{
-			EntryKey: []byte("aaaaa"), PrimaryKey: []byte("key"),
+			EntryKey: []byte(`["aaaaa"]`), PrimaryKey: []byte("key"),
 		},
 		&protobuf.IndexEntry{
-			EntryKey: []byte("aaaaa"), PrimaryKey: []byte("key"),
+			EntryKey: []byte(`["aaaaa"]`), PrimaryKey: []byte("key"),
 		},
 	},
 }
 
 func TestStatistics(t *testing.T) {
-	common.LogIgnore()
-	//common.SetLogLevel(common.LogLevelDebug)
+	c.LogIgnore()
+	//c.SetLogLevel(c.LogLevelDebug)
 
 	addr := "localhost:8888"
 	serverCallb := func(
@@ -55,11 +55,11 @@ func TestStatistics(t *testing.T) {
 	s := startServer(t, addr, serverCallb)
 	time.Sleep(100 * time.Millisecond)
 
-	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := client.NewClient(addr, config)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client := client.NewClient(client.Remoteaddr(addr), config)
 
-	out, err := client.Statistics("idx", "bkt", []byte("aaaa"), []byte("zzzz"),
-		[][]byte{}, 0)
+	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
+	out, err := client.RangeStatistics("idx", "bkt", l, h, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +70,8 @@ func TestStatistics(t *testing.T) {
 	s.Close()
 }
 
-func TestScan(t *testing.T) {
-	common.LogIgnore()
+func TestRange(t *testing.T) {
+	c.LogIgnore()
 	addr := "localhost:8888"
 	serverCallb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -86,30 +86,33 @@ func TestScan(t *testing.T) {
 	s := startServer(t, addr, serverCallb)
 	time.Sleep(100 * time.Millisecond)
 
-	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := client.NewClient(addr, config)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	qc := client.NewClient(client.Remoteaddr(addr), config)
 
 	count := 0
-	client.Scan(
-		"idx", "bkt", []byte("aaaa"), []byte("zzzz"), [][]byte{}, 0, 100, true, 1000,
-		func(val interface{}) bool {
-			switch v := val.(type) {
-			case *protobuf.ResponseStream:
+	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
+	qc.Range(
+		"idx", "bkt", l, h, 100, true, 1000,
+		func(val client.ResponseReader) bool {
+			if err := val.Error(); err != nil {
+				t.Fatal(err)
+			} else if skeys, _, err := val.GetEntries(); err != nil {
+				t.Fatal(err)
+
+			} else if len(skeys) > 0 {
 				count++
 				if count == 10000 {
 					return false
 				}
-
-			case error:
-				t.Fatal(v)
 			}
 			return true
 		})
 
 	count = 0
-	client.Scan(
-		"idx", "bkt", []byte("aaaa"), []byte("zzzz"), [][]byte{}, 0, 100, true, 1000,
-		func(val interface{}) bool {
+	l, h = c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
+	qc.Range(
+		"idx", "bkt", l, h, 100, true, 1000,
+		func(val client.ResponseReader) bool {
 			count++
 			if count == 2 {
 				return false
@@ -117,12 +120,12 @@ func TestScan(t *testing.T) {
 			return true
 		})
 
-	client.Close()
+	qc.Close()
 	s.Close()
 }
 
 func TestScanAll(t *testing.T) {
-	common.LogIgnore()
+	c.LogIgnore()
 	addr := "localhost:8888"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -137,31 +140,30 @@ func TestScanAll(t *testing.T) {
 	s := startServer(t, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := client.NewClient(addr, config)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	qc := client.NewClient(client.Remoteaddr(addr), config)
 
 	count := 0
-	client.ScanAll(
-		"idx", "bkt",
-		100, 1000,
-		func(val interface{}) bool {
-			switch v := val.(type) {
-			case *protobuf.ResponseStream:
+	qc.ScanAll(
+		"idx", "bkt", 1000,
+		func(val client.ResponseReader) bool {
+			if err := val.Error(); err != nil {
+				t.Fatal(err)
+			} else if skeys, _, err := val.GetEntries(); err != nil {
+				t.Fatal(err)
+			} else if len(skeys) > 0 {
 				count++
 				if count == 10000 {
 					return false
 				}
-
-			case error:
-				t.Fatal(v)
 			}
 			return true
 		})
 
 	count = 0
-	client.ScanAll(
-		"idx", "bkt", 100, 1000,
-		func(val interface{}) bool {
+	qc.ScanAll(
+		"idx", "bkt", 1000,
+		func(val client.ResponseReader) bool {
 			count++
 			if count == 2 {
 				return false
@@ -169,12 +171,12 @@ func TestScanAll(t *testing.T) {
 			return true
 		})
 
-	client.Close()
+	qc.Close()
 	s.Close()
 }
 
 func BenchmarkStatistics(b *testing.B) {
-	common.LogIgnore()
+	c.LogIgnore()
 	addr := "localhost:8888"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -185,22 +187,22 @@ func BenchmarkStatistics(b *testing.B) {
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := client.NewClient(addr, config)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	qc := client.NewClient(client.Remoteaddr(addr), config)
 
 	b.ResetTimer()
+	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	for i := 0; i < b.N; i++ {
-		client.Statistics("idx", "bkt", []byte("aaaa"), []byte("zzzz"),
-			[][]byte{}, 0)
+		qc.RangeStatistics("idx", "bkt", l, h, 0)
 	}
 	b.StopTimer()
 	s.Close()
-	client.Close()
+	qc.Close()
 	time.Sleep(100 * time.Millisecond)
 }
 
-func BenchmarkScan1(b *testing.B) {
-	common.LogIgnore()
+func BenchmarkRange1(b *testing.B) {
+	c.LogIgnore()
 	addr := "localhost:8888"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -211,27 +213,27 @@ func BenchmarkScan1(b *testing.B) {
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := client.NewClient(addr, config)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	qc := client.NewClient(client.Remoteaddr(addr), config)
 
 	b.ResetTimer()
+	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	for i := 0; i < b.N; i++ {
-		client.Scan(
-			"idx", "bkt", []byte("aaaa"), []byte("zzzz"), [][]byte{}, 0, 100,
-			true, 1000,
-			func(val interface{}) bool {
+		qc.Range(
+			"idx", "bkt", l, h, 100, true, 1000,
+			func(val client.ResponseReader) bool {
 				return true
 			})
 	}
 	b.StopTimer()
 
 	s.Close()
-	client.Close()
+	qc.Close()
 	time.Sleep(100 * time.Millisecond)
 }
 
-func BenchmarkScan100(b *testing.B) {
-	common.LogIgnore()
+func BenchmarkRange100(b *testing.B) {
+	c.LogIgnore()
 	addr := "localhost:8888"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -244,27 +246,27 @@ func BenchmarkScan100(b *testing.B) {
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := client.NewClient(addr, config)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	qc := client.NewClient(client.Remoteaddr(addr), config)
 
 	b.ResetTimer()
+	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	for i := 0; i < b.N; i++ {
-		client.Scan(
-			"idx", "bkt", []byte("aaaa"), []byte("zzzz"), [][]byte{}, 0, 100,
-			true, 1000,
-			func(val interface{}) bool {
+		qc.Range(
+			"idx", "bkt", l, h, 100, true, 1000,
+			func(val client.ResponseReader) bool {
 				return true
 			})
 	}
 	b.StopTimer()
 
 	s.Close()
-	client.Close()
+	qc.Close()
 	time.Sleep(100 * time.Millisecond)
 }
 
-func BenchmarkScanParallel10(b *testing.B) {
-	common.LogIgnore()
+func BenchmarkRangeParallel10(b *testing.B) {
+	c.LogIgnore()
 	addr := "localhost:8888"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -275,26 +277,27 @@ func BenchmarkScanParallel10(b *testing.B) {
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := client.NewClient(addr, config)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	qc := client.NewClient(client.Remoteaddr(addr), config)
 
+	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client.Scan(
-			"idx", "bkt", []byte("aaaa"), []byte("zzzz"), [][]byte{}, 0, 100, true, 1000,
-			func(val interface{}) bool {
+		qc.Range(
+			"idx", "bkt", l, h, 100, true, 1000,
+			func(val client.ResponseReader) bool {
 				return false
 			})
 	}
 	b.StopTimer()
 
 	s.Close()
-	client.Close()
+	qc.Close()
 	time.Sleep(100 * time.Millisecond)
 }
 
 func BenchmarkScanAll(b *testing.B) {
-	common.LogIgnore()
+	c.LogIgnore()
 	addr := "localhost:8888"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -305,26 +308,26 @@ func BenchmarkScanAll(b *testing.B) {
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
 
-	config := common.SystemConfig.SectionConfig("queryport.client.", true)
-	client := client.NewClient(addr, config)
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	qc := client.NewClient(client.Remoteaddr(addr), config)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client.ScanAll(
-			"idx", "bkt", 100, 1000,
-			func(val interface{}) bool {
+		qc.ScanAll(
+			"idx", "bkt", 1000,
+			func(val client.ResponseReader) bool {
 				return true
 			})
 	}
 	b.StopTimer()
 
 	s.Close()
-	client.Close()
+	qc.Close()
 	time.Sleep(100 * time.Millisecond)
 }
 
 func startServer(tb testing.TB, laddr string, callb RequestHandler) *Server {
-	config := common.SystemConfig.SectionConfig("queryport.indexer.", true)
+	config := c.SystemConfig.SectionConfig("queryport.indexer.", true)
 	s, err := NewServer(laddr, callb, config)
 	if err != nil {
 		tb.Fatal(err)

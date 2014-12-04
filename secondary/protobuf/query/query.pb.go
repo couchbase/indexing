@@ -288,7 +288,7 @@ func (m *EndStreamRequest) String() string { return proto.CompactTextString(m) }
 func (*EndStreamRequest) ProtoMessage()    {}
 
 type ResponseStream struct {
-	Entries          []*IndexEntry `protobuf:"bytes,1,rep,name=entries" json:"entries,omitempty"`
+	IndexEntries     []*IndexEntry `protobuf:"bytes,1,rep,name=indexEntries" json:"indexEntries,omitempty"`
 	Err              *Error        `protobuf:"bytes,2,opt,name=err" json:"err,omitempty"`
 	XXX_unrecognized []byte        `json:"-"`
 }
@@ -297,9 +297,9 @@ func (m *ResponseStream) Reset()         { *m = ResponseStream{} }
 func (m *ResponseStream) String() string { return proto.CompactTextString(m) }
 func (*ResponseStream) ProtoMessage()    {}
 
-func (m *ResponseStream) GetEntries() []*IndexEntry {
+func (m *ResponseStream) GetIndexEntries() []*IndexEntry {
 	if m != nil {
-		return m.Entries
+		return m.IndexEntries
 	}
 	return nil
 }
@@ -329,7 +329,8 @@ func (m *StreamEndResponse) GetErr() *Error {
 }
 
 type Span struct {
-	Range            *Range   `protobuf:"bytes,1,req,name=range" json:"range,omitempty"`
+	Range *Range `protobuf:"bytes,1,req,name=range" json:"range,omitempty"`
+	// TODO: may we should rename `equal` to `equals` ?
 	Equal            [][]byte `protobuf:"bytes,2,rep,name=equal" json:"equal,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
@@ -410,10 +411,10 @@ func (m *IndexEntry) GetPrimaryKey() []byte {
 
 // Statistics of a given index.
 type IndexStatistics struct {
-	Count            *uint64 `protobuf:"varint,1,req,name=count" json:"count,omitempty"`
-	UniqueKeys       *uint64 `protobuf:"varint,2,req,name=uniqueKeys" json:"uniqueKeys,omitempty"`
-	Min              []byte  `protobuf:"bytes,3,req,name=min" json:"min,omitempty"`
-	Max              []byte  `protobuf:"bytes,4,req,name=max" json:"max,omitempty"`
+	KeysCount        *uint64 `protobuf:"varint,1,req,name=keysCount" json:"keysCount,omitempty"`
+	UniqueKeysCount  *uint64 `protobuf:"varint,2,req,name=uniqueKeysCount" json:"uniqueKeysCount,omitempty"`
+	KeyMin           []byte  `protobuf:"bytes,3,req,name=keyMin" json:"keyMin,omitempty"`
+	KeyMax           []byte  `protobuf:"bytes,4,req,name=keyMax" json:"keyMax,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
@@ -421,30 +422,30 @@ func (m *IndexStatistics) Reset()         { *m = IndexStatistics{} }
 func (m *IndexStatistics) String() string { return proto.CompactTextString(m) }
 func (*IndexStatistics) ProtoMessage()    {}
 
-func (m *IndexStatistics) GetCount() uint64 {
-	if m != nil && m.Count != nil {
-		return *m.Count
+func (m *IndexStatistics) GetKeysCount() uint64 {
+	if m != nil && m.KeysCount != nil {
+		return *m.KeysCount
 	}
 	return 0
 }
 
-func (m *IndexStatistics) GetUniqueKeys() uint64 {
-	if m != nil && m.UniqueKeys != nil {
-		return *m.UniqueKeys
+func (m *IndexStatistics) GetUniqueKeysCount() uint64 {
+	if m != nil && m.UniqueKeysCount != nil {
+		return *m.UniqueKeysCount
 	}
 	return 0
 }
 
-func (m *IndexStatistics) GetMin() []byte {
+func (m *IndexStatistics) GetKeyMin() []byte {
 	if m != nil {
-		return m.Min
+		return m.KeyMin
 	}
 	return nil
 }
 
-func (m *IndexStatistics) GetMax() []byte {
+func (m *IndexStatistics) GetKeyMax() []byte {
 	if m != nil {
-		return m.Max
+		return m.KeyMax
 	}
 	return nil
 }

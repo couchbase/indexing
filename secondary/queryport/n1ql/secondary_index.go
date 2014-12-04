@@ -11,19 +11,14 @@
 
 package couchbase
 
-import "encoding/json"
-import "sync"
-
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/collatejson"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
 import "github.com/couchbaselabs/query/datastore"
 import "github.com/couchbaselabs/query/errors"
 import "github.com/couchbaselabs/query/expression"
 import "github.com/couchbaselabs/query/expression/parser"
 import "github.com/couchbaselabs/query/value"
-import "github.com/couchbaselabs/query/logging"
 
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(nil, "secondaryIndex.empty")
@@ -34,6 +29,7 @@ var ErrorEmptyHost = errors.NewError(nil, "secondaryIndex.emptyHost")
 // ErrorEmptyStatistics is index-statistics not available.
 var ErrorEmptyStatistics = errors.NewError(nil, "secondaryIndex.emptyStatistics")
 
+// PRIMARY_INDEX index name.
 var PRIMARY_INDEX = "#primary"
 
 // secondaryIndex to hold meta data information, network-address for
@@ -49,21 +45,17 @@ type secondaryIndex struct {
 	whereExpr string
 	state     datastore.IndexState
 
-	// mutex is used update `stats` and `statBins` fields.
-	mu       sync.Mutex
-	stats    *statistics
-	statBins []*statistics
 	// remote node hosting this index.
 	hosts       []string
 	hostClients []*qclient.Client
 }
 
 // TODO: keep upto date with couchbase/indexing/secondary/indexer pkg.
-var twoiInclusion = map[datastore.Inclusion]int{
-	datastore.NEITHER: 0,
-	datastore.LOW:     1,
-	datastore.HIGH:    2,
-	datastore.BOTH:    3,
+var twoiInclusion = map[datastore.Inclusion]qclient.Inclusion{
+	datastore.NEITHER: qclient.Neither,
+	datastore.LOW:     qclient.Low,
+	datastore.HIGH:    qclient.High,
+	datastore.BOTH:    qclient.Both,
 }
 
 func (si *secondaryIndex) getHostClient() (*qclient.Client, errors.Error) {
@@ -145,19 +137,24 @@ func (si *secondaryIndex) Statistics(
 		return nil, err
 	}
 
-	low, high := keys2JSON(span.Range.Low), keys2JSON(span.Range.High)
-	equal := [][]byte{keys2JSON(span.Equal)}
-	incl := uint32(twoiInclusion[span.Range.Inclusion])
+	var pstats c.IndexStatistics
+	var e error
+
 	indexn, bucketn := si.name, si.bucketn
-	pstats, e := client.Statistics(indexn, bucketn, low, high, equal, incl)
+	if span.Equal != nil {
+		equal := values2SKey(span.Equal)
+		pstats, e = client.LookupStatistics(indexn, bucketn, equal)
+
+	} else {
+		low := values2SKey(span.Range.Low)
+		high := values2SKey(span.Range.High)
+		incl := twoiInclusion[span.Range.Inclusion]
+		pstats, e = client.RangeStatistics(indexn, bucketn, low, high, incl)
+	}
 	if e != nil {
 		return nil, errors.NewError(nil, e.Error())
 	}
-
-	si.mu.Lock()
-	defer si.mu.Unlock()
-	si.stats = (&statistics{}).updateStats(pstats)
-	return si.stats, nil
+	return newStatistics(pstats), nil
 }
 
 // Drop implement Index{} interface.
@@ -181,7 +178,6 @@ func (si *secondaryIndex) Scan(
 	conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
-	stopChannel := conn.StopChannel()
 	defer close(entryChannel)
 
 	client, err := si.getHostClient()
@@ -189,48 +185,20 @@ func (si *secondaryIndex) Scan(
 		return
 	}
 
-	low, high := keys2JSON(span.Range.Low), keys2JSON(span.Range.High)
-	equal := [][]byte{keys2JSON(span.Equal)}
-	incl := uint32(twoiInclusion[span.Range.Inclusion])
 	indexn, bucketn := si.name, si.bucketn
-	client.Scan(
-		indexn, bucketn, low, high, equal, incl,
-		1 /*page-size*/, distinct, limit,
-		func(data interface{}) bool {
-			switch val := data.(type) {
-			case *protobuf.ResponseStream:
-				if err := val.GetErr().GetError(); err != "" {
-					conn.Error(errors.NewError(nil, err))
-					return false
-				}
-				for _, entry := range val.GetEntries() {
-					// Primary-key is mandatory.
-					e := &datastore.IndexEntry{
-						PrimaryKey: string(entry.GetPrimaryKey()),
-					}
-					secKey := entry.GetEntryKey()
-					if len(secKey) > 0 {
-						key, err := json2Entry(secKey)
-						if err != nil {
-							conn.Error(errors.NewError(nil, err.Error()))
-							return false
-						}
-						e.EntryKey = value.Values(key)
-					}
-					select {
-					case entryChannel <- e:
-					case <-stopChannel:
-						return false
-					}
-				}
-				return true
+	if span.Equal != nil {
+		equal := values2SKey(span.Equal)
+		client.Lookup(
+			indexn, bucketn, []c.SecondaryKey{equal}, distinct, limit,
+			makeResponsehandler(conn))
 
-			case error:
-				conn.Error(errors.NewError(nil, val.Error()))
-				return false
-			}
-			return false
-		})
+	} else {
+		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
+		incl := twoiInclusion[span.Range.Inclusion]
+		client.Range(
+			indexn, bucketn, low, high, incl, distinct, limit,
+			makeResponsehandler(conn))
+	}
 }
 
 // Scan implement PrimaryIndex{} interface.
@@ -238,7 +206,6 @@ func (si *secondaryIndex) ScanEntries(
 	limit int64, conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
-	stopChannel := conn.StopChannel()
 	defer close(entryChannel)
 
 	client, err := si.getHostClient()
@@ -247,115 +214,84 @@ func (si *secondaryIndex) ScanEntries(
 	}
 
 	indexn, bucketn := si.name, si.bucketn
-	client.ScanAll(
-		indexn, bucketn, 1 /*page-size*/, limit,
-		func(data interface{}) bool {
-			switch val := data.(type) {
-			case *protobuf.ResponseStream:
-				if err := val.GetErr().GetError(); err != "" {
-					conn.Error(errors.NewError(nil, err))
+	client.ScanAll(indexn, bucketn, limit, makeResponsehandler(conn))
+}
+
+func makeResponsehandler(
+	conn *datastore.IndexConnection) qclient.ResponseHandler {
+
+	entryChannel := conn.EntryChannel()
+	stopChannel := conn.StopChannel()
+
+	return func(data qclient.ResponseReader) bool {
+		if err := data.Error(); err != nil {
+			conn.Error(errors.NewError(nil, err.Error()))
+			return false
+
+		} else if skeys, pkeys, err := data.GetEntries(); err != nil {
+			conn.Error(errors.NewError(nil, err.Error()))
+			return false
+
+		} else {
+			for i, skey := range skeys {
+				// Primary-key is mandatory.
+				e := &datastore.IndexEntry{
+					PrimaryKey: string(pkeys[i]),
+				}
+				e.EntryKey = skey2Values(skey)
+
+				select {
+				case entryChannel <- e:
+				case <-stopChannel:
 					return false
 				}
-				for _, entry := range val.GetEntries() {
-					// Primary-key is mandatory.
-					e := &datastore.IndexEntry{
-						PrimaryKey: string(entry.GetPrimaryKey()),
-					}
-					secKey := entry.GetEntryKey()
-					if len(secKey) > 0 {
-						key, err := json2Entry(secKey)
-						if err != nil {
-							conn.Error(errors.NewError(nil, err.Error()))
-							return false
-						}
-						e.EntryKey = value.Values(key)
-					}
-					select {
-					case entryChannel <- e:
-					case <-stopChannel:
-						return false
-					}
-				}
-				return true
-
-			case error:
-				conn.Error(errors.NewError(nil, val.Error()))
-				return false
 			}
-			return false
-		})
+			return true
+		}
+		return false
+	}
 }
 
 type statistics struct {
-	mu         sync.Mutex
 	count      int64
 	uniqueKeys int64
-	min        []byte // JSON represented min value.Value{}
-	max        []byte // JSON represented max value.Value{}
+	min        value.Values
+	max        value.Values
+}
+
+func newStatistics(pstats c.IndexStatistics) datastore.Statistics {
+	stats := &statistics{}
+	stats.count, _ = pstats.Count()
+	stats.uniqueKeys, _ = pstats.DistinctCount()
+	min, _ := pstats.MinKey()
+	stats.min = skey2Values(min)
+	max, _ := pstats.MaxKey()
+	stats.max = skey2Values(max)
+	return stats
 }
 
 // Count implement Statistics{} interface.
 func (stats *statistics) Count() (int64, errors.Error) {
-	stats.mu.Lock()
-	defer stats.mu.Unlock()
-
-	if stats == nil {
-		return 0, ErrorEmptyStatistics
-	}
 	return stats.count, nil
 }
 
 // DistinctCount implement Statistics{} interface.
 func (stats *statistics) DistinctCount() (int64, errors.Error) {
-	stats.mu.Lock()
-	defer stats.mu.Unlock()
-
-	if stats == nil {
-		return 0, ErrorEmptyStatistics
-	}
 	return stats.uniqueKeys, nil
 }
 
 // Min implement Statistics{} interface.
 func (stats *statistics) Min() (value.Values, errors.Error) {
-	stats.mu.Lock()
-	defer stats.mu.Unlock()
-
-	if stats == nil {
-		return nil, ErrorEmptyStatistics
-	}
-	vals := value.NewValue(stats.min).Actual().([]interface{})
-	values := make(value.Values, 0, len(vals))
-	for _, val := range vals {
-		values = append(values, value.NewValue(val))
-	}
-	return values, nil
+	return stats.min, nil
 }
 
 // Max implement Statistics{} interface.
 func (stats *statistics) Max() (value.Values, errors.Error) {
-	stats.mu.Lock()
-	defer stats.mu.Unlock()
-
-	if stats == nil {
-		return nil, ErrorEmptyStatistics
-	}
-	vals := value.NewValue(stats.max).Actual().([]interface{})
-	values := make(value.Values, 0, len(vals))
-	for _, val := range vals {
-		values = append(values, value.NewValue(val))
-	}
-	return values, nil
+	return stats.max, nil
 }
 
 // Bins implement Statistics{} interface.
 func (stats *statistics) Bins() ([]datastore.Statistics, errors.Error) {
-	stats.mu.Lock()
-	defer stats.mu.Unlock()
-
-	if stats == nil {
-		return nil, ErrorEmptyStatistics
-	}
 	return nil, nil
 }
 
@@ -365,77 +301,46 @@ func (stats *statistics) Bins() ([]datastore.Statistics, errors.Error) {
 
 // create a queryport client connected to `host`.
 func (si *secondaryIndex) setHost(hosts []string) {
-	si.mu.Lock()
-	defer si.mu.Unlock()
-
 	si.hosts = hosts
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 	if len(hosts) > 0 {
 		si.hostClients = make([]*qclient.Client, 0, len(hosts))
 		for _, host := range hosts {
-			c := qclient.NewClient(host, config)
+			c := qclient.NewClient(qclient.Remoteaddr(host), config)
 			si.hostClients = append(si.hostClients, c)
 		}
 	}
-}
-
-func (stats *statistics) updateStats(pstats *protobuf.IndexStatistics) *statistics {
-	stats.mu.Lock()
-	defer stats.mu.Unlock()
-
-	stats.count = int64(pstats.GetCount())
-	stats.uniqueKeys = int64(pstats.GetUniqueKeys())
-	stats.min = pstats.GetMin()
-	stats.max = pstats.GetMax()
-	return stats
 }
 
 // shape of key passed to scan-coordinator (indexer node) is,
 //      [key1, key2, ... keyN]
 // where N expressions supplied in CREATE INDEX
 // to evaluate secondary-key.
-func keys2JSON(arg value.Values) []byte {
-	if arg == nil {
+func values2SKey(vals value.Values) c.SecondaryKey {
+	if vals == nil {
 		return nil
 	}
-	values := []value.Value(arg)
-	arr := value.NewValue(make([]interface{}, len(values)))
-	for i, val := range values {
-		arr.SetIndex(i, val)
+	skey := make(c.SecondaryKey, 0, len(vals))
+	for _, val := range []value.Value(vals) {
+		skey = append(skey, val.Actual())
 	}
-	bin, err := arr.MarshalJSON()
-	if err != nil {
-		logging.Errorf("unable to marshal %v: %v", arg, err)
-	}
-	return bin
+	return skey
 }
 
 // shape of return key from scan-coordinator is,
 //      [key1, key2, ... keyN]
 // where N keys where evaluated using N expressions supplied in
 // CREATE INDEX.
-//
-// * Each key will be unmarshalled using json and composed into
-//   value.Value{}.
-// * Missing key will be composed using NewMissingValue(), btw,
-//   `key1` will never be missing.
-func json2Entry(data []byte) ([]value.Value, error) {
-	arr := []interface{}{}
-	err := json.Unmarshal(data, &arr)
-	if err != nil {
-		return nil, err
-	}
-
-	// [key1, key2, ... keyN]
-	key := make([]value.Value, len(arr))
-	for i := 0; i < len(arr); i++ {
-		if s, ok := arr[i].(string); ok && collatejson.MissingLiteral.Equal(s) {
-			key[i] = value.NewMissingValue()
+func skey2Values(skey c.SecondaryKey) []value.Value {
+	vals := make([]value.Value, len(skey))
+	for i := 0; i < len(skey); i++ {
+		if s, ok := skey[i].(string); ok && collatejson.MissingLiteral.Equal(s) {
+			vals[i] = value.NewMissingValue()
 		} else {
-			key[i] = value.NewValue(arr[i])
+			vals[i] = value.NewValue(skey[i])
 		}
 	}
-	return key, nil
+	return vals
 }
 
 // ClusterManagerAddr is temporary hard-coded address for cluster-manager-agent

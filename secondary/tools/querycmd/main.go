@@ -1,9 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
-
 	"os"
 	"strings"
 
@@ -66,7 +66,7 @@ func usage() {
 
 func main() {
 	var err error
-	var statsResp *protobuf.IndexStatistics
+	var statsResp c.IndexStatistics
 	var keys [][]byte
 
 	parseArgs()
@@ -133,20 +133,49 @@ func main() {
 			os.Exit(1)
 		}
 		config := c.SystemConfig.SectionConfig("queryport.client.", true)
-		client := queryclient.NewClient(server, config)
+		client := queryclient.NewClient(queryclient.Remoteaddr(server), config)
 		if equal != "" {
 			keys = append(keys, []byte(equal))
 		}
 
+		inclusion := queryclient.Inclusion(incl)
 		switch opType {
 		case "scan":
-			err = client.Scan(indexName, bucket, []byte(low), []byte(high), keys, uint32(incl), pageSize, false, limit, scanCallback)
+			if keys == nil {
+				l, h := c.SecondaryKey{[]byte(low)}, c.SecondaryKey{[]byte(high)}
+				err = client.Range(indexName, bucket, l, h, inclusion, false, limit, scanCallback)
+
+			} else {
+				values := make([]c.SecondaryKey, 0, len(keys))
+				for _, key := range keys {
+					skey := make(c.SecondaryKey, 0)
+					if err = json.Unmarshal(key, &skey); err != nil {
+						values = append(values, skey)
+					}
+				}
+				err = client.Lookup(indexName, bucket, values, false, limit, scanCallback)
+			}
 		case "scanAll":
-			err = client.ScanAll(indexName, bucket, pageSize, limit, scanCallback)
+			err = client.ScanAll(indexName, bucket, limit, scanCallback)
 		case "stats":
-			statsResp, err = client.Statistics(indexName, bucket, []byte(low), []byte(high), keys, uint32(incl))
-			if err == nil {
-				fmt.Println("Stats: ", statsResp)
+			if keys == nil {
+				l, h := c.SecondaryKey{[]byte(low)}, c.SecondaryKey{[]byte(high)}
+				statsResp, err = client.RangeStatistics(indexName, bucket, l, h, inclusion)
+				if err == nil {
+					fmt.Println("Stats: ", statsResp)
+				}
+			} else {
+				values := make([]c.SecondaryKey, 0, len(keys))
+				for _, key := range keys {
+					skey := make(c.SecondaryKey, 0)
+					if err = json.Unmarshal(key, &skey); err != nil {
+						values = append(values, skey)
+					}
+				}
+				statsResp, err = client.LookupStatistics(indexName, bucket, values[0])
+				if err == nil {
+					fmt.Println("Stats: ", statsResp)
+				}
 			}
 		}
 
@@ -158,7 +187,7 @@ func main() {
 	}
 }
 
-func scanCallback(res interface{}) bool {
+func scanCallback(res queryclient.ResponseReader) bool {
 	switch r := res.(type) {
 	case *protobuf.ResponseStream:
 		fmt.Println("StreamResponse: ", res.(*protobuf.ResponseStream).String())
