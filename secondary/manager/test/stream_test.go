@@ -50,11 +50,17 @@ type deleteTestProjectorClient struct {
 type streamEndTestProjectorClient struct {
 }
 
+// projector client specific for TIMER_TEST
+// implement ProjectorStreamClient
+type timerTestProjectorClient struct {
+}
+
 const (
 	NO_TEST     uint8 = 0
 	SYNC_TEST         = 1
 	DELETE_TEST       = 2
 	STREAM_END_TEST   = 3
+	TIMER_TEST        = 4
 )
 
 var TT *testing.T
@@ -93,6 +99,7 @@ func TestStreamMgr(t *testing.T) {
 	runSyncTest(mgr)
 	runDeleteTest(mgr)
 	runStreamEndTest(mgr)
+	runTimerTest(mgr)
 
 	////////////////////////////////////////////////////
 	common.Infof("Stop TestStreamMgr. Tearing down *********************************************************")
@@ -153,8 +160,8 @@ func runSyncTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 	for {
 		select {
 		case ts := <-ch:
-			common.Infof("****** runSyncTestReceiver() receive correct stability timestamp")
 			if ts.Seqnos[10] >= 100 {
+				common.Infof("****** runSyncTestReceiver() receive correct stability timestamp")
 				return
 			}
 		case <-ticker.C:
@@ -756,8 +763,8 @@ func runStreamEndTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 	for {
 		select {
 		case ts := <-ch:
-			common.Infof("****** runStreamEndTestReceiver() receive correct stability timestamp")
 			if ts.Seqnos[10] >= 404 {
+				common.Infof("****** runStreamEndTestReceiver() receive correct stability timestamp")
 				return
 			}
 		case <-ticker.C:
@@ -924,6 +931,226 @@ func (c *streamEndTestProjectorClient) RestartVbuckets(topic string,
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// Timer Test
+// 1) This test will create a new index.  
+// 2) Upon notifying of the new index, the fake projector will push a sync message to the stream manager.  
+// 3) The fake projector will send another sync message after TIMESTAMP_PERSIST_INTERVAL
+// 4) read the timestamp from the respository and check to see if matches with the timer in memory
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+func runTimerTest(mgr *manager.IndexManager) {
+	defer func() { test = NO_TEST }()
+
+	common.Infof("**** Run Timer Test *****")
+	common.Infof("Timer Test Cleanup ...")
+	test = TIMER_TEST
+
+	mgr.SetTimestampPersistenceInterval(1)
+	defer mgr.SetTimestampPersistenceInterval(manager.TIMESTAMP_PERSIST_INTERVAL)
+
+	cleanupStreamMgrTimerTest(mgr)
+
+	common.Infof("***** Run timer Test ...")
+	donech = make(chan bool)
+	ch := mgr.GetStabilityTimestampChannel(common.MAINT_STREAM)
+	go runTimerTestReceiver(mgr, ch, donech)
+
+	common.Infof("Setup data for Timer Test")
+	changeTopologyForTimerTest(mgr)
+	<-donech
+
+	common.Infof("**** Timer Test Cleanup ...")
+	cleanupStreamMgrTimerTest(mgr)
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+
+	common.Infof("**** Finish Timer Test *****")
+}
+
+// clean up
+func cleanupStreamMgrTimerTest(mgr *manager.IndexManager) {
+
+	_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_timer_test")
+	if err != nil {
+		common.Infof("StreamMgrTest.cleanupStreamMgrTimerTest() :  cannot find index defn stream_mgr_timer_test.  No cleanup ...")
+	} else {
+		common.Infof("StreamMgrTest.cleanupStreamMgrTimerTest() :  found index defn stream_mgr_timer_test.  Cleaning up ...")
+
+		err = mgr.HandleDeleteIndexDDL("Default", "stream_mgr_timer_test")
+		if err != nil {
+			TT.Fatal(err)
+		}
+		time.Sleep(time.Duration(1000) * time.Millisecond)
+
+		// double check if we have really cleaned up
+		_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_timer_test")
+		if err == nil {
+			TT.Fatal("StreamMgrTest.cleanupStreamMgrTimerTest(): Cannot clean up index defn stream_mgr_timer_test")
+		}
+	}
+
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+}
+
+// run test
+func runTimerTestReceiver(mgr *manager.IndexManager, ch chan *common.TsVbuuid, donech chan bool) {
+
+	common.Infof("Run Timer Test Receiver")
+	defer close(donech)
+
+	// wait for the sync message to arrive
+	ticker := time.NewTicker(time.Duration(60) * time.Second)
+	for {
+		select {
+		case ts := <-ch:
+			if ts.Seqnos[10] >= 405 {
+			
+				// wait to avoid race condition -- this is timing dependent.  
+				time.Sleep(time.Duration(2000) * time.Millisecond)
+				
+			 	seqno, ok := mgr.GetStabilityTimestampForVb(common.MAINT_STREAM, "Default", uint16(10)) 
+			 	if !ok || seqno != ts.Seqnos[10] {
+					TT.Fatal("runTimerTestReceiver(): timestamp seqno does not match with repo.  %d != %d",
+						ts.Seqnos[10], seqno)
+			 	} else {
+					common.Infof("****** runTimerTestReceiver() receive correct stability timestamp")
+			 		return
+			 	}
+			}
+		case <-ticker.C:
+			common.Infof("****** runTimerTestReceiver() : timeout")
+			TT.Fatal("runTimerTestReceiver(): Timeout waiting to receive timestamp to arrive")
+		}
+	}
+
+	common.Infof("runTimerTestReceiver() done")
+}
+
+// start up
+func changeTopologyForTimerTest(mgr *manager.IndexManager) {
+
+	// Add a new index definition : 405
+	idxDefn := &common.IndexDefn{
+		DefnId:          common.IndexDefnId(405),
+		Name:            "stream_mgr_timer_test",
+		Using:           common.ForestDB,
+		Bucket:          "Default",
+		IsPrimary:       false,
+		SecExprs:        []string{"Testing"},
+		ExprType:        common.N1QL,
+		PartitionScheme: common.HASH,
+		PartitionKey:    "Testing"}
+
+	common.Infof("Run Timer Test : Create Index Defn 405")
+	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
+		TT.Fatal(err)
+	}
+	// Wait so there is no race condition.
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+
+	// Update the index definition to ready
+	common.Infof("Run Timer Test : Update Index Defn 405 to READY")
+	topology, err := mgr.GetTopologyByBucket("Default")
+	if err != nil {
+		TT.Fatal(err)
+	}
+	topology.ChangeStateForIndexInstByDefn(common.IndexDefnId(405), common.INDEX_STATE_CREATED, common.INDEX_STATE_READY)
+	if err := mgr.SetTopologyByBucket("Default", topology); err != nil {
+		TT.Fatal(err)
+	}
+}
+
+func (c *timerTestProjectorClient) sendSync(instances []*protobuf.Instance) {
+
+	common.Infof("timerTestProjectorClient.sendSync() ")
+
+	if len(instances) != 1 {
+		TT.Fatal("timerTestProjectorClient.sendSync(): More than one index instance sent to fake projector")
+	}
+
+	for _, inst := range instances {
+		if inst.GetIndexInstance().GetDefinition().GetDefnID() == uint64(405) {
+
+			p := newFakeProjector(manager.COORD_MAINT_STREAM_PORT)
+			go p.run(donech)
+
+			payloads := make([]*common.VbKeyVersions, 0, 200)
+
+			payload := common.NewVbKeyVersions("Default", 10, 1, 10)
+			kv := common.NewKeyVersions(100, []byte("document-name"), 1)
+			kv.AddStreamBegin()
+			kv.AddSync()
+			payload.AddKeyVersions(kv)
+			payloads = append(payloads, payload)
+
+			// send payload
+			common.Infof("****** runTimerTestReceiver() sending the first sync message")
+			if err := p.client.SendKeyVersions(payloads, true); err != nil {
+				TT.Fatal(err)
+			}
+
+			payloads = make([]*common.VbKeyVersions, 0, 200)
+
+			payload = common.NewVbKeyVersions("Default", 10, 1, 10)
+			kv = common.NewKeyVersions(405, []byte("document-name"), 1)
+			kv.AddSync()
+			payload.AddKeyVersions(kv)
+			payloads = append(payloads, payload)
+
+			// send payload
+			common.Infof("****** runTimerTestReceiver() sending the second sync message")
+			if err := p.client.SendKeyVersions(payloads, true); err != nil {
+				TT.Fatal(err)
+			}
+		}
+	}
+}
+
+func (c *timerTestProjectorClient) MutationTopicRequest(topic, endpointType string,
+	reqTimestamps []*protobuf.TsVbuuid, instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
+
+	if len(reqTimestamps) == 0 {
+		TT.Fatal("timerTestProjectorClient.MutationTopicRequest(): reqTimestamps is nil")
+	}
+
+	c.sendSync(instances)
+
+	response := new(protobuf.TopicResponse)
+	response.Topic = &topic
+	response.InstanceIds = make([]uint64, len(instances))
+	for i, inst := range instances {
+		response.InstanceIds[i] = inst.GetIndexInstance().GetInstId()
+	}
+	response.ActiveTimestamps = make([]*protobuf.TsVbuuid, 1)
+	response.ActiveTimestamps[0] = reqTimestamps[0]
+	response.RollbackTimestamps = nil
+	response.Err = nil
+
+	return response, nil
+}
+
+func (c *timerTestProjectorClient) DelInstances(topic string, uuids []uint64) error {
+	return nil
+}
+
+func (c *timerTestProjectorClient) RepairEndpoints(topic string, endpoints []string) error {
+	return nil
+}
+
+func (c *timerTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
+
+	newTs := protobuf.NewTsVbuuid("default", "Default", 1024)
+	for i := 0; i < 1024; i++ {
+		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
+	}
+	return newTs, nil
+}
+
+func (c *timerTestProjectorClient) RestartVbuckets(topic string, 
+	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
+	return nil, nil
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // Retry Test
 // This test exercise the following error handling functions:
 // 1) Projector returns rollbackTimestamp upon MutationTopicRequest
@@ -979,6 +1206,8 @@ func (p *testProjectorClientFactory) GetClientForNode(server string) manager.Pro
 		return client
 	case STREAM_END_TEST:
 		return new(streamEndTestProjectorClient)
+	case TIMER_TEST:
+		return new(timerTestProjectorClient)
 	}
 	return nil
 }
@@ -1001,6 +1230,10 @@ func (p *testProjectorClientEnv) GetNodeListForBuckets(buckets []string) (map[st
 		nodes["127.0.0.2"] = "127.0.0.2"
 		return nodes, nil
 	case STREAM_END_TEST:
+		nodes := make(map[string]string)
+		nodes["127.0.0.1"] = "127.0.0.1"
+		return nodes, nil
+	case TIMER_TEST:
 		nodes := make(map[string]string)
 		nodes["127.0.0.1"] = "127.0.0.1"
 		return nodes, nil

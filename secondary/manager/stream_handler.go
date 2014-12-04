@@ -53,11 +53,11 @@ func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
 	lastTs := m.indexMgr.getTimer().getLatest(streamId, bucket)
 	if lastTs != nil {
 		ts := common.NewTsVbuuid(bucket, NUM_VB)
-		ts.Seqnos[vbucket] = lastTs.Seqnos[vbucket] 
-		ts.Vbuuids[vbucket] = lastTs.Vbuuids[vbucket] 
-		ts.Snapshots[vbucket][0] = lastTs.Snapshots[vbucket][0] 
-		ts.Snapshots[vbucket][1] = lastTs.Snapshots[vbucket][1] 
-	
+		ts.Seqnos[vbucket] = lastTs.Seqnos[vbucket]
+		ts.Vbuuids[vbucket] = lastTs.Vbuuids[vbucket]
+		ts.Snapshots[vbucket][0] = lastTs.Snapshots[vbucket][0]
+		ts.Snapshots[vbucket][1] = lastTs.Snapshots[vbucket][1]
+
 		err := m.indexMgr.streamMgr.RestartStreamIfNecessary(streamId, []*common.TsVbuuid{ts})
 		if err != nil {
 			common.Errorf("mgrMutHandler.HandleStreamEnd(): error encounterd %v", err)

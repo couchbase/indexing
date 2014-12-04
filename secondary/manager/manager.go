@@ -32,9 +32,10 @@ type IndexManager struct {
 	admin     StreamAdmin
 
 	// timestamp management
-	timer            *Timer
-	timestampCh      map[common.StreamId]chan *common.TsVbuuid
-	timekeeperStopCh chan bool
+	timer                    *Timer
+	timestampCh              map[common.StreamId]chan *common.TsVbuuid
+	timekeeperStopCh         chan bool
+	timestampPersistInterval uint64
 
 	mutex    sync.Mutex
 	isClosed bool
@@ -325,6 +326,17 @@ func (m *IndexManager) runTimestampKeeper() {
 	defer common.Debugf("IndexManager.runTimestampKeeper() : terminate")
 
 	inboundch := m.timer.getOutputChannel()
+
+	persistTimestamp := true // save the first timestamp always
+	lastPersistTime := uint64(time.Now().UnixNano())
+
+	timestamps, err := m.repo.GetStabilityTimestamps()
+	if err != nil {
+		// TODO : Determine timestamp not exist versus forestdb error
+		common.Errorf("IndexManager.runTimestampKeeper() : cannot get stability timestamp from repository. Create a new one.")
+		timestamps = createTimestampListSerializable()
+	}
+
 	for {
 		select {
 		case <-m.timekeeperStopCh:
@@ -338,7 +350,20 @@ func (m *IndexManager) runTimestampKeeper() {
 
 			gometa.SafeRun("IndexManager.runTimestampKeeper()",
 				func() {
-					data, err := marshallTimestampWrapper(timestamp)
+					timestamps.addTimestamp(timestamp)
+					persistTimestamp = persistTimestamp ||
+						uint64(time.Now().UnixNano())-lastPersistTime > m.timestampPersistInterval
+					if persistTimestamp {
+						if err := m.repo.SetStabilityTimestamps(timestamps); err != nil {
+							common.Errorf("IndexManager.runTimestampKeeper() : cannot set stability timestamp into repository.")
+						} else {
+							common.Debugf("IndexManager.runTimestampKeeper() : saved stability timestamp to repository")
+							persistTimestamp = false
+							lastPersistTime = uint64(time.Now().UnixNano())
+						}
+					}
+
+					data, err := marshallTimestampSerializable(timestamp)
 					if err != nil {
 						common.Debugf(
 							"IndexManager.runTimestampKeeper(): error when marshalling timestamp. Ignore timestamp.  Error=%s",
@@ -352,7 +377,7 @@ func (m *IndexManager) runTimestampKeeper() {
 	}
 }
 
-func (m *IndexManager) notifyNewTimestamp(wrapper *timestampWrapper) {
+func (m *IndexManager) notifyNewTimestamp(wrapper *timestampSerializable) {
 
 	common.Debugf("IndexManager.notifyNewTimestamp(): receive new timestamp, notifying to listener")
 	streamId := common.StreamId(wrapper.StreamId)
@@ -396,7 +421,8 @@ func (m *IndexManager) startMasterService() error {
 	// timer and broadcast the stability timestamp to all the
 	// listening node.   This goroutine will be started when
 	// the indexer node becomes the coordinator master.
-	m.timer = newTimer()
+	m.timestampPersistInterval = TIMESTAMP_PERSIST_INTERVAL
+	m.timer = newTimer(m.repo)
 	m.timekeeperStopCh = make(chan bool)
 	go m.runTimestampKeeper()
 
@@ -439,4 +465,28 @@ func (m *IndexManager) stopMasterServiceNoLock() {
 			m.timekeeperStopCh = nil
 		}
 	}
+}
+
+///////////////////////////////////////////////////////
+// public function - for testing only
+///////////////////////////////////////////////////////
+
+func (m *IndexManager) GetStabilityTimestampForVb(streamId common.StreamId, bucket string, vb uint16) (uint64, bool) {
+
+	common.Errorf("IndexManager.GetStabilityTimestampForVb() : get stability timestamp from repo")
+	savedTimestamps, err := m.repo.GetStabilityTimestamps()
+	if err == nil {
+		seqno, _, ok, err := savedTimestamps.findTimestamp(streamId, bucket, vb)
+		if ok && err == nil {
+			return seqno, true
+		}
+	} else {
+		common.Errorf("IndexManager.GetStabilityTimestampForVb() : cannot get stability timestamp from repository.")
+	}
+
+	return 0, false
+}
+
+func (m *IndexManager) SetTimestampPersistenceInterval(elapsed uint64) {
+	m.timestampPersistInterval = elapsed
 }

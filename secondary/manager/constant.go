@@ -15,12 +15,12 @@ import (
 )
 
 /////////////////////////////////////////////
-// Constant for Testing 
+// Constant for Testing
 /////////////////////////////////////////////
 const TESTING = true
 
 /////////////////////////////////////////////
-// Configurable/Tuning Parameter 
+// Configurable/Tuning Parameter
 /////////////////////////////////////////////
 
 // Common
@@ -28,14 +28,14 @@ const NUM_VB = 1024
 const DEFAULT_BUCKET_NAME = "Default"
 const DEFAULT_POOL_NAME = "default"
 
-// Coordinator 
+// Coordinator
 const COORD_MAINT_STREAM_PORT = "9334"
 const COORD_INIT_STREAM_PORT = "9335"
 
-// Request Handler 
+// Request Handler
 const INDEX_DDL_HTTP_ADDR = ":9102"
 
-// Stream Manager 
+// Stream Manager
 const COUCHBASE_INTERNAL_BUCKET_URL = "http://localhost:11209/"
 const LOCALHOST = "127.0.0.1"
 const KV_DCP_PORT = "11210"
@@ -46,30 +46,31 @@ const PROJECTOR_PORT = "9999"
 const TIME_INTERVAL = time.Duration(2000) * time.Millisecond
 
 /////////////////////////////////////////////
-// Constant 
+// Constant
 /////////////////////////////////////////////
 
 // Common
 const HTTP_PREFIX = "http://"
 
-// Coordinator 
+// Coordinator
 const COORDINATOR_CONFIG_STORE = "IndexCoordinatorConfigStore"
 
-// Event Manager 
+// Event Manager
 const DEFAULT_EVT_QUEUE_SIZE = 20
 const DEFAULT_NOTIFIER_QUEUE_SIZE = 5
 
-// Stream Manager 
+// Stream Manager
 const MAINT_TOPIC = "MAINT_STREAM_TOPIC"
 const CATCHUP_TOPIC = "CATCHUP_STREAM_TOPIC"
 const INIT_TOPIC = "INIT_STREAM_TOPIC"
 
 const MAX_PROJECTOR_RETRY_ELAPSED_TIME = int64(time.Minute) * 5
 
-// Timer 
+// Timer
 const TIMESTAMP_HISTORY_COUNT = 10
 const TIMESTAMP_CHANNEL_SIZE = 30
 const TIMESTAMP_NOTIFY_CH_SIZE = 100
+const TIMESTAMP_PERSIST_INTERVAL = uint64(time.Minute)
 
 // Index Definition
 const INDEX_INSTANCE_ID = "IndexInstanceId"

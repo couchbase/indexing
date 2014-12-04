@@ -568,7 +568,7 @@ func (c *Coordinator) LogProposal(proposal protocol.ProposalMsg) error {
 
 	switch common.OpCode(proposal.GetOpCode()) {
 	case OPCODE_NOTIFY_TIMESTAMP:
-		timestamp, err := unmarshallTimestampWrapper(proposal.GetContent())
+		timestamp, err := unmarshallTimestampSerializable(proposal.GetContent())
 		if err == nil {
 			c.idxMgr.notifyNewTimestamp(timestamp)
 		} else {

@@ -330,9 +330,9 @@ func (p *ProjectorAdmin) RepairEndpointForStream(streamId common.StreamId,
 }
 
 //
-// Restart partial stream using the restart timestamp for the particular <bucket, vbucket> 
+// Restart partial stream using the restart timestamp for the particular <bucket, vbucket>
 // specified in the restart timestamp.   The partial stream for <bucket, vbucket> is only
-// restarted if it is not active. 
+// restarted if it is not active.
 //
 func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 	restartTimestamps []*common.TsVbuuid) error {
@@ -350,7 +350,7 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 		shouldRetry = false
 
 		nodes, err := p.env.GetNodeListForTimestamps(restartTimestamps)
-		if err != nil { 
+		if err != nil {
 			if err.(Error).code == ERROR_STREAM_INCONSISTENT_VBMAP {
 				shouldRetry = true
 				continue
@@ -401,7 +401,7 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 					worker.err.(Error).code != ERROR_STREAM_FEEDER &&
 					worker.err.(Error).code != ERROR_STREAM_STREAM_END &&
 					worker.err.(Error).code != ERROR_STREAM_PROJECTOR_TIMEOUT {
-					
+
 					return worker.err
 				}
 
@@ -548,7 +548,7 @@ func (worker *adminWorker) addInstances(instances []*protobuf.Instance,
 // 3) Recoverable error by other worker
 // 		* ErrorInvalidVbucketBranch
 // 		* ErrorNotMyVbucket
-//	    * ErrorInvalidKVaddrs 
+//	    * ErrorInvalidKVaddrs
 // 4) Error that may not need retry
 //		* ErrorTopicExist
 //
@@ -577,7 +577,7 @@ func (worker *adminWorker) shouldRetryAddInstances(requestTs []*protobuf.TsVbuui
 
 	} else if strings.Contains(errStr, "ErrorInvalidVbucketBranch") {
 		return nil, NewError(ERROR_STREAM_INVALID_TIMESTAMP, NORMAL, STREAM, err, "")
-		
+
 	} else if strings.Contains(errStr, "ErrorInvalidKVaddrs") {
 		return nil, NewError(ERROR_STREAM_INVALID_KVADDRS, NORMAL, STREAM, err, "")
 	}
@@ -724,7 +724,7 @@ func (worker *adminWorker) restartStream(timestamps []*protobuf.TsVbuuid, doneCh
 		common.Debugf("adminWorker::restartStream(): no client returns from factory")
 		return
 	}
-	
+
 	// open the stream for the specific node for the set of <bucket, timestamp>
 	topic := getTopicForStreamId(worker.streamId)
 
@@ -771,13 +771,13 @@ func (worker *adminWorker) restartStream(timestamps []*protobuf.TsVbuuid, doneCh
 // 		* ErrorStreamRequest
 // 		* ErrorResposneTimeout
 // 2) Non Recoverable error
-// 		* ErrorTopicMissing 
-// 		* ErrorInvalidBucket 
+// 		* ErrorTopicMissing
+// 		* ErrorInvalidBucket
 // 3) Recoverable error by other worker
 // 		* ErrorInvalidVbucketBranch
 // 		* ErrorNotMyVbucket
-// 		* ErrorFeeder 
-// 		* ErrorStreamEnd  
+// 		* ErrorFeeder
+// 		* ErrorStreamEnd
 //
 func (worker *adminWorker) shouldRetryRestartVbuckets(requestTs []*protobuf.TsVbuuid,
 	response *protobuf.TopicResponse,
@@ -794,7 +794,7 @@ func (worker *adminWorker) shouldRetryRestartVbuckets(requestTs []*protobuf.TsVb
 
 	} else if strings.Contains(errStr, "ErrorInvalidBucket") {
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
-		
+
 	} else if strings.Contains(errStr, "ErrorFeeder") {
 		return nil, NewError(ERROR_STREAM_FEEDER, NORMAL, STREAM, err, "")
 
@@ -803,7 +803,7 @@ func (worker *adminWorker) shouldRetryRestartVbuckets(requestTs []*protobuf.TsVb
 
 	} else if strings.Contains(errStr, "ErrorInvalidVbucketBranch") {
 		return nil, NewError(ERROR_STREAM_INVALID_TIMESTAMP, NORMAL, STREAM, err, "")
-		
+
 	} else if strings.Contains(errStr, "ErrorStreamEnd") {
 		return nil, NewError(ERROR_STREAM_STREAM_END, NORMAL, STREAM, err, "")
 	}
@@ -995,7 +995,7 @@ func (p *ProjectorClientEnvImpl) GetNodeListForBuckets(buckets []string) (map[st
 }
 
 //
-// Get the set of nodes for all the given timestamps 
+// Get the set of nodes for all the given timestamps
 //
 func (p *ProjectorClientEnvImpl) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
 
@@ -1013,43 +1013,43 @@ func (p *ProjectorClientEnvImpl) GetNodeListForTimestamps(timestamps []*common.T
 		if err := bucketRef.Refresh(); err != nil {
 			return nil, err
 		}
-		
+
 		vbmap, err := bucketRef.GetVBmap(nil)
 		if err != nil {
 			return nil, err
 		}
-		
+
 		for i, seqno := range ts.Seqnos {
 			if seqno != 0 {
 				found := false
 				for kvaddr, vbnos := range vbmap {
 					for _, vbno := range vbnos {
 						if vbno == uint16(i) {
-							newTs := p.findTimestamp(nodes, kvaddr, ts.Bucket) 
+							newTs := p.findTimestamp(nodes, kvaddr, ts.Bucket)
 							newTs.Append(uint16(i), ts.Seqnos[i], ts.Vbuuids[i],
 								ts.Snapshots[i][0], ts.Snapshots[i][1])
 							found = true
 							break
 						}
 					}
-					
+
 					if found {
 						break
 					}
 				}
-			
+
 				if !found {
 					return nil, NewError2(ERROR_STREAM_INCONSISTENT_VBMAP, STREAM)
 				}
-			} 
-		}	
+			}
+		}
 	}
 
 	return nodes, nil
 }
 
-func (p *ProjectorClientEnvImpl) findTimestamp(timestampMap map[string][]*protobuf.TsVbuuid, 
-	kvaddr string, 
+func (p *ProjectorClientEnvImpl) findTimestamp(timestampMap map[string][]*protobuf.TsVbuuid,
+	kvaddr string,
 	bucket string) *protobuf.TsVbuuid {
 
 	timestamps, ok := timestampMap[kvaddr]
@@ -1062,10 +1062,10 @@ func (p *ProjectorClientEnvImpl) findTimestamp(timestampMap map[string][]*protob
 			return ts
 		}
 	}
-	
+
 	newTs := protobuf.NewTsVbuuid(DEFAULT_POOL_NAME, bucket, NUM_VB)
 	timestamps = append(timestamps, newTs)
-	timestampMap[kvaddr] = timestamps 
+	timestampMap[kvaddr] = timestamps
 	return newTs
 }
 

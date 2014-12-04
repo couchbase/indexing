@@ -308,7 +308,7 @@ func (s *StreamManager) DeleteIndexForBuckets(streamId common.StreamId, buckets 
 }
 
 //
-// Restart specific vbucket in the stream based on the given timestamp. 
+// Restart specific vbucket in the stream based on the given timestamp.
 //
 func (s *StreamManager) RestartStreamIfNecessary(streamId common.StreamId, timestamps []*common.TsVbuuid) error {
 

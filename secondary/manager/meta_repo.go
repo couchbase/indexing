@@ -10,8 +10,8 @@
 package manager
 
 import (
-	"encoding/json"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	repo "github.com/couchbase/gometa/repository"
 	"github.com/couchbase/indexing/secondary/common"
@@ -57,6 +57,7 @@ const (
 	KIND_GLOBAL_TOPOLOGY
 	KIND_INDEX_INSTANCE_ID
 	KIND_INDEX_PARTITION_ID
+	KIND_STABILITY_TIMESTAMP
 )
 
 ///////////////////////////////////////////////////////
@@ -124,11 +125,11 @@ func (c *MetadataRepo) GetNextPartitionId() (common.PartitionId, error) {
 		return common.PartitionId(0), err
 	}
 
-	id = id + 1	
+	id = id + 1
 	if err := c.SetIndexPartitionId(id); err != nil {
 		return common.PartitionId(0), err
 	}
-	
+
 	return common.PartitionId(id), nil
 }
 
@@ -139,11 +140,11 @@ func (c *MetadataRepo) GetNextIndexInstId() (common.IndexInstId, error) {
 		return common.IndexInstId(0), err
 	}
 
-	id = id + 1	
+	id = id + 1
 	if err := c.SetIndexInstanceId(id); err != nil {
 		return common.IndexInstId(0), err
 	}
-	
+
 	return common.IndexInstId(id), nil
 }
 
@@ -169,6 +170,32 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 	}
 
 	return UnmarshallIndexDefn(data)
+}
+
+///////////////////////////////////////////////////////
+//  Public Function : Stability Timestamp
+///////////////////////////////////////////////////////
+
+func (c *MetadataRepo) GetStabilityTimestamps() (*timestampListSerializable, error) {
+
+	lookupName := stabilityTimestampKey()
+	data, err := c.getMeta(lookupName)
+	if err != nil {
+		return nil, err
+	}
+
+	return unmarshallTimestampListSerializable(data)
+}
+
+func (c *MetadataRepo) SetStabilityTimestamps(timestamps *timestampListSerializable) error {
+
+	data, err := marshallTimestampListSerializable(timestamps)
+	if err != nil {
+		return err
+	}
+
+	lookupName := stabilityTimestampKey()
+	return c.setMeta(lookupName, data)
 }
 
 ///////////////////////////////////////////////////////
@@ -480,6 +507,8 @@ func findTypeFromKey(key string) MetadataKind {
 		return KIND_INDEX_INSTANCE_ID
 	} else if isIndexPartitionIdKey(key) {
 		return KIND_INDEX_PARTITION_ID
+	} else if isStabilityTimestampKey(key) {
+		return KIND_STABILITY_TIMESTAMP
 	}
 	return KIND_UNKNOWN
 }
@@ -647,7 +676,7 @@ func globalTopologyKey() string {
 }
 
 func isGlobalTopologyKey(key string) bool {
-	return strings.Contains(key, "GlobalIndexTopology/")
+	return strings.Contains(key, "GlobalIndexTopology")
 }
 
 func marshallGlobalTopology(topology *GlobalTopology) ([]byte, error) {
@@ -671,7 +700,7 @@ func unmarshallGlobalTopology(data []byte) (*GlobalTopology, error) {
 }
 
 ///////////////////////////////////////////////////////
-// package local function : Index Instance Id 
+// package local function : Index Instance Id
 ///////////////////////////////////////////////////////
 
 func (c *MetadataRepo) GetIndexInstanceId() (uint64, error) {
@@ -680,14 +709,14 @@ func (c *MetadataRepo) GetIndexInstanceId() (uint64, error) {
 	data, err := c.getMeta(lookupName)
 	if err != nil {
 		// TODO : Differentiate the case for real error
-		return 0, nil 
+		return 0, nil
 	}
-	
+
 	id, read := binary.Uvarint(data)
 	if read < 0 {
 		return 0, NewError2(ERROR_META_FAIL_TO_PARSE_INT, METADATA_REPO)
 	}
-	
+
 	return id, nil
 }
 
@@ -701,15 +730,15 @@ func (c *MetadataRepo) SetIndexInstanceId(id uint64) error {
 }
 
 func indexInstanceIdKey() string {
-	return "IndexInstanceId" 
+	return "IndexInstanceId"
 }
 
 func isIndexInstanceIdKey(key string) bool {
-	return strings.Contains(key, "IndexInstanceId/")
+	return strings.Contains(key, "IndexInstanceId")
 }
 
 ///////////////////////////////////////////////////////
-// package local function : Index Partition Id 
+// package local function : Index Partition Id
 ///////////////////////////////////////////////////////
 
 func (c *MetadataRepo) GetIndexPartitionId() (uint64, error) {
@@ -718,14 +747,14 @@ func (c *MetadataRepo) GetIndexPartitionId() (uint64, error) {
 	data, err := c.getMeta(lookupName)
 	if err != nil {
 		// TODO : Differentiate the case for real error
-		return 0, nil	
+		return 0, nil
 	}
-	
+
 	id, read := binary.Uvarint(data)
 	if read < 0 {
 		return 0, NewError2(ERROR_META_FAIL_TO_PARSE_INT, METADATA_REPO)
 	}
-	
+
 	return id, nil
 }
 
@@ -739,9 +768,21 @@ func (c *MetadataRepo) SetIndexPartitionId(id uint64) error {
 }
 
 func indexPartitionIdKey() string {
-	return "IndexPartitionId" 
+	return "IndexPartitionId"
 }
 
 func isIndexPartitionIdKey(key string) bool {
-	return strings.Contains(key, "IndexPartitionId/")
+	return strings.Contains(key, "IndexPartitionId")
+}
+
+///////////////////////////////////////////////////////
+// package local function : Stability Timestamp
+///////////////////////////////////////////////////////
+
+func stabilityTimestampKey() string {
+	return fmt.Sprintf("StabilityTimestamp")
+}
+
+func isStabilityTimestampKey(key string) bool {
+	return strings.Contains(key, "StabilityTimestamp")
 }
