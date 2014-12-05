@@ -15,6 +15,7 @@ import "fmt"
 import "io"
 import "net"
 import "time"
+import "encoding/json"
 
 import "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
@@ -28,11 +29,40 @@ var ErrorProtocol = errors.New("queryport.protocol")
 // and handle them. If handler is not interested in receiving any
 // more response it shall return false, else it shall continue
 // until *protobufEncode.StreamEndResponse message is received.
-type ResponseHandler func(resp interface{}) bool
+type ResponseHandler func(resp ResponseReader) bool
+
+// ResponseReader to obtain the actual data returned from server,
+// handlers, should first call Error() and then call GetEntries().
+type ResponseReader interface {
+	// GetEntries returns a list of secondary-key and corresponding
+	// primary-key if returned value is nil, then there are no more
+	// entries for this query.
+	GetEntries() ([]common.SecondaryKey, [][]byte, error)
+
+	// Error returns the error value, if nil there is no error.
+	Error() error
+}
+
+// Remoteaddr string in the shape of "<host:port>"
+type Remoteaddr string
+
+// Inclusion specifier for range queries.
+type Inclusion uint32
+
+const (
+	// Neither does not include low-key and high-key
+	Neither Inclusion = iota
+	// Low includes low-key but does not include high-key
+	Low
+	// High includes high-key but does not include low-key
+	High
+	// Both includes both low-key and high-key
+	Both
+)
 
 // Client structure.
 type Client struct {
-	raddr string
+	raddr Remoteaddr
 	pool  *connectionPool
 	// config params
 	maxPayload         int // TODO: what if it exceeds ?
@@ -46,7 +76,7 @@ type Client struct {
 }
 
 // NewClient instance with `raddr` pointing to queryport server.
-func NewClient(raddr string, config common.Config) (c *Client) {
+func NewClient(raddr Remoteaddr, config common.Config) (c *Client) {
 	t := time.Duration(config["connPoolAvailWaitTimeout"].Int())
 	c = &Client{
 		raddr:              raddr,
@@ -60,7 +90,7 @@ func NewClient(raddr string, config common.Config) (c *Client) {
 		logPrefix:          fmt.Sprintf("[QueryPortClient:%q]", raddr),
 	}
 	c.pool = newConnectionPool(
-		raddr, c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
+		string(raddr), c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
 		c.cpAvailWaitTimeout)
 	common.Infof("%v started ...\n", c.logPrefix)
 	return c
@@ -72,73 +102,84 @@ func (c *Client) Close() {
 	common.Infof("%v ... stopped\n", c.logPrefix)
 }
 
-// Statistics for index range.
-func (c *Client) Statistics(
-	index, bucket string, low, high []byte, equal [][]byte,
-	inclusion uint32) (*protobuf.IndexStatistics, error) {
+// LookupStatistics for a single secondary-key.
+func (c *Client) LookupStatistics(
+	index, bucket string,
+	value common.SecondaryKey) (common.IndexStatistics, error) {
 
-	connectn, err := c.pool.Get()
+	// serialize lookup value.
+	val, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
 	}
-	healthy := true
-	defer c.pool.Return(connectn, healthy)
-
-	conn, pkt := connectn.conn, connectn.pkt
-
-	r := &protobuf.Range{
-		Low:       low,
-		High:      high,
-		Inclusion: proto.Uint32(inclusion),
-	}
-
 	req := &protobuf.StatisticsRequest{
-		Span: &protobuf.Span{
-			Range: r,
-			Equal: equal,
-		},
-		IndexName: proto.String(index),
 		Bucket:    proto.String(bucket),
+		IndexName: proto.String(index),
+		Span:      &protobuf.Span{Equal: [][]byte{val}},
 	}
-	// ---> protobuf.StatisticsRequest
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		msg := "%v Statistics() request transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
-		healthy = false
-		return nil, err
-	}
-
-	timeoutMs := c.readDeadline * time.Millisecond
-	conn.SetReadDeadline(time.Now().Add(timeoutMs))
-	// <--- protobuf.StatisticsResponse
-	resp, err := pkt.Receive(conn)
+	resp, err := c.doRequestResponse(req)
 	if err != nil {
-		msg := "%v Statistics() response transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
-		healthy = false
 		return nil, err
 	}
-
-	conn.SetReadDeadline(time.Now().Add(timeoutMs))
-	// <--- protobuf.StreamEndResponse (skipped)
-	endResp, err := pkt.Receive(conn)
-	if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
-		return nil, ErrorProtocol
-	}
-
 	statResp := resp.(*protobuf.StatisticsResponse)
 	if statResp.GetErr() != nil {
 		err = errors.New(statResp.GetErr().GetError())
 		return nil, err
 	}
-
 	return statResp.GetStats(), nil
 }
 
-// Scan index for a range.
-func (c *Client) Scan(
-	index, bucket string, low, high []byte, equal [][]byte, inclusion uint32,
-	pageSize int64, distinct bool, limit int64, callb ResponseHandler) error {
+// RangeStatistics for index range.
+func (c *Client) RangeStatistics(
+	index, bucket string,
+	low, high common.SecondaryKey,
+	inclusion Inclusion) (common.IndexStatistics, error) {
+
+	// serialize low and high values.
+	l, err := json.Marshal(low)
+	if err != nil {
+		return nil, err
+	}
+	h, err := json.Marshal(high)
+	if err != nil {
+		return nil, err
+	}
+
+	req := &protobuf.StatisticsRequest{
+		Bucket:    proto.String(bucket),
+		IndexName: proto.String(index),
+		Span: &protobuf.Span{
+			Range: &protobuf.Range{
+				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
+			},
+		},
+	}
+	resp, err := c.doRequestResponse(req)
+	if err != nil {
+		return nil, err
+	}
+	statResp := resp.(*protobuf.StatisticsResponse)
+	if statResp.GetErr() != nil {
+		err = errors.New(statResp.GetErr().GetError())
+		return nil, err
+	}
+	return statResp.GetStats(), nil
+}
+
+// Lookup scan index between low and high.
+func (c *Client) Lookup(
+	index, bucket string, values []common.SecondaryKey,
+	distinct bool, limit int64, callb ResponseHandler) error {
+
+	// serialize lookup value.
+	equal := make([][]byte, 0, len(values))
+	for _, value := range values {
+		val, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		equal = append(equal, val)
+	}
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -149,12 +190,66 @@ func (c *Client) Scan(
 
 	conn, pkt := connectn.conn, connectn.pkt
 
-	incl := proto.Uint32(inclusion)
-	r := &protobuf.Range{Low: low, High: high, Inclusion: incl}
 	req := &protobuf.ScanRequest{
-		Span:      &protobuf.Span{Range: r, Equal: equal},
+		Span:      &protobuf.Span{Equal: equal},
 		Distinct:  proto.Bool(distinct),
-		PageSize:  proto.Int64(pageSize),
+		PageSize:  proto.Int64(1),
+		Limit:     proto.Int64(limit),
+		IndexName: proto.String(index),
+		Bucket:    proto.String(bucket),
+	}
+	// ---> protobuf.ScanRequest
+	if err := c.sendRequest(conn, pkt, req); err != nil {
+		msg := "%v Scan() request transport failed `%v`\n"
+		common.Errorf(msg, c.logPrefix, err)
+		healthy = false
+		return err
+	}
+
+	cont := true
+	for cont {
+		// <--- protobuf.ResponseStream
+		cont, healthy, err = c.streamResponse(conn, pkt, callb)
+		if err != nil {
+			msg := "%v Scan() response failed `%v`\n"
+			common.Errorf(msg, c.logPrefix, err)
+		}
+	}
+	return nil
+}
+
+// Range scan index between low and high.
+func (c *Client) Range(
+	index, bucket string, low, high common.SecondaryKey, inclusion Inclusion,
+	distinct bool, limit int64, callb ResponseHandler) error {
+
+	// serialize low and high values.
+	l, err := json.Marshal(low)
+	if err != nil {
+		return err
+	}
+	h, err := json.Marshal(high)
+	if err != nil {
+		return err
+	}
+
+	connectn, err := c.pool.Get()
+	if err != nil {
+		return err
+	}
+	healthy := true
+	defer c.pool.Return(connectn, healthy)
+
+	conn, pkt := connectn.conn, connectn.pkt
+
+	req := &protobuf.ScanRequest{
+		Span: &protobuf.Span{
+			Range: &protobuf.Range{
+				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
+			},
+		},
+		Distinct:  proto.Bool(distinct),
+		PageSize:  proto.Int64(1),
 		Limit:     proto.Int64(limit),
 		IndexName: proto.String(index),
 		Bucket:    proto.String(bucket),
@@ -180,8 +275,8 @@ func (c *Client) Scan(
 }
 
 // ScanAll for full table scan.
-func (c *Client) ScanAll(index, bucket string, pageSize int64, limit int64,
-	callb func(interface{}) bool) error {
+func (c *Client) ScanAll(
+	index, bucket string, limit int64, callb ResponseHandler) error {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -193,7 +288,7 @@ func (c *Client) ScanAll(index, bucket string, pageSize int64, limit int64,
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanAllRequest{
-		PageSize:  proto.Int64(pageSize),
+		PageSize:  proto.Int64(1),
 		Limit:     proto.Int64(limit),
 		IndexName: proto.String(index),
 		Bucket:    proto.String(bucket),
@@ -217,6 +312,44 @@ func (c *Client) ScanAll(index, bucket string, pageSize int64, limit int64,
 	return nil
 }
 
+func (c *Client) doRequestResponse(req interface{}) (interface{}, error) {
+	connectn, err := c.pool.Get()
+	if err != nil {
+		return nil, err
+	}
+	healthy := true
+	defer c.pool.Return(connectn, healthy)
+
+	conn, pkt := connectn.conn, connectn.pkt
+
+	// ---> protobuf.*Request
+	if err := c.sendRequest(conn, pkt, req); err != nil {
+		msg := "%v Statistics() request transport failed `%v`\n"
+		common.Errorf(msg, c.logPrefix, err)
+		healthy = false
+		return nil, err
+	}
+
+	timeoutMs := c.readDeadline * time.Millisecond
+	conn.SetReadDeadline(time.Now().Add(timeoutMs))
+	// <--- protobuf.*Response
+	resp, err := pkt.Receive(conn)
+	if err != nil {
+		msg := "%v Statistics() response transport failed `%v`\n"
+		common.Errorf(msg, c.logPrefix, err)
+		healthy = false
+		return nil, err
+	}
+
+	conn.SetReadDeadline(time.Now().Add(timeoutMs))
+	// <--- protobuf.StreamEndResponse (skipped) TODO: knock this off.
+	endResp, err := pkt.Receive(conn)
+	if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
+		return nil, ErrorProtocol
+	}
+	return resp, nil
+}
+
 func (c *Client) sendRequest(
 	conn net.Conn, pkt *transport.TransportPacket, req interface{}) (err error) {
 
@@ -231,28 +364,32 @@ func (c *Client) streamResponse(
 	callb ResponseHandler) (cont bool, healthy bool, err error) {
 
 	var resp interface{}
+	var endResp *protobuf.StreamEndResponse
 	var finish bool
 
 	laddr := conn.LocalAddr()
 	timeoutMs := c.readDeadline * time.Millisecond
 	conn.SetReadDeadline(time.Now().Add(timeoutMs))
-	resp, err = pkt.Receive(conn)
-	if err != nil {
-		callb(err) // callback with error
+	if resp, err = pkt.Receive(conn); err != nil {
+		resp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(resp) // callback with error
 		cont, healthy = false, false
 		if err != io.EOF {
 			msg := "%v connection %q response transport failed `%v`\n"
 			common.Errorf(msg, c.logPrefix, laddr, err)
 		}
 
-	} else if _, finish = resp.(*protobuf.StreamEndResponse); finish {
+	} else if endResp, finish = resp.(*protobuf.StreamEndResponse); finish {
 		msg := "%v connection %q received StreamEndResponse"
 		common.Debugf(msg, c.logPrefix, laddr)
-		callb(resp) // callback most likely return true
+		callb(endResp) // callback most likely return true
 		cont, healthy = false, true
 
 	} else {
-		cont = callb(resp)
+		streamResp := resp.(*protobuf.ResponseStream)
+		cont = callb(streamResp)
 		healthy = true
 	}
 

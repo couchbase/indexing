@@ -298,19 +298,21 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 		text = append(text, ts...)
 
 	case TypeString:
-		text = append(text, '"')
-		ts, remaining, err = suffixDecodeString(code[1:], text[1:])
+		s := make([]byte, 0)
+		s, remaining, err = suffixDecodeString(code[1:], s)
 		if err == nil {
-			text = text[:len(text)+len(ts)]
-			text = append(text, '"')
+			s, err = json.Marshal(string(s))
+			if err == nil {
+				text = append(text, s...)
+			}
 		}
 
 	case TypeArray:
 		var l int
-		text = append(text, '[', ' ')
+		text = append(text, '[')
 		if codec.arrayLenPrefix {
 			datum, code = getDatum(code[1:])
-			_, ts := DecodeInt(datum[1:], text[2:])
+			_, ts := DecodeInt(datum[1:], text[1:])
 			l, err = strconv.Atoi(string(ts))
 			if err == nil {
 				for ; l > 0; l-- {
@@ -321,7 +323,7 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 					}
 					text = text[:ln+len(ts)]
 					if l > 1 {
-						text = append(text, ',', ' ')
+						text = append(text, ',')
 					}
 				}
 			}
@@ -330,7 +332,7 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 			code = code[1:]
 			for code[0] != Terminator {
 				if comma {
-					text = append(text, ',', ' ')
+					text = append(text, ',')
 				}
 				ln := len(text)
 				ts, code, err = codec.code2json(code, text[ln:])
@@ -342,15 +344,15 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 			}
 		}
 		remaining = code[1:] // remove Terminator
-		text = append(text, ' ', ']')
+		text = append(text, ']')
 
 	case TypeObj:
 		var l int
 		var key, value []byte
-		text = append(text, '{', ' ')
+		text = append(text, '{')
 		if codec.propertyLenPrefix {
 			datum, code = getDatum(code[1:])
-			_, ts := DecodeInt(datum[1:], text[2:])
+			_, ts := DecodeInt(datum[1:], text[1:])
 			l, err = strconv.Atoi(string(ts))
 			if err == nil {
 				for ; l > 0; l-- {
@@ -361,7 +363,7 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 						break
 					}
 					text = text[:ln+len(key)]
-					text = append(text, ' ', ':', ' ')
+					text = append(text, ':')
 					// decode value
 					ln = len(text)
 					key, code, err = codec.code2json(code, text[ln:])
@@ -370,7 +372,7 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 					}
 					text = text[:ln+len(key)]
 					if l > 1 {
-						text = append(text, ',', ' ')
+						text = append(text, ',')
 					}
 				}
 			}
@@ -379,7 +381,7 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 			code = code[1:]
 			for code[0] != Terminator {
 				if comma {
-					text = append(text, ',', ' ')
+					text = append(text, ',')
 				}
 				// decode key
 				ln := len(text)
@@ -388,7 +390,7 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 					break
 				}
 				text = text[:ln+len(key)]
-				text = append(text, ' ', ':', ' ')
+				text = append(text, ':')
 				// decode value
 				ln = len(text)
 				value, code, err = codec.code2json(code, text[ln:])
@@ -400,7 +402,7 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 			}
 		}
 		remaining = code[1:] // remove Terminator
-		text = append(text, ' ', '}')
+		text = append(text, '}')
 	}
 	return text, remaining, err
 }

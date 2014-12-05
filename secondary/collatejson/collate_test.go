@@ -89,8 +89,8 @@ func init() {
 
 func TestCodecLength(t *testing.T) {
 	var samples = [][2]string{
-		{"[  ]", `\b\a0\x00\x00`},
-		{`[ null, true, 10, 10.2, [  ], { "key" : {  } } ]`,
+		{"[]", `\b\a0\x00\x00`},
+		{`[null,true,10,10.2,[],{"key":{}}]`,
 			`\b\a>6\x00\x02\x00\x04\x00\x05>>21-\x00\x05>>2102-` +
 				`\x00\b\a0\x00\x00\t\a>1\x00\x06key\x00\x00\t\a0\x00\x00\x00\x00`},
 	}
@@ -120,10 +120,26 @@ func TestCodecLength(t *testing.T) {
 	}
 }
 
+func TestSpecialString(t *testing.T) {
+	var err error
+
+	jsoncodec := NewCodec(16)
+	data := []byte(`"\n"`)
+	code := make([]byte, 0, 1024)
+	code, err = jsoncodec.Encode(data, code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := make([]byte, 0, 1024)
+	if text, err = jsoncodec.Decode(code, text); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCodecNoLength(t *testing.T) {
 	var samples = [][2]string{
-		{"[  ]", `\b\x00`},
-		{`[ null, true, 10, 10.2, [  ], { "key" : {  } } ]`,
+		{"[]", `\b\x00`},
+		{`[null,true,10,10.2,[],{"key":{}}]`,
 			`\b\x02\x00\x04\x00\x05>>21-\x00\x05>>2102-\x00` +
 				`\b\x00\t\x06key\x00\x00\t\x00\x00\x00`},
 	}

@@ -580,10 +580,10 @@ func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
 		case queryStats:
 			r = &protobuf.StatisticsResponse{
 				Stats: &protobuf.IndexStatistics{
-					Count:      proto.Uint64(0),
-					UniqueKeys: proto.Uint64(0),
-					Min:        []byte{},
-					Max:        []byte{},
+					KeysCount:       proto.Uint64(0),
+					UniqueKeysCount: proto.Uint64(0),
+					KeyMin:          []byte{},
+					KeyMax:          []byte{},
 				},
 				Err: protoErr,
 			}
@@ -601,15 +601,15 @@ func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
 			entry := ProtoIndexEntryFromKey(k, sd.isPrimary)
 			entries = append(entries, entry)
 		}
-		r = &protobuf.ResponseStream{Entries: entries}
+		r = &protobuf.ResponseStream{IndexEntries: entries}
 	case statsResponse:
 		stats := payload.(statsResponse)
 		r = &protobuf.StatisticsResponse{
 			Stats: &protobuf.IndexStatistics{
-				Count:      proto.Uint64(stats.count),
-				UniqueKeys: proto.Uint64(stats.unique),
-				Min:        stats.min.Raw(),
-				Max:        stats.max.Raw(),
+				KeysCount:       proto.Uint64(stats.count),
+				UniqueKeysCount: proto.Uint64(stats.unique),
+				KeyMin:          stats.min.Raw(),
+				KeyMax:          stats.max.Raw(),
 			},
 		}
 	}

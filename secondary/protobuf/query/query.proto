@@ -53,7 +53,7 @@ message EndStreamRequest {
 }
 
 message ResponseStream {
-    repeated IndexEntry entries = 1;
+    repeated IndexEntry indexEntries = 1;
     optional Error      err     = 2;
 }
 
@@ -66,6 +66,7 @@ message StreamEndResponse {
 
 message Span {
     required Range  range = 1;
+    // TODO: may we should rename `equal` to `equals` ?
     repeated bytes  equal = 2;
 }
 
@@ -82,9 +83,9 @@ message IndexEntry {
 
 // Statistics of a given index.
 message IndexStatistics {
-    required uint64 count      = 1;
-    required uint64 uniqueKeys = 2;
-    required bytes  min        = 3;
-    required bytes  max        = 4;
+    required uint64 keysCount       = 1;
+    required uint64 uniqueKeysCount = 2;
+    required bytes  keyMin          = 3;
+    required bytes  keyMax          = 4;
 }
 

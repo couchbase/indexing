@@ -15,14 +15,14 @@ import "github.com/couchbaselabs/goprotobuf/proto"
 
 var testStatisticsResponse = &protobuf.StatisticsResponse{
 	Stats: &protobuf.IndexStatistics{
-		Count:      proto.Uint64(100),
-		UniqueKeys: proto.Uint64(100),
-		Min:        []byte(`"aaaaa"`),
-		Max:        []byte(`"zzzzz"`),
+		KeysCount:       proto.Uint64(100),
+		UniqueKeysCount: proto.Uint64(100),
+		KeyMin:          []byte(`"aaaaa"`),
+		KeyMax:          []byte(`"zzzzz"`),
 	},
 }
 var testResponseStream = &protobuf.ResponseStream{
-	Entries: []*protobuf.IndexEntry{
+	IndexEntries: []*protobuf.IndexEntry{
 		&protobuf.IndexEntry{
 			EntryKey: []byte(`["aaaaa"]`), PrimaryKey: []byte("key1"),
 		},
@@ -95,7 +95,7 @@ func main() {
 func loopback() {
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 	config.SetValue("poolSize", 10).SetValue("poolOverflow", options.par)
-	client := queryc.NewClient(options.server, config)
+	client := queryc.NewClient(queryc.Remoteaddr(options.server), config)
 	quitch := make(chan int)
 	for i := 0; i < options.par; i++ {
 		t := time.After(time.Duration(options.seconds) * time.Second)
@@ -123,9 +123,10 @@ loop:
 			break loop
 
 		default:
-			client.Scan(
-				"idx", "bkt", []byte("aaaa"), []byte("zzzz"), [][]byte{}, 0, 100, true, 1000,
-				func(val interface{}) bool {
+			l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
+			client.Range(
+				"idx", "bkt", l, h, 100, true, 1000,
+				func(val queryc.ResponseReader) bool {
 					switch v := val.(type) {
 					case *protobuf.ResponseStream:
 						count++

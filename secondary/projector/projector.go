@@ -3,6 +3,7 @@ package projector
 import "errors"
 import "fmt"
 import "sync"
+import "strings"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -40,16 +41,27 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 		name:        config["name"].String(),
 		clusterAddr: config["clusterAddr"].String(),
 		kvset:       config["kvAddrs"].Strings(),
-		adminport:   config["adminport.listenAddr"].String(),
 		topics:      make(map[string]*Feed),
 		maxvbs:      maxvbs,
 		config:      config,
 	}
-
 	p.logPrefix = fmt.Sprintf("[%s(%s)]", p.name, p.kvset)
+	cluster := p.clusterAddr
+	if !strings.HasPrefix(p.clusterAddr, "http://") {
+		cluster = "http://" + cluster
+	}
+
+	cinfo := c.NewClusterInfoCache(cluster, "default" /*pool*/)
+	if err := cinfo.Fetch(); err != nil {
+		c.Errorf("%v cluster-info: %v", p.logPrefix, err)
+	}
+	nodeId := cinfo.GetCurrentNode()
+	p.adminport, _ = cinfo.GetServiceAddress(nodeId, "projector")
+	p.logPrefix = fmt.Sprintf("[%s(%s)]", p.name, p.adminport)
 
 	apConfig := config.SectionConfig("adminport.", true)
 	apConfig = apConfig.SetValue("name", p.name+"-adminport")
+	apConfig = apConfig.SetValue("listenAddr", p.adminport)
 	reqch := make(chan ap.Request)
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
 

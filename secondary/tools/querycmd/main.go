@@ -1,9 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
-
+	"log"
 	"os"
 	"strings"
 
@@ -46,8 +47,8 @@ func parseArgs() {
 	flag.StringVar(&opType, "type", "scanAll", "Index command (scan|stats|scanAll|create|drop|list)")
 	flag.StringVar(&indexName, "index", "", "Index name")
 	flag.StringVar(&bucket, "bucket", "default", "Bucket name")
-	flag.StringVar(&low, "low", "", "Range: [low]")
-	flag.StringVar(&high, "high", "", "Range: [high]")
+	flag.StringVar(&low, "low", "[]", "Range: [low]")
+	flag.StringVar(&high, "high", "[]", "Range: [high]")
 	flag.StringVar(&equal, "equal", "", "Range: [key]")
 	flag.UintVar(&incl, "incl", 0, "Range: 0|1|2|3")
 	flag.Int64Var(&limit, "limit", 10, "Row limit")
@@ -66,8 +67,8 @@ func usage() {
 
 func main() {
 	var err error
-	var statsResp *protobuf.IndexStatistics
-	var keys [][]byte
+	var statsResp c.IndexStatistics
+	var keys []interface{}
 
 	parseArgs()
 
@@ -133,20 +134,37 @@ func main() {
 			os.Exit(1)
 		}
 		config := c.SystemConfig.SectionConfig("queryport.client.", true)
-		client := queryclient.NewClient(server, config)
+		client := queryclient.NewClient(queryclient.Remoteaddr(server), config)
 		if equal != "" {
-			keys = append(keys, []byte(equal))
+			keys = arg2key([]byte(equal))
 		}
 
+		inclusion := queryclient.Inclusion(incl)
 		switch opType {
 		case "scan":
-			err = client.Scan(indexName, bucket, []byte(low), []byte(high), keys, uint32(incl), pageSize, false, limit, scanCallback)
+			if keys == nil {
+				l := c.SecondaryKey(arg2key([]byte(low)))
+				h := c.SecondaryKey(arg2key([]byte(high)))
+				err = client.Range(indexName, bucket, l, h, inclusion, false, limit, scanCallback)
+
+			} else {
+				err = client.Lookup(indexName, bucket, []c.SecondaryKey{keys}, false, limit, scanCallback)
+			}
 		case "scanAll":
-			err = client.ScanAll(indexName, bucket, pageSize, limit, scanCallback)
+			err = client.ScanAll(indexName, bucket, limit, scanCallback)
 		case "stats":
-			statsResp, err = client.Statistics(indexName, bucket, []byte(low), []byte(high), keys, uint32(incl))
-			if err == nil {
-				fmt.Println("Stats: ", statsResp)
+			if keys == nil {
+				l := c.SecondaryKey(arg2key([]byte(low)))
+				h := c.SecondaryKey(arg2key([]byte(high)))
+				statsResp, err = client.RangeStatistics(indexName, bucket, l, h, inclusion)
+				if err == nil {
+					fmt.Println("Stats: ", statsResp)
+				}
+			} else {
+				statsResp, err = client.LookupStatistics(indexName, bucket, keys)
+				if err == nil {
+					fmt.Println("Stats: ", statsResp)
+				}
 			}
 		}
 
@@ -158,7 +176,7 @@ func main() {
 	}
 }
 
-func scanCallback(res interface{}) bool {
+func scanCallback(res queryclient.ResponseReader) bool {
 	switch r := res.(type) {
 	case *protobuf.ResponseStream:
 		fmt.Println("StreamResponse: ", res.(*protobuf.ResponseStream).String())
@@ -171,4 +189,13 @@ func scanCallback(res interface{}) bool {
 func printIndexInfo(info queryclient.IndexInfo) {
 	fmt.Printf("Index:%s/%s, Id:%s, Using:%s, Exprs:%v, isPrimary:%v\n",
 		info.Name, info.Bucket, info.DefnID, info.Using, info.SecExprs, info.IsPrimary)
+}
+
+func arg2key(arg []byte) []interface{} {
+	var key []interface{}
+	if err := json.Unmarshal(arg, &key); err != nil {
+		log.Fatal(err)
+	}
+
+	return key
 }

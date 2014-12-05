@@ -111,11 +111,6 @@ var SystemConfig = Config{
 		"human readable name for this adminport, must be supplied",
 		"projector.adminport",
 	},
-	"projector.adminport.listenAddr": ConfigValue{
-		"localhost:8888",
-		"http bind address for this projector's adminport",
-		"localhost:8888",
-	},
 	"projector.adminport.urlPrefix": ConfigValue{
 		"/adminport/",
 		"url prefix (script-path) for adminport used by projector",

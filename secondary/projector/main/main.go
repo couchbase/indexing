@@ -64,7 +64,6 @@ func main() {
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	config := c.SystemConfig.SectionConfig("projector.", true)
 	config.SetValue("clusterAddr", cluster)
-	config.SetValue("adminport.listenAddr", options.adminport)
 	epfactory := NewEndpointFactory(maxvbs, config)
 	config.SetValue("routerEndpointFactory", epfactory)
 	config.SetValue("colocate", options.colocate)
