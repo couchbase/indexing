@@ -47,8 +47,8 @@ func parseArgs() {
 	flag.StringVar(&opType, "type", "scanAll", "Index command (scan|stats|scanAll|create|drop|list)")
 	flag.StringVar(&indexName, "index", "", "Index name")
 	flag.StringVar(&bucket, "bucket", "default", "Bucket name")
-	flag.StringVar(&low, "low", "", "Range: [low]")
-	flag.StringVar(&high, "high", "", "Range: [high]")
+	flag.StringVar(&low, "low", "[]", "Range: [low]")
+	flag.StringVar(&high, "high", "[]", "Range: [high]")
 	flag.StringVar(&equal, "equal", "", "Range: [key]")
 	flag.UintVar(&incl, "incl", 0, "Range: 0|1|2|3")
 	flag.Int64Var(&limit, "limit", 10, "Row limit")
@@ -192,13 +192,10 @@ func printIndexInfo(info queryclient.IndexInfo) {
 }
 
 func arg2key(arg []byte) []interface{} {
-	var key interface{}
+	var key []interface{}
 	if err := json.Unmarshal(arg, &key); err != nil {
 		log.Fatal(err)
 	}
-	skey, ok := key.([]interface{})
-	if ok {
-		return skey
-	}
-	return []interface{}{skey}
+
+	return key
 }

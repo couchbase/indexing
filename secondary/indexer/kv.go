@@ -43,7 +43,7 @@ func NewKey(data []byte) (Key, error) {
 
 	key.raw = data
 
-	if len(data) == 0 {
+	if bytes.Compare([]byte("[]"), data) == 0 || len(data) == 0 {
 		key.encoded = nil
 		return key, nil
 	}
