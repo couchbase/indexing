@@ -84,14 +84,18 @@ func main() {
 
 		client := queryclient.NewClusterClient(server)
 		var secExprs []string
-		fields := strings.Split(fields, ",")
-		for _, field := range fields {
-			expr, err := n1ql.ParseExpression(field)
-			if err != nil {
-				fmt.Printf("Error occured: Invalid field (%v) %v ", field, err)
-			}
 
-			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
+		if fields != "" {
+			fields := strings.Split(fields, ",")
+			for _, field := range fields {
+				expr, err := n1ql.ParseExpression(field)
+				if err != nil {
+					fmt.Printf("Error occured: Invalid field (%v) %v\n", field, err)
+					os.Exit(1)
+				}
+
+				secExprs = append(secExprs, expression.NewStringer().Visit(expr))
+			}
 		}
 
 		info, err := client.CreateIndex(indexName, bucket, using, exprType, partnExp, where, secExprs, isPrimary)
