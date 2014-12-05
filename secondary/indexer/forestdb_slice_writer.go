@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
+	"sync"
 	"time"
 )
 
@@ -95,18 +96,22 @@ type fdbSlice struct {
 	name string
 	id   SliceId //slice id
 
-	dbfile *forestdb.File
-	meta   *forestdb.KVStore   // handle for index meta
-	main   []*forestdb.KVStore // handle for forward index
-	back   []*forestdb.KVStore // handle for reverse index
+	refCount int
+	lock     sync.RWMutex
+	dbfile   *forestdb.File
+	meta     *forestdb.KVStore   // handle for index meta
+	main     []*forestdb.KVStore // handle for forward index
+	back     []*forestdb.KVStore // handle for reverse index
 
 	config *forestdb.Config
 
 	idxDefnId common.IndexDefnId
 	idxInstId common.IndexInstId
 
-	status   SliceStatus
-	isActive bool
+	status        SliceStatus
+	isActive      bool
+	isSoftDeleted bool
+	isSoftClosed  bool
 
 	sc SnapshotContainer //snapshot container
 
@@ -123,6 +128,28 @@ type fdbSlice struct {
 	//captured by the stats library
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
+}
+
+func (fdb *fdbSlice) IncrRef() {
+	fdb.lock.Lock()
+	defer fdb.lock.Unlock()
+
+	fdb.refCount++
+}
+
+func (fdb *fdbSlice) DecrRef() {
+	fdb.lock.Lock()
+	defer fdb.lock.Unlock()
+
+	fdb.refCount--
+	if fdb.refCount == 0 {
+		if fdb.isSoftClosed {
+			tryCloseFdbSlice(fdb)
+		}
+		if fdb.isSoftDeleted {
+			tryDeleteFdbSlice(fdb)
+		}
+	}
 }
 
 //Insert will insert the given key/value pair from slice.
@@ -367,7 +394,7 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 
 	}
 
-	s := &fdbSnapshot{id: fdb.id,
+	s := &fdbSnapshot{slice: fdb,
 		idxDefnId: fdb.idxDefnId,
 		idxInstId: fdb.idxInstId,
 		main:      fdb.main[0],
@@ -508,8 +535,9 @@ func (fdb *fdbSlice) checkAllWorkersDone() bool {
 	return true
 }
 
-//Close the db. Should be able to reopen after this operation
-func (fdb *fdbSlice) Close() error {
+func (fdb *fdbSlice) Close() {
+	fdb.lock.Lock()
+	defer fdb.lock.Unlock()
 
 	common.Infof("ForestDBSlice::Close \n\tClosing Slice Id %v, IndexInstId %v, "+
 		"IndexDefnId %v", fdb.idxInstId, fdb.idxDefnId, fdb.id)
@@ -520,38 +548,26 @@ func (fdb *fdbSlice) Close() error {
 		<-fdb.stopCh[i]
 	}
 
-	//close the main index
-	if fdb.main[0] != nil {
-		fdb.main[0].Close()
+	if fdb.refCount > 0 {
+		fdb.isSoftClosed = true
+	} else {
+		tryCloseFdbSlice(fdb)
 	}
-	//close the back index
-	if fdb.back[0] != nil {
-		fdb.back[0].Close()
-	}
-
-	if fdb.meta != nil {
-		fdb.meta.Close()
-	}
-
-	fdb.dbfile.Close()
-	return nil
 }
 
 //Destroy removes the database file from disk.
 //Slice is not recoverable after this.
-func (fdb *fdbSlice) Destroy() error {
+func (fdb *fdbSlice) Destroy() {
+	fdb.lock.Lock()
+	defer fdb.lock.Unlock()
 
-	common.Infof("ForestDBSlice::Destroy \n\tDestroying Slice Id %v, IndexInstId %v, "+
-		"IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
-
-	if err := forestdb.Destroy(fdb.name, fdb.config); err != nil {
-
-		common.Errorf("ForestDBSlice::Destroy \n\t Error Destroying  Slice Id %v, "+
-			"IndexInstId %v, IndexDefnId %v. Error %v", fdb.id, fdb.idxInstId, fdb.idxDefnId, err)
-		return err
+	if fdb.refCount > 0 {
+		common.Infof("ForestDBSlice::Destroy \n\tSoftdeleted Slice Id %v, IndexInstId %v, "+
+			"IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
+		fdb.isSoftDeleted = true
+	} else {
+		tryDeleteFdbSlice(fdb)
 	}
-
-	return nil
 }
 
 //Id returns the Id for this Slice
@@ -639,4 +655,31 @@ func (fdb *fdbSlice) String() string {
 
 	return str
 
+}
+
+func tryDeleteFdbSlice(fdb *fdbSlice) {
+	common.Infof("ForestDBSlice::Destroy \n\tDestroying Slice Id %v, IndexInstId %v, "+
+		"IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
+
+	if err := forestdb.Destroy(fdb.name, fdb.config); err != nil {
+		common.Errorf("ForestDBSlice::Destroy \n\t Error Destroying  Slice Id %v, "+
+			"IndexInstId %v, IndexDefnId %v. Error %v", fdb.id, fdb.idxInstId, fdb.idxDefnId, err)
+	}
+}
+
+func tryCloseFdbSlice(fdb *fdbSlice) {
+	//close the main index
+	if fdb.main[0] != nil {
+		fdb.main[0].Close()
+	}
+	//close the back index
+	if fdb.back[0] != nil {
+		fdb.back[0].Close()
+	}
+
+	if fdb.meta != nil {
+		fdb.meta.Close()
+	}
+
+	fdb.dbfile.Close()
 }

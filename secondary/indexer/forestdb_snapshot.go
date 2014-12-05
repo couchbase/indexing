@@ -18,7 +18,7 @@ import (
 )
 
 type fdbSnapshot struct {
-	id SliceId //slice id
+	slice Slice
 
 	main       *forestdb.KVStore // handle for forward index
 	back       *forestdb.KVStore // handle for reverse index
@@ -54,6 +54,7 @@ func (s *fdbSnapshot) Open() error {
 				"Opening Back DB Snapshot %v", err)
 			return err
 		}
+		s.slice.IncrRef()
 		s.refCount = 1
 	}
 
@@ -74,7 +75,7 @@ func (s *fdbSnapshot) IsOpen() bool {
 }
 
 func (s *fdbSnapshot) Id() SliceId {
-	return s.id
+	return s.slice.Id()
 }
 
 func (s *fdbSnapshot) IndexInstId() common.IndexInstId {
@@ -111,6 +112,7 @@ func (s *fdbSnapshot) Close() error {
 		s.refCount--
 		if s.refCount == 0 {
 			//close the main index
+			defer s.slice.DecrRef()
 			if s.main != nil {
 				err := s.main.Close()
 				if err != nil {
@@ -144,7 +146,7 @@ func (s *fdbSnapshot) Close() error {
 func (s *fdbSnapshot) String() string {
 
 	str := fmt.Sprintf("Index: %v ", s.idxInstId)
-	str += fmt.Sprintf("SliceId: %v ", s.id)
+	str += fmt.Sprintf("SliceId: %v ", s.slice.Id())
 	str += fmt.Sprintf("MainSeqNum: %v ", s.mainSeqNum)
 	str += fmt.Sprintf("BackSeqNum: %v ", s.backSeqNum)
 	str += fmt.Sprintf("TS: %v ", s.ts)

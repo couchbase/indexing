@@ -654,9 +654,9 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 
 		//close all the slices
 		for _, slice := range sc.GetAllSlices() {
-			snapContainer := slice.GetSnapshotContainer()
+			//snapContainer := slice.GetSnapshotContainer()
 			//discard all the snapshots for this slice
-			snapContainer.RemoveAll()
+			// snapContainer.RemoveAll()
 
 			//close the slice
 			slice.Close()

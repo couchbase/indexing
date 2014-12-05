@@ -185,12 +185,10 @@ func (s *mockSlice) RollbackToZero() error {
 	return s.err
 }
 
-func (s *mockSlice) Close() error {
-	return s.err
+func (s *mockSlice) Close() {
 }
 
-func (s *mockSlice) Destroy() error {
-	return s.err
+func (s *mockSlice) Destroy() {
 }
 
 func (s *mockSlice) SetTimestamp(ts *c.TsVbuuid) error {
@@ -200,6 +198,12 @@ func (s *mockSlice) SetTimestamp(ts *c.TsVbuuid) error {
 
 func (s *mockSlice) Timestamp() *c.TsVbuuid {
 	return s.ts
+}
+
+func (s *mockSlice) IncrRef() {
+}
+
+func (s *mockSlice) DecrRef() {
 }
 
 type mockSnapshot struct {
