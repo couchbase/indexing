@@ -356,7 +356,7 @@ func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 				idx.Defn.Bucket)
 		} else {
 			tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] -= 1
-			common.Debugf("Timekeeper::addIndextoStream IndexCount %v", tk.streamBucketIndexCountMap)
+			common.Debugf("Timekeeper::removeIndexFromStream IndexCount %v", tk.streamBucketIndexCountMap)
 			if tk.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
 				tk.cleanupBucketFromStream(streamId, idx.Defn.Bucket)
 			}
@@ -389,7 +389,8 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	if tk.streamState[streamId] == STREAM_PREPARE_RECOVERY ||
 		tk.streamState[streamId] == STREAM_INACTIVE {
 		common.Debugf("Timekeeper::handleSync \n\tIgnoring Sync Marker "+
-			"for StreamId %v. Current State %v", streamId, tk.streamState[streamId])
+			"for StreamId %v. Bucket %v. Current State %v", streamId, meta.bucket,
+			tk.streamState[streamId])
 		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
@@ -735,7 +736,7 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 	if tk.streamState[streamId] == STREAM_PREPARE_RECOVERY ||
 		tk.streamState[streamId] == STREAM_INACTIVE {
 		common.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker "+
-			"for StreamId %v State %v", streamId, tk.streamState[streamId])
+			"for StreamId %v. Bucket %v. State %v", streamId, meta.bucket, tk.streamState[streamId])
 		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
@@ -758,7 +759,8 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 		common.Tracef("Timekeeper::handleSnapshotMarker \n\tUpdated TS %v", ts)
 	} else {
 		common.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker. "+
-			"Unknown Type %v.", snapshot.snapType)
+			"Unknown Type %v. Bucket %v. StreamId %v", snapshot.snapType, meta.bucket,
+			streamId)
 	}
 
 	tk.supvCmdch <- &MsgSuccess{}
@@ -801,7 +803,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 	//if there are no indexes for this bucket and stream, ignore
 	if c, ok := tk.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
 		common.Warnf("Timekeeper::handleStreamBegin \n\tIgnore StreamBegin for StreamId %v "+
-			"Bucket %v. IndexCount %v. ", streamId, tk.streamState[streamId], c)
+			"Bucket %v. IndexCount %v. ", streamId, meta.bucket, c)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
@@ -922,7 +924,7 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 	//if there are no indexes for this bucket and stream, ignore
 	if c, ok := tk.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
 		common.Warnf("Timekeeper::handleStreamEnd \n\tIgnore StreamEnd for StreamId %v "+
-			"Bucket %v. IndexCount %v. ", streamId, tk.streamState[streamId], c)
+			"Bucket %v. IndexCount %v. ", streamId, meta.bucket, c)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
@@ -1300,10 +1302,6 @@ func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 				streamId: streamId,
 				bucket:   bucket}
 
-			common.Debugf("Timekeeper::checkCatchupStreamReadyToMerge \n\t Stream %v "+
-				"State Changed to INACTIVE", streamId)
-
-			tk.streamState[streamId] = STREAM_INACTIVE
 			tk.supvCmdch <- &MsgSuccess{}
 			return true
 		}
