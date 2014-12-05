@@ -98,10 +98,11 @@ loop:
 				break loop
 			}
 
-			if msg.GetMsgType() == STORAGE_TS_REQUEST {
-				req := msg.(*MsgTSRequest)
+			if msg.GetMsgType() == STORAGE_INDEX_SNAP_REQUEST {
+				req := msg.(*MsgIndexSnapRequest)
 				ch := req.GetReplyChannel()
-				ch <- s.scanTS
+				// TODO: Fix tests
+				ch <- nil
 			}
 		}
 	}

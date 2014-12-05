@@ -394,7 +394,6 @@ func (s *scanCoordinator) requestHandler(
 	quitch <-chan interface{}) {
 
 	var indexInst *common.IndexInst
-	var partnInstMap *PartitionInstMap
 
 	p, err := s.parseScanParams(req)
 	if err == ErrUnsupportedRequest {
@@ -411,7 +410,7 @@ func (s *scanCoordinator) requestHandler(
 	}
 
 	if err == nil {
-		indexInst, partnInstMap, err = s.getIndexDS(p.indexName, p.bucket)
+		indexInst, err = s.findIndexInstance(p.indexName, p.bucket)
 	}
 
 	if err == nil && indexInst.State != common.INDEX_STATE_ACTIVE {
@@ -438,35 +437,41 @@ func (s *scanCoordinator) requestHandler(
 	// will block wait.
 	// This mechanism can be used to implement RYOW.
 
-	tsch := make(chan interface{}, 1)
-	tsReqMsg := &MsgTSRequest{
+	snapResch := make(chan interface{}, 1)
+	snapReqMsg := &MsgIndexSnapRequest{
 		ts:        sd.p.ts,
-		respch:    tsch,
+		respch:    snapResch,
 		idxInstId: indexInst.InstId,
 	}
 
 	// Block wait until a ts is available for fullfilling the request
-	s.supvMsgch <- tsReqMsg
-	msg := <-tsch
+	s.supvMsgch <- snapReqMsg
+	msg := <-snapResch
+
+	var snap IndexSnapshot
+	var ts *common.TsVbuuid
 
 	switch msg.(type) {
-	case *common.TsVbuuid:
-		sd.p.ts = msg.(*common.TsVbuuid)
+	case IndexSnapshot:
+		snap = msg.(IndexSnapshot)
+		if snap != nil {
+			ts = snap.Timestamp()
+		}
 	case error:
 		respch <- s.makeResponseMessage(sd, msg.(error))
 		close(respch)
 		return
 	}
 
-	common.Infof("%v: SCAN_ID: %v scan timestamp: %v", s.logPrefix, sd.scanId, ScanTStoString(sd.p.ts))
+	common.Infof("%v: SCAN_ID: %v scan timestamp: %v",
+		s.logPrefix, sd.scanId, ScanTStoString(ts))
 	// Index has no scannable snapshot available
-	if sd.p.ts == nil {
+	if snap == nil {
 		close(respch)
 		return
 	}
 
-	partnDefs := s.findPartitionDefsForScan(sd, indexInst)
-	go s.scanPartitions(sd, partnDefs, partnInstMap)
+	go s.scanIndexSnapshot(sd, snap)
 
 	rdr := newResponseReader(sd)
 	switch sd.p.scanType {
@@ -617,78 +622,40 @@ func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
 }
 
 // Find and return data structures for the specified index
-func (s *scanCoordinator) getIndexDS(indexName, bucket string) (indexInst *common.IndexInst,
-	partnInstMap *PartitionInstMap, err error) {
+func (s *scanCoordinator) findIndexInstance(indexName,
+	bucket string) (*common.IndexInst, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, inst := range s.indexInstMap {
 		if inst.Defn.Name == indexName && inst.Defn.Bucket == bucket {
-			indexInst = &inst
-			if pmap, ok := s.indexPartnMap[inst.InstId]; ok {
-				partnInstMap = &pmap
-				return
+			if _, ok := s.indexPartnMap[inst.InstId]; ok {
+				return &inst, nil
 			}
 
-			err = ErrNotMyIndex
-			return
+			return nil, ErrNotMyIndex
 		}
 	}
 
-	err = ErrIndexNotFound
-	return
+	return nil, ErrIndexNotFound
 }
 
-// Get defs of necessary partitions required for serving the scan request
-func (s *scanCoordinator) findPartitionDefsForScan(sd *scanDescriptor,
-	indexInst *common.IndexInst) []common.PartitionDefn {
-
-	var partnDefs []common.PartitionDefn
-
-	// Scan request has specified the specific partition to be scanned
-	if string(sd.p.partnKey) != "" {
-		id := indexInst.Pc.GetPartitionIdByPartitionKey(sd.p.partnKey)
-		partnDefs = []common.PartitionDefn{indexInst.Pc.GetPartitionById(id)}
-	} else {
-		partnDefs = indexInst.Pc.GetAllPartitions()
-	}
-
-	return partnDefs
-}
-
-func (s *scanCoordinator) isLocalEndpoint(endpoint common.Endpoint) bool {
-	// TODO: Detect local endpoint correctly
-	// Since the current indexer supports only single partition, this assumption
-	// holds true
-	return true
-}
-
-// Scan entries from the target partitions for index query
-// Scan will be distributed across all the endpoints of the target partitions
+// Scan entries from the target partitions from index snapshot
 // Scan entries/errors are written back into sd.respch channel
-func (s *scanCoordinator) scanPartitions(sd *scanDescriptor,
-	partDefs []common.PartitionDefn, partnInstMap *PartitionInstMap) {
+func (s *scanCoordinator) scanIndexSnapshot(sd *scanDescriptor, snap IndexSnapshot) {
 	// TODO: Multiple partition scanner needs a stream merger/stats reducer to
 	// work with multiple partitions and slices.
-	common.Debugf("%v: scanParitions: SCAN_ID: %v partitions: %v", s.logPrefix,
-		sd.scanId, partDefs)
+	common.Debugf("%v: scanIndexSnapshot: SCAN_ID: %v instance_id: %v",
+		s.logPrefix, sd.scanId, snap.IndexInstId())
 
 	var wg sync.WaitGroup
 	var workerStopChannels []StopChannel
 
-	for _, partnDefn := range partDefs {
-		for _, endpoint := range partnDefn.Endpoints() {
-			wg.Add(1)
-			stopch := make(StopChannel)
-			workerStopChannels = append(workerStopChannels, stopch)
-			id := partnDefn.GetPartitionId()
-			if s.isLocalEndpoint(endpoint) {
-				// run local scan for local partition
-				go s.scanLocalPartitionEndpoint(sd, id, partnInstMap, stopch, &wg)
-			} else {
-				go s.scanRemotePartitionEndpoint(sd, endpoint, id, stopch, &wg)
-			}
-		}
+	for _, ps := range snap.Partitions() {
+		wg.Add(1)
+		stopch := make(StopChannel)
+		workerStopChannels = append(workerStopChannels, stopch)
+		go s.scanPartitionSnapshot(sd, ps, stopch, &wg)
 	}
 
 	s.monitorWorkers(&wg, sd.stopch, workerStopChannels, "scanPartitions")
@@ -733,84 +700,43 @@ func (s *scanCoordinator) monitorWorkers(wg *sync.WaitGroup,
 
 }
 
-// Locate the slices for the local partition endpoint and scan them
-func (s *scanCoordinator) scanLocalPartitionEndpoint(sd *scanDescriptor,
-	partnId common.PartitionId, partnInstMap *PartitionInstMap, stopch StopChannel,
-	wg *sync.WaitGroup) {
-
-	var partnInst PartitionInst
-	var ok bool
+func (s *scanCoordinator) scanPartitionSnapshot(sd *scanDescriptor,
+	snap PartitionSnapshot, stopch StopChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()
-	common.Debugf("%v: scanLocalParitionEndpoint: SCAN_ID: %v partition: %v",
-		s.logPrefix, sd.scanId, partnId)
-
-	// TODO: Crash or return error to the client ?
-	if partnInst, ok = (*partnInstMap)[partnId]; !ok {
-		panic("Partition cannot be found in partition instance map")
-	}
+	common.Debugf("%v: scanPartitionSnapshot: SCAN_ID: %v partition: %v",
+		s.logPrefix, sd.scanId, snap.PartitionId())
 
 	var workerWg sync.WaitGroup
 	var workerStopChannels []StopChannel
 
-	sliceList := partnInst.Sc.GetAllSlices()
-
-	for _, slice := range sliceList {
+	for _, sliceSnap := range snap.Slices() {
 		workerWg.Add(1)
 		workerStopCh := make(StopChannel)
 		workerStopChannels = append(workerStopChannels, workerStopCh)
-		go s.scanLocalSlice(sd, slice, workerStopCh, &workerWg)
+		go s.scanSliceSnapshot(sd, sliceSnap, workerStopCh, &workerWg)
 	}
 
-	s.monitorWorkers(&workerWg, stopch, workerStopChannels, "scanLocalPartition")
+	s.monitorWorkers(&workerWg, stopch, workerStopChannels, "scanPartitionSnapshot")
 }
 
-func (s *scanCoordinator) scanRemotePartitionEndpoint(sd *scanDescriptor,
-	endpoint common.Endpoint,
-	partnId common.PartitionId, stopch StopChannel,
-	wg *sync.WaitGroup) {
-
-	defer wg.Done()
-	panic("not implemented")
-}
-
-// Scan a snapshot from a local slice
-// Snapshot to be scanned is determined by query parameters
-func (s *scanCoordinator) scanLocalSlice(sd *scanDescriptor,
-	slice Slice, stopch StopChannel, wg *sync.WaitGroup) {
-	var snap Snapshot
+func (s *scanCoordinator) scanSliceSnapshot(sd *scanDescriptor,
+	ss SliceSnapshot, stopch StopChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 	common.Debugf("%v: scanLocalSlice: SCAN_ID: %v Slice : %v",
-		s.logPrefix, sd.scanId, slice.Id())
+		s.logPrefix, sd.scanId, ss.SliceId())
 
-	snapContainer := slice.GetSnapshotContainer()
-	if sd.p.ts == nil {
-		snap = snapContainer.GetLatestSnapshot()
-	} else {
-		snap = snapContainer.GetSnapshotEqualToTS(sd.p.ts)
-	}
-
-	if snap != nil {
-		s.executeLocalScan(sd, snap, stopch)
-	} else {
-		common.Infof("%v: SCAN_ID: %v Slice: %v Error (%v)",
-			s.logPrefix, sd.scanId, slice.Id(), ErrSnapNotAvailable)
-		sd.respch <- ErrSnapNotAvailable
-	}
-}
-
-// Executes the actual scan of the snapshot
-// Scan can be stopped anytime by closing the stop channel
-func (s *scanCoordinator) executeLocalScan(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
 	switch sd.p.scanType {
 	case queryStats:
-		s.statsQuery(sd, snap, stopch)
+		s.statsQuery(sd, ss.Snapshot(), stopch)
 	case queryScan:
-		s.scanQuery(sd, snap, stopch)
+		s.scanQuery(sd, ss.Snapshot(), stopch)
 	case queryScanAll:
-		s.scanAllQuery(sd, snap, stopch)
+		s.scanAllQuery(sd, ss.Snapshot(), stopch)
 	}
+
+	ss.Snapshot().Close()
 }
 
 func (s *scanCoordinator) statsQuery(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {

@@ -386,7 +386,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_INITIATE_RECOVERY:
 		idx.handleInitRecovery(msg)
 
-	case STORAGE_TS_REQUEST:
+	case STORAGE_INDEX_SNAP_REQUEST:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
