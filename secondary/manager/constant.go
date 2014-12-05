@@ -24,7 +24,8 @@ const TESTING = true
 /////////////////////////////////////////////
 
 // Common
-const NUM_VB = 1024
+var NUM_VB = 1024
+
 const DEFAULT_BUCKET_NAME = "Default"
 const DEFAULT_POOL_NAME = "default"
 

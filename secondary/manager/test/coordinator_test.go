@@ -79,6 +79,8 @@ func TestCoordinator(t *testing.T) {
 	common.Infof("Topology after index creation : %s", string(content))
 
 	cleanup(mgr, t)
+	mgr.CleanupTopology()
+	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	common.Infof("Done TestCoordinator. Tearing down *********************************************************")

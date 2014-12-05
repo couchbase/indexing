@@ -490,3 +490,33 @@ func (m *IndexManager) GetStabilityTimestampForVb(streamId common.StreamId, buck
 func (m *IndexManager) SetTimestampPersistenceInterval(elapsed uint64) {
 	m.timestampPersistInterval = elapsed
 }
+
+func (m *IndexManager) CleanupTopology() {
+
+	globalTop, err := m.GetGlobalTopology()
+	if err != nil {
+		common.Errorf("IndexManager.CleanupTopology() : error %v.", err)
+		return
+	}
+
+	for _, key := range globalTop.TopologyKeys {
+		if err := m.repo.deleteMeta(key); err != nil {
+			common.Errorf("IndexManager.CleanupTopology() : error %v.", err)
+		}
+	}
+
+	key := globalTopologyKey()
+	if err := m.repo.deleteMeta(key); err != nil {
+		common.Errorf("IndexManager.CleanupTopology() : error %v.", err)
+	}
+}
+
+func (m *IndexManager) CleanupStabilityTimestamp() {
+
+	m.stopMasterServiceNoLock()
+
+	key := stabilityTimestampKey()
+	if err := m.repo.deleteMeta(key); err != nil {
+		common.Errorf("IndexManager.CleanupStabilityTimestamp() : error %v.", err)
+	}
+}

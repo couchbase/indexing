@@ -85,6 +85,8 @@ func TestEventMgr(t *testing.T) {
 	}
 
 	cleanupEvtMgrTest(mgr, t)
+	mgr.CleanupTopology()
+	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	common.Infof("Stop TestEventMgr. Tearing down *********************************************************")

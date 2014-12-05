@@ -37,8 +37,7 @@ func (m *mgrMutHandler) HandleStreamBegin(streamId common.StreamId,
 	kv *protobuf.KeyVersions,
 	offset int) {
 
-	common.Debugf("mgrMutHandler.StreamBegin")
-
+	common.Debugf("mgrMutHandler.StreamBegin : stream %d bucket %s vb %d", streamId, bucket, vbucket)
 }
 
 func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
@@ -48,7 +47,7 @@ func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
 	kv *protobuf.KeyVersions,
 	offset int) {
 
-	common.Debugf("mgrMutHandler.StreamEnd")
+	common.Debugf("mgrMutHandler.StreamEnd : stream %d bucket %s vb %d", streamId, bucket, vbucket)
 
 	lastTs := m.indexMgr.getTimer().getLatest(streamId, bucket)
 	if lastTs != nil {
@@ -60,6 +59,7 @@ func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
 
 		err := m.indexMgr.streamMgr.RestartStreamIfNecessary(streamId, []*common.TsVbuuid{ts})
 		if err != nil {
+			// TODO: What if the bucket is deleted?
 			common.Errorf("mgrMutHandler.HandleStreamEnd(): error encounterd %v", err)
 		}
 	} else {
@@ -123,9 +123,8 @@ func (m *mgrMutHandler) HandleSnapshot(streamId common.StreamId,
 
 	snapshotType, _, end := kv.Snapshot()
 
-	// Update the timer based on the snapshot marker.
-    // Update the timer based on the snapshot marker (ondisk and inmemory snapshot).
-    if snapshotType&(0x1|0x2) != 0 {
+	// Update the timer based on the snapshot marker (ondisk and inmemory snapshot).
+	if snapshotType&(0x1|0x2) != 0 {
 		m.indexMgr.getTimer().increment(streamId, bucket, vbucket, vbuuid, end)
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"net"
 	"testing"
 	"time"
+	"sync"
 )
 
 // For this test, use Index Defn Id from 400 - 410
@@ -67,6 +68,7 @@ var TT *testing.T
 var donech chan bool
 var test uint8
 var delete_test_status map[uint64]*protobuf.Instance
+var delete_test_once sync.Once	
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Test Driver
@@ -79,32 +81,15 @@ func TestStreamMgr(t *testing.T) {
 	test = NO_TEST
 	TT = t
 
-	common.Infof("Start TestStreamMgr *********************************************************")
-
-	var requestAddr = "localhost:9885"
-	var leaderAddr = "localhost:9884"
-	var config = "./config.json"
-
-	common.Infof("Start Index Manager")
-	factory := new(testProjectorClientFactory)
-	env := new(testProjectorClientEnv)
-	admin := manager.NewProjectorAdmin(factory, env)
-	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(time.Duration(3000) * time.Millisecond)
+	old_value := manager.NUM_VB	
+	manager.NUM_VB = 16 
+	defer func() {manager.NUM_VB = old_value}()
 
 	// Running test
-	runSyncTest(mgr)
-	runDeleteTest(mgr)
-	runStreamEndTest(mgr)
-	runTimerTest(mgr)
-
-	////////////////////////////////////////////////////
-	common.Infof("Stop TestStreamMgr. Tearing down *********************************************************")
-	mgr.Close()
-	time.Sleep(time.Duration(1000) * time.Millisecond)
+	runSyncTest()
+	runDeleteTest()
+	runStreamEndTest()
+	runTimerTest()
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -124,13 +109,28 @@ func TestStreamMgr(t *testing.T) {
 // 7) Stability timestamp is broadcasted by coordinator
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func runSyncTest(mgr *manager.IndexManager) {
+func runSyncTest() {
 	defer func() { test = NO_TEST }()
 
-	common.Infof("**** Run Sync Test *****")
-	common.Infof("Sync Test Cleanup ...")
+	common.Infof("**** Run Sync Test ******************************************")
 	test = SYNC_TEST
+	
+	common.Infof("***** Start TestStreamMgr ") 
+	var requestAddr = "localhost:9885"
+	var leaderAddr = "localhost:9884"
+	var config = "./config.json"
 
+	common.Infof("Start Index Manager")
+	factory := new(testProjectorClientFactory)
+	env := new(testProjectorClientEnv)
+	admin := manager.NewProjectorAdmin(factory, env)
+	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	if err != nil {
+		TT.Fatal(err)
+	}
+	time.Sleep(time.Duration(3000) * time.Millisecond)
+	
+	common.Infof("Sync Test Cleanup ...")
 	cleanupStreamMgrSyncTest(mgr)
 
 	common.Infof("***** Run Sync Test ...")
@@ -144,9 +144,15 @@ func runSyncTest(mgr *manager.IndexManager) {
 
 	common.Infof("**** Sync Test Cleanup ...")
 	cleanupStreamMgrSyncTest(mgr)
+	mgr.CleanupTopology()
+	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Finish Sync Test *****")
+	common.Infof("**** Stop TestStreamMgr. Tearing down ") 
+	mgr.Close()
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+	
+	common.Infof("**** Finish Sync Test ************************************************")
 }
 
 // run test
@@ -160,7 +166,8 @@ func runSyncTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 	for {
 		select {
 		case ts := <-ch:
-			if ts.Seqnos[10] >= 100 {
+			common.Infof("****** runSyncTestReceiver() receive stability timestamp seq[10] = %d", ts.Seqnos[10])
+			if ts.Seqnos[10] == 400 {
 				common.Infof("****** runSyncTestReceiver() receive correct stability timestamp")
 				return
 			}
@@ -229,7 +236,7 @@ func cleanupStreamMgrSyncTest(mgr *manager.IndexManager) {
 			TT.Fatal("StreamMgrTest.cleanupStreamMgrSyncTest(): Cannot clean up index defn stream_mgr_sync_test")
 		}
 	}
-
+	
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }
 
@@ -247,21 +254,23 @@ func (c *syncTestProjectorClient) sendSync(instances []*protobuf.Instance) {
 			p := newFakeProjector(manager.COORD_MAINT_STREAM_PORT)
 			go p.run(donech)
 
-			payloads := make([]*common.VbKeyVersions, 0, 200)
+			payloads := make([]*common.VbKeyVersions, 0, 2000)
 
-			payload := common.NewVbKeyVersions("Default", 10, 1, 10)
-			kv := common.NewKeyVersions(100, []byte("document-name"), 1)
-			kv.AddStreamBegin()
-			payload.AddKeyVersions(kv)
-			payloads = append(payloads, payload)
-
-			for i := 0; i < 1; i++ {
-				payload := common.NewVbKeyVersions("Default", 10, 1, 10)
-				kv := common.NewKeyVersions(uint64(100+i), []byte("document-name"), 1)
+			// send StreamBegin for all vbuckets
+			for i := 0; i < manager.NUM_VB; i++ {
+				payload := common.NewVbKeyVersions("Default", uint16(i) /* vb */, 1, 10)
+				kv := common.NewKeyVersions(1, []byte("document-name"), 1)
+				kv.AddStreamBegin()
 				kv.AddSync()
 				payload.AddKeyVersions(kv)
 				payloads = append(payloads, payload)
 			}
+
+			payload := common.NewVbKeyVersions("Default", 10, 1, 10)
+			kv := common.NewKeyVersions(uint64(400), []byte("document-name"), 1)
+			kv.AddSync()
+			payload.AddKeyVersions(kv)
+			payloads = append(payloads, payload)
 
 			// send payload
 			err := p.client.SendKeyVersions(payloads, true)
@@ -305,8 +314,8 @@ func (c *syncTestProjectorClient) RepairEndpoints(topic string, endpoints []stri
 
 func (c *syncTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
 
-	newTs := protobuf.NewTsVbuuid("default", "Default", 1024)
-	for i := 0; i < 1024; i++ {
+	newTs := protobuf.NewTsVbuuid("default", "Default", manager.NUM_VB)
+	for i := 0; i < manager.NUM_VB; i++ {
 		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
 	}
 	return newTs, nil
@@ -329,17 +338,32 @@ func (c *syncTestProjectorClient) RestartVbuckets(topic string,
 // 4) Stream Manager handle requests to more than one projectors
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func runDeleteTest(mgr *manager.IndexManager) {
+func runDeleteTest() {
 	defer func() { test = NO_TEST }()
 
-	common.Infof("**** Run Delete Test *****")
+	common.Infof("**** Run Delete Test *******************************************")
 	test = DELETE_TEST
+	delete_test_status = make(map[uint64]*protobuf.Instance)
 
+	common.Infof("***** Start TestStreamMgr ") 
+	var requestAddr = "localhost:9885"
+	var leaderAddr = "localhost:9884"
+	var config = "./config.json"
+
+	common.Infof("Start Index Manager")
+	factory := new(testProjectorClientFactory)
+	env := new(testProjectorClientEnv)
+	admin := manager.NewProjectorAdmin(factory, env)
+	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	if err != nil {
+		TT.Fatal(err)
+	}
+	time.Sleep(time.Duration(3000) * time.Millisecond)
+	
 	common.Infof("Delete Test Cleanup ...")
 	cleanupStreamMgrDeleteTest(mgr)
 
 	common.Infof("***** Run Delete Test :  setup")
-	delete_test_status = make(map[uint64]*protobuf.Instance)
 	donech = make(chan bool)
 	ch := mgr.GetStabilityTimestampChannel(common.MAINT_STREAM)
 	go runDeleteTestReceiver(ch, donech)
@@ -355,9 +379,15 @@ func runDeleteTest(mgr *manager.IndexManager) {
 
 	common.Infof("**** Delete Test Cleanup ...")
 	cleanupStreamMgrDeleteTest(mgr)
+	mgr.CleanupTopology()
+	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Finish Delete Test *****")
+	common.Infof("**** Stop TestStreamMgr. Tearing down ") 
+	mgr.Close()
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+	
+	common.Infof("**** Finish Delete Test ***********************************************************")
 }
 
 func addIndexForDeleteTest(mgr *manager.IndexManager) {
@@ -427,13 +457,13 @@ func addIndexForDeleteTest(mgr *manager.IndexManager) {
 	}
 
 	//
-	// Add a new index definition : 403 (Default1)
+	// Add a new index definition : 403 (Defaultxx)
 	//
 	idxDefn = &common.IndexDefn{
 		DefnId:          common.IndexDefnId(403),
 		Name:            "stream_mgr_delete_test_3",
 		Using:           common.ForestDB,
-		Bucket:          "Default1",
+		Bucket:          "Defaultxx",
 		IsPrimary:       false,
 		SecExprs:        []string{"Testing"},
 		ExprType:        common.N1QL,
@@ -449,12 +479,12 @@ func addIndexForDeleteTest(mgr *manager.IndexManager) {
 
 	// Update the index definition to ready
 	common.Infof("Run Delete Test : Update Index Defn 403 to READY")
-	topology, err = mgr.GetTopologyByBucket("Default1")
+	topology, err = mgr.GetTopologyByBucket("Defaultxx")
 	if err != nil {
 		TT.Fatal(err)
 	}
 	topology.ChangeStateForIndexInstByDefn(common.IndexDefnId(403), common.INDEX_STATE_CREATED, common.INDEX_STATE_READY)
-	if err := mgr.SetTopologyByBucket("Default1", topology); err != nil {
+	if err := mgr.SetTopologyByBucket("Defaultxx", topology); err != nil {
 		TT.Fatal(err)
 	}
 }
@@ -513,20 +543,20 @@ func cleanupStreamMgrDeleteTest(mgr *manager.IndexManager) {
 		}
 	}
 
-	_, err = mgr.GetIndexDefnByName("Default1", "stream_mgr_delete_test_3")
+	_, err = mgr.GetIndexDefnByName("Defaultxx", "stream_mgr_delete_test_3")
 	if err != nil {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_3.  No cleanup ...")
 	} else {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_3.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Default1", "stream_mgr_delete_test_3")
+		err = mgr.HandleDeleteIndexDDL("Defaultxx", "stream_mgr_delete_test_3")
 		if err != nil {
 			TT.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err = mgr.GetIndexDefnByName("Default1", "stream_mgr_delete_test_3")
+		_, err = mgr.GetIndexDefnByName("Defaultxx", "stream_mgr_delete_test_3")
 		if err == nil {
 			TT.Fatal("StreamMgrTest.cleanupStreamMgrSyncTest(): Cannot clean up index defn stream_mgr_delete_test_3")
 		}
@@ -548,18 +578,18 @@ func runDeleteTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 	for {
 		select {
 		case ts := <-ch:
-			common.Infof("****** runDeleteTestReceiver() : receive timestamp. bucket %s seqno[10] %v seqno[20] %v",
-				ts.Bucket, ts.Seqnos[10], ts.Seqnos[20])
-			common.Infof("****** runDeleteTestReceiver() : receive timestamp. bucket %s seqno[30] %v seqno[40] %v",
-				ts.Bucket, ts.Seqnos[30], ts.Seqnos[40])
+			common.Infof("****** runDeleteTestReceiver() : receive timestamp. bucket %s seqno[10] %v seqno[11] %v",
+				ts.Bucket, ts.Seqnos[10], ts.Seqnos[11])
+			common.Infof("****** runDeleteTestReceiver() : receive timestamp. bucket %s seqno[12] %v seqno[13] %v",
+				ts.Bucket, ts.Seqnos[12], ts.Seqnos[13])
 
-			if ts.Bucket == "Default" && ts.Seqnos[10] >= 100 && ts.Seqnos[20] >= 200 {
+			if ts.Bucket == "Default" && ts.Seqnos[10] == 401 && ts.Seqnos[11] == 402 {
 				common.Infof("****** runDeleteTestReceiver() receive correct stability timestamp for bucket Default")
 				bucket1 = true
 			}
 
-			if ts.Bucket == "Default1" && ts.Seqnos[30] >= 300 && ts.Seqnos[40] >= 400 {
-				common.Infof("****** runDeleteTestReceiver() receive correct stability timestamp for bucket Default1")
+			if ts.Bucket == "Defaultxx" && ts.Seqnos[12] >= 403 && ts.Seqnos[13] >= 404 {
+				common.Infof("****** runDeleteTestReceiver() receive correct stability timestamp for bucket Defaultxx")
 				bucket2 = true
 			}
 
@@ -584,46 +614,68 @@ func (c *deleteTestProjectorClient) sendSync() {
 	go p.run(donech)
 
 	// create an array of KeyVersions
-	payloads := make([]*common.VbKeyVersions, 0, 200)
+	payloads := make([]*common.VbKeyVersions, 0, 4000)
+	
+	delete_test_once.Do(func() {	
+		common.Infof("deleteTestProjectorClient.sendSync() sending streamBegin %v", c.server)
+		
+		// send StreamBegin for all vbuckets
+		for i := 0; i < manager.NUM_VB; i++ {
+			if i != 10 && i != 11 {	
+				payload := common.NewVbKeyVersions("Default", uint16(i) /* vb */, 1, 10)
+				kv := common.NewKeyVersions(1, []byte("document-name"), 1)
+				kv.AddStreamBegin()
+				kv.AddSync()
+				payload.AddKeyVersions(kv)
+				payloads = append(payloads, payload)
+			}
+		}
 
-	// bucket <Default>, node <127.0.0.1>  -> vb 10, seqno 101
-	// bucket <Default>, node <127.0.0.2>  -> vb 20, seqno 201
-	// bucket <Default1>, node <127.0.0.1> -> vb 30, seqno 301
-	// bucket <Default1>, node <127.0.0.2> -> vb 40, seqno 401
+		for i := 0; i < manager.NUM_VB; i++ {
+			if i != 12 && i != 13 {
+				payload := common.NewVbKeyVersions("Defaultxx", uint16(i) /* vb */, 1, 10)
+				kv := common.NewKeyVersions(1, []byte("document-name"), 1)
+				kv.AddStreamBegin()
+				kv.AddSync()
+				payload.AddKeyVersions(kv)
+				payloads = append(payloads, payload)
+			}
+		}
+	})
+
+	// bucket <Default>, node <127.0.0.1>  -> vb 10, seqno 401
+	// bucket <Default>, node <127.0.0.2>  -> vb 11, seqno 402
+	// bucket <Defaultxx>, node <127.0.0.1> -> vb 12, seqno 403
+	// bucket <Defaultxx>, node <127.0.0.2> -> vb 13, seqno 404
 	for _, inst := range delete_test_status {
 		seqno := 0
 		vb := 0
 		bucket := inst.GetIndexInstance().GetDefinition().GetBucket()
 		if bucket == "Default" {
 			if c.server == "127.0.0.1" {
-				seqno = 101
+				seqno = 401 
 				vb = 10
 			} else if c.server == "127.0.0.2" {
-				seqno = 201
-				vb = 20
+				seqno = 402 
+				vb = 11 
 			}
-		} else if bucket == "Default1" {
+		} else if bucket == "Defaultxx" {
 			if c.server == "127.0.0.1" {
-				seqno = 301
-				vb = 30
+				seqno = 403 
+				vb = 12 
 			} else if c.server == "127.0.0.2" {
-				seqno = 401
-				vb = 40
+				seqno = 404
+				vb = 13 
 			}
 		}
 
-		common.Infof("deleteTestProjectorClient.sendSync() for node %v and bucket %v", c.server, bucket)
+		common.Infof("deleteTestProjectorClient.sendSync() for node %v and bucket %v vbucket %v seqno %d", 
+			c.server, bucket, vb, seqno)
 
-		// create StreamBegin
+		// Create Sync Message
 		payload := common.NewVbKeyVersions(bucket, uint16(vb), 1, 10)
 		kv := common.NewKeyVersions(uint64(seqno), []byte("document-name"), 1)
 		kv.AddStreamBegin()
-		payload.AddKeyVersions(kv)
-		payloads = append(payloads, payload)
-
-		// Create Sync Message
-		payload = common.NewVbKeyVersions(bucket, uint16(vb), 1, 10)
-		kv = common.NewKeyVersions(uint64(seqno), []byte("document-name"), 1)
 		kv.AddSync()
 		payload.AddKeyVersions(kv)
 		payloads = append(payloads, payload)
@@ -631,6 +683,7 @@ func (c *deleteTestProjectorClient) sendSync() {
 
 	// Send payload
 	if len(payloads) != 0 {
+		common.Infof("deleteTestProjectorClient.sendSync() sending payloads to stream manager for %s", c.server)
 		err := p.client.SendKeyVersions(payloads, true)
 		if err != nil {
 			TT.Fatal(err)
@@ -681,8 +734,8 @@ func (c *deleteTestProjectorClient) RepairEndpoints(topic string, endpoints []st
 
 func (c *deleteTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
 
-	newTs := protobuf.NewTsVbuuid("default", "Default", 1024)
-	for i := 0; i < 1024; i++ {
+	newTs := protobuf.NewTsVbuuid("default", "Default", manager.NUM_VB)
+	for i := 0; i < manager.NUM_VB; i++ {
 		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
 	}
 	return newTs, nil
@@ -702,13 +755,28 @@ func (c *deleteTestProjectorClient) RestartVbuckets(topic string,
 // 4) The fake projector will also push a sync message to the data port for the coordinator to broadcast a timestamp. 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func runStreamEndTest(mgr *manager.IndexManager) {
+func runStreamEndTest() {
 	defer func() { test = NO_TEST }()
 
-	common.Infof("**** Run StreamEnd Test *****")
-	common.Infof("StreamEnd Test Cleanup ...")
+	common.Infof("**** Run StreamEnd Test ******************************************")
 	test = STREAM_END_TEST
 
+	common.Infof("***** Start TestStreamMgr ") 
+	var requestAddr = "localhost:9885"
+	var leaderAddr = "localhost:9884"
+	var config = "./config.json"
+
+	common.Infof("Start Index Manager")
+	factory := new(testProjectorClientFactory)
+	env := new(testProjectorClientEnv)
+	admin := manager.NewProjectorAdmin(factory, env)
+	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	if err != nil {
+		TT.Fatal(err)
+	}
+	time.Sleep(time.Duration(3000) * time.Millisecond)
+	
+	common.Infof("StreamEnd Test Cleanup ...")
 	cleanupStreamMgrStreamEndTest(mgr)
 
 	common.Infof("***** Run StreamEnd Test ...")
@@ -722,9 +790,15 @@ func runStreamEndTest(mgr *manager.IndexManager) {
 
 	common.Infof("**** StreamEnd Test Cleanup ...")
 	cleanupStreamMgrStreamEndTest(mgr)
+	mgr.CleanupTopology()
+	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Finish StreamEnd Test *****")
+	common.Infof("**** Stop TestStreamMgr. Tearing down ") 
+	mgr.Close()
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+	
+	common.Infof("**** Finish StreamEnd Test ****************************************")
 }
 
 // clean up
@@ -763,7 +837,7 @@ func runStreamEndTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 	for {
 		select {
 		case ts := <-ch:
-			if ts.Seqnos[10] >= 404 {
+			if ts.Seqnos[10] == 405 {
 				common.Infof("****** runStreamEndTestReceiver() receive correct stability timestamp")
 				return
 			}
@@ -779,9 +853,9 @@ func runStreamEndTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 // start up
 func changeTopologyForStreamEndTest(mgr *manager.IndexManager) {
 
-	// Add a new index definition : 404
+	// Add a new index definition : 405
 	idxDefn := &common.IndexDefn{
-		DefnId:          common.IndexDefnId(404),
+		DefnId:          common.IndexDefnId(405),
 		Name:            "stream_mgr_stream_end_test",
 		Using:           common.ForestDB,
 		Bucket:          "Default",
@@ -791,7 +865,7 @@ func changeTopologyForStreamEndTest(mgr *manager.IndexManager) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	common.Infof("Run Sync Test : Create Index Defn 404")
+	common.Infof("Run Sync Test : Create Index Defn 405")
 	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
 		TT.Fatal(err)
 	}
@@ -799,12 +873,12 @@ func changeTopologyForStreamEndTest(mgr *manager.IndexManager) {
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Update the index definition to ready
-	common.Infof("Run Sync Test : Update Index Defn 404 to READY")
+	common.Infof("Run Sync Test : Update Index Defn 405 to READY")
 	topology, err := mgr.GetTopologyByBucket("Default")
 	if err != nil {
 		TT.Fatal(err)
 	}
-	topology.ChangeStateForIndexInstByDefn(common.IndexDefnId(404), common.INDEX_STATE_CREATED, common.INDEX_STATE_READY)
+	topology.ChangeStateForIndexInstByDefn(common.IndexDefnId(405), common.INDEX_STATE_CREATED, common.INDEX_STATE_READY)
 	if err := mgr.SetTopologyByBucket("Default", topology); err != nil {
 		TT.Fatal(err)
 	}
@@ -826,14 +900,14 @@ func (c *streamEndTestProjectorClient) sendSync(timestamps []*protobuf.TsVbuuid)
 	p := newFakeProjector(manager.COORD_MAINT_STREAM_PORT)
 	go p.run(donech)
 
-	payloads := make([]*common.VbKeyVersions, 0, 200)
-	payload := common.NewVbKeyVersions("Default", 10, 1, 10)
-	payloads = append(payloads, payload)
+	payloads := make([]*common.VbKeyVersions, 0, 2000)
 	
+	payload := common.NewVbKeyVersions("Default", 10 /* vb */, 1, 10)
 	kv := common.NewKeyVersions(seqno, []byte("document-name"), 1)
 	kv.AddStreamBegin()
 	kv.AddSync()
 	payload.AddKeyVersions(kv)
+	payloads = append(payloads, payload)
 	
 	// send payload
 	if err := p.client.SendKeyVersions(payloads, true); err != nil {
@@ -850,20 +924,29 @@ func (c *streamEndTestProjectorClient) sendStreamEnd(instances []*protobuf.Insta
 	}
 
 	for _, inst := range instances {
-		if inst.GetIndexInstance().GetDefinition().GetDefnID() == uint64(404) {
+		if inst.GetIndexInstance().GetDefinition().GetDefnID() == uint64(405) {
 
 			p := newFakeProjector(manager.COORD_MAINT_STREAM_PORT)
 			go p.run(donech)
 
-			payloads := make([]*common.VbKeyVersions, 0, 200)
-			payload := common.NewVbKeyVersions("Default", 10, 1, 10)
-			payloads = append(payloads, payload)
+			payloads := make([]*common.VbKeyVersions, 0, 2000)
 			
-			kv := common.NewKeyVersions(404, []byte("document-name"), 1)
-			kv.AddStreamBegin()
+			// send StreamBegin for all vbuckets
+			for i := 0; i < manager.NUM_VB; i++ {
+				payload := common.NewVbKeyVersions("Default", uint16(i) /* vb */, 1, 10)
+				kv := common.NewKeyVersions(1, []byte("document-name"), 1)
+				kv.AddStreamBegin()
+				kv.AddSync()
+				payload.AddKeyVersions(kv)
+				payloads = append(payloads, payload)
+			}
+
+			payload := common.NewVbKeyVersions("Default", 10, 1, 10)
+			kv := common.NewKeyVersions(405, []byte("document-name"), 1)
 			kv.AddSync()
 			kv.AddStreamEnd()
 			payload.AddKeyVersions(kv)
+			payloads = append(payloads, payload)
 
 			// send payload
 			err := p.client.SendKeyVersions(payloads, true)
@@ -907,8 +990,8 @@ func (c *streamEndTestProjectorClient) RepairEndpoints(topic string, endpoints [
 
 func (c *streamEndTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
 
-	newTs := protobuf.NewTsVbuuid("default", "Default", 1024)
-	for i := 0; i < 1024; i++ {
+	newTs := protobuf.NewTsVbuuid("default", "Default", manager.NUM_VB)
+	for i := 0; i < manager.NUM_VB; i++ {
 		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
 	}
 	return newTs, nil
@@ -938,16 +1021,31 @@ func (c *streamEndTestProjectorClient) RestartVbuckets(topic string,
 // 4) read the timestamp from the respository and check to see if matches with the timer in memory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func runTimerTest(mgr *manager.IndexManager) {
+func runTimerTest() {
 	defer func() { test = NO_TEST }()
 
-	common.Infof("**** Run Timer Test *****")
-	common.Infof("Timer Test Cleanup ...")
+	common.Infof("**** Run Timer Test **********************************************")
 	test = TIMER_TEST
 
+	common.Infof("***** Start TestStreamMgr ") 
+	var requestAddr = "localhost:9885"
+	var leaderAddr = "localhost:9884"
+	var config = "./config.json"
+
+	common.Infof("Start Index Manager")
+	factory := new(testProjectorClientFactory)
+	env := new(testProjectorClientEnv)
+	admin := manager.NewProjectorAdmin(factory, env)
+	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	if err != nil {
+		TT.Fatal(err)
+	}
+	time.Sleep(time.Duration(3000) * time.Millisecond)
+	
 	mgr.SetTimestampPersistenceInterval(1)
 	defer mgr.SetTimestampPersistenceInterval(manager.TIMESTAMP_PERSIST_INTERVAL)
 
+	common.Infof("Timer Test Cleanup ...")
 	cleanupStreamMgrTimerTest(mgr)
 
 	common.Infof("***** Run timer Test ...")
@@ -961,9 +1059,15 @@ func runTimerTest(mgr *manager.IndexManager) {
 
 	common.Infof("**** Timer Test Cleanup ...")
 	cleanupStreamMgrTimerTest(mgr)
+	mgr.CleanupTopology()
+	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Finish Timer Test *****")
+	common.Infof("**** Stop TestStreamMgr. Tearing down ") 
+	mgr.Close()
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+	
+	common.Infof("**** Finish Timer Test *************************************************")
 }
 
 // clean up
@@ -1002,7 +1106,7 @@ func runTimerTestReceiver(mgr *manager.IndexManager, ch chan *common.TsVbuuid, d
 	for {
 		select {
 		case ts := <-ch:
-			if ts.Seqnos[10] >= 405 {
+			if ts.Seqnos[10] == 406 {
 			
 				// wait to avoid race condition -- this is timing dependent.  
 				time.Sleep(time.Duration(2000) * time.Millisecond)
@@ -1028,9 +1132,9 @@ func runTimerTestReceiver(mgr *manager.IndexManager, ch chan *common.TsVbuuid, d
 // start up
 func changeTopologyForTimerTest(mgr *manager.IndexManager) {
 
-	// Add a new index definition : 405
+	// Add a new index definition : 406
 	idxDefn := &common.IndexDefn{
-		DefnId:          common.IndexDefnId(405),
+		DefnId:          common.IndexDefnId(406),
 		Name:            "stream_mgr_timer_test",
 		Using:           common.ForestDB,
 		Bucket:          "Default",
@@ -1040,7 +1144,7 @@ func changeTopologyForTimerTest(mgr *manager.IndexManager) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	common.Infof("Run Timer Test : Create Index Defn 405")
+	common.Infof("Run Timer Test : Create Index Defn 406")
 	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
 		TT.Fatal(err)
 	}
@@ -1048,12 +1152,12 @@ func changeTopologyForTimerTest(mgr *manager.IndexManager) {
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Update the index definition to ready
-	common.Infof("Run Timer Test : Update Index Defn 405 to READY")
+	common.Infof("Run Timer Test : Update Index Defn 406 to READY")
 	topology, err := mgr.GetTopologyByBucket("Default")
 	if err != nil {
 		TT.Fatal(err)
 	}
-	topology.ChangeStateForIndexInstByDefn(common.IndexDefnId(405), common.INDEX_STATE_CREATED, common.INDEX_STATE_READY)
+	topology.ChangeStateForIndexInstByDefn(common.IndexDefnId(406), common.INDEX_STATE_CREATED, common.INDEX_STATE_READY)
 	if err := mgr.SetTopologyByBucket("Default", topology); err != nil {
 		TT.Fatal(err)
 	}
@@ -1068,16 +1172,25 @@ func (c *timerTestProjectorClient) sendSync(instances []*protobuf.Instance) {
 	}
 
 	for _, inst := range instances {
-		if inst.GetIndexInstance().GetDefinition().GetDefnID() == uint64(405) {
+		if inst.GetIndexInstance().GetDefinition().GetDefnID() == uint64(406) {
 
 			p := newFakeProjector(manager.COORD_MAINT_STREAM_PORT)
 			go p.run(donech)
 
-			payloads := make([]*common.VbKeyVersions, 0, 200)
+			payloads := make([]*common.VbKeyVersions, 0, 2000)
+
+			// send StreamBegin for all vbuckets
+			for i := 0; i < manager.NUM_VB; i++ {
+				payload := common.NewVbKeyVersions("Default", uint16(i) /* vb */, 1, 10)
+				kv := common.NewKeyVersions(1, []byte("document-name"), 1)
+				kv.AddStreamBegin()
+				kv.AddSync()
+				payload.AddKeyVersions(kv)
+				payloads = append(payloads, payload)
+			}
 
 			payload := common.NewVbKeyVersions("Default", 10, 1, 10)
 			kv := common.NewKeyVersions(100, []byte("document-name"), 1)
-			kv.AddStreamBegin()
 			kv.AddSync()
 			payload.AddKeyVersions(kv)
 			payloads = append(payloads, payload)
@@ -1091,7 +1204,7 @@ func (c *timerTestProjectorClient) sendSync(instances []*protobuf.Instance) {
 			payloads = make([]*common.VbKeyVersions, 0, 200)
 
 			payload = common.NewVbKeyVersions("Default", 10, 1, 10)
-			kv = common.NewKeyVersions(405, []byte("document-name"), 1)
+			kv = common.NewKeyVersions(406, []byte("document-name"), 1)
 			kv.AddSync()
 			payload.AddKeyVersions(kv)
 			payloads = append(payloads, payload)
@@ -1138,8 +1251,8 @@ func (c *timerTestProjectorClient) RepairEndpoints(topic string, endpoints []str
 
 func (c *timerTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
 
-	newTs := protobuf.NewTsVbuuid("default", "Default", 1024)
-	for i := 0; i < 1024; i++ {
+	newTs := protobuf.NewTsVbuuid("default", "Default", manager.NUM_VB)
+	for i := 0; i < manager.NUM_VB; i++ {
 		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
 	}
 	return newTs, nil

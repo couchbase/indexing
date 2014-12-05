@@ -440,14 +440,18 @@ func (t *timestampHistory) increment(vbucket uint32, vbuuid uint64, seqno uint64
 		if timestamp.Seqnos[vbucket] == 0 || timestamp.Seqnos[vbucket] < seqno {
 			timestamp.Seqnos[vbucket] = seqno
 			timestamp.Vbuuids[vbucket] = vbuuid
+
+			common.Debugf("timestampHistory.increment(): increment timestamp: bucket %v : vb id : %d, seqno : %d, vbuuid : %d",
+				timestamp.Bucket, vbucket, seqno, vbuuid)
 		}
 	} else {
 		timestamp.Seqnos[vbucket] = seqno
 		timestamp.Vbuuids[vbucket] = vbuuid
+
+		common.Debugf("timestampHistory.increment(): increment timestamp: bucket %v : vb id : %d, seqno : %d, vbuuid : %d",
+			timestamp.Bucket, vbucket, seqno, vbuuid)
 	}
 
-	common.Debugf("timestampHistory.increment(): increment timestamp: bucket %v : vb id : %d, seqno : %d, vbuuid : %d",
-		timestamp.Bucket, vbucket, seqno, vbuuid)
 }
 
 //
@@ -466,6 +470,10 @@ func (t *timestampHistory) advance() (*common.TsVbuuid, bool) {
 //
 func (t *timestampHistory) advanceNoLock() (*common.TsVbuuid, bool) {
 
+	if !t.isReady() {
+		return nil, false
+	}	
+	
 	result := t.history[t.current]
 	t.current = t.current + 1
 	if t.current >= len(t.history) {
@@ -488,6 +496,20 @@ func (t *timestampHistory) getLatest() *common.TsVbuuid {
 	defer t.mutex.Unlock()
 
 	return t.history[t.current]
+}
+
+//
+// Is the current timestamp has seqno for all vb?
+//
+func (t *timestampHistory) isReady() bool {
+	current := t.history[t.current]
+	for _, seqno := range current.Seqnos {
+		if seqno == 0 {
+			return false
+		}
+	}
+	
+	return true
 }
 
 /////////////////////////////////////////////////////////////////////////
