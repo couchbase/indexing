@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -67,7 +68,7 @@ func usage() {
 func main() {
 	var err error
 	var statsResp c.IndexStatistics
-	var keys [][]byte
+	var keys []interface{}
 
 	parseArgs()
 
@@ -135,44 +136,32 @@ func main() {
 		config := c.SystemConfig.SectionConfig("queryport.client.", true)
 		client := queryclient.NewClient(queryclient.Remoteaddr(server), config)
 		if equal != "" {
-			keys = append(keys, []byte(equal))
+			keys = arg2key([]byte(equal))
 		}
 
 		inclusion := queryclient.Inclusion(incl)
 		switch opType {
 		case "scan":
 			if keys == nil {
-				l, h := c.SecondaryKey{[]byte(low)}, c.SecondaryKey{[]byte(high)}
+				l := c.SecondaryKey(arg2key([]byte(low)))
+				h := c.SecondaryKey(arg2key([]byte(high)))
 				err = client.Range(indexName, bucket, l, h, inclusion, false, limit, scanCallback)
 
 			} else {
-				values := make([]c.SecondaryKey, 0, len(keys))
-				for _, key := range keys {
-					skey := make(c.SecondaryKey, 0)
-					if err = json.Unmarshal(key, &skey); err != nil {
-						values = append(values, skey)
-					}
-				}
-				err = client.Lookup(indexName, bucket, values, false, limit, scanCallback)
+				err = client.Lookup(indexName, bucket, []c.SecondaryKey{keys}, false, limit, scanCallback)
 			}
 		case "scanAll":
 			err = client.ScanAll(indexName, bucket, limit, scanCallback)
 		case "stats":
 			if keys == nil {
-				l, h := c.SecondaryKey{[]byte(low)}, c.SecondaryKey{[]byte(high)}
+				l := c.SecondaryKey(arg2key([]byte(low)))
+				h := c.SecondaryKey(arg2key([]byte(high)))
 				statsResp, err = client.RangeStatistics(indexName, bucket, l, h, inclusion)
 				if err == nil {
 					fmt.Println("Stats: ", statsResp)
 				}
 			} else {
-				values := make([]c.SecondaryKey, 0, len(keys))
-				for _, key := range keys {
-					skey := make(c.SecondaryKey, 0)
-					if err = json.Unmarshal(key, &skey); err != nil {
-						values = append(values, skey)
-					}
-				}
-				statsResp, err = client.LookupStatistics(indexName, bucket, values[0])
+				statsResp, err = client.LookupStatistics(indexName, bucket, keys)
 				if err == nil {
 					fmt.Println("Stats: ", statsResp)
 				}
@@ -200,4 +189,16 @@ func scanCallback(res queryclient.ResponseReader) bool {
 func printIndexInfo(info queryclient.IndexInfo) {
 	fmt.Printf("Index:%s/%s, Id:%s, Using:%s, Exprs:%v, isPrimary:%v\n",
 		info.Name, info.Bucket, info.DefnID, info.Using, info.SecExprs, info.IsPrimary)
+}
+
+func arg2key(arg []byte) []interface{} {
+	var key interface{}
+	if err := json.Unmarshal(arg, &key); err != nil {
+		log.Fatal(err)
+	}
+	skey, ok := key.([]interface{})
+	if ok {
+		return skey
+	}
+	return []interface{}{skey}
 }
