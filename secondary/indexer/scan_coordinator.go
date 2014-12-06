@@ -19,6 +19,7 @@ import (
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // TODO:
@@ -33,6 +34,7 @@ var (
 	ErrIndexNotReady      = errors.New("Index not ready")
 	ErrInternal           = errors.New("Internal server error occured")
 	ErrSnapNotAvailable   = errors.New("No snapshot available for scan")
+	ErrScanTimedOut       = errors.New("Index scan timed out")
 )
 
 type scanType string
@@ -49,6 +51,7 @@ type scanDescriptor struct {
 	p         *scanParams
 	isPrimary bool
 	stopch    StopChannel
+	timeoutch <-chan time.Time
 
 	respch chan interface{}
 }
@@ -145,7 +148,11 @@ func (r *scanStreamReader) ReadKeyBatch() (keys *[]Key, done bool, err error) {
 
 loop:
 	for r.hasNext {
-		resp, r.hasNext = <-r.sd.respch
+		select {
+		case resp, r.hasNext = <-r.sd.respch:
+		case <-r.sd.timeoutch:
+			resp = ErrScanTimedOut
+		}
 		if r.hasNext {
 			switch resp.(type) {
 			case Key:
@@ -240,6 +247,8 @@ type scanCoordinator struct {
 	mu            sync.RWMutex
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
+
+	config common.Config
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -255,6 +264,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel) (
 		supvCmdch: supvCmdch,
 		supvMsgch: supvMsgch,
 		logPrefix: "ScanCoordinator",
+		config:    common.SystemConfig.SectionConfig("indexer.scanner.", true),
 	}
 
 	config := common.SystemConfig.SectionConfig("queryport.indexer.", true)
@@ -402,11 +412,13 @@ func (s *scanCoordinator) requestHandler(
 	}
 
 	scanId := atomic.AddUint64(&s.reqCounter, 1)
+	timeout := time.Millisecond * time.Duration(s.config["scanTimeout"].Int())
 	sd := &scanDescriptor{
-		scanId: scanId,
-		p:      p,
-		stopch: make(StopChannel),
-		respch: make(chan interface{}),
+		scanId:    scanId,
+		p:         p,
+		stopch:    make(StopChannel),
+		respch:    make(chan interface{}),
+		timeoutch: time.After(timeout),
 	}
 
 	if err == nil {
@@ -446,7 +458,12 @@ func (s *scanCoordinator) requestHandler(
 
 	// Block wait until a ts is available for fullfilling the request
 	s.supvMsgch <- snapReqMsg
-	msg := <-snapResch
+	var msg interface{}
+	select {
+	case msg = <-snapResch:
+	case <-sd.timeoutch:
+		msg = ErrScanTimedOut
+	}
 
 	var snap IndexSnapshot
 	var ts *common.TsVbuuid
@@ -458,7 +475,9 @@ func (s *scanCoordinator) requestHandler(
 			ts = snap.Timestamp()
 		}
 	case error:
-		respch <- s.makeResponseMessage(sd, msg.(error))
+		err := msg.(error)
+		respch <- s.makeResponseMessage(sd, err)
+		common.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
 		close(respch)
 		return
 	}
@@ -521,6 +540,10 @@ func (s *scanCoordinator) requestHandler(
 					break loop
 				}
 			case respch <- msg:
+			}
+
+			if err != nil {
+				break loop
 			}
 		}
 		close(respch)

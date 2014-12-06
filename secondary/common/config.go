@@ -263,9 +263,9 @@ var SystemConfig = Config{
 		1000 * 1024,
 	},
 	"queryport.client.readDeadline": ConfigValue{
-		4000,
+		300000,
 		"timeout, in milliseconds, is timeout while reading from socket",
-		4000,
+		300000,
 	},
 	"queryport.client.writeDeadline": ConfigValue{
 		4000,
@@ -293,6 +293,11 @@ var SystemConfig = Config{
 		"timeout, in milliseconds, to wait for an existing connection " +
 			"from the pool before considering the creation of a new one",
 		1,
+	},
+	"indexer.scanner.scanTimeout": ConfigValue{
+		12000,
+		"timeout, in milliseconds, timeout for index scan processing",
+		12000,
 	},
 }
 
