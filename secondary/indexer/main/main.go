@@ -21,10 +21,17 @@ import (
 	"github.com/couchbase/indexing/secondary/indexer"
 )
 
-var logLevel = flag.Int("log", common.LogLevelInfo, "Log Level - 1(Info), 2(Debug), 3(Trace)")
-var numVbuckets = flag.Int("vbuckets", indexer.MAX_NUM_VBUCKETS, "Number of vbuckets configured in Couchbase")
-var cluster = flag.String("cluster", indexer.DEFAULT_CLUSTER_ENDPOINT, "Couchbase cluster address")
-var enableManager = flag.Bool("enable_manager", false, "Enable Index Manager")
+var (
+	logLevel          = flag.Int("log", common.LogLevelInfo, "Log Level - 1(Info), 2(Debug), 3(Trace)")
+	numVbuckets       = flag.Int("vbuckets", indexer.MAX_NUM_VBUCKETS, "Number of vbuckets configured in Couchbase")
+	cluster           = flag.String("cluster", indexer.DEFAULT_CLUSTER_ENDPOINT, "Couchbase cluster address")
+	adminPort         = flag.String("adminPort", "9100", "Index ddl and status port")
+	scanPort          = flag.String("scanPort", "9101", "Index scanner port")
+	streamInitPort    = flag.String("streamInitPort", "9102", "Index initial stream port")
+	streamCatchupPort = flag.String("streamCatchupPort", "9103", "Index catchup stream port")
+	streamMaintPort   = flag.String("streamMaintPort", "9104", "Index maintenance stream port")
+	enableManager     = flag.Bool("enable_manager", false, "Enable Index Manager")
+)
 
 func main() {
 
@@ -39,13 +46,17 @@ func main() {
 	config = config.SetValue("clusterAddr", *cluster)
 	config = config.SetValue("numVbuckets", *numVbuckets)
 	config = config.SetValue("enableManager", *enableManager)
+	config = config.SetValue("adminPort", *adminPort)
+	config = config.SetValue("scanPort", *scanPort)
+	config = config.SetValue("streamInitPort", *streamInitPort)
+	config = config.SetValue("streamCatchupPort", *streamCatchupPort)
+	config = config.SetValue("streamMaintPort", *streamMaintPort)
 
 	_, msg := indexer.NewIndexer(config)
 
 	if msg.GetMsgType() != indexer.MSG_SUCCESS {
 		log.Printf("Indexer Failure to Init %v", msg)
 	}
-
 }
 
 func dumpOnSignal(signals ...os.Signal) {
