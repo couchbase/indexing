@@ -17,6 +17,7 @@ import (
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
 	"github.com/couchbaselabs/goprotobuf/proto"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -256,19 +257,21 @@ type scanCoordinator struct {
 // by a synchronous response on the supvCmdch.
 // Any async message to supervisor is sent to supvMsgch.
 // If supvCmdch get closed, ScanCoordinator will shut itself down.
-func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel) (
-	ScanCoordinator, Message) {
+func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
+	config common.Config) (ScanCoordinator, Message) {
 	var err error
 
 	s := &scanCoordinator{
 		supvCmdch: supvCmdch,
 		supvMsgch: supvMsgch,
 		logPrefix: "ScanCoordinator",
-		config:    common.SystemConfig.SectionConfig("indexer.scanner.", true),
+		config:    config,
 	}
 
-	config := common.SystemConfig.SectionConfig("queryport.indexer.", true)
-	s.serv, err = queryport.NewServer(QUERY_PORT_ADDR, s.requestHandler, config)
+	addr := net.JoinHostPort("", config["scanPort"].String())
+	// TODO: Move queryport config to indexer.queryport base
+	queryportCfg := common.SystemConfig.SectionConfig("queryport.indexer.", true)
+	s.serv, err = queryport.NewServer(addr, s.requestHandler, queryportCfg)
 
 	if err != nil {
 		errMsg := &MsgError{err: Error{code: ERROR_SCAN_COORD_QUERYPORT_FAIL,

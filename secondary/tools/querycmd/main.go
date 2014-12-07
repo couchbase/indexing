@@ -43,7 +43,7 @@ const (
 )
 
 func parseArgs() {
-	flag.StringVar(&server, "server", "localhost:7000", "index server or scan server address")
+	flag.StringVar(&server, "server", "localhost:9101", "index server or scan server address")
 	flag.StringVar(&opType, "type", "scanAll", "Index command (scan|stats|scanAll|create|drop|list)")
 	flag.StringVar(&indexName, "index", "", "Index name")
 	flag.StringVar(&bucket, "bucket", "default", "Bucket name")

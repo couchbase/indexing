@@ -33,10 +33,6 @@ type Indexer interface {
 	Shutdown() Message
 }
 
-//TODO move this to config
-var NUM_VBUCKETS uint16
-var CLUSTER_ENDPOINT string
-var ENABLE_MANAGER bool
 var StreamAddrMap StreamAddressMap
 
 type BucketIndexCountMap map[string]int
@@ -83,10 +79,10 @@ type indexer struct {
 	kvSender      KVSender        //handle to KVSender
 	cbqBridge     CbqBridge       //handle to CbqBridge
 	scanCoord     ScanCoordinator //handle to ScanCoordinator
-
+	config        common.Config
 }
 
-func NewIndexer(numVbuckets uint16) (Indexer, Message) {
+func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx := &indexer{
 		wrkrRecvCh:         make(MsgChannel),
@@ -113,8 +109,8 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 
 		streamBucketFlushInProgress:  make(map[common.StreamId]BucketFlushInProgressMap),
 		streamBucketObserveFlushDone: make(map[common.StreamId]BucketObserveFlushDoneMap),
-
-		bucketsInCatchup: make(map[string]bool),
+		bucketsInCatchup:             make(map[string]bool),
+		config:                       config,
 	}
 
 	idx.state = INIT
@@ -123,20 +119,14 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	//assume indexerId 1 for now
 	idx.id = 1
 
-	if numVbuckets > 0 {
-		NUM_VBUCKETS = numVbuckets
-	} else {
-		NUM_VBUCKETS = MAX_NUM_VBUCKETS
-	}
-
-	common.Infof("Indexer::NewIndexer Starting with Vbuckets %v", NUM_VBUCKETS)
+	common.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
 	idx.initStreamAddressMap()
 	idx.initStreamFlushMap()
 
 	var res Message
-	if ENABLE_MANAGER {
-		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh)
+	if idx.config["enableManager"].Bool() {
+		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, config)
 		if res.GetMsgType() != MSG_SUCCESS {
 			common.Errorf("Indexer::NewIndexer ClusterMgrAgent Init Error", res)
 			return nil, res
@@ -144,29 +134,28 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	}
 
 	//Start Mutation Manager
-	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh,
-		numVbuckets)
+	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		common.Errorf("Indexer::NewIndexer Mutation Manager Init Error", res)
 		return nil, res
 	}
 
 	//Start KV Sender
-	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, numVbuckets)
+	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		common.Errorf("Indexer::NewIndexer KVSender Init Error", res)
 		return nil, res
 	}
 
 	//Start Timekeeper
-	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh)
+	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		common.Errorf("Indexer::NewIndexer Timekeeper Init Error", res)
 		return nil, res
 	}
 
 	//Start Scan Coordinator
-	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh)
+	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		common.Errorf("Indexer::NewIndexer Scan Coordinator Init Error", res)
 		return nil, res
@@ -180,7 +169,7 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 	}
 
 	//Start CbqBridge
-	idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh, idx.indexInstMap)
+	idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh, idx.indexInstMap, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		common.Errorf("Indexer::NewIndexer CbqBridge Init Error", res)
 		return nil, res
@@ -397,12 +386,12 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 }
 
 func (idx *indexer) handleAdminMsgs(msg Message) {
-
+	enableManager := idx.config["enableManager"].Bool()
 	switch msg.GetMsgType() {
 
 	case CBQ_CREATE_INDEX_DDL:
 
-		if ENABLE_MANAGER {
+		if enableManager {
 			//send the msg to cluster mgr
 			idx.clustMgrAgentCmdCh <- msg
 			res := <-idx.clustMgrAgentCmdCh
@@ -418,7 +407,7 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 
 	case CBQ_DROP_INDEX_DDL:
 
-		if ENABLE_MANAGER {
+		if enableManager {
 			//send the msg to cluster mgr
 			idx.clustMgrAgentCmdCh <- msg
 			res := <-idx.clustMgrAgentCmdCh
@@ -497,7 +486,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	//get current timestamp from KV and set it as Initial Build Timestamp
 
-	buildTs := idx.getCurrentKVTs(CLUSTER_ENDPOINT, indexInst.Defn.Bucket)
+	buildTs := idx.getCurrentKVTs(idx.config["clusterAddr"].String(), indexInst.Defn.Bucket)
 
 	//if initial build TS is zero, set index state to active and add it to
 	//MAINT_STREAM directly
@@ -692,7 +681,7 @@ func (idx *indexer) shutdownWorkers() {
 	idx.adminMgrCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
 	<-idx.adminMgrCmdCh
 
-	if ENABLE_MANAGER {
+	if idx.config["enableManager"].Bool() {
 		//shutdown cluster manager
 		idx.clustMgrAgentCmdCh <- &MsgGeneral{mType: CLUST_MGR_AGENT_SHUTDOWN}
 		<-idx.clustMgrAgentCmdCh
@@ -1017,30 +1006,15 @@ func (idx *indexer) sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap Message,
 }
 
 func (idx *indexer) initStreamAddressMap() {
-
-	//init the stream address map
 	StreamAddrMap = make(StreamAddressMap)
 
-	if _, port, err := net.SplitHostPort(INDEXER_MAINT_DATA_PORT_ENDPOINT); err == nil {
-		StreamAddrMap[common.MAINT_STREAM] = common.Endpoint(":" + port)
-	} else {
-		common.Errorf("Indexer::initStreamAddressMap Unable to find address for Maint Port. "+
-			"INDEXER_MAINT_DATA_PORT_ENDPOINT not set properly. Err %v", err)
+	port2addr := func(p string) string {
+		return net.JoinHostPort("", idx.config[p].String())
 	}
 
-	if _, port, err := net.SplitHostPort(INDEXER_CATCHUP_DATA_PORT_ENDPOINT); err == nil {
-		StreamAddrMap[common.CATCHUP_STREAM] = common.Endpoint(":" + port)
-	} else {
-		common.Errorf("Indexer::initStreamAddressMap Unable to find address for Catchup Port. "+
-			"INDEXER_CATCHUP_DATA_PORT_ENDPOINT not set properly. Err %v", err)
-	}
-
-	if _, port, err := net.SplitHostPort(INDEXER_INIT_DATA_PORT_ENDPOINT); err == nil {
-		StreamAddrMap[common.INIT_STREAM] = common.Endpoint(":" + port)
-	} else {
-		common.Errorf("Indexer:initStreamAddressMap Unable to find address for Init Port. "+
-			"INDEXER_INIT_DATA_PORT_ENDPOINT not set properly. Err %v", err)
-	}
+	StreamAddrMap[common.MAINT_STREAM] = common.Endpoint(port2addr("streamMaintPort"))
+	StreamAddrMap[common.CATCHUP_STREAM] = common.Endpoint(port2addr("streamCatchupPort"))
+	StreamAddrMap[common.INIT_STREAM] = common.Endpoint(port2addr("streamInitPort"))
 }
 
 //checkDuplicateIndex checks if an index with the given indexInstId
@@ -1317,7 +1291,8 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 func (idx *indexer) getCurrentKVTs(cluster, bucket string) Timestamp {
 
-	ts := NewTimestamp()
+	numVbuckets := idx.config["numVbuckets"].Int()
+	ts := NewTimestamp(numVbuckets)
 
 	start := time.Now()
 	if b, err := common.ConnectBucket(cluster, "default", bucket); err == nil {
@@ -1327,7 +1302,7 @@ func (idx *indexer) getCurrentKVTs(cluster, bucket string) Timestamp {
 		//for all nodes in cluster
 		for _, nodestat := range stats {
 			//for all vbuckets
-			for i := 1; i <= int(NUM_VBUCKETS); i++ {
+			for i := 1; i <= numVbuckets; i++ {
 				vbkey := "vb_" + strconv.Itoa(i) + ":high_seqno"
 				if highseqno, ok := nodestat[vbkey]; ok {
 					if s, err := strconv.Atoi(highseqno); err == nil {
@@ -1765,7 +1740,8 @@ func (idx *indexer) bootstrap() error {
 
 	//Start Storage Manager
 	var res Message
-	idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh, idx.indexPartnMap)
+	idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh,
+		idx.indexPartnMap, idx.config)
 	if res.GetMsgType() == MSG_ERROR {
 		err := res.(*MsgError).GetError()
 		common.Errorf("Indexer::NewIndexer Storage Manager Init Error %v", err)
@@ -1864,7 +1840,8 @@ func (idx *indexer) initFromPersistedState() error {
 
 		//Add one partition for now
 		partnId := common.PartitionId(0)
-		endpt := []common.Endpoint{INDEXER_MAINT_DATA_PORT_ENDPOINT}
+		addr := net.JoinHostPort("", idx.config["streamMaintPort"].String())
+		endpt := []common.Endpoint{common.Endpoint(addr)}
 		partnDefn := common.KeyPartitionDefn{Id: partnId,
 			Endpts: endpt}
 		newpc.AddPartition(partnId, partnDefn)

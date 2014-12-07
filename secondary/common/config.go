@@ -294,10 +294,50 @@ var SystemConfig = Config{
 			"from the pool before considering the creation of a new one",
 		1,
 	},
-	"indexer.scanner.scanTimeout": ConfigValue{
+	"indexer.scanTimeout": ConfigValue{
 		12000,
 		"timeout, in milliseconds, timeout for index scan processing",
 		12000,
+	},
+	"indexer.adminPort": ConfigValue{
+		"9100",
+		"port for index ddl and status operations",
+		"9100",
+	},
+	"indexer.scanPort": ConfigValue{
+		"9101",
+		"port for index scan operations",
+		"9101",
+	},
+	"indexer.streamInitPort": ConfigValue{
+		"9102",
+		"port for inital build stream",
+		"9102",
+	},
+	"indexer.streamCatchupPort": ConfigValue{
+		"9103",
+		"port for catchup stream",
+		"9103",
+	},
+	"indexer.streamMaintPort": ConfigValue{
+		"9104",
+		"port for maintenance stream",
+		"9104",
+	},
+	"indexer.clusterAddr": ConfigValue{
+		"127.0.0.1:8091",
+		"Local cluster manager address",
+		"127.0.0.1:8091",
+	},
+	"indexer.numVbuckets": ConfigValue{
+		1024,
+		"Number of vbuckets",
+		1024,
+	},
+	"indexer.enableManager": ConfigValue{
+		false,
+		"Enable index manager",
+		false,
 	},
 }
 

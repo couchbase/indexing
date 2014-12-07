@@ -19,34 +19,6 @@ const WORKER_MSG_QUEUE_LEN = 100000
 // Default cluster address
 const DEFAULT_CLUSTER_ENDPOINT = "localhost:9000"
 
-//Data Port Endpoint for Local Indexer on which projector
-//needs to send mutations for maintenance stream
-const INDEXER_MAINT_DATA_PORT_ENDPOINT = "localhost:8100"
-
-//Data Port Endpoint for Local Indexer on which projector
-//needs to send mutations for maintenance stream
-const INDEXER_CATCHUP_DATA_PORT_ENDPOINT = "localhost:8101"
-
-//Data Port Endpoint for Local Indexer on which projector
-//needs to send mutations for initial build stream
-const INDEXER_INIT_DATA_PORT_ENDPOINT = "localhost:8102"
-
-//Cbq Bridge Http Address on which it listens
-//to messages from Cbq Server
-const CBQ_BRIDGE_HTTP_ADDR = ":9101"
-
-const KVPORT_CLUSTER_RUN = "9000"
-
-const KVPORT = "8091"
-
-const KV_DCP_PORT = "11210"
-
-const KV_DCP_PORT_CLUSTER_RUN = "12000"
-
-const PROJECTOR_PORT = "9999"
-
-const QUERY_PORT_ADDR = ":7000"
-
 const LOCALHOST = "127.0.0.1"
 
 //Maintenance Topic Name

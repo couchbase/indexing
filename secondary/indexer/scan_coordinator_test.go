@@ -11,6 +11,8 @@ import (
 	"testing"
 )
 
+const QUERY_PORT_ADDR = ":7000"
+
 var (
 	nkeys   int = 0
 	count   int = 0

@@ -47,6 +47,8 @@ type timekeeper struct {
 
 	//map of indexInstId to its Initial Build Info
 	indexBuildInfo map[common.IndexInstId]*InitialBuildInfo
+
+	config common.Config
 }
 
 type BucketHWTMap map[string]*common.TsVbuuid
@@ -77,8 +79,8 @@ type InitialBuildInfo struct {
 //by a synchronous response of the supvCmdch.
 //Any async response to supervisor is sent to supvRespch.
 //If supvCmdch get closed, storageMgr will shut itself down.
-func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel) (
-	Timekeeper, Message) {
+func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel,
+	config common.Config) (Timekeeper, Message) {
 
 	//Init the timekeeper struct
 	tk := &timekeeper{
@@ -98,6 +100,7 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel) (
 		streamState:                      make(map[common.StreamId]StreamState),
 		streamBucketIndexCountMap:        make(map[common.StreamId]BucketIndexCountMap),
 		indexBuildInfo:                   make(map[common.IndexInstId]*InitialBuildInfo),
+		config:                           config,
 	}
 
 	//start timekeeper loop which listens to commands from its supervisor
@@ -777,9 +780,10 @@ func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
 	msg := cmd.(*MsgTKGetBucketHWT)
 	msg.ts = nil
 
+	numVbuckets := tk.config["numVbuckets"].Int()
 	if bucketHWTMap, ok := tk.streamBucketHWTMap[streamId]; ok {
 		if ts, ok := bucketHWTMap[bucket]; ok {
-			newTs := copyTsVbuuid(bucket, ts)
+			newTs := copyTsVbuuid(numVbuckets, bucket, ts)
 			msg.ts = newTs
 		}
 	}
@@ -1339,7 +1343,8 @@ func (tk *timekeeper) incrSyncCount(streamId common.StreamId, bucket string) {
 			"Stream: %v. SyncCount: %v.", bucket, streamId, syncCount)
 		//update only if its less than trigger count, otherwise it makes no
 		//difference. On long running systems, syncCount may overflow otherwise
-		if syncCount <= uint64(SYNC_COUNT_TS_TRIGGER*NUM_VBUCKETS) {
+		numVbuckets := tk.config["numVbuckets"].Int()
+		if syncCount <= uint64(SYNC_COUNT_TS_TRIGGER)*uint64(numVbuckets) {
 			bucketSyncCountMap[bucket] = syncCount
 		}
 
@@ -1363,12 +1368,13 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	bucketSyncCountMap := tk.streamBucketSyncCountMap[streamId]
 
 	//new timestamp can be generated if all stream begins have been received
-	if bucketSyncCountMap[bucket] >= uint64(SYNC_COUNT_TS_TRIGGER*NUM_VBUCKETS) &&
+	numVbuckets := tk.config["numVbuckets"].Int()
+	if bucketSyncCountMap[bucket] >= uint64(SYNC_COUNT_TS_TRIGGER)*uint64(numVbuckets) &&
 		bucketNewTsReqd[bucket] == true &&
 		tk.allStreamBeginsReceived(streamId, bucket) == true {
 
 		//generate new stability timestamp
-		tsVbuuid := copyTsVbuuid(bucket, tk.streamBucketHWTMap[streamId][bucket])
+		tsVbuuid := copyTsVbuuid(int(numVbuckets), bucket, tk.streamBucketHWTMap[streamId][bucket])
 
 		//HWT may have less Seqno than Snapshot marker as mutation come later than
 		//snapshot markers. Once a TS is generated, update the Seqnos with the
@@ -1496,8 +1502,8 @@ func (tk *timekeeper) checkStreamValid(streamId common.StreamId) bool {
 
 //helper function to extract Stability Timestamp from TsVbuuid
 func getStabilityTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
-
-	ts := NewTimestamp()
+	numVbuckets := len(tsVbuuid.Snapshots)
+	ts := NewTimestamp(numVbuckets)
 	for i, s := range tsVbuuid.Snapshots {
 		ts[i] = Seqno(s[1]) //high seq num in snapshot marker
 	}
@@ -1506,8 +1512,8 @@ func getStabilityTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 
 //helper function to extract Seqnum Timestamp from TsVbuuid
 func getTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
-
-	ts := NewTimestamp()
+	numVbuckets := len(tsVbuuid.Snapshots)
+	ts := NewTimestamp(numVbuckets)
 	for i, s := range tsVbuuid.Seqnos {
 		ts[i] = Seqno(s)
 	}
@@ -1515,15 +1521,16 @@ func getTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 }
 
 //helper function to copy TsVbuuid
-func copyTsVbuuid(bucket string, tsVbuuid *common.TsVbuuid) *common.TsVbuuid {
+func copyTsVbuuid(numVbuckets int, bucket string,
+	tsVbuuid *common.TsVbuuid) *common.TsVbuuid {
 
 	if tsVbuuid == nil {
 		return nil
 	}
 
-	newTs := common.NewTsVbuuid(bucket, int(NUM_VBUCKETS))
+	newTs := common.NewTsVbuuid(bucket, numVbuckets)
 
-	for i := 0; i < int(NUM_VBUCKETS); i++ {
+	for i := 0; i < numVbuckets; i++ {
 		newTs.Seqnos[i] = tsVbuuid.Seqnos[i]
 		newTs.Vbuuids[i] = tsVbuuid.Vbuuids[i]
 		newTs.Snapshots[i] = tsVbuuid.Snapshots[i]
@@ -1640,20 +1647,24 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId) {
 func (tk *timekeeper) computeRestartTs(streamId common.StreamId) map[string]*common.TsVbuuid {
 
 	bucketRestartTs := make(map[string]*common.TsVbuuid)
+	numVbuckets := tk.config["numVbuckets"].Int()
 
 	for bucket, cnt := range tk.streamBucketIndexCountMap[streamId] {
 		//for all the buckets with index count > 0 for the stream, use last flushed TS
 		//to restart the stream
 		if cnt > 0 {
 			if _, ok := tk.streamBucketLastFlushedTsMap[streamId][bucket]; ok {
-				bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketLastFlushedTsMap[streamId][bucket])
+				bucketRestartTs[bucket] = copyTsVbuuid(numVbuckets, bucket,
+					tk.streamBucketLastFlushedTsMap[streamId][bucket])
 			} else if ts, ok := tk.streamBucketRestartTsMap[streamId][bucket]; ok && ts != nil {
 				//if no flush has been done yet, use restart TS
-				bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketRestartTsMap[streamId][bucket])
+				bucketRestartTs[bucket] = copyTsVbuuid(numVbuckets, bucket,
+					tk.streamBucketRestartTsMap[streamId][bucket])
 			} else {
 				//for CATCHUP_STREAM, use the restart TS of MAINT_STREAM
 				if streamId == common.CATCHUP_STREAM {
-					bucketRestartTs[bucket] = copyTsVbuuid(bucket, tk.streamBucketRestartTsMap[common.MAINT_STREAM][bucket])
+					bucketRestartTs[bucket] = copyTsVbuuid(numVbuckets, bucket,
+						tk.streamBucketRestartTsMap[common.MAINT_STREAM][bucket])
 				}
 			}
 		}
@@ -1664,13 +1675,14 @@ func (tk *timekeeper) computeRestartTs(streamId common.StreamId) map[string]*com
 func (tk *timekeeper) initInternalStreamState(streamId common.StreamId,
 	bucket string) {
 
-	tk.streamBucketHWTMap[streamId][bucket] = common.NewTsVbuuid(bucket, int(NUM_VBUCKETS))
+	numVbuckets := tk.config["numVbuckets"].Int()
+	tk.streamBucketHWTMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	tk.streamBucketNewTsReqdMap[streamId][bucket] = false
 	tk.streamBucketFlushInProgressTsMap[streamId][bucket] = nil
 	tk.streamBucketTsListMap[streamId][bucket] = list.New()
 	tk.streamBucketFlushEnabledMap[streamId][bucket] = true
 	tk.streamBucketDrainEnabledMap[streamId][bucket] = true
-	tk.streamBucketStreamBeginMap[streamId][bucket] = NewTimestamp()
+	tk.streamBucketStreamBeginMap[streamId][bucket] = NewTimestamp(numVbuckets)
 
 	common.Debugf("Timekeeper::initInternalStreamState \n\tNew TS Allocated for Bucket %v "+
 		"Stream %v", bucket, streamId)
@@ -1805,6 +1817,7 @@ func (tk *timekeeper) setHWTFromRestartTs(streamId common.StreamId, bucket strin
 
 	common.Debugf("Timekeeper::setHWTFromRestartTs Stream %v Bucket %v", streamId, bucket)
 
+	numVbuckets := tk.config["numVbuckets"].Int()
 	//if no flush has been done for Catchup Stream yet, use RestartTs from Maint Stream
 	fromStream := streamId
 	if streamId == common.CATCHUP_STREAM {
@@ -1823,10 +1836,10 @@ func (tk *timekeeper) setHWTFromRestartTs(streamId common.StreamId, bucket strin
 		if restartTs, ok := bucketRestartTs[bucket]; ok {
 
 			//update HWT
-			tk.streamBucketHWTMap[streamId][bucket] = copyTsVbuuid(bucket, restartTs)
+			tk.streamBucketHWTMap[streamId][bucket] = copyTsVbuuid(numVbuckets, bucket, restartTs)
 
 			//update Last Flushed Ts
-			tk.streamBucketLastFlushedTsMap[streamId][bucket] = copyTsVbuuid(bucket, restartTs)
+			tk.streamBucketLastFlushedTsMap[streamId][bucket] = copyTsVbuuid(numVbuckets, bucket, restartTs)
 			common.Debugf("Timekeeper::setHWTFromRestartTs \n\tHWT Set For "+
 				"Bucket %v StreamId %v. TS %v.", bucket, streamId, restartTs)
 

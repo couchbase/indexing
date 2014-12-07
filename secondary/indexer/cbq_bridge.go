@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"github.com/couchbase/indexing/secondary/common"
 	"math/rand"
+	"net"
 	"net/http"
 	"strconv"
 )
@@ -26,10 +27,11 @@ type cbqBridge struct {
 	supvRespch MsgChannel //channel to send any message to supervisor
 
 	indexMap map[common.IndexInstId]IndexInfo
+	config   common.Config
 }
 
 func NewCbqBridge(supvCmdch MsgChannel, supvRespch MsgChannel,
-	indexInstMap common.IndexInstMap) (
+	indexInstMap common.IndexInstMap, config common.Config) (
 	CbqBridge, Message) {
 
 	//Init the cbqBridge struct
@@ -37,6 +39,7 @@ func NewCbqBridge(supvCmdch MsgChannel, supvRespch MsgChannel,
 		supvCmdch:  supvCmdch,
 		supvRespch: supvRespch,
 		indexMap:   make(map[common.IndexInstId]IndexInfo),
+		config:     config,
 	}
 
 	cbq.updateIndexMap(indexInstMap)
@@ -86,8 +89,9 @@ func (cbq *cbqBridge) initCbqBridge() error {
 	http.HandleFunc("/drop", cbq.handleDrop)
 	http.HandleFunc("/list", cbq.handleList)
 
-	common.Infof("CbqBridge::initCbqBridge Listening on %v", CBQ_BRIDGE_HTTP_ADDR)
-	if err := http.ListenAndServe(CBQ_BRIDGE_HTTP_ADDR, nil); err != nil {
+	addr := net.JoinHostPort("", cbq.config["adminPort"].String())
+	common.Infof("CbqBridge::initCbqBridge Listening on %v", addr)
+	if err := http.ListenAndServe(addr, nil); err != nil {
 		common.Errorf("CbqBridge: Error Starting Http Server: %v", err)
 		return err
 	}
@@ -121,12 +125,13 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 		State: common.INDEX_STATE_INITIAL,
 	}
 
-	if !ENABLE_MANAGER {
+	if !cbq.config["enableManager"].Bool() {
 		pc := common.NewKeyPartitionContainer()
 
 		//Add one partition for now
 		partnId := common.PartitionId(0)
-		endpt := []common.Endpoint{INDEXER_MAINT_DATA_PORT_ENDPOINT}
+		addr := net.JoinHostPort("", cbq.config["streamMaintPort"].String())
+		endpt := []common.Endpoint{common.Endpoint(addr)}
 		partnDefn := common.KeyPartitionDefn{Id: partnId,
 			Endpts: endpt}
 		pc.AddPartition(partnId, partnDefn)

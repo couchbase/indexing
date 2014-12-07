@@ -33,8 +33,8 @@ const DEFAULT_POOL_NAME = "default"
 const COORD_MAINT_STREAM_PORT = "9334"
 const COORD_INIT_STREAM_PORT = "9335"
 
-// Request Handler
-const INDEX_DDL_HTTP_ADDR = ":9102"
+// Request Handler configurable parameter
+const INDEX_DDL_HTTP_ADDR = ":9202"
 
 // Stream Manager
 const COUCHBASE_INTERNAL_BUCKET_URL = "http://localhost:11209/"

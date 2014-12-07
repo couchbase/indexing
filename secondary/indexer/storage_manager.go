@@ -45,6 +45,8 @@ type storageMgr struct {
 
 	dbfile *forestdb.File
 	meta   *forestdb.KVStore // handle for index meta
+
+	config common.Config
 }
 
 type snapshotWaiter struct {
@@ -77,7 +79,7 @@ func (w *snapshotWaiter) Error(err error) {
 //Any async response to supervisor is sent to supvRespch.
 //If supvCmdch get closed, storageMgr will shut itself down.
 func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
-	indexPartnMap IndexPartnMap) (
+	indexPartnMap IndexPartnMap, config common.Config) (
 	StorageManager, Message) {
 
 	//Init the storageMgr struct
@@ -86,13 +88,14 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		supvRespch:   supvRespch,
 		indexSnapMap: make(map[common.IndexInstId]IndexSnapshot),
 		waitersMap:   make(map[common.IndexInstId][]*snapshotWaiter),
+		config:       config,
 	}
 
-	config := forestdb.DefaultConfig()
+	fdbconfig := forestdb.DefaultConfig()
 	kvconfig := forestdb.DefaultKVStoreConfig()
 	var err error
 
-	if s.dbfile, err = forestdb.Open("meta", config); err != nil {
+	if s.dbfile, err = forestdb.Open("meta", fdbconfig); err != nil {
 		return nil, &MsgError{err: Error{cause: err}}
 	}
 
@@ -165,6 +168,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	tsVbuuid := cmd.(*MsgMutMgrFlushDone).GetTS()
+	numVbuckets := s.config["numVbuckets"].Int()
 
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range s.indexPartnMap {
@@ -192,7 +196,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 					latestSnapshot := snapContainer.GetLatestSnapshot()
 
-					snapTs := NewTimestamp()
+					snapTs := NewTimestamp(numVbuckets)
 					if latestSnapshot != nil {
 						snapTsVbuuid := latestSnapshot.Timestamp()
 						snapTs = getStabilityTSFromTsVbuuid(snapTsVbuuid)
@@ -309,6 +313,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	streamId := cmd.(*MsgRollback).GetStreamId()
 	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
+	numVbuckets := sm.config["numVbuckets"].Int()
 
 	respTs := make(map[string]*common.TsVbuuid)
 
@@ -356,7 +361,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
 								slice.Id())
-							respTs[idxInst.Defn.Bucket] = common.NewTsVbuuid(idxInst.Defn.Bucket, int(NUM_VBUCKETS))
+							respTs[idxInst.Defn.Bucket] = common.NewTsVbuuid(idxInst.Defn.Bucket, numVbuckets)
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback

@@ -15,8 +15,8 @@ type Timestamp []Seqno
 //Stability Timestamp
 type StabilityTimestamp Timestamp
 
-func NewTimestamp() Timestamp {
-	ts := make([]Seqno, NUM_VBUCKETS)
+func NewTimestamp(numVbuckets int) Timestamp {
+	ts := make([]Seqno, numVbuckets)
 	return ts
 }
 

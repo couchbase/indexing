@@ -34,11 +34,13 @@ func main() {
 	go common.ExitOnStdinClose()
 
 	common.SetLogLevel(*logLevel)
+	config := common.SystemConfig.SectionConfig("indexer.", true)
 
-	indexer.CLUSTER_ENDPOINT = *cluster
+	config = config.SetValue("clusterAddr", *cluster)
+	config = config.SetValue("numVbuckets", *numVbuckets)
+	config = config.SetValue("enableManager", *enableManager)
 
-	indexer.ENABLE_MANAGER = *enableManager
-	_, msg := indexer.NewIndexer(uint16(*numVbuckets))
+	_, msg := indexer.NewIndexer(config)
 
 	if msg.GetMsgType() != indexer.MSG_SUCCESS {
 		log.Printf("Indexer Failure to Init %v", msg)

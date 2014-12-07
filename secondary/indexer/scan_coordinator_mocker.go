@@ -56,11 +56,11 @@ func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFee
 }
 
 func newScannerTestHarness() (*scannerTestHarness, error) {
-	NUM_VBUCKETS = 8
+	// TODO Set NUM_VBUCKETS = 8 in config
 	h := new(scannerTestHarness)
 	h.cmdch = make(chan Message)
 	h.msgch = make(chan Message)
-	si, errMsg := NewScanCoordinator(h.cmdch, h.msgch)
+	si, errMsg := NewScanCoordinator(h.cmdch, h.msgch, c.SystemConfig.SectionConfig("indexer.", true))
 	h.scanner = si.(*scanCoordinator)
 	if errMsg.GetMsgType() != MSG_SUCCESS {
 		return nil, (errMsg.(*MsgError)).GetError().cause

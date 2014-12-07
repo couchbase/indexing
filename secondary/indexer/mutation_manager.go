@@ -67,7 +67,7 @@ type mutationMgr struct {
 //supvRespch to indicate its completion or any error that may have happened.
 //If supvRespch or supvCmdch is closed, mutation manager will termiate its loop.
 func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
-	numVbuckets uint16) (MutationManager, Message) {
+	config common.Config) (MutationManager, Message) {
 
 	//Init the mutationMgr struct
 	m := &mutationMgr{
@@ -82,7 +82,7 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		shutdownCh:             make(DoneChannel),
 		supvCmdch:              supvCmdch,
 		supvRespch:             supvRespch,
-		numVbuckets:            numVbuckets,
+		numVbuckets:            uint16(config["numVbuckets"].Int()),
 	}
 
 	//start Mutation Manager loop which listens to commands from its supervisor
