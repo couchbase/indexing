@@ -43,7 +43,7 @@ const (
 )
 
 func parseArgs() {
-	flag.StringVar(&server, "server", "localhost:9101", "index server or scan server address")
+	flag.StringVar(&server, "server", "localhost:9000", "Cluster server address")
 	flag.StringVar(&opType, "type", "scanAll", "Index command (scan|stats|scanAll|create|drop|list)")
 	flag.StringVar(&indexName, "index", "", "Index name")
 	flag.StringVar(&bucket, "bucket", "default", "Bucket name")
@@ -72,6 +72,19 @@ func main() {
 
 	parseArgs()
 
+	cinfo := c.NewClusterInfoCache(fmt.Sprintf("http://%s", server), "default")
+	if err = cinfo.Fetch(); err != nil {
+		fmt.Println("Error occured while fetching cluster info -", err)
+		os.Exit(1)
+	}
+	node := cinfo.GetCurrentNode()
+	admin_addr, err := cinfo.GetServiceAddress(node, "index_admin")
+	scan_addr, err := cinfo.GetServiceAddress(node, "index_scan")
+	if err != nil {
+		fmt.Println("Current node does not have indexer present -", err)
+		os.Exit(1)
+	}
+
 	switch opType {
 
 	case "create":
@@ -82,7 +95,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		client := queryclient.NewClusterClient(server)
+		client := queryclient.NewClusterClient(admin_addr)
 		var secExprs []string
 
 		if fields != "" {
@@ -113,7 +126,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		client := queryclient.NewClusterClient(server)
+		client := queryclient.NewClusterClient(admin_addr)
 		err := client.DropIndex(instanceId)
 		if err == nil {
 			fmt.Println("Index dropped")
@@ -121,7 +134,7 @@ func main() {
 			fmt.Println("Error occured:", err)
 		}
 	case "list":
-		client := queryclient.NewClusterClient(server)
+		client := queryclient.NewClusterClient(admin_addr)
 		infos, err := client.List()
 		if err != nil {
 			fmt.Println("Error occured:", err)
@@ -138,7 +151,7 @@ func main() {
 			os.Exit(1)
 		}
 		config := c.SystemConfig.SectionConfig("queryport.client.", true)
-		client := queryclient.NewClient(queryclient.Remoteaddr(server), config)
+		client := queryclient.NewClient(queryclient.Remoteaddr(scan_addr), config)
 		if equal != "" {
 			keys = arg2key([]byte(equal))
 		}
