@@ -11,6 +11,9 @@
 
 package couchbase
 
+import "fmt"
+import "sync"
+
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/collatejson"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
@@ -21,21 +24,274 @@ import "github.com/couchbaselabs/query/expression/parser"
 import "github.com/couchbaselabs/query/value"
 
 // ErrorIndexEmpty is index not initialized.
-var ErrorIndexEmpty = errors.NewError(nil, "secondaryIndex.empty")
+var ErrorIndexEmpty = errors.NewError(nil, "2i.empty")
 
 // ErrorEmptyHost is no valid node hosting an index.
-var ErrorEmptyHost = errors.NewError(nil, "secondaryIndex.emptyHost")
-
-// ErrorEmptyStatistics is index-statistics not available.
-var ErrorEmptyStatistics = errors.NewError(nil, "secondaryIndex.emptyStatistics")
+var ErrorEmptyHost = errors.NewError(nil, "2i.emptyHost")
 
 // PRIMARY_INDEX index name.
 var PRIMARY_INDEX = "#primary"
 
+// ClusterManagerAddr is temporary hard-coded address for
+// cluster-manager-agent, TODO: remove this!
+const ClusterManagerAddr = "localhost:9101"
+
+// IndexerAddr is temporary hard-coded address for indexer
+// node, TODO: remove this!
+const IndexerAddr = "localhost:7000"
+
+var twoiInclusion = map[datastore.Inclusion]qclient.Inclusion{
+	datastore.NEITHER: qclient.Neither,
+	datastore.LOW:     qclient.Low,
+	datastore.HIGH:    qclient.High,
+	datastore.BOTH:    qclient.Both,
+}
+
+// contains all index loaded via 2i cluster.
+type lsmKeyspace struct {
+	mu        sync.RWMutex
+	namespace string // aka pool
+	keyspace  string // aka bucket
+	indexes   map[string]*secondaryIndex
+}
+
+// manage new set of indexes under namespace->keyspace, also called as,
+// pool->bucket.
+func newLSMIndexer(namespace, keyspace string) datastore.Indexer {
+	lsm := &lsmKeyspace{
+		namespace: namespace,
+		keyspace:  keyspace,
+		indexes:   make(map[string]*secondaryIndex),
+	}
+	lsm.Refresh()
+	return lsm
+}
+
+// KeyspaceId implements datastore.Indexer{} interface.
+// Id of the keyspace to which this indexer belongs
+func (lsm *lsmKeyspace) KeyspaceId() string {
+	return lsm.keyspace
+}
+
+// Name implements datastore.Indexer{} interface. Unique within a Keyspace.
+func (lsm *lsmKeyspace) Name() datastore.IndexType {
+	return datastore.LSM
+}
+
+// IndexIds implements datastore.Indexer{} interface. Ids of the indexes
+// defined on this keyspace.
+func (lsm *lsmKeyspace) IndexIds() ([]string, errors.Error) {
+	return lsm.IndexNames()
+}
+
+// IndexNames implements datastore.Indexer{} interface. Names of the
+// indexes defined on this keyspace.
+func (lsm *lsmKeyspace) IndexNames() ([]string, errors.Error) {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
+
+	names := make([]string, 0, len(lsm.indexes))
+	for name := range lsm.indexes {
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+// IndexById implements datastore.Indexer{} interface. Find an index on this
+// keyspace using the index's id.
+func (lsm *lsmKeyspace) IndexById(id string) (datastore.Index, errors.Error) {
+	return lsm.IndexByName(id)
+}
+
+// IndexByName implements datastore.Indexer{} interface. Find an index on
+// this keyspace using the index's name.
+func (lsm *lsmKeyspace) IndexByName(name string) (datastore.Index, errors.Error) {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
+
+	index, ok := lsm.indexes[name]
+	if !ok {
+		err := errors.NewError(nil, fmt.Sprintf("Index %v not found.", name))
+		return nil, err
+	}
+	return index, nil
+}
+
+// Indexes implements datastore.Indexer{} interface. Returns all the
+// indexes defined on this keyspace.
+func (lsm *lsmKeyspace) Indexes() ([]datastore.Index, errors.Error) {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
+
+	indexes := make([]datastore.Index, 0, len(lsm.indexes))
+	for _, index := range lsm.indexes {
+		indexes = append(indexes, index)
+	}
+	return indexes, nil
+}
+
+// IndexByPrimary implements datastore.Indexer{} interface. Returns the
+// server-recommended primary index
+func (lsm *lsmKeyspace) IndexByPrimary() (datastore.PrimaryIndex, errors.Error) {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
+
+	primary, ok := lsm.indexes[PRIMARY_INDEX]
+	if !ok {
+		return primary, nil
+	}
+	return nil, nil
+}
+
+// CreatePrimaryIndex implements datastore.Indexer{} interface. Create or
+// return a primary index on this keyspace
+func (lsm *lsmKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Error) {
+	client := qclient.NewClusterClient(ClusterManagerAddr)
+	// update meta-data.
+	info, err := client.CreateIndex(
+		PRIMARY_INDEX, lsm.keyspace, /*bucket-name*/
+		string(datastore.LSM),                     /*using*/
+		"N1QL" /*exprType*/, "" /*partnExpr*/, "", /*whereExpr*/
+		nil /*secExprs*/, true /*isPrimary*/)
+	if err != nil {
+		return nil, errors.NewError(err, " Primary CreateIndex() with 2i failed")
+	} else if info == nil {
+		return nil, errors.NewError(nil, " primary CreateIndex() with 2i failed")
+	}
+	// TODO: make another call to cluster-manager for topology information,
+	// so that info will contain the nodes that host this index.
+	index, e := lsm.newPrimaryIndex(info)
+	if e == nil {
+		lsm.mu.Lock()
+		defer lsm.mu.Unlock()
+		lsm.indexes[PRIMARY_INDEX] = index
+		return index, nil
+	}
+	return nil, e
+}
+
+// CreateIndex implements datastore.Indexer{} interface. Create a secondary
+// index on this keyspace
+func (lsm *lsmKeyspace) CreateIndex(
+	name string, seekKey, rangeKey expression.Expressions,
+	where expression.Expression) (datastore.Index, errors.Error) {
+
+	var partnStr string
+	if seekKey != nil && len(seekKey) > 0 {
+		partnStr = expression.NewStringer().Visit(seekKey[0])
+	}
+
+	var whereStr string
+	if where != nil {
+		whereStr = expression.NewStringer().Visit(where)
+	}
+
+	secStrs := make([]string, len(rangeKey))
+	for i, key := range rangeKey {
+		s := expression.NewStringer().Visit(key)
+		secStrs[i] = s
+	}
+
+	client := qclient.NewClusterClient(ClusterManagerAddr)
+	info, err := client.CreateIndex(
+		name, lsm.keyspace /*bucketn*/, string(datastore.LSM), /*using*/
+		"N1QL" /*exprType*/, partnStr, whereStr, secStrs, false /*isPrimary*/)
+	if err != nil {
+		return nil, errors.NewError(nil, err.Error())
+	} else if info == nil {
+		return nil, errors.NewError(nil, "2i CreateIndex() failed")
+	}
+	// TODO: make another call to cluster-manager for topology information.
+	// so that info will contain the nodes that host this index.
+	index, e := lsm.newIndex(info)
+	if e == nil {
+		lsm.mu.Lock()
+		defer lsm.mu.Unlock()
+		lsm.indexes[name] = index
+		return index, nil
+	}
+	return nil, e
+}
+
+// Refresh and remember them as part of keyspace.indexes.
+func (lsm *lsmKeyspace) Refresh() errors.Error {
+	client := qclient.NewClusterClient(ClusterManagerAddr)
+	infos, err := client.List()
+	if err != nil {
+		return errors.NewError(nil, err.Error())
+	} else if infos == nil { // empty list of indexes
+		return nil
+	}
+
+	indexes := make(map[string]*secondaryIndex)
+	for _, info := range infos {
+		if info.Bucket != lsm.keyspace /*bucket*/ {
+			continue
+		}
+		if info.Name == "#primary" {
+			index, err := lsm.newPrimaryIndex(&info)
+			if err != nil {
+				return err
+			}
+			indexes[index.Name()] = index
+
+		} else {
+			index, err := lsm.newIndex(&info)
+			if err != nil {
+				return err
+			}
+			indexes[index.Name()] = index
+		}
+	}
+	lsm.mu.Lock()
+	defer lsm.mu.Unlock()
+	lsm.indexes = indexes // forget the old map!
+	return nil
+}
+
+// newPrimaryIndex will create a new instance of primary index.
+func (lsm *lsmKeyspace) newPrimaryIndex(
+	info *qclient.IndexInfo) (*secondaryIndex, errors.Error) {
+
+	index := &secondaryIndex{
+		lsm:       lsm,
+		name:      PRIMARY_INDEX,
+		defnID:    info.DefnID,
+		bucketn:   info.Bucket,
+		isPrimary: true,
+		using:     datastore.LSM,
+		// remote node hosting this index.
+		hosts: nil, // to becomputed by coordinator
+	}
+	// TODO: info will contain the nodes that host this index.
+	index.setHost([]string{IndexerAddr})
+	return index, nil
+}
+
+// new 2i index.
+func (lsm *lsmKeyspace) newIndex(info *qclient.IndexInfo) (*secondaryIndex, errors.Error) {
+	index := &secondaryIndex{
+		lsm:       lsm,
+		name:      info.Name,
+		defnID:    info.DefnID,
+		isPrimary: info.IsPrimary,
+		using:     datastore.IndexType(info.Using),
+		partnExpr: info.PartnExpr,
+		secExprs:  info.SecExprs,
+		whereExpr: info.WhereExpr,
+		// remote node hosting this index.
+		hosts: nil, // to becomputed by coordinator
+	}
+	// TODO: info will contain the nodes that host this index.
+	index.setHost([]string{IndexerAddr})
+	return index, nil
+}
+
 // secondaryIndex to hold meta data information, network-address for
 // a single secondary-index.
 type secondaryIndex struct {
-	name      string // name of the index
+	lsm       *lsmKeyspace // back-reference to container.
+	name      string       // name of the index
 	defnID    string
 	bucketn   string
 	isPrimary bool
@@ -50,19 +306,13 @@ type secondaryIndex struct {
 	hostClients []*qclient.Client
 }
 
-// TODO: keep upto date with couchbase/indexing/secondary/indexer pkg.
-var twoiInclusion = map[datastore.Inclusion]qclient.Inclusion{
-	datastore.NEITHER: qclient.Neither,
-	datastore.LOW:     qclient.Low,
-	datastore.HIGH:    qclient.High,
-	datastore.BOTH:    qclient.Both,
-}
-
+// obtain the hos
 func (si *secondaryIndex) getHostClient() (*qclient.Client, errors.Error) {
 	if si.hostClients == nil || len(si.hostClients) == 0 {
 		return nil, ErrorEmptyHost
 	}
-	// TODO: use round-robin or other statistical heuristics to load balance.
+	// TODO: use round-robin or other statistical heuristics to load
+	// balance.
 	client := si.hostClients[0]
 	return client, nil
 }
@@ -87,13 +337,8 @@ func (si *secondaryIndex) Type() datastore.IndexType {
 	return si.using
 }
 
-// IsPrimary implement Index{} interface.
-func (si *secondaryIndex) IsPrimary() bool {
-	return false
-}
-
-// EqualKey implement Index{} interface.
-func (si *secondaryIndex) EqualKey() expression.Expressions {
+// SeekKey implement Index{} interface.
+func (si *secondaryIndex) SeekKey() expression.Expressions {
 	if si != nil && si.partnExpr != "" {
 		expr, _ := parser.Parse(si.partnExpr)
 		return expression.Expressions{expr}
@@ -125,6 +370,7 @@ func (si *secondaryIndex) Condition() expression.Expression {
 
 // State implement Index{} interface.
 func (si *secondaryIndex) State() (datastore.IndexState, errors.Error) {
+	// TODO: if state is not ONLINE, fetch the latest state from cluster.
 	return si.state, nil
 }
 
@@ -141,9 +387,9 @@ func (si *secondaryIndex) Statistics(
 	var e error
 
 	indexn, bucketn := si.name, si.bucketn
-	if span.Equal != nil {
-		equal := values2SKey(span.Equal)
-		pstats, e = client.LookupStatistics(indexn, bucketn, equal)
+	if span.Seek != nil {
+		seek := values2SKey(span.Seek)
+		pstats, e = client.LookupStatistics(indexn, bucketn, seek)
 
 	} else {
 		low := values2SKey(span.Range.Low)
@@ -167,8 +413,10 @@ func (si *secondaryIndex) Drop() errors.Error {
 	if err != nil {
 		return errors.NewError(nil, err.Error())
 	}
+	si.lsm.mu.Lock()
+	defer si.lsm.mu.Unlock()
+	delete(si.lsm.indexes, si.Name())
 	// TODO: sync with cluster-manager ?
-	// TODO: assume this index is already deleted from keyspace.
 	return nil
 }
 
@@ -186,10 +434,10 @@ func (si *secondaryIndex) Scan(
 	}
 
 	indexn, bucketn := si.name, si.bucketn
-	if span.Equal != nil {
-		equal := values2SKey(span.Equal)
+	if span.Seek != nil {
+		seek := values2SKey(span.Seek)
 		client.Lookup(
-			indexn, bucketn, []c.SecondaryKey{equal}, distinct, limit,
+			indexn, bucketn, []c.SecondaryKey{seek}, distinct, limit,
 			makeResponsehandler(conn))
 
 	} else {
@@ -341,138 +589,6 @@ func skey2Values(skey c.SecondaryKey) []value.Value {
 		}
 	}
 	return vals
-}
-
-// ClusterManagerAddr is temporary hard-coded address for cluster-manager-agent
-const ClusterManagerAddr = "localhost:9101"
-
-// IndexerAddr is temporary hard-coded address for indexer node.
-const IndexerAddr = "localhost:7000"
-
-// Load2iIndexes and remember them as part of keyspace.indexes.
-// TODO: pointer to interface is double indirection, have no clue.
-func Load2iIndexes(bucketn string) ([]*datastore.Index, error) {
-	indexes := make([]*datastore.Index, 0)
-	client := qclient.NewClusterClient(ClusterManagerAddr)
-	infos, err := client.List()
-	if err != nil {
-		return nil, err
-	} else if infos == nil { // empty list of indexes
-		return nil, nil
-	}
-
-	var index datastore.Index
-
-	for _, info := range infos {
-		if info.Bucket != bucketn {
-			continue
-		}
-		using := datastore.IndexType(info.Using)
-		if info.Name == "#primary" {
-			index, err = new2iPrimaryIndex(using, &info)
-			if err != nil {
-				return nil, err
-			}
-
-		} else {
-			index, err = new2iIndex(&info)
-			if err != nil {
-				return nil, err
-			}
-		}
-		indexes = append(indexes, &index)
-	}
-	return indexes, nil
-}
-
-// Create2iPrimaryIndex will create a new primary index for `keyspace`.
-func Create2iPrimaryIndex(
-	bucketn string, using datastore.IndexType) (*secondaryIndex, errors.Error) {
-
-	client := qclient.NewClusterClient(ClusterManagerAddr)
-	// update meta-data.
-	info, err := client.CreateIndex(
-		PRIMARY_INDEX, bucketn, string(using), "N1QL", "", "", nil, true)
-	if err != nil {
-		return nil, errors.NewError(err, " Primary CreateIndex() with 2i failed")
-	} else if info == nil {
-		return nil, errors.NewError(nil, " primary CreateIndex() with 2i failed")
-	}
-	// TODO: make another call to cluster-manager for topology information,
-	// so that info will contain the nodes that host this index.
-	return new2iPrimaryIndex(using, info)
-}
-
-// new2iPrimaryIndex will create a new instance of primary index.
-func new2iPrimaryIndex(
-	using datastore.IndexType,
-	info *qclient.IndexInfo) (*secondaryIndex, errors.Error) {
-
-	index := &secondaryIndex{
-		name:      PRIMARY_INDEX,
-		defnID:    info.DefnID,
-		bucketn:   info.Bucket,
-		isPrimary: true,
-		using:     datastore.LSM,
-		// remote node hosting this index.
-		hosts: nil, // to becomputed by coordinator
-	}
-	// TODO: info will contain the nodes that host this index.
-	index.setHost([]string{IndexerAddr})
-	return index, nil
-}
-
-// Create2iIndex will create a new index for `keyspace`.
-func Create2iIndex(
-	name, bucketn string,
-	equalKey, rangeKey expression.Expressions, where expression.Expression,
-	using datastore.IndexType) (*secondaryIndex, errors.Error) {
-
-	var partnStr string
-	if equalKey != nil && len(equalKey) > 0 {
-		partnStr = expression.NewStringer().Visit(equalKey[0])
-	}
-
-	var whereStr string
-	if where != nil {
-		whereStr = expression.NewStringer().Visit(where)
-	}
-
-	secStrs := make([]string, len(rangeKey))
-	for i, key := range rangeKey {
-		s := expression.NewStringer().Visit(key)
-		secStrs[i] = s
-	}
-
-	client := qclient.NewClusterClient(ClusterManagerAddr)
-	info, err := client.CreateIndex(
-		name, bucketn, string(using), "N1QL", partnStr, whereStr, secStrs, false)
-	if err != nil {
-		return nil, errors.NewError(nil, err.Error())
-	} else if info == nil {
-		return nil, errors.NewError(nil, "2i CreateIndex() failed")
-	}
-	// TODO: make another call to cluster-manager for topology information.
-	// so that info will contain the nodes that host this index.
-	return new2iIndex(info)
-}
-
-// new 2i index.
-func new2iIndex(info *qclient.IndexInfo) (*secondaryIndex, errors.Error) {
-	index := &secondaryIndex{
-		name:      info.Name,
-		defnID:    info.DefnID,
-		isPrimary: info.IsPrimary,
-		using:     datastore.IndexType(info.Using),
-		partnExpr: info.PartnExpr,
-		secExprs:  info.SecExprs,
-		whereExpr: info.WhereExpr,
-		// remote node hosting this index.
-		hosts: nil, // to becomputed by coordinator
-	}
-	// TODO: info will contain the nodes that host this index.
-	index.setHost([]string{IndexerAddr})
-	return index, nil
 }
 
 func parseExprs(exprs []string) (expression.Expressions, error) {

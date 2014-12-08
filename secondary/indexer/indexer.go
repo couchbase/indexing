@@ -56,6 +56,8 @@ type indexer struct {
 	streamBucketFlushInProgress  map[common.StreamId]BucketFlushInProgressMap
 	streamBucketObserveFlushDone map[common.StreamId]BucketObserveFlushDoneMap
 
+	bucketsInCatchup map[string]bool
+
 	wrkrRecvCh         MsgChannel //channel to receive messages from workers
 	internalRecvCh     MsgChannel //buffered channel to queue worker requests
 	adminRecvCh        MsgChannel //channel to receive admin messages
@@ -111,6 +113,8 @@ func NewIndexer(numVbuckets uint16) (Indexer, Message) {
 
 		streamBucketFlushInProgress:  make(map[common.StreamId]BucketFlushInProgressMap),
 		streamBucketObserveFlushDone: make(map[common.StreamId]BucketObserveFlushDoneMap),
+
+		bucketsInCatchup: make(map[string]bool),
 	}
 
 	idx.state = INIT
@@ -1378,7 +1382,9 @@ func (idx *indexer) handleMergeCatchupStream(msg Message) {
 		return
 	}
 
-	if idx.checkStreamEmpty(streamId) {
+	delete(idx.bucketsInCatchup, bucket)
+
+	if len(idx.bucketsInCatchup) == 0 {
 		cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
 			streamId: common.CATCHUP_STREAM}
 
@@ -1536,10 +1542,13 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 
 	case common.MAINT_STREAM:
 
+		idx.bucketsInCatchup = make(map[string]bool)
+
 		for _, indexInst := range idx.indexInstMap {
 			if indexInst.State == common.INDEX_STATE_ACTIVE ||
 				indexInst.State == common.INDEX_STATE_CATCHUP {
 				indexList = append(indexList, indexInst)
+				idx.bucketsInCatchup[indexInst.Defn.Bucket] = true
 			}
 		}
 		restartStreamIds = append(restartStreamIds, common.MAINT_STREAM)
