@@ -52,6 +52,7 @@ type ProjectorAdmin struct {
 	activeTimestamps map[string][]*protobuf.TsVbuuid
 	factory          ProjectorStreamClientFactory
 	env              ProjectorClientEnv
+	monitor          *StreamMonitor
 }
 
 type adminWorker struct {
@@ -91,16 +92,17 @@ type ProjectorClientEnvImpl struct {
 // ProjectorAdmin - Public Function
 /////////////////////////////////////////////////////////////////////////
 
-func NewProjectorAdmin(factory ProjectorStreamClientFactory, env ProjectorClientEnv) *ProjectorAdmin {
+func NewProjectorAdmin(factory ProjectorStreamClientFactory, env ProjectorClientEnv, monitor *StreamMonitor) *ProjectorAdmin {
 	if factory == nil {
 		factory = newProjectorStreamClientFactoryImpl()
 	}
 	if env == nil {
 		env = newProjectorClientEnvImpl()
 	}
-	return &ProjectorAdmin{activeTimestamps: make(map[string][]*protobuf.TsVbuuid),
+	return &ProjectorAdmin{
 		factory: factory,
-		env:     env}
+		env:     env,
+		monitor: monitor}
 }
 
 //
@@ -154,7 +156,7 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 			worker := <-donech
 
 			common.Debugf("ProjectorAdmin::AddIndexToStream(): worker %v done", worker.server)
-			p.activeTimestamps[worker.server] = worker.activeTimestamps
+			p.monitorStream(worker.streamId, worker.activeTimestamps)
 			delete(workers, worker.server)
 
 			if worker.err != nil {
@@ -383,7 +385,7 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 			worker := <-donech
 
 			common.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): worker %v done", worker.server)
-			p.activeTimestamps[worker.server] = worker.activeTimestamps
+			p.monitorStream(worker.streamId, worker.activeTimestamps)
 			delete(workers, worker.server)
 
 			if worker.err != nil {
@@ -444,6 +446,18 @@ func CloseStreamFor(streamId StreamId) error {
     return nil
 }
 */
+
+func (p *ProjectorAdmin) Initialize(monitor *StreamMonitor) {
+	p.monitor = monitor
+}
+
+func (p *ProjectorAdmin) monitorStream(streamId common.StreamId, timestamps []*protobuf.TsVbuuid) {
+	if p.monitor != nil {
+		for _, ts := range timestamps {
+			p.monitor.StartStream(streamId, ts.GetBucket(), ts)
+		}
+	}
+}
 
 /////////////////////////////////////////////////////////////////////////
 // Private Function - Worker

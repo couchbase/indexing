@@ -43,8 +43,11 @@ const KV_DCP_PORT = "11210"
 const KV_DCP_PORT_CLUSTER_RUN = "12000"
 const PROJECTOR_PORT = "9999"
 
-// Timer
-const TIME_INTERVAL = time.Duration(2000) * time.Millisecond
+// Timer (2s)
+var TIME_INTERVAL = time.Duration(2000) * time.Millisecond
+
+// Stream Monitor (2m)
+var MONITOR_INTERVAL = time.Duration(120000) * time.Millisecond
 
 /////////////////////////////////////////////
 // Constant

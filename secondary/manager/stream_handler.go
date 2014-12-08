@@ -1,3 +1,12 @@
+// Copyright (c) 2014 Couchbase, Inc.
+
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
+// except in compliance with the License. You may obtain a copy of the License at
+//   http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software distributed under the
+// License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+// either express or implied. See the License for the specific language governing permissions
+// and limitations under the License.
 package manager
 
 import (
@@ -9,11 +18,13 @@ import (
 type mgrMutHandler struct {
 	indexMgr *IndexManager
 	admin    StreamAdmin
+	monitor  *StreamMonitor
 }
 
-func NewMgrMutHandler(indexMgr *IndexManager, admin StreamAdmin) *mgrMutHandler {
+func NewMgrMutHandler(indexMgr *IndexManager, admin StreamAdmin, monitor *StreamMonitor) *mgrMutHandler {
 	return &mgrMutHandler{indexMgr: indexMgr,
-		admin: admin}
+		admin:   admin,
+		monitor: monitor}
 }
 
 func (m *mgrMutHandler) HandleSync(streamId common.StreamId,
@@ -38,6 +49,9 @@ func (m *mgrMutHandler) HandleStreamBegin(streamId common.StreamId,
 	offset int) {
 
 	common.Debugf("mgrMutHandler.StreamBegin : stream %d bucket %s vb %d", streamId, bucket, vbucket)
+	if m.monitor != nil {
+		m.monitor.Activate(streamId, bucket, uint16(vbucket))
+	}
 }
 
 func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
@@ -48,6 +62,9 @@ func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
 	offset int) {
 
 	common.Debugf("mgrMutHandler.StreamEnd : stream %d bucket %s vb %d", streamId, bucket, vbucket)
+	if m.monitor != nil {
+		m.monitor.Deactivate(streamId, bucket, uint16(vbucket))
+	}
 
 	lastTs := m.indexMgr.getTimer().getLatest(streamId, bucket)
 	if lastTs != nil {

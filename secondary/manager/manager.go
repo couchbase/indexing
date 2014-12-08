@@ -426,14 +426,19 @@ func (m *IndexManager) startMasterService() error {
 	m.timekeeperStopCh = make(chan bool)
 	go m.runTimestampKeeper()
 
+	monitor := NewStreamMonitor(m, m.timer)
+
 	// Initialize the stream manager.
 	admin := m.admin
 	if admin == nil {
-		admin = NewProjectorAdmin(nil, nil)
+		admin = NewProjectorAdmin(nil, nil, monitor)
+	} else {
+		admin.Initialize(monitor)
 	}
-	handler := NewMgrMutHandler(m, admin)
+
+	handler := NewMgrMutHandler(m, admin, monitor)
 	var err error
-	m.streamMgr, err = NewStreamManager(m, handler, admin)
+	m.streamMgr, err = NewStreamManager(m, handler, admin, monitor)
 	if err != nil {
 		return err
 	}
@@ -473,7 +478,7 @@ func (m *IndexManager) stopMasterServiceNoLock() {
 
 func (m *IndexManager) GetStabilityTimestampForVb(streamId common.StreamId, bucket string, vb uint16) (uint64, bool) {
 
-	common.Errorf("IndexManager.GetStabilityTimestampForVb() : get stability timestamp from repo")
+	common.Debugf("IndexManager.GetStabilityTimestampForVb() : get stability timestamp from repo")
 	savedTimestamps, err := m.repo.GetStabilityTimestamps()
 	if err == nil {
 		seqno, _, ok, err := savedTimestamps.findTimestamp(streamId, bucket, vb)

@@ -12,6 +12,7 @@ package test
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
+	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	"testing"
 	"time"
 )
@@ -30,9 +31,9 @@ func TestEventMgr(t *testing.T) {
 	var config = "./config.json"
 
 	common.Infof("Start Index Manager")
-	factory := new(testDefaultClientFactory)
-	env := new(testDefaultClientEnv)
-	admin := manager.NewProjectorAdmin(factory, env)
+	factory := new(util.TestDefaultClientFactory)
+	env := new(util.TestDefaultClientEnv)
+	admin := manager.NewProjectorAdmin(factory, env, nil)
 	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
 	if err != nil {
 		t.Fatal(err)

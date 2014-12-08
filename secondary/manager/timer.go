@@ -340,7 +340,6 @@ func (t *Timer) run(streamId common.StreamId, bucket string, ticker *time.Ticker
 				}()
 
 				ts, ok := t.advance(streamId, bucket)
-				common.Debugf("timer.run(): Advancing timestamp for bucket %v", bucket)
 				if ok && len(t.outch) < TIMESTAMP_CHANNEL_SIZE {
 					// Make sure that this call is not blocking.  It is OK to drop
 					// the timestamp is the channel receiver is slow.
@@ -472,8 +471,8 @@ func (t *timestampHistory) advanceNoLock() (*common.TsVbuuid, bool) {
 
 	if !t.isReady() {
 		return nil, false
-	}	
-	
+	}
+
 	result := t.history[t.current]
 	t.current = t.current + 1
 	if t.current >= len(t.history) {
@@ -503,12 +502,13 @@ func (t *timestampHistory) getLatest() *common.TsVbuuid {
 //
 func (t *timestampHistory) isReady() bool {
 	current := t.history[t.current]
-	for _, seqno := range current.Seqnos {
+	for i, seqno := range current.Seqnos {
 		if seqno == 0 {
+			common.Errorf("timestampHistory.isReady() : not ready : vb %d seqno %d", i, seqno)
 			return false
 		}
 	}
-	
+
 	return true
 }
 
@@ -662,6 +662,10 @@ func (l *timestampListSerializable) findTimestamp(streamId common.StreamId, buck
 }
 
 func (l *timestampListSerializable) DebugPrint() {
+
+	if common.LogLevel() != common.LogLevelDebug {
+		return
+	}
 
 	common.Debugf("timestampListSerializable.DebugPrint() : len(timestamps) = %d", len(l.Timestamps))
 
