@@ -91,7 +91,7 @@ func (lsm *lsmKeyspace) IndexNames() ([]string, errors.Error) {
 	defer lsm.mu.RUnlock()
 
 	names := make([]string, 0, len(lsm.indexes))
-	for name, _ := range lsm.indexes {
+	for name := range lsm.indexes {
 		names = append(names, name)
 	}
 	return names, nil
@@ -173,12 +173,12 @@ func (lsm *lsmKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Err
 // CreateIndex implements datastore.Indexer{} interface. Create a secondary
 // index on this keyspace
 func (lsm *lsmKeyspace) CreateIndex(
-	name string, equalKey, rangeKey expression.Expressions,
+	name string, seekKey, rangeKey expression.Expressions,
 	where expression.Expression) (datastore.Index, errors.Error) {
 
 	var partnStr string
-	if equalKey != nil && len(equalKey) > 0 {
-		partnStr = expression.NewStringer().Visit(equalKey[0])
+	if seekKey != nil && len(seekKey) > 0 {
+		partnStr = expression.NewStringer().Visit(seekKey[0])
 	}
 
 	var whereStr string
@@ -337,8 +337,8 @@ func (si *secondaryIndex) Type() datastore.IndexType {
 	return si.using
 }
 
-// EqualKey implement Index{} interface.
-func (si *secondaryIndex) EqualKey() expression.Expressions {
+// SeekKey implement Index{} interface.
+func (si *secondaryIndex) SeekKey() expression.Expressions {
 	if si != nil && si.partnExpr != "" {
 		expr, _ := parser.Parse(si.partnExpr)
 		return expression.Expressions{expr}
@@ -387,9 +387,9 @@ func (si *secondaryIndex) Statistics(
 	var e error
 
 	indexn, bucketn := si.name, si.bucketn
-	if span.Equal != nil {
-		equal := values2SKey(span.Equal)
-		pstats, e = client.LookupStatistics(indexn, bucketn, equal)
+	if span.Seek != nil {
+		seek := values2SKey(span.Seek)
+		pstats, e = client.LookupStatistics(indexn, bucketn, seek)
 
 	} else {
 		low := values2SKey(span.Range.Low)
@@ -434,10 +434,10 @@ func (si *secondaryIndex) Scan(
 	}
 
 	indexn, bucketn := si.name, si.bucketn
-	if span.Equal != nil {
-		equal := values2SKey(span.Equal)
+	if span.Seek != nil {
+		seek := values2SKey(span.Seek)
 		client.Lookup(
-			indexn, bucketn, []c.SecondaryKey{equal}, distinct, limit,
+			indexn, bucketn, []c.SecondaryKey{seek}, distinct, limit,
 			makeResponsehandler(conn))
 
 	} else {
