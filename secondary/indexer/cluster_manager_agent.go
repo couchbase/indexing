@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"errors"
+	"strconv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
 )
@@ -177,13 +178,16 @@ func (c *clustMgrAgent) listenIndexManagerMsgs() {
 				common.Debugf("clustMgrAgent::listenIndexManagerMsgs Notification " +
 					"Received for Drop Index")
 				idxKey := data.(string)
-				idxDefn, err := c.mgr.GetIndexDefnByName(idxKey)
-				if err == nil {
-					c.supvRespch <- &MsgDropIndex{mType: CLUST_MGR_DROP_INDEX_DDL,
-						indexInstId: common.IndexInstId(idxDefn.DefnId)}
-				} else {
-					common.Errorf("clustMgrAgent::listenIndexManagerMsgs Unable to find"+
-						"Index. Key %v. Error %v", idxKey, err)
+				id, err := strconv.ParseUint(idxKey, 10, 64)	
+				if err != nil {
+					idxDefn, err := c.mgr.GetIndexDefnById(common.IndexDefnId(id))
+					if err == nil {
+						c.supvRespch <- &MsgDropIndex{mType: CLUST_MGR_DROP_INDEX_DDL,
+							indexInstId: common.IndexInstId(idxDefn.DefnId)}
+					} else {
+						common.Errorf("clustMgrAgent::listenIndexManagerMsgs Unable to find"+
+							"Index. Key %v. Error %v", idxKey, err)
+					}
 				}
 
 			} else {
@@ -232,7 +236,7 @@ func (c *clustMgrAgent) handleDropIndex(cmd Message) {
 				cause:    err}}
 	}
 
-	err = c.mgr.HandleDeleteIndexDDL(idxDefn.Bucket + "/" + idxDefn.Name)
+	err = c.mgr.HandleDeleteIndexDDL(idxDefn.Bucket, idxDefn.Name)
 	if err != nil {
 		common.Errorf("ClustMgrAgent::handleDropIndex Error In Drop Index %v", err)
 		c.supvCmdch <- &MsgError{
