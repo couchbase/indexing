@@ -32,6 +32,7 @@ const DEFAULT_POOL_NAME = "default"
 // Coordinator
 const COORD_MAINT_STREAM_PORT = "9334"
 const COORD_INIT_STREAM_PORT = "9335"
+const SCAN_REQUEST_PORT = "9336"
 
 // Request Handler configurable parameter
 const INDEX_DDL_HTTP_ADDR = ":9202"
