@@ -107,7 +107,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 		if !ok {
 			return nil, ErrorClosedPool
 		}
-		c.Debugf("%v new connection from pool", cp.logPrefix)
+		c.Debugf("%v new connection from pool\n", cp.logPrefix)
 		return connectn, nil
 	default:
 	}
@@ -122,7 +122,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 		if !ok {
 			return nil, ErrorClosedPool
 		}
-		c.Debugf("%v new connection (avail1) from pool", cp.logPrefix)
+		c.Debugf("%v new connection (avail1) from pool\n", cp.logPrefix)
 		return connectn, nil
 
 	case <-t.C:
@@ -135,7 +135,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 			if !ok {
 				return nil, ErrorClosedPool
 			}
-			c.Debugf("%v new connection (avail2) from pool", cp.logPrefix)
+			c.Debugf("%v new connection (avail2) from pool\n", cp.logPrefix)
 			return connectn, nil
 
 		case cp.createsem <- true:
@@ -148,7 +148,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 				// On error, release our create hold
 				<-cp.createsem
 			}
-			c.Debugf("%v new connection (create) from pool", cp.logPrefix)
+			c.Debugf("%v new connection (create) from pool\n", cp.logPrefix)
 			return connectn, err
 
 		case <-t.C:
