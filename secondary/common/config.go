@@ -102,7 +102,7 @@ var SystemConfig = Config{
 	},
 	"projector.vbucketSyncTimeout": ConfigValue{
 		500,
-		"timeout, in milliseconds, for sending periodic Sync messages",
+		"timeout, in milliseconds, for sending periodic Sync messages.",
 		500,
 	},
 	// projector adminport parameters
@@ -110,6 +110,11 @@ var SystemConfig = Config{
 		"projector.adminport",
 		"human readable name for this adminport, must be supplied",
 		"projector.adminport",
+	},
+	"projector.adminport.listenAddr": ConfigValue{
+		"",
+		"projector's adminport address listen for request.",
+		"",
 	},
 	"projector.adminport.urlPrefix": ConfigValue{
 		"/adminport/",

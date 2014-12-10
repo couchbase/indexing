@@ -58,7 +58,7 @@ func SetLogWriter(w io.Writer) {
 
 // Warnf similar to fmt.Printf
 func Warnf(format string, v ...interface{}) {
-	logger.Printf("[WARN] "+format, v...)
+	logger.Printf("[WARN ] "+format, v...)
 }
 
 // Errorf similar to fmt.Printf
@@ -78,7 +78,7 @@ func Fatalf(format string, v ...interface{}) {
 // Infof if logLevel >= Info
 func Infof(format string, v ...interface{}) {
 	if logLevel >= LogLevelInfo {
-		logger.Printf("[INFO] "+format, v...)
+		logger.Printf("[INFO ] "+format, v...)
 	}
 }
 
