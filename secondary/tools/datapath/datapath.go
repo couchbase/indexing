@@ -26,7 +26,7 @@ var options struct {
 	trace         bool
 }
 
-func argParse() string {
+func argParse() []string {
 	buckets := "default"
 	endpoints := "localhost:9020"
 	coordEndpoint := "localhost:9021"
@@ -65,7 +65,7 @@ func argParse() string {
 		usage()
 		os.Exit(1)
 	}
-	return args[0]
+	return strings.Split(args[0], ",")
 }
 
 func usage() {
@@ -76,7 +76,7 @@ func usage() {
 var projectors = make(map[string]*projc.Client)
 
 func main() {
-	cluster := argParse()
+	clusters := argParse()
 
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	dconf := c.SystemConfig.SectionConfig("projector.dataport.indexer.", true)
@@ -90,29 +90,18 @@ func main() {
 	}
 	go dataport.Application(options.coordEndpoint, 0, 0, maxvbs, dconf, nil)
 
-	kvaddrs, err := c.GetKVAddrs(cluster, pooln, options.buckets[0])
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("found %v nodes\n", kvaddrs)
-
-	for _, kvaddr := range kvaddrs {
-		adminport := kvaddr2adminport(kvaddr, 500)
+	for _, cluster := range clusters {
+		adminport := cluster2adminport(cluster, 500)
 		config := c.SystemConfig.SectionConfig("projector.", true)
 		config.SetValue("clusterAddr", cluster)
 		config.SetValue("adminport.listenAddr", adminport)
-		epfactory := NewEndpointFactory(maxvbs, config)
+		epfactory := NewEndpointFactory(cluster, maxvbs, config)
 		config.SetValue("routerEndpointFactory", epfactory)
-		server, err := c.GetColocatedHost(cluster)
-		if err != nil {
-			log.Fatal(err)
-		}
-		config.SetValue("kvAddrs", server)
 		projector.NewProjector(maxvbs, config) // start projector daemon
 
 		// projector-client
 		cconfig := c.SystemConfig.SectionConfig("projector.client.", true)
-		projectors[kvaddr] = projc.NewClient(adminport, maxvbs, cconfig)
+		projectors[cluster] = projc.NewClient(adminport, maxvbs, cconfig)
 	}
 
 	// index instances for specified buckets.
@@ -133,8 +122,8 @@ func main() {
 	<-make(chan bool) // wait for ever
 }
 
-func kvaddr2adminport(kvaddr string, offset int) string {
-	ss := strings.Split(kvaddr, ":")
+func cluster2adminport(cluster string, offset int) string {
+	ss := strings.Split(cluster, ":")
 	kport, err := strconv.Atoi(ss[1])
 	if err != nil {
 		log.Fatal(err)
@@ -149,12 +138,14 @@ func mf(err error, msg string) {
 }
 
 // NewEndpointFactory to create endpoint instances based on config.
-func NewEndpointFactory(maxvbs int, config c.Config) c.RouterEndpointFactory {
+func NewEndpointFactory(
+	cluster string, maxvbs int, config c.Config) c.RouterEndpointFactory {
+
 	econf := config.SectionConfig("dataport.client.", true)
 	return func(topic, endpointType, addr string) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":
-			return dataport.NewRouterEndpoint(topic, addr, maxvbs, econf)
+			return dataport.NewRouterEndpoint(cluster, topic, addr, maxvbs, econf)
 		default:
 			log.Fatal("Unknown endpoint type")
 		}

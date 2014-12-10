@@ -31,7 +31,6 @@ type KVData struct {
 	feed   *Feed
 	topic  string // immutable
 	bucket string // immutable
-	kvaddr string // immutable
 	vrs    map[uint16]*VbucketRoutine
 	// evaluators and subscribers
 	engines   map[uint64]*Engine
@@ -45,7 +44,7 @@ type KVData struct {
 
 // NewKVData create a new data-path instance.
 func NewKVData(
-	feed *Feed, bucket, kvaddr string,
+	feed *Feed, bucket string,
 	reqTs *protobuf.TsVbuuid,
 	engines map[uint64]*Engine,
 	endpoints map[string]c.RouterEndpoint,
@@ -55,7 +54,6 @@ func NewKVData(
 		feed:      feed,
 		topic:     feed.topic,
 		bucket:    bucket,
-		kvaddr:    kvaddr,
 		vrs:       make(map[uint16]*VbucketRoutine),
 		engines:   make(map[uint64]*Engine),
 		endpoints: make(map[string]c.RouterEndpoint),
@@ -63,7 +61,7 @@ func NewKVData(
 		// control calls on this feed.
 		sbch:      make(chan []interface{}, 16),
 		finch:     make(chan bool),
-		logPrefix: fmt.Sprintf("[%v->%v->%v]", feed.topic, bucket, kvaddr),
+		logPrefix: fmt.Sprintf("KVDT[<-%v<-%v #%v]", bucket, feed.cluster, feed.topic),
 	}
 	for uuid, engine := range engines {
 		kvdata.engines[uuid] = engine
@@ -106,7 +104,7 @@ func (kvdata *KVData) DeleteEngines(engineKeys []uint64) error {
 // UpdateTs with new set of {vbno,seqno}, synchronous call.
 func (kvdata *KVData) UpdateTs(ts *protobuf.TsVbuuid) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{kvCmdTs, ts}
+	cmd := []interface{}{kvCmdTs, ts, respch}
 	_, err := c.FailsafeOp(kvdata.sbch, respch, cmd, kvdata.finch)
 	return err
 }
@@ -139,9 +137,9 @@ func (kvdata *KVData) runScatter(
 			c.StackTrace(string(debug.Stack()))
 		}
 		kvdata.publishStreamEnd()
-		kvdata.feed.PostFinKVdata(kvdata.bucket, kvdata.kvaddr)
+		kvdata.feed.PostFinKVdata(kvdata.bucket)
 		close(kvdata.finch)
-		c.Infof("%v for %q ... stopped\n", kvdata.logPrefix, kvdata.kvaddr)
+		c.Infof("%v ... stopped\n", kvdata.logPrefix)
 	}()
 
 	eventCount := 0
@@ -229,43 +227,43 @@ func (kvdata *KVData) scatterMutation(
 			c.Infof("%v StreamRequest ROLLBACK: %v\n", kvdata.logPrefix, m)
 
 		} else if m.Status != mcd.SUCCESS {
-			msg := "%v StreamRequest Status: %s, %v\n"
-			c.Errorf(msg, kvdata.logPrefix, m.Status, m)
+			format := "%v StreamRequest Status: %s, %v\n"
+			c.Errorf(format, kvdata.logPrefix, m.Status, m)
 
 		} else if _, ok := kvdata.vrs[vbno]; ok {
-			msg := "%v duplicate OpStreamRequest for %v\n"
-			c.Errorf(msg, kvdata.logPrefix, vbno)
+			format := "%v duplicate OpStreamRequest for %v\n"
+			c.Errorf(format, kvdata.logPrefix, vbno)
 
 		} else if m.VBuuid, _, err = m.FailoverLog.Latest(); err != nil {
 			panic(err)
 
 		} else {
-			c.Debugf("%v StreamRequest %v\n", kvdata.logPrefix, m)
-			topic, bucket, kv := kvdata.topic, kvdata.bucket, kvdata.kvaddr
+			c.Debugf("%v StreamRequest {%v}\n", kvdata.logPrefix, vbno)
+			topic, bucket := kvdata.topic, kvdata.bucket
 			m.Seqno, _ = ts.SeqnoFor(vbno)
-			config := kvdata.feed.config
+			config, cluster := kvdata.feed.config, kvdata.feed.cluster
 			vr := NewVbucketRoutine(
-				topic, bucket, kv, vbno, m.VBuuid, m.Seqno, config)
+				cluster, topic, bucket, vbno, m.VBuuid, m.Seqno, config)
 			vr.AddEngines(kvdata.engines, kvdata.endpoints)
 			vr.Event(m)
 			kvdata.vrs[vbno] = vr
 		}
-		kvdata.feed.PostStreamRequest(kvdata.bucket, kvdata.kvaddr, m)
+		kvdata.feed.PostStreamRequest(kvdata.bucket, m)
 
 	case mcd.UPR_STREAMEND:
 		if vr, ok := kvdata.vrs[vbno]; !ok {
 			c.Errorf("%v duplicate OpStreamEnd for %v\n", kvdata.logPrefix, vbno)
 
 		} else if m.Status != mcd.SUCCESS {
-			msg := "%v StreamEnd Status: %s, %v\n"
-			c.Errorf(msg, kvdata.logPrefix, m.Status, m)
+			format := "%v StreamEnd Status: %s, %v\n"
+			c.Errorf(format, kvdata.logPrefix, m.Status, m)
 
 		} else {
-			c.Debugf("%v StreamEnd %v\n", kvdata.logPrefix, m)
+			c.Debugf("%v StreamEnd {%v}\n", kvdata.logPrefix, vbno)
 			vr.Event(m)
 			delete(kvdata.vrs, vbno)
 		}
-		kvdata.feed.PostStreamEnd(kvdata.bucket, kvdata.kvaddr, m)
+		kvdata.feed.PostStreamEnd(kvdata.bucket, m)
 
 	case mcd.UPR_MUTATION, mcd.UPR_DELETION, mcd.UPR_SNAPSHOT, mcd.UPR_EXPIRATION:
 		if vr, ok := kvdata.vrs[vbno]; ok {
@@ -279,8 +277,13 @@ func (kvdata *KVData) scatterMutation(
 }
 
 func (kvdata *KVData) publishStreamEnd() {
-	m := &mc.UprEvent{Opcode: mcd.UPR_STREAMEND, Status: mcd.SUCCESS}
 	for _, vr := range kvdata.vrs {
+		m := &mc.UprEvent{
+			Opcode:  mcd.UPR_STREAMEND,
+			Status:  mcd.SUCCESS,
+			VBucket: vr.vbno,
+		}
+		kvdata.feed.PostStreamEnd(kvdata.bucket, m)
 		vr.Event(m)
 	}
 }
