@@ -339,6 +339,11 @@ var SystemConfig = Config{
 		"Enable index manager",
 		false,
 	},
+	"indexer.storage_dir": ConfigValue{
+		"./",
+		"Index file storage directory",
+		"./",
+	},
 }
 
 // NewConfig from another

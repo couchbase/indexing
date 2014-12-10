@@ -11,6 +11,8 @@ package indexer
 
 import (
 	"errors"
+	"fmt"
+	"github.com/couchbase/indexing/secondary/common"
 	"net"
 )
 
@@ -58,4 +60,8 @@ func GetLocalIP() (net.IP, error) {
 		}
 	}
 	return nil, errors.New("cannot find local IP address")
+}
+
+func IndexFilename(inst *common.IndexInst, sliceId SliceId) string {
+	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, inst.InstId, sliceId)
 }
