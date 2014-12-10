@@ -148,9 +148,9 @@ func NewServer(
 		maxPayload:   config["maxPayload"].Int(),
 		readDeadline: time.Duration(config["tcpReadDeadline"].Int()),
 	}
-	s.logPrefix = fmt.Sprintf("[dataport %q]", laddr)
+	s.logPrefix = fmt.Sprintf("DATP[->dataport %q]", laddr)
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
-		c.Errorf("%v failed starting ! %v", s.logPrefix, err)
+		c.Errorf("%v failed starting ! %v\n", s.logPrefix, err)
 		return nil, err
 	}
 	go listener(s.logPrefix, s.lis, s.reqch) // spawn daemon
@@ -165,7 +165,7 @@ func (s *Server) addUuids(started, hostUuids keeper) keeper {
 			c.Errorf("%v duplicate vbucket %#v\n", s.logPrefix, newvb)
 		}
 		hostUuids[x] = newvb
-		c.Infof("%v added vbucket %#v\n", s.logPrefix, newvb)
+		c.Infof("%v added vbucket %v\n", s.logPrefix, newvb.id())
 	}
 	return hostUuids
 }
@@ -177,7 +177,7 @@ func (s *Server) delUuids(finished, hostUuids keeper) keeper {
 			c.Errorf("%v not active vbucket %#v\n", s.logPrefix, avb)
 		}
 		delete(hostUuids, x)
-		c.Infof("%v deleted vbucket %#v\n", s.logPrefix, avb)
+		c.Infof("%v deleted vbucket %v\n", s.logPrefix, avb.id())
 	}
 	return hostUuids
 }
@@ -226,10 +226,10 @@ loop:
 					c.Errorf("%v %q already active\n", s.logPrefix, raddr)
 					conn.Close()
 				} else { // connection accepted
-					n := len(s.conns)
-					c.Infof("%v new connection %q +%d\n", s.logPrefix, raddr, n)
 					worker := make(chan interface{}, s.maxVbuckets)
 					s.conns[raddr] = &netConn{conn: conn, worker: worker}
+					n := len(s.conns)
+					c.Infof("%v new connection %q +%d\n", s.logPrefix, raddr, n)
 					s.startWorker(raddr)
 				}
 
@@ -266,7 +266,7 @@ loop:
 
 			if appmsg != nil {
 				s.appch <- appmsg
-				c.Debugf("appmsg: %T:%+v\n", appmsg, appmsg)
+				c.Debugf("%v appmsg: %T:%+v\n", s.logPrefix, appmsg, appmsg)
 			}
 		}
 	}
@@ -369,7 +369,7 @@ func (s *Server) jumboErrorHandler(
 func closeConnection(prefix, raddr string, nc *netConn) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v closeConnection(%q) crashed: %v", prefix, raddr, r)
+			c.Errorf("%v closeConnection(%q) crashed: %v\n", prefix, raddr, r)
 			c.StackTrace(string(debug.Stack()))
 		}
 	}()
@@ -395,7 +395,7 @@ func remoteConnections(raddr string, conns map[string]*netConn) []string {
 func listener(prefix string, lis net.Listener, reqch chan []interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v listener crashed: %v", prefix, r)
+			c.Errorf("%v listener crashed: %v\n", prefix, r)
 			c.StackTrace(string(debug.Stack()))
 			msg := serverMessage{cmd: serverCmdError, err: ErrorDaemonExit}
 			reqch <- []interface{}{msg}
@@ -407,7 +407,7 @@ loop:
 		// TODO: handle `err` for lis.Close() and avoid panic(err)
 		if conn, err := lis.Accept(); err != nil {
 			if e, ok := err.(*net.OpError); ok && e.Op == "accept" {
-				c.Infof("%v ... stopped", prefix)
+				c.Infof("%v ... stopped\n", prefix)
 				break loop
 			} else {
 				panic(err)

@@ -52,7 +52,7 @@ type RouterEndpoint struct {
 // NewRouterEndpoint instantiate a new RouterEndpoint
 // routine and return its reference.
 func NewRouterEndpoint(
-	topic, raddr string,
+	cluster, topic, raddr string,
 	maxvbs int,
 	config c.Config) (*RouterEndpoint, error) {
 
@@ -60,7 +60,7 @@ func NewRouterEndpoint(
 
 	// TODO: add configuration params for transport flags.
 	flags := transport.TransportFlag(0).SetProtobuf()
-	client, err := NewClient(raddr, flags, maxvbs, config)
+	client, err := NewClient(cluster, topic, raddr, flags, maxvbs, config)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,8 @@ func NewRouterEndpoint(
 		harakiriTm: time.Duration(config["harakiriTimeout"].Int()),
 	}
 	endpoint.logPrefix = fmt.Sprintf(
-		"[%v->endpc(%v) %v]", topic, endpoint.timestamp, endpoint.raddr)
+		"ENDP[<-(%v,%4x)<-%v #%v]",
+		endpoint.raddr, uint16(endpoint.timestamp), cluster, topic)
 	endpoint.kvch = make(chan []interface{}, endpoint.genChSize)
 	endpoint.reqch = make(chan []interface{}, endpoint.keyChSize)
 
@@ -172,7 +173,7 @@ func (endpoint *RouterEndpoint) run(
 		c.Tracef("%v sent %v vbuckets to %q\n", endpoint.logPrefix, l, raddr)
 		err := buffers.flushBuffers(client, endpoint.block)
 		if err != nil {
-			c.Errorf("%v flushBuffers() %v", endpoint.logPrefix, err)
+			c.Errorf("%v flushBuffers() %v\n", endpoint.logPrefix, err)
 		}
 		return err
 	}

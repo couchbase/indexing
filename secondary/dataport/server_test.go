@@ -27,7 +27,8 @@ func TestTimeout(t *testing.T) {
 	flags := transport.TransportFlag(0).SetProtobuf()
 	prefix = "projector.dataport.client."
 	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	client, _ := NewClient(addr, flags, maxvbuckets, config)
+	client, _ := NewClient(
+		"cluster", "backfill", addr, flags, maxvbuckets, config)
 
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 
@@ -116,7 +117,8 @@ func TestLoopback(t *testing.T) {
 	flags := transport.TransportFlag(0).SetProtobuf()
 	prefix = "projector.dataport.client."
 	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	client, err := NewClient(addr, flags, maxvbuckets, config)
+	client, err := NewClient(
+		"cluster", "backfill", addr, flags, maxvbuckets, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +208,8 @@ func BenchmarkLoopback(b *testing.B) {
 	flags := transport.TransportFlag(0).SetProtobuf()
 	prefix = "projector.dataport.client."
 	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	client, _ := NewClient(addr, flags, maxvbuckets, config)
+	client, _ := NewClient(
+		"cluster", "backfill", addr, flags, maxvbuckets, config)
 
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets)
 
