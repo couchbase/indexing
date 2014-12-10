@@ -80,7 +80,7 @@ func NewHTTPServer(config c.Config, reqch chan<- Request) Server {
 		wtimeout:  time.Duration(config["writeTimeout"].Int()),
 		maxHdrlen: config["maxHeaderBytes"].Int(),
 	}
-	s.logPrefix = fmt.Sprintf("[%s:%s]", s.name, s.laddr)
+	s.logPrefix = fmt.Sprintf("%s[%s]", s.name, s.laddr)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.urlPrefix, s.systemHandler)
