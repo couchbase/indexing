@@ -476,11 +476,9 @@ func makeResponsehandler(
 			conn.Error(errors.NewError(nil, err.Error()))
 			return false
 
-		} else if skeys, pkeys, err := data.GetEntries(); err != nil {
-			conn.Error(errors.NewError(nil, err.Error()))
-			return false
-
-		} else {
+		}
+		skeys, pkeys, err := data.GetEntries()
+		if err == nil {
 			for i, skey := range skeys {
 				// Primary-key is mandatory.
 				e := &datastore.IndexEntry{
@@ -496,6 +494,7 @@ func makeResponsehandler(
 			}
 			return true
 		}
+		conn.Error(errors.NewError(nil, err.Error()))
 		return false
 	}
 }

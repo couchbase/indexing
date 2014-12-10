@@ -49,12 +49,12 @@ func NewServer(
 		logPrefix:      fmt.Sprintf("[Queryport %q]", laddr),
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
-		c.Errorf("%v failed starting %v !!", s.logPrefix, err)
+		c.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
 		return nil, err
 	}
 
 	go s.listener()
-	c.Infof("%v started ...", s.logPrefix)
+	c.Infof("%v started ...\n", s.logPrefix)
 	return s, nil
 }
 
@@ -84,7 +84,7 @@ func (s *Server) Close() (err error) {
 func (s *Server) listener() {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v listener() crashed: %v", s.logPrefix, r)
+			c.Errorf("%v listener() crashed: %v\n", s.logPrefix, r)
 			c.StackTrace(string(debug.Stack()))
 		}
 		go s.Close()
@@ -108,7 +108,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	raddr := conn.RemoteAddr()
 	defer func() {
 		conn.Close()
-		c.Debugf("%v connection %v closed", s.logPrefix, raddr)
+		c.Debugf("%v connection %v closed\n", s.logPrefix, raddr)
 	}()
 
 	// start a receive routine.
@@ -125,8 +125,8 @@ loop:
 		select {
 		case req, ok := <-rcvch:
 			if _, yes := req.(*protobuf.EndStreamRequest); yes { // skip
-				msg := "%v connection %q skip protobuf.EndStreamRequest"
-				c.Debugf(msg, s.logPrefix, raddr)
+				format := "%v connection %q skip protobuf.EndStreamRequest\n"
+				c.Debugf(format, s.logPrefix, raddr)
 				break
 			} else if !ok {
 				break loop
@@ -154,8 +154,8 @@ func (s *Server) handleRequest(
 		conn.SetWriteDeadline(time.Now().Add(timeoutMs))
 		err := tpkt.Send(conn, resp)
 		if err != nil {
-			msg := "%v connection %v response transport failed `%v`\n"
-			c.Debugf(msg, s.logPrefix, raddr, err)
+			format := "%v connection %v response transport failed `%v`\n"
+			c.Debugf(format, s.logPrefix, raddr, err)
 		}
 		return err
 	}
@@ -168,8 +168,8 @@ loop:
 		case resp, ok := <-respch:
 			if !ok {
 				if err := transmit(&protobuf.StreamEndResponse{}); err == nil {
-					msg := "%v connection %q transmitted protobuf.StreamEndResponse"
-					c.Debugf(msg, s.logPrefix, raddr)
+					format := "%v protobuf.StreamEndResponse -> %q\n"
+					c.Debugf(format, s.logPrefix, raddr)
 				}
 				break loop
 			}
@@ -180,8 +180,8 @@ loop:
 		case req, ok := <-rcvch:
 			if _, yes := req.(*protobuf.EndStreamRequest); ok && yes {
 				if err := transmit(&protobuf.StreamEndResponse{}); err == nil {
-					msg := "%v connection %q transmitted protobuf.StreamEndResponse"
-					c.Debugf(msg, s.logPrefix, raddr)
+					format := "%v protobuf.StreamEndResponse -> %q\n"
+					c.Debugf(format, s.logPrefix, raddr)
 				}
 				break loop
 
