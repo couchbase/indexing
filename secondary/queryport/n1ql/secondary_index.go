@@ -57,7 +57,7 @@ type lsmKeyspace struct {
 
 // manage new set of indexes under namespace->keyspace, also called as,
 // pool->bucket.
-func newLSMIndexer(namespace, keyspace string) datastore.Indexer {
+func NewLSMIndexer(namespace, keyspace string) datastore.Indexer {
 	lsm := &lsmKeyspace{
 		namespace: namespace,
 		keyspace:  keyspace,
