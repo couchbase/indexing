@@ -12,7 +12,8 @@ package manager
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
-	projector "github.com/couchbase/indexing/secondary/projector/client"
+	projectorC "github.com/couchbase/indexing/secondary/projector/client"
+	projector "github.com/couchbase/indexing/secondary/projector"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"net"
 	"strconv"
@@ -573,23 +574,23 @@ func (worker *adminWorker) shouldRetryAddInstances(requestTs []*protobuf.TsVbuui
 	errStr := err.Error()
 	common.Debugf("adminWorker::shouldRetryAddInstances(): Error encountered when calling MutationTopicRequest. Error=%v", errStr)
 
-	if strings.Contains(errStr, "ErrorTopicExist") {
+	if strings.Contains(errStr, projector.ErrorTopicExist.Error()) {
 		// TODO: Need pratap to define the semantic of ErrorTopExist.   Right now return as an non-recoverable error.
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorInconsistentFeed") {
+	} else if strings.Contains(errStr, projector.ErrorInconsistentFeed.Error()) {
 		// This is fatal error.  Should only happen due to coding error.   Need to return this error.
 		// For those projectors that have already been opened, let's leave it open. Eventually those
 		// projectors will fill up the buffer and terminate the connection by itself.
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorNotMyVbucket") {
+	} else if strings.Contains(errStr, projector.ErrorNotMyVbucket.Error()) {
 		return nil, NewError(ERROR_STREAM_WRONG_VBUCKET, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorInvalidVbucketBranch") {
+	} else if strings.Contains(errStr, projector.ErrorInvalidVbucketBranch.Error()) {
 		return nil, NewError(ERROR_STREAM_INVALID_TIMESTAMP, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorInvalidKVaddrs") {
+	} else if strings.Contains(errStr, projector.ErrorInvalidKVaddrs.Error()) {
 		return nil, NewError(ERROR_STREAM_INVALID_KVADDRS, NORMAL, STREAM, err, "")
 	}
 
@@ -798,22 +799,22 @@ func (worker *adminWorker) shouldRetryRestartVbuckets(requestTs []*protobuf.TsVb
 	errStr := err.Error()
 	common.Debugf("adminWorker::shouldRetryRestartVbuckets(): Error encountered when calling RestartVbuckets. Error=%v", errStr)
 
-	if strings.Contains(errStr, "ErrorTopicMissing") {
+	if strings.Contains(errStr, projector.ErrorTopicMissing.Error()) {
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorInvalidBucket") {
+	} else if strings.Contains(errStr, projector.ErrorInvalidBucket.Error()) {
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorFeeder") {
+	} else if strings.Contains(errStr, projector.ErrorFeeder.Error()) {
 		return nil, NewError(ERROR_STREAM_FEEDER, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorNotMyVbucket") {
+	} else if strings.Contains(errStr, projector.ErrorNotMyVbucket.Error()) {
 		return nil, NewError(ERROR_STREAM_WRONG_VBUCKET, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorInvalidVbucketBranch") {
+	} else if strings.Contains(errStr, projector.ErrorInvalidVbucketBranch.Error()) {
 		return nil, NewError(ERROR_STREAM_INVALID_TIMESTAMP, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorStreamEnd") {
+	} else if strings.Contains(errStr, projector.ErrorStreamEnd.Error()) {
 		return nil, NewError(ERROR_STREAM_STREAM_END, NORMAL, STREAM, err, "")
 	}
 
@@ -961,7 +962,7 @@ func (p *ProjectorStreamClientFactoryImpl) GetClientForNode(server string) Proje
 	//create client for node's projectors
 	config := common.SystemConfig.SectionConfig("projector.client.", true)
 	maxvbs := common.SystemConfig["maxVbuckets"].Int()
-	ap := projector.NewClient(HTTP_PREFIX+projAddr+"/adminport/", maxvbs, config)
+	ap := projectorC.NewClient(HTTP_PREFIX+projAddr+"/adminport/", maxvbs, config)
 	return ap
 }
 
