@@ -24,28 +24,26 @@ import (
 var options struct {
 	seed     int      // seed for monster tool
 	buckets  []string // buckets to populate
-	parallel int      // number of parallel routines per bucket
-	count    int      // number of documents to be generated per routine
-	expiry   int      // set expiry for the document, in seconds
+	prods    []string
+	parallel int // number of parallel routines per bucket
+	count    int // number of documents to be generated per routine
+	expiry   int // set expiry for the document, in seconds
 }
 
 var testDir string
 var bagDir string
-var bucketProds = map[string]string{ // name -> production file path
-	"default":  "",
-	"users":    "",
-	"projects": "",
-}
 var done = make(chan bool, 16)
 
 func argParse() string {
-	var buckets string
+	var buckets, prods string
 
 	seed := time.Now().UTC().Second()
 	flag.IntVar(&options.seed, "seed", seed,
 		"seed for monster tool")
 	flag.StringVar(&buckets, "buckets", "default",
 		"buckets to populate")
+	flag.StringVar(&prods, "prods", "users.prod",
+		"command separated list of production files for each bucket")
 	flag.IntVar(&options.parallel, "par", 1,
 		"number of parallel routines per bucket")
 	flag.IntVar(&options.count, "count", 0,
@@ -56,14 +54,12 @@ func argParse() string {
 	flag.Parse()
 
 	options.buckets = strings.Split(buckets, ",")
+	options.prods = strings.Split(prods, ",")
 
 	// collect production files.
 	_, filename, _, _ := runtime.Caller(1)
 	testDir = path.Join(path.Dir(path.Dir(path.Dir(filename))), "testdata")
 	bagDir = testDir
-	bucketProds["default"] = path.Join(testDir, "users.prod")
-	bucketProds["users"] = path.Join(testDir, "users.prod")
-	bucketProds["projects"] = path.Join(testDir, "projects.prod")
 
 	args := flag.Args()
 	if len(args) < 1 {
@@ -85,8 +81,9 @@ func main() {
 	}
 
 	n := 0
-	for _, bucket := range options.buckets {
-		n += loadBucket(cluster, bucket, bucketProds[bucket], options.count)
+	for i, bucket := range options.buckets {
+		prodfile := getProdfilePath(options.prods[i])
+		n += loadBucket(cluster, bucket, prodfile, options.count)
 	}
 	for n > 0 {
 		<-done
@@ -145,4 +142,8 @@ func mf(err error, msg string) {
 	if err != nil {
 		log.Fatalf("%v: %v", msg, err)
 	}
+}
+
+func getProdfilePath(name string) string {
+	return path.Join(testDir, name)
 }
