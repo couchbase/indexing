@@ -564,9 +564,6 @@ func (si *secondaryIndex) setHost(hosts []string) {
 // where N expressions supplied in CREATE INDEX
 // to evaluate secondary-key.
 func values2SKey(vals value.Values) c.SecondaryKey {
-	if vals == nil {
-		return nil
-	}
 	skey := make(c.SecondaryKey, 0, len(vals))
 	for _, val := range []value.Value(vals) {
 		skey = append(skey, val.Actual())
