@@ -63,16 +63,18 @@ type IndexState int
 const (
 	//Create Index Processed
 	INDEX_STATE_CREATED IndexState = 0
+	// Index is stream is ready
+	INDEX_STATE_READY = 1
 	//Initial Build In Progress
-	INDEX_STATE_INITIAL = 1
+	INDEX_STATE_INITIAL = 2
 	//Catchup In Progress
-	INDEX_STATE_CATCHUP = 2
+	INDEX_STATE_CATCHUP = 3
 	//Maitenance Stream
-	INDEX_STATE_ACTIVE = 3
+	INDEX_STATE_ACTIVE = 4
 	//Drop Index Processed
-	INDEX_STATE_DELETED = 4
+	INDEX_STATE_DELETED = 5
 	//Error State
-	INDEX_STATE_ERROR = 5
+	INDEX_STATE_ERROR = 6
 )
 
 func (s IndexState) String() string {
@@ -80,6 +82,8 @@ func (s IndexState) String() string {
 	switch s {
 	case INDEX_STATE_CREATED:
 		return "INDEX_STATE_CREATED"
+	case INDEX_STATE_READY:
+		return "INDEX_STATE_READY"
 	case INDEX_STATE_INITIAL:
 		return "INDEX_STATE_INITIAL"
 	case INDEX_STATE_CATCHUP:

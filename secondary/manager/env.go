@@ -94,7 +94,7 @@ func (e *env) getPeerHost() ([]string, error) {
 			return nil, err
 		}
 		result = append(result, host)
-	}	
+	}
 	return result, nil
 }
 

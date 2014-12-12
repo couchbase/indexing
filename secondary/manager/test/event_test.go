@@ -12,6 +12,7 @@ package test
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
+	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	"testing"
 	"time"
 )
@@ -30,7 +31,10 @@ func TestEventMgr(t *testing.T) {
 	var config = "./config.json"
 
 	common.Infof("Start Index Manager")
-	mgr, err := manager.NewIndexManager(requestAddr, leaderAddr, config)
+	factory := new(util.TestDefaultClientFactory)
+	env := new(util.TestDefaultClientEnv)
+	admin := manager.NewProjectorAdmin(factory, env, nil)
+	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +86,8 @@ func TestEventMgr(t *testing.T) {
 	}
 
 	cleanupEvtMgrTest(mgr, t)
+	mgr.CleanupTopology()
+	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	common.Infof("Stop TestEventMgr. Tearing down *********************************************************")
@@ -93,20 +99,20 @@ func TestEventMgr(t *testing.T) {
 // clean up
 func cleanupEvtMgrTest(mgr *manager.IndexManager, t *testing.T) {
 
-	_, err := mgr.GetIndexDefnByName("event_mgr_test")
+	_, err := mgr.GetIndexDefnByName("Default", "event_mgr_test")
 	if err != nil {
 		common.Infof("EventMgrTest.cleanupEvtMgrTest() :  cannot find index defn event_mgr_test.  No cleanup ...")
 	} else {
 		common.Infof("EventMgrTest.cleanupEvtMgrTest() :  found index defn event_mgr_test.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("event_mgr_test")
+		err = mgr.HandleDeleteIndexDDL("Default", "event_mgr_test")
 		if err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err := mgr.GetIndexDefnByName("event_mgr_test")
+		_, err := mgr.GetIndexDefnByName("Default", "event_mgr_test")
 		if err == nil {
 			t.Fatal("EventMgrTest.cleanupEvtMgrTest(): Cannot clean up index defn event_mgr_test")
 		}

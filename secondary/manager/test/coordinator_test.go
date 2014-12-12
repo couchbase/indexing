@@ -12,6 +12,7 @@ package test
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
+	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	"testing"
 	"time"
 )
@@ -29,7 +30,10 @@ func TestCoordinator(t *testing.T) {
 	var leaderAddr = "localhost:9884"
 	var config = "./config.json"
 
-	mgr, err := manager.NewIndexManager(requestAddr, leaderAddr, config)
+	factory := new(util.TestDefaultClientFactory)
+	env := new(util.TestDefaultClientEnv)
+	admin := manager.NewProjectorAdmin(factory, env, nil)
+	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +60,7 @@ func TestCoordinator(t *testing.T) {
 	}
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	idxDefn, err = mgr.GetIndexDefnByName("coordinator_test")
+	idxDefn, err = mgr.GetIndexDefnByName("Default", "coordinator_test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +80,8 @@ func TestCoordinator(t *testing.T) {
 	common.Infof("Topology after index creation : %s", string(content))
 
 	cleanup(mgr, t)
+	mgr.CleanupTopology()
+	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	common.Infof("Done TestCoordinator. Tearing down *********************************************************")
@@ -86,7 +92,7 @@ func TestCoordinator(t *testing.T) {
 // clean up
 func cleanup(mgr *manager.IndexManager, t *testing.T) {
 
-	err := mgr.HandleDeleteIndexDDL("coordinator_test")
+	err := mgr.HandleDeleteIndexDDL("Default", "coordinator_test")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,9 +36,13 @@ type IndexWriter interface {
 	//Set Timestamp
 	SetTimestamp(*common.TsVbuuid) error
 
-	//Close the index. Should be able to reopen after this operation
-	Close() error
+	// Dealloc resources
+	Close()
+
+	// Reference counting operators
+	IncrRef()
+	DecrRef()
 
 	//Destroy/Wipe the index completely
-	Destroy() error
+	Destroy()
 }

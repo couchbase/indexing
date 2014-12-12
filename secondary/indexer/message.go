@@ -57,7 +57,7 @@ const (
 
 	//STORAGE_MANAGER
 	STORAGE_MGR_SHUTDOWN
-	STORAGE_TS_REQUEST
+	STORAGE_INDEX_SNAP_REQUEST
 
 	//KVSender
 	KV_SENDER_SHUTDOWN
@@ -726,28 +726,27 @@ func (m *MsgRollback) GetRollbackTs() map[string]*common.TsVbuuid {
 	return m.rollbackTs
 }
 
-// STORAGE_TS_REQUEST
-type MsgTSRequest struct {
+type MsgIndexSnapRequest struct {
 	ts        *common.TsVbuuid
 	idxInstId common.IndexInstId
 
-	// Send error or timestamp
+	// Send error or index snapshot
 	respch chan interface{}
 }
 
-func (m *MsgTSRequest) GetMsgType() MsgType {
-	return STORAGE_TS_REQUEST
+func (m *MsgIndexSnapRequest) GetMsgType() MsgType {
+	return STORAGE_INDEX_SNAP_REQUEST
 }
 
-func (m *MsgTSRequest) GetTS() *common.TsVbuuid {
+func (m *MsgIndexSnapRequest) GetTS() *common.TsVbuuid {
 	return m.ts
 }
 
-func (m *MsgTSRequest) GetReplyChannel() chan interface{} {
+func (m *MsgIndexSnapRequest) GetReplyChannel() chan interface{} {
 	return m.respch
 }
 
-func (m *MsgTSRequest) GetIndexId() common.IndexInstId {
+func (m *MsgIndexSnapRequest) GetIndexId() common.IndexInstId {
 	return m.idxInstId
 }
 

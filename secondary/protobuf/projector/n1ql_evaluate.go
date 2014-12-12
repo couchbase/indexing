@@ -13,7 +13,7 @@ func CompileN1QLExpression(expressions []string) ([]interface{}, error) {
 	for _, expr := range expressions {
 		cExpr, err := qparser.Parse(expr)
 		if err != nil {
-			c.Errorf("CompileN1QLExpression() %v: %v", expr, err)
+			c.Errorf("CompileN1QLExpression() %v: %v\n", expr, err)
 			return nil, err
 		}
 		cExprs = append(cExprs, cExpr)

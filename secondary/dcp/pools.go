@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -392,16 +393,27 @@ func (b *Bucket) Refresh() error {
 	if err != nil {
 		return err
 	}
-	newcps := make([]*connectionPool, len(tmpb.VBSMJson.ServerList))
+	b.init(tmpb)
+
+	return nil
+}
+
+func (b *Bucket) init(nb *Bucket) {
+	connHost, _, _ := net.SplitHostPort(b.pool.client.BaseURL.Host)
+	for i := range nb.NodesJSON {
+		nb.NodesJSON[i].Hostname = normalizeHost(connHost, nb.NodesJSON[i].Hostname)
+	}
+
+	newcps := make([]*connectionPool, len(nb.VBSMJson.ServerList))
 	for i := range newcps {
+		nb.VBSMJson.ServerList[i] = normalizeHost(connHost, nb.VBSMJson.ServerList[i])
 		newcps[i] = newConnectionPool(
-			tmpb.VBSMJson.ServerList[i],
+			nb.VBSMJson.ServerList[i],
 			b.authHandler(), PoolSize, PoolOverflow)
 	}
 	b.replaceConnPools(newcps)
-	atomic.StorePointer(&b.vBucketServerMap, unsafe.Pointer(&tmpb.VBSMJson))
-	atomic.StorePointer(&b.nodeList, unsafe.Pointer(&tmpb.NodesJSON))
-	return nil
+	atomic.StorePointer(&b.vBucketServerMap, unsafe.Pointer(&nb.VBSMJson))
+	atomic.StorePointer(&b.nodeList, unsafe.Pointer(&nb.NodesJSON))
 }
 
 func (p *Pool) refresh() (err error) {
@@ -413,10 +425,13 @@ func (p *Pool) refresh() (err error) {
 		return err
 	}
 	for _, b := range buckets {
+		nb := &Bucket{}
+		err = p.client.parseURLResponse(p.BucketURL["terseBucketsBase"]+"/"+b.Name, nb)
+		if err != nil {
+			return err
+		}
 		b.pool = p
-		b.nodeList = unsafe.Pointer(&b.NodesJSON)
-		b.replaceConnPools(make([]*connectionPool, len(b.VBSMJson.ServerList)))
-
+		b.init(nb)
 		p.BucketMap[b.Name] = b
 	}
 	return nil
@@ -488,10 +503,6 @@ func (p *Pool) GetBucket(name string) (*Bucket, error) {
 		return nil, errors.New("No bucket named " + name)
 	}
 	runtime.SetFinalizer(&rv, bucketFinalizer)
-	err := rv.Refresh()
-	if err != nil {
-		return nil, err
-	}
 	return &rv, nil
 }
 
@@ -520,4 +531,9 @@ func GetBucket(endpoint, poolname, bucketname string) (*Bucket, error) {
 	}
 
 	return pool.GetBucket(bucketname)
+}
+
+// Make hostnames comparable for terse-buckets info and old buckets info
+func normalizeHost(ch, h string) string {
+	return strings.Replace(h, "$HOST", ch, 1)
 }

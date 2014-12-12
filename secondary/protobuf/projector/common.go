@@ -2,6 +2,7 @@ package protobuf
 
 import "sort"
 import "errors"
+import "fmt"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dcp"
@@ -367,6 +368,21 @@ func (ts *TsVbuuid) SeqnoFor(vbno uint16) (uint64, error) {
 		}
 	}
 	return 0, c.ErrorNotFound
+}
+
+func (ts *TsVbuuid) Repr() string {
+	vbnos := ts.GetVbnos()
+	s := fmt.Sprintf("pool: %v, bucket: %v, vbuckets: %v -\n",
+		ts.GetPool(), ts.GetBucket(), len(vbnos))
+	seqnos, vbuuids := ts.GetSeqnos(), ts.GetVbuuids()
+	snapshots := ts.GetSnapshots()
+	s += fmt.Sprintf("    vbno, vbuuid, seqno, snapshot-start, snapshot-end\n")
+	for i := 0; i < len(vbnos); i++ {
+		start, end := snapshots[i].GetStart(), snapshots[i].GetEnd()
+		s += fmt.Sprintf("    {%5d %16x %10d %10d %10d}\n",
+			vbnos[i], vbuuids[i], seqnos[i], start, end)
+	}
+	return s
 }
 
 // Sort TsVbuuid

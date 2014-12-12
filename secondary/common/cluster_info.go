@@ -5,6 +5,7 @@ import "errors"
 import "fmt"
 import "time"
 import "net"
+import "strings"
 
 var (
 	ErrInvalidNodeId       = errors.New("Invalid NodeId")
@@ -30,6 +31,9 @@ type ClusterInfoCache struct {
 type NodeId int
 
 func NewClusterInfoCache(cluster string, pool string) *ClusterInfoCache {
+	if !strings.HasPrefix(cluster, "http://") {
+		cluster = "http://" + cluster
+	}
 	c := &ClusterInfoCache{
 		url:      cluster,
 		poolName: pool,
@@ -113,7 +117,7 @@ func (c ClusterInfoCache) GetCurrentNode() NodeId {
 			return NodeId(i)
 		}
 	}
-
+	// TODO: can we avoid this panic ?
 	panic("Invalid cluster info")
 }
 

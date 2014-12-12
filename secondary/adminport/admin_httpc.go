@@ -14,6 +14,7 @@ package adminport
 import "bytes"
 import "io/ioutil"
 import "net/http"
+import "strings"
 
 // httpClient is a concrete type implementing Client interface.
 type httpClient struct {
@@ -24,8 +25,11 @@ type httpClient struct {
 
 // NewHTTPClient returns a new instance of Client over HTTP.
 func NewHTTPClient(listenAddr, urlPrefix string) Client {
+	if !strings.HasPrefix(listenAddr, "http://") {
+		listenAddr = "http://" + listenAddr
+	}
 	return &httpClient{
-		serverAddr: "http://" + listenAddr,
+		serverAddr: listenAddr,
 		urlPrefix:  urlPrefix,
 		httpc:      http.DefaultClient,
 	}

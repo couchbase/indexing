@@ -34,10 +34,10 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 	}
 
 	// clean up
-	repo.DropIndexByName("metadata_repo_test")
-	repo.DropIndexByName("metadata_repo_test_2")
-	repo.DropIndexByName("metadata_repo_test_3")
-	repo.DropIndexByName("metadata_repo_test_4")
+	repo.DropIndexByName("Default", "metadata_repo_test")
+	repo.DropIndexByName("Default", "metadata_repo_test_2")
+	repo.DropIndexByName("Default", "metadata_repo_test_3")
+	repo.DropIndexByName("Default", "metadata_repo_test_4")
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
@@ -59,8 +59,8 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	// Get the index definition by name
-	idxDefn, err = repo.GetIndexDefnByName("metadata_repo_test")
+	// Get the index definition	by name
+	idxDefn, err = repo.GetIndexDefnByName("Default", "metadata_repo_test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,14 +70,14 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 	}
 
 	// Delete the index definition by name
-	if err := repo.DropIndexByName("metadata_repo_test"); err != nil {
+	if err := repo.DropIndexByName("Default", "metadata_repo_test"); err != nil {
 		t.Fatal(err)
 	}
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	// Get the index definition by name
-	idxDefn, err = repo.GetIndexDefnByName("metadata_repo_test")
+	// Get the index definition	by name
+	idxDefn, err = repo.GetIndexDefnByName("Default", "metadata_repo_test")
 
 	if idxDefn != nil {
 		t.Fatal("Find deleted index definition")
@@ -189,10 +189,10 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 	common.Infof("Stop TestMetadataRepo. Tearing down *********************************************************")
 
 	// clean up
-	repo.DropIndexByName("metadata_repo_test")
-	repo.DropIndexByName("metadata_repo_test_2")
-	repo.DropIndexByName("metadata_repo_test_3")
-	repo.DropIndexByName("metadata_repo_test_4")
+	repo.DropIndexByName("Default", "metadata_repo_test")
+	repo.DropIndexByName("Default", "metadata_repo_test_2")
+	repo.DropIndexByName("Default", "metadata_repo_test_3")
+	repo.DropIndexByName("Default", "metadata_repo_test_4")
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }

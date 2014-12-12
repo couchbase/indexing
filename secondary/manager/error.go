@@ -1,3 +1,12 @@
+// Copyright (c) 2014 Couchbase, Inc.
+
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
+// except in compliance with the License. You may obtain a copy of the License at
+//   http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software distributed under the
+// License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+// either express or implied. See the License for the specific language governing permissions
+// and limitations under the License.
 package manager
 
 import (
@@ -19,6 +28,7 @@ const (
 	ERROR_META_WRONG_KEY          = 51
 	ERROR_META_IDX_DEFN_EXIST     = 52
 	ERROR_META_IDX_DEFN_NOT_EXIST = 53
+	ERROR_META_FAIL_TO_PARSE_INT  = 54
 
 	// Event Manager (101-150)
 	ERROR_EVT_DUPLICATE_NOTIFIER = 101
@@ -35,11 +45,16 @@ const (
 	ERROR_WATCH_NO_ADDR_AVAIL = 251
 
 	// Stream (301-350)
-	ERROR_STREAM_INVALID_ARGUMENT    = 301
-	ERROR_STREAM_REQUEST_ERROR       = 302
-	ERROR_STREAM_ALREADY_OPEN        = 303
-	ERROR_STREAM_NOT_OPEN            = 304
-	ERROR_STREAM_BUCKET_ALREADY_OPEN = 304
+	ERROR_STREAM_INVALID_ARGUMENT   = 301
+	ERROR_STREAM_NOT_OPEN           = 302
+	ERROR_STREAM_REQUEST_ERROR      = 303
+	ERROR_STREAM_WRONG_VBUCKET      = 304
+	ERROR_STREAM_INVALID_TIMESTAMP  = 305
+	ERROR_STREAM_PROJECTOR_TIMEOUT  = 306
+	ERROR_STREAM_INVALID_KVADDRS    = 307
+	ERROR_STREAM_STREAM_END         = 308
+	ERROR_STREAM_FEEDER             = 309
+	ERROR_STREAM_INCONSISTENT_VBMAP = 310
 )
 
 type errSeverity int16

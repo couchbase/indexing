@@ -56,11 +56,11 @@ func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFee
 }
 
 func newScannerTestHarness() (*scannerTestHarness, error) {
-	NUM_VBUCKETS = 8
+	// TODO Set NUM_VBUCKETS = 8 in config
 	h := new(scannerTestHarness)
 	h.cmdch = make(chan Message)
 	h.msgch = make(chan Message)
-	si, errMsg := NewScanCoordinator(h.cmdch, h.msgch)
+	si, errMsg := NewScanCoordinator(h.cmdch, h.msgch, c.SystemConfig.SectionConfig("indexer.", true))
 	h.scanner = si.(*scanCoordinator)
 	if errMsg.GetMsgType() != MSG_SUCCESS {
 		return nil, (errMsg.(*MsgError)).GetError().cause
@@ -98,10 +98,11 @@ loop:
 				break loop
 			}
 
-			if msg.GetMsgType() == STORAGE_TS_REQUEST {
-				req := msg.(*MsgTSRequest)
+			if msg.GetMsgType() == STORAGE_INDEX_SNAP_REQUEST {
+				req := msg.(*MsgIndexSnapRequest)
 				ch := req.GetReplyChannel()
-				ch <- s.scanTS
+				// TODO: Fix tests
+				ch <- nil
 			}
 		}
 	}
@@ -184,12 +185,10 @@ func (s *mockSlice) RollbackToZero() error {
 	return s.err
 }
 
-func (s *mockSlice) Close() error {
-	return s.err
+func (s *mockSlice) Close() {
 }
 
-func (s *mockSlice) Destroy() error {
-	return s.err
+func (s *mockSlice) Destroy() {
 }
 
 func (s *mockSlice) SetTimestamp(ts *c.TsVbuuid) error {
@@ -199,6 +198,12 @@ func (s *mockSlice) SetTimestamp(ts *c.TsVbuuid) error {
 
 func (s *mockSlice) Timestamp() *c.TsVbuuid {
 	return s.ts
+}
+
+func (s *mockSlice) IncrRef() {
+}
+
+func (s *mockSlice) DecrRef() {
 }
 
 type mockSnapshot struct {

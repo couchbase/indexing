@@ -25,6 +25,7 @@ type GlobalTopology struct {
 }
 
 type IndexTopology struct {
+	Version     uint64                  `json:"version,omitempty"`
 	Bucket      string                  `json:"bucket,omitempty"`
 	Definitions []IndexDefnDistribution `json:"definitions,omitempty"`
 }
@@ -59,7 +60,16 @@ type IndexKeyPartDistribution struct {
 
 type IndexSliceLocator struct {
 	SliceId uint64 `json:"sliceId,omitempty"`
+	State   uint32 `json:"state,omitempty"`
 	Host    string `json:"host,omitempty"`
+}
+
+//
+// topologyChange captures changes in a topology
+//
+type changeRecord struct {
+	definition *IndexDefnDistribution
+	instance   *IndexInstDistribution
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -101,9 +111,12 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 //
 func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, host string) {
 
+	t.RemoveIndexDefinition(bucket, name)
+
 	slice := new(IndexSliceLocator)
 	slice.SliceId = 0
 	slice.Host = host
+	slice.State = state
 
 	part := new(IndexPartDistribution)
 	part.PartId = 0
@@ -143,13 +156,82 @@ func (t *IndexTopology) RemoveIndexDefinition(bucket string, name string) {
 //
 // Get all index instance Id's for a specific defnition
 //
-func GetIndexInstancesByDefn(mgr *IndexManager, bucket string, defnId common.IndexDefnId) ([]uint64, error) {
+func (t *IndexTopology) FindIndexDefinition(bucket string, name string) *IndexDefnDistribution {
+
+	for _, defnRef := range t.Definitions {
+		if defnRef.Bucket == bucket && defnRef.Name == name {
+			return &defnRef
+		}
+	}
+	return nil
+}
+
+//
+// Update Index Status on instance
+//
+func (t *IndexTopology) UpdateStateForIndexInstByDefn(defnId common.IndexDefnId, state common.IndexState) {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				t.Definitions[i].Instances[j].State = uint32(state)
+				common.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
+					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
+			}
+		}
+	}
+}
+
+//
+// Update Index Status on instance
+//
+func (t *IndexTopology) ChangeStateForIndexInstByDefn(defnId common.IndexDefnId, fromState, toState common.IndexState) {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				if t.Definitions[i].Instances[j].State == uint32(fromState) {
+					t.Definitions[i].Instances[j].State = uint32(toState)
+					common.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
+				}
+			}
+		}
+	}
+}
+
+//
+// Update Index Status on instance
+//
+func (t *IndexTopology) GetHostForIndexInstByDefn(defnId common.IndexDefnId) []string {
+
+	var endpoints []string = nil
+
+	for _, defnRef := range t.Definitions {
+		if defnRef.DefnId == uint64(defnId) {
+			for _, inst := range defnRef.Instances {
+				for _, partition := range inst.Partitions {
+					for _, slice := range partition.SinglePartition.Slices {
+						endpoints = append(endpoints, slice.Host)
+					}
+				}
+			}
+		}
+	}
+
+	return endpoints
+}
+
+//
+// Get all index instance Id's for a specific defnition
+//
+func GetIndexInstancesIdByDefn(mgr *IndexManager, bucket string, defnId common.IndexDefnId) ([]uint64, error) {
 	// Get the topology from the dictionary
 	topology, err := mgr.GetTopologyByBucket(bucket)
 	if err != nil {
 		// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 		// If there is an error, return an empty array.  This assume that the topology does not exist.
-		common.Debugf("GetTopologyAsInstanceProtoMsg(): Cannot find topology for bucket %s.  Skip.", bucket)
+		common.Debugf("GetIndexInstancesByDefn(): Cannot find topology for bucket %s.  Skip.", bucket)
 		return nil, nil
 	}
 
@@ -167,6 +249,35 @@ func GetIndexInstancesByDefn(mgr *IndexManager, bucket string, defnId common.Ind
 	return result, nil
 }
 
+//
+// Get all deleted index instance Id's
+//
+func GetAllDeletedIndexInstancesId(mgr *IndexManager, buckets []string) ([]uint64, error) {
+
+	var result []uint64 = nil
+
+	// Get the topology from the dictionary
+	for _, bucket := range buckets {
+		topology, err := mgr.GetTopologyByBucket(bucket)
+		if err != nil {
+			// TODO: Determine if it is a real error, or just topology does not exist in dictionary
+			// If there is an error, return an empty array.  This assume that the topology does not exist.
+			common.Debugf("GetAllDeletedIndexInstances(): Cannot find topology for bucket %s.  Skip.", bucket)
+			continue
+		}
+
+		for _, defnRef := range topology.Definitions {
+			for _, inst := range defnRef.Instances {
+				if common.IndexState(inst.State) == common.INDEX_STATE_DELETED {
+					result = append(result, inst.InstId)
+				}
+			}
+		}
+	}
+
+	return result, nil
+}
+
 /////////////////////////////////////////////////////////////////////////
 // Protobuf message Conversion
 ////////////////////////////////////////////////////////////////////////
@@ -176,7 +287,7 @@ func GetIndexInstancesByDefn(mgr *IndexManager, bucket string, defnId common.Ind
 //
 func GetTopologyAsInstanceProtoMsg(mgr *IndexManager,
 	bucket string,
-	port string) ([]*protobuf.Instance, error) {
+	port string) ([]*protobuf.Instance, *IndexTopology, error) {
 
 	// Get the topology from the dictionary
 	topology, err := mgr.GetTopologyByBucket(bucket)
@@ -184,10 +295,11 @@ func GetTopologyAsInstanceProtoMsg(mgr *IndexManager,
 		// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 		// If there is an error, return an empty array.  This assume that the topology does not exist.
 		common.Debugf("GetTopologyAsInstanceProtoMsg(): Cannot find topology for bucket %s.  Skip.", bucket)
-		return nil, nil
+		return nil, nil, nil
 	}
 
-	return convertTopologyToIndexInstProtoMsg(mgr, topology, port)
+	instance, err := convertTopologyToIndexInstProtoMsg(mgr, topology, port)
+	return instance, topology, err
 }
 
 //
@@ -232,6 +344,32 @@ func GetIndexInstanceAsProtoMsg(mgr *IndexManager,
 }
 
 //
+// This function creates a protobuf message for the index instance in the list of change record.
+//
+func GetChangeRecordAsProtoMsg(mgr *IndexManager, changes []*changeRecord, port string) ([]*protobuf.Instance, error) {
+
+	var result []*protobuf.Instance = nil
+
+	for _, change := range changes {
+
+		// look up the index definition from dictionary
+		defn, err := mgr.GetIndexDefnById(common.IndexDefnId(change.definition.DefnId))
+		if err != nil {
+			common.Debugf("GetChangeRecordAsProtoMsg(): Cannot find definition id = %v.", change.definition.DefnId)
+			return nil, err
+		}
+
+		// Convert definition to protobuf msg
+		defn_proto := convertIndexDefnToProtoMsg(defn)
+
+		// create protobuf message for the given instance
+		result = append(result, convertIndexInstToProtoMsg(change.instance, defn_proto, port))
+	}
+
+	return result, nil
+}
+
+//
 // Serialize topology into a protobuf message format
 //
 func convertTopologyToIndexInstProtoMsg(mgr *IndexManager,
@@ -253,8 +391,14 @@ func convertTopologyToIndexInstProtoMsg(mgr *IndexManager,
 		defn_proto := convertIndexDefnToProtoMsg(defn)
 
 		// iterate through the index inst for this defnition
+		// TODO: Remove CREATED state from the if-stmt
 		for _, inst := range defnRef.Instances {
-			result = append(result, convertIndexInstToProtoMsg(&inst, defn_proto, port))
+			if common.IndexState(inst.State) == common.INDEX_STATE_READY ||
+				common.IndexState(inst.State) == common.INDEX_STATE_INITIAL ||
+				common.IndexState(inst.State) == common.INDEX_STATE_CREATED ||
+				common.IndexState(inst.State) == common.INDEX_STATE_ACTIVE {
+				result = append(result, convertIndexInstToProtoMsg(&inst, defn_proto, port))
+			}
 		}
 	}
 
@@ -309,10 +453,11 @@ func convertIndexInstToProtoMsg(inst *IndexInstDistribution,
 
 	//
 	// message IndexInst {
-	//  required uint64          instId     = 1;
-	//  required IndexState      state      = 2;
-	//  required IndexDefn       definition = 3; // contains DDL
-	//  optional TestPartition   tp         = 4;
+	//	required uint64          instId     = 1;
+	//	required IndexState      state      = 2;
+	//	required IndexDefn       definition = 3; // contains DDL
+	//	optional TestPartition   tp         = 4;
+	// }
 	//
 	instance := &protobuf.IndexInst{
 		InstId:     proto.Uint64(uint64(inst.InstId)),
@@ -328,9 +473,10 @@ func convertIndexInstToProtoMsg(inst *IndexInstDistribution,
 	}
 
 	//
-	//  message TestPartition {
-	//      repeated string endpoints     = 1; // endpoint address
-	//      optional string coordEndpoint = 2;
+	//	message TestPartition {
+	//		repeated string endpoints     = 1; // endpoint address
+	//		optional string coordEndpoint = 2;
+	//  }
 	//
 	instance.Tp = &protobuf.TestPartition{
 		Endpoints: endpoints,

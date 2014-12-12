@@ -37,14 +37,16 @@ type storageMgr struct {
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 
-	// Latest readable timestamps for each index instance
-	tsMap map[common.IndexInstId]*common.TsVbuuid
+	// Latest readable index snapshot for each index instance
+	indexSnapMap map[common.IndexInstId]IndexSnapshot
 	// List of waiters waiting for a snapshot to be created with expected
 	// atleast-timestamp
 	waitersMap map[common.IndexInstId][]*snapshotWaiter
 
 	dbfile *forestdb.File
 	meta   *forestdb.KVStore // handle for index meta
+
+	config common.Config
 }
 
 type snapshotWaiter struct {
@@ -63,8 +65,8 @@ func newSnapshotWaiter(idxId common.IndexInstId, ts *common.TsVbuuid,
 	}
 }
 
-func (w *snapshotWaiter) Notify(ts *common.TsVbuuid) {
-	w.wch <- ts
+func (w *snapshotWaiter) Notify(is IndexSnapshot) {
+	w.wch <- is
 }
 
 func (w *snapshotWaiter) Error(err error) {
@@ -77,22 +79,23 @@ func (w *snapshotWaiter) Error(err error) {
 //Any async response to supervisor is sent to supvRespch.
 //If supvCmdch get closed, storageMgr will shut itself down.
 func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
-	indexPartnMap IndexPartnMap) (
+	indexPartnMap IndexPartnMap, config common.Config) (
 	StorageManager, Message) {
 
 	//Init the storageMgr struct
 	s := &storageMgr{
-		supvCmdch:  supvCmdch,
-		supvRespch: supvRespch,
-		tsMap:      make(map[common.IndexInstId]*common.TsVbuuid),
-		waitersMap: make(map[common.IndexInstId][]*snapshotWaiter),
+		supvCmdch:    supvCmdch,
+		supvRespch:   supvRespch,
+		indexSnapMap: make(map[common.IndexInstId]IndexSnapshot),
+		waitersMap:   make(map[common.IndexInstId][]*snapshotWaiter),
+		config:       config,
 	}
 
-	config := forestdb.DefaultConfig()
+	fdbconfig := forestdb.DefaultConfig()
 	kvconfig := forestdb.DefaultKVStoreConfig()
 	var err error
 
-	if s.dbfile, err = forestdb.Open("meta", config); err != nil {
+	if s.dbfile, err = forestdb.Open("meta", fdbconfig); err != nil {
 		return nil, &MsgError{err: Error{cause: err}}
 	}
 
@@ -101,9 +104,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		return nil, &MsgError{err: Error{cause: err}}
 	}
 
-	if len(indexPartnMap) != 0 {
-		s.initTsMap(indexPartnMap)
-	}
+	s.updateIndexSnapMap(indexPartnMap)
 
 	//start Storage Manager loop which listens to commands from its supervisor
 	go s.run()
@@ -154,8 +155,8 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 	case UPDATE_INDEX_PARTITION_MAP:
 		s.handleUpdateIndexPartnMap(cmd)
 
-	case STORAGE_TS_REQUEST:
-		s.handleGetTSForIndex(cmd)
+	case STORAGE_INDEX_SNAP_REQUEST:
+		s.handleGetIndexSnapshot(cmd)
 	}
 }
 
@@ -167,6 +168,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	tsVbuuid := cmd.(*MsgMutMgrFlushDone).GetTS()
+	numVbuckets := s.config["numVbuckets"].Int()
 
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range s.indexPartnMap {
@@ -175,10 +177,15 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		//if index belongs to the flushed bucket
 		if idxInst.Defn.Bucket == bucket {
 
+			// List of snapshots for reading current timestamp
+			var isSnapCreated bool = true
+
+			var partnSnaps []PartitionSnapshot
 			//for all partitions managed by this indexer
 			for partnId, partnInst := range partnMap {
 				sc := partnInst.Sc
 
+				var sliceSnaps []SliceSnapshot
 				//create snapshot for all the slices
 				for _, slice := range sc.GetAllSlices() {
 
@@ -189,7 +196,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 					latestSnapshot := snapContainer.GetLatestSnapshot()
 
-					snapTs := NewTimestamp()
+					snapTs := NewTimestamp(numVbuckets)
 					if latestSnapshot != nil {
 						snapTsVbuuid := latestSnapshot.Timestamp()
 						snapTs = getStabilityTSFromTsVbuuid(snapTsVbuuid)
@@ -214,6 +221,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							common.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
 								"Commiting Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
+							isSnapCreated = false
 							continue
 						}
 
@@ -235,31 +243,63 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							common.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
 								"PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
-							// Update index-timestamp map whenever a snapshot is created for an index
-							// Also notify any waiters for snapshots creation
-							s.tsMap[idxInstId] = tsVbuuid
-							var newWaiters []*snapshotWaiter
-							for _, w := range s.waitersMap[idxInstId] {
-								if w.ts == nil || tsVbuuid.AsRecent(w.ts) {
-									w.Notify(tsVbuuid)
-								} else {
-									newWaiters = append(newWaiters, w)
-								}
+							ss := &sliceSnapshot{
+								id:   slice.Id(),
+								snap: newSnapshot,
 							}
-
-							s.waitersMap[idxInstId] = newWaiters
+							sliceSnaps = append(sliceSnaps, ss)
 						} else {
 							common.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
 								"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
+							isSnapCreated = false
 							continue
 						}
 					} else {
+						// Increment reference
+						latestSnapshot.Open()
+						ss := &sliceSnapshot{
+							id:   slice.Id(),
+							snap: latestSnapshot,
+						}
+						sliceSnaps = append(sliceSnaps, ss)
 						common.Debugf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
 							"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
 						continue
 					}
 				}
+
+				ps := &partitionSnapshot{
+					id:     partnId,
+					slices: sliceSnaps,
+				}
+				partnSnaps = append(partnSnaps, ps)
+			}
+
+			is := &indexSnapshot{
+				instId: idxInstId,
+				ts:     tsVbuuid,
+				partns: partnSnaps,
+			}
+
+			if isSnapCreated {
+				// Update index-snapshot map whenever a snapshot is created for an index
+				DestroyIndexSnapshot(s.indexSnapMap[idxInstId])
+				s.indexSnapMap[idxInstId] = is
+
+				// Also notify any waiters for snapshots creation
+				var newWaiters []*snapshotWaiter
+				for _, w := range s.waitersMap[idxInstId] {
+					if w.ts == nil || tsVbuuid.AsRecent(w.ts) {
+						snap := CloneIndexSnapshot(is)
+						w.Notify(snap)
+					} else {
+						newWaiters = append(newWaiters, w)
+					}
+				}
+				s.waitersMap[idxInstId] = newWaiters
+			} else {
+				DestroyIndexSnapshot(is)
 			}
 		}
 	}
@@ -273,6 +313,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	streamId := cmd.(*MsgRollback).GetStreamId()
 	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
+	numVbuckets := sm.config["numVbuckets"].Int()
 
 	respTs := make(map[string]*common.TsVbuuid)
 
@@ -320,7 +361,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
 								slice.Id())
-							respTs[idxInst.Defn.Bucket] = common.NewTsVbuuid(idxInst.Defn.Bucket, int(NUM_VBUCKETS))
+							respTs[idxInst.Defn.Bucket] = common.NewTsVbuuid(idxInst.Defn.Bucket, numVbuckets)
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
@@ -347,8 +388,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		}
 	}
 
-	//reinit the index ts map after rollback
-	sm.initTsMap(sm.indexPartnMap)
+	sm.updateIndexSnapMap(sm.indexPartnMap)
 
 	sm.supvCmdch <- &MsgRollback{streamId: streamId,
 		rollbackTs: respTs}
@@ -367,6 +407,14 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 				w.Error(ErrIndexNotFound)
 			}
 			delete(s.waitersMap, id)
+		}
+	}
+
+	// Cleanup all invalid index's snapshots
+	for idxInstId, is := range s.indexSnapMap {
+		if _, ok := s.indexInstMap[idxInstId]; !ok {
+			DestroyIndexSnapshot(is)
+			delete(s.indexSnapMap, idxInstId)
 		}
 	}
 
@@ -407,31 +455,33 @@ func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 }
 
-// Process req for providing a timestamp for index scan.
+// Process req for providing an index snapshot for index scan.
 // The request contains atleast-timestamp and the storage
-// manager will return consistent timestamp soon after
-// a snapshot meeting requested criteria is available.
+// manager will reply with a index snapshot soon after a
+// snapshot meeting requested criteria is available.
 // The requester will block wait until the response is
 // available.
-func (s *storageMgr) handleGetTSForIndex(cmd Message) {
+func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
-	req := cmd.(*MsgTSRequest)
+	req := cmd.(*MsgIndexSnapRequest)
 	_, found := s.indexInstMap[req.GetIndexId()]
 	if !found {
 		req.respch <- ErrIndexNotFound
 		return
 	}
 
-	// Return timestamp immediately if a matching snapshot exists already
+	// Return snapshot immediately if a matching snapshot exists already
 	// Otherwise add into waiters list so that next snapshot creation event
-	// can notify the requester with matching timestamp.
-	ts := s.tsMap[req.GetIndexId()]
-	// - If atleast-ts is nil and no timestamp is available, send nil ts
-	// - If atleast-ts is not-nil and no timestamp is available, wait until
+	// can notify the requester when a snapshot with matching timestamp
+	// is available.
+	is := s.indexSnapMap[req.GetIndexId()]
+	// - If atleast-ts is nil and no snapshot is available, send nil ts
+	// - If atleast-ts is not-nil and no snapshot is available, wait until
 	// it is available.
-	if req.GetTS() == nil || ts.AsRecent(req.GetTS()) {
-		req.respch <- ts
+	if req.GetTS() == nil || is.Timestamp().AsRecent(req.GetTS()) {
+		snap := CloneIndexSnapshot(is)
+		req.respch <- snap
 	} else {
 		w := newSnapshotWaiter(req.GetIndexId(), req.GetTS(), req.GetReplyChannel())
 		ws, exists := s.waitersMap[req.GetIndexId()]
@@ -443,19 +493,43 @@ func (s *storageMgr) handleGetTSForIndex(cmd Message) {
 	}
 }
 
-//Init the TS Map from already available snapshot information.
-//This function is used in indexer restart to recover on disk indexes.
-func (s *storageMgr) initTsMap(indexPartnMap IndexPartnMap) {
-
+// Update index-snapshot map using index partition map
+func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap) {
+	var tsVbuuid *common.TsVbuuid
 	for idxInstId, partnMap := range indexPartnMap {
-
 		//there is only one partition for now
 		partnInst := partnMap[0]
 		sc := partnInst.Sc
 
 		//there is only one slice for now
 		slice := sc.GetSliceById(0)
+		snapContainer := slice.GetSnapshotContainer()
+		latestSnapshot := snapContainer.GetLatestSnapshot()
 
-		s.tsMap[idxInstId] = slice.Timestamp()
+		ss := &sliceSnapshot{
+			id:   SliceId(0),
+			snap: latestSnapshot,
+		}
+
+		tsVbuuid = slice.Timestamp()
+
+		if latestSnapshot != nil {
+			latestSnapshot.Open()
+		}
+
+		ps := &partitionSnapshot{
+			id:     common.PartitionId(0),
+			slices: []SliceSnapshot{ss},
+		}
+
+		is := &indexSnapshot{
+			instId: idxInstId,
+			ts:     tsVbuuid,
+			partns: []PartitionSnapshot{ps},
+		}
+
+		DestroyIndexSnapshot(s.indexSnapMap[idxInstId])
+		delete(s.indexSnapMap, idxInstId)
+		s.indexSnapMap[idxInstId] = is
 	}
 }

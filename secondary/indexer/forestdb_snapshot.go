@@ -18,7 +18,7 @@ import (
 )
 
 type fdbSnapshot struct {
-	id SliceId //slice id
+	slice Slice
 
 	main       *forestdb.KVStore // handle for forward index
 	back       *forestdb.KVStore // handle for reverse index
@@ -34,7 +34,6 @@ type fdbSnapshot struct {
 }
 
 func (s *fdbSnapshot) Open() error {
-
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -55,6 +54,7 @@ func (s *fdbSnapshot) Open() error {
 				"Opening Back DB Snapshot %v", err)
 			return err
 		}
+		s.slice.IncrRef()
 		s.refCount = 1
 	}
 
@@ -75,7 +75,7 @@ func (s *fdbSnapshot) IsOpen() bool {
 }
 
 func (s *fdbSnapshot) Id() SliceId {
-	return s.id
+	return s.slice.Id()
 }
 
 func (s *fdbSnapshot) IndexInstId() common.IndexInstId {
@@ -109,33 +109,35 @@ func (s *fdbSnapshot) Close() error {
 			"on already closed snapshot")
 		return errors.New("Snapshot Already Closed")
 	} else {
-
-		//close the main index
-		if s.main != nil {
-			err := s.main.Close()
-			if err != nil {
-				common.Errorf("ForestDBSnapshot::Close Unexpected error "+
-					"closing Main DB Snapshot %v", err)
-				return err
-			}
-		} else {
-			common.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
-			errors.New("Main DB Handle Nil")
-		}
-
-		//close the back index
-		if s.back != nil {
-			err := s.back.Close()
-			if err != nil {
-				common.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
-					"Back DB Snapshot %v", err)
-				return err
-			}
-		} else {
-			common.Errorf("ForestDBSnapshot::Close Back DB Handle Nil")
-			errors.New("Back DB Handle Nil")
-		}
 		s.refCount--
+		if s.refCount == 0 {
+			//close the main index
+			defer s.slice.DecrRef()
+			if s.main != nil {
+				err := s.main.Close()
+				if err != nil {
+					common.Errorf("ForestDBSnapshot::Close Unexpected error "+
+						"closing Main DB Snapshot %v", err)
+					return err
+				}
+			} else {
+				common.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
+				errors.New("Main DB Handle Nil")
+			}
+
+			//close the back index
+			if s.back != nil {
+				err := s.back.Close()
+				if err != nil {
+					common.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
+						"Back DB Snapshot %v", err)
+					return err
+				}
+			} else {
+				common.Errorf("ForestDBSnapshot::Close Back DB Handle Nil")
+				errors.New("Back DB Handle Nil")
+			}
+		}
 	}
 
 	return nil
@@ -144,7 +146,7 @@ func (s *fdbSnapshot) Close() error {
 func (s *fdbSnapshot) String() string {
 
 	str := fmt.Sprintf("Index: %v ", s.idxInstId)
-	str += fmt.Sprintf("SliceId: %v ", s.id)
+	str += fmt.Sprintf("SliceId: %v ", s.slice.Id())
 	str += fmt.Sprintf("MainSeqNum: %v ", s.mainSeqNum)
 	str += fmt.Sprintf("BackSeqNum: %v ", s.backSeqNum)
 	str += fmt.Sprintf("TS: %v ", s.ts)

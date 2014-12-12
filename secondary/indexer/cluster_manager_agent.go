@@ -11,8 +11,10 @@ package indexer
 
 import (
 	"errors"
+	"strconv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
+	"net"
 )
 
 //ClustMgrAgent provides the mechanism to talk to Index Coordinator
@@ -27,16 +29,17 @@ type clustMgrAgent struct {
 
 	createNotifyCh <-chan interface{} //listen to create ddl from manager
 	dropNotifyCh   <-chan interface{} //listen to drop ddl from manager
-
+	config         common.Config
 }
 
-func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel) (
+func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Config) (
 	ClustMgrAgent, Message) {
 
 	//Init the clustMgrAgent struct
 	c := &clustMgrAgent{
 		supvCmdch:  supvCmdch,
 		supvRespch: supvRespch,
+		config:     cfg,
 	}
 
 	mgr, err := manager.NewIndexManager(GOMETA_REQUEST_ADDR,
@@ -147,7 +150,9 @@ func (c *clustMgrAgent) listenIndexManagerMsgs() {
 					pc := common.NewKeyPartitionContainer()
 
 					//Add one partition for now
-					endpt := []common.Endpoint{INDEXER_MAINT_DATA_PORT_ENDPOINT}
+					addr := net.JoinHostPort("", c.config["streamMaintPort"].String())
+					endpt := []common.Endpoint{common.Endpoint(addr)}
+
 					partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
 						Endpts: endpt}
 					pc.AddPartition(common.PartitionId(1), partnDefn)
@@ -177,13 +182,16 @@ func (c *clustMgrAgent) listenIndexManagerMsgs() {
 				common.Debugf("clustMgrAgent::listenIndexManagerMsgs Notification " +
 					"Received for Drop Index")
 				idxKey := data.(string)
-				idxDefn, err := c.mgr.GetIndexDefnByName(idxKey)
-				if err == nil {
-					c.supvRespch <- &MsgDropIndex{mType: CLUST_MGR_DROP_INDEX_DDL,
-						indexInstId: common.IndexInstId(idxDefn.DefnId)}
-				} else {
-					common.Errorf("clustMgrAgent::listenIndexManagerMsgs Unable to find"+
-						"Index. Key %v. Error %v", idxKey, err)
+				id, err := strconv.ParseUint(idxKey, 10, 64)	
+				if err != nil {
+					idxDefn, err := c.mgr.GetIndexDefnById(common.IndexDefnId(id))
+					if err == nil {
+						c.supvRespch <- &MsgDropIndex{mType: CLUST_MGR_DROP_INDEX_DDL,
+							indexInstId: common.IndexInstId(idxDefn.DefnId)}
+					} else {
+						common.Errorf("clustMgrAgent::listenIndexManagerMsgs Unable to find"+
+							"Index. Key %v. Error %v", idxKey, err)
+					}
 				}
 
 			} else {
@@ -232,7 +240,7 @@ func (c *clustMgrAgent) handleDropIndex(cmd Message) {
 				cause:    err}}
 	}
 
-	err = c.mgr.HandleDeleteIndexDDL(idxDefn.Bucket + "/" + idxDefn.Name)
+	err = c.mgr.HandleDeleteIndexDDL(idxDefn.Bucket, idxDefn.Name)
 	if err != nil {
 		common.Errorf("ClustMgrAgent::handleDropIndex Error In Drop Index %v", err)
 		c.supvCmdch <- &MsgError{

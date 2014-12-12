@@ -14,39 +14,68 @@ import (
 	"time"
 )
 
-// common
-const NUM_VB = 1024
+/////////////////////////////////////////////
+// Constant for Testing
+/////////////////////////////////////////////
+const TESTING = true
 
-// Coordinator configurable parameter
-const COORDINATOR_CONFIG_STORE = "IndexCoordinatorConfigStore"
-const COORD_MAINT_STREAM_PORT = "5334"
-const COORD_INIT_STREAM_PORT = "5335"
+/////////////////////////////////////////////
+// Configurable/Tuning Parameter
+/////////////////////////////////////////////
 
-// Event Manager configurable parameter
-const DEFAULT_EVT_QUEUE_SIZE = 20
-const DEFAULT_NOTIFIER_QUEUE_SIZE = 5
+// Common
+var NUM_VB = 1024
+
+const DEFAULT_BUCKET_NAME = "Default"
+const DEFAULT_POOL_NAME = "default"
+
+// Coordinator
+const COORD_MAINT_STREAM_PORT = "9334"
+const COORD_INIT_STREAM_PORT = "9335"
 
 // Request Handler configurable parameter
-const INDEX_DDL_HTTP_ADDR = ":9102"
+const INDEX_DDL_HTTP_ADDR = ":9202"
 
-// Stream Proxy configurable parameter
-const HTTP_PREFIX = "http://"
+// Stream Manager
 const COUCHBASE_INTERNAL_BUCKET_URL = "http://localhost:11209/"
-const COUCHBASE_DEFAULT_POOL_NAME = "default"
-
 const LOCALHOST = "127.0.0.1"
 const KV_DCP_PORT = "11210"
 const KV_DCP_PORT_CLUSTER_RUN = "12000"
 const PROJECTOR_PORT = "9999"
 
+// Timer (2s)
+var TIME_INTERVAL = time.Duration(2000) * time.Millisecond
+
+// Stream Monitor (2m)
+var MONITOR_INTERVAL = time.Duration(120000) * time.Millisecond
+
+/////////////////////////////////////////////
+// Constant
+/////////////////////////////////////////////
+
+// Common
+const HTTP_PREFIX = "http://"
+
+// Coordinator
+const COORDINATOR_CONFIG_STORE = "IndexCoordinatorConfigStore"
+
+// Event Manager
+const DEFAULT_EVT_QUEUE_SIZE = 20
+const DEFAULT_NOTIFIER_QUEUE_SIZE = 5
+
+// Stream Manager
 const MAINT_TOPIC = "MAINT_STREAM_TOPIC"
 const CATCHUP_TOPIC = "CATCHUP_STREAM_TOPIC"
 const INIT_TOPIC = "INIT_STREAM_TOPIC"
 
-const MAX_TOPIC_REQUEST_RETRY_COUNT = 3
+const MAX_PROJECTOR_RETRY_ELAPSED_TIME = int64(time.Minute) * 5
 
-// Timer configurable parameter
+// Timer
 const TIMESTAMP_HISTORY_COUNT = 10
-const TIME_INTERVAL = time.Duration(2000) * time.Millisecond
 const TIMESTAMP_CHANNEL_SIZE = 30
 const TIMESTAMP_NOTIFY_CH_SIZE = 100
+const TIMESTAMP_PERSIST_INTERVAL = uint64(time.Minute)
+
+// Index Definition
+const INDEX_INSTANCE_ID = "IndexInstanceId"
+const INDEX_PARTITION_ID = "IndexPartitionId"
