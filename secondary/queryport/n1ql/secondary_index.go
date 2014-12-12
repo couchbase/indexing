@@ -136,8 +136,7 @@ func (lsm *lsmKeyspace) IndexByPrimary() (datastore.PrimaryIndex, errors.Error) 
 	lsm.mu.RLock()
 	defer lsm.mu.RUnlock()
 
-	primary, ok := lsm.indexes[PRIMARY_INDEX]
-	if !ok {
+	if primary, ok := lsm.indexes[PRIMARY_INDEX]; ok {
 		return primary, nil
 	}
 	return nil, nil
