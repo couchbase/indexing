@@ -25,10 +25,9 @@ type Projector struct {
 	topics map[string]*Feed // active topics
 
 	// config params
-	name        string   // human readable name of the projector
-	clusterAddr string   // kv cluster's address to connect
-	adminport   string   // projector listens on this adminport
-	kvset       []string // set of kv-nodes to connect with
+	name        string // human readable name of the projector
+	clusterAddr string // kv cluster's address to connect
+	adminport   string // projector listens on this adminport
 	maxvbs      int
 	config      c.Config // full configuration information.
 	logPrefix   string
@@ -40,28 +39,19 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	p := &Projector{
 		name:        config["name"].String(),
 		clusterAddr: config["clusterAddr"].String(),
-		kvset:       config["kvAddrs"].Strings(),
 		topics:      make(map[string]*Feed),
 		maxvbs:      maxvbs,
+		adminport:   config["adminport.listenAddr"].String(),
 		config:      config,
 	}
-	p.logPrefix = fmt.Sprintf("[%s(%s)]", p.name, p.kvset)
 	cluster := p.clusterAddr
 	if !strings.HasPrefix(p.clusterAddr, "http://") {
 		cluster = "http://" + cluster
 	}
-
-	cinfo := c.NewClusterInfoCache(cluster, "default" /*pool*/)
-	if err := cinfo.Fetch(); err != nil {
-		c.Errorf("%v cluster-info: %v", p.logPrefix, err)
-	}
-	nodeId := cinfo.GetCurrentNode()
-	p.adminport, _ = cinfo.GetServiceAddress(nodeId, "projector")
-	p.logPrefix = fmt.Sprintf("[%s(%s)]", p.name, p.adminport)
+	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
 
 	apConfig := config.SectionConfig("adminport.", true)
-	apConfig = apConfig.SetValue("name", p.name+"-adminport")
-	apConfig = apConfig.SetValue("listenAddr", p.adminport)
+	apConfig = apConfig.SetValue("name", "PRAM")
 	reqch := make(chan ap.Request)
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
 
@@ -92,7 +82,7 @@ func (p *Projector) AddFeed(topic string, feed *Feed) (err error) {
 		return ErrorTopicExist
 	}
 	p.topics[topic] = feed
-	c.Infof("%v %q feed added ...", p.logPrefix, topic)
+	c.Infof("%v %q feed added ...\n", p.logPrefix, topic)
 	return
 }
 
@@ -106,7 +96,7 @@ func (p *Projector) DelFeed(topic string) (err error) {
 		return ErrorTopicMissing
 	}
 	delete(p.topics, topic)
-	c.Infof("%v ... %q feed deleted", p.logPrefix, topic)
+	c.Infof("%v ... %q feed deleted\n", p.logPrefix, topic)
 	return
 }
 
@@ -208,10 +198,8 @@ func (p *Projector) doMutationTopic(
 	topic := request.GetTopic()
 
 	config, _ := c.NewConfig(map[string]interface{}{})
-	config.SetValue("name", p.adminport)
 	config.SetValue("maxVbuckets", p.maxvbs)
 	config.Set("clusterAddr", p.config["clusterAddr"])
-	config.Set("kvAddrs", p.config["kvAddrs"])
 	config.Set("feedWaitStreamReqTimeout", p.config["feedWaitStreamReqTimeout"])
 	config.Set("feedWaitStreamEndTimeout", p.config["feedWaitStreamEndTimeout"])
 	config.Set("feedChanSize", p.config["feedChanSize"])
@@ -408,7 +396,6 @@ func (p *Projector) doStatistics(request c.Statistics) ap.MessageMarshaller {
 	m := map[string]interface{}{
 		"clusterAddr": p.clusterAddr,
 		"adminport":   p.adminport,
-		"kvset":       p.kvset,
 		"topics":      p.listTopics(),
 	}
 	stats, _ := c.NewStatistics(m)

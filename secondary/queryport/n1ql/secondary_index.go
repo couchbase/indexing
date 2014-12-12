@@ -34,11 +34,11 @@ var PRIMARY_INDEX = "#primary"
 
 // ClusterManagerAddr is temporary hard-coded address for
 // cluster-manager-agent, TODO: remove this!
-const ClusterManagerAddr = "localhost:9101"
+const ClusterManagerAddr = "localhost:9100"
 
 // IndexerAddr is temporary hard-coded address for indexer
 // node, TODO: remove this!
-const IndexerAddr = "localhost:7000"
+const IndexerAddr = "localhost:9101"
 
 var twoiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 	datastore.NEITHER: qclient.Neither,
@@ -109,12 +109,11 @@ func (lsm *lsmKeyspace) IndexByName(name string) (datastore.Index, errors.Error)
 	lsm.mu.RLock()
 	defer lsm.mu.RUnlock()
 
-	index, ok := lsm.indexes[name]
-	if !ok {
-		err := errors.NewError(nil, fmt.Sprintf("Index %v not found.", name))
-		return nil, err
+	if index, ok := lsm.indexes[name]; ok {
+		return index, nil
 	}
-	return index, nil
+	err := errors.NewError(nil, fmt.Sprintf("2i index %v not found.", name))
+	return nil, err
 }
 
 // Indexes implements datastore.Indexer{} interface. Returns all the
@@ -139,7 +138,8 @@ func (lsm *lsmKeyspace) IndexByPrimary() (datastore.PrimaryIndex, errors.Error) 
 	if primary, ok := lsm.indexes[PRIMARY_INDEX]; ok {
 		return primary, nil
 	}
-	return nil, nil
+	msg := fmt.Sprintf("2i primary-index %v not found.", PRIMARY_INDEX)
+	return nil, errors.NewError(nil, msg)
 }
 
 // CreatePrimaryIndex implements datastore.Indexer{} interface. Create or
@@ -271,6 +271,7 @@ func (lsm *lsmKeyspace) newPrimaryIndex(
 func (lsm *lsmKeyspace) newIndex(info *qclient.IndexInfo) (*secondaryIndex, errors.Error) {
 	index := &secondaryIndex{
 		lsm:       lsm,
+		bucketn:   info.Bucket,
 		name:      info.Name,
 		defnID:    info.DefnID,
 		isPrimary: info.IsPrimary,
@@ -290,9 +291,9 @@ func (lsm *lsmKeyspace) newIndex(info *qclient.IndexInfo) (*secondaryIndex, erro
 // a single secondary-index.
 type secondaryIndex struct {
 	lsm       *lsmKeyspace // back-reference to container.
-	name      string       // name of the index
-	defnID    string
 	bucketn   string
+	name      string // name of the index
+	defnID    string
 	isPrimary bool
 	using     datastore.IndexType
 	partnExpr string
@@ -563,9 +564,6 @@ func (si *secondaryIndex) setHost(hosts []string) {
 // where N expressions supplied in CREATE INDEX
 // to evaluate secondary-key.
 func values2SKey(vals value.Values) c.SecondaryKey {
-	if vals == nil {
-		return nil
-	}
 	skey := make(c.SecondaryKey, 0, len(vals))
 	for _, val := range []value.Value(vals) {
 		skey = append(skey, val.Actual())

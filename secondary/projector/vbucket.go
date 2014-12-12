@@ -35,17 +35,16 @@ type VbucketRoutine struct {
 	finch chan bool
 	// config params
 	mutChanSize int
-	syncTimeout time.Duration
+	syncTimeout time.Duration // in milliseconds
 	logPrefix   string
 }
 
 // NewVbucketRoutine creates a new routine to handle this vbucket stream.
 func NewVbucketRoutine(
-	topic, bucket, kvaddr string,
+	cluster, topic, bucket string,
 	vbno uint16, vbuuid, startSeqno uint64, config c.Config) *VbucketRoutine {
 
 	mutChanSize := config["mutationChanSize"].Int()
-	syncTimeout := time.Duration(config["vbucketSyncTimeout"].Int())
 
 	vr := &VbucketRoutine{
 		bucket:    bucket,
@@ -56,9 +55,10 @@ func NewVbucketRoutine(
 		reqch:     make(chan []interface{}, mutChanSize),
 		finch:     make(chan bool),
 	}
-	vr.logPrefix = fmt.Sprintf("[%v->%v->%v->%v]", topic, bucket, kvaddr, vbno)
+	vr.logPrefix = fmt.Sprintf("VBRT[<-%v<-%v<-%v #%v]", vbno, bucket, cluster, topic)
 	vr.mutChanSize = mutChanSize
-	vr.syncTimeout = syncTimeout
+	vr.syncTimeout = time.Duration(config["vbucketSyncTimeout"].Int())
+	vr.syncTimeout *= time.Millisecond
 
 	go vr.run(vr.reqch, startSeqno)
 	c.Infof("%v started ...\n", vr.logPrefix)
@@ -188,7 +188,7 @@ loop:
 			case vrCmdEvent:
 				m := msg[1].(*mc.UprEvent)
 				if m.Opcode == mcd.UPR_STREAMREQ { // opens up the path
-					heartBeat = time.Tick(vr.syncTimeout * time.Millisecond)
+					heartBeat = time.Tick(vr.syncTimeout)
 					format := "%v heartbeat (%v) loaded ...\n"
 					c.Debugf(format, vr.logPrefix, vr.syncTimeout)
 				}
@@ -224,20 +224,20 @@ func (vr *VbucketRoutine) updateEndpoints(eps map[string]c.RouterEndpoint) {
 	for _, engine := range vr.engines {
 		for _, raddr := range engine.Endpoints() {
 			if _, ok := eps[raddr]; !ok {
-				msg := "%v endpoint %v not found\n"
-				c.Errorf(msg, vr.logPrefix, raddr)
+				format := "%v endpoint %v not found\n"
+				c.Errorf(format, vr.logPrefix, raddr)
 			}
-			c.Debugf("%v UpdateEndpoints %v\n", vr.logPrefix, raddr)
+			c.Debugf("%v UpdateEndpoint %v to %v\n", vr.logPrefix, raddr, engine)
 			vr.endpoints[raddr] = eps[raddr]
 		}
 	}
 }
 
-var ssMsg = "%v received snapshot %v %v (type %x)\n"
-var traceMutMsg = "%v UprEvent %v:%v <<%v>>\n"
+var ssFormat = "%v received snapshot %v %v (type %x)\n"
+var traceMutFormat = "%v UprEvent %v:%v <<%v>>\n"
 
 func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
-	c.Tracef(traceMutMsg, vr.logPrefix, m.Seqno, m.Opcode, m.Key)
+	c.Tracef(traceMutFormat, vr.logPrefix, m.Seqno, m.Opcode, m.Key)
 
 	switch m.Opcode {
 	case mcd.UPR_STREAMREQ: // broadcast StreamBegin
@@ -249,7 +249,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 
 	case mcd.UPR_SNAPSHOT: // broadcast Snapshot
 		typ, start, end := m.SnapshotType, m.SnapstartSeq, m.SnapendSeq
-		c.Debugf(ssMsg, vr.logPrefix, typ, start, end)
+		c.Debugf(ssFormat, vr.logPrefix, typ, start, end)
 		if data := vr.makeSnapshotData(m, seqno); data != nil {
 			vr.sendToEndpoints(data)
 		} else {

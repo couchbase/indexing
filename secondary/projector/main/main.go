@@ -64,14 +64,13 @@ func main() {
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	config := c.SystemConfig.SectionConfig("projector.", true)
 	config.SetValue("clusterAddr", cluster)
-	epfactory := NewEndpointFactory(maxvbs, config)
+	epfactory := NewEndpointFactory(cluster, maxvbs, config)
 	config.SetValue("routerEndpointFactory", epfactory)
 	config.SetValue("colocate", options.colocate)
+	config.SetValue("adminport.listenAddr", options.adminport)
 
-	if config["colocate"].Bool() {
-		config.SetValue("kvAddrs", "")
-	} else {
-		config.SetValue("kvAddrs", options.kvaddrs)
+	if !config["colocate"].Bool() {
+		log.Fatal("Only colocation policy is supported for now!")
 	}
 
 	go c.ExitOnStdinClose()
@@ -80,12 +79,14 @@ func main() {
 }
 
 // NewEndpointFactory to create endpoint instances based on config.
-func NewEndpointFactory(maxvbs int, config c.Config) c.RouterEndpointFactory {
+func NewEndpointFactory(
+	cluster string, maxvbs int, config c.Config) c.RouterEndpointFactory {
+
 	econf := config.SectionConfig("dataport.client.", true)
 	return func(topic, endpointType, addr string) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":
-			return dataport.NewRouterEndpoint(topic, addr, maxvbs, econf)
+			return dataport.NewRouterEndpoint(cluster, topic, addr, maxvbs, econf)
 		default:
 			log.Fatal("Unknown endpoint type")
 		}

@@ -62,6 +62,7 @@ type Client struct {
 	bufferSize    int
 	bufferTimeout time.Duration
 	logPrefix     string
+	logPrefixes   map[int]string
 }
 
 // NewClient returns a pool of connection. Multiple connections, based
@@ -69,7 +70,7 @@ type Client struct {
 // A vbucket is always binded to a connection and ensure that mutations within
 // a vbucket are serialized.
 func NewClient(
-	raddr string,
+	cluster, topic, raddr string,
 	flags transport.TransportFlag,
 	maxvbs int,
 	config common.Config) (c *Client, err error) {
@@ -95,23 +96,27 @@ func NewClient(
 		maxPayload:    config["maxPayload"].Int(),
 		bufferSize:    config["bufferSize"].Int(),
 		bufferTimeout: time.Duration(config["bufferTimeout"].Int()),
-		logPrefix:     fmt.Sprintf("[DataportClient:%q]", raddr),
+		logPrefixes:   make(map[int]string),
 	}
+	c.logPrefix = fmt.Sprintf("ENDC[%v<-%v #%v]", raddr, cluster, topic)
 	// open connections with remote
 	for i := 0; i < parConns; i++ {
 		if conn, err = net.Dial("tcp", raddr); err != nil {
-			common.Errorf("%v %v Dialing to %q\n", c.logPrefix, raddr, err)
+			common.Errorf("%v Dialing to %q: %v\n", c.logPrefix, raddr, err)
 			c.doClose()
 			return nil, err
 		}
 		c.conns[i] = conn
 		c.connChans[i] = make(chan interface{}, mutChanSize)
 		c.conn2Vbs[i] = make([]string, 0, c.maxVbuckets/10)
+		c.logPrefixes[i] = fmt.Sprintf(
+			"ENDC[%v<-%v<-%v #%v]", raddr, conn.LocalAddr(), cluster, topic)
 	}
 	// spawn routines per connection.
 	quitch := make(chan []string, len(c.conns)*2)
 	for i, conn := range c.conns {
-		go c.runTransmitter(conn, flags, c.connChans[i], quitch)
+		go c.runTransmitter(
+			c.logPrefixes[i], conn, flags, c.connChans[i], quitch)
 	}
 	go c.genServer(c.reqch, quitch)
 	return c, nil
@@ -266,7 +271,7 @@ func (c *Client) sendVbmap(
 	for idx, vbnos := range idxMap {
 		common.Tracef(
 			"%v mapped vbucket {%v,%v} on conn%v\n",
-			c.logPrefix, vbmap.Bucket, vbnos, idx)
+			c.logPrefixes[idx], vbmap.Bucket, vbnos, idx)
 	}
 
 	// send the new vbmap to the other end, for each connection.
@@ -296,8 +301,8 @@ func (c *Client) sendKeyVersions(
 		if vb.Kvs[0].Commands[0] == common.StreamBegin { // first mutation
 			vbChans[vb.Uuid], idx = c.addVbucket(vb.Uuid)
 			common.Tracef(
-				"%v mapped vbucket {%v,%v} on conn%v\n",
-				c.logPrefix, vb.Bucket, vb.Vbucket, idx)
+				"%v mapped vbucket {%v,%v}\n",
+				c.logPrefixes[idx], vb.Bucket, vb.Vbucket)
 		}
 
 		if vb.Kvs[l-1].Commands[0] == common.StreamEnd { // last mutation
@@ -344,6 +349,7 @@ func (c *Client) doClose() (err error) {
 
 // per vbucket routine pushes *VbConnectionMap / *VbKeyVersions to other end.
 func (c *Client) runTransmitter(
+	logPrefix string,
 	conn net.Conn,
 	flags transport.TransportFlag,
 	payloadch chan interface{},
@@ -353,7 +359,7 @@ func (c *Client) runTransmitter(
 	defer func() {
 		if r := recover(); r != nil {
 			common.Errorf(
-				"%v runTransmitter(%q) crashed: %v\n", c.logPrefix, laddr, r)
+				"%v runTransmitter(%q) crashed: %v\n", logPrefix, laddr, r)
 			common.StackTrace(string(debug.Stack()))
 		}
 		quitch <- []string{"quit", laddr}
@@ -365,9 +371,10 @@ func (c *Client) runTransmitter(
 
 	transmit := func(payload interface{}) bool {
 		if err := pkt.Send(conn, payload); err != nil {
-			common.Errorf("%v transport %q `%v`\n", c.logPrefix, laddr, err)
+			common.Errorf("%v transport %q `%v`\n", logPrefix, laddr, err)
 			return false
 		}
+		common.Tracef("%v transported from %q\n", logPrefix, laddr)
 		return true
 	}
 

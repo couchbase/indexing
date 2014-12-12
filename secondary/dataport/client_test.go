@@ -26,7 +26,8 @@ func TestClient(t *testing.T) {
 	prefix = "projector.dataport.client."
 	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
 	maxconns := config["parConnections"].Int()
-	client, err := NewClient(addr, flags, maxvbuckets, config)
+	client, err := NewClient(
+		"cluster", "backfill", addr, flags, maxvbuckets, config)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(client.conns) != maxconns {
@@ -65,7 +66,8 @@ func TestStreamBegin(t *testing.T) {
 	flags := transport.TransportFlag(0).SetProtobuf()
 	prefix = "projector.dataport.client."
 	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	client, _ := NewClient(addr, flags, maxvbuckets, config)
+	client, _ := NewClient(
+		"cluster", "backfill", addr, flags, maxvbuckets, config)
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {
 		if err := client.SendVbmap(vbmaps[i]); err != nil {
@@ -118,7 +120,8 @@ func TestStreamEnd(t *testing.T) {
 	flags := transport.TransportFlag(0).SetProtobuf()
 	prefix = "projector.dataport.client."
 	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	client, _ := NewClient(addr, flags, maxvbuckets, config)
+	client, _ := NewClient(
+		"cluster", "backfill", addr, flags, maxvbuckets, config)
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 	for i := 0; i < maxBuckets; i++ {
 		if err := client.SendVbmap(vbmaps[i]); err != nil {
