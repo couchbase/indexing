@@ -109,7 +109,7 @@ func (pkt *TransportPacket) Send(conn transporter, payload interface{}) (err err
 	// transport framing
 	l := pktLenSize + pktFlagSize + len(data)
 	if maxLen := len(pkt.buf); l > maxLen {
-		c.Errorf("sending packet length %v is > %v\n", l, maxLen)
+		c.Errorf("sending packet length %v > %v\n", l, maxLen)
 		err = ErrorPacketOverflow
 		return
 	}
@@ -147,7 +147,7 @@ func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err 
 	a, b = pktFlagOffset, pktFlagOffset+pktFlagSize
 	pkt.flags = TransportFlag(binary.BigEndian.Uint16(pkt.buf[a:b]))
 	if maxLen := uint32(len(pkt.buf)); pktlen > maxLen {
-		c.Errorf("receiving packet length %v > %v\n", maxLen, pktlen)
+		c.Errorf("receiving packet length %v > %v\n", pktlen, maxLen)
 		err = ErrorPacketOverflow
 		return
 	}
