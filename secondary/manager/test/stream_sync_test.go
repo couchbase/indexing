@@ -257,8 +257,7 @@ func (c *syncTestProjectorClient) MutationTopicRequest(topic, endpointType strin
 	for i, inst := range instances {
 		response.InstanceIds[i] = inst.GetIndexInstance().GetInstId()
 	}
-	response.ActiveTimestamps = make([]*protobuf.TsVbuuid, 1)
-	response.ActiveTimestamps[0] = reqTimestamps[0]
+	response.ActiveTimestamps = reqTimestamps
 	response.RollbackTimestamps = nil
 	response.Err = nil
 
@@ -275,7 +274,7 @@ func (c *syncTestProjectorClient) RepairEndpoints(topic string, endpoints []stri
 
 func (c *syncTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
 
-	newTs := protobuf.NewTsVbuuid("default", "Default", manager.NUM_VB)
+	newTs := protobuf.NewTsVbuuid("default", bucketn, manager.NUM_VB)
 	for i := 0; i < manager.NUM_VB; i++ {
 		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
 	}

@@ -77,9 +77,9 @@ func NewFakeProjector(port string) *fakeProjector {
     config := common.SystemConfig.SectionConfig(prefix, true /*trim*/)
     maxvbs := common.SystemConfig["maxVbuckets"].Int()
     flag := transport.TransportFlag(0).SetProtobuf()
-    
+   
 	var err error
-	p.Client, err = dataport.NewClient(addr, flag, maxvbs, config)
+	p.Client, err = dataport.NewClient("unit-test", "mutation topic", addr, flag, maxvbs, config)
 	if err != nil {
 		TT.Fatal(err)
 	}

@@ -50,7 +50,6 @@ type VbMap map[string][]uint16
 //    - repair connection
 //
 type ProjectorAdmin struct {
-	activeTimestamps map[string][]*protobuf.TsVbuuid
 	factory          ProjectorStreamClientFactory
 	env              ProjectorClientEnv
 	monitor          *StreamMonitor
@@ -136,6 +135,7 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 
 		// start worker to create mutation stream
 		workers := make(map[string]*adminWorker)
+		var activeTimestamps []*protobuf.TsVbuuid = nil
 		donech := make(chan *adminWorker, len(nodes))
 
 		for _, server := range nodes {
@@ -159,6 +159,7 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 
 			common.Debugf("ProjectorAdmin::AddIndexToStream(): worker %v done", worker.server)
 			p.monitorStream(worker.streamId, worker.activeTimestamps)
+			activeTimestamps = append(activeTimestamps, worker.activeTimestamps...)
 			delete(workers, worker.server)
 
 			if worker.err != nil {
@@ -181,6 +182,10 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 				shouldRetry = true
 				break
 			}
+		}
+
+		if !shouldRetry {		
+			shouldRetry = !p.validateActiveVb(buckets, activeTimestamps)
 		}
 	}
 
@@ -416,6 +421,32 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 	}
 
 	return nil
+}
+
+func (p *ProjectorAdmin) validateActiveVb(buckets []string, activeTimestamps []*protobuf.TsVbuuid) bool {
+
+	for _, bucket := range buckets {
+		for vb := 0; vb < NUM_VB; vb++ {
+			found := false
+			for _, ts := range activeTimestamps {
+				if ts.GetBucket() == bucket {
+					for _, ts_vb := range ts.GetVbnos() {
+						if uint32(vb) == ts_vb {
+							found = true
+							continue
+						}
+					}
+				}
+			}
+			
+			if !found {
+				common.Debugf("validateActiveVb(): Cannot find active timestamp for bucket %s vb %d", bucket, vb)
+				return false
+			}
+		}
+	}
+	
+	return true
 }
 
 //

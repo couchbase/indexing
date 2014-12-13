@@ -258,8 +258,7 @@ func (c *monitorTestProjectorClient) MutationTopicRequest(topic, endpointType st
 	for i, inst := range instances {
 		response.InstanceIds[i] = inst.GetIndexInstance().GetInstId()
 	}
-	response.ActiveTimestamps = make([]*protobuf.TsVbuuid, 1)
-	response.ActiveTimestamps[0] = reqTimestamps[0]
+	response.ActiveTimestamps = reqTimestamps
 
 	if reqTimestamps[0].GetSeqnos()[10] != 406 {	
 		response.RollbackTimestamps = make([]*protobuf.TsVbuuid, 1)
@@ -286,7 +285,7 @@ func (c *monitorTestProjectorClient) RepairEndpoints(topic string, endpoints []s
 func (c *monitorTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
 
 	common.Infof("monitorTestProjectorClient. InitialRestartTimestamp(): start")
-	newTs := protobuf.NewTsVbuuid("default", "Default", manager.NUM_VB)
+	newTs := protobuf.NewTsVbuuid("default", bucketn, manager.NUM_VB)
 	for i := 0; i < manager.NUM_VB; i++ {
 		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
 	}
