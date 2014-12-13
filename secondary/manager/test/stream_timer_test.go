@@ -330,3 +330,7 @@ func (p *timerTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []*com
 	common.Infof("timerTestProjectorClientEnv.GetNodeListForTimestamps() ")
 	return nil, nil
 }
+
+func (p *timerTestProjectorClientEnv) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, node string) ([]*protobuf.TsVbuuid, error) {
+	return timestamps, nil
+}

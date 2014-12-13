@@ -358,3 +358,7 @@ func (p *streamEndTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []
 	nodes["127.0.0.1"] = append(nodes["127.0.0.1"], newTs)	
 	return nodes, nil
 }
+
+func (p *streamEndTestProjectorClientEnv) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, node string) ([]*protobuf.TsVbuuid, error) {
+	return timestamps, nil
+}

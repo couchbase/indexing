@@ -84,6 +84,7 @@ type ProjectorStreamClientFactoryImpl struct {
 type ProjectorClientEnv interface {
 	GetNodeListForBuckets(buckets []string) (map[string]string, error)
 	GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error)
+	FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, node string) ([]*protobuf.TsVbuuid, error)
 }
 
 type ProjectorClientEnvImpl struct {
@@ -510,7 +511,13 @@ func (worker *adminWorker) addInstances(instances []*protobuf.Instance,
 		}
 		timestamps = append(timestamps, ts)
 	}
-
+	
+	timestamps, err := worker.admin.env.FilterTimestampsForNode(timestamps, worker.server)
+	if err != nil {
+		worker.err = NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "Unable to filter restart timestamp")
+		return
+	}
+	
 	// open the stream for the specific node for the set of <bucket, timestamp>
 	topic := getTopicForStreamId(worker.streamId)
 
@@ -861,6 +868,8 @@ func makeRestartTimestamp(client ProjectorStreamClient,
 	}
 }
 
+
+
 //
 // Compute a new request timestamp based on the response from projector.
 // If all the vb is active for the given requestTs, then this function returns nil.
@@ -1077,6 +1086,53 @@ func (p *ProjectorClientEnvImpl) findTimestamp(timestampMap map[string][]*protob
 	timestamps = append(timestamps, newTs)
 	timestampMap[kvaddr] = timestamps
 	return newTs
+}
+
+//
+// Filter the timestamp based on vb list on a certain node 
+//
+func (p *ProjectorClientEnvImpl) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, 
+														 node string) ([]*protobuf.TsVbuuid, error) {
+
+	common.Debugf("ProjectorClientEnvImpl.FilterTimestampsForNode(): start")
+
+	var newTimestamps []*protobuf.TsVbuuid = nil 
+
+	for _, ts := range timestamps {
+
+		bucketRef, err := couchbase.GetBucket(COUCHBASE_INTERNAL_BUCKET_URL, DEFAULT_POOL_NAME, ts.GetBucket())
+		if err != nil {
+			return nil, err
+		}
+
+		if err := bucketRef.Refresh(); err != nil {
+			return nil, err
+		}
+
+		vbmap, err := bucketRef.GetVBmap(nil)
+		if err != nil {
+			return nil, err
+		}
+		
+		newTs := protobuf.NewTsVbuuid(DEFAULT_POOL_NAME, ts.GetBucket(), NUM_VB) 
+		
+		for kvaddr, vbnos := range vbmap {
+			if kvaddr == node {
+				for _, vbno := range vbnos {
+					seqno, vbuuid, sStart, sEnd, err := ts.Get(vbno)  
+					// If cannot get the seqno from this vbno (err != nil), then skip.  
+					// Otherwise, add to the new timestamp.
+					if err == nil {
+						newTs.Append(uint16(vbno), seqno, vbuuid, sStart, sEnd)
+					}
+					newTimestamps = append(newTimestamps, newTs)
+					continue
+				}
+			}
+		}
+	}
+
+	return newTimestamps, nil
 }
 
 /////////////////////////////////////////////////////////////////////////

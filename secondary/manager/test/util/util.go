@@ -60,6 +60,10 @@ func (p *TestDefaultClientEnv) GetNodeListForTimestamps(timestamps []*common.TsV
 	return nodes, nil
 }
 
+func (p *TestDefaultClientEnv) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, node string) ([]*protobuf.TsVbuuid, error) {
+	return timestamps, nil
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // fakeProjector
 ////////////////////////////////////////////////////////////////////////////////////////////////////

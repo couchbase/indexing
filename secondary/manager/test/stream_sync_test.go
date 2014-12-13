@@ -315,3 +315,7 @@ func (p *syncTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []*comm
 	common.Infof("syncTestProjectorClientEnv.GetNodeListForTimestamps() ")
 	return nil, nil
 }
+
+func (p *syncTestProjectorClientEnv) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, node string) ([]*protobuf.TsVbuuid, error) {
+	return timestamps, nil
+}

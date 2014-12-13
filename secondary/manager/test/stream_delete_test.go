@@ -505,3 +505,7 @@ func (p *deleteTestProjectorClientEnv) GetNodeListForBuckets(buckets []string) (
 func (p *deleteTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
 	return nil, nil
 }
+
+func (p *deleteTestProjectorClientEnv) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, node string) ([]*protobuf.TsVbuuid, error) {
+	return timestamps, nil
+}
