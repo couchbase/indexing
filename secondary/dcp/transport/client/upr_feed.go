@@ -25,20 +25,20 @@ const opaqueFailover = 0xDEADBEEF
 type UprEvent struct {
 	Opcode       transport.CommandCode // Type of event
 	Status       transport.Status      // Response status
-	VBucket      uint16                  // VBucket this event applies to
-	Opaque       uint16                  // 16 MSB of opaque
-	VBuuid       uint64                  // This field is set by downstream
-	Flags        uint32                  // Item flags
-	Expiry       uint32                  // Item expiration time
-	Key, Value   []byte                  // Item key/value
-	OldValue     []byte                  // TODO: TBD: old document value
-	Cas          uint64                  // CAS value of the item
-	Seqno        uint64                  // sequence number of the mutation
-	SnapstartSeq uint64                  // start sequence number of this snapshot
-	SnapendSeq   uint64                  // End sequence number of the snapshot
-	SnapshotType uint32                  // 0: disk 1: memory
-	FailoverLog  *FailoverLog            // Failover log containing vvuid and sequnce number
-	Error        error                   // Error value in case of a failure
+	VBucket      uint16                // VBucket this event applies to
+	Opaque       uint16                // 16 MSB of opaque
+	VBuuid       uint64                // This field is set by downstream
+	Flags        uint32                // Item flags
+	Expiry       uint32                // Item expiration time
+	Key, Value   []byte                // Item key/value
+	OldValue     []byte                // TODO: TBD: old document value
+	Cas          uint64                // CAS value of the item
+	Seqno        uint64                // sequence number of the mutation
+	SnapstartSeq uint64                // start sequence number of this snapshot
+	SnapendSeq   uint64                // End sequence number of the snapshot
+	SnapshotType uint32                // 0: disk 1: memory
+	FailoverLog  *FailoverLog          // Failover log containing vvuid and sequnce number
+	Error        error                 // Error value in case of a failure
 }
 
 // UprStream is per stream data structure over an UPR Connection.
@@ -54,17 +54,17 @@ type UprStream struct {
 // host and multiple vBuckets
 type UprFeed struct {
 	mu          sync.RWMutex
-	C           <-chan *UprEvent            // Exported channel for receiving UPR events
-	vbstreams   map[uint16]*UprStream       // vb->stream mapping
-	closer      chan bool                   // closer
-	conn        *Client                     // connection to UPR producer
-	Error       error                       // error
-	bytesRead   uint64                      // total bytes read on this connection
-	toAckBytes  uint32                      // bytes client has read
-	maxAckBytes uint32                      // Max buffer control ack bytes
-	stats       UprStats                    // Stats for upr client
+	C           <-chan *UprEvent          // Exported channel for receiving UPR events
+	vbstreams   map[uint16]*UprStream     // vb->stream mapping
+	closer      chan bool                 // closer
+	conn        *Client                   // connection to UPR producer
+	Error       error                     // error
+	bytesRead   uint64                    // total bytes read on this connection
+	toAckBytes  uint32                    // bytes client has read
+	maxAckBytes uint32                    // Max buffer control ack bytes
+	stats       UprStats                  // Stats for upr client
 	transmitCh  chan *transport.MCRequest // transmit command channel
-	transmitCl  chan bool                   //  closer channel for transmit go-routine
+	transmitCl  chan bool                 //  closer channel for transmit go-routine
 }
 
 type UprStats struct {
@@ -187,8 +187,7 @@ func doUprOpen(mc *Client, name string, sequence uint32) error {
 	rq.Extras = make([]byte, 8)
 	binary.BigEndian.PutUint32(rq.Extras[:4], sequence)
 
-	// flags = 0 for consumer
-	binary.BigEndian.PutUint32(rq.Extras[4:], 1)
+	binary.BigEndian.PutUint32(rq.Extras[4:], 1) // we are consumer
 
 	if err := mc.Transmit(rq); err != nil {
 		return err

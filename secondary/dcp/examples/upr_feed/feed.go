@@ -9,53 +9,76 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"os"
-	"runtime"
 	"runtime/pprof"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/dcp"
-	"github.com/couchbase/indexing/secondary/dcp/transport"
-	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 )
 
-var vbcount = 64
-var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
-var memprofile = flag.String("memprofile", "", "write memory profile to this file")
+const clusterAddr = "http://localhost:9000"
 
-func mf(err error, msg string) {
-	if err != nil {
-		log.Fatalf("%v: %v", msg, err)
+var options struct {
+	clusterAddr string
+	bucket      string
+	maxVb       int
+	tick        int
+	debug       bool
+	closeVbs    []string
+	cpuprofile  string
+	memprofile  string
+}
+
+func argParse() {
+	var closeVbs string
+
+	flag.StringVar(&options.bucket, "bucket", "default",
+		"bucket to connect to")
+	flag.IntVar(&options.maxVb, "maxvb", 1024,
+		"number configured vbuckets")
+	flag.IntVar(&options.tick, "tick", 1000,
+		"timer tick in mS to log information")
+	flag.StringVar(&closeVbs, "close", "",
+		"comma separated list of vbucket numbers")
+	flag.BoolVar(&options.debug, "debug", false,
+		"number configured vbuckets")
+	flag.StringVar(&options.cpuprofile, "cpuprofile", "",
+		"write cpu profile to file")
+	flag.StringVar(&options.memprofile, "memprofile", "",
+		"write memory profile to this file")
+
+	flag.Parse()
+
+	args := flag.Args()
+	if len(args) < 1 {
+		options.clusterAddr = clusterAddr
+	} else {
+		options.clusterAddr = args[0]
 	}
+	options.closeVbs = strings.Split(closeVbs, ",")
+}
+
+func usage() {
+	fmt.Fprintf(os.Stderr,
+		"%v [flags] http://user:pass@host:8091/\n\nFlags:\n",
+		os.Args[0])
+	flag.PrintDefaults()
+	os.Exit(64)
 }
 
 // Flush the bucket before trying this program
 func main() {
-
-	runtime.GOMAXPROCS(4)
+	argParse()
 
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 
-	bname := flag.String("bucket", "",
-		"bucket to connect to (defaults to username)")
-
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr,
-			"%v [flags] http://user:pass@host:8091/\n\nFlags:\n",
-			os.Args[0])
-		flag.PrintDefaults()
-		os.Exit(64)
-	}
-
-	flag.Parse()
-
-	if flag.NArg() < 1 {
-		flag.Usage()
-	}
-
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
+	if options.cpuprofile != "" {
+		f, err := os.Create(options.cpuprofile)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -63,8 +86,8 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
-	if *memprofile != "" {
-		f, err := os.Create(*memprofile)
+	if options.memprofile != "" {
+		f, err := os.Create(options.memprofile)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -72,35 +95,10 @@ func main() {
 		defer f.Close()
 	}
 
-	u, err := url.Parse(flag.Arg(0))
-	mf(err, "parse")
-
-	if *bname == "" && u.User != nil {
-		*bname = u.User.Username()
-	}
-
-	c, err := couchbase.Connect(u.String())
-	mf(err, "connect - "+u.String())
-
-	p, err := c.GetPool("default")
-	mf(err, "pool")
-
-	bucket, err := p.GetBucket(*bname)
-	mf(err, "bucket")
+	bucket := getBucket()
 
 	//addKVset(bucket, 1000)
 	//return
-
-	// get failover logs for a few vbuckets
-	vbList := []uint16{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	failoverlogMap, err := bucket.GetFailoverLogs(vbList)
-	if err != nil {
-		mf(err, "failoverlog")
-	}
-
-	for vb, flog := range failoverlogMap {
-		log.Printf("Failover log for vbucket %d is %v", vb, flog)
-	}
 
 	// start upr feed
 	name := fmt.Sprintf("%v", time.Now().UnixNano())
@@ -110,14 +108,11 @@ func main() {
 		return
 	}
 
-	// get the vbucket map for this bucket
-	vbm := bucket.VBServerMap()
-	log.Println(vbm)
-
+	opaque := uint16(10)
 	// request stream for all vbuckets
-	for i := 0; i < vbcount; i++ {
+	for i := 0; i < options.maxVb; i++ {
 		err := feed.UprRequestStream(
-			uint16(i) /*vbno*/, uint16(0) /*opaque*/, 0 /*flag*/, 0, /*vbuuid*/
+			uint16(i) /*vbno*/, opaque, 0 /*flag*/, 0, /*vbuuid*/
 			0 /*seqStart*/, 0xFFFFFFFFFFFFFFFF /*seqEnd*/, 0 /*snaps*/, 0)
 		if err != nil {
 			fmt.Printf("%s", err.Error())
@@ -125,57 +120,68 @@ func main() {
 	}
 
 	// observe the mutations from the channel.
-	var event *memcached.UprEvent
-	var mutations = 0
-	var callOnce bool
+	events(feed, 2000)
+
+	opaque += 1
+	if len(options.closeVbs) > 0 {
+		for _, vb := range options.closeVbs {
+			if len(vb) > 0 {
+				vbno, err := strconv.Atoi(vb)
+				if err != nil {
+					log.Fatal(err)
+				}
+				if err := feed.UprCloseStream(uint16(vbno), opaque); err != nil {
+					log.Printf("error while closing stream %d: %v", vbno, err)
+				}
+			}
+		}
+	}
+
+	events(feed, 100000)
+
+	feed.Close()
+}
+
+func events(feed *couchbase.UprFeed, timeoutMs int) {
+	var timeout <-chan time.Time
+
+	mutations := 0
+	done := true
+	tick := time.Tick(time.Duration(options.tick) * time.Millisecond)
+	if timeoutMs > 0 {
+		timeout = time.Tick(time.Duration(timeoutMs) * time.Millisecond)
+	}
+
 loop:
 	for {
 		select {
-		case e, ok := <-feed.C:
-			if !ok {
-				break loop
+		case e := <-feed.C:
+			if e.Opcode == mcd.UPR_MUTATION {
+				mutations += 1
 			} else {
-				event = e
+				log.Printf("Received {%s, %d(vb), %d(opq), %s}\n",
+					e.Opcode, e.VBucket, e.Opaque, e.Status)
 			}
-		case <-time.After(time.Second):
+			handleEvent(e)
+			done = false
+
+		case <-tick:
+			log.Printf("Mutation count %d", mutations)
+			if timeout == nil && done {
+				break loop
+			}
+			done = true
+
+		case <-timeout:
 			break loop
 		}
-		if event.Opcode == transport.UPR_MUTATION {
-			//log.Printf(" got mutation %s", e.Value)
-			mutations += 1
-		}
-
-		if event.Opcode == transport.UPR_STREAMEND {
-			log.Printf(" Received Stream end for vbucket %d", event.VBucket)
-		}
-
-		/*
-		   if mutations%1000 == 0 && mutations != 0 {
-		       feed.Close()
-		       return
-		   }
-		*/
-
-		// after receving 1000 mutations close some streams
-		if mutations%1000 == 0 && mutations != 0 && callOnce == false {
-			for i := 0; i < vbcount; i = i + 4 {
-				log.Printf(" closing stream for vbucket %d", i)
-				if err := feed.UprCloseStream(uint16(i), uint16(0)); err != nil {
-					log.Printf(" Received error while closing stream %d", i)
-				}
-			}
-			callOnce = true
-		}
-
-		if mutations%10000 == 0 {
-			log.Printf(" received %d mutations ", mutations)
-		}
-		//e.Release()
 	}
+}
 
-	feed.Close()
-	log.Printf("Mutation count %d", mutations)
-
+func handleEvent(e *mc.UprEvent) {
+	if e.Opcode == mcd.UPR_MUTATION && options.debug {
+		log.Printf("got mutation %s", e.Value)
+	}
 }
 
 func addKVset(b *couchbase.Bucket, count int) {
@@ -191,5 +197,30 @@ func addKVset(b *couchbase.Bucket, count int) {
 		if i%100000 == 0 {
 			fmt.Printf("\n Added %d keys", i)
 		}
+	}
+}
+
+func getBucket() *couchbase.Bucket {
+	u, err := url.Parse(options.clusterAddr)
+	mf(err, "parse")
+
+	if options.bucket == "" && u.User != nil {
+		options.bucket = u.User.Username()
+	}
+
+	c, err := couchbase.Connect(u.String())
+	mf(err, "connect - "+u.String())
+
+	p, err := c.GetPool("default")
+	mf(err, "pool")
+
+	bucket, err := p.GetBucket(options.bucket)
+	mf(err, "bucket")
+	return bucket
+}
+
+func mf(err error, msg string) {
+	if err != nil {
+		log.Fatalf("%v: %v", msg, err)
 	}
 }
