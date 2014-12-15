@@ -3,6 +3,7 @@
 package projector
 
 import "time"
+import "fmt"
 
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -53,7 +54,8 @@ type bucketUpr struct {
 func OpenBucketFeed(b *couchbase.Bucket) (feeder BucketFeeder, err error) {
 	count := uint32(time.Now().UnixNano() >> 24)
 	bupr := &bucketUpr{bucket: b}
-	if bupr.uprFeed, err = b.StartUprFeed("projector", count); err != nil {
+	name := fmt.Sprintf("proj-%s-%v", b.Name, count)
+	if bupr.uprFeed, err = b.StartUprFeed(name, uint32(0)); err != nil {
 		return nil, err
 	}
 	return bupr, nil
