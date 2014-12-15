@@ -532,7 +532,9 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 			err = e
 		}
 		c.Infof("%v stream-request %s, rollback: %v, success: vbnos %v #%x\n",
-			feed.logPrefix, bucketn, rollTs, actTs, opaque)
+			feed.logPrefix, bucketn,
+			feed.rollTss[bucketn].GetVbnos(),
+			feed.actTss[bucketn].GetVbnos(), opaque)
 	}
 	return err
 }
@@ -604,7 +606,9 @@ func (feed *Feed) restartVbuckets(
 			err = e
 		}
 		c.Infof("%v stream-request %s, rollback: %v, success: vbnos %v #%x\n",
-			feed.logPrefix, bucketn, rollTs, ts, opaque)
+			feed.logPrefix, bucketn,
+			feed.rollTss[bucketn].GetVbnos(),
+			feed.actTss[bucketn].GetVbnos(), opaque)
 	}
 	return err
 }
@@ -726,7 +730,9 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 			err = e
 		}
 		c.Infof("%v stream-request %s, rollback: %v, success: vbnos %v #%x\n",
-			feed.logPrefix, bucketn, rollTs, actTs, opaque)
+			feed.logPrefix, bucketn,
+			feed.rollTss[bucketn].GetVbnos(),
+			feed.actTss[bucketn].GetVbnos(), opaque)
 	}
 	return err
 }
