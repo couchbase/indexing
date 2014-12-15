@@ -27,6 +27,7 @@ var options struct {
 	addBuckets    []string
 	delBuckets    []string
 	loop          int
+	projector     bool // start projector, useful in debug mode.
 	debug         bool
 	trace         bool
 }
@@ -52,6 +53,8 @@ func argParse() []string {
 		"buckets to del")
 	flag.IntVar(&options.loop, "loop", 10,
 		"repeat bucket-add and bucket-del loop number of times")
+	flag.BoolVar(&options.projector, "projector", false,
+		"start projector for debug mode")
 	flag.BoolVar(&options.debug, "debug", false,
 		"run in debug mode")
 	flag.BoolVar(&options.trace, "trace", false,
@@ -123,13 +126,16 @@ func main() {
 
 	// spawn initial set of projectors
 	for _, cluster := range clusters {
-		adminport := cluster2adminport(cluster, 500)
-		config := c.SystemConfig.SectionConfig("projector.", true)
-		config.SetValue("clusterAddr", cluster)
-		config.SetValue("adminport.listenAddr", adminport)
-		epfactory := NewEndpointFactory(cluster, maxvbs, config)
-		config.SetValue("routerEndpointFactory", epfactory)
-		projector.NewProjector(maxvbs, config) // start projector daemon
+		adminport := getProjectorAdminport(cluster, "default")
+		if options.projector {
+			config := c.SystemConfig.SectionConfig("projector.", true)
+			config.SetValue("clusterAddr", cluster)
+			config.SetValue("adminport.listenAddr", adminport)
+			epfactory := NewEndpointFactory(cluster, maxvbs, config)
+			config.SetValue("routerEndpointFactory", epfactory)
+			projector.NewProjector(maxvbs, config) // start projector daemon
+		}
+
 		// projector-client
 		cconfig := c.SystemConfig.SectionConfig("projector.client.", true)
 		projectors[cluster] = projc.NewClient(adminport, maxvbs, cconfig)
@@ -196,13 +202,17 @@ func mf(err error, msg string) {
 	}
 }
 
-func cluster2adminport(cluster string, offset int) string {
-	ss := strings.Split(cluster, ":")
-	kport, err := strconv.Atoi(ss[1])
+func getProjectorAdminport(cluster, pooln string) string {
+	cinfo := c.NewClusterInfoCache(cluster, pooln)
+	if err := cinfo.Fetch(); err != nil {
+		log.Fatal(err)
+	}
+	nodeID := cinfo.GetCurrentNode()
+	adminport, err := cinfo.GetServiceAddress(nodeID, "projector")
 	if err != nil {
 		log.Fatal(err)
 	}
-	return ss[0] + ":" + strconv.Itoa(kport+offset)
+	return adminport
 }
 
 // NewEndpointFactory to create endpoint instances based on config.
@@ -247,9 +257,17 @@ func endpointCallback(addr string, msg interface{}) bool {
 
 func bucketTimestamp(bucketn string, ts *protobuf.TsVbuuid) *protobuf.TsVbuuid {
 	for i, vbno := range ts.GetVbnos() {
-		ts.Seqnos[i] = mutations.seqnos[bucketn][vbno]
-		ss := mutations.snapshots[bucketn][vbno]
-		ts.Snapshots[i] = protobuf.NewSnapshot(ss[0], ss[1])
+		seqno := uint64(0)
+		if int(vbno) < len(mutations.seqnos[bucketn]) {
+			seqno = mutations.seqnos[bucketn][vbno]
+		}
+		ts.Seqnos[i] = seqno
+		if int(vbno) < len(mutations.snapshots[bucketn]) {
+			ss := mutations.snapshots[bucketn][vbno]
+			ts.Snapshots[i] = protobuf.NewSnapshot(ss[0], ss[1])
+		} else {
+			ts.Snapshots[i] = protobuf.NewSnapshot(seqno, seqno)
+		}
 	}
 	return ts
 }

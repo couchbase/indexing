@@ -24,6 +24,7 @@ var options struct {
 	stat          string // periodic timeout to print dataport statistics
 	timeout       string // timeout for dataport to exit
 	maxVbnos      int
+	projector     bool // start projector, useful in debug mode.
 	debug         bool
 	trace         bool
 }
@@ -44,6 +45,8 @@ func argParse() string {
 		"timeout for dataport to exit")
 	flag.IntVar(&options.maxVbnos, "maxvb", 1024,
 		"max number of vbuckets")
+	flag.BoolVar(&options.projector, "projector", false,
+		"start projector for debug mode")
 	flag.BoolVar(&options.debug, "debug", false,
 		"run in debug mode")
 	flag.BoolVar(&options.trace, "trace", false,
@@ -92,16 +95,17 @@ func main() {
 
 	// spawn initial set of projectors
 	for _, cluster := range clusters {
-		adminport := cluster2adminport(cluster, 500)
-		config := c.SystemConfig.SectionConfig("projector.", true)
-		config.SetValue("clusterAddr", cluster)
-		epfactory := NewEndpointFactory(cluster, maxvbs, config)
-		config.SetValue("routerEndpointFactory", epfactory)
-		config.SetValue("adminport.listenAddr", adminport)
-		projector.NewProjector(maxvbs, config) // start projector daemon
+		adminport := getProjectorAdminport(cluster, "default")
+		if options.projector {
+			config := c.SystemConfig.SectionConfig("projector.", true)
+			config.SetValue("clusterAddr", cluster)
+			epfactory := NewEndpointFactory(cluster, maxvbs, config)
+			config.SetValue("routerEndpointFactory", epfactory)
+			config.SetValue("adminport.listenAddr", adminport)
+			projector.NewProjector(maxvbs, config) // start projector daemon
+		}
 		// projector-client
 		cconfig := c.SystemConfig.SectionConfig("projector.client.", true)
-		adminport := projectorAdminport(cluster)
 		projectors[cluster] = projc.NewClient(adminport, maxvbs, cconfig)
 	}
 
@@ -200,8 +204,8 @@ func mf(err error, msg string) {
 	}
 }
 
-func projectorAdminport(cluster string) string {
-	cinfo := c.NewClusterInfoCache(cluster, "default" /*pool*/)
+func getProjectorAdminport(cluster, pooln string) string {
+	cinfo := c.NewClusterInfoCache(cluster, pooln)
 	if err := cinfo.Fetch(); err != nil {
 		log.Fatal("error cluster-info: %v", err)
 	}
@@ -211,15 +215,6 @@ func projectorAdminport(cluster string) string {
 		log.Fatal(err)
 	}
 	return adminport
-}
-
-func cluster2adminport(cluster string, offset int) string {
-	ss := strings.Split(cluster, ":")
-	kport, err := strconv.Atoi(ss[1])
-	if err != nil {
-		log.Fatal(err)
-	}
-	return ss[0] + ":" + strconv.Itoa(kport+offset)
 }
 
 // NewEndpointFactory to create endpoint instances based on config.
