@@ -61,7 +61,7 @@ func (f *ForestDBIterator) SeekFirst() {
 		return
 	}
 	f.valid = true
-	f.Next()
+	f.Get()
 }
 
 func (f *ForestDBIterator) Seek(key []byte) {
@@ -76,12 +76,22 @@ func (f *ForestDBIterator) Seek(key []byte) {
 		return
 	}
 	f.valid = true
-	f.Next()
+	f.Get()
 }
 
 func (f *ForestDBIterator) Next() {
 	var err error
-	f.curr, err = f.iter.Next()
+	err = f.iter.Next()
+	if err != nil {
+		f.valid = false
+		return
+	}
+	f.Get()
+}
+
+func (f *ForestDBIterator) Get() {
+	var err error
+	f.curr, err = f.iter.Get()
 	if err != nil {
 		f.valid = false
 	}
