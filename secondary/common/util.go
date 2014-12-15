@@ -331,3 +331,9 @@ func GetColocatedHost(cluster string) (string, error) {
 	}
 	return "", errors.New("unknown host")
 }
+
+func CrashOnError(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
