@@ -249,7 +249,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 
 	case mcd.UPR_SNAPSHOT: // broadcast Snapshot
 		typ, start, end := m.SnapshotType, m.SnapstartSeq, m.SnapendSeq
-		c.Debugf(ssFormat, vr.logPrefix, typ, start, end)
+		c.Debugf(ssFormat, vr.logPrefix, start, end, typ)
 		if data := vr.makeSnapshotData(m, seqno); data != nil {
 			vr.sendToEndpoints(data)
 		} else {

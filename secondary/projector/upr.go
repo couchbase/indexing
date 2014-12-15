@@ -2,7 +2,6 @@
 
 package projector
 
-import "fmt"
 import "time"
 
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
@@ -52,9 +51,9 @@ type bucketUpr struct {
 
 // OpenBucketFeed opens feed for bucket.
 func OpenBucketFeed(b *couchbase.Bucket) (feeder BucketFeeder, err error) {
-	name := fmt.Sprintf("%v", time.Now().UnixNano())
+	count := uint32(time.Now().UnixNano() >> 24)
 	bupr := &bucketUpr{bucket: b}
-	if bupr.uprFeed, err = b.StartUprFeed(name, uint32(0)); err != nil {
+	if bupr.uprFeed, err = b.StartUprFeed("projector", count); err != nil {
 		return nil, err
 	}
 	return bupr, nil
