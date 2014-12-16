@@ -371,7 +371,7 @@ func (si *secondaryIndex) Condition() expression.Expression {
 // State implement Index{} interface.
 func (si *secondaryIndex) State() (datastore.IndexState, errors.Error) {
 	// TODO: if state is not ONLINE, fetch the latest state from cluster.
-	return si.state, nil
+	return datastore.ONLINE, nil
 }
 
 // Statistics implement Index{} interface.
