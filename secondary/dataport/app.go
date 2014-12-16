@@ -6,6 +6,8 @@ import "fmt"
 import "sort"
 import "strings"
 import "time"
+import "log"
+import "encoding/json"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
@@ -107,6 +109,8 @@ func processMutations(
 	bucketWise map[string]map[byte]int,
 	keys map[uint64]map[string]int) int {
 
+	var secvalues []interface{}
+
 	mutations := 0
 	for _, vb := range vbs {
 		bucket, kvs := vb.GetBucketname(), vb.GetKvs()
@@ -133,11 +137,20 @@ func processMutations(
 				if !ok {
 					m = make(map[string]int)
 				}
-				if _, ok := m[key]; !ok {
-					m[key] = 0
+				if err := json.Unmarshal([]byte(key), &secvalues); err != nil {
+					log.Fatal(err)
+				} else if len(secvalues) > 0 {
+					secJSON, err := json.Marshal(secvalues[:len(secvalues)-1])
+					if err != nil {
+						log.Fatal(err)
+					}
+					key = string(secJSON)
+					if _, ok := m[key]; !ok {
+						m[key] = 0
+					}
+					m[key]++
+					keys[uuid] = m
 				}
-				m[key]++
-				keys[uuid] = m
 			}
 		}
 		bucketWise[bucket] = commandWise

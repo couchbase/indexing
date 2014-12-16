@@ -6,6 +6,7 @@ import "log"
 import "os"
 import "strconv"
 import "strings"
+import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dataport"
@@ -125,7 +126,8 @@ func main() {
 		}
 	}
 
-	<-make(chan bool) // wait for ever
+	time.Sleep(1000 * time.Second)
+	//<-make(chan bool) // wait for ever
 }
 
 func getProjectorAdminport(cluster, pooln string) string {
