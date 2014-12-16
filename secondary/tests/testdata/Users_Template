@@ -2,7 +2,7 @@
   '{{repeat(100, 100)}}',
   {
     _id: '{{objectId()}}',
-    docid: 'User{{index()}}',
+    docid: 'User{{guid()}}',
     guid: '{{guid()}}',
     isActive: '{{bool()}}',
     balance: '{{floating(1000, 4000, 2, "$0,0.00")}}',

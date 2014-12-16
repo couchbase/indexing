@@ -10,8 +10,11 @@ import (
 
 var ClusterManagerAddr = "localhost:9100"
 
-func CreateSecondaryIndex(indexName, bucketName string, indexFields []string) {
-
+func CreateSecondaryIndex(indexName, bucketName string, indexFields []string, skipIfExists bool) error {
+	indexExists := IndexExists(indexName, bucketName)
+	if skipIfExists==true && indexExists==true {
+		return nil
+	}
 	client := qc.NewClusterClient(ClusterManagerAddr)
 	var secExprs []string
 	
@@ -32,11 +35,24 @@ func CreateSecondaryIndex(indexName, bucketName string, indexFields []string) {
 	
 	_, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary)
 	if err == nil {
-		fmt.Printf("Creating the secondary index %v\n", indexName)
-	} else {
-		fmt.Println("Error occured:", err)
-	}
+		fmt.Printf("Created the secondary index %v\n", indexName)
+	} 
+	return err
 }
+
+func IndexExists(indexName, bucketName string) bool {
+	fmt.Printf("Checking for presence of index %v\n", indexName)
+	client := qc.NewClusterClient(ClusterManagerAddr)
+	infos, err := client.List()
+	tc.HandleError(err, "Error while listing the secondary indexes")
+	for _, info := range infos {
+		if info.Name == indexName {
+			return true
+		}
+	}
+	return false
+}
+
 
 func DropSecondaryIndex(indexName string) {
 	fmt.Printf("Dropping the secondary index %v", indexName)

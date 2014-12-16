@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"log"
+	"io"
 	"io/ioutil"
+	"net/http"
 	"compress/gzip"
 )
 
@@ -41,4 +43,30 @@ func ReadCompressedFile(filePath string) ([]byte, error) {
         return nil, err
     }
 	return data, nil
+}
+
+// Download a remote file over HTTP
+func DownloadDataFile(sourceDataFile, destinationFilePath string) {
+	fmt.Println("Downloading file...")
+
+	f, err := os.Create(destinationFilePath)
+	HandleError(err, "Error downloading datafile " + destinationFilePath)
+	defer f.Close()
+
+	c := http.Client{
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			r.URL.Opaque = r.URL.Path
+			return nil
+		},
+	}
+
+	url := sourceDataFile
+	r, err := c.Get(url)
+	HandleError(err, "Error downloading datafile " + destinationFilePath)
+	defer r.Body.Close()
+	fmt.Println(r.Status)
+
+	n, err := io.Copy(f, r.Body)
+	HandleError(err, "Error downloading datafile " + destinationFilePath)
+	fmt.Println(n, "Data file downloaded")
 }

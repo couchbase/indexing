@@ -9,7 +9,7 @@ import (
 var scanResults tc.ScanResponse
 
 func Range(indexName, bucketName string, low, high []interface{}, inclusion uint32,
-			distinct bool, limit int64) tc.ScanResponse {
+			distinct bool, limit int64) (tc.ScanResponse, error) {
 	c.LogIgnore()
 	addr := "localhost:9101" // Get from config
 
@@ -18,10 +18,20 @@ func Range(indexName, bucketName string, low, high []interface{}, inclusion uint
 	scanResults = make(tc.ScanResponse)
 	
 	err := client.Range(indexName, bucketName, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit, scanCallback)
-	tc.HandleError(err, "Error from Range API")
-
 	client.Close()
-	return scanResults
+	return scanResults, err
+}
+
+func Lookup(indexName, bucketName string, values []interface{}, distinct bool, limit int64) (tc.ScanResponse, error) {
+	c.LogIgnore()
+	addr := "localhost:9101" // Get from config
+
+	// ToDo: Create a client pool
+	client := qc.NewClient(qc.Remoteaddr(addr), c.SystemConfig.SectionConfig("queryport.client.", true))
+	scanResults = make(tc.ScanResponse)
+	err := client.Lookup(indexName, bucketName, []c.SecondaryKey { values }, distinct, limit, scanCallback)
+	client.Close()
+	return scanResults, err
 }
 
 func scanCallback(response qc.ResponseReader) bool {

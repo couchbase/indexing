@@ -27,6 +27,7 @@ func Set(key string, v interface{}, bucketName string, password string, hostname
 
 	err = b.Set(key, 0, v)
 	tc.HandleError(err, "set")
+	b.Close()
 }
 
 func SetKeyValue(keyValue KeyValue, bucketName string, password string, hostname string) {
@@ -34,9 +35,22 @@ func SetKeyValue(keyValue KeyValue, bucketName string, password string, hostname
 }
 
 func SetKeyValues(keyValues []KeyValue, bucketName string, password string, hostname string) {
+	url := "http://" + bucketName + ":" + password + "@" + hostname + ":9000"
+
+	c, err := couchbase.Connect(url)
+	tc.HandleError(err, "connect - "+url)
+
+	p, err := c.GetPool("default")
+	tc.HandleError(err, "pool")
+
+	b, err := p.GetBucket(bucketName)
+	tc.HandleError(err, "bucket")
+
 	for _, value := range keyValues {
-		SetKeyValue(value, bucketName, password, hostname)
+		err = b.Set(value.Key, 0, value.JsonValue)
+		tc.HandleError(err, "set")
 	}
+	b.Close()
 }
 
 func Get(key string, rv interface{}, bucketName string, password string, hostname string) {
