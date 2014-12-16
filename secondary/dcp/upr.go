@@ -293,6 +293,7 @@ func (feed *UprFeed) uprRequestStream(vb uint16, opaque uint16, flags uint32,
 		log.Printf("error master node not found for vbucket %d\n", vb)
 		return ErrorInvalidVbucket
 	}
+	log.Printf("Posting UPR_REQUEST to %v\n", master)
 	singleFeed, ok := feed.nodeFeeds[master]
 	if !ok {
 		log.Printf("error UprFeed for host %q (vb:%d) not found", master, vb)

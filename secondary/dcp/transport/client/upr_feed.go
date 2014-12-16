@@ -292,12 +292,7 @@ func (feed *UprFeed) UprRequestStream(vbno, opaqueMSB uint16, flags uint32,
 
 	feed.mu.Lock()
 	defer feed.mu.Unlock()
-
-	if err := feed.conn.Transmit(rq); err != nil {
-		ul.LogError("", "", "Error in StreamRequest %s", err.Error())
-		return err
-	}
-
+	feed.transmitCh <- rq
 	stream := &UprStream{
 		Vbucket:  vbno,
 		Vbuuid:   vuuid,
@@ -327,7 +322,7 @@ func (feed *UprFeed) CloseStream(vbno, opaqueMSB uint16) error {
 
 // StartFeed to start the upper feed.
 func (feed *UprFeed) StartFeed() error {
-	ch := make(chan *UprEvent, 10)
+	ch := make(chan *UprEvent, 10000)
 	feed.C = ch
 	go feed.runFeed(ch)
 	return nil
@@ -572,6 +567,7 @@ loop:
 				Opcode: transport.UPR_BUFFERACK,
 			}
 			bufferAck.Extras = make([]byte, 4)
+			ul.LogInfo("", "", "Buffer-ack %v", sendSize)
 			binary.BigEndian.PutUint32(bufferAck.Extras[:4], uint32(sendSize))
 			feed.transmitCh <- bufferAck
 			uprStats.TotalBufferAckSent++
