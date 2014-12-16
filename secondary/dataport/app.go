@@ -87,8 +87,6 @@ loop:
 			break loop
 
 		case <-printTm:
-			c.Infof("%v received %v mutations and %v msgs\n",
-				logPrefix, mutations, messages)
 			for _, bucket := range sortedBuckets(bucketWise) {
 				commandWise := bucketWise[bucket]
 				c.Infof("%v %v, %v\n",
