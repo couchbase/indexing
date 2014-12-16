@@ -180,12 +180,12 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 			// List of snapshots for reading current timestamp
 			var isSnapCreated bool = true
 
-			var partnSnaps []PartitionSnapshot
+			var partnSnaps map[common.PartitionId]PartitionSnapshot
 			//for all partitions managed by this indexer
 			for partnId, partnInst := range partnMap {
 				sc := partnInst.Sc
 
-				var sliceSnaps []SliceSnapshot
+				var sliceSnaps map[SliceId]SliceSnapshot
 				//create snapshot for all the slices
 				for _, slice := range sc.GetAllSlices() {
 
@@ -247,7 +247,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 								id:   slice.Id(),
 								snap: newSnapshot,
 							}
-							sliceSnaps = append(sliceSnaps, ss)
+							sliceSnaps[slice.Id()] = ss
 						} else {
 							common.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
 								"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
@@ -262,7 +262,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							id:   slice.Id(),
 							snap: latestSnapshot,
 						}
-						sliceSnaps = append(sliceSnaps, ss)
+						sliceSnaps[slice.Id()] = ss
 						common.Debugf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
 							"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
 						continue
@@ -273,7 +273,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 					id:     partnId,
 					slices: sliceSnaps,
 				}
-				partnSnaps = append(partnSnaps, ps)
+				partnSnaps[partnId] = ps
 			}
 
 			is := &indexSnapshot{
@@ -517,15 +517,18 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap) {
 			latestSnapshot.Open()
 		}
 
+		sid := SliceId(0)
+		pid := common.PartitionId(0)
+
 		ps := &partitionSnapshot{
-			id:     common.PartitionId(0),
-			slices: []SliceSnapshot{ss},
+			id:     pid,
+			slices: map[SliceId]SliceSnapshot{sid: ss},
 		}
 
 		is := &indexSnapshot{
 			instId: idxInstId,
 			ts:     tsVbuuid,
-			partns: []PartitionSnapshot{ps},
+			partns: map[common.PartitionId]PartitionSnapshot{pid: ps},
 		}
 
 		DestroyIndexSnapshot(s.indexSnapMap[idxInstId])

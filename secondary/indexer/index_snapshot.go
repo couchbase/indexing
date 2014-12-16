@@ -26,12 +26,12 @@ import (
 type IndexSnapshot interface {
 	IndexInstId() common.IndexInstId
 	Timestamp() *common.TsVbuuid
-	Partitions() []PartitionSnapshot
+	Partitions() map[common.PartitionId]PartitionSnapshot
 }
 
 type PartitionSnapshot interface {
 	PartitionId() common.PartitionId
-	Slices() []SliceSnapshot
+	Slices() map[SliceId]SliceSnapshot
 }
 
 type SliceSnapshot interface {
@@ -42,7 +42,7 @@ type SliceSnapshot interface {
 type indexSnapshot struct {
 	instId common.IndexInstId
 	ts     *common.TsVbuuid
-	partns []PartitionSnapshot
+	partns map[common.PartitionId]PartitionSnapshot
 }
 
 func (is *indexSnapshot) IndexInstId() common.IndexInstId {
@@ -53,20 +53,20 @@ func (is *indexSnapshot) Timestamp() *common.TsVbuuid {
 	return is.ts
 }
 
-func (is *indexSnapshot) Partitions() []PartitionSnapshot {
+func (is *indexSnapshot) Partitions() map[common.PartitionId]PartitionSnapshot {
 	return is.partns
 }
 
 type partitionSnapshot struct {
 	id     common.PartitionId
-	slices []SliceSnapshot
+	slices map[SliceId]SliceSnapshot
 }
 
 func (ps *partitionSnapshot) PartitionId() common.PartitionId {
 	return ps.id
 }
 
-func (ps *partitionSnapshot) Slices() []SliceSnapshot {
+func (ps *partitionSnapshot) Slices() map[SliceId]SliceSnapshot {
 	return ps.slices
 }
 
