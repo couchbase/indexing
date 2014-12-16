@@ -65,7 +65,7 @@ message StreamEndResponse {
 // Query messages / arguments for indexer
 
 message Span {
-    required Range  range = 1;
+    optional Range  range = 1;
     // TODO: may we should rename `equal` to `equals` ?
     repeated bytes  equal = 2;
 }

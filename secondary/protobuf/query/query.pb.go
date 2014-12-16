@@ -329,7 +329,7 @@ func (m *StreamEndResponse) GetErr() *Error {
 }
 
 type Span struct {
-	Range *Range `protobuf:"bytes,1,req,name=range" json:"range,omitempty"`
+	Range *Range `protobuf:"bytes,1,opt,name=range" json:"range,omitempty"`
 	// TODO: may we should rename `equal` to `equals` ?
 	Equal            [][]byte `protobuf:"bytes,2,rep,name=equal" json:"equal,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
