@@ -36,18 +36,37 @@ type VbMap map[string][]uint16
 // 2) A projector consumer/client can start a stream based on its own <local state>, without having to
 //    know whether the projector is going to accept the request based on that <local state>.
 // 3) When projector recieves a request to start a stream, it uses its own <local state> to filter out the
-//    the <client request state>.  The resulting <active state> is
+//    the <state> requested by client.  The resulting <active state> is
 //    - timestamp filtered by <bucket, vbucket> that is applicable for that projector
 //    - the set of index instances as proposed in the client <local state>
 // 4)  Projector client can augment existing <state> by proposing new <state> to projector. Agumentation allows
 //    - adding new instance
-//    - changing endpoint of an instance?
+//    - changing endpoint of an instance
 //    - activate new vbucket
 // 5) State agumentation will not allow
 //    - remove instance
 //    - deactive vbucket
 //    - restart vbucket
 //    - repair connection
+//
+// ProjectorAdmin will operate in the following fashion:
+// 1) AddIndexToStream() can be used to start a stream with a given <state>.  A <state> is consisted of
+//    bucket timestamp and index instances.  This method can be used to augment the <state> as well. The
+//    method ensures that the <requested state> is enforced as follows:
+//    -  AddIndexToStream() passes the <state> to every projector node.  The projector node must return
+//       the active timestamps applicable for that node.  
+//    -  If a vbucket is in an active timestamp, it indicates that the stream has started successfully for that vbucket.    
+//       Termination of the stream will be manifested as StreamEnd or ConnectionError.
+//    -  Projector node may return rollback timestamp for a vbucket.  The rollback timestamp seqno must be smaller than
+//       the request timestamp unless vbuuid has changed.  It is required for ProjectorAdmin to retry using the rollback
+//       timestamps.
+//    -  AddIndexToStream() will retry until all <bucket, vbucket> have corresponding active timestamps.
+//    -  AddIndexToStream() will detects that more than one projector has active timestamps on the 
+//       same <bucket, vbucket>.  **If so, it will STOP the vbucket for both nodes.**  It will then retry restart the vbuckets.
+//    -  AddIndexToStream() will send the active timestamps to StreamMonitor to ensure that projector actually sends the 
+//       stream properly over.   If it does not get the stream for the vbucket, it will try to restart the vbucket using the latest
+//       timestamp received so far (in this case, it will be the consolidated active timestamp).  This step is just to ensure
+//       liveness property in presence of bugs or race conditions (when projector protocol is not honored).
 //
 type ProjectorAdmin struct {
 	factory          ProjectorStreamClientFactory
@@ -158,7 +177,6 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 			worker := <-donech
 
 			common.Debugf("ProjectorAdmin::AddIndexToStream(): worker %v done", worker.server)
-			p.monitorStream(worker.streamId, worker.activeTimestamps)
 			activeTimestamps = append(activeTimestamps, worker.activeTimestamps...)
 			delete(workers, worker.server)
 
@@ -184,9 +202,16 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 			}
 		}
 
-		if !shouldRetry {		
+		if !shouldRetry {
+			// TODO: This does not STOP the existing stream if two projectors return active timestamps on
+			// the same vbucket.  This could cause the dataport to have interleaved mutations on the same vbucket.
+			// Need to verify if this situation can happen (e.g. during rebalancing or kv split brain).
 			shouldRetry = !p.validateActiveVb(buckets, activeTimestamps)
 		}
+		
+		if !shouldRetry {
+			p.monitorStream(streamId, activeTimestamps)
+		} 
 	}
 
 	return nil
@@ -371,6 +396,7 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 		// start worker to create mutation stream
 		workers := make(map[string]*adminWorker)
 		donech := make(chan *adminWorker, len(nodes))
+		var activeTimestamps []*protobuf.TsVbuuid = nil
 
 		for server, timestamps := range nodes {
 			worker := &adminWorker{
@@ -392,7 +418,7 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 			worker := <-donech
 
 			common.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): worker %v done", worker.server)
-			p.monitorStream(worker.streamId, worker.activeTimestamps)
+			activeTimestamps = append(activeTimestamps, worker.activeTimestamps...)
 			delete(workers, worker.server)
 
 			if worker.err != nil {
@@ -418,6 +444,10 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 				break
 			}
 		}
+		
+		if !shouldRetry {
+			p.monitorStream(streamId, activeTimestamps)
+		}
 	}
 
 	return nil
@@ -432,8 +462,11 @@ func (p *ProjectorAdmin) validateActiveVb(buckets []string, activeTimestamps []*
 				if ts.GetBucket() == bucket {
 					for _, ts_vb := range ts.GetVbnos() {
 						if uint32(vb) == ts_vb {
+							if found {
+								common.Debugf("validateActiveVb(): find duplicate active timestamp for bucket %s vb %d", bucket, vb)
+								return false
+							}
 							found = true
-							continue
 						}
 					}
 				}
@@ -682,7 +715,7 @@ func (worker *adminWorker) deleteInstances(instances []uint64, doneCh chan *admi
 			}
 
 			common.Debugf("adminWorker::deleteInstances(): Error encountered when calling DelInstances. Error=%v", err.Error())
-			if strings.Contains(err.Error(), "ErrorTopicMissing") {
+			if strings.Contains(err.Error(), projector.ErrorTopicMissing.Error()) {
 				// It is OK if topic is missing
 				worker.err = nil
 				return
@@ -738,7 +771,7 @@ func (worker *adminWorker) repairEndpoint(endpoint string, doneCh chan *adminWor
 			}
 
 			common.Debugf("adminWorker::repairEndpiont(): Error encountered when calling RepairEndpoint. Error=%v", err.Error())
-			if strings.Contains(err.Error(), "ErrorTopicMissing") {
+			if strings.Contains(err.Error(), projector.ErrorTopicMissing.Error()) {
 				// It is OK if topic is missing
 				worker.err = nil
 				return
@@ -1156,10 +1189,12 @@ func (p *ProjectorClientEnvImpl) FilterTimestampsForNode(timestamps []*protobuf.
 					if err == nil {
 						newTs.Append(uint16(vbno), seqno, vbuuid, sStart, sEnd)
 					}
-					newTimestamps = append(newTimestamps, newTs)
-					continue
 				}
 			}
+		}
+	
+		if !newTs.IsEmpty()	{
+			newTimestamps = append(newTimestamps, newTs)
 		}
 	}
 

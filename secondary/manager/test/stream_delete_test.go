@@ -439,7 +439,23 @@ func (c *deleteTestProjectorClient) MutationTopicRequest(topic, endpointType str
 	for i, inst := range instances {
 		response.InstanceIds[i] = inst.GetIndexInstance().GetInstId()
 	}
-	response.ActiveTimestamps = reqTimestamps 
+	
+	response.ActiveTimestamps = nil 
+	for _, ts := range reqTimestamps {
+		newTs := protobuf.NewTsVbuuid("default", ts.GetBucket(), manager.NUM_VB)
+		if c.server == "127.0.0.1" {
+			for i := 0; i < manager.NUM_VB/2; i++ {
+				newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
+			}
+		}
+		if c.server == "127.0.0.2" {
+			for i := manager.NUM_VB/2; i < manager.NUM_VB; i++ {
+				newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
+			}
+		}
+		response.ActiveTimestamps = append(response.ActiveTimestamps, newTs)
+	}
+	
 	response.RollbackTimestamps = nil
 	response.Err = nil
 
