@@ -271,8 +271,11 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 		}
 		// send data to corresponding endpoint.
 		for raddr, data := range dataForEndpoints {
-			// send might fail, we don't care
-			vr.endpoints[raddr].Send(data)
+			// send might fail due to ErrorChannelFull or ErrorClosed
+			if vr.endpoints[raddr].Send(data) != nil {
+				vr.endpoints[raddr].Close()
+				delete(vr.endpoints, raddr)
+			}
 		}
 	}
 	return seqno
@@ -280,9 +283,12 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 
 // send to all endpoints.
 func (vr *VbucketRoutine) sendToEndpoints(data interface{}) {
-	for _, endpoint := range vr.endpoints {
-		// send might fail, we don't care
-		endpoint.Send(data)
+	for raddr, endpoint := range vr.endpoints {
+		// send might fail due to ErrorChannelFull or ErrorClosed
+		if endpoint.Send(data) != nil {
+			endpoint.Close()
+			delete(vr.endpoints, raddr)
+		}
 	}
 }
 

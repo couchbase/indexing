@@ -2,60 +2,65 @@ package dataport
 
 import "testing"
 import "time"
+import "fmt"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
-import "github.com/couchbase/indexing/secondary/transport"
 
 func TestTimeout(t *testing.T) {
-	c.LogIgnore()
-	//c.SetLogLevel(c.LogLevelDebug)
+	//c.LogIgnore()
+	c.SetLogLevel(c.LogLevelDebug)
 
-	addr := "localhost:8888"
+	raddr := "localhost:8888"
 	maxBuckets, maxvbuckets, mutChanSize := 2, 4, 100
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
 	prefix := "projector.dataport.indexer."
 	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	daemon, err := NewServer(addr, maxvbuckets, config, appch)
+	daemon, err := NewServer(raddr, maxvbuckets, config, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// start client
-	flags := transport.TransportFlag(0).SetProtobuf()
-	prefix = "projector.dataport.client."
-	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	client, _ := NewClient(
-		"cluster", "backfill", addr, flags, maxvbuckets, config)
+	// start endpoint
+	config = c.SystemConfig.SectionConfig("endpoint.dataport.", true /*trim*/)
+	endp, err := NewRouterEndpoint("clust", "topic", raddr, maxvbuckets, config)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 
 	// send StreamBegin
-	vbs := make([]*c.VbKeyVersions, 0, maxvbuckets)
 	for _, vbmap := range vbmaps {
 		for i := 0; i < len(vbmap.Vbuckets); i++ { // for N vbuckets
 			vbno, vbuuid := vbmap.Vbuckets[i], vbmap.Vbuuids[i]
-			vb := c.NewVbKeyVersions(vbmap.Bucket, vbno, vbuuid, 1)
 			kv := c.NewKeyVersions(uint64(0), []byte("Bourne"), 1)
 			kv.AddStreamBegin()
-			vb.AddKeyVersions(kv)
-			vbs = append(vbs, vb)
+			dkv := &c.DataportKeyVersions{
+				Bucket: vbmap.Bucket, Vbno: vbno, Vbuuid: vbuuid, Kv: kv,
+			}
+			if err := endp.Send(dkv); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	client.SendKeyVersions(vbs, true)
 
 	go func() { // this routine will keep one connection alive
 		for i := 0; ; i++ {
-			idx := i % len(vbmaps[0].Vbuckets)
-			vbno, vbuuid := vbmaps[0].Vbuckets[idx], vbmaps[0].Vbuuids[idx]
+			vbmap := vbmaps[0] // keep sending sync for first vbucket alone
+			idx := i % len(vbmap.Vbuckets)
+			vbno, vbuuid := vbmap.Vbuckets[idx], vbmap.Vbuuids[idx]
 			// send sync messages
-			vb := c.NewVbKeyVersions("default0", vbno, vbuuid, 1)
 			kv := c.NewKeyVersions(10, nil, 1)
 			kv.AddSync()
-			vb.AddKeyVersions(kv)
-			client.SendKeyVersions([]*c.VbKeyVersions{vb}, true)
+			dkv := &c.DataportKeyVersions{
+				Bucket: vbmap.Bucket, Vbno: vbno, Vbuuid: vbuuid, Kv: kv,
+			}
+			if endp.Send(dkv); err != nil {
+				t.Fatal(err)
+			}
 			<-time.After(6000 * time.Millisecond)
 		}
 	}()
@@ -68,7 +73,7 @@ func TestTimeout(t *testing.T) {
 			case []*protobuf.VbKeyVersions:
 			case ConnectionError:
 				ref := maxvbuckets
-				t.Logf("%T %v \n", ce, ref)
+				t.Logf("%T %v \n", ce, ce)
 				if len(ce) != 2 {
 					t.Fatal("mismatch in ConnectionError")
 				}
@@ -91,34 +96,31 @@ func TestTimeout(t *testing.T) {
 	}
 
 	<-time.After(100 * time.Millisecond)
-	client.Close()
+	endp.Close()
 
 	<-time.After(100 * time.Millisecond)
 	daemon.Close()
 }
 
 func TestLoopback(t *testing.T) {
-	c.LogIgnore()
-	//c.SetLogLevel(c.LogLevelDebug)
+	//c.LogIgnore()
+	c.SetLogLevel(c.LogLevelDebug)
 
-	addr := "localhost:8888"
+	raddr := "localhost:8888"
 	maxBuckets, maxvbuckets, mutChanSize := 2, 32, 100
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
 	prefix := "projector.dataport.indexer."
 	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	daemon, err := NewServer(addr, maxvbuckets, config, appch)
+	daemon, err := NewServer(raddr, maxvbuckets, config, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// start client and test loopback
-	flags := transport.TransportFlag(0).SetProtobuf()
-	prefix = "projector.dataport.client."
-	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	client, err := NewClient(
-		"cluster", "backfill", addr, flags, maxvbuckets, config)
+	// start endpoint
+	config = c.SystemConfig.SectionConfig("endpoint.dataport.", true /*trim*/)
+	endp, err := NewRouterEndpoint("clust", "topic", raddr, maxvbuckets, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,117 +128,119 @@ func TestLoopback(t *testing.T) {
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets) // vbmaps
 
 	// send StreamBegin
-	vbs := make([]*c.VbKeyVersions, 0, maxvbuckets)
 	for _, vbmap := range vbmaps {
 		for i := 0; i < len(vbmap.Vbuckets); i++ { // for N vbuckets
 			vbno, vbuuid := vbmap.Vbuckets[i], vbmap.Vbuuids[i]
-			vb := c.NewVbKeyVersions(vbmap.Bucket, vbno, vbuuid, 1)
 			kv := c.NewKeyVersions(uint64(0), []byte("Bourne"), 1)
 			kv.AddStreamBegin()
-			vb.AddKeyVersions(kv)
-			vbs = append(vbs, vb)
+			dkv := &c.DataportKeyVersions{
+				Bucket: vbmap.Bucket, Vbno: vbno, Vbuuid: vbuuid, Kv: kv,
+			}
+			if err := endp.Send(dkv); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	client.SendKeyVersions(vbs, true)
 
 	count, seqno := 200, 1
 	for i := 1; i <= count; i += 2 {
 		nVbs, nMuts, nIndexes := maxvbuckets, 5, 5
-		vbsRef :=
-			constructVbKeyVersions("default0", seqno, nVbs, nMuts, nIndexes)
-		vbsRef = append(
-			vbsRef,
-			constructVbKeyVersions("default1", seqno, nVbs, nMuts, nIndexes)...)
-		err := client.SendKeyVersions(vbsRef, true)
-		if err != nil {
-			t.Fatal(err)
+		dkvs := dataKeyVersions("default0", seqno, nVbs, nMuts, nIndexes)
+		dkvs = append(dkvs, dataKeyVersions("default1", seqno, nVbs, nMuts, nIndexes)...)
+		for _, dkv := range dkvs {
+			if err := endp.Send(dkv); err != nil {
+				t.Fatal(err)
+			}
 		}
 		seqno += nMuts
 
 		// gather
 		pvbs := make([]*protobuf.VbKeyVersions, 0)
-		for len(pvbs) < nVbs*2 {
+	loop:
+		for {
 			select {
 			case msg := <-appch:
-				t.Logf("%T %v\n", msg, msg)
+				//t.Logf("%T %v\n", msg, msg)
 				if pvbsSub, ok := msg.([]*protobuf.VbKeyVersions); !ok {
 					t.Fatalf("unexpected type in loopback %T", msg)
 				} else {
 					pvbs = append(pvbs, pvbsSub...)
 				}
+			case <-time.After(10 * time.Millisecond):
+				break loop
 			}
 		}
-		vbs := protobuf2VbKeyVersions(pvbs)
-		for _, vbRef := range vbsRef {
-			vbRef.Kvs = vbRef.Kvs[:cap(vbRef.Kvs)] // fix KeyVersions
-			for _, vb := range vbs {
-				if vb.Uuid == vbRef.Uuid {
-					if vb.Bucket != vbRef.Bucket {
-						t.Fatal("unexpected response")
-					} else if vb.Vbucket != vbRef.Vbucket {
-						t.Fatal("unexpected response")
-					} else if vb.Vbuuid != vbRef.Vbuuid {
-						t.Fatal("unexpected response")
-					} else if len(vb.Kvs) != nMuts {
-						t.Fatal("unexpected response")
+		commands := make(map[byte]int)
+		for _, vb := range protobuf2VbKeyVersions(pvbs) {
+			for _, kv := range vb.Kvs {
+				for _, cmd := range kv.Commands {
+					if _, ok := commands[byte(cmd)]; !ok {
+						commands[byte(cmd)] = 0
 					}
+					commands[byte(cmd)]++
 				}
 			}
 		}
+		if StreamBegins, ok := commands[c.StreamBegin]; ok && StreamBegins != 64 {
+			t.Fatalf("unexpected response %v", StreamBegins)
+		}
+		if commands[c.Upsert] != 1600 {
+			t.Fatalf("unexpected response %v", commands[c.Upsert])
+		}
 	}
 
-	client.Close()
+	endp.Close()
 	daemon.Close()
 }
 
 func BenchmarkLoopback(b *testing.B) {
-	c.LogIgnore()
+	//c.LogIgnore()
+	c.SetLogLevel(c.LogLevelDebug)
 
-	addr := "localhost:8888"
+	raddr := "localhost:8888"
 	maxBuckets, maxvbuckets, mutChanSize := 2, 32, 100
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
 	prefix := "projector.dataport.indexer."
 	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	daemon, err := NewServer(addr, maxvbuckets, config, appch)
+	daemon, err := NewServer(raddr, maxvbuckets, config, appch)
 	if err != nil {
 		b.Fatal(err)
 	}
 
-	// start client and test loopback
-	flags := transport.TransportFlag(0).SetProtobuf()
-	prefix = "projector.dataport.client."
-	config = c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	client, _ := NewClient(
-		"cluster", "backfill", addr, flags, maxvbuckets, config)
+	// start endpoint
+	config = c.SystemConfig.SectionConfig("endpoint.dataport.", true /*trim*/)
+	endp, err := NewRouterEndpoint("clust", "topic", raddr, maxvbuckets, config)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	vbmaps := makeVbmaps(maxvbuckets, maxBuckets)
 
 	// send StreamBegin
-	vbs := make([]*c.VbKeyVersions, 0, maxvbuckets)
 	for _, vbmap := range vbmaps {
 		for i := 0; i < len(vbmap.Vbuckets); i++ { // for N vbuckets
 			vbno, vbuuid := vbmap.Vbuckets[i], vbmap.Vbuuids[i]
-			vb := c.NewVbKeyVersions(vbmap.Bucket, vbno, vbuuid, 1)
 			kv := c.NewKeyVersions(uint64(0), []byte("Bourne"), 1)
 			kv.AddStreamBegin()
-			vb.AddKeyVersions(kv)
-			vbs = append(vbs, vb)
+			dkv := &c.DataportKeyVersions{
+				Bucket: vbmap.Bucket, Vbno: vbno, Vbuuid: vbuuid, Kv: kv,
+			}
+			if err := endp.Send(dkv); err != nil {
+				b.Fatal(err)
+			}
 		}
 	}
-	client.SendKeyVersions(vbs, true)
 
 	go func() {
-		nVbs, nMuts, nIndexes := maxvbuckets, 5, 5
-		seqno := 1
+		nVbs, nMuts, nIndexes, seqno := maxvbuckets, 5, 5, 1
 		for {
-			vbsRef :=
-				constructVbKeyVersions("default0", seqno, nVbs, nMuts, nIndexes)
-			vbs :=
-				constructVbKeyVersions("default1", seqno, nVbs, nMuts, nIndexes)
-			vbsRef = append(vbsRef, vbs...)
-			client.SendKeyVersions(vbsRef, true)
+			dkvs := dataKeyVersions("default0", seqno, nVbs, nMuts, nIndexes)
+			dkvs = append(dkvs, dataKeyVersions("default1", seqno, nVbs, nMuts, nIndexes)...)
+			for _, dkv := range dkvs {
+				endp.Send(dkv)
+			}
 			seqno += nMuts
 		}
 	}()
@@ -245,12 +249,49 @@ func BenchmarkLoopback(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		select {
 		case msg := <-appch:
-			if pvbsSub, ok := msg.([]*protobuf.VbKeyVersions); !ok {
-				b.Fatalf("unexpected type in loopback %T", pvbsSub)
+			if _, ok := msg.([]*protobuf.VbKeyVersions); !ok {
+				b.Fatalf("unexpected type in loopback %T", msg)
 			}
 		}
 	}
 
-	client.Close()
+	endp.Close()
 	daemon.Close()
+}
+
+func makeVbmaps(maxvbuckets int, maxBuckets int) []*c.VbConnectionMap {
+	vbmaps := make([]*c.VbConnectionMap, 0, maxBuckets)
+	for i := 0; i < maxBuckets; i++ {
+		vbmap := &c.VbConnectionMap{
+			Bucket:   fmt.Sprintf("default%v", i),
+			Vbuckets: make([]uint16, 0, maxvbuckets),
+			Vbuuids:  make([]uint64, 0, maxvbuckets),
+		}
+		for i := 0; i < maxvbuckets; i++ {
+			vbmap.Vbuckets = append(vbmap.Vbuckets, uint16(i))
+			vbmap.Vbuuids = append(vbmap.Vbuuids, uint64(i*10))
+		}
+		vbmaps = append(vbmaps, vbmap)
+	}
+	return vbmaps
+}
+
+func dataKeyVersions(bucket string, seqno, nVbs, nMuts, nIndexes int) []*c.DataportKeyVersions {
+	dkvs := make([]*c.DataportKeyVersions, 0)
+	for i := 0; i < nVbs; i++ { // for N vbuckets
+		vbno, vbuuid := uint16(i), uint64(i*10)
+		for j := 0; j < nMuts; j++ {
+			kv := c.NewKeyVersions(uint64(seqno+j), []byte("Bourne"), nIndexes)
+			for k := 0; k < nIndexes; k++ {
+				key := fmt.Sprintf("bangalore%v", k)
+				oldkey := fmt.Sprintf("varanasi%v", k)
+				kv.AddUpsert(uint64(k), []byte(key), []byte(oldkey))
+			}
+			dkv := &c.DataportKeyVersions{
+				Bucket: bucket, Vbno: vbno, Vbuuid: vbuuid, Kv: kv,
+			}
+			dkvs = append(dkvs, dkv)
+		}
+	}
+	return dkvs
 }

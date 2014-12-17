@@ -64,7 +64,8 @@ func main() {
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	config := c.SystemConfig.SectionConfig("projector.", true)
 	config.SetValue("clusterAddr", cluster)
-	epfactory := NewEndpointFactory(cluster, maxvbs, config)
+	econf := c.SystemConfig.SectionConfig("endpoint.dataport.", true)
+	epfactory := NewEndpointFactory(cluster, maxvbs, econf)
 	config.SetValue("routerEndpointFactory", epfactory)
 	config.SetValue("colocate", options.colocate)
 	config.SetValue("adminport.listenAddr", options.adminport)
@@ -80,9 +81,8 @@ func main() {
 
 // NewEndpointFactory to create endpoint instances based on config.
 func NewEndpointFactory(
-	cluster string, maxvbs int, config c.Config) c.RouterEndpointFactory {
+	cluster string, maxvbs int, econf c.Config) c.RouterEndpointFactory {
 
-	econf := config.SectionConfig("dataport.client.", true)
 	return func(topic, endpointType, addr string) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":

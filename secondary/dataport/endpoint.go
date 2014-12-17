@@ -5,8 +5,8 @@
 //                            |
 //                         (spawn)
 //                            |
-//                            |  (flushTimeout)
-//        Ping() -----*----> run ----------> dataport-client ---> TCP
+//                            |  (flushTimeout || > bufferSize)
+//        Ping() -----*----> run -------------------------------> TCP
 //                    |       ^
 //        Send() -----*       | endpoint routine buffers messages,
 //                    |       | batches them based on timeout and
@@ -19,6 +19,7 @@
 package dataport
 
 import "fmt"
+import "net"
 import "time"
 import "runtime/debug"
 
@@ -30,67 +31,68 @@ import "github.com/couchbase/indexing/secondary/transport"
 // specific node.
 type RouterEndpoint struct {
 	topic     string
-	timestamp int64   // immutable
-	raddr     string  // immutable
-	client    *Client // immutable
-	// gen-server
-	kvch  chan []interface{} // carries *c.KeyVersions
-	reqch chan []interface{} // carries control commands
-	finch chan bool
-
+	timestamp int64  // immutable
+	raddr     string // immutable
 	// config params
 	logPrefix string
-	parConns  int // number of parallel connection with remote
-	genChSize int // channel size for genServer routine
 	keyChSize int // channel size for key-versions
 	// live update is possible
 	block      bool          // should endpoint block when remote is slow
+	bufferSize int           // size of buffer to wait till flush
 	bufferTm   time.Duration // timeout to flush endpoint-buffer
 	harakiriTm time.Duration // timeout after which endpoint commits harakiri
+	// gen-server
+	ch    chan []interface{} // carries control commands
+	finch chan bool
+	// downstream
+	pkt  *transport.TransportPacket
+	conn net.Conn
 }
 
 // NewRouterEndpoint instantiate a new RouterEndpoint
 // routine and return its reference.
 func NewRouterEndpoint(
-	cluster, topic, raddr string,
-	maxvbs int,
+	cluster, topic, raddr string, maxvbs int,
 	config c.Config) (*RouterEndpoint, error) {
 
-	parConns := config["parConnections"].Int()
-
-	// TODO: add configuration params for transport flags.
-	flags := transport.TransportFlag(0).SetProtobuf()
-	client, err := NewClient(cluster, topic, raddr, flags, maxvbs, config)
+	conn, err := net.Dial("tcp", raddr)
 	if err != nil {
 		return nil, err
 	}
+
 	endpoint := &RouterEndpoint{
 		topic:      topic,
 		raddr:      raddr,
-		client:     client,
 		finch:      make(chan bool),
 		timestamp:  time.Now().UnixNano(),
-		parConns:   parConns,
-		genChSize:  config["genServerChanSize"].Int(),
 		keyChSize:  config["keyChanSize"].Int(),
 		block:      config["remoteBlock"].Bool(),
+		bufferSize: config["bufferSize"].Int(),
 		bufferTm:   time.Duration(config["bufferTimeout"].Int()),
 		harakiriTm: time.Duration(config["harakiriTimeout"].Int()),
 	}
+	endpoint.ch = make(chan []interface{}, endpoint.keyChSize)
+	endpoint.conn = conn
+	// TODO: add configuration params for transport flags.
+	flags := transport.TransportFlag(0).SetProtobuf()
+	maxPayload := config["maxPayload"].Int()
+	endpoint.pkt = transport.NewTransportPacket(maxPayload, flags)
+	endpoint.pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	endpoint.pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
+
 	endpoint.logPrefix = fmt.Sprintf(
 		"ENDP[<-(%v,%4x)<-%v #%v]",
 		endpoint.raddr, uint16(endpoint.timestamp), cluster, topic)
-	endpoint.kvch = make(chan []interface{}, endpoint.genChSize)
-	endpoint.reqch = make(chan []interface{}, endpoint.keyChSize)
 
-	go endpoint.run(endpoint.kvch, endpoint.reqch)
-	c.Infof("%v started (with %v conns) ...\n", endpoint.logPrefix, parConns)
+	go endpoint.run(endpoint.ch)
+	c.Infof("%v started ...\n", endpoint.logPrefix)
 	return endpoint, nil
 }
 
 // commands
 const (
 	endpCmdPing byte = iota + 1
+	endpCmdSend
 	endpCmdSetConfig
 	endpCmdGetStatistics
 	endpCmdClose
@@ -100,7 +102,7 @@ const (
 func (endpoint *RouterEndpoint) Ping() bool {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{endpCmdPing, respch}
-	resp, err := c.FailsafeOp(endpoint.reqch, respch, cmd, endpoint.finch)
+	resp, err := c.FailsafeOp(endpoint.ch, respch, cmd, endpoint.finch)
 	if err != nil {
 		return false
 	}
@@ -111,21 +113,25 @@ func (endpoint *RouterEndpoint) Ping() bool {
 func (endpoint *RouterEndpoint) SetConfig(config c.Config) error {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{endpCmdSetConfig, config, respch}
-	_, err := c.FailsafeOp(endpoint.reqch, respch, cmd, endpoint.finch)
+	_, err := c.FailsafeOp(endpoint.ch, respch, cmd, endpoint.finch)
 	return err
 }
 
 // Send KeyVersions to other end, asynchronous call.
+// Asynchronous call. Return ErrorChannelFull that can be used by caller.
 func (endpoint *RouterEndpoint) Send(data interface{}) error {
-	cmd := []interface{}{data}
-	return c.FailsafeOpAsync(endpoint.kvch, cmd, endpoint.finch)
+	cmd := []interface{}{endpCmdSend, data}
+	if endpoint.block {
+		return c.FailsafeOpAsync(endpoint.ch, cmd, endpoint.finch)
+	}
+	return c.FailsafeOpNoblock(endpoint.ch, cmd, endpoint.finch)
 }
 
 // GetStatistics for this endpoint, synchronous call.
 func (endpoint *RouterEndpoint) GetStatistics() map[string]interface{} {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{endpCmdGetStatistics, respch}
-	resp, _ := c.FailsafeOp(endpoint.reqch, respch, cmd, endpoint.finch)
+	resp, _ := c.FailsafeOp(endpoint.ch, respch, cmd, endpoint.finch)
 	return resp[0].(map[string]interface{})
 }
 
@@ -133,26 +139,23 @@ func (endpoint *RouterEndpoint) GetStatistics() map[string]interface{} {
 func (endpoint *RouterEndpoint) Close() error {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{endpCmdClose, respch}
-	resp, err := c.FailsafeOp(endpoint.reqch, respch, cmd, endpoint.finch)
+	resp, err := c.FailsafeOp(endpoint.ch, respch, cmd, endpoint.finch)
 	return c.OpError(err, resp, 0)
 }
 
 // run
-func (endpoint *RouterEndpoint) run(
-	kvch chan []interface{}, reqch chan []interface{}) {
-
+func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			c.Errorf("%v run() crashed: %v\n", endpoint.logPrefix, r)
 			c.StackTrace(string(debug.Stack()))
 		}
 		// close this endpoint
-		endpoint.client.Close()
 		close(endpoint.finch)
 		c.Infof("%v ... stopped\n", endpoint.logPrefix)
 	}()
 
-	raddr, client := endpoint.raddr, endpoint.client
+	raddr := endpoint.raddr
 
 	flushTimeout := time.Tick(endpoint.bufferTm * time.Millisecond)
 	harakiri := time.After(endpoint.harakiriTm * time.Millisecond)
@@ -162,53 +165,60 @@ func (endpoint *RouterEndpoint) run(
 	mutationCount := float64(0)
 	vbmapCount := float64(0)
 	flushCount := float64(0)
+	bufferCount := int(0)
 
-	// TODO: implement flow control by checking for ErrorChannelFull.
-	flushBuffers := func() error {
-		l := len(buffers.vbs)
-		if l == 0 {
-			c.Tracef("%v empty keyversions\n", endpoint.logPrefix)
-			return nil
+	flushBuffers := func() (err error) {
+		flushCount++
+		c.Tracef("%v sent %v mutations to %q\n",
+			endpoint.logPrefix, bufferCount, raddr)
+		if bufferCount > 0 {
+			err = buffers.flushBuffers(endpoint.conn, endpoint.pkt)
+			if err != nil {
+				c.Errorf("%v flushBuffers() %v\n", endpoint.logPrefix, err)
+			}
 		}
-		c.Tracef("%v sent %v vbuckets to %q\n", endpoint.logPrefix, l, raddr)
-		err := buffers.flushBuffers(client, endpoint.block)
-		if err != nil {
-			c.Errorf("%v flushBuffers() %v\n", endpoint.logPrefix, err)
-		}
-		return err
+		bufferCount = 0
+		return
 	}
 
 loop:
 	for {
 		select {
-		case msg := <-kvch:
-			data, ok := msg[0].(*c.DataportKeyVersions)
-			if !ok {
-				panic(fmt.Errorf("invalid data type %T\n", msg[0]))
-			}
-
-			kv := data.Kv
-			buffers.addKeyVersions(data.Bucket, data.Vbno, data.Vbuuid, kv)
-			c.Tracef("%v added %v keyversions <%v:%v:%v> to %q\n",
-				endpoint.logPrefix, kv.Length(), data.Vbno, kv.Seqno,
-				kv.Commands, buffers.raddr)
-			mutationCount++
-			// reload harakiri
-			harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
-
-		case msg := <-reqch:
+		case msg := <-ch:
 			switch msg[0].(byte) {
 			case endpCmdPing:
 				respch := msg[1].(chan []interface{})
 				respch <- []interface{}{true}
 
+			case endpCmdSend:
+				data, ok := msg[1].(*c.DataportKeyVersions)
+				if !ok {
+					panic(fmt.Errorf("invalid data type %T\n", msg[1]))
+				}
+
+				kv := data.Kv
+				buffers.addKeyVersions(data.Bucket, data.Vbno, data.Vbuuid, kv)
+				c.Tracef("%v added %v keyversions <%v:%v:%v> to %q\n",
+					endpoint.logPrefix, kv.Length(), data.Vbno, kv.Seqno,
+					kv.Commands, buffers.raddr)
+				mutationCount++ // count cummulative mutations
+				// reload harakiri
+				harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
+				bufferCount++ // count queued up mutations.
+				if bufferCount > endpoint.bufferSize {
+					if err := flushBuffers(); err != nil {
+						break loop
+					}
+				}
+
 			case endpCmdSetConfig:
 				config := msg[1].(c.Config)
 				endpoint.block = config["remoteBlock"].Bool()
+				endpoint.bufferSize = config["bufferSize"].Int()
 				endpoint.bufferTm = time.Duration(config["bufferTimeout"].Int())
 				endpoint.harakiriTm = time.Duration(config["harakiriTimeout"].Int())
 				flushTimeout = time.Tick(endpoint.bufferTm * time.Millisecond)
-				if harakiri != nil {
+				if harakiri != nil { // load harakiri only when it is active
 					harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
 				}
 				respch := msg[2].(chan []interface{})
@@ -232,7 +242,6 @@ loop:
 			if err := flushBuffers(); err != nil {
 				break loop
 			}
-			flushCount++
 
 		case <-harakiri:
 			c.Infof("%v committed harakiri\n", endpoint.logPrefix)
