@@ -430,10 +430,8 @@ func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
 //Rollback slice to given snapshot. Return error if
 //not possible
 func (fdb *fdbSlice) Rollback(s Snapshot) error {
-
 	//get the seqnum from snapshot
 	mainSeqNum := s.(*fdbSnapshot).MainIndexSeqNum()
-	backSeqNum := s.(*fdbSnapshot).BackIndexSeqNum()
 
 	//call forestdb to rollback
 	var err error
@@ -444,24 +442,14 @@ func (fdb *fdbSlice) Rollback(s Snapshot) error {
 		return err
 	}
 
-	err = fdb.back[0].Rollback(backSeqNum)
-	if err != nil {
-		common.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
-			"Back Index to Snapshot %v. Error %v", fdb.id, fdb.idxInstId, s, err)
-		return err
-	}
-
 	return nil
-
 }
 
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
 func (fdb *fdbSlice) RollbackToZero() error {
-
 	//get the seqnum from snapshot
 	mainSeqNum := forestdb.SeqNum(0)
-	backSeqNum := forestdb.SeqNum(0)
 
 	//call forestdb to rollback
 	var err error
@@ -472,15 +460,7 @@ func (fdb *fdbSlice) RollbackToZero() error {
 		return err
 	}
 
-	err = fdb.back[0].Rollback(backSeqNum)
-	if err != nil {
-		common.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
-			"Back Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
-		return err
-	}
-
 	return nil
-
 }
 
 //Commit persists the outstanding writes in underlying
