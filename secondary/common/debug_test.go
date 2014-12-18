@@ -120,3 +120,24 @@ func TestLogLevelTrace(t *testing.T) {
 	}
 	SetLogWriter(os.Stdout)
 }
+
+func TestSystemLog(t *testing.T) {
+	SetLogWriter(buffer)
+	SetLogLevel(LogLevelTrace)
+	sl := NewSystemLog()
+	sl.Warnf("warn")
+	sl.Infof("info")
+	sl.Debugf("debug")
+	sl.Tracef("trace")
+	s := string(buffer.Bytes())
+	if strings.Contains(s, "warn") == false {
+		t.Errorf("Warnf() failed %v", s)
+	} else if strings.Contains(s, "info") == false {
+		t.Errorf("Infof() failed %v", s)
+	} else if strings.Contains(s, "debug") == false {
+		t.Errorf("Debugf() failed %v", s)
+	} else if strings.Contains(s, "trace") == false {
+		t.Errorf("Tracef() failed %v", s)
+	}
+	SetLogWriter(os.Stdout)
+}
