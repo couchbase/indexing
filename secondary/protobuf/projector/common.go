@@ -198,17 +198,16 @@ func (ts *TsVbuuid) FromTsVbuuid(nativeTs *c.TsVbuuid) *TsVbuuid {
 	return ts
 }
 
-// ToTsVbuuid converts timestamp from protobuf format to common.TsVbuuid.
+// ToTsVbuuid converts timestamp from protobuf format to common.TsVbuuid,
+// later requires the full set of timestamp.
 func (ts *TsVbuuid) ToTsVbuuid() *c.TsVbuuid {
-	ss := make([][2]uint64, 0)
-	for _, s := range ts.GetSnapshots() {
-		ss = append(ss, [2]uint64{s.GetStart(), s.GetEnd()})
+	nativeTs := c.NewTsVbuuid(ts.GetBucket(), cap(ts.Seqnos))
+	seqnos, vbuuids, ss := ts.GetSeqnos(), ts.GetVbuuids(), ts.GetSnapshots()
+	for i, vbno := range ts.GetVbnos() {
+		nativeTs.Seqnos[vbno] = seqnos[i]
+		nativeTs.Vbuuids[vbno] = vbuuids[i]
+		nativeTs.Snapshots[vbno] = [2]uint64{ss[i].GetStart(), ss[i].GetEnd()}
 	}
-	nativeTs := c.NewTsVbuuid(ts.GetBucket(), len(ts.GetSeqnos()))
-	nativeTs.Bucket = ts.GetBucket()
-	nativeTs.Seqnos = ts.GetSeqnos()
-	nativeTs.Vbuuids = ts.GetVbuuids()
-	nativeTs.Snapshots = ss
 	return nativeTs
 }
 
