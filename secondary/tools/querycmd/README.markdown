@@ -13,23 +13,23 @@
       -limit=10: Row limit
       -low="": Range: [low]
       -primary=false: Is primary index
-      -server="localhost:7000": index server or scan server address
+      -server="localhost:9000": Cluster server address
       -type="scanAll": Index command (scan|stats|scanAll|create|drop|list)
 
 # Scan
-    $ querycmd -type=scanAll -bucket default -server localhost:7000 -index abcd
+    $ querycmd -type=scanAll -bucket default -index abcd
     $ querycmd -type=scanAll -index abcd -limit 0
     $ querycmd -type=scan -index state -low='["Ar"]' -high='["Co"]' -buffersz=300
     $ querycmd -type=scan -index name_state_age -low='["Ar"]' -high='["Arlette", "N"]'
     $ querycmd -type scan -index '#primary' -equal='["Adena_54605074"]'
 
 # Create
-    $ querycmd -type create -bucket default -index first_name -server localhost:9101 -fields=first_name,last_name
-    $ querycmd -type create -bucket default -server localhost:9101 -primary=true
+    $ querycmd -type create -bucket default -index first_name -fields=first_name,last_name
+    $ querycmd -type create -bucket default -primary=true
 
 # Drop
-    $ querycmd -type drop -instanceid 1234 -server localhost:9101
+    $ querycmd -type drop -instanceid 1234
 
 # List
-    $ querycmd -type list -server localhost:9101
+    $ querycmd -type list
 

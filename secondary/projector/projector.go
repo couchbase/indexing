@@ -238,7 +238,10 @@ func (p *Projector) doRestartVbuckets(
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
 		c.Errorf("%v %v\n", p.logPrefix, err)
-		response := feed.GetTopicResponse()
+		response := &protobuf.TopicResponse{}
+		if err != ErrorTopicMissing {
+			response = feed.GetTopicResponse()
+		}
 		return response.SetErr(err)
 	}
 
@@ -284,7 +287,10 @@ func (p *Projector) doAddBuckets(
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
 		c.Errorf("%v %v\n", p.logPrefix, err)
-		response := feed.GetTopicResponse()
+		response := &protobuf.TopicResponse{}
+		if err != ErrorTopicMissing {
+			response = feed.GetTopicResponse()
+		}
 		return response.SetErr(err)
 	}
 

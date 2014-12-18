@@ -237,7 +237,7 @@ var ssFormat = "%v received snapshot %v %v (type %x)\n"
 var traceMutFormat = "%v UprEvent %v:%v <<%v>>\n"
 
 func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
-	c.Tracef(traceMutFormat, vr.logPrefix, m.Seqno, m.Opcode, m.Key)
+	c.Tracef(traceMutFormat, vr.logPrefix, m.Seqno, m.Opcode, string(m.Key))
 
 	switch m.Opcode {
 	case mcd.UPR_STREAMREQ: // broadcast StreamBegin
@@ -249,7 +249,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 
 	case mcd.UPR_SNAPSHOT: // broadcast Snapshot
 		typ, start, end := m.SnapshotType, m.SnapstartSeq, m.SnapendSeq
-		c.Debugf(ssFormat, vr.logPrefix, typ, start, end)
+		c.Debugf(ssFormat, vr.logPrefix, start, end, typ)
 		if data := vr.makeSnapshotData(m, seqno); data != nil {
 			vr.sendToEndpoints(data)
 		} else {

@@ -6,6 +6,7 @@ import "log"
 import "os"
 import "strconv"
 import "strings"
+import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dataport"
@@ -22,6 +23,7 @@ var options struct {
 	stat          string   // periodic timeout to print dataport statistics
 	timeout       string   // timeout for dataport to exit
 	maxVbno       int      // maximum number of vbuckets
+	projector     bool     // start projector, useful in debug mode.
 	debug         bool
 	trace         bool
 }
@@ -43,6 +45,8 @@ func argParse() []string {
 		"timeout for dataport to exit")
 	flag.IntVar(&options.maxVbno, "maxvb", 1024,
 		"maximum number of vbuckets")
+	flag.BoolVar(&options.projector, "projector", false,
+		"start projector for debug mode")
 	flag.BoolVar(&options.debug, "debug", false,
 		"run in debug mode")
 	flag.BoolVar(&options.trace, "trace", false,
@@ -80,6 +84,7 @@ func main() {
 
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	dconf := c.SystemConfig.SectionConfig("projector.dataport.indexer.", true)
+
 	// start dataport servers.
 	for _, endpoint := range options.endpoints {
 		stat, _ := strconv.Atoi(options.stat)
@@ -91,13 +96,15 @@ func main() {
 	go dataport.Application(options.coordEndpoint, 0, 0, maxvbs, dconf, nil)
 
 	for _, cluster := range clusters {
-		adminport := cluster2adminport(cluster, 500)
-		config := c.SystemConfig.SectionConfig("projector.", true)
-		config.SetValue("clusterAddr", cluster)
-		config.SetValue("adminport.listenAddr", adminport)
-		epfactory := NewEndpointFactory(cluster, maxvbs, config)
-		config.SetValue("routerEndpointFactory", epfactory)
-		projector.NewProjector(maxvbs, config) // start projector daemon
+		adminport := getProjectorAdminport(cluster, "default")
+		if options.projector {
+			config := c.SystemConfig.SectionConfig("projector.", true)
+			config.SetValue("clusterAddr", cluster)
+			config.SetValue("adminport.listenAddr", adminport)
+			epfactory := NewEndpointFactory(cluster, maxvbs, config)
+			config.SetValue("routerEndpointFactory", epfactory)
+			projector.NewProjector(maxvbs, config) // start projector daemon
+		}
 
 		// projector-client
 		cconfig := c.SystemConfig.SectionConfig("projector.client.", true)
@@ -119,16 +126,21 @@ func main() {
 		}
 	}
 
-	<-make(chan bool) // wait for ever
+	time.Sleep(1000 * time.Second)
+	//<-make(chan bool) // wait for ever
 }
 
-func cluster2adminport(cluster string, offset int) string {
-	ss := strings.Split(cluster, ":")
-	kport, err := strconv.Atoi(ss[1])
+func getProjectorAdminport(cluster, pooln string) string {
+	cinfo := c.NewClusterInfoCache(cluster, pooln)
+	if err := cinfo.Fetch(); err != nil {
+		log.Fatal(err)
+	}
+	nodeID := cinfo.GetCurrentNode()
+	adminport, err := cinfo.GetServiceAddress(nodeID, "projector")
 	if err != nil {
 		log.Fatal(err)
 	}
-	return ss[0] + ":" + strconv.Itoa(kport+offset)
+	return adminport
 }
 
 func mf(err error, msg string) {

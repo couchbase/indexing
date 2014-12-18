@@ -19,7 +19,6 @@ import (
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
-	"net"
 	"strings"
 	"time"
 )
@@ -367,11 +366,6 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		return &MsgSuccess{}
 	}
 
-	var protoInstList []*protobuf.Instance
-	for _, indexInst := range indexInstList {
-		protoInstList = append(protoInstList, convertIndexInstToProtoInst(k.config, indexInst, streamId))
-	}
-
 	err := k.cInfoCache.Fetch()
 	if err != nil {
 		c.Errorf("KVSender::openMutationStream \n\t Error in fetching cluster info", err)
@@ -379,6 +373,12 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
 				cause:    err}}
+	}
+
+	var protoInstList []*protobuf.Instance
+	for _, indexInst := range indexInstList {
+		protoInstList = append(protoInstList,
+			convertIndexInstToProtoInst(k.config, k.cInfoCache, indexInst, streamId))
 	}
 
 	bucket := indexInstList[0].Defn.Bucket
@@ -450,9 +450,6 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 }
 
 func (k *kvSender) addIndexForNewBucket(streamId c.StreamId, indexInst c.IndexInst) Message {
-
-	protoInst := convertIndexInstToProtoInst(k.config, indexInst, streamId)
-
 	err := k.cInfoCache.Fetch()
 	if err != nil {
 		c.Errorf("KVSender::addIndexForNewBucket \n\t Error in fetching cluster info", err)
@@ -461,6 +458,8 @@ func (k *kvSender) addIndexForNewBucket(streamId c.StreamId, indexInst c.IndexIn
 				severity: FATAL,
 				cause:    err}}
 	}
+
+	protoInst := convertIndexInstToProtoInst(k.config, k.cInfoCache, indexInst, streamId)
 	bucket := indexInst.Defn.Bucket
 	nodes, _ := k.cInfoCache.GetNodesByBucket(bucket)
 
@@ -495,9 +494,6 @@ func (k *kvSender) addIndexForNewBucket(streamId c.StreamId, indexInst c.IndexIn
 }
 
 func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInst c.IndexInst) Message {
-
-	protoInst := convertIndexInstToProtoInst(k.config, indexInst, streamId)
-
 	err := k.cInfoCache.Fetch()
 	if err != nil {
 		c.Errorf("KVSender::addIndexForExistingBucket \n\t Error in fetching cluster info", err)
@@ -507,6 +503,7 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInst c.In
 				cause:    err}}
 	}
 
+	protoInst := convertIndexInstToProtoInst(k.config, k.cInfoCache, indexInst, streamId)
 	bucket := indexInst.Defn.Bucket
 	nodes, _ := k.cInfoCache.GetNodesByBucket(bucket)
 
@@ -1132,13 +1129,14 @@ outerloop:
 	return res, err
 }
 
-//convert IndexInst to protobuf format
-func convertIndexListToProto(cfg c.Config, indexList []c.IndexInst,
+// convert IndexInst to protobuf format
+// NOTE: cluster_info.Fetch() should be called before executing this function
+func convertIndexListToProto(cfg c.Config, cinfo *c.ClusterInfoCache, indexList []c.IndexInst,
 	streamId c.StreamId) []*protobuf.Instance {
 
 	protoList := make([]*protobuf.Instance, 0)
 	for _, index := range indexList {
-		protoInst := convertIndexInstToProtoInst(cfg, index, streamId)
+		protoInst := convertIndexInstToProtoInst(cfg, cinfo, index, streamId)
 		protoList = append(protoList, protoInst)
 	}
 
@@ -1146,14 +1144,15 @@ func convertIndexListToProto(cfg c.Config, indexList []c.IndexInst,
 
 }
 
-//convert IndexInst to protobuf format
-func convertIndexInstToProtoInst(cfg c.Config, indexInst c.IndexInst,
-	streamId c.StreamId) *protobuf.Instance {
+// convert IndexInst to protobuf format
+// NOTE: cluster_info.Fetch() should be called before executing this function
+func convertIndexInstToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
+	indexInst c.IndexInst, streamId c.StreamId) *protobuf.Instance {
 
 	protoDefn := convertIndexDefnToProtobuf(indexInst.Defn)
 	protoInst := convertIndexInstToProtobuf(cfg, indexInst, protoDefn)
 
-	addPartnInfoToProtoInst(cfg, indexInst, streamId, protoInst)
+	addPartnInfoToProtoInst(cfg, cinfo, indexInst, streamId, protoInst)
 
 	return &protobuf.Instance{IndexInstance: protoInst}
 }
@@ -1195,8 +1194,8 @@ func convertIndexInstToProtobuf(cfg c.Config, indexInst c.IndexInst,
 	return instance
 }
 
-func addPartnInfoToProtoInst(cfg c.Config, indexInst c.IndexInst,
-	streamId c.StreamId, protoInst *protobuf.IndexInst) {
+func addPartnInfoToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
+	indexInst c.IndexInst, streamId c.StreamId, protoInst *protobuf.IndexInst) {
 
 	switch partn := indexInst.Pc.(type) {
 	case *c.KeyPartitionContainer:
@@ -1205,9 +1204,13 @@ func addPartnInfoToProtoInst(cfg c.Config, indexInst c.IndexInst,
 		//partition structure supported
 		partnDefn := partn.GetAllPartitions()
 
-		port2addr := func(p string) string {
-			return net.JoinHostPort("", cfg[p].String())
-		}
+		nid := cinfo.GetCurrentNode()
+		streamMaintAddr, err := cinfo.GetServiceAddress(nid, "indexStreamMaint")
+		c.CrashOnError(err)
+		streamInitAddr, err := cinfo.GetServiceAddress(nid, "indexStreamInit")
+		c.CrashOnError(err)
+		streamCatchupAddr, err := cinfo.GetServiceAddress(nid, "indexStreamCatchup")
+		c.CrashOnError(err)
 
 		var endpoints []string
 		for _, p := range partnDefn {
@@ -1215,15 +1218,14 @@ func addPartnInfoToProtoInst(cfg c.Config, indexInst c.IndexInst,
 				//Set the right endpoint based on streamId
 				switch streamId {
 				case c.MAINT_STREAM:
-					e = c.Endpoint(port2addr("streamMaintPort"))
+					e = c.Endpoint(streamMaintAddr)
 				case c.CATCHUP_STREAM:
-					e = c.Endpoint(port2addr("streamCatchupPort"))
+					e = c.Endpoint(streamCatchupAddr)
 				case c.INIT_STREAM:
-					e = c.Endpoint(port2addr("streamInitPort"))
+					e = c.Endpoint(streamInitAddr)
 				}
 				endpoints = append(endpoints, string(e))
 			}
-
 		}
 		protoInst.SinglePartn = &protobuf.SinglePartition{
 			Endpoints: endpoints,
