@@ -460,7 +460,7 @@ func (f *flusher) IsQueueLWTLowerThanTimestamp(q MutationQueue, ts Timestamp) bo
 //GetQueueLWT returns the lowest seqno for each vbucket in the queue
 func (f *flusher) GetQueueLWT(q MutationQueue) Timestamp {
 
-	var ts Timestamp
+	ts := NewTimestamp(int(q.GetNumVbuckets()))
 	var i uint16
 	for i = 0; i < q.GetNumVbuckets(); i++ {
 		if mut := q.PeekHead(Vbucket(i)); mut != nil {
@@ -475,7 +475,7 @@ func (f *flusher) GetQueueLWT(q MutationQueue) Timestamp {
 //GetQueueHWT returns the highest seqno for each vbucket in the queue
 func (f *flusher) GetQueueHWT(q MutationQueue) Timestamp {
 
-	var ts Timestamp
+	ts := NewTimestamp(int(q.GetNumVbuckets()))
 	var i uint16
 	for i = 0; i < q.GetNumVbuckets(); i++ {
 		if mut := q.PeekTail(Vbucket(i)); mut != nil {
