@@ -7,11 +7,12 @@ import (
 )
 
 var scanResults tc.ScanResponse
+var ClusterScanAddr = "localhost:9101"	
 
 func Range(indexName, bucketName string, low, high []interface{}, inclusion uint32,
 			distinct bool, limit int64) (tc.ScanResponse, error) {
 	c.LogIgnore()
-	addr := "localhost:9101" // Get from config
+	addr := ClusterScanAddr // Get from config
 
 	// ToDo: Create a client pool
 	client := qc.NewClient(qc.Remoteaddr(addr), c.SystemConfig.SectionConfig("queryport.client.", true))
@@ -24,7 +25,7 @@ func Range(indexName, bucketName string, low, high []interface{}, inclusion uint
 
 func Lookup(indexName, bucketName string, values []interface{}, distinct bool, limit int64) (tc.ScanResponse, error) {
 	c.LogIgnore()
-	addr := "localhost:9101" // Get from config
+	addr := ClusterScanAddr // Get from config
 
 	// ToDo: Create a client pool
 	client := qc.NewClient(qc.Remoteaddr(addr), c.SystemConfig.SectionConfig("queryport.client.", true))

@@ -8,7 +8,7 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 )
 
-var ClusterManagerAddr = "localhost:9100"
+var ClusterManagerAddr = "localhost:9100"	
 
 func CreateSecondaryIndex(indexName, bucketName string, indexFields []string, skipIfExists bool) error {
 	indexExists := IndexExists(indexName, bucketName)
@@ -41,12 +41,12 @@ func CreateSecondaryIndex(indexName, bucketName string, indexFields []string, sk
 }
 
 func IndexExists(indexName, bucketName string) bool {
-	fmt.Printf("Checking for presence of index %v\n", indexName)
 	client := qc.NewClusterClient(ClusterManagerAddr)
 	infos, err := client.List()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, info := range infos {
 		if info.Name == indexName {
+			fmt.Printf("Index found:  %v\n", indexName)
 			return true
 		}
 	}
@@ -73,6 +73,7 @@ func DropSecondaryIndex(indexName string) {
 }
 
 func DropAllSecondaryIndexes() {
+	fmt.Println("In DropAllSecondaryIndexes()")
 	client := qc.NewClusterClient(ClusterManagerAddr)
 	infos, err := client.List()
 	tc.HandleError(err, "Error while listing the secondary indexes")
@@ -80,5 +81,6 @@ func DropAllSecondaryIndexes() {
 	for _, info := range infos {
 		e := client.DropIndex(info.DefnID)
 		tc.HandleError(e, "Error dropping the index " + info.Name)
+		fmt.Println("Dropped index ", info.Name)
 	}
 }

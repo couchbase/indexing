@@ -12,9 +12,11 @@ type KeyValue struct {
 	JsonValue map[string]interface{}
 }
 
+var port = ":9000"
+
 // ToDo: Refactor Code
 func Set(key string, v interface{}, bucketName string, password string, hostname string) {
-	url := "http://" + bucketName + ":" + password + "@" + hostname + ":9000"
+	url := "http://" + bucketName + ":" + password + "@" + hostname + port
 
 	c, err := couchbase.Connect(url)
 	tc.HandleError(err, "connect - "+url)
@@ -35,7 +37,7 @@ func SetKeyValue(keyValue KeyValue, bucketName string, password string, hostname
 }
 
 func SetKeyValues(keyValues []KeyValue, bucketName string, password string, hostname string) {
-	url := "http://" + bucketName + ":" + password + "@" + hostname + ":9000"
+	url := "http://" + bucketName + ":" + password + "@" + hostname + port
 
 	c, err := couchbase.Connect(url)
 	tc.HandleError(err, "connect - "+url)
@@ -55,7 +57,7 @@ func SetKeyValues(keyValues []KeyValue, bucketName string, password string, host
 
 func Get(key string, rv interface{}, bucketName string, password string, hostname string) {
 
-	url := "http://" + bucketName + ":" + password + "@" + hostname + ":9000"
+	url := "http://" + bucketName + ":" + password + "@" + hostname + port
 
 	c, err := couchbase.Connect(url)
 	tc.HandleError(err, "connect - "+url)
@@ -72,7 +74,7 @@ func Get(key string, rv interface{}, bucketName string, password string, hostnam
 
 func Delete(key string, bucketName string, password string, hostname string) {
 
-	url := "http://" + bucketName + ":" + password + "@" + hostname + ":9000"
+	url := "http://" + bucketName + ":" + password + "@" + hostname + port
 
 	c, err := couchbase.Connect(url)
 	tc.HandleError(err, "connect - "+url)
