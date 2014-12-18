@@ -1,15 +1,15 @@
 package datautility
 
 import (
-	"fmt"
 	"encoding/json"
-	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+	"fmt"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 )
 
 func LoadJSONFromCompressedFile(path, docidfield string) []kvutility.KeyValue {
 	file, err := tc.ReadCompressedFile(path)
-	tc.HandleError(err, "Error while decompressing data file " + path)
+	tc.HandleError(err, "Error while decompressing data file "+path)
 
 	var data interface{}
 	json.Unmarshal(file, &data)
