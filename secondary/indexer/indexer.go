@@ -644,11 +644,6 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 
 		//close all the slices
 		for _, slice := range sc.GetAllSlices() {
-			//snapContainer := slice.GetSnapshotContainer()
-			//discard all the snapshots for this slice
-			// snapContainer.RemoveAll()
-
-			//close the slice
 			slice.Close()
 
 			//wipe the physical files
@@ -1738,8 +1733,6 @@ func (idx *indexer) bootstrap() error {
 		return err
 	}
 
-	idx.recoverSnapshots()
-
 	//Start Storage Manager
 	var res Message
 	idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh,
@@ -1866,38 +1859,6 @@ func (idx *indexer) initFromPersistedState() error {
 
 }
 
-func (idx *indexer) recoverSnapshots() {
-
-	//for every index managed by this indexer
-	for idxInstId, partnMap := range idx.indexPartnMap {
-
-		//for all partitions managed by this indexer
-		for partnId, partnInst := range partnMap {
-			sc := partnInst.Sc
-
-			//recover snapshot for slice
-			for _, slice := range sc.GetAllSlices() {
-
-				snapContainer := slice.GetSnapshotContainer()
-
-				//TODO right now we recover the last snapshot, all
-				//snapshots need to be recovered
-				if lastSnapshot, err := slice.Snapshot(); err == nil {
-					lastSnapshot.Open()
-					snapContainer.Add(lastSnapshot)
-					common.Debugf("StorageMgr::recoverSnapshots \n\tAdded New Snapshot Index: %v "+
-						"PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
-
-				} else {
-					common.Errorf("StorageMgr::recoverSnapshots \n\tError Recovering Snapshot "+
-						"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
-						slice.Id(), err)
-				}
-			}
-		}
-	}
-}
-
 func (idx *indexer) closeAllStreams() {
 
 	for i := 0; i < int(common.MAX_STREAMS); i++ {
@@ -2002,7 +1963,14 @@ func (idx *indexer) makeRestartTs() map[string]*common.TsVbuuid {
 		//there is only one slice for now
 		slice := sc.GetSliceById(0)
 
-		ts := slice.Timestamp()
+		infos, err := slice.GetSnapshots()
+		// TODO: Proper error handling if possible
+		if err != nil {
+			panic("Unable read snapinfo -" + err.Error())
+		}
+
+		s := NewSnapshotInfoContainer(infos)
+		ts := s.GetLatest().Timestamp()
 
 		if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
 			if !ts.AsRecent(oldTs) {

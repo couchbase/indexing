@@ -17,6 +17,20 @@ import (
 	"sync"
 )
 
+type fdbSnapshotInfo struct {
+	Ts      *common.TsVbuuid
+	MainSeq forestdb.SeqNum
+	BackSeq forestdb.SeqNum
+}
+
+func (info *fdbSnapshotInfo) Timestamp() *common.TsVbuuid {
+	return info.Ts
+}
+
+func (info *fdbSnapshotInfo) String() string {
+	return fmt.Sprintf("SnapshotInfo: seqnos: %v, %v", info.MainSeq, info.BackSeq)
+}
+
 type fdbSnapshot struct {
 	slice Slice
 
@@ -151,4 +165,12 @@ func (s *fdbSnapshot) String() string {
 	str += fmt.Sprintf("BackSeqNum: %v ", s.backSeqNum)
 	str += fmt.Sprintf("TS: %v ", s.ts)
 	return str
+}
+
+func (s *fdbSnapshot) Info() SnapshotInfo {
+	return &fdbSnapshotInfo{
+		MainSeq: s.mainSeqNum,
+		BackSeq: s.backSeqNum,
+		Ts:      s.ts,
+	}
 }

@@ -29,7 +29,7 @@ const (
 //Slice represents the unit of physical storage for index
 type Slice interface {
 	Id() SliceId
-	Name() string
+	FilePath() string
 	Status() SliceStatus
 	IndexInstId() common.IndexInstId
 	IndexDefnId() common.IndexDefnId
@@ -37,10 +37,6 @@ type Slice interface {
 
 	SetActive(bool)
 	SetStatus(SliceStatus)
-
-	GetSnapshotContainer() SnapshotContainer
-
-	Timestamp() *common.TsVbuuid
 
 	IndexWriter
 }

@@ -43,12 +43,10 @@ func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFee
 	partInst := PartitionInst{Defn: pDef, Sc: sc}
 	partInstMap := PartitionInstMap{pId: partInst}
 
-	snapc := NewSnapshotContainer()
 	snap := &mockSnapshot{feeder: feeder}
 	snap.SetTimestamp(s.scanTS)
 
-	snapc.Add(Snapshot(snap))
-	slice := &mockSlice{sc: snapc}
+	slice := &mockSlice{}
 	slId := SliceId(0)
 	sc.AddSlice(slId, slice)
 	// TODO: Use cmdch to update map
@@ -120,7 +118,6 @@ func (s *scannerTestHarness) Shutdown() {
 type mockSlice struct {
 	id       SliceId
 	instId   c.IndexInstId
-	sc       SnapshotContainer
 	indDefId c.IndexDefnId
 	snap     Snapshot
 	err      error
@@ -131,8 +128,8 @@ func (s *mockSlice) Id() SliceId {
 	return s.id
 }
 
-func (s *mockSlice) Name() string {
-	return "mockSlice"
+func (s *mockSlice) FilePath() string {
+	return "/tmp/mockslice.index"
 }
 
 func (s *mockSlice) Status() SliceStatus {
@@ -157,10 +154,6 @@ func (s *mockSlice) SetActive(b bool) {
 func (s *mockSlice) SetStatus(ss SliceStatus) {
 }
 
-func (s *mockSlice) GetSnapshotContainer() SnapshotContainer {
-	return s.sc
-}
-
 func (s *mockSlice) Insert(k Key, v Value) error {
 	return s.err
 }
@@ -169,15 +162,19 @@ func (s *mockSlice) Delete(d []byte) error {
 	return s.err
 }
 
-func (s *mockSlice) Commit() error {
-	return s.err
+func (s *mockSlice) Commit(ts *c.TsVbuuid) (SnapshotInfo, error) {
+	return &mockSnapshotInfo{}, s.err
 }
 
-func (s *mockSlice) Snapshot() (Snapshot, error) {
+func (s *mockSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	return s.snap, s.err
 }
 
-func (s *mockSlice) Rollback(snap Snapshot) error {
+func (s *mockSlice) GetSnapshots() ([]SnapshotInfo, error) {
+	return nil, s.err
+}
+
+func (s *mockSlice) Rollback(info SnapshotInfo) error {
 	return s.err
 }
 
@@ -326,4 +323,15 @@ func (s *mockSnapshot) Timestamp() *c.TsVbuuid {
 
 func (s *mockSnapshot) SetTimestamp(ts *c.TsVbuuid) {
 	s.ts = ts
+}
+
+func (s *mockSnapshot) Info() SnapshotInfo {
+	return &mockSnapshotInfo{}
+}
+
+type mockSnapshotInfo struct {
+}
+
+func (info *mockSnapshotInfo) Timestamp() *c.TsVbuuid {
+	return nil
 }

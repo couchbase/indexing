@@ -12,53 +12,59 @@ package indexer
 import (
 	"container/list"
 	"github.com/couchbase/indexing/secondary/common"
-	"sync"
 )
 
-//SnapshotContainer manages snapshots for a Slice
-type SnapshotContainer interface {
-	Add(Snapshot)
+// A helper data stucture for in-memory snapshot info list
+type SnapshotInfoContainer interface {
+	List() []SnapshotInfo
+
+	Add(SnapshotInfo)
 	Len() int
 
-	GetLatestSnapshot() Snapshot
-	GetSnapshotEqualToTS(*common.TsVbuuid) Snapshot
-	GetSnapshotOlderThanTS(*common.TsVbuuid) Snapshot
+	GetLatest() SnapshotInfo
+	GetEqualToTS(*common.TsVbuuid) SnapshotInfo
+	GetOlderThanTS(*common.TsVbuuid) SnapshotInfo
 
 	RemoveOldest() error
 	RemoveRecentThanTS(*common.TsVbuuid) error
 	RemoveAll() error
 }
 
-type snapshotContainer struct {
+type snapshotInfoContainer struct {
 	snapshotList *list.List
-	lock         sync.RWMutex
 }
 
-//NewSnapshotContainer inits a new snapshotContainer and returns
-func NewSnapshotContainer() *snapshotContainer {
-	sc := &snapshotContainer{snapshotList: list.New()}
+func NewSnapshotInfoContainer(infos []SnapshotInfo) *snapshotInfoContainer {
+	sc := &snapshotInfoContainer{snapshotList: list.New()}
+
+	for _, info := range infos {
+		sc.snapshotList.PushFront(info)
+	}
+
 	return sc
 }
 
-//Add adds snapshot to container
-func (sc *snapshotContainer) Add(s Snapshot) {
-	sc.lock.Lock()
-	defer sc.lock.Unlock()
+func (sc *snapshotInfoContainer) List() []SnapshotInfo {
+	var infos []SnapshotInfo
+	for e := sc.snapshotList.Front(); e != nil; e = e.Next() {
+		info := e.Value.(SnapshotInfo)
+		infos = append(infos, info)
 
+	}
+	return infos
+}
+
+//Add adds snapshot to container
+func (sc *snapshotInfoContainer) Add(s SnapshotInfo) {
 	sc.snapshotList.PushFront(s)
 }
 
 //RemoveOldest removes the oldest snapshot from container.
 //Return any error that happened.
-func (sc *snapshotContainer) RemoveOldest() error {
-	sc.lock.Lock()
-	defer sc.lock.Unlock()
-
+func (sc *snapshotInfoContainer) RemoveOldest() error {
 	e := sc.snapshotList.Back()
 
 	if e != nil {
-		snapshot := e.Value.(Snapshot)
-		snapshot.Close()
 		sc.snapshotList.Remove(e)
 	}
 
@@ -68,19 +74,13 @@ func (sc *snapshotContainer) RemoveOldest() error {
 //RemoveRecentThanTS discards all the snapshots from container
 //which are more recent than the given timestamp. The snaphots
 //being removed are closed as well.
-func (sc *snapshotContainer) RemoveRecentThanTS(tsVbuuid *common.TsVbuuid) error {
-
-	sc.lock.Lock()
-	defer sc.lock.Unlock()
-
+func (sc *snapshotInfoContainer) RemoveRecentThanTS(tsVbuuid *common.TsVbuuid) error {
 	ts := getStabilityTSFromTsVbuuid(tsVbuuid)
 	for e := sc.snapshotList.Front(); e != nil; e = e.Next() {
-		snapshot := e.Value.(Snapshot)
+		snapshot := e.Value.(SnapshotInfo)
 		snapTsVbuuid := snapshot.Timestamp()
 		snapTs := getStabilityTSFromTsVbuuid(snapTsVbuuid)
 		if snapTs.GreaterThan(ts) {
-			//Close the snapshot
-			snapshot.Close()
 			sc.snapshotList.Remove(e)
 		}
 	}
@@ -92,53 +92,35 @@ func (sc *snapshotContainer) RemoveRecentThanTS(tsVbuuid *common.TsVbuuid) error
 //RemoveAll discards all the snapshosts from container.
 //All snapshots will be closed before being discarded.
 //Return any error that happened.
-func (sc *snapshotContainer) RemoveAll() error {
-	sc.lock.Lock()
-	defer sc.lock.Unlock()
-
-	//close all snapshots
-	for e := sc.snapshotList.Front(); e != nil; e = e.Next() {
-		snapshot := e.Value.(Snapshot)
-		snapshot.Close()
-	}
-
+func (sc *snapshotInfoContainer) RemoveAll() error {
 	//clear the snapshot list
 	sc.snapshotList.Init()
 	return nil
 }
 
 //Len returns the number of snapshots currently in container
-func (sc *snapshotContainer) Len() int {
-	sc.lock.RLock()
-	defer sc.lock.RUnlock()
-
+func (sc *snapshotInfoContainer) Len() int {
 	return sc.snapshotList.Len()
 }
 
 //GetLatestSnapshot returns the latest snapshot from container or nil
 //in case list is empty
-func (sc *snapshotContainer) GetLatestSnapshot() Snapshot {
-	sc.lock.RLock()
-	defer sc.lock.RUnlock()
-
+func (sc *snapshotInfoContainer) GetLatest() SnapshotInfo {
 	e := sc.snapshotList.Front()
 
 	if e == nil {
 		return nil
 	} else {
-		return e.Value.(Snapshot)
+		return e.Value.(SnapshotInfo)
 	}
 }
 
 //GetSnapshotEqualToTS returns the snapshot from container matching the
 //given timestamp or nil if its not able to find any match
-func (sc *snapshotContainer) GetSnapshotEqualToTS(tsVbuuid *common.TsVbuuid) Snapshot {
-	sc.lock.RLock()
-	defer sc.lock.RUnlock()
-
+func (sc *snapshotInfoContainer) GetEqualToTS(tsVbuuid *common.TsVbuuid) SnapshotInfo {
 	ts := getStabilityTSFromTsVbuuid(tsVbuuid)
 	for e := sc.snapshotList.Front(); e != nil; e = e.Next() {
-		snapshot := e.Value.(Snapshot)
+		snapshot := e.Value.(SnapshotInfo)
 		snapTsVbuuid := snapshot.Timestamp()
 		snapTs := getStabilityTSFromTsVbuuid(snapTsVbuuid)
 		if ts.Equals(snapTs) {
@@ -151,13 +133,10 @@ func (sc *snapshotContainer) GetSnapshotEqualToTS(tsVbuuid *common.TsVbuuid) Sna
 
 //GetSnapshotOlderThanTS returns a snapshot which is older than the
 //given TS or atleast equal. Returns nil if its not able to find any match
-func (sc *snapshotContainer) GetSnapshotOlderThanTS(tsVbuuid *common.TsVbuuid) Snapshot {
-	sc.lock.RLock()
-	defer sc.lock.RUnlock()
-
+func (sc *snapshotInfoContainer) GetOlderThanTS(tsVbuuid *common.TsVbuuid) SnapshotInfo {
 	ts := getStabilityTSFromTsVbuuid(tsVbuuid)
 	for e := sc.snapshotList.Front(); e != nil; e = e.Next() {
-		snapshot := e.Value.(Snapshot)
+		snapshot := e.Value.(SnapshotInfo)
 		snapTsVbuuid := snapshot.Timestamp()
 		snapTs := getStabilityTSFromTsVbuuid(snapTsVbuuid)
 		if ts.GreaterThanEqual(snapTs) {

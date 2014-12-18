@@ -21,20 +21,20 @@ type IndexWriter interface {
 	//Delete a key/value pair by docId
 	Delete(docid []byte) error
 
-	//Commit the pending operations
-	Commit() error
+	// Create commited ondisk snapshot
+	Commit(*common.TsVbuuid) (SnapshotInfo, error)
 
-	//Snapshot
-	Snapshot() (Snapshot, error)
+	// Get the list of commited snapshots
+	GetSnapshots() ([]SnapshotInfo, error)
+
+	// Create open snapshot handle
+	OpenSnapshot(SnapshotInfo) (Snapshot, error)
 
 	//Rollback to given snapshot
-	Rollback(s Snapshot) error
+	Rollback(s SnapshotInfo) error
 
 	//Rollback to initial state
 	RollbackToZero() error
-
-	//Set Timestamp
-	SetTimestamp(*common.TsVbuuid) error
 
 	// Dealloc resources
 	Close()

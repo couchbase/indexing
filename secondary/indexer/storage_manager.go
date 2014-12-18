@@ -177,24 +177,31 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		//if index belongs to the flushed bucket
 		if idxInst.Defn.Bucket == bucket {
 
+			lastIndexSnap := s.indexSnapMap[idxInstId]
 			// List of snapshots for reading current timestamp
 			var isSnapCreated bool = true
 
-			var partnSnaps map[common.PartitionId]PartitionSnapshot
+			partnSnaps := make(map[common.PartitionId]PartitionSnapshot)
 			//for all partitions managed by this indexer
 			for partnId, partnInst := range partnMap {
+				var lastPartnSnap PartitionSnapshot
+
+				if lastIndexSnap != nil {
+					lastPartnSnap = lastIndexSnap.Partitions()[partnId]
+				}
 				sc := partnInst.Sc
 
-				var sliceSnaps map[SliceId]SliceSnapshot
+				sliceSnaps := make(map[SliceId]SliceSnapshot)
 				//create snapshot for all the slices
 				for _, slice := range sc.GetAllSlices() {
+					var latestSnapshot Snapshot
+					if lastIndexSnap != nil {
+						lastSliceSnap := lastPartnSnap.Slices()[slice.Id()]
+						latestSnapshot = lastSliceSnap.Snapshot()
+					}
 
 					//if flush timestamp is greater than last
 					//snapshot timestamp, create a new snapshot
-
-					snapContainer := slice.GetSnapshotContainer()
-
-					latestSnapshot := snapContainer.GetLatestSnapshot()
 
 					snapTs := NewTimestamp(numVbuckets)
 					if latestSnapshot != nil {
@@ -214,10 +221,10 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							"%v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
 						newTsVbuuid := tsVbuuid.Copy()
-						slice.SetTimestamp(newTsVbuuid)
+						var err error
+						var info SnapshotInfo
 
-						if err := slice.Commit(); err != nil {
-
+						if info, err = slice.Commit(newTsVbuuid); err != nil {
 							common.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
 								"Commiting Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
@@ -229,19 +236,9 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							"Index: %v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
 						//create snapshot for slice
-						if newSnapshot, err := slice.Snapshot(); err == nil {
-
-							if snapContainer.Len() > MAX_SNAPSHOTS_PER_INDEX {
-								serr := snapContainer.RemoveOldest()
-								if serr == nil {
-									common.Tracef("StorageMgr::handleCreateSnapshot \n\tRemoved Oldest Snapshot, "+
-										"Container Len %v", snapContainer.Len())
-								}
-							}
-							newSnapshot.Open()
-							snapContainer.Add(newSnapshot)
+						if newSnapshot, err := slice.OpenSnapshot(info); err == nil {
 							common.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
-								"PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
+								"PartitionId: %v SliceId: %v (%v)", idxInstId, partnId, slice.Id(), info)
 
 							ss := &sliceSnapshot{
 								id:   slice.Id(),
@@ -330,17 +327,20 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 				//rollback all slices
 				for _, slice := range sc.GetAllSlices() {
-					s := slice.GetSnapshotContainer()
-					snap := s.GetSnapshotOlderThanTS(ts)
-					if snap != nil {
-						err := slice.Rollback(snap)
+					infos, err := slice.GetSnapshots()
+					// TODO: Proper error handling if possible
+					if err != nil {
+						panic("Unable read snapinfo -" + err.Error())
+					}
+					s := NewSnapshotInfoContainer(infos)
+					snapInfo := s.GetOlderThanTS(ts)
+					if snapInfo != nil {
+						err := slice.Rollback(snapInfo)
 						if err == nil {
-							//discard all the snapshots recent than the TS rolled back to
-							s.RemoveRecentThanTS(snap.Timestamp())
 							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
-								slice.Id(), snap)
-							respTs[idxInst.Defn.Bucket] = snap.Timestamp()
+								slice.Id(), snapInfo)
+							respTs[idxInst.Defn.Bucket] = snapInfo.Timestamp()
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
@@ -349,15 +349,12 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 								category: STORAGE_MGR,
 								cause:    err}}
 							return
-
 						}
 
 					} else {
 						//if there is no snapshot available, rollback to zero
 						err := slice.RollbackToZero()
 						if err == nil {
-							//discard all snapshots in container
-							s.RemoveAll()
 							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
 								slice.Id())
@@ -494,6 +491,10 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 }
 
 // Update index-snapshot map using index partition map
+// This function should be called only during initialization
+// of storage manager and during rollback.
+// FIXME: Current implementation makes major assumption that
+// single slice is supported.
 func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap) {
 	var tsVbuuid *common.TsVbuuid
 	for idxInstId, partnMap := range indexPartnMap {
@@ -503,36 +504,46 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap) {
 
 		//there is only one slice for now
 		slice := sc.GetSliceById(0)
-		snapContainer := slice.GetSnapshotContainer()
-		latestSnapshot := snapContainer.GetLatestSnapshot()
-
-		ss := &sliceSnapshot{
-			id:   SliceId(0),
-			snap: latestSnapshot,
-		}
-
-		tsVbuuid = slice.Timestamp()
-
-		if latestSnapshot != nil {
-			latestSnapshot.Open()
-		}
-
-		sid := SliceId(0)
-		pid := common.PartitionId(0)
-
-		ps := &partitionSnapshot{
-			id:     pid,
-			slices: map[SliceId]SliceSnapshot{sid: ss},
-		}
-
-		is := &indexSnapshot{
-			instId: idxInstId,
-			ts:     tsVbuuid,
-			partns: map[common.PartitionId]PartitionSnapshot{pid: ps},
+		infos, err := slice.GetSnapshots()
+		// TODO: Proper error handling if possible
+		if err != nil {
+			panic("Unable to read snapinfo -" + err.Error())
 		}
 
 		DestroyIndexSnapshot(s.indexSnapMap[idxInstId])
 		delete(s.indexSnapMap, idxInstId)
-		s.indexSnapMap[idxInstId] = is
+
+		snapInfoContainer := NewSnapshotInfoContainer(infos)
+		latestSnapshotInfo := snapInfoContainer.GetLatest()
+
+		if latestSnapshotInfo != nil {
+			common.Infof("StorageMgr::updateIndexSnapMap IndexInst:%v Attempting to open snapshot (%v)",
+				idxInstId, latestSnapshotInfo)
+			latestSnapshot, err := slice.OpenSnapshot(latestSnapshotInfo)
+			if err != nil {
+				panic("Unable to open snapshot -" + err.Error())
+			}
+			ss := &sliceSnapshot{
+				id:   SliceId(0),
+				snap: latestSnapshot,
+			}
+
+			tsVbuuid = latestSnapshotInfo.Timestamp()
+
+			sid := SliceId(0)
+			pid := common.PartitionId(0)
+
+			ps := &partitionSnapshot{
+				id:     pid,
+				slices: map[SliceId]SliceSnapshot{sid: ss},
+			}
+
+			is := &indexSnapshot{
+				instId: idxInstId,
+				ts:     tsVbuuid,
+				partns: map[common.PartitionId]PartitionSnapshot{pid: ps},
+			}
+			s.indexSnapMap[idxInstId] = is
+		}
 	}
 }
