@@ -58,7 +58,7 @@ func argParse() string {
 
 	// collect production files.
 	_, filename, _, _ := runtime.Caller(1)
-	testDir = path.Join(path.Dir(path.Dir(path.Dir(filename))), "testdata")
+	testDir = path.Join(path.Dir(path.Dir(path.Dir(filename))), "tests/testdata")
 	bagDir = testDir
 
 	args := flag.Args()

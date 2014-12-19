@@ -10,7 +10,7 @@ import (
 var testStats Statistics
 
 func init() {
-	text, err := ioutil.ReadFile("../testdata/statistics.json")
+	text, err := ioutil.ReadFile("../tests/testdata/statistics.json")
 	if err != nil {
 		log.Fatal(err)
 	}
