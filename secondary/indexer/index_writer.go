@@ -21,8 +21,8 @@ type IndexWriter interface {
 	//Delete a key/value pair by docId
 	Delete(docid []byte) error
 
-	// Create commited ondisk snapshot
-	Commit(*common.TsVbuuid) (SnapshotInfo, error)
+	// Create commited commited snapshot or inmemory snapshot
+	NewSnapshot(*common.TsVbuuid, bool) (SnapshotInfo, error)
 
 	// Get the list of commited snapshots
 	GetSnapshots() ([]SnapshotInfo, error)

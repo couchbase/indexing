@@ -360,7 +360,7 @@ func (fdb *fdbSlice) checkFatalDbError(err error) {
 }
 
 // Creates an open snapshot handle from snapshot info
-// Snapshot info is obtained from Commit() or GetSnapshots() API
+// Snapshot info is obtained from NewSnapshot() or GetSnapshots() API
 // Returns error if snapshot handle cannot be created.
 func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	snapInfo := info.(*fdbSnapshotInfo)
@@ -372,10 +372,11 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		ts:         snapInfo.Timestamp(),
 		mainSeqNum: snapInfo.MainSeq,
 		backSeqNum: snapInfo.BackSeq,
+		committed:  info.IsCommitted(),
 	}
 
 	common.Debugf("ForestDBSlice::OpenSnapshot \n\tSliceId %v IndexInstId %v Creating New "+
-		"Snapshot %v", fdb.id, fdb.idxInstId, s)
+		"Snapshot %v committed:%v", fdb.id, fdb.idxInstId, s, s.committed)
 	err := s.Open()
 
 	return s, err
@@ -433,7 +434,7 @@ func (fdb *fdbSlice) RollbackToZero() error {
 //Commit persists the outstanding writes in underlying
 //forestdb database. If Commit returns error, slice
 //should be rolled back to previous snapshot.
-func (fdb *fdbSlice) Commit(ts *common.TsVbuuid) (SnapshotInfo, error) {
+func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
 	//every SLICE_COMMIT_POLL_INTERVAL milliseconds,
 	//check for outstanding mutations. If there are
 	//none, proceed with the commit.
@@ -442,11 +443,6 @@ func (fdb *fdbSlice) Commit(ts *common.TsVbuuid) (SnapshotInfo, error) {
 		if fdb.checkAllWorkersDone() {
 			break
 		}
-	}
-
-	infos, err := fdb.getSnapshotsMeta()
-	if err != nil {
-		return nil, err
 	}
 
 	mainDbInfo, err := fdb.main[0].Info()
@@ -460,36 +456,43 @@ func (fdb *fdbSlice) Commit(ts *common.TsVbuuid) (SnapshotInfo, error) {
 	}
 
 	newSnapshotInfo := &fdbSnapshotInfo{
-		Ts:      ts,
-		MainSeq: mainDbInfo.LastSeqNum(),
-		BackSeq: backDbInfo.LastSeqNum(),
+		Ts:        ts,
+		MainSeq:   mainDbInfo.LastSeqNum(),
+		BackSeq:   backDbInfo.LastSeqNum(),
+		Committed: commit,
 	}
 
-	sic := NewSnapshotInfoContainer(infos)
-	sic.Add(newSnapshotInfo)
+	if commit {
+		infos, err := fdb.getSnapshotsMeta()
+		if err != nil {
+			return nil, err
+		}
+		sic := NewSnapshotInfoContainer(infos)
+		sic.Add(newSnapshotInfo)
 
-	if sic.Len() > MAX_SNAPSHOTS_PER_INDEX {
-		sic.RemoveOldest()
-	}
+		if sic.Len() > MAX_SNAPSHOTS_PER_INDEX {
+			sic.RemoveOldest()
+		}
 
-	err = fdb.updateSnapshotsMeta(sic.List())
-	if err != nil {
-		return nil, err
-	}
+		err = fdb.updateSnapshotsMeta(sic.List())
+		if err != nil {
+			return nil, err
+		}
 
-	// Commit database file
-	start := time.Now()
-	err = fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
-	elapsed := time.Since(start)
+		// Commit database file
+		start := time.Now()
+		err = fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
+		elapsed := time.Since(start)
 
-	fdb.totalCommitTime += elapsed
-	common.Debugf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v TotalFlushTime %v "+
-		"TotalCommitTime %v", fdb.id, fdb.idxInstId, fdb.totalFlushTime, fdb.totalCommitTime)
+		fdb.totalCommitTime += elapsed
+		common.Debugf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v TotalFlushTime %v "+
+			"TotalCommitTime %v", fdb.id, fdb.idxInstId, fdb.totalFlushTime, fdb.totalCommitTime)
 
-	if err != nil {
-		common.Errorf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v Error in "+
-			"Index Commit %v", fdb.id, fdb.idxInstId, err)
-		return nil, err
+		if err != nil {
+			common.Errorf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v Error in "+
+				"Index Commit %v", fdb.id, fdb.idxInstId, err)
+			return nil, err
+		}
 	}
 
 	return newSnapshotInfo, nil

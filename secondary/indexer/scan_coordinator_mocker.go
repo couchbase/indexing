@@ -162,7 +162,7 @@ func (s *mockSlice) Delete(d []byte) error {
 	return s.err
 }
 
-func (s *mockSlice) Commit(ts *c.TsVbuuid) (SnapshotInfo, error) {
+func (s *mockSlice) NewSnapshot(ts *c.TsVbuuid, commit bool) (SnapshotInfo, error) {
 	return &mockSnapshotInfo{}, s.err
 }
 
@@ -334,4 +334,8 @@ type mockSnapshotInfo struct {
 
 func (info *mockSnapshotInfo) Timestamp() *c.TsVbuuid {
 	return nil
+}
+
+func (info *mockSnapshotInfo) IsCommitted() bool {
+	return true
 }

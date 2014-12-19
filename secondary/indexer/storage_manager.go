@@ -169,6 +169,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	tsVbuuid := cmd.(*MsgMutMgrFlushDone).GetTS()
 	numVbuckets := s.config["numVbuckets"].Int()
+	// TODO: Fill this flag from incoming message
+	var needsCommit bool = true
 
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range s.indexPartnMap {
@@ -223,35 +225,34 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 						newTsVbuuid := tsVbuuid.Copy()
 						var err error
 						var info SnapshotInfo
+						var newSnapshot Snapshot
 
-						if info, err = slice.Commit(newTsVbuuid); err != nil {
+						common.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
+							"Index: %v PartitionId: %v SliceId: %v Commit:%v", idxInstId, partnId, slice.Id(), needsCommit)
+						if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
 							common.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
-								"Commiting Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
+								"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 							isSnapCreated = false
 							continue
 						}
 
-						common.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
-							"Index: %v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
-
-						//create snapshot for slice
-						if newSnapshot, err := slice.OpenSnapshot(info); err == nil {
-							common.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
-								"PartitionId: %v SliceId: %v (%v)", idxInstId, partnId, slice.Id(), info)
-
-							ss := &sliceSnapshot{
-								id:   slice.Id(),
-								snap: newSnapshot,
-							}
-							sliceSnaps[slice.Id()] = ss
-						} else {
+						if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
 							common.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
 								"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 							isSnapCreated = false
 							continue
 						}
+
+						common.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
+							"PartitionId: %v SliceId: %v (%v)", idxInstId, partnId, slice.Id(), info)
+
+						ss := &sliceSnapshot{
+							id:   slice.Id(),
+							snap: newSnapshot,
+						}
+						sliceSnaps[slice.Id()] = ss
 					} else {
 						// Increment reference
 						latestSnapshot.Open()

@@ -110,7 +110,7 @@ func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 	common.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
 		low.String(), high.String())
 
-	it, err := newForestDBIterator(s.main, s.mainSeqNum)
+	it, err := newFDBSnapshotIterator(s)
 	if err != nil {
 		cherr <- err
 		return
@@ -189,7 +189,7 @@ func (s *fdbSnapshot) GetValueSetForKeyRange(low Key, high Key,
 	common.Debugf("ForestDB Received Key Low - %s High - %s Inclusion - %v for Scan",
 		low.String(), high.String(), inclusion)
 
-	it, err := newForestDBIterator(s.main, s.mainSeqNum)
+	it, err := newFDBSnapshotIterator(s)
 	if err != nil {
 		cherr <- err
 		return

@@ -23,6 +23,19 @@ type ForestDBIterator struct {
 	iter  *forestdb.Iterator
 }
 
+func newFDBSnapshotIterator(s Snapshot) (*ForestDBIterator, error) {
+	var seq forestdb.SeqNum
+	fdbSnap := s.(*fdbSnapshot)
+	if !fdbSnap.committed {
+		seq = FORESTDB_INMEMSEQ
+	} else {
+		seq = fdbSnap.mainSeqNum
+	}
+
+	itr, err := newForestDBIterator(fdbSnap.main, seq)
+	return itr, err
+}
+
 func newForestDBIterator(db *forestdb.KVStore,
 	seq forestdb.SeqNum) (*ForestDBIterator, error) {
 	dbInst, err := db.SnapshotOpen(seq)
