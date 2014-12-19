@@ -204,7 +204,11 @@ func mf(err error, msg string) {
 }
 
 func getProjectorAdminport(cluster, pooln string) string {
-	cinfo := c.NewClusterInfoCache(cluster, pooln)
+	cinfo, err := c.NewClusterInfoCache(cluster, pooln)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	if err := cinfo.Fetch(); err != nil {
 		log.Fatal(err)
 	}

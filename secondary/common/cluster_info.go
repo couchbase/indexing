@@ -6,7 +6,6 @@ import "fmt"
 import "time"
 import "net"
 import "net/url"
-import "strings"
 import "sync"
 
 var (
@@ -37,19 +36,21 @@ type ClusterInfoCache struct {
 
 type NodeId int
 
-func NewClusterInfoCache(cluster string, pool string) *ClusterInfoCache {
-	if !strings.HasPrefix(cluster, "http://") {
-		cluster = "http://" + cluster
+func NewClusterInfoCache(cluster string, pool string) (*ClusterInfoCache, error) {
+	url, err := ClusterAuthUrl(cluster)
+	if err != nil {
+		return nil, err
 	}
+
 	c := &ClusterInfoCache{
-		url:             cluster,
+		url:             url,
 		poolName:        pool,
 		poolsvsCh:       make(chan couchbase.PoolServices),
 		poolsvsIsActive: false,
 		retries:         0,
 	}
 
-	return c
+	return c, nil
 }
 
 func (c *ClusterInfoCache) SetLogPrefix(p string) {

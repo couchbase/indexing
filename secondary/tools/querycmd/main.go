@@ -47,7 +47,7 @@ const (
 )
 
 func parseArgs() {
-	flag.StringVar(&server, "server", "localhost:9000", "Cluster server address")
+	flag.StringVar(&server, "server", "127.0.0.1:9000", "Cluster server address")
 	flag.StringVar(&opType, "type", "scanAll", "Index command (scan|stats|scanAll|count|create|drop|list)")
 	flag.StringVar(&indexName, "index", "", "Index name")
 	flag.StringVar(&bucket, "bucket", "default", "Bucket name")
@@ -86,7 +86,12 @@ func main() {
 		c.SetLogLevel(c.LogLevelInfo)
 	}
 
-	cinfo := c.NewClusterInfoCache(fmt.Sprintf("http://%s", server), "default")
+	cinfo, err := c.NewClusterInfoCache(server, "default")
+	if err != nil {
+		fmt.Println("Error occured while initializing cluster info -", err)
+		os.Exit(1)
+	}
+
 	if err = cinfo.Fetch(); err != nil {
 		fmt.Println("Error occured while fetching cluster info -", err)
 		os.Exit(1)

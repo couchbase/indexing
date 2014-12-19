@@ -4,8 +4,10 @@ import "errors"
 import "fmt"
 import "io"
 import "net"
+import "net/url"
 import "os"
 
+import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
 
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the
@@ -336,4 +338,19 @@ func CrashOnError(err error) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func ClusterAuthUrl(cluster string) (string, error) {
+	adminUser, adminPasswd, err := cbauth.GetHTTPServiceAuth(cluster)
+	if err != nil {
+		return "", err
+	}
+
+	clusterUrl := url.URL{
+		Scheme: "http",
+		Host:   cluster,
+		User:   url.UserPassword(adminUser, adminPasswd),
+	}
+
+	return clusterUrl.String(), nil
 }

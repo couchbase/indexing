@@ -11,7 +11,6 @@ package indexer
 
 import (
 	"errors"
-	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
 	"net"
@@ -43,8 +42,15 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 		config:     cfg,
 	}
 
-	url := fmt.Sprintf("http://%s", cfg["clusterAddr"].String())
-	cinfo := common.NewClusterInfoCache(url, DEFAULT_POOL)
+	cinfo, err := common.NewClusterInfoCache(cfg["clusterAddr"].String(), DEFAULT_POOL)
+	if err != nil {
+		common.Errorf("ClustMgrAgent::Fail to init ClusterInfoCache : %v", err)
+		return nil, &MsgError{
+			err: Error{code: ERROR_CLUSTER_MGR_AGENT_INIT,
+				severity: FATAL,
+				category: CLUSTER_MGR,
+				cause:    err}}
+	}
 	if err := cinfo.Fetch(); err != nil {
 		common.Errorf("ClustMgrAgent::Fail to init ClusterInfoCache : %v", err)
 		return nil, &MsgError{

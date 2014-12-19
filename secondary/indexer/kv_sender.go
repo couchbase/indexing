@@ -47,14 +47,17 @@ type kvSender struct {
 func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
 	config c.Config) (KVSender, Message) {
 
+	cinfo, err := c.NewClusterInfoCache(config["clusterAddr"].String(), DEFAULT_POOL)
+	if err != nil {
+		panic("Unable to initialize cluster_info - " + err.Error())
+	}
 	//Init the kvSender struct
-	url := fmt.Sprintf("http://%s", config["clusterAddr"].String())
 	k := &kvSender{
 		supvCmdch:                 supvCmdch,
 		supvRespch:                supvRespch,
 		streamStatus:              make(StreamStatusMap),
 		streamBucketIndexCountMap: make(map[c.StreamId]BucketIndexCountMap),
-		cInfoCache:                c.NewClusterInfoCache(url, DEFAULT_POOL),
+		cInfoCache:                cinfo,
 		config:                    config,
 	}
 

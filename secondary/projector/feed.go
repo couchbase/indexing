@@ -977,7 +977,10 @@ func (feed *Feed) bucketDetails(
 
 func (feed *Feed) getLocalVbuckets(pooln, bucketn string) ([]uint16, error) {
 	// gather vbnos based on colocation policy.
-	cinfo := c.NewClusterInfoCache(feed.cluster, pooln)
+	cinfo, err := c.NewClusterInfoCache(feed.cluster, pooln)
+	if err != nil {
+		return nil, err
+	}
 	if err := cinfo.Fetch(); err != nil {
 		return nil, err
 	}
