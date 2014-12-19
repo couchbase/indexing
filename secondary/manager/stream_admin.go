@@ -12,8 +12,8 @@ package manager
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
-	projectorC "github.com/couchbase/indexing/secondary/projector/client"
 	projector "github.com/couchbase/indexing/secondary/projector"
+	projectorC "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"net"
 	"strconv"
@@ -54,24 +54,24 @@ type VbMap map[string][]uint16
 //    bucket timestamp and index instances.  This method can be used to augment the <state> as well. The
 //    method ensures that the <requested state> is enforced as follows:
 //    -  AddIndexToStream() passes the <state> to every projector node.  The projector node must return
-//       the active timestamps applicable for that node.  
-//    -  If a vbucket is in an active timestamp, it indicates that the stream has started successfully for that vbucket.    
+//       the active timestamps applicable for that node.
+//    -  If a vbucket is in an active timestamp, it indicates that the stream has started successfully for that vbucket.
 //       Termination of the stream will be manifested as StreamEnd or ConnectionError.
 //    -  Projector node may return rollback timestamp for a vbucket.  The rollback timestamp seqno must be smaller than
 //       the request timestamp unless vbuuid has changed.  It is required for ProjectorAdmin to retry using the rollback
 //       timestamps.
 //    -  AddIndexToStream() will retry until all <bucket, vbucket> have corresponding active timestamps.
-//    -  AddIndexToStream() will detects that more than one projector has active timestamps on the 
+//    -  AddIndexToStream() will detects that more than one projector has active timestamps on the
 //       same <bucket, vbucket>.  **If so, it will STOP the vbucket for both nodes.**  It will then retry restart the vbuckets.
-//    -  AddIndexToStream() will send the active timestamps to StreamMonitor to ensure that projector actually sends the 
+//    -  AddIndexToStream() will send the active timestamps to StreamMonitor to ensure that projector actually sends the
 //       stream properly over.   If it does not get the stream for the vbucket, it will try to restart the vbucket using the latest
 //       timestamp received so far (in this case, it will be the consolidated active timestamp).  This step is just to ensure
 //       liveness property in presence of bugs or race conditions (when projector protocol is not honored).
 //
 type ProjectorAdmin struct {
-	factory          ProjectorStreamClientFactory
-	env              ProjectorClientEnv
-	monitor          *StreamMonitor
+	factory ProjectorStreamClientFactory
+	env     ProjectorClientEnv
+	monitor *StreamMonitor
 }
 
 type adminWorker struct {
@@ -208,10 +208,10 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 			// Need to verify if this situation can happen (e.g. during rebalancing or kv split brain).
 			shouldRetry = !p.validateActiveVb(buckets, activeTimestamps)
 		}
-		
+
 		if !shouldRetry {
 			p.monitorStream(streamId, activeTimestamps)
-		} 
+		}
 	}
 
 	return nil
@@ -444,7 +444,7 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 				break
 			}
 		}
-		
+
 		if !shouldRetry {
 			p.monitorStream(streamId, activeTimestamps)
 		}
@@ -471,14 +471,14 @@ func (p *ProjectorAdmin) validateActiveVb(buckets []string, activeTimestamps []*
 					}
 				}
 			}
-			
+
 			if !found {
 				common.Debugf("validateActiveVb(): Cannot find active timestamp for bucket %s vb %d", bucket, vb)
 				return false
 			}
 		}
 	}
-	
+
 	return true
 }
 
@@ -575,13 +575,13 @@ func (worker *adminWorker) addInstances(instances []*protobuf.Instance,
 		}
 		timestamps = append(timestamps, ts)
 	}
-	
+
 	timestamps, err := worker.admin.env.FilterTimestampsForNode(timestamps, worker.server)
 	if err != nil {
 		worker.err = NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "Unable to filter restart timestamp")
 		return
 	}
-	
+
 	// open the stream for the specific node for the set of <bucket, timestamp>
 	topic := getTopicForStreamId(worker.streamId)
 
@@ -932,8 +932,6 @@ func makeRestartTimestamp(client ProjectorStreamClient,
 	}
 }
 
-
-
 //
 // Compute a new request timestamp based on the response from projector.
 // If all the vb is active for the given requestTs, then this function returns nil.
@@ -1153,14 +1151,14 @@ func (p *ProjectorClientEnvImpl) findTimestamp(timestampMap map[string][]*protob
 }
 
 //
-// Filter the timestamp based on vb list on a certain node 
+// Filter the timestamp based on vb list on a certain node
 //
-func (p *ProjectorClientEnvImpl) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, 
-														 node string) ([]*protobuf.TsVbuuid, error) {
+func (p *ProjectorClientEnvImpl) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid,
+	node string) ([]*protobuf.TsVbuuid, error) {
 
 	common.Debugf("ProjectorClientEnvImpl.FilterTimestampsForNode(): start")
 
-	var newTimestamps []*protobuf.TsVbuuid = nil 
+	var newTimestamps []*protobuf.TsVbuuid = nil
 
 	for _, ts := range timestamps {
 
@@ -1177,14 +1175,14 @@ func (p *ProjectorClientEnvImpl) FilterTimestampsForNode(timestamps []*protobuf.
 		if err != nil {
 			return nil, err
 		}
-		
-		newTs := protobuf.NewTsVbuuid(DEFAULT_POOL_NAME, ts.GetBucket(), NUM_VB) 
-		
+
+		newTs := protobuf.NewTsVbuuid(DEFAULT_POOL_NAME, ts.GetBucket(), NUM_VB)
+
 		for kvaddr, vbnos := range vbmap {
 			if kvaddr == node {
 				for _, vbno := range vbnos {
-					seqno, vbuuid, sStart, sEnd, err := ts.Get(vbno)  
-					// If cannot get the seqno from this vbno (err != nil), then skip.  
+					seqno, vbuuid, sStart, sEnd, err := ts.Get(vbno)
+					// If cannot get the seqno from this vbno (err != nil), then skip.
 					// Otherwise, add to the new timestamp.
 					if err == nil {
 						newTs.Append(uint16(vbno), seqno, vbuuid, sStart, sEnd)
@@ -1192,8 +1190,8 @@ func (p *ProjectorClientEnvImpl) FilterTimestampsForNode(timestamps []*protobuf.
 				}
 			}
 		}
-	
-		if !newTs.IsEmpty()	{
+
+		if !newTs.IsEmpty() {
 			newTimestamps = append(newTimestamps, newTs)
 		}
 	}

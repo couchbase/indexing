@@ -71,6 +71,7 @@ func NewCoordinator(repo *MetadataRepo, idxMgr *IndexManager) *Coordinator {
 	coordinator.ready = false
 	coordinator.cond = sync.NewCond(&coordinator.mutex)
 	coordinator.idxMgr = idxMgr
+	coordinator.state = newCoordinatorState()
 
 	return coordinator
 }
@@ -101,10 +102,10 @@ func (s *Coordinator) Terminate() {
 
 	defer func() {
 		if r := recover(); r != nil {
-			co.Warnf("panic in MetadataRepo.Close() : %s.  Ignored.\n", r)
+			co.Warnf("panic in Coordinator.Terminate() : %s.  Ignored.\n", r)
 		}
 	}()
-
+	
 	s.state.mutex.Lock()
 	defer s.state.mutex.Unlock()
 
@@ -114,13 +115,19 @@ func (s *Coordinator) Terminate() {
 
 	s.state.done = true
 
-	s.site.Close()
-	s.site = nil
+	if s.site != nil {
+		s.site.Close()
+		s.site = nil
+	}
 
-	s.configRepo.Close()
-	s.configRepo = nil
+	if s.configRepo != nil {
+		s.configRepo.Close()
+		s.configRepo = nil
+	}
 
-	s.skillch <- true // kill leader/follower server
+	if s.skillch != nil {
+		s.skillch <- true // kill leader/follower server
+	}
 }
 
 //
@@ -225,13 +232,20 @@ func (c *Coordinator) runOnce(config string) int {
 //
 func (s *Coordinator) bootstrap(config string) (err error) {
 
+	s.state.mutex.Lock()
+	defer s.state.mutex.Unlock()
+
+	if s.state.done {
+		return
+	}
+
 	s.env, err = newEnv(config)
 	if err != nil {
 		return err
 	}
 
 	// Initialize server state
-	s.state = newCoordinatorState()
+	s.state.resetCoordinatorState()
 
 	// Initialize various callback facility for leader election and
 	// voting protocol.
@@ -455,6 +469,15 @@ func newCoordinatorState() *CoordinatorState {
 		done:      false}
 
 	return state
+}
+
+func (c *CoordinatorState) resetCoordinatorState() {
+
+	c.incomings = make(chan *protocol.RequestHandle, common.MAX_PROPOSALS)
+	c.pendings = make(map[uint64]*protocol.RequestHandle)
+	c.proposals = make(map[common.Txnid]*protocol.RequestHandle)
+	c.status = protocol.ELECTING
+	c.done = false
 }
 
 func (s *CoordinatorState) getStatus() protocol.PeerStatus {
@@ -705,16 +728,17 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 		return false
 	}
 
-	if err = c.repo.CreateIndex(defn); err != nil {
-		co.Debugf("Coordinator.createIndex() : createIndex fails. Reason = %s", err.Error())
-		return false
+	host, err := c.findNextAvailNodeForIndex()	
+    if err != nil {
+    	co.Debugf("Fail to find a host to store the index '%s'", defn.Name)
+    	return false
+    }
+    
+	if err := c.repo.createIndexAndUpdateTopology(defn, host); err != nil {
+		co.Debugf("Coordinator.createIndexy() : createIndex fails. Reason = %s", err.Error())
+		return false	
 	}
-
-	if err = c.addIndexToTopology(defn); err != nil {
-		co.Debugf("Coordinator.createIndex() : setTopology fails. Reason = %s", err.Error())
-		return false
-	}
-
+	
 	return true
 }
 
@@ -725,68 +749,12 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 //
 func (c *Coordinator) deleteIndex(key string) bool {
 
-	bucket := bucketFromIndexDefnName(key)
-	name := nameFromIndexDefnName(key)
-	co.Debugf("Coordinator.deleteIndex() : index to delete = %s, bucket = %s, name = %s", key)
-
-	// Drop the index defnition before removing it from the topology.  If it fails to
-	// remove the index defn from topology, it can mean that there is a dangling reference
-	// in the topology with a deleted index defn, but it is easier to detect.
-	if err := c.repo.DropIndexByName(bucket, name); err != nil {
+	if err := c.repo.deleteIndexAndUpdateTopology(key); err != nil {
 		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}
-
-	if err := c.deleteIndexFromTopology(bucket, name); err != nil {
-		co.Debugf("Coordinator.deleteIndex() : setTopology fails. Reason = %s", err.Error())
-		return false
-	}
-
+	
 	return true
-}
-
-//
-// Add Index to Topology
-//
-func (c *Coordinator) addIndexToTopology(defn *co.IndexDefn) error {
-
-	// get existing topology
-	topology, err := c.repo.GetTopologyByBucket(defn.Bucket)
-	if err != nil {
-		// TODO: Need to check what type of error before creating a new topologyi
-		topology = new(IndexTopology)
-		topology.Bucket = defn.Bucket
-		topology.Version = 0
-	}
-
-	// TODO: Get the host name from the indexDefn.
-	host, err := c.findNextAvailNodeForIndex()
-	if err != nil {
-		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, COORDINATOR, nil,
-			fmt.Sprintf("Fail to find a host to store the index '%s'", defn.Name))
-	}
-
-	id, err := c.repo.GetNextIndexInstId()
-	if err != nil {
-		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, COORDINATOR, nil,
-			fmt.Sprintf("Fail to generate unique instance id for index '%s'", defn.Name))
-	}
-	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
-		uint64(id), uint32(co.INDEX_STATE_CREATED), host)
-
-	// Add a reference of the bucket-level topology to the global topology.
-	// If it fails later to create bucket-level topology, it will have
-	// a dangling reference, but it is easier to discover this issue.  Otherwise,
-	// we can end up having a bucket-level topology without being referenced.
-	if err = c.addToGlobalTopologyIfNecessary(topology.Bucket); err != nil {
-		return err
-	}
-
-	if err = c.repo.SetTopologyByBucket(topology.Bucket, topology); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 //
@@ -858,44 +826,4 @@ func (c *Coordinator) findNextAvailNodeForIndex() (string, error) {
 	}
 
 	return chosenHost, nil
-}
-
-//
-// Delete Index from Topology
-//
-func (c *Coordinator) deleteIndexFromTopology(bucket string, name string) error {
-
-	// get existing topology
-	topology, err := c.repo.GetTopologyByBucket(bucket)
-	if err != nil {
-		return err
-	}
-
-	defn := topology.FindIndexDefinition(bucket, name)
-	if defn != nil {
-		topology.UpdateStateForIndexInstByDefn(co.IndexDefnId(defn.DefnId), co.INDEX_STATE_DELETED)
-		if err = c.repo.SetTopologyByBucket(topology.Bucket, topology); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-//
-// Add a reference of the bucket-level index topology to global topology.
-// If not exist, create a new one.
-//
-func (c *Coordinator) addToGlobalTopologyIfNecessary(bucket string) error {
-
-	globalTop, err := c.repo.GetGlobalTopology()
-	if err != nil {
-		globalTop = new(GlobalTopology)
-	}
-
-	if globalTop.AddTopologyKeyIfNecessary(indexTopologyKey(bucket)) {
-		return c.repo.SetGlobalTopology(globalTop)
-	}
-
-	return nil
 }

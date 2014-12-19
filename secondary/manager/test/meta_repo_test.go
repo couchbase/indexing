@@ -25,6 +25,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 
 	common.Infof("Start TestMetadataRepo *********************************************************")
 
+	/*
 	var addr = "localhost:9885"
 	var leader = "localhost:9884"
 
@@ -32,6 +33,17 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runTest(repo, t)
+	*/
+	
+	repo, err := manager.NewLocalMetadataRepo("localhost:5002", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runTest(repo, t)
+}
+	
+func runTest(repo *manager.MetadataRepo, t *testing.T) {
 
 	// clean up
 	repo.DropIndexByName("Default", "metadata_repo_test")
@@ -60,7 +72,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Get the index definition	by name
-	idxDefn, err = repo.GetIndexDefnByName("Default", "metadata_repo_test")
+	idxDefn, err := repo.GetIndexDefnByName("Default", "metadata_repo_test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,33 +169,31 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	/*
 
-	   // Test the iterator
-	   iter, err := repo.NewIterator()
-	   if err != nil {
-	       t.Fatal("Fail to get the iterator")
-	   }
+   	// Test the iterator
+   	iter, err := repo.NewIterator()
+   	if err != nil {
+       t.Fatal("Fail to get the iterator")
+   	}
 
-	   found := false
-	   for !found {
-	       key, _, err := iter.Next()
-	       if err != nil {
-	           common.Infof("error during iteration %s", err.Error())
-	           break
-	       }
+   	found := false
+   	for !found {
+       key, _, err := iter.Next()
+       if err != nil {
+           common.Infof("error during iteration %s", err.Error())
+           break
+       }
 
-	       common.Infof("key during iteration %s", key)
-	       if key == "metadata_repo_test_3" {
-	           found = true
-	       }
-	   }
+       common.Infof("key during iteration %s", key)
+       if key == "Default/metadata_repo_test_3" {
+           found = true
+       }
+   	}
 
-	   if !found {
-	       t.Fatal("Cannot find index defn 'metadata_repo_test_3' in iterator")
-	   }
+   	if !found {
+       t.Fatal("Cannot find index defn 'metadata_repo_test_3' in iterator")
+   	}
 
-	*/
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	common.Infof("Stop TestMetadataRepo. Tearing down *********************************************************")

@@ -15,6 +15,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
 	"net"
+	"fmt"
 )
 
 //ClustMgrAgent provides the mechanism to talk to Index Coordinator
@@ -42,9 +43,39 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 		config:     cfg,
 	}
 
-	mgr, err := manager.NewIndexManager(GOMETA_REQUEST_ADDR,
-		GOMETA_LEADER_ADDR, INDEX_MANAGER_CONFIG)
-
+    url := fmt.Sprintf("http://%s", cfg["clusterAddr"].String())
+	cinfo := common.NewClusterInfoCache(url, DEFAULT_POOL)
+    if err := cinfo.Fetch(); err != nil {
+		common.Errorf("ClustMgrAgent::Fail to init ClusterInfoCache : %v", err)
+		return nil, &MsgError{
+			err: Error{code: ERROR_CLUSTER_MGR_AGENT_INIT,
+				severity: FATAL,
+				category: CLUSTER_MGR,
+				cause:    err}}
+    }
+    
+    node := cinfo.GetCurrentNode()
+    scan_addr, err := cinfo.GetServiceAddress(node, "indexScan")
+    if err != nil {
+		common.Errorf("ClustMgrAgent::Fail to indexer scan address : %v", err)
+		return nil, &MsgError{
+			err: Error{code: ERROR_CLUSTER_MGR_AGENT_INIT,
+				severity: FATAL,
+				category: CLUSTER_MGR,
+				cause:    err}}
+    }
+    
+    admin_addr, err := cinfo.GetServiceAddress(node, "indexAdmin")
+    if err != nil {
+		common.Errorf("ClustMgrAgent::Fail to indexer admin address : %v", err)
+		return nil, &MsgError{
+			err: Error{code: ERROR_CLUSTER_MGR_AGENT_INIT,
+				severity: FATAL,
+				category: CLUSTER_MGR,
+				cause:    err}}
+    }
+   
+	mgr, err := manager.NewIndexManager(admin_addr, scan_addr)
 	if err != nil {
 		common.Errorf("ClustMgrAgent::NewClustMgrAgent Error In Init %v", err)
 		return nil, &MsgError{

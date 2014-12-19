@@ -31,18 +31,22 @@ func TestRequestHandler(t *testing.T) {
 
 	common.Infof("Start TestRequestHandler *********************************************************")
 
+	/*
 	var requestAddr = "localhost:9885"
 	var leaderAddr = "localhost:9884"
+	*/
 	var config = "./config.json"
 
 	common.Infof("********** Setup index manager") 
 	factory := new(util.TestDefaultClientFactory)
 	env := new(util.TestDefaultClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
-	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
 	if err != nil {
 		t.Fatal(err)
 	}
+	mgr.StartCoordinator(config)
 	defer mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 

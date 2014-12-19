@@ -10,22 +10,26 @@
 package manager
 
 import (
-	"fmt"
+	//"fmt"
 	gometa "github.com/couchbase/gometa/common"
 	"github.com/couchbase/indexing/secondary/common"
 	"sync"
 	"time"
+	"fmt"
 )
 
 ///////////////////////////////////////////////////////
 // Type Definition
 ///////////////////////////////////////////////////////
 
+var USE_MASTER_REPO = false
+
 type IndexManager struct {
 	repo        *MetadataRepo
 	coordinator *Coordinator
 	reqHandler  *requestHandler
 	eventMgr    *eventManager
+	dataport    string
 
 	// stream management
 	streamMgr *StreamManager
@@ -48,23 +52,19 @@ type IndexManager struct {
 //
 // Create a new IndexManager
 //
-func NewIndexManager(requestAddr string,
-	leaderAddr string,
-	config string) (mgr *IndexManager, err error) {
+func NewIndexManager(msgAddr string, dataport string) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(requestAddr, leaderAddr, config, nil)
+	return NewIndexManagerInternal(msgAddr, dataport, nil)
 }
 
 //
 // Create a new IndexManager
 //
-func NewIndexManagerInternal(requestAddr string,
-	leaderAddr string,
-	config string,
-	admin StreamAdmin) (mgr *IndexManager, err error) {
+func NewIndexManagerInternal(msgAddr string, dataport string, admin StreamAdmin) (mgr *IndexManager, err error) {
 
 	mgr = new(IndexManager)
 	mgr.isClosed = false
+	mgr.dataport = dataport
 
 	// stream mgmt	- stream services will start if the indexer node becomes master
 	mgr.streamMgr = nil
@@ -75,10 +75,20 @@ func NewIndexManagerInternal(requestAddr string,
 	mgr.timer = nil
 	mgr.timekeeperStopCh = nil
 
+	// Initialize the event manager.  This is non-blocking.  The event manager can be
+	// called indirectly by watcher/meta-repo when new metadata changes are sent
+	// from gometa master to the indexer node.
+	mgr.eventMgr, err = newEventManager()
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+
 	// Initialize MetadataRepo.  This a blocking call until the
 	// the metadataRepo (including watcher) is operational (e.g.
 	// finish sync with remote metadata repo master).
-	mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, config, mgr)
+	//mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, config, mgr)
+	mgr.repo, err = NewLocalMetadataRepo(msgAddr, mgr.eventMgr)
 	if err != nil {
 		return nil, err
 	}
@@ -91,14 +101,28 @@ func NewIndexManagerInternal(requestAddr string,
 		return nil, err
 	}
 
-	// Initialize the event manager.  This is non-blocking.  The event manager can be
-	// called indirectly by watcher/meta-repo when new metadata changes are sent
-	// from gometa master to the indexer node.
-	mgr.eventMgr, err = newEventManager()
-	if err != nil {
-		mgr.Close()
-		return nil, err
-	}
+	// coordinator
+	mgr.coordinator = nil
+
+	return mgr, nil
+}
+
+/*
+//
+// Create a new IndexManager
+//
+func NewIndexManager(requestAddr string,
+	leaderAddr string,
+	config string) (mgr *IndexManager, err error) {
+
+	return NewIndexManagerInternal(requestAddr, leaderAddr, config, nil)
+}
+*/
+
+func (mgr *IndexManager) StartCoordinator(config string) {
+
+	mgr.mutex.Lock()
+	defer mgr.mutex.Unlock()
 
 	// Initialize Coordinator.  This is non-blocking.  The coordinator
 	// is operational only after it can syncrhonized with the majority
@@ -108,8 +132,6 @@ func NewIndexManagerInternal(requestAddr string,
 	// manager.
 	mgr.coordinator = NewCoordinator(mgr.repo, mgr)
 	go mgr.coordinator.Run(config)
-
-	return mgr, nil
 }
 
 func (m *IndexManager) IsClose() bool {
@@ -250,35 +272,43 @@ func (m *IndexManager) StopListenTopologyUpdate(id string) {
 //
 func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 
-	//
-	// Save the index definition
-	//
-	content, err := marshallIndexDefn(defn)
-	if err != nil {
-		return err
-	}
+	if USE_MASTER_REPO {
+		//
+		// Save the index definition
+		//
+		content, err := marshallIndexDefn(defn)
+		if err != nil {
+			return err
+		}
 
-	// TODO: Make request id a string
-	id := uint64(time.Now().UnixNano())
-	if !m.coordinator.NewRequest(id, uint32(OPCODE_ADD_IDX_DEFN), indexName(defn.Bucket, defn.Name), content) {
-		// TODO: double check if it exists in the dictionary
-		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, INDEX_MANAGER, nil,
-			fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
+		// TODO: Make request id a string
+		id := uint64(time.Now().UnixNano())
+		if !m.coordinator.NewRequest(id, uint32(OPCODE_ADD_IDX_DEFN), indexName(defn.Bucket, defn.Name), content) {
+			// TODO: double check if it exists in the dictionary
+			return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, INDEX_MANAGER, nil,
+				fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
+		}
+	} else {
+		return m.repo.createIndexAndUpdateTopology(defn, m.dataport)
 	}
-
+	
 	return nil
 }
 
 func (m *IndexManager) HandleDeleteIndexDDL(bucket string, name string) error {
 
-	// TODO: Make request id a string
-	id := uint64(time.Now().UnixNano())
-	if !m.coordinator.NewRequest(id, uint32(OPCODE_DEL_IDX_DEFN), indexName(bucket, name), nil) {
-		// TODO: double check if it exists in the dictionary
-		return NewError(ERROR_MGR_DDL_DROP_IDX, NORMAL, INDEX_MANAGER, nil,
-			fmt.Sprintf("Fail to complete processing delete index statement for index '%s'", name))
+	if USE_MASTER_REPO {
+		// TODO: Make request id a string
+		id := uint64(time.Now().UnixNano())
+		if !m.coordinator.NewRequest(id, uint32(OPCODE_DEL_IDX_DEFN), indexName(bucket, name), nil) {
+			// TODO: double check if it exists in the dictionary
+			return NewError(ERROR_MGR_DDL_DROP_IDX, NORMAL, INDEX_MANAGER, nil,
+				fmt.Sprintf("Fail to complete processing delete index statement for index '%s'", name))
+		}
+	} else {
+		return m.repo.deleteIndexAndUpdateTopology(indexName(bucket, name))
 	}
-
+	
 	return nil
 }
 

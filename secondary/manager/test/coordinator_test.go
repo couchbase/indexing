@@ -26,18 +26,25 @@ func TestCoordinator(t *testing.T) {
 
 	common.Infof("Start TestCoordinator *********************************************************")
 
+	/*
 	var requestAddr = "localhost:9885"
 	var leaderAddr = "localhost:9884"
+	*/
 	var config = "./config.json"
+	manager.USE_MASTER_REPO = true
+	defer func() {manager.USE_MASTER_REPO = false}()
 
 	factory := new(util.TestDefaultClientFactory)
 	env := new(util.TestDefaultClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
-	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer mgr.Close()
+	mgr.StartCoordinator(config)
+	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	cleanup(mgr, t)
 	time.Sleep(time.Duration(1000) * time.Millisecond)
@@ -94,7 +101,7 @@ func cleanup(mgr *manager.IndexManager, t *testing.T) {
 
 	err := mgr.HandleDeleteIndexDDL("Default", "coordinator_test")
 	if err != nil {
-		t.Fatal(err)
+		common.Infof("Error deleting index %s:%s, err=%s", "Default", "coordinator_test", err)
 	}
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }

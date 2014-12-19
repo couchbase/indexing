@@ -70,6 +70,7 @@ const NUM_WRITER_THREADS_PER_SLICE = 2
 //GoMeta specific
 const GOMETA_REQUEST_ADDR = "localhost:9885"
 const GOMETA_LEADER_ADDR = "localhost:9884"
+const GOMETA_MSG_ADDR = "localhost:9886"
 
 //Index Manager
 const INDEX_MANAGER_CONFIG = "./config.json"

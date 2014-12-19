@@ -76,8 +76,10 @@ func runSyncTest() {
 	common.Infof("**** Run Sync Test ******************************************")
 	
 	common.Infof("***** Start TestStreamMgr ") 
+	/*
 	var requestAddr = "localhost:9885"
 	var leaderAddr = "localhost:9884"
+	*/
 	var config = "./config.json"
 
 	common.Infof("Start Index Manager")
@@ -86,10 +88,12 @@ func runSyncTest() {
 	factory.donech = donech
 	env := new(syncTestProjectorClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
-	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
 	if err != nil {
 		util.TT.Fatal(err)
 	}
+	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
 	
 	common.Infof("Sync Test Cleanup ...")
