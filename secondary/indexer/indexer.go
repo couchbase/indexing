@@ -916,8 +916,8 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			indexInst.InstId, partnInst)
 
 		//add a single slice per partition for now
-		filepath := path.Join(idx.config["storage_dir"].String(), IndexFilename(&indexInst, SliceId(0)))
-		if slice, err := NewForestDBSlice(filepath,
+		path := path.Join(idx.config["storage_dir"].String(), IndexPath(&indexInst, SliceId(0)))
+		if slice, err := NewForestDBSlice(path,
 			0, indexInst.Defn.DefnId, indexInst.InstId); err == nil {
 			partnInst.Sc.AddSlice(0, slice)
 			common.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",

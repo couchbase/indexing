@@ -128,8 +128,8 @@ func (s *mockSlice) Id() SliceId {
 	return s.id
 }
 
-func (s *mockSlice) FilePath() string {
-	return "/tmp/mockslice.index"
+func (s *mockSlice) Path() string {
+	return "/tmp/mockslice/"
 }
 
 func (s *mockSlice) Status() SliceStatus {

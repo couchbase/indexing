@@ -29,7 +29,7 @@ const (
 //Slice represents the unit of physical storage for index
 type Slice interface {
 	Id() SliceId
-	FilePath() string
+	Path() string
 	Status() SliceStatus
 	IndexInstId() common.IndexInstId
 	IndexDefnId() common.IndexDefnId

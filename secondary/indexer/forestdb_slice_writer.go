@@ -15,6 +15,10 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -29,18 +33,22 @@ var (
 //handle the synchronization. The only exception being Insert and
 //Delete can be called concurrently.
 //Returns error in case slice cannot be initialized.
-func NewForestDBSlice(file string, sliceId SliceId, idxDefnId common.IndexDefnId,
+func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 	idxInstId common.IndexInstId) (*fdbSlice, error) {
 
-	slice := &fdbSlice{}
+	info, err := os.Stat(path)
+	if err != nil || err == nil && info.IsDir() {
+		os.Mkdir(path, 0777)
+	}
 
-	var err error
+	filepath := newFdbFile(path, false)
+	slice := &fdbSlice{}
 
 	config := forestdb.DefaultConfig()
 	config.SetDurabilityOpt(forestdb.DRB_ASYNC)
 	kvconfig := forestdb.DefaultKVStoreConfig()
 
-	if slice.dbfile, err = forestdb.Open(file, config); err != nil {
+	if slice.dbfile, err = forestdb.Open(filepath, config); err != nil {
 		return nil, err
 	}
 
@@ -64,7 +72,7 @@ func NewForestDBSlice(file string, sliceId SliceId, idxDefnId common.IndexDefnId
 		return nil, err
 	}
 
-	slice.filepath = file
+	slice.path = path
 	slice.config = config
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefnId
@@ -94,8 +102,8 @@ type kv struct {
 
 //fdbSlice represents a forestdb slice
 type fdbSlice struct {
-	filepath string
-	id       SliceId //slice id
+	path string
+	id   SliceId //slice id
 
 	refCount int
 	lock     sync.RWMutex
@@ -558,8 +566,8 @@ func (fdb *fdbSlice) Id() SliceId {
 }
 
 // FilePath returns the filepath for this Slice
-func (fdb *fdbSlice) FilePath() string {
-	return fdb.filepath
+func (fdb *fdbSlice) Path() string {
+	return fdb.path
 }
 
 //IsActive returns if the slice is active
@@ -603,7 +611,7 @@ func (fdb *fdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 func (fdb *fdbSlice) String() string {
 
 	str := fmt.Sprintf("SliceId: %v ", fdb.id)
-	str += fmt.Sprintf("File: %v ", fdb.filepath)
+	str += fmt.Sprintf("File: %v ", fdb.path)
 	str += fmt.Sprintf("Index: %v ", fdb.idxInstId)
 
 	return str
@@ -663,7 +671,7 @@ func tryDeleteFdbSlice(fdb *fdbSlice) {
 	common.Infof("ForestDBSlice::Destroy \n\tDestroying Slice Id %v, IndexInstId %v, "+
 		"IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 
-	if err := forestdb.Destroy(fdb.filepath, fdb.config); err != nil {
+	if err := forestdb.Destroy(fdb.path, fdb.config); err != nil {
 		common.Errorf("ForestDBSlice::Destroy \n\t Error Destroying  Slice Id %v, "+
 			"IndexInstId %v, IndexDefnId %v. Error %v", fdb.id, fdb.idxInstId, fdb.idxDefnId, err)
 	}
@@ -684,4 +692,27 @@ func tryCloseFdbSlice(fdb *fdbSlice) {
 	}
 
 	fdb.dbfile.Close()
+}
+
+func newFdbFile(dirpath string, newVersion bool) string {
+	var version int = 0
+
+	pattern := fmt.Sprintf("data.fdb.*")
+	files, _ := filepath.Glob(path.Join(dirpath, pattern))
+	sort.Strings(files)
+	// Pick the first file with least version
+	if len(files) > 0 {
+		filename := path.Base(files[0])
+		_, err := fmt.Sscanf(filename, "data.fdb.%d", &version)
+		if err != nil {
+			panic(fmt.Sprintf("Invalid data file %s (%v)", files[0], err))
+		}
+	}
+
+	if newVersion {
+		version++
+	}
+
+	newFilename := fmt.Sprintf("data.fdb.%d", version)
+	return path.Join(dirpath, newFilename)
 }
