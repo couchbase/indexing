@@ -870,6 +870,9 @@ func (m MsgType) String() string {
 	case CBQ_DROP_INDEX_DDL:
 		return "CBQ_DROP_INDEX_DDL"
 
+	case STORAGE_INDEX_SNAP_REQUEST:
+		return "STORAGE_INDEX_SNAP_REQUEST"
+
 	default:
 		return "UNKNOWN_MSG_TYPE"
 	}
