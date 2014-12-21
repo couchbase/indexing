@@ -203,6 +203,10 @@ func (s *mockSlice) IncrRef() {
 func (s *mockSlice) DecrRef() {
 }
 
+func (s *mockSlice) Compact() error {
+	return nil
+}
+
 type mockSnapshot struct {
 	id        SliceId
 	indInstid c.IndexInstId

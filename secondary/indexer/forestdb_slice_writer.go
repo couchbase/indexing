@@ -608,6 +608,20 @@ func (fdb *fdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	return infos, err
 }
 
+func (fdb *fdbSlice) Compact() error {
+	fdb.IncrRef()
+	defer fdb.DecrRef()
+
+	oldpath := newFdbFile(fdb.path, false)
+	newpath := newFdbFile(fdb.path, true)
+	err := fdb.dbfile.Compact(newpath)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(oldpath)
+	return err
+}
+
 func (fdb *fdbSlice) String() string {
 
 	str := fmt.Sprintf("SliceId: %v ", fdb.id)

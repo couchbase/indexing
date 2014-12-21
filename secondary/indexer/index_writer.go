@@ -36,6 +36,9 @@ type IndexWriter interface {
 	//Rollback to initial state
 	RollbackToZero() error
 
+	// Perform file compaction
+	Compact() error
+
 	// Dealloc resources
 	Close()
 
