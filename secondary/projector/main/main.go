@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 
@@ -17,6 +18,7 @@ var options struct {
 	adminport string
 	kvaddrs   string
 	colocate  bool
+	logFile   string
 	info      bool
 	debug     bool
 	trace     bool
@@ -29,6 +31,8 @@ func argParse() string {
 		"comma separated list of kvaddrs")
 	flag.BoolVar(&options.colocate, "colocate", true,
 		"whether projector will be colocated with KV")
+	flag.StringVar(&options.logFile, "logFile", "",
+		"output logs to file default is stdout")
 	flag.BoolVar(&options.info, "info", false,
 		"enable info level logging")
 	flag.BoolVar(&options.debug, "debug", false,
@@ -59,6 +63,10 @@ func main() {
 		c.SetLogLevel(c.LogLevelDebug)
 	} else if options.info {
 		c.SetLogLevel(c.LogLevelInfo)
+	}
+	if f := getlogFile(); f != nil {
+		log.Printf("Projector logging to %q\n", f.Name())
+		c.SetLogWriter(f)
 	}
 
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
@@ -92,4 +100,22 @@ func NewEndpointFactory(
 		}
 		return nil, nil
 	}
+}
+
+func getlogFile() *os.File {
+	switch options.logFile {
+	case "":
+		return nil
+	case "tempfile":
+		f, err := ioutil.TempFile("", "projector")
+		if err != nil {
+			log.Fatal(err)
+		}
+		return f
+	}
+	f, err := os.Create(options.logFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return f
 }

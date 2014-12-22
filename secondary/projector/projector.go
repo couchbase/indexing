@@ -106,7 +106,7 @@ func (p *Projector) DelFeed(topic string) (err error) {
 func (p *Projector) doVbmapRequest(
 	request *protobuf.VbmapRequest) ap.MessageMarshaller {
 
-	c.Debugf("%v doVbmapRequest\n", p.logPrefix)
+	c.Tracef("%v doVbmapRequest\n", p.logPrefix)
 	response := &protobuf.VbmapResponse{}
 
 	pooln := request.GetPool()
@@ -145,7 +145,7 @@ func (p *Projector) doVbmapRequest(
 func (p *Projector) doFailoverLog(
 	request *protobuf.FailoverLogRequest) ap.MessageMarshaller {
 
-	c.Debugf("%v doFailoverLog\n", p.logPrefix)
+	c.Tracef("%v doFailoverLog\n", p.logPrefix)
 	response := &protobuf.FailoverLogResponse{}
 
 	pooln := request.GetPool()
@@ -194,7 +194,7 @@ func (p *Projector) doFailoverLog(
 func (p *Projector) doMutationTopic(
 	request *protobuf.MutationTopicRequest) ap.MessageMarshaller {
 
-	c.Debugf("%v doMutationTopic()\n", p.logPrefix)
+	c.Tracef("%v doMutationTopic()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	config, _ := c.NewConfig(map[string]interface{}{})
@@ -232,7 +232,7 @@ func (p *Projector) doMutationTopic(
 func (p *Projector) doRestartVbuckets(
 	request *protobuf.RestartVbucketsRequest) ap.MessageMarshaller {
 
-	c.Debugf("%v doRestartVbuckets()\n", p.logPrefix)
+	c.Tracef("%v doRestartVbuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
@@ -260,7 +260,7 @@ func (p *Projector) doRestartVbuckets(
 func (p *Projector) doShutdownVbuckets(
 	request *protobuf.ShutdownVbucketsRequest) ap.MessageMarshaller {
 
-	c.Debugf("%v doShutdownVbuckets()\n", p.logPrefix)
+	c.Tracef("%v doShutdownVbuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
@@ -281,7 +281,7 @@ func (p *Projector) doShutdownVbuckets(
 func (p *Projector) doAddBuckets(
 	request *protobuf.AddBucketsRequest) ap.MessageMarshaller {
 
-	c.Debugf("%v doAddBuckets()\n", p.logPrefix)
+	c.Tracef("%v doAddBuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
@@ -309,7 +309,7 @@ func (p *Projector) doAddBuckets(
 func (p *Projector) doDelBuckets(
 	request *protobuf.DelBucketsRequest) ap.MessageMarshaller {
 
-	c.Debugf("%v doDelBuckets()\n", p.logPrefix)
+	c.Tracef("%v doDelBuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
@@ -328,7 +328,7 @@ func (p *Projector) doDelBuckets(
 func (p *Projector) doAddInstances(
 	request *protobuf.AddInstancesRequest) ap.MessageMarshaller {
 
-	c.Debugf("%v doAddInstances()\n", p.logPrefix)
+	c.Tracef("%v doAddInstances()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
@@ -346,7 +346,7 @@ func (p *Projector) doAddInstances(
 func (p *Projector) doDelInstances(
 	request *protobuf.DelInstancesRequest) ap.MessageMarshaller {
 
-	c.Debugf("%v doDelInstances()\n", p.logPrefix)
+	c.Tracef("%v doDelInstances()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
@@ -364,7 +364,7 @@ func (p *Projector) doDelInstances(
 func (p *Projector) doRepairEndpoints(
 	request *protobuf.RepairEndpointsRequest) ap.MessageMarshaller {
 
-	c.Debugf("%v doRepairEndpoints()\n", p.logPrefix)
+	c.Tracef("%v doRepairEndpoints()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
@@ -382,7 +382,7 @@ func (p *Projector) doRepairEndpoints(
 func (p *Projector) doShutdownTopic(
 	request *protobuf.ShutdownTopicRequest) ap.MessageMarshaller {
 
-	c.Debugf("%v doShutdownTopic()\n", p.logPrefix)
+	c.Tracef("%v doShutdownTopic()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
@@ -397,7 +397,7 @@ func (p *Projector) doShutdownTopic(
 }
 
 func (p *Projector) doStatistics(request c.Statistics) ap.MessageMarshaller {
-	c.Debugf("%v doStatistics()\n", p.logPrefix)
+	c.Tracef("%v doStatistics()\n", p.logPrefix)
 
 	m := map[string]interface{}{
 		"clusterAddr": p.clusterAddr,

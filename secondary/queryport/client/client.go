@@ -401,7 +401,7 @@ func (c *Client) streamResponse(
 
 	} else if endResp, finish = resp.(*protobuf.StreamEndResponse); finish {
 		msg := "%v connection %q received StreamEndResponse"
-		common.Debugf(msg, c.logPrefix, laddr)
+		common.Tracef(msg, c.logPrefix, laddr)
 		callb(endResp) // callback most likely return true
 		cont, healthy = false, true
 
@@ -430,7 +430,7 @@ func (c *Client) closeStream(
 		return
 	}
 	msg := "%v connection %q transmitted protobuf.EndStreamRequest"
-	common.Debugf(msg, c.logPrefix, laddr)
+	common.Tracef(msg, c.logPrefix, laddr)
 
 	timeoutMs := c.readDeadline * time.Millisecond
 	// flush the connection until stream has ended.

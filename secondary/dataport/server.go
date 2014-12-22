@@ -165,7 +165,7 @@ func (s *Server) addUuids(started, hostUuids keeper) keeper {
 			c.Errorf("%v duplicate vbucket %#v\n", s.logPrefix, newvb)
 		}
 		hostUuids[x] = newvb
-		c.Infof("%v added vbucket %v\n", s.logPrefix, newvb.id())
+		c.Tracef("%v added vbucket %v\n", s.logPrefix, newvb.id())
 	}
 	return hostUuids
 }
@@ -177,7 +177,7 @@ func (s *Server) delUuids(finished, hostUuids keeper) keeper {
 			c.Errorf("%v not active vbucket %#v\n", s.logPrefix, avb)
 		}
 		delete(hostUuids, x)
-		c.Infof("%v deleted vbucket %v\n", s.logPrefix, avb.id())
+		c.Tracef("%v deleted vbucket %v\n", s.logPrefix, avb.id())
 	}
 	return hostUuids
 }
@@ -266,7 +266,7 @@ loop:
 
 			if appmsg != nil {
 				s.appch <- appmsg
-				c.Debugf("%v appmsg: %T:%+v\n", s.logPrefix, appmsg, appmsg)
+				c.Tracef("%v appmsg: %T:%+v\n", s.logPrefix, appmsg, appmsg)
 			}
 		}
 	}
@@ -274,7 +274,7 @@ loop:
 
 // handle new connection
 func (s *Server) handleNewConnection(conn net.Conn, raddr string) error {
-	c.Infof("%v connection request from %q\n", s.logPrefix, raddr)
+	c.Tracef("%v connection request from %q\n", s.logPrefix, raddr)
 	if _, ok := s.conns[raddr]; ok {
 		c.Errorf("%v %q already active\n", s.logPrefix, raddr)
 		return ErrorDuplicateClient
@@ -282,7 +282,7 @@ func (s *Server) handleNewConnection(conn net.Conn, raddr string) error {
 	// connection accepted
 	worker := make(chan interface{}, s.maxVbuckets)
 	s.conns[raddr] = &netConn{conn: conn, worker: worker, active: false}
-	c.Debugf("%v total active connections %v\n", s.logPrefix, len(s.conns))
+	c.Tracef("%v total active connections %v\n", s.logPrefix, len(s.conns))
 	return nil
 }
 
@@ -309,7 +309,7 @@ func (s *Server) handleClose() {
 
 // start a connection worker to read mutation message for a subset of vbuckets.
 func (s *Server) startWorker(raddr string) {
-	c.Infof("%v starting worker for connection %q\n", s.logPrefix, raddr)
+	c.Tracef("%v starting worker for connection %q\n", s.logPrefix, raddr)
 	nc := s.conns[raddr]
 	go doReceive(s.logPrefix, nc, s.maxPayload, s.readDeadline, s.appch, s.reqch)
 	nc.active = true
@@ -483,7 +483,7 @@ loop:
 			msg.cmd, msg.args = serverCmdVbmap, []interface{}{vbmap}
 			reqch <- []interface{}{msg}
 			format := "%v worker %q exit: `serverCmdVbmap`\n"
-			c.Infof(format, prefix, msg.raddr)
+			c.Tracef(format, prefix, msg.raddr)
 			break loop
 
 		} else if vbs, ok := payload.([]*protobuf.VbKeyVersions); ok {
@@ -495,7 +495,7 @@ loop:
 					msg.args = []interface{}{started, finished}
 					reqch <- []interface{}{msg}
 					format := "%v worker %q exit: serverCmdVbcontrol {%v,%v}\n"
-					c.Infof(format, prefix, msg.raddr, len(started), len(finished))
+					c.Tracef(format, prefix, msg.raddr, len(started), len(finished))
 					break loop
 				}
 

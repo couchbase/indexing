@@ -351,7 +351,7 @@ loop:
 					c.Errorf("%v unexpected %T for %v\n", feed.logPrefix, v, v)
 
 				} else if ok {
-					c.Infof("%v back channel flush %v\n", feed.logPrefix, v.Repr())
+					c.Debugf("%v back channel flush %v\n", feed.logPrefix, v.Repr())
 					reqTs = reqTs.FilterByVbuckets([]uint16{v.vbno})
 					feed.reqTss[v.bucket] = reqTs
 
@@ -366,7 +366,7 @@ loop:
 				}
 
 			} else if v, ok := msg[0].(*controlStreamEnd); ok {
-				c.Infof("%v back channel flush %v\n", feed.logPrefix, v.Repr())
+				c.Debugf("%v back channel flush %v\n", feed.logPrefix, v.Repr())
 				reqTs := feed.reqTss[v.bucket]
 				reqTs = reqTs.FilterByVbuckets([]uint16{v.vbno})
 				feed.reqTss[v.bucket] = reqTs
@@ -383,7 +383,7 @@ loop:
 				actTs, ok := feed.actTss[v.bucket]
 				if ok && actTs != nil && actTs.Len() == 0 { // bucket is done
 					prefix := feed.logPrefix
-					c.Infof("%v self deleting bucket %v\n", prefix, v.bucket)
+					c.Debugf("%v self deleting bucket %v\n", prefix, v.bucket)
 					feed.cleanupBucket(v.bucket)
 				}
 
@@ -1186,7 +1186,7 @@ loop:
 	for {
 		select {
 		case msg := <-feed.backch:
-			c.Infof("%v back channel %T\n", feed.logPrefix, msg[0])
+			c.Debugf("%v back channel %T\n", feed.logPrefix, msg[0])
 			switch callb(msg[0]) {
 			case "skip":
 				msgs = append(msgs, msg)

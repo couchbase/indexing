@@ -224,7 +224,7 @@ func (kvdata *KVData) scatterMutation(
 	switch m.Opcode {
 	case mcd.UPR_STREAMREQ:
 		if m.Status == mcd.ROLLBACK {
-			c.Infof("%v StreamRequest ROLLBACK: %v\n", kvdata.logPrefix, m)
+			c.Tracef("%v StreamRequest ROLLBACK: %v\n", kvdata.logPrefix, m)
 
 		} else if m.Status != mcd.SUCCESS {
 			format := "%v StreamRequest Status: %s, %v\n"
@@ -238,7 +238,7 @@ func (kvdata *KVData) scatterMutation(
 			panic(err)
 
 		} else {
-			c.Debugf("%v StreamRequest {%v}\n", kvdata.logPrefix, vbno)
+			c.Tracef("%v StreamRequest {%v}\n", kvdata.logPrefix, vbno)
 			topic, bucket := kvdata.topic, kvdata.bucket
 			m.Seqno, _ = ts.SeqnoFor(vbno)
 			config, cluster := kvdata.feed.config, kvdata.feed.cluster
@@ -259,7 +259,7 @@ func (kvdata *KVData) scatterMutation(
 			c.Errorf(format, kvdata.logPrefix, m.Status, m)
 
 		} else {
-			c.Debugf("%v StreamEnd {%v}\n", kvdata.logPrefix, vbno)
+			c.Tracef("%v StreamEnd {%v}\n", kvdata.logPrefix, vbno)
 			vr.Event(m)
 			delete(kvdata.vrs, vbno)
 		}
