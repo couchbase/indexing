@@ -29,7 +29,7 @@ Request-Body: {
         "name":      <string>,  // name of the index
         "bucket":    <string>,  // name of the bucket for which index created
         "defnID":    <string>,  // empty, will be assigned by server
-        "using":     "lsm",
+        "using":     "gsi",
         "exprType":  "N1QL",
         "partnExpr": <string>,   // expression string in N1QL format
         "secExprs":  []<string>, // list of expressions in N1QL format

@@ -48,50 +48,50 @@ var twoiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 }
 
 // contains all index loaded via 2i cluster.
-type lsmKeyspace struct {
+type gsiKeyspace struct {
 	mu        sync.RWMutex
 	namespace string // aka pool
 	keyspace  string // aka bucket
 	indexes   map[string]*secondaryIndex
 }
 
-// NewLSMIndexer manage new set of indexes under namespace->keyspace,
+// NewGSIIndexer manage new set of indexes under namespace->keyspace,
 // also called as, pool->bucket.
-func NewLSMIndexer(namespace, keyspace string) datastore.Indexer {
-	lsm := &lsmKeyspace{
+func NewGSIIndexer(namespace, keyspace string) datastore.Indexer {
+	gsi := &gsiKeyspace{
 		namespace: namespace,
 		keyspace:  keyspace,
 		indexes:   make(map[string]*secondaryIndex),
 	}
-	lsm.Refresh()
-	return lsm
+	gsi.Refresh()
+	return gsi
 }
 
 // KeyspaceId implements datastore.Indexer{} interface.
 // Id of the keyspace to which this indexer belongs
-func (lsm *lsmKeyspace) KeyspaceId() string {
-	return lsm.keyspace
+func (gsi *gsiKeyspace) KeyspaceId() string {
+	return gsi.keyspace
 }
 
 // Name implements datastore.Indexer{} interface. Unique within a Keyspace.
-func (lsm *lsmKeyspace) Name() datastore.IndexType {
-	return datastore.LSM
+func (gsi *gsiKeyspace) Name() datastore.IndexType {
+	return datastore.GSI
 }
 
 // IndexIds implements datastore.Indexer{} interface. Ids of the indexes
 // defined on this keyspace.
-func (lsm *lsmKeyspace) IndexIds() ([]string, errors.Error) {
-	return lsm.IndexNames()
+func (gsi *gsiKeyspace) IndexIds() ([]string, errors.Error) {
+	return gsi.IndexNames()
 }
 
 // IndexNames implements datastore.Indexer{} interface. Names of the
 // indexes defined on this keyspace.
-func (lsm *lsmKeyspace) IndexNames() ([]string, errors.Error) {
-	lsm.mu.RLock()
-	defer lsm.mu.RUnlock()
+func (gsi *gsiKeyspace) IndexNames() ([]string, errors.Error) {
+	gsi.mu.RLock()
+	defer gsi.mu.RUnlock()
 
-	names := make([]string, 0, len(lsm.indexes))
-	for name := range lsm.indexes {
+	names := make([]string, 0, len(gsi.indexes))
+	for name := range gsi.indexes {
 		names = append(names, name)
 	}
 	return names, nil
@@ -99,17 +99,17 @@ func (lsm *lsmKeyspace) IndexNames() ([]string, errors.Error) {
 
 // IndexById implements datastore.Indexer{} interface. Find an index on this
 // keyspace using the index's id.
-func (lsm *lsmKeyspace) IndexById(id string) (datastore.Index, errors.Error) {
-	return lsm.IndexByName(id)
+func (gsi *gsiKeyspace) IndexById(id string) (datastore.Index, errors.Error) {
+	return gsi.IndexByName(id)
 }
 
 // IndexByName implements datastore.Indexer{} interface. Find an index on
 // this keyspace using the index's name.
-func (lsm *lsmKeyspace) IndexByName(name string) (datastore.Index, errors.Error) {
-	lsm.mu.RLock()
-	defer lsm.mu.RUnlock()
+func (gsi *gsiKeyspace) IndexByName(name string) (datastore.Index, errors.Error) {
+	gsi.mu.RLock()
+	defer gsi.mu.RUnlock()
 
-	if index, ok := lsm.indexes[name]; ok {
+	if index, ok := gsi.indexes[name]; ok {
 		return index, nil
 	}
 	err := errors.NewError(nil, fmt.Sprintf("2i index %v not found.", name))
@@ -118,12 +118,12 @@ func (lsm *lsmKeyspace) IndexByName(name string) (datastore.Index, errors.Error)
 
 // Indexes implements datastore.Indexer{} interface. Returns all the
 // indexes defined on this keyspace.
-func (lsm *lsmKeyspace) Indexes() ([]datastore.Index, errors.Error) {
-	lsm.mu.RLock()
-	defer lsm.mu.RUnlock()
+func (gsi *gsiKeyspace) Indexes() ([]datastore.Index, errors.Error) {
+	gsi.mu.RLock()
+	defer gsi.mu.RUnlock()
 
-	indexes := make([]datastore.Index, 0, len(lsm.indexes))
-	for _, index := range lsm.indexes {
+	indexes := make([]datastore.Index, 0, len(gsi.indexes))
+	for _, index := range gsi.indexes {
 		indexes = append(indexes, index)
 	}
 	return indexes, nil
@@ -131,11 +131,11 @@ func (lsm *lsmKeyspace) Indexes() ([]datastore.Index, errors.Error) {
 
 // IndexByPrimary implements datastore.Indexer{} interface. Returns the
 // server-recommended primary index
-func (lsm *lsmKeyspace) IndexByPrimary() (datastore.PrimaryIndex, errors.Error) {
-	lsm.mu.RLock()
-	defer lsm.mu.RUnlock()
+func (gsi *gsiKeyspace) IndexByPrimary() (datastore.PrimaryIndex, errors.Error) {
+	gsi.mu.RLock()
+	defer gsi.mu.RUnlock()
 
-	if primary, ok := lsm.indexes[PRIMARY_INDEX]; ok {
+	if primary, ok := gsi.indexes[PRIMARY_INDEX]; ok {
 		return primary, nil
 	}
 	msg := fmt.Sprintf("2i primary-index %v not found.", PRIMARY_INDEX)
@@ -144,12 +144,12 @@ func (lsm *lsmKeyspace) IndexByPrimary() (datastore.PrimaryIndex, errors.Error) 
 
 // CreatePrimaryIndex implements datastore.Indexer{} interface. Create or
 // return a primary index on this keyspace
-func (lsm *lsmKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Error) {
+func (gsi *gsiKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Error) {
 	client := qclient.NewClusterClient(ClusterManagerAddr)
 	// update meta-data.
 	info, err := client.CreateIndex(
-		PRIMARY_INDEX, lsm.keyspace, /*bucket-name*/
-		string(datastore.LSM),                     /*using*/
+		PRIMARY_INDEX, gsi.keyspace, /*bucket-name*/
+		string(datastore.GSI),                     /*using*/
 		"N1QL" /*exprType*/, "" /*partnExpr*/, "", /*whereExpr*/
 		nil /*secExprs*/, true /*isPrimary*/)
 	if err != nil {
@@ -159,11 +159,11 @@ func (lsm *lsmKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Err
 	}
 	// TODO: make another call to cluster-manager for topology information,
 	// so that info will contain the nodes that host this index.
-	index, e := lsm.newPrimaryIndex(info)
+	index, e := gsi.newPrimaryIndex(info)
 	if e == nil {
-		lsm.mu.Lock()
-		defer lsm.mu.Unlock()
-		lsm.indexes[PRIMARY_INDEX] = index
+		gsi.mu.Lock()
+		defer gsi.mu.Unlock()
+		gsi.indexes[PRIMARY_INDEX] = index
 		return index, nil
 	}
 	return nil, e
@@ -171,7 +171,7 @@ func (lsm *lsmKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Err
 
 // CreateIndex implements datastore.Indexer{} interface. Create a secondary
 // index on this keyspace
-func (lsm *lsmKeyspace) CreateIndex(
+func (gsi *gsiKeyspace) CreateIndex(
 	name string, seekKey, rangeKey expression.Expressions,
 	where expression.Expression) (datastore.Index, errors.Error) {
 
@@ -193,7 +193,7 @@ func (lsm *lsmKeyspace) CreateIndex(
 
 	client := qclient.NewClusterClient(ClusterManagerAddr)
 	info, err := client.CreateIndex(
-		name, lsm.keyspace /*bucketn*/, string(datastore.LSM), /*using*/
+		name, gsi.keyspace /*bucketn*/, string(datastore.GSI), /*using*/
 		"N1QL" /*exprType*/, partnStr, whereStr, secStrs, false /*isPrimary*/)
 	if err != nil {
 		return nil, errors.NewError(nil, err.Error())
@@ -202,18 +202,18 @@ func (lsm *lsmKeyspace) CreateIndex(
 	}
 	// TODO: make another call to cluster-manager for topology information.
 	// so that info will contain the nodes that host this index.
-	index, e := lsm.newIndex(info)
+	index, e := gsi.newIndex(info)
 	if e == nil {
-		lsm.mu.Lock()
-		defer lsm.mu.Unlock()
-		lsm.indexes[name] = index
+		gsi.mu.Lock()
+		defer gsi.mu.Unlock()
+		gsi.indexes[name] = index
 		return index, nil
 	}
 	return nil, e
 }
 
 // Refresh and remember them as part of keyspace.indexes.
-func (lsm *lsmKeyspace) Refresh() errors.Error {
+func (gsi *gsiKeyspace) Refresh() errors.Error {
 	client := qclient.NewClusterClient(ClusterManagerAddr)
 	infos, err := client.List()
 	if err != nil {
@@ -224,41 +224,41 @@ func (lsm *lsmKeyspace) Refresh() errors.Error {
 
 	indexes := make(map[string]*secondaryIndex)
 	for _, info := range infos {
-		if info.Bucket != lsm.keyspace /*bucket*/ {
+		if info.Bucket != gsi.keyspace /*bucket*/ {
 			continue
 		}
 		if info.Name == "#primary" {
-			index, err := lsm.newPrimaryIndex(&info)
+			index, err := gsi.newPrimaryIndex(&info)
 			if err != nil {
 				return err
 			}
 			indexes[index.Name()] = index
 
 		} else {
-			index, err := lsm.newIndex(&info)
+			index, err := gsi.newIndex(&info)
 			if err != nil {
 				return err
 			}
 			indexes[index.Name()] = index
 		}
 	}
-	lsm.mu.Lock()
-	defer lsm.mu.Unlock()
-	lsm.indexes = indexes // forget the old map!
+	gsi.mu.Lock()
+	defer gsi.mu.Unlock()
+	gsi.indexes = indexes // forget the old map!
 	return nil
 }
 
 // newPrimaryIndex will create a new instance of primary index.
-func (lsm *lsmKeyspace) newPrimaryIndex(
+func (gsi *gsiKeyspace) newPrimaryIndex(
 	info *qclient.IndexInfo) (*secondaryIndex, errors.Error) {
 
 	index := &secondaryIndex{
-		lsm:       lsm,
+		gsi:       gsi,
 		name:      PRIMARY_INDEX,
 		defnID:    info.DefnID,
 		bucketn:   info.Bucket,
 		isPrimary: true,
-		using:     datastore.LSM,
+		using:     datastore.GSI,
 		// remote node hosting this index.
 		hosts: nil, // to becomputed by coordinator
 	}
@@ -268,9 +268,9 @@ func (lsm *lsmKeyspace) newPrimaryIndex(
 }
 
 // new 2i index.
-func (lsm *lsmKeyspace) newIndex(info *qclient.IndexInfo) (*secondaryIndex, errors.Error) {
+func (gsi *gsiKeyspace) newIndex(info *qclient.IndexInfo) (*secondaryIndex, errors.Error) {
 	index := &secondaryIndex{
-		lsm:       lsm,
+		gsi:       gsi,
 		bucketn:   info.Bucket,
 		name:      info.Name,
 		defnID:    info.DefnID,
@@ -290,7 +290,7 @@ func (lsm *lsmKeyspace) newIndex(info *qclient.IndexInfo) (*secondaryIndex, erro
 // secondaryIndex to hold meta data information, network-address for
 // a single secondary-index.
 type secondaryIndex struct {
-	lsm       *lsmKeyspace // back-reference to container.
+	gsi       *gsiKeyspace // back-reference to container.
 	bucketn   string
 	name      string // name of the index
 	defnID    string
@@ -426,9 +426,9 @@ func (si *secondaryIndex) Drop() errors.Error {
 	if err != nil {
 		return errors.NewError(nil, err.Error())
 	}
-	si.lsm.mu.Lock()
-	defer si.lsm.mu.Unlock()
-	delete(si.lsm.indexes, si.Name())
+	si.gsi.mu.Lock()
+	defer si.gsi.mu.Unlock()
+	delete(si.gsi.indexes, si.Name())
 	// TODO: sync with cluster-manager ?
 	return nil
 }

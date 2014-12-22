@@ -36,7 +36,7 @@ var (
 )
 
 const (
-	using    = "lsm"
+	using    = "gsi"
 	exprType = "N1QL"
 	partnExp = ""
 	where    = ""
