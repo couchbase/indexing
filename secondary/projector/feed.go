@@ -964,7 +964,12 @@ func (feed *Feed) bucketDetails(
 			feed.errorf("bucket.FailoverLog empty", bucketn, nil)
 			return nil, ErrorInvalidVbucket
 		}
-		vbuuids[i] = flog[len(flog)-1][0]
+		latestVbuuid, _, err := flog.Latest()
+		if err != nil {
+			feed.errorf("bucket.FailoverLog invalid log", bucketn, nil)
+			return nil, err
+		}
+		vbuuids[i] = latestVbuuid
 	}
 
 	return vbuuids, nil

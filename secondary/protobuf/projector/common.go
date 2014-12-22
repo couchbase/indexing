@@ -338,8 +338,8 @@ func (ts *TsVbuuid) ComputeFailoverTs(flogs couchbase.FailoverLog) *TsVbuuid {
 // InitialRestartTs for a subset of vbuckets.
 func (ts *TsVbuuid) InitialRestartTs(flogs couchbase.FailoverLog) *TsVbuuid {
 	for vbno, flog := range flogs {
-		x := flog[len(flog)-1]
-		ts.Append(vbno, 0, x[0], 0, 0)
+		vbuuid, _, _ := flog.Latest()
+		ts.Append(vbno, 0, vbuuid, 0, 0)
 	}
 	return ts
 }
@@ -350,10 +350,10 @@ func (ts *TsVbuuid) ComputeRestartTs(flogs couchbase.FailoverLog) *TsVbuuid {
 	restartTs := NewTsVbuuid(ts.GetPool(), ts.GetBucket(), cap(ts.Vbnos))
 	i := 0
 	for vbno, flog := range flogs {
-		x := flog[len(flog)-1]
+		vbuuid, _, _ := flog.Latest()
 		s := ts.Snapshots[i]
 		start, end := s.GetStart(), s.GetEnd()
-		restartTs.Append(vbno, start, x[0], start, end)
+		restartTs.Append(vbno, start, vbuuid, start, end)
 		i++
 	}
 	return restartTs

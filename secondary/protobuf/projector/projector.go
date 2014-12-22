@@ -202,7 +202,7 @@ func (resp *FailoverLogResponse) LatestBranch() map[uint16]uint64 {
 	vbuuids := make(map[uint16]uint64)
 	for _, flog := range resp.GetLogs() {
 		vbno := uint16(flog.GetVbno())
-		vbuuids[vbno] = flog.Vbuuids[len(flog.Vbuuids)-1]
+		vbuuids[vbno] = flog.Vbuuids[0]
 	}
 	return vbuuids
 }
