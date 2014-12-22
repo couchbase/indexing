@@ -17,7 +17,7 @@ const MAX_NUM_VBUCKETS = 1024
 const WORKER_MSG_QUEUE_LEN = 100000
 
 // Default cluster address
-const DEFAULT_CLUSTER_ENDPOINT = "localhost:9000"
+const DEFAULT_CLUSTER_ENDPOINT = "127.0.0.1:9000"
 
 const LOCALHOST = "127.0.0.1"
 
