@@ -65,7 +65,6 @@ type indexer struct {
 	storageMgrCmdCh    MsgChannel //channel to send commands to storage manager
 	tkCmdCh            MsgChannel //channel to send commands to timekeeper
 	adminMgrCmdCh      MsgChannel //channel to send commands to admin port manager
-	compactMgrCmdCh    MsgChannel //channel to send commands to compaction manager
 	clustMgrAgentCmdCh MsgChannel //channel to send messages to index coordinator
 	kvSenderCmdCh      MsgChannel //channel to send messages to kv sender
 	cbqBridgeCmdCh     MsgChannel //channel to send message to cbq sender
@@ -73,15 +72,14 @@ type indexer struct {
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
 
-	tk            Timekeeper        //handle to timekeeper
-	storageMgr    StorageManager    //handle to storage manager
-	compactMgr    CompactionManager //handle to compaction manager
-	mutMgr        MutationManager   //handle to mutation manager
-	adminMgr      AdminManager      //handle to admin port manager
-	clustMgrAgent ClustMgrAgent     //handle to ClustMgrAgent
-	kvSender      KVSender          //handle to KVSender
-	cbqBridge     CbqBridge         //handle to CbqBridge
-	scanCoord     ScanCoordinator   //handle to ScanCoordinator
+	tk            Timekeeper      //handle to timekeeper
+	storageMgr    StorageManager  //handle to storage manager
+	mutMgr        MutationManager //handle to mutation manager
+	adminMgr      AdminManager    //handle to admin port manager
+	clustMgrAgent ClustMgrAgent   //handle to ClustMgrAgent
+	kvSender      KVSender        //handle to KVSender
+	cbqBridge     CbqBridge       //handle to CbqBridge
+	scanCoord     ScanCoordinator //handle to ScanCoordinator
 	config        common.Config
 }
 
@@ -98,7 +96,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		storageMgrCmdCh:    make(MsgChannel),
 		tkCmdCh:            make(MsgChannel),
 		adminMgrCmdCh:      make(MsgChannel),
-		compactMgrCmdCh:    make(MsgChannel),
 		clustMgrAgentCmdCh: make(MsgChannel),
 		kvSenderCmdCh:      make(MsgChannel),
 		cbqBridgeCmdCh:     make(MsgChannel),
@@ -198,12 +195,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.state = ACTIVE
 	common.Infof("Indexer::NewIndexer Status ACTIVE")
-
-	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
-	if res.GetMsgType() != MSG_SUCCESS {
-		common.Errorf("Indexer::NewCompactionmanager Init Error", res)
-		return nil, res
-	}
 
 	//start the main indexer loop
 	idx.run()
@@ -385,9 +376,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_INITIATE_RECOVERY:
 		idx.handleInitRecovery(msg)
 
-	case STORAGE_INDEX_SNAP_REQUEST,
-		STORAGE_INDEX_STORAGE_STATS,
-		STORAGE_INDEX_COMPACT:
+	case STORAGE_INDEX_SNAP_REQUEST:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
@@ -655,6 +644,11 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 
 		//close all the slices
 		for _, slice := range sc.GetAllSlices() {
+			//snapContainer := slice.GetSnapshotContainer()
+			//discard all the snapshots for this slice
+			// snapContainer.RemoveAll()
+
+			//close the slice
 			slice.Close()
 
 			//wipe the physical files
@@ -927,8 +921,8 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			indexInst.InstId, partnInst)
 
 		//add a single slice per partition for now
-		path := path.Join(idx.config["storage_dir"].String(), IndexPath(&indexInst, SliceId(0)))
-		if slice, err := NewForestDBSlice(path,
+		filepath := path.Join(idx.config["storage_dir"].String(), IndexFilename(&indexInst, SliceId(0)))
+		if slice, err := NewForestDBSlice(filepath,
 			0, indexInst.Defn.DefnId, indexInst.InstId); err == nil {
 			partnInst.Sc.AddSlice(0, slice)
 			common.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
@@ -1193,8 +1187,11 @@ func (idx *indexer) handleMergeStream(msg Message) {
 	case common.INIT_STREAM:
 		idx.handleMergeInitStream(msg)
 
+	case common.CATCHUP_STREAM:
+		idx.handleMergeCatchupStream(msg)
+
 	default:
-		common.Errorf("Indexer::handleMergeStream \n\tOnly INIT_STREAM can be merged "+
+		common.Errorf("Indexer::handleMergeStream \n\tOnly INIT_STREAM/CATCHUP_STREAM can be merged "+
 			"to MAINT_STREAM. Found Stream: %v.", streamId)
 		return
 	}
@@ -1307,7 +1304,7 @@ func (idx *indexer) getCurrentKVTs(cluster, bucket string) Timestamp {
 		//for all nodes in cluster
 		for _, nodestat := range stats {
 			//for all vbuckets
-			for i := 0; i < numVbuckets; i++ {
+			for i := 1; i <= numVbuckets; i++ {
 				vbkey := "vb_" + strconv.Itoa(i) + ":high_seqno"
 				if highseqno, ok := nodestat[vbkey]; ok {
 					if s, err := strconv.Atoi(highseqno); err == nil {
@@ -1450,18 +1447,36 @@ func (idx *indexer) handlePrepareRecovery(msg Message) {
 
 	var terminateStreamIds []common.StreamId
 
-	switch idx.state {
+	switch streamId {
 
-	case ACTIVE, RECOVERY:
+	case common.MAINT_STREAM:
 
-		idx.state = RECOVERY
+		switch idx.state {
+
+		case ACTIVE:
+
+			idx.state = RECOVERY
+			terminateStreamIds = append(terminateStreamIds, common.MAINT_STREAM)
+			common.Infof("Indexer::handlePrepareRecovery Status RECOVERY")
+
+		case RECOVERY:
+
+			terminateStreamIds = append(terminateStreamIds, common.CATCHUP_STREAM)
+			terminateStreamIds = append(terminateStreamIds, common.MAINT_STREAM)
+			common.Infof("Indexer::handlePrepareRecovery Restart RECOVERY")
+
+		default:
+
+			common.Errorf("Indexer::handlePrepareRecovery \n\tInvalid Indexer State For Prepare Recovery. "+
+				"State %v StreamId %v", idx.state, streamId)
+			return
+		}
+
+	case common.INIT_STREAM:
 		terminateStreamIds = append(terminateStreamIds, streamId)
-		common.Infof("Indexer::handlePrepareRecovery Status RECOVERY")
 
 	default:
-
-		common.Errorf("Indexer::handlePrepareRecovery \n\tInvalid Indexer State For Prepare Recovery. "+
-			"State %v StreamId %v", idx.state, streamId)
+		common.Errorf("Indexer::handlePrepareRecovery \n\tRecovery Not Supported For StreamId %v", streamId)
 		return
 	}
 
@@ -1504,13 +1519,17 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 
 	case common.MAINT_STREAM:
 
+		idx.bucketsInCatchup = make(map[string]bool)
+
 		for _, indexInst := range idx.indexInstMap {
 			if indexInst.State == common.INDEX_STATE_ACTIVE ||
 				indexInst.State == common.INDEX_STATE_CATCHUP {
 				indexList = append(indexList, indexInst)
+				idx.bucketsInCatchup[indexInst.Defn.Bucket] = true
 			}
 		}
 		restartStreamIds = append(restartStreamIds, common.MAINT_STREAM)
+		restartStreamIds = append(restartStreamIds, common.CATCHUP_STREAM)
 
 	case common.INIT_STREAM:
 
@@ -1582,7 +1601,7 @@ func (idx *indexer) processRollback(msg Message) {
 
 		switch streamId {
 
-		case common.MAINT_STREAM, common.INIT_STREAM:
+		case common.CATCHUP_STREAM, common.INIT_STREAM:
 
 			//send to storage manager to rollback
 			idx.storageMgrCmdCh <- msg
@@ -1603,11 +1622,22 @@ func (idx *indexer) processRollback(msg Message) {
 				common.Errorf("Indexer::processRollback Error during Rollback %v", res)
 			}
 
-		default:
-			common.Errorf("Indexer::processRollback Invalid Stream %v For Rollback", streamId)
-			return
-		}
+		case common.MAINT_STREAM:
 
+			//send the rollbackTs in RestartVbuckets message
+			rollbackTs := msg.(*MsgRollback).GetRollbackTs()
+
+			//send to kv sender to restart vbucket
+			idx.kvSenderCmdCh <- &MsgRestartVbuckets{streamId: streamId,
+				restartTs: rollbackTs}
+			msg = <-idx.kvSenderCmdCh
+
+			if msg.GetMsgType() == MSG_SUCCESS {
+				return
+			}
+			//TODO right now this is infinite try, till KV agress to start the
+			//stream
+		}
 	}
 
 }
@@ -1707,6 +1737,8 @@ func (idx *indexer) bootstrap() error {
 	if err := idx.initFromPersistedState(); err != nil {
 		return err
 	}
+
+	idx.recoverSnapshots()
 
 	//Start Storage Manager
 	var res Message
@@ -1834,6 +1866,38 @@ func (idx *indexer) initFromPersistedState() error {
 
 }
 
+func (idx *indexer) recoverSnapshots() {
+
+	//for every index managed by this indexer
+	for idxInstId, partnMap := range idx.indexPartnMap {
+
+		//for all partitions managed by this indexer
+		for partnId, partnInst := range partnMap {
+			sc := partnInst.Sc
+
+			//recover snapshot for slice
+			for _, slice := range sc.GetAllSlices() {
+
+				snapContainer := slice.GetSnapshotContainer()
+
+				//TODO right now we recover the last snapshot, all
+				//snapshots need to be recovered
+				if lastSnapshot, err := slice.Snapshot(); err == nil {
+					lastSnapshot.Open()
+					snapContainer.Add(lastSnapshot)
+					common.Debugf("StorageMgr::recoverSnapshots \n\tAdded New Snapshot Index: %v "+
+						"PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
+
+				} else {
+					common.Errorf("StorageMgr::recoverSnapshots \n\tError Recovering Snapshot "+
+						"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
+						slice.Id(), err)
+				}
+			}
+		}
+	}
+}
+
 func (idx *indexer) closeAllStreams() {
 
 	for i := 0; i < int(common.MAX_STREAMS); i++ {
@@ -1938,14 +2002,7 @@ func (idx *indexer) makeRestartTs() map[string]*common.TsVbuuid {
 		//there is only one slice for now
 		slice := sc.GetSliceById(0)
 
-		infos, err := slice.GetSnapshots()
-		// TODO: Proper error handling if possible
-		if err != nil {
-			panic("Unable read snapinfo -" + err.Error())
-		}
-
-		s := NewSnapshotInfoContainer(infos)
-		ts := s.GetLatest().Timestamp()
+		ts := slice.Timestamp()
 
 		if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
 			if !ts.AsRecent(oldTs) {
