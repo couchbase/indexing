@@ -1304,7 +1304,7 @@ func (idx *indexer) getCurrentKVTs(cluster, bucket string) Timestamp {
 		//for all nodes in cluster
 		for _, nodestat := range stats {
 			//for all vbuckets
-			for i := 1; i <= numVbuckets; i++ {
+			for i := 0; i < numVbuckets; i++ {
 				vbkey := "vb_" + strconv.Itoa(i) + ":high_seqno"
 				if highseqno, ok := nodestat[vbkey]; ok {
 					if s, err := strconv.Atoi(highseqno); err == nil {
