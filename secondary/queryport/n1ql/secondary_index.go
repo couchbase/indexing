@@ -55,8 +55,8 @@ type lsmKeyspace struct {
 	indexes   map[string]*secondaryIndex
 }
 
-// manage new set of indexes under namespace->keyspace, also called as,
-// pool->bucket.
+// NewLSMIndexer manage new set of indexes under namespace->keyspace,
+// also called as, pool->bucket.
 func NewLSMIndexer(namespace, keyspace string) datastore.Indexer {
 	lsm := &lsmKeyspace{
 		namespace: namespace,
@@ -401,6 +401,19 @@ func (si *secondaryIndex) Statistics(
 		return nil, errors.NewError(nil, e.Error())
 	}
 	return newStatistics(pstats), nil
+}
+
+// Count implement Index{} interface.
+func (si *secondaryIndex) Count() (int64, errors.Error) {
+	client, err := si.getHostClient()
+	if err != nil {
+		return 0, err
+	}
+	count, e := client.Count(si.name, si.bucketn)
+	if e != nil {
+		return 0, errors.NewError(nil, e.Error())
+	}
+	return count, nil
 }
 
 // Drop implement Index{} interface.

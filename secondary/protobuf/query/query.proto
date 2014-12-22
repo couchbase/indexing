@@ -10,12 +10,14 @@ message Error {
 message QueryPayload {
     required uint32             version           = 1;
     optional StatisticsRequest  statisticsRequest = 2;
-    optional ScanRequest        scanRequest       = 3;
-    optional ScanAllRequest     scanAllRequest    = 4;
-    optional EndStreamRequest   endStream         = 5;
-    optional StatisticsResponse statistics        = 6;
-    optional ResponseStream     stream            = 7;
-    optional StreamEndResponse  streamEnd         = 8;
+    optional StatisticsResponse statistics        = 3;
+    optional ScanRequest        scanRequest       = 4;
+    optional ScanAllRequest     scanAllRequest    = 5;
+    optional ResponseStream     stream            = 6;
+    optional CountRequest       countRequest      = 7;
+    optional CountResponse      countResponse     = 8;
+    optional EndStreamRequest   endStream         = 9;
+    optional StreamEndResponse  streamEnd         = 10;
 }
 
 // Get Index statistics. StatisticsResponse is returned back from indexer.
@@ -60,6 +62,18 @@ message ResponseStream {
 // Last response packet sent by server to end query results.
 message StreamEndResponse {
     optional Error err = 1;
+}
+
+// Count request to indexer.
+message CountRequest {
+    required string indexName = 1;
+    required string bucket    = 2;
+}
+
+// total number of entries in index.
+message CountResponse {
+    required int64 count = 1;
+    optional Error err   = 2;
 }
 
 // Query messages / arguments for indexer

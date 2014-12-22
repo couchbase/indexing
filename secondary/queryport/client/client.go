@@ -312,6 +312,24 @@ func (c *Client) ScanAll(
 	return nil
 }
 
+// Count of all entries in index.
+func (c *Client) Count(index, bucket string) (int64, error) {
+	req := &protobuf.CountRequest{
+		Bucket:    proto.String(bucket),
+		IndexName: proto.String(index),
+	}
+	resp, err := c.doRequestResponse(req)
+	if err != nil {
+		return 0, err
+	}
+	countResp := resp.(*protobuf.CountResponse)
+	if countResp.GetErr() != nil {
+		err = errors.New(countResp.GetErr().GetError())
+		return 0, err
+	}
+	return countResp.GetCount(), nil
+}
+
 func (c *Client) doRequestResponse(req interface{}) (interface{}, error) {
 	connectn, err := c.pool.Get()
 	if err != nil {

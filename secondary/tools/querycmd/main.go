@@ -44,7 +44,7 @@ const (
 
 func parseArgs() {
 	flag.StringVar(&server, "server", "localhost:9000", "Cluster server address")
-	flag.StringVar(&opType, "type", "scanAll", "Index command (scan|stats|scanAll|create|drop|list)")
+	flag.StringVar(&opType, "type", "scanAll", "Index command (scan|stats|scanAll|count|create|drop|list)")
 	flag.StringVar(&indexName, "index", "", "Index name")
 	flag.StringVar(&bucket, "bucket", "default", "Bucket name")
 	flag.StringVar(&low, "low", "[]", "Range: [low]")
@@ -144,6 +144,15 @@ func main() {
 		for _, info := range infos {
 			printIndexInfo(info)
 		}
+
+	case "count":
+		config := c.SystemConfig.SectionConfig("queryport.client.", true)
+		client := queryclient.NewClient(queryclient.Remoteaddr(scan_addr), config)
+		count, err := client.Count(indexName, bucket)
+		if err != nil {
+			fmt.Println("Error occured:", err)
+		}
+		fmt.Println("Index %q/%q has %v entries:", bucket, indexName, count)
 
 	default:
 		if indexName == "" {
