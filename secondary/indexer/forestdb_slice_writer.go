@@ -73,6 +73,7 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 	}
 
 	slice.path = path
+	slice.currfile = filepath
 	slice.config = config
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefnId
@@ -102,8 +103,9 @@ type kv struct {
 
 //fdbSlice represents a forestdb slice
 type fdbSlice struct {
-	path string
-	id   SliceId //slice id
+	path     string
+	currfile string
+	id       SliceId //slice id
 
 	refCount int
 	lock     sync.RWMutex
@@ -612,14 +614,32 @@ func (fdb *fdbSlice) Compact() error {
 	fdb.IncrRef()
 	defer fdb.DecrRef()
 
-	oldpath := newFdbFile(fdb.path, false)
 	newpath := newFdbFile(fdb.path, true)
 	err := fdb.dbfile.Compact(newpath)
 	if err != nil {
 		return err
 	}
-	err = os.Remove(oldpath)
+
+	err = os.Remove(fdb.currfile)
+	fdb.currfile = newpath
 	return err
+}
+
+func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
+	var sts StorageStatistics
+	f, err := os.Open(fdb.currfile)
+	if err != nil {
+		return sts, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return sts, err
+	}
+
+	sts.DataSize = int64(fdb.dbfile.EstimateSpaceUsed())
+	sts.DiskSize = fi.Size()
+
+	return sts, nil
 }
 
 func (fdb *fdbSlice) String() string {

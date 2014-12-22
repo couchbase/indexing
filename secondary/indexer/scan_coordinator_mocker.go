@@ -207,6 +207,10 @@ func (s *mockSlice) Compact() error {
 	return nil
 }
 
+func (s *mockSlice) Statistics() (StorageStatistics, error) {
+	return StorageStatistics{}, nil
+}
+
 type mockSnapshot struct {
 	id        SliceId
 	indInstid c.IndexInstId

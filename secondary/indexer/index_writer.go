@@ -13,6 +13,11 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 )
 
+type StorageStatistics struct {
+	DataSize int64
+	DiskSize int64
+}
+
 type IndexWriter interface {
 
 	//Persist a key/value pair
@@ -35,6 +40,9 @@ type IndexWriter interface {
 
 	//Rollback to initial state
 	RollbackToZero() error
+
+	// Statistics used for compaction trigger
+	Statistics() (StorageStatistics, error)
 
 	// Perform file compaction
 	Compact() error

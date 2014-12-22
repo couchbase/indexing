@@ -58,6 +58,7 @@ const (
 	//STORAGE_MANAGER
 	STORAGE_MGR_SHUTDOWN
 	STORAGE_INDEX_SNAP_REQUEST
+	STORAGE_INDEX_STORAGE_STATS
 
 	//KVSender
 	KV_SENDER_SHUTDOWN
@@ -750,6 +751,18 @@ func (m *MsgIndexSnapRequest) GetIndexId() common.IndexInstId {
 	return m.idxInstId
 }
 
+type MsgIndexStorageStats struct {
+	respch chan []IndexStorageStats
+}
+
+func (m *MsgIndexStorageStats) GetMsgType() MsgType {
+	return STORAGE_INDEX_STORAGE_STATS
+}
+
+func (m *MsgIndexStorageStats) GetReplyChannel() chan []IndexStorageStats {
+	return m.respch
+}
+
 //Helper function to return string for message type
 
 func (m MsgType) String() string {
@@ -872,6 +885,8 @@ func (m MsgType) String() string {
 
 	case STORAGE_INDEX_SNAP_REQUEST:
 		return "STORAGE_INDEX_SNAP_REQUEST"
+	case STORAGE_INDEX_STORAGE_STATS:
+		return "STORAGE_INDEX_STORAGE_STATS"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

@@ -157,6 +157,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case STORAGE_INDEX_SNAP_REQUEST:
 		s.handleGetIndexSnapshot(cmd)
+
+	case STORAGE_INDEX_STORAGE_STATS:
+		s.handleGetIndexStorageStats(cmd)
 	}
 }
 
@@ -489,6 +492,46 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 			s.waitersMap[req.idxInstId] = []*snapshotWaiter{w}
 		}
 	}
+}
+
+func (s *storageMgr) handleGetIndexStorageStats(cmd Message) {
+	s.supvCmdch <- &MsgSuccess{}
+	req := cmd.(*MsgIndexStorageStats)
+	replych := req.GetReplyChannel()
+
+	var stats []IndexStorageStats
+	var err error
+	var sts StorageStatistics
+
+	for idxInstId, partnMap := range s.indexPartnMap {
+		var dataSz, diskSz int64
+	loop:
+		for _, partnInst := range partnMap {
+			for _, slice := range partnInst.Sc.GetAllSlices() {
+				sts, err = slice.Statistics()
+				if err != nil {
+					break loop
+				}
+
+				dataSz += sts.DataSize
+				diskSz += sts.DiskSize
+			}
+		}
+
+		if err == nil {
+			stat := IndexStorageStats{
+				InstId: idxInstId,
+				Stats: StorageStatistics{
+					DataSize: dataSz,
+					DiskSize: diskSz,
+				},
+			}
+
+			stats = append(stats, stat)
+		}
+	}
+
+	replych <- stats
 }
 
 // Update index-snapshot map using index partition map

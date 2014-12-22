@@ -130,3 +130,9 @@ func (m MutationSnapshot) CanProcess() bool {
 
 	return false
 }
+
+// Represents storage stats for an index instance
+type IndexStorageStats struct {
+	InstId common.IndexInstId
+	Stats  StorageStatistics
+}
