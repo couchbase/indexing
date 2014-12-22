@@ -22,7 +22,6 @@ var options struct {
 	coordEndpoint string   // co-ordinator endpoint
 	stat          string   // periodic timeout to print dataport statistics
 	timeout       string   // timeout for dataport to exit
-	maxVbno       int      // maximum number of vbuckets
 	projector     bool     // start projector, useful in debug mode.
 	debug         bool
 	trace         bool
@@ -43,8 +42,6 @@ func argParse() []string {
 		"periodic timeout to print dataport statistics")
 	flag.StringVar(&options.timeout, "timeout", "0",
 		"timeout for dataport to exit")
-	flag.IntVar(&options.maxVbno, "maxvb", 1024,
-		"maximum number of vbuckets")
 	flag.BoolVar(&options.projector, "projector", false,
 		"start projector for debug mode")
 	flag.BoolVar(&options.debug, "debug", false,
