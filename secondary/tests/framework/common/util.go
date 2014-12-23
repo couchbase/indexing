@@ -1,13 +1,14 @@
 package common
 
 import (
+	"compress/gzip"
+	"encoding/json"
 	"fmt"
-	"os"
-	"log"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
-	"compress/gzip"
+	"os"
 )
 
 // ToDo: Point out the exact difference between two responses
@@ -27,21 +28,21 @@ func HandleError(err error, msg string) {
 // Read a .gz file
 func ReadCompressedFile(filePath string) ([]byte, error) {
 	file, err := os.Open(filePath)
-    if err != nil {
-        return nil, err
-    }
-    defer file.Close()
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
 
-    reader, err := gzip.NewReader(file)
-    if err != nil {
-        return nil, err
-    }
-    defer reader.Close()
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
 
-    data, err := ioutil.ReadAll(reader)
-    if err != nil {
-        return nil, err
-    }
+	data, err := ioutil.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
 	return data, nil
 }
 
@@ -50,7 +51,7 @@ func DownloadDataFile(sourceDataFile, destinationFilePath string) {
 	fmt.Println("Downloading file...")
 
 	f, err := os.Create(destinationFilePath)
-	HandleError(err, "Error downloading datafile " + destinationFilePath)
+	HandleError(err, "Error downloading datafile "+destinationFilePath)
 	defer f.Close()
 
 	c := http.Client{
@@ -62,11 +63,21 @@ func DownloadDataFile(sourceDataFile, destinationFilePath string) {
 
 	url := sourceDataFile
 	r, err := c.Get(url)
-	HandleError(err, "Error downloading datafile " + destinationFilePath)
+	HandleError(err, "Error downloading datafile "+destinationFilePath)
 	defer r.Body.Close()
 	fmt.Println(r.Status)
 
 	n, err := io.Copy(f, r.Body)
-	HandleError(err, "Error downloading datafile " + destinationFilePath)
+	HandleError(err, "Error downloading datafile "+destinationFilePath)
 	fmt.Println(n, "Data file downloaded")
+}
+
+func GetClusterConfFromFile(filepath string) ClusterConfiguration {
+	file, e := os.Open(filepath)
+	HandleError(e, "Error in creating config file handle")
+	decoder := json.NewDecoder(file)
+	configuration := ClusterConfiguration{}
+	err := decoder.Decode(&configuration)
+	HandleError(err, "Error in decoding cluster configuration")
+	return configuration
 }

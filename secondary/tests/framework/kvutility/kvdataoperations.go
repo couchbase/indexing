@@ -2,8 +2,8 @@ package kvutility
 
 import (
 	"fmt"
-	"github.com/couchbaselabs/go-couchbase"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbaselabs/go-couchbase"
 )
 
 // Move to common
@@ -12,11 +12,9 @@ type KeyValue struct {
 	JsonValue map[string]interface{}
 }
 
-var port = ":9000"
-
 // ToDo: Refactor Code
-func Set(key string, v interface{}, bucketName string, password string, hostname string) {
-	url := "http://" + bucketName + ":" + password + "@" + hostname + port
+func Set(key string, v interface{}, bucketName string, password string, hostaddress string) {
+	url := "http://" + bucketName + ":" + password + "@" + hostaddress
 
 	c, err := couchbase.Connect(url)
 	tc.HandleError(err, "connect - "+url)
@@ -32,13 +30,12 @@ func Set(key string, v interface{}, bucketName string, password string, hostname
 	b.Close()
 }
 
-func SetKeyValue(keyValue KeyValue, bucketName string, password string, hostname string) {
-	Set(keyValue.Key, keyValue.JsonValue, bucketName, password, hostname)
+func SetKeyValue(keyValue KeyValue, bucketName string, password string, hostaddress string) {
+	Set(keyValue.Key, keyValue.JsonValue, bucketName, password, hostaddress)
 }
 
-func SetKeyValues(keyValues []KeyValue, bucketName string, password string, hostname string) {
-	url := "http://" + bucketName + ":" + password + "@" + hostname + port
-
+func SetKeyValues(keyValues []KeyValue, bucketName string, password string, hostaddress string) {
+	url := "http://" + bucketName + ":" + password + "@" + hostaddress
 	c, err := couchbase.Connect(url)
 	tc.HandleError(err, "connect - "+url)
 
@@ -55,9 +52,9 @@ func SetKeyValues(keyValues []KeyValue, bucketName string, password string, host
 	b.Close()
 }
 
-func Get(key string, rv interface{}, bucketName string, password string, hostname string) {
+func Get(key string, rv interface{}, bucketName string, password string, hostaddress string) {
 
-	url := "http://" + bucketName + ":" + password + "@" + hostname + port
+	url := "http://" + bucketName + ":" + password + "@" + hostaddress
 
 	c, err := couchbase.Connect(url)
 	tc.HandleError(err, "connect - "+url)
@@ -72,9 +69,9 @@ func Get(key string, rv interface{}, bucketName string, password string, hostnam
 	tc.HandleError(err, "get")
 }
 
-func Delete(key string, bucketName string, password string, hostname string) {
+func Delete(key string, bucketName string, password string, hostaddress string) {
 
-	url := "http://" + bucketName + ":" + password + "@" + hostname + port
+	url := "http://" + bucketName + ":" + password + "@" + hostaddress
 
 	c, err := couchbase.Connect(url)
 	tc.HandleError(err, "connect - "+url)
