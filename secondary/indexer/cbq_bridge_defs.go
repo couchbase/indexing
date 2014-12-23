@@ -82,6 +82,7 @@ func (idx IndexInfo) String() string {
 	str += fmt.Sprintf("\tBucket: %v\n", idx.Bucket)
 	str += fmt.Sprintf("\tIsPrimary: %v\n", idx.IsPrimary)
 	str += fmt.Sprintf("\tExprtype: %v\n", idx.Exprtype)
+	str += fmt.Sprintf("\tWhereExpr: %v\n", idx.WhereExpr)
 	return str
 
 }

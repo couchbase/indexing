@@ -1037,6 +1037,7 @@ func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 		SecExpressions:  indexDefn.SecExprs,
 		PartitionScheme: partnScheme,
 		PartnExpression: proto.String(indexDefn.PartitionKey),
+		WhereExpression: proto.String(indexDefn.WhereExpr),
 	}
 
 	return defn

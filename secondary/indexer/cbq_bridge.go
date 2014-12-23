@@ -117,7 +117,8 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 		SecExprs:        indexinfo.SecExprs,
 		ExprType:        common.N1QL,
 		PartitionScheme: common.SINGLE,
-		PartitionKey:    indexinfo.PartnExpr}
+		PartitionKey:    indexinfo.PartnExpr,
+		WhereExpr:       indexinfo.WhereExpr}
 
 	idxInst := common.IndexInst{InstId: common.IndexInstId(defnID),
 		Defn:  idxDefn,
@@ -248,7 +249,7 @@ func getIndexInfoFromInst(inst common.IndexInst) IndexInfo {
 	idx.Exprtype = string(inst.Defn.ExprType)
 	idx.PartnExpr = inst.Defn.PartitionKey
 	idx.SecExprs = inst.Defn.SecExprs
-	idx.WhereExpr = ""
+	idx.WhereExpr = inst.Defn.WhereExpr
 	idx.IsPrimary = inst.Defn.IsPrimary
 
 	return idx

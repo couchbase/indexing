@@ -111,6 +111,7 @@ type IndexDefn struct {
 	ExprType        ExprType
 	PartitionScheme PartitionScheme
 	PartitionKey    string
+	WhereExpr       string
 }
 
 //IndexInst is an instance of an Index(aka replica)
@@ -135,6 +136,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("\n\t\tSecExprs: %v ", idx.SecExprs)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	str += fmt.Sprintf("PartitionKey: %v ", idx.PartitionKey)
+	str += fmt.Sprintf("WhereExpr: %v ", idx.WhereExpr)
 	return str
 
 }
