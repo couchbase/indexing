@@ -93,7 +93,6 @@ func startWatcher(mgr *IndexManager,
 	// TODO: call Close() to cleanup the state upon retry by the watcher server
 	go protocol.RunWatcherServer(
 		leaderAddr,
-		nil,
 		s.handler,
 		s.factory,
 		s.killch,

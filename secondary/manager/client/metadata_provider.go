@@ -179,7 +179,7 @@ func (o *MetadataProvider) startWatcher(addr string) *watcher {
 	readych := make(chan bool)
 
 	// TODO: call Close() to cleanup the state upon retry by the MetadataProvider server
-	go protocol.RunWatcherServer(
+	go protocol.RunWatcherServerWithRequest(
 		s.leaderAddr,
 		s,
 		s,
