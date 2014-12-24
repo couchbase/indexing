@@ -59,6 +59,7 @@ const (
 	STORAGE_MGR_SHUTDOWN
 	STORAGE_INDEX_SNAP_REQUEST
 	STORAGE_INDEX_STORAGE_STATS
+	STORAGE_INDEX_COMPACT
 
 	//KVSender
 	KV_SENDER_SHUTDOWN
@@ -86,6 +87,8 @@ const (
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
+
+	COMPACTION_MGR_SHUTDOWN
 
 	//COMMON
 	UPDATE_INDEX_INSTANCE_MAP
@@ -763,6 +766,23 @@ func (m *MsgIndexStorageStats) GetReplyChannel() chan []IndexStorageStats {
 	return m.respch
 }
 
+type MsgIndexCompact struct {
+	instId common.IndexInstId
+	errch  chan error
+}
+
+func (m *MsgIndexCompact) GetMsgType() MsgType {
+	return STORAGE_INDEX_COMPACT
+}
+
+func (m *MsgIndexCompact) GetInstId() common.IndexInstId {
+	return m.instId
+}
+
+func (m *MsgIndexCompact) GetErrorChannel() chan error {
+	return m.errch
+}
+
 //Helper function to return string for message type
 
 func (m MsgType) String() string {
@@ -887,6 +907,8 @@ func (m MsgType) String() string {
 		return "STORAGE_INDEX_SNAP_REQUEST"
 	case STORAGE_INDEX_STORAGE_STATS:
 		return "STORAGE_INDEX_STORAGE_STATS"
+	case STORAGE_INDEX_COMPACT:
+		return "STORAGE_INDEX_COMPACT"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

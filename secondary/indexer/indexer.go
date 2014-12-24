@@ -65,6 +65,7 @@ type indexer struct {
 	storageMgrCmdCh    MsgChannel //channel to send commands to storage manager
 	tkCmdCh            MsgChannel //channel to send commands to timekeeper
 	adminMgrCmdCh      MsgChannel //channel to send commands to admin port manager
+	compactMgrCmdCh    MsgChannel //channel to send commands to compaction manager
 	clustMgrAgentCmdCh MsgChannel //channel to send messages to index coordinator
 	kvSenderCmdCh      MsgChannel //channel to send messages to kv sender
 	cbqBridgeCmdCh     MsgChannel //channel to send message to cbq sender
@@ -72,14 +73,15 @@ type indexer struct {
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
 
-	tk            Timekeeper      //handle to timekeeper
-	storageMgr    StorageManager  //handle to storage manager
-	mutMgr        MutationManager //handle to mutation manager
-	adminMgr      AdminManager    //handle to admin port manager
-	clustMgrAgent ClustMgrAgent   //handle to ClustMgrAgent
-	kvSender      KVSender        //handle to KVSender
-	cbqBridge     CbqBridge       //handle to CbqBridge
-	scanCoord     ScanCoordinator //handle to ScanCoordinator
+	tk            Timekeeper        //handle to timekeeper
+	storageMgr    StorageManager    //handle to storage manager
+	compactMgr    CompactionManager //handle to compaction manager
+	mutMgr        MutationManager   //handle to mutation manager
+	adminMgr      AdminManager      //handle to admin port manager
+	clustMgrAgent ClustMgrAgent     //handle to ClustMgrAgent
+	kvSender      KVSender          //handle to KVSender
+	cbqBridge     CbqBridge         //handle to CbqBridge
+	scanCoord     ScanCoordinator   //handle to ScanCoordinator
 	config        common.Config
 }
 
@@ -96,6 +98,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		storageMgrCmdCh:    make(MsgChannel),
 		tkCmdCh:            make(MsgChannel),
 		adminMgrCmdCh:      make(MsgChannel),
+		compactMgrCmdCh:    make(MsgChannel),
 		clustMgrAgentCmdCh: make(MsgChannel),
 		kvSenderCmdCh:      make(MsgChannel),
 		cbqBridgeCmdCh:     make(MsgChannel),
@@ -195,6 +198,12 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.state = ACTIVE
 	common.Infof("Indexer::NewIndexer Status ACTIVE")
+
+	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	if res.GetMsgType() != MSG_SUCCESS {
+		common.Errorf("Indexer::NewCompactionmanager Init Error", res)
+		return nil, res
+	}
 
 	//start the main indexer loop
 	idx.run()
@@ -376,7 +385,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_INITIATE_RECOVERY:
 		idx.handleInitRecovery(msg)
 
-	case STORAGE_INDEX_SNAP_REQUEST:
+	case STORAGE_INDEX_SNAP_REQUEST,
+		STORAGE_INDEX_STORAGE_STATS,
+		STORAGE_INDEX_COMPACT:
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 

@@ -160,6 +160,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case STORAGE_INDEX_STORAGE_STATS:
 		s.handleGetIndexStorageStats(cmd)
+
+	case STORAGE_INDEX_COMPACT:
+		s.handleIndexCompaction(cmd)
 	}
 }
 
@@ -532,6 +535,40 @@ func (s *storageMgr) handleGetIndexStorageStats(cmd Message) {
 	}
 
 	replych <- stats
+}
+
+func (s *storageMgr) handleIndexCompaction(cmd Message) {
+	s.supvCmdch <- &MsgSuccess{}
+	req := cmd.(*MsgIndexCompact)
+	errch := req.GetErrorChannel()
+	var slices []Slice
+
+	partnMap, ok := s.indexPartnMap[req.GetInstId()]
+	if !ok {
+		errch <- ErrIndexNotFound
+	}
+
+	// Increment rc for slices
+	for _, partnInst := range partnMap {
+		for _, slice := range partnInst.Sc.GetAllSlices() {
+			slice.IncrRef()
+			slices = append(slices, slice)
+		}
+	}
+
+	// Perform file compaction without blocking storage manager main loop
+	go func() {
+		for _, slice := range slices {
+			err := slice.Compact()
+			slice.DecrRef()
+			if err != nil {
+				errch <- err
+				return
+			}
+		}
+
+		errch <- nil
+	}()
 }
 
 // Update index-snapshot map using index partition map

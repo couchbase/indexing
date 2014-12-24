@@ -326,6 +326,21 @@ var SystemConfig = Config{
 		"Index file storage directory",
 		"./",
 	},
+	"indexer.compaction.interval": ConfigValue{
+		60,
+		"Compaction poll interval in seconds",
+		60,
+	},
+	"indexer.compaction.minFrag": ConfigValue{
+		30,
+		"Compaction fragmentation threshold percentage",
+		30,
+	},
+	"indexer.compaction.minSize": ConfigValue{
+		uint64(1024 * 1024),
+		"Compaction min file size",
+		uint64(1024 * 1024),
+	},
 }
 
 // NewConfig from another
