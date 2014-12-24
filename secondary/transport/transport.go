@@ -140,6 +140,7 @@ func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err 
 
 	// transport de-framing
 	if err = fullRead(conn, pkt.buf[:pktDataOffset]); err != nil {
+		c.Errorf("receiving packet: %v\n", err)
 		return
 	}
 	a, b := pktLenOffset, pktLenOffset+pktLenSize
@@ -152,6 +153,7 @@ func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err 
 		return
 	}
 	if err = fullRead(conn, pkt.buf[:pktlen]); err != nil {
+		c.Errorf("receiving packet: %v\n", err)
 		return
 	}
 

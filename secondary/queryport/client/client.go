@@ -342,8 +342,8 @@ func (c *Client) doRequestResponse(req interface{}) (interface{}, error) {
 
 	// ---> protobuf.*Request
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		msg := "%v Statistics() request transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
+		msg := "%v %T request transport failed `%v`\n"
+		common.Errorf(msg, c.logPrefix, req, err)
 		healthy = false
 		return nil, err
 	}
@@ -353,8 +353,8 @@ func (c *Client) doRequestResponse(req interface{}) (interface{}, error) {
 	// <--- protobuf.*Response
 	resp, err := pkt.Receive(conn)
 	if err != nil {
-		msg := "%v Statistics() response transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
+		msg := "%v %T response transport failed `%v`\n"
+		common.Errorf(msg, c.logPrefix, req, err)
 		healthy = false
 		return nil, err
 	}
