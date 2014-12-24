@@ -11,3 +11,5 @@ CBIDXT-139: Projector / DataFlow - Error Loading Data During Rebalance.
 
 CBIDXT-126: Projector / ControlFlow - Handle Bucket Deletion.
 CBIDXT-124: Projector / DataFlow - Handle Bucket Flush.
+
+Move projector/Error* to projector/client/*
