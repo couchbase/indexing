@@ -215,11 +215,11 @@ func (r *scanStreamReader) ReadStat() (stat statsResponse, err error) {
 
 func (r *scanStreamReader) ReadCount() (count countResponse, err error) {
 	resp := <-r.sd.respch
-	switch r := resp.(type) {
+	switch val := resp.(type) {
 	case countResponse:
-		return count, nil
+		return val, nil
 	case error:
-		return count, r
+		return count, val
 	}
 	return count, err
 }
