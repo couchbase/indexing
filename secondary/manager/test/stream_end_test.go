@@ -115,20 +115,20 @@ func runStreamEndTest() {
 // clean up
 func cleanupStreamMgrStreamEndTest(mgr *manager.IndexManager) {
 
-	_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_stream_end_test")
+	_, err := mgr.GetIndexDefnById(common.IndexDefnId(405))
 	if err != nil {
 		common.Infof("StreamMgrTest.cleanupStreamMgrStreamEndTest() :  cannot find index defn stream_mgr_stream_end_test.  No cleanup ...")
 	} else {
 		common.Infof("StreamMgrTest.cleanupStreamMgrStreamEndTest() :  found index defn stream_mgr_stream_end_test.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Default", "stream_mgr_stream_end_test")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(405))
 		if err != nil {
 			util.TT.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_stream_end_test")
+		_, err := mgr.GetIndexDefnById(common.IndexDefnId(405))
 		if err == nil {
 			util.TT.Fatal("StreamMgrTest.cleanupStreamMgrStreamEndTest(): Cannot clean up index defn stream_mgr_stream_end_test")
 		}

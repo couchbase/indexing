@@ -211,7 +211,11 @@ func (m *httpHandler) dropIndexRequest(w http.ResponseWriter, r *http.Request) {
 
 	// call the index manager to handle the DDL
 	indexinfo := request.Index
-	err := m.mgr.HandleDeleteIndexDDL(indexinfo.Bucket, indexinfo.Name)
+	id, err := indexDefnId(indexinfo.DefnID)
+	if err == nil {
+		err = m.mgr.HandleDeleteIndexDDL(id)
+	}
+	
 	if err == nil {
 		// No error, return success
 		res := IndexResponse{

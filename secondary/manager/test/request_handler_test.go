@@ -73,20 +73,20 @@ func TestRequestHandler(t *testing.T) {
 // clean up
 func cleanupRequestHandlerTest(mgr *manager.IndexManager, t *testing.T) {
 
-	_, err := mgr.GetIndexDefnByName("Default", "request_handler_test")
+	_, err := mgr.GetIndexDefnById(common.IndexDefnId(500))
 	if err != nil {
 		common.Infof("RequestHandlerTest.cleanupRequestHandlerTest() :  cannot find index defn request_handler_test.  No cleanup ...")
 	} else {
 		common.Infof("RequestHandlerTest.cleanupRequestHandlerTest() :  found index defn request_handler_test.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Default", "request_handler_test")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(500))
 		if err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err := mgr.GetIndexDefnByName("Default", "request_handler_test")
+		_, err := mgr.GetIndexDefnById(common.IndexDefnId(500))
 		if err == nil {
 			t.Fatal("RequestHandlerTest.cleanupRequestHandlerTest(): Cannot clean up index defn request_handler_test")
 		}

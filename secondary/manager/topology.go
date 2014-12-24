@@ -167,6 +167,19 @@ func (t *IndexTopology) FindIndexDefinition(bucket string, name string) *IndexDe
 }
 
 //
+// Get all index instance Id's for a specific defnition
+//
+func (t *IndexTopology) FindIndexDefinitionById(id common.IndexDefnId) *IndexDefnDistribution {
+
+	for _, defnRef := range t.Definitions {
+		if defnRef.DefnId == uint64(id) {
+			return &defnRef
+		}
+	}
+	return nil
+}
+
+//
 // Update Index Status on instance
 //
 func (t *IndexTopology) UpdateStateForIndexInstByDefn(defnId common.IndexDefnId, state common.IndexState) {

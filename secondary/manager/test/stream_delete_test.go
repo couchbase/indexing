@@ -230,68 +230,66 @@ func deleteIndexForDeleteTest(mgr *manager.IndexManager) {
 	// Delete a new index definition : 401 (Default)
 	//
 	common.Infof("Run Delete Test : Delete Index Defn 401")
-	if err := mgr.HandleDeleteIndexDDL("Default", "stream_mgr_delete_test_1"); err != nil {
+	if err := mgr.HandleDeleteIndexDDL(common.IndexDefnId(401)); err != nil {
 		util.TT.Fatal(err)
 	}
-	// Wait so there is no race condition.
-	//time.Sleep(time.Duration(1000) * time.Millisecond)
 }
 
 // clean up
 func cleanupStreamMgrDeleteTest(mgr *manager.IndexManager) {
 
-	_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_delete_test_1")
+	_, err := mgr.GetIndexDefnById(common.IndexDefnId(401))
 	if err != nil {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_1.  No cleanup ...")
 	} else {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_1.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Default", "stream_mgr_delete_test_1")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(401))
 		if err != nil {
 			util.TT.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err = mgr.GetIndexDefnByName("Default", "stream_mgr_delete_test_1")
+		_, err = mgr.GetIndexDefnById(common.IndexDefnId(401))
 		if err == nil {
 			util.TT.Fatal("StreamMgrTest.cleanupStreamMgrSyncTest(): Cannot clean up index defn stream_mgr_delete_test_1")
 		}
 	}
 
-	_, err = mgr.GetIndexDefnByName("Default", "stream_mgr_delete_test_2")
+	_, err = mgr.GetIndexDefnById(common.IndexDefnId(402))
 	if err != nil {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_2.  No cleanup ...")
 	} else {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_2.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Default", "stream_mgr_delete_test_2")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(402))
 		if err != nil {
 			util.TT.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err = mgr.GetIndexDefnByName("Default", "stream_mgr_delete_test_2")
+		_, err = mgr.GetIndexDefnById(common.IndexDefnId(402))
 		if err == nil {
 			util.TT.Fatal("StreamMgrTest.cleanupStreamMgrSyncTest(): Cannot clean up index defn stream_mgr_delete_test_2")
 		}
 	}
 
-	_, err = mgr.GetIndexDefnByName("Defaultxx", "stream_mgr_delete_test_3")
+	_, err = mgr.GetIndexDefnById(common.IndexDefnId(403))
 	if err != nil {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_3.  No cleanup ...")
 	} else {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_3.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Defaultxx", "stream_mgr_delete_test_3")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(403))
 		if err != nil {
 			util.TT.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err = mgr.GetIndexDefnByName("Defaultxx", "stream_mgr_delete_test_3")
+		_, err = mgr.GetIndexDefnById(common.IndexDefnId(403))
 		if err == nil {
 			util.TT.Fatal("StreamMgrTest.cleanupStreamMgrSyncTest(): Cannot clean up index defn stream_mgr_delete_test_3")
 		}

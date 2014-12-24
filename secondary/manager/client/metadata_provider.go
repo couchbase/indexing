@@ -38,6 +38,7 @@ type MetadataProvider struct {
 type metadataRepo struct {
 	definitions map[c.IndexDefnId]*c.IndexDefn
 	instances   map[c.IndexDefnId]*IndexInstDistribution
+	indices 	map[c.IndexDefnId]*IndexMetadata
 	mutex       sync.Mutex
 }
 
@@ -52,6 +53,17 @@ type watcher struct {
 	incomingReqs chan *protocol.RequestHandle
 	pendingReqs  map[uint64]*protocol.RequestHandle // key : request id
 	loggedReqs   map[common.Txnid]*protocol.RequestHandle
+}
+
+type IndexMetadata struct {
+	Definition 	*c.IndexDefn
+	Instances   []*InstanceDefn
+}
+
+type InstanceDefn struct {
+	InstId c.IndexInstId 
+	State c.IndexState
+	Endpts []c.Endpoint
 }
 
 ///////////////////////////////////////////////////////
@@ -148,13 +160,13 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId, indexAdminPort string
 	return nil
 }
 
-func (o *MetadataProvider) ListIndex() []*c.IndexDefn {
+func (o *MetadataProvider) ListIndex() []*IndexMetadata {
 	o.repo.mutex.Lock()
 	defer o.repo.mutex.Unlock()
 
-	result := make([]*c.IndexDefn, 0, len(o.repo.definitions))
-	for _, defn := range o.repo.definitions {
-		result = append(result, defn)
+	result := make([]*IndexMetadata, 0, len(o.repo.indices))
+	for _, meta := range o.repo.indices {
+		result = append(result, meta)
 	}
 
 	return result
@@ -238,8 +250,10 @@ func (o *MetadataProvider) getWatcherAddr(MetadataProviderId string) (string, er
 
 func newMetadataRepo() *metadataRepo {
 
-	return &metadataRepo{definitions: make(map[c.IndexDefnId]*c.IndexDefn),
-		instances: make(map[c.IndexDefnId]*IndexInstDistribution)}
+	return &metadataRepo{
+		definitions: make(map[c.IndexDefnId]*c.IndexDefn),
+		instances: make(map[c.IndexDefnId]*IndexInstDistribution),
+		indices : make(map[c.IndexDefnId]*IndexMetadata)}
 }
 
 func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
@@ -248,6 +262,12 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 	defer r.mutex.Unlock()
 
 	r.definitions[defn.DefnId] = defn
+	r.indices[defn.DefnId] = r.makeIndexMetadata(defn)	
+	
+	inst, ok := r.instances[defn.DefnId]
+	if ok {
+		r.updateIndexMetadata(defn.DefnId, inst)
+	}
 }
 
 func (r *metadataRepo) removeDefn(defnId c.IndexDefnId) {
@@ -257,6 +277,7 @@ func (r *metadataRepo) removeDefn(defnId c.IndexDefnId) {
 
 	delete(r.definitions, defnId)
 	delete(r.instances, defnId)
+	delete(r.indices, defnId)
 }
 
 func (r *metadataRepo) updateTopology(topology *IndexTopology) {
@@ -265,9 +286,10 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology) {
 	defer r.mutex.Unlock()
 
 	for _, defnRef := range topology.Definitions {
-		defnId := defnRef.DefnId
+		defnId := c.IndexDefnId(defnRef.DefnId)
 		for _, instRef := range defnRef.Instances {
-			r.instances[c.IndexDefnId(defnId)] = &instRef
+			r.instances[defnId] = &instRef
+			r.updateIndexMetadata(defnId, &instRef)
 		}
 	}
 }
@@ -290,6 +312,29 @@ func (r *metadataRepo) unmarshallAndAddInst(content []byte) error {
 	}
 	r.updateTopology(topology)
 	return nil
+}
+
+func (r *metadataRepo) makeIndexMetadata(defn *c.IndexDefn) *IndexMetadata {
+
+	return &IndexMetadata{Definition : defn, 
+			Instances : nil}
+}
+
+func (r *metadataRepo) updateIndexMetadata(defnId c.IndexDefnId, inst *IndexInstDistribution) {
+
+	meta, ok :=	r.indices[defnId]
+	if ok {
+		idxInst := new(InstanceDefn)
+		idxInst.InstId = c.IndexInstId(inst.InstId)
+		idxInst.State = c.IndexState(inst.State)
+		
+		for _, partition := range inst.Partitions {
+			for _, slice := range partition.SinglePartition.Slices {
+				idxInst.Endpts = append(idxInst.Endpts, c.Endpoint(slice.Host))
+			}
+		}
+		meta.Instances = []*InstanceDefn{idxInst} 
+	}
 }
 
 ///////////////////////////////////////////////////////

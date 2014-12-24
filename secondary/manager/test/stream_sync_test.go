@@ -183,20 +183,20 @@ func changeTopologyForSyncTest(mgr *manager.IndexManager) {
 // clean up
 func cleanupStreamMgrSyncTest(mgr *manager.IndexManager) {
 
-	_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_sync_test")
+	_, err := mgr.GetIndexDefnById(common.IndexDefnId(400))
 	if err != nil {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_sync_test.  No cleanup ...")
 	} else {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_sync_test.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Default", "stream_mgr_sync_test")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(400))
 		if err != nil {
 			util.TT.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_sync_test")
+		_, err := mgr.GetIndexDefnById(common.IndexDefnId(400))
 		if err == nil {
 			util.TT.Fatal("StreamMgrTest.cleanupStreamMgrSyncTest(): Cannot clean up index defn stream_mgr_sync_test")
 		}

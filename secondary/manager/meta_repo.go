@@ -162,16 +162,6 @@ func (c *MetadataRepo) GetNextIndexInstId() (common.IndexInstId, error) {
 //  Public Function : Index Defnition Lookup
 ///////////////////////////////////////////////////////
 
-func (c *MetadataRepo) GetIndexDefnByName(bucket string, name string) (*common.IndexDefn, error) {
-	lookupName := indexDefnKeyByName(indexName(bucket, name))
-	data, err := c.getMeta(lookupName)
-	if err != nil {
-		return nil, err
-	}
-
-	return UnmarshallIndexDefn(data)
-}
-
 func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDefn, error) {
 	lookupName := indexDefnKeyById(id)
 	data, err := c.getMeta(lookupName)
@@ -268,7 +258,7 @@ func (c *MetadataRepo) SetGlobalTopology(topology *GlobalTopology) error {
 func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 
 	// check if defn already exist
-	exist, err := c.GetIndexDefnByName(defn.Bucket, defn.Name)
+	exist, err := c.GetIndexDefnById(defn.DefnId)
 	if exist != nil {
 		// TODO: should not return error if not found (should return nil)
 		return NewError(ERROR_META_IDX_DEFN_EXIST, NORMAL, METADATA_REPO, nil,
@@ -281,14 +271,8 @@ func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 		return err
 	}
 
-	// save by defn name
-	lookupName := indexDefnKeyByName(indexName(defn.Bucket, defn.Name))
-	if err := c.setMeta(lookupName, data); err != nil {
-		return err
-	}
-
 	// save by defn id
-	lookupName = indexDefnKeyById(defn.DefnId)
+	lookupName := indexDefnKeyById(defn.DefnId)
 	if err := c.setMeta(lookupName, data); err != nil {
 		return err
 	}
@@ -307,34 +291,6 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 	}
 
 	lookupName := indexDefnKeyById(id)
-	if err := c.deleteMeta(lookupName); err != nil {
-		return err
-	}
-
-	lookupName = indexDefnKeyByName(indexName(exist.Bucket, exist.Name))
-	if err := c.deleteMeta(lookupName); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (c *MetadataRepo) DropIndexByName(bucket string, name string) error {
-
-	// check if defn already exist
-	exist, _ := c.GetIndexDefnByName(bucket, name)
-	if exist == nil {
-		// TODO: should not return error if not found (should return nil)
-		return NewError(ERROR_META_IDX_DEFN_NOT_EXIST, NORMAL, METADATA_REPO, nil,
-			fmt.Sprintf("Index Definition '%s' does not exist", name))
-	}
-
-	lookupName := indexDefnKeyByName(indexName(bucket, name))
-	if err := c.deleteMeta(lookupName); err != nil {
-		return err
-	}
-
-	lookupName = indexDefnKeyById(exist.DefnId)
 	if err := c.deleteMeta(lookupName); err != nil {
 		return err
 	}
@@ -364,7 +320,7 @@ func (i *MetaIterator) Next() (key string, content []byte, err error) {
 		}
 
 		if isIndexDefnKey(key) {
-			name := indexDefnNameFromKey(key)
+			name := indexDefnIdFromKey(key)
 			if name != "" {
 				return name, content, nil
 			}
@@ -620,40 +576,16 @@ func findTypeFromKey(key string) MetadataKind {
 // package local function : Index Definition
 ///////////////////////////////////////////////////////
 
-func bucketFromIndexDefnRepoKey(key string) string {
-	name := indexDefnNameFromKey(key)
-	return bucketFromIndexDefnName(name)
+func indexDefnIdStr(id common.IndexDefnId) string {
+	return strconv.FormatUint(uint64(id), 10) 
 }
 
-func nameFromIndexDefnRepoKey(key string) string {
-	name := indexDefnNameFromKey(key)
-	return nameFromIndexDefnName(name)
-}
-
-func bucketFromIndexDefnName(name string) string {
-	i := strings.Index(name, "/")
-	if i != -1 {
-		return name[:i]
+func indexDefnId(key string) (common.IndexDefnId, error) {
+	val, err := strconv.ParseUint(key, 10, 64)
+	if err != nil {
+		return common.IndexDefnId(0), err
 	}
-
-	return ""
-}
-
-func nameFromIndexDefnName(name string) string {
-	i := strings.Index(name, "/")
-	if i != -1 && i < len(name)-1 {
-		return name[i+1:]
-	}
-
-	return ""
-}
-
-func indexName(bucket string, name string) string {
-	return bucket + "/" + name
-}
-
-func indexDefnKeyByName(name string) string {
-	return fmt.Sprintf("IndexDefinitionName/%s", name)
+	return common.IndexDefnId(val), nil
 }
 
 func indexDefnKeyById(id common.IndexDefnId) string {
@@ -661,14 +593,14 @@ func indexDefnKeyById(id common.IndexDefnId) string {
 }
 
 func isIndexDefnKey(key string) bool {
-	return strings.Contains(key, "IndexDefinitionName/")
+	return strings.Contains(key, "IndexDefinitionId/")
 }
 
-func indexDefnNameFromKey(key string) string {
+func indexDefnIdFromKey(key string) string {
 
-	i := strings.Index(key, "IndexDefinitionName/")
+	i := strings.Index(key, "IndexDefinitionId/")
 	if i != -1 {
-		return key[i+len("IndexDefinitionName/"):]
+		return key[i+len("IndexDefinitionId/"):]
 	}
 
 	return ""
@@ -917,20 +849,20 @@ func (m *MetadataRepo) createIndexAndUpdateTopology(defn *common.IndexDefn, host
 // returns true, it means deleteIndex request completes successfully.
 // If this function returns false, then the result is unknown.
 //
-func (m *MetadataRepo) deleteIndexAndUpdateTopology(key string) error {
+func (m *MetadataRepo) deleteIndexAndUpdateTopology(id common.IndexDefnId) error {
 
-	bucket := bucketFromIndexDefnName(key)
-	name := nameFromIndexDefnName(key)
-	common.Debugf("MetadataRepo.deleteIndex() : index to delete = %s", key)
+	common.Debugf("MetadataRepo.deleteIndex() : index to delete = %d", id)
+	
+	defn, _ := m.GetIndexDefnById(id)
 
 	// Drop the index defnition before removing it from the topology.  If it fails to
 	// remove the index defn from topology, it can mean that there is a dangling reference
 	// in the topology with a deleted index defn, but it is easier to detect.
-	if err := m.DropIndexByName(bucket, name); err != nil {
+	if err := m.DropIndexById(id); err != nil {
 		return err
 	}
 
-	if err := m.deleteIndexFromTopology(bucket, name); err != nil {
+	if err := m.deleteIndexFromTopology(defn.Bucket, id); err != nil {
 		return err
 	}
 
@@ -977,7 +909,7 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, host string) e
 //
 // Delete Index from Topology
 //
-func (m *MetadataRepo) deleteIndexFromTopology(bucket string, name string) error {
+func (m *MetadataRepo) deleteIndexFromTopology(bucket string, id common.IndexDefnId) error {
 
 	// get existing topology
 	topology, err := m.GetTopologyByBucket(bucket)
@@ -985,7 +917,7 @@ func (m *MetadataRepo) deleteIndexFromTopology(bucket string, name string) error
 		return err
 	}
 
-	defn := topology.FindIndexDefinition(bucket, name)
+	defn := topology.FindIndexDefinitionById(id)
 	if defn != nil {
 		topology.UpdateStateForIndexInstByDefn(common.IndexDefnId(defn.DefnId), common.INDEX_STATE_DELETED)
 		if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {

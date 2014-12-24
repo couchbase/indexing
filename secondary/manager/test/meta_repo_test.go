@@ -46,10 +46,10 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 func runTest(repo *manager.MetadataRepo, t *testing.T) {
 
 	// clean up
-	repo.DropIndexByName("Default", "metadata_repo_test")
-	repo.DropIndexByName("Default", "metadata_repo_test_2")
-	repo.DropIndexByName("Default", "metadata_repo_test_3")
-	repo.DropIndexByName("Default", "metadata_repo_test_4")
+	repo.DropIndexById(common.IndexDefnId(100))
+	repo.DropIndexById(common.IndexDefnId(101))
+	repo.DropIndexById(common.IndexDefnId(102))
+	repo.DropIndexById(common.IndexDefnId(103))
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
@@ -72,7 +72,7 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Get the index definition	by name
-	idxDefn, err := repo.GetIndexDefnByName("Default", "metadata_repo_test")
+	idxDefn, err := repo.GetIndexDefnById(common.IndexDefnId(100))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,14 +82,14 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 	}
 
 	// Delete the index definition by name
-	if err := repo.DropIndexByName("Default", "metadata_repo_test"); err != nil {
+	if err := repo.DropIndexById(common.IndexDefnId(100)); err != nil {
 		t.Fatal(err)
 	}
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Get the index definition	by name
-	idxDefn, err = repo.GetIndexDefnByName("Default", "metadata_repo_test")
+	idxDefn, err = repo.GetIndexDefnById(common.IndexDefnId(100))
 
 	if idxDefn != nil {
 		t.Fatal("Find deleted index definition")
@@ -185,7 +185,7 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
        }
 
        common.Infof("key during iteration %s", key)
-       if key == "Default/metadata_repo_test_3" {
+       if key == "103" {
            found = true
        }
    	}
@@ -199,10 +199,10 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 	common.Infof("Stop TestMetadataRepo. Tearing down *********************************************************")
 
 	// clean up
-	repo.DropIndexByName("Default", "metadata_repo_test")
-	repo.DropIndexByName("Default", "metadata_repo_test_2")
-	repo.DropIndexByName("Default", "metadata_repo_test_3")
-	repo.DropIndexByName("Default", "metadata_repo_test_4")
+	repo.DropIndexById(common.IndexDefnId(100))
+	repo.DropIndexById(common.IndexDefnId(101))
+	repo.DropIndexById(common.IndexDefnId(102))
+	repo.DropIndexById(common.IndexDefnId(103))
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }

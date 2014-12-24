@@ -7,12 +7,14 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
-package client
+package test 
 
 import (
 	"fmt"
-	gometa "github.com/couchbase/gometa/server"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/manager/client"
+	"github.com/couchbase/indexing/secondary/manager"
+	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	"testing"
 	"time"
 )
@@ -23,48 +25,60 @@ func TestMetadataProvider(t *testing.T) {
 	common.LogEnable()
 	common.SetLogLevel(common.LogLevelDebug)
 
-	common.Infof("Start EmbeddedServer *********************************************************")
+	common.Infof("Start Index Manager *********************************************************")
 
 	var msgAddr = "localhost:9884"
-	server, err := gometa.RunEmbeddedServer(msgAddr)
+	factory := new(util.TestDefaultClientFactory)
+	env := new(util.TestDefaultClientEnv)
+	admin := manager.NewProjectorAdmin(factory, env, nil)
+	mgr, err := manager.NewIndexManagerInternal(msgAddr, "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Terminate()
+	defer mgr.Close()
 
 	common.Infof("Cleanup Test *********************************************************")
 
-	cleanupTest(server, t)
+	cleanupTest(mgr, t)
 
 	common.Infof("Setup Initial Data *********************************************************")
 
-	setupInitialData(server, t)
+	setupInitialData(mgr, t)
 
 	common.Infof("Start Provider *********************************************************")
 
 	var providerId = "TestMetadataProvider"
-	provider, err := NewMetadataProvider(providerId)
+	provider, err := client.NewMetadataProvider(providerId)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer provider.Close()
 	provider.WatchMetadata(msgAddr)
 
-	// the gometa server is running in the same process.  So sleep to make sure that the server
-	// has a chance to finish off initialization.
+	// the gometa server is running in the same process as MetadataProvider (client).  So sleep to 
+	// make sure that the server has a chance to finish off initialization, since the client may 
+	// be ready, but the server is not.
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	common.Infof("Verify Initial Data *********************************************************")
 
-	if !lookup(provider, common.IndexDefnId(100)) {
+	meta := lookup(provider, common.IndexDefnId(100)) 
+	if meta == nil {
 		t.Fatal("Cannot find Index Defn 100 from MetadataProvider")
 	}
 	common.Infof("found Index Defn 100")
+	if len(meta.Instances) == 0 || meta.Instances[0].State != common.INDEX_STATE_READY {
+		t.Fatal("Index Defn 100 state is not ready")
+	}
 
-	if !lookup(provider, common.IndexDefnId(101)) {
+	meta = lookup(provider, common.IndexDefnId(101)) 
+	if meta == nil {
 		t.Fatal("Cannot find Index Defn 101 from MetadataProvider")
 	}
 	common.Infof("found Index Defn 101")
+	if len(meta.Instances) == 0 || meta.Instances[0].State != common.INDEX_STATE_READY {
+		t.Fatal("Index Defn 101 state is not ready")
+	}
 
 	common.Infof("Change Data *********************************************************")
 
@@ -80,42 +94,42 @@ func TestMetadataProvider(t *testing.T) {
 
 	common.Infof("Verify Changed Data *********************************************************")
 
-	if !lookup(provider, common.IndexDefnId(100)) {
+	if lookup(provider, common.IndexDefnId(100)) == nil {
 		t.Fatal("Cannot find Index Defn 100 from MetadataProvider")
 	}
 	common.Infof("found Index Defn 100")
 
-	if lookup(provider, common.IndexDefnId(101)) {
+	if lookup(provider, common.IndexDefnId(101)) != nil {
 		t.Fatal("Found Deleted Index Defn 101 from MetadataProvider")
 	}
 	common.Infof("cannot found deleted Index Defn 101")
 
-	if !lookup(provider, newDefnId) {
+	if lookup(provider, newDefnId) == nil {
 		t.Fatal(fmt.Sprintf("Cannot Found Index Defn %d from MetadataProvider", newDefnId))
 	}
 	common.Infof("Found Index Defn %d", newDefnId)
 
 	common.Infof("Cleanup Test *********************************************************")
 
-	cleanupTest(server, t)
+	cleanupTest(mgr, t)
+	cleanSingleIndex(mgr, t, newDefnId) 
+	time.Sleep(time.Duration(1000) * time.Millisecond)
 }
 
-func lookup(provider *MetadataProvider, id common.IndexDefnId) bool {
+func lookup(provider *client.MetadataProvider, id common.IndexDefnId) *client.IndexMetadata {
 
 	metas := provider.ListIndex()
 
-	found := false
 	for _, meta := range metas {
 		if meta.Definition.DefnId == id {
-			found = true
-			break
+			return meta
 		}
 	}
 
-	return found
+	return nil
 }
 
-func setupInitialData(server *gometa.EmbeddedServer, t *testing.T) {
+func setupInitialData(mgr *manager.IndexManager, t *testing.T) {
 
 	// Add a new index definition : 100
 	idxDefn := &common.IndexDefn{
@@ -129,12 +143,10 @@ func setupInitialData(server *gometa.EmbeddedServer, t *testing.T) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	value, err := marshallIndexDefn(idxDefn)
+	err := mgr.HandleCreateIndexDDL(idxDefn)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	server.SetValue("IndexDefinitionId/100", value)
 
 	// Add a new index definition : 101
 	idxDefn = &common.IndexDefn{
@@ -148,56 +160,44 @@ func setupInitialData(server *gometa.EmbeddedServer, t *testing.T) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	value, err = marshallIndexDefn(idxDefn)
+	err = mgr.HandleCreateIndexDDL(idxDefn)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	server.SetValue("IndexDefinitionId/101", value)
+	
+	// Update the index definition to ready
+	topology, err := mgr.GetTopologyByBucket("Default")
+	if err != nil {
+		util.TT.Fatal(err)
+	}
+	
+	topology.ChangeStateForIndexInstByDefn(common.IndexDefnId(100), common.INDEX_STATE_CREATED, common.INDEX_STATE_READY)
+	topology.ChangeStateForIndexInstByDefn(common.IndexDefnId(101), common.INDEX_STATE_CREATED, common.INDEX_STATE_READY)
+	if err := mgr.SetTopologyByBucket("Default", topology); err != nil {
+		util.TT.Fatal(err)
+	}
 }
 
 // clean up
-func cleanupTest(server *gometa.EmbeddedServer, t *testing.T) {
+func cleanupTest(mgr *manager.IndexManager, t *testing.T) {
 
-	_, err := server.GetValue("IndexDefinitionId/100")
+	cleanSingleIndex(mgr, t, common.IndexDefnId(100))
+	cleanSingleIndex(mgr, t, common.IndexDefnId(101))
+}
+
+func cleanSingleIndex(mgr *manager.IndexManager, t *testing.T, id common.IndexDefnId) {
+
+	_, err := mgr.GetIndexDefnById(id)
 	if err != nil {
-		common.Infof("cleanupTest() :  cannot find index defn 100.  No cleanup ...")
+		common.Infof("cleanupTest() :  cannot find index defn %d.  No cleanup ...", id)
 	} else {
-		common.Infof("cleanupTest.cleanupTest() :  found index defn 100.  Cleaning up ...")
+		common.Infof("cleanupTest.cleanupTest() :  found index defn %d.  Cleaning up ...", id)
 
-		server.DeleteValue("IndexDefinitionId/100")
+		mgr.HandleDeleteIndexDDL(id)
 
-		_, err := server.GetValue("IndexDefinitionId/100")
+		_, err := mgr.GetIndexDefnById(id)
 		if err == nil {
-			common.Infof("cleanupTest() :  cannot cleanup index defn 100.  ...")
-		}
-	}
-
-	_, err = server.GetValue("IndexDefinitionId/101")
-	if err != nil {
-		common.Infof("cleanupTest() :  cannot find index defn 101.  No cleanup ...")
-	} else {
-		common.Infof("cleanupTest.cleanupTest() :  found index defn 101.  Cleaning up ...")
-
-		server.DeleteValue("IndexDefinitionId/101")
-
-		_, err := server.GetValue("IndexDefinitionId/101")
-		if err == nil {
-			common.Infof("cleanupTest() :  cannot cleanup index defn 101.  ...")
-		}
-	}
-
-	_, err = server.GetValue("IndexDefinitionId/102")
-	if err != nil {
-		common.Infof("cleanupTest() :  cannot find index defn 102.  No cleanup ...")
-	} else {
-		common.Infof("cleanupTest.cleanupTest() :  found index defn 102.  Cleaning up ...")
-
-		server.DeleteValue("IndexDefinitionId/102")
-
-		_, err := server.GetValue("IndexDefinitionId/102")
-		if err == nil {
-			common.Infof("cleanupTest() :  cannot cleanup index defn 102.  ...")
+			common.Infof("cleanupTest() :  cannot cleanup index defn %d.  ...", id)
 		}
 	}
 }

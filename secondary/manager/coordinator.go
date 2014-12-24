@@ -749,7 +749,13 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 //
 func (c *Coordinator) deleteIndex(key string) bool {
 
-	if err := c.repo.deleteIndexAndUpdateTopology(key); err != nil {
+	id, err := indexDefnId(key)
+	if err != nil {
+		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
+		return false 
+	}
+	
+	if err := c.repo.deleteIndexAndUpdateTopology(id); err != nil {
 		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}

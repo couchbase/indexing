@@ -102,20 +102,20 @@ func TestEventMgr(t *testing.T) {
 // clean up
 func cleanupEvtMgrTest(mgr *manager.IndexManager, t *testing.T) {
 
-	_, err := mgr.GetIndexDefnByName("Default", "event_mgr_test")
+	_, err := mgr.GetIndexDefnById(common.IndexDefnId(300))
 	if err != nil {
 		common.Infof("EventMgrTest.cleanupEvtMgrTest() :  cannot find index defn event_mgr_test.  No cleanup ...")
 	} else {
 		common.Infof("EventMgrTest.cleanupEvtMgrTest() :  found index defn event_mgr_test.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Default", "event_mgr_test")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(300))
 		if err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err := mgr.GetIndexDefnByName("Default", "event_mgr_test")
+		_, err := mgr.GetIndexDefnById(common.IndexDefnId(300))
 		if err == nil {
 			t.Fatal("EventMgrTest.cleanupEvtMgrTest(): Cannot clean up index defn event_mgr_test")
 		}

@@ -49,7 +49,7 @@ func TestCoordinator(t *testing.T) {
 	cleanup(mgr, t)
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	// Add a new index definition : 100
+	// Add a new index definition : 200
 	idxDefn := &common.IndexDefn{
 		DefnId:          common.IndexDefnId(200),
 		Name:            "coordinator_test",
@@ -67,7 +67,7 @@ func TestCoordinator(t *testing.T) {
 	}
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	idxDefn, err = mgr.GetIndexDefnByName("Default", "coordinator_test")
+	idxDefn, err = mgr.GetIndexDefnById(common.IndexDefnId(200))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestCoordinator(t *testing.T) {
 // clean up
 func cleanup(mgr *manager.IndexManager, t *testing.T) {
 
-	err := mgr.HandleDeleteIndexDDL("Default", "coordinator_test")
+	err := mgr.HandleDeleteIndexDDL(common.IndexDefnId(200))
 	if err != nil {
 		common.Infof("Error deleting index %s:%s, err=%s", "Default", "coordinator_test", err)
 	}

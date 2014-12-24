@@ -260,18 +260,7 @@ func (c *clustMgrAgent) handleDropIndex(cmd Message) {
 
 	idxInstId := cmd.(*MsgDropIndex).GetIndexInstId()
 
-	//TODO DefnId and InstId are same for now
-	idxDefn, err := c.mgr.GetIndexDefnById(common.IndexDefnId(idxInstId))
-	if err != nil {
-		common.Errorf("ClustMgrAgent::handleDropIndex Unable to find Index Id %v Err %v", err)
-		c.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_CLUSTER_MGR_DROP_FAIL,
-				severity: FATAL,
-				category: CLUSTER_MGR,
-				cause:    err}}
-	}
-
-	err = c.mgr.HandleDeleteIndexDDL(idxDefn.Bucket, idxDefn.Name)
+	err := c.mgr.HandleDeleteIndexDDL(common.IndexDefnId(idxInstId))
 	if err != nil {
 		common.Errorf("ClustMgrAgent::handleDropIndex Error In Drop Index %v", err)
 		c.supvCmdch <- &MsgError{
