@@ -915,7 +915,8 @@ func (feed *Feed) bucketFeed(
 			feed.errorf("ConnectBucket()", bucketn, err)
 			return nil, err
 		}
-		feeder, err = OpenBucketFeed(bucket)
+		name := fmt.Sprintf("proj-%s-%s", bucket.Name, feed.topic)
+		feeder, err = OpenBucketFeed(name, bucket)
 		if err != nil {
 			feed.errorf("OpenBucketFeed()", bucketn, err)
 			return nil, err
