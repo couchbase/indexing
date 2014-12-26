@@ -17,7 +17,7 @@ const MAX_NUM_VBUCKETS = 1024
 const WORKER_MSG_QUEUE_LEN = 100000
 
 // Default cluster address
-const DEFAULT_CLUSTER_ENDPOINT = "localhost:9000"
+const DEFAULT_CLUSTER_ENDPOINT = "127.0.0.1:9000"
 
 const LOCALHOST = "127.0.0.1"
 
@@ -70,6 +70,7 @@ const NUM_WRITER_THREADS_PER_SLICE = 2
 //GoMeta specific
 const GOMETA_REQUEST_ADDR = "localhost:9885"
 const GOMETA_LEADER_ADDR = "localhost:9884"
+const GOMETA_MSG_ADDR = "localhost:9886"
 
 //Index Manager
 const INDEX_MANAGER_CONFIG = "./config.json"

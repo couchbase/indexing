@@ -2,8 +2,8 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/dataport"
+	"github.com/couchbase/indexing/secondary/manager"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbase/indexing/secondary/transport"
 	"net"
@@ -26,13 +26,13 @@ var TT *testing.T
 // testDefaultClientFactory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func (p *TestDefaultClientFactory) GetClientForNode(server string) manager.ProjectorStreamClient  {
+func (p *TestDefaultClientFactory) GetClientForNode(server string) manager.ProjectorStreamClient {
 
 	return nil
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// testDefaultClientEnv 
+// testDefaultClientEnv
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 func (p *TestDefaultClientEnv) GetNodeListForBuckets(buckets []string) (map[string]string, error) {
@@ -46,18 +46,22 @@ func (p *TestDefaultClientEnv) GetNodeListForBuckets(buckets []string) (map[stri
 func (p *TestDefaultClientEnv) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
 
 	common.Infof("testDefaultClientEnv.GetNodeListForTimestamps() ")
-	
+
 	nodes := make(map[string][]*protobuf.TsVbuuid)
-	nodes["127.0.0.1"] = nil 
-		
+	nodes["127.0.0.1"] = nil
+
 	newTs := protobuf.NewTsVbuuid("default", "Default", 1)
 	for i, _ := range timestamps[0].Seqnos {
 		newTs.Append(uint16(i), timestamps[0].Seqnos[i], timestamps[0].Vbuuids[i],
 			timestamps[0].Snapshots[i][0], timestamps[0].Snapshots[i][1])
 	}
-		
-	nodes["127.0.0.1"] = append(nodes["127.0.0.1"], newTs)	
+
+	nodes["127.0.0.1"] = append(nodes["127.0.0.1"], newTs)
 	return nodes, nil
+}
+
+func (p *TestDefaultClientEnv) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, node string) ([]*protobuf.TsVbuuid, error) {
+	return timestamps, nil
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -69,13 +73,12 @@ func NewFakeProjector(port string) *fakeProjector {
 	p := new(fakeProjector)
 
 	addr := net.JoinHostPort("127.0.0.1", port)
-	prefix := "projector.dataport.client."
-    config := common.SystemConfig.SectionConfig(prefix, true /*trim*/)
-    maxvbs := common.SystemConfig["maxVbuckets"].Int()
-    flag := transport.TransportFlag(0).SetProtobuf()
-    
+	prefix := "endpoint.dataport."
+	config := common.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	maxvbs := common.SystemConfig["maxVbuckets"].Int()
+	flag := transport.TransportFlag(0).SetProtobuf()
 	var err error
-	p.Client, err = dataport.NewClient(addr, flag, maxvbs, config)
+	p.Client, err = dataport.NewClient("unit-test", "mutation topic", addr, flag, maxvbs, config)
 	if err != nil {
 		TT.Fatal(err)
 	}

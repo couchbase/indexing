@@ -458,5 +458,22 @@ func (m *Instance) GetIndexInstance() *IndexInst {
 	return nil
 }
 
+// List of instances
+type Instances struct {
+	Instances        []*Instance `protobuf:"bytes,1,rep,name=instances" json:"instances,omitempty"`
+	XXX_unrecognized []byte      `json:"-"`
+}
+
+func (m *Instances) Reset()         { *m = Instances{} }
+func (m *Instances) String() string { return proto.CompactTextString(m) }
+func (*Instances) ProtoMessage()    {}
+
+func (m *Instances) GetInstances() []*Instance {
+	if m != nil {
+		return m.Instances
+	}
+	return nil
+}
+
 func init() {
 }

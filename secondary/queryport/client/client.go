@@ -312,6 +312,24 @@ func (c *Client) ScanAll(
 	return nil
 }
 
+// Count of all entries in index.
+func (c *Client) Count(index, bucket string) (int64, error) {
+	req := &protobuf.CountRequest{
+		Bucket:    proto.String(bucket),
+		IndexName: proto.String(index),
+	}
+	resp, err := c.doRequestResponse(req)
+	if err != nil {
+		return 0, err
+	}
+	countResp := resp.(*protobuf.CountResponse)
+	if countResp.GetErr() != nil {
+		err = errors.New(countResp.GetErr().GetError())
+		return 0, err
+	}
+	return countResp.GetCount(), nil
+}
+
 func (c *Client) doRequestResponse(req interface{}) (interface{}, error) {
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -324,8 +342,8 @@ func (c *Client) doRequestResponse(req interface{}) (interface{}, error) {
 
 	// ---> protobuf.*Request
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		msg := "%v Statistics() request transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
+		msg := "%v %T request transport failed `%v`\n"
+		common.Errorf(msg, c.logPrefix, req, err)
 		healthy = false
 		return nil, err
 	}
@@ -335,8 +353,8 @@ func (c *Client) doRequestResponse(req interface{}) (interface{}, error) {
 	// <--- protobuf.*Response
 	resp, err := pkt.Receive(conn)
 	if err != nil {
-		msg := "%v Statistics() response transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
+		msg := "%v %T response transport failed `%v`\n"
+		common.Errorf(msg, c.logPrefix, req, err)
 		healthy = false
 		return nil, err
 	}
@@ -383,7 +401,7 @@ func (c *Client) streamResponse(
 
 	} else if endResp, finish = resp.(*protobuf.StreamEndResponse); finish {
 		msg := "%v connection %q received StreamEndResponse"
-		common.Debugf(msg, c.logPrefix, laddr)
+		common.Tracef(msg, c.logPrefix, laddr)
 		callb(endResp) // callback most likely return true
 		cont, healthy = false, true
 
@@ -412,7 +430,7 @@ func (c *Client) closeStream(
 		return
 	}
 	msg := "%v connection %q transmitted protobuf.EndStreamRequest"
-	common.Debugf(msg, c.logPrefix, laddr)
+	common.Tracef(msg, c.logPrefix, laddr)
 
 	timeoutMs := c.readDeadline * time.Millisecond
 	// flush the connection until stream has ended.

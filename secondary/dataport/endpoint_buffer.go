@@ -1,6 +1,9 @@
 package dataport
 
+import "net"
+
 import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/transport"
 
 type endpointBuffers struct {
 	raddr string
@@ -28,14 +31,16 @@ func (b *endpointBuffers) addKeyVersions(
 }
 
 // flush the buffers to the other end.
-func (b *endpointBuffers) flushBuffers(client *Client, block bool) error {
+func (b *endpointBuffers) flushBuffers(
+	conn net.Conn, pkt *transport.TransportPacket) error {
+
 	vbs := make([]*c.VbKeyVersions, 0, len(b.vbs))
 	for _, vb := range b.vbs {
 		vbs = append(vbs, vb)
 	}
-	// re-initialize before failing.
 	b.vbs = make(map[string]*c.VbKeyVersions)
-	if err := client.SendKeyVersions(vbs, block); err != nil {
+
+	if err := pkt.Send(conn, vbs); err != nil {
 		return err
 	}
 	return nil

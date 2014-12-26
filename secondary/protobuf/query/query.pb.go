@@ -18,6 +18,8 @@ It has these top-level messages:
 	EndStreamRequest
 	ResponseStream
 	StreamEndResponse
+	CountRequest
+	CountResponse
 	Span
 	Range
 	IndexEntry
@@ -54,12 +56,14 @@ func (m *Error) GetError() string {
 type QueryPayload struct {
 	Version           *uint32             `protobuf:"varint,1,req,name=version" json:"version,omitempty"`
 	StatisticsRequest *StatisticsRequest  `protobuf:"bytes,2,opt,name=statisticsRequest" json:"statisticsRequest,omitempty"`
-	ScanRequest       *ScanRequest        `protobuf:"bytes,3,opt,name=scanRequest" json:"scanRequest,omitempty"`
-	ScanAllRequest    *ScanAllRequest     `protobuf:"bytes,4,opt,name=scanAllRequest" json:"scanAllRequest,omitempty"`
-	EndStream         *EndStreamRequest   `protobuf:"bytes,5,opt,name=endStream" json:"endStream,omitempty"`
-	Statistics        *StatisticsResponse `protobuf:"bytes,6,opt,name=statistics" json:"statistics,omitempty"`
-	Stream            *ResponseStream     `protobuf:"bytes,7,opt,name=stream" json:"stream,omitempty"`
-	StreamEnd         *StreamEndResponse  `protobuf:"bytes,8,opt,name=streamEnd" json:"streamEnd,omitempty"`
+	Statistics        *StatisticsResponse `protobuf:"bytes,3,opt,name=statistics" json:"statistics,omitempty"`
+	ScanRequest       *ScanRequest        `protobuf:"bytes,4,opt,name=scanRequest" json:"scanRequest,omitempty"`
+	ScanAllRequest    *ScanAllRequest     `protobuf:"bytes,5,opt,name=scanAllRequest" json:"scanAllRequest,omitempty"`
+	Stream            *ResponseStream     `protobuf:"bytes,6,opt,name=stream" json:"stream,omitempty"`
+	CountRequest      *CountRequest       `protobuf:"bytes,7,opt,name=countRequest" json:"countRequest,omitempty"`
+	CountResponse     *CountResponse      `protobuf:"bytes,8,opt,name=countResponse" json:"countResponse,omitempty"`
+	EndStream         *EndStreamRequest   `protobuf:"bytes,9,opt,name=endStream" json:"endStream,omitempty"`
+	StreamEnd         *StreamEndResponse  `protobuf:"bytes,10,opt,name=streamEnd" json:"streamEnd,omitempty"`
 	XXX_unrecognized  []byte              `json:"-"`
 }
 
@@ -81,6 +85,13 @@ func (m *QueryPayload) GetStatisticsRequest() *StatisticsRequest {
 	return nil
 }
 
+func (m *QueryPayload) GetStatistics() *StatisticsResponse {
+	if m != nil {
+		return m.Statistics
+	}
+	return nil
+}
+
 func (m *QueryPayload) GetScanRequest() *ScanRequest {
 	if m != nil {
 		return m.ScanRequest
@@ -95,23 +106,30 @@ func (m *QueryPayload) GetScanAllRequest() *ScanAllRequest {
 	return nil
 }
 
-func (m *QueryPayload) GetEndStream() *EndStreamRequest {
-	if m != nil {
-		return m.EndStream
-	}
-	return nil
-}
-
-func (m *QueryPayload) GetStatistics() *StatisticsResponse {
-	if m != nil {
-		return m.Statistics
-	}
-	return nil
-}
-
 func (m *QueryPayload) GetStream() *ResponseStream {
 	if m != nil {
 		return m.Stream
+	}
+	return nil
+}
+
+func (m *QueryPayload) GetCountRequest() *CountRequest {
+	if m != nil {
+		return m.CountRequest
+	}
+	return nil
+}
+
+func (m *QueryPayload) GetCountResponse() *CountResponse {
+	if m != nil {
+		return m.CountResponse
+	}
+	return nil
+}
+
+func (m *QueryPayload) GetEndStream() *EndStreamRequest {
+	if m != nil {
+		return m.EndStream
 	}
 	return nil
 }
@@ -322,6 +340,56 @@ func (m *StreamEndResponse) String() string { return proto.CompactTextString(m) 
 func (*StreamEndResponse) ProtoMessage()    {}
 
 func (m *StreamEndResponse) GetErr() *Error {
+	if m != nil {
+		return m.Err
+	}
+	return nil
+}
+
+// Count request to indexer.
+type CountRequest struct {
+	IndexName        *string `protobuf:"bytes,1,req,name=indexName" json:"indexName,omitempty"`
+	Bucket           *string `protobuf:"bytes,2,req,name=bucket" json:"bucket,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *CountRequest) Reset()         { *m = CountRequest{} }
+func (m *CountRequest) String() string { return proto.CompactTextString(m) }
+func (*CountRequest) ProtoMessage()    {}
+
+func (m *CountRequest) GetIndexName() string {
+	if m != nil && m.IndexName != nil {
+		return *m.IndexName
+	}
+	return ""
+}
+
+func (m *CountRequest) GetBucket() string {
+	if m != nil && m.Bucket != nil {
+		return *m.Bucket
+	}
+	return ""
+}
+
+// total number of entries in index.
+type CountResponse struct {
+	Count            *int64 `protobuf:"varint,1,req,name=count" json:"count,omitempty"`
+	Err              *Error `protobuf:"bytes,2,opt,name=err" json:"err,omitempty"`
+	XXX_unrecognized []byte `json:"-"`
+}
+
+func (m *CountResponse) Reset()         { *m = CountResponse{} }
+func (m *CountResponse) String() string { return proto.CompactTextString(m) }
+func (*CountResponse) ProtoMessage()    {}
+
+func (m *CountResponse) GetCount() int64 {
+	if m != nil && m.Count != nil {
+		return *m.Count
+	}
+	return 0
+}
+
+func (m *CountResponse) GetErr() *Error {
 	if m != nil {
 		return m.Err
 	}

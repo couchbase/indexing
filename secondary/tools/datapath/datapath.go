@@ -22,7 +22,6 @@ var options struct {
 	coordEndpoint string   // co-ordinator endpoint
 	stat          string   // periodic timeout to print dataport statistics
 	timeout       string   // timeout for dataport to exit
-	maxVbno       int      // maximum number of vbuckets
 	projector     bool     // start projector, useful in debug mode.
 	debug         bool
 	trace         bool
@@ -43,8 +42,6 @@ func argParse() []string {
 		"periodic timeout to print dataport statistics")
 	flag.StringVar(&options.timeout, "timeout", "0",
 		"timeout for dataport to exit")
-	flag.IntVar(&options.maxVbno, "maxvb", 1024,
-		"maximum number of vbuckets")
 	flag.BoolVar(&options.projector, "projector", false,
 		"start projector for debug mode")
 	flag.BoolVar(&options.debug, "debug", false,
@@ -101,7 +98,8 @@ func main() {
 			config := c.SystemConfig.SectionConfig("projector.", true)
 			config.SetValue("clusterAddr", cluster)
 			config.SetValue("adminport.listenAddr", adminport)
-			epfactory := NewEndpointFactory(cluster, maxvbs, config)
+			econf := c.SystemConfig.SectionConfig("endpoint.dataport.", true)
+			epfactory := NewEndpointFactory(cluster, maxvbs, econf)
 			config.SetValue("routerEndpointFactory", epfactory)
 			projector.NewProjector(maxvbs, config) // start projector daemon
 		}
@@ -151,9 +149,8 @@ func mf(err error, msg string) {
 
 // NewEndpointFactory to create endpoint instances based on config.
 func NewEndpointFactory(
-	cluster string, maxvbs int, config c.Config) c.RouterEndpointFactory {
+	cluster string, maxvbs int, econf c.Config) c.RouterEndpointFactory {
 
-	econf := config.SectionConfig("dataport.client.", true)
 	return func(topic, endpointType, addr string) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":

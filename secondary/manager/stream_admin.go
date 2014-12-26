@@ -12,7 +12,8 @@ package manager
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
-	projector "github.com/couchbase/indexing/secondary/projector/client"
+	projector "github.com/couchbase/indexing/secondary/projector"
+	projectorC "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"net"
 	"strconv"
@@ -35,12 +36,12 @@ type VbMap map[string][]uint16
 // 2) A projector consumer/client can start a stream based on its own <local state>, without having to
 //    know whether the projector is going to accept the request based on that <local state>.
 // 3) When projector recieves a request to start a stream, it uses its own <local state> to filter out the
-//    the <client request state>.  The resulting <active state> is
+//    the <state> requested by client.  The resulting <active state> is
 //    - timestamp filtered by <bucket, vbucket> that is applicable for that projector
 //    - the set of index instances as proposed in the client <local state>
 // 4)  Projector client can augment existing <state> by proposing new <state> to projector. Agumentation allows
 //    - adding new instance
-//    - changing endpoint of an instance?
+//    - changing endpoint of an instance
 //    - activate new vbucket
 // 5) State agumentation will not allow
 //    - remove instance
@@ -48,11 +49,29 @@ type VbMap map[string][]uint16
 //    - restart vbucket
 //    - repair connection
 //
+// ProjectorAdmin will operate in the following fashion:
+// 1) AddIndexToStream() can be used to start a stream with a given <state>.  A <state> is consisted of
+//    bucket timestamp and index instances.  This method can be used to augment the <state> as well. The
+//    method ensures that the <requested state> is enforced as follows:
+//    -  AddIndexToStream() passes the <state> to every projector node.  The projector node must return
+//       the active timestamps applicable for that node.
+//    -  If a vbucket is in an active timestamp, it indicates that the stream has started successfully for that vbucket.
+//       Termination of the stream will be manifested as StreamEnd or ConnectionError.
+//    -  Projector node may return rollback timestamp for a vbucket.  The rollback timestamp seqno must be smaller than
+//       the request timestamp unless vbuuid has changed.  It is required for ProjectorAdmin to retry using the rollback
+//       timestamps.
+//    -  AddIndexToStream() will retry until all <bucket, vbucket> have corresponding active timestamps.
+//    -  AddIndexToStream() will detects that more than one projector has active timestamps on the
+//       same <bucket, vbucket>.  **If so, it will STOP the vbucket for both nodes.**  It will then retry restart the vbuckets.
+//    -  AddIndexToStream() will send the active timestamps to StreamMonitor to ensure that projector actually sends the
+//       stream properly over.   If it does not get the stream for the vbucket, it will try to restart the vbucket using the latest
+//       timestamp received so far (in this case, it will be the consolidated active timestamp).  This step is just to ensure
+//       liveness property in presence of bugs or race conditions (when projector protocol is not honored).
+//
 type ProjectorAdmin struct {
-	activeTimestamps map[string][]*protobuf.TsVbuuid
-	factory          ProjectorStreamClientFactory
-	env              ProjectorClientEnv
-	monitor          *StreamMonitor
+	factory ProjectorStreamClientFactory
+	env     ProjectorClientEnv
+	monitor *StreamMonitor
 }
 
 type adminWorker struct {
@@ -83,6 +102,7 @@ type ProjectorStreamClientFactoryImpl struct {
 type ProjectorClientEnv interface {
 	GetNodeListForBuckets(buckets []string) (map[string]string, error)
 	GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error)
+	FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, node string) ([]*protobuf.TsVbuuid, error)
 }
 
 type ProjectorClientEnvImpl struct {
@@ -134,6 +154,7 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 
 		// start worker to create mutation stream
 		workers := make(map[string]*adminWorker)
+		var activeTimestamps []*protobuf.TsVbuuid = nil
 		donech := make(chan *adminWorker, len(nodes))
 
 		for _, server := range nodes {
@@ -156,7 +177,7 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 			worker := <-donech
 
 			common.Debugf("ProjectorAdmin::AddIndexToStream(): worker %v done", worker.server)
-			p.monitorStream(worker.streamId, worker.activeTimestamps)
+			activeTimestamps = append(activeTimestamps, worker.activeTimestamps...)
 			delete(workers, worker.server)
 
 			if worker.err != nil {
@@ -179,6 +200,17 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 				shouldRetry = true
 				break
 			}
+		}
+
+		if !shouldRetry {
+			// TODO: This does not STOP the existing stream if two projectors return active timestamps on
+			// the same vbucket.  This could cause the dataport to have interleaved mutations on the same vbucket.
+			// Need to verify if this situation can happen (e.g. during rebalancing or kv split brain).
+			shouldRetry = !p.validateActiveVb(buckets, activeTimestamps)
+		}
+
+		if !shouldRetry {
+			p.monitorStream(streamId, activeTimestamps)
 		}
 	}
 
@@ -364,6 +396,7 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 		// start worker to create mutation stream
 		workers := make(map[string]*adminWorker)
 		donech := make(chan *adminWorker, len(nodes))
+		var activeTimestamps []*protobuf.TsVbuuid = nil
 
 		for server, timestamps := range nodes {
 			worker := &adminWorker{
@@ -385,7 +418,7 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 			worker := <-donech
 
 			common.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): worker %v done", worker.server)
-			p.monitorStream(worker.streamId, worker.activeTimestamps)
+			activeTimestamps = append(activeTimestamps, worker.activeTimestamps...)
 			delete(workers, worker.server)
 
 			if worker.err != nil {
@@ -411,9 +444,42 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 				break
 			}
 		}
+
+		if !shouldRetry {
+			p.monitorStream(streamId, activeTimestamps)
+		}
 	}
 
 	return nil
+}
+
+func (p *ProjectorAdmin) validateActiveVb(buckets []string, activeTimestamps []*protobuf.TsVbuuid) bool {
+
+	for _, bucket := range buckets {
+		for vb := 0; vb < NUM_VB; vb++ {
+			found := false
+			for _, ts := range activeTimestamps {
+				if ts.GetBucket() == bucket {
+					for _, ts_vb := range ts.GetVbnos() {
+						if uint32(vb) == ts_vb {
+							if found {
+								common.Debugf("validateActiveVb(): find duplicate active timestamp for bucket %s vb %d", bucket, vb)
+								return false
+							}
+							found = true
+						}
+					}
+				}
+			}
+
+			if !found {
+				common.Debugf("validateActiveVb(): Cannot find active timestamp for bucket %s vb %d", bucket, vb)
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 //
@@ -510,6 +576,12 @@ func (worker *adminWorker) addInstances(instances []*protobuf.Instance,
 		timestamps = append(timestamps, ts)
 	}
 
+	timestamps, err := worker.admin.env.FilterTimestampsForNode(timestamps, worker.server)
+	if err != nil {
+		worker.err = NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "Unable to filter restart timestamp")
+		return
+	}
+
 	// open the stream for the specific node for the set of <bucket, timestamp>
 	topic := getTopicForStreamId(worker.streamId)
 
@@ -573,23 +645,23 @@ func (worker *adminWorker) shouldRetryAddInstances(requestTs []*protobuf.TsVbuui
 	errStr := err.Error()
 	common.Debugf("adminWorker::shouldRetryAddInstances(): Error encountered when calling MutationTopicRequest. Error=%v", errStr)
 
-	if strings.Contains(errStr, "ErrorTopicExist") {
+	if strings.Contains(errStr, projector.ErrorTopicExist.Error()) {
 		// TODO: Need pratap to define the semantic of ErrorTopExist.   Right now return as an non-recoverable error.
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorInconsistentFeed") {
+	} else if strings.Contains(errStr, projector.ErrorInconsistentFeed.Error()) {
 		// This is fatal error.  Should only happen due to coding error.   Need to return this error.
 		// For those projectors that have already been opened, let's leave it open. Eventually those
 		// projectors will fill up the buffer and terminate the connection by itself.
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorNotMyVbucket") {
+	} else if strings.Contains(errStr, projector.ErrorNotMyVbucket.Error()) {
 		return nil, NewError(ERROR_STREAM_WRONG_VBUCKET, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorInvalidVbucketBranch") {
+	} else if strings.Contains(errStr, projector.ErrorInvalidVbucketBranch.Error()) {
 		return nil, NewError(ERROR_STREAM_INVALID_TIMESTAMP, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorInvalidKVaddrs") {
+	} else if strings.Contains(errStr, projector.ErrorInvalidKVaddrs.Error()) {
 		return nil, NewError(ERROR_STREAM_INVALID_KVADDRS, NORMAL, STREAM, err, "")
 	}
 
@@ -643,7 +715,7 @@ func (worker *adminWorker) deleteInstances(instances []uint64, doneCh chan *admi
 			}
 
 			common.Debugf("adminWorker::deleteInstances(): Error encountered when calling DelInstances. Error=%v", err.Error())
-			if strings.Contains(err.Error(), "ErrorTopicMissing") {
+			if strings.Contains(err.Error(), projector.ErrorTopicMissing.Error()) {
 				// It is OK if topic is missing
 				worker.err = nil
 				return
@@ -699,7 +771,7 @@ func (worker *adminWorker) repairEndpoint(endpoint string, doneCh chan *adminWor
 			}
 
 			common.Debugf("adminWorker::repairEndpiont(): Error encountered when calling RepairEndpoint. Error=%v", err.Error())
-			if strings.Contains(err.Error(), "ErrorTopicMissing") {
+			if strings.Contains(err.Error(), projector.ErrorTopicMissing.Error()) {
 				// It is OK if topic is missing
 				worker.err = nil
 				return
@@ -798,22 +870,22 @@ func (worker *adminWorker) shouldRetryRestartVbuckets(requestTs []*protobuf.TsVb
 	errStr := err.Error()
 	common.Debugf("adminWorker::shouldRetryRestartVbuckets(): Error encountered when calling RestartVbuckets. Error=%v", errStr)
 
-	if strings.Contains(errStr, "ErrorTopicMissing") {
+	if strings.Contains(errStr, projector.ErrorTopicMissing.Error()) {
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorInvalidBucket") {
+	} else if strings.Contains(errStr, projector.ErrorInvalidBucket.Error()) {
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorFeeder") {
+	} else if strings.Contains(errStr, projector.ErrorFeeder.Error()) {
 		return nil, NewError(ERROR_STREAM_FEEDER, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorNotMyVbucket") {
+	} else if strings.Contains(errStr, projector.ErrorNotMyVbucket.Error()) {
 		return nil, NewError(ERROR_STREAM_WRONG_VBUCKET, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorInvalidVbucketBranch") {
+	} else if strings.Contains(errStr, projector.ErrorInvalidVbucketBranch.Error()) {
 		return nil, NewError(ERROR_STREAM_INVALID_TIMESTAMP, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, "ErrorStreamEnd") {
+	} else if strings.Contains(errStr, projector.ErrorStreamEnd.Error()) {
 		return nil, NewError(ERROR_STREAM_STREAM_END, NORMAL, STREAM, err, "")
 	}
 
@@ -961,7 +1033,7 @@ func (p *ProjectorStreamClientFactoryImpl) GetClientForNode(server string) Proje
 	//create client for node's projectors
 	config := common.SystemConfig.SectionConfig("projector.client.", true)
 	maxvbs := common.SystemConfig["maxVbuckets"].Int()
-	ap := projector.NewClient(HTTP_PREFIX+projAddr+"/adminport/", maxvbs, config)
+	ap := projectorC.NewClient(HTTP_PREFIX+projAddr+"/adminport/", maxvbs, config)
 	return ap
 }
 
@@ -1076,6 +1148,55 @@ func (p *ProjectorClientEnvImpl) findTimestamp(timestampMap map[string][]*protob
 	timestamps = append(timestamps, newTs)
 	timestampMap[kvaddr] = timestamps
 	return newTs
+}
+
+//
+// Filter the timestamp based on vb list on a certain node
+//
+func (p *ProjectorClientEnvImpl) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid,
+	node string) ([]*protobuf.TsVbuuid, error) {
+
+	common.Debugf("ProjectorClientEnvImpl.FilterTimestampsForNode(): start")
+
+	var newTimestamps []*protobuf.TsVbuuid = nil
+
+	for _, ts := range timestamps {
+
+		bucketRef, err := couchbase.GetBucket(COUCHBASE_INTERNAL_BUCKET_URL, DEFAULT_POOL_NAME, ts.GetBucket())
+		if err != nil {
+			return nil, err
+		}
+
+		if err := bucketRef.Refresh(); err != nil {
+			return nil, err
+		}
+
+		vbmap, err := bucketRef.GetVBmap(nil)
+		if err != nil {
+			return nil, err
+		}
+
+		newTs := protobuf.NewTsVbuuid(DEFAULT_POOL_NAME, ts.GetBucket(), NUM_VB)
+
+		for kvaddr, vbnos := range vbmap {
+			if kvaddr == node {
+				for _, vbno := range vbnos {
+					seqno, vbuuid, sStart, sEnd, err := ts.Get(vbno)
+					// If cannot get the seqno from this vbno (err != nil), then skip.
+					// Otherwise, add to the new timestamp.
+					if err == nil {
+						newTs.Append(uint16(vbno), seqno, vbuuid, sStart, sEnd)
+					}
+				}
+			}
+		}
+
+		if !newTs.IsEmpty() {
+			newTimestamps = append(newTimestamps, newTs)
+		}
+	}
+
+	return newTimestamps, nil
 }
 
 /////////////////////////////////////////////////////////////////////////

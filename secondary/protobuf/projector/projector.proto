@@ -118,3 +118,8 @@ message ShutdownTopicRequest {
 message Instance {
     optional IndexInst indexInstance = 1;
 }
+
+// List of instances
+message Instances {
+    repeated Instance instances     = 1;
+}

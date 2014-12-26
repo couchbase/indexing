@@ -33,10 +33,14 @@ var (
 	fields     string
 	isPrimary  bool
 	instanceId string
+
+	trace bool
+	debug bool
+	info  bool
 )
 
 const (
-	using    = "lsm"
+	using    = "gsi"
 	exprType = "N1QL"
 	partnExp = ""
 	where    = ""
@@ -44,7 +48,7 @@ const (
 
 func parseArgs() {
 	flag.StringVar(&server, "server", "localhost:9000", "Cluster server address")
-	flag.StringVar(&opType, "type", "scanAll", "Index command (scan|stats|scanAll|create|drop|list)")
+	flag.StringVar(&opType, "type", "scanAll", "Index command (scan|stats|scanAll|count|create|drop|list)")
 	flag.StringVar(&indexName, "index", "", "Index name")
 	flag.StringVar(&bucket, "bucket", "default", "Bucket name")
 	flag.StringVar(&low, "low", "[]", "Range: [low]")
@@ -56,6 +60,9 @@ func parseArgs() {
 	flag.StringVar(&fields, "fields", "", "Comma separated on-index fields")
 	flag.BoolVar(&isPrimary, "primary", false, "Is primary index")
 	flag.StringVar(&instanceId, "instanceid", "", "Index instanceId")
+	flag.BoolVar(&debug, "debug", false, "run in debug mode")
+	flag.BoolVar(&trace, "trace", false, "run in trace mode")
+	flag.BoolVar(&info, "info", false, "run in info mode")
 
 	flag.Parse()
 }
@@ -71,6 +78,13 @@ func main() {
 	var keys []interface{}
 
 	parseArgs()
+	if debug {
+		c.SetLogLevel(c.LogLevelDebug)
+	} else if trace {
+		c.SetLogLevel(c.LogLevelTrace)
+	} else if info {
+		c.SetLogLevel(c.LogLevelInfo)
+	}
 
 	cinfo := c.NewClusterInfoCache(fmt.Sprintf("http://%s", server), "default")
 	if err = cinfo.Fetch(); err != nil {
@@ -183,6 +197,15 @@ func main() {
 					fmt.Println("Stats: ", statsResp)
 				}
 			}
+		case "count":
+			config := c.SystemConfig.SectionConfig("queryport.client.", true)
+			client := queryclient.NewClient(queryclient.Remoteaddr(scan_addr), config)
+			count, err := client.Count(indexName, bucket)
+			if err != nil {
+				fmt.Println("Error occured:", err)
+			}
+			fmt.Printf("Index %q/%q has %v entries\n", bucket, indexName, count)
+
 		}
 
 		if err != nil {

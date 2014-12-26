@@ -144,12 +144,12 @@ loop:
 			cmd := msg[0].(byte)
 			switch cmd {
 			case vrCmdAddEngines:
-				c.Debugf("%v vrCmdAddEngines\n", vr.logPrefix)
+				c.Tracef("%v vrCmdAddEngines\n", vr.logPrefix)
 				vr.engines = make(map[uint64]*Engine)
 				if msg[1] != nil {
 					for uuid, engine := range msg[1].(map[uint64]*Engine) {
 						vr.engines[uuid] = engine
-						c.Debugf("%v AddEngine %v\n", vr.logPrefix, uuid)
+						c.Tracef("%v AddEngine %v\n", vr.logPrefix, uuid)
 					}
 					vr.printCtrl(vr.engines)
 				}
@@ -163,20 +163,20 @@ loop:
 				addEngineCount++
 
 			case vrCmdDeleteEngines:
-				c.Debugf("%v vrCmdDeleteEngines\n", vr.logPrefix)
+				c.Tracef("%v vrCmdDeleteEngines\n", vr.logPrefix)
 				engineKeys := msg[1].([]uint64)
 				for _, uuid := range engineKeys {
 					delete(vr.engines, uuid)
-					c.Debugf("%v DelEngine %v\n", vr.logPrefix, uuid)
+					c.Tracef("%v DelEngine %v\n", vr.logPrefix, uuid)
 				}
 
-				c.Debugf("%v deleted engines %v\n", engineKeys)
+				c.Tracef("%v deleted engines %v\n", engineKeys)
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{nil}
 				delEngineCount++
 
 			case vrCmdGetStatistics:
-				c.Debugf("%v vrCmdStatistics\n", vr.logPrefix)
+				c.Tracef("%v vrCmdStatistics\n", vr.logPrefix)
 				respch := msg[1].(chan []interface{})
 				stats.Set("addEngines", addEngineCount)
 				stats.Set("delEngines", delEngineCount)
@@ -190,7 +190,7 @@ loop:
 				if m.Opcode == mcd.UPR_STREAMREQ { // opens up the path
 					heartBeat = time.Tick(vr.syncTimeout)
 					format := "%v heartbeat (%v) loaded ...\n"
-					c.Debugf(format, vr.logPrefix, vr.syncTimeout)
+					c.Tracef(format, vr.logPrefix, vr.syncTimeout)
 				}
 
 				// count statistics
@@ -227,7 +227,7 @@ func (vr *VbucketRoutine) updateEndpoints(eps map[string]c.RouterEndpoint) {
 				format := "%v endpoint %v not found\n"
 				c.Errorf(format, vr.logPrefix, raddr)
 			}
-			c.Debugf("%v UpdateEndpoint %v to %v\n", vr.logPrefix, raddr, engine)
+			c.Tracef("%v UpdateEndpoint %v to %v\n", vr.logPrefix, raddr, engine)
 			vr.endpoints[raddr] = eps[raddr]
 		}
 	}
@@ -271,8 +271,11 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 		}
 		// send data to corresponding endpoint.
 		for raddr, data := range dataForEndpoints {
-			// send might fail, we don't care
-			vr.endpoints[raddr].Send(data)
+			// send might fail due to ErrorChannelFull or ErrorClosed
+			if vr.endpoints[raddr].Send(data) != nil {
+				vr.endpoints[raddr].Close()
+				delete(vr.endpoints, raddr)
+			}
 		}
 	}
 	return seqno
@@ -280,9 +283,12 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 
 // send to all endpoints.
 func (vr *VbucketRoutine) sendToEndpoints(data interface{}) {
-	for _, endpoint := range vr.endpoints {
-		// send might fail, we don't care
-		endpoint.Send(data)
+	for raddr, endpoint := range vr.endpoints {
+		// send might fail due to ErrorChannelFull or ErrorClosed
+		if endpoint.Send(data) != nil {
+			endpoint.Close()
+			delete(vr.endpoints, raddr)
+		}
 	}
 }
 
@@ -290,11 +296,11 @@ func (vr *VbucketRoutine) printCtrl(v interface{}) {
 	switch val := v.(type) {
 	case map[string]c.RouterEndpoint:
 		for raddr := range val {
-			c.Debugf("%v knows endpoint %v\n", vr.logPrefix, raddr)
+			c.Tracef("%v knows endpoint %v\n", vr.logPrefix, raddr)
 		}
 	case map[uint64]*Engine:
 		for uuid := range val {
-			c.Debugf("%v knows engine %v\n", vr.logPrefix, uuid)
+			c.Tracef("%v knows engine %v\n", vr.logPrefix, uuid)
 		}
 	}
 }

@@ -11,11 +11,13 @@ package manager
 
 import (
 	"encoding/json"
-	gometa "github.com/couchbase/gometa/common"
 	"github.com/couchbase/indexing/secondary/common"
+	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"github.com/couchbaselabs/goprotobuf/proto"
 	"math/rand"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 )
 
@@ -26,16 +28,16 @@ import (
 // to narrow down only for DDL.
 ///////////////////////////////////////////////////////
 
-// Every index ever created and maintained by this package will have an
-// associated index-info structure.
 type IndexInfo struct {
-	Name      string           `json:"name,omitempty"`       // Name of the index
-	Uuid      string           `json:"uuid,omitempty"`       // unique id for every index
-	Using     common.IndexType `json:"using,omitempty"`      // indexing algorithm
-	SecExprs  []string         `json:"onExprList,omitempty"` // expression list
-	Bucket    string           `json:"bucket,omitempty"`     // bucket name
-	IsPrimary bool             `json:"isPrimary,omitempty"`
-	Exprtype  common.ExprType  `json:"exprType,omitempty"`
+	Name      string   `json:"name,omitempty"`
+	Bucket    string   `json:"bucket,omitempty"`
+	DefnID    string   `json:"defnID, omitempty"`
+	Using     string   `json:"using,omitempty"`
+	Exprtype  string   `json:"exprType,omitempty"`
+	PartnExpr string   `json:"partnExpr,omitempty"`
+	SecExprs  []string `json:"secExprs,omitempty"`
+	WhereExpr string   `json:"whereExpr,omitempty"`
+	IsPrimary bool     `json:"isPrimary,omitempty"`
 }
 
 type RequestType string
@@ -43,55 +45,20 @@ type RequestType string
 const (
 	CREATE RequestType = "create"
 	DROP   RequestType = "drop"
-	LIST   RequestType = "list"
-	NOTIFY RequestType = "notify"
-	NODES  RequestType = "nodes"
-	SCAN   RequestType = "scan"
-	STATS  RequestType = "stats"
+	GET    RequestType = "get"
 )
 
-// All API accept IndexRequest structure and returns IndexResponse structure.
-// If application is written in Go, and compiled with `indexing` package then
-// they can choose the access the underlying interfaces directly.
 type IndexRequest struct {
-	Type       RequestType `json:"type,omitempty"`
-	Index      IndexInfo   `json:"index,omitempty"`
-	ServerUuid string      `json:"serverUuid,omitempty"`
-	Params     QueryParams `json:"params,omitempty"`
+	Version uint64      `json:"version,omitempty"`
+	Type    RequestType `json:"type,omitempty"`
+	Index   IndexInfo   `json:"index,omitempty"`
 }
 
-// URL encoded query params
-type QueryParams struct {
-	ScanType  ScanType  `json:"scanType,omitempty"`
-	Low       [][]byte  `json:"low,omitempty"`
-	High      [][]byte  `json:"high,omitempty"`
-	Inclusion Inclusion `json:"inclusion,omitempty"`
-	Limit     int64     `json:"limit,omitempty"`
-}
-
-type ScanType string
-
-const (
-	COUNT      ScanType = "count"
-	EXISTS     ScanType = "exists"
-	LOOKUP     ScanType = "lookup"
-	RANGESCAN  ScanType = "rangeScan"
-	FULLSCAN   ScanType = "fullScan"
-	RANGECOUNT ScanType = "rangeCount"
-)
-
-//RESPONSE DATA FORMATS
-type ResponseStatus string
-
-const (
-	RESP_SUCCESS       ResponseStatus = "success"
-	RESP_ERROR         ResponseStatus = "error"
-	RESP_INVALID_CACHE ResponseStatus = "invalid_cache"
-)
-
-type IndexRow struct {
-	Key   [][]byte `json:"key,omitempty"`
-	Value string   `json:"value,omitempty"`
+type IndexResponse struct {
+	Version uint64         `json:"version,omitempty"`
+	Status  ResponseStatus `json:"status,omitempty"`
+	Indexes []IndexInfo    `json:"indexes,omitempty"`
+	Errors  []IndexError   `json:"errors,omitempty"`
 }
 
 type IndexError struct {
@@ -99,34 +66,24 @@ type IndexError struct {
 	Msg  string `json:"msg,omitempty"`
 }
 
-type IndexMetaResponse struct {
-	Status     ResponseStatus `json:"status,omitempty"`
-	Indexes    []IndexInfo    `json:"indexes,omitempty"`
-	ServerUuid string         `json:"serverUuid,omitempty"`
-	Nodes      []NodeInfo     `json:"nodes,omitempty"`
-	Errors     []IndexError   `json:"errors,omitempty"`
+type TopologyRequest struct {
+	Version uint64      `json:"version,omitempty"`
+	Type    RequestType `json:"type,omitempty"`
+	Bucket  string      `json:"bucket,omitempty"`
 }
 
-type IndexScanResponse struct {
+type TopologyResponse struct {
+	Version   uint64         `json:"version,omitempty"`
 	Status    ResponseStatus `json:"status,omitempty"`
-	TotalRows uint64         `json:"totalrows,omitempty"`
-	Rows      []IndexRow     `json:"rows,omitempty"`
+	Instances []byte         `json:"instance,omitempty"`
 	Errors    []IndexError   `json:"errors,omitempty"`
 }
 
-//Indexer Node Info
-type NodeInfo struct {
-	IndexerURL string `json:"indexerURL,omitempty"`
-}
-
-// Inclusion
-type Inclusion int
+type ResponseStatus string
 
 const (
-	Neither Inclusion = iota
-	Low
-	High
-	Both
+	RESP_SUCCESS ResponseStatus = "success"
+	RESP_ERROR   ResponseStatus = "error"
 )
 
 type requestHandler struct {
@@ -135,6 +92,13 @@ type requestHandler struct {
 	mutex    sync.Mutex
 	isClosed bool
 }
+
+type httpHandler struct {
+	initializer sync.Once
+	mgr         *IndexManager
+}
+
+var handler httpHandler
 
 ///////////////////////////////////////////////////////
 // Package Local Function
@@ -164,15 +128,15 @@ func (m *requestHandler) close() {
 	}
 }
 
-func (m *requestHandler) createIndexRequest(w http.ResponseWriter, r *http.Request) {
+func (m *httpHandler) createIndexRequest(w http.ResponseWriter, r *http.Request) {
 
 	// convert request
-	idxRequest := convertRequest(r)
-	if idxRequest == nil {
+	request := convertIndexRequest(r)
+	if request == nil {
 		ierr := IndexError{Code: string(RESP_ERROR),
 			Msg: "RequestHandler::createIndexRequest: Unable to convert request"}
 
-		res := IndexMetaResponse{
+		res := IndexResponse{
 			Status: RESP_ERROR,
 			Errors: []IndexError{ierr},
 		}
@@ -181,27 +145,38 @@ func (m *requestHandler) createIndexRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	indexinfo := request.Index
+
+	defnID := uint64(rand.Int())
+	if len(indexinfo.DefnID) != 0 {
+		if num, err := strconv.ParseUint(indexinfo.DefnID, 10, 64); err == nil {
+			defnID = num
+		}
+	}
+
 	// create an in-memory index definition
-	indexinfo := idxRequest.Index
+	// TODO : WhereExpr
 	idxDefn := &common.IndexDefn{
-		DefnId:          common.IndexDefnId(rand.Int()),
+		DefnId:          common.IndexDefnId(defnID),
 		Name:            indexinfo.Name,
 		Using:           common.ForestDB,
 		Bucket:          indexinfo.Bucket,
 		IsPrimary:       indexinfo.IsPrimary,
 		SecExprs:        indexinfo.SecExprs,
 		ExprType:        common.N1QL,
-		PartitionScheme: common.TEST,
-		PartitionKey:    ""}
+		PartitionScheme: common.SINGLE,
+		PartitionKey:    indexinfo.PartnExpr}
 
 	// call the index manager to handle the DDL
+	common.Debugf("RequestHandler::createIndexRequest: invoke IndexManager for create index bucket %s name %s",
+		indexinfo.Bucket, indexinfo.Name)
+
 	err := m.mgr.HandleCreateIndexDDL(idxDefn)
 	if err == nil {
 		// No error, return success
-		res := IndexMetaResponse{
-			Status:     RESP_SUCCESS,
-			Indexes:    []IndexInfo{indexinfo},
-			ServerUuid: "",
+		res := IndexResponse{
+			Status:  RESP_SUCCESS,
+			Indexes: []IndexInfo{indexinfo},
 		}
 		sendResponse(w, res)
 	} else {
@@ -209,7 +184,91 @@ func (m *requestHandler) createIndexRequest(w http.ResponseWriter, r *http.Reque
 		ierr := IndexError{Code: string(RESP_ERROR),
 			Msg: err.Error()}
 
-		res := IndexMetaResponse{
+		res := IndexResponse{
+			Status: RESP_ERROR,
+			Errors: []IndexError{ierr},
+		}
+		sendResponse(w, res)
+	}
+}
+
+func (m *httpHandler) dropIndexRequest(w http.ResponseWriter, r *http.Request) {
+
+	// convert request
+	request := convertIndexRequest(r)
+	if request == nil {
+		ierr := IndexError{Code: string(RESP_ERROR),
+			Msg: "RequestHandler::dropIndexRequest: Unable to convert request"}
+
+		res := IndexResponse{
+			Status: RESP_ERROR,
+			Errors: []IndexError{ierr},
+		}
+
+		sendResponse(w, res)
+		return
+	}
+
+	// call the index manager to handle the DDL
+	indexinfo := request.Index
+	id, err := indexDefnId(indexinfo.DefnID)
+	if err == nil {
+		err = m.mgr.HandleDeleteIndexDDL(id)
+	}
+	
+	if err == nil {
+		// No error, return success
+		res := IndexResponse{
+			Status: RESP_SUCCESS,
+		}
+		sendResponse(w, res)
+	} else {
+		// report failure
+		ierr := IndexError{Code: string(RESP_ERROR),
+			Msg: err.Error()}
+
+		res := IndexResponse{
+			Status: RESP_ERROR,
+			Errors: []IndexError{ierr},
+		}
+		sendResponse(w, res)
+	}
+}
+
+func (m *httpHandler) getTopologyRequest(w http.ResponseWriter, r *http.Request) {
+	// convert request
+	request := convertTopologyRequest(r)
+	if request == nil {
+		ierr := IndexError{Code: string(RESP_ERROR),
+			Msg: "RequestHandler::getTopologyRequest: Unable to convert request"}
+
+		res := TopologyResponse{
+			Status: RESP_ERROR,
+			Errors: []IndexError{ierr},
+		}
+
+		sendResponse(w, res)
+		return
+	}
+
+	// call the index manager to handle the DDL
+	instances, _, err := GetTopologyAsInstanceProtoMsg(m.mgr, request.Bucket, SCAN_REQUEST_PORT)
+	protoInsts := &protobuf.Instances{Instances: instances}
+	data, err := proto.Marshal(protoInsts)
+	if err == nil {
+
+		// No error, return success
+		res := TopologyResponse{
+			Status:    RESP_SUCCESS,
+			Instances: data,
+		}
+		sendResponse(w, res)
+	} else {
+		// report failure
+		ierr := IndexError{Code: string(RESP_ERROR),
+			Msg: err.Error()}
+
+		res := TopologyResponse{
 			Status: RESP_ERROR,
 			Errors: []IndexError{ierr},
 		}
@@ -221,25 +280,47 @@ func (m *requestHandler) createIndexRequest(w http.ResponseWriter, r *http.Reque
 // Private Function
 ///////////////////////////////////////////////////////
 
-func convertRequest(r *http.Request) *IndexRequest {
-	indexreq := IndexRequest{}
-	buf := make([]byte, r.ContentLength, r.ContentLength)
+func convertIndexRequest(r *http.Request) *IndexRequest {
+	req := IndexRequest{}
+	buf := make([]byte, r.ContentLength)
+	common.Debugf("RequestHandler::convertIndexRequest: request content length %d", len(buf))
 
 	// Body will be non-null but can return EOF if being empty
-	if _, err := r.Body.Read(buf); err != nil {
-		common.Debugf("RequestHandler::convertRequest: unable to read request body")
+	if n, err := r.Body.Read(buf); err != nil && int64(n) != r.ContentLength {
+		common.Debugf("RequestHandler::convertIndexRequest: unable to read request body, err %v", err)
 		return nil
 	}
 
-	if err := json.Unmarshal(buf, &indexreq); err != nil {
-		common.Debugf("RequestHandler::convertRequest: unable to unmarshall request body. Buf = %s", buf)
+	if err := json.Unmarshal(buf, &req); err != nil {
+		common.Debugf("RequestHandler::convertIndexRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
 		return nil
 	}
 
-	return &indexreq
+	return &req
+}
+
+func convertTopologyRequest(r *http.Request) *TopologyRequest {
+	req := TopologyRequest{}
+	buf := make([]byte, r.ContentLength)
+	common.Debugf("RequestHandler::convertIndexRequest: request content length %d", len(buf))
+
+	// Body will be non-null but can return EOF if being empty
+	if n, err := r.Body.Read(buf); err != nil && int64(n) != r.ContentLength {
+		common.Debugf("RequestHandler::convertIndexRequest: unable to read request body, err %v", err)
+		return nil
+	}
+
+	if err := json.Unmarshal(buf, &req); err != nil {
+		common.Debugf("RequestHandler::convertIndexRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
+		return nil
+	}
+
+	return &req
 }
 
 func sendResponse(w http.ResponseWriter, res interface{}) {
+	common.Debugf("RequestHandler::sendResponse: sending response back to caller")
+
 	header := w.Header()
 	header["Content-Type"] = []string{"application/json"}
 
@@ -257,20 +338,31 @@ func sendHttpError(w http.ResponseWriter, reason string, code int) {
 
 func (r *requestHandler) run() {
 
-	gometa.SafeRun("requestHandler.run()",
-		func() {
-			http.HandleFunc("/createIndex", r.createIndexRequest)
-		})
+	handler.initializer.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				common.Warnf("error encountered when registering http createIndex handler : %v.  Ignored.\n", r)
+			}
+		}()
+
+		http.HandleFunc("/createIndex", handler.createIndexRequest)
+		http.HandleFunc("/dropIndex", handler.dropIndexRequest)
+		http.HandleFunc("/getTopology", handler.getTopologyRequest)
+	})
+
+	handler.mgr = r.mgr
 
 	li, err := net.Listen("tcp", INDEX_DDL_HTTP_ADDR)
 	if err != nil {
 		// TODO: abort
-		common.Warnf("EventManager.run() : HTTP Server fails")
+		common.Warnf("requestHandler.run() : HTTP Server Listen fails, err %v", err)
 	}
 	r.listener = li
 
 	if err := http.Serve(li, nil); err != nil {
 		// TODO: abort
-		common.Warnf("EventManager.run() : HTTP Server fails")
+		common.Warnf("requestHandler.run() : HTTP Server Serve fails, err %v", err)
 	}
+
+	common.Debugf("requestHandler.run() : Request Handler HTTP server running")
 }

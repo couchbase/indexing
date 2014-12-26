@@ -22,6 +22,30 @@ var logLevel int
 var logFile io.Writer = os.Stdout
 var logger *log.Logger
 
+// Logger interface for sub-components to do logging.
+type Logger interface {
+	// Warnf to log message and warning messages will be logged.
+	Warnf(format string, v ...interface{})
+
+	// Errorf to log message and warning messages will be logged.
+	Errorf(format string, v ...interface{})
+
+	// Fatalf to log message and warning messages will be logged.
+	Fatalf(format string, v ...interface{})
+
+	// Infof to log message at info level.
+	Infof(format string, v ...interface{})
+
+	// Debugf to log message at info level.
+	Debugf(format string, v ...interface{})
+
+	// Tracef to log message at info level.
+	Tracef(format string, v ...interface{})
+
+	// StackTrace parse string `s` and log it as error message.
+	StackTrace(s string)
+}
+
 func init() {
 	logger = log.New(logFile, "", log.Lmicroseconds)
 }
@@ -109,4 +133,39 @@ func StackTrace(s string) {
 	for _, line := range strings.Split(s, "\n") {
 		Errorf("%s\n", line)
 	}
+}
+
+// SystemLog
+type SystemLog string
+
+func NewSystemLog() SystemLog {
+	return SystemLog("system-log")
+}
+
+func (log SystemLog) Warnf(format string, v ...interface{}) {
+	Warnf(format, v...)
+}
+
+func (log SystemLog) Errorf(format string, v ...interface{}) {
+	Errorf(format, v...)
+}
+
+func (log SystemLog) Fatalf(format string, v ...interface{}) {
+	Fatalf(format, v...)
+}
+
+func (log SystemLog) Infof(format string, v ...interface{}) {
+	Infof(format, v...)
+}
+
+func (log SystemLog) Debugf(format string, v ...interface{}) {
+	Debugf(format, v...)
+}
+
+func (log SystemLog) Tracef(format string, v ...interface{}) {
+	Tracef(format, v...)
+}
+
+func (log SystemLog) StackTrace(s string) {
+	StackTrace(s)
 }

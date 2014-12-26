@@ -312,7 +312,7 @@ func (c *Client) sendKeyVersions(
 		select {
 		case vbChans[vb.Uuid] <- vb:
 			if fin {
-				common.Infof(
+				common.Tracef(
 					"%v {%v,%v} ended\n", c.logPrefix, vb.Bucket, vb.Vbucket)
 				c.delVbucket(vb.Uuid)
 				delete(vbChans, vb.Uuid)

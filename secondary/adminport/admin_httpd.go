@@ -279,7 +279,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *httpServer) connState(conn net.Conn, state http.ConnState) {
 	raddr := conn.RemoteAddr()
-	c.Debugf("%s connState for %q : %v\n", s.logPrefix, raddr, state)
+	c.Tracef("%s connState for %q : %v\n", s.logPrefix, raddr, state)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

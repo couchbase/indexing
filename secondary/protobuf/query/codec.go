@@ -23,6 +23,9 @@ func ProtobufEncode(payload interface{}) (data []byte, err error) {
 	case *StatisticsRequest:
 		pl.StatisticsRequest = val
 
+	case *CountRequest:
+		pl.CountRequest = val
+
 	case *ScanRequest:
 		pl.ScanRequest = val
 
@@ -36,6 +39,9 @@ func ProtobufEncode(payload interface{}) (data []byte, err error) {
 	case *StatisticsResponse:
 		pl.Statistics = val
 
+	case *CountResponse:
+		pl.CountResponse = val
+
 	case *ResponseStream:
 		pl.Stream = val
 
@@ -45,7 +51,6 @@ func ProtobufEncode(payload interface{}) (data []byte, err error) {
 	default:
 		return nil, ErrorMissingPayload
 	}
-
 	data, err = proto.Marshal(pl)
 	return
 }
@@ -69,6 +74,8 @@ func ProtobufDecode(data []byte) (value interface{}, err error) {
 	// request
 	if val := pl.GetStatisticsRequest(); val != nil {
 		return val, nil
+	} else if val := pl.GetCountRequest(); val != nil {
+		return val, nil
 	} else if val := pl.GetScanRequest(); val != nil {
 		return val, nil
 	} else if val := pl.GetScanAllRequest(); val != nil {
@@ -79,6 +86,10 @@ func ProtobufDecode(data []byte) (value interface{}, err error) {
 	} else if val := pl.GetStatistics(); val != nil {
 		return val, nil
 	} else if val := pl.GetStream(); val != nil {
+		return val, nil
+	} else if val := pl.GetCountResponse(); val != nil {
+		return val, nil
+	} else if val := pl.GetEndStream(); val != nil {
 		return val, nil
 	} else if val := pl.GetStreamEnd(); val != nil {
 		return val, nil

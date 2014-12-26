@@ -84,6 +84,9 @@ func (bupr *bucketUpr) StartVbStreams(
 		if e != nil {
 			err = e
 		}
+		// FIXME/TODO: the below sleep avoid back-to-back dispatch of
+		// StreamRequest to DCP, which seem to cause some problems.
+		time.Sleep(time.Millisecond)
 	}
 	return err
 }

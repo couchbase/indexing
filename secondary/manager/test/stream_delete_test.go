@@ -76,8 +76,10 @@ func runDeleteTest() {
 	delete_test_status = make(map[uint64]*protobuf.Instance)
 
 	common.Infof("***** Start TestStreamMgr ") 
+	/*
 	var requestAddr = "localhost:9885"
 	var leaderAddr = "localhost:9884"
+	*/
 	var config = "./config.json"
 
 	common.Infof("Start Index Manager")
@@ -86,10 +88,12 @@ func runDeleteTest() {
 	factory.donech = donech
 	env := new(deleteTestProjectorClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
-	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
 	if err != nil {
 		util.TT.Fatal(err)
 	}
+	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
 	
 	common.Infof("Delete Test Cleanup ...")
@@ -226,68 +230,66 @@ func deleteIndexForDeleteTest(mgr *manager.IndexManager) {
 	// Delete a new index definition : 401 (Default)
 	//
 	common.Infof("Run Delete Test : Delete Index Defn 401")
-	if err := mgr.HandleDeleteIndexDDL("Default", "stream_mgr_delete_test_1"); err != nil {
+	if err := mgr.HandleDeleteIndexDDL(common.IndexDefnId(401)); err != nil {
 		util.TT.Fatal(err)
 	}
-	// Wait so there is no race condition.
-	//time.Sleep(time.Duration(1000) * time.Millisecond)
 }
 
 // clean up
 func cleanupStreamMgrDeleteTest(mgr *manager.IndexManager) {
 
-	_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_delete_test_1")
+	_, err := mgr.GetIndexDefnById(common.IndexDefnId(401))
 	if err != nil {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_1.  No cleanup ...")
 	} else {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_1.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Default", "stream_mgr_delete_test_1")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(401))
 		if err != nil {
 			util.TT.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err = mgr.GetIndexDefnByName("Default", "stream_mgr_delete_test_1")
+		_, err = mgr.GetIndexDefnById(common.IndexDefnId(401))
 		if err == nil {
 			util.TT.Fatal("StreamMgrTest.cleanupStreamMgrSyncTest(): Cannot clean up index defn stream_mgr_delete_test_1")
 		}
 	}
 
-	_, err = mgr.GetIndexDefnByName("Default", "stream_mgr_delete_test_2")
+	_, err = mgr.GetIndexDefnById(common.IndexDefnId(402))
 	if err != nil {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_2.  No cleanup ...")
 	} else {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_2.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Default", "stream_mgr_delete_test_2")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(402))
 		if err != nil {
 			util.TT.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err = mgr.GetIndexDefnByName("Default", "stream_mgr_delete_test_2")
+		_, err = mgr.GetIndexDefnById(common.IndexDefnId(402))
 		if err == nil {
 			util.TT.Fatal("StreamMgrTest.cleanupStreamMgrSyncTest(): Cannot clean up index defn stream_mgr_delete_test_2")
 		}
 	}
 
-	_, err = mgr.GetIndexDefnByName("Defaultxx", "stream_mgr_delete_test_3")
+	_, err = mgr.GetIndexDefnById(common.IndexDefnId(403))
 	if err != nil {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_3.  No cleanup ...")
 	} else {
 		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_3.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Defaultxx", "stream_mgr_delete_test_3")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(403))
 		if err != nil {
 			util.TT.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err = mgr.GetIndexDefnByName("Defaultxx", "stream_mgr_delete_test_3")
+		_, err = mgr.GetIndexDefnById(common.IndexDefnId(403))
 		if err == nil {
 			util.TT.Fatal("StreamMgrTest.cleanupStreamMgrSyncTest(): Cannot clean up index defn stream_mgr_delete_test_3")
 		}
@@ -439,8 +441,23 @@ func (c *deleteTestProjectorClient) MutationTopicRequest(topic, endpointType str
 	for i, inst := range instances {
 		response.InstanceIds[i] = inst.GetIndexInstance().GetInstId()
 	}
-	response.ActiveTimestamps = make([]*protobuf.TsVbuuid, 1)
-	response.ActiveTimestamps[0] = reqTimestamps[0]
+	
+	response.ActiveTimestamps = nil 
+	for _, ts := range reqTimestamps {
+		newTs := protobuf.NewTsVbuuid("default", ts.GetBucket(), manager.NUM_VB)
+		if c.server == "127.0.0.1" {
+			for i := 0; i < manager.NUM_VB/2; i++ {
+				newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
+			}
+		}
+		if c.server == "127.0.0.2" {
+			for i := manager.NUM_VB/2; i < manager.NUM_VB; i++ {
+				newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
+			}
+		}
+		response.ActiveTimestamps = append(response.ActiveTimestamps, newTs)
+	}
+	
 	response.RollbackTimestamps = nil
 	response.Err = nil
 
@@ -465,7 +482,7 @@ func (c *deleteTestProjectorClient) RepairEndpoints(topic string, endpoints []st
 
 func (c *deleteTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
 
-	newTs := protobuf.NewTsVbuuid("default", "Default", manager.NUM_VB)
+	newTs := protobuf.NewTsVbuuid("default", bucketn, manager.NUM_VB)
 	for i := 0; i < manager.NUM_VB; i++ {
 		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
 	}
@@ -504,4 +521,8 @@ func (p *deleteTestProjectorClientEnv) GetNodeListForBuckets(buckets []string) (
 
 func (p *deleteTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
 	return nil, nil
+}
+
+func (p *deleteTestProjectorClientEnv) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, node string) ([]*protobuf.TsVbuuid, error) {
+	return timestamps, nil
 }

@@ -81,8 +81,10 @@ func runMonitorTest() {
 	common.Infof("**** Run Monitor Test ******************************************")
 
 	common.Infof("***** Start TestStreamMgr ") 
+	/*
 	var requestAddr = "localhost:9885"
 	var leaderAddr = "localhost:9884"
+	*/
 	var config = "./config.json"
 
 	common.Infof("Start Index Manager")
@@ -91,10 +93,12 @@ func runMonitorTest() {
 	factory.donech = donech
 	env := new(monitorTestProjectorClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
-	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
 	if err != nil {
 		util.TT.Fatal(err)
 	}
+	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
 	
 	common.Infof("Monitor Test Cleanup ...")
@@ -124,20 +128,20 @@ func runMonitorTest() {
 // clean up
 func cleanupStreamMgrMonitorTest(mgr *manager.IndexManager) {
 
-	_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_monitor_test")
+	_, err := mgr.GetIndexDefnById(common.IndexDefnId(406))
 	if err != nil {
 		common.Infof("StreamMgrTest.cleanupStreamMgrMonitorTest() :  cannot find index defn stream_mgr_monitor_test.  No cleanup ...")
 	} else {
 		common.Infof("StreamMgrTest.cleanupStreamMgrMonitorTest() :  found index defn stream_mgr_monitor_test.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Default", "stream_mgr_monitor_test")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(406))
 		if err != nil {
 			util.TT.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_monitor_test")
+		_, err := mgr.GetIndexDefnById(common.IndexDefnId(406))
 		if err == nil {
 			util.TT.Fatal("StreamMgrTest.cleanupStreamMgrMonitorTest(): Cannot clean up index defn stream_mgr_monitor_test")
 		}
@@ -258,8 +262,7 @@ func (c *monitorTestProjectorClient) MutationTopicRequest(topic, endpointType st
 	for i, inst := range instances {
 		response.InstanceIds[i] = inst.GetIndexInstance().GetInstId()
 	}
-	response.ActiveTimestamps = make([]*protobuf.TsVbuuid, 1)
-	response.ActiveTimestamps[0] = reqTimestamps[0]
+	response.ActiveTimestamps = reqTimestamps
 
 	if reqTimestamps[0].GetSeqnos()[10] != 406 {	
 		response.RollbackTimestamps = make([]*protobuf.TsVbuuid, 1)
@@ -286,7 +289,7 @@ func (c *monitorTestProjectorClient) RepairEndpoints(topic string, endpoints []s
 func (c *monitorTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
 
 	common.Infof("monitorTestProjectorClient. InitialRestartTimestamp(): start")
-	newTs := protobuf.NewTsVbuuid("default", "Default", manager.NUM_VB)
+	newTs := protobuf.NewTsVbuuid("default", bucketn, manager.NUM_VB)
 	for i := 0; i < manager.NUM_VB; i++ {
 		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
 	}
@@ -346,4 +349,8 @@ func (p *monitorTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []*c
 		
 	nodes["127.0.0.1"] = append(nodes["127.0.0.1"], newTs)	
 	return nodes, nil
+}
+
+func (p *monitorTestProjectorClientEnv) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, node string) ([]*protobuf.TsVbuuid, error) {
+	return timestamps, nil
 }

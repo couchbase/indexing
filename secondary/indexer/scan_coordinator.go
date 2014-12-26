@@ -42,6 +42,7 @@ type scanType string
 
 const (
 	queryStats   scanType = "stats"
+	queryCount   scanType = "count"
 	queryScan    scanType = "scan"
 	queryScanAll scanType = "scanall"
 )
@@ -118,6 +119,10 @@ type statsResponse struct {
 	min, max Key
 	unique   uint64
 	count    uint64
+}
+
+type countResponse struct {
+	count int64
 }
 
 // Streaming scan results reader helper
@@ -205,8 +210,18 @@ func (r *scanStreamReader) ReadStat() (stat statsResponse, err error) {
 	case error:
 		err = resp.(error)
 	}
-
 	return
+}
+
+func (r *scanStreamReader) ReadCount() (count countResponse, err error) {
+	resp := <-r.sd.respch
+	switch val := resp.(type) {
+	case countResponse:
+		return val, nil
+	case error:
+		return count, val
+	}
+	return count, err
 }
 
 func (r *scanStreamReader) Done() {
@@ -363,9 +378,8 @@ func (s *scanCoordinator) parseScanParams(
 		return nil
 	}
 
-	switch req.(type) {
+	switch r := req.(type) {
 	case *protobuf.StatisticsRequest:
-		r := req.(*protobuf.StatisticsRequest)
 		p.scanType = queryStats
 		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
 		err = fillRanges(
@@ -374,8 +388,11 @@ func (s *scanCoordinator) parseScanParams(
 			r.GetSpan().GetEqual())
 		p.indexName = r.GetIndexName()
 		p.bucket = r.GetBucket()
+	case *protobuf.CountRequest:
+		p.scanType = queryCount
+		p.indexName = r.GetIndexName()
+		p.bucket = r.GetBucket()
 	case *protobuf.ScanRequest:
-		r := req.(*protobuf.ScanRequest)
 		p.scanType = queryScan
 		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
 		err = fillRanges(
@@ -388,7 +405,6 @@ func (s *scanCoordinator) parseScanParams(
 		p.pageSize = r.GetPageSize()
 	case *protobuf.ScanAllRequest:
 		p.scanType = queryScanAll
-		r := req.(*protobuf.ScanAllRequest)
 		p.limit = r.GetLimit()
 		p.indexName = r.GetIndexName()
 		p.bucket = r.GetBucket()
@@ -509,6 +525,18 @@ func (s *scanCoordinator) requestHandler(
 		respch <- msg
 		close(respch)
 
+	case queryCount:
+		var msg interface{}
+		count, err := rdr.ReadCount()
+		if err != nil {
+			msg = s.makeResponseMessage(sd, err)
+		} else {
+			msg = s.makeResponseMessage(sd, count)
+		}
+
+		respch <- msg
+		close(respch)
+
 	case queryScan:
 		fallthrough
 	case queryScanAll:
@@ -618,6 +646,10 @@ func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
 				},
 				Err: protoErr,
 			}
+		case queryCount:
+			r = &protobuf.CountResponse{
+				Count: proto.Int64(0), Err: protoErr,
+			}
 		case queryScan:
 			fallthrough
 		case queryScanAll:
@@ -643,6 +675,9 @@ func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
 				KeyMax:          stats.max.Raw(),
 			},
 		}
+	case countResponse:
+		counts := payload.(countResponse)
+		r = &protobuf.CountResponse{Count: proto.Int64(counts.count)}
 	}
 	return
 }
@@ -756,6 +791,8 @@ func (s *scanCoordinator) scanSliceSnapshot(sd *scanDescriptor,
 	switch sd.p.scanType {
 	case queryStats:
 		s.statsQuery(sd, ss.Snapshot(), stopch)
+	case queryCount:
+		s.statsCount(sd, ss.Snapshot(), stopch)
 	case queryScan:
 		s.scanQuery(sd, ss.Snapshot(), stopch)
 	case queryScanAll:
@@ -774,6 +811,16 @@ func (s *scanCoordinator) statsQuery(sd *scanDescriptor, snap Snapshot, stopch S
 		min, _ := NewKey([]byte("min"))
 		max, _ := NewKey([]byte("max"))
 		sd.respch <- statsResponse{count: totalRows, min: min, max: max}
+	}
+}
+
+func (s *scanCoordinator) statsCount(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+	count, err := snap.CountTotal(stopch)
+	// TODO: Implement min, max, unique (maybe)
+	if err != nil {
+		sd.respch <- err
+	} else {
+		sd.respch <- countResponse{count: int64(count)}
 	}
 }
 

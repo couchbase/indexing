@@ -162,53 +162,35 @@ var SystemConfig = Config{
 		"/adminport/",
 	},
 	// projector dataport client parameters
-	"projector.dataport.client.parConnections": ConfigValue{
-		1,
-		"number of parallel connections to open with remote",
-		1,
-	},
 	// TODO: this configuration option should be tunnable for each feed.
-	"projector.dataport.client.remoteBlock": ConfigValue{
+	"endpoint.dataport.remoteBlock": ConfigValue{
 		false,
 		"should dataport endpoint block when remote is slow ?",
 		false,
 	},
-	"projector.dataport.client.genServerChanSize": ConfigValue{
-		64,
-		"request channel size of projector-dataport-client's gen-server " +
-			"routine",
-		64,
-	},
-	"projector.dataport.client.mutationChanSize": ConfigValue{
-		10000,
-		"channel size of projector-dataport-client's data path " +
-			"routine",
-		10000,
-	},
-	"projector.dataport.client.keyChanSize": ConfigValue{
+	"endpoint.dataport.keyChanSize": ConfigValue{
 		10000,
 		"channel size of dataport endpoints data input",
 		10000,
 	},
-	"projector.dataport.client.bufferSize": ConfigValue{
+	"endpoint.dataport.bufferSize": ConfigValue{
 		100,
 		"number of entries to buffer before flushing it, where each entry " +
 			"is for a vbucket's set of mutations that was flushed by the endpoint.",
 		100,
 	},
-	"projector.dataport.client.bufferTimeout": ConfigValue{
+	"endpoint.dataport.bufferTimeout": ConfigValue{
 		1,
-		"timeout in milliseconds, to flush vbucket-mutations from endpoint " +
-			"buffer to dataport-client, again from dataport-client to socket.",
+		"timeout in milliseconds, to flush vbucket-mutations from endpoint",
 		1, // 1ms
 	},
-	"projector.dataport.client.harakiriTimeout": ConfigValue{
+	"endpoint.dataport.harakiriTimeout": ConfigValue{
 		10 * 1000,
 		"timeout in milliseconds, after which endpoint will commit harakiri " +
 			"if not activity",
 		10 * 1000, //10s
 	},
-	"projector.dataport.client.maxPayload": ConfigValue{
+	"endpoint.dataport.maxPayload": ConfigValue{
 		1000 * 1024,
 		"maximum payload length, in bytes, for transmission data from " +
 			"router to downstream client",
@@ -226,9 +208,9 @@ var SystemConfig = Config{
 		1000 * 1024, // bytes
 	},
 	"projector.dataport.indexer.tcpReadDeadline": ConfigValue{
-		4000,
+		10 * 1000,
 		"timeout, in milliseconds, while reading from socket",
-		4000, // 4s
+		10 * 1000, // 10s
 	},
 	// indexer queryport configuration
 	"queryport.indexer.maxPayload": ConfigValue{

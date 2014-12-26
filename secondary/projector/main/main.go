@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 
@@ -17,6 +18,7 @@ var options struct {
 	adminport string
 	kvaddrs   string
 	colocate  bool
+	logFile   string
 	info      bool
 	debug     bool
 	trace     bool
@@ -29,6 +31,8 @@ func argParse() string {
 		"comma separated list of kvaddrs")
 	flag.BoolVar(&options.colocate, "colocate", true,
 		"whether projector will be colocated with KV")
+	flag.StringVar(&options.logFile, "logFile", "",
+		"output logs to file default is stdout")
 	flag.BoolVar(&options.info, "info", false,
 		"enable info level logging")
 	flag.BoolVar(&options.debug, "debug", false,
@@ -60,11 +64,16 @@ func main() {
 	} else if options.info {
 		c.SetLogLevel(c.LogLevelInfo)
 	}
+	if f := getlogFile(); f != nil {
+		log.Printf("Projector logging to %q\n", f.Name())
+		c.SetLogWriter(f)
+	}
 
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	config := c.SystemConfig.SectionConfig("projector.", true)
 	config.SetValue("clusterAddr", cluster)
-	epfactory := NewEndpointFactory(cluster, maxvbs, config)
+	econf := c.SystemConfig.SectionConfig("endpoint.dataport.", true)
+	epfactory := NewEndpointFactory(cluster, maxvbs, econf)
 	config.SetValue("routerEndpointFactory", epfactory)
 	config.SetValue("colocate", options.colocate)
 	config.SetValue("adminport.listenAddr", options.adminport)
@@ -80,9 +89,8 @@ func main() {
 
 // NewEndpointFactory to create endpoint instances based on config.
 func NewEndpointFactory(
-	cluster string, maxvbs int, config c.Config) c.RouterEndpointFactory {
+	cluster string, maxvbs int, econf c.Config) c.RouterEndpointFactory {
 
-	econf := config.SectionConfig("dataport.client.", true)
 	return func(topic, endpointType, addr string) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":
@@ -92,4 +100,22 @@ func NewEndpointFactory(
 		}
 		return nil, nil
 	}
+}
+
+func getlogFile() *os.File {
+	switch options.logFile {
+	case "":
+		return nil
+	case "tempfile":
+		f, err := ioutil.TempFile("", "projector")
+		if err != nil {
+			log.Fatal(err)
+		}
+		return f
+	}
+	f, err := os.Create(options.logFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return f
 }

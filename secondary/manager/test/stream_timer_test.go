@@ -66,8 +66,10 @@ func runTimerTest() {
 	common.Infof("**** Run Timer Test **********************************************")
 
 	common.Infof("***** Start TestStreamMgr ") 
+	/*
 	var requestAddr = "localhost:9885"
 	var leaderAddr = "localhost:9884"
+	*/
 	var config = "./config.json"
 
 	common.Infof("Start Index Manager")
@@ -76,10 +78,12 @@ func runTimerTest() {
 	factory.donech = donech
 	env := new(timerTestProjectorClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
-	mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
 	if err != nil {
 		util.TT.Fatal(err)
 	}
+	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
 	
 	mgr.SetTimestampPersistenceInterval(1)
@@ -112,20 +116,20 @@ func runTimerTest() {
 // clean up
 func cleanupStreamMgrTimerTest(mgr *manager.IndexManager) {
 
-	_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_timer_test")
+	_, err := mgr.GetIndexDefnById(common.IndexDefnId(406))
 	if err != nil {
 		common.Infof("StreamMgrTest.cleanupStreamMgrTimerTest() :  cannot find index defn stream_mgr_timer_test.  No cleanup ...")
 	} else {
 		common.Infof("StreamMgrTest.cleanupStreamMgrTimerTest() :  found index defn stream_mgr_timer_test.  Cleaning up ...")
 
-		err = mgr.HandleDeleteIndexDDL("Default", "stream_mgr_timer_test")
+		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(406))
 		if err != nil {
 			util.TT.Fatal(err)
 		}
 		time.Sleep(time.Duration(1000) * time.Millisecond)
 
 		// double check if we have really cleaned up
-		_, err := mgr.GetIndexDefnByName("Default", "stream_mgr_timer_test")
+		_, err := mgr.GetIndexDefnById(common.IndexDefnId(406))
 		if err == nil {
 			util.TT.Fatal("StreamMgrTest.cleanupStreamMgrTimerTest(): Cannot clean up index defn stream_mgr_timer_test")
 		}
@@ -272,8 +276,7 @@ func (c *timerTestProjectorClient) MutationTopicRequest(topic, endpointType stri
 	for i, inst := range instances {
 		response.InstanceIds[i] = inst.GetIndexInstance().GetInstId()
 	}
-	response.ActiveTimestamps = make([]*protobuf.TsVbuuid, 1)
-	response.ActiveTimestamps[0] = reqTimestamps[0]
+	response.ActiveTimestamps = reqTimestamps
 	response.RollbackTimestamps = nil
 	response.Err = nil
 
@@ -290,7 +293,7 @@ func (c *timerTestProjectorClient) RepairEndpoints(topic string, endpoints []str
 
 func (c *timerTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
 
-	newTs := protobuf.NewTsVbuuid("default", "Default", manager.NUM_VB)
+	newTs := protobuf.NewTsVbuuid("default", bucketn, manager.NUM_VB)
 	for i := 0; i < manager.NUM_VB; i++ {
 		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
 	}
@@ -329,4 +332,8 @@ func (p *timerTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []*com
 
 	common.Infof("timerTestProjectorClientEnv.GetNodeListForTimestamps() ")
 	return nil, nil
+}
+
+func (p *timerTestProjectorClientEnv) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid, node string) ([]*protobuf.TsVbuuid, error) {
+	return timestamps, nil
 }

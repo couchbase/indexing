@@ -65,9 +65,7 @@ func (s *fdbSnapshot) KeySet(stopch StopChannel) (chan Key, chan error) {
 	cherr := make(chan error)
 
 	nilKey, _ := NewKeyFromEncodedBytes(nil)
-	// TODO: Change incl to Both when incl is supported
-	incl := Low
-	go s.GetKeySetForKeyRange(nilKey, nilKey, incl, chkey, cherr, stopch)
+	go s.GetKeySetForKeyRange(nilKey, nilKey, Both, chkey, cherr, stopch)
 	return chkey, cherr
 }
 
@@ -108,7 +106,6 @@ func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 	inclusion Inclusion, chkey chan Key, cherr chan error, stopch StopChannel) {
 
 	defer close(chkey)
-	defer close(cherr)
 
 	common.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
 		low.String(), high.String())
@@ -278,77 +275,23 @@ func (s *fdbSnapshot) CountRange(low Key, high Key, inclusion Inclusion,
 	common.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
 		low.String(), high.String())
 
+	chkey := make(chan Key)
+	cherr := make(chan error)
+	go s.GetKeySetForKeyRange(low, high, inclusion, chkey, cherr, stopch)
+
 	var count uint64
-
-	it, err := newForestDBIterator(s.main, s.mainSeqNum)
-	if err != nil {
-		return 0, err
-	}
-	defer closeIterator(it)
-
-	var lowkey []byte
-
-	if lowkey = low.Encoded(); lowkey == nil {
-		it.SeekFirst()
-	} else {
-		it.Seek(lowkey)
-	}
-
-	var key Key
-	for ; it.Valid(); it.Next() {
-
+loop:
+	for {
 		select {
-
-		case <-stopch:
-			//stop signalled, end processing
-			return count, nil
-
-		default:
-			if key, err = NewKeyFromEncodedBytes(it.Key()); err != nil {
-				common.Errorf("Error Converting from bytes %v to key %v. Skipping row",
-					it.Key(), err)
-				continue
+		case _, ok := <-chkey:
+			if !ok {
+				break loop
 			}
-
-			common.Tracef("ForestDB Got Key - %s", key.String())
-
-			var highcmp int
-			if high.Encoded() == nil {
-				highcmp = -1 //if high key is nil, iterate through the fullset
-			} else {
-				highcmp = key.Compare(high)
-			}
-
-			var lowcmp int
-			if low.Encoded() == nil {
-				lowcmp = 1 //all keys are greater than nil
-			} else {
-				lowcmp = key.Compare(low)
-			}
-
-			if highcmp == 0 && (inclusion == Both || inclusion == High) {
-				common.Tracef("ForestDB Got Value Equal to High Key")
-				count++
-			} else if lowcmp == 0 && (inclusion == Both || inclusion == Low) {
-				common.Tracef("ForestDB Got Value Equal to Low Key")
-				count++
-			} else if (highcmp == -1) && (lowcmp == 1) { //key is between high and low
-				if highcmp == -1 {
-					common.Tracef("ForestDB Got Value Lesser Than High Key")
-				} else if lowcmp == 1 {
-					common.Tracef("ForestDB Got Value Greater Than Low Key")
-				}
-				count++
-			} else {
-				common.Tracef("ForestDB not Sending Value")
-				//if we have reached past the high key, no need to scan further
-				if highcmp == 1 {
-					break
-				}
-			}
+			count++
+		case err := <-cherr:
+			return 0, err
 		}
 	}
-
 	return count, nil
 }
 
@@ -386,6 +329,9 @@ func readEqualKeys(k Key, kPrefix []byte, it *ForestDBIterator,
 	var err error
 	var t []interface{}
 	jsonKey := k.Raw()
+	if jsonKey == nil {
+		return
+	}
 	err = json.Unmarshal(jsonKey, &t)
 	if err != nil {
 		cherr <- err
