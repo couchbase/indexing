@@ -82,6 +82,7 @@ const (
 
 	//INDEXER
 	INDEXER_PREPARE_RECOVERY
+	INDEXER_PREPARE_DONE
 	INDEXER_INITIATE_RECOVERY
 	INDEXER_ROLLBACK
 
@@ -202,9 +203,7 @@ func (m *MsgStreamError) GetError() Error {
 	return m.err
 }
 
-//STREAM_READER_STREAM_SHUTDOWN
-//STREAM_READER_RESTART_VBUCKETS
-//STREAM_READER_REPAIR_VBUCKETS
+//STREAM_READER_CONN_ERROR
 type MsgStreamInfo struct {
 	mType    MsgType
 	streamId common.StreamId
@@ -646,7 +645,10 @@ func (m *MsgTKGetBucketHWT) String() string {
 //KV_SENDER_RESTART_VBUCKETS
 type MsgRestartVbuckets struct {
 	streamId  common.StreamId
-	restartTs map[string]*common.TsVbuuid
+	bucket    string
+	restartTs *common.TsVbuuid
+	respCh    MsgChannel
+	stopCh    StopChannel
 }
 
 func (m *MsgRestartVbuckets) GetMsgType() MsgType {
@@ -657,8 +659,20 @@ func (m *MsgRestartVbuckets) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRestartVbuckets) GetRestartTs() map[string]*common.TsVbuuid {
+func (m *MsgRestartVbuckets) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgRestartVbuckets) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
+}
+
+func (m *MsgRestartVbuckets) GetResponseCh() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgRestartVbuckets) GetStopChannel() StopChannel {
+	return m.stopCh
 }
 
 func (m *MsgRestartVbuckets) String() string {
@@ -694,11 +708,13 @@ func (m *MsgRepairEndpoints) String() string {
 }
 
 //INDEXER_PREPARE_RECOVERY
+//INDEXER_PREPARE_DONE
 //INDEXER_INITIATE_RECOVERY
 type MsgRecovery struct {
 	mType     MsgType
 	streamId  common.StreamId
-	restartTs map[string]*common.TsVbuuid
+	bucket    string
+	restartTs *common.TsVbuuid
 }
 
 func (m *MsgRecovery) GetMsgType() MsgType {
@@ -709,7 +725,11 @@ func (m *MsgRecovery) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRecovery) GetRestartTs() map[string]*common.TsVbuuid {
+func (m *MsgRecovery) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgRecovery) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
 }
 
@@ -864,6 +884,8 @@ func (m MsgType) String() string {
 
 	case INDEXER_PREPARE_RECOVERY:
 		return "INDEXER_PREPARE_RECOVERY"
+	case INDEXER_PREPARE_DONE:
+		return "INDEXER_PREPARE_DONE"
 	case INDEXER_INITIATE_RECOVERY:
 		return "INDEXER_INITIATE_RECOVERY"
 	case INDEXER_ROLLBACK:
