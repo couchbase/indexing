@@ -208,9 +208,9 @@ var SystemConfig = Config{
 		1000 * 1024, // bytes
 	},
 	"projector.dataport.indexer.tcpReadDeadline": ConfigValue{
-		4000,
+		10 * 000,
 		"timeout, in milliseconds, while reading from socket",
-		4000, // 4s
+		10 * 000, // 10s
 	},
 	// indexer queryport configuration
 	"queryport.indexer.maxPayload": ConfigValue{
