@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/couchbase/cbauth"
 	c "github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	queryclient "github.com/couchbase/indexing/secondary/queryport/client"
@@ -33,6 +34,7 @@ var (
 	fields     string
 	isPrimary  bool
 	instanceId string
+	auth       string
 
 	trace bool
 	debug bool
@@ -63,6 +65,7 @@ func parseArgs() {
 	flag.BoolVar(&debug, "debug", false, "run in debug mode")
 	flag.BoolVar(&trace, "trace", false, "run in trace mode")
 	flag.BoolVar(&info, "info", false, "run in info mode")
+	flag.StringVar(&auth, "auth", "Administrator:asdasd", "Auth user and password")
 
 	flag.Parse()
 }
@@ -85,6 +88,11 @@ func main() {
 	} else if info {
 		c.SetLogLevel(c.LogLevelInfo)
 	}
+
+	up := strings.Split(auth, ":")
+	authURL := fmt.Sprintf("http://%s/_cbauth", server)
+	authU, authP := up[0], up[1]
+	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
 
 	cinfo, err := c.NewClusterInfoCache(server, "default")
 	if err != nil {
