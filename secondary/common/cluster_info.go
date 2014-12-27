@@ -5,6 +5,7 @@ import "errors"
 import "fmt"
 import "time"
 import "net"
+import "net/url"
 import "strings"
 import "sync"
 
@@ -196,6 +197,17 @@ func (c ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr strin
 	if port, ok = node.Services[srvc]; !ok {
 		err = ErrInvalidService
 		return
+	}
+
+	// For current node, hostname might be empty
+	// Insert hostname used to connect to the cluster
+	cUrl, err := url.Parse(c.url)
+	if err != nil {
+		return "", errors.New("Unable to parse cluster url - " + err.Error())
+	}
+	h, _, _ := net.SplitHostPort(cUrl.Host)
+	if node.Hostname == "" {
+		node.Hostname = h
 	}
 
 	addr = net.JoinHostPort(node.Hostname, fmt.Sprint(port))
