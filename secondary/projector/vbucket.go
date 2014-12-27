@@ -121,7 +121,7 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 
 		} else { // publish stream-end
 			c.Debugf("%v StreamEnd for vbucket %v\n", vr.logPrefix, vr.vbno)
-			vr.sendToEndpoints(data)
+			vr.broadcast2Endpoints(data)
 		}
 
 		close(vr.finch)
@@ -155,7 +155,8 @@ loop:
 				}
 
 				if msg[2] != nil {
-					vr.updateEndpoints(msg[2].(map[string]c.RouterEndpoint))
+					endpoints := msg[2].(map[string]c.RouterEndpoint)
+					vr.endpoints = vr.updateEndpoints(endpoints)
 					vr.printCtrl(vr.endpoints)
 				}
 				respch := msg[3].(chan []interface{})
@@ -209,7 +210,7 @@ loop:
 			if data := vr.makeSyncData(seqno); data != nil {
 				syncCount++
 				c.Tracef("%v Sync count %v\n", vr.logPrefix, syncCount)
-				vr.sendToEndpoints(data)
+				vr.broadcast2Endpoints(data)
 
 			} else {
 				c.Errorf("%v Sync NOT PUBLISHED\n", vr.logPrefix)
@@ -219,8 +220,10 @@ loop:
 }
 
 // only endpoints that host engines defined on this vbucket.
-func (vr *VbucketRoutine) updateEndpoints(eps map[string]c.RouterEndpoint) {
-	vr.endpoints = make(map[string]c.RouterEndpoint)
+func (vr *VbucketRoutine) updateEndpoints(
+	eps map[string]c.RouterEndpoint) map[string]c.RouterEndpoint {
+
+	endpoints := make(map[string]c.RouterEndpoint)
 	for _, engine := range vr.engines {
 		for _, raddr := range engine.Endpoints() {
 			if _, ok := eps[raddr]; !ok {
@@ -228,9 +231,10 @@ func (vr *VbucketRoutine) updateEndpoints(eps map[string]c.RouterEndpoint) {
 				c.Errorf(format, vr.logPrefix, raddr)
 			}
 			c.Tracef("%v UpdateEndpoint %v to %v\n", vr.logPrefix, raddr, engine)
-			vr.endpoints[raddr] = eps[raddr]
+			endpoints[raddr] = eps[raddr]
 		}
 	}
+	return endpoints
 }
 
 var ssFormat = "%v received snapshot %v %v (type %x)\n"
@@ -242,7 +246,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 	switch m.Opcode {
 	case mcd.UPR_STREAMREQ: // broadcast StreamBegin
 		if data := vr.makeStreamBeginData(seqno); data != nil {
-			vr.sendToEndpoints(data)
+			vr.broadcast2Endpoints(data)
 		} else {
 			c.Errorf("%v StreamBeginData NOT PUBLISHED\n", vr.logPrefix)
 		}
@@ -251,7 +255,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 		typ, start, end := m.SnapshotType, m.SnapstartSeq, m.SnapendSeq
 		c.Debugf(ssFormat, vr.logPrefix, start, end, typ)
 		if data := vr.makeSnapshotData(m, seqno); data != nil {
-			vr.sendToEndpoints(data)
+			vr.broadcast2Endpoints(data)
 		} else {
 			c.Errorf("%v Snapshot NOT PUBLISHED\n", vr.logPrefix)
 		}
@@ -272,9 +276,11 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 		// send data to corresponding endpoint.
 		for raddr, data := range dataForEndpoints {
 			// send might fail due to ErrorChannelFull or ErrorClosed
-			if vr.endpoints[raddr].Send(data) != nil {
-				vr.endpoints[raddr].Close()
-				delete(vr.endpoints, raddr)
+			if endpoint, ok := vr.endpoints[raddr]; ok {
+				if endpoint.Send(data) != nil {
+					endpoint.Close()
+					delete(vr.endpoints, raddr)
+				}
 			}
 		}
 	}
@@ -282,7 +288,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 }
 
 // send to all endpoints.
-func (vr *VbucketRoutine) sendToEndpoints(data interface{}) {
+func (vr *VbucketRoutine) broadcast2Endpoints(data interface{}) {
 	for raddr, endpoint := range vr.endpoints {
 		// send might fail due to ErrorChannelFull or ErrorClosed
 		if endpoint.Send(data) != nil {
