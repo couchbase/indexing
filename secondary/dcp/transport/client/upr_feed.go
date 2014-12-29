@@ -7,13 +7,11 @@ package memcached
 import (
 	"encoding/binary"
 	"errors"
+	"log"
 	"fmt"
 	"strconv"
 	"sync"
-
 	"github.com/couchbase/indexing/secondary/dcp/transport"
-	"github.com/couchbaselabs/retriever/logger"
-	"github.com/couchbaselabs/retriever/stats"
 )
 
 const uprMutationExtraLen = 16
@@ -80,14 +78,6 @@ type FailoverLog [][2]uint64
 // error codes
 var ErrorInvalidLog = errors.New("couchbase.errorInvalidLog")
 
-//logging and stats
-var ul *logger.LogWriter
-var us *stats.StatsCollector
-
-func init() {
-	ul, _ = logger.NewLogger("upr_client", logger.LevelInfo)
-}
-
 func (flogp *FailoverLog) Latest() (vbuuid, seqno uint64, err error) {
 	if flogp != nil {
 		flog := *flogp
@@ -147,13 +137,12 @@ loop:
 		select {
 		case command := <-ch:
 			if err := mc.Transmit(command); err != nil {
-				msg := "Failed to transmit command %s. Error %s"
-				ul.LogError(msg, command.Opcode.String(), err.Error())
+				log.Printf("Failed to transmit command %s. Error %s\n", command.Opcode.String(), err.Error())
 				break loop
 			}
 
 		case <-closer:
-			ul.LogInfo("", "", "Exiting send command go routine ...")
+			log.Println("Exiting send command go routine ...")
 			break loop
 		}
 	}
@@ -163,7 +152,6 @@ loop:
 // TODO: Describe side-effects on bucket instance and its connection pool.
 func (mc *Client) NewUprFeed() (*UprFeed, error) {
 
-	ul.LogDebug("", "", "New UPR Feed")
 	feed := &UprFeed{
 		conn:       mc,
 		closer:     make(chan bool),
@@ -203,7 +191,6 @@ func doUprOpen(mc *Client, name string, sequence uint32) error {
 		return fmt.Errorf("error %v", res.Status)
 	}
 
-	ul.LogDebug("", "", "UPR open success")
 	return nil
 }
 
@@ -235,8 +222,6 @@ func (feed *UprFeed) UprOpen(name string, sequence uint32, bufSize uint32) error
 // UprGetFailoverLog for given list of vbuckets.
 func (mc *Client) UprGetFailoverLog(
 	vb []uint16) (map[uint16]*FailoverLog, error) {
-
-	ul.LogDebug("", "", "Get Failover Log")
 
 	rq := &transport.MCRequest{
 		Opcode: transport.UPR_FAILOVERLOG,
@@ -358,7 +343,7 @@ func handleStreamRequest(
 
 	case res.Status == transport.ROLLBACK:
 		rollback = binary.BigEndian.Uint64(res.Extras)
-		ul.LogInfo("", "", "Rollback %v for vb %v\n", rollback, res.Opaque)
+		log.Printf("Rollback %v for vb %v\n", rollback, res.Opaque)
 		return res.Status, rollback, nil, nil
 
 	case res.Status != transport.SUCCESS:
@@ -398,7 +383,7 @@ loop:
 		sendAck := false
 		bytes, err := pkt.Receive(mc, headerBuf[:])
 		if err != nil {
-			ul.LogError("", "", "Error in receive %s", err.Error())
+			log.Printf("Error in receive %s\n", err.Error())
 			feed.Error = err
 			// send all the stream close messages to the client
 			feed.doStreamClose(ch)
@@ -425,15 +410,14 @@ loop:
 			switch pkt.Opcode {
 			case transport.UPR_STREAMREQ:
 				if stream == nil {
-					ul.LogError("", "", "Stream not found for vb %d: %#v", vb, pkt)
+					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
 				status, rb, flog, err := handleStreamRequest(res)
 				if status == transport.ROLLBACK {
 					event = makeUprEvent(pkt, stream)
 					// rollback stream
-					msg := "UPR_STREAMREQ with rollback %d for vb %d Failed: %v"
-					ul.LogError("", "", msg, rb, vb, err)
+					log.Printf("UPR_STREAMREQ with rollback %d for vb %d Failed: %v\n" , rb, vb, err)
 					// delete the stream from the vbmap for the feed
 					feed.mu.Lock()
 					delete(feed.vbstreams, vb)
@@ -444,11 +428,10 @@ loop:
 					event.Seqno = stream.StartSeq
 					event.FailoverLog = flog
 					stream.connected = true
-					ul.LogInfo("", "", "UPR_STREAMREQ for vb %d successful", vb)
+					log.Printf("UPR_STREAMREQ for vb %d successful\n", vb)
 
 				} else if err != nil {
-					msg := "UPR_STREAMREQ for vbucket %d erro %s"
-					ul.LogError("", "", msg, vb, err.Error())
+					log.Printf("UPR_STREAMREQ for vbucket %d erro %s\n", vb, err.Error())
 					event = &UprEvent{
 						Opcode:  transport.UPR_STREAMREQ,
 						Status:  status,
@@ -465,7 +448,7 @@ loop:
 				transport.UPR_DELETION,
 				transport.UPR_EXPIRATION:
 				if stream == nil {
-					ul.LogError("", "", "Stream not found for vb %d: %#v", vb, pkt)
+					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
 				event = makeUprEvent(pkt, stream)
@@ -474,12 +457,12 @@ loop:
 
 			case transport.UPR_STREAMEND:
 				if stream == nil {
-					ul.LogError("", "", "Stream not found for vb %d: %#v", vb, pkt)
+					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
 				//stream has ended
 				event = makeUprEvent(pkt, stream)
-				ul.LogInfo("", "", "Stream Ended for vb %d", vb)
+				log.Printf("Stream Ended for vb %d\n", vb)
 				sendAck = true
 
 				feed.mu.Lock()
@@ -488,7 +471,7 @@ loop:
 
 			case transport.UPR_SNAPSHOT:
 				if stream == nil {
-					ul.LogError("", "", "Stream not found for vb %d: %#v", vb, pkt)
+					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
 				// snapshot marker
@@ -501,7 +484,7 @@ loop:
 
 			case transport.UPR_FLUSH:
 				if stream == nil {
-					ul.LogError("", "", "Stream not found for vb %d: %#v", vb, pkt)
+					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
 				// special processing for flush ?
@@ -509,13 +492,12 @@ loop:
 
 			case transport.UPR_CLOSESTREAM:
 				if stream == nil {
-					ul.LogError("", "", "Stream not found for vb %d: %#v", vb, pkt)
+					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
 				event = makeUprEvent(pkt, stream)
 				event.Opcode = transport.UPR_STREAMEND // opcode re-write !!
-				msg := "Stream Closed for vb %d StreamEnd simulated"
-				ul.LogInfo("", "", msg, vb)
+				log.Printf("Stream Closed for vb %d StreamEnd simulated\n", vb)
 				sendAck = true
 
 				feed.mu.Lock()
@@ -523,12 +505,11 @@ loop:
 				feed.mu.Unlock()
 
 			case transport.UPR_ADDSTREAM:
-				ul.LogWarn("", "", "Opcode %v not implemented", pkt.Opcode)
+				log.Printf("Opcode %v not implemented\n", pkt.Opcode)
 
 			case transport.UPR_CONTROL, transport.UPR_BUFFERACK:
 				if res.Status != transport.SUCCESS {
-					msg := "Opcode %v received status %d"
-					ul.LogWarn("", "", msg, pkt.Opcode.String(), res.Status)
+					log.Printf("Opcode %v received status %d\n", pkt.Opcode.String(), res.Status)
 				}
 
 			case transport.UPR_NOOP:
@@ -539,8 +520,7 @@ loop:
 				feed.transmitCh <- noop
 
 			default:
-				msg := "Recived an unknown response for vbucket %d"
-				ul.LogError("", "", msg, vb)
+				log.Printf("Recived an unknown response for vbucket %d\n", vb)
 			}
 		}
 
@@ -556,7 +536,7 @@ loop:
 			feed.mu.RUnlock()
 
 			if event.Opcode == transport.UPR_CLOSESTREAM && l == 0 {
-				ul.LogInfo("", "", "No more streams")
+				log.Println("No more streams")
 				break loop
 			}
 		}
@@ -567,7 +547,7 @@ loop:
 				Opcode: transport.UPR_BUFFERACK,
 			}
 			bufferAck.Extras = make([]byte, 4)
-			ul.LogInfo("", "", "Buffer-ack %v", sendSize)
+			log.Printf("Buffer-ack %v\n", sendSize)
 			binary.BigEndian.PutUint32(bufferAck.Extras[:4], uint32(sendSize))
 			feed.transmitCh <- bufferAck
 			uprStats.TotalBufferAckSent++
