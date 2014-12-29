@@ -30,6 +30,7 @@ var (
 	streamInitPort    = flag.String("streamInitPort", "9102", "Index initial stream port")
 	streamCatchupPort = flag.String("streamCatchupPort", "9103", "Index catchup stream port")
 	streamMaintPort   = flag.String("streamMaintPort", "9104", "Index maintenance stream port")
+	storageDir        = flag.String("storageDir", "./", "Index file storage directory path")
 	enableManager     = flag.Bool("enable_manager", false, "Enable Index Manager")
 )
 
@@ -51,6 +52,7 @@ func main() {
 	config = config.SetValue("streamInitPort", *streamInitPort)
 	config = config.SetValue("streamCatchupPort", *streamCatchupPort)
 	config = config.SetValue("streamMaintPort", *streamMaintPort)
+	config = config.SetValue("storage_dir", *storageDir)
 
 	_, msg := indexer.NewIndexer(config)
 
