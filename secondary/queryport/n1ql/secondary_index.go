@@ -9,14 +9,16 @@
 // or implied. See the License for the specific language governing
 // permissions and limitations under the License.
 
-package couchbase
+package n1ql
 
 import "fmt"
 import "sync"
+import "strconv"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/collatejson"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
+import mclient "github.com/couchbase/indexing/secondary/manager/client"
 import "github.com/couchbaselabs/query/datastore"
 import "github.com/couchbaselabs/query/errors"
 import "github.com/couchbaselabs/query/expression"
@@ -24,21 +26,15 @@ import "github.com/couchbaselabs/query/expression/parser"
 import "github.com/couchbaselabs/query/value"
 
 // ErrorIndexEmpty is index not initialized.
-var ErrorIndexEmpty = errors.NewError(nil, "2i.empty")
+var ErrorIndexEmpty = errors.NewError(nil, "gsi.empty")
 
 // ErrorEmptyHost is no valid node hosting an index.
-var ErrorEmptyHost = errors.NewError(nil, "2i.emptyHost")
+var ErrorEmptyHost = errors.NewError(nil, "gsi.emptyHost")
 
 // PRIMARY_INDEX index name.
 var PRIMARY_INDEX = "#primary"
 
-// ClusterManagerAddr is temporary hard-coded address for
-// cluster-manager-agent, TODO: remove this!
-const ClusterManagerAddr = "localhost:9100"
-
-// IndexerAddr is temporary hard-coded address for indexer
-// node, TODO: remove this!
-const IndexerAddr = "localhost:9101"
+var useMetadataProvider = false
 
 var twoiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 	datastore.NEITHER: qclient.Neither,
@@ -47,24 +43,75 @@ var twoiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 	datastore.BOTH:    qclient.Both,
 }
 
-// contains all index loaded via 2i cluster.
+//--------------------
+// datastore.Indexer{}
+//--------------------
+
+// contains all index loaded via gsi cluster.
 type gsiKeyspace struct {
-	mu        sync.RWMutex
-	namespace string // aka pool
-	keyspace  string // aka bucket
-	indexes   map[string]*secondaryIndex
+	rw          sync.RWMutex
+	clusterURL  string
+	serviceAddr string
+	namespace   string                     // aka pool
+	keyspace    string                     // aka bucket
+	indexes     map[string]*secondaryIndex // defnID -> index
+	scanners    map[string]*qclient.Client // defnID -> query-client
+	bridge      gsiBridge                  // TODO: can be consolidated with MetadataProvider
+}
+
+// local interface that bridges n1ql back-end with GSI either via
+// CBQ-bridge or via MetadataProvider. Until MetadataProvider both
+// type of access will be supported.
+type gsiBridge interface {
+	// will refresh the latest set of index managed by GSI cluster
+	// and return the list of secondaryIndex to be cached locally.
+	refresh() ([]*secondaryIndex, errors.Error)
+
+	// create a new index and return a instance of secondaryIndex to
+	// be cached locally.
+	createIndex(
+		name, bucket, using, exprType, partnExpr, whereExpr string,
+		secExprs []string, isPrimary bool) (*secondaryIndex, errors.Error)
+
+	// drop an index and update the local cache.
+	dropIndex(si *secondaryIndex) errors.Error
+
+	// create a queryport client with indexer
+	newScannerClient(si *secondaryIndex) (*qclient.Client, errors.Error)
+
+	// close the bridge with GSI cluster.
+	closeBridge()
 }
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
 // also called as, pool->bucket.
-func NewGSIIndexer(namespace, keyspace string) datastore.Indexer {
+func NewGSIIndexer(
+	clusterURL, namespace, keyspace string) (datastore.Indexer, errors.Error) {
+
+	var err errors.Error
+
 	gsi := &gsiKeyspace{
-		namespace: namespace,
-		keyspace:  keyspace,
-		indexes:   make(map[string]*secondaryIndex),
+		clusterURL: clusterURL,
+		namespace:  namespace,
+		keyspace:   keyspace,
+		indexes:    make(map[string]*secondaryIndex), // defnID -> index
+		scanners:   make(map[string]*qclient.Client), // defnID -> query-client
 	}
-	gsi.Refresh()
-	return gsi
+	gsi.serviceAddr, err = gsi.getLocalServiceAddr(clusterURL)
+	if err != nil {
+		return nil, err
+	}
+	if useMetadataProvider {
+		bridge, err := newMetaBridgeClient(gsi, gsi.clusterURL, gsi.serviceAddr)
+		if err != nil {
+			return nil, err
+		}
+		gsi.bridge = bridge
+	} else {
+		gsi.bridge = newCbqBridgeClient(gsi)
+	}
+	err = gsi.Refresh()
+	return gsi, err
 }
 
 // KeyspaceId implements datastore.Indexer{} interface.
@@ -73,26 +120,40 @@ func (gsi *gsiKeyspace) KeyspaceId() string {
 	return gsi.keyspace
 }
 
-// Name implements datastore.Indexer{} interface. Unique within a Keyspace.
+// Name implements datastore.Indexer{} interface.
+// Unique within a Keyspace.
 func (gsi *gsiKeyspace) Name() datastore.IndexType {
 	return datastore.GSI
 }
 
-// IndexIds implements datastore.Indexer{} interface. Ids of the indexes
-// defined on this keyspace.
+// IndexIds implements datastore.Indexer{} interface. Ids of the
+// latest set of indexes from GSI cluster, defined on this keyspace.
 func (gsi *gsiKeyspace) IndexIds() ([]string, errors.Error) {
-	return gsi.IndexNames()
+	if err := gsi.Refresh(); err != nil {
+		return nil, err
+	}
+
+	gsi.rw.RLock()
+	defer gsi.rw.RUnlock()
+	ids := make([]string, 0, len(gsi.indexes))
+	for _, index := range gsi.indexes {
+		ids = append(ids, index.Id())
+	}
+	return ids, nil
 }
 
 // IndexNames implements datastore.Indexer{} interface. Names of the
-// indexes defined on this keyspace.
+// latest set of indexes from GSI cluster, defined on this keyspace.
 func (gsi *gsiKeyspace) IndexNames() ([]string, errors.Error) {
-	gsi.mu.RLock()
-	defer gsi.mu.RUnlock()
+	if err := gsi.Refresh(); err != nil {
+		return nil, err
+	}
 
+	gsi.rw.RLock()
+	defer gsi.rw.RUnlock()
 	names := make([]string, 0, len(gsi.indexes))
-	for name := range gsi.indexes {
-		names = append(names, name)
+	for _, index := range gsi.indexes {
+		names = append(names, index.Name())
 	}
 	return names, nil
 }
@@ -100,28 +161,41 @@ func (gsi *gsiKeyspace) IndexNames() ([]string, errors.Error) {
 // IndexById implements datastore.Indexer{} interface. Find an index on this
 // keyspace using the index's id.
 func (gsi *gsiKeyspace) IndexById(id string) (datastore.Index, errors.Error) {
-	return gsi.IndexByName(id)
+	gsi.rw.Lock()
+	defer gsi.rw.Unlock()
+	index, ok := gsi.indexes[id]
+	if !ok {
+		errmsg := fmt.Sprintf("GSI index id %v not found.", id)
+		err := errors.NewError(nil, errmsg)
+		return nil, err
+	}
+	return index, nil
 }
 
 // IndexByName implements datastore.Indexer{} interface. Find an index on
 // this keyspace using the index's name.
 func (gsi *gsiKeyspace) IndexByName(name string) (datastore.Index, errors.Error) {
-	gsi.mu.RLock()
-	defer gsi.mu.RUnlock()
+	gsi.rw.RLock()
+	defer gsi.rw.RUnlock()
 
-	if index, ok := gsi.indexes[name]; ok {
-		return index, nil
+	for _, index := range gsi.indexes {
+		if index.Name() == name {
+			return index, nil
+		}
 	}
-	err := errors.NewError(nil, fmt.Sprintf("2i index %v not found.", name))
+	err := errors.NewError(nil, fmt.Sprintf("GSI index %v not found.", name))
 	return nil, err
 }
 
-// Indexes implements datastore.Indexer{} interface. Returns all the
-// indexes defined on this keyspace.
+// Indexes implements datastore.Indexer{} interface. Return the latest
+// set of all indexes from GSI cluster, defined on this keyspace.
 func (gsi *gsiKeyspace) Indexes() ([]datastore.Index, errors.Error) {
-	gsi.mu.RLock()
-	defer gsi.mu.RUnlock()
+	if err := gsi.Refresh(); err != nil {
+		return nil, err
+	}
 
+	gsi.rw.RLock()
+	defer gsi.rw.RUnlock()
 	indexes := make([]datastore.Index, 0, len(gsi.indexes))
 	for _, index := range gsi.indexes {
 		indexes = append(indexes, index)
@@ -132,41 +206,32 @@ func (gsi *gsiKeyspace) Indexes() ([]datastore.Index, errors.Error) {
 // IndexByPrimary implements datastore.Indexer{} interface. Returns the
 // server-recommended primary index
 func (gsi *gsiKeyspace) IndexByPrimary() (datastore.PrimaryIndex, errors.Error) {
-	gsi.mu.RLock()
-	defer gsi.mu.RUnlock()
-
-	if primary, ok := gsi.indexes[PRIMARY_INDEX]; ok {
-		return primary, nil
+	si, err := gsi.IndexByName(PRIMARY_INDEX)
+	if err != nil {
+		return nil, err
 	}
-	msg := fmt.Sprintf("2i primary-index %v not found.", PRIMARY_INDEX)
-	return nil, errors.NewError(nil, msg)
+	return si.(datastore.PrimaryIndex), nil
 }
 
 // CreatePrimaryIndex implements datastore.Indexer{} interface. Create or
 // return a primary index on this keyspace
 func (gsi *gsiKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Error) {
-	client := qclient.NewClusterClient(ClusterManagerAddr)
-	// update meta-data.
-	info, err := client.CreateIndex(
-		PRIMARY_INDEX, gsi.keyspace, /*bucket-name*/
-		string(datastore.GSI),                     /*using*/
-		"N1QL" /*exprType*/, "" /*partnExpr*/, "", /*whereExpr*/
-		nil /*secExprs*/, true /*isPrimary*/)
+	index, err := gsi.bridge.createIndex(
+		PRIMARY_INDEX,
+		gsi.keyspace,          /*bucket-name*/
+		string(datastore.GSI), /*using*/
+		"N1QL",                /*exprType*/
+		"",                    /*partnStr*/
+		"",                    /*whereStr*/
+		nil,                   /*secStrs*/
+		true /*isPrimary*/)
 	if err != nil {
-		return nil, errors.NewError(err, " Primary CreateIndex() with 2i failed")
-	} else if info == nil {
-		return nil, errors.NewError(nil, " primary CreateIndex() with 2i failed")
+		return nil, err
 	}
-	// TODO: make another call to cluster-manager for topology information,
-	// so that info will contain the nodes that host this index.
-	index, e := gsi.newPrimaryIndex(info)
-	if e == nil {
-		gsi.mu.Lock()
-		defer gsi.mu.Unlock()
-		gsi.indexes[PRIMARY_INDEX] = index
-		return index, nil
+	if err := gsi.setIndex(index); err != nil {
+		return nil, err
 	}
-	return nil, e
+	return index, nil
 }
 
 // CreateIndex implements datastore.Indexer{} interface. Create a secondary
@@ -190,102 +255,113 @@ func (gsi *gsiKeyspace) CreateIndex(
 		s := expression.NewStringer().Visit(key)
 		secStrs[i] = s
 	}
-
-	client := qclient.NewClusterClient(ClusterManagerAddr)
-	info, err := client.CreateIndex(
-		name, gsi.keyspace /*bucketn*/, string(datastore.GSI), /*using*/
-		"N1QL" /*exprType*/, partnStr, whereStr, secStrs, false /*isPrimary*/)
+	index, err := gsi.bridge.createIndex(
+		name,
+		gsi.keyspace,          /*bucket-name*/
+		string(datastore.GSI), /*using*/
+		"N1QL",                /*exprType*/
+		partnStr, whereStr, secStrs,
+		false /*isPrimary*/)
 	if err != nil {
-		return nil, errors.NewError(nil, err.Error())
-	} else if info == nil {
-		return nil, errors.NewError(nil, "2i CreateIndex() failed")
+		return nil, err
 	}
-	// TODO: make another call to cluster-manager for topology information.
-	// so that info will contain the nodes that host this index.
-	index, e := gsi.newIndex(info)
-	if e == nil {
-		gsi.mu.Lock()
-		defer gsi.mu.Unlock()
-		gsi.indexes[name] = index
-		return index, nil
+	if err := gsi.setIndex(index); err != nil {
+		return nil, err
 	}
-	return nil, e
+	return index, nil
 }
 
-// Refresh and remember them as part of keyspace.indexes.
-func (gsi *gsiKeyspace) Refresh() errors.Error {
-	client := qclient.NewClusterClient(ClusterManagerAddr)
-	infos, err := client.List()
+// Refresh list of indexes and scanner clients.
+func (gsi *gsiKeyspace) Refresh() (err errors.Error) {
+	indexes, err := gsi.bridge.refresh()
 	if err != nil {
-		return errors.NewError(nil, err.Error())
-	} else if infos == nil { // empty list of indexes
-		return nil
+		return err
 	}
-
-	indexes := make(map[string]*secondaryIndex)
-	for _, info := range infos {
-		if info.Bucket != gsi.keyspace /*bucket*/ {
-			continue
-		}
-		if info.Name == "#primary" {
-			index, err := gsi.newPrimaryIndex(&info)
-			if err != nil {
-				return err
-			}
-			indexes[index.Name()] = index
-
-		} else {
-			index, err := gsi.newIndex(&info)
-			if err != nil {
-				return err
-			}
-			indexes[index.Name()] = index
+	gsi.clearIndexes()
+	for _, index := range indexes {
+		if err := gsi.setIndex(index); err != nil {
+			return err
 		}
 	}
-	gsi.mu.Lock()
-	defer gsi.mu.Unlock()
-	gsi.indexes = indexes // forget the old map!
 	return nil
 }
 
-// newPrimaryIndex will create a new instance of primary index.
-func (gsi *gsiKeyspace) newPrimaryIndex(
-	info *qclient.IndexInfo) (*secondaryIndex, errors.Error) {
-
-	index := &secondaryIndex{
-		gsi:       gsi,
-		name:      PRIMARY_INDEX,
-		defnID:    info.DefnID,
-		bucketn:   info.Bucket,
-		isPrimary: true,
-		using:     datastore.GSI,
-		// remote node hosting this index.
-		hosts: nil, // to becomputed by coordinator
+// Restart the bridge with GSI cluster.
+func (gsi *gsiKeyspace) Restart() errors.Error {
+	gsi.bridge.closeBridge()
+	if useMetadataProvider {
+		bridge, err := newMetaBridgeClient(gsi, gsi.clusterURL, gsi.serviceAddr)
+		if err != nil {
+			return err
+		}
+		gsi.bridge = bridge
+	} else {
+		gsi.bridge = newCbqBridgeClient(gsi)
 	}
-	// TODO: info will contain the nodes that host this index.
-	index.setHost([]string{IndexerAddr})
-	return index, nil
+	return gsi.Refresh()
 }
 
-// new 2i index.
-func (gsi *gsiKeyspace) newIndex(info *qclient.IndexInfo) (*secondaryIndex, errors.Error) {
-	index := &secondaryIndex{
-		gsi:       gsi,
-		bucketn:   info.Bucket,
-		name:      info.Name,
-		defnID:    info.DefnID,
-		isPrimary: info.IsPrimary,
-		using:     datastore.IndexType(info.Using),
-		partnExpr: info.PartnExpr,
-		secExprs:  info.SecExprs,
-		whereExpr: info.WhereExpr,
-		// remote node hosting this index.
-		hosts: nil, // to becomputed by coordinator
+//------------------------------------------
+// private functions for datastore.Indexer{}
+//------------------------------------------
+
+func (gsi *gsiKeyspace) setIndex(si *secondaryIndex) errors.Error {
+	gsi.rw.Lock()
+	defer gsi.rw.Unlock()
+	gsi.indexes[si.Id()] = si
+	client, err := gsi.bridge.newScannerClient(si)
+	if err != nil {
+		return err
 	}
-	// TODO: info will contain the nodes that host this index.
-	index.setHost([]string{IndexerAddr})
-	return index, nil
+	gsi.scanners[si.Id()] = client
+	return nil
 }
+
+// for getIndex() use IndexById()
+
+// return the scanner object for index
+func (gsi *gsiKeyspace) getScanner(id string) (q *qclient.Client, ok bool) {
+	gsi.rw.RLock()
+	defer gsi.rw.RUnlock()
+	scanner, ok := gsi.scanners[id]
+	return scanner, ok
+}
+
+func (gsi *gsiKeyspace) delIndex(id string) {
+	gsi.rw.Lock()
+	defer gsi.rw.Unlock()
+	delete(gsi.indexes, id)
+}
+
+func (gsi *gsiKeyspace) clearIndexes() {
+	gsi.rw.Lock()
+	defer gsi.rw.Unlock()
+	gsi.indexes = make(map[string]*secondaryIndex) // defnID -> index
+	for _, scanner := range gsi.scanners {
+		scanner.Close()
+	}
+	gsi.scanners = make(map[string]*qclient.Client)
+}
+
+// return n1ql's service address, called once during bootstrap
+func (gsi *gsiKeyspace) getLocalServiceAddr(
+	cluster string) (string, errors.Error) {
+
+	cinfo, err := getClusterInfo(cluster, "default" /*pool*/) // TODO:nomagic
+	if err != nil {
+		return "", err
+	}
+	nodeID := cinfo.GetCurrentNode()
+	serviceAddr, e := cinfo.GetServiceAddress(nodeID, "n1ql")
+	if e != nil {
+		return "", errors.NewError(e, fmt.Sprintf("ClusterInfo() failed"))
+	}
+	return serviceAddr, nil
+}
+
+//------------------
+// datastore.Index{}
+//------------------
 
 // secondaryIndex to hold meta data information, network-address for
 // a single secondary-index.
@@ -302,19 +378,56 @@ type secondaryIndex struct {
 	state     datastore.IndexState
 
 	// remote node hosting this index.
-	hosts       []string
-	hostClients []*qclient.Client
+	nodes []c.NodeId
 }
 
-// obtain the hos
-func (si *secondaryIndex) getHostClient() (*qclient.Client, errors.Error) {
-	if si.hostClients == nil || len(si.hostClients) == 0 {
-		return nil, ErrorEmptyHost
+// for cbq-bridge.
+func newSecondaryIndexFromInfo(
+	gsi *gsiKeyspace,
+	info *qclient.IndexInfo,
+	nodes []c.NodeId) (*secondaryIndex, errors.Error) {
+
+	si := &secondaryIndex{
+		gsi:       gsi,
+		bucketn:   info.Bucket,
+		name:      info.Name,
+		defnID:    info.DefnID,
+		isPrimary: info.IsPrimary,
+		using:     datastore.IndexType(info.Using),
+		partnExpr: info.PartnExpr,
+		secExprs:  info.SecExprs,
+		whereExpr: info.WhereExpr,
+		state:     datastore.ONLINE,
+		nodes:     nodes, // remote node hosting this index.
 	}
-	// TODO: use round-robin or other statistical heuristics to load
-	// balance.
-	client := si.hostClients[0]
-	return client, nil
+	return si, nil
+}
+
+// for metadata-provider.
+func newSecondaryIndexFromMetaData(
+	gsi *gsiKeyspace,
+	imd *mclient.IndexMetadata,
+	nodes []c.NodeId) (*secondaryIndex, errors.Error) {
+
+	if len(imd.Instances) < 1 {
+		return nil, errors.NewError(nil, "no instance created by metadata")
+	}
+	state, indexDefn := imd.Instances[0].State, imd.Definition
+	defnID := strconv.FormatUint(uint64(indexDefn.DefnId), 16)
+	si := &secondaryIndex{
+		gsi:       gsi,
+		bucketn:   indexDefn.Bucket,
+		name:      indexDefn.Name,
+		defnID:    defnID,
+		isPrimary: indexDefn.IsPrimary,
+		using:     datastore.IndexType(indexDefn.Using),
+		partnExpr: indexDefn.PartitionKey,
+		secExprs:  indexDefn.SecExprs,
+		whereExpr: "", // TODO: where-clause.
+		state:     datastore.IndexState(state),
+		nodes:     nodes, // remote node hosting this index.
+	}
+	return si, nil
 }
 
 // KeyspaceId implement Index{} interface.
@@ -324,7 +437,7 @@ func (si *secondaryIndex) KeyspaceId() string {
 
 // Id implement Index{} interface.
 func (si *secondaryIndex) Id() string {
-	return si.Name()
+	return si.defnID
 }
 
 // Name implement Index{} interface.
@@ -370,17 +483,16 @@ func (si *secondaryIndex) Condition() expression.Expression {
 
 // State implement Index{} interface.
 func (si *secondaryIndex) State() (datastore.IndexState, errors.Error) {
-	// TODO: if state is not ONLINE, fetch the latest state from cluster.
-	return datastore.ONLINE, nil
+	return si.state, nil
 }
 
 // Statistics implement Index{} interface.
 func (si *secondaryIndex) Statistics(
 	span *datastore.Span) (datastore.Statistics, errors.Error) {
 
-	client, err := si.getHostClient()
-	if err != nil {
-		return nil, err
+	client, ok := si.gsi.getScanner(si.Id())
+	if !ok {
+		return nil, errors.NewError(nil, "GSI.getScanner() failed")
 	}
 
 	var pstats c.IndexStatistics
@@ -405,10 +517,11 @@ func (si *secondaryIndex) Statistics(
 
 // Count implement Index{} interface.
 func (si *secondaryIndex) Count() (int64, errors.Error) {
-	client, err := si.getHostClient()
-	if err != nil {
-		return 0, err
+	client, ok := si.gsi.getScanner(si.Id())
+	if !ok {
+		return 0, errors.NewError(nil, "GSI.getScanner() failed")
 	}
+
 	count, e := client.Count(si.name, si.bucketn)
 	if e != nil {
 		return 0, errors.NewError(nil, e.Error())
@@ -421,15 +534,10 @@ func (si *secondaryIndex) Drop() errors.Error {
 	if si == nil {
 		return ErrorIndexEmpty
 	}
-	client := qclient.NewClusterClient(ClusterManagerAddr)
-	err := client.DropIndex(si.defnID)
-	if err != nil {
-		return errors.NewError(nil, err.Error())
+	if err := si.gsi.bridge.dropIndex(si); err != nil {
+		return err
 	}
-	si.gsi.mu.Lock()
-	defer si.gsi.mu.Unlock()
-	delete(si.gsi.indexes, si.Name())
-	// TODO: sync with cluster-manager ?
+	si.gsi.delIndex(si.Id())
 	return nil
 }
 
@@ -441,8 +549,8 @@ func (si *secondaryIndex) Scan(
 	entryChannel := conn.EntryChannel()
 	defer close(entryChannel)
 
-	client, err := si.getHostClient()
-	if err != nil {
+	client, ok := si.gsi.getScanner(si.Id())
+	if !ok {
 		return
 	}
 
@@ -469,14 +577,18 @@ func (si *secondaryIndex) ScanEntries(
 	entryChannel := conn.EntryChannel()
 	defer close(entryChannel)
 
-	client, err := si.getHostClient()
-	if err != nil {
+	client, ok := si.gsi.getScanner(si.Id())
+	if !ok {
 		return
 	}
 
 	indexn, bucketn := si.name, si.bucketn
 	client.ScanAll(indexn, bucketn, limit, makeResponsehandler(conn))
 }
+
+//-------------------------------------
+// private functions for secondaryIndex
+//-------------------------------------
 
 func makeResponsehandler(
 	conn *datastore.IndexConnection) qclient.ResponseHandler {
@@ -512,6 +624,10 @@ func makeResponsehandler(
 	}
 }
 
+//-----------------------
+// datastore.Statistics{}
+//-----------------------
+
 type statistics struct {
 	count      int64
 	uniqueKeys int64
@@ -519,6 +635,8 @@ type statistics struct {
 	max        value.Values
 }
 
+// return an
+// adaptor from gsi index statistics structure to datastore.Statistics{}
 func newStatistics(pstats c.IndexStatistics) datastore.Statistics {
 	stats := &statistics{}
 	stats.count, _ = pstats.Count()
@@ -555,22 +673,9 @@ func (stats *statistics) Bins() ([]datastore.Statistics, errors.Error) {
 	return nil, nil
 }
 
-// local function that can be used to asynchronously update
-// meta-data information, host network-address from coordinator
-// notifications.
-
-// create a queryport client connected to `host`.
-func (si *secondaryIndex) setHost(hosts []string) {
-	si.hosts = hosts
-	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	if len(hosts) > 0 {
-		si.hostClients = make([]*qclient.Client, 0, len(hosts))
-		for _, host := range hosts {
-			c := qclient.NewClient(qclient.Remoteaddr(host), config)
-			si.hostClients = append(si.hostClients, c)
-		}
-	}
-}
+//------------------
+// private functions
+//------------------
 
 // shape of key passed to scan-coordinator (indexer node) is,
 //      [key1, key2, ... keyN]
@@ -600,18 +705,47 @@ func skey2Values(skey c.SecondaryKey) []value.Value {
 	return vals
 }
 
-func parseExprs(exprs []string) (expression.Expressions, error) {
-	keys := expression.Expressions(nil)
-	if len(exprs) > 0 {
-		for _, expr := range exprs {
-			if len(expr) > 0 {
-				key, err := parser.Parse(expr)
-				if err != nil {
-					return nil, err
-				}
-				keys = append(keys, key)
-			}
-		}
+// get cluster info and refresh ns-server data.
+func getClusterInfo(
+	cluster string, pooln string) (*c.ClusterInfoCache, errors.Error) {
+
+	cinfo := c.NewClusterInfoCache(cluster, pooln)
+	if err := cinfo.Fetch(); err != nil {
+		return nil, errors.NewError(err, fmt.Sprintf("ClusterInfo() failed"))
 	}
-	return keys, nil
+	return cinfo, nil
+}
+
+// return adminports for all known indexers.
+func getIndexerAdminports(
+	cinfo *c.ClusterInfoCache,
+	nodes []c.NodeId) (map[c.NodeId]string, errors.Error) {
+
+	iAdminports := make(map[c.NodeId]string)
+	for _, node := range nodes {
+		adminport, err := cinfo.GetServiceAddress(node, "indexer-adminport")
+		if err != nil {
+			msg := "GSI GetServiceAddress() failed"
+			return nil, errors.NewError(err, fmt.Sprintf(msg))
+		}
+		iAdminports[node] = adminport
+	}
+	return iAdminports, nil
+}
+
+// return queryports for all known indexers.
+func getIndexerQueryports(
+	cinfo *c.ClusterInfoCache,
+	nodes []c.NodeId) (map[c.NodeId]string, errors.Error) {
+
+	iQueryports := make(map[c.NodeId]string)
+	for _, node := range nodes {
+		queryport, err := cinfo.GetServiceAddress(node, "indexer-queryport")
+		if err != nil {
+			msg := "GSI GetServiceAddress() failed"
+			return nil, errors.NewError(err, fmt.Sprintf(msg))
+		}
+		iQueryports[node] = queryport
+	}
+	return iQueryports, nil
 }
