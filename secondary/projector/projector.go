@@ -1,20 +1,14 @@
 package projector
 
-import "errors"
 import "fmt"
 import "sync"
 import "strings"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
+import projC "github.com/couchbase/indexing/secondary/projector/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/couchbaselabs/goprotobuf/proto"
-
-// ErrorTopicExist
-var ErrorTopicExist = errors.New("projector.topicExist")
-
-// ErrorTopicMissing
-var ErrorTopicMissing = errors.New("projector.topicMissing")
 
 // Projector data structure, a projector is connected to
 // one or more upstream kv-nodes. Works in tandem with
@@ -69,7 +63,7 @@ func (p *Projector) GetFeed(topic string) (*Feed, error) {
 	if feed, ok := p.topics[topic]; ok {
 		return feed, nil
 	}
-	return nil, ErrorTopicMissing
+	return nil, projC.ErrorTopicMissing
 }
 
 // AddFeed object for `topic`.
@@ -79,7 +73,7 @@ func (p *Projector) AddFeed(topic string, feed *Feed) (err error) {
 	defer p.mu.Unlock()
 
 	if _, ok := p.topics[topic]; ok {
-		return ErrorTopicExist
+		return projC.ErrorTopicExist
 	}
 	p.topics[topic] = feed
 	c.Infof("%v %q feed added ...\n", p.logPrefix, topic)
@@ -93,7 +87,7 @@ func (p *Projector) DelFeed(topic string) (err error) {
 	defer p.mu.Unlock()
 
 	if _, ok := p.topics[topic]; ok == false {
-		return ErrorTopicMissing
+		return projC.ErrorTopicMissing
 	}
 	delete(p.topics, topic)
 	c.Infof("%v ... %q feed deleted\n", p.logPrefix, topic)
@@ -239,7 +233,7 @@ func (p *Projector) doRestartVbuckets(
 	if err != nil {
 		c.Errorf("%v %v\n", p.logPrefix, err)
 		response := &protobuf.TopicResponse{}
-		if err != ErrorTopicMissing {
+		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
 		}
 		return response.SetErr(err)
@@ -288,7 +282,7 @@ func (p *Projector) doAddBuckets(
 	if err != nil {
 		c.Errorf("%v %v\n", p.logPrefix, err)
 		response := &protobuf.TopicResponse{}
-		if err != ErrorTopicMissing {
+		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
 		}
 		return response.SetErr(err)

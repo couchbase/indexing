@@ -622,18 +622,18 @@ func (worker *adminWorker) addInstances(instances []*protobuf.Instance,
 //
 // Handle error for adding instance.  The following error can be returned from projector:
 // 1) Unconditional Recoverable error by worker
-// 		* generic http error
-// 		* ErrorStreamRequest
-// 		* ErrorResposneTimeout
-// 		* ErrorFeeder
+//      * generic http error
+//      * ErrorStreamRequest
+//      * ErrorResposneTimeout
+//      * ErrorFeeder
 // 2) Non Recoverable error
-// 		* ErrorInconsistentFeed
+//      * ErrorInconsistentFeed
 // 3) Recoverable error by other worker
-// 		* ErrorInvalidVbucketBranch
-// 		* ErrorNotMyVbucket
-//	    * ErrorInvalidKVaddrs
+//      * ErrorInvalidVbucketBranch
+//      * ErrorNotMyVbucket
+//      * ErrorInvalidKVaddrs
 // 4) Error that may not need retry
-//		* ErrorTopicExist
+//      * ErrorTopicExist
 //
 func (worker *adminWorker) shouldRetryAddInstances(requestTs []*protobuf.TsVbuuid,
 	response *protobuf.TopicResponse,
@@ -645,23 +645,23 @@ func (worker *adminWorker) shouldRetryAddInstances(requestTs []*protobuf.TsVbuui
 	errStr := err.Error()
 	common.Debugf("adminWorker::shouldRetryAddInstances(): Error encountered when calling MutationTopicRequest. Error=%v", errStr)
 
-	if strings.Contains(errStr, projector.ErrorTopicExist.Error()) {
+	if strings.Contains(errStr, projectorC.ErrorTopicExist.Error()) {
 		// TODO: Need pratap to define the semantic of ErrorTopExist.   Right now return as an non-recoverable error.
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, projector.ErrorInconsistentFeed.Error()) {
+	} else if strings.Contains(errStr, projectorC.ErrorInconsistentFeed.Error()) {
 		// This is fatal error.  Should only happen due to coding error.   Need to return this error.
 		// For those projectors that have already been opened, let's leave it open. Eventually those
 		// projectors will fill up the buffer and terminate the connection by itself.
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, projector.ErrorNotMyVbucket.Error()) {
+	} else if strings.Contains(errStr, projectorC.ErrorNotMyVbucket.Error()) {
 		return nil, NewError(ERROR_STREAM_WRONG_VBUCKET, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, projector.ErrorInvalidVbucketBranch.Error()) {
+	} else if strings.Contains(errStr, projectorC.ErrorInvalidVbucketBranch.Error()) {
 		return nil, NewError(ERROR_STREAM_INVALID_TIMESTAMP, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, projector.ErrorInvalidKVaddrs.Error()) {
+	} else if strings.Contains(errStr, projectorC.ErrorInvalidKVaddrs.Error()) {
 		return nil, NewError(ERROR_STREAM_INVALID_KVADDRS, NORMAL, STREAM, err, "")
 	}
 
@@ -715,7 +715,7 @@ func (worker *adminWorker) deleteInstances(instances []uint64, doneCh chan *admi
 			}
 
 			common.Debugf("adminWorker::deleteInstances(): Error encountered when calling DelInstances. Error=%v", err.Error())
-			if strings.Contains(err.Error(), projector.ErrorTopicMissing.Error()) {
+			if strings.Contains(err.Error(), projectorC.ErrorTopicMissing.Error()) {
 				// It is OK if topic is missing
 				worker.err = nil
 				return
@@ -771,7 +771,7 @@ func (worker *adminWorker) repairEndpoint(endpoint string, doneCh chan *adminWor
 			}
 
 			common.Debugf("adminWorker::repairEndpiont(): Error encountered when calling RepairEndpoint. Error=%v", err.Error())
-			if strings.Contains(err.Error(), projector.ErrorTopicMissing.Error()) {
+			if strings.Contains(err.Error(), projectorC.ErrorTopicMissing.Error()) {
 				// It is OK if topic is missing
 				worker.err = nil
 				return
@@ -848,17 +848,17 @@ func (worker *adminWorker) restartStream(timestamps []*protobuf.TsVbuuid, doneCh
 //
 // Handle error for restart vbuckets.  The following error can be returned from projector:
 // 1) Unconditional Recoverable error by worker
-// 		* generic http error
-// 		* ErrorStreamRequest
-// 		* ErrorResposneTimeout
+//      * generic http error
+//      * ErrorStreamRequest
+//      * ErrorResposneTimeout
 // 2) Non Recoverable error
-// 		* ErrorTopicMissing
-// 		* ErrorInvalidBucket
+//      * ErrorTopicMissing
+//      * ErrorInvalidBucket
 // 3) Recoverable error by other worker
-// 		* ErrorInvalidVbucketBranch
-// 		* ErrorNotMyVbucket
-// 		* ErrorFeeder
-// 		* ErrorStreamEnd
+//      * ErrorInvalidVbucketBranch
+//      * ErrorNotMyVbucket
+//      * ErrorFeeder
+//      * ErrorStreamEnd
 //
 func (worker *adminWorker) shouldRetryRestartVbuckets(requestTs []*protobuf.TsVbuuid,
 	response *protobuf.TopicResponse,
@@ -870,22 +870,22 @@ func (worker *adminWorker) shouldRetryRestartVbuckets(requestTs []*protobuf.TsVb
 	errStr := err.Error()
 	common.Debugf("adminWorker::shouldRetryRestartVbuckets(): Error encountered when calling RestartVbuckets. Error=%v", errStr)
 
-	if strings.Contains(errStr, projector.ErrorTopicMissing.Error()) {
+	if strings.Contains(errStr, projectorC.ErrorTopicMissing.Error()) {
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, projector.ErrorInvalidBucket.Error()) {
+	} else if strings.Contains(errStr, projectorC.ErrorInvalidBucket.Error()) {
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, projector.ErrorFeeder.Error()) {
+	} else if strings.Contains(errStr, projectorC.ErrorFeeder.Error()) {
 		return nil, NewError(ERROR_STREAM_FEEDER, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, projector.ErrorNotMyVbucket.Error()) {
+	} else if strings.Contains(errStr, projectorC.ErrorNotMyVbucket.Error()) {
 		return nil, NewError(ERROR_STREAM_WRONG_VBUCKET, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, projector.ErrorInvalidVbucketBranch.Error()) {
+	} else if strings.Contains(errStr, projectorC.ErrorInvalidVbucketBranch.Error()) {
 		return nil, NewError(ERROR_STREAM_INVALID_TIMESTAMP, NORMAL, STREAM, err, "")
 
-	} else if strings.Contains(errStr, projector.ErrorStreamEnd.Error()) {
+	} else if strings.Contains(errStr, projectorC.ErrorStreamEnd.Error()) {
 		return nil, NewError(ERROR_STREAM_STREAM_END, NORMAL, STREAM, err, "")
 	}
 

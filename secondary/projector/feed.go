@@ -1,6 +1,5 @@
 package projector
 
-import "errors"
 import "fmt"
 import "time"
 import "runtime/debug"
@@ -9,41 +8,8 @@ import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+import projC "github.com/couchbase/indexing/secondary/projector/client"
 import "github.com/couchbaselabs/goprotobuf/proto"
-
-// error codes
-
-// ErrorInvalidBucket
-var ErrorInvalidBucket = errors.New("feed.invalidBucket")
-
-// ErrorInvalidKVaddrs
-var ErrorInvalidKVaddrs = errors.New("feed.invalidKVaddrs")
-
-// ErrorInvalidVbucketBranch
-var ErrorInvalidVbucketBranch = errors.New("feed.invalidVbucketBranch")
-
-// ErrorInvalidVbucket
-var ErrorInvalidVbucket = errors.New("feed.invalidVbucket")
-
-// ErrorInconsistentFeed
-var ErrorInconsistentFeed = errors.New("feed.inconsistentFeed")
-
-// ErrorFeeder
-var ErrorFeeder = errors.New("feed.feeder")
-
-// ErrorNotMyVbucket
-var ErrorNotMyVbucket = errors.New("feed.notMyVbucket")
-
-// ErrorStreamRequest
-var ErrorStreamRequest = errors.New("feed.streamRequest")
-
-// ErrorStreamEnd
-var ErrorStreamEnd = errors.New("feed.streamEnd")
-
-// ErrorResponseTimeout is sent when projector does not recieve
-// expected control message like StreamBegin (when stream is started)
-// and StreamEnd (when stream is closed).
-var ErrorResponseTimeout = errors.New("feed.responseTimeout")
 
 // Feed is mutation stream - for maintenance, initial-load, catchup etc...
 type Feed struct {
@@ -488,7 +454,7 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
 			feed.cleanupBucket(bucketn)
-			err = ErrorFeeder
+			err = projC.ErrorFeeder
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -512,7 +478,7 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			feed.cleanupBucket(bucketn)
-			err = ErrorFeeder
+			err = projC.ErrorFeeder
 			continue
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
@@ -556,7 +522,7 @@ func (feed *Feed) restartVbuckets(
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
 			feed.cleanupBucket(bucketn)
-			err = ErrorFeeder
+			err = projC.ErrorFeeder
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -584,7 +550,7 @@ func (feed *Feed) restartVbuckets(
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			feed.cleanupBucket(bucketn)
-			err = ErrorFeeder
+			err = projC.ErrorFeeder
 			continue
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
@@ -629,7 +595,7 @@ func (feed *Feed) shutdownVbuckets(
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
 			feed.cleanupBucket(bucketn)
-			err = ErrorFeeder
+			err = projC.ErrorFeeder
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -640,14 +606,14 @@ func (feed *Feed) shutdownVbuckets(
 		if !ok1 || !ok2 || !ok3 {
 			msg := "%v shutdownVbuckets() invalid bucket %v\n"
 			c.Errorf(msg, feed.logPrefix, bucketn)
-			err = ErrorInvalidBucket
+			err = projC.ErrorInvalidBucket
 			continue
 		}
 		// shutdown upstream
 		_, e = feed.bucketFeed(opaque, true, false, ts)
 		if e != nil {
 			feed.cleanupBucket(bucketn)
-			err = ErrorFeeder
+			err = projC.ErrorFeeder
 			continue
 		}
 		endTs, _, e := feed.waitStreamEnds(opaque, bucketn, ts)
@@ -686,7 +652,7 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
 			feed.cleanupBucket(bucketn)
-			err = ErrorFeeder
+			err = projC.ErrorFeeder
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -710,7 +676,7 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
 		if e != nil { // all feed errors are fatal, skip this bucket.
 			feed.cleanupBucket(bucketn)
-			err = ErrorFeeder
+			err = projC.ErrorFeeder
 			continue
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
@@ -902,7 +868,7 @@ func (feed *Feed) bucketFeed(
 	if start {
 		if reqTs.VerifyBranch(vbnos, vbuuids) == false {
 			feed.errorf("VerifyBranch()", bucketn, vbuuids)
-			return nil, ErrorInvalidVbucketBranch
+			return nil, projC.ErrorInvalidVbucketBranch
 		}
 	}
 
@@ -963,7 +929,7 @@ func (feed *Feed) bucketDetails(
 		flog := flogs[vbno]
 		if len(flog) < 1 {
 			feed.errorf("bucket.FailoverLog empty", bucketn, nil)
-			return nil, ErrorInvalidVbucket
+			return nil, projC.ErrorInvalidVbucket
 		}
 		latestVbuuid, _, err := flog.Latest()
 		if err != nil {
@@ -1064,21 +1030,21 @@ func (feed *Feed) subscribers(
 
 	evaluators, err := req.GetEvaluators()
 	if err != nil {
-		return nil, nil, ErrorInconsistentFeed
+		return nil, nil, projC.ErrorInconsistentFeed
 	}
 	routers, err := req.GetRouters()
 	if err != nil {
-		return nil, nil, ErrorInconsistentFeed
+		return nil, nil, projC.ErrorInconsistentFeed
 	}
 
 	if len(evaluators) != len(routers) {
-		err = ErrorInconsistentFeed
+		err = projC.ErrorInconsistentFeed
 		c.Errorf("%v error %v, len() mismatch\n", feed.logPrefix, err)
 		return nil, nil, err
 	}
 	for uuid := range evaluators {
 		if _, ok := routers[uuid]; ok == false {
-			err = ErrorInconsistentFeed
+			err = projC.ErrorInconsistentFeed
 			c.Errorf("%v error %v, uuid mismatch\n", feed.logPrefix, err)
 			return nil, nil, err
 		}
@@ -1122,10 +1088,10 @@ func (feed *Feed) waitStreamRequests(
 				rollTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
 			} else if val.status == mcd.NOT_MY_VBUCKET {
 				failTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
-				err = ErrorNotMyVbucket
+				err = projC.ErrorNotMyVbucket
 			} else {
 				failTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
-				err = ErrorStreamRequest
+				err = projC.ErrorStreamRequest
 			}
 			vbnos = c.RemoveUint16(val.vbno, vbnos)
 			if len(vbnos) == 0 {
@@ -1166,10 +1132,10 @@ func (feed *Feed) waitStreamEnds(
 				endTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
 			} else if val.status == mcd.NOT_MY_VBUCKET {
 				failTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
-				err = ErrorNotMyVbucket
+				err = projC.ErrorNotMyVbucket
 			} else {
 				failTs.Append(val.vbno, 0 /*seqno*/, 0 /*vbuuid*/, 0, 0)
-				err = ErrorStreamEnd
+				err = projC.ErrorStreamEnd
 			}
 			vbnos = c.RemoveUint16(val.vbno, vbnos)
 			if len(vbnos) == 0 {
@@ -1205,7 +1171,7 @@ loop:
 			}
 
 		case <-timeout:
-			err = ErrorResponseTimeout
+			err = projC.ErrorResponseTimeout
 			c.Errorf("%v feedback timeout %v\n", feed.logPrefix, err)
 			break loop
 		}

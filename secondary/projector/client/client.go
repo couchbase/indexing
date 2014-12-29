@@ -65,11 +65,52 @@ package client
 import "fmt"
 import "time"
 import "strings"
+import "errors"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/couchbaselabs/goprotobuf/proto"
+
+// error codes
+
+// ErrorTopicExist
+var ErrorTopicExist = errors.New("projector.topicExist")
+
+// ErrorTopicMissing
+var ErrorTopicMissing = errors.New("projector.topicMissing")
+
+// ErrorInvalidBucket
+var ErrorInvalidBucket = errors.New("feed.invalidBucket")
+
+// ErrorInvalidKVaddrs
+var ErrorInvalidKVaddrs = errors.New("feed.invalidKVaddrs")
+
+// ErrorInvalidVbucketBranch
+var ErrorInvalidVbucketBranch = errors.New("feed.invalidVbucketBranch")
+
+// ErrorInvalidVbucket
+var ErrorInvalidVbucket = errors.New("feed.invalidVbucket")
+
+// ErrorInconsistentFeed
+var ErrorInconsistentFeed = errors.New("feed.inconsistentFeed")
+
+// ErrorFeeder
+var ErrorFeeder = errors.New("feed.feeder")
+
+// ErrorNotMyVbucket
+var ErrorNotMyVbucket = errors.New("feed.notMyVbucket")
+
+// ErrorStreamRequest
+var ErrorStreamRequest = errors.New("feed.streamRequest")
+
+// ErrorStreamEnd
+var ErrorStreamEnd = errors.New("feed.streamEnd")
+
+// ErrorResponseTimeout is sent when projector does not recieve
+// expected control message like StreamBegin (when stream is started)
+// and StreamEnd (when stream is closed).
+var ErrorResponseTimeout = errors.New("feed.responseTimeout")
 
 // Client connects with a projector's adminport to
 // issues request and get back response.
