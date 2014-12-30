@@ -23,6 +23,7 @@ type ClusterInfoCache struct {
 	logPrefix string
 	retries   int
 
+	nodes   []couchbase.Node
 	client  couchbase.Client
 	pool    couchbase.Pool
 	nodesvs []couchbase.NodeServices
@@ -70,6 +71,23 @@ func (c *ClusterInfoCache) Fetch() error {
 			return err
 		}
 
+		for _, n := range c.pool.Nodes {
+			if n.ClusterMembership == "active" {
+				c.nodes = append(c.nodes, n)
+			}
+		}
+
+		found := false
+		for _, node := range c.nodes {
+			if node.ThisNode {
+				found = true
+			}
+		}
+
+		if !found {
+			return errors.New("Current node's cluster membership is not active")
+		}
+
 		poolServs, err = c.client.GetPoolServices(c.poolName)
 		if err != nil {
 			return err
@@ -84,7 +102,7 @@ func (c *ClusterInfoCache) Fetch() error {
 }
 
 func (c ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
-	for i, _ := range c.pool.Nodes {
+	for i, _ := range c.nodes {
 		if _, ok := c.nodesvs[i].Services[srvc]; ok {
 			nids = append(nids, NodeId(i))
 		}
@@ -101,7 +119,7 @@ func (c ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err er
 	}
 	defer b.Close()
 
-	for i, _ := range c.pool.Nodes {
+	for i, _ := range c.nodes {
 		nid := NodeId(i)
 		if _, ok := c.findVBServerIndex(b, nid); ok {
 			nids = append(nids, nid)
@@ -112,13 +130,13 @@ func (c ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err er
 }
 
 func (c ClusterInfoCache) GetCurrentNode() NodeId {
-	for i, node := range c.pool.Nodes {
+	for i, node := range c.nodes {
 		if node.ThisNode {
 			return NodeId(i)
 		}
 	}
 	// TODO: can we avoid this panic ?
-	panic("Invalid cluster info")
+	panic("Current node is not in active membership")
 }
 
 func (c ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr string, err error) {
@@ -169,7 +187,7 @@ func (c ClusterInfoCache) findVBServerIndex(b *couchbase.Bucket, nid NodeId) (in
 	bnodes := b.Nodes()
 
 	for idx, n := range bnodes {
-		if c.sameNode(n, c.pool.Nodes[nid]) {
+		if c.sameNode(n, c.nodes[nid]) {
 			return idx, true
 		}
 	}
