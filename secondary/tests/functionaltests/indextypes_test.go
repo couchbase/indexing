@@ -4,24 +4,25 @@ import (
 	"flag"
 	"fmt"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"testing"
 	"time"
 )
 
-var docs []kvutility.KeyValue
+var docs, mut_docs tc.KeyValues
 var defaultlimit int64 = 10000000
 var kvaddress, indexManagementAddress, indexScanAddress string
+var clusterconfig tc.ClusterConfiguration
 
 func init() {
 	fmt.Println("In init()")
 	var configpath string
 	flag.StringVar(&configpath, "cbconfig", "../config/clusterrun_conf.json", "Path of the configuration file with data about Couchbase Cluster")
 	flag.Parse()
-	var clusterconfig = tc.GetClusterConfFromFile(configpath)
+	clusterconfig = tc.GetClusterConfFromFile(configpath)
 	kvaddress = clusterconfig.KVAddress
 	indexManagementAddress = clusterconfig.IndexManagementAddress
 	indexScanAddress = clusterconfig.IndexScanAddress
@@ -29,10 +30,13 @@ func init() {
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	// Working with Users10k dataset.
 	dataFilePath := "../testdata/Users10k.txt.gz"
-	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath)
+	mutationFilePath := "../testdata/Users_mut.txt.gz"
+	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath, true)
+	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, true)
 	keyValues := datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	kvutility.SetKeyValues(keyValues, "default", "", clusterconfig.KVAddress)
 	docs = keyValues
+	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
 }
 
 // Test for single index field of data type float64

@@ -4,10 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 )
 
-func LoadJSONFromCompressedFile(path, docidfield string) []kvutility.KeyValue {
+func LoadJSONFromCompressedFile(path, docidfield string) tc.KeyValues {
 	file, err := tc.ReadCompressedFile(path)
 	tc.HandleError(err, "Error while decompressing data file "+path)
 
@@ -15,20 +14,20 @@ func LoadJSONFromCompressedFile(path, docidfield string) []kvutility.KeyValue {
 	json.Unmarshal(file, &data)
 
 	m := data.([]interface{})
-
-	keyValues := make([]kvutility.KeyValue, len(m))
+	keyValues := make(tc.KeyValues)
 
 	var i = 0
+	var k string
 	if len(docidfield) > 0 {
 		for _, v := range m {
-			keyValues[i].Key = fmt.Sprintf("%v", v.(map[string]interface{})[docidfield])
-			keyValues[i].JsonValue = v.(map[string]interface{})
+			k = fmt.Sprintf("%v", v.(map[string]interface{})[docidfield])
+			keyValues[k] =  v
 			i++
 		}
 	} else {
 		for _, v := range m {
-			keyValues[i].Key = fmt.Sprintf("%v", i)
-			keyValues[i].JsonValue = v.(map[string]interface{})
+			k = fmt.Sprintf("%v", i)
+			keyValues[k] =  v
 			i++
 		}
 	}

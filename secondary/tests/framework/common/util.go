@@ -47,9 +47,14 @@ func ReadCompressedFile(filePath string) ([]byte, error) {
 }
 
 // Download a remote file over HTTP
-func DownloadDataFile(sourceDataFile, destinationFilePath string) {
+func DownloadDataFile(sourceDataFile, destinationFilePath string, skipIfFileExists bool) {
+	if skipIfFileExists == true {
+		if _, err := os.Stat(destinationFilePath); err == nil {
+      		fmt.Println("Data file exists. Skipping download")
+			return
+     	}
+	}
 	fmt.Println("Downloading file...")
-
 	f, err := os.Create(destinationFilePath)
 	HandleError(err, "Error downloading datafile "+destinationFilePath)
 	defer f.Close()
