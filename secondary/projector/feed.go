@@ -350,7 +350,7 @@ loop:
 				if ok && actTs != nil && actTs.Len() == 0 { // bucket is done
 					prefix := feed.logPrefix
 					c.Debugf("%v self deleting bucket %v\n", prefix, v.bucket)
-					feed.cleanupBucket(v.bucket)
+					feed.cleanupBucket(v.bucket, false)
 				}
 
 			} else {
@@ -453,7 +453,7 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
-			feed.cleanupBucket(bucketn)
+			feed.cleanupBucket(bucketn, false)
 			err = projC.ErrorFeeder
 			continue
 		}
@@ -477,7 +477,7 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 		// start upstream, after filtering out remove vbuckets.
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
 		if e != nil { // all feed errors are fatal, skip this bucket.
-			feed.cleanupBucket(bucketn)
+			feed.cleanupBucket(bucketn, false)
 			err = projC.ErrorFeeder
 			continue
 		}
@@ -521,7 +521,7 @@ func (feed *Feed) restartVbuckets(
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
-			feed.cleanupBucket(bucketn)
+			feed.cleanupBucket(bucketn, false)
 			err = projC.ErrorFeeder
 			continue
 		}
@@ -549,7 +549,7 @@ func (feed *Feed) restartVbuckets(
 		// (re)start the upstream, after filtering out remote vbuckets.
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
 		if e != nil { // all feed errors are fatal, skip this bucket.
-			feed.cleanupBucket(bucketn)
+			feed.cleanupBucket(bucketn, false)
 			err = projC.ErrorFeeder
 			continue
 		}
@@ -594,7 +594,7 @@ func (feed *Feed) shutdownVbuckets(
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
-			feed.cleanupBucket(bucketn)
+			feed.cleanupBucket(bucketn, false)
 			err = projC.ErrorFeeder
 			continue
 		}
@@ -612,7 +612,7 @@ func (feed *Feed) shutdownVbuckets(
 		// shutdown upstream
 		_, e = feed.bucketFeed(opaque, true, false, ts)
 		if e != nil {
-			feed.cleanupBucket(bucketn)
+			feed.cleanupBucket(bucketn, false)
 			err = projC.ErrorFeeder
 			continue
 		}
@@ -651,7 +651,7 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
-			feed.cleanupBucket(bucketn)
+			feed.cleanupBucket(bucketn, false)
 			err = projC.ErrorFeeder
 			continue
 		}
@@ -675,7 +675,7 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 		// start upstream
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
 		if e != nil { // all feed errors are fatal, skip this bucket.
-			feed.cleanupBucket(bucketn)
+			feed.cleanupBucket(bucketn, false)
 			err = projC.ErrorFeeder
 			continue
 		}
@@ -707,7 +707,7 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 // vbucket-routines exits on StreamEnd
 func (feed *Feed) delBuckets(req *protobuf.DelBucketsRequest) error {
 	for _, bucketn := range req.GetBuckets() {
-		feed.cleanupBucket(bucketn)
+		feed.cleanupBucket(bucketn, true)
 	}
 	return nil
 }
@@ -822,8 +822,10 @@ func (feed *Feed) shutdown() error {
 }
 
 // shutdown upstream, data-path and remove data-structure for this bucket.
-func (feed *Feed) cleanupBucket(bucketn string) {
-	delete(feed.engines, bucketn) // :SideEffect:
+func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
+	if enginesOk {
+		delete(feed.engines, bucketn) // :SideEffect:
+	}
 	delete(feed.reqTss, bucketn)  // :SideEffect:
 	delete(feed.actTss, bucketn)  // :SideEffect:
 	delete(feed.rollTss, bucketn) // :SideEffect:
