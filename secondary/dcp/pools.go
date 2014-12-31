@@ -1,6 +1,7 @@
 package couchbase
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -285,6 +286,70 @@ func queryRestAPI(
 		return err
 	}
 	return nil
+}
+
+// Helper function to process streaming URI responses
+func notificationIterHelper(
+	baseURL *url.URL,
+	path string,
+	authHandler AuthHandler,
+	callb func([]byte, error) bool) error {
+	u := *baseURL
+	u.User = nil
+	if q := strings.Index(path, "?"); q > 0 {
+		u.Path = path[:q]
+		u.RawQuery = path[q+1:]
+	} else {
+		u.Path = path
+	}
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		return err
+	}
+	maybeAddAuth(req, authHandler)
+
+	res, err := HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+
+	if res.StatusCode != 200 {
+		bod, _ := ioutil.ReadAll(io.LimitReader(res.Body, 512))
+		res.Body.Close()
+		return fmt.Errorf("HTTP error %v getting %q: %s",
+			res.Status, u.String(), bod)
+	}
+
+	reader := bufio.NewReader(res.Body)
+	go func() {
+		for {
+			bs, err := reader.ReadBytes('\n')
+			if len(bs) == 1 && bs[0] == '\n' {
+				continue
+			}
+			cont := callb(bs, err)
+			if !cont || err != nil {
+				res.Body.Close()
+				return
+			}
+		}
+	}()
+
+	return err
+}
+
+// NodeServices streaming API handler
+func (c *Client) NodeServicesCallback(pool string, callb func(PoolServices, error) bool) error {
+	poolURI := "/pools/" + pool + "/nodeServicesStreaming"
+	callb2 := func(data []byte, err error) bool {
+		var ps PoolServices
+		if err == nil {
+			err = json.Unmarshal(data, &ps)
+		}
+		return callb(ps, err)
+	}
+	return notificationIterHelper(c.BaseURL, poolURI, c.ah, callb2)
 }
 
 func (c *Client) parseURLResponse(path string, out interface{}) error {
