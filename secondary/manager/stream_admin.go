@@ -12,7 +12,6 @@ package manager
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
-	projector "github.com/couchbase/indexing/secondary/projector"
 	projectorC "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"net"

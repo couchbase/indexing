@@ -1,254 +1,308 @@
 package main
 
 import (
-	"encoding/json"
-	"flag"
-	"fmt"
-	"log"
-	"os"
-	"strings"
+    "encoding/json"
+    "flag"
+    "fmt"
+    "log"
+    "os"
+    "strings"
 
-	"github.com/couchbase/cbauth"
-	c "github.com/couchbase/indexing/secondary/common"
-	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-	queryclient "github.com/couchbase/indexing/secondary/queryport/client"
-	"github.com/couchbaselabs/query/expression"
-	"github.com/couchbaselabs/query/parser/n1ql"
-)
-
-var (
-	server string
-	opType string
-
-	indexName string
-	bucket    string
-
-	low   string
-	high  string
-	equal string
-	incl  uint
-
-	limit    int64
-	pageSize int64
-
-	fields     string
-	isPrimary  bool
-	instanceId string
-	auth       string
-
-	trace bool
-	debug bool
-	info  bool
+    "github.com/couchbase/cbauth"
+    c "github.com/couchbase/indexing/secondary/common"
+    mclient "github.com/couchbase/indexing/secondary/manager/client"
+    qclient "github.com/couchbase/indexing/secondary/queryport/client"
+    "github.com/couchbaselabs/query/expression"
+    "github.com/couchbaselabs/query/parser/n1ql"
 )
 
 const (
-	using    = "gsi"
-	exprType = "N1QL"
-	partnExp = ""
-	where    = ""
+    ExprType = "N1QL"
+    where    = ""
 )
 
-func parseArgs() {
-	flag.StringVar(&server, "server", "127.0.0.1:9000", "Cluster server address")
-	flag.StringVar(&opType, "type", "scanAll", "Index command (scan|stats|scanAll|count|create|drop|list)")
-	flag.StringVar(&indexName, "index", "", "Index name")
-	flag.StringVar(&bucket, "bucket", "default", "Bucket name")
-	flag.StringVar(&low, "low", "[]", "Range: [low]")
-	flag.StringVar(&high, "high", "[]", "Range: [high]")
-	flag.StringVar(&equal, "equal", "", "Range: [key]")
-	flag.UintVar(&incl, "incl", 0, "Range: 0|1|2|3")
-	flag.Int64Var(&limit, "limit", 10, "Row limit")
-	flag.Int64Var(&pageSize, "buffersz", 0, "Rows buffer size per internal message")
-	flag.StringVar(&fields, "fields", "", "Comma separated on-index fields")
-	flag.BoolVar(&isPrimary, "primary", false, "Is primary index")
-	flag.StringVar(&instanceId, "instanceid", "", "Index instanceId")
-	flag.BoolVar(&debug, "debug", false, "run in debug mode")
-	flag.BoolVar(&trace, "trace", false, "run in trace mode")
-	flag.BoolVar(&info, "info", false, "run in info mode")
-	flag.StringVar(&auth, "auth", "Administrator:asdasd", "Auth user and password")
+var trace bool
+var debug bool
+var info bool
 
-	flag.Parse()
+type Command struct {
+    opType string
+    // basic options.
+    server    string
+    indexName string
+    bucket    string
+    adminPort string
+    queryPort string
+    // options for create-index.
+    using     string
+    exprType  string
+    partnStr  string
+    whereStr  string
+    secStrs   []string
+    isPrimary bool
+    // options for Range, Statistics, Count
+    low       c.SecondaryKey
+    high      c.SecondaryKey
+    equal     c.SecondaryKey
+    inclusion qclient.Inclusion
+    limit     int64
+}
+
+func parseArgs(arguments []string) (*Command, []string) {
+    var fields string
+    var inclusion uint
+    var equal, low, high string
+
+    cmdOptions := &Command{}
+    fset := flag.NewFlagSet("cmd", flag.ExitOnError)
+
+    // basic options
+    fset.StringVar(&cmdOptions.server, "server", "127.0.0.1:9000", "Cluster server address")
+    fset.StringVar(&cmdOptions.opType, "type", "scanAll", "Index command (scan|stats|scanAll|count|create|drop|list)")
+    fset.StringVar(&cmdOptions.indexName, "index", "", "Index name")
+    fset.StringVar(&cmdOptions.bucket, "bucket", "default", "Bucket name")
+    // options for create-index
+    fset.StringVar(&cmdOptions.using, "using", "gsi", "using clause for create index")
+    fset.StringVar(&cmdOptions.exprType, "exprType", "N1QL", "type of expression for create index")
+    fset.StringVar(&cmdOptions.partnStr, "partn", "", "partition expression for create index")
+    fset.StringVar(&cmdOptions.whereStr, "where", "", "where clause for create index")
+    fset.StringVar(&fields, "fields", "", "Comma separated on-index fields") // secStrs
+    fset.BoolVar(&cmdOptions.isPrimary, "primary", false, "Is primary index")
+    // options for Range, Statistics, Count
+    fset.StringVar(&low, "low", "[]", "Span.Range: [low]")
+    fset.StringVar(&high, "high", "[]", "Span.Range: [high]")
+    fset.StringVar(&equal, "equal", "", "Span.Lookup: [key]")
+    fset.UintVar(&inclusion, "incl", 0, "Range: 0|1|2|3")
+    fset.Int64Var(&cmdOptions.limit, "limit", 10, "Row limit")
+    // options for logging
+    fset.BoolVar(&debug, "debug", false, "run in debug mode")
+    fset.BoolVar(&trace, "trace", false, "run in trace mode")
+    fset.BoolVar(&info, "info", false, "run in info mode")
+
+    if err := fset.Parse(arguments); err != nil {
+        log.Println(arguments)
+        log.Fatal(err)
+    }
+
+    cmdOptions.inclusion = qclient.Inclusion(inclusion)
+    cmdOptions.secStrs = make([]string, 0)
+    if fields != "" {
+        for _, field := range strings.Split(fields, ",") {
+            expr, err := n1ql.ParseExpression(field)
+            if err != nil {
+                fmt.Printf("Error occured: Invalid field (%v) %v\n", field, err)
+                os.Exit(1)
+            }
+            secStr := expression.NewStringer().Visit(expr)
+            cmdOptions.secStrs = append(cmdOptions.secStrs, secStr)
+        }
+    }
+    if equal != "" {
+        cmdOptions.equal = c.SecondaryKey(arg2key([]byte(equal)))
+    }
+    cmdOptions.low = c.SecondaryKey(arg2key([]byte(low)))
+    cmdOptions.high = c.SecondaryKey(arg2key([]byte(high)))
+    return cmdOptions, fset.Args()
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "Usage: %s -type scanAll -index idx1 -bucket default\n", os.Args[0])
-	flag.PrintDefaults()
+    fmt.Fprintf(os.Stderr, "Usage: %s -type scanAll -index idx1 -bucket default\n", os.Args[0])
+    flag.PrintDefaults()
 }
+
+var sanity bool
 
 func main() {
-	var err error
-	var statsResp c.IndexStatistics
-	var keys []interface{}
+    cmdOptions, args := parseArgs(os.Args[1:])
 
-	parseArgs()
-	if debug {
-		c.SetLogLevel(c.LogLevelDebug)
-	} else if trace {
-		c.SetLogLevel(c.LogLevelTrace)
-	} else if info {
-		c.SetLogLevel(c.LogLevelInfo)
-	}
+    if debug {
+        c.SetLogLevel(c.LogLevelDebug)
+    } else if trace {
+        c.SetLogLevel(c.LogLevelTrace)
+    } else if info {
+        c.SetLogLevel(c.LogLevelInfo)
+    }
 
-	up := strings.Split(auth, ":")
-	authURL := fmt.Sprintf("http://%s/_cbauth", server)
-	authU, authP := up[0], up[1]
-	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
+    config := c.SystemConfig.SectionConfig("queryport.client.", true)
+    client, err := qclient.NewGsiClient(
+        cmdOptions.server, "querycmd", config)
+    if err != nil {
+        log.Fatal(err)
+    }
 
-	cinfo, err := c.NewClusterInfoCache(server, "default")
-	if err != nil {
-		fmt.Println("Error occured while initializing cluster info -", err)
-		os.Exit(1)
-	}
+    if len(args) > 0 && args[0] == "sanity" {
+        sanity = true
+        err = runSanityTests(client)
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
+        }
 
-	if err = cinfo.Fetch(); err != nil {
-		fmt.Println("Error occured while fetching cluster info -", err)
-		os.Exit(1)
-	}
-	node := cinfo.GetCurrentNode()
-	admin_addr, err := cinfo.GetServiceAddress(node, "indexAdmin")
-	scan_addr, err := cinfo.GetServiceAddress(node, "indexScan")
-	if err != nil {
-		fmt.Println("Current node does not have indexer present -", err)
-		os.Exit(1)
-	}
-
-	switch opType {
-
-	case "create":
-
-		if !isPrimary && (fields == "" || indexName == "") {
-			fmt.Println("Invalid fields or index name")
-			usage()
-			os.Exit(1)
-		}
-
-		client := queryclient.NewClusterClient(admin_addr)
-		var secExprs []string
-
-		if fields != "" {
-			fields := strings.Split(fields, ",")
-			for _, field := range fields {
-				expr, err := n1ql.ParseExpression(field)
-				if err != nil {
-					fmt.Printf("Error occured: Invalid field (%v) %v\n", field, err)
-					os.Exit(1)
-				}
-
-				secExprs = append(secExprs, expression.NewStringer().Visit(expr))
-			}
-		}
-
-		info, err := client.CreateIndex(indexName, bucket, using, exprType, partnExp, where, secExprs, isPrimary)
-		if err == nil {
-			fmt.Println("Index created")
-			printIndexInfo(*info)
-		} else {
-			fmt.Println("Error occured:", err)
-		}
-
-	case "drop":
-		if instanceId == "" {
-			fmt.Println("Invalid instanceId")
-			usage()
-			os.Exit(1)
-		}
-
-		client := queryclient.NewClusterClient(admin_addr)
-		err := client.DropIndex(instanceId)
-		if err == nil {
-			fmt.Println("Index dropped")
-		} else {
-			fmt.Println("Error occured:", err)
-		}
-	case "list":
-		client := queryclient.NewClusterClient(admin_addr)
-		infos, err := client.List()
-		if err != nil {
-			fmt.Println("Error occured:", err)
-		}
-
-		fmt.Println("Indexes:")
-		for _, info := range infos {
-			printIndexInfo(info)
-		}
-
-	default:
-		if indexName == "" {
-			usage()
-			os.Exit(1)
-		}
-		config := c.SystemConfig.SectionConfig("queryport.client.", true)
-		client := queryclient.NewClient(queryclient.Remoteaddr(scan_addr), config)
-		if equal != "" {
-			keys = arg2key([]byte(equal))
-		}
-
-		inclusion := queryclient.Inclusion(incl)
-		switch opType {
-		case "scan":
-			if keys == nil {
-				l := c.SecondaryKey(arg2key([]byte(low)))
-				h := c.SecondaryKey(arg2key([]byte(high)))
-				err = client.Range(indexName, bucket, l, h, inclusion, false, limit, scanCallback)
-
-			} else {
-				err = client.Lookup(indexName, bucket, []c.SecondaryKey{keys}, false, limit, scanCallback)
-			}
-		case "scanAll":
-			err = client.ScanAll(indexName, bucket, limit, scanCallback)
-		case "stats":
-			if keys == nil {
-				l := c.SecondaryKey(arg2key([]byte(low)))
-				h := c.SecondaryKey(arg2key([]byte(high)))
-				statsResp, err = client.RangeStatistics(indexName, bucket, l, h, inclusion)
-				if err == nil {
-					fmt.Println("Stats: ", statsResp)
-				}
-			} else {
-				statsResp, err = client.LookupStatistics(indexName, bucket, keys)
-				if err == nil {
-					fmt.Println("Stats: ", statsResp)
-				}
-			}
-		case "count":
-			config := c.SystemConfig.SectionConfig("queryport.client.", true)
-			client := queryclient.NewClient(queryclient.Remoteaddr(scan_addr), config)
-			count, err := client.Count(indexName, bucket)
-			if err != nil {
-				fmt.Println("Error occured:", err)
-			}
-			fmt.Printf("Index %q/%q has %v entries\n", bucket, indexName, count)
-
-		}
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
-		}
-
-		client.Close()
-	}
+    } else {
+        err = handleCommand(client, cmdOptions, scanCallback)
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
+        }
+    }
+    client.Close()
 }
 
-func scanCallback(res queryclient.ResponseReader) bool {
-	switch r := res.(type) {
-	case *protobuf.ResponseStream:
-		fmt.Println("StreamResponse: ", res.(*protobuf.ResponseStream).String())
-	case error:
-		fmt.Println("Error: ", r)
-	}
-	return true
+func handleCommand(
+    client *qclient.GsiClient, cmd *Command,
+    callb qclient.ResponseHandler) (err error) {
+
+    iname, bucket, limit := cmd.indexName, cmd.bucket, cmd.limit
+    low, high, equal, incl := cmd.low, cmd.high, cmd.equal, cmd.inclusion
+
+    switch cmd.opType {
+    case "create":
+        var defnID c.IndexDefnId
+        if len(cmd.secStrs) == 0 || cmd.indexName == "" {
+            return fmt.Errorf("createIndex(): required fields missing")
+        }
+        defnID, err = client.CreateIndex(
+            iname, bucket, cmd.using, cmd.exprType,
+            cmd.partnStr, cmd.whereStr, cmd.secStrs, cmd.isPrimary)
+        if err == nil {
+            fmt.Printf("Index created: %v\n", defnID)
+        }
+
+    case "drop":
+        var indexes []*mclient.IndexMetadata
+        indexes, err = client.Refresh()
+        if err != nil {
+            return err
+        }
+        defnID, ok := getDefnID(bucket, iname, indexes)
+        if ok {
+            err = client.DropIndex(defnID)
+            if err == nil {
+                fmt.Println("Index dropped")
+            }
+        } else {
+            err = fmt.Errorf("index %v/%v unknown", bucket, iname)
+        }
+
+    case "list":
+        var indexes []*mclient.IndexMetadata
+        indexes, err = client.Refresh()
+        if err != nil {
+            return err
+        }
+        fmt.Println("List of indexes:")
+        for _, index := range indexes {
+            fmt.Printf("%#v\n", index)
+        }
+
+    case "scan":
+        if cmd.equal == nil {
+            err = client.Range(iname, bucket, low, high, incl, false, limit, callb)
+
+        } else {
+            equals := []c.SecondaryKey{cmd.equal}
+            client.Lookup(iname, bucket, equals, false, limit, callb)
+        }
+        if err == nil {
+            fmt.Println("Scan results:")
+        }
+
+    case "scanAll":
+        err = client.ScanAll(iname, bucket, limit, callb)
+        if err == nil {
+            fmt.Println("ScanAll results:")
+        }
+
+    case "stats":
+        var statsResp c.IndexStatistics
+        if cmd.equal == nil {
+            statsResp, err = client.RangeStatistics(iname, bucket, low, high, incl)
+        } else {
+            statsResp, err = client.LookupStatistics(iname, bucket, equal)
+        }
+        if err == nil {
+            fmt.Println("Stats: ", statsResp)
+        }
+
+    case "count":
+        var count int64
+        count, err = client.Count(iname, bucket)
+        if err == nil {
+            fmt.Printf("Index %q/%q has %v entries\n", bucket, iname, count)
+        }
+
+    }
+    return err
 }
 
-func printIndexInfo(info queryclient.IndexInfo) {
-	fmt.Printf("Index:%s/%s, Id:%s, Using:%s, Exprs:%v, isPrimary:%v\n",
-		info.Name, info.Bucket, info.DefnID, info.Using, info.SecExprs, info.IsPrimary)
+func runSanityTests(client *qclient.GsiClient) (err error) {
+    for _, args := range sanityCommands {
+        entries := 0
+        callb := func(res qclient.ResponseReader) bool {
+            entries++
+            return true
+        }
+        cmd, _ := parseArgs(args)
+        if err = handleCommand(client, cmd, callb); err != nil {
+            fmt.Printf("%#v\n", cmd)
+            fmt.Printf("    %v\n", err)
+        } else {
+            fmt.Printf("    Success ... entries:%v\n", entries)
+        }
+        fmt.Println()
+    }
+    return
+}
+
+func scanCallback(res qclient.ResponseReader) bool {
+    if res.Error() != nil {
+        fmt.Println("Error: ", res)
+    } else if skeys, pkeys, err := res.GetEntries(); err != nil {
+        fmt.Println("Error: ", err)
+    } else {
+        for i, pkey := range pkeys {
+            fmt.Printf("pkey %v:\n", pkey)
+            fmt.Printf("    skey %v\n", skeys[i])
+        }
+    }
+    return true
 }
 
 func arg2key(arg []byte) []interface{} {
-	var key []interface{}
-	if err := json.Unmarshal(arg, &key); err != nil {
-		log.Fatal(err)
-	}
+    var key []interface{}
+    if err := json.Unmarshal(arg, &key); err != nil {
+        log.Fatal(err)
+    }
+    return key
+}
 
-	return key
+func getDefnID(
+    bucket, indexName string,
+    indexes []*mclient.IndexMetadata) (defnID c.IndexDefnId, ok bool) {
+
+    for _, index := range indexes {
+        defn := index.Definition
+        if defn.Bucket == bucket && defn.Name == indexName {
+            return index.Definition.DefnId, true
+        }
+    }
+    return c.IndexDefnId(0), false
+}
+
+var sanityCommands = [][]string{
+    []string{
+        "-type", "create", "-bucket", "beer-sample", "-index", "index-city",
+        "-fields", "city",
+    },
+    []string{"-type", "list", "-bucket", "beer-sample"},
+    []string{
+        "-type", "scan", "-bucket", "beer-sample", "-index", "index-city",
+        "-low", "[\"B\"]", "-high", "[\"D\"]", "-incl", "1", "-limit",
+        "1000000000",
+    },
+    []string{
+        "-type", "scanAll", "-bucket", "beer-sample", "-index", "index-city",
+        "-limit", "10000",
+    },
+    []string{
+        "-type", "count", "-bucket", "beer-sample", "-index", "index-city",
+    },
 }

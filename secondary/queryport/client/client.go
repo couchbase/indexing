@@ -1,29 +1,18 @@
-// Package queryport provides a simple library to spawn a queryport and access
-// queryport via passive client API.
-//
-// ---> Request                 ---> Request
-//      <--- Response                <--- Response
-//      <--- Response                <--- Response
-//      ...                     ---> EndStreamRequest
-//      <--- StreamEndResponse       <--- Response (residue)
-//                                   <--- StreamEndResponse
-
 package client
 
 import "errors"
-import "fmt"
-import "io"
-import "net"
-import "time"
-import "encoding/json"
 
 import "github.com/couchbase/indexing/secondary/common"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import "github.com/couchbase/indexing/secondary/transport"
-import "github.com/couchbaselabs/goprotobuf/proto"
+import mclient "github.com/couchbase/indexing/secondary/manager/client"
 
 // ErrorProtocol
-var ErrorProtocol = errors.New("queryport.protocol")
+var ErrorProtocol = errors.New("queryport.client.protocol")
+
+// ErrorNoHost
+var ErrorNoHost = errors.New("queryport.client.noHost")
+
+// ErrorIndexNotFound
+var ErrorIndexNotFound = errors.New("queryport.indexNotFound")
 
 // ResponseHandler shall interpret response packets from server
 // and handle them. If handler is not interested in receiving any
@@ -60,395 +49,231 @@ const (
 	Both
 )
 
-// Client structure.
-type Client struct {
-	raddr Remoteaddr
-	pool  *connectionPool
-	// config params
-	maxPayload         int // TODO: what if it exceeds ?
-	readDeadline       time.Duration
-	writeDeadline      time.Duration
-	poolSize           int
-	poolOverflow       int
-	cpTimeout          time.Duration
-	cpAvailWaitTimeout time.Duration
-	logPrefix          string
+// BridgeAccessor for Create,Drop,List,Refresh operations.
+type BridgeAccessor interface {
+	// Refresh will refresh to latest set of index managed by GSI
+	// cluster and return the list of index.
+	Refresh() ([]*mclient.IndexMetadata, error)
+
+	// CreateIndex and return defnID of created index.
+	CreateIndex(
+		name, bucket, using, exprType, partnExpr, whereExpr string,
+		secExprs []string, isPrimary bool) (common.IndexDefnId, error)
+
+	// DropIndex from GSI cluster.
+	DropIndex(defnID common.IndexDefnId) error
+
+	// GetQueryports will return list of queryports for all indexer in
+	// the cluster.
+	GetQueryports() (queryports []string)
+
+	// GetQueryport will fetch queryport address for indexer hosting
+	// index `defnID`
+	GetQueryport(defnID common.IndexDefnId) (queryport string, ok bool)
+
+	// Close this accessor.
+	Close()
 }
 
-// NewClient instance with `raddr` pointing to queryport server.
-func NewClient(raddr Remoteaddr, config common.Config) (c *Client) {
-	t := time.Duration(config["connPoolAvailWaitTimeout"].Int())
-	c = &Client{
-		raddr:              raddr,
-		maxPayload:         config["maxPayload"].Int(),
-		readDeadline:       time.Duration(config["readDeadline"].Int()),
-		writeDeadline:      time.Duration(config["writeDeadline"].Int()),
-		poolSize:           config["poolSize"].Int(),
-		poolOverflow:       config["poolOverflow"].Int(),
-		cpTimeout:          time.Duration(config["connPoolTimeout"].Int()),
-		cpAvailWaitTimeout: t,
-		logPrefix:          fmt.Sprintf("[QueryPortClient:%q]", raddr),
+// GsiAccessor for index operation on GSI cluster.
+type GsiAccessor interface {
+	BridgeAccessor
+
+	// LookupStatistics for a single secondary-key.
+	LookupStatistics(
+		index, bucket string,
+		value common.SecondaryKey) (common.IndexStatistics, error)
+
+	// RangeStatistics for index range.
+	RangeStatistics(
+		index, bucket string,
+		low, high common.SecondaryKey,
+		inclusion Inclusion) (common.IndexStatistics, error)
+
+	// Lookup scan index between low and high.
+	Lookup(
+		index, bucket string, values []common.SecondaryKey,
+		distinct bool, limit int64, callb ResponseHandler)
+
+	// Range scan index between low and high.
+	Range(
+		index, bucket string, low, high common.SecondaryKey,
+		inclusion Inclusion, distinct bool, limit int64,
+		callb ResponseHandler) error
+
+	// ScanAll for full table scan.
+	ScanAll(index, bucket string, limit int64, callb ResponseHandler) error
+
+	// Count of all entries in index.
+	Count(index, bucket string) (int64, error)
+}
+
+// TODO: integration with MetadataProvider
+var useMetadataProvider = false
+
+// GsiClient for accessing GSI cluster. The client will
+// use `adminport` for meta-data operation and `queryport`
+// for index-scan related operations.
+type GsiClient struct {
+	bridge       BridgeAccessor // manages adminport
+	queryClients map[string]*gsiScanClient
+}
+
+// NewGsiClient
+func NewGsiClient(
+	cluster, serviceAddr string,
+	config common.Config) (c *GsiClient, err error) {
+
+	if useMetadataProvider {
+		c, err = makeWithMetaProvider(cluster, serviceAddr, config)
+	} else {
+		c, err = makeWithCbq(config)
 	}
-	c.pool = newConnectionPool(
-		string(raddr), c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
-		c.cpAvailWaitTimeout)
-	common.Infof("%v started ...\n", c.logPrefix)
-	return c
+	if err != nil {
+		return nil, err
+	}
+	c.Refresh()
+	return c, nil
 }
 
-// Close the client and all open connections with server.
-func (c *Client) Close() {
-	c.pool.Close()
-	common.Infof("%v ... stopped\n", c.logPrefix)
+// Refresh implements BridgeAccessor{} interface.
+func (c *GsiClient) Refresh() ([]*mclient.IndexMetadata, error) {
+	return c.bridge.Refresh()
+}
+
+// CreateIndex implements BridgeAccessor{} interface.
+func (c *GsiClient) CreateIndex(
+	name, bucket, using, exprType, partnExpr, whereExpr string,
+	secExprs []string, isPrimary bool) (common.IndexDefnId, error) {
+
+	return c.bridge.CreateIndex(
+		name, bucket, using, exprType, partnExpr, whereExpr,
+		secExprs, isPrimary)
+}
+
+// DropIndex implements BridgeAccessor{} interface.
+func (c *GsiClient) DropIndex(defnID common.IndexDefnId) error {
+	return c.bridge.DropIndex(defnID)
 }
 
 // LookupStatistics for a single secondary-key.
-func (c *Client) LookupStatistics(
+func (c *GsiClient) LookupStatistics(
 	index, bucket string,
 	value common.SecondaryKey) (common.IndexStatistics, error) {
 
-	// serialize lookup value.
-	val, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
+	// TODO: implementation is only for cbq-bridge.
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	if !ok {
+		return nil, ErrorNoHost
 	}
-	req := &protobuf.StatisticsRequest{
-		Bucket:    proto.String(bucket),
-		IndexName: proto.String(index),
-		Span:      &protobuf.Span{Equal: [][]byte{val}},
-	}
-	resp, err := c.doRequestResponse(req)
-	if err != nil {
-		return nil, err
-	}
-	statResp := resp.(*protobuf.StatisticsResponse)
-	if statResp.GetErr() != nil {
-		err = errors.New(statResp.GetErr().GetError())
-		return nil, err
-	}
-	return statResp.GetStats(), nil
+	qc := c.queryClients[queryport]
+	return qc.LookupStatistics(index, bucket, value)
 }
 
 // RangeStatistics for index range.
-func (c *Client) RangeStatistics(
+func (c *GsiClient) RangeStatistics(
 	index, bucket string,
 	low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
-	// serialize low and high values.
-	l, err := json.Marshal(low)
-	if err != nil {
-		return nil, err
+	// TODO: implementation is only for cbq-bridge.
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	if !ok {
+		return nil, ErrorNoHost
 	}
-	h, err := json.Marshal(high)
-	if err != nil {
-		return nil, err
-	}
-
-	req := &protobuf.StatisticsRequest{
-		Bucket:    proto.String(bucket),
-		IndexName: proto.String(index),
-		Span: &protobuf.Span{
-			Range: &protobuf.Range{
-				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
-			},
-		},
-	}
-	resp, err := c.doRequestResponse(req)
-	if err != nil {
-		return nil, err
-	}
-	statResp := resp.(*protobuf.StatisticsResponse)
-	if statResp.GetErr() != nil {
-		err = errors.New(statResp.GetErr().GetError())
-		return nil, err
-	}
-	return statResp.GetStats(), nil
+	qc := c.queryClients[queryport]
+	return qc.RangeStatistics(index, bucket, low, high, inclusion)
 }
 
 // Lookup scan index between low and high.
-func (c *Client) Lookup(
+func (c *GsiClient) Lookup(
 	index, bucket string, values []common.SecondaryKey,
-	distinct bool, limit int64, callb ResponseHandler) error {
+	distinct bool, limit int64, callb ResponseHandler) {
 
-	// serialize lookup value.
-	equal := make([][]byte, 0, len(values))
-	for _, value := range values {
-		val, err := json.Marshal(value)
-		if err != nil {
-			return err
-		}
-		equal = append(equal, val)
+	// TODO: implementation is only for cbq-bridge.
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	if !ok {
+		return
 	}
-
-	connectn, err := c.pool.Get()
-	if err != nil {
-		return err
-	}
-	healthy := true
-	defer c.pool.Return(connectn, healthy)
-
-	conn, pkt := connectn.conn, connectn.pkt
-
-	req := &protobuf.ScanRequest{
-		Span:      &protobuf.Span{Equal: equal},
-		Distinct:  proto.Bool(distinct),
-		PageSize:  proto.Int64(1),
-		Limit:     proto.Int64(limit),
-		IndexName: proto.String(index),
-		Bucket:    proto.String(bucket),
-	}
-	// ---> protobuf.ScanRequest
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		msg := "%v Scan() request transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
-		healthy = false
-		return err
-	}
-
-	cont := true
-	for cont {
-		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb)
-		if err != nil {
-			msg := "%v Scan() response failed `%v`\n"
-			common.Errorf(msg, c.logPrefix, err)
-		}
-	}
-	return nil
+	qc := c.queryClients[queryport]
+	qc.Lookup(index, bucket, values, distinct, limit, callb)
+	return
 }
 
 // Range scan index between low and high.
-func (c *Client) Range(
-	index, bucket string, low, high common.SecondaryKey, inclusion Inclusion,
-	distinct bool, limit int64, callb ResponseHandler) error {
+func (c *GsiClient) Range(
+	index, bucket string, low, high common.SecondaryKey,
+	inclusion Inclusion, distinct bool, limit int64,
+	callb ResponseHandler) error {
 
-	// serialize low and high values.
-	l, err := json.Marshal(low)
-	if err != nil {
-		return err
+	// TODO: implementation is only for cbq-bridge.
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	if !ok {
+		return ErrorNoHost
 	}
-	h, err := json.Marshal(high)
-	if err != nil {
-		return err
-	}
-
-	connectn, err := c.pool.Get()
-	if err != nil {
-		return err
-	}
-	healthy := true
-	defer c.pool.Return(connectn, healthy)
-
-	conn, pkt := connectn.conn, connectn.pkt
-
-	req := &protobuf.ScanRequest{
-		Span: &protobuf.Span{
-			Range: &protobuf.Range{
-				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
-			},
-		},
-		Distinct:  proto.Bool(distinct),
-		PageSize:  proto.Int64(1),
-		Limit:     proto.Int64(limit),
-		IndexName: proto.String(index),
-		Bucket:    proto.String(bucket),
-	}
-	// ---> protobuf.ScanRequest
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		msg := "%v Scan() request transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
-		healthy = false
-		return err
-	}
-
-	cont := true
-	for cont {
-		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb)
-		if err != nil {
-			msg := "%v Scan() response failed `%v`\n"
-			common.Errorf(msg, c.logPrefix, err)
-		}
-	}
-	return nil
+	qc := c.queryClients[queryport]
+	return qc.Range(index, bucket, low, high, inclusion, distinct, limit, callb)
 }
 
 // ScanAll for full table scan.
-func (c *Client) ScanAll(
+func (c *GsiClient) ScanAll(
 	index, bucket string, limit int64, callb ResponseHandler) error {
 
-	connectn, err := c.pool.Get()
-	if err != nil {
-		return err
+	// TODO: implementation is only for cbq-bridge.
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	if !ok {
+		return ErrorNoHost
 	}
-	healthy := true
-	defer c.pool.Return(connectn, healthy)
-
-	conn, pkt := connectn.conn, connectn.pkt
-
-	req := &protobuf.ScanAllRequest{
-		PageSize:  proto.Int64(1),
-		Limit:     proto.Int64(limit),
-		IndexName: proto.String(index),
-		Bucket:    proto.String(bucket),
-	}
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		common.Errorf(
-			"%v ScanAll() request transport failed `%v`\n",
-			c.logPrefix, err)
-		healthy = false
-		return err
-	}
-
-	cont := true
-	for cont {
-		cont, healthy, err = c.streamResponse(conn, pkt, callb)
-		if err != nil {
-			msg := "%v ScanAll() response failed `%v`\n"
-			common.Errorf(msg, c.logPrefix, err)
-		}
-	}
-	return nil
+	qc := c.queryClients[queryport]
+	return qc.ScanAll(index, bucket, limit, callb)
 }
 
 // Count of all entries in index.
-func (c *Client) Count(index, bucket string) (int64, error) {
-	req := &protobuf.CountRequest{
-		Bucket:    proto.String(bucket),
-		IndexName: proto.String(index),
+func (c *GsiClient) Count(index, bucket string) (int64, error) {
+	// TODO: implementation is only for cbq-bridge.
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	if !ok {
+		return 0, ErrorNoHost
 	}
-	resp, err := c.doRequestResponse(req)
-	if err != nil {
-		return 0, err
-	}
-	countResp := resp.(*protobuf.CountResponse)
-	if countResp.GetErr() != nil {
-		err = errors.New(countResp.GetErr().GetError())
-		return 0, err
-	}
-	return countResp.GetCount(), nil
+	qc := c.queryClients[queryport]
+	return qc.Count(index, bucket)
 }
 
-func (c *Client) doRequestResponse(req interface{}) (interface{}, error) {
-	connectn, err := c.pool.Get()
+// Close the client and all open connections with server.
+func (c *GsiClient) Close() {
+	c.bridge.Close()
+	for _, queryClient := range c.queryClients {
+		queryClient.Close()
+	}
+}
+
+// create GSI client using cbqBridge and ScanCoordinator
+func makeWithCbq(config common.Config) (*GsiClient, error) {
+	c := &GsiClient{
+		queryClients: make(map[string]*gsiScanClient),
+	}
+	c.bridge = newCbqClient()
+	for _, queryport := range c.bridge.GetQueryports() {
+		queryClient := newGsiScanClient(queryport, config)
+		c.queryClients[queryport] = queryClient
+	}
+	return c, nil
+}
+
+func makeWithMetaProvider(
+	cluster, serviceAddr string,
+	config common.Config) (c *GsiClient, err error) {
+
+	c = &GsiClient{
+		queryClients: make(map[string]*gsiScanClient),
+	}
+	c.bridge, err = newMetaBridgeClient(cluster, serviceAddr)
 	if err != nil {
 		return nil, err
 	}
-	healthy := true
-	defer c.pool.Return(connectn, healthy)
-
-	conn, pkt := connectn.conn, connectn.pkt
-
-	// ---> protobuf.*Request
-	if err := c.sendRequest(conn, pkt, req); err != nil {
-		msg := "%v %T request transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, req, err)
-		healthy = false
-		return nil, err
+	for _, queryport := range c.bridge.GetQueryports() {
+		queryClient := newGsiScanClient(queryport, config)
+		c.queryClients[queryport] = queryClient
 	}
-
-	timeoutMs := c.readDeadline * time.Millisecond
-	conn.SetReadDeadline(time.Now().Add(timeoutMs))
-	// <--- protobuf.*Response
-	resp, err := pkt.Receive(conn)
-	if err != nil {
-		msg := "%v %T response transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, req, err)
-		healthy = false
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(timeoutMs))
-	// <--- protobuf.StreamEndResponse (skipped) TODO: knock this off.
-	endResp, err := pkt.Receive(conn)
-	if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
-		return nil, ErrorProtocol
-	}
-	return resp, nil
-}
-
-func (c *Client) sendRequest(
-	conn net.Conn, pkt *transport.TransportPacket, req interface{}) (err error) {
-
-	timeoutMs := c.writeDeadline * time.Millisecond
-	conn.SetWriteDeadline(time.Now().Add(timeoutMs))
-	return pkt.Send(conn, req)
-}
-
-func (c *Client) streamResponse(
-	conn net.Conn,
-	pkt *transport.TransportPacket,
-	callb ResponseHandler) (cont bool, healthy bool, err error) {
-
-	var resp interface{}
-	var endResp *protobuf.StreamEndResponse
-	var finish bool
-
-	laddr := conn.LocalAddr()
-	timeoutMs := c.readDeadline * time.Millisecond
-	conn.SetReadDeadline(time.Now().Add(timeoutMs))
-	if resp, err = pkt.Receive(conn); err != nil {
-		resp := &protobuf.ResponseStream{
-			Err: &protobuf.Error{Error: proto.String(err.Error())},
-		}
-		callb(resp) // callback with error
-		cont, healthy = false, false
-		if err != io.EOF {
-			msg := "%v connection %q response transport failed `%v`\n"
-			common.Errorf(msg, c.logPrefix, laddr, err)
-		}
-
-	} else if endResp, finish = resp.(*protobuf.StreamEndResponse); finish {
-		msg := "%v connection %q received StreamEndResponse"
-		common.Tracef(msg, c.logPrefix, laddr)
-		callb(endResp) // callback most likely return true
-		cont, healthy = false, true
-
-	} else {
-		streamResp := resp.(*protobuf.ResponseStream)
-		cont = callb(streamResp)
-		healthy = true
-	}
-
-	if cont == false && healthy == true && finish == false {
-		err = c.closeStream(conn, pkt)
-	}
-	return
-}
-
-func (c *Client) closeStream(
-	conn net.Conn, pkt *transport.TransportPacket) (err error) {
-
-	var resp interface{}
-	laddr := conn.LocalAddr()
-	// request server to end the stream.
-	err = c.sendRequest(conn, pkt, &protobuf.EndStreamRequest{})
-	if err != nil {
-		msg := "%v closeStream() request transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
-		return
-	}
-	msg := "%v connection %q transmitted protobuf.EndStreamRequest"
-	common.Tracef(msg, c.logPrefix, laddr)
-
-	timeoutMs := c.readDeadline * time.Millisecond
-	// flush the connection until stream has ended.
-	for true {
-		conn.SetReadDeadline(time.Now().Add(timeoutMs))
-		resp, err = pkt.Receive(conn)
-		if err == io.EOF {
-			common.Errorf("%v connection %q closed \n", c.logPrefix, laddr)
-			return
-
-		} else if err != nil {
-			msg := "%v connection %q response transport failed `%v`\n"
-			common.Errorf(msg, c.logPrefix, laddr, err)
-			return
-
-		} else if _, ok := resp.(*protobuf.StreamEndResponse); ok {
-			return
-		}
-	}
-	return
+	return c, nil
 }
