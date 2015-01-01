@@ -6,6 +6,7 @@ import "fmt"
 import "time"
 import "net"
 import "strings"
+import "sync"
 
 var (
 	ErrInvalidNodeId       = errors.New("Invalid NodeId")
@@ -18,6 +19,7 @@ var (
 // local management service for obtaining cluster information.
 // Info cache can be updated by using Refresh() method.
 type ClusterInfoCache struct {
+	sync.Mutex
 	url       string
 	poolName  string
 	logPrefix string
