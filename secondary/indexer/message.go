@@ -66,6 +66,7 @@ const (
 	KV_SENDER_GET_CURR_KV_TS
 	KV_SENDER_RESTART_VBUCKETS
 	KV_SENDER_REPAIR_ENDPOINTS
+	KV_STREAM_REPAIR
 
 	//ADMIN_MGR
 	ADMIN_MGR_SHUTDOWN
@@ -98,6 +99,7 @@ const (
 	OPEN_STREAM
 	ADD_INDEX_LIST_TO_STREAM
 	REMOVE_INDEX_LIST_FROM_STREAM
+	REMOVE_BUCKET_FROM_STREAM
 	CLOSE_STREAM
 	CLEANUP_STREAM
 )
@@ -260,6 +262,7 @@ func (m *MsgUpdateBucketQueue) String() string {
 
 //OPEN_STREAM
 //ADD_INDEX_LIST_TO_STREAM
+//REMOVE_BUCKET_FROM_STREAM
 //REMOVE_INDEX_LIST_FROM_STREAM
 //CLOSE_STREAM
 //CLEANUP_STREAM
@@ -269,6 +272,7 @@ type MsgStreamUpdate struct {
 	indexList []common.IndexInst
 	buildTs   Timestamp
 	respCh    MsgChannel
+	stopCh    StopChannel
 	bucket    string
 	restartTs map[string]*common.TsVbuuid
 }
@@ -291,6 +295,10 @@ func (m *MsgStreamUpdate) GetTimestamp() Timestamp {
 
 func (m *MsgStreamUpdate) GetResponseChannel() MsgChannel {
 	return m.respCh
+}
+
+func (m *MsgStreamUpdate) GetStopChannel() StopChannel {
+	return m.stopCh
 }
 
 func (m *MsgStreamUpdate) GetBucket() string {
@@ -803,6 +811,24 @@ func (m *MsgIndexCompact) GetErrorChannel() chan error {
 	return m.errch
 }
 
+//KV_STREAM_REPAIR
+type MsgKVStreamRepair struct {
+	streamId common.StreamId
+	buckets  []string
+}
+
+func (m *MsgKVStreamRepair) GetMsgType() MsgType {
+	return KV_STREAM_REPAIR
+}
+
+func (m *MsgKVStreamRepair) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgKVStreamRepair) GetBuckets() []string {
+	return m.buckets
+}
+
 //Helper function to return string for message type
 
 func (m MsgType) String() string {
@@ -905,6 +931,8 @@ func (m MsgType) String() string {
 		return "ADD_INDEX_LIST_TO_STREAM"
 	case REMOVE_INDEX_LIST_FROM_STREAM:
 		return "REMOVE_INDEX_LIST_FROM_STREAM"
+	case REMOVE_BUCKET_FROM_STREAM:
+		return "REMOVE_BUCKET_FROM_STREAM"
 	case CLOSE_STREAM:
 		return "CLOSE_STREAM"
 	case CLEANUP_STREAM:
@@ -914,6 +942,8 @@ func (m MsgType) String() string {
 		return "KV_SENDER_RESTART_VBUCKETS"
 	case KV_SENDER_REPAIR_ENDPOINTS:
 		return "KV_SENDER_REPAIR_ENDPOINTS"
+	case KV_STREAM_REPAIR:
+		return "KV_STREAM_REPAIR"
 
 	case CLUST_MGR_CREATE_INDEX_DDL:
 		return "CLUST_MGR_CREATE_INDEX_DDL"

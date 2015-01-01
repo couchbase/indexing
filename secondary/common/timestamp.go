@@ -38,9 +38,11 @@ func NewTsVbuuid(bucket string, numVbuckets int) *TsVbuuid {
 
 // GetVbnos will return the list of all vbnos.
 func (ts *TsVbuuid) GetVbnos() []uint16 {
-	vbnos := make([]uint16, 0, len(ts.Seqnos))
-	for i := 0; i < len(ts.Seqnos); i++ {
-		vbnos = append(vbnos, uint16(i))
+	var vbnos []uint16
+	for i := 0; i < len(ts.Vbuuids); i++ {
+		if ts.Vbuuids[i] != 0 { //if vbuuid is valid
+			vbnos = append(vbnos, uint16(i))
+		}
 	}
 	return vbnos
 }
@@ -82,7 +84,13 @@ func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
 
 // Len return number of entries in the timestamp.
 func (ts *TsVbuuid) Len() int {
-	return len(ts.Seqnos)
+	length := 0
+	for i := 0; i < len(ts.Vbuuids); i++ {
+		if ts.Vbuuids[i] != 0 { //if vbuuid is valid
+			length++
+		}
+	}
+	return length
 }
 
 // Copy will return a clone of this timestamp.
