@@ -5,6 +5,7 @@ import "net"
 import "runtime/debug"
 import "sync"
 import "time"
+import "io"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
@@ -216,7 +217,11 @@ loop:
 		req, err := rpkt.Receive(conn)
 		// TODO: handle close-connection and don't print error message.
 		if err != nil {
-			c.Errorf("%v connection %q exited %v\n", s.logPrefix, raddr, err)
+			if err == io.EOF {
+				c.Tracef("%v connection %q exited %v\n", s.logPrefix, raddr, err)
+			} else {
+				c.Errorf("%v connection %q exited %v\n", s.logPrefix, raddr, err)
+			}
 			break loop
 		}
 		select {
