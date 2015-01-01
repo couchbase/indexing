@@ -10,6 +10,8 @@ import (
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"testing"
 	"time"
+	"os/user"
+	"path/filepath"
 )
 
 var docs, mut_docs tc.KeyValues
@@ -28,15 +30,16 @@ func init() {
 	indexScanAddress = clusterconfig.IndexScanAddress
 
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
-	// Working with Users10k dataset.
-	dataFilePath := "../testdata/Users10k.txt.gz"
-	mutationFilePath := "../testdata/Users_mut.txt.gz"
+	// Working with Users10k and Users_mut dataset.
+	u, _ := user.Current()
+	dataFilePath := filepath.Join(u.HomeDir, "testdata/Users10k.txt.gz")
+	mutationFilePath := filepath.Join(u.HomeDir, "testdata/Users_mut.txt.gz")
 	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath, true)
 	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, true)
 	keyValues := datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
+	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
 	kvutility.SetKeyValues(keyValues, "default", "", clusterconfig.KVAddress)
 	docs = keyValues
-	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
 }
 
 // Test for single index field of data type float64

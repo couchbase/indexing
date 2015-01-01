@@ -7,6 +7,10 @@ import (
 )
 
 func Validate(expectedResponse , actualResponse tc.ScanResponse) {
+	if len(expectedResponse) != len(actualResponse) {
+		fmt.Println("Lengths of Expected and Actual scan responses are different: ", len(expectedResponse), len(actualResponse) )
+		panic("Expected and Actual scan responses are different")
+	}
 	eq := reflect.DeepEqual(expectedResponse, actualResponse)
 	if eq {
 	    fmt.Println("Expected and Actual scan responses are the same")

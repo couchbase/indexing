@@ -91,7 +91,7 @@ func DeleteKeys(keyValues tc.KeyValues, bucketName string, password string, host
 
 	for key, _ := range keyValues {
 		err = b.Delete(key)
-		tc.HandleError(err, "delete")
+		// tc.HandleError(err, "delete")
 	}
 	b.Close()
 }
