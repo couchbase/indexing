@@ -81,31 +81,29 @@ type GsiAccessor interface {
 
 	// LookupStatistics for a single secondary-key.
 	LookupStatistics(
-		index, bucket string,
-		value common.SecondaryKey) (common.IndexStatistics, error)
+		defnID uint64, v common.SecondaryKey) (common.IndexStatistics, error)
 
 	// RangeStatistics for index range.
 	RangeStatistics(
-		index, bucket string,
-		low, high common.SecondaryKey,
+		defnID uint64, low, high common.SecondaryKey,
 		inclusion Inclusion) (common.IndexStatistics, error)
 
 	// Lookup scan index between low and high.
 	Lookup(
-		index, bucket string, values []common.SecondaryKey,
-		distinct bool, limit int64, callb ResponseHandler)
+		defnID uint64, values []common.SecondaryKey,
+		distinct bool, limit int64, callb ResponseHandler) error
 
 	// Range scan index between low and high.
 	Range(
-		index, bucket string, low, high common.SecondaryKey,
+		defnID uint64, low, high common.SecondaryKey,
 		inclusion Inclusion, distinct bool, limit int64,
 		callb ResponseHandler) error
 
 	// ScanAll for full table scan.
-	ScanAll(index, bucket string, limit int64, callb ResponseHandler) error
+	ScanAll(defnID uint64, limit int64, callb ResponseHandler) error
 
 	// Count of all entries in index.
-	Count(index, bucket string) (int64, error)
+	Count(defnID uint64) (int64, error)
 }
 
 // TODO: integration with MetadataProvider
@@ -119,7 +117,7 @@ type GsiClient struct {
 	queryClients map[string]*gsiScanClient
 }
 
-// NewGsiClient
+// NewGsiClient returns client to access GSI cluster.
 func NewGsiClient(
 	cluster, serviceAddr string,
 	config common.Config) (c *GsiClient, err error) {
@@ -158,8 +156,7 @@ func (c *GsiClient) DropIndex(defnID common.IndexDefnId) error {
 
 // LookupStatistics for a single secondary-key.
 func (c *GsiClient) LookupStatistics(
-	index, bucket string,
-	value common.SecondaryKey) (common.IndexStatistics, error) {
+	defnID uint64, value common.SecondaryKey) (common.IndexStatistics, error) {
 
 	// TODO: implementation is only for cbq-bridge.
 	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
@@ -167,13 +164,12 @@ func (c *GsiClient) LookupStatistics(
 		return nil, ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.LookupStatistics(index, bucket, value)
+	return qc.LookupStatistics(defnID, value)
 }
 
 // RangeStatistics for index range.
 func (c *GsiClient) RangeStatistics(
-	index, bucket string,
-	low, high common.SecondaryKey,
+	defnID uint64, low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
 	// TODO: implementation is only for cbq-bridge.
@@ -182,27 +178,26 @@ func (c *GsiClient) RangeStatistics(
 		return nil, ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.RangeStatistics(index, bucket, low, high, inclusion)
+	return qc.RangeStatistics(defnID, low, high, inclusion)
 }
 
 // Lookup scan index between low and high.
 func (c *GsiClient) Lookup(
-	index, bucket string, values []common.SecondaryKey,
-	distinct bool, limit int64, callb ResponseHandler) {
+	defnID uint64, values []common.SecondaryKey,
+	distinct bool, limit int64, callb ResponseHandler) error {
 
 	// TODO: implementation is only for cbq-bridge.
 	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
 	if !ok {
-		return
+		return ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	qc.Lookup(index, bucket, values, distinct, limit, callb)
-	return
+	return qc.Lookup(defnID, values, distinct, limit, callb)
 }
 
 // Range scan index between low and high.
 func (c *GsiClient) Range(
-	index, bucket string, low, high common.SecondaryKey,
+	defnID uint64, low, high common.SecondaryKey,
 	inclusion Inclusion, distinct bool, limit int64,
 	callb ResponseHandler) error {
 
@@ -212,12 +207,12 @@ func (c *GsiClient) Range(
 		return ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.Range(index, bucket, low, high, inclusion, distinct, limit, callb)
+	return qc.Range(defnID, low, high, inclusion, distinct, limit, callb)
 }
 
 // ScanAll for full table scan.
 func (c *GsiClient) ScanAll(
-	index, bucket string, limit int64, callb ResponseHandler) error {
+	defnID uint64, limit int64, callb ResponseHandler) error {
 
 	// TODO: implementation is only for cbq-bridge.
 	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
@@ -225,18 +220,18 @@ func (c *GsiClient) ScanAll(
 		return ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.ScanAll(index, bucket, limit, callb)
+	return qc.ScanAll(defnID, limit, callb)
 }
 
 // Count of all entries in index.
-func (c *GsiClient) Count(index, bucket string) (int64, error) {
+func (c *GsiClient) Count(defnID uint64) (int64, error) {
 	// TODO: implementation is only for cbq-bridge.
 	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
 	if !ok {
 		return 0, ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.Count(index, bucket)
+	return qc.Count(defnID)
 }
 
 // Close the client and all open connections with server.

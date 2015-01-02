@@ -200,12 +200,7 @@ func handleCommand(
 		}
 
 	case "drop":
-		var indexes []*mclient.IndexMetadata
-		indexes, err = client.Refresh()
-		if err != nil {
-			return err
-		}
-		defnID, ok := getDefnID(bucket, iname, indexes)
+		defnID, ok := getDefnID(client, bucket, iname)
 		if ok {
 			err = client.DropIndex(defnID)
 			if err == nil {
@@ -227,29 +222,32 @@ func handleCommand(
 		}
 
 	case "scan":
+		defnID, _ := getDefnID(client, bucket, iname)
 		if cmd.equal == nil {
-			err = client.Range(iname, bucket, low, high, incl, false, limit, callb)
+			err = client.Range(uint64(defnID), low, high, incl, false, limit, callb)
 
 		} else {
 			equals := []c.SecondaryKey{cmd.equal}
-			client.Lookup(iname, bucket, equals, false, limit, callb)
+			client.Lookup(uint64(defnID), equals, false, limit, callb)
 		}
 		if err == nil {
 			fmt.Println("Scan results:")
 		}
 
 	case "scanAll":
-		err = client.ScanAll(iname, bucket, limit, callb)
+		defnID, _ := getDefnID(client, bucket, iname)
+		err = client.ScanAll(uint64(defnID), limit, callb)
 		if err == nil {
 			fmt.Println("ScanAll results:")
 		}
 
 	case "stats":
 		var statsResp c.IndexStatistics
+		defnID, _ := getDefnID(client, bucket, iname)
 		if cmd.equal == nil {
-			statsResp, err = client.RangeStatistics(iname, bucket, low, high, incl)
+			statsResp, err = client.RangeStatistics(uint64(defnID), low, high, incl)
 		} else {
-			statsResp, err = client.LookupStatistics(iname, bucket, equal)
+			statsResp, err = client.LookupStatistics(uint64(defnID), equal)
 		}
 		if err == nil {
 			fmt.Println("Stats: ", statsResp)
@@ -257,7 +255,8 @@ func handleCommand(
 
 	case "count":
 		var count int64
-		count, err = client.Count(iname, bucket)
+		defnID, _ := getDefnID(client, bucket, iname)
+		count, err = client.Count(uint64(defnID))
 		if err == nil {
 			fmt.Printf("Index %q/%q has %v entries\n", bucket, iname, count)
 		}
@@ -290,15 +289,19 @@ func arg2key(arg []byte) []interface{} {
 
 func printIndexInfo(index *mclient.IndexMetadata) {
 	defn := index.Definition
-	fmt.Printf("Index:%s/%s, Id:%s, Using:%s, Exprs:%v, isPrimary:%v\n",
+	fmt.Printf("Index:%s/%s, Id:%v, Using:%s, Exprs:%v, isPrimary:%v\n",
 		defn.Name, defn.Bucket, defn.DefnId, defn.Using, defn.SecExprs,
 		defn.IsPrimary)
 }
 
 func getDefnID(
-	bucket, indexName string,
-	indexes []*mclient.IndexMetadata) (defnID c.IndexDefnId, ok bool) {
+	client *qclient.GsiClient,
+	bucket, indexName string) (defnID c.IndexDefnId, ok bool) {
 
+	indexes, err := client.Refresh()
+	if err != nil {
+		log.Fatal(err)
+	}
 	for _, index := range indexes {
 		defn := index.Definition
 		if defn.Bucket == bucket && defn.Name == indexName {
@@ -401,7 +404,7 @@ loop:
 		default:
 			l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 			err := client.Range(
-				"idx", "bkt", l, h, 100, true, 1000,
+				0xABBA /*defnID*/, l, h, 100, true, 1000,
 				func(val qclient.ResponseReader) bool {
 					switch v := val.(type) {
 					case *protobuf.ResponseStream:

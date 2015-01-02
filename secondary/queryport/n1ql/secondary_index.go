@@ -34,11 +34,20 @@ var ErrorEmptyHost = errors.NewError(nil, "gsi.emptyHost")
 // PRIMARY_INDEX index name.
 var PRIMARY_INDEX = "#primary"
 
-var twoiInclusion = map[datastore.Inclusion]qclient.Inclusion{
+var n1ql2GsiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 	datastore.NEITHER: qclient.Neither,
 	datastore.LOW:     qclient.Low,
 	datastore.HIGH:    qclient.High,
 	datastore.BOTH:    qclient.Both,
+}
+var gsi2N1QLState = map[c.IndexState]datastore.IndexState{
+	c.INDEX_STATE_CREATED: datastore.PENDING,
+	c.INDEX_STATE_READY:   datastore.ONLINE,
+	c.INDEX_STATE_INITIAL: datastore.PENDING,
+	c.INDEX_STATE_CATCHUP: datastore.PENDING,
+	c.INDEX_STATE_ACTIVE:  datastore.ONLINE,
+	c.INDEX_STATE_DELETED: datastore.OFFLINE,
+	c.INDEX_STATE_ERROR:   datastore.OFFLINE,
 }
 
 //--------------------
@@ -353,7 +362,7 @@ func newSecondaryIndexFromMetaData(
 		partnExpr: indexDefn.PartitionKey,
 		secExprs:  indexDefn.SecExprs,
 		whereExpr: "", // TODO: where-clause.
-		state:     datastore.IndexState(state),
+		state:     gsi2N1QLState[state],
 	}
 	return si, nil
 }
@@ -423,10 +432,10 @@ func (si *secondaryIndex) Statistics(
 	}
 	client := si.gsi.gsiClient
 
-	indexn, bucketn := si.name, si.bucketn
+	defnID := si.defnID
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
-		pstats, err := client.LookupStatistics(indexn, bucketn, seek)
+		pstats, err := client.LookupStatistics(defnID, seek)
 		if err != nil {
 			return nil, errors.NewError(err, "GSI Statistics()")
 		}
@@ -434,8 +443,8 @@ func (si *secondaryIndex) Statistics(
 	}
 	low := values2SKey(span.Range.Low)
 	high := values2SKey(span.Range.High)
-	incl := twoiInclusion[span.Range.Inclusion]
-	pstats, err := client.RangeStatistics(indexn, bucketn, low, high, incl)
+	incl := n1ql2GsiInclusion[span.Range.Inclusion]
+	pstats, err := client.RangeStatistics(defnID, low, high, incl)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI Statistics()")
 	}
@@ -448,7 +457,7 @@ func (si *secondaryIndex) Count() (int64, errors.Error) {
 		return 0, ErrorIndexEmpty
 	}
 	client := si.gsi.gsiClient
-	count, err := client.Count(si.name, si.bucketn)
+	count, err := client.Count(si.defnID)
 	if err != nil {
 		return 0, errors.NewError(err, "GSI Count")
 	}
@@ -477,18 +486,17 @@ func (si *secondaryIndex) Scan(
 	defer close(entryChannel)
 
 	client := si.gsi.gsiClient
-	indexn, bucketn := si.name, si.bucketn
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
 		client.Lookup(
-			indexn, bucketn, []c.SecondaryKey{seek}, distinct, limit,
+			si.defnID, []c.SecondaryKey{seek}, distinct, limit,
 			makeResponsehandler(conn))
 
 	} else {
 		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
-		incl := twoiInclusion[span.Range.Inclusion]
+		incl := n1ql2GsiInclusion[span.Range.Inclusion]
 		client.Range(
-			indexn, bucketn, low, high, incl, distinct, limit,
+			si.defnID, low, high, incl, distinct, limit,
 			makeResponsehandler(conn))
 	}
 }
@@ -501,8 +509,7 @@ func (si *secondaryIndex) ScanEntries(
 	defer close(entryChannel)
 
 	client := si.gsi.gsiClient
-	indexn, bucketn := si.name, si.bucketn
-	client.ScanAll(indexn, bucketn, limit, makeResponsehandler(conn))
+	client.ScanAll(si.defnID, limit, makeResponsehandler(conn))
 }
 
 //-------------------------------------

@@ -103,6 +103,7 @@ func (sd scanDescriptor) String() string {
 
 type scanParams struct {
 	scanType  scanType
+	defnID    uint64
 	indexName string
 	bucket    string
 	ts        *common.TsVbuuid
@@ -386,12 +387,10 @@ func (s *scanCoordinator) parseScanParams(
 			r.GetSpan().GetRange().GetLow(),
 			r.GetSpan().GetRange().GetHigh(),
 			r.GetSpan().GetEqual())
-		p.indexName = r.GetIndexName()
-		p.bucket = r.GetBucket()
+		p.defnID = r.GetDefnID()
 	case *protobuf.CountRequest:
 		p.scanType = queryCount
-		p.indexName = r.GetIndexName()
-		p.bucket = r.GetBucket()
+		p.defnID = r.GetDefnID()
 	case *protobuf.ScanRequest:
 		p.scanType = queryScan
 		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
@@ -400,14 +399,12 @@ func (s *scanCoordinator) parseScanParams(
 			r.GetSpan().GetRange().GetHigh(),
 			r.GetSpan().GetEqual())
 		p.limit = r.GetLimit()
-		p.indexName = r.GetIndexName()
-		p.bucket = r.GetBucket()
+		p.defnID = r.GetDefnID()
 		p.pageSize = r.GetPageSize()
 	case *protobuf.ScanAllRequest:
 		p.scanType = queryScanAll
 		p.limit = r.GetLimit()
-		p.indexName = r.GetIndexName()
-		p.bucket = r.GetBucket()
+		p.defnID = r.GetDefnID()
 		p.pageSize = r.GetPageSize()
 	default:
 		err = ErrUnsupportedRequest
@@ -441,19 +438,20 @@ func (s *scanCoordinator) requestHandler(
 	}
 
 	if err == nil {
-		indexInst, err = s.findIndexInstance(p.indexName, p.bucket)
+		indexInst, err = s.findIndexInstance(p.defnID)
 	}
 
 	if err == nil && indexInst.State != common.INDEX_STATE_ACTIVE {
 		err = ErrIndexNotReady
 	}
-
 	if err != nil {
 		common.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
 		respch <- s.makeResponseMessage(sd, err)
 		close(respch)
 		return
 	}
+
+	p.indexName, p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
 
 	// Its a primary index scan
 	sd.isPrimary = indexInst.Defn.IsPrimary
@@ -683,21 +681,21 @@ func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
 }
 
 // Find and return data structures for the specified index
-func (s *scanCoordinator) findIndexInstance(indexName,
-	bucket string) (*common.IndexInst, error) {
+func (s *scanCoordinator) findIndexInstance(
+	defnID uint64) (*common.IndexInst, error) {
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, inst := range s.indexInstMap {
-		if inst.Defn.Name == indexName && inst.Defn.Bucket == bucket {
+		fmt.Println("verify", inst.InstId, inst.Defn.DefnId, common.IndexDefnId(defnID))
+		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
 			if _, ok := s.indexPartnMap[inst.InstId]; ok {
 				return &inst, nil
 			}
-
 			return nil, ErrNotMyIndex
 		}
 	}
-
 	return nil, ErrIndexNotFound
 }
 

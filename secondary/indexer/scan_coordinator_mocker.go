@@ -22,7 +22,7 @@ type snapshotFeeder func(keych chan Key, valch chan Value, errch chan error)
 
 // Create a mock index that uses a feeder function to provide query results.
 // Creates an index with single partition, single slice with a snapshot.
-func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFeeder) {
+func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFeeder) c.IndexDefnId {
 	s.indexCount++
 
 	pc := c.NewKeyPartitionContainer()
@@ -32,7 +32,8 @@ func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFee
 	pc.AddPartition(pId, pDef)
 
 	instId := c.IndexInstId(s.indexCount)
-	indDefn := c.IndexDefn{Name: name, Bucket: bucket}
+	defnId := c.IndexDefnId(0xABBA)
+	indDefn := c.IndexDefn{Name: name, Bucket: bucket, DefnId: defnId}
 	indInst := c.IndexInst{InstId: instId, State: c.INDEX_STATE_ACTIVE,
 		Defn: indDefn, Pc: pc,
 	}
@@ -51,6 +52,7 @@ func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFee
 	sc.AddSlice(slId, slice)
 	// TODO: Use cmdch to update map
 	s.scanner.indexPartnMap[instId] = partInstMap
+	return defnId
 }
 
 func newScannerTestHarness() (*scannerTestHarness, error) {

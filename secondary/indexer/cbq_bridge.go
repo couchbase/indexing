@@ -15,7 +15,6 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"strconv"
 )
 
 //CbqBridge is a temporary solution to allow Cbq Engine to talk to Indexing
@@ -139,7 +138,7 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 		idxInst.Pc = pc
 	}
 
-	indexinfo.DefnID = strconv.Itoa(defnID)
+	indexinfo.DefnID = uint64(defnID)
 
 	respCh := make(MsgChannel)
 	cbq.supvRespch <- &MsgCreateIndex{mType: CBQ_CREATE_INDEX_DDL,
@@ -178,7 +177,7 @@ func (cbq *cbqBridge) handleDrop(w http.ResponseWriter, r *http.Request) {
 
 	common.Debugf("CbqBridge::handleDrop Received DropIndex %v", indexinfo)
 
-	defnID, _ := strconv.Atoi(indexinfo.DefnID)
+	defnID := indexinfo.DefnID
 
 	respCh := make(MsgChannel)
 	cbq.supvRespch <- &MsgDropIndex{mType: CBQ_DROP_INDEX_DDL,
@@ -244,7 +243,7 @@ func getIndexInfoFromInst(inst common.IndexInst) IndexInfo {
 
 	idx.Name = inst.Defn.Name
 	idx.Bucket = inst.Defn.Name
-	idx.DefnID = strconv.Itoa(int(inst.Defn.DefnId))
+	idx.DefnID = uint64(inst.Defn.DefnId)
 	idx.Using = string(inst.Defn.Using)
 	idx.Exprtype = string(inst.Defn.ExprType)
 	idx.PartnExpr = inst.Defn.PartitionKey

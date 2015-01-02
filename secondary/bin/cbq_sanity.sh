@@ -11,8 +11,9 @@ run_query(){
 
 # cleanup
 #run_query 'DROP PRIMARY INDEX ON default:default'       'grep "error\|cause\|msg\|success" -i'
+#run_query 'DROP INDEX default:default.idx1'    'grep "error\|cause\|msg\|success" -i'
 #run_query 'DROP PRIMARY INDEX ON default:`beer-sample`' 'grep "error\|cause\|msg\|success" -i'
-#run_query 'DROP INDEX default:`beer-sample`.myindex'    'grep "error\|cause\|msg\|success" -i'
+#run_query 'DROP INDEX default:`beer-sample`.idx2'    'grep "error\|cause\|msg\|success" -i'
 
 # create-index
 run_query 'CREATE PRIMARY INDEX ON default:default USING GSI'       'grep "error\|cause\|msg\|success" -i'

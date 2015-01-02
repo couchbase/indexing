@@ -17,14 +17,14 @@ func TestTimeout(t *testing.T) {
 	// start server
 	appch := make(chan interface{}, mutChanSize)
 	prefix := "projector.dataport.indexer."
-	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
-	daemon, err := NewServer(raddr, maxvbuckets, config, appch)
+	dconfig := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	daemon, err := NewServer(raddr, maxvbuckets, dconfig, appch)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// start endpoint
-	config = c.SystemConfig.SectionConfig("endpoint.dataport.", true /*trim*/)
+	config := c.SystemConfig.SectionConfig("endpoint.dataport.", true /*trim*/)
 	endp, err := NewRouterEndpoint("clust", "topic", raddr, maxvbuckets, config)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,8 @@ func TestTimeout(t *testing.T) {
 			if endp.Send(dkv); err != nil {
 				t.Fatal(err)
 			}
-			<-time.After(6000 * time.Millisecond)
+			<-time.After(
+				time.Duration(dconfig["tcpReadDeadline"].Int()) * time.Millisecond)
 		}
 	}()
 

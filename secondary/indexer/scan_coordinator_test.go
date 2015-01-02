@@ -108,10 +108,13 @@ func TestInvalidIndexScan(t *testing.T) {
 	defer h.Shutdown()
 
 	tst = t
-	h.createIndex("idx", "default", simpleKeyFeeder)
+	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
-	client.ScanAll("invalid", "default", 40, verifyInvalidIndex)
+	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	if err != nil {
+		t.Errorf("cannot create GsiClient %v", err)
+	}
+	client.ScanAll(uint64(defnId), 40, verifyInvalidIndex)
 	client.Close()
 
 }
@@ -128,13 +131,15 @@ func TestIndexScan(t *testing.T) {
 	tst = t
 	count = 0
 	nkeys = 100
-	h.createIndex("idx", "default", simpleKeyFeeder)
+	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
+	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	if err != nil {
+		t.Errorf("cannot create GsiClient %v", err)
+	}
 	low := c.SecondaryKey{"low"}
 	high := c.SecondaryKey{"high"}
-	client.Range("idx", "default", low, high, queryclient.Inclusion(Both), false, 0,
-		verifyIndexScanAll)
+	client.Range(uint64(defnId), low, high, queryclient.Inclusion(Both), false, 0, verifyIndexScanAll)
 	client.Close()
 	if count != nkeys {
 		t.Error("Scan result entries count mismatch", count, "!=", nkeys)
@@ -152,10 +157,13 @@ func TestIndexScanAll(t *testing.T) {
 	tst = t
 	count = 0
 	nkeys = 100
-	h.createIndex("idx", "default", simpleKeyFeeder)
+	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
-	client.ScanAll("idx", "default", 0, verifyIndexScanAll)
+	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	if err != nil {
+		t.Errorf("cannot create GsiClient %v", err)
+	}
+	client.ScanAll(uint64(defnId), 0, verifyIndexScanAll)
 	client.Close()
 	if count != nkeys {
 		t.Error("Scan result entries count mismatch", count, "!=", nkeys)
@@ -173,10 +181,13 @@ func TestIndexScanAllLimit(t *testing.T) {
 	tst = t
 	count = 0
 	nkeys = 10000
-	h.createIndex("idx", "default", simpleKeyFeeder)
+	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
-	client.ScanAll("idx", "default", 100, verifyIndexScanAll)
+	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	if err != nil {
+		t.Errorf("cannot create GsiClient %v", err)
+	}
+	client.ScanAll(uint64(defnId), 100, verifyIndexScanAll)
 	client.Close()
 	if count != 100 {
 		t.Error("Scan result entries count mismatch", count, "!=", 100)
@@ -194,10 +205,13 @@ func TestScanEmptyIndex(t *testing.T) {
 	tst = t
 	count = 0
 	nkeys = 0
-	h.createIndex("idx", "default", simpleKeyFeeder)
+	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
-	client.ScanAll("idx", "default", 0, verifyIndexScanAll)
+	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	if err != nil {
+		t.Errorf("cannot create GsiClient %v", err)
+	}
+	client.ScanAll(uint64(defnId), 0, verifyIndexScanAll)
 	client.Close()
 	if count != 0 {
 		t.Error("Scan result entries count mismatch", count, "!=", nkeys)
@@ -216,10 +230,13 @@ func TestIndexScanErrors(t *testing.T) {
 	count = 0
 	nkeys = 100
 	nerrors = 0
-	h.createIndex("idx", "default", simpleErrorFeeder)
+	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
-	client.ScanAll("idx", "default", 0, verifyIndexScanAll)
+	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	if err != nil {
+		t.Errorf("cannot create GsiClient %v", err)
+	}
+	client.ScanAll(uint64(defnId), 0, verifyIndexScanAll)
 
 	if count != 100 {
 		t.Error("Scan result entries count mismatch", count, "!=", 100)
@@ -233,7 +250,7 @@ func TestIndexScanErrors(t *testing.T) {
 	nerrors = 0
 	nkeys = 0
 
-	client.ScanAll("idx", "default", 0, verifyIndexScanAll)
+	client.ScanAll(uint64(defnId), 0, verifyIndexScanAll)
 	if count != 0 {
 		t.Error("Scan result entries count mismatch", count, "!=", 0)
 	}
@@ -295,13 +312,15 @@ func TestStatistics(t *testing.T) {
 		},
 	}
 
-	h.createIndex("idx", "default", simpleKeyFeeder)
+	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
+	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	if err != nil {
+		t.Errorf("cannot create GsiClient %v", err)
+	}
 	low := c.SecondaryKey{"low"}
 	high := c.SecondaryKey{"high"}
-	out, err := client.RangeStatistics("idx", "default", low,
-		high, 0)
+	out, err := client.RangeStatistics(uint64(defnId), low, high, 0)
 
 	if reflect.DeepEqual(out, testStatisticsResponse.GetStats()) == false {
 		t.Errorf("Unexpected stats response %v", out)
@@ -320,13 +339,15 @@ func TestStatisticsError(t *testing.T) {
 	tst = t
 	nkeys = 1000
 
-	h.createIndex("idx", "default", simpleErrorFeeder)
+	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client := queryclient.NewClient(QUERY_PORT_ADDR, config)
+	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	if err != nil {
+		t.Errorf("cannot create GsiClient %v", err)
+	}
 	low := c.SecondaryKey{"low"}
 	high := c.SecondaryKey{"high"}
-	_, err = client.RangeStatistics("idx", "default", low,
-		high, 0)
+	_, err = client.RangeStatistics(uint64(defnId), low, high, 0)
 
 	if err == ErrInternal {
 		t.Errorf("Unexpected stats err %v", err)

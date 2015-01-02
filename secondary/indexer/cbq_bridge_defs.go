@@ -46,7 +46,7 @@ type IndexRequest struct {
 type IndexInfo struct {
 	Name      string   `json:"name,omitempty"`
 	Bucket    string   `json:"bucket,omitempty"`
-	DefnID    string   `json:"defnID, omitempty"`
+	DefnID    uint64   `json:"defnID, omitempty"`
 	Using     string   `json:"using,omitempty"`
 	Exprtype  string   `json:"exprType,omitempty"`
 	PartnExpr string   `json:"partnExpr,omitempty"`

@@ -22,9 +22,8 @@ message QueryPayload {
 
 // Get Index statistics. StatisticsResponse is returned back from indexer.
 message StatisticsRequest {
-    required Span   span      = 1;
-    required string indexName = 3;
-    required string bucket    = 4;
+    required uint64 defnID = 1;
+    required Span   span   = 2;
 }
 
 message StatisticsResponse {
@@ -34,20 +33,18 @@ message StatisticsResponse {
 
 // Scan request to indexer.
 message ScanRequest {
-    required Span   span      = 1;
-    required bool   distinct  = 2;
-    required int64  limit     = 3;
-    required int64  pageSize  = 4;
-    required string indexName = 5;
-    required string bucket    = 6;
+    required uint64 defnID    = 1;
+    required Span   span      = 2;
+    required bool   distinct  = 3;
+    required int64  limit     = 4;
+    required int64  pageSize  = 5;
 }
 
 // Full table scan request from indexer.
 message ScanAllRequest {
-    required int64  pageSize  = 1;
-    required int64  limit     = 2;
-    required string indexName = 3;
-    required string bucket    = 4;
+    required uint64 defnID    = 1;
+    required int64  pageSize  = 2;
+    required int64  limit     = 3;
 }
 
 // Request by client to stop streaming the query results.
@@ -66,8 +63,7 @@ message StreamEndResponse {
 
 // Count request to indexer.
 message CountRequest {
-    required string indexName = 1;
-    required string bucket    = 2;
+    required uint64 defnID    = 1;
 }
 
 // total number of entries in index.
@@ -102,4 +98,3 @@ message IndexStatistics {
     required bytes  keyMin          = 3;
     required bytes  keyMax          = 4;
 }
-

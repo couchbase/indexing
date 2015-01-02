@@ -59,8 +59,7 @@ func newGsiScanClient(queryport string, config common.Config) *gsiScanClient {
 
 // LookupStatistics for a single secondary-key.
 func (c *gsiScanClient) LookupStatistics(
-	index, bucket string,
-	value common.SecondaryKey) (common.IndexStatistics, error) {
+	defnID uint64, value common.SecondaryKey) (common.IndexStatistics, error) {
 
 	// serialize lookup value.
 	val, err := json.Marshal(value)
@@ -68,9 +67,8 @@ func (c *gsiScanClient) LookupStatistics(
 		return nil, err
 	}
 	req := &protobuf.StatisticsRequest{
-		Bucket:    proto.String(bucket),
-		IndexName: proto.String(index),
-		Span:      &protobuf.Span{Equal: [][]byte{val}},
+		DefnID: proto.Uint64(defnID),
+		Span:   &protobuf.Span{Equal: [][]byte{val}},
 	}
 	resp, err := c.doRequestResponse(req)
 	if err != nil {
@@ -86,8 +84,7 @@ func (c *gsiScanClient) LookupStatistics(
 
 // RangeStatistics for index range.
 func (c *gsiScanClient) RangeStatistics(
-	index, bucket string,
-	low, high common.SecondaryKey,
+	defnID uint64, low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
 	// serialize low and high values.
@@ -101,8 +98,7 @@ func (c *gsiScanClient) RangeStatistics(
 	}
 
 	req := &protobuf.StatisticsRequest{
-		Bucket:    proto.String(bucket),
-		IndexName: proto.String(index),
+		DefnID: proto.Uint64(defnID),
 		Span: &protobuf.Span{
 			Range: &protobuf.Range{
 				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
@@ -123,7 +119,7 @@ func (c *gsiScanClient) RangeStatistics(
 
 // Lookup scan index between low and high.
 func (c *gsiScanClient) Lookup(
-	index, bucket string, values []common.SecondaryKey,
+	defnID uint64, values []common.SecondaryKey,
 	distinct bool, limit int64, callb ResponseHandler) error {
 
 	// serialize lookup value.
@@ -146,12 +142,11 @@ func (c *gsiScanClient) Lookup(
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanRequest{
-		Span:      &protobuf.Span{Equal: equal},
-		Distinct:  proto.Bool(distinct),
-		PageSize:  proto.Int64(1),
-		Limit:     proto.Int64(limit),
-		IndexName: proto.String(index),
-		Bucket:    proto.String(bucket),
+		DefnID:   proto.Uint64(defnID),
+		Span:     &protobuf.Span{Equal: equal},
+		Distinct: proto.Bool(distinct),
+		PageSize: proto.Int64(1),
+		Limit:    proto.Int64(limit),
 	}
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
@@ -175,7 +170,7 @@ func (c *gsiScanClient) Lookup(
 
 // Range scan index between low and high.
 func (c *gsiScanClient) Range(
-	index, bucket string, low, high common.SecondaryKey, inclusion Inclusion,
+	defnID uint64, low, high common.SecondaryKey, inclusion Inclusion,
 	distinct bool, limit int64, callb ResponseHandler) error {
 
 	// serialize low and high values.
@@ -198,16 +193,15 @@ func (c *gsiScanClient) Range(
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanRequest{
+		DefnID: proto.Uint64(defnID),
 		Span: &protobuf.Span{
 			Range: &protobuf.Range{
 				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
 			},
 		},
-		Distinct:  proto.Bool(distinct),
-		PageSize:  proto.Int64(1),
-		Limit:     proto.Int64(limit),
-		IndexName: proto.String(index),
-		Bucket:    proto.String(bucket),
+		Distinct: proto.Bool(distinct),
+		PageSize: proto.Int64(1),
+		Limit:    proto.Int64(limit),
 	}
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
@@ -231,7 +225,7 @@ func (c *gsiScanClient) Range(
 
 // ScanAll for full table scan.
 func (c *gsiScanClient) ScanAll(
-	index, bucket string, limit int64, callb ResponseHandler) error {
+	defnID uint64, limit int64, callb ResponseHandler) error {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -243,10 +237,9 @@ func (c *gsiScanClient) ScanAll(
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanAllRequest{
-		PageSize:  proto.Int64(1),
-		Limit:     proto.Int64(limit),
-		IndexName: proto.String(index),
-		Bucket:    proto.String(bucket),
+		DefnID:   proto.Uint64(defnID),
+		PageSize: proto.Int64(1),
+		Limit:    proto.Int64(limit),
 	}
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		common.Errorf(
@@ -268,10 +261,9 @@ func (c *gsiScanClient) ScanAll(
 }
 
 // Count of all entries in index.
-func (c *gsiScanClient) Count(index, bucket string) (int64, error) {
+func (c *gsiScanClient) Count(defnID uint64) (int64, error) {
 	req := &protobuf.CountRequest{
-		Bucket:    proto.String(bucket),
-		IndexName: proto.String(index),
+		DefnID: proto.Uint64(defnID),
 	}
 	resp, err := c.doRequestResponse(req)
 	if err != nil {

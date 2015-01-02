@@ -128,7 +128,7 @@ func (b *metadataClient) makeTopology() (adminport string, ok bool) {
 	nIndexes := 0xFFFFFFFF
 	for addr, indexes := range b.topology {
 		if len(indexes) <= nIndexes {
-			adminport, nIndexes = addr, nIndexes
+			adminport, nIndexes = addr, len(indexes)
 		}
 	}
 	return adminport, true

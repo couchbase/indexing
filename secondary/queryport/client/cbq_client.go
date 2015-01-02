@@ -11,7 +11,6 @@ import "io/ioutil"
 import "errors"
 import "strings"
 import "sync"
-import "strconv"
 
 import "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
@@ -120,9 +119,9 @@ func (b *cbqClient) CreateIndex(
 			defer resp.Body.Close()
 			mresp, err = b.metaResponse(resp)
 			if err == nil {
-				defnID := string2defnID(mresp.Indexes[0].DefnID)
+				defnID := mresp.Indexes[0].DefnID
 				b.Refresh()
-				return defnID, nil
+				return common.IndexDefnId(defnID), nil
 			}
 			return 0, err
 		}
@@ -136,7 +135,7 @@ func (b *cbqClient) DropIndex(defnID common.IndexDefnId) error {
 
 	// Construct request body.
 	req := indexRequest{
-		Type: "drop", Index: indexInfo{DefnID: defnID2String(uint64(defnID))},
+		Type: "drop", Index: indexInfo{DefnID: uint64(defnID)},
 	}
 	body, err := json.Marshal(req)
 	if err == nil {
@@ -195,7 +194,7 @@ func (b *cbqClient) metaResponse(
 type indexInfo struct {
 	Name      string   `json:"name,omitempty"`
 	Bucket    string   `json:"bucket,omitempty"`
-	DefnID    string   `json:"defnID, omitempty"`
+	DefnID    uint64   `json:"defnID, omitempty"`
 	Using     string   `json:"using,omitempty"`
 	ExprType  string   `json:"exprType,omitempty"`
 	PartnExpr string   `json:"partnExpr,omitempty"`
@@ -206,7 +205,7 @@ type indexInfo struct {
 
 func newIndexMetaData(info *indexInfo) *mclient.IndexMetadata {
 	defn := &common.IndexDefn{
-		DefnId:       common.IndexDefnId(string2defnID(info.DefnID)),
+		DefnId:       common.IndexDefnId(info.DefnID),
 		Name:         info.Name,
 		Using:        common.IndexType(info.Using),
 		Bucket:       info.Bucket,
@@ -217,7 +216,7 @@ func newIndexMetaData(info *indexInfo) *mclient.IndexMetadata {
 	}
 	instances := []*mclient.InstanceDefn{
 		&mclient.InstanceDefn{
-			InstId: common.IndexInstId(string2defnID(info.DefnID)), // TODO: defnID as InstID
+			InstId: common.IndexInstId(info.DefnID), // TODO: defnID as InstID
 			State:  common.INDEX_STATE_READY,
 			Endpts: []common.Endpoint{"localhost:9101"},
 		},
@@ -227,13 +226,4 @@ func newIndexMetaData(info *indexInfo) *mclient.IndexMetadata {
 		Instances:  instances,
 	}
 	return imeta
-}
-
-func string2defnID(id string) common.IndexDefnId {
-	defnID, _ := strconv.ParseUint(id, 16, 64)
-	return common.IndexDefnId(defnID)
-}
-
-func defnID2String(id uint64) string {
-	return strconv.FormatUint(id, 16)
 }
