@@ -13,7 +13,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
-	"github.com/couchbase/indexing/secondary/projector"
+	projectorC "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"testing"
 	"time"
@@ -68,7 +68,7 @@ func TestStreamMgr_Monitor(t *testing.T) {
 //    But no streamBegin and sync message will be sent.
 // 5) Stream Monitior will timeout without receving streamBegin message.
 // 6) The monitor call back to the fake projector to restart the vubcket with a restart timestamp.  This restart
-//	  timestamp is the same as the one returned from MutationTopicRequest.
+//    timestamp is the same as the one returned from MutationTopicRequest.
 // 7) During restart vbucket, the fake projector will send BeginStream message as well as sync messagse.   It will use
 //    the seqno from the restart timestamp when sending sync message.
 // 8) The dataport will update the stability timestamp upon receving the sync message.  The test will end if the
@@ -81,8 +81,8 @@ func runMonitorTest() {
 
 	common.Infof("***** Start TestStreamMgr ")
 	/*
-		var requestAddr = "localhost:9885"
-		var leaderAddr = "localhost:9884"
+	   var requestAddr = "localhost:9885"
+	   var leaderAddr = "localhost:9884"
 	*/
 	var config = "./config.json"
 
@@ -268,8 +268,8 @@ func (c *monitorTestProjectorClient) MutationTopicRequest(topic, endpointType st
 		response.RollbackTimestamps[0] = protobuf.NewTsVbuuid(manager.DEFAULT_POOL_NAME, reqTimestamps[0].GetBucket(), manager.NUM_VB)
 		response.RollbackTimestamps[0].Append(uint16(10), uint64(406), reqTimestamps[0].Vbuuids[10], 0, 0)
 
-		response.Err = protobuf.NewError(projector.ErrorStreamRequest)
-		return response, projector.ErrorStreamRequest
+		response.Err = protobuf.NewError(projectorC.ErrorStreamRequest)
+		return response, projectorC.ErrorStreamRequest
 	} else {
 		response.RollbackTimestamps = nil
 		response.Err = nil
