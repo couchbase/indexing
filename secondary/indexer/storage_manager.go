@@ -317,16 +317,18 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 	streamId := cmd.(*MsgRollback).GetStreamId()
 	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
+	bucket := cmd.(*MsgRollback).GetBucket()
+
 	numVbuckets := sm.config["numVbuckets"].Int()
 
-	respTs := make(map[string]*common.TsVbuuid)
+	var respTs *common.TsVbuuid
 
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range sm.indexPartnMap {
 		idxInst := sm.indexInstMap[idxInstId]
 
 		//if this bucket needs to be rolled back
-		if ts, ok := rollbackTs[idxInst.Defn.Bucket]; ok {
+		if idxInst.Defn.Bucket == bucket {
 
 			//for all partitions managed by this indexer
 			for partnId, partnInst := range partnMap {
@@ -340,14 +342,14 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						panic("Unable read snapinfo -" + err.Error())
 					}
 					s := NewSnapshotInfoContainer(infos)
-					snapInfo := s.GetOlderThanTS(ts)
+					snapInfo := s.GetOlderThanTS(rollbackTs)
 					if snapInfo != nil {
 						err := slice.Rollback(snapInfo)
 						if err == nil {
 							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
 								slice.Id(), snapInfo)
-							respTs[idxInst.Defn.Bucket] = snapInfo.Timestamp()
+							respTs = snapInfo.Timestamp()
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
@@ -365,7 +367,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
 								slice.Id())
-							respTs[idxInst.Defn.Bucket] = common.NewTsVbuuid(idxInst.Defn.Bucket, numVbuckets)
+							respTs = common.NewTsVbuuid(bucket, numVbuckets)
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
@@ -385,7 +387,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	// Notify all scan waiters for all indexes with error
 	for idxInstId, waiters := range sm.waitersMap {
 		idxInst := sm.indexInstMap[idxInstId]
-		if _, ok := rollbackTs[idxInst.Defn.Bucket]; ok {
+		if idxInst.Defn.Bucket == bucket {
 			for _, w := range waiters {
 				w.Error(ErrIndexRollback)
 			}
@@ -395,6 +397,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	sm.updateIndexSnapMap(sm.indexPartnMap)
 
 	sm.supvCmdch <- &MsgRollback{streamId: streamId,
+		bucket:     bucket,
 		rollbackTs: respTs}
 }
 

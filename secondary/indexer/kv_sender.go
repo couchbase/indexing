@@ -15,7 +15,6 @@ package indexer
 
 import (
 	"errors"
-	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
@@ -178,7 +177,7 @@ func (k *kvSender) handleRemoveBucketFromStream(cmd Message) {
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 
-	go k.deleteBucketsFromStream(streamId, []string(bucket), respCh, stopCh)
+	go k.deleteBucketsFromStream(streamId, []string{bucket}, respCh, stopCh)
 
 	k.supvCmdch <- &MsgSuccess{}
 }
@@ -209,28 +208,8 @@ func (k *kvSender) handleRestartVbuckets(cmd Message) {
 	k.supvCmdch <- &MsgSuccess{}
 }
 
-func (k *kvSender) makeRestartTsForVbs(bucketRestartTs map[string]*c.TsVbuuid,
-	vbnos []uint32) ([]*protobuf.TsVbuuid, error) {
-
-	var restartTsList []*protobuf.TsVbuuid
-	var err error
-	for bucket, tsVbuuid := range bucketRestartTs {
-		var ts *protobuf.TsVbuuid
-		if tsVbuuid == nil {
-			ts, err = k.makeInitialTs(bucket, vbnos)
-		} else {
-			ts, err = makeRestartTsFromTsVbuuid(bucket, tsVbuuid, vbnos)
-		}
-		if err != nil {
-			return nil, err
-		}
-		restartTsList = append(restartTsList, ts)
-	}
-	return restartTsList, nil
-}
-
 func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.IndexInst,
-	bucketRestartTs map[string]*c.TsVbuuid, respCh MsgChannel, stopCh StopChannel) {
+	restartTs *c.TsVbuuid, respCh MsgChannel, stopCh StopChannel) {
 
 	if len(indexInstList) == 0 {
 		c.Warnf("KVSender::openMutationStream Empty IndexList. Nothing to do.")
@@ -239,9 +218,10 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	}
 
 	protoInstList := convertIndexListToProto(k.config, k.cInfoCache, indexInstList, streamId)
+	bucket := indexInstList[0].Defn.Bucket
 
 	//use any bucket as list of vbs remain the same for all buckets
-	vbnos, err := k.getAllVbucketsInCluster(indexInstList[0].Defn.Bucket)
+	vbnos, err := k.getAllVbucketsInCluster(bucket)
 	if err != nil {
 		c.Errorf("KVSender::openMutationStream \n\t Error in fetching vbuckets info", err)
 		respCh <- &MsgError{
@@ -251,7 +231,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		return
 	}
 
-	restartTsList, err := k.makeRestartTsForVbs(bucketRestartTs, vbnos)
+	restartTsList, err := k.makeRestartTsForVbs(bucket, restartTs, vbnos)
 	if err != nil {
 		c.Errorf("KVSender::openMutationStream \n\t Error making restart ts", err)
 		respCh <- &MsgError{
@@ -259,11 +239,6 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 				severity: FATAL,
 				cause:    err}}
 		return
-	}
-
-	var bucketList []string
-	for b, _ := range bucketRestartTs {
-		bucketList = append(bucketList, b)
 	}
 
 	addrs, err := k.getAllProjectorAddrs()
@@ -276,8 +251,8 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 		return
 	}
 
-	rollbackTs := make(map[string]*protobuf.TsVbuuid)
-	activeTs := make(map[string]*protobuf.TsVbuuid)
+	var rollbackTs *protobuf.TsVbuuid
+	var activeTs *protobuf.TsVbuuid
 	topic := getTopicForStreamId(streamId)
 
 	fn := func(r int, err error) error {
@@ -291,29 +266,23 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 					c.Errorf("KVSender::openMutationStream \n\t Error Received %v from %v", ret, addr)
 					err = ret
 				} else {
-					updateActiveTsFromResponse(activeTs, res)
-					updateRollbackTsFromResponse(rollbackTs, res)
+					activeTs = updateActiveTsFromResponse(bucket, activeTs, res)
+					rollbackTs = updateRollbackTsFromResponse(bucket, rollbackTs, res)
 				}
 			}, stopCh)
 		}
 
-		if len(rollbackTs) != 0 {
+		if rollbackTs != nil {
 			//no retry required for rollback
 			return nil
 		} else if err != nil {
 			//retry for any error
 			return err
 		} else {
-			//check if we have received activeTs for all buckets
+			//check if we have received activeTs for all vbuckets
 			retry := false
-			for _, b := range bucketList {
-				if ts, ok := activeTs[b]; ok {
-					if ts.Len() != len(vbnos) {
-						retry = true
-					}
-				} else {
-					retry = true
-				}
+			if activeTs == nil || activeTs.Len() != len(vbnos) {
+				retry = true
 			}
 
 			if retry {
@@ -328,14 +297,12 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
 	err = rh.Run()
 
-	if len(rollbackTs) != 0 {
+	if rollbackTs != nil {
 		c.Infof("KVSender::openMutationStream \n\t Rollback Received %v", rollbackTs)
 		//convert from protobuf to native format
-		nativeTs := make(map[string]*c.TsVbuuid)
-		for bucket, ts := range rollbackTs {
-			nativeTs[bucket] = ts.ToTsVbuuid()
-		}
+		nativeTs := rollbackTs.ToTsVbuuid()
 		respCh <- &MsgRollback{streamId: streamId,
+			bucket:     bucket,
 			rollbackTs: nativeTs}
 	} else if err != nil {
 		c.Errorf("KVSender::openMutationStream \n\t Error Received %v", err)
@@ -368,8 +335,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 	protoTs := protobuf.NewTsVbuuid(DEFAULT_POOL, restartTs.Bucket, numVbuckets)
 	protoRestartTs = protoTs.FromTsVbuuid(restartTs)
 
-	activeTs := make(map[string]*protobuf.TsVbuuid)
-	rollbackTs := make(map[string]*protobuf.TsVbuuid)
+	var rollbackTs *protobuf.TsVbuuid
 	topic := getTopicForStreamId(streamId)
 	rollback := false
 
@@ -380,14 +346,14 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 
 			if res, ret := sendRestartVbuckets(ap, topic, protoRestartTs); ret != nil {
 				//retry for all errors
-				c.Errorf("KVSender::openMutationStream \n\t Error Received %v from %v", ret, addr)
+				c.Errorf("KVSender::restartVbuckets \n\t Error Received %v from %v", ret, addr)
 				err = ret
 			} else {
-				updateRollbackTsFromResponse(rollbackTs, res)
+				rollbackTs = updateRollbackTsFromResponse(restartTs.Bucket, rollbackTs, res)
 			}
 		}
 
-		if checkVbListInTS(protoRestartTs.GetVbnos(), rollbackTs[restartTs.Bucket]) {
+		if rollbackTs != nil && checkVbListInTS(protoRestartTs.GetVbnos(), rollbackTs) {
 			//if rollback, no need to retry
 			rollback = true
 			return nil
@@ -403,19 +369,17 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 	//msg to caller
 	if rollback {
 		//convert from protobuf to native format
-		nativeTs := make(map[string]*c.TsVbuuid)
-		for b, ts := range rollbackTs {
-			nativeTs[b] = ts.ToTsVbuuid()
-		}
+		nativeTs := rollbackTs.ToTsVbuuid()
+
 		respCh <- &MsgRollback{streamId: streamId,
 			rollbackTs: nativeTs}
 	} else if err != nil {
 		//if there is a topicMissing error, a fresh
 		//MutationTopicRequest is required.
-		if err == projClient.ErrorTopicMissing {
+		if err.Error() == projClient.ErrorTopicMissing.Error() {
 			respCh <- &MsgKVStreamRepair{
 				streamId: streamId,
-				buckets:  []string{restartTs.Bucket},
+				bucket:   restartTs.Bucket,
 			}
 		} else {
 			respCh <- &MsgError{
@@ -427,36 +391,6 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 	} else {
 		respCh <- &MsgSuccess{}
 	}
-}
-
-func updateActiveTsFromResponse(activeTs map[string]*protobuf.TsVbuuid, res *protobuf.TopicResponse) {
-
-	activeTsList := res.GetActiveTimestamps()
-	for _, ts := range activeTsList {
-		if ts != nil && !ts.IsEmpty() {
-			if tsb, ok := activeTs[ts.GetBucket()]; ok {
-				tsb.Union(ts)
-			} else {
-				activeTs[ts.GetBucket()] = ts
-			}
-		}
-	}
-
-}
-
-func updateRollbackTsFromResponse(rollbackTs map[string]*protobuf.TsVbuuid, res *protobuf.TopicResponse) {
-
-	rollbackTsList := res.GetRollbackTimestamps()
-	for _, ts := range rollbackTsList {
-		if ts != nil && !ts.IsEmpty() {
-			if tsb, ok := rollbackTs[ts.GetBucket()]; ok {
-				tsb.Union(ts)
-			} else {
-				rollbackTs[ts.GetBucket()] = ts
-			}
-		}
-	}
-
 }
 
 func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInstList []c.IndexInst,
@@ -530,7 +464,7 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []
 				ap := newProjClient(addr)
 				if ret := sendDelInstancesRequest(ap, topic, uuids); ret != nil {
 					c.Errorf("KVSender::deleteIndexesFromStream \n\t Error Received %v from %v", ret, addr)
-					if ret == projClient.ErrorTopicMissing {
+					if ret.Error() == projClient.ErrorTopicMissing.Error() {
 						c.Infof("KVSender::deleteIndexesFromStream Treating TopicMissing As Success")
 					} else {
 						err = ret
@@ -577,7 +511,7 @@ func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string
 				ap := newProjClient(addr)
 				if ret := sendDelBucketsRequest(ap, topic, buckets); ret != nil {
 					c.Errorf("KVSender::deleteBucketsFromStream \n\t Error Received %v from %v", ret, addr)
-					if ret == projClient.ErrorTopicMissing {
+					if ret.Error() == projClient.ErrorTopicMissing.Error() {
 						c.Infof("KVSender::deleteBucketsFromStream Treating TopicMissing As Success")
 					} else {
 						err = ret
@@ -624,7 +558,7 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId,
 				ap := newProjClient(addr)
 				if ret := sendShutdownTopic(ap, topic); ret != nil {
 					c.Errorf("KVSender::closeMutationStream \n\t Error Received %v from %v", ret, addr)
-					if ret == projClient.ErrorTopicMissing {
+					if ret.Error() == projClient.ErrorTopicMissing.Error() {
 						c.Infof("KVSender::closeMutationStream Treating TopicMissing As Success")
 					} else {
 						err = ret
@@ -652,7 +586,7 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId,
 
 //send the actual MutationStreamRequest on adminport
 func sendMutationTopicRequest(ap *projClient.Client, topic string,
-	reqTimestamps []*protobuf.TsVbuuid,
+	reqTimestamps *protobuf.TsVbuuid,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
 
 	c.Debugf("KVSender::sendMutationTopicRequest Projector %v Topic %v Instances %v RequestTS %v",
@@ -660,7 +594,8 @@ func sendMutationTopicRequest(ap *projClient.Client, topic string,
 
 	endpointType := "dataport"
 
-	if res, err := ap.MutationTopicRequest(topic, endpointType, reqTimestamps, instances); err != nil {
+	if res, err := ap.MutationTopicRequest(topic, endpointType,
+		[]*protobuf.TsVbuuid{reqTimestamps}, instances); err != nil {
 		c.Fatalf("KVSender::sendMutationTopicRequest \n\tUnexpected Error %v During Mutation Stream "+
 			"Request %v for IndexInst %v", err, topic, instances)
 
@@ -791,6 +726,59 @@ func getTopicForStreamId(streamId c.StreamId) string {
 	}
 
 	return topic
+}
+
+func (k *kvSender) makeRestartTsForVbs(bucket string, tsVbuuid *c.TsVbuuid,
+	vbnos []uint32) (*protobuf.TsVbuuid, error) {
+
+	var err error
+
+	var ts *protobuf.TsVbuuid
+	if tsVbuuid == nil {
+		ts, err = k.makeInitialTs(bucket, vbnos)
+	} else {
+		ts, err = makeRestartTsFromTsVbuuid(bucket, tsVbuuid, vbnos)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return ts, nil
+}
+
+func updateActiveTsFromResponse(bucket string,
+	activeTs *protobuf.TsVbuuid, res *protobuf.TopicResponse) *protobuf.TsVbuuid {
+
+	activeTsList := res.GetActiveTimestamps()
+	for _, ts := range activeTsList {
+		if ts != nil && !ts.IsEmpty() && ts.GetBucket() == bucket {
+			if activeTs == nil {
+				activeTs = ts.Clone()
+			} else {
+				activeTs.Union(ts)
+			}
+		}
+	}
+	return activeTs
+
+}
+
+func updateRollbackTsFromResponse(bucket string,
+	rollbackTs *protobuf.TsVbuuid, res *protobuf.TopicResponse) *protobuf.TsVbuuid {
+
+	rollbackTsList := res.GetRollbackTimestamps()
+	for _, ts := range rollbackTsList {
+		if ts != nil && !ts.IsEmpty() && ts.GetBucket() == bucket {
+			if rollbackTs == nil {
+				rollbackTs = ts.Clone()
+			} else {
+				rollbackTs.Union(ts)
+			}
+		}
+	}
+
+	return rollbackTs
+
 }
 
 func (k *kvSender) makeInitialTs(bucket string,

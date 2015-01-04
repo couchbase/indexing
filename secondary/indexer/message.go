@@ -50,9 +50,11 @@ const (
 	TK_SHUTDOWN
 	TK_STABILITY_TIMESTAMP
 	TK_INIT_BUILD_DONE
+	TK_INIT_BUILD_DONE_ACK
 	TK_ENABLE_FLUSH
 	TK_DISABLE_FLUSH
 	TK_MERGE_STREAM
+	TK_MERGE_STREAM_ACK
 	TK_GET_BUCKET_HWT
 
 	//STORAGE_MANAGER
@@ -85,7 +87,9 @@ const (
 	INDEXER_PREPARE_RECOVERY
 	INDEXER_PREPARE_DONE
 	INDEXER_INITIATE_RECOVERY
+	INDEXER_RECOVERY_DONE
 	INDEXER_ROLLBACK
+	STREAM_REQUEST_DONE
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -206,6 +210,7 @@ func (m *MsgStreamError) GetError() Error {
 }
 
 //STREAM_READER_CONN_ERROR
+//STREAM_REQUEST_DONE
 type MsgStreamInfo struct {
 	mType    MsgType
 	streamId common.StreamId
@@ -274,7 +279,7 @@ type MsgStreamUpdate struct {
 	respCh    MsgChannel
 	stopCh    StopChannel
 	bucket    string
-	restartTs map[string]*common.TsVbuuid
+	restartTs *common.TsVbuuid
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -305,7 +310,7 @@ func (m *MsgStreamUpdate) GetBucket() string {
 	return m.bucket
 }
 
-func (m *MsgStreamUpdate) GetRestartTs() map[string]*common.TsVbuuid {
+func (m *MsgStreamUpdate) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
 }
 
@@ -487,15 +492,16 @@ func (m *MsgTKStabilityTS) String() string {
 }
 
 //TK_INIT_BUILD_DONE
+//TK_INIT_BUILD_DONE_ACK
 type MsgTKInitBuildDone struct {
+	mType    MsgType
 	streamId common.StreamId
 	buildTs  Timestamp
 	bucket   string
-	respCh   MsgChannel
 }
 
 func (m *MsgTKInitBuildDone) GetMsgType() MsgType {
-	return TK_INIT_BUILD_DONE
+	return m.mType
 }
 
 func (m *MsgTKInitBuildDone) GetBucket() string {
@@ -510,19 +516,17 @@ func (m *MsgTKInitBuildDone) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgTKInitBuildDone) GetResponseChannel() MsgChannel {
-	return m.respCh
-}
-
 //TK_MERGE_STREAM
+//TK_MERGE_STREAM_ACK
 type MsgTKMergeStream struct {
+	mType    MsgType
 	streamId common.StreamId
 	bucket   string
 	mergeTs  Timestamp
 }
 
 func (m *MsgTKMergeStream) GetMsgType() MsgType {
-	return TK_MERGE_STREAM
+	return m.mType
 }
 
 func (m *MsgTKMergeStream) GetStreamId() common.StreamId {
@@ -718,6 +722,7 @@ func (m *MsgRepairEndpoints) String() string {
 //INDEXER_PREPARE_RECOVERY
 //INDEXER_PREPARE_DONE
 //INDEXER_INITIATE_RECOVERY
+//INDEXER_RECOVERY_DONE
 type MsgRecovery struct {
 	mType     MsgType
 	streamId  common.StreamId
@@ -743,7 +748,8 @@ func (m *MsgRecovery) GetRestartTs() *common.TsVbuuid {
 
 type MsgRollback struct {
 	streamId   common.StreamId
-	rollbackTs map[string]*common.TsVbuuid
+	bucket     string
+	rollbackTs *common.TsVbuuid
 }
 
 func (m *MsgRollback) GetMsgType() MsgType {
@@ -754,7 +760,11 @@ func (m *MsgRollback) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRollback) GetRollbackTs() map[string]*common.TsVbuuid {
+func (m *MsgRollback) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgRollback) GetRollbackTs() *common.TsVbuuid {
 	return m.rollbackTs
 }
 
@@ -813,8 +823,9 @@ func (m *MsgIndexCompact) GetErrorChannel() chan error {
 
 //KV_STREAM_REPAIR
 type MsgKVStreamRepair struct {
-	streamId common.StreamId
-	buckets  []string
+	streamId  common.StreamId
+	bucket    string
+	restartTs *common.TsVbuuid
 }
 
 func (m *MsgKVStreamRepair) GetMsgType() MsgType {
@@ -825,8 +836,12 @@ func (m *MsgKVStreamRepair) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgKVStreamRepair) GetBuckets() []string {
-	return m.buckets
+func (m *MsgKVStreamRepair) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
+	return m.restartTs
 }
 
 //Helper function to return string for message type
@@ -884,12 +899,16 @@ func (m MsgType) String() string {
 		return "TK_STABILITY_TIMESTAMP"
 	case TK_INIT_BUILD_DONE:
 		return "TK_INIT_BUILD_DONE"
+	case TK_INIT_BUILD_DONE_ACK:
+		return "TK_INIT_BUILD_DONE_ACK"
 	case TK_ENABLE_FLUSH:
 		return "TK_ENABLE_FLUSH"
 	case TK_DISABLE_FLUSH:
 		return "TK_DISABLE_FLUSH"
 	case TK_MERGE_STREAM:
 		return "TK_MERGE_STREAM"
+	case TK_MERGE_STREAM_ACK:
+		return "TK_MERGE_STREAM_ACK"
 	case TK_GET_BUCKET_HWT:
 		return "TK_GET_BUCKET_HWT"
 
@@ -914,8 +933,12 @@ func (m MsgType) String() string {
 		return "INDEXER_PREPARE_DONE"
 	case INDEXER_INITIATE_RECOVERY:
 		return "INDEXER_INITIATE_RECOVERY"
+	case INDEXER_RECOVERY_DONE:
+		return "INDEXER_RECOVERY_DONE"
 	case INDEXER_ROLLBACK:
 		return "INDEXER_ROLLBACK"
+	case STREAM_REQUEST_DONE:
+		return "STREAM_REQUEST_DONE"
 
 	case SCAN_COORD_SHUTDOWN:
 		return "SCAN_COORD_SHUTDOWN"

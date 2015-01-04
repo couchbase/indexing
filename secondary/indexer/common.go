@@ -16,15 +16,13 @@ import (
 
 type StreamAddressMap map[common.StreamId]common.Endpoint
 
-type StreamStatusMap map[common.StreamId]StreamStatus
-
 type StreamStatus byte
 
 const (
-	//Stream is active i.e. processing mutations
-	STREAM_ACTIVE StreamStatus = iota
 	//Stream is inactive i.e. not processing mutations
-	STREAM_INACTIVE
+	STREAM_INACTIVE StreamStatus = iota
+	//Stream is active i.e. processing mutations
+	STREAM_ACTIVE
 	//Stream is preparing for recovery(i.e. it has received
 	//a control or error message and it is doing a cleanup
 	//before initiating Catchup

@@ -39,9 +39,9 @@ type timekeeper struct {
 }
 
 type InitialBuildInfo struct {
-	indexInst common.IndexInst
-	buildTs   Timestamp
-	respCh    MsgChannel
+	indexInst            common.IndexInst
+	buildTs              Timestamp
+	buildDoneAckReceived bool
 }
 
 //timeout in milliseconds to batch the vbuckets
@@ -153,6 +153,12 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case INDEXER_PREPARE_DONE:
 		tk.handlePrepareDone(cmd)
 
+	case TK_INIT_BUILD_DONE_ACK:
+		tk.handleInitBuildDoneAck(cmd)
+
+	case TK_MERGE_STREAM_ACK:
+		tk.handleMergeStreamAck(cmd)
+
 	default:
 		common.Errorf("Timekeeper::handleSupvervisorCommands "+
 			"Received Unknown Command %v", cmd)
@@ -170,10 +176,11 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	tk.ss.initNewStream(streamId)
-
-	common.Debugf("Timekeeper::handleStreamOpen \n\t Stream %v "+
-		"State Changed to ACTIVE", streamId)
+	if tk.ss.streamStatus[streamId] != STREAM_ACTIVE {
+		tk.ss.initNewStream(streamId)
+		common.Debugf("Timekeeper::handleStreamOpen \n\t Stream %v "+
+			"State Changed to ACTIVE", streamId)
+	}
 
 	//add the new indexes to internal maps
 	tk.addIndextoStream(cmd)
@@ -242,7 +249,6 @@ func (tk *timekeeper) handleAddIndextoStream(cmd Message) {
 
 func (tk *timekeeper) addIndextoStream(cmd Message) {
 
-	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
 	buildTs := cmd.(*MsgStreamUpdate).GetTimestamp()
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
@@ -261,8 +267,7 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 		if idx.State == common.INDEX_STATE_INITIAL {
 			tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
 				indexInst: idx,
-				buildTs:   buildTs,
-				respCh:    respCh}
+				buildTs:   buildTs}
 		}
 	}
 
@@ -311,9 +316,6 @@ func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 		} else {
 			tk.ss.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] -= 1
 			common.Debugf("Timekeeper::removeIndexFromStream IndexCount %v", tk.ss.streamBucketIndexCountMap)
-			if tk.ss.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
-				tk.ss.cleanupBucketFromStream(streamId, idx.Defn.Bucket)
-			}
 		}
 	}
 }
@@ -526,15 +528,18 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 
 		//check if any of the initial build index is past its Build TS.
 		//Generate msg for Build Done and change the state of the index.
-		tk.checkInitialBuildDone(cmd)
+		if tk.checkInitialBuildDone(cmd) {
+			break
+		}
 
 		//if flush is for INIT_STREAM, check if any index in CATCHUP has reached
 		//past the last flushed TS of the MAINT_STREAM for this bucket.
 		//In such case, all indexes of the bucket can merged to MAINT_STREAM.
-		if tk.checkInitStreamReadyToMerge(cmd) {
+		lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+		if tk.checkInitStreamReadyToMerge(streamId, bucket, lastFlushedTs) {
 			//if stream is ready to merge, further STREAM_ACTIVE processing is
 			//not required, return from here.
-			return
+			break
 		}
 
 		//check if there is any pending TS for this bucket/stream.
@@ -734,7 +739,6 @@ func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
 	msg := cmd.(*MsgTKGetBucketHWT)
 	msg.ts = nil
 
-	numVbuckets := tk.config["numVbuckets"].Int()
 	if bucketHWTMap, ok := tk.ss.streamBucketHWTMap[streamId]; ok {
 		if ts, ok := bucketHWTMap[bucket]; ok {
 			newTs := ts.Copy()
@@ -887,6 +891,53 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 
 }
 
+func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
+
+	streamId := cmd.(*MsgTKInitBuildDone).GetStreamId()
+	bucket := cmd.(*MsgTKInitBuildDone).GetBucket()
+
+	common.Debugf("Timekeeper::handleInitBuildDoneAck StreamId %v Bucket %v",
+		streamId, bucket)
+
+	if streamId == common.INIT_STREAM {
+		for _, buildInfo := range tk.indexBuildInfo {
+			if buildInfo.indexInst.Defn.Bucket == bucket {
+				buildInfo.buildDoneAckReceived = true
+			}
+		}
+	}
+
+	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
+		!tk.ss.checkAnyAbortPending(streamId, bucket) {
+
+		lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+		if tk.checkInitStreamReadyToMerge(streamId, bucket, lastFlushedTs) {
+			//if stream is ready to merge, further STREAM_ACTIVE processing is
+			//not required, return from here.
+			tk.supvCmdch <- &MsgSuccess{}
+			return
+		}
+
+		//check if there is any pending TS for this bucket/stream.
+		//It can be processed now.
+		tk.processPendingTS(streamId, bucket)
+
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleMergeStreamAck(cmd Message) {
+
+	streamId := cmd.(*MsgTKMergeStream).GetStreamId()
+	bucket := cmd.(*MsgTKMergeStream).GetBucket()
+
+	common.Debugf("Timekeeper::handleMergeStreamAck StreamId %v Bucket %v",
+		streamId, bucket)
+
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
 func (tk *timekeeper) prepareRecovery(streamId common.StreamId,
 	bucket string) bool {
 
@@ -982,11 +1033,13 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 //checkInitialBuildDone checks if any of the index in Initial State is past its
 //Build TS based on the Flush Done Message. It generates msg for Build Done
 //and changes the state of the index.
-func (tk *timekeeper) checkInitialBuildDone(cmd Message) {
+func (tk *timekeeper) checkInitialBuildDone(cmd Message) bool {
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	flushTs := cmd.(*MsgMutMgrFlushDone).GetTS()
+
+	status := false
 
 	for _, buildInfo := range tk.indexBuildInfo {
 		//if index belongs to the flushed bucket and in INITIAL state
@@ -1012,26 +1065,26 @@ func (tk *timekeeper) checkInitialBuildDone(cmd Message) {
 				common.Debugf("Timekeeper::checkInitialBuildDone \n\tInitial Build Done Index: %v "+
 					"Stream: %v Bucket: %v BuildTS: %v", idx.InstId, streamId, bucket, buildInfo.buildTs)
 
+				status = true
+
 				//generate init build done msg
 				tk.supvRespch <- &MsgTKInitBuildDone{
+					mType:    TK_INIT_BUILD_DONE,
 					streamId: streamId,
 					buildTs:  buildInfo.buildTs,
-					bucket:   bucket,
-					respCh:   buildInfo.respCh}
+					bucket:   bucket}
 
 			}
 		}
 	}
+	return status
 }
 
 //checkInitStreamReadyToMerge checks if any index in Catchup State in INIT_STREAM
 //has reached past the last flushed TS of the MAINT_STREAM for this bucket.
 //In such case, all indexes of the bucket can merged to MAINT_STREAM.
-func (tk *timekeeper) checkInitStreamReadyToMerge(cmd Message) bool {
-
-	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
-	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
-	flushTs := cmd.(*MsgMutMgrFlushDone).GetTS()
+func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
+	bucket string, flushTs *common.TsVbuuid) bool {
 
 	//INIT_STREAM cannot be merged to MAINT_STREAM if its not ACTIVE
 	if tk.ss.streamBucketStatus[common.MAINT_STREAM][bucket] != STREAM_ACTIVE {
@@ -1041,15 +1094,30 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(cmd Message) bool {
 		return false
 	}
 
-	//TODO Add a check that if any repair is going on, merge cannot happen
+	//If any repair is going on, merge cannot happen
+	if stopCh, ok := tk.ss.streamBucketRepairStopCh[common.MAINT_STREAM][bucket]; ok && stopCh != nil {
+
+		common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t MAINT_STREAM In Repair." +
+			"INIT_STREAM cannot be merged. Continue both streams.")
+		return false
+	}
+
+	if stopCh, ok := tk.ss.streamBucketRepairStopCh[common.INIT_STREAM][bucket]; ok && stopCh != nil {
+
+		common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t INIT_STREAM In Repair." +
+			"INIT_STREAM cannot be merged. Continue both streams.")
+		return false
+	}
 
 	if streamId == common.INIT_STREAM {
 
 		for _, buildInfo := range tk.indexBuildInfo {
-			//if index belongs to the flushed bucket and in CATCHUP state
+			//if index belongs to the flushed bucket and in CATCHUP state and
+			//buildDoneAck has been received
 			idx := buildInfo.indexInst
 			if idx.Defn.Bucket == bucket &&
-				idx.State == common.INDEX_STATE_CATCHUP {
+				idx.State == common.INDEX_STATE_CATCHUP &&
+				buildInfo.buildDoneAckReceived == true {
 
 				//if the flushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
 				//this index can be merged to MAINT_STREAM
@@ -1074,14 +1142,14 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(cmd Message) bool {
 						bucket, lastFlushedTs)
 
 					tk.supvRespch <- &MsgTKMergeStream{
+						mType:    TK_MERGE_STREAM,
 						streamId: streamId,
 						bucket:   bucket,
 						mergeTs:  ts}
 
 					common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v "+
 						"Bucket %v State Changed to INACTIVE", streamId, bucket)
-					tk.ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
-					tk.supvCmdch <- &MsgSuccess{}
+					tk.ss.cleanupBucketFromStream(streamId, bucket)
 					return true
 				}
 			}
@@ -1424,8 +1492,6 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 	//prepare repairTs with all vbs in STREAM_END, REPAIR status and
 	//send that to KVSender to repair
-	hwtTs := tk.ss.streamBucketHWTMap[streamId][bucket]
-
 	if repairTs, ok := tk.ss.getRepairTsForBucket(streamId, bucket); ok {
 
 		respCh := make(MsgChannel)
@@ -1467,8 +1533,23 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		//if rollback msg, call prepareRecovery
 		tk.prepareRecovery(streamId, bucket)
 
+	case KV_STREAM_REPAIR:
+
+		common.Infof("Timekeeper::sendRestartMsg Received KV Repair Msg For " +
+			"Stream %v Bucket %v. Aborting Repair")
+
+		tk.lock.Lock()
+		defer tk.lock.Unlock()
+
+		resp := kvresp.(*MsgKVStreamRepair)
+
+		resp.restartTs = tk.ss.computeRestartTs(streamId, bucket)
+		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+
+		tk.supvRespch <- resp
+
 	default:
-		common.Errorf("Timekeeper::sendRestartMsg Unhandled Response "+
+		common.Fatalf("Timekeeper::sendRestartMsg Unhandled Response "+
 			"from KV %v For Request %v.", kvresp, restartMsg)
 		tk.repairStream(streamId, bucket)
 	}
