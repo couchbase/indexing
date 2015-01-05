@@ -33,3 +33,6 @@
 # List
     $ querycmd -type list
 
+# Benchmark
+    $ GOMAXPROCS=8 go run tools/querycmd/main.go -par 100 -duration 10 benchmark
+
