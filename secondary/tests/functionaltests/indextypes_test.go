@@ -30,16 +30,21 @@ func init() {
 	indexScanAddress = clusterconfig.IndexScanAddress
 
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	time.Sleep(5 * time.Second)
 	// Working with Users10k and Users_mut dataset.
 	u, _ := user.Current()
 	dataFilePath := filepath.Join(u.HomeDir, "testdata/Users10k.txt.gz")
 	mutationFilePath := filepath.Join(u.HomeDir, "testdata/Users_mut.txt.gz")
-	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath, true)
-	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, true)
-	keyValues := datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
+	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath, false)
+	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, false)
+	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
-	kvutility.SetKeyValues(keyValues, "default", "", clusterconfig.KVAddress)
-	docs = keyValues
+	fmt.Println("Emptying the default bucket")
+	kvutility.DeleteKeys(docs, "default", "", clusterconfig.KVAddress)	
+	kvutility.DeleteKeys(mut_docs, "default", "", clusterconfig.KVAddress)
+	time.Sleep(5 * time.Second)	
+	fmt.Println("Loading the default bucket")
+	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 }
 
 // Test for single index field of data type float64
