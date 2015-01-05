@@ -77,6 +77,9 @@ func NewFakeProjector(port string) *fakeProjector {
 	config := common.SystemConfig.SectionConfig(prefix, true /*trim*/)
 	maxvbs := common.SystemConfig["maxVbuckets"].Int()
 	flag := transport.TransportFlag(0).SetProtobuf()
+	config.Set("mutationChanSize", common.ConfigValue{10000, "channel size of projector-dataport-client's data path routine", 10000})
+	config.Set("parConnections", common.ConfigValue{1, "number of parallel connections to open with remote", 1})
+	
 	var err error
 	p.Client, err = dataport.NewClient("unit-test", "mutation topic", addr, flag, maxvbs, config)
 	if err != nil {
