@@ -8,8 +8,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
-	"math/rand"
 	"net/url"
 	"os"
 	"path"
@@ -18,7 +18,9 @@ import (
 	"time"
 
 	"github.com/couchbase/indexing/secondary/dcp"
+	parsec "github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
+	mcommon "github.com/prataprc/monster/common"
 )
 
 var options struct {
@@ -112,27 +114,21 @@ func loadBucket(cluster, bucket, prodfile string, count int) int {
 }
 
 func genDocuments(b *couchbase.Bucket, prodfile string, idx, n int) {
-	conf := make(map[string]interface{})
-	start, err := monster.Parse(prodfile, conf)
-	mf(err, "monster - ")
-	nonterminals, root := monster.Build(start)
-	c := map[string]interface{}{
-		"_nonterminals": nonterminals,
-		// rand.Rand is not thread safe.
-		"_random":   rand.New(rand.NewSource(int64(options.seed))),
-		"_bagdir":   bagDir,
-		"_prodfile": prodfile,
-	}
-	msg := fmt.Sprintf("%s - set", b.Name)
+	text, err := ioutil.ReadFile(prodfile)
+	s := parsec.NewScanner(text)
+	root, _ := monster.Y(s)
+	scope := root.(mcommon.Scope)
+	nterms := scope["_nonterminals"].(mcommon.NTForms)
+	scope = monster.BuildContext(scope, uint64(options.seed), bagDir)
+
 	for i := 0; i < n; i++ {
-		monster.Initialize(c)
-		doc := root.Generate(c)
+		doc := monster.EvalForms("root", scope, nterms["s"]).(string)
 		key := fmt.Sprintf("%s-%v-%v", b.Name, idx, i+1)
 		err = b.SetRaw(key, options.expiry, []byte(doc))
 		if err != nil {
 			fmt.Printf("%T %v\n", err, err)
 		}
-		mf(err, msg)
+		mf(err, "error setting document")
 	}
 	fmt.Printf("routine %v generated %v documents for %q\n", idx, n, b.Name)
 	done <- true
