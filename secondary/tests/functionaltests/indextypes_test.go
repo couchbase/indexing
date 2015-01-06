@@ -4,14 +4,14 @@ import (
 	"flag"
 	"fmt"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
+	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
-	"testing"
-	"time"
 	"os/user"
 	"path/filepath"
+	"testing"
+	"time"
 )
 
 var docs, mut_docs tc.KeyValues
@@ -40,9 +40,9 @@ func init() {
 	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
 	fmt.Println("Emptying the default bucket")
-	kvutility.DeleteKeys(docs, "default", "", clusterconfig.KVAddress)	
+	kvutility.DeleteKeys(docs, "default", "", clusterconfig.KVAddress)
 	kvutility.DeleteKeys(mut_docs, "default", "", clusterconfig.KVAddress)
-	time.Sleep(5 * time.Second)	
+	time.Sleep(5 * time.Second)
 	fmt.Println("Loading the default bucket")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 }
@@ -308,6 +308,193 @@ func TestNestedIndex_Bool(t *testing.T) {
 
 	docScanResults := datautility.ExpectedScanResponse_bool(docs, "address.isresidential", false, 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{false}, []interface{}{false}, 3, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+}
+
+func TestLookupJsonObject(t *testing.T) {
+	fmt.Println("In TestLookupJsonObject()")
+	var indexName = "index_streetaddress"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(3 * time.Second)
+
+	value := map[string]interface{}{
+		"doornumber":   "12B",
+		"floor":        5.0,
+		"buildingname": "Sterling Heights",
+		"streetname":   "Hill Street"}
+	docScanResults := datautility.ExpectedLookupResponse_json(docs, "address.streetaddress", value)
+	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{value}, true, defaultlimit)
+	tc.PrintScanResults(docScanResults, "docScanResults")
+	tc.PrintScanResults(scanResults, "scanResults")
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+}
+
+func TestLookupObjDifferentOrdering(t *testing.T) {
+	fmt.Println("In TestLookupObjDifferentOrdering()")
+	var indexName = "index_streetaddress"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(3 * time.Second)
+
+	value := map[string]interface{}{
+		"floor":        5.0,
+		"streetname":   "Hill Street",
+		"buildingname": "Sterling Heights",
+		"doornumber":   "12B"}
+	docScanResults := datautility.ExpectedLookupResponse_json(docs, "address.streetaddress", value)
+	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{value}, true, defaultlimit)
+	tc.PrintScanResults(docScanResults, "docScanResults")
+	tc.PrintScanResults(scanResults, "scanResults")
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+}
+
+func TestRangeJsonObject(t *testing.T) {
+	fmt.Println("In TestRangeJsonObject()")
+	var indexName = "index_streetaddress"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(3 * time.Second)
+
+	low := map[string]interface{}{
+		"floor":        1.0,
+		"streetname":   "AAA",
+		"buildingname": "AA",
+		"doornumber":   "AAAA"}
+	high := map[string]interface{}{
+		"floor":        9.0,
+		"streetname":   "zzz",
+		"buildingname": "zz",
+		"doornumber":   "zzzz"}
+
+	value1 := map[string]interface{}{
+		"floor":        5.0,
+		"streetname":   "Hill Street",
+		"buildingname": "Sterling Heights",
+		"doornumber":   "12B"}
+	value2 := map[string]interface{}{
+		"floor":        2.0,
+		"streetname":   "Karweg Place",
+		"buildingname": "Rosewood Gardens",
+		"doornumber":   "514"}
+	docScanResults := make(tc.ScanResponse)
+	docScanResults["User3bf51f08-0bac-4c03-bcec-5c255cbdde2c"] = []interface{}{value1}
+	docScanResults["Userbb48952f-f8d1-4e04-a0e1-96b9019706fb"] = []interface{}{value2}
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{low}, []interface{}{high}, 3, true, defaultlimit)
+	tc.PrintScanResults(scanResults, "scanResults")
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+}
+
+func TestLookupFloatDiffForms(t *testing.T) {
+	fmt.Println("In TestLookupFloatDiffForms()")
+	var indexName = "index_latitude"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"latitude"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// Wait, else results in "Index not ready"
+	time.Sleep(1 * time.Second)
+
+	// Scan 1
+	fmt.Println("Scan 1")
+	docScanResults := datautility.ExpectedScanResponse_float64(docs, "latitude", -13, 70, 1)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-13}, []interface{}{70}, 1, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Scan 2
+	fmt.Println("Scan 2")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", 4.112783, 4.112783, 3)
+	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{4.112783}, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Scan 3
+	fmt.Println("Scan 3")
+	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{20.563915 / 5}, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Scan 4
+	fmt.Println("Scan 4")
+	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{2.0563915 * 2}, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Scan 5
+	fmt.Println("Scan 5")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", 4.112783000, 4.112783000, 3)
+	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{4.112783000}, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Scan 6
+	fmt.Println("Scan 6")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", 4.112783333, 4.112783333, 3)
+	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{4.112783333}, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+}
+
+func TestRangeFloatInclVariations(t *testing.T) {
+	fmt.Println("In TestRangeFloatInclVariations()")
+	var indexName = "index_latitude"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"latitude"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second) // Wait, else results in "Index not ready"
+
+	// Scan 1. Value close to  -67.373265, Inclusion 0
+	fmt.Println("Scan 1")
+	docScanResults := datautility.ExpectedScanResponse_float64(docs, "latitude", -67.373365, -67.373165, 0)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.373365}, []interface{}{-67.373165}, 0, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Scan 2. Value close to  -67.373265, Inclusion 1 ( >= low && < high) (val < low && val < high : Expected 0 result)
+	fmt.Println("Scan 2")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", -67.3732649999, -67.373264, 1)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.3732649999}, []interface{}{-67.373264}, 1, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Scan 3. Value close to  -67.373265, Inclusion 2 ( > low && <= high) (val > low && val > high: Expect 0 result)
+	fmt.Println("Scan 3")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", -67.373265999, -67.37326500001, 2)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.373265999}, []interface{}{-67.37326500001}, 2, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Scan 4. Value close to  -67.373265, Inclusion 2 ( > low && <= high) ( val > low && val < high: Expect 1 result)
+	fmt.Println("Scan 4")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", -67.37326500001, -67.3732649999, 2)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.37326500001}, []interface{}{-67.3732649999}, 2, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Scan 5. Value close to  -67.373265, Inclusion 3 ( val == low && val < high : Expect 1 result)
+	fmt.Println("Scan 5")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", -67.373265, -67.3732649999, 3)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.373265}, []interface{}{-67.3732649999}, 3, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Scan 6. Value close to  -67.373265, Inclusion 3 ( val == low && val > high : Expect 0 results)
+	fmt.Println("Scan 6")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", -67.373265, -67.37326500001, 3)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.373265}, []interface{}{-67.37326500001}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
 	tv.Validate(docScanResults, scanResults)
 }
