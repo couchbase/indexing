@@ -79,11 +79,13 @@ func (c *ClusterInfoCache) Fetch() error {
 			return err
 		}
 
+		var nodes []couchbase.Node
 		for _, n := range c.pool.Nodes {
 			if n.ClusterMembership == "active" {
-				c.nodes = append(c.nodes, n)
+				nodes = append(nodes, n)
 			}
 		}
+		c.nodes = nodes
 
 		found := false
 		for _, node := range c.nodes {
