@@ -23,14 +23,11 @@ var (
 
 //Counter interface
 func (s *fdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
-
-	var nilKey Key
-	var err error
-	if nilKey, err = NewKeyFromEncodedBytes(nil); err != nil {
+	info, err := s.main.Info()
+	if err != nil {
 		return 0, err
 	}
-
-	return s.CountRange(nilKey, nilKey, Both, stopch)
+	return info.DocCount(), nil
 }
 
 //Exister interface
