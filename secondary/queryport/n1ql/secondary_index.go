@@ -635,9 +635,13 @@ func skey2Values(skey c.SecondaryKey) []value.Value {
 func getClusterInfo(
 	cluster string, pooln string) (*c.ClusterInfoCache, errors.Error) {
 
-	cinfo := c.NewClusterInfoCache(cluster, pooln)
-	if err := cinfo.Fetch(); err != nil {
+	cinfo, err := c.NewClusterInfoCache(cluster, pooln)
+	if err != nil {
 		return nil, errors.NewError(err, fmt.Sprintf("ClusterInfo() failed"))
+	}
+	if err := cinfo.Fetch(); err != nil {
+		msg := fmt.Sprintf("Fetch ClusterInfo() failed")
+		return nil, errors.NewError(err, msg)
 	}
 	return cinfo, nil
 }
