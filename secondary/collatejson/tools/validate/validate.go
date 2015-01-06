@@ -19,12 +19,15 @@ import (
 	"strconv"
 	"time"
 	//"reflect"
+	"io/ioutil"
 	"path"
 	"runtime"
 
 	qv "github.com/couchbaselabs/query/value"
 	"github.com/prataprc/collatejson"
+	"github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
+	mcommon "github.com/prataprc/monster/common"
 )
 
 var options struct {
@@ -281,9 +284,18 @@ func generateFloats(count int) []float64 {
 func generateJSON(prodfile string, count int) []string {
 	seed := int(time.Now().UnixNano())
 	bagdir := path.Dir(prodfile)
-	jsons, err := monster.Generate(seed, count, bagdir, prodfile)
+	text, err := ioutil.ReadFile(prodfile)
 	if err != nil {
-		log.Fatalf(err.Error())
+		log.Fatal(err)
+	}
+	s := parsec.NewScanner(text)
+	root, _ := monster.Y(s)
+	scope := root.(mcommon.Scope)
+	nterms := scope["_nonterminals"].(mcommon.NTForms)
+	scope = monster.BuildContext(scope, uint64(seed), bagdir)
+	jsons := make([]string, count)
+	for i := 0; i < count; i++ {
+		jsons[i] = monster.EvalForms("root", scope, nterms["s"]).(string)
 	}
 	return jsons
 }
