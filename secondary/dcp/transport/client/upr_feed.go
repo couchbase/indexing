@@ -7,11 +7,11 @@ package memcached
 import (
 	"encoding/binary"
 	"errors"
-	"log"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/dcp/transport"
+	"log"
 	"strconv"
 	"sync"
-	"github.com/couchbase/indexing/secondary/dcp/transport"
 )
 
 const uprMutationExtraLen = 16
@@ -417,7 +417,7 @@ loop:
 				if status == transport.ROLLBACK {
 					event = makeUprEvent(pkt, stream)
 					// rollback stream
-					log.Printf("UPR_STREAMREQ with rollback %d for vb %d Failed: %v\n" , rb, vb, err)
+					log.Printf("UPR_STREAMREQ with rollback %d for vb %d Failed: %v\n", rb, vb, err)
 					// delete the stream from the vbmap for the feed
 					feed.mu.Lock()
 					delete(feed.vbstreams, vb)
