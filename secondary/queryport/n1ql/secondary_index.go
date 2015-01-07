@@ -42,7 +42,7 @@ var n1ql2GsiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 }
 var gsi2N1QLState = map[c.IndexState]datastore.IndexState{
 	c.INDEX_STATE_CREATED: datastore.PENDING,
-	c.INDEX_STATE_READY:   datastore.ONLINE,
+	c.INDEX_STATE_READY:   datastore.PENDING,
 	c.INDEX_STATE_INITIAL: datastore.PENDING,
 	c.INDEX_STATE_CATCHUP: datastore.PENDING,
 	c.INDEX_STATE_ACTIVE:  datastore.ONLINE,

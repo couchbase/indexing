@@ -133,6 +133,13 @@ func parseArgs(arguments []string) (*Command, []string) {
 	}
 	cmdOptions.low = c.SecondaryKey(arg2key([]byte(low)))
 	cmdOptions.high = c.SecondaryKey(arg2key([]byte(high)))
+
+	// setup cbauth
+	authURL := fmt.Sprintf("http://%s/_cbauth", cmdOptions.server)
+	up := strings.Split(cmdOptions.auth, ":")
+	authU, authP := up[0], up[1]
+	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
+
 	return cmdOptions, fset.Args()
 }
 

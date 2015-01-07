@@ -4,11 +4,11 @@ import "flag"
 import "fmt"
 import "log"
 import "os"
-import "strconv"
 import "strings"
 import "time"
 import "sync"
 
+import "github.com/couchbase/cbauth"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dataport"
 import "github.com/couchbase/indexing/secondary/projector"
@@ -21,11 +21,12 @@ var pooln = "default"
 var options struct {
 	endpoints     []string // list of endpoint daemon to start
 	coordEndpoint string   // co-ordinator endpoint
-	stat          string   // periodic timeout to print dataport statistics
-	timeout       string   // timeout to loop
+	stat          int      // periodic timeout to print dataport statistics
+	timeout       int      // timeout to loop
 	maxVbno       int      // maximum number of vbuckets
 	addBuckets    []string
 	delBuckets    []string
+	auth          string
 	loop          int
 	projector     bool // start projector, useful in debug mode.
 	debug         bool
@@ -41,9 +42,9 @@ func argParse() []string {
 		"list of endpoint daemon to start")
 	flag.StringVar(&options.coordEndpoint, "coorendp", "localhost:9021",
 		"co-ordinator endpoint")
-	flag.StringVar(&options.stat, "stat", "1000",
+	flag.IntVar(&options.stat, "stat", 1000,
 		"periodic timeout to print dataport statistics")
-	flag.StringVar(&options.timeout, "timeout", "0",
+	flag.IntVar(&options.timeout, "timeout", 0,
 		"timeout to loop")
 	flag.IntVar(&options.maxVbno, "maxvb", 1024,
 		"maximum number of vbuckets")
@@ -51,6 +52,8 @@ func argParse() []string {
 		"buckets to add")
 	flag.StringVar(&delBuckets, "delBuckets", addBuckets,
 		"buckets to del")
+	flag.StringVar(&options.auth, "auth", "Administrator:asdasd",
+		"Auth user and password")
 	flag.IntVar(&options.loop, "loop", 10,
 		"repeat bucket-add and bucket-del loop number of times")
 	flag.BoolVar(&options.projector, "projector", false,
@@ -96,6 +99,11 @@ var mutations struct {
 
 func main() {
 	clusters := argParse()
+	// setup cbauth
+	authURL := fmt.Sprintf("http://%s/_cbauth", clusters[0])
+	up := strings.Split(options.auth, ":")
+	authU, authP := up[0], up[1]
+	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
 
 	mutations.seqnos = map[string][]uint64{
 		"beer-sample": make([]uint64, options.maxVbno),
@@ -114,15 +122,9 @@ func main() {
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	dconf := c.SystemConfig.SectionConfig("projector.dataport.indexer.", true)
 	for _, endpoint := range options.endpoints {
-		stat, _ := strconv.Atoi(options.stat)
-		go dataport.Application(endpoint, stat, 0, maxvbs, dconf, endpointCallback)
+		go dataport.Application(endpoint, options.stat, 0, maxvbs, dconf, endpointCallback)
 	}
 	go dataport.Application(options.coordEndpoint, 0, 0, maxvbs, dconf, nil)
-
-	timeout, err := strconv.Atoi(options.timeout)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	// spawn initial set of projectors
 	for _, cluster := range clusters {
@@ -159,7 +161,7 @@ func main() {
 loop:
 	if options.addBuckets != nil {
 		// add `buckets` and its instances after few seconds
-		<-time.After(time.Duration(timeout) * time.Millisecond)
+		<-time.After(time.Duration(options.timeout) * time.Millisecond)
 		instances = protobuf.ExampleIndexInstances(
 			options.addBuckets, options.endpoints, options.coordEndpoint)
 		for _, client := range projectors {
@@ -180,7 +182,7 @@ loop:
 
 	if options.delBuckets != nil {
 		// del `buckets` and its instances after few seconds
-		<-time.After(time.Duration(timeout) * time.Millisecond)
+		<-time.After(time.Duration(options.timeout) * time.Millisecond)
 		for _, client := range projectors {
 			err := client.DelBuckets("backfill", options.delBuckets)
 			if err != nil {
@@ -205,6 +207,9 @@ func mf(err error, msg string) {
 
 func getProjectorAdminport(cluster, pooln string) string {
 	cinfo, err := c.NewClusterInfoCache(cluster, pooln)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
