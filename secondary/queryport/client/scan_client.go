@@ -68,7 +68,7 @@ func (c *gsiScanClient) LookupStatistics(
 	}
 	req := &protobuf.StatisticsRequest{
 		DefnID: proto.Uint64(defnID),
-		Span:   &protobuf.Span{Equal: [][]byte{val}},
+		Span:   &protobuf.Span{Equals: [][]byte{val}},
 	}
 	resp, err := c.doRequestResponse(req)
 	if err != nil {
@@ -123,13 +123,13 @@ func (c *gsiScanClient) Lookup(
 	distinct bool, limit int64, callb ResponseHandler) error {
 
 	// serialize lookup value.
-	equal := make([][]byte, 0, len(values))
+	equals := make([][]byte, 0, len(values))
 	for _, value := range values {
 		val, err := json.Marshal(value)
 		if err != nil {
 			return err
 		}
-		equal = append(equal, val)
+		equals = append(equals, val)
 	}
 
 	connectn, err := c.pool.Get()
@@ -143,7 +143,7 @@ func (c *gsiScanClient) Lookup(
 
 	req := &protobuf.ScanRequest{
 		DefnID:   proto.Uint64(defnID),
-		Span:     &protobuf.Span{Equal: equal},
+		Span:     &protobuf.Span{Equals: equals},
 		Distinct: proto.Bool(distinct),
 		PageSize: proto.Int64(1),
 		Limit:    proto.Int64(limit),
@@ -260,10 +260,58 @@ func (c *gsiScanClient) ScanAll(
 	return nil
 }
 
-// Count of all entries in index.
-func (c *gsiScanClient) Count(defnID uint64) (int64, error) {
+// CountLookup to count number entries for given set of keys.
+func (c *gsiScanClient) CountLookup(
+	defnID uint64, values []common.SecondaryKey) (int64, error) {
+
+	// serialize match value.
+	equals := make([][]byte, 0, len(values))
+	for _, value := range values {
+		val, err := json.Marshal(value)
+		if err != nil {
+			return 0, err
+		}
+		equals = append(equals, val)
+	}
+
 	req := &protobuf.CountRequest{
 		DefnID: proto.Uint64(defnID),
+		Span:   &protobuf.Span{Equals: equals},
+	}
+	resp, err := c.doRequestResponse(req)
+	if err != nil {
+		return 0, err
+	}
+	countResp := resp.(*protobuf.CountResponse)
+	if countResp.GetErr() != nil {
+		err = errors.New(countResp.GetErr().GetError())
+		return 0, err
+	}
+	return countResp.GetCount(), nil
+}
+
+// CountRange to count number entries in the given range.
+func (c *gsiScanClient) CountRange(
+	defnID uint64, low, high common.SecondaryKey,
+	inclusion Inclusion) (int64, error) {
+
+	// serialize low and high values.
+	l, err := json.Marshal(low)
+	if err != nil {
+		return 0, err
+	}
+	h, err := json.Marshal(high)
+	if err != nil {
+		return 0, err
+	}
+
+	req := &protobuf.CountRequest{
+		DefnID: proto.Uint64(defnID),
+		Span: &protobuf.Span{
+			Range: &protobuf.Range{
+				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
+			},
+		},
 	}
 	resp, err := c.doRequestResponse(req)
 	if err != nil {

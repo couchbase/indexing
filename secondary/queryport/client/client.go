@@ -102,8 +102,11 @@ type GsiAccessor interface {
 	// ScanAll for full table scan.
 	ScanAll(defnID uint64, limit int64, callb ResponseHandler) error
 
-	// Count of all entries in index.
-	Count(defnID uint64) (int64, error)
+	// CountLookup of all entries in index.
+	CountLookup(defnID uint64) (int64, error)
+
+	// CountRange of all entries in index.
+	CountRange(defnID uint64) (int64, error)
 }
 
 // TODO: integration with MetadataProvider
@@ -218,14 +221,29 @@ func (c *GsiClient) ScanAll(
 	return qc.ScanAll(defnID, limit, callb)
 }
 
-// Count of all entries in index.
-func (c *GsiClient) Count(defnID uint64) (int64, error) {
+// CountLookup to count number entries for given set of keys.
+func (c *GsiClient) CountLookup(
+	defnID uint64, values []common.SecondaryKey) (int64, error) {
+
 	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
 	if !ok {
 		return 0, ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.Count(defnID)
+	return qc.CountLookup(defnID, values)
+}
+
+// CountRange to count number entries in the given range.
+func (c *GsiClient) CountRange(
+	defnID uint64,
+	low, high common.SecondaryKey, inclusion Inclusion) (int64, error) {
+
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
+	if !ok {
+		return 0, ErrorNoHost
+	}
+	qc := c.queryClients[queryport]
+	return qc.CountRange(defnID, low, high, inclusion)
 }
 
 // Close the client and all open connections with server.

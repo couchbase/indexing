@@ -64,6 +64,7 @@ message StreamEndResponse {
 // Count request to indexer.
 message CountRequest {
     required uint64 defnID    = 1;
+    required Span   span      = 2;
 }
 
 // total number of entries in index.
@@ -75,9 +76,8 @@ message CountResponse {
 // Query messages / arguments for indexer
 
 message Span {
-    optional Range  range = 1;
-    // TODO: may we should rename `equal` to `equals` ?
-    repeated bytes  equal = 2;
+    optional Range range  = 1;
+    repeated bytes equals = 2;
 }
 
 message Range {

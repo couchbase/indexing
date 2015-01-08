@@ -386,18 +386,23 @@ func (s *scanCoordinator) parseScanParams(
 		err = fillRanges(
 			r.GetSpan().GetRange().GetLow(),
 			r.GetSpan().GetRange().GetHigh(),
-			r.GetSpan().GetEqual())
+			r.GetSpan().GetEquals())
 		p.defnID = r.GetDefnID()
 	case *protobuf.CountRequest:
 		p.scanType = queryCount
+		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
 		p.defnID = r.GetDefnID()
+		err = fillRanges(
+			r.GetSpan().GetRange().GetLow(),
+			r.GetSpan().GetRange().GetHigh(),
+			r.GetSpan().GetEquals())
 	case *protobuf.ScanRequest:
 		p.scanType = queryScan
 		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
 		err = fillRanges(
 			r.GetSpan().GetRange().GetLow(),
 			r.GetSpan().GetRange().GetHigh(),
-			r.GetSpan().GetEqual())
+			r.GetSpan().GetEquals())
 		p.limit = r.GetLimit()
 		p.defnID = r.GetDefnID()
 		p.pageSize = r.GetPageSize()
@@ -788,19 +793,19 @@ func (s *scanCoordinator) scanSliceSnapshot(sd *scanDescriptor,
 
 	switch sd.p.scanType {
 	case queryStats:
-		s.statsQuery(sd, ss.Snapshot(), stopch)
+		s.queryStats(sd, ss.Snapshot(), stopch)
 	case queryCount:
-		s.statsCount(sd, ss.Snapshot(), stopch)
+		s.queryCount(sd, ss.Snapshot(), stopch)
 	case queryScan:
-		s.scanQuery(sd, ss.Snapshot(), stopch)
+		s.queryScan(sd, ss.Snapshot(), stopch)
 	case queryScanAll:
-		s.scanAllQuery(sd, ss.Snapshot(), stopch)
+		s.queryScanAll(sd, ss.Snapshot(), stopch)
 	}
 
 	ss.Snapshot().Close()
 }
 
-func (s *scanCoordinator) statsQuery(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+func (s *scanCoordinator) queryStats(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
 	totalRows, err := snap.CountRange(sd.p.low, sd.p.high, sd.p.incl, stopch)
 	// TODO: Implement min, max, unique (maybe)
 	if err != nil {
@@ -812,17 +817,39 @@ func (s *scanCoordinator) statsQuery(sd *scanDescriptor, snap Snapshot, stopch S
 	}
 }
 
-func (s *scanCoordinator) statsCount(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
-	count, err := snap.CountTotal(stopch)
-	// TODO: Implement min, max, unique (maybe)
-	if err != nil {
-		sd.respch <- err
-	} else {
+func (s *scanCoordinator) queryCount(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+	p := sd.p
+	lowkey, highkey := p.low.Encoded(), p.high.Encoded()
+	if p.keys != nil && len(p.keys) > 0 { // handle lookup counts
+		allCounts := uint64(0)
+		for _, key := range p.keys {
+			count, err := snap.CountRange(key, key, Both, stopch)
+			if err != nil {
+				sd.respch <- err
+				break
+			}
+			allCounts += count
+		}
+		sd.respch <- countResponse{count: int64(allCounts)}
+
+	} else if lowkey != nil || highkey != nil { // handle range counts
+		count, err := snap.CountRange(p.low, p.high, p.incl, stopch)
+		if err != nil {
+			sd.respch <- err
+		}
 		sd.respch <- countResponse{count: int64(count)}
+
+	} else { // handle full total
+		count, err := snap.CountTotal(stopch)
+		if err != nil {
+			sd.respch <- err
+		} else {
+			sd.respch <- countResponse{count: int64(count)}
+		}
 	}
 }
 
-func (s *scanCoordinator) scanQuery(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+func (s *scanCoordinator) queryScan(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
 	// TODO: Decide whether a missing response should be provided point query for keys
 	if len(sd.p.keys) != 0 {
 		for _, k := range sd.p.keys {
@@ -836,7 +863,7 @@ func (s *scanCoordinator) scanQuery(sd *scanDescriptor, snap Snapshot, stopch St
 
 }
 
-func (s *scanCoordinator) scanAllQuery(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+func (s *scanCoordinator) queryScanAll(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
 	ch, cherr := snap.KeySet(stopch)
 	s.receiveKeys(sd, ch, cherr)
 }

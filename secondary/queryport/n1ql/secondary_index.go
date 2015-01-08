@@ -452,16 +452,31 @@ func (si *secondaryIndex) Statistics(
 }
 
 // Count implement Index{} interface.
-func (si *secondaryIndex) Count() (int64, errors.Error) {
+func (si *secondaryIndex) Count(
+	span *datastore.Span) (count int64, err errors.Error) {
+
 	if si == nil {
 		return 0, ErrorIndexEmpty
 	}
 	client := si.gsi.gsiClient
-	count, err := client.Count(si.defnID)
-	if err != nil {
-		return 0, errors.NewError(err, "GSI Count")
+
+	var e error
+	if span.Seek != nil {
+		seek := values2SKey(span.Seek)
+		count, e = client.CountLookup(si.defnID, []c.SecondaryKey{seek})
+		if e != nil {
+			err = errors.NewError(err, "GSI CountLookup()")
+		}
+
+	} else {
+		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
+		incl := n1ql2GsiInclusion[span.Range.Inclusion]
+		count, e = client.CountRange(si.defnID, low, high, incl)
+		if e != nil {
+			err = errors.NewError(err, "GSI CountRange()")
+		}
 	}
-	return count, nil
+	return count, err
 }
 
 // Drop implement Index{} interface.

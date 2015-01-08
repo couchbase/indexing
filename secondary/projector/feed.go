@@ -879,7 +879,7 @@ func (feed *Feed) bucketFeed(
 
 	feeder, ok = feed.feeders[bucketn]
 	if !ok { // the feed is being started for the first time
-		bucket, err := connectBucket(feed.cluster, pooln, bucketn)
+		bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn)
 		if err != nil {
 			return nil, err
 		}
@@ -913,7 +913,7 @@ func (feed *Feed) bucketFeed(
 func (feed *Feed) bucketDetails(
 	pooln, bucketn string, vbnos []uint16) ([]uint64, error) {
 
-	bucket, err := connectBucket(feed.cluster, pooln, bucketn)
+	bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn)
 	if err != nil {
 		return nil, err
 	}
@@ -949,17 +949,17 @@ func (feed *Feed) getLocalVbuckets(pooln, bucketn string) ([]uint16, error) {
 	cinfo, err := c.NewClusterInfoCache(feed.cluster, pooln)
 	if err != nil {
 		c.Errorf("%v ClusterInfoCache(`%v`): %v\n", prefix, bucketn, err)
-		return nil, ErrorClusterInfo
+		return nil, projC.ErrorClusterInfo
 	}
 	if err := cinfo.Fetch(); err != nil {
 		c.Errorf("%v cinfo.Fetch(`%v`): %v\n", prefix, bucketn, err)
-		return nil, ErrorClusterInfo
+		return nil, projC.ErrorClusterInfo
 	}
 	nodeID := cinfo.GetCurrentNode()
 	vbnos32, err := cinfo.GetVBuckets(nodeID, bucketn)
 	if err != nil {
 		c.Errorf("%v cinfo.GetVBuckets(`%v`): %v\n", prefix, bucketn, err)
-		return nil, ErrorClusterInfo
+		return nil, projC.ErrorClusterInfo
 	}
 	vbnos := c.Vbno32to16(vbnos32)
 	c.Infof("%v vbmap {%v,%v} - %v\n", prefix, pooln, bucketn, vbnos)
@@ -1239,18 +1239,18 @@ func (feed *Feed) infof(prefix, bucketn string, val interface{}) {
 func (feed *Feed) connectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
 	couch, err := couchbase.Connect("http://" + cluster)
 	if err != nil {
-		feed.errorf("connectBucket(`%v`, `%v`)", pooln, bucketn, err)
-		return nil, ErrorDCPConnection
+		feed.errorf("connectBucket(`%v`)", bucketn, err)
+		return nil, projC.ErrorDCPConnection
 	}
 	pool, err := couch.GetPool(pooln)
 	if err != nil {
 		feed.errorf("GetPool(`%v`)", pooln, err)
-		return nil, ErrorDCPPool
+		return nil, projC.ErrorDCPPool
 	}
 	bucket, err := pool.GetBucket(bucketn)
 	if err != nil {
 		feed.errorf("GetBucket(`%v`)", bucketn, err)
-		return nil, ErrorDCPBucket
+		return nil, projC.ErrorDCPBucket
 	}
 	return bucket, nil
 }

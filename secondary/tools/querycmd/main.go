@@ -230,12 +230,13 @@ func handleCommand(
 
 	case "scan":
 		defnID, _ := getDefnID(client, bucket, iname)
-		if cmd.equal == nil {
-			err = client.Range(uint64(defnID), low, high, incl, false, limit, callb)
-
-		} else {
+		if cmd.equal != nil {
 			equals := []c.SecondaryKey{cmd.equal}
 			client.Lookup(uint64(defnID), equals, false, limit, callb)
+
+		} else {
+			err = client.Range(
+				uint64(defnID), low, high, incl, false, limit, callb)
 		}
 		if err == nil {
 			fmt.Println("Scan results:")
@@ -251,10 +252,11 @@ func handleCommand(
 	case "stats":
 		var statsResp c.IndexStatistics
 		defnID, _ := getDefnID(client, bucket, iname)
-		if cmd.equal == nil {
-			statsResp, err = client.RangeStatistics(uint64(defnID), low, high, incl)
-		} else {
+		if cmd.equal != nil {
 			statsResp, err = client.LookupStatistics(uint64(defnID), equal)
+		} else {
+			statsResp, err = client.RangeStatistics(
+				uint64(defnID), low, high, incl)
 		}
 		if err == nil {
 			fmt.Println("Stats: ", statsResp)
@@ -262,10 +264,22 @@ func handleCommand(
 
 	case "count":
 		var count int64
+
 		defnID, _ := getDefnID(client, bucket, iname)
-		count, err = client.Count(uint64(defnID))
-		if err == nil {
-			fmt.Printf("Index %q/%q has %v entries\n", bucket, iname, count)
+		if cmd.equal != nil {
+			equals := []c.SecondaryKey{cmd.equal}
+			count, err := client.CountLookup(uint64(defnID), equals)
+			if err == nil {
+				fmt.Printf("Index %q/%q has %v entries\n", bucket, iname, count)
+				fmt.Println("CountLookup results:")
+			}
+
+		} else {
+			count, err = client.CountRange(uint64(defnID), low, high, incl)
+			if err == nil {
+				fmt.Printf("Index %q/%q has %v entries\n", bucket, iname, count)
+				fmt.Println("CountRange results:")
+			}
 		}
 
 	}
@@ -279,8 +293,7 @@ func scanCallback(res qclient.ResponseReader) bool {
 		fmt.Println("Error: ", err)
 	} else {
 		for i, pkey := range pkeys {
-			fmt.Printf("pkey %v:\n", pkey)
-			fmt.Printf("    skey %v\n", skeys[i])
+			fmt.Printf("%v ... %v\n", skeys[i], string(pkey))
 		}
 	}
 	return true
@@ -349,12 +362,20 @@ var sanityCommands = [][]string{
 	[]string{"-type", "list", "-bucket", "beer-sample"},
 	[]string{
 		"-type", "scan", "-bucket", "beer-sample", "-index", "index-city",
-		"-low", "[\"B\"]", "-high", "[\"D\"]", "-incl", "1", "-limit",
+		"-low", "[\"B\"]", "-high", "[\"D\"]", "-incl", "3", "-limit",
 		"1000000000",
 	},
 	[]string{
 		"-type", "scanAll", "-bucket", "beer-sample", "-index", "index-city",
 		"-limit", "10000",
+	},
+	[]string{
+		"-type", "count", "-bucket", "beer-sample", "-index", "index-city",
+		"-equal", "[\"Beersel\"]",
+	},
+	[]string{
+		"-type", "count", "-bucket", "beer-sample", "-index", "index-city",
+		"-low", "[\"A\"]", "-high", "[\"s\"]",
 	},
 	[]string{
 		"-type", "count", "-bucket", "beer-sample", "-index", "index-city",

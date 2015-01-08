@@ -325,6 +325,7 @@ func (m *StreamEndResponse) GetErr() *Error {
 // Count request to indexer.
 type CountRequest struct {
 	DefnID           *uint64 `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
+	Span             *Span   `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
@@ -337,6 +338,13 @@ func (m *CountRequest) GetDefnID() uint64 {
 		return *m.DefnID
 	}
 	return 0
+}
+
+func (m *CountRequest) GetSpan() *Span {
+	if m != nil {
+		return m.Span
+	}
+	return nil
 }
 
 // total number of entries in index.
@@ -365,9 +373,8 @@ func (m *CountResponse) GetErr() *Error {
 }
 
 type Span struct {
-	Range *Range `protobuf:"bytes,1,opt,name=range" json:"range,omitempty"`
-	// TODO: may we should rename `equal` to `equals` ?
-	Equal            [][]byte `protobuf:"bytes,2,rep,name=equal" json:"equal,omitempty"`
+	Range            *Range   `protobuf:"bytes,1,opt,name=range" json:"range,omitempty"`
+	Equals           [][]byte `protobuf:"bytes,2,rep,name=equals" json:"equals,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -382,9 +389,9 @@ func (m *Span) GetRange() *Range {
 	return nil
 }
 
-func (m *Span) GetEqual() [][]byte {
+func (m *Span) GetEquals() [][]byte {
 	if m != nil {
-		return m.Equal
+		return m.Equals
 	}
 	return nil
 }
