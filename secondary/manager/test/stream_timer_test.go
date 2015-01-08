@@ -12,10 +12,10 @@ package test
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
+	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"testing"
 	"time"
-	util "github.com/couchbase/indexing/secondary/manager/test/util"
 )
 
 // For this test, use Index Defn Id from 400 - 410
@@ -45,9 +45,9 @@ func TestStreamMgr_Timer(t *testing.T) {
 	common.SetLogLevel(common.LogLevelDebug)
 	util.TT = t
 
-	old_value := manager.NUM_VB	
-	manager.NUM_VB = 16 
-	defer func() {manager.NUM_VB = old_value}()
+	old_value := manager.NUM_VB
+	manager.NUM_VB = 16
+	defer func() { manager.NUM_VB = old_value }()
 
 	// Running test
 	runTimerTest()
@@ -55,8 +55,8 @@ func TestStreamMgr_Timer(t *testing.T) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Timer Test
-// 1) This test will create a new index.  
-// 2) Upon notifying of the new index, the fake projector will push a sync message to the stream manager.  
+// 1) This test will create a new index.
+// 2) Upon notifying of the new index, the fake projector will push a sync message to the stream manager.
 // 3) The fake projector will send another sync message after TIMESTAMP_PERSIST_INTERVAL
 // 4) read the timestamp from the respository and check to see if matches with the timer in memory
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -65,10 +65,10 @@ func runTimerTest() {
 
 	common.Infof("**** Run Timer Test **********************************************")
 
-	common.Infof("***** Start TestStreamMgr ") 
+	common.Infof("***** Start TestStreamMgr ")
 	/*
-	var requestAddr = "localhost:9885"
-	var leaderAddr = "localhost:9884"
+		var requestAddr = "localhost:9885"
+		var leaderAddr = "localhost:9884"
 	*/
 	var config = "./config.json"
 
@@ -79,13 +79,13 @@ func runTimerTest() {
 	env := new(timerTestProjectorClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
 	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin)
 	if err != nil {
 		util.TT.Fatal(err)
 	}
 	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
-	
+
 	mgr.SetTimestampPersistenceInterval(1)
 	defer mgr.SetTimestampPersistenceInterval(manager.TIMESTAMP_PERSIST_INTERVAL)
 
@@ -106,10 +106,10 @@ func runTimerTest() {
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Stop TestStreamMgr. Tearing down ") 
+	common.Infof("**** Stop TestStreamMgr. Tearing down ")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
-	
+
 	common.Infof("**** Finish Timer Test *************************************************")
 }
 
@@ -150,18 +150,18 @@ func runTimerTestReceiver(mgr *manager.IndexManager, ch chan *common.TsVbuuid, d
 		select {
 		case ts := <-ch:
 			if ts.Seqnos[10] == 406 {
-			
-				// wait to avoid race condition -- this is timing dependent.  
+
+				// wait to avoid race condition -- this is timing dependent.
 				time.Sleep(time.Duration(2000) * time.Millisecond)
-				
-			 	seqno, ok := mgr.GetStabilityTimestampForVb(common.MAINT_STREAM, "Default", uint16(10)) 
-			 	if !ok || seqno != ts.Seqnos[10] {
+
+				seqno, ok := mgr.GetStabilityTimestampForVb(common.MAINT_STREAM, "Default", uint16(10))
+				if !ok || seqno != ts.Seqnos[10] {
 					util.TT.Fatal("runTimerTestReceiver(): timestamp seqno does not match with repo.  %d != %d",
 						ts.Seqnos[10], seqno)
-			 	} else {
+				} else {
 					common.Infof("****** runTimerTestReceiver() receive correct stability timestamp")
-			 		return
-			 	}
+					return
+				}
 			}
 		case <-ticker.C:
 			common.Infof("****** runTimerTestReceiver() : timeout")
@@ -300,7 +300,7 @@ func (c *timerTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string
 	return newTs, nil
 }
 
-func (c *timerTestProjectorClient) RestartVbuckets(topic string, 
+func (c *timerTestProjectorClient) RestartVbuckets(topic string,
 	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
 	return nil, nil
 }

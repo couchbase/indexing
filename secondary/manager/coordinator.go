@@ -105,7 +105,7 @@ func (s *Coordinator) Terminate() {
 			co.Warnf("panic in Coordinator.Terminate() : %s.  Ignored.\n", r)
 		}
 	}()
-	
+
 	s.state.mutex.Lock()
 	defer s.state.mutex.Unlock()
 
@@ -728,17 +728,17 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 		return false
 	}
 
-	host, err := c.findNextAvailNodeForIndex()	
-    if err != nil {
-    	co.Debugf("Fail to find a host to store the index '%s'", defn.Name)
-    	return false
-    }
-    
+	host, err := c.findNextAvailNodeForIndex()
+	if err != nil {
+		co.Debugf("Fail to find a host to store the index '%s'", defn.Name)
+		return false
+	}
+
 	if err := c.repo.createIndexAndUpdateTopology(defn, host); err != nil {
 		co.Debugf("Coordinator.createIndexy() : createIndex fails. Reason = %s", err.Error())
-		return false	
+		return false
 	}
-	
+
 	return true
 }
 
@@ -752,14 +752,14 @@ func (c *Coordinator) deleteIndex(key string) bool {
 	id, err := indexDefnId(key)
 	if err != nil {
 		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
-		return false 
+		return false
 	}
-	
+
 	if err := c.repo.deleteIndexAndUpdateTopology(id); err != nil {
 		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}
-	
+
 	return true
 }
 

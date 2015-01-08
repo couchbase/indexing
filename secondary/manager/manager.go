@@ -11,11 +11,11 @@ package manager
 
 import (
 	//"fmt"
+	"fmt"
 	gometa "github.com/couchbase/gometa/common"
 	"github.com/couchbase/indexing/secondary/common"
 	"sync"
 	"time"
-	"fmt"
 )
 
 ///////////////////////////////////////////////////////
@@ -294,7 +294,7 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 	} else {
 		return m.repo.createIndexAndUpdateTopology(defn, m.dataport)
 	}
-	
+
 	return nil
 }
 
@@ -311,7 +311,7 @@ func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
 	} else {
 		return m.repo.deleteIndexAndUpdateTopology(defnId)
 	}
-	
+
 	return nil
 }
 

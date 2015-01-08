@@ -14,9 +14,9 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"sync"
 	"testing"
 	"time"
-	"sync"
 )
 
 // For this test, use Index Defn Id from 400 - 410
@@ -38,7 +38,7 @@ type deleteTestProjectorClient struct {
 }
 
 var delete_test_status map[uint64]*protobuf.Instance
-var delete_test_once sync.Once	
+var delete_test_once sync.Once
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Test Driver
@@ -50,9 +50,9 @@ func TestStreamMgr_Delete(t *testing.T) {
 	common.SetLogLevel(common.LogLevelDebug)
 	util.TT = t
 
-	old_value := manager.NUM_VB	
-	manager.NUM_VB = 16 
-	defer func() {manager.NUM_VB = old_value}()
+	old_value := manager.NUM_VB
+	manager.NUM_VB = 16
+	defer func() { manager.NUM_VB = old_value }()
 
 	// Running test
 	runDeleteTest()
@@ -75,10 +75,10 @@ func runDeleteTest() {
 	common.Infof("**** Run Delete Test *******************************************")
 	delete_test_status = make(map[uint64]*protobuf.Instance)
 
-	common.Infof("***** Start TestStreamMgr ") 
+	common.Infof("***** Start TestStreamMgr ")
 	/*
-	var requestAddr = "localhost:9885"
-	var leaderAddr = "localhost:9884"
+		var requestAddr = "localhost:9885"
+		var leaderAddr = "localhost:9884"
 	*/
 	var config = "./config.json"
 
@@ -89,13 +89,13 @@ func runDeleteTest() {
 	env := new(deleteTestProjectorClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
 	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin)
 	if err != nil {
 		util.TT.Fatal(err)
 	}
 	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
-	
+
 	common.Infof("Delete Test Cleanup ...")
 	cleanupStreamMgrDeleteTest(mgr)
 
@@ -118,10 +118,10 @@ func runDeleteTest() {
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Stop TestStreamMgr. Tearing down ") 
+	common.Infof("**** Stop TestStreamMgr. Tearing down ")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
-	
+
 	common.Infof("**** Finish Delete Test ***********************************************************")
 }
 
@@ -348,13 +348,13 @@ func (c *deleteTestProjectorClient) sendSync() {
 
 	// create an array of KeyVersions
 	payloads := make([]*common.VbKeyVersions, 0, 4000)
-	
-	delete_test_once.Do(func() {	
+
+	delete_test_once.Do(func() {
 		common.Infof("deleteTestProjectorClient.sendSync() sending streamBegin %v", c.server)
-		
+
 		// send StreamBegin for all vbuckets
 		for i := 0; i < manager.NUM_VB; i++ {
-			if i != 10 && i != 11 {	
+			if i != 10 && i != 11 {
 				payload := common.NewVbKeyVersions("Default", uint16(i) /* vb */, 1, 10)
 				kv := common.NewKeyVersions(1, []byte("document-name"), 1)
 				kv.AddStreamBegin()
@@ -386,23 +386,23 @@ func (c *deleteTestProjectorClient) sendSync() {
 		bucket := inst.GetIndexInstance().GetDefinition().GetBucket()
 		if bucket == "Default" {
 			if c.server == "127.0.0.1" {
-				seqno = 401 
+				seqno = 401
 				vb = 10
 			} else if c.server == "127.0.0.2" {
-				seqno = 402 
-				vb = 11 
+				seqno = 402
+				vb = 11
 			}
 		} else if bucket == "Defaultxx" {
 			if c.server == "127.0.0.1" {
-				seqno = 403 
-				vb = 12 
+				seqno = 403
+				vb = 12
 			} else if c.server == "127.0.0.2" {
 				seqno = 404
-				vb = 13 
+				vb = 13
 			}
 		}
 
-		common.Infof("deleteTestProjectorClient.sendSync() for node %v and bucket %v vbucket %v seqno %d", 
+		common.Infof("deleteTestProjectorClient.sendSync() for node %v and bucket %v vbucket %v seqno %d",
 			c.server, bucket, vb, seqno)
 
 		// Create Sync Message
@@ -441,8 +441,8 @@ func (c *deleteTestProjectorClient) MutationTopicRequest(topic, endpointType str
 	for i, inst := range instances {
 		response.InstanceIds[i] = inst.GetIndexInstance().GetInstId()
 	}
-	
-	response.ActiveTimestamps = nil 
+
+	response.ActiveTimestamps = nil
 	for _, ts := range reqTimestamps {
 		newTs := protobuf.NewTsVbuuid("default", ts.GetBucket(), manager.NUM_VB)
 		if c.server == "127.0.0.1" {
@@ -451,13 +451,13 @@ func (c *deleteTestProjectorClient) MutationTopicRequest(topic, endpointType str
 			}
 		}
 		if c.server == "127.0.0.2" {
-			for i := manager.NUM_VB/2; i < manager.NUM_VB; i++ {
+			for i := manager.NUM_VB / 2; i < manager.NUM_VB; i++ {
 				newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
 			}
 		}
 		response.ActiveTimestamps = append(response.ActiveTimestamps, newTs)
 	}
-	
+
 	response.RollbackTimestamps = nil
 	response.Err = nil
 
@@ -489,11 +489,11 @@ func (c *deleteTestProjectorClient) InitialRestartTimestamp(pooln, bucketn strin
 	return newTs, nil
 }
 
-func (c *deleteTestProjectorClient) RestartVbuckets(topic string, 
+func (c *deleteTestProjectorClient) RestartVbuckets(topic string,
 	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
 	return nil, nil
 }
-	
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // testProjectorClientFactory
 ////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -40,6 +40,8 @@ type IndexDefnDistribution struct {
 type IndexInstDistribution struct {
 	InstId     uint64                  `json:"instId,omitempty"`
 	State      uint32                  `json:"state,omitempty"`
+	StreamId   uint32                  `json:"steamId,omitempty"`
+	Error      string                  `json:"error,omitempty"`
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
 }
 
@@ -190,6 +192,39 @@ func (t *IndexTopology) UpdateStateForIndexInstByDefn(defnId common.IndexDefnId,
 				t.Definitions[i].Instances[j].State = uint32(state)
 				common.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
 					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
+			}
+		}
+	}
+}
+
+//
+// Update StreamId on instance
+//
+func (t *IndexTopology) UpdateStreamForIndexInstByDefn(defnId common.IndexDefnId, stream common.StreamId) {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				t.Definitions[i].Instances[j].StreamId = uint32(stream)
+				common.Debugf("IndexTopology.UpdateStreamForIndexInstByDefn(): Update index '%v' inst '%v stream to '%v'",
+					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].StreamId)
+			}
+		}
+	}
+}
+
+//
+// Set Error on instance
+//
+func (t *IndexTopology) SetErrorForIndexInstByDefn(defnId common.IndexDefnId, errorStr string) {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				t.Definitions[i].Instances[j].State = uint32(common.INDEX_STATE_ERROR)
+				t.Definitions[i].Instances[j].Error = errorStr
+				common.Debugf("IndexTopology.SetErrorForIndexInstByDefn(): Set error for index '%v' inst '%v.  Error = '%v'",
+					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Error)
 			}
 		}
 	}

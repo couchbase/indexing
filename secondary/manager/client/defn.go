@@ -40,6 +40,8 @@ type IndexDefnDistribution struct {
 type IndexInstDistribution struct {
 	InstId     uint64                  `json:"instId,omitempty"`
 	State      uint32                  `json:"state,omitempty"`
+	StreamId   uint32                  `json:"streamId,omitempty"`
+	Error      string                  `json:"error,omitempty"`
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
 }
 

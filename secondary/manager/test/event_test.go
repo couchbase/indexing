@@ -27,9 +27,9 @@ func TestEventMgr(t *testing.T) {
 	common.Infof("Start TestEventMgr *********************************************************")
 
 	/*
-	var requestAddr = "localhost:9885"
-	var leaderAddr = "localhost:9884"
-	var config = "./config.json"
+		var requestAddr = "localhost:9885"
+		var leaderAddr = "localhost:9884"
+		var config = "./config.json"
 	*/
 
 	common.Infof("Start Index Manager")
@@ -37,7 +37,7 @@ func TestEventMgr(t *testing.T) {
 	env := new(util.TestDefaultClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
 	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin)
 	if err != nil {
 		t.Fatal(err)
 	}

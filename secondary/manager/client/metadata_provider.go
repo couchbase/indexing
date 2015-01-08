@@ -38,7 +38,7 @@ type MetadataProvider struct {
 type metadataRepo struct {
 	definitions map[c.IndexDefnId]*c.IndexDefn
 	instances   map[c.IndexDefnId]*IndexInstDistribution
-	indices 	map[c.IndexDefnId]*IndexMetadata
+	indices     map[c.IndexDefnId]*IndexMetadata
 	mutex       sync.Mutex
 }
 
@@ -56,13 +56,13 @@ type watcher struct {
 }
 
 type IndexMetadata struct {
-	Definition 	*c.IndexDefn
-	Instances   []*InstanceDefn
+	Definition *c.IndexDefn
+	Instances  []*InstanceDefn
 }
 
 type InstanceDefn struct {
-	InstId c.IndexInstId 
-	State c.IndexState
+	InstId c.IndexInstId
+	State  c.IndexState
 	Endpts []c.Endpoint
 }
 
@@ -252,8 +252,8 @@ func newMetadataRepo() *metadataRepo {
 
 	return &metadataRepo{
 		definitions: make(map[c.IndexDefnId]*c.IndexDefn),
-		instances: make(map[c.IndexDefnId]*IndexInstDistribution),
-		indices : make(map[c.IndexDefnId]*IndexMetadata)}
+		instances:   make(map[c.IndexDefnId]*IndexInstDistribution),
+		indices:     make(map[c.IndexDefnId]*IndexMetadata)}
 }
 
 func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
@@ -262,8 +262,8 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 	defer r.mutex.Unlock()
 
 	r.definitions[defn.DefnId] = defn
-	r.indices[defn.DefnId] = r.makeIndexMetadata(defn)	
-	
+	r.indices[defn.DefnId] = r.makeIndexMetadata(defn)
+
 	inst, ok := r.instances[defn.DefnId]
 	if ok {
 		r.updateIndexMetadata(defn.DefnId, inst)
@@ -316,24 +316,24 @@ func (r *metadataRepo) unmarshallAndAddInst(content []byte) error {
 
 func (r *metadataRepo) makeIndexMetadata(defn *c.IndexDefn) *IndexMetadata {
 
-	return &IndexMetadata{Definition : defn, 
-			Instances : nil}
+	return &IndexMetadata{Definition: defn,
+		Instances: nil}
 }
 
 func (r *metadataRepo) updateIndexMetadata(defnId c.IndexDefnId, inst *IndexInstDistribution) {
 
-	meta, ok :=	r.indices[defnId]
+	meta, ok := r.indices[defnId]
 	if ok {
 		idxInst := new(InstanceDefn)
 		idxInst.InstId = c.IndexInstId(inst.InstId)
 		idxInst.State = c.IndexState(inst.State)
-		
+
 		for _, partition := range inst.Partitions {
 			for _, slice := range partition.SinglePartition.Slices {
 				idxInst.Endpts = append(idxInst.Endpts, c.Endpoint(slice.Host))
 			}
 		}
-		meta.Instances = []*InstanceDefn{idxInst} 
+		meta.Instances = []*InstanceDefn{idxInst}
 	}
 }
 

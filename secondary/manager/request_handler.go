@@ -215,7 +215,7 @@ func (m *httpHandler) dropIndexRequest(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = m.mgr.HandleDeleteIndexDDL(id)
 	}
-	
+
 	if err == nil {
 		// No error, return success
 		res := IndexResponse{
