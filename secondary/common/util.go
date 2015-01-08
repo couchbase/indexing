@@ -9,6 +9,7 @@ import "os"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
+import "github.com/couchbase/indexing/secondary/dcp/transport/client"
 
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the
 // order of `strs` in the result.
@@ -190,10 +191,40 @@ func OpError(err error, vals []interface{}, idx int) error {
 	return vals[idx].(error)
 }
 
+// cbauth admin authentication helper
+// Uses default cbauth env variables internally to provide auth creds
+type cbAuthHandler struct {
+	hostport string
+	bucket   string
+}
+
+func (ah *cbAuthHandler) GetCredentials() (string, string) {
+	u, p, err := cbauth.GetHTTPServiceAuth(ah.hostport)
+	if err != nil {
+		panic(err)
+	}
+
+	return u, p
+}
+
+func (ah *cbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.Client) error {
+	u, p, err := cbauth.GetMemcachedServiceAuth(host)
+	if err != nil {
+		panic(err)
+	}
+	_, err = conn.Auth(u, p)
+	_, err = conn.SelectBucket(ah.bucket)
+	return err
+}
+
 // ConnectBucket will instantiate a couchbase-bucket instance with cluster.
 // caller's responsibility to close the bucket.
 func ConnectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
-	couch, err := couchbase.Connect("http://" + cluster)
+	ah := &cbAuthHandler{
+		hostport: cluster,
+		bucket:   bucketn,
+	}
+	couch, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
 	if err != nil {
 		return nil, err
 	}
