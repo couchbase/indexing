@@ -4,6 +4,63 @@
 **maxVbuckets** (int)
     number of vbuckets configured in KV
 
+**endpoint.dataport.bufferSize** (int)
+    number of entries to buffer before flushing it, where each entry is for a vbucket's set of mutations that was flushed by the endpoint.
+
+**endpoint.dataport.bufferTimeout** (int)
+    timeout in milliseconds, to flush vbucket-mutations from endpoint
+
+**endpoint.dataport.harakiriTimeout** (int)
+    timeout in milliseconds, after which endpoint will commit harakiri if not activity
+
+**endpoint.dataport.keyChanSize** (int)
+    channel size of dataport endpoints data input
+
+**endpoint.dataport.maxPayload** (int)
+    maximum payload length, in bytes, for transmission data from router to downstream client
+
+**endpoint.dataport.remoteBlock** (bool)
+    should dataport endpoint block when remote is slow ?
+
+**indexer.adminPort** (string)
+    port for index ddl and status operations
+
+**indexer.clusterAddr** (string)
+    Local cluster manager address
+
+**indexer.enableManager** (bool)
+    Enable index manager
+
+**indexer.numVbuckets** (int)
+    Number of vbuckets
+
+**indexer.scanPort** (string)
+    port for index scan operations
+
+**indexer.scanTimeout** (int)
+    timeout, in milliseconds, timeout for index scan processing
+
+**indexer.storage_dir** (string)
+    Index file storage directory
+
+**indexer.streamCatchupPort** (string)
+    port for catchup stream
+
+**indexer.streamInitPort** (string)
+    port for inital build stream
+
+**indexer.streamMaintPort** (string)
+    port for maintenance stream
+
+**indexer.compaction.interval** (int)
+    Compaction poll interval in seconds
+
+**indexer.compaction.minFrag** (int)
+    Compaction fragmentation threshold percentage
+
+**indexer.compaction.minSize** (uint64)
+    Compaction min file size
+
 **log.ignore** (bool)
     ignores all logging, irrespective of the log-level
 
@@ -12,6 +69,12 @@
 
 **projector.clusterAddr** (string)
     KV cluster's address to be used by projector
+
+**projector.colocate** (bool)
+    Whether projector will be colocated with KV. In which case `kvaddrs` specified above will be discarded
+
+**projector.feedChanSize** (int)
+    channel size for feed's control path and back path.
 
 **projector.feedWaitStreamEndTimeout** (int)
     timeout, in milliseconds, to await a response for StreamEnd
@@ -32,10 +95,10 @@
     RouterEndpointFactory callback to generate endpoint instances to push data to downstream
 
 **projector.vbucketSyncTimeout** (int)
-    timeout, in milliseconds, is for sending periodic Sync messages for
+    timeout, in milliseconds, for sending periodic Sync messages.
 
 **projector.adminport.listenAddr** (string)
-    http bind address for this projector's adminport
+    projector's adminport address listen for request.
 
 **projector.adminport.maxHeaderBytes** (int)
     in bytes, is max. length of adminport http header used by projector
@@ -61,29 +124,8 @@
 **projector.client.retryInterval** (int)
     retryInterval, in milliseconds, when connection refused by server
 
-**projector.dataport.client.bufferTimeout** (int)
-    timeout in milliseconds, to flush endpoint buffer to remote
-
-**projector.dataport.client.genServerChanSize** (int)
-    request channel size of projector-dataport-client's gen-server routine
-
-**projector.dataport.client.harakiriTimeout** (int)
-    timeout in milliseconds, after which endpoint will commit harakiri if not activity
-
-**projector.dataport.client.keyChanSize** (int)
-    channel size of dataport endpoints data input
-
-**projector.dataport.client.maxPayload** (int)
-    maximum payload length, in bytes, for transmission data from router to downstream client
-
-**projector.dataport.client.mutationChanSize** (int)
-    channel size of projector-dataport-client's data path routine
-
-**projector.dataport.client.noRemoteBlock** (bool)
-    should dataport endpoint block when remote is slow ?
-
-**projector.dataport.client.parConnections** (int)
-    number of parallel connections to open with remote
+**projector.client.urlPrefix** (string)
+    url prefix (script-path) for adminport used by projector
 
 **projector.dataport.indexer.genServerChanSize** (int)
     request channel size of indexer dataport's gen-server routine
@@ -123,6 +165,9 @@
 
 **queryport.indexer.readDeadline** (int)
     timeout, in milliseconds, is timeout while reading from socket
+
+**queryport.indexer.streamChanSize** (int)
+    size of the buffered channels used to stream request and response.
 
 **queryport.indexer.writeDeadline** (int)
     timeout, in milliseconds, is timeout while writing to socket
