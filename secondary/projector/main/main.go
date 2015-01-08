@@ -6,7 +6,9 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strings"
 
+	"github.com/couchbase/cbauth"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/projector"
@@ -19,6 +21,7 @@ var options struct {
 	kvaddrs   string
 	colocate  bool
 	logFile   string
+	auth      string
 	info      bool
 	debug     bool
 	trace     bool
@@ -33,6 +36,8 @@ func argParse() string {
 		"whether projector will be colocated with KV")
 	flag.StringVar(&options.logFile, "logFile", "",
 		"output logs to file default is stdout")
+	flag.StringVar(&options.auth, "auth", "",
+		"Auth user and password")
 	flag.BoolVar(&options.info, "info", false,
 		"enable info level logging")
 	flag.BoolVar(&options.debug, "debug", false,
@@ -64,6 +69,15 @@ func main() {
 	} else if options.info {
 		c.SetLogLevel(c.LogLevelInfo)
 	}
+
+	// setup cbauth
+	if options.auth != "" {
+		authURL := fmt.Sprintf("http://%s/_cbauth", cluster)
+		up := strings.Split(options.auth, ":")
+		authU, authP := up[0], up[1]
+		cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
+	}
+
 	if f := getlogFile(); f != nil {
 		log.Printf("Projector logging to %q\n", f.Name())
 		c.SetLogWriter(f)

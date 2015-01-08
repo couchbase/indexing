@@ -948,14 +948,17 @@ func (feed *Feed) getLocalVbuckets(pooln, bucketn string) ([]uint16, error) {
 	// gather vbnos based on colocation policy.
 	cinfo, err := c.NewClusterInfoCache(feed.cluster, pooln)
 	if err != nil {
+		c.Errorf("%v ClusterInfoCache(%v): %v\n", feed.logPrefix, bucketn, err)
 		return nil, err
 	}
 	if err := cinfo.Fetch(); err != nil {
+		c.Errorf("%v cinfo.Fetch(%v): %v\n", feed.logPrefix, bucketn, err)
 		return nil, err
 	}
 	nodeID := cinfo.GetCurrentNode()
 	vbnos32, err := cinfo.GetVBuckets(nodeID, bucketn)
 	if err != nil {
+		c.Errorf("%v cinfo.GetVBuckets(%v): %v\n", feed.logPrefix, bucketn, err)
 		return nil, err
 	}
 	vbnos := c.Vbno32to16(vbnos32)

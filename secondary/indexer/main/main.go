@@ -11,12 +11,15 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime/pprof"
+	"strings"
 
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/indexer"
 )
@@ -32,11 +35,20 @@ var (
 	streamMaintPort   = flag.String("streamMaintPort", "9104", "Index maintenance stream port")
 	storageDir        = flag.String("storageDir", "./", "Index file storage directory path")
 	enableManager     = flag.Bool("enable_manager", false, "Enable Index Manager")
+	auth              = flag.String("auth", "", "Auth user and password")
 )
 
 func main() {
 
 	flag.Parse()
+
+	// setup cbauth
+	if *auth != "" {
+		authURL := fmt.Sprintf("http://%s/_cbauth", *cluster)
+		up := strings.Split(*auth, ":")
+		authU, authP := up[0], up[1]
+		cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
+	}
 
 	go dumpOnSignalForPlatform()
 	go common.ExitOnStdinClose()

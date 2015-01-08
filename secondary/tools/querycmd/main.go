@@ -88,7 +88,7 @@ func parseArgs(arguments []string) (*Command, []string) {
 	fset.StringVar(&cmdOptions.opType, "type", "scanAll", "Index command (scan|stats|scanAll|count|create|drop|list)")
 	fset.StringVar(&cmdOptions.indexName, "index", "", "Index name")
 	fset.StringVar(&cmdOptions.bucket, "bucket", "default", "Bucket name")
-	flag.StringVar(&cmdOptions.auth, "auth", "Administrator:asdasd", "Auth user and password")
+	fset.StringVar(&cmdOptions.auth, "auth", "Administrator:asdasd", "Auth user and password")
 	// options for create-index
 	fset.StringVar(&cmdOptions.using, "using", "gsi", "using clause for create index")
 	fset.StringVar(&cmdOptions.exprType, "exprType", "N1QL", "type of expression for create index")
@@ -358,6 +358,9 @@ var sanityCommands = [][]string{
 	},
 	[]string{
 		"-type", "count", "-bucket", "beer-sample", "-index", "index-city",
+	},
+	[]string{
+		"-type", "drop", "-bucket", "beer-sample", "-index", "index-city",
 	},
 }
 
