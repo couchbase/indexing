@@ -158,8 +158,7 @@ func (c *GsiClient) DropIndex(defnID common.IndexDefnId) error {
 func (c *GsiClient) LookupStatistics(
 	defnID uint64, value common.SecondaryKey) (common.IndexStatistics, error) {
 
-	// TODO: implementation is only for cbq-bridge.
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
 	if !ok {
 		return nil, ErrorNoHost
 	}
@@ -172,8 +171,7 @@ func (c *GsiClient) RangeStatistics(
 	defnID uint64, low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
-	// TODO: implementation is only for cbq-bridge.
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
 	if !ok {
 		return nil, ErrorNoHost
 	}
@@ -186,8 +184,7 @@ func (c *GsiClient) Lookup(
 	defnID uint64, values []common.SecondaryKey,
 	distinct bool, limit int64, callb ResponseHandler) error {
 
-	// TODO: implementation is only for cbq-bridge.
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
 	if !ok {
 		return ErrorNoHost
 	}
@@ -201,8 +198,7 @@ func (c *GsiClient) Range(
 	inclusion Inclusion, distinct bool, limit int64,
 	callb ResponseHandler) error {
 
-	// TODO: implementation is only for cbq-bridge.
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
 	if !ok {
 		return ErrorNoHost
 	}
@@ -214,8 +210,7 @@ func (c *GsiClient) Range(
 func (c *GsiClient) ScanAll(
 	defnID uint64, limit int64, callb ResponseHandler) error {
 
-	// TODO: implementation is only for cbq-bridge.
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
 	if !ok {
 		return ErrorNoHost
 	}
@@ -225,8 +220,7 @@ func (c *GsiClient) ScanAll(
 
 // Count of all entries in index.
 func (c *GsiClient) Count(defnID uint64) (int64, error) {
-	// TODO: implementation is only for cbq-bridge.
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(0))
+	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
 	if !ok {
 		return 0, ErrorNoHost
 	}

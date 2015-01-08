@@ -1,6 +1,7 @@
 package client
 
 import "sync"
+import "fmt"
 
 import common "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
@@ -61,9 +62,19 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	defer b.rw.Unlock()
 	b.topology = make(map[string][]*mclient.IndexMetadata)
 	// gather topology of each index.
-	// TODO: how to gather topology from each index.
-	//for _, index := range indexes {
-	//}
+	for _, index := range indexes {
+		for _, instance := range index.Instances {
+			for _, queryport := range instance.Endpts {
+				adminport := b.queryport2adminport(string(queryport))
+				sl, ok := b.topology[adminport]
+				if !ok {
+					sl = make([]*mclient.IndexMetadata, 0)
+				}
+				sl = append(sl, index)
+				b.topology[adminport] = sl
+			}
+		}
+	}
 	return indexes, nil
 }
 
@@ -152,6 +163,17 @@ func (b *metadataClient) getNode(
 		}
 	}
 	return "", false
+}
+
+// given queryport fetch the corresponding adminport for the indexer node.
+func (b *metadataClient) queryport2adminport(queryport string) string {
+	for adminport, qport := range b.queryports {
+		if qport == queryport {
+			return adminport
+		}
+	}
+	panic(fmt.Errorf("cannot find adminport for %v", queryport))
+	return ""
 }
 
 // return adminports for all known indexers.
