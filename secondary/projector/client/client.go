@@ -98,6 +98,18 @@ var ErrorInconsistentFeed = errors.New("feed.inconsistentFeed")
 // ErrorFeeder
 var ErrorFeeder = errors.New("feed.feeder")
 
+// ErrorDCPConnection
+var ErrorDCPConnection = errors.New("feed.dcpConnection")
+
+// ErrorDCPPool
+var ErrorDCPPool = errors.New("feed.dcpPool")
+
+// ErrorDCPBucket
+var ErrorDCPBucket = errors.New("feed.dcpBucket")
+
+// ErrorClusterInfo
+var ErrorClusterInfo = errors.New("feed.clusterInfo")
+
 // ErrorNotMyVbucket
 var ErrorNotMyVbucket = errors.New("feed.notMyVbucket")
 

@@ -4,6 +4,7 @@ import "fmt"
 import "time"
 import "runtime/debug"
 
+import "github.com/couchbase/indexing/secondary/dcp"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -453,8 +454,8 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
+			err = e
 			feed.cleanupBucket(bucketn, false)
-			err = projC.ErrorFeeder
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -477,8 +478,8 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 		// start upstream, after filtering out remove vbuckets.
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
 		if e != nil { // all feed errors are fatal, skip this bucket.
+			err = e
 			feed.cleanupBucket(bucketn, false)
-			err = projC.ErrorFeeder
 			continue
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
@@ -521,8 +522,8 @@ func (feed *Feed) restartVbuckets(
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
+			err = e
 			feed.cleanupBucket(bucketn, false)
-			err = projC.ErrorFeeder
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -549,8 +550,8 @@ func (feed *Feed) restartVbuckets(
 		// (re)start the upstream, after filtering out remote vbuckets.
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
 		if e != nil { // all feed errors are fatal, skip this bucket.
+			err = e
 			feed.cleanupBucket(bucketn, false)
-			err = projC.ErrorFeeder
 			continue
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
@@ -594,8 +595,8 @@ func (feed *Feed) shutdownVbuckets(
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
+			err = e
 			feed.cleanupBucket(bucketn, false)
-			err = projC.ErrorFeeder
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -612,8 +613,8 @@ func (feed *Feed) shutdownVbuckets(
 		// shutdown upstream
 		_, e = feed.bucketFeed(opaque, true, false, ts)
 		if e != nil {
+			err = e
 			feed.cleanupBucket(bucketn, false)
-			err = projC.ErrorFeeder
 			continue
 		}
 		endTs, _, e := feed.waitStreamEnds(opaque, bucketn, ts)
@@ -651,8 +652,8 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
+			err = e
 			feed.cleanupBucket(bucketn, false)
-			err = projC.ErrorFeeder
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -675,8 +676,8 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 		// start upstream
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
 		if e != nil { // all feed errors are fatal, skip this bucket.
+			err = e
 			feed.cleanupBucket(bucketn, false)
-			err = projC.ErrorFeeder
 			continue
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
@@ -878,9 +879,8 @@ func (feed *Feed) bucketFeed(
 
 	feeder, ok = feed.feeders[bucketn]
 	if !ok { // the feed is being started for the first time
-		bucket, err := c.ConnectBucket(feed.cluster, pooln, bucketn)
+		bucket, err := connectBucket(feed.cluster, pooln, bucketn)
 		if err != nil {
-			feed.errorf("ConnectBucket()", bucketn, err)
 			return nil, err
 		}
 		name := fmt.Sprintf("proj-%s-%s", bucket.Name, feed.topic)
@@ -913,9 +913,8 @@ func (feed *Feed) bucketFeed(
 func (feed *Feed) bucketDetails(
 	pooln, bucketn string, vbnos []uint16) ([]uint64, error) {
 
-	bucket, err := c.ConnectBucket(feed.cluster, pooln, bucketn)
+	bucket, err := connectBucket(feed.cluster, pooln, bucketn)
 	if err != nil {
-		feed.errorf("ConnectBucket()", bucketn, err)
 		return nil, err
 	}
 	defer bucket.Close()
@@ -945,25 +944,26 @@ func (feed *Feed) bucketDetails(
 }
 
 func (feed *Feed) getLocalVbuckets(pooln, bucketn string) ([]uint16, error) {
+	prefix := feed.logPrefix
 	// gather vbnos based on colocation policy.
 	cinfo, err := c.NewClusterInfoCache(feed.cluster, pooln)
 	if err != nil {
-		c.Errorf("%v ClusterInfoCache(%v): %v\n", feed.logPrefix, bucketn, err)
-		return nil, err
+		c.Errorf("%v ClusterInfoCache(`%v`): %v\n", prefix, bucketn, err)
+		return nil, ErrorClusterInfo
 	}
 	if err := cinfo.Fetch(); err != nil {
-		c.Errorf("%v cinfo.Fetch(%v): %v\n", feed.logPrefix, bucketn, err)
-		return nil, err
+		c.Errorf("%v cinfo.Fetch(`%v`): %v\n", prefix, bucketn, err)
+		return nil, ErrorClusterInfo
 	}
 	nodeID := cinfo.GetCurrentNode()
 	vbnos32, err := cinfo.GetVBuckets(nodeID, bucketn)
 	if err != nil {
-		c.Errorf("%v cinfo.GetVBuckets(%v): %v\n", feed.logPrefix, bucketn, err)
-		return nil, err
+		c.Errorf("%v cinfo.GetVBuckets(`%v`): %v\n", prefix, bucketn, err)
+		return nil, ErrorClusterInfo
 	}
 	vbnos := c.Vbno32to16(vbnos32)
-	c.Infof("%v vbmap {%v,%v} - %v\n", feed.logPrefix, pooln, bucketn, vbnos)
-	return vbnos, err
+	c.Infof("%v vbmap {%v,%v} - %v\n", prefix, pooln, bucketn, vbnos)
+	return vbnos, nil
 }
 
 // start data-path each kvaddr
@@ -1232,4 +1232,25 @@ func (feed *Feed) debugf(prefix, bucketn string, val interface{}) {
 
 func (feed *Feed) infof(prefix, bucketn string, val interface{}) {
 	c.Infof("%v %v for %q: %v\n", feed.logPrefix, prefix, bucketn, val)
+}
+
+// connectBucket will instantiate a couchbase-bucket instance with cluster.
+// caller's responsibility to close the bucket.
+func (feed *Feed) connectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
+	couch, err := couchbase.Connect("http://" + cluster)
+	if err != nil {
+		feed.errorf("connectBucket(`%v`, `%v`)", pooln, bucketn, err)
+		return nil, ErrorDCPConnection
+	}
+	pool, err := couch.GetPool(pooln)
+	if err != nil {
+		feed.errorf("GetPool(`%v`)", pooln, err)
+		return nil, ErrorDCPPool
+	}
+	bucket, err := pool.GetBucket(bucketn)
+	if err != nil {
+		feed.errorf("GetBucket(`%v`)", bucketn, err)
+		return nil, ErrorDCPBucket
+	}
+	return bucket, nil
 }
