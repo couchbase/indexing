@@ -38,6 +38,9 @@ type RepoRef interface {
 	deleteMeta(name string) error
 	newIterator() (*MetaIterator, error)
 	registerNotifier(notifier MetadataNotifier)
+	setLocalValue(name string, value string) error
+	getLocalValue(name string) (string, error)
+	deleteLocalValue(name string) error
 	close()
 }
 
@@ -111,6 +114,27 @@ func (c *MetadataRepo) RegisterNotifier(notifier MetadataNotifier) {
 	defer c.mutex.Unlock()
 
 	c.repo.registerNotifier(notifier)
+}
+
+func (c *MetadataRepo) SetLocalValue(key string, value string) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.repo.setLocalValue(key, value)
+}
+
+func (c *MetadataRepo) DeleteLocalValue(key string) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.repo.deleteLocalValue(key)
+}
+
+func (c *MetadataRepo) GetLocalValue(key string) (string, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.repo.getLocalValue(key)
 }
 
 func (c *MetadataRepo) Close() {
@@ -418,6 +442,18 @@ func (c *LocalRepoRef) registerNotifier(notifier MetadataNotifier) {
 	c.notifier = notifier
 }
 
+func (c *LocalRepoRef) setLocalValue(key string, value string) error {
+	return c.server.SetConfigValue(key, value)
+}
+
+func (c *LocalRepoRef) deleteLocalValue(key string) error {
+	return c.server.DeleteConfigValue(key)
+}
+
+func (c *LocalRepoRef) getLocalValue(key string) (string, error) {
+	return c.server.GetConfigValue(key)
+}
+
 ///////////////////////////////////////////////////////
 // private function : RemoteRepoRef
 ///////////////////////////////////////////////////////
@@ -553,6 +589,18 @@ func (c *RemoteRepoRef) close() {
 }
 
 func (c *RemoteRepoRef) registerNotifier(notifier MetadataNotifier) {
+	panic("Function not supported")
+}
+
+func (c *RemoteRepoRef) setLocalValue(key string, value string) error {
+	panic("Function not supported")
+}
+
+func (c *RemoteRepoRef) deleteLocalValue(key string) error {
+	panic("Function not supported")
+}
+
+func (c *RemoteRepoRef) getLocalValue(key string) (string, error) {
 	panic("Function not supported")
 }
 

@@ -194,6 +194,20 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 	}
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
+	
+	// test loal value
+	
+	if err := repo.SetLocalValue("testLocalValue1", "testLocalValue1"); err != nil {
+		t.Fatal("Fail to set local value" + err.Error())
+	}
+	
+	value, err := repo.GetLocalValue("testLocalValue1")
+	if err != nil {
+		t.Fatal("Fail to set local value" + err.Error())
+	}
+	if value != "testLocalValue1" {
+		t.Fatal("Fail to set local value : Return value is different")
+	}
 
 	common.Infof("Stop TestMetadataRepo. Tearing down *********************************************************")
 

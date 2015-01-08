@@ -189,6 +189,18 @@ func (m *IndexManager) RegisterNotifier(notifier MetadataNotifier) {
 	m.repo.RegisterNotifier(notifier)
 }
 
+func (m *IndexManager) SetLocalValue(key string, value string) error {
+	return m.repo.SetLocalValue(key, value)
+}
+
+func (m *IndexManager) DeleteLocalValue(key string) error {
+	return m.repo.DeleteLocalValue(key)
+}
+
+func (m *IndexManager) GetLocalValue(key string) (string, error) {
+	return m.repo.GetLocalValue(key)
+}
+
 //
 // Get an index definiton by id
 //
