@@ -55,6 +55,10 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 				category: CLUSTER_MGR,
 				cause:    err}}
 	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
 	if err := cinfo.Fetch(); err != nil {
 		common.Errorf("ClustMgrAgent::Fail to init ClusterInfoCache : %v", err)
 		return nil, &MsgError{
@@ -119,6 +123,7 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 				category: CLUSTER_MGR,
 				cause:    err}}
 	}
+
 	//start clustMgrAgent loop which listens to commands from its supervisor
 	go c.run()
 
