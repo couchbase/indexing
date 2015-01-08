@@ -45,6 +45,12 @@ type IndexManager struct {
 	isClosed bool
 }
 
+type MetadataNotifier interface {
+	OnIndexCreate(*common.IndexDefn) error
+	OnIndexDelete(common.IndexDefnId) error
+	OnTopologyUpdate(*IndexTopology) error
+}
+
 ///////////////////////////////////////////////////////
 // public function
 ///////////////////////////////////////////////////////
@@ -178,6 +184,10 @@ func (m *IndexManager) Close() {
 ///////////////////////////////////////////////////////
 // public function - Metadata Operation
 ///////////////////////////////////////////////////////
+
+func (m *IndexManager) RegisterNotifier(notifier MetadataNotifier) {
+	m.repo.RegisterNotifier(notifier)
+}
 
 //
 // Get an index definiton by id

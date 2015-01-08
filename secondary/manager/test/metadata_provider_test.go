@@ -19,6 +19,11 @@ import (
 	"time"
 )
 
+type notifier struct {
+	hasCreated bool
+	hasDeleted bool
+}
+
 // For this test, use Index Defn Id from 100 - 110
 func TestMetadataProvider(t *testing.T) {
 
@@ -81,6 +86,9 @@ func TestMetadataProvider(t *testing.T) {
 	}
 
 	common.Infof("Change Data *********************************************************")
+	
+	notifier := &notifier{hasCreated : false, hasDeleted : false}
+	mgr.RegisterNotifier(notifier)
 
 	newDefnId, err := provider.CreateIndex("metadata_provider_test_102", "Default", common.ForestDB,
 		common.N1QL, "Testing", "Testing", msgAddr, []string{"Testing"}, false)
@@ -108,7 +116,17 @@ func TestMetadataProvider(t *testing.T) {
 		t.Fatal(fmt.Sprintf("Cannot Found Index Defn %d from MetadataProvider", newDefnId))
 	}
 	common.Infof("Found Index Defn %d", newDefnId)
+	
+	if !notifier.hasCreated {
+		t.Fatal(fmt.Sprintf("Does not recieve notification for creating index %s", newDefnId))
+	}
+	common.Infof(fmt.Sprintf("Recieve notification for creating index %s", newDefnId))
 
+	if !notifier.hasDeleted {
+		t.Fatal("Does not recieve notification for deleting index 101")
+	}
+	common.Infof("Recieve notification for deleting index 101")
+	
 	common.Infof("Cleanup Test *********************************************************")
 
 	cleanupTest(mgr, t)
@@ -200,4 +218,18 @@ func cleanSingleIndex(mgr *manager.IndexManager, t *testing.T, id common.IndexDe
 			common.Infof("cleanupTest() :  cannot cleanup index defn %d.  ...", id)
 		}
 	}
+}
+
+func (n *notifier) OnIndexCreate(*common.IndexDefn) error {
+	n.hasCreated = true
+	return nil
+}
+
+func (n *notifier) OnIndexDelete(common.IndexDefnId) error {
+	n.hasDeleted = true
+	return nil
+}
+
+func (n *notifier) OnTopologyUpdate(*manager.IndexTopology) error {
+	return nil
 }

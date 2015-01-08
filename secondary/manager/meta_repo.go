@@ -15,6 +15,7 @@ import (
 	"fmt"
 	repo "github.com/couchbase/gometa/repository"
 	gometa "github.com/couchbase/gometa/server"
+	c "github.com/couchbase/gometa/common"
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
@@ -36,6 +37,7 @@ type RepoRef interface {
 	setMeta(name string, value []byte) error
 	deleteMeta(name string) error
 	newIterator() (*MetaIterator, error)
+	registerNotifier(notifier MetadataNotifier)
 	close()
 }
 
@@ -48,6 +50,7 @@ type RemoteRepoRef struct {
 type LocalRepoRef struct {
 	server   *gometa.EmbeddedServer
 	eventMgr *eventManager
+	notifier  MetadataNotifier
 }
 
 type MetaIterator struct {
@@ -99,9 +102,15 @@ func NewLocalMetadataRepo(msgAddr string, eventMgr *eventManager) (*MetadataRepo
 	if err != nil {
 		return nil, err
 	}
-	repo := &MetadataRepo{repo: ref,
-		isClosed: false}
+	repo := &MetadataRepo{repo: ref, isClosed: false}
 	return repo, nil
+}
+
+func (c *MetadataRepo) RegisterNotifier(notifier MetadataNotifier) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	
+	c.repo.registerNotifier(notifier)	
 }
 
 func (c *MetadataRepo) Close() {
@@ -342,12 +351,13 @@ func (i *MetaIterator) Close() {
 
 func newLocalRepoRef(msgAddr string, eventMgr *eventManager) (*LocalRepoRef, error) {
 
-	server, err := gometa.RunEmbeddedServer(msgAddr)
+	repoRef := &LocalRepoRef{eventMgr: eventMgr, notifier: nil}
+	server, err := gometa.RunEmbeddedServerWithNotifier(msgAddr, repoRef)
 	if err != nil {
 		return nil, err
 	}
 
-	repoRef := &LocalRepoRef{server: server, eventMgr: eventMgr}
+	repoRef.server = server
 	return repoRef, nil
 }
 
@@ -404,6 +414,10 @@ func getEventType(key string) EventType {
 	return evtType
 }
 
+func (c *LocalRepoRef) registerNotifier(notifier MetadataNotifier) {
+	c.notifier = notifier	
+}
+	
 ///////////////////////////////////////////////////////
 // private function : RemoteRepoRef
 ///////////////////////////////////////////////////////
@@ -538,6 +552,10 @@ func (c *RemoteRepoRef) close() {
 	}
 }
 
+func (c *RemoteRepoRef) registerNotifier(notifier MetadataNotifier) {
+	panic("Function not supported")
+}
+	
 ///////////////////////////////////////////////////////
 // private function
 ///////////////////////////////////////////////////////
@@ -944,4 +962,86 @@ func (m *MetadataRepo) addToGlobalTopologyIfNecessary(bucket string) error {
 	}
 
 	return nil
+}
+
+///////////////////////////////////////////////////////
+//  Interface : EventNotifier 
+///////////////////////////////////////////////////////
+
+func (m *LocalRepoRef) OnNewProposal(txnid c.Txnid, op c.OpCode, key string, content []byte) error {
+
+	if m.notifier == nil {
+		return nil
+	}
+
+	common.Debugf("LocalRepoRef.OnNewProposal(): key %s", key) 
+	
+	switch op {
+	case c.OPCODE_ADD:
+		if isIndexDefnKey(key) {
+			indexDefn, err := UnmarshallIndexDefn(content)
+			if err != nil {
+				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall index defn for key %s", key) 
+				return err
+			}
+			
+			return m.notifier.OnIndexCreate(indexDefn)
+			
+		} else if isIndexTopologyKey(key) {
+			topology, err := unmarshallIndexTopology(content) 
+			if err != nil {
+				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall topology for key %s", key) 
+				return err
+			}
+			
+			return m.notifier.OnTopologyUpdate(topology)
+		}
+		
+	case c.OPCODE_SET:
+		if isIndexDefnKey(key) {
+			indexDefn, err := UnmarshallIndexDefn(content)
+			if err != nil {
+				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall index defn for key %s", key) 
+				return err
+			}
+			
+			return m.notifier.OnIndexCreate(indexDefn)
+			
+		} else if isIndexTopologyKey(key) {
+			topology, err := unmarshallIndexTopology(content) 
+			if err != nil {
+				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall topology for key %s", key) 
+				return err
+			}
+			
+			return m.notifier.OnTopologyUpdate(topology)
+		}
+	
+	case c.OPCODE_DELETE:
+		if isIndexDefnKey(key) {
+		
+			i := strings.Index(key, "/")
+			if i != -1 && i < len(key)-1 {
+			
+				id, err := strconv.ParseUint(key[i+1:], 10, 64)
+				if err != nil {
+					common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall IndexDefnId key %s", key) 
+					return err
+				}
+				
+				return m.notifier.OnIndexDelete(common.IndexDefnId(id))
+				
+			} else {
+				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall IndexDefnId key %s", key) 
+				return NewError(ERROR_META_FAIL_TO_PARSE_INT, NORMAL, METADATA_REPO, nil, 
+					"MetadataRepo.OnNewProposal() : cannot parse index definition id")
+			}
+		}
+	}
+
+	return nil
+}
+
+func (m *LocalRepoRef) OnCommit(tnxid c.Txnid, key string) {
+	// nothing to do
 }
