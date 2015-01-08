@@ -43,6 +43,7 @@ var (
 	ErrKVRollbackForInitRequest = errors.New("KV Rollback Received For Initial Build Request")
 	ErrMaintStreamMissingBucket = errors.New("Bucket Missing in Maint Stream")
 	ErrInvalidStream            = errors.New("Invalid Stream")
+	ErrIndexerInRecovery        = errors.New("Indexer In Recovery")
 )
 
 type indexer struct {
@@ -94,6 +95,8 @@ type indexer struct {
 	config        common.Config
 
 	kvlock sync.Mutex //fine-grain lock for KVSender
+
+	enableManager bool
 }
 
 func NewIndexer(config common.Config) (Indexer, Message) {
@@ -141,14 +144,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.initStreamFlushMap()
 
 	var res Message
-	if idx.config["enableManager"].Bool() {
-		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, config)
-		if res.GetMsgType() != MSG_SUCCESS {
-			common.Errorf("Indexer::NewIndexer ClusterMgrAgent Init Error", res)
-			return nil, res
-		}
-	}
-
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
@@ -177,18 +172,29 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
+	idx.enableManager = idx.config["enableManager"].Bool()
+
+	if idx.enableManager {
+		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, config)
+		if res.GetMsgType() != MSG_SUCCESS {
+			common.Errorf("Indexer::NewIndexer ClusterMgrAgent Init Error", res)
+			return nil, res
+		}
+	}
+
 	//read persisted indexer state
 	if err := idx.bootstrap(); err != nil {
-		common.Fatalf("Indexer::Unable to Bootstrap Indexer from Meta File. " +
-			"Remove the file and try again.")
+		common.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
 		return nil, &MsgError{err: Error{cause: err}}
 	}
 
-	//Start CbqBridge
-	idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh, idx.indexInstMap, idx.config)
-	if res.GetMsgType() != MSG_SUCCESS {
-		common.Errorf("Indexer::NewIndexer CbqBridge Init Error", res)
-		return nil, res
+	if !idx.enableManager {
+		//Start CbqBridge
+		idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh, idx.indexInstMap, idx.config)
+		if res.GetMsgType() != MSG_SUCCESS {
+			common.Errorf("Indexer::NewIndexer CbqBridge Init Error", res)
+			return nil, res
+		}
 	}
 
 	//Register with Index Coordinator
@@ -430,51 +436,28 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 }
 
 func (idx *indexer) handleAdminMsgs(msg Message) {
-	enableManager := idx.config["enableManager"].Bool()
+
 	switch msg.GetMsgType() {
 
-	case CBQ_CREATE_INDEX_DDL:
-
-		if enableManager {
-			//send the msg to cluster mgr
-			idx.clustMgrAgentCmdCh <- msg
-			res := <-idx.clustMgrAgentCmdCh
-
-			//send response
-			respCh := msg.(*MsgCreateIndex).GetResponseChannel()
-			if respCh != nil {
-				respCh <- res
-			}
-		} else {
-			idx.handleCreateIndex(msg)
-		}
-
-	case CBQ_DROP_INDEX_DDL:
-
-		if enableManager {
-			//send the msg to cluster mgr
-			idx.clustMgrAgentCmdCh <- msg
-			res := <-idx.clustMgrAgentCmdCh
-
-			//send response
-			respCh := msg.(*MsgDropIndex).GetResponseChannel()
-			if respCh != nil {
-				respCh <- res
-			}
-		} else {
-			idx.handleDropIndex(msg)
-		}
-
-	case CLUST_MGR_CREATE_INDEX_DDL:
+	case CLUST_MGR_CREATE_INDEX_DDL,
+		CBQ_CREATE_INDEX_DDL:
 
 		idx.handleCreateIndex(msg)
 
-	case CLUST_MGR_DROP_INDEX_DDL:
+	case CLUST_MGR_DROP_INDEX_DDL,
+		CBQ_DROP_INDEX_DDL:
 
 		idx.handleDropIndex(msg)
 
+	case MSG_ERROR:
+
+		common.Fatalf("Indexer::handleAdminMsgs Fatal Error On Admin Channel %v", msg)
+		err := msg.(*MsgError).GetError()
+		common.CrashOnError(err.cause)
+
 	default:
 		common.Errorf("Indexer::handleAdminMsgs Unknown Message %v", msg)
+		common.CrashOnError(errors.New("Unknown Msg On Admin Channel"))
 
 	}
 
@@ -497,7 +480,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 			clientCh <- &MsgError{
 				err: Error{code: ERROR_INDEXER_IN_RECOVERY,
 					severity: FATAL,
-					cause:    errors.New("Indexer In Recovery"),
+					cause:    ErrIndexerInRecovery,
 					category: INDEXER}}
 
 		}
@@ -579,10 +562,21 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	//if initial build is not being done, send success response,
 	//otherwise success response will be sent when initial build gets done
-	if !initialBuildReqd {
+	if !initialBuildReqd || idx.enableManager {
 		clientCh <- &MsgSuccess{}
 	} else {
 		idx.bucketCreateClientChMap[indexInst.Defn.Bucket] = clientCh
+	}
+
+	//store updated status and streamId in meta store
+	if idx.enableManager {
+		if err := idx.updateMetaStateForIndexList([]common.IndexInst{indexInst}); err != nil {
+			common.CrashOnError(err)
+		}
+
+		if err := idx.updateMetaStreamIdForIndexList([]common.IndexInst{indexInst}); err != nil {
+			common.CrashOnError(err)
+		}
 	}
 
 }
@@ -622,7 +616,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 			clientCh <- &MsgError{
 				err: Error{code: ERROR_INDEXER_IN_RECOVERY,
 					severity: FATAL,
-					cause:    errors.New("Indexer In Recovery"),
+					cause:    ErrIndexerInRecovery,
 					category: INDEXER}}
 
 		}
@@ -784,11 +778,23 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 
-		if clientCh, ok := idx.bucketCreateClientChMap[bucket]; ok {
-			if clientCh != nil {
-				clientCh <- &MsgSuccess{}
+		//for cbq bridge, return response after merge is done and
+		//index is ready to query
+		if !idx.enableManager {
+			if clientCh, ok := idx.bucketCreateClientChMap[bucket]; ok {
+				if clientCh != nil {
+					clientCh <- &MsgSuccess{}
+				}
+				delete(idx.bucketCreateClientChMap, bucket)
 			}
-			delete(idx.bucketCreateClientChMap, bucket)
+		} else {
+
+			if err := idx.updateMetaStateForBucket(bucket); err != nil {
+				common.CrashOnError(err)
+			}
+			if err := idx.updateMetaStreamIdForBucket(bucket); err != nil {
+				common.CrashOnError(err)
+			}
 		}
 
 	default:
@@ -876,7 +882,7 @@ func (idx *indexer) shutdownWorkers() {
 	idx.adminMgrCmdCh <- &MsgGeneral{mType: ADMIN_MGR_SHUTDOWN}
 	<-idx.adminMgrCmdCh
 
-	if idx.config["enableManager"].Bool() {
+	if idx.enableManager {
 		//shutdown cluster manager
 		idx.clustMgrAgentCmdCh <- &MsgGeneral{mType: CLUST_MGR_AGENT_SHUTDOWN}
 		<-idx.clustMgrAgentCmdCh
@@ -1355,11 +1361,21 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	//if index is already in MAINT_STREAM, nothing more needs to be done
 	if streamId == common.MAINT_STREAM {
 
-		if clientCh, ok := idx.bucketCreateClientChMap[bucket]; ok {
-			if clientCh != nil {
-				clientCh <- &MsgSuccess{}
+		//for cbq bridge, return response as index is ready to query
+		if !idx.enableManager {
+			if clientCh, ok := idx.bucketCreateClientChMap[bucket]; ok {
+				if clientCh != nil {
+					clientCh <- &MsgSuccess{}
+				}
+				delete(idx.bucketCreateClientChMap, bucket)
 			}
-			delete(idx.bucketCreateClientChMap, bucket)
+		} else {
+			if err := idx.updateMetaStateForIndexList(indexList); err != nil {
+				common.CrashOnError(err)
+			}
+			if err := idx.updateMetaStreamIdForIndexList(indexList); err != nil {
+				common.CrashOnError(err)
+			}
 		}
 
 		return
@@ -2084,4 +2100,120 @@ func (idx *indexer) checkStreamRequestPending(streamId common.StreamId, bucket s
 	}
 
 	return false
+}
+
+func (idx *indexer) updateMetaStateForBucket(bucket string) error {
+
+	var indexList []common.IndexInst
+	for _, inst := range idx.indexInstMap {
+		if inst.Defn.Bucket == bucket {
+			indexList = append(indexList, inst)
+		}
+	}
+
+	if len(indexList) != 0 {
+		return idx.updateMetaStateForIndexList(indexList)
+	} else {
+		return nil
+	}
+
+}
+
+func (idx *indexer) updateMetaStateForIndexList(indexList []common.IndexInst) error {
+
+	msg := &MsgClustMgrUpdate{
+		mType:     CLUST_MGR_UPDATE_STATE_FOR_INDEX,
+		indexList: indexList}
+
+	return idx.sendMsgToClusterMgr(msg)
+
+}
+
+func (idx *indexer) updateMetaStreamIdForBucket(bucket string) error {
+
+	var indexList []common.IndexInst
+	for _, inst := range idx.indexInstMap {
+		if inst.Defn.Bucket == bucket {
+			indexList = append(indexList, inst)
+		}
+	}
+
+	if len(indexList) != 0 {
+		return idx.updateMetaStreamIdForIndexList(indexList)
+	} else {
+		return nil
+	}
+
+}
+
+func (idx *indexer) updateMetaStreamIdForIndexList(indexList []common.IndexInst) error {
+
+	msg := &MsgClustMgrUpdate{
+		mType:     CLUST_MGR_UPDATE_STREAM_FOR_INDEX,
+		indexList: indexList}
+
+	return idx.sendMsgToClusterMgr(msg)
+
+}
+
+func (idx *indexer) updateMetaErrorForBucket(bucket string, errStr string) error {
+
+	var indexList []common.IndexInst
+	for _, inst := range idx.indexInstMap {
+		if inst.Defn.Bucket == bucket {
+			indexList = append(indexList, inst)
+		}
+	}
+
+	if len(indexList) != 0 {
+		return idx.updateMetaErrorForIndexList(indexList, errStr)
+	} else {
+		return nil
+	}
+
+}
+
+func (idx *indexer) updateMetaErrorForIndexList(indexList []common.IndexInst, errStr string) error {
+
+	msg := &MsgClustMgrUpdate{
+		mType:     CLUST_MGR_UPDATE_ERROR_FOR_INDEX,
+		indexList: indexList,
+		errStr:    errStr,
+	}
+	return idx.sendMsgToClusterMgr(msg)
+}
+
+func (idx *indexer) sendMsgToClusterMgr(msg Message) error {
+
+	idx.clustMgrAgentCmdCh <- msg
+
+	if res, ok := <-idx.clustMgrAgentCmdCh; ok {
+
+		switch res.GetMsgType() {
+
+		case MSG_SUCCESS:
+			return nil
+
+		case MSG_ERROR:
+			common.Debugf("Indexer::sendMsgToClusterMgr Error "+
+				"from Cluster Manager %v", res)
+			err := res.(*MsgError).GetError()
+			return err.cause
+
+		default:
+			common.Debugf("Indexer::sendMsgToClusterMgr Unknown Response "+
+				"from Cluster Manager %v", res)
+			common.CrashOnError(errors.New("Unknown Response"))
+
+		}
+
+	} else {
+
+		common.Debugf("clustMgrAgent::sendMsgToClusterMgr Unexpected Channel Close " +
+			"from Cluster Manager")
+		common.CrashOnError(errors.New("Unknown Response"))
+
+	}
+
+	return nil
 }

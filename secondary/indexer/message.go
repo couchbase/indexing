@@ -77,6 +77,9 @@ const (
 	CLUST_MGR_AGENT_SHUTDOWN
 	CLUST_MGR_CREATE_INDEX_DDL
 	CLUST_MGR_DROP_INDEX_DDL
+	CLUST_MGR_UPDATE_STATE_FOR_INDEX
+	CLUST_MGR_UPDATE_STREAM_FOR_INDEX
+	CLUST_MGR_UPDATE_ERROR_FOR_INDEX
 
 	//CBQ_BRIDGE_SHUTDOWN
 	CBQ_BRIDGE_SHUTDOWN
@@ -844,6 +847,27 @@ func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
 }
 
+//CLUST_MGR_UPDATE_STATE_FOR_INDEX
+//CLUST_MGR_UPDATE_STREAM_FOR_INDEX
+//CLUST_MGR_UPDATE_ERROR_FOR_INDEX
+type MsgClustMgrUpdate struct {
+	mType     MsgType
+	indexList []common.IndexInst
+	errStr    string
+}
+
+func (m *MsgClustMgrUpdate) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgClustMgrUpdate) GetIndexList() []common.IndexInst {
+	return m.indexList
+}
+
+func (m *MsgClustMgrUpdate) GetErrorStr() string {
+	return m.errStr
+}
+
 //Helper function to return string for message type
 
 func (m MsgType) String() string {
@@ -972,6 +996,12 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_CREATE_INDEX_DDL"
 	case CLUST_MGR_DROP_INDEX_DDL:
 		return "CLUST_MGR_DROP_INDEX_DDL"
+	case CLUST_MGR_UPDATE_STATE_FOR_INDEX:
+		return "CLUST_MGR_UPDATE_STATE_FOR_INDEX"
+	case CLUST_MGR_UPDATE_STREAM_FOR_INDEX:
+		return "CLUST_MGR_UPDATE_STREAM_FOR_INDEX"
+	case CLUST_MGR_UPDATE_ERROR_FOR_INDEX:
+		return "CLUST_MGR_UPDATE_ERROR_FOR_INDEX"
 
 	case CBQ_CREATE_INDEX_DDL:
 		return "CBQ_CREATE_INDEX_DDL"
