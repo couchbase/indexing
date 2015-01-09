@@ -26,8 +26,8 @@ func init() {
 	flag.Parse()
 	clusterconfig = tc.GetClusterConfFromFile(configpath)
 	kvaddress = clusterconfig.KVAddress
-	indexManagementAddress = clusterconfig.IndexManagementAddress
-	indexScanAddress = clusterconfig.IndexScanAddress
+	indexManagementAddress = clusterconfig.KVAddress
+	indexScanAddress = clusterconfig.KVAddress
 
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	time.Sleep(5 * time.Second)

@@ -14,9 +14,10 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	var scanErr error
 	scanErr = nil
 	// ToDo: Create a client pool
-	client := qc.NewClient(qc.Remoteaddr(server), c.SystemConfig.SectionConfig("queryport.client.", true))
+	client := CreateClient(server)
+	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults = make(tc.ScanResponse)
-	connErr := client.Range(indexName, bucketName, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit, func(response qc.ResponseReader) bool {
+	connErr := client.Range(uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit, func(response qc.ResponseReader) bool {
 		if err := response.Error(); err != nil {
 			scanErr = err
 			return false
@@ -52,9 +53,10 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	var scanErr error
 	scanErr = nil
 	// ToDo: Create a client pool
-	client := qc.NewClient(qc.Remoteaddr(server), c.SystemConfig.SectionConfig("queryport.client.", true))
+	client := CreateClient(server)
+	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults = make(tc.ScanResponse)
-	connErr := client.Lookup(indexName, bucketName, []c.SecondaryKey{values}, distinct, limit, func(response qc.ResponseReader) bool {
+	connErr := client.Lookup(uint64(defnID), []c.SecondaryKey{values}, distinct, limit, func(response qc.ResponseReader) bool {
 		if err := response.Error(); err != nil {
 			scanErr = err
 			return false

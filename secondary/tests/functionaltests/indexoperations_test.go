@@ -141,8 +141,7 @@ func TestCreateDuplicateIndex(t *testing.T) {
 // Negative test - Drop a secondary index that doesnt exist
 func TestDropNonExistingIndex(t *testing.T) {
 	fmt.Println("In TestDropNonExistingIndex()")
-	var indexDefnId = "index_IDontExist"
-	err := secondaryindex.DropSecondaryIndexByID(indexDefnId, indexManagementAddress)
+	err := secondaryindex.DropSecondaryIndexByID(123456, indexManagementAddress)
 	if err == nil {
 		t.Fatal("Error excpected when deleting non existent index but index drop didnt fail \n")
 	} else {
