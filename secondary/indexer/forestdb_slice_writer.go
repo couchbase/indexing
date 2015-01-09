@@ -705,8 +705,14 @@ func tryDeleteFdbSlice(fdb *fdbSlice) {
 	common.Infof("ForestDBSlice::Destroy \n\tDestroying Slice Id %v, IndexInstId %v, "+
 		"IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 
-	if err := forestdb.Destroy(fdb.path, fdb.config); err != nil {
+	if err := forestdb.Destroy(fdb.currfile, fdb.config); err != nil {
 		common.Errorf("ForestDBSlice::Destroy \n\t Error Destroying  Slice Id %v, "+
+			"IndexInstId %v, IndexDefnId %v. Error %v", fdb.id, fdb.idxInstId, fdb.idxDefnId, err)
+	}
+
+	//cleanup the disk directory
+	if err := os.RemoveAll(fdb.path); err != nil {
+		common.Errorf("ForestDBSlice::Destroy \n\t Error Cleaning Up Slice Id %v, "+
 			"IndexInstId %v, IndexDefnId %v. Error %v", fdb.id, fdb.idxInstId, fdb.idxDefnId, err)
 	}
 }
