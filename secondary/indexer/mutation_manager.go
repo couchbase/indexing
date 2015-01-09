@@ -564,11 +564,13 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 		delete(bucketQueueMap, bucket)
 	}
 
-	if bucketQueueMap == nil {
+	if len(bucketQueueMap) == 0 {
 		m.sendMsgToStreamReader(streamId,
 			&MsgGeneral{mType: STREAM_READER_SHUTDOWN})
 
 		m.cleanupStream(streamId)
+
+		m.supvCmdch <- &MsgSuccess{}
 	} else if bucketMapDirty {
 		respMsg := m.sendMsgToStreamReader(streamId,
 			&MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap})

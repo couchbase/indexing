@@ -429,6 +429,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case STREAM_REQUEST_DONE:
 		idx.handleStreamRequestDone(msg)
 
+	case KV_SENDER_RESTART_VBUCKETS:
+
+		//fwd the message to kv_sender
+		idx.sendMsgToKVSender(msg)
+
 	default:
 		common.Errorf("Indexer::handleWorkerMsgs Unknown Message %v", msg)
 	}
@@ -811,6 +816,10 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	bucket := msg.(*MsgStreamInfo).GetBucket()
 
 	common.Debugf("Indexer::handleStreamRequestDone StreamId %v Bucket %v", streamId, bucket)
+
+	//send the ack to timekeeper
+	idx.tkCmdCh <- msg
+	<-idx.tkCmdCh
 
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
 

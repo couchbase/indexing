@@ -159,6 +159,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case TK_MERGE_STREAM_ACK:
 		tk.handleMergeStreamAck(cmd)
 
+	case STREAM_REQUEST_DONE:
+		tk.handleStreamRequestDone(cmd)
+
 	default:
 		common.Errorf("Timekeeper::handleSupvervisorCommands "+
 			"Received Unknown Command %v", cmd)
@@ -435,7 +438,8 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 
 		//check if any of the initial build index is past its Build TS.
 		//Generate msg for Build Done and change the state of the index.
-		tk.checkInitialBuildDone(cmd)
+		flushTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+		tk.checkInitialBuildDone(streamId, bucket, flushTs)
 
 		//check if there is any pending TS for this bucket/stream.
 		//It can be processed now.
@@ -528,18 +532,20 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 
 		//check if any of the initial build index is past its Build TS.
 		//Generate msg for Build Done and change the state of the index.
-		if tk.checkInitialBuildDone(cmd) {
-			break
-		}
+		if tk.checkAnyInitialStateIndex(bucket) {
+			flushTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+			tk.checkInitialBuildDone(streamId, bucket, flushTs)
+		} else {
 
-		//if flush is for INIT_STREAM, check if any index in CATCHUP has reached
-		//past the last flushed TS of the MAINT_STREAM for this bucket.
-		//In such case, all indexes of the bucket can merged to MAINT_STREAM.
-		lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
-		if tk.checkInitStreamReadyToMerge(streamId, bucket, lastFlushedTs) {
-			//if stream is ready to merge, further STREAM_ACTIVE processing is
-			//not required, return from here.
-			break
+			//if flush is for INIT_STREAM, check if any index in CATCHUP has reached
+			//past the last flushed TS of the MAINT_STREAM for this bucket.
+			//In such case, all indexes of the bucket can merged to MAINT_STREAM.
+			lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+			if tk.checkInitStreamReadyToMerge(streamId, bucket, lastFlushedTs) {
+				//if stream is ready to merge, further STREAM_ACTIVE processing is
+				//not required, return from here.
+				break
+			}
 		}
 
 		//check if there is any pending TS for this bucket/stream.
@@ -657,12 +663,6 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 			bucketFlushEnabledMap[bucket] = true
 			//if there are any pending TS, send that
 			tk.processPendingTS(streamId, bucket)
-		}
-
-		if tk.ss.streamStatus[streamId] == STREAM_RECOVERY {
-			common.Debugf("Timekeeper::handleFlushStateChange \n\t Stream %v "+
-				"State Changed to ACTIVE", streamId)
-			tk.ss.streamStatus[streamId] = STREAM_ACTIVE
 		}
 
 	case TK_DISABLE_FLUSH:
@@ -938,6 +938,26 @@ func (tk *timekeeper) handleMergeStreamAck(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
+func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
+
+	streamId := cmd.(*MsgStreamInfo).GetStreamId()
+	bucket := cmd.(*MsgStreamInfo).GetBucket()
+
+	common.Debugf("Timekeeper::handleStreamRequestDone StreamId %v Bucket %v",
+		streamId, bucket)
+
+	if streamId == common.INIT_STREAM {
+
+		if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
+			!tk.ss.checkAnyAbortPending(streamId, bucket) {
+			lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+			tk.checkInitialBuildDone(streamId, bucket, lastFlushedTs)
+		}
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
 func (tk *timekeeper) prepareRecovery(streamId common.StreamId,
 	bucket string) bool {
 
@@ -1033,23 +1053,33 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 //checkInitialBuildDone checks if any of the index in Initial State is past its
 //Build TS based on the Flush Done Message. It generates msg for Build Done
 //and changes the state of the index.
-func (tk *timekeeper) checkInitialBuildDone(cmd Message) bool {
-
-	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
-	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
-	flushTs := cmd.(*MsgMutMgrFlushDone).GetTS()
+func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
+	bucket string, flushTs *common.TsVbuuid) bool {
 
 	status := false
 
 	for _, buildInfo := range tk.indexBuildInfo {
 		//if index belongs to the flushed bucket and in INITIAL state
+		initBuildDone := false
 		idx := buildInfo.indexInst
 		if idx.Defn.Bucket == bucket &&
 			idx.Stream == streamId &&
 			idx.State == common.INDEX_STATE_INITIAL {
-			//check if the flushTS is greater than buildTS
-			ts := getStabilityTSFromTsVbuuid(flushTs)
-			if ts.GreaterThanEqual(buildInfo.buildTs) {
+
+			//if buildTs is zero, initial build is done
+			if buildInfo.buildTs.IsZeroTs() {
+				initBuildDone = true
+			} else if flushTs == nil {
+				initBuildDone = false
+			} else {
+				//check if the flushTS is greater than buildTS
+				ts := getStabilityTSFromTsVbuuid(flushTs)
+				if ts.GreaterThanEqual(buildInfo.buildTs) {
+					initBuildDone = true
+				}
+			}
+
+			if initBuildDone {
 
 				//change all indexes of this bucket to Catchup state if the flush
 				//is for INIT_STREAM
@@ -1086,6 +1116,13 @@ func (tk *timekeeper) checkInitialBuildDone(cmd Message) bool {
 func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	bucket string, flushTs *common.TsVbuuid) bool {
 
+	common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v Bucket %v "+
+		"FlushTs %v", streamId, bucket, flushTs)
+
+	if streamId != common.INIT_STREAM {
+		return false
+	}
+
 	//INIT_STREAM cannot be merged to MAINT_STREAM if its not ACTIVE
 	if tk.ss.streamBucketStatus[common.MAINT_STREAM][bucket] != STREAM_ACTIVE {
 		common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tMAINT_STREAM in %v. "+
@@ -1109,52 +1146,65 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		return false
 	}
 
-	if streamId == common.INIT_STREAM {
+	for _, buildInfo := range tk.indexBuildInfo {
+		//if index belongs to the flushed bucket and in CATCHUP state and
+		//buildDoneAck has been received
+		idx := buildInfo.indexInst
+		if idx.Defn.Bucket == bucket &&
+			idx.State == common.INDEX_STATE_CATCHUP &&
+			buildInfo.buildDoneAckReceived == true {
 
-		for _, buildInfo := range tk.indexBuildInfo {
-			//if index belongs to the flushed bucket and in CATCHUP state and
-			//buildDoneAck has been received
-			idx := buildInfo.indexInst
-			if idx.Defn.Bucket == bucket &&
-				idx.State == common.INDEX_STATE_CATCHUP &&
-				buildInfo.buildDoneAckReceived == true {
+			//if the flushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
+			//this index can be merged to MAINT_STREAM
+			bucketLastFlushedTsMap := tk.ss.streamBucketLastFlushedTsMap[common.MAINT_STREAM]
+			lastFlushedTsVbuuid := bucketLastFlushedTsMap[idx.Defn.Bucket]
 
-				//if the flushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
-				//this index can be merged to MAINT_STREAM
-				bucketLastFlushedTsMap := tk.ss.streamBucketLastFlushedTsMap[common.MAINT_STREAM]
-				lastFlushedTsVbuuid := bucketLastFlushedTsMap[idx.Defn.Bucket]
+			//if no flush has happened yet, its good to merge
+			readyToMerge := false
+			var ts, lastFlushedTs Timestamp
+			if lastFlushedTsVbuuid == nil {
+				readyToMerge = true
+			} else {
 				lastFlushedTs := getStabilityTSFromTsVbuuid(lastFlushedTsVbuuid)
-
 				ts := getStabilityTSFromTsVbuuid(flushTs)
 				if ts.GreaterThanEqual(lastFlushedTs) {
-					//disable flush for MAINT_STREAM for this bucket, so it doesn't
-					//move ahead till merge is complete
-					bucketFlushEnabledMap := tk.ss.streamBucketFlushEnabledMap[common.MAINT_STREAM]
-					bucketFlushEnabledMap[idx.Defn.Bucket] = false
-
-					//change state of all indexes of this bucket to ACTIVE
-					//these indexes get removed later as part of merge message
-					//from indexer
-					tk.changeIndexStateForBucket(bucket, common.INDEX_STATE_ACTIVE)
-
-					common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tIndex Ready To Merge. "+
-						"Index: %v Stream: %v Bucket: %v LastFlushTS: %v", idx.InstId, streamId,
-						bucket, lastFlushedTs)
-
-					tk.supvRespch <- &MsgTKMergeStream{
-						mType:    TK_MERGE_STREAM,
-						streamId: streamId,
-						bucket:   bucket,
-						mergeTs:  ts}
-
-					common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v "+
-						"Bucket %v State Changed to INACTIVE", streamId, bucket)
-					tk.ss.cleanupBucketFromStream(streamId, bucket)
-					return true
+					readyToMerge = true
 				}
+			}
+
+			if readyToMerge {
+
+				//disable flush for MAINT_STREAM for this bucket, so it doesn't
+				//move ahead till merge is complete
+				tk.ss.streamBucketFlushEnabledMap[common.MAINT_STREAM][bucket] = false
+
+				//if bucket in INIT_STREAM is going to merge, disable flush. No need to waste
+				//resources on flush as these mutations will be flushed from MAINT_STREAM anyway.
+				tk.ss.streamBucketFlushEnabledMap[common.INIT_STREAM][bucket] = false
+
+				//change state of all indexes of this bucket to ACTIVE
+				//these indexes get removed later as part of merge message
+				//from indexer
+				tk.changeIndexStateForBucket(bucket, common.INDEX_STATE_ACTIVE)
+
+				common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tIndex Ready To Merge. "+
+					"Index: %v Stream: %v Bucket: %v LastFlushTS: %v", idx.InstId, streamId,
+					bucket, lastFlushedTs)
+
+				tk.supvRespch <- &MsgTKMergeStream{
+					mType:    TK_MERGE_STREAM,
+					streamId: streamId,
+					bucket:   bucket,
+					mergeTs:  ts}
+
+				common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v "+
+					"Bucket %v State Changed to INACTIVE", streamId, bucket)
+				tk.ss.cleanupBucketFromStream(streamId, bucket)
+				return true
 			}
 		}
 	}
+
 	return false
 }
 
@@ -1326,6 +1376,22 @@ func (tk *timekeeper) changeIndexStateForBucket(bucket string, state common.Inde
 			buildInfo.indexInst.State = state
 		}
 	}
+
+}
+
+//check if any index for the given bucket is in initial state
+func (tk *timekeeper) checkAnyInitialStateIndex(bucket string) bool {
+
+	for _, buildInfo := range tk.indexBuildInfo {
+		//if index belongs to the flushed bucket and in INITIAL state
+		idx := buildInfo.indexInst
+		if idx.Defn.Bucket == bucket &&
+			idx.State == common.INDEX_STATE_INITIAL {
+			return true
+		}
+	}
+
+	return false
 
 }
 
