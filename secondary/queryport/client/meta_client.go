@@ -60,18 +60,17 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	}
 	b.rw.Lock()
 	defer b.rw.Unlock()
+
 	b.topology = make(map[string][]*mclient.IndexMetadata)
+	for _, adminport := range b.adminports {
+		b.topology[adminport] = make([]*mclient.IndexMetadata, 0)
+	}
 	// gather topology of each index.
 	for _, index := range indexes {
 		for _, instance := range index.Instances {
 			for _, queryport := range instance.Endpts {
 				adminport := b.queryport2adminport(string(queryport))
-				sl, ok := b.topology[adminport]
-				if !ok {
-					sl = make([]*mclient.IndexMetadata, 0)
-				}
-				sl = append(sl, index)
-				b.topology[adminport] = sl
+				b.topology[adminport] = append(b.topology[adminport], index)
 			}
 		}
 	}
@@ -173,7 +172,6 @@ func (b *metadataClient) queryport2adminport(queryport string) string {
 		}
 	}
 	panic(fmt.Errorf("cannot find adminport for %v", queryport))
-	return ""
 }
 
 // return adminports for all known indexers.
