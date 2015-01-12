@@ -699,7 +699,7 @@ func marshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
 		PartitionScheme: partnScheme,
 		PartnExpression: proto.String(defn.PartitionKey),
 	}
-
+	
 	return proto.Marshal(pDefn)
 }
 
@@ -1030,19 +1030,25 @@ func (m *LocalRepoRef) OnNewProposal(txnid c.Txnid, op c.OpCode, key string, con
 			indexDefn, err := UnmarshallIndexDefn(content)
 			if err != nil {
 				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall index defn for key %s", key)
-				return err
+				return &c.RecoverableError{Reason : err.Error()}
 			}
 
-			return m.notifier.OnIndexCreate(indexDefn)
+			if err := m.notifier.OnIndexCreate(indexDefn); err != nil {
+				return &c.RecoverableError{Reason : err.Error()}
+			}	
+			return nil
 
 		} else if isIndexTopologyKey(key) {
 			topology, err := unmarshallIndexTopology(content)
 			if err != nil {
 				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall topology for key %s", key)
-				return err
+				return &c.RecoverableError{Reason : err.Error()}
 			}
 
-			return m.notifier.OnTopologyUpdate(topology)
+			if err := m.notifier.OnTopologyUpdate(topology); err != nil {
+				return &c.RecoverableError{Reason : err.Error()}
+			}	
+			return nil
 		}
 
 	case c.OPCODE_SET:
@@ -1050,19 +1056,25 @@ func (m *LocalRepoRef) OnNewProposal(txnid c.Txnid, op c.OpCode, key string, con
 			indexDefn, err := UnmarshallIndexDefn(content)
 			if err != nil {
 				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall index defn for key %s", key)
-				return err
+				return &c.RecoverableError{Reason : err.Error()}
 			}
 
-			return m.notifier.OnIndexCreate(indexDefn)
+			if err := m.notifier.OnIndexCreate(indexDefn); err != nil {
+				return &c.RecoverableError{Reason : err.Error()}
+			}	
+			return nil
 
 		} else if isIndexTopologyKey(key) {
 			topology, err := unmarshallIndexTopology(content)
 			if err != nil {
 				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall topology for key %s", key)
-				return err
+				return &c.RecoverableError{Reason : err.Error()}
 			}
 
-			return m.notifier.OnTopologyUpdate(topology)
+			if err := m.notifier.OnTopologyUpdate(topology); err != nil {
+				return &c.RecoverableError{Reason : err.Error()}
+			}	
+			return nil
 		}
 
 	case c.OPCODE_DELETE:
@@ -1074,15 +1086,19 @@ func (m *LocalRepoRef) OnNewProposal(txnid c.Txnid, op c.OpCode, key string, con
 				id, err := strconv.ParseUint(key[i+1:], 10, 64)
 				if err != nil {
 					common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall IndexDefnId key %s", key)
-					return err
+					return &c.RecoverableError{Reason : err.Error()}
 				}
 
-				return m.notifier.OnIndexDelete(common.IndexDefnId(id))
+				if err := m.notifier.OnIndexDelete(common.IndexDefnId(id)); err != nil {
+					return &c.RecoverableError{Reason : err.Error()}
+				}	
+				return nil
 
 			} else {
 				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall IndexDefnId key %s", key)
-				return NewError(ERROR_META_FAIL_TO_PARSE_INT, NORMAL, METADATA_REPO, nil,
+				err := NewError(ERROR_META_FAIL_TO_PARSE_INT, NORMAL, METADATA_REPO, nil,
 					"MetadataRepo.OnNewProposal() : cannot parse index definition id")
+				return &c.RecoverableError{Reason : err.Error()}
 			}
 		}
 	}

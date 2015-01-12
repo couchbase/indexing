@@ -11,6 +11,7 @@ package test
 
 import (
 	"fmt"
+	c "github.com/couchbase/gometa/common"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -99,6 +100,11 @@ func TestMetadataProvider(t *testing.T) {
 	if err := provider.DropIndex(common.IndexDefnId(101), msgAddr); err != nil {
 		t.Fatal("Cannot drop Index Defn 101 through MetadataProvider")
 	}
+	
+	if _, err := provider.CreateIndex("metadata_provider_test_103", "Default", common.ForestDB,
+		common.N1QL, "Testing", "Testing", msgAddr, []string{"Testing"}, false); err == nil {
+		t.Fatal("Error does not propage for create Index Defn 103 through MetadataProvider")
+	}
 
 	common.Infof("Verify Changed Data *********************************************************")
 
@@ -120,7 +126,7 @@ func TestMetadataProvider(t *testing.T) {
 	if !notifier.hasCreated {
 		t.Fatal(fmt.Sprintf("Does not recieve notification for creating index %s", newDefnId))
 	}
-	common.Infof(fmt.Sprintf("Recieve notification for creating index %s", newDefnId))
+	common.Infof(fmt.Sprintf("Recieve notification for creating index %v", newDefnId))
 
 	if !notifier.hasDeleted {
 		t.Fatal("Does not recieve notification for deleting index 101")
@@ -129,6 +135,7 @@ func TestMetadataProvider(t *testing.T) {
 
 	common.Infof("Cleanup Test *********************************************************")
 
+	provider.UnwatchMetadata(msgAddr)
 	cleanupTest(mgr, t)
 	cleanSingleIndex(mgr, t, newDefnId)
 	time.Sleep(time.Duration(1000) * time.Millisecond)
@@ -220,7 +227,12 @@ func cleanSingleIndex(mgr *manager.IndexManager, t *testing.T, id common.IndexDe
 	}
 }
 
-func (n *notifier) OnIndexCreate(*common.IndexDefn) error {
+func (n *notifier) OnIndexCreate(defn *common.IndexDefn) error {
+
+	if defn.Name == "metadata_provider_test_103" {
+		return &c.RecoverableError{Reason : "do not allow creating metadata_provider_test_103"}
+	}
+
 	n.hasCreated = true
 	return nil
 }

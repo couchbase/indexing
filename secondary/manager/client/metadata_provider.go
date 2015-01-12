@@ -142,9 +142,9 @@ func (o *MetadataProvider) CreateIndex(
 	}
 
 	key := fmt.Sprintf("IndexDefinitionId/%d", defnID)
-	watcher.makeRequest(common.OPCODE_SET, key, content)
+	err = watcher.makeRequest(common.OPCODE_SET, key, content)
 
-	return defnID, nil
+	return defnID, err 
 }
 
 func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId, indexAdminPort string) error {
@@ -155,9 +155,7 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId, indexAdminPort string
 	}
 
 	key := fmt.Sprintf("IndexDefinitionId/%d", defnID)
-	watcher.makeRequest(common.OPCODE_DELETE, key, []byte(""))
-
-	return nil
+	return watcher.makeRequest(common.OPCODE_DELETE, key, []byte(""))
 }
 
 func (o *MetadataProvider) ListIndex() []*IndexMetadata {
@@ -363,7 +361,7 @@ func (w *watcher) close() {
 	}
 }
 
-func (w *watcher) makeRequest(opCode common.OpCode, key string, content []byte) {
+func (w *watcher) makeRequest(opCode common.OpCode, key string, content []byte) error {
 
 	id := uint64(time.Now().UnixNano())
 	request := w.factory.CreateRequest(id, uint32(opCode), key, content)
@@ -377,6 +375,8 @@ func (w *watcher) makeRequest(opCode common.OpCode, key string, content []byte) 
 	w.incomingReqs <- handle
 
 	handle.CondVar.Wait()
+
+	return handle.Err	
 }
 
 ///////////////////////////////////////////////////////
@@ -465,6 +465,11 @@ func (w *watcher) Commit(txid common.Txnid) error {
 
 func (w *watcher) LogProposal(p protocol.ProposalMsg) error {
 
+	if common.OpCode(p.GetOpCode()) == common.OPCODE_ABORT {
+		w.Abort(p.GetReqId(), p.GetKey())
+		return nil
+	}
+	
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -478,6 +483,22 @@ func (w *watcher) LogProposal(p protocol.ProposalMsg) error {
 	}
 
 	return nil
+}
+
+func (w *watcher) Abort(reqId uint64, err string) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	handle, ok := w.pendingReqs[reqId]
+	if ok {
+		delete(w.pendingReqs, reqId)
+			
+		handle.CondVar.L.Lock()
+		defer handle.CondVar.L.Unlock()
+
+		handle.Err = errors.New(err) 
+		handle.CondVar.Signal()
+	}
 }
 
 func (w *watcher) GetFollowerId() string {
@@ -545,19 +566,33 @@ func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content
 
 func (w *watcher) processChange(op uint32, key string, content []byte) error {
 
+	c.Debugf("watcher.processChange(): key = %v", key)
+	
 	opCode := common.OpCode(op)
 
 	switch opCode {
 	case common.OPCODE_ADD:
 		if isIndexDefnKey(key) {
+			if len(content) == 0 {
+				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+			}
 			return w.provider.repo.unmarshallAndAddDefn(content)
 		} else if isIndexTopologyKey(key) {
+			if len(content) == 0 {
+				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+			}
 			return w.provider.repo.unmarshallAndAddInst(content)
 		}
 	case common.OPCODE_SET:
 		if isIndexDefnKey(key) {
+			if len(content) == 0 {
+				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+			}
 			return w.provider.repo.unmarshallAndAddDefn(content)
 		} else if isIndexTopologyKey(key) {
+			if len(content) == 0 {
+				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+			}
 			return w.provider.repo.unmarshallAndAddInst(content)
 		}
 	case common.OPCODE_DELETE:
