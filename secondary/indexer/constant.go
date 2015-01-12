@@ -67,13 +67,7 @@ const SLICE_COMMIT_POLL_INTERVAL = 20
 //Default Number of threads for a Slice Writer
 const NUM_WRITER_THREADS_PER_SLICE = 2
 
-//GoMeta specific
-const GOMETA_REQUEST_ADDR = "localhost:9885"
-const GOMETA_LEADER_ADDR = "localhost:9884"
-const GOMETA_MSG_ADDR = "localhost:9886"
-
-//Index Manager
-const INDEX_MANAGER_CONFIG = "./config.json"
-
 //Max Length of Secondary Key
 const MAX_SEC_KEY_LEN = 1024
+
+const INDEXER_ID_KEY = "IndexerId"

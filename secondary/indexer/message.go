@@ -80,6 +80,9 @@ const (
 	CLUST_MGR_UPDATE_STATE_FOR_INDEX
 	CLUST_MGR_UPDATE_STREAM_FOR_INDEX
 	CLUST_MGR_UPDATE_ERROR_FOR_INDEX
+	CLUST_MGR_GET_GLOBAL_TOPOLOGY
+	CLUST_MGR_GET_LOCAL
+	CLUST_MGR_SET_LOCAL
 
 	//CBQ_BRIDGE_SHUTDOWN
 	CBQ_BRIDGE_SHUTDOWN
@@ -868,6 +871,44 @@ func (m *MsgClustMgrUpdate) GetErrorStr() string {
 	return m.errStr
 }
 
+//CLUST_MGR_GET_GLOBAL_TOPOLOGY
+type MsgClustMgrTopology struct {
+	indexInstMap common.IndexInstMap
+}
+
+func (m *MsgClustMgrTopology) GetMsgType() MsgType {
+	return CLUST_MGR_GET_GLOBAL_TOPOLOGY
+}
+
+func (m *MsgClustMgrTopology) GetInstMap() common.IndexInstMap {
+	return m.indexInstMap
+}
+
+//CLUST_MGR_GET_LOCAL
+//CLUST_MGR_SET_LOCAL
+type MsgClustMgrLocal struct {
+	mType MsgType
+	key   string
+	value string
+	err   error
+}
+
+func (m *MsgClustMgrLocal) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgClustMgrLocal) GetKey() string {
+	return m.key
+}
+
+func (m *MsgClustMgrLocal) GetValue() string {
+	return m.value
+}
+
+func (m *MsgClustMgrLocal) GetError() error {
+	return m.err
+}
+
 //Helper function to return string for message type
 
 func (m MsgType) String() string {
@@ -1002,6 +1043,12 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_UPDATE_STREAM_FOR_INDEX"
 	case CLUST_MGR_UPDATE_ERROR_FOR_INDEX:
 		return "CLUST_MGR_UPDATE_ERROR_FOR_INDEX"
+	case CLUST_MGR_GET_GLOBAL_TOPOLOGY:
+		return "CLUST_MGR_GET_GLOBAL_TOPOLOGY"
+	case CLUST_MGR_GET_LOCAL:
+		return "CLUST_MGR_GET_LOCAL"
+	case CLUST_MGR_SET_LOCAL:
+		return "CLUST_MGR_SET_LOCAL"
 
 	case CBQ_CREATE_INDEX_DDL:
 		return "CBQ_CREATE_INDEX_DDL"

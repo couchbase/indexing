@@ -15,14 +15,13 @@ import (
 	"errors"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
+	"math/rand"
 	"net"
 	"path"
 	"strconv"
 	"sync"
 	"time"
 )
-
-type IndexerId uint64
 
 type Indexer interface {
 	Shutdown() Message
@@ -47,7 +46,7 @@ var (
 )
 
 type indexer struct {
-	id IndexerId
+	id string
 
 	indexInstMap  common.IndexInstMap //map of indexInstId to IndexInst
 	indexPartnMap IndexPartnMap       //map of indexInstId to PartitionInst
@@ -134,9 +133,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	common.Infof("Indexer::NewIndexer Status INIT")
-
-	//assume indexerId 1 for now
-	idx.id = 1
 
 	common.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
@@ -1904,6 +1900,8 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 
 func (idx *indexer) bootstrap() error {
 
+	idx.genIndexerId()
+
 	//close any old streams with projector
 	idx.closeAllStreams()
 
@@ -1942,7 +1940,128 @@ func (idx *indexer) bootstrap() error {
 
 }
 
+func (idx *indexer) genIndexerId() {
+
+	if idx.enableManager {
+
+		//try to fetch IndexerId from manager
+		idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+			mType: CLUST_MGR_GET_LOCAL,
+			key:   INDEXER_ID_KEY,
+		}
+
+		respMsg := <-idx.clustMgrAgentCmdCh
+		resp := respMsg.(*MsgClustMgrLocal)
+
+		val := resp.GetValue()
+		err := resp.GetError()
+
+		if err == nil {
+			idx.id = val
+		} else if err.Error() == "key not found" {
+			//if there is no IndexerId, generate and store in manager
+			idx.id = string(rand.Int())
+
+			idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+				mType: CLUST_MGR_SET_LOCAL,
+				key:   INDEXER_ID_KEY,
+				value: val,
+			}
+
+			respMsg := <-idx.clustMgrAgentCmdCh
+			resp := respMsg.(*MsgClustMgrLocal)
+
+			errMsg := resp.GetError()
+			if errMsg != nil {
+				common.Errorf("Indexer::genIndexerId Unable to set IndexerId In Local"+
+					"Meta Storage. Err %v", errMsg)
+				common.CrashOnError(errMsg)
+			}
+
+		} else {
+			common.Errorf("Indexer::genIndexerId Error Fetching IndexerId From Local"+
+				"Meta Storage. Err %v", err)
+			common.CrashOnError(err)
+		}
+	} else {
+		//assume 1 without manager
+		idx.id = "1"
+	}
+
+}
+
 func (idx *indexer) initFromPersistedState() error {
+
+	err := idx.recoverIndexInstMap()
+	if err != nil {
+		common.Errorf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
+		return err
+	}
+
+	common.Debugf("Indexer::initFromPersistedState Recovered IndexInstMap %v", idx.indexInstMap)
+
+	for _, inst := range idx.indexInstMap {
+
+		newpc := common.NewKeyPartitionContainer()
+
+		//Add one partition for now
+		partnId := common.PartitionId(0)
+		addr := net.JoinHostPort("", idx.config["streamMaintPort"].String())
+		endpt := []common.Endpoint{common.Endpoint(addr)}
+		partnDefn := common.KeyPartitionDefn{Id: partnId,
+			Endpts: endpt}
+		newpc.AddPartition(partnId, partnDefn)
+
+		inst.Pc = newpc
+
+		//allocate partition/slice
+		var partnInstMap PartitionInstMap
+		var err error
+		if partnInstMap, err = idx.initPartnInstance(inst, nil); err != nil {
+			return err
+		}
+
+		idx.indexInstMap[inst.InstId] = inst
+		idx.indexPartnMap[inst.InstId] = partnInstMap
+
+	}
+
+	return nil
+
+}
+
+func (idx *indexer) recoverIndexInstMap() error {
+
+	if idx.enableManager {
+		return idx.recoverInstMapFromManager()
+	} else {
+		return idx.recoverInstMapFromFile()
+	}
+
+}
+
+func (idx *indexer) recoverInstMapFromManager() error {
+
+	idx.clustMgrAgentCmdCh <- &MsgClustMgrTopology{}
+
+	resp := <-idx.clustMgrAgentCmdCh
+
+	switch resp.GetMsgType() {
+
+	case CLUST_MGR_GET_GLOBAL_TOPOLOGY:
+		idx.indexInstMap = resp.(*MsgClustMgrTopology).GetInstMap()
+
+	case MSG_ERROR:
+		err := resp.(*MsgError).GetError()
+		common.CrashOnError(err.cause)
+
+	default:
+		common.CrashOnError(errors.New("Unknown Response"))
+	}
+	return nil
+}
+
+func (idx *indexer) recoverInstMapFromFile() error {
 
 	var dbfile *forestdb.File
 	var meta *forestdb.KVStore
@@ -1985,40 +2104,10 @@ func (idx *indexer) initFromPersistedState() error {
 	err = dec.Decode(&idx.indexInstMap)
 
 	if err != nil {
-		common.Errorf("Indexer::initFromPersistedState Decode Error %v", err)
+		common.Errorf("Indexer::recoverInstMapFromFile Decode Error %v", err)
 		return err
 	}
-
-	common.Debugf("Indexer::initFromPersistedState Recovered IndexInstMap %v", idx.indexInstMap)
-
-	for _, inst := range idx.indexInstMap {
-
-		newpc := common.NewKeyPartitionContainer()
-
-		//Add one partition for now
-		partnId := common.PartitionId(0)
-		addr := net.JoinHostPort("", idx.config["streamMaintPort"].String())
-		endpt := []common.Endpoint{common.Endpoint(addr)}
-		partnDefn := common.KeyPartitionDefn{Id: partnId,
-			Endpts: endpt}
-		newpc.AddPartition(partnId, partnDefn)
-
-		inst.Pc = newpc
-
-		//allocate partition/slice
-		var partnInstMap PartitionInstMap
-		var err error
-		if partnInstMap, err = idx.initPartnInstance(inst, nil); err != nil {
-			return err
-		}
-
-		idx.indexInstMap[inst.InstId] = inst
-		idx.indexPartnMap[inst.InstId] = partnInstMap
-
-	}
-
 	return nil
-
 }
 
 func (idx *indexer) startStreams() bool {

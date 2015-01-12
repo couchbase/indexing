@@ -167,6 +167,15 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_UPDATE_ERROR_FOR_INDEX:
 		c.handleUpdateErrorForIndex(cmd)
 
+	case CLUST_MGR_GET_GLOBAL_TOPOLOGY:
+		c.handleGetGlobalTopology(cmd)
+
+	case CLUST_MGR_GET_LOCAL:
+		c.handleGetLocalValue(cmd)
+
+	case CLUST_MGR_SET_LOCAL:
+		c.handleSetLocalValue(cmd)
+
 	default:
 		common.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
 	}
@@ -188,6 +197,7 @@ func (c *clustMgrAgent) handleUpdateStateForIndex(cmd Message) {
 			if err != nil {
 				common.CrashOnError(err)
 			}
+			topologyMap[index.Defn.Bucket] = t
 		}
 		t.UpdateStateForIndexInstByDefn(common.IndexDefnId(index.InstId), index.State)
 	}
@@ -201,6 +211,8 @@ func (c *clustMgrAgent) handleUpdateStateForIndex(cmd Message) {
 			common.CrashOnError(err)
 		}
 	}
+
+	c.supvRespch <- &MsgSuccess{}
 
 }
 
@@ -219,6 +231,7 @@ func (c *clustMgrAgent) handleUpdateStreamForIndex(cmd Message) {
 			if err != nil {
 				common.CrashOnError(err)
 			}
+			topologyMap[index.Defn.Bucket] = t
 		}
 		t.UpdateStateForIndexInstByDefn(common.IndexDefnId(index.InstId), index.State)
 	}
@@ -232,6 +245,8 @@ func (c *clustMgrAgent) handleUpdateStreamForIndex(cmd Message) {
 			common.CrashOnError(err)
 		}
 	}
+
+	c.supvRespch <- &MsgSuccess{}
 
 }
 
@@ -251,6 +266,7 @@ func (c *clustMgrAgent) handleUpdateErrorForIndex(cmd Message) {
 			if err != nil {
 				common.CrashOnError(err)
 			}
+			topologyMap[index.Defn.Bucket] = t
 		}
 		t.SetErrorForIndexInstByDefn(common.IndexDefnId(index.InstId), errStr)
 	}
@@ -263,6 +279,73 @@ func (c *clustMgrAgent) handleUpdateErrorForIndex(cmd Message) {
 		if err != nil {
 			common.CrashOnError(err)
 		}
+	}
+
+	c.supvRespch <- &MsgSuccess{}
+}
+
+func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
+
+	//get the latest topology from manager
+	metaIter, err := c.mgr.NewIndexDefnIterator()
+	if err != nil {
+		common.CrashOnError(err)
+	}
+
+	indexInstMap := make(common.IndexInstMap)
+
+	for _, defn, err := metaIter.Next(); err != nil; {
+
+		var idxDefn common.IndexDefn
+		idxDefn = *defn
+
+		t, e := c.mgr.GetTopologyByBucket(idxDefn.Bucket)
+		if e != nil {
+			common.CrashOnError(e)
+		}
+
+		inst := t.GetIndexInstByDefn(idxDefn.DefnId)
+
+		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
+			Defn:   idxDefn,
+			State:  common.IndexState(inst.State),
+			Stream: common.StreamId(inst.StreamId),
+		}
+
+		indexInstMap[idxInst.InstId] = idxInst
+
+	}
+
+	c.supvRespch <- &MsgClustMgrTopology{indexInstMap: indexInstMap}
+}
+
+func (c *clustMgrAgent) handleGetLocalValue(cmd Message) {
+
+	key := cmd.(*MsgClustMgrLocal).GetKey()
+
+	val, err := c.mgr.GetLocalValue(key)
+
+	c.supvRespch <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_GET_LOCAL,
+		key:   key,
+		value: val,
+		err:   err,
+	}
+
+}
+
+func (c *clustMgrAgent) handleSetLocalValue(cmd Message) {
+
+	key := cmd.(*MsgClustMgrLocal).GetKey()
+	val := cmd.(*MsgClustMgrLocal).GetValue()
+
+	err := c.mgr.SetLocalValue(key, val)
+
+	c.supvRespch <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_SET_LOCAL,
+		key:   key,
+		value: val,
+		err:   err,
 	}
 
 }
