@@ -85,6 +85,11 @@ func TestCoordinator(t *testing.T) {
 		t.Fatal(err)
 	}
 	common.Infof("Topology after index creation : %s", string(content))
+	
+	inst := topology.GetIndexInstByDefn(common.IndexDefnId(200))
+	if inst == nil || common.IndexState(inst.State) != common.INDEX_STATE_CREATED {
+		t.Fatal("Index Inst not found for index defn 200 or inst state is not in CREATE")
+	}
 
 	cleanup(mgr, t)
 	mgr.CleanupTopology()

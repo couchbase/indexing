@@ -184,6 +184,22 @@ func (t *IndexTopology) FindIndexDefinitionById(id common.IndexDefnId) *IndexDef
 //
 // Update Index Status on instance
 //
+func (t *IndexTopology) GetIndexInstByDefn(defnId common.IndexDefnId) *IndexInstDistribution {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for _, inst := range t.Definitions[i].Instances {
+				return &inst
+			}
+		}
+	}
+
+	return nil
+}
+
+//
+// Update Index Status on instance
+//
 func (t *IndexTopology) UpdateStateForIndexInstByDefn(defnId common.IndexDefnId, state common.IndexState) {
 
 	for i, _ := range t.Definitions {
