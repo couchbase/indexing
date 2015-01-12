@@ -177,14 +177,14 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 
 	found := false
 	for !found {
-		key, _, err := iter.Next()
+		key, defn, err := iter.Next()
 		if err != nil {
 			common.Infof("error during iteration %s", err.Error())
 			break
 		}
 
 		common.Infof("key during iteration %s", key)
-		if key == "103" {
+		if key == "103" && defn.DefnId == common.IndexDefnId(103) {
 			found = true
 		}
 	}

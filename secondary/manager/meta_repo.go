@@ -344,10 +344,10 @@ func (c *MetadataRepo) NewIterator() (*MetaIterator, error) {
 }
 
 // Get value from iterator
-func (i *MetaIterator) Next() (key string, content []byte, err error) {
+func (i *MetaIterator) Next() (string, *common.IndexDefn, error) {
 
 	for {
-		key, content, err = i.iterator.Next()
+		key, content, err := i.iterator.Next()
 		if err != nil {
 			return "", nil, err
 		}
@@ -355,7 +355,11 @@ func (i *MetaIterator) Next() (key string, content []byte, err error) {
 		if isIndexDefnKey(key) {
 			name := indexDefnIdFromKey(key)
 			if name != "" {
-				return name, content, nil
+				defn, err := UnmarshallIndexDefn(content) 
+				if err != nil {
+					return "", nil, err
+				}
+				return name, defn, nil
 			}
 			return "", nil, NewError(ERROR_META_WRONG_KEY, NORMAL, METADATA_REPO, nil,
 				fmt.Sprintf("Index Definition Key %s is mal-formed", key))
