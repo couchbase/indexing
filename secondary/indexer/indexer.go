@@ -434,8 +434,15 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		//fwd the message to kv_sender
 		idx.sendMsgToKVSender(msg)
 
+	case MSG_ERROR:
+		//crash for all errors by default
+		common.Fatalf("Indexer::handleWorkerMsgs Fatal Error On Worker Channel %+v", msg)
+		err := msg.(*MsgError).GetError()
+		common.CrashOnError(err.cause)
+
 	default:
-		common.Errorf("Indexer::handleWorkerMsgs Unknown Message %v", msg)
+		common.Errorf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
+		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
 	}
 
 }
@@ -456,12 +463,12 @@ func (idx *indexer) handleAdminMsgs(msg Message) {
 
 	case MSG_ERROR:
 
-		common.Fatalf("Indexer::handleAdminMsgs Fatal Error On Admin Channel %v", msg)
+		common.Fatalf("Indexer::handleAdminMsgs Fatal Error On Admin Channel %+v", msg)
 		err := msg.(*MsgError).GetError()
 		common.CrashOnError(err.cause)
 
 	default:
-		common.Errorf("Indexer::handleAdminMsgs Unknown Message %v", msg)
+		common.Errorf("Indexer::handleAdminMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Admin Channel"))
 
 	}
