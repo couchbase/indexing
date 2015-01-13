@@ -588,5 +588,12 @@ func vbOpaque(opq32 uint32) uint16 {
 
 // Close this UprFeed.
 func (feed *UprFeed) Close() {
-	close(feed.closer)
+	feed.mu.Lock()
+	defer feed.mu.Unlock()
+
+	if feed.conn != nil {
+		close(feed.closer)
+		feed.conn.Close()
+		feed.conn = nil
+	}
 }
