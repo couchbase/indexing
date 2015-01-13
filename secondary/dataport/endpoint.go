@@ -150,6 +150,8 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 			c.Errorf("%v run() crashed: %v\n", endpoint.logPrefix, r)
 			c.StackTrace(string(debug.Stack()))
 		}
+		// close the connection
+		endpoint.conn.Close()
 		// close this endpoint
 		close(endpoint.finch)
 		c.Infof("%v ... stopped\n", endpoint.logPrefix)
