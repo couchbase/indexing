@@ -1074,10 +1074,18 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 				indexList: indexList,
 				respCh:    respCh}
 		} else {
-			cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-				streamId: streamId,
-				bucket:   indexInst.Defn.Bucket,
-				respCh:   respCh}
+			if idx.checkLastBucketInStream(indexInst.Defn.Bucket, streamId) {
+				//promote to close stream
+				cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
+					streamId: streamId,
+					respCh:   respCh}
+
+			} else {
+				cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+					streamId: streamId,
+					bucket:   indexInst.Defn.Bucket,
+					respCh:   respCh}
+			}
 		}
 
 		//send stream update to mutation manager
@@ -1511,11 +1519,21 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	stopCh := make(StopChannel)
 
 	//remove bucket from INIT_STREAM
-	cmd := &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-		streamId: common.INIT_STREAM,
-		bucket:   bucket,
-		respCh:   respCh,
-		stopCh:   stopCh}
+	var cmd Message
+	if idx.checkLastBucketInStream(bucket, streamId) {
+		//promote to close stream
+		cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
+			streamId: streamId,
+			respCh:   respCh,
+			stopCh:   stopCh}
+	} else {
+		cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+			streamId: streamId,
+			bucket:   bucket,
+			respCh:   respCh,
+			stopCh:   stopCh,
+		}
+	}
 
 	//send stream update to timekeeper
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.tkCmdCh, "Timekeeper"); resp.GetMsgType() != MSG_SUCCESS {
@@ -1614,6 +1632,21 @@ func (idx *indexer) checkBucketExistsInStream(bucket string, streamId common.Str
 
 }
 
+//checkLastBucketInStream returns true if the given bucket is the only bucket
+//active in the given stream, else false
+func (idx *indexer) checkLastBucketInStream(bucket string, streamId common.StreamId) bool {
+
+	bucketStatus := idx.streamBucketStatus[streamId]
+
+	for b, s := range bucketStatus {
+		if b != bucket && s == STREAM_ACTIVE {
+			return false
+		}
+	}
+	return true
+
+}
+
 //checkStreamEmpty return true if there is no index currently in the
 //give stream, else false
 func (idx *indexer) checkStreamEmpty(streamId common.StreamId) bool {
@@ -1655,11 +1688,20 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
 
-	cmd := &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-		streamId: streamId,
-		bucket:   bucket,
-		respCh:   respCh,
-		stopCh:   stopCh}
+	var cmd Message
+	if idx.checkLastBucketInStream(bucket, streamId) {
+		//promote to close stream
+		cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
+			streamId: streamId,
+			respCh:   respCh,
+			stopCh:   stopCh}
+	} else {
+		cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+			streamId: streamId,
+			bucket:   bucket,
+			respCh:   respCh,
+			stopCh:   stopCh}
+	}
 
 	//send stream update to mutation manager
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh,
@@ -2186,7 +2228,7 @@ func (idx *indexer) closeAllStreams() {
 
 				default:
 					//log and retry for all other responses
-					common.Errorf("Indexer::stopBucketStream Stream %v Bucket %v \n\t"+
+					common.Errorf("Indexer::closeAllStreams Stream %v Bucket %v \n\t"+
 						"Error from Projector %v", resp)
 				}
 			}
