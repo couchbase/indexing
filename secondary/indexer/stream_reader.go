@@ -204,6 +204,8 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 	meta.seqno = Seqno(kv.GetSeqno())
 
 	var mut *MutationKeys
+	skipMutation := false
+	evalFilter := true
 
 	common.Tracef("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
 
@@ -215,10 +217,19 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 		//case protobuf.Command_Upsert, protobuf.Command_Deletion, protobuf.Command_UpsertDeletion:
 		case common.Upsert, common.Deletion, common.UpsertDeletion:
 
-			//check the bucket filter to see if this mutation can be processed
-			//valid mutation will increment seqno of the filter
-			if !r.checkAndSetBucketFilter(meta) {
-				return
+			//As there can multiple keys in a KeyVersion for a mutation,
+			//filter needs to be evaluated and set only once.
+			if evalFilter {
+				evalFilter = false
+				//check the bucket filter to see if this mutation can be processed
+				//valid mutation will increment seqno of the filter
+				if !r.checkAndSetBucketFilter(meta) {
+					skipMutation = true
+				}
+			}
+
+			if skipMutation {
+				continue
 			}
 
 			logPerfStat()
@@ -453,6 +464,8 @@ func (r *mutationStreamReader) initBucketFilter() {
 	//have a filter yet
 	for b, q := range r.bucketQueueMap {
 		if _, ok := r.bucketFilterMap[b]; !ok {
+			common.Tracef("MutationStreamReader::initBucketFilter Added new filter "+
+				"for Bucket %v Stream %v", b, r.streamId)
 			r.bucketFilterMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
 		}
 	}
@@ -460,6 +473,8 @@ func (r *mutationStreamReader) initBucketFilter() {
 	//remove the bucket filters for which bucket doesn't exist anymore
 	for b, _ := range r.bucketFilterMap {
 		if _, ok := r.bucketQueueMap[b]; !ok {
+			common.Tracef("MutationStreamReader::initBucketFilter Deleted filter "+
+				"for Bucket %v Stream %v", b, r.streamId)
 			delete(r.bucketFilterMap, b)
 		}
 	}
@@ -473,8 +488,10 @@ func (r *mutationStreamReader) setBucketFilter(meta *MutationMeta) {
 	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
 		filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
 		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+		common.Tracef("MutationStreamReader::setBucketFilter Vbucket %v "+
+			"Seqno %v Bucket %v Stream %v", meta.vbucket, meta.seqno, meta.bucket, r.streamId)
 	} else {
-		common.Errorf("MutationStreamReader::setBucketFilter Missing bucket \n"+
+		common.Errorf("MutationStreamReader::setBucketFilter Missing bucket "+
 			"%v in Filter for Stream %v", meta.bucket, r.streamId)
 	}
 
@@ -491,10 +508,13 @@ func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool 
 			filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
 			return true
 		} else {
+			common.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Skipped "+
+				"Mutation %v for Bucket %v Stream %v. Current Filter %v", meta,
+				meta.bucket, r.streamId, filter)
 			return false
 		}
 	} else {
-		common.Errorf("MutationStreamReader::checkAndSetBucketFilter Missing \n"+
+		common.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Missing"+
 			"bucket %v in Filter for Stream %v", meta.bucket, r.streamId)
 		return false
 	}
