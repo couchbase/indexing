@@ -47,14 +47,35 @@ type cbqClient struct {
 }
 
 // newCbqClient create cbq-cluster client.
-func newCbqClient() *cbqClient {
+func newCbqClient(cluster string) (*cbqClient, error) {
+	cinfo, err := common.NewClusterInfoCache(cluster, "default" /*pooln*/)
+	if err != nil {
+		return nil, err
+	}
+	if err = cinfo.Fetch(); err != nil {
+		return nil, err
+	}
+	nodes := cinfo.GetNodesByServiceType("indexAdmin")
+	if l := len(nodes); l < 1 {
+		err := fmt.Errorf("cinfo.GetNodesByServiceType() returns %d nodes", l)
+		return nil, err
+	}
+	adminport, err := cinfo.GetServiceAddress(nodes[0], "indexAdmin")
+	if err != nil {
+		return nil, err
+	}
+	queryport, err := cinfo.GetServiceAddress(nodes[0], "indexScan")
+	if err != nil {
+		return nil, err
+	}
+
 	b := &cbqClient{
-		adminport: "http://localhost:9100",
-		queryport: "localhost:9101",
+		adminport: "http://" + adminport,
+		queryport: queryport,
 		httpc:     http.DefaultClient,
 	}
 	b.logPrefix = fmt.Sprintf("[cbqClient %v]", b.adminport)
-	return b
+	return b, nil
 }
 
 // Refresh list all indexes.
@@ -76,7 +97,8 @@ func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, error) {
 			if err == nil {
 				indexes := make([]*mclient.IndexMetadata, 0)
 				for _, info := range mresp.Indexes {
-					indexes = append(indexes, newIndexMetaData(&info))
+					indexes = append(
+						indexes, newIndexMetaData(&info, b.queryport))
 				}
 				b.rw.Lock()
 				defer b.rw.Unlock()
@@ -159,13 +181,13 @@ func (b *cbqClient) DropIndex(defnID common.IndexDefnId) error {
 
 // GetQueryports implements BridgeAccessor{} interface.
 func (b *cbqClient) GetQueryports() (queryports []string) {
-	return []string{"localhost:9101"}
+	return []string{b.queryport}
 }
 
 // GetQueryport implements BridgeAccessor{} interface.
 func (b *cbqClient) GetQueryport(
 	defnID common.IndexDefnId) (queryport string, ok bool) {
-	return "localhost:9101", true
+	return b.queryport, true
 }
 
 // Close implements BridgeAccessor
@@ -203,7 +225,7 @@ type indexInfo struct {
 	IsPrimary bool     `json:"isPrimary,omitempty"`
 }
 
-func newIndexMetaData(info *indexInfo) *mclient.IndexMetadata {
+func newIndexMetaData(info *indexInfo, queryport string) *mclient.IndexMetadata {
 	defn := &common.IndexDefn{
 		DefnId:       common.IndexDefnId(info.DefnID),
 		Name:         info.Name,
@@ -218,7 +240,7 @@ func newIndexMetaData(info *indexInfo) *mclient.IndexMetadata {
 		&mclient.InstanceDefn{
 			InstId: common.IndexInstId(info.DefnID), // TODO: defnID as InstID
 			State:  common.INDEX_STATE_READY,
-			Endpts: []common.Endpoint{"localhost:9101"},
+			Endpts: []common.Endpoint{common.Endpoint(queryport)},
 		},
 	}
 	imeta := &mclient.IndexMetadata{

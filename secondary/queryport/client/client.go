@@ -128,7 +128,7 @@ func NewGsiClient(
 	if useMetadataProvider {
 		c, err = makeWithMetaProvider(cluster, serviceAddr, config)
 	} else {
-		c, err = makeWithCbq(config)
+		c, err = makeWithCbq(cluster, config)
 	}
 	if err != nil {
 		return nil, err
@@ -255,11 +255,14 @@ func (c *GsiClient) Close() {
 }
 
 // create GSI client using cbqBridge and ScanCoordinator
-func makeWithCbq(config common.Config) (*GsiClient, error) {
+func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
+	var err error
 	c := &GsiClient{
 		queryClients: make(map[string]*gsiScanClient),
 	}
-	c.bridge = newCbqClient()
+	if c.bridge, err = newCbqClient(cluster); err != nil {
+		return nil, err
+	}
 	for _, queryport := range c.bridge.GetQueryports() {
 		queryClient := newGsiScanClient(queryport, config)
 		c.queryClients[queryport] = queryClient
