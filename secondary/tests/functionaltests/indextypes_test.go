@@ -3,6 +3,7 @@ package functionaltests
 import (
 	"flag"
 	"fmt"
+	"github.com/couchbase/cbauth"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
@@ -28,6 +29,10 @@ func init() {
 	kvaddress = clusterconfig.KVAddress
 	indexManagementAddress = clusterconfig.KVAddress
 	indexScanAddress = clusterconfig.KVAddress
+
+	// setup cbauth
+	authURL := fmt.Sprintf("http://%s/_cbauth", kvaddress)
+	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, clusterconfig.Username, clusterconfig.Password, nil)
 
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	time.Sleep(5 * time.Second)

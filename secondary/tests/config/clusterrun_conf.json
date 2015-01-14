@@ -1,1 +1,5 @@
-{"KVAddress":"localhost:9000","IndexManagementAddress":"localhost:9100","IndexScanAddress":"localhost:9101"}
+{
+   "KVAddress": "localhost:9000",
+   "Username": "Administrator",
+   "Password": "password"
+}
