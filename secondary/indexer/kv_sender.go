@@ -714,18 +714,8 @@ func sendShutdownTopic(ap *projClient.Client,
 
 func getTopicForStreamId(streamId c.StreamId) string {
 
-	var topic string
+	return StreamTopicName[streamId]
 
-	switch streamId {
-	case c.MAINT_STREAM:
-		topic = MAINT_TOPIC
-	case c.CATCHUP_STREAM:
-		topic = CATCHUP_TOPIC
-	case c.INIT_STREAM:
-		topic = INIT_TOPIC
-	}
-
-	return topic
 }
 
 func (k *kvSender) makeRestartTsForVbs(bucket string, tsVbuuid *c.TsVbuuid,

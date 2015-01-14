@@ -28,6 +28,7 @@ type Indexer interface {
 }
 
 var StreamAddrMap StreamAddressMap
+var StreamTopicName map[common.StreamId]string
 
 type BucketIndexCountMap map[string]int
 type BucketFlushInProgressMap map[string]bool
@@ -1257,6 +1258,14 @@ func (idx *indexer) initStreamAddressMap() {
 	StreamAddrMap[common.INIT_STREAM] = common.Endpoint(port2addr("streamInitPort"))
 }
 
+func (idx *indexer) initStreamTopicName() {
+	StreamTopicName = make(map[common.StreamId]string)
+
+	StreamTopicName[common.MAINT_STREAM] = MAINT_TOPIC + "_" + idx.id
+	StreamTopicName[common.CATCHUP_STREAM] = CATCHUP_TOPIC + "_" + idx.id
+	StreamTopicName[common.INIT_STREAM] = INIT_TOPIC + "_" + idx.id
+}
+
 //checkDuplicateIndex checks if an index with the given indexInstId
 // or name already exists
 func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
@@ -1944,6 +1953,9 @@ func (idx *indexer) bootstrap() error {
 
 	idx.genIndexerId()
 
+	//set topic names based on indexer id
+	idx.initStreamTopicName()
+
 	//close any old streams with projector
 	idx.closeAllStreams()
 
@@ -2029,6 +2041,8 @@ func (idx *indexer) genIndexerId() {
 		//assume 1 without manager
 		idx.id = "1"
 	}
+
+	common.Infof("Indexer Id %v", idx.id)
 
 }
 
