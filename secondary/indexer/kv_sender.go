@@ -201,8 +201,8 @@ func (k *kvSender) handleRestartVbuckets(cmd Message) {
 
 	streamId := cmd.(*MsgRestartVbuckets).GetStreamId()
 	restartTs := cmd.(*MsgRestartVbuckets).GetRestartTs()
-	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
-	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
+	respCh := cmd.(*MsgRestartVbuckets).GetResponseCh()
+	stopCh := cmd.(*MsgRestartVbuckets).GetStopChannel()
 
 	go k.restartVbuckets(streamId, restartTs, respCh, stopCh)
 	k.supvCmdch <- &MsgSuccess{}
