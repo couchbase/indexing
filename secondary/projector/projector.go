@@ -46,7 +46,7 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
 
 	apConfig := config.SectionConfig("adminport.", true)
-	apConfig = apConfig.SetValue("name", "PRAM")
+	apConfig.SetValue("name", "PRAM")
 	reqch := make(chan ap.Request)
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
 

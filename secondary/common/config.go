@@ -14,6 +14,9 @@ package common
 
 import "encoding/json"
 import "strings"
+import "fmt"
+import "reflect"
+import "errors"
 
 // Config is a key, value map with key always being a string
 // represents a config-parameter.
@@ -326,17 +329,17 @@ var SystemConfig = Config{
 		"Index file storage directory",
 		"./",
 	},
-	"indexer.compaction.interval": ConfigValue{
+	"indexer.settings.compaction.interval": ConfigValue{
 		60,
 		"Compaction poll interval in seconds",
 		60,
 	},
-	"indexer.compaction.minFrag": ConfigValue{
+	"indexer.settings.compaction.minFrag": ConfigValue{
 		30,
 		"Compaction fragmentation threshold percentage",
 		30,
 	},
-	"indexer.compaction.minSize": ConfigValue{
+	"indexer.settings.compaction.minSize": ConfigValue{
 		uint64(1024 * 1024),
 		"Compaction min file size",
 		uint64(1024 * 1024),
@@ -353,6 +356,11 @@ var SystemConfig = Config{
 // or from []byte slice, a byte-slice of JSON string.
 func NewConfig(data interface{}) (Config, error) {
 	config := SystemConfig.Clone()
+	err := config.Update(data)
+	return config, err
+}
+
+func (config Config) Update(data interface{}) error {
 	switch v := data.(type) {
 	case Config: // Clone
 		for key, value := range v {
@@ -361,23 +369,26 @@ func NewConfig(data interface{}) (Config, error) {
 
 	case map[string]interface{}: // transform
 		for key, value := range v {
-			config.SetValue(key, value)
+			if err := config.SetValue(key, value); err != nil {
+				return err
+			}
 		}
 
 	case []byte: // parse JSON
 		m := make(map[string]interface{})
-		if err := json.Unmarshal(v, m); err != nil {
-			return nil, err
+		if err := json.Unmarshal(v, &m); err != nil {
+			return err
 		}
 		for key, value := range m {
-			config.SetValue(key, value)
+			if err := config.SetValue(key, value); err != nil {
+				return err
+			}
 		}
 
 	default:
-		return nil, nil
+		return nil
 	}
-
-	return config, nil
+	return nil
 }
 
 // Clone a new config object.
@@ -431,11 +442,30 @@ func (config Config) Set(key string, cv ConfigValue) Config {
 }
 
 // SetValue config parameter with value. Mutates the config object.
-func (config Config) SetValue(key string, value interface{}) Config {
-	cv := config[key]
+func (config Config) SetValue(key string, value interface{}) error {
+	cv, ok := config[key]
+	if !ok {
+		return errors.New("Invalid config parameter")
+	}
+
+	defType := reflect.TypeOf(cv.DefaultVal)
+	valType := reflect.TypeOf(value)
+
+	if valType.ConvertibleTo(defType) {
+		v := reflect.ValueOf(value)
+		v = reflect.Indirect(v)
+		value = v.Convert(defType).Interface()
+		valType = defType
+	}
+
+	if defType != reflect.TypeOf(value) {
+		return fmt.Errorf("%v: Value type mismatch, %v != %v (%v)",
+			key, valType, defType, value)
+	}
 	cv.Value = value
 	config[key] = cv
-	return config
+
+	return nil
 }
 
 // Int assumes config value is an integer and returns the same.
