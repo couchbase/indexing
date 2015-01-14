@@ -1256,47 +1256,23 @@ func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	bucket string) {
 
-	bucketNewTsReqd := tk.ss.streamBucketNewTsReqdMap[streamId]
-	bucketFlushInProgressTsMap := tk.ss.streamBucketFlushInProgressTsMap[streamId]
-	bucketTsListMap := tk.ss.streamBucketTsListMap[streamId]
-	bucketFlushEnabledMap := tk.ss.streamBucketFlushEnabledMap[streamId]
-	bucketSyncCountMap := tk.ss.streamBucketSyncCountMap[streamId]
+	if tk.ss.checkNewTSDue(streamId, bucket) {
 
-	//new timestamp can be generated if all stream begins have been received
-	numVbuckets := tk.config["numVbuckets"].Int()
-	if bucketSyncCountMap[bucket] >= uint64(SYNC_COUNT_TS_TRIGGER)*uint64(numVbuckets) &&
-		bucketNewTsReqd[bucket] == true &&
-		tk.ss.checkAllStreamBeginsReceived(streamId, bucket) == true {
+		tsVbuuid := tk.ss.getNextStabilityTS(streamId, bucket)
 
-		//generate new stability timestamp
-		tsVbuuid := tk.ss.streamBucketHWTMap[streamId][bucket].Copy()
-
-		//HWT may have less Seqno than Snapshot marker as mutation come later than
-		//snapshot markers. Once a TS is generated, update the Seqnos with the
-		//snapshot high seq num as that persistence will happen at these seqnums.
-		updateTsSeqNumToSnapshot(tsVbuuid)
-
-		common.Debugf("Timekeeper::generateNewStabilityTS \n\tGenerating new Stability "+
-			"TS: %v Bucket: %v Stream: %v. SyncCount: %v", tsVbuuid,
-			bucket, streamId, bucketSyncCountMap[bucket])
-
-		//if there is no flush already in progress for this bucket
-		//no pending TS in list and flush is not disabled, send new TS
-		tsList := bucketTsListMap[bucket]
-		if bucketFlushInProgressTsMap[bucket] == nil &&
-			bucketFlushEnabledMap[bucket] == true &&
-			tsList.Len() == 0 {
+		if tk.ss.canFlushNewTS(streamId, bucket) {
+			common.Debugf("Timekeeper::generateNewStabilityTS \n\tFlushing new "+
+				"TS: %v Bucket: %v Stream: %v.", tsVbuuid, bucket, streamId)
 			tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = tsVbuuid
 			go tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		} else {
 			//store the ts in list
 			common.Debugf("Timekeeper::generateNewStabilityTS \n\tAdding TS: %v to Pending "+
 				"List for Bucket: %v Stream: %v.", tsVbuuid, bucket, streamId)
+			tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
 			tsList.PushBack(tsVbuuid)
 			tk.drainQueueIfOverflow(streamId, bucket)
 		}
-		bucketSyncCountMap[bucket] = 0
-		bucketNewTsReqd[bucket] = false
 	}
 }
 
@@ -1438,16 +1414,6 @@ func getTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 		ts[i] = Seqno(s)
 	}
 	return ts
-}
-
-//helper function to update Seqnos in TsVbuuid to
-//high seqnum of snapshot markers
-func updateTsSeqNumToSnapshot(ts *common.TsVbuuid) {
-
-	for i, s := range ts.Snapshots {
-		ts.Seqnos[i] = s[1]
-	}
-
 }
 
 //if there are more mutations in this queue than configured,

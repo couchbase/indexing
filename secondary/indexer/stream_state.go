@@ -23,6 +23,7 @@ type StreamState struct {
 
 	streamBucketHWTMap           map[common.StreamId]BucketHWTMap
 	streamBucketSyncCountMap     map[common.StreamId]BucketSyncCountMap
+	streamBucketInMemTsCountMap  map[common.StreamId]BucketInMemTsCountMap
 	streamBucketNewTsReqdMap     map[common.StreamId]BucketNewTsReqdMap
 	streamBucketTsListMap        map[common.StreamId]BucketTsListMap
 	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
@@ -41,6 +42,7 @@ type BucketHWTMap map[string]*common.TsVbuuid
 type BucketLastFlushedTsMap map[string]*common.TsVbuuid
 type BucketRestartTsMap map[string]*common.TsVbuuid
 type BucketSyncCountMap map[string]uint64
+type BucketInMemTsCountMap map[string]uint16
 type BucketNewTsReqdMap map[string]bool
 
 type BucketTsListMap map[string]*list.List
@@ -60,6 +62,7 @@ func InitStreamState(config common.Config) *StreamState {
 		config:                           config,
 		streamBucketHWTMap:               make(map[common.StreamId]BucketHWTMap),
 		streamBucketSyncCountMap:         make(map[common.StreamId]BucketSyncCountMap),
+		streamBucketInMemTsCountMap:      make(map[common.StreamId]BucketInMemTsCountMap),
 		streamBucketNewTsReqdMap:         make(map[common.StreamId]BucketNewTsReqdMap),
 		streamBucketTsListMap:            make(map[common.StreamId]BucketTsListMap),
 		streamBucketFlushInProgressTsMap: make(map[common.StreamId]BucketFlushInProgressTsMap),
@@ -87,6 +90,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 
 	bucketSyncCountMap := make(BucketSyncCountMap)
 	ss.streamBucketSyncCountMap[streamId] = bucketSyncCountMap
+
+	bucketInMemTsCountMap := make(BucketInMemTsCountMap)
+	ss.streamBucketInMemTsCountMap[streamId] = bucketInMemTsCountMap
 
 	bucketNewTsReqdMap := make(BucketNewTsReqdMap)
 	ss.streamBucketNewTsReqdMap[streamId] = bucketNewTsReqdMap
@@ -131,6 +137,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	numVbuckets := ss.config["numVbuckets"].Int()
 	ss.streamBucketHWTMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamBucketSyncCountMap[streamId][bucket] = 0
+	ss.streamBucketInMemTsCountMap[streamId][bucket] = 0
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
 	ss.streamBucketFlushInProgressTsMap[streamId][bucket] = nil
 	ss.streamBucketAbortInProgressMap[streamId][bucket] = false
@@ -159,6 +166,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 
 	delete(ss.streamBucketHWTMap[streamId], bucket)
 	delete(ss.streamBucketSyncCountMap[streamId], bucket)
+	delete(ss.streamBucketInMemTsCountMap[streamId], bucket)
 	delete(ss.streamBucketNewTsReqdMap[streamId], bucket)
 	delete(ss.streamBucketTsListMap[streamId], bucket)
 	delete(ss.streamBucketFlushInProgressTsMap[streamId], bucket)
@@ -182,6 +190,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	//delete this stream from internal maps
 	delete(ss.streamBucketHWTMap, streamId)
 	delete(ss.streamBucketSyncCountMap, streamId)
+	delete(ss.streamBucketInMemTsCountMap, streamId)
 	delete(ss.streamBucketNewTsReqdMap, streamId)
 	delete(ss.streamBucketTsListMap, streamId)
 	delete(ss.streamBucketFlushInProgressTsMap, streamId)
@@ -333,7 +342,7 @@ func (ss *StreamState) incrSyncCount(streamId common.StreamId,
 		//update only if its less than trigger count, otherwise it makes no
 		//difference. On long running systems, syncCount may overflow otherwise
 		numVbuckets := ss.config["numVbuckets"].Int()
-		if syncCount <= uint64(SYNC_COUNT_TS_TRIGGER)*uint64(numVbuckets) {
+		if syncCount <= uint64(IN_MEM_TS_TRIGGER)*uint64(numVbuckets) {
 			bucketSyncCountMap[bucket] = syncCount
 		}
 
@@ -357,6 +366,78 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 		ts.Seqnos[meta.vbucket] = uint64(meta.seqno)
 		ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
 		common.Tracef("StreamState::updateHWT \n\tHWT Updated : %v", ts)
+	}
+
+}
+
+func (ss *StreamState) checkNewTSDue(streamId common.StreamId, bucket string) bool {
+
+	bucketNewTsReqd := ss.streamBucketNewTsReqdMap[streamId]
+	bucketSyncCountMap := ss.streamBucketSyncCountMap[streamId]
+
+	numVbuckets := ss.config["numVbuckets"].Int()
+
+	if bucketSyncCountMap[bucket] >= uint64(IN_MEM_TS_TRIGGER)*uint64(numVbuckets) &&
+		bucketNewTsReqd[bucket] == true &&
+		ss.checkAllStreamBeginsReceived(streamId, bucket) == true {
+		return true
+	}
+	return false
+}
+
+//gets the stability timestamp based on the current HWT
+func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
+	bucket string) *common.TsVbuuid {
+
+	//generate new stability timestamp
+	tsVbuuid := ss.streamBucketHWTMap[streamId][bucket].Copy()
+
+	//HWT may have less Seqno than Snapshot marker as mutation come later than
+	//snapshot markers. Once a TS is generated, update the Seqnos with the
+	//snapshot high seq num as that persistence will happen at these seqnums.
+	updateTsSeqNumToSnapshot(tsVbuuid)
+
+	if ss.streamBucketInMemTsCountMap[streamId][bucket] == PERSISTED_TS_TRIGGER {
+		//set persisted flag
+		tsVbuuid.SetPersisted(true)
+		ss.streamBucketInMemTsCountMap[streamId][bucket] = 0
+	} else {
+		ss.streamBucketInMemTsCountMap[streamId][bucket]++
+	}
+
+	//reset state for next TS
+	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
+	ss.streamBucketSyncCountMap[streamId][bucket] = 0
+
+	return tsVbuuid
+}
+
+func (ss *StreamState) canFlushNewTS(streamId common.StreamId,
+	bucket string) bool {
+
+	bucketFlushInProgressTsMap := ss.streamBucketFlushInProgressTsMap[streamId]
+	bucketTsListMap := ss.streamBucketTsListMap[streamId]
+	bucketFlushEnabledMap := ss.streamBucketFlushEnabledMap[streamId]
+
+	//if there is no flush already in progress for this bucket
+	//no pending TS in list and flush is not disabled, send new TS
+	tsList := bucketTsListMap[bucket]
+	if bucketFlushInProgressTsMap[bucket] == nil &&
+		bucketFlushEnabledMap[bucket] == true &&
+		tsList.Len() == 0 {
+		return true
+	}
+
+	return false
+
+}
+
+//helper function to update Seqnos in TsVbuuid to
+//high seqnum of snapshot markers
+func updateTsSeqNumToSnapshot(ts *common.TsVbuuid) {
+
+	for i, s := range ts.Snapshots {
+		ts.Seqnos[i] = s[1]
 	}
 
 }

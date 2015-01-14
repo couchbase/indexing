@@ -175,8 +175,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	tsVbuuid := cmd.(*MsgMutMgrFlushDone).GetTS()
 	numVbuckets := s.config["numVbuckets"].Int()
-	// TODO: Fill this flag from incoming message
-	var needsCommit bool = true
+	var needsCommit bool = tsVbuuid.IsPersisted()
 
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range s.indexPartnMap {

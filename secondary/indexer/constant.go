@@ -44,8 +44,16 @@ const DEFAULT_NUM_STREAM_READER_WORKERS = 8
 const MAX_STREAM_READER_WORKER_BUFFER = 1000
 
 //Number of Sync messages from each vbucket after
-//which Timekeeper triggers a new Stability Timestamp
-const SYNC_COUNT_TS_TRIGGER uint16 = 2
+//which Timekeeper triggers a new InMem Stability Timestamp
+const IN_MEM_TS_TRIGGER uint16 = 2
+
+//Number of InMemory TS after which Timekeeper
+//triggers a new Persisted Stability Timestamp
+//0 means every TS gets persisted
+//TODO ForestDB InMem Snapshots don't seem to be
+//returning all data in scan. Keep this value
+//as 0 till that is fixed.
+const PERSISTED_TS_TRIGGER uint16 = 0
 
 //Max number of snapshot to be retained per index.
 //Older snapshots are deleted.

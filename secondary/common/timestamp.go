@@ -23,6 +23,7 @@ type TsVbuuid struct {
 	Seqnos    []uint64
 	Vbuuids   []uint64
 	Snapshots [][2]uint64
+	Persisted bool
 }
 
 // NewTsVbuuid returns reference to new instance of TsVbuuid.
@@ -91,6 +92,16 @@ func (ts *TsVbuuid) Len() int {
 		}
 	}
 	return length
+}
+
+//Persisted returns the value of persisted flag
+func (ts *TsVbuuid) IsPersisted() bool {
+	return ts.Persisted
+}
+
+//Persisted sets the persisted flag
+func (ts *TsVbuuid) SetPersisted(persist bool) {
+	ts.Persisted = persist
 }
 
 // Copy will return a clone of this timestamp.
