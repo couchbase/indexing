@@ -36,7 +36,7 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 		runTest(repo, t)
 	*/
 
-	repo, err := manager.NewLocalMetadataRepo("localhost:5002", nil)
+	repo, _, err := manager.NewLocalMetadataRepo("localhost:5002", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,13 +194,13 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 	}
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
-	
+
 	// test loal value
-	
+
 	if err := repo.SetLocalValue("testLocalValue1", "testLocalValue1"); err != nil {
 		t.Fatal("Fail to set local value" + err.Error())
 	}
-	
+
 	value, err := repo.GetLocalValue("testLocalValue1")
 	if err != nil {
 		t.Fatal("Fail to set local value" + err.Error())

@@ -734,7 +734,7 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 		return false
 	}
 
-	if err := c.repo.createIndexAndUpdateTopology(defn, host); err != nil {
+	if err := c.idxMgr.getLifecycleMgr().CreateIndex(defn, host); err != nil {
 		co.Debugf("Coordinator.createIndexy() : createIndex fails. Reason = %s", err.Error())
 		return false
 	}
@@ -755,7 +755,7 @@ func (c *Coordinator) deleteIndex(key string) bool {
 		return false
 	}
 
-	if err := c.repo.deleteIndexAndUpdateTopology(id); err != nil {
+	if err := c.idxMgr.getLifecycleMgr().DeleteIndex(id); err != nil {
 		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}

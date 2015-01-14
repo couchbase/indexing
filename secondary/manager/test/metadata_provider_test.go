@@ -100,10 +100,14 @@ func TestMetadataProvider(t *testing.T) {
 	if err := provider.DropIndex(common.IndexDefnId(101), msgAddr); err != nil {
 		t.Fatal("Cannot drop Index Defn 101 through MetadataProvider")
 	}
-	
+
 	if _, err := provider.CreateIndex("metadata_provider_test_103", "Default", common.ForestDB,
 		common.N1QL, "Testing", "Testing", msgAddr, []string{"Testing"}, false); err == nil {
 		t.Fatal("Error does not propage for create Index Defn 103 through MetadataProvider")
+	}
+
+	if err := mgr.UpdateIndexInstance("Default", newDefnId, common.INDEX_STATE_ACTIVE, common.StreamId(100), ""); err != nil {
+		t.Fatal("Fail to update index instance")
 	}
 
 	common.Infof("Verify Changed Data *********************************************************")
@@ -133,6 +137,15 @@ func TestMetadataProvider(t *testing.T) {
 	}
 	common.Infof("Recieve notification for deleting index 101")
 
+	time.Sleep(time.Duration(1000) * time.Millisecond)
+
+	metas := provider.ListIndex()
+	for _, meta := range metas {
+		if meta.Definition.DefnId == newDefnId && meta.Instances[0].State != common.INDEX_STATE_ACTIVE { 
+			t.Fatal("Topology change is not propagated to MetadataProvider")
+		}
+	}
+
 	common.Infof("Cleanup Test *********************************************************")
 
 	provider.UnwatchMetadata(msgAddr)
@@ -146,7 +159,7 @@ func lookup(provider *client.MetadataProvider, id common.IndexDefnId) *client.In
 	metas := provider.ListIndex()
 
 	for _, meta := range metas {
-		if meta.Definition.DefnId == id {
+		if meta.Definition.DefnId == id && meta.Instances[0].Endpts[0] == "localhost:"+manager.COORD_MAINT_STREAM_PORT {
 			return meta
 		}
 	}
@@ -230,7 +243,7 @@ func cleanSingleIndex(mgr *manager.IndexManager, t *testing.T, id common.IndexDe
 func (n *notifier) OnIndexCreate(defn *common.IndexDefn) error {
 
 	if defn.Name == "metadata_provider_test_103" {
-		return &c.RecoverableError{Reason : "do not allow creating metadata_provider_test_103"}
+		return &c.RecoverableError{Reason: "do not allow creating metadata_provider_test_103"}
 	}
 
 	n.hasCreated = true
@@ -243,5 +256,9 @@ func (n *notifier) OnIndexDelete(common.IndexDefnId) error {
 }
 
 func (n *notifier) OnTopologyUpdate(*manager.IndexTopology) error {
+	return nil
+}
+
+func (n *notifier) OnIndexBuild([]common.IndexDefnId) error {
 	return nil
 }

@@ -11,8 +11,9 @@ package manager
 
 import (
 	//"fmt"
+	"encoding/json"
 	"fmt"
-	gometa "github.com/couchbase/gometa/common"
+	gometaC "github.com/couchbase/gometa/common"
 	"github.com/couchbase/indexing/secondary/common"
 	"sync"
 	"time"
@@ -25,11 +26,13 @@ import (
 var USE_MASTER_REPO = false
 
 type IndexManager struct {
-	repo        *MetadataRepo
-	coordinator *Coordinator
-	reqHandler  *requestHandler
-	eventMgr    *eventManager
-	dataport    string
+	repo          *MetadataRepo
+	coordinator   *Coordinator
+	reqHandler    *requestHandler
+	eventMgr      *eventManager
+	lifecycleMgr  *LifecycleMgr
+	dataport      string
+	requestServer RequestServer
 
 	// stream management
 	streamMgr *StreamManager
@@ -48,7 +51,12 @@ type IndexManager struct {
 type MetadataNotifier interface {
 	OnIndexCreate(*common.IndexDefn) error
 	OnIndexDelete(common.IndexDefnId) error
+	OnIndexBuild([]common.IndexDefnId) error
 	OnTopologyUpdate(*IndexTopology) error
+}
+
+type RequestServer interface {
+	CustomSet(key string, value []byte) error
 }
 
 ///////////////////////////////////////////////////////
@@ -90,14 +98,21 @@ func NewIndexManagerInternal(msgAddr string, dataport string, admin StreamAdmin)
 		return nil, err
 	}
 
+	// Initialize LifecycleMgr.
+	mgr.lifecycleMgr = NewLifecycleMgr(dataport, nil)
+
 	// Initialize MetadataRepo.  This a blocking call until the
 	// the metadataRepo (including watcher) is operational (e.g.
 	// finish sync with remote metadata repo master).
 	//mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, config, mgr)
-	mgr.repo, err = NewLocalMetadataRepo(msgAddr, mgr.eventMgr)
+	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(msgAddr, mgr.eventMgr, mgr.lifecycleMgr)
 	if err != nil {
+		mgr.Close()
 		return nil, err
 	}
+
+	// start lifecycle manager
+	mgr.lifecycleMgr.Run(mgr.repo)
 
 	// Initialize request handler.  This is non-blocking.  The index manager
 	// will not be able handle new request until request handler is done initialization.
@@ -178,6 +193,10 @@ func (m *IndexManager) Close() {
 		m.reqHandler.close()
 	}
 
+	if m.lifecycleMgr != nil {
+		m.lifecycleMgr.Terminate()
+	}
+
 	m.isClosed = true
 }
 
@@ -187,6 +206,7 @@ func (m *IndexManager) Close() {
 
 func (m *IndexManager) RegisterNotifier(notifier MetadataNotifier) {
 	m.repo.RegisterNotifier(notifier)
+	m.lifecycleMgr.RegisterNotifier(notifier)
 }
 
 func (m *IndexManager) SetLocalValue(key string, value string) error {
@@ -304,7 +324,7 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 				fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
 		}
 	} else {
-		return m.repo.createIndexAndUpdateTopology(defn, m.dataport)
+		return m.lifecycleMgr.CreateIndex(defn, m.dataport)
 	}
 
 	return nil
@@ -321,10 +341,28 @@ func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
 				fmt.Sprintf("Fail to complete processing delete index statement for index id = '%d'", defnId))
 		}
 	} else {
-		return m.repo.deleteIndexAndUpdateTopology(defnId)
+		return m.lifecycleMgr.DeleteIndex(defnId)
 	}
 
 	return nil
+}
+
+func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, state common.IndexState,
+	streamId common.StreamId, err string) error {
+
+	inst := &topologyChange{
+		Bucket:   bucket,
+		DefnId:   uint64(defnId),
+		State:    uint32(state),
+		StreamId: uint32(streamId),
+		Error:    err}
+
+	buf, e := json.Marshal(&inst)
+	if e != nil {
+		return e
+	}
+
+	return m.requestServer.CustomSet(topologyChangeKey, buf)
 }
 
 //
@@ -393,7 +431,7 @@ func (m *IndexManager) runTimestampKeeper() {
 				return
 			}
 
-			gometa.SafeRun("IndexManager.runTimestampKeeper()",
+			gometaC.SafeRun("IndexManager.runTimestampKeeper()",
 				func() {
 					timestamps.addTimestamp(timestamp)
 					persistTimestamp = persistTimestamp ||
@@ -446,6 +484,13 @@ func (m *IndexManager) getTimer() *Timer {
 ///////////////////////////////////////////////////////
 // package local function
 ///////////////////////////////////////////////////////
+
+//
+// Get lifecycle manager
+//
+func (m *IndexManager) getLifecycleMgr() *LifecycleMgr {
+	return m.lifecycleMgr
+}
 
 //
 // Notify new event

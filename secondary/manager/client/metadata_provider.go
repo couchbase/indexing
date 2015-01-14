@@ -63,6 +63,7 @@ type IndexMetadata struct {
 type InstanceDefn struct {
 	InstId c.IndexInstId
 	State  c.IndexState
+	Error  string
 	Endpts []c.Endpoint
 }
 
@@ -141,10 +142,10 @@ func (o *MetadataProvider) CreateIndex(
 		return 0, err
 	}
 
-	key := fmt.Sprintf("IndexDefinitionId/%d", defnID)
-	err = watcher.makeRequest(common.OPCODE_SET, key, content)
+	key := fmt.Sprintf("%d", defnID)
+	err = watcher.makeRequest(common.OPCODE_CUSTOM_SET, key, content)
 
-	return defnID, err 
+	return defnID, err
 }
 
 func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId, indexAdminPort string) error {
@@ -154,8 +155,8 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId, indexAdminPort string
 		return err
 	}
 
-	key := fmt.Sprintf("IndexDefinitionId/%d", defnID)
-	return watcher.makeRequest(common.OPCODE_DELETE, key, []byte(""))
+	key := fmt.Sprintf("%d", defnID)
+	return watcher.makeRequest(common.OPCODE_CUSTOM_DELETE, key, []byte(""))
 }
 
 func (o *MetadataProvider) ListIndex() []*IndexMetadata {
@@ -325,6 +326,7 @@ func (r *metadataRepo) updateIndexMetadata(defnId c.IndexDefnId, inst *IndexInst
 		idxInst := new(InstanceDefn)
 		idxInst.InstId = c.IndexInstId(inst.InstId)
 		idxInst.State = c.IndexState(inst.State)
+		idxInst.Error = inst.Error
 
 		for _, partition := range inst.Partitions {
 			for _, slice := range partition.SinglePartition.Slices {
@@ -376,7 +378,7 @@ func (w *watcher) makeRequest(opCode common.OpCode, key string, content []byte) 
 
 	handle.CondVar.Wait()
 
-	return handle.Err	
+	return handle.Err
 }
 
 ///////////////////////////////////////////////////////
@@ -465,11 +467,12 @@ func (w *watcher) Commit(txid common.Txnid) error {
 
 func (w *watcher) LogProposal(p protocol.ProposalMsg) error {
 
-	if common.OpCode(p.GetOpCode()) == common.OPCODE_ABORT {
+	if common.OpCode(p.GetOpCode()) == common.OPCODE_ABORT ||
+		common.OpCode(p.GetOpCode()) == common.OPCODE_RESPONSE {
 		w.Abort(p.GetReqId(), p.GetKey())
 		return nil
 	}
-	
+
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -492,11 +495,14 @@ func (w *watcher) Abort(reqId uint64, err string) {
 	handle, ok := w.pendingReqs[reqId]
 	if ok {
 		delete(w.pendingReqs, reqId)
-			
+
 		handle.CondVar.L.Lock()
 		defer handle.CondVar.L.Unlock()
 
-		handle.Err = errors.New(err) 
+		if len(err) != 0 {
+			handle.Err = errors.New(err)
+		}
+
 		handle.CondVar.Signal()
 	}
 }
@@ -567,7 +573,7 @@ func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content
 func (w *watcher) processChange(op uint32, key string, content []byte) error {
 
 	c.Debugf("watcher.processChange(): key = %v", key)
-	
+
 	opCode := common.OpCode(op)
 
 	switch opCode {

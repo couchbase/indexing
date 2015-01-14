@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	c "github.com/couchbase/gometa/common"
+	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
 	gometa "github.com/couchbase/gometa/server"
 	"github.com/couchbase/indexing/secondary/common"
@@ -99,14 +100,16 @@ func NewMetadataRepo(requestAddr string,
 	return repo, nil
 }
 
-func NewLocalMetadataRepo(msgAddr string, eventMgr *eventManager) (*MetadataRepo, error) {
+func NewLocalMetadataRepo(msgAddr string,
+	eventMgr *eventManager,
+	reqHandler protocol.CustomRequestHandler) (*MetadataRepo, RequestServer, error) {
 
-	ref, err := newLocalRepoRef(msgAddr, eventMgr)
+	ref, err := newLocalRepoRef(msgAddr, eventMgr, reqHandler)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	repo := &MetadataRepo{repo: ref, isClosed: false}
-	return repo, nil
+	return repo, ref.server, nil
 }
 
 func (c *MetadataRepo) RegisterNotifier(notifier MetadataNotifier) {
@@ -355,7 +358,7 @@ func (i *MetaIterator) Next() (string, *common.IndexDefn, error) {
 		if isIndexDefnKey(key) {
 			name := indexDefnIdFromKey(key)
 			if name != "" {
-				defn, err := UnmarshallIndexDefn(content) 
+				defn, err := UnmarshallIndexDefn(content)
 				if err != nil {
 					return "", nil, err
 				}
@@ -377,10 +380,10 @@ func (i *MetaIterator) Close() {
 // private function : LocalRepoRef
 ///////////////////////////////////////////////////////
 
-func newLocalRepoRef(msgAddr string, eventMgr *eventManager) (*LocalRepoRef, error) {
+func newLocalRepoRef(msgAddr string, eventMgr *eventManager, reqHandler protocol.CustomRequestHandler) (*LocalRepoRef, error) {
 
 	repoRef := &LocalRepoRef{eventMgr: eventMgr, notifier: nil}
-	server, err := gometa.RunEmbeddedServerWithNotifier(msgAddr, repoRef)
+	server, err := gometa.RunEmbeddedServerWithCustomHandler(msgAddr, repoRef, reqHandler)
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +397,10 @@ func (c *LocalRepoRef) getMeta(name string) ([]byte, error) {
 }
 
 func (c *LocalRepoRef) setMeta(name string, value []byte) error {
-	c.server.SetValue(name, value)
+	if err := c.server.Set(name, value); err != nil {
+		return err
+	}
+
 	evtType := getEventType(name)
 	if c.eventMgr != nil && evtType != EVENT_NONE {
 		c.eventMgr.notify(evtType, value)
@@ -403,7 +409,10 @@ func (c *LocalRepoRef) setMeta(name string, value []byte) error {
 }
 
 func (c *LocalRepoRef) deleteMeta(name string) error {
-	c.server.DeleteValue(name)
+	if err := c.server.Delete(name); err != nil {
+		return err
+	}
+
 	if c.eventMgr != nil && findTypeFromKey(name) == KIND_INDEX_DEFN {
 		c.eventMgr.notify(EVENT_DROP_INDEX, []byte(name))
 	}
@@ -703,7 +712,7 @@ func marshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
 		PartitionScheme: partnScheme,
 		PartnExpression: proto.String(defn.PartitionKey),
 	}
-	
+
 	return proto.Marshal(pDefn)
 }
 
@@ -897,49 +906,6 @@ func isStabilityTimestampKey(key string) bool {
 ///////////////////////////////////////////////////////////
 
 //
-// Handle create Index request in the dictionary.  If this function
-// returns true, it means createIndex request completes successfully.
-// If this function returns false, then the result is unknown.
-//
-func (m *MetadataRepo) createIndexAndUpdateTopology(defn *common.IndexDefn, host string) error {
-
-	if err := m.CreateIndex(defn); err != nil {
-		return err
-	}
-
-	if err := m.addIndexToTopology(defn, host); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-//
-// Handle delete Index request in the dictionary.  If this function
-// returns true, it means deleteIndex request completes successfully.
-// If this function returns false, then the result is unknown.
-//
-func (m *MetadataRepo) deleteIndexAndUpdateTopology(id common.IndexDefnId) error {
-
-	common.Debugf("MetadataRepo.deleteIndex() : index to delete = %d", id)
-
-	defn, _ := m.GetIndexDefnById(id)
-
-	// Drop the index defnition before removing it from the topology.  If it fails to
-	// remove the index defn from topology, it can mean that there is a dangling reference
-	// in the topology with a deleted index defn, but it is easier to detect.
-	if err := m.DropIndexById(id); err != nil {
-		return err
-	}
-
-	if err := m.deleteIndexFromTopology(defn.Bucket, id); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-//
 // Add Index to Topology
 //
 func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, host string) error {
@@ -1031,85 +997,66 @@ func (m *LocalRepoRef) OnNewProposal(txnid c.Txnid, op c.OpCode, key string, con
 	switch op {
 	case c.OPCODE_ADD:
 		if isIndexDefnKey(key) {
-			indexDefn, err := UnmarshallIndexDefn(content)
-			if err != nil {
-				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall index defn for key %s", key)
-				return &c.RecoverableError{Reason : err.Error()}
-			}
-
-			if err := m.notifier.OnIndexCreate(indexDefn); err != nil {
-				return &c.RecoverableError{Reason : err.Error()}
-			}	
-			return nil
-
-		} else if isIndexTopologyKey(key) {
-			topology, err := unmarshallIndexTopology(content)
-			if err != nil {
-				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall topology for key %s", key)
-				return &c.RecoverableError{Reason : err.Error()}
-			}
-
-			if err := m.notifier.OnTopologyUpdate(topology); err != nil {
-				return &c.RecoverableError{Reason : err.Error()}
-			}	
-			return nil
+			return m.onNewProposalForCreateIndexDefn(txnid, op, key, content)
 		}
 
 	case c.OPCODE_SET:
 		if isIndexDefnKey(key) {
-			indexDefn, err := UnmarshallIndexDefn(content)
-			if err != nil {
-				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall index defn for key %s", key)
-				return &c.RecoverableError{Reason : err.Error()}
-			}
-
-			if err := m.notifier.OnIndexCreate(indexDefn); err != nil {
-				return &c.RecoverableError{Reason : err.Error()}
-			}	
-			return nil
-
-		} else if isIndexTopologyKey(key) {
-			topology, err := unmarshallIndexTopology(content)
-			if err != nil {
-				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall topology for key %s", key)
-				return &c.RecoverableError{Reason : err.Error()}
-			}
-
-			if err := m.notifier.OnTopologyUpdate(topology); err != nil {
-				return &c.RecoverableError{Reason : err.Error()}
-			}	
-			return nil
+			return m.onNewProposalForCreateIndexDefn(txnid, op, key, content)
 		}
 
 	case c.OPCODE_DELETE:
 		if isIndexDefnKey(key) {
-
-			i := strings.Index(key, "/")
-			if i != -1 && i < len(key)-1 {
-
-				id, err := strconv.ParseUint(key[i+1:], 10, 64)
-				if err != nil {
-					common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall IndexDefnId key %s", key)
-					return &c.RecoverableError{Reason : err.Error()}
-				}
-
-				if err := m.notifier.OnIndexDelete(common.IndexDefnId(id)); err != nil {
-					return &c.RecoverableError{Reason : err.Error()}
-				}	
-				return nil
-
-			} else {
-				common.Debugf("LocalRepoRef.OnNewProposal(): fail to unmarshall IndexDefnId key %s", key)
-				err := NewError(ERROR_META_FAIL_TO_PARSE_INT, NORMAL, METADATA_REPO, nil,
-					"MetadataRepo.OnNewProposal() : cannot parse index definition id")
-				return &c.RecoverableError{Reason : err.Error()}
-			}
+			return m.onNewProposalForDeleteIndexDefn(txnid, op, key, content)
 		}
 	}
 
 	return nil
 }
 
-func (m *LocalRepoRef) OnCommit(tnxid c.Txnid, key string) {
+func (m *LocalRepoRef) OnCommit(txnid c.Txnid, key string) {
 	// nothing to do
+}
+
+func (m *LocalRepoRef) onNewProposalForCreateIndexDefn(txnid c.Txnid, op c.OpCode, key string, content []byte) error {
+
+	common.Debugf("LocalRepoRef.OnNewProposalForCreateIndexDefn(): key %s", key)
+
+	indexDefn, err := UnmarshallIndexDefn(content)
+	if err != nil {
+		common.Debugf("LocalRepoRef.OnNewProposalForCreateIndexDefn(): fail to unmarshall index defn for key %s", key)
+		return &c.RecoverableError{Reason: err.Error()}
+	}
+
+	if err := m.notifier.OnIndexCreate(indexDefn); err != nil {
+		return &c.RecoverableError{Reason: err.Error()}
+	}
+
+	return nil
+}
+
+func (m *LocalRepoRef) onNewProposalForDeleteIndexDefn(txnid c.Txnid, op c.OpCode, key string, content []byte) error {
+
+	common.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): key %s", key)
+
+	i := strings.Index(key, "/")
+	if i != -1 && i < len(key)-1 {
+
+		id, err := strconv.ParseUint(key[i+1:], 10, 64)
+		if err != nil {
+			common.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): fail to unmarshall IndexDefnId key %s", key)
+			return &c.RecoverableError{Reason: err.Error()}
+		}
+
+		if err := m.notifier.OnIndexDelete(common.IndexDefnId(id)); err != nil {
+			return &c.RecoverableError{Reason: err.Error()}
+		}
+		return nil
+
+	} else {
+		common.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): fail to unmarshall IndexDefnId key %s", key)
+		err := NewError(ERROR_META_FAIL_TO_PARSE_INT, NORMAL, METADATA_REPO, nil,
+			"MetadataRepo.OnNewProposalForDeleteIndexDefn() : cannot parse index definition id")
+		return &c.RecoverableError{Reason: err.Error()}
+	}
 }
