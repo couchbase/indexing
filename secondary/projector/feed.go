@@ -726,6 +726,7 @@ func (feed *Feed) addInstances(req *protobuf.AddInstancesRequest) error {
 		if _, ok := feed.kvdata[bucketn]; ok {
 			feed.kvdata[bucketn].AddEngines(engines, feed.endpoints)
 		} else {
+			feed.errorf("addInstances() invalid bucket", bucketn, nil)
 			err = projC.ErrorInvalidBucket
 		}
 	}
@@ -759,6 +760,7 @@ func (feed *Feed) delInstances(req *protobuf.DelInstancesRequest) error {
 		if _, ok := feed.kvdata[bucketn]; ok {
 			feed.kvdata[bucketn].DeleteEngines(uuids)
 		} else {
+			feed.errorf("delInstances() invalid bucket", bucketn, nil)
 			err = projC.ErrorInvalidBucket
 		}
 	}
