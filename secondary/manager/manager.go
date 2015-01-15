@@ -52,7 +52,6 @@ type MetadataNotifier interface {
 	OnIndexCreate(*common.IndexDefn) error
 	OnIndexDelete(common.IndexDefnId) error
 	OnIndexBuild([]common.IndexDefnId) error
-	OnTopologyUpdate(*IndexTopology) error
 }
 
 type RequestServer interface {

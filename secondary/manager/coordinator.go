@@ -11,6 +11,7 @@
 package manager
 
 import (
+	"errors"
 	"fmt"
 	common "github.com/couchbase/gometa/common"
 	message "github.com/couchbase/gometa/message"
@@ -609,6 +610,16 @@ func (c *Coordinator) Commit(txid common.Txnid) error {
 	return nil
 }
 
+func (c *Coordinator) Abort(fid string, reqId uint64, err string) error {
+	c.updateRequestOnRespond(fid, reqId, err)
+	return nil
+}
+
+func (c *Coordinator) Respond(fid string, reqId uint64, err string) error {
+	c.updateRequestOnRespond(fid, reqId, err)
+	return nil
+}
+
 func (c *Coordinator) GetQuorumVerifier() protocol.QuorumVerifier {
 	return c
 }
@@ -663,6 +674,31 @@ func (c *Coordinator) updateRequestOnNewProposal(proposal protocol.ProposalMsg) 
 		if ok {
 			delete(c.state.pendings, reqId)
 			c.state.proposals[common.Txnid(txnid)] = handle
+		}
+	}
+}
+
+func (c *Coordinator) updateRequestOnRespond(fid string, reqId uint64, err string) {
+
+	// If this host is the one that sends the request to the leader
+	if fid == c.GetFollowerId() {
+		c.state.mutex.Lock()
+		defer c.state.mutex.Unlock()
+
+		// look up the request handle from the pending list and
+		// move it to the proposed list
+		handle, ok := c.state.pendings[reqId]
+		if ok {
+			delete(c.state.pendings, reqId)
+
+			handle.CondVar.L.Lock()
+			defer handle.CondVar.L.Unlock()
+
+			if len(err) != 0 {
+				handle.Err = errors.New(err)
+			}
+
+			handle.CondVar.Signal()
 		}
 	}
 }

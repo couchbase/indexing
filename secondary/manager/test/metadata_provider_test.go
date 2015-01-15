@@ -255,10 +255,6 @@ func (n *notifier) OnIndexDelete(common.IndexDefnId) error {
 	return nil
 }
 
-func (n *notifier) OnTopologyUpdate(*manager.IndexTopology) error {
-	return nil
-}
-
 func (n *notifier) OnIndexBuild([]common.IndexDefnId) error {
 	return nil
 }

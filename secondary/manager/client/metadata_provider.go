@@ -467,12 +467,6 @@ func (w *watcher) Commit(txid common.Txnid) error {
 
 func (w *watcher) LogProposal(p protocol.ProposalMsg) error {
 
-	if common.OpCode(p.GetOpCode()) == common.OPCODE_ABORT ||
-		common.OpCode(p.GetOpCode()) == common.OPCODE_RESPONSE {
-		w.Abort(p.GetReqId(), p.GetKey())
-		return nil
-	}
-
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
@@ -488,7 +482,17 @@ func (w *watcher) LogProposal(p protocol.ProposalMsg) error {
 	return nil
 }
 
-func (w *watcher) Abort(reqId uint64, err string) {
+func (w *watcher) Abort(fid string, reqId uint64, err string) error {
+	w.respond(reqId, err)
+	return nil
+}
+
+func (w *watcher) Respond(fid string, reqId uint64, err string) error {
+	w.respond(reqId, err)
+	return nil
+}
+
+func (w *watcher) respond(reqId uint64, err string) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
