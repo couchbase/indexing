@@ -1,3 +1,5 @@
+// +build ignore
+
 package queryport
 
 import "reflect"
@@ -56,7 +58,7 @@ func TestStatistics(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	client, err := client.NewGsiClient("localhost:9000", "servertest", config)
 	if err != nil {
 		t.Fatal(err)
 	}

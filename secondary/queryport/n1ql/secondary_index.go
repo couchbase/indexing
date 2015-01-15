@@ -199,7 +199,8 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Err
 		"",                    /*partnStr*/
 		"",                    /*whereStr*/
 		nil,                   /*secStrs*/
-		true /*isPrimary*/)
+		true,                  /*isPrimary*/
+		nil /*TODO: tie this with CREATE INDEX stmt*/)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreatePrimaryIndex()")
 	}
@@ -237,7 +238,8 @@ func (gsi *gsiKeyspace) CreateIndex(
 		string(datastore.GSI), /*using*/
 		"N1QL",                /*exprType*/
 		partnStr, whereStr, secStrs,
-		false /*isPrimary*/)
+		false, /*isPrimary*/
+		nil /*TODO: tie this with CREATE INDEX stmt*/)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreatePrimaryIndex()")
 	}

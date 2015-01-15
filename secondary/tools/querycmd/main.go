@@ -67,6 +67,9 @@ type Command struct {
 	whereStr  string
 	secStrs   []string
 	isPrimary bool
+	with      string
+	// options for build index
+	bindexes []string
 	// options for Range, Statistics, Count
 	low       c.SecondaryKey
 	high      c.SecondaryKey
@@ -76,7 +79,7 @@ type Command struct {
 }
 
 func parseArgs(arguments []string) (*Command, []string) {
-	var fields string
+	var fields, bindexes string
 	var inclusion uint
 	var equal, low, high string
 
@@ -85,7 +88,7 @@ func parseArgs(arguments []string) (*Command, []string) {
 
 	// basic options
 	fset.StringVar(&cmdOptions.server, "server", "localhost:9000", "Cluster server address")
-	fset.StringVar(&cmdOptions.opType, "type", "scanAll", "Index command (scan|stats|scanAll|count|create|drop|list)")
+	fset.StringVar(&cmdOptions.opType, "type", "scanAll", "Index command (scan|stats|scanAll|count|nodes|create|build|drop|list)")
 	fset.StringVar(&cmdOptions.indexName, "index", "", "Index name")
 	fset.StringVar(&cmdOptions.bucket, "bucket", "default", "Bucket name")
 	fset.StringVar(&cmdOptions.auth, "auth", "Administrator:asdasd", "Auth user and password")
@@ -96,6 +99,9 @@ func parseArgs(arguments []string) (*Command, []string) {
 	fset.StringVar(&cmdOptions.whereStr, "where", "", "where clause for create index")
 	fset.StringVar(&fields, "fields", "", "Comma separated on-index fields") // secStrs
 	fset.BoolVar(&cmdOptions.isPrimary, "primary", false, "Is primary index")
+	fset.StringVar(&cmdOptions.with, "with", "", "index specific properties")
+	// options for build-index
+	fset.StringVar(&bindexes, "indexes", "", "csv list of bucket.index to build")
 	// options for Range, Statistics, Count
 	fset.StringVar(&low, "low", "[]", "Span.Range: [low]")
 	fset.StringVar(&high, "high", "[]", "Span.Range: [high]")
@@ -113,6 +119,9 @@ func parseArgs(arguments []string) (*Command, []string) {
 	if err := fset.Parse(arguments); err != nil {
 		log.Println(arguments)
 		log.Fatal(err)
+	}
+	if len(bindexes) > 0 {
+		cmdOptions.bindexes = strings.Split(bindexes, ",")
 	}
 
 	cmdOptions.inclusion = qclient.Inclusion(inclusion)
@@ -193,7 +202,28 @@ func handleCommand(
 	iname, bucket, limit := cmd.indexName, cmd.bucket, cmd.limit
 	low, high, equal, incl := cmd.low, cmd.high, cmd.equal, cmd.inclusion
 
+	indexes, err := client.Refresh()
+
 	switch cmd.opType {
+	case "nodes":
+		fmt.Println("List of nodes:")
+		nodes, err := client.Nodes()
+		if err != nil {
+			log.Fatal(err)
+		}
+		for adminport, queryport := range nodes {
+			fmt.Println("    %v : scan %v", adminport, queryport)
+		}
+
+	case "list":
+		if err != nil {
+			return err
+		}
+		fmt.Println("List of indexes:")
+		for _, index := range indexes {
+			printIndexInfo(index)
+		}
+
 	case "create":
 		var defnID c.IndexDefnId
 		if len(cmd.secStrs) == 0 || cmd.indexName == "" {
@@ -201,9 +231,30 @@ func handleCommand(
 		}
 		defnID, err = client.CreateIndex(
 			iname, bucket, cmd.using, cmd.exprType,
-			cmd.partnStr, cmd.whereStr, cmd.secStrs, cmd.isPrimary)
+			cmd.partnStr, cmd.whereStr, cmd.secStrs, cmd.isPrimary,
+			[]byte(cmd.with))
 		if err == nil {
 			fmt.Printf("Index created: %v\n", defnID)
+		}
+
+	case "build":
+		defnIDs := make([]c.IndexDefnId, 0, len(cmd.bindexes))
+		for _, bindex := range cmd.bindexes {
+			v := strings.Split(bindex, ".")
+			if len(v) < 0 {
+				return fmt.Errorf("Invalid index specified : %v", bindex)
+			}
+			bucket, iname = v[0], v[1]
+			defnID, ok := getDefnID(client, bucket, iname)
+			if ok {
+				defnIDs = append(defnIDs, defnID)
+			} else {
+				err = fmt.Errorf("index %v/%v unknown", bucket, iname)
+				break
+			}
+		}
+		if err == nil {
+			err = client.BuildIndexes(defnIDs)
 		}
 
 	case "drop":
@@ -215,17 +266,6 @@ func handleCommand(
 			}
 		} else {
 			err = fmt.Errorf("index %v/%v unknown", bucket, iname)
-		}
-
-	case "list":
-		var indexes []*mclient.IndexMetadata
-		indexes, err = client.Refresh()
-		if err != nil {
-			return err
-		}
-		fmt.Println("List of indexes:")
-		for _, index := range indexes {
-			printIndexInfo(index)
 		}
 
 	case "scan":

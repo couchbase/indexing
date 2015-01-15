@@ -11,6 +11,15 @@ var ErrorProtocol = errors.New("queryport.client.protocol")
 // ErrorNoHost
 var ErrorNoHost = errors.New("queryport.client.noHost")
 
+// ErrorEmptyDeployment
+var ErrorEmptyDeployment = errors.New("queryport.client.emptyDeployment")
+
+// ErrorManyDeployment
+var ErrorManyDeployment = errors.New("queryport.client.manyDeployment")
+
+// ErrorInvalidDeploymentNode
+var ErrorInvalidDeploymentNode = errors.New("queryport.client.invalidDeploymentPlan")
+
 // ErrorIndexNotFound
 var ErrorIndexNotFound = errors.New("queryport.indexNotFound")
 
@@ -51,23 +60,55 @@ const (
 
 // BridgeAccessor for Create,Drop,List,Refresh operations.
 type BridgeAccessor interface {
-	// Refresh will refresh to latest set of index managed by GSI
+	// Refresh shall refresh to latest set of index managed by GSI
 	// cluster and return the list of index.
 	Refresh() ([]*mclient.IndexMetadata, error)
 
+	// Nodes shall return a map of adminport and queryport for indexer
+	// nodes.
+	Nodes() (map[string]string, error)
+
 	// CreateIndex and return defnID of created index.
+	// name
+	//      index name
+	// bucket
+	//      bucket name in which index is defined.
+	// using
+	//      token should always be GSI.
+	// exprType
+	//      token specifies how in interpret partnExpr, whereExpr, secExprs
+	// partnExpr
+	//      marshalled expression of type `exprType` that emits partition
+	//      value from a kv-document.
+	// whereExpr
+	//      marshalled predicate-expression of type `exprType` that emits
+	//      a boolean from a kv-document.
+	// secExprs
+	//      marshalled list of expression of type `exprType` that emits
+	//      an array of secondary-key values from a kv-document.
+	// isPrimary
+	//      specify whether the index is created on docid.
+	// with
+	//      JSON marshalled description about index deployment (and more...).
 	CreateIndex(
 		name, bucket, using, exprType, partnExpr, whereExpr string,
-		secExprs []string, isPrimary bool) (common.IndexDefnId, error)
+		secExprs []string, isPrimary bool,
+		with []byte) (common.IndexDefnId, error)
 
-	// DropIndex from GSI cluster.
+	// BuildIndexes to build a deferred set of indexes. This call implies
+	// that indexes specified are already created.
+	BuildIndexes(defnIDs []common.IndexDefnId) error
+
+	// DropIndex to drop index specified by `defnID`.
+	// - if index is in deferred build state, it shall be removed
+	//   from deferred list.
 	DropIndex(defnID common.IndexDefnId) error
 
-	// GetQueryports will return list of queryports for all indexer in
+	// GetQueryports shall return list of queryports for all indexer in
 	// the cluster.
 	GetQueryports() (queryports []string)
 
-	// GetQueryport will fetch queryport address for indexer hosting
+	// GetQueryport shall fetch queryport address for indexer hosting
 	// index `defnID`
 	GetQueryport(defnID common.IndexDefnId) (queryport string, ok bool)
 
@@ -109,10 +150,9 @@ type GsiAccessor interface {
 	CountRange(defnID uint64) (int64, error)
 }
 
-// TODO: integration with MetadataProvider
 var useMetadataProvider = false
 
-// GsiClient for accessing GSI cluster. The client will
+// GsiClient for accessing GSI cluster. The client shall
 // use `adminport` for meta-data operation and `queryport`
 // for index-scan related operations.
 type GsiClient struct {
@@ -142,14 +182,25 @@ func (c *GsiClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	return c.bridge.Refresh()
 }
 
+// Nodes implements BridgeAccessor{} interface.
+func (c *GsiClient) Nodes() (map[string]string, error) {
+	return c.bridge.Nodes()
+}
+
 // CreateIndex implements BridgeAccessor{} interface.
 func (c *GsiClient) CreateIndex(
 	name, bucket, using, exprType, partnExpr, whereExpr string,
-	secExprs []string, isPrimary bool) (common.IndexDefnId, error) {
+	secExprs []string, isPrimary bool,
+	with []byte) (common.IndexDefnId, error) {
 
 	return c.bridge.CreateIndex(
 		name, bucket, using, exprType, partnExpr, whereExpr,
-		secExprs, isPrimary)
+		secExprs, isPrimary, with)
+}
+
+// BuildIndexes implements BridgeAccessor{} interface.
+func (c *GsiClient) BuildIndexes(defnIDs []common.IndexDefnId) error {
+	return c.bridge.BuildIndexes(defnIDs)
 }
 
 // DropIndex implements BridgeAccessor{} interface.

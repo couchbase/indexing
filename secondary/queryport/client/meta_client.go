@@ -2,6 +2,7 @@ package client
 
 import "sync"
 import "fmt"
+import "encoding/json"
 
 import common "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
@@ -51,7 +52,7 @@ func newMetaBridgeClient(
 	return b, nil
 }
 
-// Refresh list all indexes.
+// Refresh implement BridgeAccessor{} interface.
 func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	mindexes := b.mdClient.ListIndex()
 	indexes := make([]*mclient.IndexMetadata, 0, len(mindexes))
@@ -77,18 +78,69 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	return indexes, nil
 }
 
+// Nodes implement BridgeAccessor{} interface.
+func (b *metadataClient) Nodes() (map[string]string, error) {
+	nodes := make(map[string]string)
+	for adminport, queryport := range b.queryports {
+		nodes[adminport] = queryport
+	}
+	return nodes, nil
+}
+
 // CreateIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) CreateIndex(
 	indexName, bucket, using, exprType, partnExpr, whereExpr string,
-	secExprs []string, isPrimary bool) (common.IndexDefnId, error) {
+	secExprs []string, isPrimary bool,
+	with []byte) (common.IndexDefnId, error) {
 
-	adminport, ok := b.makeTopology()
-	if !ok {
-		return common.IndexDefnId(0), ErrorNoHost
+	withm := make(map[string]interface{})
+
+	err := json.Unmarshal(with, &withm)
+	if err != nil {
+		return common.IndexDefnId(0), err
 	}
+	nodes := withm["nodes"].([]interface{})
+
+	if len(nodes) < 1 {
+		return common.IndexDefnId(0), ErrorEmptyDeployment
+	} else if len(nodes) > 1 {
+		return common.IndexDefnId(0), ErrorManyDeployment
+	}
+
+	adminport, ok := nodes[0].(string) // topology
+	if !ok {
+		return common.IndexDefnId(0), ErrorInvalidDeploymentNode
+	}
+
 	return b.mdClient.CreateIndex(
 		indexName, bucket, using, exprType, partnExpr, whereExpr,
 		adminport, secExprs, isPrimary)
+}
+
+// BuildIndexes implements BridgeAccessor{} interface.
+func (b *metadataClient) BuildIndexes(defnIDs []common.IndexDefnId) error {
+	_, ok := b.getNodes(defnIDs)
+	if !ok {
+		return ErrorIndexNotFound
+	}
+
+	dispatch := make(map[string][]common.IndexDefnId) // adminport -> []indexes
+	for _, defnID := range defnIDs {
+		adminport, ok := b.getNode(defnID)
+		if !ok {
+			return ErrorIndexNotFound
+		}
+		if _, ok := dispatch[adminport]; !ok {
+			dispatch[adminport] = make([]common.IndexDefnId, 0)
+		}
+		dispatch[adminport] = append(dispatch[adminport], defnID)
+	}
+
+	// TODO: This needs to be added at the metadata-client.
+	//for adminport, defnIDs := range dispatch {
+	//  b.mdClient.BuildIndexes(adminport, defnIDs)
+	//}
+	return nil
 }
 
 // DropIndex implements BridgeAccessor{} interface.
@@ -130,21 +182,25 @@ func (b *metadataClient) Close() {
 	b.mdClient.Close()
 }
 
-// makeTopology for a new index based on round robin method.
-func (b *metadataClient) makeTopology() (adminport string, ok bool) {
-	b.rw.RLock()
-	defer b.rw.RUnlock()
+// getNodes return the set of nodes hosting the specified set
+// of indexes
+func (b *metadataClient) getNodes(
+	defnIDs []common.IndexDefnId) (adminport []string, ok bool) {
 
-	if len(b.topology) == 0 {
-		return "", false
-	}
-	nIndexes := 0xFFFFFFFF
-	for addr, indexes := range b.topology {
-		if len(indexes) <= nIndexes {
-			adminport, nIndexes = addr, len(indexes)
+	m := make(map[string]bool)
+	for _, defnID := range defnIDs {
+		adminport, ok := b.getNode(defnID)
+		if !ok {
+			return nil, false
 		}
+		m[adminport] = true
 	}
-	return adminport, true
+
+	adminports := make([]string, 0)
+	for adminport := range m {
+		adminports = append(adminports, adminport)
+	}
+	return adminports, true
 }
 
 // getNode hosting index with `defnID`.

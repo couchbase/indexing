@@ -78,7 +78,7 @@ func newCbqClient(cluster string) (*cbqClient, error) {
 	return b, nil
 }
 
-// Refresh list all indexes.
+// Refresh implement BridgeAccessor{} interface.
 func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	var resp *http.Response
 	var mresp indexMetaResponse
@@ -111,10 +111,16 @@ func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	return nil, err
 }
 
-// CreateIndex implements BridgeAccessor{} interface.
+// Nodes implement BridgeAccessor{} interface.
+func (b *cbqClient) Nodes() (map[string]string, error) {
+	return map[string]string{b.adminport: b.queryport}, nil
+}
+
+// CreateIndex implement BridgeAccessor{} interface.
 func (b *cbqClient) CreateIndex(
 	name, bucket, using, exprType, partnExpr, whereExpr string,
-	secExprs []string, isPrimary bool) (common.IndexDefnId, error) {
+	secExprs []string, isPrimary bool,
+	with []byte) (common.IndexDefnId, error) {
 
 	var resp *http.Response
 	var mresp indexMetaResponse
@@ -151,7 +157,12 @@ func (b *cbqClient) CreateIndex(
 	return 0, err
 }
 
-// DropIndex implements BridgeAccessor{} interface.
+// BuildIndexes implement BridgeAccessor{} interface.
+func (b *cbqClient) BuildIndexes(defnID []common.IndexDefnId) error {
+	panic("cbqClient does not implement build-indexes")
+}
+
+// DropIndex implement BridgeAccessor{} interface.
 func (b *cbqClient) DropIndex(defnID common.IndexDefnId) error {
 	var resp *http.Response
 
@@ -179,18 +190,18 @@ func (b *cbqClient) DropIndex(defnID common.IndexDefnId) error {
 	return err
 }
 
-// GetQueryports implements BridgeAccessor{} interface.
+// GetQueryports implement BridgeAccessor{} interface.
 func (b *cbqClient) GetQueryports() (queryports []string) {
 	return []string{b.queryport}
 }
 
-// GetQueryport implements BridgeAccessor{} interface.
+// GetQueryport implement BridgeAccessor{} interface.
 func (b *cbqClient) GetQueryport(
 	defnID common.IndexDefnId) (queryport string, ok bool) {
 	return b.queryport, true
 }
 
-// Close implements BridgeAccessor
+// Close implement BridgeAccessor
 func (b *cbqClient) Close() {
 	// TODO: do nothing ?
 }
