@@ -227,25 +227,28 @@ func (ie *IndexEvaluator) TransformRoute(
 		uuid, where, string(npkey), string(nkey))
 	switch m.Opcode {
 	case mcd.UPR_MUTATION:
-		if where { // WHERE predicate
-			// NOTE: Upsert shall be targeted to indexer node hosting the
-			// key.
-			raddrs := instn.UpsertEndpoints(m, npkey, nkey, okey)
-			for _, raddr := range raddrs {
-				dkv, ok := data[raddr].(*c.DataportKeyVersions)
-				if !ok {
-					kv := c.NewKeyVersions(seqno, m.Key, 4)
-					kv.AddUpsert(uuid, nkey, okey)
-					dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
-				} else {
-					dkv.Kv.AddUpsert(uuid, nkey, okey)
-				}
-				data[raddr] = dkv
+		// FIXME: TODO: where clause is not used to for optimizing out messages
+		// not passing the where clause. For this we need a gaurantee that
+		// where clause will be defined only on immutable fields.
+		//if where { // WHERE predicate
+		// NOTE: Upsert shall be targeted to indexer node hosting the
+		// key.
+		raddrs := instn.UpsertEndpoints(m, npkey, nkey, okey)
+		for _, raddr := range raddrs {
+			dkv, ok := data[raddr].(*c.DataportKeyVersions)
+			if !ok {
+				kv := c.NewKeyVersions(seqno, m.Key, 4)
+				kv.AddUpsert(uuid, nkey, okey)
+				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+			} else {
+				dkv.Kv.AddUpsert(uuid, nkey, okey)
 			}
+			data[raddr] = dkv
 		}
+		//}
 		// NOTE: UpsertDeletion shall be broadcasted if old-key is not
 		// available.
-		raddrs := instn.UpsertDeletionEndpoints(m, opkey, nkey, okey)
+		raddrs = instn.UpsertDeletionEndpoints(m, opkey, nkey, okey)
 		for _, raddr := range raddrs {
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
 			if !ok {
