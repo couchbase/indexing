@@ -720,11 +720,16 @@ func (feed *Feed) addInstances(req *protobuf.AddInstancesRequest) error {
 	if err := feed.processSubscribers(req); err != nil { // :SideEffect:
 		return err
 	}
+	var err error
 	// post to kv data-path
 	for bucketn, engines := range feed.engines {
-		feed.kvdata[bucketn].AddEngines(engines, feed.endpoints)
+		if _, ok := feed.kvdata[bucketn]; ok {
+			feed.kvdata[bucketn].AddEngines(engines, feed.endpoints)
+		} else {
+			err = projC.ErrorInvalidBucket
+		}
 	}
-	return nil
+	return err
 }
 
 // only data-path shall be updated.
@@ -748,12 +753,17 @@ func (feed *Feed) delInstances(req *protobuf.DelInstancesRequest) error {
 		bucknIds[bucketn] = uuids
 		fengines[bucketn] = m
 	}
+	var err error
 	// posted post to kv data-path.
 	for bucketn, uuids := range bucknIds {
-		feed.kvdata[bucketn].DeleteEngines(uuids)
+		if _, ok := feed.kvdata[bucketn]; ok {
+			feed.kvdata[bucketn].DeleteEngines(uuids)
+		} else {
+			err = projC.ErrorInvalidBucket
+		}
 	}
 	feed.engines = fengines // :SideEffect:
-	return nil
+	return err
 }
 
 // endpoints are independent.
@@ -809,8 +819,9 @@ func (feed *Feed) shutdown() error {
 		feeder.CloseFeed()
 	}
 	// close data-path
-	for _, kvdata := range feed.kvdata {
+	for bucketn, kvdata := range feed.kvdata {
 		kvdata.Close()
+		delete(feed.kvdata, bucketn) // :SideEffect:
 	}
 	// close downstream
 	for _, endpoint := range feed.endpoints {
