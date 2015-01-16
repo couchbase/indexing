@@ -131,8 +131,8 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 	var heartBeat <-chan time.Time // for Sync message
 
 	stats := vr.newStats()
-	addEngineCount := stats.Get("addEngines").(float64)
-	delEngineCount := stats.Get("delEngines").(float64)
+	addEngineCount := stats.Get("addInsts").(float64)
+	delEngineCount := stats.Get("delInsts").(float64)
 	syncCount := stats.Get("syncs").(float64)
 	sshotCount := stats.Get("snapshots").(float64)
 	mutationCount := stats.Get("mutations").(float64)
@@ -179,8 +179,8 @@ loop:
 			case vrCmdGetStatistics:
 				c.Tracef("%v vrCmdStatistics\n", vr.logPrefix)
 				respch := msg[1].(chan []interface{})
-				stats.Set("addEngines", addEngineCount)
-				stats.Set("delEngines", delEngineCount)
+				stats.Set("addInsts", addEngineCount)
+				stats.Set("delInsts", delEngineCount)
 				stats.Set("syncs", syncCount)
 				stats.Set("snapshots", sshotCount)
 				stats.Set("mutations", mutationCount)
@@ -298,31 +298,6 @@ func (vr *VbucketRoutine) broadcast2Endpoints(data interface{}) {
 	}
 }
 
-func (vr *VbucketRoutine) printCtrl(v interface{}) {
-	switch val := v.(type) {
-	case map[string]c.RouterEndpoint:
-		for raddr := range val {
-			c.Tracef("%v knows endpoint %v\n", vr.logPrefix, raddr)
-		}
-	case map[uint64]*Engine:
-		for uuid := range val {
-			c.Tracef("%v knows engine %v\n", vr.logPrefix, uuid)
-		}
-	}
-}
-
-func (vr *VbucketRoutine) newStats() c.Statistics {
-	m := map[string]interface{}{
-		"addEngines": float64(0), // no. of update-engine commands
-		"delEngines": float64(0), // no. of delete-engine commands
-		"syncs":      float64(0), // no. of Sync message generated
-		"snapshots":  float64(0), // no. of Begin
-		"mutations":  float64(0), // no. of Upsert, Delete
-	}
-	stats, _ := c.NewStatistics(m)
-	return stats
-}
-
 func (vr *VbucketRoutine) makeStreamBeginData(seqno uint64) interface{} {
 	defer func() {
 		if r := recover(); r != nil {
@@ -408,4 +383,29 @@ func (vr *VbucketRoutine) makeStreamEndData(seqno uint64) interface{} {
 		}
 	}
 	return nil
+}
+
+func (vr *VbucketRoutine) newStats() c.Statistics {
+	m := map[string]interface{}{
+		"addInsts":  float64(0), // no. of update-engine commands
+		"delInsts":  float64(0), // no. of delete-engine commands
+		"syncs":     float64(0), // no. of Sync message generated
+		"snapshots": float64(0), // no. of Begin
+		"mutations": float64(0), // no. of Upsert, Delete
+	}
+	stats, _ := c.NewStatistics(m)
+	return stats
+}
+
+func (vr *VbucketRoutine) printCtrl(v interface{}) {
+	switch val := v.(type) {
+	case map[string]c.RouterEndpoint:
+		for raddr := range val {
+			c.Tracef("%v knows endpoint %v\n", vr.logPrefix, raddr)
+		}
+	case map[uint64]*Engine:
+		for uuid := range val {
+			c.Tracef("%v knows engine %v\n", vr.logPrefix, uuid)
+		}
+	}
 }

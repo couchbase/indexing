@@ -163,23 +163,21 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 	harakiri := time.After(endpoint.harakiriTm * time.Millisecond)
 	buffers := newEndpointBuffers(raddr)
 
-	stats, _ := c.NewStatistics(nil)
-	mutationCount := float64(0)
-	vbmapCount := float64(0)
-	flushCount := float64(0)
-	bufferCount := int(0)
+	messageCount := int64(0)
+	flushCount := int64(0)
+	mutationCount := int64(0)
 
 	flushBuffers := func() (err error) {
-		flushCount++
 		c.Tracef("%v sent %v mutations to %q\n",
-			endpoint.logPrefix, bufferCount, raddr)
-		if bufferCount > 0 {
+			endpoint.logPrefix, mutationCount, raddr)
+		if mutationCount > 0 {
+			flushCount++
 			err = buffers.flushBuffers(endpoint.conn, endpoint.pkt)
 			if err != nil {
 				c.Errorf("%v flushBuffers() %v\n", endpoint.logPrefix, err)
 			}
 		}
-		bufferCount = 0
+		mutationCount = 0
 		return
 	}
 
@@ -203,11 +201,11 @@ loop:
 				c.Tracef("%v added %v keyversions <%v:%v:%v> to %q\n",
 					endpoint.logPrefix, kv.Length(), data.Vbno, kv.Seqno,
 					kv.Commands, buffers.raddr)
-				mutationCount++ // count cummulative mutations
+				messageCount++ // count cummulative mutations
 				// reload harakiri
 				harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
-				bufferCount++ // count queued up mutations.
-				if bufferCount > endpoint.bufferSize {
+				mutationCount++ // count queued up mutations.
+				if mutationCount > int64(endpoint.bufferSize) {
 					if err := flushBuffers(); err != nil {
 						break loop
 					}
@@ -228,9 +226,9 @@ loop:
 
 			case endpCmdGetStatistics:
 				respch := msg[1].(chan []interface{})
-				stats.Set("mutations", mutationCount)
-				stats.Set("vbmaps", vbmapCount)
-				stats.Set("flushes", flushCount)
+				stats := endpoint.newStats()
+				stats.Set("messageCount", float64(messageCount))
+				stats.Set("flushCount", float64(flushCount))
 				respch <- []interface{}{map[string]interface{}(stats)}
 
 			case endpCmdClose:
@@ -251,4 +249,13 @@ loop:
 			break loop
 		}
 	}
+}
+
+func (endpoint *RouterEndpoint) newStats() c.Statistics {
+	m := map[string]interface{}{
+		"messageCount": float64(0),
+		"flushCount":   float64(0),
+	}
+	stats, _ := c.NewStatistics(m)
+	return stats
 }

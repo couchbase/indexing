@@ -129,8 +129,6 @@ func (kvdata *KVData) Close() error {
 func (kvdata *KVData) runScatter(
 	ts *protobuf.TsVbuuid, mutch <-chan *mc.UprEvent) {
 
-	stats := kvdata.newStats()
-
 	defer func() {
 		if r := recover(); r != nil {
 			c.Errorf("%v runScatter() crashed: %v\n", kvdata.logPrefix, r)
@@ -142,7 +140,9 @@ func (kvdata *KVData) runScatter(
 		c.Infof("%v ... stopped\n", kvdata.logPrefix)
 	}()
 
-	eventCount := 0
+	// stats
+	eventCount, addCount, delCount := int64(0), int64(0), int64(0)
+	tsCount := int64(0)
 
 loop:
 	for {
@@ -180,6 +180,7 @@ loop:
 						vr.AddEngines(kvdata.engines, kvdata.endpoints)
 					}
 				}
+				addCount++
 				respch <- []interface{}{nil}
 
 			case kvCmdDelEngines:
@@ -191,15 +192,22 @@ loop:
 				for _, engineKey := range engineKeys {
 					delete(kvdata.engines, engineKey)
 				}
+				delCount++
 				respch <- []interface{}{nil}
 
 			case kvCmdTs:
 				ts = ts.Union(msg[1].(*protobuf.TsVbuuid))
 				respch := msg[2].(chan []interface{})
+				tsCount++
 				respch <- []interface{}{nil}
 
 			case kvCmdGetStats:
 				respch := msg[1].(chan []interface{})
+				stats := kvdata.newStats()
+				stats.Set("events", float64(eventCount))
+				stats.Set("addInsts", float64(addCount))
+				stats.Set("delInsts", float64(delCount))
+				stats.Set("tsCount", float64(tsCount))
 				statVbuckets := make(map[string]interface{})
 				for i, vr := range kvdata.vrs {
 					statVbuckets[strconv.Itoa(int(i))] = vr.GetStatistics()
@@ -292,6 +300,9 @@ func (kvdata *KVData) newStats() c.Statistics {
 	statVbuckets := make(map[string]interface{})
 	m := map[string]interface{}{
 		"events":   float64(0),   // no. of mutations events received
+		"addInsts": float64(0),   // no. of addInstances received
+		"delInsts": float64(0),   // no. of delInsts received
+		"tsCount":  float64(0),   // no. of updateTs received
 		"vbuckets": statVbuckets, // per vbucket statistics
 	}
 	stats, _ := c.NewStatistics(m)

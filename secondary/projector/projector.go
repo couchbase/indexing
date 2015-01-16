@@ -3,6 +3,7 @@ package projector
 import "fmt"
 import "sync"
 import "strings"
+import "encoding/json"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -390,13 +391,12 @@ func (p *Projector) doShutdownTopic(
 	return protobuf.NewError(err)
 }
 
-func (p *Projector) doStatistics(request c.Statistics) ap.MessageMarshaller {
+func (p *Projector) doStatistics() interface{} {
 	c.Tracef("%v doStatistics()\n", p.logPrefix)
 
 	m := map[string]interface{}{
 		"clusterAddr": p.clusterAddr,
 		"adminport":   p.adminport,
-		"topics":      p.listTopics(),
 	}
 	stats, _ := c.NewStatistics(m)
 
@@ -405,8 +405,11 @@ func (p *Projector) doStatistics(request c.Statistics) ap.MessageMarshaller {
 		feeds.Set(topic, feed.GetStatistics())
 	}
 	stats.Set("feeds", feeds)
-	stats.Set("adminport", p.admind.GetStatistics())
-	return stats
+	data, err := json.Marshal(stats)
+	if err != nil {
+		c.Errorf("%v encoding statistics: %v\n", p.logPrefix, err)
+	}
+	return string(data)
 }
 
 // return list of active topics

@@ -794,8 +794,9 @@ func (feed *Feed) repairEndpoints(req *protobuf.RepairEndpointsRequest) error {
 	return nil
 }
 
-func (feed *Feed) getStatistics() map[string]interface{} {
+func (feed *Feed) getStatistics() c.Statistics {
 	stats, _ := c.NewStatistics(nil)
+	stats.Set("topic", feed.topic)
 	stats.Set("engines", feed.engineNames())
 	for bucketn, kvdata := range feed.kvdata {
 		stats.Set("bucket-"+bucketn, kvdata.GetStatistics())
@@ -804,8 +805,8 @@ func (feed *Feed) getStatistics() map[string]interface{} {
 	for raddr, endpoint := range feed.endpoints {
 		endStats.Set(raddr, endpoint.GetStatistics())
 	}
-	stats.Set("endpoint", endStats)
-	return map[string]interface{}(stats)
+	stats.Set("endpoints", endStats)
+	return stats
 }
 
 func (feed *Feed) shutdown() error {
