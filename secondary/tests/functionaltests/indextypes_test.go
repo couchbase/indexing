@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
@@ -32,7 +33,11 @@ func init() {
 
 	// setup cbauth
 	authURL := fmt.Sprintf("http://%s/_cbauth", kvaddress)
-	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, clusterconfig.Username, clusterconfig.Password, nil)
+	rpcURL := fmt.Sprintf("http://%s/index", kvaddress)
+	common.MaybeSetEnv("NS_SERVER_CBAUTH_RPC_URL", rpcURL)
+	common.MaybeSetEnv("NS_SERVER_CBAUTH_USER", clusterconfig.Username)
+	common.MaybeSetEnv("NS_SERVER_CBAUTH_PWD", clusterconfig.Password)
+	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, nil)
 
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	time.Sleep(5 * time.Second)
