@@ -20,7 +20,7 @@ type metadataClient struct {
 func newMetaBridgeClient(
 	cluster, serviceAddr string) (c *metadataClient, err error) {
 
-	cinfo, err := common.NewClusterInfoCache(cluster, "default" /*pooln*/)
+	cinfo, err := common.NewClusterInfoCache(common.ClusterUrl(cluster), "default" /*pooln*/)
 	if err != nil {
 		return nil, err
 	}

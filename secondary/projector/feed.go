@@ -957,7 +957,11 @@ func (feed *Feed) bucketDetails(
 func (feed *Feed) getLocalVbuckets(pooln, bucketn string) ([]uint16, error) {
 	prefix := feed.logPrefix
 	// gather vbnos based on colocation policy.
-	cinfo, err := c.NewClusterInfoCache(feed.cluster, pooln)
+	var cinfo *c.ClusterInfoCache
+	url, err := c.ClusterAuthUrl(feed.config["clusterAddr"].String())
+	if err == nil {
+		cinfo, err = c.NewClusterInfoCache(url, pooln)
+	}
 	if err != nil {
 		c.Errorf("%v ClusterInfoCache(`%v`): %v\n", prefix, bucketn, err)
 		return nil, projC.ErrorClusterInfo

@@ -386,6 +386,15 @@ func ClusterAuthUrl(cluster string) (string, error) {
 	return clusterUrl.String(), nil
 }
 
+func ClusterUrl(cluster string) string {
+	clusterUrl := url.URL{
+		Scheme: "http",
+		Host:   cluster,
+	}
+
+	return clusterUrl.String()
+}
+
 func MaybeSetEnv(key, value string) string {
 	if s := os.Getenv(key); s != "" {
 		return s

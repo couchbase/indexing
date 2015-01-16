@@ -36,14 +36,9 @@ type ClusterInfoCache struct {
 
 type NodeId int
 
-func NewClusterInfoCache(cluster string, pool string) (*ClusterInfoCache, error) {
-	url, err := ClusterAuthUrl(cluster)
-	if err != nil {
-		return nil, err
-	}
-
+func NewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, error) {
 	c := &ClusterInfoCache{
-		url:             url,
+		url:             clusterUrl,
 		poolName:        pool,
 		poolsvsCh:       make(chan couchbase.PoolServices),
 		poolsvsIsActive: false,

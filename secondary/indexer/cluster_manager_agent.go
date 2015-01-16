@@ -42,7 +42,11 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 		config:     cfg,
 	}
 
-	cinfo, err := common.NewClusterInfoCache(cfg["clusterAddr"].String(), DEFAULT_POOL)
+	var cinfo *common.ClusterInfoCache
+	url, err := common.ClusterAuthUrl(cfg["clusterAddr"].String())
+	if err == nil {
+		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+	}
 	if err != nil {
 		common.Errorf("ClustMgrAgent::Fail to init ClusterInfoCache : %v", err)
 		return nil, &MsgError{

@@ -47,7 +47,11 @@ type kvSender struct {
 func NewKVSender(supvCmdch MsgChannel, supvRespch MsgChannel,
 	config c.Config) (KVSender, Message) {
 
-	cinfo, err := c.NewClusterInfoCache(config["clusterAddr"].String(), DEFAULT_POOL)
+	var cinfo *c.ClusterInfoCache
+	url, err := c.ClusterAuthUrl(config["clusterAddr"].String())
+	if err == nil {
+		cinfo, err = c.NewClusterInfoCache(url, DEFAULT_POOL)
+	}
 	if err != nil {
 		panic("Unable to initialize cluster_info - " + err.Error())
 	}
