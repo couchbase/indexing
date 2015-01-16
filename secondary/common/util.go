@@ -354,3 +354,11 @@ func ClusterAuthUrl(cluster string) (string, error) {
 
 	return clusterUrl.String(), nil
 }
+
+func MaybeSetEnv(key, value string) string {
+	if s := os.Getenv(key); s != "" {
+		return s
+	}
+	os.Setenv(key, value)
+	return value
+}

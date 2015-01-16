@@ -38,16 +38,27 @@ var (
 	auth              = flag.String("auth", "", "Auth user and password")
 )
 
+func MaybeSetEnv(key, value string) {
+	if os.Getenv(key) != "" {
+		return
+	}
+	os.Setenv(key, value)
+}
+
 func main() {
 
 	flag.Parse()
 
 	// setup cbauth
 	if *auth != "" {
-		authURL := fmt.Sprintf("http://%s/_cbauth", *cluster)
 		up := strings.Split(*auth, ":")
 		authU, authP := up[0], up[1]
-		cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
+		authURL := fmt.Sprintf("http://%s/_cbauth", *cluster)
+		rpcURL := fmt.Sprintf("http://%s/index", *cluster)
+		common.MaybeSetEnv("NS_SERVER_CBAUTH_RPC_URL", rpcURL)
+		common.MaybeSetEnv("NS_SERVER_CBAUTH_USER", authU)
+		common.MaybeSetEnv("NS_SERVER_CBAUTH_PWD", authP)
+		cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, nil)
 	}
 
 	go dumpOnSignalForPlatform()

@@ -72,10 +72,14 @@ func main() {
 
 	// setup cbauth
 	if options.auth != "" {
-		authURL := fmt.Sprintf("http://%s/_cbauth", cluster)
 		up := strings.Split(options.auth, ":")
 		authU, authP := up[0], up[1]
-		cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
+		authURL := fmt.Sprintf("http://%s/_cbauth", cluster)
+		rpcURL := fmt.Sprintf("http://%s/projector", cluster)
+		c.MaybeSetEnv("NS_SERVER_CBAUTH_RPC_URL", rpcURL)
+		c.MaybeSetEnv("NS_SERVER_CBAUTH_USER", authU)
+		c.MaybeSetEnv("NS_SERVER_CBAUTH_PWD", authP)
+		cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, nil)
 	}
 
 	if f := getlogFile(); f != nil {
