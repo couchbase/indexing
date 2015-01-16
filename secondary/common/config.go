@@ -468,6 +468,16 @@ func (config Config) SetValue(key string, value interface{}) error {
 	return nil
 }
 
+func (config Config) Json() []byte {
+	kvs := make(map[string]interface{})
+	for key, value := range config {
+		kvs[key] = value.Value
+	}
+
+	bytes, _ := json.Marshal(kvs)
+	return bytes
+}
+
 // Int assumes config value is an integer and returns the same.
 func (cv ConfigValue) Int() int {
 	return cv.Value.(int)

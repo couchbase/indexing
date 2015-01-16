@@ -82,6 +82,7 @@ type indexer struct {
 	clustMgrAgentCmdCh MsgChannel //channel to send messages to index coordinator
 	kvSenderCmdCh      MsgChannel //channel to send messages to kv sender
 	cbqBridgeCmdCh     MsgChannel //channel to send message to cbq sender
+	settingsMgrCmdCh   MsgChannel
 	scanCoordCmdCh     MsgChannel //chhannel to send messages to scan coordinator
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
@@ -94,7 +95,8 @@ type indexer struct {
 	clustMgrAgent ClustMgrAgent     //handle to ClustMgrAgent
 	kvSender      KVSender          //handle to KVSender
 	cbqBridge     CbqBridge         //handle to CbqBridge
-	scanCoord     ScanCoordinator   //handle to ScanCoordinator
+	settingsMgr   settingsManager
+	scanCoord     ScanCoordinator //handle to ScanCoordinator
 	config        common.Config
 
 	kvlock sync.Mutex //fine-grain lock for KVSender
@@ -119,6 +121,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		clustMgrAgentCmdCh: make(MsgChannel),
 		kvSenderCmdCh:      make(MsgChannel),
 		cbqBridgeCmdCh:     make(MsgChannel),
+		settingsMgrCmdCh:   make(MsgChannel),
 		scanCoordCmdCh:     make(MsgChannel),
 
 		mutMgrExitCh: make(MsgChannel),
@@ -186,6 +189,12 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	if err := idx.bootstrap(); err != nil {
 		common.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
 		return nil, &MsgError{err: Error{cause: err}}
+	}
+
+	idx.settingsMgr, res = NewSettingsManager(idx.settingsMgrCmdCh, idx.wrkrRecvCh, idx.config)
+	if res.GetMsgType() != MSG_SUCCESS {
+		common.Errorf("Indexer::NewIndexer settingsMgr Init Error", res)
+		return nil, res
 	}
 
 	if !idx.enableManager {
@@ -410,6 +419,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case INDEXER_ROLLBACK:
 		idx.handleRollback(msg)
+
+	case CONFIG_SETTINGS_UPDATE:
+		idx.compactMgrCmdCh <- msg
+		<-idx.compactMgrCmdCh
 
 	case INDEXER_PREPARE_DONE:
 		idx.handlePrepareDone(msg)

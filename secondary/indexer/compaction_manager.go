@@ -123,6 +123,12 @@ loop:
 					common.Infof("%v: Shutting Down", cm.logPrefix)
 					cm.supvCmdCh <- &MsgSuccess{}
 					break loop
+				} else if cmd.GetMsgType() == CONFIG_SETTINGS_UPDATE {
+					cfgUpdate := cmd.(*MsgConfigUpdate)
+					cm.config = cfgUpdate.GetConfig()
+					cd.Stop()
+					cd = cm.newCompactionDaemon()
+					cd.Start()
 				}
 			} else {
 				break loop
@@ -134,7 +140,7 @@ loop:
 }
 
 func (cm *compactionManager) newCompactionDaemon() *compactionDaemon {
-	cfg := cm.config.SectionConfig("compaction.", true)
+	cfg := cm.config.SectionConfig("settings.compaction.", true)
 	cd := &compactionDaemon{
 		quitch:  make(chan bool),
 		config:  cfg,

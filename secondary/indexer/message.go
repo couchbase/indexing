@@ -111,6 +111,8 @@ const (
 	REMOVE_BUCKET_FROM_STREAM
 	CLOSE_STREAM
 	CLEANUP_STREAM
+
+	CONFIG_SETTINGS_UPDATE
 )
 
 type Message interface {
@@ -932,6 +934,18 @@ func (m *MsgClustMgrLocal) GetError() error {
 	return m.err
 }
 
+type MsgConfigUpdate struct {
+	cfg common.Config
+}
+
+func (m *MsgConfigUpdate) GetMsgType() MsgType {
+	return CONFIG_SETTINGS_UPDATE
+}
+
+func (m *MsgConfigUpdate) GetConfig() common.Config {
+	return m.cfg
+}
+
 //Helper function to return string for message type
 
 func (m MsgType) String() string {
@@ -1082,6 +1096,9 @@ func (m MsgType) String() string {
 		return "STORAGE_INDEX_STORAGE_STATS"
 	case STORAGE_INDEX_COMPACT:
 		return "STORAGE_INDEX_COMPACT"
+
+	case CONFIG_SETTINGS_UPDATE:
+		return "CONFIG_SETTINGS_UPDATE"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"
