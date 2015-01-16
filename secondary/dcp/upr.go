@@ -68,6 +68,7 @@ func (b *Bucket) GetFailoverLogs(vBuckets []uint16) (FailoverLog, error) {
 			return nil, ErrorConnectionOverflow
 		}
 		mc.Hijack()
+		defer serverConn.Return(mc)
 
 		failoverlogs, err := mc.UprGetFailoverLog(vbList)
 		if err != nil {
@@ -78,7 +79,6 @@ func (b *Bucket) GetFailoverLogs(vBuckets []uint16) (FailoverLog, error) {
 		for vb, log := range failoverlogs {
 			failoverLogMap[vb] = *log
 		}
-		serverConn.Return(mc)
 	}
 
 	return failoverLogMap, nil
