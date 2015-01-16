@@ -49,6 +49,7 @@ type watcher struct {
 	pendings   map[common.Txnid]protocol.LogEntryMsg
 	killch     chan bool
 	mutex      sync.Mutex
+	indices    map[c.IndexDefnId]interface{}
 
 	incomingReqs chan *protocol.RequestHandle
 	pendingReqs  map[uint64]*protocol.RequestHandle // key : request id
@@ -109,13 +110,70 @@ func (o *MetadataProvider) UnwatchMetadata(indexAdminPort string) {
 
 	delete(o.watchers, indexAdminPort)
 	if watcher != nil {
+		watcher.cleanupIndices(o.repo)
 		watcher.close()
 	}
+}
+
+func (o *MetadataProvider) CreateIndexWithPlan(
+	name, bucket, using, exprType, partnExpr, whereExpr string,
+	secExprs []string, isPrimary bool, plan map[string]interface{}) (c.IndexDefnId, error) {
+
+	if o.FindIndexByName(name, bucket) != nil {
+		return c.IndexDefnId(0), errors.New("Index %v already exist. Cannot create.")
+	}
+
+	nodes, ok := plan["nodes"].([]string)
+	if !ok || len(nodes) != 1 {
+		return c.IndexDefnId(0), errors.New("Create Index is allowed for one and only one node")
+	}
+
+	deferred, ok := plan["defer_build"].(bool)
+	if !ok {
+		deferred = false
+	}
+
+	watcher := o.findMatchingWatcher(nodes[0])
+	if watcher == nil {
+		return c.IndexDefnId(0),
+			errors.New(fmt.Sprintf("Fails to create index.  Node %s does not exist or is not running", nodes[0]))
+	}
+
+	defnID := c.IndexDefnId(rand.Int())
+
+	// TODO : whereExpr
+	whereExpr = whereExpr
+	idxDefn := &c.IndexDefn{
+		DefnId:          defnID,
+		Name:            name,
+		Using:           c.IndexType(using),
+		Bucket:          bucket,
+		IsPrimary:       isPrimary,
+		SecExprs:        secExprs,
+		ExprType:        c.ExprType(exprType),
+		PartitionScheme: c.HASH,
+		PartitionKey:    partnExpr,
+		Deferred:        deferred,
+		Nodes:           nodes}
+
+	content, err := c.MarshallIndexDefn(idxDefn)
+	if err != nil {
+		return 0, err
+	}
+
+	key := fmt.Sprintf("%d", defnID)
+	err = watcher.makeRequest(OPCODE_CREATE_INDEX, key, content)
+
+	return defnID, err
 }
 
 func (o *MetadataProvider) CreateIndex(
 	name, bucket, using, exprType, partnExpr, whereExpr, indexAdminPort string,
 	secExprs []string, isPrimary bool) (c.IndexDefnId, error) {
+
+	if o.FindIndexByName(name, bucket) != nil {
+		return c.IndexDefnId(0), errors.New("Index %v already exist. Cannot create.")
+	}
 
 	defnID := c.IndexDefnId(rand.Int())
 
@@ -137,18 +195,22 @@ func (o *MetadataProvider) CreateIndex(
 		return 0, err
 	}
 
-	content, err := marshallIndexDefn(idxDefn)
+	content, err := c.MarshallIndexDefn(idxDefn)
 	if err != nil {
 		return 0, err
 	}
 
 	key := fmt.Sprintf("%d", defnID)
-	err = watcher.makeRequest(common.OPCODE_CUSTOM_SET, key, content)
+	err = watcher.makeRequest(OPCODE_CREATE_INDEX, key, content)
 
 	return defnID, err
 }
 
 func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId, indexAdminPort string) error {
+
+	if o.FindIndex(defnID) == nil {
+		return errors.New("Index %v does not exist. Cannot drop.")
+	}
 
 	watcher, err := o.findWatcher(indexAdminPort)
 	if err != nil {
@@ -156,7 +218,33 @@ func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId, indexAdminPort string
 	}
 
 	key := fmt.Sprintf("%d", defnID)
-	return watcher.makeRequest(common.OPCODE_CUSTOM_DELETE, key, []byte(""))
+	return watcher.makeRequest(OPCODE_DROP_INDEX, key, []byte(""))
+}
+
+func (o *MetadataProvider) BuildIndexes(adminport string, defnIDs []c.IndexDefnId) error {
+
+	for _, id := range defnIDs {
+		meta := o.FindIndex(id)
+		if meta == nil {
+			return errors.New(fmt.Sprintf("Index %v not found.  Cannot build index.", meta.Definition.Name))
+		}
+		if meta.Instances != nil && meta.Instances[0].State != c.INDEX_STATE_CREATED {
+			return errors.New(fmt.Sprintf("Index %v is not in CREATED state.  Cannot build index.", meta.Definition.Name))
+		}
+	}
+
+	watcher, err := o.findWatcher(adminport)
+	if err != nil {
+		return err
+	}
+
+	list := BuildIndexIdList(defnIDs)
+	content, err := MarshallIndexIdList(list)
+	if err != nil {
+		return err
+	}
+
+	return watcher.makeRequest(OPCODE_BUILD_INDEX, "Index Build", content)
 }
 
 func (o *MetadataProvider) ListIndex() []*IndexMetadata {
@@ -169,6 +257,30 @@ func (o *MetadataProvider) ListIndex() []*IndexMetadata {
 	}
 
 	return result
+}
+
+func (o *MetadataProvider) FindIndex(id c.IndexDefnId) *IndexMetadata {
+	o.repo.mutex.Lock()
+	defer o.repo.mutex.Unlock()
+
+	if meta, ok := o.repo.indices[id]; ok {
+		return meta
+	}
+
+	return nil
+}
+
+func (o *MetadataProvider) FindIndexByName(name string, bucket string) *IndexMetadata {
+	o.repo.mutex.Lock()
+	defer o.repo.mutex.Unlock()
+
+	for _, meta := range o.repo.indices {
+		if meta.Definition.Name == name && meta.Definition.Bucket == bucket {
+			return meta
+		}
+	}
+
+	return nil
 }
 
 func (o *MetadataProvider) Close() {
@@ -243,6 +355,19 @@ func (o *MetadataProvider) getWatcherAddr(MetadataProviderId string) (string, er
 	return "", errors.New("MetadataProvider.getWatcherAddr() : Fail to find an IP address")
 }
 
+func (o *MetadataProvider) findMatchingWatcher(deployNodeName string) *watcher {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	for _, watcher := range o.watchers {
+		if strings.Index(watcher.leaderAddr, deployNodeName) == 0 {
+			return watcher
+		}
+	}
+
+	return nil
+}
+
 ///////////////////////////////////////////////////////
 // private function : metadataRepo
 ///////////////////////////////////////////////////////
@@ -295,7 +420,7 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology) {
 
 func (r *metadataRepo) unmarshallAndAddDefn(content []byte) error {
 
-	defn, err := unmarshallIndexDefn(content)
+	defn, err := c.UnmarshallIndexDefn(content)
 	if err != nil {
 		return err
 	}
@@ -352,8 +477,45 @@ func newWatcher(o *MetadataProvider, addr string) *watcher {
 	s.incomingReqs = make(chan *protocol.RequestHandle)
 	s.pendingReqs = make(map[uint64]*protocol.RequestHandle)
 	s.loggedReqs = make(map[common.Txnid]*protocol.RequestHandle)
+	s.indices = make(map[c.IndexDefnId]interface{})
 
 	return s
+}
+
+func (w *watcher) addDefn(defnId c.IndexDefnId) {
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	w.indices[defnId] = nil
+}
+
+func (w *watcher) removeDefn(defnId c.IndexDefnId) {
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	delete(w.indices, defnId)
+}
+
+func (w *watcher) addDefnWithNoLock(defnId c.IndexDefnId) {
+
+	w.indices[defnId] = nil
+}
+
+func (w *watcher) removeDefnWithNoLock(defnId c.IndexDefnId) {
+
+	delete(w.indices, defnId)
+}
+
+func (w *watcher) cleanupIndices(repo *metadataRepo) {
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	for defnId, _ := range w.indices {
+		repo.removeDefn(defnId)
+	}
 }
 
 func (w *watcher) close() {
@@ -581,24 +743,19 @@ func (w *watcher) processChange(op uint32, key string, content []byte) error {
 	opCode := common.OpCode(op)
 
 	switch opCode {
-	case common.OPCODE_ADD:
+	case common.OPCODE_ADD, common.OPCODE_SET:
 		if isIndexDefnKey(key) {
 			if len(content) == 0 {
 				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
 			}
-			return w.provider.repo.unmarshallAndAddDefn(content)
-		} else if isIndexTopologyKey(key) {
-			if len(content) == 0 {
-				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+
+			id, err := extractDefnIdFromKey(key)
+			if err != nil {
+				return err
 			}
-			return w.provider.repo.unmarshallAndAddInst(content)
-		}
-	case common.OPCODE_SET:
-		if isIndexDefnKey(key) {
-			if len(content) == 0 {
-				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
-			}
+			w.addDefnWithNoLock(c.IndexDefnId(id))
 			return w.provider.repo.unmarshallAndAddDefn(content)
+
 		} else if isIndexTopologyKey(key) {
 			if len(content) == 0 {
 				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
@@ -608,18 +765,24 @@ func (w *watcher) processChange(op uint32, key string, content []byte) error {
 	case common.OPCODE_DELETE:
 		if isIndexDefnKey(key) {
 
-			i := strings.Index(key, "/")
-			if i != -1 && i < len(key)-1 {
-				id, err := strconv.ParseUint(key[i+1:], 10, 64)
-				if err != nil {
-					return err
-				}
-				w.provider.repo.removeDefn(c.IndexDefnId(id))
-			} else {
-				return errors.New("watcher.processChange() : cannot parse index definition id")
+			id, err := extractDefnIdFromKey(key)
+			if err != nil {
+				return err
 			}
+			w.removeDefnWithNoLock(c.IndexDefnId(id))
+			w.provider.repo.removeDefn(c.IndexDefnId(id))
 		}
 	}
 
 	return nil
+}
+
+func extractDefnIdFromKey(key string) (c.IndexDefnId, error) {
+	i := strings.Index(key, "/")
+	if i != -1 && i < len(key)-1 {
+		id, err := strconv.ParseUint(key[i+1:], 10, 64)
+		return c.IndexDefnId(id), err
+	}
+
+	return c.IndexDefnId(0), errors.New("watcher.processChange() : cannot parse index definition id")
 }

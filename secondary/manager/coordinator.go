@@ -759,7 +759,7 @@ func (c *Coordinator) getPeerUDPAddr() []string {
 //
 func (c *Coordinator) createIndex(key string, content []byte) bool {
 
-	defn, err := UnmarshallIndexDefn(content)
+	defn, err := co.UnmarshallIndexDefn(content)
 	if err != nil {
 		return false
 	}

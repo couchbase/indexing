@@ -75,7 +75,7 @@ func TestEventMgr(t *testing.T) {
 		t.Fatal("Does not receive notification from watcher")
 	}
 
-	idxDefn, err = manager.UnmarshallIndexDefn(([]byte)(data))
+	idxDefn, err = common.UnmarshallIndexDefn(([]byte)(data))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,8 +18,6 @@ import (
 	repo "github.com/couchbase/gometa/repository"
 	gometa "github.com/couchbase/gometa/server"
 	"github.com/couchbase/indexing/secondary/common"
-	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-	"github.com/couchbaselabs/goprotobuf/proto"
 	"math/rand"
 	"net/rpc"
 	"strconv"
@@ -205,7 +203,7 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 		return nil, err
 	}
 
-	return UnmarshallIndexDefn(data)
+	return common.UnmarshallIndexDefn(data)
 }
 
 ///////////////////////////////////////////////////////
@@ -302,7 +300,7 @@ func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 	}
 
 	// marshall the defn
-	data, err := marshallIndexDefn(defn)
+	data, err := common.MarshallIndexDefn(defn)
 	if err != nil {
 		return err
 	}
@@ -358,7 +356,7 @@ func (i *MetaIterator) Next() (string, *common.IndexDefn, error) {
 		if isIndexDefnKey(key) {
 			name := indexDefnIdFromKey(key)
 			if name != "" {
-				defn, err := UnmarshallIndexDefn(content)
+				defn, err := common.UnmarshallIndexDefn(content)
 				if err != nil {
 					return "", nil, err
 				}
@@ -685,65 +683,6 @@ func indexDefnIdFromKey(key string) string {
 	return ""
 }
 
-//
-//
-// TODO: This function is copied from indexer.kv_sender.  It would be nice if this
-// go to common.
-//
-func marshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
-
-	using := protobuf.StorageType(
-		protobuf.StorageType_value[string(defn.Using)]).Enum()
-
-	exprType := protobuf.ExprType(
-		protobuf.ExprType_value[string(defn.ExprType)]).Enum()
-
-	partnScheme := protobuf.PartitionScheme(
-		protobuf.PartitionScheme_value[string(defn.PartitionScheme)]).Enum()
-
-	pDefn := &protobuf.IndexDefn{
-		DefnID:          proto.Uint64(uint64(defn.DefnId)),
-		Bucket:          proto.String(defn.Bucket),
-		IsPrimary:       proto.Bool(defn.IsPrimary),
-		Name:            proto.String(defn.Name),
-		Using:           using,
-		ExprType:        exprType,
-		SecExpressions:  defn.SecExprs,
-		PartitionScheme: partnScheme,
-		PartnExpression: proto.String(defn.PartitionKey),
-	}
-
-	return proto.Marshal(pDefn)
-}
-
-//
-// !! This function is made public only for testing purpose.
-//
-func UnmarshallIndexDefn(data []byte) (*common.IndexDefn, error) {
-
-	pDefn := new(protobuf.IndexDefn)
-	if err := proto.Unmarshal(data, pDefn); err != nil {
-		return nil, err
-	}
-
-	using := common.IndexType(pDefn.GetUsing().String())
-	exprType := common.ExprType(pDefn.GetExprType().String())
-	partnScheme := common.PartitionScheme(pDefn.GetPartitionScheme().String())
-
-	idxDefn := &common.IndexDefn{
-		DefnId:          common.IndexDefnId(pDefn.GetDefnID()),
-		Name:            pDefn.GetName(),
-		Using:           using,
-		Bucket:          pDefn.GetBucket(),
-		IsPrimary:       pDefn.GetIsPrimary(),
-		SecExprs:        pDefn.GetSecExpressions(),
-		ExprType:        exprType,
-		PartitionScheme: partnScheme,
-		PartitionKey:    pDefn.GetPartnExpression()}
-
-	return idxDefn, nil
-}
-
 ///////////////////////////////////////////////////////
 // package local function : Index Topology
 ///////////////////////////////////////////////////////
@@ -1022,7 +961,7 @@ func (m *LocalRepoRef) onNewProposalForCreateIndexDefn(txnid c.Txnid, op c.OpCod
 
 	common.Debugf("LocalRepoRef.OnNewProposalForCreateIndexDefn(): key %s", key)
 
-	indexDefn, err := UnmarshallIndexDefn(content)
+	indexDefn, err := common.UnmarshallIndexDefn(content)
 	if err != nil {
 		common.Debugf("LocalRepoRef.OnNewProposalForCreateIndexDefn(): fail to unmarshall index defn for key %s", key)
 		return &c.RecoverableError{Reason: err.Error()}

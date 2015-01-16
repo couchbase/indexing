@@ -10,6 +10,7 @@
 package common
 
 import (
+	"encoding/json"
 	"fmt"
 )
 
@@ -102,16 +103,18 @@ func (s IndexState) String() string {
 //IndexDefn represents the index definition as specified
 //during CREATE INDEX
 type IndexDefn struct {
-	DefnId          IndexDefnId
-	Name            string    // Name of the index
-	Using           IndexType // indexing algorithm
-	Bucket          string    // bucket name
-	IsPrimary       bool
-	SecExprs        []string // expression list
-	ExprType        ExprType
-	PartitionScheme PartitionScheme
-	PartitionKey    string
-	WhereExpr       string
+	DefnId          IndexDefnId     `json:"defnId,omitempty"`
+	Name            string          `json:"name,omitempty"`
+	Using           IndexType       `json:"using,omitempty"`
+	Bucket          string          `json:"bucket,omitempty"`
+	IsPrimary       bool            `json:"isPrimary,omitempty"`
+	SecExprs        []string        `json:"secExprs,omitempty"`
+	ExprType        ExprType        `json:"exprType,omitempty"`
+	PartitionScheme PartitionScheme `json:"partitionScheme,omitempty"`
+	PartitionKey    string          `json:"partitionKey,omitempty"`
+	WhereExpr       string          `json:"where,omitempty"`
+	Deferred        bool            `json:"deferred,omitempty"`
+	Nodes           []string        `json:"nodes,omitempty"`
 }
 
 //IndexInst is an instance of an Index(aka replica)
@@ -199,4 +202,24 @@ func CopyIndexInstMap(inMap IndexInstMap) IndexInstMap {
 		outMap[k] = v
 	}
 	return outMap
+}
+
+func MarshallIndexDefn(defn *IndexDefn) ([]byte, error) {
+
+	buf, err := json.Marshal(&defn)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func UnmarshallIndexDefn(data []byte) (*IndexDefn, error) {
+
+	defn := new(IndexDefn)
+	if err := json.Unmarshal(data, defn); err != nil {
+		return nil, err
+	}
+
+	return defn, nil
 }

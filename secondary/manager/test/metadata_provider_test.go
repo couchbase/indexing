@@ -20,6 +20,8 @@ import (
 	"time"
 )
 
+var newDefnId common.IndexDefnId
+
 type notifier struct {
 	hasCreated bool
 	hasDeleted bool
@@ -76,6 +78,9 @@ func TestMetadataProvider(t *testing.T) {
 	if len(meta.Instances) == 0 || meta.Instances[0].State != common.INDEX_STATE_READY {
 		t.Fatal("Index Defn 100 state is not ready")
 	}
+	if meta.Instances[0].Endpts[0] != "localhost:"+manager.COORD_MAINT_STREAM_PORT {
+		t.Fatal("Index Defn 100 state is not ready")
+	}
 
 	meta = lookup(provider, common.IndexDefnId(101))
 	if meta == nil {
@@ -85,16 +90,27 @@ func TestMetadataProvider(t *testing.T) {
 	if len(meta.Instances) == 0 || meta.Instances[0].State != common.INDEX_STATE_READY {
 		t.Fatal("Index Defn 101 state is not ready")
 	}
+	if meta.Instances[0].Endpts[0] != "localhost:"+manager.COORD_MAINT_STREAM_PORT {
+		t.Fatal("Index Defn 100 state is not ready")
+	}
 
 	common.Infof("Change Data *********************************************************")
 
 	notifier := &notifier{hasCreated: false, hasDeleted: false}
 	mgr.RegisterNotifier(notifier)
 
-	newDefnId, err := provider.CreateIndex("metadata_provider_test_102", "Default", common.ForestDB,
-		common.N1QL, "Testing", "Testing", msgAddr, []string{"Testing"}, false)
+	plan := make(map[string]interface{})
+	plan["nodes"] = []string{msgAddr}
+	plan["defer_build"] = true
+	newDefnId, err := provider.CreateIndexWithPlan("metadata_provider_test_102", "Default", common.ForestDB,
+		common.N1QL, "Testing", "Testing", []string{"Testing"}, false, plan)
 	if err != nil {
 		t.Fatal("Cannot create Index Defn 102 through MetadataProvider")
+	}
+	input := make([]common.IndexDefnId, 1)
+	input[0] = newDefnId
+	if err := provider.BuildIndexes(msgAddr, input); err != nil {
+		t.Fatal("Cannot build Index Defn : %v", err)
 	}
 
 	if err := provider.DropIndex(common.IndexDefnId(101), msgAddr); err != nil {
@@ -122,10 +138,15 @@ func TestMetadataProvider(t *testing.T) {
 	}
 	common.Infof("cannot found deleted Index Defn 101")
 
-	if lookup(provider, newDefnId) == nil {
+	if meta = lookup(provider, newDefnId); meta == nil {
 		t.Fatal(fmt.Sprintf("Cannot Found Index Defn %d from MetadataProvider", newDefnId))
+	} else {
+		common.Infof("Found Index Defn %d", newDefnId)
+		common.Infof("meta.Instance %v", meta.Instances)
+		if meta.Instances[0].Endpts[0] != "localhost:"+manager.COORD_MAINT_STREAM_PORT {
+			t.Fatal(fmt.Sprintf("Index Defn %v state is not ready", newDefnId))
+		}
 	}
-	common.Infof("Found Index Defn %d", newDefnId)
 
 	if !notifier.hasCreated {
 		t.Fatal(fmt.Sprintf("Does not recieve notification for creating index %s", newDefnId))
@@ -141,7 +162,7 @@ func TestMetadataProvider(t *testing.T) {
 
 	metas := provider.ListIndex()
 	for _, meta := range metas {
-		if meta.Definition.DefnId == newDefnId && meta.Instances[0].State != common.INDEX_STATE_ACTIVE { 
+		if meta.Definition.DefnId == newDefnId && meta.Instances[0].State != common.INDEX_STATE_ACTIVE {
 			t.Fatal("Topology change is not propagated to MetadataProvider")
 		}
 	}
@@ -159,7 +180,7 @@ func lookup(provider *client.MetadataProvider, id common.IndexDefnId) *client.In
 	metas := provider.ListIndex()
 
 	for _, meta := range metas {
-		if meta.Definition.DefnId == id && meta.Instances[0].Endpts[0] == "localhost:"+manager.COORD_MAINT_STREAM_PORT {
+		if meta.Definition.DefnId == id {
 			return meta
 		}
 	}
@@ -255,6 +276,6 @@ func (n *notifier) OnIndexDelete(common.IndexDefnId) error {
 	return nil
 }
 
-func (n *notifier) OnIndexBuild([]common.IndexDefnId) error {
+func (n *notifier) OnIndexBuild(id []common.IndexDefnId) error {
 	return nil
 }

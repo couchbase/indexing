@@ -1,4 +1,5 @@
 // Copyright (c) 2014 Couchbase, Inc.
+
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
 // except in compliance with the License. You may obtain a copy of the License at
 //   http://www.apache.org/licenses/LICENSE-2.0
@@ -15,6 +16,7 @@ import (
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/manager/client"
 	"runtime/debug"
 )
 
@@ -31,8 +33,6 @@ type requestHolder struct {
 	request protocol.RequestMsg
 	fid     string
 }
-
-const topologyChangeKey = "::topologyChange::"
 
 type topologyChange struct {
 	Bucket   string `json:"bucket,omitempty"`
@@ -117,16 +117,14 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 
 	var err error
 	switch op {
-	case c.OPCODE_CUSTOM_ADD:
+	case client.OPCODE_CREATE_INDEX:
 		err = m.handleCreateIndex(key, content, m.scanport)
-	case c.OPCODE_CUSTOM_SET:
-		if key == topologyChangeKey {
-			err = m.handleTopologyChange(content)
-		} else {
-			err = m.handleCreateIndex(key, content, m.scanport)
-		}
-	case c.OPCODE_CUSTOM_DELETE:
+	case client.OPCODE_UPDATE_INDEX_INST:
+		err = m.handleTopologyChange(content)
+	case client.OPCODE_DROP_INDEX:
 		err = m.handleDeleteIndex(key)
+	case client.OPCODE_BUILD_INDEX:
+		err = m.handleBuildIndexes(content, m.scanport)
 	}
 
 	common.Debugf("LifecycleMgr.dispatchRequest () : send response")
@@ -142,7 +140,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 
 func (m *LifecycleMgr) handleCreateIndex(key string, content []byte, scanport string) error {
 
-	defn, err := UnmarshallIndexDefn(content)
+	defn, err := common.UnmarshallIndexDefn(content)
 	if err != nil {
 		common.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Unable to unmarshall index definition. Reason = %v", err)
 		return err
@@ -158,24 +156,69 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scanport string) erro
 		return err
 	}
 
-	if err := m.repo.addIndexToTopology(defn, scanport); err != nil {
-		common.Errorf("LifecycleMgr.hanaleCreateIndex() : createIndex fails. Reason = %v", err)
-		m.repo.DropIndexById(defn.DefnId)
-		return err
-	}
+	if !defn.Deferred {
+		common.Debugf("LifecycleMgr.handleCreateIndex() : start Index Build")
 
-	common.Debugf("LifecycleMgr.handleCreateIndex() : before Index Build")
-
-	if m.notifier != nil {
-		if err := m.notifier.OnIndexBuild([]common.IndexDefnId{defn.DefnId}); err != nil {
+		if err := m.repo.addIndexToTopology(defn, scanport); err != nil {
 			common.Errorf("LifecycleMgr.hanaleCreateIndex() : createIndex fails. Reason = %v", err)
 			m.repo.DropIndexById(defn.DefnId)
-			m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
 			return err
+		}
+
+		if m.notifier != nil {
+			if err := m.notifier.OnIndexBuild([]common.IndexDefnId{defn.DefnId}); err != nil {
+				common.Errorf("LifecycleMgr.hanaleCreateIndex() : createIndex fails. Reason = %v", err)
+				m.repo.DropIndexById(defn.DefnId)
+				m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
+				return err
+			}
 		}
 	}
 
 	common.Debugf("LifecycleMgr.handleCreateIndex() : createIndex completes")
+
+	return nil
+}
+
+func (m *LifecycleMgr) handleBuildIndexes(content []byte, scanport string) error {
+
+	list, err := client.UnmarshallIndexIdList(content)
+	if err != nil {
+		common.Errorf("LifecycleMgr.handleBuildIndexes() : buildIndex fails. Unable to unmarshall index list. Reason = %v", err)
+		return err
+	}
+
+	input := make([]common.IndexDefnId, len(list.DefnIds))
+	for i, id := range list.DefnIds {
+		input[i] = common.IndexDefnId(id)
+	}
+
+	return m.BuildIndexes(input, scanport)
+}
+
+func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId, scanport string) error {
+
+	for _, id := range ids {
+		defn, err := m.repo.GetIndexDefnById(id)
+		if err != nil {
+			common.Errorf("LifecycleMgr.handleBuildIndexes() : buildIndex fails. Reason = %v", err)
+			return err
+		}
+
+		if err := m.repo.addIndexToTopology(defn, scanport); err != nil {
+			common.Errorf("LifecycleMgr.handleBuildIndexes() : buildIndex fails. Reason = %v", err)
+			return err
+		}
+	}
+
+	if m.notifier != nil {
+		if err := m.notifier.OnIndexBuild(ids); err != nil {
+			common.Errorf("LifecycleMgr.hanaleBuildIndexes() : buildIndex fails. Reason = %v", err)
+			return err
+		}
+	}
+
+	common.Debugf("LifecycleMgr.handleBuildIndexes() : buildIndex completes")
 
 	return nil
 }

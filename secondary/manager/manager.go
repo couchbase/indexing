@@ -15,6 +15,7 @@ import (
 	"fmt"
 	gometaC "github.com/couchbase/gometa/common"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/manager/client"
 	"sync"
 	"time"
 )
@@ -55,7 +56,7 @@ type MetadataNotifier interface {
 }
 
 type RequestServer interface {
-	CustomSet(key string, value []byte) error
+	MakeRequest(opCode gometaC.OpCode, key string, value []byte) error
 }
 
 ///////////////////////////////////////////////////////
@@ -310,7 +311,7 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 		//
 		// Save the index definition
 		//
-		content, err := marshallIndexDefn(defn)
+		content, err := common.MarshallIndexDefn(defn)
 		if err != nil {
 			return err
 		}
@@ -361,7 +362,7 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 		return e
 	}
 
-	return m.requestServer.CustomSet(topologyChangeKey, buf)
+	return m.requestServer.MakeRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
 //
