@@ -1884,7 +1884,7 @@ func (idx *indexer) processRollback(streamId common.StreamId,
 //helper function to init streamFlush map for all streams
 func (idx *indexer) initStreamFlushMap() {
 
-	for i := 0; i < int(common.MAX_STREAMS); i++ {
+	for i := 0; i < int(common.ALL_STREAMS); i++ {
 		idx.streamBucketFlushInProgress[common.StreamId(i)] = make(BucketFlushInProgressMap)
 		idx.streamBucketObserveFlushDone[common.StreamId(i)] = make(BucketObserveFlushDoneMap)
 	}
@@ -2222,7 +2222,7 @@ func (idx *indexer) closeAllStreams() {
 
 	respCh := make(MsgChannel)
 
-	for i := 0; i < int(common.MAX_STREAMS); i++ {
+	for i := 0; i < int(common.ALL_STREAMS); i++ {
 
 		cmd := &MsgStreamUpdate{mType: CLOSE_STREAM,
 			streamId: common.StreamId(i),

@@ -159,7 +159,7 @@ const (
 	MAINT_STREAM StreamId = iota
 	CATCHUP_STREAM
 	INIT_STREAM
-	MAX_STREAMS
+	ALL_STREAMS
 )
 
 func (s StreamId) String() string {

@@ -104,7 +104,7 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		return nil, &MsgError{err: Error{cause: err}}
 	}
 
-	s.updateIndexSnapMap(indexPartnMap)
+	s.updateIndexSnapMap(indexPartnMap, common.ALL_STREAMS, "")
 
 	//start Storage Manager loop which listens to commands from its supervisor
 	go s.run()
@@ -174,6 +174,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	tsVbuuid := cmd.(*MsgMutMgrFlushDone).GetTS()
+	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
+
 	numVbuckets := s.config["numVbuckets"].Int()
 	var needsCommit bool = tsVbuuid.IsPersisted()
 
@@ -181,8 +183,9 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	for idxInstId, partnMap := range s.indexPartnMap {
 		idxInst := s.indexInstMap[idxInstId]
 
-		//if index belongs to the flushed bucket
-		if idxInst.Defn.Bucket == bucket {
+		//if index belongs to the flushed bucket and stream
+		if idxInst.Defn.Bucket == bucket &&
+			idxInst.Stream == streamId {
 
 			lastIndexSnap := s.indexSnapMap[idxInstId]
 			// List of snapshots for reading current timestamp
@@ -326,8 +329,8 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	for idxInstId, partnMap := range sm.indexPartnMap {
 		idxInst := sm.indexInstMap[idxInstId]
 
-		//if this bucket needs to be rolled back
-		if idxInst.Defn.Bucket == bucket {
+		//if this bucket in stream needs to be rolled back
+		if idxInst.Defn.Bucket == bucket && idxInst.Stream == streamId {
 
 			//for all partitions managed by this indexer
 			for partnId, partnInst := range partnMap {
@@ -383,17 +386,19 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		}
 	}
 
-	// Notify all scan waiters for all indexes with error
+	// Notify all scan waiters for indexes in this bucket
+	// and stream with error
 	for idxInstId, waiters := range sm.waitersMap {
 		idxInst := sm.indexInstMap[idxInstId]
-		if idxInst.Defn.Bucket == bucket {
+		if idxInst.Defn.Bucket == bucket &&
+			idxInst.Stream == streamId {
 			for _, w := range waiters {
 				w.Error(ErrIndexRollback)
 			}
 		}
 	}
 
-	sm.updateIndexSnapMap(sm.indexPartnMap)
+	sm.updateIndexSnapMap(sm.indexPartnMap, streamId, bucket)
 
 	sm.supvCmdch <- &MsgRollback{streamId: streamId,
 		bucket:     bucket,
@@ -578,9 +583,20 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 // of storage manager and during rollback.
 // FIXME: Current implementation makes major assumption that
 // single slice is supported.
-func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap) {
+func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
+	streamId common.StreamId, bucket string) {
 	var tsVbuuid *common.TsVbuuid
 	for idxInstId, partnMap := range indexPartnMap {
+
+		//if bucket and stream have been provided
+		if bucket != "" && streamId != common.ALL_STREAMS {
+			idxInst := s.indexInstMap[idxInstId]
+			//skip the index if bucket and stream don't match
+			if idxInst.Defn.Bucket != bucket && idxInst.Stream != streamId {
+				continue
+			}
+		}
+
 		//there is only one partition for now
 		partnInst := partnMap[0]
 		sc := partnInst.Sc
