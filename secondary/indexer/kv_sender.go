@@ -745,7 +745,7 @@ func updateActiveTsFromResponse(bucket string,
 			if activeTs == nil {
 				activeTs = ts.Clone()
 			} else {
-				activeTs.Union(ts)
+				activeTs = activeTs.Union(ts)
 			}
 		}
 	}
@@ -762,7 +762,7 @@ func updateRollbackTsFromResponse(bucket string,
 			if rollbackTs == nil {
 				rollbackTs = ts.Clone()
 			} else {
-				rollbackTs.Union(ts)
+				rollbackTs = rollbackTs.Union(ts)
 			}
 		}
 	}
