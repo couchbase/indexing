@@ -47,7 +47,7 @@ var delete_test_once sync.Once
 func TestStreamMgr_Delete(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelDebug)
+	common.SetLogLevel(common.LogLevelTrace)
 	util.TT = t
 
 	old_value := manager.NUM_VB

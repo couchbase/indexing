@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	gometaC "github.com/couchbase/gometa/common"
+	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"sync"
@@ -75,6 +76,13 @@ func NewIndexManager(msgAddr string, dataport string) (mgr *IndexManager, err er
 // Create a new IndexManager
 //
 func NewIndexManagerInternal(msgAddr string, dataport string, admin StreamAdmin) (mgr *IndexManager, err error) {
+
+	if common.IsLogEnabled() {
+		gometaL.LogEnable()
+		gometaL.SetLogLevel(common.LogLevel())
+		//gometaL.SetLogLevel(common.LogLevelInfo)
+		gometaL.SetPrefix("Indexing/Gometa")
+	}
 
 	mgr = new(IndexManager)
 	mgr.isClosed = false

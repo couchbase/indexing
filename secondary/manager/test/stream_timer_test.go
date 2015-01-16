@@ -42,7 +42,7 @@ type timerTestProjectorClient struct {
 func TestStreamMgr_Timer(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelDebug)
+	common.SetLogLevel(common.LogLevelTrace)
 	util.TT = t
 
 	old_value := manager.NUM_VB

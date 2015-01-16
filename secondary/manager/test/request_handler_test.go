@@ -27,7 +27,7 @@ import (
 func TestRequestHandler(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelDebug)
+	common.SetLogLevel(common.LogLevelTrace)
 
 	common.Infof("Start TestRequestHandler *********************************************************")
 

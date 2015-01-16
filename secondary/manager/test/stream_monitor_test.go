@@ -43,7 +43,7 @@ type monitorTestProjectorClient struct {
 func TestStreamMgr_Monitor(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelDebug)
+	common.SetLogLevel(common.LogLevelTrace)
 	util.TT = t
 
 	old_value := manager.NUM_VB
