@@ -496,7 +496,7 @@ func newRemoteRepoRef(requestAddr string,
 }
 
 func (c *RemoteRepoRef) newIterator() (*MetaIterator, error) {
-	iter, err := c.repository.NewIterator("/", "")
+	iter, err := c.repository.NewIterator(repo.MAIN, "/", "")
 	if err != nil {
 		return nil, err
 	}
