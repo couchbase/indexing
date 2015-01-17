@@ -190,15 +190,20 @@ func (b *cbqClient) DropIndex(defnID common.IndexDefnId) error {
 	return err
 }
 
-// GetQueryports implement BridgeAccessor{} interface.
-func (b *cbqClient) GetQueryports() (queryports []string) {
+// GetScanports implement BridgeAccessor{} interface.
+func (b *cbqClient) GetScanports() (queryports []string) {
 	return []string{b.queryport}
 }
 
-// GetQueryport implement BridgeAccessor{} interface.
-func (b *cbqClient) GetQueryport(
+// GetScanport implement BridgeAccessor{} interface.
+func (b *cbqClient) GetScanport(
 	defnID common.IndexDefnId) (queryport string, ok bool) {
 	return b.queryport, true
+}
+
+// Timeit implement BridgeAccessor{} interface.
+func (b *cbqClient) Timeit(defnID uint64, value float64) {
+	// TODO: do nothing ?
 }
 
 // Close implement BridgeAccessor

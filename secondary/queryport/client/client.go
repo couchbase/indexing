@@ -1,6 +1,7 @@
 package client
 
 import "errors"
+import "time"
 
 import "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
@@ -61,7 +62,7 @@ const (
 // BridgeAccessor for Create,Drop,List,Refresh operations.
 type BridgeAccessor interface {
 	// Refresh shall refresh to latest set of index managed by GSI
-	// cluster and return the list of index.
+	// cluster, cache it locally and return the list of index.
 	Refresh() ([]*mclient.IndexMetadata, error)
 
 	// Nodes shall return a map of adminport and queryport for indexer
@@ -104,13 +105,16 @@ type BridgeAccessor interface {
 	//   from deferred list.
 	DropIndex(defnID common.IndexDefnId) error
 
-	// GetQueryports shall return list of queryports for all indexer in
+	// GetScanports shall return list of queryports for all indexer in
 	// the cluster.
-	GetQueryports() (queryports []string)
+	GetScanports() (queryports []string)
 
-	// GetQueryport shall fetch queryport address for indexer hosting
-	// index `defnID`
-	GetQueryport(defnID common.IndexDefnId) (queryport string, ok bool)
+	// GetScanport shall fetch queryport address for indexer, under least
+	// load, hosting index `defnID` or an equivalent of `defnID`
+	GetScanport(defnID common.IndexDefnId) (queryport string, ok bool)
+
+	// Timeit will add `value` to incrementalAvg for index-load.
+	Timeit(defnID uint64, value float64)
 
 	// Close this accessor.
 	Close()
@@ -212,12 +216,16 @@ func (c *GsiClient) DropIndex(defnID common.IndexDefnId) error {
 func (c *GsiClient) LookupStatistics(
 	defnID uint64, value common.SecondaryKey) (common.IndexStatistics, error) {
 
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
+	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return nil, ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.LookupStatistics(defnID, value)
+	// time LookupStatistics()
+	begin := time.Now().UnixNano()
+	stats, err := qc.LookupStatistics(defnID, value)
+	c.bridge.Timeit(defnID, float64(time.Now().UnixNano()-begin))
+	return stats, err
 }
 
 // RangeStatistics for index range.
@@ -225,12 +233,16 @@ func (c *GsiClient) RangeStatistics(
 	defnID uint64, low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
+	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return nil, ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.RangeStatistics(defnID, low, high, inclusion)
+	// time RangeStatistics()
+	begin := time.Now().UnixNano()
+	stats, err := qc.RangeStatistics(defnID, low, high, inclusion)
+	c.bridge.Timeit(defnID, float64(time.Now().UnixNano()-begin))
+	return stats, err
 }
 
 // Lookup scan index between low and high.
@@ -238,12 +250,16 @@ func (c *GsiClient) Lookup(
 	defnID uint64, values []common.SecondaryKey,
 	distinct bool, limit int64, callb ResponseHandler) error {
 
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
+	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.Lookup(defnID, values, distinct, limit, callb)
+	// time Lookup()
+	begin := time.Now().UnixNano()
+	err := qc.Lookup(defnID, values, distinct, limit, callb)
+	c.bridge.Timeit(defnID, float64(time.Now().UnixNano()-begin))
+	return err
 }
 
 // Range scan index between low and high.
@@ -252,36 +268,48 @@ func (c *GsiClient) Range(
 	inclusion Inclusion, distinct bool, limit int64,
 	callb ResponseHandler) error {
 
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
+	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.Range(defnID, low, high, inclusion, distinct, limit, callb)
+	// time Range()
+	begin := time.Now().UnixNano()
+	err := qc.Range(defnID, low, high, inclusion, distinct, limit, callb)
+	c.bridge.Timeit(defnID, float64(time.Now().UnixNano()-begin))
+	return err
 }
 
 // ScanAll for full table scan.
 func (c *GsiClient) ScanAll(
 	defnID uint64, limit int64, callb ResponseHandler) error {
 
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
+	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.ScanAll(defnID, limit, callb)
+	// time ScanAll()
+	begin := time.Now().UnixNano()
+	err := qc.ScanAll(defnID, limit, callb)
+	c.bridge.Timeit(defnID, float64(time.Now().UnixNano()-begin))
+	return err
 }
 
 // CountLookup to count number entries for given set of keys.
 func (c *GsiClient) CountLookup(
 	defnID uint64, values []common.SecondaryKey) (int64, error) {
 
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
+	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return 0, ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.CountLookup(defnID, values)
+	// time CountLookup()
+	begin := time.Now().UnixNano()
+	count, err := qc.CountLookup(defnID, values)
+	c.bridge.Timeit(defnID, float64(time.Now().UnixNano()-begin))
+	return count, err
 }
 
 // CountRange to count number entries in the given range.
@@ -289,12 +317,16 @@ func (c *GsiClient) CountRange(
 	defnID uint64,
 	low, high common.SecondaryKey, inclusion Inclusion) (int64, error) {
 
-	queryport, ok := c.bridge.GetQueryport(common.IndexDefnId(defnID))
+	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return 0, ErrorNoHost
 	}
 	qc := c.queryClients[queryport]
-	return qc.CountRange(defnID, low, high, inclusion)
+	// time CountRange()
+	begin := time.Now().UnixNano()
+	count, err := qc.CountRange(defnID, low, high, inclusion)
+	c.bridge.Timeit(defnID, float64(time.Now().UnixNano()-begin))
+	return count, err
 }
 
 // Close the client and all open connections with server.
@@ -314,7 +346,7 @@ func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
 	if c.bridge, err = newCbqClient(cluster); err != nil {
 		return nil, err
 	}
-	for _, queryport := range c.bridge.GetQueryports() {
+	for _, queryport := range c.bridge.GetScanports() {
 		queryClient := newGsiScanClient(queryport, config)
 		c.queryClients[queryport] = queryClient
 	}
@@ -332,7 +364,7 @@ func makeWithMetaProvider(
 	if err != nil {
 		return nil, err
 	}
-	for _, queryport := range c.bridge.GetQueryports() {
+	for _, queryport := range c.bridge.GetScanports() {
 		queryClient := newGsiScanClient(queryport, config)
 		c.queryClients[queryport] = queryClient
 	}

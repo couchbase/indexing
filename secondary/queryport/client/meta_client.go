@@ -8,14 +8,18 @@ import common "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 
 type metadataClient struct {
-	rw          sync.RWMutex // protects `topology`
 	clusterURL  string
 	serviceAddr string
 	mdClient    *mclient.MetadataProvider
+	rw          sync.RWMutex      // protects all fields listed below
 	adminports  []string          // list of nodes represented by its adminport.
 	queryports  map[string]string // adminport -> queryport
 	// sherlock topology management, multi-node & single-partition.
 	topology map[string][]*mclient.IndexMetadata // adminport -> indexes
+	// shelock load replicas.
+	replicas map[common.IndexDefnId][]common.IndexDefnId
+	// shelock load balancing.
+	loads map[common.IndexDefnId]*loadHeuristics // adminport -> loadHeuristics
 }
 
 func newMetaBridgeClient(
@@ -75,11 +79,16 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 			}
 		}
 	}
+	// compute replicas
+	b.replicas = b.computeReplicas()
 	return indexes, nil
 }
 
 // Nodes implement BridgeAccessor{} interface.
 func (b *metadataClient) Nodes() (map[string]string, error) {
+	b.rw.Lock()
+	defer b.rw.Unlock()
+
 	nodes := make(map[string]string)
 	for adminport, queryport := range b.queryports {
 		nodes[adminport] = queryport
@@ -152,8 +161,11 @@ func (b *metadataClient) DropIndex(defnID common.IndexDefnId) error {
 	return b.mdClient.DropIndex(defnID, adminport)
 }
 
-// GetQueryports implements BridgeAccessor{} interface.
-func (b *metadataClient) GetQueryports() (queryports []string) {
+// GetScanports implements BridgeAccessor{} interface.
+func (b *metadataClient) GetScanports() (queryports []string) {
+	b.rw.Lock()
+	defer b.rw.Unlock()
+
 	if len(b.queryports) == 0 {
 		return nil
 	}
@@ -164,16 +176,36 @@ func (b *metadataClient) GetQueryports() (queryports []string) {
 	return queryports
 }
 
-// GetQueryport implements BridgeAccessor{} interface.
-func (b *metadataClient) GetQueryport(
+// GetScanport implements BridgeAccessor{} interface.
+func (b *metadataClient) GetScanport(
 	defnID common.IndexDefnId) (queryport string, ok bool) {
 
+	defnID = b.pickOptimal(defnID) // defnID (aka index) under least load
 	adminport, ok := b.getNode(defnID)
 	if !ok {
 		return "", false
 	}
+
+	b.rw.Lock()
+	defer b.rw.Unlock()
 	queryport, ok = b.queryports[adminport]
 	return queryport, ok
+}
+
+// Timeit implement BridgeAccessor{} interface.
+func (b *metadataClient) Timeit(defnID uint64, value float64) {
+	b.rw.Lock()
+	defer b.rw.Unlock()
+
+	id := common.IndexDefnId(defnID)
+	if load, ok := b.loads[id]; !ok {
+		b.loads[id] = &loadHeuristics{avgLoad: value, count: 1}
+	} else {
+		// compute incremental average.
+		avg, n := load.avgLoad, load.count
+		load.avgLoad = (float64(n)*avg + float64(value)) / float64(n+1)
+		load.count = n + 1
+	}
 }
 
 // close this bridge, to be called when a new indexer is added or
@@ -181,6 +213,96 @@ func (b *metadataClient) GetQueryport(
 func (b *metadataClient) Close() {
 	b.mdClient.Close()
 }
+
+//--------------------------------
+// local functions to map replicas
+//--------------------------------
+
+// compute a map of replicas for each index in 2i.
+func (b *metadataClient) computeReplicas() map[common.IndexDefnId][]common.IndexDefnId {
+	replicaMap := make(map[common.IndexDefnId][]common.IndexDefnId, 0)
+	for adminport1, indexes1 := range b.topology {
+		for _, index1 := range indexes1 {
+			replicas := make([]common.IndexDefnId, 0)
+			replicas = append(replicas, index1.Definition.DefnId) // add itself
+			for adminport2, indexes2 := range b.topology {
+				if adminport1 == adminport2 { // skip colocated indexes
+					continue
+				}
+				for _, index2 := range indexes2 {
+					if b.equivalentIndex(index1, index2) { // pick equivalents
+						replicas = append(replicas, index2.Definition.DefnId)
+					}
+				}
+			}
+			replicaMap[index1.Definition.DefnId] = replicas // map it
+		}
+	}
+	return replicaMap
+}
+
+// compare whether two index are equivalent.
+func (b *metadataClient) equivalentIndex(
+	index1, index2 *mclient.IndexMetadata) bool {
+
+	d1, d2 := index1.Definition, index2.Definition
+	if d1.Using != d1.Using ||
+		d1.Bucket != d2.Bucket ||
+		d1.IsPrimary != d2.IsPrimary ||
+		d1.ExprType != d2.ExprType ||
+		d1.PartitionScheme != d2.PartitionScheme ||
+		d1.PartitionKey != d2.PartitionKey {
+
+		return false
+	}
+
+	for _, s1 := range d1.SecExprs {
+		for _, s2 := range d2.SecExprs {
+			if s1 != s2 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+//--------------------------------
+// local functions to map replicas
+//--------------------------------
+
+// manage load statistics.
+type loadHeuristics struct {
+	avgLoad float64
+	count   uint64
+}
+
+// pick an optimal replica for the index `defnID` under least load.
+func (b *metadataClient) pickOptimal(
+	defnID common.IndexDefnId) common.IndexDefnId {
+
+	b.rw.Lock()
+	defer b.rw.Unlock()
+
+	optimalID, currLoad := defnID, 0.0
+	if load, ok := b.loads[defnID]; ok {
+		currLoad = load.avgLoad
+	}
+	for _, replicaID := range b.replicas[defnID] {
+		load, ok := b.loads[replicaID]
+		if !ok { // no load for this replica
+			return replicaID
+		}
+		if currLoad == 0.0 || load.avgLoad < currLoad {
+			// found an index under less load
+			optimalID, currLoad = replicaID, load.avgLoad
+		}
+	}
+	return optimalID
+}
+
+//----------------
+// local functions
+//----------------
 
 // getNodes return the set of nodes hosting the specified set
 // of indexes
