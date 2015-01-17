@@ -16,12 +16,10 @@ import (
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	c "github.com/couchbase/indexing/secondary/common"
-	"math/rand"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 ///////////////////////////////////////////////////////
@@ -139,7 +137,10 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			errors.New(fmt.Sprintf("Fails to create index.  Node %s does not exist or is not running", nodes[0]))
 	}
 
-	defnID := c.IndexDefnId(rand.Int())
+	defnID, err := c.NewIndexDefnId()
+	if err != nil {
+		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fails to create index. Fail to create uuid for index definition id."))
+	}
 
 	// TODO : whereExpr
 	whereExpr = whereExpr
@@ -175,7 +176,10 @@ func (o *MetadataProvider) CreateIndex(
 		return c.IndexDefnId(0), errors.New("Index %v already exist. Cannot create.")
 	}
 
-	defnID := c.IndexDefnId(rand.Int())
+	defnID, err := c.NewIndexDefnId()
+	if err != nil {
+		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fails to create index. Fail to create uuid for index definition id."))
+	}
 
 	// TODO : whereExpr
 	whereExpr = whereExpr
@@ -527,7 +531,12 @@ func (w *watcher) close() {
 
 func (w *watcher) makeRequest(opCode common.OpCode, key string, content []byte) error {
 
-	id := uint64(time.Now().UnixNano())
+	uuid, err := c.NewUUID()
+	if err != nil {
+		return err
+	}
+	id := uuid.Uint64()
+
 	request := w.factory.CreateRequest(id, uint32(opCode), key, content)
 
 	handle := &protocol.RequestHandle{Request: request, Err: nil}

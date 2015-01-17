@@ -324,9 +324,7 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 			return err
 		}
 
-		// TODO: Make request id a string
-		id := uint64(time.Now().UnixNano())
-		if !m.coordinator.NewRequest(id, uint32(OPCODE_ADD_IDX_DEFN), indexDefnIdStr(defn.DefnId), content) {
+		if !m.coordinator.NewRequest(uint32(OPCODE_ADD_IDX_DEFN), indexDefnIdStr(defn.DefnId), content) {
 			// TODO: double check if it exists in the dictionary
 			return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, INDEX_MANAGER, nil,
 				fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
@@ -341,9 +339,8 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
 
 	if USE_MASTER_REPO {
-		// TODO: Make request id a string
-		id := uint64(time.Now().UnixNano())
-		if !m.coordinator.NewRequest(id, uint32(OPCODE_DEL_IDX_DEFN), indexDefnIdStr(defnId), nil) {
+
+		if !m.coordinator.NewRequest(uint32(OPCODE_DEL_IDX_DEFN), indexDefnIdStr(defnId), nil) {
 			// TODO: double check if it exists in the dictionary
 			return NewError(ERROR_MGR_DDL_DROP_IDX, NORMAL, INDEX_MANAGER, nil,
 				fmt.Sprintf("Fail to complete processing delete index statement for index id = '%d'", defnId))
@@ -460,8 +457,7 @@ func (m *IndexManager) runTimestampKeeper() {
 							"IndexManager.runTimestampKeeper(): error when marshalling timestamp. Ignore timestamp.  Error=%s",
 							err.Error())
 					} else {
-						id := uint64(time.Now().UnixNano())
-						m.coordinator.NewRequest(id, uint32(OPCODE_NOTIFY_TIMESTAMP), "Stability Timestamp", data)
+						m.coordinator.NewRequest(uint32(OPCODE_NOTIFY_TIMESTAMP), "Stability Timestamp", data)
 					}
 				})
 		}

@@ -223,3 +223,12 @@ func UnmarshallIndexDefn(data []byte) (*IndexDefn, error) {
 
 	return defn, nil
 }
+
+func NewIndexDefnId() (IndexDefnId, error) {
+	uuid, err := NewUUID()
+	if err != nil {
+		return IndexDefnId(0), err
+	}
+
+	return IndexDefnId(uuid.Uint64()), nil
+}

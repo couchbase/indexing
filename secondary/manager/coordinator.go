@@ -148,7 +148,13 @@ func (s *Coordinator) IsDone() bool {
 // If request is interrupted, then the request may still be processed by some other
 // nodes.  So the outcome of the request is unknown when this function returns false.
 //
-func (s *Coordinator) NewRequest(id uint64, opCode uint32, key string, content []byte) bool {
+func (s *Coordinator) NewRequest(opCode uint32, key string, content []byte) bool {
+
+	uuid, err := co.NewUUID()
+	if err != nil {
+		return false
+	}
+	id := uuid.Uint64()
 
 	s.waitForReady()
 

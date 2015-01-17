@@ -10,7 +10,7 @@
 package manager
 
 import (
-	"encoding/binary"
+	//"encoding/binary"
 	"encoding/json"
 	"fmt"
 	c "github.com/couchbase/gometa/common"
@@ -18,7 +18,6 @@ import (
 	repo "github.com/couchbase/gometa/repository"
 	gometa "github.com/couchbase/gometa/server"
 	"github.com/couchbase/indexing/secondary/common"
-	"math/rand"
 	"net/rpc"
 	"strconv"
 	"strings"
@@ -76,8 +75,6 @@ const (
 	KIND_INDEX_DEFN
 	KIND_TOPOLOGY
 	KIND_GLOBAL_TOPOLOGY
-	KIND_INDEX_INSTANCE_ID
-	KIND_INDEX_PARTITION_ID
 	KIND_STABILITY_TIMESTAMP
 )
 
@@ -164,32 +161,22 @@ func (c *MetadataRepo) Close() {
 
 func (c *MetadataRepo) GetNextPartitionId() (common.PartitionId, error) {
 
-	id, err := c.GetIndexPartitionId()
+	id, err := common.NewUUID()
 	if err != nil {
 		return common.PartitionId(0), err
 	}
 
-	id = id + 1
-	if err := c.SetIndexPartitionId(id); err != nil {
-		return common.PartitionId(0), err
-	}
-
-	return common.PartitionId(id), nil
+	return common.PartitionId(id.Uint64()), nil
 }
 
 func (c *MetadataRepo) GetNextIndexInstId() (common.IndexInstId, error) {
 
-	id, err := c.GetIndexInstanceId()
+	id, err := common.NewUUID()
 	if err != nil {
 		return common.IndexInstId(0), err
 	}
 
-	id = id + 1
-	if err := c.SetIndexInstanceId(id); err != nil {
-		return common.IndexInstId(0), err
-	}
-
-	return common.IndexInstId(id), nil
+	return common.IndexInstId(id.Uint64()), nil
 }
 
 ///////////////////////////////////////////////////////
@@ -483,10 +470,17 @@ func newRemoteRepoRef(requestAddr string,
 	// This is a blocking call unit the watcher is ready.  This means
 	// the watcher has succesfully synchronized with the remote metadata
 	// repository.
-	var watcherId string = strconv.FormatUint(uint64(rand.Uint32()), 10)
+
+	var watcherId string
 	env, err := newEnv(config)
 	if err == nil {
 		watcherId = env.getHostElectionPort()
+	} else {
+		uuid, err := common.NewUUID()
+		if err != nil {
+			return nil, err
+		}
+		watcherId = strconv.FormatUint(uuid.Uint64(), 10)
 	}
 
 	watcher, err := startWatcher(mgr, repository, leaderAddr, watcherId)
@@ -639,10 +633,6 @@ func findTypeFromKey(key string) MetadataKind {
 		return KIND_TOPOLOGY
 	} else if isGlobalTopologyKey(key) {
 		return KIND_GLOBAL_TOPOLOGY
-	} else if isIndexInstanceIdKey(key) {
-		return KIND_INDEX_INSTANCE_ID
-	} else if isIndexPartitionIdKey(key) {
-		return KIND_INDEX_PARTITION_ID
 	} else if isStabilityTimestampKey(key) {
 		return KIND_STABILITY_TIMESTAMP
 	}
@@ -750,82 +740,6 @@ func unmarshallGlobalTopology(data []byte) (*GlobalTopology, error) {
 	}
 
 	return topology, nil
-}
-
-///////////////////////////////////////////////////////
-// package local function : Index Instance Id
-///////////////////////////////////////////////////////
-
-func (c *MetadataRepo) GetIndexInstanceId() (uint64, error) {
-
-	lookupName := indexInstanceIdKey()
-	data, err := c.getMeta(lookupName)
-	if err != nil {
-		// TODO : Differentiate the case for real error
-		return 0, nil
-	}
-
-	id, read := binary.Uvarint(data)
-	if read < 0 {
-		return 0, NewError2(ERROR_META_FAIL_TO_PARSE_INT, METADATA_REPO)
-	}
-
-	return id, nil
-}
-
-func (c *MetadataRepo) SetIndexInstanceId(id uint64) error {
-
-	data := make([]byte, 8)
-	binary.PutUvarint(data, id)
-
-	lookupName := indexInstanceIdKey()
-	return c.setMeta(lookupName, data)
-}
-
-func indexInstanceIdKey() string {
-	return "IndexInstanceId"
-}
-
-func isIndexInstanceIdKey(key string) bool {
-	return strings.Contains(key, "IndexInstanceId")
-}
-
-///////////////////////////////////////////////////////
-// package local function : Index Partition Id
-///////////////////////////////////////////////////////
-
-func (c *MetadataRepo) GetIndexPartitionId() (uint64, error) {
-
-	lookupName := indexPartitionIdKey()
-	data, err := c.getMeta(lookupName)
-	if err != nil {
-		// TODO : Differentiate the case for real error
-		return 0, nil
-	}
-
-	id, read := binary.Uvarint(data)
-	if read < 0 {
-		return 0, NewError2(ERROR_META_FAIL_TO_PARSE_INT, METADATA_REPO)
-	}
-
-	return id, nil
-}
-
-func (c *MetadataRepo) SetIndexPartitionId(id uint64) error {
-
-	data := make([]byte, 8)
-	binary.PutUvarint(data, id)
-
-	lookupName := indexPartitionIdKey()
-	return c.setMeta(lookupName, data)
-}
-
-func indexPartitionIdKey() string {
-	return "IndexPartitionId"
-}
-
-func isIndexPartitionIdKey(key string) bool {
-	return strings.Contains(key, "IndexPartitionId")
 }
 
 ///////////////////////////////////////////////////////
