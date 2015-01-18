@@ -38,7 +38,7 @@ func NewSnapshotInfoContainer(infos []SnapshotInfo) *snapshotInfoContainer {
 	sc := &snapshotInfoContainer{snapshotList: list.New()}
 
 	for _, info := range infos {
-		sc.snapshotList.PushFront(info)
+		sc.snapshotList.PushBack(info)
 	}
 
 	return sc
