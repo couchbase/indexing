@@ -124,11 +124,13 @@ loop:
 					cm.supvCmdCh <- &MsgSuccess{}
 					break loop
 				} else if cmd.GetMsgType() == CONFIG_SETTINGS_UPDATE {
+					common.Infof("%v: Refreshing settings", cm.logPrefix)
 					cfgUpdate := cmd.(*MsgConfigUpdate)
 					cm.config = cfgUpdate.GetConfig()
 					cd.Stop()
 					cd = cm.newCompactionDaemon()
 					cd.Start()
+					cm.supvCmdCh <- &MsgSuccess{}
 				}
 			} else {
 				break loop

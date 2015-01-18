@@ -11,9 +11,15 @@ package indexer
 
 import (
 	"errors"
+	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"io/ioutil"
 	"net/http"
+)
+
+const (
+	indexerMetaDir          = "/indexer/"
+	indexerSettingsMetaPath = indexerMetaDir + "settings"
 )
 
 // Implements dynamic settings management for indexer
@@ -21,6 +27,7 @@ type settingsManager struct {
 	supvCmdch MsgChannel
 	supvMsgch MsgChannel
 	config    common.Config
+	cancelCh  chan struct{}
 }
 
 func NewSettingsManager(supvCmdch MsgChannel,
@@ -29,9 +36,20 @@ func NewSettingsManager(supvCmdch MsgChannel,
 		supvCmdch: supvCmdch,
 		supvMsgch: supvMsgch,
 		config:    config,
+		cancelCh:  make(chan struct{}),
 	}
 
 	http.HandleFunc("/settings", s.handleSettingsReq)
+	go func() {
+		for {
+			err := metakv.RunObserveChildren("/", s.metaKVCallback, s.cancelCh)
+			if err == nil {
+				return
+			} else {
+				common.Errorf("IndexerSettingsManager: metakv notifier failed (%v)..Restarting", err)
+			}
+		}
+	}()
 	return s, &MsgSuccess{}
 }
 
@@ -58,21 +76,32 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 		bytes, _ := ioutil.ReadAll(r.Body)
 
 		config := s.config.Clone()
-		err := config.Update(bytes)
+		current, rev, err := metakv.Get(indexerSettingsMetaPath)
+		if err == nil {
+			if len(current) > 0 {
+				config.Update(current)
+			}
+			err = config.Update(bytes)
+		}
+
 		if err != nil {
 			s.writeError(w, err)
 			return
 		}
 
-		s.config = config
-		s.supvMsgch <- &MsgConfigUpdate{
-			cfg: s.config,
+		settingsConfig := config.SectionConfig("settings.", false)
+		newSettingsBytes := settingsConfig.Json()
+		if err = metakv.Set(indexerSettingsMetaPath, newSettingsBytes, rev); err != nil {
+			s.writeError(w, err)
+			return
 		}
-		common.Infof("New settings received: \n%s", string(bytes))
 		s.writeOk(w)
-
 	} else if r.Method == "GET" {
-		settingsConfig := s.config.SectionConfig("settings.", false)
+		settingsConfig, err := getSettingsConfig(s.config)
+		if err != nil {
+			s.writeError(w, err)
+			return
+		}
 		s.writeJson(w, settingsConfig.Json())
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
@@ -88,6 +117,7 @@ loop:
 			if ok {
 				if cmd.GetMsgType() == STORAGE_MGR_SHUTDOWN {
 					common.Infof("SettingsManager::run Shutting Down")
+					close(s.cancelCh)
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -96,4 +126,29 @@ loop:
 			}
 		}
 	}
+}
+
+func (s *settingsManager) metaKVCallback(path string, value []byte, rev interface{}) error {
+	if path == indexerSettingsMetaPath {
+		common.Infof("New settings received: \n%s", string(value))
+		config := s.config.Clone()
+		config.Update(value)
+		s.config = config
+		s.supvMsgch <- &MsgConfigUpdate{
+			cfg: s.config,
+		}
+	}
+
+	return nil
+}
+
+func getSettingsConfig(cfg common.Config) (common.Config, error) {
+	settingsConfig := cfg.SectionConfig("settings.", false)
+	current, _, err := metakv.Get(indexerSettingsMetaPath)
+	if err == nil {
+		if len(current) > 0 {
+			settingsConfig.Update(current)
+		}
+	}
+	return settingsConfig, err
 }
