@@ -97,6 +97,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketNewTsReqdMap := make(BucketNewTsReqdMap)
 	ss.streamBucketNewTsReqdMap[streamId] = bucketNewTsReqdMap
 
+	bucketRestartTsMap := make(BucketRestartTsMap)
+	ss.streamBucketRestartTsMap[streamId] = bucketRestartTsMap
+
 	bucketTsListMap := make(BucketTsListMap)
 	ss.streamBucketTsListMap[streamId] = bucketTsListMap
 

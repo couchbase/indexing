@@ -271,6 +271,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 						sliceSnaps[slice.Id()] = ss
 						common.Debugf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
 							"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
+						common.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
 						continue
 					}
 				}

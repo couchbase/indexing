@@ -183,6 +183,14 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 		tk.ss.initNewStream(streamId)
 		common.Debugf("Timekeeper::handleStreamOpen \n\t Stream %v "+
 			"State Changed to ACTIVE", streamId)
+
+		bucket := cmd.(*MsgStreamUpdate).GetBucket()
+		restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
+		if restartTs != nil {
+			tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
+			common.Debugf("Timekeeper::handleStreamOpen RestartTs Set Bucket %v TS %v ",
+				bucket, restartTs)
+		}
 	}
 
 	//add the new indexes to internal maps
@@ -262,6 +270,7 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 		//if this is first index for the bucket, add bucket to stream
 		if tk.ss.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
 			tk.ss.initBucketInStream(streamId, idx.Defn.Bucket)
+			tk.ss.setHWTFromRestartTs(streamId, idx.Defn.Bucket)
 		}
 
 		tk.ss.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] += 1
@@ -833,6 +842,8 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 		tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_END)
 		if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
 			tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
+			common.Debugf("Timekeeper::handleStreamEnd \n\tRepairStream due to StreamEnd. "+
+				"StreamId %v MutationMeta %v", streamId, meta)
 			go tk.repairStream(streamId, meta.bucket)
 		}
 
@@ -875,6 +886,8 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 		tk.ss.updateVbStatus(streamId, bucket, vbList, VBS_CONN_ERROR)
 		if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
 			tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
+			common.Debugf("Timekeeper::handleStreamConnError \n\tRepairStream due to ConnError. "+
+				"StreamId %v Bucket %v VbList %v", streamId, bucket, vbList)
 			go tk.repairStream(streamId, bucket)
 		}
 

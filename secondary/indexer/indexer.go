@@ -658,6 +658,9 @@ func (idx *indexer) handleRollback(msg Message) {
 	streamId := msg.(*MsgRollback).GetStreamId()
 	rollbackTs := msg.(*MsgRollback).GetRollbackTs()
 
+	common.Debugf("Indexer::handleRollback StreamId %v Bucket %v",
+		streamId, bucket)
+
 	idx.streamBucketRollbackTs[streamId][bucket] = rollbackTs
 	idx.streamBucketStatus[streamId][bucket] = STREAM_RECOVERY
 
@@ -670,6 +673,9 @@ func (idx *indexer) handlePrepareRecovery(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	bucket := msg.(*MsgRecovery).GetBucket()
 
+	common.Debugf("Indexer::handlePrepareRecovery StreamId %v Bucket %v",
+		streamId, bucket)
+
 	idx.stopBucketStream(streamId, bucket)
 
 }
@@ -678,6 +684,9 @@ func (idx *indexer) handlePrepareDone(msg Message) {
 
 	bucket := msg.(*MsgRecovery).GetBucket()
 	streamId := msg.(*MsgRecovery).GetStreamId()
+
+	common.Debugf("Indexer::handlePrepareDone StreamId %v Bucket %v",
+		streamId, bucket)
 
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
 
@@ -702,6 +711,9 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 	bucket := msg.(*MsgRecovery).GetBucket()
 	restartTs := msg.(*MsgRecovery).GetRestartTs()
 
+	common.Debugf("Indexer::handleInitRecovery StreamId %v Bucket %v",
+		streamId, bucket)
+
 	idx.startBucketStream(streamId, bucket, restartTs)
 
 }
@@ -710,6 +722,9 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 
 	bucket := msg.(*MsgRecovery).GetBucket()
 	streamId := msg.(*MsgRecovery).GetStreamId()
+
+	common.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v",
+		streamId, bucket)
 
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
 	delete(idx.streamBucketRollbackTs[streamId], bucket)
@@ -742,7 +757,8 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
 
-	common.Debugf("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v", streamId, bucket)
+	common.Debugf("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v",
+		streamId, bucket)
 
 	switch streamId {
 
@@ -767,7 +783,8 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
 
-	common.Debugf("Indexer::handleMergeStreamAck StreamId %v Bucket %v", streamId, bucket)
+	common.Debugf("Indexer::handleMergeStreamAck StreamId %v Bucket %v",
+		streamId, bucket)
 
 	switch streamId {
 
@@ -819,7 +836,8 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	streamId := msg.(*MsgStreamInfo).GetStreamId()
 	bucket := msg.(*MsgStreamInfo).GetBucket()
 
-	common.Debugf("Indexer::handleStreamRequestDone StreamId %v Bucket %v", streamId, bucket)
+	common.Debugf("Indexer::handleStreamRequestDone StreamId %v Bucket %v",
+		streamId, bucket)
 
 	//send the ack to timekeeper
 	idx.tkCmdCh <- msg
@@ -1804,6 +1822,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 	cmd := &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:  streamId,
+		bucket:    bucket,
 		indexList: indexList,
 		restartTs: restartTs,
 		respCh:    respCh,
@@ -1827,6 +1846,8 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
+
+	idx.streamBucketStatus[streamId][bucket] = STREAM_RECOVERY
 
 	go func() {
 	retryloop:
@@ -2171,16 +2192,18 @@ func (idx *indexer) startStreams() bool {
 	restartTs := idx.makeRestartTs()
 
 	//Start MAINT_STREAM
+	idx.streamBucketStatus[common.MAINT_STREAM] = make(BucketStatus)
 	for bucket, ts := range restartTs {
 		idx.startBucketStream(common.MAINT_STREAM, bucket, ts)
 	}
 
 	//Start INIT_STREAM
+	idx.streamBucketStatus[common.INIT_STREAM] = make(BucketStatus)
 	for bucket, ts := range restartTs {
 		idx.startBucketStream(common.INIT_STREAM, bucket, ts)
 	}
 
-	return false
+	return true
 
 }
 
