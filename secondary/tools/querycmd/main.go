@@ -144,10 +144,14 @@ func parseArgs(arguments []string) (*Command, []string) {
 	cmdOptions.high = c.SecondaryKey(arg2key([]byte(high)))
 
 	// setup cbauth
-	authURL := fmt.Sprintf("http://%s/_cbauth", cmdOptions.server)
 	up := strings.Split(cmdOptions.auth, ":")
 	authU, authP := up[0], up[1]
-	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
+	authURL := fmt.Sprintf("http://%s/_cbauth", cmdOptions.server)
+	rpcURL := fmt.Sprintf("http://%s/index", cmdOptions.server)
+	c.MaybeSetEnv("NS_SERVER_CBAUTH_RPC_URL", rpcURL)
+	c.MaybeSetEnv("NS_SERVER_CBAUTH_USER", authU)
+	c.MaybeSetEnv("NS_SERVER_CBAUTH_PWD", authP)
+	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, nil)
 
 	return cmdOptions, fset.Args()
 }
@@ -441,7 +445,8 @@ func benchmark(cluster, addr string) {
 
 func loopback(cluster, raddr string) {
 	qconf := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qconf.SetValue("poolSize", 10).SetValue("poolOverflow", mock_nclients)
+	qconf.SetValue("poolSize", 10)
+	qconf.SetValue("poolOverflow", mock_nclients)
 	client, err := qclient.NewGsiClient(cluster, "querycmd", qconf)
 	if err != nil {
 		log.Fatal(err)
