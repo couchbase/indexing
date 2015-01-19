@@ -155,9 +155,10 @@ loop:
 			eventCount++
 
 			// all vbuckets have ended for this stream, exit kvdata.
-			if len(kvdata.vrs) == 0 {
-				break loop
-			}
+			// FIXME : For now don't cleanup the bucket because of this.
+			//if len(kvdata.vrs) == 0 {
+			//    break loop
+			//}
 
 		case msg := <-kvdata.sbch:
 			cmd := msg[0].(byte)
