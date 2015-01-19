@@ -142,8 +142,6 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fails to create index. Fail to create uuid for index definition id."))
 	}
 
-	// TODO : whereExpr
-	whereExpr = whereExpr
 	idxDefn := &c.IndexDefn{
 		DefnId:          defnID,
 		Name:            name,
@@ -154,6 +152,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		ExprType:        c.ExprType(exprType),
 		PartitionScheme: c.HASH,
 		PartitionKey:    partnExpr,
+		WhereExpr:       whereExpr,
 		Deferred:        deferred,
 		Nodes:           nodes}
 

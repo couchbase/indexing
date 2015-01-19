@@ -103,7 +103,7 @@ func TestMetadataProvider(t *testing.T) {
 	plan["nodes"] = []string{msgAddr}
 	plan["defer_build"] = true
 	newDefnId, err := provider.CreateIndexWithPlan("metadata_provider_test_102", "Default", common.ForestDB,
-		common.N1QL, "Testing", "Testing", []string{"Testing"}, false, plan)
+		common.N1QL, "Testing", "TestingWhereExpr", []string{"Testing"}, false, plan)
 	if err != nil {
 		t.Fatal("Cannot create Index Defn 102 through MetadataProvider")
 	}
@@ -145,6 +145,9 @@ func TestMetadataProvider(t *testing.T) {
 		common.Infof("meta.Instance %v", meta.Instances)
 		if meta.Instances[0].Endpts[0] != "localhost:"+manager.COORD_MAINT_STREAM_PORT {
 			t.Fatal(fmt.Sprintf("Index Defn %v state is not ready", newDefnId))
+		}
+		if meta.Definition.WhereExpr != "TestingWhereExpr" {
+			t.Fatal(fmt.Sprintf("WhereExpr is missing in Index Defn %v", newDefnId))
 		}
 	}
 
