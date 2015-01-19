@@ -897,7 +897,7 @@ func (feed *Feed) bucketFeed(
 		if err != nil {
 			return nil, err
 		}
-		name := fmt.Sprintf("proj-%s-%s", bucket.Name, feed.topic)
+		name := newDCPConnectionName(bucket.Name, feed.topic, c.NewID())
 		feeder, err = OpenBucketFeed(name, bucket)
 		if err != nil {
 			feed.errorf("OpenBucketFeed()", bucketn, err)
@@ -1236,6 +1236,11 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 func newOpaque() uint16 {
 	// bit 26 ... 42 from UnixNano().
 	return uint16((uint64(time.Now().UnixNano()) >> 26) & 0xFFFF)
+}
+
+// generate a unique opaque identifier.
+func newDCPConnectionName(bucketn, topic string, uuid uint64) string {
+	return fmt.Sprintf("proj-%s-%s-%v", bucketn, topic, uuid)
 }
 
 //---- local function

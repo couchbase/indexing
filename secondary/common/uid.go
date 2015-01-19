@@ -12,7 +12,6 @@ package common
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"hash/crc32"
 	"net"
 	"os"
