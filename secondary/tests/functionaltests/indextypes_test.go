@@ -33,7 +33,9 @@ func init() {
 
 	// setup cbauth
 	authURL := fmt.Sprintf("http://%s/_cbauth", kvaddress)
-	rpcURL := fmt.Sprintf("http://%s/index", kvaddress)
+	// FIXME: for now we will say this client is goxdcr, but eventually
+	// ns_server should accomodate test clients.
+	rpcURL := fmt.Sprintf("http://%s/goxdcr", kvaddress)
 	common.MaybeSetEnv("NS_SERVER_CBAUTH_RPC_URL", rpcURL)
 	common.MaybeSetEnv("NS_SERVER_CBAUTH_USER", clusterconfig.Username)
 	common.MaybeSetEnv("NS_SERVER_CBAUTH_PWD", clusterconfig.Password)

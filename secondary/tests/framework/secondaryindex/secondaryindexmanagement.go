@@ -51,7 +51,7 @@ func CreateSecondaryIndex(indexName, bucketName, server string, indexFields []st
 	where := ""
 	isPrimary := false
 
-	_, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary)
+	_, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary, nil)
 	if err == nil {
 		fmt.Printf("Created the secondary index %v\n", indexName)
 	}
