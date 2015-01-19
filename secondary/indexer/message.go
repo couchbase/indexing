@@ -76,10 +76,9 @@ const (
 	//CLUSTER_MGR
 	CLUST_MGR_AGENT_SHUTDOWN
 	CLUST_MGR_CREATE_INDEX_DDL
+	CLUST_MGR_BUILD_INDEX_DDL
 	CLUST_MGR_DROP_INDEX_DDL
-	CLUST_MGR_UPDATE_STATE_FOR_INDEX
-	CLUST_MGR_UPDATE_STREAM_FOR_INDEX
-	CLUST_MGR_UPDATE_ERROR_FOR_INDEX
+	CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
 	CLUST_MGR_GET_GLOBAL_TOPOLOGY
 	CLUST_MGR_GET_LOCAL
 	CLUST_MGR_SET_LOCAL
@@ -595,6 +594,32 @@ func (m *MsgCreateIndex) GetString() string {
 	return str
 }
 
+//CLUST_MGR_BUILD_INDEX_DDL
+type MsgBuildIndex struct {
+	indexInstList []common.IndexInstId
+	respCh        MsgChannel
+}
+
+func (m *MsgBuildIndex) GetMsgType() MsgType {
+	return CLUST_MGR_BUILD_INDEX_DDL
+}
+
+func (m *MsgBuildIndex) GetIndexList() []common.IndexInstId {
+	return m.indexInstList
+}
+
+func (m *MsgBuildIndex) GetRespCh() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgBuildIndex) GetString() string {
+
+	str := "\n\tMessage: MsgBuildIndex"
+	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_BUILD_INDEX_DDL)
+	str += fmt.Sprintf("\n\tIndex: %v", m.indexInstList)
+	return str
+}
+
 //CBQ_DROP_INDEX_DDL
 //CLUST_MGR_DROP_INDEX_DDL
 type MsgDropIndex struct {
@@ -850,13 +875,10 @@ func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
 }
 
-//CLUST_MGR_UPDATE_STATE_FOR_INDEX
-//CLUST_MGR_UPDATE_STREAM_FOR_INDEX
-//CLUST_MGR_UPDATE_ERROR_FOR_INDEX
+//CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
 type MsgClustMgrUpdate struct {
 	mType     MsgType
 	indexList []common.IndexInst
-	errStr    string
 }
 
 func (m *MsgClustMgrUpdate) GetMsgType() MsgType {
@@ -865,10 +887,6 @@ func (m *MsgClustMgrUpdate) GetMsgType() MsgType {
 
 func (m *MsgClustMgrUpdate) GetIndexList() []common.IndexInst {
 	return m.indexList
-}
-
-func (m *MsgClustMgrUpdate) GetErrorStr() string {
-	return m.errStr
 }
 
 //CLUST_MGR_GET_GLOBAL_TOPOLOGY
@@ -1035,14 +1053,12 @@ func (m MsgType) String() string {
 
 	case CLUST_MGR_CREATE_INDEX_DDL:
 		return "CLUST_MGR_CREATE_INDEX_DDL"
+	case CLUST_MGR_BUILD_INDEX_DDL:
+		return "CLUST_MGR_BUILD_INDEX_DDL"
 	case CLUST_MGR_DROP_INDEX_DDL:
 		return "CLUST_MGR_DROP_INDEX_DDL"
-	case CLUST_MGR_UPDATE_STATE_FOR_INDEX:
-		return "CLUST_MGR_UPDATE_STATE_FOR_INDEX"
-	case CLUST_MGR_UPDATE_STREAM_FOR_INDEX:
-		return "CLUST_MGR_UPDATE_STREAM_FOR_INDEX"
-	case CLUST_MGR_UPDATE_ERROR_FOR_INDEX:
-		return "CLUST_MGR_UPDATE_ERROR_FOR_INDEX"
+	case CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX:
+		return "CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX"
 	case CLUST_MGR_GET_GLOBAL_TOPOLOGY:
 		return "CLUST_MGR_GET_GLOBAL_TOPOLOGY"
 	case CLUST_MGR_GET_LOCAL:

@@ -121,6 +121,7 @@ type IndexInst struct {
 	State  IndexState
 	Stream StreamId
 	Pc     PartitionContainer
+	Error  string
 }
 
 //IndexInstMap is a map from IndexInstanceId to IndexInstance

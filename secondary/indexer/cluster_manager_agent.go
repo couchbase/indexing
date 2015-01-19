@@ -14,6 +14,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
 	"net"
+	"runtime/debug"
 )
 
 //ClustMgrAgent provides the mechanism to talk to Index Coordinator
@@ -158,14 +159,8 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 
 	switch cmd.GetMsgType() {
 
-	case CLUST_MGR_UPDATE_STATE_FOR_INDEX:
-		c.handleUpdateStateForIndex(cmd)
-
-	case CLUST_MGR_UPDATE_STREAM_FOR_INDEX:
-		c.handleUpdateStreamForIndex(cmd)
-
-	case CLUST_MGR_UPDATE_ERROR_FOR_INDEX:
-		c.handleUpdateErrorForIndex(cmd)
+	case CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX:
+		c.handleUpdateTopologyForIndex(cmd)
 
 	case CLUST_MGR_GET_GLOBAL_TOPOLOGY:
 		c.handleGetGlobalTopology(cmd)
@@ -182,109 +177,25 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 
 }
 
-func (c *clustMgrAgent) handleUpdateStateForIndex(cmd Message) {
+func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
+
+	common.Debugf("ClustMgr:handleUpdateTopologyForIndex %v", cmd)
 
 	indexList := cmd.(*MsgClustMgrUpdate).GetIndexList()
 
-	var ok bool
-	var err error
-	var t *manager.IndexTopology
-
-	topologyMap := make(map[string]*manager.IndexTopology)
 	for _, index := range indexList {
-		if t, ok = topologyMap[index.Defn.Bucket]; !ok {
-			t, err = c.mgr.GetTopologyByBucket(index.Defn.Bucket)
-			if err != nil {
-				common.CrashOnError(err)
-			}
-			topologyMap[index.Defn.Bucket] = t
-		}
-		t.UpdateStateForIndexInstByDefn(common.IndexDefnId(index.InstId), index.State)
+		err := c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId,
+			index.State, index.Stream, index.Error)
+		common.CrashOnError(err)
 	}
 
-	//set the topology back
-	//TODO Check with John what happens if the topology has changed
-	//after Get but before Set
-	for b, t := range topologyMap {
-		err = c.mgr.SetTopologyByBucket(b, t)
-		if err != nil {
-			common.CrashOnError(err)
-		}
-	}
+	c.supvCmdch <- &MsgSuccess{}
 
-	c.supvRespch <- &MsgSuccess{}
-
-}
-
-func (c *clustMgrAgent) handleUpdateStreamForIndex(cmd Message) {
-
-	indexList := cmd.(*MsgClustMgrUpdate).GetIndexList()
-
-	var ok bool
-	var err error
-	var t *manager.IndexTopology
-
-	topologyMap := make(map[string]*manager.IndexTopology)
-	for _, index := range indexList {
-		if t, ok = topologyMap[index.Defn.Bucket]; !ok {
-			t, err = c.mgr.GetTopologyByBucket(index.Defn.Bucket)
-			if err != nil {
-				common.CrashOnError(err)
-			}
-			topologyMap[index.Defn.Bucket] = t
-		}
-		t.UpdateStateForIndexInstByDefn(common.IndexDefnId(index.InstId), index.State)
-	}
-
-	//set the topology back
-	//TODO Check with John what happens if the topology has changed
-	//after Get but before Set
-	for b, t := range topologyMap {
-		err = c.mgr.SetTopologyByBucket(b, t)
-		if err != nil {
-			common.CrashOnError(err)
-		}
-	}
-
-	c.supvRespch <- &MsgSuccess{}
-
-}
-
-func (c *clustMgrAgent) handleUpdateErrorForIndex(cmd Message) {
-
-	indexList := cmd.(*MsgClustMgrUpdate).GetIndexList()
-	errStr := cmd.(*MsgClustMgrUpdate).GetErrorStr()
-
-	var ok bool
-	var err error
-	var t *manager.IndexTopology
-
-	topologyMap := make(map[string]*manager.IndexTopology)
-	for _, index := range indexList {
-		if t, ok = topologyMap[index.Defn.Bucket]; !ok {
-			t, err = c.mgr.GetTopologyByBucket(index.Defn.Bucket)
-			if err != nil {
-				common.CrashOnError(err)
-			}
-			topologyMap[index.Defn.Bucket] = t
-		}
-		t.SetErrorForIndexInstByDefn(common.IndexDefnId(index.InstId), errStr)
-	}
-
-	//set the topology back
-	//TODO Check with John what happens if the topology has changed
-	//after Get but before Set
-	for b, t := range topologyMap {
-		err = c.mgr.SetTopologyByBucket(b, t)
-		if err != nil {
-			common.CrashOnError(err)
-		}
-	}
-
-	c.supvRespch <- &MsgSuccess{}
 }
 
 func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
+
+	common.Debugf("ClustMgr:handleGetGlobalTopology %v", cmd)
 
 	//get the latest topology from manager
 	metaIter, err := c.mgr.NewIndexDefnIterator()
@@ -294,7 +205,8 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 
 	indexInstMap := make(common.IndexInstMap)
 
-	for _, defn, err := metaIter.Next(); err != nil; {
+	//TODO check what is the right end-condition for iterator
+	for _, defn, err := metaIter.Next(); err == nil; {
 
 		var idxDefn common.IndexDefn
 		idxDefn = *defn
@@ -316,16 +228,18 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 
 	}
 
-	c.supvRespch <- &MsgClustMgrTopology{indexInstMap: indexInstMap}
+	c.supvCmdch <- &MsgClustMgrTopology{indexInstMap: indexInstMap}
 }
 
 func (c *clustMgrAgent) handleGetLocalValue(cmd Message) {
 
 	key := cmd.(*MsgClustMgrLocal).GetKey()
 
+	common.Debugf("ClustMgr:handleGetLocalValue Key %v", key)
+
 	val, err := c.mgr.GetLocalValue(key)
 
-	c.supvRespch <- &MsgClustMgrLocal{
+	c.supvCmdch <- &MsgClustMgrLocal{
 		mType: CLUST_MGR_GET_LOCAL,
 		key:   key,
 		value: val,
@@ -339,9 +253,11 @@ func (c *clustMgrAgent) handleSetLocalValue(cmd Message) {
 	key := cmd.(*MsgClustMgrLocal).GetKey()
 	val := cmd.(*MsgClustMgrLocal).GetValue()
 
+	common.Debugf("ClustMgr:handleSetLocalValue Key %v Value %v", key, val)
+
 	err := c.mgr.SetLocalValue(key, val)
 
-	c.supvRespch <- &MsgClustMgrLocal{
+	c.supvCmdch <- &MsgClustMgrLocal{
 		mType: CLUST_MGR_SET_LOCAL,
 		key:   key,
 		value: val,
@@ -364,6 +280,9 @@ func (c *clustMgrAgent) panicHandler() {
 		default:
 			err = errors.New("Unknown panic")
 		}
+
+		common.Fatalf("ClusterMgrAgent Panic Err %v", err)
+		common.StackTrace(string(debug.Stack()))
 
 		//panic, propagate to supervisor
 		msg := &MsgError{
@@ -399,18 +318,15 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
 	common.Debugf("clustMgrAgent::OnIndexCreate Notification "+
 		"Received for Create Index %v", indexDefn)
 
-	pc := common.NewKeyPartitionContainer()
+	pc := meta.makeDefaultPartitionContainer()
 
-	//Add one partition for now
-	addr := net.JoinHostPort("", meta.config["streamMaintPort"].String())
-	endpt := []common.Endpoint{common.Endpoint(addr)}
-
-	partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
-		Endpts: endpt}
-	pc.AddPartition(common.PartitionId(1), partnDefn)
+	//FIXME set partitionScheme correctly for now. Needs to be sent correctly
+	//by manager
+	Defn := *indexDefn
+	Defn.PartitionScheme = common.SINGLE
 
 	idxInst := common.IndexInst{InstId: common.IndexInstId(indexDefn.DefnId),
-		Defn:  *indexDefn,
+		Defn:  Defn,
 		State: common.INDEX_STATE_CREATED,
 		Pc:    pc,
 	}
@@ -448,6 +364,53 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
 
 		common.Debugf("clustMgrAgent::OnIndexCreate Unexpected Channel Close "+
 			"for Create Index %v", indexDefn)
+		common.CrashOnError(errors.New("Unknown Response"))
+	}
+
+	return nil
+}
+func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId) error {
+
+	common.Debugf("clustMgrAgent::OnIndexBuild Notification "+
+		"Received for Build Index %v", indexDefnList)
+
+	respCh := make(MsgChannel)
+
+	var indexInstList []common.IndexInstId
+	for _, defnId := range indexDefnList {
+		indexInstList = append(indexInstList, common.IndexInstId(defnId))
+	}
+
+	meta.adminCh <- &MsgBuildIndex{indexInstList: indexInstList,
+		respCh: respCh}
+
+	//wait for response
+	if res, ok := <-respCh; ok {
+
+		switch res.GetMsgType() {
+
+		case MSG_SUCCESS:
+			common.Debugf("clustMgrAgent::OnIndexBuild Success "+
+				"for Build Index %v", indexDefnList)
+			return nil
+
+		case MSG_ERROR:
+			common.Debugf("clustMgrAgent::OnIndexBuild Error "+
+				"for Build Index %v. Error %v.", indexDefnList, res)
+			err := res.(*MsgError).GetError()
+			return err.cause
+
+		default:
+			common.Fatalf("clustMgrAgent::OnIndexBuild Unknown Response "+
+				"Received for Build Index %v. Response %v", indexDefnList, res)
+			common.CrashOnError(errors.New("Unknown Response"))
+
+		}
+
+	} else {
+
+		common.Debugf("clustMgrAgent::OnIndexBuild Unexpected Channel Close "+
+			"for Create Index %v", indexDefnList)
 		common.CrashOnError(errors.New("Unknown Response"))
 	}
 
@@ -499,7 +462,18 @@ func (meta *metaNotifier) OnIndexDelete(defnId common.IndexDefnId) error {
 	return nil
 }
 
-func (meta *metaNotifier) OnTopologyUpdate(t *manager.IndexTopology) error {
-	//No action required for topology updates for now
-	return nil
+func (meta *metaNotifier) makeDefaultPartitionContainer() common.PartitionContainer {
+
+	pc := common.NewKeyPartitionContainer()
+
+	//Add one partition for now
+	addr := net.JoinHostPort("", meta.config["streamMaintPort"].String())
+	endpt := []common.Endpoint{common.Endpoint(addr)}
+
+	partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
+		Endpts: endpt}
+	pc.AddPartition(common.PartitionId(1), partnDefn)
+
+	return pc
+
 }
