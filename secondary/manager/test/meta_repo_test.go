@@ -12,6 +12,7 @@ package test
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
+	fdb "github.com/couchbaselabs/goforestdb"
 	"testing"
 	"time"
 )
@@ -176,10 +177,12 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 	}
 
 	found := false
-	for !found {
+	for {
 		key, defn, err := iter.Next()
-		if err != nil {
-			common.Infof("error during iteration %s", err.Error())
+		if err != nil { 
+			if err != fdb.RESULT_ITERATOR_FAIL {
+				common.Infof("error during iteration %s", err.Error())
+			}
 			break
 		}
 
