@@ -206,6 +206,11 @@ func (b *cbqClient) Timeit(defnID uint64, value float64) {
 	// TODO: do nothing ?
 }
 
+// IndexState implement BridgeAccessor{} interface.
+func (b *cbqClient) IndexState(defnID uint64) (common.IndexState, error) {
+	return common.INDEX_STATE_ACTIVE, nil
+}
+
 // Close implement BridgeAccessor
 func (b *cbqClient) Close() {
 	// TODO: do nothing ?

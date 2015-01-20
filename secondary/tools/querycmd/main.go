@@ -87,7 +87,7 @@ func parseArgs(arguments []string) (*Command, []string) {
 	fset := flag.NewFlagSet("cmd", flag.ExitOnError)
 
 	// basic options
-	fset.StringVar(&cmdOptions.server, "server", "localhost:9000", "Cluster server address")
+	fset.StringVar(&cmdOptions.server, "server", "127.0.0.1:9000", "Cluster server address")
 	fset.StringVar(&cmdOptions.opType, "type", "scanAll", "Index command (scan|stats|scanAll|count|nodes|create|build|drop|list)")
 	fset.StringVar(&cmdOptions.indexName, "index", "", "Index name")
 	fset.StringVar(&cmdOptions.bucket, "bucket", "default", "Bucket name")
@@ -353,8 +353,9 @@ func arg2key(arg []byte) []interface{} {
 
 func printIndexInfo(index *mclient.IndexMetadata) {
 	defn := index.Definition
-	fmt.Printf("Index:%s/%s, Id:%v, Using:%s, Exprs:%v, isPrimary:%v\n",
-		defn.Name, defn.Bucket, defn.DefnId, defn.Using, defn.SecExprs,
+	insts := index.Instances
+	fmt.Printf("Index:%s/%s, Id:%v, State:%s, Using:%s, Exprs:%v, isPrimary:%v\n",
+		defn.Name, defn.Bucket, defn.DefnId, insts[0].State, defn.Using, defn.SecExprs,
 		defn.IsPrimary)
 }
 

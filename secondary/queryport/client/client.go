@@ -4,6 +4,8 @@ import "errors"
 import "time"
 
 import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbaselabs/goprotobuf/proto"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 
 // ErrorProtocol
@@ -23,6 +25,12 @@ var ErrorInvalidDeploymentNode = errors.New("queryport.client.invalidDeploymentP
 
 // ErrorIndexNotFound
 var ErrorIndexNotFound = errors.New("queryport.indexNotFound")
+
+// ErrorInstanceNotFound
+var ErrorInstanceNotFound = errors.New("queryport.instanceNotFound")
+
+// ErrorIndexNotReady
+var ErrorIndexNotReady = errors.New("queryport.indexNotReady")
 
 // ResponseHandler shall interpret response packets from server
 // and handle them. If handler is not interested in receiving any
@@ -113,6 +121,9 @@ type BridgeAccessor interface {
 	// load, hosting index `defnID` or an equivalent of `defnID`
 	GetScanport(defnID common.IndexDefnId) (queryport string, ok bool)
 
+	// IndexState returns the current state of index `defnID` and error.
+	IndexState(defnID uint64) (common.IndexState, error)
+
 	// Timeit will add `value` to incrementalAvg for index-load.
 	Timeit(defnID uint64, value float64)
 
@@ -154,7 +165,7 @@ type GsiAccessor interface {
 	CountRange(defnID uint64) (int64, error)
 }
 
-var useMetadataProvider = false
+var useMetadataProvider = true
 
 // GsiClient for accessing GSI cluster. The client shall
 // use `adminport` for meta-data operation and `queryport`
@@ -181,6 +192,10 @@ func NewGsiClient(
 	return c, nil
 }
 
+func (c *GsiClient) IndexState(defnID uint64) (common.IndexState, error) {
+	return c.bridge.IndexState(defnID)
+}
+
 // Refresh implements BridgeAccessor{} interface.
 func (c *GsiClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	return c.bridge.Refresh()
@@ -195,27 +210,36 @@ func (c *GsiClient) Nodes() (map[string]string, error) {
 func (c *GsiClient) CreateIndex(
 	name, bucket, using, exprType, partnExpr, whereExpr string,
 	secExprs []string, isPrimary bool,
-	with []byte) (common.IndexDefnId, error) {
+	with []byte) (uint64, error) {
 
-	return c.bridge.CreateIndex(
+	defnID, err := c.bridge.CreateIndex(
 		name, bucket, using, exprType, partnExpr, whereExpr,
 		secExprs, isPrimary, with)
+	return uint64(defnID), err
 }
 
 // BuildIndexes implements BridgeAccessor{} interface.
-func (c *GsiClient) BuildIndexes(defnIDs []common.IndexDefnId) error {
-	return c.bridge.BuildIndexes(defnIDs)
+func (c *GsiClient) BuildIndexes(defnIDs []uint64) error {
+	ids := make([]common.IndexDefnId, len(defnIDs))
+	for i, id := range defnIDs {
+		ids[i] = common.IndexDefnId(id)
+	}
+	return c.bridge.BuildIndexes(ids)
 }
 
 // DropIndex implements BridgeAccessor{} interface.
-func (c *GsiClient) DropIndex(defnID common.IndexDefnId) error {
-	return c.bridge.DropIndex(defnID)
+func (c *GsiClient) DropIndex(defnID uint64) error {
+	return c.bridge.DropIndex(common.IndexDefnId(defnID))
 }
 
 // LookupStatistics for a single secondary-key.
 func (c *GsiClient) LookupStatistics(
 	defnID uint64, value common.SecondaryKey) (common.IndexStatistics, error) {
 
+	// check whether the index is present and available.
+	if _, err := c.bridge.IndexState(defnID); err != nil {
+		return nil, err
+	}
 	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return nil, ErrorNoHost
@@ -233,6 +257,10 @@ func (c *GsiClient) RangeStatistics(
 	defnID uint64, low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
+	// check whether the index is present and available.
+	if _, err := c.bridge.IndexState(defnID); err != nil {
+		return nil, err
+	}
 	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return nil, ErrorNoHost
@@ -250,6 +278,14 @@ func (c *GsiClient) Lookup(
 	defnID uint64, values []common.SecondaryKey,
 	distinct bool, limit int64, callb ResponseHandler) error {
 
+	// check whether the index is present and available.
+	if _, err := c.bridge.IndexState(defnID); err != nil {
+		protoResp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(protoResp)
+		return nil
+	}
 	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return ErrorNoHost
@@ -268,6 +304,14 @@ func (c *GsiClient) Range(
 	inclusion Inclusion, distinct bool, limit int64,
 	callb ResponseHandler) error {
 
+	// check whether the index is present and available.
+	if _, err := c.bridge.IndexState(defnID); err != nil {
+		protoResp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(protoResp)
+		return nil
+	}
 	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return ErrorNoHost
@@ -284,6 +328,14 @@ func (c *GsiClient) Range(
 func (c *GsiClient) ScanAll(
 	defnID uint64, limit int64, callb ResponseHandler) error {
 
+	// check whether the index is present and available.
+	if _, err := c.bridge.IndexState(defnID); err != nil {
+		protoResp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(protoResp)
+		return nil
+	}
 	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return ErrorNoHost
@@ -300,6 +352,10 @@ func (c *GsiClient) ScanAll(
 func (c *GsiClient) CountLookup(
 	defnID uint64, values []common.SecondaryKey) (int64, error) {
 
+	// check whether the index is present and available.
+	if _, err := c.bridge.IndexState(defnID); err != nil {
+		return 0, err
+	}
 	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return 0, ErrorNoHost
@@ -317,6 +373,10 @@ func (c *GsiClient) CountRange(
 	defnID uint64,
 	low, high common.SecondaryKey, inclusion Inclusion) (int64, error) {
 
+	// check whether the index is present and available.
+	if _, err := c.bridge.IndexState(defnID); err != nil {
+		return 0, err
+	}
 	queryport, ok := c.bridge.GetScanport(common.IndexDefnId(defnID))
 	if !ok {
 		return 0, ErrorNoHost

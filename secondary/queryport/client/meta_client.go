@@ -3,6 +3,7 @@ package client
 import "sync"
 import "fmt"
 import "encoding/json"
+import "math/rand"
 
 import common "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
@@ -35,6 +36,9 @@ func newMetaBridgeClient(
 	b := &metadataClient{
 		clusterURL:  cluster,
 		serviceAddr: serviceAddr,
+		adminports:  make([]string, 0),
+		queryports:  make(map[string]string, 0),
+		loads:       make(map[common.IndexDefnId]*loadHeuristics),
 	}
 	// initialize meta-data-provide.
 	b.mdClient, err = mclient.NewMetadataProvider(b.serviceAddr)
@@ -100,25 +104,33 @@ func (b *metadataClient) Nodes() (map[string]string, error) {
 func (b *metadataClient) CreateIndex(
 	indexName, bucket, using, exprType, partnExpr, whereExpr string,
 	secExprs []string, isPrimary bool,
-	with []byte) (common.IndexDefnId, error) {
+	planJSON []byte) (common.IndexDefnId, error) {
 
-	withm := make(map[string]interface{})
+	var adminport string
 
-	err := json.Unmarshal(with, &withm)
-	if err != nil {
-		return common.IndexDefnId(0), err
+	if planJSON != nil && len(planJSON) > 0 {
+		plan := make(map[string]interface{})
+		err := json.Unmarshal(planJSON, &plan)
+		if err != nil {
+			return common.IndexDefnId(0), err
+		}
+		nodes, ok := plan["nodes"].([]interface{})
+		if ok {
+			if len(nodes) < 1 {
+				return common.IndexDefnId(0), ErrorEmptyDeployment
+			} else if len(nodes) > 1 {
+				return common.IndexDefnId(0), ErrorManyDeployment
+			}
+			adminport, ok = nodes[0].(string) //topology
+			if !ok {
+				return common.IndexDefnId(0), ErrorInvalidDeploymentNode
+			}
+		}
 	}
-	nodes := withm["nodes"].([]interface{})
-
-	if len(nodes) < 1 {
-		return common.IndexDefnId(0), ErrorEmptyDeployment
-	} else if len(nodes) > 1 {
-		return common.IndexDefnId(0), ErrorManyDeployment
-	}
-
-	adminport, ok := nodes[0].(string) // topology
-	if !ok {
-		return common.IndexDefnId(0), ErrorInvalidDeploymentNode
+	if adminport == "" {
+		// if plan is not provided pick a random indexer node
+		n := rand.Intn(len(b.adminports))
+		adminport = b.adminports[n]
 	}
 
 	return b.mdClient.CreateIndex(
@@ -206,6 +218,28 @@ func (b *metadataClient) Timeit(defnID uint64, value float64) {
 		load.avgLoad = (float64(n)*avg + float64(value)) / float64(n+1)
 		load.count = n + 1
 	}
+}
+
+// IndexState implement BridgeAccessor{} interface.
+func (b *metadataClient) IndexState(defnID uint64) (common.IndexState, error) {
+	b.rw.RLock()
+	defer b.rw.RUnlock()
+
+	for _, indexes := range b.topology {
+		for _, index := range indexes {
+			if index.Definition.DefnId == common.IndexDefnId(defnID) {
+				if index.Instances != nil && len(index.Instances) > 0 {
+					state := index.Instances[0].State
+					if state != common.INDEX_STATE_ACTIVE {
+						return state, ErrorIndexNotReady
+					}
+					return state, nil
+				}
+				return common.INDEX_STATE_ERROR, ErrorInstanceNotFound
+			}
+		}
+	}
+	return common.INDEX_STATE_ERROR, ErrorIndexNotFound
 }
 
 // close this bridge, to be called when a new indexer is added or

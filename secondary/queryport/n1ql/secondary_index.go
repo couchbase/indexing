@@ -486,8 +486,7 @@ func (si *secondaryIndex) Drop() errors.Error {
 	if si == nil {
 		return ErrorIndexEmpty
 	}
-	defnID := c.IndexDefnId(si.defnID)
-	if err := si.gsi.gsiClient.DropIndex(defnID); err != nil {
+	if err := si.gsi.gsiClient.DropIndex(si.defnID); err != nil {
 		return errors.NewError(err, "GSI Drop()")
 	}
 	si.gsi.delIndex(si.Id())
