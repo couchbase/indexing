@@ -53,7 +53,8 @@ type Stream struct {
 
 func newStream(id common.StreamId, hostStr string, handler MutationHandler) (*Stream, error) {
 
-	mutch := make(chan interface{})
+	// TODO: use constant
+	mutch := make(chan interface{}, 1000)
 	stopch := make(chan bool)
 
 	s := &Stream{id: id,
@@ -72,11 +73,6 @@ func (s *Stream) getEndpoint() string {
 
 func (s *Stream) start() (err error) {
 
-	// Start the listening go-routine.  Run this before starting the dataport server,
-	// as to eliminate raceful condition.
-	go s.run()
-
-	// start dataport stream
 	config := common.SystemConfig.SectionConfig("projector.dataport.indexer.", true)
 	maxvbs := common.SystemConfig["maxVbuckets"].Int()
 	s.receiver, err = dataport.NewServer(s.hostStr, maxvbs, config, s.mutch)
@@ -87,6 +83,10 @@ func (s *Stream) start() (err error) {
 	}
 	common.Debugf("Stream.run(): dataport server started on addr %s", s.hostStr)
 
+	// Start the listening go-routine.  
+	go s.run()
+
+	// start dataport stream
 	return nil
 }
 
