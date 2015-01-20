@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"github.com/couchbase/cbauth"
+	c "github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
@@ -34,7 +35,13 @@ func init() {
 
 	// setup cbauth
 	authURL := fmt.Sprintf("http://%s/_cbauth", kvaddress)
-	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, clusterconfig.Username, clusterconfig.Password, nil)
+	// FIXME: for now we will say this client is goxdcr, but eventually
+	// ns_server should accomodate test clients.
+	rpcURL := fmt.Sprintf("http://%s/goxdcr", kvaddress)
+	c.MaybeSetEnv("NS_SERVER_CBAUTH_RPC_URL", rpcURL)
+	c.MaybeSetEnv("NS_SERVER_CBAUTH_USER", clusterconfig.Username)
+	c.MaybeSetEnv("NS_SERVER_CBAUTH_PWD", clusterconfig.Password)
+	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, nil)
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {

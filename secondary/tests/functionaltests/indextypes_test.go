@@ -1,6 +1,7 @@
 package functionaltests
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/couchbase/cbauth"
@@ -47,8 +48,8 @@ func init() {
 	u, _ := user.Current()
 	dataFilePath := filepath.Join(u.HomeDir, "testdata/Users10k.txt.gz")
 	mutationFilePath := filepath.Join(u.HomeDir, "testdata/Users_mut.txt.gz")
-	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath, false)
-	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, false)
+	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath, true)
+	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, true)
 	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
 	fmt.Println("Emptying the default bucket")
@@ -509,6 +510,59 @@ func TestRangeFloatInclVariations(t *testing.T) {
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.373265}, []interface{}{-67.37326500001}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
 	tv.Validate(docScanResults, scanResults)
+}
+
+func TestScanAll(t *testing.T) {
+	fmt.Println("In TestScanAll()")
+	var index1 = "index_name"
+	var bucketName = "default"
+	
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"name"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second) // Wait, else results in "Index not ready"
+
+	docScanResults := datautility.ExpectedScanResponse_string(docs, "name","A", "z", 3)
+	fmt.Println("Length of docScanResults = ", len(docScanResults))
+	scanResults, err := secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit)
+	fmt.Println("Length of scanResults = ", len(scanResults))
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+}
+
+func TestScanAllNestedField(t *testing.T) {
+	fmt.Println("In TestScanAllNestedField()")
+	var index1 = "index_streetname"
+	var bucketName = "default"
+	
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"address.streetaddress.streetname"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second) // Wait, else results in "Index not ready"
+
+	docScanResults := datautility.ExpectedScanResponse_string(docs, "address.streetaddress.streetname","A", "z", 3)
+	fmt.Println("Length of docScanResults = ", len(docScanResults))
+	scanResults, err := secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit)
+	fmt.Println("Length of scanResults = ", len(scanResults))
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+}
+
+func TestBasicPrimaryIndex(t *testing.T) {
+	fmt.Println("In TestBasicPrimaryIndex()")
+	var indexName = "index_p1"
+	var bucketName = "default"
+	
+	err := secondaryindex.CreatePrimaryIndex(indexName, bucketName, indexManagementAddress, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second) // Wait, else results in "Index not ready"
+
+	// docScanResults := datautility.ExpectedScanResponse_float64(docs, "latitude", -67.373365, -67.373165, 0)
+	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	if (len(scanResults) != len(docs)) {
+		fmt.Println("Len of scanResults is incorrect. Expected and Actual are", len(docs), len(scanResults))
+		err = errors.New("Len of scanResults is incorrect.")
+	}
+ 	FailTestIfError(err, "Len of scanResults is incorrect", t)
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {
