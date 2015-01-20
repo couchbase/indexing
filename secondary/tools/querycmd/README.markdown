@@ -25,7 +25,7 @@
 
 # Create
     $ querycmd -type create -bucket default -index first_name -fields=first_name,last_name
-    $ querycmd -type create -bucket default -primary=true
+    $ querycmd -type create -bucket default -primary=true -index primary
 
 # Drop
     $ querycmd -type drop -instanceid 1234

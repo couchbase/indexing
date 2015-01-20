@@ -230,7 +230,7 @@ func handleCommand(
 
 	case "create":
 		var defnID c.IndexDefnId
-		if len(cmd.secStrs) == 0 || cmd.indexName == "" {
+		if len(cmd.secStrs) == 0 && !cmd.isPrimary || cmd.indexName == "" {
 			return fmt.Errorf("createIndex(): required fields missing")
 		}
 		defnID, err = client.CreateIndex(
