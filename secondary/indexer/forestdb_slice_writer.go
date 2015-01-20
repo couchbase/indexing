@@ -34,7 +34,7 @@ var (
 //Delete can be called concurrently.
 //Returns error in case slice cannot be initialized.
 func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
-	idxInstId common.IndexInstId) (*fdbSlice, error) {
+	idxInstId common.IndexInstId, sysconf common.Config) (*fdbSlice, error) {
 
 	info, err := os.Stat(path)
 	if err != nil || err == nil && info.IsDir() {
@@ -52,16 +52,17 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 		return nil, err
 	}
 
-	slice.main = make([]*forestdb.KVStore, NUM_WRITER_THREADS_PER_SLICE)
-	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+	slice.numWriters = sysconf["numSliceWriters"].Int()
+	slice.main = make([]*forestdb.KVStore, slice.numWriters)
+	for i := 0; i < slice.numWriters; i++ {
 		if slice.main[i], err = slice.dbfile.OpenKVStore("main", kvconfig); err != nil {
 			return nil, err
 		}
 	}
 
 	//create a separate back-index
-	slice.back = make([]*forestdb.KVStore, NUM_WRITER_THREADS_PER_SLICE)
-	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+	slice.back = make([]*forestdb.KVStore, slice.numWriters)
+	for i := 0; i < slice.numWriters; i++ {
 		if slice.back[i], err = slice.dbfile.OpenKVStore("back", kvconfig); err != nil {
 			return nil, err
 		}
@@ -80,17 +81,17 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 	slice.id = sliceId
 
 	slice.cmdCh = make(chan interface{}, SLICE_COMMAND_BUFFER_SIZE)
-	slice.workerDone = make([]chan bool, NUM_WRITER_THREADS_PER_SLICE)
-	slice.stopCh = make([]DoneChannel, NUM_WRITER_THREADS_PER_SLICE)
+	slice.workerDone = make([]chan bool, slice.numWriters)
+	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
-	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
 		slice.workerDone[i] = make(chan bool)
 		go slice.handleCommandsWorker(i)
 	}
 
 	common.Debugf("ForestDBSlice:NewForestDBSlice \n\t Created New Slice Id %v IndexInstId %v "+
-		"WriterThreads %v", sliceId, idxInstId, NUM_WRITER_THREADS_PER_SLICE)
+		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
 
 	return slice, nil
 }
@@ -131,6 +132,8 @@ type fdbSlice struct {
 	workerDone []chan bool //worker status check channel
 
 	fatalDbErr error //store any fatal DB error
+
+	numWriters int //number of writer threads
 
 	//TODO: Remove this once these stats are
 	//captured by the stats library
@@ -520,7 +523,7 @@ func (fdb *fdbSlice) checkAllWorkersDone() bool {
 
 	//worker queue is empty, make sure both workers are done
 	//processing the last mutation
-	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+	for i := 0; i < fdb.numWriters; i++ {
 		fdb.workerDone[i] <- true
 		<-fdb.workerDone[i]
 	}
@@ -535,7 +538,7 @@ func (fdb *fdbSlice) Close() {
 		"IndexDefnId %v", fdb.idxInstId, fdb.idxDefnId, fdb.id)
 
 	//signal shutdown for command handler routines
-	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+	for i := 0; i < fdb.numWriters; i++ {
 		fdb.stopCh[i] <- true
 		<-fdb.stopCh[i]
 	}

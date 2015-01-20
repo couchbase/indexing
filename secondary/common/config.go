@@ -341,6 +341,11 @@ var SystemConfig = Config{
 		"Compaction min file size",
 		uint64(1024 * 1024),
 	},
+	"indexer.numSliceWriters": ConfigValue{
+		1,
+		"Number of Writer Threads for a Slice",
+		1,
+	},
 }
 
 // NewConfig from another

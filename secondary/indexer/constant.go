@@ -72,9 +72,6 @@ const SLICE_COMMAND_BUFFER_SIZE = 10000
 //any outstanding writes before commit
 const SLICE_COMMIT_POLL_INTERVAL = 20
 
-//Default Number of threads for a Slice Writer
-const NUM_WRITER_THREADS_PER_SLICE = 2
-
 //Max Length of Secondary Key
 const MAX_SEC_KEY_LEN = 1024
 
