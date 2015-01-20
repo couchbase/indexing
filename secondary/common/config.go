@@ -277,9 +277,9 @@ var SystemConfig = Config{
 		1,
 	},
 	"indexer.scanTimeout": ConfigValue{
-		12000,
+		120000,
 		"timeout, in milliseconds, timeout for index scan processing",
-		12000,
+		120000,
 	},
 	"indexer.adminPort": ConfigValue{
 		"9100",
