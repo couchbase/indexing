@@ -1,25 +1,24 @@
 package main
 
-import (
-	"encoding/json"
-	"flag"
-	"fmt"
-	"log"
-	"os"
-	"reflect"
-	"strings"
-	"time"
+import "encoding/json"
+import "flag"
+import "fmt"
+import "log"
+import "os"
+import "reflect"
+import "strings"
+import "time"
+import "errors"
 
-	"github.com/couchbase/cbauth"
-	c "github.com/couchbase/indexing/secondary/common"
-	mclient "github.com/couchbase/indexing/secondary/manager/client"
-	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-	"github.com/couchbase/indexing/secondary/queryport"
-	qclient "github.com/couchbase/indexing/secondary/queryport/client"
-	"github.com/couchbaselabs/goprotobuf/proto"
-	"github.com/couchbaselabs/query/expression"
-	"github.com/couchbaselabs/query/parser/n1ql"
-)
+import "github.com/couchbase/cbauth"
+import c "github.com/couchbase/indexing/secondary/common"
+import mclient "github.com/couchbase/indexing/secondary/manager/client"
+import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+import "github.com/couchbase/indexing/secondary/queryport"
+import qclient "github.com/couchbase/indexing/secondary/queryport/client"
+import "github.com/couchbaselabs/goprotobuf/proto"
+import "github.com/couchbaselabs/query/expression"
+import "github.com/couchbaselabs/query/parser/n1ql"
 
 const (
 	ExprType = "N1QL"
@@ -191,7 +190,7 @@ func main() {
 		}
 
 	} else {
-		err = handleCommand(client, cmdOptions, scanCallback)
+		err = handleCommand(client, cmdOptions, false)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
 		}
@@ -200,13 +199,29 @@ func main() {
 }
 
 func handleCommand(
-	client *qclient.GsiClient, cmd *Command,
-	callb qclient.ResponseHandler) (err error) {
+	client *qclient.GsiClient, cmd *Command, sanity bool) (err error) {
 
 	iname, bucket, limit := cmd.indexName, cmd.bucket, cmd.limit
 	low, high, equal, incl := cmd.low, cmd.high, cmd.equal, cmd.inclusion
 
 	indexes, err := client.Refresh()
+
+	entries := 0
+	callb := func(res qclient.ResponseReader) bool {
+		if res.Error() != nil {
+			fmt.Println("Error: ", res)
+		} else if skeys, pkeys, err := res.GetEntries(); err != nil {
+			fmt.Println("Error: ", err)
+		} else {
+			if sanity == false {
+				for i, pkey := range pkeys {
+					fmt.Printf("%v ... %v\n", skeys[i], string(pkey))
+				}
+			}
+			entries += len(pkeys)
+		}
+		return true
+	}
 
 	switch cmd.opType {
 	case "nodes":
@@ -216,7 +231,7 @@ func handleCommand(
 			log.Fatal(err)
 		}
 		for adminport, queryport := range nodes {
-			fmt.Println("    %v : scan %v", adminport, queryport)
+			fmt.Printf("    {%v, %v}\n", adminport, queryport)
 		}
 
 	case "list":
@@ -230,6 +245,7 @@ func handleCommand(
 
 	case "create":
 		var defnID uint64
+		var state c.IndexState
 		if len(cmd.secStrs) == 0 && !cmd.isPrimary || cmd.indexName == "" {
 			return fmt.Errorf("createIndex(): required fields missing")
 		}
@@ -239,6 +255,11 @@ func handleCommand(
 			[]byte(cmd.with))
 		if err == nil {
 			fmt.Printf("Index created: %v\n", defnID)
+			state, err = waitUntilIndexState(
+				client, defnID, c.INDEX_STATE_ACTIVE, 100, 10000)
+			if err == nil {
+				fmt.Println("Index state:", state)
+			}
 		}
 
 	case "build":
@@ -274,6 +295,7 @@ func handleCommand(
 
 	case "scan":
 		defnID, _ := getDefnID(client, bucket, iname)
+		fmt.Println("Scan index:")
 		if cmd.equal != nil {
 			equals := []c.SecondaryKey{cmd.equal}
 			client.Lookup(uint64(defnID), equals, false, limit, callb)
@@ -283,14 +305,15 @@ func handleCommand(
 				uint64(defnID), low, high, incl, false, limit, callb)
 		}
 		if err == nil {
-			fmt.Println("Scan results:")
+			fmt.Println("Tota number of entries: ", entries)
 		}
 
 	case "scanAll":
 		defnID, _ := getDefnID(client, bucket, iname)
+		fmt.Println("ScanAll index:")
 		err = client.ScanAll(uint64(defnID), limit, callb)
 		if err == nil {
-			fmt.Println("ScanAll results:")
+			fmt.Println("Tota number of entries: ", entries)
 		}
 
 	case "stats":
@@ -311,36 +334,23 @@ func handleCommand(
 
 		defnID, _ := getDefnID(client, bucket, iname)
 		if cmd.equal != nil {
+			fmt.Println("CountLookup:")
 			equals := []c.SecondaryKey{cmd.equal}
 			count, err := client.CountLookup(uint64(defnID), equals)
 			if err == nil {
 				fmt.Printf("Index %q/%q has %v entries\n", bucket, iname, count)
-				fmt.Println("CountLookup results:")
 			}
 
 		} else {
+			fmt.Println("CountRange:")
 			count, err = client.CountRange(uint64(defnID), low, high, incl)
 			if err == nil {
 				fmt.Printf("Index %q/%q has %v entries\n", bucket, iname, count)
-				fmt.Println("CountRange results:")
 			}
 		}
 
 	}
 	return err
-}
-
-func scanCallback(res qclient.ResponseReader) bool {
-	if res.Error() != nil {
-		fmt.Println("Error: ", res)
-	} else if skeys, pkeys, err := res.GetEntries(); err != nil {
-		fmt.Println("Error: ", err)
-	} else {
-		for i, pkey := range pkeys {
-			fmt.Printf("%v ... %v\n", skeys[i], string(pkey))
-		}
-	}
-	return true
 }
 
 func arg2key(arg []byte) []interface{} {
@@ -382,17 +392,10 @@ func getDefnID(
 
 func runSanityTests(client *qclient.GsiClient) (err error) {
 	for _, args := range sanityCommands {
-		entries := 0
-		callb := func(res qclient.ResponseReader) bool {
-			entries++
-			return true
-		}
 		cmd, _ := parseArgs(args)
-		if err = handleCommand(client, cmd, callb); err != nil {
+		if err = handleCommand(client, cmd, true); err != nil {
 			fmt.Printf("%#v\n", cmd)
 			fmt.Printf("    %v\n", err)
-		} else {
-			fmt.Printf("    Success ... entries:%v\n", entries)
 		}
 		fmt.Println()
 	}
@@ -400,6 +403,9 @@ func runSanityTests(client *qclient.GsiClient) (err error) {
 }
 
 var sanityCommands = [][]string{
+	[]string{
+		"-type", "nodes",
+	},
 	[]string{
 		"-type", "create", "-bucket", "beer-sample", "-index", "index-city",
 		"-fields", "city",
@@ -536,5 +542,25 @@ loop:
 		case <-quitch:
 			break loop
 		}
+	}
+}
+
+func waitUntilIndexState(
+	client *qclient.GsiClient, defnID uint64,
+	state c.IndexState, period, timeout time.Duration) (c.IndexState, error) {
+
+	expired := time.After(timeout * time.Millisecond)
+	for {
+		select {
+		case <-expired:
+			return c.INDEX_STATE_ERROR, errors.New("timeout")
+		default:
+		}
+		if st, err := client.IndexState(defnID); err != nil {
+			return st, err
+		} else if st == state {
+			return st, nil
+		}
+		time.Sleep(period * time.Millisecond)
 	}
 }
