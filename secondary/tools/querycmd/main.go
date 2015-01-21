@@ -229,7 +229,7 @@ func handleCommand(
 		}
 
 	case "create":
-		var defnID c.IndexDefnId
+		var defnID uint64
 		if len(cmd.secStrs) == 0 && !cmd.isPrimary || cmd.indexName == "" {
 			return fmt.Errorf("createIndex(): required fields missing")
 		}
@@ -242,7 +242,7 @@ func handleCommand(
 		}
 
 	case "build":
-		defnIDs := make([]c.IndexDefnId, 0, len(cmd.bindexes))
+		defnIDs := make([]uint64, 0, len(cmd.bindexes))
 		for _, bindex := range cmd.bindexes {
 			v := strings.Split(bindex, ".")
 			if len(v) < 0 {
@@ -361,7 +361,7 @@ func printIndexInfo(index *mclient.IndexMetadata) {
 
 func getDefnID(
 	client *qclient.GsiClient,
-	bucket, indexName string) (defnID c.IndexDefnId, ok bool) {
+	bucket, indexName string) (defnID uint64, ok bool) {
 
 	indexes, err := client.Refresh()
 	if err != nil {
@@ -370,10 +370,10 @@ func getDefnID(
 	for _, index := range indexes {
 		defn := index.Definition
 		if defn.Bucket == bucket && defn.Name == indexName {
-			return index.Definition.DefnId, true
+			return uint64(index.Definition.DefnId), true
 		}
 	}
-	return c.IndexDefnId(0), false
+	return 0, false
 }
 
 //----------------------------------
