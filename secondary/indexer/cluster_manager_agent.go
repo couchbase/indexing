@@ -218,13 +218,17 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 
 		inst := t.GetIndexInstByDefn(idxDefn.DefnId)
 
-		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
+		//TODO: Check if its ok to use DefnId as InstId here. There is no option
+		//as of now, as Manager sends DefnId in CreateIndex.
+		idxInst := common.IndexInst{InstId: common.IndexInstId(idxDefn.DefnId),
 			Defn:   idxDefn,
 			State:  common.IndexState(inst.State),
 			Stream: common.StreamId(inst.StreamId),
 		}
 
 		indexInstMap[idxInst.InstId] = idxInst
+
+		_, defn, err = metaIter.Next()
 
 	}
 
