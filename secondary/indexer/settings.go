@@ -10,24 +10,28 @@
 package indexer
 
 import (
+	"bytes"
 	"errors"
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"io/ioutil"
 	"net/http"
+	"time"
 )
 
 const (
 	indexerMetaDir          = "/indexer/"
 	indexerSettingsMetaPath = indexerMetaDir + "settings"
+	indexCompactonMetaPath  = indexerMetaDir + "triggerCompaction"
 )
 
 // Implements dynamic settings management for indexer
 type settingsManager struct {
-	supvCmdch MsgChannel
-	supvMsgch MsgChannel
-	config    common.Config
-	cancelCh  chan struct{}
+	supvCmdch       MsgChannel
+	supvMsgch       MsgChannel
+	config          common.Config
+	cancelCh        chan struct{}
+	compactionToken []byte
 }
 
 func NewSettingsManager(supvCmdch MsgChannel,
@@ -40,6 +44,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	}
 
 	http.HandleFunc("/settings", s.handleSettingsReq)
+	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
 	go func() {
 		for {
 			err := metakv.RunObserveChildren("/", s.metaKVCallback, s.cancelCh)
@@ -109,6 +114,22 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+func (s *settingsManager) handleCompactionTrigger(w http.ResponseWriter, r *http.Request) {
+	_, rev, err := metakv.Get(indexCompactonMetaPath)
+	if err != nil {
+		s.writeError(w, err)
+		return
+	}
+
+	newToken := time.Now().String()
+	if err = metakv.Set(indexCompactonMetaPath, []byte(newToken), rev); err != nil {
+		s.writeError(w, err)
+		return
+	}
+
+	s.writeOk(w)
+}
+
 func (s *settingsManager) run() {
 loop:
 	for {
@@ -137,6 +158,36 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 		s.supvMsgch <- &MsgConfigUpdate{
 			cfg: s.config,
 		}
+	} else if path == indexCompactonMetaPath {
+		currentToken := s.compactionToken
+		s.compactionToken = value
+		if currentToken == nil || bytes.Equal(currentToken, value) {
+			return nil
+		}
+
+		common.Infof("Manual compaction trigger requested")
+		replych := make(chan []IndexStorageStats)
+		statReq := &MsgIndexStorageStats{respch: replych}
+		s.supvMsgch <- statReq
+		stats := <-replych
+		// XXX: minFile size check can be applied
+		go func() {
+			for _, is := range stats {
+				errch := make(chan error)
+				compactReq := &MsgIndexCompact{
+					instId: is.InstId,
+					errch:  errch,
+				}
+				common.Infof("ManualCompaction: Compacting index instance:%v", is.InstId)
+				s.supvMsgch <- compactReq
+				err := <-errch
+				if err == nil {
+					common.Infof("ManualCompaction: Finished compacting index instance:%v", is.InstId)
+				} else {
+					common.Errorf("ManualCompaction: Index instance:%v Compaction failed with reason - %v", is.InstId, err)
+				}
+			}
+		}()
 	}
 
 	return nil
