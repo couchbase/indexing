@@ -21,6 +21,7 @@ import "github.com/couchbaselabs/query/datastore"
 import "github.com/couchbaselabs/query/errors"
 import "github.com/couchbaselabs/query/expression"
 import "github.com/couchbaselabs/query/expression/parser"
+import "github.com/couchbaselabs/query/timestamp"
 import "github.com/couchbaselabs/query/value"
 
 // ErrorIndexEmpty is index not initialized.
@@ -436,6 +437,7 @@ func (si *secondaryIndex) Drop() errors.Error {
 // Scan implement Index{} interface.
 func (si *secondaryIndex) Scan(
 	span *datastore.Span, distinct bool, limit int64,
+	cons datastore.ScanConsistency, vector timestamp.Vector,
 	conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
@@ -464,7 +466,8 @@ func (si *secondaryIndex) Scan(
 
 // Scan implement PrimaryIndex{} interface.
 func (si *secondaryIndex) ScanEntries(
-	limit int64, conn *datastore.IndexConnection) {
+	limit int64, cons datastore.ScanConsistency,
+	vector timestamp.Vector, conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
 	defer close(entryChannel)
