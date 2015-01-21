@@ -46,6 +46,10 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 
 	config := forestdb.DefaultConfig()
 	config.SetDurabilityOpt(forestdb.DRB_ASYNC)
+
+	memQuota := sysconf["memory_quota"].Uint64()
+	config.SetBufferCacheSize(memQuota)
+
 	kvconfig := forestdb.DefaultKVStoreConfig()
 
 	if slice.dbfile, err = forestdb.Open(filepath, config); err != nil {
