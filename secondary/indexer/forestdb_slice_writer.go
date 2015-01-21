@@ -623,7 +623,10 @@ func (fdb *fdbSlice) Compact() error {
 		return err
 	}
 
-	err = os.Remove(fdb.currfile)
+	if _, e := os.Stat(fdb.currfile); e == nil {
+		err = os.Remove(fdb.currfile)
+	}
+
 	fdb.currfile = newpath
 	return err
 }
