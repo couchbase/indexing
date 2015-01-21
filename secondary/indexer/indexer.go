@@ -143,10 +143,16 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	common.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
+	var res Message
+	idx.settingsMgr, idx.config, res = NewSettingsManager(idx.settingsMgrCmdCh, idx.wrkrRecvCh, config)
+	if res.GetMsgType() != MSG_SUCCESS {
+		common.Errorf("Indexer::NewIndexer settingsMgr Init Error", res)
+		return nil, res
+	}
+
 	idx.initStreamAddressMap()
 	idx.initStreamFlushMap()
 
-	var res Message
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
@@ -189,12 +195,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	if err := idx.bootstrap(); err != nil {
 		common.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
 		return nil, &MsgError{err: Error{cause: err}}
-	}
-
-	idx.settingsMgr, res = NewSettingsManager(idx.settingsMgrCmdCh, idx.wrkrRecvCh, idx.config)
-	if res.GetMsgType() != MSG_SUCCESS {
-		common.Errorf("Indexer::NewIndexer settingsMgr Init Error", res)
-		return nil, res
 	}
 
 	if !idx.enableManager {

@@ -16,6 +16,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"io/ioutil"
 	"net/http"
+	"runtime"
 	"time"
 )
 
@@ -35,7 +36,7 @@ type settingsManager struct {
 }
 
 func NewSettingsManager(supvCmdch MsgChannel,
-	supvMsgch MsgChannel, config common.Config) (settingsManager, Message) {
+	supvMsgch MsgChannel, config common.Config) (settingsManager, common.Config, Message) {
 	s := settingsManager{
 		supvCmdch: supvCmdch,
 		supvMsgch: supvMsgch,
@@ -43,6 +44,19 @@ func NewSettingsManager(supvCmdch MsgChannel,
 		cancelCh:  make(chan struct{}),
 	}
 
+	value, _, err := metakv.Get(indexerSettingsMetaPath)
+	if err != nil {
+		return s, nil, &MsgError{
+			err: Error{
+				category: INDEXER,
+				cause:    err,
+				severity: FATAL,
+			}}
+	}
+
+	if len(value) > 0 {
+		config.Update(value)
+	}
 	http.HandleFunc("/settings", s.handleSettingsReq)
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
 	go func() {
@@ -55,7 +69,8 @@ func NewSettingsManager(supvCmdch MsgChannel,
 			}
 		}
 	}()
-	return s, &MsgSuccess{}
+
+	return s, config, &MsgSuccess{}
 }
 
 func (s *settingsManager) writeOk(w http.ResponseWriter) {
