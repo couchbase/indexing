@@ -42,7 +42,7 @@ type BucketHWTMap map[string]*common.TsVbuuid
 type BucketLastFlushedTsMap map[string]*common.TsVbuuid
 type BucketRestartTsMap map[string]*common.TsVbuuid
 type BucketSyncCountMap map[string]uint64
-type BucketInMemTsCountMap map[string]uint16
+type BucketInMemTsCountMap map[string]uint64
 type BucketNewTsReqdMap map[string]bool
 
 type BucketTsListMap map[string]*list.List
@@ -344,8 +344,13 @@ func (ss *StreamState) incrSyncCount(streamId common.StreamId,
 			"Stream: %v. SyncCount: %v.", bucket, streamId, syncCount)
 		//update only if its less than trigger count, otherwise it makes no
 		//difference. On long running systems, syncCount may overflow otherwise
-		numVbuckets := ss.config["numVbuckets"].Int()
-		if syncCount <= uint64(IN_MEM_TS_TRIGGER)*uint64(numVbuckets) {
+
+		snapInterval := ss.config["settings.inmemory_snapshot.interval"].Uint64() * uint64(ss.config["numVbuckets"].Int())
+		syncPeriod := ss.config["sync_period"].Uint64()
+		// Number of sync messages after which an inmemory snapshot is triggered.
+		maxSyncCount := snapInterval / syncPeriod
+
+		if syncCount <= maxSyncCount {
 			bucketSyncCountMap[bucket] = syncCount
 		}
 
@@ -377,10 +382,12 @@ func (ss *StreamState) checkNewTSDue(streamId common.StreamId, bucket string) bo
 
 	bucketNewTsReqd := ss.streamBucketNewTsReqdMap[streamId]
 	bucketSyncCountMap := ss.streamBucketSyncCountMap[streamId]
+	snapInterval := ss.config["settings.inmemory_snapshot.interval"].Uint64() * uint64(ss.config["numVbuckets"].Int())
+	syncPeriod := ss.config["sync_period"].Uint64()
+	// Number of sync messages after which an inmemory snapshot is triggered.
+	maxSyncCount := snapInterval / syncPeriod
 
-	numVbuckets := ss.config["numVbuckets"].Int()
-
-	if bucketSyncCountMap[bucket] >= uint64(IN_MEM_TS_TRIGGER)*uint64(numVbuckets) &&
+	if bucketSyncCountMap[bucket] >= maxSyncCount &&
 		bucketNewTsReqd[bucket] == true &&
 		ss.checkAllStreamBeginsReceived(streamId, bucket) == true {
 		return true
@@ -400,7 +407,14 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	//snapshot high seq num as that persistence will happen at these seqnums.
 	updateTsSeqNumToSnapshot(tsVbuuid)
 
-	if ss.streamBucketInMemTsCountMap[streamId][bucket] == PERSISTED_TS_TRIGGER {
+	numVbuckets := uint64(ss.config["numVbuckets"].Int())
+	snapInterval := ss.config["settings.inmemory_snapshot.interval"].Uint64() * numVbuckets
+	snapPersistInterval := ss.config["settings.persisted_snapshot.interval"].Uint64() * numVbuckets
+	syncPeriod := ss.config["sync_period"].Uint64()
+	// Number of inmemory ts after which a persisted timestamp should be generated
+	numInMemTs := snapPersistInterval / (syncPeriod * snapInterval)
+
+	if ss.streamBucketInMemTsCountMap[streamId][bucket] == numInMemTs {
 		//set persisted flag
 		tsVbuuid.SetPersisted(true)
 		ss.streamBucketInMemTsCountMap[streamId][bucket] = 0
@@ -433,6 +447,10 @@ func (ss *StreamState) canFlushNewTS(streamId common.StreamId,
 
 	return false
 
+}
+
+func (ss *StreamState) UpdateConfig(cfg common.Config) {
+	ss.config = cfg
 }
 
 //helper function to update Seqnos in TsVbuuid to

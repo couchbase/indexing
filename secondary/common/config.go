@@ -335,6 +335,12 @@ var SystemConfig = Config{
 		1,
 	},
 
+	"indexer.sync_period": ConfigValue{
+		uint64(100),
+		"Stream message sync interval in millis",
+		uint64(100),
+	},
+
 	// Indexer dynamic settings
 	"indexer.settings.compaction.interval": ConfigValue{
 		60,
@@ -351,15 +357,15 @@ var SystemConfig = Config{
 		"Compaction min file size",
 		uint64(1024 * 1024),
 	},
-	"indexer.settings.persistted_snapshot.interval": ConfigValue{
-		10,
+	"indexer.settings.persisted_snapshot.interval": ConfigValue{
+		uint64(200),
 		"Persisted snapshotting interval in milliseconds",
-		10,
+		uint64(200),
 	},
 	"indexer.settings.inmemory_snapshot.interval": ConfigValue{
-		10,
+		uint64(200),
 		"InMemory snapshotting interval in milliseconds",
-		10,
+		uint64(200),
 	},
 	"indexer.settings.recovery.max_rollbacks": ConfigValue{
 		5,

@@ -162,6 +162,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case STREAM_REQUEST_DONE:
 		tk.handleStreamRequestDone(cmd)
 
+	case CONFIG_SETTINGS_UPDATE:
+		tk.handleConfigUpdate(cmd)
+
 	default:
 		common.Errorf("Timekeeper::handleSupvervisorCommands "+
 			"Received Unknown Command %v", cmd)
@@ -967,6 +970,14 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 			tk.checkInitialBuildDone(streamId, bucket, lastFlushedTs)
 		}
 	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleConfigUpdate(cmd Message) {
+	cfgUpdate := cmd.(*MsgConfigUpdate)
+	tk.config = cfgUpdate.GetConfig()
+	tk.ss.UpdateConfig(tk.config)
 
 	tk.supvCmdch <- &MsgSuccess{}
 }

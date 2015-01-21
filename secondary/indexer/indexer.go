@@ -423,6 +423,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		idx.compactMgrCmdCh <- msg
 		<-idx.compactMgrCmdCh
+		idx.tkCmdCh <- msg
+		<-idx.tkCmdCh
 
 	case INDEXER_PREPARE_DONE:
 		idx.handlePrepareDone(msg)
