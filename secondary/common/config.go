@@ -329,6 +329,13 @@ var SystemConfig = Config{
 		"Index file storage directory",
 		"./",
 	},
+	"indexer.numSliceWriters": ConfigValue{
+		1,
+		"Number of Writer Threads for a Slice",
+		1,
+	},
+
+	// Indexer dynamic settings
 	"indexer.settings.compaction.interval": ConfigValue{
 		60,
 		"Compaction poll interval in seconds",
@@ -344,9 +351,29 @@ var SystemConfig = Config{
 		"Compaction min file size",
 		uint64(1024 * 1024),
 	},
-	"indexer.numSliceWriters": ConfigValue{
+	"indexer.settings.persistted_snapshot.interval": ConfigValue{
+		10,
+		"Persisted snapshotting interval in milliseconds",
+		10,
+	},
+	"indexer.settings.inmemory_snapshot.interval": ConfigValue{
+		10,
+		"InMemory snapshotting interval in milliseconds",
+		10,
+	},
+	"indexer.settings.recovery.max_rollbacks": ConfigValue{
+		5,
+		"Maximum number of committed rollback points",
+		5,
+	},
+	"indexer.settings.memory_quota": ConfigValue{
+		uint64(0),
+		"Maximum memory used by the indexer buffercache",
+		uint64(0),
+	},
+	"indexer.settings.max_cpu_procs": ConfigValue{
 		1,
-		"Number of Writer Threads for a Slice",
+		"Maximum nCPUs used by the processes",
 		1,
 	},
 }
