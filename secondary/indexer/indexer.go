@@ -2296,14 +2296,24 @@ func (idx *indexer) makeRestartTs() map[string]*common.TsVbuuid {
 		}
 
 		s := NewSnapshotInfoContainer(infos)
-		ts := s.GetLatest().Timestamp()
+		latestSnapInfo := s.GetLatest()
 
-		if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
-			if !ts.AsRecent(oldTs) {
+		//There may not be a valid snapshot info if no flush
+		//happened for this index
+		if latestSnapInfo != nil {
+			ts := latestSnapInfo.Timestamp()
+			if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
+				if !ts.AsRecent(oldTs) {
+					restartTs[idxInst.Defn.Bucket] = ts
+				}
+			} else {
 				restartTs[idxInst.Defn.Bucket] = ts
 			}
 		} else {
-			restartTs[idxInst.Defn.Bucket] = ts
+			//set restartTs to nil for this bucket
+			if _, ok := restartTs[idxInst.Defn.Bucket]; !ok {
+				restartTs[idxInst.Defn.Bucket] = nil
+			}
 		}
 	}
 	return restartTs
