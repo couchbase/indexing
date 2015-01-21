@@ -2,6 +2,7 @@ package secondaryindex
 
 import (
 	"fmt"
+	"time"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -42,9 +43,10 @@ func CreatePrimaryIndex(indexName, bucketName, server string, skipIfExists bool)
 	where := ""
 	isPrimary := true
 
-	_, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary, nil)
+	defnID, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary, nil)
 	if err == nil {
 		fmt.Printf("Created the gsi primary index %v\n", indexName)
+		return WaitTillIndexActive(defnID, client)
 	}
 
 	client.Close()
@@ -52,35 +54,9 @@ func CreatePrimaryIndex(indexName, bucketName, server string, skipIfExists bool)
 }
 
 func CreateSecondaryIndex(indexName, bucketName, server string, indexFields []string, skipIfExists bool) error {
-	indexExists := IndexExists(indexName, bucketName, server)
-	if skipIfExists == true && indexExists == true {
-		return nil
-	}
 	client := CreateClient(server, "2itest")
-	var secExprs []string
-
-	for _, indexField := range indexFields {
-		expr, err := n1ql.ParseExpression(indexField)
-		if err != nil {
-			fmt.Printf("Creating index %v. Error while parsing the expression (%v) : %v\n", indexName, indexField, err)
-		}
-
-		secExprs = append(secExprs, expression.NewStringer().Visit(expr))
-	}
-
-	using := "gsi"
-	exprType := "N1QL"
-	partnExp := ""
-	where := ""
-	isPrimary := false
-
-	_, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary, nil)
-	if err == nil {
-		fmt.Printf("Created the secondary index %v\n", indexName)
-	}
-
-	client.Close()
-	return err
+	defer client.Close()
+	return CreateSecondaryIndexWithClient(indexName, bucketName, server, indexFields, skipIfExists, client)
 }
 
 func CreateSecondaryIndexWithClient(indexName, bucketName, server string, indexFields []string, skipIfExists bool, client *qc.GsiClient) error {
@@ -105,11 +81,29 @@ func CreateSecondaryIndexWithClient(indexName, bucketName, server string, indexF
 	where := ""
 	isPrimary := false
 
-	_, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary, nil)
+	defnID, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary, nil)
 	if err == nil {
 		fmt.Printf("Created the secondary index %v\n", indexName)
+		return WaitTillIndexActive(defnID, client)
 	}
+	
 	return err
+}
+
+func WaitTillIndexActive(defnID uint64, client *qc.GsiClient) error {
+	for {
+		state, e := client.IndexState(defnID); 
+		if e != nil {
+			fmt.Println("Error while fetching index state for defnID ", defnID)
+			return e
+		}
+		
+		if state == c.INDEX_STATE_ACTIVE {
+			return nil
+		} else {
+			time.Sleep(1 * time.Second)
+		}
+	}
 }
 
 func IndexExists(indexName, bucketName, server string) bool {
