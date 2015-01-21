@@ -233,11 +233,7 @@ func (b *metadataClient) IndexState(defnID uint64) (common.IndexState, error) {
 		for _, index := range indexes {
 			if index.Definition.DefnId == common.IndexDefnId(defnID) {
 				if index.Instances != nil && len(index.Instances) > 0 {
-					state := index.Instances[0].State
-					if state != common.INDEX_STATE_ACTIVE {
-						return state, ErrorIndexNotReady
-					}
-					return state, nil
+					return index.Instances[0].State, nil
 				}
 				return common.INDEX_STATE_ERROR, ErrorInstanceNotFound
 			}
