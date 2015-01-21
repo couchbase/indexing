@@ -73,13 +73,9 @@ func main() {
 	// setup cbauth
 	if options.auth != "" {
 		up := strings.Split(options.auth, ":")
-		authU, authP := up[0], up[1]
-		authURL := fmt.Sprintf("http://%s/_cbauth", cluster)
-		rpcURL := fmt.Sprintf("http://%s/projector", cluster)
-		c.MaybeSetEnv("NS_SERVER_CBAUTH_RPC_URL", rpcURL)
-		c.MaybeSetEnv("NS_SERVER_CBAUTH_USER", authU)
-		c.MaybeSetEnv("NS_SERVER_CBAUTH_PWD", authP)
-		cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, nil)
+		if _, err := cbauth.InternalRetryDefaultInit(cluster, up[0], up[1]); err != nil {
+			log.Fatalf("Failed to initialize cbauth: %s", err)
+		}
 	}
 
 	if f := getlogFile(); f != nil {
