@@ -133,9 +133,11 @@ func (b *metadataClient) CreateIndex(
 		adminport = b.adminports[n]
 	}
 
-	return b.mdClient.CreateIndex(
+	defnID, err := b.mdClient.CreateIndex(
 		indexName, bucket, using, exprType, partnExpr, whereExpr,
 		adminport, secExprs, isPrimary)
+	b.Refresh() // refresh so that we too have IndexMetadata table.
+	return defnID, err
 }
 
 // BuildIndexes implements BridgeAccessor{} interface.
@@ -222,6 +224,8 @@ func (b *metadataClient) Timeit(defnID uint64, value float64) {
 
 // IndexState implement BridgeAccessor{} interface.
 func (b *metadataClient) IndexState(defnID uint64) (common.IndexState, error) {
+	b.Refresh()
+
 	b.rw.RLock()
 	defer b.rw.RUnlock()
 
