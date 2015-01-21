@@ -57,6 +57,9 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	if len(value) > 0 {
 		config.Update(value)
 	}
+
+	setNumCPUs(config)
+
 	http.HandleFunc("/settings", s.handleSettingsReq)
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
 	go func() {
@@ -170,6 +173,8 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 		config := s.config.Clone()
 		config.Update(value)
 		s.config = config
+		setNumCPUs(config)
+
 		s.supvMsgch <- &MsgConfigUpdate{
 			cfg: s.config,
 		}
@@ -217,4 +222,14 @@ func getSettingsConfig(cfg common.Config) (common.Config, error) {
 		}
 	}
 	return settingsConfig, err
+}
+
+func setNumCPUs(config common.Config) {
+	ncpu := config["settings.max_cpu_procs"].Int()
+	if ncpu == 0 {
+		ncpu = runtime.NumCPU()
+	}
+
+	common.Infof("Setting maxcpus = %d", ncpu)
+	runtime.GOMAXPROCS(ncpu)
 }
