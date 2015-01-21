@@ -34,7 +34,7 @@ var (
 	streamCatchupPort = flag.String("streamCatchupPort", "9103", "Index catchup stream port")
 	streamMaintPort   = flag.String("streamMaintPort", "9104", "Index maintenance stream port")
 	storageDir        = flag.String("storageDir", "./", "Index file storage directory path")
-	enableManager     = flag.Bool("enable_manager", false, "Enable Index Manager")
+	enableManager     = flag.Bool("enable_manager", true, "Enable Index Manager")
 	auth              = flag.String("auth", "", "Auth user and password")
 )
 
