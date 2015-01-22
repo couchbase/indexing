@@ -13,7 +13,6 @@ import (
 	//"encoding/binary"
 	"encoding/json"
 	"fmt"
-	c "github.com/couchbase/gometa/common"
 	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
 	gometa "github.com/couchbase/gometa/server"
@@ -368,7 +367,7 @@ func (i *MetaIterator) Close() {
 func newLocalRepoRef(msgAddr string, eventMgr *eventManager, reqHandler protocol.CustomRequestHandler) (*LocalRepoRef, error) {
 
 	repoRef := &LocalRepoRef{eventMgr: eventMgr, notifier: nil}
-	server, err := gometa.RunEmbeddedServerWithCustomHandler(msgAddr, repoRef, reqHandler)
+	server, err := gometa.RunEmbeddedServerWithCustomHandler(msgAddr, nil, reqHandler)
 	if err != nil {
 		return nil, err
 	}
@@ -761,7 +760,7 @@ func isStabilityTimestampKey(key string) bool {
 //
 // Add Index to Topology
 //
-func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, host string) error {
+func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, id common.IndexInstId, host string) error {
 
 	// get existing topology
 	topology, err := m.GetTopologyByBucket(defn.Bucket)
@@ -772,11 +771,6 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, host string) e
 		topology.Version = 0
 	}
 
-	id, err := m.GetNextIndexInstId()
-	if err != nil {
-		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, METADATA_REPO, nil,
-			fmt.Sprintf("Fail to generate unique instance id for index '%s'", defn.Name))
-	}
 	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
 		uint64(id), uint32(common.INDEX_STATE_CREATED), host)
 
@@ -806,12 +800,10 @@ func (m *MetadataRepo) deleteIndexFromTopology(bucket string, id common.IndexDef
 		return err
 	}
 
-	defn := topology.FindIndexDefinitionById(id)
-	if defn != nil {
-		topology.UpdateStateForIndexInstByDefn(common.IndexDefnId(defn.DefnId), common.INDEX_STATE_DELETED)
-		if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
-			return err
-		}
+	topology.RemoveIndexDefinitionById(id)
+
+	if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
+		return err
 	}
 
 	return nil
@@ -835,6 +827,7 @@ func (m *MetadataRepo) addToGlobalTopologyIfNecessary(bucket string) error {
 	return nil
 }
 
+/*
 ///////////////////////////////////////////////////////
 //  Interface : EventNotifier
 ///////////////////////////////////////////////////////
@@ -913,3 +906,4 @@ func (m *LocalRepoRef) onNewProposalForDeleteIndexDefn(txnid c.Txnid, op c.OpCod
 		return &c.RecoverableError{Reason: err.Error()}
 	}
 }
+*/

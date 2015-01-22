@@ -155,6 +155,20 @@ func (t *IndexTopology) RemoveIndexDefinition(bucket string, name string) {
 	}
 }
 
+func (t *IndexTopology) RemoveIndexDefinitionById(id common.IndexDefnId) {
+
+	for i, defnRef := range t.Definitions {
+		if common.IndexDefnId(defnRef.DefnId) == id {
+			if i == len(t.Definitions)-1 {
+				t.Definitions = t.Definitions[:i]
+			} else {
+				t.Definitions = append(t.Definitions[0:i], t.Definitions[i+1:]...)
+			}
+			return
+		}
+	}
+}
+
 //
 // Get all index instance Id's for a specific defnition
 //
@@ -237,7 +251,6 @@ func (t *IndexTopology) SetErrorForIndexInstByDefn(defnId common.IndexDefnId, er
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				t.Definitions[i].Instances[j].State = uint32(common.INDEX_STATE_ERROR)
 				t.Definitions[i].Instances[j].Error = errorStr
 				common.Debugf("IndexTopology.SetErrorForIndexInstByDefn(): Set error for index '%v' inst '%v.  Error = '%v'",
 					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Error)

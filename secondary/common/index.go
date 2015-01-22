@@ -76,6 +76,8 @@ const (
 	INDEX_STATE_DELETED = 5
 	//Error State
 	INDEX_STATE_ERROR = 6
+	// Nil State (used for no-op / invalid)
+	INDEX_STATE_NIL = 7
 )
 
 func (s IndexState) String() string {
@@ -160,7 +162,8 @@ func (idx IndexInst) String() string {
 type StreamId uint16
 
 const (
-	MAINT_STREAM StreamId = iota
+	NIL_STREAM StreamId = iota
+	MAINT_STREAM 
 	CATCHUP_STREAM
 	INIT_STREAM
 	ALL_STREAMS

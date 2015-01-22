@@ -50,6 +50,47 @@ type IndexManager struct {
 	isClosed bool
 }
 
+//
+// Index Lifecycle
+// 1) Index Creation
+//   A) When an index is created, the index definition is assigned to a 64 bits UUID (IndexDefnId).
+//   B) IndexManager will persist the index definition.
+//   C) IndexManager will persist the index instance with INDEX_STATE_CREATED status.
+//      Each instance is assigned a 64 bits IndexInstId. For the first instance of an index,
+//      the IndexInstId is equal to the IndexDefnId.
+//   D) IndexManager will invovke MetadataNotifier.OnIndexCreate().
+//   E) IndexManager will update instance to status INDEX_STATE_READY.
+//   F) If there is any error in (1B) - (1E), IndexManager will cleanup by deleting index definition and index instance.
+//      Since there is no atomic transaction, cleanup may not be completed, and the index will be left in an invalid state.
+//      See (5) for conditions where the index is considered valid.
+//   G) If there is any error in (1E), IndexManager will also invoke OnIndexDelete()
+//   H) Any error from (1A) or (1F), the error will be reported back to MetadataProvider.
+//
+// 2) Immediate Index Build (index definition is persisted successfully and deferred build flag is false)
+//   A) MetadataNotifier.OnIndexBuild() is invoked.   OnIndexBuild() is responsible for updating the state of the index
+//      instance (e.g. from READY to INITIAL).
+//   B) If there is an error in (2A), the error will be returned to the MetadataProvider.
+//   C) No cleanup will be perfromed by IndexManager if OnIndexBuild() fails.  In other words, the index can be left in
+//      INDEX_STATE_READY.   The user should be able to kick off index build again using deferred build.
+//   D) OnIndexBuild() can be running on a separate go-rountine.  It can invoke UpdateIndexInstance() at any time during
+//      index build.  This update will be queued serially and apply to the topology specific for that index instance (will
+//      not affect any other index instance).  The new index state will be returned to the MetadataProvider asynchronously.
+//
+// 3) Deferred Index Build
+//    A) For Deferred Index Build, it will follow step (2A) - (2D).
+//
+// 4) Index Deletion
+//    A) When an index is deleted, IndexManager will set the index to INDEX_STATE_DELETED.
+//    B) If (4A) fails, the error will be returned and the index is considered as NOT deleted.
+//    C) IndexManager will then invoke MetadataNotifier.OnIndexDelete().
+//    D) The IndexManager will delete the index definition first before deleting the index instance.  since there is no atomic
+//       transaction, the cleanup may not be completed, and index can be in inconsistent state. See (5) for valid index state.
+//    E) Any error returned from (4C) to (4D) will not be returned to the client (since these are cleanup steps)
+//
+// 5) Valid Index States
+//    A) Both index definition and index instance exist.
+//    B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
+//
 type MetadataNotifier interface {
 	OnIndexCreate(*common.IndexDefn) error
 	OnIndexDelete(common.IndexDefnId) error
@@ -58,6 +99,7 @@ type MetadataNotifier interface {
 
 type RequestServer interface {
 	MakeRequest(opCode gometaC.OpCode, key string, value []byte) error
+	MakeAsyncRequest(opCode gometaC.OpCode, key string, value []byte)  error
 }
 
 ///////////////////////////////////////////////////////
@@ -69,7 +111,7 @@ type RequestServer interface {
 //
 func NewIndexManager(msgAddr string, dataport string) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(msgAddr, dataport, nil)
+	return NewIndexManagerInternal(msgAddr, dataport, NewProjectorAdmin(nil, nil, nil))
 }
 
 //
@@ -367,7 +409,8 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 		return e
 	}
 
-	return m.requestServer.MakeRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
+	common.Debugf("IndexManager.UpdateIndexInstance(): making request for Index instance update")
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
 //
@@ -507,36 +550,34 @@ func (m *IndexManager) startMasterService() error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	// Initialize the timer.   The timer will be activated by the
-	// stream manager when the stream manager opens the stream
-	// during initialization.  The stream manager, in turn, is
-	// started when the coordinator becomes the master.   There
-	// is gorounine in index manager that will listen to the
-	// timer and broadcast the stability timestamp to all the
-	// listening node.   This goroutine will be started when
-	// the indexer node becomes the coordinator master.
-	m.timestampPersistInterval = TIMESTAMP_PERSIST_INTERVAL
-	m.timer = newTimer(m.repo)
-	m.timekeeperStopCh = make(chan bool)
-	go m.runTimestampKeeper()
-
-	monitor := NewStreamMonitor(m, m.timer)
-
-	// Initialize the stream manager.
 	admin := m.admin
-	if admin == nil {
-		admin = NewProjectorAdmin(nil, nil, monitor)
-	} else {
-		admin.Initialize(monitor)
-	}
+	if admin != nil {
+		// Initialize the timer.   The timer will be activated by the
+		// stream manager when the stream manager opens the stream
+		// during initialization.  The stream manager, in turn, is
+		// started when the coordinator becomes the master.   There
+		// is gorounine in index manager that will listen to the
+		// timer and broadcast the stability timestamp to all the
+		// listening node.   This goroutine will be started when
+		// the indexer node becomes the coordinator master.
+		m.timestampPersistInterval = TIMESTAMP_PERSIST_INTERVAL
+		m.timer = newTimer(m.repo)
+		m.timekeeperStopCh = make(chan bool)
+		go m.runTimestampKeeper()
 
-	handler := NewMgrMutHandler(m, admin, monitor)
-	var err error
-	m.streamMgr, err = NewStreamManager(m, handler, admin, monitor)
-	if err != nil {
-		return err
+		monitor := NewStreamMonitor(m, m.timer)
+
+		// Initialize the stream manager.
+		admin.Initialize(monitor)
+
+	    handler := NewMgrMutHandler(m, admin, monitor)
+	    var err error
+	    m.streamMgr, err = NewStreamManager(m, handler, admin, monitor)
+	    if err != nil {
+		    return err
+	    }
+	    m.streamMgr.StartHandlingTopologyChange()
 	}
-	m.streamMgr.StartHandlingTopologyChange()
 	return nil
 }
 

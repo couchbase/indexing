@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
-	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"net/http"
@@ -38,11 +37,7 @@ func TestRequestHandler(t *testing.T) {
 	var config = "./config.json"
 
 	common.Infof("********** Setup index manager")
-	factory := new(util.TestDefaultClientFactory)
-	env := new(util.TestDefaultClientEnv)
-	admin := manager.NewProjectorAdmin(factory, env, nil)
-	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

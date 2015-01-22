@@ -17,7 +17,7 @@ import (
 	"github.com/couchbase/gometa/protocol"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager/client"
-	"runtime/debug"
+	//"runtime/debug"
 )
 
 type LifecycleMgr struct {
@@ -47,7 +47,7 @@ func NewLifecycleMgr(scanport string, notifier MetadataNotifier) *LifecycleMgr {
 	mgr := &LifecycleMgr{repo: nil,
 		scanport:  scanport,
 		notifier:  notifier,
-		incomings: make(chan *requestHolder),
+		incomings: make(chan *requestHolder, 1000),
 		outgoings: make(chan c.Packet, 1000),
 		killch:    make(chan bool)}
 
@@ -71,6 +71,8 @@ func (m *LifecycleMgr) Terminate() {
 }
 
 func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
+	common.Debugf("LifecycleMgr.OnNewRequest(): queuing new request. reqId %v", request.GetReqId())
+	
 	m.incomings <- &requestHolder{request: request, fid: fid}
 }
 
@@ -80,12 +82,14 @@ func (m *LifecycleMgr) GetResponseChannel() <-chan c.Packet {
 
 func (m *LifecycleMgr) processRequest() {
 
+	/*
 	defer func() {
 		if r := recover(); r != nil {
 			common.Debugf("panic in LifecycleMgr.processRequest() : %s\n", r)
 			common.Debugf("%s", debug.Stack())
 		}
 	}()
+	*/
 
 	common.Debugf("LifecycleMgr.processRequest(): LifecycleMgr is ready to proces request")
 	factory := message.NewConcreteMsgFactory()
@@ -115,6 +119,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	content := request.request.GetContent()
 	fid := request.fid
 
+	common.Debugf("LifecycleMgr.dispatchRequest () : requestId %d, op %d, key %v", reqId, op, key)
+	
 	var err error
 	switch op {
 	case client.OPCODE_CREATE_INDEX:
@@ -127,7 +133,7 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		err = m.handleBuildIndexes(content, m.scanport)
 	}
 
-	common.Debugf("LifecycleMgr.dispatchRequest () : send response")
+	common.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d", reqId)
 
 	if err == nil {
 		msg := factory.CreateResponse(fid, reqId, "")
@@ -156,20 +162,37 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scanport string) erro
 		return err
 	}
 
-	if !defn.Deferred {
-		common.Debugf("LifecycleMgr.handleCreateIndex() : start Index Build")
+	if err := m.repo.addIndexToTopology(defn, common.IndexInstId(defn.DefnId), scanport); err != nil {
+		common.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
+		m.repo.DropIndexById(defn.DefnId)
+		return err
+	}
 
-		if err := m.repo.addIndexToTopology(defn, scanport); err != nil {
-			common.Errorf("LifecycleMgr.hanaleCreateIndex() : createIndex fails. Reason = %v", err)
+	if m.notifier != nil {
+		if err := m.notifier.OnIndexCreate(defn); err != nil {
+			common.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 			m.repo.DropIndexById(defn.DefnId)
+			m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
 			return err
 		}
+	}
+
+	if err := m.updateIndexState(defn.Bucket, defn.DefnId, common.INDEX_STATE_READY); err != nil {
+		common.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 
 		if m.notifier != nil {
+			m.notifier.OnIndexDelete(defn.DefnId)
+		}
+		m.repo.DropIndexById(defn.DefnId)
+		m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
+		return err
+	}
+
+	if !defn.Deferred {
+		if m.notifier != nil {
+			common.Debugf("LifecycleMgr.handleCreateIndex() : start Index Build")
 			if err := m.notifier.OnIndexBuild([]common.IndexDefnId{defn.DefnId}); err != nil {
 				common.Errorf("LifecycleMgr.hanaleCreateIndex() : createIndex fails. Reason = %v", err)
-				m.repo.DropIndexById(defn.DefnId)
-				m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
 				return err
 			}
 		}
@@ -199,13 +222,8 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, scanport string) error
 func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId, scanport string) error {
 
 	for _, id := range ids {
-		defn, err := m.repo.GetIndexDefnById(id)
+		_, err := m.repo.GetIndexDefnById(id)
 		if err != nil {
-			common.Errorf("LifecycleMgr.handleBuildIndexes() : buildIndex fails. Reason = %v", err)
-			return err
-		}
-
-		if err := m.repo.addIndexToTopology(defn, scanport); err != nil {
 			common.Errorf("LifecycleMgr.handleBuildIndexes() : buildIndex fails. Reason = %v", err)
 			return err
 		}
@@ -236,20 +254,21 @@ func (m *LifecycleMgr) handleDeleteIndex(key string) error {
 
 func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId) error {
 
-	defn, _ := m.repo.GetIndexDefnById(id)
+	defn, err := m.repo.GetIndexDefnById(id)
+	if err != nil {
+		return err
+	}
 
-	// Drop the index defnition before removing it from the topology.  If it fails to
-	// remove the index defn from topology, it can mean that there is a dangling reference
-	// in the topology with a deleted index defn, but it is easier to detect.
-	if err := m.repo.DropIndexById(id); err != nil {
+	if err := m.updateIndexState(defn.Bucket, defn.DefnId, common.INDEX_STATE_DELETED); err != nil {
 		common.Errorf("LifecycleMgr.handleDeleteIndex() : deleteIndex fails. Reason = %v", err)
 		return err
 	}
 
-	if err := m.repo.deleteIndexFromTopology(defn.Bucket, id); err != nil {
-		common.Errorf("LifecycleMgr.handleDeleteIndex() : deleteIndex fails. Reason = %v", err)
-		return err
+	if m.notifier != nil {
+		m.notifier.OnIndexDelete(defn.DefnId)
 	}
+	m.repo.DropIndexById(defn.DefnId)
+	m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
 
 	return nil
 }
@@ -261,21 +280,51 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 		return err
 	}
 
-	topology, err := m.repo.GetTopologyByBucket(change.Bucket)
+	return m.UpdateIndexInstance(change.Bucket, common.IndexDefnId(change.DefnId), common.IndexState(change.State),
+		common.StreamId(change.StreamId), change.Error)
+}
+
+func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, state common.IndexState,
+	streamId common.StreamId, errStr string) error {
+
+	topology, err := m.repo.GetTopologyByBucket(bucket)
 	if err != nil {
-		common.Errorf("LifecycleMgr.handleTopologyChange() : fails to find topology. Reason = %v", err)
+		common.Errorf("LifecycleMgr.handleTopologyChange() : index instance update fails. Reason = %v", err)
 		return err
 	}
 
-	topology.UpdateStateForIndexInstByDefn(common.IndexDefnId(change.DefnId), common.IndexState(change.State))
-	topology.UpdateStreamForIndexInstByDefn(common.IndexDefnId(change.DefnId), common.StreamId(change.StreamId))
-
-	if len(change.Error) != 0 {
-		topology.SetErrorForIndexInstByDefn(common.IndexDefnId(change.DefnId), change.Error)
+	if state != common.INDEX_STATE_NIL {
+		topology.UpdateStateForIndexInstByDefn(common.IndexDefnId(defnId), common.IndexState(state))
+	}
+	
+	if streamId != common.NIL_STREAM {
+		topology.UpdateStreamForIndexInstByDefn(common.IndexDefnId(defnId), common.StreamId(streamId))
 	}
 
-	if err := m.repo.SetTopologyByBucket(change.Bucket, topology); err != nil {
-		common.Errorf("LifecycleMgr.handleTopologyChange() : toplogy change fails. Reason = %v", err)
+	if len(errStr) != 0 {
+		topology.SetErrorForIndexInstByDefn(common.IndexDefnId(defnId), errStr)
+	}
+
+	if err := m.repo.SetTopologyByBucket(bucket, topology); err != nil {
+		common.Errorf("LifecycleMgr.handleTopologyChange() : index instance update fails. Reason = %v", err)
+		return err
+	}
+
+	return nil
+}
+
+func (m *LifecycleMgr) updateIndexState(bucket string, defnId common.IndexDefnId, state common.IndexState) error {
+
+	topology, err := m.repo.GetTopologyByBucket(bucket)
+	if err != nil {
+		common.Errorf("LifecycleMgr.updateIndexState() : fails to find index instance. Reason = %v", err)
+		return err
+	}
+
+	topology.UpdateStateForIndexInstByDefn(defnId, state)
+
+	if err := m.repo.SetTopologyByBucket(bucket, topology); err != nil {
+		common.Errorf("LifecycleMgr.updateIndexState() : fail to update state of index instance.  Reason = %v", err)
 		return err
 	}
 

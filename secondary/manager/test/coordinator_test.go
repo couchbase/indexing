@@ -12,7 +12,6 @@ package test
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
-	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	"testing"
 	"time"
 )
@@ -34,11 +33,7 @@ func TestCoordinator(t *testing.T) {
 	manager.USE_MASTER_REPO = true
 	defer func() { manager.USE_MASTER_REPO = false }()
 
-	factory := new(util.TestDefaultClientFactory)
-	env := new(util.TestDefaultClientEnv)
-	admin := manager.NewProjectorAdmin(factory, env, nil)
-	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,8 +82,8 @@ func TestCoordinator(t *testing.T) {
 	common.Infof("Topology after index creation : %s", string(content))
 	
 	inst := topology.GetIndexInstByDefn(common.IndexDefnId(200))
-	if inst == nil || common.IndexState(inst.State) != common.INDEX_STATE_CREATED {
-		t.Fatal("Index Inst not found for index defn 200 or inst state is not in CREATE")
+	if inst == nil || common.IndexState(inst.State) != common.INDEX_STATE_READY {
+		t.Fatal("Index Inst not found for index defn 200 or inst state is not in READY")
 	}
 
 	cleanup(mgr, t)

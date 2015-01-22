@@ -118,7 +118,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	secExprs []string, isPrimary bool, plan map[string]interface{}) (c.IndexDefnId, error) {
 
 	if o.FindIndexByName(name, bucket) != nil {
-		return c.IndexDefnId(0), errors.New("Index %v already exist. Cannot create.")
+		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %v already exist. Cannot create.", name))
 	}
 
 	nodes, ok := plan["nodes"].([]string)
@@ -180,8 +180,6 @@ func (o *MetadataProvider) CreateIndex(
 		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fails to create index. Fail to create uuid for index definition id."))
 	}
 
-	// TODO : whereExpr
-	whereExpr = whereExpr
 	idxDefn := &c.IndexDefn{
 		DefnId:          defnID,
 		Name:            name,
@@ -190,6 +188,7 @@ func (o *MetadataProvider) CreateIndex(
 		IsPrimary:       isPrimary,
 		SecExprs:        secExprs,
 		ExprType:        c.ExprType(exprType),
+		WhereExpr:       whereExpr,
 		PartitionScheme: c.HASH,
 		PartitionKey:    partnExpr}
 
@@ -231,8 +230,8 @@ func (o *MetadataProvider) BuildIndexes(adminport string, defnIDs []c.IndexDefnI
 		if meta == nil {
 			return errors.New(fmt.Sprintf("Index %v not found.  Cannot build index.", meta.Definition.Name))
 		}
-		if meta.Instances != nil && meta.Instances[0].State != c.INDEX_STATE_CREATED {
-			return errors.New(fmt.Sprintf("Index %v is not in CREATED state.  Cannot build index.", meta.Definition.Name))
+		if meta.Instances != nil && meta.Instances[0].State != c.INDEX_STATE_READY {
+			return errors.New(fmt.Sprintf("Index %v is not in READY state.  Cannot build index.", meta.Definition.Name))
 		}
 	}
 
@@ -256,7 +255,9 @@ func (o *MetadataProvider) ListIndex() []*IndexMetadata {
 
 	result := make([]*IndexMetadata, 0, len(o.repo.indices))
 	for _, meta := range o.repo.indices {
-		result = append(result, meta)
+		if o.isValidIndex(meta) {
+			result = append(result, meta)
+		}
 	}
 
 	return result
@@ -267,7 +268,9 @@ func (o *MetadataProvider) FindIndex(id c.IndexDefnId) *IndexMetadata {
 	defer o.repo.mutex.Unlock()
 
 	if meta, ok := o.repo.indices[id]; ok {
-		return meta
+		if o.isValidIndex(meta) {
+			return meta
+		}
 	}
 
 	return nil
@@ -278,8 +281,10 @@ func (o *MetadataProvider) FindIndexByName(name string, bucket string) *IndexMet
 	defer o.repo.mutex.Unlock()
 
 	for _, meta := range o.repo.indices {
-		if meta.Definition.Name == name && meta.Definition.Bucket == bucket {
-			return meta
+		if o.isValidIndex(meta) {
+			if meta.Definition.Name == name && meta.Definition.Bucket == bucket {
+				return meta
+			}
 		}
 	}
 
@@ -369,6 +374,24 @@ func (o *MetadataProvider) findMatchingWatcher(deployNodeName string) *watcher {
 	}
 
 	return nil
+}
+
+func (o *MetadataProvider) isValidIndex(meta *IndexMetadata) bool {
+
+	if meta.Definition == nil {
+		return false
+	}
+
+	if len(meta.Instances) == 0 {
+		return false
+	}
+
+	if meta.Instances[0].State == c.INDEX_STATE_CREATED ||
+		meta.Instances[0].State == c.INDEX_STATE_DELETED {
+		return false
+	}
+
+	return true
 }
 
 ///////////////////////////////////////////////////////
@@ -747,6 +770,7 @@ func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content
 func (w *watcher) processChange(op uint32, key string, content []byte) error {
 
 	c.Debugf("watcher.processChange(): key = %v", key)
+	defer c.Debugf("watcher.processChange(): done -> key = %v", key)
 
 	opCode := common.OpCode(op)
 
