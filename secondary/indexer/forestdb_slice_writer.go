@@ -347,7 +347,7 @@ func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) (Key, error) 
 
 	//forestdb reports get in a non-existent key as an
 	//error, skip that
-	if err != nil && err.Error() != "key not found" {
+	if err != nil && err != forestdb.RESULT_KEY_NOT_FOUND {
 		return k, err
 	}
 
