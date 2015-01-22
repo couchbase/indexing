@@ -216,7 +216,7 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Err
 // index on this keyspace
 func (gsi *gsiKeyspace) CreateIndex(
 	name string, seekKey, rangeKey expression.Expressions,
-	where expression.Expression) (datastore.Index, errors.Error) {
+	where expression.Expression, with value.Value) (datastore.Index, errors.Error) {
 
 	var partnStr string
 	if seekKey != nil && len(seekKey) > 0 {
