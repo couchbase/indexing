@@ -875,19 +875,22 @@ func (feed *Feed) bucketFeed(
 	}()
 
 	vbnos := c.Vbno32to16(reqTs.GetVbnos())
-	vbuuids, err := feed.bucketDetails(pooln, bucketn, vbnos)
+	_ /*vbuuidsi*/, err = feed.bucketDetails(pooln, bucketn, vbnos)
 	if err != nil {
 		return nil, err
 	}
 
 	// if streams need to be started, make sure that branch
 	// histories are the same.
-	if start {
-		if reqTs.VerifyBranch(vbnos, vbuuids) == false {
-			feed.errorf("VerifyBranch()", bucketn, vbuuids)
-			return nil, projC.ErrorInvalidVbucketBranch
-		}
-	}
+	// FIXME: this is any way redundant during a race between
+	// KV and indexer. We will allow UPR to fail.
+	//
+	//if start {
+	//    if reqTs.VerifyBranch(vbnos, vbuuids) == false {
+	//        feed.errorf("VerifyBranch()", bucketn, vbuuids)
+	//        return nil, projC.ErrorInvalidVbucketBranch
+	//    }
+	//}
 
 	var ok bool
 
