@@ -70,7 +70,6 @@ type gsiKeyspace struct {
 // also called as, pool->bucket.
 func NewGSIIndexer(
 	clusterURL, namespace, keyspace string) (datastore.Indexer, errors.Error) {
-
 	gsi := &gsiKeyspace{
 		clusterURL: clusterURL,
 		namespace:  namespace,
@@ -86,6 +85,7 @@ func NewGSIIndexer(
 	if err := gsi.Restart(); err != nil {
 		return nil, err
 	}
+	gsi.Refresh()
 	return gsi, nil
 }
 
