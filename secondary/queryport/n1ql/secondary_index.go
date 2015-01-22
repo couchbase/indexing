@@ -50,10 +50,11 @@ var twoiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 
 // contains all index loaded via 2i cluster.
 type gsiKeyspace struct {
-	mu        sync.RWMutex
-	namespace string // aka pool
-	keyspace  string // aka bucket
-	indexes   map[string]*secondaryIndex
+	mu             sync.RWMutex
+	namespace      string // aka pool
+	keyspace       string // aka bucket
+	indexes        map[string]*secondaryIndex
+	primaryIndexes map[string]*secondaryIndex
 }
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
@@ -61,9 +62,10 @@ type gsiKeyspace struct {
 func NewGSIIndexer(
         clusterURL, namespace, keyspace string) (datastore.Indexer, errors.Error) {
 	gsi := &gsiKeyspace{
-		namespace: namespace,
-		keyspace:  keyspace,
-		indexes:   make(map[string]*secondaryIndex),
+		namespace:      namespace,
+		keyspace:       keyspace,
+		indexes:        make(map[string]*secondaryIndex),
+		primaryIndexes: make(map[string]*secondaryIndex),
 	}
 	gsi.Refresh()
 	return gsi, nil
@@ -118,6 +120,19 @@ func (gsi *gsiKeyspace) IndexByName(name string) (datastore.Index, errors.Error)
 	return nil, err
 }
 
+// PrimaryIndexes implements datastore.Indexer{} interface. Returns the
+// server-recommended primary indexes
+func (gsi *gsiKeyspace) PrimaryIndexes() ([]datastore.PrimaryIndex, errors.Error) {
+	gsi.mu.RLock()
+	defer gsi.mu.RUnlock()
+
+	indexes := make([]datastore.PrimaryIndex, 0, len(gsi.primaryIndexes))
+	for _, index := range gsi.primaryIndexes {
+		indexes = append(indexes, index)
+	}
+	return indexes, nil
+}
+
 // Indexes implements datastore.Indexer{} interface. Returns all the
 // indexes defined on this keyspace.
 func (gsi *gsiKeyspace) Indexes() ([]datastore.Index, errors.Error) {
@@ -131,26 +146,14 @@ func (gsi *gsiKeyspace) Indexes() ([]datastore.Index, errors.Error) {
 	return indexes, nil
 }
 
-// IndexByPrimary implements datastore.Indexer{} interface. Returns the
-// server-recommended primary index
-func (gsi *gsiKeyspace) IndexByPrimary() (datastore.PrimaryIndex, errors.Error) {
-	gsi.mu.RLock()
-	defer gsi.mu.RUnlock()
-
-	if primary, ok := gsi.indexes[PRIMARY_INDEX]; ok {
-		return primary, nil
-	}
-	msg := fmt.Sprintf("2i primary-index %v not found.", PRIMARY_INDEX)
-	return nil, errors.NewError(nil, msg)
-}
-
 // CreatePrimaryIndex implements datastore.Indexer{} interface. Create or
 // return a primary index on this keyspace
-func (gsi *gsiKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Error) {
+func (gsi *gsiKeyspace) CreatePrimaryIndex(name string, with value.Value) (
+	datastore.PrimaryIndex, errors.Error) {
 	client := qclient.NewClusterClient(ClusterManagerAddr)
 	// update meta-data.
 	info, err := client.CreateIndex(
-		PRIMARY_INDEX, gsi.keyspace, /*bucket-name*/
+		name, gsi.keyspace, /*bucket-name*/
 		string(datastore.GSI),                     /*using*/
 		"N1QL" /*exprType*/, "" /*partnExpr*/, "", /*whereExpr*/
 		nil /*secExprs*/, true /*isPrimary*/)
@@ -165,7 +168,8 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Err
 	if e == nil {
 		gsi.mu.Lock()
 		defer gsi.mu.Unlock()
-		gsi.indexes[PRIMARY_INDEX] = index
+		gsi.indexes[name] = index
+		gsi.primaryIndexes[name] = index
 		return index, nil
 	}
 	return nil, e
@@ -175,7 +179,7 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex() (datastore.PrimaryIndex, errors.Err
 // index on this keyspace
 func (gsi *gsiKeyspace) CreateIndex(
 	name string, seekKey, rangeKey expression.Expressions,
-	where expression.Expression) (datastore.Index, errors.Error) {
+	where expression.Expression, with value.Value) (datastore.Index, errors.Error) {
 
 	var partnStr string
 	if seekKey != nil && len(seekKey) > 0 {
@@ -212,6 +216,11 @@ func (gsi *gsiKeyspace) CreateIndex(
 		return index, nil
 	}
 	return nil, e
+}
+
+// BuildIndexes implements datastore.Indexer{} interface.
+func (gsi *gsiKeyspace) BuildIndexes(names ...string) errors.Error {
+	return errors.NewError(nil, "BUILD INDEXES not yet implemented for GSI.")
 }
 
 // Refresh and remember them as part of keyspace.indexes.
@@ -431,6 +440,11 @@ func (si *secondaryIndex) Drop() errors.Error {
 	si.gsi.mu.Lock()
 	defer si.gsi.mu.Unlock()
 	delete(si.gsi.indexes, si.Name())
+
+	if si.isPrimary {
+		delete(si.gsi.primaryIndexes, si.Name())
+	}
+
 	// TODO: sync with cluster-manager ?
 	return nil
 }
