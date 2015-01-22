@@ -23,7 +23,6 @@ var (
 
 //StorageManager manages the snapshots for the indexes and responsible for storing
 //indexer metadata in a config database
-//TODO - Add config database storage
 
 const INST_MAP_KEY_NAME = "IndexInstMap"
 
@@ -91,17 +90,20 @@ func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		config:       config,
 	}
 
-	fdbconfig := forestdb.DefaultConfig()
-	kvconfig := forestdb.DefaultKVStoreConfig()
-	var err error
+	//if manager is not enabled, create meta file
+	if config["enableManager"].Bool() == false {
+		fdbconfig := forestdb.DefaultConfig()
+		kvconfig := forestdb.DefaultKVStoreConfig()
+		var err error
 
-	if s.dbfile, err = forestdb.Open("meta", fdbconfig); err != nil {
-		return nil, &MsgError{err: Error{cause: err}}
-	}
+		if s.dbfile, err = forestdb.Open("meta", fdbconfig); err != nil {
+			return nil, &MsgError{err: Error{cause: err}}
+		}
 
-	// Make use of default kvstore provided by forestdb
-	if s.meta, err = s.dbfile.OpenKVStore("default", kvconfig); err != nil {
-		return nil, &MsgError{err: Error{cause: err}}
+		// Make use of default kvstore provided by forestdb
+		if s.meta, err = s.dbfile.OpenKVStore("default", kvconfig); err != nil {
+			return nil, &MsgError{err: Error{cause: err}}
+		}
 	}
 
 	s.updateIndexSnapMap(indexPartnMap, common.ALL_STREAMS, "")
@@ -430,30 +432,35 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 		}
 	}
 
-	instMap := common.CopyIndexInstMap(s.indexInstMap)
+	//if manager is not enable, store the updated InstMap in
+	//meta file
+	if s.config["enableManager"].Bool() == false {
 
-	for id, inst := range instMap {
-		inst.Pc = nil
-		instMap[id] = inst
+		instMap := common.CopyIndexInstMap(s.indexInstMap)
+
+		for id, inst := range instMap {
+			inst.Pc = nil
+			instMap[id] = inst
+		}
+
+		//store indexInstMap in metadata store
+		var instBytes bytes.Buffer
+		var err error
+
+		enc := gob.NewEncoder(&instBytes)
+		err = enc.Encode(instMap)
+		if err != nil {
+			common.Errorf("StorageMgr::handleUpdateIndexInstMap \n\t Error Marshalling "+
+				"IndexInstMap %v. Err %v", instMap, err)
+		}
+
+		if err = s.meta.SetKV([]byte(INST_MAP_KEY_NAME), instBytes.Bytes()); err != nil {
+			common.Errorf("StorageMgr::handleUpdateIndexInstMap \n\tError "+
+				"Storing IndexInstMap %v", err)
+		}
+
+		s.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
 	}
-
-	//store indexInstMap in metadata store
-	var instBytes bytes.Buffer
-	var err error
-
-	enc := gob.NewEncoder(&instBytes)
-	err = enc.Encode(instMap)
-	if err != nil {
-		common.Errorf("StorageMgr::handleUpdateIndexInstMap \n\t Error Marshalling "+
-			"IndexInstMap %v. Err %v", instMap, err)
-	}
-
-	if err = s.meta.SetKV([]byte(INST_MAP_KEY_NAME), instBytes.Bytes()); err != nil {
-		common.Errorf("StorageMgr::handleUpdateIndexInstMap \n\tError "+
-			"Storing IndexInstMap %v", err)
-	}
-
-	s.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
 
 	s.supvCmdch <- &MsgSuccess{}
 }
