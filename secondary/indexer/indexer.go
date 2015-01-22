@@ -18,6 +18,7 @@ import (
 	"github.com/couchbaselabs/goforestdb"
 	"math/rand"
 	"net"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -1317,8 +1318,13 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		common.Infof("Indexer::initPartnInstance Initialized Partition: \n\t Index: %v Partition: %v",
 			indexInst.InstId, partnInst)
 
+		storage_dir := idx.config["storage_dir"].String()
+		os.Mkdir(storage_dir, 0755)
+		if _, e := os.Stat(storage_dir); e != nil {
+			common.CrashOnError(e)
+		}
+		path := path.Join(storage_dir, IndexPath(&indexInst, SliceId(0)))
 		//add a single slice per partition for now
-		path := path.Join(idx.config["storage_dir"].String(), IndexPath(&indexInst, SliceId(0)))
 		if slice, err := NewForestDBSlice(path,
 			0, indexInst.Defn.DefnId, indexInst.InstId, idx.config); err == nil {
 			partnInst.Sc.AddSlice(0, slice)
