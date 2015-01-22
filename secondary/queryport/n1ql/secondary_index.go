@@ -58,14 +58,15 @@ type gsiKeyspace struct {
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
 // also called as, pool->bucket.
-func NewGSIIndexer(namespace, keyspace string) datastore.Indexer {
+func NewGSIIndexer(
+        clusterURL, namespace, keyspace string) (datastore.Indexer, errors.Error) {
 	gsi := &gsiKeyspace{
 		namespace: namespace,
 		keyspace:  keyspace,
 		indexes:   make(map[string]*secondaryIndex),
 	}
 	gsi.Refresh()
-	return gsi
+	return gsi, nil
 }
 
 // KeyspaceId implements datastore.Indexer{} interface.
