@@ -165,3 +165,9 @@ func (v VbStatus) String() string {
 		return "VBS_STATUS_INVALID"
 	}
 }
+
+type MetaUpdateFields struct {
+	state  bool
+	stream bool
+	err    bool
+}

@@ -535,7 +535,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	if idx.enableManager {
 		clientCh <- &MsgSuccess{}
 	} else {
-		//for cbq client, simulate build index
+		//for cbq bridge, simulate build index
 		idx.handleBuildIndex(&MsgBuildIndex{indexInstList: []common.IndexInstId{indexInst.InstId},
 			respCh: clientCh})
 	}
@@ -544,124 +544,146 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 func (idx *indexer) handleBuildIndex(msg Message) {
 
-	indexList := msg.(*MsgBuildIndex).GetIndexList()
+	instIdList := msg.(*MsgBuildIndex).GetIndexList()
 	clientCh := msg.(*MsgBuildIndex).GetRespCh()
 
-	common.Infof("Indexer::handleBuildIndex %v", indexList)
+	common.Infof("Indexer::handleBuildIndex %v", instIdList)
 
-	//TODO assume one index for now, this will get fixed in deferred build
-	indexInstId := indexList[0]
-
-	var indexInst common.IndexInst
-	var ok bool
-
-	if indexInst, ok = idx.indexInstMap[indexInstId]; !ok {
-		common.Errorf("Indexer::handleBuildIndex \n\tUnknown Index Instance %v", indexInstId)
+	if len(instIdList) == 0 {
+		common.Warnf("Indexer::handleBuildIndex Nothing To Build")
 		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_INDEXER_IN_RECOVERY,
-					severity: FATAL,
-					cause:    ErrIndexNotFound,
-					category: INDEXER}}
+			clientCh <- &MsgSuccess{}
 		}
-		return
 	}
 
-	if idx.streamBucketStatus[common.INIT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY ||
-		idx.streamBucketStatus[common.MAINT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY {
-		common.Errorf("Indexer::handleBuildIndex \n\tCannot Process Build Index " +
-			"In Recovery Mode.")
+	bucketIndexList := idx.groupIndexListByBucket(instIdList)
 
-		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_INDEXER_IN_RECOVERY,
-					severity: FATAL,
-					cause:    ErrIndexerInRecovery,
-					category: INDEXER}}
-
-		}
-		return
-	}
-
-	//check if Initial Build is already running for this index's bucket
-	if ok := idx.checkDuplicateInitialBuildRequest(indexInst, clientCh); !ok {
-		return
-	}
-
-	//if there is already an index for this bucket in MAINT_STREAM,
-	//add this index to INIT_STREAM
-	if idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.MAINT_STREAM) {
-		indexInst.Stream = common.INIT_STREAM
-	} else {
-		indexInst.Stream = common.MAINT_STREAM
-	}
-
-	//get current timestamp from KV and set it as Initial Build Timestamp
-	buildTs := idx.getCurrentKVTs(idx.config["clusterAddr"].String(), indexInst.Defn.Bucket)
-	if buildTs == nil {
-		errStr := fmt.Sprintf("Error Connecting KV %v", idx.config["clusterAddr"].String())
-		common.Errorf("Indexer::handleBuildIndex %v", errStr)
-		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_INDEXER_IN_RECOVERY,
-					severity: FATAL,
-					cause:    errors.New(errStr),
-					category: INDEXER}}
-		}
-		return
-	}
-
-	//if initial build TS is zero and index belongs to MAINT_STREAM
-	//initial build is not required.
 	initialBuildReqd := true
-	if buildTs.IsZeroTs() && indexInst.Stream == common.MAINT_STREAM {
-		indexInst.State = common.INDEX_STATE_ACTIVE
-		initialBuildReqd = false
-	} else {
-		indexInst.State = common.INDEX_STATE_INITIAL
-	}
+	for bucket, instIdList := range bucketIndexList {
 
-	common.Debugf("Indexer::handleBuildIndex \n\tAdded Index: %v to Stream: %v State: %v",
-		indexInst.InstId, indexInst.Stream, indexInst.State)
-
-	//update index maps with this index
-	idx.indexInstMap[indexInst.InstId] = indexInst
-
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
-
-	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
-		if clientCh != nil {
-			clientCh <- &MsgError{
-				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
-					severity: FATAL,
-					cause:    err,
-					category: INDEXER}}
+		if ok := idx.checkValidIndexInst(bucket, instIdList, clientCh); !ok {
+			common.Errorf("Indexer::handleBuildIndex \n\tInvalid Index List "+
+				"Bucket %v. IndexList %v", bucket, instIdList)
+			if idx.enableManager {
+				delete(bucketIndexList, bucket)
+				continue
+			} else {
+				return
+			}
 		}
-		common.CrashOnError(err)
-	}
 
-	//send Stream Update to workers
-	idx.sendStreamUpdateForCreateIndex(indexInst, buildTs, clientCh)
+		if ok := idx.checkBucketInRecovery(bucket, instIdList, clientCh); ok {
+			common.Errorf("Indexer::handleBuildIndex \n\tCannot Process Build Index "+
+				"In Recovery Mode. Bucket %v. IndexList %v", bucket, instIdList)
+			if idx.enableManager {
+				delete(bucketIndexList, bucket)
+				continue
+			} else {
+				return
+			}
+		}
 
-	if _, ok := idx.streamBucketStatus[indexInst.Stream][indexInst.Defn.Bucket]; !ok {
-		idx.streamBucketStatus[indexInst.Stream] = make(BucketStatus)
-	}
-	idx.streamBucketStatus[indexInst.Stream][indexInst.Defn.Bucket] = STREAM_ACTIVE
+		//check if Initial Build is already running for this index's bucket
+		if ok := idx.checkDuplicateInitialBuildRequest(bucket, instIdList, clientCh); !ok {
+			common.Errorf("Indexer::handleBuildIndex \n\tBuild Already In"+
+				"Progress. Bucket %v.", bucket)
+			if idx.enableManager {
+				delete(bucketIndexList, bucket)
+				continue
+			} else {
+				return
+			}
+		}
 
-	//if initial build is not being done, send success response,
-	//otherwise success response will be sent when initial build gets done
-	if !initialBuildReqd || idx.enableManager {
-		clientCh <- &MsgSuccess{}
-	} else {
-		idx.bucketCreateClientChMap[indexInst.Defn.Bucket] = clientCh
-	}
+		//get current timestamp from KV and set it as Initial Build Timestamp
+		buildTs, err := idx.getCurrentKVTs(idx.config["clusterAddr"].String(), bucket)
+		if err != nil {
+			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
+				idx.config["clusterAddr"].String(), err)
+			common.Errorf("Indexer::handleBuildIndex %v", errStr)
+			if idx.enableManager {
+				idx.bulkUpdateError(instIdList, errStr)
+				if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true); err != nil {
+					common.CrashOnError(err)
+				}
+				delete(bucketIndexList, bucket)
+				continue
+			} else if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_IN_RECOVERY,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+				return
+			}
+		}
 
-	//store updated state and streamId in meta store
-	if idx.enableManager {
-		if err := idx.updateMetaInfoForIndexList([]common.IndexInst{indexInst}); err != nil {
+		//if there is already an index for this bucket in MAINT_STREAM,
+		//add this index to INIT_STREAM
+		var buildStream common.StreamId
+		if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM) {
+			buildStream = common.INIT_STREAM
+		} else {
+			buildStream = common.MAINT_STREAM
+		}
+
+		idx.bulkUpdateStream(instIdList, buildStream)
+
+		//if initial build TS is zero and index belongs to MAINT_STREAM
+		//initial build is not required.
+		var buildState common.IndexState
+		if buildTs.IsZeroTs() && buildStream == common.MAINT_STREAM {
+			buildState = common.INDEX_STATE_ACTIVE
+			initialBuildReqd = false
+		} else {
+			buildState = common.INDEX_STATE_INITIAL
+		}
+
+		idx.bulkUpdateState(instIdList, buildState)
+
+		common.Debugf("Indexer::handleBuildIndex \n\tAdded Index: %v to Stream: %v State: %v",
+			instIdList, buildStream, buildState)
+
+		msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+
+		if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+						severity: FATAL,
+						cause:    err,
+						category: INDEXER}}
+			}
 			common.CrashOnError(err)
 		}
+
+		//send Stream Update to workers
+		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, bucket, buildTs, clientCh)
+
+		if _, ok := idx.streamBucketStatus[buildStream][bucket]; !ok {
+			idx.streamBucketStatus[buildStream] = make(BucketStatus)
+		}
+		idx.streamBucketStatus[buildStream][bucket] = STREAM_ACTIVE
+
+		//store updated state and streamId in meta store
+		if idx.enableManager {
+			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false); err != nil {
+				common.CrashOnError(err)
+			}
+		} else {
+
+			//if initial build is not being done, send success response,
+			//otherwise success response will be sent when initial build gets done
+			if !initialBuildReqd {
+				clientCh <- &MsgSuccess{}
+			} else {
+				idx.bucketCreateClientChMap[bucket] = clientCh
+			}
+			return
+		}
 	}
+
+	clientCh <- &MsgSuccess{}
 
 }
 
@@ -677,19 +699,51 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	var ok bool
 	if indexInst, ok = idx.indexInstMap[indexInstId]; !ok {
 
-		common.Errorf("Indexer::handleDropIndex Unknown IndexInstId", indexInstId)
+		errStr := fmt.Sprintf("Unknown Index Instance %v", indexInstId)
+		common.Errorf("Indexer::handleDropIndex %v", errStr)
 
 		if clientCh != nil {
 			clientCh <- &MsgError{
 				err: Error{code: ERROR_INDEXER_UNKNOWN_INDEX,
 					severity: FATAL,
-					cause:    errors.New("Index Unknown"),
+					cause:    errors.New(errStr),
 					category: INDEXER}}
 		}
 		return
 	}
 
-	//TODO Do we need to check for both stream in case of index in catchup state
+	//if the index state is Created/Ready/Deleted, only data cleanup is
+	//required. No stream updates are required.
+	if indexInst.State == common.INDEX_STATE_CREATED ||
+		indexInst.State == common.INDEX_STATE_READY ||
+		indexInst.State == common.INDEX_STATE_DELETED {
+
+		idx.cleanupIndexData(indexInst, clientCh)
+		common.Debugf("Indexer::handleDropIndex Cleanup Successful for "+
+			"Index Data %v", indexInst)
+		clientCh <- &MsgSuccess{}
+	}
+
+	//Drop is a two step process. First set the index state as DELETED.
+	//Then all the workers are notified about this state change. If this
+	//step is successful, no mutation/scan request for the index will be processed.
+	//Second step, is the actual cleanup of index instance from internal maps
+	//and purging of physical slice files.
+
+	indexInst.State = common.INDEX_STATE_DELETED
+	idx.indexInstMap[indexInst.InstId] = indexInst
+
+	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+		clientCh <- &MsgError{
+			err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+				severity: FATAL,
+				cause:    err,
+				category: INDEXER}}
+		common.CrashOnError(err)
+	}
+
 	if idx.streamBucketStatus[common.MAINT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY ||
 		idx.streamBucketStatus[common.INIT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY {
 
@@ -889,7 +943,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 				delete(idx.bucketCreateClientChMap, bucket)
 			}
 		} else {
-			if err := idx.updateMetaInfoForBucket(bucket); err != nil {
+			if err := idx.updateMetaInfoForBucket(bucket, true, true, false); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -917,7 +971,7 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
 }
 
-func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
+func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	clientCh MsgChannel) {
 
 	indexInstId := indexInst.InstId
@@ -942,16 +996,20 @@ func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
 	//for all partitions managed by this indexer
 	for _, partnInst := range idxPartnInfo {
 		sc := partnInst.Sc
-
 		//close all the slices
 		for _, slice := range sc.GetAllSlices() {
 			slice.Close()
-
 			//wipe the physical files
 			slice.Destroy()
 		}
-
 	}
+
+}
+
+func (idx *indexer) cleanupIndex(indexInst common.IndexInst,
+	clientCh MsgChannel) {
+
+	idx.cleanupIndexData(indexInst, clientCh)
 
 	//send Stream update to workers
 	if ok := idx.sendStreamUpdateForDropIndex(indexInst, clientCh); !ok {
@@ -1004,17 +1062,20 @@ func (idx *indexer) Shutdown() Message {
 	return nil
 }
 
-func (idx *indexer) sendStreamUpdateForCreateIndex(indexInst common.IndexInst,
-	buildTs Timestamp, clientCh MsgChannel) bool {
+func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstId,
+	buildStream common.StreamId, bucket string, buildTs Timestamp, clientCh MsgChannel) bool {
 
 	var cmd Message
 	var indexList []common.IndexInst
-	indexList = append(indexList, indexInst)
+	for _, instId := range instIdList {
+		indexInst := idx.indexInstMap[instId]
+		indexList = append(indexList, indexInst)
+	}
 
 	respCh := make(MsgChannel)
 
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
-		streamId:  indexInst.Stream,
+		streamId:  buildStream,
 		indexList: indexList,
 		buildTs:   buildTs,
 		respCh:    respCh,
@@ -1042,10 +1103,10 @@ func (idx *indexer) sendStreamUpdateForCreateIndex(indexInst common.IndexInst,
 
 	stopCh := make(StopChannel)
 
-	if _, ok := idx.streamBucketRequestStopCh[indexInst.Stream][indexInst.Defn.Bucket]; !ok {
-		idx.streamBucketRequestStopCh[indexInst.Stream] = make(BucketRequestStopCh)
+	if _, ok := idx.streamBucketRequestStopCh[buildStream][bucket]; !ok {
+		idx.streamBucketRequestStopCh[buildStream] = make(BucketRequestStopCh)
 	}
-	idx.streamBucketRequestStopCh[indexInst.Stream][indexInst.Defn.Bucket] = stopCh
+	idx.streamBucketRequestStopCh[buildStream][bucket] = stopCh
 
 	go func() {
 	retryloop:
@@ -1059,23 +1120,23 @@ func (idx *indexer) sendStreamUpdateForCreateIndex(indexInst common.IndexInst,
 				case MSG_SUCCESS:
 					//delete stopCh to indicate this request is done
 					//TODO Add a separate message for this as there is no lock now
-					common.Debugf("Indexer::sendStreamUpdateForCreateIndex \n\tStream Request Success For "+
-						"Stream %v Bucket %v.", indexInst.Stream, indexInst.Defn.Bucket)
+					common.Debugf("Indexer::sendStreamUpdateForBuildIndex \n\tStream Request Success For "+
+						"Stream %v Bucket %v.", buildStream, bucket)
 					idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
-						streamId: indexInst.Stream,
-						bucket:   indexInst.Defn.Bucket,
+						streamId: buildStream,
+						bucket:   bucket,
 					}
 					break retryloop
 
 				case INDEXER_ROLLBACK:
 					//an initial build request should never receive rollback message
-					common.Errorf("Indexer::sendStreamUpdateForCreateIndex \n\tUnexpected Rollback from "+
+					common.Errorf("Indexer::sendStreamUpdateForBuildIndex \n\tUnexpected Rollback from "+
 						"Projector during Initial Stream Request %v", resp)
 					common.CrashOnError(ErrKVRollbackForInitRequest)
 
 				default:
 					//log and retry for all other responses
-					common.Errorf("Indexer::sendStreamUpdateForCreateIndex - Error from Projector %v", resp)
+					common.Errorf("Indexer::sendStreamUpdateForBuildIndex - Error from Projector %v", resp)
 
 				}
 			}
@@ -1399,10 +1460,10 @@ func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 	return true
 }
 
-//checkDuplicateInitialBuildRequest check if INIT_STREAM is already running for the
-//bucket on the given index
-func (idx *indexer) checkDuplicateInitialBuildRequest(indexInst common.IndexInst,
-	respCh MsgChannel) bool {
+//checkDuplicateInitialBuildRequest check if any other index on the given bucket
+//is already building
+func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
+	instIdList []common.IndexInstId, respCh MsgChannel) bool {
 
 	//if initial build is already running for some other index on this bucket,
 	//cannot start another one
@@ -1410,14 +1471,16 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(indexInst common.IndexInst
 
 		if ((index.State == common.INDEX_STATE_INITIAL ||
 			index.State == common.INDEX_STATE_CATCHUP) &&
-			indexInst.Defn.Bucket == index.Defn.Bucket) ||
-			idx.checkStreamRequestPending(index.Stream, index.Defn.Bucket) {
+			index.Defn.Bucket == bucket) ||
+			idx.checkStreamRequestPending(index.Stream, bucket) {
 
-			errStr := "Multiple Initial " +
-				"Builds On A Bucket Are Not Supported By Indexer."
-
-			common.Errorf(errStr)
-			if respCh != nil {
+			errStr := fmt.Sprintf("Build Already In Progress. Bucket %v", bucket)
+			if idx.enableManager {
+				idx.bulkUpdateError(instIdList, errStr)
+				if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true); err != nil {
+					common.CrashOnError(err)
+				}
+			} else if respCh != nil {
 				respCh <- &MsgError{
 					err: Error{code: ERROR_INDEX_BUILD_IN_PROGRESS,
 						severity: FATAL,
@@ -1450,6 +1513,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 
 	//get the list of indexes for this bucket and stream in INITIAL state
 	var indexList []common.IndexInst
+	var instIdList []common.IndexInstId
 	for _, index := range idx.indexInstMap {
 		if index.Defn.Bucket == bucket && index.Stream == streamId &&
 			index.State == common.INDEX_STATE_INITIAL {
@@ -1460,6 +1524,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				index.State = common.INDEX_STATE_ACTIVE
 			}
 			indexList = append(indexList, index)
+			instIdList = append(instIdList, index.InstId)
 		}
 	}
 
@@ -1487,7 +1552,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				delete(idx.bucketCreateClientChMap, bucket)
 			}
 		} else {
-			if err := idx.updateMetaInfoForIndexList(indexList); err != nil {
+			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -1675,7 +1740,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 		bucket, streamId)
 }
 
-func (idx *indexer) getCurrentKVTs(cluster, bucket string) Timestamp {
+func (idx *indexer) getCurrentKVTs(cluster, bucket string) (Timestamp, error) {
 
 	numVbuckets := idx.config["numVbuckets"].Int()
 	ts := NewTimestamp(numVbuckets)
@@ -1699,11 +1764,11 @@ func (idx *indexer) getCurrentKVTs(cluster, bucket string) Timestamp {
 		}
 		elapsed := time.Since(start)
 		common.Debugf("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
-		return ts
+		return ts, nil
 
 	} else {
 		common.Errorf("Indexer::getCurrentKVTs Error Connecting to KV Cluster %v", err)
-		return nil
+		return nil, err
 	}
 
 }
@@ -2364,28 +2429,43 @@ func (idx *indexer) checkStreamRequestPending(streamId common.StreamId, bucket s
 	return false
 }
 
-func (idx *indexer) updateMetaInfoForBucket(bucket string) error {
+func (idx *indexer) updateMetaInfoForBucket(bucket string,
+	updateState bool, updateStream bool, updateError bool) error {
 
-	var indexList []common.IndexInst
+	var instIdList []common.IndexInstId
 	for _, inst := range idx.indexInstMap {
 		if inst.Defn.Bucket == bucket {
-			indexList = append(indexList, inst)
+			instIdList = append(instIdList, inst.InstId)
 		}
 	}
 
-	if len(indexList) != 0 {
-		return idx.updateMetaInfoForIndexList(indexList)
+	if len(instIdList) != 0 {
+		return idx.updateMetaInfoForIndexList(instIdList, updateState,
+			updateStream, updateError)
 	} else {
 		return nil
 	}
 
 }
 
-func (idx *indexer) updateMetaInfoForIndexList(indexList []common.IndexInst) error {
+func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
+	updateState bool, updateStream bool, updateError bool) error {
+
+	var indexList []common.IndexInst
+	for _, instId := range instIdList {
+		indexList = append(indexList, idx.indexInstMap[instId])
+	}
+
+	updatedFields := MetaUpdateFields{
+		state:  updateState,
+		stream: updateStream,
+		err:    updateError,
+	}
 
 	msg := &MsgClustMgrUpdate{
-		mType:     CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX,
-		indexList: indexList}
+		mType:         CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX,
+		indexList:     indexList,
+		updatedFields: updatedFields}
 
 	return idx.sendMsgToClusterMgr(msg)
 
@@ -2424,4 +2504,102 @@ func (idx *indexer) sendMsgToClusterMgr(msg Message) error {
 	}
 
 	return nil
+}
+
+func (idx *indexer) bulkUpdateError(instIdList []common.IndexInstId,
+	errStr string) {
+
+	for _, instId := range instIdList {
+		idxInst := idx.indexInstMap[instId]
+		idxInst.Error = errStr
+		idx.indexInstMap[instId] = idxInst
+	}
+
+}
+
+func (idx *indexer) bulkUpdateState(instIdList []common.IndexInstId,
+	state common.IndexState) {
+
+	for _, instId := range instIdList {
+		idxInst := idx.indexInstMap[instId]
+		idxInst.State = state
+		idx.indexInstMap[instId] = idxInst
+	}
+}
+
+func (idx *indexer) bulkUpdateStream(instIdList []common.IndexInstId,
+	stream common.StreamId) {
+
+	for _, instId := range instIdList {
+		idxInst := idx.indexInstMap[instId]
+		idxInst.Stream = stream
+		idx.indexInstMap[instId] = idxInst
+	}
+}
+
+func (idx *indexer) checkBucketInRecovery(bucket string,
+	instIdList []common.IndexInstId, clientCh MsgChannel) bool {
+
+	if idx.streamBucketStatus[common.INIT_STREAM][bucket] == STREAM_RECOVERY ||
+		idx.streamBucketStatus[common.MAINT_STREAM][bucket] == STREAM_RECOVERY {
+
+		if idx.enableManager {
+			errStr := fmt.Sprintf("Bucket %v In Recovery", bucket)
+			idx.bulkUpdateError(instIdList, errStr)
+			if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true); err != nil {
+				common.CrashOnError(err)
+			}
+		} else if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_IN_RECOVERY,
+					severity: FATAL,
+					cause:    ErrIndexerInRecovery,
+					category: INDEXER}}
+		}
+		return true
+	}
+	return false
+}
+
+func (idx *indexer) checkValidIndexInst(bucket string,
+	instIdList []common.IndexInstId, clientCh MsgChannel) bool {
+
+	//validate instance list
+	for _, instId := range instIdList {
+		if _, ok := idx.indexInstMap[instId]; !ok {
+			if idx.enableManager {
+				errStr := fmt.Sprintf("Unknown Index Instance %v In Build Request", instId)
+				idx.bulkUpdateError(instIdList, errStr)
+				if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true); err != nil {
+					common.CrashOnError(err)
+				}
+			} else if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_UNKNOWN_INDEX,
+						severity: FATAL,
+						cause:    ErrIndexNotFound,
+						category: INDEXER}}
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func (idx *indexer) groupIndexListByBucket(instIdList []common.IndexInstId) map[string][]common.IndexInstId {
+
+	bucketInstList := make(map[string][]common.IndexInstId)
+	for _, instId := range instIdList {
+		indexInst := idx.indexInstMap[instId]
+		if instList, ok := bucketInstList[indexInst.Defn.Bucket]; ok {
+			instList = append(instList, indexInst.InstId)
+			bucketInstList[indexInst.Defn.Bucket] = instList
+		} else {
+			var newInstList []common.IndexInstId
+			newInstList = append(newInstList, indexInst.InstId)
+			bucketInstList[indexInst.Defn.Bucket] = newInstList
+		}
+	}
+	return bucketInstList
+
 }

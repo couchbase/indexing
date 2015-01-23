@@ -335,6 +335,14 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 			continue
 		}
 
+		//Skip mutations for indexes in DELETED state. This may happen if complete
+		//couldn't happen when processing drop index.
+		if idxInst.State == common.INDEX_STATE_DELETED {
+			common.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v In "+
+				"DELETED State. Skipped Mutation Key %v", idxInst.InstId, mut.keys[i])
+			continue
+		}
+
 		switch cmd {
 
 		case common.Upsert:

@@ -877,8 +877,9 @@ func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
 
 //CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
 type MsgClustMgrUpdate struct {
-	mType     MsgType
-	indexList []common.IndexInst
+	mType         MsgType
+	indexList     []common.IndexInst
+	updatedFields MetaUpdateFields
 }
 
 func (m *MsgClustMgrUpdate) GetMsgType() MsgType {
@@ -887,6 +888,10 @@ func (m *MsgClustMgrUpdate) GetMsgType() MsgType {
 
 func (m *MsgClustMgrUpdate) GetIndexList() []common.IndexInst {
 	return m.indexList
+}
+
+func (m *MsgClustMgrUpdate) GetUpdatedFields() MetaUpdateFields {
+	return m.updatedFields
 }
 
 //CLUST_MGR_GET_GLOBAL_TOPOLOGY

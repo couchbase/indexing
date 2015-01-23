@@ -63,21 +63,21 @@ type IndexState int
 
 const (
 	//Create Index Processed
-	INDEX_STATE_CREATED IndexState = 0
+	INDEX_STATE_CREATED IndexState = iota
 	// Index is stream is ready
-	INDEX_STATE_READY = 1
+	INDEX_STATE_READY
 	//Initial Build In Progress
-	INDEX_STATE_INITIAL = 2
+	INDEX_STATE_INITIAL
 	//Catchup In Progress
-	INDEX_STATE_CATCHUP = 3
+	INDEX_STATE_CATCHUP
 	//Maitenance Stream
-	INDEX_STATE_ACTIVE = 4
+	INDEX_STATE_ACTIVE
 	//Drop Index Processed
-	INDEX_STATE_DELETED = 5
+	INDEX_STATE_DELETED
 	//Error State
-	INDEX_STATE_ERROR = 6
+	INDEX_STATE_ERROR
 	// Nil State (used for no-op / invalid)
-	INDEX_STATE_NIL = 7
+	INDEX_STATE_NIL
 )
 
 func (s IndexState) String() string {
@@ -163,7 +163,7 @@ type StreamId uint16
 
 const (
 	NIL_STREAM StreamId = iota
-	MAINT_STREAM 
+	MAINT_STREAM
 	CATCHUP_STREAM
 	INIT_STREAM
 	ALL_STREAMS

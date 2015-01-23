@@ -416,7 +416,8 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 	// Remove all snapshot waiters for indexes that do not exist anymore
 	for id, ws := range s.waitersMap {
-		if _, ok := s.indexInstMap[id]; !ok {
+		if inst, ok := s.indexInstMap[id]; !ok ||
+			inst.State == common.INDEX_STATE_DELETED {
 			for _, w := range ws {
 				w.Error(ErrIndexNotFound)
 			}
@@ -426,7 +427,8 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 	// Cleanup all invalid index's snapshots
 	for idxInstId, is := range s.indexSnapMap {
-		if _, ok := s.indexInstMap[idxInstId]; !ok {
+		if inst, ok := s.indexInstMap[idxInstId]; !ok ||
+			inst.State == common.INDEX_STATE_DELETED {
 			DestroyIndexSnapshot(is)
 			delete(s.indexSnapMap, idxInstId)
 		}

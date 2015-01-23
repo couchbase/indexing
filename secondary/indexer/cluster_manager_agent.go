@@ -182,10 +182,25 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 	common.Debugf("ClustMgr:handleUpdateTopologyForIndex %v", cmd)
 
 	indexList := cmd.(*MsgClustMgrUpdate).GetIndexList()
+	updatedFields := cmd.(*MsgClustMgrUpdate).GetUpdatedFields()
+
+	updatedState := common.INDEX_STATE_NIL
+	updatedStream := common.NIL_STREAM
+	updatedError := ""
 
 	for _, index := range indexList {
+		if updatedFields.state {
+			updatedState = index.State
+		}
+		if updatedFields.stream {
+			updatedStream = index.Stream
+		}
+		if updatedFields.err {
+			updatedError = index.Error
+		}
+
 		err := c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId,
-			index.State, index.Stream, index.Error)
+			updatedState, updatedStream, updatedError)
 		common.CrashOnError(err)
 	}
 
@@ -205,8 +220,7 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 
 	indexInstMap := make(common.IndexInstMap)
 
-	//TODO check what is the right end-condition for iterator
-	for _, defn, err := metaIter.Next(); err == nil; {
+	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
 
 		var idxDefn common.IndexDefn
 		idxDefn = *defn
@@ -218,17 +232,29 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 
 		inst := t.GetIndexInstByDefn(idxDefn.DefnId)
 
-		//TODO: Check if its ok to use DefnId as InstId here. There is no option
-		//as of now, as Manager sends DefnId in CreateIndex.
-		idxInst := common.IndexInst{InstId: common.IndexInstId(idxDefn.DefnId),
+		if inst == nil {
+			common.Warnf("ClustMgr:handleGetGlobalTopology Index Instance Not "+
+				"Found For Index Definition %v. Ignored.", idxDefn)
+			continue
+		}
+
+		//for indexer, Ready state doesn't matter. Till index build,
+		//the index stays in Created state.
+		var state common.IndexState
+		instState := common.IndexState(inst.State)
+		if instState == common.INDEX_STATE_READY {
+			state = common.INDEX_STATE_CREATED
+		} else {
+			state = instState
+		}
+
+		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
 			Defn:   idxDefn,
-			State:  common.IndexState(inst.State),
+			State:  state,
 			Stream: common.StreamId(inst.StreamId),
 		}
 
 		indexInstMap[idxInst.InstId] = idxInst
-
-		_, defn, err = metaIter.Next()
 
 	}
 
@@ -324,13 +350,8 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
 
 	pc := meta.makeDefaultPartitionContainer()
 
-	//FIXME set partitionScheme correctly for now. Needs to be sent correctly
-	//by manager
-	Defn := *indexDefn
-	Defn.PartitionScheme = common.SINGLE
-
 	idxInst := common.IndexInst{InstId: common.IndexInstId(indexDefn.DefnId),
-		Defn:  Defn,
+		Defn:  *indexDefn,
 		State: common.INDEX_STATE_CREATED,
 		Pc:    pc,
 	}
