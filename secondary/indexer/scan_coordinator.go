@@ -132,11 +132,12 @@ type countResponse struct {
 // - To apply limit clause on streaming scan results
 // - To perform graceful termination of stream scanning
 type scanStreamReader struct {
-	sd      *scanDescriptor
-	keysBuf *[]Key
-	bufSize int64
-	count   int64
-	hasNext bool
+	sd        *scanDescriptor
+	keysBuf   *[]Key
+	bufSize   int64
+	count     int64
+	bytesRead int64
+	hasNext   bool
 }
 
 func newResponseReader(sd *scanDescriptor) *scanStreamReader {
@@ -171,6 +172,7 @@ loop:
 
 				k := resp.(Key)
 				sz := int64(len(k.Raw()))
+				r.bytesRead += sz
 				// Page size constraint
 				if r.bufSize > 0 && r.bufSize+sz > r.sd.p.pageSize {
 					keys = r.keysBuf
@@ -248,6 +250,10 @@ func (r *scanStreamReader) ReturnedRows() uint64 {
 	return uint64(r.count)
 }
 
+func (r *scanStreamReader) ReturnedBytes() uint64 {
+	return uint64(r.bytesRead)
+}
+
 //TODO
 //For any query request, check if the replica is available. And use replica in case
 //its more recent or serving less queries.
@@ -259,8 +265,9 @@ type ScanCoordinator interface {
 }
 
 type indexScanStats struct {
-	Requests *uint64
-	Rows     *uint64
+	Requests  *uint64
+	Rows      *uint64
+	BytesRead *uint64
 }
 
 type scanCoordinator struct {
@@ -335,6 +342,19 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 		k = fmt.Sprintf("%s.%s.num_rows", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(*stat.Rows)
 		statsMap[k] = v
+		k = fmt.Sprintf("%s.%s.bytes_read", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(*stat.BytesRead)
+		statsMap[k] = v
+
+		c, err := s.getItemsCount(instId)
+		if err == nil {
+			k := fmt.Sprintf("%s.%s.items_count", inst.Defn.Bucket, inst.Defn.Name)
+			v := fmt.Sprint(c)
+			statsMap[k] = v
+		} else {
+			common.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
+				inst.Defn.Bucket, inst.Defn.Name, err)
+		}
 	}
 
 	replych <- statsMap
@@ -633,6 +653,7 @@ func (s *scanCoordinator) requestHandler(
 
 		s.mu.RLock()
 		(*s.scanStatsMap[indexInst.InstId].Rows) += rdr.ReturnedRows()
+		(*s.scanStatsMap[indexInst.InstId].BytesRead) += rdr.ReturnedBytes()
 		s.mu.RUnlock()
 		common.Infof("%v: SCAN_ID: %v finished scan (%s)", s.logPrefix, sd.scanId, status)
 	}
@@ -955,8 +976,9 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 	for instId, _ := range s.indexInstMap {
 		if _, ok := s.scanStatsMap[instId]; !ok {
 			s.scanStatsMap[instId] = indexScanStats{
-				Requests: new(uint64),
-				Rows:     new(uint64),
+				Requests:  new(uint64),
+				Rows:      new(uint64),
+				BytesRead: new(uint64),
 			}
 		}
 	}
@@ -973,6 +995,46 @@ func (s *scanCoordinator) handleUpdateIndexPartnMap(cmd Message) {
 	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, error) {
+	var count uint64
+
+	snapResch := make(chan interface{}, 1)
+	snapReqMsg := &MsgIndexSnapRequest{
+		ts:        nil,
+		respch:    snapResch,
+		idxInstId: instId,
+	}
+
+	s.supvMsgch <- snapReqMsg
+	msg := <-snapResch
+
+	var is IndexSnapshot
+
+	switch msg.(type) {
+	case IndexSnapshot:
+		is = msg.(IndexSnapshot)
+		if is == nil {
+			return 0, nil
+		}
+	case error:
+		return 0, msg.(error)
+	}
+
+	for _, ps := range is.Partitions() {
+		for _, ss := range ps.Slices() {
+			snap := ss.Snapshot()
+			stopch := make(StopChannel)
+			c, err := snap.CountTotal(stopch)
+			if err != nil {
+				return 0, err
+			}
+			count += c
+		}
+	}
+
+	return count, nil
 }
 
 // Helper method to pretty print timestamp
