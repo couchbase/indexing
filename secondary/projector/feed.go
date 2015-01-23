@@ -875,7 +875,7 @@ func (feed *Feed) bucketFeed(
 	}()
 
 	vbnos := c.Vbno32to16(reqTs.GetVbnos())
-	_ /*vbuuidsi*/, err = feed.bucketDetails(pooln, bucketn, vbnos)
+	_ /*vbuuids*/, err = feed.bucketDetails(pooln, bucketn, vbnos)
 	if err != nil {
 		return nil, err
 	}

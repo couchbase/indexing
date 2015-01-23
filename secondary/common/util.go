@@ -6,6 +6,7 @@ import "io"
 import "net"
 import "net/url"
 import "os"
+import "strings"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
@@ -387,9 +388,17 @@ func ClusterAuthUrl(cluster string) (string, error) {
 }
 
 func ClusterUrl(cluster string) string {
+	host := cluster
+	if strings.HasPrefix(cluster, "http") {
+		u, err := url.Parse(cluster)
+		if err != nil {
+			panic(err) // TODO: should we panic ?
+		}
+		host = u.Host
+	}
 	clusterUrl := url.URL{
 		Scheme: "http",
-		Host:   cluster,
+		Host:   host,
 	}
 
 	return clusterUrl.String()
