@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"time"
 )
@@ -34,7 +35,7 @@ type compactionDaemon struct {
 
 func (cd *compactionDaemon) Start() {
 	if !cd.started {
-		dur := time.Second * time.Duration(cd.config["interval"].Int())
+		dur := time.Second * time.Duration(cd.config["check_period"].Int())
 		cd.ticker = time.NewTicker(dur)
 		cd.started = true
 		go cd.loop()
@@ -51,6 +52,30 @@ func (cd *compactionDaemon) Stop() {
 
 func (cd *compactionDaemon) needsCompaction(is IndexStorageStats) bool {
 	common.Infof("CompactionDaemon: Checking fragmentation of index instance:%v (Data:%v, Disk:%v)", is.InstId, is.Stats.DataSize, is.Stats.DiskSize)
+
+	interval := cd.config["interval"].String()
+	isCompactionInterval := true
+	if interval != "00:00,00:00" {
+		var start_hr, start_min, end_hr, end_min int
+		n, err := fmt.Sscanf(interval, "%d:%d,%d:%d", &start_hr, &start_min, &end_hr, &end_min)
+		start_min += start_hr * 60
+		end_min += end_hr * 60
+
+		if n == 4 && err == nil {
+			hr, min, _ := time.Now().Clock()
+			min += hr * 60
+
+			if min < start_min || min > end_min {
+				isCompactionInterval = false
+			}
+		}
+	}
+
+	if !isCompactionInterval {
+		common.Infof("CompactionDaemon: Compaction attempt skipped since compaction interval is configured for %v", interval)
+		return false
+	}
+
 	if uint64(is.Stats.DiskSize) > cd.config["minSize"].Uint64() {
 		perc := float64(is.Stats.DiskSize-is.Stats.DataSize) * float64(100) / float64(is.Stats.DataSize+1)
 		if float64(perc) >= float64(cd.config["minFrag"].Int()) {
