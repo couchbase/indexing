@@ -301,9 +301,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 		topology.UpdateStreamForIndexInstByDefn(common.IndexDefnId(defnId), common.StreamId(streamId))
 	}
 
-	if len(errStr) != 0 {
-		topology.SetErrorForIndexInstByDefn(common.IndexDefnId(defnId), errStr)
-	}
+	topology.SetErrorForIndexInstByDefn(common.IndexDefnId(defnId), errStr)
 
 	if err := m.repo.SetTopologyByBucket(bucket, topology); err != nil {
 		common.Errorf("LifecycleMgr.handleTopologyChange() : index instance update fails. Reason = %v", err)

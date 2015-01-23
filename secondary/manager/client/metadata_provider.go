@@ -150,7 +150,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		IsPrimary:       isPrimary,
 		SecExprs:        secExprs,
 		ExprType:        c.ExprType(exprType),
-		PartitionScheme: c.HASH,
+		PartitionScheme: c.SINGLE,
 		PartitionKey:    partnExpr,
 		WhereExpr:       whereExpr,
 		Deferred:        deferred,
@@ -189,7 +189,7 @@ func (o *MetadataProvider) CreateIndex(
 		SecExprs:        secExprs,
 		ExprType:        c.ExprType(exprType),
 		WhereExpr:       whereExpr,
-		PartitionScheme: c.HASH,
+		PartitionScheme: c.SINGLE,
 		PartitionKey:    partnExpr}
 
 	watcher, err := o.findWatcher(indexAdminPort)
