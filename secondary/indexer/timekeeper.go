@@ -14,6 +14,7 @@
 package indexer
 
 import (
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"sync"
 	"time"
@@ -34,6 +35,9 @@ type timekeeper struct {
 	indexBuildInfo map[common.IndexInstId]*InitialBuildInfo
 
 	config common.Config
+
+	indexInstMap  common.IndexInstMap
+	indexPartnMap IndexPartnMap
 
 	lock sync.Mutex //lock to protect this structure
 }
@@ -62,6 +66,8 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel,
 		supvRespch:     supvRespch,
 		ss:             InitStreamState(config),
 		config:         config,
+		indexInstMap:   make(common.IndexInstMap),
+		indexPartnMap:  make(IndexPartnMap),
 		indexBuildInfo: make(map[common.IndexInstId]*InitialBuildInfo),
 	}
 
@@ -164,6 +170,15 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 
 	case CONFIG_SETTINGS_UPDATE:
 		tk.handleConfigUpdate(cmd)
+
+	case UPDATE_INDEX_INSTANCE_MAP:
+		tk.handleUpdateIndexInstMap(cmd)
+
+	case UPDATE_INDEX_PARTITION_MAP:
+		tk.handleUpdateIndexPartnMap(cmd)
+
+	case INDEX_PROGRESS_STATS:
+		tk.handleStats(cmd)
 
 	default:
 		common.Errorf("Timekeeper::handleSupvervisorCommands "+
@@ -1610,4 +1625,86 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		tk.repairStream(streamId, bucket)
 	}
 
+}
+
+func (tk *timekeeper) handleUpdateIndexInstMap(cmd Message) {
+	common.Infof("Timekeeper::handleUpdateIndexInstMap %v", cmd)
+	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+	tk.indexInstMap = common.CopyIndexInstMap(indexInstMap)
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleUpdateIndexPartnMap(cmd Message) {
+	common.Infof("Timekeeper::handleUpdateIndexPartnMap %v", cmd)
+	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
+	tk.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleStats(cmd Message) {
+	tk.supvCmdch <- &MsgSuccess{}
+
+	statsMap := make(map[string]string)
+	req := cmd.(*MsgStatsRequest)
+	replych := req.GetReplyChannel()
+
+	// Populate current KV timestamps for all buckets
+	bucketTsMap := make(map[string]Timestamp)
+	for _, inst := range tk.indexInstMap {
+		if _, ok := bucketTsMap[inst.Defn.Bucket]; !ok {
+			kvTs, err := GetCurrentKVTs(tk.config["clusterAddr"].String(),
+				inst.Defn.Bucket, tk.config["numVbuckets"].Int())
+			if err != nil {
+				common.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
+				replych <- statsMap
+				return
+			}
+
+			bucketTsMap[inst.Defn.Bucket] = kvTs
+		}
+	}
+
+	for _, inst := range tk.indexInstMap {
+		k := fmt.Sprintf("%s.%s.num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
+		sum := uint64(0)
+		flushedTs := tk.ss.streamBucketLastFlushedTsMap[inst.Stream][inst.Defn.Bucket]
+		if flushedTs != nil {
+			for _, seqno := range flushedTs.Seqnos {
+				sum += seqno
+			}
+		}
+		v := fmt.Sprint(sum)
+		statsMap[k] = v
+
+		receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
+		queued := uint64(0)
+		if receivedTs != nil {
+			for i, seqno := range receivedTs.Seqnos {
+				flushSeqno := uint64(0)
+				if flushedTs != nil {
+					flushSeqno = flushedTs.Seqnos[i]
+				}
+
+				queued += seqno - flushSeqno
+			}
+		}
+		k = fmt.Sprintf("%s.%s.num_docs_queued", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(queued)
+		statsMap[k] = v
+
+		pending := uint64(0)
+		kvTs := bucketTsMap[inst.Defn.Bucket]
+		for i, seqno := range kvTs {
+			recvdSeqno := uint64(0)
+			if receivedTs != nil {
+				recvdSeqno = receivedTs.Seqnos[i]
+			}
+			pending += uint64(seqno) - recvdSeqno
+		}
+		k = fmt.Sprintf("%s.%s.num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(pending)
+		statsMap[k] = v
+	}
+
+	replych <- statsMap
 }

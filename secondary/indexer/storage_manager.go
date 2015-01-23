@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
 )
@@ -165,6 +166,9 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 
 	case STORAGE_INDEX_COMPACT:
 		s.handleIndexCompaction(cmd)
+
+	case STORAGE_STATS:
+		s.handleStats(cmd)
 	}
 }
 
@@ -518,7 +522,32 @@ func (s *storageMgr) handleGetIndexStorageStats(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 	req := cmd.(*MsgIndexStorageStats)
 	replych := req.GetReplyChannel()
+	stats := s.getIndexStorageStats()
+	replych <- stats
+}
 
+func (s *storageMgr) handleStats(cmd Message) {
+	s.supvCmdch <- &MsgSuccess{}
+
+	statsMap := make(map[string]string)
+	req := cmd.(*MsgStatsRequest)
+	replych := req.GetReplyChannel()
+	stats := s.getIndexStorageStats()
+
+	for _, st := range stats {
+		inst := s.indexInstMap[st.InstId]
+		k := fmt.Sprintf("%s.%s.disk_size", inst.Defn.Bucket, inst.Defn.Name)
+		v := fmt.Sprint(st.Stats.DiskSize)
+		statsMap[k] = v
+		k = fmt.Sprintf("%s.%s.data_size", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(st.Stats.DataSize)
+		statsMap[k] = v
+	}
+
+	replych <- statsMap
+}
+
+func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 	var stats []IndexStorageStats
 	var err error
 	var sts StorageStatistics
@@ -551,7 +580,7 @@ func (s *storageMgr) handleGetIndexStorageStats(cmd Message) {
 		}
 	}
 
-	replych <- stats
+	return stats
 }
 
 func (s *storageMgr) handleIndexCompaction(cmd Message) {

@@ -244,6 +244,10 @@ func (r *scanStreamReader) Done() {
 	}()
 }
 
+func (r *scanStreamReader) ReturnedRows() uint64 {
+	return uint64(r.count)
+}
+
 //TODO
 //For any query request, check if the replica is available. And use replica in case
 //its more recent or serving less queries.
@@ -252,6 +256,11 @@ func (r *scanStreamReader) Done() {
 //the partitions/slices required to be scanned as per query parameters.
 
 type ScanCoordinator interface {
+}
+
+type indexScanStats struct {
+	Requests *uint64
+	Rows     *uint64
 }
 
 type scanCoordinator struct {
@@ -266,6 +275,8 @@ type scanCoordinator struct {
 	indexPartnMap IndexPartnMap
 
 	config common.Config
+
+	scanStatsMap map[common.IndexInstId]indexScanStats
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -278,10 +289,11 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	var err error
 
 	s := &scanCoordinator{
-		supvCmdch: supvCmdch,
-		supvMsgch: supvMsgch,
-		logPrefix: "ScanCoordinator",
-		config:    config,
+		supvCmdch:    supvCmdch,
+		supvMsgch:    supvMsgch,
+		logPrefix:    "ScanCoordinator",
+		config:       config,
+		scanStatsMap: make(map[common.IndexInstId]indexScanStats),
 	}
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
@@ -304,6 +316,28 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	return s, &MsgSuccess{}
 
+}
+
+func (s *scanCoordinator) handleStats(cmd Message) {
+	s.supvCmdch <- &MsgSuccess{}
+
+	statsMap := make(map[string]string)
+	req := cmd.(*MsgStatsRequest)
+	replych := req.GetReplyChannel()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for instId, stat := range s.scanStatsMap {
+		inst := s.indexInstMap[instId]
+		k := fmt.Sprintf("%s.%s.num_requests", inst.Defn.Bucket, inst.Defn.Name)
+		v := fmt.Sprint(*stat.Requests)
+		statsMap[k] = v
+		k = fmt.Sprintf("%s.%s.num_rows", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(*stat.Rows)
+		statsMap[k] = v
+	}
+
+	replych <- statsMap
 }
 
 func (s *scanCoordinator) run() {
@@ -334,6 +368,9 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 
 	case UPDATE_INDEX_PARTITION_MAP:
 		s.handleUpdateIndexPartnMap(cmd)
+
+	case SCAN_STATS:
+		s.handleStats(cmd)
 
 	default:
 		common.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
@@ -445,6 +482,11 @@ func (s *scanCoordinator) requestHandler(
 	if err == nil {
 		indexInst, err = s.findIndexInstance(p.defnID)
 	}
+
+	// Update statistics
+	s.mu.RLock()
+	(*s.scanStatsMap[indexInst.InstId].Requests)++
+	s.mu.RUnlock()
 
 	if err == nil && indexInst.State != common.INDEX_STATE_ACTIVE {
 		err = ErrIndexNotReady
@@ -589,6 +631,9 @@ func (s *scanCoordinator) requestHandler(
 			status = "successful"
 		}
 
+		s.mu.RLock()
+		(*s.scanStatsMap[indexInst.InstId].Rows) += rdr.ReturnedRows()
+		s.mu.RUnlock()
 		common.Infof("%v: SCAN_ID: %v finished scan (%s)", s.logPrefix, sd.scanId, status)
 	}
 }
@@ -898,6 +943,23 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 	common.Infof("ScanCoordinator::handleUpdateIndexInstMap %v", cmd)
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
+
+	// Remove invalid indexes
+	for instId, _ := range s.scanStatsMap {
+		if _, ok := s.indexInstMap[instId]; !ok {
+			delete(s.scanStatsMap, instId)
+		}
+	}
+
+	// Add newly added indexes
+	for instId, _ := range s.indexInstMap {
+		if _, ok := s.scanStatsMap[instId]; !ok {
+			s.scanStatsMap[instId] = indexScanStats{
+				Requests: new(uint64),
+				Rows:     new(uint64),
+			}
+		}
+	}
 
 	s.supvCmdch <- &MsgSuccess{}
 }

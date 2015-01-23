@@ -113,6 +113,10 @@ const (
 	CLEANUP_STREAM
 
 	CONFIG_SETTINGS_UPDATE
+
+	STORAGE_STATS
+	SCAN_STATS
+	INDEX_PROGRESS_STATS
 )
 
 type Message interface {
@@ -834,6 +838,19 @@ func (m *MsgIndexStorageStats) GetMsgType() MsgType {
 }
 
 func (m *MsgIndexStorageStats) GetReplyChannel() chan []IndexStorageStats {
+	return m.respch
+}
+
+type MsgStatsRequest struct {
+	mType  MsgType
+	respch chan map[string]string
+}
+
+func (m *MsgStatsRequest) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgStatsRequest) GetReplyChannel() chan map[string]string {
 	return m.respch
 }
 

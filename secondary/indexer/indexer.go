@@ -23,7 +23,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 type Indexer interface {
@@ -84,6 +83,7 @@ type indexer struct {
 	kvSenderCmdCh      MsgChannel //channel to send messages to kv sender
 	cbqBridgeCmdCh     MsgChannel //channel to send message to cbq sender
 	settingsMgrCmdCh   MsgChannel
+	statsMgrCmdCh      MsgChannel
 	scanCoordCmdCh     MsgChannel //chhannel to send messages to scan coordinator
 
 	mutMgrExitCh MsgChannel //channel to indicate mutation manager exited
@@ -97,6 +97,7 @@ type indexer struct {
 	kvSender      KVSender          //handle to KVSender
 	cbqBridge     CbqBridge         //handle to CbqBridge
 	settingsMgr   settingsManager
+	statsMgr      statsManager
 	scanCoord     ScanCoordinator //handle to ScanCoordinator
 	config        common.Config
 
@@ -123,6 +124,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		kvSenderCmdCh:      make(MsgChannel),
 		cbqBridgeCmdCh:     make(MsgChannel),
 		settingsMgrCmdCh:   make(MsgChannel),
+		statsMgrCmdCh:      make(MsgChannel),
 		scanCoordCmdCh:     make(MsgChannel),
 
 		mutMgrExitCh: make(MsgChannel),
@@ -196,6 +198,12 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	if err := idx.bootstrap(); err != nil {
 		common.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
 		return nil, &MsgError{err: Error{cause: err}}
+	}
+
+	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, config)
+	if res.GetMsgType() != MSG_SUCCESS {
+		common.Errorf("Indexer::NewIndexer statsMgr Init Error", res)
+		return nil, res
 	}
 
 	if !idx.enableManager {
@@ -450,6 +458,18 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		//fwd the message to kv_sender
 		idx.sendMsgToKVSender(msg)
 
+	case STORAGE_STATS:
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
+	case SCAN_STATS:
+		idx.scanCoordCmdCh <- msg
+		<-idx.scanCoordCmdCh
+
+	case INDEX_PROGRESS_STATS:
+		idx.tkCmdCh <- msg
+		<-idx.tkCmdCh
+
 	case MSG_ERROR:
 		//crash for all errors by default
 		common.Fatalf("Indexer::handleWorkerMsgs Fatal Error On Worker Channel %+v", msg)
@@ -612,7 +632,10 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 
 		//get current timestamp from KV and set it as Initial Build Timestamp
-		buildTs, err := idx.getCurrentKVTs(idx.config["clusterAddr"].String(), bucket)
+		buildTs, err := GetCurrentKVTs(idx.config["clusterAddr"].String(),
+			bucket,
+			idx.config["numVbuckets"].Int())
+
 		if err != nil {
 			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
 				idx.config["clusterAddr"].String(), err)
@@ -1371,6 +1394,10 @@ func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
 		return err
 	}
 
+	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.tkCmdCh,
+		"Timekeeper"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1761,40 +1788,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 		bucket, streamId)
 }
 
-func (idx *indexer) getCurrentKVTs(cluster, bucket string) (Timestamp, error) {
-
-	numVbuckets := idx.config["numVbuckets"].Int()
-	ts := NewTimestamp(numVbuckets)
-
-	start := time.Now()
-	if b, err := common.ConnectBucket(cluster, "default", bucket); err == nil {
-		//get all the vb seqnum
-		stats := b.GetStats("vbucket-seqno")
-
-		//for all nodes in cluster
-		for _, nodestat := range stats {
-			//for all vbuckets
-			for i := 0; i < numVbuckets; i++ {
-				vbkey := "vb_" + strconv.Itoa(i) + ":high_seqno"
-				if highseqno, ok := nodestat[vbkey]; ok {
-					if s, err := strconv.Atoi(highseqno); err == nil {
-						ts[i] = Seqno(s)
-					}
-				}
-			}
-		}
-		elapsed := time.Since(start)
-		common.Debugf("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
-		return ts, nil
-
-	} else {
-		common.Errorf("Indexer::getCurrentKVTs Error Connecting to KV Cluster %v", err)
-		return nil, err
-	}
-
-}
-
-//checkBucketExistsInStream returns true if there is an index in the given stream
+//checkBucketExistsInStream returns true if there is no index in the given stream
 //which belongs to the given bucket, else false
 func (idx *indexer) checkBucketExistsInStream(bucket string, streamId common.StreamId) bool {
 
