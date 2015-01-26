@@ -18,6 +18,7 @@ import (
 	"github.com/couchbaselabs/goforestdb"
 	"math/rand"
 	"net"
+	"net/http"
 	"os"
 	"path"
 	"strconv"
@@ -239,6 +240,15 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		common.Errorf("Indexer::NewCompactionmanager Init Error", res)
 		return nil, res
 	}
+
+	// Setup http server
+	go func() {
+		addr := net.JoinHostPort("", idx.config["httpPort"].String())
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			common.Errorf("indexer:: Error Starting Http Server: %v", err)
+			common.CrashOnError(err)
+		}
+	}()
 
 	//start the main indexer loop
 	idx.run()
