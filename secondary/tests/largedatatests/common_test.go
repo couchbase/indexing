@@ -34,14 +34,9 @@ func init() {
 	indexScanAddress = clusterconfig.KVAddress
 
 	// setup cbauth
-	authURL := fmt.Sprintf("http://%s/_cbauth", kvaddress)
-	// FIXME: for now we will say this client is goxdcr, but eventually
-	// ns_server should accomodate test clients.
-	rpcURL := fmt.Sprintf("http://%s/goxdcr", kvaddress)
-	c.MaybeSetEnv("NS_SERVER_CBAUTH_RPC_URL", rpcURL)
-	c.MaybeSetEnv("NS_SERVER_CBAUTH_USER", clusterconfig.Username)
-	c.MaybeSetEnv("NS_SERVER_CBAUTH_PWD", clusterconfig.Password)
-	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, nil)
+	if _, err := cbauth.InternalRetryDefaultInit(kvaddress, clusterconfig.Username, clusterconfig.Password); err != nil {
+		log.Fatalf("Failed to initialize cbauth: %s", err)
+	}
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {

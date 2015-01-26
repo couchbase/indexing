@@ -144,13 +144,9 @@ func parseArgs(arguments []string) (*Command, []string) {
 
 	// setup cbauth
 	up := strings.Split(cmdOptions.auth, ":")
-	authU, authP := up[0], up[1]
-	authURL := fmt.Sprintf("http://%s/_cbauth", cmdOptions.server)
-	rpcURL := fmt.Sprintf("http://%s/index", cmdOptions.server)
-	c.MaybeSetEnv("NS_SERVER_CBAUTH_RPC_URL", rpcURL)
-	c.MaybeSetEnv("NS_SERVER_CBAUTH_USER", authU)
-	c.MaybeSetEnv("NS_SERVER_CBAUTH_PWD", authP)
-	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, nil)
+	if _, err := cbauth.InternalRetryDefaultInit(cmdOptions.server, up[0], up[1]); err != nil {
+		log.Fatalf("Failed to initialize cbauth: %s", err)
+	}
 
 	return cmdOptions, fset.Args()
 }
