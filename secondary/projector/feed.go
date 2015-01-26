@@ -355,7 +355,7 @@ loop:
 				}
 
 			} else {
-				c.Errorf("%v back channel flush %v\n", feed.logPrefix, v.Repr())
+				c.Errorf("%v back channel flush %T\n", feed.logPrefix, msg[0])
 			}
 
 		case <-timeout:
