@@ -225,7 +225,7 @@ func getSettingsConfig(cfg common.Config) (common.Config, error) {
 }
 
 func setNumCPUs(config common.Config) {
-	ncpu := config["settings.max_cpu_procs"].Int()
+	ncpu := config["settings.max_cpu_percent"].Int() / 100
 	if ncpu == 0 {
 		ncpu = runtime.NumCPU()
 	}

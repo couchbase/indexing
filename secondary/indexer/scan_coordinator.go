@@ -339,7 +339,7 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 		k := fmt.Sprintf("%s.%s.num_requests", inst.Defn.Bucket, inst.Defn.Name)
 		v := fmt.Sprint(*stat.Requests)
 		statsMap[k] = v
-		k = fmt.Sprintf("%s.%s.num_rows", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s.%s.num_rows_returned", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(*stat.Rows)
 		statsMap[k] = v
 		k = fmt.Sprintf("%s.%s.bytes_read", inst.Defn.Bucket, inst.Defn.Name)

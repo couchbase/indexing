@@ -357,12 +357,12 @@ var SystemConfig = Config{
 		"Compaction allowed interval",
 		"00:00,00:00",
 	},
-	"indexer.settings.compaction.minFrag": ConfigValue{
+	"indexer.settings.compaction.min_frag": ConfigValue{
 		30,
 		"Compaction fragmentation threshold percentage",
 		30,
 	},
-	"indexer.settings.compaction.minSize": ConfigValue{
+	"indexer.settings.compaction.min_size": ConfigValue{
 		uint64(1024 * 1024),
 		"Compaction min file size",
 		uint64(1024 * 1024),
@@ -387,10 +387,10 @@ var SystemConfig = Config{
 		"Maximum memory used by the indexer buffercache",
 		uint64(0),
 	},
-	"indexer.settings.max_cpu_procs": ConfigValue{
-		1,
-		"Maximum nCPUs used by the processes",
-		1,
+	"indexer.settings.max_cpu_percent": ConfigValue{
+		100,
+		"Maximum nCPUs percent used by the processes",
+		100,
 	},
 }
 

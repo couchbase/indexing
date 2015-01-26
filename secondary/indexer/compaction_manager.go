@@ -76,9 +76,9 @@ func (cd *compactionDaemon) needsCompaction(is IndexStorageStats) bool {
 		return false
 	}
 
-	if uint64(is.Stats.DiskSize) > cd.config["minSize"].Uint64() {
+	if uint64(is.Stats.DiskSize) > cd.config["min_size"].Uint64() {
 		perc := float64(is.Stats.DiskSize-is.Stats.DataSize) * float64(100) / float64(is.Stats.DataSize+1)
-		if float64(perc) >= float64(cd.config["minFrag"].Int()) {
+		if float64(perc) >= float64(cd.config["min_frag"].Int()) {
 			return true
 		}
 	}
