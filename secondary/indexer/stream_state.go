@@ -270,7 +270,8 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 
 	hwtTs := ss.streamBucketHWTMap[streamId][bucket]
 	for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
-		if s == VBS_STREAM_END || s == VBS_CONN_ERROR {
+		if s == VBS_STREAM_END || s == VBS_CONN_ERROR ||
+			s == VBS_REPAIR {
 			repairTs.Seqnos[i] = hwtTs.Seqnos[i]
 			repairTs.Vbuuids[i] = hwtTs.Vbuuids[i]
 			repairTs.Snapshots[i][0] = hwtTs.Snapshots[i][0]

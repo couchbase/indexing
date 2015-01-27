@@ -301,8 +301,6 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 		}
 	}
 
-	//TODO - Use restartTs if present to set the HWT
-
 }
 
 func (tk *timekeeper) handleRemoveIndexFromStream(cmd Message) {
@@ -1607,7 +1605,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	case KV_STREAM_REPAIR:
 
 		common.Infof("Timekeeper::sendRestartMsg Received KV Repair Msg For " +
-			"Stream %v Bucket %v. Aborting Repair")
+			"Stream %v Bucket %v. Attempting Stream Repair.")
 
 		tk.lock.Lock()
 		defer tk.lock.Unlock()
@@ -1620,8 +1618,8 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		tk.supvRespch <- resp
 
 	default:
-		common.Fatalf("Timekeeper::sendRestartMsg Unhandled Response "+
-			"from KV %v For Request %v.", kvresp, restartMsg)
+		common.Fatalf("Timekeeper::sendRestartMsg Unexpected Response "+
+			"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
 		tk.repairStream(streamId, bucket)
 	}
 
