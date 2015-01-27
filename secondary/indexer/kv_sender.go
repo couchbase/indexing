@@ -616,11 +616,12 @@ func sendRestartVbuckets(ap *projClient.Client,
 	//Shutdown the vbucket before restart. If the vbucket is already
 	//running, projector will ignore the request otherwise
 	if err := ap.ShutdownVbuckets(topic, []*protobuf.TsVbuuid{restartTs}); err != nil {
-		c.Fatalf("KVSender::sendRestartVbuckets \n\tUnexpected Error During "+
+		c.Errorf("KVSender::sendRestartVbuckets \n\tUnexpected Error During "+
 			"ShutdownVbuckets Request for Topic %v. Err %v.",
 			topic, err)
 
-		return nil, err
+		//all shutdownVbuckets errors are treated as success as it is a best-effort call.
+		//RestartVbuckets errors will be acted upon.
 	}
 
 	if res, err := ap.RestartVbuckets(topic, []*protobuf.TsVbuuid{restartTs}); err != nil {
