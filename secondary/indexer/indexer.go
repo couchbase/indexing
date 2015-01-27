@@ -839,7 +839,14 @@ func (idx *indexer) handleRollback(msg Message) {
 	common.Debugf("Indexer::handleRollback StreamId %v Bucket %v",
 		streamId, bucket)
 
-	idx.streamBucketRollbackTs[streamId][bucket] = rollbackTs
+	if _, ok := idx.streamBucketRollbackTs[streamId]; ok {
+		idx.streamBucketRollbackTs[streamId][bucket] = rollbackTs
+	} else {
+		bucketRollbackTs := make(BucketRollbackTs)
+		bucketRollbackTs[bucket] = rollbackTs
+		idx.streamBucketRollbackTs[streamId] = bucketRollbackTs
+	}
+
 	idx.streamBucketStatus[streamId][bucket] = STREAM_RECOVERY
 
 	idx.stopBucketStream(streamId, bucket)
