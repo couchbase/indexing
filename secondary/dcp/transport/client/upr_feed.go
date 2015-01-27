@@ -21,22 +21,23 @@ const opaqueFailover = 0xDEADBEEF
 
 // UprEvent memcached events for UPR streams.
 type UprEvent struct {
-	Opcode       transport.CommandCode // Type of event
-	Status       transport.Status      // Response status
-	VBucket      uint16                // VBucket this event applies to
-	Opaque       uint16                // 16 MSB of opaque
-	VBuuid       uint64                // This field is set by downstream
-	Flags        uint32                // Item flags
-	Expiry       uint32                // Item expiration time
-	Key, Value   []byte                // Item key/value
-	OldValue     []byte                // TODO: TBD: old document value
-	Cas          uint64                // CAS value of the item
-	Seqno        uint64                // sequence number of the mutation
-	SnapstartSeq uint64                // start sequence number of this snapshot
-	SnapendSeq   uint64                // End sequence number of the snapshot
-	SnapshotType uint32                // 0: disk 1: memory
-	FailoverLog  *FailoverLog          // Failover log containing vvuid and sequnce number
-	Error        error                 // Error value in case of a failure
+	Opcode     transport.CommandCode // Type of event
+	Status     transport.Status      // Response status
+	VBucket    uint16                // VBucket this event applies to
+	Opaque     uint16                // 16 MSB of opaque
+	VBuuid     uint64                // This field is set by downstream
+	Flags      uint32                // Item flags
+	Expiry     uint32                // Item expiration time
+	Key, Value []byte                // Item key/value
+	OldValue   []byte                // TODO: TBD: old document value
+	Cas        uint64                // CAS value of the item
+	// sequence number of the mutation, also doubles as rollback-seqno.
+	Seqno        uint64
+	SnapstartSeq uint64       // start sequence number of this snapshot
+	SnapendSeq   uint64       // End sequence number of the snapshot
+	SnapshotType uint32       // 0: disk 1: memory
+	FailoverLog  *FailoverLog // Failover log containing vvuid and sequnce number
+	Error        error        // Error value in case of a failure
 }
 
 // UprStream is per stream data structure over an UPR Connection.
@@ -416,6 +417,8 @@ loop:
 				status, rb, flog, err := handleStreamRequest(res)
 				if status == transport.ROLLBACK {
 					event = makeUprEvent(pkt, stream)
+					event.Status = status
+					event.Seqno = rb
 					// rollback stream
 					log.Printf("UPR_STREAMREQ with rollback %d for vb %d Failed: %v\n", rb, vb, err)
 					// delete the stream from the vbmap for the feed
@@ -425,6 +428,7 @@ loop:
 
 				} else if status == transport.SUCCESS {
 					event = makeUprEvent(pkt, stream)
+					event.Status = status
 					event.Seqno = stream.StartSeq
 					event.FailoverLog = flog
 					stream.connected = true

@@ -224,7 +224,7 @@ type controlStreamRequest struct {
 	status mcd.Status
 	vbno   uint16
 	vbuuid uint64
-	seqno  uint64
+	seqno  uint64 // also doubles as rollback-seqno
 }
 
 func (v *controlStreamRequest) Repr() string {
@@ -242,7 +242,7 @@ func (feed *Feed) PostStreamRequest(bucket string, m *mc.UprEvent) {
 		status: m.Status,
 		vbno:   m.VBucket,
 		vbuuid: m.VBuuid,
-		seqno:  m.Seqno,
+		seqno:  m.Seqno, // can also be roll-back seqno, based on status
 	}
 	c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
 }
@@ -324,7 +324,7 @@ loop:
 
 					if v.status == mcd.ROLLBACK {
 						rollTs := feed.rollTss[v.bucket]
-						rollTs.Append(v.vbno, seqno, vbuuid, sStart, sEnd)
+						rollTs.Append(v.vbno, v.seqno, vbuuid, sStart, sEnd)
 
 					} else if v.status == mcd.SUCCESS {
 						actTs := feed.actTss[v.bucket]
@@ -877,7 +877,7 @@ func (feed *Feed) bucketFeed(
 	vbnos := c.Vbno32to16(reqTs.GetVbnos())
 	_ /*vbuuids*/, err = feed.bucketDetails(pooln, bucketn, vbnos)
 	if err != nil {
-		return nil, err
+		return nil, projC.ErrorFeeder
 	}
 
 	// if streams need to be started, make sure that branch
@@ -898,13 +898,13 @@ func (feed *Feed) bucketFeed(
 	if !ok { // the feed is being started for the first time
 		bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn)
 		if err != nil {
-			return nil, err
+			return nil, projC.ErrorFeeder
 		}
 		name := newDCPConnectionName(bucket.Name, feed.topic, c.NewID())
 		feeder, err = OpenBucketFeed(name, bucket)
 		if err != nil {
 			feed.errorf("OpenBucketFeed()", bucketn, err)
-			return nil, err
+			return nil, projC.ErrorFeeder
 		}
 	}
 
@@ -913,14 +913,14 @@ func (feed *Feed) bucketFeed(
 		c.Infof("%v stop-timestamp- %v\n", feed.logPrefix, reqTs.Repr())
 		if err = feeder.EndVbStreams(opaque, reqTs); err != nil {
 			feed.errorf("EndVbStreams()", bucketn, err)
-			return feeder, err
+			return feeder, projC.ErrorFeeder
 		}
 
 	} else if start {
 		c.Infof("%v start-timestamp- %v\n", feed.logPrefix, reqTs.Repr())
 		if err = feeder.StartVbStreams(opaque, reqTs); err != nil {
 			feed.errorf("StartVbStreams()", bucketn, err)
-			return feeder, err
+			return feeder, projC.ErrorFeeder
 		}
 	}
 	return feeder, nil
