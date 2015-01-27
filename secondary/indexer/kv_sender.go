@@ -320,7 +320,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 
 	addrs, err := k.getProjAddrsForVbuckets(restartTs.Bucket, restartTs.GetVbnos())
 	if err != nil {
-		c.Errorf("KVSender::restartVbuckets \n\t Error in fetching cluster info", err)
+		c.Errorf("KVSender::restartVbuckets \n\t Error in fetching cluster info %v", err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
