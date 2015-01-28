@@ -167,9 +167,9 @@ var SystemConfig = Config{
 	// projector dataport client parameters
 	// TODO: this configuration option should be tunnable for each feed.
 	"endpoint.dataport.remoteBlock": ConfigValue{
-		false,
+		true,
 		"should dataport endpoint block when remote is slow ?",
-		false,
+		true,
 	},
 	"endpoint.dataport.keyChanSize": ConfigValue{
 		10000,

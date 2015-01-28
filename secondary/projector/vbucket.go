@@ -275,9 +275,14 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 		}
 		// send data to corresponding endpoint.
 		for raddr, data := range dataForEndpoints {
-			// send might fail due to ErrorChannelFull or ErrorClosed
 			if endpoint, ok := vr.endpoints[raddr]; ok {
-				if endpoint.Send(data) != nil {
+				// FIXME: without the coordinator doing shared topic
+				// management, we will allow the feed to block.
+				// Otherwise, send might fail due to ErrorChannelFull
+				// or ErrorClosed
+				if err := endpoint.Send(data); err != nil {
+					msg := "%v endpoint(%q).Send() failed: %v"
+					c.Errorf(msg, vr.logPrefix, raddr, err)
 					endpoint.Close()
 					delete(vr.endpoints, raddr)
 				}
@@ -290,8 +295,13 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 // send to all endpoints.
 func (vr *VbucketRoutine) broadcast2Endpoints(data interface{}) {
 	for raddr, endpoint := range vr.endpoints {
-		// send might fail due to ErrorChannelFull or ErrorClosed
-		if endpoint.Send(data) != nil {
+		// FIXME: without the coordinator doing shared topic
+		// management, we will allow the feed to block.
+		// Otherwise, send might fail due to ErrorChannelFull
+		// or ErrorClosed
+		if err := endpoint.Send(data); err != nil {
+			msg := "%v endpoint(%q).Send() failed: %v"
+			c.Errorf(msg, vr.logPrefix, raddr, err)
 			endpoint.Close()
 			delete(vr.endpoints, raddr)
 		}
