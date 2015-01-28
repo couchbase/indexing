@@ -2,6 +2,7 @@ package client
 
 import "sync"
 import "fmt"
+import "strings"
 import "encoding/json"
 import "math/rand"
 
@@ -106,36 +107,27 @@ func (b *metadataClient) CreateIndex(
 	secExprs []string, isPrimary bool,
 	planJSON []byte) (common.IndexDefnId, error) {
 
-	var adminport string
+	createPlan := make(map[string]interface{})
+	// plan may not be provided, pick a random indexer node
+	n := rand.Intn(len(b.adminports))
+	plan := map[string]interface{}{ // with default values
+		"nodes":       []string{b.adminports[n]},
+		"defer_build": false,
+	}
 
 	if planJSON != nil && len(planJSON) > 0 {
-		plan := make(map[string]interface{})
-		err := json.Unmarshal(planJSON, &plan)
+		err := json.Unmarshal(planJSON, &createPlan)
 		if err != nil {
 			return common.IndexDefnId(0), err
 		}
-		nodes, ok := plan["nodes"].([]interface{})
-		if ok {
-			if len(nodes) < 1 {
-				return common.IndexDefnId(0), ErrorEmptyDeployment
-			} else if len(nodes) > 1 {
-				return common.IndexDefnId(0), ErrorManyDeployment
-			}
-			adminport, ok = nodes[0].(string) //topology
-			if !ok {
-				return common.IndexDefnId(0), ErrorInvalidDeploymentNode
-			}
+		for key, value := range createPlan { // override default values
+			plan[key] = value
 		}
 	}
-	if adminport == "" {
-		// if plan is not provided pick a random indexer node
-		n := rand.Intn(len(b.adminports))
-		adminport = b.adminports[n]
-	}
 
-	defnID, err := b.mdClient.CreateIndex(
+	defnID, err := b.mdClient.CreateIndexWithPlan(
 		indexName, bucket, using, exprType, partnExpr, whereExpr,
-		adminport, secExprs, isPrimary)
+		secExprs, isPrimary, plan)
 	b.Refresh() // refresh so that we too have IndexMetadata table.
 	return defnID, err
 }
@@ -159,10 +151,17 @@ func (b *metadataClient) BuildIndexes(defnIDs []common.IndexDefnId) error {
 		dispatch[adminport] = append(dispatch[adminport], defnID)
 	}
 
-	// TODO: This needs to be added at the metadata-client.
-	//for adminport, defnIDs := range dispatch {
-	//  b.mdClient.BuildIndexes(adminport, defnIDs)
-	//}
+	errMessages := make([]string, 0)
+	for adminport, defnIDs := range dispatch {
+		err := b.mdClient.BuildIndexes(adminport, defnIDs)
+		if err != nil {
+			msg := fmt.Sprintf("build error with %q indexer: %v", adminport, err)
+			errMessages = append(errMessages, msg)
+		}
+	}
+	if len(errMessages) > 0 {
+		return fmt.Errorf(strings.Join(errMessages, "\n"))
+	}
 	return nil
 }
 

@@ -67,6 +67,7 @@ type Command struct {
 	secStrs   []string
 	isPrimary bool
 	with      string
+	withPlan  map[string]interface{}
 	// options for build index
 	bindexes []string
 	// options for Range, Statistics, Count
@@ -90,7 +91,7 @@ func parseArgs(arguments []string) (*Command, []string) {
 	fset.StringVar(&cmdOptions.opType, "type", "scanAll", "Index command (scan|stats|scanAll|count|nodes|create|build|drop|list)")
 	fset.StringVar(&cmdOptions.indexName, "index", "", "Index name")
 	fset.StringVar(&cmdOptions.bucket, "bucket", "default", "Bucket name")
-	fset.StringVar(&cmdOptions.auth, "auth", "Administrator:asdasd", "Auth user and password")
+	fset.StringVar(&cmdOptions.auth, "auth", "", "Auth user and password")
 	// options for create-index
 	fset.StringVar(&cmdOptions.using, "using", "gsi", "using clause for create index")
 	fset.StringVar(&cmdOptions.exprType, "exprType", "N1QL", "type of expression for create index")
@@ -142,10 +143,20 @@ func parseArgs(arguments []string) (*Command, []string) {
 	cmdOptions.low = c.SecondaryKey(arg2key([]byte(low)))
 	cmdOptions.high = c.SecondaryKey(arg2key([]byte(high)))
 
+	if len(cmdOptions.with) > 0 {
+		err := json.Unmarshal([]byte(cmdOptions.with), &cmdOptions.withPlan)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	// setup cbauth
-	up := strings.Split(cmdOptions.auth, ":")
-	if _, err := cbauth.InternalRetryDefaultInit(cmdOptions.server, up[0], up[1]); err != nil {
-		log.Fatalf("Failed to initialize cbauth: %s", err)
+	if cmdOptions.auth != "" {
+		up := strings.Split(cmdOptions.auth, ":")
+		_, err := cbauth.InternalRetryDefaultInit(cmdOptions.server, up[0], up[1])
+		if err != nil {
+			log.Fatalf("Failed to initialize cbauth: %s", err)
+		}
 	}
 
 	return cmdOptions, fset.Args()
@@ -241,7 +252,7 @@ func handleCommand(
 
 	case "create":
 		var defnID uint64
-		var state c.IndexState
+		var states []c.IndexState
 		if len(cmd.secStrs) == 0 && !cmd.isPrimary || cmd.indexName == "" {
 			return fmt.Errorf("createIndex(): required fields missing")
 		}
@@ -251,17 +262,21 @@ func handleCommand(
 			[]byte(cmd.with))
 		if err == nil {
 			fmt.Printf("Index created: %v\n", defnID)
-			state, err = waitUntilIndexState(
-				client, defnID, c.INDEX_STATE_ACTIVE, 100, 10000)
-			if err == nil {
-				fmt.Println("Index state:", state)
+			if d, ok := cmd.withPlan["defer_build"]; !(ok && d.(bool)) {
+				states, err = waitUntilIndexState(
+					client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
+					100 /*period*/, 10000 /*timeout*/)
+				if err == nil {
+					fmt.Println("Index state:", states[0])
+				}
 			}
 		}
 
 	case "build":
+		var states []c.IndexState
 		defnIDs := make([]uint64, 0, len(cmd.bindexes))
 		for _, bindex := range cmd.bindexes {
-			v := strings.Split(bindex, ".")
+			v := strings.Split(bindex, ":")
 			if len(v) < 0 {
 				return fmt.Errorf("Invalid index specified : %v", bindex)
 			}
@@ -276,6 +291,15 @@ func handleCommand(
 		}
 		if err == nil {
 			err = client.BuildIndexes(defnIDs)
+			fmt.Printf("Index building for: %v\n", defnIDs)
+			states, err = waitUntilIndexState(
+				client, defnIDs, c.INDEX_STATE_ACTIVE,
+				100 /*period*/, 10000 /*timeout*/)
+			if err == nil {
+				for i, defnID := range defnIDs {
+					fmt.Printf("Index state for %v: %v", defnID, states[i])
+				}
+			}
 		}
 
 	case "drop":
@@ -406,7 +430,12 @@ var sanityCommands = [][]string{
 		"-type", "create", "-bucket", "beer-sample", "-index", "index-city",
 		"-fields", "city",
 	},
+	[]string{
+		"-type", "create", "-bucket", "beer-sample", "-index", "index-abv",
+		"-fields", "abv", "-with", "{\"defer_build\": true}",
+	},
 	[]string{"-type", "list", "-bucket", "beer-sample"},
+	// Query on index-city
 	[]string{
 		"-type", "scan", "-bucket", "beer-sample", "-index", "index-city",
 		"-low", "[\"B\"]", "-high", "[\"D\"]", "-incl", "3", "-limit",
@@ -429,6 +458,34 @@ var sanityCommands = [][]string{
 	},
 	[]string{
 		"-type", "drop", "-bucket", "beer-sample", "-index", "index-city",
+	},
+	// Deferred build
+	[]string{
+		"-type", "build", "-indexes", "beer-sample:index-abv",
+	},
+	// Query on index-abv
+	[]string{
+		"-type", "scan", "-bucket", "beer-sample", "-index", "index-abv",
+		"-low", "[2]", "-high", "[20]", "-incl", "3", "-limit",
+		"1000000000",
+	},
+	[]string{
+		"-type", "scanAll", "-bucket", "beer-sample", "-index", "index-abv",
+		"-limit", "10000",
+	},
+	[]string{
+		"-type", "count", "-bucket", "beer-sample", "-index", "index-abv",
+		"-equal", "[10]",
+	},
+	[]string{
+		"-type", "count", "-bucket", "beer-sample", "-index", "index-abv",
+		"-low", "[3]", "-high", "[50]",
+	},
+	[]string{
+		"-type", "count", "-bucket", "beer-sample", "-index", "index-abv",
+	},
+	[]string{
+		"-type", "drop", "-bucket", "beer-sample", "-index", "index-abv",
 	},
 }
 
@@ -542,20 +599,32 @@ loop:
 }
 
 func waitUntilIndexState(
-	client *qclient.GsiClient, defnID uint64,
-	state c.IndexState, period, timeout time.Duration) (c.IndexState, error) {
+	client *qclient.GsiClient, defnIDs []uint64,
+	state c.IndexState, period, timeout time.Duration) ([]c.IndexState, error) {
 
 	expired := time.After(timeout * time.Millisecond)
+	states := make([]c.IndexState, len(defnIDs))
+	pending := len(defnIDs)
 	for {
 		select {
 		case <-expired:
-			return c.INDEX_STATE_ERROR, errors.New("timeout")
+			return nil, errors.New("timeout")
+
 		default:
 		}
-		if st, err := client.IndexState(defnID); err != nil {
-			return st, err
-		} else if st == state {
-			return st, nil
+		for i, defnID := range defnIDs {
+			if states[i] != state {
+				if st, err := client.IndexState(defnID); err != nil {
+					return nil, err
+				} else if st == state {
+					states[i] = state
+					pending--
+					continue
+				}
+			}
+		}
+		if pending == 0 {
+			return states, nil
 		}
 		time.Sleep(period * time.Millisecond)
 	}

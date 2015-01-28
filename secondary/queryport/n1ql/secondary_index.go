@@ -286,7 +286,19 @@ func (gsi *gsiKeyspace) CreateIndex(
 
 // BuildIndexes implements datastore.Indexer{} interface.
 func (gsi *gsiKeyspace) BuildIndexes(names ...string) errors.Error {
-	return errors.NewError(nil, "BUILD INDEXES not yet implemented for GSI.")
+	defnIDs := make([]uint64, len(names))
+	for i, name := range names {
+		index, err := gsi.IndexByName(name)
+		if err != nil {
+			return errors.NewError(err, "BuildIndexes")
+		}
+		defnIDs[i] = string2defnID(index.Id())
+	}
+	err := gsi.gsiClient.BuildIndexes(defnIDs)
+	if err != nil {
+		return errors.NewError(err, "BuildIndexes")
+	}
+	return nil
 }
 
 // Refresh list of indexes and scanner clients.
