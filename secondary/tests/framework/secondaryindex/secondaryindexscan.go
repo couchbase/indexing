@@ -6,7 +6,7 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 )
 
-var scanResults tc.ScanResponse
+// var scanResults tc.ScanResponse
 
 func RangeWithClient(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	distinct bool, limit int64, client *qc.GsiClient) (tc.ScanResponse, error) {
@@ -15,7 +15,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 	scanErr = nil
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	scanResults = make(tc.ScanResponse)
+	scanResults := make(tc.ScanResponse)
 	connErr := client.Range(uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit, func(response qc.ResponseReader) bool {
 		if err := response.Error(); err != nil {
 			scanErr = err
@@ -55,7 +55,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	// ToDo: Create a client pool
 	client := CreateClient(server, "2itest")
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	scanResults = make(tc.ScanResponse)
+	scanResults := make(tc.ScanResponse)
 	connErr := client.Range(uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit, func(response qc.ResponseReader) bool {
 		if err := response.Error(); err != nil {
 			scanErr = err
@@ -95,7 +95,7 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	// ToDo: Create a client pool
 	client := CreateClient(server, "2itest")
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	scanResults = make(tc.ScanResponse)
+	scanResults := make(tc.ScanResponse)
 	connErr := client.Lookup(uint64(defnID), []c.SecondaryKey{values}, distinct, limit, func(response qc.ResponseReader) bool {
 		if err := response.Error(); err != nil {
 			scanErr = err
@@ -134,7 +134,7 @@ func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse
 	// ToDo: Create a client pool
 	client := CreateClient(server, "2itest")
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	scanResults = make(tc.ScanResponse)
+	scanResults := make(tc.ScanResponse)
 	connErr := client.ScanAll(uint64(defnID), limit, func(response qc.ResponseReader) bool {
 		if err := response.Error(); err != nil {
 			scanErr = err
@@ -166,6 +166,7 @@ func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse
 	return scanResults, nil
 }
 
+/*
 func scanCallback(response qc.ResponseReader) bool {
 	if err := response.Error(); err != nil {
 		// panic(err.Error())
@@ -186,4 +187,4 @@ func scanCallback(response qc.ResponseReader) bool {
 		return true
 	}
 	return false
-}
+}*/

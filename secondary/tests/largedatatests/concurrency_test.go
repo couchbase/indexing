@@ -63,8 +63,42 @@ func DeleteDocsForDuration(wg *sync.WaitGroup, seconds float64) {
 	}
 }
 
-func RangeScanForDuration(wg *sync.WaitGroup, seconds float64, t *testing.T, indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
-	distinct bool, limit int64) {
+func CreateDeleteDocsForDuration(wg *sync.WaitGroup, seconds float64) {
+	fmt.Println("CreateDocs:: Creating mutations")
+	defer wg.Done()
+	start := time.Now()
+	for {
+		elapsed := time.Since(start)
+		if elapsed.Seconds() >= seconds {
+			break
+		}
+		
+		docsToBeCreated := GenerateJsons(100, seed, prodfile, bagdir)
+		seed++
+		kv.SetKeyValues(docsToBeCreated, "default", "", clusterconfig.KVAddress)
+		for key, value := range docsToBeCreated {
+			kvdocs[key] = value	
+		}
+		fmt.Println("CreateDocs:: Len of kvdocs", len(kvdocs))
+		
+		i := 0
+		keysToBeDeleted := make(tc.KeyValues)
+		for key, value := range kvdocs {
+			keysToBeDeleted[key] = value
+			i++
+			if i == 5 {
+				break
+			}
+		}
+		kv.DeleteKeys(keysToBeDeleted, "default", "", clusterconfig.KVAddress)
+		// Update docs object with deleted keys
+		for key, _ := range keysToBeDeleted {
+			delete(kvdocs, key)
+		}
+	}
+}
+
+func RangeScanForDuration_ltr(header string, wg *sync.WaitGroup, seconds float64, t *testing.T, indexName, bucketName, server string) {
 	fmt.Println("In Range Scan")	
 	defer wg.Done()
 	client := secondaryindex.CreateClient(clusterconfig.KVAddress, "RangeForDuration")
@@ -76,9 +110,35 @@ func RangeScanForDuration(wg *sync.WaitGroup, seconds float64, t *testing.T, ind
 		if elapsed.Seconds() >= seconds {
 			break
 		}
+		low := random_letter()
+		high := random_letter()
 		
-		scanResults, err := secondaryindex.RangeWithClient(indexName, bucketName, server, low, high, inclusion, distinct, limit, client)
-		log.Printf("%d  RangeScan:: Len of scanResults is: %d", i, len(scanResults))
+		rangeStart := time.Now()
+		scanResults, err := secondaryindex.RangeWithClient(indexName, bucketName, server, []interface{}{ low }, []interface{}{ high }, 3, true, defaultlimit, client)
+		rangeElapsed := time.Since(rangeStart)
+		fmt.Printf("Range Scan of %d user documents took %s\n", len(kvdocs), rangeElapsed)
+		log.Printf("%v %d  RangeScanForDuration:: Len of scanResults is: %d\n", header, i, len(scanResults))
+		i++
+		FailTestIfError(err, "Error in scan", t)
+	}
+}
+
+func RangeScanForDuration_num(header string, wg *sync.WaitGroup, seconds float64, t *testing.T, indexName, bucketName, server string) {
+	fmt.Println("In Range Scan")	
+	defer wg.Done()
+	client := secondaryindex.CreateClient(clusterconfig.KVAddress, "RangeForDuration")
+	defer client.Close()
+	start := time.Now()
+	i := 1
+	for {
+		elapsed := time.Since(start)
+		if elapsed.Seconds() >= seconds {
+			break
+		}
+		low := random_num(15, 80)
+		high := random_num(15, 80)
+		scanResults, err := secondaryindex.RangeWithClient(indexName, bucketName, server, []interface{}{ low }, []interface{}{ high }, 3, true, defaultlimit, client)
+		log.Printf("%v %d  RangeScanForDuration:: Len of scanResults is: %d\n", header, i, len(scanResults))
 		i++
 		FailTestIfError(err, "Error in scan", t)
 	}
@@ -100,8 +160,8 @@ func CreateDropIndexesForDuration(wg *sync.WaitGroup, seconds float64, t *testin
 		err := secondaryindex.CreateSecondaryIndexWithClient(index1, bucketName, indexManagementAddress, []string{"age"}, true, client)
 		FailTestIfError(err, "Error in creating the index", t)
 		time.Sleep(1 * time.Second)
-		scanResults, err := secondaryindex.RangeWithClient(index1, bucketName, indexScanAddress, []interface{}{random(15, 80)}, []interface{}{random(15, 80)}, 3, true, defaultlimit, client)
-		log.Printf("%v  RangeScan:: Len of scanResults is: %d", index1, len(scanResults))
+		scanResults, err := secondaryindex.RangeWithClient(index1, bucketName, indexScanAddress, []interface{}{random_num(15, 80)}, []interface{}{random_num(15, 80)}, 3, true, defaultlimit, client)
+		log.Printf("%v RangeScan CreateDropIndexesForDuration:: Len of scanResults is: %d\n", index1, len(scanResults))
 		FailTestIfError(err, "Error in scan", t)
 		
 		var index2 = "index_firstname"
@@ -109,7 +169,7 @@ func CreateDropIndexesForDuration(wg *sync.WaitGroup, seconds float64, t *testin
 		FailTestIfError(err, "Error in creating the index", t)
 		time.Sleep(1 * time.Second)
 		scanResults, err = secondaryindex.RangeWithClient(index2, bucketName, indexScanAddress, []interface{}{"M"}, []interface{}{"Z"}, 3, true, defaultlimit, client)
-		log.Printf("%v  RangeScan:: Len of scanResults is: %d", index2, len(scanResults))
+		log.Printf("%v  RangeScan CreateDropIndexesForDuration:: Len of scanResults is: %d", index2, len(scanResults))
 		FailTestIfError(err, "Error in scan", t)
 		
 		err = secondaryindex.DropSecondaryIndexWithClient(index1, bucketName, indexManagementAddress, client)
@@ -140,11 +200,11 @@ func SequentialRangeScanForDuration(indexName, bucketName string, seconds float6
 	}
 }
 
-func TestSequentialRangeScans(t *testing.T) {
+func SkipTestSequentialRangeScans(t *testing.T) {
 	fmt.Println("In TestSequentialRangeScans()")
 	prodfile = "../../../../../prataprc/monster/prods/test.prod"
 	bagdir =  "../../../../../prataprc/monster/bags/"	
-	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
 	kvdocs = GenerateJsons(1000, seed, prodfile, bagdir)
@@ -167,7 +227,7 @@ func TestRangeWithConcurrentAddMuts(t *testing.T) {
 	var wg sync.WaitGroup
 	prodfile = "../../../../../prataprc/monster/prods/test.prod"
 	bagdir =  "../../../../../prataprc/monster/bags/"	
-	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
 	kvdocs = GenerateJsons(1000, seed, prodfile, bagdir)
@@ -184,8 +244,8 @@ func TestRangeWithConcurrentAddMuts(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 	
 	wg.Add(2)
-	go CreateDocsForDuration(&wg, 60)
-	go RangeScanForDuration(&wg, 60, t, indexName, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"z"}, 3, true, defaultlimit)	
+	go CreateDocsForDuration(&wg, 120)
+	go RangeScanForDuration_ltr("Thread 1: ", &wg, 120, t, indexName, bucketName, indexScanAddress)
 	wg.Wait()
 }
 
@@ -194,7 +254,7 @@ func TestRangeWithConcurrentDelMuts(t *testing.T) {
 	var wg sync.WaitGroup
 	prodfile = "../../../../../prataprc/monster/prods/test.prod"
 	bagdir =  "../../../../../prataprc/monster/bags/"	
-	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
 	kvdocs = GenerateJsons(30000, seed, prodfile, bagdir)
@@ -212,7 +272,7 @@ func TestRangeWithConcurrentDelMuts(t *testing.T) {
 	
 	wg.Add(2)
 	go DeleteDocsForDuration(&wg, 60)
-	go RangeScanForDuration(&wg, 60, t, indexName, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"z"}, 3, true, defaultlimit)
+	go RangeScanForDuration_ltr("Thread 1: ", &wg, 60, t, indexName, bucketName, indexScanAddress)
 	wg.Wait()
 }
 
@@ -221,18 +281,16 @@ func TestScanWithConcurrentIndexOps(t *testing.T) {
 	var wg sync.WaitGroup
 	prodfile = "../../../../../prataprc/monster/prods/test.prod"
 	bagdir =  "../../../../../prataprc/monster/bags/"	
-	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
-	kvdocs = GenerateJsons(30000, seed, prodfile, bagdir)
+	kvdocs = GenerateJsons(100000, seed, prodfile, bagdir)
 	seed++	
 	
 	fmt.Println("Setting initial JSON docs in KV")
 	kv.SetKeyValues(kvdocs, "default", "", clusterconfig.KVAddress)
 	
 	var indexName = "index_company"
-	// var index1 = "index_age"
-	// var index2 = "index_firstname"
 	var bucketName = "default"
 	
 	fmt.Println("Creating a 2i")
@@ -241,10 +299,84 @@ func TestScanWithConcurrentIndexOps(t *testing.T) {
 	
 	wg.Add(2)
 	go CreateDropIndexesForDuration(&wg, 180, t)
-	go RangeScanForDuration(&wg, 180, t, indexName, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"z"}, 3, true, defaultlimit)
+	go RangeScanForDuration_ltr("Thread 1: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
 	wg.Wait()
 }
 
-func random(min, max float64) float64 {
-  return rand.Float64() * (max - min) + min
+func TestConcurrentScans_SameIndex(t *testing.T) {
+	fmt.Println("In TestConcurrentScans()")
+	var wg sync.WaitGroup
+	prodfile = "../../../../../prataprc/monster/prods/test.prod"
+	bagdir =  "../../../../../prataprc/monster/bags/"	
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	
+	fmt.Println("Generating JSON docs")
+	kvdocs = GenerateJsons(100000, seed, prodfile, bagdir)
+	seed++	
+	
+	fmt.Println("Setting initial JSON docs in KV")
+	kv.SetKeyValues(kvdocs, "default", "", clusterconfig.KVAddress)
+	
+	var indexName = "index_company"
+	var bucketName = "default"
+	
+	fmt.Println("Creating a 2i")
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	
+	wg.Add(6)
+	go RangeScanForDuration_ltr("Thread 1: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 2: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 3: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 4: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 5: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 6: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
+	wg.Wait()
+}
+
+func TestConcurrentScans_MultipleIndexes(t *testing.T) {
+	fmt.Println("In TestConcurrentScans()")
+	var wg sync.WaitGroup
+	prodfile = "../../../../../prataprc/monster/prods/test.prod"
+	bagdir =  "../../../../../prataprc/monster/bags/"	
+	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	
+	fmt.Println("Generating JSON docs")
+	kvdocs = GenerateJsons(100000, seed, prodfile, bagdir)
+	seed++	
+	
+	fmt.Println("Setting initial JSON docs in KV")
+	kv.SetKeyValues(kvdocs, "default", "", clusterconfig.KVAddress)
+	
+	var index1 = "index_company"
+	var index2 = "index_age"
+	var index3 = "index_firstname"
+	var bucketName = "default"
+	
+	fmt.Println("Creating multiple indexes")
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"company"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	
+	err = secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, []string{"age"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	
+	err = secondaryindex.CreateSecondaryIndex(index3, bucketName, indexManagementAddress, []string{"`first-name`"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	
+	wg.Add(3)
+	go RangeScanForDuration_ltr("Thread 1: ", &wg, 1800, t, index1, bucketName, indexScanAddress)
+	go RangeScanForDuration_num("Thread 2: ", &wg, 1800, t, index2, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 3: ", &wg, 1800, t, index3, bucketName, indexScanAddress)
+	wg.Wait()
+}
+
+func random_num(min, max float64) float64 {
+	rand.Seed(time.Now().UnixNano() + 100)
+	return rand.Float64() * (max - min) + min
+}
+
+func random_letter() string {
+	rand.Seed(time.Now().UnixNano())
+	letters := []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    return string(letters[rand.Intn(len(letters))])
 }

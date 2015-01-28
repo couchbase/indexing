@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"github.com/couchbase/cbauth"
-	c "github.com/couchbase/indexing/secondary/common"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"

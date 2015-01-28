@@ -69,7 +69,7 @@ func TestCreateDropCreate(t *testing.T) {
 	tv.Validate(docScanResults, scanResults)
 }
 
-func SkipTestCreate2Drop1Scan2(t *testing.T) {
+func TestCreate2Drop1Scan2(t *testing.T) {
 	fmt.Println("In TestCreate2Drop1Scan2()")
 	var index1 = "index_i1"
 	var index2 = "index_i2"
