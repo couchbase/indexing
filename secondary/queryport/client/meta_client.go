@@ -3,6 +3,7 @@ package client
 import "sync"
 import "fmt"
 import "strings"
+import "errors"
 import "encoding/json"
 import "math/rand"
 
@@ -232,7 +233,15 @@ func (b *metadataClient) IndexState(defnID uint64) (common.IndexState, error) {
 		for _, index := range indexes {
 			if index.Definition.DefnId == common.IndexDefnId(defnID) {
 				if index.Instances != nil && len(index.Instances) > 0 {
-					return index.Instances[0].State, nil
+					state := index.Instances[0].State
+					if len(index.Instances) == 0 {
+						err := fmt.Errorf("no instance for %q", defnID)
+						return state, err
+					} else if index.Instances[0].Error != "" {
+						return state, errors.New(index.Instances[0].Error)
+					} else {
+						return state, nil
+					}
 				}
 				return common.INDEX_STATE_ERROR, ErrorInstanceNotFound
 			}

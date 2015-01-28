@@ -427,7 +427,7 @@ func newSecondaryIndexFromMetaData(
 		whereExpr: "", // TODO: where-clause.
 		state:     gsi2N1QLState[instn.State],
 		err:       instn.Error,
-		//deferred: TODO: populate this field.
+		deferred:  indexDefn.Deferred,
 	}
 	return si, nil
 }
