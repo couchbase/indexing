@@ -31,12 +31,24 @@
 // server behavior:
 //
 // 1. can handle more than one connection from same router.
+//
 // 2. whenever a connection with router
 //    a. gets closed
 //    b. or timeout
 //    all connections with that router will be closed and same will
 //    be intimated to application for catchup connection, using
 //    ConnectionError message.
+//
+// 3. StreamEnd, ConnectionError can be seen by serve due to,
+//    a. rebalance
+//    b. failover
+//    c. projector crash
+//    d. network partition
+//    e. DCP dropping the connection
+//    f. partial stream start
+//    g. bucket delete
+//    h. bucket flush
+//    i. DCP feed error
 
 package dataport
 
