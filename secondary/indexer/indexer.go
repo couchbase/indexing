@@ -480,6 +480,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 
+	case INDEXER_BUCKET_NOT_FOUND:
+		idx.handleBucketNotFound(msg)
+
 	case MSG_ERROR:
 		//crash for all errors by default
 		common.Fatalf("Indexer::handleWorkerMsgs Fatal Error On Worker Channel %+v", msg)
@@ -1027,6 +1030,46 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
 }
 
+func (idx *indexer) handleBucketNotFound(msg Message) {
+
+	streamId := msg.(*MsgRecovery).GetStreamId()
+	bucket := msg.(*MsgRecovery).GetBucket()
+
+	common.Debugf("Indexer::handleBucketNotFound StreamId %v Bucket %v",
+		streamId, bucket)
+
+	var instIdList []common.IndexInstId
+	for _, index := range idx.indexInstMap {
+		if index.Stream == streamId &&
+			index.Defn.Bucket == bucket {
+			instIdList = append(instIdList, index.InstId)
+		}
+	}
+
+	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
+	common.Debugf("Indexer::handleBucketNotFound Updated Index State to DELETED %v",
+		instIdList)
+
+	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+		common.CrashOnError(err)
+	}
+
+	if idx.enableManager {
+		if err := idx.updateMetaInfoForIndexList(instIdList, true, false, false); err != nil {
+			common.CrashOnError(err)
+		}
+	}
+
+	//TODO cleanup streambucket internal maps
+
+	idx.stopBucketStream(streamId, bucket)
+
+	idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+
+}
+
 func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	clientCh MsgChannel) {
 
@@ -1132,6 +1175,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	cmd = &MsgStreamUpdate{mType: OPEN_STREAM,
 		streamId:  buildStream,
+		bucket:    bucket,
 		indexList: indexList,
 		buildTs:   buildTs,
 		respCh:    respCh,
@@ -1167,6 +1211,14 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	go func() {
 	retryloop:
 		for {
+			if !ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
+				common.Errorf("Indexer::sendStreamUpdateForBuildIndex \n\tBucket Not Found "+
+					"For Stream %v Bucket %v", buildStream, bucket)
+				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
+					streamId: buildStream,
+					bucket:   bucket}
+				break retryloop
+			}
 			idx.sendMsgToKVSender(cmd)
 
 			if resp, ok := <-respCh; ok {
@@ -1317,6 +1369,15 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 		go func() {
 		retryloop:
 			for {
+				if !ValidateBucket(idx.config["clusterAddr"].String(), indexInst.Defn.Bucket) {
+					common.Errorf("Indexer::sendStreamUpdateForDropIndex \n\tBucket Not Found "+
+						"For Stream %v Bucket %v", streamId, indexInst.Defn.Bucket)
+					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
+						streamId: streamId,
+						bucket:   indexInst.Defn.Bucket}
+					break retryloop
+				}
+
 				idx.sendMsgToKVSender(cmd)
 
 				if resp, ok := <-respCh; ok {
@@ -1657,6 +1718,11 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	go func() {
 	retryloop:
 		for {
+			if !ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
+				common.Errorf("Indexer::handleInitialBuildDone \n\tBucket Not Found "+
+					"For Stream %v Bucket %v", streamId, bucket)
+				break retryloop
+			}
 			idx.sendMsgToKVSender(cmd)
 
 			if resp, ok := <-respCh; ok {
@@ -1779,6 +1845,11 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	go func() {
 	retryloop:
 		for {
+			if !ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
+				common.Errorf("Indexer::handleMergeInitStream \n\tBucket Not Found "+
+					"For Stream %v Bucket %v", streamId, bucket)
+				break retryloop
+			}
 			idx.sendMsgToKVSender(cmd)
 
 			if resp, ok := <-respCh; ok {
@@ -1917,6 +1988,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 	go func() {
 	retryloop:
 		for {
+
 			idx.sendMsgToKVSender(cmd)
 
 			if resp, ok := <-respCh; ok {
@@ -2017,6 +2089,16 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	go func() {
 	retryloop:
 		for {
+			//validate bucket before every try
+			if !ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
+				common.Errorf("Indexer::startBucketStream \n\tBucket Not Found "+
+					"For Stream %v Bucket %v", streamId, bucket)
+				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
+					streamId: streamId,
+					bucket:   bucket}
+				break retryloop
+			}
+
 			idx.sendMsgToKVSender(cmd)
 
 			if resp, ok := <-respCh; ok {
@@ -2038,7 +2120,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 				default:
 					//log and retry for all other responses
 					common.Errorf("Indexer::startBucketStream Stream %v Bucket %v \n\t"+
-						"Error from Projector %v", resp)
+						"Error from Projector %v. Retrying.", resp)
 				}
 			}
 		}

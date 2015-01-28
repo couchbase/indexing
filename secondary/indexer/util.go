@@ -97,3 +97,30 @@ func GetCurrentKVTs(cluster, bucket string, numVbs int) (Timestamp, error) {
 		return nil, err
 	}
 }
+
+func ValidateBucket(cluster, bucket string) bool {
+
+	var cinfo *common.ClusterInfoCache
+	url, err := common.ClusterAuthUrl(cluster)
+	if err == nil {
+		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+	}
+	if err != nil {
+		common.Fatalf("Indexer::Fail to init ClusterInfoCache : %v", err)
+		common.CrashOnError(err)
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	if err := cinfo.Fetch(); err != nil {
+		common.Errorf("Indexer::Fail to init ClusterInfoCache : %v", err)
+		common.CrashOnError(err)
+	}
+
+	if nids, err := cinfo.GetNodesByBucket(bucket); err == nil && len(nids) != 0 {
+		return true
+	} else {
+		return false
+	}
+}

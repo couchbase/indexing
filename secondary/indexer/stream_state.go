@@ -220,7 +220,7 @@ func (ss *StreamState) updateVbStatus(streamId common.StreamId, bucket string,
 
 }
 
-//computes the restart Ts for all the buckets in a given stream
+//computes the restart Ts for the given bucket and stream
 func (ss *StreamState) computeRestartTs(streamId common.StreamId,
 	bucket string) *common.TsVbuuid {
 

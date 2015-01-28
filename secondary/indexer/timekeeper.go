@@ -1618,9 +1618,22 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		tk.supvRespch <- resp
 
 	default:
-		common.Fatalf("Timekeeper::sendRestartMsg Unexpected Response "+
-			"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
-		tk.repairStream(streamId, bucket)
+		if !ValidateBucket(tk.config["clusterAddr"].String(), bucket) {
+			common.Errorf("Timekeeper::sendRestartMsg \n\tBucket Not Found "+
+				"For Stream %v Bucket %v", streamId, bucket)
+
+			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+
+			tk.ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+
+			tk.supvRespch <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
+				streamId: streamId,
+				bucket:   bucket}
+		} else {
+			common.Fatalf("Timekeeper::sendRestartMsg Error Response "+
+				"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
+			tk.repairStream(streamId, bucket)
+		}
 	}
 
 }
