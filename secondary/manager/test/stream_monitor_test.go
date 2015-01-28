@@ -15,6 +15,7 @@ import (
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	projectorC "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"os"
 	"testing"
 	"time"
 )
@@ -79,6 +80,10 @@ func runMonitorTest() {
 
 	common.Infof("**** Run Monitor Test ******************************************")
 
+	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
+	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
+	os.MkdirAll("./data/", os.ModePerm)
+
 	common.Infof("***** Start TestStreamMgr ")
 	/*
 	   var requestAddr = "localhost:9885"
@@ -93,7 +98,7 @@ func runMonitorTest() {
 	env := new(monitorTestProjectorClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
 	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin, cfg)
 	if err != nil {
 		util.TT.Fatal(err)
 	}

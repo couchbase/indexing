@@ -10,9 +10,11 @@
 package test
 
 import (
+	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
 	fdb "github.com/couchbaselabs/goforestdb"
+	"os"
 	"testing"
 	"time"
 )
@@ -23,6 +25,10 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 
 	common.LogEnable()
 	common.SetLogLevel(common.LogLevelTrace)
+
+	gometaL.LogEnable()
+	gometaL.SetLogLevel(gometaL.LogLevelTrace)
+	gometaL.SetPrefix("Indexing/Gometa")
 
 	common.Infof("Start TestMetadataRepo *********************************************************")
 
@@ -37,7 +43,8 @@ func TestMetadataRepoForIndexDefn(t *testing.T) {
 		runTest(repo, t)
 	*/
 
-	repo, _, err := manager.NewLocalMetadataRepo("localhost:5002", nil, nil)
+	os.MkdirAll("./data/", os.ModePerm)
+	repo, _, err := manager.NewLocalMetadataRepo("localhost:5002", nil, nil, "./data/MetadataStore")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +186,7 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 	found := false
 	for {
 		key, defn, err := iter.Next()
-		if err != nil { 
+		if err != nil {
 			if err != fdb.RESULT_ITERATOR_FAIL {
 				common.Infof("error during iteration %s", err.Error())
 			}

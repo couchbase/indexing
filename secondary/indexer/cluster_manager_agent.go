@@ -88,7 +88,7 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 				cause:    err}}
 	}
 
-	mgr, err := manager.NewIndexManager(admin_addr, scan_addr)
+	mgr, err := manager.NewIndexManager(admin_addr, scan_addr, cfg)
 	if err != nil {
 		common.Errorf("ClustMgrAgent::NewClustMgrAgent Error In Init %v", err)
 		return nil, &MsgError{

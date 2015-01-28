@@ -14,6 +14,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
+	"os"
 	"testing"
 	"time"
 )
@@ -23,6 +24,10 @@ func TestIndexManager(t *testing.T) {
 
 	common.LogEnable()
 	common.SetLogLevel(common.LogLevelTrace)
+	os.MkdirAll("./data/", os.ModePerm)
+
+	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
+	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
 
 	common.Infof("Start Index Manager *********************************************************")
 
@@ -30,7 +35,7 @@ func TestIndexManager(t *testing.T) {
 	factory := new(util.TestDefaultClientFactory)
 	env := new(util.TestDefaultClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
-	mgr, err := manager.NewIndexManagerInternal(msgAddr, "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal(msgAddr, "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +48,7 @@ func TestIndexManager(t *testing.T) {
 	common.Infof("Setup Initial Data *********************************************************")
 
 	//setupInitialData(mgr, t)
-	
+
 	common.Infof("Start Provider *********************************************************")
 
 	var providerId = "TestMetadataProvider"
@@ -55,9 +60,9 @@ func TestIndexManager(t *testing.T) {
 	provider.WatchMetadata(msgAddr)
 
 	common.Infof("Test Iterator *********************************************************")
-	
+
 	runIterator(mgr, t, 0)
-	
+
 	plan := make(map[string]interface{})
 	plan["nodes"] = []string{msgAddr}
 	plan["defer_build"] = true
@@ -67,14 +72,14 @@ func TestIndexManager(t *testing.T) {
 		t.Fatal("Cannot create Index Defn 101 through MetadataProvider")
 	}
 	runIterator(mgr, t, 1)
-	
+
 	newDefnId102, err := provider.CreateIndexWithPlan("manager_test_102", "Default", common.ForestDB,
 		common.N1QL, "Testing", "TestingWhereExpr", []string{"Testing"}, false, plan)
 	if err != nil {
 		t.Fatal("Cannot create Index Defn 102 through MetadataProvider")
 	}
 	runIterator(mgr, t, 2)
-	
+
 	common.Infof("Cleanup Test *********************************************************")
 
 	provider.UnwatchMetadata(msgAddr)
@@ -118,12 +123,12 @@ func setupInitialData_managerTest(mgr *manager.IndexManager, t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
-	err = mgr.UpdateIndexInstance("Default", common.IndexDefnId(101), common.INDEX_STATE_ACTIVE, common.StreamId(0), "") 
+
+	err = mgr.UpdateIndexInstance("Default", common.IndexDefnId(101), common.INDEX_STATE_ACTIVE, common.StreamId(0), "")
 	if err != nil {
 		util.TT.Fatal(err)
 	}
-		
+
 	err = mgr.UpdateIndexInstance("Default", common.IndexDefnId(102), common.INDEX_STATE_ACTIVE, common.StreamId(0), "")
 	if err != nil {
 		util.TT.Fatal(err)
@@ -150,17 +155,17 @@ func cleanSingleIndex_managerTest(mgr *manager.IndexManager, t *testing.T, id co
 func runIterator(mgr *manager.IndexManager, t *testing.T, expectedCount int) {
 
 	metaIter, err := mgr.NewIndexDefnIterator()
-    if err != nil {
-    	t.Fatal(err)
-    }
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	count := 0	
-    for key, _, err := metaIter.Next(); err == nil; key, _, err = metaIter.Next() {
-    	common.Infof("key during iteration %s", key)
-    	count++
-    }
-    
-    if expectedCount != -1 && expectedCount != count {
-    	t.Fatal("ExpectedCount does not match with number of index defn in repository")
-    }
+	count := 0
+	for key, _, err := metaIter.Next(); err == nil; key, _, err = metaIter.Next() {
+		common.Infof("key during iteration %s", key)
+		count++
+	}
+
+	if expectedCount != -1 && expectedCount != count {
+		t.Fatal("ExpectedCount does not match with number of index defn in repository")
+	}
 }

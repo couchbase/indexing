@@ -19,6 +19,7 @@ import (
 	r "github.com/couchbase/gometa/repository"
 	co "github.com/couchbase/indexing/secondary/common"
 	"math"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -45,6 +46,7 @@ type Coordinator struct {
 	factory    protocol.MsgFactory
 	skillch    chan bool
 	idxMgr     *IndexManager
+	basepath   string
 
 	mutex sync.Mutex
 	cond  *sync.Cond
@@ -66,13 +68,14 @@ type CoordinatorState struct {
 // Public API
 /////////////////////////////////////////////////////////////////////////////
 
-func NewCoordinator(repo *MetadataRepo, idxMgr *IndexManager) *Coordinator {
+func NewCoordinator(repo *MetadataRepo, idxMgr *IndexManager, basepath string) *Coordinator {
 	coordinator := new(Coordinator)
 	coordinator.repo = repo
 	coordinator.ready = false
 	coordinator.cond = sync.NewCond(&coordinator.mutex)
 	coordinator.idxMgr = idxMgr
 	coordinator.state = newCoordinatorState()
+	coordinator.basepath = basepath
 
 	return coordinator
 }
@@ -264,7 +267,8 @@ func (s *Coordinator) bootstrap(config string) (err error) {
 	s.txn = common.NewTxnState()
 
 	// Initialize the state to enable voting
-	s.configRepo, err = r.OpenRepositoryWithName(COORDINATOR_CONFIG_STORE)
+	repoName := filepath.Join(s.basepath, COORDINATOR_CONFIG_STORE)
+	s.configRepo, err = r.OpenRepositoryWithName(repoName)
 	if err != nil {
 		return err
 	}

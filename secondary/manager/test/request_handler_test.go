@@ -17,6 +17,7 @@ import (
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 )
@@ -28,6 +29,10 @@ func TestRequestHandler(t *testing.T) {
 	common.LogEnable()
 	common.SetLogLevel(common.LogLevelTrace)
 
+	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
+	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
+	os.MkdirAll("./data/", os.ModePerm)
+
 	common.Infof("Start TestRequestHandler *********************************************************")
 
 	/*
@@ -37,7 +42,7 @@ func TestRequestHandler(t *testing.T) {
 	var config = "./config.json"
 
 	common.Infof("********** Setup index manager")
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, nil)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, nil, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,8 +17,10 @@ import (
 	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"path/filepath"
 	"sync"
 	"time"
+	"os"
 )
 
 ///////////////////////////////////////////////////////
@@ -35,6 +37,7 @@ type IndexManager struct {
 	lifecycleMgr  *LifecycleMgr
 	dataport      string
 	requestServer RequestServer
+	basepath      string
 
 	// stream management
 	streamMgr *StreamManager
@@ -99,7 +102,7 @@ type MetadataNotifier interface {
 
 type RequestServer interface {
 	MakeRequest(opCode gometaC.OpCode, key string, value []byte) error
-	MakeAsyncRequest(opCode gometaC.OpCode, key string, value []byte)  error
+	MakeAsyncRequest(opCode gometaC.OpCode, key string, value []byte) error
 }
 
 ///////////////////////////////////////////////////////
@@ -109,15 +112,18 @@ type RequestServer interface {
 //
 // Create a new IndexManager
 //
-func NewIndexManager(msgAddr string, dataport string) (mgr *IndexManager, err error) {
+func NewIndexManager(msgAddr string, dataport string, config common.Config) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(msgAddr, dataport, NewProjectorAdmin(nil, nil, nil))
+	return NewIndexManagerInternal(msgAddr, dataport, NewProjectorAdmin(nil, nil, nil), config)
 }
 
 //
 // Create a new IndexManager
 //
-func NewIndexManagerInternal(msgAddr string, dataport string, admin StreamAdmin) (mgr *IndexManager, err error) {
+func NewIndexManagerInternal(msgAddr string,
+	dataport string,
+	admin StreamAdmin,
+	config common.Config) (mgr *IndexManager, err error) {
 
 	if common.IsLogEnabled() {
 		gometaL.LogEnable()
@@ -155,7 +161,10 @@ func NewIndexManagerInternal(msgAddr string, dataport string, admin StreamAdmin)
 	// the metadataRepo (including watcher) is operational (e.g.
 	// finish sync with remote metadata repo master).
 	//mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, config, mgr)
-	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(msgAddr, mgr.eventMgr, mgr.lifecycleMgr)
+	mgr.basepath = config["storage_dir"].String()
+	os.Mkdir(mgr.basepath, 0755)	
+	repoName := filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
+	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(msgAddr, mgr.eventMgr, mgr.lifecycleMgr, repoName)
 	if err != nil {
 		mgr.Close()
 		return nil, err
@@ -201,7 +210,7 @@ func (mgr *IndexManager) StartCoordinator(config string) {
 	// put in a channel for later processing (once leader election is done).
 	// Once the coordinator becomes the leader, it will invoke teh stream
 	// manager.
-	mgr.coordinator = NewCoordinator(mgr.repo, mgr)
+	mgr.coordinator = NewCoordinator(mgr.repo, mgr, mgr.basepath)
 	go mgr.coordinator.Run(config)
 }
 
@@ -570,13 +579,13 @@ func (m *IndexManager) startMasterService() error {
 		// Initialize the stream manager.
 		admin.Initialize(monitor)
 
-	    handler := NewMgrMutHandler(m, admin, monitor)
-	    var err error
-	    m.streamMgr, err = NewStreamManager(m, handler, admin, monitor)
-	    if err != nil {
-		    return err
-	    }
-	    m.streamMgr.StartHandlingTopologyChange()
+		handler := NewMgrMutHandler(m, admin, monitor)
+		var err error
+		m.streamMgr, err = NewStreamManager(m, handler, admin, monitor)
+		if err != nil {
+			return err
+		}
+		m.streamMgr.StartHandlingTopologyChange()
 	}
 	return nil
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
+	"os"
 	"testing"
 	"time"
 )
@@ -34,13 +35,17 @@ func TestMetadataProvider(t *testing.T) {
 	common.LogEnable()
 	common.SetLogLevel(common.LogLevelTrace)
 
+	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
+	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
+	os.MkdirAll("./data/", os.ModePerm)
+
 	common.Infof("Start Index Manager *********************************************************")
 
 	var msgAddr = "localhost:9884"
 	factory := new(util.TestDefaultClientFactory)
 	env := new(util.TestDefaultClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
-	mgr, err := manager.NewIndexManagerInternal(msgAddr, "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal(msgAddr, "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +136,7 @@ func TestMetadataProvider(t *testing.T) {
 	}
 	common.Infof("done creating index 103")
 
-	// Update instance (set state to ACTIVE) 
+	// Update instance (set state to ACTIVE)
 	if err := mgr.UpdateIndexInstance("Default", newDefnId2, common.INDEX_STATE_ACTIVE, common.StreamId(100), ""); err != nil {
 		t.Fatal("Fail to update index instance")
 	}
@@ -142,7 +147,7 @@ func TestMetadataProvider(t *testing.T) {
 		t.Fatal("Fail to update index instance")
 	}
 	common.Infof("done updating index 103")
-	
+
 	// Create Index (immediate).  This index is supposed to fail by OnIndexBuild()
 	if _, err := provider.CreateIndex("metadata_provider_test_104", "Default", common.ForestDB,
 		common.N1QL, "Testing", "Testing", msgAddr, []string{"Testing"}, false); err == nil {
