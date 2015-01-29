@@ -541,6 +541,14 @@ func (s *storageMgr) handleStats(cmd Message) {
 		statsMap[k] = v
 		k = fmt.Sprintf("%s.%s.data_size", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(st.Stats.DataSize)
+		k = fmt.Sprintf("%s.%s.get_bytes", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(st.Stats.GetBytes)
+		statsMap[k] = v
+		k = fmt.Sprintf("%s.%s.insert_bytes", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(st.Stats.InsertBytes)
+		statsMap[k] = v
+		k = fmt.Sprintf("%s.%s.delete_bytes", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(st.Stats.DeleteBytes)
 		statsMap[k] = v
 	}
 
@@ -554,6 +562,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 
 	for idxInstId, partnMap := range s.indexPartnMap {
 		var dataSz, diskSz int64
+		var getBytes, insertBytes, deleteBytes int64
 	loop:
 		for _, partnInst := range partnMap {
 			for _, slice := range partnInst.Sc.GetAllSlices() {
@@ -564,6 +573,9 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 
 				dataSz += sts.DataSize
 				diskSz += sts.DiskSize
+				getBytes += sts.GetBytes
+				insertBytes += sts.InsertBytes
+				deleteBytes += sts.DeleteBytes
 			}
 		}
 
@@ -571,8 +583,11 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 			stat := IndexStorageStats{
 				InstId: idxInstId,
 				Stats: StorageStatistics{
-					DataSize: dataSz,
-					DiskSize: diskSz,
+					DataSize:    dataSz,
+					DiskSize:    diskSz,
+					GetBytes:    getBytes,
+					InsertBytes: insertBytes,
+					DeleteBytes: deleteBytes,
 				},
 			}
 

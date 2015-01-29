@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -142,6 +143,9 @@ type fdbSlice struct {
 	//captured by the stats library
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
+
+	// Statistics
+	get_bytes, insert_bytes, delete_bytes int64
 }
 
 func (fdb *fdbSlice) IncrRef() {
@@ -257,6 +261,7 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 				"entry from main index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
+		atomic.AddInt64(&fdb.delete_bytes, int64(len(oldkey.Encoded())))
 
 		//delete from back index
 		if err = fdb.back[workerId].DeleteKV(v.Docid()); err != nil {
@@ -265,6 +270,7 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 				"entry from back index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
+		atomic.AddInt64(&fdb.delete_bytes, int64(len(v.Docid())))
 	}
 
 	//if the Key is nil, nothing needs to be done
@@ -281,6 +287,7 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 			"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, v, k, err)
 		return
 	}
+	atomic.AddInt64(&fdb.insert_bytes, int64(len(v.Docid())+len(k.Encoded())))
 
 	//set in main index
 	if err = fdb.main[workerId].SetKV(k.Encoded(), v.Encoded()); err != nil {
@@ -289,7 +296,7 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 			"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, k, v, err)
 		return
 	}
-
+	atomic.AddInt64(&fdb.insert_bytes, int64(len(k.Encoded())+len(v.Encoded())))
 }
 
 //delete does the actual delete in forestdb
@@ -324,6 +331,7 @@ func (fdb *fdbSlice) delete(docid []byte, workerId int) {
 			docid, oldkey, err)
 		return
 	}
+	atomic.AddInt64(&fdb.delete_bytes, int64(len(oldkey.Encoded())))
 
 	//delete from the back index
 	if err = fdb.back[workerId].DeleteKV(docid); err != nil {
@@ -332,6 +340,7 @@ func (fdb *fdbSlice) delete(docid []byte, workerId int) {
 			"entry from back index for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
 		return
 	}
+	atomic.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 
 }
 
@@ -347,6 +356,7 @@ func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) (Key, error) 
 	var err error
 
 	kbyte, err = fdb.back[workerId].GetKV([]byte(docid))
+	atomic.AddInt64(&fdb.get_bytes, int64(len(kbyte)))
 
 	//forestdb reports get in a non-existent key as an
 	//error, skip that
@@ -647,6 +657,9 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 
 	sts.DataSize = int64(fdb.dbfile.EstimateSpaceUsed())
 	sts.DiskSize = fi.Size()
+	sts.GetBytes = atomic.LoadInt64(&fdb.get_bytes)
+	sts.InsertBytes = atomic.LoadInt64(&fdb.insert_bytes)
+	sts.DeleteBytes = atomic.LoadInt64(&fdb.delete_bytes)
 
 	return sts, nil
 }

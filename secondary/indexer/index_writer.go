@@ -16,6 +16,10 @@ import (
 type StorageStatistics struct {
 	DataSize int64
 	DiskSize int64
+
+	GetBytes    int64
+	InsertBytes int64
+	DeleteBytes int64
 }
 
 type IndexWriter interface {
