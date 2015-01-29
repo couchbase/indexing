@@ -112,7 +112,7 @@ func (b *metadataClient) CreateIndex(
 	// plan may not be provided, pick a random indexer node
 	n := rand.Intn(len(b.adminports))
 	plan := map[string]interface{}{ // with default values
-		"nodes":       []string{b.adminports[n]},
+		"nodes":       []interface{}{b.adminports[n]},
 		"defer_build": false,
 	}
 
