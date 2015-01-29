@@ -354,6 +354,9 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 		v = fmt.Sprint(*stat.WaitTime)
 		statsMap[k] = v
 
+		st := s.serv.Statistics()
+		statsMap["num_connections"] = fmt.Sprint(st.Connections)
+
 		c, err := s.getItemsCount(instId)
 		if err == nil {
 			k := fmt.Sprintf("%s.%s.items_count", inst.Defn.Bucket, inst.Defn.Name)
