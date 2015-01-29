@@ -516,6 +516,10 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 func (feed *Feed) restartVbuckets(
 	req *protobuf.RestartVbucketsRequest) (err error) {
 
+	// update engines and endpoints
+	if err = feed.processSubscribers(req); err != nil { // :SideEffect:
+		return err
+	}
 	// iterate request-timestamp for each bucket.
 	opaque := newOpaque()
 	for _, ts := range req.GetRestartTimestamps() {
