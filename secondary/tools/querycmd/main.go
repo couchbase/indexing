@@ -6,6 +6,8 @@ import "fmt"
 import "log"
 import "os"
 import "strings"
+import "errors"
+import "time"
 
 import "github.com/couchbase/cbauth"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -400,4 +402,37 @@ func getDefnID(
 		}
 	}
 	return 0, false
+}
+
+func waitUntilIndexState(
+	client *qclient.GsiClient, defnIDs []uint64,
+	state c.IndexState, period, timeout time.Duration) ([]c.IndexState, error) {
+
+	expired := time.After(timeout * time.Millisecond)
+	states := make([]c.IndexState, len(defnIDs))
+	pending := len(defnIDs)
+	for {
+		select {
+		case <-expired:
+			return nil, errors.New("timeout")
+
+		default:
+		}
+		for i, defnID := range defnIDs {
+			if states[i] != state {
+				st, err := client.IndexState(defnID)
+				if err != nil {
+					return nil, err
+				} else if st == state {
+					states[i] = state
+					pending--
+					continue
+				}
+			}
+		}
+		if pending == 0 {
+			return states, nil
+		}
+		time.Sleep(period * time.Millisecond)
+	}
 }

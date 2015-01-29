@@ -4,7 +4,6 @@ import "time"
 import "log"
 import "fmt"
 import "reflect"
-import "errors"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
@@ -117,37 +116,5 @@ loop:
 		case <-quitch:
 			break loop
 		}
-	}
-}
-
-func waitUntilIndexState(
-	client *qclient.GsiClient, defnIDs []uint64,
-	state c.IndexState, period, timeout time.Duration) ([]c.IndexState, error) {
-
-	expired := time.After(timeout * time.Millisecond)
-	states := make([]c.IndexState, len(defnIDs))
-	pending := len(defnIDs)
-	for {
-		select {
-		case <-expired:
-			return nil, errors.New("timeout")
-
-		default:
-		}
-		for i, defnID := range defnIDs {
-			if states[i] != state {
-				if st, err := client.IndexState(defnID); err != nil {
-					return nil, err
-				} else if st == state {
-					states[i] = state
-					pending--
-					continue
-				}
-			}
-		}
-		if pending == 0 {
-			return states, nil
-		}
-		time.Sleep(period * time.Millisecond)
 	}
 }
