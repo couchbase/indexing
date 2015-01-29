@@ -596,7 +596,9 @@ func (feed *Feed) shutdownVbuckets(
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
 		if e != nil {
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			//FIXME: in case of shutdown we are not cleaning the bucket !
+			//wait for the code to settle-down and remove this.
+			//feed.cleanupBucket(bucketn, false)
 			continue
 		}
 		ts := ts.SelectByVbuckets(vbnos)
@@ -614,7 +616,9 @@ func (feed *Feed) shutdownVbuckets(
 		_, e = feed.bucketFeed(opaque, true, false, ts)
 		if e != nil {
 			err = e
-			feed.cleanupBucket(bucketn, false)
+			//FIXME: in case of shutdown we are not cleaning the bucket !
+			//wait for the code to settle-down and remove this.
+			//feed.cleanupBucket(bucketn, false)
 			continue
 		}
 		endTs, _, e := feed.waitStreamEnds(opaque, bucketn, ts)
@@ -868,7 +872,7 @@ func (feed *Feed) bucketFeed(
 
 	defer func() {
 		if err != nil && feeder != nil {
-			feed.infof("closing feed for", bucketn, nil)
+			feed.infof("closing upstream-feed for", bucketn, nil)
 			feeder.CloseFeed()
 			feeder = nil
 		}
