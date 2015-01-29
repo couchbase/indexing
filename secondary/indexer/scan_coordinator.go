@@ -268,6 +268,8 @@ type indexScanStats struct {
 	Requests  *uint64
 	Rows      *uint64
 	BytesRead *uint64
+	ScanTime  *int64
+	WaitTime  *int64
 }
 
 type scanCoordinator struct {
@@ -342,8 +344,14 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 		k = fmt.Sprintf("%s.%s.num_rows_returned", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(*stat.Rows)
 		statsMap[k] = v
-		k = fmt.Sprintf("%s.%s.bytes_read", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s.%s.scan_bytes_read", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(*stat.BytesRead)
+		statsMap[k] = v
+		k = fmt.Sprintf("%s.%s.total_scan_duration", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(*stat.ScanTime)
+		statsMap[k] = v
+		k = fmt.Sprintf("%s.%s.scan_wait_duration", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(*stat.WaitTime)
 		statsMap[k] = v
 
 		c, err := s.getItemsCount(instId)
@@ -491,6 +499,7 @@ func (s *scanCoordinator) requestHandler(
 
 	scanId := atomic.AddUint64(&s.reqCounter, 1)
 	timeout := time.Millisecond * time.Duration(s.config["scanTimeout"].Int())
+	startTime := time.Now()
 	sd := &scanDescriptor{
 		scanId:    scanId,
 		p:         p,
@@ -565,6 +574,8 @@ func (s *scanCoordinator) requestHandler(
 		close(respch)
 		return
 	}
+
+	waitDuration := time.Now().Sub(startTime)
 
 	common.Infof("%v: SCAN_ID: %v scan timestamp: %v",
 		s.logPrefix, sd.scanId, ScanTStoString(ts))
@@ -654,6 +665,8 @@ func (s *scanCoordinator) requestHandler(
 		s.mu.RLock()
 		(*s.scanStatsMap[indexInst.InstId].Rows) += rdr.ReturnedRows()
 		(*s.scanStatsMap[indexInst.InstId].BytesRead) += rdr.ReturnedBytes()
+		(*s.scanStatsMap[indexInst.InstId].ScanTime) += time.Now().Sub(startTime).Nanoseconds()
+		(*s.scanStatsMap[indexInst.InstId].WaitTime) += waitDuration.Nanoseconds()
 		s.mu.RUnlock()
 		common.Infof("%v: SCAN_ID: %v finished scan (%s)", s.logPrefix, sd.scanId, status)
 	}
@@ -979,6 +992,8 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 				Requests:  new(uint64),
 				Rows:      new(uint64),
 				BytesRead: new(uint64),
+				ScanTime:  new(int64),
+				WaitTime:  new(int64),
 			}
 		}
 	}
