@@ -800,6 +800,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		common.Debugf("Indexer::handleDropIndex Cleanup Successful for "+
 			"Index Data %v", indexInst)
 		clientCh <- &MsgSuccess{}
+		return
 	}
 
 	//Drop is a two step process. First set the index state as DELETED.
