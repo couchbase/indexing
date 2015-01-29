@@ -121,10 +121,11 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %v already exist. Cannot create.", name))
 	}
 
-	nodes, ok := plan["nodes"].([]string)
-	if !ok || len(nodes) != 1 {
+	ns, ok := plan["nodes"].([]interface{})
+	if !ok || len(ns) != 1 {
 		return c.IndexDefnId(0), errors.New("Create Index is allowed for one and only one node")
 	}
+	nodes := []string{ns[0].(string)}
 
 	deferred, ok := plan["defer_build"].(bool)
 	if !ok {
