@@ -5,16 +5,12 @@ import "flag"
 import "fmt"
 import "log"
 import "os"
-import "reflect"
 import "strings"
-import "time"
-import "errors"
 
 import "github.com/couchbase/cbauth"
 import c "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import "github.com/couchbase/indexing/secondary/queryport"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
 import "github.com/couchbaselabs/goprotobuf/proto"
 import "github.com/couchbaselabs/query/expression"
@@ -188,12 +184,12 @@ func main() {
 	if len(args) > 0 {
 		switch args[0] {
 		case "sanity":
-			err = runSanityTests(client)
+			err = doSanityTests(cmdOptions.server, client)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
 			}
 		case "benchmark":
-			benchmark(cmdOptions.server, "localhost:9101")
+			doBenchmark(cmdOptions.server, "localhost:9101")
 		}
 
 	} else {
@@ -265,7 +261,7 @@ func handleCommand(
 			if d, ok := cmd.withPlan["defer_build"]; !(ok && d.(bool)) {
 				states, err = waitUntilIndexState(
 					client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
-					100 /*period*/, 10000 /*timeout*/)
+					100 /*period*/, 20000 /*timeout*/)
 				if err == nil {
 					fmt.Println("Index state:", states[0])
 				}
@@ -294,7 +290,7 @@ func handleCommand(
 			fmt.Printf("Index building for: %v\n", defnIDs)
 			states, err = waitUntilIndexState(
 				client, defnIDs, c.INDEX_STATE_ACTIVE,
-				100 /*period*/, 10000 /*timeout*/)
+				100 /*period*/, 20000 /*timeout*/)
 			if err == nil {
 				for i, defnID := range defnIDs {
 					fmt.Printf("Index state for %v: %v", defnID, states[i])
@@ -404,228 +400,4 @@ func getDefnID(
 		}
 	}
 	return 0, false
-}
-
-//----------------------------------
-// sanity check for queryport client
-//----------------------------------
-
-func runSanityTests(client *qclient.GsiClient) (err error) {
-	for _, args := range sanityCommands {
-		cmd, _ := parseArgs(args)
-		if err = handleCommand(client, cmd, true); err != nil {
-			fmt.Printf("%#v\n", cmd)
-			fmt.Printf("    %v\n", err)
-		}
-		fmt.Println()
-	}
-	return
-}
-
-var sanityCommands = [][]string{
-	[]string{
-		"-type", "nodes",
-	},
-	[]string{
-		"-type", "create", "-bucket", "beer-sample", "-index", "index-city",
-		"-fields", "city",
-	},
-	[]string{
-		"-type", "create", "-bucket", "beer-sample", "-index", "index-abv",
-		"-fields", "abv", "-with", "{\"defer_build\": true}",
-	},
-	[]string{"-type", "list", "-bucket", "beer-sample"},
-	// Query on index-city
-	[]string{
-		"-type", "scan", "-bucket", "beer-sample", "-index", "index-city",
-		"-low", "[\"B\"]", "-high", "[\"D\"]", "-incl", "3", "-limit",
-		"1000000000",
-	},
-	[]string{
-		"-type", "scanAll", "-bucket", "beer-sample", "-index", "index-city",
-		"-limit", "10000",
-	},
-	[]string{
-		"-type", "count", "-bucket", "beer-sample", "-index", "index-city",
-		"-equal", "[\"Beersel\"]",
-	},
-	[]string{
-		"-type", "count", "-bucket", "beer-sample", "-index", "index-city",
-		"-low", "[\"A\"]", "-high", "[\"s\"]",
-	},
-	[]string{
-		"-type", "count", "-bucket", "beer-sample", "-index", "index-city",
-	},
-	[]string{
-		"-type", "drop", "-bucket", "beer-sample", "-index", "index-city",
-	},
-	// Deferred build
-	[]string{
-		"-type", "build", "-indexes", "beer-sample:index-abv",
-	},
-	// Query on index-abv
-	[]string{
-		"-type", "scan", "-bucket", "beer-sample", "-index", "index-abv",
-		"-low", "[2]", "-high", "[20]", "-incl", "3", "-limit",
-		"1000000000",
-	},
-	[]string{
-		"-type", "scanAll", "-bucket", "beer-sample", "-index", "index-abv",
-		"-limit", "10000",
-	},
-	[]string{
-		"-type", "count", "-bucket", "beer-sample", "-index", "index-abv",
-		"-equal", "[10]",
-	},
-	[]string{
-		"-type", "count", "-bucket", "beer-sample", "-index", "index-abv",
-		"-low", "[3]", "-high", "[50]",
-	},
-	[]string{
-		"-type", "count", "-bucket", "beer-sample", "-index", "index-abv",
-	},
-	[]string{
-		"-type", "drop", "-bucket", "beer-sample", "-index", "index-abv",
-	},
-}
-
-//--------------------
-// benchmark queryport
-//--------------------
-
-func benchmark(cluster, addr string) {
-	qconf := c.SystemConfig.SectionConfig("queryport.indexer.", true)
-	s, err := queryport.NewServer(addr, serverCallb, qconf)
-	if err != nil {
-		log.Fatal(err)
-	}
-	loopback(cluster, addr)
-	s.Close()
-}
-
-func loopback(cluster, raddr string) {
-	qconf := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qconf.SetValue("poolSize", 10)
-	qconf.SetValue("poolOverflow", mock_nclients)
-	client, err := qclient.NewGsiClient(cluster, "querycmd", qconf)
-	if err != nil {
-		log.Fatal(err)
-	}
-	quitch := make(chan int)
-	for i := 0; i < mock_nclients; i++ {
-		t := time.After(time.Duration(mock_duration) * time.Second)
-		go runClient(client, t, quitch)
-	}
-
-	count := 0
-	for i := 0; i < mock_nclients; i++ {
-		n := <-quitch
-		count += n
-	}
-
-	client.Close()
-	fmt.Printf("Completed %v queries in %v seconds\n", count, mock_duration)
-}
-
-func runClient(client *qclient.GsiClient, t <-chan time.Time, quitch chan<- int) {
-	count := 0
-
-loop:
-	for {
-		select {
-		case <-t:
-			quitch <- count
-			break loop
-
-		default:
-			l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
-			err := client.Range(
-				0xABBA /*defnID*/, l, h, 100, true, 1000,
-				func(val qclient.ResponseReader) bool {
-					switch v := val.(type) {
-					case *protobuf.ResponseStream:
-						count++
-						if reflect.DeepEqual(v, testResponseStream) == false {
-							log.Fatal("failed on testResponseStream")
-						}
-					case error:
-						log.Println(v)
-					}
-					return true
-				})
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-	}
-}
-
-func serverCallb(
-	req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
-
-	switch req.(type) {
-	case *protobuf.StatisticsRequest:
-		resp := testStatisticsResponse
-		select {
-		case respch <- resp:
-			close(respch)
-
-		case <-quitch:
-			log.Fatal("unexpected quit", req)
-		}
-
-	case *protobuf.ScanRequest:
-		sendResponse(1, respch, quitch)
-		close(respch)
-
-	case *protobuf.ScanAllRequest:
-		sendResponse(1, respch, quitch)
-		close(respch)
-	}
-}
-
-func sendResponse(
-	count int, respch chan<- interface{}, quitch <-chan interface{}) {
-
-	i := 0
-loop:
-	for ; i < count; i++ {
-		select {
-		case respch <- testResponseStream:
-		case <-quitch:
-			break loop
-		}
-	}
-}
-
-func waitUntilIndexState(
-	client *qclient.GsiClient, defnIDs []uint64,
-	state c.IndexState, period, timeout time.Duration) ([]c.IndexState, error) {
-
-	expired := time.After(timeout * time.Millisecond)
-	states := make([]c.IndexState, len(defnIDs))
-	pending := len(defnIDs)
-	for {
-		select {
-		case <-expired:
-			return nil, errors.New("timeout")
-
-		default:
-		}
-		for i, defnID := range defnIDs {
-			if states[i] != state {
-				if st, err := client.IndexState(defnID); err != nil {
-					return nil, err
-				} else if st == state {
-					states[i] = state
-					pending--
-					continue
-				}
-			}
-		}
-		if pending == 0 {
-			return states, nil
-		}
-		time.Sleep(period * time.Millisecond)
-	}
 }
