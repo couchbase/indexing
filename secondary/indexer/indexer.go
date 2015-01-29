@@ -48,6 +48,7 @@ var (
 	ErrInvalidStream            = errors.New("Invalid Stream")
 	ErrIndexerInRecovery        = errors.New("Indexer In Recovery")
 	ErrKVConnect                = errors.New("Error Connecting KV")
+	ErrUnknownBucket            = errors.New("Unknown Bucket")
 )
 
 type indexer struct {
@@ -535,6 +536,20 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	common.Infof("Indexer::handleCreateIndex %v", indexInst)
 
+	if !ValidateBucket(idx.config["clusterAddr"].String(), indexInst.Defn.Bucket) {
+		common.Errorf("Indexer::handleCreateIndex \n\t Bucket %v Not Found")
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_UNKNOWN_BUCKET,
+					severity: FATAL,
+					cause:    ErrUnknownBucket,
+					category: INDEXER}}
+
+		}
+		return
+	}
+
 	if idx.streamBucketStatus[common.INIT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY ||
 		idx.streamBucketStatus[common.MAINT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY {
 		common.Errorf("Indexer::handleCreateIndex \n\tCannot Process Create Index " +
@@ -613,6 +628,17 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		if ok := idx.checkValidIndexInst(bucket, instIdList, clientCh); !ok {
 			common.Errorf("Indexer::handleBuildIndex \n\tInvalid Index List "+
 				"Bucket %v. IndexList %v", bucket, instIdList)
+			if idx.enableManager {
+				delete(bucketIndexList, bucket)
+				continue
+			} else {
+				return
+			}
+		}
+
+		if !idx.checkBucketExists(bucket, instIdList, clientCh) {
+			common.Errorf("Indexer::handleBuildIndex \n\tCannot Process Build Index."+
+				"Unknown Bucket %v.", bucket)
 			if idx.enableManager {
 				delete(bucketIndexList, bucket)
 				continue
@@ -2716,4 +2742,26 @@ func (idx *indexer) groupIndexListByBucket(instIdList []common.IndexInstId) map[
 	}
 	return bucketInstList
 
+}
+
+func (idx *indexer) checkBucketExists(bucket string,
+	instIdList []common.IndexInstId, clientCh MsgChannel) bool {
+
+	if !ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
+		if idx.enableManager {
+			errStr := fmt.Sprintf("Unknown Bucket %v In Build Request", bucket)
+			idx.bulkUpdateError(instIdList, errStr)
+			if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true); err != nil {
+				common.CrashOnError(err)
+			}
+		} else if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_UNKNOWN_BUCKET,
+					severity: FATAL,
+					cause:    ErrUnknownBucket,
+					category: INDEXER}}
+		}
+		return false
+	}
+	return true
 }
