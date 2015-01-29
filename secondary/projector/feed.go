@@ -926,7 +926,12 @@ func (feed *Feed) bucketFeed(
 		if err != nil {
 			return nil, projC.ErrorFeeder
 		}
-		name := newDCPConnectionName(bucket.Name, feed.topic, c.NewID())
+		uuid, err := c.NewUUID()
+		if err != nil {
+			c.Errorf("Could not generate UUID in c.NewUUID", bucketn, err)
+			return nil, err
+		}
+		name := newDCPConnectionName(bucket.Name, feed.topic, uuid.Uint64())
 		feeder, err = OpenBucketFeed(name, bucket)
 		if err != nil {
 			feed.errorf("OpenBucketFeed()", bucketn, err)
