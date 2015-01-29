@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"github.com/couchbase/indexing/secondary/common"
 	"net/http"
+	"runtime"
 )
 
 type statsManager struct {
@@ -28,6 +29,7 @@ func NewStatsManager(supvCmdch MsgChannel,
 	}
 
 	http.HandleFunc("/stats", s.handleStatsReq)
+	http.HandleFunc("/stats/mem", s.handleMemStatsReq)
 	return s, &MsgSuccess{}
 }
 
@@ -49,6 +51,19 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		}
 
 		bytes, _ := json.Marshal(statsMap)
+		w.WriteHeader(200)
+		w.Write(bytes)
+	} else {
+		w.WriteHeader(400)
+		w.Write([]byte("Unsupported method"))
+	}
+}
+
+func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request) {
+	stats := new(runtime.MemStats)
+	if r.Method == "POST" || r.Method == "GET" {
+		runtime.ReadMemStats(stats)
+		bytes, _ := json.Marshal(stats)
 		w.WriteHeader(200)
 		w.Write(bytes)
 	} else {
