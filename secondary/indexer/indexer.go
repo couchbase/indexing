@@ -1591,9 +1591,9 @@ func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 	//return error
 	for _, index := range idx.indexInstMap {
 
-		//TODO if this index is deleted but not cleanedup yet, skip that
 		if index.Defn.Name == indexInst.Defn.Name &&
-			index.Defn.Bucket == indexInst.Defn.Bucket {
+			index.Defn.Bucket == indexInst.Defn.Bucket &&
+			index.State != common.INDEX_STATE_DELETED {
 
 			common.Errorf("Indexer::checkDuplicateIndex Duplicate Index Name. "+
 				"Name: %v, Duplicate Index: %v", indexInst.Defn.Name, index)
