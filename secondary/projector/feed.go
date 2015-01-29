@@ -2,6 +2,8 @@ package projector
 
 import "fmt"
 import "time"
+import "strings"
+import "net"
 import "runtime/debug"
 
 import "github.com/couchbase/indexing/secondary/dcp"
@@ -1046,7 +1048,7 @@ func (feed *Feed) processSubscribers(req Subscriber) error {
 func (feed *Feed) startEndpoints(routers map[uint64]c.Router) error {
 	for _, router := range routers {
 		for _, raddr := range router.Endpoints() {
-			endpoint, ok := feed.endpoints[raddr]
+			endpoint, ok := feed.getEndpoint(raddr, true /*nodup*/)
 			if (!ok) || (!endpoint.Ping()) {
 				// ignore error while starting endpoint
 				topic, typ := feed.topic, feed.endpointType
@@ -1060,6 +1062,31 @@ func (feed *Feed) startEndpoints(routers map[uint64]c.Router) error {
 		}
 	}
 	return nil
+}
+
+func (feed *Feed) getEndpoint(raddr string, nodup bool) (c.RouterEndpoint, bool) {
+	// FIXME: hack to detect duplicate endpoints.
+	if nodup {
+		parts := strings.Split(raddr, ":")
+		ip := parts[0]
+		netIP := net.ParseIP(ip)
+		for raddr1, endpoint := range feed.endpoints {
+			parts = strings.Split(raddr1, ":")
+			ip1 := parts[0]
+			// check whether both are local-ip.
+			if c.IsIPLocal(ip) && c.IsIPLocal(ip1) {
+				return endpoint, true
+			}
+			// check wethere they are coming from the same remote.
+			netIP1 := net.ParseIP(ip1)
+			if netIP.Equal(netIP1) {
+				return endpoint, true
+			}
+		}
+		return nil, false
+	}
+	endpoint, ok := feed.endpoints[raddr]
+	return endpoint, ok
 }
 
 // - return ErrorInconsistentFeed for malformed feeds.
