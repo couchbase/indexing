@@ -36,7 +36,7 @@ func NewStatsManager(supvCmdch MsgChannel,
 func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" || r.Method == "GET" {
 		statsMap := make(map[string]string)
-		stats_list := []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS}
+		stats_list := []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS}
 		for _, t := range stats_list {
 			ch := make(chan map[string]string)
 			msg := &MsgStatsRequest{

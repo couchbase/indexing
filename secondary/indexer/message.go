@@ -118,6 +118,7 @@ const (
 	STORAGE_STATS
 	SCAN_STATS
 	INDEX_PROGRESS_STATS
+	INDEXER_STATS
 )
 
 type Message interface {

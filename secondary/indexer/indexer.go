@@ -106,6 +106,7 @@ type indexer struct {
 	kvlock sync.Mutex //fine-grain lock for KVSender
 
 	enableManager bool
+	needsRestart  bool
 }
 
 func NewIndexer(config common.Config) (Indexer, Message) {
@@ -441,6 +442,13 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.handleRollback(msg)
 
 	case CONFIG_SETTINGS_UPDATE:
+		cfgUpdate := msg.(*MsgConfigUpdate)
+		newConfig := cfgUpdate.GetConfig()
+		if newConfig["settings.memory_quota"].Uint64() !=
+			idx.config["settings.memory_quota"].Uint64() {
+			idx.needsRestart = true
+		}
+		idx.config = newConfig
 		idx.compactMgrCmdCh <- msg
 		<-idx.compactMgrCmdCh
 		idx.tkCmdCh <- msg
@@ -483,6 +491,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case INDEXER_BUCKET_NOT_FOUND:
 		idx.handleBucketNotFound(msg)
+
+	case INDEXER_STATS:
+		idx.handleStats(msg)
 
 	case MSG_ERROR:
 		//crash for all errors by default
@@ -2765,4 +2776,12 @@ func (idx *indexer) checkBucketExists(bucket string,
 		return false
 	}
 	return true
+}
+
+func (idx *indexer) handleStats(cmd Message) {
+	statsMap := make(map[string]string)
+	req := cmd.(*MsgStatsRequest)
+	replych := req.GetReplyChannel()
+	statsMap["needs_restart"] = fmt.Sprint(idx.needsRestart)
+	replych <- statsMap
 }
