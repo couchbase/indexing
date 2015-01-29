@@ -352,9 +352,10 @@ func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 
 	case dataport.ConnectionError:
 		common.Debugf("MutationStreamReader::handleStreamInfoMsg \n\tReceived ConnectionError "+
-			"from Client for Stream %v.", r.streamId)
+			"from Client for Stream %v %v.", r.streamId, msg.(dataport.ConnectionError))
 
-		//send a separate message for each bucket
+		//send a separate message for each bucket. If the ConnError is with empty vblist,
+		//the message is ignored.
 		for bucket, vbList := range msg.(dataport.ConnectionError) {
 			supvMsg = &MsgStreamInfo{mType: STREAM_READER_CONN_ERROR,
 				streamId: r.streamId,

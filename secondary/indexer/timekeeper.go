@@ -775,7 +775,7 @@ func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
 
 func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
-	common.Tracef("Timekeeper::handleStreamBegin %v", cmd)
+	common.Debugf("Timekeeper::handleStreamBegin %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -828,7 +828,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
-	common.Tracef("Timekeeper::handleStreamEnd %v", cmd)
+	common.Debugf("Timekeeper::handleStreamEnd %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -1604,8 +1604,8 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 	case KV_STREAM_REPAIR:
 
-		common.Infof("Timekeeper::sendRestartMsg Received KV Repair Msg For " +
-			"Stream %v Bucket %v. Attempting Stream Repair.")
+		common.Infof("Timekeeper::sendRestartMsg Received KV Repair Msg For "+
+			"Stream %v Bucket %v. Attempting Stream Repair.", streamId, bucket)
 
 		tk.lock.Lock()
 		defer tk.lock.Unlock()
