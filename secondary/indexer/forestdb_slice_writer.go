@@ -16,7 +16,6 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -748,11 +747,11 @@ func newFdbFile(dirpath string, newVersion bool) string {
 	var version int = 0
 
 	pattern := fmt.Sprintf("data.fdb.*")
-	files, _ := filepath.Glob(path.Join(dirpath, pattern))
+	files, _ := filepath.Glob(filepath.Join(dirpath, pattern))
 	sort.Strings(files)
 	// Pick the first file with least version
 	if len(files) > 0 {
-		filename := path.Base(files[0])
+		filename := filepath.Base(files[0])
 		_, err := fmt.Sscanf(filename, "data.fdb.%d", &version)
 		if err != nil {
 			panic(fmt.Sprintf("Invalid data file %s (%v)", files[0], err))
@@ -764,5 +763,5 @@ func newFdbFile(dirpath string, newVersion bool) string {
 	}
 
 	newFilename := fmt.Sprintf("data.fdb.%d", version)
-	return path.Join(dirpath, newFilename)
+	return filepath.Join(dirpath, newFilename)
 }

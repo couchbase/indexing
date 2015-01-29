@@ -20,7 +20,7 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -1450,7 +1450,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		if _, e := os.Stat(storage_dir); e != nil {
 			common.CrashOnError(e)
 		}
-		path := path.Join(storage_dir, IndexPath(&indexInst, SliceId(0)))
+		path := filepath.Join(storage_dir, IndexPath(&indexInst, SliceId(0)))
 		//add a single slice per partition for now
 		if slice, err := NewForestDBSlice(path,
 			0, indexInst.Defn.DefnId, indexInst.InstId, idx.config); err == nil {
