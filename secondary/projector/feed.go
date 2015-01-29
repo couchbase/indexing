@@ -1071,7 +1071,7 @@ func (feed *Feed) getEndpoint(raddr string, nodup bool) (c.RouterEndpoint, bool)
 		ip := parts[0]
 		netIP := net.ParseIP(ip)
 		for raddr1, endpoint := range feed.endpoints {
-			parts1 = strings.Split(raddr1, ":")
+			parts1 := strings.Split(raddr1, ":")
 			// check whether ports are same.
 			if parts[1] != parts1[1] {
 				continue
