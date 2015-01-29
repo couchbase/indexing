@@ -516,10 +516,14 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 func (feed *Feed) restartVbuckets(
 	req *protobuf.RestartVbucketsRequest) (err error) {
 
-	// update engines and endpoints
-	if err = feed.processSubscribers(req); err != nil { // :SideEffect:
-		return err
+	// FIXME: restart-vbuckets implies a repair Endpoint.
+	endpoints := make([]string, 0)
+	for raddr := range feed.endpoints {
+		endpoints = append(endpoints, raddr)
 	}
+	rpReq := protobuf.NewRepairEndpointsRequest(feed.topic, endpoints)
+	feed.repairEndpoints(rpReq)
+
 	// iterate request-timestamp for each bucket.
 	opaque := newOpaque()
 	for _, ts := range req.GetRestartTimestamps() {
