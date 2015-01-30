@@ -1070,11 +1070,14 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 			bucketAbortInProgressMap := tk.ss.streamBucketAbortInProgressMap[streamId]
 			bucketAbortInProgressMap[bucket] = true
 
-			//empty the TSList for this bucket and stream so
-			//there is no further processing for this bucket.
-			tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
-			tsList.Init()
 		}
+		//TODO As prepareRecovery is now done only if rollback is received,
+		//no point flushing more mutations. Its going to be rolled back anyways.
+		//Once Catchup Stream is back, move this logic back.
+		//empty the TSList for this bucket and stream so
+		//there is no further processing for this bucket.
+		tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
+		tsList.Init()
 
 	} else {
 
