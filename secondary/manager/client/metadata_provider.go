@@ -118,7 +118,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	secExprs []string, isPrimary bool, plan map[string]interface{}) (c.IndexDefnId, error) {
 
 	if o.FindIndexByName(name, bucket) != nil {
-		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %v already exist. Cannot create.", name))
+		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %s already exist.", name))
 	}
 
 	ns, ok := plan["nodes"].([]interface{})
@@ -140,7 +140,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 	defnID, err := c.NewIndexDefnId()
 	if err != nil {
-		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fails to create index. Fail to create uuid for index definition id."))
+		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fails to create index. Fail to create uuid for index definition."))
 	}
 
 	idxDefn := &c.IndexDefn{
@@ -173,12 +173,12 @@ func (o *MetadataProvider) CreateIndex(
 	secExprs []string, isPrimary bool) (c.IndexDefnId, error) {
 
 	if o.FindIndexByName(name, bucket) != nil {
-		return c.IndexDefnId(0), errors.New("Index %v already exist. Cannot create.")
+		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %s already exist.", name))
 	}
 
 	defnID, err := c.NewIndexDefnId()
 	if err != nil {
-		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fails to create index. Fail to create uuid for index definition id."))
+		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fails to create index. Fail to create uuid for index definition."))
 	}
 
 	idxDefn := &c.IndexDefn{
@@ -212,7 +212,7 @@ func (o *MetadataProvider) CreateIndex(
 func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId, indexAdminPort string) error {
 
 	if o.FindIndex(defnID) == nil {
-		return errors.New("Index %v does not exist. Cannot drop.")
+		return errors.New("Index does not exist.")
 	}
 
 	watcher, err := o.findWatcher(indexAdminPort)
@@ -229,10 +229,10 @@ func (o *MetadataProvider) BuildIndexes(adminport string, defnIDs []c.IndexDefnI
 	for _, id := range defnIDs {
 		meta := o.FindIndex(id)
 		if meta == nil {
-			return errors.New(fmt.Sprintf("Index %v not found.  Cannot build index.", meta.Definition.Name))
+			return errors.New(fmt.Sprintf("Index %s not found", meta.Definition.Name))
 		}
 		if meta.Instances != nil && meta.Instances[0].State != c.INDEX_STATE_READY {
-			return errors.New(fmt.Sprintf("Index %v is not in READY state.  Cannot build index.", meta.Definition.Name))
+			return errors.New(fmt.Sprintf("Index %s is not in READY state.", meta.Definition.Name))
 		}
 	}
 
