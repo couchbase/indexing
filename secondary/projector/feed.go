@@ -2,8 +2,6 @@ package projector
 
 import "fmt"
 import "time"
-import "strings"
-import "net"
 import "runtime/debug"
 
 import "github.com/couchbase/indexing/secondary/dcp"
@@ -519,11 +517,8 @@ func (feed *Feed) restartVbuckets(
 	req *protobuf.RestartVbucketsRequest) (err error) {
 
 	// FIXME: restart-vbuckets implies a repair Endpoint.
-	endpoints := make([]string, 0)
-	for raddr := range feed.endpoints {
-		endpoints = append(endpoints, raddr)
-	}
-	rpReq := protobuf.NewRepairEndpointsRequest(feed.topic, endpoints)
+	raddrs := feed.endpointRaddrs()
+	rpReq := protobuf.NewRepairEndpointsRequest(feed.topic, raddrs)
 	feed.repairEndpoints(rpReq)
 
 	// iterate request-timestamp for each bucket.
@@ -783,38 +778,36 @@ func (feed *Feed) delInstances(req *protobuf.DelInstancesRequest) error {
 }
 
 // endpoints are independent.
-func (feed *Feed) repairEndpoints(req *protobuf.RepairEndpointsRequest) error {
-	var endpoint c.RouterEndpoint
-	var ok, pingOk bool
-	var raddr1 string
+func (feed *Feed) repairEndpoints(
+	req *protobuf.RepairEndpointsRequest) (err error) {
 
 	prefix := feed.logPrefix
 	for _, raddr := range req.GetEndpoints() {
 		c.Debugf("%v trying to repair %q\n", prefix, raddr)
-		raddr1, endpoint, ok = feed.getEndpoint(raddr, true /*nodup*/)
-		if ok {
-			if pingOk = endpoint.Ping(); !pingOk {
-				c.Infof("%v endpoint %q restarting ...\n", prefix, raddr)
-			} else {
-				feed.endpoints[raddr] = endpoint  // :SideEffect:
-				feed.endpoints[raddr1] = endpoint // :SideEffect:
-			}
-		}
-		if !ok || !pingOk {
-			// ignore error while starting endpoint
-			topic, typ := feed.topic, feed.endpointType
-			endpoint, err := feed.epFactory(topic, typ, raddr)
-			if err != nil {
-				return err
+		raddr1, endpoint, e := feed.getEndpoint(raddr)
+		if e != nil {
+			c.Errorf("%v error repairing endpoint %q\n", prefix, raddr1)
+			err = e
+			continue
 
-			} else if endpoint != nil {
-				// FIXME: hack to make both node-name available from
-				// endpoints table.
-				feed.endpoints[raddr] = endpoint // :SideEffect:
-				feed.endpoints[raddr1] = endpoint
+		} else if (endpoint == nil) || (endpoint != nil && !endpoint.Ping()) {
+			// endpoint found but not active or enpoint is not found.
+			c.Infof("%v endpoint %q restarting ...\n", prefix, raddr)
+			topic, typ := feed.topic, feed.endpointType
+			endpoint, e = feed.epFactory(topic, typ, raddr)
+			if e != nil {
+				c.Errorf("%v error repairing endpoint %q\n", prefix, raddr1)
+				err = e
+				continue
 			}
+
+		} else {
+			c.Infof("%v endpoint %q active ...\n", prefix, raddr)
 		}
-		c.Infof("%v endpoint %q active ...\n", prefix, raddr)
+		// FIXME: hack to make both node-name available from
+		// endpoints table.
+		feed.endpoints[raddr] = endpoint  // :SideEffect:
+		feed.endpoints[raddr1] = endpoint // :SideEffect:
 	}
 
 	// posted to each kv data-path
@@ -1064,72 +1057,54 @@ func (feed *Feed) processSubscribers(req Subscriber) error {
 // feed.endpoints is updated with freshly started endpoint,
 // if an endpoint is already present and active it is
 // reused.
-func (feed *Feed) startEndpoints(routers map[uint64]c.Router) error {
-	var endpoint c.RouterEndpoint
-	var ok, pingOk bool
-	var raddr1 string
-
+func (feed *Feed) startEndpoints(routers map[uint64]c.Router) (err error) {
 	prefix := feed.logPrefix
 	for _, router := range routers {
 		for _, raddr := range router.Endpoints() {
-			raddr1, endpoint, ok = feed.getEndpoint(raddr, true /*nodup*/)
-			if ok {
-				if pingOk = endpoint.Ping(); !pingOk {
-					c.Infof("%v endpoint %q restarted ...\n", prefix, raddr)
-				} else {
-					feed.endpoints[raddr] = endpoint  // :SideEffect:
-					feed.endpoints[raddr1] = endpoint // :SideEffect:
-				}
-			}
-			if !ok || !pingOk {
-				// ignore error while starting endpoint
+			raddr1, endpoint, e := feed.getEndpoint(raddr)
+			if e != nil {
+				c.Errorf("%v error starting endpoint %q\n", prefix, raddr1)
+				err = e
+				continue
+
+			} else if (endpoint == nil) || (endpoint != nil && !endpoint.Ping()) {
+				// endpoint found but not active or enpoint is not found.
+				c.Infof("%v endpoint %q starting ...\n", prefix, raddr)
 				topic, typ := feed.topic, feed.endpointType
-				endpoint, err := feed.epFactory(topic, typ, raddr)
-				if err != nil {
-					return err
-				} else if endpoint != nil {
-					// FIXME: hack to make both node-name available from
-					// endpoints table.
-					feed.endpoints[raddr] = endpoint // :SideEffect:
-					feed.endpoints[raddr1] = endpoint
+				endpoint, e = feed.epFactory(topic, typ, raddr)
+				if e != nil {
+					c.Errorf("%v error repairing endpoint %q\n", prefix, raddr1)
+					err = e
+					continue
 				}
+
+			} else {
+				c.Infof("%v endpoint %q active ...\n", prefix, raddr)
 			}
+			// FIXME: hack to make both node-name available from
+			// endpoints table.
+			feed.endpoints[raddr] = endpoint  // :SideEffect:
+			feed.endpoints[raddr1] = endpoint // :SideEffect:
 		}
 	}
 	return nil
 }
 
-func (feed *Feed) getEndpoint(
-	raddr string, nodup bool) (string, c.RouterEndpoint, bool) {
-
+func (feed *Feed) getEndpoint(raddr string) (string, c.RouterEndpoint, error) {
 	prefix := feed.logPrefix
-	// FIXME: hack to detect duplicate endpoints.
-	if nodup {
-		parts := strings.Split(raddr, ":")
-		ip := parts[0]
-		netIP := net.ParseIP(ip)
-		for raddr1, endpoint := range feed.endpoints {
-			parts1 := strings.Split(raddr1, ":")
-			// check whether ports are same.
-			if parts[1] != parts1[1] {
-				continue
-			}
-			ip1 := parts1[0]
-			// check whether both are local-ip.
-			if c.IsIPLocal(ip) && c.IsIPLocal(ip1) {
-				c.Debugf("%v endpoint %q takenas %q ...", prefix, raddr, raddr1)
-				return raddr1, endpoint, true
-			}
-			// check wethere they are coming from the same remote.
-			netIP1 := net.ParseIP(ip1)
-			if netIP.Equal(netIP1) {
-				c.Debugf("%v endpoint %q takenas %q ...", prefix, raddr, raddr1)
-				return raddr1, endpoint, true
-			}
-		}
+	_, eqRaddr, err := c.EquivalentIP(raddr, feed.endpointRaddrs())
+	if err != nil {
+		return raddr, nil, err
+
+	} else if raddr != eqRaddr {
+		c.Debugf("%v endpoint %q takenas %q ...", prefix, raddr, eqRaddr)
+		raddr = eqRaddr
 	}
 	endpoint, ok := feed.endpoints[raddr]
-	return raddr, endpoint, ok
+	if ok {
+		return raddr, endpoint, nil
+	}
+	return raddr, nil, nil
 }
 
 // - return ErrorInconsistentFeed for malformed feeds.
@@ -1166,6 +1141,14 @@ func (feed *Feed) engineNames() []string {
 		names = append(names, fmt.Sprintf("%v", uuid))
 	}
 	return names
+}
+
+func (feed *Feed) endpointRaddrs() []string {
+	raddrs := make([]string, 0, len(feed.endpoints))
+	for raddr := range feed.endpoints {
+		raddrs = append(raddrs, raddr)
+	}
+	return raddrs
 }
 
 // wait for kvdata to post StreamRequest.

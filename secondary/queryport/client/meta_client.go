@@ -390,12 +390,20 @@ func (b *metadataClient) getNode(
 
 // given queryport fetch the corresponding adminport for the indexer node.
 func (b *metadataClient) queryport2adminport(queryport string) string {
+	queryports := make([]string, 0, len(b.queryports))
+	for _, qport := range b.queryports {
+		queryports = append(queryports, qport)
+	}
+	_, eqAddr, err := common.EquivalentIP(queryport, queryports)
+	if err != nil {
+		panic(fmt.Errorf("malformed queryport %v, %v", queryport, b.queryports))
+	}
 	for adminport, qport := range b.queryports {
-		if qport == queryport {
+		if qport == eqAddr {
 			return adminport
 		}
 	}
-	panic(fmt.Errorf("cannot find adminport for %v", queryport))
+	panic(fmt.Errorf("adminport not found %v, %v", queryport, b.queryports))
 }
 
 // return adminports for all known indexers.

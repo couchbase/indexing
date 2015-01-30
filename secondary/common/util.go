@@ -411,3 +411,35 @@ func MaybeSetEnv(key, value string) string {
 	os.Setenv(key, value)
 	return value
 }
+
+func EquivalentIP(
+	raddr string,
+	raddrs []string) (this string, other string, err error) {
+
+	host, port, err := net.SplitHostPort(raddr)
+	if err != nil {
+		return "", "", err
+	}
+	netIP := net.ParseIP(host)
+
+	for _, raddr1 := range raddrs {
+		host1, port1, err := net.SplitHostPort(raddr1)
+		if err != nil {
+			return "", "", err
+		}
+		netIP1 := net.ParseIP(host1)
+		// check whether ports are same.
+		if port != port1 {
+			continue
+		}
+		// check whether both are local-ip.
+		if IsIPLocal(host) && IsIPLocal(host1) {
+			return raddr, raddr1, nil // raddr => raddr1
+		}
+		// check wethere they are coming from the same remote.
+		if netIP.Equal(netIP1) {
+			return raddr, raddr1, nil // raddr == raddr1
+		}
+	}
+	return raddr, raddr, nil
+}
