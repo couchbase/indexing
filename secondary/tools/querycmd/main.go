@@ -259,7 +259,7 @@ func handleCommand(
 			cmd.partnStr, cmd.whereStr, cmd.secStrs, cmd.isPrimary,
 			[]byte(cmd.with))
 		if err == nil {
-			fmt.Printf("Index created: %v\n", defnID)
+			fmt.Printf("Index created: %v with %q\n", defnID, cmd.with)
 			if d, ok := cmd.withPlan["defer_build"]; !(ok && d.(bool)) {
 				states, err = waitUntilIndexState(
 					client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,

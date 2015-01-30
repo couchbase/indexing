@@ -1,7 +1,8 @@
 package main
 
-import "math/rand"
 import "fmt"
+import "time"
+import "math/rand"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
@@ -39,18 +40,18 @@ func doSanityTests(cluster string, client *qclient.GsiClient) (err error) {
 
 func fixDeployments(adminports []string) {
 	cmds := make([][]string, 0, len(sanityCommands))
-	for _, cmd := range sanityCommands {
+	for i, cmd := range sanityCommands {
 		if cmd[0] == "-type" && cmd[1] == "create" {
+			seed := time.Now().UTC().Second() * i
+			rnd := rand.New(rand.NewSource(int64(seed))).Intn(100000)
+			n := (rnd / (10000 / len(adminports))) % len(adminports)
 			switch cmd[5] {
 			case "index-city":
-				n := rand.Intn(len(adminports))
 				with := fmt.Sprintf("{\"nodes\": [%q]}", adminports[n])
 				cmd = append(cmd, "-with", with)
-
 			case "index-abv":
-				n := rand.Intn(len(adminports))
-				with := fmt.Sprintf(
-					"{\"nodes\": [%q], \"defer_build\": true}", adminports[n])
+				f := "{\"nodes\": [%q], \"defer_build\": true}"
+				with := fmt.Sprintf(f, adminports[n])
 				cmd = append(cmd, "-with", with)
 			}
 		}
