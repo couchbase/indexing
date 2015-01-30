@@ -79,6 +79,11 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 	}
 
 	admin_addr, err := cinfo.GetServiceAddress(node, "indexAdmin")
+	if _, p, e := net.SplitHostPort(admin_addr); e != nil {
+		common.CrashOnError(e)
+	} else {
+		admin_addr = net.JoinHostPort("", p)
+	}
 	if err != nil {
 		common.Errorf("ClustMgrAgent::Fail to indexer admin address : %v", err)
 		return nil, &MsgError{
