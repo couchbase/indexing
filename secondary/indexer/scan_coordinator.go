@@ -338,19 +338,19 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 
 	for instId, stat := range s.scanStatsMap {
 		inst := s.indexInstMap[instId]
-		k := fmt.Sprintf("%s.%s.num_requests", inst.Defn.Bucket, inst.Defn.Name)
+		k := fmt.Sprintf("%s:%s:num_requests", inst.Defn.Bucket, inst.Defn.Name)
 		v := fmt.Sprint(*stat.Requests)
 		statsMap[k] = v
-		k = fmt.Sprintf("%s.%s.num_rows_returned", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s:%s:num_rows_returned", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(*stat.Rows)
 		statsMap[k] = v
-		k = fmt.Sprintf("%s.%s.scan_bytes_read", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s:%s:scan_bytes_read", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(*stat.BytesRead)
 		statsMap[k] = v
-		k = fmt.Sprintf("%s.%s.total_scan_duration", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s:%s:total_scan_duration", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(*stat.ScanTime)
 		statsMap[k] = v
-		k = fmt.Sprintf("%s.%s.scan_wait_duration", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s:%s:scan_wait_duration", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(*stat.WaitTime)
 		statsMap[k] = v
 
@@ -359,7 +359,7 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 
 		c, err := s.getItemsCount(instId)
 		if err == nil {
-			k := fmt.Sprintf("%s.%s.items_count", inst.Defn.Bucket, inst.Defn.Name)
+			k := fmt.Sprintf("%s:%s:items_count", inst.Defn.Bucket, inst.Defn.Name)
 			v := fmt.Sprint(c)
 			statsMap[k] = v
 		} else {

@@ -536,18 +536,18 @@ func (s *storageMgr) handleStats(cmd Message) {
 
 	for _, st := range stats {
 		inst := s.indexInstMap[st.InstId]
-		k := fmt.Sprintf("%s.%s.disk_size", inst.Defn.Bucket, inst.Defn.Name)
+		k := fmt.Sprintf("%s:%s:disk_size", inst.Defn.Bucket, inst.Defn.Name)
 		v := fmt.Sprint(st.Stats.DiskSize)
 		statsMap[k] = v
-		k = fmt.Sprintf("%s.%s.data_size", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s:%s:data_size", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(st.Stats.DataSize)
-		k = fmt.Sprintf("%s.%s.get_bytes", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s:%s:get_bytes", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(st.Stats.GetBytes)
 		statsMap[k] = v
-		k = fmt.Sprintf("%s.%s.insert_bytes", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s:%s:insert_bytes", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(st.Stats.InsertBytes)
 		statsMap[k] = v
-		k = fmt.Sprintf("%s.%s.delete_bytes", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s:%s:delete_bytes", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(st.Stats.DeleteBytes)
 		statsMap[k] = v
 	}

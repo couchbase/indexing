@@ -1676,7 +1676,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 	}
 
 	for _, inst := range tk.indexInstMap {
-		k := fmt.Sprintf("%s.%s.num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
+		k := fmt.Sprintf("%s:%s:num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
 		sum := uint64(0)
 		flushedTs := tk.ss.streamBucketLastFlushedTsMap[inst.Stream][inst.Defn.Bucket]
 		if flushedTs != nil {
@@ -1699,7 +1699,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				queued += seqno - flushSeqno
 			}
 		}
-		k = fmt.Sprintf("%s.%s.num_docs_queued", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s:%s:num_docs_queued", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(queued)
 		statsMap[k] = v
 
@@ -1712,7 +1712,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			}
 			pending += uint64(seqno) - recvdSeqno
 		}
-		k = fmt.Sprintf("%s.%s.num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
+		k = fmt.Sprintf("%s:%s:num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(pending)
 		statsMap[k] = v
 	}
