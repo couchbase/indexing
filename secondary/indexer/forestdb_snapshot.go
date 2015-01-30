@@ -76,13 +76,13 @@ func (s *fdbSnapshot) Open() error {
 		s.main, err = s.main.SnapshotOpen(mainSeq)
 		if err != nil {
 			common.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
-				"Opening Main DB Snapshot (%v) %v", s.slice.Path(), err)
+				"Opening Main DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), mainSeq, err)
 			return err
 		}
 		s.back, err = s.back.SnapshotOpen(backSeq)
 		if err != nil {
 			common.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
-				"Opening Back DB Snapshot (%v) %v", s.slice.Path(), err)
+				"Opening Back DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), backSeq, err)
 			return err
 		}
 		s.slice.IncrRef()
