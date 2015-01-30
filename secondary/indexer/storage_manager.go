@@ -248,6 +248,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 								"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 							isSnapCreated = false
+							common.CrashOnError(err)
 							continue
 						}
 
@@ -256,6 +257,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 								"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 							isSnapCreated = false
+							common.CrashOnError(err)
 							continue
 						}
 
