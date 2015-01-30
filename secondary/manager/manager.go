@@ -136,11 +136,11 @@ func NewIndexManagerInternal(msgAddr string,
 	mgr.isClosed = false
 	mgr.dataport = dataport
 
-	// stream mgmt	- stream services will start if the indexer node becomes master
+	// stream mgmt  - stream services will start if the indexer node becomes master
 	mgr.streamMgr = nil
 	mgr.admin = admin
 
-	// timestamp mgmt	- timestamp servcie will start if indexer node becomes master
+	// timestamp mgmt   - timestamp servcie will start if indexer node becomes master
 	mgr.timestampCh = make(map[common.StreamId]chan *common.TsVbuuid)
 	mgr.timer = nil
 	mgr.timekeeperStopCh = nil
@@ -175,11 +175,11 @@ func NewIndexManagerInternal(msgAddr string,
 
 	// Initialize request handler.  This is non-blocking.  The index manager
 	// will not be able handle new request until request handler is done initialization.
-	mgr.reqHandler, err = NewRequestHandler(mgr)
-	if err != nil {
-		mgr.Close()
-		return nil, err
-	}
+	//mgr.reqHandler, err = NewRequestHandler(mgr)
+	//if err != nil {
+	//    mgr.Close()
+	//    return nil, err
+	//}
 
 	// coordinator
 	mgr.coordinator = nil
@@ -192,10 +192,10 @@ func NewIndexManagerInternal(msgAddr string,
 // Create a new IndexManager
 //
 func NewIndexManager(requestAddr string,
-	leaderAddr string,
-	config string) (mgr *IndexManager, err error) {
+    leaderAddr string,
+    config string) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(requestAddr, leaderAddr, config, nil)
+    return NewIndexManagerInternal(requestAddr, leaderAddr, config, nil)
 }
 */
 
