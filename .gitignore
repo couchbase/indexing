@@ -4,3 +4,4 @@
 *.idat.*
 .DS_Store
 secondary/tests/testdata/Users10k.txt.gz
+secondary/triage
