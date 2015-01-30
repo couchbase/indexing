@@ -28,7 +28,7 @@ var options struct {
 }
 
 func argParse() string {
-	flag.StringVar(&options.adminport, "adminport", "localhost:9999",
+	flag.StringVar(&options.adminport, "adminport", "",
 		"adminport address")
 	flag.StringVar(&options.kvaddrs, "kvaddrs", "127.0.0.1:12000",
 		"comma separated list of kvaddrs")
