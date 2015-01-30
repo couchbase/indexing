@@ -784,20 +784,32 @@ func (feed *Feed) delInstances(req *protobuf.DelInstancesRequest) error {
 
 // endpoints are independent.
 func (feed *Feed) repairEndpoints(req *protobuf.RepairEndpointsRequest) error {
+	var endpoint c.RouterEndpoint
+	var ok, pingOk bool
+	var raddr1 string
+
+	prefix := feed.logPrefix
 	for _, raddr := range req.GetEndpoints() {
-		endpoint, ok := feed.endpoints[raddr]
-		if (!ok) || (!endpoint.Ping()) {
+		raddr1, endpoint, ok = feed.getEndpoint(raddr, true /*nodup*/)
+		if ok {
+			if pingOk = endpoint.Ping(); !pingOk {
+				c.Infof("%v endpoint %q restarted ...\n", prefix, raddr)
+			}
+		}
+		if !ok || !pingOk {
 			// ignore error while starting endpoint
 			topic, typ := feed.topic, feed.endpointType
 			endpoint, err := feed.epFactory(topic, typ, raddr)
-			c.Infof("%v endpoint %q restarted ...\n", feed.logPrefix, raddr)
 			if err != nil {
 				return err
 			} else if endpoint != nil {
+				// FIXME: hack to make both node-name available from
+				// endpoints table.
 				feed.endpoints[raddr] = endpoint // :SideEffect:
+				feed.endpoints[raddr1] = endpoint
 			}
 		}
-		c.Infof("%v endpoint %q active ...\n", feed.logPrefix, raddr)
+		c.Infof("%v endpoint %q active ...\n", prefix, raddr)
 	}
 
 	// posted to each kv data-path
@@ -1048,17 +1060,30 @@ func (feed *Feed) processSubscribers(req Subscriber) error {
 // if an endpoint is already present and active it is
 // reused.
 func (feed *Feed) startEndpoints(routers map[uint64]c.Router) error {
+	var endpoint c.RouterEndpoint
+	var ok, pingOk bool
+	var raddr1 string
+
+	prefix := feed.logPrefix
 	for _, router := range routers {
 		for _, raddr := range router.Endpoints() {
-			endpoint, ok := feed.getEndpoint(raddr, true /*nodup*/)
-			if (!ok) || (!endpoint.Ping()) {
+			raddr1, endpoint, ok = feed.getEndpoint(raddr, true /*nodup*/)
+			if ok {
+				if pingOk = endpoint.Ping(); !pingOk {
+					c.Infof("%v endpoint %q restarted ...\n", prefix, raddr)
+				}
+			}
+			if !ok || !pingOk {
 				// ignore error while starting endpoint
 				topic, typ := feed.topic, feed.endpointType
 				endpoint, err := feed.epFactory(topic, typ, raddr)
 				if err != nil {
 					return err
 				} else if endpoint != nil {
-					feed.endpoints[raddr] = endpoint
+					// FIXME: hack to make both node-name available from
+					// endpoints table.
+					feed.endpoints[raddr] = endpoint // :SideEffect:
+					feed.endpoints[raddr1] = endpoint
 				}
 			}
 		}
@@ -1066,7 +1091,10 @@ func (feed *Feed) startEndpoints(routers map[uint64]c.Router) error {
 	return nil
 }
 
-func (feed *Feed) getEndpoint(raddr string, nodup bool) (c.RouterEndpoint, bool) {
+func (feed *Feed) getEndpoint(
+	raddr string, nodup bool) (string, c.RouterEndpoint, bool) {
+
+	prefix := feed.logPrefix
 	// FIXME: hack to detect duplicate endpoints.
 	if nodup {
 		parts := strings.Split(raddr, ":")
@@ -1081,18 +1109,20 @@ func (feed *Feed) getEndpoint(raddr string, nodup bool) (c.RouterEndpoint, bool)
 			ip1 := parts1[0]
 			// check whether both are local-ip.
 			if c.IsIPLocal(ip) && c.IsIPLocal(ip1) {
-				return endpoint, true
+				c.Debugf("%v endpoint %q takenas %q ...", prefix, raddr, raddr1)
+				return raddr1, endpoint, true
 			}
 			// check wethere they are coming from the same remote.
 			netIP1 := net.ParseIP(ip1)
 			if netIP.Equal(netIP1) {
-				return endpoint, true
+				c.Debugf("%v endpoint %q takenas %q ...", prefix, raddr, raddr1)
+				return raddr1, endpoint, true
 			}
 		}
-		return nil, false
+		return "", nil, false
 	}
 	endpoint, ok := feed.endpoints[raddr]
-	return endpoint, ok
+	return raddr, endpoint, ok
 }
 
 // - return ErrorInconsistentFeed for malformed feeds.
