@@ -200,8 +200,8 @@ func (ts *TsVbuuid) FromTsVbuuid(nativeTs *c.TsVbuuid) *TsVbuuid {
 
 // ToTsVbuuid converts timestamp from protobuf format to common.TsVbuuid,
 // later requires the full set of timestamp.
-func (ts *TsVbuuid) ToTsVbuuid() *c.TsVbuuid {
-	nativeTs := c.NewTsVbuuid(ts.GetBucket(), cap(ts.Seqnos))
+func (ts *TsVbuuid) ToTsVbuuid(maxVbuckets int) *c.TsVbuuid {
+	nativeTs := c.NewTsVbuuid(ts.GetBucket(), maxVbuckets)
 	seqnos, vbuuids, ss := ts.GetSeqnos(), ts.GetVbuuids(), ts.GetSnapshots()
 	for i, vbno := range ts.GetVbnos() {
 		nativeTs.Seqnos[vbno] = seqnos[i]
