@@ -881,11 +881,13 @@ func (feed *Feed) bucketFeed(
 	pooln, bucketn := reqTs.GetPool(), reqTs.GetBucket()
 
 	defer func() {
-		if err != nil && feeder != nil {
-			feed.infof("closing upstream-feed for", bucketn, nil)
-			feeder.CloseFeed()
-			feeder = nil
-		}
+		// FIXME: cleanupBucket is called (except for shutdownVbuckets)
+		// anyways, so don't bother to close the upstream.
+		//if err != nil && feeder != nil {
+		//    feed.infof("closing upstream-feed for", bucketn, nil)
+		//    feeder.CloseFeed()
+		//    feeder = nil
+		//}
 	}()
 
 	vbnos := c.Vbno32to16(reqTs.GetVbnos())
