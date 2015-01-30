@@ -87,8 +87,14 @@ const (
 func (kvdata *KVData) AddEngines(
 	engines map[uint64]*Engine, endpoints map[string]c.RouterEndpoint) error {
 
+	// copy them to local map and then pass down the reference.
+	eps := make(map[string]c.RouterEndpoint)
+	for k, v := range endpoints {
+		eps[k] = v
+	}
+
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{kvCmdAddEngines, engines, endpoints, respch}
+	cmd := []interface{}{kvCmdAddEngines, engines, eps, respch}
 	_, err := c.FailsafeOp(kvdata.sbch, respch, cmd, kvdata.finch)
 	return err
 }

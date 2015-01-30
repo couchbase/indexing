@@ -790,10 +790,14 @@ func (feed *Feed) repairEndpoints(req *protobuf.RepairEndpointsRequest) error {
 
 	prefix := feed.logPrefix
 	for _, raddr := range req.GetEndpoints() {
+		c.Debugf("%v trying to repair %q\n", prefix, raddr)
 		raddr1, endpoint, ok = feed.getEndpoint(raddr, true /*nodup*/)
 		if ok {
 			if pingOk = endpoint.Ping(); !pingOk {
-				c.Infof("%v endpoint %q restarted ...\n", prefix, raddr)
+				c.Infof("%v endpoint %q restarting ...\n", prefix, raddr)
+			} else {
+				feed.endpoints[raddr] = endpoint  // :SideEffect:
+				feed.endpoints[raddr1] = endpoint // :SideEffect:
 			}
 		}
 		if !ok || !pingOk {
@@ -1071,6 +1075,9 @@ func (feed *Feed) startEndpoints(routers map[uint64]c.Router) error {
 			if ok {
 				if pingOk = endpoint.Ping(); !pingOk {
 					c.Infof("%v endpoint %q restarted ...\n", prefix, raddr)
+				} else {
+					feed.endpoints[raddr] = endpoint  // :SideEffect:
+					feed.endpoints[raddr1] = endpoint // :SideEffect:
 				}
 			}
 			if !ok || !pingOk {
