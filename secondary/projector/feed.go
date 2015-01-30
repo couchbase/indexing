@@ -806,6 +806,7 @@ func (feed *Feed) repairEndpoints(req *protobuf.RepairEndpointsRequest) error {
 			endpoint, err := feed.epFactory(topic, typ, raddr)
 			if err != nil {
 				return err
+
 			} else if endpoint != nil {
 				// FIXME: hack to make both node-name available from
 				// endpoints table.
@@ -1126,7 +1127,6 @@ func (feed *Feed) getEndpoint(
 				return raddr1, endpoint, true
 			}
 		}
-		return "", nil, false
 	}
 	endpoint, ok := feed.endpoints[raddr]
 	return raddr, endpoint, ok
