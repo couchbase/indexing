@@ -1937,13 +1937,16 @@ func (idx *indexer) checkBucketExistsInStream(bucket string, streamId common.Str
 //active in the given stream, else false
 func (idx *indexer) checkLastBucketInStream(bucket string, streamId common.StreamId) bool {
 
-	bucketStatus := idx.streamBucketStatus[streamId]
+	for _, index := range idx.indexInstMap {
 
-	for b, s := range bucketStatus {
-		if b != bucket && s == STREAM_ACTIVE {
+		if index.Defn.Bucket != bucket && index.Stream == streamId &&
+			(index.State == common.INDEX_STATE_ACTIVE ||
+				index.State == common.INDEX_STATE_CATCHUP ||
+				index.State == common.INDEX_STATE_INITIAL) {
 			return false
 		}
 	}
+
 	return true
 
 }
