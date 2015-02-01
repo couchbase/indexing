@@ -196,6 +196,8 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	common.Debugf("Timekeeper::handleStreamOpen %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
+	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -205,17 +207,27 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 		common.Debugf("Timekeeper::handleStreamOpen \n\t Stream %v "+
 			"State Changed to ACTIVE", streamId)
 
-		bucket := cmd.(*MsgStreamUpdate).GetBucket()
-		restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
-		if restartTs != nil {
-			tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
-			common.Debugf("Timekeeper::handleStreamOpen RestartTs Set Bucket %v TS %v ",
-				bucket, restartTs)
-		}
 	}
 
-	//add the new indexes to internal maps
-	tk.addIndextoStream(cmd)
+	status := tk.ss.streamBucketStatus[streamId][bucket]
+	switch status {
+
+	//fresh start or recovery
+	case STREAM_INACTIVE, STREAM_PREPARE_DONE:
+		if restartTs != nil {
+			tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
+		}
+		tk.ss.initBucketInStream(streamId, bucket)
+		tk.ss.setHWTFromRestartTs(streamId, bucket)
+		tk.addIndextoStream(cmd)
+
+	//repair
+	default:
+		//no-op
+		common.Debugf("Timekeeper::handleStreamOpen %v %v Status %v. "+
+			"Nothing to do.", streamId, bucket, status)
+
+	}
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -229,9 +241,10 @@ func (tk *timekeeper) handleStreamClose(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	//delete indexes from stream
-	tk.removeIndexFromStream(cmd)
-	tk.ss.resetStreamState(streamId)
+	//cleanup all buckets from stream
+	for bucket, _ := range tk.ss.streamBucketStatus[streamId] {
+		tk.removeBucketFromStream(streamId, bucket)
+	}
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -302,12 +315,6 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 	//If the index is in INITIAL state, store it in initialbuild map
 	for _, idx := range indexInstList {
 
-		//if this is first index for the bucket, add bucket to stream
-		if tk.ss.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
-			tk.ss.initBucketInStream(streamId, idx.Defn.Bucket)
-			tk.ss.setHWTFromRestartTs(streamId, idx.Defn.Bucket)
-		}
-
 		tk.ss.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] += 1
 		common.Debugf("Timekeeper::addIndextoStream IndexCount %v", tk.ss.streamBucketIndexCountMap)
 
@@ -336,10 +343,13 @@ func (tk *timekeeper) handleRemoveBucketFromStream(cmd Message) {
 
 	common.Infof("Timekeeper::handleRemoveBucketFromStream %v", cmd)
 
+	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
+	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	tk.removeBucketFromStream(cmd)
+	tk.removeBucketFromStream(streamId, bucket)
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -365,10 +375,10 @@ func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 	}
 }
 
-func (tk *timekeeper) removeBucketFromStream(cmd Message) {
+func (tk *timekeeper) removeBucketFromStream(streamId common.StreamId,
+	bucket string) {
 
-	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
-	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	status := tk.ss.streamBucketStatus[streamId][bucket]
 
 	//delete all indexes for this bucket
 	for instId, idx := range tk.indexBuildInfo {
@@ -377,8 +387,13 @@ func (tk *timekeeper) removeBucketFromStream(cmd Message) {
 		}
 	}
 
-	delete(tk.ss.streamBucketIndexCountMap[streamId], bucket)
-	tk.ss.cleanupBucketFromStream(streamId, bucket)
+	//for a bucket in prepareRecovery, only change the status
+	//actual cleanup happens in initRecovery
+	if status == STREAM_PREPARE_RECOVERY {
+		tk.ss.streamBucketStatus[streamId][bucket] = STREAM_PREPARE_RECOVERY
+	} else {
+		tk.ss.cleanupBucketFromStream(streamId, bucket)
+	}
 
 }
 
@@ -1620,7 +1635,6 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 	case INDEXER_ROLLBACK:
 		//if rollback msg, call initPrepareRecovery
-		tk.prepareRecovery(streamId, bucket)
 		common.Infof("Timekeeper::sendRestartMsg Received Rollback Msg For "+
 			"%v %v. Sending Init Prepare.", streamId, bucket)
 
