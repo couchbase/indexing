@@ -454,6 +454,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
 
+	case INDEXER_INIT_PREP_RECOVERY:
+		idx.handleInitPrepRecovery(msg)
+
 	case INDEXER_PREPARE_DONE:
 		idx.handlePrepareDone(msg)
 
@@ -906,6 +909,32 @@ func (idx *indexer) handlePrepareRecovery(msg Message) {
 
 }
 
+func (idx *indexer) handleInitPrepRecovery(msg Message) {
+
+	bucket := msg.(*MsgRecovery).GetBucket()
+	streamId := msg.(*MsgRecovery).GetStreamId()
+	rollbackTs := msg.(*MsgRecovery).GetRestartTs()
+
+	common.Debugf("Indexer::handleInitPrepRecovery StreamId %v Bucket %v",
+		streamId, bucket)
+
+	if rollbackTs != nil {
+		if _, ok := idx.streamBucketRollbackTs[streamId]; ok {
+			idx.streamBucketRollbackTs[streamId][bucket] = rollbackTs
+		} else {
+			bucketRollbackTs := make(BucketRollbackTs)
+			bucketRollbackTs[bucket] = rollbackTs
+			idx.streamBucketRollbackTs[streamId] = bucketRollbackTs
+		}
+	}
+
+	idx.streamBucketStatus[streamId][bucket] = STREAM_RECOVERY
+
+	//fwd the msg to timekeeper
+	idx.tkCmdCh <- msg
+	<-idx.tkCmdCh
+}
+
 func (idx *indexer) handlePrepareDone(msg Message) {
 
 	bucket := msg.(*MsgRecovery).GetBucket()
@@ -916,18 +945,9 @@ func (idx *indexer) handlePrepareDone(msg Message) {
 
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
 
-	//if there is a rollbackTs, process rollback
-	if ts, ok := idx.streamBucketRollbackTs[streamId][bucket]; ok && ts != nil {
-		restartTs, err := idx.processRollback(streamId, bucket, ts)
-		if err != nil {
-			common.CrashOnError(err)
-		}
-		idx.startBucketStream(streamId, bucket, restartTs)
-	} else {
-		//fwd the msg to timekeeper
-		idx.tkCmdCh <- msg
-		<-idx.tkCmdCh
-	}
+	//fwd the msg to timekeeper
+	idx.tkCmdCh <- msg
+	<-idx.tkCmdCh
 
 }
 
@@ -940,7 +960,16 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 	common.Debugf("Indexer::handleInitRecovery StreamId %v Bucket %v",
 		streamId, bucket)
 
-	idx.startBucketStream(streamId, bucket, restartTs)
+	//if there is a rollbackTs, process rollback
+	if ts, ok := idx.streamBucketRollbackTs[streamId][bucket]; ok && ts != nil {
+		restartTs, err := idx.processRollback(streamId, bucket, ts)
+		if err != nil {
+			common.CrashOnError(err)
+		}
+		idx.startBucketStream(streamId, bucket, restartTs)
+	} else {
+		idx.startBucketStream(streamId, bucket, restartTs)
+	}
 
 }
 
@@ -2155,7 +2184,11 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 				case INDEXER_ROLLBACK:
 					common.Infof("Indexer::startBucketStream \n\tRollback from "+
 						"Projector For Stream %v Bucket %v", streamId, bucket)
-					idx.internalRecvCh <- resp
+					rollbackTs := resp.(*MsgRollback).GetRollbackTs()
+					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+						streamId:  streamId,
+						bucket:    bucket,
+						restartTs: rollbackTs}
 					break retryloop
 
 				default:

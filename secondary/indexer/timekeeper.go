@@ -156,6 +156,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case TK_GET_BUCKET_HWT:
 		tk.handleGetBucketHWT(cmd)
 
+	case INDEXER_INIT_PREP_RECOVERY:
+		tk.handleInitPrepRecovery(cmd)
+
 	case INDEXER_PREPARE_DONE:
 		tk.handlePrepareDone(cmd)
 
@@ -231,6 +234,20 @@ func (tk *timekeeper) handleStreamClose(cmd Message) {
 	tk.ss.resetStreamState(streamId)
 
 	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleInitPrepRecovery(msg Message) {
+
+	bucket := msg.(*MsgRecovery).GetBucket()
+	streamId := msg.(*MsgRecovery).GetStreamId()
+
+	common.Debugf("Timekeeper::handleInitPrepRecovery %v %v",
+		streamId, bucket)
+
+	tk.prepareRecovery(streamId, bucket)
+
+	tk.supvCmdch <- &MsgSuccess{}
+
 }
 
 func (tk *timekeeper) handlePrepareDone(cmd Message) {
@@ -1602,8 +1619,14 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		tk.repairStream(streamId, bucket)
 
 	case INDEXER_ROLLBACK:
-		//if rollback msg, call prepareRecovery
+		//if rollback msg, call initPrepareRecovery
 		tk.prepareRecovery(streamId, bucket)
+		common.Infof("Timekeeper::sendRestartMsg Received Rollback Msg For "+
+			"%v %v. Sending Init Prepare.", streamId, bucket)
+
+		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+			streamId: streamId,
+			bucket:   bucket}
 
 	case KV_STREAM_REPAIR:
 

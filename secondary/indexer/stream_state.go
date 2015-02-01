@@ -163,8 +163,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 
 	//if there is any ongoing repair for this bucket, abort that
 	if stopCh, ok := ss.streamBucketRepairStopCh[streamId][bucket]; ok && stopCh != nil {
-		stopCh <- true
-		<-stopCh
+		close(stopCh)
 	}
 
 	delete(ss.streamBucketHWTMap[streamId], bucket)
