@@ -68,7 +68,7 @@ func main() {
 	config.SetValue("enableManager", *enableManager)
 	config.SetValue("adminPort", *adminPort)
 	config.SetValue("scanPort", *scanPort)
-	config.SetValue("httpPort", *streamCatchupPort)
+	config.SetValue("httpPort", *httpPort)
 	config.SetValue("streamInitPort", *streamInitPort)
 	config.SetValue("streamCatchupPort", *streamCatchupPort)
 	config.SetValue("streamMaintPort", *streamMaintPort)
