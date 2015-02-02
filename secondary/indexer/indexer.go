@@ -388,6 +388,12 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		bucket := msg.(*MsgTKStabilityTS).GetBucket()
 		streamId := msg.(*MsgTKStabilityTS).GetStreamId()
 
+		if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
+			common.Debugf("Indexer: Skipped PersistTs for %v %v. "+
+				"STREAM_INACTIVE", streamId, bucket)
+			return
+		}
+
 		idx.streamBucketFlushInProgress[streamId][bucket] = true
 
 		idx.mutMgrCmdCh <- &MsgMutMgrFlushMutationQueue{
@@ -1426,6 +1432,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 					bucket:   indexInst.Defn.Bucket,
 					respCh:   respCh}
 			}
+			idx.streamBucketStatus[streamId][indexInst.Defn.Bucket] = STREAM_INACTIVE
 		}
 
 		//send stream update to mutation manager
