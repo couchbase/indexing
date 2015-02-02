@@ -289,12 +289,15 @@ func TestDropNonExistingIndex(t *testing.T) {
 	}
 }
 
-// Skipping right now as this causes further tests to fail
-func SkipTestCreateIndexNonExistentBucket(t *testing.T) {
+func TestCreateIndexNonExistentBucket(t *testing.T) {
 	fmt.Println("In TestCreateIndexNonExistentBucket()")
-	var indexName = "index_BucketTest1"
-	var bucketName = "test1"
+	var indexName = "index_BlahBucket"
+	var bucketName = "BlahBucket"
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"score"}, true)
-	FailTestIfError(err, "Error in creating the index", t)
+	if err == nil {
+		t.Fatal("Error excpected when creating index on non-existent bucket but error didnt occur\n")
+	} else {
+		fmt.Println("Index create failed as expected with error: ", err)
+	}
 }
