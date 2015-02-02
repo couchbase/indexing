@@ -1736,6 +1736,10 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false); err != nil {
+		common.CrashOnError(err)
+	}
+
 	//if index is already in MAINT_STREAM, nothing more needs to be done
 	if streamId == common.MAINT_STREAM {
 
@@ -1747,12 +1751,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				}
 				delete(idx.bucketCreateClientChMap, bucket)
 			}
-		} else {
-			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false); err != nil {
-				common.CrashOnError(err)
-			}
 		}
-
 		return
 	}
 
