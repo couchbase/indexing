@@ -2510,15 +2510,17 @@ func (idx *indexer) recoverInstMapFromFile() error {
 
 func (idx *indexer) startStreams() bool {
 
-	restartTs := idx.makeRestartTs()
-
 	//Start MAINT_STREAM
+	restartTs := idx.makeRestartTs(common.MAINT_STREAM)
+
 	idx.streamBucketStatus[common.MAINT_STREAM] = make(BucketStatus)
 	for bucket, ts := range restartTs {
 		idx.startBucketStream(common.MAINT_STREAM, bucket, ts)
 	}
 
 	//Start INIT_STREAM
+	restartTs = idx.makeRestartTs(common.INIT_STREAM)
+
 	idx.streamBucketStatus[common.INIT_STREAM] = make(BucketStatus)
 	for bucket, ts := range restartTs {
 		idx.startBucketStream(common.INIT_STREAM, bucket, ts)
@@ -2528,44 +2530,47 @@ func (idx *indexer) startStreams() bool {
 
 }
 
-func (idx *indexer) makeRestartTs() map[string]*common.TsVbuuid {
+func (idx *indexer) makeRestartTs(streamId common.StreamId) map[string]*common.TsVbuuid {
 
 	restartTs := make(map[string]*common.TsVbuuid)
 
 	for idxInstId, partnMap := range idx.indexPartnMap {
 		idxInst := idx.indexInstMap[idxInstId]
 
-		//there is only one partition for now
-		partnInst := partnMap[0]
-		sc := partnInst.Sc
+		if idxInst.Stream == streamId {
 
-		//there is only one slice for now
-		slice := sc.GetSliceById(0)
+			//there is only one partition for now
+			partnInst := partnMap[0]
+			sc := partnInst.Sc
 
-		infos, err := slice.GetSnapshots()
-		// TODO: Proper error handling if possible
-		if err != nil {
-			panic("Unable read snapinfo -" + err.Error())
-		}
+			//there is only one slice for now
+			slice := sc.GetSliceById(0)
 
-		s := NewSnapshotInfoContainer(infos)
-		latestSnapInfo := s.GetLatest()
+			infos, err := slice.GetSnapshots()
+			// TODO: Proper error handling if possible
+			if err != nil {
+				panic("Unable read snapinfo -" + err.Error())
+			}
 
-		//There may not be a valid snapshot info if no flush
-		//happened for this index
-		if latestSnapInfo != nil {
-			ts := latestSnapInfo.Timestamp()
-			if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
-				if !ts.AsRecent(oldTs) {
+			s := NewSnapshotInfoContainer(infos)
+			latestSnapInfo := s.GetLatest()
+
+			//There may not be a valid snapshot info if no flush
+			//happened for this index
+			if latestSnapInfo != nil {
+				ts := latestSnapInfo.Timestamp()
+				if oldTs, ok := restartTs[idxInst.Defn.Bucket]; ok {
+					if !ts.AsRecent(oldTs) {
+						restartTs[idxInst.Defn.Bucket] = ts
+					}
+				} else {
 					restartTs[idxInst.Defn.Bucket] = ts
 				}
 			} else {
-				restartTs[idxInst.Defn.Bucket] = ts
-			}
-		} else {
-			//set restartTs to nil for this bucket
-			if _, ok := restartTs[idxInst.Defn.Bucket]; !ok {
-				restartTs[idxInst.Defn.Bucket] = nil
+				//set restartTs to nil for this bucket
+				if _, ok := restartTs[idxInst.Defn.Bucket]; !ok {
+					restartTs[idxInst.Defn.Bucket] = nil
+				}
 			}
 		}
 	}
