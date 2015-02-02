@@ -1,7 +1,6 @@
 // go implementation of upr client.
 // See https://github.com/couchbaselabs/cbupr/blob/master/transport-spec.md
-// TODO
-// 1. Use a pool allocator to avoid garbage
+
 package memcached
 
 import (
@@ -12,6 +11,7 @@ import (
 	"log"
 	"strconv"
 	"sync"
+	"time"
 )
 
 const uprMutationExtraLen = 16
@@ -46,6 +46,7 @@ type UprStream struct {
 	Vbuuid    uint64 // vbucket uuid
 	StartSeq  uint64 // start sequence number
 	EndSeq    uint64 // end sequence number
+	LastSeen  int64  // UnixNano value of last seen
 	connected bool
 }
 
@@ -524,7 +525,22 @@ loop:
 				feed.transmitCh <- noop
 
 			default:
-				log.Printf("Recived an unknown response for vbucket %d\n", vb)
+				log.Printf("Received an unknown response for vbucket %d\n", vb)
+			}
+
+			// debug logging for DCP hiccups
+			if event != nil && stream != nil {
+				now := time.Now().UnixNano()
+				if event.Opcode != transport.UPR_SNAPSHOT ||
+					event.Opcode != transport.UPR_STREAMREQ {
+
+					delta := (now - stream.LastSeen) / 1000000
+					if delta > 3000 {
+						msg := "Warning: DCP event %v for vb %v after %v mS\n"
+						log.Printf(msg, event.Opcode, stream.Vbucket, delta)
+					}
+				}
+				stream.LastSeen = now
 			}
 		}
 
