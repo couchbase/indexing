@@ -2520,10 +2520,11 @@ func (idx *indexer) validateIndexInstMap() {
 
 	for instId, index := range idx.indexInstMap {
 
-		//only indexes in created, initial, active state
+		//only indexes in created, initial, catchup, active state
 		//are valid for recovery
 		if index.State != common.INDEX_STATE_CREATED ||
 			index.State != common.INDEX_STATE_INITIAL ||
+			index.State != common.INDEX_STATE_CATCHUP ||
 			index.State != common.INDEX_STATE_ACTIVE {
 			common.Debugf("Indexer::validateIndexInstMap \n\t State %v Not Recoverable. "+
 				"Not Recovering Index %v", index.State, index)
