@@ -11,9 +11,19 @@ package client
 
 import (
 	"encoding/json"
-	"github.com/couchbase/indexing/secondary/common"
-	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-	"github.com/couchbaselabs/goprotobuf/proto"
+	"github.com/couchbase/gometa/common"
+	c "github.com/couchbase/indexing/secondary/common"
+)
+
+/////////////////////////////////////////////////////////////////////////
+// OpCode
+////////////////////////////////////////////////////////////////////////
+
+const (
+	OPCODE_CREATE_INDEX      common.OpCode = common.OPCODE_CUSTOM + 1
+	OPCODE_DROP_INDEX                      = OPCODE_CREATE_INDEX + 1
+	OPCODE_BUILD_INDEX                     = OPCODE_DROP_INDEX + 1
+	OPCODE_UPDATE_INDEX_INST               = OPCODE_BUILD_INDEX + 1
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -40,6 +50,8 @@ type IndexDefnDistribution struct {
 type IndexInstDistribution struct {
 	InstId     uint64                  `json:"instId,omitempty"`
 	State      uint32                  `json:"state,omitempty"`
+	StreamId   uint32                  `json:"streamId,omitempty"`
+	Error      string                  `json:"error,omitempty"`
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
 }
 
@@ -65,59 +77,16 @@ type IndexSliceLocator struct {
 }
 
 /////////////////////////////////////////////////////////////////////////
-// private method : unmarshalling
+// Index List
 ////////////////////////////////////////////////////////////////////////
 
-func unmarshallIndexDefn(data []byte) (*common.IndexDefn, error) {
-
-	pDefn := new(protobuf.IndexDefn)
-	if err := proto.Unmarshal(data, pDefn); err != nil {
-		return nil, err
-	}
-
-	using := common.IndexType(pDefn.GetUsing().String())
-	exprType := common.ExprType(pDefn.GetExprType().String())
-	partnScheme := common.PartitionScheme(pDefn.GetPartitionScheme().String())
-
-	idxDefn := &common.IndexDefn{
-		DefnId:          common.IndexDefnId(pDefn.GetDefnID()),
-		Name:            pDefn.GetName(),
-		Using:           using,
-		Bucket:          pDefn.GetBucket(),
-		IsPrimary:       pDefn.GetIsPrimary(),
-		SecExprs:        pDefn.GetSecExpressions(),
-		ExprType:        exprType,
-		PartitionScheme: partnScheme,
-		PartitionKey:    pDefn.GetPartnExpression()}
-
-	return idxDefn, nil
+type IndexIdList struct {
+	DefnIds []uint64 `json:"defnIds,omitempty"`
 }
 
-func marshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
-
-	using := protobuf.StorageType(
-		protobuf.StorageType_value[string(defn.Using)]).Enum()
-
-	exprType := protobuf.ExprType(
-		protobuf.ExprType_value[string(defn.ExprType)]).Enum()
-
-	partnScheme := protobuf.PartitionScheme(
-		protobuf.PartitionScheme_value[string(defn.PartitionScheme)]).Enum()
-
-	pDefn := &protobuf.IndexDefn{
-		DefnID:          proto.Uint64(uint64(defn.DefnId)),
-		Bucket:          proto.String(defn.Bucket),
-		IsPrimary:       proto.Bool(defn.IsPrimary),
-		Name:            proto.String(defn.Name),
-		Using:           using,
-		ExprType:        exprType,
-		SecExpressions:  defn.SecExprs,
-		PartitionScheme: partnScheme,
-		PartnExpression: proto.String(defn.PartitionKey),
-	}
-
-	return proto.Marshal(pDefn)
-}
+/////////////////////////////////////////////////////////////////////////
+// private method : unmarshalling
+////////////////////////////////////////////////////////////////////////
 
 func unmarshallIndexTopology(data []byte) (*IndexTopology, error) {
 
@@ -132,6 +101,35 @@ func unmarshallIndexTopology(data []byte) (*IndexTopology, error) {
 func marshallIndexTopology(topology *IndexTopology) ([]byte, error) {
 
 	buf, err := json.Marshal(&topology)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func BuildIndexIdList(ids []c.IndexDefnId) *IndexIdList {
+	list := new(IndexIdList)
+	list.DefnIds = make([]uint64, len(ids))
+	for i, id := range ids {
+		list.DefnIds[i] = uint64(id)
+	}
+	return list
+}
+
+func UnmarshallIndexIdList(data []byte) (*IndexIdList, error) {
+
+	list := new(IndexIdList)
+	if err := json.Unmarshal(data, list); err != nil {
+		return nil, err
+	}
+
+	return list, nil
+}
+
+func MarshallIndexIdList(list *IndexIdList) ([]byte, error) {
+
+	buf, err := json.Marshal(&list)
 	if err != nil {
 		return nil, err
 	}

@@ -16,7 +16,9 @@ import (
 	"os"
 	"os/signal"
 	"runtime/pprof"
+	"strings"
 
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/indexer"
 )
@@ -27,15 +29,33 @@ var (
 	cluster           = flag.String("cluster", indexer.DEFAULT_CLUSTER_ENDPOINT, "Couchbase cluster address")
 	adminPort         = flag.String("adminPort", "9100", "Index ddl and status port")
 	scanPort          = flag.String("scanPort", "9101", "Index scanner port")
-	streamInitPort    = flag.String("streamInitPort", "9102", "Index initial stream port")
-	streamCatchupPort = flag.String("streamCatchupPort", "9103", "Index catchup stream port")
-	streamMaintPort   = flag.String("streamMaintPort", "9104", "Index maintenance stream port")
-	enableManager     = flag.Bool("enable_manager", false, "Enable Index Manager")
+	httpPort          = flag.String("httpPort", "9102", "Index http mgmt port")
+	streamInitPort    = flag.String("streamInitPort", "9103", "Index initial stream port")
+	streamCatchupPort = flag.String("streamCatchupPort", "9104", "Index catchup stream port")
+	streamMaintPort   = flag.String("streamMaintPort", "9105", "Index maintenance stream port")
+	storageDir        = flag.String("storageDir", "./", "Index file storage directory path")
+	enableManager     = flag.Bool("enable_manager", true, "Enable Index Manager")
+	auth              = flag.String("auth", "", "Auth user and password")
 )
+
+func MaybeSetEnv(key, value string) {
+	if os.Getenv(key) != "" {
+		return
+	}
+	os.Setenv(key, value)
+}
 
 func main() {
 
 	flag.Parse()
+
+	// setup cbauth
+	if *auth != "" {
+		up := strings.Split(*auth, ":")
+		if _, err := cbauth.InternalRetryDefaultInit(*cluster, up[0], up[1]); err != nil {
+			log.Fatalf("Failed to initialize cbauth: %s", err)
+		}
+	}
 
 	go dumpOnSignalForPlatform()
 	go common.ExitOnStdinClose()
@@ -43,14 +63,16 @@ func main() {
 	common.SetLogLevel(*logLevel)
 	config := common.SystemConfig.SectionConfig("indexer.", true)
 
-	config = config.SetValue("clusterAddr", *cluster)
-	config = config.SetValue("numVbuckets", *numVbuckets)
-	config = config.SetValue("enableManager", *enableManager)
-	config = config.SetValue("adminPort", *adminPort)
-	config = config.SetValue("scanPort", *scanPort)
-	config = config.SetValue("streamInitPort", *streamInitPort)
-	config = config.SetValue("streamCatchupPort", *streamCatchupPort)
-	config = config.SetValue("streamMaintPort", *streamMaintPort)
+	config.SetValue("clusterAddr", *cluster)
+	config.SetValue("numVbuckets", *numVbuckets)
+	config.SetValue("enableManager", *enableManager)
+	config.SetValue("adminPort", *adminPort)
+	config.SetValue("scanPort", *scanPort)
+	config.SetValue("httpPort", *httpPort)
+	config.SetValue("streamInitPort", *streamInitPort)
+	config.SetValue("streamCatchupPort", *streamCatchupPort)
+	config.SetValue("streamMaintPort", *streamMaintPort)
+	config.SetValue("storage_dir", *storageDir)
 
 	_, msg := indexer.NewIndexer(config)
 

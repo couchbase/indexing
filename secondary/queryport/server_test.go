@@ -1,3 +1,5 @@
+// +build ignore
+
 package queryport
 
 import "reflect"
@@ -33,7 +35,7 @@ func TestStatistics(t *testing.T) {
 	c.LogIgnore()
 	//c.SetLogLevel(c.LogLevelDebug)
 
-	addr := "localhost:8888"
+	addr := "localhost:9101"
 	serverCallb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
 
@@ -56,10 +58,13 @@ func TestStatistics(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client := client.NewClient(client.Remoteaddr(addr), config)
+	client, err := client.NewGsiClient("localhost:9000", "servertest", config)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
-	out, err := client.RangeStatistics("idx", "bkt", l, h, 0)
+	out, err := client.RangeStatistics(0x0 /*defnID*/, l, h, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +77,7 @@ func TestStatistics(t *testing.T) {
 
 func TestRange(t *testing.T) {
 	c.LogIgnore()
-	addr := "localhost:8888"
+	addr := "localhost:9101"
 	serverCallb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
 
@@ -87,12 +92,15 @@ func TestRange(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc := client.NewClient(client.Remoteaddr(addr), config)
+	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	count := 0
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	qc.Range(
-		"idx", "bkt", l, h, 100, true, 1000,
+		0x0 /*defnID*/, l, h, 100, true, 1000,
 		func(val client.ResponseReader) bool {
 			if err := val.Error(); err != nil {
 				t.Fatal(err)
@@ -111,7 +119,7 @@ func TestRange(t *testing.T) {
 	count = 0
 	l, h = c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	qc.Range(
-		"idx", "bkt", l, h, 100, true, 1000,
+		0x0 /*defnID*/, l, h, 100, true, 1000,
 		func(val client.ResponseReader) bool {
 			count++
 			if count == 2 {
@@ -126,7 +134,7 @@ func TestRange(t *testing.T) {
 
 func TestScanAll(t *testing.T) {
 	c.LogIgnore()
-	addr := "localhost:8888"
+	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
 
@@ -141,11 +149,14 @@ func TestScanAll(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc := client.NewClient(client.Remoteaddr(addr), config)
+	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	count := 0
 	qc.ScanAll(
-		"idx", "bkt", 1000,
+		0x0 /*defnID*/, 1000,
 		func(val client.ResponseReader) bool {
 			if err := val.Error(); err != nil {
 				t.Fatal(err)
@@ -162,7 +173,7 @@ func TestScanAll(t *testing.T) {
 
 	count = 0
 	qc.ScanAll(
-		"idx", "bkt", 1000,
+		0x0 /*defnID*/, 1000,
 		func(val client.ResponseReader) bool {
 			count++
 			if count == 2 {
@@ -177,7 +188,7 @@ func TestScanAll(t *testing.T) {
 
 func BenchmarkStatistics(b *testing.B) {
 	c.LogIgnore()
-	addr := "localhost:8888"
+	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
 
@@ -188,12 +199,15 @@ func BenchmarkStatistics(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc := client.NewClient(client.Remoteaddr(addr), config)
+	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ResetTimer()
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	for i := 0; i < b.N; i++ {
-		qc.RangeStatistics("idx", "bkt", l, h, 0)
+		qc.RangeStatistics(0x0 /*defnID*/, l, h, 0)
 	}
 	b.StopTimer()
 	s.Close()
@@ -203,7 +217,7 @@ func BenchmarkStatistics(b *testing.B) {
 
 func BenchmarkRange1(b *testing.B) {
 	c.LogIgnore()
-	addr := "localhost:8888"
+	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
 
@@ -214,13 +228,16 @@ func BenchmarkRange1(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc := client.NewClient(client.Remoteaddr(addr), config)
+	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ResetTimer()
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	for i := 0; i < b.N; i++ {
 		qc.Range(
-			"idx", "bkt", l, h, 100, true, 1000,
+			0x0 /*defnID*/, l, h, 100, true, 1000,
 			func(val client.ResponseReader) bool {
 				return true
 			})
@@ -234,7 +251,7 @@ func BenchmarkRange1(b *testing.B) {
 
 func BenchmarkRange100(b *testing.B) {
 	c.LogIgnore()
-	addr := "localhost:8888"
+	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
 
@@ -247,13 +264,16 @@ func BenchmarkRange100(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc := client.NewClient(client.Remoteaddr(addr), config)
+	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ResetTimer()
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	for i := 0; i < b.N; i++ {
 		qc.Range(
-			"idx", "bkt", l, h, 100, true, 1000,
+			0x0 /*defnID*/, l, h, 100, true, 1000,
 			func(val client.ResponseReader) bool {
 				return true
 			})
@@ -267,7 +287,7 @@ func BenchmarkRange100(b *testing.B) {
 
 func BenchmarkRangeParallel10(b *testing.B) {
 	c.LogIgnore()
-	addr := "localhost:8888"
+	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
 
@@ -278,13 +298,16 @@ func BenchmarkRangeParallel10(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc := client.NewClient(client.Remoteaddr(addr), config)
+	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		qc.Range(
-			"idx", "bkt", l, h, 100, true, 1000,
+			0x0 /*defnID*/, l, h, 100, true, 1000,
 			func(val client.ResponseReader) bool {
 				return false
 			})
@@ -298,7 +321,7 @@ func BenchmarkRangeParallel10(b *testing.B) {
 
 func BenchmarkScanAll(b *testing.B) {
 	c.LogIgnore()
-	addr := "localhost:8888"
+	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
 
@@ -309,12 +332,15 @@ func BenchmarkScanAll(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc := client.NewClient(client.Remoteaddr(addr), config)
+	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		qc.ScanAll(
-			"idx", "bkt", 1000,
+			0x0 /*defnID*/, 1000,
 			func(val client.ResponseReader) bool {
 				return true
 			})

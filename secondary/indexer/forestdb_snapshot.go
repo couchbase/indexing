@@ -14,8 +14,30 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
+	"math"
 	"sync"
 )
+
+var FORESTDB_INMEMSEQ = forestdb.SeqNum(math.MaxUint64)
+
+type fdbSnapshotInfo struct {
+	Ts        *common.TsVbuuid
+	MainSeq   forestdb.SeqNum
+	BackSeq   forestdb.SeqNum
+	Committed bool
+}
+
+func (info *fdbSnapshotInfo) Timestamp() *common.TsVbuuid {
+	return info.Ts
+}
+
+func (info *fdbSnapshotInfo) IsCommitted() bool {
+	return info.Committed
+}
+
+func (info *fdbSnapshotInfo) String() string {
+	return fmt.Sprintf("SnapshotInfo: seqnos: %v, %v", info.MainSeq, info.BackSeq)
+}
 
 type fdbSnapshot struct {
 	slice Slice
@@ -28,6 +50,7 @@ type fdbSnapshot struct {
 	idxDefnId common.IndexDefnId //index definition id
 	idxInstId common.IndexInstId //index instance id
 	ts        *common.TsVbuuid   //timestamp
+	committed bool
 
 	refCount int          //Reader count for this snapshot
 	lock     sync.RWMutex //lock to atomically increment the refCount
@@ -41,17 +64,25 @@ func (s *fdbSnapshot) Open() error {
 		s.refCount++
 		return nil
 	} else {
+		var mainSeq, backSeq forestdb.SeqNum
+		if s.committed {
+			mainSeq = s.mainSeqNum
+			backSeq = s.backSeqNum
+		} else {
+			mainSeq = FORESTDB_INMEMSEQ
+			backSeq = FORESTDB_INMEMSEQ
+		}
 		var err error
-		s.main, err = s.main.SnapshotOpen(s.mainSeqNum)
+		s.main, err = s.main.SnapshotOpen(mainSeq)
 		if err != nil {
 			common.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
-				"Opening Main DB Snapshot %v", err)
+				"Opening Main DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), mainSeq, err)
 			return err
 		}
-		s.back, err = s.back.SnapshotOpen(s.backSeqNum)
+		s.back, err = s.back.SnapshotOpen(backSeq)
 		if err != nil {
 			common.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
-				"Opening Back DB Snapshot %v", err)
+				"Opening Back DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), backSeq, err)
 			return err
 		}
 		s.slice.IncrRef()
@@ -151,4 +182,13 @@ func (s *fdbSnapshot) String() string {
 	str += fmt.Sprintf("BackSeqNum: %v ", s.backSeqNum)
 	str += fmt.Sprintf("TS: %v ", s.ts)
 	return str
+}
+
+func (s *fdbSnapshot) Info() SnapshotInfo {
+	return &fdbSnapshotInfo{
+		MainSeq:   s.mainSeqNum,
+		BackSeq:   s.backSeqNum,
+		Committed: s.committed,
+		Ts:        s.ts,
+	}
 }

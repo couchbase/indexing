@@ -50,20 +50,25 @@ const (
 	TK_SHUTDOWN
 	TK_STABILITY_TIMESTAMP
 	TK_INIT_BUILD_DONE
+	TK_INIT_BUILD_DONE_ACK
 	TK_ENABLE_FLUSH
 	TK_DISABLE_FLUSH
 	TK_MERGE_STREAM
+	TK_MERGE_STREAM_ACK
 	TK_GET_BUCKET_HWT
 
 	//STORAGE_MANAGER
 	STORAGE_MGR_SHUTDOWN
 	STORAGE_INDEX_SNAP_REQUEST
+	STORAGE_INDEX_STORAGE_STATS
+	STORAGE_INDEX_COMPACT
 
 	//KVSender
 	KV_SENDER_SHUTDOWN
 	KV_SENDER_GET_CURR_KV_TS
 	KV_SENDER_RESTART_VBUCKETS
 	KV_SENDER_REPAIR_ENDPOINTS
+	KV_STREAM_REPAIR
 
 	//ADMIN_MGR
 	ADMIN_MGR_SHUTDOWN
@@ -71,7 +76,12 @@ const (
 	//CLUSTER_MGR
 	CLUST_MGR_AGENT_SHUTDOWN
 	CLUST_MGR_CREATE_INDEX_DDL
+	CLUST_MGR_BUILD_INDEX_DDL
 	CLUST_MGR_DROP_INDEX_DDL
+	CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
+	CLUST_MGR_GET_GLOBAL_TOPOLOGY
+	CLUST_MGR_GET_LOCAL
+	CLUST_MGR_SET_LOCAL
 
 	//CBQ_BRIDGE_SHUTDOWN
 	CBQ_BRIDGE_SHUTDOWN
@@ -79,12 +89,19 @@ const (
 	CBQ_DROP_INDEX_DDL
 
 	//INDEXER
+	INDEXER_INIT_PREP_RECOVERY
 	INDEXER_PREPARE_RECOVERY
+	INDEXER_PREPARE_DONE
 	INDEXER_INITIATE_RECOVERY
+	INDEXER_RECOVERY_DONE
+	INDEXER_BUCKET_NOT_FOUND
 	INDEXER_ROLLBACK
+	STREAM_REQUEST_DONE
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
+
+	COMPACTION_MGR_SHUTDOWN
 
 	//COMMON
 	UPDATE_INDEX_INSTANCE_MAP
@@ -93,8 +110,16 @@ const (
 	OPEN_STREAM
 	ADD_INDEX_LIST_TO_STREAM
 	REMOVE_INDEX_LIST_FROM_STREAM
+	REMOVE_BUCKET_FROM_STREAM
 	CLOSE_STREAM
 	CLEANUP_STREAM
+
+	CONFIG_SETTINGS_UPDATE
+
+	STORAGE_STATS
+	SCAN_STATS
+	INDEX_PROGRESS_STATS
+	INDEXER_STATS
 )
 
 type Message interface {
@@ -198,9 +223,8 @@ func (m *MsgStreamError) GetError() Error {
 	return m.err
 }
 
-//STREAM_READER_STREAM_SHUTDOWN
-//STREAM_READER_RESTART_VBUCKETS
-//STREAM_READER_REPAIR_VBUCKETS
+//STREAM_READER_CONN_ERROR
+//STREAM_REQUEST_DONE
 type MsgStreamInfo struct {
 	mType    MsgType
 	streamId common.StreamId
@@ -257,6 +281,7 @@ func (m *MsgUpdateBucketQueue) String() string {
 
 //OPEN_STREAM
 //ADD_INDEX_LIST_TO_STREAM
+//REMOVE_BUCKET_FROM_STREAM
 //REMOVE_INDEX_LIST_FROM_STREAM
 //CLOSE_STREAM
 //CLEANUP_STREAM
@@ -266,8 +291,9 @@ type MsgStreamUpdate struct {
 	indexList []common.IndexInst
 	buildTs   Timestamp
 	respCh    MsgChannel
+	stopCh    StopChannel
 	bucket    string
-	restartTs map[string]*common.TsVbuuid
+	restartTs *common.TsVbuuid
 }
 
 func (m *MsgStreamUpdate) GetMsgType() MsgType {
@@ -290,11 +316,15 @@ func (m *MsgStreamUpdate) GetResponseChannel() MsgChannel {
 	return m.respCh
 }
 
+func (m *MsgStreamUpdate) GetStopChannel() StopChannel {
+	return m.stopCh
+}
+
 func (m *MsgStreamUpdate) GetBucket() string {
 	return m.bucket
 }
 
-func (m *MsgStreamUpdate) GetRestartTs() map[string]*common.TsVbuuid {
+func (m *MsgStreamUpdate) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
 }
 
@@ -476,15 +506,16 @@ func (m *MsgTKStabilityTS) String() string {
 }
 
 //TK_INIT_BUILD_DONE
+//TK_INIT_BUILD_DONE_ACK
 type MsgTKInitBuildDone struct {
+	mType    MsgType
 	streamId common.StreamId
 	buildTs  Timestamp
 	bucket   string
-	respCh   MsgChannel
 }
 
 func (m *MsgTKInitBuildDone) GetMsgType() MsgType {
-	return TK_INIT_BUILD_DONE
+	return m.mType
 }
 
 func (m *MsgTKInitBuildDone) GetBucket() string {
@@ -499,19 +530,17 @@ func (m *MsgTKInitBuildDone) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgTKInitBuildDone) GetResponseChannel() MsgChannel {
-	return m.respCh
-}
-
 //TK_MERGE_STREAM
+//TK_MERGE_STREAM_ACK
 type MsgTKMergeStream struct {
+	mType    MsgType
 	streamId common.StreamId
 	bucket   string
 	mergeTs  Timestamp
 }
 
 func (m *MsgTKMergeStream) GetMsgType() MsgType {
-	return TK_MERGE_STREAM
+	return m.mType
 }
 
 func (m *MsgTKMergeStream) GetStreamId() common.StreamId {
@@ -571,6 +600,32 @@ func (m *MsgCreateIndex) GetString() string {
 	str := "\n\tMessage: MsgCreateIndex"
 	str += fmt.Sprintf("\n\tType: %v", m.mType)
 	str += fmt.Sprintf("\n\tIndex: %v", m.indexInst)
+	return str
+}
+
+//CLUST_MGR_BUILD_INDEX_DDL
+type MsgBuildIndex struct {
+	indexInstList []common.IndexInstId
+	respCh        MsgChannel
+}
+
+func (m *MsgBuildIndex) GetMsgType() MsgType {
+	return CLUST_MGR_BUILD_INDEX_DDL
+}
+
+func (m *MsgBuildIndex) GetIndexList() []common.IndexInstId {
+	return m.indexInstList
+}
+
+func (m *MsgBuildIndex) GetRespCh() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgBuildIndex) GetString() string {
+
+	str := "\n\tMessage: MsgBuildIndex"
+	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_BUILD_INDEX_DDL)
+	str += fmt.Sprintf("\n\tIndex: %v", m.indexInstList)
 	return str
 }
 
@@ -642,7 +697,10 @@ func (m *MsgTKGetBucketHWT) String() string {
 //KV_SENDER_RESTART_VBUCKETS
 type MsgRestartVbuckets struct {
 	streamId  common.StreamId
-	restartTs map[string]*common.TsVbuuid
+	bucket    string
+	restartTs *common.TsVbuuid
+	respCh    MsgChannel
+	stopCh    StopChannel
 }
 
 func (m *MsgRestartVbuckets) GetMsgType() MsgType {
@@ -653,8 +711,20 @@ func (m *MsgRestartVbuckets) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRestartVbuckets) GetRestartTs() map[string]*common.TsVbuuid {
+func (m *MsgRestartVbuckets) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgRestartVbuckets) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
+}
+
+func (m *MsgRestartVbuckets) GetResponseCh() MsgChannel {
+	return m.respCh
+}
+
+func (m *MsgRestartVbuckets) GetStopChannel() StopChannel {
+	return m.stopCh
 }
 
 func (m *MsgRestartVbuckets) String() string {
@@ -689,12 +759,17 @@ func (m *MsgRepairEndpoints) String() string {
 	return str
 }
 
+//INDEXER_INIT_PREP_RECOVERY
 //INDEXER_PREPARE_RECOVERY
+//INDEXER_PREPARE_DONE
 //INDEXER_INITIATE_RECOVERY
+//INDEXER_RECOVERY_DONE
+//INDEXER_BUCKET_NOT_FOUND
 type MsgRecovery struct {
 	mType     MsgType
 	streamId  common.StreamId
-	restartTs map[string]*common.TsVbuuid
+	bucket    string
+	restartTs *common.TsVbuuid
 }
 
 func (m *MsgRecovery) GetMsgType() MsgType {
@@ -705,13 +780,18 @@ func (m *MsgRecovery) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRecovery) GetRestartTs() map[string]*common.TsVbuuid {
+func (m *MsgRecovery) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgRecovery) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
 }
 
 type MsgRollback struct {
 	streamId   common.StreamId
-	rollbackTs map[string]*common.TsVbuuid
+	bucket     string
+	rollbackTs *common.TsVbuuid
 }
 
 func (m *MsgRollback) GetMsgType() MsgType {
@@ -722,7 +802,11 @@ func (m *MsgRollback) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgRollback) GetRollbackTs() map[string]*common.TsVbuuid {
+func (m *MsgRollback) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgRollback) GetRollbackTs() *common.TsVbuuid {
 	return m.rollbackTs
 }
 
@@ -748,6 +832,140 @@ func (m *MsgIndexSnapRequest) GetReplyChannel() chan interface{} {
 
 func (m *MsgIndexSnapRequest) GetIndexId() common.IndexInstId {
 	return m.idxInstId
+}
+
+type MsgIndexStorageStats struct {
+	respch chan []IndexStorageStats
+}
+
+func (m *MsgIndexStorageStats) GetMsgType() MsgType {
+	return STORAGE_INDEX_STORAGE_STATS
+}
+
+func (m *MsgIndexStorageStats) GetReplyChannel() chan []IndexStorageStats {
+	return m.respch
+}
+
+type MsgStatsRequest struct {
+	mType  MsgType
+	respch chan map[string]string
+}
+
+func (m *MsgStatsRequest) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgStatsRequest) GetReplyChannel() chan map[string]string {
+	return m.respch
+}
+
+type MsgIndexCompact struct {
+	instId common.IndexInstId
+	errch  chan error
+}
+
+func (m *MsgIndexCompact) GetMsgType() MsgType {
+	return STORAGE_INDEX_COMPACT
+}
+
+func (m *MsgIndexCompact) GetInstId() common.IndexInstId {
+	return m.instId
+}
+
+func (m *MsgIndexCompact) GetErrorChannel() chan error {
+	return m.errch
+}
+
+//KV_STREAM_REPAIR
+type MsgKVStreamRepair struct {
+	streamId  common.StreamId
+	bucket    string
+	restartTs *common.TsVbuuid
+}
+
+func (m *MsgKVStreamRepair) GetMsgType() MsgType {
+	return KV_STREAM_REPAIR
+}
+
+func (m *MsgKVStreamRepair) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgKVStreamRepair) GetBucket() string {
+	return m.bucket
+}
+
+func (m *MsgKVStreamRepair) GetRestartTs() *common.TsVbuuid {
+	return m.restartTs
+}
+
+//CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
+type MsgClustMgrUpdate struct {
+	mType         MsgType
+	indexList     []common.IndexInst
+	updatedFields MetaUpdateFields
+}
+
+func (m *MsgClustMgrUpdate) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgClustMgrUpdate) GetIndexList() []common.IndexInst {
+	return m.indexList
+}
+
+func (m *MsgClustMgrUpdate) GetUpdatedFields() MetaUpdateFields {
+	return m.updatedFields
+}
+
+//CLUST_MGR_GET_GLOBAL_TOPOLOGY
+type MsgClustMgrTopology struct {
+	indexInstMap common.IndexInstMap
+}
+
+func (m *MsgClustMgrTopology) GetMsgType() MsgType {
+	return CLUST_MGR_GET_GLOBAL_TOPOLOGY
+}
+
+func (m *MsgClustMgrTopology) GetInstMap() common.IndexInstMap {
+	return m.indexInstMap
+}
+
+//CLUST_MGR_GET_LOCAL
+//CLUST_MGR_SET_LOCAL
+type MsgClustMgrLocal struct {
+	mType MsgType
+	key   string
+	value string
+	err   error
+}
+
+func (m *MsgClustMgrLocal) GetMsgType() MsgType {
+	return m.mType
+}
+
+func (m *MsgClustMgrLocal) GetKey() string {
+	return m.key
+}
+
+func (m *MsgClustMgrLocal) GetValue() string {
+	return m.value
+}
+
+func (m *MsgClustMgrLocal) GetError() error {
+	return m.err
+}
+
+type MsgConfigUpdate struct {
+	cfg common.Config
+}
+
+func (m *MsgConfigUpdate) GetMsgType() MsgType {
+	return CONFIG_SETTINGS_UPDATE
+}
+
+func (m *MsgConfigUpdate) GetConfig() common.Config {
+	return m.cfg
 }
 
 //Helper function to return string for message type
@@ -805,12 +1023,16 @@ func (m MsgType) String() string {
 		return "TK_STABILITY_TIMESTAMP"
 	case TK_INIT_BUILD_DONE:
 		return "TK_INIT_BUILD_DONE"
+	case TK_INIT_BUILD_DONE_ACK:
+		return "TK_INIT_BUILD_DONE_ACK"
 	case TK_ENABLE_FLUSH:
 		return "TK_ENABLE_FLUSH"
 	case TK_DISABLE_FLUSH:
 		return "TK_DISABLE_FLUSH"
 	case TK_MERGE_STREAM:
 		return "TK_MERGE_STREAM"
+	case TK_MERGE_STREAM_ACK:
+		return "TK_MERGE_STREAM_ACK"
 	case TK_GET_BUCKET_HWT:
 		return "TK_GET_BUCKET_HWT"
 
@@ -829,12 +1051,22 @@ func (m MsgType) String() string {
 	case CBQ_BRIDGE_SHUTDOWN:
 		return "CBQ_BRIDGE_SHUTDOWN"
 
+	case INDEXER_INIT_PREP_RECOVERY:
+		return "INDEXER_INIT_PREP_RECOVERY"
 	case INDEXER_PREPARE_RECOVERY:
 		return "INDEXER_PREPARE_RECOVERY"
+	case INDEXER_PREPARE_DONE:
+		return "INDEXER_PREPARE_DONE"
 	case INDEXER_INITIATE_RECOVERY:
 		return "INDEXER_INITIATE_RECOVERY"
+	case INDEXER_RECOVERY_DONE:
+		return "INDEXER_RECOVERY_DONE"
+	case INDEXER_BUCKET_NOT_FOUND:
+		return "INDEXER_BUCKET_NOT_FOUND"
 	case INDEXER_ROLLBACK:
 		return "INDEXER_ROLLBACK"
+	case STREAM_REQUEST_DONE:
+		return "STREAM_REQUEST_DONE"
 
 	case SCAN_COORD_SHUTDOWN:
 		return "SCAN_COORD_SHUTDOWN"
@@ -850,6 +1082,8 @@ func (m MsgType) String() string {
 		return "ADD_INDEX_LIST_TO_STREAM"
 	case REMOVE_INDEX_LIST_FROM_STREAM:
 		return "REMOVE_INDEX_LIST_FROM_STREAM"
+	case REMOVE_BUCKET_FROM_STREAM:
+		return "REMOVE_BUCKET_FROM_STREAM"
 	case CLOSE_STREAM:
 		return "CLOSE_STREAM"
 	case CLEANUP_STREAM:
@@ -859,16 +1093,38 @@ func (m MsgType) String() string {
 		return "KV_SENDER_RESTART_VBUCKETS"
 	case KV_SENDER_REPAIR_ENDPOINTS:
 		return "KV_SENDER_REPAIR_ENDPOINTS"
+	case KV_STREAM_REPAIR:
+		return "KV_STREAM_REPAIR"
 
 	case CLUST_MGR_CREATE_INDEX_DDL:
 		return "CLUST_MGR_CREATE_INDEX_DDL"
+	case CLUST_MGR_BUILD_INDEX_DDL:
+		return "CLUST_MGR_BUILD_INDEX_DDL"
 	case CLUST_MGR_DROP_INDEX_DDL:
 		return "CLUST_MGR_DROP_INDEX_DDL"
+	case CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX:
+		return "CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX"
+	case CLUST_MGR_GET_GLOBAL_TOPOLOGY:
+		return "CLUST_MGR_GET_GLOBAL_TOPOLOGY"
+	case CLUST_MGR_GET_LOCAL:
+		return "CLUST_MGR_GET_LOCAL"
+	case CLUST_MGR_SET_LOCAL:
+		return "CLUST_MGR_SET_LOCAL"
 
 	case CBQ_CREATE_INDEX_DDL:
 		return "CBQ_CREATE_INDEX_DDL"
 	case CBQ_DROP_INDEX_DDL:
 		return "CBQ_DROP_INDEX_DDL"
+
+	case STORAGE_INDEX_SNAP_REQUEST:
+		return "STORAGE_INDEX_SNAP_REQUEST"
+	case STORAGE_INDEX_STORAGE_STATS:
+		return "STORAGE_INDEX_STORAGE_STATS"
+	case STORAGE_INDEX_COMPACT:
+		return "STORAGE_INDEX_COMPACT"
+
+	case CONFIG_SETTINGS_UPDATE:
+		return "CONFIG_SETTINGS_UPDATE"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

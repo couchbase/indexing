@@ -16,24 +16,24 @@ import (
 
 type StreamAddressMap map[common.StreamId]common.Endpoint
 
-type StreamStateMap map[common.StreamId]StreamState
-
-type StreamState byte
+type StreamStatus byte
 
 const (
-	//Stream is active i.e. processing mutations
-	STREAM_ACTIVE StreamState = 0
 	//Stream is inactive i.e. not processing mutations
-	STREAM_INACTIVE = 1
+	STREAM_INACTIVE StreamStatus = iota
+	//Stream is active i.e. processing mutations
+	STREAM_ACTIVE
 	//Stream is preparing for recovery(i.e. it has received
 	//a control or error message and it is doing a cleanup
 	//before initiating Catchup
-	STREAM_PREPARE_RECOVERY = 2
+	STREAM_PREPARE_RECOVERY
+	//Prepare is done before recovery
+	STREAM_PREPARE_DONE
 	//Stream is using a Catchup to recover
-	STREAM_RECOVERY = 3
+	STREAM_RECOVERY
 )
 
-func (s StreamState) String() string {
+func (s StreamStatus) String() string {
 
 	switch s {
 	case STREAM_ACTIVE:
@@ -42,6 +42,8 @@ func (s StreamState) String() string {
 		return "STREAM_INACTIVE"
 	case STREAM_PREPARE_RECOVERY:
 		return "STREAM_PREPARE_RECOVERY"
+	case STREAM_PREPARE_DONE:
+		return "STREAM_PREPARE_DONE"
 	case STREAM_RECOVERY:
 		return "STREAM_RECOVERY"
 	default:
@@ -129,4 +131,43 @@ func (m MutationSnapshot) CanProcess() bool {
 	}
 
 	return false
+}
+
+// Represents storage stats for an index instance
+type IndexStorageStats struct {
+	InstId common.IndexInstId
+	Stats  StorageStatistics
+}
+
+type VbStatus Seqno
+
+const (
+	VBS_INIT = iota
+	VBS_STREAM_BEGIN
+	VBS_STREAM_END
+	VBS_CONN_ERROR
+	VBS_REPAIR
+)
+
+func (v VbStatus) String() string {
+	switch v {
+	case VBS_INIT:
+		return "VBS_INIT"
+	case VBS_STREAM_BEGIN:
+		return "VBS_STREAM_BEGIN"
+	case VBS_STREAM_END:
+		return "VBS_STREAM_END"
+	case VBS_CONN_ERROR:
+		return "VBS_CONN_ERROR"
+	case VBS_REPAIR:
+		return "VBS_REPAIR"
+	default:
+		return "VBS_STATUS_INVALID"
+	}
+}
+
+type MetaUpdateFields struct {
+	state  bool
+	stream bool
+	err    bool
 }

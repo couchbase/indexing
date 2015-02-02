@@ -83,6 +83,8 @@ const (
 	UPR_BUFFERACK   = CommandCode(0x5d) // UPR Buffer Acknowledgement
 	UPR_CONTROL     = CommandCode(0x5e) // Set flow control params
 
+	SELECT_BUCKET = CommandCode(0x89) // Select bucket
+
 	OBSERVE = CommandCode(0x92)
 )
 

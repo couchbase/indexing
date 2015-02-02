@@ -1,0 +1,23 @@
+(let guid (uuid))
+
+s : "{ " properties "}".
+
+properties  : type ",\n"
+              docid ",\n"
+              age ",\n"
+              active ",\n"
+              company ",\n"
+              "\"first-name\": \"" fname DQ ",\n"
+              lastname ",\n"
+              emailid ",\n"
+              gender ",\n".
+
+type       : "\"type\": \"user\"".
+docid      : "\"docid\": \"" (sprintf "User-%v" $guid) DQ.
+age        : "\"age\": " (range 15 80).
+active     : "\"isActive\": " (choice "true" "false").
+company    : "\"company\": \"" (bag "./companies") DQ.
+fname      : (bag "./propernames").
+lastname   : "\"last-name\": \""  (bag "./propernames") DQ.
+emailid    : "\"emailid\": \"" $fname "@gmail.com" DQ.
+gender     : "\"gender\": \"" (choice "male" "female") DQ.

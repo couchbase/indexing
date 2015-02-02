@@ -1,5 +1,5 @@
 {  
-   "KVAddress": "172.23.105.6:8091",
-   "IndexManagementAddress": "172.23.105.6:9100",
-   "IndexScanAddress": "172.23.105.6:9101"
+   "KVAddress": "172.23.107.133:8091",
+   "Username": "Administrator",
+   "Password": "password"
 }

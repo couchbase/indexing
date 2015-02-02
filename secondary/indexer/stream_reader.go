@@ -41,6 +41,7 @@ type mutationStreamReader struct {
 
 	bucketQueueMap BucketQueueMap //indexId to mutation queue map
 
+	bucketFilterMap map[string]*common.TsVbuuid
 }
 
 //CreateMutationStreamReader creates a new mutation stream and starts
@@ -73,15 +74,18 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 
 	//init the reader
 	r := &mutationStreamReader{streamId: streamId,
-		stream:         stream,
-		streamMutch:    streamMutch,
-		supvCmdch:      supvCmdch,
-		supvRespch:     supvRespch,
-		numWorkers:     numWorkers,
-		workerch:       make([]MutationChannel, numWorkers),
-		workerStopCh:   make([]StopChannel, numWorkers),
-		bucketQueueMap: CopyBucketQueueMap(bucketQueueMap),
+		stream:          stream,
+		streamMutch:     streamMutch,
+		supvCmdch:       supvCmdch,
+		supvRespch:      supvRespch,
+		numWorkers:      numWorkers,
+		workerch:        make([]MutationChannel, numWorkers),
+		workerStopCh:    make([]StopChannel, numWorkers),
+		bucketQueueMap:  CopyBucketQueueMap(bucketQueueMap),
+		bucketFilterMap: make(map[string]*common.TsVbuuid),
 	}
+
+	r.initBucketFilter()
 
 	//start the main reader loop
 	go r.run()
@@ -200,6 +204,8 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 	meta.seqno = Seqno(kv.GetSeqno())
 
 	var mut *MutationKeys
+	skipMutation := false
+	evalFilter := true
 
 	common.Tracef("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
 
@@ -211,10 +217,23 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 		//case protobuf.Command_Upsert, protobuf.Command_Deletion, protobuf.Command_UpsertDeletion:
 		case common.Upsert, common.Deletion, common.UpsertDeletion:
 
-			mutationCount++
-			if (mutationCount%10000 == 0) || mutationCount == 1 {
-				common.Infof("MutationStreamReader:: MutationCount %v", mutationCount)
+			//As there can multiple keys in a KeyVersion for a mutation,
+			//filter needs to be evaluated and set only once.
+			if evalFilter {
+				evalFilter = false
+				//check the bucket filter to see if this mutation can be processed
+				//valid mutation will increment seqno of the filter
+				if !r.checkAndSetBucketFilter(meta) {
+					skipMutation = true
+				}
 			}
+
+			if skipMutation {
+				continue
+			}
+
+			logPerfStat()
+
 			//allocate new mutation first time
 			if mut == nil {
 				//TODO use free list here to reuse the struct and reduce garbage
@@ -246,6 +265,10 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 			r.supvRespch <- msg
 
 		case common.StreamBegin:
+
+			//set bucket filter on receiving stream begin
+			r.setBucketFilter(meta)
+
 			//send message to supervisor to take decision
 			msg := &MsgStream{mType: STREAM_READER_STREAM_BEGIN,
 				streamId: r.streamId,
@@ -329,9 +352,10 @@ func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 
 	case dataport.ConnectionError:
 		common.Debugf("MutationStreamReader::handleStreamInfoMsg \n\tReceived ConnectionError "+
-			"from Client for Stream %v.", r.streamId)
+			"from Client for Stream %v %v.", r.streamId, msg.(dataport.ConnectionError))
 
-		//send a separate message for each bucket
+		//send a separate message for each bucket. If the ConnError is with empty vblist,
+		//the message is ignored.
 		for bucket, vbList := range msg.(dataport.ConnectionError) {
 			supvMsg = &MsgStreamInfo{mType: STREAM_READER_CONN_ERROR,
 				streamId: r.streamId,
@@ -366,6 +390,8 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		//copy and store new bucketQueueMap
 		bucketQueueMap := cmd.(*MsgUpdateBucketQueue).GetBucketQueueMap()
 		r.bucketQueueMap = CopyBucketQueueMap(bucketQueueMap)
+
+		r.initBucketFilter()
 
 		//start all workers again
 		r.startWorkers()
@@ -432,6 +458,69 @@ func (r *mutationStreamReader) stopWorkers() {
 	}
 }
 
+//initBucketFilter initializes the bucket filter
+func (r *mutationStreamReader) initBucketFilter() {
+
+	//allocate a new filter for the buckets which don't
+	//have a filter yet
+	for b, q := range r.bucketQueueMap {
+		if _, ok := r.bucketFilterMap[b]; !ok {
+			common.Tracef("MutationStreamReader::initBucketFilter Added new filter "+
+				"for Bucket %v Stream %v", b, r.streamId)
+			r.bucketFilterMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
+		}
+	}
+
+	//remove the bucket filters for which bucket doesn't exist anymore
+	for b, _ := range r.bucketFilterMap {
+		if _, ok := r.bucketQueueMap[b]; !ok {
+			common.Tracef("MutationStreamReader::initBucketFilter Deleted filter "+
+				"for Bucket %v Stream %v", b, r.streamId)
+			delete(r.bucketFilterMap, b)
+		}
+	}
+
+}
+
+//setBucketFilter sets the bucket filter based on seqno/vbuuid of mutation.
+//filter is set when stream begin is received.
+func (r *mutationStreamReader) setBucketFilter(meta *MutationMeta) {
+
+	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
+		filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
+		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+		common.Tracef("MutationStreamReader::setBucketFilter Vbucket %v "+
+			"Seqno %v Bucket %v Stream %v", meta.vbucket, meta.seqno, meta.bucket, r.streamId)
+	} else {
+		common.Errorf("MutationStreamReader::setBucketFilter Missing bucket "+
+			"%v in Filter for Stream %v", meta.bucket, r.streamId)
+	}
+
+}
+
+//checkAndSetBucketFilter checks if mutation can be processed
+//based on the current filter. Filter is also updated with new
+//seqno/vbuuid if mutations can be processed.
+func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool {
+
+	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
+		if uint64(meta.seqno) > filter.Seqnos[meta.vbucket] {
+			filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
+			filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+			return true
+		} else {
+			common.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Skipped "+
+				"Mutation %v for Bucket %v Stream %v. Current Filter %v", meta,
+				meta.bucket, r.streamId, filter)
+			return false
+		}
+	} else {
+		common.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Missing"+
+			"bucket %v in Filter for Stream %v", meta.bucket, r.streamId)
+		return false
+	}
+}
+
 //helper function to copy vbList
 func copyVbList(vbList []uint16) []Vbucket {
 
@@ -442,4 +531,14 @@ func copyVbList(vbList []uint16) []Vbucket {
 	}
 
 	return c
+}
+
+func logPerfStat() {
+
+	mutationCount++
+	if (mutationCount%10000 == 0) || mutationCount == 1 {
+		common.Infof("MutationStreamReader::logPerfStat \n"+
+			"MutationCount %v", mutationCount)
+	}
+
 }

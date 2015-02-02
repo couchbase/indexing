@@ -91,8 +91,12 @@ As an illustration of synchronous replication, please see [Initial Index Build P
 * [Terminology Document](markdown/terminology.md)
 
 ###Presentation
+
 * [John's Presentation Slides](other/presentation.pdf)
 
+###UI design
+
+* [UI Design](other/CB_Cluster_2iQuery_Administration.pdf)
 
 ###References
 1. [Distributed Indexing Design Proposal - Steve Yen](https://docs.google.com/document/d/1TEY_yjUMs3FT3FZkgqIZUiKziUUBGiCWFSjWOOj65Dw/edit?pli=1)

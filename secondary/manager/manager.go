@@ -11,11 +11,16 @@ package manager
 
 import (
 	//"fmt"
-	gometa "github.com/couchbase/gometa/common"
+	"encoding/json"
+	"fmt"
+	gometaC "github.com/couchbase/gometa/common"
+	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/manager/client"
+	"path/filepath"
 	"sync"
 	"time"
-	"fmt"
+	"os"
 )
 
 ///////////////////////////////////////////////////////
@@ -25,11 +30,14 @@ import (
 var USE_MASTER_REPO = false
 
 type IndexManager struct {
-	repo        *MetadataRepo
-	coordinator *Coordinator
-	reqHandler  *requestHandler
-	eventMgr    *eventManager
-	dataport    string
+	repo          *MetadataRepo
+	coordinator   *Coordinator
+	reqHandler    *requestHandler
+	eventMgr      *eventManager
+	lifecycleMgr  *LifecycleMgr
+	dataport      string
+	requestServer RequestServer
+	basepath      string
 
 	// stream management
 	streamMgr *StreamManager
@@ -45,6 +53,58 @@ type IndexManager struct {
 	isClosed bool
 }
 
+//
+// Index Lifecycle
+// 1) Index Creation
+//   A) When an index is created, the index definition is assigned to a 64 bits UUID (IndexDefnId).
+//   B) IndexManager will persist the index definition.
+//   C) IndexManager will persist the index instance with INDEX_STATE_CREATED status.
+//      Each instance is assigned a 64 bits IndexInstId. For the first instance of an index,
+//      the IndexInstId is equal to the IndexDefnId.
+//   D) IndexManager will invovke MetadataNotifier.OnIndexCreate().
+//   E) IndexManager will update instance to status INDEX_STATE_READY.
+//   F) If there is any error in (1B) - (1E), IndexManager will cleanup by deleting index definition and index instance.
+//      Since there is no atomic transaction, cleanup may not be completed, and the index will be left in an invalid state.
+//      See (5) for conditions where the index is considered valid.
+//   G) If there is any error in (1E), IndexManager will also invoke OnIndexDelete()
+//   H) Any error from (1A) or (1F), the error will be reported back to MetadataProvider.
+//
+// 2) Immediate Index Build (index definition is persisted successfully and deferred build flag is false)
+//   A) MetadataNotifier.OnIndexBuild() is invoked.   OnIndexBuild() is responsible for updating the state of the index
+//      instance (e.g. from READY to INITIAL).
+//   B) If there is an error in (2A), the error will be returned to the MetadataProvider.
+//   C) No cleanup will be perfromed by IndexManager if OnIndexBuild() fails.  In other words, the index can be left in
+//      INDEX_STATE_READY.   The user should be able to kick off index build again using deferred build.
+//   D) OnIndexBuild() can be running on a separate go-rountine.  It can invoke UpdateIndexInstance() at any time during
+//      index build.  This update will be queued serially and apply to the topology specific for that index instance (will
+//      not affect any other index instance).  The new index state will be returned to the MetadataProvider asynchronously.
+//
+// 3) Deferred Index Build
+//    A) For Deferred Index Build, it will follow step (2A) - (2D).
+//
+// 4) Index Deletion
+//    A) When an index is deleted, IndexManager will set the index to INDEX_STATE_DELETED.
+//    B) If (4A) fails, the error will be returned and the index is considered as NOT deleted.
+//    C) IndexManager will then invoke MetadataNotifier.OnIndexDelete().
+//    D) The IndexManager will delete the index definition first before deleting the index instance.  since there is no atomic
+//       transaction, the cleanup may not be completed, and index can be in inconsistent state. See (5) for valid index state.
+//    E) Any error returned from (4C) to (4D) will not be returned to the client (since these are cleanup steps)
+//
+// 5) Valid Index States
+//    A) Both index definition and index instance exist.
+//    B) Index Instance is not in INDEX_STATE_CREATE or INDEX_STATE_DELETED.
+//
+type MetadataNotifier interface {
+	OnIndexCreate(*common.IndexDefn) error
+	OnIndexDelete(common.IndexDefnId) error
+	OnIndexBuild([]common.IndexDefnId) error
+}
+
+type RequestServer interface {
+	MakeRequest(opCode gometaC.OpCode, key string, value []byte) error
+	MakeAsyncRequest(opCode gometaC.OpCode, key string, value []byte) error
+}
+
 ///////////////////////////////////////////////////////
 // public function
 ///////////////////////////////////////////////////////
@@ -52,25 +112,35 @@ type IndexManager struct {
 //
 // Create a new IndexManager
 //
-func NewIndexManager(msgAddr string, dataport string) (mgr *IndexManager, err error) {
+func NewIndexManager(msgAddr string, dataport string, config common.Config) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(msgAddr, dataport, nil)
+	return NewIndexManagerInternal(msgAddr, dataport, NewProjectorAdmin(nil, nil, nil), config)
 }
 
 //
 // Create a new IndexManager
 //
-func NewIndexManagerInternal(msgAddr string, dataport string, admin StreamAdmin) (mgr *IndexManager, err error) {
+func NewIndexManagerInternal(msgAddr string,
+	dataport string,
+	admin StreamAdmin,
+	config common.Config) (mgr *IndexManager, err error) {
+
+	if common.IsLogEnabled() {
+		gometaL.LogEnable()
+		gometaL.SetLogLevel(common.LogLevel())
+		//gometaL.SetLogLevel(common.LogLevelInfo)
+		gometaL.SetPrefix("Indexing/Gometa")
+	}
 
 	mgr = new(IndexManager)
 	mgr.isClosed = false
 	mgr.dataport = dataport
 
-	// stream mgmt	- stream services will start if the indexer node becomes master
+	// stream mgmt  - stream services will start if the indexer node becomes master
 	mgr.streamMgr = nil
 	mgr.admin = admin
 
-	// timestamp mgmt	- timestamp servcie will start if indexer node becomes master
+	// timestamp mgmt   - timestamp servcie will start if indexer node becomes master
 	mgr.timestampCh = make(map[common.StreamId]chan *common.TsVbuuid)
 	mgr.timer = nil
 	mgr.timekeeperStopCh = nil
@@ -84,22 +154,32 @@ func NewIndexManagerInternal(msgAddr string, dataport string, admin StreamAdmin)
 		return nil, err
 	}
 
+	// Initialize LifecycleMgr.
+	mgr.lifecycleMgr = NewLifecycleMgr(dataport, nil)
+
 	// Initialize MetadataRepo.  This a blocking call until the
 	// the metadataRepo (including watcher) is operational (e.g.
 	// finish sync with remote metadata repo master).
 	//mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, config, mgr)
-	mgr.repo, err = NewLocalMetadataRepo(msgAddr, mgr.eventMgr)
-	if err != nil {
-		return nil, err
-	}
-
-	// Initialize request handler.  This is non-blocking.  The index manager
-	// will not be able handle new request until request handler is done initialization.
-	mgr.reqHandler, err = NewRequestHandler(mgr)
+	mgr.basepath = config["storage_dir"].String()
+	os.Mkdir(mgr.basepath, 0755)	
+	repoName := filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
+	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(msgAddr, mgr.eventMgr, mgr.lifecycleMgr, repoName)
 	if err != nil {
 		mgr.Close()
 		return nil, err
 	}
+
+	// start lifecycle manager
+	mgr.lifecycleMgr.Run(mgr.repo)
+
+	// Initialize request handler.  This is non-blocking.  The index manager
+	// will not be able handle new request until request handler is done initialization.
+	//mgr.reqHandler, err = NewRequestHandler(mgr)
+	//if err != nil {
+	//    mgr.Close()
+	//    return nil, err
+	//}
 
 	// coordinator
 	mgr.coordinator = nil
@@ -112,10 +192,10 @@ func NewIndexManagerInternal(msgAddr string, dataport string, admin StreamAdmin)
 // Create a new IndexManager
 //
 func NewIndexManager(requestAddr string,
-	leaderAddr string,
-	config string) (mgr *IndexManager, err error) {
+    leaderAddr string,
+    config string) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(requestAddr, leaderAddr, config, nil)
+    return NewIndexManagerInternal(requestAddr, leaderAddr, config, nil)
 }
 */
 
@@ -130,7 +210,7 @@ func (mgr *IndexManager) StartCoordinator(config string) {
 	// put in a channel for later processing (once leader election is done).
 	// Once the coordinator becomes the leader, it will invoke teh stream
 	// manager.
-	mgr.coordinator = NewCoordinator(mgr.repo, mgr)
+	mgr.coordinator = NewCoordinator(mgr.repo, mgr, mgr.basepath)
 	go mgr.coordinator.Run(config)
 }
 
@@ -172,12 +252,33 @@ func (m *IndexManager) Close() {
 		m.reqHandler.close()
 	}
 
+	if m.lifecycleMgr != nil {
+		m.lifecycleMgr.Terminate()
+	}
+
 	m.isClosed = true
 }
 
 ///////////////////////////////////////////////////////
 // public function - Metadata Operation
 ///////////////////////////////////////////////////////
+
+func (m *IndexManager) RegisterNotifier(notifier MetadataNotifier) {
+	m.repo.RegisterNotifier(notifier)
+	m.lifecycleMgr.RegisterNotifier(notifier)
+}
+
+func (m *IndexManager) SetLocalValue(key string, value string) error {
+	return m.repo.SetLocalValue(key, value)
+}
+
+func (m *IndexManager) DeleteLocalValue(key string) error {
+	return m.repo.DeleteLocalValue(key)
+}
+
+func (m *IndexManager) GetLocalValue(key string) (string, error) {
+	return m.repo.GetLocalValue(key)
+}
 
 //
 // Get an index definiton by id
@@ -269,40 +370,56 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 		//
 		// Save the index definition
 		//
-		content, err := marshallIndexDefn(defn)
+		content, err := common.MarshallIndexDefn(defn)
 		if err != nil {
 			return err
 		}
 
-		// TODO: Make request id a string
-		id := uint64(time.Now().UnixNano())
-		if !m.coordinator.NewRequest(id, uint32(OPCODE_ADD_IDX_DEFN), indexDefnIdStr(defn.DefnId), content) {
+		if !m.coordinator.NewRequest(uint32(OPCODE_ADD_IDX_DEFN), indexDefnIdStr(defn.DefnId), content) {
 			// TODO: double check if it exists in the dictionary
 			return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, INDEX_MANAGER, nil,
 				fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
 		}
 	} else {
-		return m.repo.createIndexAndUpdateTopology(defn, m.dataport)
+		return m.lifecycleMgr.CreateIndex(defn, m.dataport)
 	}
-	
+
 	return nil
 }
 
 func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
 
 	if USE_MASTER_REPO {
-		// TODO: Make request id a string
-		id := uint64(time.Now().UnixNano())
-		if !m.coordinator.NewRequest(id, uint32(OPCODE_DEL_IDX_DEFN), indexDefnIdStr(defnId), nil) {
+
+		if !m.coordinator.NewRequest(uint32(OPCODE_DEL_IDX_DEFN), indexDefnIdStr(defnId), nil) {
 			// TODO: double check if it exists in the dictionary
 			return NewError(ERROR_MGR_DDL_DROP_IDX, NORMAL, INDEX_MANAGER, nil,
 				fmt.Sprintf("Fail to complete processing delete index statement for index id = '%d'", defnId))
 		}
 	} else {
-		return m.repo.deleteIndexAndUpdateTopology(defnId)
+		return m.lifecycleMgr.DeleteIndex(defnId)
 	}
-	
+
 	return nil
+}
+
+func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, state common.IndexState,
+	streamId common.StreamId, err string) error {
+
+	inst := &topologyChange{
+		Bucket:   bucket,
+		DefnId:   uint64(defnId),
+		State:    uint32(state),
+		StreamId: uint32(streamId),
+		Error:    err}
+
+	buf, e := json.Marshal(&inst)
+	if e != nil {
+		return e
+	}
+
+	common.Debugf("IndexManager.UpdateIndexInstance(): making request for Index instance update")
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
 //
@@ -371,7 +488,7 @@ func (m *IndexManager) runTimestampKeeper() {
 				return
 			}
 
-			gometa.SafeRun("IndexManager.runTimestampKeeper()",
+			gometaC.SafeRun("IndexManager.runTimestampKeeper()",
 				func() {
 					timestamps.addTimestamp(timestamp)
 					persistTimestamp = persistTimestamp ||
@@ -392,8 +509,7 @@ func (m *IndexManager) runTimestampKeeper() {
 							"IndexManager.runTimestampKeeper(): error when marshalling timestamp. Ignore timestamp.  Error=%s",
 							err.Error())
 					} else {
-						id := uint64(time.Now().UnixNano())
-						m.coordinator.NewRequest(id, uint32(OPCODE_NOTIFY_TIMESTAMP), "Stability Timestamp", data)
+						m.coordinator.NewRequest(uint32(OPCODE_NOTIFY_TIMESTAMP), "Stability Timestamp", data)
 					}
 				})
 		}
@@ -426,6 +542,13 @@ func (m *IndexManager) getTimer() *Timer {
 ///////////////////////////////////////////////////////
 
 //
+// Get lifecycle manager
+//
+func (m *IndexManager) getLifecycleMgr() *LifecycleMgr {
+	return m.lifecycleMgr
+}
+
+//
 // Notify new event
 //
 func (m *IndexManager) notify(evtType EventType, obj interface{}) {
@@ -436,36 +559,34 @@ func (m *IndexManager) startMasterService() error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	// Initialize the timer.   The timer will be activated by the
-	// stream manager when the stream manager opens the stream
-	// during initialization.  The stream manager, in turn, is
-	// started when the coordinator becomes the master.   There
-	// is gorounine in index manager that will listen to the
-	// timer and broadcast the stability timestamp to all the
-	// listening node.   This goroutine will be started when
-	// the indexer node becomes the coordinator master.
-	m.timestampPersistInterval = TIMESTAMP_PERSIST_INTERVAL
-	m.timer = newTimer(m.repo)
-	m.timekeeperStopCh = make(chan bool)
-	go m.runTimestampKeeper()
-
-	monitor := NewStreamMonitor(m, m.timer)
-
-	// Initialize the stream manager.
 	admin := m.admin
-	if admin == nil {
-		admin = NewProjectorAdmin(nil, nil, monitor)
-	} else {
-		admin.Initialize(monitor)
-	}
+	if admin != nil {
+		// Initialize the timer.   The timer will be activated by the
+		// stream manager when the stream manager opens the stream
+		// during initialization.  The stream manager, in turn, is
+		// started when the coordinator becomes the master.   There
+		// is gorounine in index manager that will listen to the
+		// timer and broadcast the stability timestamp to all the
+		// listening node.   This goroutine will be started when
+		// the indexer node becomes the coordinator master.
+		m.timestampPersistInterval = TIMESTAMP_PERSIST_INTERVAL
+		m.timer = newTimer(m.repo)
+		m.timekeeperStopCh = make(chan bool)
+		go m.runTimestampKeeper()
 
-	handler := NewMgrMutHandler(m, admin, monitor)
-	var err error
-	m.streamMgr, err = NewStreamManager(m, handler, admin, monitor)
-	if err != nil {
-		return err
+		monitor := NewStreamMonitor(m, m.timer)
+
+		// Initialize the stream manager.
+		admin.Initialize(monitor)
+
+		handler := NewMgrMutHandler(m, admin, monitor)
+		var err error
+		m.streamMgr, err = NewStreamManager(m, handler, admin, monitor)
+		if err != nil {
+			return err
+		}
+		m.streamMgr.StartHandlingTopologyChange()
 	}
-	m.streamMgr.StartHandlingTopologyChange()
 	return nil
 }
 

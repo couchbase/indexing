@@ -12,11 +12,12 @@ package test
 import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
+	util "github.com/couchbase/indexing/secondary/manager/test/util"
+	projectorC "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-	"github.com/couchbase/indexing/secondary/projector"
+	"os"
 	"testing"
 	"time"
-	util "github.com/couchbase/indexing/secondary/manager/test/util"
 )
 
 // For this test, use Index Defn Id from 400 - 410
@@ -36,7 +37,6 @@ type monitorTestProjectorClient struct {
 	donech chan bool
 }
 
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Test Driver
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -44,34 +44,34 @@ type monitorTestProjectorClient struct {
 func TestStreamMgr_Monitor(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelDebug)
+	common.SetLogLevel(common.LogLevelTrace)
 	util.TT = t
 
-	old_value := manager.NUM_VB	
-	manager.NUM_VB = 16 
-	defer func() {manager.NUM_VB = old_value}()
-	
+	old_value := manager.NUM_VB
+	manager.NUM_VB = 16
+	defer func() { manager.NUM_VB = old_value }()
+
 	old_interval := manager.MONITOR_INTERVAL
-	manager.MONITOR_INTERVAL = time.Duration(1000) * time.Millisecond	
-	defer func() {manager.MONITOR_INTERVAL = old_interval}()
+	manager.MONITOR_INTERVAL = time.Duration(1000) * time.Millisecond
+	defer func() { manager.MONITOR_INTERVAL = old_interval }()
 
 	// Running test
 	runMonitorTest()
 }
-	
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Monitor Test
-// 1) This test will create a new index.  
+// 1) This test will create a new index.
 // 2) Upon notifying of the new index, MutationTopicRequest will return an error with the active timestamp as well
 //    as the rollback timestamp.
 // 3) StreamAdmin will retry MutationTopicRequest by merging the request timestamps and rollback timestamps.
-// 4) If the new request timestamp has the right seqno (from rollback timestamp), MutationTopicRequest will not return error. 
+// 4) If the new request timestamp has the right seqno (from rollback timestamp), MutationTopicRequest will not return error.
 //    But no streamBegin and sync message will be sent.
-// 5) Stream Monitior will timeout without receving streamBegin message. 
+// 5) Stream Monitior will timeout without receving streamBegin message.
 // 6) The monitor call back to the fake projector to restart the vubcket with a restart timestamp.  This restart
-//	  timestamp is the same as the one returned from MutationTopicRequest.
+//    timestamp is the same as the one returned from MutationTopicRequest.
 // 7) During restart vbucket, the fake projector will send BeginStream message as well as sync messagse.   It will use
-//    the seqno from the restart timestamp when sending sync message. 
+//    the seqno from the restart timestamp when sending sync message.
 // 8) The dataport will update the stability timestamp upon receving the sync message.  The test will end if the
 //    timestamp contains the expected seqno
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -80,10 +80,14 @@ func runMonitorTest() {
 
 	common.Infof("**** Run Monitor Test ******************************************")
 
-	common.Infof("***** Start TestStreamMgr ") 
+	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
+	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
+	os.MkdirAll("./data/", os.ModePerm)
+
+	common.Infof("***** Start TestStreamMgr ")
 	/*
-	var requestAddr = "localhost:9885"
-	var leaderAddr = "localhost:9884"
+	   var requestAddr = "localhost:9885"
+	   var leaderAddr = "localhost:9884"
 	*/
 	var config = "./config.json"
 
@@ -94,13 +98,13 @@ func runMonitorTest() {
 	env := new(monitorTestProjectorClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
 	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin, cfg)
 	if err != nil {
 		util.TT.Fatal(err)
 	}
 	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
-	
+
 	common.Infof("Monitor Test Cleanup ...")
 	cleanupStreamMgrMonitorTest(mgr)
 
@@ -118,10 +122,10 @@ func runMonitorTest() {
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Stop TestStreamMgr. Tearing down ") 
+	common.Infof("**** Stop TestStreamMgr. Tearing down ")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
-	
+
 	common.Infof("**** Finish Monitor Test ****************************************")
 }
 
@@ -220,18 +224,18 @@ func (c *monitorTestProjectorClient) sendSync(timestamps []*protobuf.TsVbuuid) {
 	go p.Run(c.donech)
 
 	payloads := make([]*common.VbKeyVersions, 0, 2000)
-	
+
 	// send StreamBegin for all vbuckets
 	for i := 0; i < manager.NUM_VB; i++ {
 		seqno, vbuuid, _, _, err := timestamps[0].Get(uint16(i))
 		if err != nil {
 			seqno = 1
 			vbuuid = 1
-		} 
+		}
 		if seqno == 0 {
 			seqno = 1
 		}
-		
+
 		payload := common.NewVbKeyVersions("Default", uint16(i) /* vb */, vbuuid, 10)
 		kv := common.NewKeyVersions(seqno, []byte("document-name"), 1)
 		kv.AddStreamBegin()
@@ -250,10 +254,10 @@ func (c *monitorTestProjectorClient) MutationTopicRequest(topic, endpointType st
 	reqTimestamps []*protobuf.TsVbuuid, instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
 
 	common.Infof("monitorTestProjectorClient.MutationTopicRequest(): start")
-	
+
 	if len(reqTimestamps) == 0 {
 		util.TT.Fatal("testProjectorClient.MutationTopicRequest(): reqTimestamps is nil")
-		
+
 	}
 
 	response := new(protobuf.TopicResponse)
@@ -264,17 +268,17 @@ func (c *monitorTestProjectorClient) MutationTopicRequest(topic, endpointType st
 	}
 	response.ActiveTimestamps = reqTimestamps
 
-	if reqTimestamps[0].GetSeqnos()[10] != 406 {	
+	if reqTimestamps[0].GetSeqnos()[10] != 406 {
 		response.RollbackTimestamps = make([]*protobuf.TsVbuuid, 1)
 		response.RollbackTimestamps[0] = protobuf.NewTsVbuuid(manager.DEFAULT_POOL_NAME, reqTimestamps[0].GetBucket(), manager.NUM_VB)
 		response.RollbackTimestamps[0].Append(uint16(10), uint64(406), reqTimestamps[0].Vbuuids[10], 0, 0)
 
-		response.Err = protobuf.NewError(projector.ErrorStreamRequest)
-		return response, projector.ErrorStreamRequest 
+		response.Err = protobuf.NewError(projectorC.ErrorStreamRequest)
+		return response, projectorC.ErrorStreamRequest
 	} else {
-		response.RollbackTimestamps = nil 
+		response.RollbackTimestamps = nil
 		response.Err = nil
-		return response, nil 
+		return response, nil
 	}
 }
 
@@ -296,14 +300,14 @@ func (c *monitorTestProjectorClient) InitialRestartTimestamp(pooln, bucketn stri
 	return newTs, nil
 }
 
-func (c *monitorTestProjectorClient) RestartVbuckets(topic string, 
+func (c *monitorTestProjectorClient) RestartVbuckets(topic string,
 	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
-	
+
 	c.sendSync(restartTimestamps)
-	
+
 	response := new(protobuf.TopicResponse)
 	response.Topic = &topic
-	response.InstanceIds = nil 
+	response.InstanceIds = nil
 	response.ActiveTimestamps = make([]*protobuf.TsVbuuid, 1)
 	response.ActiveTimestamps[0] = restartTimestamps[0]
 	response.RollbackTimestamps = nil
@@ -339,15 +343,15 @@ func (p *monitorTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []*c
 
 	common.Infof("monitorTestProjectorClientEnv.GetNodeListForTimestamps() ")
 	nodes := make(map[string][]*protobuf.TsVbuuid)
-	nodes["127.0.0.1"] = nil 
-		
+	nodes["127.0.0.1"] = nil
+
 	newTs := protobuf.NewTsVbuuid("default", "Default", 1)
 	for i, _ := range timestamps[0].Seqnos {
 		newTs.Append(uint16(i), timestamps[0].Seqnos[i], timestamps[0].Vbuuids[i],
 			timestamps[0].Snapshots[i][0], timestamps[0].Snapshots[i][1])
 	}
-		
-	nodes["127.0.0.1"] = append(nodes["127.0.0.1"], newTs)	
+
+	nodes["127.0.0.1"] = append(nodes["127.0.0.1"], newTs)
 	return nodes, nil
 }
 

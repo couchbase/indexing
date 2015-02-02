@@ -10,6 +10,7 @@
 package common
 
 import (
+	"encoding/json"
 	"fmt"
 )
 
@@ -62,19 +63,21 @@ type IndexState int
 
 const (
 	//Create Index Processed
-	INDEX_STATE_CREATED IndexState = 0
+	INDEX_STATE_CREATED IndexState = iota
 	// Index is stream is ready
-	INDEX_STATE_READY = 1
+	INDEX_STATE_READY
 	//Initial Build In Progress
-	INDEX_STATE_INITIAL = 2
+	INDEX_STATE_INITIAL
 	//Catchup In Progress
-	INDEX_STATE_CATCHUP = 3
+	INDEX_STATE_CATCHUP
 	//Maitenance Stream
-	INDEX_STATE_ACTIVE = 4
+	INDEX_STATE_ACTIVE
 	//Drop Index Processed
-	INDEX_STATE_DELETED = 5
+	INDEX_STATE_DELETED
 	//Error State
-	INDEX_STATE_ERROR = 6
+	INDEX_STATE_ERROR
+	// Nil State (used for no-op / invalid)
+	INDEX_STATE_NIL
 )
 
 func (s IndexState) String() string {
@@ -102,15 +105,18 @@ func (s IndexState) String() string {
 //IndexDefn represents the index definition as specified
 //during CREATE INDEX
 type IndexDefn struct {
-	DefnId          IndexDefnId
-	Name            string    // Name of the index
-	Using           IndexType // indexing algorithm
-	Bucket          string    // bucket name
-	IsPrimary       bool
-	SecExprs        []string // expression list
-	ExprType        ExprType
-	PartitionScheme PartitionScheme
-	PartitionKey    string
+	DefnId          IndexDefnId     `json:"defnId,omitempty"`
+	Name            string          `json:"name,omitempty"`
+	Using           IndexType       `json:"using,omitempty"`
+	Bucket          string          `json:"bucket,omitempty"`
+	IsPrimary       bool            `json:"isPrimary,omitempty"`
+	SecExprs        []string        `json:"secExprs,omitempty"`
+	ExprType        ExprType        `json:"exprType,omitempty"`
+	PartitionScheme PartitionScheme `json:"partitionScheme,omitempty"`
+	PartitionKey    string          `json:"partitionKey,omitempty"`
+	WhereExpr       string          `json:"where,omitempty"`
+	Deferred        bool            `json:"deferred,omitempty"`
+	Nodes           []string        `json:"nodes,omitempty"`
 }
 
 //IndexInst is an instance of an Index(aka replica)
@@ -120,6 +126,7 @@ type IndexInst struct {
 	State  IndexState
 	Stream StreamId
 	Pc     PartitionContainer
+	Error  string
 }
 
 //IndexInstMap is a map from IndexInstanceId to IndexInstance
@@ -135,6 +142,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("\n\t\tSecExprs: %v ", idx.SecExprs)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	str += fmt.Sprintf("PartitionKey: %v ", idx.PartitionKey)
+	str += fmt.Sprintf("WhereExpr: %v ", idx.WhereExpr)
 	return str
 
 }
@@ -154,10 +162,11 @@ func (idx IndexInst) String() string {
 type StreamId uint16
 
 const (
-	MAINT_STREAM StreamId = iota
+	NIL_STREAM StreamId = iota
+	MAINT_STREAM
 	CATCHUP_STREAM
 	INIT_STREAM
-	MAX_STREAMS
+	ALL_STREAMS
 )
 
 func (s StreamId) String() string {
@@ -196,4 +205,33 @@ func CopyIndexInstMap(inMap IndexInstMap) IndexInstMap {
 		outMap[k] = v
 	}
 	return outMap
+}
+
+func MarshallIndexDefn(defn *IndexDefn) ([]byte, error) {
+
+	buf, err := json.Marshal(&defn)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
+func UnmarshallIndexDefn(data []byte) (*IndexDefn, error) {
+
+	defn := new(IndexDefn)
+	if err := json.Unmarshal(data, defn); err != nil {
+		return nil, err
+	}
+
+	return defn, nil
+}
+
+func NewIndexDefnId() (IndexDefnId, error) {
+	uuid, err := NewUUID()
+	if err != nil {
+		return IndexDefnId(0), err
+	}
+
+	return IndexDefnId(uuid.Uint64()), nil
 }

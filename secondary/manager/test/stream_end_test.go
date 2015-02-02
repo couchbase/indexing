@@ -14,6 +14,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"os"
 	"testing"
 	"time"
 )
@@ -35,7 +36,6 @@ type streamEndTestProjectorClient struct {
 	donech chan bool
 }
 
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Test Driver
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -43,34 +43,38 @@ type streamEndTestProjectorClient struct {
 func TestStreamMgr_StreamEnd(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelDebug)
+	common.SetLogLevel(common.LogLevelTrace)
 	util.TT = t
 
-	old_value := manager.NUM_VB	
-	manager.NUM_VB = 16 
-	defer func() {manager.NUM_VB = old_value}()
+	old_value := manager.NUM_VB
+	manager.NUM_VB = 16
+	defer func() { manager.NUM_VB = old_value }()
 
 	// Running test
 	runStreamEndTest()
 }
-	
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // StreamEnd Test
-// 1) This test will create a new index.  
-// 2) Upon notifying of the new index, the fake projector will push a StreamEnd message to the stream manager.  
-// 3) The stream manager will then call back to the fake projector to repair the vubcket.  If the correct vbucket 
-//    is received, the fake projector will return without error.   
-// 4) The fake projector will also push a sync message to the data port for the coordinator to broadcast a timestamp. 
+// 1) This test will create a new index.
+// 2) Upon notifying of the new index, the fake projector will push a StreamEnd message to the stream manager.
+// 3) The stream manager will then call back to the fake projector to repair the vubcket.  If the correct vbucket
+//    is received, the fake projector will return without error.
+// 4) The fake projector will also push a sync message to the data port for the coordinator to broadcast a timestamp.
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 func runStreamEndTest() {
 
 	common.Infof("**** Run StreamEnd Test ******************************************")
 
-	common.Infof("***** Start TestStreamMgr ") 
+	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
+	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
+	os.MkdirAll("./data/", os.ModePerm)
+
+	common.Infof("***** Start TestStreamMgr ")
 	/*
-	var requestAddr = "localhost:9885"
-	var leaderAddr = "localhost:9884"
+		var requestAddr = "localhost:9885"
+		var leaderAddr = "localhost:9884"
 	*/
 	var config = "./config.json"
 
@@ -81,13 +85,13 @@ func runStreamEndTest() {
 	env := new(streamEndTestProjectorClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
 	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin, cfg)
 	if err != nil {
 		util.TT.Fatal(err)
 	}
 	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
-	
+
 	common.Infof("StreamEnd Test Cleanup ...")
 	cleanupStreamMgrStreamEndTest(mgr)
 
@@ -105,10 +109,10 @@ func runStreamEndTest() {
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Stop TestStreamMgr. Tearing down ") 
+	common.Infof("**** Stop TestStreamMgr. Tearing down ")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
-	
+
 	common.Infof("**** Finish StreamEnd Test ****************************************")
 }
 
@@ -207,19 +211,19 @@ func (c *streamEndTestProjectorClient) sendSync(timestamps []*protobuf.TsVbuuid)
 	if err != nil {
 		util.TT.Fatal(err)
 	}
-	
+
 	p := util.NewFakeProjector(manager.COORD_MAINT_STREAM_PORT)
 	go p.Run(c.donech)
 
 	payloads := make([]*common.VbKeyVersions, 0, 2000)
-	
+
 	payload := common.NewVbKeyVersions("Default", 10 /* vb */, 1, 10)
 	kv := common.NewKeyVersions(seqno, []byte("document-name"), 1)
 	kv.AddStreamBegin()
 	kv.AddSync()
 	payload.AddKeyVersions(kv)
 	payloads = append(payloads, payload)
-	
+
 	// send payload
 	if err := p.Client.SendKeyVersions(payloads, true); err != nil {
 		util.TT.Fatal(err)
@@ -241,7 +245,7 @@ func (c *streamEndTestProjectorClient) sendStreamEnd(instances []*protobuf.Insta
 			go p.Run(c.donech)
 
 			payloads := make([]*common.VbKeyVersions, 0, 2000)
-			
+
 			// send StreamBegin for all vbuckets
 			for i := 0; i < manager.NUM_VB; i++ {
 				payload := common.NewVbKeyVersions("Default", uint16(i) /* vb */, 1, 10)
@@ -283,7 +287,7 @@ func (c *streamEndTestProjectorClient) MutationTopicRequest(topic, endpointType 
 	for i, inst := range instances {
 		response.InstanceIds[i] = inst.GetIndexInstance().GetInstId()
 	}
-	response.ActiveTimestamps = reqTimestamps 
+	response.ActiveTimestamps = reqTimestamps
 	response.RollbackTimestamps = nil
 	response.Err = nil
 
@@ -307,14 +311,14 @@ func (c *streamEndTestProjectorClient) InitialRestartTimestamp(pooln, bucketn st
 	return newTs, nil
 }
 
-func (c *streamEndTestProjectorClient) RestartVbuckets(topic string, 
+func (c *streamEndTestProjectorClient) RestartVbuckets(topic string,
 	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
-	
+
 	c.sendSync(restartTimestamps)
-	
+
 	response := new(protobuf.TopicResponse)
 	response.Topic = &topic
-	response.InstanceIds = nil 
+	response.InstanceIds = nil
 	response.ActiveTimestamps = make([]*protobuf.TsVbuuid, 1)
 	response.ActiveTimestamps[0] = restartTimestamps[0]
 	response.RollbackTimestamps = nil
@@ -350,15 +354,15 @@ func (p *streamEndTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []
 
 	common.Infof("streamEndTestProjectorClientEnv.GetNodeListForTimestamps() ")
 	nodes := make(map[string][]*protobuf.TsVbuuid)
-	nodes["127.0.0.1"] = nil 
-		
+	nodes["127.0.0.1"] = nil
+
 	newTs := protobuf.NewTsVbuuid("default", "Default", 1)
 	for i, _ := range timestamps[0].Seqnos {
 		newTs.Append(uint16(i), timestamps[0].Seqnos[i], timestamps[0].Vbuuids[i],
 			timestamps[0].Snapshots[i][0], timestamps[0].Snapshots[i][1])
 	}
-		
-	nodes["127.0.0.1"] = append(nodes["127.0.0.1"], newTs)	
+
+	nodes["127.0.0.1"] = append(nodes["127.0.0.1"], newTs)
 	return nodes, nil
 }
 

@@ -4,13 +4,13 @@ import "flag"
 import "fmt"
 import "log"
 import "os"
-import "strconv"
 import "strings"
 import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dataport"
 import "github.com/couchbase/indexing/secondary/projector"
+import "github.com/couchbase/cbauth"
 import projc "github.com/couchbase/indexing/secondary/projector/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 
@@ -20,9 +20,10 @@ var options struct {
 	buckets       []string // buckets to connect
 	endpoints     []string // list of endpoint daemon to start
 	coordEndpoint string   // co-ordinator endpoint
-	stat          string   // periodic timeout to print dataport statistics
-	timeout       string   // timeout for dataport to exit
-	projector     bool     // start projector, useful in debug mode.
+	stat          int      // periodic timeout to print dataport statistics
+	timeout       int      // timeout for dataport to exit
+	auth          string
+	projector     bool // start projector, useful in debug mode.
 	debug         bool
 	trace         bool
 }
@@ -38,10 +39,12 @@ func argParse() []string {
 		"list of endpoint daemon to start")
 	flag.StringVar(&options.coordEndpoint, "coorendp", coordEndpoint,
 		"co-ordinator endpoint")
-	flag.StringVar(&options.stat, "stat", "1000",
+	flag.IntVar(&options.stat, "stat", 1000,
 		"periodic timeout to print dataport statistics")
-	flag.StringVar(&options.timeout, "timeout", "0",
+	flag.IntVar(&options.timeout, "timeout", 0,
 		"timeout for dataport to exit")
+	flag.StringVar(&options.auth, "auth", "Administrator:asdasd",
+		"Auth user and password")
 	flag.BoolVar(&options.projector, "projector", false,
 		"start projector for debug mode")
 	flag.BoolVar(&options.debug, "debug", false,
@@ -79,15 +82,19 @@ var projectors = make(map[string]*projc.Client)
 func main() {
 	clusters := argParse()
 
+	// setup cbauth
+	authURL := fmt.Sprintf("http://%s/_cbauth", clusters[0])
+	up := strings.Split(options.auth, ":")
+	authU, authP := up[0], up[1]
+	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
+
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	dconf := c.SystemConfig.SectionConfig("projector.dataport.indexer.", true)
 
 	// start dataport servers.
 	for _, endpoint := range options.endpoints {
-		stat, _ := strconv.Atoi(options.stat)
-		timeout, _ := strconv.Atoi(options.timeout)
 		go dataport.Application(
-			endpoint, stat, timeout, maxvbs, dconf,
+			endpoint, options.stat, options.timeout, maxvbs, dconf,
 			func(addr string, msg interface{}) bool { return true })
 	}
 	go dataport.Application(options.coordEndpoint, 0, 0, maxvbs, dconf, nil)
@@ -129,7 +136,10 @@ func main() {
 }
 
 func getProjectorAdminport(cluster, pooln string) string {
-	cinfo := c.NewClusterInfoCache(cluster, pooln)
+	cinfo, err := c.NewClusterInfoCache(c.ClusterUrl(cluster), pooln)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if err := cinfo.Fetch(); err != nil {
 		log.Fatal(err)
 	}

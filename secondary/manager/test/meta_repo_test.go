@@ -10,8 +10,11 @@
 package test
 
 import (
+	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
+	fdb "github.com/couchbaselabs/goforestdb"
+	"os"
 	"testing"
 	"time"
 )
@@ -21,28 +24,33 @@ import (
 func TestMetadataRepoForIndexDefn(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelDebug)
+	common.SetLogLevel(common.LogLevelTrace)
+
+	gometaL.LogEnable()
+	gometaL.SetLogLevel(gometaL.LogLevelTrace)
+	gometaL.SetPrefix("Indexing/Gometa")
 
 	common.Infof("Start TestMetadataRepo *********************************************************")
 
 	/*
-	var addr = "localhost:9885"
-	var leader = "localhost:9884"
+		var addr = "localhost:9885"
+		var leader = "localhost:9884"
 
-	repo, err := manager.NewMetadataRepo(addr, leader, "./config.json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runTest(repo, t)
+		repo, err := manager.NewMetadataRepo(addr, leader, "./config.json", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runTest(repo, t)
 	*/
-	
-	repo, err := manager.NewLocalMetadataRepo("localhost:5002", nil)
+
+	os.MkdirAll("./data/", os.ModePerm)
+	repo, _, err := manager.NewLocalMetadataRepo("localhost:5002", nil, nil, "./data/MetadataStore")
 	if err != nil {
 		t.Fatal(err)
 	}
 	runTest(repo, t)
 }
-	
+
 func runTest(repo *manager.MetadataRepo, t *testing.T) {
 
 	// clean up
@@ -169,32 +177,47 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Test the iterator
+	iter, err := repo.NewIterator()
+	if err != nil {
+		t.Fatal("Fail to get the iterator")
+	}
 
-   	// Test the iterator
-   	iter, err := repo.NewIterator()
-   	if err != nil {
-       t.Fatal("Fail to get the iterator")
-   	}
+	found := false
+	for {
+		key, defn, err := iter.Next()
+		if err != nil {
+			if err != fdb.RESULT_ITERATOR_FAIL {
+				common.Infof("error during iteration %s", err.Error())
+			}
+			break
+		}
 
-   	found := false
-   	for !found {
-       key, _, err := iter.Next()
-       if err != nil {
-           common.Infof("error during iteration %s", err.Error())
-           break
-       }
+		common.Infof("key during iteration %s", key)
+		if key == "103" && defn.DefnId == common.IndexDefnId(103) {
+			found = true
+		}
+	}
 
-       common.Infof("key during iteration %s", key)
-       if key == "103" {
-           found = true
-       }
-   	}
-
-   	if !found {
-       t.Fatal("Cannot find index defn 'metadata_repo_test_3' in iterator")
-   	}
+	if !found {
+		t.Fatal("Cannot find index defn 'metadata_repo_test_3' in iterator")
+	}
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
+
+	// test loal value
+
+	if err := repo.SetLocalValue("testLocalValue1", "testLocalValue1"); err != nil {
+		t.Fatal("Fail to set local value" + err.Error())
+	}
+
+	value, err := repo.GetLocalValue("testLocalValue1")
+	if err != nil {
+		t.Fatal("Fail to set local value" + err.Error())
+	}
+	if value != "testLocalValue1" {
+		t.Fatal("Fail to set local value : Return value is different")
+	}
 
 	common.Infof("Stop TestMetadataRepo. Tearing down *********************************************************")
 

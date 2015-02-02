@@ -13,6 +13,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
+	"os"
 	"testing"
 	"time"
 )
@@ -22,14 +23,18 @@ import (
 func TestEventMgr(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelDebug)
+	common.SetLogLevel(common.LogLevelTrace)
 
 	common.Infof("Start TestEventMgr *********************************************************")
 
+	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
+	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
+	os.MkdirAll("./data/", os.ModePerm)
+
 	/*
-	var requestAddr = "localhost:9885"
-	var leaderAddr = "localhost:9884"
-	var config = "./config.json"
+		var requestAddr = "localhost:9885"
+		var leaderAddr = "localhost:9884"
+		var config = "./config.json"
 	*/
 
 	common.Infof("Start Index Manager")
@@ -37,7 +42,7 @@ func TestEventMgr(t *testing.T) {
 	env := new(util.TestDefaultClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
 	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +80,7 @@ func TestEventMgr(t *testing.T) {
 		t.Fatal("Does not receive notification from watcher")
 	}
 
-	idxDefn, err = manager.UnmarshallIndexDefn(([]byte)(data))
+	idxDefn, err = common.UnmarshallIndexDefn(([]byte)(data))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,22 +12,38 @@ package indexer
 import (
 	"errors"
 	"github.com/couchbaselabs/goforestdb"
+	"sync/atomic"
 )
 
 //ForestDBIterator taken from
 //https://github.com/couchbaselabs/bleve/blob/master/index/store/goforestdb/iterator.go
 type ForestDBIterator struct {
+	slice *fdbSlice
 	db    *forestdb.KVStore
 	valid bool
 	curr  *forestdb.Doc
 	iter  *forestdb.Iterator
 }
 
-func newForestDBIterator(db *forestdb.KVStore,
+func newFDBSnapshotIterator(s Snapshot) (*ForestDBIterator, error) {
+	var seq forestdb.SeqNum
+	fdbSnap := s.(*fdbSnapshot)
+	if !fdbSnap.committed {
+		seq = FORESTDB_INMEMSEQ
+	} else {
+		seq = fdbSnap.mainSeqNum
+	}
+
+	itr, err := newForestDBIterator(fdbSnap.slice.(*fdbSlice), fdbSnap.main, seq)
+	return itr, err
+}
+
+func newForestDBIterator(slice *fdbSlice, db *forestdb.KVStore,
 	seq forestdb.SeqNum) (*ForestDBIterator, error) {
 	dbInst, err := db.SnapshotOpen(seq)
 	rv := ForestDBIterator{
-		db: dbInst,
+		db:    dbInst,
+		slice: slice,
 	}
 
 	if err != nil {
@@ -73,6 +89,13 @@ func (f *ForestDBIterator) Next() {
 		f.valid = false
 		return
 	}
+
+	//free the doc allocated by forestdb
+	if f.curr != nil {
+		f.curr.Close()
+		f.curr = nil
+	}
+
 	f.Get()
 }
 
@@ -93,6 +116,7 @@ func (f *ForestDBIterator) Current() ([]byte, []byte, bool) {
 
 func (f *ForestDBIterator) Key() []byte {
 	if f.valid && f.curr != nil {
+		atomic.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Key())))
 		return f.curr.Key()
 	}
 	return nil
@@ -100,6 +124,7 @@ func (f *ForestDBIterator) Key() []byte {
 
 func (f *ForestDBIterator) Value() []byte {
 	if f.valid && f.curr != nil {
+		atomic.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Body())))
 		return f.curr.Body()
 	}
 	return nil
@@ -110,6 +135,13 @@ func (f *ForestDBIterator) Valid() bool {
 }
 
 func (f *ForestDBIterator) Close() error {
+
+	//free the doc allocated by forestdb
+	if f.curr != nil {
+		f.curr.Close()
+		f.curr = nil
+	}
+
 	var err error
 	f.valid = false
 	err = f.iter.Close()

@@ -1,5 +1,7 @@
 package projector
 
+import "expvar"
+
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
@@ -32,6 +34,8 @@ func (p *Projector) mainAdminPort(reqch chan ap.Request) {
 	p.admind.Register(reqRepairEndpoints)
 	p.admind.Register(reqShutdownFeed)
 	p.admind.Register(reqStats)
+
+	expvar.Publish("projector", expvar.Func(p.doStatistics))
 
 	p.admind.Start()
 
@@ -81,8 +85,6 @@ func (p *Projector) handleRequest(req ap.Request) {
 		response = p.doRepairEndpoints(request)
 	case *protobuf.ShutdownTopicRequest:
 		response = p.doShutdownTopic(request)
-	case c.Statistics:
-		response = p.doStatistics(request)
 	default:
 		err = c.ErrorInvalidRequest
 	}

@@ -27,6 +27,7 @@
 package adminport
 
 import "fmt"
+import "expvar"
 import "runtime/debug"
 import "io"
 import "net"
@@ -84,6 +85,7 @@ func NewHTTPServer(config c.Config, reqch chan<- Request) Server {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.urlPrefix, s.systemHandler)
+	mux.HandleFunc("/debug/vars", s.expvarHandler)
 	s.srv = &http.Server{
 		Addr:           s.laddr,
 		Handler:        mux,
@@ -275,6 +277,21 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("%v, %v", ErrorInternal, v)
 		http.Error(w, v.Error(), http.StatusInternalServerError)
 	}
+}
+
+// handle expvar request.
+func (s *httpServer) expvarHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	fmt.Fprintf(w, "{\n")
+	first := true
+	expvar.Do(func(kv expvar.KeyValue) {
+		if !first {
+			fmt.Fprintf(w, ",\n")
+		}
+		first = false
+		fmt.Fprintf(w, "%q: %s", kv.Key, kv.Value)
+	})
+	fmt.Fprintf(w, "\n}\n")
 }
 
 func (s *httpServer) connState(conn net.Conn, state http.ConnState) {

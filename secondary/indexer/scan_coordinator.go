@@ -103,6 +103,7 @@ func (sd scanDescriptor) String() string {
 
 type scanParams struct {
 	scanType  scanType
+	defnID    uint64
 	indexName string
 	bucket    string
 	ts        *common.TsVbuuid
@@ -131,11 +132,12 @@ type countResponse struct {
 // - To apply limit clause on streaming scan results
 // - To perform graceful termination of stream scanning
 type scanStreamReader struct {
-	sd      *scanDescriptor
-	keysBuf *[]Key
-	bufSize int64
-	count   int64
-	hasNext bool
+	sd        *scanDescriptor
+	keysBuf   *[]Key
+	bufSize   int64
+	count     int64
+	bytesRead int64
+	hasNext   bool
 }
 
 func newResponseReader(sd *scanDescriptor) *scanStreamReader {
@@ -170,6 +172,7 @@ loop:
 
 				k := resp.(Key)
 				sz := int64(len(k.Raw()))
+				r.bytesRead += sz
 				// Page size constraint
 				if r.bufSize > 0 && r.bufSize+sz > r.sd.p.pageSize {
 					keys = r.keysBuf
@@ -243,6 +246,14 @@ func (r *scanStreamReader) Done() {
 	}()
 }
 
+func (r *scanStreamReader) ReturnedRows() uint64 {
+	return uint64(r.count)
+}
+
+func (r *scanStreamReader) ReturnedBytes() uint64 {
+	return uint64(r.bytesRead)
+}
+
 //TODO
 //For any query request, check if the replica is available. And use replica in case
 //its more recent or serving less queries.
@@ -251,6 +262,14 @@ func (r *scanStreamReader) Done() {
 //the partitions/slices required to be scanned as per query parameters.
 
 type ScanCoordinator interface {
+}
+
+type indexScanStats struct {
+	Requests  *uint64
+	Rows      *uint64
+	BytesRead *uint64
+	ScanTime  *int64
+	WaitTime  *int64
 }
 
 type scanCoordinator struct {
@@ -265,6 +284,8 @@ type scanCoordinator struct {
 	indexPartnMap IndexPartnMap
 
 	config common.Config
+
+	scanStatsMap map[common.IndexInstId]indexScanStats
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -277,10 +298,11 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	var err error
 
 	s := &scanCoordinator{
-		supvCmdch: supvCmdch,
-		supvMsgch: supvMsgch,
-		logPrefix: "ScanCoordinator",
-		config:    config,
+		supvCmdch:    supvCmdch,
+		supvMsgch:    supvMsgch,
+		logPrefix:    "ScanCoordinator",
+		config:       config,
+		scanStatsMap: make(map[common.IndexInstId]indexScanStats),
 	}
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
@@ -303,6 +325,50 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	return s, &MsgSuccess{}
 
+}
+
+func (s *scanCoordinator) handleStats(cmd Message) {
+	s.supvCmdch <- &MsgSuccess{}
+
+	statsMap := make(map[string]string)
+	req := cmd.(*MsgStatsRequest)
+	replych := req.GetReplyChannel()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for instId, stat := range s.scanStatsMap {
+		inst := s.indexInstMap[instId]
+		k := fmt.Sprintf("%s:%s:num_requests", inst.Defn.Bucket, inst.Defn.Name)
+		v := fmt.Sprint(*stat.Requests)
+		statsMap[k] = v
+		k = fmt.Sprintf("%s:%s:num_rows_returned", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(*stat.Rows)
+		statsMap[k] = v
+		k = fmt.Sprintf("%s:%s:scan_bytes_read", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(*stat.BytesRead)
+		statsMap[k] = v
+		k = fmt.Sprintf("%s:%s:total_scan_duration", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(*stat.ScanTime)
+		statsMap[k] = v
+		k = fmt.Sprintf("%s:%s:scan_wait_duration", inst.Defn.Bucket, inst.Defn.Name)
+		v = fmt.Sprint(*stat.WaitTime)
+		statsMap[k] = v
+
+		st := s.serv.Statistics()
+		statsMap["num_connections"] = fmt.Sprint(st.Connections)
+
+		c, err := s.getItemsCount(instId)
+		if err == nil {
+			k := fmt.Sprintf("%s:%s:items_count", inst.Defn.Bucket, inst.Defn.Name)
+			v := fmt.Sprint(c)
+			statsMap[k] = v
+		} else {
+			common.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
+				inst.Defn.Bucket, inst.Defn.Name, err)
+		}
+	}
+
+	replych <- statsMap
 }
 
 func (s *scanCoordinator) run() {
@@ -333,6 +399,9 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 
 	case UPDATE_INDEX_PARTITION_MAP:
 		s.handleUpdateIndexPartnMap(cmd)
+
+	case SCAN_STATS:
+		s.handleStats(cmd)
 
 	default:
 		common.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
@@ -385,29 +454,30 @@ func (s *scanCoordinator) parseScanParams(
 		err = fillRanges(
 			r.GetSpan().GetRange().GetLow(),
 			r.GetSpan().GetRange().GetHigh(),
-			r.GetSpan().GetEqual())
-		p.indexName = r.GetIndexName()
-		p.bucket = r.GetBucket()
+			r.GetSpan().GetEquals())
+		p.defnID = r.GetDefnID()
 	case *protobuf.CountRequest:
 		p.scanType = queryCount
-		p.indexName = r.GetIndexName()
-		p.bucket = r.GetBucket()
+		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
+		p.defnID = r.GetDefnID()
+		err = fillRanges(
+			r.GetSpan().GetRange().GetLow(),
+			r.GetSpan().GetRange().GetHigh(),
+			r.GetSpan().GetEquals())
 	case *protobuf.ScanRequest:
 		p.scanType = queryScan
 		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
 		err = fillRanges(
 			r.GetSpan().GetRange().GetLow(),
 			r.GetSpan().GetRange().GetHigh(),
-			r.GetSpan().GetEqual())
+			r.GetSpan().GetEquals())
 		p.limit = r.GetLimit()
-		p.indexName = r.GetIndexName()
-		p.bucket = r.GetBucket()
+		p.defnID = r.GetDefnID()
 		p.pageSize = r.GetPageSize()
 	case *protobuf.ScanAllRequest:
 		p.scanType = queryScanAll
 		p.limit = r.GetLimit()
-		p.indexName = r.GetIndexName()
-		p.bucket = r.GetBucket()
+		p.defnID = r.GetDefnID()
 		p.pageSize = r.GetPageSize()
 	default:
 		err = ErrUnsupportedRequest
@@ -432,6 +502,7 @@ func (s *scanCoordinator) requestHandler(
 
 	scanId := atomic.AddUint64(&s.reqCounter, 1)
 	timeout := time.Millisecond * time.Duration(s.config["scanTimeout"].Int())
+	startTime := time.Now()
 	sd := &scanDescriptor{
 		scanId:    scanId,
 		p:         p,
@@ -441,19 +512,25 @@ func (s *scanCoordinator) requestHandler(
 	}
 
 	if err == nil {
-		indexInst, err = s.findIndexInstance(p.indexName, p.bucket)
+		indexInst, err = s.findIndexInstance(p.defnID)
 	}
+
+	// Update statistics
+	s.mu.RLock()
+	(*s.scanStatsMap[indexInst.InstId].Requests)++
+	s.mu.RUnlock()
 
 	if err == nil && indexInst.State != common.INDEX_STATE_ACTIVE {
 		err = ErrIndexNotReady
 	}
-
 	if err != nil {
 		common.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
 		respch <- s.makeResponseMessage(sd, err)
 		close(respch)
 		return
 	}
+
+	p.indexName, p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
 
 	// Its a primary index scan
 	sd.isPrimary = indexInst.Defn.IsPrimary
@@ -500,6 +577,8 @@ func (s *scanCoordinator) requestHandler(
 		close(respch)
 		return
 	}
+
+	waitDuration := time.Now().Sub(startTime)
 
 	common.Infof("%v: SCAN_ID: %v scan timestamp: %v",
 		s.logPrefix, sd.scanId, ScanTStoString(ts))
@@ -586,6 +665,12 @@ func (s *scanCoordinator) requestHandler(
 			status = "successful"
 		}
 
+		s.mu.RLock()
+		(*s.scanStatsMap[indexInst.InstId].Rows) += rdr.ReturnedRows()
+		(*s.scanStatsMap[indexInst.InstId].BytesRead) += rdr.ReturnedBytes()
+		(*s.scanStatsMap[indexInst.InstId].ScanTime) += time.Now().Sub(startTime).Nanoseconds()
+		(*s.scanStatsMap[indexInst.InstId].WaitTime) += waitDuration.Nanoseconds()
+		s.mu.RUnlock()
 		common.Infof("%v: SCAN_ID: %v finished scan (%s)", s.logPrefix, sd.scanId, status)
 	}
 }
@@ -683,21 +768,21 @@ func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
 }
 
 // Find and return data structures for the specified index
-func (s *scanCoordinator) findIndexInstance(indexName,
-	bucket string) (*common.IndexInst, error) {
+func (s *scanCoordinator) findIndexInstance(
+	defnID uint64) (*common.IndexInst, error) {
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for _, inst := range s.indexInstMap {
-		if inst.Defn.Name == indexName && inst.Defn.Bucket == bucket {
+		fmt.Println("verify", inst.InstId, inst.Defn.DefnId, common.IndexDefnId(defnID))
+		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
 			if _, ok := s.indexPartnMap[inst.InstId]; ok {
 				return &inst, nil
 			}
-
 			return nil, ErrNotMyIndex
 		}
 	}
-
 	return nil, ErrIndexNotFound
 }
 
@@ -790,19 +875,19 @@ func (s *scanCoordinator) scanSliceSnapshot(sd *scanDescriptor,
 
 	switch sd.p.scanType {
 	case queryStats:
-		s.statsQuery(sd, ss.Snapshot(), stopch)
+		s.queryStats(sd, ss.Snapshot(), stopch)
 	case queryCount:
-		s.statsCount(sd, ss.Snapshot(), stopch)
+		s.queryCount(sd, ss.Snapshot(), stopch)
 	case queryScan:
-		s.scanQuery(sd, ss.Snapshot(), stopch)
+		s.queryScan(sd, ss.Snapshot(), stopch)
 	case queryScanAll:
-		s.scanAllQuery(sd, ss.Snapshot(), stopch)
+		s.queryScanAll(sd, ss.Snapshot(), stopch)
 	}
 
 	ss.Snapshot().Close()
 }
 
-func (s *scanCoordinator) statsQuery(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+func (s *scanCoordinator) queryStats(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
 	totalRows, err := snap.CountRange(sd.p.low, sd.p.high, sd.p.incl, stopch)
 	// TODO: Implement min, max, unique (maybe)
 	if err != nil {
@@ -814,17 +899,39 @@ func (s *scanCoordinator) statsQuery(sd *scanDescriptor, snap Snapshot, stopch S
 	}
 }
 
-func (s *scanCoordinator) statsCount(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
-	count, err := snap.CountTotal(stopch)
-	// TODO: Implement min, max, unique (maybe)
-	if err != nil {
-		sd.respch <- err
-	} else {
+func (s *scanCoordinator) queryCount(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+	p := sd.p
+	lowkey, highkey := p.low.Encoded(), p.high.Encoded()
+	if p.keys != nil && len(p.keys) > 0 { // handle lookup counts
+		allCounts := uint64(0)
+		for _, key := range p.keys {
+			count, err := snap.CountRange(key, key, Both, stopch)
+			if err != nil {
+				sd.respch <- err
+				break
+			}
+			allCounts += count
+		}
+		sd.respch <- countResponse{count: int64(allCounts)}
+
+	} else if lowkey != nil || highkey != nil { // handle range counts
+		count, err := snap.CountRange(p.low, p.high, p.incl, stopch)
+		if err != nil {
+			sd.respch <- err
+		}
 		sd.respch <- countResponse{count: int64(count)}
+
+	} else { // handle full total
+		count, err := snap.CountTotal(stopch)
+		if err != nil {
+			sd.respch <- err
+		} else {
+			sd.respch <- countResponse{count: int64(count)}
+		}
 	}
 }
 
-func (s *scanCoordinator) scanQuery(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+func (s *scanCoordinator) queryScan(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
 	// TODO: Decide whether a missing response should be provided point query for keys
 	if len(sd.p.keys) != 0 {
 		for _, k := range sd.p.keys {
@@ -838,7 +945,7 @@ func (s *scanCoordinator) scanQuery(sd *scanDescriptor, snap Snapshot, stopch St
 
 }
 
-func (s *scanCoordinator) scanAllQuery(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
+func (s *scanCoordinator) queryScanAll(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
 	ch, cherr := snap.KeySet(stopch)
 	s.receiveKeys(sd, ch, cherr)
 }
@@ -874,6 +981,26 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
+	// Remove invalid indexes
+	for instId, _ := range s.scanStatsMap {
+		if _, ok := s.indexInstMap[instId]; !ok {
+			delete(s.scanStatsMap, instId)
+		}
+	}
+
+	// Add newly added indexes
+	for instId, _ := range s.indexInstMap {
+		if _, ok := s.scanStatsMap[instId]; !ok {
+			s.scanStatsMap[instId] = indexScanStats{
+				Requests:  new(uint64),
+				Rows:      new(uint64),
+				BytesRead: new(uint64),
+				ScanTime:  new(int64),
+				WaitTime:  new(int64),
+			}
+		}
+	}
+
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -886,6 +1013,46 @@ func (s *scanCoordinator) handleUpdateIndexPartnMap(cmd Message) {
 	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, error) {
+	var count uint64
+
+	snapResch := make(chan interface{}, 1)
+	snapReqMsg := &MsgIndexSnapRequest{
+		ts:        nil,
+		respch:    snapResch,
+		idxInstId: instId,
+	}
+
+	s.supvMsgch <- snapReqMsg
+	msg := <-snapResch
+
+	var is IndexSnapshot
+
+	switch msg.(type) {
+	case IndexSnapshot:
+		is = msg.(IndexSnapshot)
+		if is == nil {
+			return 0, nil
+		}
+	case error:
+		return 0, msg.(error)
+	}
+
+	for _, ps := range is.Partitions() {
+		for _, ss := range ps.Slices() {
+			snap := ss.Snapshot()
+			stopch := make(StopChannel)
+			c, err := snap.CountTotal(stopch)
+			if err != nil {
+				return 0, err
+			}
+			count += c
+		}
+	}
+
+	return count, nil
 }
 
 // Helper method to pretty print timestamp

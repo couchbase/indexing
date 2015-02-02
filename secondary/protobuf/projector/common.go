@@ -187,21 +187,21 @@ func (ts *TsVbuuid) Contains(vbno uint16) bool {
 // FromTsVbuuid converts timestamp from common.TsVbuuid to protobuf
 // format.
 func (ts *TsVbuuid) FromTsVbuuid(nativeTs *c.TsVbuuid) *TsVbuuid {
-	for i, vbno := range nativeTs.GetVbnos() {
-		s := nativeTs.Snapshots[i]
+	for _, vbno := range nativeTs.GetVbnos() {
+		s := nativeTs.Snapshots[vbno]
 		snapshot := NewSnapshot(s[0], s[1])
 		ts.Snapshots = append(ts.Snapshots, snapshot)
 		ts.Vbnos = append(ts.Vbnos, uint32(vbno))
-		ts.Seqnos = append(ts.Seqnos, nativeTs.Seqnos[i])
-		ts.Vbuuids = append(ts.Vbuuids, nativeTs.Vbuuids[i])
+		ts.Seqnos = append(ts.Seqnos, nativeTs.Seqnos[vbno])
+		ts.Vbuuids = append(ts.Vbuuids, nativeTs.Vbuuids[vbno])
 	}
 	return ts
 }
 
 // ToTsVbuuid converts timestamp from protobuf format to common.TsVbuuid,
 // later requires the full set of timestamp.
-func (ts *TsVbuuid) ToTsVbuuid() *c.TsVbuuid {
-	nativeTs := c.NewTsVbuuid(ts.GetBucket(), cap(ts.Seqnos))
+func (ts *TsVbuuid) ToTsVbuuid(maxVbuckets int) *c.TsVbuuid {
+	nativeTs := c.NewTsVbuuid(ts.GetBucket(), maxVbuckets)
 	seqnos, vbuuids, ss := ts.GetSeqnos(), ts.GetVbuuids(), ts.GetSnapshots()
 	for i, vbno := range ts.GetVbnos() {
 		nativeTs.Seqnos[vbno] = seqnos[i]

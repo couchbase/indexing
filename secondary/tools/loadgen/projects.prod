@@ -1,0 +1,14 @@
+s : "{ " properties "}".
+
+properties  : DQ "type"     DQ ": " DQ "project" DQ ", " NL
+              DQ "name"     DQ ": " DQ projectname DQ ", " NL
+              DQ "members"  DQ ": " "[" members "]" ", " NL
+              DQ "language" DQ ": " DQ language DQ NL.
+
+projectname : (bag "./propernames").
+members     : DQ (bag "./propernames") DQ
+            | members "," DQ (bag "./propernames") DQ.
+language    : "python"
+            | "haskell"
+            | "lua"
+            | "golang".

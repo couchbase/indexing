@@ -6,7 +6,9 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strings"
 
+	"github.com/couchbase/cbauth"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/projector"
@@ -19,13 +21,14 @@ var options struct {
 	kvaddrs   string
 	colocate  bool
 	logFile   string
+	auth      string
 	info      bool
 	debug     bool
 	trace     bool
 }
 
 func argParse() string {
-	flag.StringVar(&options.adminport, "adminport", "localhost:9999",
+	flag.StringVar(&options.adminport, "adminport", "",
 		"adminport address")
 	flag.StringVar(&options.kvaddrs, "kvaddrs", "127.0.0.1:12000",
 		"comma separated list of kvaddrs")
@@ -33,6 +36,8 @@ func argParse() string {
 		"whether projector will be colocated with KV")
 	flag.StringVar(&options.logFile, "logFile", "",
 		"output logs to file default is stdout")
+	flag.StringVar(&options.auth, "auth", "",
+		"Auth user and password")
 	flag.BoolVar(&options.info, "info", false,
 		"enable info level logging")
 	flag.BoolVar(&options.debug, "debug", false,
@@ -64,6 +69,15 @@ func main() {
 	} else if options.info {
 		c.SetLogLevel(c.LogLevelInfo)
 	}
+
+	// setup cbauth
+	if options.auth != "" {
+		up := strings.Split(options.auth, ":")
+		if _, err := cbauth.InternalRetryDefaultInit(cluster, up[0], up[1]); err != nil {
+			log.Fatalf("Failed to initialize cbauth: %s", err)
+		}
+	}
+
 	if f := getlogFile(); f != nil {
 		log.Printf("Projector logging to %q\n", f.Name())
 		c.SetLogWriter(f)

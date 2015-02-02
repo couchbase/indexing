@@ -46,7 +46,7 @@ type IndexRequest struct {
 type IndexInfo struct {
 	Name      string   `json:"name,omitempty"`
 	Bucket    string   `json:"bucket,omitempty"`
-	DefnID    string   `json:"defnID, omitempty"`
+	DefnID    uint64   `json:"defnID, omitempty"`
 	Using     string   `json:"using,omitempty"`
 	Exprtype  string   `json:"exprType,omitempty"`
 	PartnExpr string   `json:"partnExpr,omitempty"`
@@ -82,6 +82,7 @@ func (idx IndexInfo) String() string {
 	str += fmt.Sprintf("\tBucket: %v\n", idx.Bucket)
 	str += fmt.Sprintf("\tIsPrimary: %v\n", idx.IsPrimary)
 	str += fmt.Sprintf("\tExprtype: %v\n", idx.Exprtype)
+	str += fmt.Sprintf("\tWhereExpr: %v\n", idx.WhereExpr)
 	return str
 
 }

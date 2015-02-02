@@ -31,12 +31,24 @@
 // server behavior:
 //
 // 1. can handle more than one connection from same router.
+//
 // 2. whenever a connection with router
 //    a. gets closed
 //    b. or timeout
 //    all connections with that router will be closed and same will
 //    be intimated to application for catchup connection, using
 //    ConnectionError message.
+//
+// 3. StreamEnd, ConnectionError can be seen by serve due to,
+//    a. rebalance
+//    b. failover
+//    c. projector crash
+//    d. network partition
+//    e. DCP dropping the connection
+//    f. partial stream start
+//    g. bucket delete
+//    h. bucket flush
+//    i. DCP feed error
 
 package dataport
 
@@ -165,7 +177,7 @@ func (s *Server) addUuids(started, hostUuids keeper) keeper {
 			c.Errorf("%v duplicate vbucket %#v\n", s.logPrefix, newvb)
 		}
 		hostUuids[x] = newvb
-		c.Tracef("%v added vbucket %v\n", s.logPrefix, newvb.id())
+		c.Debugf("%v added vbucket %v\n", s.logPrefix, newvb.id())
 	}
 	return hostUuids
 }
@@ -177,7 +189,7 @@ func (s *Server) delUuids(finished, hostUuids keeper) keeper {
 			c.Errorf("%v not active vbucket %#v\n", s.logPrefix, avb)
 		}
 		delete(hostUuids, x)
-		c.Tracef("%v deleted vbucket %v\n", s.logPrefix, avb.id())
+		c.Debugf("%v deleted vbucket %v\n", s.logPrefix, avb.id())
 	}
 	return hostUuids
 }
@@ -261,7 +273,8 @@ loop:
 				break loop
 
 			case serverCmdError:
-				appmsg = s.jumboErrorHandler(msg.raddr, hostUuids, msg.err)
+				hostUuids, appmsg =
+					s.jumboErrorHandler(msg.raddr, hostUuids, msg.err)
 			}
 
 			if appmsg != nil {
@@ -319,13 +332,14 @@ func (s *Server) startWorker(raddr string) {
 // server or it closes all open connections with faulting remote-host and
 // returns back a message for application.
 func (s *Server) jumboErrorHandler(
-	raddr string, hostUuids keeper, err error) (msg interface{}) {
+	raddr string, hostUuids keeper,
+	err error) (actvUuids keeper, msg interface{}) {
 
 	var whatJumbo string
 
 	if _, ok := s.conns[raddr]; ok == false {
 		c.Errorf("%v fatal remote %q already gone\n", s.logPrefix, raddr)
-		return nil
+		return hostUuids, nil
 	}
 
 	if err == io.EOF {
@@ -342,14 +356,15 @@ func (s *Server) jumboErrorHandler(
 
 	} else {
 		c.Errorf("%v no error why did you call jumbo !!!\n", s.logPrefix)
-		return
+		return hostUuids, nil
 	}
 
 	switch whatJumbo {
 	case "closeremote":
 		ce := NewConnectionError()
 		for _, raddr := range remoteConnections(raddr, s.conns) {
-			ce.Append(hostUuids, raddr)
+			finished := ce.Append(hostUuids, raddr)
+			actvUuids = s.delUuids(finished, hostUuids)
 			closeConnection(s.logPrefix, raddr, s.conns[raddr])
 			delete(s.conns, raddr)
 		}
@@ -358,12 +373,13 @@ func (s *Server) jumboErrorHandler(
 	case "closeall":
 		ce := NewConnectionError()
 		for raddr := range s.conns {
-			ce.Append(hostUuids, raddr)
+			finished := ce.Append(hostUuids, raddr)
+			actvUuids = s.delUuids(finished, hostUuids)
 		}
 		msg = ce
 		go s.Close()
 	}
-	return
+	return actvUuids, msg
 }
 
 func closeConnection(prefix, raddr string, nc *netConn) {
@@ -540,11 +556,13 @@ func NewConnectionError() ConnectionError {
 }
 
 // Append {buckets,vbuckets} for connection error.
-func (ce ConnectionError) Append(hostUuids keeper, raddr string) {
-	for _, avb := range hostUuids {
+func (ce ConnectionError) Append(hostUuids keeper, raddr string) keeper {
+	finished := make(keeper)
+	for uuid, avb := range hostUuids {
 		if avb.raddr != raddr {
 			continue
 		}
+		finished[uuid] = avb
 		vbs, ok := ce[avb.bucket]
 		if !ok {
 			vbs = make([]uint16, 0, 4)
@@ -552,4 +570,5 @@ func (ce ConnectionError) Append(hostUuids keeper, raddr string) {
 		vbs = append(vbs, avb.vbno)
 		ce[avb.bucket] = vbs
 	}
+	return finished
 }

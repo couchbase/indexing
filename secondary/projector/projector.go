@@ -1,20 +1,15 @@
 package projector
 
-import "errors"
 import "fmt"
 import "sync"
 import "strings"
+import "encoding/json"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
+import projC "github.com/couchbase/indexing/secondary/projector/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/couchbaselabs/goprotobuf/proto"
-
-// ErrorTopicExist
-var ErrorTopicExist = errors.New("projector.topicExist")
-
-// ErrorTopicMissing
-var ErrorTopicMissing = errors.New("projector.topicMissing")
 
 // Projector data structure, a projector is connected to
 // one or more upstream kv-nodes. Works in tandem with
@@ -51,7 +46,7 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
 
 	apConfig := config.SectionConfig("adminport.", true)
-	apConfig = apConfig.SetValue("name", "PRAM")
+	apConfig.SetValue("name", "PRAM")
 	reqch := make(chan ap.Request)
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
 
@@ -69,7 +64,7 @@ func (p *Projector) GetFeed(topic string) (*Feed, error) {
 	if feed, ok := p.topics[topic]; ok {
 		return feed, nil
 	}
-	return nil, ErrorTopicMissing
+	return nil, projC.ErrorTopicMissing
 }
 
 // AddFeed object for `topic`.
@@ -79,7 +74,7 @@ func (p *Projector) AddFeed(topic string, feed *Feed) (err error) {
 	defer p.mu.Unlock()
 
 	if _, ok := p.topics[topic]; ok {
-		return ErrorTopicExist
+		return projC.ErrorTopicExist
 	}
 	p.topics[topic] = feed
 	c.Infof("%v %q feed added ...\n", p.logPrefix, topic)
@@ -93,7 +88,7 @@ func (p *Projector) DelFeed(topic string) (err error) {
 	defer p.mu.Unlock()
 
 	if _, ok := p.topics[topic]; ok == false {
-		return ErrorTopicMissing
+		return projC.ErrorTopicMissing
 	}
 	delete(p.topics, topic)
 	c.Infof("%v ... %q feed deleted\n", p.logPrefix, topic)
@@ -239,7 +234,7 @@ func (p *Projector) doRestartVbuckets(
 	if err != nil {
 		c.Errorf("%v %v\n", p.logPrefix, err)
 		response := &protobuf.TopicResponse{}
-		if err != ErrorTopicMissing {
+		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
 		}
 		return response.SetErr(err)
@@ -288,7 +283,7 @@ func (p *Projector) doAddBuckets(
 	if err != nil {
 		c.Errorf("%v %v\n", p.logPrefix, err)
 		response := &protobuf.TopicResponse{}
-		if err != ErrorTopicMissing {
+		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
 		}
 		return response.SetErr(err)
@@ -396,13 +391,12 @@ func (p *Projector) doShutdownTopic(
 	return protobuf.NewError(err)
 }
 
-func (p *Projector) doStatistics(request c.Statistics) ap.MessageMarshaller {
+func (p *Projector) doStatistics() interface{} {
 	c.Tracef("%v doStatistics()\n", p.logPrefix)
 
 	m := map[string]interface{}{
 		"clusterAddr": p.clusterAddr,
 		"adminport":   p.adminport,
-		"topics":      p.listTopics(),
 	}
 	stats, _ := c.NewStatistics(m)
 
@@ -411,8 +405,11 @@ func (p *Projector) doStatistics(request c.Statistics) ap.MessageMarshaller {
 		feeds.Set(topic, feed.GetStatistics())
 	}
 	stats.Set("feeds", feeds)
-	stats.Set("adminport", p.admind.GetStatistics())
-	return stats
+	data, err := json.Marshal(stats)
+	if err != nil {
+		c.Errorf("%v encoding statistics: %v\n", p.logPrefix, err)
+	}
+	return string(data)
 }
 
 // return list of active topics

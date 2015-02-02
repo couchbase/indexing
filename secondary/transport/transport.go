@@ -8,13 +8,12 @@
 
 package transport
 
-import (
-	"encoding/binary"
-	"errors"
-	"net"
+import "encoding/binary"
+import "errors"
+import "net"
+import "io"
 
-	c "github.com/couchbase/indexing/secondary/common"
-)
+import c "github.com/couchbase/indexing/secondary/common"
 
 // error codes
 
@@ -140,7 +139,11 @@ func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err 
 
 	// transport de-framing
 	if err = fullRead(conn, pkt.buf[:pktDataOffset]); err != nil {
-		c.Errorf("receiving packet: %v\n", err)
+		if err == io.EOF {
+			c.Tracef("receiving packet: %v\n", err)
+		} else {
+			c.Errorf("receiving packet: %v\n", err)
+		}
 		return
 	}
 	a, b := pktLenOffset, pktLenOffset+pktLenSize
@@ -153,7 +156,11 @@ func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err 
 		return
 	}
 	if err = fullRead(conn, pkt.buf[:pktlen]); err != nil {
-		c.Errorf("receiving packet: %v\n", err)
+		if err == io.EOF {
+			c.Tracef("receiving packet: %v\n", err)
+		} else {
+			c.Errorf("receiving packet: %v\n", err)
+		}
 		return
 	}
 

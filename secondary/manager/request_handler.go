@@ -14,7 +14,6 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
-	"math/rand"
 	"net"
 	"net/http"
 	"strconv"
@@ -147,17 +146,30 @@ func (m *httpHandler) createIndexRequest(w http.ResponseWriter, r *http.Request)
 
 	indexinfo := request.Index
 
-	defnID := uint64(rand.Int())
+	defnID, err := common.NewIndexDefnId()
+	if err != nil {
+
+		ierr := IndexError{Code: string(RESP_ERROR),
+			Msg: "Fail to generate index definition id"}
+
+		res := IndexResponse{
+			Status: RESP_ERROR,
+			Errors: []IndexError{ierr},
+		}
+		sendResponse(w, res)
+		return
+	}
+
 	if len(indexinfo.DefnID) != 0 {
 		if num, err := strconv.ParseUint(indexinfo.DefnID, 10, 64); err == nil {
-			defnID = num
+			defnID = common.IndexDefnId(num)
 		}
 	}
 
 	// create an in-memory index definition
 	// TODO : WhereExpr
 	idxDefn := &common.IndexDefn{
-		DefnId:          common.IndexDefnId(defnID),
+		DefnId:          defnID,
 		Name:            indexinfo.Name,
 		Using:           common.ForestDB,
 		Bucket:          indexinfo.Bucket,
@@ -171,7 +183,7 @@ func (m *httpHandler) createIndexRequest(w http.ResponseWriter, r *http.Request)
 	common.Debugf("RequestHandler::createIndexRequest: invoke IndexManager for create index bucket %s name %s",
 		indexinfo.Bucket, indexinfo.Name)
 
-	err := m.mgr.HandleCreateIndexDDL(idxDefn)
+	err = m.mgr.HandleCreateIndexDDL(idxDefn)
 	if err == nil {
 		// No error, return success
 		res := IndexResponse{
@@ -215,7 +227,7 @@ func (m *httpHandler) dropIndexRequest(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = m.mgr.HandleDeleteIndexDDL(id)
 	}
-	
+
 	if err == nil {
 		// No error, return success
 		res := IndexResponse{

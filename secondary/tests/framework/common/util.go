@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
 // ToDo: Point out the exact difference between two responses
@@ -46,10 +47,34 @@ func ReadCompressedFile(filePath string) ([]byte, error) {
 	return data, nil
 }
 
-// Download a remote file over HTTP
-func DownloadDataFile(sourceDataFile, destinationFilePath string) {
-	fmt.Println("Downloading file...")
+func FileExists(path string) bool {
+	if _, err := os.Stat(path); err == nil {
+		return true
+    } else {
+		return false
+	}
+}
 
+// Creates a directory if it not exists, else skips
+func CreateDirectory(dirpath string) {
+	if FileExists(dirpath) == true {
+		return
+	}
+	err := os.Mkdir(dirpath, 0777)
+	HandleError(err, "Error creating directory: " +dirpath)
+	fmt.Println("Directory created: ", dirpath)
+}
+
+// Download a remote file over HTTP
+func DownloadDataFile(sourceDataFile, destinationFilePath string, skipIfFileExists bool) {
+	dataFileExists := FileExists(destinationFilePath)
+	if skipIfFileExists == true && dataFileExists == true {
+      	fmt.Println("Data file exists. Skipping download")
+		return
+	}
+
+	CreateDirectory(filepath.Dir(destinationFilePath)) 
+	fmt.Println("Downloading data file to: ", destinationFilePath)
 	f, err := os.Create(destinationFilePath)
 	HandleError(err, "Error downloading datafile "+destinationFilePath)
 	defer f.Close()

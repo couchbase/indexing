@@ -121,7 +121,7 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 
 		} else { // publish stream-end
 			c.Debugf("%v StreamEnd for vbucket %v\n", vr.logPrefix, vr.vbno)
-			vr.sendToEndpoints(data)
+			vr.broadcast2Endpoints(data)
 		}
 
 		close(vr.finch)
@@ -131,8 +131,8 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 	var heartBeat <-chan time.Time // for Sync message
 
 	stats := vr.newStats()
-	addEngineCount := stats.Get("addEngines").(float64)
-	delEngineCount := stats.Get("delEngines").(float64)
+	addEngineCount := stats.Get("addInsts").(float64)
+	delEngineCount := stats.Get("delInsts").(float64)
 	syncCount := stats.Get("syncs").(float64)
 	sshotCount := stats.Get("snapshots").(float64)
 	mutationCount := stats.Get("mutations").(float64)
@@ -155,7 +155,8 @@ loop:
 				}
 
 				if msg[2] != nil {
-					vr.updateEndpoints(msg[2].(map[string]c.RouterEndpoint))
+					endpoints := msg[2].(map[string]c.RouterEndpoint)
+					vr.endpoints = vr.updateEndpoints(endpoints)
 					vr.printCtrl(vr.endpoints)
 				}
 				respch := msg[3].(chan []interface{})
@@ -178,8 +179,8 @@ loop:
 			case vrCmdGetStatistics:
 				c.Tracef("%v vrCmdStatistics\n", vr.logPrefix)
 				respch := msg[1].(chan []interface{})
-				stats.Set("addEngines", addEngineCount)
-				stats.Set("delEngines", delEngineCount)
+				stats.Set("addInsts", addEngineCount)
+				stats.Set("delInsts", delEngineCount)
 				stats.Set("syncs", syncCount)
 				stats.Set("snapshots", sshotCount)
 				stats.Set("mutations", mutationCount)
@@ -209,7 +210,7 @@ loop:
 			if data := vr.makeSyncData(seqno); data != nil {
 				syncCount++
 				c.Tracef("%v Sync count %v\n", vr.logPrefix, syncCount)
-				vr.sendToEndpoints(data)
+				vr.broadcast2Endpoints(data)
 
 			} else {
 				c.Errorf("%v Sync NOT PUBLISHED\n", vr.logPrefix)
@@ -219,8 +220,10 @@ loop:
 }
 
 // only endpoints that host engines defined on this vbucket.
-func (vr *VbucketRoutine) updateEndpoints(eps map[string]c.RouterEndpoint) {
-	vr.endpoints = make(map[string]c.RouterEndpoint)
+func (vr *VbucketRoutine) updateEndpoints(
+	eps map[string]c.RouterEndpoint) map[string]c.RouterEndpoint {
+
+	endpoints := make(map[string]c.RouterEndpoint)
 	for _, engine := range vr.engines {
 		for _, raddr := range engine.Endpoints() {
 			if _, ok := eps[raddr]; !ok {
@@ -228,9 +231,10 @@ func (vr *VbucketRoutine) updateEndpoints(eps map[string]c.RouterEndpoint) {
 				c.Errorf(format, vr.logPrefix, raddr)
 			}
 			c.Tracef("%v UpdateEndpoint %v to %v\n", vr.logPrefix, raddr, engine)
-			vr.endpoints[raddr] = eps[raddr]
+			endpoints[raddr] = eps[raddr]
 		}
 	}
+	return endpoints
 }
 
 var ssFormat = "%v received snapshot %v %v (type %x)\n"
@@ -242,7 +246,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 	switch m.Opcode {
 	case mcd.UPR_STREAMREQ: // broadcast StreamBegin
 		if data := vr.makeStreamBeginData(seqno); data != nil {
-			vr.sendToEndpoints(data)
+			vr.broadcast2Endpoints(data)
 		} else {
 			c.Errorf("%v StreamBeginData NOT PUBLISHED\n", vr.logPrefix)
 		}
@@ -251,7 +255,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 		typ, start, end := m.SnapshotType, m.SnapstartSeq, m.SnapendSeq
 		c.Debugf(ssFormat, vr.logPrefix, start, end, typ)
 		if data := vr.makeSnapshotData(m, seqno); data != nil {
-			vr.sendToEndpoints(data)
+			vr.broadcast2Endpoints(data)
 		} else {
 			c.Errorf("%v Snapshot NOT PUBLISHED\n", vr.logPrefix)
 		}
@@ -271,10 +275,17 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 		}
 		// send data to corresponding endpoint.
 		for raddr, data := range dataForEndpoints {
-			// send might fail due to ErrorChannelFull or ErrorClosed
-			if vr.endpoints[raddr].Send(data) != nil {
-				vr.endpoints[raddr].Close()
-				delete(vr.endpoints, raddr)
+			if endpoint, ok := vr.endpoints[raddr]; ok {
+				// FIXME: without the coordinator doing shared topic
+				// management, we will allow the feed to block.
+				// Otherwise, send might fail due to ErrorChannelFull
+				// or ErrorClosed
+				if err := endpoint.Send(data); err != nil {
+					msg := "%v endpoint(%q).Send() failed: %v"
+					c.Errorf(msg, vr.logPrefix, raddr, err)
+					endpoint.Close()
+					delete(vr.endpoints, raddr)
+				}
 			}
 		}
 	}
@@ -282,39 +293,19 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 }
 
 // send to all endpoints.
-func (vr *VbucketRoutine) sendToEndpoints(data interface{}) {
+func (vr *VbucketRoutine) broadcast2Endpoints(data interface{}) {
 	for raddr, endpoint := range vr.endpoints {
-		// send might fail due to ErrorChannelFull or ErrorClosed
-		if endpoint.Send(data) != nil {
+		// FIXME: without the coordinator doing shared topic
+		// management, we will allow the feed to block.
+		// Otherwise, send might fail due to ErrorChannelFull
+		// or ErrorClosed
+		if err := endpoint.Send(data); err != nil {
+			msg := "%v endpoint(%q).Send() failed: %v"
+			c.Errorf(msg, vr.logPrefix, raddr, err)
 			endpoint.Close()
 			delete(vr.endpoints, raddr)
 		}
 	}
-}
-
-func (vr *VbucketRoutine) printCtrl(v interface{}) {
-	switch val := v.(type) {
-	case map[string]c.RouterEndpoint:
-		for raddr := range val {
-			c.Tracef("%v knows endpoint %v\n", vr.logPrefix, raddr)
-		}
-	case map[uint64]*Engine:
-		for uuid := range val {
-			c.Tracef("%v knows engine %v\n", vr.logPrefix, uuid)
-		}
-	}
-}
-
-func (vr *VbucketRoutine) newStats() c.Statistics {
-	m := map[string]interface{}{
-		"addEngines": float64(0), // no. of update-engine commands
-		"delEngines": float64(0), // no. of delete-engine commands
-		"syncs":      float64(0), // no. of Sync message generated
-		"snapshots":  float64(0), // no. of Begin
-		"mutations":  float64(0), // no. of Upsert, Delete
-	}
-	stats, _ := c.NewStatistics(m)
-	return stats
 }
 
 func (vr *VbucketRoutine) makeStreamBeginData(seqno uint64) interface{} {
@@ -402,4 +393,29 @@ func (vr *VbucketRoutine) makeStreamEndData(seqno uint64) interface{} {
 		}
 	}
 	return nil
+}
+
+func (vr *VbucketRoutine) newStats() c.Statistics {
+	m := map[string]interface{}{
+		"addInsts":  float64(0), // no. of update-engine commands
+		"delInsts":  float64(0), // no. of delete-engine commands
+		"syncs":     float64(0), // no. of Sync message generated
+		"snapshots": float64(0), // no. of Begin
+		"mutations": float64(0), // no. of Upsert, Delete
+	}
+	stats, _ := c.NewStatistics(m)
+	return stats
+}
+
+func (vr *VbucketRoutine) printCtrl(v interface{}) {
+	switch val := v.(type) {
+	case map[string]c.RouterEndpoint:
+		for raddr := range val {
+			c.Tracef("%v knows endpoint %v\n", vr.logPrefix, raddr)
+		}
+	case map[uint64]*Engine:
+		for uuid := range val {
+			c.Tracef("%v knows engine %v\n", vr.logPrefix, uuid)
+		}
+	}
 }

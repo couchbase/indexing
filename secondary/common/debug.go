@@ -65,6 +65,11 @@ func LogEnable() {
 	logger = log.New(logFile, "", log.Lmicroseconds)
 }
 
+// Is log enabled
+func IsLogEnabled() bool {
+	return logger != nil
+}
+
 // SetLogLevel sets current log level
 func SetLogLevel(level int) {
 	logLevel = level

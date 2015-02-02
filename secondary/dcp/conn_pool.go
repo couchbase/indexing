@@ -10,6 +10,14 @@ import (
 var errClosedPool = errors.New("the pool is closed")
 var errNoPool = errors.New("no pool")
 
+// GenericMcdAuthHandler is a kind of AuthHandler that performs
+// special auth exchange (like non-standard auth, possibly followed by
+// select-bucket).
+type GenericMcdAuthHandler interface {
+	AuthHandler
+	AuthenticateMemcachedConn(string, *memcached.Client) error
+}
+
 // Default timeout for retrieving a connection from the pool.
 var ConnPoolTimeout = time.Hour * 24 * 30
 
@@ -43,6 +51,15 @@ func defaultMkConn(host string, ah AuthHandler) (*memcached.Client, error) {
 	conn, err := memcached.Connect("tcp", host)
 	if err != nil {
 		return nil, err
+	}
+
+	if gah, ok := ah.(GenericMcdAuthHandler); ok {
+		err = gah.AuthenticateMemcachedConn(host, conn)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		return conn, nil
 	}
 	name, pass := ah.GetCredentials()
 	if name != "default" {

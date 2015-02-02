@@ -13,6 +13,15 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 )
 
+type StorageStatistics struct {
+	DataSize int64
+	DiskSize int64
+
+	GetBytes    int64
+	InsertBytes int64
+	DeleteBytes int64
+}
+
 type IndexWriter interface {
 
 	//Persist a key/value pair
@@ -21,20 +30,26 @@ type IndexWriter interface {
 	//Delete a key/value pair by docId
 	Delete(docid []byte) error
 
-	//Commit the pending operations
-	Commit() error
+	// Create commited commited snapshot or inmemory snapshot
+	NewSnapshot(*common.TsVbuuid, bool) (SnapshotInfo, error)
 
-	//Snapshot
-	Snapshot() (Snapshot, error)
+	// Get the list of commited snapshots
+	GetSnapshots() ([]SnapshotInfo, error)
+
+	// Create open snapshot handle
+	OpenSnapshot(SnapshotInfo) (Snapshot, error)
 
 	//Rollback to given snapshot
-	Rollback(s Snapshot) error
+	Rollback(s SnapshotInfo) error
 
 	//Rollback to initial state
 	RollbackToZero() error
 
-	//Set Timestamp
-	SetTimestamp(*common.TsVbuuid) error
+	// Statistics used for compaction trigger
+	Statistics() (StorageStatistics, error)
+
+	// Perform file compaction
+	Compact() error
 
 	// Dealloc resources
 	Close()

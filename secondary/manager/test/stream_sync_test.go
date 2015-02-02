@@ -14,6 +14,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"os"
 	"testing"
 	"time"
 )
@@ -35,7 +36,6 @@ type syncTestProjectorClient struct {
 	donech chan bool
 }
 
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Test Driver
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -43,12 +43,12 @@ type syncTestProjectorClient struct {
 func TestStreamMgr_Sync(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelDebug)
+	common.SetLogLevel(common.LogLevelTrace)
 	util.TT = t
 
-	old_value := manager.NUM_VB	
-	manager.NUM_VB = 16 
-	defer func() {manager.NUM_VB = old_value}()
+	old_value := manager.NUM_VB
+	manager.NUM_VB = 16
+	defer func() { manager.NUM_VB = old_value }()
 
 	// Running test
 	runSyncTest()
@@ -74,11 +74,15 @@ func TestStreamMgr_Sync(t *testing.T) {
 func runSyncTest() {
 
 	common.Infof("**** Run Sync Test ******************************************")
-	
-	common.Infof("***** Start TestStreamMgr ") 
+
+	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
+	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
+	os.MkdirAll("./data/", os.ModePerm)
+
+	common.Infof("***** Start TestStreamMgr ")
 	/*
-	var requestAddr = "localhost:9885"
-	var leaderAddr = "localhost:9884"
+		var requestAddr = "localhost:9885"
+		var leaderAddr = "localhost:9884"
 	*/
 	var config = "./config.json"
 
@@ -89,13 +93,13 @@ func runSyncTest() {
 	env := new(syncTestProjectorClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
 	//mgr, err := manager.NewIndexManagerInternal(requestAddr, leaderAddr, config, admin)
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:" + manager.COORD_MAINT_STREAM_PORT, admin)
+	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin, cfg)
 	if err != nil {
 		util.TT.Fatal(err)
 	}
 	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
-	
+
 	common.Infof("Sync Test Cleanup ...")
 	cleanupStreamMgrSyncTest(mgr)
 
@@ -113,10 +117,10 @@ func runSyncTest() {
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Stop TestStreamMgr. Tearing down ") 
+	common.Infof("**** Stop TestStreamMgr. Tearing down ")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
-	
+
 	common.Infof("**** Finish Sync Test ************************************************")
 }
 
@@ -201,7 +205,7 @@ func cleanupStreamMgrSyncTest(mgr *manager.IndexManager) {
 			util.TT.Fatal("StreamMgrTest.cleanupStreamMgrSyncTest(): Cannot clean up index defn stream_mgr_sync_test")
 		}
 	}
-	
+
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }
 
@@ -285,11 +289,11 @@ func (c *syncTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string)
 	return newTs, nil
 }
 
-func (c *syncTestProjectorClient) RestartVbuckets(topic string, 
+func (c *syncTestProjectorClient) RestartVbuckets(topic string,
 	restartTimestamps []*protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
 	return nil, nil
 }
-	
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // testProjectorClientFactory
 ////////////////////////////////////////////////////////////////////////////////////////////////////

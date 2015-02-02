@@ -4,10 +4,10 @@ import "flag"
 import "fmt"
 import "log"
 import "os"
-import "strconv"
 import "strings"
 import "time"
 
+import "github.com/couchbase/cbauth"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dataport"
 import "github.com/couchbase/indexing/secondary/projector"
@@ -21,9 +21,10 @@ var options struct {
 	buckets       []string
 	endpoints     []string
 	coordEndpoint string
-	stat          string // periodic timeout to print dataport statistics
-	timeout       string // timeout for dataport to exit
+	stat          int // periodic timeout to print dataport statistics
+	timeout       int // timeout for dataport to exit
 	maxVbnos      int
+	auth          string
 	projector     bool // start projector, useful in debug mode.
 	debug         bool
 	trace         bool
@@ -39,12 +40,14 @@ func argParse() string {
 		"endpoints for mutations stream")
 	flag.StringVar(&options.coordEndpoint, "coorendp", "localhost:9021",
 		"coordinator endpoint")
-	flag.StringVar(&options.stat, "stat", "1000",
+	flag.IntVar(&options.stat, "stat", 1000,
 		"periodic timeout to print dataport statistics")
-	flag.StringVar(&options.timeout, "timeout", "0",
+	flag.IntVar(&options.timeout, "timeout", 0,
 		"timeout for dataport to exit")
 	flag.IntVar(&options.maxVbnos, "maxvb", 1024,
 		"max number of vbuckets")
+	flag.StringVar(&options.auth, "auth", "Administrator:asdasd",
+		"Auth user and password")
 	flag.BoolVar(&options.projector, "projector", false,
 		"start projector for debug mode")
 	flag.BoolVar(&options.debug, "debug", false,
@@ -83,13 +86,18 @@ var projectors = make(map[string]*projc.Client) // cluster -> client
 func main() {
 	clusters := strings.Split(argParse(), ",")
 
+	// setup cbauth
+	authURL := fmt.Sprintf("http://%s/_cbauth", clusters[0])
+	up := strings.Split(options.auth, ":")
+	authU, authP := up[0], up[1]
+	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
+
 	// start dataport servers.
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	dconf := c.SystemConfig.SectionConfig("projector.dataport.indexer.", true)
 	for _, endpoint := range options.endpoints {
-		stat, _ := strconv.Atoi(options.stat)
-		timeout, _ := strconv.Atoi(options.timeout)
-		go dataport.Application(endpoint, stat, timeout, maxvbs, dconf, appHandler)
+		go dataport.Application(
+			endpoint, options.stat, options.timeout, maxvbs, dconf, appHandler)
 	}
 	go dataport.Application(options.coordEndpoint, 0, 0, maxvbs, dconf, nil)
 
@@ -206,8 +214,12 @@ func mf(err error, msg string) {
 }
 
 func getProjectorAdminport(cluster, pooln string) string {
-	cinfo := c.NewClusterInfoCache(cluster, pooln)
-	if err := cinfo.Fetch(); err != nil {
+	cinfo, err := c.NewClusterInfoCache(c.ClusterUrl(cluster), pooln)
+	if err != nil {
+		log.Fatal("error cluster-info: %v", err)
+	}
+
+	if err = cinfo.Fetch(); err != nil {
 		log.Fatal("error cluster-info: %v", err)
 	}
 	nodeId := cinfo.GetCurrentNode()

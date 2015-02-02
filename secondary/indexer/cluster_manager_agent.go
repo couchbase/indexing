@@ -11,11 +11,10 @@ package indexer
 
 import (
 	"errors"
-	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager"
 	"net"
-	"strconv"
+	"runtime/debug"
 )
 
 //ClustMgrAgent provides the mechanism to talk to Index Coordinator
@@ -26,11 +25,10 @@ type clustMgrAgent struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any message to supervisor
 
-	mgr *manager.IndexManager //handle to index manager
+	mgr    *manager.IndexManager //handle to index manager
+	config common.Config
 
-	createNotifyCh <-chan interface{} //listen to create ddl from manager
-	dropNotifyCh   <-chan interface{} //listen to drop ddl from manager
-	config         common.Config
+	metaNotifier manager.MetadataNotifier
 }
 
 func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Config) (
@@ -43,8 +41,23 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 		config:     cfg,
 	}
 
-	url := fmt.Sprintf("http://%s", cfg["clusterAddr"].String())
-	cinfo := common.NewClusterInfoCache(url, DEFAULT_POOL)
+	var cinfo *common.ClusterInfoCache
+	url, err := common.ClusterAuthUrl(cfg["clusterAddr"].String())
+	if err == nil {
+		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+	}
+	if err != nil {
+		common.Errorf("ClustMgrAgent::Fail to init ClusterInfoCache : %v", err)
+		return nil, &MsgError{
+			err: Error{code: ERROR_CLUSTER_MGR_AGENT_INIT,
+				severity: FATAL,
+				category: CLUSTER_MGR,
+				cause:    err}}
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
 	if err := cinfo.Fetch(); err != nil {
 		common.Errorf("ClustMgrAgent::Fail to init ClusterInfoCache : %v", err)
 		return nil, &MsgError{
@@ -66,6 +79,11 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 	}
 
 	admin_addr, err := cinfo.GetServiceAddress(node, "indexAdmin")
+	if _, p, e := net.SplitHostPort(admin_addr); e != nil {
+		common.CrashOnError(e)
+	} else {
+		admin_addr = net.JoinHostPort("", p)
+	}
 	if err != nil {
 		common.Errorf("ClustMgrAgent::Fail to indexer admin address : %v", err)
 		return nil, &MsgError{
@@ -75,7 +93,7 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 				cause:    err}}
 	}
 
-	mgr, err := manager.NewIndexManager(admin_addr, scan_addr)
+	mgr, err := manager.NewIndexManager(admin_addr, scan_addr, cfg)
 	if err != nil {
 		common.Errorf("ClustMgrAgent::NewClustMgrAgent Error In Init %v", err)
 		return nil, &MsgError{
@@ -88,31 +106,24 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 
 	c.mgr = mgr
 
-	c.createNotifyCh, err = mgr.StartListenIndexCreate("ClustMgrAgent")
-	if err != nil {
-		common.Errorf("ClustMgrAgent::NewClustMgrAgent Error In "+
-			"StartListenIndexCreate %v", err)
+	metaNotifier := NewMetaNotifier(supvRespch, cfg)
+	if metaNotifier == nil {
+		common.Errorf("ClustMgrAgent::NewClustMgrAgent Error In Init %v", err)
 		return nil, &MsgError{
 			err: Error{code: ERROR_CLUSTER_MGR_AGENT_INIT,
 				severity: FATAL,
-				category: CLUSTER_MGR,
-				cause:    err}}
+				category: CLUSTER_MGR}}
+
 	}
 
-	c.dropNotifyCh, err = mgr.StartListenIndexDelete("ClustMgrAgent")
-	if err != nil {
-		common.Errorf("ClustMgrAgent::NewClustMgrAgent Error In "+
-			"StartListenIndexDelete %v", err)
-		return nil, &MsgError{
-			err: Error{code: ERROR_CLUSTER_MGR_AGENT_INIT,
-				severity: FATAL,
-				category: CLUSTER_MGR,
-				cause:    err}}
-	}
+	mgr.RegisterNotifier(metaNotifier)
+
+	c.metaNotifier = metaNotifier
+
 	//start clustMgrAgent loop which listens to commands from its supervisor
 	go c.run()
 
-	go c.listenIndexManagerMsgs()
+	//register with Index Manager for notification of metadata updates
 
 	return c, &MsgSuccess{}
 
@@ -153,11 +164,17 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 
 	switch cmd.GetMsgType() {
 
-	case CBQ_CREATE_INDEX_DDL:
-		c.handleCreateIndex(cmd)
+	case CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX:
+		c.handleUpdateTopologyForIndex(cmd)
 
-	case CBQ_DROP_INDEX_DDL:
-		c.handleDropIndex(cmd)
+	case CLUST_MGR_GET_GLOBAL_TOPOLOGY:
+		c.handleGetGlobalTopology(cmd)
+
+	case CLUST_MGR_GET_LOCAL:
+		c.handleGetLocalValue(cmd)
+
+	case CLUST_MGR_SET_LOCAL:
+		c.handleSetLocalValue(cmd)
 
 	default:
 		common.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
@@ -165,111 +182,121 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 
 }
 
-func (c *clustMgrAgent) listenIndexManagerMsgs() {
+func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 
-	for {
-		select {
+	common.Debugf("ClustMgr:handleUpdateTopologyForIndex %v", cmd)
 
-		case data, ok := <-c.createNotifyCh:
-			if ok {
-				//unmarshal and send to indexer
-				common.Debugf("clustMgrAgent::listenIndexManagerMsgs Notification " +
-					"Received for Create Index")
-				idxDefn, err := manager.UnmarshallIndexDefn(data.([]byte))
-				if err == nil {
+	indexList := cmd.(*MsgClustMgrUpdate).GetIndexList()
+	updatedFields := cmd.(*MsgClustMgrUpdate).GetUpdatedFields()
 
-					pc := common.NewKeyPartitionContainer()
+	updatedState := common.INDEX_STATE_NIL
+	updatedStream := common.NIL_STREAM
+	updatedError := ""
 
-					//Add one partition for now
-					addr := net.JoinHostPort("", c.config["streamMaintPort"].String())
-					endpt := []common.Endpoint{common.Endpoint(addr)}
-
-					partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
-						Endpts: endpt}
-					pc.AddPartition(common.PartitionId(1), partnDefn)
-
-					idxInst := common.IndexInst{InstId: common.IndexInstId(idxDefn.DefnId),
-						Defn:  *idxDefn,
-						State: common.INDEX_STATE_INITIAL,
-						Pc:    pc,
-					}
-
-					c.supvRespch <- &MsgCreateIndex{mType: CLUST_MGR_CREATE_INDEX_DDL,
-						indexInst: idxInst}
-				}
-			} else {
-
-				common.Errorf("clustMgrAgent::listenIndexManagerMsgs Unexpected " +
-					"Close Received from Index Manager.")
-				c.supvRespch <- &MsgError{
-					err: Error{code: ERROR_INDEX_MANAGER_CHANNEL_CLOSE,
-						severity: FATAL,
-						category: CLUSTER_MGR}}
-			}
-
-		case data, ok := <-c.dropNotifyCh:
-			//unmarshal and send to indexer
-			if ok {
-				common.Debugf("clustMgrAgent::listenIndexManagerMsgs Notification " +
-					"Received for Drop Index")
-				idxKey := data.(string)
-				id, err := strconv.ParseUint(idxKey, 10, 64)
-				if err != nil {
-					idxDefn, err := c.mgr.GetIndexDefnById(common.IndexDefnId(id))
-					if err == nil {
-						c.supvRespch <- &MsgDropIndex{mType: CLUST_MGR_DROP_INDEX_DDL,
-							indexInstId: common.IndexInstId(idxDefn.DefnId)}
-					} else {
-						common.Errorf("clustMgrAgent::listenIndexManagerMsgs Unable to find"+
-							"Index. Key %v. Error %v", idxKey, err)
-					}
-				}
-
-			} else {
-				common.Errorf("clustMgrAgent::listenIndexManagerMsgs Unexpected " +
-					"Close Received from Index Manager.")
-				c.supvRespch <- &MsgError{
-					err: Error{code: ERROR_INDEX_MANAGER_CHANNEL_CLOSE,
-						severity: FATAL,
-						category: CLUSTER_MGR}}
-			}
-
+	for _, index := range indexList {
+		if updatedFields.state {
+			updatedState = index.State
 		}
+		if updatedFields.stream {
+			updatedStream = index.Stream
+		}
+		if updatedFields.err {
+			updatedError = index.Error
+		}
+
+		err := c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId,
+			updatedState, updatedStream, updatedError)
+		common.CrashOnError(err)
+	}
+
+	c.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
+
+	common.Debugf("ClustMgr:handleGetGlobalTopology %v", cmd)
+
+	//get the latest topology from manager
+	metaIter, err := c.mgr.NewIndexDefnIterator()
+	if err != nil {
+		common.CrashOnError(err)
+	}
+
+	indexInstMap := make(common.IndexInstMap)
+
+	for _, defn, err := metaIter.Next(); err == nil; _, defn, err = metaIter.Next() {
+
+		var idxDefn common.IndexDefn
+		idxDefn = *defn
+
+		t, e := c.mgr.GetTopologyByBucket(idxDefn.Bucket)
+		if e != nil {
+			common.CrashOnError(e)
+		}
+
+		inst := t.GetIndexInstByDefn(idxDefn.DefnId)
+
+		if inst == nil {
+			common.Warnf("ClustMgr:handleGetGlobalTopology Index Instance Not "+
+				"Found For Index Definition %v. Ignored.", idxDefn)
+			continue
+		}
+
+		//for indexer, Ready state doesn't matter. Till index build,
+		//the index stays in Created state.
+		var state common.IndexState
+		instState := common.IndexState(inst.State)
+		if instState == common.INDEX_STATE_READY {
+			state = common.INDEX_STATE_CREATED
+		} else {
+			state = instState
+		}
+
+		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
+			Defn:   idxDefn,
+			State:  state,
+			Stream: common.StreamId(inst.StreamId),
+		}
+
+		indexInstMap[idxInst.InstId] = idxInst
+
+	}
+
+	c.supvCmdch <- &MsgClustMgrTopology{indexInstMap: indexInstMap}
+}
+
+func (c *clustMgrAgent) handleGetLocalValue(cmd Message) {
+
+	key := cmd.(*MsgClustMgrLocal).GetKey()
+
+	common.Debugf("ClustMgr:handleGetLocalValue Key %v", key)
+
+	val, err := c.mgr.GetLocalValue(key)
+
+	c.supvCmdch <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_GET_LOCAL,
+		key:   key,
+		value: val,
+		err:   err,
 	}
 
 }
 
-func (c *clustMgrAgent) handleCreateIndex(cmd Message) {
+func (c *clustMgrAgent) handleSetLocalValue(cmd Message) {
 
-	idxInst := cmd.(*MsgCreateIndex).GetIndexInst()
+	key := cmd.(*MsgClustMgrLocal).GetKey()
+	val := cmd.(*MsgClustMgrLocal).GetValue()
 
-	err := c.mgr.HandleCreateIndexDDL(&idxInst.Defn)
-	if err != nil {
-		common.Errorf("ClustMgrAgent::handleCreateIndex Error In Create Index %v", err)
-		c.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_CLUSTER_MGR_CREATE_FAIL,
-				severity: FATAL,
-				category: CLUSTER_MGR,
-				cause:    err}}
-	} else {
-		c.supvCmdch <- &MsgSuccess{}
-	}
-}
+	common.Debugf("ClustMgr:handleSetLocalValue Key %v Value %v", key, val)
 
-func (c *clustMgrAgent) handleDropIndex(cmd Message) {
+	err := c.mgr.SetLocalValue(key, val)
 
-	idxInstId := cmd.(*MsgDropIndex).GetIndexInstId()
-
-	err := c.mgr.HandleDeleteIndexDDL(common.IndexDefnId(idxInstId))
-	if err != nil {
-		common.Errorf("ClustMgrAgent::handleDropIndex Error In Drop Index %v", err)
-		c.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_CLUSTER_MGR_DROP_FAIL,
-				severity: FATAL,
-				category: CLUSTER_MGR,
-				cause:    err}}
-	} else {
-		c.supvCmdch <- &MsgSuccess{}
+	c.supvCmdch <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_SET_LOCAL,
+		key:   key,
+		value: val,
+		err:   err,
 	}
 
 }
@@ -289,6 +316,9 @@ func (c *clustMgrAgent) panicHandler() {
 			err = errors.New("Unknown panic")
 		}
 
+		common.Fatalf("ClusterMgrAgent Panic Err %v", err)
+		common.StackTrace(string(debug.Stack()))
+
 		//panic, propagate to supervisor
 		msg := &MsgError{
 			err: Error{code: ERROR_INDEX_MANAGER_PANIC,
@@ -297,5 +327,183 @@ func (c *clustMgrAgent) panicHandler() {
 				cause:    err}}
 		c.supvRespch <- msg
 	}
+
+}
+
+type metaNotifier struct {
+	adminCh MsgChannel
+	config  common.Config
+}
+
+func NewMetaNotifier(adminCh MsgChannel, config common.Config) *metaNotifier {
+
+	if adminCh == nil {
+		return nil
+	}
+
+	return &metaNotifier{
+		adminCh: adminCh,
+		config:  config,
+	}
+
+}
+
+func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
+
+	common.Debugf("clustMgrAgent::OnIndexCreate Notification "+
+		"Received for Create Index %v", indexDefn)
+
+	pc := meta.makeDefaultPartitionContainer()
+
+	idxInst := common.IndexInst{InstId: common.IndexInstId(indexDefn.DefnId),
+		Defn:  *indexDefn,
+		State: common.INDEX_STATE_CREATED,
+		Pc:    pc,
+	}
+
+	respCh := make(MsgChannel)
+
+	meta.adminCh <- &MsgCreateIndex{mType: CLUST_MGR_CREATE_INDEX_DDL,
+		indexInst: idxInst,
+		respCh:    respCh}
+
+	//wait for response
+	if res, ok := <-respCh; ok {
+
+		switch res.GetMsgType() {
+
+		case MSG_SUCCESS:
+			common.Debugf("clustMgrAgent::OnIndexCreate Success "+
+				"for Create Index %v", indexDefn)
+			return nil
+
+		case MSG_ERROR:
+			common.Debugf("clustMgrAgent::OnIndexCreate Error "+
+				"for Create Index %v. Error %v.", indexDefn, res)
+			err := res.(*MsgError).GetError()
+			return err.cause
+
+		default:
+			common.Fatalf("clustMgrAgent::OnIndexCreate Unknown Response "+
+				"Received for Create Index %v. Response %v", indexDefn, res)
+			common.CrashOnError(errors.New("Unknown Response"))
+
+		}
+
+	} else {
+
+		common.Debugf("clustMgrAgent::OnIndexCreate Unexpected Channel Close "+
+			"for Create Index %v", indexDefn)
+		common.CrashOnError(errors.New("Unknown Response"))
+	}
+
+	return nil
+}
+func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId) error {
+
+	common.Debugf("clustMgrAgent::OnIndexBuild Notification "+
+		"Received for Build Index %v", indexDefnList)
+
+	respCh := make(MsgChannel)
+
+	var indexInstList []common.IndexInstId
+	for _, defnId := range indexDefnList {
+		indexInstList = append(indexInstList, common.IndexInstId(defnId))
+	}
+
+	meta.adminCh <- &MsgBuildIndex{indexInstList: indexInstList,
+		respCh: respCh}
+
+	//wait for response
+	if res, ok := <-respCh; ok {
+
+		switch res.GetMsgType() {
+
+		case MSG_SUCCESS:
+			common.Debugf("clustMgrAgent::OnIndexBuild Success "+
+				"for Build Index %v", indexDefnList)
+			return nil
+
+		case MSG_ERROR:
+			common.Debugf("clustMgrAgent::OnIndexBuild Error "+
+				"for Build Index %v. Error %v.", indexDefnList, res)
+			err := res.(*MsgError).GetError()
+			return err.cause
+
+		default:
+			common.Fatalf("clustMgrAgent::OnIndexBuild Unknown Response "+
+				"Received for Build Index %v. Response %v", indexDefnList, res)
+			common.CrashOnError(errors.New("Unknown Response"))
+
+		}
+
+	} else {
+
+		common.Debugf("clustMgrAgent::OnIndexBuild Unexpected Channel Close "+
+			"for Create Index %v", indexDefnList)
+		common.CrashOnError(errors.New("Unknown Response"))
+	}
+
+	return nil
+}
+
+func (meta *metaNotifier) OnIndexDelete(defnId common.IndexDefnId) error {
+
+	common.Debugf("clustMgrAgent::OnIndexDelete Notification "+
+		"Received for Drop IndexId %v", defnId)
+
+	respCh := make(MsgChannel)
+
+	//Treat DefnId as InstId for now
+	meta.adminCh <- &MsgDropIndex{mType: CLUST_MGR_DROP_INDEX_DDL,
+		indexInstId: common.IndexInstId(defnId),
+		respCh:      respCh}
+
+	//wait for response
+	if res, ok := <-respCh; ok {
+
+		switch res.GetMsgType() {
+
+		case MSG_SUCCESS:
+			common.Debugf("clustMgrAgent::OnIndexDelete Success "+
+				"for Drop IndexId %v", defnId)
+			return nil
+
+		case MSG_ERROR:
+			common.Debugf("clustMgrAgent::OnIndexDelete Error "+
+				"for Drop IndexId %v. Error %v", defnId, res)
+			err := res.(*MsgError).GetError()
+			return err.cause
+
+		default:
+			common.Fatalf("clustMgrAgent::OnIndexDelete Unknown Response "+
+				"Received for Drop IndexId %v. Response %v", defnId, res)
+			common.CrashOnError(errors.New("Unknown Response"))
+
+		}
+
+	} else {
+		common.Debugf("clustMgrAgent::OnIndexDelete Unexpected Channel Close "+
+			"for Drop IndexId %v", defnId)
+		common.CrashOnError(errors.New("Unknown Response"))
+
+	}
+
+	return nil
+}
+
+func (meta *metaNotifier) makeDefaultPartitionContainer() common.PartitionContainer {
+
+	pc := common.NewKeyPartitionContainer()
+
+	//Add one partition for now
+	addr := net.JoinHostPort("", meta.config["streamMaintPort"].String())
+	endpt := []common.Endpoint{common.Endpoint(addr)}
+
+	partnDefn := common.KeyPartitionDefn{Id: common.PartitionId(1),
+		Endpts: endpt}
+	pc.AddPartition(common.PartitionId(1), partnDefn)
+
+	return pc
 
 }

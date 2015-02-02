@@ -129,6 +129,14 @@ func (c *Client) Auth(user, pass string) (*transport.MCResponse, error) {
 	return res, fmt.Errorf("auth mechanism PLAIN not supported")
 }
 
+// select bucket
+func (c *Client) SelectBucket(bucket string) (*transport.MCResponse, error) {
+
+	return c.Send(&transport.MCRequest{
+		Opcode: transport.SELECT_BUCKET,
+		Key:    []byte(fmt.Sprintf("%s", bucket))})
+}
+
 func (c *Client) store(opcode transport.CommandCode, vb uint16,
 	key string, flags int, exp int, body []byte) (*transport.MCResponse, error) {
 

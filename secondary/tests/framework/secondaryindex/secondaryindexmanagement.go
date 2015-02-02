@@ -1,95 +1,201 @@
 package secondaryindex
 
 import (
-    "fmt"
-    qc "github.com/couchbase/indexing/secondary/queryport/client"
-    tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-    "github.com/couchbaselabs/query/expression"
-    "github.com/couchbaselabs/query/parser/n1ql"
+	"fmt"
+	"time"
+	c "github.com/couchbase/indexing/secondary/common"
+	qc "github.com/couchbase/indexing/secondary/queryport/client"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbaselabs/query/expression"
+	"github.com/couchbaselabs/query/parser/n1ql"
 )
 
+func CreateClient(server, serviceAddr string) *qc.GsiClient {
+	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	client, err := qc.NewGsiClient(server, serviceAddr, config)
+	tc.HandleError(err, "Error while creating gsi client")
+	return client
+}
+
+func GetDefnID(client *qc.GsiClient, bucket, indexName string) (defnID c.IndexDefnId, ok bool) {
+	indexes, err := client.Refresh()
+	tc.HandleError(err, "Error while listing the indexes")
+	for _, index := range indexes {
+		defn := index.Definition
+		if defn.Bucket == bucket && defn.Name == indexName {
+			return index.Definition.DefnId, true
+		}
+	}
+	return c.IndexDefnId(0), false
+}
+
+func CreatePrimaryIndex(indexName, bucketName, server string, skipIfExists bool) error {
+	indexExists := IndexExists(indexName, bucketName, server)
+	if skipIfExists == true && indexExists == true {
+		return nil
+	}
+	client := CreateClient(server, "2itest")
+	var secExprs []string
+
+	using := "gsi"
+	exprType := "N1QL"
+	partnExp := ""
+	where := ""
+	isPrimary := true
+
+	defnID, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary, nil)
+	if err == nil {
+		fmt.Printf("Created the gsi primary index %v\n", indexName)
+		return WaitTillIndexActive(defnID, client)
+	}
+
+	client.Close()
+	return err
+}
+
 func CreateSecondaryIndex(indexName, bucketName, server string, indexFields []string, skipIfExists bool) error {
-    indexExists := IndexExists(indexName, bucketName, server)
-    if skipIfExists == true && indexExists == true {
-        return nil
-    }
-    client := qc.NewClusterClient(server)
-    var secExprs []string
+	client := CreateClient(server, "2itest")
+	defer client.Close()
+	return CreateSecondaryIndexWithClient(indexName, bucketName, server, indexFields, skipIfExists, client)
+}
 
-    for _, indexField := range indexFields {
-        expr, err := n1ql.ParseExpression(indexField)
-        if err != nil {
-            fmt.Printf("Creating index %v. Error while parsing the expression (%v) : %v\n", indexName, indexField, err)
-        }
+func CreateSecondaryIndexWithClient(indexName, bucketName, server string, indexFields []string, skipIfExists bool, client *qc.GsiClient) error {
+	indexExists := IndexExistsWithClient(indexName, bucketName, server, client)
+	if skipIfExists == true && indexExists == true {
+		return nil
+	}
+	
+	var secExprs []string
+	for _, indexField := range indexFields {
+		expr, err := n1ql.ParseExpression(indexField)
+		if err != nil {
+			fmt.Printf("Creating index %v. Error while parsing the expression (%v) : %v\n", indexName, indexField, err)
+		}
 
-        secExprs = append(secExprs, expression.NewStringer().Visit(expr))
-    }
+		secExprs = append(secExprs, expression.NewStringer().Visit(expr))
+	}
 
-    using := "gsi"
-    exprType := "N1QL"
-    partnExp := ""
-    where := ""
-    isPrimary := false
+	using := "gsi"
+	exprType := "N1QL"
+	partnExp := ""
+	where := ""
+	isPrimary := false
 
-    _, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary)
-    if err == nil {
-        fmt.Printf("Created the secondary index %v\n", indexName)
-    }
-    return err
+	defnID, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary, nil)
+	if err == nil {
+		fmt.Printf("Created the secondary index %v\n", indexName)
+		return WaitTillIndexActive(defnID, client)
+	}
+	
+	return err
+}
+
+func WaitTillIndexActive(defnID uint64, client *qc.GsiClient) error {
+	for {
+		state, e := client.IndexState(defnID); 
+		if e != nil {
+			fmt.Println("Error while fetching index state for defnID ", defnID)
+			return e
+		}
+		
+		if state == c.INDEX_STATE_ACTIVE {
+			return nil
+		} else {
+			time.Sleep(1 * time.Second)
+		}
+	}
 }
 
 func IndexExists(indexName, bucketName, server string) bool {
-    client := qc.NewClusterClient(server)
-    infos, err := client.List()
-    tc.HandleError(err, "Error while listing the secondary indexes")
-    for _, info := range infos {
-        if info.Name == indexName {
-            fmt.Printf("Index found:  %v\n", indexName)
-            return true
-        }
-    }
-    return false
+	client := CreateClient(server, "2itest")
+	indexes, err := client.Refresh()
+	client.Close()
+	tc.HandleError(err, "Error while listing the secondary indexes")
+	for _, index := range indexes {
+		defn := index.Definition
+		if defn.Name == indexName {
+			fmt.Printf("Index found:  %v\n", indexName)
+			return true
+		}
+	}
+	return false
+}
+
+func IndexExistsWithClient(indexName, bucketName, server string, client *qc.GsiClient) bool {
+	indexes, err := client.Refresh()
+	tc.HandleError(err, "Error while listing the secondary indexes")
+	for _, index := range indexes {
+		defn := index.Definition
+		if defn.Name == indexName {
+			fmt.Printf("Index found:  %v\n", indexName)
+			return true
+		}
+	}
+	return false
 }
 
 func DropSecondaryIndex(indexName, bucketName, server string) error {
-    fmt.Println("Dropping the secondary index ", indexName)
-    client := qc.NewClusterClient(server)
-    infos, err := client.List()
-    tc.HandleError(err, "Error while listing the secondary indexes")
-
-    for _, info := range infos {
-        if (info.Name == indexName) && (info.Bucket == bucketName) {
-            e := client.DropIndex(info.DefnID)
-            if e == nil {
-                fmt.Println("Index dropped")
-            } else {
-                return e
-            }
-        }
-    }
-    return nil
+	fmt.Println("Dropping the secondary index ", indexName)
+	client := CreateClient(server, "2itest")
+	indexes, err := client.Refresh()
+	tc.HandleError(err, "Error while listing the secondary indexes")
+	for _, index := range indexes {
+		defn := index.Definition
+		if (defn.Name == indexName) && (defn.Bucket == bucketName) {
+			e := client.DropIndex(uint64(defn.DefnId))
+			if e == nil {
+				fmt.Println("Index dropped")
+			} else {
+				client.Close()
+				return e
+			}
+		}
+	}
+	client.Close()
+	return nil
 }
 
-func DropSecondaryIndexByID(indexDefnID, server string) error {
-    fmt.Println("Dropping the secondary index ", indexDefnID)
-    client := qc.NewClusterClient(server)
-    e := client.DropIndex(indexDefnID)
-    if e != nil {
-        return e
-    }
-    fmt.Println("Index dropped")
-    return nil
+func DropSecondaryIndexWithClient(indexName, bucketName, server string, client *qc.GsiClient) error {
+	fmt.Println("Dropping the secondary index ", indexName)
+	indexes, err := client.Refresh()
+	tc.HandleError(err, "Error while listing the secondary indexes")
+	for _, index := range indexes {
+		defn := index.Definition
+		if (defn.Name == indexName) && (defn.Bucket == bucketName) {
+			e := client.DropIndex(uint64(defn.DefnId))
+			if e == nil {
+				fmt.Println("Index dropped")
+			} else {
+				client.Close()
+				return e
+			}
+		}
+	}
+	return nil
 }
 
 func DropAllSecondaryIndexes(server string) {
-    fmt.Println("In DropAllSecondaryIndexes()")
-    client := qc.NewClusterClient(server)
-    infos, err := client.List()
-    tc.HandleError(err, "Error while listing the secondary indexes")
+	fmt.Println("In DropAllSecondaryIndexes()")
+	client := CreateClient(server, "2itest")
+	indexes, err := client.Refresh()
+	tc.HandleError(err, "Error while listing the secondary indexes")
+	for _, index := range indexes {
+		defn := index.Definition
+		e := client.DropIndex(uint64(defn.DefnId))
+		tc.HandleError(e, "Error dropping the index "+defn.Name)
+		fmt.Println("Dropped index ", defn.Name)
+	}
+	client.Close()
+}
 
-    for _, info := range infos {
-        e := client.DropIndex(info.DefnID)
-        tc.HandleError(e, "Error dropping the index "+info.Name)
-        fmt.Println("Dropped index ", info.Name)
-    }
+func DropSecondaryIndexByID(indexDefnID uint64, server string) error {
+	fmt.Println("Dropping the secondary index ", indexDefnID)
+	client := CreateClient(server, "2itest")
+	e := client.DropIndex(indexDefnID)	
+	if e != nil {
+		return e
+	}
+	client.Close()
+	fmt.Println("Index dropped")
+	return nil
 }

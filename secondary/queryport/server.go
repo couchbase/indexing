@@ -5,6 +5,8 @@ import "net"
 import "runtime/debug"
 import "sync"
 import "time"
+import "io"
+import "sync/atomic"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
@@ -31,6 +33,12 @@ type Server struct {
 	writeDeadline  time.Duration
 	streamChanSize int
 	logPrefix      string
+
+	nConnections int64
+}
+
+type ServerStats struct {
+	Connections int64
 }
 
 // NewServer creates a new queryport daemon.
@@ -56,6 +64,12 @@ func NewServer(
 	go s.listener()
 	c.Infof("%v started ...\n", s.logPrefix)
 	return s, nil
+}
+
+func (s *Server) Statistics() ServerStats {
+	return ServerStats{
+		Connections: atomic.LoadInt64(&s.nConnections),
+	}
 }
 
 // Close queryport daemon.
@@ -105,6 +119,11 @@ func (s *Server) listener() {
 // handle connection request. connection might be kept open in client's
 // connection pool.
 func (s *Server) handleConnection(conn net.Conn) {
+	atomic.AddInt64(&s.nConnections, 1)
+	defer func() {
+		atomic.AddInt64(&s.nConnections, -1)
+	}()
+
 	raddr := conn.RemoteAddr()
 	defer func() {
 		conn.Close()
@@ -216,7 +235,11 @@ loop:
 		req, err := rpkt.Receive(conn)
 		// TODO: handle close-connection and don't print error message.
 		if err != nil {
-			c.Errorf("%v connection %q exited %v\n", s.logPrefix, raddr, err)
+			if err == io.EOF {
+				c.Tracef("%v connection %q exited %v\n", s.logPrefix, raddr, err)
+			} else {
+				c.Errorf("%v connection %q exited %v\n", s.logPrefix, raddr, err)
+			}
 			break loop
 		}
 		select {

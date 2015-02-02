@@ -43,10 +43,6 @@ const DEFAULT_NUM_STREAM_READER_WORKERS = 8
 //up mutations before processing
 const MAX_STREAM_READER_WORKER_BUFFER = 1000
 
-//Number of Sync messages from each vbucket after
-//which Timekeeper triggers a new Stability Timestamp
-const SYNC_COUNT_TS_TRIGGER uint16 = 2
-
 //Max number of snapshot to be retained per index.
 //Older snapshots are deleted.
 const MAX_SNAPSHOTS_PER_INDEX = 5
@@ -64,16 +60,7 @@ const SLICE_COMMAND_BUFFER_SIZE = 10000
 //any outstanding writes before commit
 const SLICE_COMMIT_POLL_INTERVAL = 20
 
-//Default Number of threads for a Slice Writer
-const NUM_WRITER_THREADS_PER_SLICE = 2
-
-//GoMeta specific
-const GOMETA_REQUEST_ADDR = "localhost:9885"
-const GOMETA_LEADER_ADDR = "localhost:9884"
-const GOMETA_MSG_ADDR = "localhost:9886"
-
-//Index Manager
-const INDEX_MANAGER_CONFIG = "./config.json"
-
 //Max Length of Secondary Key
 const MAX_SEC_KEY_LEN = 1024
+
+const INDEXER_ID_KEY = "IndexerId"

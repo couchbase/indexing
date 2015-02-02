@@ -11,6 +11,7 @@
 package manager
 
 import (
+	"errors"
 	"fmt"
 	common "github.com/couchbase/gometa/common"
 	message "github.com/couchbase/gometa/message"
@@ -18,6 +19,7 @@ import (
 	r "github.com/couchbase/gometa/repository"
 	co "github.com/couchbase/indexing/secondary/common"
 	"math"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -44,6 +46,7 @@ type Coordinator struct {
 	factory    protocol.MsgFactory
 	skillch    chan bool
 	idxMgr     *IndexManager
+	basepath   string
 
 	mutex sync.Mutex
 	cond  *sync.Cond
@@ -65,13 +68,14 @@ type CoordinatorState struct {
 // Public API
 /////////////////////////////////////////////////////////////////////////////
 
-func NewCoordinator(repo *MetadataRepo, idxMgr *IndexManager) *Coordinator {
+func NewCoordinator(repo *MetadataRepo, idxMgr *IndexManager, basepath string) *Coordinator {
 	coordinator := new(Coordinator)
 	coordinator.repo = repo
 	coordinator.ready = false
 	coordinator.cond = sync.NewCond(&coordinator.mutex)
 	coordinator.idxMgr = idxMgr
 	coordinator.state = newCoordinatorState()
+	coordinator.basepath = basepath
 
 	return coordinator
 }
@@ -105,7 +109,7 @@ func (s *Coordinator) Terminate() {
 			co.Warnf("panic in Coordinator.Terminate() : %s.  Ignored.\n", r)
 		}
 	}()
-	
+
 	s.state.mutex.Lock()
 	defer s.state.mutex.Unlock()
 
@@ -147,7 +151,13 @@ func (s *Coordinator) IsDone() bool {
 // If request is interrupted, then the request may still be processed by some other
 // nodes.  So the outcome of the request is unknown when this function returns false.
 //
-func (s *Coordinator) NewRequest(id uint64, opCode uint32, key string, content []byte) bool {
+func (s *Coordinator) NewRequest(opCode uint32, key string, content []byte) bool {
+
+	uuid, err := co.NewUUID()
+	if err != nil {
+		return false
+	}
+	id := uuid.Uint64()
 
 	s.waitForReady()
 
@@ -257,7 +267,8 @@ func (s *Coordinator) bootstrap(config string) (err error) {
 	s.txn = common.NewTxnState()
 
 	// Initialize the state to enable voting
-	s.configRepo, err = r.OpenRepositoryWithName(COORDINATOR_CONFIG_STORE)
+	repoName := filepath.Join(s.basepath, COORDINATOR_CONFIG_STORE)
+	s.configRepo, err = r.OpenRepositoryWithName(repoName)
 	if err != nil {
 		return err
 	}
@@ -609,6 +620,16 @@ func (c *Coordinator) Commit(txid common.Txnid) error {
 	return nil
 }
 
+func (c *Coordinator) Abort(fid string, reqId uint64, err string) error {
+	c.updateRequestOnRespond(fid, reqId, err)
+	return nil
+}
+
+func (c *Coordinator) Respond(fid string, reqId uint64, err string) error {
+	c.updateRequestOnRespond(fid, reqId, err)
+	return nil
+}
+
 func (c *Coordinator) GetQuorumVerifier() protocol.QuorumVerifier {
 	return c
 }
@@ -663,6 +684,31 @@ func (c *Coordinator) updateRequestOnNewProposal(proposal protocol.ProposalMsg) 
 		if ok {
 			delete(c.state.pendings, reqId)
 			c.state.proposals[common.Txnid(txnid)] = handle
+		}
+	}
+}
+
+func (c *Coordinator) updateRequestOnRespond(fid string, reqId uint64, err string) {
+
+	// If this host is the one that sends the request to the leader
+	if fid == c.GetFollowerId() {
+		c.state.mutex.Lock()
+		defer c.state.mutex.Unlock()
+
+		// look up the request handle from the pending list and
+		// move it to the proposed list
+		handle, ok := c.state.pendings[reqId]
+		if ok {
+			delete(c.state.pendings, reqId)
+
+			handle.CondVar.L.Lock()
+			defer handle.CondVar.L.Unlock()
+
+			if len(err) != 0 {
+				handle.Err = errors.New(err)
+			}
+
+			handle.CondVar.Signal()
 		}
 	}
 }
@@ -723,22 +769,22 @@ func (c *Coordinator) getPeerUDPAddr() []string {
 //
 func (c *Coordinator) createIndex(key string, content []byte) bool {
 
-	defn, err := UnmarshallIndexDefn(content)
+	defn, err := co.UnmarshallIndexDefn(content)
 	if err != nil {
 		return false
 	}
 
-	host, err := c.findNextAvailNodeForIndex()	
-    if err != nil {
-    	co.Debugf("Fail to find a host to store the index '%s'", defn.Name)
-    	return false
-    }
-    
-	if err := c.repo.createIndexAndUpdateTopology(defn, host); err != nil {
-		co.Debugf("Coordinator.createIndexy() : createIndex fails. Reason = %s", err.Error())
-		return false	
+	host, err := c.findNextAvailNodeForIndex()
+	if err != nil {
+		co.Debugf("Fail to find a host to store the index '%s'", defn.Name)
+		return false
 	}
-	
+
+	if err := c.idxMgr.getLifecycleMgr().CreateIndex(defn, host); err != nil {
+		co.Debugf("Coordinator.createIndexy() : createIndex fails. Reason = %s", err.Error())
+		return false
+	}
+
 	return true
 }
 
@@ -752,14 +798,14 @@ func (c *Coordinator) deleteIndex(key string) bool {
 	id, err := indexDefnId(key)
 	if err != nil {
 		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
-		return false 
+		return false
 	}
-	
-	if err := c.repo.deleteIndexAndUpdateTopology(id); err != nil {
+
+	if err := c.idxMgr.getLifecycleMgr().DeleteIndex(id); err != nil {
 		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}
-	
+
 	return true
 }
 

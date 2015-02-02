@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"net"
+	"strconv"
+	"time"
 )
 
 func IsIPLocal(ip string) bool {
@@ -62,6 +64,63 @@ func GetLocalIP() (net.IP, error) {
 	return nil, errors.New("cannot find local IP address")
 }
 
-func IndexFilename(inst *common.IndexInst, sliceId SliceId) string {
+func IndexPath(inst *common.IndexInst, sliceId SliceId) string {
 	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, inst.InstId, sliceId)
+}
+
+func GetCurrentKVTs(cluster, bucket string, numVbs int) (Timestamp, error) {
+	ts := NewTimestamp(numVbs)
+	start := time.Now()
+	if b, err := common.ConnectBucket(cluster, "default", bucket); err == nil {
+		//get all the vb seqnum
+		stats := b.GetStats("vbucket-seqno")
+
+		//for all nodes in cluster
+		for _, nodestat := range stats {
+			//for all vbuckets
+			for i := 0; i < numVbs; i++ {
+				vbkey := "vb_" + strconv.Itoa(i) + ":high_seqno"
+				if highseqno, ok := nodestat[vbkey]; ok {
+					if s, err := strconv.Atoi(highseqno); err == nil {
+						ts[i] = Seqno(s)
+					}
+				}
+			}
+		}
+		elapsed := time.Since(start)
+		common.Debugf("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
+		b.Close()
+		return ts, nil
+
+	} else {
+		common.Errorf("Indexer::getCurrentKVTs Error Connecting to KV Cluster %v", err)
+		return nil, err
+	}
+}
+
+func ValidateBucket(cluster, bucket string) bool {
+
+	var cinfo *common.ClusterInfoCache
+	url, err := common.ClusterAuthUrl(cluster)
+	if err == nil {
+		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+	}
+	if err != nil {
+		common.Fatalf("Indexer::Fail to init ClusterInfoCache : %v", err)
+		common.CrashOnError(err)
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	if err := cinfo.Fetch(); err != nil {
+		common.Errorf("Indexer::Fail to init ClusterInfoCache : %v", err)
+		common.CrashOnError(err)
+	}
+
+	if nids, err := cinfo.GetNodesByBucket(bucket); err == nil && len(nids) != 0 {
+		return true
+	} else {
+		return false
+	}
 }

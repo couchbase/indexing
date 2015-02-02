@@ -143,9 +143,8 @@ func (m *QueryPayload) GetStreamEnd() *StreamEndResponse {
 
 // Get Index statistics. StatisticsResponse is returned back from indexer.
 type StatisticsRequest struct {
-	Span             *Span   `protobuf:"bytes,1,req,name=span" json:"span,omitempty"`
-	IndexName        *string `protobuf:"bytes,3,req,name=indexName" json:"indexName,omitempty"`
-	Bucket           *string `protobuf:"bytes,4,req,name=bucket" json:"bucket,omitempty"`
+	DefnID           *uint64 `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
+	Span             *Span   `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
@@ -153,25 +152,18 @@ func (m *StatisticsRequest) Reset()         { *m = StatisticsRequest{} }
 func (m *StatisticsRequest) String() string { return proto.CompactTextString(m) }
 func (*StatisticsRequest) ProtoMessage()    {}
 
+func (m *StatisticsRequest) GetDefnID() uint64 {
+	if m != nil && m.DefnID != nil {
+		return *m.DefnID
+	}
+	return 0
+}
+
 func (m *StatisticsRequest) GetSpan() *Span {
 	if m != nil {
 		return m.Span
 	}
 	return nil
-}
-
-func (m *StatisticsRequest) GetIndexName() string {
-	if m != nil && m.IndexName != nil {
-		return *m.IndexName
-	}
-	return ""
-}
-
-func (m *StatisticsRequest) GetBucket() string {
-	if m != nil && m.Bucket != nil {
-		return *m.Bucket
-	}
-	return ""
 }
 
 type StatisticsResponse struct {
@@ -200,18 +192,24 @@ func (m *StatisticsResponse) GetErr() *Error {
 
 // Scan request to indexer.
 type ScanRequest struct {
-	Span             *Span   `protobuf:"bytes,1,req,name=span" json:"span,omitempty"`
-	Distinct         *bool   `protobuf:"varint,2,req,name=distinct" json:"distinct,omitempty"`
-	Limit            *int64  `protobuf:"varint,3,req,name=limit" json:"limit,omitempty"`
-	PageSize         *int64  `protobuf:"varint,4,req,name=pageSize" json:"pageSize,omitempty"`
-	IndexName        *string `protobuf:"bytes,5,req,name=indexName" json:"indexName,omitempty"`
-	Bucket           *string `protobuf:"bytes,6,req,name=bucket" json:"bucket,omitempty"`
+	DefnID           *uint64 `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
+	Span             *Span   `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
+	Distinct         *bool   `protobuf:"varint,3,req,name=distinct" json:"distinct,omitempty"`
+	Limit            *int64  `protobuf:"varint,4,req,name=limit" json:"limit,omitempty"`
+	PageSize         *int64  `protobuf:"varint,5,req,name=pageSize" json:"pageSize,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
 func (m *ScanRequest) Reset()         { *m = ScanRequest{} }
 func (m *ScanRequest) String() string { return proto.CompactTextString(m) }
 func (*ScanRequest) ProtoMessage()    {}
+
+func (m *ScanRequest) GetDefnID() uint64 {
+	if m != nil && m.DefnID != nil {
+		return *m.DefnID
+	}
+	return 0
+}
 
 func (m *ScanRequest) GetSpan() *Span {
 	if m != nil {
@@ -241,32 +239,24 @@ func (m *ScanRequest) GetPageSize() int64 {
 	return 0
 }
 
-func (m *ScanRequest) GetIndexName() string {
-	if m != nil && m.IndexName != nil {
-		return *m.IndexName
-	}
-	return ""
-}
-
-func (m *ScanRequest) GetBucket() string {
-	if m != nil && m.Bucket != nil {
-		return *m.Bucket
-	}
-	return ""
-}
-
 // Full table scan request from indexer.
 type ScanAllRequest struct {
-	PageSize         *int64  `protobuf:"varint,1,req,name=pageSize" json:"pageSize,omitempty"`
-	Limit            *int64  `protobuf:"varint,2,req,name=limit" json:"limit,omitempty"`
-	IndexName        *string `protobuf:"bytes,3,req,name=indexName" json:"indexName,omitempty"`
-	Bucket           *string `protobuf:"bytes,4,req,name=bucket" json:"bucket,omitempty"`
+	DefnID           *uint64 `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
+	PageSize         *int64  `protobuf:"varint,2,req,name=pageSize" json:"pageSize,omitempty"`
+	Limit            *int64  `protobuf:"varint,3,req,name=limit" json:"limit,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
 func (m *ScanAllRequest) Reset()         { *m = ScanAllRequest{} }
 func (m *ScanAllRequest) String() string { return proto.CompactTextString(m) }
 func (*ScanAllRequest) ProtoMessage()    {}
+
+func (m *ScanAllRequest) GetDefnID() uint64 {
+	if m != nil && m.DefnID != nil {
+		return *m.DefnID
+	}
+	return 0
+}
 
 func (m *ScanAllRequest) GetPageSize() int64 {
 	if m != nil && m.PageSize != nil {
@@ -280,20 +270,6 @@ func (m *ScanAllRequest) GetLimit() int64 {
 		return *m.Limit
 	}
 	return 0
-}
-
-func (m *ScanAllRequest) GetIndexName() string {
-	if m != nil && m.IndexName != nil {
-		return *m.IndexName
-	}
-	return ""
-}
-
-func (m *ScanAllRequest) GetBucket() string {
-	if m != nil && m.Bucket != nil {
-		return *m.Bucket
-	}
-	return ""
 }
 
 // Request by client to stop streaming the query results.
@@ -348,8 +324,8 @@ func (m *StreamEndResponse) GetErr() *Error {
 
 // Count request to indexer.
 type CountRequest struct {
-	IndexName        *string `protobuf:"bytes,1,req,name=indexName" json:"indexName,omitempty"`
-	Bucket           *string `protobuf:"bytes,2,req,name=bucket" json:"bucket,omitempty"`
+	DefnID           *uint64 `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
+	Span             *Span   `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
@@ -357,18 +333,18 @@ func (m *CountRequest) Reset()         { *m = CountRequest{} }
 func (m *CountRequest) String() string { return proto.CompactTextString(m) }
 func (*CountRequest) ProtoMessage()    {}
 
-func (m *CountRequest) GetIndexName() string {
-	if m != nil && m.IndexName != nil {
-		return *m.IndexName
+func (m *CountRequest) GetDefnID() uint64 {
+	if m != nil && m.DefnID != nil {
+		return *m.DefnID
 	}
-	return ""
+	return 0
 }
 
-func (m *CountRequest) GetBucket() string {
-	if m != nil && m.Bucket != nil {
-		return *m.Bucket
+func (m *CountRequest) GetSpan() *Span {
+	if m != nil {
+		return m.Span
 	}
-	return ""
+	return nil
 }
 
 // total number of entries in index.
@@ -397,9 +373,8 @@ func (m *CountResponse) GetErr() *Error {
 }
 
 type Span struct {
-	Range *Range `protobuf:"bytes,1,opt,name=range" json:"range,omitempty"`
-	// TODO: may we should rename `equal` to `equals` ?
-	Equal            [][]byte `protobuf:"bytes,2,rep,name=equal" json:"equal,omitempty"`
+	Range            *Range   `protobuf:"bytes,1,opt,name=range" json:"range,omitempty"`
+	Equals           [][]byte `protobuf:"bytes,2,rep,name=equals" json:"equals,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -414,9 +389,9 @@ func (m *Span) GetRange() *Range {
 	return nil
 }
 
-func (m *Span) GetEqual() [][]byte {
+func (m *Span) GetEquals() [][]byte {
 	if m != nil {
-		return m.Equal
+		return m.Equals
 	}
 	return nil
 }

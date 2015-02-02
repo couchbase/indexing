@@ -335,6 +335,14 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 			continue
 		}
 
+		//Skip mutations for indexes in DELETED state. This may happen if complete
+		//couldn't happen when processing drop index.
+		if idxInst.State == common.INDEX_STATE_DELETED {
+			common.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v In "+
+				"DELETED State. Skipped Mutation Key %v", idxInst.InstId, mut.keys[i])
+			continue
+		}
+
 		switch cmd {
 
 		case common.Upsert:
@@ -460,7 +468,7 @@ func (f *flusher) IsQueueLWTLowerThanTimestamp(q MutationQueue, ts Timestamp) bo
 //GetQueueLWT returns the lowest seqno for each vbucket in the queue
 func (f *flusher) GetQueueLWT(q MutationQueue) Timestamp {
 
-	var ts Timestamp
+	ts := NewTimestamp(int(q.GetNumVbuckets()))
 	var i uint16
 	for i = 0; i < q.GetNumVbuckets(); i++ {
 		if mut := q.PeekHead(Vbucket(i)); mut != nil {
@@ -475,7 +483,7 @@ func (f *flusher) GetQueueLWT(q MutationQueue) Timestamp {
 //GetQueueHWT returns the highest seqno for each vbucket in the queue
 func (f *flusher) GetQueueHWT(q MutationQueue) Timestamp {
 
-	var ts Timestamp
+	ts := NewTimestamp(int(q.GetNumVbuckets()))
 	var i uint16
 	for i = 0; i < q.GetNumVbuckets(); i++ {
 		if mut := q.PeekTail(Vbucket(i)); mut != nil {

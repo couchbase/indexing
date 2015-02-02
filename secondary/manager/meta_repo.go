@@ -10,15 +10,13 @@
 package manager
 
 import (
-	"encoding/binary"
+	//"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
 	gometa "github.com/couchbase/gometa/server"
 	"github.com/couchbase/indexing/secondary/common"
-	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-	"github.com/couchbaselabs/goprotobuf/proto"
-	"math/rand"
 	"net/rpc"
 	"strconv"
 	"strings"
@@ -36,6 +34,10 @@ type RepoRef interface {
 	setMeta(name string, value []byte) error
 	deleteMeta(name string) error
 	newIterator() (*MetaIterator, error)
+	registerNotifier(notifier MetadataNotifier)
+	setLocalValue(name string, value string) error
+	getLocalValue(name string) (string, error)
+	deleteLocalValue(name string) error
 	close()
 }
 
@@ -48,6 +50,7 @@ type RemoteRepoRef struct {
 type LocalRepoRef struct {
 	server   *gometa.EmbeddedServer
 	eventMgr *eventManager
+	notifier MetadataNotifier
 }
 
 type MetaIterator struct {
@@ -71,8 +74,6 @@ const (
 	KIND_INDEX_DEFN
 	KIND_TOPOLOGY
 	KIND_GLOBAL_TOPOLOGY
-	KIND_INDEX_INSTANCE_ID
-	KIND_INDEX_PARTITION_ID
 	KIND_STABILITY_TIMESTAMP
 )
 
@@ -93,15 +94,45 @@ func NewMetadataRepo(requestAddr string,
 	return repo, nil
 }
 
-func NewLocalMetadataRepo(msgAddr string, eventMgr *eventManager) (*MetadataRepo, error) {
+func NewLocalMetadataRepo(msgAddr string,
+	eventMgr *eventManager,
+	reqHandler protocol.CustomRequestHandler,
+	repoName string) (*MetadataRepo, RequestServer, error) {
 
-	ref, err := newLocalRepoRef(msgAddr, eventMgr)
+	ref, err := newLocalRepoRef(msgAddr, eventMgr, reqHandler, repoName)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	repo := &MetadataRepo{repo: ref,
-		isClosed: false}
-	return repo, nil
+	repo := &MetadataRepo{repo: ref, isClosed: false}
+	return repo, ref.server, nil
+}
+
+func (c *MetadataRepo) RegisterNotifier(notifier MetadataNotifier) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.repo.registerNotifier(notifier)
+}
+
+func (c *MetadataRepo) SetLocalValue(key string, value string) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.repo.setLocalValue(key, value)
+}
+
+func (c *MetadataRepo) DeleteLocalValue(key string) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.repo.deleteLocalValue(key)
+}
+
+func (c *MetadataRepo) GetLocalValue(key string) (string, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.repo.getLocalValue(key)
 }
 
 func (c *MetadataRepo) Close() {
@@ -130,32 +161,22 @@ func (c *MetadataRepo) Close() {
 
 func (c *MetadataRepo) GetNextPartitionId() (common.PartitionId, error) {
 
-	id, err := c.GetIndexPartitionId()
+	id, err := common.NewUUID()
 	if err != nil {
 		return common.PartitionId(0), err
 	}
 
-	id = id + 1
-	if err := c.SetIndexPartitionId(id); err != nil {
-		return common.PartitionId(0), err
-	}
-
-	return common.PartitionId(id), nil
+	return common.PartitionId(id.Uint64()), nil
 }
 
 func (c *MetadataRepo) GetNextIndexInstId() (common.IndexInstId, error) {
 
-	id, err := c.GetIndexInstanceId()
+	id, err := common.NewUUID()
 	if err != nil {
 		return common.IndexInstId(0), err
 	}
 
-	id = id + 1
-	if err := c.SetIndexInstanceId(id); err != nil {
-		return common.IndexInstId(0), err
-	}
-
-	return common.IndexInstId(id), nil
+	return common.IndexInstId(id.Uint64()), nil
 }
 
 ///////////////////////////////////////////////////////
@@ -169,7 +190,7 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 		return nil, err
 	}
 
-	return UnmarshallIndexDefn(data)
+	return common.UnmarshallIndexDefn(data)
 }
 
 ///////////////////////////////////////////////////////
@@ -266,7 +287,7 @@ func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 	}
 
 	// marshall the defn
-	data, err := marshallIndexDefn(defn)
+	data, err := common.MarshallIndexDefn(defn)
 	if err != nil {
 		return err
 	}
@@ -311,10 +332,10 @@ func (c *MetadataRepo) NewIterator() (*MetaIterator, error) {
 }
 
 // Get value from iterator
-func (i *MetaIterator) Next() (key string, content []byte, err error) {
+func (i *MetaIterator) Next() (string, *common.IndexDefn, error) {
 
 	for {
-		key, content, err = i.iterator.Next()
+		key, content, err := i.iterator.Next()
 		if err != nil {
 			return "", nil, err
 		}
@@ -322,7 +343,11 @@ func (i *MetaIterator) Next() (key string, content []byte, err error) {
 		if isIndexDefnKey(key) {
 			name := indexDefnIdFromKey(key)
 			if name != "" {
-				return name, content, nil
+				defn, err := common.UnmarshallIndexDefn(content)
+				if err != nil {
+					return "", nil, err
+				}
+				return name, defn, nil
 			}
 			return "", nil, NewError(ERROR_META_WRONG_KEY, NORMAL, METADATA_REPO, nil,
 				fmt.Sprintf("Index Definition Key %s is mal-formed", key))
@@ -340,14 +365,18 @@ func (i *MetaIterator) Close() {
 // private function : LocalRepoRef
 ///////////////////////////////////////////////////////
 
-func newLocalRepoRef(msgAddr string, eventMgr *eventManager) (*LocalRepoRef, error) {
+func newLocalRepoRef(msgAddr string, 
+	eventMgr *eventManager, 
+	reqHandler protocol.CustomRequestHandler,
+	repoName string) (*LocalRepoRef, error) {
 
-	server, err := gometa.RunEmbeddedServer(msgAddr)
+	repoRef := &LocalRepoRef{eventMgr: eventMgr, notifier: nil}
+	server, err := gometa.RunEmbeddedServerWithCustomHandler(msgAddr, nil, reqHandler, repoName)
 	if err != nil {
 		return nil, err
 	}
 
-	repoRef := &LocalRepoRef{server: server, eventMgr: eventMgr}
+	repoRef.server = server
 	return repoRef, nil
 }
 
@@ -356,7 +385,10 @@ func (c *LocalRepoRef) getMeta(name string) ([]byte, error) {
 }
 
 func (c *LocalRepoRef) setMeta(name string, value []byte) error {
-	c.server.SetValue(name, value)
+	if err := c.server.Set(name, value); err != nil {
+		return err
+	}
+
 	evtType := getEventType(name)
 	if c.eventMgr != nil && evtType != EVENT_NONE {
 		c.eventMgr.notify(evtType, value)
@@ -365,7 +397,10 @@ func (c *LocalRepoRef) setMeta(name string, value []byte) error {
 }
 
 func (c *LocalRepoRef) deleteMeta(name string) error {
-	c.server.DeleteValue(name)
+	if err := c.server.Delete(name); err != nil {
+		return err
+	}
+
 	if c.eventMgr != nil && findTypeFromKey(name) == KIND_INDEX_DEFN {
 		c.eventMgr.notify(EVENT_DROP_INDEX, []byte(name))
 	}
@@ -404,6 +439,22 @@ func getEventType(key string) EventType {
 	return evtType
 }
 
+func (c *LocalRepoRef) registerNotifier(notifier MetadataNotifier) {
+	c.notifier = notifier
+}
+
+func (c *LocalRepoRef) setLocalValue(key string, value string) error {
+	return c.server.SetConfigValue(key, value)
+}
+
+func (c *LocalRepoRef) deleteLocalValue(key string) error {
+	return c.server.DeleteConfigValue(key)
+}
+
+func (c *LocalRepoRef) getLocalValue(key string) (string, error) {
+	return c.server.GetConfigValue(key)
+}
+
 ///////////////////////////////////////////////////////
 // private function : RemoteRepoRef
 ///////////////////////////////////////////////////////
@@ -422,10 +473,17 @@ func newRemoteRepoRef(requestAddr string,
 	// This is a blocking call unit the watcher is ready.  This means
 	// the watcher has succesfully synchronized with the remote metadata
 	// repository.
-	var watcherId string = strconv.FormatUint(uint64(rand.Uint32()), 10)
+
+	var watcherId string
 	env, err := newEnv(config)
 	if err == nil {
 		watcherId = env.getHostElectionPort()
+	} else {
+		uuid, err := common.NewUUID()
+		if err != nil {
+			return nil, err
+		}
+		watcherId = strconv.FormatUint(uuid.Uint64(), 10)
 	}
 
 	watcher, err := startWatcher(mgr, repository, leaderAddr, watcherId)
@@ -441,7 +499,7 @@ func newRemoteRepoRef(requestAddr string,
 }
 
 func (c *RemoteRepoRef) newIterator() (*MetaIterator, error) {
-	iter, err := c.repository.NewIterator("/", "")
+	iter, err := c.repository.NewIterator(repo.MAIN, "/", "")
 	if err != nil {
 		return nil, err
 	}
@@ -538,6 +596,22 @@ func (c *RemoteRepoRef) close() {
 	}
 }
 
+func (c *RemoteRepoRef) registerNotifier(notifier MetadataNotifier) {
+	panic("Function not supported")
+}
+
+func (c *RemoteRepoRef) setLocalValue(key string, value string) error {
+	panic("Function not supported")
+}
+
+func (c *RemoteRepoRef) deleteLocalValue(key string) error {
+	panic("Function not supported")
+}
+
+func (c *RemoteRepoRef) getLocalValue(key string) (string, error) {
+	panic("Function not supported")
+}
+
 ///////////////////////////////////////////////////////
 // private function
 ///////////////////////////////////////////////////////
@@ -562,10 +636,6 @@ func findTypeFromKey(key string) MetadataKind {
 		return KIND_TOPOLOGY
 	} else if isGlobalTopologyKey(key) {
 		return KIND_GLOBAL_TOPOLOGY
-	} else if isIndexInstanceIdKey(key) {
-		return KIND_INDEX_INSTANCE_ID
-	} else if isIndexPartitionIdKey(key) {
-		return KIND_INDEX_PARTITION_ID
 	} else if isStabilityTimestampKey(key) {
 		return KIND_STABILITY_TIMESTAMP
 	}
@@ -577,7 +647,7 @@ func findTypeFromKey(key string) MetadataKind {
 ///////////////////////////////////////////////////////
 
 func indexDefnIdStr(id common.IndexDefnId) string {
-	return strconv.FormatUint(uint64(id), 10) 
+	return strconv.FormatUint(uint64(id), 10)
 }
 
 func indexDefnId(key string) (common.IndexDefnId, error) {
@@ -604,65 +674,6 @@ func indexDefnIdFromKey(key string) string {
 	}
 
 	return ""
-}
-
-//
-//
-// TODO: This function is copied from indexer.kv_sender.  It would be nice if this
-// go to common.
-//
-func marshallIndexDefn(defn *common.IndexDefn) ([]byte, error) {
-
-	using := protobuf.StorageType(
-		protobuf.StorageType_value[string(defn.Using)]).Enum()
-
-	exprType := protobuf.ExprType(
-		protobuf.ExprType_value[string(defn.ExprType)]).Enum()
-
-	partnScheme := protobuf.PartitionScheme(
-		protobuf.PartitionScheme_value[string(defn.PartitionScheme)]).Enum()
-
-	pDefn := &protobuf.IndexDefn{
-		DefnID:          proto.Uint64(uint64(defn.DefnId)),
-		Bucket:          proto.String(defn.Bucket),
-		IsPrimary:       proto.Bool(defn.IsPrimary),
-		Name:            proto.String(defn.Name),
-		Using:           using,
-		ExprType:        exprType,
-		SecExpressions:  defn.SecExprs,
-		PartitionScheme: partnScheme,
-		PartnExpression: proto.String(defn.PartitionKey),
-	}
-
-	return proto.Marshal(pDefn)
-}
-
-//
-// !! This function is made public only for testing purpose.
-//
-func UnmarshallIndexDefn(data []byte) (*common.IndexDefn, error) {
-
-	pDefn := new(protobuf.IndexDefn)
-	if err := proto.Unmarshal(data, pDefn); err != nil {
-		return nil, err
-	}
-
-	using := common.IndexType(pDefn.GetUsing().String())
-	exprType := common.ExprType(pDefn.GetExprType().String())
-	partnScheme := common.PartitionScheme(pDefn.GetPartitionScheme().String())
-
-	idxDefn := &common.IndexDefn{
-		DefnId:          common.IndexDefnId(pDefn.GetDefnID()),
-		Name:            pDefn.GetName(),
-		Using:           using,
-		Bucket:          pDefn.GetBucket(),
-		IsPrimary:       pDefn.GetIsPrimary(),
-		SecExprs:        pDefn.GetSecExpressions(),
-		ExprType:        exprType,
-		PartitionScheme: partnScheme,
-		PartitionKey:    pDefn.GetPartnExpression()}
-
-	return idxDefn, nil
 }
 
 ///////////////////////////////////////////////////////
@@ -735,82 +746,6 @@ func unmarshallGlobalTopology(data []byte) (*GlobalTopology, error) {
 }
 
 ///////////////////////////////////////////////////////
-// package local function : Index Instance Id
-///////////////////////////////////////////////////////
-
-func (c *MetadataRepo) GetIndexInstanceId() (uint64, error) {
-
-	lookupName := indexInstanceIdKey()
-	data, err := c.getMeta(lookupName)
-	if err != nil {
-		// TODO : Differentiate the case for real error
-		return 0, nil
-	}
-
-	id, read := binary.Uvarint(data)
-	if read < 0 {
-		return 0, NewError2(ERROR_META_FAIL_TO_PARSE_INT, METADATA_REPO)
-	}
-
-	return id, nil
-}
-
-func (c *MetadataRepo) SetIndexInstanceId(id uint64) error {
-
-	data := make([]byte, 8)
-	binary.PutUvarint(data, id)
-
-	lookupName := indexInstanceIdKey()
-	return c.setMeta(lookupName, data)
-}
-
-func indexInstanceIdKey() string {
-	return "IndexInstanceId"
-}
-
-func isIndexInstanceIdKey(key string) bool {
-	return strings.Contains(key, "IndexInstanceId")
-}
-
-///////////////////////////////////////////////////////
-// package local function : Index Partition Id
-///////////////////////////////////////////////////////
-
-func (c *MetadataRepo) GetIndexPartitionId() (uint64, error) {
-
-	lookupName := indexPartitionIdKey()
-	data, err := c.getMeta(lookupName)
-	if err != nil {
-		// TODO : Differentiate the case for real error
-		return 0, nil
-	}
-
-	id, read := binary.Uvarint(data)
-	if read < 0 {
-		return 0, NewError2(ERROR_META_FAIL_TO_PARSE_INT, METADATA_REPO)
-	}
-
-	return id, nil
-}
-
-func (c *MetadataRepo) SetIndexPartitionId(id uint64) error {
-
-	data := make([]byte, 8)
-	binary.PutUvarint(data, id)
-
-	lookupName := indexPartitionIdKey()
-	return c.setMeta(lookupName, data)
-}
-
-func indexPartitionIdKey() string {
-	return "IndexPartitionId"
-}
-
-func isIndexPartitionIdKey(key string) bool {
-	return strings.Contains(key, "IndexPartitionId")
-}
-
-///////////////////////////////////////////////////////
 // package local function : Stability Timestamp
 ///////////////////////////////////////////////////////
 
@@ -827,52 +762,9 @@ func isStabilityTimestampKey(key string) bool {
 ///////////////////////////////////////////////////////////
 
 //
-// Handle create Index request in the dictionary.  If this function
-// returns true, it means createIndex request completes successfully.
-// If this function returns false, then the result is unknown.
-//
-func (m *MetadataRepo) createIndexAndUpdateTopology(defn *common.IndexDefn, host string) error {
-
-	if err := m.CreateIndex(defn); err != nil {
-		return err
-	}
-
-	if err := m.addIndexToTopology(defn, host); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-//
-// Handle delete Index request in the dictionary.  If this function
-// returns true, it means deleteIndex request completes successfully.
-// If this function returns false, then the result is unknown.
-//
-func (m *MetadataRepo) deleteIndexAndUpdateTopology(id common.IndexDefnId) error {
-
-	common.Debugf("MetadataRepo.deleteIndex() : index to delete = %d", id)
-	
-	defn, _ := m.GetIndexDefnById(id)
-
-	// Drop the index defnition before removing it from the topology.  If it fails to
-	// remove the index defn from topology, it can mean that there is a dangling reference
-	// in the topology with a deleted index defn, but it is easier to detect.
-	if err := m.DropIndexById(id); err != nil {
-		return err
-	}
-
-	if err := m.deleteIndexFromTopology(defn.Bucket, id); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-//
 // Add Index to Topology
 //
-func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, host string) error {
+func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, id common.IndexInstId, host string) error {
 
 	// get existing topology
 	topology, err := m.GetTopologyByBucket(defn.Bucket)
@@ -883,11 +775,6 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, host string) e
 		topology.Version = 0
 	}
 
-	id, err := m.GetNextIndexInstId()
-	if err != nil {
-		return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, METADATA_REPO, nil,
-			fmt.Sprintf("Fail to generate unique instance id for index '%s'", defn.Name))
-	}
 	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
 		uint64(id), uint32(common.INDEX_STATE_CREATED), host)
 
@@ -917,12 +804,10 @@ func (m *MetadataRepo) deleteIndexFromTopology(bucket string, id common.IndexDef
 		return err
 	}
 
-	defn := topology.FindIndexDefinitionById(id)
-	if defn != nil {
-		topology.UpdateStateForIndexInstByDefn(common.IndexDefnId(defn.DefnId), common.INDEX_STATE_DELETED)
-		if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
-			return err
-		}
+	topology.RemoveIndexDefinitionById(id)
+
+	if err = m.SetTopologyByBucket(topology.Bucket, topology); err != nil {
+		return err
 	}
 
 	return nil
@@ -945,3 +830,84 @@ func (m *MetadataRepo) addToGlobalTopologyIfNecessary(bucket string) error {
 
 	return nil
 }
+
+/*
+///////////////////////////////////////////////////////
+//  Interface : EventNotifier
+///////////////////////////////////////////////////////
+
+func (m *LocalRepoRef) OnNewProposal(txnid c.Txnid, op c.OpCode, key string, content []byte) error {
+
+	if m.notifier == nil {
+		return nil
+	}
+
+	common.Debugf("LocalRepoRef.OnNewProposal(): key %s", key)
+
+	switch op {
+	case c.OPCODE_ADD:
+		if isIndexDefnKey(key) {
+			return m.onNewProposalForCreateIndexDefn(txnid, op, key, content)
+		}
+
+	case c.OPCODE_SET:
+		if isIndexDefnKey(key) {
+			return m.onNewProposalForCreateIndexDefn(txnid, op, key, content)
+		}
+
+	case c.OPCODE_DELETE:
+		if isIndexDefnKey(key) {
+			return m.onNewProposalForDeleteIndexDefn(txnid, op, key, content)
+		}
+	}
+
+	return nil
+}
+
+func (m *LocalRepoRef) OnCommit(txnid c.Txnid, key string) {
+	// nothing to do
+}
+
+func (m *LocalRepoRef) onNewProposalForCreateIndexDefn(txnid c.Txnid, op c.OpCode, key string, content []byte) error {
+
+	common.Debugf("LocalRepoRef.OnNewProposalForCreateIndexDefn(): key %s", key)
+
+	indexDefn, err := common.UnmarshallIndexDefn(content)
+	if err != nil {
+		common.Debugf("LocalRepoRef.OnNewProposalForCreateIndexDefn(): fail to unmarshall index defn for key %s", key)
+		return &c.RecoverableError{Reason: err.Error()}
+	}
+
+	if err := m.notifier.OnIndexCreate(indexDefn); err != nil {
+		return &c.RecoverableError{Reason: err.Error()}
+	}
+
+	return nil
+}
+
+func (m *LocalRepoRef) onNewProposalForDeleteIndexDefn(txnid c.Txnid, op c.OpCode, key string, content []byte) error {
+
+	common.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): key %s", key)
+
+	i := strings.Index(key, "/")
+	if i != -1 && i < len(key)-1 {
+
+		id, err := strconv.ParseUint(key[i+1:], 10, 64)
+		if err != nil {
+			common.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): fail to unmarshall IndexDefnId key %s", key)
+			return &c.RecoverableError{Reason: err.Error()}
+		}
+
+		if err := m.notifier.OnIndexDelete(common.IndexDefnId(id)); err != nil {
+			return &c.RecoverableError{Reason: err.Error()}
+		}
+		return nil
+
+	} else {
+		common.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): fail to unmarshall IndexDefnId key %s", key)
+		err := NewError(ERROR_META_FAIL_TO_PARSE_INT, NORMAL, METADATA_REPO, nil,
+			"MetadataRepo.OnNewProposalForDeleteIndexDefn() : cannot parse index definition id")
+		return &c.RecoverableError{Reason: err.Error()}
+	}
+}
+*/

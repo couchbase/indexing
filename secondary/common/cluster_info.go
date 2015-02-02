@@ -5,7 +5,8 @@ import "errors"
 import "fmt"
 import "time"
 import "net"
-import "strings"
+import "net/url"
+import "sync"
 
 var (
 	ErrInvalidNodeId       = errors.New("Invalid NodeId")
@@ -18,29 +19,33 @@ var (
 // local management service for obtaining cluster information.
 // Info cache can be updated by using Refresh() method.
 type ClusterInfoCache struct {
+	sync.Mutex
 	url       string
 	poolName  string
 	logPrefix string
 	retries   int
 
-	client  couchbase.Client
-	pool    couchbase.Pool
-	nodesvs []couchbase.NodeServices
+	client          couchbase.Client
+	pool            couchbase.Pool
+	nodes           []couchbase.Node
+	nodesvs         []couchbase.NodeServices
+	poolsvsCh       chan couchbase.PoolServices
+	poolsvsIsActive bool
+	poolsvsErr      error
 }
 
 type NodeId int
 
-func NewClusterInfoCache(cluster string, pool string) *ClusterInfoCache {
-	if !strings.HasPrefix(cluster, "http://") {
-		cluster = "http://" + cluster
-	}
+func NewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, error) {
 	c := &ClusterInfoCache{
-		url:      cluster,
-		poolName: pool,
-		retries:  0,
+		url:             clusterUrl,
+		poolName:        pool,
+		poolsvsCh:       make(chan couchbase.PoolServices),
+		poolsvsIsActive: false,
+		retries:         0,
 	}
 
-	return c
+	return c, nil
 }
 
 func (c *ClusterInfoCache) SetLogPrefix(p string) {
@@ -52,7 +57,6 @@ func (c *ClusterInfoCache) SetMaxRetries(r int) {
 }
 
 func (c *ClusterInfoCache) Fetch() error {
-	var poolServs couchbase.PoolServices
 
 	fn := func(r int, err error) error {
 		if r > 0 {
@@ -70,12 +74,45 @@ func (c *ClusterInfoCache) Fetch() error {
 			return err
 		}
 
+		var nodes []couchbase.Node
+		for _, n := range c.pool.Nodes {
+			if n.ClusterMembership == "active" {
+				nodes = append(nodes, n)
+			}
+		}
+		c.nodes = nodes
+
+		found := false
+		for _, node := range c.nodes {
+			if node.ThisNode {
+				found = true
+			}
+		}
+
+		if !found {
+			return errors.New("Current node's cluster membership is not active")
+		}
+
+		var poolServs couchbase.PoolServices
 		poolServs, err = c.client.GetPoolServices(c.poolName)
 		if err != nil {
 			return err
 		}
-
 		c.nodesvs = poolServs.NodesExt
+
+		// Streaming nodeServices API background callback setup
+		// If Fetch() is called for the first time, nodeServices callback is setup
+		// Otherwise if streaming API handler is in error state, that means handler
+		// is not present anymore and we need to setup a new handler.
+		if c.poolsvsIsActive == false || c.poolsvsErr != nil {
+			err = c.client.NodeServicesCallback(c.poolName, c.nodeServicesCallback)
+			if err != nil {
+				return err
+			}
+			c.poolsvsIsActive = true
+			c.poolsvsErr = nil
+		}
+
 		return nil
 	}
 
@@ -84,13 +121,37 @@ func (c *ClusterInfoCache) Fetch() error {
 }
 
 func (c ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
-	for i, _ := range c.pool.Nodes {
-		if _, ok := c.nodesvs[i].Services[srvc]; ok {
+	for i, svs := range c.nodesvs {
+		if _, ok := svs.Services[srvc]; ok {
 			nids = append(nids, NodeId(i))
 		}
 	}
 
 	return
+}
+
+func (c *ClusterInfoCache) nodeServicesCallback(ps couchbase.PoolServices, err error) bool {
+	if err != nil {
+		c.poolsvsErr = err
+		close(c.poolsvsCh)
+		return false
+	}
+
+	c.poolsvsCh <- ps
+	return true
+}
+
+func (c *ClusterInfoCache) WaitAndUpdateServices() error {
+	if c.poolsvsErr != nil {
+		return c.poolsvsErr
+	}
+
+	ps := <-c.poolsvsCh
+	if c.poolsvsErr == nil {
+		c.nodesvs = ps.NodesExt
+	}
+
+	return c.poolsvsErr
 }
 
 func (c ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err error) {
@@ -101,7 +162,7 @@ func (c ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err er
 	}
 	defer b.Close()
 
-	for i, _ := range c.pool.Nodes {
+	for i, _ := range c.nodes {
 		nid := NodeId(i)
 		if _, ok := c.findVBServerIndex(b, nid); ok {
 			nids = append(nids, nid)
@@ -112,13 +173,13 @@ func (c ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err er
 }
 
 func (c ClusterInfoCache) GetCurrentNode() NodeId {
-	for i, node := range c.pool.Nodes {
+	for i, node := range c.nodes {
 		if node.ThisNode {
 			return NodeId(i)
 		}
 	}
 	// TODO: can we avoid this panic ?
-	panic("Invalid cluster info")
+	panic("Current node is not in active membership")
 }
 
 func (c ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr string, err error) {
@@ -134,6 +195,17 @@ func (c ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr strin
 	if port, ok = node.Services[srvc]; !ok {
 		err = ErrInvalidService
 		return
+	}
+
+	// For current node, hostname might be empty
+	// Insert hostname used to connect to the cluster
+	cUrl, err := url.Parse(c.url)
+	if err != nil {
+		return "", errors.New("Unable to parse cluster url - " + err.Error())
+	}
+	h, _, _ := net.SplitHostPort(cUrl.Host)
+	if node.Hostname == "" {
+		node.Hostname = h
 	}
 
 	addr = net.JoinHostPort(node.Hostname, fmt.Sprint(port))
@@ -169,7 +241,7 @@ func (c ClusterInfoCache) findVBServerIndex(b *couchbase.Bucket, nid NodeId) (in
 	bnodes := b.Nodes()
 
 	for idx, n := range bnodes {
-		if c.sameNode(n, c.pool.Nodes[nid]) {
+		if c.sameNode(n, c.nodes[nid]) {
 			return idx, true
 		}
 	}

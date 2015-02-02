@@ -22,7 +22,7 @@ type snapshotFeeder func(keych chan Key, valch chan Value, errch chan error)
 
 // Create a mock index that uses a feeder function to provide query results.
 // Creates an index with single partition, single slice with a snapshot.
-func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFeeder) {
+func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFeeder) c.IndexDefnId {
 	s.indexCount++
 
 	pc := c.NewKeyPartitionContainer()
@@ -32,7 +32,8 @@ func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFee
 	pc.AddPartition(pId, pDef)
 
 	instId := c.IndexInstId(s.indexCount)
-	indDefn := c.IndexDefn{Name: name, Bucket: bucket}
+	defnId := c.IndexDefnId(0xABBA)
+	indDefn := c.IndexDefn{Name: name, Bucket: bucket, DefnId: defnId}
 	indInst := c.IndexInst{InstId: instId, State: c.INDEX_STATE_ACTIVE,
 		Defn: indDefn, Pc: pc,
 	}
@@ -43,16 +44,15 @@ func (s *scannerTestHarness) createIndex(name, bucket string, feeder snapshotFee
 	partInst := PartitionInst{Defn: pDef, Sc: sc}
 	partInstMap := PartitionInstMap{pId: partInst}
 
-	snapc := NewSnapshotContainer()
 	snap := &mockSnapshot{feeder: feeder}
 	snap.SetTimestamp(s.scanTS)
 
-	snapc.Add(Snapshot(snap))
-	slice := &mockSlice{sc: snapc}
+	slice := &mockSlice{}
 	slId := SliceId(0)
 	sc.AddSlice(slId, slice)
 	// TODO: Use cmdch to update map
 	s.scanner.indexPartnMap[instId] = partInstMap
+	return defnId
 }
 
 func newScannerTestHarness() (*scannerTestHarness, error) {
@@ -120,7 +120,6 @@ func (s *scannerTestHarness) Shutdown() {
 type mockSlice struct {
 	id       SliceId
 	instId   c.IndexInstId
-	sc       SnapshotContainer
 	indDefId c.IndexDefnId
 	snap     Snapshot
 	err      error
@@ -131,8 +130,8 @@ func (s *mockSlice) Id() SliceId {
 	return s.id
 }
 
-func (s *mockSlice) Name() string {
-	return "mockSlice"
+func (s *mockSlice) Path() string {
+	return "/tmp/mockslice/"
 }
 
 func (s *mockSlice) Status() SliceStatus {
@@ -157,10 +156,6 @@ func (s *mockSlice) SetActive(b bool) {
 func (s *mockSlice) SetStatus(ss SliceStatus) {
 }
 
-func (s *mockSlice) GetSnapshotContainer() SnapshotContainer {
-	return s.sc
-}
-
 func (s *mockSlice) Insert(k Key, v Value) error {
 	return s.err
 }
@@ -169,15 +164,19 @@ func (s *mockSlice) Delete(d []byte) error {
 	return s.err
 }
 
-func (s *mockSlice) Commit() error {
-	return s.err
+func (s *mockSlice) NewSnapshot(ts *c.TsVbuuid, commit bool) (SnapshotInfo, error) {
+	return &mockSnapshotInfo{}, s.err
 }
 
-func (s *mockSlice) Snapshot() (Snapshot, error) {
+func (s *mockSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	return s.snap, s.err
 }
 
-func (s *mockSlice) Rollback(snap Snapshot) error {
+func (s *mockSlice) GetSnapshots() ([]SnapshotInfo, error) {
+	return nil, s.err
+}
+
+func (s *mockSlice) Rollback(info SnapshotInfo) error {
 	return s.err
 }
 
@@ -204,6 +203,14 @@ func (s *mockSlice) IncrRef() {
 }
 
 func (s *mockSlice) DecrRef() {
+}
+
+func (s *mockSlice) Compact() error {
+	return nil
+}
+
+func (s *mockSlice) Statistics() (StorageStatistics, error) {
+	return StorageStatistics{}, nil
 }
 
 type mockSnapshot struct {
@@ -326,4 +333,19 @@ func (s *mockSnapshot) Timestamp() *c.TsVbuuid {
 
 func (s *mockSnapshot) SetTimestamp(ts *c.TsVbuuid) {
 	s.ts = ts
+}
+
+func (s *mockSnapshot) Info() SnapshotInfo {
+	return &mockSnapshotInfo{}
+}
+
+type mockSnapshotInfo struct {
+}
+
+func (info *mockSnapshotInfo) Timestamp() *c.TsVbuuid {
+	return nil
+}
+
+func (info *mockSnapshotInfo) IsCommitted() bool {
+	return true
 }

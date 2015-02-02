@@ -5,33 +5,30 @@
 
 package main
 
-import (
-	"flag"
-	"fmt"
-	"log"
-	"math/rand"
-	"net/url"
-	"os"
-	"path"
-	"runtime"
-	"strings"
-	"time"
+import "flag"
+import "fmt"
+import "io/ioutil"
+import "log"
+import "net/url"
+import "os"
+import "strings"
+import "time"
 
-	"github.com/couchbase/indexing/secondary/dcp"
-	"github.com/prataprc/monster"
-)
+import "github.com/couchbase/indexing/secondary/dcp"
+import parsec "github.com/prataprc/goparsec"
+import "github.com/prataprc/monster"
+import mcommon "github.com/prataprc/monster/common"
 
 var options struct {
 	seed     int      // seed for monster tool
 	buckets  []string // buckets to populate
 	prods    []string
+	bagdir   string
 	parallel int // number of parallel routines per bucket
 	count    int // number of documents to be generated per routine
 	expiry   int // set expiry for the document, in seconds
 }
 
-var testDir string
-var bagDir string
 var done = make(chan bool, 16)
 
 func argParse() string {
@@ -41,9 +38,11 @@ func argParse() string {
 	flag.IntVar(&options.seed, "seed", seed,
 		"seed for monster tool")
 	flag.StringVar(&buckets, "buckets", "default",
-		"buckets to populate")
+		"comma separated list of buckets")
 	flag.StringVar(&prods, "prods", "users.prod",
-		"command separated list of production files for each bucket")
+		"comma separated list of production files for each bucket")
+	flag.StringVar(&options.bagdir, "bagdir", "",
+		"bagdirectory for production files.")
 	flag.IntVar(&options.parallel, "par", 1,
 		"number of parallel routines per bucket")
 	flag.IntVar(&options.count, "count", 0,
@@ -56,13 +55,16 @@ func argParse() string {
 	options.buckets = strings.Split(buckets, ",")
 	options.prods = strings.Split(prods, ",")
 
-	// collect production files.
-	_, filename, _, _ := runtime.Caller(1)
-	testDir = path.Join(path.Dir(path.Dir(path.Dir(filename))), "tests/testdata")
-	bagDir = testDir
+	// the last production file is used for remaining bucket.
+	if pn, bn := len(options.prods), len(options.buckets); pn != bn {
+		lastprod := options.prods[pn-1]
+		for i := pn; i < bn; i++ {
+			options.prods = append(options.prods, lastprod)
+		}
+	}
 
 	args := flag.Args()
-	if len(args) < 1 {
+	if len(args) < 1 || options.bagdir == "" {
 		usage()
 		os.Exit(1)
 	}
@@ -82,7 +84,7 @@ func main() {
 
 	n := 0
 	for i, bucket := range options.buckets {
-		prodfile := getProdfilePath(options.prods[i])
+		prodfile := options.prods[i]
 		n += loadBucket(cluster, bucket, prodfile, options.count)
 	}
 	for n > 0 {
@@ -112,38 +114,52 @@ func loadBucket(cluster, bucket, prodfile string, count int) int {
 }
 
 func genDocuments(b *couchbase.Bucket, prodfile string, idx, n int) {
-	conf := make(map[string]interface{})
-	start, err := monster.Parse(prodfile, conf)
-	mf(err, "monster - ")
-	nonterminals, root := monster.Build(start)
-	c := map[string]interface{}{
-		"_nonterminals": nonterminals,
-		// rand.Rand is not thread safe.
-		"_random":   rand.New(rand.NewSource(int64(options.seed))),
-		"_bagdir":   bagDir,
-		"_prodfile": prodfile,
+	// compile
+	text, err := ioutil.ReadFile(prodfile)
+	if err != nil {
+		log.Fatal(err)
 	}
-	msg := fmt.Sprintf("%s - set", b.Name)
-	for i := 0; i < n; i++ {
-		monster.Initialize(c)
-		doc := root.Generate(c)
+	root := compile(parsec.NewScanner(text))
+	scope := root.(mcommon.Scope)
+	nterms := scope["_nonterminals"].(mcommon.NTForms)
+	scope = monster.BuildContext(scope, uint64(options.seed), options.bagdir)
+	scope["_prodfile"] = prodfile
+	// evaluate
+	for i := 0; i < options.count; i++ {
+		doc := evaluate("root", scope, nterms["s"]).(string)
 		key := fmt.Sprintf("%s-%v-%v", b.Name, idx, i+1)
 		err = b.SetRaw(key, options.expiry, []byte(doc))
 		if err != nil {
 			fmt.Printf("%T %v\n", err, err)
 		}
-		mf(err, msg)
+		mf(err, "error setting document")
 	}
 	fmt.Printf("routine %v generated %v documents for %q\n", idx, n, b.Name)
 	done <- true
+}
+
+func compile(s parsec.Scanner) parsec.ParsecNode {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("%v at %v", r, s.GetCursor())
+		}
+	}()
+	root, _ := monster.Y(s)
+	return root
+}
+
+func evaluate(name string, scope mcommon.Scope, forms []*mcommon.Form) interface{} {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("%v", r)
+		}
+	}()
+	scope = scope.ApplyGlobalForms()
+	return monster.EvalForms(name, scope, forms)
 }
 
 func mf(err error, msg string) {
 	if err != nil {
 		log.Fatalf("%v: %v", msg, err)
 	}
-}
-
-func getProdfilePath(name string) string {
-	return path.Join(testDir, name)
 }

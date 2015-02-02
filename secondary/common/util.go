@@ -4,9 +4,13 @@ import "errors"
 import "fmt"
 import "io"
 import "net"
+import "net/url"
 import "os"
+import "strings"
 
+import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
+import "github.com/couchbase/indexing/secondary/dcp/transport/client"
 
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the
 // order of `strs` in the result.
@@ -188,10 +192,40 @@ func OpError(err error, vals []interface{}, idx int) error {
 	return vals[idx].(error)
 }
 
+// cbauth admin authentication helper
+// Uses default cbauth env variables internally to provide auth creds
+type cbAuthHandler struct {
+	hostport string
+	bucket   string
+}
+
+func (ah *cbAuthHandler) GetCredentials() (string, string) {
+	u, p, err := cbauth.GetHTTPServiceAuth(ah.hostport)
+	if err != nil {
+		panic(err)
+	}
+
+	return u, p
+}
+
+func (ah *cbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.Client) error {
+	u, p, err := cbauth.GetMemcachedServiceAuth(host)
+	if err != nil {
+		panic(err)
+	}
+	_, err = conn.Auth(u, p)
+	_, err = conn.SelectBucket(ah.bucket)
+	return err
+}
+
 // ConnectBucket will instantiate a couchbase-bucket instance with cluster.
 // caller's responsibility to close the bucket.
 func ConnectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
-	couch, err := couchbase.Connect("http://" + cluster)
+	ah := &cbAuthHandler{
+		hostport: cluster,
+		bucket:   bucketn,
+	}
+	couch, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
 	if err != nil {
 		return nil, err
 	}
@@ -336,4 +370,76 @@ func CrashOnError(err error) {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func ClusterAuthUrl(cluster string) (string, error) {
+	adminUser, adminPasswd, err := cbauth.GetHTTPServiceAuth(cluster)
+	if err != nil {
+		return "", err
+	}
+
+	clusterUrl := url.URL{
+		Scheme: "http",
+		Host:   cluster,
+		User:   url.UserPassword(adminUser, adminPasswd),
+	}
+
+	return clusterUrl.String(), nil
+}
+
+func ClusterUrl(cluster string) string {
+	host := cluster
+	if strings.HasPrefix(cluster, "http") {
+		u, err := url.Parse(cluster)
+		if err != nil {
+			panic(err) // TODO: should we panic ?
+		}
+		host = u.Host
+	}
+	clusterUrl := url.URL{
+		Scheme: "http",
+		Host:   host,
+	}
+
+	return clusterUrl.String()
+}
+
+func MaybeSetEnv(key, value string) string {
+	if s := os.Getenv(key); s != "" {
+		return s
+	}
+	os.Setenv(key, value)
+	return value
+}
+
+func EquivalentIP(
+	raddr string,
+	raddrs []string) (this string, other string, err error) {
+
+	host, port, err := net.SplitHostPort(raddr)
+	if err != nil {
+		return "", "", err
+	}
+	netIP := net.ParseIP(host)
+
+	for _, raddr1 := range raddrs {
+		host1, port1, err := net.SplitHostPort(raddr1)
+		if err != nil {
+			return "", "", err
+		}
+		netIP1 := net.ParseIP(host1)
+		// check whether ports are same.
+		if port != port1 {
+			continue
+		}
+		// check whether both are local-ip.
+		if IsIPLocal(host) && IsIPLocal(host1) {
+			return raddr, raddr1, nil // raddr => raddr1
+		}
+		// check wethere they are coming from the same remote.
+		if netIP.Equal(netIP1) {
+			return raddr, raddr1, nil // raddr == raddr1
+		}
+	}
+	return raddr, raddr, nil
 }

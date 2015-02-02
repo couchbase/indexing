@@ -11,14 +11,21 @@ package indexer
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
+	"os"
+	"path/filepath"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-const STABILITY_TS_KEY_NAME = "stability-ts"
+var (
+	snapshotMetaListKey = []byte("snapshots-list")
+)
 
 //NewForestDBSlice initiailizes a new slice with forestdb backend.
 //Both main and back index gets initialized with default config.
@@ -26,31 +33,40 @@ const STABILITY_TS_KEY_NAME = "stability-ts"
 //handle the synchronization. The only exception being Insert and
 //Delete can be called concurrently.
 //Returns error in case slice cannot be initialized.
-func NewForestDBSlice(name string, sliceId SliceId, idxDefnId common.IndexDefnId,
-	idxInstId common.IndexInstId) (*fdbSlice, error) {
+func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
+	idxInstId common.IndexInstId, sysconf common.Config) (*fdbSlice, error) {
 
+	info, err := os.Stat(path)
+	if err != nil || err == nil && info.IsDir() {
+		os.Mkdir(path, 0777)
+	}
+
+	filepath := newFdbFile(path, false)
 	slice := &fdbSlice{}
-
-	var err error
 
 	config := forestdb.DefaultConfig()
 	config.SetDurabilityOpt(forestdb.DRB_ASYNC)
+
+	memQuota := sysconf["settings.memory_quota"].Uint64()
+	config.SetBufferCacheSize(memQuota)
+
 	kvconfig := forestdb.DefaultKVStoreConfig()
 
-	if slice.dbfile, err = forestdb.Open(name, config); err != nil {
+	if slice.dbfile, err = forestdb.Open(filepath, config); err != nil {
 		return nil, err
 	}
 
-	slice.main = make([]*forestdb.KVStore, NUM_WRITER_THREADS_PER_SLICE)
-	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+	slice.numWriters = sysconf["numSliceWriters"].Int()
+	slice.main = make([]*forestdb.KVStore, slice.numWriters)
+	for i := 0; i < slice.numWriters; i++ {
 		if slice.main[i], err = slice.dbfile.OpenKVStore("main", kvconfig); err != nil {
 			return nil, err
 		}
 	}
 
 	//create a separate back-index
-	slice.back = make([]*forestdb.KVStore, NUM_WRITER_THREADS_PER_SLICE)
-	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+	slice.back = make([]*forestdb.KVStore, slice.numWriters)
+	for i := 0; i < slice.numWriters; i++ {
 		if slice.back[i], err = slice.dbfile.OpenKVStore("back", kvconfig); err != nil {
 			return nil, err
 		}
@@ -61,26 +77,25 @@ func NewForestDBSlice(name string, sliceId SliceId, idxDefnId common.IndexDefnId
 		return nil, err
 	}
 
-	slice.name = name
+	slice.path = path
+	slice.currfile = filepath
 	slice.config = config
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefnId
 	slice.id = sliceId
 
-	slice.sc = NewSnapshotContainer()
-
 	slice.cmdCh = make(chan interface{}, SLICE_COMMAND_BUFFER_SIZE)
-	slice.workerDone = make([]chan bool, NUM_WRITER_THREADS_PER_SLICE)
-	slice.stopCh = make([]DoneChannel, NUM_WRITER_THREADS_PER_SLICE)
+	slice.workerDone = make([]chan bool, slice.numWriters)
+	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
-	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
 		slice.workerDone[i] = make(chan bool)
 		go slice.handleCommandsWorker(i)
 	}
 
 	common.Debugf("ForestDBSlice:NewForestDBSlice \n\t Created New Slice Id %v IndexInstId %v "+
-		"WriterThreads %v", sliceId, idxInstId, NUM_WRITER_THREADS_PER_SLICE)
+		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
 
 	return slice, nil
 }
@@ -93,12 +108,14 @@ type kv struct {
 
 //fdbSlice represents a forestdb slice
 type fdbSlice struct {
-	name string
-	id   SliceId //slice id
+	path     string
+	currfile string
+	id       SliceId //slice id
 
 	refCount int
 	lock     sync.RWMutex
 	dbfile   *forestdb.File
+	metaLock sync.Mutex
 	meta     *forestdb.KVStore   // handle for index meta
 	main     []*forestdb.KVStore // handle for forward index
 	back     []*forestdb.KVStore // handle for reverse index
@@ -113,8 +130,6 @@ type fdbSlice struct {
 	isSoftDeleted bool
 	isSoftClosed  bool
 
-	sc SnapshotContainer //snapshot container
-
 	cmdCh  chan interface{} //internal channel to buffer commands
 	stopCh []DoneChannel    //internal channel to signal shutdown
 
@@ -122,12 +137,15 @@ type fdbSlice struct {
 
 	fatalDbErr error //store any fatal DB error
 
-	ts *common.TsVbuuid //timestamp for this slice
+	numWriters int //number of writer threads
 
 	//TODO: Remove this once these stats are
 	//captured by the stats library
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
+
+	// Statistics
+	get_bytes, insert_bytes, delete_bytes int64
 }
 
 func (fdb *fdbSlice) IncrRef() {
@@ -243,6 +261,7 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 				"entry from main index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
+		atomic.AddInt64(&fdb.delete_bytes, int64(len(oldkey.Encoded())))
 
 		//delete from back index
 		if err = fdb.back[workerId].DeleteKV(v.Docid()); err != nil {
@@ -251,6 +270,7 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 				"entry from back index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
+		atomic.AddInt64(&fdb.delete_bytes, int64(len(v.Docid())))
 	}
 
 	//if the Key is nil, nothing needs to be done
@@ -267,6 +287,7 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 			"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, v, k, err)
 		return
 	}
+	atomic.AddInt64(&fdb.insert_bytes, int64(len(v.Docid())+len(k.Encoded())))
 
 	//set in main index
 	if err = fdb.main[workerId].SetKV(k.Encoded(), v.Encoded()); err != nil {
@@ -275,7 +296,7 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 			"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, k, v, err)
 		return
 	}
-
+	atomic.AddInt64(&fdb.insert_bytes, int64(len(k.Encoded())+len(v.Encoded())))
 }
 
 //delete does the actual delete in forestdb
@@ -310,6 +331,7 @@ func (fdb *fdbSlice) delete(docid []byte, workerId int) {
 			docid, oldkey, err)
 		return
 	}
+	atomic.AddInt64(&fdb.delete_bytes, int64(len(oldkey.Encoded())))
 
 	//delete from the back index
 	if err = fdb.back[workerId].DeleteKV(docid); err != nil {
@@ -318,6 +340,7 @@ func (fdb *fdbSlice) delete(docid []byte, workerId int) {
 			"entry from back index for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
 		return
 	}
+	atomic.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 
 }
 
@@ -333,10 +356,11 @@ func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) (Key, error) 
 	var err error
 
 	kbyte, err = fdb.back[workerId].GetKV([]byte(docid))
+	atomic.AddInt64(&fdb.get_bytes, int64(len(kbyte)))
 
 	//forestdb reports get in a non-existent key as an
 	//error, skip that
-	if err != nil && err.Error() != "key not found" {
+	if err != nil && err != forestdb.RESULT_KEY_NOT_FOUND {
 		return k, err
 	}
 
@@ -361,107 +385,69 @@ func (fdb *fdbSlice) checkFatalDbError(err error) {
 
 }
 
-//Snapshot creates a new snapshot from the latest
-//committed data available in forestdb. Caller must
-//first call Commit to ensure there is no outstanding
-//write before calling Snapshot. Returns error if
-//received from forestdb.
-func (fdb *fdbSlice) Snapshot() (Snapshot, error) {
-
-	//if ts is nil, read from DB. This is to handle the case
-	//when indexer restarts
-	if fdb.ts == nil {
-
-		var tsb []byte
-		var err error
-
-		tsb, err = fdb.meta.GetKV([]byte(STABILITY_TS_KEY_NAME))
-
-		if err != nil {
-			common.Errorf("ForestDBSlice::Snapshot \n\t Error Reading TS from Slice Id %v "+
-				"IndexInstId %v. Err %v", fdb.id, fdb.idxInstId, err)
-			return nil, err
-		} else {
-			var ts common.TsVbuuid
-			err = json.Unmarshal(tsb, &ts)
-			if err != nil {
-				common.Errorf("ForestDBSlice::Snapshot \n\t Error Unmarshall TS From SliceId %v"+
-					"IndexInstId %v. Err %v", fdb.id, fdb.idxInstId, err)
-			} else {
-				fdb.ts = &ts
-			}
-		}
-
-	}
-
+// Creates an open snapshot handle from snapshot info
+// Snapshot info is obtained from NewSnapshot() or GetSnapshots() API
+// Returns error if snapshot handle cannot be created.
+func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
+	snapInfo := info.(*fdbSnapshotInfo)
 	s := &fdbSnapshot{slice: fdb,
-		idxDefnId: fdb.idxDefnId,
-		idxInstId: fdb.idxInstId,
-		main:      fdb.main[0],
-		back:      fdb.back[0],
-		ts:        fdb.ts}
-
-	//store snapshot seqnum for main index
-	{
-		i, err := fdb.main[0].Info()
-		if err != nil {
-			return nil, err
-		}
-		seq := i.LastSeqNum()
-		s.mainSeqNum = seq
+		idxDefnId:  fdb.idxDefnId,
+		idxInstId:  fdb.idxInstId,
+		main:       fdb.main[0],
+		back:       fdb.back[0],
+		ts:         snapInfo.Timestamp(),
+		mainSeqNum: snapInfo.MainSeq,
+		backSeqNum: snapInfo.BackSeq,
+		committed:  info.IsCommitted(),
 	}
 
-	//store snapshot seqnum for back index
-	{
-		i, err := fdb.back[0].Info()
-		if err != nil {
-			return nil, err
-		}
-		seq := i.LastSeqNum()
-		s.backSeqNum = seq
-	}
+	common.Debugf("ForestDBSlice::OpenSnapshot \n\tSliceId %v IndexInstId %v Creating New "+
+		"Snapshot %v committed:%v", fdb.id, fdb.idxInstId, s, s.committed)
+	err := s.Open()
 
-	common.Debugf("ForestDBSlice::Snapshot \n\tSliceId %v IndexInstId %v Created New "+
-		"Snapshot %v", fdb.id, fdb.idxInstId, s)
-
-	return s, nil
+	return s, err
 }
 
 //Rollback slice to given snapshot. Return error if
 //not possible
-func (fdb *fdbSlice) Rollback(s Snapshot) error {
-
+func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 	//get the seqnum from snapshot
-	mainSeqNum := s.(*fdbSnapshot).MainIndexSeqNum()
-	backSeqNum := s.(*fdbSnapshot).BackIndexSeqNum()
+	mainSeqNum := info.(*fdbSnapshotInfo).MainSeq
+
+	infos, err := fdb.getSnapshotsMeta()
+	if err != nil {
+		return err
+	}
+
+	sic := NewSnapshotInfoContainer(infos)
+	sic.RemoveRecentThanTS(info.Timestamp())
 
 	//call forestdb to rollback
-	var err error
 	err = fdb.main[0].Rollback(mainSeqNum)
 	if err != nil {
 		common.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
-			"Main Index to Snapshot %v. Error %v", fdb.id, fdb.idxInstId, s, err)
+			"Main Index to Snapshot %v. Error %v", fdb.id, fdb.idxInstId, info, err)
 		return err
 	}
 
-	err = fdb.back[0].Rollback(backSeqNum)
+	// Update valid snapshot list and commit
+	err = fdb.updateSnapshotsMeta(sic.List())
 	if err != nil {
-		common.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
-			"Back Index to Snapshot %v. Error %v", fdb.id, fdb.idxInstId, s, err)
 		return err
 	}
 
-	return nil
-
+	return fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
 }
 
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
 func (fdb *fdbSlice) RollbackToZero() error {
-
 	//get the seqnum from snapshot
 	mainSeqNum := forestdb.SeqNum(0)
-	backSeqNum := forestdb.SeqNum(0)
+
+	//HACK: This doesn't work till MB-13239 gets fixed
+	common.Errorf("ForestDBSlice::RollbackToZero MB-13239 Needs to be Fixed")
+	return nil
 
 	//call forestdb to rollback
 	var err error
@@ -472,22 +458,13 @@ func (fdb *fdbSlice) RollbackToZero() error {
 		return err
 	}
 
-	err = fdb.back[0].Rollback(backSeqNum)
-	if err != nil {
-		common.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
-			"Back Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
-		return err
-	}
-
 	return nil
-
 }
 
 //Commit persists the outstanding writes in underlying
 //forestdb database. If Commit returns error, slice
 //should be rolled back to previous snapshot.
-func (fdb *fdbSlice) Commit() error {
-
+func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
 	//every SLICE_COMMIT_POLL_INTERVAL milliseconds,
 	//check for outstanding mutations. If there are
 	//none, proceed with the commit.
@@ -498,22 +475,57 @@ func (fdb *fdbSlice) Commit() error {
 		}
 	}
 
-	// Commit database file
-	start := time.Now()
-	err := fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
-	elapsed := time.Since(start)
-
-	fdb.totalCommitTime += elapsed
-	common.Debugf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v TotalFlushTime %v "+
-		"TotalCommitTime %v", fdb.id, fdb.idxInstId, fdb.totalFlushTime, fdb.totalCommitTime)
-
+	mainDbInfo, err := fdb.main[0].Info()
 	if err != nil {
-		common.Errorf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v Error in "+
-			"Index Commit %v", fdb.id, fdb.idxInstId, err)
-		return err
+		return nil, err
 	}
 
-	return nil
+	backDbInfo, err := fdb.back[0].Info()
+	if err != nil {
+		return nil, err
+	}
+
+	newSnapshotInfo := &fdbSnapshotInfo{
+		Ts:        ts,
+		MainSeq:   mainDbInfo.LastSeqNum(),
+		BackSeq:   backDbInfo.LastSeqNum(),
+		Committed: commit,
+	}
+
+	if commit {
+		infos, err := fdb.getSnapshotsMeta()
+		if err != nil {
+			return nil, err
+		}
+		sic := NewSnapshotInfoContainer(infos)
+		sic.Add(newSnapshotInfo)
+
+		if sic.Len() > MAX_SNAPSHOTS_PER_INDEX {
+			sic.RemoveOldest()
+		}
+
+		err = fdb.updateSnapshotsMeta(sic.List())
+		if err != nil {
+			return nil, err
+		}
+
+		// Commit database file
+		start := time.Now()
+		err = fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
+		elapsed := time.Since(start)
+
+		fdb.totalCommitTime += elapsed
+		common.Debugf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v TotalFlushTime %v "+
+			"TotalCommitTime %v", fdb.id, fdb.idxInstId, fdb.totalFlushTime, fdb.totalCommitTime)
+
+		if err != nil {
+			common.Errorf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v Error in "+
+				"Index Commit %v", fdb.id, fdb.idxInstId, err)
+			return nil, err
+		}
+	}
+
+	return newSnapshotInfo, nil
 }
 
 //checkAllWorkersDone return true if all workers have
@@ -528,7 +540,7 @@ func (fdb *fdbSlice) checkAllWorkersDone() bool {
 
 	//worker queue is empty, make sure both workers are done
 	//processing the last mutation
-	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+	for i := 0; i < fdb.numWriters; i++ {
 		fdb.workerDone[i] <- true
 		<-fdb.workerDone[i]
 	}
@@ -543,7 +555,7 @@ func (fdb *fdbSlice) Close() {
 		"IndexDefnId %v", fdb.idxInstId, fdb.idxDefnId, fdb.id)
 
 	//signal shutdown for command handler routines
-	for i := 0; i < NUM_WRITER_THREADS_PER_SLICE; i++ {
+	for i := 0; i < fdb.numWriters; i++ {
 		fdb.stopCh[i] <- true
 		<-fdb.stopCh[i]
 	}
@@ -575,9 +587,9 @@ func (fdb *fdbSlice) Id() SliceId {
 	return fdb.id
 }
 
-//Name returns the Name for this Slice
-func (fdb *fdbSlice) Name() string {
-	return fdb.name
+// FilePath returns the filepath for this Slice
+func (fdb *fdbSlice) Path() string {
+	return fdb.path
 }
 
 //IsActive returns if the slice is active
@@ -612,57 +624,121 @@ func (fdb *fdbSlice) IndexDefnId() common.IndexDefnId {
 	return fdb.idxDefnId
 }
 
-//GetSnapshotContainer returns the snapshot container for
-//this slice
-func (fdb *fdbSlice) GetSnapshotContainer() SnapshotContainer {
-	return fdb.sc
+// Returns snapshot info list
+func (fdb *fdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
+	infos, err := fdb.getSnapshotsMeta()
+	return infos, err
 }
 
-func (fdb *fdbSlice) Timestamp() *common.TsVbuuid {
+func (fdb *fdbSlice) Compact() error {
+	fdb.IncrRef()
+	defer fdb.DecrRef()
 
-	return fdb.ts
-}
-
-func (fdb *fdbSlice) SetTimestamp(ts *common.TsVbuuid) error {
-
-	common.Tracef("ForestDBSlice::SetTimestamp \n\tSliceId %v IndexInstId %v. TS - %s",
-		fdb.id, fdb.idxInstId, ts)
-
-	//marshal TS
-	var tsVal []byte
-	var err error
-	if tsVal, err = json.Marshal(ts); err != nil {
-		common.Errorf("ForestDBSlice::SetTimestamp \n\t Error Marshalling TS %v. Err %v", ts, err)
+	newpath := newFdbFile(fdb.path, true)
+	err := fdb.dbfile.Compact(newpath)
+	if err != nil {
 		return err
 	}
 
-	if err = fdb.meta.SetKV([]byte(STABILITY_TS_KEY_NAME), tsVal); err != nil {
-		common.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error"+
-			"in storing timestamp %s (%v)", fdb.id, fdb.idxInstId, tsVal, err)
-		return err
+	if _, e := os.Stat(fdb.currfile); e == nil {
+		err = os.Remove(fdb.currfile)
 	}
 
-	fdb.ts = ts
+	fdb.currfile = newpath
+	return err
+}
 
-	return nil
+func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
+	var sts StorageStatistics
+	f, err := os.Open(fdb.currfile)
+	if err != nil {
+		return sts, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return sts, err
+	}
+
+	sts.DataSize = int64(fdb.dbfile.EstimateSpaceUsed())
+	sts.DiskSize = fi.Size()
+	sts.GetBytes = atomic.LoadInt64(&fdb.get_bytes)
+	sts.InsertBytes = atomic.LoadInt64(&fdb.insert_bytes)
+	sts.DeleteBytes = atomic.LoadInt64(&fdb.delete_bytes)
+
+	return sts, nil
 }
 
 func (fdb *fdbSlice) String() string {
 
 	str := fmt.Sprintf("SliceId: %v ", fdb.id)
-	str += fmt.Sprintf("Name: %v ", fdb.name)
+	str += fmt.Sprintf("File: %v ", fdb.path)
 	str += fmt.Sprintf("Index: %v ", fdb.idxInstId)
 
 	return str
 
 }
 
+func (fdb *fdbSlice) updateSnapshotsMeta(infos []SnapshotInfo) error {
+	fdb.metaLock.Lock()
+	defer fdb.metaLock.Unlock()
+
+	val, err := json.Marshal(infos)
+	if err != nil {
+		goto handle_err
+	}
+	err = fdb.meta.SetKV(snapshotMetaListKey, val)
+	if err != nil {
+		goto handle_err
+	}
+	return nil
+
+handle_err:
+	return errors.New("Failed to update snapshots list -" + err.Error())
+}
+
+func (fdb *fdbSlice) getSnapshotsMeta() ([]SnapshotInfo, error) {
+	var tmp []*fdbSnapshotInfo
+	var snapList []SnapshotInfo
+
+	fdb.metaLock.Lock()
+	defer fdb.metaLock.Unlock()
+
+	data, err := fdb.meta.GetKV(snapshotMetaListKey)
+
+	if err != nil {
+		if err == forestdb.RESULT_KEY_NOT_FOUND {
+			return []SnapshotInfo(nil), nil
+		}
+		return nil, err
+	}
+
+	err = json.Unmarshal(data, &tmp)
+	if err != nil {
+		goto handle_err
+	}
+
+	for i := range tmp {
+		snapList = append(snapList, tmp[i])
+	}
+
+	return snapList, nil
+
+handle_err:
+	return snapList, errors.New("Failed to retrieve snapshots list -" + err.Error())
+}
+
 func tryDeleteFdbSlice(fdb *fdbSlice) {
 	common.Infof("ForestDBSlice::Destroy \n\tDestroying Slice Id %v, IndexInstId %v, "+
 		"IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 
-	if err := forestdb.Destroy(fdb.name, fdb.config); err != nil {
+	if err := forestdb.Destroy(fdb.currfile, fdb.config); err != nil {
 		common.Errorf("ForestDBSlice::Destroy \n\t Error Destroying  Slice Id %v, "+
+			"IndexInstId %v, IndexDefnId %v. Error %v", fdb.id, fdb.idxInstId, fdb.idxDefnId, err)
+	}
+
+	//cleanup the disk directory
+	if err := os.RemoveAll(fdb.path); err != nil {
+		common.Errorf("ForestDBSlice::Destroy \n\t Error Cleaning Up Slice Id %v, "+
 			"IndexInstId %v, IndexDefnId %v. Error %v", fdb.id, fdb.idxInstId, fdb.idxDefnId, err)
 	}
 }
@@ -682,4 +758,27 @@ func tryCloseFdbSlice(fdb *fdbSlice) {
 	}
 
 	fdb.dbfile.Close()
+}
+
+func newFdbFile(dirpath string, newVersion bool) string {
+	var version int = 0
+
+	pattern := fmt.Sprintf("data.fdb.*")
+	files, _ := filepath.Glob(filepath.Join(dirpath, pattern))
+	sort.Strings(files)
+	// Pick the first file with least version
+	if len(files) > 0 {
+		filename := filepath.Base(files[0])
+		_, err := fmt.Sscanf(filename, "data.fdb.%d", &version)
+		if err != nil {
+			panic(fmt.Sprintf("Invalid data file %s (%v)", files[0], err))
+		}
+	}
+
+	if newVersion {
+		version++
+	}
+
+	newFilename := fmt.Sprintf("data.fdb.%d", version)
+	return filepath.Join(dirpath, newFilename)
 }

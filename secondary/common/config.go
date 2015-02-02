@@ -14,6 +14,9 @@ package common
 
 import "encoding/json"
 import "strings"
+import "fmt"
+import "reflect"
+import "errors"
 
 // Config is a key, value map with key always being a string
 // represents a config-parameter.
@@ -164,9 +167,9 @@ var SystemConfig = Config{
 	// projector dataport client parameters
 	// TODO: this configuration option should be tunnable for each feed.
 	"endpoint.dataport.remoteBlock": ConfigValue{
-		false,
+		true,
 		"should dataport endpoint block when remote is slow ?",
-		false,
+		true,
 	},
 	"endpoint.dataport.keyChanSize": ConfigValue{
 		10000,
@@ -277,9 +280,9 @@ var SystemConfig = Config{
 		1,
 	},
 	"indexer.scanTimeout": ConfigValue{
-		12000,
+		120000,
 		"timeout, in milliseconds, timeout for index scan processing",
-		12000,
+		120000,
 	},
 	"indexer.adminPort": ConfigValue{
 		"9100",
@@ -291,20 +294,25 @@ var SystemConfig = Config{
 		"port for index scan operations",
 		"9101",
 	},
+	"indexer.httpPort": ConfigValue{
+		"9102",
+		"port for external stats amd settings",
+		"9102",
+	},
 	"indexer.streamInitPort": ConfigValue{
-		"9102",
+		"9103",
 		"port for inital build stream",
-		"9102",
+		"9103",
 	},
 	"indexer.streamCatchupPort": ConfigValue{
-		"9103",
+		"9104",
 		"port for catchup stream",
-		"9103",
+		"9104",
 	},
 	"indexer.streamMaintPort": ConfigValue{
-		"9104",
+		"9105",
 		"port for maintenance stream",
-		"9104",
+		"9105",
 	},
 	"indexer.clusterAddr": ConfigValue{
 		"127.0.0.1:8091",
@@ -326,6 +334,64 @@ var SystemConfig = Config{
 		"Index file storage directory",
 		"./",
 	},
+	"indexer.numSliceWriters": ConfigValue{
+		1,
+		"Number of Writer Threads for a Slice",
+		1,
+	},
+
+	"indexer.sync_period": ConfigValue{
+		uint64(100),
+		"Stream message sync interval in millis",
+		uint64(100),
+	},
+
+	// Indexer dynamic settings
+	"indexer.settings.compaction.check_period": ConfigValue{
+		1200,
+		"Compaction poll interval in seconds",
+		1200,
+	},
+	"indexer.settings.compaction.interval": ConfigValue{
+		"00:00,00:00",
+		"Compaction allowed interval",
+		"00:00,00:00",
+	},
+	"indexer.settings.compaction.min_frag": ConfigValue{
+		30,
+		"Compaction fragmentation threshold percentage",
+		30,
+	},
+	"indexer.settings.compaction.min_size": ConfigValue{
+		uint64(1024 * 1024),
+		"Compaction min file size",
+		uint64(1024 * 1024),
+	},
+	"indexer.settings.persisted_snapshot.interval": ConfigValue{
+		uint64(200),
+		"Persisted snapshotting interval in milliseconds",
+		uint64(200),
+	},
+	"indexer.settings.inmemory_snapshot.interval": ConfigValue{
+		uint64(200),
+		"InMemory snapshotting interval in milliseconds",
+		uint64(200),
+	},
+	"indexer.settings.recovery.max_rollbacks": ConfigValue{
+		5,
+		"Maximum number of committed rollback points",
+		5,
+	},
+	"indexer.settings.memory_quota": ConfigValue{
+		uint64(0),
+		"Maximum memory used by the indexer buffercache",
+		uint64(0),
+	},
+	"indexer.settings.max_cpu_percent": ConfigValue{
+		100,
+		"Maximum nCPUs percent used by the processes",
+		100,
+	},
 }
 
 // NewConfig from another
@@ -333,6 +399,11 @@ var SystemConfig = Config{
 // or from []byte slice, a byte-slice of JSON string.
 func NewConfig(data interface{}) (Config, error) {
 	config := SystemConfig.Clone()
+	err := config.Update(data)
+	return config, err
+}
+
+func (config Config) Update(data interface{}) error {
 	switch v := data.(type) {
 	case Config: // Clone
 		for key, value := range v {
@@ -341,23 +412,26 @@ func NewConfig(data interface{}) (Config, error) {
 
 	case map[string]interface{}: // transform
 		for key, value := range v {
-			config.SetValue(key, value)
+			if err := config.SetValue(key, value); err != nil {
+				return err
+			}
 		}
 
 	case []byte: // parse JSON
 		m := make(map[string]interface{})
-		if err := json.Unmarshal(v, m); err != nil {
-			return nil, err
+		if err := json.Unmarshal(v, &m); err != nil {
+			return err
 		}
 		for key, value := range m {
-			config.SetValue(key, value)
+			if err := config.SetValue(key, value); err != nil {
+				return err
+			}
 		}
 
 	default:
-		return nil, nil
+		return nil
 	}
-
-	return config, nil
+	return nil
 }
 
 // Clone a new config object.
@@ -411,11 +485,40 @@ func (config Config) Set(key string, cv ConfigValue) Config {
 }
 
 // SetValue config parameter with value. Mutates the config object.
-func (config Config) SetValue(key string, value interface{}) Config {
-	cv := config[key]
+func (config Config) SetValue(key string, value interface{}) error {
+	cv, ok := config[key]
+	if !ok {
+		return errors.New("Invalid config parameter")
+	}
+
+	defType := reflect.TypeOf(cv.DefaultVal)
+	valType := reflect.TypeOf(value)
+
+	if valType.ConvertibleTo(defType) {
+		v := reflect.ValueOf(value)
+		v = reflect.Indirect(v)
+		value = v.Convert(defType).Interface()
+		valType = defType
+	}
+
+	if defType != reflect.TypeOf(value) {
+		return fmt.Errorf("%v: Value type mismatch, %v != %v (%v)",
+			key, valType, defType, value)
+	}
 	cv.Value = value
 	config[key] = cv
-	return config
+
+	return nil
+}
+
+func (config Config) Json() []byte {
+	kvs := make(map[string]interface{})
+	for key, value := range config {
+		kvs[key] = value.Value
+	}
+
+	bytes, _ := json.Marshal(kvs)
+	return bytes
 }
 
 // Int assumes config value is an integer and returns the same.
