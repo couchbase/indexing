@@ -66,8 +66,7 @@ type indexer struct {
 	streamBucketRollbackTs    map[common.StreamId]BucketRollbackTs
 
 	//TODO move this as part of index instance
-	bucketBuildTs    map[string]Timestamp //only for init stream
-	bucketsInCatchup map[string]bool
+	bucketBuildTs map[string]Timestamp //only for init stream
 
 	//TODO Remove this once cbq bridge support goes away
 	bucketCreateClientChMap map[string]MsgChannel
@@ -142,7 +141,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamBucketObserveFlushDone: make(map[common.StreamId]BucketObserveFlushDoneMap),
 		streamBucketRequestStopCh:    make(map[common.StreamId]BucketRequestStopCh),
 		streamBucketRollbackTs:       make(map[common.StreamId]BucketRollbackTs),
-		bucketsInCatchup:             make(map[string]bool),
 		bucketBuildTs:                make(map[string]Timestamp),
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
 		config:                       config,
