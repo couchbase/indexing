@@ -840,6 +840,18 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		common.CrashOnError(err)
 	}
 
+	//if this is the last index for the bucket in MaintStream and the bucket exists
+	//in InitStream, don't cleanup bucket from stream. It is needed for merge to
+	//happen.
+	if indexInst.Stream == common.MAINT_STREAM &&
+		!idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.MAINT_STREAM) &&
+		idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.INIT_STREAM) {
+		common.Debugf("Indexer::handleDropIndex Pre-Catchup Index Found for %v "+
+			"%v. Stream Cleanup Skipped.", indexInst.Stream, indexInst.Defn.Bucket)
+		clientCh <- &MsgSuccess{}
+		return
+	}
+
 	if idx.streamBucketStatus[common.MAINT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY ||
 		idx.streamBucketStatus[common.INIT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY {
 
@@ -1736,6 +1748,10 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false); err != nil {
+		common.CrashOnError(err)
+	}
+
 	//if index is already in MAINT_STREAM, nothing more needs to be done
 	if streamId == common.MAINT_STREAM {
 
@@ -1747,12 +1763,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				}
 				delete(idx.bucketCreateClientChMap, bucket)
 			}
-		} else {
-			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false); err != nil {
-				common.CrashOnError(err)
-			}
 		}
-
 		return
 	}
 
@@ -2521,10 +2532,11 @@ func (idx *indexer) validateIndexInstMap() {
 
 	for instId, index := range idx.indexInstMap {
 
-		//only indexes in created, initial, active state
+		//only indexes in created, initial, catchup, active state
 		//are valid for recovery
 		if index.State != common.INDEX_STATE_CREATED ||
 			index.State != common.INDEX_STATE_INITIAL ||
+			index.State != common.INDEX_STATE_CATCHUP ||
 			index.State != common.INDEX_STATE_ACTIVE {
 			common.Debugf("Indexer::validateIndexInstMap \n\t State %v Not Recoverable. "+
 				"Not Recovering Index %v", index.State, index)
