@@ -251,7 +251,7 @@ func TestRangeWithConcurrentDelMuts(t *testing.T) {
 	fmt.Println("In TestRangeWithConcurrentDelMuts()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
-	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
 	kvdocs = GenerateJsons(30000, seed, prodfile, bagdir)
@@ -268,8 +268,8 @@ func TestRangeWithConcurrentDelMuts(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 	
 	wg.Add(2)
-	go DeleteDocsForDuration(&wg, 60)
-	go RangeScanForDuration_ltr("Thread 1: ", &wg, 60, t, indexName, bucketName, indexScanAddress)
+	go DeleteDocsForDuration(&wg, 120)
+	go RangeScanForDuration_ltr("Thread 1: ", &wg, 120, t, indexName, bucketName, indexScanAddress)
 	wg.Wait()
 }
 
@@ -277,7 +277,7 @@ func TestScanWithConcurrentIndexOps(t *testing.T) {
 	fmt.Println("In TestScanWithConcurrentIndexOps()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
-	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
 	kvdocs = GenerateJsons(100000, seed, prodfile, bagdir)
@@ -294,8 +294,8 @@ func TestScanWithConcurrentIndexOps(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 	
 	wg.Add(2)
-	go CreateDropIndexesForDuration(&wg, 180, t)
-	go RangeScanForDuration_ltr("Thread 1: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
+	go CreateDropIndexesForDuration(&wg, 120, t)
+	go RangeScanForDuration_ltr("Thread 1: ", &wg, 120, t, indexName, bucketName, indexScanAddress)
 	wg.Wait()
 }
 
@@ -303,7 +303,7 @@ func TestConcurrentScans_SameIndex(t *testing.T) {
 	fmt.Println("In TestConcurrentScans()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
-	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
 	kvdocs = GenerateJsons(100000, seed, prodfile, bagdir)
@@ -320,12 +320,12 @@ func TestConcurrentScans_SameIndex(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 	
 	wg.Add(6)
-	go RangeScanForDuration_ltr("Thread 1: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
-	go RangeScanForDuration_ltr("Thread 2: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
-	go RangeScanForDuration_ltr("Thread 3: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
-	go RangeScanForDuration_ltr("Thread 4: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
-	go RangeScanForDuration_ltr("Thread 5: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
-	go RangeScanForDuration_ltr("Thread 6: ", &wg, 180, t, indexName, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 1: ", &wg, 120, t, indexName, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 2: ", &wg, 120, t, indexName, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 3: ", &wg, 120, t, indexName, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 4: ", &wg, 120, t, indexName, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 5: ", &wg, 120, t, indexName, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 6: ", &wg, 120, t, indexName, bucketName, indexScanAddress)
 	wg.Wait()
 }
 
@@ -333,7 +333,7 @@ func TestConcurrentScans_MultipleIndexes(t *testing.T) {
 	fmt.Println("In TestConcurrentScans()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
-	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
 	kvdocs = GenerateJsons(100000, seed, prodfile, bagdir)
@@ -358,9 +358,9 @@ func TestConcurrentScans_MultipleIndexes(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 	
 	wg.Add(3)
-	go RangeScanForDuration_ltr("Thread 1: ", &wg, 1800, t, index1, bucketName, indexScanAddress)
-	go RangeScanForDuration_num("Thread 2: ", &wg, 1800, t, index2, bucketName, indexScanAddress)
-	go RangeScanForDuration_ltr("Thread 3: ", &wg, 1800, t, index3, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 1: ", &wg, 120, t, index1, bucketName, indexScanAddress)
+	go RangeScanForDuration_num("Thread 2: ", &wg, 120, t, index2, bucketName, indexScanAddress)
+	go RangeScanForDuration_ltr("Thread 3: ", &wg, 120, t, index3, bucketName, indexScanAddress)
 	wg.Wait()
 }
 
