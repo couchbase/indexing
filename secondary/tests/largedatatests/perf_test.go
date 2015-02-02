@@ -34,7 +34,7 @@ func TestPerfInitialIndexBuild_SimpleJson(t *testing.T) {
 	fmt.Printf("Index build of %d user documents took %s\n", count, elapsed)
 }
 
-func TestPerfInitialIndexBuild_ComplexJson(t *testing.T) {
+func SkipTestPerfInitialIndexBuild_ComplexJson(t *testing.T) {
 	fmt.Println("In TestPerfInitialIndexBuild()")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
@@ -57,7 +57,7 @@ func TestPerfInitialIndexBuild_ComplexJson(t *testing.T) {
 	fmt.Printf("Index build of %d user documents took %s\n", count, elapsed)
 }
 
-func TestPerfRangeWithoutMutations_1M(t *testing.T) {
+func SkipTestPerfRangeWithoutMutations_1M(t *testing.T) {
 	fmt.Println("In TestPerfQueryWithoutMutations_1M()")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
@@ -84,7 +84,7 @@ func TestPerfRangeWithoutMutations_1M(t *testing.T) {
 	fmt.Printf("Range Scan of %d user documents took %s\n", count, elapsed)
 }
 
-func TestPerfLookupWithoutMutations_1M(t *testing.T) {
+func SkipTestPerfLookupWithoutMutations_1M(t *testing.T) {
 	fmt.Println("In TestPerfQueryWithoutMutations_1M()")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
@@ -111,7 +111,7 @@ func TestPerfLookupWithoutMutations_1M(t *testing.T) {
 	fmt.Printf("Lookup of %d user documents took %s\n", count, elapsed)
 }
 
-func TestPerfScanAllWithoutMutations_1M(t *testing.T) {
+func SkipTestPerfScanAllWithoutMutations_1M(t *testing.T) {
 	fmt.Println("In TestPerfQueryWithoutMutations_1M()")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
@@ -138,7 +138,7 @@ func TestPerfScanAllWithoutMutations_1M(t *testing.T) {
 	fmt.Printf("ScanAll of %d user documents took %s\n", count, elapsed)
 }
 
-func TestPerfRangeWithoutMutations_10M(t *testing.T) {
+func SkipTestPerfRangeWithoutMutations_10M(t *testing.T) {
 	fmt.Println("In TestPerfQueryWithoutMutations_10M()")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
@@ -164,7 +164,7 @@ func TestPerfRangeWithoutMutations_10M(t *testing.T) {
 	fmt.Printf("Range Scan of %d user documents took %s\n", count, elapsed)
 }
 
-func TestPerfRangeWithConcurrentKVMuts(t *testing.T) {
+func SkipTestPerfRangeWithConcurrentKVMuts(t *testing.T) {
 	fmt.Println("In TestPerfRangeWithConcurrentKVMuts()")
 	var wg sync.WaitGroup
 	prodfile = "../../../../../prataprc/monster/prods/test.prod"

@@ -51,8 +51,22 @@ func init() {
 	kvutility.DeleteKeys(docs, "default", "", clusterconfig.KVAddress)
 	kvutility.DeleteKeys(mut_docs, "default", "", clusterconfig.KVAddress)
 	time.Sleep(5 * time.Second)
-	fmt.Println("Loading the default bucket")
+	
+	fmt.Println("In TestCreateIndexOnEmptyBucket()")
+	var indexName = "index_eyeColor"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"eyeColor"}, true)
+	tc.HandleError(err, "Error in creating the index")
+	time.Sleep(1 * time.Second)
+
+	// Populate the bucket now
+	fmt.Println("Populating the default bucket")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "b", "b", 3)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"b"}, 3, true, defaultlimit)
+	tc.HandleError(err, "Error in scan")
+	tv.Validate(docScanResults, scanResults)
 }
 
 // Test for single index field of data type float64

@@ -1,8 +1,12 @@
 package kvutility
 
 import (
+	"fmt"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbaselabs/go-couchbase"
+	"net/http"
+	"net/url"
+	"strings"
 )
 
 // ToDo: Refactor Code
@@ -70,7 +74,7 @@ func Delete(key string, bucketName string, password string, hostaddress string) 
 
 	b, err := p.GetBucket(bucketName)
 	tc.HandleError(err, "bucket")
-	
+
 	err = b.Delete(key)
 	tc.HandleError(err, "delete")
 	b.Close()
@@ -94,4 +98,20 @@ func DeleteKeys(keyValues tc.KeyValues, bucketName string, password string, host
 		// tc.HandleError(err, "delete")
 	}
 	b.Close()
+}
+
+func CreateBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
+	client := &http.Client{}
+	address := "http://" + hostaddress + "/pools/default/buckets"
+
+	data := url.Values{"name": {bucketName}, "ramQuotaMB": {"300"}, "authType": {"none"}, "replicaNumber": {"1"}, "proxyPort": {"11211"}}
+
+	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
+	req.SetBasicAuth(serverUserName, serverPassword)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	resp, err := client.Do(req)
+	fmt.Println(address)
+	fmt.Println(req)
+	fmt.Println(resp)
+	tc.HandleError(err, "Create Bucket")
 }
