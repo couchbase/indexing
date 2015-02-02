@@ -65,6 +65,8 @@ type indexer struct {
 	streamBucketRequestStopCh map[common.StreamId]BucketRequestStopCh
 	streamBucketRollbackTs    map[common.StreamId]BucketRollbackTs
 
+	//TODO move this as part of index instance
+	bucketBuildTs    map[string]Timestamp //only for init stream
 	bucketsInCatchup map[string]bool
 
 	//TODO Remove this once cbq bridge support goes away
@@ -141,6 +143,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamBucketRequestStopCh:    make(map[common.StreamId]BucketRequestStopCh),
 		streamBucketRollbackTs:       make(map[common.StreamId]BucketRollbackTs),
 		bucketsInCatchup:             make(map[string]bool),
+		bucketBuildTs:                make(map[string]Timestamp),
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
 		config:                       config,
 	}
@@ -708,6 +711,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 						category: INDEXER}}
 				return
 			}
+		} else {
+			idx.bucketBuildTs[bucket] = buildTs
 		}
 
 		//if there is already an index for this bucket in MAINT_STREAM,
@@ -2132,6 +2137,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		bucket:    bucket,
 		indexList: indexList,
 		restartTs: restartTs,
+		buildTs:   idx.bucketBuildTs[bucket],
 		respCh:    respCh,
 		stopCh:    stopCh}
 
@@ -2398,6 +2404,8 @@ func (idx *indexer) initFromPersistedState() error {
 
 	common.Debugf("Indexer::initFromPersistedState Recovered IndexInstMap %v", idx.indexInstMap)
 
+	idx.validateIndexInstMap()
+
 	for _, inst := range idx.indexInstMap {
 
 		newpc := common.NewKeyPartitionContainer()
@@ -2506,6 +2514,57 @@ func (idx *indexer) recoverInstMapFromFile() error {
 		return err
 	}
 	return nil
+}
+
+func (idx *indexer) validateIndexInstMap() {
+
+	bucketValidated := make(map[string]bool)
+	bucketValid := make(map[string]bool)
+
+	for instId, index := range idx.indexInstMap {
+
+		//only indexes in created, initial, active state
+		//are valid for recovery
+		if index.State != common.INDEX_STATE_CREATED ||
+			index.State != common.INDEX_STATE_INITIAL ||
+			index.State != common.INDEX_STATE_ACTIVE {
+			common.Debugf("Indexer::validateIndexInstMap \n\t State %v Not Recoverable. "+
+				"Not Recovering Index %v", index.State, index)
+			delete(idx.indexInstMap, instId)
+		}
+
+		//if bucket doesn't exist, cleanup
+		bucket := index.Defn.Bucket
+		if !bucketValidated[bucket] {
+
+			if ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
+				bucketValid[bucket] = true
+			} else {
+				bucketValid[bucket] = false
+			}
+			bucketValidated[bucket] = true
+
+			//also set the buildTs for initial state index.
+			//TODO buildTs to be part of index instance
+			if bucketValid[bucket] {
+				buildTs, err := GetCurrentKVTs(idx.config["clusterAddr"].String(),
+					bucket,
+					idx.config["numVbuckets"].Int())
+				if err != nil {
+					common.CrashOnError(err)
+				} else {
+					idx.bucketBuildTs[bucket] = buildTs
+				}
+			}
+		}
+
+		if !bucketValid[bucket] {
+			common.Errorf("Indexer::validateIndexInstMap \n\t Bucket %v Not Found."+
+				"Not Recovering Index %v", bucket, index)
+			delete(idx.indexInstMap, instId)
+		}
+	}
+
 }
 
 func (idx *indexer) startStreams() bool {
