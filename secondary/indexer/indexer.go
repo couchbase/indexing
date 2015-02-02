@@ -840,6 +840,18 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		common.CrashOnError(err)
 	}
 
+	//if this is the last index for the bucket in MaintStream and the bucket exists
+	//in InitStream, don't cleanup bucket from stream. It is needed for merge to
+	//happen.
+	if indexInst.Stream == common.MAINT_STREAM &&
+		!idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.MAINT_STREAM) &&
+		idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.INIT_STREAM) {
+		common.Debugf("Indexer::handleDropIndex Pre-Catchup Index Found for %v "+
+			"%v. Stream Cleanup Skipped.", indexInst.Stream, indexInst.Defn.Bucket)
+		clientCh <- &MsgSuccess{}
+		return
+	}
+
 	if idx.streamBucketStatus[common.MAINT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY ||
 		idx.streamBucketStatus[common.INIT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY {
 
