@@ -2,6 +2,7 @@ package largedatatests
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 	"log"
 	"math/rand"
@@ -14,7 +15,6 @@ import (
 
 var kvdocs tc.KeyValues
 var prodfile string
-var bagdir string
 
 func CreateDocsForDuration(wg *sync.WaitGroup, seconds float64) {
 	fmt.Println("CreateDocs:: Creating mutations")
@@ -202,8 +202,7 @@ func SequentialRangeScanForDuration(indexName, bucketName string, seconds float6
 
 func SkipTestSequentialRangeScans(t *testing.T) {
 	fmt.Println("In TestSequentialRangeScans()")
-	prodfile = "../../../../../prataprc/monster/prods/test.prod"
-	bagdir =  "../../../../../prataprc/monster/bags/"	
+	prodfile = filepath.Join(proddir, "test.prod")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
@@ -225,8 +224,7 @@ func SkipTestSequentialRangeScans(t *testing.T) {
 func TestRangeWithConcurrentAddMuts(t *testing.T) {
 	fmt.Println("In TestRangeWithConcurrentAddMuts()")
 	var wg sync.WaitGroup
-	prodfile = "../../../../../prataprc/monster/prods/test.prod"
-	bagdir =  "../../../../../prataprc/monster/bags/"	
+	prodfile = filepath.Join(proddir, "test.prod")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
@@ -252,8 +250,7 @@ func TestRangeWithConcurrentAddMuts(t *testing.T) {
 func TestRangeWithConcurrentDelMuts(t *testing.T) {
 	fmt.Println("In TestRangeWithConcurrentDelMuts()")
 	var wg sync.WaitGroup
-	prodfile = "../../../../../prataprc/monster/prods/test.prod"
-	bagdir =  "../../../../../prataprc/monster/bags/"	
+	prodfile = filepath.Join(proddir, "test.prod")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
@@ -279,8 +276,7 @@ func TestRangeWithConcurrentDelMuts(t *testing.T) {
 func TestScanWithConcurrentIndexOps(t *testing.T) {
 	fmt.Println("In TestScanWithConcurrentIndexOps()")
 	var wg sync.WaitGroup
-	prodfile = "../../../../../prataprc/monster/prods/test.prod"
-	bagdir =  "../../../../../prataprc/monster/bags/"	
+	prodfile = filepath.Join(proddir, "test.prod")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
@@ -306,8 +302,7 @@ func TestScanWithConcurrentIndexOps(t *testing.T) {
 func TestConcurrentScans_SameIndex(t *testing.T) {
 	fmt.Println("In TestConcurrentScans()")
 	var wg sync.WaitGroup
-	prodfile = "../../../../../prataprc/monster/prods/test.prod"
-	bagdir =  "../../../../../prataprc/monster/bags/"	
+	prodfile = filepath.Join(proddir, "test.prod")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
@@ -337,9 +332,8 @@ func TestConcurrentScans_SameIndex(t *testing.T) {
 func TestConcurrentScans_MultipleIndexes(t *testing.T) {
 	fmt.Println("In TestConcurrentScans()")
 	var wg sync.WaitGroup
-	prodfile = "../../../../../prataprc/monster/prods/test.prod"
-	bagdir =  "../../../../../prataprc/monster/bags/"	
-	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	prodfile = filepath.Join(proddir, "test.prod")
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
 	fmt.Println("Generating JSON docs")
 	kvdocs = GenerateJsons(100000, seed, prodfile, bagdir)

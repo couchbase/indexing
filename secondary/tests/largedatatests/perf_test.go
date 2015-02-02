@@ -2,10 +2,10 @@ package largedatatests
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 	"log"
 	"sync"
-	// tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"testing"
@@ -15,8 +15,7 @@ func TestPerfInitialIndexBuild_SimpleJson(t *testing.T) {
 	fmt.Println("In TestPerfInitialIndexBuild()")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	
-	prodfile := "../../../../../prataprc/monster/prods/test.prod"
-	bagdir :=  "../../../../../prataprc/monster/bags/"
+	prodfile = filepath.Join(proddir, "test.prod")
 	fmt.Println("Generating JSON docs")
 	count := 1000000
 	keyValues := GenerateJsons(count, 1, prodfile, bagdir)

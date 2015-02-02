@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"path/filepath"
 	"log"
 	"github.com/couchbase/cbauth"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -13,6 +14,7 @@ import (
 	"io/ioutil"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +22,7 @@ var seed int
 var defaultlimit int64 = 10000000
 var kvaddress, indexManagementAddress, indexScanAddress string
 var clusterconfig tc.ClusterConfiguration
+var proddir, bagdir string
 
 func init() {
 	fmt.Println("In init()")
@@ -35,6 +38,16 @@ func init() {
 	// setup cbauth
 	if _, err := cbauth.InternalRetryDefaultInit(kvaddress, clusterconfig.Username, clusterconfig.Password); err != nil {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
+	}
+	
+	// Resolve monster bags and prods paths
+	gopath := os.Getenv("GOPATH")
+	for _, dir := range strings.Split(gopath, ":") {
+		file := filepath.Join(dir, "src/github.com/prataprc/monster")
+		if tc.FileExists(file) {
+			proddir = filepath.Join(file, "prods")
+			bagdir = filepath.Join(file, "bags")
+		}
 	}
 }
 
