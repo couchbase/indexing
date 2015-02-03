@@ -4,13 +4,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"github.com/couchbase/cbauth"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
+	"log"
 	"os/user"
 	"path/filepath"
 	"testing"
@@ -43,15 +43,15 @@ func init() {
 	u, _ := user.Current()
 	dataFilePath := filepath.Join(u.HomeDir, "testdata/Users10k.txt.gz")
 	mutationFilePath := filepath.Join(u.HomeDir, "testdata/Users_mut.txt.gz")
-	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath, true)
-	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, true)
+	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath, false)
+	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, false)
 	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
 	fmt.Println("Emptying the default bucket")
 	kvutility.DeleteKeys(docs, "default", "", clusterconfig.KVAddress)
 	kvutility.DeleteKeys(mut_docs, "default", "", clusterconfig.KVAddress)
 	time.Sleep(5 * time.Second)
-	
+
 	fmt.Println("In TestCreateIndexOnEmptyBucket()")
 	var indexName = "index_eyeColor"
 	var bucketName = "default"
@@ -62,7 +62,7 @@ func init() {
 	// Populate the bucket now
 	fmt.Println("Populating the default bucket")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
-	time.Sleep(5 * time.Second)  // Sleep for mutations to catch up
+	time.Sleep(10 * time.Second) // Sleep for mutations to catch up
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, true, defaultlimit)
 	tc.HandleError(err, "Error in scan")
@@ -160,7 +160,7 @@ func TestIndexOnNonExistentField(t *testing.T) {
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"height"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	
+
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "height", 6.0, 6.5, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{6.0}, []interface{}{6.5}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
@@ -294,7 +294,7 @@ func TestNestedIndex_Bool(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.isresidential"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
-		docScanResults := datautility.ExpectedScanResponse_bool(docs, "address.isresidential", false, 3)
+	docScanResults := datautility.ExpectedScanResponse_bool(docs, "address.isresidential", false, 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{false}, []interface{}{false}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
 	tv.Validate(docScanResults, scanResults)
@@ -484,11 +484,11 @@ func TestScanAll(t *testing.T) {
 	fmt.Println("In TestScanAll()")
 	var index1 = "index_name"
 	var bucketName = "default"
-	
+
 	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"name"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_string(docs, "name","A", "z", 3)
+	docScanResults := datautility.ExpectedScanResponse_string(docs, "name", "A", "z", 3)
 	fmt.Println("Length of docScanResults = ", len(docScanResults))
 	scanResults, err := secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit)
 	fmt.Println("Length of scanResults = ", len(scanResults))
@@ -500,11 +500,11 @@ func TestScanAllNestedField(t *testing.T) {
 	fmt.Println("In TestScanAllNestedField()")
 	var index1 = "index_streetname"
 	var bucketName = "default"
-	
+
 	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"address.streetaddress.streetname"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	docScanResults := datautility.ExpectedScanResponse_string(docs, "address.streetaddress.streetname","A", "z", 3)
+	docScanResults := datautility.ExpectedScanResponse_string(docs, "address.streetaddress.streetname", "A", "z", 3)
 	fmt.Println("Length of docScanResults = ", len(docScanResults))
 	scanResults, err := secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit)
 	fmt.Println("Length of scanResults = ", len(scanResults))
@@ -516,18 +516,126 @@ func TestBasicPrimaryIndex(t *testing.T) {
 	fmt.Println("In TestBasicPrimaryIndex()")
 	var indexName = "index_p1"
 	var bucketName = "default"
-	
+
 	err := secondaryindex.CreatePrimaryIndex(indexName, bucketName, indexManagementAddress, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	// docScanResults := datautility.ExpectedScanResponse_float64(docs, "latitude", -67.373365, -67.373165, 0)
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	if (len(scanResults) != len(docs)) {
+	if len(scanResults) != len(docs) {
 		fmt.Println("Len of scanResults is incorrect. Expected and Actual are", len(docs), len(scanResults))
 		err = errors.New("Len of scanResults is incorrect.")
 	}
- 	FailTestIfError(err, "Len of scanResults is incorrect", t)
+	FailTestIfError(err, "Len of scanResults is incorrect", t)
+}
+
+func TestBasicNullDataType(t *testing.T) {
+	fmt.Println("In TestBasicNullDataType()")
+	var indexName = "index_email"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"email"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedLookupResponse_nil(docs, "email")
+	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{nil}, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Scan all should include null : todo
+}
+
+func TestBasicArrayDataType_ScanAll(t *testing.T) {
+	fmt.Println("In TestBasicArrayDataType_ScanAll()")
+	var indexName = "index_tags"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedScanAllResponse(docs, "tags")
+	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+}
+
+func SkipTestBasicArrayDataType_Lookup(t *testing.T) {
+	fmt.Println("In TestBasicArrayDataType_Lookup()")
+	var indexName = "index_tags"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// Document has array: "reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"
+	arrayValue := []string{"reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"}
+	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{arrayValue}, true, defaultlimit)
+	docScanResults := make(tc.ScanResponse)
+	docScanResults["Usere46cea01-38f6-4e7b-92e5-69d64668ae75"] = []interface{}{arrayValue}
+	tc.PrintScanResults(scanResults, "scanResults")
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+}
+
+func TestArrayDataType_LookupMissingArrayValue(t *testing.T) {
+	fmt.Println("In TestArrayDataType_LookupMissingArrayValue()")
+	var indexName = "index_tags"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// Document has array order:  "reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"
+	arrayValue := []string{"A", "B", "C", "D", "E", "F", "G"} // an array that doesnt exist in  tags field
+	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{arrayValue}, true, defaultlimit)
+	tc.PrintScanResults(scanResults, "scanResults")
+	FailTestIfError(err, "Error in scan", t)
+	if len(scanResults) != 0 {
+		e := errors.New("Lookup should not return any doc key as array looked is missing in docs")
+		FailTestIfError(e, "Error in array Lookup", t)
+	}
+}
+
+func SkipTestArrayDataType_LookupWrongOrder(t *testing.T) {
+	fmt.Println("In TestArrayDataType_LookupWrongOrder()")
+	var indexName = "index_tags"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// Document has array order:  "reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"
+	arrayValue := []string{"reprehenderit", "tempor", "officia", "labore", "sunt", "tempor", "exercitation"} // Re-ordered the array elements
+	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{arrayValue}, true, defaultlimit)
+	tc.PrintScanResults(scanResults, "scanResults")
+	FailTestIfError(err, "Error in scan", t)
+	if len(scanResults) != 0 {
+		e := errors.New("Lookup should not return any doc key as array was looked up in wrong order")
+		FailTestIfError(e, "Error in array Lookup", t)
+	}
+}
+
+func SkipTestArrayDataType_LookupSubset(t *testing.T) {
+	fmt.Println("In TestArrayDataType_LookupSubset()")
+	var indexName = "index_tags"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// Document has array order:  "reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"
+	arrayValue1 := []string{"reprehenderit", "officia", "tempor", "exercitation"} // Subset of the array elements
+	// todo: arrayValue2 is a todo
+	// arrayValue2 := []string{ "reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"}    // Removed a repeating element from original arrayValue
+
+	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{arrayValue1}, true, defaultlimit)
+	tc.PrintScanResults(scanResults, "scanResults")
+	FailTestIfError(err, "Error in scan", t)
+	if len(scanResults) != 0 {
+		e := errors.New("Lookup should not return any doc key as lookup key was array's subset")
+		FailTestIfError(e, "Error in array Lookup", t)
+	}
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {
