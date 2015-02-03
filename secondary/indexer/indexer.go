@@ -2541,13 +2541,11 @@ func (idx *indexer) validateIndexInstMap() {
 
 		//only indexes in created, initial, catchup, active state
 		//are valid for recovery
-		if index.State != common.INDEX_STATE_CREATED ||
-			index.State != common.INDEX_STATE_INITIAL ||
-			index.State != common.INDEX_STATE_CATCHUP ||
-			index.State != common.INDEX_STATE_ACTIVE {
+		if !isValidRecoveryState(index.State) {
 			common.Debugf("Indexer::validateIndexInstMap \n\t State %v Not Recoverable. "+
 				"Not Recovering Index %v", index.State, index)
 			delete(idx.indexInstMap, instId)
+			continue
 		}
 
 		//if bucket doesn't exist, cleanup
@@ -2580,6 +2578,23 @@ func (idx *indexer) validateIndexInstMap() {
 				"Not Recovering Index %v", bucket, index)
 			delete(idx.indexInstMap, instId)
 		}
+	}
+
+}
+
+func isValidRecoveryState(state common.IndexState) bool {
+
+	switch state {
+
+	case common.INDEX_STATE_CREATED,
+		common.INDEX_STATE_INITIAL,
+		common.INDEX_STATE_CATCHUP,
+		common.INDEX_STATE_ACTIVE:
+		return true
+
+	default:
+		return false
+
 	}
 
 }

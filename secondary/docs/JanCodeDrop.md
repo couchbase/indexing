@@ -18,10 +18,27 @@
 - Configurable Indexer Settings
 - Indexer Statistics
 
-###Implemented
+####Implemented
 
 - Failover KV Node(Hard) [MB-13239](https://issues.couchbase.com/browse/MB-13239)
 - Bucket Flush [MB-13239](https://issues.couchbase.com/browse/MB-13239)
 - Index Compaction [MB-13111](https://issues.couchbase.com/browse/MB-13239)
 - In-memory Snapshots
 - Multi Buckets
+
+### N1QL
+
+- CREATE PRIMARY INDEX
+  * any bucket, any number of times.
+  * with deployment plan.
+  * with or without deferred build.
+- CREATE INDEX
+  * any bucket, any number of times, any expression.
+  * WHERE clause
+  * with deployment plan.
+  * with or without deferred build.
+- BUILD INDEX.
+- DROP INDEX.
+- LIST INDEX.
+- All kinds SELECT.
+
