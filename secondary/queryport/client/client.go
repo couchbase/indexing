@@ -177,11 +177,11 @@ type GsiClient struct {
 
 // NewGsiClient returns client to access GSI cluster.
 func NewGsiClient(
-	cluster, serviceAddr string,
+	cluster string,
 	config common.Config) (c *GsiClient, err error) {
 
 	if useMetadataProvider {
-		c, err = makeWithMetaProvider(cluster, serviceAddr, config)
+		c, err = makeWithMetaProvider(cluster, config)
 	} else {
 		c, err = makeWithCbq(cluster, config)
 	}
@@ -415,13 +415,13 @@ func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
 }
 
 func makeWithMetaProvider(
-	cluster, serviceAddr string,
+	cluster string,
 	config common.Config) (c *GsiClient, err error) {
 
 	c = &GsiClient{
 		queryClients: make(map[string]*gsiScanClient),
 	}
-	c.bridge, err = newMetaBridgeClient(cluster, serviceAddr)
+	c.bridge, err = newMetaBridgeClient(cluster)
 	if err != nil {
 		return nil, err
 	}

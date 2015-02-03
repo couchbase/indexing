@@ -2,17 +2,17 @@ package secondaryindex
 
 import (
 	"fmt"
-	"time"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbaselabs/query/expression"
 	"github.com/couchbaselabs/query/parser/n1ql"
+	"time"
 )
 
 func CreateClient(server, serviceAddr string) *qc.GsiClient {
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := qc.NewGsiClient(server, serviceAddr, config)
+	client, err := qc.NewGsiClient(server, config)
 	tc.HandleError(err, "Error while creating gsi client")
 	return client
 }
@@ -64,7 +64,7 @@ func CreateSecondaryIndexWithClient(indexName, bucketName, server string, indexF
 	if skipIfExists == true && indexExists == true {
 		return nil
 	}
-	
+
 	var secExprs []string
 	for _, indexField := range indexFields {
 		expr, err := n1ql.ParseExpression(indexField)
@@ -86,7 +86,7 @@ func CreateSecondaryIndexWithClient(indexName, bucketName, server string, indexF
 		fmt.Printf("Created the secondary index %v\n", indexName)
 		return WaitTillIndexActive(defnID, client)
 	}
-	
+
 	return err
 }
 
@@ -97,7 +97,7 @@ func WaitTillIndexActive(defnID uint64, client *qc.GsiClient) error {
 			fmt.Println("Error while fetching index state for defnID ", defnID)
 			return e
 		}
-		
+
 		if state == c.INDEX_STATE_ACTIVE {
 			return nil
 		} else {
@@ -191,7 +191,7 @@ func DropAllSecondaryIndexes(server string) {
 func DropSecondaryIndexByID(indexDefnID uint64, server string) error {
 	fmt.Println("Dropping the secondary index ", indexDefnID)
 	client := CreateClient(server, "2itest")
-	e := client.DropIndex(indexDefnID)	
+	e := client.DropIndex(indexDefnID)
 	if e != nil {
 		return e
 	}

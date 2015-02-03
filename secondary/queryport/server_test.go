@@ -58,7 +58,7 @@ func TestStatistics(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := client.NewGsiClient("localhost:9000", "servertest", config)
+	client, err := client.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestRange(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	qc, err := client.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestScanAll(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	qc, err := client.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func BenchmarkStatistics(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	qc, err := client.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func BenchmarkRange1(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	qc, err := client.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func BenchmarkRange100(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	qc, err := client.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func BenchmarkRangeParallel10(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	qc, err := client.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func BenchmarkScanAll(b *testing.B) {
 	time.Sleep(100 * time.Millisecond)
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qc, err := client.NewGsiClient("localhost:9000", "localhost:9101", config)
+	qc, err := client.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		b.Fatal(err)
 	}

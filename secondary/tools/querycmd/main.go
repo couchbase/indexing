@@ -178,7 +178,7 @@ func main() {
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 	client, err := qclient.NewGsiClient(
-		cmdOptions.server, "querycmd", config)
+		cmdOptions.server, config)
 	if err != nil {
 		log.Fatal(err)
 	}

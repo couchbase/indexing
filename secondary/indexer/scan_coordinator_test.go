@@ -110,7 +110,7 @@ func TestInvalidIndexScan(t *testing.T) {
 	tst = t
 	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	client, err := queryclient.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
@@ -133,7 +133,7 @@ func TestIndexScan(t *testing.T) {
 	nkeys = 100
 	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	client, err := queryclient.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
@@ -159,7 +159,7 @@ func TestIndexScanAll(t *testing.T) {
 	nkeys = 100
 	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	client, err := queryclient.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
@@ -183,7 +183,7 @@ func TestIndexScanAllLimit(t *testing.T) {
 	nkeys = 10000
 	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	client, err := queryclient.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
@@ -207,7 +207,7 @@ func TestScanEmptyIndex(t *testing.T) {
 	nkeys = 0
 	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	client, err := queryclient.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
@@ -232,7 +232,7 @@ func TestIndexScanErrors(t *testing.T) {
 	nerrors = 0
 	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	client, err := queryclient.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
@@ -314,7 +314,7 @@ func TestStatistics(t *testing.T) {
 
 	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	client, err := queryclient.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
@@ -341,7 +341,7 @@ func TestStatisticsError(t *testing.T) {
 
 	defnId := h.createIndex("idx", "default", simpleKeyFeeder)
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := queryclient.NewGsiClient("localhost:9000", "scanCoord", config)
+	client, err := queryclient.NewGsiClient("localhost:9000", config)
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
