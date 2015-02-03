@@ -92,7 +92,7 @@ func CreateSecondaryIndexWithClient(indexName, bucketName, server string, indexF
 
 func WaitTillIndexActive(defnID uint64, client *qc.GsiClient) error {
 	for {
-		state, e := client.IndexState(defnID); 
+		state, e := client.IndexState(defnID)
 		if e != nil {
 			fmt.Println("Error while fetching index state for defnID ", defnID)
 			return e

@@ -18,7 +18,6 @@ func TestThreeIndexCreates(t *testing.T) {
 
 	e := secondaryindex.CreateSecondaryIndex(i1, bucketName, indexManagementAddress, []string{"balance"}, true)
 	FailTestIfError(e, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 	
 	//Create docs mutations: Add new docs to KV
 	fmt.Println("Create docs mutations")
@@ -32,7 +31,6 @@ func TestThreeIndexCreates(t *testing.T) {
 	
 	err = secondaryindex.CreateSecondaryIndex(i2, bucketName, indexManagementAddress, []string{"email"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 	
 	//Create docs mutations: Add new docs to KV
 	fmt.Println("Create docs mutations")
@@ -46,7 +44,6 @@ func TestThreeIndexCreates(t *testing.T) {
 	
 	err = secondaryindex.CreateSecondaryIndex(i3, bucketName, indexManagementAddress, []string{"address.pin"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 	
 	//Delete docs mutations:  Delete docs from KV
 	fmt.Println("Delete docs mutations")
@@ -76,7 +73,6 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	
 	e := secondaryindex.CreateSecondaryIndex(i1, bucketName, indexManagementAddress, []string{"address.street"}, true)
 	FailTestIfError(e, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 	
 	//Create docs mutations: Add new docs to KV
 	fmt.Println("Create docs mutations")
@@ -90,7 +86,6 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	
 	err = secondaryindex.CreateSecondaryIndex(i2, bucketName, indexManagementAddress, []string{"registered"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 	
 	//Create docs mutations: Add new docs to KV
 	fmt.Println("Create docs mutations")
@@ -104,7 +99,6 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	
 	err = secondaryindex.CreateSecondaryIndex(i3, bucketName, indexManagementAddress, []string{"gender"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 	
 	//Create docs mutations: Add new docs to KV
 	fmt.Println("Create docs mutations")
@@ -136,7 +130,6 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	
 	err = secondaryindex.CreateSecondaryIndex(i4, bucketName, indexManagementAddress, []string{"longitude"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 	
 	//Create docs mutations: Add new docs to KV
 	fmt.Println("Create docs mutations")
@@ -156,7 +149,6 @@ func TestCreateDropScan(t *testing.T) {
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 1, true, defaultlimit)
@@ -181,7 +173,6 @@ func TestCreateDropCreate(t *testing.T) {
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 2)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 2, true, defaultlimit)
@@ -189,7 +180,6 @@ func TestCreateDropCreate(t *testing.T) {
 	tv.Validate(docScanResults, scanResults)
 
 	err = secondaryindex.DropSecondaryIndex(indexName, bucketName, indexManagementAddress)
-	time.Sleep(1 * time.Second)
 
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "BIOSPAN", "ZILLANET", 0)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"BIOSPAN"}, []interface{}{"ZILLANET"}, 0, true, defaultlimit)
@@ -201,7 +191,6 @@ func TestCreateDropCreate(t *testing.T) {
 
 	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 1)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 3, true, defaultlimit)
@@ -220,8 +209,6 @@ func TestCreate2Drop1Scan2(t *testing.T) {
 	err = secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, []string{"age"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	time.Sleep(2 * time.Second)
-
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 1)
 	scanResults, err := secondaryindex.Range(index1, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan 1", t)
@@ -233,7 +220,6 @@ func TestCreate2Drop1Scan2(t *testing.T) {
 	tv.Validate(docScanResults, scanResults)
 
 	err = secondaryindex.DropSecondaryIndex(index1, bucketName, indexManagementAddress)
-	time.Sleep(2 * time.Second)
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 60, 1)
 	scanResults, err = secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{0}, []interface{}{60}, 1, true, defaultlimit)
@@ -248,7 +234,6 @@ func TestIndexNameCaseSensitivity(t *testing.T) {
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 35, 40, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, true, defaultlimit)

@@ -55,7 +55,6 @@ func SkipTestCreateDocsMutation_LessDelay(t *testing.T) {
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second) // Wait for index create to complete
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
@@ -82,7 +81,6 @@ func SkipTestDeleteDocsMutation_LessDelay(t *testing.T) {
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second) // Wait for index create to complete
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
@@ -108,7 +106,6 @@ func TestCreateDocsMutation(t *testing.T) {
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second) // Wait for index create to complete
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
@@ -135,7 +132,6 @@ func TestDeleteDocsMutation(t *testing.T) {
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second) // Wait for index create to complete
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
