@@ -64,12 +64,19 @@ type gsiKeyspace struct {
 	gsiClient      *qclient.GsiClient
 	indexes        map[uint64]*secondaryIndex // defnID -> index
 	primaryIndexes map[uint64]*secondaryIndex
+	logPrefix      string
 }
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
 // also called as, pool->bucket.
+// will return an error when,
+// - GSI cluster is not available.
+// - network partitions / errors.
 func NewGSIIndexer(
 	clusterURL, namespace, keyspace string) (datastore.Indexer, errors.Error) {
+
+	c.SetLogLevel(c.LogLevelTrace)
+
 	gsi := &gsiKeyspace{
 		clusterURL:     clusterURL,
 		namespace:      namespace,
@@ -83,11 +90,22 @@ func NewGSIIndexer(
 		return nil, e
 	}
 	gsi.serviceAddr = serviceAddr
-	// restart client and refresh the index.
-	if err := gsi.Restart(); err != nil {
+	gsi.logPrefix =
+		fmt.Sprintf("GSIC[%s; %s; %s]", serviceAddr, namespace, keyspace)
+
+	// get the singleton-client, that is, if the client is already created
+	// using same `serviceAddr` just return the same, else create a new one.
+	client, err := singletonClient(clusterURL, serviceAddr)
+	if err != nil {
+		logging.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
+	}
+	gsi.gsiClient = client
+	// refresh indexes for this service->namespace->keyspace
+	if err := gsi.Refresh(); err != nil {
+		logging.Errorf("%v Refresh() failed: %v", gsi.logPrefix, err)
 		return nil, err
 	}
-	gsi.Refresh()
+	logging.Debugf("%v instantiated ...", gsi.logPrefix)
 	return gsi, nil
 }
 
@@ -116,6 +134,10 @@ func (gsi *gsiKeyspace) IndexIds() ([]string, errors.Error) {
 	for _, index := range gsi.indexes {
 		ids = append(ids, index.Id())
 	}
+	for _, index := range gsi.primaryIndexes {
+		ids = append(ids, index.Id())
+	}
+	logging.Debugf("%v IndexIds %v", gsi.logPrefix, ids)
 	return ids, nil
 }
 
@@ -132,6 +154,10 @@ func (gsi *gsiKeyspace) IndexNames() ([]string, errors.Error) {
 	for _, index := range gsi.indexes {
 		names = append(names, index.Name())
 	}
+	for _, index := range gsi.primaryIndexes {
+		names = append(names, index.Name())
+	}
+	logging.Debugf("%v IndexNames %v", gsi.logPrefix, names)
 	return names, nil
 }
 
@@ -143,9 +169,12 @@ func (gsi *gsiKeyspace) IndexById(id string) (datastore.Index, errors.Error) {
 	defnID := string2defnID(id)
 	index, ok := gsi.indexes[defnID]
 	if !ok {
-		errmsg := fmt.Sprintf("GSI index id %v not found.", id)
-		err := errors.NewError(nil, errmsg)
-		return nil, err
+		index, ok = gsi.primaryIndexes[defnID]
+		if !ok {
+			errmsg := fmt.Sprintf("GSI index id %v not found.", id)
+			err := errors.NewError(nil, errmsg)
+			return nil, err
+		}
 	}
 	return index, nil
 }
@@ -157,6 +186,11 @@ func (gsi *gsiKeyspace) IndexByName(name string) (datastore.Index, errors.Error)
 	defer gsi.rw.RUnlock()
 
 	for _, index := range gsi.indexes {
+		if index.Name() == name {
+			return index, nil
+		}
+	}
+	for _, index := range gsi.primaryIndexes {
 		if index.Name() == name {
 			return index, nil
 		}
@@ -176,6 +210,9 @@ func (gsi *gsiKeyspace) Indexes() ([]datastore.Index, errors.Error) {
 	defer gsi.rw.RUnlock()
 	indexes := make([]datastore.Index, 0, len(gsi.indexes))
 	for _, index := range gsi.indexes {
+		indexes = append(indexes, index)
+	}
+	for _, index := range gsi.primaryIndexes {
 		indexes = append(indexes, index)
 	}
 	return indexes, nil
@@ -226,14 +263,11 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex(
 	if err := gsi.Refresh(); err != nil {
 		return nil, err
 	}
-	gsi.rw.RLock()
-	defer gsi.rw.RUnlock()
-	index, ok := gsi.primaryIndexes[defnID]
-	if !ok {
-		msg := fmt.Sprintf("GSI index %v not found.", defnID)
-		return nil, errors.NewError(nil, msg)
+	index, errr := gsi.IndexById(defnID2String(defnID))
+	if errr != nil {
+		return nil, errr
 	}
-	return index, nil
+	return index.(datastore.PrimaryIndex), nil
 }
 
 // CreateIndex implements datastore.Indexer{} interface. Create a secondary
@@ -309,6 +343,9 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 	}
 	gsi.clearIndexes()
 	for _, index := range indexes {
+		if index.Definition.Bucket != gsi.keyspace {
+			continue
+		}
 		si, err := newSecondaryIndexFromMetaData(gsi, index)
 		if err != nil {
 			return err
@@ -318,22 +355,6 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 		}
 	}
 	return nil
-}
-
-// Restart will close existing gsiClient and restart, and refresh
-// local cache of indexes before returning.
-func (gsi *gsiKeyspace) Restart() errors.Error {
-	if gsi.gsiClient != nil {
-		gsi.gsiClient.Close()
-	}
-	qconf := c.SystemConfig.SectionConfig("queryport.client.", true /*trim*/)
-	logging.Errorf("Restart() GSI client...")
-	c, err := qclient.NewGsiClient(gsi.clusterURL, gsi.serviceAddr, qconf)
-	if err != nil {
-		return errors.NewError(err, "NewGsiClient()")
-	}
-	gsi.gsiClient = c
-	return gsi.Refresh()
 }
 
 //------------------------------------------
@@ -731,4 +752,32 @@ func defnID2String(id uint64) string {
 func string2defnID(id string) uint64 {
 	defnID, _ := strconv.ParseUint(id, 16, 64)
 	return defnID
+}
+
+//-----------------
+// singleton client
+//-----------------
+
+var muclient sync.Mutex
+
+// mapped as serviceAddr -> GsiClient
+var singletonClients = make(map[string]*qclient.GsiClient)
+
+func singletonClient(clusterURL, serviceAddr string) (*qclient.GsiClient, error) {
+	muclient.Lock()
+	defer muclient.Unlock()
+	client, ok := singletonClients[serviceAddr]
+	if ok {
+		logging.Debugf("[%v] reusing singleton", serviceAddr)
+		return client, nil
+	}
+
+	var err error
+	qconf := c.SystemConfig.SectionConfig("queryport.client.", true /*trim*/)
+	client, err = qclient.NewGsiClient(clusterURL, serviceAddr, qconf)
+	if err != nil {
+		return nil, fmt.Errorf("NewGsiClient(): %v", err)
+	}
+	singletonClients[serviceAddr] = client
+	return client, nil
 }
