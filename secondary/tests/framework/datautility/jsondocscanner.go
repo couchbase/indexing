@@ -163,6 +163,62 @@ func ExpectedScanResponse_bool(docs tc.KeyValues, jsonPath string, value bool, i
 	return results
 }
 
+// ScanAll for all datatypes
+func ExpectedScanAllResponse(docs tc.KeyValues, jsonPath string) tc.ScanResponse {
+	results := make(tc.ScanResponse)
+	fields := strings.Split(jsonPath, ".")
+	var json map[string]interface{}
+	var f string
+	var i int
+
+	for k, v := range docs {
+		// Access the nested field
+		json = v.(map[string]interface{})
+		for i = 0; i < len(fields)-1; i++ {
+			f = fields[i]
+			switch json[f].(type) {
+			case map[string]interface{}:
+				json = json[f].(map[string]interface{})
+			default:
+				break
+			}
+		}
+		field := json[fields[i]]
+		results[k] = []interface{}{field}
+	}
+
+	return results
+}
+
+// Lookup for nil
+func ExpectedLookupResponse_nil(docs tc.KeyValues, jsonPath string) tc.ScanResponse {
+	results := make(tc.ScanResponse)
+	fields := strings.Split(jsonPath, ".")
+	var json map[string]interface{}
+	var f string
+	var i int
+
+	for k, v := range docs {
+		// Access the nested field
+		json = v.(map[string]interface{})
+		for i = 0; i < len(fields)-1; i++ {
+			f = fields[i]
+			switch json[f].(type) {
+			case map[string]interface{}:
+				json = json[f].(map[string]interface{})
+			default:
+				break
+			}
+		}
+		field := json[fields[i]]
+		if field == nil {
+			results[k] = []interface{}{field}
+		}
+	}
+
+	return results
+}
+
 // Lookup for Json object from list of docs
 func ExpectedLookupResponse_json(docs tc.KeyValues, jsonPath string, value map[string]interface{}) tc.ScanResponse {
 	results := make(tc.ScanResponse)

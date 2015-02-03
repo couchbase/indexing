@@ -58,7 +58,6 @@ var gsi2N1QLState = map[c.IndexState]datastore.IndexState{
 type gsiKeyspace struct {
 	rw             sync.RWMutex
 	clusterURL     string
-	serviceAddr    string
 	namespace      string // aka pool
 	keyspace       string // aka bucket
 	gsiClient      *qclient.GsiClient
@@ -84,18 +83,10 @@ func NewGSIIndexer(
 		indexes:        make(map[uint64]*secondaryIndex), // defnID -> index
 		primaryIndexes: make(map[uint64]*secondaryIndex),
 	}
-	// get n1ql service addr.
-	serviceAddr, e := gsi.getLocalServiceAddr(clusterURL)
-	if e != nil {
-		return nil, e
-	}
-	gsi.serviceAddr = serviceAddr
-	gsi.logPrefix =
-		fmt.Sprintf("GSIC[%s; %s; %s]", serviceAddr, namespace, keyspace)
+	gsi.logPrefix = fmt.Sprintf("GSIC[%s; %s]", namespace, keyspace)
 
-	// get the singleton-client, that is, if the client is already created
-	// using same `serviceAddr` just return the same, else create a new one.
-	client, err := singletonClient(clusterURL, serviceAddr)
+	// get the singleton-client
+	client, err := getSingletonClient(clusterURL)
 	if err != nil {
 		logging.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
 	}
@@ -387,22 +378,6 @@ func (gsi *gsiKeyspace) clearIndexes() {
 	defer gsi.rw.Unlock()
 	gsi.indexes = make(map[uint64]*secondaryIndex)        // defnID -> index
 	gsi.primaryIndexes = make(map[uint64]*secondaryIndex) // defnID -> index
-}
-
-// return n1ql's service address, called once during bootstrap
-func (gsi *gsiKeyspace) getLocalServiceAddr(
-	cluster string) (string, errors.Error) {
-
-	cinfo, err := getClusterInfo(cluster, "default" /*pool*/) // TODO:nomagic
-	if err != nil {
-		return "", err
-	}
-	nodeID := cinfo.GetCurrentNode()
-	serviceAddr, e := cinfo.GetServiceAddress(nodeID, "n1ql")
-	if e != nil {
-		return "", errors.NewError(e, fmt.Sprintf("ClusterInfo() failed"))
-	}
-	return serviceAddr, nil
 }
 
 //------------------
@@ -759,25 +734,19 @@ func string2defnID(id string) uint64 {
 //-----------------
 
 var muclient sync.Mutex
+var singletonClient *qclient.GsiClient = nil
 
-// mapped as serviceAddr -> GsiClient
-var singletonClients = make(map[string]*qclient.GsiClient)
-
-func singletonClient(clusterURL, serviceAddr string) (*qclient.GsiClient, error) {
+func getSingletonClient(clusterURL string) (*qclient.GsiClient, error) {
 	muclient.Lock()
 	defer muclient.Unlock()
-	client, ok := singletonClients[serviceAddr]
-	if ok {
-		logging.Debugf("[%v] reusing singleton", serviceAddr)
-		return client, nil
+	if singletonClient == nil {
+		logging.Debugf("creating singleton for URL %v", clusterURL)
+		qconf := c.SystemConfig.SectionConfig("queryport.client.", true /*trim*/)
+		client, err := qclient.NewGsiClient(clusterURL, qconf)
+		if err != nil {
+			return nil, fmt.Errorf("NewGsiClient(): %v", err)
+		}
+		singletonClient = client
 	}
-
-	var err error
-	qconf := c.SystemConfig.SectionConfig("queryport.client.", true /*trim*/)
-	client, err = qclient.NewGsiClient(clusterURL, serviceAddr, qconf)
-	if err != nil {
-		return nil, fmt.Errorf("NewGsiClient(): %v", err)
-	}
-	singletonClients[serviceAddr] = client
-	return client, nil
+	return singletonClient, nil
 }

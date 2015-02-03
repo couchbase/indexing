@@ -10,9 +10,11 @@
 package common
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"io"
+	"strconv"
 )
 
 type UUID []byte
@@ -28,4 +30,15 @@ func NewUUID() (UUID, error) {
 
 func (u UUID) Uint64() uint64 {
 	return binary.LittleEndian.Uint64(([]byte)(u))
+}
+
+func (u UUID) Str() string {
+	var buf bytes.Buffer
+	for i := 0; i < len(u); i++ {
+		if i > 0 {
+			buf.WriteString(":")
+		}
+		buf.WriteString(strconv.FormatUint(uint64(u[i]), 16))
+	}
+	return buf.String()
 }

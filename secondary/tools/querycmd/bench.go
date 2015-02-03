@@ -28,7 +28,7 @@ func loopback(cluster, raddr string) {
 	qconf := c.SystemConfig.SectionConfig("queryport.client.", true)
 	qconf.SetValue("poolSize", 10)
 	qconf.SetValue("poolOverflow", mock_nclients)
-	client, err := qclient.NewGsiClient(cluster, "querycmd", qconf)
+	client, err := qclient.NewGsiClient(cluster, qconf)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -12,12 +12,11 @@ import common "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 
 type metadataClient struct {
-	clusterURL  string
-	serviceAddr string
-	mdClient    *mclient.MetadataProvider
-	rw          sync.RWMutex      // protects all fields listed below
-	adminports  []string          // list of nodes represented by its adminport.
-	queryports  map[string]string // adminport -> queryport
+	clusterURL string
+	mdClient   *mclient.MetadataProvider
+	rw         sync.RWMutex      // protects all fields listed below
+	adminports []string          // list of nodes represented by its adminport.
+	queryports map[string]string // adminport -> queryport
 	// sherlock topology management, multi-node & single-partition.
 	topology map[string][]*mclient.IndexMetadata // adminport -> indexes
 	// shelock load replicas.
@@ -26,8 +25,7 @@ type metadataClient struct {
 	loads map[common.IndexDefnId]*loadHeuristics // adminport -> loadHeuristics
 }
 
-func newMetaBridgeClient(
-	cluster, serviceAddr string) (c *metadataClient, err error) {
+func newMetaBridgeClient(cluster string) (c *metadataClient, err error) {
 
 	cinfo, err := common.NewClusterInfoCache(common.ClusterUrl(cluster), "default" /*pooln*/)
 	if err != nil {
@@ -37,14 +35,18 @@ func newMetaBridgeClient(
 		return nil, err
 	}
 	b := &metadataClient{
-		clusterURL:  cluster,
-		serviceAddr: serviceAddr,
-		adminports:  make([]string, 0),
-		queryports:  make(map[string]string, 0),
-		loads:       make(map[common.IndexDefnId]*loadHeuristics),
+		clusterURL: cluster,
+		adminports: make([]string, 0),
+		queryports: make(map[string]string, 0),
+		loads:      make(map[common.IndexDefnId]*loadHeuristics),
 	}
 	// initialize meta-data-provide.
-	b.mdClient, err = mclient.NewMetadataProvider(b.serviceAddr)
+	uuid, err := common.NewUUID()
+	if err != nil {
+		common.Errorf("Could not generate UUID in common.NewUUID")
+		return nil, err
+	}
+	b.mdClient, err = mclient.NewMetadataProvider(uuid.Str())
 	if err != nil {
 		return nil, err
 	}
