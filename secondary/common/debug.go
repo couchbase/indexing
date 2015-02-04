@@ -65,7 +65,7 @@ func LogEnable() {
 	logger = log.New(logFile, "", log.Lmicroseconds)
 }
 
-// Is log enabled
+// IslogEnabled to check whether logging is active.
 func IsLogEnabled() bool {
 	return logger != nil
 }
@@ -140,37 +140,46 @@ func StackTrace(s string) {
 	}
 }
 
-// SystemLog
+// SystemLog is a default 2i-logging object that can be passed around
+// to libraries.
 type SystemLog string
 
+// NewSystemLog returns a new instance of system-logger.
 func NewSystemLog() SystemLog {
 	return SystemLog("system-log")
 }
 
+// Warnf to log message and warning messages will be logged.
 func (log SystemLog) Warnf(format string, v ...interface{}) {
 	Warnf(format, v...)
 }
 
+// Errorf to log message and warning messages will be logged.
 func (log SystemLog) Errorf(format string, v ...interface{}) {
 	Errorf(format, v...)
 }
 
+// Fatalf to log message and warning messages will be logged.
 func (log SystemLog) Fatalf(format string, v ...interface{}) {
 	Fatalf(format, v...)
 }
 
+// Infof to log message at info level.
 func (log SystemLog) Infof(format string, v ...interface{}) {
 	Infof(format, v...)
 }
 
+// Debugf to log message at info level.
 func (log SystemLog) Debugf(format string, v ...interface{}) {
 	Debugf(format, v...)
 }
 
+// Tracef to log message at info level.
 func (log SystemLog) Tracef(format string, v ...interface{}) {
 	Tracef(format, v...)
 }
 
+// StackTrace parse string `s` and log it as error message.
 func (log SystemLog) StackTrace(s string) {
 	StackTrace(s)
 }
