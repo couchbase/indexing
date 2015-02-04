@@ -29,6 +29,7 @@ package adminport
 import "fmt"
 import "expvar"
 import "runtime/debug"
+import "encoding/json"
 import "io"
 import "net"
 import "net/http"
@@ -43,6 +44,7 @@ import c "github.com/couchbase/indexing/secondary/common"
 type httpServer struct {
 	mu       sync.Mutex   // handle concurrent updates to this object
 	lis      net.Listener // TCP listener
+	mux      *http.ServeMux
 	srv      *http.Server // http server
 	messages map[string]MessageMarshaller
 	conns    []net.Conn
@@ -83,12 +85,12 @@ func NewHTTPServer(config c.Config, reqch chan<- Request) Server {
 	}
 	s.logPrefix = fmt.Sprintf("%s[%s]", s.name, s.laddr)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc(s.urlPrefix, s.systemHandler)
-	mux.HandleFunc("/debug/vars", s.expvarHandler)
+	s.mux = http.NewServeMux()
+	s.mux.HandleFunc(s.urlPrefix, s.systemHandler)
+	s.mux.HandleFunc("/debug/vars", s.expvarHandler)
 	s.srv = &http.Server{
 		Addr:           s.laddr,
-		Handler:        mux,
+		Handler:        s.mux,
 		ConnState:      s.connState,
 		ReadTimeout:    s.rtimeout * time.Millisecond,
 		WriteTimeout:   s.wtimeout * time.Millisecond,
@@ -110,6 +112,23 @@ func (s *httpServer) Register(msg MessageMarshaller) (err error) {
 	s.messages[key] = msg
 	s.statsMessages[key] = [3]uint64{0, 0, 0}
 	c.Infof("%s registered %s\n", s.logPrefix, s.getURL(msg))
+	return
+}
+
+// RegisterHandler is part of Server interface.
+func (s *httpServer) RegisterHttpHandler(
+	path string,
+	handler func(http.ResponseWriter, *http.Request)) (err error) {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.lis != nil {
+		c.Errorf("%v can't register, server already started\n", s.logPrefix)
+		return ErrorRegisteringRequest
+	}
+	s.mux.HandleFunc(path, handler)
+	c.Infof("%s registered %s\n", s.logPrefix, path)
 	return
 }
 
@@ -289,7 +308,11 @@ func (s *httpServer) expvarHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, ",\n")
 		}
 		first = false
-		fmt.Fprintf(w, "%q: %s", kv.Key, kv.Value)
+		data, err := json.Marshal(kv.Value)
+		if err != nil {
+			c.Errorf("%v encoding statistics: %v\n", s.logPrefix, err)
+		}
+		fmt.Fprintf(w, "%q: %s", kv.Key, data)
 	})
 	fmt.Fprintf(w, "\n}\n")
 }
