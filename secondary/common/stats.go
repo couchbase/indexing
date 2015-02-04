@@ -2,9 +2,10 @@
 
 package common
 
-import (
-	"encoding/json"
-)
+import "encoding/json"
+import "sort"
+import "fmt"
+import "strings"
 
 // Statistics provide a type and method receivers for marshalling and
 // un-marshalling statistics, as JSON, for components across the network.
@@ -130,4 +131,46 @@ func (s Statistics) Get(path string) interface{} {
 // ToMap converts Statistics to map.
 func (s Statistics) ToMap() map[string]interface{} {
 	return map[string]interface{}(s)
+}
+
+// Lines will convert JSON to human readable list of statistics.
+func (s Statistics) Lines() string {
+	return valueString("", s)
+}
+
+func valueString(prefix string, val interface{}) string {
+	// a shot in the dark, may be val is a map.
+	m, ok := val.(map[string]interface{})
+	if !ok {
+		stats, ok := val.(Statistics) // or val is a Statistics
+		if ok {
+			m = map[string]interface{}(stats)
+		}
+	}
+	switch v := val.(type) {
+	case map[string]interface{}, Statistics:
+		keys := make([]string, 0, len(m))
+		for key := range m {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		ss := make([]string, 0, len(m))
+		for _, key := range keys {
+			val := m[key]
+			ss = append(ss, valueString(fmt.Sprintf("%s%s.", prefix, key), val))
+		}
+		return strings.Join(ss, "\n")
+
+	case []interface{}:
+		ss := make([]string, 0, len(v))
+		for i, x := range v {
+			ss = append(ss, fmt.Sprintf("%s%d : %s", prefix, i, x))
+		}
+		return strings.Join(ss, "\n")
+
+	default:
+		prefix = strings.Trim(prefix, ".")
+		return fmt.Sprintf("%v : %v", prefix, val)
+	}
 }
