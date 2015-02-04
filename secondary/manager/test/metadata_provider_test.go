@@ -23,6 +23,7 @@ import (
 
 var newDefnId, newDefnId2 common.IndexDefnId
 var gMgr *manager.IndexManager = nil
+var metadata_provider_test_done = make(chan bool)
 
 type notifier struct {
 	hasCreated bool
@@ -68,6 +69,7 @@ func TestMetadataProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer provider.Close()
+	provider.SetTimeout(int64(time.Second) * 15)
 	provider.WatchMetadata(msgAddr)
 
 	// the gometa server is running in the same process as MetadataProvider (client).  So sleep to
@@ -108,7 +110,7 @@ func TestMetadataProvider(t *testing.T) {
 
 	// Create Index with deployment plan (deferred)
 	plan := make(map[string]interface{})
-	plan["nodes"] = []string{msgAddr}
+	plan["nodes"] = []interface{}{msgAddr}
 	plan["defer_build"] = true
 	newDefnId, err := provider.CreateIndexWithPlan("metadata_provider_test_102", "Default", common.ForestDB,
 		common.N1QL, "Testing", "TestingWhereExpr", []string{"Testing"}, false, plan)
@@ -214,12 +216,25 @@ func TestMetadataProvider(t *testing.T) {
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
+	common.Infof("Verify Cleanup / Timeout *********************************************************")
+
+	// Create Index (immediate).
+
+	newDefnId105, err := provider.CreateIndex("metadata_provider_test_105", "Default", common.ForestDB,
+		common.N1QL, "Testing", "TestingWhereExpr", msgAddr, []string{"Testing"}, false)
+	if err == nil {
+		t.Fatal("Does not receive timeout error for create Index Defn 105 through MetadataProvider")
+	}
+	common.Infof("recieve expected timeout error when creating index 105")
+	close(metadata_provider_test_done)
+
 	common.Infof("Cleanup Test *********************************************************")
 
 	provider.UnwatchMetadata(msgAddr)
 	cleanupTest(mgr, t)
 	cleanSingleIndex(mgr, t, newDefnId)
 	cleanSingleIndex(mgr, t, newDefnId2)
+	cleanSingleIndex(mgr, t, newDefnId105)
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }
 
@@ -301,6 +316,10 @@ func (n *notifier) OnIndexCreate(defn *common.IndexDefn) error {
 
 	if defn.Name == "metadata_provider_test_104" {
 		return &c.RecoverableError{Reason: "do not allow creating metadata_provider_test_104"}
+	}
+
+	if defn.Name == "metadata_provider_test_105" {
+		<-metadata_provider_test_done
 	}
 
 	n.hasCreated = true

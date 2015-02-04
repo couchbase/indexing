@@ -560,7 +560,7 @@ func TestBasicArrayDataType_ScanAll(t *testing.T) {
 	tv.Validate(docScanResults, scanResults)
 }
 
-func SkipTestBasicArrayDataType_Lookup(t *testing.T) {
+func TestBasicArrayDataType_Lookup(t *testing.T) {
 	fmt.Println("In TestBasicArrayDataType_Lookup()")
 	var indexName = "index_tags"
 	var bucketName = "default"
@@ -568,14 +568,22 @@ func SkipTestBasicArrayDataType_Lookup(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	// Document has array: "reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"
-	arrayValue := []string{"reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"}
+	// Document has array: "reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"
+	arrayValue := []string{"reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"}
+
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{arrayValue}, true, defaultlimit)
-	docScanResults := make(tc.ScanResponse)
-	docScanResults["Usere46cea01-38f6-4e7b-92e5-69d64668ae75"] = []interface{}{arrayValue}
 	tc.PrintScanResults(scanResults, "scanResults")
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	if len(scanResults) != 1 {
+		e := errors.New("Lookup should return exactly one result")
+		FailTestIfError(e, "Error in array Lookup: ", t)
+	}
+	for k := range scanResults {
+		if k != "Usere46cea01-38f6-4e7b-92e5-69d64668ae75" {
+			e := errors.New("Lookup returned a wrong key")
+			FailTestIfError(e, "Error in array Lookup: ", t)
+		}
+	}
 }
 
 func TestArrayDataType_LookupMissingArrayValue(t *testing.T) {
@@ -586,7 +594,7 @@ func TestArrayDataType_LookupMissingArrayValue(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	// Document has array order:  "reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"
+	// Document has array: "reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"
 	arrayValue := []string{"A", "B", "C", "D", "E", "F", "G"} // an array that doesnt exist in  tags field
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{arrayValue}, true, defaultlimit)
 	tc.PrintScanResults(scanResults, "scanResults")
@@ -605,7 +613,7 @@ func SkipTestArrayDataType_LookupWrongOrder(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	// Document has array order:  "reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"
+	// Document has array: "reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"
 	arrayValue := []string{"reprehenderit", "tempor", "officia", "labore", "sunt", "tempor", "exercitation"} // Re-ordered the array elements
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{arrayValue}, true, defaultlimit)
 	tc.PrintScanResults(scanResults, "scanResults")
@@ -624,8 +632,8 @@ func SkipTestArrayDataType_LookupSubset(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	// Document has array order:  "reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"
-	arrayValue1 := []string{"reprehenderit", "officia", "tempor", "exercitation"} // Subset of the array elements
+	// Document has array: "reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"
+	arrayValue1 := []string{"reprehenderit", "exercitation", "labore", "sunt"} // Subset of the array elements
 	// todo: arrayValue2 is a todo
 	// arrayValue2 := []string{ "reprehenderit", "officia", "tempor", "exercitation", "labore", "sunt", "tempor"}    // Removed a repeating element from original arrayValue
 

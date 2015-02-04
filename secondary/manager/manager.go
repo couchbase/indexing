@@ -17,10 +17,10 @@ import (
 	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
-	"os"
 )
 
 ///////////////////////////////////////////////////////
@@ -162,7 +162,7 @@ func NewIndexManagerInternal(msgAddr string,
 	// finish sync with remote metadata repo master).
 	//mgr.repo, err = NewMetadataRepo(requestAddr, leaderAddr, config, mgr)
 	mgr.basepath = config["storage_dir"].String()
-	os.Mkdir(mgr.basepath, 0755)	
+	os.Mkdir(mgr.basepath, 0755)
 	repoName := filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
 	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(msgAddr, mgr.eventMgr, mgr.lifecycleMgr, repoName)
 	if err != nil {
@@ -236,10 +236,6 @@ func (m *IndexManager) Close() {
 
 	m.stopMasterServiceNoLock()
 
-	if m.repo != nil {
-		m.repo.Close()
-	}
-
 	if m.coordinator != nil {
 		m.coordinator.Terminate()
 	}
@@ -254,6 +250,10 @@ func (m *IndexManager) Close() {
 
 	if m.lifecycleMgr != nil {
 		m.lifecycleMgr.Terminate()
+	}
+
+	if m.repo != nil {
+		m.repo.Close()
 	}
 
 	m.isClosed = true

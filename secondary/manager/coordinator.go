@@ -661,6 +661,10 @@ func (c *Coordinator) AddPendingRequest(handle *protocol.RequestHandle) {
 	c.state.pendings[handle.Request.GetReqId()] = handle
 }
 
+func (c *Coordinator) CleanupOnError() {
+	// no-op.  Coorindator will cleanup itself in runOnce()
+}
+
 //
 // Update the request upon new proposal.
 //
