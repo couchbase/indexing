@@ -21,6 +21,7 @@ var options struct {
 	kvaddrs   string
 	colocate  bool
 	logFile   string
+	nolog     bool
 	auth      string
 	info      bool
 	debug     bool
@@ -36,6 +37,8 @@ func argParse() string {
 		"whether projector will be colocated with KV")
 	flag.StringVar(&options.logFile, "logFile", "",
 		"output logs to file default is stdout")
+	flag.BoolVar(&options.nolog, "nolog", false,
+		"ignore logging")
 	flag.StringVar(&options.auth, "auth", "",
 		"Auth user and password")
 	flag.BoolVar(&options.info, "info", false,
@@ -66,13 +69,32 @@ func main() {
 	c.SeedProcess()
 
 	cluster := argParse() // eg. "localhost:9000"
-	if options.trace {
+
+	config := c.SystemConfig.Clone()
+	if options.nolog {
+		c.LogIgnore()
+		config.SetValue("log.ignore", true)
+	} else if options.trace {
 		c.SetLogLevel(c.LogLevelTrace)
+		config.SetValue("log.level", "trace")
 	} else if options.debug {
 		c.SetLogLevel(c.LogLevelDebug)
+		config.SetValue("log.level", "debug")
 	} else if options.info {
 		c.SetLogLevel(c.LogLevelInfo)
+		config.SetValue("log.level", "info")
 	}
+	if f := getlogFile(); f != nil {
+		log.Printf("Projector logging to %q\n", f.Name())
+		c.SetLogWriter(f)
+		config.SetValue("log.file", f.Name())
+	}
+	config.SetValue("projector.clusterAddr", cluster)
+	if options.colocate == false {
+		c.Fatalf("Only colocation policy is supported for now!\n")
+	}
+	config.SetValue("projector.colocate", options.colocate)
+	config.SetValue("projector.adminport.listenAddr", options.adminport)
 
 	// setup cbauth
 	if options.auth != "" {
@@ -82,26 +104,14 @@ func main() {
 		}
 	}
 
-	if f := getlogFile(); f != nil {
-		log.Printf("Projector logging to %q\n", f.Name())
-		c.SetLogWriter(f)
-	}
-
-	maxvbs := c.SystemConfig["maxVbuckets"].Int()
-	config := c.SystemConfig.SectionConfig("projector.", true)
-	config.SetValue("clusterAddr", cluster)
+	maxvbs := config["maxVbuckets"].Int()
+	pconf := config.SectionConfig("projector.", true)
 	econf := c.SystemConfig.SectionConfig("endpoint.dataport.", true)
 	epfactory := NewEndpointFactory(cluster, maxvbs, econf)
-	config.SetValue("routerEndpointFactory", epfactory)
-	config.SetValue("colocate", options.colocate)
-	config.SetValue("adminport.listenAddr", options.adminport)
-
-	if !config["colocate"].Bool() {
-		log.Fatal("Only colocation policy is supported for now!")
-	}
+	pconf.SetValue("routerEndpointFactory", epfactory)
 
 	go c.ExitOnStdinClose()
-	projector.NewProjector(maxvbs, config)
+	projector.NewProjector(maxvbs, pconf)
 	<-done
 }
 

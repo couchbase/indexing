@@ -15,7 +15,7 @@ import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 //--------------------
 
 func doBenchmark(cluster, addr string) {
-	qconf := c.SystemConfig.SectionConfig("queryport.indexer.", true)
+	qconf := c.SystemConfig.SectionConfig("indexer.queryport.", true)
 	s, err := queryport.NewServer(addr, serverCallb, qconf)
 	if err != nil {
 		log.Fatal(err)

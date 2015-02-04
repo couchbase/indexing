@@ -37,8 +37,8 @@ type Server struct {
 	nConnections int64
 }
 
-type ServerStats struct {
-	Connections int64
+type serverStats struct {
+	connections int64
 }
 
 // NewServer creates a new queryport daemon.
@@ -64,12 +64,6 @@ func NewServer(
 	go s.listener()
 	c.Infof("%v started ...\n", s.logPrefix)
 	return s, nil
-}
-
-func (s *Server) Statistics() ServerStats {
-	return ServerStats{
-		Connections: atomic.LoadInt64(&s.nConnections),
-	}
 }
 
 // Close queryport daemon.

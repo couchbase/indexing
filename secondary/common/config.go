@@ -114,6 +114,11 @@ var SystemConfig = Config{
 		500,
 	},
 	// projector adminport parameters
+	"projector.adminport.name": ConfigValue{
+		"projector.adminport",
+		"human readable name for this adminport, must be supplied",
+		"projector.adminport",
+	},
 	"projector.adminport.listenAddr": ConfigValue{
 		"",
 		"projector's adminport address listen for request.",
@@ -139,30 +144,7 @@ var SystemConfig = Config{
 		"in bytes, is max. length of adminport http header",
 		1 << 20, // 1 MegaByte
 	},
-	// projector's adminport client
-	"projector.client.retryInterval": ConfigValue{
-		16,
-		"retryInterval, in milliseconds, when connection refused by server",
-		16,
-	},
-	"projector.client.maxRetries": ConfigValue{
-		5,
-		"maximum number of timest to retry",
-		5,
-	},
-	"projector.client.exponentialBackoff": ConfigValue{
-		2,
-		"multiplying factor on retryInterval for every attempt with server",
-		2,
-	},
-	// TODO: This configuration param is same as the above.
-	"projector.client.urlPrefix": ConfigValue{
-		"/adminport/",
-		"url prefix (script-path) for adminport used by projector",
-		"/adminport/",
-	},
 	// projector dataport client parameters
-	// TODO: this configuration option should be tunnable for each feed.
 	"endpoint.dataport.remoteBlock": ConfigValue{
 		true,
 		"should dataport endpoint block when remote is slow ?",
@@ -196,44 +178,65 @@ var SystemConfig = Config{
 			"router to downstream client",
 		1000 * 1024, // bytes
 	},
+	// projector's adminport client, can be used by manager
+	"manager.projectorclient.retryInterval": ConfigValue{
+		16,
+		"retryInterval, in milliseconds when connection refused by server",
+		16,
+	},
+	"manager.projectorclient.maxRetries": ConfigValue{
+		5,
+		"maximum number of times to retry",
+		5,
+	},
+	"manager.projectorclient.exponentialBackoff": ConfigValue{
+		2,
+		"multiplying factor on retryInterval for every attempt with server",
+		2,
+	},
+	"manager.projectorclient.urlPrefix": ConfigValue{
+		"/adminport/",
+		"url prefix (script-path) for adminport used by projector",
+		"/adminport/",
+	},
 	// indexer dataport parameters
-	"projector.dataport.indexer.genServerChanSize": ConfigValue{
+	"indexer.dataport.genServerChanSize": ConfigValue{
 		64,
 		"request channel size of indexer dataport's gen-server routine",
 		64,
 	},
-	"projector.dataport.indexer.maxPayload": ConfigValue{
+	"indexer.dataport.maxPayload": ConfigValue{
 		1000 * 1024,
 		"maximum payload length, in bytes, for receiving data from router",
 		1000 * 1024, // bytes
 	},
-	"projector.dataport.indexer.tcpReadDeadline": ConfigValue{
+	"indexer.dataport.tcpReadDeadline": ConfigValue{
 		10 * 1000,
 		"timeout, in milliseconds, while reading from socket",
 		10 * 1000, // 10s
 	},
 	// indexer queryport configuration
-	"queryport.indexer.maxPayload": ConfigValue{
+	"indexer.queryport.maxPayload": ConfigValue{
 		1000 * 1024,
 		"maximum payload, in bytes, for receiving data from client",
 		1000 * 1024,
 	},
-	"queryport.indexer.readDeadline": ConfigValue{
+	"indexer.queryport.readDeadline": ConfigValue{
 		4000,
 		"timeout, in milliseconds, is timeout while reading from socket",
 		4000,
 	},
-	"queryport.indexer.writeDeadline": ConfigValue{
+	"indexer.queryport.writeDeadline": ConfigValue{
 		4000,
 		"timeout, in milliseconds, is timeout while writing to socket",
 		4000,
 	},
-	"queryport.indexer.pageSize": ConfigValue{
+	"indexer.queryport.pageSize": ConfigValue{
 		1,
 		"number of index-entries that shall be returned as single payload",
 		1,
 	},
-	"queryport.indexer.streamChanSize": ConfigValue{
+	"indexer.queryport.streamChanSize": ConfigValue{
 		16,
 		"size of the buffered channels used to stream request and response.",
 		16,
@@ -276,6 +279,28 @@ var SystemConfig = Config{
 			"from the pool before considering the creation of a new one",
 		1,
 	},
+	// projector's adminport client, can be used by indexer.
+	"indexer.projectorclient.retryInterval": ConfigValue{
+		16,
+		"retryInterval, in milliseconds when connection refused by server",
+		16,
+	},
+	"indexer.projectorclient.maxRetries": ConfigValue{
+		5,
+		"maximum number of times to retry",
+		5,
+	},
+	"indexer.projectorclient.exponentialBackoff": ConfigValue{
+		2,
+		"multiplying factor on retryInterval for every attempt with server",
+		2,
+	},
+	"indexer.projectorclient.urlPrefix": ConfigValue{
+		"/adminport/",
+		"url prefix (script-path) for adminport used by projector",
+		"/adminport/",
+	},
+	// indexer configuration
 	"indexer.scanTimeout": ConfigValue{
 		120000,
 		"timeout, in milliseconds, timeout for index scan processing",
@@ -400,6 +425,8 @@ func NewConfig(data interface{}) (Config, error) {
 	return config, err
 }
 
+// Update config object with data, can be a Config, map[string]interface{},
+// []byte.
 func (config Config) Update(data interface{}) error {
 	switch v := data.(type) {
 	case Config: // Clone
@@ -485,7 +512,7 @@ func (config Config) Set(key string, cv ConfigValue) Config {
 func (config Config) SetValue(key string, value interface{}) error {
 	cv, ok := config[key]
 	if !ok {
-		return errors.New("Invalid config parameter")
+		return errors.New("invalid config parameter")
 	}
 
 	defType := reflect.TypeOf(cv.DefaultVal)
@@ -508,6 +535,7 @@ func (config Config) SetValue(key string, value interface{}) error {
 	return nil
 }
 
+// Json will marshal config into JSON string.
 func (config Config) Json() []byte {
 	kvs := make(map[string]interface{})
 	for key, value := range config {

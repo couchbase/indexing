@@ -72,8 +72,7 @@ func (s *Stream) getEndpoint() string {
 }
 
 func (s *Stream) start() (err error) {
-
-	config := common.SystemConfig.SectionConfig("projector.dataport.indexer.", true)
+	config := common.SystemConfig.SectionConfig("indexer.dataport.", true)
 	maxvbs := common.SystemConfig["maxVbuckets"].Int()
 	s.receiver, err = dataport.NewServer(s.hostStr, maxvbs, config, s.mutch)
 	if err != nil {
@@ -83,7 +82,7 @@ func (s *Stream) start() (err error) {
 	}
 	common.Debugf("Stream.run(): dataport server started on addr %s", s.hostStr)
 
-	// Start the listening go-routine.  
+	// Start the listening go-routine.
 	go s.run()
 
 	// start dataport stream

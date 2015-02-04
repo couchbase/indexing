@@ -90,7 +90,7 @@ func main() {
 	}
 
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
-	dconf := c.SystemConfig.SectionConfig("projector.dataport.indexer.", true)
+	dconf := c.SystemConfig.SectionConfig("indexer.dataport.", true)
 
 	// start dataport servers.
 	for _, endpoint := range options.endpoints {
@@ -113,7 +113,7 @@ func main() {
 		}
 
 		// projector-client
-		cconfig := c.SystemConfig.SectionConfig("projector.client.", true)
+		cconfig := c.SystemConfig.SectionConfig("indexer.projectorclient.", true)
 		projectors[cluster] = projc.NewClient(adminport, maxvbs, cconfig)
 	}
 

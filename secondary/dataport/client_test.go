@@ -16,7 +16,7 @@ func TestClient(t *testing.T) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	prefix := "projector.dataport.indexer."
+	prefix := "indexer.dataport."
 	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
 	daemon, err := NewServer(addr, maxvbuckets, config, appch)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestStreamBegin(t *testing.T) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	prefix := "projector.dataport.indexer."
+	prefix := "indexer.dataport."
 	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
 	daemon, err := NewServer(addr, maxvbuckets, config, appch)
 	if err != nil {
@@ -111,7 +111,7 @@ func TestStreamEnd(t *testing.T) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	prefix := "projector.dataport.indexer."
+	prefix := "indexer.dataport."
 	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
 	daemon, err := NewServer(addr, maxvbuckets, config, appch)
 	if err != nil {

@@ -740,7 +740,7 @@ func string2defnID(id string) uint64 {
 //-----------------
 
 var muclient sync.Mutex
-var singletonClient *qclient.GsiClient = nil
+var singletonClient *qclient.GsiClient
 
 func getSingletonClient(clusterURL string) (*qclient.GsiClient, error) {
 	muclient.Lock()
@@ -750,7 +750,7 @@ func getSingletonClient(clusterURL string) (*qclient.GsiClient, error) {
 		qconf := c.SystemConfig.SectionConfig("queryport.client.", true /*trim*/)
 		client, err := qclient.NewGsiClient(clusterURL, qconf)
 		if err != nil {
-			return nil, fmt.Errorf("NewGsiClient(): %v", err)
+			return nil, fmt.Errorf("in NewGsiClient(): %v", err)
 		}
 		singletonClient = client
 	}

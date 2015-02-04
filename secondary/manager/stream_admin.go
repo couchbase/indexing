@@ -1030,7 +1030,7 @@ func (p *ProjectorStreamClientFactoryImpl) GetClientForNode(server string) Proje
 	}
 
 	//create client for node's projectors
-	config := common.SystemConfig.SectionConfig("projector.client.", true)
+	config := common.SystemConfig.SectionConfig("manager.projectorclient.", true)
 	maxvbs := common.SystemConfig["maxVbuckets"].Int()
 	ap := projectorC.NewClient(HTTP_PREFIX+projAddr+"/adminport/", maxvbs, config)
 	return ap
