@@ -46,13 +46,18 @@ var SystemConfig = Config{
 	// TODO: add configuration for log file-name and other types of writer.
 	"log.ignore": ConfigValue{
 		false,
-		"ignores all logging, irrespective of the log-level",
+		"ignore all logging, irrespective of the log-level",
 		false,
 	},
 	"log.level": ConfigValue{
 		"info",
 		"logging level for the system",
 		"info",
+	},
+	"log.file": ConfigValue{
+		"",
+		"log messages to file",
+		"",
 	},
 	// projector parameters
 	"projector.name": ConfigValue{
@@ -95,12 +100,12 @@ var SystemConfig = Config{
 	},
 	"projector.mutationChanSize": ConfigValue{
 		10000,
-		"channel size of projector's data path routine",
+		"channel size of projector's vbucket workers",
 		10000,
 	},
 	"projector.feedChanSize": ConfigValue{
 		100,
-		"channel size for feed's control path and back path.",
+		"channel size for feed's control path and its back-channel.",
 		100,
 	},
 	"projector.vbucketSyncTimeout": ConfigValue{
@@ -109,11 +114,6 @@ var SystemConfig = Config{
 		500,
 	},
 	// projector adminport parameters
-	"projector.adminport.name": ConfigValue{
-		"projector.adminport",
-		"human readable name for this adminport, must be supplied",
-		"projector.adminport",
-	},
 	"projector.adminport.listenAddr": ConfigValue{
 		"",
 		"projector's adminport address listen for request.",
@@ -126,20 +126,17 @@ var SystemConfig = Config{
 	},
 	"projector.adminport.readTimeout": ConfigValue{
 		0,
-		"timeout in milliseconds, is read timeout for adminport http server " +
-			"used by projector",
+		"timeout in milliseconds, is http server's read timeout",
 		0,
 	},
 	"projector.adminport.writeTimeout": ConfigValue{
 		0,
-		"timeout in milliseconds, is write timeout for adminport http server " +
-			"used by projector",
+		"timeout in milliseconds, is http server's write timeout",
 		0,
 	},
 	"projector.adminport.maxHeaderBytes": ConfigValue{
 		1 << 20, // 1 MegaByte
-		"in bytes, is max. length of adminport http header " +
-			"used by projector",
+		"in bytes, is max. length of adminport http header",
 		1 << 20, // 1 MegaByte
 	},
 	// projector's adminport client
