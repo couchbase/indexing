@@ -420,10 +420,8 @@ func (c *LocalRepoRef) newIterator() (*MetaIterator, error) {
 
 func (c *LocalRepoRef) close() {
 
-	if c.server != nil {
-		c.server.Terminate()
-		c.server = nil
-	}
+	// c.server.Terminate() is idempotent
+	c.server.Terminate()
 }
 
 func getEventType(key string) EventType {

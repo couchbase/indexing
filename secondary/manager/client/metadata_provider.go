@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/gometa/common"
+	"github.com/couchbase/gometa/log"
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -20,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 ///////////////////////////////////////////////////////
@@ -29,6 +31,7 @@ import (
 type MetadataProvider struct {
 	providerId string
 	watchers   map[string]*watcher
+	timeout    int64
 	repo       *metadataRepo
 	mutex      sync.Mutex
 }
@@ -41,13 +44,15 @@ type metadataRepo struct {
 }
 
 type watcher struct {
-	provider   *MetadataProvider
-	leaderAddr string
-	factory    protocol.MsgFactory
-	pendings   map[common.Txnid]protocol.LogEntryMsg
-	killch     chan bool
-	mutex      sync.Mutex
-	indices    map[c.IndexDefnId]interface{}
+	provider    *MetadataProvider
+	leaderAddr  string
+	factory     protocol.MsgFactory
+	pendings    map[common.Txnid]protocol.LogEntryMsg
+	killch      chan bool
+	mutex       sync.Mutex
+	indices     map[c.IndexDefnId]interface{}
+	timerKillCh chan bool
+	isClosed    bool
 
 	incomingReqs chan *protocol.RequestHandle
 	pendingReqs  map[uint64]*protocol.RequestHandle // key : request id
@@ -66,15 +71,25 @@ type InstanceDefn struct {
 	Endpts []c.Endpoint
 }
 
+var REQUEST_CHANNEL_COUNT = 1000
+
 ///////////////////////////////////////////////////////
 // Public function : MetadataProvider
 ///////////////////////////////////////////////////////
 
 func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 
+	if c.IsLogEnabled() {
+		log.LogEnable()
+		log.SetLogLevel(c.LogLevel())
+		//log.SetLogLevel(common.LogLevelTrace)
+		log.SetPrefix("MetadataProvider/Gometa")
+	}
+
 	s = new(MetadataProvider)
 	s.watchers = make(map[string]*watcher)
 	s.repo = newMetadataRepo()
+	s.timeout = int64(time.Minute) * 5
 
 	s.providerId, err = s.getWatcherAddr(providerId)
 	if err != nil {
@@ -83,6 +98,10 @@ func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 	c.Debugf("MetadataProvider.NewMetadataProvider(): MetadataProvider follower ID %s", s.providerId)
 
 	return s, nil
+}
+
+func (o *MetadataProvider) SetTimeout(timeout int64) {
+	o.timeout = timeout
 }
 
 func (o *MetadataProvider) WatchMetadata(indexAdminPort string) {
@@ -322,6 +341,8 @@ func (o *MetadataProvider) startWatcher(addr string) *watcher {
 	// TODO: timeout
 	<-readych
 
+	s.startTimer()
+
 	return s
 }
 
@@ -501,10 +522,11 @@ func newWatcher(o *MetadataProvider, addr string) *watcher {
 	s.killch = make(chan bool, 1) // make it buffered to unblock sender
 	s.factory = message.NewConcreteMsgFactory()
 	s.pendings = make(map[common.Txnid]protocol.LogEntryMsg)
-	s.incomingReqs = make(chan *protocol.RequestHandle)
+	s.incomingReqs = make(chan *protocol.RequestHandle, REQUEST_CHANNEL_COUNT)
 	s.pendingReqs = make(map[uint64]*protocol.RequestHandle)
 	s.loggedReqs = make(map[common.Txnid]*protocol.RequestHandle)
 	s.indices = make(map[c.IndexDefnId]interface{})
+	s.isClosed = false
 
 	return s
 }
@@ -547,9 +569,17 @@ func (w *watcher) cleanupIndices(repo *metadataRepo) {
 
 func (w *watcher) close() {
 
+	// kill the watcherServer
 	if len(w.killch) == 0 {
 		w.killch <- true
 	}
+
+	// kill the timeoutChecker
+	if len(w.timerKillCh) == 0 {
+		w.timerKillCh <- true
+	}
+
+	w.cleanupOnClose()
 }
 
 func (w *watcher) makeRequest(opCode common.OpCode, key string, content []byte) error {
@@ -562,17 +592,100 @@ func (w *watcher) makeRequest(opCode common.OpCode, key string, content []byte) 
 
 	request := w.factory.CreateRequest(id, uint32(opCode), key, content)
 
-	handle := &protocol.RequestHandle{Request: request, Err: nil}
+	handle := &protocol.RequestHandle{Request: request, Err: nil, StartTime: 0}
 	handle.CondVar = sync.NewCond(&handle.Mutex)
 
 	handle.CondVar.L.Lock()
 	defer handle.CondVar.L.Unlock()
 
-	w.incomingReqs <- handle
-
-	handle.CondVar.Wait()
+	if w.queueRequest(handle) {
+		handle.CondVar.Wait()
+	}
 
 	return handle.Err
+}
+
+func (w *watcher) startTimer() {
+
+	w.timerKillCh = make(chan bool, 1)
+	go w.timeoutChecker()
+}
+
+func (w *watcher) timeoutChecker() {
+
+	timer := time.NewTicker(time.Second)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-timer.C:
+			w.cleanupOnTimeout()
+		case <-w.timerKillCh:
+			return
+		}
+	}
+}
+
+func (w *watcher) cleanupOnTimeout() {
+
+	// Mutex for protecting the following go-routine:
+	// 1) WatcherServer main processing loop
+	// 2) Commit / LogProposal / Respond / Abort
+	// 3) CleanupOnClose / CleaupOnError
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	current := time.Now().UnixNano()
+
+	for key, request := range w.pendingReqs {
+		if current-request.StartTime >= w.provider.timeout {
+			delete(w.pendingReqs, key)
+			w.signalError(request, "Request Timeout")
+		}
+	}
+
+	for key, request := range w.loggedReqs {
+		if current-request.StartTime >= w.provider.timeout {
+			delete(w.loggedReqs, key)
+			w.signalError(request, "Request Timeout")
+		}
+	}
+}
+
+func (w *watcher) cleanupOnClose() {
+
+	// Mutex for protecting the following go-routine:
+	// 1) WatcherServer main processing loop
+	// 2) Commit / LogProposal / Respond / Abort
+	// 3) CleanupOnTimeout / CleaupOnError
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	w.isClosed = true
+
+	for len(w.incomingReqs) != 0 {
+		request := <-w.incomingReqs
+		w.signalError(request, "Terminate Request during cleanup")
+	}
+
+	for key, request := range w.pendingReqs {
+		delete(w.pendingReqs, key)
+		w.signalError(request, "Terminate Request during cleanup")
+	}
+
+	for key, request := range w.loggedReqs {
+		delete(w.loggedReqs, key)
+		w.signalError(request, "Terminate Request during cleanup")
+	}
+}
+
+func (w *watcher) signalError(request *protocol.RequestHandle, errStr string) {
+	request.Err = errors.New(errStr)
+	request.CondVar.L.Lock()
+	defer request.CondVar.L.Unlock()
+	request.CondVar.Signal()
 }
 
 ///////////////////////////////////////////////////////
@@ -591,17 +704,67 @@ func isIndexTopologyKey(key string) bool {
 // Interface : RequestMgr
 ///////////////////////////////////////////////////////
 
-func (w *watcher) AddPendingRequest(handle *protocol.RequestHandle) {
+func (w *watcher) queueRequest(handle *protocol.RequestHandle) bool {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
+	if w.isClosed {
+		handle.Err = errors.New("Connection is shutting down.  Cannot process incoming request")
+		return false
+	}
+
+	w.incomingReqs <- handle
+	return true
+}
+
+func (w *watcher) AddPendingRequest(handle *protocol.RequestHandle) {
+
+	// Mutex for protecting the following go-routine:
+	// 1) Commit / LogProposal / Respond / Abort
+	// 2) CleanupOnClose / CleaupOnTimeout / CleanupOnError
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if w.isClosed {
+		w.signalError(handle, "Terminate Request during cleanup")
+		return
+	}
+
 	// remember the request
+	handle.StartTime = time.Now().UnixNano()
 	w.pendingReqs[handle.Request.GetReqId()] = handle
 }
 
 func (w *watcher) GetRequestChannel() <-chan *protocol.RequestHandle {
 
+	// Mutex for protecting the following go-routine:
+	// 1) CleanupOnClose / CleaupOnTimeout
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
 	return (<-chan *protocol.RequestHandle)(w.incomingReqs)
+}
+
+func (w *watcher) CleanupOnError() {
+
+	// Mutex for protecting the following go-routine:
+	// 1) Commit / LogProposal / Respond / Abort
+	// 2) CleanupOnClose / CleaupOnTimeout
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	for key, request := range w.pendingReqs {
+		delete(w.pendingReqs, key)
+		w.signalError(request, "Terminate Request due to server termination")
+	}
+
+	for key, request := range w.loggedReqs {
+		delete(w.loggedReqs, key)
+		w.signalError(request, "Terminate Request due to server termination")
+	}
 }
 
 ///////////////////////////////////////////////////////
