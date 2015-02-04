@@ -388,9 +388,9 @@ var SystemConfig = Config{
 		uint64(0),
 	},
 	"indexer.settings.max_cpu_percent": ConfigValue{
-		100,
+		400,
 		"Maximum nCPUs percent used by the processes",
-		100,
+		400,
 	},
 }
 
