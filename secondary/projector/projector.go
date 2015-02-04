@@ -2,6 +2,7 @@ package projector
 
 import "fmt"
 import "sync"
+import "net/http"
 import "strings"
 import "encoding/json"
 
@@ -405,11 +406,35 @@ func (p *Projector) doStatistics() interface{} {
 		feeds.Set(topic, feed.GetStatistics())
 	}
 	stats.Set("feeds", feeds)
-	data, err := json.Marshal(stats)
-	if err != nil {
-		c.Errorf("%v encoding statistics: %v\n", p.logPrefix, err)
+	return map[string]interface{}(stats)
+}
+
+//--------------
+// http handlers
+//--------------
+
+// handle projector statistics
+func (p *Projector) handleStats(w http.ResponseWriter, r *http.Request) {
+	c.Tracef("%v handleStats()\n", p.logPrefix)
+
+	contentType := r.Header.Get("Content-Type")
+	isJSON := strings.Contains(contentType, "application/json")
+
+	stats := p.doStatistics().(map[string]interface{})
+	if isJSON {
+		data, err := json.Marshal(stats)
+		if err != nil {
+			c.Errorf("%v encoding statistics: %v\n", p.logPrefix, err)
+		}
+		fmt.Fprintf(w, "%s", string(data))
+
+	} else {
+		fmt.Fprintf(w, "%s", c.Statistics(stats).Lines())
 	}
-	return string(data)
+}
+
+// handle settings
+func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // return list of active topics
