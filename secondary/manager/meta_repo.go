@@ -58,6 +58,10 @@ type MetaIterator struct {
 	iterator *repo.RepoIterator
 }
 
+type TopologyIterator struct {
+	iterator *repo.RepoIterator
+}
+
 type Request struct {
 	OpCode string
 	Key    string
@@ -352,7 +356,6 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 // Create a new iterator
 //
 func (c *MetadataRepo) NewIterator() (*MetaIterator, error) {
-
 	return c.repo.newIterator()
 }
 
@@ -382,6 +385,42 @@ func (i *MetaIterator) Next() (string, *common.IndexDefn, error) {
 
 // close iterator
 func (i *MetaIterator) Close() {
+
+	i.iterator.Close()
+}
+
+//
+// Create a new topology iterator
+//
+func (c *MetadataRepo) NewTopologyIterator() (*TopologyIterator, error) {
+	iter, err := c.repo.newIterator()
+	if err != nil {
+		return nil, err
+	}
+	return &TopologyIterator{iterator: iter.iterator}, nil
+}
+
+// Get value from iterator
+func (i *TopologyIterator) Next() (*IndexTopology, error) {
+
+	for {
+		key, content, err := i.iterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		if isIndexTopologyKey(key) {
+			topology, err := unmarshallIndexTopology(content)
+			if err != nil {
+				return nil, err
+			}
+			return topology, nil
+		}
+	}
+}
+
+// close iterator
+func (i *TopologyIterator) Close() {
 
 	i.iterator.Close()
 }

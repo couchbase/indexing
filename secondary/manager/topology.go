@@ -10,8 +10,8 @@
 package manager
 
 import (
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
 )
@@ -298,14 +298,14 @@ func (t *IndexTopology) ChangeStateForIndexInstByDefn(defnId common.IndexDefnId,
 //
 // Update Index Status on instance
 //
-func (t *IndexTopology) GetStateByDefn(defnId common.IndexDefnId) common.IndexState {
+func (t *IndexTopology) GetStatusByDefn(defnId common.IndexDefnId) (common.IndexState, string) {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
-			return common.IndexState(t.Definitions[i].Instances[0].State)
+			return common.IndexState(t.Definitions[i].Instances[0].State), t.Definitions[i].Instances[0].Error
 		}
 	}
-	return common.INDEX_STATE_NIL
+	return common.INDEX_STATE_NIL, ""
 }
 
 //

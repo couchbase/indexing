@@ -33,7 +33,6 @@ var USE_MASTER_REPO = false
 type IndexManager struct {
 	repo          *MetadataRepo
 	coordinator   *Coordinator
-	reqHandler    *requestHandler
 	eventMgr      *eventManager
 	lifecycleMgr  *LifecycleMgr
 	requestServer RequestServer
@@ -180,13 +179,8 @@ func NewIndexManagerInternal(
 	// start lifecycle manager
 	mgr.lifecycleMgr.Run(mgr.repo)
 
-	// Initialize request handler.  This is non-blocking.  The index manager
-	// will not be able handle new request until request handler is done initialization.
-	//mgr.reqHandler, err = NewRequestHandler(mgr)
-	//if err != nil {
-	//    mgr.Close()
-	//    return nil, err
-	//}
+	// register request handler
+	registerRequestHandler(mgr)
 
 	// coordinator
 	mgr.coordinator = nil
@@ -249,10 +243,6 @@ func (m *IndexManager) Close() {
 
 	if m.eventMgr != nil {
 		m.eventMgr.close()
-	}
-
-	if m.reqHandler != nil {
-		m.reqHandler.close()
 	}
 
 	if m.lifecycleMgr != nil {
@@ -377,28 +367,28 @@ func (m *IndexManager) StopListenTopologyUpdate(id string) {
 //
 func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 
-	if USE_MASTER_REPO {
-		//
-		// Save the index definition
-		//
-		content, err := common.MarshallIndexDefn(defn)
-		if err != nil {
-			return err
-		}
+	key := fmt.Sprintf("%d", defn.DefnId)
+	content, err := common.MarshallIndexDefn(defn)
+	if err != nil {
+		return err
+	}
 
+	if USE_MASTER_REPO {
 		if !m.coordinator.NewRequest(uint32(OPCODE_ADD_IDX_DEFN), indexDefnIdStr(defn.DefnId), content) {
 			// TODO: double check if it exists in the dictionary
 			return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, INDEX_MANAGER, nil,
 				fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
 		}
 	} else {
-		return m.lifecycleMgr.CreateIndex(defn)
+		return m.requestServer.MakeRequest(client.OPCODE_CREATE_INDEX, key, content)
 	}
 
 	return nil
 }
 
 func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
+
+	key := fmt.Sprintf("%d", defnId)
 
 	if USE_MASTER_REPO {
 
@@ -408,7 +398,7 @@ func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
 				fmt.Sprintf("Fail to complete processing delete index statement for index id = '%d'", defnId))
 		}
 	} else {
-		return m.lifecycleMgr.DeleteIndex(defnId)
+		return m.requestServer.MakeRequest(client.OPCODE_DROP_INDEX, key, []byte(""))
 	}
 
 	return nil
@@ -552,6 +542,15 @@ func (m *IndexManager) getTimer() *Timer {
 ///////////////////////////////////////////////////////
 // package local function
 ///////////////////////////////////////////////////////
+
+//
+// Get MetadataRepo
+// Any caller uses MetadatdaRepo should only for read purpose.
+// Writer operation should go through LifecycleMgr
+//
+func (m *IndexManager) getMetadataRepo() *MetadataRepo {
+	return m.repo
+}
 
 //
 // Get lifecycle manager

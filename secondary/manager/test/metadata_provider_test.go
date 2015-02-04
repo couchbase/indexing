@@ -13,6 +13,7 @@ import (
 	"fmt"
 	c "github.com/couchbase/gometa/common"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
@@ -33,7 +34,7 @@ type notifier struct {
 // For this test, use Index Defn Id from 100 - 110
 func TestMetadataProvider(t *testing.T) {
 
-	common.LogEnable()
+	logging.LogEnable()
 	logging.SetLogLevel(logging.LogLevelTrace)
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
@@ -43,10 +44,11 @@ func TestMetadataProvider(t *testing.T) {
 	logging.Infof("Start Index Manager *********************************************************")
 
 	var msgAddr = "localhost:9884"
+	var httpAddr = "localhost:9885"
 	factory := new(util.TestDefaultClientFactory)
 	env := new(util.TestDefaultClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
-	addrPrv := util.NewFakeAddressProvider(msgAddr)
+	addrPrv := util.NewFakeAddressProvider(msgAddr, httpAddr)
 	mgr, err := manager.NewIndexManagerInternal(addrPrv, admin, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +178,7 @@ func TestMetadataProvider(t *testing.T) {
 	if meta = lookup(provider, newDefnId); meta == nil {
 		t.Fatal(fmt.Sprintf("Cannot Found Index Defn %d from MetadataProvider", newDefnId))
 	} else {
-		loggingn.Infof("Found Index Defn %d", newDefnId)
+		logging.Infof("Found Index Defn %d", newDefnId)
 		logging.Infof("meta.Instance %v", meta.Instances)
 		if meta.Instances[0].IndexerId != indexerId {
 			t.Fatal(fmt.Sprintf("Index Defn %v has incorrect endpoint", newDefnId))

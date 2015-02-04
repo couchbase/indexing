@@ -178,7 +178,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 			return err
 		}
 
-		state := topology.GetStateByDefn(existDefn.DefnId)
+		state, _ := topology.GetStatusByDefn(existDefn.DefnId)
 		if state != common.INDEX_STATE_NIL && state != common.INDEX_STATE_DELETED {
 			return errors.New(fmt.Sprintf("Index %s.%s already exist", defn.Bucket, defn.Name))
 		}
