@@ -480,7 +480,13 @@ func (si *secondaryIndex) Condition() expression.Expression {
 }
 
 // State implement Index{} interface.
-func (si *secondaryIndex) State() (state datastore.IndexState, msg string, err errors.Error) {
+func (si *secondaryIndex) State() (datastore.IndexState, string, errors.Error) {
+	if si.err != "" {
+		// if err is not empty, return OFFLINE with error reason
+		// and the state in which the error occured.
+		msg := fmt.Printf("while in state %v", si.state)
+		return datastore.OFFLINE, msg, errors.NewError(si.err, msg)
+	}
 	return si.state, "", nil
 }
 
