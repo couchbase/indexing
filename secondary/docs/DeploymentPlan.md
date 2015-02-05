@@ -22,9 +22,9 @@ WITH `{"nodes": ["node_addr"], "defer_build": true}````
 
 ####Setup
  
-**Node1**(172.16.1.174:9000) - kv+index+n1ql  (**"indexAdmin":"9100"**)
+**Node1**(172.16.1.174:9000) - kv+index+n1ql  
 
-**Node2**(127.0.0.1:9001)    - index (**"indexAdmin":"9106"**)
+**Node2**(127.0.0.1:9001)    - index 
 
 
 
@@ -36,14 +36,14 @@ WITH `{"nodes": ["node_addr"], "defer_build": true}````
 ```CREATE INDEX index_abv 
 ON `beer-sample`(abv) 
 USING GSI 
-WITH `{"nodes": ["172.16.1.174:9100"]}`;```
+WITH `{"nodes": ["172.16.1.174:9000"]}`;```
 
 Index index_abv gets deployed on node 172.16.1.174:9000 and build is triggered immediately.
 
 ```CREATE INDEX index_type
 ON `beer-sample`(type) 
 USING GSI 
-WITH `{"nodes": ["127.0.0.1:9106"]}`;```
+WITH `{"nodes": ["127.0.0.1:9001"]}`;```
 
 Index index_type gets deployed on node 127.0.0.1:9001 and build is triggered immediately.
 
@@ -83,14 +83,14 @@ Build for indexes index_abv and index_type gets triggered.
 ```CREATE INDEX index_abv 
 ON `beer-sample`(abv) 
 USING GSI 
-WITH `{"nodes": ["172.16.1.174:9100"], "defer_build": true}`;```
+WITH `{"nodes": ["172.16.1.174:9000"], "defer_build": true}`;```
 
 Index index_abv gets deployed on node 172.16.1.174:9000 and build is not triggered.
 
 ```CREATE INDEX index_type
 ON `beer-sample`(type) 
 USING GSI 
-WITH `{"nodes": ["127.0.0.1:9106"], "defer_build": true}`'```
+WITH `{"nodes": ["127.0.0.1:9100"], "defer_build": true}`'```
 
 Index index_abv gets deployed on node 127.0.0.1:9001 and build is not triggered.
 
