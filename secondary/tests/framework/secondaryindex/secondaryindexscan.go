@@ -2,7 +2,6 @@ package secondaryindex
 
 import (
 	"errors"
-	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
