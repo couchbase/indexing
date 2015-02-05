@@ -127,7 +127,7 @@ func NewIndexManagerInternal(
 
 	if common.IsLogEnabled() {
 		gometaL.LogEnable()
-		gometaL.SetLogLevel(common.LogLevel())
+		gometaL.SetLogLevel(int(common.LogLevel()))
 		//gometaL.SetLogLevel(common.LogLevelInfo)
 		gometaL.SetPrefix("Indexing/Gometa")
 	}

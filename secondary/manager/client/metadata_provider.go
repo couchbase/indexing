@@ -84,7 +84,7 @@ func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 
 	if c.IsLogEnabled() {
 		log.LogEnable()
-		log.SetLogLevel(c.LogLevel())
+		log.SetLogLevel(int(c.LogLevel()))
 		//log.SetLogLevel(common.LogLevelTrace)
 		log.SetPrefix("MetadataProvider/Gometa")
 	}

@@ -77,6 +77,16 @@ func (p *Projector) SetConfig(config c.Config) {
 	p.clusterAddr = pconf["clusterAddr"].String()
 	p.adminport = pconf["adminport.listenAddr"].String()
 
+	// update loglevel
+	switch p.config["log.level"].String() {
+	case "info":
+		c.SetLogLevel(c.LogLevelInfo)
+	case "debug":
+		c.SetLogLevel(c.LogLevelDebug)
+	case "trace":
+		c.SetLogLevel(c.LogLevelTrace)
+	}
+
 	p.config["projector.routerEndpointFactory"] = ef // IMPORTANT: skip override
 }
 
@@ -488,19 +498,23 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 	case "POST":
 		dataIn := make([]byte, r.ContentLength)
+		// read settings
 		if err := requestRead(r.Body, dataIn); err != nil {
 			c.Errorf("%v handleSettings() POST: %v\n", p.logPrefix, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// parse settings
 		newConfig := make(map[string]interface{})
 		if err := json.Unmarshal(dataIn, &newConfig); err != nil {
 			c.Errorf("%v handleSettings() json decoding: %v\n", p.logPrefix, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		}
+		// update projector settings
 		c.Infof("%v updating projector config ...\n", p.logPrefix)
 		config, _ := c.NewConfig(newConfig)
 		p.SetConfig(config)
+		// update feed settings
 		for _, feed := range p.GetFeeds() {
 			feed.SetConfig(p.GetConfig())
 		}

@@ -5,20 +5,19 @@ import "io/ioutil"
 import "log"
 import "os"
 import "strings"
-import "sync"
+import "sync/atomic"
 
 // Error, Warning, Fatal are always logged
 const (
 	// LogLevelInfo log messages for info
-	LogLevelInfo int = iota + 1
+	LogLevelInfo int32 = iota + 1
 	// LogLevelDebug log messages for info and debug
 	LogLevelDebug
 	// LogLevelTrace log messages info, debug and trace
 	LogLevelTrace
 )
 
-var logrw sync.RWMutex
-var logLevel int
+var logLevel int32
 var logFile io.Writer = os.Stdout
 var logger *log.Logger
 
@@ -51,10 +50,8 @@ func init() {
 }
 
 // LogLevel returns current log level
-func LogLevel() int {
-	logrw.RLock()
-	defer logrw.RUnlock()
-	return logLevel
+func LogLevel() int32 {
+	return atomic.LoadInt32(&logLevel)
 }
 
 // LogIgnore to ignore all log messages.
@@ -73,10 +70,8 @@ func IsLogEnabled() bool {
 }
 
 // SetLogLevel sets current log level
-func SetLogLevel(level int) {
-	logrw.Lock()
-	defer logrw.Unlock()
-	logLevel = level
+func SetLogLevel(level int32) {
+	atomic.StoreInt32(&logLevel, int32(level))
 }
 
 // SetLogWriter sets output file for log messages
@@ -110,9 +105,8 @@ func Fatalf(format string, v ...interface{}) {
 
 // Infof if logLevel >= Info
 func Infof(format string, v ...interface{}) {
-	logrw.RLock()
-	defer logrw.RUnlock()
-	if logLevel >= LogLevelInfo {
+	level := atomic.LoadInt32(&logLevel)
+	if level >= LogLevelInfo {
 		logger.Printf("[INFO ] "+format, v...)
 	}
 }
@@ -123,9 +117,8 @@ func Infof(format string, v ...interface{}) {
 
 // Debugf if logLevel >= Debug
 func Debugf(format string, v ...interface{}) {
-	logrw.RLock()
-	defer logrw.RUnlock()
-	if logLevel >= LogLevelDebug {
+	level := atomic.LoadInt32(&logLevel)
+	if level >= LogLevelDebug {
 		logger.Printf("[DEBUG] "+format, v...)
 	}
 }
@@ -136,9 +129,8 @@ func Debugf(format string, v ...interface{}) {
 
 // Tracef if logLevel >= Trace
 func Tracef(format string, v ...interface{}) {
-	logrw.RLock()
-	defer logrw.RUnlock()
-	if logLevel >= LogLevelTrace {
+	level := atomic.LoadInt32(&logLevel)
+	if level >= LogLevelTrace {
 		logger.Printf("[TRACE] "+format, v...)
 	}
 }
