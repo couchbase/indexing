@@ -36,7 +36,7 @@ func init() {
 	if _, err := cbauth.InternalRetryDefaultInit(kvaddress, clusterconfig.Username, clusterconfig.Password); err != nil {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
 	}
-
+	secondaryindex.CheckCollation = true
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	time.Sleep(5 * time.Second)
 	// Working with Users10k and Users_mut dataset.
