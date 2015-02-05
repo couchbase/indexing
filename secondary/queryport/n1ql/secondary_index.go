@@ -480,8 +480,8 @@ func (si *secondaryIndex) Condition() expression.Expression {
 }
 
 // State implement Index{} interface.
-func (si *secondaryIndex) State() (datastore.IndexState, errors.Error) {
-	return si.state, nil
+func (si *secondaryIndex) State() (state datastore.IndexState, msg string, err errors.Error) {
+	return si.state, "", nil
 }
 
 // Statistics implement Index{} interface.
