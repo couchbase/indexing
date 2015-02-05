@@ -105,7 +105,16 @@ const (
 	fCmdShutdown
 	fCmdGetTopicResponse
 	fCmdGetStatistics
+	fCmdSetConfig
 )
+
+// SetConfig for this feed.
+func (feed *Feed) SetConfig(config c.Config) error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdSetConfig, config, respch}
+	_, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return err
+}
 
 // MutationTopic will start the feed.
 // Synchronous call.
@@ -424,6 +433,11 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 	case fCmdGetStatistics:
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.getStatistics()}
+
+	case fCmdSetConfig:
+		config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
+		feed.setConfig(config)
+		respch <- []interface{}{nil}
 
 	case fCmdShutdown:
 		respch := msg[1].(chan []interface{})
@@ -839,6 +853,31 @@ func (feed *Feed) getStatistics() c.Statistics {
 	return stats
 }
 
+func (feed *Feed) setConfig(config c.Config) {
+	feed.config = feed.config.Override(config)
+
+	pconf := feed.config.SectionConfig("projector.", true /*trim*/)
+	epf := pconf["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
+	feed.reqTimeout = time.Duration(pconf["feedWaitStreamReqTimeout"].Int())
+	feed.endTimeout = time.Duration(pconf["feedWaitStreamEndTimeout"].Int())
+	feed.epFactory = epf
+	c.Infof("%v updated configuration ...\n", feed.logPrefix)
+	c.Infof(
+		"%v feedWaitStreamReqTimeout : %v*1000\n",
+		feed.logPrefix, feed.reqTimeout)
+	c.Infof(
+		"%v feedWaitStreamEndTimeout : %v*1000\n",
+		feed.logPrefix, feed.endTimeout)
+	for _, kvdata := range feed.kvdata {
+		kvdata.SetConfig(pconf)
+	}
+
+	econf := feed.config.SectionConfig("endpoint.dataport.", true /*trim*/)
+	for _, endpoint := range feed.endpoints {
+		endpoint.SetConfig(econf)
+	}
+}
+
 func (feed *Feed) shutdown() error {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1034,7 +1073,7 @@ func (feed *Feed) startDataPath(
 		kvdata.UpdateTs(ts)
 	} else { // pass engines & endpoints to kvdata.
 		engs, ends := feed.engines[bucketn], feed.endpoints
-		kvdata = NewKVData(feed, bucketn, ts, engs, ends, mutch)
+		kvdata = NewKVData(feed, bucketn, ts, engs, ends, mutch, feed.config)
 	}
 	return kvdata
 }

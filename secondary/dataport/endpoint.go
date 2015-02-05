@@ -212,14 +212,23 @@ loop:
 				}
 
 			case endpCmdSetConfig:
+				prefix := endpoint.logPrefix
 				config := msg[1].(c.Config)
 				endpoint.block = config["remoteBlock"].Bool()
 				endpoint.bufferSize = config["bufferSize"].Int()
-				endpoint.bufferTm = time.Duration(config["bufferTimeout"].Int())
-				endpoint.harakiriTm = time.Duration(config["harakiriTimeout"].Int())
+				endpoint.bufferTm =
+					time.Duration(config["bufferTimeout"].Int())
+				endpoint.harakiriTm =
+					time.Duration(config["harakiriTimeout"].Int())
 				flushTimeout = time.Tick(endpoint.bufferTm * time.Millisecond)
+				c.Infof("%v updated configuration ...\n", prefix)
+				c.Infof("%v block : %v\n", prefix, endpoint.block)
+				c.Infof("%v bufferSize : %v\n", prefix, endpoint.bufferSize)
+				c.Infof("%v bufferTm : %v\n", prefix, endpoint.bufferTm)
 				if harakiri != nil { // load harakiri only when it is active
 					harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
+					infomsg := "%v reloaded harakiriTm: %v\n"
+					c.Infof(infomsg, prefix, endpoint.harakiriTm)
 				}
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{nil}

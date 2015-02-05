@@ -82,6 +82,7 @@ var SystemConfig = Config{
 			"`kvaddrs` specified above will be discarded",
 		true,
 	},
+	// Projector feed settings
 	"projector.routerEndpointFactory": ConfigValue{
 		RouterEndpointFactory(nil),
 		"RouterEndpointFactory callback to generate endpoint instances " +

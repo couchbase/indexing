@@ -105,13 +105,12 @@ func main() {
 	}
 
 	maxvbs := config["maxVbuckets"].Int()
-	pconf := config.SectionConfig("projector.", true)
 	econf := c.SystemConfig.SectionConfig("endpoint.dataport.", true)
 	epfactory := NewEndpointFactory(cluster, maxvbs, econf)
-	pconf.SetValue("routerEndpointFactory", epfactory)
+	config.SetValue("projector.routerEndpointFactory", epfactory)
 
 	go c.ExitOnStdinClose()
-	projector.NewProjector(maxvbs, pconf)
+	projector.NewProjector(maxvbs, config)
 	<-done
 }
 

@@ -70,6 +70,7 @@ const (
 	vrCmdAddEngines
 	vrCmdDeleteEngines
 	vrCmdGetStatistics
+	vrCmdSetConfig
 )
 
 // Event will post an UprEvent, asychronous call.
@@ -106,6 +107,14 @@ func (vr *VbucketRoutine) GetStatistics() map[string]interface{} {
 	cmd := []interface{}{vrCmdGetStatistics, respch}
 	resp, _ := c.FailsafeOp(vr.reqch, respch, cmd, vr.finch)
 	return resp[0].(map[string]interface{})
+}
+
+// SetConfig for vbucket-routine.
+func (vr *VbucketRoutine) SetConfig(config c.Config) error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{vrCmdSetConfig, config, respch}
+	_, err := c.FailsafeOp(vr.reqch, respch, cmd, vr.finch)
+	return err
 }
 
 // routine handles data path for a single vbucket.
@@ -185,6 +194,18 @@ loop:
 				stats.Set("snapshots", sshotCount)
 				stats.Set("mutations", mutationCount)
 				respch <- []interface{}{stats.ToMap()}
+
+			case vrCmdSetConfig:
+				config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
+				vr.syncTimeout = time.Duration(config["vbucketSyncTimeout"].Int())
+				vr.syncTimeout *= time.Millisecond
+				// re-initialize the heart beat only if it is already started.
+				if heartBeat != nil {
+					infomsg := "%v heart-beat reloaded: %v\n"
+					c.Infof(infomsg, vr.logPrefix, vr.syncTimeout)
+					heartBeat = time.Tick(vr.syncTimeout)
+				}
+				respch <- []interface{}{nil}
 
 			case vrCmdEvent:
 				m := msg[1].(*mc.UprEvent)

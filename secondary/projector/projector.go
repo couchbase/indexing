@@ -2,6 +2,7 @@ package projector
 
 import "fmt"
 import "sync"
+import "io"
 import "net/http"
 import "strings"
 import "encoding/json"
@@ -16,16 +17,16 @@ import "github.com/couchbaselabs/goprotobuf/proto"
 // one or more upstream kv-nodes. Works in tandem with
 // projector's adminport.
 type Projector struct {
+	admind ap.Server // admin-port server
+	// lock protected fields.
 	mu     sync.RWMutex
-	admind ap.Server        // admin-port server
 	topics map[string]*Feed // active topics
-
+	config c.Config         // full configuration information.
 	// config params
 	name        string // human readable name of the projector
 	clusterAddr string // kv cluster's address to connect
 	adminport   string // projector listens on this adminport
 	maxvbs      int
-	config      c.Config // full configuration information.
 	logPrefix   string
 }
 
@@ -33,20 +34,19 @@ type Projector struct {
 // starts a corresponding adminport.
 func NewProjector(maxvbs int, config c.Config) *Projector {
 	p := &Projector{
-		name:        config["name"].String(),
-		clusterAddr: config["clusterAddr"].String(),
-		topics:      make(map[string]*Feed),
-		maxvbs:      maxvbs,
-		adminport:   config["adminport.listenAddr"].String(),
-		config:      config,
+		topics: make(map[string]*Feed),
+		maxvbs: maxvbs,
+		config: config,
 	}
+	p.SetConfig(config)
+
 	cluster := p.clusterAddr
 	if !strings.HasPrefix(p.clusterAddr, "http://") {
 		cluster = "http://" + cluster
 	}
 	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
 
-	apConfig := config.SectionConfig("adminport.", true)
+	apConfig := p.config.SectionConfig("projector.adminport.", true)
 	apConfig.SetValue("name", "PRAM")
 	reqch := make(chan ap.Request)
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
@@ -54,6 +54,48 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	go p.mainAdminPort(reqch)
 	c.Infof("%v started ...\n", p.logPrefix)
 	return p
+}
+
+// GetConfig returns the config object from projector.
+func (p *Projector) GetConfig() c.Config {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.config
+}
+
+// SetConfig accepts a full-set or subset of global configuration
+// and updates projector related fields.
+func (p *Projector) SetConfig(config c.Config) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	ef := p.config["projector.routerEndpointFactory"]
+	p.config = p.config.Override(config)
+
+	pconf := p.config.SectionConfig("projector.", true /*trim*/)
+	p.name = pconf["name"].String()
+	p.clusterAddr = pconf["clusterAddr"].String()
+	p.adminport = pconf["adminport.listenAddr"].String()
+
+	p.config["projector.routerEndpointFactory"] = ef // IMPORTANT: skip override
+}
+
+// GetFeedConfig from current configuration settings.
+func (p *Projector) GetFeedConfig(topic string) c.Config {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	config, _ := c.NewConfig(map[string]interface{}{})
+	pconf := p.config.SectionConfig("projector.", true /*trim*/)
+	config.SetValue("maxVbuckets", p.maxvbs)
+	config.Set("clusterAddr", pconf["clusterAddr"])
+	config.Set("feedWaitStreamReqTimeout", pconf["feedWaitStreamReqTimeout"])
+	config.Set("feedWaitStreamEndTimeout", pconf["feedWaitStreamEndTimeout"])
+	config.Set("feedChanSize", pconf["feedChanSize"])
+	config.Set("mutationChanSize", pconf["mutationChanSize"])
+	config.Set("vbucketSyncTimeout", pconf["vbucketSyncTimeout"])
+	config.Set("routerEndpointFactory", pconf["routerEndpointFactory"])
+	return config
 }
 
 // GetFeed object for `topic`.
@@ -66,6 +108,18 @@ func (p *Projector) GetFeed(topic string) (*Feed, error) {
 		return feed, nil
 	}
 	return nil, projC.ErrorTopicMissing
+}
+
+// GetFeeds return a list of all feeds.
+func (p *Projector) GetFeeds() []*Feed {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	feeds := make([]*Feed, 0)
+	for _, feed := range p.topics {
+		feeds = append(feeds, feed)
+	}
+	return feeds
 }
 
 // AddFeed object for `topic`.
@@ -193,20 +247,10 @@ func (p *Projector) doMutationTopic(
 	c.Tracef("%v doMutationTopic()\n", p.logPrefix)
 	topic := request.GetTopic()
 
-	config, _ := c.NewConfig(map[string]interface{}{})
-	config.SetValue("maxVbuckets", p.maxvbs)
-	config.Set("clusterAddr", p.config["clusterAddr"])
-	config.Set("feedWaitStreamReqTimeout", p.config["feedWaitStreamReqTimeout"])
-	config.Set("feedWaitStreamEndTimeout", p.config["feedWaitStreamEndTimeout"])
-	config.Set("feedChanSize", p.config["feedChanSize"])
-	config.Set("mutationChanSize", p.config["mutationChanSize"])
-	config.Set("vbucketSyncTimeout", p.config["vbucketSyncTimeout"])
-	config.Set("routerEndpointFactory", p.config["routerEndpointFactory"])
-
 	var err error
-
 	feed, _ := p.GetFeed(topic)
 	if feed == nil {
+		config := p.GetFeedConfig(topic)
 		feed, err = NewFeed(topic, config)
 		if err != nil {
 			return (&protobuf.TopicResponse{}).SetErr(err)
@@ -415,7 +459,7 @@ func (p *Projector) doStatistics() interface{} {
 
 // handle projector statistics
 func (p *Projector) handleStats(w http.ResponseWriter, r *http.Request) {
-	c.Tracef("%v handleStats()\n", p.logPrefix)
+	c.Infof("%s Request %q\n", p.logPrefix, r.URL.Path)
 
 	contentType := r.Header.Get("Content-Type")
 	isJSON := strings.Contains(contentType, "application/json")
@@ -425,16 +469,45 @@ func (p *Projector) handleStats(w http.ResponseWriter, r *http.Request) {
 		data, err := json.Marshal(stats)
 		if err != nil {
 			c.Errorf("%v encoding statistics: %v\n", p.logPrefix, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 		}
 		fmt.Fprintf(w, "%s", string(data))
-
-	} else {
-		fmt.Fprintf(w, "%s", c.Statistics(stats).Lines())
+		return
 	}
+	fmt.Fprintf(w, "%s", c.Statistics(stats).Lines())
 }
 
 // handle settings
 func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
+	c.Infof("%s Request %q %q\n", p.logPrefix, r.Method, r.URL.Path)
+	switch r.Method {
+	case "GET":
+		header := w.Header()
+		header["Content-Type"] = []string{"application/json"}
+		fmt.Fprintf(w, "%s", string(p.GetConfig().Json()))
+
+	case "POST":
+		dataIn := make([]byte, r.ContentLength)
+		if err := requestRead(r.Body, dataIn); err != nil {
+			c.Errorf("%v handleSettings() POST: %v\n", p.logPrefix, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		newConfig := make(map[string]interface{})
+		if err := json.Unmarshal(dataIn, &newConfig); err != nil {
+			c.Errorf("%v handleSettings() json decoding: %v\n", p.logPrefix, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+		c.Infof("%v updating projector config ...\n", p.logPrefix)
+		config, _ := c.NewConfig(newConfig)
+		p.SetConfig(config)
+		for _, feed := range p.GetFeeds() {
+			feed.SetConfig(p.GetConfig())
+		}
+
+	default:
+		http.Error(w, "only GET POST supported", http.StatusMethodNotAllowed)
+	}
 }
 
 // return list of active topics
@@ -444,4 +517,22 @@ func (p *Projector) listTopics() []string {
 		topics = append(topics, topic)
 	}
 	return topics
+}
+
+func requestRead(r io.Reader, data []byte) (err error) {
+	var c int
+
+	n, start := len(data), 0
+	for n > 0 && err == nil {
+		// Per http://golang.org/pkg/io/#Reader, it is valid for Read to
+		// return EOF with non-zero number of bytes at the end of the
+		// input stream
+		c, err = r.Read(data[start:])
+		n -= c
+		start += c
+	}
+	if n == 0 {
+		return nil
+	}
+	return err
 }

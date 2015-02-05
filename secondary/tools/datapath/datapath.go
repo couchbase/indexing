@@ -103,12 +103,12 @@ func main() {
 	for _, cluster := range clusters {
 		adminport := getProjectorAdminport(cluster, "default")
 		if options.projector {
-			config := c.SystemConfig.SectionConfig("projector.", true)
-			config.SetValue("clusterAddr", cluster)
-			config.SetValue("adminport.listenAddr", adminport)
+			config := c.SystemConfig.Clone()
+			config.SetValue("projector.clusterAddr", cluster)
+			config.SetValue("projector.adminport.listenAddr", adminport)
 			econf := c.SystemConfig.SectionConfig("endpoint.dataport.", true)
 			epfactory := NewEndpointFactory(cluster, maxvbs, econf)
-			config.SetValue("routerEndpointFactory", epfactory)
+			config.SetValue("projector.routerEndpointFactory", epfactory)
 			projector.NewProjector(maxvbs, config) // start projector daemon
 		}
 
