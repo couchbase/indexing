@@ -413,7 +413,7 @@ func (config Config) Update(data interface{}) error {
 	case map[string]interface{}: // transform
 		for key, value := range v {
 			if err := config.SetValue(key, value); err != nil {
-				return err
+				Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
 			}
 		}
 
@@ -424,7 +424,7 @@ func (config Config) Update(data interface{}) error {
 		}
 		for key, value := range m {
 			if err := config.SetValue(key, value); err != nil {
-				return err
+				Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
 			}
 		}
 
