@@ -382,7 +382,7 @@ func (p *Projector) doShutdownTopic(
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		c.Errorf("%v %v\n", p.logPrefix, err)
+		c.Errorf("%v topic %v: %v\n", p.logPrefix, topic, err)
 		return protobuf.NewError(err)
 	}
 

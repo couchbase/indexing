@@ -485,6 +485,8 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
 		kvdata := feed.startDataPath(bucketn, feeder, ts)
+		engines, _ := feed.engines[bucketn]
+		kvdata.AddEngines(engines, feed.endpoints)
 		feed.kvdata[bucketn] = kvdata // :SideEffect:
 		// wait for stream to start ...
 		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
@@ -563,6 +565,8 @@ func (feed *Feed) restartVbuckets(
 		// open data-path, if not already open.
 		if _, ok := feed.kvdata[bucketn]; !ok {
 			kvdata := feed.startDataPath(bucketn, feeder, ts)
+			engines, _ := feed.engines[bucketn]
+			kvdata.AddEngines(engines, feed.endpoints)
 			feed.kvdata[bucketn] = kvdata // :SideEffect:
 		}
 		// wait stream to start ...
@@ -692,6 +696,8 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
 		kvdata := feed.startDataPath(bucketn, feeder, ts)
+		engines, _ := feed.engines[bucketn]
+		kvdata.AddEngines(engines, feed.endpoints)
 		feed.kvdata[bucketn] = kvdata // :SideEffect:
 		// wait for stream to start ...
 		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
