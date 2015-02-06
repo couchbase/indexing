@@ -11,9 +11,10 @@ package common
 
 import (
 	"bytes"
-	"crypto/rand"
+	crypt "crypto/rand"
 	"encoding/binary"
 	"io"
+	rnd "math/rand"
 	"strconv"
 )
 
@@ -21,7 +22,7 @@ type UUID []byte
 
 func NewUUID() (UUID, error) {
 	uuid := make([]byte, 8)
-	n, err := io.ReadFull(rand.Reader, uuid)
+	n, err := io.ReadFull(crypt.Reader, uuid)
 	if n != len(uuid) || err != nil {
 		return UUID(nil), err
 	}
@@ -41,4 +42,12 @@ func (u UUID) Str() string {
 		buf.WriteString(strconv.FormatUint(uint64(u[i]), 16))
 	}
 	return buf.String()
+}
+
+func SeedProcess() {
+	uuid, err := NewUUID()
+	if err != nil {
+		seed := uuid.Uint64()
+		rnd.Seed(int64(seed))
+	}
 }

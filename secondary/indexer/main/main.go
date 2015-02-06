@@ -43,9 +43,10 @@ func MaybeSetEnv(key, value string) {
 }
 
 func main() {
-
 	common.HideConsole(true)
 	defer common.HideConsole(false)
+	common.SeedProcess()
+
 	flag.Parse()
 
 	// setup cbauth
