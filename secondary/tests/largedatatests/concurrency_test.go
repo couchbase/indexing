@@ -364,13 +364,15 @@ func TestConcurrentScans_MultipleIndexes(t *testing.T) {
 	wg.Wait()
 }
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
 func random_num(min, max float64) float64 {
-	rand.Seed(time.Now().UnixNano() + 100)
 	return rand.Float64()*(max-min) + min
 }
 
 func random_letter() string {
-	rand.Seed(time.Now().UnixNano())
 	letters := []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 	return string(letters[rand.Intn(len(letters))])
 }
