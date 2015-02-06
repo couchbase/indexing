@@ -61,6 +61,8 @@ func usage() {
 }
 
 func main() {
+	c.HideConsole(true)
+	defer c.HideConsole(false)
 	cluster := argParse() // eg. "localhost:9000"
 	if options.trace {
 		c.SetLogLevel(c.LogLevelTrace)

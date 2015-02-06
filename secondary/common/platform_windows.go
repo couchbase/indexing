@@ -7,10 +7,29 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
-// +build windows !darwin !freebsd !linux !openbsd !netbsd
+package common
 
-package main
+import "syscall"
 
-func dumpOnSignalForPlatform() {
-	// not sure whats best here
+func DumpOnSignal() {
+	// not implemented
+}
+
+// Hide console on windows without removing it unlike -H windowsgui.
+func HideConsole(hide bool) {
+	var k32 = syscall.NewLazyDLL("kernel32.dll")
+	var cw = k32.NewProc("GetConsoleWindow")
+	var u32 = syscall.NewLazyDLL("user32.dll")
+	var sw = u32.NewProc("ShowWindow")
+	hwnd, _, _ := cw.Call()
+	if hwnd == 0 {
+		return
+	}
+	if hide {
+		var SW_HIDE uintptr = 0
+		sw.Call(hwnd, SW_HIDE)
+	} else {
+		var SW_RESTORE uintptr = 9
+		sw.Call(hwnd, SW_RESTORE)
+	}
 }
