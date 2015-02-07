@@ -2378,7 +2378,13 @@ func (idx *indexer) genIndexerId() {
 			idx.id = val
 		} else if strings.Contains(err.Error(), "key not found") {
 			//if there is no IndexerId, generate and store in manager
-			idx.id = strconv.Itoa(rand.Int())
+
+			id, err := common.NewUUID()
+			if err == nil {
+				idx.id = id.Str()
+			} else {
+				idx.id = strconv.Itoa(rand.Int())
+			}
 
 			idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
 				mType: CLUST_MGR_SET_LOCAL,

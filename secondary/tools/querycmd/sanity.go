@@ -38,12 +38,15 @@ func doSanityTests(cluster string, client *qclient.GsiClient) (err error) {
 	return
 }
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
 func fixDeployments(adminports []string) {
 	cmds := make([][]string, 0, len(sanityCommands))
-	for i, cmd := range sanityCommands {
+	for _, cmd := range sanityCommands {
 		if cmd[0] == "-type" && cmd[1] == "create" {
-			seed := time.Now().UTC().Second() * i
-			rnd := rand.New(rand.NewSource(int64(seed))).Intn(100000)
+			rnd := rand.Intn(100000)
 			n := (rnd / (10000 / len(adminports))) % len(adminports)
 			switch cmd[5] {
 			case "index-city":

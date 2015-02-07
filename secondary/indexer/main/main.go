@@ -12,10 +12,7 @@ package main
 import (
 	"flag"
 	"log"
-	_ "net/http/pprof"
 	"os"
-	"os/signal"
-	"runtime/pprof"
 	"strings"
 
 	"github.com/couchbase/cbauth"
@@ -46,6 +43,9 @@ func MaybeSetEnv(key, value string) {
 }
 
 func main() {
+	common.HideConsole(true)
+	defer common.HideConsole(false)
+	common.SeedProcess()
 
 	flag.Parse()
 
@@ -57,7 +57,7 @@ func main() {
 		}
 	}
 
-	go dumpOnSignalForPlatform()
+	go common.DumpOnSignal()
 	go common.ExitOnStdinClose()
 
 	common.SetLogLevel(*logLevel)
@@ -78,13 +78,5 @@ func main() {
 
 	if msg.GetMsgType() != indexer.MSG_SUCCESS {
 		log.Printf("Indexer Failure to Init %v", msg)
-	}
-}
-
-func dumpOnSignal(signals ...os.Signal) {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, signals...)
-	for _ = range c {
-		pprof.Lookup("goroutine").WriteTo(os.Stderr, 1)
 	}
 }

@@ -3,7 +3,6 @@ package client
 import "sync"
 import "fmt"
 import "strings"
-import "time"
 import "errors"
 import "encoding/json"
 import "math/rand"
@@ -113,9 +112,7 @@ func (b *metadataClient) CreateIndex(
 
 	createPlan := make(map[string]interface{})
 	// plan may not be provided, pick a random indexer node
-	time.Sleep(1 * time.Millisecond) // sleep to make a random seed.
-	seed := time.Now().UTC().Second()
-	rnd := rand.New(rand.NewSource(int64(seed))).Intn(100000)
+	rnd := rand.Intn(100000)
 	n := (rnd / (10000 / len(b.adminports))) % len(b.adminports)
 	plan := map[string]interface{}{ // with default values
 		"nodes":       []interface{}{b.adminports[n]},

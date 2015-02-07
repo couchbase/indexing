@@ -36,7 +36,7 @@ func init() {
 	if _, err := cbauth.InternalRetryDefaultInit(kvaddress, clusterconfig.Username, clusterconfig.Password); err != nil {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
 	}
-
+	secondaryindex.CheckCollation = true
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	time.Sleep(5 * time.Second)
 	// Working with Users10k and Users_mut dataset.
@@ -565,6 +565,16 @@ func TestBasicArrayDataType_Lookup(t *testing.T) {
 	var indexName = "index_tags"
 	var bucketName = "default"
 
+	key := "Usere46cea01-38f6-4e7b-92e5-69d64668ae75"
+	if _, present := docs[key]; present == false {
+		keysToBeSet := make(tc.KeyValues)
+		keysToBeSet[key] = mut_docs[key]
+		kvutility.SetKeyValues(keysToBeSet, "default", "", clusterconfig.KVAddress)
+		// Update docs object with newly added keys and remove those keys from mut_docs
+		docs[key] = mut_docs[key]
+		delete(mut_docs, key)
+	}
+
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
@@ -643,6 +653,130 @@ func SkipTestArrayDataType_LookupSubset(t *testing.T) {
 	if len(scanResults) != 0 {
 		e := errors.New("Lookup should not return any doc key as lookup key was array's subset")
 		FailTestIfError(e, "Error in array Lookup", t)
+	}
+}
+
+func TestScanLimitParameter(t *testing.T) {
+	fmt.Println("In TestScanLimitParameter()")
+	var indexName = "index_age"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	limit := 500
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, true, int64(limit))
+	FailTestIfError(err, "Error in scan", t)
+	if len(scanResults) != limit {
+		e := errors.New(fmt.Sprintf("Expected %d number of results but got %d results", limit, len(scanResults)))
+		FailTestIfError(e, "Error in scan limit: ", t)
+	}
+
+	limit = 1000
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, true, int64(limit))
+	FailTestIfError(err, "Error in scan", t)
+	if len(scanResults) != limit {
+		e := errors.New(fmt.Sprintf("Expected %d number of results but got %d results", limit, len(scanResults)))
+		FailTestIfError(e, "Error in scan limit: ", t)
+	}
+
+	// Todo: Verify the results in scanresults
+}
+
+func SkipTestScanDistinctParameter(t *testing.T) {
+	fmt.Println("In TestScanDistinctParameter()")
+	var indexName = "index_age"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	// var limit int
+	// limit = 10
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, true, defaultlimit)
+	tc.PrintScanResults(scanResults, "scanResults")
+	FailTestIfError(err, "Error in scan", t)
+	// Todo: Verify the results in scanresults
+}
+
+func TestCountRange(t *testing.T) {
+	fmt.Println("In TestRangeCount()")
+	var indexName = "index_age"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 35, 40, 1)
+	rangeCount, err := secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	fmt.Println("Count of expected and actual Range is: ", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", -10, 50, 2)
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{-10}, []interface{}{50}, 2)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	fmt.Println("Count of expected and actual Range is: ", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 45, 46, 2)
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{45}, []interface{}{46}, 2)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	fmt.Println("Count of expected and actual Range is: ", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 40, 50, 3)
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{40}, []interface{}{50}, 3)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	fmt.Println("Count of expected and actual Range is: ", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 55, 45, 3)
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{55}, []interface{}{45}, 3)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	fmt.Println("Count of expected and actual Range is: ", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+}
+
+func TestCountLookup(t *testing.T) {
+	fmt.Println("In TestCountLookup()")
+	var indexName = "index_age"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 25, 25, 3)
+	rangeCount, err := secondaryindex.CountLookup(indexName, bucketName, indexScanAddress, []interface{}{25})
+	FailTestIfError(err, "Error in CountRange: ", t)
+	fmt.Println("Count of expected and actual Range is: ", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 75, 75, 3)
+	rangeCount, err = secondaryindex.CountLookup(indexName, bucketName, indexScanAddress, []interface{}{75})
+	FailTestIfError(err, "Error in CountRange: ", t)
+	fmt.Println("Count of expected and actual Range is: ", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
 	}
 }
 
