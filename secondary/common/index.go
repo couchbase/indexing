@@ -16,6 +16,10 @@ import (
 
 type IndexKey []byte
 
+type IndexerId string
+
+const INDEXER_ID_NIL = IndexerId("")
+
 // SecondaryKey is secondary-key in the shape of - [ val1, val2, ..., valN ]
 // where value can be any golang data-type that can be serialized into JSON.
 // simple-key shall be shaped as [ val ]

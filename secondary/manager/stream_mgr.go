@@ -171,7 +171,7 @@ func (s *StreamManager) StartStream(streamId common.StreamId) error {
 
 	// Create a new stream.  This will prepare the reciever to be ready for receving mutation.
 	port := getPortForStreamId(streamId)
-	stream, err := newStream(streamId, net.JoinHostPort(LOCALHOST, port), s.handler)
+	stream, err := newStream(streamId, port, s.handler)
 	if err != nil {
 		return err
 	}
@@ -239,9 +239,13 @@ func (s *StreamManager) AddIndexForBuckets(streamId common.StreamId, buckets []s
 
 		// Genereate the index instance protobuf messages based on distribution topology
 		port := getPortForStreamId(streamId)
+		addr, err := s.getAddrForPort(port)
+		if err != nil {
+			return err
+		}
 
 		// Get the index topology for this index
-		instances, topology, err := GetTopologyAsInstanceProtoMsg(s.indexMgr, bucket, port)
+		instances, topology, err := GetTopologyAsInstanceProtoMsg(s.indexMgr, bucket, addr)
 		if err != nil {
 			return err
 		}
@@ -390,6 +394,17 @@ func (s *StreamManager) getStream(streamId common.StreamId) *Stream {
 	defer s.mutex.Unlock()
 
 	return s.streams[streamId]
+}
+
+func (s *StreamManager) getAddrForPort(port string) (string, error) {
+	addrProvider := s.indexMgr.getServiceAddrProvider()
+
+	host, err := addrProvider.GetLocalServiceHost("indexAdmin")
+	if err != nil {
+		return "", err
+	}
+
+	return net.JoinHostPort(host, port), nil
 }
 
 ///////////////////////////////////////////////////////
@@ -694,7 +709,12 @@ func (s *StreamManager) handleAddInstances(
 
 	if len(changes) > 0 {
 		port := getPortForStreamId(streamId)
-		instances, err := GetChangeRecordAsProtoMsg(s.indexMgr, changes, port)
+		addr, err := s.getAddrForPort(port)
+		if err != nil {
+			return err
+		}
+
+		instances, err := GetChangeRecordAsProtoMsg(s.indexMgr, changes, addr)
 		if err != nil {
 			return err
 		}

@@ -67,33 +67,7 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 				cause:    err}}
 	}
 
-	node := cinfo.GetCurrentNode()
-	scan_addr, err := cinfo.GetServiceAddress(node, "indexScan")
-	if err != nil {
-		common.Errorf("ClustMgrAgent::Fail to indexer scan address : %v", err)
-		return nil, &MsgError{
-			err: Error{code: ERROR_CLUSTER_MGR_AGENT_INIT,
-				severity: FATAL,
-				category: CLUSTER_MGR,
-				cause:    err}}
-	}
-
-	admin_addr, err := cinfo.GetServiceAddress(node, "indexAdmin")
-	if _, p, e := net.SplitHostPort(admin_addr); e != nil {
-		common.CrashOnError(e)
-	} else {
-		admin_addr = net.JoinHostPort("", p)
-	}
-	if err != nil {
-		common.Errorf("ClustMgrAgent::Fail to indexer admin address : %v", err)
-		return nil, &MsgError{
-			err: Error{code: ERROR_CLUSTER_MGR_AGENT_INIT,
-				severity: FATAL,
-				category: CLUSTER_MGR,
-				cause:    err}}
-	}
-
-	mgr, err := manager.NewIndexManager(admin_addr, scan_addr, cfg)
+	mgr, err := manager.NewIndexManager(cinfo, cfg)
 	if err != nil {
 		common.Errorf("ClustMgrAgent::NewClustMgrAgent Error In Init %v", err)
 		return nil, &MsgError{

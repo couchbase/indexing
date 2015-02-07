@@ -14,6 +14,12 @@ var (
 	ErrNodeNotBucketMember = errors.New("Node is not a member of bucket")
 )
 
+const (
+	INDEX_ADMIN_SERVICE = "indexAdmin"
+	INDEX_SCAN_SERVICE  = "indexScan"
+	INDEX_HTTP_SERVICE  = "indexHttp"
+)
+
 // Helper object for fetching cluster information
 // Can be used by services running on a cluster node to connect with
 // local management service for obtaining cluster information.
@@ -32,6 +38,13 @@ type ClusterInfoCache struct {
 	poolsvsCh       chan couchbase.PoolServices
 	poolsvsIsActive bool
 	poolsvsErr      error
+}
+
+type ServiceAddressProvider interface {
+	GetLocalServiceAddress(srvc string) (string, error)
+	GetLocalServicePort(srvc string) (string, error)
+	GetLocalServiceHost(srvc string) (string, error)
+	GetLocalHostAddress() (string, error)
 }
 
 type NodeId int
@@ -251,4 +264,54 @@ func (c ClusterInfoCache) findVBServerIndex(b *couchbase.Bucket, nid NodeId) (in
 
 func (c ClusterInfoCache) sameNode(n1 couchbase.Node, n2 couchbase.Node) bool {
 	return n1.Hostname == n2.Hostname
+}
+
+func (c ClusterInfoCache) GetLocalServiceAddress(srvc string) (string, error) {
+	node := c.GetCurrentNode()
+	return c.GetServiceAddress(node, srvc)
+}
+
+func (c ClusterInfoCache) GetLocalServicePort(srvc string) (string, error) {
+	addr, err := c.GetLocalServiceAddress(srvc)
+	if err != nil {
+		return addr, err
+	}
+
+	_, p, e := net.SplitHostPort(addr)
+	if e != nil {
+		return p, e
+	}
+
+	return net.JoinHostPort("", p), nil
+}
+
+func (c ClusterInfoCache) GetLocalServiceHost(srvc string) (string, error) {
+
+	addr, err := c.GetLocalServiceAddress(srvc)
+	if err != nil {
+		return addr, err
+	}
+
+	h, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", err
+	}
+
+	return h, nil
+}
+
+func (c ClusterInfoCache) GetLocalHostAddress() (string, error) {
+
+	cUrl, err := url.Parse(c.url)
+	if err != nil {
+		return "", errors.New("Unable to parse cluster url - " + err.Error())
+	}
+	_, p, _ := net.SplitHostPort(cUrl.Host)
+
+	h, err := c.GetLocalServiceHost(INDEX_ADMIN_SERVICE)
+	if err != nil {
+		return "", err
+	}
+
+	return net.JoinHostPort(h, p), nil
 }

@@ -20,6 +20,10 @@ type fakeProjector struct {
 	Client *dataport.Client
 }
 
+type fakeAddressProvider struct {
+	adminport string
+}
+
 var TT *testing.T
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -74,7 +78,7 @@ func NewFakeProjector(port string) *fakeProjector {
 
 	addr := net.JoinHostPort("127.0.0.1", port)
 	prefix := "endpoint.dataport."
-	config := common.SystemConfig.SectionConfig(prefix, true /*trim*/)
+	config := common.SystemConfig.SectionConfig(prefix, true )
 	maxvbs := common.SystemConfig["maxVbuckets"].Int()
 	flag := transport.TransportFlag(0).SetProtobuf()
 	config.Set("mutationChanSize", common.ConfigValue{10000, "channel size of projector-dataport-client's data path routine", 10000})
@@ -95,4 +99,45 @@ func (p *fakeProjector) Run(donech chan bool) {
 	p.Client.Close()
 
 	common.Infof("fakeProjector: done")
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// fakeAdderssProvider 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+func NewFakeAddressProvider(adminport string) common.ServiceAddressProvider {
+	return &fakeAddressProvider{adminport : adminport}
+}
+
+func (p *fakeAddressProvider) GetLocalServiceAddress(srvc string) (string, error) {
+	if srvc == common.INDEX_ADMIN_SERVICE {
+		return p.adminport, nil
+	}
+	return "", nil
+}
+
+func (p *fakeAddressProvider) GetLocalServicePort(srvc string) (string, error) {
+	if srvc == common.INDEX_ADMIN_SERVICE {
+		_, port, err := net.SplitHostPort(p.adminport) 
+		if err != nil {
+			return "", err
+		}
+		return net.JoinHostPort("", port), nil
+	}
+	return "", nil
+}
+
+func (p *fakeAddressProvider) GetLocalServiceHost(srvc string) (string, error) {
+	if srvc == common.INDEX_ADMIN_SERVICE {
+		h, _, err := net.SplitHostPort(p.adminport) 
+		if err != nil {
+			return "", err
+		}
+		return h, nil
+	}
+	return "", nil
+}
+
+func (p *fakeAddressProvider) GetLocalHostAddress() (string, error) {
+	return p.adminport, nil
 }

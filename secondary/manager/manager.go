@@ -35,9 +35,9 @@ type IndexManager struct {
 	reqHandler    *requestHandler
 	eventMgr      *eventManager
 	lifecycleMgr  *LifecycleMgr
-	dataport      string
 	requestServer RequestServer
 	basepath      string
+	addrProvider  common.ServiceAddressProvider
 
 	// stream management
 	streamMgr *StreamManager
@@ -112,16 +112,16 @@ type RequestServer interface {
 //
 // Create a new IndexManager
 //
-func NewIndexManager(msgAddr string, dataport string, config common.Config) (mgr *IndexManager, err error) {
+func NewIndexManager(addrProvider common.ServiceAddressProvider, config common.Config) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(msgAddr, dataport, NewProjectorAdmin(nil, nil, nil), config)
+	return NewIndexManagerInternal(addrProvider, NewProjectorAdmin(nil, nil, nil), config)
 }
 
 //
 // Create a new IndexManager
 //
-func NewIndexManagerInternal(msgAddr string,
-	dataport string,
+func NewIndexManagerInternal(
+	addrProvider common.ServiceAddressProvider,
 	admin StreamAdmin,
 	config common.Config) (mgr *IndexManager, err error) {
 
@@ -134,7 +134,7 @@ func NewIndexManagerInternal(msgAddr string,
 
 	mgr = new(IndexManager)
 	mgr.isClosed = false
-	mgr.dataport = dataport
+	mgr.addrProvider = addrProvider
 
 	// stream mgmt  - stream services will start if the indexer node becomes master
 	mgr.streamMgr = nil
@@ -155,7 +155,7 @@ func NewIndexManagerInternal(msgAddr string,
 	}
 
 	// Initialize LifecycleMgr.
-	mgr.lifecycleMgr = NewLifecycleMgr(dataport, nil)
+	mgr.lifecycleMgr = NewLifecycleMgr(addrProvider, nil)
 
 	// Initialize MetadataRepo.  This a blocking call until the
 	// the metadataRepo (including watcher) is operational (e.g.
@@ -164,7 +164,14 @@ func NewIndexManagerInternal(msgAddr string,
 	mgr.basepath = config["storage_dir"].String()
 	os.Mkdir(mgr.basepath, 0755)
 	repoName := filepath.Join(mgr.basepath, gometaC.REPOSITORY_NAME)
-	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(msgAddr, mgr.eventMgr, mgr.lifecycleMgr, repoName)
+
+	adminPort, err := addrProvider.GetLocalServicePort(common.INDEX_ADMIN_SERVICE)
+	if err != nil {
+		mgr.Close()
+		return nil, err
+	}
+
+	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(adminPort, mgr.eventMgr, mgr.lifecycleMgr, repoName)
 	if err != nil {
 		mgr.Close()
 		return nil, err
@@ -257,6 +264,10 @@ func (m *IndexManager) Close() {
 	}
 
 	m.isClosed = true
+}
+
+func (m *IndexManager) getServiceAddrProvider() common.ServiceAddressProvider {
+	return m.addrProvider
 }
 
 ///////////////////////////////////////////////////////
@@ -381,7 +392,7 @@ func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 				fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
 		}
 	} else {
-		return m.lifecycleMgr.CreateIndex(defn, m.dataport)
+		return m.lifecycleMgr.CreateIndex(defn)
 	}
 
 	return nil

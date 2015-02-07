@@ -356,7 +356,7 @@ func (s *watcher) UpdateStateOnCommit(txnid common.Txnid, key string) {
 	}
 }
 
-func (s *watcher) UpdateStateOnRespond(fid string, reqId uint64, err string) {
+func (s *watcher) UpdateStateOnRespond(fid string, reqId uint64, err string, content []byte) {
 }
 
 func (s *watcher) GetStatus() protocol.PeerStatus {

@@ -264,7 +264,7 @@ func (m *httpHandler) getTopologyRequest(w http.ResponseWriter, r *http.Request)
 	}
 
 	// call the index manager to handle the DDL
-	instances, _, err := GetTopologyAsInstanceProtoMsg(m.mgr, request.Bucket, SCAN_REQUEST_PORT)
+	instances, _, err := GetTopologyAsInstanceProtoMsg(m.mgr, request.Bucket, "")
 	protoInsts := &protobuf.Instances{Instances: instances}
 	data, err := proto.Marshal(protoInsts)
 	if err == nil {
