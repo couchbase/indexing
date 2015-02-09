@@ -98,7 +98,7 @@ func parseArgs(arguments []string) (*Command, []string) {
 	fset.StringVar(&fields, "fields", "", "Comma separated on-index fields") // secStrs
 	fset.BoolVar(&cmdOptions.isPrimary, "primary", false, "Is primary index")
 	fset.StringVar(&cmdOptions.with, "with", "", "index specific properties")
-	// options for build-index
+	// options for build-indexes, drop-indexes
 	fset.StringVar(&bindexes, "indexes", "", "csv list of bucket.index to build")
 	// options for Range, Statistics, Count
 	fset.StringVar(&low, "low", "[]", "Span.Range: [low]")
@@ -190,6 +190,13 @@ func main() {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
 			}
+
+		case "mb13339":
+			err = doMB13339(cmdOptions.server, client)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
+			}
+
 		case "benchmark":
 			doBenchmark(cmdOptions.server, "localhost:9101")
 		}
@@ -250,7 +257,6 @@ func handleCommand(
 
 	case "create":
 		var defnID uint64
-		var states []c.IndexState
 		if len(cmd.secStrs) == 0 && !cmd.isPrimary || cmd.indexName == "" {
 			return fmt.Errorf("createIndex(): required fields missing")
 		}
@@ -260,18 +266,9 @@ func handleCommand(
 			[]byte(cmd.with))
 		if err == nil {
 			fmt.Printf("Index created: %v with %q\n", defnID, cmd.with)
-			if d, ok := cmd.withPlan["defer_build"]; !(ok && d.(bool)) {
-				states, err = waitUntilIndexState(
-					client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
-					100 /*period*/, 20000 /*timeout*/)
-				if err == nil {
-					fmt.Println("Index state:", states[0])
-				}
-			}
 		}
 
 	case "build":
-		var states []c.IndexState
 		defnIDs := make([]uint64, 0, len(cmd.bindexes))
 		for _, bindex := range cmd.bindexes {
 			v := strings.Split(bindex, ":")
@@ -290,54 +287,78 @@ func handleCommand(
 		if err == nil {
 			err = client.BuildIndexes(defnIDs)
 			fmt.Printf("Index building for: %v\n", defnIDs)
-			states, err = waitUntilIndexState(
-				client, defnIDs, c.INDEX_STATE_ACTIVE,
-				100 /*period*/, 20000 /*timeout*/)
-			if err == nil {
-				for i, defnID := range defnIDs {
-					fmt.Printf("Index state for %v: %v", defnID, states[i])
-				}
-			}
 		}
 
 	case "drop":
-		defnID, ok := getDefnID(client, bucket, iname)
-		if ok {
-			err = client.DropIndex(defnID)
-			if err == nil {
-				fmt.Println("Index dropped")
+		for _, bindex := range cmd.bindexes {
+			v := strings.Split(bindex, ":")
+			if len(v) != 2 {
+				return fmt.Errorf("Invalid index specified : %v", bindex)
 			}
-		} else {
-			err = fmt.Errorf("index %v/%v unknown", bucket, iname)
+			bucket, iname = v[0], v[1]
+			defnID, ok := getDefnID(client, bucket, iname)
+			if ok {
+				err = client.DropIndex(defnID)
+				if err == nil {
+					fmt.Printf("Index dropped %v/%v\n", bucket, iname)
+				}
+			} else {
+				err = fmt.Errorf("index %v/%v unknown", bucket, iname)
+			}
 		}
 
 	case "scan":
+		var state c.IndexState
+
 		defnID, _ := getDefnID(client, bucket, iname)
 		fmt.Println("Scan index:")
-		if cmd.equal != nil {
+		_, err = waitUntilIndexState(
+			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
+			100 /*period*/, 20000 /*timeout*/)
+
+		if err != nil {
+			state, err = client.IndexState(defnID)
+			fmt.Printf("Index state: {%v, %v}\n", state, err)
+		} else if cmd.equal != nil {
 			equals := []c.SecondaryKey{cmd.equal}
 			client.Lookup(uint64(defnID), equals, false, limit, callb)
-
 		} else {
-			err = client.Range(
-				uint64(defnID), low, high, incl, false, limit, callb)
+			err = client.Range(uint64(defnID), low, high, incl, false, limit, callb)
 		}
 		if err == nil {
-			fmt.Println("Tota number of entries: ", entries)
+			fmt.Println("Total number of entries: ", entries)
 		}
 
 	case "scanAll":
+		var state c.IndexState
+
 		defnID, _ := getDefnID(client, bucket, iname)
 		fmt.Println("ScanAll index:")
-		err = client.ScanAll(uint64(defnID), limit, callb)
+		_, err = waitUntilIndexState(
+			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
+			100 /*period*/, 20000 /*timeout*/)
+		if err != nil {
+			state, err = client.IndexState(defnID)
+			fmt.Printf("Index state: {%v, %v} \n", state, err)
+		} else {
+			err = client.ScanAll(uint64(defnID), limit, callb)
+		}
 		if err == nil {
-			fmt.Println("Tota number of entries: ", entries)
+			fmt.Println("Total number of entries: ", entries)
 		}
 
 	case "stats":
+		var state c.IndexState
 		var statsResp c.IndexStatistics
+
 		defnID, _ := getDefnID(client, bucket, iname)
-		if cmd.equal != nil {
+		_, err = waitUntilIndexState(
+			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
+			100 /*period*/, 20000 /*timeout*/)
+		if err != nil {
+			state, err = client.IndexState(defnID)
+			fmt.Printf("Index state: {%v, %v} \n", state, err)
+		} else if cmd.equal != nil {
 			statsResp, err = client.LookupStatistics(uint64(defnID), equal)
 		} else {
 			statsResp, err = client.RangeStatistics(
@@ -348,10 +369,17 @@ func handleCommand(
 		}
 
 	case "count":
+		var state c.IndexState
 		var count int64
 
 		defnID, _ := getDefnID(client, bucket, iname)
-		if cmd.equal != nil {
+		_, err = waitUntilIndexState(
+			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
+			100 /*period*/, 20000 /*timeout*/)
+		if err != nil {
+			state, err = client.IndexState(defnID)
+			fmt.Printf("Index state: {%v, %v} \n", state, err)
+		} else if cmd.equal != nil {
 			fmt.Println("CountLookup:")
 			equals := []c.SecondaryKey{cmd.equal}
 			count, err := client.CountLookup(uint64(defnID), equals)
@@ -366,7 +394,6 @@ func handleCommand(
 				fmt.Printf("Index %q/%q has %v entries\n", bucket, iname, count)
 			}
 		}
-
 	}
 	return err
 }
@@ -381,10 +408,15 @@ func arg2key(arg []byte) []interface{} {
 
 func printIndexInfo(index *mclient.IndexMetadata) {
 	defn := index.Definition
-	insts := index.Instances
-	fmt.Printf("Index:%s/%s, Id:%v, State:%s, Using:%s, Exprs:%v, isPrimary:%v\n",
-		defn.Name, defn.Bucket, defn.DefnId, insts[0].State, defn.Using, defn.SecExprs,
+	fmt.Printf("Index:%s/%s, Id:%v, Using:%s, Exprs:%v, isPrimary:%v\n",
+		defn.Bucket, defn.Name, defn.DefnId, defn.Using, defn.SecExprs,
 		defn.IsPrimary)
+	insts := index.Instances
+	if len(insts) < 1 {
+		fmt.Printf("    Error: zero instances")
+	} else {
+		fmt.Printf("    State:%s, Error:%v\n", insts[0].State, insts[0].Error)
+	}
 }
 
 func getDefnID(

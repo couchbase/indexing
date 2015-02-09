@@ -25,8 +25,7 @@ func doSanityTests(cluster string, client *qclient.GsiClient) (err error) {
 		return err
 	}
 
-	fixDeployments(adminports)
-
+	sanityCommands = fixDeployments(adminports, sanityCommands)
 	for _, args := range sanityCommands {
 		cmd, _ := parseArgs(args)
 		if err = handleCommand(client, cmd, true); err != nil {
@@ -38,29 +37,26 @@ func doSanityTests(cluster string, client *qclient.GsiClient) (err error) {
 	return
 }
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
-
-func fixDeployments(adminports []string) {
-	cmds := make([][]string, 0, len(sanityCommands))
-	for _, cmd := range sanityCommands {
+func fixDeployments(adminports []string, commands [][]string) [][]string {
+	cmds := make([][]string, 0, len(commands))
+	for i, cmd := range commands {
 		if cmd[0] == "-type" && cmd[1] == "create" {
 			rnd := rand.Intn(100000)
 			n := (rnd / (10000 / len(adminports))) % len(adminports)
 			switch cmd[5] {
-			case "index-city":
-				with := fmt.Sprintf("{\"nodes\": [%q]}", adminports[n])
-				cmd = append(cmd, "-with", with)
 			case "index-abv":
 				f := "{\"nodes\": [%q], \"defer_build\": true}"
 				with := fmt.Sprintf(f, adminports[n])
+				cmd = append(cmd, "-with", with)
+
+			default:
+				with := fmt.Sprintf("{\"nodes\": [%q]}", adminports[n])
 				cmd = append(cmd, "-with", with)
 			}
 		}
 		cmds = append(cmds, cmd)
 	}
-	sanityCommands = cmds
+	return cmds
 }
 
 func getIndexerAdminports(
@@ -113,7 +109,7 @@ var sanityCommands = [][]string{
 		"-type", "count", "-bucket", "beer-sample", "-index", "index-city",
 	},
 	[]string{
-		"-type", "drop", "-bucket", "beer-sample", "-index", "index-city",
+		"-type", "drop", "-indexes", "beer-sample:index-city",
 	},
 
 	// Deferred build
@@ -143,6 +139,10 @@ var sanityCommands = [][]string{
 		"-type", "count", "-bucket", "beer-sample", "-index", "index-abv",
 	},
 	[]string{
-		"-type", "drop", "-bucket", "beer-sample", "-index", "index-abv",
+		"-type", "drop", "-indexes", "beer-sample:index-abv",
 	},
+}
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
 }
