@@ -340,3 +340,7 @@ func TestBucketConnPoolConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func mkNL(in []Node) unsafe.Pointer {
+	return unsafe.Pointer(&in)
+}
