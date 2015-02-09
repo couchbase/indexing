@@ -535,7 +535,7 @@ loop:
 					event.Opcode != transport.UPR_STREAMREQ {
 
 					delta := (now - stream.LastSeen) / 1000000
-					if delta > 3000 {
+					if stream.LastSeen != 0 && delta > 3000 {
 						msg := "Warning: DCP event %v for vb %v after %v mS\n"
 						log.Printf(msg, event.Opcode, stream.Vbucket, delta)
 					}
