@@ -99,11 +99,13 @@ var mutations struct {
 
 func main() {
 	clusters := argParse()
+
 	// setup cbauth
-	authURL := fmt.Sprintf("http://%s/_cbauth", clusters[0])
 	up := strings.Split(options.auth, ":")
-	authU, authP := up[0], up[1]
-	cbauth.Default = cbauth.NewDefaultAuthenticator(authURL, authU, authP, nil)
+	_, err := cbauth.InternalRetryDefaultInit(clusters[0], up[0], up[1])
+	if err != nil {
+		log.Fatalf("Failed to initialize cbauth: %s", err)
+	}
 
 	mutations.seqnos = map[string][]uint64{
 		"beer-sample": make([]uint64, options.maxVbno),
