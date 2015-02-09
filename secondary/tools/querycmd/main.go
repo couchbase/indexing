@@ -49,7 +49,8 @@ var testResponseStream = &protobuf.ResponseStream{
 }
 
 type Command struct {
-	opType string
+	indexers []string
+	opType   string
 	// basic options.
 	server    string
 	indexName string
@@ -77,7 +78,7 @@ type Command struct {
 }
 
 func parseArgs(arguments []string) (*Command, []string) {
-	var fields, bindexes string
+	var indexers, fields, bindexes string
 	var inclusion uint
 	var equal, low, high string
 
@@ -85,6 +86,7 @@ func parseArgs(arguments []string) (*Command, []string) {
 	fset := flag.NewFlagSet("cmd", flag.ExitOnError)
 
 	// basic options
+	fset.StringVar(&indexers, "indexers", "127.0.0.1:9000", "cluster-address for indexer nodes")
 	fset.StringVar(&cmdOptions.server, "server", "127.0.0.1:9000", "Cluster server address")
 	fset.StringVar(&cmdOptions.opType, "type", "scanAll", "Index command (scan|stats|scanAll|count|nodes|create|build|drop|list)")
 	fset.StringVar(&cmdOptions.indexName, "index", "", "Index name")
@@ -121,6 +123,7 @@ func parseArgs(arguments []string) (*Command, []string) {
 	if len(bindexes) > 0 {
 		cmdOptions.bindexes = strings.Split(bindexes, ",")
 	}
+	cmdOptions.indexers = strings.Split(indexers, ",")
 
 	cmdOptions.inclusion = qclient.Inclusion(inclusion)
 	cmdOptions.secStrs = make([]string, 0)
@@ -186,13 +189,13 @@ func main() {
 	if len(args) > 0 {
 		switch args[0] {
 		case "sanity":
-			err = doSanityTests(cmdOptions.server, client)
+			err = doSanityTests(cmdOptions.server, cmdOptions.indexers, client)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
 			}
 
 		case "mb13339":
-			err = doMB13339(cmdOptions.server, client)
+			err = doMB13339(cmdOptions.server, cmdOptions.indexers, client)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
 			}

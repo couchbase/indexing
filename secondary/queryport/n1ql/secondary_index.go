@@ -484,8 +484,8 @@ func (si *secondaryIndex) State() (datastore.IndexState, string, errors.Error) {
 	if si.err != "" {
 		// if err is not empty, return OFFLINE with error reason
 		// and the state in which the error occured.
-		msg := fmt.Printf("while in state %v", si.state)
-		return datastore.OFFLINE, msg, errors.NewError(si.err, msg)
+		msg := fmt.Sprintf("error %s while in state %v", si.err, si.state)
+		return datastore.OFFLINE, msg, errors.NewError(nil, msg)
 	}
 	return si.state, "", nil
 }

@@ -11,21 +11,14 @@ import qclient "github.com/couchbase/indexing/secondary/queryport/client"
 // sanity check for queryport client
 //----------------------------------
 
-func doSanityTests(cluster string, client *qclient.GsiClient) (err error) {
-	cinfo, err :=
-		c.NewClusterInfoCache(c.ClusterUrl(cluster), "default" /*pooln*/)
-	if err != nil {
-		return err
-	}
-	if err = cinfo.Fetch(); err != nil {
-		return err
-	}
-	adminports, err := getIndexerAdminports(cinfo)
-	if err != nil {
-		return err
+func doSanityTests(
+	cluster string, indexers []string, client *qclient.GsiClient) (err error) {
+
+	if len(indexers) < 1 {
+		panic(fmt.Errorf("specify indexers"))
 	}
 
-	sanityCommands = fixDeployments(adminports, sanityCommands)
+	sanityCommands = fixDeployments(indexers, sanityCommands)
 	for _, args := range sanityCommands {
 		cmd, _ := parseArgs(args)
 		if err = handleCommand(client, cmd, true); err != nil {
@@ -37,20 +30,20 @@ func doSanityTests(cluster string, client *qclient.GsiClient) (err error) {
 	return
 }
 
-func fixDeployments(adminports []string, commands [][]string) [][]string {
+func fixDeployments(indexers []string, commands [][]string) [][]string {
 	cmds := make([][]string, 0, len(commands))
-	for i, cmd := range commands {
+	for _, cmd := range commands {
 		if cmd[0] == "-type" && cmd[1] == "create" {
 			rnd := rand.Intn(100000)
-			n := (rnd / (10000 / len(adminports))) % len(adminports)
+			n := (rnd / (10000 / len(indexers))) % len(indexers)
 			switch cmd[5] {
 			case "index-abv":
 				f := "{\"nodes\": [%q], \"defer_build\": true}"
-				with := fmt.Sprintf(f, adminports[n])
+				with := fmt.Sprintf(f, indexers[n])
 				cmd = append(cmd, "-with", with)
 
 			default:
-				with := fmt.Sprintf("{\"nodes\": [%q]}", adminports[n])
+				with := fmt.Sprintf("{\"nodes\": [%q]}", indexers[n])
 				cmd = append(cmd, "-with", with)
 			}
 		}
