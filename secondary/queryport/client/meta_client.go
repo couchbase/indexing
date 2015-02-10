@@ -360,9 +360,10 @@ func (b *metadataClient) updateIndexerList(cinfo *common.ClusterInfoCache) error
 	// delete indexer-nodes that got removed from cluster.
 	for _, indexerID := range b.adminports {
 		b.mdClient.UnwatchMetadata(indexerID)
+		delete(b.topology, indexerID)
 	}
 	b.adminports = m
-	return nil
+	return err
 }
 
 // return adminports for all known indexers.
@@ -379,6 +380,27 @@ func getIndexerAdminports(
 	}
 	return iAdminports, nil
 }
+
+// FIXME/TODO: based on discussion with John-
+//
+//    if we cannot watch the metadata due to network partition we will
+//    have an empty list of index and cannot query, in other words
+//    the client will tolerate the partition and rejects scans until it
+//    is healed.
+//    i) alternatively, figure out a way to propagate error that happens
+//       with watchClusterChanges() go-routine.
+//
+//    and while propating error back to the caller
+//    1) we can encourage the caller to Refresh() the client hoping for
+//       success, or,
+//    2) Close() the client and re-create it.
+//
+//    side-effects of partitioning,
+//    a) query cannot get indexes from the indexer node -- so n1ql has
+//       to do bucket scan. It is a perf issue.
+//    b) Network disconnected after watcher is up. We have the list of
+//       indexes -- but we cannot query on it. N1QL should still degrade
+//       to bucket scan.
 
 func (b *metadataClient) watchClusterChanges(cluster string) {
 	clusterURL := common.ClusterUrl(cluster)

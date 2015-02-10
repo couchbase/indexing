@@ -287,8 +287,7 @@ var SystemConfig = Config{
 	},
 	"queryport.client.retryIntervalScanport": ConfigValue{
 		1,
-		"timeout, in milliseconds, to wait for an existing connection " +
-			"from the pool before considering the creation of a new one",
+		"wait, in milliseconds, before re-trying for a scanport",
 		1,
 	},
 	// projector's adminport client, can be used by indexer.
