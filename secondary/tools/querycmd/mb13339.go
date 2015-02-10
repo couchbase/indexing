@@ -1,19 +1,25 @@
 package main
 
 import "fmt"
+import "log"
+import "os"
 
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
+import "github.com/couchbase/indexing/secondary/querycmd"
 
 // test case to simulate
 // https://issues.couchbase.com/browse/MB-13339
 
 func doMB13339(
-	cluster string, indexers []string, client *qclient.GsiClient) (err error) {
+	cluster string, client *qclient.GsiClient) (err error) {
 
-	mb13339Commands = fixDeployments(indexers, mb13339Commands)
 	for _, args := range mb13339Commands {
-		cmd, _ := parseArgs(args)
-		if err = handleCommand(client, cmd, true); err != nil {
+		cmd, _, _, err := querycmd.ParseArgs(args)
+		if err != nil {
+			log.Fatal(err)
+		}
+		err = querycmd.HandleCommand(client, cmd, true, os.Stdout)
+		if err != nil {
 			fmt.Printf("%#v\n", cmd)
 			fmt.Printf("    %v\n", err)
 		}

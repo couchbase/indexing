@@ -12,7 +12,6 @@ package main
 import (
 	"flag"
 	"log"
-	"os"
 	"strings"
 
 	"github.com/couchbase/cbauth"
@@ -34,13 +33,6 @@ var (
 	enableManager     = flag.Bool("enable_manager", true, "Enable Index Manager")
 	auth              = flag.String("auth", "", "Auth user and password")
 )
-
-func MaybeSetEnv(key, value string) {
-	if os.Getenv(key) != "" {
-		return
-	}
-	os.Setenv(key, value)
-}
 
 func main() {
 	common.HideConsole(true)

@@ -3,67 +3,32 @@ package main
 import "fmt"
 import "time"
 import "math/rand"
+import "os"
+import "log"
 
-import c "github.com/couchbase/indexing/secondary/common"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
+import "github.com/couchbase/indexing/secondary/querycmd"
 
 //----------------------------------
 // sanity check for queryport client
 //----------------------------------
 
 func doSanityTests(
-	cluster string, indexers []string, client *qclient.GsiClient) (err error) {
+	cluster string, client *qclient.GsiClient) (err error) {
 
-	if len(indexers) < 1 {
-		panic(fmt.Errorf("specify indexers"))
-	}
-
-	sanityCommands = fixDeployments(indexers, sanityCommands)
 	for _, args := range sanityCommands {
-		cmd, _ := parseArgs(args)
-		if err = handleCommand(client, cmd, true); err != nil {
+		cmd, _, _, err := querycmd.ParseArgs(args)
+		if err != nil {
+			log.Fatal(err)
+		}
+		err = querycmd.HandleCommand(client, cmd, true, os.Stdout)
+		if err != nil {
 			fmt.Printf("%#v\n", cmd)
 			fmt.Printf("    %v\n", err)
 		}
 		fmt.Println()
 	}
 	return
-}
-
-func fixDeployments(indexers []string, commands [][]string) [][]string {
-	cmds := make([][]string, 0, len(commands))
-	for _, cmd := range commands {
-		if cmd[0] == "-type" && cmd[1] == "create" {
-			rnd := rand.Intn(100000)
-			n := (rnd / (10000 / len(indexers))) % len(indexers)
-			switch cmd[5] {
-			case "index-abv":
-				f := "{\"nodes\": [%q], \"defer_build\": true}"
-				with := fmt.Sprintf(f, indexers[n])
-				cmd = append(cmd, "-with", with)
-
-			default:
-				with := fmt.Sprintf("{\"nodes\": [%q]}", indexers[n])
-				cmd = append(cmd, "-with", with)
-			}
-		}
-		cmds = append(cmds, cmd)
-	}
-	return cmds
-}
-
-func getIndexerAdminports(
-	cinfo *c.ClusterInfoCache) ([]string, error) {
-
-	iAdminports := make([]string, 0)
-	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
-		adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
-		if err != nil {
-			return nil, err
-		}
-		iAdminports = append(iAdminports, adminport)
-	}
-	return iAdminports, nil
 }
 
 var sanityCommands = [][]string{
@@ -76,7 +41,7 @@ var sanityCommands = [][]string{
 	},
 	[]string{
 		"-type", "create", "-bucket", "beer-sample", "-index", "index-abv",
-		"-fields", "abv",
+		"-fields", "abv", "-with", "{\"defer_build\": true}",
 	},
 	[]string{"-type", "list", "-bucket", "beer-sample"},
 
