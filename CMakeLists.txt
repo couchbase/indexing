@@ -31,13 +31,17 @@ IF (DEFINED FORESTDB_TARGET)
   SET (_forestdb_dep DEPENDS ${FORESTDB_TARGET})
 ENDIF (DEFINED FORESTDB_TARGET)
 
-GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmds/indexer
+GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/indexer
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   ${_forestdb_dep}
   CGO_INCLUDE_DIRS "${FORESTDB_INCLUDE_DIR}"
   CGO_LIBRARY_DIRS "${FORESTDB_LIBRARY_DIR}"
   INSTALL_PATH bin OUTPUT indexer)
 
-GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmds/projector
+GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
  INSTALL_PATH bin OUTPUT projector)
+
+GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
+  GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
+ INSTALL_PATH bin OUTPUT cbindex)

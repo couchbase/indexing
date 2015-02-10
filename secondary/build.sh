@@ -4,7 +4,7 @@
 build_indexer(){
 
     echo "Building Indexer..."
-    cd cmds/indexer/
+    cd cmd/indexer/
     go build -o indexer
     cp indexer ../../bin/
     cd ../..
@@ -14,7 +14,7 @@ build_indexer(){
 
 clean_indexer(){
 
-    cd cmds/indexer/
+    cd cmd/indexer/
     go clean
     rm -f indexer
     cd ../..
@@ -24,7 +24,7 @@ clean_indexer(){
 build_projector(){
 
     echo "Building Projector..."
-    cd cmds/projector/
+    cd cmd/projector/
     go build -o projector
     cp projector ../../bin/
     cd ../..
@@ -34,7 +34,7 @@ build_projector(){
 
 clean_projector(){
 
-    cd cmds/projector/
+    cd cmd/projector/
     go clean
     rm -f projector
     cd ../..
