@@ -101,6 +101,7 @@ func TestRange(t *testing.T) {
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	qc.Range(
 		0x0 /*defnID*/, l, h, 100, true, 1000,
+		c.AnyConsistency, nil,
 		func(val client.ResponseReader) bool {
 			if err := val.Error(); err != nil {
 				t.Fatal(err)
@@ -120,6 +121,7 @@ func TestRange(t *testing.T) {
 	l, h = c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	qc.Range(
 		0x0 /*defnID*/, l, h, 100, true, 1000,
+		c.AnyConsistency, nil,
 		func(val client.ResponseReader) bool {
 			count++
 			if count == 2 {
@@ -157,6 +159,7 @@ func TestScanAll(t *testing.T) {
 	count := 0
 	qc.ScanAll(
 		0x0 /*defnID*/, 1000,
+		c.AnyConsistency, nil,
 		func(val client.ResponseReader) bool {
 			if err := val.Error(); err != nil {
 				t.Fatal(err)
@@ -174,6 +177,7 @@ func TestScanAll(t *testing.T) {
 	count = 0
 	qc.ScanAll(
 		0x0 /*defnID*/, 1000,
+		c.AnyConsistency, nil,
 		func(val client.ResponseReader) bool {
 			count++
 			if count == 2 {
@@ -238,6 +242,7 @@ func BenchmarkRange1(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		qc.Range(
 			0x0 /*defnID*/, l, h, 100, true, 1000,
+			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return true
 			})
@@ -274,6 +279,7 @@ func BenchmarkRange100(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		qc.Range(
 			0x0 /*defnID*/, l, h, 100, true, 1000,
+			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return true
 			})
@@ -308,6 +314,7 @@ func BenchmarkRangeParallel10(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		qc.Range(
 			0x0 /*defnID*/, l, h, 100, true, 1000,
+			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return false
 			})
@@ -341,6 +348,7 @@ func BenchmarkScanAll(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		qc.ScanAll(
 			0x0 /*defnID*/, 1000,
+			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return true
 			})

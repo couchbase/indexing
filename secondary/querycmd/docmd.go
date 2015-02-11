@@ -122,10 +122,10 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 		}
 	}
 	if equal != "" {
-		cmdOptions.Equal = c.SecondaryKey(arg2key([]byte(equal)))
+		cmdOptions.Equal = c.SecondaryKey(Arg2Key([]byte(equal)))
 	}
-	cmdOptions.Low = c.SecondaryKey(arg2key([]byte(low)))
-	cmdOptions.High = c.SecondaryKey(arg2key([]byte(high)))
+	cmdOptions.Low = c.SecondaryKey(Arg2Key([]byte(low)))
+	cmdOptions.High = c.SecondaryKey(Arg2Key([]byte(high)))
 
 	// with
 	if len(cmdOptions.With) > 0 {
@@ -217,7 +217,7 @@ func HandleCommand(
 				return fmt.Errorf("invalid index specified : %v", bindex)
 			}
 			bucket, iname = v[0], v[1]
-			defnID, ok := getDefnID(client, bucket, iname)
+			defnID, ok := GetDefnID(client, bucket, iname)
 			if ok {
 				defnIDs = append(defnIDs, defnID)
 			} else {
@@ -237,7 +237,7 @@ func HandleCommand(
 				return fmt.Errorf("invalid index specified : %v", bindex)
 			}
 			bucket, iname = v[0], v[1]
-			defnID, ok := getDefnID(client, bucket, iname)
+			defnID, ok := GetDefnID(client, bucket, iname)
 			if ok {
 				err = client.DropIndex(defnID)
 				if err == nil {
@@ -251,7 +251,7 @@ func HandleCommand(
 	case "scan":
 		var state c.IndexState
 
-		defnID, _ := getDefnID(client, bucket, iname)
+		defnID, _ := GetDefnID(client, bucket, iname)
 		fmt.Fprintln(w, "Scan index:")
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
@@ -262,9 +262,13 @@ func HandleCommand(
 			fmt.Fprintf(w, "Index state: {%v, %v}\n", state, err)
 		} else if cmd.Equal != nil {
 			equals := []c.SecondaryKey{cmd.Equal}
-			client.Lookup(uint64(defnID), equals, false, limit, callb)
+			client.Lookup(
+				uint64(defnID), equals, false, limit,
+				c.AnyConsistency, nil, callb)
 		} else {
-			err = client.Range(uint64(defnID), low, high, incl, false, limit, callb)
+			err = client.Range(
+				uint64(defnID), low, high, incl, false, limit,
+				c.AnyConsistency, nil, callb)
 		}
 		if err == nil {
 			fmt.Fprintln(w, "Total number of entries: ", entries)
@@ -273,7 +277,7 @@ func HandleCommand(
 	case "scanAll":
 		var state c.IndexState
 
-		defnID, _ := getDefnID(client, bucket, iname)
+		defnID, _ := GetDefnID(client, bucket, iname)
 		fmt.Fprintln(w, "ScanAll index:")
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
@@ -282,7 +286,8 @@ func HandleCommand(
 			state, err = client.IndexState(defnID)
 			fmt.Fprintf(w, "Index state: {%v, %v} \n", state, err)
 		} else {
-			err = client.ScanAll(uint64(defnID), limit, callb)
+			err = client.ScanAll(
+				uint64(defnID), limit, c.AnyConsistency, nil, callb)
 		}
 		if err == nil {
 			fmt.Fprintln(w, "Total number of entries: ", entries)
@@ -292,7 +297,7 @@ func HandleCommand(
 		var state c.IndexState
 		var statsResp c.IndexStatistics
 
-		defnID, _ := getDefnID(client, bucket, iname)
+		defnID, _ := GetDefnID(client, bucket, iname)
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
 			100 /*period*/, 20000 /*timeout*/)
@@ -313,7 +318,7 @@ func HandleCommand(
 		var state c.IndexState
 		var count int64
 
-		defnID, _ := getDefnID(client, bucket, iname)
+		defnID, _ := GetDefnID(client, bucket, iname)
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
 			100 /*period*/, 20000 /*timeout*/)
@@ -352,7 +357,7 @@ func printIndexInfo(w io.Writer, index *mclient.IndexMetadata) {
 	}
 }
 
-func getDefnID(
+func GetDefnID(
 	client *qclient.GsiClient,
 	bucket, indexName string) (defnID uint64, ok bool) {
 
@@ -408,7 +413,7 @@ func WaitUntilIndexState(
 // local functions
 //----------------
 
-func arg2key(arg []byte) []interface{} {
+func Arg2Key(arg []byte) []interface{} {
 	var key []interface{}
 	if err := json.Unmarshal(arg, &key); err != nil {
 		log.Fatal(err)

@@ -106,6 +106,40 @@ func (s IndexState) String() string {
 	}
 }
 
+// Consistency definition for index-scan queries.
+type Consistency byte
+
+const (
+	// AnyConsistency indexer would return the most current
+	// data available at the moment.
+	AnyConsistency Consistency = iota + 1
+
+	// SessionConsistency indexer would query the latest timestamp
+	// from each KV node. It will ensure that the scan result is at
+	// least as recent as the KV timestamp. In other words, this
+	// option ensures the query result is at least as recent as what
+	// the user session has observed so far.
+	SessionConsistency
+
+	// QueryConsistency indexer would accept a timestamp vector,
+	// and make sure to return a stable data-set that is atleast as
+	// recent as the timestamp-vector.
+	QueryConsistency
+)
+
+func (cons Consistency) String() string {
+	switch cons {
+	case AnyConsistency:
+		return "ANY_CONSISTENCY"
+	case SessionConsistency:
+		return "SESSION_CONSISTENCY"
+	case QueryConsistency:
+		return "QUERY_CONSISTENCY"
+	default:
+		return "UNKNOWN_CONSISTENCY"
+	}
+}
+
 //IndexDefn represents the index definition as specified
 //during CREATE INDEX
 type IndexDefn struct {

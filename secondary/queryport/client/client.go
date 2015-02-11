@@ -152,16 +152,22 @@ type GsiAccessor interface {
 	// Lookup scan index between low and high.
 	Lookup(
 		defnID uint64, values []common.SecondaryKey,
-		distinct bool, limit int64, callb ResponseHandler) error
+		distinct bool, limit int64,
+		cons common.Consistency, vector *TsConsistency,
+		callb ResponseHandler) error
 
 	// Range scan index between low and high.
 	Range(
 		defnID uint64, low, high common.SecondaryKey,
 		inclusion Inclusion, distinct bool, limit int64,
+		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
 
 	// ScanAll for full table scan.
-	ScanAll(defnID uint64, limit int64, callb ResponseHandler) error
+	ScanAll(
+		defnID uint64, limit int64,
+		cons common.Consistency, vector *TsConsistency,
+		callb ResponseHandler) error
 
 	// CountLookup of all entries in index.
 	CountLookup(defnID uint64) (int64, error)
@@ -278,25 +284,8 @@ func (c *GsiClient) RangeStatistics(
 // Lookup scan index between low and high.
 func (c *GsiClient) Lookup(
 	defnID uint64, values []common.SecondaryKey,
-	distinct bool, limit int64, callb ResponseHandler) error {
-
-	// check whether the index is present and available.
-	if _, err := c.bridge.IndexState(defnID); err != nil {
-		protoResp := &protobuf.ResponseStream{
-			Err: &protobuf.Error{Error: proto.String(err.Error())},
-		}
-		callb(protoResp)
-		return nil
-	}
-	return c.doScan(defnID, func(qc *gsiScanClient) error {
-		return qc.Lookup(defnID, values, distinct, limit, callb)
-	})
-}
-
-// Range scan index between low and high.
-func (c *GsiClient) Range(
-	defnID uint64, low, high common.SecondaryKey,
-	inclusion Inclusion, distinct bool, limit int64,
+	distinct bool, limit int64,
+	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) error {
 
 	// check whether the index is present and available.
@@ -308,13 +297,16 @@ func (c *GsiClient) Range(
 		return nil
 	}
 	return c.doScan(defnID, func(qc *gsiScanClient) error {
-		return qc.Range(defnID, low, high, inclusion, distinct, limit, callb)
+		return qc.Lookup(defnID, values, distinct, limit, cons, vector, callb)
 	})
 }
 
-// ScanAll for full table scan.
-func (c *GsiClient) ScanAll(
-	defnID uint64, limit int64, callb ResponseHandler) error {
+// Range scan index between low and high.
+func (c *GsiClient) Range(
+	defnID uint64, low, high common.SecondaryKey,
+	inclusion Inclusion, distinct bool, limit int64,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) error {
 
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
@@ -325,7 +317,27 @@ func (c *GsiClient) ScanAll(
 		return nil
 	}
 	return c.doScan(defnID, func(qc *gsiScanClient) error {
-		return qc.ScanAll(defnID, limit, callb)
+		return qc.Range(
+			defnID, low, high, inclusion, distinct, limit, cons, vector, callb)
+	})
+}
+
+// ScanAll for full table scan.
+func (c *GsiClient) ScanAll(
+	defnID uint64, limit int64,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) error {
+
+	// check whether the index is present and available.
+	if _, err := c.bridge.IndexState(defnID); err != nil {
+		protoResp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(protoResp)
+		return nil
+	}
+	return c.doScan(defnID, func(qc *gsiScanClient) error {
+		return qc.ScanAll(defnID, limit, cons, vector, callb)
 	})
 }
 
@@ -446,4 +458,44 @@ func makeWithMetaProvider(
 	}
 	c.updateScanClients()
 	return c, nil
+}
+
+//--------------------------
+// Consistency and Stability
+//--------------------------
+
+// TsConsistency specifies a subset of vbuckets to be used as
+// timestamp vector to specify consistency criteria.
+//
+// Timestamp-vector will be ignored for AnyConsistency, computed
+// locally by scan-coordinator or accepted as scan-arguments for
+// SessionConsistency.
+type TsConsistency struct {
+	Vbnos   []uint16
+	Seqnos  []uint64
+	Vbuuids []uint64
+}
+
+// NewTsConsistency returns a new consistency vector object.
+func NewTsConsistency(
+	vbnos []uint16, seqnos []uint64, vbuuids []uint64) *TsConsistency {
+
+	return &TsConsistency{Vbnos: vbnos, Seqnos: seqnos, Vbuuids: vbuuids}
+}
+
+// Override vbucket's {seqno, vbuuid} in the timestamp-vector,
+// if vbucket is not present in the vector, append them to vector.
+func (ts *TsConsistency) Override(
+	vbno uint16, seqno, vbuuid uint64) *TsConsistency {
+
+	for i, vb := range ts.Vbnos {
+		if vbno == vb {
+			ts.Seqnos[i], ts.Vbuuids[i] = seqno, vbuuid
+			return ts
+		}
+	}
+	ts.Vbnos = append(ts.Vbnos, vbno)
+	ts.Seqnos = append(ts.Seqnos, seqno)
+	ts.Vbuuids = append(ts.Vbuuids, vbuuid)
+	return ts
 }

@@ -83,3 +83,13 @@ func (s *IndexStatistics) DistinctCount() (int64, error) {
 func (s *IndexStatistics) Bins() ([]c.IndexStatistics, error) {
 	return nil, nil
 }
+
+func NewTsConsistency(
+	vbnos []uint16, seqnos []uint64, vbuuids []uint64) *TsConsistency {
+
+	vbnos32 := make([]uint32, len(vbnos))
+	for i, vbno := range vbnos {
+		vbnos32[i] = uint32(vbno)
+	}
+	return &TsConsistency{Vbnos: vbnos32, Seqnos: seqnos, Vbuuids: vbuuids}
+}

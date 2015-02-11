@@ -475,11 +475,31 @@ func (s *scanCoordinator) parseScanParams(
 		p.limit = r.GetLimit()
 		p.defnID = r.GetDefnID()
 		p.pageSize = r.GetPageSize()
+		vector := r.GetVector()
+		cons := common.Consistency(r.GetCons())
+		if cons == common.QueryConsistency && vector != nil {
+			p.ts = common.NewTsVbuuid("", s.config["numVbuckets"].Int())
+			tsCons := r.GetVector()
+			for i, vbno := range tsCons.Vbnos {
+				p.ts.Seqnos[vbno] = tsCons.Seqnos[i]
+				p.ts.Vbuuids[vbno] = tsCons.Vbuuids[i]
+			}
+		}
 	case *protobuf.ScanAllRequest:
 		p.scanType = queryScanAll
 		p.limit = r.GetLimit()
 		p.defnID = r.GetDefnID()
 		p.pageSize = r.GetPageSize()
+		vector := r.GetVector()
+		cons := common.Consistency(r.GetCons())
+		if cons == common.QueryConsistency && vector != nil {
+			p.ts = common.NewTsVbuuid("", s.config["numVbuckets"].Int())
+			tsCons := r.GetVector()
+			for i, vbno := range tsCons.Vbnos {
+				p.ts.Seqnos[vbno] = tsCons.Seqnos[i]
+				p.ts.Vbuuids[vbno] = tsCons.Vbuuids[i]
+			}
+		}
 	default:
 		err = ErrUnsupportedRequest
 	}
@@ -532,6 +552,9 @@ func (s *scanCoordinator) requestHandler(
 	}
 
 	p.indexName, p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
+	if p.ts != nil {
+		p.ts.Bucket = p.bucket
+	}
 
 	// Its a primary index scan
 	sd.isPrimary = indexInst.Defn.IsPrimary
@@ -776,7 +799,6 @@ func (s *scanCoordinator) findIndexInstance(
 	defer s.mu.RUnlock()
 
 	for _, inst := range s.indexInstMap {
-		fmt.Println("verify", inst.InstId, inst.Defn.DefnId, common.IndexDefnId(defnID))
 		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
 			if _, ok := s.indexPartnMap[inst.InstId]; ok {
 				return &inst, nil

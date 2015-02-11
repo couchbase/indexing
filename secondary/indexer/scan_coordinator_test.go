@@ -114,7 +114,7 @@ func TestInvalidIndexScan(t *testing.T) {
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
-	client.ScanAll(uint64(defnId), 40, verifyInvalidIndex)
+	client.ScanAll(uint64(defnId), 40, c.AnyConsistency, nil, verifyInvalidIndex)
 	client.Close()
 
 }
@@ -139,7 +139,9 @@ func TestIndexScan(t *testing.T) {
 	}
 	low := c.SecondaryKey{"low"}
 	high := c.SecondaryKey{"high"}
-	client.Range(uint64(defnId), low, high, queryclient.Inclusion(Both), false, 0, verifyIndexScanAll)
+	client.Range(
+		uint64(defnId), low, high, queryclient.Inclusion(Both), false, 0,
+		c.AnyConsistency, nil, verifyIndexScanAll)
 	client.Close()
 	if count != nkeys {
 		t.Error("Scan result entries count mismatch", count, "!=", nkeys)
@@ -163,7 +165,7 @@ func TestIndexScanAll(t *testing.T) {
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
-	client.ScanAll(uint64(defnId), 0, verifyIndexScanAll)
+	client.ScanAll(uint64(defnId), 0, c.AnyConsistency, nil, verifyIndexScanAll)
 	client.Close()
 	if count != nkeys {
 		t.Error("Scan result entries count mismatch", count, "!=", nkeys)
@@ -187,7 +189,7 @@ func TestIndexScanAllLimit(t *testing.T) {
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
-	client.ScanAll(uint64(defnId), 100, verifyIndexScanAll)
+	client.ScanAll(uint64(defnId), 100, c.AnyConsistency, nil, verifyIndexScanAll)
 	client.Close()
 	if count != 100 {
 		t.Error("Scan result entries count mismatch", count, "!=", 100)
@@ -211,7 +213,7 @@ func TestScanEmptyIndex(t *testing.T) {
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
-	client.ScanAll(uint64(defnId), 0, verifyIndexScanAll)
+	client.ScanAll(uint64(defnId), 0, c.AnyConsistency, nil, verifyIndexScanAll)
 	client.Close()
 	if count != 0 {
 		t.Error("Scan result entries count mismatch", count, "!=", nkeys)
@@ -236,7 +238,7 @@ func TestIndexScanErrors(t *testing.T) {
 	if err != nil {
 		t.Errorf("cannot create GsiClient %v", err)
 	}
-	client.ScanAll(uint64(defnId), 0, verifyIndexScanAll)
+	client.ScanAll(uint64(defnId), 0, c.AnyConsistency, nil, verifyIndexScanAll)
 
 	if count != 100 {
 		t.Error("Scan result entries count mismatch", count, "!=", 100)
@@ -250,7 +252,7 @@ func TestIndexScanErrors(t *testing.T) {
 	nerrors = 0
 	nkeys = 0
 
-	client.ScanAll(uint64(defnId), 0, verifyIndexScanAll)
+	client.ScanAll(uint64(defnId), 0, c.AnyConsistency, nil, verifyIndexScanAll)
 	if count != 0 {
 		t.Error("Scan result entries count mismatch", count, "!=", 0)
 	}
@@ -282,7 +284,7 @@ func TestIndexScanErrors(t *testing.T) {
 //h.createIndex("idx", "default", simpleKeyFeeder)
 //config := c.SystemConfig.SectionConfig("queryport.client.", true)
 //client := queryclient.NewClient(QUERY_PORT_ADDR, config)
-//client.ScanAll("idx", "default", 4092, 0, verifyIndexScanAll)
+//client.ScanAll("idx", "default", 4092, 0, c.AnyConsistency, nil, verifyIndexScanAll)
 //client.Close()
 //if count != nkeys {
 //t.Error("Scan result entries count mismatch", count, "!=", nkeys)

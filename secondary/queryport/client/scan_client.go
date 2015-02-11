@@ -121,7 +121,9 @@ func (c *gsiScanClient) RangeStatistics(
 // Lookup scan index between low and high.
 func (c *gsiScanClient) Lookup(
 	defnID uint64, values []common.SecondaryKey,
-	distinct bool, limit int64, callb ResponseHandler) error {
+	distinct bool, limit int64,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) error {
 
 	// serialize lookup value.
 	equals := make([][]byte, 0, len(values))
@@ -148,6 +150,11 @@ func (c *gsiScanClient) Lookup(
 		Distinct: proto.Bool(distinct),
 		PageSize: proto.Int64(1),
 		Limit:    proto.Int64(limit),
+		Cons:     proto.Uint32(uint32(cons)),
+	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
 	}
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
@@ -172,7 +179,8 @@ func (c *gsiScanClient) Lookup(
 // Range scan index between low and high.
 func (c *gsiScanClient) Range(
 	defnID uint64, low, high common.SecondaryKey, inclusion Inclusion,
-	distinct bool, limit int64, callb ResponseHandler) error {
+	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) error {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -203,6 +211,11 @@ func (c *gsiScanClient) Range(
 		Distinct: proto.Bool(distinct),
 		PageSize: proto.Int64(1),
 		Limit:    proto.Int64(limit),
+		Cons:     proto.Uint32(uint32(cons)),
+	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
 	}
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
@@ -226,7 +239,9 @@ func (c *gsiScanClient) Range(
 
 // ScanAll for full table scan.
 func (c *gsiScanClient) ScanAll(
-	defnID uint64, limit int64, callb ResponseHandler) error {
+	defnID uint64, limit int64,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) error {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
@@ -241,6 +256,11 @@ func (c *gsiScanClient) ScanAll(
 		DefnID:   proto.Uint64(defnID),
 		PageSize: proto.Int64(1),
 		Limit:    proto.Int64(limit),
+		Cons:     proto.Uint32(uint32(cons)),
+	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
 	}
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		logging.Errorf(

@@ -8,28 +8,7 @@ import "os"
 import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/querycmd"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import "github.com/couchbaselabs/goprotobuf/proto"
-
-var testStatisticsResponse = &protobuf.StatisticsResponse{
-	Stats: &protobuf.IndexStatistics{
-		KeysCount:       proto.Uint64(100),
-		UniqueKeysCount: proto.Uint64(100),
-		KeyMin:          []byte(`"aaaaa"`),
-		KeyMax:          []byte(`"zzzzz"`),
-	},
-}
-var testResponseStream = &protobuf.ResponseStream{
-	IndexEntries: []*protobuf.IndexEntry{
-		&protobuf.IndexEntry{
-			EntryKey: []byte(`["aaaaa"]`), PrimaryKey: []byte("key1"),
-		},
-		&protobuf.IndexEntry{
-			EntryKey: []byte(`["aaaaa"]`), PrimaryKey: []byte("key2"),
-		},
-	},
-}
 
 func usage(fset *flag.FlagSet) {
 	fmt.Fprintf(os.Stderr, "Usage: %s (sanity|bench|...)\n", os.Args[0])
@@ -67,6 +46,9 @@ func main() {
 
 	case "benchmark":
 		doBenchmark(cmdOptions.Server, "localhost:9101")
+
+	case "consistency":
+		doConsistency(cmdOptions.Server, client)
 	}
 	client.Close()
 }
