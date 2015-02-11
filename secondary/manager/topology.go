@@ -42,6 +42,7 @@ type IndexInstDistribution struct {
 	State      uint32                  `json:"state,omitempty"`
 	StreamId   uint32                  `json:"steamId,omitempty"`
 	Error      string                  `json:"error,omitempty"`
+	BuildTime  []uint64                `json:"buildTime,omitempty"`
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
 }
 
@@ -254,6 +255,23 @@ func (t *IndexTopology) SetErrorForIndexInstByDefn(defnId common.IndexDefnId, er
 				t.Definitions[i].Instances[j].Error = errorStr
 				logging.Debugf("IndexTopology.SetErrorForIndexInstByDefn(): Set error for index '%v' inst '%v.  Error = '%v'",
 					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Error)
+			}
+		}
+	}
+}
+
+//
+// Set BuildTime on instance
+//
+func (t *IndexTopology) SetBuildTimeForIndexInstByDefn(defnId common.IndexDefnId, buildTime []uint64) {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				t.Definitions[i].Instances[j].BuildTime = make([]uint64, len(buildTime))
+				copy(t.Definitions[i].Instances[j].BuildTime, buildTime)
+				logging.Debugf("IndexTopology.SetBuildTimeForIndexInstByDefn(): Set buildTime for index '%v' inst '%v, len(Buildtime) %d",
+					defnId, t.Definitions[i].Instances[j].InstId, len(t.Definitions[i].Instances[j].BuildTime))
 			}
 		}
 	}

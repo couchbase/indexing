@@ -38,11 +38,12 @@ type requestHolder struct {
 }
 
 type topologyChange struct {
-	Bucket   string `json:"bucket,omitempty"`
-	DefnId   uint64 `json:"defnId,omitempty"`
-	State    uint32 `json:"state,omitempty"`
-	StreamId uint32 `json:"steamId,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Bucket    string   `json:"bucket,omitempty"`
+	DefnId    uint64   `json:"defnId,omitempty"`
+	State     uint32   `json:"state,omitempty"`
+	StreamId  uint32   `json:"steamId,omitempty"`
+	Error     string   `json:"error,omitempty"`
+	BuildTime []uint64 `json:"buildTime,omitempty"`
 }
 
 func NewLifecycleMgr(addrProvider common.ServiceAddressProvider, notifier MetadataNotifier) *LifecycleMgr {
@@ -308,11 +309,11 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 	}
 
 	return m.UpdateIndexInstance(change.Bucket, common.IndexDefnId(change.DefnId), common.IndexState(change.State),
-		common.StreamId(change.StreamId), change.Error)
+		common.StreamId(change.StreamId), change.Error, change.BuildTime)
 }
 
 func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, state common.IndexState,
-	streamId common.StreamId, errStr string) error {
+	streamId common.StreamId, errStr string, buildTime []uint64) error {
 
 	topology, err := m.repo.GetTopologyByBucket(bucket)
 	if err != nil {
@@ -329,6 +330,10 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	}
 
 	topology.SetErrorForIndexInstByDefn(common.IndexDefnId(defnId), errStr)
+
+	if len(buildTime) > 0 {
+		topology.SetBuildTimeForIndexInstByDefn(common.IndexDefnId(defnId), buildTime)
+	}
 
 	if err := m.repo.SetTopologyByBucket(bucket, topology); err != nil {
 		logging.Errorf("LifecycleMgr.handleTopologyChange() : index instance update fails. Reason = %v", err)

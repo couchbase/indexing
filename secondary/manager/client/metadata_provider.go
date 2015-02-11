@@ -71,6 +71,7 @@ type InstanceDefn struct {
 	InstId    c.IndexInstId
 	State     c.IndexState
 	Error     string
+	BuildTime []uint64
 	IndexerId c.IndexerId
 	Endpts    []c.Endpoint
 }
@@ -634,6 +635,7 @@ func (r *metadataRepo) updateIndexMetadataNoLock(defnId c.IndexDefnId, inst *Ind
 		idxInst.InstId = c.IndexInstId(inst.InstId)
 		idxInst.State = c.IndexState(inst.State)
 		idxInst.Error = inst.Error
+		idxInst.BuildTime = inst.BuildTime
 
 		for _, partition := range inst.Partitions {
 			for _, slice := range partition.SinglePartition.Slices {

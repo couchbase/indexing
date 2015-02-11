@@ -143,13 +143,13 @@ func TestMetadataProvider(t *testing.T) {
 	logging.Infof("done creating index 103")
 
 	// Update instance (set state to ACTIVE)
-	if err := mgr.UpdateIndexInstance("Default", newDefnId2, common.INDEX_STATE_ACTIVE, common.StreamId(100), ""); err != nil {
+	if err := mgr.UpdateIndexInstance("Default", newDefnId2, common.INDEX_STATE_ACTIVE, common.StreamId(100), "", nil); err != nil {
 		t.Fatal("Fail to update index instance")
 	}
 	logging.Infof("done updating index 103")
 
 	// Update instance (set error string)
-	if err := mgr.UpdateIndexInstance("Default", newDefnId2, common.INDEX_STATE_NIL, common.NIL_STREAM, "testing"); err != nil {
+	if err := mgr.UpdateIndexInstance("Default", newDefnId2, common.INDEX_STATE_NIL, common.NIL_STREAM, "testing", nil); err != nil {
 		t.Fatal("Fail to update index instance")
 	}
 	logging.Infof("done updating index 103")
@@ -205,6 +205,9 @@ func TestMetadataProvider(t *testing.T) {
 		}
 		if meta.Instances[0].Error != "testing" {
 			t.Fatal(fmt.Sprintf("Index Defn %v has incorrect error string", newDefnId2))
+		}
+		if meta.Instances[0].BuildTime[10] != 33 {
+			t.Fatal(fmt.Sprintf("Index Defn %v has incorrect buildtime", newDefnId2))
 		}
 	}
 
@@ -340,6 +343,11 @@ func (n *notifier) OnIndexDelete(common.IndexDefnId) error {
 }
 
 func (n *notifier) OnIndexBuild(id []common.IndexDefnId) error {
-	err := gMgr.UpdateIndexInstance("Default", id[0], common.INDEX_STATE_INITIAL, common.StreamId(100), "")
+	buildTime := make([]uint64, 1024)
+	buildTime[10] = 33
+	err := gMgr.UpdateIndexInstance("Default", id[0], common.INDEX_STATE_INITIAL, common.StreamId(100), "", buildTime)
+
+	// change the value to test copy works
+	buildTime[10] = 34
 	return err
 }

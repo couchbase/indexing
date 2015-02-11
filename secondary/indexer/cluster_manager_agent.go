@@ -180,7 +180,7 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		}
 
 		err := c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId,
-			updatedState, updatedStream, updatedError)
+			updatedState, updatedStream, updatedError, nil)
 		common.CrashOnError(err)
 	}
 

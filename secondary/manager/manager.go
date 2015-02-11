@@ -415,14 +415,15 @@ func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
 }
 
 func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, state common.IndexState,
-	streamId common.StreamId, err string) error {
+	streamId common.StreamId, err string, buildTime []uint64) error {
 
 	inst := &topologyChange{
-		Bucket:   bucket,
-		DefnId:   uint64(defnId),
-		State:    uint32(state),
-		StreamId: uint32(streamId),
-		Error:    err}
+		Bucket:    bucket,
+		DefnId:    uint64(defnId),
+		State:     uint32(state),
+		StreamId:  uint32(streamId),
+		Error:     err,
+		BuildTime: buildTime}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {
