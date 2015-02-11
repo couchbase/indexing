@@ -12,6 +12,8 @@ package manager
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	c "github.com/couchbase/gometa/common"
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
@@ -21,12 +23,12 @@ import (
 )
 
 type LifecycleMgr struct {
-	repo      *MetadataRepo
-	scanport  string
-	notifier  MetadataNotifier
-	incomings chan *requestHolder
-	outgoings chan c.Packet
-	killch    chan bool
+	repo         *MetadataRepo
+	addrProvider common.ServiceAddressProvider
+	notifier     MetadataNotifier
+	incomings    chan *requestHolder
+	outgoings    chan c.Packet
+	killch       chan bool
 }
 
 type requestHolder struct {
@@ -42,14 +44,14 @@ type topologyChange struct {
 	Error    string `json:"error,omitempty"`
 }
 
-func NewLifecycleMgr(scanport string, notifier MetadataNotifier) *LifecycleMgr {
+func NewLifecycleMgr(addrProvider common.ServiceAddressProvider, notifier MetadataNotifier) *LifecycleMgr {
 
 	mgr := &LifecycleMgr{repo: nil,
-		scanport:  scanport,
-		notifier:  notifier,
-		incomings: make(chan *requestHolder, 1000),
-		outgoings: make(chan c.Packet, 1000),
-		killch:    make(chan bool)}
+		addrProvider: addrProvider,
+		notifier:     notifier,
+		incomings:    make(chan *requestHolder, 1000),
+		outgoings:    make(chan c.Packet, 1000),
+		killch:       make(chan bool)}
 
 	return mgr
 }
@@ -72,7 +74,7 @@ func (m *LifecycleMgr) Terminate() {
 
 func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 	common.Debugf("LifecycleMgr.OnNewRequest(): queuing new request. reqId %v", request.GetReqId())
-	
+
 	m.incomings <- &requestHolder{request: request, fid: fid}
 }
 
@@ -83,12 +85,12 @@ func (m *LifecycleMgr) GetResponseChannel() <-chan c.Packet {
 func (m *LifecycleMgr) processRequest() {
 
 	/*
-	defer func() {
-		if r := recover(); r != nil {
-			common.Debugf("panic in LifecycleMgr.processRequest() : %s\n", r)
-			common.Debugf("%s", debug.Stack())
-		}
-	}()
+		defer func() {
+			if r := recover(); r != nil {
+				common.Debugf("panic in LifecycleMgr.processRequest() : %s\n", r)
+				common.Debugf("%s", debug.Stack())
+			}
+		}()
 	*/
 
 	common.Debugf("LifecycleMgr.processRequest(): LifecycleMgr is ready to proces request")
@@ -120,31 +122,35 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 	fid := request.fid
 
 	common.Debugf("LifecycleMgr.dispatchRequest () : requestId %d, op %d, key %v", reqId, op, key)
-	
-	var err error
+
+	var err error = nil
+	var result []byte = nil
+
 	switch op {
 	case client.OPCODE_CREATE_INDEX:
-		err = m.handleCreateIndex(key, content, m.scanport)
+		err = m.handleCreateIndex(key, content)
 	case client.OPCODE_UPDATE_INDEX_INST:
 		err = m.handleTopologyChange(content)
 	case client.OPCODE_DROP_INDEX:
 		err = m.handleDeleteIndex(key)
 	case client.OPCODE_BUILD_INDEX:
-		err = m.handleBuildIndexes(content, m.scanport)
+		err = m.handleBuildIndexes(content)
+	case client.OPCODE_SERVICE_MAP:
+		result, err = m.handleServiceMap(content)
 	}
 
-	common.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d", reqId)
+	common.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
 
 	if err == nil {
-		msg := factory.CreateResponse(fid, reqId, "")
+		msg := factory.CreateResponse(fid, reqId, "", result)
 		m.outgoings <- msg
 	} else {
-		msg := factory.CreateResponse(fid, reqId, err.Error())
+		msg := factory.CreateResponse(fid, reqId, err.Error(), result)
 		m.outgoings <- msg
 	}
 }
 
-func (m *LifecycleMgr) handleCreateIndex(key string, content []byte, scanport string) error {
+func (m *LifecycleMgr) handleCreateIndex(key string, content []byte) error {
 
 	defn, err := common.UnmarshallIndexDefn(content)
 	if err != nil {
@@ -152,17 +158,36 @@ func (m *LifecycleMgr) handleCreateIndex(key string, content []byte, scanport st
 		return err
 	}
 
-	return m.CreateIndex(defn, scanport)
+	return m.CreateIndex(defn)
 }
 
-func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scanport string) error {
+func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
+
+	existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Name)
+	if err != nil {
+		common.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
+		return err
+	}
+
+	if existDefn != nil {
+		topology, err := m.repo.GetTopologyByBucket(existDefn.Bucket)
+		if err != nil {
+			common.Errorf("LifecycleMgr.handleCreateIndex() : fails to find index instance. Reason = %v", err)
+			return err
+		}
+
+		state := topology.GetStateByDefn(existDefn.DefnId)
+		if state != common.INDEX_STATE_NIL && state != common.INDEX_STATE_DELETED {
+			return errors.New(fmt.Sprintf("Index %s.%s already exist", defn.Bucket, defn.Name))
+		}
+	}
 
 	if err := m.repo.CreateIndex(defn); err != nil {
 		common.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 		return err
 	}
 
-	if err := m.repo.addIndexToTopology(defn, common.IndexInstId(defn.DefnId), scanport); err != nil {
+	if err := m.repo.addIndexToTopology(defn, common.IndexInstId(defn.DefnId)); err != nil {
 		common.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 		m.repo.DropIndexById(defn.DefnId)
 		return err
@@ -203,7 +228,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn, scanport string) erro
 	return nil
 }
 
-func (m *LifecycleMgr) handleBuildIndexes(content []byte, scanport string) error {
+func (m *LifecycleMgr) handleBuildIndexes(content []byte) error {
 
 	list, err := client.UnmarshallIndexIdList(content)
 	if err != nil {
@@ -216,10 +241,10 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte, scanport string) error
 		input[i] = common.IndexDefnId(id)
 	}
 
-	return m.BuildIndexes(input, scanport)
+	return m.BuildIndexes(input)
 }
 
-func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId, scanport string) error {
+func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId) error {
 
 	for _, id := range ids {
 		_, err := m.repo.GetIndexDefnById(id)
@@ -264,6 +289,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId) error {
 		return err
 	}
 
+	// Can call index delete again on already deleted defn
 	if m.notifier != nil {
 		m.notifier.OnIndexDelete(defn.DefnId)
 	}
@@ -296,7 +322,7 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	if state != common.INDEX_STATE_NIL {
 		topology.UpdateStateForIndexInstByDefn(common.IndexDefnId(defnId), common.IndexState(state))
 	}
-	
+
 	if streamId != common.NIL_STREAM {
 		topology.UpdateStreamForIndexInstByDefn(common.IndexDefnId(defnId), common.StreamId(streamId))
 	}
@@ -327,4 +353,37 @@ func (m *LifecycleMgr) updateIndexState(bucket string, defnId common.IndexDefnId
 	}
 
 	return nil
+}
+
+func (m *LifecycleMgr) handleServiceMap(content []byte) ([]byte, error) {
+
+	srvMap := new(client.ServiceMap)
+
+	id, err := m.repo.GetLocalIndexerId()
+	if err != nil {
+		return nil, err
+	}
+	srvMap.IndexerId = string(id)
+
+	srvMap.ScanAddr, err = m.addrProvider.GetLocalServiceAddress(common.INDEX_SCAN_SERVICE)
+	if err != nil {
+		return nil, err
+	}
+
+	srvMap.HttpAddr, err = m.addrProvider.GetLocalServiceAddress(common.INDEX_HTTP_SERVICE)
+	if err != nil {
+		return nil, err
+	}
+
+	srvMap.AdminAddr, err = m.addrProvider.GetLocalServiceAddress(common.INDEX_ADMIN_SERVICE)
+	if err != nil {
+		return nil, err
+	}
+
+	srvMap.NodeAddr, err = m.addrProvider.GetLocalHostAddress()
+	if err != nil {
+		return nil, err
+	}
+
+	return client.MarshallServiceMap(srvMap)
 }

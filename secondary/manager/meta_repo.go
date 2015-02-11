@@ -107,6 +107,11 @@ func NewLocalMetadataRepo(msgAddr string,
 	return repo, ref.server, nil
 }
 
+func (c *MetadataRepo) GetLocalIndexerId() (common.IndexerId, error) {
+	val, err := c.GetLocalValue("IndexerId")
+	return common.IndexerId(val), err
+}
+
 func (c *MetadataRepo) RegisterNotifier(notifier MetadataNotifier) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
@@ -191,6 +196,25 @@ func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDef
 	}
 
 	return common.UnmarshallIndexDefn(data)
+}
+
+func (c *MetadataRepo) GetIndexDefnByName(bucket string, name string) (*common.IndexDefn, error) {
+
+	iter, err := c.NewIterator()
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	_, defn, err := iter.Next()
+	for err == nil {
+		if defn.Bucket == bucket && defn.Name == name {
+			return defn, nil
+		}
+		_, defn, err = iter.Next()
+	}
+
+	return nil, nil
 }
 
 ///////////////////////////////////////////////////////
@@ -365,8 +389,8 @@ func (i *MetaIterator) Close() {
 // private function : LocalRepoRef
 ///////////////////////////////////////////////////////
 
-func newLocalRepoRef(msgAddr string, 
-	eventMgr *eventManager, 
+func newLocalRepoRef(msgAddr string,
+	eventMgr *eventManager,
 	reqHandler protocol.CustomRequestHandler,
 	repoName string) (*LocalRepoRef, error) {
 
@@ -762,7 +786,7 @@ func isStabilityTimestampKey(key string) bool {
 //
 // Add Index to Topology
 //
-func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, id common.IndexInstId, host string) error {
+func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, id common.IndexInstId) error {
 
 	// get existing topology
 	topology, err := m.GetTopologyByBucket(defn.Bucket)
@@ -773,8 +797,13 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, id common.Inde
 		topology.Version = 0
 	}
 
+	indexerId, err := m.GetLocalIndexerId()
+	if err != nil {
+		return err
+	}
+
 	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
-		uint64(id), uint32(common.INDEX_STATE_CREATED), host)
+		uint64(id), uint32(common.INDEX_STATE_CREATED), string(indexerId))
 
 	// Add a reference of the bucket-level topology to the global topology.
 	// If it fails later to create bucket-level topology, it will have

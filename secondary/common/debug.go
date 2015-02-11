@@ -1,24 +1,23 @@
 package common
 
-import (
-	"io"
-	"io/ioutil"
-	"log"
-	"os"
-	"strings"
-)
+import "io"
+import "io/ioutil"
+import "log"
+import "os"
+import "strings"
+import "sync/atomic"
 
 // Error, Warning, Fatal are always logged
 const (
 	// LogLevelInfo log messages for info
-	LogLevelInfo int = iota + 1
+	LogLevelInfo int32 = iota + 1
 	// LogLevelDebug log messages for info and debug
 	LogLevelDebug
 	// LogLevelTrace log messages info, debug and trace
 	LogLevelTrace
 )
 
-var logLevel int
+var logLevel int32
 var logFile io.Writer = os.Stdout
 var logger *log.Logger
 
@@ -51,8 +50,8 @@ func init() {
 }
 
 // LogLevel returns current log level
-func LogLevel() int {
-	return logLevel
+func LogLevel() int32 {
+	return atomic.LoadInt32(&logLevel)
 }
 
 // LogIgnore to ignore all log messages.
@@ -65,14 +64,14 @@ func LogEnable() {
 	logger = log.New(logFile, "", log.Lmicroseconds)
 }
 
-// Is log enabled
+// IslogEnabled to check whether logging is active.
 func IsLogEnabled() bool {
 	return logger != nil
 }
 
 // SetLogLevel sets current log level
-func SetLogLevel(level int) {
-	logLevel = level
+func SetLogLevel(level int32) {
+	atomic.StoreInt32(&logLevel, int32(level))
 }
 
 // SetLogWriter sets output file for log messages
@@ -106,7 +105,8 @@ func Fatalf(format string, v ...interface{}) {
 
 // Infof if logLevel >= Info
 func Infof(format string, v ...interface{}) {
-	if logLevel >= LogLevelInfo {
+	level := atomic.LoadInt32(&logLevel)
+	if level >= LogLevelInfo {
 		logger.Printf("[INFO ] "+format, v...)
 	}
 }
@@ -117,7 +117,8 @@ func Infof(format string, v ...interface{}) {
 
 // Debugf if logLevel >= Debug
 func Debugf(format string, v ...interface{}) {
-	if logLevel >= LogLevelDebug {
+	level := atomic.LoadInt32(&logLevel)
+	if level >= LogLevelDebug {
 		logger.Printf("[DEBUG] "+format, v...)
 	}
 }
@@ -128,7 +129,8 @@ func Debugf(format string, v ...interface{}) {
 
 // Tracef if logLevel >= Trace
 func Tracef(format string, v ...interface{}) {
-	if logLevel >= LogLevelTrace {
+	level := atomic.LoadInt32(&logLevel)
+	if level >= LogLevelTrace {
 		logger.Printf("[TRACE] "+format, v...)
 	}
 }
@@ -140,37 +142,46 @@ func StackTrace(s string) {
 	}
 }
 
-// SystemLog
+// SystemLog is a default 2i-logging object that can be passed around
+// to libraries.
 type SystemLog string
 
+// NewSystemLog returns a new instance of system-logger.
 func NewSystemLog() SystemLog {
 	return SystemLog("system-log")
 }
 
+// Warnf to log message and warning messages will be logged.
 func (log SystemLog) Warnf(format string, v ...interface{}) {
 	Warnf(format, v...)
 }
 
+// Errorf to log message and warning messages will be logged.
 func (log SystemLog) Errorf(format string, v ...interface{}) {
 	Errorf(format, v...)
 }
 
+// Fatalf to log message and warning messages will be logged.
 func (log SystemLog) Fatalf(format string, v ...interface{}) {
 	Fatalf(format, v...)
 }
 
+// Infof to log message at info level.
 func (log SystemLog) Infof(format string, v ...interface{}) {
 	Infof(format, v...)
 }
 
+// Debugf to log message at info level.
 func (log SystemLog) Debugf(format string, v ...interface{}) {
 	Debugf(format, v...)
 }
 
+// Tracef to log message at info level.
 func (log SystemLog) Tracef(format string, v ...interface{}) {
 	Tracef(format, v...)
 }
 
+// StackTrace parse string `s` and log it as error message.
 func (log SystemLog) StackTrace(s string) {
 	StackTrace(s)
 }

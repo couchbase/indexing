@@ -305,6 +305,10 @@ func TestLookupJsonObject(t *testing.T) {
 	var indexName = "index_streetaddress"
 	var bucketName = "default"
 
+	addDocIfNotPresentInKV("User3bf51f08-0bac-4c03-bcec-5c255cbdde2c")
+	addDocIfNotPresentInKV("Userbb48952f-f8d1-4e04-a0e1-96b9019706fb")
+	time.Sleep(2 * time.Second)
+
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
@@ -376,6 +380,7 @@ func TestRangeJsonObject(t *testing.T) {
 	docScanResults["Userbb48952f-f8d1-4e04-a0e1-96b9019706fb"] = []interface{}{value2}
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{low}, []interface{}{high}, 3, true, defaultlimit)
 	tc.PrintScanResults(scanResults, "scanResults")
+	tc.PrintScanResults(docScanResults, "docScanResults")
 	FailTestIfError(err, "Error in scan", t)
 	tv.Validate(docScanResults, scanResults)
 }
@@ -565,15 +570,8 @@ func TestBasicArrayDataType_Lookup(t *testing.T) {
 	var indexName = "index_tags"
 	var bucketName = "default"
 
-	key := "Usere46cea01-38f6-4e7b-92e5-69d64668ae75"
-	if _, present := docs[key]; present == false {
-		keysToBeSet := make(tc.KeyValues)
-		keysToBeSet[key] = mut_docs[key]
-		kvutility.SetKeyValues(keysToBeSet, "default", "", clusterconfig.KVAddress)
-		// Update docs object with newly added keys and remove those keys from mut_docs
-		docs[key] = mut_docs[key]
-		delete(mut_docs, key)
-	}
+	addDocIfNotPresentInKV("Usere46cea01-38f6-4e7b-92e5-69d64668ae75")
+	time.Sleep(2 * time.Second)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
 	FailTestIfError(err, "Error in creating the index", t)
@@ -783,5 +781,16 @@ func TestCountLookup(t *testing.T) {
 func FailTestIfError(err error, msg string, t *testing.T) {
 	if err != nil {
 		t.Fatal("%v: %v\n", msg, err)
+	}
+}
+
+func addDocIfNotPresentInKV(docKey string) {
+	if _, present := docs[docKey]; present == false {
+		keysToBeSet := make(tc.KeyValues)
+		keysToBeSet[docKey] = mut_docs[docKey]
+		kvutility.SetKeyValues(keysToBeSet, "default", "", clusterconfig.KVAddress)
+		// Update docs object with newly added keys and remove those keys from mut_docs
+		docs[docKey] = mut_docs[docKey]
+		delete(mut_docs, docKey)
 	}
 }

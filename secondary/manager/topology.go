@@ -13,7 +13,6 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
-	"net"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -61,9 +60,9 @@ type IndexKeyPartDistribution struct {
 }
 
 type IndexSliceLocator struct {
-	SliceId uint64 `json:"sliceId,omitempty"`
-	State   uint32 `json:"state,omitempty"`
-	Host    string `json:"host,omitempty"`
+	SliceId   uint64 `json:"sliceId,omitempty"`
+	State     uint32 `json:"state,omitempty"`
+	IndexerId string `json:"indexerId,omitempty"`
 }
 
 //
@@ -111,13 +110,13 @@ func (g *GlobalTopology) RemoveTopologyKey(key string) {
 //
 // Add an index definition to Topology.
 //
-func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, host string) {
+func (t *IndexTopology) AddIndexDefinition(bucket string, name string, defnId uint64, instId uint64, state uint32, indexerId string) {
 
 	t.RemoveIndexDefinition(bucket, name)
 
 	slice := new(IndexSliceLocator)
 	slice.SliceId = 0
-	slice.Host = host
+	slice.IndexerId = indexerId
 	slice.State = state
 
 	part := new(IndexPartDistribution)
@@ -280,23 +279,14 @@ func (t *IndexTopology) ChangeStateForIndexInstByDefn(defnId common.IndexDefnId,
 //
 // Update Index Status on instance
 //
-func (t *IndexTopology) GetHostForIndexInstByDefn(defnId common.IndexDefnId) []string {
+func (t *IndexTopology) GetStateByDefn(defnId common.IndexDefnId) common.IndexState {
 
-	var endpoints []string = nil
-
-	for _, defnRef := range t.Definitions {
-		if defnRef.DefnId == uint64(defnId) {
-			for _, inst := range defnRef.Instances {
-				for _, partition := range inst.Partitions {
-					for _, slice := range partition.SinglePartition.Slices {
-						endpoints = append(endpoints, slice.Host)
-					}
-				}
-			}
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			return common.IndexState(t.Definitions[i].Instances[0].State)
 		}
 	}
-
-	return endpoints
+	return common.INDEX_STATE_NIL
 }
 
 //
@@ -363,8 +353,7 @@ func GetAllDeletedIndexInstancesId(mgr *IndexManager, buckets []string) ([]uint6
 // Get all index instances for the topology as protobuf message
 //
 func GetTopologyAsInstanceProtoMsg(mgr *IndexManager,
-	bucket string,
-	port string) ([]*protobuf.Instance, *IndexTopology, error) {
+	bucket string, port string) ([]*protobuf.Instance, *IndexTopology, error) {
 
 	// Get the topology from the dictionary
 	topology, err := mgr.GetTopologyByBucket(bucket)
@@ -450,8 +439,7 @@ func GetChangeRecordAsProtoMsg(mgr *IndexManager, changes []*changeRecord, port 
 // Serialize topology into a protobuf message format
 //
 func convertTopologyToIndexInstProtoMsg(mgr *IndexManager,
-	topology *IndexTopology,
-	port string) ([]*protobuf.Instance, error) {
+	topology *IndexTopology, port string) ([]*protobuf.Instance, error) {
 
 	var result []*protobuf.Instance = nil
 
@@ -543,11 +531,7 @@ func convertIndexInstToProtoMsg(inst *IndexInstDistribution,
 
 	// accumulate endpoints for this instance
 	var endpoints []string
-	for _, partition := range inst.Partitions {
-		for _, slice := range partition.SinglePartition.Slices {
-			endpoints = append(endpoints, net.JoinHostPort(slice.Host, port))
-		}
-	}
+	endpoints = append(endpoints, port)
 
 	//
 	//	message TestPartition {

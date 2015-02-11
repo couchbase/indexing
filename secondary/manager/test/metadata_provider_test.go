@@ -46,7 +46,8 @@ func TestMetadataProvider(t *testing.T) {
 	factory := new(util.TestDefaultClientFactory)
 	env := new(util.TestDefaultClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
-	mgr, err := manager.NewIndexManagerInternal(msgAddr, "localhost:"+manager.COORD_MAINT_STREAM_PORT, admin, cfg)
+	addrPrv := util.NewFakeAddressProvider(msgAddr)
+	mgr, err := manager.NewIndexManagerInternal(addrPrv, admin, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +71,10 @@ func TestMetadataProvider(t *testing.T) {
 	}
 	defer provider.Close()
 	provider.SetTimeout(int64(time.Second) * 15)
-	provider.WatchMetadata(msgAddr)
+	indexerId, err := provider.WatchMetadata(msgAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// the gometa server is running in the same process as MetadataProvider (client).  So sleep to
 	// make sure that the server has a chance to finish off initialization, since the client may
@@ -87,7 +91,7 @@ func TestMetadataProvider(t *testing.T) {
 	if len(meta.Instances) == 0 || meta.Instances[0].State != common.INDEX_STATE_READY {
 		t.Fatal("Index Defn 100 state is not ready")
 	}
-	if meta.Instances[0].Endpts[0] != "localhost:"+manager.COORD_MAINT_STREAM_PORT {
+	if meta.Instances[0].IndexerId != indexerId {
 		t.Fatal("Index Defn 100 state is not ready")
 	}
 
@@ -99,7 +103,7 @@ func TestMetadataProvider(t *testing.T) {
 	if len(meta.Instances) == 0 || meta.Instances[0].State != common.INDEX_STATE_READY {
 		t.Fatal("Index Defn 101 state is not ready")
 	}
-	if meta.Instances[0].Endpts[0] != "localhost:"+manager.COORD_MAINT_STREAM_PORT {
+	if meta.Instances[0].IndexerId != indexerId {
 		t.Fatal("Index Defn 100 state is not ready")
 	}
 
@@ -119,20 +123,20 @@ func TestMetadataProvider(t *testing.T) {
 	}
 	input := make([]common.IndexDefnId, 1)
 	input[0] = newDefnId
-	if err := provider.BuildIndexes(msgAddr, input); err != nil {
+	if err := provider.BuildIndexes(input); err != nil {
 		t.Fatal("Cannot build Index Defn : %v", err)
 	}
 	common.Infof("done creating index 102")
 
 	// Drop a seeded index (created during setup step)
-	if err := provider.DropIndex(common.IndexDefnId(101), msgAddr); err != nil {
+	if err := provider.DropIndex(common.IndexDefnId(101)); err != nil {
 		t.Fatal("Cannot drop Index Defn 101 through MetadataProvider")
 	}
 	common.Infof("done dropping index 101")
 
 	// Create Index (immediate).
-	newDefnId2, err := provider.CreateIndex("metadata_provider_test_103", "Default", common.ForestDB,
-		common.N1QL, "Testing", "TestingWhereExpr", msgAddr, []string{"Testing"}, false)
+	newDefnId2, err := provider.CreateIndexWithPlan("metadata_provider_test_103", "Default", common.ForestDB,
+		common.N1QL, "Testing", "TestingWhereExpr", []string{"Testing"}, false, nil)
 	if err != nil {
 		t.Fatal("Cannot create Index Defn 103 through MetadataProvider")
 	}
@@ -151,8 +155,8 @@ func TestMetadataProvider(t *testing.T) {
 	common.Infof("done updating index 103")
 
 	// Create Index (immediate).  This index is supposed to fail by OnIndexBuild()
-	if _, err := provider.CreateIndex("metadata_provider_test_104", "Default", common.ForestDB,
-		common.N1QL, "Testing", "Testing", msgAddr, []string{"Testing"}, false); err == nil {
+	if _, err := provider.CreateIndexWithPlan("metadata_provider_test_104", "Default", common.ForestDB,
+		common.N1QL, "Testing", "Testing", []string{"Testing"}, false, nil); err == nil {
 		t.Fatal("Error does not propage for create Index Defn 104 through MetadataProvider")
 	}
 	common.Infof("done creating index 104")
@@ -174,7 +178,7 @@ func TestMetadataProvider(t *testing.T) {
 	} else {
 		common.Infof("Found Index Defn %d", newDefnId)
 		common.Infof("meta.Instance %v", meta.Instances)
-		if meta.Instances[0].Endpts[0] != "localhost:"+manager.COORD_MAINT_STREAM_PORT {
+		if meta.Instances[0].IndexerId != indexerId {
 			t.Fatal(fmt.Sprintf("Index Defn %v has incorrect endpoint", newDefnId))
 		}
 		if meta.Definition.WhereExpr != "TestingWhereExpr" {
@@ -190,7 +194,7 @@ func TestMetadataProvider(t *testing.T) {
 	} else {
 		common.Infof("Found Index Defn %d", newDefnId2)
 		common.Infof("meta.Instance %v", meta.Instances)
-		if meta.Instances[0].Endpts[0] != "localhost:"+manager.COORD_MAINT_STREAM_PORT {
+		if meta.Instances[0].IndexerId != indexerId {
 			t.Fatal(fmt.Sprintf("Index Defn %v has incorrect endpoint", newDefnId2))
 		}
 		if meta.Definition.WhereExpr != "TestingWhereExpr" {
@@ -220,8 +224,8 @@ func TestMetadataProvider(t *testing.T) {
 
 	// Create Index (immediate).
 
-	newDefnId105, err := provider.CreateIndex("metadata_provider_test_105", "Default", common.ForestDB,
-		common.N1QL, "Testing", "TestingWhereExpr", msgAddr, []string{"Testing"}, false)
+	newDefnId105, err := provider.CreateIndexWithPlan("metadata_provider_test_105", "Default", common.ForestDB,
+		common.N1QL, "Testing", "TestingWhereExpr", []string{"Testing"}, false, nil)
 	if err == nil {
 		t.Fatal("Does not receive timeout error for create Index Defn 105 through MetadataProvider")
 	}
@@ -230,7 +234,7 @@ func TestMetadataProvider(t *testing.T) {
 
 	common.Infof("Cleanup Test *********************************************************")
 
-	provider.UnwatchMetadata(msgAddr)
+	provider.UnwatchMetadata(indexerId)
 	cleanupTest(mgr, t)
 	cleanSingleIndex(mgr, t, newDefnId)
 	cleanSingleIndex(mgr, t, newDefnId2)
@@ -253,6 +257,12 @@ func lookup(provider *client.MetadataProvider, id common.IndexDefnId) *client.In
 
 func setupInitialData(mgr *manager.IndexManager, t *testing.T) {
 
+	uuid, err := common.NewUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr.SetLocalValue("IndexerId", uuid.Str())
+
 	// Add a new index definition : 100
 	idxDefn := &common.IndexDefn{
 		DefnId:          common.IndexDefnId(100),
@@ -265,8 +275,7 @@ func setupInitialData(mgr *manager.IndexManager, t *testing.T) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	err := mgr.HandleCreateIndexDDL(idxDefn)
-	if err != nil {
+	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,8 +291,7 @@ func setupInitialData(mgr *manager.IndexManager, t *testing.T) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	err = mgr.HandleCreateIndexDDL(idxDefn)
-	if err != nil {
+	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -480,7 +480,13 @@ func (si *secondaryIndex) Condition() expression.Expression {
 }
 
 // State implement Index{} interface.
-func (si *secondaryIndex) State() (state datastore.IndexState, msg string, err errors.Error) {
+func (si *secondaryIndex) State() (datastore.IndexState, string, errors.Error) {
+	if si.err != "" {
+		// if err is not empty, return OFFLINE with error reason
+		// and the state in which the error occured.
+		msg := fmt.Sprintf("error %s while in state %v", si.err, si.state)
+		return datastore.OFFLINE, msg, errors.NewError(nil, msg)
+	}
 	return si.state, "", nil
 }
 
@@ -734,7 +740,7 @@ func string2defnID(id string) uint64 {
 //-----------------
 
 var muclient sync.Mutex
-var singletonClient *qclient.GsiClient = nil
+var singletonClient *qclient.GsiClient
 
 func getSingletonClient(clusterURL string) (*qclient.GsiClient, error) {
 	muclient.Lock()
@@ -744,7 +750,7 @@ func getSingletonClient(clusterURL string) (*qclient.GsiClient, error) {
 		qconf := c.SystemConfig.SectionConfig("queryport.client.", true /*trim*/)
 		client, err := qclient.NewGsiClient(clusterURL, qconf)
 		if err != nil {
-			return nil, fmt.Errorf("NewGsiClient(): %v", err)
+			return nil, fmt.Errorf("in NewGsiClient(): %v", err)
 		}
 		singletonClient = client
 	}

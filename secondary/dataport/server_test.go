@@ -16,7 +16,7 @@ func TestTimeout(t *testing.T) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	prefix := "projector.dataport.indexer."
+	prefix := "indexer.dataport."
 	dconfig := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
 	daemon, err := NewServer(raddr, maxvbuckets, dconfig, appch)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestLoopback(t *testing.T) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	prefix := "projector.dataport.indexer."
+	prefix := "indexer.dataport."
 	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
 	daemon, err := NewServer(raddr, maxvbuckets, config, appch)
 	if err != nil {
@@ -203,7 +203,7 @@ func BenchmarkLoopback(b *testing.B) {
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
-	prefix := "projector.dataport.indexer."
+	prefix := "indexer.dataport."
 	config := c.SystemConfig.SectionConfig(prefix, true /*trim*/)
 	daemon, err := NewServer(raddr, maxvbuckets, config, appch)
 	if err != nil {

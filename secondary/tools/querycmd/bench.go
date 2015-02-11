@@ -10,12 +10,15 @@ import qclient "github.com/couchbase/indexing/secondary/queryport/client"
 import "github.com/couchbase/indexing/secondary/queryport"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 
+var mock_nclients = 1
+var mock_duration = 1
+
 //--------------------
 // Benchmark queryport
 //--------------------
 
 func doBenchmark(cluster, addr string) {
-	qconf := c.SystemConfig.SectionConfig("queryport.indexer.", true)
+	qconf := c.SystemConfig.SectionConfig("indexer.queryport.", true)
 	s, err := queryport.NewServer(addr, serverCallb, qconf)
 	if err != nil {
 		log.Fatal(err)

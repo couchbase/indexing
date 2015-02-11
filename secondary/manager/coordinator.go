@@ -18,7 +18,6 @@ import (
 	protocol "github.com/couchbase/gometa/protocol"
 	r "github.com/couchbase/gometa/repository"
 	co "github.com/couchbase/indexing/secondary/common"
-	"math"
 	"path/filepath"
 	"sync"
 	"time"
@@ -621,12 +620,12 @@ func (c *Coordinator) Commit(txid common.Txnid) error {
 }
 
 func (c *Coordinator) Abort(fid string, reqId uint64, err string) error {
-	c.updateRequestOnRespond(fid, reqId, err)
+	c.updateRequestOnRespond(fid, reqId, err, nil)
 	return nil
 }
 
-func (c *Coordinator) Respond(fid string, reqId uint64, err string) error {
-	c.updateRequestOnRespond(fid, reqId, err)
+func (c *Coordinator) Respond(fid string, reqId uint64, err string, content []byte) error {
+	c.updateRequestOnRespond(fid, reqId, err, content)
 	return nil
 }
 
@@ -692,7 +691,7 @@ func (c *Coordinator) updateRequestOnNewProposal(proposal protocol.ProposalMsg) 
 	}
 }
 
-func (c *Coordinator) updateRequestOnRespond(fid string, reqId uint64, err string) {
+func (c *Coordinator) updateRequestOnRespond(fid string, reqId uint64, err string, content []byte) {
 
 	// If this host is the one that sends the request to the leader
 	if fid == c.GetFollowerId() {
@@ -778,13 +777,9 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 		return false
 	}
 
-	host, err := c.findNextAvailNodeForIndex()
-	if err != nil {
-		co.Debugf("Fail to find a host to store the index '%s'", defn.Name)
-		return false
-	}
-
-	if err := c.idxMgr.getLifecycleMgr().CreateIndex(defn, host); err != nil {
+	// For now, use the local host. This logic is not called in sherlock production code.
+	// But still will be called in uint test.
+	if err := c.idxMgr.getLifecycleMgr().CreateIndex(defn); err != nil {
 		co.Debugf("Coordinator.createIndexy() : createIndex fails. Reason = %s", err.Error())
 		return false
 	}
@@ -811,75 +806,4 @@ func (c *Coordinator) deleteIndex(key string) bool {
 	}
 
 	return true
-}
-
-//
-// Find next available node to host a new index for a particular bucket.
-// This is purely only look at number of index definitons deployed for each
-// node.  This does not take into account node availability as well as
-// working set.  The node to deploy an index should really come from the
-// DBA based on index runtime statistics.
-//
-func (c *Coordinator) findNextAvailNodeForIndex() (string, error) {
-
-	// Get Global Topology
-	globalTop, err := c.repo.GetGlobalTopology()
-	if err != nil {
-		// Use the local node
-		return c.env.getLocalHost()
-	}
-
-	// initialize a map of indexCount per node
-	indexCount := make(map[string]int)
-
-	// Initialize the map with local index node
-	host, err := c.env.getLocalHost()
-	if err != nil {
-		return "", err
-	}
-	indexCount[host] = 0
-
-	// Intialize the map with peer index node
-	hosts, err := c.env.getPeerHost()
-	if err != nil {
-		return "", err
-	}
-	for _, host := range hosts {
-		indexCount[host] = 0
-	}
-
-	// Iterate through the topology for each bucket.  From the slice locator,
-	// find out the node that host the index.   Increment the indexCount accordingly.
-	for _, key := range globalTop.TopologyKeys {
-		t, err := c.repo.GetTopologyByBucket(getBucketFromTopologyKey(key))
-		if err != nil {
-			return "", err
-		}
-
-		for _, defnRef := range t.Definitions {
-			for _, inst := range defnRef.Instances {
-				for _, partition := range inst.Partitions {
-					singlePart := partition.SinglePartition
-					for _, slice := range singlePart.Slices {
-						count, ok := indexCount[slice.Host]
-						if ok {
-							indexCount[slice.Host] = count + 1
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// look for the host with the smallest count (least populated).
-	minCount := math.MaxInt32
-	chosenHost := ""
-	for host, count := range indexCount {
-		if count < minCount {
-			minCount = count
-			chosenHost = host
-		}
-	}
-
-	return chosenHost, nil
 }

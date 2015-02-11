@@ -24,6 +24,7 @@ const (
 	OPCODE_DROP_INDEX                      = OPCODE_CREATE_INDEX + 1
 	OPCODE_BUILD_INDEX                     = OPCODE_DROP_INDEX + 1
 	OPCODE_UPDATE_INDEX_INST               = OPCODE_BUILD_INDEX + 1
+	OPCODE_SERVICE_MAP                     = OPCODE_UPDATE_INDEX_INST + 1
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -71,9 +72,9 @@ type IndexKeyPartDistribution struct {
 }
 
 type IndexSliceLocator struct {
-	SliceId uint64 `json:"sliceId,omitempty"`
-	State   uint32 `json:"state,omitempty"`
-	Host    string `json:"host,omitempty"`
+	SliceId   uint64 `json:"sliceId,omitempty"`
+	State     uint32 `json:"state,omitempty"`
+	IndexerId string `json:"indexerId,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -82,6 +83,18 @@ type IndexSliceLocator struct {
 
 type IndexIdList struct {
 	DefnIds []uint64 `json:"defnIds,omitempty"`
+}
+
+/////////////////////////////////////////////////////////////////////////
+// Service Map
+////////////////////////////////////////////////////////////////////////
+
+type ServiceMap struct {
+	IndexerId string `json:"indexerId,omitempty"`
+	ScanAddr  string `json:"scanAddr,omitempty"`
+	HttpAddr  string `json:"httpAddr,omitempty"`
+	AdminAddr string `json:"adminAddr,omitempty"`
+	NodeAddr  string `json:"nodeAddr,omitempty"`
 }
 
 /////////////////////////////////////////////////////////////////////////
@@ -133,6 +146,30 @@ func MarshallIndexIdList(list *IndexIdList) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return buf, nil
+}
+
+func UnmarshallServiceMap(data []byte) (*ServiceMap, error) {
+
+	c.Debugf("UnmarshallServiceMap: %v", string(data))
+
+	list := new(ServiceMap)
+	if err := json.Unmarshal(data, list); err != nil {
+		return nil, err
+	}
+
+	return list, nil
+}
+
+func MarshallServiceMap(srvMap *ServiceMap) ([]byte, error) {
+
+	buf, err := json.Marshal(&srvMap)
+	if err != nil {
+		return nil, err
+	}
+
+	c.Debugf("MarshallServiceMap: %v", string(buf))
 
 	return buf, nil
 }

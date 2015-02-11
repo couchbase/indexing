@@ -67,3 +67,8 @@ type RouterEndpoint interface {
 	// synchronous call.
 	Close() error
 }
+
+// MarshalJSON implements encoding/json.Marshaler{} interface
+func (r RouterEndpointFactory) MarshalJSON() ([]byte, error) {
+	return []byte(`""`), nil
+}

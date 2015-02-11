@@ -54,7 +54,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	//start a new mutation stream
 	streamMutch := make(chan interface{})
 	config := common.SystemConfig.SectionConfig(
-		"projector.dataport.indexer.", true /*trim*/)
+		"indexer.dataport.", true /*trim*/)
 	stream, err := dataport.NewServer(
 		string(StreamAddrMap[streamId]),
 		common.SystemConfig["maxVbuckets"].Int(),

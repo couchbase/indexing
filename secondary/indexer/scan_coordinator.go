@@ -307,7 +307,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
 	// TODO: Move queryport config to indexer.queryport base
-	queryportCfg := common.SystemConfig.SectionConfig("queryport.indexer.", true)
+	queryportCfg := common.SystemConfig.SectionConfig("indexer.queryport.", true)
 	s.serv, err = queryport.NewServer(addr, s.requestHandler, queryportCfg)
 
 	if err != nil {

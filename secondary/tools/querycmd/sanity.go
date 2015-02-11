@@ -3,78 +3,32 @@ package main
 import "fmt"
 import "time"
 import "math/rand"
+import "os"
+import "log"
 
-import c "github.com/couchbase/indexing/secondary/common"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
+import "github.com/couchbase/indexing/secondary/querycmd"
 
 //----------------------------------
 // sanity check for queryport client
 //----------------------------------
 
-func doSanityTests(cluster string, client *qclient.GsiClient) (err error) {
-	cinfo, err :=
-		c.NewClusterInfoCache(c.ClusterUrl(cluster), "default" /*pooln*/)
-	if err != nil {
-		return err
-	}
-	if err = cinfo.Fetch(); err != nil {
-		return err
-	}
-	adminports, err := getIndexerAdminports(cinfo)
-	if err != nil {
-		return err
-	}
-
-	fixDeployments(adminports)
+func doSanityTests(
+	cluster string, client *qclient.GsiClient) (err error) {
 
 	for _, args := range sanityCommands {
-		cmd, _ := parseArgs(args)
-		if err = handleCommand(client, cmd, true); err != nil {
+		cmd, _, _, err := querycmd.ParseArgs(args)
+		if err != nil {
+			log.Fatal(err)
+		}
+		err = querycmd.HandleCommand(client, cmd, true, os.Stdout)
+		if err != nil {
 			fmt.Printf("%#v\n", cmd)
 			fmt.Printf("    %v\n", err)
 		}
 		fmt.Println()
 	}
 	return
-}
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
-
-func fixDeployments(adminports []string) {
-	cmds := make([][]string, 0, len(sanityCommands))
-	for _, cmd := range sanityCommands {
-		if cmd[0] == "-type" && cmd[1] == "create" {
-			rnd := rand.Intn(100000)
-			n := (rnd / (10000 / len(adminports))) % len(adminports)
-			switch cmd[5] {
-			case "index-city":
-				with := fmt.Sprintf("{\"nodes\": [%q]}", adminports[n])
-				cmd = append(cmd, "-with", with)
-			case "index-abv":
-				f := "{\"nodes\": [%q], \"defer_build\": true}"
-				with := fmt.Sprintf(f, adminports[n])
-				cmd = append(cmd, "-with", with)
-			}
-		}
-		cmds = append(cmds, cmd)
-	}
-	sanityCommands = cmds
-}
-
-func getIndexerAdminports(
-	cinfo *c.ClusterInfoCache) ([]string, error) {
-
-	iAdminports := make([]string, 0)
-	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
-		adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
-		if err != nil {
-			return nil, err
-		}
-		iAdminports = append(iAdminports, adminport)
-	}
-	return iAdminports, nil
 }
 
 var sanityCommands = [][]string{
@@ -87,7 +41,7 @@ var sanityCommands = [][]string{
 	},
 	[]string{
 		"-type", "create", "-bucket", "beer-sample", "-index", "index-abv",
-		"-fields", "abv",
+		"-fields", "abv", "-with", "{\"defer_build\": true}",
 	},
 	[]string{"-type", "list", "-bucket", "beer-sample"},
 
@@ -113,7 +67,7 @@ var sanityCommands = [][]string{
 		"-type", "count", "-bucket", "beer-sample", "-index", "index-city",
 	},
 	[]string{
-		"-type", "drop", "-bucket", "beer-sample", "-index", "index-city",
+		"-type", "drop", "-indexes", "beer-sample:index-city",
 	},
 
 	// Deferred build
@@ -143,6 +97,10 @@ var sanityCommands = [][]string{
 		"-type", "count", "-bucket", "beer-sample", "-index", "index-abv",
 	},
 	[]string{
-		"-type", "drop", "-bucket", "beer-sample", "-index", "index-abv",
+		"-type", "drop", "-indexes", "beer-sample:index-abv",
 	},
+}
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
 }

@@ -105,7 +105,16 @@ const (
 	fCmdShutdown
 	fCmdGetTopicResponse
 	fCmdGetStatistics
+	fCmdSetConfig
 )
+
+// SetConfig for this feed.
+func (feed *Feed) SetConfig(config c.Config) error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdSetConfig, config, respch}
+	_, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return err
+}
 
 // MutationTopic will start the feed.
 // Synchronous call.
@@ -425,6 +434,11 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.getStatistics()}
 
+	case fCmdSetConfig:
+		config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
+		feed.setConfig(config)
+		respch <- []interface{}{nil}
+
 	case fCmdShutdown:
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.shutdown()}
@@ -485,6 +499,8 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
 		kvdata := feed.startDataPath(bucketn, feeder, ts)
+		engines, _ := feed.engines[bucketn]
+		kvdata.AddEngines(engines, feed.endpoints)
 		feed.kvdata[bucketn] = kvdata // :SideEffect:
 		// wait for stream to start ...
 		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
@@ -563,6 +579,8 @@ func (feed *Feed) restartVbuckets(
 		// open data-path, if not already open.
 		if _, ok := feed.kvdata[bucketn]; !ok {
 			kvdata := feed.startDataPath(bucketn, feeder, ts)
+			engines, _ := feed.engines[bucketn]
+			kvdata.AddEngines(engines, feed.endpoints)
 			feed.kvdata[bucketn] = kvdata // :SideEffect:
 		}
 		// wait stream to start ...
@@ -692,6 +710,8 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
 		kvdata := feed.startDataPath(bucketn, feeder, ts)
+		engines, _ := feed.engines[bucketn]
+		kvdata.AddEngines(engines, feed.endpoints)
 		feed.kvdata[bucketn] = kvdata // :SideEffect:
 		// wait for stream to start ...
 		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
@@ -831,6 +851,31 @@ func (feed *Feed) getStatistics() c.Statistics {
 	}
 	stats.Set("endpoints", endStats)
 	return stats
+}
+
+func (feed *Feed) setConfig(config c.Config) {
+	feed.config = feed.config.Override(config)
+
+	pconf := feed.config.SectionConfig("projector.", true /*trim*/)
+	epf := pconf["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
+	feed.reqTimeout = time.Duration(pconf["feedWaitStreamReqTimeout"].Int())
+	feed.endTimeout = time.Duration(pconf["feedWaitStreamEndTimeout"].Int())
+	feed.epFactory = epf
+	c.Infof("%v updated configuration ...\n", feed.logPrefix)
+	c.Infof(
+		"%v feedWaitStreamReqTimeout : %v*1000\n",
+		feed.logPrefix, feed.reqTimeout)
+	c.Infof(
+		"%v feedWaitStreamEndTimeout : %v*1000\n",
+		feed.logPrefix, feed.endTimeout)
+	for _, kvdata := range feed.kvdata {
+		kvdata.SetConfig(pconf)
+	}
+
+	econf := feed.config.SectionConfig("endpoint.dataport.", true /*trim*/)
+	for _, endpoint := range feed.endpoints {
+		endpoint.SetConfig(econf)
+	}
 }
 
 func (feed *Feed) shutdown() error {
@@ -1028,7 +1073,7 @@ func (feed *Feed) startDataPath(
 		kvdata.UpdateTs(ts)
 	} else { // pass engines & endpoints to kvdata.
 		engs, ends := feed.engines[bucketn], feed.endpoints
-		kvdata = NewKVData(feed, bucketn, ts, engs, ends, mutch)
+		kvdata = NewKVData(feed, bucketn, ts, engs, ends, mutch, feed.config)
 	}
 	return kvdata
 }

@@ -12,7 +12,6 @@ package main
 import (
 	"flag"
 	"log"
-	"os"
 	"strings"
 
 	"github.com/couchbase/cbauth"
@@ -21,7 +20,7 @@ import (
 )
 
 var (
-	logLevel          = flag.Int("log", common.LogLevelInfo, "Log Level - 1(Info), 2(Debug), 3(Trace)")
+	logLevel          = flag.Int("log", int(common.LogLevelInfo), "Log Level - 1(Info), 2(Debug), 3(Trace)")
 	numVbuckets       = flag.Int("vbuckets", indexer.MAX_NUM_VBUCKETS, "Number of vbuckets configured in Couchbase")
 	cluster           = flag.String("cluster", indexer.DEFAULT_CLUSTER_ENDPOINT, "Couchbase cluster address")
 	adminPort         = flag.String("adminPort", "9100", "Index ddl and status port")
@@ -34,13 +33,6 @@ var (
 	enableManager     = flag.Bool("enable_manager", true, "Enable Index Manager")
 	auth              = flag.String("auth", "", "Auth user and password")
 )
-
-func MaybeSetEnv(key, value string) {
-	if os.Getenv(key) != "" {
-		return
-	}
-	os.Setenv(key, value)
-}
 
 func main() {
 	common.HideConsole(true)
@@ -60,7 +52,7 @@ func main() {
 	go common.DumpOnSignal()
 	go common.ExitOnStdinClose()
 
-	common.SetLogLevel(*logLevel)
+	common.SetLogLevel(int32(*logLevel))
 	config := common.SystemConfig.SectionConfig("indexer.", true)
 
 	config.SetValue("clusterAddr", *cluster)

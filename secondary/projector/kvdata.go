@@ -32,6 +32,7 @@ type KVData struct {
 	topic  string // immutable
 	bucket string // immutable
 	vrs    map[uint16]*VbucketRoutine
+	config c.Config
 	// evaluators and subscribers
 	engines   map[uint64]*Engine
 	endpoints map[string]c.RouterEndpoint
@@ -48,13 +49,15 @@ func NewKVData(
 	reqTs *protobuf.TsVbuuid,
 	engines map[uint64]*Engine,
 	endpoints map[string]c.RouterEndpoint,
-	mutch <-chan *mc.UprEvent) *KVData {
+	mutch <-chan *mc.UprEvent,
+	config c.Config) *KVData {
 
 	kvdata := &KVData{
 		feed:      feed,
 		topic:     feed.topic,
 		bucket:    bucket,
 		vrs:       make(map[uint16]*VbucketRoutine),
+		config:    config,
 		engines:   make(map[uint64]*Engine),
 		endpoints: make(map[string]c.RouterEndpoint),
 		// 16 is enough, there can't be more than that many out-standing
@@ -80,6 +83,7 @@ const (
 	kvCmdDelEngines
 	kvCmdTs
 	kvCmdGetStats
+	kvCmdSetConfig
 	kvCmdClose
 )
 
@@ -121,6 +125,14 @@ func (kvdata *KVData) GetStatistics() map[string]interface{} {
 	cmd := []interface{}{kvCmdGetStats, respch}
 	resp, _ := c.FailsafeOp(kvdata.sbch, respch, cmd, kvdata.finch)
 	return resp[0].(map[string]interface{})
+}
+
+// SetConfig for kvdata.
+func (kvdata *KVData) SetConfig(config c.Config) error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{kvCmdSetConfig, config, respch}
+	_, err := c.FailsafeOp(kvdata.sbch, respch, cmd, kvdata.finch)
+	return err
 }
 
 // Close kvdata kv data path, synchronous call.
@@ -222,6 +234,14 @@ loop:
 				stats.Set("vbuckets", statVbuckets)
 				respch <- []interface{}{map[string]interface{}(stats)}
 
+			case kvCmdSetConfig:
+				config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
+				kvdata.config = config
+				for _, vr := range kvdata.vrs {
+					vr.SetConfig(config)
+				}
+				respch <- []interface{}{nil}
+
 			case kvCmdClose:
 				respch := msg[1].(chan []interface{})
 				respch <- []interface{}{nil}
@@ -256,7 +276,7 @@ func (kvdata *KVData) scatterMutation(
 			c.Tracef("%v StreamRequest {%v}\n", kvdata.logPrefix, vbno)
 			topic, bucket := kvdata.topic, kvdata.bucket
 			m.Seqno, _ = ts.SeqnoFor(vbno)
-			config, cluster := kvdata.feed.config, kvdata.feed.cluster
+			cluster, config := kvdata.feed.cluster, kvdata.config
 			vr := NewVbucketRoutine(
 				cluster, topic, bucket, vbno, m.VBuuid, m.Seqno, config)
 			vr.AddEngines(kvdata.engines, kvdata.endpoints)

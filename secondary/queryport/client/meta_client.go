@@ -2,42 +2,36 @@ package client
 
 import "sync"
 import "fmt"
-import "strings"
 import "errors"
 import "encoding/json"
-import "math/rand"
 
-import common "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 
 type metadataClient struct {
 	clusterURL string
 	mdClient   *mclient.MetadataProvider
-	rw         sync.RWMutex      // protects all fields listed below
-	adminports []string          // list of nodes represented by its adminport.
-	queryports map[string]string // adminport -> queryport
+	rw         sync.RWMutex // protects all fields listed below
 	// sherlock topology management, multi-node & single-partition.
-	topology map[string][]*mclient.IndexMetadata // adminport -> indexes
+	adminports map[string]common.IndexerId                   // book-keeping for cluster changes
+	topology   map[common.IndexerId][]*mclient.IndexMetadata // indexerId -> indexes
 	// shelock load replicas.
 	replicas map[common.IndexDefnId][]common.IndexDefnId
 	// shelock load balancing.
-	loads map[common.IndexDefnId]*loadHeuristics // adminport -> loadHeuristics
+	loads map[common.IndexDefnId]*loadHeuristics // index -> loadHeuristics
 }
 
 func newMetaBridgeClient(cluster string) (c *metadataClient, err error) {
-
-	cinfo, err := common.NewClusterInfoCache(common.ClusterUrl(cluster), "default" /*pooln*/)
+	cinfo, err :=
+		common.NewClusterInfoCache(common.ClusterUrl(cluster), "default")
 	if err != nil {
-		return nil, err
-	}
-	if err = cinfo.Fetch(); err != nil {
 		return nil, err
 	}
 	b := &metadataClient{
 		clusterURL: cluster,
-		adminports: make([]string, 0),
-		queryports: make(map[string]string, 0),
+		adminports: make(map[string]common.IndexerId),
 		loads:      make(map[common.IndexDefnId]*loadHeuristics),
+		topology:   make(map[common.IndexerId][]*mclient.IndexMetadata),
 	}
 	// initialize meta-data-provide.
 	uuid, err := common.NewUUID()
@@ -49,42 +43,38 @@ func newMetaBridgeClient(cluster string) (c *metadataClient, err error) {
 	if err != nil {
 		return nil, err
 	}
-	// populate indexers' adminport and queryport
-	if b.adminports, err = getIndexerAdminports(cinfo); err != nil {
+	if err := b.updateIndexerList(cinfo); err != nil {
+		b.mdClient.Close()
 		return nil, err
 	}
-	if b.queryports, err = getIndexerQueryports(cinfo); err != nil {
-		return nil, err
-	}
-	// watch all indexers
-	for _, adminport := range b.adminports {
-		b.mdClient.WatchMetadata(adminport)
-	}
+
 	b.Refresh()
+	go b.watchClusterChanges(cluster)
 	return b, nil
 }
 
 // Refresh implement BridgeAccessor{} interface.
 func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
+	b.rw.Lock()
+	defer b.rw.Unlock()
+
 	mindexes := b.mdClient.ListIndex()
 	indexes := make([]*mclient.IndexMetadata, 0, len(mindexes))
 	for _, mindex := range mindexes {
 		indexes = append(indexes, mindex)
 	}
-	b.rw.Lock()
-	defer b.rw.Unlock()
 
-	b.topology = make(map[string][]*mclient.IndexMetadata)
-	for _, adminport := range b.adminports {
-		b.topology[adminport] = make([]*mclient.IndexMetadata, 0)
-	}
 	// gather topology of each index.
 	for _, index := range indexes {
 		for _, instance := range index.Instances {
-			for _, queryport := range instance.Endpts {
-				adminport := b.queryport2adminport(string(queryport))
-				b.topology[adminport] = append(b.topology[adminport], index)
+			id := instance.IndexerId
+			if _, ok := b.topology[id]; !ok {
+				// there could be a race between Refresh() and
+				// watchClusterChanges() so create an entry in
+				// topology.
+				b.topology[id] = make([]*mclient.IndexMetadata, 0)
 			}
+			b.topology[id] = append(b.topology[id], index)
 		}
 	}
 	// compute replicas
@@ -94,12 +84,17 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 
 // Nodes implement BridgeAccessor{} interface.
 func (b *metadataClient) Nodes() (map[string]string, error) {
-	b.rw.Lock()
-	defer b.rw.Unlock()
+	b.rw.RLock()
+	defer b.rw.RUnlock()
 
 	nodes := make(map[string]string)
-	for adminport, queryport := range b.queryports {
-		nodes[adminport] = queryport
+	for indexerID := range b.topology {
+		if indexerID != common.INDEXER_ID_NIL {
+			a, q, err := b.mdClient.FindServiceForIndexer(indexerID)
+			if err == nil {
+				nodes[a] = q
+			}
+		}
 	}
 	return nodes, nil
 }
@@ -110,22 +105,11 @@ func (b *metadataClient) CreateIndex(
 	secExprs []string, isPrimary bool,
 	planJSON []byte) (common.IndexDefnId, error) {
 
-	createPlan := make(map[string]interface{})
-	// plan may not be provided, pick a random indexer node
-	rnd := rand.Intn(100000)
-	n := (rnd / (10000 / len(b.adminports))) % len(b.adminports)
-	plan := map[string]interface{}{ // with default values
-		"nodes":       []interface{}{b.adminports[n]},
-		"defer_build": false,
-	}
-
+	plan := make(map[string]interface{})
 	if planJSON != nil && len(planJSON) > 0 {
-		err := json.Unmarshal(planJSON, &createPlan)
+		err := json.Unmarshal(planJSON, &plan)
 		if err != nil {
 			return common.IndexDefnId(0), err
-		}
-		for key, value := range createPlan { // override default values
-			plan[key] = value
 		}
 	}
 
@@ -142,54 +126,29 @@ func (b *metadataClient) BuildIndexes(defnIDs []common.IndexDefnId) error {
 	if !ok {
 		return ErrorIndexNotFound
 	}
-
-	dispatch := make(map[string][]common.IndexDefnId) // adminport -> []indexes
-	for _, defnID := range defnIDs {
-		adminport, ok := b.getNode(defnID)
-		if !ok {
-			return ErrorIndexNotFound
-		}
-		if _, ok := dispatch[adminport]; !ok {
-			dispatch[adminport] = make([]common.IndexDefnId, 0)
-		}
-		dispatch[adminport] = append(dispatch[adminport], defnID)
-	}
-
-	errMessages := make([]string, 0)
-	for adminport, defnIDs := range dispatch {
-		err := b.mdClient.BuildIndexes(adminport, defnIDs)
-		if err != nil {
-			msg := fmt.Sprintf("build error with %q indexer: %v", adminport, err)
-			errMessages = append(errMessages, msg)
-		}
-	}
-	if len(errMessages) > 0 {
-		return fmt.Errorf(strings.Join(errMessages, "\n"))
-	}
-	return nil
+	return b.mdClient.BuildIndexes(defnIDs)
 }
 
 // DropIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) DropIndex(defnID common.IndexDefnId) error {
-	adminport, ok := b.getNode(defnID)
-	if !ok {
-		return ErrorIndexNotFound
-	}
-	return b.mdClient.DropIndex(defnID, adminport)
+	return b.mdClient.DropIndex(defnID)
 }
 
 // GetScanports implements BridgeAccessor{} interface.
 func (b *metadataClient) GetScanports() (queryports []string) {
-	b.rw.Lock()
-	defer b.rw.Unlock()
+	b.rw.RLock()
+	defer b.rw.RUnlock()
 
-	if len(b.queryports) == 0 {
-		return nil
+	queryports = make([]string, 0)
+	for indexerID := range b.topology {
+		if indexerID != common.INDEXER_ID_NIL {
+			_, queryport, err := b.mdClient.FindServiceForIndexer(indexerID)
+			if err == nil {
+				queryports = append(queryports, queryport)
+			}
+		}
 	}
-	queryports = make([]string, 0, len(b.queryports))
-	for _, queryport := range b.queryports {
-		queryports = append(queryports, queryport)
-	}
+	common.Debugf("Scan ports %v for all indexes", queryports)
 	return queryports
 }
 
@@ -197,16 +156,16 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 func (b *metadataClient) GetScanport(
 	defnID common.IndexDefnId) (queryport string, ok bool) {
 
+	b.rw.RLock()
+	defer b.rw.RUnlock()
+
 	defnID = b.pickOptimal(defnID) // defnID (aka index) under least load
-	adminport, ok := b.getNode(defnID)
-	if !ok {
+	_, queryport, err := b.mdClient.FindServiceForIndex(defnID)
+	if err != nil {
 		return "", false
 	}
-
-	b.rw.Lock()
-	defer b.rw.Unlock()
-	queryport, ok = b.queryports[adminport]
-	return queryport, ok
+	common.Debugf("Scan port %s for index %d", queryport, defnID)
+	return queryport, true
 }
 
 // Timeit implement BridgeAccessor{} interface.
@@ -266,12 +225,12 @@ func (b *metadataClient) Close() {
 // compute a map of replicas for each index in 2i.
 func (b *metadataClient) computeReplicas() map[common.IndexDefnId][]common.IndexDefnId {
 	replicaMap := make(map[common.IndexDefnId][]common.IndexDefnId, 0)
-	for adminport1, indexes1 := range b.topology {
+	for id1, indexes1 := range b.topology {
 		for _, index1 := range indexes1 {
 			replicas := make([]common.IndexDefnId, 0)
 			replicas = append(replicas, index1.Definition.DefnId) // add itself
-			for adminport2, indexes2 := range b.topology {
-				if adminport1 == adminport2 { // skip colocated indexes
+			for id2, indexes2 := range b.topology {
+				if id1 == id2 { // skip colocated indexes
 					continue
 				}
 				for _, index2 := range indexes2 {
@@ -325,9 +284,6 @@ type loadHeuristics struct {
 func (b *metadataClient) pickOptimal(
 	defnID common.IndexDefnId) common.IndexDefnId {
 
-	b.rw.Lock()
-	defer b.rw.Unlock()
-
 	optimalID, currLoad := defnID, 0.0
 	if load, ok := b.loads[defnID]; ok {
 		currLoad = load.avgLoad
@@ -354,17 +310,12 @@ func (b *metadataClient) pickOptimal(
 func (b *metadataClient) getNodes(
 	defnIDs []common.IndexDefnId) (adminport []string, ok bool) {
 
-	m := make(map[string]bool)
+	adminports := make([]string, 0)
 	for _, defnID := range defnIDs {
 		adminport, ok := b.getNode(defnID)
 		if !ok {
 			return nil, false
 		}
-		m[adminport] = true
-	}
-
-	adminports := make([]string, 0)
-	for adminport := range m {
 		adminports = append(adminports, adminport)
 	}
 	return adminports, true
@@ -374,35 +325,44 @@ func (b *metadataClient) getNodes(
 func (b *metadataClient) getNode(
 	defnID common.IndexDefnId) (adminport string, ok bool) {
 
-	b.rw.RLock()
-	defer b.rw.RUnlock()
-
-	for addr, indexes := range b.topology {
-		for _, index := range indexes {
-			if defnID == index.Definition.DefnId {
-				return addr, true
-			}
-		}
+	adminport, _, err := b.mdClient.FindServiceForIndex(defnID)
+	if err != nil {
+		return "", false
 	}
-	return "", false
+	return adminport, true
 }
 
-// given queryport fetch the corresponding adminport for the indexer node.
-func (b *metadataClient) queryport2adminport(queryport string) string {
-	queryports := make([]string, 0, len(b.queryports))
-	for _, qport := range b.queryports {
-		queryports = append(queryports, qport)
+// update 2i cluster information
+func (b *metadataClient) updateIndexerList(cinfo *common.ClusterInfoCache) error {
+	if err := cinfo.Fetch(); err != nil {
+		return err
 	}
-	_, eqAddr, err := common.EquivalentIP(queryport, queryports)
+	// populate indexers' adminport and queryport
+	adminports, err := getIndexerAdminports(cinfo)
 	if err != nil {
-		panic(fmt.Errorf("malformed queryport %v, %v", queryport, b.queryports))
+		return err
 	}
-	for adminport, qport := range b.queryports {
-		if qport == eqAddr {
-			return adminport
+
+	b.rw.Lock()
+	defer b.rw.Unlock()
+	// watch all indexers
+	m := make(map[string]common.IndexerId)
+	for _, adminport := range adminports { // add new indexer-nodes if any
+		if indexerID, ok := b.adminports[adminport]; !ok {
+			indexerID, err = b.mdClient.WatchMetadata(adminport)
+			m[adminport] = indexerID
+			b.topology[indexerID] = make([]*mclient.IndexMetadata, 0)
+		} else {
+			m[adminport] = indexerID
+			delete(b.adminports, adminport)
 		}
 	}
-	panic(fmt.Errorf("adminport not found %v, %v", queryport, b.queryports))
+	// delete indexer-nodes that got removed from cluster.
+	for _, indexerID := range b.adminports {
+		b.mdClient.UnwatchMetadata(indexerID)
+	}
+	b.adminports = m
+	return nil
 }
 
 // return adminports for all known indexers.
@@ -420,21 +380,22 @@ func getIndexerAdminports(
 	return iAdminports, nil
 }
 
-// return queryports for all known indexers.
-func getIndexerQueryports(
-	cinfo *common.ClusterInfoCache) (map[string]string, error) {
-
-	iQueryports := make(map[string]string)
-	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
-		adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
-		if err != nil {
-			return nil, err
-		}
-		queryport, err := cinfo.GetServiceAddress(node, "indexScan")
-		if err != nil {
-			return nil, err
-		}
-		iQueryports[adminport] = queryport
+func (b *metadataClient) watchClusterChanges(cluster string) {
+	clusterURL := common.ClusterUrl(cluster)
+	cinfo, err := common.NewClusterInfoCache(clusterURL, "default")
+	if err != nil {
+		err := fmt.Errorf("error NewClusterInfoCache(): %v", err)
+		panic(err)
 	}
-	return iQueryports, nil
+
+	for {
+		if err := cinfo.WaitAndUpdateServices(); err != nil {
+			err := fmt.Errorf("error while waiting for cluster change: %v", err)
+			panic(err)
+		}
+		if err = b.updateIndexerList(cinfo); err != nil {
+			err := fmt.Errorf("error while updating indexer nodes: %v", err)
+			panic(err)
+		}
+	}
 }
