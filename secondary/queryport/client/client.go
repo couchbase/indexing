@@ -390,14 +390,14 @@ func (c *GsiClient) doScan(
 
 	var qc *gsiScanClient
 	var err error
-	var ok bool
+	var ok1, ok2 bool
 	var queryport string
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
 	for i := 0; i < retry; i++ {
-		if queryport, ok = c.bridge.GetScanport(common.IndexDefnId(defnID)); ok {
-			if qc, ok = c.queryClients[queryport]; ok {
+		if queryport, ok1 = c.bridge.GetScanport(common.IndexDefnId(defnID)); ok1 {
+			if qc, ok2 = c.queryClients[queryport]; ok2 {
 				begin := time.Now().UnixNano()
 				if err = callb(qc); err == nil {
 					c.bridge.Timeit(defnID, float64(time.Now().UnixNano()-begin))
@@ -405,6 +405,7 @@ func (c *GsiClient) doScan(
 				}
 			}
 		}
+		common.Infof("Retrying scan for index %v (%v %v) ...\n", defnID, ok1, ok2)
 		c.updateScanClients()
 		time.Sleep(time.Duration(wait) * time.Millisecond)
 	}
