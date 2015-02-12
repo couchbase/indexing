@@ -74,10 +74,15 @@ func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
 	if ts == nil || other == nil {
 		return false
 	}
-	if ts.Bucket != other.Bucket || ts.Len() != other.Len() {
+	if ts.Bucket != other.Bucket {
 		return false
 	}
 	for i, vbuuid := range ts.Vbuuids {
+		//skip comparing the vbucket if "other" ts has vbuuid 0
+		if other.Vbuuids[i] == 0 {
+			continue
+		}
+
 		if vbuuid != other.Vbuuids[i] || ts.Seqnos[i] < other.Seqnos[i] {
 			return false
 		}
