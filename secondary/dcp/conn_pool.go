@@ -200,7 +200,7 @@ func (cp *connectionPool) StartTapFeed(args *memcached.TapArguments) (*memcached
 
 const DEFAULT_WINDOW_SIZE = 20 * 1024 * 1024 // 20 Mb
 
-func (cp *connectionPool) StartUprFeed(name string, sequence uint32) (*memcached.UprFeed, error) {
+func (cp *connectionPool) StartDcpFeed(name string, sequence uint32) (*memcached.DcpFeed, error) {
 	if cp == nil {
 		return nil, errNoPool
 	}
@@ -209,16 +209,16 @@ func (cp *connectionPool) StartUprFeed(name string, sequence uint32) (*memcached
 	if err != nil {
 		return nil, err
 	}
-	// A connection can't be used after it has been allocated to UPR;
+	// A connection can't be used after it has been allocated to DCP;
 	// Dont' count it against the connection pool capacity
 	<-cp.createsem
 
-	uf, err := mc.NewUprFeed()
+	uf, err := mc.NewDcpFeed()
 	if err != nil {
 		return nil, err
 	}
 
-	if err := uf.UprOpen(name, sequence, DEFAULT_WINDOW_SIZE); err != nil {
+	if err := uf.DcpOpen(name, sequence, DEFAULT_WINDOW_SIZE); err != nil {
 		return nil, err
 	}
 

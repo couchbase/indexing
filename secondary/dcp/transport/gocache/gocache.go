@@ -4,9 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net"
 
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 	"github.com/couchbase/indexing/secondary/dcp/transport/server"
 )
@@ -44,14 +44,14 @@ func waitForConnections(ls net.Listener) {
 	go RunServer(reqChannel)
 	handler := &reqHandler{reqChannel}
 
-	log.Printf("Listening on port %d", *port)
+	logging.Warnf("Listening on port %d", *port)
 	for {
 		s, e := ls.Accept()
 		if e == nil {
-			log.Printf("Got a connection from %v", s.RemoteAddr())
+			logging.Warnf("Got a connection from %v", s.RemoteAddr())
 			go connectionHandler(s, handler)
 		} else {
-			log.Printf("Error accepting from %s", ls)
+			logging.Warnf("Error accepting from %s", ls)
 		}
 	}
 }
@@ -60,7 +60,7 @@ func main() {
 	flag.Parse()
 	ls, e := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if e != nil {
-		log.Fatalf("Got an error:  %s", e)
+		logging.Fatalf("Got an error:  %s", e)
 	}
 
 	waitForConnections(ls)

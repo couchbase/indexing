@@ -10,7 +10,7 @@
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 //AdminManager listens to the admin port messages and relays it back to Indexer
@@ -51,7 +51,7 @@ loop:
 		case cmd, ok := <-a.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == ADMIN_MGR_SHUTDOWN {
-					common.Infof("Admin Manager: Shutting Down")
+					logging.Infof("Admin Manager: Shutting Down")
 					a.supvCmdch <- &MsgSuccess{}
 					break loop
 				}

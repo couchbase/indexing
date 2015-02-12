@@ -5,12 +5,12 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net"
 	"strings"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 )
 
@@ -246,8 +246,7 @@ func (c *Client) GetBulk(vb uint16, keys []string) (map[string]*transport.MCResp
 				going = false
 			case transport.GETQ:
 			default:
-				log.Panicf("Unexpected opcode in GETQ response: %+v",
-					res)
+				logging.Fatalf("Unexpected opcode in GETQ response: %+v", res)
 			}
 			rv[keys[res.Opaque]] = res
 		}

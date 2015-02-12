@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"net"
 	"strconv"
@@ -82,10 +83,9 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 
-	if c.IsLogEnabled() {
+	if logging.IsLogEnabled() {
 		log.LogEnable()
-		log.SetLogLevel(int(c.LogLevel()))
-		//log.SetLogLevel(common.LogLevelTrace)
+		log.SetLogLevel(int(logging.LogLevel()))
 		log.SetPrefix("MetadataProvider/Gometa")
 	}
 
@@ -98,7 +98,7 @@ func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 	if err != nil {
 		return nil, err
 	}
-	c.Debugf("MetadataProvider.NewMetadataProvider(): MetadataProvider follower ID %s", s.providerId)
+	logging.Debugf("MetadataProvider.NewMetadataProvider(): MetadataProvider follower ID %s", s.providerId)
 
 	return s, nil
 }
@@ -744,13 +744,13 @@ func (w *watcher) refreshServiceMap() error {
 
 	content, err := w.makeRequest(OPCODE_SERVICE_MAP, "Service Map", []byte(""))
 	if err != nil {
-		c.Errorf("watcher.refreshServiceMap() %s", err)
+		logging.Errorf("watcher.refreshServiceMap() %s", err)
 		return err
 	}
 
 	srvMap, err := UnmarshallServiceMap(content)
 	if err != nil {
-		c.Errorf("watcher.refreshServiceMap() %s", err)
+		logging.Errorf("watcher.refreshServiceMap() %s", err)
 		return err
 	}
 
@@ -1006,7 +1006,7 @@ func (w *watcher) Commit(txid common.Txnid) error {
 
 	msg, ok := w.pendings[txid]
 	if !ok {
-		c.Warnf("Watcher.commit(): unknown txnid %d.  Txn not processed at commit", txid)
+		logging.Warnf("Watcher.commit(): unknown txnid %d.  Txn not processed at commit", txid)
 		return nil
 	}
 
@@ -1068,7 +1068,7 @@ func (w *watcher) respond(reqId uint64, err string, content []byte) {
 			handle.Err = errors.New(err)
 		}
 
-		c.Debugf("watcher.Respond() : len(content) %d", len(content))
+		logging.Debugf("watcher.Respond() : len(content) %d", len(content))
 		handle.Content = content
 
 		handle.CondVar.Signal()
@@ -1132,7 +1132,7 @@ func (w *watcher) GetCommitedEntries(txid1, txid2 common.Txnid) (<-chan protocol
 func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content []byte, toCommit bool) error {
 
 	if err := w.processChange(op, key, content); err != nil {
-		c.Errorf("watcher.LogAndCommit(): receive error when processing log entry from server.  Error = %v", err)
+		logging.Errorf("watcher.LogAndCommit(): receive error when processing log entry from server.  Error = %v", err)
 	}
 
 	return nil
@@ -1140,8 +1140,8 @@ func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content
 
 func (w *watcher) processChange(op uint32, key string, content []byte) error {
 
-	c.Debugf("watcher.processChange(): key = %v", key)
-	defer c.Debugf("watcher.processChange(): done -> key = %v", key)
+	logging.Debugf("watcher.processChange(): key = %v", key)
+	defer logging.Debugf("watcher.processChange(): done -> key = %v", key)
 
 	opCode := common.OpCode(op)
 
@@ -1149,7 +1149,7 @@ func (w *watcher) processChange(op uint32, key string, content []byte) error {
 	case common.OPCODE_ADD, common.OPCODE_SET:
 		if isIndexDefnKey(key) {
 			if len(content) == 0 {
-				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
 			}
 
 			id, err := extractDefnIdFromKey(key)
@@ -1161,7 +1161,7 @@ func (w *watcher) processChange(op uint32, key string, content []byte) error {
 
 		} else if isIndexTopologyKey(key) {
 			if len(content) == 0 {
-				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
 			}
 			return w.provider.repo.unmarshallAndAddInst(content)
 		}

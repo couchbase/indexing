@@ -10,6 +10,7 @@
 package manager
 
 import (
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	data "github.com/couchbase/indexing/secondary/protobuf/data"
@@ -76,11 +77,11 @@ func (s *Stream) start() (err error) {
 	maxvbs := common.SystemConfig["maxVbuckets"].Int()
 	s.receiver, err = dataport.NewServer(s.hostStr, maxvbs, config, s.mutch)
 	if err != nil {
-		common.Errorf("StreamManager: Error returned from dataport.NewServer = %s.", err.Error())
+		logging.Errorf("StreamManager: Error returned from dataport.NewServer = %s.", err.Error())
 		close(s.stopch)
 		return err
 	}
-	common.Debugf("Stream.run(): dataport server started on addr %s", s.hostStr)
+	logging.Debugf("Stream.run(): dataport server started on addr %s", s.hostStr)
 
 	// Start the listening go-routine.
 	go s.run()
@@ -95,7 +96,7 @@ func (s *Stream) Close() {
 
 func (s *Stream) run() {
 
-	common.Debugf("Stream.run(): starts")
+	logging.Debugf("Stream.run(): starts")
 
 	defer s.receiver.Close()
 
@@ -106,22 +107,22 @@ func (s *Stream) run() {
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						common.Debugf("panic in Stream.run() : error ignored.  Error = %v\n", r)
+						logging.Debugf("panic in Stream.run() : error ignored.  Error = %v\n", r)
 					}
 				}()
 
 				switch d := mut.(type) {
 				case ([]*data.VbKeyVersions):
-					common.Debugf("Stream.run(): recieve VbKeyVersion")
+					logging.Debugf("Stream.run(): recieve VbKeyVersion")
 					s.handleVbKeyVersions(d)
 				case dataport.ConnectionError:
-					common.Debugf("Stream.run(): recieve ConnectionError")
+					logging.Debugf("Stream.run(): recieve ConnectionError")
 					s.handler.HandleConnectionError(s.id, d)
 				}
 			}()
 
 		case <-s.stopch:
-			common.Debugf("Stream.run(): stop")
+			logging.Debugf("Stream.run(): stop")
 			return
 		}
 	}
@@ -168,7 +169,7 @@ func (s *Stream) handleSingleKeyVersion(bucket string,
 	kv *data.KeyVersions) {
 
 	for i, cmd := range kv.GetCommands() {
-		common.Debugf("Stream.handleSingleKeyVersion(): recieve command %v", cmd)
+		logging.Debugf("Stream.handleSingleKeyVersion(): recieve command %v", cmd)
 		switch byte(cmd) {
 		case common.Upsert:
 			s.handler.HandleUpsert(s.id, bucket, vbucket, vbuuid, kv, i)

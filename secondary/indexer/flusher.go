@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"sync"
 )
@@ -91,7 +92,7 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	ts Timestamp, stopch StopChannel) MsgChannel {
 
-	common.Infof("Flusher::PersistUptoTS StreamId: %v Timestamp: %v",
+	logging.Infof("Flusher::PersistUptoTS StreamId: %v Timestamp: %v",
 		streamId, ts)
 
 	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
@@ -112,7 +113,7 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 func (f *flusher) DrainUptoTS(q MutationQueue, streamId common.StreamId,
 	ts Timestamp, stopch StopChannel) MsgChannel {
 
-	common.Infof("Flusher::DrainUptoTS StreamId: %v Timestamp: %v",
+	logging.Infof("Flusher::DrainUptoTS StreamId: %v Timestamp: %v",
 		streamId, ts)
 
 	msgch := make(MsgChannel)
@@ -132,7 +133,7 @@ func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
 	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	stopch StopChannel) MsgChannel {
 
-	common.Infof("Flusher::Persist StreamId: %v", streamId)
+	logging.Infof("Flusher::Persist StreamId: %v", streamId)
 
 	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
@@ -151,7 +152,7 @@ func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
 func (f *flusher) Drain(q MutationQueue, streamId common.StreamId,
 	stopch StopChannel) MsgChannel {
 
-	common.Infof("Flusher::Drain StreamId: %v", streamId)
+	logging.Infof("Flusher::Drain StreamId: %v", streamId)
 
 	msgch := make(MsgChannel)
 	go f.flushQueue(q, streamId, nil, false, stopch, msgch)
@@ -190,10 +191,10 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId,
 
 	//wait for all workers to finish
 	go func() {
-		common.Tracef("Flusher::flushQueue Waiting for workers to finish Stream %v", streamId)
+		logging.Tracef("Flusher::flushQueue Waiting for workers to finish Stream %v", streamId)
 		wg.Wait()
 		//send signal on channel to indicate all workers have finished
-		common.Tracef("Flusher::flushQueue All workers finished for Stream %v", streamId)
+		logging.Tracef("Flusher::flushQueue All workers finished for Stream %v", streamId)
 		close(allWorkersDoneCh)
 	}()
 
@@ -201,14 +202,14 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId,
 	//or workers to send any message
 	select {
 	case <-stopch:
-		common.Debugf("Flusher::flushQueue Stopping All Workers")
+		logging.Debugf("Flusher::flushQueue Stopping All Workers")
 		//stop all workers
 		for _, ch := range workerStopChannels {
 			close(ch)
 		}
 		//wait for all workers to stop
 		<-allWorkersDoneCh
-		common.Debugf("Flusher::flushQueue Stopped All Workers")
+		logging.Debugf("Flusher::flushQueue Stopped All Workers")
 
 		//wait for notification of all workers finishing
 	case <-allWorkersDoneCh:
@@ -234,7 +235,7 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 
 	defer wg.Done()
 
-	common.Tracef("Flusher::flushSingleVbucket Started worker to flush vbucket: "+
+	logging.Tracef("Flusher::flushSingleVbucket Started worker to flush vbucket: "+
 		"%v for stream: %v", vbucket, streamId)
 
 	mutch, qstopch, err := q.Dequeue(vbucket)
@@ -271,7 +272,7 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 
 	defer wg.Done()
 
-	common.Tracef("Flusher::flushSingleVbucketUptoSeqno Started worker to flush vbucket: "+
+	logging.Tracef("Flusher::flushSingleVbucketUptoSeqno Started worker to flush vbucket: "+
 		"%v till Seqno: %v for Stream: %v", vbucket, seqno, streamId)
 
 	mutch, err := q.DequeueUptoSeqno(vbucket, seqno)
@@ -308,13 +309,13 @@ func (f *flusher) flushSingleMutation(mut *MutationKeys, streamId common.StreamI
 		f.flush(mut, streamId)
 
 	default:
-		common.Errorf("Flusher::flushSingleMutation Invalid StreamId: %v", streamId)
+		logging.Errorf("Flusher::flushSingleMutation Invalid StreamId: %v", streamId)
 	}
 }
 
 func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 
-	common.Tracef("Flusher::flush Flushing Stream %v Mutations %v", streamId, mut)
+	logging.Tracef("Flusher::flush Flushing Stream %v Mutations %v", streamId, mut)
 
 	var processedUpserts []common.IndexInstId
 	for i, cmd := range mut.commands {
@@ -322,14 +323,14 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 		var idxInst common.IndexInst
 		var ok bool
 		if idxInst, ok = f.indexInstMap[mut.uuids[i]]; !ok {
-			common.Errorf("Flusher::flush Unknown Index Instance Id %v. "+
+			logging.Errorf("Flusher::flush Unknown Index Instance Id %v. "+
 				"Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
 			continue
 		}
 
 		//Skip this mutation if the index doesn't belong to the stream being flushed
 		if streamId != idxInst.Stream && streamId != common.CATCHUP_STREAM {
-			common.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v Stream: %v In "+
+			logging.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v Stream: %v In "+
 				"Stream: %v. Skipped Mutation Key %v", idxInst.InstId, idxInst.Stream,
 				streamId, mut.keys[i])
 			continue
@@ -338,7 +339,7 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 		//Skip mutations for indexes in DELETED state. This may happen if complete
 		//couldn't happen when processing drop index.
 		if idxInst.State == common.INDEX_STATE_DELETED {
-			common.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v In "+
+			logging.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v In "+
 				"DELETED State. Skipped Mutation Key %v", idxInst.InstId, mut.keys[i])
 			continue
 		}
@@ -371,7 +372,7 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 			}
 
 		default:
-			common.Errorf("Flusher::flush Unknown mutation type received. Skipped %v",
+			logging.Errorf("Flusher::flush Unknown mutation type received. Skipped %v",
 				mut.keys[i])
 		}
 	}
@@ -385,7 +386,7 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 
 	if key, err = NewKey(mut.keys[i]); err != nil {
 
-		common.Errorf("Flusher::processUpsert Error Generating Key"+
+		logging.Errorf("Flusher::processUpsert Error Generating Key"+
 			"From Mutation: %v. Skipped. Error: %v", mut.keys[i], err)
 		return
 	}
@@ -393,7 +394,7 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 	if value, err = NewValue(mut.docid, mut.meta.vbucket,
 		mut.meta.seqno); err != nil {
 
-		common.Errorf("Flusher::processUpsert Error Generating Value"+
+		logging.Errorf("Flusher::processUpsert Error Generating Value"+
 			"From Mutation: %v. Skipped. Error: %v", mut.keys[i], err)
 		return
 	}
@@ -405,7 +406,7 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 	var partnInstMap PartitionInstMap
 	var ok bool
 	if partnInstMap, ok = f.indexPartnMap[mut.uuids[i]]; !ok {
-		common.Errorf("Flusher::processUpsert Missing Partition Instance Map"+
+		logging.Errorf("Flusher::processUpsert Missing Partition Instance Map"+
 			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuids[i], mut.keys[i])
 		return
 	}
@@ -413,11 +414,11 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.keys[i]))
 		if err := slice.Insert(key, value); err != nil {
-			common.Errorf("Flusher::processUpsert Error Inserting Key: %v "+
+			logging.Errorf("Flusher::processUpsert Error Inserting Key: %v "+
 				"Value: %v in Slice: %v. Error: %v", key, value, slice.Id(), err)
 		}
 	} else {
-		common.Errorf("Flusher::processUpsert Partition Instance not found "+
+		logging.Errorf("Flusher::processUpsert Partition Instance not found "+
 			"for Id: %v Skipped Mutation Key: %v", partnId, mut.keys[i])
 	}
 
@@ -432,7 +433,7 @@ func (f *flusher) processDelete(mut *MutationKeys, i int) {
 	var partnInstMap PartitionInstMap
 	var ok bool
 	if partnInstMap, ok = f.indexPartnMap[mut.uuids[i]]; !ok {
-		common.Errorf("Flusher:processDelete Missing Partition Instance Map"+
+		logging.Errorf("Flusher:processDelete Missing Partition Instance Map"+
 			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuids[i], mut.keys[i])
 		return
 	}
@@ -440,11 +441,11 @@ func (f *flusher) processDelete(mut *MutationKeys, i int) {
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.keys[i]))
 		if err := slice.Delete(mut.docid); err != nil {
-			common.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
+			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
 				"from Slice: %v", mut.docid, slice.Id())
 		}
 	} else {
-		common.Errorf("Flusher::processDelete Partition Instance not found "+
+		logging.Errorf("Flusher::processDelete Partition Instance not found "+
 			"for Id: %v. Skipped Mutation Key: %v", partnId, mut.keys[i])
 	}
 }

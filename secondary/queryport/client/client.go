@@ -3,6 +3,7 @@ package client
 import "errors"
 import "time"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbaselabs/goprotobuf/proto"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
@@ -405,7 +406,7 @@ func (c *GsiClient) doScan(
 				}
 			}
 		}
-		common.Infof("Retrying scan for index %v (%v %v) ...\n", defnID, ok1, ok2)
+		logging.Infof("Retrying scan for index %v (%v %v) ...\n", defnID, ok1, ok2)
 		c.updateScanClients()
 		time.Sleep(time.Duration(wait) * time.Millisecond)
 	}

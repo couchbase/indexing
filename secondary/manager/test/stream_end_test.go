@@ -43,7 +43,7 @@ type streamEndTestProjectorClient struct {
 func TestStreamMgr_StreamEnd(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.LogLevelTrace)
 	util.TT = t
 
 	old_value := manager.NUM_VB
@@ -65,20 +65,20 @@ func TestStreamMgr_StreamEnd(t *testing.T) {
 
 func runStreamEndTest() {
 
-	common.Infof("**** Run StreamEnd Test ******************************************")
+	logging.Infof("**** Run StreamEnd Test ******************************************")
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
 	os.MkdirAll("./data/", os.ModePerm)
 
-	common.Infof("***** Start TestStreamMgr ")
+	logging.Infof("***** Start TestStreamMgr ")
 	/*
 		var requestAddr = "localhost:9885"
 		var leaderAddr = "localhost:9884"
 	*/
 	var config = "./config.json"
 
-	common.Infof("Start Index Manager")
+	logging.Infof("Start Index Manager")
 	donech := make(chan bool)
 	factory := new(streamEndTestProjectorClientFactory)
 	factory.donech = donech
@@ -92,28 +92,28 @@ func runStreamEndTest() {
 	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
 
-	common.Infof("StreamEnd Test Cleanup ...")
+	logging.Infof("StreamEnd Test Cleanup ...")
 	cleanupStreamMgrStreamEndTest(mgr)
 
-	common.Infof("***** Run StreamEnd Test ...")
+	logging.Infof("***** Run StreamEnd Test ...")
 	ch := mgr.GetStabilityTimestampChannel(common.MAINT_STREAM)
 	go runStreamEndTestReceiver(ch, donech)
 
-	common.Infof("Setup data for StreamEnd Test")
+	logging.Infof("Setup data for StreamEnd Test")
 	changeTopologyForStreamEndTest(mgr)
 	<-donech
 
-	common.Infof("**** StreamEnd Test Cleanup ...")
+	logging.Infof("**** StreamEnd Test Cleanup ...")
 	cleanupStreamMgrStreamEndTest(mgr)
 	mgr.CleanupTopology()
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Stop TestStreamMgr. Tearing down ")
+	logging.Infof("**** Stop TestStreamMgr. Tearing down ")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Finish StreamEnd Test ****************************************")
+	logging.Infof("**** Finish StreamEnd Test ****************************************")
 }
 
 // clean up
@@ -121,9 +121,9 @@ func cleanupStreamMgrStreamEndTest(mgr *manager.IndexManager) {
 
 	_, err := mgr.GetIndexDefnById(common.IndexDefnId(405))
 	if err != nil {
-		common.Infof("StreamMgrTest.cleanupStreamMgrStreamEndTest() :  cannot find index defn stream_mgr_stream_end_test.  No cleanup ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrStreamEndTest() :  cannot find index defn stream_mgr_stream_end_test.  No cleanup ...")
 	} else {
-		common.Infof("StreamMgrTest.cleanupStreamMgrStreamEndTest() :  found index defn stream_mgr_stream_end_test.  Cleaning up ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrStreamEndTest() :  found index defn stream_mgr_stream_end_test.  Cleaning up ...")
 
 		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(405))
 		if err != nil {
@@ -144,7 +144,7 @@ func cleanupStreamMgrStreamEndTest(mgr *manager.IndexManager) {
 // run test
 func runStreamEndTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 
-	common.Infof("Run StreamEnd Test Receiver")
+	logging.Infof("Run StreamEnd Test Receiver")
 	defer close(donech)
 
 	// wait for the sync message to arrive
@@ -153,16 +153,16 @@ func runStreamEndTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 		select {
 		case ts := <-ch:
 			if ts.Seqnos[10] == 405 {
-				common.Infof("****** runStreamEndTestReceiver() receive correct stability timestamp")
+				logging.Infof("****** runStreamEndTestReceiver() receive correct stability timestamp")
 				return
 			}
 		case <-ticker.C:
-			common.Infof("****** runStreamEndTestReceiver() : timeout")
+			logging.Infof("****** runStreamEndTestReceiver() : timeout")
 			util.TT.Fatal("runSyncTestReceiver(): Timeout waiting to receive timestamp to arrive")
 		}
 	}
 
-	common.Infof("runStreamEndTestReceiver() done")
+	logging.Infof("runStreamEndTestReceiver() done")
 }
 
 // start up
@@ -180,7 +180,7 @@ func changeTopologyForStreamEndTest(mgr *manager.IndexManager) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	common.Infof("Run Sync Test : Create Index Defn 405")
+	logging.Infof("Run Sync Test : Create Index Defn 405")
 	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
 		util.TT.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func changeTopologyForStreamEndTest(mgr *manager.IndexManager) {
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Update the index definition to ready
-	common.Infof("Run Sync Test : Update Index Defn 405 to READY")
+	logging.Infof("Run Sync Test : Update Index Defn 405 to READY")
 	topology, err := mgr.GetTopologyByBucket("Default")
 	if err != nil {
 		util.TT.Fatal(err)
@@ -201,7 +201,7 @@ func changeTopologyForStreamEndTest(mgr *manager.IndexManager) {
 
 func (c *streamEndTestProjectorClient) sendSync(timestamps []*protobuf.TsVbuuid) {
 
-	common.Infof("streamEndTestProjectorClient.sendSync() ")
+	logging.Infof("streamEndTestProjectorClient.sendSync() ")
 
 	if len(timestamps) != 1 {
 		util.TT.Fatal("streamEndTestProjectorClient.sendSync(): More than one timestamp sent to fake projector. Num = %v", len(timestamps))
@@ -232,7 +232,7 @@ func (c *streamEndTestProjectorClient) sendSync(timestamps []*protobuf.TsVbuuid)
 
 func (c *streamEndTestProjectorClient) sendStreamEnd(instances []*protobuf.Instance) {
 
-	common.Infof("streamEndTestProjectorClient.sendStreamEnd() ")
+	logging.Infof("streamEndTestProjectorClient.sendStreamEnd() ")
 
 	if len(instances) != 1 {
 		util.TT.Fatal("streamEndTestProjectorClient.sendStreamEnd(): More than one index instance sent to fake projector")
@@ -344,7 +344,7 @@ func (p *streamEndTestProjectorClientFactory) GetClientForNode(server string) ma
 
 func (p *streamEndTestProjectorClientEnv) GetNodeListForBuckets(buckets []string) (map[string]string, error) {
 
-	common.Infof("streamEndTestProjectorClientEnv.GetNodeListForBuckets() ")
+	logging.Infof("streamEndTestProjectorClientEnv.GetNodeListForBuckets() ")
 	nodes := make(map[string]string)
 	nodes["127.0.0.1"] = "127.0.0.1"
 	return nodes, nil
@@ -352,7 +352,7 @@ func (p *streamEndTestProjectorClientEnv) GetNodeListForBuckets(buckets []string
 
 func (p *streamEndTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
 
-	common.Infof("streamEndTestProjectorClientEnv.GetNodeListForTimestamps() ")
+	logging.Infof("streamEndTestProjectorClientEnv.GetNodeListForTimestamps() ")
 	nodes := make(map[string][]*protobuf.TsVbuuid)
 	nodes["127.0.0.1"] = nil
 

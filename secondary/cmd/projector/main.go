@@ -11,6 +11,7 @@ import (
 	"github.com/couchbase/cbauth"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/projector"
 )
 
@@ -72,26 +73,26 @@ func main() {
 
 	config := c.SystemConfig.Clone()
 	if options.nolog {
-		c.LogIgnore()
+		logging.LogIgnore()
 		config.SetValue("log.ignore", true)
 	} else if options.trace {
-		c.SetLogLevel(c.LogLevelTrace)
+		logging.SetLogLevel(logging.LogLevelTrace)
 		config.SetValue("log.level", "trace")
 	} else if options.debug {
-		c.SetLogLevel(c.LogLevelDebug)
+		logging.SetLogLevel(logging.LogLevelDebug)
 		config.SetValue("log.level", "debug")
 	} else if options.info {
-		c.SetLogLevel(c.LogLevelInfo)
+		logging.SetLogLevel(logging.LogLevelInfo)
 		config.SetValue("log.level", "info")
 	}
 	if f := getlogFile(); f != nil {
 		log.Printf("Projector logging to %q\n", f.Name())
-		c.SetLogWriter(f)
+		logging.SetLogWriter(f)
 		config.SetValue("log.file", f.Name())
 	}
 	config.SetValue("projector.clusterAddr", cluster)
 	if options.colocate == false {
-		c.Fatalf("Only colocation policy is supported for now!\n")
+		logging.Fatalf("Only colocation policy is supported for now!\n")
 	}
 	config.SetValue("projector.colocate", options.colocate)
 	config.SetValue("projector.adminport.listenAddr", options.adminport)

@@ -32,7 +32,7 @@ func main() {
 
 	// get failover logs for some vbuckets
 	vbuckets := []uint16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	failovermap, err := client.UprGetFailoverLog(vbuckets)
+	failovermap, err := client.DcpGetFailoverLog(vbuckets)
 	if err != nil {
 		log.Fatalf("Failed to get failover log %v", err)
 	}
@@ -54,43 +54,43 @@ func main() {
 		log.Printf("Auth response = %v", resp)
 	}
 
-	uf, err := client.NewUprFeed()
+	uf, err := client.NewDcpFeed()
 	if err != nil {
 		log.Fatalf("Error connecting: %v", err)
 	}
 
-	err = uf.UprOpen("example", 0, 400)
+	err = uf.DcpOpen("example", 0, 400)
 	if err != nil {
-		log.Fatalf("Error in UPR Open: %v", err)
+		log.Fatalf("Error in DCP Open: %v", err)
 	}
 
 	//time.Sleep(10 * time.Second)
 
 	for i := 0; i < 64; i++ {
-		err := uf.UprRequestStream(uint16(i), 0, 0, 0, 0, 0xFFFFFFFFFFFFFFFF, 0, 0)
+		err := uf.DcpRequestStream(uint16(i), 0, 0, 0, 0, 0xFFFFFFFFFFFFFFFF, 0, 0)
 		if err != nil {
 			log.Fatalf("Request stream for vb %d Failed %v", i, err)
 		}
 	}
 
-	err = uf.UprRequestStream(uint16(100), 0, 0, 0, 0, 0, 0, 0)
+	err = uf.DcpRequestStream(uint16(100), 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		log.Fatalf("Request stream for vb 100 Failed %v", err)
 	}
 
 	err = uf.StartFeed()
 	if err != nil {
-		log.Fatalf("Error starting upr feed: %v", err)
+		log.Fatalf("Error starting dcp feed: %v", err)
 	}
 	for op := range uf.C {
-		if op.String() == "UPR_SNAPSHOT" {
+		if op.String() == "DCP_SNAPSHOT" {
 			log.Printf("Received Snapshot marker for Vbucket %d. Start Sequence %d End Sequence %d", op.VBucket, op.SnapstartSeq, op.SnapendSeq)
-		} else if op.String() == "UPR_MUTATION" {
+		} else if op.String() == "DCP_MUTATION" {
 			log.Printf("Received %s Key %s, Sequence %d, Cas %d\n", op.String(), op.Key, op.Seqno, op.Cas)
 			if len(op.Value) > 0 && len(op.Value) < 500 {
 				log.Printf("\tValue: %s", op.Value)
 			}
-		} else if op.String() == "UPR_STREAMEND" {
+		} else if op.String() == "DCP_STREAMEND" {
 			log.Printf("Received stream end event for vbucket %d", op.VBucket)
 		}
 
@@ -98,7 +98,7 @@ func main() {
 			log.Printf("Got an Error for vbucket %d, Error %s", op.VBucket, op.Error.Error())
 		}
 	}
-	log.Printf("Upr feed closed; err = %v.", uf.Error)
+	log.Printf("Dcp feed closed; err = %v.", uf.Error)
 }
 
 func failoverLog(vb uint16, flog memcached.FailoverLog, err error) {

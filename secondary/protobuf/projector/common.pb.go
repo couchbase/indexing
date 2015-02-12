@@ -65,7 +65,7 @@ func (m *Vbuckets) GetVbnos() []uint32 {
 	return nil
 }
 
-// Start and end of UPR snapshot
+// Start and end of DCP snapshot
 type Snapshot struct {
 	Start            *uint64 `protobuf:"varint,1,req,name=start" json:"start,omitempty"`
 	End              *uint64 `protobuf:"varint,2,req,name=end" json:"end,omitempty"`

@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"encoding/json"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"math/rand"
 	"net"
@@ -89,9 +90,9 @@ func (cbq *cbqBridge) initCbqBridge() error {
 	http.HandleFunc("/list", cbq.handleList)
 
 	addr := net.JoinHostPort("", cbq.config["adminPort"].String())
-	common.Infof("CbqBridge::initCbqBridge Listening on %v", addr)
+	logging.Infof("CbqBridge::initCbqBridge Listening on %v", addr)
 	if err := http.ListenAndServe(addr, nil); err != nil {
-		common.Errorf("CbqBridge: Error Starting Http Server: %v", err)
+		logging.Errorf("CbqBridge: Error Starting Http Server: %v", err)
 		return err
 	}
 	return nil
@@ -104,7 +105,7 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	indexinfo := indexRequest(r).Index
 
-	common.Debugf("CbqBridge::handleCreate Received CreateIndex %v", indexinfo)
+	logging.Debugf("CbqBridge::handleCreate Received CreateIndex %v", indexinfo)
 
 	//generate a new unique id
 	defnID := rand.Int()
@@ -157,7 +158,7 @@ func (cbq *cbqBridge) handleCreate(w http.ResponseWriter, r *http.Request) {
 	} else {
 		err := msg.(*MsgError).GetError()
 
-		common.Debugf("CbqBridge::handleCreate Received Error %s", err.cause)
+		logging.Debugf("CbqBridge::handleCreate Received Error %s", err.cause)
 
 		ierr := IndexError{Code: string(RESP_ERROR),
 			Msg: err.cause.Error()}
@@ -176,7 +177,7 @@ func (cbq *cbqBridge) handleDrop(w http.ResponseWriter, r *http.Request) {
 
 	indexinfo := indexRequest(r).Index
 
-	common.Debugf("CbqBridge::handleDrop Received DropIndex %v", indexinfo)
+	logging.Debugf("CbqBridge::handleDrop Received DropIndex %v", indexinfo)
 
 	defnID := indexinfo.DefnID
 
@@ -195,7 +196,7 @@ func (cbq *cbqBridge) handleDrop(w http.ResponseWriter, r *http.Request) {
 	} else {
 		err := msg.(*MsgError).GetError()
 
-		common.Debugf("CbqBridge: DropIndex Received Error %s", err.cause)
+		logging.Debugf("CbqBridge: DropIndex Received Error %s", err.cause)
 
 		ierr := IndexError{Code: string(RESP_ERROR),
 			Msg: err.cause.Error()}
@@ -213,7 +214,7 @@ func (cbq *cbqBridge) handleDrop(w http.ResponseWriter, r *http.Request) {
 func (cbq *cbqBridge) handleList(w http.ResponseWriter, r *http.Request) {
 	var res IndexMetaResponse
 
-	common.Debugf("CbqBridge::handleList Received ListIndex")
+	logging.Debugf("CbqBridge::handleList Received ListIndex")
 
 	var indexList []IndexInfo
 	for _, idx := range cbq.indexMap {
@@ -230,7 +231,7 @@ func (cbq *cbqBridge) handleList(w http.ResponseWriter, r *http.Request) {
 //handleUpdateIndexInstMap updates the indexInstMap
 func (cbq *cbqBridge) updateIndexMap(indexInstMap common.IndexInstMap) {
 
-	common.Debugf("CbqBridge::updateIndexMap %v", indexInstMap)
+	logging.Debugf("CbqBridge::updateIndexMap %v", indexInstMap)
 
 	for id, inst := range indexInstMap {
 		cbq.indexMap[id] = getIndexInfoFromInst(inst)
@@ -282,7 +283,7 @@ func sendResponse(w http.ResponseWriter, res interface{}) {
 	header["Content-Type"] = []string{"application/json"}
 
 	if buf, err = json.Marshal(&res); err != nil {
-		common.Errorf("CbqBridge::sendResponse Unable to marshal response", res)
+		logging.Errorf("CbqBridge::sendResponse Unable to marshal response", res)
 	}
 	w.Write(buf)
 }

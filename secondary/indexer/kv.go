@@ -14,7 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
-	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // Key is an array of JSON objects, per encoding/json
@@ -114,7 +114,7 @@ func (k *Key) Raw() []byte {
 		// TODO: Refactor to reuse tmp buffer
 		buf := make([]byte, 0, MAX_SEC_KEY_LEN)
 		if buf, err = jsoncodec.Decode(k.encoded, buf); err != nil {
-			common.Errorf("KV::Raw Error Decoding Key %v, Err %v", k.encoded,
+			logging.Errorf("KV::Raw Error Decoding Key %v, Err %v", k.encoded,
 				err)
 			return nil
 		}

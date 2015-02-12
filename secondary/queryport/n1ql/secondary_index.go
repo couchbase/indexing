@@ -15,6 +15,7 @@ import "fmt"
 import "sync"
 import "strconv"
 
+import l "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/collatejson"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
@@ -74,7 +75,7 @@ type gsiKeyspace struct {
 func NewGSIIndexer(
 	clusterURL, namespace, keyspace string) (datastore.Indexer, errors.Error) {
 
-	c.SetLogLevel(c.LogLevelTrace)
+	l.SetLogLevel(l.LogLevelTrace)
 
 	gsi := &gsiKeyspace{
 		clusterURL:     clusterURL,

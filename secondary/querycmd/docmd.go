@@ -10,6 +10,7 @@ import "errors"
 import "time"
 
 import "github.com/couchbase/cbauth"
+import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
@@ -94,11 +95,11 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 
 	// deal with logging
 	if debug {
-		c.SetLogLevel(c.LogLevelDebug)
+		logging.SetLogLevel(logging.LogLevelDebug)
 	} else if trace {
-		c.SetLogLevel(c.LogLevelTrace)
+		logging.SetLogLevel(logging.LogLevelTrace)
 	} else if info {
-		c.SetLogLevel(c.LogLevelInfo)
+		logging.SetLogLevel(logging.LogLevelInfo)
 	}
 
 	// bindexes

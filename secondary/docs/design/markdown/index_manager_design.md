@@ -290,7 +290,7 @@ Process of rebalance,
 
 TBD
 
-### UPR connection coordination
+### DCP connection coordination
 
 Index-Coordinator is responsible for starting the "maintanence stream" and
 "backfill stream". At any given time there can be only one "maintanence
@@ -299,15 +299,15 @@ stream". Subsequently it is responsible for restarting them when,
 * connection between projector and KV fails, consequently downstream connections
   will be terminated.
 * kv-rebalance, during kv-rebalance one or more vbucket stream will switch to
-  another node that will lead to stream-end on the projector's UPR connection.
+  another node that will lead to stream-end on the projector's DCP connection.
 * kv-rollback, during which kv has crashed and failover-log indicates that
   indexer-nodes need to rollback.
 
 SYNC messages and connection termination will be used to infer that upstream
-UPR connection has dropped or projector has crashed. STREAM_BEGIN and STREAM_END
+DCP connection has dropped or projector has crashed. STREAM_BEGIN and STREAM_END
 will be used to infer a kv-rebalance.
 
-### UPR connection during bootstrap
+### DCP connection during bootstrap
 
 Index-Coordinator will handshake with projectors for failover-log.
 Index-Coordinator should compute the restart-timestamp and use them to start
@@ -375,7 +375,7 @@ Rollback context,
         //   "restart",  means restart-timestamp is computed and nodes can
         //               rollback.
         //   "rollback", means local-indexer-nodes are commanded to rollback
-        //               by providing to them failover-timestamp and upr-timestamp.
+        //               by providing to them failover-timestamp and dcp-timestamp.
         rollback          string
         failoverTimestamp Timestamp
         restartTimestamp  Timestamp
@@ -384,7 +384,7 @@ Rollback context,
 
 Index-Coordinator notifies each indexer to enter into recovery mode by
 passing the failover log received from the projector. Index-Coordinator would
-establish a new UPR connection with all the projectors for index maintenance.
+establish a new DCP connection with all the projectors for index maintenance.
 Each individual local indexer will start in recovery mode.  It will switch
 over from recovery mode to normal mode when the catch-up traffic has a seqNo
 that is equal or greater than the seqNo at the mutation queue.

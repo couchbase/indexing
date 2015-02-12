@@ -12,6 +12,7 @@ import "errors"
 import "strings"
 import "sync"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 
@@ -89,7 +90,7 @@ func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	if err == nil { // Post HTTP request.
 		bodybuf := bytes.NewBuffer(body)
 		url := b.adminport + "/list"
-		common.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
+		logging.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
 		resp, err = b.httpc.Post(url, "application/json", bodybuf)
 		if err == nil {
 			defer resp.Body.Close()
@@ -141,7 +142,7 @@ func (b *cbqClient) CreateIndex(
 	if err == nil { // Post HTTP request.
 		bodybuf := bytes.NewBuffer(body)
 		url := b.adminport + "/create"
-		common.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
+		logging.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
 		resp, err = b.httpc.Post(url, "application/json", bodybuf)
 		if err == nil {
 			defer resp.Body.Close()
@@ -175,7 +176,7 @@ func (b *cbqClient) DropIndex(defnID common.IndexDefnId) error {
 		// Post HTTP request.
 		bodybuf := bytes.NewBuffer(body)
 		url := b.adminport + "/drop"
-		common.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
+		logging.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
 		resp, err = b.httpc.Post(url, "application/json", bodybuf)
 		if err == nil {
 			defer resp.Body.Close()
@@ -224,7 +225,7 @@ func (b *cbqClient) metaResponse(
 	body, err = ioutil.ReadAll(resp.Body)
 	if err == nil {
 		if err = json.Unmarshal(body, &mresp); err == nil {
-			common.Tracef("%v received raw response %s", b.logPrefix, string(body))
+			logging.Tracef("%v received raw response %s", b.logPrefix, string(body))
 			if strings.Contains(mresp.Status, "error") {
 				err = errors.New(mresp.Errors[0].Msg)
 			}

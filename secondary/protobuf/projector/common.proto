@@ -13,7 +13,7 @@ message Vbuckets {
     repeated uint32 vbnos = 1;
 }
 
-// Start and end of UPR snapshot
+// Start and end of DCP snapshot
 message Snapshot {
     required uint64 start = 1;
     required uint64 end   = 2;

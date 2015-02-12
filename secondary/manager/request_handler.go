@@ -11,6 +11,7 @@ package manager
 
 import (
 	"encoding/json"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
@@ -180,7 +181,7 @@ func (m *httpHandler) createIndexRequest(w http.ResponseWriter, r *http.Request)
 		PartitionKey:    indexinfo.PartnExpr}
 
 	// call the index manager to handle the DDL
-	common.Debugf("RequestHandler::createIndexRequest: invoke IndexManager for create index bucket %s name %s",
+	logging.Debugf("RequestHandler::createIndexRequest: invoke IndexManager for create index bucket %s name %s",
 		indexinfo.Bucket, indexinfo.Name)
 
 	err = m.mgr.HandleCreateIndexDDL(idxDefn)
@@ -295,16 +296,16 @@ func (m *httpHandler) getTopologyRequest(w http.ResponseWriter, r *http.Request)
 func convertIndexRequest(r *http.Request) *IndexRequest {
 	req := IndexRequest{}
 	buf := make([]byte, r.ContentLength)
-	common.Debugf("RequestHandler::convertIndexRequest: request content length %d", len(buf))
+	logging.Debugf("RequestHandler::convertIndexRequest: request content length %d", len(buf))
 
 	// Body will be non-null but can return EOF if being empty
 	if n, err := r.Body.Read(buf); err != nil && int64(n) != r.ContentLength {
-		common.Debugf("RequestHandler::convertIndexRequest: unable to read request body, err %v", err)
+		logging.Debugf("RequestHandler::convertIndexRequest: unable to read request body, err %v", err)
 		return nil
 	}
 
 	if err := json.Unmarshal(buf, &req); err != nil {
-		common.Debugf("RequestHandler::convertIndexRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
+		logging.Debugf("RequestHandler::convertIndexRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
 		return nil
 	}
 
@@ -314,16 +315,16 @@ func convertIndexRequest(r *http.Request) *IndexRequest {
 func convertTopologyRequest(r *http.Request) *TopologyRequest {
 	req := TopologyRequest{}
 	buf := make([]byte, r.ContentLength)
-	common.Debugf("RequestHandler::convertIndexRequest: request content length %d", len(buf))
+	logging.Debugf("RequestHandler::convertIndexRequest: request content length %d", len(buf))
 
 	// Body will be non-null but can return EOF if being empty
 	if n, err := r.Body.Read(buf); err != nil && int64(n) != r.ContentLength {
-		common.Debugf("RequestHandler::convertIndexRequest: unable to read request body, err %v", err)
+		logging.Debugf("RequestHandler::convertIndexRequest: unable to read request body, err %v", err)
 		return nil
 	}
 
 	if err := json.Unmarshal(buf, &req); err != nil {
-		common.Debugf("RequestHandler::convertIndexRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
+		logging.Debugf("RequestHandler::convertIndexRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
 		return nil
 	}
 
@@ -331,7 +332,7 @@ func convertTopologyRequest(r *http.Request) *TopologyRequest {
 }
 
 func sendResponse(w http.ResponseWriter, res interface{}) {
-	common.Debugf("RequestHandler::sendResponse: sending response back to caller")
+	logging.Debugf("RequestHandler::sendResponse: sending response back to caller")
 
 	header := w.Header()
 	header["Content-Type"] = []string{"application/json"}
@@ -353,7 +354,7 @@ func (r *requestHandler) run() {
 	handler.initializer.Do(func() {
 		defer func() {
 			if r := recover(); r != nil {
-				common.Warnf("error encountered when registering http createIndex handler : %v.  Ignored.\n", r)
+				logging.Warnf("error encountered when registering http createIndex handler : %v.  Ignored.\n", r)
 			}
 		}()
 
@@ -367,14 +368,14 @@ func (r *requestHandler) run() {
 	li, err := net.Listen("tcp", INDEX_DDL_HTTP_ADDR)
 	if err != nil {
 		// TODO: abort
-		common.Warnf("requestHandler.run() : HTTP Server Listen fails, err %v", err)
+		logging.Warnf("requestHandler.run() : HTTP Server Listen fails, err %v", err)
 	}
 	r.listener = li
 
 	if err := http.Serve(li, nil); err != nil {
 		// TODO: abort
-		common.Warnf("requestHandler.run() : HTTP Server Serve fails, err %v", err)
+		logging.Warnf("requestHandler.run() : HTTP Server Serve fails, err %v", err)
 	}
 
-	common.Debugf("requestHandler.run() : Request Handler HTTP server running")
+	logging.Debugf("requestHandler.run() : Request Handler HTTP server running")
 }

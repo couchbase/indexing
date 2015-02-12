@@ -22,6 +22,7 @@ import "runtime/debug"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/logging"
 
 // VbucketRoutine is immutable structure defined for each vbucket.
 type VbucketRoutine struct {
@@ -61,7 +62,7 @@ func NewVbucketRoutine(
 	vr.syncTimeout *= time.Millisecond
 
 	go vr.run(vr.reqch, startSeqno)
-	c.Infof("%v started ...\n", vr.logPrefix)
+	logging.Infof("%v started ...\n", vr.logPrefix)
 	return vr
 }
 
@@ -73,8 +74,8 @@ const (
 	vrCmdSetConfig
 )
 
-// Event will post an UprEvent, asychronous call.
-func (vr *VbucketRoutine) Event(m *mc.UprEvent) error {
+// Event will post an DcpEvent, asychronous call.
+func (vr *VbucketRoutine) Event(m *mc.DcpEvent) error {
 	cmd := []interface{}{vrCmdEvent, m}
 	return c.FailsafeOpAsync(vr.reqch, cmd, vr.finch)
 }
@@ -121,20 +122,20 @@ func (vr *VbucketRoutine) SetConfig(config c.Config) error {
 func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			c.Errorf("%v run() crashed: %v\n", vr.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v run() crashed: %v\n", vr.logPrefix, r)
+			logging.StackTrace(string(debug.Stack()))
 		}
 
 		if data := vr.makeStreamEndData(seqno); data == nil {
-			c.Errorf("%v StreamEnd NOT PUBLISHED\n", vr.logPrefix)
+			logging.Errorf("%v StreamEnd NOT PUBLISHED\n", vr.logPrefix)
 
 		} else { // publish stream-end
-			c.Debugf("%v StreamEnd for vbucket %v\n", vr.logPrefix, vr.vbno)
+			logging.Debugf("%v StreamEnd for vbucket %v\n", vr.logPrefix, vr.vbno)
 			vr.broadcast2Endpoints(data)
 		}
 
 		close(vr.finch)
-		c.Infof("%v ... stopped\n", vr.logPrefix)
+		logging.Infof("%v ... stopped\n", vr.logPrefix)
 	}()
 
 	var heartBeat <-chan time.Time // for Sync message
@@ -153,12 +154,12 @@ loop:
 			cmd := msg[0].(byte)
 			switch cmd {
 			case vrCmdAddEngines:
-				c.Tracef("%v vrCmdAddEngines\n", vr.logPrefix)
+				logging.Tracef("%v vrCmdAddEngines\n", vr.logPrefix)
 				vr.engines = make(map[uint64]*Engine)
 				if msg[1] != nil {
 					for uuid, engine := range msg[1].(map[uint64]*Engine) {
 						vr.engines[uuid] = engine
-						c.Tracef("%v AddEngine %v\n", vr.logPrefix, uuid)
+						logging.Tracef("%v AddEngine %v\n", vr.logPrefix, uuid)
 					}
 					vr.printCtrl(vr.engines)
 				}
@@ -173,20 +174,20 @@ loop:
 				addEngineCount++
 
 			case vrCmdDeleteEngines:
-				c.Tracef("%v vrCmdDeleteEngines\n", vr.logPrefix)
+				logging.Tracef("%v vrCmdDeleteEngines\n", vr.logPrefix)
 				engineKeys := msg[1].([]uint64)
 				for _, uuid := range engineKeys {
 					delete(vr.engines, uuid)
-					c.Tracef("%v DelEngine %v\n", vr.logPrefix, uuid)
+					logging.Tracef("%v DelEngine %v\n", vr.logPrefix, uuid)
 				}
 
-				c.Tracef("%v deleted engines %v\n", engineKeys)
+				logging.Tracef("%v deleted engines %v\n", engineKeys)
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{nil}
 				delEngineCount++
 
 			case vrCmdGetStatistics:
-				c.Tracef("%v vrCmdStatistics\n", vr.logPrefix)
+				logging.Tracef("%v vrCmdStatistics\n", vr.logPrefix)
 				respch := msg[1].(chan []interface{})
 				stats.Set("addInsts", addEngineCount)
 				stats.Set("delInsts", delEngineCount)
@@ -202,27 +203,27 @@ loop:
 				// re-initialize the heart beat only if it is already started.
 				if heartBeat != nil {
 					infomsg := "%v heart-beat reloaded: %v\n"
-					c.Infof(infomsg, vr.logPrefix, vr.syncTimeout)
+					logging.Infof(infomsg, vr.logPrefix, vr.syncTimeout)
 					heartBeat = time.Tick(vr.syncTimeout)
 				}
 				respch <- []interface{}{nil}
 
 			case vrCmdEvent:
-				m := msg[1].(*mc.UprEvent)
-				if m.Opcode == mcd.UPR_STREAMREQ { // opens up the path
+				m := msg[1].(*mc.DcpEvent)
+				if m.Opcode == mcd.DCP_STREAMREQ { // opens up the path
 					heartBeat = time.Tick(vr.syncTimeout)
 					format := "%v heartbeat (%v) loaded ...\n"
-					c.Tracef(format, vr.logPrefix, vr.syncTimeout)
+					logging.Tracef(format, vr.logPrefix, vr.syncTimeout)
 				}
 
 				// count statistics
 				seqno = vr.handleEvent(m, seqno)
 				switch m.Opcode {
-				case mcd.UPR_SNAPSHOT:
+				case mcd.DCP_SNAPSHOT:
 					sshotCount++
-				case mcd.UPR_MUTATION, mcd.UPR_DELETION, mcd.UPR_EXPIRATION:
+				case mcd.DCP_MUTATION, mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
 					mutationCount++
-				case mcd.UPR_STREAMEND:
+				case mcd.DCP_STREAMEND:
 					break loop
 				}
 			}
@@ -230,11 +231,11 @@ loop:
 		case <-heartBeat:
 			if data := vr.makeSyncData(seqno); data != nil {
 				syncCount++
-				c.Tracef("%v Sync count %v\n", vr.logPrefix, syncCount)
+				logging.Tracef("%v Sync count %v\n", vr.logPrefix, syncCount)
 				vr.broadcast2Endpoints(data)
 
 			} else {
-				c.Errorf("%v Sync NOT PUBLISHED\n", vr.logPrefix)
+				logging.Errorf("%v Sync NOT PUBLISHED\n", vr.logPrefix)
 			}
 		}
 	}
@@ -249,9 +250,9 @@ func (vr *VbucketRoutine) updateEndpoints(
 		for _, raddr := range engine.Endpoints() {
 			if _, ok := eps[raddr]; !ok {
 				format := "%v endpoint %v not found\n"
-				c.Errorf(format, vr.logPrefix, raddr)
+				logging.Errorf(format, vr.logPrefix, raddr)
 			}
-			c.Tracef("%v UpdateEndpoint %v to %v\n", vr.logPrefix, raddr, engine)
+			logging.Tracef("%v UpdateEndpoint %v to %v\n", vr.logPrefix, raddr, engine)
 			endpoints[raddr] = eps[raddr]
 		}
 	}
@@ -259,29 +260,29 @@ func (vr *VbucketRoutine) updateEndpoints(
 }
 
 var ssFormat = "%v received snapshot %v %v (type %x)\n"
-var traceMutFormat = "%v UprEvent %v:%v <<%v>>\n"
+var traceMutFormat = "%v DcpEvent %v:%v <<%v>>\n"
 
-func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
-	c.Tracef(traceMutFormat, vr.logPrefix, m.Seqno, m.Opcode, string(m.Key))
+func (vr *VbucketRoutine) handleEvent(m *mc.DcpEvent, seqno uint64) uint64 {
+	logging.Tracef(traceMutFormat, vr.logPrefix, m.Seqno, m.Opcode, string(m.Key))
 
 	switch m.Opcode {
-	case mcd.UPR_STREAMREQ: // broadcast StreamBegin
+	case mcd.DCP_STREAMREQ: // broadcast StreamBegin
 		if data := vr.makeStreamBeginData(seqno); data != nil {
 			vr.broadcast2Endpoints(data)
 		} else {
-			c.Errorf("%v StreamBeginData NOT PUBLISHED\n", vr.logPrefix)
+			logging.Errorf("%v StreamBeginData NOT PUBLISHED\n", vr.logPrefix)
 		}
 
-	case mcd.UPR_SNAPSHOT: // broadcast Snapshot
+	case mcd.DCP_SNAPSHOT: // broadcast Snapshot
 		typ, start, end := m.SnapshotType, m.SnapstartSeq, m.SnapendSeq
-		c.Debugf(ssFormat, vr.logPrefix, start, end, typ)
+		logging.Debugf(ssFormat, vr.logPrefix, start, end, typ)
 		if data := vr.makeSnapshotData(m, seqno); data != nil {
 			vr.broadcast2Endpoints(data)
 		} else {
-			c.Errorf("%v Snapshot NOT PUBLISHED\n", vr.logPrefix)
+			logging.Errorf("%v Snapshot NOT PUBLISHED\n", vr.logPrefix)
 		}
 
-	case mcd.UPR_MUTATION, mcd.UPR_DELETION, mcd.UPR_EXPIRATION:
+	case mcd.DCP_MUTATION, mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
 		// sequence number gets incremented only here.
 		seqno = m.Seqno
 		// prepare a data for each endpoint.
@@ -290,7 +291,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 		for _, engine := range vr.engines {
 			err := engine.TransformRoute(vr.vbuuid, m, dataForEndpoints)
 			if err != nil {
-				c.Errorf("%v TransformRoute %v\n", vr.logPrefix, err)
+				logging.Errorf("%v TransformRoute %v\n", vr.logPrefix, err)
 				continue
 			}
 		}
@@ -303,7 +304,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.UprEvent, seqno uint64) uint64 {
 				// or ErrorClosed
 				if err := endpoint.Send(data); err != nil {
 					msg := "%v endpoint(%q).Send() failed: %v"
-					c.Errorf(msg, vr.logPrefix, raddr, err)
+					logging.Errorf(msg, vr.logPrefix, raddr, err)
 					endpoint.Close()
 					delete(vr.endpoints, raddr)
 				}
@@ -322,7 +323,7 @@ func (vr *VbucketRoutine) broadcast2Endpoints(data interface{}) {
 		// or ErrorClosed
 		if err := endpoint.Send(data); err != nil {
 			msg := "%v endpoint(%q).Send() failed: %v"
-			c.Errorf(msg, vr.logPrefix, raddr, err)
+			logging.Errorf(msg, vr.logPrefix, raddr, err)
 			endpoint.Close()
 			delete(vr.endpoints, raddr)
 		}
@@ -332,8 +333,8 @@ func (vr *VbucketRoutine) broadcast2Endpoints(data interface{}) {
 func (vr *VbucketRoutine) makeStreamBeginData(seqno uint64) interface{} {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v stream-begin crashed: %v\n", vr.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v stream-begin crashed: %v\n", vr.logPrefix, r)
+			logging.StackTrace(string(debug.Stack()))
 		}
 	}()
 
@@ -353,8 +354,8 @@ func (vr *VbucketRoutine) makeStreamBeginData(seqno uint64) interface{} {
 func (vr *VbucketRoutine) makeSyncData(seqno uint64) (data interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v sync crashed: %v\n", vr.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v sync crashed: %v\n", vr.logPrefix, r)
+			logging.StackTrace(string(debug.Stack()))
 		}
 	}()
 
@@ -372,12 +373,12 @@ func (vr *VbucketRoutine) makeSyncData(seqno uint64) (data interface{}) {
 }
 
 func (vr *VbucketRoutine) makeSnapshotData(
-	m *mc.UprEvent, seqno uint64) interface{} {
+	m *mc.DcpEvent, seqno uint64) interface{} {
 
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v snapshot crashed: %v\n", vr.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v snapshot crashed: %v\n", vr.logPrefix, r)
+			logging.StackTrace(string(debug.Stack()))
 		}
 	}()
 
@@ -397,8 +398,8 @@ func (vr *VbucketRoutine) makeSnapshotData(
 func (vr *VbucketRoutine) makeStreamEndData(seqno uint64) interface{} {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v stream-end crashed: %v\n", vr.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v stream-end crashed: %v\n", vr.logPrefix, r)
+			logging.StackTrace(string(debug.Stack()))
 		}
 	}()
 
@@ -432,11 +433,11 @@ func (vr *VbucketRoutine) printCtrl(v interface{}) {
 	switch val := v.(type) {
 	case map[string]c.RouterEndpoint:
 		for raddr := range val {
-			c.Tracef("%v knows endpoint %v\n", vr.logPrefix, raddr)
+			logging.Tracef("%v knows endpoint %v\n", vr.logPrefix, raddr)
 		}
 	case map[uint64]*Engine:
 		for uuid := range val {
-			c.Tracef("%v knows engine %v\n", vr.logPrefix, uuid)
+			logging.Tracef("%v knows engine %v\n", vr.logPrefix, uuid)
 		}
 	}
 }

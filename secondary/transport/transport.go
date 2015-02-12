@@ -13,7 +13,7 @@ import "errors"
 import "net"
 import "io"
 
-import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/logging"
 
 // error codes
 
@@ -108,7 +108,7 @@ func (pkt *TransportPacket) Send(conn transporter, payload interface{}) (err err
 	// transport framing
 	l := pktLenSize + pktFlagSize + len(data)
 	if maxLen := len(pkt.buf); l > maxLen {
-		c.Errorf("sending packet length %v > %v\n", l, maxLen)
+		logging.Errorf("sending packet length %v > %v\n", l, maxLen)
 		err = ErrorPacketOverflow
 		return
 	}
@@ -119,14 +119,14 @@ func (pkt *TransportPacket) Send(conn transporter, payload interface{}) (err err
 	binary.BigEndian.PutUint16(pkt.buf[a:b], uint16(pkt.flags))
 	if n, err = conn.Write(pkt.buf[:pktDataOffset]); err == nil {
 		if n, err = conn.Write(data); err == nil && n != len(data) {
-			c.Errorf("transport wrote only %v bytes for data\n", n)
+			logging.Errorf("transport wrote only %v bytes for data\n", n)
 			err = ErrorPacketWrite
 		}
 		laddr, raddr := conn.LocalAddr(), conn.RemoteAddr()
-		c.Tracef("wrote %v bytes on connection %v->%v", len(data), laddr, raddr)
+		logging.Tracef("wrote %v bytes on connection %v->%v", len(data), laddr, raddr)
 
 	} else if n != pktDataOffset {
-		c.Errorf("transport wrote only %v bytes for header\n", n)
+		logging.Errorf("transport wrote only %v bytes for header\n", n)
 		err = ErrorPacketWrite
 	}
 	return
@@ -140,9 +140,9 @@ func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err 
 	// transport de-framing
 	if err = fullRead(conn, pkt.buf[:pktDataOffset]); err != nil {
 		if err == io.EOF {
-			c.Tracef("receiving packet: %v\n", err)
+			logging.Tracef("receiving packet: %v\n", err)
 		} else {
-			c.Errorf("receiving packet: %v\n", err)
+			logging.Errorf("receiving packet: %v\n", err)
 		}
 		return
 	}
@@ -151,22 +151,22 @@ func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err 
 	a, b = pktFlagOffset, pktFlagOffset+pktFlagSize
 	pkt.flags = TransportFlag(binary.BigEndian.Uint16(pkt.buf[a:b]))
 	if maxLen := uint32(len(pkt.buf)); pktlen > maxLen {
-		c.Errorf("receiving packet length %v > %v\n", pktlen, maxLen)
+		logging.Errorf("receiving packet length %v > %v\n", pktlen, maxLen)
 		err = ErrorPacketOverflow
 		return
 	}
 	if err = fullRead(conn, pkt.buf[:pktlen]); err != nil {
 		if err == io.EOF {
-			c.Tracef("receiving packet: %v\n", err)
+			logging.Tracef("receiving packet: %v\n", err)
 		} else {
-			c.Errorf("receiving packet: %v\n", err)
+			logging.Errorf("receiving packet: %v\n", err)
 		}
 		return
 	}
 
 	data = pkt.buf[:pktlen]
 	laddr, raddr := conn.LocalAddr(), conn.RemoteAddr()
-	c.Tracef("read %v bytes on connection %v<-%v", len(data), laddr, raddr)
+	logging.Tracef("read %v bytes on connection %v<-%v", len(data), laddr, raddr)
 
 	// de-compression
 	if data, err = pkt.decompress(data); err != nil {

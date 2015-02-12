@@ -1,4 +1,4 @@
-package common
+package logging
 
 import "io"
 import "io/ioutil"
@@ -10,7 +10,7 @@ import "sync/atomic"
 // Error, Warning, Fatal are always logged
 const (
 	// LogLevelInfo log messages for info
-	LogLevelInfo int32 = iota + 1
+	LogLevelInfo = iota + 1
 	// LogLevelDebug log messages for info and debug
 	LogLevelDebug
 	// LogLevelTrace log messages info, debug and trace
@@ -50,8 +50,8 @@ func init() {
 }
 
 // LogLevel returns current log level
-func LogLevel() int32 {
-	return atomic.LoadInt32(&logLevel)
+func LogLevel() int {
+	return int(atomic.LoadInt32(&logLevel))
 }
 
 // LogIgnore to ignore all log messages.
@@ -70,7 +70,7 @@ func IsLogEnabled() bool {
 }
 
 // SetLogLevel sets current log level
-func SetLogLevel(level int32) {
+func SetLogLevel(level int) {
 	atomic.StoreInt32(&logLevel, int32(level))
 }
 

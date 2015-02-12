@@ -11,16 +11,16 @@ package main
 
 import (
 	"flag"
-	"log"
 	"strings"
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/indexer"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 var (
-	logLevel          = flag.Int("log", int(common.LogLevelInfo), "Log Level - 1(Info), 2(Debug), 3(Trace)")
+	logLevel          = flag.Int("log", logging.LogLevelInfo, "Log Level - 1(Info), 2(Debug), 3(Trace)")
 	numVbuckets       = flag.Int("vbuckets", indexer.MAX_NUM_VBUCKETS, "Number of vbuckets configured in Couchbase")
 	cluster           = flag.String("cluster", indexer.DEFAULT_CLUSTER_ENDPOINT, "Couchbase cluster address")
 	adminPort         = flag.String("adminPort", "9100", "Index ddl and status port")
@@ -45,14 +45,14 @@ func main() {
 	if *auth != "" {
 		up := strings.Split(*auth, ":")
 		if _, err := cbauth.InternalRetryDefaultInit(*cluster, up[0], up[1]); err != nil {
-			log.Fatalf("Failed to initialize cbauth: %s", err)
+			logging.Fatalf("Failed to initialize cbauth: %s", err)
 		}
 	}
 
 	go common.DumpOnSignal()
 	go common.ExitOnStdinClose()
 
-	common.SetLogLevel(int32(*logLevel))
+	logging.SetLogLevel(*logLevel)
 	config := common.SystemConfig.SectionConfig("indexer.", true)
 
 	config.SetValue("clusterAddr", *cluster)
@@ -69,6 +69,6 @@ func main() {
 	_, msg := indexer.NewIndexer(config)
 
 	if msg.GetMsgType() != indexer.MSG_SUCCESS {
-		log.Printf("Indexer Failure to Init %v", msg)
+		logging.Warnf("Indexer Failure to Init %v", msg)
 	}
 }

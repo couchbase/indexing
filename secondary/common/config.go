@@ -17,6 +17,7 @@ import "strings"
 import "fmt"
 import "reflect"
 import "errors"
+import "github.com/couchbase/indexing/secondary/logging"
 
 // Config is a key, value map with key always being a string
 // represents a config-parameter.
@@ -448,7 +449,7 @@ func (config Config) Update(data interface{}) error {
 	case map[string]interface{}: // transform
 		for key, value := range v {
 			if err := config.SetValue(key, value); err != nil {
-				Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
+				logging.Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
 			}
 		}
 
@@ -459,7 +460,7 @@ func (config Config) Update(data interface{}) error {
 		}
 		for key, value := range m {
 			if err := config.SetValue(key, value); err != nil {
-				Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
+				logging.Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
 			}
 		}
 

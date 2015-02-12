@@ -36,7 +36,7 @@ func usage() {
 
 func main() {
 	outtxt := "2i configuration parameters\n"
-	outtxt += "===========================\n"
+	outtxt += "---------------------------\n"
 	argParse()
 	for _, param := range sortParams() {
 		cv := c.SystemConfig[param]

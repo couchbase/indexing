@@ -29,12 +29,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 	"github.com/couchbase/indexing/secondary/dcp/transport/client"
 )
@@ -50,7 +50,7 @@ func slowLog(startTime time.Time, format string, args ...interface{}) {
 	if elapsed := time.Now().Sub(startTime); elapsed > SlowServerCallWarningThreshold {
 		pc, _, _, _ := runtime.Caller(2)
 		caller := runtime.FuncForPC(pc).Name()
-		log.Printf("dcp-client: "+format+" in "+caller+" took "+elapsed.String(), args...)
+		logging.Warnf("dcp-client: "+format+" in "+caller+" took "+elapsed.String(), args...)
 	}
 }
 
@@ -199,7 +199,7 @@ func (b *Bucket) doBulkGet(vb uint16, keys []string,
 			conn, err := pool.Get()
 			if err != nil {
 				if isAuthError(err) {
-					log.Printf(" Fatal Auth Error %v", err)
+					logging.Fatalf(" Fatal Auth Error %v", err)
 					return err
 				}
 				// retry
@@ -223,7 +223,7 @@ func (b *Bucket) doBulkGet(vb uint16, keys []string,
 					ch <- rv
 					return err
 				}
-				log.Printf("Connection Error: %s. Refreshing bucket", err.Error())
+				logging.Warnf("Connection Error: %s. Refreshing bucket", err.Error())
 				b.Refresh()
 				// retry
 				return nil

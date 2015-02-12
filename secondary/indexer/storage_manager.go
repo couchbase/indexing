@@ -14,6 +14,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
 )
@@ -128,7 +129,7 @@ loop:
 		case cmd, ok := <-s.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == STORAGE_MGR_SHUTDOWN {
-					common.Infof("StorageManager::run Shutting Down")
+					logging.Infof("StorageManager::run Shutting Down")
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -176,7 +177,7 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 //after flush has completed
 func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
-	common.Tracef("StorageMgr::handleCreateSnapshot %v", cmd)
+	logging.Tracef("StorageMgr::handleCreateSnapshot %v", cmd)
 
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	tsVbuuid := cmd.(*MsgMutMgrFlushDone).GetTS()
@@ -233,7 +234,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 					if latestSnapshot == nil || ts.GreaterThan(snapTs) {
 						//commit the outstanding data
 
-						common.Tracef("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
+						logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
 							"%v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
 						newTsVbuuid := tsVbuuid.Copy()
@@ -241,10 +242,10 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 						var info SnapshotInfo
 						var newSnapshot Snapshot
 
-						common.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
+						logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
 							"Index: %v PartitionId: %v SliceId: %v Commit:%v", idxInstId, partnId, slice.Id(), needsCommit)
 						if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
-							common.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
+							logging.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
 								"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 							isSnapCreated = false
@@ -253,7 +254,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 						}
 
 						if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
-							common.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
+							logging.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
 								"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 							isSnapCreated = false
@@ -261,7 +262,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							continue
 						}
 
-						common.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
+						logging.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
 							"PartitionId: %v SliceId: %v (%v)", idxInstId, partnId, slice.Id(), info)
 
 						ss := &sliceSnapshot{
@@ -277,9 +278,9 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							snap: latestSnapshot,
 						}
 						sliceSnaps[slice.Id()] = ss
-						common.Debugf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
+						logging.Debugf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
 							"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
-						common.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
+						logging.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
 						continue
 					}
 				}
@@ -357,7 +358,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 					if snapInfo != nil {
 						err := slice.Rollback(snapInfo)
 						if err == nil {
-							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
+							logging.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
 								slice.Id(), snapInfo)
 							respTs = snapInfo.Timestamp()
@@ -375,7 +376,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						//if there is no snapshot available, rollback to zero
 						err := slice.RollbackToZero()
 						if err == nil {
-							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
+							logging.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
 								slice.Id())
 							respTs = common.NewTsVbuuid(bucket, numVbuckets)
@@ -416,7 +417,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
-	common.Infof("StorageMgr::handleUpdateIndexInstMap %v", cmd)
+	logging.Infof("StorageMgr::handleUpdateIndexInstMap %v", cmd)
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
@@ -458,12 +459,12 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 		enc := gob.NewEncoder(&instBytes)
 		err = enc.Encode(instMap)
 		if err != nil {
-			common.Errorf("StorageMgr::handleUpdateIndexInstMap \n\t Error Marshalling "+
+			logging.Errorf("StorageMgr::handleUpdateIndexInstMap \n\t Error Marshalling "+
 				"IndexInstMap %v. Err %v", instMap, err)
 		}
 
 		if err = s.meta.SetKV([]byte(INST_MAP_KEY_NAME), instBytes.Bytes()); err != nil {
-			common.Errorf("StorageMgr::handleUpdateIndexInstMap \n\tError "+
+			logging.Errorf("StorageMgr::handleUpdateIndexInstMap \n\tError "+
 				"Storing IndexInstMap %v", err)
 		}
 
@@ -475,7 +476,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
 
-	common.Infof("StorageMgr::handleUpdateIndexPartnMap %v", cmd)
+	logging.Infof("StorageMgr::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
@@ -672,7 +673,7 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 		latestSnapshotInfo := snapInfoContainer.GetLatest()
 
 		if latestSnapshotInfo != nil {
-			common.Infof("StorageMgr::updateIndexSnapMap IndexInst:%v Attempting to open snapshot (%v)",
+			logging.Infof("StorageMgr::updateIndexSnapMap IndexInst:%v Attempting to open snapshot (%v)",
 				idxInstId, latestSnapshotInfo)
 			latestSnapshot, err := slice.OpenSnapshot(latestSnapshotInfo)
 			if err != nil {

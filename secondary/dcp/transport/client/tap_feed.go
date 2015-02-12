@@ -5,9 +5,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"math"
 
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 )
 
@@ -95,13 +95,13 @@ func makeTapEvent(req transport.MCRequest) *TapEvent {
 		case transport.TAP_OPAQUE_ENABLE_CHECKPOINT_SYNC:
 			return nil
 		default:
-			log.Printf("TapFeed: Ignoring TAP_OPAQUE/%d", op)
+			logging.Warnf("TapFeed: Ignoring TAP_OPAQUE/%d", op)
 			return nil // unknown opaque event
 		}
 	case transport.NOOP:
 		return nil // ignore
 	default:
-		log.Printf("TapFeed: Ignoring %s", req.Opcode)
+		logging.Warnf("TapFeed: Ignoring %s", req.Opcode)
 		return nil // unknown event
 	}
 
@@ -279,7 +279,7 @@ loop:
 			break loop
 		}
 
-		//log.Printf("** TapFeed received %#v : %q", pkt, pkt.Body)
+		//logging.Warnf("** TapFeed received %#v : %q", pkt, pkt.Body)
 
 		if pkt.Opcode == transport.TAP_CONNECT {
 			// This is not an event from the server; it's
@@ -312,7 +312,7 @@ loop:
 		}
 	}
 	if err := mc.Close(); err != nil {
-		log.Printf("Error closing memcached client:  %v", err)
+		logging.Warnf("Error closing memcached client:  %v", err)
 	}
 }
 

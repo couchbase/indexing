@@ -77,7 +77,7 @@ indexer node shall shutdown / restart the stream with projector.
 
 Router will have an output queue for each endpoint and when ever the queue
 overflows it will cascade to upstream buffers and eventually will throttle the
-UPR streams.
+DCP streams.
 
 This can lead to system level (system is secondary index) slow down, actually
 the system level slow down is one of the many corner case. If the connection is

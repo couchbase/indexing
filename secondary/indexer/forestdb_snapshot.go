@@ -12,6 +12,7 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbaselabs/goforestdb"
 	"math"
@@ -75,13 +76,13 @@ func (s *fdbSnapshot) Open() error {
 		var err error
 		s.main, err = s.main.SnapshotOpen(mainSeq)
 		if err != nil {
-			common.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+			logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
 				"Opening Main DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), mainSeq, err)
 			return err
 		}
 		s.back, err = s.back.SnapshotOpen(backSeq)
 		if err != nil {
-			common.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+			logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
 				"Opening Back DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), backSeq, err)
 			return err
 		}
@@ -136,7 +137,7 @@ func (s *fdbSnapshot) Close() error {
 	defer s.lock.Unlock()
 
 	if s.refCount <= 0 {
-		common.Errorf("ForestDBSnapshot::Close Close operation requested " +
+		logging.Errorf("ForestDBSnapshot::Close Close operation requested " +
 			"on already closed snapshot")
 		return errors.New("Snapshot Already Closed")
 	} else {
@@ -147,12 +148,12 @@ func (s *fdbSnapshot) Close() error {
 			if s.main != nil {
 				err := s.main.Close()
 				if err != nil {
-					common.Errorf("ForestDBSnapshot::Close Unexpected error "+
+					logging.Errorf("ForestDBSnapshot::Close Unexpected error "+
 						"closing Main DB Snapshot %v", err)
 					return err
 				}
 			} else {
-				common.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
+				logging.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
 				errors.New("Main DB Handle Nil")
 			}
 
@@ -160,12 +161,12 @@ func (s *fdbSnapshot) Close() error {
 			if s.back != nil {
 				err := s.back.Close()
 				if err != nil {
-					common.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
+					logging.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
 						"Back DB Snapshot %v", err)
 					return err
 				}
 			} else {
-				common.Errorf("ForestDBSnapshot::Close Back DB Handle Nil")
+				logging.Errorf("ForestDBSnapshot::Close Back DB Handle Nil")
 				errors.New("Back DB Handle Nil")
 			}
 		}

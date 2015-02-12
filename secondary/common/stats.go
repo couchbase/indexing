@@ -6,6 +6,7 @@ import "encoding/json"
 import "sort"
 import "fmt"
 import "strings"
+import "github.com/couchbase/indexing/secondary/logging"
 
 // Statistics provide a type and method receivers for marshalling and
 // un-marshalling statistics, as JSON, for components across the network.
@@ -58,7 +59,7 @@ func (s Statistics) ContentType() string {
 func (s Statistics) Incr(path string, vals ...int) {
 	l := len(vals)
 	if l == 0 {
-		Warnf("Incr called without value")
+		logging.Warnf("Incr called without value")
 		return
 	}
 
@@ -68,7 +69,7 @@ func (s Statistics) Incr(path string, vals ...int) {
 
 	case []interface{}:
 		if l != len(vs) {
-			Warnf("Incr expected %v values, got %v", len(vs), l)
+			logging.Warnf("Incr expected %v values, got %v", len(vs), l)
 			return
 		}
 		for i, v := range vs {
@@ -77,7 +78,7 @@ func (s Statistics) Incr(path string, vals ...int) {
 
 	case []float64:
 		if l != len(vs) {
-			Warnf("Incr expected %v values, got %v", len(vs), l)
+			logging.Warnf("Incr expected %v values, got %v", len(vs), l)
 			return
 		}
 		for i, v := range vs {
@@ -90,7 +91,7 @@ func (s Statistics) Incr(path string, vals ...int) {
 func (s Statistics) Decr(path string, vals ...int) {
 	l := len(vals)
 	if l == 0 {
-		Warnf("Decr called without value")
+		logging.Warnf("Decr called without value")
 		return
 	}
 
@@ -100,7 +101,7 @@ func (s Statistics) Decr(path string, vals ...int) {
 
 	case []interface{}:
 		if l != len(vs) {
-			Warnf("Decr expected %v values, got %v", len(vs), l)
+			logging.Warnf("Decr expected %v values, got %v", len(vs), l)
 			return
 		}
 		for i, v := range vs {
@@ -109,7 +110,7 @@ func (s Statistics) Decr(path string, vals ...int) {
 
 	case []float64:
 		if l != len(vs) {
-			Warnf("Incr expected %v values, got %v", len(vs), l)
+			logging.Warnf("Incr expected %v values, got %v", len(vs), l)
 			return
 		}
 		for i, v := range vs {

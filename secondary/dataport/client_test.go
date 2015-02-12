@@ -12,7 +12,7 @@ var addr = "localhost:8888"
 
 func TestClient(t *testing.T) {
 	maxBuckets, maxvbuckets, mutChanSize := 2, 8, 1000
-	c.LogIgnore()
+	logging.LogIgnore()
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
@@ -53,7 +53,7 @@ func TestClient(t *testing.T) {
 
 func TestStreamBegin(t *testing.T) {
 	maxBuckets, maxvbuckets, mutChanSize := 2, 8, 1000
-	c.LogIgnore()
+	logging.LogIgnore()
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)
@@ -107,7 +107,7 @@ func TestStreamBegin(t *testing.T) {
 
 func TestStreamEnd(t *testing.T) {
 	maxBuckets, maxvbuckets, mutChanSize := 2, 8, 100
-	c.LogIgnore()
+	logging.LogIgnore()
 
 	// start server
 	appch := make(chan interface{}, mutChanSize)

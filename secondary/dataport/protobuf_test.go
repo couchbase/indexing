@@ -8,7 +8,7 @@ import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 const confMaxKeyvers = 10
 
 func TestVbConnectionMap(t *testing.T) {
-	common.LogIgnore()
+	logging.LogIgnore()
 
 	vbuckets := []uint16{1, 2, 3, 4}
 	vbuuids := []uint64{10, 20, 30, 40}
@@ -36,7 +36,7 @@ func TestVbConnectionMap(t *testing.T) {
 }
 
 func TestAddUpsert(t *testing.T) {
-	common.LogIgnore()
+	logging.LogIgnore()
 
 	kv := kvUpserts()
 	vbno, vbuuid, nMuts := uint16(10), uint64(1000), 10

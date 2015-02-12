@@ -32,8 +32,8 @@ var testResponseStream = &protobuf.ResponseStream{
 }
 
 func TestStatistics(t *testing.T) {
-	c.LogIgnore()
-	//c.SetLogLevel(c.LogLevelDebug)
+	logging.LogIgnore()
+	//logging.SetLogLevel(logging.LogLevelDebug)
 
 	addr := "localhost:9101"
 	serverCallb := func(
@@ -76,7 +76,7 @@ func TestStatistics(t *testing.T) {
 }
 
 func TestRange(t *testing.T) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	serverCallb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -133,7 +133,7 @@ func TestRange(t *testing.T) {
 }
 
 func TestScanAll(t *testing.T) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -187,7 +187,7 @@ func TestScanAll(t *testing.T) {
 }
 
 func BenchmarkStatistics(b *testing.B) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -216,7 +216,7 @@ func BenchmarkStatistics(b *testing.B) {
 }
 
 func BenchmarkRange1(b *testing.B) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -250,7 +250,7 @@ func BenchmarkRange1(b *testing.B) {
 }
 
 func BenchmarkRange100(b *testing.B) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -286,7 +286,7 @@ func BenchmarkRange100(b *testing.B) {
 }
 
 func BenchmarkRangeParallel10(b *testing.B) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -320,7 +320,7 @@ func BenchmarkRangeParallel10(b *testing.B) {
 }
 
 func BenchmarkScanAll(b *testing.B) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {

@@ -15,6 +15,7 @@ package indexer
 
 import (
 	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"sync"
 	"time"
@@ -90,7 +91,7 @@ loop:
 		case cmd, ok := <-tk.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == TK_SHUTDOWN {
-					common.Infof("Timekeeper::run Shutting Down")
+					logging.Infof("Timekeeper::run Shutting Down")
 					tk.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -184,7 +185,7 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 		tk.handleStats(cmd)
 
 	default:
-		common.Errorf("Timekeeper::handleSupvervisorCommands "+
+		logging.Errorf("Timekeeper::handleSupvervisorCommands "+
 			"Received Unknown Command %v", cmd)
 
 	}
@@ -193,7 +194,7 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 
 func (tk *timekeeper) handleStreamOpen(cmd Message) {
 
-	common.Debugf("Timekeeper::handleStreamOpen %v", cmd)
+	logging.Debugf("Timekeeper::handleStreamOpen %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
@@ -204,7 +205,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 
 	if tk.ss.streamStatus[streamId] != STREAM_ACTIVE {
 		tk.ss.initNewStream(streamId)
-		common.Debugf("Timekeeper::handleStreamOpen \n\t Stream %v "+
+		logging.Debugf("Timekeeper::handleStreamOpen \n\t Stream %v "+
 			"State Changed to ACTIVE", streamId)
 
 	}
@@ -224,7 +225,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	//repair
 	default:
 		//no-op
-		common.Debugf("Timekeeper::handleStreamOpen %v %v Status %v. "+
+		logging.Debugf("Timekeeper::handleStreamOpen %v %v Status %v. "+
 			"Nothing to do.", streamId, bucket, status)
 
 	}
@@ -234,7 +235,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 
 func (tk *timekeeper) handleStreamClose(cmd Message) {
 
-	common.Debugf("Timekeeper::handleStreamClose %v", cmd)
+	logging.Debugf("Timekeeper::handleStreamClose %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 
@@ -254,7 +255,7 @@ func (tk *timekeeper) handleInitPrepRecovery(msg Message) {
 	bucket := msg.(*MsgRecovery).GetBucket()
 	streamId := msg.(*MsgRecovery).GetStreamId()
 
-	common.Debugf("Timekeeper::handleInitPrepRecovery %v %v",
+	logging.Debugf("Timekeeper::handleInitPrepRecovery %v %v",
 		streamId, bucket)
 
 	tk.prepareRecovery(streamId, bucket)
@@ -265,7 +266,7 @@ func (tk *timekeeper) handleInitPrepRecovery(msg Message) {
 
 func (tk *timekeeper) handlePrepareDone(cmd Message) {
 
-	common.Debugf("Timekeeper::handlePrepareDone %v", cmd)
+	logging.Debugf("Timekeeper::handlePrepareDone %v", cmd)
 
 	streamId := cmd.(*MsgRecovery).GetStreamId()
 	bucket := cmd.(*MsgRecovery).GetBucket()
@@ -276,7 +277,7 @@ func (tk *timekeeper) handlePrepareDone(cmd Message) {
 	//if stream is in PREPARE_RECOVERY, check and init RECOVERY
 	if tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY {
 
-		common.Debugf("Timekeeper::handlePrepareDone\n\t Stream %v "+
+		logging.Debugf("Timekeeper::handlePrepareDone\n\t Stream %v "+
 			"Bucket %v State Changed to PREPARE_DONE", streamId, bucket)
 		tk.ss.streamBucketStatus[streamId][bucket] = STREAM_PREPARE_DONE
 
@@ -287,7 +288,7 @@ func (tk *timekeeper) handlePrepareDone(cmd Message) {
 			}
 		}
 	} else {
-		common.Debugf("Timekeeper::handlePrepareDone\n\t Unexpected PREPARE_DONE "+
+		logging.Debugf("Timekeeper::handlePrepareDone\n\t Unexpected PREPARE_DONE "+
 			"for StreamId %v Bucket %v State %v", streamId, bucket,
 			tk.ss.streamBucketStatus[streamId][bucket])
 	}
@@ -297,7 +298,7 @@ func (tk *timekeeper) handlePrepareDone(cmd Message) {
 
 func (tk *timekeeper) handleAddIndextoStream(cmd Message) {
 
-	common.Infof("Timekeeper::handleAddIndextoStream %v", cmd)
+	logging.Infof("Timekeeper::handleAddIndextoStream %v", cmd)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -316,7 +317,7 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 	for _, idx := range indexInstList {
 
 		tk.ss.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] += 1
-		common.Debugf("Timekeeper::addIndextoStream IndexCount %v", tk.ss.streamBucketIndexCountMap)
+		logging.Debugf("Timekeeper::addIndextoStream IndexCount %v", tk.ss.streamBucketIndexCountMap)
 
 		if idx.State == common.INDEX_STATE_INITIAL {
 			tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
@@ -329,7 +330,7 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 
 func (tk *timekeeper) handleRemoveIndexFromStream(cmd Message) {
 
-	common.Infof("Timekeeper::handleRemoveIndexFromStream %v", cmd)
+	logging.Infof("Timekeeper::handleRemoveIndexFromStream %v", cmd)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -341,7 +342,7 @@ func (tk *timekeeper) handleRemoveIndexFromStream(cmd Message) {
 
 func (tk *timekeeper) handleRemoveBucketFromStream(cmd Message) {
 
-	common.Infof("Timekeeper::handleRemoveBucketFromStream %v", cmd)
+	logging.Infof("Timekeeper::handleRemoveBucketFromStream %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
@@ -365,12 +366,12 @@ func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 			delete(tk.indexBuildInfo, idx.InstId)
 		}
 		if tk.ss.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
-			common.Fatalf("Timekeeper::removeIndexFromStream Invalid Internal "+
+			logging.Fatalf("Timekeeper::removeIndexFromStream Invalid Internal "+
 				"State Detected. Index Count Underflow. Stream %s. Bucket %s.", streamId,
 				idx.Defn.Bucket)
 		} else {
 			tk.ss.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] -= 1
-			common.Debugf("Timekeeper::removeIndexFromStream IndexCount %v", tk.ss.streamBucketIndexCountMap)
+			logging.Debugf("Timekeeper::removeIndexFromStream IndexCount %v", tk.ss.streamBucketIndexCountMap)
 		}
 	}
 }
@@ -399,7 +400,7 @@ func (tk *timekeeper) removeBucketFromStream(streamId common.StreamId,
 
 func (tk *timekeeper) handleSync(cmd Message) {
 
-	common.Tracef("Timekeeper::handleSync %v", cmd)
+	logging.Tracef("Timekeeper::handleSync %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -409,21 +410,21 @@ func (tk *timekeeper) handleSync(cmd Message) {
 
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, meta.bucket) == false {
-		common.Warnf("Timekeeper::handleSync \n\tReceived Sync for "+
+		logging.Warnf("Timekeeper::handleSync \n\tReceived Sync for "+
 			"Inactive Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
 		return
 	}
 
 	//if there are no indexes for this bucket and stream, ignore
 	if c, ok := tk.ss.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
-		common.Tracef("Timekeeper::handleSync \n\tIgnore Sync for StreamId %v "+
+		logging.Tracef("Timekeeper::handleSync \n\tIgnore Sync for StreamId %v "+
 			"Bucket %v. IndexCount %v. ", streamId, meta.bucket, c)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
 	if _, ok := tk.ss.streamBucketHWTMap[streamId][meta.bucket]; !ok {
-		common.Debugf("Timekeeper::handleSync \n\tIgnoring Sync Marker "+
+		logging.Debugf("Timekeeper::handleSync \n\tIgnoring Sync Marker "+
 			"for StreamId %v Bucket %v. Bucket Not Found.", streamId, meta.bucket)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
@@ -460,7 +461,7 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 	} else {
 		//this bucket is already gone from this stream, may be because
 		//the index were dropped. Log and ignore.
-		common.Debugf("Timekeeper::handleFlushDone Ignore Flush Done for Stream %v "+
+		logging.Debugf("Timekeeper::handleFlushDone Ignore Flush Done for Stream %v "+
 			"Bucket %v. Bucket Info Not Found", streamId, bucket)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
@@ -475,14 +476,14 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 		tk.handleFlushDoneInitStream(cmd)
 
 	default:
-		common.Errorf("Timekeeper::handleFlushDone \n\tInvalid StreamId %v ", streamId)
+		logging.Errorf("Timekeeper::handleFlushDone \n\tInvalid StreamId %v ", streamId)
 	}
 
 }
 
 func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 
-	common.Tracef("Timekeeper::handleFlushDoneMaintStream %v", cmd)
+	logging.Tracef("Timekeeper::handleFlushDoneMaintStream %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -517,11 +518,11 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 		}
 
 	case STREAM_INACTIVE:
-		common.Errorf("Timekeeper::handleFlushDoneMaintStream Unexpected Flush Done "+
+		logging.Errorf("Timekeeper::handleFlushDoneMaintStream Unexpected Flush Done "+
 			"Received for Inactive StreamId %v.", streamId)
 
 	default:
-		common.Errorf("Timekeeper::handleFlushDoneMaintStream Invalid Stream State %v.", state)
+		logging.Errorf("Timekeeper::handleFlushDoneMaintStream Invalid Stream State %v.", state)
 
 	}
 
@@ -530,7 +531,7 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 
 func (tk *timekeeper) handleFlushDoneCatchupStream(cmd Message) {
 
-	common.Tracef("Timekeeper::handleFlushDoneCatchupStream %v", cmd)
+	logging.Tracef("Timekeeper::handleFlushDoneCatchupStream %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -566,7 +567,7 @@ func (tk *timekeeper) handleFlushDoneCatchupStream(cmd Message) {
 		}
 	default:
 
-		common.Errorf("Timekeeper::handleFlushDoneCatchupStream Invalid State Detected. "+
+		logging.Errorf("Timekeeper::handleFlushDoneCatchupStream Invalid State Detected. "+
 			"CATCHUP_STREAM Can Only Be Flushed in ACTIVE or PREPARE_RECOVERY state. "+
 			"Current State %v.", state)
 	}
@@ -576,7 +577,7 @@ func (tk *timekeeper) handleFlushDoneCatchupStream(cmd Message) {
 
 func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 
-	common.Tracef("Timekeeper::handleFlushDoneInitStream %v", cmd)
+	logging.Tracef("Timekeeper::handleFlushDoneInitStream %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -625,7 +626,7 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 
 	default:
 
-		common.Errorf("Timekeeper::handleFlushDoneInitStream Invalid State Detected. "+
+		logging.Errorf("Timekeeper::handleFlushDoneInitStream Invalid State Detected. "+
 			"INIT_STREAM Can Only Be Flushed in ACTIVE or PREPARE_RECOVERY state. "+
 			"Current State %v.", state)
 	}
@@ -635,7 +636,7 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 
 func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 
-	common.Tracef("Timekeeper::handleFlushAbortDone %v", cmd)
+	logging.Tracef("Timekeeper::handleFlushAbortDone %v", cmd)
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -648,7 +649,7 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 	switch state {
 
 	case STREAM_ACTIVE:
-		common.Errorf("Timekeeper::handleFlushAbortDone Unexpected Flush Abort "+
+		logging.Errorf("Timekeeper::handleFlushAbortDone Unexpected Flush Abort "+
 			"Received for Active StreamId %v.", streamId)
 
 	case STREAM_PREPARE_RECOVERY:
@@ -661,7 +662,7 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 		} else {
 			//this bucket is already gone from this stream, may be because
 			//the index were dropped. Log and ignore.
-			common.Debugf("Timekeeper::handleFlushDone Ignore Flush Abort for Stream %v "+
+			logging.Debugf("Timekeeper::handleFlushDone Ignore Flush Abort for Stream %v "+
 				"Bucket %v. Bucket Info Not Found", streamId, bucket)
 			tk.supvCmdch <- &MsgSuccess{}
 			return
@@ -678,11 +679,11 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 		}
 
 	case STREAM_RECOVERY, STREAM_INACTIVE:
-		common.Errorf("Timekeeper::handleFlushAbortDone Unexpected Flush Abort "+
+		logging.Errorf("Timekeeper::handleFlushAbortDone Unexpected Flush Abort "+
 			"Received for StreamId %v Bucket %v State %v", streamId, bucket, state)
 
 	default:
-		common.Errorf("Timekeeper::handleFlushAbortDone Invalid Stream State %v "+
+		logging.Errorf("Timekeeper::handleFlushAbortDone Invalid Stream State %v "+
 			"for StreamId %v Bucket %v", state, streamId, bucket)
 
 	}
@@ -696,7 +697,7 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 	streamId := cmd.(*MsgTKToggleFlush).GetStreamId()
 	bucket := cmd.(*MsgTKToggleFlush).GetBucket()
 
-	common.Debugf("Timekeeper::handleFlushStateChange \n\t Received Flush State Change "+
+	logging.Debugf("Timekeeper::handleFlushStateChange \n\t Received Flush State Change "+
 		"for Bucket: %v StreamId: %v Type: %v", bucket, streamId, t)
 
 	//TODO Check if stream is valid
@@ -741,7 +742,7 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 
 func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 
-	common.Tracef("Timekeeper::handleSnapshotMarker %v", cmd)
+	logging.Tracef("Timekeeper::handleSnapshotMarker %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -751,14 +752,14 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, meta.bucket) == false {
-		common.Warnf("Timekeeper::handleSnapshotMarker \n\tReceived Snapshot Marker for "+
+		logging.Warnf("Timekeeper::handleSnapshotMarker \n\tReceived Snapshot Marker for "+
 			"Inactive Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
 		return
 	}
 
 	//if there are no indexes for this bucket and stream, ignore
 	if c, ok := tk.ss.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
-		common.Warnf("Timekeeper::handleSnapshotMarker \n\tIgnore Snapshot for StreamId %v "+
+		logging.Warnf("Timekeeper::handleSnapshotMarker \n\tIgnore Snapshot for StreamId %v "+
 			"Bucket %v. IndexCount %v. ", streamId, meta.bucket, c)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
@@ -772,9 +773,9 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 		ts.Snapshots[meta.vbucket][1] = snapshot.end
 
 		tk.ss.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
-		common.Tracef("Timekeeper::handleSnapshotMarker \n\tUpdated TS %v", ts)
+		logging.Tracef("Timekeeper::handleSnapshotMarker \n\tUpdated TS %v", ts)
 	} else {
-		common.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker. "+
+		logging.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker. "+
 			"Unknown Type %v. Bucket %v. StreamId %v", snapshot.snapType, meta.bucket,
 			streamId)
 	}
@@ -784,7 +785,7 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 
 func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
 
-	common.Debugf("Timekeeper::handleGetBucketHWT %v", cmd)
+	logging.Debugf("Timekeeper::handleGetBucketHWT %v", cmd)
 
 	streamId := cmd.(*MsgTKGetBucketHWT).GetStreamId()
 	bucket := cmd.(*MsgTKGetBucketHWT).GetBucket()
@@ -807,7 +808,7 @@ func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
 
 func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
-	common.Debugf("Timekeeper::handleStreamBegin %v", cmd)
+	logging.Debugf("Timekeeper::handleStreamBegin %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -817,14 +818,14 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, meta.bucket) == false {
-		common.Warnf("Timekeeper::handleStreamBegin \n\tReceived StreamBegin for "+
+		logging.Warnf("Timekeeper::handleStreamBegin \n\tReceived StreamBegin for "+
 			"Inactive Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
 		return
 	}
 
 	//if there are no indexes for this bucket and stream, ignore
 	if c, ok := tk.ss.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
-		common.Warnf("Timekeeper::handleStreamBegin \n\tIgnore StreamBegin for StreamId %v "+
+		logging.Warnf("Timekeeper::handleStreamBegin \n\tIgnore StreamBegin for StreamId %v "+
 			"Bucket %v. IndexCount %v. ", streamId, meta.bucket, c)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
@@ -846,11 +847,11 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE, STREAM_INACTIVE:
 		//ignore stream begin in prepare_recovery
-		common.Debugf("Timekeeper::handleStreamBegin \n\tIgnore StreamBegin "+
+		logging.Debugf("Timekeeper::handleStreamBegin \n\tIgnore StreamBegin "+
 			"for StreamId %v State %v MutationMeta %v", streamId, state, meta)
 
 	default:
-		common.Errorf("Timekeeper::handleStreamBegin \n\tInvalid Stream State "+
+		logging.Errorf("Timekeeper::handleStreamBegin \n\tInvalid Stream State "+
 			"StreamId %v Bucket %v State %v", streamId, meta.bucket, state)
 	}
 
@@ -860,7 +861,7 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
-	common.Debugf("Timekeeper::handleStreamEnd %v", cmd)
+	logging.Debugf("Timekeeper::handleStreamEnd %v", cmd)
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
@@ -870,14 +871,14 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, meta.bucket) == false {
-		common.Warnf("Timekeeper::handleStreamEnd \n\tReceived StreamEnd for "+
+		logging.Warnf("Timekeeper::handleStreamEnd \n\tReceived StreamEnd for "+
 			"Inactive Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
 		return
 	}
 
 	//if there are no indexes for this bucket and stream, ignore
 	if c, ok := tk.ss.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
-		common.Warnf("Timekeeper::handleStreamEnd \n\tIgnore StreamEnd for StreamId %v "+
+		logging.Warnf("Timekeeper::handleStreamEnd \n\tIgnore StreamEnd for StreamId %v "+
 			"Bucket %v. IndexCount %v. ", streamId, meta.bucket, c)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
@@ -890,18 +891,18 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 		tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_END)
 		if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
 			tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
-			common.Debugf("Timekeeper::handleStreamEnd \n\tRepairStream due to StreamEnd. "+
+			logging.Debugf("Timekeeper::handleStreamEnd \n\tRepairStream due to StreamEnd. "+
 				"StreamId %v MutationMeta %v", streamId, meta)
 			go tk.repairStream(streamId, meta.bucket)
 		}
 
 	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE, STREAM_INACTIVE:
 		//ignore stream end in prepare_recovery
-		common.Debugf("Timekeeper::handleStreamEnd \n\tIgnore StreamEnd for "+
+		logging.Debugf("Timekeeper::handleStreamEnd \n\tIgnore StreamEnd for "+
 			"StreamId %v State %v MutationMeta %v", streamId, state, meta)
 
 	default:
-		common.Errorf("Timekeeper::handleStreamEnd \n\tInvalid Stream State "+
+		logging.Errorf("Timekeeper::handleStreamEnd \n\tInvalid Stream State "+
 			"StreamId %v Bucket %v State %v", streamId, meta.bucket, state)
 	}
 
@@ -910,7 +911,7 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 }
 func (tk *timekeeper) handleStreamConnError(cmd Message) {
 
-	common.Debugf("Timekeeper::handleStreamConnError %v", cmd)
+	logging.Debugf("Timekeeper::handleStreamConnError %v", cmd)
 
 	streamId := cmd.(*MsgStreamInfo).GetStreamId()
 	bucket := cmd.(*MsgStreamInfo).GetBucket()
@@ -920,7 +921,7 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, bucket) == false {
-		common.Warnf("Timekeeper::handleStreamConnError \n\tReceived ConnError for "+
+		logging.Warnf("Timekeeper::handleStreamConnError \n\tReceived ConnError for "+
 			"Inactive Bucket %v Stream %v. Ignored.", bucket, streamId)
 		return
 	}
@@ -934,17 +935,17 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 		tk.ss.updateVbStatus(streamId, bucket, vbList, VBS_CONN_ERROR)
 		if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
 			tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
-			common.Debugf("Timekeeper::handleStreamConnError \n\tRepairStream due to ConnError. "+
+			logging.Debugf("Timekeeper::handleStreamConnError \n\tRepairStream due to ConnError. "+
 				"StreamId %v Bucket %v VbList %v", streamId, bucket, vbList)
 			go tk.repairStream(streamId, bucket)
 		}
 
 	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE, STREAM_INACTIVE:
-		common.Debugf("Timekeeper::handleStreamConnError \n\tIgnore Connection Error "+
+		logging.Debugf("Timekeeper::handleStreamConnError \n\tIgnore Connection Error "+
 			"for StreamId %v Bucket %v State %v", streamId, bucket, state)
 
 	default:
-		common.Errorf("Timekeeper::handleStreamConnError \n\tInvalid Stream State "+
+		logging.Errorf("Timekeeper::handleStreamConnError \n\tInvalid Stream State "+
 			"StreamId %v Bucket %v State %v", streamId, bucket, state)
 	}
 
@@ -957,7 +958,7 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 	streamId := cmd.(*MsgTKInitBuildDone).GetStreamId()
 	bucket := cmd.(*MsgTKInitBuildDone).GetBucket()
 
-	common.Debugf("Timekeeper::handleInitBuildDoneAck StreamId %v Bucket %v",
+	logging.Debugf("Timekeeper::handleInitBuildDoneAck StreamId %v Bucket %v",
 		streamId, bucket)
 
 	if streamId == common.INIT_STREAM {
@@ -993,7 +994,7 @@ func (tk *timekeeper) handleMergeStreamAck(cmd Message) {
 	streamId := cmd.(*MsgTKMergeStream).GetStreamId()
 	bucket := cmd.(*MsgTKMergeStream).GetBucket()
 
-	common.Debugf("Timekeeper::handleMergeStreamAck StreamId %v Bucket %v",
+	logging.Debugf("Timekeeper::handleMergeStreamAck StreamId %v Bucket %v",
 		streamId, bucket)
 
 	tk.supvCmdch <- &MsgSuccess{}
@@ -1004,7 +1005,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	streamId := cmd.(*MsgStreamInfo).GetStreamId()
 	bucket := cmd.(*MsgStreamInfo).GetBucket()
 
-	common.Debugf("Timekeeper::handleStreamRequestDone StreamId %v Bucket %v",
+	logging.Debugf("Timekeeper::handleStreamRequestDone StreamId %v Bucket %v",
 		streamId, bucket)
 
 	if streamId == common.INIT_STREAM {
@@ -1030,14 +1031,14 @@ func (tk *timekeeper) handleConfigUpdate(cmd Message) {
 func (tk *timekeeper) prepareRecovery(streamId common.StreamId,
 	bucket string) bool {
 
-	common.Debugf("Timekeeper::prepareRecovery StreamId %v Bucket %v",
+	logging.Debugf("Timekeeper::prepareRecovery StreamId %v Bucket %v",
 		streamId, bucket)
 
 	//change to PREPARE_RECOVERY so that
 	//no more TS generation and flush happen.
 	if tk.ss.streamBucketStatus[streamId][bucket] == STREAM_ACTIVE {
 
-		common.Debugf("Timekeeper::prepareRecovery \n\t Stream %v "+
+		logging.Debugf("Timekeeper::prepareRecovery \n\t Stream %v "+
 			"Bucket %v State Changed to PREPARE_RECOVERY", streamId, bucket)
 
 		tk.ss.streamBucketStatus[streamId][bucket] = STREAM_PREPARE_RECOVERY
@@ -1048,7 +1049,7 @@ func (tk *timekeeper) prepareRecovery(streamId common.StreamId,
 
 	} else {
 
-		common.Errorf("Timekeeper::prepareRecovery Invalid Prepare Recovery Request")
+		logging.Errorf("Timekeeper::prepareRecovery Invalid Prepare Recovery Request")
 		return false
 
 	}
@@ -1086,13 +1087,13 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 		//if HWT is greater than flush in progress TS, this means the flush
 		//in progress will finish.
 		if tsHWT.GreaterThanEqual(flushTs) {
-			common.Debugf("Timekeeper::flushOrAbortInProgressTS \n\tProcessing Flush TS %v "+
+			logging.Debugf("Timekeeper::flushOrAbortInProgressTS \n\tProcessing Flush TS %v "+
 				"before recovery for bucket %v streamId %v", ts, bucket, streamId)
 		} else {
 			//else this flush needs to be aborted. Though some mutations may
 			//arrive and flush may get completed before this abort message
 			//reaches.
-			common.Debugf("Timekeeper::flushOrAbortInProgressTS \n\tAborting Flush TS %v "+
+			logging.Debugf("Timekeeper::flushOrAbortInProgressTS \n\tAborting Flush TS %v "+
 				"before recovery for bucket %v streamId %v", ts, bucket, streamId)
 
 			tk.supvRespch <- &MsgMutMgrFlushMutationQueue{mType: MUT_MGR_ABORT_PERSIST,
@@ -1116,7 +1117,7 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 		//for the buckets where no flush is in progress, it implies
 		//there are no pending TS. So nothing needs to be done and
 		//recovery can be initiated.
-		common.Debugf("Timekeeper::flushOrAbortInProgressTS \n\tRecovery can be initiated for "+
+		logging.Debugf("Timekeeper::flushOrAbortInProgressTS \n\tRecovery can be initiated for "+
 			"Bucket %v Stream %v", bucket, streamId)
 	}
 
@@ -1164,7 +1165,7 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 					}
 				}
 
-				common.Debugf("Timekeeper::checkInitialBuildDone \n\tInitial Build Done Index: %v "+
+				logging.Debugf("Timekeeper::checkInitialBuildDone \n\tInitial Build Done Index: %v "+
 					"Stream: %v Bucket: %v BuildTS: %v", idx.InstId, streamId, bucket, buildInfo.buildTs)
 
 				status = true
@@ -1188,7 +1189,7 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	bucket string, flushTs *common.TsVbuuid) bool {
 
-	common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v Bucket %v "+
+	logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v Bucket %v "+
 		"FlushTs %v", streamId, bucket, flushTs)
 
 	if streamId != common.INIT_STREAM {
@@ -1197,7 +1198,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 	//INIT_STREAM cannot be merged to MAINT_STREAM if its not ACTIVE
 	if tk.ss.streamBucketStatus[common.MAINT_STREAM][bucket] != STREAM_ACTIVE {
-		common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tMAINT_STREAM in %v. "+
+		logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tMAINT_STREAM in %v. "+
 			"INIT_STREAM cannot be merged. Continue both streams.",
 			tk.ss.streamBucketStatus[common.MAINT_STREAM][bucket])
 		return false
@@ -1206,14 +1207,14 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	//If any repair is going on, merge cannot happen
 	if stopCh, ok := tk.ss.streamBucketRepairStopCh[common.MAINT_STREAM][bucket]; ok && stopCh != nil {
 
-		common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t MAINT_STREAM In Repair." +
+		logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t MAINT_STREAM In Repair." +
 			"INIT_STREAM cannot be merged. Continue both streams.")
 		return false
 	}
 
 	if stopCh, ok := tk.ss.streamBucketRepairStopCh[common.INIT_STREAM][bucket]; ok && stopCh != nil {
 
-		common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t INIT_STREAM In Repair." +
+		logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t INIT_STREAM In Repair." +
 			"INIT_STREAM cannot be merged. Continue both streams.")
 		return false
 	}
@@ -1259,7 +1260,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 				//from indexer
 				tk.changeIndexStateForBucket(bucket, common.INDEX_STATE_ACTIVE)
 
-				common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tIndex Ready To Merge. "+
+				logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tIndex Ready To Merge. "+
 					"Index: %v Stream: %v Bucket: %v LastFlushTS: %v", idx.InstId, streamId,
 					bucket, lastFlushedTs)
 
@@ -1269,7 +1270,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 					bucket:   bucket,
 					mergeTs:  ts}
 
-				common.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v "+
+				logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v "+
 					"Bucket %v State Changed to INACTIVE", streamId, bucket)
 				tk.ss.cleanupBucketFromStream(streamId, bucket)
 				return true
@@ -1310,7 +1311,7 @@ func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 			//drop mutations till merge is complete
 			tk.ss.streamBucketDrainEnabledMap[common.MAINT_STREAM][bucket] = false
 
-			common.Debugf("Timekeeper::checkCatchupStreamReadyToMerge \n\tBucket Ready To Merge. "+
+			logging.Debugf("Timekeeper::checkCatchupStreamReadyToMerge \n\tBucket Ready To Merge. "+
 				"Stream: %v Bucket: %v ", streamId, bucket)
 
 			tk.supvRespch <- &MsgTKMergeStream{
@@ -1333,13 +1334,13 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 		tsVbuuid := tk.ss.getNextStabilityTS(streamId, bucket)
 
 		if tk.ss.canFlushNewTS(streamId, bucket) {
-			common.Debugf("Timekeeper::generateNewStabilityTS \n\tFlushing new "+
+			logging.Debugf("Timekeeper::generateNewStabilityTS \n\tFlushing new "+
 				"TS: %v Bucket: %v Stream: %v.", tsVbuuid, bucket, streamId)
 			tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = tsVbuuid
 			go tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		} else {
 			//store the ts in list
-			common.Debugf("Timekeeper::generateNewStabilityTS \n\tAdding TS: %v to Pending "+
+			logging.Debugf("Timekeeper::generateNewStabilityTS \n\tAdding TS: %v to Pending "+
 				"List for Bucket: %v Stream: %v.", tsVbuuid, bucket, streamId)
 			tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
 			tsList.PushBack(tsVbuuid)
@@ -1378,12 +1379,12 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 			tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_DONE {
 			//if HWT is greater than flush TS, this TS can be flush
 			if tsHWT.GreaterThanEqual(ts) {
-				common.Debugf("Timekeeper::processPendingTS \n\tProcessing Flush TS %v "+
+				logging.Debugf("Timekeeper::processPendingTS \n\tProcessing Flush TS %v "+
 					"before recovery for bucket %v streamId %v", ts, bucket, streamId)
 			} else {
 				//empty the TSList for this bucket and stream so
 				//there is no further processing for this bucket.
-				common.Debugf("Timekeeper::processPendingTS \n\tCannot Flush TS %v "+
+				logging.Debugf("Timekeeper::processPendingTS \n\tCannot Flush TS %v "+
 					"before recovery for bucket %v streamId %v. Clearing Ts List", ts,
 					bucket, streamId)
 				tsList.Init()
@@ -1391,7 +1392,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 			}
 
 		}
-		common.Debugf("Timekeeper::processPendingTS \n\tFound Pending Stability TS Bucket: %v "+
+		logging.Debugf("Timekeeper::processPendingTS \n\tFound Pending Stability TS Bucket: %v "+
 			"Stream: %v TS: %v", bucket, streamId, ts)
 
 		tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = tsVbuuid
@@ -1406,7 +1407,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 func (tk *timekeeper) sendNewStabilityTS(ts *common.TsVbuuid, bucket string,
 	streamId common.StreamId) {
 
-	common.Debugf("Timekeeper::sendNewStabilityTS \n\tBucket: %v "+
+	logging.Debugf("Timekeeper::sendNewStabilityTS \n\tBucket: %v "+
 		"Stream: %v TS: %v", bucket, streamId, ts)
 
 	tk.supvRespch <- &MsgTKStabilityTS{ts: ts,
@@ -1449,7 +1450,7 @@ func (tk *timekeeper) checkBucketActiveInStream(streamId common.StreamId,
 	bucket string) bool {
 
 	if bucketStatus, ok := tk.ss.streamBucketStatus[streamId]; !ok {
-		common.Errorf("Timekeeper::checkBucketActiveInStream "+
+		logging.Errorf("Timekeeper::checkBucketActiveInStream "+
 			"\n\tUnknown Stream: %v", streamId)
 		tk.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_TK_UNKNOWN_STREAM,
@@ -1457,7 +1458,7 @@ func (tk *timekeeper) checkBucketActiveInStream(streamId common.StreamId,
 				category: TIMEKEEPER}}
 		return false
 	} else if status, ok := bucketStatus[bucket]; !ok || status != STREAM_ACTIVE {
-		common.Errorf("Timekeeper::checkBucketActiveInStream "+
+		logging.Errorf("Timekeeper::checkBucketActiveInStream "+
 			"\n\tUnknown Bucket %v In Stream %v", bucket, streamId)
 		tk.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_TK_UNKNOWN_STREAM,
@@ -1514,7 +1515,7 @@ func (tk *timekeeper) drainQueueIfOverflow(streamId common.StreamId, bucket stri
 func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 	bucket string) {
 
-	common.Debugf("Timekeeper::initiateRecovery Started")
+	logging.Debugf("Timekeeper::initiateRecovery Started")
 
 	if tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_DONE {
 
@@ -1527,10 +1528,10 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 			bucket:    bucket,
 			restartTs: restartTs}
 		tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
-		common.Debugf("Timekeeper::initiateRecovery StreamId %v "+
+		logging.Debugf("Timekeeper::initiateRecovery StreamId %v "+
 			"RestartTs %v", streamId, restartTs)
 	} else {
-		common.Errorf("Timekeeper::initiateRecovery Invalid State For %v "+
+		logging.Errorf("Timekeeper::initiateRecovery Invalid State For %v "+
 			"Stream Detected. State %v", streamId,
 			tk.ss.streamBucketStatus[streamId][bucket])
 	}
@@ -1552,7 +1553,7 @@ func compareTsSnapshot(sourceTs, targetTs *common.TsVbuuid) bool {
 func (tk *timekeeper) checkBucketReadyForRecovery(streamId common.StreamId,
 	bucket string) bool {
 
-	common.Debugf("Timekeeper::checkBucketReadyForRecovery StreamId %v "+
+	logging.Debugf("Timekeeper::checkBucketReadyForRecovery StreamId %v "+
 		"Bucket %v", streamId, bucket)
 
 	if tk.ss.checkAnyFlushPending(streamId, bucket) ||
@@ -1561,18 +1562,18 @@ func (tk *timekeeper) checkBucketReadyForRecovery(streamId common.StreamId,
 		return false
 	}
 
-	common.Debugf("Timekeeper::checkBucketReadyForRecovery StreamId %v "+
+	logging.Debugf("Timekeeper::checkBucketReadyForRecovery StreamId %v "+
 		"Bucket %v Ready for Recovery", streamId, bucket)
 	return true
 }
 
 func (tk *timekeeper) handleStreamCleanup(cmd Message) {
 
-	common.Debugf("Timekeeper::handleStreamCleanup %v", cmd)
+	logging.Debugf("Timekeeper::handleStreamCleanup %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 
-	common.Debugf("Timekeeper::handleStreamCleanup \n\t Stream %v "+
+	logging.Debugf("Timekeeper::handleStreamCleanup \n\t Stream %v "+
 		"State Changed to INACTIVE", streamId)
 
 	tk.lock.Lock()
@@ -1611,7 +1612,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 	} else {
 		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
-		common.Debugf("Timekeeper::repairStream Nothing to repair for "+
+		logging.Debugf("Timekeeper::repairStream Nothing to repair for "+
 			"Stream %v and Bucket %v", streamId, bucket)
 	}
 
@@ -1635,7 +1636,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 	case INDEXER_ROLLBACK:
 		//if rollback msg, call initPrepareRecovery
-		common.Infof("Timekeeper::sendRestartMsg Received Rollback Msg For "+
+		logging.Infof("Timekeeper::sendRestartMsg Received Rollback Msg For "+
 			"%v %v. Sending Init Prepare.", streamId, bucket)
 
 		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
@@ -1644,7 +1645,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 	case KV_STREAM_REPAIR:
 
-		common.Infof("Timekeeper::sendRestartMsg Received KV Repair Msg For "+
+		logging.Infof("Timekeeper::sendRestartMsg Received KV Repair Msg For "+
 			"Stream %v Bucket %v. Attempting Stream Repair.", streamId, bucket)
 
 		tk.lock.Lock()
@@ -1659,7 +1660,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 	default:
 		if !ValidateBucket(tk.config["clusterAddr"].String(), bucket) {
-			common.Errorf("Timekeeper::sendRestartMsg \n\tBucket Not Found "+
+			logging.Errorf("Timekeeper::sendRestartMsg \n\tBucket Not Found "+
 				"For Stream %v Bucket %v", streamId, bucket)
 
 			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
@@ -1670,7 +1671,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 				streamId: streamId,
 				bucket:   bucket}
 		} else {
-			common.Fatalf("Timekeeper::sendRestartMsg Error Response "+
+			logging.Fatalf("Timekeeper::sendRestartMsg Error Response "+
 				"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
 			tk.repairStream(streamId, bucket)
 		}
@@ -1679,14 +1680,14 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 }
 
 func (tk *timekeeper) handleUpdateIndexInstMap(cmd Message) {
-	common.Infof("Timekeeper::handleUpdateIndexInstMap %v", cmd)
+	logging.Infof("Timekeeper::handleUpdateIndexInstMap %v", cmd)
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 	tk.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
 func (tk *timekeeper) handleUpdateIndexPartnMap(cmd Message) {
-	common.Infof("Timekeeper::handleUpdateIndexPartnMap %v", cmd)
+	logging.Infof("Timekeeper::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	tk.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 	tk.supvCmdch <- &MsgSuccess{}
@@ -1706,7 +1707,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			kvTs, err := GetCurrentKVTs(tk.config["clusterAddr"].String(),
 				inst.Defn.Bucket, tk.config["numVbuckets"].Int())
 			if err != nil {
-				common.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
+				logging.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
 				replych <- statsMap
 				return
 			}

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
@@ -363,7 +364,7 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 			v := fmt.Sprint(c)
 			statsMap[k] = v
 		} else {
-			common.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
+			logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
 				inst.Defn.Bucket, inst.Defn.Name, err)
 		}
 	}
@@ -378,7 +379,7 @@ loop:
 		case cmd, ok := <-s.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == SCAN_COORD_SHUTDOWN {
-					common.Infof("ScanCoordinator: Shutting Down")
+					logging.Infof("ScanCoordinator: Shutting Down")
 					s.serv.Close()
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
@@ -404,7 +405,7 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 		s.handleStats(cmd)
 
 	default:
-		common.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
+		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
 		s.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_SCAN_COORD_UNKNOWN_COMMAND,
 				severity: NORMAL,
@@ -524,7 +525,7 @@ func (s *scanCoordinator) requestHandler(
 		err = ErrIndexNotReady
 	}
 	if err != nil {
-		common.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
+		logging.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
 		respch <- s.makeResponseMessage(sd, err)
 		close(respch)
 		return
@@ -535,7 +536,7 @@ func (s *scanCoordinator) requestHandler(
 	// Its a primary index scan
 	sd.isPrimary = indexInst.Defn.IsPrimary
 
-	common.Infof("%v: SCAN_REQ %v", s.logPrefix, sd)
+	logging.Infof("%v: SCAN_REQ %v", s.logPrefix, sd)
 	// Before starting the index scan, we have to find out the snapshot timestamp
 	// that can fullfil this query by considering atleast-timestamp provided in
 	// the query request. A timestamp request message is sent to the storage
@@ -573,14 +574,14 @@ func (s *scanCoordinator) requestHandler(
 	case error:
 		err := msg.(error)
 		respch <- s.makeResponseMessage(sd, err)
-		common.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
+		logging.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
 		close(respch)
 		return
 	}
 
 	waitDuration := time.Now().Sub(startTime)
 
-	common.Infof("%v: SCAN_ID: %v scan timestamp: %v",
+	logging.Infof("%v: SCAN_ID: %v scan timestamp: %v",
 		s.logPrefix, sd.scanId, ScanTStoString(ts))
 	// Index has no scannable snapshot available
 	if snap == nil {
@@ -671,7 +672,7 @@ func (s *scanCoordinator) requestHandler(
 		(*s.scanStatsMap[indexInst.InstId].ScanTime) += time.Now().Sub(startTime).Nanoseconds()
 		(*s.scanStatsMap[indexInst.InstId].WaitTime) += waitDuration.Nanoseconds()
 		s.mu.RUnlock()
-		common.Infof("%v: SCAN_ID: %v finished scan (%s)", s.logPrefix, sd.scanId, status)
+		logging.Infof("%v: SCAN_ID: %v finished scan (%s)", s.logPrefix, sd.scanId, status)
 	}
 }
 
@@ -791,7 +792,7 @@ func (s *scanCoordinator) findIndexInstance(
 func (s *scanCoordinator) scanIndexSnapshot(sd *scanDescriptor, snap IndexSnapshot) {
 	// TODO: Multiple partition scanner needs a stream merger/stats reducer to
 	// work with multiple partitions and slices.
-	common.Debugf("%v: scanIndexSnapshot: SCAN_ID: %v instance_id: %v",
+	logging.Debugf("%v: scanIndexSnapshot: SCAN_ID: %v instance_id: %v",
 		s.logPrefix, sd.scanId, snap.IndexInstId())
 
 	var wg sync.WaitGroup
@@ -820,24 +821,24 @@ func (s *scanCoordinator) monitorWorkers(wg *sync.WaitGroup,
 
 	//wait for all workers to finish
 	go func() {
-		common.Tracef("ScanCoordinator: %s: Waiting for workers to finish.", debugStr)
+		logging.Tracef("ScanCoordinator: %s: Waiting for workers to finish.", debugStr)
 		wg.Wait()
 		//send signal on channel to indicate all workers have finished
-		common.Tracef("ScanCoordinator: %s: All workers finished", debugStr)
+		logging.Tracef("ScanCoordinator: %s: All workers finished", debugStr)
 		close(allWorkersDoneCh)
 	}()
 
 	//wait for upstream to signal stop or for all workers to signal done
 	select {
 	case <-stopch:
-		common.Debugf("ScanCoordinator: %s: Stopping All Workers.", debugStr)
+		logging.Debugf("ScanCoordinator: %s: Stopping All Workers.", debugStr)
 		//stop all workers
 		for _, ch := range workerStopChannels {
 			close(ch)
 		}
 		//wait for all workers to stop
 		<-allWorkersDoneCh
-		common.Debugf("ScanCoordinator: %s: Stopped All Workers.", debugStr)
+		logging.Debugf("ScanCoordinator: %s: Stopped All Workers.", debugStr)
 
 		//wait for notification of all workers finishing
 	case <-allWorkersDoneCh:
@@ -850,7 +851,7 @@ func (s *scanCoordinator) scanPartitionSnapshot(sd *scanDescriptor,
 	snap PartitionSnapshot, stopch StopChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()
-	common.Debugf("%v: scanPartitionSnapshot: SCAN_ID: %v partition: %v",
+	logging.Debugf("%v: scanPartitionSnapshot: SCAN_ID: %v partition: %v",
 		s.logPrefix, sd.scanId, snap.PartitionId())
 
 	var workerWg sync.WaitGroup
@@ -870,7 +871,7 @@ func (s *scanCoordinator) scanSliceSnapshot(sd *scanDescriptor,
 	ss SliceSnapshot, stopch StopChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()
-	common.Debugf("%v: scanLocalSlice: SCAN_ID: %v Slice : %v",
+	logging.Debugf("%v: scanLocalSlice: SCAN_ID: %v Slice : %v",
 		s.logPrefix, sd.scanId, ss.SliceId())
 
 	switch sd.p.scanType {
@@ -961,7 +962,7 @@ func (s *scanCoordinator) receiveKeys(sd *scanDescriptor, chkey chan Key, cherr 
 		select {
 		case key, ok = <-chkey:
 			if ok {
-				common.Tracef("%v: SCAN_ID: %v Received key: %v)",
+				logging.Tracef("%v: SCAN_ID: %v Received key: %v)",
 					s.logPrefix, sd.scanId, string(key.Raw()))
 				sd.respch <- key
 			}
@@ -977,7 +978,7 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	common.Infof("ScanCoordinator::handleUpdateIndexInstMap %v", cmd)
+	logging.Infof("ScanCoordinator::handleUpdateIndexInstMap %v", cmd)
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
@@ -1008,7 +1009,7 @@ func (s *scanCoordinator) handleUpdateIndexPartnMap(cmd Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	common.Infof("ScanCoordinator::handleUpdateIndexPartnMap %v", cmd)
+	logging.Infof("ScanCoordinator::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 

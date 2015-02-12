@@ -9,7 +9,7 @@ type FakeBucket struct {
 	bucket  string
 	vbmap   map[string][]uint16
 	flogs   couchbase.FailoverLog
-	C       chan *mc.UprEvent
+	C       chan *mc.DcpEvent
 	streams map[uint16]*FakeStream
 }
 
@@ -28,7 +28,7 @@ func NewFakeBuckets(buckets []string) map[string]*FakeBucket {
 			bucket:  bucket,
 			vbmap:   make(map[string][]uint16),
 			flogs:   make(couchbase.FailoverLog),
-			C:       make(chan *mc.UprEvent, 10000),
+			C:       make(chan *mc.DcpEvent, 10000),
 			streams: make(map[uint16]*FakeStream),
 		}
 	}
@@ -74,7 +74,7 @@ func (b *FakeBucket) SetFailoverLog(vbno uint16, flog [][2]uint64) {
 // BucketFeeder interface
 
 // GetChannel is method receiver for BucketFeeder interface
-func (b *FakeBucket) GetChannel() <-chan *mc.UprEvent {
+func (b *FakeBucket) GetChannel() <-chan *mc.DcpEvent {
 	return b.C
 }
 
@@ -97,6 +97,6 @@ func (b *FakeBucket) CloseFeed() (err error) {
 	return
 }
 
-func (s *FakeStream) run(mutch chan *mc.UprEvent) {
+func (s *FakeStream) run(mutch chan *mc.DcpEvent) {
 	// TODO: generate mutation events
 }

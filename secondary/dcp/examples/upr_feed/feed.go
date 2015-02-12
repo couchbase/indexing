@@ -100,9 +100,9 @@ func main() {
 	//addKVset(bucket, 1000)
 	//return
 
-	// start upr feed
+	// start dcp feed
 	name := fmt.Sprintf("%v", time.Now().UnixNano())
-	feed, err := bucket.StartUprFeed(name, 0)
+	feed, err := bucket.StartDcpFeed(name, 0)
 	if err != nil {
 		log.Print(" Failed to start stream ", err)
 		return
@@ -111,7 +111,7 @@ func main() {
 	opaque := uint16(10)
 	// request stream for all vbuckets
 	for i := 0; i < options.maxVb; i++ {
-		err := feed.UprRequestStream(
+		err := feed.DcpRequestStream(
 			uint16(i) /*vbno*/, opaque, 0 /*flag*/, 0, /*vbuuid*/
 			0 /*seqStart*/, 0xFFFFFFFFFFFFFFFF /*seqEnd*/, 0 /*snaps*/, 0)
 		if err != nil {
@@ -130,7 +130,7 @@ func main() {
 				if err != nil {
 					log.Fatal(err)
 				}
-				if err := feed.UprCloseStream(uint16(vbno), opaque); err != nil {
+				if err := feed.DcpCloseStream(uint16(vbno), opaque); err != nil {
 					log.Printf("error while closing stream %d: %v", vbno, err)
 				}
 			}
@@ -142,7 +142,7 @@ func main() {
 	feed.Close()
 }
 
-func events(feed *couchbase.UprFeed, timeoutMs int) {
+func events(feed *couchbase.DcpFeed, timeoutMs int) {
 	var timeout <-chan time.Time
 
 	mutations := 0
@@ -156,7 +156,7 @@ loop:
 	for {
 		select {
 		case e := <-feed.C:
-			if e.Opcode == mcd.UPR_MUTATION {
+			if e.Opcode == mcd.DCP_MUTATION {
 				mutations += 1
 			} else {
 				log.Printf("Received {%s, %d(vb), %d(opq), %s}\n",
@@ -178,8 +178,8 @@ loop:
 	}
 }
 
-func handleEvent(e *mc.UprEvent) {
-	if e.Opcode == mcd.UPR_MUTATION && options.debug {
+func handleEvent(e *mc.DcpEvent) {
+	if e.Opcode == mcd.DCP_MUTATION && options.debug {
 		log.Printf("got mutation %s", e.Value)
 	}
 }

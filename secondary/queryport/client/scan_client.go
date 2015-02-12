@@ -17,6 +17,7 @@ import "net"
 import "time"
 import "encoding/json"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbase/indexing/secondary/transport"
@@ -53,7 +54,7 @@ func newGsiScanClient(queryport string, config common.Config) *gsiScanClient {
 	c.pool = newConnectionPool(
 		queryport, c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
 		c.cpAvailWaitTimeout)
-	common.Infof("%v started ...\n", c.logPrefix)
+	logging.Infof("%v started ...\n", c.logPrefix)
 	return c
 }
 
@@ -151,7 +152,7 @@ func (c *gsiScanClient) Lookup(
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		msg := "%v Scan() request transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
+		logging.Errorf(msg, c.logPrefix, err)
 		healthy = false
 		return err
 	}
@@ -162,7 +163,7 @@ func (c *gsiScanClient) Lookup(
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
 		if err != nil {
 			msg := "%v Scan() response failed `%v`\n"
-			common.Errorf(msg, c.logPrefix, err)
+			logging.Errorf(msg, c.logPrefix, err)
 		}
 	}
 	return nil
@@ -206,7 +207,7 @@ func (c *gsiScanClient) Range(
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		msg := "%v Scan() request transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
+		logging.Errorf(msg, c.logPrefix, err)
 		healthy = false
 		return err
 	}
@@ -217,7 +218,7 @@ func (c *gsiScanClient) Range(
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
 		if err != nil {
 			msg := "%v Scan() response failed `%v`\n"
-			common.Errorf(msg, c.logPrefix, err)
+			logging.Errorf(msg, c.logPrefix, err)
 		}
 	}
 	return nil
@@ -242,7 +243,7 @@ func (c *gsiScanClient) ScanAll(
 		Limit:    proto.Int64(limit),
 	}
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		common.Errorf(
+		logging.Errorf(
 			"%v ScanAll() request transport failed `%v`\n",
 			c.logPrefix, err)
 		healthy = false
@@ -254,7 +255,7 @@ func (c *gsiScanClient) ScanAll(
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
 		if err != nil {
 			msg := "%v ScanAll() response failed `%v`\n"
-			common.Errorf(msg, c.logPrefix, err)
+			logging.Errorf(msg, c.logPrefix, err)
 		}
 	}
 	return nil
@@ -342,7 +343,7 @@ func (c *gsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 	// ---> protobuf.*Request
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		msg := "%v %T request transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, req, err)
+		logging.Errorf(msg, c.logPrefix, req, err)
 		healthy = false
 		return nil, err
 	}
@@ -353,7 +354,7 @@ func (c *gsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 	resp, err := pkt.Receive(conn)
 	if err != nil {
 		msg := "%v %T response transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, req, err)
+		logging.Errorf(msg, c.logPrefix, req, err)
 		healthy = false
 		return nil, err
 	}
@@ -395,12 +396,12 @@ func (c *gsiScanClient) streamResponse(
 		cont, healthy = false, false
 		if err != io.EOF {
 			msg := "%v connection %q response transport failed `%v`\n"
-			common.Errorf(msg, c.logPrefix, laddr, err)
+			logging.Errorf(msg, c.logPrefix, laddr, err)
 		}
 
 	} else if endResp, finish = resp.(*protobuf.StreamEndResponse); finish {
 		msg := "%v connection %q received StreamEndResponse"
-		common.Tracef(msg, c.logPrefix, laddr)
+		logging.Tracef(msg, c.logPrefix, laddr)
 		callb(endResp) // callback most likely return true
 		cont, healthy = false, true
 
@@ -425,11 +426,11 @@ func (c *gsiScanClient) closeStream(
 	err = c.sendRequest(conn, pkt, &protobuf.EndStreamRequest{})
 	if err != nil {
 		msg := "%v closeStream() request transport failed `%v`\n"
-		common.Errorf(msg, c.logPrefix, err)
+		logging.Errorf(msg, c.logPrefix, err)
 		return
 	}
 	msg := "%v connection %q transmitted protobuf.EndStreamRequest"
-	common.Tracef(msg, c.logPrefix, laddr)
+	logging.Tracef(msg, c.logPrefix, laddr)
 
 	timeoutMs := c.readDeadline * time.Millisecond
 	// flush the connection until stream has ended.
@@ -437,12 +438,12 @@ func (c *gsiScanClient) closeStream(
 		conn.SetReadDeadline(time.Now().Add(timeoutMs))
 		resp, err = pkt.Receive(conn)
 		if err == io.EOF {
-			common.Errorf("%v connection %q closed \n", c.logPrefix, laddr)
+			logging.Errorf("%v connection %q closed \n", c.logPrefix, laddr)
 			return
 
 		} else if err != nil {
 			msg := "%v connection %q response transport failed `%v`\n"
-			common.Errorf(msg, c.logPrefix, laddr, err)
+			logging.Errorf(msg, c.logPrefix, laddr, err)
 			return
 
 		} else if _, ok := resp.(*protobuf.StreamEndResponse); ok {

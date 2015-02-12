@@ -5,6 +5,7 @@ import "fmt"
 import "log"
 import "os"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/querycmd"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
@@ -37,12 +38,12 @@ func usage(fset *flag.FlagSet) {
 func main() {
 	cmdOptions, args, fset, err := querycmd.ParseArgs(os.Args[1:])
 	if err != nil {
-		log.Fatal(err)
+		logging.Fatalf("%v", err)
 	} else if cmdOptions.Help {
 		usage(fset)
 		os.Exit(0)
 	} else if len(args) < 1 {
-		log.Fatalf("specify a command")
+		logging.Fatalf("%v", "specify a command")
 	}
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)

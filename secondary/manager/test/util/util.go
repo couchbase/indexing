@@ -1,6 +1,7 @@
 package test
 
 import (
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/manager"
@@ -41,7 +42,7 @@ func (p *TestDefaultClientFactory) GetClientForNode(server string) manager.Proje
 
 func (p *TestDefaultClientEnv) GetNodeListForBuckets(buckets []string) (map[string]string, error) {
 
-	common.Infof("testDefaultClientEnv.GetNodeListForBuckets() ")
+	logging.Infof("testDefaultClientEnv.GetNodeListForBuckets() ")
 	nodes := make(map[string]string)
 	nodes["127.0.0.1"] = "127.0.0.1"
 	return nodes, nil
@@ -49,7 +50,7 @@ func (p *TestDefaultClientEnv) GetNodeListForBuckets(buckets []string) (map[stri
 
 func (p *TestDefaultClientEnv) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
 
-	common.Infof("testDefaultClientEnv.GetNodeListForTimestamps() ")
+	logging.Infof("testDefaultClientEnv.GetNodeListForTimestamps() ")
 
 	nodes := make(map[string][]*protobuf.TsVbuuid)
 	nodes["127.0.0.1"] = nil
@@ -98,7 +99,7 @@ func (p *fakeProjector) Run(donech chan bool) {
 	<-donech
 	p.Client.Close()
 
-	common.Infof("fakeProjector: done")
+	logging.Infof("fakeProjector: done")
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

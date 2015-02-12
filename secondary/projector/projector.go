@@ -12,6 +12,7 @@ import c "github.com/couchbase/indexing/secondary/common"
 import projC "github.com/couchbase/indexing/secondary/projector/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/couchbaselabs/goprotobuf/proto"
+import "github.com/couchbase/indexing/secondary/logging"
 
 // Projector data structure, a projector is connected to
 // one or more upstream kv-nodes. Works in tandem with
@@ -52,7 +53,7 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
 
 	go p.mainAdminPort(reqch)
-	c.Infof("%v started ...\n", p.logPrefix)
+	logging.Infof("%v started ...\n", p.logPrefix)
 	return p
 }
 
@@ -80,11 +81,11 @@ func (p *Projector) SetConfig(config c.Config) {
 	// update loglevel
 	switch p.config["log.level"].String() {
 	case "info":
-		c.SetLogLevel(c.LogLevelInfo)
+		logging.SetLogLevel(logging.LogLevelInfo)
 	case "debug":
-		c.SetLogLevel(c.LogLevelDebug)
+		logging.SetLogLevel(logging.LogLevelDebug)
 	case "trace":
-		c.SetLogLevel(c.LogLevelTrace)
+		logging.SetLogLevel(logging.LogLevelTrace)
 	}
 
 	p.config["projector.routerEndpointFactory"] = ef // IMPORTANT: skip override
@@ -142,7 +143,7 @@ func (p *Projector) AddFeed(topic string, feed *Feed) (err error) {
 		return projC.ErrorTopicExist
 	}
 	p.topics[topic] = feed
-	c.Infof("%v %q feed added ...\n", p.logPrefix, topic)
+	logging.Infof("%v %q feed added ...\n", p.logPrefix, topic)
 	return
 }
 
@@ -156,7 +157,7 @@ func (p *Projector) DelFeed(topic string) (err error) {
 		return projC.ErrorTopicMissing
 	}
 	delete(p.topics, topic)
-	c.Infof("%v ... %q feed deleted\n", p.logPrefix, topic)
+	logging.Infof("%v ... %q feed deleted\n", p.logPrefix, topic)
 	return
 }
 
@@ -166,7 +167,7 @@ func (p *Projector) DelFeed(topic string) (err error) {
 func (p *Projector) doVbmapRequest(
 	request *protobuf.VbmapRequest) ap.MessageMarshaller {
 
-	c.Tracef("%v doVbmapRequest\n", p.logPrefix)
+	logging.Tracef("%v doVbmapRequest\n", p.logPrefix)
 	response := &protobuf.VbmapResponse{}
 
 	pooln := request.GetPool()
@@ -176,7 +177,7 @@ func (p *Projector) doVbmapRequest(
 	// get vbmap from bucket connection.
 	bucket, err := c.ConnectBucket(p.clusterAddr, pooln, bucketn)
 	if err != nil {
-		c.Errorf("%v for bucket %q, %v\n", p.logPrefix, bucketn, err)
+		logging.Errorf("%v for bucket %q, %v\n", p.logPrefix, bucketn, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -185,7 +186,7 @@ func (p *Projector) doVbmapRequest(
 	bucket.Refresh()
 	m, err := bucket.GetVBmap(kvaddrs)
 	if err != nil {
-		c.Errorf("%v for bucket %q, %v\n", p.logPrefix, bucketn, err)
+		logging.Errorf("%v for bucket %q, %v\n", p.logPrefix, bucketn, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -205,7 +206,7 @@ func (p *Projector) doVbmapRequest(
 func (p *Projector) doFailoverLog(
 	request *protobuf.FailoverLogRequest) ap.MessageMarshaller {
 
-	c.Tracef("%v doFailoverLog\n", p.logPrefix)
+	logging.Tracef("%v doFailoverLog\n", p.logPrefix)
 	response := &protobuf.FailoverLogResponse{}
 
 	pooln := request.GetPool()
@@ -214,7 +215,7 @@ func (p *Projector) doFailoverLog(
 
 	bucket, err := c.ConnectBucket(p.clusterAddr, pooln, bucketn)
 	if err != nil {
-		c.Errorf("%v %s, %v\n", p.logPrefix, bucketn, err)
+		logging.Errorf("%v %s, %v\n", p.logPrefix, bucketn, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -238,7 +239,7 @@ func (p *Projector) doFailoverLog(
 			protoFlogs = append(protoFlogs, protoFlog)
 		}
 	} else {
-		c.Errorf("%v %s.GetFailoverLogs() %v\n", p.logPrefix, bucketn, err)
+		logging.Errorf("%v %s.GetFailoverLogs() %v\n", p.logPrefix, bucketn, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -254,7 +255,7 @@ func (p *Projector) doFailoverLog(
 func (p *Projector) doMutationTopic(
 	request *protobuf.MutationTopicRequest) ap.MessageMarshaller {
 
-	c.Tracef("%v doMutationTopic()\n", p.logPrefix)
+	logging.Tracef("%v doMutationTopic()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	var err error
@@ -282,12 +283,12 @@ func (p *Projector) doMutationTopic(
 func (p *Projector) doRestartVbuckets(
 	request *protobuf.RestartVbucketsRequest) ap.MessageMarshaller {
 
-	c.Tracef("%v doRestartVbuckets()\n", p.logPrefix)
+	logging.Tracef("%v doRestartVbuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		c.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v %v\n", p.logPrefix, err)
 		response := &protobuf.TopicResponse{}
 		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
@@ -310,12 +311,12 @@ func (p *Projector) doRestartVbuckets(
 func (p *Projector) doShutdownVbuckets(
 	request *protobuf.ShutdownVbucketsRequest) ap.MessageMarshaller {
 
-	c.Tracef("%v doShutdownVbuckets()\n", p.logPrefix)
+	logging.Tracef("%v doShutdownVbuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		c.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v %v\n", p.logPrefix, err)
 		return protobuf.NewError(err)
 	}
 
@@ -331,12 +332,12 @@ func (p *Projector) doShutdownVbuckets(
 func (p *Projector) doAddBuckets(
 	request *protobuf.AddBucketsRequest) ap.MessageMarshaller {
 
-	c.Tracef("%v doAddBuckets()\n", p.logPrefix)
+	logging.Tracef("%v doAddBuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		c.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v %v\n", p.logPrefix, err)
 		response := &protobuf.TopicResponse{}
 		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
@@ -359,12 +360,12 @@ func (p *Projector) doAddBuckets(
 func (p *Projector) doDelBuckets(
 	request *protobuf.DelBucketsRequest) ap.MessageMarshaller {
 
-	c.Tracef("%v doDelBuckets()\n", p.logPrefix)
+	logging.Tracef("%v doDelBuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		c.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v %v\n", p.logPrefix, err)
 		return protobuf.NewError(err)
 	}
 
@@ -378,12 +379,12 @@ func (p *Projector) doDelBuckets(
 func (p *Projector) doAddInstances(
 	request *protobuf.AddInstancesRequest) ap.MessageMarshaller {
 
-	c.Tracef("%v doAddInstances()\n", p.logPrefix)
+	logging.Tracef("%v doAddInstances()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		c.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v %v\n", p.logPrefix, err)
 		return protobuf.NewError(err)
 	}
 
@@ -396,12 +397,12 @@ func (p *Projector) doAddInstances(
 func (p *Projector) doDelInstances(
 	request *protobuf.DelInstancesRequest) ap.MessageMarshaller {
 
-	c.Tracef("%v doDelInstances()\n", p.logPrefix)
+	logging.Tracef("%v doDelInstances()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		c.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v %v\n", p.logPrefix, err)
 		return protobuf.NewError(err)
 	}
 
@@ -414,12 +415,12 @@ func (p *Projector) doDelInstances(
 func (p *Projector) doRepairEndpoints(
 	request *protobuf.RepairEndpointsRequest) ap.MessageMarshaller {
 
-	c.Tracef("%v doRepairEndpoints()\n", p.logPrefix)
+	logging.Tracef("%v doRepairEndpoints()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		c.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v %v\n", p.logPrefix, err)
 		return protobuf.NewError(err)
 	}
 
@@ -432,12 +433,12 @@ func (p *Projector) doRepairEndpoints(
 func (p *Projector) doShutdownTopic(
 	request *protobuf.ShutdownTopicRequest) ap.MessageMarshaller {
 
-	c.Tracef("%v doShutdownTopic()\n", p.logPrefix)
+	logging.Tracef("%v doShutdownTopic()\n", p.logPrefix)
 	topic := request.GetTopic()
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		c.Errorf("%v topic %v: %v\n", p.logPrefix, topic, err)
+		logging.Errorf("%v topic %v: %v\n", p.logPrefix, topic, err)
 		return protobuf.NewError(err)
 	}
 
@@ -447,7 +448,7 @@ func (p *Projector) doShutdownTopic(
 }
 
 func (p *Projector) doStatistics() interface{} {
-	c.Tracef("%v doStatistics()\n", p.logPrefix)
+	logging.Tracef("%v doStatistics()\n", p.logPrefix)
 
 	m := map[string]interface{}{
 		"clusterAddr": p.clusterAddr,
@@ -469,7 +470,7 @@ func (p *Projector) doStatistics() interface{} {
 
 // handle projector statistics
 func (p *Projector) handleStats(w http.ResponseWriter, r *http.Request) {
-	c.Infof("%s Request %q\n", p.logPrefix, r.URL.Path)
+	logging.Infof("%s Request %q\n", p.logPrefix, r.URL.Path)
 
 	contentType := r.Header.Get("Content-Type")
 	isJSON := strings.Contains(contentType, "application/json")
@@ -478,7 +479,7 @@ func (p *Projector) handleStats(w http.ResponseWriter, r *http.Request) {
 	if isJSON {
 		data, err := json.Marshal(stats)
 		if err != nil {
-			c.Errorf("%v encoding statistics: %v\n", p.logPrefix, err)
+			logging.Errorf("%v encoding statistics: %v\n", p.logPrefix, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		}
 		fmt.Fprintf(w, "%s", string(data))
@@ -489,7 +490,7 @@ func (p *Projector) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // handle settings
 func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
-	c.Infof("%s Request %q %q\n", p.logPrefix, r.Method, r.URL.Path)
+	logging.Infof("%s Request %q %q\n", p.logPrefix, r.Method, r.URL.Path)
 	switch r.Method {
 	case "GET":
 		header := w.Header()
@@ -500,18 +501,18 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 		dataIn := make([]byte, r.ContentLength)
 		// read settings
 		if err := requestRead(r.Body, dataIn); err != nil {
-			c.Errorf("%v handleSettings() POST: %v\n", p.logPrefix, err)
+			logging.Errorf("%v handleSettings() POST: %v\n", p.logPrefix, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		// parse settings
 		newConfig := make(map[string]interface{})
 		if err := json.Unmarshal(dataIn, &newConfig); err != nil {
-			c.Errorf("%v handleSettings() json decoding: %v\n", p.logPrefix, err)
+			logging.Errorf("%v handleSettings() json decoding: %v\n", p.logPrefix, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		}
 		// update projector settings
-		c.Infof("%v updating projector config ...\n", p.logPrefix)
+		logging.Infof("%v updating projector config ...\n", p.logPrefix)
 		config, _ := c.NewConfig(newConfig)
 		p.SetConfig(config)
 		// update feed settings

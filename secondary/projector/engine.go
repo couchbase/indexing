@@ -48,7 +48,7 @@ func (engine *Engine) SyncData(
 
 // SnapshotData from this engine.
 func (engine *Engine) SnapshotData(
-	m *mc.UprEvent, vbno uint16, vbuuid, seqno uint64) interface{} {
+	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64) interface{} {
 
 	return engine.evaluator.SnapshotData(m, vbno, vbuuid, seqno)
 }
@@ -62,7 +62,7 @@ func (engine *Engine) StreamEndData(
 
 // TransformRoute data to endpoints.
 func (engine *Engine) TransformRoute(
-	vbuuid uint64, m *mc.UprEvent, data map[string]interface{}) error {
+	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}) error {
 
 	return engine.evaluator.TransformRoute(vbuuid, m, data)
 }

@@ -5,7 +5,8 @@ import "fmt"
 import "errors"
 import "encoding/json"
 
-import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/logging"
+import common "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 
 type metadataClient struct {
@@ -36,7 +37,7 @@ func newMetaBridgeClient(cluster string) (c *metadataClient, err error) {
 	// initialize meta-data-provide.
 	uuid, err := common.NewUUID()
 	if err != nil {
-		common.Errorf("Could not generate UUID in common.NewUUID")
+		logging.Errorf("Could not generate UUID in common.NewUUID")
 		return nil, err
 	}
 	b.mdClient, err = mclient.NewMetadataProvider(uuid.Str())
@@ -148,7 +149,7 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 			}
 		}
 	}
-	common.Debugf("Scan ports %v for all indexes", queryports)
+	logging.Debugf("Scan ports %v for all indexes", queryports)
 	return queryports
 }
 
@@ -164,7 +165,7 @@ func (b *metadataClient) GetScanport(
 	if err != nil {
 		return "", false
 	}
-	common.Debugf("Scan port %s for index %d", queryport, defnID)
+	logging.Debugf("Scan port %s for index %d", queryport, defnID)
 	return queryport, true
 }
 

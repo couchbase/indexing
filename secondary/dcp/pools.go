@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -18,6 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"unsafe"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // HTTPClient to use for REST and view operations.
@@ -554,7 +554,7 @@ func (b *Bucket) Close() {
 
 func bucketFinalizer(b *Bucket) {
 	if b.connPools != nil {
-		log.Printf("Warning: Finalizing a bucket with active connections.")
+		logging.Warnf("Warning: Finalizing a bucket with active connections.")
 	}
 }
 

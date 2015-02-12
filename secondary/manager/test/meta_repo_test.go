@@ -24,13 +24,13 @@ import (
 func TestMetadataRepoForIndexDefn(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.LogLevelTrace)
 
 	gometaL.LogEnable()
 	gometaL.SetLogLevel(gometaL.LogLevelTrace)
 	gometaL.SetPrefix("Indexing/Gometa")
 
-	common.Infof("Start TestMetadataRepo *********************************************************")
+	logging.Infof("Start TestMetadataRepo *********************************************************")
 
 	/*
 		var addr = "localhost:9885"
@@ -188,12 +188,12 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 		key, defn, err := iter.Next()
 		if err != nil {
 			if err != fdb.RESULT_ITERATOR_FAIL {
-				common.Infof("error during iteration %s", err.Error())
+				logging.Infof("error during iteration %s", err.Error())
 			}
 			break
 		}
 
-		common.Infof("key during iteration %s", key)
+		logging.Infof("key during iteration %s", key)
 		if key == "103" && defn.DefnId == common.IndexDefnId(103) {
 			found = true
 		}
@@ -219,7 +219,7 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 		t.Fatal("Fail to set local value : Return value is different")
 	}
 
-	common.Infof("Stop TestMetadataRepo. Tearing down *********************************************************")
+	logging.Infof("Stop TestMetadataRepo. Tearing down *********************************************************")
 
 	// clean up
 	repo.DropIndexById(common.IndexDefnId(100))

@@ -14,7 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 var (
@@ -52,7 +52,7 @@ func (s *fdbSnapshot) Lookup(key Key, stopch StopChannel) (chan Value, chan erro
 	chval := make(chan Value)
 	cherr := make(chan error)
 
-	common.Debugf("FdbSnapshot: Received Lookup Query for Key %s", key.String())
+	logging.Debugf("FdbSnapshot: Received Lookup Query for Key %s", key.String())
 	go s.GetValueSetForKeyRange(key, key, Both, chval, cherr, stopch)
 	return chval, cherr
 }
@@ -104,7 +104,7 @@ func (s *fdbSnapshot) GetKeySetForKeyRange(low Key, high Key,
 
 	defer close(chkey)
 
-	common.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
+	logging.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
 		low.String(), high.String())
 
 	it, err := newFDBSnapshotIterator(s)
@@ -146,7 +146,7 @@ loop:
 			return
 
 		default:
-			common.Tracef("ForestDB Got Key - %s", string(it.Key()))
+			logging.Tracef("ForestDB Got Key - %s", string(it.Key()))
 
 			var highcmp int
 			if highkey == nil {
@@ -156,14 +156,14 @@ loop:
 			}
 
 			if key, err = NewKeyFromEncodedBytes(it.Key()); err != nil {
-				common.Errorf("Error Converting from bytes %v to key %v. Skipping row",
+				logging.Errorf("Error Converting from bytes %v to key %v. Skipping row",
 					it.Key(), err)
 				panic(err)
 			}
 
 			// if we have reached past the high key, no need to scan further
 			if highcmp > 0 {
-				common.Tracef("ForestDB Discarding Key - %s since >= high", string(it.Key()))
+				logging.Tracef("ForestDB Discarding Key - %s since >= high", string(it.Key()))
 				break loop
 			}
 
@@ -183,7 +183,7 @@ func (s *fdbSnapshot) GetValueSetForKeyRange(low Key, high Key,
 	defer close(chval)
 	defer close(cherr)
 
-	common.Debugf("ForestDB Received Key Low - %s High - %s Inclusion - %v for Scan",
+	logging.Debugf("ForestDB Received Key Low - %s High - %s Inclusion - %v for Scan",
 		low.String(), high.String(), inclusion)
 
 	it, err := newFDBSnapshotIterator(s)
@@ -213,18 +213,18 @@ func (s *fdbSnapshot) GetValueSetForKeyRange(low Key, high Key,
 
 		default:
 			if key, err = NewKeyFromEncodedBytes(it.Key()); err != nil {
-				common.Errorf("Error Converting from bytes %v to key %v. Skipping row",
+				logging.Errorf("Error Converting from bytes %v to key %v. Skipping row",
 					it.Key(), err)
 				continue
 			}
 
 			if val, err = NewValueFromEncodedBytes(it.Value()); err != nil {
-				common.Errorf("Error Converting from bytes %v to value %v, Skipping row",
+				logging.Errorf("Error Converting from bytes %v to value %v, Skipping row",
 					it.Value(), err)
 				continue
 			}
 
-			common.Tracef("ForestDB Got Value - %s", val.String())
+			logging.Tracef("ForestDB Got Value - %s", val.String())
 
 			var highcmp int
 			if high.Encoded() == nil {
@@ -241,20 +241,20 @@ func (s *fdbSnapshot) GetValueSetForKeyRange(low Key, high Key,
 			}
 
 			if highcmp == 0 && (inclusion == Both || inclusion == High) {
-				common.Tracef("ForestDB Sending Value Equal to High Key")
+				logging.Tracef("ForestDB Sending Value Equal to High Key")
 				chval <- val
 			} else if lowcmp == 0 && (inclusion == Both || inclusion == Low) {
-				common.Tracef("ForestDB Sending Value Equal to Low Key")
+				logging.Tracef("ForestDB Sending Value Equal to Low Key")
 				chval <- val
 			} else if (highcmp == -1) && (lowcmp == 1) { //key is between high and low
 				if highcmp == -1 {
-					common.Tracef("ForestDB Sending Value Lesser Than High Key")
+					logging.Tracef("ForestDB Sending Value Lesser Than High Key")
 				} else if lowcmp == 1 {
-					common.Tracef("ForestDB Sending Value Greater Than Low Key")
+					logging.Tracef("ForestDB Sending Value Greater Than Low Key")
 				}
 				chval <- val
 			} else {
-				common.Tracef("ForestDB not Sending Value")
+				logging.Tracef("ForestDB not Sending Value")
 				//if we have reached past the high key, no need to scan further
 				if highcmp == 1 {
 					break
@@ -269,7 +269,7 @@ func (s *fdbSnapshot) GetValueSetForKeyRange(low Key, high Key,
 func (s *fdbSnapshot) CountRange(low Key, high Key, inclusion Inclusion,
 	stopch StopChannel) (uint64, error) {
 
-	common.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
+	logging.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
 		low.String(), high.String())
 
 	chkey := make(chan Key)
@@ -383,6 +383,6 @@ loop:
 func closeIterator(it *ForestDBIterator) {
 	err := it.Close()
 	if err != nil {
-		common.Errorf("ForestDB iterator: dealloc failed (%v)", err)
+		logging.Errorf("ForestDB iterator: dealloc failed (%v)", err)
 	}
 }

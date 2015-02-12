@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"encoding/json"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"net/http"
 	"runtime"
@@ -79,7 +80,7 @@ loop:
 		case cmd, ok := <-s.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == STORAGE_MGR_SHUTDOWN {
-					common.Infof("SettingsManager::run Shutting Down")
+					logging.Infof("SettingsManager::run Shutting Down")
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}

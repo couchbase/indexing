@@ -48,7 +48,7 @@ var delete_test_once sync.Once
 func TestStreamMgr_Delete(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.LogLevelTrace)
 	util.TT = t
 
 	old_value := manager.NUM_VB
@@ -73,21 +73,21 @@ func TestStreamMgr_Delete(t *testing.T) {
 
 func runDeleteTest() {
 
-	common.Infof("**** Run Delete Test *******************************************")
+	logging.Infof("**** Run Delete Test *******************************************")
 	delete_test_status = make(map[uint64]*protobuf.Instance)
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
 	os.MkdirAll("./data/", os.ModePerm)
 
-	common.Infof("***** Start TestStreamMgr ")
+	logging.Infof("***** Start TestStreamMgr ")
 	/*
 		var requestAddr = "localhost:9885"
 		var leaderAddr = "localhost:9884"
 	*/
 	var config = "./config.json"
 
-	common.Infof("Start Index Manager")
+	logging.Infof("Start Index Manager")
 	donech := make(chan bool)
 	factory := new(deleteTestProjectorClientFactory)
 	factory.donech = donech
@@ -101,33 +101,33 @@ func runDeleteTest() {
 	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
 
-	common.Infof("Delete Test Cleanup ...")
+	logging.Infof("Delete Test Cleanup ...")
 	cleanupStreamMgrDeleteTest(mgr)
 
-	common.Infof("***** Run Delete Test :  setup")
+	logging.Infof("***** Run Delete Test :  setup")
 	ch := mgr.GetStabilityTimestampChannel(common.MAINT_STREAM)
 	go runDeleteTestReceiver(ch, donech)
 
-	common.Infof("***** Run Delete Test :  add 3 indexes in 2 buckets to trigger topology change")
+	logging.Infof("***** Run Delete Test :  add 3 indexes in 2 buckets to trigger topology change")
 	addIndexForDeleteTest(mgr)
 
-	common.Infof("***** Run Delete Test :  delete index in 'Default' buckets to trigger topology change")
+	logging.Infof("***** Run Delete Test :  delete index in 'Default' buckets to trigger topology change")
 	deleteIndexForDeleteTest(mgr)
 
-	common.Infof("***** Run Delete Test :  wait for stability timestamp to arrive")
+	logging.Infof("***** Run Delete Test :  wait for stability timestamp to arrive")
 	<-donech
 
-	common.Infof("**** Delete Test Cleanup ...")
+	logging.Infof("**** Delete Test Cleanup ...")
 	cleanupStreamMgrDeleteTest(mgr)
 	mgr.CleanupTopology()
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Stop TestStreamMgr. Tearing down ")
+	logging.Infof("**** Stop TestStreamMgr. Tearing down ")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Finish Delete Test ***********************************************************")
+	logging.Infof("**** Finish Delete Test ***********************************************************")
 }
 
 func addIndexForDeleteTest(mgr *manager.IndexManager) {
@@ -146,7 +146,7 @@ func addIndexForDeleteTest(mgr *manager.IndexManager) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	common.Infof("Run Delete Test : Create Index Defn 401")
+	logging.Infof("Run Delete Test : Create Index Defn 401")
 	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
 		util.TT.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func addIndexForDeleteTest(mgr *manager.IndexManager) {
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Update the index definition to ready
-	common.Infof("Run Delete Test : Update Index Defn 401 to READY")
+	logging.Infof("Run Delete Test : Update Index Defn 401 to READY")
 	topology, err := mgr.GetTopologyByBucket("Default")
 	if err != nil {
 		util.TT.Fatal(err)
@@ -178,7 +178,7 @@ func addIndexForDeleteTest(mgr *manager.IndexManager) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	common.Infof("Run Delete Test : Create Index Defn 402")
+	logging.Infof("Run Delete Test : Create Index Defn 402")
 	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
 		util.TT.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func addIndexForDeleteTest(mgr *manager.IndexManager) {
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Update the index definition to ready
-	common.Infof("Run Delete Test : Update Index Defn 402 to READY")
+	logging.Infof("Run Delete Test : Update Index Defn 402 to READY")
 	topology, err = mgr.GetTopologyByBucket("Default")
 	if err != nil {
 		util.TT.Fatal(err)
@@ -210,7 +210,7 @@ func addIndexForDeleteTest(mgr *manager.IndexManager) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	common.Infof("Run Delete Test : Create Index Defn 403")
+	logging.Infof("Run Delete Test : Create Index Defn 403")
 	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
 		util.TT.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func addIndexForDeleteTest(mgr *manager.IndexManager) {
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Update the index definition to ready
-	common.Infof("Run Delete Test : Update Index Defn 403 to READY")
+	logging.Infof("Run Delete Test : Update Index Defn 403 to READY")
 	topology, err = mgr.GetTopologyByBucket("Defaultxx")
 	if err != nil {
 		util.TT.Fatal(err)
@@ -234,7 +234,7 @@ func deleteIndexForDeleteTest(mgr *manager.IndexManager) {
 	//
 	// Delete a new index definition : 401 (Default)
 	//
-	common.Infof("Run Delete Test : Delete Index Defn 401")
+	logging.Infof("Run Delete Test : Delete Index Defn 401")
 	if err := mgr.HandleDeleteIndexDDL(common.IndexDefnId(401)); err != nil {
 		util.TT.Fatal(err)
 	}
@@ -245,9 +245,9 @@ func cleanupStreamMgrDeleteTest(mgr *manager.IndexManager) {
 
 	_, err := mgr.GetIndexDefnById(common.IndexDefnId(401))
 	if err != nil {
-		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_1.  No cleanup ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_1.  No cleanup ...")
 	} else {
-		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_1.  Cleaning up ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_1.  Cleaning up ...")
 
 		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(401))
 		if err != nil {
@@ -264,9 +264,9 @@ func cleanupStreamMgrDeleteTest(mgr *manager.IndexManager) {
 
 	_, err = mgr.GetIndexDefnById(common.IndexDefnId(402))
 	if err != nil {
-		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_2.  No cleanup ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_2.  No cleanup ...")
 	} else {
-		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_2.  Cleaning up ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_2.  Cleaning up ...")
 
 		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(402))
 		if err != nil {
@@ -283,9 +283,9 @@ func cleanupStreamMgrDeleteTest(mgr *manager.IndexManager) {
 
 	_, err = mgr.GetIndexDefnById(common.IndexDefnId(403))
 	if err != nil {
-		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_3.  No cleanup ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_delete_test_3.  No cleanup ...")
 	} else {
-		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_3.  Cleaning up ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_delete_test_3.  Cleaning up ...")
 
 		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(403))
 		if err != nil {
@@ -306,7 +306,7 @@ func cleanupStreamMgrDeleteTest(mgr *manager.IndexManager) {
 // run test receiver
 func runDeleteTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 
-	common.Infof("Run Delete Test Receiver")
+	logging.Infof("Run Delete Test Receiver")
 	defer close(donech)
 
 	// wait for the delete message to arrive
@@ -316,18 +316,18 @@ func runDeleteTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 	for {
 		select {
 		case ts := <-ch:
-			common.Infof("****** runDeleteTestReceiver() : receive timestamp. bucket %s seqno[10] %v seqno[11] %v",
+			logging.Infof("****** runDeleteTestReceiver() : receive timestamp. bucket %s seqno[10] %v seqno[11] %v",
 				ts.Bucket, ts.Seqnos[10], ts.Seqnos[11])
-			common.Infof("****** runDeleteTestReceiver() : receive timestamp. bucket %s seqno[12] %v seqno[13] %v",
+			logging.Infof("****** runDeleteTestReceiver() : receive timestamp. bucket %s seqno[12] %v seqno[13] %v",
 				ts.Bucket, ts.Seqnos[12], ts.Seqnos[13])
 
 			if ts.Bucket == "Default" && ts.Seqnos[10] == 401 && ts.Seqnos[11] == 402 {
-				common.Infof("****** runDeleteTestReceiver() receive correct stability timestamp for bucket Default")
+				logging.Infof("****** runDeleteTestReceiver() receive correct stability timestamp for bucket Default")
 				bucket1 = true
 			}
 
 			if ts.Bucket == "Defaultxx" && ts.Seqnos[12] >= 403 && ts.Seqnos[13] >= 404 {
-				common.Infof("****** runDeleteTestReceiver() receive correct stability timestamp for bucket Defaultxx")
+				logging.Infof("****** runDeleteTestReceiver() receive correct stability timestamp for bucket Defaultxx")
 				bucket2 = true
 			}
 
@@ -336,17 +336,17 @@ func runDeleteTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 			}
 
 		case <-ticker.C:
-			common.Infof("****** runDeleteTestReceiver() : timeout")
+			logging.Infof("****** runDeleteTestReceiver() : timeout")
 			util.TT.Fatal("runDeleteTestReceiver1(): Timeout waiting to receive timestamp to arrive")
 		}
 	}
 
-	common.Infof("runDeleteTestReceiver1() done")
+	logging.Infof("runDeleteTestReceiver1() done")
 }
 
 func (c *deleteTestProjectorClient) sendSync() {
 
-	common.Infof("deleteTestProjectorClient.sendSync() server %v", c.server)
+	logging.Infof("deleteTestProjectorClient.sendSync() server %v", c.server)
 
 	p := util.NewFakeProjector(manager.COORD_MAINT_STREAM_PORT)
 	go p.Run(c.donech)
@@ -355,7 +355,7 @@ func (c *deleteTestProjectorClient) sendSync() {
 	payloads := make([]*common.VbKeyVersions, 0, 4000)
 
 	delete_test_once.Do(func() {
-		common.Infof("deleteTestProjectorClient.sendSync() sending streamBegin %v", c.server)
+		logging.Infof("deleteTestProjectorClient.sendSync() sending streamBegin %v", c.server)
 
 		// send StreamBegin for all vbuckets
 		for i := 0; i < manager.NUM_VB; i++ {
@@ -407,7 +407,7 @@ func (c *deleteTestProjectorClient) sendSync() {
 			}
 		}
 
-		common.Infof("deleteTestProjectorClient.sendSync() for node %v and bucket %v vbucket %v seqno %d",
+		logging.Infof("deleteTestProjectorClient.sendSync() for node %v and bucket %v vbucket %v seqno %d",
 			c.server, bucket, vb, seqno)
 
 		// Create Sync Message
@@ -421,7 +421,7 @@ func (c *deleteTestProjectorClient) sendSync() {
 
 	// Send payload
 	if len(payloads) != 0 {
-		common.Infof("deleteTestProjectorClient.sendSync() sending payloads to stream manager for %s", c.server)
+		logging.Infof("deleteTestProjectorClient.sendSync() sending payloads to stream manager for %s", c.server)
 		err := p.Client.SendKeyVersions(payloads, true)
 		if err != nil {
 			util.TT.Fatal(err)
@@ -471,7 +471,7 @@ func (c *deleteTestProjectorClient) MutationTopicRequest(topic, endpointType str
 
 func (c *deleteTestProjectorClient) DelInstances(topic string, uuids []uint64) error {
 
-	common.Infof("deleteTestProjectorClient.DelInstances() for server %v", c.server)
+	logging.Infof("deleteTestProjectorClient.DelInstances() for server %v", c.server)
 
 	for _, uuid := range uuids {
 		delete(delete_test_status, uuid)
@@ -517,7 +517,7 @@ func (p *deleteTestProjectorClientFactory) GetClientForNode(server string) manag
 
 func (p *deleteTestProjectorClientEnv) GetNodeListForBuckets(buckets []string) (map[string]string, error) {
 
-	common.Infof("deleteTestProjectorClientEnv.GetNodeListForBuckets() ")
+	logging.Infof("deleteTestProjectorClientEnv.GetNodeListForBuckets() ")
 	nodes := make(map[string]string)
 	nodes["127.0.0.1"] = "127.0.0.1"
 	nodes["127.0.0.2"] = "127.0.0.2"

@@ -43,7 +43,7 @@ type syncTestProjectorClient struct {
 func TestStreamMgr_Sync(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.LogLevelTrace)
 	util.TT = t
 
 	old_value := manager.NUM_VB
@@ -73,20 +73,20 @@ func TestStreamMgr_Sync(t *testing.T) {
 
 func runSyncTest() {
 
-	common.Infof("**** Run Sync Test ******************************************")
+	logging.Infof("**** Run Sync Test ******************************************")
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
 	os.MkdirAll("./data/", os.ModePerm)
 
-	common.Infof("***** Start TestStreamMgr ")
+	logging.Infof("***** Start TestStreamMgr ")
 	/*
 		var requestAddr = "localhost:9885"
 		var leaderAddr = "localhost:9884"
 	*/
 	var config = "./config.json"
 
-	common.Infof("Start Index Manager")
+	logging.Infof("Start Index Manager")
 	donech := make(chan bool)
 	factory := new(syncTestProjectorClientFactory)
 	factory.donech = donech
@@ -100,34 +100,34 @@ func runSyncTest() {
 	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
 
-	common.Infof("Sync Test Cleanup ...")
+	logging.Infof("Sync Test Cleanup ...")
 	cleanupStreamMgrSyncTest(mgr)
 
-	common.Infof("***** Run Sync Test ...")
+	logging.Infof("***** Run Sync Test ...")
 	ch := mgr.GetStabilityTimestampChannel(common.MAINT_STREAM)
 	go runSyncTestReceiver(ch, donech)
 
-	common.Infof("Setup data for Sync Test")
+	logging.Infof("Setup data for Sync Test")
 	changeTopologyForSyncTest(mgr)
 	<-donech
 
-	common.Infof("**** Sync Test Cleanup ...")
+	logging.Infof("**** Sync Test Cleanup ...")
 	cleanupStreamMgrSyncTest(mgr)
 	mgr.CleanupTopology()
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Stop TestStreamMgr. Tearing down ")
+	logging.Infof("**** Stop TestStreamMgr. Tearing down ")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Finish Sync Test ************************************************")
+	logging.Infof("**** Finish Sync Test ************************************************")
 }
 
 // run test
 func runSyncTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 
-	common.Infof("Run Sync Test Receiver")
+	logging.Infof("Run Sync Test Receiver")
 	defer close(donech)
 
 	// wait for the sync message to arrive
@@ -135,18 +135,18 @@ func runSyncTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 	for {
 		select {
 		case ts := <-ch:
-			common.Infof("****** runSyncTestReceiver() receive stability timestamp seq[10] = %d", ts.Seqnos[10])
+			logging.Infof("****** runSyncTestReceiver() receive stability timestamp seq[10] = %d", ts.Seqnos[10])
 			if ts.Seqnos[10] == 400 {
-				common.Infof("****** runSyncTestReceiver() receive correct stability timestamp")
+				logging.Infof("****** runSyncTestReceiver() receive correct stability timestamp")
 				return
 			}
 		case <-ticker.C:
-			common.Infof("****** runSyncTestReceiver() : timeout")
+			logging.Infof("****** runSyncTestReceiver() : timeout")
 			util.TT.Fatal("runSyncTestReceiver(): Timeout waiting to receive timestamp to arrive")
 		}
 	}
 
-	common.Infof("runSyncTestReceiver() done")
+	logging.Infof("runSyncTestReceiver() done")
 }
 
 // start up
@@ -164,7 +164,7 @@ func changeTopologyForSyncTest(mgr *manager.IndexManager) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	common.Infof("Run Sync Test : Create Index Defn 400")
+	logging.Infof("Run Sync Test : Create Index Defn 400")
 	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
 		util.TT.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func changeTopologyForSyncTest(mgr *manager.IndexManager) {
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Update the index definition to ready
-	common.Infof("Run Sync Test : Update Index Defn 400 to READY")
+	logging.Infof("Run Sync Test : Update Index Defn 400 to READY")
 	topology, err := mgr.GetTopologyByBucket("Default")
 	if err != nil {
 		util.TT.Fatal(err)
@@ -189,9 +189,9 @@ func cleanupStreamMgrSyncTest(mgr *manager.IndexManager) {
 
 	_, err := mgr.GetIndexDefnById(common.IndexDefnId(400))
 	if err != nil {
-		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_sync_test.  No cleanup ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  cannot find index defn stream_mgr_sync_test.  No cleanup ...")
 	} else {
-		common.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_sync_test.  Cleaning up ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrSyncTest() :  found index defn stream_mgr_sync_test.  Cleaning up ...")
 
 		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(400))
 		if err != nil {
@@ -211,7 +211,7 @@ func cleanupStreamMgrSyncTest(mgr *manager.IndexManager) {
 
 func (c *syncTestProjectorClient) sendSync(instances []*protobuf.Instance) {
 
-	common.Infof("syncTestProjectorClient.sendSync() ")
+	logging.Infof("syncTestProjectorClient.sendSync() ")
 
 	if len(instances) != 1 {
 		util.TT.Fatal("syncTestProjectorClient.sendSync(): More than one index instance sent to fake projector")
@@ -311,7 +311,7 @@ func (p *syncTestProjectorClientFactory) GetClientForNode(server string) manager
 
 func (p *syncTestProjectorClientEnv) GetNodeListForBuckets(buckets []string) (map[string]string, error) {
 
-	common.Infof("syncTestProjectorClientEnv.GetNodeListForBuckets() ")
+	logging.Infof("syncTestProjectorClientEnv.GetNodeListForBuckets() ")
 	nodes := make(map[string]string)
 	nodes["127.0.0.1"] = "127.0.0.1"
 	return nodes, nil
@@ -319,7 +319,7 @@ func (p *syncTestProjectorClientEnv) GetNodeListForBuckets(buckets []string) (ma
 
 func (p *syncTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
 
-	common.Infof("syncTestProjectorClientEnv.GetNodeListForTimestamps() ")
+	logging.Infof("syncTestProjectorClientEnv.GetNodeListForTimestamps() ")
 	return nil, nil
 }
 

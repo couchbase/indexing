@@ -12,8 +12,8 @@ package manager
 import (
 	"bytes"
 	json "encoding/json"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/gometa/common"
-	co "github.com/couchbase/indexing/secondary/common"
 	"net"
 	"os"
 	"strings"
@@ -146,17 +146,17 @@ func (e *env) initWithConfig(path string) error {
 	if e.hostUDPAddr, err = resolveAddr(common.ELECTION_TRANSPORT_TYPE, c.Host.ElectionAddr); err != nil {
 		return err
 	}
-	co.Debugf("Env.initWithConfig(): Host UDP Addr %s", e.hostUDPAddr.String())
+	logging.Debugf("Env.initWithConfig(): Host UDP Addr %s", e.hostUDPAddr.String())
 
 	if e.hostTCPAddr, err = resolveAddr(common.MESSAGE_TRANSPORT_TYPE, c.Host.MessageAddr); err != nil {
 		return err
 	}
-	co.Debugf("Env.initWithConfig(): Host TCP Addr %s", e.hostTCPAddr.String())
+	logging.Debugf("Env.initWithConfig(): Host TCP Addr %s", e.hostTCPAddr.String())
 
 	if e.hostRequestAddr, err = resolveAddr(common.MESSAGE_TRANSPORT_TYPE, c.Host.RequestAddr); err != nil {
 		return err
 	}
-	co.Debugf("Env.initWithConfig(): Host Request Addr %s", e.hostRequestAddr.String())
+	logging.Debugf("Env.initWithConfig(): Host Request Addr %s", e.hostRequestAddr.String())
 
 	e.peerUDPAddr = make([]string, 0, len(c.Peer))
 	e.peerTCPAddr = make([]string, 0, len(c.Peer))
@@ -167,14 +167,14 @@ func (e *env) initWithConfig(path string) error {
 			return err
 		}
 		e.peerUDPAddr = append(e.peerUDPAddr, udpAddr.String())
-		co.Debugf("Env.initWithConfig(): Peer UDP Addr %s", udpAddr.String())
+		logging.Debugf("Env.initWithConfig(): Peer UDP Addr %s", udpAddr.String())
 
 		tcpAddr, err := resolveAddr(common.MESSAGE_TRANSPORT_TYPE, peer.MessageAddr)
 		if err != nil {
 			return err
 		}
 		e.peerTCPAddr = append(e.peerTCPAddr, tcpAddr.String())
-		co.Debugf("Env.initWithConfig(): Peer TCP Addr %s", tcpAddr.String())
+		logging.Debugf("Env.initWithConfig(): Peer TCP Addr %s", tcpAddr.String())
 	}
 
 	return nil
@@ -206,19 +206,19 @@ func (e *env) resolveHostAddr() (err error) {
 	if err != nil {
 		return err
 	}
-	co.Debugf("Env.resoleHostAddr(): Host UDP Addr %s", e.hostUDPAddr.String())
+	logging.Debugf("Env.resoleHostAddr(): Host UDP Addr %s", e.hostUDPAddr.String())
 
 	e.hostTCPAddr, err = resolveAddr(common.MESSAGE_TRANSPORT_TYPE, os.Args[2])
 	if err != nil {
 		return err
 	}
-	co.Debugf("Env.resolveHostAddr(): Host TCP Addr %s", e.hostTCPAddr.String())
+	logging.Debugf("Env.resolveHostAddr(): Host TCP Addr %s", e.hostTCPAddr.String())
 
 	e.hostRequestAddr, err = resolveAddr(common.MESSAGE_TRANSPORT_TYPE, os.Args[3])
 	if err != nil {
 		return err
 	}
-	co.Debugf("Env.resolveHostAddr(): Host Request Addr %s", e.hostRequestAddr.String())
+	logging.Debugf("Env.resolveHostAddr(): Host Request Addr %s", e.hostRequestAddr.String())
 
 	return nil
 }
@@ -235,7 +235,7 @@ func (e *env) resolvePeerAddr() error {
 		}
 		e.peerUDPAddr = append(e.peerUDPAddr, peer.String())
 		i++
-		co.Debugf("Env.resolvePeerAddr(): Peer UDP Addr %s", peer.String())
+		logging.Debugf("Env.resolvePeerAddr(): Peer UDP Addr %s", peer.String())
 
 		peer, err = resolveAddr(common.MESSAGE_TRANSPORT_TYPE, args[i])
 		if err != nil {
@@ -243,7 +243,7 @@ func (e *env) resolvePeerAddr() error {
 		}
 		e.peerTCPAddr = append(e.peerTCPAddr, peer.String())
 		i++
-		co.Debugf("Env.resolvePeerAddr(): Peer TCP Addr %s", peer.String())
+		logging.Debugf("Env.resolvePeerAddr(): Peer TCP Addr %s", peer.String())
 	}
 
 	return nil

@@ -10,6 +10,7 @@
 package manager
 
 import (
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	couchbase "github.com/couchbase/indexing/secondary/dcp"
 	projectorC "github.com/couchbase/indexing/secondary/projector/client"
@@ -132,11 +133,11 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 	instances []*protobuf.Instance,
 	requestTimestamps []*common.TsVbuuid) error {
 
-	common.Debugf("ProjectorAdmin::AddIndexToStream(): streamId=%v", streamId)
+	logging.Debugf("ProjectorAdmin::AddIndexToStream(): streamId=%v", streamId)
 
 	// If there is no bucket or index instances, nothing to start.
 	if len(buckets) == 0 || len(instances) == 0 {
-		common.Debugf("ProjectorAdmin::AddIndexToStream(): len(buckets)=%v, len(instances)=%v",
+		logging.Debugf("ProjectorAdmin::AddIndexToStream(): len(buckets)=%v, len(instances)=%v",
 			len(buckets), len(instances))
 		return nil
 	}
@@ -149,7 +150,7 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 		if err != nil {
 			return err
 		}
-		common.Debugf("ProjectorAdmin::AddIndexToStream(): len(nodes)=%v", len(nodes))
+		logging.Debugf("ProjectorAdmin::AddIndexToStream(): len(nodes)=%v", len(nodes))
 
 		// start worker to create mutation stream
 		workers := make(map[string]*adminWorker)
@@ -168,19 +169,19 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 			go worker.addInstances(instances, buckets, requestTimestamps, donech)
 		}
 
-		common.Debugf("ProjectorAdmin::AddIndexToStream(): len(workers)=%v", len(workers))
+		logging.Debugf("ProjectorAdmin::AddIndexToStream(): len(workers)=%v", len(workers))
 
 		// now wait for the worker to be done
 		// TODO: timeout?
 		for len(workers) != 0 {
 			worker := <-donech
 
-			common.Debugf("ProjectorAdmin::AddIndexToStream(): worker %v done", worker.server)
+			logging.Debugf("ProjectorAdmin::AddIndexToStream(): worker %v done", worker.server)
 			activeTimestamps = append(activeTimestamps, worker.activeTimestamps...)
 			delete(workers, worker.server)
 
 			if worker.err != nil {
-				common.Debugf("ProjectorAdmin::AddIndexToStream(): worker % has error=%v", worker.server, worker.err)
+				logging.Debugf("ProjectorAdmin::AddIndexToStream(): worker % has error=%v", worker.server, worker.err)
 
 				// cleanup : kill the other workers
 				for _, worker := range workers {
@@ -195,7 +196,7 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 					return worker.err
 				}
 
-				common.Debugf("ProjectorAdmin::AddIndexToStream(): retry adding instances to nodes")
+				logging.Debugf("ProjectorAdmin::AddIndexToStream(): retry adding instances to nodes")
 				shouldRetry = true
 				break
 			}
@@ -221,11 +222,11 @@ func (p *ProjectorAdmin) AddIndexToStream(streamId common.StreamId,
 //
 func (p *ProjectorAdmin) DeleteIndexFromStream(streamId common.StreamId, buckets []string, instances []uint64) error {
 
-	common.Debugf("StreamAdmin::DeleteIndexFromStream(): streamId=%d", streamId.String())
+	logging.Debugf("StreamAdmin::DeleteIndexFromStream(): streamId=%d", streamId.String())
 
 	// If there is no bucket or index instances, nothing to start.
 	if len(buckets) == 0 || len(instances) == 0 {
-		common.Debugf("ProjectorAdmin::DeleteIndexToStream(): len(buckets)=%v, len(instances)=%v",
+		logging.Debugf("ProjectorAdmin::DeleteIndexToStream(): len(buckets)=%v, len(instances)=%v",
 			len(buckets), len(instances))
 		return nil
 	}
@@ -255,18 +256,18 @@ func (p *ProjectorAdmin) DeleteIndexFromStream(streamId common.StreamId, buckets
 			go worker.deleteInstances(instances, donech)
 		}
 
-		common.Debugf("ProjectorAdmin::DeleteIndexToStream(): len(workers)=%v", len(workers))
+		logging.Debugf("ProjectorAdmin::DeleteIndexToStream(): len(workers)=%v", len(workers))
 
 		// now wait for the worker to be done
 		// TODO: timeout?
 		for len(workers) != 0 {
 			worker := <-donech
 
-			common.Debugf("ProjectorAdmin::DeleteIndexToStream(): worker %v done", worker.server)
+			logging.Debugf("ProjectorAdmin::DeleteIndexToStream(): worker %v done", worker.server)
 			delete(workers, worker.server)
 
 			if worker.err != nil {
-				common.Debugf("ProjectorAdmin::DeleteIndexFromStream(): worker % has error=%v", worker.server, worker.err)
+				logging.Debugf("ProjectorAdmin::DeleteIndexFromStream(): worker % has error=%v", worker.server, worker.err)
 
 				// cleanup : kill the other workers
 				for _, worker := range workers {
@@ -278,7 +279,7 @@ func (p *ProjectorAdmin) DeleteIndexFromStream(streamId common.StreamId, buckets
 					return worker.err
 				}
 
-				common.Debugf("ProjectorAdmin::DeleteIndexToStream(): retry adding instances to nodes")
+				logging.Debugf("ProjectorAdmin::DeleteIndexToStream(): retry adding instances to nodes")
 				shouldRetry = true
 				break
 			}
@@ -297,7 +298,7 @@ func (p *ProjectorAdmin) RepairEndpointForStream(streamId common.StreamId,
 	bucketVbnosMap map[string][]uint16,
 	endpoint string) error {
 
-	common.Debugf("ProjectorAdmin::RepairStreamForEndpoint(): streamId = %d", streamId.String())
+	logging.Debugf("ProjectorAdmin::RepairStreamForEndpoint(): streamId = %d", streamId.String())
 
 	// If there is no bucket, nothing to start.
 	if len(bucketVbnosMap) == 0 {
@@ -341,7 +342,7 @@ func (p *ProjectorAdmin) RepairEndpointForStream(streamId common.StreamId,
 			delete(workers, worker.server)
 
 			if worker.err != nil {
-				common.Debugf("ProjectorAdmin::RepairEndpointFromStream(): worker % has error=%v", worker.server, worker.err)
+				logging.Debugf("ProjectorAdmin::RepairEndpointFromStream(): worker % has error=%v", worker.server, worker.err)
 
 				// cleanup : kill the other workers
 				for _, worker := range workers {
@@ -370,10 +371,10 @@ func (p *ProjectorAdmin) RepairEndpointForStream(streamId common.StreamId,
 func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 	restartTimestamps []*common.TsVbuuid) error {
 
-	common.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): streamId=%v", streamId)
+	logging.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): streamId=%v", streamId)
 
 	if len(restartTimestamps) == 0 {
-		common.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): len(restartTimestamps)=%v",
+		logging.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): len(restartTimestamps)=%v",
 			len(restartTimestamps))
 		return nil
 	}
@@ -390,7 +391,7 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 			}
 			return err
 		}
-		common.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): len(nodes)=%v", len(nodes))
+		logging.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): len(nodes)=%v", len(nodes))
 
 		// start worker to create mutation stream
 		workers := make(map[string]*adminWorker)
@@ -409,19 +410,19 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 			go worker.restartStream(timestamps, donech)
 		}
 
-		common.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): len(workers)=%v", len(workers))
+		logging.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): len(workers)=%v", len(workers))
 
 		// now wait for the worker to be done
 		// TODO: timeout?
 		for len(workers) != 0 {
 			worker := <-donech
 
-			common.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): worker %v done", worker.server)
+			logging.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): worker %v done", worker.server)
 			activeTimestamps = append(activeTimestamps, worker.activeTimestamps...)
 			delete(workers, worker.server)
 
 			if worker.err != nil {
-				common.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): worker % has error=%v", worker.server, worker.err)
+				logging.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): worker % has error=%v", worker.server, worker.err)
 
 				// cleanup : kill the other workers
 				for _, worker := range workers {
@@ -438,7 +439,7 @@ func (p *ProjectorAdmin) RestartStreamIfNecessary(streamId common.StreamId,
 					return worker.err
 				}
 
-				common.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): retry adding instances to nodes")
+				logging.Debugf("ProjectorAdmin::RestartStreamIfNecessary(): retry adding instances to nodes")
 				shouldRetry = true
 				break
 			}
@@ -462,7 +463,7 @@ func (p *ProjectorAdmin) validateActiveVb(buckets []string, activeTimestamps []*
 					for _, ts_vb := range ts.GetVbnos() {
 						if uint32(vb) == ts_vb {
 							if found {
-								common.Debugf("validateActiveVb(): find duplicate active timestamp for bucket %s vb %d", bucket, vb)
+								logging.Debugf("validateActiveVb(): find duplicate active timestamp for bucket %s vb %d", bucket, vb)
 								return false
 							}
 							found = true
@@ -472,7 +473,7 @@ func (p *ProjectorAdmin) validateActiveVb(buckets []string, activeTimestamps []*
 			}
 
 			if !found {
-				common.Debugf("validateActiveVb(): Cannot find active timestamp for bucket %s vb %d", bucket, vb)
+				logging.Debugf("validateActiveVb(): Cannot find active timestamp for bucket %s vb %d", bucket, vb)
 				return false
 			}
 		}
@@ -487,7 +488,7 @@ func (p *ProjectorAdmin) validateActiveVb(buckets []string, activeTimestamps []*
 /*
 func CloseStreamFor(streamId StreamId) error {
 
-    common.Debugf("StreamAdmin::CloseStream(): streamId = %d, bucket = %s", streamId.String(), bucket)
+    logging.Debugf("StreamAdmin::CloseStream(): streamId = %d, bucket = %s", streamId.String(), bucket)
 
     // get the vbmap
     vbMap, err := getVbMap(bucket)
@@ -540,7 +541,7 @@ func (worker *adminWorker) addInstances(instances []*protobuf.Instance,
 		doneCh <- worker
 	}()
 
-	common.Debugf("adminWorker::addInstances(): start")
+	logging.Debugf("adminWorker::addInstances(): start")
 
 	// Get projector client for the particular node.  This function does not
 	// return an error even if the server is an invalid host name, but subsequent
@@ -548,7 +549,7 @@ func (worker *adminWorker) addInstances(instances []*protobuf.Instance,
 	// (no need to close upon termination).
 	client := worker.admin.factory.GetClientForNode(worker.server)
 	if client == nil {
-		common.Debugf("adminWorker::addInstances(): no client returns from factory")
+		logging.Debugf("adminWorker::addInstances(): no client returns from factory")
 		return
 	}
 
@@ -638,11 +639,11 @@ func (worker *adminWorker) shouldRetryAddInstances(requestTs []*protobuf.TsVbuui
 	response *protobuf.TopicResponse,
 	err error) ([]*protobuf.TsVbuuid, error) {
 
-	common.Debugf("adminWorker::shouldRetryAddInstances(): start")
+	logging.Debugf("adminWorker::shouldRetryAddInstances(): start")
 
 	// First of all, let's check for any non-recoverable error.
 	errStr := err.Error()
-	common.Debugf("adminWorker::shouldRetryAddInstances(): Error encountered when calling MutationTopicRequest. Error=%v", errStr)
+	logging.Debugf("adminWorker::shouldRetryAddInstances(): Error encountered when calling MutationTopicRequest. Error=%v", errStr)
 
 	if strings.Contains(errStr, projectorC.ErrorTopicExist.Error()) {
 		// TODO: Need pratap to define the semantic of ErrorTopExist.   Right now return as an non-recoverable error.
@@ -684,7 +685,7 @@ func (worker *adminWorker) deleteInstances(instances []uint64, doneCh chan *admi
 		doneCh <- worker
 	}()
 
-	common.Debugf("adminWorker::deleteInstances(): start")
+	logging.Debugf("adminWorker::deleteInstances(): start")
 
 	// Get projector client for the particular node.  This function does not
 	// return an error even if the server is an invalid host name, but subsequent
@@ -692,7 +693,7 @@ func (worker *adminWorker) deleteInstances(instances []uint64, doneCh chan *admi
 	// (no need to close upon termination).
 	client := worker.admin.factory.GetClientForNode(worker.server)
 	if client == nil {
-		common.Debugf("adminWorker::deleteInstances(): no client returns from factory")
+		logging.Debugf("adminWorker::deleteInstances(): no client returns from factory")
 		return
 	}
 
@@ -713,7 +714,7 @@ func (worker *adminWorker) deleteInstances(instances []uint64, doneCh chan *admi
 				return
 			}
 
-			common.Debugf("adminWorker::deleteInstances(): Error encountered when calling DelInstances. Error=%v", err.Error())
+			logging.Debugf("adminWorker::deleteInstances(): Error encountered when calling DelInstances. Error=%v", err.Error())
 			if strings.Contains(err.Error(), projectorC.ErrorTopicMissing.Error()) {
 				// It is OK if topic is missing
 				worker.err = nil
@@ -739,7 +740,7 @@ func (worker *adminWorker) repairEndpoint(endpoint string, doneCh chan *adminWor
 		doneCh <- worker
 	}()
 
-	common.Debugf("adminWorker::repairEndpoint(): start")
+	logging.Debugf("adminWorker::repairEndpoint(): start")
 
 	// Get projector client for the particular node.  This function does not
 	// return an error even if the server is an invalid host name, but subsequent
@@ -747,7 +748,7 @@ func (worker *adminWorker) repairEndpoint(endpoint string, doneCh chan *adminWor
 	// (no need to close upon termination).
 	client := worker.admin.factory.GetClientForNode(worker.server)
 	if client == nil {
-		common.Debugf("adminWorker::repairEndpoints(): no client returns from factory")
+		logging.Debugf("adminWorker::repairEndpoints(): no client returns from factory")
 		return
 	}
 
@@ -769,7 +770,7 @@ func (worker *adminWorker) repairEndpoint(endpoint string, doneCh chan *adminWor
 				return
 			}
 
-			common.Debugf("adminWorker::repairEndpiont(): Error encountered when calling RepairEndpoint. Error=%v", err.Error())
+			logging.Debugf("adminWorker::repairEndpiont(): Error encountered when calling RepairEndpoint. Error=%v", err.Error())
 			if strings.Contains(err.Error(), projectorC.ErrorTopicMissing.Error()) {
 				// It is OK if topic is missing
 				worker.err = nil
@@ -795,7 +796,7 @@ func (worker *adminWorker) restartStream(timestamps []*protobuf.TsVbuuid, doneCh
 		doneCh <- worker
 	}()
 
-	common.Debugf("adminWorker::restartStream(): start")
+	logging.Debugf("adminWorker::restartStream(): start")
 
 	// Get projector client for the particular node.  This function does not
 	// return an error even if the server is an invalid host name, but subsequent
@@ -803,7 +804,7 @@ func (worker *adminWorker) restartStream(timestamps []*protobuf.TsVbuuid, doneCh
 	// (no need to close upon termination).
 	client := worker.admin.factory.GetClientForNode(worker.server)
 	if client == nil {
-		common.Debugf("adminWorker::restartStream(): no client returns from factory")
+		logging.Debugf("adminWorker::restartStream(): no client returns from factory")
 		return
 	}
 
@@ -863,11 +864,11 @@ func (worker *adminWorker) shouldRetryRestartVbuckets(requestTs []*protobuf.TsVb
 	response *protobuf.TopicResponse,
 	err error) ([]*protobuf.TsVbuuid, error) {
 
-	common.Debugf("adminWorker::shouldRetryRestartVbuckets(): start")
+	logging.Debugf("adminWorker::shouldRetryRestartVbuckets(): start")
 
 	// First of all, let's check for any non-recoverable error.
 	errStr := err.Error()
-	common.Debugf("adminWorker::shouldRetryRestartVbuckets(): Error encountered when calling RestartVbuckets. Error=%v", errStr)
+	logging.Debugf("adminWorker::shouldRetryRestartVbuckets(): Error encountered when calling RestartVbuckets. Error=%v", errStr)
 
 	if strings.Contains(errStr, projectorC.ErrorTopicMissing.Error()) {
 		return nil, NewError(ERROR_STREAM_REQUEST_ERROR, NORMAL, STREAM, err, "")
@@ -1021,11 +1022,11 @@ func (p *ProjectorStreamClientFactoryImpl) GetClientForNode(server string) Proje
 				p := iportProj + nodeNum
 				projAddr = LOCALHOST + ":" + strconv.Itoa(p)
 			}
-			common.Debugf("StreamAdmin::GetClientForNode(): Local Projector Addr: %v", projAddr)
+			logging.Debugf("StreamAdmin::GetClientForNode(): Local Projector Addr: %v", projAddr)
 
 		} else {
 			projAddr = host + ":" + PROJECTOR_PORT
-			common.Debugf("StreamAdmin::GetClientForNode(): Remote Projector Addr: %v", projAddr)
+			logging.Debugf("StreamAdmin::GetClientForNode(): Remote Projector Addr: %v", projAddr)
 		}
 	}
 
@@ -1049,7 +1050,7 @@ func newProjectorClientEnvImpl() ProjectorClientEnv {
 //
 func (p *ProjectorClientEnvImpl) GetNodeListForBuckets(buckets []string) (map[string]string, error) {
 
-	common.Debugf("ProjectorCLientEnvImpl::getNodeListForBuckets(): start")
+	logging.Debugf("ProjectorCLientEnvImpl::getNodeListForBuckets(): start")
 
 	nodes := make(map[string]string)
 
@@ -1066,7 +1067,7 @@ func (p *ProjectorClientEnvImpl) GetNodeListForBuckets(buckets []string) (map[st
 
 		for _, node := range bucketRef.NodeAddresses() {
 			// TODO: This may not work for cluster_run when all processes are run in the same node.  Need to check.
-			common.Debugf("ProjectorCLientEnvImpl::getNodeListForBuckets(): node=%v for bucket %v", node, bucket)
+			logging.Debugf("ProjectorCLientEnvImpl::getNodeListForBuckets(): node=%v for bucket %v", node, bucket)
 			nodes[node] = node
 		}
 	}
@@ -1079,7 +1080,7 @@ func (p *ProjectorClientEnvImpl) GetNodeListForBuckets(buckets []string) (map[st
 //
 func (p *ProjectorClientEnvImpl) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
 
-	common.Debugf("ProjectorCLientEnvImpl::getNodeListForTimestamps(): start")
+	logging.Debugf("ProjectorCLientEnvImpl::getNodeListForTimestamps(): start")
 
 	nodes := make(map[string][]*protobuf.TsVbuuid)
 
@@ -1155,7 +1156,7 @@ func (p *ProjectorClientEnvImpl) findTimestamp(timestampMap map[string][]*protob
 func (p *ProjectorClientEnvImpl) FilterTimestampsForNode(timestamps []*protobuf.TsVbuuid,
 	node string) ([]*protobuf.TsVbuuid, error) {
 
-	common.Debugf("ProjectorClientEnvImpl.FilterTimestampsForNode(): start")
+	logging.Debugf("ProjectorClientEnvImpl.FilterTimestampsForNode(): start")
 
 	var newTimestamps []*protobuf.TsVbuuid = nil
 

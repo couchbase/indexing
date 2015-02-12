@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"time"
 )
@@ -51,7 +52,7 @@ func (cd *compactionDaemon) Stop() {
 }
 
 func (cd *compactionDaemon) needsCompaction(is IndexStorageStats) bool {
-	common.Infof("CompactionDaemon: Checking fragmentation of index instance:%v (Data:%v, Disk:%v)", is.InstId, is.Stats.DataSize, is.Stats.DiskSize)
+	logging.Infof("CompactionDaemon: Checking fragmentation of index instance:%v (Data:%v, Disk:%v)", is.InstId, is.Stats.DataSize, is.Stats.DiskSize)
 
 	interval := cd.config["interval"].String()
 	isCompactionInterval := true
@@ -72,7 +73,7 @@ func (cd *compactionDaemon) needsCompaction(is IndexStorageStats) bool {
 	}
 
 	if !isCompactionInterval {
-		common.Infof("CompactionDaemon: Compaction attempt skipped since compaction interval is configured for %v", interval)
+		logging.Infof("CompactionDaemon: Compaction attempt skipped since compaction interval is configured for %v", interval)
 		return false
 	}
 
@@ -105,13 +106,13 @@ loop:
 							instId: is.InstId,
 							errch:  errch,
 						}
-						common.Infof("CompactionDaemon: Compacting index instance:%v", is.InstId)
+						logging.Infof("CompactionDaemon: Compacting index instance:%v", is.InstId)
 						cd.msgch <- compactReq
 						err := <-errch
 						if err == nil {
-							common.Infof("CompactionDaemon: Finished compacting index instance:%v", is.InstId)
+							logging.Infof("CompactionDaemon: Finished compacting index instance:%v", is.InstId)
 						} else {
-							common.Errorf("CompactionDaemon: Index instance:%v Compaction failed with reason - %v", is.InstId, err)
+							logging.Errorf("CompactionDaemon: Index instance:%v Compaction failed with reason - %v", is.InstId, err)
 						}
 					}
 				}
@@ -145,11 +146,11 @@ loop:
 		case cmd, ok := <-cm.supvCmdCh:
 			if ok {
 				if cmd.GetMsgType() == COMPACTION_MGR_SHUTDOWN {
-					common.Infof("%v: Shutting Down", cm.logPrefix)
+					logging.Infof("%v: Shutting Down", cm.logPrefix)
 					cm.supvCmdCh <- &MsgSuccess{}
 					break loop
 				} else if cmd.GetMsgType() == CONFIG_SETTINGS_UPDATE {
-					common.Infof("%v: Refreshing settings", cm.logPrefix)
+					logging.Infof("%v: Refreshing settings", cm.logPrefix)
 					cfgUpdate := cmd.(*MsgConfigUpdate)
 					cm.config = cfgUpdate.GetConfig()
 					cd.Stop()

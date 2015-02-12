@@ -67,6 +67,7 @@ import "time"
 import "strings"
 import "errors"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
@@ -659,7 +660,7 @@ func (client *Client) withRetry(fn func() error) (err error) {
 				return err
 			}
 		}
-		c.Debugf("Retrying %q after %v mS\n", client.adminport, interval)
+		logging.Debugf("Retrying %q after %v mS\n", client.adminport, interval)
 		time.Sleep(time.Duration(interval) * time.Millisecond)
 		if client.expBackoff > 0 {
 			interval *= client.expBackoff

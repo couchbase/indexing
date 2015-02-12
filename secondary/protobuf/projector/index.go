@@ -2,6 +2,7 @@ package protobuf
 
 import "fmt"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
@@ -13,16 +14,16 @@ type Partition interface {
 
 	// UpsertEndpoints return a list of endpoints <host:port>
 	// to which Upsert message will be published.
-	UpsertEndpoints(i *IndexInst, m *mc.UprEvent, partKey, key, oldKey []byte) []string
+	UpsertEndpoints(i *IndexInst, m *mc.DcpEvent, partKey, key, oldKey []byte) []string
 
 	// UpsertDeletionEndpoints return a list of endpoints
 	// <host:port> to which UpsertDeletion message will be
 	// published.
-	UpsertDeletionEndpoints(i *IndexInst, m *mc.UprEvent, partKey, key, oldKey []byte) []string
+	UpsertDeletionEndpoints(i *IndexInst, m *mc.DcpEvent, partKey, key, oldKey []byte) []string
 
 	// DeletionEndpoints return a list of endpoints
 	// <host:port> to which Deletion message will be published.
-	DeletionEndpoints(i *IndexInst, m *mc.UprEvent, partKey, oldKey []byte) []string
+	DeletionEndpoints(i *IndexInst, m *mc.DcpEvent, partKey, oldKey []byte) []string
 }
 
 // Bucket implements Router{} interface.
@@ -41,7 +42,7 @@ func (instance *IndexInst) Endpoints() []string {
 
 // UpsertEndpoints implements Router{} interface.
 func (instance *IndexInst) UpsertEndpoints(
-	m *mc.UprEvent, partKey, key, oldKey []byte) []string {
+	m *mc.DcpEvent, partKey, key, oldKey []byte) []string {
 
 	p := instance.GetPartitionObject()
 	if p == nil {
@@ -52,7 +53,7 @@ func (instance *IndexInst) UpsertEndpoints(
 
 // UpsertDeletionEndpoints implements Router{} interface.
 func (instance *IndexInst) UpsertDeletionEndpoints(
-	m *mc.UprEvent, partKey, key, oldKey []byte) []string {
+	m *mc.DcpEvent, partKey, key, oldKey []byte) []string {
 
 	p := instance.GetPartitionObject()
 	if p == nil {
@@ -63,7 +64,7 @@ func (instance *IndexInst) UpsertDeletionEndpoints(
 
 // DeletionEndpoints implements Router{} interface.
 func (instance *IndexInst) DeletionEndpoints(
-	m *mc.UprEvent, partKey, oldKey []byte) []string {
+	m *mc.DcpEvent, partKey, oldKey []byte) []string {
 
 	p := instance.GetPartitionObject()
 	if p == nil {
@@ -165,7 +166,7 @@ func (ie *IndexEvaluator) SyncData(
 
 // SnapshotData implement Evaluator{} interface.
 func (ie *IndexEvaluator) SnapshotData(
-	m *mc.UprEvent, vbno uint16, vbuuid, seqno uint64) (data interface{}) {
+	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64) (data interface{}) {
 
 	bucket := ie.Bucket()
 	kv := c.NewKeyVersions(seqno, nil, 1)
@@ -185,7 +186,7 @@ func (ie *IndexEvaluator) StreamEndData(
 
 // TransformRoute implement Evaluator{} interface.
 func (ie *IndexEvaluator) TransformRoute(
-	vbuuid uint64, m *mc.UprEvent, data map[string]interface{}) (err error) {
+	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}) (err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -223,10 +224,10 @@ func (ie *IndexEvaluator) TransformRoute(
 
 	bucket := ie.Bucket()
 
-	c.Tracef("inst: %v where: %v (pkey: %v) key: %v\n",
+	logging.Tracef("inst: %v where: %v (pkey: %v) key: %v\n",
 		uuid, where, string(npkey), string(nkey))
 	switch m.Opcode {
-	case mcd.UPR_MUTATION:
+	case mcd.DCP_MUTATION:
 		// FIXME: TODO: where clause is not used to for optimizing out messages
 		// not passing the where clause. For this we need a gaurantee that
 		// where clause will be defined only on immutable fields.
@@ -261,7 +262,7 @@ func (ie *IndexEvaluator) TransformRoute(
 			data[raddr] = dkv
 		}
 
-	case mcd.UPR_DELETION, mcd.UPR_EXPIRATION:
+	case mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
 		// Delete shall be broadcasted if old-key is not available.
 		raddrs := instn.DeletionEndpoints(m, opkey, okey)
 		for _, raddr := range raddrs {

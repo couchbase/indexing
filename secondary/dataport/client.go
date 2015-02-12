@@ -37,6 +37,7 @@ import "net"
 import "time"
 import "runtime/debug"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
 
@@ -102,7 +103,7 @@ func NewClient(
 	// open connections with remote
 	for i := 0; i < parConns; i++ {
 		if conn, err = net.Dial("tcp", raddr); err != nil {
-			common.Errorf("%v Dialing to %q: %v\n", c.logPrefix, raddr, err)
+			logging.Errorf("%v Dialing to %q: %v\n", c.logPrefix, raddr, err)
 			c.doClose()
 			return nil, err
 		}
@@ -200,8 +201,8 @@ func (c *Client) Close() error {
 func (c *Client) genServer(reqch chan []interface{}, quitch chan []string) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			common.Errorf("%v gen-server crashed: %v\n", c.logPrefix, r)
-			common.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v gen-server crashed: %v\n", c.logPrefix, r)
+			logging.StackTrace(string(debug.Stack()))
 		}
 		c.doClose()
 	}()
@@ -269,7 +270,7 @@ func (c *Client) sendVbmap(
 		}
 	}
 	for idx, vbnos := range idxMap {
-		common.Tracef(
+		logging.Tracef(
 			"%v mapped vbucket {%v,%v} on conn%v\n",
 			c.logPrefixes[idx], vbmap.Bucket, vbnos, idx)
 	}
@@ -292,7 +293,7 @@ func (c *Client) sendKeyVersions(
 
 	for _, vb := range vbs {
 		if len(vb.Kvs) == 0 {
-			common.Warnf("%v empty mutations\n", c.logPrefix)
+			logging.Warnf("%v empty mutations\n", c.logPrefix)
 			continue
 		}
 
@@ -300,7 +301,7 @@ func (c *Client) sendKeyVersions(
 
 		if vb.Kvs[0].Commands[0] == common.StreamBegin { // first mutation
 			vbChans[vb.Uuid], idx = c.addVbucket(vb.Uuid)
-			common.Tracef(
+			logging.Tracef(
 				"%v mapped vbucket {%v,%v}\n",
 				c.logPrefixes[idx], vb.Bucket, vb.Vbucket)
 		}
@@ -312,7 +313,7 @@ func (c *Client) sendKeyVersions(
 		select {
 		case vbChans[vb.Uuid] <- vb:
 			if fin {
-				common.Tracef(
+				logging.Tracef(
 					"%v {%v,%v} ended\n", c.logPrefix, vb.Bucket, vb.Vbucket)
 				c.delVbucket(vb.Uuid)
 				delete(vbChans, vb.Uuid)
@@ -330,8 +331,8 @@ func (c *Client) doClose() (err error) {
 	recoverClose := func(payloadch chan interface{}, conn net.Conn) {
 		defer func() {
 			if r := recover(); r != nil {
-				common.Errorf("%v doClose() crashed: %v\n", c.logPrefix, r)
-				common.StackTrace(string(debug.Stack()))
+				logging.Errorf("%v doClose() crashed: %v\n", c.logPrefix, r)
+				logging.StackTrace(string(debug.Stack()))
 				err = common.ErrorClosed
 			}
 		}()
@@ -343,7 +344,7 @@ func (c *Client) doClose() (err error) {
 		recoverClose(payloadch, c.conns[i])
 	}
 	close(c.finch)
-	common.Infof("%v closed", c.logPrefix)
+	logging.Infof("%v closed", c.logPrefix)
 	return
 }
 
@@ -358,9 +359,9 @@ func (c *Client) runTransmitter(
 	laddr := conn.LocalAddr().String()
 	defer func() {
 		if r := recover(); r != nil {
-			common.Errorf(
+			logging.Errorf(
 				"%v runTransmitter(%q) crashed: %v\n", logPrefix, laddr, r)
-			common.StackTrace(string(debug.Stack()))
+			logging.StackTrace(string(debug.Stack()))
 		}
 		quitch <- []string{"quit", laddr}
 	}()
@@ -371,10 +372,10 @@ func (c *Client) runTransmitter(
 
 	transmit := func(payload interface{}) bool {
 		if err := pkt.Send(conn, payload); err != nil {
-			common.Errorf("%v transport %q `%v`\n", logPrefix, laddr, err)
+			logging.Errorf("%v transport %q `%v`\n", logPrefix, laddr, err)
 			return false
 		}
-		common.Tracef("%v transported from %q\n", logPrefix, laddr)
+		logging.Tracef("%v transported from %q\n", logPrefix, laddr)
 		return true
 	}
 

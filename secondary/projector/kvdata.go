@@ -20,6 +20,7 @@ import "fmt"
 import "strconv"
 import "runtime/debug"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -49,7 +50,7 @@ func NewKVData(
 	reqTs *protobuf.TsVbuuid,
 	engines map[uint64]*Engine,
 	endpoints map[string]c.RouterEndpoint,
-	mutch <-chan *mc.UprEvent,
+	mutch <-chan *mc.DcpEvent,
 	config c.Config) *KVData {
 
 	kvdata := &KVData{
@@ -73,7 +74,7 @@ func NewKVData(
 		kvdata.endpoints[raddr] = endpoint
 	}
 	go kvdata.runScatter(reqTs, mutch)
-	c.Infof("%v started ...\n", kvdata.logPrefix)
+	logging.Infof("%v started ...\n", kvdata.logPrefix)
 	return kvdata
 }
 
@@ -145,17 +146,17 @@ func (kvdata *KVData) Close() error {
 
 // go-routine handles data path.
 func (kvdata *KVData) runScatter(
-	ts *protobuf.TsVbuuid, mutch <-chan *mc.UprEvent) {
+	ts *protobuf.TsVbuuid, mutch <-chan *mc.DcpEvent) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v runScatter() crashed: %v\n", kvdata.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v runScatter() crashed: %v\n", kvdata.logPrefix, r)
+			logging.StackTrace(string(debug.Stack()))
 		}
 		kvdata.publishStreamEnd()
 		kvdata.feed.PostFinKVdata(kvdata.bucket)
 		close(kvdata.finch)
-		c.Infof("%v ... stopped\n", kvdata.logPrefix)
+		logging.Infof("%v ... stopped\n", kvdata.logPrefix)
 	}()
 
 	// stats
@@ -252,28 +253,28 @@ loop:
 }
 
 func (kvdata *KVData) scatterMutation(
-	m *mc.UprEvent, ts *protobuf.TsVbuuid) (err error) {
+	m *mc.DcpEvent, ts *protobuf.TsVbuuid) (err error) {
 
 	vbno := m.VBucket
 
 	switch m.Opcode {
-	case mcd.UPR_STREAMREQ:
+	case mcd.DCP_STREAMREQ:
 		if m.Status == mcd.ROLLBACK {
-			c.Tracef("%v StreamRequest ROLLBACK: %v\n", kvdata.logPrefix, m)
+			logging.Tracef("%v StreamRequest ROLLBACK: %v\n", kvdata.logPrefix, m)
 
 		} else if m.Status != mcd.SUCCESS {
 			format := "%v StreamRequest Status: %s, %v\n"
-			c.Errorf(format, kvdata.logPrefix, m.Status, m)
+			logging.Errorf(format, kvdata.logPrefix, m.Status, m)
 
 		} else if _, ok := kvdata.vrs[vbno]; ok {
 			format := "%v duplicate OpStreamRequest for %v\n"
-			c.Errorf(format, kvdata.logPrefix, vbno)
+			logging.Errorf(format, kvdata.logPrefix, vbno)
 
 		} else if m.VBuuid, _, err = m.FailoverLog.Latest(); err != nil {
 			panic(err)
 
 		} else {
-			c.Tracef("%v StreamRequest {%v}\n", kvdata.logPrefix, vbno)
+			logging.Tracef("%v StreamRequest {%v}\n", kvdata.logPrefix, vbno)
 			topic, bucket := kvdata.topic, kvdata.bucket
 			m.Seqno, _ = ts.SeqnoFor(vbno)
 			cluster, config := kvdata.feed.cluster, kvdata.config
@@ -285,27 +286,27 @@ func (kvdata *KVData) scatterMutation(
 		}
 		kvdata.feed.PostStreamRequest(kvdata.bucket, m)
 
-	case mcd.UPR_STREAMEND:
+	case mcd.DCP_STREAMEND:
 		if vr, ok := kvdata.vrs[vbno]; !ok {
-			c.Errorf("%v duplicate OpStreamEnd for %v\n", kvdata.logPrefix, vbno)
+			logging.Errorf("%v duplicate OpStreamEnd for %v\n", kvdata.logPrefix, vbno)
 
 		} else if m.Status != mcd.SUCCESS {
 			format := "%v StreamEnd Status: %s, %v\n"
-			c.Errorf(format, kvdata.logPrefix, m.Status, m)
+			logging.Errorf(format, kvdata.logPrefix, m.Status, m)
 
 		} else {
-			c.Tracef("%v StreamEnd {%v}\n", kvdata.logPrefix, vbno)
+			logging.Tracef("%v StreamEnd {%v}\n", kvdata.logPrefix, vbno)
 			vr.Event(m)
 			delete(kvdata.vrs, vbno)
 		}
 		kvdata.feed.PostStreamEnd(kvdata.bucket, m)
 
-	case mcd.UPR_MUTATION, mcd.UPR_DELETION, mcd.UPR_SNAPSHOT, mcd.UPR_EXPIRATION:
+	case mcd.DCP_MUTATION, mcd.DCP_DELETION, mcd.DCP_SNAPSHOT, mcd.DCP_EXPIRATION:
 		if vr, ok := kvdata.vrs[vbno]; ok {
 			vr.Event(m)
 
 		} else {
-			c.Errorf("%v unknown vbucket %v\n", kvdata.logPrefix, vbno)
+			logging.Errorf("%v unknown vbucket %v\n", kvdata.logPrefix, vbno)
 		}
 	}
 	return
@@ -313,8 +314,8 @@ func (kvdata *KVData) scatterMutation(
 
 func (kvdata *KVData) publishStreamEnd() {
 	for _, vr := range kvdata.vrs {
-		m := &mc.UprEvent{
-			Opcode:  mcd.UPR_STREAMEND,
+		m := &mc.DcpEvent{
+			Opcode:  mcd.DCP_STREAMEND,
 			Status:  mcd.SUCCESS,
 			VBucket: vr.vbno,
 		}

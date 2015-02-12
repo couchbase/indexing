@@ -3,6 +3,8 @@
 
 package common
 
+import "github.com/couchbase/indexing/secondary/logging"
+
 // TsVb is logical clock for a subset of vbuckets.
 type TsVb struct {
 	Bucket string
@@ -173,35 +175,35 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 	return other
 }
 
-// DebugPrint to log this timestamp using Debugf.
+// DebugPrint to log this timestamp using logging.Debugf.
 func (ts *TsVbuuid) DebugPrint() {
 
-	Debugf("TsVbuuid : bucket = %s", ts.Bucket)
+	logging.Debugf("TsVbuuid : bucket = %s", ts.Bucket)
 	for i, seqno := range ts.Seqnos {
-		Debugf("TsVbuuid : vb = %d, vbuuid = %d, seqno = %d, snapshot[0] = %d, snapshot[1] = %d",
+		logging.Debugf("TsVbuuid : vb = %d, vbuuid = %d, seqno = %d, snapshot[0] = %d, snapshot[1] = %d",
 			i, ts.Vbuuids[i], seqno, ts.Snapshots[0], ts.Snapshots[1])
 	}
 }
 
-// DebugPrintDiff logs the difference between two timestamps using Debugf.
+// DebugPrintDiff logs the difference between two timestamps using logging.Debugf.
 func (ts *TsVbuuid) DebugPrintDiff(other *TsVbuuid) {
 
 	if ts.Equal(other) {
-		Debugf("TsVbuuid.DebugPrintDiff(): two timestamps are equal.  Nothing to print.")
+		logging.Debugf("TsVbuuid.DebugPrintDiff(): two timestamps are equal.  Nothing to print.")
 		return
 	}
 
 	if other == nil {
-		Debugf("TsVbuuid.DebugPrintDiff(): second timestamp is nil.  Dump the first timestamp.")
+		logging.Debugf("TsVbuuid.DebugPrintDiff(): second timestamp is nil.  Dump the first timestamp.")
 		ts.DebugPrint()
 		return
 	}
 
 	if len(other.Seqnos) != len(ts.Seqnos) {
-		Debugf("TsVbuuid.DebugPrintDiff(): two timestamps contain different number of vbuckets.")
-		Debugf("TsVbuuid.DebugPrintDiff(): First timestamp .....")
+		logging.Debugf("TsVbuuid.DebugPrintDiff(): two timestamps contain different number of vbuckets.")
+		logging.Debugf("TsVbuuid.DebugPrintDiff(): First timestamp .....")
 		ts.DebugPrint()
-		Debugf("TsVbuuid.DebugPrintDiff(): Second timestamp .....")
+		logging.Debugf("TsVbuuid.DebugPrintDiff(): Second timestamp .....")
 		other.DebugPrint()
 		return
 	}
@@ -210,9 +212,9 @@ func (ts *TsVbuuid) DebugPrintDiff(other *TsVbuuid) {
 		if ts.Seqnos[i] != other.Seqnos[i] || ts.Vbuuids[i] != other.Vbuuids[i] ||
 			ts.Snapshots[i][0] != other.Snapshots[i][0] || ts.Snapshots[i][1] != other.Snapshots[i][1] {
 
-			Debugf("TsVbuuid.DebugPrintDiff(): TsVbuuid (1) : bucket %s, vb = %d, vbuuid = %d, seqno = %d, snapshot[0] = %d, snapshot[1] = %d",
+			logging.Debugf("TsVbuuid.DebugPrintDiff(): TsVbuuid (1) : bucket %s, vb = %d, vbuuid = %d, seqno = %d, snapshot[0] = %d, snapshot[1] = %d",
 				ts.Bucket, i, ts.Vbuuids[i], ts.Seqnos[i], ts.Snapshots[0], ts.Snapshots[1])
-			Debugf("TsVbuuid.DebugPrintDiff(): TsVbuuid (2) : vb = %d, vbuuid = %d, seqno = %d, snapshot[0] = %d, snapshot[1] = %d",
+			logging.Debugf("TsVbuuid.DebugPrintDiff(): TsVbuuid (2) : vb = %d, vbuuid = %d, seqno = %d, snapshot[0] = %d, snapshot[1] = %d",
 				other.Bucket, i, other.Vbuuids[i], other.Seqnos[i], other.Snapshots[0], other.Snapshots[1])
 		}
 	}

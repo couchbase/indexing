@@ -12,6 +12,7 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"net"
 	"strconv"
@@ -88,12 +89,12 @@ func GetCurrentKVTs(cluster, bucket string, numVbs int) (Timestamp, error) {
 			}
 		}
 		elapsed := time.Since(start)
-		common.Debugf("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
+		logging.Debugf("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
 		b.Close()
 		return ts, nil
 
 	} else {
-		common.Errorf("Indexer::getCurrentKVTs Error Connecting to KV Cluster %v", err)
+		logging.Errorf("Indexer::getCurrentKVTs Error Connecting to KV Cluster %v", err)
 		return nil, err
 	}
 }
@@ -106,7 +107,7 @@ func ValidateBucket(cluster, bucket string) bool {
 		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
 	}
 	if err != nil {
-		common.Fatalf("Indexer::Fail to init ClusterInfoCache : %v", err)
+		logging.Fatalf("Indexer::Fail to init ClusterInfoCache : %v", err)
 		common.CrashOnError(err)
 	}
 
@@ -114,7 +115,7 @@ func ValidateBucket(cluster, bucket string) bool {
 	defer cinfo.Unlock()
 
 	if err := cinfo.Fetch(); err != nil {
-		common.Errorf("Indexer::Fail to init ClusterInfoCache : %v", err)
+		logging.Errorf("Indexer::Fail to init ClusterInfoCache : %v", err)
 		common.CrashOnError(err)
 	}
 

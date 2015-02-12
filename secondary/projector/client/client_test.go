@@ -5,7 +5,7 @@ import "testing"
 import c "github.com/couchbase/indexing/secondary/common"
 
 func TestRetry100_5(t *testing.T) {
-	//c.SetLogLevel(c.LogLevelDebug)
+	//logging.SetLogLevel(logging.LogLevelDebug)
 	adminport := "localhost:9999"
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	config := c.SystemConfig.SectionConfig("indexer.projectorclient.", true)
@@ -16,7 +16,7 @@ func TestRetry100_5(t *testing.T) {
 }
 
 func TestRetry0_5(t *testing.T) {
-	//c.SetLogLevel(c.LogLevelDebug)
+	//logging.SetLogLevel(logging.LogLevelDebug)
 	adminport := "localhost:9999"
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	config := c.SystemConfig.SectionConfig("indexer.projectorclient.", true)
@@ -27,7 +27,7 @@ func TestRetry0_5(t *testing.T) {
 }
 
 //func TestRetry100_0(t *testing.T) {
-//    c.SetLogLevel(c.LogLevelDebug)
+//    logging.SetLogLevel(logging.LogLevelDebug)
 //    adminport := "localhost:9999"
 //    config := c.SystemConfig.SectionConfig("indexer.projectorclient", true)
 //    config.SetValue("retryInterval", 100)

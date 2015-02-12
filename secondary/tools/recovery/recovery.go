@@ -8,6 +8,7 @@ import "strings"
 import "time"
 
 import "github.com/couchbase/cbauth"
+import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dataport"
 import "github.com/couchbase/indexing/secondary/projector"
@@ -60,11 +61,11 @@ func argParse() string {
 	options.buckets = strings.Split(buckets, ",")
 	options.endpoints = strings.Split(endpoints, ",")
 	if options.debug {
-		c.SetLogLevel(c.LogLevelDebug)
+		logging.SetLogLevel(logging.LogLevelDebug)
 	} else if options.trace {
-		c.SetLogLevel(c.LogLevelTrace)
+		logging.SetLogLevel(logging.LogLevelTrace)
 	} else {
-		c.SetLogLevel(c.LogLevelInfo)
+		logging.SetLogLevel(logging.LogLevelInfo)
 	}
 
 	args := flag.Args()

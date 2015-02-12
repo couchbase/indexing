@@ -15,12 +15,12 @@ type Evaluator interface {
 	SyncData(vbno uint16, vbuuid, seqno uint64) (data interface{})
 
 	// SnapshotData is generated for downstream.
-	SnapshotData(m *mc.UprEvent, vbno uint16, vbuuid, seqno uint64) interface{}
+	SnapshotData(m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64) interface{}
 
 	// StreamEnd is generated for downstream.
 	StreamEndData(vbno uint16, vbuuid, seqno uint64) (data interface{})
 
 	// TransformRoute will transform document consumable by
 	// downstream, returns data to be published to endpoints.
-	TransformRoute(vbuuid uint64, m *mc.UprEvent, data map[string]interface{}) error
+	TransformRoute(vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}) error
 }

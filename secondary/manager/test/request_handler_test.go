@@ -27,13 +27,13 @@ import (
 func TestRequestHandler(t *testing.T) {
 
 	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.LogLevelTrace)
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
 	os.MkdirAll("./data/", os.ModePerm)
 
-	common.Infof("Start TestRequestHandler *********************************************************")
+	logging.Infof("Start TestRequestHandler *********************************************************")
 
 	/*
 		var requestAddr = "localhost:9885"
@@ -41,7 +41,7 @@ func TestRequestHandler(t *testing.T) {
 	*/
 	var config = "./config.json"
 
-	common.Infof("********** Setup index manager")
+	logging.Infof("********** Setup index manager")
 	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, nil, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -50,22 +50,22 @@ func TestRequestHandler(t *testing.T) {
 	defer mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("********** Cleanup Old Test")
+	logging.Infof("********** Cleanup Old Test")
 	cleanupRequestHandlerTest(mgr, t)
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("********** Start running request handler test")
+	logging.Infof("********** Start running request handler test")
 	createIndexRequest(t)
 	getTopologyRequest(t)
 	dropIndexRequest(t)
 
-	common.Infof("********** Cleanup Test")
+	logging.Infof("********** Cleanup Test")
 	cleanupRequestHandlerTest(mgr, t)
 	mgr.CleanupTopology()
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("Done TestRequestHandler. Tearing down *********************************************************")
+	logging.Infof("Done TestRequestHandler. Tearing down *********************************************************")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }
@@ -75,9 +75,9 @@ func cleanupRequestHandlerTest(mgr *manager.IndexManager, t *testing.T) {
 
 	_, err := mgr.GetIndexDefnById(common.IndexDefnId(500))
 	if err != nil {
-		common.Infof("RequestHandlerTest.cleanupRequestHandlerTest() :  cannot find index defn request_handler_test.  No cleanup ...")
+		logging.Infof("RequestHandlerTest.cleanupRequestHandlerTest() :  cannot find index defn request_handler_test.  No cleanup ...")
 	} else {
-		common.Infof("RequestHandlerTest.cleanupRequestHandlerTest() :  found index defn request_handler_test.  Cleaning up ...")
+		logging.Infof("RequestHandlerTest.cleanupRequestHandlerTest() :  found index defn request_handler_test.  Cleaning up ...")
 
 		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(500))
 		if err != nil {
@@ -95,7 +95,7 @@ func cleanupRequestHandlerTest(mgr *manager.IndexManager, t *testing.T) {
 
 func createIndexRequest(t *testing.T) {
 
-	common.Infof("********** Start createIndexRequest")
+	logging.Infof("********** Start createIndexRequest")
 
 	// Construct request body.
 	info := manager.IndexInfo{
@@ -124,12 +124,12 @@ func createIndexRequest(t *testing.T) {
 
 	validateIndexResponse(resp, t)
 
-	common.Infof("********** Done createIndexRequest")
+	logging.Infof("********** Done createIndexRequest")
 }
 
 func dropIndexRequest(t *testing.T) {
 
-	common.Infof("********** Start dropIndexRequest")
+	logging.Infof("********** Start dropIndexRequest")
 
 	// Construct request body.
 	info := manager.IndexInfo{
@@ -152,12 +152,12 @@ func dropIndexRequest(t *testing.T) {
 
 	validateIndexResponse(resp, t)
 
-	common.Infof("********** Done dropIndexRequest")
+	logging.Infof("********** Done dropIndexRequest")
 }
 
 func getTopologyRequest(t *testing.T) {
 
-	common.Infof("********** Start getTopologyRequest")
+	logging.Infof("********** Start getTopologyRequest")
 
 	req := manager.TopologyRequest{Version: uint64(1), Type: manager.GET, Bucket: "Default"}
 	body, err := json.Marshal(req)
@@ -183,7 +183,7 @@ func getTopologyRequest(t *testing.T) {
 		t.Fatal("Cannot find index definition 500 in topology")
 	}
 
-	common.Infof("********** Done getTopologyRequest")
+	logging.Infof("********** Done getTopologyRequest")
 }
 
 func validateIndexResponse(r *http.Response, t *testing.T) {
