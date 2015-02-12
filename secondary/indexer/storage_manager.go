@@ -14,8 +14,8 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbaselabs/goforestdb"
 )
 
@@ -417,7 +417,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
-	logging.Infof("StorageMgr::handleUpdateIndexInstMap %v", cmd)
+	logging.Tracef("StorageMgr::handleUpdateIndexInstMap %v", cmd)
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
@@ -476,7 +476,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
 
-	logging.Infof("StorageMgr::handleUpdateIndexPartnMap %v", cmd)
+	logging.Tracef("StorageMgr::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 

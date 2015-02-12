@@ -15,8 +15,8 @@ package indexer
 
 import (
 	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"sync"
 	"time"
 )
@@ -1680,14 +1680,14 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 }
 
 func (tk *timekeeper) handleUpdateIndexInstMap(cmd Message) {
-	logging.Infof("Timekeeper::handleUpdateIndexInstMap %v", cmd)
+	logging.Tracef("Timekeeper::handleUpdateIndexInstMap %v", cmd)
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 	tk.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
 func (tk *timekeeper) handleUpdateIndexPartnMap(cmd Message) {
-	logging.Infof("Timekeeper::handleUpdateIndexPartnMap %v", cmd)
+	logging.Tracef("Timekeeper::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	tk.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 	tk.supvCmdch <- &MsgSuccess{}

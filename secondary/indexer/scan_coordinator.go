@@ -13,8 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
 	"github.com/couchbaselabs/goprotobuf/proto"
@@ -1000,7 +1000,7 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	logging.Infof("ScanCoordinator::handleUpdateIndexInstMap %v", cmd)
+	logging.Tracef("ScanCoordinator::handleUpdateIndexInstMap %v", cmd)
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
@@ -1031,7 +1031,7 @@ func (s *scanCoordinator) handleUpdateIndexPartnMap(cmd Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	logging.Infof("ScanCoordinator::handleUpdateIndexPartnMap %v", cmd)
+	logging.Tracef("ScanCoordinator::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
