@@ -13,8 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbaselabs/goforestdb"
 	"os"
 	"path/filepath"
@@ -635,8 +635,59 @@ func (fdb *fdbSlice) Compact() error {
 	fdb.IncrRef()
 	defer fdb.DecrRef()
 
+	//get oldest snapshot upto which compaction can be done
+	infos, err := fdb.getSnapshotsMeta()
+	if err != nil {
+		return err
+	}
+
+	sic := NewSnapshotInfoContainer(infos)
+
+	osnap := sic.GetOldest()
+	if osnap == nil {
+		logging.Debugf("ForestDBSlice::Compact \n\tNo Snapshot Found. Skipped Compaction."+
+			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
+		return nil
+	}
+
+	mainSeq := osnap.(*fdbSnapshotInfo).MainSeq
+
+	//find the db snapshot lower than oldest snapshot
+	snap, err := fdb.dbfile.GetAllSnapMarkers()
+	if err != nil {
+		return err
+	}
+	defer snap.FreeSnapMarkers()
+
+	var snapMarker *forestdb.SnapMarker
+	var compactSeqNum forestdb.SeqNum
+snaploop:
+	for _, s := range snap.SnapInfoList() {
+
+		cm := s.GetKvsCommitMarkers()
+		for _, c := range cm {
+			//if seqNum of "main" kvs is less than or equal to oldest snapshot seqnum
+			//it is safe to compact upto that snapshot
+			if c.GetKvStoreName() == "main" && c.GetSeqNum() <= mainSeq {
+				snapMarker = s.GetSnapMarker()
+				compactSeqNum = c.GetSeqNum()
+				break snaploop
+			}
+		}
+	}
+
+	if snapMarker == nil {
+		logging.Debugf("ForestDBSlice::Compact \n\tNo Valid SnapMarker Found. Skipped Compaction."+
+			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
+		return nil
+	} else {
+		logging.Debugf("ForestDBSlice::Compact \n\tCompacting upto SeqNum %v. "+
+			"Slice Id %v, IndexInstId %v, IndexDefnId %v", compactSeqNum, fdb.id,
+			fdb.idxInstId, fdb.idxDefnId)
+	}
+
 	newpath := newFdbFile(fdb.path, true)
-	err := fdb.dbfile.Compact(newpath)
+	err = fdb.dbfile.CompactUpto(newpath, snapMarker)
 	if err != nil {
 		return err
 	}

@@ -12,8 +12,8 @@ package indexer
 import (
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbaselabs/goforestdb"
 	"math"
 	"sync"
