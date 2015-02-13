@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"path/filepath"
 )
 
@@ -105,4 +106,20 @@ func GetClusterConfFromFile(filepath string) ClusterConfiguration {
 	err := decoder.Decode(&configuration)
 	HandleError(err, "Error in decoding cluster configuration")
 	return configuration
+}
+
+// Returns paths of Prod and Bags dir
+func FetchMonsterToolPath() (string, string) {
+	// Resolve monster bags and prods paths
+	gopath := os.Getenv("GOPATH")
+	for _, dir := range strings.Split(gopath, ":") {
+		file := filepath.Join(dir, "src/github.com/prataprc/monster")
+		if FileExists(file) {
+			proddir := filepath.Join(file, "prods")
+			bagdir := filepath.Join(file, "bags")
+			return proddir, bagdir
+		}
+	}
+	
+	return "", ""
 }

@@ -2,6 +2,7 @@ package secondaryindex
 
 import (
 	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -224,6 +225,20 @@ func CountLookup(indexName, bucketName, server string, values []interface{}) (in
 		return 0, err
 	} else {
 		return count, nil
+	}
+}
+
+func RangeStatistics(indexName, bucketName, server string, low, high []interface{}, inclusion uint32) error {
+	logging.LogIgnore()
+	// ToDo: Create a client pool
+	client := CreateClient(server, "2itest")
+	defnID, _ := GetDefnID(client, bucketName, indexName)
+	statistics, err := client.RangeStatistics(uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
+	if err != nil {
+		return err
+	} else {
+		fmt.Println("Statistics: \n\n", statistics)
+		return nil
 	}
 }
 
