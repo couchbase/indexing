@@ -251,8 +251,13 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 			"backindex entry %v", fdb.id, fdb.idxInstId, err)
 		return
 	} else if oldkey.Encoded() != nil {
-		//TODO: Handle the case if old-value from backindex matches with the
-		//new-value(false mutation). Skip It.
+		//If old-key from backindex matches with the new-key
+		//in mutation, skip it.
+		if bytes.Compare(oldkey.Encoded(), k.Encoded()) == 0 {
+			logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
+				"Doc Id %v. Key %v. Skipped.", fdb.id, fdb.idxInstId, v.Docid(), k.Encoded())
+			return
+		}
 
 		//there is already an entry in main index for this docid
 		//delete from main index
