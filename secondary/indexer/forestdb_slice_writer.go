@@ -291,13 +291,13 @@ func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
 	atomic.AddInt64(&fdb.insert_bytes, int64(len(v.Docid())+len(k.Encoded())))
 
 	//set in main index
-	if err = fdb.main[workerId].SetKV(k.Encoded(), v.Encoded()); err != nil {
+	if err = fdb.main[workerId].SetKV(k.Encoded(), nil); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
 			"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, k, v, err)
 		return
 	}
-	atomic.AddInt64(&fdb.insert_bytes, int64(len(k.Encoded())+len(v.Encoded())))
+	atomic.AddInt64(&fdb.insert_bytes, int64(len(k.Encoded())))
 }
 
 //delete does the actual delete in forestdb

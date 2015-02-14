@@ -30,12 +30,8 @@ type Value struct {
 }
 
 type Valuedata struct {
-	Docid   []byte
-	Vbucket Vbucket //useful for debugging, can be removed to optimize space
-	Seqno   Seqno   //useful for debugging, can be removed to optimize space
+	Docid []byte
 }
-
-var KEY_SEPARATOR []byte = []byte{0xff, 0xff, 0xff, 0xff}
 
 func NewKey(data []byte) (Key, error) {
 	var err error
@@ -59,13 +55,11 @@ func NewKey(data []byte) (Key, error) {
 	return key, nil
 }
 
-func NewValue(docid []byte, vbucket Vbucket, seqno Seqno) (Value, error) {
+func NewValue(docid []byte) (Value, error) {
 
 	var val Value
 
 	val.raw.Docid = docid
-	val.raw.Vbucket = vbucket
-	val.raw.Seqno = seqno
 
 	var err error
 	if val.encoded, err = json.Marshal(val.raw); err != nil {
@@ -145,7 +139,5 @@ func (v *Value) Docid() []byte {
 func (v *Value) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("Docid:%v ", v.raw.Docid))
-	buf.WriteString(fmt.Sprintf("Vbucket:%d ", v.raw.Vbucket))
-	buf.WriteString(fmt.Sprintf("Seqno:%d", v.raw.Seqno))
 	return buf.String()
 }

@@ -10,8 +10,8 @@
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"sync"
 )
 
@@ -391,8 +391,7 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 		return
 	}
 
-	if value, err = NewValue(mut.docid, mut.meta.vbucket,
-		mut.meta.seqno); err != nil {
+	if value, err = NewValue(mut.docid); err != nil {
 
 		logging.Errorf("Flusher::processUpsert Error Generating Value"+
 			"From Mutation: %v. Skipped. Error: %v", mut.keys[i], err)
