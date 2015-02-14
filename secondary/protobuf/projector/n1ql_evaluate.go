@@ -2,9 +2,9 @@ package protobuf
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/collatejson"
-import qexpr "github.com/couchbaselabs/query/expression"
-import qparser "github.com/couchbaselabs/query/expression/parser"
-import qvalue "github.com/couchbaselabs/query/value"
+import qexpr "github.com/couchbase/query/expression"
+import qparser "github.com/couchbase/query/expression/parser"
+import qvalue "github.com/couchbase/query/value"
 
 // CompileN1QLExpression will take expressions defined in N1QL's DDL statement
 // and compile them for evaluation.

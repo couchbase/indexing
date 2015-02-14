@@ -12,7 +12,7 @@ package collatejson
 
 import (
 	"encoding/json"
-	qv "github.com/couchbaselabs/query/value"
+	qv "github.com/couchbase/query/value"
 	"reflect"
 	"testing"
 )

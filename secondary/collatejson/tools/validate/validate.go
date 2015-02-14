@@ -23,7 +23,7 @@ import (
 	"path"
 	"runtime"
 
-	qv "github.com/couchbaselabs/query/value"
+	qv "github.com/couchbase/query/value"
 	"github.com/prataprc/collatejson"
 	"github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
