@@ -508,6 +508,11 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		}
 	}
 
+	if info.IsCommitted() {
+		s.meta = fdb.meta
+		s.metaSeqNum = snapInfo.MetaSeq
+	}
+
 	logging.Debugf("ForestDBSlice::OpenSnapshot \n\tSliceId %v IndexInstId %v Creating New "+
 		"Snapshot %v committed:%v", fdb.id, fdb.idxInstId, s, s.committed)
 	err := s.Open()
@@ -614,6 +619,12 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 		if err != nil {
 			return nil, err
 		}
+
+		metaDbInfo, err := fdb.meta.Info()
+		if err != nil {
+			return nil, err
+		}
+		newSnapshotInfo.MetaSeq = metaDbInfo.LastSeqNum()
 
 		// Commit database file
 		start := time.Now()

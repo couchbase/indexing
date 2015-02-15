@@ -25,6 +25,7 @@ type fdbSnapshotInfo struct {
 	Ts        *common.TsVbuuid
 	MainSeq   forestdb.SeqNum
 	BackSeq   forestdb.SeqNum
+	MetaSeq   forestdb.SeqNum
 	Committed bool
 }
 
@@ -37,16 +38,20 @@ func (info *fdbSnapshotInfo) IsCommitted() bool {
 }
 
 func (info *fdbSnapshotInfo) String() string {
-	return fmt.Sprintf("SnapshotInfo: seqnos: %v, %v", info.MainSeq, info.BackSeq)
+	return fmt.Sprintf("SnapshotInfo: seqnos: %v, %v, %v", info.MainSeq,
+		info.BackSeq, info.MetaSeq)
 }
 
 type fdbSnapshot struct {
 	slice Slice
 
-	main       *forestdb.KVStore // handle for forward index
-	back       *forestdb.KVStore // handle for reverse index
+	main *forestdb.KVStore // handle for forward index
+	back *forestdb.KVStore // handle for reverse index
+	meta *forestdb.KVStore // handle for meta
+
 	mainSeqNum forestdb.SeqNum
 	backSeqNum forestdb.SeqNum
+	metaSeqNum forestdb.SeqNum
 
 	idxDefnId common.IndexDefnId //index definition id
 	idxInstId common.IndexInstId //index instance id
@@ -90,6 +95,16 @@ func (s *fdbSnapshot) Open() error {
 				return err
 			}
 		}
+
+		if s.committed {
+			s.meta, err = s.meta.SnapshotOpen(s.metaSeqNum)
+			if err != nil {
+				logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+					"Opening Meta DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), s.metaSeqNum, err)
+				return err
+			}
+		}
+
 		s.slice.IncrRef()
 		s.refCount = 1
 	}
@@ -173,6 +188,21 @@ func (s *fdbSnapshot) Close() error {
 				logging.Errorf("ForestDBSnapshot::Close Back DB Handle Nil")
 				errors.New("Back DB Handle Nil")
 			}
+
+			//close the meta index
+			if s.committed {
+				if s.meta != nil {
+					err := s.meta.Close()
+					if err != nil {
+						logging.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
+							"Meta DB Snapshot %v", err)
+						return err
+					}
+				} else {
+					logging.Errorf("ForestDBSnapshot::Close Meta DB Handle Nil")
+					errors.New("Meta DB Handle Nil")
+				}
+			}
 		}
 	}
 
@@ -193,6 +223,7 @@ func (s *fdbSnapshot) Info() SnapshotInfo {
 	return &fdbSnapshotInfo{
 		MainSeq:   s.mainSeqNum,
 		BackSeq:   s.backSeqNum,
+		MetaSeq:   s.metaSeqNum,
 		Committed: s.committed,
 		Ts:        s.ts,
 	}
