@@ -523,8 +523,9 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 //Rollback slice to given snapshot. Return error if
 //not possible
 func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
+
 	//get the seqnum from snapshot
-	mainSeqNum := info.(*fdbSnapshotInfo).MainSeq
+	snapInfo := info.(*fdbSnapshotInfo)
 
 	infos, err := fdb.getSnapshotsMeta()
 	if err != nil {
@@ -534,11 +535,25 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 	sic := NewSnapshotInfoContainer(infos)
 	sic.RemoveRecentThanTS(info.Timestamp())
 
-	//call forestdb to rollback
-	err = fdb.main[0].Rollback(mainSeqNum)
+	//call forestdb to rollback for each kv store
+	err = fdb.main[0].Rollback(snapInfo.MainSeq)
 	if err != nil {
 		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
 			"Main Index to Snapshot %v. Error %v", fdb.id, fdb.idxInstId, info, err)
+		return err
+	}
+
+	err = fdb.back[0].Rollback(snapInfo.BackSeq)
+	if err != nil {
+		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
+			"Back Index to Snapshot %v. Error %v", fdb.id, fdb.idxInstId, info, err)
+		return err
+	}
+
+	err = fdb.meta.Rollback(snapInfo.MetaSeq)
+	if err != nil {
+		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
+			"Meta Index to Snapshot %v. Error %v", fdb.id, fdb.idxInstId, info, err)
 		return err
 	}
 
@@ -555,14 +570,28 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 //not possible
 func (fdb *fdbSlice) RollbackToZero() error {
 
-	mainSeqNum := forestdb.SeqNum(0)
+	zeroSeqNum := forestdb.SeqNum(0)
 
 	//call forestdb to rollback
 	var err error
-	err = fdb.main[0].Rollback(mainSeqNum)
+	err = fdb.main[0].Rollback(zeroSeqNum)
 	if err != nil {
 		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
 			"Main Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
+		return err
+	}
+
+	err = fdb.back[0].Rollback(zeroSeqNum)
+	if err != nil {
+		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
+			"Back Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
+		return err
+	}
+
+	err = fdb.meta.Rollback(zeroSeqNum)
+	if err != nil {
+		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
+			"Meta Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
 		return err
 	}
 
