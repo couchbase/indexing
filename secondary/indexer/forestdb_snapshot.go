@@ -80,11 +80,15 @@ func (s *fdbSnapshot) Open() error {
 				"Opening Main DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), mainSeq, err)
 			return err
 		}
-		s.back, err = s.back.SnapshotOpen(backSeq)
-		if err != nil {
-			logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
-				"Opening Back DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), backSeq, err)
-			return err
+
+		//if there is a back-index(non-primary index)
+		if s.back != nil {
+			s.back, err = s.back.SnapshotOpen(backSeq)
+			if err != nil {
+				logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+					"Opening Back DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), backSeq, err)
+				return err
+			}
 		}
 		s.slice.IncrRef()
 		s.refCount = 1

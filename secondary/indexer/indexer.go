@@ -14,8 +14,8 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbaselabs/goforestdb"
 	"math/rand"
 	"net"
@@ -1517,7 +1517,9 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		path := filepath.Join(storage_dir, IndexPath(&indexInst, SliceId(0)))
 		//add a single slice per partition for now
 		if slice, err := NewForestDBSlice(path,
-			0, indexInst.Defn.DefnId, indexInst.InstId, idx.config); err == nil {
+			0, indexInst.Defn.DefnId, indexInst.InstId,
+			indexInst.Defn.IsPrimary, idx.config); err == nil {
+
 			partnInst.Sc.AddSlice(0, slice)
 			logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
 				indexInst.InstId, slice)
