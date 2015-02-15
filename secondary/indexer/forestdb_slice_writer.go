@@ -464,6 +464,10 @@ func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) (Key, error) 
 //to caller on next DB operation
 func (fdb *fdbSlice) checkFatalDbError(err error) {
 
+	//panic on all DB errors and recover rather than risk
+	//inconsistent db state
+	common.CrashOnError(err)
+
 	errStr := err.Error()
 	switch errStr {
 
