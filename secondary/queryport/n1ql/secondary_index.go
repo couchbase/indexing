@@ -306,7 +306,7 @@ func (gsi *gsiKeyspace) CreateIndex(
 		false, /*isPrimary*/
 		withJSON)
 	if err != nil {
-		return nil, errors.NewError(err, "GSI CreatePrimaryIndex()")
+		return nil, errors.NewError(err, "GSI CreateIndex()")
 	}
 	// refresh to get back the newly created index.
 	if err := gsi.Refresh(); err != nil {
