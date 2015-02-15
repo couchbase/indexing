@@ -545,12 +545,8 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
 func (fdb *fdbSlice) RollbackToZero() error {
-	//get the seqnum from snapshot
-	mainSeqNum := forestdb.SeqNum(0)
 
-	//HACK: This doesn't work till MB-13239 gets fixed
-	logging.Errorf("ForestDBSlice::RollbackToZero MB-13239 Needs to be Fixed")
-	return nil
+	mainSeqNum := forestdb.SeqNum(0)
 
 	//call forestdb to rollback
 	var err error
