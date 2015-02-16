@@ -213,7 +213,7 @@ func TestMixedDatatypesScan_Bool(t *testing.T) {
 }
 
 // Test case for testing secondary key field values as very huge
-func TestLargeSecondaryKeyLength(t *testing.T) {
+func SkipTestLargeSecondaryKeyLength(t *testing.T) {
 	fmt.Println("In TestLargeSecondaryKeyLength()")
 	
 	field := "LongSecField"
