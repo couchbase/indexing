@@ -212,6 +212,40 @@ func TestMixedDatatypesScan_Bool(t *testing.T) {
 	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
 }
 
+// Test case for testing secondary key field values as very huge
+func TestLargeSecondaryKeyLength(t *testing.T) {
+	fmt.Println("In TestLargeSecondaryKeyLength()")
+	
+	field := "LongSecField"
+	indexName := "index_LongSecField"
+	bucketName := "default"
+	
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(1 * time.Second)
+	
+	largeKeyDocs := generateLargeSecondayKeyDocs(1000, field)
+	seed++
+	fmt.Println("Setting JSON docs in KV")
+	kvutility.SetKeyValues(largeKeyDocs, "default", "", clusterconfig.KVAddress)	
+	
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedScanAllResponse(largeKeyDocs, field)
+	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tc.PrintScanResults(scanResults, "scanResults")
+	fmt.Println("ScanAll: Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+	tv.Validate(docScanResults, scanResults)
+	
+	docScanResults = datautility.ExpectedScanResponse_string(largeKeyDocs, field, "A", "zzzz", 3)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzzz"}, 3, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+	fmt.Println("Range: Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+}
+
 func generateJSONSMixedDatatype(numDocs int,fieldName string) tc.KeyValues {
 	prodfile := filepath.Join(proddir, "test2.prod")
 	docs := GenerateJsons(numDocs, seed, prodfile, bagdir)
@@ -252,6 +286,17 @@ func generateJSONSMixedDatatype(numDocs int,fieldName string) tc.KeyValues {
 	fmt.Println("Number of json fields is: ", objCount)	
 	fmt.Println("Number of true bool fields is: ", trueBoolCount)	
 	fmt.Println("Number of false bool fields is: ", falseBoolCount)	
+	return docs
+}
+
+func generateLargeSecondayKeyDocs(numDocs int,fieldName string) tc.KeyValues {
+	prodfile := filepath.Join(proddir, "test2.prod")
+	docs := GenerateJsons(numDocs, seed, prodfile, bagdir)
+	for k, v := range docs {
+		json := v.(map[string]interface{})
+		json[fieldName] =  randString(randomNum(600, 2000))
+		docs[k] = json
+	}
 	return docs
 }
 

@@ -300,7 +300,7 @@ func TestScanWithConcurrentIndexOps(t *testing.T) {
 }
 
 func TestConcurrentScans_SameIndex(t *testing.T) {
-	fmt.Println("In TestConcurrentScans()")
+	fmt.Println("In TestConcurrentScans_SameIndex()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
 	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
@@ -330,7 +330,7 @@ func TestConcurrentScans_SameIndex(t *testing.T) {
 }
 
 func TestConcurrentScans_MultipleIndexes(t *testing.T) {
-	fmt.Println("In TestConcurrentScans()")
+	fmt.Println("In TestConcurrentScans_MultipleIndexes()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
 	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
