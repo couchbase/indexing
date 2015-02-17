@@ -667,3 +667,7 @@ func (client *Client) withRetry(fn func() error) (err error) {
 		}
 	}
 }
+
+func (client *Client) String() string {
+	return client.adminport
+}

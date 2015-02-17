@@ -15,6 +15,7 @@ package indexer
 
 import (
 	"errors"
+	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
@@ -591,19 +592,21 @@ func sendMutationTopicRequest(ap *projClient.Client, topic string,
 	reqTimestamps *protobuf.TsVbuuid,
 	instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
 
-	logging.Debugf("KVSender::sendMutationTopicRequest Projector %v Topic %v Instances %v RequestTS %v",
-		ap, topic, instances, reqTimestamps)
+	logging.Debugf("KVSender::sendMutationTopicRequest Projector %v Topic %v \n\tInstances %v \n\tRequestTS %v",
+		ap, topic, instances, reqTimestamps.Repr())
 
 	endpointType := "dataport"
 
 	if res, err := ap.MutationTopicRequest(topic, endpointType,
 		[]*protobuf.TsVbuuid{reqTimestamps}, instances); err != nil {
-		logging.Fatalf("KVSender::sendMutationTopicRequest \n\tUnexpected Error %v During Mutation Stream "+
-			"Request %v for IndexInst %v", err, topic, instances)
+		logging.Fatalf("KVSender::sendMutationTopicRequest \n\tProjector %v Topic %v Unexpected Error %v", ap,
+			topic, err)
 
 		return res, err
 	} else {
-		logging.Debugf("KVSender::sendMutationTopicRequest \n\tMutationStream Response %v", res)
+		logging.Debugf("KVSender::sendMutationTopicRequest \n\tMutationStream Response Projector %v Topic %v "+
+			"\n\tInstanceIds %v \n\tActiveTs %v \n\tRollbackTs %v", ap, topic, res.GetInstanceIds(),
+			debugPrintTs(res.GetActiveTimestamps()), debugPrintTs(res.GetRollbackTimestamps()))
 		return res, nil
 	}
 }
@@ -612,14 +615,14 @@ func sendRestartVbuckets(ap *projClient.Client,
 	topic string,
 	restartTs *protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
 
-	logging.Debugf("KVSender::sendRestartVbuckets Projector %v Topic %v RestartTs %v",
-		ap, topic, restartTs)
+	logging.Debugf("KVSender::sendRestartVbuckets Projector %v Topic %v \n\tRestartTs %v",
+		ap, topic, restartTs.Repr())
 
 	//Shutdown the vbucket before restart. If the vbucket is already
 	//running, projector will ignore the request otherwise
 	if err := ap.ShutdownVbuckets(topic, []*protobuf.TsVbuuid{restartTs}); err != nil {
 		logging.Errorf("KVSender::sendRestartVbuckets \n\tUnexpected Error During "+
-			"ShutdownVbuckets Request for Topic %v. Err %v.",
+			"ShutdownVbuckets Request for Projector %v Topic %v. Err %v.", ap,
 			topic, err)
 
 		//all shutdownVbuckets errors are treated as success as it is a best-effort call.
@@ -628,12 +631,14 @@ func sendRestartVbuckets(ap *projClient.Client,
 
 	if res, err := ap.RestartVbuckets(topic, []*protobuf.TsVbuuid{restartTs}); err != nil {
 		logging.Fatalf("KVSender::sendRestartVbuckets \n\tUnexpected Error During "+
-			"Restart Vbuckets Request for Topic %v. Err %v.",
+			"Restart Vbuckets Request for Projector %v Topic %v. Err %v.", ap,
 			topic, err)
 
 		return res, err
 	} else {
-		logging.Debugf("KVSender::sendRestartVbuckets \n\tRestartVbuckets Response %v", res)
+		logging.Debugf("KVSender::sendRestartVbuckets \n\tRestartVbuckets Response Projector %v Topic %v "+
+			"\nInstanceIds %v \nActiveTs %v \nRollbackTs %v", ap, topic, res.GetInstanceIds(),
+			debugPrintTs(res.GetActiveTimestamps()), debugPrintTs(res.GetRollbackTimestamps()))
 		return res, nil
 	}
 }
@@ -643,12 +648,12 @@ func sendAddInstancesRequest(ap *projClient.Client,
 	topic string,
 	instances []*protobuf.Instance) error {
 
-	logging.Debugf("KVSender::sendAddInstancesRequest Projector %v Topic %v Instances %v",
+	logging.Debugf("KVSender::sendAddInstancesRequest Projector %v Topic %v \nInstances %v",
 		ap, topic, instances)
 
 	if err := ap.AddInstances(topic, instances); err != nil {
 		logging.Fatalf("KVSender::sendAddInstancesRequest \n\tUnexpected Error During "+
-			"Add Instances Request Topic %v IndexInst %v. Err %v",
+			"Add Instances Request Projector %v Topic %v IndexInst %v. Err %v", ap,
 			topic, instances, err)
 
 		return err
@@ -669,7 +674,7 @@ func sendDelInstancesRequest(ap *projClient.Client,
 
 	if err := ap.DelInstances(topic, uuids); err != nil {
 		logging.Fatalf("KVSender::sendDelInstancesRequest \n\tUnexpected Error During "+
-			"Del Instances Request Topic %v Instances %v. Err %v",
+			"Del Instances Request Projector %v Topic %v Instances %v. Err %v", ap,
 			topic, uuids, err)
 
 		return err
@@ -690,7 +695,7 @@ func sendDelBucketsRequest(ap *projClient.Client,
 
 	if err := ap.DelBuckets(topic, buckets); err != nil {
 		logging.Fatalf("KVSender::sendDelBucketsRequest \n\tUnexpected Error During "+
-			"Del Buckets Request Topic %v Buckets %v. Err %v",
+			"Del Buckets Request Projector %v Topic %v Buckets %v. Err %v", ap,
 			topic, buckets, err)
 
 		return err
@@ -707,7 +712,7 @@ func sendShutdownTopic(ap *projClient.Client,
 
 	if err := ap.ShutdownTopic(topic); err != nil {
 		logging.Fatalf("KVSender::sendShutdownTopic \n\tUnexpected Error During "+
-			"Shutdown Topic %v. Err %v", topic, err)
+			"Shutdown Projector %v Topic %v. Err %v", topic, err)
 
 		return err
 	} else {
@@ -840,7 +845,12 @@ loop:
 		}
 	}
 
-	logging.Debugf("KVSender::getFailoverLogs \n\tFailover Log Response %v Error %v", res, err)
+	s := ""
+	for _, l := range res.GetLogs() {
+		s += fmt.Sprintf("\t%v\n", l)
+	}
+
+	logging.Debugf("KVSender::getFailoverLogs \n\tFailover Log Response Error %v \n%v", err, s)
 
 	return res, err
 }
@@ -1100,5 +1110,16 @@ func execWithStopCh(fn func(), stopCh StopChannel) {
 		fn()
 
 	}
+
+}
+
+func debugPrintTs(tsList []*protobuf.TsVbuuid) string {
+
+	if len(tsList) == 0 {
+		return ""
+	}
+
+	ts := tsList[0]
+	return ts.Repr()
 
 }
