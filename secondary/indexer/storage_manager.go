@@ -192,7 +192,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 		//if index belongs to the flushed bucket and stream
 		if idxInst.Defn.Bucket == bucket &&
-			idxInst.Stream == streamId {
+			idxInst.Stream == streamId &&
+			idxInst.State != common.INDEX_STATE_DELETED {
 
 			lastIndexSnap := s.indexSnapMap[idxInstId]
 			// List of snapshots for reading current timestamp
@@ -340,7 +341,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		idxInst := sm.indexInstMap[idxInstId]
 
 		//if this bucket in stream needs to be rolled back
-		if idxInst.Defn.Bucket == bucket && idxInst.Stream == streamId {
+		if idxInst.Defn.Bucket == bucket &&
+			idxInst.Stream == streamId &&
+			idxInst.State != common.INDEX_STATE_DELETED {
 
 			//for all partitions managed by this indexer
 			for partnId, partnInst := range partnMap {
@@ -493,8 +496,8 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
 	req := cmd.(*MsgIndexSnapRequest)
-	_, found := s.indexInstMap[req.GetIndexId()]
-	if !found {
+	inst, found := s.indexInstMap[req.GetIndexId()]
+	if !found || inst.State == common.INDEX_STATE_DELETED {
 		req.respch <- ErrIndexNotFound
 		return
 	}
@@ -539,6 +542,10 @@ func (s *storageMgr) handleStats(cmd Message) {
 
 	for _, st := range stats {
 		inst := s.indexInstMap[st.InstId]
+		if inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+
 		k := fmt.Sprintf("%s:%s:disk_size", inst.Defn.Bucket, inst.Defn.Name)
 		v := fmt.Sprint(st.Stats.DiskSize)
 		statsMap[k] = v
@@ -564,6 +571,13 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 	var sts StorageStatistics
 
 	for idxInstId, partnMap := range s.indexPartnMap {
+
+		inst := s.indexInstMap[idxInstId]
+		//skip deleted indexes
+		if inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+
 		var dataSz, diskSz int64
 		var getBytes, insertBytes, deleteBytes int64
 	loop:
@@ -607,10 +621,13 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	errch := req.GetErrorChannel()
 	var slices []Slice
 
-	partnMap, ok := s.indexPartnMap[req.GetInstId()]
-	if !ok {
+	inst, ok := s.indexInstMap[req.GetInstId()]
+	if !ok || inst.State == common.INDEX_STATE_DELETED {
 		errch <- ErrIndexNotFound
+		return
 	}
+
+	partnMap, _ := s.indexPartnMap[req.GetInstId()]
 
 	// Increment rc for slices
 	for _, partnInst := range partnMap {
