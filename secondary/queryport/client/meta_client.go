@@ -350,18 +350,35 @@ func (b *metadataClient) updateIndexerList(cinfo *common.ClusterInfoCache) error
 	m := make(map[string]common.IndexerId)
 	for _, adminport := range adminports { // add new indexer-nodes if any
 		if indexerID, ok := b.adminports[adminport]; !ok {
+			// WatchMetadata will "unwatch" an old metadata watcher which
+			// shares the same indexer Id (but the adminport may be different).
 			indexerID, err = b.mdClient.WatchMetadata(adminport)
 			m[adminport] = indexerID
 			b.topology[indexerID] = make([]*mclient.IndexMetadata, 0)
 		} else {
+			err = b.mdClient.UpdateServiceAddrForIndexer(indexerID, adminport)
 			m[adminport] = indexerID
 			delete(b.adminports, adminport)
 		}
 	}
 	// delete indexer-nodes that got removed from cluster.
 	for _, indexerID := range b.adminports {
-		b.mdClient.UnwatchMetadata(indexerID)
-		delete(b.topology, indexerID)
+
+		// check if the indexerId exists in var "m".  In case the
+		// adminport changes for the same index node, there would
+		// be two adminport mapping to the same indexerId, one
+		// in b.adminport (old) and the other in "m" (new).	 So
+		// make sure not to accidently unwatch the indexer.
+		found := false
+		for _, id := range m {
+			if indexerID == id {
+				found = true
+			}
+		}
+		if !found {
+			b.mdClient.UnwatchMetadata(indexerID)
+			delete(b.topology, indexerID)
+		}
 	}
 	b.adminports = m
 	return err

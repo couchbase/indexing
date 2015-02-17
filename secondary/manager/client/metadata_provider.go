@@ -119,7 +119,18 @@ func (o *MetadataProvider) WatchMetadata(indexAdminPort string) (c.IndexerId, er
 		return c.INDEXER_ID_NIL, errors.New(fmt.Sprintf("Cannot initiate connection to indexer port %s.", indexAdminPort))
 	}
 
+	if err := watcher.updateServiceMap(indexAdminPort); err != nil {
+		return c.INDEXER_ID_NIL, err
+	}
+
 	indexerId := watcher.getIndexerId()
+
+	oldWatcher, ok := o.watchers[indexerId]
+	if ok {
+		// there is an old watcher with an matching indexerId.  Close it ...
+		oldWatcher.close()
+	}
+
 	o.watchers[indexerId] = watcher
 	return indexerId, nil
 }
@@ -352,6 +363,16 @@ func (o *MetadataProvider) FindServiceForIndexer(id c.IndexerId) (adminport stri
 	}
 
 	return watcher.getAdminAddr(), watcher.getScanAddr(), nil
+}
+
+func (o *MetadataProvider) UpdateServiceAddrForIndexer(id c.IndexerId, adminport string) error {
+
+	watcher, err := o.findWatcherByIndexerId(id)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Cannot locate cluster node."))
+	}
+
+	return watcher.updateServiceMap(adminport)
 }
 
 func (o *MetadataProvider) FindIndexByName(name string, bucket string) *IndexMetadata {
@@ -662,6 +683,45 @@ func newWatcher(o *MetadataProvider, addr string) *watcher {
 	s.isClosed = false
 
 	return s
+}
+
+func (w *watcher) updateServiceMap(adminport string) error {
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if w.serviceMap == nil {
+		panic("Index node metadata is not initialized")
+	}
+
+	h, _, err := net.SplitHostPort(adminport)
+	if err != nil {
+		return err
+	}
+
+	if len(h) > 0 {
+		w.serviceMap.AdminAddr = adminport
+
+		_, p, err := net.SplitHostPort(w.serviceMap.NodeAddr)
+		if err != nil {
+			return err
+		}
+		w.serviceMap.NodeAddr = net.JoinHostPort(h, p)
+
+		_, p, err = net.SplitHostPort(w.serviceMap.ScanAddr)
+		if err != nil {
+			return err
+		}
+		w.serviceMap.ScanAddr = net.JoinHostPort(h, p)
+
+		_, p, err = net.SplitHostPort(w.serviceMap.HttpAddr)
+		if err != nil {
+			return err
+		}
+		w.serviceMap.HttpAddr = net.JoinHostPort(h, p)
+	}
+
+	return nil
 }
 
 func (w *watcher) getIndexerId() c.IndexerId {
