@@ -258,6 +258,9 @@ func (tk *timekeeper) handleInitPrepRecovery(msg Message) {
 	logging.Debugf("Timekeeper::handleInitPrepRecovery %v %v",
 		streamId, bucket)
 
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
 	tk.prepareRecovery(streamId, bucket)
 
 	tk.supvCmdch <- &MsgSuccess{}
@@ -961,6 +964,9 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 	logging.Debugf("Timekeeper::handleInitBuildDoneAck StreamId %v Bucket %v",
 		streamId, bucket)
 
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
 	if streamId == common.INIT_STREAM {
 		for _, buildInfo := range tk.indexBuildInfo {
 			if buildInfo.indexInst.Defn.Bucket == bucket {
@@ -1007,6 +1013,9 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 
 	logging.Debugf("Timekeeper::handleStreamRequestDone StreamId %v Bucket %v",
 		streamId, bucket)
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
 
 	if streamId == common.INIT_STREAM {
 
@@ -1715,6 +1724,9 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			bucketTsMap[inst.Defn.Bucket] = kvTs
 		}
 	}
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
 
 	for _, inst := range tk.indexInstMap {
 		k := fmt.Sprintf("%s:%s:num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
