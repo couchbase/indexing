@@ -61,6 +61,6 @@ const SLICE_COMMAND_BUFFER_SIZE = 10000
 const SLICE_COMMIT_POLL_INTERVAL = 20
 
 //Max Length of Secondary Key
-const MAX_SEC_KEY_LEN = 1024
+const MAX_SEC_KEY_LEN = 4096
 
 const INDEXER_ID_KEY = "IndexerId"

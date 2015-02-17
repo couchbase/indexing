@@ -12,6 +12,7 @@ package indexer
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -37,6 +38,10 @@ func NewKey(data []byte) (Key, error) {
 	var err error
 	var key Key
 
+	if len(data) > MAX_SEC_KEY_LEN {
+		return key, errors.New("Key Too Long")
+	}
+
 	key.raw = data
 
 	if bytes.Compare([]byte("[]"), data) == 0 || len(data) == 0 {
@@ -44,9 +49,10 @@ func NewKey(data []byte) (Key, error) {
 		return key, nil
 	}
 
-	// TODO: Refactor to reuse tmp buffer
 	jsoncodec := collatejson.NewCodec(16)
-	buf := make([]byte, 0, MAX_SEC_KEY_LEN)
+	//TODO collatejson needs 3x buffer size. see if that can
+	//be reduced. Also reuse buffer.
+	buf := make([]byte, 0, len(data)*3)
 	if buf, err = jsoncodec.Encode(data, buf); err != nil {
 		return key, err
 	}
