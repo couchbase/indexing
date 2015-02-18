@@ -2,25 +2,18 @@ package logging
 
 import (
 	"bytes"
-	"log"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 var buffer *bytes.Buffer
 
 func init() {
 	buffer = bytes.NewBuffer([]byte{})
-	logger = log.New(buffer, "", log.Lmicroseconds)
-}
-
-func TestLogLevel(t *testing.T) {
-	SetLogLevel(LogLevelDebug)
-	if LogLevel() != LogLevelDebug {
-		t.Errorf("SetLogLevel() not respected")
-	}
-	SetLogLevel(0)
+	buffer.Reset()
+	SetLogWriter(buffer)
 }
 
 func TestLogIgnore(t *testing.T) {
@@ -28,15 +21,16 @@ func TestLogIgnore(t *testing.T) {
 	if s := string(buffer.Bytes()); strings.Contains(s, "test") == false {
 		t.Errorf("Warnf() failed %v", s)
 	}
-	LogIgnore()
+	SetLogLevel(Silent)
 	Warnf("test")
 	if s := string(buffer.Bytes()); s == "" {
 		t.Errorf("Warnf() failed %v", s)
 	}
-	LogEnable()
+	SetLogLevel(Info)
 }
 
 func TestLogLevelDefault(t *testing.T) {
+	buffer.Reset()
 	SetLogWriter(buffer)
 	Warnf("warn")
 	Errorf("error")
@@ -51,7 +45,7 @@ func TestLogLevelDefault(t *testing.T) {
 		t.Errorf("Errorf() failed %v", s)
 	} else if strings.Contains(s, "fatal") == false {
 		t.Errorf("Fatalf() failed %v", s)
-	} else if strings.Contains(s, "info") == true {
+	} else if strings.Contains(s, "info") == false {
 		t.Errorf("Infof() failed %v", s)
 	} else if strings.Contains(s, "debug") == true {
 		t.Errorf("Debugf() failed %v", s)
@@ -62,8 +56,9 @@ func TestLogLevelDefault(t *testing.T) {
 }
 
 func TestLogLevelInfo(t *testing.T) {
+	buffer.Reset()
 	SetLogWriter(buffer)
-	SetLogLevel(LogLevelInfo)
+	SetLogLevel(Info)
 	Warnf("warn")
 	Infof("info")
 	Debugf("debug")
@@ -82,8 +77,9 @@ func TestLogLevelInfo(t *testing.T) {
 }
 
 func TestLogLevelDebug(t *testing.T) {
+	buffer.Reset()
 	SetLogWriter(buffer)
-	SetLogLevel(LogLevelDebug)
+	SetLogLevel(Debug)
 	Warnf("warn")
 	Infof("info")
 	Debugf("debug")
@@ -102,8 +98,9 @@ func TestLogLevelDebug(t *testing.T) {
 }
 
 func TestLogLevelTrace(t *testing.T) {
+	buffer.Reset()
 	SetLogWriter(buffer)
-	SetLogLevel(LogLevelTrace)
+	SetLogLevel(Trace)
 	Warnf("warn")
 	Infof("info")
 	Debugf("debug")
@@ -122,9 +119,10 @@ func TestLogLevelTrace(t *testing.T) {
 }
 
 func TestSystemLog(t *testing.T) {
+	buffer.Reset()
 	SetLogWriter(buffer)
-	SetLogLevel(LogLevelTrace)
-	sl := NewSystemLog()
+	SetLogLevel(Trace)
+	sl := SystemLogger
 	sl.Warnf("warn")
 	sl.Infof("info")
 	sl.Debugf("debug")
@@ -140,4 +138,38 @@ func TestSystemLog(t *testing.T) {
 		t.Errorf("Tracef() failed %v", s)
 	}
 	SetLogWriter(os.Stdout)
+}
+
+func TestTimingLogging(t *testing.T) {
+	buffer.Reset()
+	SetLogWriter(buffer)
+	SetLogLevel(Timing)
+	TimeMe()
+	s := string(buffer.Bytes())
+	if strings.Contains(s, "logging.TimeMe 100") == false {
+		t.Errorf("Timer failed %v", s)
+	}
+}
+
+func TestStackTheTrace(t *testing.T) {
+	buffer.Reset()
+	SetLogWriter(buffer)
+	SetLogLevel(Error)
+	StackMe()
+	s := string(buffer.Bytes())
+	if strings.Contains(s, "TestStackTheTrace: StackMe()") == false {
+		t.Errorf("StackTrace failed, missing frames %v", s)
+	}
+	if strings.Contains(strings.ToLower(s), "stacktrace") == true {
+		t.Errorf("StackTrace failed, too many frames %v", s)
+	}
+}
+
+func TimeMe() {
+	defer Timer("test").End()
+	time.Sleep(1 * time.Second)
+}
+
+func StackMe() {
+	StackTrace(Error)
 }

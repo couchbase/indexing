@@ -11,6 +11,7 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	projectorC "github.com/couchbase/indexing/secondary/projector/client"
@@ -43,8 +44,7 @@ type monitorTestProjectorClient struct {
 
 func TestStreamMgr_Monitor(t *testing.T) {
 
-	common.LogEnable()
-	logging.SetLogLevel(logging.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 	util.TT = t
 
 	old_value := manager.NUM_VB

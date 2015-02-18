@@ -61,11 +61,11 @@ func argParse() string {
 	options.buckets = strings.Split(buckets, ",")
 	options.endpoints = strings.Split(endpoints, ",")
 	if options.debug {
-		logging.SetLogLevel(logging.LogLevelDebug)
+		logging.SetLogLevel(logging.Debug)
 	} else if options.trace {
-		logging.SetLogLevel(logging.LogLevelTrace)
+		logging.SetLogLevel(logging.Trace)
 	} else {
-		logging.SetLogLevel(logging.LogLevelInfo)
+		logging.SetLogLevel(logging.Info)
 	}
 
 	args := flag.Args()

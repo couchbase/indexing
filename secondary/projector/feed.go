@@ -2,7 +2,6 @@ package projector
 
 import "fmt"
 import "time"
-import "runtime/debug"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/dcp"
@@ -302,7 +301,7 @@ func (feed *Feed) genServer() {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			logging.Errorf("%v gen-server crashed: %v\n", feed.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 			feed.shutdown()
 		}
 	}()
@@ -883,7 +882,7 @@ func (feed *Feed) shutdown() error {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v shutdown() crashed: %v\n", feed.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 

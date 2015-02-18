@@ -28,7 +28,6 @@ package adminport
 
 import "fmt"
 import "expvar"
-import "runtime/debug"
 import "encoding/json"
 import "io"
 import "net"
@@ -232,7 +231,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 		defer s.mu.Unlock()
 		if recov := recover(); recov != nil {
 			logging.Errorf("%s systemHandler() crashed: %v\n", s.logPrefix, recov)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 			stats[2]++ // error count
 		}
 		if err != nil {

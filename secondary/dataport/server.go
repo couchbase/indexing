@@ -57,7 +57,6 @@ import "fmt"
 import "io"
 import "net"
 import "time"
-import "runtime/debug"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
@@ -220,7 +219,7 @@ func (s *Server) genServer(reqch chan []interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v gen-server crashed: %v\n", s.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 			s.handleClose()
 		}
 	}()
@@ -305,7 +304,7 @@ func (s *Server) handleClose() {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v handleClose() crashed: %v\n", s.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 
@@ -387,7 +386,7 @@ func closeConnection(prefix, raddr string, nc *netConn) {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v closeConnection(%q) crashed: %v\n", prefix, raddr, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 	close(nc.worker)
@@ -413,7 +412,7 @@ func listener(prefix string, lis net.Listener, reqch chan []interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v listener crashed: %v\n", prefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 			msg := serverMessage{cmd: serverCmdError, err: ErrorDaemonExit}
 			reqch <- []interface{}{msg}
 		}

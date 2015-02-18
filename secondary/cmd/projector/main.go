@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"strings"
 
@@ -22,11 +21,8 @@ var options struct {
 	kvaddrs   string
 	colocate  bool
 	logFile   string
-	nolog     bool
 	auth      string
-	info      bool
-	debug     bool
-	trace     bool
+	loglevel  string
 }
 
 func argParse() string {
@@ -38,16 +34,14 @@ func argParse() string {
 		"whether projector will be colocated with KV")
 	flag.StringVar(&options.logFile, "logFile", "",
 		"output logs to file default is stdout")
-	flag.BoolVar(&options.nolog, "nolog", false,
-		"ignore logging")
+	flag.StringVar(&options.loglevel, "logLevel", "Info",
+		"Log Level - Silent, Fatal, Error, Info, Debug, Trace")
 	flag.StringVar(&options.auth, "auth", "",
 		"Auth user and password")
-	flag.BoolVar(&options.info, "info", false,
-		"enable info level logging")
-	flag.BoolVar(&options.debug, "debug", false,
-		"enable debug level logging")
-	flag.BoolVar(&options.trace, "trace", false,
-		"enable trace level logging")
+
+	// so we don't need to sync merge with ns_server. remove soon
+	var unused string
+	flag.StringVar(&unused, "debug", "", "Not Used")
 
 	flag.Parse()
 
@@ -72,21 +66,10 @@ func main() {
 	cluster := argParse() // eg. "localhost:9000"
 
 	config := c.SystemConfig.Clone()
-	if options.nolog {
-		logging.LogIgnore()
-		config.SetValue("log.ignore", true)
-	} else if options.trace {
-		logging.SetLogLevel(logging.LogLevelTrace)
-		config.SetValue("log.level", "trace")
-	} else if options.debug {
-		logging.SetLogLevel(logging.LogLevelDebug)
-		config.SetValue("log.level", "debug")
-	} else if options.info {
-		logging.SetLogLevel(logging.LogLevelInfo)
-		config.SetValue("log.level", "info")
-	}
+	logging.SetLogLevel(logging.Level(options.loglevel))
+
 	if f := getlogFile(); f != nil {
-		log.Printf("Projector logging to %q\n", f.Name())
+		fmt.Printf("Projector logging to %q\n", f.Name())
 		logging.SetLogWriter(f)
 		config.SetValue("log.file", f.Name())
 	}
@@ -101,7 +84,7 @@ func main() {
 	if options.auth != "" {
 		up := strings.Split(options.auth, ":")
 		if _, err := cbauth.InternalRetryDefaultInit(cluster, up[0], up[1]); err != nil {
-			log.Fatalf("Failed to initialize cbauth: %s", err)
+			logging.Fatalf("Failed to initialize cbauth: %s", err)
 		}
 	}
 
@@ -124,7 +107,7 @@ func NewEndpointFactory(
 		case "dataport":
 			return dataport.NewRouterEndpoint(cluster, topic, addr, maxvbs, econf)
 		default:
-			log.Fatal("Unknown endpoint type")
+			logging.Fatalf("Unknown endpoint type\n")
 		}
 		return nil, nil
 	}
@@ -137,13 +120,13 @@ func getlogFile() *os.File {
 	case "tempfile":
 		f, err := ioutil.TempFile("", "projector")
 		if err != nil {
-			log.Fatal(err)
+			logging.Fatalf("%v", err)
 		}
 		return f
 	}
 	f, err := os.Create(options.logFile)
 	if err != nil {
-		log.Fatal(err)
+		logging.Fatalf("%v", err)
 	}
 	return f
 }

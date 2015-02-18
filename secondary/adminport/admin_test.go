@@ -25,12 +25,9 @@ var server Server
 
 func init() {
 	server = doServer("http://"+addr, q)
-	//logging.SetLogLevel(logging.LogLevelDebug)
 }
 
 func TestLoopback(t *testing.T) {
-	logging.LogIgnore()
-
 	urlPrefix := common.SystemConfig["projector.adminport.urlPrefix"].String()
 	client := NewHTTPClient(addr, urlPrefix)
 	req := &testMessage{

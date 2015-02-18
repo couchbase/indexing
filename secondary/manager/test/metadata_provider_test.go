@@ -34,8 +34,7 @@ type notifier struct {
 // For this test, use Index Defn Id from 100 - 110
 func TestMetadataProvider(t *testing.T) {
 
-	logging.LogEnable()
-	logging.SetLogLevel(logging.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})

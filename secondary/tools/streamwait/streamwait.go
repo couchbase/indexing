@@ -8,7 +8,7 @@ import "log"
 import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbase/indexing/secondary/logging" 
+import "github.com/couchbase/indexing/secondary/logging"
 
 var options struct {
 	maxVbs   int
@@ -28,11 +28,11 @@ func argParse() []string {
 	flag.Parse()
 
 	if options.debug {
-		logging.SetLogLevel(logging.LogLevelDebug)
+		logging.SetLogLevel(logging.Debug)
 	} else if options.trace {
-		logging.SetLogLevel(logging.LogLevelTrace)
+		logging.SetLogLevel(logging.Trace)
 	} else {
-		logging.SetLogLevel(logging.LogLevelInfo)
+		logging.SetLogLevel(logging.Info)
 	}
 
 	options.vbuckets = make([]uint16, 0, options.maxVbs)

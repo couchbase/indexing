@@ -11,6 +11,7 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	"os"
@@ -22,8 +23,7 @@ import (
 
 func TestEventMgr(t *testing.T) {
 
-	common.LogEnable()
-	logging.SetLogLevel(logging.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 
 	logging.Infof("Start TestEventMgr *********************************************************")
 

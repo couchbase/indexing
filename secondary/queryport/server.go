@@ -2,7 +2,6 @@ package queryport
 
 import "fmt"
 import "net"
-import "runtime/debug"
 import "sync"
 import "time"
 import "io"
@@ -79,7 +78,7 @@ func (s *Server) Close() (err error) {
 		if r := recover(); r != nil {
 			logging.Errorf("%v Close() crashed: %v\n", s.logPrefix, r)
 			err = fmt.Errorf("%v", r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 
@@ -100,7 +99,7 @@ func (s *Server) listener() {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v listener() crashed: %v\n", s.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 		go s.Close()
 	}()

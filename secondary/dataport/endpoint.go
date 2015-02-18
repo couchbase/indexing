@@ -21,7 +21,6 @@ package dataport
 import "fmt"
 import "net"
 import "time"
-import "runtime/debug"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
@@ -149,7 +148,7 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			logging.Errorf("%v run() crashed: %v\n", endpoint.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 		// close the connection
 		endpoint.conn.Close()

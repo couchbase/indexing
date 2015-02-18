@@ -10,10 +10,12 @@
 package manager
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"github.com/couchbase/indexing/secondary/logging"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"sync"
@@ -662,23 +664,19 @@ func (l *timestampListSerializable) findTimestamp(streamId common.StreamId, buck
 	return 0, 0, false, nil
 }
 
-func (l *timestampListSerializable) DebugPrint() {
-
-	if logging.LogLevel() != logging.LogLevelDebug {
-		return
-	}
-
-	logging.Debugf("timestampListSerializable.DebugPrint() : len(timestamps) = %d", len(l.Timestamps))
-
-	for _, t := range l.Timestamps {
-		logging.Debugf("timestampListSerializable.DebugPrint() : ----------")
-		logging.Debugf("timestampListSerializable.DebugPrint() : bucket %s", t.Bucket)
-		logging.Debugf("timestampListSerializable.DebugPrint() : streamId %d", t.StreamId)
+func (l *timestampListSerializable) String() string {
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("timestampListSerializable len=%v\n", len(l.Timestamps)))
+	for i, t := range l.Timestamps {
+		buf.WriteString(fmt.Sprintf("- index %v\n", i))
+		buf.WriteString(fmt.Sprintf("- bucket %s\n", t.Bucket))
+		buf.WriteString(fmt.Sprintf("- streamId %d\n", t.StreamId))
 		ts, err := unmarshallTimestamp(t.Timestamp)
 		if err != nil {
-			logging.Errorf("timestampListSerializable.debugPrint() : unable to unmarshall timestamp for bucket")
+			buf.WriteString("- Cannot unmarshall timestamp for this bucket\n")
 		} else {
-			ts.DebugPrint()
+			buf.WriteString(ts.String())
 		}
 	}
+	return buf.String()
 }

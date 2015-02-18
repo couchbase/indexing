@@ -13,7 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/gometa/common"
-	"github.com/couchbase/gometa/log"
+	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -84,11 +84,7 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 
-	if logging.IsLogEnabled() {
-		log.LogEnable()
-		log.SetLogLevel(int(logging.LogLevel()))
-		log.SetPrefix("MetadataProvider/Gometa")
-	}
+	gometaL.Current = &logging.SystemLogger
 
 	s = new(MetadataProvider)
 	s.watchers = make(map[c.IndexerId]*watcher)

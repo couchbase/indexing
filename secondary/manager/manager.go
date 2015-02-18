@@ -125,11 +125,7 @@ func NewIndexManagerInternal(
 	admin StreamAdmin,
 	config common.Config) (mgr *IndexManager, err error) {
 
-	if logging.IsLogEnabled() {
-		gometaL.LogEnable()
-		gometaL.SetLogLevel(int(logging.LogLevel()))
-		gometaL.SetPrefix("Indexing/Gometa")
-	}
+	gometaL.Current = &logging.SystemLogger
 
 	mgr = new(IndexManager)
 	mgr.isClosed = false

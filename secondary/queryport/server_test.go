@@ -33,7 +33,6 @@ var testResponseStream = &protobuf.ResponseStream{
 
 func TestStatistics(t *testing.T) {
 	logging.LogIgnore()
-	//logging.SetLogLevel(logging.LogLevelDebug)
 
 	addr := "localhost:9101"
 	serverCallb := func(

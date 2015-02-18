@@ -3,7 +3,6 @@ package client
 import "errors"
 import "fmt"
 import "net"
-import "runtime/debug"
 import "time"
 
 import "github.com/couchbase/indexing/secondary/logging"
@@ -75,7 +74,7 @@ func (cp *connectionPool) Close() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v Close() crashed: %v\n", cp.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 	close(cp.connections)

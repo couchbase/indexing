@@ -17,7 +17,6 @@ package projector
 
 import "fmt"
 import "time"
-import "runtime/debug"
 
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
@@ -123,7 +122,7 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			logging.Errorf("%v run() crashed: %v\n", vr.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v", logging.StackTrace())
 		}
 
 		if data := vr.makeStreamEndData(seqno); data == nil {
@@ -334,7 +333,7 @@ func (vr *VbucketRoutine) makeStreamBeginData(seqno uint64) interface{} {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v stream-begin crashed: %v\n", vr.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 
@@ -355,7 +354,7 @@ func (vr *VbucketRoutine) makeSyncData(seqno uint64) (data interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v sync crashed: %v\n", vr.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 
@@ -378,7 +377,7 @@ func (vr *VbucketRoutine) makeSnapshotData(
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v snapshot crashed: %v\n", vr.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 
@@ -399,7 +398,7 @@ func (vr *VbucketRoutine) makeStreamEndData(seqno uint64) interface{} {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v stream-end crashed: %v\n", vr.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 

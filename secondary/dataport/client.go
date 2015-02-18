@@ -35,7 +35,6 @@ import "errors"
 import "fmt"
 import "net"
 import "time"
-import "runtime/debug"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
@@ -202,7 +201,7 @@ func (c *Client) genServer(reqch chan []interface{}, quitch chan []string) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			logging.Errorf("%v gen-server crashed: %v\n", c.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 		c.doClose()
 	}()
@@ -332,7 +331,7 @@ func (c *Client) doClose() (err error) {
 		defer func() {
 			if r := recover(); r != nil {
 				logging.Errorf("%v doClose() crashed: %v\n", c.logPrefix, r)
-				logging.StackTrace(string(debug.Stack()))
+				logging.Errorf("%s", logging.StackTrace())
 				err = common.ErrorClosed
 			}
 		}()
@@ -361,7 +360,7 @@ func (c *Client) runTransmitter(
 		if r := recover(); r != nil {
 			logging.Errorf(
 				"%v runTransmitter(%q) crashed: %v\n", logPrefix, laddr, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 		quitch <- []string{"quit", laddr}
 	}()

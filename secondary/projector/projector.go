@@ -81,11 +81,11 @@ func (p *Projector) SetConfig(config c.Config) {
 	// update loglevel
 	switch p.config["log.level"].String() {
 	case "info":
-		logging.SetLogLevel(logging.LogLevelInfo)
+		logging.SetLogLevel(logging.Info)
 	case "debug":
-		logging.SetLogLevel(logging.LogLevelDebug)
+		logging.SetLogLevel(logging.Debug)
 	case "trace":
-		logging.SetLogLevel(logging.LogLevelTrace)
+		logging.SetLogLevel(logging.Trace)
 	}
 
 	p.config["projector.routerEndpointFactory"] = ef // IMPORTANT: skip override

@@ -11,6 +11,7 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"os"
 	"testing"
@@ -21,8 +22,7 @@ import (
 
 func TestCoordinator(t *testing.T) {
 
-	common.LogEnable()
-	logging.SetLogLevel(logging.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 
 	logging.Infof("Start TestCoordinator *********************************************************")
 

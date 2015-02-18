@@ -3,10 +3,9 @@
 
 package common
 
-import (
-	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
-)
+import "github.com/couchbase/indexing/secondary/logging"
+import "bytes"
+import "fmt"
 
 // TsVb is logical clock for a subset of vbuckets.
 type TsVb struct {
@@ -183,162 +182,55 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 	return other
 }
 
+// Convert into a human readable format
 func (ts *TsVbuuid) String() string {
+	var buf bytes.Buffer
 	vbnos := ts.GetVbnos()
-	s := fmt.Sprintf("bucket: %v, vbuckets: %v -\n",
-		ts.Bucket, len(vbnos))
-	s += fmt.Sprintf("    vbno, vbuuid, seqno, snapshot-start, snapshot-end\n")
+	buf.WriteString(fmt.Sprintf("bucket: %v, vbuckets: %v -\n",
+		ts.Bucket, len(vbnos)))
+	buf.WriteString(fmt.Sprintf("    vbno, vbuuid, seqno, snapshot-start, snapshot-end\n"))
 	for _, v := range vbnos {
 		start, end := ts.Snapshots[v][0], ts.Snapshots[v][1]
-		s += fmt.Sprintf("    {%5d %16x %10d %10d %10d}\n",
-			v, ts.Vbuuids[v], ts.Seqnos[v], start, end)
+		buf.WriteString(fmt.Sprintf("    {%5d %16x %10d %10d %10d}\n",
+			v, ts.Vbuuids[v], ts.Seqnos[v], start, end))
 	}
-	return s
+	return buf.String()
 }
 
-// DebugPrint to log this timestamp using logging.Debugf.
-func (ts *TsVbuuid) DebugPrint() {
+// Convert the difference between two timestamps to human readable format
+func (ts *TsVbuuid) Diff(other *TsVbuuid) string {
 
-	logging.Debugf("TsVbuuid : bucket = %s", ts.Bucket)
-	for i, seqno := range ts.Seqnos {
-		logging.Debugf("TsVbuuid : vb = %d, vbuuid = %d, seqno = %d, snapshot[0] = %d, snapshot[1] = %d",
-			i, ts.Vbuuids[i], seqno, ts.Snapshots[0], ts.Snapshots[1])
+	var buf bytes.Buffer
+	if ts.Equal(other) {
+		buf.WriteString("Timestamps are equal\n")
+		return buf.String()
 	}
+
+	if other == nil {
+		buf.WriteString("This timestamp:\n")
+		buf.WriteString(ts.String())
+		buf.WriteString("Other timestamp is nil\n")
+		return buf.String()
+	}
+
+	if len(other.Seqnos) != len(ts.Seqnos) {
+		logging.Debugf("Two timestamps contain different number of vbuckets\n")
+		buf.WriteString("This timestamp:\n")
+		buf.WriteString(ts.String())
+		buf.WriteString("Other timestamp:\n")
+		buf.WriteString(other.String())
+		return buf.String()
+	}
+
+	for i := range ts.Seqnos {
+		if ts.Seqnos[i] != other.Seqnos[i] || ts.Vbuuids[i] != other.Vbuuids[i] ||
+			ts.Snapshots[i][0] != other.Snapshots[i][0] || ts.Snapshots[i][1] != other.Snapshots[i][1] {
+			buf.WriteString(fmt.Sprintf("This timestamp: bucket %s, vb = %d, vbuuid = %d, seqno = %d, snapshot[0] = %d, snapshot[1] = %d\n",
+				ts.Bucket, i, ts.Vbuuids[i], ts.Seqnos[i], ts.Snapshots[0], ts.Snapshots[1]))
+			buf.WriteString(fmt.Sprintf("Other timestamp: bucket %s, vb = %d, vbuuid = %d, seqno = %d, snapshot[0] = %d, snapshot[1] = %d\n",
+				other.Bucket, i, other.Vbuuids[i], other.Seqnos[i], other.Snapshots[0], other.Snapshots[1]))
+		}
+	}
+
+	return buf.String()
 }
-
-//TODO: As TsVbuuid acts like a array now, the below helper functions are
-//no longer required. These can be deleted, once we are sure these are not
-//going to required.
-
-/*
-// SelectByVbuckets will select vbuckets from `ts` for a subset of `vbuckets`,
-// both `ts` and `vbuckets` are expected to be pre-sorted.
-func (ts *TsVbuuid) SelectByVbuckets(vbuckets []uint16) *TsVbuuid {
-    if ts == nil || vbuckets == nil {
-        return ts
-    }
-
-    maxVbuckets := len(ts.Seqnos)
-    newts := NewTsVbuuid(ts.Bucket, maxVbuckets)
-    if len(ts.Vbnos) == 0 {
-        return newts
-    }
-
-    cache := [maxVbuckets]byte{}
-    for _, vbno := range vbuckets {
-        cache[vbno] = 1
-    }
-    for i, vbno := range ts.Vbnos {
-        if cache[vbno] == 1 {
-            newts.Vbnos = append(newts.Vbnos, vbno)
-            newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
-            newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
-            newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
-        }
-    }
-    return newts
-}
-
-// FilterByVbuckets will exclude `vbuckets` from `ts`, both `ts` and `vbuckets`
-// are expected to be pre-sorted. TODO: Write unit test case.
-func (ts *TsVbuuid) FilterByVbuckets(vbuckets []uint16) *TsVbuuid {
-    if ts == nil || vbuckets == nil {
-        return ts
-    }
-
-    maxVbuckets := len(ts.Seqnos)
-    newts := NewTsVbuuid(ts.Bucket, maxVbuckets)
-    if len(ts.Vbnos) == 0 {
-        return newts
-    }
-
-    cache := [maxVbuckets]byte{}
-    for _, vbno := range vbuckets {
-        cache[vbno] = 1
-    }
-    for i, vbno := range ts.Vbnos {
-        if cache[vbno] == 1 {
-            continue
-        }
-        newts.Vbnos = append(newts.Vbnos, vbno)
-        newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
-        newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
-        newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
-    }
-    return newts
-}
-
-// Union will return a union set of timestamps based on Vbuckets. Duplicate
-// vbucket entries in `other` timestamp will be skipped.
-func (ts *TsVbuuid) Union(other *TsVbuuid) *TsVbuuid {
-    if ts == nil || other == nil {
-        return ts
-    }
-
-    maxVbuckets := len(ts.Seqnos)
-    newts := NewTsVbuuid(ts.Bucket, maxVbuckets)
-
-    // copy from other
-    newts.Vbnos = append(newts.Vbnos, other.Vbnos...)
-    newts.Seqnos = append(newts.Seqnos, other.Seqnos...)
-    newts.Vbuuids = append(newts.Vbuuids, other.Vbuuids...)
-    newts.Snapshots = append(newts.Snapshots, other.Snapshots...)
-
-    cache := [maxVbuckets]byte{}
-    for _, vbno := range other.Vbnos {
-        cache[vbno] = 1
-    }
-
-    // deduplicate this
-    for i, vbno := range ts.Vbnos {
-        if cache[vbno] == 1 {
-            continue
-        }
-        newts.Vbnos = append(newts.Vbnos, vbno)
-        newts.Seqnos = append(newts.Seqnos, ts.Seqnos[i])
-        newts.Vbuuids = append(newts.Vbuuids, ts.Vbuuids[i])
-        newts.Snapshots = append(newts.Snapshots, ts.Snapshots[i])
-    }
-    sort.Sort(newts)
-    return newts
-}
-
-// Unions will return a union set of all timestamps arguments. First vbucket
-// entry from the list of timestamps will be picked and while rest are skipped.
-func (ts *TsVbuuid) Unions(timestamps ...*TsVbuuid) *TsVbuuid {
-    for _, other := range timestamps {
-        ts = ts.Union(other)
-    }
-    return ts
-}
-
-// CompareVbuckets will compare two timestamps for its bucket and vbuckets
-func (ts *TsVbuuid) CompareVbuckets(other *TsVbuuid) bool {
-    if ts == nil || other == nil {
-        return false
-    }
-    sort.Sort(ts)
-    sort.Sort(other)
-    if ts.Bucket != other.Bucket || ts.Len() != other.Len() {
-        return false
-    }
-    for i, vbno := range ts.Vbnos {
-        if vbno != other.Vbnos[i] {
-            return false
-        }
-    }
-    return true
-}
-
-func (ts *TsVbuuid) Less(i, j int) bool {
-    return ts.Vbnos[i] < ts.Vbnos[j]
-}
-
-func (ts *TsVbuuid) Swap(i, j int) {
-    ts.Vbnos[i], ts.Vbnos[j] = ts.Vbnos[j], ts.Vbnos[i]
-    ts.Seqnos[i], ts.Seqnos[j] = ts.Seqnos[j], ts.Seqnos[i]
-    ts.Vbuuids[i], ts.Vbuuids[j] = ts.Vbuuids[j], ts.Vbuuids[i]
-    ts.Snapshots[i], ts.Snapshots[j] = ts.Snapshots[j], ts.Snapshots[i]
-}
-
-*/

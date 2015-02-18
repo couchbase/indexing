@@ -3,7 +3,6 @@ package secondaryindex
 import (
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
@@ -15,7 +14,6 @@ var CheckCollation = false
 
 func RangeWithClient(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	distinct bool, limit int64, client *qc.GsiClient) (tc.ScanResponse, error) {
-	logging.LogIgnore()
 	var scanErr error
 	scanErr = nil
 	defnID, _ := GetDefnID(client, bucketName, indexName)
@@ -56,7 +54,6 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 
 func Range(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	distinct bool, limit int64) (tc.ScanResponse, error) {
-	logging.LogIgnore()
 	var scanErr error
 	scanErr = nil
 	var previousSecKey value.Value
@@ -115,7 +112,6 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 }
 
 func Lookup(indexName, bucketName, server string, values []interface{}, distinct bool, limit int64) (tc.ScanResponse, error) {
-	logging.LogIgnore()
 	var scanErr error
 	scanErr = nil
 	// ToDo: Create a client pool
@@ -157,7 +153,6 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 }
 
 func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse, error) {
-	logging.LogIgnore()
 	var scanErr error
 	scanErr = nil
 	var previousSecKey value.Value
@@ -215,7 +210,6 @@ func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse
 }
 
 func CountRange(indexName, bucketName, server string, low, high []interface{}, inclusion uint32) (int64, error) {
-	logging.LogIgnore()
 	// ToDo: Create a client pool
 	client := CreateClient(server, "2itest")
 	defnID, _ := GetDefnID(client, bucketName, indexName)
@@ -228,7 +222,6 @@ func CountRange(indexName, bucketName, server string, low, high []interface{}, i
 }
 
 func CountLookup(indexName, bucketName, server string, values []interface{}) (int64, error) {
-	logging.LogIgnore()
 	// ToDo: Create a client pool
 	client := CreateClient(server, "2itest")
 	defnID, _ := GetDefnID(client, bucketName, indexName)
@@ -241,7 +234,6 @@ func CountLookup(indexName, bucketName, server string, values []interface{}) (in
 }
 
 func RangeStatistics(indexName, bucketName, server string, low, high []interface{}, inclusion uint32) error {
-	logging.LogIgnore()
 	// ToDo: Create a client pool
 	client := CreateClient(server, "2itest")
 	defnID, _ := GetDefnID(client, bucketName, indexName)

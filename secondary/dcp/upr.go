@@ -2,8 +2,6 @@ package couchbase
 
 import (
 	"errors"
-	"runtime/debug"
-	"strings"
 	"sync"
 
 	"github.com/couchbase/indexing/secondary/dcp/transport"
@@ -190,7 +188,7 @@ func (feed *DcpFeed) genServer(reqch chan []interface{}) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			logging.Errorf("error DcpFeed for %v crashed: %v\n", feed.bucket, r)
-			stackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 
@@ -394,13 +392,6 @@ func failsafeOp(
 		return nil, ErrorClosed
 	}
 	return nil, nil
-}
-
-// stackTrace formats the output of debug.Stack()
-func stackTrace(s string) {
-	for _, line := range strings.Split(s, "\n") {
-		logging.Errorf("%s\n", line)
-	}
 }
 
 // opError suppliments FailsafeOp used by gen-servers.

@@ -5,15 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"runtime/debug"
 	"strings"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dcp"
 	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 var options struct {
@@ -53,11 +52,11 @@ func argParse() string {
 
 	options.buckets = strings.Split(buckets, ",")
 	if options.debug {
-		logging.SetLogLevel(logging.LogLevelDebug)
+		logging.SetLogLevel(logging.Debug)
 	} else if options.trace {
-		logging.SetLogLevel(logging.LogLevelTrace)
+		logging.SetLogLevel(logging.Trace)
 	} else {
-		logging.SetLogLevel(logging.LogLevelInfo)
+		logging.SetLogLevel(logging.Info)
 	}
 
 	args := flag.Args()
@@ -85,8 +84,8 @@ func main() {
 func startBucket(cluster, bucketn string, rch chan []interface{}) int {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("%s:\n%s\n", r, debug.Stack())
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("Recovered from panic %v", r)
+			logging.Errorf(logging.StackTrace())
 		}
 	}()
 

@@ -80,7 +80,7 @@ type gsiKeyspace struct {
 func NewGSIIndexer(
 	clusterURL, namespace, keyspace string) (datastore.Indexer, errors.Error) {
 
-	l.SetLogLevel(l.LogLevelTrace)
+	l.SetLogLevel(l.Trace)
 
 	gsi := &gsiKeyspace{
 		clusterURL:     clusterURL,

@@ -11,6 +11,7 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
@@ -47,8 +48,7 @@ var delete_test_once sync.Once
 
 func TestStreamMgr_Delete(t *testing.T) {
 
-	common.LogEnable()
-	logging.SetLogLevel(logging.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 	util.TT = t
 
 	old_value := manager.NUM_VB

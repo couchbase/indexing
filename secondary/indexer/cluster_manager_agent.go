@@ -15,7 +15,6 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"net"
-	"runtime/debug"
 )
 
 //ClustMgrAgent provides the mechanism to talk to Index Coordinator
@@ -292,7 +291,7 @@ func (c *clustMgrAgent) panicHandler() {
 		}
 
 		logging.Fatalf("ClusterMgrAgent Panic Err %v", err)
-		logging.StackTrace(string(debug.Stack()))
+		logging.Fatalf("%s", logging.StackTrace())
 
 		//panic, propagate to supervisor
 		msg := &MsgError{

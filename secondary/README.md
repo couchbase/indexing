@@ -26,10 +26,8 @@ Projector can be started with below command line options:
     bin > ./projector
     Usage : ./projector [OPTIONS] <cluster-addr> 
       -adminport="localhost:9999": adminport address
-      -debug=false: enable debug level logging
-      -info=false: enable info level logging
+      -loglevel=debug: choose logging level
       -kvaddrs="127.0.0.1:12000": comma separated list of kvaddrs
-      -trace=false: enable trace level logging
       
 E.g. projector can be started in trace mode against Couchbase server running with 
 cluster_run mode with the command:
@@ -47,7 +45,7 @@ Projector can be started with below command line options:
 
     bin > ./indexer -h
     Usage of ./indexer:
-      -log=1: Log Level - 1(Info), 2(Debug), 3(Trace)
+      -loglevel=info|debug|trace
       -projector="http://localhost:9999": Projector Admin Port Address
       -vbuckets=1024: Number of vbuckets configured in Couchbase
     

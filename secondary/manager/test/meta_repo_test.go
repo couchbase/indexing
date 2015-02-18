@@ -12,6 +12,7 @@ package test
 import (
 	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	fdb "github.com/couchbaselabs/goforestdb"
 	"os"
@@ -23,8 +24,7 @@ import (
 
 func TestMetadataRepoForIndexDefn(t *testing.T) {
 
-	common.LogEnable()
-	logging.SetLogLevel(logging.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 
 	gometaL.LogEnable()
 	gometaL.SetLogLevel(gometaL.LogLevelTrace)

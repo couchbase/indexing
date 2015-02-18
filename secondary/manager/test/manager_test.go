@@ -11,6 +11,7 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
@@ -22,8 +23,7 @@ import (
 // For this test, use Index Defn Id from 100 - 110
 func TestIndexManager(t *testing.T) {
 
-	common.LogEnable()
-	logging.SetLogLevel(logging.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 	os.MkdirAll("./data/", os.ModePerm)
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)

@@ -3,7 +3,6 @@ package querycmd
 import "encoding/json"
 import "flag"
 import "fmt"
-import "log"
 import "io"
 import "strings"
 import "errors"
@@ -54,9 +53,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	var fields, bindexes string
 	var inclusion uint
 	var equal, low, high string
-	var trace bool
-	var debug bool
-	var info bool
+	var loglevel string
 
 	cmdOptions := &Command{}
 	fset := flag.NewFlagSet("cmd", flag.ExitOnError)
@@ -84,9 +81,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.UintVar(&inclusion, "incl", 0, "Range: 0|1|2|3")
 	fset.Int64Var(&cmdOptions.Limit, "limit", 10, "Row limit")
 	// logging ...
-	fset.BoolVar(&trace, "trace", false, "log in trace mode")
-	fset.BoolVar(&debug, "debug", false, "log in debug mode")
-	fset.BoolVar(&info, "info", false, "log in info mode")
+	fset.StringVar(&loglevel, "loglevel", "Info", "Log level (debug|trace|info)")
 	fset.BoolVar(&cmdOptions.Help, "h", false, "print help")
 
 	if err := fset.Parse(arguments); err != nil {
@@ -94,13 +89,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	}
 
 	// deal with logging
-	if debug {
-		logging.SetLogLevel(logging.LogLevelDebug)
-	} else if trace {
-		logging.SetLogLevel(logging.LogLevelTrace)
-	} else if info {
-		logging.SetLogLevel(logging.LogLevelInfo)
-	}
+	logging.SetLogLevel(logging.Level(loglevel))
 
 	// bindexes
 	if len(bindexes) > 0 {
@@ -131,7 +120,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	if len(cmdOptions.With) > 0 {
 		err := json.Unmarshal([]byte(cmdOptions.With), &cmdOptions.WithPlan)
 		if err != nil {
-			log.Fatal(err)
+			logging.Fatalf("%v\n", err)
 		}
 	}
 
@@ -140,7 +129,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 		up := strings.Split(cmdOptions.Auth, ":")
 		_, err := cbauth.InternalRetryDefaultInit(cmdOptions.Server, up[0], up[1])
 		if err != nil {
-			log.Fatalf("Failed to initialize cbauth: %s", err)
+			logging.Fatalf("Failed to initialize cbauth: %s\n", err)
 		}
 	}
 
@@ -181,7 +170,7 @@ func HandleCommand(
 		fmt.Fprintln(w, "List of nodes:")
 		nodes, err := client.Nodes()
 		if err != nil {
-			log.Fatal(err)
+			logging.Fatalf("%v\n", err)
 		}
 		for adminport, queryport := range nodes {
 			fmt.Fprintf(w, "    {%v, %v}\n", adminport, queryport)
@@ -363,7 +352,7 @@ func GetDefnID(
 
 	indexes, err := client.Refresh()
 	if err != nil {
-		log.Fatal(err)
+		logging.Fatalf("%v\n", err)
 	}
 	for _, index := range indexes {
 		defn := index.Definition
@@ -416,7 +405,7 @@ func WaitUntilIndexState(
 func Arg2Key(arg []byte) []interface{} {
 	var key []interface{}
 	if err := json.Unmarshal(arg, &key); err != nil {
-		log.Fatal(err)
+		logging.Fatalf("%v\n", err)
 	}
 	return key
 }

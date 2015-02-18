@@ -18,7 +18,6 @@ package projector
 
 import "fmt"
 import "strconv"
-import "runtime/debug"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
@@ -151,7 +150,7 @@ func (kvdata *KVData) runScatter(
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v runScatter() crashed: %v\n", kvdata.logPrefix, r)
-			logging.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 		kvdata.publishStreamEnd()
 		kvdata.feed.PostFinKVdata(kvdata.bucket)
