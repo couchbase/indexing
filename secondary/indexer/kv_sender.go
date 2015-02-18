@@ -712,7 +712,7 @@ func sendShutdownTopic(ap *projClient.Client,
 
 	if err := ap.ShutdownTopic(topic); err != nil {
 		logging.Fatalf("KVSender::sendShutdownTopic \n\tUnexpected Error During "+
-			"Shutdown Projector %v Topic %v. Err %v", topic, err)
+			"Shutdown Projector %v Topic %v. Err %v", ap, topic, err)
 
 		return err
 	} else {

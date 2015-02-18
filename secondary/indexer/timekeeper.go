@@ -1416,7 +1416,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 func (tk *timekeeper) sendNewStabilityTS(ts *common.TsVbuuid, bucket string,
 	streamId common.StreamId) {
 
-	logging.Debugf("Timekeeper::sendNewStabilityTS \n\tBucket: %v "+
+	logging.Tracef("Timekeeper::sendNewStabilityTS \n\tBucket: %v "+
 		"Stream: %v TS: %v", bucket, streamId, ts)
 
 	tk.supvRespch <- &MsgTKStabilityTS{ts: ts,

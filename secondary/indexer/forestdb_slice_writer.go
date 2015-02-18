@@ -514,7 +514,7 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	}
 
 	logging.Debugf("ForestDBSlice::OpenSnapshot \n\tSliceId %v IndexInstId %v Creating New "+
-		"Snapshot %v committed:%v", fdb.id, fdb.idxInstId, s, s.committed)
+		"Snapshot %v committed:%v", fdb.id, fdb.idxInstId, snapInfo, s.committed)
 	err := s.Open()
 
 	return s, err
