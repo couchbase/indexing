@@ -13,8 +13,8 @@ import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import "github.com/couchbaselabs/query/expression"
-import "github.com/couchbaselabs/query/parser/n1ql"
+import "github.com/couchbase/query/expression"
+import "github.com/couchbase/query/parser/n1ql"
 
 // Command object containing parsed result from command-line
 // or program constructued list of args.

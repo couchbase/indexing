@@ -5,8 +5,8 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	"github.com/couchbaselabs/query/expression"
-	"github.com/couchbaselabs/query/parser/n1ql"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/parser/n1ql"
 	"time"
 )
 
