@@ -633,6 +633,14 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 	}
 
 	if commit {
+
+		metaDbInfo, err := fdb.meta.Info()
+		if err != nil {
+			return nil, err
+		}
+		//the next meta seqno after this update
+		newSnapshotInfo.MetaSeq = metaDbInfo.LastSeqNum() + 1
+
 		infos, err := fdb.getSnapshotsMeta()
 		if err != nil {
 			return nil, err
@@ -648,12 +656,6 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 		if err != nil {
 			return nil, err
 		}
-
-		metaDbInfo, err := fdb.meta.Info()
-		if err != nil {
-			return nil, err
-		}
-		newSnapshotInfo.MetaSeq = metaDbInfo.LastSeqNum()
 
 		// Commit database file
 		start := time.Now()
