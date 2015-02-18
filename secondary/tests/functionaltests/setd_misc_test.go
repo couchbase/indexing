@@ -24,7 +24,7 @@ var proddir, bagdir string
 // 2) query for old index after loading bucket
 // 3) create new indexes and query
 // 4) list indexes: should list only new indexes
-func TestBucketDefaultDelete(t *testing.T) {
+func SkipTestBucketDefaultDelete(t *testing.T) {
 	fmt.Println("In TestBucketDefaultDelete()")
 	fmt.Println("SKIPPING ....")
 	return
@@ -63,7 +63,7 @@ func TestBucketDefaultDelete(t *testing.T) {
 	// todo: list the index and confirm there is only index created
 }
 
-func TestMixedDatatypesScanAll(t *testing.T) {
+func SkipTestMixedDatatypesScanAll(t *testing.T) {
 	fmt.Println("In TestMixedDatatypesScanAll()")
 	
 	field := "md_street"
@@ -89,7 +89,7 @@ func TestMixedDatatypesScanAll(t *testing.T) {
 	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
 }
 
-func TestMixedDatatypesRange_Float(t *testing.T) {
+func SkipTestMixedDatatypesRange_Float(t *testing.T) {
 	fmt.Println("In TestMixedDatatypesRange_Float()")
 	
 	field := "mixed_field"
@@ -121,7 +121,7 @@ func TestMixedDatatypesRange_Float(t *testing.T) {
 	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
 }
 
-func TestMixedDatatypesRange_String(t *testing.T) {
+func SkipTestMixedDatatypesRange_String(t *testing.T) {
 	fmt.Println("In TestMixedDatatypesRange_String()")
 	
 	field := "mixed_field"
@@ -147,7 +147,7 @@ func TestMixedDatatypesRange_String(t *testing.T) {
 	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
 }
 
-func TestMixedDatatypesRange_Json(t *testing.T) {
+func SkipTestMixedDatatypesRange_Json(t *testing.T) {
 	fmt.Println("In TestMixedDatatypesRange_Json()")
 	
 	field := "mixed_field"
@@ -182,7 +182,7 @@ func TestMixedDatatypesRange_Json(t *testing.T) {
 	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
 }
 
-func TestMixedDatatypesScan_Bool(t *testing.T) {
+func SkipTestMixedDatatypesScan_Bool(t *testing.T) {
 	fmt.Println("In TestMixedDatatypesScan_Bool()")
 	
 	field := "mixed_field"
