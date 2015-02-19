@@ -226,7 +226,7 @@ func (ss *StreamState) computeRestartTs(streamId common.StreamId,
 
 	var restartTs *common.TsVbuuid
 
-	if _, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok {
+	if fts, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && fts != nil {
 		restartTs = ss.streamBucketLastFlushedTsMap[streamId][bucket].Copy()
 	} else if ts, ok := ss.streamBucketRestartTsMap[streamId][bucket]; ok && ts != nil {
 		//if no flush has been done yet, use restart TS
