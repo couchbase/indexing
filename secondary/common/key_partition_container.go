@@ -10,8 +10,8 @@
 package common
 
 import (
-	"hash/crc32"
 	"github.com/couchbase/indexing/secondary/logging"
+	"hash/crc32"
 )
 
 //KeyPartitionDefn defines a key based partition in terms of topology

@@ -39,6 +39,8 @@ type Feed struct {
 	reqch  chan []interface{}
 	backch chan []interface{}
 	finch  chan bool
+	// book-keeping for stale-ness
+	stale int
 
 	// config params
 	maxVbuckets int
@@ -102,6 +104,7 @@ const (
 	fCmdAddInstances
 	fCmdDelInstances
 	fCmdRepairEndpoints
+	fCmdStaleCheck
 	fCmdShutdown
 	fCmdGetTopicResponse
 	fCmdGetStatistics
@@ -198,6 +201,19 @@ func (feed *Feed) RepairEndpoints(req *protobuf.RepairEndpointsRequest) error {
 	cmd := []interface{}{fCmdRepairEndpoints, req, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
+}
+
+// StaleCheck will check for feed sanity and return "exit" if feed
+// has was already stale and still stale.
+// Synchronous call.
+func (feed *Feed) StaleCheck() (string, error) {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdStaleCheck, respch}
+	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	if err != nil {
+		return "exit", err
+	}
+	return resp[0].(string), nil
 }
 
 // GetTopicResponse for this feed.
@@ -315,7 +331,16 @@ loop:
 	for {
 		select {
 		case msg = <-feed.reqch:
-			if feed.handleCommand(msg) {
+			switch feed.handleCommand(msg) {
+			case "ok":
+				feed.stale = 0
+			case "stale":
+				if feed.stale == 1 { // already gone stale.
+					logging.Warnf("%v collect stale...", feed.logPrefix)
+					break loop
+				}
+				feed.stale++
+			case "exit":
 				break loop
 			}
 
@@ -324,10 +349,12 @@ loop:
 				reqTs, ok := feed.reqTss[v.bucket]
 				seqno, vbuuid, sStart, sEnd, err := reqTs.Get(v.vbno)
 				if err != nil {
-					logging.Errorf("%v unexpected %T for %v\n", feed.logPrefix, v, v)
+					logging.Errorf(
+						"%v unexpected %T for %v\n", feed.logPrefix, v, v)
 
 				} else if ok {
-					logging.Debugf("%v back channel flush %v\n", feed.logPrefix, v.Repr())
+					logging.Debugf(
+						"%v back channel flush %v\n", feed.logPrefix, v.Repr())
 					reqTs = reqTs.FilterByVbuckets([]uint16{v.vbno})
 					feed.reqTss[v.bucket] = reqTs
 
@@ -342,7 +369,8 @@ loop:
 				}
 
 			} else if v, ok := msg[0].(*controlStreamEnd); ok {
-				logging.Debugf("%v back channel flush %v\n", feed.logPrefix, v.Repr())
+				logging.Debugf(
+					"%v back channel flush %v\n", feed.logPrefix, v.Repr())
 				reqTs := feed.reqTss[v.bucket]
 				reqTs = reqTs.FilterByVbuckets([]uint16{v.vbno})
 				feed.reqTss[v.bucket] = reqTs
@@ -358,13 +386,14 @@ loop:
 			} else if v, ok := msg[0].(*controlFinKVData); ok {
 				actTs, ok := feed.actTss[v.bucket]
 				if ok && actTs != nil && actTs.Len() == 0 { // bucket is done
-					prefix := feed.logPrefix
-					logging.Debugf("%v self deleting bucket %v\n", prefix, v.bucket)
+					fmsg := "%v self deleting bucket %v\n"
+					logging.Debugf(fmsg, feed.logPrefix, v.bucket)
 					feed.cleanupBucket(v.bucket, false)
 				}
 
 			} else {
-				logging.Errorf("%v back channel flush %T\n", feed.logPrefix, msg[0])
+				logging.Errorf(
+					"%v back channel flush %T\n", feed.logPrefix, msg[0])
 			}
 
 		case <-timeout:
@@ -374,10 +403,14 @@ loop:
 			}
 		}
 	}
+	timeout = nil
 }
 
-func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
-	exit = false
+// "ok"    - command handled.
+// "stale" - feed has gone stale.
+// "exit"  - feed was already stale, so exit feed.
+func (feed *Feed) handleCommand(msg []interface{}) (status string) {
+	status = "ok"
 
 	switch cmd := msg[0].(byte); cmd {
 	case fCmdStart:
@@ -426,6 +459,12 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 		respch := msg[2].(chan []interface{})
 		respch <- []interface{}{feed.repairEndpoints(req)}
 
+	case fCmdStaleCheck:
+		respch := msg[1].(chan []interface{})
+		what := feed.staleCheck()
+		status = what
+		respch <- []interface{}{what}
+
 	case fCmdGetTopicResponse:
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.topicResponse()}
@@ -442,10 +481,10 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 	case fCmdShutdown:
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.shutdown()}
-		exit = true
+		status = "exit"
 
 	}
-	return exit
+	return status
 }
 
 // start a new feed.
@@ -838,6 +877,21 @@ func (feed *Feed) repairEndpoints(
 	return nil
 }
 
+// return,
+// "ok", feed is active.
+// "stale", feed is stale.
+func (feed *Feed) staleCheck() string {
+	raddrs := []string{}
+	for raddr, endpoint := range feed.endpoints {
+		if endpoint.Ping() {
+			return "ok" // feed active
+		}
+		raddrs = append(raddrs, raddr)
+	}
+	logging.Warnf("%v marking stale ... %v", feed.logPrefix, raddrs)
+	return "stale"
+}
+
 func (feed *Feed) getStatistics() c.Statistics {
 	stats, _ := c.NewStatistics(nil)
 	stats.Set("topic", feed.topic)
@@ -863,11 +917,9 @@ func (feed *Feed) setConfig(config c.Config) {
 	feed.epFactory = epf
 	logging.Infof("%v updated configuration ...\n", feed.logPrefix)
 	logging.Infof(
-		"%v feedWaitStreamReqTimeout : %v*1000\n",
-		feed.logPrefix, feed.reqTimeout)
+		"%v feedWaitStreamReqTimeout : %v\n", feed.logPrefix, feed.reqTimeout)
 	logging.Infof(
-		"%v feedWaitStreamEndTimeout : %v*1000\n",
-		feed.logPrefix, feed.endTimeout)
+		"%v feedWaitStreamEndTimeout : %v\n", feed.logPrefix, feed.endTimeout)
 	for _, kvdata := range feed.kvdata {
 		kvdata.SetConfig(pconf)
 	}

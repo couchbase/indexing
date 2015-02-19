@@ -115,6 +115,12 @@ var SystemConfig = Config{
 		"timeout, in milliseconds, for sending periodic Sync messages.",
 		500,
 	},
+	"projector.watchInterval": ConfigValue{
+		5 * 60 * 1000, // 5 minutes
+		"periodic tick, in milli-seconds to check for stale feeds, " +
+			"a feed is considered stale when all its endpoint go stale.",
+		5 * 60 * 1000,
+	},
 	// projector adminport parameters
 	"projector.adminport.name": ConfigValue{
 		"projector.adminport",

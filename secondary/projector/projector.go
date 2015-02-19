@@ -53,6 +53,7 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
 
 	go p.mainAdminPort(reqch)
+	go p.watcherDameon(p.config["projector.watchInterval"].Int())
 	logging.Infof("%v started ...\n", p.logPrefix)
 	return p
 }
@@ -527,6 +528,8 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 // return list of active topics
 func (p *Projector) listTopics() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	topics := make([]string, 0, len(p.topics))
 	for topic := range p.topics {
 		topics = append(topics, topic)

@@ -147,6 +147,7 @@ func (kvdata *KVData) Close() error {
 func (kvdata *KVData) runScatter(
 	ts *protobuf.TsVbuuid, mutch <-chan *mc.DcpEvent) {
 
+	// NOTE: panic will bubble up from vbucket-routine to kvdata.
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v runScatter() crashed: %v\n", kvdata.logPrefix, r)
@@ -196,7 +197,10 @@ loop:
 				}
 				if kvdata.engines != nil || kvdata.endpoints != nil {
 					for _, vr := range kvdata.vrs {
-						vr.AddEngines(kvdata.engines, kvdata.endpoints)
+						err := vr.AddEngines(kvdata.engines, kvdata.endpoints)
+						if err != nil {
+							panic(err)
+						}
 					}
 				}
 				addCount++
@@ -206,7 +210,9 @@ loop:
 				engineKeys := msg[1].([]uint64)
 				respch := msg[2].(chan []interface{})
 				for _, vr := range kvdata.vrs {
-					vr.DeleteEngines(engineKeys)
+					if err := vr.DeleteEngines(engineKeys); err != nil {
+						panic(err)
+					}
 				}
 				for _, engineKey := range engineKeys {
 					delete(kvdata.engines, engineKey)
@@ -229,7 +235,11 @@ loop:
 				stats.Set("tsCount", float64(tsCount))
 				statVbuckets := make(map[string]interface{})
 				for i, vr := range kvdata.vrs {
-					statVbuckets[strconv.Itoa(int(i))] = vr.GetStatistics()
+					stats, err := vr.GetStatistics()
+					if err != nil {
+						panic(err)
+					}
+					statVbuckets[strconv.Itoa(int(i))] = stats
 				}
 				stats.Set("vbuckets", statVbuckets)
 				respch <- []interface{}{map[string]interface{}(stats)}
@@ -238,7 +248,9 @@ loop:
 				config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
 				kvdata.config = config
 				for _, vr := range kvdata.vrs {
-					vr.SetConfig(config)
+					if err := vr.SetConfig(config); err != nil {
+						panic(err)
+					}
 				}
 				respch <- []interface{}{nil}
 
@@ -279,15 +291,20 @@ func (kvdata *KVData) scatterMutation(
 			cluster, config := kvdata.feed.cluster, kvdata.config
 			vr := NewVbucketRoutine(
 				cluster, topic, bucket, vbno, m.VBuuid, m.Seqno, config)
-			vr.AddEngines(kvdata.engines, kvdata.endpoints)
-			vr.Event(m)
+			if vr.AddEngines(kvdata.engines, kvdata.endpoints) != nil {
+				panic(err)
+			}
+			if vr.Event(m) != nil {
+				panic(err)
+			}
 			kvdata.vrs[vbno] = vr
 		}
 		kvdata.feed.PostStreamRequest(kvdata.bucket, m)
 
 	case mcd.DCP_STREAMEND:
 		if vr, ok := kvdata.vrs[vbno]; !ok {
-			logging.Errorf("%v duplicate OpStreamEnd for %v\n", kvdata.logPrefix, vbno)
+			logging.Errorf(
+				"%v duplicate OpStreamEnd for %v\n", kvdata.logPrefix, vbno)
 
 		} else if m.Status != mcd.SUCCESS {
 			format := "%v StreamEnd Status: %s, %v\n"
@@ -295,14 +312,19 @@ func (kvdata *KVData) scatterMutation(
 
 		} else {
 			logging.Tracef("%v StreamEnd {%v}\n", kvdata.logPrefix, vbno)
-			vr.Event(m)
+			if vr.Event(m) != nil {
+				panic(err)
+			}
 			delete(kvdata.vrs, vbno)
 		}
 		kvdata.feed.PostStreamEnd(kvdata.bucket, m)
 
-	case mcd.DCP_MUTATION, mcd.DCP_DELETION, mcd.DCP_SNAPSHOT, mcd.DCP_EXPIRATION:
+	case mcd.DCP_MUTATION, mcd.DCP_DELETION,
+		mcd.DCP_SNAPSHOT, mcd.DCP_EXPIRATION:
 		if vr, ok := kvdata.vrs[vbno]; ok {
-			vr.Event(m)
+			if vr.Event(m) != nil {
+				panic(err)
+			}
 
 		} else {
 			logging.Errorf("%v unknown vbucket %v\n", kvdata.logPrefix, vbno)
@@ -311,7 +333,7 @@ func (kvdata *KVData) scatterMutation(
 	return
 }
 
-func (kvdata *KVData) publishStreamEnd() {
+func (kvdata *KVData) publishStreamEnd() error {
 	for _, vr := range kvdata.vrs {
 		m := &mc.DcpEvent{
 			Opcode:  mcd.DCP_STREAMEND,
@@ -321,6 +343,7 @@ func (kvdata *KVData) publishStreamEnd() {
 		kvdata.feed.PostStreamEnd(kvdata.bucket, m)
 		vr.Event(m)
 	}
+	return nil
 }
 
 func (kvdata *KVData) newStats() c.Statistics {

@@ -102,11 +102,14 @@ func (vr *VbucketRoutine) DeleteEngines(engines []uint64) error {
 
 // GetStatistics for vr vbucket
 // synchronous call.
-func (vr *VbucketRoutine) GetStatistics() map[string]interface{} {
+func (vr *VbucketRoutine) GetStatistics() (map[string]interface{}, error) {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vrCmdGetStatistics, respch}
-	resp, _ := c.FailsafeOp(vr.reqch, respch, cmd, vr.finch)
-	return resp[0].(map[string]interface{})
+	resp, err := c.FailsafeOp(vr.reqch, respch, cmd, vr.finch)
+	if err != nil {
+		return nil, err
+	}
+	return resp[0].(map[string]interface{}), nil
 }
 
 // SetConfig for vbucket-routine.
