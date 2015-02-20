@@ -1833,7 +1833,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				default:
 					//log and retry for all other responses
 					logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v \n\t"+
-						"Error from Projector %v", resp)
+						"Error from Projector %v", streamId, bucket, resp)
 				}
 			}
 		}
