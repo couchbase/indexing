@@ -185,11 +185,13 @@ func (s *Server) addUuids(started, hostUuids keeper) keeper {
 func (s *Server) delUuids(finished, hostUuids keeper) keeper {
 	for x := range finished {
 		avb, ok := hostUuids[x]
-		if !ok {
+		if ok {
+			delete(hostUuids, x)
+			logging.Debugf("%v deleted vbucket %v\n", s.logPrefix, avb.id())
+
+		} else {
 			logging.Errorf("%v not active vbucket %#v\n", s.logPrefix, avb)
 		}
-		delete(hostUuids, x)
-		logging.Debugf("%v deleted vbucket %v\n", s.logPrefix, avb.id())
 	}
 	return hostUuids
 }
