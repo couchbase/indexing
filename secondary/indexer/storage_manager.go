@@ -186,6 +186,13 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	numVbuckets := s.config["numVbuckets"].Int()
 	var needsCommit bool = tsVbuuid.IsPersisted()
 
+	if s.needSnapshot(streamId, bucket, tsVbuuid.IsPersisted()) {
+		logging.Debugf("StorageMgr::handleCreateSnapshot \n\tSkip Snapshot For %v "+
+			"%v Persisted %v", streamId, bucket, tsVbuuid.IsPersisted())
+		s.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range s.indexPartnMap {
 		idxInst := s.indexInstMap[idxInstId]
@@ -220,7 +227,6 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 					//if flush timestamp is greater than last
 					//snapshot timestamp, create a new snapshot
-
 					snapTs := NewTimestamp(numVbuckets)
 					if latestSnapshot != nil {
 						snapTsVbuuid := latestSnapshot.Timestamp()
@@ -719,4 +725,25 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 			s.indexSnapMap[idxInstId] = is
 		}
 	}
+}
+
+func (s *storageMgr) needSnapshot(streamId common.StreamId, bucket string,
+	isPersisted bool) bool {
+
+	//skip in-memory snapshots for INIT_STREAM
+	if streamId == common.INIT_STREAM && !isPersisted {
+		return false
+	}
+
+	//skip in-memory snapshots if Initial state index is present
+	//in MAINT_STREAM
+	if streamId == common.MAINT_STREAM && !isPersisted {
+		for _, inst := range s.indexInstMap {
+			if inst.Defn.Bucket == bucket &&
+				inst.State == common.INDEX_STATE_INITIAL {
+				return false
+			}
+		}
+	}
+	return true
 }
