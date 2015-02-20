@@ -167,7 +167,8 @@ func (v VbStatus) String() string {
 }
 
 type MetaUpdateFields struct {
-	state  bool
-	stream bool
-	err    bool
+	state   bool
+	stream  bool
+	err     bool
+	buildTs bool
 }

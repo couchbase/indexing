@@ -703,7 +703,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
 			if idx.enableManager {
 				idx.bulkUpdateError(instIdList, errStr)
-				if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true); err != nil {
+				if err := idx.updateMetaInfoForIndexList(instIdList, false,
+					false, true, false); err != nil {
 					common.CrashOnError(err)
 				}
 				delete(bucketIndexList, bucket)
@@ -718,6 +719,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		} else {
 			idx.bucketBuildTs[bucket] = buildTs
+			idx.bulkUpdateBuildTs(instIdList, buildTs)
 		}
 
 		//if there is already an index for this bucket in MAINT_STREAM,
@@ -769,7 +771,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		//store updated state and streamId in meta store
 		if idx.enableManager {
-			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false); err != nil {
+			if err := idx.updateMetaInfoForIndexList(instIdList, true,
+				true, false, true); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -1146,7 +1149,7 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	}
 
 	if idx.enableManager {
-		if err := idx.updateMetaInfoForIndexList(instIdList, true, false, false); err != nil {
+		if err := idx.updateMetaInfoForIndexList(instIdList, true, false, false, false); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -1695,7 +1698,7 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
 			errStr := fmt.Sprintf("Build Already In Progress. Bucket %v", bucket)
 			if idx.enableManager {
 				idx.bulkUpdateError(instIdList, errStr)
-				if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true); err != nil {
+				if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true, false); err != nil {
 					common.CrashOnError(err)
 				}
 			} else if respCh != nil {
@@ -1758,7 +1761,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -2734,7 +2737,7 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 
 	if len(instIdList) != 0 {
 		return idx.updateMetaInfoForIndexList(instIdList, updateState,
-			updateStream, updateError)
+			updateStream, updateError, false)
 	} else {
 		return nil
 	}
@@ -2742,7 +2745,7 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 }
 
 func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
-	updateState bool, updateStream bool, updateError bool) error {
+	updateState bool, updateStream bool, updateError bool, updateBuildTs bool) error {
 
 	var indexList []common.IndexInst
 	for _, instId := range instIdList {
@@ -2750,9 +2753,10 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 	}
 
 	updatedFields := MetaUpdateFields{
-		state:  updateState,
-		stream: updateStream,
-		err:    updateError,
+		state:   updateState,
+		stream:  updateStream,
+		err:     updateError,
+		buildTs: updateBuildTs,
 	}
 
 	msg := &MsgClustMgrUpdate{
@@ -2830,6 +2834,18 @@ func (idx *indexer) bulkUpdateStream(instIdList []common.IndexInstId,
 	}
 }
 
+func (idx *indexer) bulkUpdateBuildTs(instIdList []common.IndexInstId,
+	buildTs Timestamp) {
+
+	for _, instId := range instIdList {
+		idxInst := idx.indexInstMap[instId]
+		for i, ts := range buildTs {
+			idxInst.BuildTs[i] = uint64(ts)
+		}
+		idx.indexInstMap[instId] = idxInst
+	}
+}
+
 func (idx *indexer) checkBucketInRecovery(bucket string,
 	instIdList []common.IndexInstId, clientCh MsgChannel) bool {
 
@@ -2839,7 +2855,8 @@ func (idx *indexer) checkBucketInRecovery(bucket string,
 		if idx.enableManager {
 			errStr := fmt.Sprintf("Bucket %v In Recovery", bucket)
 			idx.bulkUpdateError(instIdList, errStr)
-			if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true); err != nil {
+			if err := idx.updateMetaInfoForIndexList(instIdList, false,
+				false, true, false); err != nil {
 				common.CrashOnError(err)
 			}
 		} else if clientCh != nil {
@@ -2863,7 +2880,8 @@ func (idx *indexer) checkValidIndexInst(bucket string,
 			if idx.enableManager {
 				errStr := fmt.Sprintf("Unknown Index Instance %v In Build Request", instId)
 				idx.bulkUpdateError(instIdList, errStr)
-				if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true); err != nil {
+				if err := idx.updateMetaInfoForIndexList(instIdList, false,
+					false, true, false); err != nil {
 					common.CrashOnError(err)
 				}
 			} else if clientCh != nil {
@@ -2904,7 +2922,8 @@ func (idx *indexer) checkBucketExists(bucket string,
 		if idx.enableManager {
 			errStr := fmt.Sprintf("Unknown Bucket %v In Build Request", bucket)
 			idx.bulkUpdateError(instIdList, errStr)
-			if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true); err != nil {
+			if err := idx.updateMetaInfoForIndexList(instIdList, false,
+				false, true, false); err != nil {
 				common.CrashOnError(err)
 			}
 		} else if clientCh != nil {
