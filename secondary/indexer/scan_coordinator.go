@@ -1051,6 +1051,11 @@ func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, erro
 	s.supvMsgch <- snapReqMsg
 	msg := <-snapResch
 
+	// Index snapshot is not available yet (non-active index or empty index)
+	if msg == nil {
+		return 0, nil
+	}
+
 	var is IndexSnapshot
 
 	switch msg.(type) {
