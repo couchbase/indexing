@@ -15,6 +15,7 @@ func usage(fset *flag.FlagSet) {
 }
 
 func main() {
+	logging.SetLogLevel(logging.Warn)
 	cmdOptions, _, fset, err := querycmd.ParseArgs(os.Args[1:])
 	if err != nil {
 		logging.Fatalf("%v\n", err)
