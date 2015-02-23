@@ -346,6 +346,7 @@ func printIndexInfo(w io.Writer, index *mclient.IndexMetadata) {
 	}
 }
 
+// GetDefnID for bucket/indexName.
 func GetDefnID(
 	client *qclient.GsiClient,
 	bucket, indexName string) (defnID uint64, ok bool) {
@@ -402,6 +403,7 @@ func WaitUntilIndexState(
 // local functions
 //----------------
 
+// Arg2Key convert JSON string to golang-native.
 func Arg2Key(arg []byte) []interface{} {
 	var key []interface{}
 	if err := json.Unmarshal(arg, &key); err != nil {
