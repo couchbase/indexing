@@ -53,7 +53,6 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	var fields, bindexes string
 	var inclusion uint
 	var equal, low, high string
-	var loglevel string
 
 	cmdOptions := &Command{}
 	fset := flag.NewFlagSet("cmd", flag.ExitOnError)
@@ -80,16 +79,11 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&equal, "equal", "", "Span.Lookup: [key]")
 	fset.UintVar(&inclusion, "incl", 0, "Range: 0|1|2|3")
 	fset.Int64Var(&cmdOptions.Limit, "limit", 10, "Row limit")
-	// logging ...
-	fset.StringVar(&loglevel, "loglevel", "Info", "Log level (debug|trace|info)")
 	fset.BoolVar(&cmdOptions.Help, "h", false, "print help")
 
 	if err := fset.Parse(arguments); err != nil {
 		return nil, nil, fset, err
 	}
-
-	// deal with logging
-	logging.SetLogLevel(logging.Level(loglevel))
 
 	// bindexes
 	if len(bindexes) > 0 {
