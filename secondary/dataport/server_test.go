@@ -9,7 +9,7 @@ import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 
 func TestTimeout(t *testing.T) {
-	logging.SetLogLevel(logging.Debug)
+	logging.SetLogLevel(logging.Silent)
 
 	raddr := "localhost:8888"
 	maxBuckets, maxvbuckets, mutChanSize := 2, 4, 100
@@ -104,7 +104,7 @@ func TestTimeout(t *testing.T) {
 }
 
 func TestLoopback(t *testing.T) {
-	logging.SetLogLevel(logging.Debug)
+	logging.SetLogLevel(logging.Silent)
 
 	raddr := "localhost:8888"
 	maxBuckets, maxvbuckets, mutChanSize := 2, 32, 100
@@ -194,7 +194,7 @@ func TestLoopback(t *testing.T) {
 }
 
 func BenchmarkLoopback(b *testing.B) {
-	logging.SetLogLevel(logging.Debug)
+	logging.SetLogLevel(logging.Silent)
 
 	raddr := "localhost:8888"
 	maxBuckets, maxvbuckets, mutChanSize := 2, 32, 100
