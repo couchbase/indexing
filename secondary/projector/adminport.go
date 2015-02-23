@@ -35,8 +35,8 @@ func (p *Projector) mainAdminPort(reqch chan ap.Request) {
 	p.admind.Register(reqRepairEndpoints)
 	p.admind.Register(reqShutdownFeed)
 	p.admind.Register(reqStats)
-	p.admind.RegisterHttpHandler("/stats", p.handleStats)
-	p.admind.RegisterHttpHandler("/settings", p.handleSettings)
+	p.admind.RegisterHTTPHandler("/stats", p.handleStats)
+	p.admind.RegisterHTTPHandler("/settings", p.handleSettings)
 
 	expvar.Publish("projector", expvar.Func(p.doStatistics))
 

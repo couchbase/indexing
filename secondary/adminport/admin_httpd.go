@@ -116,7 +116,7 @@ func (s *httpServer) Register(msg MessageMarshaller) (err error) {
 }
 
 // RegisterHandler is part of Server interface.
-func (s *httpServer) RegisterHttpHandler(
+func (s *httpServer) RegisterHTTPHandler(
 	path string,
 	handler func(http.ResponseWriter, *http.Request)) (err error) {
 
