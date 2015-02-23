@@ -17,17 +17,20 @@ import (
 var done = make(chan bool)
 
 var options struct {
-	adminport string
-	kvaddrs   string
-	colocate  bool
-	logFile   string
-	auth      string
-	loglevel  string
+	adminport   string
+	numVbuckets int
+	kvaddrs     string
+	colocate    bool
+	logFile     string
+	auth        string
+	loglevel    string
 }
 
 func argParse() string {
 	flag.StringVar(&options.adminport, "adminport", "",
 		"adminport address")
+	flag.IntVar(&options.numVbuckets, "vbuckets", 1024,
+		"maximum number of vbuckets configured.")
 	flag.StringVar(&options.kvaddrs, "kvaddrs", "127.0.0.1:12000",
 		"comma separated list of kvaddrs")
 	flag.BoolVar(&options.colocate, "colocate", true,
@@ -68,6 +71,7 @@ func main() {
 	config := c.SystemConfig.Clone()
 	logging.SetLogLevel(logging.Level(options.loglevel))
 
+	config.SetValue("maxVbuckets", options.numVbuckets)
 	if f := getlogFile(); f != nil {
 		fmt.Printf("Projector logging to %q\n", f.Name())
 		logging.SetLogWriter(f)
@@ -88,24 +92,24 @@ func main() {
 		}
 	}
 
-	maxvbs := config["maxVbuckets"].Int()
 	econf := c.SystemConfig.SectionConfig("endpoint.dataport.", true)
-	epfactory := NewEndpointFactory(cluster, maxvbs, econf)
+	epfactory := NewEndpointFactory(cluster, options.numVbuckets, econf)
 	config.SetValue("projector.routerEndpointFactory", epfactory)
 
 	go c.ExitOnStdinClose()
-	projector.NewProjector(maxvbs, config)
+	projector.NewProjector(options.numVbuckets, config)
 	<-done
 }
 
 // NewEndpointFactory to create endpoint instances based on config.
 func NewEndpointFactory(
-	cluster string, maxvbs int, econf c.Config) c.RouterEndpointFactory {
+	cluster string, numVbuckets int, econf c.Config) c.RouterEndpointFactory {
 
 	return func(topic, endpointType, addr string) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":
-			return dataport.NewRouterEndpoint(cluster, topic, addr, maxvbs, econf)
+			return dataport.NewRouterEndpoint(
+				cluster, topic, addr, numVbuckets, econf)
 		default:
 			logging.Fatalf("Unknown endpoint type\n")
 		}
