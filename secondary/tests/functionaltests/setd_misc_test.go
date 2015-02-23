@@ -59,7 +59,7 @@ func SkipTestBucketDefaultDelete(t *testing.T) {
 	// todo: list the index and confirm there is only index created
 }
 
-func SkipTestMixedDatatypesScanAll(t *testing.T) {
+func TestMixedDatatypesScanAll(t *testing.T) {
 	fmt.Println("In TestMixedDatatypesScanAll()")
 
 	field := "md_street"
@@ -85,7 +85,7 @@ func SkipTestMixedDatatypesScanAll(t *testing.T) {
 	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
 }
 
-func SkipTestMixedDatatypesRange_Float(t *testing.T) {
+func TestMixedDatatypesRange_Float(t *testing.T) {
 	fmt.Println("In TestMixedDatatypesRange_Float()")
 
 	field := "mixed_field"
@@ -117,7 +117,7 @@ func SkipTestMixedDatatypesRange_Float(t *testing.T) {
 	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
 }
 
-func SkipTestMixedDatatypesRange_String(t *testing.T) {
+func TestMixedDatatypesRange_String(t *testing.T) {
 	fmt.Println("In TestMixedDatatypesRange_String()")
 
 	field := "mixed_field"
@@ -143,7 +143,7 @@ func SkipTestMixedDatatypesRange_String(t *testing.T) {
 	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
 }
 
-func SkipTestMixedDatatypesRange_Json(t *testing.T) {
+func TestMixedDatatypesRange_Json(t *testing.T) {
 	fmt.Println("In TestMixedDatatypesRange_Json()")
 
 	field := "mixed_field"
@@ -178,7 +178,7 @@ func SkipTestMixedDatatypesRange_Json(t *testing.T) {
 	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
 }
 
-func SkipTestMixedDatatypesScan_Bool(t *testing.T) {
+func TestMixedDatatypesScan_Bool(t *testing.T) {
 	fmt.Println("In TestMixedDatatypesScan_Bool()")
 
 	field := "mixed_field"
@@ -211,7 +211,7 @@ func SkipTestMixedDatatypesScan_Bool(t *testing.T) {
 }
 
 // Test case for testing secondary key field values as very huge
-func SkipTestLargeSecondaryKeyLength(t *testing.T) {
+func TestLargeSecondaryKeyLength(t *testing.T) {
 	fmt.Println("In TestLargeSecondaryKeyLength()")
 
 	field := "LongSecField"
@@ -233,15 +233,43 @@ func SkipTestLargeSecondaryKeyLength(t *testing.T) {
 	docScanResults := datautility.ExpectedScanAllResponse(largeKeyDocs, field)
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tc.PrintScanResults(scanResults, "scanResults")
 	fmt.Println("ScanAll: Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
 	tv.Validate(docScanResults, scanResults)
 
 	docScanResults = datautility.ExpectedScanResponse_string(largeKeyDocs, field, "A", "zzzz", 3)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzzz"}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
 	fmt.Println("Range: Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+	tv.Validate(docScanResults, scanResults)
+}
+
+// Test case for testing primary key values with longest length possible
+func TestLargePrimaryKeyLength(t *testing.T) {
+	fmt.Println("In TestLargePrimaryKeyLength()")
+	
+	indexName := "index_LongPrimaryField"
+	bucketName := "default"
+	
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(1 * time.Second)
+	
+	largePrimaryKeyDocs := generateLargePrimaryKeyDocs(1000, "docid")
+	seed++
+	fmt.Println("Setting JSON docs in KV")
+	kvutility.SetKeyValues(largePrimaryKeyDocs, "default", "", clusterconfig.KVAddress)	
+	
+	err := secondaryindex.CreatePrimaryIndex(indexName, bucketName, indexManagementAddress, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	if len(scanResults) != len(largePrimaryKeyDocs) {
+		fmt.Println("Len of scanResults is incorrect. Expected and Actual are", len(largePrimaryKeyDocs), len(scanResults))
+		err = errors.New("Len of scanResults is incorrect.")
+	}
+	FailTestIfError(err, "Len of scanResults is incorrect", t)
+	fmt.Println("Lengths of scanReuslts and num of docs are: ", len(scanResults), len(largePrimaryKeyDocs))
 }
 
 func generateJSONSMixedDatatype(numDocs int, fieldName string) tc.KeyValues {
@@ -296,6 +324,17 @@ func generateLargeSecondayKeyDocs(numDocs int, fieldName string) tc.KeyValues {
 		docs[k] = json
 	}
 	return docs
+}
+
+func generateLargePrimaryKeyDocs(numDocs int,fieldName string) tc.KeyValues {
+	prodfile := filepath.Join(proddir, "test2.prod")
+	docs := GenerateJsons(numDocs, seed, prodfile, bagdir)
+	largePrimaryKeyDocs := make(tc.KeyValues)
+	for _, v := range docs {
+		str := randString(randomNum(200, 210))
+		largePrimaryKeyDocs[str] = v
+	}
+	return largePrimaryKeyDocs
 }
 
 func randomBool() bool {
