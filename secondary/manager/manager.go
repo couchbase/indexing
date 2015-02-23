@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	gometaC "github.com/couchbase/gometa/common"
-	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
@@ -124,8 +123,6 @@ func NewIndexManagerInternal(
 	addrProvider common.ServiceAddressProvider,
 	admin StreamAdmin,
 	config common.Config) (mgr *IndexManager, err error) {
-
-	gometaL.Current = &logging.SystemLogger
 
 	mgr = new(IndexManager)
 	mgr.isClosed = false

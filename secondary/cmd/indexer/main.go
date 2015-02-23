@@ -15,10 +15,11 @@ import (
 	"strings"
 
 	"github.com/couchbase/cbauth"
+	gmt "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/indexer"
 	"github.com/couchbase/indexing/secondary/logging"
-	// "github.com/couchbaselabs/goforestdb"
+	fdb "github.com/couchbaselabs/goforestdb"
 )
 
 var (
@@ -60,7 +61,9 @@ func main() {
 	go common.ExitOnStdinClose()
 
 	logging.SetLogLevel(logging.Level(*logLevel))
-	// forestdb.Log = &logging.SystemLogger
+
+	fdb.Log = &logging.SystemLogger
+	gmt.Current = &logging.SystemLogger
 
 	config := common.SystemConfig.SectionConfig("indexer.", true)
 
