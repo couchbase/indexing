@@ -52,7 +52,7 @@ var gsi2N1QLState = map[c.IndexState]datastore.IndexState{
 }
 var n1ql2GsiConsistency = map[datastore.ScanConsistency]c.Consistency{
 	datastore.UNBOUNDED: c.AnyConsistency,
-	datastore.SCAN_PLUS: c.QueryConsistency,
+	datastore.SCAN_PLUS: c.SessionConsistency,
 	datastore.AT_PLUS:   c.QueryConsistency,
 }
 

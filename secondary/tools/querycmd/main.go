@@ -15,6 +15,8 @@ func usage(fset *flag.FlagSet) {
 }
 
 func main() {
+	logging.SetLogLevel(logging.Silent)
+
 	cmdOptions, args, fset, err := querycmd.ParseArgs(os.Args[1:])
 	if err != nil {
 		logging.Fatalf("%v", err)
@@ -23,6 +25,16 @@ func main() {
 		os.Exit(0)
 	} else if len(args) < 1 {
 		logging.Fatalf("%v", "specify a command")
+	}
+
+	b, err := c.ConnectBucket(cmdOptions.Server, "default", "default")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer b.Close()
+	maxvb, err := c.MaxVbuckets(b)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
@@ -48,7 +60,7 @@ func main() {
 		doBenchmark(cmdOptions.Server, "localhost:9101")
 
 	case "consistency":
-		doConsistency(cmdOptions.Server, client)
+		doConsistency(cmdOptions.Server, maxvb, client)
 	}
 	client.Close()
 }

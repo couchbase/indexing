@@ -25,8 +25,7 @@ func main() {
 	}
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := qclient.NewGsiClient(
-		cmdOptions.Server, config)
+	client, err := qclient.NewGsiClient(cmdOptions.Server, config)
 	if err != nil {
 		logging.Fatalf("%v\n", err)
 	}

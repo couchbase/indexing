@@ -466,7 +466,7 @@ func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64) {
 	seqnos = make([]uint64, maxvb)
 	vbuuids = make([]uint64, maxvb)
 	// for all nodes in cluster
-	for _, nodestat := range bucket.GetStats("vbuckets-seqno") {
+	for _, nodestat := range bucket.GetStats("vbucket-seqno") {
 		// for all vbuckets
 		for i := 0; i < maxvb; i++ {
 			vbkey := "vb_" + strconv.Itoa(i) + ":high_seqno"

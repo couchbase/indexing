@@ -121,7 +121,7 @@ func (b *cbqClient) Nodes() (map[string]string, error) {
 func (b *cbqClient) CreateIndex(
 	name, bucket, using, exprType, partnExpr, whereExpr string,
 	secExprs []string, isPrimary bool,
-	with []byte) (common.IndexDefnId, error) {
+	with []byte) (defnID uint64, err error) {
 
 	var resp *http.Response
 	var mresp indexMetaResponse
@@ -150,7 +150,7 @@ func (b *cbqClient) CreateIndex(
 			if err == nil {
 				defnID := mresp.Indexes[0].DefnID
 				b.Refresh()
-				return common.IndexDefnId(defnID), nil
+				return defnID, nil
 			}
 			return 0, err
 		}
@@ -159,12 +159,12 @@ func (b *cbqClient) CreateIndex(
 }
 
 // BuildIndexes implement BridgeAccessor{} interface.
-func (b *cbqClient) BuildIndexes(defnID []common.IndexDefnId) error {
+func (b *cbqClient) BuildIndexes(defnID []uint64) error {
 	panic("cbqClient does not implement build-indexes")
 }
 
 // DropIndex implement BridgeAccessor{} interface.
-func (b *cbqClient) DropIndex(defnID common.IndexDefnId) error {
+func (b *cbqClient) DropIndex(defnID uint64) error {
 	var resp *http.Response
 
 	// Construct request body.
@@ -197,9 +197,13 @@ func (b *cbqClient) GetScanports() (queryports []string) {
 }
 
 // GetScanport implement BridgeAccessor{} interface.
-func (b *cbqClient) GetScanport(
-	defnID common.IndexDefnId) (queryport string, ok bool) {
+func (b *cbqClient) GetScanport(defnID uint64) (queryport string, ok bool) {
 	return b.queryport, true
+}
+
+// GetIndexDefn implements BridgeAccessor{} interface.
+func (b *cbqClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
+	panic("cbqClient does not implement GetIndexDefn")
 }
 
 // Timeit implement BridgeAccessor{} interface.

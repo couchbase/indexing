@@ -15,7 +15,7 @@ type metadataClient struct {
 	rw         sync.RWMutex // protects all fields listed below
 	// sherlock topology management, multi-node & single-partition.
 	adminports map[string]common.IndexerId                   // book-keeping for cluster changes
-	topology   map[common.IndexerId][]*mclient.IndexMetadata // indexerId -> indexes
+	topology   map[common.IndexerId][]*mclient.IndexMetadata //indexerId->indexes
 	// shelock load replicas.
 	replicas map[common.IndexDefnId][]common.IndexDefnId
 	// shelock load balancing.
@@ -100,17 +100,32 @@ func (b *metadataClient) Nodes() (map[string]string, error) {
 	return nodes, nil
 }
 
+// GetIndexDefn implements BridgeAccessor{} interface.
+func (b *metadataClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
+	b.rw.RLock()
+	defer b.rw.RUnlock()
+
+	for _, indexes := range b.topology {
+		for _, index := range indexes {
+			if defnID == uint64(index.Definition.DefnId) {
+				return index.Definition
+			}
+		}
+	}
+	return nil
+}
+
 // CreateIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) CreateIndex(
 	indexName, bucket, using, exprType, partnExpr, whereExpr string,
 	secExprs []string, isPrimary bool,
-	planJSON []byte) (common.IndexDefnId, error) {
+	planJSON []byte) (uint64, error) {
 
 	plan := make(map[string]interface{})
 	if planJSON != nil && len(planJSON) > 0 {
 		err := json.Unmarshal(planJSON, &plan)
 		if err != nil {
-			return common.IndexDefnId(0), err
+			return 0, err
 		}
 	}
 
@@ -118,21 +133,25 @@ func (b *metadataClient) CreateIndex(
 		indexName, bucket, using, exprType, partnExpr, whereExpr,
 		secExprs, isPrimary, plan)
 	b.Refresh() // refresh so that we too have IndexMetadata table.
-	return defnID, err
+	return uint64(defnID), err
 }
 
 // BuildIndexes implements BridgeAccessor{} interface.
-func (b *metadataClient) BuildIndexes(defnIDs []common.IndexDefnId) error {
+func (b *metadataClient) BuildIndexes(defnIDs []uint64) error {
 	_, ok := b.getNodes(defnIDs)
 	if !ok {
 		return ErrorIndexNotFound
 	}
-	return b.mdClient.BuildIndexes(defnIDs)
+	ids := make([]common.IndexDefnId, len(defnIDs))
+	for i, id := range defnIDs {
+		ids[i] = common.IndexDefnId(id)
+	}
+	return b.mdClient.BuildIndexes(ids)
 }
 
 // DropIndex implements BridgeAccessor{} interface.
-func (b *metadataClient) DropIndex(defnID common.IndexDefnId) error {
-	return b.mdClient.DropIndex(defnID)
+func (b *metadataClient) DropIndex(defnID uint64) error {
+	return b.mdClient.DropIndex(common.IndexDefnId(defnID))
 }
 
 // GetScanports implements BridgeAccessor{} interface.
@@ -154,14 +173,13 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 }
 
 // GetScanport implements BridgeAccessor{} interface.
-func (b *metadataClient) GetScanport(
-	defnID common.IndexDefnId) (queryport string, ok bool) {
-
+func (b *metadataClient) GetScanport(defnID uint64) (queryport string, ok bool) {
 	b.rw.RLock()
 	defer b.rw.RUnlock()
 
 	defnID = b.pickOptimal(defnID) // defnID (aka index) under least load
-	_, queryport, err := b.mdClient.FindServiceForIndex(defnID)
+	_, queryport, err :=
+		b.mdClient.FindServiceForIndex(common.IndexDefnId(defnID))
 	if err != nil {
 		return "", false
 	}
@@ -282,24 +300,23 @@ type loadHeuristics struct {
 }
 
 // pick an optimal replica for the index `defnID` under least load.
-func (b *metadataClient) pickOptimal(
-	defnID common.IndexDefnId) common.IndexDefnId {
-
-	optimalID, currLoad := defnID, 0.0
-	if load, ok := b.loads[defnID]; ok {
+func (b *metadataClient) pickOptimal(defnID uint64) uint64 {
+	id := common.IndexDefnId(defnID)
+	optimalID, currLoad := id, 0.0
+	if load, ok := b.loads[id]; ok {
 		currLoad = load.avgLoad
 	}
-	for _, replicaID := range b.replicas[defnID] {
+	for _, replicaID := range b.replicas[id] {
 		load, ok := b.loads[replicaID]
 		if !ok { // no load for this replica
-			return replicaID
+			return uint64(replicaID)
 		}
 		if currLoad == 0.0 || load.avgLoad < currLoad {
 			// found an index under less load
 			optimalID, currLoad = replicaID, load.avgLoad
 		}
 	}
-	return optimalID
+	return uint64(optimalID)
 }
 
 //----------------
@@ -308,8 +325,7 @@ func (b *metadataClient) pickOptimal(
 
 // getNodes return the set of nodes hosting the specified set
 // of indexes
-func (b *metadataClient) getNodes(
-	defnIDs []common.IndexDefnId) (adminport []string, ok bool) {
+func (b *metadataClient) getNodes(defnIDs []uint64) ([]string, bool) {
 
 	adminports := make([]string, 0)
 	for _, defnID := range defnIDs {
@@ -323,14 +339,12 @@ func (b *metadataClient) getNodes(
 }
 
 // getNode hosting index with `defnID`.
-func (b *metadataClient) getNode(
-	defnID common.IndexDefnId) (adminport string, ok bool) {
-
-	adminport, _, err := b.mdClient.FindServiceForIndex(defnID)
+func (b *metadataClient) getNode(defnID uint64) (adminport string, ok bool) {
+	aport, _, err := b.mdClient.FindServiceForIndex(common.IndexDefnId(defnID))
 	if err != nil {
 		return "", false
 	}
-	return adminport, true
+	return aport, true
 }
 
 // update 2i cluster information
@@ -367,7 +381,7 @@ func (b *metadataClient) updateIndexerList(cinfo *common.ClusterInfoCache) error
 		// check if the indexerId exists in var "m".  In case the
 		// adminport changes for the same index node, there would
 		// be two adminport mapping to the same indexerId, one
-		// in b.adminport (old) and the other in "m" (new).	 So
+		// in b.adminport (old) and the other in "m" (new).  So
 		// make sure not to accidently unwatch the indexer.
 		found := false
 		for _, id := range m {

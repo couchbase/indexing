@@ -477,7 +477,9 @@ func (s *scanCoordinator) parseScanParams(
 		p.pageSize = r.GetPageSize()
 		vector := r.GetVector()
 		cons := common.Consistency(r.GetCons())
-		if cons == common.QueryConsistency && vector != nil {
+		checkVector :=
+			cons == common.QueryConsistency || cons == common.SessionConsistency
+		if checkVector && vector != nil {
 			p.ts = common.NewTsVbuuid("", s.config["numVbuckets"].Int())
 			tsCons := r.GetVector()
 			for i, vbno := range tsCons.Vbnos {
@@ -492,7 +494,9 @@ func (s *scanCoordinator) parseScanParams(
 		p.pageSize = r.GetPageSize()
 		vector := r.GetVector()
 		cons := common.Consistency(r.GetCons())
-		if cons == common.QueryConsistency && vector != nil {
+		checkVector :=
+			cons == common.QueryConsistency || cons == common.SessionConsistency
+		if checkVector && vector != nil {
 			p.ts = common.NewTsVbuuid("", s.config["numVbuckets"].Int())
 			tsCons := r.GetVector()
 			for i, vbno := range tsCons.Vbnos {

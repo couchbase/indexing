@@ -156,6 +156,7 @@ func (c *gsiScanClient) Lookup(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
 	}
+
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		msg := "%v Scan() request transport failed `%v`\n"
