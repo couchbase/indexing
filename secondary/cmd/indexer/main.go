@@ -18,6 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/indexer"
 	"github.com/couchbase/indexing/secondary/logging"
+	// "github.com/couchbaselabs/goforestdb"
 )
 
 var (
@@ -59,6 +60,8 @@ func main() {
 	go common.ExitOnStdinClose()
 
 	logging.SetLogLevel(logging.Level(*logLevel))
+	// forestdb.Log = &logging.SystemLogger
+
 	config := common.SystemConfig.SectionConfig("indexer.", true)
 
 	config.SetValue("clusterAddr", *cluster)
