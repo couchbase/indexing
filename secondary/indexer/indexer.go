@@ -2686,6 +2686,12 @@ func (idx *indexer) closeAllStreams() {
 
 	for i := 0; i < int(common.ALL_STREAMS); i++ {
 
+		//skip for nil and catchup stream
+		if i == int(common.NIL_STREAM) ||
+			i == int(common.CATCHUP_STREAM) {
+			continue
+		}
+
 		cmd := &MsgStreamUpdate{mType: CLOSE_STREAM,
 			streamId: common.StreamId(i),
 			respCh:   respCh,
