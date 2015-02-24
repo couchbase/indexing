@@ -119,6 +119,7 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 	copy(newTs.Seqnos, ts.Seqnos)
 	copy(newTs.Vbuuids, ts.Vbuuids)
 	copy(newTs.Snapshots, ts.Snapshots)
+	newTs.Persisted = ts.Persisted
 	return newTs
 }
 
