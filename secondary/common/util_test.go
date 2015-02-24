@@ -113,6 +113,28 @@ func TestIP(t *testing.T) {
 	}
 }
 
+func TestEquivalentIP(t *testing.T) {
+	var a string = "127.0.0.1:8091"
+	b := []string{"127.0.0.1:8091", "192.1.2.1:8091"}
+
+	raddr, raddr1, err := EquivalentIP(a, b)
+	if raddr != "127.0.0.1:8091" || raddr1 != "127.0.0.1:8091" || err != nil {
+		t.Fatal("failed EquivalentIP")
+	}
+
+	a = "192.1.2.1:8091"
+	raddr, raddr1, err = EquivalentIP(a, b)
+	if raddr != "192.1.2.1:8091" || raddr1 != "192.1.2.1:8091" || err != nil {
+		t.Fatal("failed EquivalentIP")
+	}
+
+	a = "localhost:8091"
+	raddr, raddr1, err = EquivalentIP(a, b)
+	if raddr != "127.0.0.1:8091" || raddr1 != "127.0.0.1:8091" || err != nil {
+		t.Fatal("failed EquivalentIP")
+	}
+}
+
 func BenchmarkExcludeStrings(b *testing.B) {
 	x := []string{"1", "2", "3", "4"}
 	y := []string{"2", "4"}
