@@ -1371,7 +1371,7 @@ loop:
 	}
 	// re-populate in the same order.
 	for _, msg := range msgs {
-		feed.backch <- []interface{}{msg}
+		feed.backch <- msg
 	}
 	return
 }
