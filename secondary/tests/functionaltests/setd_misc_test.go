@@ -246,19 +246,19 @@ func TestLargeSecondaryKeyLength(t *testing.T) {
 // Test case for testing primary key values with longest length possible
 func TestLargePrimaryKeyLength(t *testing.T) {
 	fmt.Println("In TestLargePrimaryKeyLength()")
-	
+
 	indexName := "index_LongPrimaryField"
 	bucketName := "default"
-	
+
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	time.Sleep(1 * time.Second)
-	
+
 	largePrimaryKeyDocs := generateLargePrimaryKeyDocs(1000, "docid")
 	seed++
 	fmt.Println("Setting JSON docs in KV")
-	kvutility.SetKeyValues(largePrimaryKeyDocs, "default", "", clusterconfig.KVAddress)	
-	
+	kvutility.SetKeyValues(largePrimaryKeyDocs, "default", "", clusterconfig.KVAddress)
+
 	err := secondaryindex.CreatePrimaryIndex(indexName, bucketName, indexManagementAddress, true)
 	FailTestIfError(err, "Error in creating the index", t)
 
@@ -270,6 +270,152 @@ func TestLargePrimaryKeyLength(t *testing.T) {
 	}
 	FailTestIfError(err, "Len of scanResults is incorrect", t)
 	fmt.Println("Lengths of scanReuslts and num of docs are: ", len(scanResults), len(largePrimaryKeyDocs))
+}
+
+func TestCompositeIndex(t *testing.T) {
+	fmt.Println("In TestCompositeIndex()")
+
+	var bucketName = "default"
+	var indexName = "index_comp"
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
+	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
+	fmt.Println("Populating the default bucket")
+	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+	time.Sleep(10 * time.Second)
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age", "company"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
+	if len(scanResults) != len(docs) {
+		fmt.Println("ScanAll of composite index is wrong. Expected and actual num of results: ", len(docs), len(scanResults))
+		e := errors.New("ScanAll of composite index is wrong")
+		FailTestIfError(e, "Error in TestCompositeIndex", t)
+
+	}
+
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{25, "F"}, []interface{}{30, "M"}, 3, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	// todo: validate the results
+
+	docScanResults := make(tc.ScanResponse)
+	docScanResults["User22a44f1c-3f15-4ada-9cf5-6c24a7690a37"] = []interface{}{25.0, "ZIGGLES"}
+	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{25, "ZIGGLES"}, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+}
+
+// Backindexing
+func TestUpdateMutations_DeleteField(t *testing.T) {
+	fmt.Println("In TestUpdateMutations_DeleteField()")
+
+	var bucketName = "default"
+	var indexName = "index_bal"
+	var field = "balance"
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	tc.ClearMap(docs)
+	docs = generateDocs(1000, "users.prod")
+	seed++
+	fmt.Println("Setting JSON docs in KV")
+	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+	docScanResults := datautility.ExpectedScanAllResponse(docs, field)
+	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	// Create mutations with delete fields
+	DeleteFieldMutations(200, "balance") // Update 20 documents by deleting the indexed field
+	time.Sleep(10 * time.Second)         // Wait for mutations to catch up
+
+	docScanResults = datautility.ExpectedScanAllResponse(docs, field)
+	scanResults, err = secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+}
+
+func TestUpdateMutations_AddField(t *testing.T) {
+	fmt.Println("In TestUpdateMutations_AddField()")
+
+	var bucketName = "default"
+	var indexName = "index_newField"
+	var field = "newField"
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	tc.ClearMap(docs)
+	docs = generateDocs(1000, "users.prod")
+	seed++
+	fmt.Println("Setting JSON docs in KV")
+	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedScanAllResponse(docs, field)
+	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	fmt.Println("Count of scan results before add field mutations: ", len(scanResults))
+	tv.Validate(docScanResults, scanResults)
+
+	// Create mutations with add fields
+	AddFieldMutations(300, field) // Update documents by adding the indexed field
+	time.Sleep(10 * time.Second)  // Wait for mutations to catch up
+
+	docScanResults = datautility.ExpectedScanAllResponse(docs, field)
+	scanResults, err = secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	fmt.Println("Count of scan results after add field mutations: ", len(scanResults))
+	tv.Validate(docScanResults, scanResults)
+}
+
+func TestUpdateMutations_DataTypeChange(t *testing.T) {
+	fmt.Println("In TestUpdateMutations_DataTypeChange()")
+
+	var bucketName = "default"
+	var indexName = "index_isUserActive"
+	var field = "isActive"
+
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	tc.ClearMap(docs)
+	docs = generateDocs(1000, "users.prod")
+	seed++
+	fmt.Println("Setting JSON docs in KV")
+	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+	time.Sleep(10 * time.Second)
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedScanAllResponse(docs, field)
+	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
+	tv.Validate(docScanResults, scanResults)
+
+	// Create mutations with delete fields
+	DataTypeChangeMutations_BoolToString(200, field) // Update documents by changing datatype of the indexed field
+	time.Sleep(10 * time.Second)                     // Wait for mutations to catch up
+
+	docScanResults = datautility.ExpectedScanAllResponse(docs, field)
+	scanResults, err = secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
+	tv.Validate(docScanResults, scanResults)
+
+	docScanResults = datautility.ExpectedScanResponse_string(docs, field, "true", "true", 3)
+	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{"true"}, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
+
+	docScanResults = datautility.ExpectedScanResponse_string(docs, field, "false", "false", 3)
+	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{"false"}, true, defaultlimit)
+	FailTestIfError(err, "Error in scan", t)
+	tv.Validate(docScanResults, scanResults)
 }
 
 func generateJSONSMixedDatatype(numDocs int, fieldName string) tc.KeyValues {
@@ -326,7 +472,7 @@ func generateLargeSecondayKeyDocs(numDocs int, fieldName string) tc.KeyValues {
 	return docs
 }
 
-func generateLargePrimaryKeyDocs(numDocs int,fieldName string) tc.KeyValues {
+func generateLargePrimaryKeyDocs(numDocs int, fieldName string) tc.KeyValues {
 	prodfile := filepath.Join(proddir, "test2.prod")
 	docs := GenerateJsons(numDocs, seed, prodfile, bagdir)
 	largePrimaryKeyDocs := make(tc.KeyValues)
@@ -366,4 +512,81 @@ func randString(n int) string {
 func random_char() string {
 	chars := []rune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 	return string(chars[rand.Intn(len(chars))])
+}
+
+func generateDocs(numDocs int, prodFileName string) tc.KeyValues {
+	prodfile := filepath.Join(proddir, prodFileName)
+	docs := GenerateJsons(numDocs, seed, prodfile, bagdir)
+	return docs
+}
+
+func DeleteFieldMutations(num int, field string) {
+	i := 0
+	keys := make(tc.KeyValues)
+	for key, value := range docs {
+		keys[key] = value
+		i++
+		if i == num {
+			break
+		}
+	}
+
+	keysToBeUpdated := make(tc.KeyValues)
+	for key, value := range keys {
+		json := value.(map[string]interface{})
+		delete(json, field)
+		docs[key] = json
+		keysToBeUpdated[key] = json
+	}
+
+	kvutility.SetKeyValues(keysToBeUpdated, "default", "", clusterconfig.KVAddress)
+}
+
+func AddFieldMutations(num int, field string) {
+	i := 0
+	keys := make(tc.KeyValues)
+	for key, value := range docs {
+		keys[key] = value
+		i++
+		if i == num {
+			break
+		}
+	}
+
+	keysToBeUpdated := make(tc.KeyValues)
+	for key, value := range keys {
+		json := value.(map[string]interface{})
+		strValue := randString(randomNum(5, 12))
+		json[field] = strValue
+		docs[key] = json
+		keysToBeUpdated[key] = json
+	}
+
+	kvutility.SetKeyValues(keysToBeUpdated, "default", "", clusterconfig.KVAddress)
+}
+
+func DataTypeChangeMutations_BoolToString(num int, field string) {
+	i := 0
+	keys := make(tc.KeyValues)
+	for key, value := range docs {
+		keys[key] = value
+		i++
+		if i == num {
+			break
+		}
+	}
+
+	keysToBeUpdated := make(tc.KeyValues)
+	for key, value := range keys {
+		json := value.(map[string]interface{})
+		if json[field] == true {
+			json[field] = "true"
+		} else {
+			json[field] = "false"
+		}
+		docs[key] = json
+		keysToBeUpdated[key] = json
+	}
+
+	kvutility.SetKeyValues(keysToBeUpdated, "default", "", clusterconfig.KVAddress)
 }

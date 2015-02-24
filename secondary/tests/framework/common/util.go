@@ -9,8 +9,9 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
+	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // ToDo: Point out the exact difference between two responses
@@ -51,7 +52,7 @@ func ReadCompressedFile(filePath string) ([]byte, error) {
 func FileExists(path string) bool {
 	if _, err := os.Stat(path); err == nil {
 		return true
-    } else {
+	} else {
 		return false
 	}
 }
@@ -62,7 +63,7 @@ func CreateDirectory(dirpath string) {
 		return
 	}
 	err := os.Mkdir(dirpath, 0777)
-	HandleError(err, "Error creating directory: " +dirpath)
+	HandleError(err, "Error creating directory: "+dirpath)
 	fmt.Println("Directory created: ", dirpath)
 }
 
@@ -70,11 +71,11 @@ func CreateDirectory(dirpath string) {
 func DownloadDataFile(sourceDataFile, destinationFilePath string, skipIfFileExists bool) {
 	dataFileExists := FileExists(destinationFilePath)
 	if skipIfFileExists == true && dataFileExists == true {
-      	fmt.Println("Data file exists. Skipping download")
+		fmt.Println("Data file exists. Skipping download")
 		return
 	}
 
-	CreateDirectory(filepath.Dir(destinationFilePath)) 
+	CreateDirectory(filepath.Dir(destinationFilePath))
 	fmt.Println("Downloading data file to: ", destinationFilePath)
 	f, err := os.Create(destinationFilePath)
 	HandleError(err, "Error downloading datafile "+destinationFilePath)
@@ -120,6 +121,30 @@ func FetchMonsterToolPath() (string, string) {
 			return proddir, bagdir
 		}
 	}
-	
+
 	return "", ""
+}
+
+func ClearMap(docs KeyValues) {
+	for k := range docs {
+		delete(docs, k)
+	}
+}
+
+func KillIndexer() {
+	out, err := exec.Command("pkill", "indexer").CombinedOutput()
+	if err != nil {
+		log.Println(err)
+	} else {
+		log.Println(out)
+	}
+}
+
+func KillProjector() {
+	out, err := exec.Command("pkill", "projector").CombinedOutput()
+	if err != nil {
+		log.Println(err)
+	} else {
+		log.Println(out)
+	}
 }

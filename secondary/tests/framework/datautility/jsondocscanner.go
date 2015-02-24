@@ -183,8 +183,11 @@ func ExpectedScanAllResponse(docs tc.KeyValues, jsonPath string) tc.ScanResponse
 				break
 			}
 		}
-		field := json[fields[i]]
-		results[k] = []interface{}{field}
+
+		// Add the field only if is present
+		if field, ok := json[fields[i]]; ok {
+			results[k] = []interface{}{field}
+		}
 	}
 
 	return results
