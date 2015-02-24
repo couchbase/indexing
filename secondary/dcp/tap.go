@@ -3,8 +3,8 @@ package couchbase
 import (
 	"time"
 
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 const initialRetryInterval = 1 * time.Second

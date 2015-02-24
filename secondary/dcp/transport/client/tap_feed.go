@@ -7,8 +7,8 @@ import (
 	"io"
 	"math"
 
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // TAP protocol docs: <http://www.couchbase.com/wiki/display/couchbase/TAP+Protocol>

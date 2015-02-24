@@ -12,8 +12,8 @@ import (
 // ErrorInvalidVbucket
 var ErrorInvalidVbucket = errors.New("dcp.invalidVbucket")
 
-// ErrorConnectionOverflow
-var ErrorConnectionOverflow = errors.New("dcp.connectionOverflow")
+// ErrorConnection
+var ErrorConnection = errors.New("dcp.connection")
 
 // ErrorFailoverLog
 var ErrorFailoverLog = errors.New("dcp.failoverLog")
@@ -62,13 +62,13 @@ func (b *Bucket) GetFailoverLogs(vBuckets []uint16) (FailoverLog, error) {
 
 		mc, err := serverConn.Get()
 		if err != nil {
-			logging.Errorf("error connections overflow for vblist %v\n", vbList)
-			return nil, ErrorConnectionOverflow
+			logging.Errorf("in serverConn.Get() for vblist %v: %v\n", vbList, err)
+			return nil, ErrorConnection
 		}
 		mc.Hijack()
-		defer serverConn.Return(mc)
 
 		failoverlogs, err := mc.DcpGetFailoverLog(vbList)
+		serverConn.Return(mc)
 		if err != nil {
 			format := "error getting failover log for host %s: %v\n"
 			logging.Errorf(format, serverConn.host, err)
@@ -78,7 +78,6 @@ func (b *Bucket) GetFailoverLogs(vBuckets []uint16) (FailoverLog, error) {
 			failoverLogMap[vb] = *log
 		}
 	}
-
 	return failoverLogMap, nil
 }
 

@@ -34,9 +34,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // Maximum number of times to retry a chunk of a bulk get on error.

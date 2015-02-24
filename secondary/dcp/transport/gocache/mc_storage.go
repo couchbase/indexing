@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/binary"
 
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 type storage struct {

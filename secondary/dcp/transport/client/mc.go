@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 const bufsize = 1024

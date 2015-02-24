@@ -6,9 +6,9 @@ import (
 	"io"
 	"net"
 
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 	"github.com/couchbase/indexing/secondary/dcp/transport/server"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 var port = flag.Int("port", 11212, "Port on which to listen")

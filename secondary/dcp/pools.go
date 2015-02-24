@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -17,7 +18,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"unsafe"
-	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // HTTPClient to use for REST and view operations.
