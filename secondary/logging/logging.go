@@ -234,7 +234,7 @@ func (log *destination) isEnabled(at LogLevel, skip int) bool {
 		return olvl >= at
 	}
 
-	return false
+	return log.baselevel >= at
 }
 
 func (log *destination) printf(at LogLevel, skip int, format string, v ...interface{}) {
