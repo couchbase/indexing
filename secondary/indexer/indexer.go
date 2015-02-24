@@ -1336,7 +1336,9 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 				default:
 					//log and retry for all other responses
-					logging.Errorf("Indexer::sendStreamUpdateForBuildIndex - Error from Projector %v", resp)
+					respErr := resp.(*MsgError).GetError()
+					logging.Errorf("Indexer::sendStreamUpdateForBuildIndex - "+
+						"Error from Projector %v. Retrying.", respErr.cause)
 
 				}
 			}
@@ -1482,7 +1484,9 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 
 					default:
 						//log and retry for all other responses
-						logging.Errorf("Indexer::sendStreamUpdateForDropIndex - Error from Projector %v", resp)
+						respErr := resp.(*MsgError).GetError()
+						logging.Errorf("Indexer::sendStreamUpdateForDropIndex - "+
+							"Error from Projector %v. Retrying.", respErr.cause)
 
 					}
 				}
@@ -1832,8 +1836,9 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 
 				default:
 					//log and retry for all other responses
+					respErr := resp.(*MsgError).GetError()
 					logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v \n\t"+
-						"Error from Projector %v", streamId, bucket, resp)
+						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
 				}
 			}
 		}
@@ -1959,8 +1964,9 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 				default:
 					//log and retry for all other responses
+					respErr := resp.(*MsgError).GetError()
 					logging.Errorf("Indexer::handleMergeInitStream Stream %v Bucket %v \n\t"+
-						"Error from Projector %v", resp)
+						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
 				}
 			}
 		}
@@ -2100,8 +2106,9 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 
 				default:
 					//log and retry for all other responses
+					respErr := resp.(*MsgError).GetError()
 					logging.Errorf("Indexer::stopBucketStream Stream %v Bucket %v \n\t"+
-						"Error from Projector %v", resp)
+						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
 
 				}
 			}
@@ -2221,8 +2228,10 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 				default:
 					//log and retry for all other responses
+					respErr := resp.(*MsgError).GetError()
 					logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v \n\t"+
-						"Error from Projector %v. Retrying.", resp)
+						"Error from Projector %v. Retrying.", streamId, bucket,
+						respErr.cause)
 				}
 			}
 		}
@@ -2710,8 +2719,9 @@ func (idx *indexer) closeAllStreams() {
 
 				default:
 					//log and retry for all other responses
-					logging.Errorf("Indexer::closeAllStreams Stream %v Bucket %v \n\t"+
-						"Error from Projector %v", resp)
+					respErr := resp.(*MsgError).GetError()
+					logging.Errorf("Indexer::closeAllStreams Stream %v \n\t"+
+						"Error from Projector %v. Retrying.", common.StreamId(i), respErr.cause)
 				}
 			}
 		}
