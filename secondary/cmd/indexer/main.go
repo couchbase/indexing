@@ -15,11 +15,10 @@ import (
 	"strings"
 
 	"github.com/couchbase/cbauth"
-	gmt "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/indexer"
 	"github.com/couchbase/indexing/secondary/logging"
-	fdb "github.com/couchbaselabs/goforestdb"
+	"github.com/couchbaselabs/goforestdb"
 )
 
 var (
@@ -48,6 +47,9 @@ func main() {
 	logging.Infof("Indexer started with command line: %v\n", os.Args)
 	flag.Parse()
 
+	logging.SetLogLevel(logging.Level(*logLevel))
+	forestdb.Log = &logging.SystemLogger
+
 	// setup cbauth
 	if *auth != "" {
 		up := strings.Split(*auth, ":")
@@ -59,11 +61,6 @@ func main() {
 
 	go common.DumpOnSignal()
 	go common.ExitOnStdinClose()
-
-	logging.SetLogLevel(logging.Level(*logLevel))
-
-	fdb.Log = &logging.SystemLogger
-	gmt.Current = &logging.SystemLogger
 
 	config := common.SystemConfig.SectionConfig("indexer.", true)
 
