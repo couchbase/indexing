@@ -2845,9 +2845,11 @@ func (idx *indexer) bulkUpdateBuildTs(instIdList []common.IndexInstId,
 
 	for _, instId := range instIdList {
 		idxInst := idx.indexInstMap[instId]
+		buildTs := make([]uint64, len(buildTs))
 		for i, ts := range buildTs {
-			idxInst.BuildTs[i] = uint64(ts)
+			buildTs[i] = uint64(ts)
 		}
+		idxInst.BuildTs = buildTs
 		idx.indexInstMap[instId] = idxInst
 	}
 }
