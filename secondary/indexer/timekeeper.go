@@ -1342,6 +1342,11 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 
 		tsVbuuid := tk.ss.getNextStabilityTS(streamId, bucket)
 
+		//persist TS which completes the build
+		if !tsVbuuid.IsPersisted() && tk.isBuildCompletionTs(streamId, bucket, tsVbuuid) {
+			tsVbuuid.SetPersisted(true)
+		}
+
 		if tk.ss.canFlushNewTS(streamId, bucket) {
 			logging.Debugf("Timekeeper::generateNewStabilityTS \n\tFlushing new "+
 				"TS: %v Bucket: %v Stream: %v.", tsVbuuid, bucket, streamId)
@@ -1771,4 +1776,25 @@ func (tk *timekeeper) handleStats(cmd Message) {
 	}
 
 	replych <- statsMap
+}
+
+func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
+	bucket string, flushTs *common.TsVbuuid) bool {
+
+	for _, buildInfo := range tk.indexBuildInfo {
+		//if index belongs to the flushed bucket and in INITIAL state
+		idx := buildInfo.indexInst
+		if idx.Defn.Bucket == bucket &&
+			idx.Stream == streamId &&
+			idx.State == common.INDEX_STATE_INITIAL {
+
+			//if flushTs is greater than or equal to buildTs
+			ts := getStabilityTSFromTsVbuuid(flushTs)
+			if ts.GreaterThanEqual(buildInfo.buildTs) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
