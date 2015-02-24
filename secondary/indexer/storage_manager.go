@@ -730,9 +730,6 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 func (s *storageMgr) needSnapshot(streamId common.StreamId, bucket string,
 	isPersisted bool) bool {
 
-	//HACK: Allow tests to run till this is fixed
-	return true
-
 	//skip in-memory snapshots for INIT_STREAM
 	if streamId == common.INIT_STREAM && !isPersisted {
 		return false
