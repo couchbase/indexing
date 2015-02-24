@@ -13,8 +13,8 @@ import (
 	"bytes"
 	"errors"
 	"github.com/couchbase/cbauth/metakv"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"io/ioutil"
 	"net/http"
 	"runtime"
@@ -60,6 +60,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	}
 
 	setNumCPUs(config)
+	setLogger(config)
 
 	http.HandleFunc("/settings", s.handleSettingsReq)
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
@@ -175,6 +176,7 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 		config.Update(value)
 		s.config = config
 		setNumCPUs(config)
+		setLogger(config)
 
 		s.supvMsgch <- &MsgConfigUpdate{
 			cfg: s.config,
@@ -233,4 +235,18 @@ func setNumCPUs(config common.Config) {
 
 	logging.Infof("Setting maxcpus = %d", ncpu)
 	runtime.GOMAXPROCS(ncpu)
+}
+
+func setLogger(config common.Config) {
+	logLevel := config["settings.log_level"].String()
+	logOverride := config["settings.log_override"].String()
+
+	if len(logOverride) > 0 {
+		logging.Infof("Setting log override = %v", logOverride)
+		logging.AddOverride(logOverride)
+	} else {
+		level := logging.Level(logLevel)
+		logging.Infof("Setting log level to %v", level)
+		logging.SetLogLevel(level)
+	}
 }

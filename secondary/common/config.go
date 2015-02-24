@@ -426,6 +426,16 @@ var SystemConfig = Config{
 		"Maximum nCPUs percent used by the processes",
 		400,
 	},
+	"indexer.settings.log_level": ConfigValue{
+		"info",
+		"Indexer logging level",
+		"info",
+	},
+	"indexer.settings.log_override": ConfigValue{
+		"",
+		"override log level. format is filename[:line]=Level[,...]",
+		"",
+	},
 }
 
 // NewConfig from another
