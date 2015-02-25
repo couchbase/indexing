@@ -43,17 +43,6 @@ var SystemConfig = Config{
 		"number of vbuckets configured in KV",
 		1024,
 	},
-	// log parameters
-	"log.level": ConfigValue{
-		"info",
-		"logging level for the system",
-		"info",
-	},
-	"log.override": ConfigValue{
-		"",
-		"override log level. format is filename[:line]=Level[,...]",
-		"",
-	},
 	// projector parameters
 	"projector.name": ConfigValue{
 		"projector",
@@ -433,7 +422,17 @@ var SystemConfig = Config{
 	},
 	"indexer.settings.log_override": ConfigValue{
 		"",
-		"override log level. format is filename[:line]=Level[,...]",
+		"Indexer override log level. format is filename[:line]=Level[,...]",
+		"",
+	},
+	"projector.settings.log_level": ConfigValue{
+		"info",
+		"Projector logging level",
+		"info",
+	},
+	"projector.settings.log_override": ConfigValue{
+		"",
+		"Projector override log level. format is filename[:line]=Level[,...]",
 		"",
 	},
 }
@@ -522,6 +521,16 @@ func (config Config) SectionConfig(prefix string, trim bool) Config {
 		}
 	}
 	return section
+}
+
+func (config Config) FilterConfig(subs string) Config {
+	newConfig := make(Config)
+	for key, value := range config {
+		if strings.Contains(key, subs) {
+			newConfig[key] = value
+		}
+	}
+	return newConfig
 }
 
 // Set ConfigValue for parameter. Mutates the config object.

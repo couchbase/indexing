@@ -62,18 +62,17 @@ func main() {
 	go common.DumpOnSignal()
 	go common.ExitOnStdinClose()
 
-	config := common.SystemConfig.SectionConfig("indexer.", true)
-
-	config.SetValue("clusterAddr", *cluster)
-	config.SetValue("numVbuckets", *numVbuckets)
-	config.SetValue("enableManager", *enableManager)
-	config.SetValue("adminPort", *adminPort)
-	config.SetValue("scanPort", *scanPort)
-	config.SetValue("httpPort", *httpPort)
-	config.SetValue("streamInitPort", *streamInitPort)
-	config.SetValue("streamCatchupPort", *streamCatchupPort)
-	config.SetValue("streamMaintPort", *streamMaintPort)
-	config.SetValue("storage_dir", *storageDir)
+	config := common.SystemConfig
+	config.SetValue("indexer.clusterAddr", *cluster)
+	config.SetValue("indexer.numVbuckets", *numVbuckets)
+	config.SetValue("indexer.enableManager", *enableManager)
+	config.SetValue("indexer.adminPort", *adminPort)
+	config.SetValue("indexer.scanPort", *scanPort)
+	config.SetValue("indexer.httpPort", *httpPort)
+	config.SetValue("indexer.streamInitPort", *streamInitPort)
+	config.SetValue("indexer.streamCatchupPort", *streamCatchupPort)
+	config.SetValue("indexer.streamMaintPort", *streamMaintPort)
+	config.SetValue("indexer.storage_dir", *storageDir)
 
 	_, msg := indexer.NewIndexer(config)
 

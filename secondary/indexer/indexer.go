@@ -144,12 +144,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamBucketRollbackTs:       make(map[common.StreamId]BucketRollbackTs),
 		bucketBuildTs:                make(map[string]Timestamp),
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
-		config:                       config,
 	}
 
 	logging.Infof("Indexer::NewIndexer Status INIT")
-
-	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
 	var res Message
 	idx.settingsMgr, idx.config, res = NewSettingsManager(idx.settingsMgrCmdCh, idx.wrkrRecvCh, config)
@@ -157,6 +154,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Errorf("Indexer::NewIndexer settingsMgr Init Error", res)
 		return nil, res
 	}
+
+	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
 	idx.initStreamAddressMap()
 	idx.initStreamFlushMap()
@@ -192,7 +191,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.enableManager = idx.config["enableManager"].Bool()
 
 	if idx.enableManager {
-		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, config)
+		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config)
 		if res.GetMsgType() != MSG_SUCCESS {
 			logging.Errorf("Indexer::NewIndexer ClusterMgrAgent Init Error", res)
 			return nil, res
@@ -205,7 +204,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, &MsgError{err: Error{cause: err}}
 	}
 
-	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, config)
+	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Errorf("Indexer::NewIndexer statsMgr Init Error", res)
 		return nil, res

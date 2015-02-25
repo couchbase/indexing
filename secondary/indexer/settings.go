@@ -22,9 +22,7 @@ import (
 )
 
 const (
-	indexerMetaDir          = "/indexer/"
-	indexerSettingsMetaPath = indexerMetaDir + "settings"
-	indexCompactonMetaPath  = indexerMetaDir + "triggerCompaction"
+	indexCompactonMetaPath = common.IndexingMetaDir + "triggerCompaction"
 )
 
 // Implements dynamic settings management for indexer
@@ -45,7 +43,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 		cancelCh:  make(chan struct{}),
 	}
 
-	value, _, err := metakv.Get(indexerSettingsMetaPath)
+	config, err := common.GetSettingsConfig(config)
 	if err != nil {
 		return s, nil, &MsgError{
 			err: Error{
@@ -53,10 +51,6 @@ func NewSettingsManager(supvCmdch MsgChannel,
 				cause:    err,
 				severity: FATAL,
 			}}
-	}
-
-	if len(value) > 0 {
-		config.Update(value)
 	}
 
 	setNumCPUs(config)
@@ -75,7 +69,8 @@ func NewSettingsManager(supvCmdch MsgChannel,
 		}
 	}()
 
-	return s, config, &MsgSuccess{}
+	indexerConfig := config.SectionConfig("indexer.", true)
+	return s, indexerConfig, &MsgSuccess{}
 }
 
 func (s *settingsManager) writeOk(w http.ResponseWriter) {
@@ -101,7 +96,7 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 		bytes, _ := ioutil.ReadAll(r.Body)
 
 		config := s.config.Clone()
-		current, rev, err := metakv.Get(indexerSettingsMetaPath)
+		current, rev, err := metakv.Get(common.IndexingSettingsMetaPath)
 		if err == nil {
 			if len(current) > 0 {
 				config.Update(current)
@@ -114,20 +109,20 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		settingsConfig := config.SectionConfig("settings.", false)
+		settingsConfig := config.FilterConfig(".settings.")
 		newSettingsBytes := settingsConfig.Json()
-		if err = metakv.Set(indexerSettingsMetaPath, newSettingsBytes, rev); err != nil {
+		if err = metakv.Set(common.IndexingSettingsMetaPath, newSettingsBytes, rev); err != nil {
 			s.writeError(w, err)
 			return
 		}
 		s.writeOk(w)
 	} else if r.Method == "GET" {
-		settingsConfig, err := getSettingsConfig(s.config)
+		settingsConfig, err := common.GetSettingsConfig(s.config)
 		if err != nil {
 			s.writeError(w, err)
 			return
 		}
-		s.writeJson(w, settingsConfig.Json())
+		s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
 		return
@@ -170,7 +165,7 @@ loop:
 }
 
 func (s *settingsManager) metaKVCallback(path string, value []byte, rev interface{}) error {
-	if path == indexerSettingsMetaPath {
+	if path == common.IndexingSettingsMetaPath {
 		logging.Infof("New settings received: \n%s", string(value))
 		config := s.config.Clone()
 		config.Update(value)
@@ -178,8 +173,9 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 		setNumCPUs(config)
 		setLogger(config)
 
+		indexerConfig := s.config.SectionConfig("indexer.", true)
 		s.supvMsgch <- &MsgConfigUpdate{
-			cfg: s.config,
+			cfg: indexerConfig,
 		}
 	} else if path == indexCompactonMetaPath {
 		currentToken := s.compactionToken
@@ -216,19 +212,8 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 	return nil
 }
 
-func getSettingsConfig(cfg common.Config) (common.Config, error) {
-	settingsConfig := cfg.SectionConfig("settings.", false)
-	current, _, err := metakv.Get(indexerSettingsMetaPath)
-	if err == nil {
-		if len(current) > 0 {
-			settingsConfig.Update(current)
-		}
-	}
-	return settingsConfig, err
-}
-
 func setNumCPUs(config common.Config) {
-	ncpu := config["settings.max_cpu_percent"].Int() / 100
+	ncpu := config["indexer.settings.max_cpu_percent"].Int() / 100
 	if ncpu == 0 {
 		ncpu = runtime.NumCPU()
 	}
@@ -238,8 +223,8 @@ func setNumCPUs(config common.Config) {
 }
 
 func setLogger(config common.Config) {
-	logLevel := config["settings.log_level"].String()
-	logOverride := config["settings.log_override"].String()
+	logLevel := config["indexer.settings.log_level"].String()
+	logOverride := config["indexer.settings.log_override"].String()
 
 	if len(logOverride) > 0 {
 		logging.Infof("Setting log override = %v", logOverride)

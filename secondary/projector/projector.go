@@ -39,7 +39,16 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 		maxvbs: maxvbs,
 		config: config,
 	}
+
+	// Setup dynamic configuration propagation
+	config, err := c.GetSettingsConfig(config)
+	c.CrashOnError(err)
+
 	p.SetConfig(config)
+	callb := func(cfg c.Config) {
+		p.SetConfig(cfg)
+	}
+	c.SetupSettingsNotifier(callb, make(chan struct{}))
 
 	cluster := p.clusterAddr
 	if !strings.HasPrefix(p.clusterAddr, "http://") {
@@ -81,9 +90,9 @@ func (p *Projector) SetConfig(config c.Config) {
 	p.config["projector.routerEndpointFactory"] = ef // IMPORTANT: skip override
 
 	// update loglevel
-	level := p.config["log.level"].String()
+	level := p.config["projector.settings.log_level"].String()
 	logging.SetLogLevel(logging.Level(level))
-	override := p.config["log.override"].String()
+	override := p.config["projector.settings.log_override"].String()
 	logging.AddOverride(override)
 }
 
