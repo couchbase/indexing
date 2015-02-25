@@ -78,18 +78,13 @@ func (p *Projector) SetConfig(config c.Config) {
 	p.name = pconf["name"].String()
 	p.clusterAddr = pconf["clusterAddr"].String()
 	p.adminport = pconf["adminport.listenAddr"].String()
+	p.config["projector.routerEndpointFactory"] = ef // IMPORTANT: skip override
 
 	// update loglevel
-	switch p.config["log.level"].String() {
-	case "info":
-		logging.SetLogLevel(logging.Info)
-	case "debug":
-		logging.SetLogLevel(logging.Debug)
-	case "trace":
-		logging.SetLogLevel(logging.Trace)
-	}
-
-	p.config["projector.routerEndpointFactory"] = ef // IMPORTANT: skip override
+	level := p.config["log.level"].String()
+	logging.SetLogLevel(logging.Level(level))
+	override := p.config["log.override"].String()
+	logging.AddOverride(override)
 }
 
 // GetFeedConfig from current configuration settings.

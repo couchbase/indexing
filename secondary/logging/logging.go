@@ -60,7 +60,7 @@ type Ender interface {
 // Implementation
 //
 
-type filterMap map[string]LogLevel
+type overrideMap map[string]LogLevel
 
 // Messages administrator should eventually see.
 func (t LogLevel) String() string {
@@ -112,7 +112,7 @@ func Level(s string) LogLevel {
 type destination struct {
 	baselevel LogLevel
 	target    *l.Logger
-	filters   filterMap
+	overrides overrideMap
 }
 
 type stopClock struct {
@@ -163,11 +163,9 @@ func (log *destination) Tracef(format string, v ...interface{}) {
 	log.printf(Trace, 1, format, v...)
 }
 
-// Set the base log level. Filters are cleared.
+// Set the base log level
 func (log *destination) SetLogLevel(to LogLevel) {
 	log.baselevel = to
-	added := make(filterMap)
-	log.filters = added
 }
 
 // Get stack trace
@@ -189,16 +187,29 @@ func (log *destination) LazyTrace(fn func() string) {
 	}
 }
 
-// Override log level for a file and/or line.
-// Location is specified as file.go or file.go:22
-func (log *destination) AddFilter(loc string, to LogLevel) {
+// Add logging override. Format: filename[:line]=Level[,...]
+func (log *destination) AddOverride(line string) {
 	// infrequent, so clone to avoid locks
-	added := make(filterMap)
-	for k, v := range log.filters {
+	added := make(overrideMap)
+	for k, v := range log.overrides {
 		added[k] = v
 	}
-	added[loc] = to
-	log.filters = added
+	specs := strings.Split(line, ",")
+	for _, spec := range specs {
+		kv := strings.Split(spec, "=")
+		if len(kv) != 2 {
+			continue
+		}
+		added[kv[0]] = Level(kv[1])
+	}
+	log.overrides = added
+}
+
+// Clear all overrides
+func (log *destination) ClearOverrides() {
+	// infrequent, so clone to avoid locks
+	added := make(overrideMap)
+	log.overrides = added
 }
 
 // Stop the running timer and print timing
@@ -207,29 +218,22 @@ func (watch *stopClock) End() {
 	watch.log.printf(Timing, watch.skip, "%.1f μs - %s", float64(elapsed)/1000, watch.comment)
 }
 
-// Clear all overrides
-func (log *destination) ClearFilters() {
-	// infrequent, so clone to avoid locks
-	added := make(filterMap)
-	log.filters = added
-}
-
 // Check if enabled
 func (log *destination) isEnabled(at LogLevel, skip int) bool {
 	// normal production case
-	if len(log.filters) == 0 {
+	if len(log.overrides) == 0 {
 		return log.baselevel >= at
 	}
 
 	// unusual case, perhaps troubleshooting
 	_, file, line, _ := runtime.Caller(skip + 1)
 	base := filepath.Base(file)
-	olvl, present := log.filters[base]
+	olvl, present := log.overrides[base]
 	if present {
 		return olvl >= at
 	}
 	name := base + ":" + strconv.Itoa(line)
-	olvl, present = log.filters[name]
+	olvl, present = log.overrides[name]
 	if present {
 		return olvl >= at
 	}
@@ -273,13 +277,13 @@ var SystemLogger destination
 
 func init() {
 	dest := l.New(os.Stdout, "", l.Lmicroseconds)
-	SystemLogger = destination{baselevel: Info, target: dest, filters: make(filterMap)}
+	SystemLogger = destination{baselevel: Info, target: dest, overrides: make(overrideMap)}
 }
 
 // SetLogWriter sets a new default destination
 func SetLogWriter(w io.Writer) {
 	dest := l.New(w, "", l.Lmicroseconds)
-	SystemLogger = destination{baselevel: Info, target: dest, filters: make(filterMap)}
+	SystemLogger = destination{baselevel: Info, target: dest, overrides: make(overrideMap)}
 }
 
 //
@@ -325,14 +329,19 @@ func Timer(format string, v ...interface{}) Ender {
 	return SystemLogger.timer(2, format, v...)
 }
 
-// SetLogLevel sets current log level
+// Set the base log level
 func SetLogLevel(to LogLevel) {
 	SystemLogger.SetLogLevel(to)
 }
 
-// Override log level for a file and/or line.
-func AddFilter(loc string, to LogLevel) {
-	SystemLogger.AddFilter(loc, to)
+// Add logging override. Format: filename[:line]=Level[,...]
+func AddOverride(line string) {
+	SystemLogger.AddOverride(line)
+}
+
+// Clear all overrides
+func ClearOverrides() {
+	SystemLogger.ClearOverrides()
 }
 
 // Run function only if output will be logged at debug level

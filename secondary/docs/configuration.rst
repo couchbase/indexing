@@ -61,11 +61,11 @@
 **indexer.compaction.minSize** (uint64)
     Compaction min file size
 
-**log.ignore** (bool)
-    ignores all logging, irrespective of the log-level
-
 **log.level** (string)
-    logging level for the system
+    logging level for the system. allowable values are silent|fatal|error|warn|info|debug|trace.
+
+**log.override** (string)
+    override log levels by file or line for troubleshooting. format is filename[:line]=Level[,...]
 
 **projector.clusterAddr** (string)
     KV cluster's address to be used by projector

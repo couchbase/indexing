@@ -44,20 +44,14 @@ var SystemConfig = Config{
 		1024,
 	},
 	// log parameters
-	// TODO: add configuration for log file-name and other types of writer.
-	"log.ignore": ConfigValue{
-		false,
-		"ignore all logging, irrespective of the log-level",
-		false,
-	},
 	"log.level": ConfigValue{
 		"info",
 		"logging level for the system",
 		"info",
 	},
-	"log.file": ConfigValue{
+	"log.override": ConfigValue{
 		"",
-		"log messages to file",
+		"override log level. format is filename[:line]=Level[,...]",
 		"",
 	},
 	// projector parameters
