@@ -86,6 +86,10 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 		return nil, nil, fset, err
 	}
 
+	if cmdOptions.IndexName == "" {
+		cmdOptions.Help = true
+	}
+
 	// bindexes
 	if len(bindexes) > 0 {
 		cmdOptions.Bindexes = strings.Split(bindexes, ",")

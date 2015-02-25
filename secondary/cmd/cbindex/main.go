@@ -16,9 +16,11 @@ func usage(fset *flag.FlagSet) {
 
 func main() {
 	logging.SetLogLevel(logging.Warn)
+
 	cmdOptions, _, fset, err := querycmd.ParseArgs(os.Args[1:])
 	if err != nil {
 		logging.Fatalf("%v\n", err)
+		os.Exit(1)
 	} else if cmdOptions.Help {
 		usage(fset)
 		os.Exit(0)
@@ -28,6 +30,7 @@ func main() {
 	client, err := qclient.NewGsiClient(cmdOptions.Server, config)
 	if err != nil {
 		logging.Fatalf("%v\n", err)
+		os.Exit(1)
 	}
 
 	if err = querycmd.HandleCommand(client, cmdOptions, false, os.Stdout); err != nil {
