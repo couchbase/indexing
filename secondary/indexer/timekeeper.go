@@ -745,8 +745,6 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 
 func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 
-	logging.Tracef("Timekeeper::handleSnapshotMarker %v", cmd)
-
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
@@ -776,7 +774,8 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 		ts.Snapshots[meta.vbucket][1] = snapshot.end
 
 		tk.ss.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
-		logging.Tracef("Timekeeper::handleSnapshotMarker \n\tUpdated TS %v", ts)
+		logging.Debugf("TK Snapshot %v %v %v %v %v %v", streamId, meta.bucket,
+			meta.vbucket, meta.vbuuid, snapshot.start, snapshot.end)
 	} else {
 		logging.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker. "+
 			"Unknown Type %v. Bucket %v. StreamId %v", snapshot.snapType, meta.bucket,
@@ -811,10 +810,11 @@ func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
 
 func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
-	logging.Debugf("Timekeeper::handleStreamBegin %v", cmd)
-
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	logging.Debugf("TK StreamBegin %v %v %v %v %v", streamId, meta.bucket,
+		meta.vbucket, meta.vbuuid, meta.seqno)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -864,10 +864,11 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
-	logging.Debugf("Timekeeper::handleStreamEnd %v", cmd)
-
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	logging.Debugf("TK StreamEnd %v %v %v %v %v", streamId, meta.bucket,
+		meta.vbucket, meta.vbuuid, meta.seqno)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
