@@ -214,7 +214,7 @@ func TestLevels(t *testing.T) {
 		t.Errorf("Location mark on on line 21: %v", s)
 	}
 	if strings.Contains(s, "twentytwo") == true {
-		t.Errorf("Location mark on on line 21: %v", s)
+		t.Errorf("Location mark on on line 22: %v", s)
 	}
 }
 
@@ -222,7 +222,7 @@ func TestFilters1(t *testing.T) {
 	buffer.Reset()
 	SetLogWriter(buffer)
 	SetLogLevel(Error)
-	AddFilter("logging_test.go", Debug)
+	AddOverride("logging_test.go=Debug")
 	LocationMarker()
 	s := string(buffer.Bytes())
 	if strings.Contains(s, "twentyzero") == false {
@@ -239,9 +239,9 @@ func TestFilters1(t *testing.T) {
 func TestFilters2(t *testing.T) {
 	buffer.Reset()
 	SetLogWriter(buffer)
-	SetLogLevel(Error)
-	AddFilter("logging_test.go:20", Silent)
-	AddFilter("logging_test.go:22", Debug)
+	SetLogLevel(Fatal)
+	AddOverride("logging_test.go:20=Silent")
+	AddOverride("logging_test.go:22=Debug")
 	LocationMarker()
 	s := string(buffer.Bytes())
 	if strings.Contains(s, "twentyzero") == true {
@@ -251,6 +251,24 @@ func TestFilters2(t *testing.T) {
 		t.Errorf("Location mark on on line 21: %v", s)
 	}
 	if strings.Contains(s, "twentytwo") == false {
+		t.Errorf("Location mark on on line 22: %v", s)
+	}
+}
+
+func TestFilters3(t *testing.T) {
+	buffer.Reset()
+	SetLogWriter(buffer)
+	SetLogLevel(Silent)
+	AddOverride("github.com/couchbase/indexing/secondary/logging/*=Error")
+	LocationMarker()
+	s := string(buffer.Bytes())
+	if strings.Contains(s, "twentyzero") == false {
+		t.Errorf("Location mark on on line 20: %v", s)
+	}
+	if strings.Contains(s, "twentyone") == false {
+		t.Errorf("Location mark on on line 21: %v", s)
+	}
+	if strings.Contains(s, "twentytwo") == true {
 		t.Errorf("Location mark on on line 22: %v", s)
 	}
 }

@@ -422,7 +422,7 @@ var SystemConfig = Config{
 	},
 	"indexer.settings.log_override": ConfigValue{
 		"",
-		"Indexer override log level. format is filename[:line]=Level[,...]",
+		"Indexer override log level.format is [relpath/]filename[:line]=LogLevel[,...] (wildcard * is allowed)",
 		"",
 	},
 	"projector.settings.log_level": ConfigValue{
@@ -432,7 +432,7 @@ var SystemConfig = Config{
 	},
 	"projector.settings.log_override": ConfigValue{
 		"",
-		"Projector override log level. format is filename[:line]=Level[,...]",
+		"Projector override log level. format is [relpath/]filename[:line]=LogLevel[,...] (wildcard * is allowed)",
 		"",
 	},
 }

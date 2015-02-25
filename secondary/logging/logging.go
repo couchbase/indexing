@@ -9,8 +9,8 @@ import "bytes"
 import "strconv"
 import "runtime"
 import "runtime/debug"
-import "path/filepath"
 import l "log"
+import rx "regexp"
 
 // Log levels
 type LogLevel int16
@@ -60,7 +60,10 @@ type Ender interface {
 // Implementation
 //
 
-type overrideMap map[string]LogLevel
+type overrideLoc struct {
+	matcher *rx.Regexp
+	level   LogLevel
+}
 
 // Messages administrator should eventually see.
 func (t LogLevel) String() string {
@@ -112,7 +115,7 @@ func Level(s string) LogLevel {
 type destination struct {
 	baselevel LogLevel
 	target    *l.Logger
-	overrides overrideMap
+	overrides *[]overrideLoc
 }
 
 type stopClock struct {
@@ -190,9 +193,9 @@ func (log *destination) LazyTrace(fn func() string) {
 // Add logging override. Format: filename[:line]=Level[,...]
 func (log *destination) AddOverride(line string) {
 	// infrequent, so clone to avoid locks
-	added := make(overrideMap)
-	for k, v := range log.overrides {
-		added[k] = v
+	added := make([]overrideLoc, 0, 16)
+	if log.overrides != nil {
+		added = append(added, *log.overrides...)
 	}
 	specs := strings.Split(line, ",")
 	for _, spec := range specs {
@@ -200,16 +203,25 @@ func (log *destination) AddOverride(line string) {
 		if len(kv) != 2 {
 			continue
 		}
-		added[kv[0]] = Level(kv[1])
+		exp, slvl := kv[0], kv[1]
+		exp = strings.Replace(exp, `*`, `.*`, -1)
+		if !strings.Contains(exp, ":") {
+			exp += `:[\d]+`
+		}
+		exp = exp + "$"
+		level := Level(slvl)
+		re, err := rx.Compile(exp)
+		if err == nil {
+			entry := overrideLoc{matcher: re, level: level}
+			added = append(added, entry)
+		}
 	}
-	log.overrides = added
+	log.overrides = &added
 }
 
 // Clear all overrides
 func (log *destination) ClearOverrides() {
-	// infrequent, so clone to avoid locks
-	added := make(overrideMap)
-	log.overrides = added
+	log.overrides = nil
 }
 
 // Stop the running timer and print timing
@@ -221,21 +233,17 @@ func (watch *stopClock) End() {
 // Check if enabled
 func (log *destination) isEnabled(at LogLevel, skip int) bool {
 	// normal production case
-	if len(log.overrides) == 0 {
+	if log.overrides == nil {
 		return log.baselevel >= at
 	}
 
 	// unusual case, perhaps troubleshooting
 	_, file, line, _ := runtime.Caller(skip + 1)
-	base := filepath.Base(file)
-	olvl, present := log.overrides[base]
-	if present {
-		return olvl >= at
-	}
-	name := base + ":" + strconv.Itoa(line)
-	olvl, present = log.overrides[name]
-	if present {
-		return olvl >= at
+	loc := file + ":" + strconv.Itoa(line)
+	for _, spec := range *log.overrides {
+		if spec.matcher.MatchString(loc) {
+			return spec.level >= at
+		}
 	}
 
 	return log.baselevel >= at
@@ -277,13 +285,13 @@ var SystemLogger destination
 
 func init() {
 	dest := l.New(os.Stdout, "", l.Lmicroseconds)
-	SystemLogger = destination{baselevel: Info, target: dest, overrides: make(overrideMap)}
+	SystemLogger = destination{baselevel: Info, target: dest, overrides: nil}
 }
 
 // SetLogWriter sets a new default destination
 func SetLogWriter(w io.Writer) {
 	dest := l.New(w, "", l.Lmicroseconds)
-	SystemLogger = destination{baselevel: Info, target: dest, overrides: make(overrideMap)}
+	SystemLogger = destination{baselevel: Info, target: dest, overrides: nil}
 }
 
 //

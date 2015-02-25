@@ -65,7 +65,7 @@
     logging level for the system. allowable values are silent|fatal|error|warn|info|debug|trace.
 
 **log.override** (string)
-    override log levels by file or line for troubleshooting. format is filename[:line]=Level[,...]
+    override log levels. format is [relpath/]filename[:line]=LogLevel[,...] (wildcard * is allowed)
 
 **projector.clusterAddr** (string)
     KV cluster's address to be used by projector
