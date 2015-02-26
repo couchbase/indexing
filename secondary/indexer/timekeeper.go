@@ -51,7 +51,8 @@ type InitialBuildInfo struct {
 
 //timeout in milliseconds to batch the vbuckets
 //together for repair message
-const REPAIR_BATCH_TIMEOUT = 100
+const REPAIR_BATCH_TIMEOUT = 1000
+const REPAIR_RETRY_INTERVAL = 5000
 
 //NewTimekeeper returns an instance of timekeeper or err message.
 //It listens on supvCmdch for command and every command is followed
@@ -1646,7 +1647,11 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	switch kvresp.GetMsgType() {
 
 	case MSG_SUCCESS:
-		//success, check for more vbuckets in repair state
+		//allow sufficient time for control messages to come in
+		//after projector has confirmed success
+		time.Sleep(REPAIR_RETRY_INTERVAL * time.Millisecond)
+
+		//check for more vbuckets in repair state
 		tk.repairStream(streamId, bucket)
 
 	case INDEXER_ROLLBACK:
