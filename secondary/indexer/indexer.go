@@ -1043,8 +1043,6 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 
 	case common.INIT_STREAM:
 
-		delete(idx.streamBucketRequestStopCh[streamId], bucket)
-
 		//send the ack to timekeeper
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
@@ -1806,11 +1804,6 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		respErr := resp.(*MsgError).GetError()
 		common.CrashOnError(respErr.cause)
 	}
-
-	if _, ok := idx.streamBucketRequestStopCh[streamId][bucket]; !ok {
-		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
-	}
-	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
 
 	go func() {
 	retryloop:

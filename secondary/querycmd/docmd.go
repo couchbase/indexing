@@ -4,9 +4,14 @@ import "encoding/json"
 import "flag"
 import "fmt"
 import "io"
+import "bytes"
 import "strings"
+import "strconv"
+import "net"
 import "errors"
 import "time"
+import "net/http"
+import "io/ioutil"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/logging"
@@ -44,6 +49,9 @@ type Command struct {
 	Equal     c.SecondaryKey
 	Inclusion qclient.Inclusion
 	Limit     int64
+	// Configuration
+	ConfigKey string
+	ConfigVal string
 	Help      bool
 }
 
@@ -59,8 +67,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 
 	// basic options
 	fset.StringVar(&cmdOptions.Server, "server", "127.0.0.1:9000", "Cluster server address")
-	fset.StringVar(&cmdOptions.OpType, "type", "scanAll",
-		"Index command (scan|stats|scanAll|count|nodes|create|build|drop|list)")
+	fset.StringVar(&cmdOptions.OpType, "type", "scanAll", "Command: scan|stats|scanAll|count|nodes|create|build|drop|list|config")
 	fset.StringVar(&cmdOptions.IndexName, "index", "", "Index name")
 	fset.StringVar(&cmdOptions.Bucket, "bucket", "default", "Bucket name")
 	fset.StringVar(&cmdOptions.Auth, "auth", "", "Auth user and password")
@@ -81,13 +88,12 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.UintVar(&inclusion, "incl", 0, "Range: 0|1|2|3")
 	fset.Int64Var(&cmdOptions.Limit, "limit", 10, "Row limit")
 	fset.BoolVar(&cmdOptions.Help, "h", false, "print help")
+	// options for setting configuration
+	fset.StringVar(&cmdOptions.ConfigKey, "ckey", "", "Config key")
+	fset.StringVar(&cmdOptions.ConfigVal, "cval", "", "Config value")
 
 	if err := fset.Parse(arguments); err != nil {
 		return nil, nil, fset, err
-	}
-
-	if cmdOptions.IndexName == "" {
-		cmdOptions.Help = true
 	}
 
 	// bindexes
@@ -169,7 +175,7 @@ func HandleCommand(
 		fmt.Fprintln(w, "List of nodes:")
 		nodes, err := client.Nodes()
 		if err != nil {
-			logging.Fatalf("%v\n", err)
+			return err
 		}
 		for adminport, queryport := range nodes {
 			fmt.Fprintf(w, "    {%v, %v}\n", adminport, queryport)
@@ -327,6 +333,69 @@ func HandleCommand(
 			if err == nil {
 				fmt.Fprintf(w, "Index %q/%q has %v entries\n", bucket, iname, count)
 			}
+		}
+
+	case "config":
+		nodes, err := client.Nodes()
+		if err != nil {
+			return err
+		}
+		var adminurl string
+		for adminurl, _ = range nodes {
+			break
+		}
+		host, sport, _ := net.SplitHostPort(adminurl)
+		iport, _ := strconv.Atoi(sport)
+
+		//
+		// hack, fix this
+		//
+		ihttp := iport + 2
+		url := "http://" + host + ":" + strconv.Itoa(ihttp) + "/settings"
+
+		oresp, err := http.Get(url)
+		if err != nil {
+			return err
+		}
+		obody, err := ioutil.ReadAll(oresp.Body)
+		if err != nil {
+			return err
+		}
+		oresp.Body.Close()
+
+		pretty := strings.Replace(string(obody), ",\"", ",\n\"", -1)
+		fmt.Printf("Current Settings:\n%s\n", string(pretty))
+
+		var jbody map[string]interface{}
+		err = json.Unmarshal(obody, &jbody)
+		if err != nil {
+			return err
+		}
+
+		if len(cmd.ConfigKey) > 0 {
+			fmt.Printf("Changing config key '%s' to value '%s'\n", cmd.ConfigKey, cmd.ConfigVal)
+			jbody[cmd.ConfigKey] = cmd.ConfigVal
+
+			pbody, err := json.Marshal(jbody)
+			if err != nil {
+				return err
+			}
+			_, err = http.Post(url, "text/json", bytes.NewBuffer(pbody))
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("New Settings:\n%s\n", string(pretty))
+			nresp, err := http.Get(url)
+			if err != nil {
+				return err
+			}
+			nbody, err := ioutil.ReadAll(nresp.Body)
+			if err != nil {
+				return err
+			}
+			pretty = strings.Replace(string(nbody), ",\"", ",\n\"", -1)
+			fmt.Printf("New Settings:\n%s\n", string(pretty))
 		}
 	}
 	return err

@@ -51,7 +51,8 @@ type InitialBuildInfo struct {
 
 //timeout in milliseconds to batch the vbuckets
 //together for repair message
-const REPAIR_BATCH_TIMEOUT = 100
+const REPAIR_BATCH_TIMEOUT = 1000
+const REPAIR_RETRY_INTERVAL = 5000
 
 //NewTimekeeper returns an instance of timekeeper or err message.
 //It listens on supvCmdch for command and every command is followed
@@ -745,8 +746,6 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 
 func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 
-	logging.Tracef("Timekeeper::handleSnapshotMarker %v", cmd)
-
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
@@ -776,7 +775,8 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 		ts.Snapshots[meta.vbucket][1] = snapshot.end
 
 		tk.ss.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
-		logging.Tracef("Timekeeper::handleSnapshotMarker \n\tUpdated TS %v", ts)
+		logging.Debugf("TK Snapshot %v %v %v %v %v %v", streamId, meta.bucket,
+			meta.vbucket, meta.vbuuid, snapshot.start, snapshot.end)
 	} else {
 		logging.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker. "+
 			"Unknown Type %v. Bucket %v. StreamId %v", snapshot.snapType, meta.bucket,
@@ -811,10 +811,11 @@ func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
 
 func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
-	logging.Debugf("Timekeeper::handleStreamBegin %v", cmd)
-
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	logging.Debugf("TK StreamBegin %v %v %v %v %v", streamId, meta.bucket,
+		meta.vbucket, meta.vbuuid, meta.seqno)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -864,10 +865,11 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
-	logging.Debugf("Timekeeper::handleStreamEnd %v", cmd)
-
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	logging.Debugf("TK StreamEnd %v %v %v %v %v", streamId, meta.bucket,
+		meta.vbucket, meta.vbuuid, meta.seqno)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -1138,8 +1140,6 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 	bucket string, flushTs *common.TsVbuuid) bool {
 
-	status := false
-
 	for _, buildInfo := range tk.indexBuildInfo {
 		//if index belongs to the flushed bucket and in INITIAL state
 		initBuildDone := false
@@ -1168,16 +1168,16 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 				if streamId == common.INIT_STREAM {
 					tk.changeIndexStateForBucket(bucket, common.INDEX_STATE_CATCHUP)
 				} else {
-					//cleanup the index as build is done
-					if _, ok := tk.indexBuildInfo[idx.InstId]; ok {
-						delete(tk.indexBuildInfo, idx.InstId)
+					//cleanup all indexes for bucket as build is done
+					for _, buildInfo := range tk.indexBuildInfo {
+						if buildInfo.indexInst.Defn.Bucket == bucket {
+							delete(tk.indexBuildInfo, buildInfo.indexInst.InstId)
+						}
 					}
 				}
 
 				logging.Debugf("Timekeeper::checkInitialBuildDone \n\tInitial Build Done Index: %v "+
 					"Stream: %v Bucket: %v BuildTS: %v", idx.InstId, streamId, bucket, buildInfo.buildTs)
-
-				status = true
 
 				//generate init build done msg
 				tk.supvRespch <- &MsgTKInitBuildDone{
@@ -1186,10 +1186,12 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 					buildTs:  buildInfo.buildTs,
 					bucket:   bucket}
 
+				return true
+
 			}
 		}
 	}
-	return status
+	return false
 }
 
 //checkInitStreamReadyToMerge checks if any index in Catchup State in INIT_STREAM
@@ -1645,7 +1647,11 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	switch kvresp.GetMsgType() {
 
 	case MSG_SUCCESS:
-		//success, check for more vbuckets in repair state
+		//allow sufficient time for control messages to come in
+		//after projector has confirmed success
+		time.Sleep(REPAIR_RETRY_INTERVAL * time.Millisecond)
+
+		//check for more vbuckets in repair state
 		tk.repairStream(streamId, bucket)
 
 	case INDEXER_ROLLBACK:

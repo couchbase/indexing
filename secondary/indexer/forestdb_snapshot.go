@@ -173,7 +173,7 @@ func (s *fdbSnapshot) Close() error {
 				}
 			} else {
 				logging.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
-				errors.New("Main DB Handle Nil")
+				return errors.New("Main DB Handle Nil")
 			}
 
 			//close the back index
@@ -185,8 +185,8 @@ func (s *fdbSnapshot) Close() error {
 					return err
 				}
 			} else {
-				logging.Errorf("ForestDBSnapshot::Close Back DB Handle Nil")
-				errors.New("Back DB Handle Nil")
+				//valid to be nil in case of primary index
+				logging.Warnf("ForestDBSnapshot::Close Back DB Handle Nil")
 			}
 
 			//close the meta index
@@ -200,7 +200,7 @@ func (s *fdbSnapshot) Close() error {
 					}
 				} else {
 					logging.Errorf("ForestDBSnapshot::Close Meta DB Handle Nil")
-					errors.New("Meta DB Handle Nil")
+					return errors.New("Meta DB Handle Nil")
 				}
 			}
 		}
