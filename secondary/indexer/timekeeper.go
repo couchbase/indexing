@@ -1140,8 +1140,6 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 	bucket string, flushTs *common.TsVbuuid) bool {
 
-	status := false
-
 	for _, buildInfo := range tk.indexBuildInfo {
 		//if index belongs to the flushed bucket and in INITIAL state
 		initBuildDone := false
@@ -1170,16 +1168,16 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 				if streamId == common.INIT_STREAM {
 					tk.changeIndexStateForBucket(bucket, common.INDEX_STATE_CATCHUP)
 				} else {
-					//cleanup the index as build is done
-					if _, ok := tk.indexBuildInfo[idx.InstId]; ok {
-						delete(tk.indexBuildInfo, idx.InstId)
+					//cleanup all indexes for bucket as build is done
+					for _, buildInfo := range tk.indexBuildInfo {
+						if buildInfo.indexInst.Defn.Bucket == bucket {
+							delete(tk.indexBuildInfo, buildInfo.indexInst.InstId)
+						}
 					}
 				}
 
 				logging.Debugf("Timekeeper::checkInitialBuildDone \n\tInitial Build Done Index: %v "+
 					"Stream: %v Bucket: %v BuildTS: %v", idx.InstId, streamId, bucket, buildInfo.buildTs)
-
-				status = true
 
 				//generate init build done msg
 				tk.supvRespch <- &MsgTKInitBuildDone{
@@ -1188,10 +1186,12 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 					buildTs:  buildInfo.buildTs,
 					bucket:   bucket}
 
+				return true
+
 			}
 		}
 	}
-	return status
+	return false
 }
 
 //checkInitStreamReadyToMerge checks if any index in Catchup State in INIT_STREAM
