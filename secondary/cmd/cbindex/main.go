@@ -41,7 +41,7 @@ func main() {
 	if err != nil {
 		logging.Fatalf("%v\n", err)
 		os.Exit(1)
-	} else if cmdOptions.Help {
+	} else if cmdOptions.Help || len(cmdOptions.OpType) < 1 {
 		usage(fset)
 		os.Exit(0)
 	}
