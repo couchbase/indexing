@@ -441,10 +441,19 @@ func (b *metadataClient) watchClusterChanges(cluster string) {
 		err := fmt.Errorf("error NewClusterInfoCache(): %v", err)
 		panic(err)
 	}
+	snotifer, err := common.NewServicesChangeNotifier(clusterURL, "default")
+	if err != nil {
+		err := fmt.Errorf("error common.NewServicesChangeNotifier(): %v", err)
+		panic(err)
+	}
 
 	for {
-		if err := cinfo.WaitAndUpdateServices(); err != nil {
-			err := fmt.Errorf("error while waiting for cluster change: %v", err)
+		if _, err := snotifer.Get(); err != nil {
+			if err == common.ErrNodeServicesCancel {
+				return
+			}
+
+			err := fmt.Errorf("error while waiting for node services config change: %v", err)
 			panic(err)
 		}
 		if err = b.updateIndexerList(cinfo); err != nil {
