@@ -1,6 +1,7 @@
 package test
 
 import (
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/manager"
@@ -22,6 +23,7 @@ type fakeProjector struct {
 
 type fakeAddressProvider struct {
 	adminport string
+	httpport  string
 }
 
 var TT *testing.T
@@ -41,7 +43,7 @@ func (p *TestDefaultClientFactory) GetClientForNode(server string) manager.Proje
 
 func (p *TestDefaultClientEnv) GetNodeListForBuckets(buckets []string) (map[string]string, error) {
 
-	common.Infof("testDefaultClientEnv.GetNodeListForBuckets() ")
+	logging.Infof("testDefaultClientEnv.GetNodeListForBuckets() ")
 	nodes := make(map[string]string)
 	nodes["127.0.0.1"] = "127.0.0.1"
 	return nodes, nil
@@ -49,7 +51,7 @@ func (p *TestDefaultClientEnv) GetNodeListForBuckets(buckets []string) (map[stri
 
 func (p *TestDefaultClientEnv) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
 
-	common.Infof("testDefaultClientEnv.GetNodeListForTimestamps() ")
+	logging.Infof("testDefaultClientEnv.GetNodeListForTimestamps() ")
 
 	nodes := make(map[string][]*protobuf.TsVbuuid)
 	nodes["127.0.0.1"] = nil
@@ -78,12 +80,12 @@ func NewFakeProjector(port string) *fakeProjector {
 
 	addr := net.JoinHostPort("127.0.0.1", port)
 	prefix := "endpoint.dataport."
-	config := common.SystemConfig.SectionConfig(prefix, true )
+	config := common.SystemConfig.SectionConfig(prefix, true)
 	maxvbs := common.SystemConfig["maxVbuckets"].Int()
 	flag := transport.TransportFlag(0).SetProtobuf()
 	config.Set("mutationChanSize", common.ConfigValue{10000, "channel size of projector-dataport-client's data path routine", 10000})
 	config.Set("parConnections", common.ConfigValue{1, "number of parallel connections to open with remote", 1})
-	
+
 	var err error
 	p.Client, err = dataport.NewClient("unit-test", "mutation topic", addr, flag, maxvbs, config)
 	if err != nil {
@@ -98,43 +100,65 @@ func (p *fakeProjector) Run(donech chan bool) {
 	<-donech
 	p.Client.Close()
 
-	common.Infof("fakeProjector: done")
+	logging.Infof("fakeProjector: done")
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// fakeAdderssProvider 
+// fakeAdderssProvider
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-func NewFakeAddressProvider(adminport string) common.ServiceAddressProvider {
-	return &fakeAddressProvider{adminport : adminport}
+func NewFakeAddressProvider(adminport string, httpport string) common.ServiceAddressProvider {
+	return &fakeAddressProvider{adminport: adminport, httpport: httpport}
 }
 
 func (p *fakeAddressProvider) GetLocalServiceAddress(srvc string) (string, error) {
 	if srvc == common.INDEX_ADMIN_SERVICE {
 		return p.adminport, nil
 	}
+
+	if srvc == common.INDEX_HTTP_SERVICE {
+		return p.httpport, nil
+	}
 	return "", nil
 }
 
 func (p *fakeAddressProvider) GetLocalServicePort(srvc string) (string, error) {
 	if srvc == common.INDEX_ADMIN_SERVICE {
-		_, port, err := net.SplitHostPort(p.adminport) 
+		_, port, err := net.SplitHostPort(p.adminport)
 		if err != nil {
 			return "", err
 		}
 		return net.JoinHostPort("", port), nil
 	}
+
+	if srvc == common.INDEX_HTTP_SERVICE {
+		_, port, err := net.SplitHostPort(p.httpport)
+		if err != nil {
+			return "", err
+		}
+		return net.JoinHostPort("", port), nil
+	}
+
 	return "", nil
 }
 
 func (p *fakeAddressProvider) GetLocalServiceHost(srvc string) (string, error) {
 	if srvc == common.INDEX_ADMIN_SERVICE {
-		h, _, err := net.SplitHostPort(p.adminport) 
+		h, _, err := net.SplitHostPort(p.adminport)
 		if err != nil {
 			return "", err
 		}
 		return h, nil
 	}
+
+	if srvc == common.INDEX_HTTP_SERVICE {
+		h, _, err := net.SplitHostPort(p.httpport)
+		if err != nil {
+			return "", err
+		}
+		return h, nil
+	}
+
 	return "", nil
 }
 

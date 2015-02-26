@@ -11,6 +11,7 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"os"
 	"testing"
@@ -21,10 +22,9 @@ import (
 
 func TestCoordinator(t *testing.T) {
 
-	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 
-	common.Infof("Start TestCoordinator *********************************************************")
+	logging.Infof("Start TestCoordinator *********************************************************")
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
@@ -84,7 +84,7 @@ func TestCoordinator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	common.Infof("Topology after index creation : %s", string(content))
+	logging.Infof("Topology after index creation : %s", string(content))
 
 	inst := topology.GetIndexInstByDefn(common.IndexDefnId(200))
 	if inst == nil || common.IndexState(inst.State) != common.INDEX_STATE_READY {
@@ -96,7 +96,7 @@ func TestCoordinator(t *testing.T) {
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("Done TestCoordinator. Tearing down *********************************************************")
+	logging.Infof("Done TestCoordinator. Tearing down *********************************************************")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }
@@ -106,7 +106,7 @@ func cleanup(mgr *manager.IndexManager, t *testing.T) {
 
 	err := mgr.HandleDeleteIndexDDL(common.IndexDefnId(200))
 	if err != nil {
-		common.Infof("Error deleting index %s:%s, err=%s", "Default", "coordinator_test", err)
+		logging.Infof("Error deleting index %s:%s, err=%s", "Default", "coordinator_test", err)
 	}
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }

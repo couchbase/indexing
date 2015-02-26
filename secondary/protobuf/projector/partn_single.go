@@ -50,7 +50,7 @@ func (p *SinglePartition) Hosts(inst *IndexInst) []string {
 // - `partnKey` is ignored.
 // - for now, `oldKey` is ignored.
 func (p *SinglePartition) UpsertEndpoints(
-	inst *IndexInst, m *mc.UprEvent, partKey, key, oldKey []byte) []string {
+	inst *IndexInst, m *mc.DcpEvent, partKey, key, oldKey []byte) []string {
 
 	return p.GetEndpoints()
 }
@@ -58,7 +58,7 @@ func (p *SinglePartition) UpsertEndpoints(
 // UpsertDeletionEndpoints implements Partition{} interface.
 // - always return an empty list.
 func (p *SinglePartition) UpsertDeletionEndpoints(
-	inst *IndexInst, m *mc.UprEvent, oldPartKey, key, oldKey []byte) []string {
+	inst *IndexInst, m *mc.DcpEvent, oldPartKey, key, oldKey []byte) []string {
 
 	return nil
 }
@@ -68,7 +68,7 @@ func (p *SinglePartition) UpsertDeletionEndpoints(
 // - `oldPartKey` is ignored.
 // - for now, `oldKey` is ignored.
 func (p *SinglePartition) DeletionEndpoints(
-	inst *IndexInst, m *mc.UprEvent, oldPartKey, oldKey []byte) []string {
+	inst *IndexInst, m *mc.DcpEvent, oldPartKey, oldKey []byte) []string {
 
 	return p.GetEndpoints()
 }

@@ -2,8 +2,8 @@ package projector
 
 import "fmt"
 import "time"
-import "runtime/debug"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/dcp"
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
@@ -23,10 +23,10 @@ type Feed struct {
 	// vbucket entry from this timestamp is deleted only when a SUCCESS,
 	// ROLLBACK or ERROR response is received from feeder.
 	reqTss map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
-	// actTs, once StreamBegin SUCCESS response is got back from UPR,
+	// actTs, once StreamBegin SUCCESS response is got back from DCP,
 	// vbucket entry is moved here.
 	actTss map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
-	// rollTs, when StreamBegin ROLLBACK response is got back from UPR,
+	// rollTs, when StreamBegin ROLLBACK response is got back from DCP,
 	// vbucket entry is moved here.
 	rollTss map[string]*protobuf.TsVbuuid // bucket -> TsVbuuid
 
@@ -39,6 +39,8 @@ type Feed struct {
 	reqch  chan []interface{}
 	backch chan []interface{}
 	finch  chan bool
+	// book-keeping for stale-ness
+	stale int
 
 	// config params
 	maxVbuckets int
@@ -89,7 +91,7 @@ func NewFeed(topic string, config c.Config) (*Feed, error) {
 	feed.logPrefix = fmt.Sprintf("FEED[<=>%v(%v)]", topic, feed.cluster)
 
 	go feed.genServer()
-	c.Infof("%v started ...\n", feed.logPrefix)
+	logging.Infof("%v feed started ...\n", feed.logPrefix)
 	return feed, nil
 }
 
@@ -102,6 +104,7 @@ const (
 	fCmdAddInstances
 	fCmdDelInstances
 	fCmdRepairEndpoints
+	fCmdStaleCheck
 	fCmdShutdown
 	fCmdGetTopicResponse
 	fCmdGetStatistics
@@ -200,6 +203,19 @@ func (feed *Feed) RepairEndpoints(req *protobuf.RepairEndpointsRequest) error {
 	return c.OpError(err, resp, 0)
 }
 
+// StaleCheck will check for feed sanity and return "exit" if feed
+// has was already stale and still stale.
+// Synchronous call.
+func (feed *Feed) StaleCheck() (string, error) {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdStaleCheck, respch}
+	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	if err != nil {
+		return "exit", err
+	}
+	return resp[0].(string), nil
+}
+
 // GetTopicResponse for this feed.
 // Synchronous call.
 func (feed *Feed) GetTopicResponse() *protobuf.TopicResponse {
@@ -243,7 +259,7 @@ func (v *controlStreamRequest) Repr() string {
 
 // PostStreamRequest feedback from data-path.
 // Asynchronous call.
-func (feed *Feed) PostStreamRequest(bucket string, m *mc.UprEvent) {
+func (feed *Feed) PostStreamRequest(bucket string, m *mc.DcpEvent) {
 	var respch chan []interface{}
 	cmd := &controlStreamRequest{
 		bucket: bucket,
@@ -253,6 +269,8 @@ func (feed *Feed) PostStreamRequest(bucket string, m *mc.UprEvent) {
 		vbuuid: m.VBuuid,
 		seqno:  m.Seqno, // can also be roll-back seqno, based on status
 	}
+	fmsg := "%v ##%x backch %T %v\n"
+	logging.Debugf(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
 	c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
 }
 
@@ -270,7 +288,7 @@ func (v *controlStreamEnd) Repr() string {
 
 // PostStreamEnd feedback from data-path.
 // Asynchronous call.
-func (feed *Feed) PostStreamEnd(bucket string, m *mc.UprEvent) {
+func (feed *Feed) PostStreamEnd(bucket string, m *mc.DcpEvent) {
 	var respch chan []interface{}
 	cmd := &controlStreamEnd{
 		bucket: bucket,
@@ -278,6 +296,8 @@ func (feed *Feed) PostStreamEnd(bucket string, m *mc.UprEvent) {
 		status: m.Status,
 		vbno:   m.VBucket,
 	}
+	fmsg := "%v ##%x backch %T %v\n"
+	logging.Debugf(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
 	c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
 }
 
@@ -294,14 +314,16 @@ func (v *controlFinKVData) Repr() string {
 func (feed *Feed) PostFinKVdata(bucket string) {
 	var respch chan []interface{}
 	cmd := &controlFinKVData{bucket: bucket}
+	fmsg := "%v backch %T %v\n"
+	logging.Debugf(fmsg, feed.logPrefix, cmd, cmd.Repr())
 	c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
 }
 
 func (feed *Feed) genServer() {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			c.Errorf("%v gen-server crashed: %v\n", feed.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v feed gen-server crashed: %v\n", feed.logPrefix, r)
+			logging.Errorf("%s", logging.StackTrace())
 			feed.shutdown()
 		}
 	}()
@@ -315,69 +337,98 @@ loop:
 	for {
 		select {
 		case msg = <-feed.reqch:
-			if feed.handleCommand(msg) {
+			switch feed.handleCommand(msg) {
+			case "ok":
+				feed.stale = 0
+
+			case "stale":
+				if feed.stale == 1 { // already gone stale.
+					logging.Warnf("%v feed collect stale...", feed.logPrefix)
+					break loop
+				}
+				logging.Warnf("%v feed mark stale...", feed.logPrefix)
+				feed.stale++
+
+			case "exit":
 				break loop
 			}
 
 		case msg = <-feed.backch:
-			if v, ok := msg[0].(*controlStreamRequest); ok {
-				reqTs, ok := feed.reqTss[v.bucket]
-				seqno, vbuuid, sStart, sEnd, err := reqTs.Get(v.vbno)
+			prefix := feed.logPrefix
+			if cmd, ok := msg[0].(*controlStreamRequest); ok {
+				reqTs, ok := feed.reqTss[cmd.bucket]
+				seqno, vbuuid, sStart, sEnd, err := reqTs.Get(cmd.vbno)
 				if err != nil {
-					c.Errorf("%v unexpected %T for %v\n", feed.logPrefix, v, v)
+					fmsg := "%v ##%x backch flush %T: %v\n"
+					logging.Fatalf(fmsg, prefix, cmd, cmd.opaque, err)
 
 				} else if ok {
-					c.Debugf("%v back channel flush %v\n", feed.logPrefix, v.Repr())
-					reqTs = reqTs.FilterByVbuckets([]uint16{v.vbno})
-					feed.reqTss[v.bucket] = reqTs
+					reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
+					feed.reqTss[cmd.bucket] = reqTs
 
-					if v.status == mcd.ROLLBACK {
-						rollTs := feed.rollTss[v.bucket]
-						rollTs.Append(v.vbno, v.seqno, vbuuid, sStart, sEnd)
+					if cmd.status == mcd.ROLLBACK {
+						fmsg := "%v ##%x backch flush rollback %T: %v\n"
+						logging.Debugf(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
+						rollTs := feed.rollTss[cmd.bucket]
+						rollTs.Append(cmd.vbno, cmd.seqno, vbuuid, sStart, sEnd)
 
-					} else if v.status == mcd.SUCCESS {
-						actTs := feed.actTss[v.bucket]
-						actTs.Append(v.vbno, seqno, vbuuid, sStart, sEnd)
+					} else if cmd.status == mcd.SUCCESS {
+						fmsg := "%v ##%x backch flush success %T: %v\n"
+						logging.Debugf(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
+						actTs := feed.actTss[cmd.bucket]
+						actTs.Append(cmd.vbno, seqno, vbuuid, sStart, sEnd)
+
+					} else {
+						fmsg := "%v ##%x backch flush error %T: %v\n"
+						logging.Errorf(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
 					}
 				}
 
-			} else if v, ok := msg[0].(*controlStreamEnd); ok {
-				c.Debugf("%v back channel flush %v\n", feed.logPrefix, v.Repr())
-				reqTs := feed.reqTss[v.bucket]
-				reqTs = reqTs.FilterByVbuckets([]uint16{v.vbno})
-				feed.reqTss[v.bucket] = reqTs
+			} else if cmd, ok := msg[0].(*controlStreamEnd); ok {
+				fmsg := "%v ##%x backch flush %T: %v\n"
+				logging.Debugf(fmsg, prefix, cmd.opaque, cmd.Repr())
+				reqTs := feed.reqTss[cmd.bucket]
+				reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
+				feed.reqTss[cmd.bucket] = reqTs
 
-				actTs := feed.actTss[v.bucket]
-				actTs = actTs.FilterByVbuckets([]uint16{v.vbno})
-				feed.actTss[v.bucket] = actTs
+				actTs := feed.actTss[cmd.bucket]
+				actTs = actTs.FilterByVbuckets([]uint16{cmd.vbno})
+				feed.actTss[cmd.bucket] = actTs
 
-				rollTs := feed.rollTss[v.bucket]
-				rollTs = rollTs.FilterByVbuckets([]uint16{v.vbno})
-				feed.rollTss[v.bucket] = rollTs
+				rollTs := feed.rollTss[cmd.bucket]
+				rollTs = rollTs.FilterByVbuckets([]uint16{cmd.vbno})
+				feed.rollTss[cmd.bucket] = rollTs
 
-			} else if v, ok := msg[0].(*controlFinKVData); ok {
-				actTs, ok := feed.actTss[v.bucket]
+			} else if cmd, ok := msg[0].(*controlFinKVData); ok {
+				logging.Debugf(
+					"%v backch flush %T -- %v\n", prefix, cmd, cmd.Repr())
+				actTs, ok := feed.actTss[cmd.bucket]
 				if ok && actTs != nil && actTs.Len() == 0 { // bucket is done
-					prefix := feed.logPrefix
-					c.Debugf("%v self deleting bucket %v\n", prefix, v.bucket)
-					feed.cleanupBucket(v.bucket, false)
+					logging.Debugf("%v self deleting bucket\n", prefix)
+					feed.cleanupBucket(cmd.bucket, false)
+
+				} else {
+					logging.Fatalf("%v FinKVData before StreamEnds\n", prefix)
 				}
 
 			} else {
-				c.Errorf("%v back channel flush %T\n", feed.logPrefix, msg[0])
+				logging.Fatalf("%v backch flush %T: %v\n", prefix, msg[0], msg[0])
 			}
 
 		case <-timeout:
-			// TODO: should this be ERROR ?
-			if len(feed.backch) > 0 {
-				c.Debugf(ctrlMsg, feed.logPrefix, len(feed.backch))
+			if len(feed.backch) > 0 { // can happend during rebalance.
+				logging.Debugf(ctrlMsg, feed.logPrefix, len(feed.backch))
 			}
 		}
 	}
+	timeout = nil
 }
 
-func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
-	exit = false
+// "ok"    - command handled.
+// "stale" - feed has gone stale.
+// "exit"  - feed was already stale, so exit feed.
+func (feed *Feed) handleCommand(msg []interface{}) (status string) {
+	status = "ok"
 
 	switch cmd := msg[0].(byte); cmd {
 	case fCmdStart:
@@ -426,6 +477,12 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 		respch := msg[2].(chan []interface{})
 		respch <- []interface{}{feed.repairEndpoints(req)}
 
+	case fCmdStaleCheck:
+		respch := msg[1].(chan []interface{})
+		what := feed.staleCheck()
+		status = what
+		respch <- []interface{}{what}
+
 	case fCmdGetTopicResponse:
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.topicResponse()}
@@ -442,10 +499,10 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 	case fCmdShutdown:
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.shutdown()}
-		exit = true
+		status = "exit"
 
 	}
-	return exit
+	return status
 }
 
 // start a new feed.
@@ -458,15 +515,15 @@ func (feed *Feed) handleCommand(msg []interface{}) (exit bool) {
 func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 	feed.endpointType = req.GetEndpointType()
 
+	opaque := newOpaque() // iterate request-timestamp for each bucket
+
 	// update engines and endpoints
-	if err = feed.processSubscribers(req); err != nil { // :SideEffect:
+	if err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
 		return err
 	}
-	// iterate request-timestamp for each bucket.
-	opaque := newOpaque()
 	for _, ts := range req.GetReqTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
-		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
+		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
 		if e != nil {
 			err = e
 			feed.cleanupBucket(bucketn, false)
@@ -498,9 +555,9 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
-		kvdata := feed.startDataPath(bucketn, feeder, ts)
+		kvdata := feed.startDataPath(bucketn, feeder, opaque, ts)
 		engines, _ := feed.engines[bucketn]
-		kvdata.AddEngines(engines, feed.endpoints)
+		kvdata.AddEngines(opaque, engines, feed.endpoints)
 		feed.kvdata[bucketn] = kvdata // :SideEffect:
 		// wait for stream to start ...
 		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
@@ -514,10 +571,12 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 		if e != nil {
 			err = e
 		}
-		c.Infof("%v stream-request %s, rollback: %v, success: vbnos %v #%x\n",
-			feed.logPrefix, bucketn,
+		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
+		logging.Infof(
+			fmsg,
+			feed.logPrefix, opaque, bucketn,
 			feed.rollTss[bucketn].GetVbnos(),
-			feed.actTss[bucketn].GetVbnos(), opaque)
+			feed.actTss[bucketn].GetVbnos())
 	}
 	return err
 }
@@ -532,16 +591,16 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 func (feed *Feed) restartVbuckets(
 	req *protobuf.RestartVbucketsRequest) (err error) {
 
+	opaque := newOpaque() // iterate request-timestamp for each bucket
+
 	// FIXME: restart-vbuckets implies a repair Endpoint.
 	raddrs := feed.endpointRaddrs()
 	rpReq := protobuf.NewRepairEndpointsRequest(feed.topic, raddrs)
 	feed.repairEndpoints(rpReq)
 
-	// iterate request-timestamp for each bucket.
-	opaque := newOpaque()
 	for _, ts := range req.GetRestartTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
-		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
+		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
 		if e != nil {
 			err = e
 			feed.cleanupBucket(bucketn, false)
@@ -566,7 +625,7 @@ func (feed *Feed) restartVbuckets(
 		reqTs = ts.Union(ts)
 		// if bucket already present update kvdata first.
 		if _, ok := feed.kvdata[bucketn]; ok {
-			feed.kvdata[bucketn].UpdateTs(ts)
+			feed.kvdata[bucketn].UpdateTs(opaque, ts)
 		}
 		// (re)start the upstream, after filtering out remote vbuckets.
 		feeder, e := feed.bucketFeed(opaque, false, true, ts)
@@ -578,9 +637,9 @@ func (feed *Feed) restartVbuckets(
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
 		if _, ok := feed.kvdata[bucketn]; !ok {
-			kvdata := feed.startDataPath(bucketn, feeder, ts)
+			kvdata := feed.startDataPath(bucketn, feeder, opaque, ts)
 			engines, _ := feed.engines[bucketn]
-			kvdata.AddEngines(engines, feed.endpoints)
+			kvdata.AddEngines(opaque, engines, feed.endpoints)
 			feed.kvdata[bucketn] = kvdata // :SideEffect:
 		}
 		// wait stream to start ...
@@ -595,10 +654,12 @@ func (feed *Feed) restartVbuckets(
 		if e != nil {
 			err = e
 		}
-		c.Infof("%v stream-request %s, rollback: %v, success: vbnos %v #%x\n",
-			feed.logPrefix, bucketn,
+		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
+		logging.Infof(
+			fmsg,
+			feed.logPrefix, opaque, bucketn,
 			feed.rollTss[bucketn].GetVbnos(),
-			feed.actTss[bucketn].GetVbnos(), opaque)
+			feed.actTss[bucketn].GetVbnos())
 	}
 	return err
 }
@@ -612,11 +673,12 @@ func (feed *Feed) restartVbuckets(
 // - return ErrorResponseTimeout if feedback is not completed within timeout.
 func (feed *Feed) shutdownVbuckets(
 	req *protobuf.ShutdownVbucketsRequest) (err error) {
+
 	// iterate request-timestamp for each bucket.
 	opaque := newOpaque()
 	for _, ts := range req.GetShutdownTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
-		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
+		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
 		if e != nil {
 			err = e
 			//FIXME: in case of shutdown we are not cleaning the bucket !
@@ -630,8 +692,8 @@ func (feed *Feed) shutdownVbuckets(
 		rollTs, ok2 := feed.rollTss[bucketn]
 		reqTs, ok3 := feed.reqTss[bucketn]
 		if !ok1 || !ok2 || !ok3 {
-			msg := "%v shutdownVbuckets() invalid bucket %v\n"
-			c.Errorf(msg, feed.logPrefix, bucketn)
+			fmsg := "%v ##%x shutdownVbuckets() invalid-bucket %v\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
 			err = projC.ErrorInvalidBucket
 			continue
 		}
@@ -653,8 +715,8 @@ func (feed *Feed) shutdownVbuckets(
 		if e != nil {
 			err = e
 		}
-		c.Infof("%v stream-end completed for bucket %v, vbnos %v #%x\n",
-			feed.logPrefix, bucketn, vbnos, opaque)
+		fmsg := "%v ##%x stream-end completed for bucket %v, vbnos %v\n"
+		logging.Infof(fmsg, feed.logPrefix, opaque, bucketn, vbnos)
 	}
 	return err
 }
@@ -668,16 +730,17 @@ func (feed *Feed) shutdownVbuckets(
 // - return ErrorStreamRequest if StreamRequest failed for some reason
 // - return ErrorResponseTimeout if feedback is not completed within timeout.
 func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
+
+	opaque := newOpaque() // iterate request-timestamp for each bucket
+
 	// update engines and endpoints
-	if err = feed.processSubscribers(req); err != nil { // :SideEffect:
+	if err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
 		return err
 	}
 
-	// iterate request-timestamp for each bucket.
-	opaque := newOpaque()
 	for _, ts := range req.GetReqTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
-		vbnos, e := feed.getLocalVbuckets(pooln, bucketn)
+		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
 		if e != nil {
 			err = e
 			feed.cleanupBucket(bucketn, false)
@@ -709,9 +772,9 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
-		kvdata := feed.startDataPath(bucketn, feeder, ts)
+		kvdata := feed.startDataPath(bucketn, feeder, opaque, ts)
 		engines, _ := feed.engines[bucketn]
-		kvdata.AddEngines(engines, feed.endpoints)
+		kvdata.AddEngines(opaque, engines, feed.endpoints)
 		feed.kvdata[bucketn] = kvdata // :SideEffect:
 		// wait for stream to start ...
 		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
@@ -725,10 +788,11 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 		if e != nil {
 			err = e
 		}
-		c.Infof("%v stream-request %s, rollback: %v, success: vbnos %v #%x\n",
-			feed.logPrefix, bucketn,
+		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
+		logging.Infof(
+			fmsg, feed.logPrefix, opaque, bucketn,
 			feed.rollTss[bucketn].GetVbnos(),
-			feed.actTss[bucketn].GetVbnos(), opaque)
+			feed.actTss[bucketn].GetVbnos())
 	}
 	return err
 }
@@ -746,16 +810,17 @@ func (feed *Feed) delBuckets(req *protobuf.DelBucketsRequest) error {
 // - return ErrorInconsistentFeed for malformed feed request
 func (feed *Feed) addInstances(req *protobuf.AddInstancesRequest) error {
 	// update engines and endpoints
-	if err := feed.processSubscribers(req); err != nil { // :SideEffect:
+	if err := feed.processSubscribers(0xFFFF, req); err != nil { // :SideEffect:
 		return err
 	}
 	var err error
 	// post to kv data-path
 	for bucketn, engines := range feed.engines {
 		if _, ok := feed.kvdata[bucketn]; ok {
-			feed.kvdata[bucketn].AddEngines(engines, feed.endpoints)
+			feed.kvdata[bucketn].AddEngines(0xFFFF, engines, feed.endpoints)
 		} else {
-			feed.errorf("addInstances() invalid bucket", bucketn, nil)
+			fmsg := "%v addInstances() invalid-bucket %q\n"
+			logging.Errorf(fmsg, feed.logPrefix, bucketn)
 			err = projC.ErrorInvalidBucket
 		}
 	}
@@ -787,9 +852,10 @@ func (feed *Feed) delInstances(req *protobuf.DelInstancesRequest) error {
 	// posted post to kv data-path.
 	for bucketn, uuids := range bucknIds {
 		if _, ok := feed.kvdata[bucketn]; ok {
-			feed.kvdata[bucketn].DeleteEngines(uuids)
+			feed.kvdata[bucketn].DeleteEngines(0xFFFF, uuids)
 		} else {
-			feed.errorf("delInstances() invalid bucket", bucketn, nil)
+			fmsg := "%v delInstances() invalid-bucket %q"
+			logging.Errorf(fmsg, feed.logPrefix, bucketn)
 			err = projC.ErrorInvalidBucket
 		}
 	}
@@ -803,26 +869,25 @@ func (feed *Feed) repairEndpoints(
 
 	prefix := feed.logPrefix
 	for _, raddr := range req.GetEndpoints() {
-		c.Debugf("%v trying to repair %q\n", prefix, raddr)
-		raddr1, endpoint, e := feed.getEndpoint(raddr)
+		logging.Debugf("%v trying to repair %q\n", prefix, raddr)
+		raddr1, endpoint, e := feed.getEndpoint(raddr, 0xFFF)
 		if e != nil {
-			c.Errorf("%v error repairing endpoint %q\n", prefix, raddr1)
 			err = e
 			continue
 
-		} else if (endpoint == nil) || (endpoint != nil && !endpoint.Ping()) {
-			// endpoint found but not active or enpoint is not found.
-			c.Infof("%v endpoint %q restarting ...\n", prefix, raddr)
+		} else if (endpoint == nil) || !endpoint.Ping() {
 			topic, typ := feed.topic, feed.endpointType
 			endpoint, e = feed.epFactory(topic, typ, raddr)
 			if e != nil {
-				c.Errorf("%v error repairing endpoint %q\n", prefix, raddr1)
+				fmsg := "%v endpoint-factor %q: %v\n"
+				logging.Errorf(fmsg, prefix, raddr1, e)
 				err = e
 				continue
 			}
+			logging.Infof("%v endpoint %q restarted\n", prefix, raddr)
 
 		} else {
-			c.Infof("%v endpoint %q active ...\n", prefix, raddr)
+			logging.Infof("%v endpoint %q active ...\n", prefix, raddr)
 		}
 		// FIXME: hack to make both node-name available from
 		// endpoints table.
@@ -833,9 +898,23 @@ func (feed *Feed) repairEndpoints(
 	// posted to each kv data-path
 	for bucketn, kvdata := range feed.kvdata {
 		// though only endpoints have been updated
-		kvdata.AddEngines(feed.engines[bucketn], feed.endpoints)
+		kvdata.AddEngines(0xFFFF, feed.engines[bucketn], feed.endpoints)
 	}
 	return nil
+}
+
+// return,
+// "ok", feed is active.
+// "stale", feed is stale.
+func (feed *Feed) staleCheck() string {
+	raddrs := []string{}
+	for raddr, endpoint := range feed.endpoints {
+		if endpoint.Ping() {
+			return "ok" // feed active
+		}
+		raddrs = append(raddrs, raddr)
+	}
+	return "stale"
 }
 
 func (feed *Feed) getStatistics() c.Statistics {
@@ -861,13 +940,11 @@ func (feed *Feed) setConfig(config c.Config) {
 	feed.reqTimeout = time.Duration(pconf["feedWaitStreamReqTimeout"].Int())
 	feed.endTimeout = time.Duration(pconf["feedWaitStreamEndTimeout"].Int())
 	feed.epFactory = epf
-	c.Infof("%v updated configuration ...\n", feed.logPrefix)
-	c.Infof(
-		"%v feedWaitStreamReqTimeout : %v*1000\n",
-		feed.logPrefix, feed.reqTimeout)
-	c.Infof(
-		"%v feedWaitStreamEndTimeout : %v*1000\n",
-		feed.logPrefix, feed.endTimeout)
+	logging.Infof("%v updated configuration ...\n", feed.logPrefix)
+	logging.Infof(
+		"%v feedWaitStreamReqTimeout : %v\n", feed.logPrefix, feed.reqTimeout)
+	logging.Infof(
+		"%v feedWaitStreamEndTimeout : %v\n", feed.logPrefix, feed.endTimeout)
 	for _, kvdata := range feed.kvdata {
 		kvdata.SetConfig(pconf)
 	}
@@ -881,8 +958,8 @@ func (feed *Feed) setConfig(config c.Config) {
 func (feed *Feed) shutdown() error {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v shutdown() crashed: %v\n", feed.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v shutdown() crashed: %v\n", feed.logPrefix, r)
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 
@@ -901,7 +978,7 @@ func (feed *Feed) shutdown() error {
 	}
 	// cleanup
 	close(feed.finch)
-	c.Infof("%v ... stopped\n", feed.logPrefix)
+	logging.Infof("%v feed ... stopped\n", feed.logPrefix)
 	return nil
 }
 
@@ -946,7 +1023,7 @@ func (feed *Feed) bucketFeed(
 	}()
 
 	vbnos := c.Vbno32to16(reqTs.GetVbnos())
-	_ /*vbuuids*/, err = feed.bucketDetails(pooln, bucketn, vbnos)
+	_ /*vbuuids*/, err = feed.bucketDetails(pooln, bucketn, opaque, vbnos)
 	if err != nil {
 		return nil, projC.ErrorFeeder
 	}
@@ -954,7 +1031,7 @@ func (feed *Feed) bucketFeed(
 	// if streams need to be started, make sure that branch
 	// histories are the same.
 	// FIXME: this is any way redundant during a race between
-	// KV and indexer. We will allow UPR to fail.
+	// KV and indexer. We will allow DCP to fail.
 	//
 	//if start {
 	//    if reqTs.VerifyBranch(vbnos, vbuuids) == false {
@@ -973,29 +1050,35 @@ func (feed *Feed) bucketFeed(
 		}
 		uuid, err := c.NewUUID()
 		if err != nil {
-			c.Errorf("Could not generate UUID in c.NewUUID", bucketn, err)
+			fmsg := "%v ##%x c.NewUUID(): %v"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
 			return nil, err
 		}
 		name := newDCPConnectionName(bucket.Name, feed.topic, uuid.Uint64())
 		feeder, err = OpenBucketFeed(name, bucket)
 		if err != nil {
-			feed.errorf("OpenBucketFeed()", bucketn, err)
+			fmsg := "%v ##%x OpenBucketFeed(%q): %v"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
 			return nil, projC.ErrorFeeder
 		}
 	}
 
 	// stop and start are mutually exclusive
 	if stop {
-		c.Infof("%v stop-timestamp- %v\n", feed.logPrefix, reqTs.Repr())
+		fmsg := "%v ##%x stop-timestamp %v\n"
+		logging.Infof(fmsg, feed.logPrefix, opaque, reqTs.Repr())
 		if err = feeder.EndVbStreams(opaque, reqTs); err != nil {
-			feed.errorf("EndVbStreams()", bucketn, err)
+			fmsg := "%v ##%x EndVbStreams(%q): %v"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
 			return feeder, projC.ErrorFeeder
 		}
 
 	} else if start {
-		c.Infof("%v start-timestamp- %v\n", feed.logPrefix, reqTs.Repr())
+		fmsg := "%v ##%x start-timestamp %v\n"
+		logging.Infof(fmsg, feed.logPrefix, opaque, reqTs.Repr())
 		if err = feeder.StartVbStreams(opaque, reqTs); err != nil {
-			feed.errorf("StartVbStreams()", bucketn, err)
+			fmsg := "%v ##%x StartVbStreams(%q): %v"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
 			return feeder, projC.ErrorFeeder
 		}
 	}
@@ -1004,7 +1087,7 @@ func (feed *Feed) bucketFeed(
 
 // - return dcp-client failures.
 func (feed *Feed) bucketDetails(
-	pooln, bucketn string, vbnos []uint16) ([]uint64, error) {
+	pooln, bucketn string, opaque uint16, vbnos []uint16) ([]uint64, error) {
 
 	bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn)
 	if err != nil {
@@ -1015,19 +1098,22 @@ func (feed *Feed) bucketDetails(
 	// failover-logs
 	flogs, err := bucket.GetFailoverLogs(vbnos)
 	if err != nil {
-		feed.errorf("bucket.GetFailoverLogs()", bucketn, err)
+		fmsg := "%v ##%x %q.GetFailoverLogs(): %v"
+		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
 		return nil, err
 	}
 	vbuuids := make([]uint64, len(vbnos))
 	for i, vbno := range vbnos {
 		flog := flogs[vbno]
 		if len(flog) < 1 {
-			feed.errorf("bucket.FailoverLog empty", bucketn, nil)
+			fmsg := "%v ##%x %q.FailoverLog() empty"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
 			return nil, projC.ErrorInvalidVbucket
 		}
 		latestVbuuid, _, err := flog.Latest()
 		if err != nil {
-			feed.errorf("bucket.FailoverLog invalid log", bucketn, nil)
+			fmsg := "%v ##%x %q.FailoverLog invalid log"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
 			return nil, err
 		}
 		vbuuids[i] = latestVbuuid
@@ -1036,7 +1122,9 @@ func (feed *Feed) bucketDetails(
 	return vbuuids, nil
 }
 
-func (feed *Feed) getLocalVbuckets(pooln, bucketn string) ([]uint16, error) {
+func (feed *Feed) getLocalVbuckets(
+	pooln, bucketn string, opaque uint16) ([]uint16, error) {
+
 	prefix := feed.logPrefix
 	// gather vbnos based on colocation policy.
 	var cinfo *c.ClusterInfoCache
@@ -1045,48 +1133,56 @@ func (feed *Feed) getLocalVbuckets(pooln, bucketn string) ([]uint16, error) {
 		cinfo, err = c.NewClusterInfoCache(url, pooln)
 	}
 	if err != nil {
-		c.Errorf("%v ClusterInfoCache(`%v`): %v\n", prefix, bucketn, err)
+		fmsg := "%v ##%x ClusterInfoCache(`%v`): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
 		return nil, projC.ErrorClusterInfo
 	}
 	if err := cinfo.Fetch(); err != nil {
-		c.Errorf("%v cinfo.Fetch(`%v`): %v\n", prefix, bucketn, err)
+		fmsg := "%v ##%x cinfo.Fetch(`%v`): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
 		return nil, projC.ErrorClusterInfo
 	}
 	nodeID := cinfo.GetCurrentNode()
 	vbnos32, err := cinfo.GetVBuckets(nodeID, bucketn)
 	if err != nil {
-		c.Errorf("%v cinfo.GetVBuckets(`%v`): %v\n", prefix, bucketn, err)
+		fmsg := "%v ##%x cinfo.GetVBuckets(`%v`): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
 		return nil, projC.ErrorClusterInfo
 	}
 	vbnos := c.Vbno32to16(vbnos32)
-	c.Infof("%v vbmap {%v,%v} - %v\n", prefix, pooln, bucketn, vbnos)
+	fmsg := "%v ##%x vbmap {%v,%v} - %v\n"
+	logging.Infof(fmsg, prefix, opaque, pooln, bucketn, vbnos)
 	return vbnos, nil
 }
 
 // start data-path each kvaddr
 func (feed *Feed) startDataPath(
-	bucketn string, feeder BucketFeeder, ts *protobuf.TsVbuuid) *KVData {
+	bucketn string, feeder BucketFeeder,
+	opaque uint16,
+	ts *protobuf.TsVbuuid) *KVData {
 
 	mutch := feeder.GetChannel()
 	kvdata, ok := feed.kvdata[bucketn]
 	if ok {
-		kvdata.UpdateTs(ts)
+		kvdata.UpdateTs(opaque, ts)
+
 	} else { // pass engines & endpoints to kvdata.
 		engs, ends := feed.engines[bucketn], feed.endpoints
-		kvdata = NewKVData(feed, bucketn, ts, engs, ends, mutch, feed.config)
+		kvdata = NewKVData(
+			feed, bucketn, opaque, ts, engs, ends, mutch, feed.config)
 	}
 	return kvdata
 }
 
 // - return ErrorInconsistentFeed for malformed feed request
-func (feed *Feed) processSubscribers(req Subscriber) error {
-	evaluators, routers, err := feed.subscribers(req)
+func (feed *Feed) processSubscribers(opaque uint16, req Subscriber) error {
+	evaluators, routers, err := feed.subscribers(opaque, req)
 	if err != nil {
 		return err
 	}
 
 	// start fresh set of all endpoints from routers.
-	if err = feed.startEndpoints(routers); err != nil {
+	if err = feed.startEndpoints(opaque, routers); err != nil {
 		return err
 	}
 	// update feed engines.
@@ -1097,7 +1193,6 @@ func (feed *Feed) processSubscribers(req Subscriber) error {
 			m = make(map[uint64]*Engine)
 		}
 		engine := NewEngine(uuid, evaluator, routers[uuid])
-		c.Infof("%v new engine %v created ...\n", feed.logPrefix, uuid)
 		m[uuid] = engine
 		feed.engines[bucketn] = m // :SideEffect:
 	}
@@ -1107,29 +1202,32 @@ func (feed *Feed) processSubscribers(req Subscriber) error {
 // feed.endpoints is updated with freshly started endpoint,
 // if an endpoint is already present and active it is
 // reused.
-func (feed *Feed) startEndpoints(routers map[uint64]c.Router) (err error) {
+func (feed *Feed) startEndpoints(
+	opaque uint16, routers map[uint64]c.Router) (err error) {
+
 	prefix := feed.logPrefix
 	for _, router := range routers {
 		for _, raddr := range router.Endpoints() {
-			raddr1, endpoint, e := feed.getEndpoint(raddr)
+			raddr1, endpoint, e := feed.getEndpoint(raddr, opaque)
 			if e != nil {
-				c.Errorf("%v error starting endpoint %q\n", prefix, raddr1)
 				err = e
 				continue
 
-			} else if (endpoint == nil) || (endpoint != nil && !endpoint.Ping()) {
-				// endpoint found but not active or enpoint is not found.
-				c.Infof("%v endpoint %q starting ...\n", prefix, raddr)
+			} else if endpoint == nil || !endpoint.Ping() {
 				topic, typ := feed.topic, feed.endpointType
 				endpoint, e = feed.epFactory(topic, typ, raddr)
 				if e != nil {
-					c.Errorf("%v error repairing endpoint %q\n", prefix, raddr1)
+					fmsg := "%v ##%x endpoint-factor %q: %v\n"
+					logging.Errorf(fmsg, prefix, opaque, raddr1, e)
 					err = e
 					continue
 				}
+				fmsg := "%v ##%x endpoint %q started\n"
+				logging.Infof(fmsg, prefix, opaque, raddr)
 
 			} else {
-				c.Infof("%v endpoint %q active ...\n", prefix, raddr)
+				fmsg := "%v ##%x endpoint %q active ...\n"
+				logging.Infof(fmsg, prefix, raddr)
 			}
 			// FIXME: hack to make both node-name available from
 			// endpoints table.
@@ -1140,14 +1238,19 @@ func (feed *Feed) startEndpoints(routers map[uint64]c.Router) (err error) {
 	return nil
 }
 
-func (feed *Feed) getEndpoint(raddr string) (string, c.RouterEndpoint, error) {
+func (feed *Feed) getEndpoint(
+	raddr string, opaque uint16) (string, c.RouterEndpoint, error) {
+
 	prefix := feed.logPrefix
 	_, eqRaddr, err := c.EquivalentIP(raddr, feed.endpointRaddrs())
 	if err != nil {
+		fmsg := "%v ##%x EquivalentIP() for %q: %v"
+		logging.Errorf(fmsg, prefix, opaque, raddr, err)
 		return raddr, nil, err
 
 	} else if raddr != eqRaddr {
-		c.Debugf("%v endpoint %q takenas %q ...", prefix, raddr, eqRaddr)
+		fmsg := "%v ##%x endpoint %q takenas %q ..."
+		logging.Warnf(fmsg, prefix, opaque, raddr, eqRaddr)
 		raddr = eqRaddr
 	}
 	endpoint, ok := feed.endpoints[raddr]
@@ -1159,27 +1262,32 @@ func (feed *Feed) getEndpoint(raddr string) (string, c.RouterEndpoint, error) {
 
 // - return ErrorInconsistentFeed for malformed feeds.
 func (feed *Feed) subscribers(
+	opaque uint16,
 	req Subscriber) (map[uint64]c.Evaluator, map[uint64]c.Router, error) {
 
 	evaluators, err := req.GetEvaluators()
 	if err != nil {
+		fmsg := "%v ##%x malformed evaluators: %v\n"
+		logging.Fatalf(fmsg, feed.logPrefix, opaque, err)
 		return nil, nil, projC.ErrorInconsistentFeed
 	}
 	routers, err := req.GetRouters()
 	if err != nil {
+		fmsg := "%v ##%x malformed routers: %v\n"
+		logging.Fatalf(fmsg, feed.logPrefix, opaque, err)
 		return nil, nil, projC.ErrorInconsistentFeed
 	}
 
 	if len(evaluators) != len(routers) {
-		err = projC.ErrorInconsistentFeed
-		c.Errorf("%v error %v, len() mismatch\n", feed.logPrefix, err)
-		return nil, nil, err
+		fmsg := "%v ##%x malformed evaluators/routers\n"
+		logging.Fatalf(fmsg, feed.logPrefix, opaque)
+		return nil, nil, projC.ErrorInconsistentFeed
 	}
+	fmsg := "%v ##%x uuid mismatch: %v\n"
 	for uuid := range evaluators {
 		if _, ok := routers[uuid]; ok == false {
-			err = projC.ErrorInconsistentFeed
-			c.Errorf("%v error %v, uuid mismatch\n", feed.logPrefix, err)
-			return nil, nil, err
+			logging.Fatalf(fmsg, feed.logPrefix, opaque, uuid)
+			return nil, nil, projC.ErrorInconsistentFeed
 		}
 	}
 	return evaluators, routers, nil
@@ -1219,7 +1327,7 @@ func (feed *Feed) waitStreamRequests(
 	}
 
 	timeout := time.After(feed.reqTimeout * time.Millisecond)
-	err1 := feed.waitOnFeedback(timeout, func(msg interface{}) string {
+	err1 := feed.waitOnFeedback(timeout, opaque, func(msg interface{}) string {
 		if val, ok := msg.(*controlStreamRequest); ok && val.bucket == bucketn && val.opaque == opaque &&
 			ts.Contains(val.vbno) {
 
@@ -1265,7 +1373,7 @@ func (feed *Feed) waitStreamEnds(
 	}
 
 	timeout := time.After(feed.endTimeout * time.Millisecond)
-	err1 := feed.waitOnFeedback(timeout, func(msg interface{}) string {
+	err1 := feed.waitOnFeedback(timeout, opaque, func(msg interface{}) string {
 		if val, ok := msg.(*controlStreamEnd); ok && val.bucket == bucketn && val.opaque == opaque &&
 			ts.Contains(val.vbno) {
 
@@ -1295,14 +1403,14 @@ func (feed *Feed) waitStreamEnds(
 // block feed until feedback posted back from kvdata.
 // - return ErrorResponseTimeout if feedback is not completed within timeout
 func (feed *Feed) waitOnFeedback(
-	timeout <-chan time.Time, callb func(msg interface{}) string) (err error) {
+	timeout <-chan time.Time,
+	opaque uint16, callb func(msg interface{}) string) (err error) {
 
 	msgs := make([][]interface{}, 0)
 loop:
 	for {
 		select {
 		case msg := <-feed.backch:
-			c.Debugf("%v back channel %T\n", feed.logPrefix, msg[0])
 			switch callb(msg[0]) {
 			case "skip":
 				msgs = append(msgs, msg)
@@ -1312,14 +1420,14 @@ loop:
 			}
 
 		case <-timeout:
+			logging.Errorf("%v ##%x dcp-timeout\n", feed.logPrefix, opaque)
 			err = projC.ErrorResponseTimeout
-			c.Errorf("%v feedback timeout %v\n", feed.logPrefix, err)
 			break loop
 		}
 	}
 	// re-populate in the same order.
 	for _, msg := range msgs {
-		feed.backch <- []interface{}{msg}
+		feed.backch <- msg
 	}
 	return
 }
@@ -1363,34 +1471,27 @@ func newDCPConnectionName(bucketn, topic string, uuid uint64) string {
 
 //---- local function
 
-func (feed *Feed) errorf(prefix, bucketn string, val interface{}) {
-	c.Errorf("%v %v for %q: %v\n", feed.logPrefix, prefix, bucketn, val)
-}
-
-func (feed *Feed) debugf(prefix, bucketn string, val interface{}) {
-	c.Debugf("%v %v for %q: %v\n", feed.logPrefix, prefix, bucketn, val)
-}
-
-func (feed *Feed) infof(prefix, bucketn string, val interface{}) {
-	c.Infof("%v %v for %q: %v\n", feed.logPrefix, prefix, bucketn, val)
-}
-
 // connectBucket will instantiate a couchbase-bucket instance with cluster.
 // caller's responsibility to close the bucket.
-func (feed *Feed) connectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
+func (feed *Feed) connectBucket(
+	cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
+
 	couch, err := couchbase.Connect("http://" + cluster)
 	if err != nil {
-		feed.errorf("connectBucket(`%v`)", bucketn, err)
+		fmsg := "%v connectBucket(`%v`): %v"
+		logging.Errorf(fmsg, feed.logPrefix, bucketn, err)
 		return nil, projC.ErrorDCPConnection
 	}
 	pool, err := couch.GetPool(pooln)
 	if err != nil {
-		feed.errorf("GetPool(`%v`)", pooln, err)
+		fmsg := "%v GetPool(`%v`): %v"
+		logging.Errorf(fmsg, feed.logPrefix, pooln, err)
 		return nil, projC.ErrorDCPPool
 	}
 	bucket, err := pool.GetBucket(bucketn)
 	if err != nil {
-		feed.errorf("GetBucket(`%v`)", bucketn, err)
+		fmsg := "%v GetBucket(`%v`): %v"
+		logging.Errorf(fmsg, feed.logPrefix, bucketn, err)
 		return nil, projC.ErrorDCPBucket
 	}
 	return bucket, nil

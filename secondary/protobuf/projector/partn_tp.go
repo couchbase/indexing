@@ -40,20 +40,20 @@ func (p *TestPartition) Hosts(inst *IndexInst) []string {
 // UpsertEndpoints implements Partition{} interface.
 // Full broadcast.
 func (p *TestPartition) UpsertEndpoints(
-	inst *IndexInst, m *mc.UprEvent, partKey, key, oldKey []byte) []string {
+	inst *IndexInst, m *mc.DcpEvent, partKey, key, oldKey []byte) []string {
 	return p.Hosts(inst)
 }
 
 // UpsertDeletionEndpoints implements Partition{} interface.
 // Full broadcast.
 func (p *TestPartition) UpsertDeletionEndpoints(
-	inst *IndexInst, m *mc.UprEvent, oldPartKey, key, oldKey []byte) []string {
+	inst *IndexInst, m *mc.DcpEvent, oldPartKey, key, oldKey []byte) []string {
 	return p.Hosts(inst)
 }
 
 // DeletionEndpoints implements Partition{} interface.
 // Full broadcast.
 func (p *TestPartition) DeletionEndpoints(
-	inst *IndexInst, m *mc.UprEvent, oldPartKey, oldKey []byte) []string {
+	inst *IndexInst, m *mc.DcpEvent, oldPartKey, oldKey []byte) []string {
 	return p.Hosts(inst)
 }

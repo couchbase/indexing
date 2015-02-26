@@ -32,8 +32,7 @@ var testResponseStream = &protobuf.ResponseStream{
 }
 
 func TestStatistics(t *testing.T) {
-	c.LogIgnore()
-	//c.SetLogLevel(c.LogLevelDebug)
+	logging.LogIgnore()
 
 	addr := "localhost:9101"
 	serverCallb := func(
@@ -76,7 +75,7 @@ func TestStatistics(t *testing.T) {
 }
 
 func TestRange(t *testing.T) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	serverCallb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -101,6 +100,7 @@ func TestRange(t *testing.T) {
 	l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	qc.Range(
 		0x0 /*defnID*/, l, h, 100, true, 1000,
+		c.AnyConsistency, nil,
 		func(val client.ResponseReader) bool {
 			if err := val.Error(); err != nil {
 				t.Fatal(err)
@@ -120,6 +120,7 @@ func TestRange(t *testing.T) {
 	l, h = c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 	qc.Range(
 		0x0 /*defnID*/, l, h, 100, true, 1000,
+		c.AnyConsistency, nil,
 		func(val client.ResponseReader) bool {
 			count++
 			if count == 2 {
@@ -133,7 +134,7 @@ func TestRange(t *testing.T) {
 }
 
 func TestScanAll(t *testing.T) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -157,6 +158,7 @@ func TestScanAll(t *testing.T) {
 	count := 0
 	qc.ScanAll(
 		0x0 /*defnID*/, 1000,
+		c.AnyConsistency, nil,
 		func(val client.ResponseReader) bool {
 			if err := val.Error(); err != nil {
 				t.Fatal(err)
@@ -174,6 +176,7 @@ func TestScanAll(t *testing.T) {
 	count = 0
 	qc.ScanAll(
 		0x0 /*defnID*/, 1000,
+		c.AnyConsistency, nil,
 		func(val client.ResponseReader) bool {
 			count++
 			if count == 2 {
@@ -187,7 +190,7 @@ func TestScanAll(t *testing.T) {
 }
 
 func BenchmarkStatistics(b *testing.B) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -216,7 +219,7 @@ func BenchmarkStatistics(b *testing.B) {
 }
 
 func BenchmarkRange1(b *testing.B) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -238,6 +241,7 @@ func BenchmarkRange1(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		qc.Range(
 			0x0 /*defnID*/, l, h, 100, true, 1000,
+			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return true
 			})
@@ -250,7 +254,7 @@ func BenchmarkRange1(b *testing.B) {
 }
 
 func BenchmarkRange100(b *testing.B) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -274,6 +278,7 @@ func BenchmarkRange100(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		qc.Range(
 			0x0 /*defnID*/, l, h, 100, true, 1000,
+			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return true
 			})
@@ -286,7 +291,7 @@ func BenchmarkRange100(b *testing.B) {
 }
 
 func BenchmarkRangeParallel10(b *testing.B) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -308,6 +313,7 @@ func BenchmarkRangeParallel10(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		qc.Range(
 			0x0 /*defnID*/, l, h, 100, true, 1000,
+			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return false
 			})
@@ -320,7 +326,7 @@ func BenchmarkRangeParallel10(b *testing.B) {
 }
 
 func BenchmarkScanAll(b *testing.B) {
-	c.LogIgnore()
+	logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
 		req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
@@ -341,6 +347,7 @@ func BenchmarkScanAll(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		qc.ScanAll(
 			0x0 /*defnID*/, 1000,
+			c.AnyConsistency, nil,
 			func(val client.ResponseReader) bool {
 				return true
 			})

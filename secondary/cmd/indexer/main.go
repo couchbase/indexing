@@ -11,16 +11,18 @@ package main
 
 import (
 	"flag"
-	"log"
+	"os"
 	"strings"
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/indexer"
+	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbaselabs/goforestdb"
 )
 
 var (
-	logLevel          = flag.Int("log", int(common.LogLevelInfo), "Log Level - 1(Info), 2(Debug), 3(Trace)")
+	logLevel          = flag.String("loglevel", "Info", "Log Level - Silent, Fatal, Error, Info, Debug, Trace")
 	numVbuckets       = flag.Int("vbuckets", indexer.MAX_NUM_VBUCKETS, "Number of vbuckets configured in Couchbase")
 	cluster           = flag.String("cluster", indexer.DEFAULT_CLUSTER_ENDPOINT, "Couchbase cluster address")
 	adminPort         = flag.String("adminPort", "9100", "Index ddl and status port")
@@ -32,6 +34,9 @@ var (
 	storageDir        = flag.String("storageDir", "./", "Index file storage directory path")
 	enableManager     = flag.Bool("enable_manager", true, "Enable Index Manager")
 	auth              = flag.String("auth", "", "Auth user and password")
+
+	// so we don't need to sync with ns_server for merge. remove this soon
+	unused = flag.String("log", "", "Ignored")
 )
 
 func main() {
@@ -39,36 +44,41 @@ func main() {
 	defer common.HideConsole(false)
 	common.SeedProcess()
 
+	logging.Infof("Indexer started with command line: %v\n", os.Args)
 	flag.Parse()
+
+	logging.SetLogLevel(logging.Level(*logLevel))
+	forestdb.Log = &logging.SystemLogger
 
 	// setup cbauth
 	if *auth != "" {
 		up := strings.Split(*auth, ":")
+		logging.Tracef("Initializing cbauth with user %v for cluster %v\n", up[0], *cluster)
 		if _, err := cbauth.InternalRetryDefaultInit(*cluster, up[0], up[1]); err != nil {
-			log.Fatalf("Failed to initialize cbauth: %s", err)
+			logging.Fatalf("Failed to initialize cbauth: %s", err)
 		}
 	}
 
 	go common.DumpOnSignal()
 	go common.ExitOnStdinClose()
 
-	common.SetLogLevel(int32(*logLevel))
-	config := common.SystemConfig.SectionConfig("indexer.", true)
-
-	config.SetValue("clusterAddr", *cluster)
-	config.SetValue("numVbuckets", *numVbuckets)
-	config.SetValue("enableManager", *enableManager)
-	config.SetValue("adminPort", *adminPort)
-	config.SetValue("scanPort", *scanPort)
-	config.SetValue("httpPort", *httpPort)
-	config.SetValue("streamInitPort", *streamInitPort)
-	config.SetValue("streamCatchupPort", *streamCatchupPort)
-	config.SetValue("streamMaintPort", *streamMaintPort)
-	config.SetValue("storage_dir", *storageDir)
+	config := common.SystemConfig
+	config.SetValue("indexer.clusterAddr", *cluster)
+	config.SetValue("indexer.numVbuckets", *numVbuckets)
+	config.SetValue("indexer.enableManager", *enableManager)
+	config.SetValue("indexer.adminPort", *adminPort)
+	config.SetValue("indexer.scanPort", *scanPort)
+	config.SetValue("indexer.httpPort", *httpPort)
+	config.SetValue("indexer.streamInitPort", *streamInitPort)
+	config.SetValue("indexer.streamCatchupPort", *streamCatchupPort)
+	config.SetValue("indexer.streamMaintPort", *streamMaintPort)
+	config.SetValue("indexer.storage_dir", *storageDir)
 
 	_, msg := indexer.NewIndexer(config)
 
 	if msg.GetMsgType() != indexer.MSG_SUCCESS {
-		log.Printf("Indexer Failure to Init %v", msg)
+		logging.Warnf("Indexer Failure to Init %v", msg)
 	}
+
+	logging.Infof("Indexer exiting normally\n")
 }

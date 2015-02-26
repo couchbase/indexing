@@ -1,7 +1,6 @@
 package queryport
 
-import "log"
-
+import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 
@@ -17,7 +16,7 @@ func Application(config c.Config) {
 		config)
 
 	if err != nil {
-		log.Fatal(err)
+		logging.Fatalf("Listen failed - %v", err)
 	}
 	<-killch
 	s.Close()

@@ -1,10 +1,13 @@
-Move projector/Error* to projector/client/*
+- https://issues.couchbase.com/browse/MB-13485 (Bucket delete-create)
+- https://issues.couchbase.com/browse/MB-13375
+  (Range statistics, should be moved to backlog?)
+- GetFailoverLog() issue from goxdcr.
+- Connection overflow due to indexer restart.
+- hangs when adding index instance during rebalance.
+- projector memory profiling, dynamic settings for `memprofile`
+- Upstream (DCP) record replay.
+- Integrate new transport with queryport.
+
 CBIDXT-282: queryport - multiplexing requests on the same connection.
-CBIDXT-218: Gocouchbase, connection pool overflow.
-CBIDXT-139: Projector / DataFlow - Error Loading Data During Rebalance.
-
-CBIDXT-126: Projector / ControlFlow - Handle Bucket Deletion.
-CBIDXT-124: Projector / DataFlow - Handle Bucket Flush.
-
 CBIDXT-289: queryport, the stream response error value is not
             comparable with defined error objects.

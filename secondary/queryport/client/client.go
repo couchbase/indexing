@@ -3,6 +3,7 @@ package client
 import "errors"
 import "time"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbaselabs/goprotobuf/proto"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
@@ -25,7 +26,7 @@ var ErrorEmptyDeployment = errors.New("queryport.client.emptyDeployment")
 var ErrorManyDeployment = errors.New("queryport.client.manyDeployment")
 
 // ErrorInvalidDeploymentNode
-var ErrorInvalidDeploymentNode = errors.New("queryport.client.invalidDeploymentPlan")
+var ErrorInvalidDeploymentNode = errors.New("queryport.client.invdDeployPlan")
 
 // ErrorIndexNotFound
 var ErrorIndexNotFound = errors.New("queryport.indexNotFound")
@@ -106,16 +107,16 @@ type BridgeAccessor interface {
 	CreateIndex(
 		name, bucket, using, exprType, partnExpr, whereExpr string,
 		secExprs []string, isPrimary bool,
-		with []byte) (common.IndexDefnId, error)
+		with []byte) (defnID uint64, err error)
 
 	// BuildIndexes to build a deferred set of indexes. This call implies
 	// that indexes specified are already created.
-	BuildIndexes(defnIDs []common.IndexDefnId) error
+	BuildIndexes(defnIDs []uint64) error
 
 	// DropIndex to drop index specified by `defnID`.
 	// - if index is in deferred build state, it shall be removed
 	//   from deferred list.
-	DropIndex(defnID common.IndexDefnId) error
+	DropIndex(defnID uint64) error
 
 	// GetScanports shall return list of queryports for all indexer in
 	// the cluster.
@@ -123,7 +124,10 @@ type BridgeAccessor interface {
 
 	// GetScanport shall fetch queryport address for indexer, under least
 	// load, hosting index `defnID` or an equivalent of `defnID`
-	GetScanport(defnID common.IndexDefnId) (queryport string, ok bool)
+	GetScanport(defnID uint64) (queryport string, ok bool)
+
+	// GetIndex will return the index-definition structure for defnID.
+	GetIndexDefn(defnID uint64) *common.IndexDefn
 
 	// IndexState returns the current state of index `defnID` and error.
 	IndexState(defnID uint64) (common.IndexState, error)
@@ -151,16 +155,22 @@ type GsiAccessor interface {
 	// Lookup scan index between low and high.
 	Lookup(
 		defnID uint64, values []common.SecondaryKey,
-		distinct bool, limit int64, callb ResponseHandler) error
+		distinct bool, limit int64,
+		cons common.Consistency, vector *TsConsistency,
+		callb ResponseHandler) error
 
 	// Range scan index between low and high.
 	Range(
 		defnID uint64, low, high common.SecondaryKey,
 		inclusion Inclusion, distinct bool, limit int64,
+		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
 
 	// ScanAll for full table scan.
-	ScanAll(defnID uint64, limit int64, callb ResponseHandler) error
+	ScanAll(
+		defnID uint64, limit int64,
+		cons common.Consistency, vector *TsConsistency,
+		callb ResponseHandler) error
 
 	// CountLookup of all entries in index.
 	CountLookup(defnID uint64) (int64, error)
@@ -176,14 +186,15 @@ var useMetadataProvider = true
 // for index-scan related operations.
 type GsiClient struct {
 	bridge       BridgeAccessor // manages adminport
+	cluster      string
+	maxvb        int
 	config       common.Config
 	queryClients map[string]*gsiScanClient
 }
 
 // NewGsiClient returns client to access GSI cluster.
 func NewGsiClient(
-	cluster string,
-	config common.Config) (c *GsiClient, err error) {
+	cluster string, config common.Config) (c *GsiClient, err error) {
 
 	if useMetadataProvider {
 		c, err = makeWithMetaProvider(cluster, config)
@@ -193,6 +204,7 @@ func NewGsiClient(
 	if err != nil {
 		return nil, err
 	}
+	c.maxvb = -1
 	c.Refresh()
 	return c, nil
 }
@@ -212,30 +224,46 @@ func (c *GsiClient) Nodes() (map[string]string, error) {
 	return c.bridge.Nodes()
 }
 
+// BucketTs will return the current vbucket-timestamp.
+func (c *GsiClient) BucketTs(bucketn string) (*TsConsistency, error) {
+	b, err := common.ConnectBucket(c.cluster, "default" /*pooln*/, bucketn)
+	if err != nil {
+		return nil, err
+	}
+	defer b.Close()
+	if c.maxvb == -1 {
+		if c.maxvb, err = common.MaxVbuckets(b); err != nil {
+			return nil, err
+		}
+	}
+	seqnos, vbuuids := common.BucketTs(b, c.maxvb)
+	vbnos := make([]uint16, c.maxvb)
+	for i := range vbnos {
+		vbnos[i] = uint16(i)
+	}
+	return NewTsConsistency(vbnos, seqnos, vbuuids), nil
+}
+
 // CreateIndex implements BridgeAccessor{} interface.
 func (c *GsiClient) CreateIndex(
 	name, bucket, using, exprType, partnExpr, whereExpr string,
 	secExprs []string, isPrimary bool,
-	with []byte) (uint64, error) {
+	with []byte) (defnID uint64, err error) {
 
-	defnID, err := c.bridge.CreateIndex(
+	defnID, err = c.bridge.CreateIndex(
 		name, bucket, using, exprType, partnExpr, whereExpr,
 		secExprs, isPrimary, with)
-	return uint64(defnID), err
+	return defnID, err
 }
 
 // BuildIndexes implements BridgeAccessor{} interface.
 func (c *GsiClient) BuildIndexes(defnIDs []uint64) error {
-	ids := make([]common.IndexDefnId, len(defnIDs))
-	for i, id := range defnIDs {
-		ids[i] = common.IndexDefnId(id)
-	}
-	return c.bridge.BuildIndexes(ids)
+	return c.bridge.BuildIndexes(defnIDs)
 }
 
 // DropIndex implements BridgeAccessor{} interface.
 func (c *GsiClient) DropIndex(defnID uint64) error {
-	return c.bridge.DropIndex(common.IndexDefnId(defnID))
+	return c.bridge.DropIndex(defnID)
 }
 
 // LookupStatistics for a single secondary-key.
@@ -277,25 +305,8 @@ func (c *GsiClient) RangeStatistics(
 // Lookup scan index between low and high.
 func (c *GsiClient) Lookup(
 	defnID uint64, values []common.SecondaryKey,
-	distinct bool, limit int64, callb ResponseHandler) error {
-
-	// check whether the index is present and available.
-	if _, err := c.bridge.IndexState(defnID); err != nil {
-		protoResp := &protobuf.ResponseStream{
-			Err: &protobuf.Error{Error: proto.String(err.Error())},
-		}
-		callb(protoResp)
-		return nil
-	}
-	return c.doScan(defnID, func(qc *gsiScanClient) error {
-		return qc.Lookup(defnID, values, distinct, limit, callb)
-	})
-}
-
-// Range scan index between low and high.
-func (c *GsiClient) Range(
-	defnID uint64, low, high common.SecondaryKey,
-	inclusion Inclusion, distinct bool, limit int64,
+	distinct bool, limit int64,
+	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) error {
 
 	// check whether the index is present and available.
@@ -306,14 +317,23 @@ func (c *GsiClient) Range(
 		callb(protoResp)
 		return nil
 	}
-	return c.doScan(defnID, func(qc *gsiScanClient) error {
-		return qc.Range(defnID, low, high, inclusion, distinct, limit, callb)
+	return c.doScan(defnID, func(qc *gsiScanClient) (err error) {
+		index := c.bridge.GetIndexDefn(defnID)
+		if cons == common.SessionConsistency && vector == nil {
+			if vector, err = c.BucketTs(index.Bucket); err != nil {
+				return err
+			}
+		}
+		return qc.Lookup(defnID, values, distinct, limit, cons, vector, callb)
 	})
 }
 
-// ScanAll for full table scan.
-func (c *GsiClient) ScanAll(
-	defnID uint64, limit int64, callb ResponseHandler) error {
+// Range scan index between low and high.
+func (c *GsiClient) Range(
+	defnID uint64, low, high common.SecondaryKey,
+	inclusion Inclusion, distinct bool, limit int64,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) error {
 
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
@@ -323,8 +343,40 @@ func (c *GsiClient) ScanAll(
 		callb(protoResp)
 		return nil
 	}
-	return c.doScan(defnID, func(qc *gsiScanClient) error {
-		return qc.ScanAll(defnID, limit, callb)
+	return c.doScan(defnID, func(qc *gsiScanClient) (err error) {
+		index := c.bridge.GetIndexDefn(defnID)
+		if cons == common.SessionConsistency && vector == nil {
+			if vector, err = c.BucketTs(index.Bucket); err != nil {
+				return err
+			}
+		}
+		return qc.Range(
+			defnID, low, high, inclusion, distinct, limit, cons, vector, callb)
+	})
+}
+
+// ScanAll for full table scan.
+func (c *GsiClient) ScanAll(
+	defnID uint64, limit int64,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) error {
+
+	// check whether the index is present and available.
+	if _, err := c.bridge.IndexState(defnID); err != nil {
+		protoResp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(protoResp)
+		return nil
+	}
+	return c.doScan(defnID, func(qc *gsiScanClient) (err error) {
+		index := c.bridge.GetIndexDefn(defnID)
+		if cons == common.SessionConsistency && vector == nil {
+			if vector, err = c.BucketTs(index.Bucket); err != nil {
+				return err
+			}
+		}
+		return qc.ScanAll(defnID, limit, cons, vector, callb)
 	})
 }
 
@@ -346,7 +398,8 @@ func (c *GsiClient) CountLookup(
 // CountRange to count number entries in the given range.
 func (c *GsiClient) CountRange(
 	defnID uint64,
-	low, high common.SecondaryKey, inclusion Inclusion) (count int64, err error) {
+	low, high common.SecondaryKey,
+	inclusion Inclusion) (count int64, err error) {
 
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
@@ -390,14 +443,14 @@ func (c *GsiClient) doScan(
 
 	var qc *gsiScanClient
 	var err error
-	var ok bool
+	var ok1, ok2 bool
 	var queryport string
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
 	for i := 0; i < retry; i++ {
-		if queryport, ok = c.bridge.GetScanport(common.IndexDefnId(defnID)); ok {
-			if qc, ok = c.queryClients[queryport]; ok {
+		if queryport, ok1 = c.bridge.GetScanport(defnID); ok1 {
+			if qc, ok2 = c.queryClients[queryport]; ok2 {
 				begin := time.Now().UnixNano()
 				if err = callb(qc); err == nil {
 					c.bridge.Timeit(defnID, float64(time.Now().UnixNano()-begin))
@@ -405,6 +458,8 @@ func (c *GsiClient) doScan(
 				}
 			}
 		}
+		logging.Infof(
+			"Retrying scan for index %v (%v %v) ...\n", defnID, ok1, ok2)
 		c.updateScanClients()
 		time.Sleep(time.Duration(wait) * time.Millisecond)
 	}
@@ -416,8 +471,11 @@ func (c *GsiClient) doScan(
 
 // create GSI client using cbqBridge and ScanCoordinator
 func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
+
 	var err error
 	c := &GsiClient{
+		cluster:      cluster,
+		config:       config,
 		queryClients: make(map[string]*gsiScanClient),
 	}
 	if c.bridge, err = newCbqClient(cluster); err != nil {
@@ -431,10 +489,10 @@ func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
 }
 
 func makeWithMetaProvider(
-	cluster string,
-	config common.Config) (c *GsiClient, err error) {
+	cluster string, config common.Config) (c *GsiClient, err error) {
 
 	c = &GsiClient{
+		cluster:      cluster,
 		config:       config,
 		queryClients: make(map[string]*gsiScanClient),
 	}
@@ -444,4 +502,44 @@ func makeWithMetaProvider(
 	}
 	c.updateScanClients()
 	return c, nil
+}
+
+//--------------------------
+// Consistency and Stability
+//--------------------------
+
+// TsConsistency specifies a subset of vbuckets to be used as
+// timestamp vector to specify consistency criteria.
+//
+// Timestamp-vector will be ignored for AnyConsistency, computed
+// locally by scan-coordinator or accepted as scan-arguments for
+// SessionConsistency.
+type TsConsistency struct {
+	Vbnos   []uint16
+	Seqnos  []uint64
+	Vbuuids []uint64
+}
+
+// NewTsConsistency returns a new consistency vector object.
+func NewTsConsistency(
+	vbnos []uint16, seqnos []uint64, vbuuids []uint64) *TsConsistency {
+
+	return &TsConsistency{Vbnos: vbnos, Seqnos: seqnos, Vbuuids: vbuuids}
+}
+
+// Override vbucket's {seqno, vbuuid} in the timestamp-vector,
+// if vbucket is not present in the vector, append them to vector.
+func (ts *TsConsistency) Override(
+	vbno uint16, seqno, vbuuid uint64) *TsConsistency {
+
+	for i, vb := range ts.Vbnos {
+		if vbno == vb {
+			ts.Seqnos[i], ts.Vbuuids[i] = seqno, vbuuid
+			return ts
+		}
+	}
+	ts.Vbnos = append(ts.Vbnos, vbno)
+	ts.Seqnos = append(ts.Seqnos, seqno)
+	ts.Vbuuids = append(ts.Vbuuids, vbuuid)
+	return ts
 }

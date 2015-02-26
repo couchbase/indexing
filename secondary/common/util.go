@@ -6,6 +6,7 @@ import "io"
 import "net"
 import "net/url"
 import "os"
+import "strconv"
 import "strings"
 
 import "github.com/couchbase/cbauth"
@@ -218,28 +219,6 @@ func (ah *cbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.
 	return err
 }
 
-// ConnectBucket will instantiate a couchbase-bucket instance with cluster.
-// caller's responsibility to close the bucket.
-func ConnectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
-	ah := &cbAuthHandler{
-		hostport: cluster,
-		bucket:   bucketn,
-	}
-	couch, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
-	if err != nil {
-		return nil, err
-	}
-	pool, err := couch.GetPool(pooln)
-	if err != nil {
-		return nil, err
-	}
-	bucket, err := pool.GetBucket(bucketn)
-	if err != nil {
-		return nil, err
-	}
-	return bucket, err
-}
-
 // GetKVAddrs gather the list of kvnode-address based on the latest vbmap.
 func GetKVAddrs(cluster, pooln, bucketn string) ([]string, error) {
 	b, err := ConnectBucket(cluster, pooln, bucketn)
@@ -442,4 +421,67 @@ func EquivalentIP(
 		}
 	}
 	return raddr, raddr, nil
+}
+
+//---------------------
+// SDK bucket operation
+//---------------------
+
+// ConnectBucket will instantiate a couchbase-bucket instance with cluster.
+// caller's responsibility to close the bucket.
+func ConnectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
+	ah := &cbAuthHandler{
+		hostport: cluster,
+		bucket:   bucketn,
+	}
+	couch, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
+	if err != nil {
+		return nil, err
+	}
+	pool, err := couch.GetPool(pooln)
+	if err != nil {
+		return nil, err
+	}
+	bucket, err := pool.GetBucket(bucketn)
+	if err != nil {
+		return nil, err
+	}
+	return bucket, err
+}
+
+// MaxVbuckets return the number of vbuckets in bucket.
+func MaxVbuckets(bucket *couchbase.Bucket) (int, error) {
+	count := 0
+	m, err := bucket.GetVBmap(nil)
+	if err == nil {
+		for _, vbnos := range m {
+			count += len(vbnos)
+		}
+	}
+	return count, err
+}
+
+// BucketTs return bucket timestamp for all vbucket.
+func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64) {
+	seqnos = make([]uint64, maxvb)
+	vbuuids = make([]uint64, maxvb)
+	// for all nodes in cluster
+	for _, nodestat := range bucket.GetStats("vbucket-seqno") {
+		// for all vbuckets
+		for i := 0; i < maxvb; i++ {
+			vbkey := "vb_" + strconv.Itoa(i) + ":high_seqno"
+			if highseqno, ok := nodestat[vbkey]; ok {
+				if s, err := strconv.Atoi(highseqno); err == nil {
+					seqnos[i] = uint64(s)
+				}
+			}
+			vbkey = "vb_" + strconv.Itoa(i) + ":uuid"
+			if vbuuid, ok := nodestat[vbkey]; ok {
+				if uuid, err := strconv.Atoi(vbuuid); err == nil {
+					vbuuids[i] = uint64(uuid)
+				}
+			}
+		}
+	}
+	return seqnos, vbuuids
 }

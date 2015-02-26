@@ -11,6 +11,7 @@ package manager
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
 )
@@ -41,6 +42,7 @@ type IndexInstDistribution struct {
 	State      uint32                  `json:"state,omitempty"`
 	StreamId   uint32                  `json:"steamId,omitempty"`
 	Error      string                  `json:"error,omitempty"`
+	BuildTime  []uint64                `json:"buildTime,omitempty"`
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
 }
 
@@ -219,7 +221,7 @@ func (t *IndexTopology) UpdateStateForIndexInstByDefn(defnId common.IndexDefnId,
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
 				t.Definitions[i].Instances[j].State = uint32(state)
-				common.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
+				logging.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
 					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
 			}
 		}
@@ -235,7 +237,7 @@ func (t *IndexTopology) UpdateStreamForIndexInstByDefn(defnId common.IndexDefnId
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
 				t.Definitions[i].Instances[j].StreamId = uint32(stream)
-				common.Debugf("IndexTopology.UpdateStreamForIndexInstByDefn(): Update index '%v' inst '%v stream to '%v'",
+				logging.Debugf("IndexTopology.UpdateStreamForIndexInstByDefn(): Update index '%v' inst '%v stream to '%v'",
 					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].StreamId)
 			}
 		}
@@ -251,8 +253,25 @@ func (t *IndexTopology) SetErrorForIndexInstByDefn(defnId common.IndexDefnId, er
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
 				t.Definitions[i].Instances[j].Error = errorStr
-				common.Debugf("IndexTopology.SetErrorForIndexInstByDefn(): Set error for index '%v' inst '%v.  Error = '%v'",
+				logging.Debugf("IndexTopology.SetErrorForIndexInstByDefn(): Set error for index '%v' inst '%v.  Error = '%v'",
 					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Error)
+			}
+		}
+	}
+}
+
+//
+// Set BuildTime on instance
+//
+func (t *IndexTopology) SetBuildTimeForIndexInstByDefn(defnId common.IndexDefnId, buildTime []uint64) {
+
+	for i, _ := range t.Definitions {
+		if t.Definitions[i].DefnId == uint64(defnId) {
+			for j, _ := range t.Definitions[i].Instances {
+				t.Definitions[i].Instances[j].BuildTime = make([]uint64, len(buildTime))
+				copy(t.Definitions[i].Instances[j].BuildTime, buildTime)
+				logging.Debugf("IndexTopology.SetBuildTimeForIndexInstByDefn(): Set buildTime for index '%v' inst '%v, len(Buildtime) %d",
+					defnId, t.Definitions[i].Instances[j].InstId, len(t.Definitions[i].Instances[j].BuildTime))
 			}
 		}
 	}
@@ -268,7 +287,7 @@ func (t *IndexTopology) ChangeStateForIndexInstByDefn(defnId common.IndexDefnId,
 			for j, _ := range t.Definitions[i].Instances {
 				if t.Definitions[i].Instances[j].State == uint32(fromState) {
 					t.Definitions[i].Instances[j].State = uint32(toState)
-					common.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
+					logging.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
 						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
 				}
 			}
@@ -279,14 +298,14 @@ func (t *IndexTopology) ChangeStateForIndexInstByDefn(defnId common.IndexDefnId,
 //
 // Update Index Status on instance
 //
-func (t *IndexTopology) GetStateByDefn(defnId common.IndexDefnId) common.IndexState {
+func (t *IndexTopology) GetStatusByDefn(defnId common.IndexDefnId) (common.IndexState, string) {
 
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
-			return common.IndexState(t.Definitions[i].Instances[0].State)
+			return common.IndexState(t.Definitions[i].Instances[0].State), t.Definitions[i].Instances[0].Error
 		}
 	}
-	return common.INDEX_STATE_NIL
+	return common.INDEX_STATE_NIL, ""
 }
 
 //
@@ -298,7 +317,7 @@ func GetIndexInstancesIdByDefn(mgr *IndexManager, bucket string, defnId common.I
 	if err != nil {
 		// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 		// If there is an error, return an empty array.  This assume that the topology does not exist.
-		common.Debugf("GetIndexInstancesByDefn(): Cannot find topology for bucket %s.  Skip.", bucket)
+		logging.Debugf("GetIndexInstancesByDefn(): Cannot find topology for bucket %s.  Skip.", bucket)
 		return nil, nil
 	}
 
@@ -329,7 +348,7 @@ func GetAllDeletedIndexInstancesId(mgr *IndexManager, buckets []string) ([]uint6
 		if err != nil {
 			// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 			// If there is an error, return an empty array.  This assume that the topology does not exist.
-			common.Debugf("GetAllDeletedIndexInstances(): Cannot find topology for bucket %s.  Skip.", bucket)
+			logging.Debugf("GetAllDeletedIndexInstances(): Cannot find topology for bucket %s.  Skip.", bucket)
 			continue
 		}
 
@@ -360,7 +379,7 @@ func GetTopologyAsInstanceProtoMsg(mgr *IndexManager,
 	if err != nil {
 		// TODO: Determine if it is a real error, or just topology does not exist in dictionary
 		// If there is an error, return an empty array.  This assume that the topology does not exist.
-		common.Debugf("GetTopologyAsInstanceProtoMsg(): Cannot find topology for bucket %s.  Skip.", bucket)
+		logging.Debugf("GetTopologyAsInstanceProtoMsg(): Cannot find topology for bucket %s.  Skip.", bucket)
 		return nil, nil, nil
 	}
 
@@ -392,7 +411,7 @@ func GetIndexInstanceAsProtoMsg(mgr *IndexManager,
 			// look up the index definition from dictionary
 			defn, err := mgr.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId))
 			if err != nil {
-				common.Debugf("GetIndexInstanceAsProtoMsg(): Cannot find definition id = %v.", defnId)
+				logging.Debugf("GetIndexInstanceAsProtoMsg(): Cannot find definition id = %v.", defnId)
 				return nil, err
 			}
 
@@ -421,7 +440,7 @@ func GetChangeRecordAsProtoMsg(mgr *IndexManager, changes []*changeRecord, port 
 		// look up the index definition from dictionary
 		defn, err := mgr.GetIndexDefnById(common.IndexDefnId(change.definition.DefnId))
 		if err != nil {
-			common.Debugf("GetChangeRecordAsProtoMsg(): Cannot find definition id = %v.", change.definition.DefnId)
+			logging.Debugf("GetChangeRecordAsProtoMsg(): Cannot find definition id = %v.", change.definition.DefnId)
 			return nil, err
 		}
 
@@ -448,7 +467,7 @@ func convertTopologyToIndexInstProtoMsg(mgr *IndexManager,
 		// look up the index definition from dictionary
 		defn, err := mgr.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId))
 		if err != nil {
-			common.Debugf("convertTopologyToIndexInstProtoMsg(): Cannot find definition id = %v. Skip", defnRef.DefnId)
+			logging.Debugf("convertTopologyToIndexInstProtoMsg(): Cannot find definition id = %v. Skip", defnRef.DefnId)
 			continue
 		}
 

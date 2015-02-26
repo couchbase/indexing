@@ -12,9 +12,10 @@ package indexer
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
-	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // Key is an array of JSON objects, per encoding/json
@@ -30,16 +31,16 @@ type Value struct {
 }
 
 type Valuedata struct {
-	Docid   []byte
-	Vbucket Vbucket //useful for debugging, can be removed to optimize space
-	Seqno   Seqno   //useful for debugging, can be removed to optimize space
+	Docid []byte
 }
-
-var KEY_SEPARATOR []byte = []byte{0xff, 0xff, 0xff, 0xff}
 
 func NewKey(data []byte) (Key, error) {
 	var err error
 	var key Key
+
+	if len(data) > MAX_SEC_KEY_LEN {
+		return key, errors.New("Key Too Long")
+	}
 
 	key.raw = data
 
@@ -48,9 +49,10 @@ func NewKey(data []byte) (Key, error) {
 		return key, nil
 	}
 
-	// TODO: Refactor to reuse tmp buffer
 	jsoncodec := collatejson.NewCodec(16)
-	buf := make([]byte, 0, MAX_SEC_KEY_LEN)
+	//TODO collatejson needs 3x buffer size. see if that can
+	//be reduced. Also reuse buffer.
+	buf := make([]byte, 0, len(data)*3)
 	if buf, err = jsoncodec.Encode(data, buf); err != nil {
 		return key, err
 	}
@@ -59,13 +61,11 @@ func NewKey(data []byte) (Key, error) {
 	return key, nil
 }
 
-func NewValue(docid []byte, vbucket Vbucket, seqno Seqno) (Value, error) {
+func NewValue(docid []byte) (Value, error) {
 
 	var val Value
 
 	val.raw.Docid = docid
-	val.raw.Vbucket = vbucket
-	val.raw.Seqno = seqno
 
 	var err error
 	if val.encoded, err = json.Marshal(val.raw); err != nil {
@@ -114,7 +114,7 @@ func (k *Key) Raw() []byte {
 		// TODO: Refactor to reuse tmp buffer
 		buf := make([]byte, 0, MAX_SEC_KEY_LEN)
 		if buf, err = jsoncodec.Decode(k.encoded, buf); err != nil {
-			common.Errorf("KV::Raw Error Decoding Key %v, Err %v", k.encoded,
+			logging.Errorf("KV::Raw Error Decoding Key %v, Err %v", k.encoded,
 				err)
 			return nil
 		}
@@ -145,7 +145,5 @@ func (v *Value) Docid() []byte {
 func (v *Value) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("Docid:%v ", v.raw.Docid))
-	buf.WriteString(fmt.Sprintf("Vbucket:%d ", v.raw.Vbucket))
-	buf.WriteString(fmt.Sprintf("Seqno:%d", v.raw.Seqno))
 	return buf.String()
 }

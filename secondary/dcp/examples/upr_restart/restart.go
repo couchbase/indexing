@@ -57,15 +57,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// start upr feed
+	// start dcp feed
 	name := fmt.Sprintf("%v", time.Now().UnixNano())
-	feed, err := bucket.StartUprFeed(name, 0)
+	feed, err := bucket.StartDcpFeed(name, 0)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	for i := 0; i < options.maxVb; i++ {
-		err := feed.UprRequestStream(
+		err := feed.DcpRequestStream(
 			uint16(i) /*vbno*/, uint16(0) /*opaque*/, 0 /*flag*/, 0, /*vbuuid*/
 			0 /*seqStart*/, 0xFFFFFFFFFFFFFFFF /*seqEnd*/, 0 /*snaps*/, 0)
 		if err != nil {
@@ -96,7 +96,7 @@ func main() {
 	addKVset(bucket1, mutationCount)
 
 	log.Println("Restarting ....")
-	feed, err = bucket.StartUprFeed(name, 0)
+	feed, err = bucket.StartDcpFeed(name, 0)
 	if err != nil {
 		panic(err)
 	}
@@ -104,7 +104,7 @@ func main() {
 	for i := 0; i < options.maxVb; i++ {
 		log.Printf("Vbucket %d High sequence number %d, Snapshot end sequence %d", i, vbseqNo[i][0], vbseqNo[i][1])
 		failoverLog := failoverlogMap[uint16(i)]
-		err := feed.UprRequestStream(
+		err := feed.DcpRequestStream(
 			uint16(i) /*vbno*/, uint16(0) /*opaque*/, 0, /*flag*/
 			failoverLog[0][0],                              /*vbuuid*/
 			vbseqNo[i][0] /*seqStart*/, 0xFFFFFFFFFFFFFFFF, /*seqEnd*/
@@ -114,13 +114,13 @@ func main() {
 		}
 	}
 
-	var e *memcached.UprEvent
+	var e *memcached.DcpEvent
 	var mutations int
 loop:
 	for {
 		select {
 		case f := <-feed.C:
-			if f.Opcode == transport.UPR_MUTATION {
+			if f.Opcode == transport.DCP_MUTATION {
 				vbseqNo[f.VBucket][0] = f.Seqno
 				e = f
 				mutations += 1
@@ -150,7 +150,7 @@ func addKVset(b *couchbase.Bucket, count int) {
 	}
 }
 
-func receiveMutations(feed *couchbase.UprFeed, breakAfter int) [][2]uint64 {
+func receiveMutations(feed *couchbase.DcpFeed, breakAfter int) [][2]uint64 {
 	var vbseqNo = make([][2]uint64, options.maxVb)
 	var mutations = 0
 	var ssMarkers = 0
@@ -158,11 +158,11 @@ loop:
 	for {
 		select {
 		case e := <-feed.C:
-			if e.Opcode == transport.UPR_MUTATION {
+			if e.Opcode == transport.DCP_MUTATION {
 				vbseqNo[e.VBucket][0] = e.Seqno
 				mutations += 1
 			}
-			if e.Opcode == transport.UPR_SNAPSHOT {
+			if e.Opcode == transport.DCP_SNAPSHOT {
 				vbseqNo[e.VBucket][1] = e.SnapendSeq
 				ssMarkers += 1
 			}

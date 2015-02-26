@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestPerfInitialIndexBuild_SimpleJson(t *testing.T) {
+func SkipTestPerfInitialIndexBuild_SimpleJson(t *testing.T) {
 	fmt.Println("In TestPerfInitialIndexBuild()")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	

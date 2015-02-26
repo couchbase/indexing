@@ -22,6 +22,7 @@ type SnapshotInfoContainer interface {
 	Len() int
 
 	GetLatest() SnapshotInfo
+	GetOldest() SnapshotInfo
 	GetEqualToTS(*common.TsVbuuid) SnapshotInfo
 	GetOlderThanTS(*common.TsVbuuid) SnapshotInfo
 
@@ -103,7 +104,7 @@ func (sc *snapshotInfoContainer) Len() int {
 	return sc.snapshotList.Len()
 }
 
-//GetLatestSnapshot returns the latest snapshot from container or nil
+//GetLatest returns the latest snapshot from container or nil
 //in case list is empty
 func (sc *snapshotInfoContainer) GetLatest() SnapshotInfo {
 	e := sc.snapshotList.Front()
@@ -115,7 +116,19 @@ func (sc *snapshotInfoContainer) GetLatest() SnapshotInfo {
 	}
 }
 
-//GetSnapshotEqualToTS returns the snapshot from container matching the
+//GetOldest returns the oldest snapshot from container or nil
+//in case list is empty
+func (sc *snapshotInfoContainer) GetOldest() SnapshotInfo {
+	e := sc.snapshotList.Back()
+
+	if e == nil {
+		return nil
+	} else {
+		return e.Value.(SnapshotInfo)
+	}
+}
+
+//GetEqualToTS returns the snapshot from container matching the
 //given timestamp or nil if its not able to find any match
 func (sc *snapshotInfoContainer) GetEqualToTS(tsVbuuid *common.TsVbuuid) SnapshotInfo {
 	ts := getStabilityTSFromTsVbuuid(tsVbuuid)
@@ -131,7 +144,7 @@ func (sc *snapshotInfoContainer) GetEqualToTS(tsVbuuid *common.TsVbuuid) Snapsho
 	return nil
 }
 
-//GetSnapshotOlderThanTS returns a snapshot which is older than the
+//GetOlderThanTS returns a snapshot which is older than the
 //given TS or atleast equal. Returns nil if its not able to find any match
 func (sc *snapshotInfoContainer) GetOlderThanTS(tsVbuuid *common.TsVbuuid) SnapshotInfo {
 	ts := getStabilityTSFromTsVbuuid(tsVbuuid)

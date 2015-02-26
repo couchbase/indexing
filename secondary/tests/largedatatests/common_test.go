@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"path/filepath"
 	"log"
 	"github.com/couchbase/cbauth"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -14,7 +13,6 @@ import (
 	"io/ioutil"
 	"os"
 	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -40,15 +38,7 @@ func init() {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
 	}
 	
-	// Resolve monster bags and prods paths
-	gopath := os.Getenv("GOPATH")
-	for _, dir := range strings.Split(gopath, ":") {
-		file := filepath.Join(dir, "src/github.com/prataprc/monster")
-		if tc.FileExists(file) {
-			proddir = filepath.Join(file, "prods")
-			bagdir = filepath.Join(file, "bags")
-		}
-	}
+	proddir, bagdir = tc.FetchMonsterToolPath()
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {

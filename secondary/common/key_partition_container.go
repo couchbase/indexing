@@ -10,8 +10,8 @@
 package common
 
 import (
+	"github.com/couchbase/indexing/secondary/logging"
 	"hash/crc32"
-	"log"
 )
 
 //KeyPartitionDefn defines a key based partition in terms of topology
@@ -88,7 +88,7 @@ func (pc *KeyPartitionContainer) GetEndpointsByPartitionId(id PartitionId) []End
 	if p, ok := pc.PartitionMap[id]; ok {
 		return p.Endpoints()
 	} else {
-		log.Printf("KeyPartitionContainer: Invalid Partition Id %v", id)
+		logging.Warnf("KeyPartitionContainer: Invalid Partition Id %v", id)
 		return nil
 	}
 }
@@ -109,7 +109,7 @@ func (pc *KeyPartitionContainer) GetPartitionById(id PartitionId) PartitionDefn 
 	if p, ok := pc.PartitionMap[id]; ok {
 		return p
 	} else {
-		log.Printf("KeyPartitionContainer: Invalid Partition Id %v", id)
+		logging.Warnf("KeyPartitionContainer: Invalid Partition Id %v", id)
 		return nil
 	}
 }

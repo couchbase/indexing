@@ -183,8 +183,42 @@ func ExpectedScanAllResponse(docs tc.KeyValues, jsonPath string) tc.ScanResponse
 				break
 			}
 		}
+
+		// Add the field only if is present
+		if field, ok := json[fields[i]]; ok {
+			results[k] = []interface{}{field}
+		}
+	}
+
+	return results
+}
+
+// ScanAll for all json object types
+func ExpectedScanAllResponse_json(docs tc.KeyValues, jsonPath string) tc.ScanResponse {
+	results := make(tc.ScanResponse)
+	fields := strings.Split(jsonPath, ".")
+	var json map[string]interface{}
+	var f string
+	var i int
+
+	for k, v := range docs {
+		// Access the nested field
+		json = v.(map[string]interface{})
+		for i = 0; i < len(fields)-1; i++ {
+			f = fields[i]
+			switch json[f].(type) {
+			case map[string]interface{}:
+				json = json[f].(map[string]interface{})
+			default:
+				break
+			}
+		}
 		field := json[fields[i]]
-		results[k] = []interface{}{field}
+		switch field.(type) {
+		case map[string]interface{}:
+			results[k] = []interface{}{field}
+		default:
+		}
 	}
 
 	return results

@@ -12,6 +12,7 @@ import "errors"
 import "strings"
 import "sync"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 
@@ -89,7 +90,7 @@ func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	if err == nil { // Post HTTP request.
 		bodybuf := bytes.NewBuffer(body)
 		url := b.adminport + "/list"
-		common.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
+		logging.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
 		resp, err = b.httpc.Post(url, "application/json", bodybuf)
 		if err == nil {
 			defer resp.Body.Close()
@@ -120,7 +121,7 @@ func (b *cbqClient) Nodes() (map[string]string, error) {
 func (b *cbqClient) CreateIndex(
 	name, bucket, using, exprType, partnExpr, whereExpr string,
 	secExprs []string, isPrimary bool,
-	with []byte) (common.IndexDefnId, error) {
+	with []byte) (defnID uint64, err error) {
 
 	var resp *http.Response
 	var mresp indexMetaResponse
@@ -141,7 +142,7 @@ func (b *cbqClient) CreateIndex(
 	if err == nil { // Post HTTP request.
 		bodybuf := bytes.NewBuffer(body)
 		url := b.adminport + "/create"
-		common.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
+		logging.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
 		resp, err = b.httpc.Post(url, "application/json", bodybuf)
 		if err == nil {
 			defer resp.Body.Close()
@@ -149,7 +150,7 @@ func (b *cbqClient) CreateIndex(
 			if err == nil {
 				defnID := mresp.Indexes[0].DefnID
 				b.Refresh()
-				return common.IndexDefnId(defnID), nil
+				return defnID, nil
 			}
 			return 0, err
 		}
@@ -158,12 +159,12 @@ func (b *cbqClient) CreateIndex(
 }
 
 // BuildIndexes implement BridgeAccessor{} interface.
-func (b *cbqClient) BuildIndexes(defnID []common.IndexDefnId) error {
+func (b *cbqClient) BuildIndexes(defnID []uint64) error {
 	panic("cbqClient does not implement build-indexes")
 }
 
 // DropIndex implement BridgeAccessor{} interface.
-func (b *cbqClient) DropIndex(defnID common.IndexDefnId) error {
+func (b *cbqClient) DropIndex(defnID uint64) error {
 	var resp *http.Response
 
 	// Construct request body.
@@ -175,7 +176,7 @@ func (b *cbqClient) DropIndex(defnID common.IndexDefnId) error {
 		// Post HTTP request.
 		bodybuf := bytes.NewBuffer(body)
 		url := b.adminport + "/drop"
-		common.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
+		logging.Infof("%v posting %v to URL %v", b.logPrefix, bodybuf, url)
 		resp, err = b.httpc.Post(url, "application/json", bodybuf)
 		if err == nil {
 			defer resp.Body.Close()
@@ -196,9 +197,13 @@ func (b *cbqClient) GetScanports() (queryports []string) {
 }
 
 // GetScanport implement BridgeAccessor{} interface.
-func (b *cbqClient) GetScanport(
-	defnID common.IndexDefnId) (queryport string, ok bool) {
+func (b *cbqClient) GetScanport(defnID uint64) (queryport string, ok bool) {
 	return b.queryport, true
+}
+
+// GetIndexDefn implements BridgeAccessor{} interface.
+func (b *cbqClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
+	panic("cbqClient does not implement GetIndexDefn")
 }
 
 // Timeit implement BridgeAccessor{} interface.
@@ -224,7 +229,7 @@ func (b *cbqClient) metaResponse(
 	body, err = ioutil.ReadAll(resp.Body)
 	if err == nil {
 		if err = json.Unmarshal(body, &mresp); err == nil {
-			common.Tracef("%v received raw response %s", b.logPrefix, string(body))
+			logging.Tracef("%v received raw response %s", b.logPrefix, string(body))
 			if strings.Contains(mresp.Status, "error") {
 				err = errors.New(mresp.Errors[0].Msg)
 			}

@@ -46,7 +46,7 @@ ensure safety and performance.
 
 ## projector topology
 
-Projector topology defines how projectors and its UPR connections are started
+Projector topology defines how projectors and its DCP connections are started
 and grouped across many nodes for all the buckets defined in KV.
 
 ### co-location
@@ -56,31 +56,31 @@ with KV node. A single kv-node can host more than one bucket and for each bucket
 it will be hosting a subset of vbucket.
 
 After projector initialization, it will wait for admin messages to start / restart
-UPR connection.
+DCP connection.
 
 ### computing key-versions
 
 Projector will pick every document from its input queue and apply expressions
 from each index active on the stream. Say if there are 3 indexes active on
 the stream, there will be three expressions to be applied on each document
-coming from UPR mutation queue.
+coming from DCP mutation queue.
 
-Types of upr mutations,
-* UPR_MUTATION, either a document is inserted or updated.
+Types of dcp mutations,
+* DCP_MUTATION, either a document is inserted or updated.
   * for every mutated document, projector will compute 3 key-versions, say if
     there are three indexes defined for the bucket.
-  * if previous version of document is available from UPR message, projector
+  * if previous version of document is available from DCP message, projector
     will compute 3 key-versions, called old-keys, from the older document.
     * only key versions that are different from the old key versions will be
       sent across to router.
-  * if previous version of document is not available from UPR message,
+  * if previous version of document is not available from DCP message,
     it is not possible to detect secondary-key changes and KeyVersions will
     be computed and sent to router.
-* UPR_DELETION, when an existing document is deleted.
+* DCP_DELETION, when an existing document is deleted.
 
 ## connection, streams and flow control
 
-Projector will start a UPR connection with one or more KV nodes, depending on
+Projector will start a DCP connection with one or more KV nodes, depending on
 whether it is co-located with KV or not, for stream request. Stream request
 can be for
 
@@ -93,7 +93,7 @@ but the type of stream is opaque to projector.
 * *stream end*, when ever a stream ends on a connection, projector will
   try to restart the stream, using the last received `{vbuuid, seqNo}` until it
   receives NOT_MY_VBUCKET message.
-* *cascading connection termination*, when ever a UPR connection is closed,
+* *cascading connection termination*, when ever a DCP connection is closed,
   corresponding downstream connection will be closed. After which, it is up to
   the indexer or Index-Coordinator to restart the connection.
 
@@ -108,33 +108,33 @@ projector and router, for that stream. All projected mutations on the topic will
 be publised on that stream.
 
 Timestamp will be computed by indexer and Index-Coordinator during fresh
-start, upr-connection loss, kv-rebalance, kv-rollback and Index-Coordinator
+start, dcp-connection loss, kv-rebalance, kv-rollback and Index-Coordinator
 restart
 
 Timestamp is a vector of sequence number for each vbucket. Optionally a vector
 of vbuuid corresponding to sequence number can also be attached to
 restart-timestamp to detect roll-back conditions.
 
-The projector will start a UPR connection and vbucket streams with the sequence
+The projector will start a DCP connection and vbucket streams with the sequence
 number less than or equal to restart-timestamp.
 
 ### stream bootstrapping
 
-Projector and downstream component will handshake to start a UPR connection.
+Projector and downstream component will handshake to start a DCP connection.
 The *downstream component* here is indexer or Index-Coordinator.
 
 * downstream component fetches the failover log from projector.
 * downstream component computes a failover-timestamp using failover log and
-  latest UPR sequence-no.
+  latest DCP sequence-no.
 * downstream component will decide if it needs a rollback by comparing the
   UUID between latest stability-timestamp and failover-timestamp.
 * projector will receive a start stream request with restart-timestamp.
 * projector will use failover-log and computes failover-timestamp. After
-  starting the stream, gathers UPR-timestamp and sends back failover-timestamp
-  and UPR-timestamp to the caller.
+  starting the stream, gathers DCP-timestamp and sends back failover-timestamp
+  and DCP-timestamp to the caller.
   * if projector detects that a failover has happened in between, it will close
-    the UPR connection and downstream connections.
-* during stream start projector will always honor ROLLBACK response from UPR
+    the DCP connection and downstream connections.
+* during stream start projector will always honor ROLLBACK response from DCP
   producer. It is up to indexer and Index-Coordinator to be aware of duplicate
   KeyVersions and ignore them.
 
@@ -155,7 +155,7 @@ Active streams may have to be restarted in the following cases,
 * kv-rollback, Index-Coordinator will follow rollback sequence to compute
   restart-timestamp and post a stream request to projector.
 * kv-rebalance, during kv-rebalance one or more vbucket stream will switch to
-  another node that will lead to stream-end on the projector's UPR connection.
+  another node that will lead to stream-end on the projector's DCP connection.
   It is upto indexer and Index-Coordinator to post a stream request for migrating
   vbucket to all projectors after identifying the restart-timestamp.
 
@@ -187,8 +187,8 @@ Typical flow of topic creation and subscription in projector,
 ### projector operation
 
 As part of normal operation projector will,
-* start a thread/routine per kv-node called UPR thread. Each routine shall
-  manage a UPR connection with kv-node.
+* start a thread/routine per kv-node called DCP thread. Each routine shall
+  manage a DCP connection with kv-node.
 * maintain separate queue for each vbucket, both on the input side and output
   side.
 * apply DDL expressions on the document for each document from vbucket's input
@@ -196,14 +196,14 @@ As part of normal operation projector will,
 * push the event to vbucket's output queue.
 
 Applying index DDL expressions on incoming mutations,
-* DDL expressions are applied only for UPR_MUTATION type events.
+* DDL expressions are applied only for DCP_MUTATION type events.
 * projector will use the list of supplied indexids to fetch the list of index
   DDLs applicable on a stream.
 
 ### flow control
 
-Projector will use UPR's flow control mechanism by advertising its buffer size.
+Projector will use DCP's flow control mechanism by advertising its buffer size.
 
-As an alternative if UPR's flow control is not available, UPR routine can end
+As an alternative if DCP's flow control is not available, DCP routine can end
 the stream for the vbucket. There after it can restart the stream when buffer
 gets emptied out.

@@ -11,6 +11,7 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
@@ -22,14 +23,13 @@ import (
 // For this test, use Index Defn Id from 100 - 110
 func TestIndexManager(t *testing.T) {
 
-	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 	os.MkdirAll("./data/", os.ModePerm)
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
 
-	common.Infof("Start Index Manager *********************************************************")
+	logging.Infof("Start Index Manager *********************************************************")
 
 	var msgAddr = "localhost:9884"
 	factory := new(util.TestDefaultClientFactory)
@@ -41,15 +41,15 @@ func TestIndexManager(t *testing.T) {
 	}
 	defer mgr.Close()
 
-	common.Infof("Cleanup Test *********************************************************")
+	logging.Infof("Cleanup Test *********************************************************")
 
 	cleanupTest(mgr, t)
 
-	common.Infof("Setup Initial Data *********************************************************")
+	logging.Infof("Setup Initial Data *********************************************************")
 
 	//setupInitialData(mgr, t)
 
-	common.Infof("Start Provider *********************************************************")
+	logging.Infof("Start Provider *********************************************************")
 
 	var providerId = "TestMetadataProvider"
 	provider, err := client.NewMetadataProvider(providerId)
@@ -59,7 +59,7 @@ func TestIndexManager(t *testing.T) {
 	defer provider.Close()
 	provider.WatchMetadata(msgAddr)
 
-	common.Infof("Test Iterator *********************************************************")
+	logging.Infof("Test Iterator *********************************************************")
 
 	runIterator(mgr, t, 0)
 
@@ -80,7 +80,7 @@ func TestIndexManager(t *testing.T) {
 	}
 	runIterator(mgr, t, 2)
 
-	common.Infof("Cleanup Test *********************************************************")
+	logging.Infof("Cleanup Test *********************************************************")
 
 	provider.UnwatchMetadata(msgAddr)
 	cleanSingleIndex_managerTest(mgr, t, newDefnId101)
@@ -139,15 +139,15 @@ func cleanSingleIndex_managerTest(mgr *manager.IndexManager, t *testing.T, id co
 
 	_, err := mgr.GetIndexDefnById(id)
 	if err != nil {
-		common.Infof("cleanupTest() :  cannot find index defn %d.  No cleanup ...", id)
+		logging.Infof("cleanupTest() :  cannot find index defn %d.  No cleanup ...", id)
 	} else {
-		common.Infof("cleanupTest.cleanupTest() :  found index defn %d.  Cleaning up ...", id)
+		logging.Infof("cleanupTest.cleanupTest() :  found index defn %d.  Cleaning up ...", id)
 
 		mgr.HandleDeleteIndexDDL(id)
 
 		_, err := mgr.GetIndexDefnById(id)
 		if err == nil {
-			common.Infof("cleanupTest() :  cannot cleanup index defn %d.  ...", id)
+			logging.Infof("cleanupTest() :  cannot cleanup index defn %d.  ...", id)
 		}
 	}
 }
@@ -161,7 +161,7 @@ func runIterator(mgr *manager.IndexManager, t *testing.T, expectedCount int) {
 
 	count := 0
 	for key, _, err := metaIter.Next(); err == nil; key, _, err = metaIter.Next() {
-		common.Infof("key during iteration %s", key)
+		logging.Infof("key during iteration %s", key)
 		count++
 	}
 

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbaselabs/goforestdb"
 	"math"
 	"sync"
@@ -24,6 +25,7 @@ type fdbSnapshotInfo struct {
 	Ts        *common.TsVbuuid
 	MainSeq   forestdb.SeqNum
 	BackSeq   forestdb.SeqNum
+	MetaSeq   forestdb.SeqNum
 	Committed bool
 }
 
@@ -36,16 +38,20 @@ func (info *fdbSnapshotInfo) IsCommitted() bool {
 }
 
 func (info *fdbSnapshotInfo) String() string {
-	return fmt.Sprintf("SnapshotInfo: seqnos: %v, %v", info.MainSeq, info.BackSeq)
+	return fmt.Sprintf("SnapshotInfo: seqnos: %v, %v, %v", info.MainSeq,
+		info.BackSeq, info.MetaSeq)
 }
 
 type fdbSnapshot struct {
 	slice Slice
 
-	main       *forestdb.KVStore // handle for forward index
-	back       *forestdb.KVStore // handle for reverse index
+	main *forestdb.KVStore // handle for forward index
+	back *forestdb.KVStore // handle for reverse index
+	meta *forestdb.KVStore // handle for meta
+
 	mainSeqNum forestdb.SeqNum
 	backSeqNum forestdb.SeqNum
+	metaSeqNum forestdb.SeqNum
 
 	idxDefnId common.IndexDefnId //index definition id
 	idxInstId common.IndexInstId //index instance id
@@ -75,16 +81,30 @@ func (s *fdbSnapshot) Open() error {
 		var err error
 		s.main, err = s.main.SnapshotOpen(mainSeq)
 		if err != nil {
-			common.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+			logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
 				"Opening Main DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), mainSeq, err)
 			return err
 		}
-		s.back, err = s.back.SnapshotOpen(backSeq)
-		if err != nil {
-			common.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
-				"Opening Back DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), backSeq, err)
-			return err
+
+		//if there is a back-index(non-primary index)
+		if s.back != nil {
+			s.back, err = s.back.SnapshotOpen(backSeq)
+			if err != nil {
+				logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+					"Opening Back DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), backSeq, err)
+				return err
+			}
 		}
+
+		if s.committed {
+			s.meta, err = s.meta.SnapshotOpen(s.metaSeqNum)
+			if err != nil {
+				logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+					"Opening Meta DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), s.metaSeqNum, err)
+				return err
+			}
+		}
+
 		s.slice.IncrRef()
 		s.refCount = 1
 	}
@@ -136,7 +156,7 @@ func (s *fdbSnapshot) Close() error {
 	defer s.lock.Unlock()
 
 	if s.refCount <= 0 {
-		common.Errorf("ForestDBSnapshot::Close Close operation requested " +
+		logging.Errorf("ForestDBSnapshot::Close Close operation requested " +
 			"on already closed snapshot")
 		return errors.New("Snapshot Already Closed")
 	} else {
@@ -147,12 +167,12 @@ func (s *fdbSnapshot) Close() error {
 			if s.main != nil {
 				err := s.main.Close()
 				if err != nil {
-					common.Errorf("ForestDBSnapshot::Close Unexpected error "+
+					logging.Errorf("ForestDBSnapshot::Close Unexpected error "+
 						"closing Main DB Snapshot %v", err)
 					return err
 				}
 			} else {
-				common.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
+				logging.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
 				errors.New("Main DB Handle Nil")
 			}
 
@@ -160,13 +180,28 @@ func (s *fdbSnapshot) Close() error {
 			if s.back != nil {
 				err := s.back.Close()
 				if err != nil {
-					common.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
+					logging.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
 						"Back DB Snapshot %v", err)
 					return err
 				}
 			} else {
-				common.Errorf("ForestDBSnapshot::Close Back DB Handle Nil")
+				logging.Errorf("ForestDBSnapshot::Close Back DB Handle Nil")
 				errors.New("Back DB Handle Nil")
+			}
+
+			//close the meta index
+			if s.committed {
+				if s.meta != nil {
+					err := s.meta.Close()
+					if err != nil {
+						logging.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
+							"Meta DB Snapshot %v", err)
+						return err
+					}
+				} else {
+					logging.Errorf("ForestDBSnapshot::Close Meta DB Handle Nil")
+					errors.New("Meta DB Handle Nil")
+				}
 			}
 		}
 	}
@@ -188,6 +223,7 @@ func (s *fdbSnapshot) Info() SnapshotInfo {
 	return &fdbSnapshotInfo{
 		MainSeq:   s.mainSeqNum,
 		BackSeq:   s.backSeqNum,
+		MetaSeq:   s.metaSeqNum,
 		Committed: s.committed,
 		Ts:        s.ts,
 	}

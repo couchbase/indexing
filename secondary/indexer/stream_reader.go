@@ -12,6 +12,7 @@ package indexer
 import (
 	"errors"
 
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
@@ -61,7 +62,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		config, streamMutch)
 	if err != nil {
 		//return stream init error
-		common.Errorf("MutationStreamReader: Error returned from NewServer."+
+		logging.Errorf("MutationStreamReader: Error returned from NewServer."+
 			"StreamId: %v, Err: %v", streamId, err)
 
 		msgErr := &MsgError{
@@ -106,7 +107,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 //This call doesn't return till shutdown is complete.
 func (r *mutationStreamReader) Shutdown() {
 
-	common.Infof("MutationStreamReader:Shutdown StreamReader %v", r.streamId)
+	logging.Infof("MutationStreamReader:Shutdown StreamReader %v", r.streamId)
 
 	//close the mutation stream
 	r.stream.Close()
@@ -140,7 +141,7 @@ func (r *mutationStreamReader) run() {
 			} else {
 				//stream library has closed this channel indicating
 				//unexpected stream closure send the message to supervisor
-				common.Errorf("MutationStreamReader::run Unexpected Mutation "+
+				logging.Errorf("MutationStreamReader::run Unexpected Mutation "+
 					"Channel Close for Stream %v", r.streamId)
 				msgErr := &MsgError{
 					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
@@ -207,7 +208,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 	skipMutation := false
 	evalFilter := true
 
-	common.Tracef("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
+	logging.Tracef("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
 
 	for i, cmd := range kv.GetCommands() {
 
@@ -311,7 +312,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 //startMutationStreamWorker is the worker which processes mutation in a worker queue
 func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch StopChannel) {
 
-	common.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
+	logging.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
 		"Started for Stream %v.", workerId, r.streamId)
 
 	for {
@@ -319,7 +320,7 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 		case mut := <-r.workerch[workerId]:
 			r.handleSingleMutation(mut)
 		case <-stopch:
-			common.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
+			logging.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
 				"Stopped for Stream %v", workerId, r.streamId)
 			return
 		}
@@ -330,14 +331,14 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 //handleSingleMutation enqueues mutation in the mutation queue
 func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys) {
 
-	common.Tracef("MutationStreamReader::handleSingleMutation received mutation %v", mut)
+	logging.Tracef("MutationStreamReader::handleSingleMutation received mutation %v", mut)
 
 	//based on the index, enqueue the mutation in the right queue
 	if q, ok := r.bucketQueueMap[mut.meta.bucket]; ok {
 		q.queue.Enqueue(mut, mut.meta.vbucket)
 
 	} else {
-		common.Errorf("MutationStreamReader::handleSingleMutation got mutation for "+
+		logging.Errorf("MutationStreamReader::handleSingleMutation got mutation for "+
 			"unknown bucket. Skipped  %v", mut)
 	}
 
@@ -351,7 +352,7 @@ func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 	switch msg.(type) {
 
 	case dataport.ConnectionError:
-		common.Debugf("MutationStreamReader::handleStreamInfoMsg \n\tReceived ConnectionError "+
+		logging.Debugf("MutationStreamReader::handleStreamInfoMsg \n\tReceived ConnectionError "+
 			"from Client for Stream %v %v.", r.streamId, msg.(dataport.ConnectionError))
 
 		//send a separate message for each bucket. If the ConnError is with empty vblist,
@@ -366,7 +367,7 @@ func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 		}
 
 	default:
-		common.Errorf("MutationStreamReader::handleStreamError \n\tReceived Unknown Message "+
+		logging.Errorf("MutationStreamReader::handleStreamError \n\tReceived Unknown Message "+
 			"from Client for Stream %v.", r.streamId)
 		supvMsg = &MsgError{
 			err: Error{code: ERROR_STREAM_READER_UNKNOWN_ERROR,
@@ -383,7 +384,7 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 
 	case STREAM_READER_UPDATE_QUEUE_MAP:
 
-		common.Debugf("MutationStreamReader::handleSupervisorCommands %v", cmd)
+		logging.Debugf("MutationStreamReader::handleSupervisorCommands %v", cmd)
 		//stop all workers
 		r.stopWorkers()
 
@@ -399,7 +400,7 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		return &MsgSuccess{}
 
 	default:
-		common.Errorf("MutationStreamReader::handleSupervisorCommands \n\tReceived Unknown Command %v", cmd)
+		logging.Errorf("MutationStreamReader::handleSupervisorCommands \n\tReceived Unknown Command %v", cmd)
 		return &MsgError{
 			err: Error{code: ERROR_STREAM_READER_UNKNOWN_COMMAND,
 				severity: NORMAL,
@@ -413,7 +414,7 @@ func (r *mutationStreamReader) panicHandler() {
 
 	//panic recovery
 	if rc := recover(); rc != nil {
-		common.Fatalf("MutationStreamReader::panicHandler \n\tReceived Panic for Stream %v", r.streamId)
+		logging.Fatalf("MutationStreamReader::panicHandler \n\tReceived Panic for Stream %v", r.streamId)
 		//TODO Log the stack trace here
 		var err error
 		switch x := rc.(type) {
@@ -438,7 +439,7 @@ func (r *mutationStreamReader) panicHandler() {
 //a StopChannel to each worker
 func (r *mutationStreamReader) startWorkers() {
 
-	common.Debugf("MutationStreamReader::startWorkers Starting All Stream Workers")
+	logging.Debugf("MutationStreamReader::startWorkers Starting All Stream Workers")
 
 	//start worker goroutines to process incoming mutation concurrently
 	for w := 0; w < r.numWorkers; w++ {
@@ -450,7 +451,7 @@ func (r *mutationStreamReader) startWorkers() {
 //all workers are stopped
 func (r *mutationStreamReader) stopWorkers() {
 
-	common.Debugf("MutationStreamReader::stopWorkers Stopping All Stream Workers")
+	logging.Debugf("MutationStreamReader::stopWorkers Stopping All Stream Workers")
 
 	//stop all workers
 	for _, ch := range r.workerStopCh {
@@ -465,7 +466,7 @@ func (r *mutationStreamReader) initBucketFilter() {
 	//have a filter yet
 	for b, q := range r.bucketQueueMap {
 		if _, ok := r.bucketFilterMap[b]; !ok {
-			common.Tracef("MutationStreamReader::initBucketFilter Added new filter "+
+			logging.Tracef("MutationStreamReader::initBucketFilter Added new filter "+
 				"for Bucket %v Stream %v", b, r.streamId)
 			r.bucketFilterMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
 		}
@@ -474,7 +475,7 @@ func (r *mutationStreamReader) initBucketFilter() {
 	//remove the bucket filters for which bucket doesn't exist anymore
 	for b, _ := range r.bucketFilterMap {
 		if _, ok := r.bucketQueueMap[b]; !ok {
-			common.Tracef("MutationStreamReader::initBucketFilter Deleted filter "+
+			logging.Tracef("MutationStreamReader::initBucketFilter Deleted filter "+
 				"for Bucket %v Stream %v", b, r.streamId)
 			delete(r.bucketFilterMap, b)
 		}
@@ -489,10 +490,10 @@ func (r *mutationStreamReader) setBucketFilter(meta *MutationMeta) {
 	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
 		filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
 		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
-		common.Tracef("MutationStreamReader::setBucketFilter Vbucket %v "+
+		logging.Tracef("MutationStreamReader::setBucketFilter Vbucket %v "+
 			"Seqno %v Bucket %v Stream %v", meta.vbucket, meta.seqno, meta.bucket, r.streamId)
 	} else {
-		common.Errorf("MutationStreamReader::setBucketFilter Missing bucket "+
+		logging.Errorf("MutationStreamReader::setBucketFilter Missing bucket "+
 			"%v in Filter for Stream %v", meta.bucket, r.streamId)
 	}
 
@@ -509,13 +510,13 @@ func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool 
 			filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
 			return true
 		} else {
-			common.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Skipped "+
+			logging.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Skipped "+
 				"Mutation %v for Bucket %v Stream %v. Current Filter %v", meta,
 				meta.bucket, r.streamId, filter)
 			return false
 		}
 	} else {
-		common.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Missing"+
+		logging.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Missing"+
 			"bucket %v in Filter for Stream %v", meta.bucket, r.streamId)
 		return false
 	}
@@ -537,7 +538,7 @@ func logPerfStat() {
 
 	mutationCount++
 	if (mutationCount%10000 == 0) || mutationCount == 1 {
-		common.Infof("MutationStreamReader::logPerfStat \n"+
+		logging.Infof("MutationStreamReader::logPerfStat \n"+
 			"MutationCount %v", mutationCount)
 	}
 

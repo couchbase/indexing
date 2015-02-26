@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"runtime/debug"
 	"strings"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/couchbase/indexing/secondary/dcp"
 	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 var options struct {
@@ -51,11 +51,11 @@ func argParse() string {
 
 	options.buckets = strings.Split(buckets, ",")
 	if options.debug {
-		common.SetLogLevel(common.LogLevelDebug)
+		logging.SetLogLevel(logging.Debug)
 	} else if options.trace {
-		common.SetLogLevel(common.LogLevelTrace)
+		logging.SetLogLevel(logging.Trace)
 	} else {
-		common.SetLogLevel(common.LogLevelInfo)
+		logging.SetLogLevel(logging.Info)
 	}
 
 	args := flag.Args()
@@ -82,45 +82,44 @@ func main() {
 func startBucket(cluster, bucketn string) int {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("%s:\n%s\n", r, debug.Stack())
-			common.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s:\n%s\n", r, logging.StackTrace())
 		}
 	}()
 
-	common.Infof("Connecting with %q\n", bucketn)
+	logging.Infof("Connecting with %q\n", bucketn)
 	b, err := common.ConnectBucket(cluster, "default", bucketn)
 	mf(err, "bucket")
 
-	uprFeed, err := b.StartUprFeed("rawupr", uint32(0))
+	dcpFeed, err := b.StartDcpFeed("rawupr", uint32(0))
 	mf(err, "- upr")
 
 	vbnos := listOfVbnos(options.maxVbno)
 
 	flogs, err := b.GetFailoverLogs(vbnos)
-	mf(err, "- upr failoverlogs")
+	mf(err, "- dcp failoverlogs")
 
 	if options.printflogs {
 		printFlogs(vbnos, flogs)
 	}
 
-	go startUpr(uprFeed, flogs)
+	go startDcp(dcpFeed, flogs)
 
 	for {
-		e, ok := <-uprFeed.C
+		e, ok := <-dcpFeed.C
 		if ok == false {
-			common.Infof("Closing for bucket %q\n", b.Name)
+			logging.Infof("Closing for bucket %q\n", b.Name)
 		}
 		rch <- []interface{}{b.Name, e}
 	}
 }
 
-func startUpr(uprFeed *couchbase.UprFeed, flogs couchbase.FailoverLog) {
+func startDcp(dcpFeed *couchbase.DcpFeed, flogs couchbase.FailoverLog) {
 	start, end := uint64(0), uint64(0xFFFFFFFFFFFFFFFF)
 	snapStart, snapEnd := uint64(0), uint64(0)
 	for vbno, flog := range flogs {
 		x := flog[len(flog)-1] // map[uint16][][2]uint64
 		opaque, flags, vbuuid := uint16(vbno), uint32(0), x[0]
-		err := uprFeed.UprRequestStream(
+		err := dcpFeed.DcpRequestStream(
 			vbno, opaque, flags, vbuuid, start, end, snapStart, snapEnd)
 		mf(err, fmt.Sprintf("stream-req for %v failed", vbno))
 	}
@@ -148,10 +147,10 @@ loop:
 			if ok == false {
 				break loop
 			}
-			bucket, e := msg[0].(string), msg[1].(*mc.UprEvent)
-			if e.Opcode == mcd.UPR_MUTATION {
-				common.Tracef("UprMutation KEY -- %v\n", string(e.Key))
-				common.Tracef("     %v\n", string(e.Value))
+			bucket, e := msg[0].(string), msg[1].(*mc.DcpEvent)
+			if e.Opcode == mcd.DCP_MUTATION {
+				logging.Tracef("DcpMutation KEY -- %v\n", string(e.Key))
+				logging.Tracef("     %v\n", string(e.Value))
 			}
 			if _, ok := counts[bucket]; !ok {
 				counts[bucket] = make(map[mcd.CommandCode]int)
@@ -163,9 +162,9 @@ loop:
 
 		case <-tick:
 			for bucket, m := range counts {
-				common.Infof("%q %s\n", bucket, sprintCounts(m))
+				logging.Infof("%q %s\n", bucket, sprintCounts(m))
 			}
-			common.Infof("\n")
+			logging.Infof("\n")
 		}
 	}
 }
@@ -192,8 +191,8 @@ func listOfVbnos(maxVbno int) []uint16 {
 
 func printFlogs(vbnos []uint16, flogs couchbase.FailoverLog) {
 	for i, vbno := range vbnos {
-		common.Infof("Failover log for vbucket %v\n", vbno)
-		common.Infof("   %#v\n", flogs[uint16(i)])
+		logging.Infof("Failover log for vbucket %v\n", vbno)
+		logging.Infof("   %#v\n", flogs[uint16(i)])
 	}
-	common.Infof("\n")
+	logging.Infof("\n")
 }

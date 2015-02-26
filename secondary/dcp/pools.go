@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"io"
 	"io/ioutil"
-	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -554,7 +554,7 @@ func (b *Bucket) Close() {
 
 func bucketFinalizer(b *Bucket) {
 	if b.connPools != nil {
-		log.Printf("Warning: Finalizing a bucket with active connections.")
+		logging.Warnf("Warning: Finalizing a bucket with active connections.")
 	}
 }
 

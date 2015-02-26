@@ -10,6 +10,7 @@
 package manager
 
 import (
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
@@ -34,7 +35,7 @@ func (m *mgrMutHandler) HandleSync(streamId common.StreamId,
 	kv *protobuf.KeyVersions,
 	offset int) {
 
-	common.Debugf("mgrMutHandler.HandleSync: bucket %s, vbucket %d, vbuuid %d, seqno %d",
+	logging.Debugf("mgrMutHandler.HandleSync: bucket %s, vbucket %d, vbuuid %d, seqno %d",
 		bucket, vbucket, vbuuid, kv.GetSeqno())
 
 	// update the timer
@@ -48,7 +49,7 @@ func (m *mgrMutHandler) HandleStreamBegin(streamId common.StreamId,
 	kv *protobuf.KeyVersions,
 	offset int) {
 
-	common.Debugf("mgrMutHandler.StreamBegin : stream %d bucket %s vb %d", streamId, bucket, vbucket)
+	logging.Debugf("mgrMutHandler.StreamBegin : stream %d bucket %s vb %d", streamId, bucket, vbucket)
 	if m.monitor != nil {
 		m.monitor.Activate(streamId, bucket, uint16(vbucket))
 	}
@@ -61,7 +62,7 @@ func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
 	kv *protobuf.KeyVersions,
 	offset int) {
 
-	common.Debugf("mgrMutHandler.StreamEnd : stream %d bucket %s vb %d", streamId, bucket, vbucket)
+	logging.Debugf("mgrMutHandler.StreamEnd : stream %d bucket %s vb %d", streamId, bucket, vbucket)
 	if m.monitor != nil {
 		m.monitor.Deactivate(streamId, bucket, uint16(vbucket))
 	}
@@ -77,11 +78,11 @@ func (m *mgrMutHandler) HandleStreamEnd(streamId common.StreamId,
 		err := m.indexMgr.streamMgr.RestartStreamIfNecessary(streamId, []*common.TsVbuuid{ts})
 		if err != nil {
 			// TODO: What if the bucket is deleted?
-			common.Errorf("mgrMutHandler.HandleStreamEnd(): error encounterd %v", err)
+			logging.Errorf("mgrMutHandler.HandleStreamEnd(): error encounterd %v", err)
 		}
 	} else {
 		// TODO: Handle race condition - get stream end before the first sync message is received.
-		common.Errorf("mgrMutHandler.HandleStreamEnd(): stability timestamp is not available")
+		logging.Errorf("mgrMutHandler.HandleStreamEnd(): stability timestamp is not available")
 	}
 }
 
@@ -93,7 +94,7 @@ func (m *mgrMutHandler) HandleUpsert(streamId common.StreamId,
 	offset int) {
 
 	// Ignore any mutation
-	common.Debugf("mgrMutHandler.HandleUpsert")
+	logging.Debugf("mgrMutHandler.HandleUpsert")
 }
 
 func (m *mgrMutHandler) HandleDeletion(streamId common.StreamId,
@@ -104,7 +105,7 @@ func (m *mgrMutHandler) HandleDeletion(streamId common.StreamId,
 	offset int) {
 
 	// Ignore any mutation
-	common.Debugf("mgrMutHandler.HandleDeletion")
+	logging.Debugf("mgrMutHandler.HandleDeletion")
 }
 
 func (m *mgrMutHandler) HandleUpsertDeletion(streamId common.StreamId,
@@ -115,7 +116,7 @@ func (m *mgrMutHandler) HandleUpsertDeletion(streamId common.StreamId,
 	offset int) {
 
 	// Ignore any mutation
-	common.Debugf("mgrMutHandler.HandleUpsertDeletion")
+	logging.Debugf("mgrMutHandler.HandleUpsertDeletion")
 }
 
 func (m *mgrMutHandler) HandleDropData(streamId common.StreamId,
@@ -126,7 +127,7 @@ func (m *mgrMutHandler) HandleDropData(streamId common.StreamId,
 	offset int) {
 
 	// TODO
-	common.Debugf("mgrMutHandler.HandleDropData")
+	logging.Debugf("mgrMutHandler.HandleDropData")
 }
 
 func (m *mgrMutHandler) HandleSnapshot(streamId common.StreamId,
@@ -136,7 +137,7 @@ func (m *mgrMutHandler) HandleSnapshot(streamId common.StreamId,
 	kv *protobuf.KeyVersions,
 	offset int) {
 
-	common.Debugf("mgrMutHandler.Snapshot")
+	logging.Debugf("mgrMutHandler.Snapshot")
 
 	snapshotType, _, end := kv.Snapshot()
 
@@ -148,7 +149,7 @@ func (m *mgrMutHandler) HandleSnapshot(streamId common.StreamId,
 
 func (m *mgrMutHandler) HandleConnectionError(streamId common.StreamId, err dataport.ConnectionError) {
 
-	common.Debugf("mgrMutHandler.ConnectionError")
+	logging.Debugf("mgrMutHandler.ConnectionError")
 
 	// ConnectionError happens in 3 cases:
 	//  1) Projector goes down for a specific node

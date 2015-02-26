@@ -2,11 +2,11 @@
 
 Initial Index Build can be divided into 2 phases:
 - **Prepare Phase** - Index metadata (id, topology) is generated and storage gets allocated for the new index.
-- **Load Phase** - UPR mutation stream is initiated for the new index and indexers process/store secondary keys.
+- **Load Phase** - DCP mutation stream is initiated for the new index and indexers process/store secondary keys.
 
 *After Prepare phase, it will require the administrator to initiate index building from UI.
 The administrator will have to select the new index definitions for initial loading.
-This will allow same UPR connection to be shared for multiple indexes' initial build.*
+This will allow same DCP connection to be shared for multiple indexes' initial build.*
 
 ####Prepare Phase
 
@@ -50,10 +50,10 @@ This will allow same UPR connection to be shared for multiple indexes' initial b
 4. Index coordinator will notify all Routers about new index topology. 
 5. Router will create topic/subscribers for the new index and ACK to index coordinator.
 6. Index Coordinator will notify all Projectors about the new index definitions. 
-7. Projector will start UPR mutation stream for new topic. This new stream will be in addition to the existing UPR index maintenance stream.
+7. Projector will start DCP mutation stream for new topic. This new stream will be in addition to the existing DCP index maintenance stream.
 8. For each incoming mutation on the stream, projector would run the map functions for the indexes being built and publish the secondary key versions to Router on the new topic.
 9. Router will forward the secondary key versions to local indexers based on the subscribers for the new topic.
-10. For the new index, the local indexer would now have two incoming UPR streams, one for indexing building and the other one for index maintenance. The mutations from index building stream will be put in the `Initial Build Queue` and index status marked as **INITIAL_BUILD**.
+10. For the new index, the local indexer would now have two incoming DCP streams, one for indexing building and the other one for index maintenance. The mutations from index building stream will be put in the `Initial Build Queue` and index status marked as **INITIAL_BUILD**.
 11. Local Indexer will persist mutations from `Initial Build Queue` on a regular basis and create snapshots which can be used to resume the index build if there is a crash.
 12. Once thetimestamp of mutations with highest seq no in `Initial Build Queue` matches the `Initial Build Timestamp`, the local indexer will mark the index initial build as complete.
 13. Indexer will send "Initial Build Complete" message to index coordinator.

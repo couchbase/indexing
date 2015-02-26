@@ -6,9 +6,9 @@ import "fmt"
 import "sort"
 import "strings"
 import "time"
-import "log"
 import "encoding/json"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 
@@ -89,15 +89,15 @@ loop:
 		case <-printTm:
 			for _, bucket := range sortedBuckets(bucketWise) {
 				commandWise := bucketWise[bucket]
-				c.Infof("%v %v, %v\n",
+				logging.Infof("%v %v, %v\n",
 					logPrefix, bucket, sprintCommandCount(commandWise))
 			}
 			for id := uint64(0); id < 100; id++ {
 				if ks, ok := keys[id]; ok {
-					c.Infof("%v %v\n", logPrefix, sprintKeyCount(id, ks))
+					logging.Infof("%v %v\n", logPrefix, sprintKeyCount(id, ks))
 				}
 			}
-			c.Infof("\n")
+			logging.Infof("\n")
 		}
 	}
 }
@@ -136,11 +136,11 @@ func processMutations(
 					m = make(map[string]int)
 				}
 				if err := json.Unmarshal([]byte(key), &secvalues); err != nil {
-					log.Fatal(err)
+					logging.Fatalf("Error in unmarshalling - %v", err)
 				} else if len(secvalues) > 0 {
 					secJSON, err := json.Marshal(secvalues[:len(secvalues)-1])
 					if err != nil {
-						log.Fatal(err)
+						logging.Fatalf("Error in marshaling - %v", err)
 					}
 					key = string(secJSON)
 					if _, ok := m[key]; !ok {

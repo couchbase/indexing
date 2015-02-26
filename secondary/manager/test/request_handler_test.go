@@ -13,9 +13,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
-	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-	"github.com/couchbaselabs/goprotobuf/proto"
+	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	"net/http"
 	"os"
 	"testing"
@@ -26,23 +26,21 @@ import (
 
 func TestRequestHandler(t *testing.T) {
 
-	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
 	os.MkdirAll("./data/", os.ModePerm)
 
-	common.Infof("Start TestRequestHandler *********************************************************")
+	logging.Infof("Start TestRequestHandler *********************************************************")
 
-	/*
-		var requestAddr = "localhost:9885"
-		var leaderAddr = "localhost:9884"
-	*/
 	var config = "./config.json"
 
-	common.Infof("********** Setup index manager")
-	mgr, err := manager.NewIndexManagerInternal("localhost:9886", "localhost:"+manager.COORD_MAINT_STREAM_PORT, nil, cfg)
+	logging.Infof("********** Setup index manager")
+	var msgAddr = "localhost:9884"
+	var httpAddr = "localhost:9102"
+	addrPrv := util.NewFakeAddressProvider(msgAddr, httpAddr)
+	mgr, err := manager.NewIndexManagerInternal(addrPrv, nil, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,22 +48,28 @@ func TestRequestHandler(t *testing.T) {
 	defer mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("********** Cleanup Old Test")
+	logging.Infof("********** Start HTTP Server")
+	go func() {
+		if err := http.ListenAndServe(":9102", nil); err != nil {
+			t.Fatal("Fail to start HTTP server on :9102")
+		}
+	}()
+
+	logging.Infof("********** Cleanup Old Test")
 	cleanupRequestHandlerTest(mgr, t)
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("********** Start running request handler test")
+	logging.Infof("********** Start running request handler test")
 	createIndexRequest(t)
-	getTopologyRequest(t)
 	dropIndexRequest(t)
 
-	common.Infof("********** Cleanup Test")
+	logging.Infof("********** Cleanup Test")
 	cleanupRequestHandlerTest(mgr, t)
 	mgr.CleanupTopology()
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("Done TestRequestHandler. Tearing down *********************************************************")
+	logging.Infof("Done TestRequestHandler. Tearing down *********************************************************")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 }
@@ -75,9 +79,9 @@ func cleanupRequestHandlerTest(mgr *manager.IndexManager, t *testing.T) {
 
 	_, err := mgr.GetIndexDefnById(common.IndexDefnId(500))
 	if err != nil {
-		common.Infof("RequestHandlerTest.cleanupRequestHandlerTest() :  cannot find index defn request_handler_test.  No cleanup ...")
+		logging.Infof("RequestHandlerTest.cleanupRequestHandlerTest() :  cannot find index defn request_handler_test.  No cleanup ...")
 	} else {
-		common.Infof("RequestHandlerTest.cleanupRequestHandlerTest() :  found index defn request_handler_test.  Cleaning up ...")
+		logging.Infof("RequestHandlerTest.cleanupRequestHandlerTest() :  found index defn request_handler_test.  Cleaning up ...")
 
 		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(500))
 		if err != nil {
@@ -95,19 +99,37 @@ func cleanupRequestHandlerTest(mgr *manager.IndexManager, t *testing.T) {
 
 func createIndexRequest(t *testing.T) {
 
-	common.Infof("********** Start createIndexRequest")
+	logging.Infof("********** Start createIndexRequest")
+
+	/*
+		DefnId          IndexDefnId     `json:"defnId,omitempty"`
+		Name            string          `json:"name,omitempty"`
+		Using           IndexType       `json:"using,omitempty"`
+		Bucket          string          `json:"bucket,omitempty"`
+		IsPrimary       bool            `json:"isPrimary,omitempty"`
+		SecExprs        []string        `json:"secExprs,omitempty"`
+		ExprType        ExprType        `json:"exprType,omitempty"`
+		PartitionScheme PartitionScheme `json:"partitionScheme,omitempty"`
+		PartitionKey    string          `json:"partitionKey,omitempty"`
+		WhereExpr       string          `json:"where,omitempty"`
+		Deferred        bool            `json:"deferred,omitempty"`
+		Nodes           []string        `json:"nodes,omitempty"`
+	*/
 
 	// Construct request body.
-	info := manager.IndexInfo{
-		DefnID:    "500",
-		Name:      "request_handler_test",
-		Bucket:    "Default",
-		Using:     common.ForestDB,
-		IsPrimary: false,
-		SecExprs:  []string{"Testing"},
-		Exprtype:  common.N1QL,
-		PartnExpr: "Testing",
-		WhereExpr: "Testing",
+	info := common.IndexDefn{
+		DefnId:          common.IndexDefnId(500),
+		Name:            "request_handler_test",
+		Using:           common.ForestDB,
+		Bucket:          "Default",
+		IsPrimary:       false,
+		SecExprs:        []string{"Testing"},
+		ExprType:        common.N1QL,
+		WhereExpr:       "Testing",
+		PartitionKey:    "Testing",
+		PartitionScheme: common.SINGLE,
+		Deferred:        false,
+		Nodes:           []string{"localhost"},
 	}
 
 	req := manager.IndexRequest{Version: uint64(1), Type: manager.CREATE, Index: info}
@@ -117,23 +139,23 @@ func createIndexRequest(t *testing.T) {
 	}
 
 	bodybuf := bytes.NewBuffer(body)
-	resp, err := http.Post("http://localhost"+manager.INDEX_DDL_HTTP_ADDR+"/createIndex", "application/json", bodybuf)
+	resp, err := http.Post("http://localhost:9102/createIndex", "application/json", bodybuf)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	validateIndexResponse(resp, t)
 
-	common.Infof("********** Done createIndexRequest")
+	logging.Infof("********** Done createIndexRequest")
 }
 
 func dropIndexRequest(t *testing.T) {
 
-	common.Infof("********** Start dropIndexRequest")
+	logging.Infof("********** Start dropIndexRequest")
 
 	// Construct request body.
-	info := manager.IndexInfo{
-		DefnID: "500",
+	info := common.IndexDefn{
+		DefnId: common.IndexDefnId(500),
 		Name:   "request_handler_test",
 		Bucket: "Default",
 	}
@@ -145,45 +167,14 @@ func dropIndexRequest(t *testing.T) {
 	}
 
 	bodybuf := bytes.NewBuffer(body)
-	resp, err := http.Post("http://localhost"+manager.INDEX_DDL_HTTP_ADDR+"/dropIndex", "application/json", bodybuf)
+	resp, err := http.Post("http://localhost:9102/dropIndex", "application/json", bodybuf)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	validateIndexResponse(resp, t)
 
-	common.Infof("********** Done dropIndexRequest")
-}
-
-func getTopologyRequest(t *testing.T) {
-
-	common.Infof("********** Start getTopologyRequest")
-
-	req := manager.TopologyRequest{Version: uint64(1), Type: manager.GET, Bucket: "Default"}
-	body, err := json.Marshal(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	bodybuf := bytes.NewBuffer(body)
-	resp, err := http.Post("http://localhost"+manager.INDEX_DDL_HTTP_ADDR+"/getTopology", "application/json", bodybuf)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	found := false
-	insts := validateTopologyResponse(resp, t)
-	for _, inst := range insts.GetInstances() {
-		if inst.GetIndexInstance().GetDefinition().GetDefnID() == uint64(500) {
-			found = true
-		}
-	}
-
-	if !found {
-		t.Fatal("Cannot find index definition 500 in topology")
-	}
-
-	common.Infof("********** Done getTopologyRequest")
+	logging.Infof("********** Done dropIndexRequest")
 }
 
 func validateIndexResponse(r *http.Response, t *testing.T) {
@@ -205,36 +196,4 @@ func validateIndexResponse(r *http.Response, t *testing.T) {
 	if resp.Status != manager.RESP_SUCCESS {
 		t.Fatal("Fail to get SUCCESS response")
 	}
-}
-
-func validateTopologyResponse(r *http.Response, t *testing.T) *protobuf.Instances {
-
-	defer r.Body.Close()
-
-	resp := manager.TopologyResponse{}
-	buf := make([]byte, r.ContentLength)
-
-	// Body will be non-null but can return EOF if being empty
-	if n, err := r.Body.Read(buf); err != nil && int64(n) != r.ContentLength {
-		t.Fatal(err)
-	}
-
-	if err := json.Unmarshal(buf, &resp); err != nil {
-		t.Fatal(err)
-	}
-
-	if resp.Status != manager.RESP_SUCCESS {
-		t.Fatal("Fail to get SUCCESS response")
-	}
-
-	insts := new(protobuf.Instances)
-	if err := proto.Unmarshal(resp.Instances, insts); err != nil {
-		t.Fatal("Fail to unmarshall instances")
-	}
-
-	if len(insts.GetInstances()) == 0 {
-		t.Fatal("No instances returned")
-	}
-
-	return insts
 }

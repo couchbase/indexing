@@ -17,6 +17,7 @@ import "strings"
 import "fmt"
 import "reflect"
 import "errors"
+import "github.com/couchbase/indexing/secondary/logging"
 
 // Config is a key, value map with key always being a string
 // represents a config-parameter.
@@ -41,23 +42,6 @@ var SystemConfig = Config{
 		1024,
 		"number of vbuckets configured in KV",
 		1024,
-	},
-	// log parameters
-	// TODO: add configuration for log file-name and other types of writer.
-	"log.ignore": ConfigValue{
-		false,
-		"ignore all logging, irrespective of the log-level",
-		false,
-	},
-	"log.level": ConfigValue{
-		"info",
-		"logging level for the system",
-		"info",
-	},
-	"log.file": ConfigValue{
-		"",
-		"log messages to file",
-		"",
 	},
 	// projector parameters
 	"projector.name": ConfigValue{
@@ -113,6 +97,12 @@ var SystemConfig = Config{
 		500,
 		"timeout, in milliseconds, for sending periodic Sync messages.",
 		500,
+	},
+	"projector.watchInterval": ConfigValue{
+		5 * 60 * 1000, // 5 minutes
+		"periodic tick, in milli-seconds to check for stale feeds, " +
+			"a feed is considered stale when all its endpoint go stale.",
+		5 * 60 * 1000,
 	},
 	// projector adminport parameters
 	"projector.adminport.name": ConfigValue{
@@ -287,8 +277,7 @@ var SystemConfig = Config{
 	},
 	"queryport.client.retryIntervalScanport": ConfigValue{
 		1,
-		"timeout, in milliseconds, to wait for an existing connection " +
-			"from the pool before considering the creation of a new one",
+		"wait, in milliseconds, before re-trying for a scanport",
 		1,
 	},
 	// projector's adminport client, can be used by indexer.
@@ -426,6 +415,26 @@ var SystemConfig = Config{
 		"Maximum nCPUs percent used by the processes",
 		400,
 	},
+	"indexer.settings.log_level": ConfigValue{
+		"info",
+		"Indexer logging level",
+		"info",
+	},
+	"indexer.settings.log_override": ConfigValue{
+		"",
+		"Indexer override log level.format is [relpath/]filename[:line]=LogLevel[,...] (wildcard * is allowed)",
+		"",
+	},
+	"projector.settings.log_level": ConfigValue{
+		"info",
+		"Projector logging level",
+		"info",
+	},
+	"projector.settings.log_override": ConfigValue{
+		"",
+		"Projector override log level. format is [relpath/]filename[:line]=LogLevel[,...] (wildcard * is allowed)",
+		"",
+	},
 }
 
 // NewConfig from another
@@ -449,7 +458,7 @@ func (config Config) Update(data interface{}) error {
 	case map[string]interface{}: // transform
 		for key, value := range v {
 			if err := config.SetValue(key, value); err != nil {
-				Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
+				logging.Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
 			}
 		}
 
@@ -460,7 +469,7 @@ func (config Config) Update(data interface{}) error {
 		}
 		for key, value := range m {
 			if err := config.SetValue(key, value); err != nil {
-				Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
+				logging.Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
 			}
 		}
 
@@ -512,6 +521,16 @@ func (config Config) SectionConfig(prefix string, trim bool) Config {
 		}
 	}
 	return section
+}
+
+func (config Config) FilterConfig(subs string) Config {
+	newConfig := make(Config)
+	for key, value := range config {
+		if strings.Contains(key, subs) {
+			newConfig[key] = value
+		}
+	}
+	return newConfig
 }
 
 // Set ConfigValue for parameter. Mutates the config object.

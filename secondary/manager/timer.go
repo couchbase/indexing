@@ -10,9 +10,12 @@
 package manager
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbaselabs/goprotobuf/proto"
 	"sync"
@@ -79,7 +82,7 @@ func newTimer(repo *MetadataRepo) *Timer {
 		for _, timestamp := range savedTimestamps.Timestamps {
 			ts, err := unmarshallTimestamp(timestamp.Timestamp)
 			if err != nil {
-				common.Errorf("Timer.newTimer() : unable to unmarshall timestamp for bucket %v.  Skip initialization.",
+				logging.Errorf("Timer.newTimer() : unable to unmarshall timestamp for bucket %v.  Skip initialization.",
 					timestamp.Bucket)
 				continue
 			}
@@ -87,11 +90,11 @@ func newTimer(repo *MetadataRepo) *Timer {
 			for vb, seqno := range ts.Seqnos {
 				timer.increment(common.StreamId(timestamp.StreamId), timestamp.Bucket, uint32(vb), ts.Vbuuids[vb], seqno)
 			}
-			common.Errorf("Timer.newTimer() : initialized timestamp for bucket %v from repository.", timestamp.Bucket)
+			logging.Errorf("Timer.newTimer() : initialized timestamp for bucket %v from repository.", timestamp.Bucket)
 		}
 	} else {
 		// TODO : Determine timestamp not exist versus forestdb error
-		common.Errorf("Timer.newTimer() : cannot get stability timestamp from repository. Skip initialization.")
+		logging.Errorf("Timer.newTimer() : cannot get stability timestamp from repository. Skip initialization.")
 	}
 
 	return timer
@@ -318,7 +321,7 @@ func (t *Timer) advance(streamId common.StreamId, bucket string) (*common.TsVbuu
 //
 func (t *Timer) run(streamId common.StreamId, bucket string, ticker *time.Ticker, stopch chan bool) {
 
-	common.Debugf("timer.run(): Start for bucket %v", bucket)
+	logging.Debugf("timer.run(): Start for bucket %v", bucket)
 
 	defer ticker.Stop()
 
@@ -326,7 +329,7 @@ func (t *Timer) run(streamId common.StreamId, bucket string, ticker *time.Ticker
 		select {
 		// Make sure the stopch is the first one in select.
 		case <-stopch:
-			common.Debugf("timer.run(): Coordinator timer for bucket %v being explicitly stopped by supervisor.", bucket)
+			logging.Debugf("timer.run(): Coordinator timer for bucket %v being explicitly stopped by supervisor.", bucket)
 			return
 
 		case <-ticker.C:
@@ -335,7 +338,7 @@ func (t *Timer) run(streamId common.StreamId, bucket string, ticker *time.Ticker
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						common.Debugf("panic in Timer.run() : error ignored.  Error = %v\n", r)
+						logging.Debugf("panic in Timer.run() : error ignored.  Error = %v\n", r)
 					}
 				}()
 
@@ -345,9 +348,9 @@ func (t *Timer) run(streamId common.StreamId, bucket string, ticker *time.Ticker
 					// the timestamp is the channel receiver is slow.
 					wrapper, err := createTimestampSerializable(ts, streamId)
 					if err != nil {
-						common.Debugf("timer.run(): Unable to create wrapper for timestamp.  Skip timestamp.")
+						logging.Debugf("timer.run(): Unable to create wrapper for timestamp.  Skip timestamp.")
 					} else {
-						common.Debugf("timer.run(): Sending timestamp to channel for bucket %v", bucket)
+						logging.Debugf("timer.run(): Sending timestamp to channel for bucket %v", bucket)
 						t.outch <- wrapper
 					}
 				}
@@ -440,14 +443,14 @@ func (t *timestampHistory) increment(vbucket uint32, vbuuid uint64, seqno uint64
 			timestamp.Seqnos[vbucket] = seqno
 			timestamp.Vbuuids[vbucket] = vbuuid
 
-			common.Debugf("timestampHistory.increment(): increment timestamp: bucket %v : vb id : %d, seqno : %d, vbuuid : %d",
+			logging.Debugf("timestampHistory.increment(): increment timestamp: bucket %v : vb id : %d, seqno : %d, vbuuid : %d",
 				timestamp.Bucket, vbucket, seqno, vbuuid)
 		}
 	} else {
 		timestamp.Seqnos[vbucket] = seqno
 		timestamp.Vbuuids[vbucket] = vbuuid
 
-		common.Debugf("timestampHistory.increment(): increment timestamp: bucket %v : vb id : %d, seqno : %d, vbuuid : %d",
+		logging.Debugf("timestampHistory.increment(): increment timestamp: bucket %v : vb id : %d, seqno : %d, vbuuid : %d",
 			timestamp.Bucket, vbucket, seqno, vbuuid)
 	}
 
@@ -504,7 +507,7 @@ func (t *timestampHistory) isReady() bool {
 	current := t.history[t.current]
 	for i, seqno := range current.Seqnos {
 		if seqno == 0 {
-			common.Errorf("timestampHistory.isReady() : not ready : vb %d seqno %d", i, seqno)
+			logging.Errorf("timestampHistory.isReady() : not ready : vb %d seqno %d", i, seqno)
 			return false
 		}
 	}
@@ -597,7 +600,7 @@ func marshallTimestampListSerializable(list *timestampListSerializable) ([]byte,
 		return nil, err
 	}
 
-	common.Debugf("marshallTimestampListSerializable() : serialized timestamp list in bytes %d.", len(buf))
+	logging.Debugf("marshallTimestampListSerializable() : serialized timestamp list in bytes %d.", len(buf))
 	return buf, nil
 }
 
@@ -642,17 +645,17 @@ func (l *timestampListSerializable) findTimestamp(streamId common.StreamId, buck
 	for _, t := range l.Timestamps {
 		if t.Bucket == bucket && common.StreamId(t.StreamId) == streamId {
 
-			common.Debugf("timestampListSerializable.findTimestamp() : found timestamp for streamId %v bucket %v.",
+			logging.Debugf("timestampListSerializable.findTimestamp() : found timestamp for streamId %v bucket %v.",
 				streamId, bucket)
 
 			ts, err := unmarshallTimestamp(t.Timestamp)
 			if err != nil {
-				common.Errorf("timestampListSerializable.findTimestamp() : unable to unmarshall timestamp for bucket %v.",
+				logging.Errorf("timestampListSerializable.findTimestamp() : unable to unmarshall timestamp for bucket %v.",
 					t.Bucket)
 				return 0, 0, false, err
 			}
 
-			common.Debugf("timestampListSerializable.findTimestamp() : seqNo for vb %d is %d.", vb, ts.Seqnos[vb])
+			logging.Debugf("timestampListSerializable.findTimestamp() : seqNo for vb %d is %d.", vb, ts.Seqnos[vb])
 
 			return ts.Seqnos[vb], ts.Vbuuids[vb], true, nil
 		}
@@ -661,23 +664,19 @@ func (l *timestampListSerializable) findTimestamp(streamId common.StreamId, buck
 	return 0, 0, false, nil
 }
 
-func (l *timestampListSerializable) DebugPrint() {
-
-	if common.LogLevel() != common.LogLevelDebug {
-		return
-	}
-
-	common.Debugf("timestampListSerializable.DebugPrint() : len(timestamps) = %d", len(l.Timestamps))
-
-	for _, t := range l.Timestamps {
-		common.Debugf("timestampListSerializable.DebugPrint() : ----------")
-		common.Debugf("timestampListSerializable.DebugPrint() : bucket %s", t.Bucket)
-		common.Debugf("timestampListSerializable.DebugPrint() : streamId %d", t.StreamId)
+func (l *timestampListSerializable) String() string {
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("timestampListSerializable len=%v\n", len(l.Timestamps)))
+	for i, t := range l.Timestamps {
+		buf.WriteString(fmt.Sprintf("- index %v\n", i))
+		buf.WriteString(fmt.Sprintf("- bucket %s\n", t.Bucket))
+		buf.WriteString(fmt.Sprintf("- streamId %d\n", t.StreamId))
 		ts, err := unmarshallTimestamp(t.Timestamp)
 		if err != nil {
-			common.Errorf("timestampListSerializable.debugPrint() : unable to unmarshall timestamp for bucket")
+			buf.WriteString("- Cannot unmarshall timestamp for this bucket\n")
 		} else {
-			ts.DebugPrint()
+			buf.WriteString(ts.String())
 		}
 	}
+	return buf.String()
 }

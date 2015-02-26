@@ -11,6 +11,7 @@ package manager
 
 import (
 	"fmt"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	data "github.com/couchbase/indexing/secondary/protobuf/data"
@@ -142,7 +143,7 @@ func (s *StreamManager) IsClosed() bool {
 func (s *StreamManager) StartHandlingTopologyChange() {
 
 	if !s.IsClosed() {
-		common.Debugf("StreamManager.StartHandlingTopologyChange(): start")
+		logging.Debugf("StreamManager.StartHandlingTopologyChange(): start")
 		go s.run()
 	}
 }
@@ -157,7 +158,7 @@ func (s *StreamManager) StartStream(streamId common.StreamId) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	common.Debugf("StreamManager.StartStream(): start")
+	logging.Debugf("StreamManager.StartStream(): start")
 
 	if s.isClosed {
 		return nil
@@ -165,7 +166,7 @@ func (s *StreamManager) StartStream(streamId common.StreamId) error {
 
 	// Verify if the stream is already open.  Just an no-op.
 	if stream, ok := s.streams[streamId]; ok && stream.status {
-		common.Debugf("StreamManager.StartStream(): stream %v already started", streamId)
+		logging.Debugf("StreamManager.StartStream(): stream %v already started", streamId)
 		return nil
 	}
 
@@ -180,7 +181,7 @@ func (s *StreamManager) StartStream(streamId common.StreamId) error {
 	if err != nil {
 		return err
 	}
-	common.Debugf("StreamManager.StartStream(): stream %v started successfully on port %v", streamId, port)
+	logging.Debugf("StreamManager.StartStream(): stream %v started successfully on port %v", streamId, port)
 
 	s.streams[streamId] = stream
 	stream.status = true
@@ -333,7 +334,7 @@ func (s *StreamManager) addIndexInstances(streamId common.StreamId, bucket strin
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	common.Debugf("StreamManager.addIndexInstances() bucket %v", bucket)
+	logging.Debugf("StreamManager.addIndexInstances() bucket %v", bucket)
 
 	if s.isClosed {
 		return nil
@@ -466,24 +467,24 @@ func (s *StreamManager) run() {
 		select {
 		case data, ok := <-changeCh:
 			if !ok {
-				common.Debugf("StreamManager.run(): topology change channel is closed.  Terminates.")
+				logging.Debugf("StreamManager.run(): topology change channel is closed.  Terminates.")
 				return
 			}
 
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
-						common.Warnf("panic in StreamManager.run() : %s.  Ignored.", r)
+						logging.Warnf("panic in StreamManager.run() : %s.  Ignored.", r)
 					}
 				}()
 
 				topology, err := unmarshallIndexTopology(data.([]byte))
 				if err != nil {
-					common.Errorf("StreamManager.run(): unable to unmarshall topology.  Topology change is ignored by stream manager.")
+					logging.Errorf("StreamManager.run(): unable to unmarshall topology.  Topology change is ignored by stream manager.")
 				} else {
 					err := s.handleTopologyChange(topology)
 					if err != nil {
-						common.Errorf("StreamManager.run(): receive error from handleTopologyChange.  Error = %v.  Ignore", err)
+						logging.Errorf("StreamManager.run(): receive error from handleTopologyChange.  Error = %v.  Ignore", err)
 					}
 				}
 			}()
@@ -503,7 +504,7 @@ func (s *StreamManager) run() {
 //
 func (s *StreamManager) initializeMaintenanceStream() error {
 
-	common.Debugf("StreamManager.initializeMaintenanceStream():Start()")
+	logging.Debugf("StreamManager.initializeMaintenanceStream():Start()")
 
 	// Notify the projector to start the incremental stream
 	if err := s.StartStream(common.MAINT_STREAM); err != nil {
@@ -587,7 +588,7 @@ func (s *StreamManager) loadTopology() error {
 //
 func (s *StreamManager) handleTopologyChange(newTopology *IndexTopology) error {
 
-	common.Debugf("StreamManager.handleTopologyChange()")
+	logging.Debugf("StreamManager.handleTopologyChange()")
 
 	if err := s.handleTopologyChangeForMaintStream(newTopology); err != nil {
 		return err
@@ -612,15 +613,15 @@ func (s *StreamManager) handleTopologyChangeForMaintStream(newTopology *IndexTop
 	if !ok || !stream.status {
 		return nil
 	}
-	common.Debugf("StreamManager.handleTopologyChangeForMaintStream(): new topology for bucket %v version %v ",
+	logging.Debugf("StreamManager.handleTopologyChangeForMaintStream(): new topology for bucket %v version %v ",
 		newTopology.Bucket, newTopology.Version)
 
 	oldTopology, ok := s.topologies[newTopology.Bucket]
 	if !ok {
-		common.Debugf("StreamManager.handleTopologyChangeForMaintStream(): old topology for bucket %v", newTopology.Bucket)
+		logging.Debugf("StreamManager.handleTopologyChangeForMaintStream(): old topology for bucket %v", newTopology.Bucket)
 		oldTopology = nil
 	} else {
-		common.Debugf("StreamManager.handleTopologyChangeForMaintStream(): old topology exist for bucket %. Version %v ",
+		logging.Debugf("StreamManager.handleTopologyChangeForMaintStream(): old topology exist for bucket %. Version %v ",
 			oldTopology.Bucket, oldTopology.Version)
 	}
 
@@ -688,10 +689,10 @@ func (s *StreamManager) handleAddInstances(
 	fromState []common.IndexState,
 	toState []common.IndexState) error {
 
-	common.Debugf("StreamManager.handleAddInstances()")
+	logging.Debugf("StreamManager.handleAddInstances()")
 
 	if oldTopology != nil && oldTopology.Version == newTopology.Version {
-		common.Debugf("StreamManager.handleAddInstances(): new topology version = %v, old topology version = %v.",
+		logging.Debugf("StreamManager.handleAddInstances(): new topology version = %v, old topology version = %v.",
 			newTopology.Version, oldTopology.Version)
 		return nil
 	}
@@ -720,7 +721,7 @@ func (s *StreamManager) handleAddInstances(
 		}
 		return s.addIndexInstances(streamId, bucket, instances)
 	} else {
-		common.Debugf("StreamManager.handleAddInstances(): no new changes")
+		logging.Debugf("StreamManager.handleAddInstances(): no new changes")
 	}
 
 	return nil
@@ -741,18 +742,18 @@ func (s *StreamManager) addInstancesToChangeList(
 
 	var changes []*changeRecord = nil
 
-	common.Debugf("StreamManager.addInstancesToChangeList(): defn '%v'", newDefn.Name)
+	logging.Debugf("StreamManager.addInstancesToChangeList(): defn '%v'", newDefn.Name)
 
 	for _, newInst := range newDefn.Instances {
 		add := s.inState(common.IndexState(newInst.State), toStates)
-		common.Debugf("StreamManager.addInstancesToChangeList(): found new instance '%v' in state %v",
+		logging.Debugf("StreamManager.addInstancesToChangeList(): found new instance '%v' in state %v",
 			newInst.InstId, newInst.State)
 
 		if oldDefn != nil {
 			for _, oldInst := range oldDefn.Instances {
 				if newInst.InstId == oldInst.InstId {
 					if s.inState(common.IndexState(oldInst.State), fromStates) {
-						common.Debugf("StreamManager.addInstancesToChangeList(): found old instance '%v' in state %v",
+						logging.Debugf("StreamManager.addInstancesToChangeList(): found old instance '%v' in state %v",
 							oldInst.InstId, oldInst.State)
 					}
 					add = add && s.inState(common.IndexState(oldInst.State), fromStates) &&
@@ -762,7 +763,7 @@ func (s *StreamManager) addInstancesToChangeList(
 		}
 
 		if add {
-			common.Debugf("StreamManager.addInstancesToChangeList(): adding inst '%v' to change list.", newInst.InstId)
+			logging.Debugf("StreamManager.addInstancesToChangeList(): adding inst '%v' to change list.", newInst.InstId)
 			change := &changeRecord{definition: newDefn, instance: &newInst}
 			changes = append(changes, change)
 		}
@@ -818,10 +819,10 @@ func (s *StreamManager) handleDeleteInstances(
 
 	var toBeDeleted []uint64 = nil
 	for _, change := range changes {
-		common.Debugf("StreamManager.handleDeleteInstances(): adding inst '%v' to change list.", change.instance.InstId)
+		logging.Debugf("StreamManager.handleDeleteInstances(): adding inst '%v' to change list.", change.instance.InstId)
 		toBeDeleted = append(toBeDeleted, change.instance.InstId)
 	}
 
-	common.Debugf("StreamManager.handleDeleteInstances(): len(toBeDeleted) '%v'", len(toBeDeleted))
+	logging.Debugf("StreamManager.handleDeleteInstances(): len(toBeDeleted) '%v'", len(toBeDeleted))
 	return s.removeIndexInstances(streamId, bucket, toBeDeleted)
 }

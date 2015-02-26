@@ -16,6 +16,7 @@ import (
 	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
 	gometa "github.com/couchbase/gometa/server"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"net/rpc"
 	"strconv"
@@ -54,6 +55,10 @@ type LocalRepoRef struct {
 }
 
 type MetaIterator struct {
+	iterator *repo.RepoIterator
+}
+
+type TopologyIterator struct {
 	iterator *repo.RepoIterator
 }
 
@@ -145,8 +150,8 @@ func (c *MetadataRepo) Close() {
 	/*
 		defer func() {
 			if r := recover(); r != nil {
-				common.Warnf("panic in MetadataRepo.Close() : %s.  Ignored.\n", r)
-				common.Warnf("%s", debug.Stack())
+				logging.Warnf("panic in MetadataRepo.Close() : %s.  Ignored.\n", r)
+				logging.Warnf("%s", debug.Stack())
 			}
 		}()
 	*/
@@ -351,7 +356,6 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 // Create a new iterator
 //
 func (c *MetadataRepo) NewIterator() (*MetaIterator, error) {
-
 	return c.repo.newIterator()
 }
 
@@ -381,6 +385,42 @@ func (i *MetaIterator) Next() (string, *common.IndexDefn, error) {
 
 // close iterator
 func (i *MetaIterator) Close() {
+
+	i.iterator.Close()
+}
+
+//
+// Create a new topology iterator
+//
+func (c *MetadataRepo) NewTopologyIterator() (*TopologyIterator, error) {
+	iter, err := c.repo.newIterator()
+	if err != nil {
+		return nil, err
+	}
+	return &TopologyIterator{iterator: iter.iterator}, nil
+}
+
+// Get value from iterator
+func (i *TopologyIterator) Next() (*IndexTopology, error) {
+
+	for {
+		key, content, err := i.iterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		if isIndexTopologyKey(key) {
+			topology, err := unmarshallIndexTopology(content)
+			if err != nil {
+				return nil, err
+			}
+			return topology, nil
+		}
+	}
+}
+
+// close iterator
+func (i *TopologyIterator) Close() {
 
 	i.iterator.Close()
 }
@@ -536,7 +576,7 @@ func (c *RemoteRepoRef) getMetaFromWatcher(name string) ([]byte, error) {
 	// Get the value from the local cache first
 	value, err := c.watcher.Get(name)
 	if err == nil && value != nil {
-		common.Debugf("RemoteRepoRef.getMeta(): Found metadata in local repository for key %s", name)
+		logging.Debugf("RemoteRepoRef.getMeta(): Found metadata in local repository for key %s", name)
 		return value, nil
 	}
 
@@ -544,7 +584,7 @@ func (c *RemoteRepoRef) getMetaFromWatcher(name string) ([]byte, error) {
 }
 
 func (c *RemoteRepoRef) getMeta(name string) ([]byte, error) {
-	common.Debugf("RemoteRepoRef.getMeta(): key=%s", name)
+	logging.Debugf("RemoteRepoRef.getMeta(): key=%s", name)
 
 	// Get the metadata locally from watcher first
 	value, err := c.getMetaFromWatcher(name)
@@ -559,7 +599,7 @@ func (c *RemoteRepoRef) getMeta(name string) ([]byte, error) {
 		return nil, err
 	}
 
-	common.Debugf("RemoteRepoRef.getMeta(): remote metadata for key %s exist=%v", name, reply != nil && reply.Result != nil)
+	logging.Debugf("RemoteRepoRef.getMeta(): remote metadata for key %s exist=%v", name, reply != nil && reply.Result != nil)
 	if reply != nil {
 		// reply.Result can be nil if metadata does not exist
 		return reply.Result, nil
@@ -599,7 +639,7 @@ func (c *RemoteRepoRef) newDictionaryRequest(request *Request, reply **Reply) er
 
 	err = client.Call("RequestReceiver.NewRequest", request, reply)
 	if err != nil {
-		common.Debugf("MetadataRepo.newDictionaryRequest(): Got Error = %s", err.Error())
+		logging.Debugf("MetadataRepo.newDictionaryRequest(): Got Error = %s", err.Error())
 		return err
 	}
 
@@ -869,7 +909,7 @@ func (m *LocalRepoRef) OnNewProposal(txnid c.Txnid, op c.OpCode, key string, con
 		return nil
 	}
 
-	common.Debugf("LocalRepoRef.OnNewProposal(): key %s", key)
+	logging.Debugf("LocalRepoRef.OnNewProposal(): key %s", key)
 
 	switch op {
 	case c.OPCODE_ADD:
@@ -897,11 +937,11 @@ func (m *LocalRepoRef) OnCommit(txnid c.Txnid, key string) {
 
 func (m *LocalRepoRef) onNewProposalForCreateIndexDefn(txnid c.Txnid, op c.OpCode, key string, content []byte) error {
 
-	common.Debugf("LocalRepoRef.OnNewProposalForCreateIndexDefn(): key %s", key)
+	logging.Debugf("LocalRepoRef.OnNewProposalForCreateIndexDefn(): key %s", key)
 
 	indexDefn, err := common.UnmarshallIndexDefn(content)
 	if err != nil {
-		common.Debugf("LocalRepoRef.OnNewProposalForCreateIndexDefn(): fail to unmarshall index defn for key %s", key)
+		logging.Debugf("LocalRepoRef.OnNewProposalForCreateIndexDefn(): fail to unmarshall index defn for key %s", key)
 		return &c.RecoverableError{Reason: err.Error()}
 	}
 
@@ -914,14 +954,14 @@ func (m *LocalRepoRef) onNewProposalForCreateIndexDefn(txnid c.Txnid, op c.OpCod
 
 func (m *LocalRepoRef) onNewProposalForDeleteIndexDefn(txnid c.Txnid, op c.OpCode, key string, content []byte) error {
 
-	common.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): key %s", key)
+	logging.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): key %s", key)
 
 	i := strings.Index(key, "/")
 	if i != -1 && i < len(key)-1 {
 
 		id, err := strconv.ParseUint(key[i+1:], 10, 64)
 		if err != nil {
-			common.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): fail to unmarshall IndexDefnId key %s", key)
+			logging.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): fail to unmarshall IndexDefnId key %s", key)
 			return &c.RecoverableError{Reason: err.Error()}
 		}
 
@@ -931,7 +971,7 @@ func (m *LocalRepoRef) onNewProposalForDeleteIndexDefn(txnid c.Txnid, op c.OpCod
 		return nil
 
 	} else {
-		common.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): fail to unmarshall IndexDefnId key %s", key)
+		logging.Debugf("LocalRepoRef.OnNewProposalForDeleteIndexDefn(): fail to unmarshall IndexDefnId key %s", key)
 		err := NewError(ERROR_META_FAIL_TO_PARSE_INT, NORMAL, METADATA_REPO, nil,
 			"MetadataRepo.OnNewProposalForDeleteIndexDefn() : cannot parse index definition id")
 		return &c.RecoverableError{Reason: err.Error()}

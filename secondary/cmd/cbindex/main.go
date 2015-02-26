@@ -2,11 +2,11 @@ package main
 
 import "flag"
 import "fmt"
-import "log"
 import "os"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
+import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/querycmd"
 
 func usage(fset *flag.FlagSet) {
@@ -15,19 +15,22 @@ func usage(fset *flag.FlagSet) {
 }
 
 func main() {
+	logging.SetLogLevel(logging.Warn)
+
 	cmdOptions, _, fset, err := querycmd.ParseArgs(os.Args[1:])
 	if err != nil {
-		log.Fatal(err)
+		logging.Fatalf("%v\n", err)
+		os.Exit(1)
 	} else if cmdOptions.Help {
 		usage(fset)
 		os.Exit(0)
 	}
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
-	client, err := qclient.NewGsiClient(
-		cmdOptions.Server, config)
+	client, err := qclient.NewGsiClient(cmdOptions.Server, config)
 	if err != nil {
-		log.Fatal(err)
+		logging.Fatalf("%v\n", err)
+		os.Exit(1)
 	}
 
 	if err = querycmd.HandleCommand(client, cmdOptions, false, os.Stdout); err != nil {

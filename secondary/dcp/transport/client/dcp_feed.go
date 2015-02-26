@@ -1,4 +1,4 @@
-// go implementation of upr client.
+// go implementation of dcp client.
 // See https://github.com/couchbaselabs/cbupr/blob/master/transport-spec.md
 
 package memcached
@@ -8,19 +8,19 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/dcp/transport"
-	"log"
+	"github.com/couchbase/indexing/secondary/logging"
 	"strconv"
 	"sync"
 	"time"
 )
 
-const uprMutationExtraLen = 16
+const dcpMutationExtraLen = 16
 const bufferAckThreshold = 0.2
 const opaqueOpen = 0xBEAF0001
 const opaqueFailover = 0xDEADBEEF
 
-// UprEvent memcached events for UPR streams.
-type UprEvent struct {
+// DcpEvent memcached events for DCP streams.
+type DcpEvent struct {
 	Opcode     transport.CommandCode // Type of event
 	Status     transport.Status      // Response status
 	VBucket    uint16                // VBucket this event applies to
@@ -40,8 +40,8 @@ type UprEvent struct {
 	Error        error        // Error value in case of a failure
 }
 
-// UprStream is per stream data structure over an UPR Connection.
-type UprStream struct {
+// DcpStream is per stream data structure over an DCP Connection.
+type DcpStream struct {
 	Vbucket   uint16 // Vbucket id
 	Vbuuid    uint64 // vbucket uuid
 	StartSeq  uint64 // start sequence number
@@ -50,24 +50,24 @@ type UprStream struct {
 	connected bool
 }
 
-// UprFeed represents an UPR feed. A feed contains a connection to a single
+// DcpFeed represents an DCP feed. A feed contains a connection to a single
 // host and multiple vBuckets
-type UprFeed struct {
+type DcpFeed struct {
 	mu          sync.RWMutex
-	C           <-chan *UprEvent          // Exported channel for receiving UPR events
-	vbstreams   map[uint16]*UprStream     // vb->stream mapping
+	C           <-chan *DcpEvent          // Exported channel for receiving DCP events
+	vbstreams   map[uint16]*DcpStream     // vb->stream mapping
 	closer      chan bool                 // closer
-	conn        *Client                   // connection to UPR producer
+	conn        *Client                   // connection to DCP producer
 	Error       error                     // error
 	bytesRead   uint64                    // total bytes read on this connection
 	toAckBytes  uint32                    // bytes client has read
 	maxAckBytes uint32                    // Max buffer control ack bytes
-	stats       UprStats                  // Stats for upr client
+	stats       DcpStats                  // Stats for dcp client
 	transmitCh  chan *transport.MCRequest // transmit command channel
 	transmitCl  chan bool                 //  closer channel for transmit go-routine
 }
 
-type UprStats struct {
+type DcpStats struct {
 	TotalBytes         uint64
 	TotalMutation      uint64
 	TotalBufferAckSent uint64
@@ -89,8 +89,8 @@ func (flogp *FailoverLog) Latest() (vbuuid, seqno uint64, err error) {
 	return vbuuid, seqno, ErrorInvalidLog
 }
 
-func makeUprEvent(rq transport.MCRequest, stream *UprStream) *UprEvent {
-	event := &UprEvent{
+func makeDcpEvent(rq transport.MCRequest, stream *DcpStream) *DcpEvent {
+	event := &DcpEvent{
 		Opcode:  rq.Opcode,
 		VBucket: stream.Vbucket,
 		VBuuid:  stream.Vbuuid,
@@ -107,15 +107,15 @@ func makeUprEvent(rq transport.MCRequest, stream *UprStream) *UprEvent {
 	}
 
 	if len(rq.Extras) >= tapMutationExtraLen &&
-		event.Opcode == transport.UPR_MUTATION ||
-		event.Opcode == transport.UPR_DELETION ||
-		event.Opcode == transport.UPR_EXPIRATION {
+		event.Opcode == transport.DCP_MUTATION ||
+		event.Opcode == transport.DCP_DELETION ||
+		event.Opcode == transport.DCP_EXPIRATION {
 
 		event.Flags = binary.BigEndian.Uint32(rq.Extras[8:])
 		event.Expiry = binary.BigEndian.Uint32(rq.Extras[12:])
 
 	} else if len(rq.Extras) >= tapMutationExtraLen &&
-		event.Opcode == transport.UPR_SNAPSHOT {
+		event.Opcode == transport.DCP_SNAPSHOT {
 
 		event.SnapstartSeq = binary.BigEndian.Uint64(rq.Extras[:8])
 		event.SnapendSeq = binary.BigEndian.Uint64(rq.Extras[8:16])
@@ -125,7 +125,7 @@ func makeUprEvent(rq transport.MCRequest, stream *UprStream) *UprEvent {
 	return event
 }
 
-func (event *UprEvent) String() string {
+func (event *DcpEvent) String() string {
 	name := transport.CommandNames[event.Opcode]
 	if name == "" {
 		name = fmt.Sprintf("#%d", event.Opcode)
@@ -139,25 +139,25 @@ loop:
 		select {
 		case command := <-ch:
 			if err := mc.Transmit(command); err != nil {
-				log.Printf("Failed to transmit command %s. Error %s\n", command.Opcode.String(), err.Error())
+				logging.Warnf("Failed to transmit command %s. Error %s\n", command.Opcode.String(), err.Error())
 				break loop
 			}
 
 		case <-closer:
-			log.Println("Exiting send command go routine ...")
+			logging.Warnf("Exiting send command go routine ...")
 			break loop
 		}
 	}
 }
 
-// NewUprFeed creates a new UPR Feed.
+// NewDcpFeed creates a new DCP Feed.
 // TODO: Describe side-effects on bucket instance and its connection pool.
-func (mc *Client) NewUprFeed() (*UprFeed, error) {
+func (mc *Client) NewDcpFeed() (*DcpFeed, error) {
 
-	feed := &UprFeed{
+	feed := &DcpFeed{
 		conn:       mc,
 		closer:     make(chan bool),
-		vbstreams:  make(map[uint16]*UprStream),
+		vbstreams:  make(map[uint16]*DcpStream),
 		transmitCh: make(chan *transport.MCRequest),
 		transmitCl: make(chan bool),
 	}
@@ -166,10 +166,10 @@ func (mc *Client) NewUprFeed() (*UprFeed, error) {
 	return feed, nil
 }
 
-func doUprOpen(mc *Client, name string, sequence uint32) error {
+func doDcpOpen(mc *Client, name string, sequence uint32) error {
 
 	rq := &transport.MCRequest{
-		Opcode: transport.UPR_OPEN,
+		Opcode: transport.DCP_OPEN,
 		Key:    []byte(name),
 		Opaque: opaqueOpen,
 	}
@@ -185,7 +185,7 @@ func doUprOpen(mc *Client, name string, sequence uint32) error {
 
 	if res, err := mc.Receive(); err != nil {
 		return err
-	} else if res.Opcode != transport.UPR_OPEN {
+	} else if res.Opcode != transport.DCP_OPEN {
 		return fmt.Errorf("unexpected #opcode %v", res.Opcode)
 	} else if rq.Opaque != res.Opaque {
 		return fmt.Errorf("opaque mismatch, %v over %v", res.Opaque, res.Opaque)
@@ -196,21 +196,21 @@ func doUprOpen(mc *Client, name string, sequence uint32) error {
 	return nil
 }
 
-// UprOpen to connect with a UPR producer.
-// Name: name of te UPR connection
+// DcpOpen to connect with a DCP producer.
+// Name: name of te DCP connection
 // sequence: sequence number for the connection
 // bufsize: max size of the application
-func (feed *UprFeed) UprOpen(name string, sequence uint32, bufSize uint32) error {
+func (feed *DcpFeed) DcpOpen(name string, sequence uint32, bufSize uint32) error {
 	mc := feed.conn
 
-	if err := doUprOpen(mc, name, sequence); err != nil {
+	if err := doDcpOpen(mc, name, sequence); err != nil {
 		return err
 	}
 
-	// send a UPR control message to set the window size for the this connection
+	// send a DCP control message to set the window size for the this connection
 	if bufSize > 0 {
 		rq := &transport.MCRequest{
-			Opcode: transport.UPR_CONTROL,
+			Opcode: transport.DCP_CONTROL,
 			Key:    []byte("connection_buffer_size"),
 			Body:   []byte(strconv.Itoa(int(bufSize))),
 		}
@@ -221,17 +221,17 @@ func (feed *UprFeed) UprOpen(name string, sequence uint32, bufSize uint32) error
 	return nil
 }
 
-// UprGetFailoverLog for given list of vbuckets.
-func (mc *Client) UprGetFailoverLog(
+// DcpGetFailoverLog for given list of vbuckets.
+func (mc *Client) DcpGetFailoverLog(
 	vb []uint16) (map[uint16]*FailoverLog, error) {
 
 	rq := &transport.MCRequest{
-		Opcode: transport.UPR_FAILOVERLOG,
+		Opcode: transport.DCP_FAILOVERLOG,
 		Opaque: opaqueFailover,
 	}
 
-	if err := doUprOpen(mc, "FailoverLog", 0); err != nil {
-		return nil, fmt.Errorf("UPR_OPEN Failed %s", err.Error())
+	if err := doDcpOpen(mc, "FailoverLog", 0); err != nil {
+		return nil, fmt.Errorf("DCP_OPEN Failed %s", err.Error())
 	}
 
 	failoverLogs := make(map[uint16]*FailoverLog)
@@ -244,7 +244,7 @@ func (mc *Client) UprGetFailoverLog(
 
 		if err != nil {
 			return nil, fmt.Errorf("failed to receive %s", err.Error())
-		} else if res.Opcode != transport.UPR_FAILOVERLOG || res.Status != transport.SUCCESS {
+		} else if res.Opcode != transport.DCP_FAILOVERLOG || res.Status != transport.SUCCESS {
 			return nil, fmt.Errorf("unexpected #opcode %v", res.Opcode)
 		}
 
@@ -258,12 +258,12 @@ func (mc *Client) UprGetFailoverLog(
 	return failoverLogs, nil
 }
 
-// UprRequestStream for a single vbucket.
-func (feed *UprFeed) UprRequestStream(vbno, opaqueMSB uint16, flags uint32,
+// DcpRequestStream for a single vbucket.
+func (feed *DcpFeed) DcpRequestStream(vbno, opaqueMSB uint16, flags uint32,
 	vuuid, startSequence, endSequence, snapStart, snapEnd uint64) error {
 
 	rq := &transport.MCRequest{
-		Opcode:  transport.UPR_STREAMREQ,
+		Opcode:  transport.DCP_STREAMREQ,
 		VBucket: vbno,
 		Opaque:  composeOpaque(vbno, opaqueMSB),
 	}
@@ -280,7 +280,7 @@ func (feed *UprFeed) UprRequestStream(vbno, opaqueMSB uint16, flags uint32,
 	feed.mu.Lock()
 	defer feed.mu.Unlock()
 	feed.transmitCh <- rq
-	stream := &UprStream{
+	stream := &DcpStream{
 		Vbucket:  vbno,
 		Vbuuid:   vuuid,
 		StartSeq: startSequence,
@@ -291,7 +291,7 @@ func (feed *UprFeed) UprRequestStream(vbno, opaqueMSB uint16, flags uint32,
 }
 
 // CloseStream for specified vbucket.
-func (feed *UprFeed) CloseStream(vbno, opaqueMSB uint16) error {
+func (feed *DcpFeed) CloseStream(vbno, opaqueMSB uint16) error {
 	feed.mu.Lock()
 	defer feed.mu.Unlock()
 
@@ -299,7 +299,7 @@ func (feed *UprFeed) CloseStream(vbno, opaqueMSB uint16) error {
 		return fmt.Errorf("Stream for vb %d has not been requested", vbno)
 	}
 	closeStream := &transport.MCRequest{
-		Opcode:  transport.UPR_CLOSESTREAM,
+		Opcode:  transport.DCP_CLOSESTREAM,
 		VBucket: vbno,
 		Opaque:  composeOpaque(vbno, opaqueMSB),
 	}
@@ -308,8 +308,8 @@ func (feed *UprFeed) CloseStream(vbno, opaqueMSB uint16) error {
 }
 
 // StartFeed to start the upper feed.
-func (feed *UprFeed) StartFeed() error {
-	ch := make(chan *UprEvent, 10000)
+func (feed *DcpFeed) StartFeed() error {
+	ch := make(chan *DcpEvent, 10000)
 	feed.C = ch
 	go feed.runFeed(ch)
 	return nil
@@ -345,7 +345,7 @@ func handleStreamRequest(
 
 	case res.Status == transport.ROLLBACK:
 		rollback = binary.BigEndian.Uint64(res.Extras)
-		log.Printf("Rollback %v for vb %v\n", rollback, res.Opaque)
+		logging.Warnf("Rollback %v for vb %v\n", rollback, res.Opaque)
 		return res.Status, rollback, nil, nil
 
 	case res.Status != transport.SUCCESS:
@@ -358,34 +358,34 @@ func handleStreamRequest(
 }
 
 // generate stream end responses for all active vb streams
-func (feed *UprFeed) doStreamClose(ch chan *UprEvent) {
+func (feed *DcpFeed) doStreamClose(ch chan *DcpEvent) {
 	feed.mu.RLock()
 	for vb, stream := range feed.vbstreams {
-		uprEvent := &UprEvent{
+		dcpEvent := &DcpEvent{
 			VBucket: vb,
 			VBuuid:  stream.Vbuuid,
-			Opcode:  transport.UPR_STREAMEND,
+			Opcode:  transport.DCP_STREAMEND,
 		}
-		ch <- uprEvent
+		ch <- dcpEvent
 	}
 	feed.mu.RUnlock()
 }
 
-func (feed *UprFeed) runFeed(ch chan *UprEvent) {
+func (feed *DcpFeed) runFeed(ch chan *DcpEvent) {
 	defer close(ch)
 	var headerBuf [transport.HDR_LEN]byte
 	var pkt transport.MCRequest
-	var event *UprEvent
+	var event *DcpEvent
 
 	mc := feed.conn.Hijack()
-	uprStats := &feed.stats
+	dcpStats := &feed.stats
 
 loop:
 	for {
 		sendAck := false
 		bytes, err := pkt.Receive(mc, headerBuf[:])
 		if err != nil {
-			log.Printf("Error in receive %s\n", err.Error())
+			logging.Warnf("Error in receive %s\n", err.Error())
 			feed.Error = err
 			// send all the stream close messages to the client
 			feed.doStreamClose(ch)
@@ -403,42 +403,42 @@ loop:
 			}
 
 			vb := vbOpaque(pkt.Opaque)
-			uprStats.TotalBytes = uint64(bytes)
+			dcpStats.TotalBytes = uint64(bytes)
 
 			feed.mu.RLock()
 			stream := feed.vbstreams[vb]
 			feed.mu.RUnlock()
 
 			switch pkt.Opcode {
-			case transport.UPR_STREAMREQ:
+			case transport.DCP_STREAMREQ:
 				if stream == nil {
-					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
+					logging.Warnf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
 				status, rb, flog, err := handleStreamRequest(res)
 				if status == transport.ROLLBACK {
-					event = makeUprEvent(pkt, stream)
+					event = makeDcpEvent(pkt, stream)
 					event.Status = status
 					event.Seqno = rb
 					// rollback stream
-					log.Printf("UPR_STREAMREQ with rollback %d for vb %d Failed: %v\n", rb, vb, err)
+					logging.Warnf("DCP_STREAMREQ with rollback %d for vb %d Failed: %v\n", rb, vb, err)
 					// delete the stream from the vbmap for the feed
 					feed.mu.Lock()
 					delete(feed.vbstreams, vb)
 					feed.mu.Unlock()
 
 				} else if status == transport.SUCCESS {
-					event = makeUprEvent(pkt, stream)
+					event = makeDcpEvent(pkt, stream)
 					event.Status = status
 					event.Seqno = stream.StartSeq
 					event.FailoverLog = flog
 					stream.connected = true
-					log.Printf("UPR_STREAMREQ for vb %d successful\n", vb)
+					logging.Warnf("DCP_STREAMREQ for vb %d successful\n", vb)
 
 				} else if err != nil {
-					log.Printf("UPR_STREAMREQ for vbucket %d erro %s\n", vb, err.Error())
-					event = &UprEvent{
-						Opcode:  transport.UPR_STREAMREQ,
+					logging.Warnf("DCP_STREAMREQ for vbucket %d erro %s\n", vb, err.Error())
+					event = &DcpEvent{
+						Opcode:  transport.DCP_STREAMREQ,
 						Status:  status,
 						VBucket: vb,
 						Error:   err,
@@ -449,95 +449,95 @@ loop:
 					feed.mu.Unlock()
 				}
 
-			case transport.UPR_MUTATION,
-				transport.UPR_DELETION,
-				transport.UPR_EXPIRATION:
+			case transport.DCP_MUTATION,
+				transport.DCP_DELETION,
+				transport.DCP_EXPIRATION:
 				if stream == nil {
-					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
+					logging.Warnf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
-				event = makeUprEvent(pkt, stream)
-				uprStats.TotalMutation++
+				event = makeDcpEvent(pkt, stream)
+				dcpStats.TotalMutation++
 				sendAck = true
 
-			case transport.UPR_STREAMEND:
+			case transport.DCP_STREAMEND:
 				if stream == nil {
-					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
+					logging.Warnf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
 				//stream has ended
-				event = makeUprEvent(pkt, stream)
-				log.Printf("Stream Ended for vb %d\n", vb)
+				event = makeDcpEvent(pkt, stream)
+				logging.Warnf("Stream Ended for vb %d\n", vb)
 				sendAck = true
 
 				feed.mu.Lock()
 				delete(feed.vbstreams, vb)
 				feed.mu.Unlock()
 
-			case transport.UPR_SNAPSHOT:
+			case transport.DCP_SNAPSHOT:
 				if stream == nil {
-					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
+					logging.Warnf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
 				// snapshot marker
-				event = makeUprEvent(pkt, stream)
+				event = makeDcpEvent(pkt, stream)
 				event.SnapstartSeq = binary.BigEndian.Uint64(pkt.Extras[0:8])
 				event.SnapendSeq = binary.BigEndian.Uint64(pkt.Extras[8:16])
 				event.SnapshotType = binary.BigEndian.Uint32(pkt.Extras[16:20])
-				uprStats.TotalSnapShot++
+				dcpStats.TotalSnapShot++
 				sendAck = true
 
-			case transport.UPR_FLUSH:
+			case transport.DCP_FLUSH:
 				if stream == nil {
-					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
+					logging.Warnf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
 				// special processing for flush ?
-				event = makeUprEvent(pkt, stream)
+				event = makeDcpEvent(pkt, stream)
 
-			case transport.UPR_CLOSESTREAM:
+			case transport.DCP_CLOSESTREAM:
 				if stream == nil {
-					log.Printf("Stream not found for vb %d: %#v\n", vb, pkt)
+					logging.Warnf("Stream not found for vb %d: %#v\n", vb, pkt)
 					break loop
 				}
-				event = makeUprEvent(pkt, stream)
-				event.Opcode = transport.UPR_STREAMEND // opcode re-write !!
-				log.Printf("Stream Closed for vb %d StreamEnd simulated\n", vb)
+				event = makeDcpEvent(pkt, stream)
+				event.Opcode = transport.DCP_STREAMEND // opcode re-write !!
+				logging.Warnf("Stream Closed for vb %d StreamEnd simulated\n", vb)
 				sendAck = true
 
 				feed.mu.Lock()
 				delete(feed.vbstreams, vb)
 				feed.mu.Unlock()
 
-			case transport.UPR_ADDSTREAM:
-				log.Printf("Opcode %v not implemented\n", pkt.Opcode)
+			case transport.DCP_ADDSTREAM:
+				logging.Warnf("Opcode %v not implemented\n", pkt.Opcode)
 
-			case transport.UPR_CONTROL, transport.UPR_BUFFERACK:
+			case transport.DCP_CONTROL, transport.DCP_BUFFERACK:
 				if res.Status != transport.SUCCESS {
-					log.Printf("Opcode %v received status %d\n", pkt.Opcode.String(), res.Status)
+					logging.Warnf("Opcode %v received status %d\n", pkt.Opcode.String(), res.Status)
 				}
 
-			case transport.UPR_NOOP:
+			case transport.DCP_NOOP:
 				// send a NOOP back
 				noop := &transport.MCRequest{
-					Opcode: transport.UPR_NOOP,
+					Opcode: transport.DCP_NOOP,
 				}
 				feed.transmitCh <- noop
 
 			default:
-				log.Printf("Received an unknown response for vbucket %d\n", vb)
+				logging.Warnf("Received an unknown response for vbucket %d\n", vb)
 			}
 
 			// debug logging for DCP hiccups
 			if event != nil && stream != nil {
 				now := time.Now().UnixNano()
-				if event.Opcode != transport.UPR_SNAPSHOT ||
-					event.Opcode != transport.UPR_STREAMREQ {
+				if event.Opcode != transport.DCP_SNAPSHOT ||
+					event.Opcode != transport.DCP_STREAMREQ {
 
 					delta := (now - stream.LastSeen) / 1000000
 					if stream.LastSeen != 0 && delta > 3000 {
 						msg := "Warning: DCP event %v for vb %v after %v mS\n"
-						log.Printf(msg, event.Opcode, stream.Vbucket, delta)
+						logging.Warnf(msg, event.Opcode, stream.Vbucket, delta)
 					}
 				}
 				stream.LastSeen = now
@@ -555,8 +555,8 @@ loop:
 			l := len(feed.vbstreams)
 			feed.mu.RUnlock()
 
-			if event.Opcode == transport.UPR_CLOSESTREAM && l == 0 {
-				log.Println("No more streams")
+			if event.Opcode == transport.DCP_CLOSESTREAM && l == 0 {
+				logging.Warnf("No more streams")
 				break loop
 			}
 		}
@@ -564,13 +564,13 @@ loop:
 		needToSend, sendSize := feed.SendBufferAck(sendAck, uint32(bytes))
 		if needToSend {
 			bufferAck := &transport.MCRequest{
-				Opcode: transport.UPR_BUFFERACK,
+				Opcode: transport.DCP_BUFFERACK,
 			}
 			bufferAck.Extras = make([]byte, 4)
-			log.Printf("Buffer-ack %v\n", sendSize)
+			logging.Warnf("Buffer-ack %v\n", sendSize)
 			binary.BigEndian.PutUint32(bufferAck.Extras[:4], uint32(sendSize))
 			feed.transmitCh <- bufferAck
-			uprStats.TotalBufferAckSent++
+			dcpStats.TotalBufferAckSent++
 		}
 	}
 
@@ -578,7 +578,7 @@ loop:
 }
 
 // Send buffer ack
-func (feed *UprFeed) SendBufferAck(sendAck bool, bytes uint32) (bool, uint32) {
+func (feed *DcpFeed) SendBufferAck(sendAck bool, bytes uint32) (bool, uint32) {
 	if sendAck {
 		totalBytes := feed.toAckBytes + bytes
 		if totalBytes > feed.maxAckBytes {
@@ -590,7 +590,7 @@ func (feed *UprFeed) SendBufferAck(sendAck bool, bytes uint32) (bool, uint32) {
 	return false, 0
 }
 
-func (feed *UprFeed) GetUprStats() *UprStats {
+func (feed *DcpFeed) GetDcpStats() *DcpStats {
 	return &feed.stats
 }
 
@@ -606,8 +606,8 @@ func vbOpaque(opq32 uint32) uint16 {
 	return uint16(opq32 & 0xFFFF)
 }
 
-// Close this UprFeed.
-func (feed *UprFeed) Close() {
+// Close this DcpFeed.
+func (feed *DcpFeed) Close() {
 	feed.mu.Lock()
 	defer feed.mu.Unlock()
 

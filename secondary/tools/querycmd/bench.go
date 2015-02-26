@@ -9,9 +9,29 @@ import c "github.com/couchbase/indexing/secondary/common"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
 import "github.com/couchbase/indexing/secondary/queryport"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
+import "github.com/couchbaselabs/goprotobuf/proto"
 
 var mock_nclients = 1
 var mock_duration = 1
+
+var testStatisticsResponse = &protobuf.StatisticsResponse{
+	Stats: &protobuf.IndexStatistics{
+		KeysCount:       proto.Uint64(100),
+		UniqueKeysCount: proto.Uint64(100),
+		KeyMin:          []byte(`"aaaaa"`),
+		KeyMax:          []byte(`"zzzzz"`),
+	},
+}
+var testResponseStream = &protobuf.ResponseStream{
+	IndexEntries: []*protobuf.IndexEntry{
+		&protobuf.IndexEntry{
+			EntryKey: []byte(`["aaaaa"]`), PrimaryKey: []byte("key1"),
+		},
+		&protobuf.IndexEntry{
+			EntryKey: []byte(`["aaaaa"]`), PrimaryKey: []byte("key2"),
+		},
+	},
+}
 
 //--------------------
 // Benchmark queryport
@@ -65,6 +85,7 @@ loop:
 			l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 			err := client.Range(
 				0xABBA /*defnID*/, l, h, 100, true, 1000,
+				c.AnyConsistency, nil,
 				func(val qclient.ResponseReader) bool {
 					switch v := val.(type) {
 					case *protobuf.ResponseStream:

@@ -15,7 +15,7 @@ var ErrorEmptyN1QLExpression = errors.New("secondary.emptyN1QLExpression")
 var ErrorUnexpectedPayload = errors.New("secondary.unexpectedPayload")
 
 // ErrorClosed
-var ErrorClosed = errors.New("secondary.closed")
+var ErrorClosed = errors.New("genServer.closed")
 
 // ErrorChannelFull
 var ErrorChannelFull = errors.New("secondary.channelFull")

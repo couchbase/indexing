@@ -72,7 +72,7 @@ type Server interface {
 
 	// RegisterHandler a request message that shall be supported by
 	// adminport-server
-	RegisterHttpHandler(string, func(http.ResponseWriter, *http.Request)) error
+	RegisterHTTPHandler(string, func(http.ResponseWriter, *http.Request)) error
 
 	// Unregister a previously registered request message
 	Unregister(msg MessageMarshaller) error

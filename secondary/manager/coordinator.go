@@ -18,6 +18,7 @@ import (
 	protocol "github.com/couchbase/gometa/protocol"
 	r "github.com/couchbase/gometa/repository"
 	co "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"path/filepath"
 	"sync"
 	"time"
@@ -105,7 +106,7 @@ func (s *Coordinator) Terminate() {
 
 	defer func() {
 		if r := recover(); r != nil {
-			co.Warnf("panic in Coordinator.Terminate() : %s.  Ignored.\n", r)
+			logging.Warnf("panic in Coordinator.Terminate() : %s.  Ignored.\n", r)
 		}
 	}()
 
@@ -184,13 +185,13 @@ func (s *Coordinator) NewRequest(opCode uint32, key string, content []byte) bool
 //
 func (c *Coordinator) runOnce(config string) int {
 
-	co.Debugf("Coordinator.runOnce() : Start Running Coordinator")
+	logging.Debugf("Coordinator.runOnce() : Start Running Coordinator")
 
 	pauseTime := 0
 
 	defer func() {
 		if r := recover(); r != nil {
-			co.Warnf("panic in Coordinator.runOnce() : %s\n", r)
+			logging.Warnf("panic in Coordinator.runOnce() : %s\n", r)
 		}
 
 		common.SafeRun("Coordinator.cleanupState()",
@@ -212,7 +213,7 @@ func (c *Coordinator) runOnce(config string) int {
 		// will continue to run to responds to other peer election request
 		leader, err := c.runElection()
 		if err != nil {
-			co.Warnf("Coordinator.runOnce() : Error Encountered During Election : %s", err.Error())
+			logging.Warnf("Coordinator.runOnce() : Error Encountered During Election : %s", err.Error())
 			pauseTime = 100
 		} else {
 
@@ -221,12 +222,12 @@ func (c *Coordinator) runOnce(config string) int {
 				// runCoordinator() is done if there is an error	or being terminated explicitly (killch)
 				err := c.runProtocol(leader)
 				if err != nil {
-					co.Warnf("Coordinator.RunOnce() : Error Encountered From Coordinator : %s", err.Error())
+					logging.Warnf("Coordinator.RunOnce() : Error Encountered From Coordinator : %s", err.Error())
 				}
 			}
 		}
 	} else {
-		co.Infof("Coordinator.RunOnce(): Coordinator has been terminated explicitly. Terminate.")
+		logging.Infof("Coordinator.RunOnce(): Coordinator has been terminated explicitly. Terminate.")
 	}
 
 	return pauseTime
@@ -401,10 +402,10 @@ func (s *Coordinator) runElection() (leader string, err error) {
 	peers := s.getPeerUDPAddr()
 
 	// Create an election site to start leader election.
-	co.Debugf("Coordinator.runElection(): Local Coordinator %s start election", host)
-	co.Debugf("Coordinator.runElection(): Peer in election")
+	logging.Debugf("Coordinator.runElection(): Local Coordinator %s start election", host)
+	logging.Debugf("Coordinator.runElection(): Peer in election")
 	for _, peer := range peers {
-		co.Debugf("	peer : %s", peer)
+		logging.Debugf("	peer : %s", peer)
 	}
 
 	s.site, err = protocol.CreateElectionSite(host, peers, s.factory, s, false)
@@ -437,7 +438,7 @@ func (s *Coordinator) runProtocol(leader string) (err error) {
 	// If this host is the leader, then start the leader server.
 	// Otherwise, start the followerCoordinator.
 	if leader == host {
-		co.Debugf("Coordinator.runServer() : Local Coordinator %s is elected as leader. Leading ...", leader)
+		logging.Debugf("Coordinator.runServer() : Local Coordinator %s is elected as leader. Leading ...", leader)
 		s.state.setStatus(protocol.LEADING)
 
 		// start other master services if this node is a candidate as master
@@ -446,7 +447,7 @@ func (s *Coordinator) runProtocol(leader string) (err error) {
 
 		err = protocol.RunLeaderServer(s.getHostTCPAddr(), s.listener, s, s, s.factory, s.skillch)
 	} else {
-		co.Debugf("Coordinator.runServer() : Remote Coordinator %s is elected as leader. Following ...", leader)
+		logging.Debugf("Coordinator.runServer() : Remote Coordinator %s is elected as leader. Following ...", leader)
 		s.state.setStatus(protocol.FOLLOWING)
 		leaderAddr := s.findMatchingPeerTCPAddr(leader)
 		if len(leaderAddr) == 0 {
@@ -592,10 +593,10 @@ func (c *Coordinator) LogProposal(proposal protocol.ProposalMsg) error {
 		switch common.OpCode(proposal.GetOpCode()) {
 		case OPCODE_ADD_IDX_DEFN:
 			success := c.createIndex(proposal.GetKey(), proposal.GetContent())
-			co.Debugf("Coordinator.LogProposal(): (createIndex) success = %s", success)
+			logging.Debugf("Coordinator.LogProposal(): (createIndex) success = %s", success)
 		case OPCODE_DEL_IDX_DEFN:
 			success := c.deleteIndex(proposal.GetKey())
-			co.Debugf("Coordinator.LogProposal(): (deleteIndex) success = %s", success)
+			logging.Debugf("Coordinator.LogProposal(): (deleteIndex) success = %s", success)
 		}
 	}
 
@@ -605,7 +606,7 @@ func (c *Coordinator) LogProposal(proposal protocol.ProposalMsg) error {
 		if err == nil {
 			c.idxMgr.notifyNewTimestamp(timestamp)
 		} else {
-			co.Debugf("Coordinator.LogProposal(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
+			logging.Debugf("Coordinator.LogProposal(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
 		}
 	}
 
@@ -673,7 +674,7 @@ func (c *Coordinator) updateRequestOnNewProposal(proposal protocol.ProposalMsg) 
 	reqId := proposal.GetReqId()
 	txnid := proposal.GetTxnid()
 
-	co.Debugf("Coorindator.updateRequestOnNewProposal(): recieve proposal. Txnid %d, follower id %s, coorindator fid %s",
+	logging.Debugf("Coorindator.updateRequestOnNewProposal(): recieve proposal. Txnid %d, follower id %s, coorindator fid %s",
 		txnid, fid, c.GetFollowerId())
 
 	// If this host is the one that sends the request to the leader
@@ -724,7 +725,7 @@ func (c *Coordinator) updateRequestOnCommit(txnid common.Txnid) {
 	c.state.mutex.Lock()
 	defer c.state.mutex.Unlock()
 
-	co.Debugf("Coorindator.updateRequestOnCommit(): recieve proposal. Txnid %d, coorindator fid %s",
+	logging.Debugf("Coorindator.updateRequestOnCommit(): recieve proposal. Txnid %d, coorindator fid %s",
 		txnid, c.GetFollowerId())
 
 	// If I can find the proposal based on the txnid in this host, this means
@@ -780,7 +781,7 @@ func (c *Coordinator) createIndex(key string, content []byte) bool {
 	// For now, use the local host. This logic is not called in sherlock production code.
 	// But still will be called in uint test.
 	if err := c.idxMgr.getLifecycleMgr().CreateIndex(defn); err != nil {
-		co.Debugf("Coordinator.createIndexy() : createIndex fails. Reason = %s", err.Error())
+		logging.Debugf("Coordinator.createIndexy() : createIndex fails. Reason = %s", err.Error())
 		return false
 	}
 
@@ -796,12 +797,12 @@ func (c *Coordinator) deleteIndex(key string) bool {
 
 	id, err := indexDefnId(key)
 	if err != nil {
-		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
+		logging.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}
 
 	if err := c.idxMgr.getLifecycleMgr().DeleteIndex(id); err != nil {
-		co.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
+		logging.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}
 

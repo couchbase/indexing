@@ -10,6 +10,7 @@
 package manager
 
 import (
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"sync"
@@ -49,7 +50,7 @@ func (m *StreamMonitor) Close() {
 }
 
 func (m *StreamMonitor) Start() {
-	common.Debugf("StreamMonitor.Start()")
+	logging.Debugf("StreamMonitor.Start()")
 	go m.monitor()
 }
 
@@ -57,7 +58,7 @@ func (m *StreamMonitor) StartStream(streamId common.StreamId, bucket string, tim
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	common.Debugf("StreamMonitor.StartStream() : streamId %d bucket %s #seqNo %d", streamId, bucket, len(timestamp.GetSeqnos()))
+	logging.Debugf("StreamMonitor.StartStream() : streamId %d bucket %s #seqNo %d", streamId, bucket, len(timestamp.GetSeqnos()))
 
 	bucketMap, ok := m.startTimestamps[streamId]
 	if !ok {
@@ -94,7 +95,7 @@ func (m *StreamMonitor) Activate(streamId common.StreamId, bucket string, vb uin
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	common.Debugf("StreamMonitor.Activate() : streamId %d bucket %s vb %d", streamId, bucket, vb)
+	logging.Debugf("StreamMonitor.Activate() : streamId %d bucket %s vb %d", streamId, bucket, vb)
 
 	bucketMap, ok := m.activeMap[streamId]
 	if !ok {
@@ -116,7 +117,7 @@ func (m *StreamMonitor) Deactivate(streamId common.StreamId, bucket string, vb u
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	common.Debugf("StreamMonitor.Deactivate() : streamId %d bucket %s vb %d", streamId, bucket, vb)
+	logging.Debugf("StreamMonitor.Deactivate() : streamId %d bucket %s vb %d", streamId, bucket, vb)
 
 	bucketMap, ok := m.activeMap[streamId]
 	if !ok {
@@ -139,7 +140,7 @@ func (m *StreamMonitor) Deactivate(streamId common.StreamId, bucket string, vb u
 
 func (m *StreamMonitor) monitor() {
 
-	common.Debugf("StreamMonitor::Monitor(): start")
+	logging.Debugf("StreamMonitor::Monitor(): start")
 
 	ticker := time.NewTicker(MONITOR_INTERVAL)
 	defer ticker.Stop()
@@ -182,7 +183,7 @@ func (m *StreamMonitor) repair() {
 				for vb, _ := range ts.Seqnos {
 					if !m.isActive(streamId, bucket, uint16(vb)) {
 
-						common.Debugf("StreamMonitor.repair() : not active -> streamId %d bucket %s vb %d",
+						logging.Debugf("StreamMonitor.repair() : not active -> streamId %d bucket %s vb %d",
 							streamId, bucket, vb)
 						retryBuckets, ok := toRetry[streamId]
 						if !ok {
@@ -197,7 +198,7 @@ func (m *StreamMonitor) repair() {
 						}
 
 						retryTs.Seqnos[vb], retryTs.Vbuuids[vb] = m.findRestartSeqno(streamId, bucket, uint16(vb))
-						common.Debugf("StreamMonitor.repair() : ts to retry -> seqno %d vbuuid %d",
+						logging.Debugf("StreamMonitor.repair() : ts to retry -> seqno %d vbuuid %d",
 							retryTs.Seqnos[vb], retryTs.Vbuuids[vb])
 					}
 				}
@@ -210,9 +211,9 @@ func (m *StreamMonitor) repair() {
 		for _, ts := range buckets {
 			timestamps = append(timestamps, ts)
 		}
-		common.Debugf("StreamMonitor.repair() : streamId %s len(timetamps) %d", streamId, len(timestamps))
+		logging.Debugf("StreamMonitor.repair() : streamId %s len(timetamps) %d", streamId, len(timestamps))
 		if err := m.manager.streamMgr.RestartStreamIfNecessary(streamId, timestamps); err != nil {
-			common.Debugf("StreamMonitor::Repair(): error %s", err)
+			logging.Debugf("StreamMonitor::Repair(): error %s", err)
 		}
 	}
 }

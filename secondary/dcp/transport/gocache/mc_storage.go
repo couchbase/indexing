@@ -2,9 +2,9 @@ package main
 
 import (
 	"encoding/binary"
-	"log"
 
 	"github.com/couchbase/indexing/secondary/dcp/transport"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 type storage struct {
@@ -27,7 +27,7 @@ func RunServer(input chan chanReq) {
 	s.data = make(map[string]transport.MCItem)
 	for {
 		req := <-input
-		log.Printf("Got a request: %s", req.req)
+		logging.Warnf("Got a request: %s", req.req)
 		req.res <- dispatch(req.req, &s)
 	}
 }
@@ -81,7 +81,7 @@ func handleFlush(req *transport.MCRequest, s *storage) (ret *transport.MCRespons
 	ret = &transport.MCResponse{}
 	delay := binary.BigEndian.Uint32(req.Extras)
 	if delay > 0 {
-		log.Printf("Delay not supported (got %d)", delay)
+		logging.Warnf("Delay not supported (got %d)", delay)
 	}
 	s.data = make(map[string]transport.MCItem)
 	return

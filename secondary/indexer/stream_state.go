@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"container/list"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 )
 
@@ -154,7 +155,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 
-	common.Debugf("StreamState::initBucketInStream \n\tNew Bucket %v Added for "+
+	logging.Debugf("StreamState::initBucketInStream \n\tNew Bucket %v Added for "+
 		"Stream %v", bucket, streamId)
 }
 
@@ -182,7 +183,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
-	common.Debugf("StreamState::cleanupBucketFromStream \n\tBucket %v Deleted from "+
+	logging.Debugf("StreamState::cleanupBucketFromStream \n\tBucket %v Deleted from "+
 		"Stream %v", bucket, streamId)
 
 }
@@ -206,7 +207,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
-	common.Debugf("StreamState::resetStreamState \n\tReset Stream %v State", streamId)
+	logging.Debugf("StreamState::resetStreamState \n\tReset Stream %v State", streamId)
 }
 
 func (ss *StreamState) updateVbStatus(streamId common.StreamId, bucket string,
@@ -225,7 +226,7 @@ func (ss *StreamState) computeRestartTs(streamId common.StreamId,
 
 	var restartTs *common.TsVbuuid
 
-	if _, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok {
+	if fts, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && fts != nil {
 		restartTs = ss.streamBucketLastFlushedTsMap[streamId][bucket].Copy()
 	} else if ts, ok := ss.streamBucketRestartTsMap[streamId][bucket]; ok && ts != nil {
 		//if no flush has been done yet, use restart TS
@@ -237,7 +238,7 @@ func (ss *StreamState) computeRestartTs(streamId common.StreamId,
 func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
 	bucket string) {
 
-	common.Debugf("StreamState::setHWTFromRestartTs Stream %v "+
+	logging.Debugf("StreamState::setHWTFromRestartTs Stream %v "+
 		"Bucket %v", streamId, bucket)
 
 	if bucketRestartTs, ok := ss.streamBucketRestartTsMap[streamId]; ok {
@@ -249,11 +250,11 @@ func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
 
 			//update Last Flushed Ts
 			ss.streamBucketLastFlushedTsMap[streamId][bucket] = restartTs.Copy()
-			common.Debugf("StreamState::setHWTFromRestartTs \n\tHWT Set For "+
+			logging.Debugf("StreamState::setHWTFromRestartTs \n\tHWT Set For "+
 				"Bucket %v StreamId %v. TS %v.", bucket, streamId, restartTs)
 
 		} else {
-			common.Warnf("StreamState::setHWTFromRestartTs \n\tRestartTs Not Found For "+
+			logging.Warnf("StreamState::setHWTFromRestartTs \n\tRestartTs Not Found For "+
 				"Bucket %v StreamId %v. No Value Set.", bucket, streamId)
 		}
 	}
@@ -340,7 +341,7 @@ func (ss *StreamState) incrSyncCount(streamId common.StreamId,
 	if syncCount, ok := bucketSyncCountMap[bucket]; ok {
 		syncCount++
 
-		common.Tracef("StreamState::incrSyncCount \n\tUpdating Sync Count for Bucket: %v "+
+		logging.Tracef("StreamState::incrSyncCount \n\tUpdating Sync Count for Bucket: %v "+
 			"Stream: %v. SyncCount: %v.", bucket, streamId, syncCount)
 		//update only if its less than trigger count, otherwise it makes no
 		//difference. On long running systems, syncCount may overflow otherwise
@@ -356,7 +357,7 @@ func (ss *StreamState) incrSyncCount(streamId common.StreamId,
 
 	} else {
 		//add a new counter for this bucket
-		common.Debugf("StreamState::incrSyncCount \n\tAdding new Sync Count for Bucket: %v "+
+		logging.Debugf("StreamState::incrSyncCount \n\tAdding new Sync Count for Bucket: %v "+
 			"Stream: %v. SyncCount: %v.", bucket, streamId, syncCount)
 		bucketSyncCountMap[bucket] = 1
 	}
@@ -373,7 +374,7 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 	if uint64(meta.seqno) > ts.Seqnos[meta.vbucket] {
 		ts.Seqnos[meta.vbucket] = uint64(meta.seqno)
 		ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
-		common.Tracef("StreamState::updateHWT \n\tHWT Updated : %v", ts)
+		logging.Tracef("StreamState::updateHWT \n\tHWT Updated : %v", ts)
 	}
 
 }

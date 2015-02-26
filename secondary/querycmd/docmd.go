@@ -3,13 +3,13 @@ package querycmd
 import "encoding/json"
 import "flag"
 import "fmt"
-import "log"
 import "io"
 import "strings"
 import "errors"
 import "time"
 
 import "github.com/couchbase/cbauth"
+import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
@@ -53,16 +53,14 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	var fields, bindexes string
 	var inclusion uint
 	var equal, low, high string
-	var trace bool
-	var debug bool
-	var info bool
 
 	cmdOptions := &Command{}
 	fset := flag.NewFlagSet("cmd", flag.ExitOnError)
 
 	// basic options
 	fset.StringVar(&cmdOptions.Server, "server", "127.0.0.1:9000", "Cluster server address")
-	fset.StringVar(&cmdOptions.OpType, "type", "scanAll", "Index command (scan|stats|scanAll|count|nodes|create|build|drop|list)")
+	fset.StringVar(&cmdOptions.OpType, "type", "scanAll",
+		"Index command (scan|stats|scanAll|count|nodes|create|build|drop|list)")
 	fset.StringVar(&cmdOptions.IndexName, "index", "", "Index name")
 	fset.StringVar(&cmdOptions.Bucket, "bucket", "default", "Bucket name")
 	fset.StringVar(&cmdOptions.Auth, "auth", "", "Auth user and password")
@@ -82,23 +80,14 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&equal, "equal", "", "Span.Lookup: [key]")
 	fset.UintVar(&inclusion, "incl", 0, "Range: 0|1|2|3")
 	fset.Int64Var(&cmdOptions.Limit, "limit", 10, "Row limit")
-	// logging ...
-	fset.BoolVar(&trace, "trace", false, "log in trace mode")
-	fset.BoolVar(&debug, "debug", false, "log in debug mode")
-	fset.BoolVar(&info, "info", false, "log in info mode")
 	fset.BoolVar(&cmdOptions.Help, "h", false, "print help")
 
 	if err := fset.Parse(arguments); err != nil {
 		return nil, nil, fset, err
 	}
 
-	// deal with logging
-	if debug {
-		c.SetLogLevel(c.LogLevelDebug)
-	} else if trace {
-		c.SetLogLevel(c.LogLevelTrace)
-	} else if info {
-		c.SetLogLevel(c.LogLevelInfo)
+	if cmdOptions.IndexName == "" {
+		cmdOptions.Help = true
 	}
 
 	// bindexes
@@ -121,16 +110,16 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 		}
 	}
 	if equal != "" {
-		cmdOptions.Equal = c.SecondaryKey(arg2key([]byte(equal)))
+		cmdOptions.Equal = c.SecondaryKey(Arg2Key([]byte(equal)))
 	}
-	cmdOptions.Low = c.SecondaryKey(arg2key([]byte(low)))
-	cmdOptions.High = c.SecondaryKey(arg2key([]byte(high)))
+	cmdOptions.Low = c.SecondaryKey(Arg2Key([]byte(low)))
+	cmdOptions.High = c.SecondaryKey(Arg2Key([]byte(high)))
 
 	// with
 	if len(cmdOptions.With) > 0 {
 		err := json.Unmarshal([]byte(cmdOptions.With), &cmdOptions.WithPlan)
 		if err != nil {
-			log.Fatal(err)
+			logging.Fatalf("%v\n", err)
 		}
 	}
 
@@ -139,7 +128,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 		up := strings.Split(cmdOptions.Auth, ":")
 		_, err := cbauth.InternalRetryDefaultInit(cmdOptions.Server, up[0], up[1])
 		if err != nil {
-			log.Fatalf("Failed to initialize cbauth: %s", err)
+			logging.Fatalf("Failed to initialize cbauth: %s\n", err)
 		}
 	}
 
@@ -180,7 +169,7 @@ func HandleCommand(
 		fmt.Fprintln(w, "List of nodes:")
 		nodes, err := client.Nodes()
 		if err != nil {
-			log.Fatal(err)
+			logging.Fatalf("%v\n", err)
 		}
 		for adminport, queryport := range nodes {
 			fmt.Fprintf(w, "    {%v, %v}\n", adminport, queryport)
@@ -216,7 +205,7 @@ func HandleCommand(
 				return fmt.Errorf("invalid index specified : %v", bindex)
 			}
 			bucket, iname = v[0], v[1]
-			defnID, ok := getDefnID(client, bucket, iname)
+			defnID, ok := GetDefnID(client, bucket, iname)
 			if ok {
 				defnIDs = append(defnIDs, defnID)
 			} else {
@@ -236,7 +225,7 @@ func HandleCommand(
 				return fmt.Errorf("invalid index specified : %v", bindex)
 			}
 			bucket, iname = v[0], v[1]
-			defnID, ok := getDefnID(client, bucket, iname)
+			defnID, ok := GetDefnID(client, bucket, iname)
 			if ok {
 				err = client.DropIndex(defnID)
 				if err == nil {
@@ -250,7 +239,7 @@ func HandleCommand(
 	case "scan":
 		var state c.IndexState
 
-		defnID, _ := getDefnID(client, bucket, iname)
+		defnID, _ := GetDefnID(client, bucket, iname)
 		fmt.Fprintln(w, "Scan index:")
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
@@ -261,9 +250,13 @@ func HandleCommand(
 			fmt.Fprintf(w, "Index state: {%v, %v}\n", state, err)
 		} else if cmd.Equal != nil {
 			equals := []c.SecondaryKey{cmd.Equal}
-			client.Lookup(uint64(defnID), equals, false, limit, callb)
+			client.Lookup(
+				uint64(defnID), equals, false, limit,
+				c.AnyConsistency, nil, callb)
 		} else {
-			err = client.Range(uint64(defnID), low, high, incl, false, limit, callb)
+			err = client.Range(
+				uint64(defnID), low, high, incl, false, limit,
+				c.AnyConsistency, nil, callb)
 		}
 		if err == nil {
 			fmt.Fprintln(w, "Total number of entries: ", entries)
@@ -272,7 +265,7 @@ func HandleCommand(
 	case "scanAll":
 		var state c.IndexState
 
-		defnID, _ := getDefnID(client, bucket, iname)
+		defnID, _ := GetDefnID(client, bucket, iname)
 		fmt.Fprintln(w, "ScanAll index:")
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
@@ -281,7 +274,8 @@ func HandleCommand(
 			state, err = client.IndexState(defnID)
 			fmt.Fprintf(w, "Index state: {%v, %v} \n", state, err)
 		} else {
-			err = client.ScanAll(uint64(defnID), limit, callb)
+			err = client.ScanAll(
+				uint64(defnID), limit, c.AnyConsistency, nil, callb)
 		}
 		if err == nil {
 			fmt.Fprintln(w, "Total number of entries: ", entries)
@@ -291,7 +285,7 @@ func HandleCommand(
 		var state c.IndexState
 		var statsResp c.IndexStatistics
 
-		defnID, _ := getDefnID(client, bucket, iname)
+		defnID, _ := GetDefnID(client, bucket, iname)
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
 			100 /*period*/, 20000 /*timeout*/)
@@ -312,7 +306,7 @@ func HandleCommand(
 		var state c.IndexState
 		var count int64
 
-		defnID, _ := getDefnID(client, bucket, iname)
+		defnID, _ := GetDefnID(client, bucket, iname)
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
 			100 /*period*/, 20000 /*timeout*/)
@@ -351,13 +345,14 @@ func printIndexInfo(w io.Writer, index *mclient.IndexMetadata) {
 	}
 }
 
-func getDefnID(
+// GetDefnID for bucket/indexName.
+func GetDefnID(
 	client *qclient.GsiClient,
 	bucket, indexName string) (defnID uint64, ok bool) {
 
 	indexes, err := client.Refresh()
 	if err != nil {
-		log.Fatal(err)
+		logging.Fatalf("%v\n", err)
 	}
 	for _, index := range indexes {
 		defn := index.Definition
@@ -407,10 +402,11 @@ func WaitUntilIndexState(
 // local functions
 //----------------
 
-func arg2key(arg []byte) []interface{} {
+// Arg2Key convert JSON string to golang-native.
+func Arg2Key(arg []byte) []interface{} {
 	var key []interface{}
 	if err := json.Unmarshal(arg, &key); err != nil {
-		log.Fatal(err)
+		logging.Fatalf("%v\n", err)
 	}
 	return key
 }

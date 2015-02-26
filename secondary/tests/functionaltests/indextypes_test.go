@@ -2,72 +2,14 @@ package functionaltests
 
 import (
 	"errors"
-	"flag"
 	"fmt"
-	"github.com/couchbase/cbauth"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
-	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
-	"log"
-	"os/user"
-	"path/filepath"
 	"testing"
 	"time"
 )
-
-var docs, mut_docs tc.KeyValues
-var defaultlimit int64 = 10000000
-var kvaddress, indexManagementAddress, indexScanAddress string
-var clusterconfig tc.ClusterConfiguration
-
-func init() {
-	fmt.Println("In init()")
-	var configpath string
-	flag.StringVar(&configpath, "cbconfig", "../config/clusterrun_conf.json", "Path of the configuration file with data about Couchbase Cluster")
-	flag.Parse()
-	clusterconfig = tc.GetClusterConfFromFile(configpath)
-	kvaddress = clusterconfig.KVAddress
-	indexManagementAddress = clusterconfig.KVAddress
-	indexScanAddress = clusterconfig.KVAddress
-
-	// setup cbauth
-	if _, err := cbauth.InternalRetryDefaultInit(kvaddress, clusterconfig.Username, clusterconfig.Password); err != nil {
-		log.Fatalf("Failed to initialize cbauth: %s", err)
-	}
-	secondaryindex.CheckCollation = true
-	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
-	time.Sleep(5 * time.Second)
-	// Working with Users10k and Users_mut dataset.
-	u, _ := user.Current()
-	dataFilePath := filepath.Join(u.HomeDir, "testdata/Users10k.txt.gz")
-	mutationFilePath := filepath.Join(u.HomeDir, "testdata/Users_mut.txt.gz")
-	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath, false)
-	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, false)
-	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
-	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
-	fmt.Println("Emptying the default bucket")
-	kvutility.DeleteKeys(docs, "default", "", clusterconfig.KVAddress)
-	kvutility.DeleteKeys(mut_docs, "default", "", clusterconfig.KVAddress)
-	time.Sleep(5 * time.Second)
-
-	fmt.Println("In TestCreateIndexOnEmptyBucket()")
-	var indexName = "index_eyeColor"
-	var bucketName = "default"
-
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"eyeColor"}, true)
-	tc.HandleError(err, "Error in creating the index")
-
-	// Populate the bucket now
-	fmt.Println("Populating the default bucket")
-	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
-	time.Sleep(10 * time.Second) // Sleep for mutations to catch up
-	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, true, defaultlimit)
-	tc.HandleError(err, "Error in scan")
-	tv.Validate(docScanResults, scanResults)
-}
 
 // Test for single index field of data type float64
 func TestSimpleIndex_FloatDataType(t *testing.T) {
@@ -778,19 +720,11 @@ func TestCountLookup(t *testing.T) {
 	}
 }
 
-func FailTestIfError(err error, msg string, t *testing.T) {
-	if err != nil {
-		t.Fatal("%v: %v\n", msg, err)
-	}
-}
+func TestRangeStatistics(t *testing.T) {
+	fmt.Println("In TestRangeCount()")
+	var indexName = "index_age"
+	var bucketName = "default"
 
-func addDocIfNotPresentInKV(docKey string) {
-	if _, present := docs[docKey]; present == false {
-		keysToBeSet := make(tc.KeyValues)
-		keysToBeSet[docKey] = mut_docs[docKey]
-		kvutility.SetKeyValues(keysToBeSet, "default", "", clusterconfig.KVAddress)
-		// Update docs object with newly added keys and remove those keys from mut_docs
-		docs[docKey] = mut_docs[docKey]
-		delete(mut_docs, docKey)
-	}
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	FailTestIfError(err, "Error in creating the index", t)
 }

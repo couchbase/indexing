@@ -21,10 +21,10 @@ package dataport
 import "fmt"
 import "net"
 import "time"
-import "runtime/debug"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
+import "github.com/couchbase/indexing/secondary/logging"
 
 // RouterEndpoint structure, per topic, to gather key-versions / mutations
 // from one or more vbuckets and push them downstream to a
@@ -85,7 +85,7 @@ func NewRouterEndpoint(
 		endpoint.raddr, uint16(endpoint.timestamp), cluster, topic)
 
 	go endpoint.run(endpoint.ch)
-	c.Infof("%v started ...\n", endpoint.logPrefix)
+	logging.Infof("%v started ...\n", endpoint.logPrefix)
 	return endpoint, nil
 }
 
@@ -147,14 +147,14 @@ func (endpoint *RouterEndpoint) Close() error {
 func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			c.Errorf("%v run() crashed: %v\n", endpoint.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v run() crashed: %v\n", endpoint.logPrefix, r)
+			logging.Errorf("%s", logging.StackTrace())
 		}
 		// close the connection
 		endpoint.conn.Close()
 		// close this endpoint
 		close(endpoint.finch)
-		c.Infof("%v ... stopped\n", endpoint.logPrefix)
+		logging.Infof("%v ... stopped\n", endpoint.logPrefix)
 	}()
 
 	raddr := endpoint.raddr
@@ -168,13 +168,13 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 	mutationCount := int64(0)
 
 	flushBuffers := func() (err error) {
-		c.Tracef("%v sent %v mutations to %q\n",
+		logging.Tracef("%v sent %v mutations to %q\n",
 			endpoint.logPrefix, mutationCount, raddr)
 		if mutationCount > 0 {
 			flushCount++
 			err = buffers.flushBuffers(endpoint.conn, endpoint.pkt)
 			if err != nil {
-				c.Errorf("%v flushBuffers() %v\n", endpoint.logPrefix, err)
+				logging.Errorf("%v flushBuffers() %v\n", endpoint.logPrefix, err)
 			}
 		}
 		mutationCount = 0
@@ -198,7 +198,7 @@ loop:
 
 				kv := data.Kv
 				buffers.addKeyVersions(data.Bucket, data.Vbno, data.Vbuuid, kv)
-				c.Tracef("%v added %v keyversions <%v:%v:%v> to %q\n",
+				logging.Tracef("%v added %v keyversions <%v:%v:%v> to %q\n",
 					endpoint.logPrefix, kv.Length(), data.Vbno, kv.Seqno,
 					kv.Commands, buffers.raddr)
 				messageCount++ // count cummulative mutations
@@ -221,14 +221,14 @@ loop:
 				endpoint.harakiriTm =
 					time.Duration(config["harakiriTimeout"].Int())
 				flushTimeout = time.Tick(endpoint.bufferTm * time.Millisecond)
-				c.Infof("%v updated configuration ...\n", prefix)
-				c.Infof("%v block : %v\n", prefix, endpoint.block)
-				c.Infof("%v bufferSize : %v\n", prefix, endpoint.bufferSize)
-				c.Infof("%v bufferTm : %v\n", prefix, endpoint.bufferTm)
+				logging.Infof("%v updated configuration ...\n", prefix)
+				logging.Infof("%v block : %v\n", prefix, endpoint.block)
+				logging.Infof("%v bufferSize : %v\n", prefix, endpoint.bufferSize)
+				logging.Infof("%v bufferTm : %v\n", prefix, endpoint.bufferTm)
 				if harakiri != nil { // load harakiri only when it is active
 					harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
 					infomsg := "%v reloaded harakiriTm: %v\n"
-					c.Infof(infomsg, prefix, endpoint.harakiriTm)
+					logging.Infof(infomsg, prefix, endpoint.harakiriTm)
 				}
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{nil}
@@ -253,7 +253,7 @@ loop:
 			}
 
 		case <-harakiri:
-			c.Infof("%v committed harakiri\n", endpoint.logPrefix)
+			logging.Infof("%v committed harakiri\n", endpoint.logPrefix)
 			flushBuffers()
 			break loop
 		}

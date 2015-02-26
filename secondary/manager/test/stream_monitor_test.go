@@ -11,6 +11,7 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	projectorC "github.com/couchbase/indexing/secondary/projector/client"
@@ -43,8 +44,7 @@ type monitorTestProjectorClient struct {
 
 func TestStreamMgr_Monitor(t *testing.T) {
 
-	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 	util.TT = t
 
 	old_value := manager.NUM_VB
@@ -78,20 +78,20 @@ func TestStreamMgr_Monitor(t *testing.T) {
 
 func runMonitorTest() {
 
-	common.Infof("**** Run Monitor Test ******************************************")
+	logging.Infof("**** Run Monitor Test ******************************************")
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
 	os.MkdirAll("./data/", os.ModePerm)
 
-	common.Infof("***** Start TestStreamMgr ")
+	logging.Infof("***** Start TestStreamMgr ")
 	/*
 	   var requestAddr = "localhost:9885"
 	   var leaderAddr = "localhost:9884"
 	*/
 	var config = "./config.json"
 
-	common.Infof("Start Index Manager")
+	logging.Infof("Start Index Manager")
 	donech := make(chan bool)
 	factory := new(monitorTestProjectorClientFactory)
 	factory.donech = donech
@@ -105,28 +105,28 @@ func runMonitorTest() {
 	mgr.StartCoordinator(config)
 	time.Sleep(time.Duration(3000) * time.Millisecond)
 
-	common.Infof("Monitor Test Cleanup ...")
+	logging.Infof("Monitor Test Cleanup ...")
 	cleanupStreamMgrMonitorTest(mgr)
 
-	common.Infof("***** Run Monitor Test ...")
+	logging.Infof("***** Run Monitor Test ...")
 	ch := mgr.GetStabilityTimestampChannel(common.MAINT_STREAM)
 	go runMonitorTestReceiver(ch, donech)
 
-	common.Infof("Setup data for Monitor Test")
+	logging.Infof("Setup data for Monitor Test")
 	changeTopologyForMonitorTest(mgr)
 	<-donech
 
-	common.Infof("**** Monitor Test Cleanup ...")
+	logging.Infof("**** Monitor Test Cleanup ...")
 	cleanupStreamMgrMonitorTest(mgr)
 	mgr.CleanupTopology()
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Stop TestStreamMgr. Tearing down ")
+	logging.Infof("**** Stop TestStreamMgr. Tearing down ")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Finish Monitor Test ****************************************")
+	logging.Infof("**** Finish Monitor Test ****************************************")
 }
 
 // clean up
@@ -134,9 +134,9 @@ func cleanupStreamMgrMonitorTest(mgr *manager.IndexManager) {
 
 	_, err := mgr.GetIndexDefnById(common.IndexDefnId(406))
 	if err != nil {
-		common.Infof("StreamMgrTest.cleanupStreamMgrMonitorTest() :  cannot find index defn stream_mgr_monitor_test.  No cleanup ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrMonitorTest() :  cannot find index defn stream_mgr_monitor_test.  No cleanup ...")
 	} else {
-		common.Infof("StreamMgrTest.cleanupStreamMgrMonitorTest() :  found index defn stream_mgr_monitor_test.  Cleaning up ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrMonitorTest() :  found index defn stream_mgr_monitor_test.  Cleaning up ...")
 
 		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(406))
 		if err != nil {
@@ -157,7 +157,7 @@ func cleanupStreamMgrMonitorTest(mgr *manager.IndexManager) {
 // run test
 func runMonitorTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 
-	common.Infof("Run Monitor Test Receiver")
+	logging.Infof("Run Monitor Test Receiver")
 	defer close(donech)
 
 	// wait for the sync message to arrive
@@ -166,16 +166,16 @@ func runMonitorTestReceiver(ch chan *common.TsVbuuid, donech chan bool) {
 		select {
 		case ts := <-ch:
 			if ts.Seqnos[10] == 406 {
-				common.Infof("****** runMonitorTestReceiver() receive correct stability timestamp")
+				logging.Infof("****** runMonitorTestReceiver() receive correct stability timestamp")
 				return
 			}
 		case <-ticker.C:
-			common.Infof("****** runMonitorTestReceiver() : timeout")
+			logging.Infof("****** runMonitorTestReceiver() : timeout")
 			util.TT.Fatal("runMonitorTestReceiver(): Timeout waiting to receive timestamp to arrive")
 		}
 	}
 
-	common.Infof("runMonitorTestReceiver() done")
+	logging.Infof("runMonitorTestReceiver() done")
 }
 
 // start up
@@ -193,7 +193,7 @@ func changeTopologyForMonitorTest(mgr *manager.IndexManager) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	common.Infof("Run Monitor Test : Create Index Defn 406")
+	logging.Infof("Run Monitor Test : Create Index Defn 406")
 	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
 		util.TT.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func changeTopologyForMonitorTest(mgr *manager.IndexManager) {
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Update the index definition to ready
-	common.Infof("Run Monitor Test : Update Index Defn 406 to READY")
+	logging.Infof("Run Monitor Test : Update Index Defn 406 to READY")
 	topology, err := mgr.GetTopologyByBucket("Default")
 	if err != nil {
 		util.TT.Fatal(err)
@@ -214,7 +214,7 @@ func changeTopologyForMonitorTest(mgr *manager.IndexManager) {
 
 func (c *monitorTestProjectorClient) sendSync(timestamps []*protobuf.TsVbuuid) {
 
-	common.Infof("monitorTestProjectorClient.sendSync() ")
+	logging.Infof("monitorTestProjectorClient.sendSync() ")
 
 	if len(timestamps) != 1 {
 		util.TT.Fatal("monitorTestProjectorClient.sendSync(): More than one timestamp sent to fake projector. Num = %v", len(timestamps))
@@ -253,7 +253,7 @@ func (c *monitorTestProjectorClient) sendSync(timestamps []*protobuf.TsVbuuid) {
 func (c *monitorTestProjectorClient) MutationTopicRequest(topic, endpointType string,
 	reqTimestamps []*protobuf.TsVbuuid, instances []*protobuf.Instance) (*protobuf.TopicResponse, error) {
 
-	common.Infof("monitorTestProjectorClient.MutationTopicRequest(): start")
+	logging.Infof("monitorTestProjectorClient.MutationTopicRequest(): start")
 
 	if len(reqTimestamps) == 0 {
 		util.TT.Fatal("testProjectorClient.MutationTopicRequest(): reqTimestamps is nil")
@@ -292,7 +292,7 @@ func (c *monitorTestProjectorClient) RepairEndpoints(topic string, endpoints []s
 
 func (c *monitorTestProjectorClient) InitialRestartTimestamp(pooln, bucketn string) (*protobuf.TsVbuuid, error) {
 
-	common.Infof("monitorTestProjectorClient. InitialRestartTimestamp(): start")
+	logging.Infof("monitorTestProjectorClient. InitialRestartTimestamp(): start")
 	newTs := protobuf.NewTsVbuuid("default", bucketn, manager.NUM_VB)
 	for i := 0; i < manager.NUM_VB; i++ {
 		newTs.Append(uint16(i), uint64(i), uint64(1234), uint64(0), uint64(0))
@@ -333,7 +333,7 @@ func (p *monitorTestProjectorClientFactory) GetClientForNode(server string) mana
 
 func (p *monitorTestProjectorClientEnv) GetNodeListForBuckets(buckets []string) (map[string]string, error) {
 
-	common.Infof("monitorTestProjectorClientEnv.GetNodeListForBuckets() ")
+	logging.Infof("monitorTestProjectorClientEnv.GetNodeListForBuckets() ")
 	nodes := make(map[string]string)
 	nodes["127.0.0.1"] = "127.0.0.1"
 	return nodes, nil
@@ -341,7 +341,7 @@ func (p *monitorTestProjectorClientEnv) GetNodeListForBuckets(buckets []string) 
 
 func (p *monitorTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
 
-	common.Infof("monitorTestProjectorClientEnv.GetNodeListForTimestamps() ")
+	logging.Infof("monitorTestProjectorClientEnv.GetNodeListForTimestamps() ")
 	nodes := make(map[string][]*protobuf.TsVbuuid)
 	nodes["127.0.0.1"] = nil
 

@@ -3,10 +3,9 @@ package client
 import "errors"
 import "fmt"
 import "net"
-import "runtime/debug"
 import "time"
 
-import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/transport"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 
@@ -51,7 +50,7 @@ func newConnectionPool(
 		logPrefix:    fmt.Sprintf("[Queryport-connpool:%v]", host),
 	}
 	cp.mkConn = cp.defaultMkConn
-	c.Infof("%v started ...\n", cp.logPrefix)
+	logging.Infof("%v started ...\n", cp.logPrefix)
 	return cp
 }
 
@@ -59,7 +58,7 @@ func newConnectionPool(
 var ConnPoolCallback func(host string, source string, start time.Time, err error)
 
 func (cp *connectionPool) defaultMkConn(host string) (*connection, error) {
-	c.Infof("%v open new connection ...\n", cp.logPrefix)
+	logging.Infof("%v open new connection ...\n", cp.logPrefix)
 	conn, err := net.Dial("tcp", host)
 	if err != nil {
 		return nil, err
@@ -74,15 +73,15 @@ func (cp *connectionPool) defaultMkConn(host string) (*connection, error) {
 func (cp *connectionPool) Close() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v Close() crashed: %v\n", cp.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v Close() crashed: %v\n", cp.logPrefix, r)
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 	close(cp.connections)
 	for connectn := range cp.connections {
 		connectn.conn.Close()
 	}
-	c.Infof("%v ... stopped\n", cp.logPrefix)
+	logging.Infof("%v ... stopped\n", cp.logPrefix)
 	return
 }
 
@@ -107,7 +106,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 		if !ok {
 			return nil, ErrorClosedPool
 		}
-		c.Debugf("%v new connection from pool\n", cp.logPrefix)
+		logging.Debugf("%v new connection from pool\n", cp.logPrefix)
 		return connectn, nil
 	default:
 	}
@@ -122,7 +121,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 		if !ok {
 			return nil, ErrorClosedPool
 		}
-		c.Debugf("%v new connection (avail1) from pool\n", cp.logPrefix)
+		logging.Debugf("%v new connection (avail1) from pool\n", cp.logPrefix)
 		return connectn, nil
 
 	case <-t.C:
@@ -135,7 +134,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 			if !ok {
 				return nil, ErrorClosedPool
 			}
-			c.Debugf("%v new connection (avail2) from pool\n", cp.logPrefix)
+			logging.Debugf("%v new connection (avail2) from pool\n", cp.logPrefix)
 			return connectn, nil
 
 		case cp.createsem <- true:
@@ -148,7 +147,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 				// On error, release our create hold
 				<-cp.createsem
 			}
-			c.Debugf("%v new connection (create) from pool\n", cp.logPrefix)
+			logging.Debugf("%v new connection (create) from pool\n", cp.logPrefix)
 			return connectn, err
 
 		case <-t.C:
@@ -168,7 +167,7 @@ func (cp *connectionPool) Return(connectn *connection, healthy bool) {
 
 	laddr := connectn.conn.LocalAddr()
 	if cp == nil {
-		c.Infof("%v pool closed\n", cp.logPrefix, laddr)
+		logging.Infof("%v pool closed\n", cp.logPrefix, laddr)
 		connectn.conn.Close()
 	}
 
@@ -185,15 +184,15 @@ func (cp *connectionPool) Return(connectn *connection, healthy bool) {
 
 		select {
 		case cp.connections <- connectn:
-			c.Debugf("%v connection %q reclaimed to pool\n", cp.logPrefix, laddr)
+			logging.Debugf("%v connection %q reclaimed to pool\n", cp.logPrefix, laddr)
 		default:
-			c.Debugf("%v closing overflow connection %q\n", cp.logPrefix, laddr)
+			logging.Debugf("%v closing overflow connection %q\n", cp.logPrefix, laddr)
 			<-cp.createsem
 			connectn.conn.Close()
 		}
 
 	} else {
-		c.Infof("%v closing unhealthy connection %q\n", cp.logPrefix, laddr)
+		logging.Infof("%v closing unhealthy connection %q\n", cp.logPrefix, laddr)
 		<-cp.createsem
 		connectn.conn.Close()
 	}

@@ -29,7 +29,7 @@ type BucketAccess interface {
 // BucketFeeder interface from a BucketAccess object.
 type BucketFeeder interface {
 	// GetChannel return a mutation channel.
-	GetChannel() (mutch <-chan *mc.UprEvent)
+	GetChannel() (mutch <-chan *mc.DcpEvent)
 
 	// StartVbStreams starts a set of vbucket streams on this feed.
 	// returns list of vbuckets for which StreamRequest is successfully
@@ -44,8 +44,8 @@ type BucketFeeder interface {
 }
 
 // concrete type implementing BucketFeeder
-type bucketUpr struct {
-	uprFeed *couchbase.UprFeed
+type bucketDcp struct {
+	dcpFeed *couchbase.DcpFeed
 	bucket  *couchbase.Bucket
 }
 
@@ -53,20 +53,20 @@ type bucketUpr struct {
 func OpenBucketFeed(
 	feedname string, b *couchbase.Bucket) (feeder BucketFeeder, err error) {
 
-	bupr := &bucketUpr{bucket: b}
-	if bupr.uprFeed, err = b.StartUprFeed(feedname, uint32(0)); err != nil {
+	bdcp := &bucketDcp{bucket: b}
+	if bdcp.dcpFeed, err = b.StartDcpFeed(feedname, uint32(0)); err != nil {
 		return nil, err
 	}
-	return bupr, nil
+	return bdcp, nil
 }
 
 // GetChannel implements Feeder{} interface.
-func (bupr *bucketUpr) GetChannel() (mutch <-chan *mc.UprEvent) {
-	return bupr.uprFeed.C
+func (bdcp *bucketDcp) GetChannel() (mutch <-chan *mc.DcpEvent) {
+	return bdcp.dcpFeed.C
 }
 
 // StartVbStreams implements Feeder{} interface.
-func (bupr *bucketUpr) StartVbStreams(
+func (bdcp *bucketDcp) StartVbStreams(
 	opaque uint16, reqTs *protobuf.TsVbuuid) error {
 
 	var err error
@@ -78,7 +78,7 @@ func (bupr *bucketUpr) StartVbStreams(
 		flags, vbuuid := uint32(0), vbuuids[i]
 		start, end := seqnos[i], uint64(0xFFFFFFFFFFFFFFFF)
 		snapStart, snapEnd := snapshots[i].GetStart(), snapshots[i].GetEnd()
-		e := bupr.uprFeed.UprRequestStream(
+		e := bdcp.dcpFeed.DcpRequestStream(
 			vbno, opaque, flags, vbuuid, start, end, snapStart, snapEnd)
 		if e != nil {
 			err = e
@@ -91,12 +91,12 @@ func (bupr *bucketUpr) StartVbStreams(
 }
 
 // EndVbStreams implements Feeder{} interface.
-func (bupr *bucketUpr) EndVbStreams(
+func (bdcp *bucketDcp) EndVbStreams(
 	opaque uint16, ts *protobuf.TsVbuuid) (err error) {
 
 	vbnos := c.Vbno32to16(ts.GetVbnos())
 	for _, vbno := range vbnos {
-		if e := bupr.uprFeed.UprCloseStream(vbno, opaque); e != nil {
+		if e := bdcp.dcpFeed.DcpCloseStream(vbno, opaque); e != nil {
 			err = e
 		}
 	}
@@ -104,8 +104,8 @@ func (bupr *bucketUpr) EndVbStreams(
 }
 
 // CloseFeed implements Feeder{} interface.
-func (bupr *bucketUpr) CloseFeed() error {
-	bupr.uprFeed.Close()
-	bupr.bucket.Close()
+func (bdcp *bucketDcp) CloseFeed() error {
+	bdcp.dcpFeed.Close()
+	bdcp.bucket.Close()
 	return nil
 }

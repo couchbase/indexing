@@ -9,6 +9,7 @@ import "time"
 import "sync"
 
 import "github.com/couchbase/cbauth"
+import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dataport"
 import "github.com/couchbase/indexing/secondary/projector"
@@ -69,11 +70,11 @@ func argParse() []string {
 	options.delBuckets = strings.Split(delBuckets, ",")
 	options.endpoints = strings.Split(endpoints, ",")
 	if options.debug {
-		c.SetLogLevel(c.LogLevelDebug)
+		logging.SetLogLevel(logging.Debug)
 	} else if options.trace {
-		c.SetLogLevel(c.LogLevelTrace)
+		logging.SetLogLevel(logging.Trace)
 	} else {
-		c.SetLogLevel(c.LogLevelInfo)
+		logging.SetLogLevel(logging.Info)
 	}
 
 	args := flag.Args()

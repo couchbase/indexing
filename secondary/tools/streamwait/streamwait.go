@@ -8,6 +8,7 @@ import "log"
 import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/logging"
 
 var options struct {
 	maxVbs   int
@@ -27,11 +28,11 @@ func argParse() []string {
 	flag.Parse()
 
 	if options.debug {
-		c.SetLogLevel(c.LogLevelDebug)
+		logging.SetLogLevel(logging.Debug)
 	} else if options.trace {
-		c.SetLogLevel(c.LogLevelTrace)
+		logging.SetLogLevel(logging.Trace)
 	} else {
-		c.SetLogLevel(c.LogLevelInfo)
+		logging.SetLogLevel(logging.Info)
 	}
 
 	options.vbuckets = make([]uint16, 0, options.maxVbs)
@@ -55,7 +56,7 @@ func main() {
 	// get dcp feed for this bucket.
 	suffix := uint32(time.Now().UnixNano() >> 24)
 	name := fmt.Sprintf("streamwait-test-%v", suffix)
-	uprFeed, err := bucket.StartUprFeed(name, uint32(0))
+	dcpFeed, err := bucket.StartDcpFeed(name, uint32(0))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func main() {
 			flags, vbuuid := uint32(0), uint64(0)
 			start, end := uint64(0), uint64(0xFFFFFFFFFFFFFFFF)
 			snapStart, snapEnd := uint64(0), uint64(0)
-			err := uprFeed.UprRequestStream(
+			err := dcpFeed.DcpRequestStream(
 				vbno, vbno /*opaque*/, flags, vbuuid, start, end,
 				snapStart, snapEnd)
 			if err != nil {
@@ -81,9 +82,9 @@ func main() {
 	commands := make(map[byte]int)
 	for {
 		select {
-		case e, ok := <-uprFeed.C:
+		case e, ok := <-dcpFeed.C:
 			if !ok {
-				log.Fatal("uprFeed channel has closed")
+				log.Fatal("dcpFeed channel has closed")
 			}
 			if _, ok := commands[byte(e.Opcode)]; !ok {
 				commands[byte(e.Opcode)] = 0

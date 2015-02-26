@@ -8,7 +8,7 @@ import (
 
 // The maximum reasonable body length to expect.
 // Anything larger than this will result in an error.
-var MaxBodyLen = int(1e6)
+var MaxBodyLen = int(20 * 1024 * 1024) // 20MB
 
 // MCRequest is memcached Request
 type MCRequest struct {

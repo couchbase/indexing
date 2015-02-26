@@ -1,6 +1,7 @@
 package common
 
 import "github.com/couchbase/indexing/secondary/dcp"
+import "github.com/couchbase/indexing/secondary/logging"
 import "errors"
 import "fmt"
 import "time"
@@ -73,7 +74,7 @@ func (c *ClusterInfoCache) Fetch() error {
 
 	fn := func(r int, err error) error {
 		if r > 0 {
-			Infof("%vError occured during cluster info update (%v) .. Retrying(%d)",
+			logging.Infof("%vError occured during cluster info update (%v) .. Retrying(%d)",
 				c.logPrefix, err, r)
 		}
 

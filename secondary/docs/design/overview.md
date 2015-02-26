@@ -9,7 +9,7 @@ This document describes the High Level Design for Secondary Indexes. It also des
 
 - __Projector__
 
-  The Projector is responsible for mapping mutations to a set of Secondary Key Versions. The Projector can reside within the master KV node in which the mutation is generated or it can reside in separate node. It receives mutations from ep-engine through UPR protocol and sends the evaluated results to Router.  [Details](markdown/projector.md)
+  The Projector is responsible for mapping mutations to a set of Secondary Key Versions. The Projector can reside within the master KV node in which the mutation is generated or it can reside in separate node. It receives mutations from ep-engine through DCP protocol and sends the evaluated results to Router.  [Details](markdown/projector.md)
 
 - __Router__
 
@@ -53,7 +53,7 @@ This document describes the High Level Design for Secondary Indexes. It also des
 ###Communication Protocols
 
 * Projector and Ep-Engine Protocol
-  * [UPR protocol](https://github.com/couchbaselabs/cbupr/blob/master/index.md) will be used to talk to Ep-engine in KV. 
+  * [DCP protocol](https://github.com/couchbaselabs/cbupr/blob/master/index.md) will be used to talk to Ep-engine in KV. 
   
 * Router and Indexer Protocol
 * Query and Indexer Protocol

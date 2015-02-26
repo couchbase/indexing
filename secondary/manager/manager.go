@@ -16,6 +16,7 @@ import (
 	gometaC "github.com/couchbase/gometa/common"
 	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"os"
 	"path/filepath"
@@ -32,7 +33,6 @@ var USE_MASTER_REPO = false
 type IndexManager struct {
 	repo          *MetadataRepo
 	coordinator   *Coordinator
-	reqHandler    *requestHandler
 	eventMgr      *eventManager
 	lifecycleMgr  *LifecycleMgr
 	requestServer RequestServer
@@ -125,12 +125,7 @@ func NewIndexManagerInternal(
 	admin StreamAdmin,
 	config common.Config) (mgr *IndexManager, err error) {
 
-	if common.IsLogEnabled() {
-		gometaL.LogEnable()
-		gometaL.SetLogLevel(int(common.LogLevel()))
-		//gometaL.SetLogLevel(common.LogLevelInfo)
-		gometaL.SetPrefix("Indexing/Gometa")
-	}
+	gometaL.Current = &logging.SystemLogger
 
 	mgr = new(IndexManager)
 	mgr.isClosed = false
@@ -180,13 +175,8 @@ func NewIndexManagerInternal(
 	// start lifecycle manager
 	mgr.lifecycleMgr.Run(mgr.repo)
 
-	// Initialize request handler.  This is non-blocking.  The index manager
-	// will not be able handle new request until request handler is done initialization.
-	//mgr.reqHandler, err = NewRequestHandler(mgr)
-	//if err != nil {
-	//    mgr.Close()
-	//    return nil, err
-	//}
+	// register request handler
+	registerRequestHandler(mgr)
 
 	// coordinator
 	mgr.coordinator = nil
@@ -249,10 +239,6 @@ func (m *IndexManager) Close() {
 
 	if m.eventMgr != nil {
 		m.eventMgr.close()
-	}
-
-	if m.reqHandler != nil {
-		m.reqHandler.close()
 	}
 
 	if m.lifecycleMgr != nil {
@@ -377,28 +363,28 @@ func (m *IndexManager) StopListenTopologyUpdate(id string) {
 //
 func (m *IndexManager) HandleCreateIndexDDL(defn *common.IndexDefn) error {
 
-	if USE_MASTER_REPO {
-		//
-		// Save the index definition
-		//
-		content, err := common.MarshallIndexDefn(defn)
-		if err != nil {
-			return err
-		}
+	key := fmt.Sprintf("%d", defn.DefnId)
+	content, err := common.MarshallIndexDefn(defn)
+	if err != nil {
+		return err
+	}
 
+	if USE_MASTER_REPO {
 		if !m.coordinator.NewRequest(uint32(OPCODE_ADD_IDX_DEFN), indexDefnIdStr(defn.DefnId), content) {
 			// TODO: double check if it exists in the dictionary
 			return NewError(ERROR_MGR_DDL_CREATE_IDX, NORMAL, INDEX_MANAGER, nil,
 				fmt.Sprintf("Fail to complete processing create index statement for index '%s'", defn.Name))
 		}
 	} else {
-		return m.lifecycleMgr.CreateIndex(defn)
+		return m.requestServer.MakeRequest(client.OPCODE_CREATE_INDEX, key, content)
 	}
 
 	return nil
 }
 
 func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
+
+	key := fmt.Sprintf("%d", defnId)
 
 	if USE_MASTER_REPO {
 
@@ -408,28 +394,29 @@ func (m *IndexManager) HandleDeleteIndexDDL(defnId common.IndexDefnId) error {
 				fmt.Sprintf("Fail to complete processing delete index statement for index id = '%d'", defnId))
 		}
 	} else {
-		return m.lifecycleMgr.DeleteIndex(defnId)
+		return m.requestServer.MakeRequest(client.OPCODE_DROP_INDEX, key, []byte(""))
 	}
 
 	return nil
 }
 
 func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, state common.IndexState,
-	streamId common.StreamId, err string) error {
+	streamId common.StreamId, err string, buildTime []uint64) error {
 
 	inst := &topologyChange{
-		Bucket:   bucket,
-		DefnId:   uint64(defnId),
-		State:    uint32(state),
-		StreamId: uint32(streamId),
-		Error:    err}
+		Bucket:    bucket,
+		DefnId:    uint64(defnId),
+		State:     uint32(state),
+		StreamId:  uint32(streamId),
+		Error:     err,
+		BuildTime: buildTime}
 
 	buf, e := json.Marshal(&inst)
 	if e != nil {
 		return e
 	}
 
-	common.Debugf("IndexManager.UpdateIndexInstance(): making request for Index instance update")
+	logging.Debugf("IndexManager.UpdateIndexInstance(): making request for Index instance update")
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
@@ -474,7 +461,7 @@ func (m *IndexManager) GetStabilityTimestampChannel(streamId common.StreamId) ch
 
 func (m *IndexManager) runTimestampKeeper() {
 
-	defer common.Debugf("IndexManager.runTimestampKeeper() : terminate")
+	defer logging.Debugf("IndexManager.runTimestampKeeper() : terminate")
 
 	inboundch := m.timer.getOutputChannel()
 
@@ -484,7 +471,7 @@ func (m *IndexManager) runTimestampKeeper() {
 	timestamps, err := m.repo.GetStabilityTimestamps()
 	if err != nil {
 		// TODO : Determine timestamp not exist versus forestdb error
-		common.Errorf("IndexManager.runTimestampKeeper() : cannot get stability timestamp from repository. Create a new one.")
+		logging.Errorf("IndexManager.runTimestampKeeper() : cannot get stability timestamp from repository. Create a new one.")
 		timestamps = createTimestampListSerializable()
 	}
 
@@ -506,9 +493,9 @@ func (m *IndexManager) runTimestampKeeper() {
 						uint64(time.Now().UnixNano())-lastPersistTime > m.timestampPersistInterval
 					if persistTimestamp {
 						if err := m.repo.SetStabilityTimestamps(timestamps); err != nil {
-							common.Errorf("IndexManager.runTimestampKeeper() : cannot set stability timestamp into repository.")
+							logging.Errorf("IndexManager.runTimestampKeeper() : cannot set stability timestamp into repository.")
 						} else {
-							common.Debugf("IndexManager.runTimestampKeeper() : saved stability timestamp to repository")
+							logging.Debugf("IndexManager.runTimestampKeeper() : saved stability timestamp to repository")
 							persistTimestamp = false
 							lastPersistTime = uint64(time.Now().UnixNano())
 						}
@@ -516,7 +503,7 @@ func (m *IndexManager) runTimestampKeeper() {
 
 					data, err := marshallTimestampSerializable(timestamp)
 					if err != nil {
-						common.Debugf(
+						logging.Debugf(
 							"IndexManager.runTimestampKeeper(): error when marshalling timestamp. Ignore timestamp.  Error=%s",
 							err.Error())
 					} else {
@@ -529,11 +516,11 @@ func (m *IndexManager) runTimestampKeeper() {
 
 func (m *IndexManager) notifyNewTimestamp(wrapper *timestampSerializable) {
 
-	common.Debugf("IndexManager.notifyNewTimestamp(): receive new timestamp, notifying to listener")
+	logging.Debugf("IndexManager.notifyNewTimestamp(): receive new timestamp, notifying to listener")
 	streamId := common.StreamId(wrapper.StreamId)
 	timestamp, err := unmarshallTimestamp(wrapper.Timestamp)
 	if err != nil {
-		common.Debugf("IndexManager.notifyNewTimestamp(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
+		logging.Debugf("IndexManager.notifyNewTimestamp(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
 	} else {
 		ch, ok := m.timestampCh[streamId]
 		if ok {
@@ -551,6 +538,15 @@ func (m *IndexManager) getTimer() *Timer {
 ///////////////////////////////////////////////////////
 // package local function
 ///////////////////////////////////////////////////////
+
+//
+// Get MetadataRepo
+// Any caller uses MetadatdaRepo should only for read purpose.
+// Writer operation should go through LifecycleMgr
+//
+func (m *IndexManager) getMetadataRepo() *MetadataRepo {
+	return m.repo
+}
 
 //
 // Get lifecycle manager
@@ -633,7 +629,7 @@ func (m *IndexManager) stopMasterServiceNoLock() {
 
 func (m *IndexManager) GetStabilityTimestampForVb(streamId common.StreamId, bucket string, vb uint16) (uint64, bool) {
 
-	common.Debugf("IndexManager.GetStabilityTimestampForVb() : get stability timestamp from repo")
+	logging.Debugf("IndexManager.GetStabilityTimestampForVb() : get stability timestamp from repo")
 	savedTimestamps, err := m.repo.GetStabilityTimestamps()
 	if err == nil {
 		seqno, _, ok, err := savedTimestamps.findTimestamp(streamId, bucket, vb)
@@ -641,7 +637,7 @@ func (m *IndexManager) GetStabilityTimestampForVb(streamId common.StreamId, buck
 			return seqno, true
 		}
 	} else {
-		common.Errorf("IndexManager.GetStabilityTimestampForVb() : cannot get stability timestamp from repository.")
+		logging.Errorf("IndexManager.GetStabilityTimestampForVb() : cannot get stability timestamp from repository.")
 	}
 
 	return 0, false
@@ -655,19 +651,19 @@ func (m *IndexManager) CleanupTopology() {
 
 	globalTop, err := m.GetGlobalTopology()
 	if err != nil {
-		common.Errorf("IndexManager.CleanupTopology() : error %v.", err)
+		logging.Errorf("IndexManager.CleanupTopology() : error %v.", err)
 		return
 	}
 
 	for _, key := range globalTop.TopologyKeys {
 		if err := m.repo.deleteMeta(key); err != nil {
-			common.Errorf("IndexManager.CleanupTopology() : error %v.", err)
+			logging.Errorf("IndexManager.CleanupTopology() : error %v.", err)
 		}
 	}
 
 	key := globalTopologyKey()
 	if err := m.repo.deleteMeta(key); err != nil {
-		common.Errorf("IndexManager.CleanupTopology() : error %v.", err)
+		logging.Errorf("IndexManager.CleanupTopology() : error %v.", err)
 	}
 }
 
@@ -677,6 +673,6 @@ func (m *IndexManager) CleanupStabilityTimestamp() {
 
 	key := stabilityTimestampKey()
 	if err := m.repo.deleteMeta(key); err != nil {
-		common.Errorf("IndexManager.CleanupStabilityTimestamp() : error %v.", err)
+		logging.Errorf("IndexManager.CleanupStabilityTimestamp() : error %v.", err)
 	}
 }

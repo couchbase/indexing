@@ -1,6 +1,6 @@
 package protobuf
 
-import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/collatejson"
 import qexpr "github.com/couchbase/query/expression"
 import qparser "github.com/couchbase/query/expression/parser"
@@ -13,7 +13,7 @@ func CompileN1QLExpression(expressions []string) ([]interface{}, error) {
 	for _, expr := range expressions {
 		cExpr, err := qparser.Parse(expr)
 		if err != nil {
-			c.Errorf("CompileN1QLExpression() %v: %v\n", expr, err)
+			logging.Errorf("CompileN1QLExpression() %v: %v\n", expr, err)
 			return nil, err
 		}
 		cExprs = append(cExprs, cExpr)

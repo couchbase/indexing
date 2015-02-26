@@ -11,6 +11,7 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	"os"
@@ -22,10 +23,9 @@ import (
 
 func TestEventMgr(t *testing.T) {
 
-	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 
-	common.Infof("Start TestEventMgr *********************************************************")
+	logging.Infof("Start TestEventMgr *********************************************************")
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
@@ -37,7 +37,7 @@ func TestEventMgr(t *testing.T) {
 		var config = "./config.json"
 	*/
 
-	common.Infof("Start Index Manager")
+	logging.Infof("Start Index Manager")
 	factory := new(util.TestDefaultClientFactory)
 	env := new(util.TestDefaultClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
@@ -51,7 +51,7 @@ func TestEventMgr(t *testing.T) {
 	cleanupEvtMgrTest(mgr, t)
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("Start Listening to event")
+	logging.Infof("Start Listening to event")
 	notifications, err := mgr.StartListenIndexCreate("TestEventMgr")
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestEventMgr(t *testing.T) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	common.Infof("Before DDL")
+	logging.Infof("Before DDL")
 	err = mgr.HandleCreateIndexDDL(idxDefn)
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestEventMgr(t *testing.T) {
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("Stop TestEventMgr. Tearing down *********************************************************")
+	logging.Infof("Stop TestEventMgr. Tearing down *********************************************************")
 
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
@@ -109,9 +109,9 @@ func cleanupEvtMgrTest(mgr *manager.IndexManager, t *testing.T) {
 
 	_, err := mgr.GetIndexDefnById(common.IndexDefnId(300))
 	if err != nil {
-		common.Infof("EventMgrTest.cleanupEvtMgrTest() :  cannot find index defn event_mgr_test.  No cleanup ...")
+		logging.Infof("EventMgrTest.cleanupEvtMgrTest() :  cannot find index defn event_mgr_test.  No cleanup ...")
 	} else {
-		common.Infof("EventMgrTest.cleanupEvtMgrTest() :  found index defn event_mgr_test.  Cleaning up ...")
+		logging.Infof("EventMgrTest.cleanupEvtMgrTest() :  found index defn event_mgr_test.  Cleaning up ...")
 
 		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(300))
 		if err != nil {

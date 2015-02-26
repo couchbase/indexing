@@ -2,6 +2,7 @@ package secondaryindex
 
 import (
 	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
@@ -13,32 +14,34 @@ var CheckCollation = false
 
 func RangeWithClient(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	distinct bool, limit int64, client *qc.GsiClient) (tc.ScanResponse, error) {
-	c.LogIgnore()
 	var scanErr error
 	scanErr = nil
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
-	connErr := client.Range(uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit, func(response qc.ResponseReader) bool {
-		if err := response.Error(); err != nil {
-			scanErr = err
-			return false
-		} else if skeys, pkeys, err := response.GetEntries(); err != nil {
-			scanErr = err
-			return false
-		} else {
-			for i, skey := range skeys {
-				primaryKey := string(pkeys[i])
-				if _, keyPresent := scanResults[primaryKey]; keyPresent {
-					// Duplicate primary key found
-					tc.HandleError(err, "Duplicate primary key found in the scan results: "+primaryKey)
-				} else {
-					scanResults[primaryKey] = skey
+	connErr := client.Range(
+		uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
+		c.AnyConsistency, nil,
+		func(response qc.ResponseReader) bool {
+			if err := response.Error(); err != nil {
+				scanErr = err
+				return false
+			} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+				scanErr = err
+				return false
+			} else {
+				for i, skey := range skeys {
+					primaryKey := string(pkeys[i])
+					if _, keyPresent := scanResults[primaryKey]; keyPresent {
+						// Duplicate primary key found
+						tc.HandleError(err, "Duplicate primary key found in the scan results: "+primaryKey)
+					} else {
+						scanResults[primaryKey] = skey
+					}
 				}
+				return true
 			}
-			return true
-		}
-		return false
-	})
+			return false
+		})
 
 	if connErr != nil {
 		tc.HandleError(connErr, "Connection error in Scan")
@@ -51,7 +54,6 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 
 func Range(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
 	distinct bool, limit int64) (tc.ScanResponse, error) {
-	c.LogIgnore()
 	var scanErr error
 	scanErr = nil
 	var previousSecKey value.Value
@@ -60,41 +62,44 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	client := CreateClient(server, "2itest")
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
-	connErr := client.Range(uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit, func(response qc.ResponseReader) bool {
-		if err := response.Error(); err != nil {
-			scanErr = err
-			return false
-		} else if skeys, pkeys, err := response.GetEntries(); err != nil {
-			scanErr = err
-			return false
-		} else {
-			for i, skey := range skeys {
-				primaryKey := string(pkeys[i])
-				if _, keyPresent := scanResults[primaryKey]; keyPresent {
-					// Duplicate primary key found
-					tc.HandleError(err, "Duplicate primary key found in the scan results: "+primaryKey)
-				} else {
-					// Test collation only if CheckCollation is true
-					if CheckCollation == true && len(skey) > 0 {
-						secVal := skey2Values(skey)[0]
-						if previousSecKey == nil {
-							previousSecKey = secVal
-						} else {
-							if secVal.Collate(previousSecKey) < 0 {
-								errMsg := "Collation check failed. Previous Sec key > Current Sec key"
-								scanErr = errors.New(errMsg)
-								return false
+	connErr := client.Range(
+		uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
+		c.AnyConsistency, nil,
+		func(response qc.ResponseReader) bool {
+			if err := response.Error(); err != nil {
+				scanErr = err
+				return false
+			} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+				scanErr = err
+				return false
+			} else {
+				for i, skey := range skeys {
+					primaryKey := string(pkeys[i])
+					if _, keyPresent := scanResults[primaryKey]; keyPresent {
+						// Duplicate primary key found
+						tc.HandleError(err, "Duplicate primary key found in the scan results: "+primaryKey)
+					} else {
+						// Test collation only if CheckCollation is true
+						if CheckCollation == true && len(skey) > 0 {
+							secVal := skey2Values(skey)[0]
+							if previousSecKey == nil {
+								previousSecKey = secVal
+							} else {
+								if secVal.Collate(previousSecKey) < 0 {
+									errMsg := "Collation check failed. Previous Sec key > Current Sec key"
+									scanErr = errors.New(errMsg)
+									return false
+								}
 							}
 						}
-					}
 
-					scanResults[primaryKey] = skey
+						scanResults[primaryKey] = skey
+					}
 				}
+				return true
 			}
-			return true
-		}
-		return false
-	})
+			return false
+		})
 
 	client.Close()
 	if connErr != nil {
@@ -107,34 +112,36 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 }
 
 func Lookup(indexName, bucketName, server string, values []interface{}, distinct bool, limit int64) (tc.ScanResponse, error) {
-	c.LogIgnore()
 	var scanErr error
 	scanErr = nil
 	// ToDo: Create a client pool
 	client := CreateClient(server, "2itest")
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
-	connErr := client.Lookup(uint64(defnID), []c.SecondaryKey{values}, distinct, limit, func(response qc.ResponseReader) bool {
-		if err := response.Error(); err != nil {
-			scanErr = err
-			return false
-		} else if skeys, pkeys, err := response.GetEntries(); err != nil {
-			scanErr = err
-			return false
-		} else {
-			for i, skey := range skeys {
-				primaryKey := string(pkeys[i])
-				if _, keyPresent := scanResults[primaryKey]; keyPresent {
-					// Duplicate primary key found
-					tc.HandleError(err, "Duplicate primary key found in the scan results: "+primaryKey)
-				} else {
-					scanResults[primaryKey] = skey
+	connErr := client.Lookup(
+		uint64(defnID), []c.SecondaryKey{values}, distinct, limit,
+		c.AnyConsistency, nil,
+		func(response qc.ResponseReader) bool {
+			if err := response.Error(); err != nil {
+				scanErr = err
+				return false
+			} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+				scanErr = err
+				return false
+			} else {
+				for i, skey := range skeys {
+					primaryKey := string(pkeys[i])
+					if _, keyPresent := scanResults[primaryKey]; keyPresent {
+						// Duplicate primary key found
+						tc.HandleError(err, "Duplicate primary key found in the scan results: "+primaryKey)
+					} else {
+						scanResults[primaryKey] = skey
+					}
 				}
+				return true
 			}
-			return true
-		}
-		return false
-	})
+			return false
+		})
 
 	client.Close()
 	if connErr != nil {
@@ -146,7 +153,6 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 }
 
 func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse, error) {
-	c.LogIgnore()
 	var scanErr error
 	scanErr = nil
 	var previousSecKey value.Value
@@ -155,41 +161,44 @@ func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse
 	client := CreateClient(server, "2itest")
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
-	connErr := client.ScanAll(uint64(defnID), limit, func(response qc.ResponseReader) bool {
-		if err := response.Error(); err != nil {
-			scanErr = err
-			return false
-		} else if skeys, pkeys, err := response.GetEntries(); err != nil {
-			scanErr = err
-			return false
-		} else {
-			for i, skey := range skeys {
-				primaryKey := string(pkeys[i])
-				if _, keyPresent := scanResults[primaryKey]; keyPresent {
-					// Duplicate primary key found
-					tc.HandleError(err, "Duplicate primary key found in the scan results: "+primaryKey)
-				} else {
-					// Test collation only if CheckCollation is true
-					if CheckCollation == true && len(skey) > 0 {
-						secVal := skey2Values(skey)[0]
-						if previousSecKey == nil {
-							previousSecKey = secVal
-						} else {
-							if secVal.Collate(previousSecKey) < 0 {
-								errMsg := "Collation check failed. Previous Sec key > Current Sec key"
-								scanErr = errors.New(errMsg)
-								return false
+	connErr := client.ScanAll(
+		uint64(defnID), limit,
+		c.AnyConsistency, nil,
+		func(response qc.ResponseReader) bool {
+			if err := response.Error(); err != nil {
+				scanErr = err
+				return false
+			} else if skeys, pkeys, err := response.GetEntries(); err != nil {
+				scanErr = err
+				return false
+			} else {
+				for i, skey := range skeys {
+					primaryKey := string(pkeys[i])
+					if _, keyPresent := scanResults[primaryKey]; keyPresent {
+						// Duplicate primary key found
+						tc.HandleError(err, "Duplicate primary key found in the scan results: "+primaryKey)
+					} else {
+						// Test collation only if CheckCollation is true
+						if CheckCollation == true && len(skey) > 0 {
+							secVal := skey2Values(skey)[0]
+							if previousSecKey == nil {
+								previousSecKey = secVal
+							} else {
+								if secVal.Collate(previousSecKey) < 0 {
+									errMsg := "Collation check failed. Previous Sec key > Current Sec key"
+									scanErr = errors.New(errMsg)
+									return false
+								}
 							}
 						}
-					}
 
-					scanResults[primaryKey] = skey
+						scanResults[primaryKey] = skey
+					}
 				}
+				return true
 			}
-			return true
-		}
-		return false
-	})
+			return false
+		})
 
 	client.Close()
 	if connErr != nil {
@@ -201,7 +210,6 @@ func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse
 }
 
 func CountRange(indexName, bucketName, server string, low, high []interface{}, inclusion uint32) (int64, error) {
-	c.LogIgnore()
 	// ToDo: Create a client pool
 	client := CreateClient(server, "2itest")
 	defnID, _ := GetDefnID(client, bucketName, indexName)
@@ -214,7 +222,6 @@ func CountRange(indexName, bucketName, server string, low, high []interface{}, i
 }
 
 func CountLookup(indexName, bucketName, server string, values []interface{}) (int64, error) {
-	c.LogIgnore()
 	// ToDo: Create a client pool
 	client := CreateClient(server, "2itest")
 	defnID, _ := GetDefnID(client, bucketName, indexName)
@@ -223,6 +230,19 @@ func CountLookup(indexName, bucketName, server string, values []interface{}) (in
 		return 0, err
 	} else {
 		return count, nil
+	}
+}
+
+func RangeStatistics(indexName, bucketName, server string, low, high []interface{}, inclusion uint32) error {
+	// ToDo: Create a client pool
+	client := CreateClient(server, "2itest")
+	defnID, _ := GetDefnID(client, bucketName, indexName)
+	statistics, err := client.RangeStatistics(uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
+	if err != nil {
+		return err
+	} else {
+		fmt.Println("Statistics: \n\n", statistics)
+		return nil
 	}
 }
 

@@ -10,7 +10,7 @@ Insert/Update Mutation Workflow can be divided into 3 phases:
 
 * __Key Distribution Phase(Step 1-7)__
 
-  During this phase, [Projector](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/overview.md#components) receives mutations from [UPR](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md) (Step 1-2), 
+  During this phase, [Projector](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/overview.md#components) receives mutations from [DCP](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/markdown/terminology.md) (Step 1-2), 
 runs mapping functions and extracts secondary keys(Step 3). 
 These are then sent to [Router](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/overview.md#components) (Step 4) to be sent to individual [Indexers](https://github.com/couchbase/indexing/blob/master/secondary/docs/design/overview.md#components) running on different nodes(Step 5-7).
 

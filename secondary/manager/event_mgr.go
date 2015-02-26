@@ -11,7 +11,7 @@ package manager
 
 import (
 	"fmt"
-	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"sync"
 )
 
@@ -60,7 +60,7 @@ func (e *eventManager) close() {
 
 	defer func() {
 		if r := recover(); r != nil {
-			c.Warnf("panic in eventManager.Close() : %s.  Ignored.\n", r)
+			logging.Warnf("panic in eventManager.Close() : %s.  Ignored.\n", r)
 		}
 	}()
 

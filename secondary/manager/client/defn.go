@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"github.com/couchbase/gometa/common"
 	c "github.com/couchbase/indexing/secondary/common"
+	logging "github.com/couchbase/indexing/secondary/logging"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -53,6 +54,7 @@ type IndexInstDistribution struct {
 	State      uint32                  `json:"state,omitempty"`
 	StreamId   uint32                  `json:"streamId,omitempty"`
 	Error      string                  `json:"error,omitempty"`
+	BuildTime  []uint64                `json:"buildTime,omitempty"`
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
 }
 
@@ -152,7 +154,7 @@ func MarshallIndexIdList(list *IndexIdList) ([]byte, error) {
 
 func UnmarshallServiceMap(data []byte) (*ServiceMap, error) {
 
-	c.Debugf("UnmarshallServiceMap: %v", string(data))
+	logging.Debugf("UnmarshallServiceMap: %v", string(data))
 
 	list := new(ServiceMap)
 	if err := json.Unmarshal(data, list); err != nil {
@@ -169,7 +171,7 @@ func MarshallServiceMap(srvMap *ServiceMap) ([]byte, error) {
 		return nil, err
 	}
 
-	c.Debugf("MarshallServiceMap: %v", string(buf))
+	logging.Debugf("MarshallServiceMap: %v", string(buf))
 
 	return buf, nil
 }

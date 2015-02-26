@@ -375,7 +375,7 @@ func (ts *TsVbuuid) Repr() string {
 		ts.GetPool(), ts.GetBucket(), len(vbnos))
 	seqnos, vbuuids := ts.GetSeqnos(), ts.GetVbuuids()
 	snapshots := ts.GetSnapshots()
-	s += fmt.Sprintf("    vbno, vbuuid, seqno, snapshot-start, snapshot-end\n")
+	s += fmt.Sprintf("    {vbno, vbuuid, seqno, snapshot-start, snapshot-end}\n")
 	for i := 0; i < len(vbnos); i++ {
 		start, end := snapshots[i].GetStart(), snapshots[i].GetEnd()
 		s += fmt.Sprintf("    {%5d %16x %10d %10d %10d}\n",

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"io/ioutil"
 	"net/http"
 	"runtime"
@@ -21,9 +22,7 @@ import (
 )
 
 const (
-	indexerMetaDir          = "/indexer/"
-	indexerSettingsMetaPath = indexerMetaDir + "settings"
-	indexCompactonMetaPath  = indexerMetaDir + "triggerCompaction"
+	indexCompactonMetaPath = common.IndexingMetaDir + "triggerCompaction"
 )
 
 // Implements dynamic settings management for indexer
@@ -44,7 +43,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 		cancelCh:  make(chan struct{}),
 	}
 
-	value, _, err := metakv.Get(indexerSettingsMetaPath)
+	config, err := common.GetSettingsConfig(config)
 	if err != nil {
 		return s, nil, &MsgError{
 			err: Error{
@@ -54,11 +53,8 @@ func NewSettingsManager(supvCmdch MsgChannel,
 			}}
 	}
 
-	if len(value) > 0 {
-		config.Update(value)
-	}
-
 	setNumCPUs(config)
+	setLogger(config)
 
 	http.HandleFunc("/settings", s.handleSettingsReq)
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
@@ -68,12 +64,13 @@ func NewSettingsManager(supvCmdch MsgChannel,
 			if err == nil {
 				return
 			} else {
-				common.Errorf("IndexerSettingsManager: metakv notifier failed (%v)..Restarting", err)
+				logging.Errorf("IndexerSettingsManager: metakv notifier failed (%v)..Restarting", err)
 			}
 		}
 	}()
 
-	return s, config, &MsgSuccess{}
+	indexerConfig := config.SectionConfig("indexer.", true)
+	return s, indexerConfig, &MsgSuccess{}
 }
 
 func (s *settingsManager) writeOk(w http.ResponseWriter) {
@@ -99,7 +96,7 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 		bytes, _ := ioutil.ReadAll(r.Body)
 
 		config := s.config.Clone()
-		current, rev, err := metakv.Get(indexerSettingsMetaPath)
+		current, rev, err := metakv.Get(common.IndexingSettingsMetaPath)
 		if err == nil {
 			if len(current) > 0 {
 				config.Update(current)
@@ -112,20 +109,20 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		settingsConfig := config.SectionConfig("settings.", false)
+		settingsConfig := config.FilterConfig(".settings.")
 		newSettingsBytes := settingsConfig.Json()
-		if err = metakv.Set(indexerSettingsMetaPath, newSettingsBytes, rev); err != nil {
+		if err = metakv.Set(common.IndexingSettingsMetaPath, newSettingsBytes, rev); err != nil {
 			s.writeError(w, err)
 			return
 		}
 		s.writeOk(w)
 	} else if r.Method == "GET" {
-		settingsConfig, err := getSettingsConfig(s.config)
+		settingsConfig, err := common.GetSettingsConfig(s.config)
 		if err != nil {
 			s.writeError(w, err)
 			return
 		}
-		s.writeJson(w, settingsConfig.Json())
+		s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
 		return
@@ -155,7 +152,7 @@ loop:
 		case cmd, ok := <-s.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == STORAGE_MGR_SHUTDOWN {
-					common.Infof("SettingsManager::run Shutting Down")
+					logging.Infof("SettingsManager::run Shutting Down")
 					close(s.cancelCh)
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
@@ -168,15 +165,17 @@ loop:
 }
 
 func (s *settingsManager) metaKVCallback(path string, value []byte, rev interface{}) error {
-	if path == indexerSettingsMetaPath {
-		common.Infof("New settings received: \n%s", string(value))
+	if path == common.IndexingSettingsMetaPath {
+		logging.Infof("New settings received: \n%s", string(value))
 		config := s.config.Clone()
 		config.Update(value)
 		s.config = config
 		setNumCPUs(config)
+		setLogger(config)
 
+		indexerConfig := s.config.SectionConfig("indexer.", true)
 		s.supvMsgch <- &MsgConfigUpdate{
-			cfg: s.config,
+			cfg: indexerConfig,
 		}
 	} else if path == indexCompactonMetaPath {
 		currentToken := s.compactionToken
@@ -185,7 +184,7 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 			return nil
 		}
 
-		common.Infof("Manual compaction trigger requested")
+		logging.Infof("Manual compaction trigger requested")
 		replych := make(chan []IndexStorageStats)
 		statReq := &MsgIndexStorageStats{respch: replych}
 		s.supvMsgch <- statReq
@@ -198,13 +197,13 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 					instId: is.InstId,
 					errch:  errch,
 				}
-				common.Infof("ManualCompaction: Compacting index instance:%v", is.InstId)
+				logging.Infof("ManualCompaction: Compacting index instance:%v", is.InstId)
 				s.supvMsgch <- compactReq
 				err := <-errch
 				if err == nil {
-					common.Infof("ManualCompaction: Finished compacting index instance:%v", is.InstId)
+					logging.Infof("ManualCompaction: Finished compacting index instance:%v", is.InstId)
 				} else {
-					common.Errorf("ManualCompaction: Index instance:%v Compaction failed with reason - %v", is.InstId, err)
+					logging.Errorf("ManualCompaction: Index instance:%v Compaction failed with reason - %v", is.InstId, err)
 				}
 			}
 		}()
@@ -213,23 +212,26 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 	return nil
 }
 
-func getSettingsConfig(cfg common.Config) (common.Config, error) {
-	settingsConfig := cfg.SectionConfig("settings.", false)
-	current, _, err := metakv.Get(indexerSettingsMetaPath)
-	if err == nil {
-		if len(current) > 0 {
-			settingsConfig.Update(current)
-		}
-	}
-	return settingsConfig, err
-}
-
 func setNumCPUs(config common.Config) {
-	ncpu := config["settings.max_cpu_percent"].Int() / 100
+	ncpu := config["indexer.settings.max_cpu_percent"].Int() / 100
 	if ncpu == 0 {
 		ncpu = runtime.NumCPU()
 	}
 
-	common.Infof("Setting maxcpus = %d", ncpu)
+	logging.Infof("Setting maxcpus = %d", ncpu)
 	runtime.GOMAXPROCS(ncpu)
+}
+
+func setLogger(config common.Config) {
+	logLevel := config["indexer.settings.log_level"].String()
+	logOverride := config["indexer.settings.log_override"].String()
+
+	if len(logOverride) > 0 {
+		logging.Infof("Setting log override = %v", logOverride)
+		logging.AddOverride(logOverride)
+	} else {
+		level := logging.Level(logLevel)
+		logging.Infof("Setting log level to %v", level)
+		logging.SetLogLevel(level)
+	}
 }

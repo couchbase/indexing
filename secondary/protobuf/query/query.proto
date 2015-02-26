@@ -6,6 +6,13 @@ message Error {
     required string error = 1; // Empty string means success
 }
 
+// consistency timestamp specifying a subset of vbucket.
+message TsConsistency {
+    repeated uint32 vbnos   = 1; // subset of vbucket numbers
+    repeated uint64 seqnos  = 2; // corresponding seqno. for each vbucket
+    repeated uint64 vbuuids = 3; // corresponding vbuuid for each vbucket
+}
+
 // Request can be one of the optional field.
 message QueryPayload {
     required uint32             version           = 1;
@@ -33,18 +40,22 @@ message StatisticsResponse {
 
 // Scan request to indexer.
 message ScanRequest {
-    required uint64 defnID    = 1;
-    required Span   span      = 2;
-    required bool   distinct  = 3;
-    required int64  limit     = 4;
-    required int64  pageSize  = 5;
+    required uint64        defnID   = 1;
+    required Span          span     = 2;
+    required bool          distinct = 3;
+    required int64         limit    = 4;
+    required int64         pageSize = 5;
+    required uint32        cons     = 6;
+    optional TsConsistency vector   = 7;
 }
 
 // Full table scan request from indexer.
 message ScanAllRequest {
-    required uint64 defnID    = 1;
-    required int64  pageSize  = 2;
-    required int64  limit     = 3;
+    required uint64        defnID   = 1;
+    required int64         pageSize = 2;
+    required int64         limit    = 3;
+    required uint32        cons     = 4;
+    optional TsConsistency vector   = 5;
 }
 
 // Request by client to stop streaming the query results.

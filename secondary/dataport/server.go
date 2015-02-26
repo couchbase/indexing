@@ -57,11 +57,11 @@ import "fmt"
 import "io"
 import "net"
 import "time"
-import "runtime/debug"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 import "github.com/couchbase/indexing/secondary/transport"
+import "github.com/couchbase/indexing/secondary/logging"
 
 // Error codes
 
@@ -162,22 +162,22 @@ func NewServer(
 	}
 	s.logPrefix = fmt.Sprintf("DATP[->dataport %q]", laddr)
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
-		c.Errorf("%v failed starting ! %v\n", s.logPrefix, err)
+		logging.Errorf("%v failed starting ! %v\n", s.logPrefix, err)
 		return nil, err
 	}
 	go listener(s.logPrefix, s.lis, s.reqch) // spawn daemon
 	go s.genServer(s.reqch)                  // spawn gen-server
-	c.Infof("%v started ...", s.logPrefix)
+	logging.Infof("%v started ...", s.logPrefix)
 	return s, nil
 }
 
 func (s *Server) addUuids(started, hostUuids keeper) keeper {
 	for x, newvb := range started {
 		if hostUuids.isActive(newvb.bucket, newvb.vbno) {
-			c.Errorf("%v duplicate vbucket %#v\n", s.logPrefix, newvb)
+			logging.Errorf("%v duplicate vbucket %#v\n", s.logPrefix, newvb)
 		}
 		hostUuids[x] = newvb
-		c.Debugf("%v added vbucket %v\n", s.logPrefix, newvb.id())
+		logging.Debugf("%v added vbucket %v\n", s.logPrefix, newvb.id())
 	}
 	return hostUuids
 }
@@ -185,11 +185,13 @@ func (s *Server) addUuids(started, hostUuids keeper) keeper {
 func (s *Server) delUuids(finished, hostUuids keeper) keeper {
 	for x := range finished {
 		avb, ok := hostUuids[x]
-		if !ok {
-			c.Errorf("%v not active vbucket %#v\n", s.logPrefix, avb)
+		if ok {
+			delete(hostUuids, x)
+			logging.Debugf("%v deleted vbucket %v\n", s.logPrefix, avb.id())
+
+		} else {
+			logging.Errorf("%v not active vbucket %#v\n", s.logPrefix, avb)
 		}
-		delete(hostUuids, x)
-		c.Debugf("%v deleted vbucket %v\n", s.logPrefix, avb.id())
 	}
 	return hostUuids
 }
@@ -218,8 +220,8 @@ func (s *Server) genServer(reqch chan []interface{}) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v gen-server crashed: %v\n", s.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v gen-server crashed: %v\n", s.logPrefix, r)
+			logging.Errorf("%s", logging.StackTrace())
 			s.handleClose()
 		}
 	}()
@@ -235,13 +237,13 @@ loop:
 			case serverCmdNewConnection:
 				conn, raddr := msg.args[0].(net.Conn), msg.raddr
 				if _, ok := s.conns[raddr]; ok {
-					c.Errorf("%v %q already active\n", s.logPrefix, raddr)
+					logging.Errorf("%v %q already active\n", s.logPrefix, raddr)
 					conn.Close()
 				} else { // connection accepted
 					worker := make(chan interface{}, s.maxVbuckets)
 					s.conns[raddr] = &netConn{conn: conn, worker: worker}
 					n := len(s.conns)
-					c.Infof("%v new connection %q +%d\n", s.logPrefix, raddr, n)
+					logging.Infof("%v new connection %q +%d\n", s.logPrefix, raddr, n)
 					s.startWorker(raddr)
 				}
 
@@ -279,7 +281,7 @@ loop:
 
 			if appmsg != nil {
 				s.appch <- appmsg
-				c.Tracef("%v appmsg: %T:%+v\n", s.logPrefix, appmsg, appmsg)
+				logging.Tracef("%v appmsg: %T:%+v\n", s.logPrefix, appmsg, appmsg)
 			}
 		}
 	}
@@ -287,15 +289,15 @@ loop:
 
 // handle new connection
 func (s *Server) handleNewConnection(conn net.Conn, raddr string) error {
-	c.Tracef("%v connection request from %q\n", s.logPrefix, raddr)
+	logging.Tracef("%v connection request from %q\n", s.logPrefix, raddr)
 	if _, ok := s.conns[raddr]; ok {
-		c.Errorf("%v %q already active\n", s.logPrefix, raddr)
+		logging.Errorf("%v %q already active\n", s.logPrefix, raddr)
 		return ErrorDuplicateClient
 	}
 	// connection accepted
 	worker := make(chan interface{}, s.maxVbuckets)
 	s.conns[raddr] = &netConn{conn: conn, worker: worker, active: false}
-	c.Tracef("%v total active connections %v\n", s.logPrefix, len(s.conns))
+	logging.Tracef("%v total active connections %v\n", s.logPrefix, len(s.conns))
 	return nil
 }
 
@@ -303,8 +305,8 @@ func (s *Server) handleNewConnection(conn net.Conn, raddr string) error {
 func (s *Server) handleClose() {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v handleClose() crashed: %v\n", s.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v handleClose() crashed: %v\n", s.logPrefix, r)
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 
@@ -316,13 +318,13 @@ func (s *Server) handleClose() {
 	s.lis, s.conns = nil, nil
 	close(s.finch)
 
-	c.Infof("%v ... stopped\n", s.logPrefix)
+	logging.Infof("%v ... stopped\n", s.logPrefix)
 	return
 }
 
 // start a connection worker to read mutation message for a subset of vbuckets.
 func (s *Server) startWorker(raddr string) {
-	c.Tracef("%v starting worker for connection %q\n", s.logPrefix, raddr)
+	logging.Tracef("%v starting worker for connection %q\n", s.logPrefix, raddr)
 	nc := s.conns[raddr]
 	go doReceive(s.logPrefix, nc, s.maxPayload, s.readDeadline, s.appch, s.reqch)
 	nc.active = true
@@ -338,24 +340,24 @@ func (s *Server) jumboErrorHandler(
 	var whatJumbo string
 
 	if _, ok := s.conns[raddr]; ok == false {
-		c.Errorf("%v fatal remote %q already gone\n", s.logPrefix, raddr)
+		logging.Errorf("%v fatal remote %q already gone\n", s.logPrefix, raddr)
 		return hostUuids, nil
 	}
 
 	if err == io.EOF {
-		c.Errorf("%v remote %q closed\n", s.logPrefix, raddr)
+		logging.Errorf("%v remote %q closed\n", s.logPrefix, raddr)
 		whatJumbo = "closeremote"
 
 	} else if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
-		c.Errorf("%v remote %q timeout: %v\n", s.logPrefix, raddr, err)
+		logging.Errorf("%v remote %q timeout: %v\n", s.logPrefix, raddr, err)
 		whatJumbo = "closeremote"
 
 	} else if err != nil {
-		c.Errorf("%v remote %q unknown error: %v\n", s.logPrefix, raddr, err)
+		logging.Errorf("%v remote %q unknown error: %v\n", s.logPrefix, raddr, err)
 		whatJumbo = "closeall"
 
 	} else {
-		c.Errorf("%v no error why did you call jumbo !!!\n", s.logPrefix)
+		logging.Errorf("%v no error why did you call jumbo !!!\n", s.logPrefix)
 		return hostUuids, nil
 	}
 
@@ -385,13 +387,13 @@ func (s *Server) jumboErrorHandler(
 func closeConnection(prefix, raddr string, nc *netConn) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v closeConnection(%q) crashed: %v\n", prefix, raddr, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v closeConnection(%q) crashed: %v\n", prefix, raddr, r)
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 	close(nc.worker)
 	nc.conn.Close()
-	c.Infof("%v connection %q closed !\n", prefix, raddr)
+	logging.Infof("%v connection %q closed !\n", prefix, raddr)
 }
 
 // get all remote connections for `host`
@@ -411,8 +413,8 @@ func remoteConnections(raddr string, conns map[string]*netConn) []string {
 func listener(prefix string, lis net.Listener, reqch chan []interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v listener crashed: %v\n", prefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v listener crashed: %v\n", prefix, r)
+			logging.Errorf("%s", logging.StackTrace())
 			msg := serverMessage{cmd: serverCmdError, err: ErrorDaemonExit}
 			reqch <- []interface{}{msg}
 		}
@@ -423,7 +425,7 @@ loop:
 		// TODO: handle `err` for lis.Close() and avoid panic(err)
 		if conn, err := lis.Accept(); err != nil {
 			if e, ok := err.(*net.OpError); ok && e.Op == "accept" {
-				c.Infof("%v ... stopped\n", prefix)
+				logging.Infof("%v ... stopped\n", prefix)
 				break loop
 			} else {
 				panic(err)
@@ -480,7 +482,7 @@ func doReceive(
 					finished[id] = avb
 				}
 			}
-			c.Tracef("%v {%v, %v}\n", prefix, bucket, vbno)
+			logging.Tracef("%v {%v, %v}\n", prefix, bucket, vbno)
 		}
 	}
 
@@ -492,14 +494,14 @@ loop:
 		if payload, err := pkt.Receive(conn); err != nil {
 			msg.cmd, msg.err = serverCmdError, err
 			reqch <- []interface{}{msg}
-			c.Errorf("%v worker %q exit: %v\n", prefix, msg.raddr, err)
+			logging.Errorf("%v worker %q exit: %v\n", prefix, msg.raddr, err)
 			break loop
 
 		} else if vbmap, ok := payload.(*protobuf.VbConnectionMap); ok {
 			msg.cmd, msg.args = serverCmdVbmap, []interface{}{vbmap}
 			reqch <- []interface{}{msg}
 			format := "%v worker %q exit: `serverCmdVbmap`\n"
-			c.Tracef(format, prefix, msg.raddr)
+			logging.Tracef(format, prefix, msg.raddr)
 			break loop
 
 		} else if vbs, ok := payload.([]*protobuf.VbKeyVersions); ok {
@@ -511,21 +513,21 @@ loop:
 					msg.args = []interface{}{started, finished}
 					reqch <- []interface{}{msg}
 					format := "%v worker %q exit: serverCmdVbcontrol {%v,%v}\n"
-					c.Tracef(format, prefix, msg.raddr, len(started), len(finished))
+					logging.Tracef(format, prefix, msg.raddr, len(started), len(finished))
 					break loop
 				}
 
 			case <-worker:
 				msg.cmd, msg.err = serverCmdError, ErrorWorkerKilled
 				reqch <- []interface{}{msg}
-				c.Errorf("%v worker %q exit: %v\n", prefix, msg.raddr, msg.err)
+				logging.Errorf("%v worker %q exit: %v\n", prefix, msg.raddr, msg.err)
 				break loop
 			}
 
 		} else {
 			msg.cmd, msg.err = serverCmdError, ErrorPayload
 			reqch <- []interface{}{msg}
-			c.Errorf("%v worker %q exit: %v\n", prefix, msg.raddr, msg.err)
+			logging.Errorf("%v worker %q exit: %v\n", prefix, msg.raddr, msg.err)
 			break loop
 		}
 	}

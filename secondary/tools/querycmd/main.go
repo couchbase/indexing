@@ -5,44 +5,36 @@ import "fmt"
 import "log"
 import "os"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/querycmd"
-import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
-import "github.com/couchbaselabs/goprotobuf/proto"
-
-var testStatisticsResponse = &protobuf.StatisticsResponse{
-	Stats: &protobuf.IndexStatistics{
-		KeysCount:       proto.Uint64(100),
-		UniqueKeysCount: proto.Uint64(100),
-		KeyMin:          []byte(`"aaaaa"`),
-		KeyMax:          []byte(`"zzzzz"`),
-	},
-}
-var testResponseStream = &protobuf.ResponseStream{
-	IndexEntries: []*protobuf.IndexEntry{
-		&protobuf.IndexEntry{
-			EntryKey: []byte(`["aaaaa"]`), PrimaryKey: []byte("key1"),
-		},
-		&protobuf.IndexEntry{
-			EntryKey: []byte(`["aaaaa"]`), PrimaryKey: []byte("key2"),
-		},
-	},
-}
 
 func usage(fset *flag.FlagSet) {
 	fmt.Fprintf(os.Stderr, "Usage: %s (sanity|bench|...)\n", os.Args[0])
 }
 
 func main() {
+	logging.SetLogLevel(logging.Silent)
+
 	cmdOptions, args, fset, err := querycmd.ParseArgs(os.Args[1:])
 	if err != nil {
-		log.Fatal(err)
+		logging.Fatalf("%v", err)
 	} else if cmdOptions.Help {
 		usage(fset)
 		os.Exit(0)
 	} else if len(args) < 1 {
-		log.Fatalf("specify a command")
+		logging.Fatalf("%v", "specify a command")
+	}
+
+	b, err := c.ConnectBucket(cmdOptions.Server, "default", "default")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer b.Close()
+	maxvb, err := c.MaxVbuckets(b)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
@@ -66,6 +58,9 @@ func main() {
 
 	case "benchmark":
 		doBenchmark(cmdOptions.Server, "localhost:9101")
+
+	case "consistency":
+		doConsistency(cmdOptions.Server, maxvb, client)
 	}
 	client.Close()
 }

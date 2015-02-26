@@ -5,6 +5,7 @@ import "expvar"
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+import "github.com/couchbase/indexing/secondary/logging"
 
 // list of requests handled by this adminport
 var reqVbmap = &protobuf.VbmapRequest{}
@@ -34,8 +35,8 @@ func (p *Projector) mainAdminPort(reqch chan ap.Request) {
 	p.admind.Register(reqRepairEndpoints)
 	p.admind.Register(reqShutdownFeed)
 	p.admind.Register(reqStats)
-	p.admind.RegisterHttpHandler("/stats", p.handleStats)
-	p.admind.RegisterHttpHandler("/settings", p.handleSettings)
+	p.admind.RegisterHTTPHandler("/stats", p.handleStats)
+	p.admind.RegisterHTTPHandler("/settings", p.handleSettings)
 
 	expvar.Publish("projector", expvar.Func(p.doStatistics))
 
@@ -55,7 +56,7 @@ loop:
 	}
 
 	p.admind.Stop()
-	c.Infof("%v ... adminport stopped\n", p.logPrefix)
+	logging.Infof("%v ... adminport stopped\n", p.logPrefix)
 }
 
 // re-entrant / concurrent request handler.
@@ -94,7 +95,7 @@ func (p *Projector) handleRequest(req ap.Request) {
 	if err == nil {
 		req.Send(response)
 	} else {
-		c.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v %v\n", p.logPrefix, err)
 		req.SendError(err)
 	}
 }

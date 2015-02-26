@@ -13,10 +13,11 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/gometa/common"
-	"github.com/couchbase/gometa/log"
+	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"net"
 	"strconv"
@@ -70,6 +71,7 @@ type InstanceDefn struct {
 	InstId    c.IndexInstId
 	State     c.IndexState
 	Error     string
+	BuildTime []uint64
 	IndexerId c.IndexerId
 	Endpts    []c.Endpoint
 }
@@ -82,12 +84,7 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 
-	if c.IsLogEnabled() {
-		log.LogEnable()
-		log.SetLogLevel(int(c.LogLevel()))
-		//log.SetLogLevel(common.LogLevelTrace)
-		log.SetPrefix("MetadataProvider/Gometa")
-	}
+	gometaL.Current = &logging.SystemLogger
 
 	s = new(MetadataProvider)
 	s.watchers = make(map[c.IndexerId]*watcher)
@@ -98,7 +95,7 @@ func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 	if err != nil {
 		return nil, err
 	}
-	c.Debugf("MetadataProvider.NewMetadataProvider(): MetadataProvider follower ID %s", s.providerId)
+	logging.Debugf("MetadataProvider.NewMetadataProvider(): MetadataProvider follower ID %s", s.providerId)
 
 	return s, nil
 }
@@ -122,7 +119,18 @@ func (o *MetadataProvider) WatchMetadata(indexAdminPort string) (c.IndexerId, er
 		return c.INDEXER_ID_NIL, errors.New(fmt.Sprintf("Cannot initiate connection to indexer port %s.", indexAdminPort))
 	}
 
+	if err := watcher.updateServiceMap(indexAdminPort); err != nil {
+		return c.INDEXER_ID_NIL, err
+	}
+
 	indexerId := watcher.getIndexerId()
+
+	oldWatcher, ok := o.watchers[indexerId]
+	if ok {
+		// there is an old watcher with an matching indexerId.  Close it ...
+		oldWatcher.close()
+	}
+
 	o.watchers[indexerId] = watcher
 	return indexerId, nil
 }
@@ -355,6 +363,16 @@ func (o *MetadataProvider) FindServiceForIndexer(id c.IndexerId) (adminport stri
 	}
 
 	return watcher.getAdminAddr(), watcher.getScanAddr(), nil
+}
+
+func (o *MetadataProvider) UpdateServiceAddrForIndexer(id c.IndexerId, adminport string) error {
+
+	watcher, err := o.findWatcherByIndexerId(id)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Cannot locate cluster node."))
+	}
+
+	return watcher.updateServiceMap(adminport)
 }
 
 func (o *MetadataProvider) FindIndexByName(name string, bucket string) *IndexMetadata {
@@ -634,6 +652,7 @@ func (r *metadataRepo) updateIndexMetadataNoLock(defnId c.IndexDefnId, inst *Ind
 		idxInst.InstId = c.IndexInstId(inst.InstId)
 		idxInst.State = c.IndexState(inst.State)
 		idxInst.Error = inst.Error
+		idxInst.BuildTime = inst.BuildTime
 
 		for _, partition := range inst.Partitions {
 			for _, slice := range partition.SinglePartition.Slices {
@@ -664,6 +683,45 @@ func newWatcher(o *MetadataProvider, addr string) *watcher {
 	s.isClosed = false
 
 	return s
+}
+
+func (w *watcher) updateServiceMap(adminport string) error {
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if w.serviceMap == nil {
+		panic("Index node metadata is not initialized")
+	}
+
+	h, _, err := net.SplitHostPort(adminport)
+	if err != nil {
+		return err
+	}
+
+	if len(h) > 0 {
+		w.serviceMap.AdminAddr = adminport
+
+		_, p, err := net.SplitHostPort(w.serviceMap.NodeAddr)
+		if err != nil {
+			return err
+		}
+		w.serviceMap.NodeAddr = net.JoinHostPort(h, p)
+
+		_, p, err = net.SplitHostPort(w.serviceMap.ScanAddr)
+		if err != nil {
+			return err
+		}
+		w.serviceMap.ScanAddr = net.JoinHostPort(h, p)
+
+		_, p, err = net.SplitHostPort(w.serviceMap.HttpAddr)
+		if err != nil {
+			return err
+		}
+		w.serviceMap.HttpAddr = net.JoinHostPort(h, p)
+	}
+
+	return nil
 }
 
 func (w *watcher) getIndexerId() c.IndexerId {
@@ -744,13 +802,13 @@ func (w *watcher) refreshServiceMap() error {
 
 	content, err := w.makeRequest(OPCODE_SERVICE_MAP, "Service Map", []byte(""))
 	if err != nil {
-		c.Errorf("watcher.refreshServiceMap() %s", err)
+		logging.Errorf("watcher.refreshServiceMap() %s", err)
 		return err
 	}
 
 	srvMap, err := UnmarshallServiceMap(content)
 	if err != nil {
-		c.Errorf("watcher.refreshServiceMap() %s", err)
+		logging.Errorf("watcher.refreshServiceMap() %s", err)
 		return err
 	}
 
@@ -1006,7 +1064,7 @@ func (w *watcher) Commit(txid common.Txnid) error {
 
 	msg, ok := w.pendings[txid]
 	if !ok {
-		c.Warnf("Watcher.commit(): unknown txnid %d.  Txn not processed at commit", txid)
+		logging.Warnf("Watcher.commit(): unknown txnid %d.  Txn not processed at commit", txid)
 		return nil
 	}
 
@@ -1068,7 +1126,7 @@ func (w *watcher) respond(reqId uint64, err string, content []byte) {
 			handle.Err = errors.New(err)
 		}
 
-		c.Debugf("watcher.Respond() : len(content) %d", len(content))
+		logging.Debugf("watcher.Respond() : len(content) %d", len(content))
 		handle.Content = content
 
 		handle.CondVar.Signal()
@@ -1132,7 +1190,7 @@ func (w *watcher) GetCommitedEntries(txid1, txid2 common.Txnid) (<-chan protocol
 func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content []byte, toCommit bool) error {
 
 	if err := w.processChange(op, key, content); err != nil {
-		c.Errorf("watcher.LogAndCommit(): receive error when processing log entry from server.  Error = %v", err)
+		logging.Errorf("watcher.LogAndCommit(): receive error when processing log entry from server.  Error = %v", err)
 	}
 
 	return nil
@@ -1140,8 +1198,8 @@ func (w *watcher) LogAndCommit(txid common.Txnid, op uint32, key string, content
 
 func (w *watcher) processChange(op uint32, key string, content []byte) error {
 
-	c.Debugf("watcher.processChange(): key = %v", key)
-	defer c.Debugf("watcher.processChange(): done -> key = %v", key)
+	logging.Debugf("watcher.processChange(): key = %v", key)
+	defer logging.Debugf("watcher.processChange(): done -> key = %v", key)
 
 	opCode := common.OpCode(op)
 
@@ -1149,7 +1207,7 @@ func (w *watcher) processChange(op uint32, key string, content []byte) error {
 	case common.OPCODE_ADD, common.OPCODE_SET:
 		if isIndexDefnKey(key) {
 			if len(content) == 0 {
-				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
 			}
 
 			id, err := extractDefnIdFromKey(key)
@@ -1161,7 +1219,7 @@ func (w *watcher) processChange(op uint32, key string, content []byte) error {
 
 		} else if isIndexTopologyKey(key) {
 			if len(content) == 0 {
-				c.Debugf("watcher.processChange(): content of key = %v is empty.", key)
+				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
 			}
 			return w.provider.repo.unmarshallAndAddInst(content)
 		}

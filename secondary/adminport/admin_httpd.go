@@ -28,7 +28,6 @@ package adminport
 
 import "fmt"
 import "expvar"
-import "runtime/debug"
 import "encoding/json"
 import "io"
 import "net"
@@ -37,6 +36,7 @@ import "reflect"
 import "sync"
 import "time"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 
 // httpServer is a concrete type implementing adminport Server
@@ -105,18 +105,18 @@ func (s *httpServer) Register(msg MessageMarshaller) (err error) {
 	defer s.mu.Unlock()
 
 	if s.lis != nil {
-		c.Errorf("%v can't register, server already started\n", s.logPrefix)
+		logging.Errorf("%v can't register, server already started\n", s.logPrefix)
 		return ErrorRegisteringRequest
 	}
 	key := fmt.Sprintf("%v%v", s.urlPrefix, msg.Name())
 	s.messages[key] = msg
 	s.statsMessages[key] = [3]uint64{0, 0, 0}
-	c.Infof("%s registered %s\n", s.logPrefix, s.getURL(msg))
+	logging.Infof("%s registered %s\n", s.logPrefix, s.getURL(msg))
 	return
 }
 
 // RegisterHandler is part of Server interface.
-func (s *httpServer) RegisterHttpHandler(
+func (s *httpServer) RegisterHTTPHandler(
 	path string,
 	handler func(http.ResponseWriter, *http.Request)) (err error) {
 
@@ -124,11 +124,11 @@ func (s *httpServer) RegisterHttpHandler(
 	defer s.mu.Unlock()
 
 	if s.lis != nil {
-		c.Errorf("%v can't register, server already started\n", s.logPrefix)
+		logging.Errorf("%v can't register, server already started\n", s.logPrefix)
 		return ErrorRegisteringRequest
 	}
 	s.mux.HandleFunc(path, handler)
-	c.Infof("%s registered %s\n", s.logPrefix, path)
+	logging.Infof("%s registered %s\n", s.logPrefix, path)
 	return
 }
 
@@ -138,16 +138,16 @@ func (s *httpServer) Unregister(msg MessageMarshaller) (err error) {
 	defer s.mu.Unlock()
 
 	if s.lis != nil {
-		c.Errorf("%v can't unregister, server already started\n", s.logPrefix)
+		logging.Errorf("%v can't unregister, server already started\n", s.logPrefix)
 		return ErrorRegisteringRequest
 	}
 	name := msg.Name()
 	if _, ok := s.messages[name]; !ok {
-		c.Errorf("%v message %q hasn't been registered\n", s.logPrefix, name)
+		logging.Errorf("%v message %q hasn't been registered\n", s.logPrefix, name)
 		return ErrorMessageUnknown
 	}
 	delete(s.messages, name)
-	c.Infof("%s unregistered %s\n", s.logPrefix, s.getURL(msg))
+	logging.Infof("%s unregistered %s\n", s.logPrefix, s.getURL(msg))
 	return
 }
 
@@ -173,12 +173,12 @@ func (s *httpServer) Start() (err error) {
 	defer s.mu.Unlock()
 
 	if s.lis != nil {
-		c.Errorf("%v already started ...\n", s.logPrefix)
+		logging.Errorf("%v already started ...\n", s.logPrefix)
 		return ErrorServerStarted
 	}
 
 	if s.lis, err = net.Listen("tcp", s.srv.Addr); err != nil {
-		c.Errorf("%v listen failed %v\n", s.logPrefix, err)
+		logging.Errorf("%v listen failed %v\n", s.logPrefix, err)
 		return err
 	}
 
@@ -186,11 +186,11 @@ func (s *httpServer) Start() (err error) {
 	go func() {
 		defer s.shutdown()
 
-		c.Infof("%s starting ...\n", s.logPrefix)
+		logging.Infof("%s starting ...\n", s.logPrefix)
 		err := s.srv.Serve(s.lis) // serve until listener is closed.
 		// TODO: look into error message and skip logging if Stop().
 		if err != nil {
-			c.Errorf("%s %v\n", s.logPrefix, err)
+			logging.Errorf("%s %v\n", s.logPrefix, err)
 		}
 	}()
 	return
@@ -200,7 +200,7 @@ func (s *httpServer) Start() (err error) {
 // outstanding requests are serviced.
 func (s *httpServer) Stop() {
 	s.shutdown()
-	c.Infof("%s ... stopped\n", s.logPrefix)
+	logging.Infof("%s ... stopped\n", s.logPrefix)
 }
 
 func (s *httpServer) shutdown() {
@@ -222,7 +222,7 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
 	var dataIn, dataOut []byte
 
-	c.Infof("%s Request %q\n", s.logPrefix, r.URL.Path)
+	logging.Infof("%s Request %q\n", s.logPrefix, r.URL.Path)
 
 	stats := s.statsMessages[r.URL.Path]
 
@@ -230,12 +230,12 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if recov := recover(); recov != nil {
-			c.Errorf("%s systemHandler() crashed: %v\n", s.logPrefix, recov)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s systemHandler() crashed: %v\n", s.logPrefix, recov)
+			logging.Errorf("%s", logging.StackTrace())
 			stats[2]++ // error count
 		}
 		if err != nil {
-			c.Errorf("%s %v\n", s.logPrefix, err)
+			logging.Errorf("%s %v\n", s.logPrefix, err)
 			stats[2]++ // error count
 		}
 		stats[1]++ // response count
@@ -310,7 +310,7 @@ func (s *httpServer) expvarHandler(w http.ResponseWriter, r *http.Request) {
 		first = false
 		data, err := json.Marshal(kv.Value)
 		if err != nil {
-			c.Errorf("%v encoding statistics: %v\n", s.logPrefix, err)
+			logging.Errorf("%v encoding statistics: %v\n", s.logPrefix, err)
 		}
 		fmt.Fprintf(w, "%q: %s", kv.Key, data)
 	})
@@ -319,7 +319,7 @@ func (s *httpServer) expvarHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *httpServer) connState(conn net.Conn, state http.ConnState) {
 	raddr := conn.RemoteAddr()
-	c.Tracef("%s connState for %q : %v\n", s.logPrefix, raddr, state)
+	logging.Tracef("%s connState for %q : %v\n", s.logPrefix, raddr, state)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -15,6 +15,7 @@ import "fmt"
 import "sync"
 import "strconv"
 
+import l "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/collatejson"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
@@ -49,6 +50,11 @@ var gsi2N1QLState = map[c.IndexState]datastore.IndexState{
 	c.INDEX_STATE_ERROR:   datastore.OFFLINE,
 	// c.INDEX_STATE_NIL:     datastore.OFFLINE, TODO: uncomment this.
 }
+var n1ql2GsiConsistency = map[datastore.ScanConsistency]c.Consistency{
+	datastore.UNBOUNDED: c.AnyConsistency,
+	datastore.SCAN_PLUS: c.SessionConsistency,
+	datastore.AT_PLUS:   c.QueryConsistency,
+}
 
 //--------------------
 // datastore.Indexer{}
@@ -74,7 +80,7 @@ type gsiKeyspace struct {
 func NewGSIIndexer(
 	clusterURL, namespace, keyspace string) (datastore.Indexer, errors.Error) {
 
-	c.SetLogLevel(c.LogLevelTrace)
+	l.SetLogLevel(l.Trace)
 
 	gsi := &gsiKeyspace{
 		clusterURL:     clusterURL,
@@ -300,7 +306,7 @@ func (gsi *gsiKeyspace) CreateIndex(
 		false, /*isPrimary*/
 		withJSON)
 	if err != nil {
-		return nil, errors.NewError(err, "GSI CreatePrimaryIndex()")
+		return nil, errors.NewError(err, "GSI CreateIndex()")
 	}
 	// refresh to get back the newly created index.
 	if err := gsi.Refresh(); err != nil {
@@ -569,6 +575,7 @@ func (si *secondaryIndex) Scan(
 		seek := values2SKey(span.Seek)
 		client.Lookup(
 			si.defnID, []c.SecondaryKey{seek}, distinct, limit,
+			n1ql2GsiConsistency[cons], vector2ts(vector),
 			makeResponsehandler(conn))
 
 	} else {
@@ -576,6 +583,7 @@ func (si *secondaryIndex) Scan(
 		incl := n1ql2GsiInclusion[span.Range.Inclusion]
 		client.Range(
 			si.defnID, low, high, incl, distinct, limit,
+			n1ql2GsiConsistency[cons], vector2ts(vector),
 			makeResponsehandler(conn))
 	}
 }
@@ -589,7 +597,10 @@ func (si *secondaryIndex) ScanEntries(
 	defer close(entryChannel)
 
 	client := si.gsi.gsiClient
-	client.ScanAll(si.defnID, limit, makeResponsehandler(conn))
+	client.ScanAll(
+		si.defnID, limit,
+		n1ql2GsiConsistency[cons], vector2ts(vector),
+		makeResponsehandler(conn))
 }
 
 //-------------------------------------
@@ -733,6 +744,23 @@ func defnID2String(id uint64) string {
 func string2defnID(id string) uint64 {
 	defnID, _ := strconv.ParseUint(id, 16, 64)
 	return defnID
+}
+
+func vector2ts(vector timestamp.Vector) *qclient.TsConsistency {
+	vbnos := make([]uint16, 0, 1024)
+	seqnos := make([]uint64, 0, 1024)
+	vbuuids := make([]uint64, 0, 1024)
+	for _, entry := range vector.Entries() {
+		vbnos = append(vbnos, uint16(entry.Position()))
+		seqnos = append(seqnos, uint64(entry.Value()))
+		vbuuids = append(vbuuids, uint64(guard2Vbuuid(entry.Guard())))
+	}
+	return qclient.NewTsConsistency(vbnos, seqnos, vbuuids)
+}
+
+func guard2Vbuuid(guard string) uint64 {
+	vbuuid, _ := strconv.ParseUint(guard, 10, 64)
+	return vbuuid
 }
 
 //-----------------

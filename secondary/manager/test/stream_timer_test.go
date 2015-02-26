@@ -11,6 +11,7 @@ package test
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
@@ -42,8 +43,7 @@ type timerTestProjectorClient struct {
 
 func TestStreamMgr_Timer(t *testing.T) {
 
-	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 	util.TT = t
 
 	old_value := manager.NUM_VB
@@ -64,20 +64,20 @@ func TestStreamMgr_Timer(t *testing.T) {
 
 func runTimerTest() {
 
-	common.Infof("**** Run Timer Test **********************************************")
+	logging.Infof("**** Run Timer Test **********************************************")
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
 	os.MkdirAll("./data/", os.ModePerm)
 
-	common.Infof("***** Start TestStreamMgr ")
+	logging.Infof("***** Start TestStreamMgr ")
 	/*
 		var requestAddr = "localhost:9885"
 		var leaderAddr = "localhost:9884"
 	*/
 	var config = "./config.json"
 
-	common.Infof("Start Index Manager")
+	logging.Infof("Start Index Manager")
 	donech := make(chan bool)
 	factory := new(timerTestProjectorClientFactory)
 	factory.donech = donech
@@ -94,28 +94,28 @@ func runTimerTest() {
 	mgr.SetTimestampPersistenceInterval(1)
 	defer mgr.SetTimestampPersistenceInterval(manager.TIMESTAMP_PERSIST_INTERVAL)
 
-	common.Infof("Timer Test Cleanup ...")
+	logging.Infof("Timer Test Cleanup ...")
 	cleanupStreamMgrTimerTest(mgr)
 
-	common.Infof("***** Run timer Test ...")
+	logging.Infof("***** Run timer Test ...")
 	ch := mgr.GetStabilityTimestampChannel(common.MAINT_STREAM)
 	go runTimerTestReceiver(mgr, ch, donech)
 
-	common.Infof("Setup data for Timer Test")
+	logging.Infof("Setup data for Timer Test")
 	changeTopologyForTimerTest(mgr)
 	<-donech
 
-	common.Infof("**** Timer Test Cleanup ...")
+	logging.Infof("**** Timer Test Cleanup ...")
 	cleanupStreamMgrTimerTest(mgr)
 	mgr.CleanupTopology()
 	mgr.CleanupStabilityTimestamp()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Stop TestStreamMgr. Tearing down ")
+	logging.Infof("**** Stop TestStreamMgr. Tearing down ")
 	mgr.Close()
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("**** Finish Timer Test *************************************************")
+	logging.Infof("**** Finish Timer Test *************************************************")
 }
 
 // clean up
@@ -123,9 +123,9 @@ func cleanupStreamMgrTimerTest(mgr *manager.IndexManager) {
 
 	_, err := mgr.GetIndexDefnById(common.IndexDefnId(406))
 	if err != nil {
-		common.Infof("StreamMgrTest.cleanupStreamMgrTimerTest() :  cannot find index defn stream_mgr_timer_test.  No cleanup ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrTimerTest() :  cannot find index defn stream_mgr_timer_test.  No cleanup ...")
 	} else {
-		common.Infof("StreamMgrTest.cleanupStreamMgrTimerTest() :  found index defn stream_mgr_timer_test.  Cleaning up ...")
+		logging.Infof("StreamMgrTest.cleanupStreamMgrTimerTest() :  found index defn stream_mgr_timer_test.  Cleaning up ...")
 
 		err = mgr.HandleDeleteIndexDDL(common.IndexDefnId(406))
 		if err != nil {
@@ -146,7 +146,7 @@ func cleanupStreamMgrTimerTest(mgr *manager.IndexManager) {
 // run test
 func runTimerTestReceiver(mgr *manager.IndexManager, ch chan *common.TsVbuuid, donech chan bool) {
 
-	common.Infof("Run Timer Test Receiver")
+	logging.Infof("Run Timer Test Receiver")
 	defer close(donech)
 
 	// wait for the sync message to arrive
@@ -164,17 +164,17 @@ func runTimerTestReceiver(mgr *manager.IndexManager, ch chan *common.TsVbuuid, d
 					util.TT.Fatal("runTimerTestReceiver(): timestamp seqno does not match with repo.  %d != %d",
 						ts.Seqnos[10], seqno)
 				} else {
-					common.Infof("****** runTimerTestReceiver() receive correct stability timestamp")
+					logging.Infof("****** runTimerTestReceiver() receive correct stability timestamp")
 					return
 				}
 			}
 		case <-ticker.C:
-			common.Infof("****** runTimerTestReceiver() : timeout")
+			logging.Infof("****** runTimerTestReceiver() : timeout")
 			util.TT.Fatal("runTimerTestReceiver(): Timeout waiting to receive timestamp to arrive")
 		}
 	}
 
-	common.Infof("runTimerTestReceiver() done")
+	logging.Infof("runTimerTestReceiver() done")
 }
 
 // start up
@@ -192,7 +192,7 @@ func changeTopologyForTimerTest(mgr *manager.IndexManager) {
 		PartitionScheme: common.HASH,
 		PartitionKey:    "Testing"}
 
-	common.Infof("Run Timer Test : Create Index Defn 406")
+	logging.Infof("Run Timer Test : Create Index Defn 406")
 	if err := mgr.HandleCreateIndexDDL(idxDefn); err != nil {
 		util.TT.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func changeTopologyForTimerTest(mgr *manager.IndexManager) {
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
 	// Update the index definition to ready
-	common.Infof("Run Timer Test : Update Index Defn 406 to READY")
+	logging.Infof("Run Timer Test : Update Index Defn 406 to READY")
 	topology, err := mgr.GetTopologyByBucket("Default")
 	if err != nil {
 		util.TT.Fatal(err)
@@ -213,7 +213,7 @@ func changeTopologyForTimerTest(mgr *manager.IndexManager) {
 
 func (c *timerTestProjectorClient) sendSync(instances []*protobuf.Instance) {
 
-	common.Infof("timerTestProjectorClient.sendSync() ")
+	logging.Infof("timerTestProjectorClient.sendSync() ")
 
 	if len(instances) != 1 {
 		util.TT.Fatal("timerTestProjectorClient.sendSync(): More than one index instance sent to fake projector")
@@ -244,7 +244,7 @@ func (c *timerTestProjectorClient) sendSync(instances []*protobuf.Instance) {
 			payloads = append(payloads, payload)
 
 			// send payload
-			common.Infof("****** runTimerTestReceiver() sending the first sync message")
+			logging.Infof("****** runTimerTestReceiver() sending the first sync message")
 			if err := p.Client.SendKeyVersions(payloads, true); err != nil {
 				util.TT.Fatal(err)
 			}
@@ -258,7 +258,7 @@ func (c *timerTestProjectorClient) sendSync(instances []*protobuf.Instance) {
 			payloads = append(payloads, payload)
 
 			// send payload
-			common.Infof("****** runTimerTestReceiver() sending the second sync message")
+			logging.Infof("****** runTimerTestReceiver() sending the second sync message")
 			if err := p.Client.SendKeyVersions(payloads, true); err != nil {
 				util.TT.Fatal(err)
 			}
@@ -327,7 +327,7 @@ func (p *timerTestProjectorClientFactory) GetClientForNode(server string) manage
 
 func (p *timerTestProjectorClientEnv) GetNodeListForBuckets(buckets []string) (map[string]string, error) {
 
-	common.Infof("timerTestProjectorClientEnv.GetNodeListForBuckets() ")
+	logging.Infof("timerTestProjectorClientEnv.GetNodeListForBuckets() ")
 	nodes := make(map[string]string)
 	nodes["127.0.0.1"] = "127.0.0.1"
 	return nodes, nil
@@ -335,7 +335,7 @@ func (p *timerTestProjectorClientEnv) GetNodeListForBuckets(buckets []string) (m
 
 func (p *timerTestProjectorClientEnv) GetNodeListForTimestamps(timestamps []*common.TsVbuuid) (map[string][]*protobuf.TsVbuuid, error) {
 
-	common.Infof("timerTestProjectorClientEnv.GetNodeListForTimestamps() ")
+	logging.Infof("timerTestProjectorClientEnv.GetNodeListForTimestamps() ")
 	return nil, nil
 }
 

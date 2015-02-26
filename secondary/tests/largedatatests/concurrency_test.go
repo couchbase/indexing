@@ -116,10 +116,10 @@ func RangeScanForDuration_ltr(header string, wg *sync.WaitGroup, seconds float64
 		rangeStart := time.Now()
 		scanResults, err := secondaryindex.RangeWithClient(indexName, bucketName, server, []interface{}{low}, []interface{}{high}, 3, true, defaultlimit, client)
 		rangeElapsed := time.Since(rangeStart)
+		FailTestIfError(err, "RangeScanForDuration Thread:: Error in scan", t)
 		fmt.Printf("Range Scan of %d user documents took %s\n", len(kvdocs), rangeElapsed)
 		log.Printf("%v %d  RangeScanForDuration:: Len of scanResults is: %d\n", header, i, len(scanResults))
 		i++
-		FailTestIfError(err, "Error in scan", t)
 	}
 }
 
@@ -161,16 +161,16 @@ func CreateDropIndexesForDuration(wg *sync.WaitGroup, seconds float64, t *testin
 		FailTestIfError(err, "Error in creating the index", t)
 		time.Sleep(1 * time.Second)
 		scanResults, err := secondaryindex.RangeWithClient(index1, bucketName, indexScanAddress, []interface{}{random_num(15, 80)}, []interface{}{random_num(15, 80)}, 3, true, defaultlimit, client)
+		FailTestIfError(err, "CreateDropIndexesForDuration:: Error in scan", t)
 		log.Printf("%v RangeScan CreateDropIndexesForDuration:: Len of scanResults is: %d\n", index1, len(scanResults))
-		FailTestIfError(err, "Error in scan", t)
-
+		
 		var index2 = "index_firstname"
 		err = secondaryindex.CreateSecondaryIndexWithClient(index2, bucketName, indexManagementAddress, []string{"`first-name`"}, true, client)
 		FailTestIfError(err, "Error in creating the index", t)
 		time.Sleep(1 * time.Second)
 		scanResults, err = secondaryindex.RangeWithClient(index2, bucketName, indexScanAddress, []interface{}{"M"}, []interface{}{"Z"}, 3, true, defaultlimit, client)
+		FailTestIfError(err, "CreateDropIndexesForDuration:: Error in scan", t)
 		log.Printf("%v  RangeScan CreateDropIndexesForDuration:: Len of scanResults is: %d", index2, len(scanResults))
-		FailTestIfError(err, "Error in scan", t)
 
 		err = secondaryindex.DropSecondaryIndexWithClient(index1, bucketName, indexManagementAddress, client)
 		FailTestIfError(err, "Error in drop index", t)
@@ -300,7 +300,7 @@ func TestScanWithConcurrentIndexOps(t *testing.T) {
 }
 
 func TestConcurrentScans_SameIndex(t *testing.T) {
-	fmt.Println("In TestConcurrentScans()")
+	fmt.Println("In TestConcurrentScans_SameIndex()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
 	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
@@ -330,7 +330,7 @@ func TestConcurrentScans_SameIndex(t *testing.T) {
 }
 
 func TestConcurrentScans_MultipleIndexes(t *testing.T) {
-	fmt.Println("In TestConcurrentScans()")
+	fmt.Println("In TestConcurrentScans_MultipleIndexes()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
 	// secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)

@@ -2,12 +2,12 @@ package queryport
 
 import "fmt"
 import "net"
-import "runtime/debug"
 import "sync"
 import "time"
 import "io"
 import "sync/atomic"
 
+import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbase/indexing/secondary/transport"
@@ -57,12 +57,12 @@ func NewServer(
 		logPrefix:      fmt.Sprintf("[Queryport %q]", laddr),
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
-		c.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
+		logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
 		return nil, err
 	}
 
 	go s.listener()
-	c.Infof("%v started ...\n", s.logPrefix)
+	logging.Infof("%v started ...\n", s.logPrefix)
 	return s, nil
 }
 
@@ -76,9 +76,9 @@ func (s *Server) Statistics() ServerStats {
 func (s *Server) Close() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v Close() crashed: %v\n", s.logPrefix, r)
+			logging.Errorf("%v Close() crashed: %v\n", s.logPrefix, r)
 			err = fmt.Errorf("%v", r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
 
@@ -88,7 +88,7 @@ func (s *Server) Close() (err error) {
 		s.lis.Close() // close listener daemon
 		s.lis = nil
 		close(s.killch)
-		c.Infof("%v ... stopped\n", s.logPrefix)
+		logging.Infof("%v ... stopped\n", s.logPrefix)
 	}
 	return
 }
@@ -98,8 +98,8 @@ func (s *Server) Close() (err error) {
 func (s *Server) listener() {
 	defer func() {
 		if r := recover(); r != nil {
-			c.Errorf("%v listener() crashed: %v\n", s.logPrefix, r)
-			c.StackTrace(string(debug.Stack()))
+			logging.Errorf("%v listener() crashed: %v\n", s.logPrefix, r)
+			logging.Errorf("%s", logging.StackTrace())
 		}
 		go s.Close()
 	}()
@@ -127,7 +127,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	raddr := conn.RemoteAddr()
 	defer func() {
 		conn.Close()
-		c.Debugf("%v connection %v closed\n", s.logPrefix, raddr)
+		logging.Debugf("%v connection %v closed\n", s.logPrefix, raddr)
 	}()
 
 	// start a receive routine.
@@ -145,7 +145,7 @@ loop:
 		case req, ok := <-rcvch:
 			if _, yes := req.(*protobuf.EndStreamRequest); yes { // skip
 				format := "%v connection %q skip protobuf.EndStreamRequest\n"
-				c.Debugf(format, s.logPrefix, raddr)
+				logging.Debugf(format, s.logPrefix, raddr)
 				break
 			} else if !ok {
 				break loop
@@ -174,7 +174,7 @@ func (s *Server) handleRequest(
 		err := tpkt.Send(conn, resp)
 		if err != nil {
 			format := "%v connection %v response transport failed `%v`\n"
-			c.Debugf(format, s.logPrefix, raddr, err)
+			logging.Debugf(format, s.logPrefix, raddr, err)
 		}
 		return err
 	}
@@ -188,7 +188,7 @@ loop:
 			if !ok {
 				if err := transmit(&protobuf.StreamEndResponse{}); err == nil {
 					format := "%v protobuf.StreamEndResponse -> %q\n"
-					c.Debugf(format, s.logPrefix, raddr)
+					logging.Debugf(format, s.logPrefix, raddr)
 				}
 				break loop
 			}
@@ -200,7 +200,7 @@ loop:
 			if _, yes := req.(*protobuf.EndStreamRequest); ok && yes {
 				if err := transmit(&protobuf.StreamEndResponse{}); err == nil {
 					format := "%v protobuf.StreamEndResponse -> %q\n"
-					c.Debugf(format, s.logPrefix, raddr)
+					logging.Debugf(format, s.logPrefix, raddr)
 				}
 				break loop
 
@@ -224,7 +224,7 @@ func (s *Server) doReceive(conn net.Conn, rcvch chan<- interface{}) {
 	rpkt := transport.NewTransportPacket(s.maxPayload, flags)
 	rpkt.SetDecoder(transport.EncodingProtobuf, protobuf.ProtobufDecode)
 
-	c.Debugf("%v connection %q doReceive() ...\n", s.logPrefix, raddr)
+	logging.Debugf("%v connection %q doReceive() ...\n", s.logPrefix, raddr)
 
 loop:
 	for {
@@ -236,9 +236,9 @@ loop:
 		// TODO: handle close-connection and don't print error message.
 		if err != nil {
 			if err == io.EOF {
-				c.Tracef("%v connection %q exited %v\n", s.logPrefix, raddr, err)
+				logging.Tracef("%v connection %q exited %v\n", s.logPrefix, raddr, err)
 			} else {
-				c.Errorf("%v connection %q exited %v\n", s.logPrefix, raddr, err)
+				logging.Errorf("%v connection %q exited %v\n", s.logPrefix, raddr, err)
 			}
 			break loop
 		}

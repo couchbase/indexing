@@ -10,9 +10,9 @@
 package indexer
 
 import (
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"hash/crc32"
-	"log"
 )
 
 //SliceContainer contains all slices for an index partition
@@ -101,7 +101,7 @@ func (sc *HashedSliceContainer) GetSliceById(id SliceId) Slice {
 	if s, ok := sc.SliceMap[id]; ok {
 		return s
 	} else {
-		log.Printf("HashedSliceContainer: Invalid Slice Id %v", id)
+		logging.Warnf("HashedSliceContainer: Invalid Slice Id %v", id)
 		return nil
 	}
 }

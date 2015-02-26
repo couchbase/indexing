@@ -29,7 +29,7 @@ support new use-cases e.g. N1QL.
 
 #####KV Related
 - Independent Scaling from KV Cluster
-- Mutation Stream via UPR
+- Mutation Stream via DCP
 - Support KV Failover(data loss), Rebalance
 
 #####Query Related

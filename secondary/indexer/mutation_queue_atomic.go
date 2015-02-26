@@ -155,6 +155,8 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 			//copy the mutation pointer
 			m := head.next.mutation
 			if seqno >= m.meta.seqno {
+				//free mutation pointer
+				head.next.mutation = nil
 				//move head to next
 				atomic.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
 				atomic.AddInt64(&q.size[vbucket], -1)

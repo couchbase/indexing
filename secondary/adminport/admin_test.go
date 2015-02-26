@@ -6,6 +6,7 @@ import "reflect"
 import "testing"
 
 import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/logging"
 
 var addr = "localhost:9999"
 
@@ -24,13 +25,11 @@ var q = make(chan bool)
 var server Server
 
 func init() {
+	logging.SetLogLevel(logging.Silent)
 	server = doServer("http://"+addr, q)
-	//common.SetLogLevel(common.LogLevelDebug)
 }
 
 func TestLoopback(t *testing.T) {
-	common.LogIgnore()
-
 	urlPrefix := common.SystemConfig["projector.adminport.urlPrefix"].String()
 	client := NewHTTPClient(addr, urlPrefix)
 	req := &testMessage{
@@ -61,6 +60,7 @@ func TestLoopback(t *testing.T) {
 }
 
 func BenchmarkClientRequest(b *testing.B) {
+	logging.SetLogLevel(logging.Silent)
 	urlPrefix := common.SystemConfig["projector.adminport.urlPrefix"].String()
 	client := NewHTTPClient(addr, urlPrefix)
 	req := &testMessage{

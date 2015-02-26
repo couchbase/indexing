@@ -1,10 +1,10 @@
 package couchbase
 
 import (
-	"log"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/dcp/transport/client"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 const initialRetryInterval = 1 * time.Second
@@ -66,7 +66,7 @@ func (feed *TapFeed) run() {
 		}
 
 		// On error, try to refresh the bucket in case the list of nodes changed:
-		log.Printf("dcp-client: TAP connection lost; reconnecting to bucket %q in %v",
+		logging.Warnf("dcp-client: TAP connection lost; reconnecting to bucket %q in %v",
 			feed.bucket.Name, retryInterval)
 		err := feed.bucket.Refresh()
 		bucketOK = err == nil
@@ -88,7 +88,7 @@ func (feed *TapFeed) connectToNodes() (killSwitch chan bool, err error) {
 		var singleFeed *memcached.TapFeed
 		singleFeed, err = serverConn.StartTapFeed(feed.args)
 		if err != nil {
-			log.Printf("dcp-client: Error connecting to tap feed of %s: %v", serverConn.host, err)
+			logging.Errorf("dcp-client: Error connecting to tap feed of %s: %v", serverConn.host, err)
 			feed.closeNodeFeeds()
 			return
 		}
@@ -105,7 +105,7 @@ func (feed *TapFeed) forwardTapEvents(singleFeed *memcached.TapFeed, killSwitch 
 		case event, ok := <-singleFeed.C:
 			if !ok {
 				if singleFeed.Error != nil {
-					log.Printf("dcp-client: Tap feed from %s failed: %v", host, singleFeed.Error)
+					logging.Errorf("dcp-client: Tap feed from %s failed: %v", host, singleFeed.Error)
 				}
 				killSwitch <- true
 				return

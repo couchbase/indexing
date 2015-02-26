@@ -16,7 +16,7 @@ import (
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
-	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"net"
 	"sync"
 )
@@ -79,7 +79,7 @@ func startWatcher(mgr *IndexManager,
 	if err != nil {
 		return nil, err
 	}
-	c.Debugf("watcher.startWatcher(): watcher follower ID %s", s.watcherAddr)
+	logging.Debugf("watcher.startWatcher(): watcher follower ID %s", s.watcherAddr)
 
 	s.txn = common.NewTxnState()
 	s.factory = message.NewConcreteMsgFactory()
@@ -303,7 +303,7 @@ func (s *watcher) UpdateStateOnNewProposal(proposal protocol.ProposalMsg) {
 	defer s.mutex.Unlock()
 
 	opCode := common.OpCode(proposal.GetOpCode())
-	c.Debugf("Watcher.UpdateStateOnNewProposal(): receive proposal on metadata kind %d", findTypeFromKey(proposal.GetKey()))
+	logging.Debugf("Watcher.UpdateStateOnNewProposal(): receive proposal on metadata kind %d", findTypeFromKey(proposal.GetKey()))
 
 	// register the event for notification
 	var evtType EventType = EVENT_NONE
@@ -327,12 +327,12 @@ func (s *watcher) UpdateStateOnNewProposal(proposal protocol.ProposalMsg) {
 			evtType = EVENT_DROP_INDEX
 		}
 	default:
-		c.Debugf("Watcher.UpdateStateOnNewProposal(): recieve proposal with opcode %d.  Skip convert proposal to event.", opCode)
+		logging.Debugf("Watcher.UpdateStateOnNewProposal(): recieve proposal with opcode %d.  Skip convert proposal to event.", opCode)
 	}
 
-	c.Debugf("Watcher.UpdateStateOnNewProposal(): convert metadata type to event  %d", evtType)
+	logging.Debugf("Watcher.UpdateStateOnNewProposal(): convert metadata type to event  %d", evtType)
 	if evtType != EVENT_NONE {
-		c.Debugf("Watcher.UpdateStateOnNewProposal(): register event for txid %d", proposal.GetTxnid())
+		logging.Debugf("Watcher.UpdateStateOnNewProposal(): register event for txid %d", proposal.GetTxnid())
 		s.notifications[common.Txnid(proposal.GetTxnid())] =
 			newNotificationHandle(proposal.GetKey(), evtType, proposal.GetContent())
 	}
@@ -350,7 +350,7 @@ func (s *watcher) UpdateStateOnCommit(txnid common.Txnid, key string) {
 
 	notification, ok := s.notifications[txnid]
 	if ok && notification != nil && s.mgr != nil {
-		c.Debugf("Watcher.UpdateStateOnCommit(): notify event for txid %d", txnid)
+		logging.Debugf("Watcher.UpdateStateOnCommit(): notify event for txid %d", txnid)
 		s.mgr.notify(notification.evtType, notification.content)
 		delete(s.notifications, txnid)
 	}

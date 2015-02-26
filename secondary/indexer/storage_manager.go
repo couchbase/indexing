@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbaselabs/goforestdb"
 )
 
@@ -128,7 +129,7 @@ loop:
 		case cmd, ok := <-s.supvCmdch:
 			if ok {
 				if cmd.GetMsgType() == STORAGE_MGR_SHUTDOWN {
-					common.Infof("StorageManager::run Shutting Down")
+					logging.Infof("StorageManager::run Shutting Down")
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -176,7 +177,7 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 //after flush has completed
 func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
-	common.Tracef("StorageMgr::handleCreateSnapshot %v", cmd)
+	logging.Tracef("StorageMgr::handleCreateSnapshot %v", cmd)
 
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
 	tsVbuuid := cmd.(*MsgMutMgrFlushDone).GetTS()
@@ -185,13 +186,21 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	numVbuckets := s.config["numVbuckets"].Int()
 	var needsCommit bool = tsVbuuid.IsPersisted()
 
+	if !s.needSnapshot(streamId, bucket, tsVbuuid.IsPersisted()) {
+		logging.Debugf("StorageMgr::handleCreateSnapshot \n\tSkip Snapshot For %v "+
+			"%v Persisted %v", streamId, bucket, tsVbuuid.IsPersisted())
+		s.supvCmdch <- &MsgSuccess{}
+		return
+	}
+
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range s.indexPartnMap {
 		idxInst := s.indexInstMap[idxInstId]
 
 		//if index belongs to the flushed bucket and stream
 		if idxInst.Defn.Bucket == bucket &&
-			idxInst.Stream == streamId {
+			idxInst.Stream == streamId &&
+			idxInst.State != common.INDEX_STATE_DELETED {
 
 			lastIndexSnap := s.indexSnapMap[idxInstId]
 			// List of snapshots for reading current timestamp
@@ -218,7 +227,6 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 					//if flush timestamp is greater than last
 					//snapshot timestamp, create a new snapshot
-
 					snapTs := NewTimestamp(numVbuckets)
 					if latestSnapshot != nil {
 						snapTsVbuuid := latestSnapshot.Timestamp()
@@ -233,7 +241,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 					if latestSnapshot == nil || ts.GreaterThan(snapTs) {
 						//commit the outstanding data
 
-						common.Tracef("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
+						logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
 							"%v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
 						newTsVbuuid := tsVbuuid.Copy()
@@ -241,10 +249,10 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 						var info SnapshotInfo
 						var newSnapshot Snapshot
 
-						common.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
+						logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
 							"Index: %v PartitionId: %v SliceId: %v Commit:%v", idxInstId, partnId, slice.Id(), needsCommit)
 						if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
-							common.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
+							logging.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
 								"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 							isSnapCreated = false
@@ -253,7 +261,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 						}
 
 						if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
-							common.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
+							logging.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
 								"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 								slice.Id(), err)
 							isSnapCreated = false
@@ -261,7 +269,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							continue
 						}
 
-						common.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
+						logging.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
 							"PartitionId: %v SliceId: %v (%v)", idxInstId, partnId, slice.Id(), info)
 
 						ss := &sliceSnapshot{
@@ -277,9 +285,9 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 							snap: latestSnapshot,
 						}
 						sliceSnaps[slice.Id()] = ss
-						common.Debugf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
+						logging.Debugf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
 							"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
-						common.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
+						logging.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
 						continue
 					}
 				}
@@ -339,7 +347,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		idxInst := sm.indexInstMap[idxInstId]
 
 		//if this bucket in stream needs to be rolled back
-		if idxInst.Defn.Bucket == bucket && idxInst.Stream == streamId {
+		if idxInst.Defn.Bucket == bucket &&
+			idxInst.Stream == streamId &&
+			idxInst.State != common.INDEX_STATE_DELETED {
 
 			//for all partitions managed by this indexer
 			for partnId, partnInst := range partnMap {
@@ -357,7 +367,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 					if snapInfo != nil {
 						err := slice.Rollback(snapInfo)
 						if err == nil {
-							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
+							logging.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
 								slice.Id(), snapInfo)
 							respTs = snapInfo.Timestamp()
@@ -375,7 +385,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						//if there is no snapshot available, rollback to zero
 						err := slice.RollbackToZero()
 						if err == nil {
-							common.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
+							logging.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
 								slice.Id())
 							respTs = common.NewTsVbuuid(bucket, numVbuckets)
@@ -416,7 +426,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
-	common.Infof("StorageMgr::handleUpdateIndexInstMap %v", cmd)
+	logging.Tracef("StorageMgr::handleUpdateIndexInstMap %v", cmd)
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
@@ -458,12 +468,12 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 		enc := gob.NewEncoder(&instBytes)
 		err = enc.Encode(instMap)
 		if err != nil {
-			common.Errorf("StorageMgr::handleUpdateIndexInstMap \n\t Error Marshalling "+
+			logging.Errorf("StorageMgr::handleUpdateIndexInstMap \n\t Error Marshalling "+
 				"IndexInstMap %v. Err %v", instMap, err)
 		}
 
 		if err = s.meta.SetKV([]byte(INST_MAP_KEY_NAME), instBytes.Bytes()); err != nil {
-			common.Errorf("StorageMgr::handleUpdateIndexInstMap \n\tError "+
+			logging.Errorf("StorageMgr::handleUpdateIndexInstMap \n\tError "+
 				"Storing IndexInstMap %v", err)
 		}
 
@@ -475,7 +485,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 func (s *storageMgr) handleUpdateIndexPartnMap(cmd Message) {
 
-	common.Infof("StorageMgr::handleUpdateIndexPartnMap %v", cmd)
+	logging.Tracef("StorageMgr::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
@@ -492,8 +502,8 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
 	req := cmd.(*MsgIndexSnapRequest)
-	_, found := s.indexInstMap[req.GetIndexId()]
-	if !found {
+	inst, found := s.indexInstMap[req.GetIndexId()]
+	if !found || inst.State == common.INDEX_STATE_DELETED {
 		req.respch <- ErrIndexNotFound
 		return
 	}
@@ -538,6 +548,10 @@ func (s *storageMgr) handleStats(cmd Message) {
 
 	for _, st := range stats {
 		inst := s.indexInstMap[st.InstId]
+		if inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+
 		k := fmt.Sprintf("%s:%s:disk_size", inst.Defn.Bucket, inst.Defn.Name)
 		v := fmt.Sprint(st.Stats.DiskSize)
 		statsMap[k] = v
@@ -563,6 +577,13 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 	var sts StorageStatistics
 
 	for idxInstId, partnMap := range s.indexPartnMap {
+
+		inst := s.indexInstMap[idxInstId]
+		//skip deleted indexes
+		if inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+
 		var dataSz, diskSz int64
 		var getBytes, insertBytes, deleteBytes int64
 	loop:
@@ -606,10 +627,13 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	errch := req.GetErrorChannel()
 	var slices []Slice
 
-	partnMap, ok := s.indexPartnMap[req.GetInstId()]
-	if !ok {
+	inst, ok := s.indexInstMap[req.GetInstId()]
+	if !ok || inst.State == common.INDEX_STATE_DELETED {
 		errch <- ErrIndexNotFound
+		return
 	}
+
+	partnMap, _ := s.indexPartnMap[req.GetInstId()]
 
 	// Increment rc for slices
 	for _, partnInst := range partnMap {
@@ -672,7 +696,7 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 		latestSnapshotInfo := snapInfoContainer.GetLatest()
 
 		if latestSnapshotInfo != nil {
-			common.Infof("StorageMgr::updateIndexSnapMap IndexInst:%v Attempting to open snapshot (%v)",
+			logging.Infof("StorageMgr::updateIndexSnapMap IndexInst:%v Attempting to open snapshot (%v)",
 				idxInstId, latestSnapshotInfo)
 			latestSnapshot, err := slice.OpenSnapshot(latestSnapshotInfo)
 			if err != nil {
@@ -701,4 +725,25 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 			s.indexSnapMap[idxInstId] = is
 		}
 	}
+}
+
+func (s *storageMgr) needSnapshot(streamId common.StreamId, bucket string,
+	isPersisted bool) bool {
+
+	//skip in-memory snapshots for INIT_STREAM
+	if streamId == common.INIT_STREAM && !isPersisted {
+		return false
+	}
+
+	//skip in-memory snapshots if Initial state index is present
+	//in MAINT_STREAM
+	if streamId == common.MAINT_STREAM && !isPersisted {
+		for _, inst := range s.indexInstMap {
+			if inst.Defn.Bucket == bucket &&
+				inst.State == common.INDEX_STATE_INITIAL {
+				return false
+			}
+		}
+	}
+	return true
 }

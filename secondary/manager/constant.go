@@ -26,15 +26,12 @@ const TESTING = true
 // Common
 var NUM_VB = 1024
 
-const DEFAULT_BUCKET_NAME = "Default"
+const DEFAULT_BUCKET_NAME = "default"
 const DEFAULT_POOL_NAME = "default"
 
 // Coordinator
 const COORD_MAINT_STREAM_PORT = ":9334"
 const COORD_INIT_STREAM_PORT = ":9335"
-
-// Request Handler configurable parameter
-const INDEX_DDL_HTTP_ADDR = ":9202"
 
 // Stream Manager
 const COUCHBASE_INTERNAL_BUCKET_URL = "http://localhost:11209/"

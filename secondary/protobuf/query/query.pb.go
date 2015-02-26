@@ -10,6 +10,7 @@ It is generated from these files:
 
 It has these top-level messages:
 	Error
+	TsConsistency
 	QueryPayload
 	StatisticsRequest
 	StatisticsResponse
@@ -50,6 +51,39 @@ func (m *Error) GetError() string {
 		return *m.Error
 	}
 	return ""
+}
+
+// consistency timestamp specifying a subset of vbucket.
+type TsConsistency struct {
+	Vbnos            []uint32 `protobuf:"varint,1,rep,name=vbnos" json:"vbnos,omitempty"`
+	Seqnos           []uint64 `protobuf:"varint,2,rep,name=seqnos" json:"seqnos,omitempty"`
+	Vbuuids          []uint64 `protobuf:"varint,3,rep,name=vbuuids" json:"vbuuids,omitempty"`
+	XXX_unrecognized []byte   `json:"-"`
+}
+
+func (m *TsConsistency) Reset()         { *m = TsConsistency{} }
+func (m *TsConsistency) String() string { return proto.CompactTextString(m) }
+func (*TsConsistency) ProtoMessage()    {}
+
+func (m *TsConsistency) GetVbnos() []uint32 {
+	if m != nil {
+		return m.Vbnos
+	}
+	return nil
+}
+
+func (m *TsConsistency) GetSeqnos() []uint64 {
+	if m != nil {
+		return m.Seqnos
+	}
+	return nil
+}
+
+func (m *TsConsistency) GetVbuuids() []uint64 {
+	if m != nil {
+		return m.Vbuuids
+	}
+	return nil
 }
 
 // Request can be one of the optional field.
@@ -192,12 +226,14 @@ func (m *StatisticsResponse) GetErr() *Error {
 
 // Scan request to indexer.
 type ScanRequest struct {
-	DefnID           *uint64 `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
-	Span             *Span   `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
-	Distinct         *bool   `protobuf:"varint,3,req,name=distinct" json:"distinct,omitempty"`
-	Limit            *int64  `protobuf:"varint,4,req,name=limit" json:"limit,omitempty"`
-	PageSize         *int64  `protobuf:"varint,5,req,name=pageSize" json:"pageSize,omitempty"`
-	XXX_unrecognized []byte  `json:"-"`
+	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
+	Span             *Span          `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
+	Distinct         *bool          `protobuf:"varint,3,req,name=distinct" json:"distinct,omitempty"`
+	Limit            *int64         `protobuf:"varint,4,req,name=limit" json:"limit,omitempty"`
+	PageSize         *int64         `protobuf:"varint,5,req,name=pageSize" json:"pageSize,omitempty"`
+	Cons             *uint32        `protobuf:"varint,6,req,name=cons" json:"cons,omitempty"`
+	Vector           *TsConsistency `protobuf:"bytes,7,opt,name=vector" json:"vector,omitempty"`
+	XXX_unrecognized []byte         `json:"-"`
 }
 
 func (m *ScanRequest) Reset()         { *m = ScanRequest{} }
@@ -239,12 +275,28 @@ func (m *ScanRequest) GetPageSize() int64 {
 	return 0
 }
 
+func (m *ScanRequest) GetCons() uint32 {
+	if m != nil && m.Cons != nil {
+		return *m.Cons
+	}
+	return 0
+}
+
+func (m *ScanRequest) GetVector() *TsConsistency {
+	if m != nil {
+		return m.Vector
+	}
+	return nil
+}
+
 // Full table scan request from indexer.
 type ScanAllRequest struct {
-	DefnID           *uint64 `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
-	PageSize         *int64  `protobuf:"varint,2,req,name=pageSize" json:"pageSize,omitempty"`
-	Limit            *int64  `protobuf:"varint,3,req,name=limit" json:"limit,omitempty"`
-	XXX_unrecognized []byte  `json:"-"`
+	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
+	PageSize         *int64         `protobuf:"varint,2,req,name=pageSize" json:"pageSize,omitempty"`
+	Limit            *int64         `protobuf:"varint,3,req,name=limit" json:"limit,omitempty"`
+	Cons             *uint32        `protobuf:"varint,4,req,name=cons" json:"cons,omitempty"`
+	Vector           *TsConsistency `protobuf:"bytes,5,opt,name=vector" json:"vector,omitempty"`
+	XXX_unrecognized []byte         `json:"-"`
 }
 
 func (m *ScanAllRequest) Reset()         { *m = ScanAllRequest{} }
@@ -270,6 +322,20 @@ func (m *ScanAllRequest) GetLimit() int64 {
 		return *m.Limit
 	}
 	return 0
+}
+
+func (m *ScanAllRequest) GetCons() uint32 {
+	if m != nil && m.Cons != nil {
+		return *m.Cons
+	}
+	return 0
+}
+
+func (m *ScanAllRequest) GetVector() *TsConsistency {
+	if m != nil {
+		return m.Vector
+	}
+	return nil
 }
 
 // Request by client to stop streaming the query results.

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	c "github.com/couchbase/gometa/common"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	"github.com/couchbase/indexing/secondary/manager/client"
 	util "github.com/couchbase/indexing/secondary/manager/test/util"
@@ -33,20 +34,20 @@ type notifier struct {
 // For this test, use Index Defn Id from 100 - 110
 func TestMetadataProvider(t *testing.T) {
 
-	common.LogEnable()
-	common.SetLogLevel(common.LogLevelTrace)
+	logging.SetLogLevel(logging.Trace)
 
 	cfg := common.SystemConfig.SectionConfig("indexer", true /*trim*/)
 	cfg.Set("storage_dir", common.ConfigValue{"./data/", "metadata file path", "./"})
 	os.MkdirAll("./data/", os.ModePerm)
 
-	common.Infof("Start Index Manager *********************************************************")
+	logging.Infof("Start Index Manager *********************************************************")
 
 	var msgAddr = "localhost:9884"
+	var httpAddr = "localhost:9885"
 	factory := new(util.TestDefaultClientFactory)
 	env := new(util.TestDefaultClientEnv)
 	admin := manager.NewProjectorAdmin(factory, env, nil)
-	addrPrv := util.NewFakeAddressProvider(msgAddr)
+	addrPrv := util.NewFakeAddressProvider(msgAddr, httpAddr)
 	mgr, err := manager.NewIndexManagerInternal(addrPrv, admin, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -54,15 +55,15 @@ func TestMetadataProvider(t *testing.T) {
 	defer mgr.Close()
 	gMgr = mgr
 
-	common.Infof("Cleanup Test *********************************************************")
+	logging.Infof("Cleanup Test *********************************************************")
 
 	cleanupTest(mgr, t)
 
-	common.Infof("Setup Initial Data *********************************************************")
+	logging.Infof("Setup Initial Data *********************************************************")
 
 	setupInitialData(mgr, t)
 
-	common.Infof("Start Provider *********************************************************")
+	logging.Infof("Start Provider *********************************************************")
 
 	var providerId = "TestMetadataProvider"
 	provider, err := client.NewMetadataProvider(providerId)
@@ -81,13 +82,13 @@ func TestMetadataProvider(t *testing.T) {
 	// be ready, but the server is not.
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("Verify Initial Data *********************************************************")
+	logging.Infof("Verify Initial Data *********************************************************")
 
 	meta := lookup(provider, common.IndexDefnId(100))
 	if meta == nil {
 		t.Fatal("Cannot find Index Defn 100 from MetadataProvider")
 	}
-	common.Infof("found Index Defn 100")
+	logging.Infof("found Index Defn 100")
 	if len(meta.Instances) == 0 || meta.Instances[0].State != common.INDEX_STATE_READY {
 		t.Fatal("Index Defn 100 state is not ready")
 	}
@@ -99,7 +100,7 @@ func TestMetadataProvider(t *testing.T) {
 	if meta == nil {
 		t.Fatal("Cannot find Index Defn 101 from MetadataProvider")
 	}
-	common.Infof("found Index Defn 101")
+	logging.Infof("found Index Defn 101")
 	if len(meta.Instances) == 0 || meta.Instances[0].State != common.INDEX_STATE_READY {
 		t.Fatal("Index Defn 101 state is not ready")
 	}
@@ -107,7 +108,7 @@ func TestMetadataProvider(t *testing.T) {
 		t.Fatal("Index Defn 100 state is not ready")
 	}
 
-	common.Infof("Change Data *********************************************************")
+	logging.Infof("Change Data *********************************************************")
 
 	notifier := &notifier{hasCreated: false, hasDeleted: false}
 	mgr.RegisterNotifier(notifier)
@@ -126,13 +127,13 @@ func TestMetadataProvider(t *testing.T) {
 	if err := provider.BuildIndexes(input); err != nil {
 		t.Fatal("Cannot build Index Defn : %v", err)
 	}
-	common.Infof("done creating index 102")
+	logging.Infof("done creating index 102")
 
 	// Drop a seeded index (created during setup step)
 	if err := provider.DropIndex(common.IndexDefnId(101)); err != nil {
 		t.Fatal("Cannot drop Index Defn 101 through MetadataProvider")
 	}
-	common.Infof("done dropping index 101")
+	logging.Infof("done dropping index 101")
 
 	// Create Index (immediate).
 	newDefnId2, err := provider.CreateIndexWithPlan("metadata_provider_test_103", "Default", common.ForestDB,
@@ -140,44 +141,44 @@ func TestMetadataProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal("Cannot create Index Defn 103 through MetadataProvider")
 	}
-	common.Infof("done creating index 103")
+	logging.Infof("done creating index 103")
 
 	// Update instance (set state to ACTIVE)
-	if err := mgr.UpdateIndexInstance("Default", newDefnId2, common.INDEX_STATE_ACTIVE, common.StreamId(100), ""); err != nil {
+	if err := mgr.UpdateIndexInstance("Default", newDefnId2, common.INDEX_STATE_ACTIVE, common.StreamId(100), "", nil); err != nil {
 		t.Fatal("Fail to update index instance")
 	}
-	common.Infof("done updating index 103")
+	logging.Infof("done updating index 103")
 
 	// Update instance (set error string)
-	if err := mgr.UpdateIndexInstance("Default", newDefnId2, common.INDEX_STATE_NIL, common.NIL_STREAM, "testing"); err != nil {
+	if err := mgr.UpdateIndexInstance("Default", newDefnId2, common.INDEX_STATE_NIL, common.NIL_STREAM, "testing", nil); err != nil {
 		t.Fatal("Fail to update index instance")
 	}
-	common.Infof("done updating index 103")
+	logging.Infof("done updating index 103")
 
 	// Create Index (immediate).  This index is supposed to fail by OnIndexBuild()
 	if _, err := provider.CreateIndexWithPlan("metadata_provider_test_104", "Default", common.ForestDB,
 		common.N1QL, "Testing", "Testing", []string{"Testing"}, false, nil); err == nil {
 		t.Fatal("Error does not propage for create Index Defn 104 through MetadataProvider")
 	}
-	common.Infof("done creating index 104")
+	logging.Infof("done creating index 104")
 
-	common.Infof("Verify Changed Data *********************************************************")
+	logging.Infof("Verify Changed Data *********************************************************")
 
 	if lookup(provider, common.IndexDefnId(100)) == nil {
 		t.Fatal("Cannot find Index Defn 100 from MetadataProvider")
 	}
-	common.Infof("found Index Defn 100")
+	logging.Infof("found Index Defn 100")
 
 	if lookup(provider, common.IndexDefnId(101)) != nil {
 		t.Fatal("Found Deleted Index Defn 101 from MetadataProvider")
 	}
-	common.Infof("cannot found deleted Index Defn 101")
+	logging.Infof("cannot found deleted Index Defn 101")
 
 	if meta = lookup(provider, newDefnId); meta == nil {
 		t.Fatal(fmt.Sprintf("Cannot Found Index Defn %d from MetadataProvider", newDefnId))
 	} else {
-		common.Infof("Found Index Defn %d", newDefnId)
-		common.Infof("meta.Instance %v", meta.Instances)
+		logging.Infof("Found Index Defn %d", newDefnId)
+		logging.Infof("meta.Instance %v", meta.Instances)
 		if meta.Instances[0].IndexerId != indexerId {
 			t.Fatal(fmt.Sprintf("Index Defn %v has incorrect endpoint", newDefnId))
 		}
@@ -192,8 +193,8 @@ func TestMetadataProvider(t *testing.T) {
 	if meta = lookup(provider, newDefnId2); meta == nil {
 		t.Fatal(fmt.Sprintf("Cannot Found Index Defn %d from MetadataProvider", newDefnId2))
 	} else {
-		common.Infof("Found Index Defn %d", newDefnId2)
-		common.Infof("meta.Instance %v", meta.Instances)
+		logging.Infof("Found Index Defn %d", newDefnId2)
+		logging.Infof("meta.Instance %v", meta.Instances)
 		if meta.Instances[0].IndexerId != indexerId {
 			t.Fatal(fmt.Sprintf("Index Defn %v has incorrect endpoint", newDefnId2))
 		}
@@ -206,21 +207,24 @@ func TestMetadataProvider(t *testing.T) {
 		if meta.Instances[0].Error != "testing" {
 			t.Fatal(fmt.Sprintf("Index Defn %v has incorrect error string", newDefnId2))
 		}
+		if meta.Instances[0].BuildTime[10] != 33 {
+			t.Fatal(fmt.Sprintf("Index Defn %v has incorrect buildtime", newDefnId2))
+		}
 	}
 
 	if !notifier.hasCreated {
 		t.Fatal(fmt.Sprintf("Does not recieve notification for creating index %s", newDefnId))
 	}
-	common.Infof(fmt.Sprintf("Recieve notification for creating index %v", newDefnId))
+	logging.Infof(fmt.Sprintf("Recieve notification for creating index %v", newDefnId))
 
 	if !notifier.hasDeleted {
 		t.Fatal("Does not recieve notification for deleting index 101")
 	}
-	common.Infof("Recieve notification for deleting index 101")
+	logging.Infof("Recieve notification for deleting index 101")
 
 	time.Sleep(time.Duration(1000) * time.Millisecond)
 
-	common.Infof("Verify Cleanup / Timeout *********************************************************")
+	logging.Infof("Verify Cleanup / Timeout *********************************************************")
 
 	// Create Index (immediate).
 
@@ -229,10 +233,10 @@ func TestMetadataProvider(t *testing.T) {
 	if err == nil {
 		t.Fatal("Does not receive timeout error for create Index Defn 105 through MetadataProvider")
 	}
-	common.Infof("recieve expected timeout error when creating index 105")
+	logging.Infof("recieve expected timeout error when creating index 105")
 	close(metadata_provider_test_done)
 
-	common.Infof("Cleanup Test *********************************************************")
+	logging.Infof("Cleanup Test *********************************************************")
 
 	provider.UnwatchMetadata(indexerId)
 	cleanupTest(mgr, t)
@@ -307,15 +311,15 @@ func cleanSingleIndex(mgr *manager.IndexManager, t *testing.T, id common.IndexDe
 
 	_, err := mgr.GetIndexDefnById(id)
 	if err != nil {
-		common.Infof("cleanupTest() :  cannot find index defn %d.  No cleanup ...", id)
+		logging.Infof("cleanupTest() :  cannot find index defn %d.  No cleanup ...", id)
 	} else {
-		common.Infof("cleanupTest.cleanupTest() :  found index defn %d.  Cleaning up ...", id)
+		logging.Infof("cleanupTest.cleanupTest() :  found index defn %d.  Cleaning up ...", id)
 
 		mgr.HandleDeleteIndexDDL(id)
 
 		_, err := mgr.GetIndexDefnById(id)
 		if err == nil {
-			common.Infof("cleanupTest() :  cannot cleanup index defn %d.  ...", id)
+			logging.Infof("cleanupTest() :  cannot cleanup index defn %d.  ...", id)
 		}
 	}
 }
@@ -340,6 +344,11 @@ func (n *notifier) OnIndexDelete(common.IndexDefnId) error {
 }
 
 func (n *notifier) OnIndexBuild(id []common.IndexDefnId) error {
-	err := gMgr.UpdateIndexInstance("Default", id[0], common.INDEX_STATE_INITIAL, common.StreamId(100), "")
+	buildTime := make([]uint64, 1024)
+	buildTime[10] = 33
+	err := gMgr.UpdateIndexInstance("Default", id[0], common.INDEX_STATE_INITIAL, common.StreamId(100), "", buildTime)
+
+	// change the value to test copy works
+	buildTime[10] = 34
 	return err
 }
