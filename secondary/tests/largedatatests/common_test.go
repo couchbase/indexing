@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"github.com/couchbase/cbauth"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
 	"github.com/prataprc/monster/common"
 	"io/ioutil"
+	"log"
 	"os"
 	"runtime"
 	"testing"
@@ -37,13 +37,13 @@ func init() {
 	if _, err := cbauth.InternalRetryDefaultInit(kvaddress, clusterconfig.Username, clusterconfig.Password); err != nil {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
 	}
-	
+
 	proddir, bagdir = tc.FetchMonsterToolPath()
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {
 	if err != nil {
-		t.Fatal("%v: %v\n", msg, err)
+		t.Errorf("%v: %v\n", msg, err)
 	}
 }
 
