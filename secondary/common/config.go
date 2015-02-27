@@ -89,9 +89,9 @@ var SystemConfig = Config{
 		10000,
 	},
 	"projector.feedChanSize": ConfigValue{
-		100,
+		10000,
 		"channel size for feed's control path and its back-channel.",
-		100,
+		10000,
 	},
 	"projector.vbucketSyncTimeout": ConfigValue{
 		500,
