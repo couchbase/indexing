@@ -271,10 +271,10 @@ func (feed *Feed) PostStreamRequest(bucket string, m *mc.DcpEvent) {
 	}
 	fmsg := "%v ##%x backch %T %v\n"
 	logging.Debugf(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
-	err := c.FailsafeOpNoBlock(feed.backch, []interface{}{cmd}, feed.finch)
+	err := c.FailsafeOpNoblock(feed.backch, []interface{}{cmd}, feed.finch)
 	if err == c.ErrorChannelFull {
 		fmsg := "%v ##%x backch blocked on PostStreamRequest\n"
-		logging.Errorf(fmsg, feed.logPrefix, m.opaque)
+		logging.Errorf(fmsg, feed.logPrefix, m.Opaque)
 		// block now !!
 		c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
 	}
@@ -304,10 +304,10 @@ func (feed *Feed) PostStreamEnd(bucket string, m *mc.DcpEvent) {
 	}
 	fmsg := "%v ##%x backch %T %v\n"
 	logging.Debugf(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
-	err := c.FailsafeOpNoBlock(feed.backch, []interface{}{cmd}, feed.finch)
+	err := c.FailsafeOpNoblock(feed.backch, []interface{}{cmd}, feed.finch)
 	if err == c.ErrorChannelFull {
 		fmsg := "%v ##%x backch blocked on PostStreamEnd\n"
-		logging.Errorf(fmsg, feed.logPrefix, m.opaque)
+		logging.Errorf(fmsg, feed.logPrefix, m.Opaque)
 		// block now !!
 		c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
 	}
@@ -328,10 +328,10 @@ func (feed *Feed) PostFinKVdata(bucket string) {
 	cmd := &controlFinKVData{bucket: bucket}
 	fmsg := "%v backch %T %v\n"
 	logging.Debugf(fmsg, feed.logPrefix, cmd, cmd.Repr())
-	err := c.FailsafeOpNoBlock(feed.backch, []interface{}{cmd}, feed.finch)
+	err := c.FailsafeOpNoblock(feed.backch, []interface{}{cmd}, feed.finch)
 	if err == c.ErrorChannelFull {
-		fmsg := "%v ##%x backch blocked on PostFinKVdata\n"
-		logging.Errorf(fmsg, feed.logPrefix, m.opaque)
+		fmsg := "%v backch blocked on PostFinKVdata\n"
+		logging.Errorf(fmsg, feed.logPrefix)
 		// block now !!
 		c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
 	}
