@@ -26,7 +26,7 @@ import (
 
 const (
 	HTTP_PREFIX             string = "http://"
-	MAX_KV_REQUEST_RETRY    int    = 3
+	MAX_KV_REQUEST_RETRY    int    = 1
 	BACKOFF_FACTOR          int    = 2
 	MAX_CLUSTER_FETCH_RETRY int    = 600
 )
