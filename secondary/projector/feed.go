@@ -271,7 +271,13 @@ func (feed *Feed) PostStreamRequest(bucket string, m *mc.DcpEvent) {
 	}
 	fmsg := "%v ##%x backch %T %v\n"
 	logging.Debugf(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
-	c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
+	err := c.FailsafeOpNoBlock(feed.backch, []interface{}{cmd}, feed.finch)
+	if err == c.ErrorChannelFull {
+		fmsg := "%v ##%x backch blocked on PostStreamRequest\n"
+		logging.Errorf(fmsg, feed.logPrefix, m.opaque)
+		// block now !!
+		c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
+	}
 }
 
 type controlStreamEnd struct {
@@ -298,7 +304,13 @@ func (feed *Feed) PostStreamEnd(bucket string, m *mc.DcpEvent) {
 	}
 	fmsg := "%v ##%x backch %T %v\n"
 	logging.Debugf(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
-	c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
+	err := c.FailsafeOpNoBlock(feed.backch, []interface{}{cmd}, feed.finch)
+	if err == c.ErrorChannelFull {
+		fmsg := "%v ##%x backch blocked on PostStreamEnd\n"
+		logging.Errorf(fmsg, feed.logPrefix, m.opaque)
+		// block now !!
+		c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
+	}
 }
 
 type controlFinKVData struct {
@@ -316,7 +328,13 @@ func (feed *Feed) PostFinKVdata(bucket string) {
 	cmd := &controlFinKVData{bucket: bucket}
 	fmsg := "%v backch %T %v\n"
 	logging.Debugf(fmsg, feed.logPrefix, cmd, cmd.Repr())
-	c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
+	err := c.FailsafeOpNoBlock(feed.backch, []interface{}{cmd}, feed.finch)
+	if err == c.ErrorChannelFull {
+		fmsg := "%v ##%x backch blocked on PostFinKVdata\n"
+		logging.Errorf(fmsg, feed.logPrefix, m.opaque)
+		// block now !!
+		c.FailsafeOp(feed.backch, respch, []interface{}{cmd}, feed.finch)
+	}
 }
 
 func (feed *Feed) genServer() {
@@ -1099,7 +1117,7 @@ func (feed *Feed) bucketDetails(
 	// failover-logs
 	flogs, err := bucket.GetFailoverLogs(vbnos)
 	if err != nil {
-		fmsg := "%v ##%x %q.GetFailoverLogs(): %v"
+		fmsg := "%v ##%x GetFailoverLogs(%q): %v"
 		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
 		return nil, err
 	}

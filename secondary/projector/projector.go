@@ -244,7 +244,7 @@ func (p *Projector) doFailoverLog(
 			protoFlogs = append(protoFlogs, protoFlog)
 		}
 	} else {
-		logging.Errorf("%v %s.GetFailoverLogs() %v\n", p.logPrefix, bucketn, err)
+		logging.Errorf("%v GetFailoverLogs(%q) %v\n", p.logPrefix, bucketn, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
