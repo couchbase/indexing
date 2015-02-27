@@ -20,11 +20,15 @@ type metadataClient struct {
 	replicas map[common.IndexDefnId][]common.IndexDefnId
 	// shelock load balancing.
 	loads map[common.IndexDefnId]*loadHeuristics // index -> loadHeuristics
+
+	// For observing node services config
+	scn *common.ServicesChangeNotifier
 }
 
 func newMetaBridgeClient(cluster string) (c *metadataClient, err error) {
+	clusterURL := common.ClusterUrl(cluster)
 	cinfo, err :=
-		common.NewClusterInfoCache(common.ClusterUrl(cluster), "default")
+		common.NewClusterInfoCache(clusterURL, "default")
 	if err != nil {
 		return nil, err
 	}
@@ -46,6 +50,12 @@ func newMetaBridgeClient(cluster string) (c *metadataClient, err error) {
 	}
 	if err := b.updateIndexerList(cinfo); err != nil {
 		b.mdClient.Close()
+		return nil, err
+	}
+
+	b.scn, err = common.NewServicesChangeNotifier(clusterURL, "default")
+	if err != nil {
+		err := fmt.Errorf("error common.NewServicesChangeNotifier(): %v", err)
 		return nil, err
 	}
 
@@ -235,6 +245,7 @@ func (b *metadataClient) IndexState(defnID uint64) (common.IndexState, error) {
 // an active indexer leaves the cluster or during system shutdown.
 func (b *metadataClient) Close() {
 	b.mdClient.Close()
+	b.scn.Close()
 }
 
 //--------------------------------
@@ -441,14 +452,9 @@ func (b *metadataClient) watchClusterChanges(cluster string) {
 		err := fmt.Errorf("error NewClusterInfoCache(): %v", err)
 		panic(err)
 	}
-	snotifer, err := common.NewServicesChangeNotifier(clusterURL, "default")
-	if err != nil {
-		err := fmt.Errorf("error common.NewServicesChangeNotifier(): %v", err)
-		panic(err)
-	}
 
 	for {
-		if _, err := snotifer.Get(); err != nil {
+		if _, err := b.scn.Get(); err != nil {
 			if err == common.ErrNodeServicesCancel {
 				return
 			}
