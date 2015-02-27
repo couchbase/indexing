@@ -1495,7 +1495,8 @@ func newDCPConnectionName(bucketn, topic string, uuid uint64) string {
 func (feed *Feed) connectBucket(
 	cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
 
-	couch, err := couchbase.Connect("http://" + cluster)
+	ah := &c.CbAuthHandler{Hostport: cluster, Bucket: bucketn}
+	couch, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
 	if err != nil {
 		fmsg := "%v connectBucket(`%v`): %v"
 		logging.Errorf(fmsg, feed.logPrefix, bucketn, err)

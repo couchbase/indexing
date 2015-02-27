@@ -195,13 +195,13 @@ func OpError(err error, vals []interface{}, idx int) error {
 
 // cbauth admin authentication helper
 // Uses default cbauth env variables internally to provide auth creds
-type cbAuthHandler struct {
-	hostport string
-	bucket   string
+type CbAuthHandler struct {
+	Hostport string
+	Bucket   string
 }
 
-func (ah *cbAuthHandler) GetCredentials() (string, string) {
-	u, p, err := cbauth.GetHTTPServiceAuth(ah.hostport)
+func (ah *CbAuthHandler) GetCredentials() (string, string) {
+	u, p, err := cbauth.GetHTTPServiceAuth(ah.Hostport)
 	if err != nil {
 		panic(err)
 	}
@@ -209,13 +209,13 @@ func (ah *cbAuthHandler) GetCredentials() (string, string) {
 	return u, p
 }
 
-func (ah *cbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.Client) error {
+func (ah *CbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.Client) error {
 	u, p, err := cbauth.GetMemcachedServiceAuth(host)
 	if err != nil {
 		panic(err)
 	}
 	_, err = conn.Auth(u, p)
-	_, err = conn.SelectBucket(ah.bucket)
+	_, err = conn.SelectBucket(ah.Bucket)
 	return err
 }
 
@@ -430,9 +430,9 @@ func EquivalentIP(
 // ConnectBucket will instantiate a couchbase-bucket instance with cluster.
 // caller's responsibility to close the bucket.
 func ConnectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
-	ah := &cbAuthHandler{
-		hostport: cluster,
-		bucket:   bucketn,
+	ah := &CbAuthHandler{
+		Hostport: cluster,
+		Bucket:   bucketn,
 	}
 	couch, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
 	if err != nil {
