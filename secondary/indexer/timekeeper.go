@@ -1630,6 +1630,9 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
 		logging.Debugf("Timekeeper::repairStream Nothing to repair for "+
 			"Stream %v and Bucket %v", streamId, bucket)
+
+		//process any merge that was missed due to stream repair
+		tk.checkPendingStreamMerge(streamId, bucket)
 	}
 
 }
@@ -1803,4 +1806,17 @@ func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
 	}
 
 	return false
+}
+
+//check any stream merge that was missed due to stream repair
+func (tk *timekeeper) checkPendingStreamMerge(streamId common.StreamId,
+	bucket string) {
+
+	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
+		!tk.ss.checkAnyAbortPending(streamId, bucket) {
+
+		lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+		tk.checkInitStreamReadyToMerge(streamId, bucket, lastFlushedTs)
+
+	}
 }
