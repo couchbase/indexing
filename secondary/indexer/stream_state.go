@@ -11,8 +11,8 @@ package indexer
 
 import (
 	"container/list"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 type StreamState struct {
@@ -408,18 +408,17 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	//snapshot high seq num as that persistence will happen at these seqnums.
 	updateTsSeqNumToSnapshot(tsVbuuid)
 
-	numVbuckets := uint64(ss.config["numVbuckets"].Int())
-	snapInterval := ss.config["settings.inmemory_snapshot.interval"].Uint64() * numVbuckets
-	snapPersistInterval := ss.config["settings.persisted_snapshot.interval"].Uint64() * numVbuckets
-	syncPeriod := ss.config["sync_period"].Uint64()
+	snapInterval := ss.config["settings.inmemory_snapshot.interval"].Uint64()
+	snapPersistInterval := ss.config["settings.persisted_snapshot.interval"].Uint64()
 	// Number of inmemory ts after which a persisted timestamp should be generated
-	numInMemTs := snapPersistInterval / (syncPeriod * snapInterval)
+	numInMemTs := snapPersistInterval / snapInterval
 
 	if ss.streamBucketInMemTsCountMap[streamId][bucket] == numInMemTs {
 		//set persisted flag
 		tsVbuuid.SetPersisted(true)
 		ss.streamBucketInMemTsCountMap[streamId][bucket] = 0
 	} else {
+		tsVbuuid.SetPersisted(false)
 		ss.streamBucketInMemTsCountMap[streamId][bucket]++
 	}
 
