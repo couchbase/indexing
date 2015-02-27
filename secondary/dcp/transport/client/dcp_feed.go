@@ -136,6 +136,8 @@ func (feed *DcpFeed) genServer(
 			logging.Errorf("%s", logging.StackTrace())
 		}
 		close(feed.finch)
+		feed.conn.Close()
+		feed.conn = nil
 		logging.Infof("%v ... stopped\n", feed.logPrefix)
 	}()
 
@@ -188,14 +190,14 @@ loop:
 
 			case dfCmdCloseStream:
 				vbno, opaqueMSB := msg[1].(uint16), msg[2].(uint16)
-				respch := msg[9].(chan []interface{})
+				respch := msg[3].(chan []interface{})
 				err := feed.doDcpCloseStream(vbno, opaqueMSB)
 				respch <- []interface{}{err}
 
 			case dfCmdClose:
 				feed.sendStreamEnd(feed.outch)
-				feed.conn.Close()
-				feed.conn = nil
+				respch := msg[1].(chan []interface{})
+				respch <- []interface{}{nil}
 				break loop
 			}
 
@@ -210,6 +212,15 @@ loop:
 			}
 		}
 	}
+}
+
+func (feed *DcpFeed) isClosed() bool {
+	select {
+	case <-feed.finch:
+		return true
+	default:
+	}
+	return false
 }
 
 func (feed *DcpFeed) handlePacket(
@@ -747,6 +758,10 @@ func (feed *DcpFeed) doReceive(rcvch chan []interface{}) {
 		bytes, err := pkt.Receive(feed.conn.conn, headerBuf[:])
 		if err != nil && err == io.EOF {
 			logging.Infof("%v EOF received\n", feed.logPrefix)
+			break
+
+		} else if feed.isClosed() {
+			logging.Infof("%v doReceive(): connection closed\n", feed.logPrefix)
 			break
 
 		} else if err != nil {

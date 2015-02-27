@@ -183,9 +183,9 @@ func (feed *DcpFeed) genServer(reqch chan []interface{}) {
 		if r := recover(); r != nil {
 			logging.Errorf("%v crashed: %v\n", feed.logPrefix, r)
 			logging.Errorf("%s", logging.StackTrace())
-			for _, nodeFeed := range feed.nodeFeeds {
-				nodeFeed.dcpFeed.Close()
-			}
+		}
+		for _, nodeFeed := range feed.nodeFeeds {
+			nodeFeed.dcpFeed.Close()
 		}
 		feed.nodeFeeds = nil
 		close(feed.output)
