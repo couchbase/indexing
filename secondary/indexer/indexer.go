@@ -409,14 +409,20 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.mutMgrCmdCh <- msg
 		<-idx.mutMgrCmdCh
 
-	case MUT_MGR_FLUSH_DONE, MUT_MGR_ABORT_DONE:
+	case MUT_MGR_FLUSH_DONE:
+
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
+	case MUT_MGR_ABORT_DONE:
+
+		idx.tkCmdCh <- msg
+		<-idx.tkCmdCh
+
+	case STORAGE_SNAP_DONE:
 
 		bucket := msg.(*MsgMutMgrFlushDone).GetBucket()
 		streamId := msg.(*MsgMutMgrFlushDone).GetStreamId()
-
-		//fwd the message to storage manager
-		idx.storageMgrCmdCh <- msg
-		<-idx.storageMgrCmdCh
 
 		idx.streamBucketFlushInProgress[streamId][bucket] = false
 

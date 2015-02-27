@@ -149,7 +149,7 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case TK_DISABLE_FLUSH:
 		tk.handleFlushStateChange(cmd)
 
-	case MUT_MGR_FLUSH_DONE:
+	case STORAGE_SNAP_DONE:
 		tk.handleFlushDone(cmd)
 
 	case MUT_MGR_ABORT_DONE:

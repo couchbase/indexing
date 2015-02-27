@@ -177,19 +177,28 @@ func (s *storageMgr) handleSupvervisorCommands(cmd Message) {
 //after flush has completed
 func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
+	s.supvCmdch <- &MsgSuccess{}
+
 	logging.Tracef("StorageMgr::handleCreateSnapshot %v", cmd)
 
-	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
-	tsVbuuid := cmd.(*MsgMutMgrFlushDone).GetTS()
-	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
+	msgFlushDone := cmd.(*MsgMutMgrFlushDone)
+
+	bucket := msgFlushDone.GetBucket()
+	tsVbuuid := msgFlushDone.GetTS()
+	streamId := msgFlushDone.GetStreamId()
 
 	numVbuckets := s.config["numVbuckets"].Int()
 	var needsCommit bool = tsVbuuid.IsPersisted()
 
 	if !s.needSnapshot(streamId, bucket, tsVbuuid.IsPersisted()) {
+
 		logging.Debugf("StorageMgr::handleCreateSnapshot \n\tSkip Snapshot For %v "+
 			"%v Persisted %v", streamId, bucket, tsVbuuid.IsPersisted())
-		s.supvCmdch <- &MsgSuccess{}
+
+		s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
+			streamId: streamId,
+			bucket:   bucket,
+			ts:       tsVbuuid}
 		return
 	}
 
@@ -327,7 +336,10 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		}
 	}
 
-	s.supvCmdch <- &MsgSuccess{}
+	s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
+		streamId: streamId,
+		bucket:   bucket,
+		ts:       tsVbuuid}
 
 }
 
