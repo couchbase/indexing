@@ -111,6 +111,8 @@ func (p *Projector) GetFeedConfig(topic string) c.Config {
 	config.Set("mutationChanSize", pconf["mutationChanSize"])
 	config.Set("vbucketSyncTimeout", pconf["vbucketSyncTimeout"])
 	config.Set("routerEndpointFactory", pconf["routerEndpointFactory"])
+	config.Set("dcp.genChanSize", pconf["dcp.genChanSize"])
+	config.Set("dcp.dataChanSize", pconf["dcp.dataChanSize"])
 	return config
 }
 
@@ -228,7 +230,12 @@ func (p *Projector) doFailoverLog(
 
 	protoFlogs := make([]*protobuf.FailoverLog, 0, len(vbuckets))
 	vbnos := c.Vbno32to16(vbuckets)
-	if flogs, err := bucket.GetFailoverLogs(vbnos); err == nil {
+	dcpConfig := map[string]interface{}{
+		"genChanSize":  p.config["projector.dcp.genChanSize"].Int(),
+		"dataChanSize": p.config["projector.dcp.dataChanSize"].Int(),
+	}
+	flogs, err := bucket.GetFailoverLogs(vbnos, dcpConfig)
+	if err == nil {
 		for vbno, flog := range flogs {
 			vbuuids := make([]uint64, 0, len(flog))
 			seqnos := make([]uint64, 0, len(flog))

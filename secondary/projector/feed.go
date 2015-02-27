@@ -1074,7 +1074,11 @@ func (feed *Feed) bucketFeed(
 			return nil, err
 		}
 		name := newDCPConnectionName(bucket.Name, feed.topic, uuid.Uint64())
-		feeder, err = OpenBucketFeed(name, bucket)
+		dcpConfig := map[string]interface{}{
+			"genChanSize":  feed.config["dcp.genChanSize"].Int(),
+			"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
+		}
+		feeder, err = OpenBucketFeed(name, bucket, dcpConfig)
 		if err != nil {
 			fmsg := "%v ##%x OpenBucketFeed(%q): %v"
 			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
@@ -1115,7 +1119,11 @@ func (feed *Feed) bucketDetails(
 	defer bucket.Close()
 
 	// failover-logs
-	flogs, err := bucket.GetFailoverLogs(vbnos)
+	dcpConfig := map[string]interface{}{
+		"genChanSize":  feed.config["dcp.genChanSize"].Int(),
+		"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
+	}
+	flogs, err := bucket.GetFailoverLogs(vbnos, dcpConfig)
 	if err != nil {
 		fmsg := "%v ##%x GetFailoverLogs(%q): %v"
 		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
