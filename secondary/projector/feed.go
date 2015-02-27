@@ -400,8 +400,8 @@ loop:
 				feed.rollTss[cmd.bucket] = rollTs
 
 			} else if cmd, ok := msg[0].(*controlFinKVData); ok {
-				logging.Debugf(
-					"%v backch flush %T -- %v\n", prefix, cmd, cmd.Repr())
+				fmsg := "%v backch flush %T -- %v\n"
+				logging.Debugf(fmsg, prefix, cmd, cmd.Repr())
 				actTs, ok := feed.actTss[cmd.bucket]
 				if ok && actTs != nil && actTs.Len() == 0 { // bucket is done
 					logging.Debugf("%v self deleting bucket\n", prefix)
@@ -879,7 +879,7 @@ func (feed *Feed) repairEndpoints(
 			topic, typ := feed.topic, feed.endpointType
 			endpoint, e = feed.epFactory(topic, typ, raddr)
 			if e != nil {
-				fmsg := "%v endpoint-factor %q: %v\n"
+				fmsg := "%v endpoint-factory %q: %v\n"
 				logging.Errorf(fmsg, prefix, raddr1, e)
 				err = e
 				continue
@@ -887,7 +887,8 @@ func (feed *Feed) repairEndpoints(
 			logging.Infof("%v endpoint %q restarted\n", prefix, raddr)
 
 		} else {
-			logging.Infof("%v endpoint %q active ...\n", prefix, raddr)
+			fmsg := "%v endpoint %q active ...\n"
+			logging.Infof(fmsg, prefix, raddr)
 		}
 		// FIXME: hack to make both node-name available from
 		// endpoints table.
@@ -1217,7 +1218,7 @@ func (feed *Feed) startEndpoints(
 				topic, typ := feed.topic, feed.endpointType
 				endpoint, e = feed.epFactory(topic, typ, raddr)
 				if e != nil {
-					fmsg := "%v ##%x endpoint-factor %q: %v\n"
+					fmsg := "%v ##%x endpoint-factory %q: %v\n"
 					logging.Errorf(fmsg, prefix, opaque, raddr1, e)
 					err = e
 					continue
@@ -1227,7 +1228,7 @@ func (feed *Feed) startEndpoints(
 
 			} else {
 				fmsg := "%v ##%x endpoint %q active ...\n"
-				logging.Infof(fmsg, prefix, raddr)
+				logging.Infof(fmsg, prefix, opaque, raddr)
 			}
 			// FIXME: hack to make both node-name available from
 			// endpoints table.
