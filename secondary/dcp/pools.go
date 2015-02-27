@@ -26,7 +26,7 @@ var HTTPTransport = &http.Transport{MaxIdleConnsPerHost: MaxIdleConnsPerHost}
 var HTTPClient = &http.Client{Transport: HTTPTransport}
 
 // PoolSize is the size of each connection pool (per host).
-var PoolSize = 4
+var PoolSize = 64
 
 // PoolOverflow is the number of overflow connections allowed in a
 // pool.
