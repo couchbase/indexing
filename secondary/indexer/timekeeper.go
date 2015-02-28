@@ -1814,6 +1814,16 @@ func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
 func (tk *timekeeper) checkPendingStreamMerge(streamId common.StreamId,
 	bucket string) {
 
+	//for repair done of MAINT_STREAM, if there is any corresponding INIT_STREAM,
+	//check the possibility of merge
+	if streamId == common.MAINT_STREAM {
+		if tk.ss.streamBucketStatus[common.INIT_STREAM][bucket] == STREAM_ACTIVE {
+			streamId = common.INIT_STREAM
+		} else {
+			return
+		}
+	}
+
 	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
 		!tk.ss.checkAnyAbortPending(streamId, bucket) {
 
