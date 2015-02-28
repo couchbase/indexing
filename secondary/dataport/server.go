@@ -324,8 +324,13 @@ func (s *Server) handleClose() {
 
 // start a connection worker to read mutation message for a subset of vbuckets.
 func (s *Server) startWorker(raddr string) {
+	nc, ok := s.conns[raddr]
+	if !ok {
+		fmsg := "%v connection %q already gone stale !\n"
+		logging.Infof(fmsg, s.logPrefix, raddr)
+		return
+	}
 	logging.Tracef("%v starting worker for connection %q\n", s.logPrefix, raddr)
-	nc := s.conns[raddr]
 	go doReceive(s.logPrefix, nc, s.maxPayload, s.readDeadline, s.appch, s.reqch)
 	nc.active = true
 }
