@@ -701,6 +701,7 @@ type MsgRestartVbuckets struct {
 	streamId  common.StreamId
 	bucket    string
 	restartTs *common.TsVbuuid
+	connErr   bool
 	respCh    MsgChannel
 	stopCh    StopChannel
 }
@@ -721,6 +722,10 @@ func (m *MsgRestartVbuckets) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
 }
 
+func (m *MsgRestartVbuckets) HasConnErr() bool {
+	return m.connErr
+}
+
 func (m *MsgRestartVbuckets) GetResponseCh() MsgChannel {
 	return m.respCh
 }
@@ -732,6 +737,7 @@ func (m *MsgRestartVbuckets) GetStopChannel() StopChannel {
 func (m *MsgRestartVbuckets) String() string {
 	str := "\n\tMessage: MsgRestartVbuckets"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	str += fmt.Sprintf("\n\tRestartTS: %v", m.restartTs)
 	return str
 }

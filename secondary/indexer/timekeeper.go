@@ -920,6 +920,9 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 
 	streamId := cmd.(*MsgStreamInfo).GetStreamId()
 	bucket := cmd.(*MsgStreamInfo).GetBucket()
+	vbList := cmd.(*MsgStreamInfo).GetVbList()
+
+	logging.Debugf("TK ConnError %v %v %v", streamId, bucket, vbList)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -935,8 +938,6 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 	switch state {
 
 	case STREAM_ACTIVE:
-		vbList := cmd.(*MsgStreamInfo).GetVbList()
-		bucket := cmd.(*MsgStreamInfo).GetBucket()
 		tk.ss.updateVbStatus(streamId, bucket, vbList, VBS_CONN_ERROR)
 		if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
 			tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
@@ -1613,7 +1614,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 	//prepare repairTs with all vbs in STREAM_END, REPAIR status and
 	//send that to KVSender to repair
-	if repairTs, ok := tk.ss.getRepairTsForBucket(streamId, bucket); ok {
+	if repairTs, needRepair, connErr := tk.ss.getRepairTsForBucket(streamId, bucket); needRepair {
 
 		respCh := make(MsgChannel)
 		stopCh := tk.ss.streamBucketRepairStopCh[streamId][bucket]
@@ -1622,7 +1623,8 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 			bucket:    bucket,
 			restartTs: repairTs,
 			respCh:    respCh,
-			stopCh:    stopCh}
+			stopCh:    stopCh,
+			connErr:   connErr}
 
 		go tk.sendRestartMsg(restartMsg)
 

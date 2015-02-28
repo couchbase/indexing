@@ -261,28 +261,32 @@ func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
 }
 
 func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
-	bucket string) (*common.TsVbuuid, bool) {
+	bucket string) (*common.TsVbuuid, bool, bool) {
 
 	anythingToRepair := false
+	hasConnErr := false
 
 	numVbuckets := ss.config["numVbuckets"].Int()
 	repairTs := common.NewTsVbuuid(bucket, numVbuckets)
 
 	hwtTs := ss.streamBucketHWTMap[streamId][bucket]
 	for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
-		if s == VBS_STREAM_END || s == VBS_CONN_ERROR ||
-			s == VBS_REPAIR {
+		if s == VBS_STREAM_END || s == VBS_CONN_ERROR {
 			repairTs.Seqnos[i] = hwtTs.Seqnos[i]
 			repairTs.Vbuuids[i] = hwtTs.Vbuuids[i]
 			repairTs.Snapshots[i][0] = hwtTs.Snapshots[i][0]
 			repairTs.Snapshots[i][1] = hwtTs.Snapshots[i][1]
-			//change the status of this vbucket to REPAIR
-			ss.streamBucketVbStatusMap[streamId][bucket][i] = VBS_REPAIR
+
+			//connection error needs special handling in repair
+			//shutdownVbuckets needs to be called before restart
+			if s == VBS_CONN_ERROR {
+				hasConnErr = true
+			}
 			anythingToRepair = true
 		}
 	}
 
-	return repairTs, anythingToRepair
+	return repairTs, anythingToRepair, hasConnErr
 
 }
 

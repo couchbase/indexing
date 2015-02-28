@@ -205,8 +205,9 @@ func (k *kvSender) handleRestartVbuckets(cmd Message) {
 	restartTs := cmd.(*MsgRestartVbuckets).GetRestartTs()
 	respCh := cmd.(*MsgRestartVbuckets).GetResponseCh()
 	stopCh := cmd.(*MsgRestartVbuckets).GetStopChannel()
+	connErr := cmd.(*MsgRestartVbuckets).HasConnErr()
 
-	go k.restartVbuckets(streamId, restartTs, respCh, stopCh)
+	go k.restartVbuckets(streamId, restartTs, connErr, respCh, stopCh)
 	k.supvCmdch <- &MsgSuccess{}
 }
 
@@ -319,7 +320,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 }
 
 func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
-	respCh MsgChannel, stopCh StopChannel) {
+	connErr bool, respCh MsgChannel, stopCh StopChannel) {
 
 	addrs, err := k.getProjAddrsForVbuckets(restartTs.Bucket, restartTs.GetVbnos())
 	if err != nil {
@@ -347,7 +348,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 		for _, addr := range addrs {
 			ap := newProjClient(addr)
 
-			if res, ret := sendRestartVbuckets(ap, topic, protoRestartTs); ret != nil {
+			if res, ret := sendRestartVbuckets(ap, topic, connErr, protoRestartTs); ret != nil {
 				//retry for all errors
 				logging.Errorf("KVSender::restartVbuckets \n\t Error Received %v from %v", ret, addr)
 				err = ret
@@ -612,21 +613,23 @@ func sendMutationTopicRequest(ap *projClient.Client, topic string,
 }
 
 func sendRestartVbuckets(ap *projClient.Client,
-	topic string,
+	topic string, connErr bool,
 	restartTs *protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
 
 	logging.Debugf("KVSender::sendRestartVbuckets Projector %v Topic %v \n\tRestartTs %v",
 		ap, topic, restartTs.Repr())
 
-	//Shutdown the vbucket before restart. If the vbucket is already
+	//Shutdown the vbucket before restart if there was a ConnErr. If the vbucket is already
 	//running, projector will ignore the request otherwise
-	if err := ap.ShutdownVbuckets(topic, []*protobuf.TsVbuuid{restartTs}); err != nil {
-		logging.Errorf("KVSender::sendRestartVbuckets \n\tUnexpected Error During "+
-			"ShutdownVbuckets Request for Projector %v Topic %v. Err %v.", ap,
-			topic, err)
+	if connErr {
+		if err := ap.ShutdownVbuckets(topic, []*protobuf.TsVbuuid{restartTs}); err != nil {
+			logging.Errorf("KVSender::sendRestartVbuckets \n\tUnexpected Error During "+
+				"ShutdownVbuckets Request for Projector %v Topic %v. Err %v.", ap,
+				topic, err)
 
-		//all shutdownVbuckets errors are treated as success as it is a best-effort call.
-		//RestartVbuckets errors will be acted upon.
+			//all shutdownVbuckets errors are treated as success as it is a best-effort call.
+			//RestartVbuckets errors will be acted upon.
+		}
 	}
 
 	if res, err := ap.RestartVbuckets(topic, []*protobuf.TsVbuuid{restartTs}); err != nil {
