@@ -91,10 +91,10 @@ func (f *ForestDBIterator) Next() {
 	}
 
 	//free the doc allocated by forestdb
-	if f.curr != nil {
-		f.curr.Close()
-		f.curr = nil
-	}
+	//	if f.curr != nil {
+	//		f.curr.Close()
+	//		f.curr = nil
+	//	}
 
 	f.Get()
 }
@@ -137,10 +137,10 @@ func (f *ForestDBIterator) Valid() bool {
 func (f *ForestDBIterator) Close() error {
 
 	//free the doc allocated by forestdb
-	if f.curr != nil {
-		f.curr.Close()
-		f.curr = nil
-	}
+	//	if f.curr != nil {
+	//		f.curr.Close()
+	//		f.curr = nil
+	//	}
 
 	var err error
 	f.valid = false
