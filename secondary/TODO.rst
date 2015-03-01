@@ -1,9 +1,6 @@
-- https://issues.couchbase.com/browse/MB-13485 (Bucket delete-create)
 - https://issues.couchbase.com/browse/MB-13375
   (Range statistics, should be moved to backlog?)
 - GetFailoverLog() issue from goxdcr.
-- Connection overflow due to indexer restart.
-- hangs when adding index instance during rebalance.
 - projector memory profiling, dynamic settings for `memprofile`
 - Upstream (DCP) record replay.
 - Integrate new transport with queryport.

@@ -61,7 +61,7 @@ type Feed struct {
 //    mutationChanSize: channel size of projector's data path routine
 //    vbucketSyncTimeout: timeout, in ms, for sending periodic Sync messages
 //    routerEndpointFactory: endpoint factory
-func NewFeed(topic string, config c.Config) (*Feed, error) {
+func NewFeed(topic string, config c.Config, opaque uint16) (*Feed, error) {
 	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
 	chsize := config["feedChanSize"].Int()
 	feed := &Feed{
@@ -122,10 +122,10 @@ func (feed *Feed) SetConfig(config c.Config) error {
 // MutationTopic will start the feed.
 // Synchronous call.
 func (feed *Feed) MutationTopic(
-	req *protobuf.MutationTopicRequest) (*protobuf.TopicResponse, error) {
+	req *protobuf.MutationTopicRequest, opaque uint16) (*protobuf.TopicResponse, error) {
 
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdStart, req, respch}
+	cmd := []interface{}{fCmdStart, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return resp[0].(*protobuf.TopicResponse), c.OpError(err, resp, 1)
 }
@@ -133,10 +133,10 @@ func (feed *Feed) MutationTopic(
 // RestartVbuckets will restart upstream vbuckets for specified buckets.
 // Synchronous call.
 func (feed *Feed) RestartVbuckets(
-	req *protobuf.RestartVbucketsRequest) (*protobuf.TopicResponse, error) {
+	req *protobuf.RestartVbucketsRequest, opaque uint16) (*protobuf.TopicResponse, error) {
 
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdRestartVbuckets, req, respch}
+	cmd := []interface{}{fCmdRestartVbuckets, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return resp[0].(*protobuf.TopicResponse), c.OpError(err, resp, 1)
 }
@@ -144,9 +144,10 @@ func (feed *Feed) RestartVbuckets(
 // ShutdownVbuckets will shutdown streams for
 // specified buckets.
 // Synchronous call.
-func (feed *Feed) ShutdownVbuckets(req *protobuf.ShutdownVbucketsRequest) error {
+func (feed *Feed) ShutdownVbuckets(
+	req *protobuf.ShutdownVbucketsRequest, opaque uint16) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdShutdownVbuckets, req, respch}
+	cmd := []interface{}{fCmdShutdownVbuckets, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
@@ -155,10 +156,11 @@ func (feed *Feed) ShutdownVbuckets(req *protobuf.ShutdownVbucketsRequest) error 
 // and downstream elements, except endpoints.
 // Synchronous call.
 func (feed *Feed) AddBuckets(
-	req *protobuf.AddBucketsRequest) (*protobuf.TopicResponse, error) {
+	req *protobuf.AddBucketsRequest,
+	opaque uint16) (*protobuf.TopicResponse, error) {
 
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdAddBuckets, req, respch}
+	cmd := []interface{}{fCmdAddBuckets, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return resp[0].(*protobuf.TopicResponse), c.OpError(err, resp, 1)
 }
@@ -166,9 +168,11 @@ func (feed *Feed) AddBuckets(
 // DelBuckets will remove buckets and all its upstream
 // and downstream elements, except endpoints.
 // Synchronous call.
-func (feed *Feed) DelBuckets(req *protobuf.DelBucketsRequest) error {
+func (feed *Feed) DelBuckets(
+	req *protobuf.DelBucketsRequest, opaque uint16) error {
+
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdDelBuckets, req, respch}
+	cmd := []interface{}{fCmdDelBuckets, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
@@ -176,9 +180,11 @@ func (feed *Feed) DelBuckets(req *protobuf.DelBucketsRequest) error {
 // AddInstances will restart specified endpoint-address if
 // it is not active already.
 // Synchronous call.
-func (feed *Feed) AddInstances(req *protobuf.AddInstancesRequest) error {
+func (feed *Feed) AddInstances(
+	req *protobuf.AddInstancesRequest, opaque uint16) error {
+
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdAddInstances, req, respch}
+	cmd := []interface{}{fCmdAddInstances, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
@@ -186,9 +192,11 @@ func (feed *Feed) AddInstances(req *protobuf.AddInstancesRequest) error {
 // DelInstances will restart specified endpoint-address if
 // it is not active already.
 // Synchronous call.
-func (feed *Feed) DelInstances(req *protobuf.DelInstancesRequest) error {
+func (feed *Feed) DelInstances(
+	req *protobuf.DelInstancesRequest, opaque uint16) error {
+
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdDelInstances, req, respch}
+	cmd := []interface{}{fCmdDelInstances, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
@@ -196,9 +204,11 @@ func (feed *Feed) DelInstances(req *protobuf.DelInstancesRequest) error {
 // RepairEndpoints will restart specified endpoint-address if
 // it is not active already.
 // Synchronous call.
-func (feed *Feed) RepairEndpoints(req *protobuf.RepairEndpointsRequest) error {
+func (feed *Feed) RepairEndpoints(
+	req *protobuf.RepairEndpointsRequest, opaque uint16) error {
+
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdRepairEndpoints, req, respch}
+	cmd := []interface{}{fCmdRepairEndpoints, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return c.OpError(err, resp, 0)
 }
@@ -236,9 +246,9 @@ func (feed *Feed) GetStatistics() c.Statistics {
 
 // Shutdown feed, its upstream connection with kv and downstream endpoints.
 // Synchronous call.
-func (feed *Feed) Shutdown() error {
+func (feed *Feed) Shutdown(opaque uint16) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdShutdown, respch}
+	cmd := []interface{}{fCmdShutdown, opaque, respch}
 	_, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return err
 }
@@ -342,7 +352,7 @@ func (feed *Feed) genServer() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v feed gen-server crashed: %v\n", feed.logPrefix, r)
 			logging.Errorf("%s", logging.StackTrace())
-			feed.shutdown()
+			feed.shutdown(0xFFFF)
 		}
 	}()
 
@@ -451,49 +461,49 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 	switch cmd := msg[0].(byte); cmd {
 	case fCmdStart:
 		req := msg[1].(*protobuf.MutationTopicRequest)
-		respch := msg[2].(chan []interface{})
-		err := feed.start(req)
+		opaque, respch := msg[2].(uint16), msg[3].(chan []interface{})
+		err := feed.start(req, opaque)
 		response := feed.topicResponse()
 		respch <- []interface{}{response, err}
 
 	case fCmdRestartVbuckets:
 		req := msg[1].(*protobuf.RestartVbucketsRequest)
-		respch := msg[2].(chan []interface{})
-		err := feed.restartVbuckets(req)
+		opaque, respch := msg[2].(uint16), msg[3].(chan []interface{})
+		err := feed.restartVbuckets(req, opaque)
 		response := feed.topicResponse()
 		respch <- []interface{}{response, err}
 
 	case fCmdShutdownVbuckets:
 		req := msg[1].(*protobuf.ShutdownVbucketsRequest)
-		respch := msg[2].(chan []interface{})
-		respch <- []interface{}{feed.shutdownVbuckets(req)}
+		opaque, respch := msg[2].(uint16), msg[3].(chan []interface{})
+		respch <- []interface{}{feed.shutdownVbuckets(req, opaque)}
 
 	case fCmdAddBuckets:
 		req := msg[1].(*protobuf.AddBucketsRequest)
-		respch := msg[2].(chan []interface{})
-		err := feed.addBuckets(req)
+		opaque, respch := msg[2].(uint16), msg[3].(chan []interface{})
+		err := feed.addBuckets(req, opaque)
 		response := feed.topicResponse()
 		respch <- []interface{}{response, err}
 
 	case fCmdDelBuckets:
 		req := msg[1].(*protobuf.DelBucketsRequest)
-		respch := msg[2].(chan []interface{})
-		respch <- []interface{}{feed.delBuckets(req)}
+		opaque, respch := msg[2].(uint16), msg[3].(chan []interface{})
+		respch <- []interface{}{feed.delBuckets(req, opaque)}
 
 	case fCmdAddInstances:
 		req := msg[1].(*protobuf.AddInstancesRequest)
-		respch := msg[2].(chan []interface{})
-		respch <- []interface{}{feed.addInstances(req)}
+		opaque, respch := msg[2].(uint16), msg[3].(chan []interface{})
+		respch <- []interface{}{feed.addInstances(req, opaque)}
 
 	case fCmdDelInstances:
 		req := msg[1].(*protobuf.DelInstancesRequest)
-		respch := msg[2].(chan []interface{})
-		respch <- []interface{}{feed.delInstances(req)}
+		opaque, respch := msg[2].(uint16), msg[3].(chan []interface{})
+		respch <- []interface{}{feed.delInstances(req, opaque)}
 
 	case fCmdRepairEndpoints:
 		req := msg[1].(*protobuf.RepairEndpointsRequest)
-		respch := msg[2].(chan []interface{})
-		respch <- []interface{}{feed.repairEndpoints(req)}
+		opaque, respch := msg[2].(uint16), msg[3].(chan []interface{})
+		respch <- []interface{}{feed.repairEndpoints(req, opaque)}
 
 	case fCmdStaleCheck:
 		respch := msg[1].(chan []interface{})
@@ -515,8 +525,9 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 		respch <- []interface{}{nil}
 
 	case fCmdShutdown:
-		respch := msg[1].(chan []interface{})
-		respch <- []interface{}{feed.shutdown()}
+		opaque := msg[1].(uint16)
+		respch := msg[2].(chan []interface{})
+		respch <- []interface{}{feed.shutdown(opaque)}
 		status = "exit"
 
 	}
@@ -530,10 +541,10 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 // - return ErrorNotMyVbucket due to rebalances and failures.
 // - return ErrorStreamRequest if StreamRequest failed for some reason
 // - return ErrorResponseTimeout if feedback is not completed within timeout.
-func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
-	feed.endpointType = req.GetEndpointType()
+func (feed *Feed) start(
+	req *protobuf.MutationTopicRequest, opaque uint16) (err error) {
 
-	opaque := newOpaque() // iterate request-timestamp for each bucket
+	feed.endpointType = req.GetEndpointType()
 
 	// update engines and endpoints
 	if err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
@@ -607,14 +618,12 @@ func (feed *Feed) start(req *protobuf.MutationTopicRequest) (err error) {
 // - return ErrorStreamRequest if StreamRequest failed for some reason
 // - return ErrorResponseTimeout if feedback is not completed within timeout.
 func (feed *Feed) restartVbuckets(
-	req *protobuf.RestartVbucketsRequest) (err error) {
-
-	opaque := newOpaque() // iterate request-timestamp for each bucket
+	req *protobuf.RestartVbucketsRequest, opaque uint16) (err error) {
 
 	// FIXME: restart-vbuckets implies a repair Endpoint.
 	raddrs := feed.endpointRaddrs()
 	rpReq := protobuf.NewRepairEndpointsRequest(feed.topic, raddrs)
-	feed.repairEndpoints(rpReq)
+	feed.repairEndpoints(rpReq, opaque)
 
 	for _, ts := range req.GetRestartTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
@@ -690,10 +699,9 @@ func (feed *Feed) restartVbuckets(
 // - return ErrorStreamEnd if StreamEnd failed for some reason
 // - return ErrorResponseTimeout if feedback is not completed within timeout.
 func (feed *Feed) shutdownVbuckets(
-	req *protobuf.ShutdownVbucketsRequest) (err error) {
+	req *protobuf.ShutdownVbucketsRequest, opaque uint16) (err error) {
 
 	// iterate request-timestamp for each bucket.
-	opaque := newOpaque()
 	for _, ts := range req.GetShutdownTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
 		vbnos, e := feed.getLocalVbuckets(pooln, bucketn, opaque)
@@ -747,9 +755,8 @@ func (feed *Feed) shutdownVbuckets(
 // - return ErrorNotMyVbucket due to rebalances and failures.
 // - return ErrorStreamRequest if StreamRequest failed for some reason
 // - return ErrorResponseTimeout if feedback is not completed within timeout.
-func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
-
-	opaque := newOpaque() // iterate request-timestamp for each bucket
+func (feed *Feed) addBuckets(
+	req *protobuf.AddBucketsRequest, opaque uint16) (err error) {
 
 	// update engines and endpoints
 	if err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
@@ -817,7 +824,9 @@ func (feed *Feed) addBuckets(req *protobuf.AddBucketsRequest) (err error) {
 
 // upstreams are closed for buckets, data-path is closed for downstream,
 // vbucket-routines exits on StreamEnd
-func (feed *Feed) delBuckets(req *protobuf.DelBucketsRequest) error {
+func (feed *Feed) delBuckets(
+	req *protobuf.DelBucketsRequest, opaque uint16) error {
+
 	for _, bucketn := range req.GetBuckets() {
 		feed.cleanupBucket(bucketn, true)
 	}
@@ -826,19 +835,21 @@ func (feed *Feed) delBuckets(req *protobuf.DelBucketsRequest) error {
 
 // only data-path shall be updated.
 // - return ErrorInconsistentFeed for malformed feed request
-func (feed *Feed) addInstances(req *protobuf.AddInstancesRequest) error {
+func (feed *Feed) addInstances(
+	req *protobuf.AddInstancesRequest, opaque uint16) error {
+
 	// update engines and endpoints
-	if err := feed.processSubscribers(0xFFFF, req); err != nil { // :SideEffect:
+	if err := feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
 		return err
 	}
 	var err error
 	// post to kv data-path
 	for bucketn, engines := range feed.engines {
 		if _, ok := feed.kvdata[bucketn]; ok {
-			feed.kvdata[bucketn].AddEngines(0xFFFF, engines, feed.endpoints)
+			feed.kvdata[bucketn].AddEngines(opaque, engines, feed.endpoints)
 		} else {
-			fmsg := "%v addInstances() invalid-bucket %q\n"
-			logging.Errorf(fmsg, feed.logPrefix, bucketn)
+			fmsg := "%v ##%x addInstances() invalid-bucket %q\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
 			err = projC.ErrorInvalidBucket
 		}
 	}
@@ -848,7 +859,9 @@ func (feed *Feed) addInstances(req *protobuf.AddInstancesRequest) error {
 // only data-path shall be updated.
 // * if it is the last instance defined on the bucket, then
 //   use delBuckets() API to delete the bucket.
-func (feed *Feed) delInstances(req *protobuf.DelInstancesRequest) error {
+func (feed *Feed) delInstances(
+	req *protobuf.DelInstancesRequest, opaque uint16) error {
+
 	// reconstruct instance uuids bucket-wise.
 	instanceIds := req.GetInstanceIds()
 	bucknIds := make(map[string][]uint64)           // bucket -> []instance
@@ -870,10 +883,10 @@ func (feed *Feed) delInstances(req *protobuf.DelInstancesRequest) error {
 	// posted post to kv data-path.
 	for bucketn, uuids := range bucknIds {
 		if _, ok := feed.kvdata[bucketn]; ok {
-			feed.kvdata[bucketn].DeleteEngines(0xFFFF, uuids)
+			feed.kvdata[bucketn].DeleteEngines(opaque, uuids)
 		} else {
-			fmsg := "%v delInstances() invalid-bucket %q"
-			logging.Errorf(fmsg, feed.logPrefix, bucketn)
+			fmsg := "%v ##%x delInstances() invalid-bucket %q"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
 			err = projC.ErrorInvalidBucket
 		}
 	}
@@ -883,12 +896,12 @@ func (feed *Feed) delInstances(req *protobuf.DelInstancesRequest) error {
 
 // endpoints are independent.
 func (feed *Feed) repairEndpoints(
-	req *protobuf.RepairEndpointsRequest) (err error) {
+	req *protobuf.RepairEndpointsRequest, opaque uint16) (err error) {
 
 	prefix := feed.logPrefix
 	for _, raddr := range req.GetEndpoints() {
-		logging.Debugf("%v trying to repair %q\n", prefix, raddr)
-		raddr1, endpoint, e := feed.getEndpoint(raddr, 0xFFF)
+		logging.Debugf("%v ##%x trying to repair %q\n", prefix, opaque, raddr)
+		raddr1, endpoint, e := feed.getEndpoint(raddr, opaque)
 		if e != nil {
 			err = e
 			continue
@@ -897,16 +910,17 @@ func (feed *Feed) repairEndpoints(
 			topic, typ := feed.topic, feed.endpointType
 			endpoint, e = feed.epFactory(topic, typ, raddr)
 			if e != nil {
-				fmsg := "%v endpoint-factory %q: %v\n"
-				logging.Errorf(fmsg, prefix, raddr1, e)
+				fmsg := "%v ##%x endpoint-factory %q: %v\n"
+				logging.Errorf(fmsg, prefix, opaque, raddr1, e)
 				err = e
 				continue
 			}
-			logging.Infof("%v endpoint %q restarted\n", prefix, raddr)
+			fmsg := "%v ##%x endpoint %q restarted\n"
+			logging.Infof(fmsg, prefix, opaque, raddr)
 
 		} else {
-			fmsg := "%v endpoint %q active ...\n"
-			logging.Infof(fmsg, prefix, raddr)
+			fmsg := "%v ##%x endpoint %q active ...\n"
+			logging.Infof(fmsg, prefix, opaque, raddr)
 		}
 		// FIXME: hack to make both node-name available from
 		// endpoints table.
@@ -917,7 +931,7 @@ func (feed *Feed) repairEndpoints(
 	// posted to each kv data-path
 	for bucketn, kvdata := range feed.kvdata {
 		// though only endpoints have been updated
-		kvdata.AddEngines(0xFFFF, feed.engines[bucketn], feed.endpoints)
+		kvdata.AddEngines(opaque, feed.engines[bucketn], feed.endpoints)
 	}
 	return nil
 }
@@ -974,10 +988,11 @@ func (feed *Feed) setConfig(config c.Config) {
 	}
 }
 
-func (feed *Feed) shutdown() error {
+func (feed *Feed) shutdown(opaque uint16) error {
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Errorf("%v shutdown() crashed: %v\n", feed.logPrefix, r)
+			fmsg := "%v ##%x shutdown() crashed: %v\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, r)
 			logging.Errorf("%s", logging.StackTrace())
 		}
 	}()
@@ -997,7 +1012,7 @@ func (feed *Feed) shutdown() error {
 	}
 	// cleanup
 	close(feed.finch)
-	logging.Infof("%v feed ... stopped\n", feed.logPrefix)
+	logging.Infof("%v ##%x feed ... stopped\n", feed.logPrefix, opaque)
 	return nil
 }
 
@@ -1483,12 +1498,6 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 		ActiveTimestamps:   xs,
 		RollbackTimestamps: ys,
 	}
-}
-
-// generate a new 16 bit opaque value set as MSB.
-func newOpaque() uint16 {
-	// bit 26 ... 42 from UnixNano().
-	return uint16((uint64(time.Now().UnixNano()) >> 26) & 0xFFFF)
 }
 
 // generate a unique opaque identifier.

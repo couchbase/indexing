@@ -23,7 +23,7 @@ func (p *Projector) watcherDameon(tick int) {
 				req := &protobuf.ShutdownTopicRequest{
 					Topic: proto.String(topic),
 				}
-				p.doShutdownTopic(req)
+				p.doShutdownTopic(req, 0xFFFE)
 			}
 		}
 	}

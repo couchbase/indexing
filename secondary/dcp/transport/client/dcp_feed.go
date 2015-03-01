@@ -524,6 +524,7 @@ func (feed *DcpFeed) sendStreamEnd(outch chan<- *DcpEvent) {
 			VBucket: vb,
 			VBuuid:  stream.Vbuuid,
 			Opcode:  transport.DCP_STREAMEND,
+			Opaque:  stream.AppOpaque,
 		}
 		outch <- dcpEvent
 	}
