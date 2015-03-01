@@ -63,6 +63,15 @@ func (f *ForestDBIterator) SeekFirst() {
 		f.valid = false
 		return
 	}
+
+	//pre-allocate doc
+	keybuf := make([]byte, MAX_SEC_KEY_BUFFER_LEN)
+	f.curr, err = forestdb.NewDoc(keybuf, nil, nil)
+	if err != nil {
+		f.valid = false
+		return
+	}
+
 	f.valid = true
 	f.Get()
 }
@@ -78,6 +87,15 @@ func (f *ForestDBIterator) Seek(key []byte) {
 		f.valid = false
 		return
 	}
+
+	//pre-allocate doc
+	keybuf := make([]byte, MAX_SEC_KEY_BUFFER_LEN)
+	f.curr, err = forestdb.NewDoc(keybuf, nil, nil)
+	if err != nil {
+		f.valid = false
+		return
+	}
+
 	f.valid = true
 	f.Get()
 }
@@ -90,18 +108,12 @@ func (f *ForestDBIterator) Next() {
 		return
 	}
 
-	//free the doc allocated by forestdb
-	if f.curr != nil {
-		f.curr.Close()
-		f.curr = nil
-	}
-
 	f.Get()
 }
 
 func (f *ForestDBIterator) Get() {
 	var err error
-	f.curr, err = f.iter.Get()
+	err = f.iter.GetPreAlloc(f.curr)
 	if err != nil {
 		f.valid = false
 	}

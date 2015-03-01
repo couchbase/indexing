@@ -52,7 +52,7 @@ func NewKey(data []byte) (Key, error) {
 	jsoncodec := collatejson.NewCodec(16)
 	//TODO collatejson needs 3x buffer size. see if that can
 	//be reduced. Also reuse buffer.
-	buf := make([]byte, 0, len(data)*3)
+	buf := make([]byte, 0, MAX_SEC_KEY_BUFFER_LEN)
 	if buf, err = jsoncodec.Encode(data, buf); err != nil {
 		return key, err
 	}
