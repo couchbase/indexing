@@ -469,16 +469,20 @@ func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64) {
 	for _, nodestat := range bucket.GetStats("vbucket-seqno") {
 		// for all vbuckets
 		for i := 0; i < maxvb; i++ {
-			vbkey := "vb_" + strconv.Itoa(i) + ":high_seqno"
-			if highseqno, ok := nodestat[vbkey]; ok {
-				if s, err := strconv.Atoi(highseqno); err == nil {
-					seqnos[i] = uint64(s)
+			vbno_str := strconv.Itoa(i)
+			vbstatkey := "vb_" + vbno_str
+			if state, ok := nodestat[vbstatkey]; ok && state == "active" {
+				vbkey := "vb_" + vbno_str + ":high_seqno"
+				if highseqno, ok := nodestat[vbkey]; ok {
+					if s, err := strconv.Atoi(highseqno); err == nil {
+						seqnos[i] = uint64(s)
+					}
 				}
-			}
-			vbkey = "vb_" + strconv.Itoa(i) + ":uuid"
-			if vbuuid, ok := nodestat[vbkey]; ok {
-				if uuid, err := strconv.Atoi(vbuuid); err == nil {
-					vbuuids[i] = uint64(uuid)
+				vbkey = "vb_" + vbno_str + ":uuid"
+				if vbuuid, ok := nodestat[vbkey]; ok {
+					if uuid, err := strconv.Atoi(vbuuid); err == nil {
+						vbuuids[i] = uint64(uuid)
+					}
 				}
 			}
 		}
