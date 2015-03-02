@@ -3,7 +3,6 @@ package common
 import (
 	"compress/gzip"
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -16,9 +15,9 @@ import (
 
 // ToDo: Point out the exact difference between two responses
 func PrintScanResults(results ScanResponse, resultType string) {
-	fmt.Printf("Count of %v is %d\n", resultType, len(results))
+	log.Printf("Count of %v is %d\n", resultType, len(results))
 	for key, value := range results {
-		fmt.Println("Key:", key, "Value:", value)
+		log.Println("Key: %v  Value: %v", key, value)
 	}
 }
 
@@ -64,19 +63,19 @@ func CreateDirectory(dirpath string) {
 	}
 	err := os.Mkdir(dirpath, 0777)
 	HandleError(err, "Error creating directory: "+dirpath)
-	fmt.Println("Directory created: ", dirpath)
+	log.Printf("Directory created: %v", dirpath)
 }
 
 // Download a remote file over HTTP
 func DownloadDataFile(sourceDataFile, destinationFilePath string, skipIfFileExists bool) {
 	dataFileExists := FileExists(destinationFilePath)
 	if skipIfFileExists == true && dataFileExists == true {
-		fmt.Println("Data file exists. Skipping download")
+		log.Printf("Data file exists. Skipping download")
 		return
 	}
 
 	CreateDirectory(filepath.Dir(destinationFilePath))
-	fmt.Println("Downloading data file to: ", destinationFilePath)
+	log.Printf("Downloading data file to: %v", destinationFilePath)
 	f, err := os.Create(destinationFilePath)
 	HandleError(err, "Error downloading datafile "+destinationFilePath)
 	defer f.Close()
@@ -92,11 +91,11 @@ func DownloadDataFile(sourceDataFile, destinationFilePath string, skipIfFileExis
 	r, err := c.Get(url)
 	HandleError(err, "Error downloading datafile "+destinationFilePath)
 	defer r.Body.Close()
-	fmt.Println(r.Status)
+	log.Printf("%v", r.Status)
 
 	n, err := io.Copy(f, r.Body)
 	HandleError(err, "Error downloading datafile "+destinationFilePath)
-	fmt.Println(n, "Data file downloaded")
+	log.Printf("%d Data file downloaded", n)
 }
 
 func GetClusterConfFromFile(filepath string) ClusterConfiguration {
