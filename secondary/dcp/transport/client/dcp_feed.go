@@ -203,6 +203,7 @@ loop:
 
 		case resp, ok := <-rcvch:
 			if !ok {
+				feed.sendStreamEnd(feed.outch)
 				break loop
 			}
 			pkt, bytes := resp[0].(*transport.MCRequest), resp[1].(int)
