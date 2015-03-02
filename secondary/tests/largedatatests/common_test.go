@@ -25,7 +25,7 @@ var proddir, bagdir string
 func init() {
 	fmt.Println("In init()")
 
-	logging.SetLogLevel(logging.Silent)
+	logging.SetLogLevel(logging.Warn)
 	var configpath string
 	seed = 1
 	flag.StringVar(&configpath, "cbconfig", "../config/clusterrun_conf.json", "Path of the configuration file with data about Couchbase Cluster")
