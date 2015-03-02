@@ -306,7 +306,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 							continue
 						}
 
-						logging.Debugf("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
+						logging.Infof("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
 							"PartitionId: %v SliceId: %v (%v)", idxInstId, partnId, slice.Id(), info)
 
 						ss := &sliceSnapshot{
@@ -322,7 +322,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 							snap: latestSnapshot,
 						}
 						sliceSnaps[slice.Id()] = ss
-						logging.Debugf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
+						logging.Warnf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
 							"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
 						logging.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
 						continue
@@ -416,7 +416,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 					if snapInfo != nil {
 						err := slice.Rollback(snapInfo)
 						if err == nil {
-							logging.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
+							logging.Infof("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
 								slice.Id(), snapInfo)
 							respTs = snapInfo.Timestamp()
@@ -434,7 +434,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						//if there is no snapshot available, rollback to zero
 						err := slice.RollbackToZero()
 						if err == nil {
-							logging.Debugf("StorageMgr::handleRollback \n\t Rollback Index: %v "+
+							logging.Infof("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
 								slice.Id())
 							respTs = common.NewTsVbuuid(bucket, numVbuckets)

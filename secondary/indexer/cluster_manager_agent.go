@@ -327,7 +327,7 @@ func NewMetaNotifier(adminCh MsgChannel, config common.Config) *metaNotifier {
 
 func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
 
-	logging.Debugf("clustMgrAgent::OnIndexCreate Notification "+
+	logging.Infof("clustMgrAgent::OnIndexCreate Notification "+
 		"Received for Create Index %v", indexDefn)
 
 	pc := meta.makeDefaultPartitionContainer()
@@ -350,12 +350,12 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
 		switch res.GetMsgType() {
 
 		case MSG_SUCCESS:
-			logging.Debugf("clustMgrAgent::OnIndexCreate Success "+
+			logging.Infof("clustMgrAgent::OnIndexCreate Success "+
 				"for Create Index %v", indexDefn)
 			return nil
 
 		case MSG_ERROR:
-			logging.Debugf("clustMgrAgent::OnIndexCreate Error "+
+			logging.Errorf("clustMgrAgent::OnIndexCreate Error "+
 				"for Create Index %v. Error %v.", indexDefn, res)
 			err := res.(*MsgError).GetError()
 			return err.cause
@@ -369,7 +369,7 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
 
 	} else {
 
-		logging.Debugf("clustMgrAgent::OnIndexCreate Unexpected Channel Close "+
+		logging.Fatalf("clustMgrAgent::OnIndexCreate Unexpected Channel Close "+
 			"for Create Index %v", indexDefn)
 		common.CrashOnError(errors.New("Unknown Response"))
 	}
@@ -378,7 +378,7 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
 }
 func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId) error {
 
-	logging.Debugf("clustMgrAgent::OnIndexBuild Notification "+
+	logging.Infof("clustMgrAgent::OnIndexBuild Notification "+
 		"Received for Build Index %v", indexDefnList)
 
 	respCh := make(MsgChannel)
@@ -397,12 +397,12 @@ func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId) error
 		switch res.GetMsgType() {
 
 		case MSG_SUCCESS:
-			logging.Debugf("clustMgrAgent::OnIndexBuild Success "+
+			logging.Infof("clustMgrAgent::OnIndexBuild Success "+
 				"for Build Index %v", indexDefnList)
 			return nil
 
 		case MSG_ERROR:
-			logging.Debugf("clustMgrAgent::OnIndexBuild Error "+
+			logging.Errorf("clustMgrAgent::OnIndexBuild Error "+
 				"for Build Index %v. Error %v.", indexDefnList, res)
 			err := res.(*MsgError).GetError()
 			return err.cause
@@ -416,7 +416,7 @@ func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId) error
 
 	} else {
 
-		logging.Debugf("clustMgrAgent::OnIndexBuild Unexpected Channel Close "+
+		logging.Fatalf("clustMgrAgent::OnIndexBuild Unexpected Channel Close "+
 			"for Create Index %v", indexDefnList)
 		common.CrashOnError(errors.New("Unknown Response"))
 	}
@@ -426,7 +426,7 @@ func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId) error
 
 func (meta *metaNotifier) OnIndexDelete(defnId common.IndexDefnId) error {
 
-	logging.Debugf("clustMgrAgent::OnIndexDelete Notification "+
+	logging.Infof("clustMgrAgent::OnIndexDelete Notification "+
 		"Received for Drop IndexId %v", defnId)
 
 	respCh := make(MsgChannel)
@@ -442,12 +442,12 @@ func (meta *metaNotifier) OnIndexDelete(defnId common.IndexDefnId) error {
 		switch res.GetMsgType() {
 
 		case MSG_SUCCESS:
-			logging.Debugf("clustMgrAgent::OnIndexDelete Success "+
+			logging.Infof("clustMgrAgent::OnIndexDelete Success "+
 				"for Drop IndexId %v", defnId)
 			return nil
 
 		case MSG_ERROR:
-			logging.Debugf("clustMgrAgent::OnIndexDelete Error "+
+			logging.Errorf("clustMgrAgent::OnIndexDelete Error "+
 				"for Drop IndexId %v. Error %v", defnId, res)
 			err := res.(*MsgError).GetError()
 			return err.cause
@@ -460,7 +460,7 @@ func (meta *metaNotifier) OnIndexDelete(defnId common.IndexDefnId) error {
 		}
 
 	} else {
-		logging.Debugf("clustMgrAgent::OnIndexDelete Unexpected Channel Close "+
+		logging.Fatalf("clustMgrAgent::OnIndexDelete Unexpected Channel Close "+
 			"for Drop IndexId %v", defnId)
 		common.CrashOnError(errors.New("Unknown Response"))
 

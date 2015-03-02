@@ -803,7 +803,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	indexInstId := msg.(*MsgDropIndex).GetIndexInstId()
 	clientCh := msg.(*MsgDropIndex).GetResponseChannel()
 
-	logging.Debugf("Indexer::handleDropIndex - IndexInstId %v", indexInstId)
+	logging.Infof("Indexer::handleDropIndex - IndexInstId %v", indexInstId)
 
 	var indexInst common.IndexInst
 	var ok bool
@@ -861,7 +861,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	if indexInst.Stream == common.MAINT_STREAM &&
 		!idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.MAINT_STREAM) &&
 		idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.INIT_STREAM) {
-		logging.Debugf("Indexer::handleDropIndex Pre-Catchup Index Found for %v "+
+		logging.Warnf("Indexer::handleDropIndex Pre-Catchup Index Found for %v "+
 			"%v. Stream Cleanup Skipped.", indexInst.Stream, indexInst.Defn.Bucket)
 		clientCh <- &MsgSuccess{}
 		return
