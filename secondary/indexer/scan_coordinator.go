@@ -160,6 +160,8 @@ loop:
 		select {
 		case resp, r.hasNext = <-r.sd.respch:
 		case <-r.sd.timeoutch:
+			// Since error is set as response, cleanup happens in the following
+			// code block by calling r.Done()
 			resp = ErrScanTimedOut
 		}
 		if r.hasNext {
@@ -586,6 +588,7 @@ func (s *scanCoordinator) requestHandler(
 	select {
 	case msg = <-snapResch:
 	case <-sd.timeoutch:
+		go readDeallocSnapshot(snapResch)
 		msg = ErrScanTimedOut
 	}
 
@@ -664,6 +667,10 @@ func (s *scanCoordinator) requestHandler(
 			}
 
 			if err != nil {
+				if err == ErrScanTimedOut {
+					logging.Warnf("%v: SCAN_ID: %v scan request timed out in index db reads",
+						s.logPrefix, sd.scanId)
+				}
 				msg = s.makeResponseMessage(sd, err)
 			} else {
 				msg = s.makeResponseMessage(sd, keys)
@@ -909,8 +916,11 @@ func (s *scanCoordinator) scanSliceSnapshot(sd *scanDescriptor,
 		s.queryScan(sd, ss.Snapshot(), stopch)
 	case queryScanAll:
 		s.queryScanAll(sd, ss.Snapshot(), stopch)
+
 	}
 
+	// Top level request handler may go away even before scan worker go-routine is died.
+	// Hence snapshot cleanup should be done at scan worker level
 	ss.Snapshot().Close()
 }
 
@@ -1068,6 +1078,7 @@ func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, erro
 		if is == nil {
 			return 0, nil
 		}
+		defer DestroyIndexSnapshot(is)
 	case error:
 		return 0, msg.(error)
 	}
@@ -1103,4 +1114,22 @@ func ScanTStoString(ts *common.TsVbuuid) string {
 	seqsStr += "]"
 
 	return seqsStr
+}
+
+func readDeallocSnapshot(ch chan interface{}) {
+	msg := <-ch
+	if msg == nil {
+		return
+	}
+
+	var is IndexSnapshot
+	switch msg.(type) {
+	case IndexSnapshot:
+		is = msg.(IndexSnapshot)
+		if is == nil {
+			return
+		}
+
+		DestroyIndexSnapshot(is)
+	}
 }
