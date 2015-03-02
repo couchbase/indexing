@@ -3,7 +3,6 @@ package largedatatests
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/logging"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -23,7 +22,7 @@ var clusterconfig tc.ClusterConfiguration
 var proddir, bagdir string
 
 func init() {
-	fmt.Println("In init()")
+	log.Printf("In init()")
 
 	logging.SetLogLevel(logging.Warn)
 	var configpath string

@@ -2,7 +2,6 @@ package functionaltests
 
 import (
 	"errors"
-	"fmt"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
@@ -30,7 +29,7 @@ func TestBucketDefaultDelete(t *testing.T) {
 	kvutility.CreateBucket("default", "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11212")
 	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
-	fmt.Println("Populating the default bucket")
+	log.Printf("Populating the default bucket")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 	time.Sleep(2 * time.Second)
 
@@ -39,14 +38,14 @@ func TestBucketDefaultDelete(t *testing.T) {
 
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{"BIOSPAN"}, true, 10000000)
 	if err == nil {
-		fmt.Println("Scan did not fail as expected. Got scanresults: \n", scanResults)
+		log.Printf("Scan did not fail as expected. Got scanresults: %v\n", scanResults)
 		e := errors.New("Scan did not fail as expected after bucket delete")
 		FailTestIfError(e, "Error in TestBucketDefaultDelete", t)
 	} else {
-		fmt.Println("Scan failed as expected with error: ", err)
+		log.Printf("Scan failed as expected with error: %v", err)
 	}
 
-	fmt.Println("Populating the default bucket after it was deleted")
+	log.Printf("Populating the default bucket after it was deleted")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 
 	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
@@ -61,7 +60,7 @@ func TestBucketDefaultDelete(t *testing.T) {
 }
 
 func TestMixedDatatypesScanAll(t *testing.T) {
-	fmt.Println("In TestMixedDatatypesScanAll()")
+	log.Printf("In TestMixedDatatypesScanAll()")
 
 	field := "md_street"
 	indexName := "index_mixeddt"
@@ -74,7 +73,7 @@ func TestMixedDatatypesScanAll(t *testing.T) {
 
 	mixeddtdocs = generateJSONSMixedDatatype(1000, "md_street")
 	seed++
-	fmt.Println("Setting mixed datatypes JSON docs in KV")
+	log.Printf("Setting mixed datatypes JSON docs in KV")
 	kvutility.SetKeyValues(mixeddtdocs, "default", "", clusterconfig.KVAddress)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
@@ -85,11 +84,11 @@ func TestMixedDatatypesScanAll(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
-	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+	log.Printf("Lengths of expected and actual scan results are:  %d and %d", len(docScanResults), len(scanResults))
 }
 
 func TestMixedDatatypesRange_Float(t *testing.T) {
-	fmt.Println("In TestMixedDatatypesRange_Float()")
+	log.Printf("In TestMixedDatatypesRange_Float()")
 
 	field := "mixed_field"
 	indexName := "index_mixeddt"
@@ -102,7 +101,7 @@ func TestMixedDatatypesRange_Float(t *testing.T) {
 
 	mixeddtdocs = generateJSONSMixedDatatype(1000, field)
 	seed++
-	fmt.Println("Setting mixed datatypes JSON docs in KV")
+	log.Printf("Setting mixed datatypes JSON docs in KV")
 	kvutility.SetKeyValues(mixeddtdocs, "default", "", clusterconfig.KVAddress)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
@@ -113,18 +112,18 @@ func TestMixedDatatypesRange_Float(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
-	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+	log.Printf("Lengths of expected and actual scan results are:  %d and %d", len(docScanResults), len(scanResults))
 
 	docScanResults = datautility.ExpectedScanResponse_float64(mixeddtdocs, field, 1, 100, 2)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{1}, []interface{}{100}, 2, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
-	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+	log.Printf("Lengths of expected and actual scan results are:  %d and %d", len(docScanResults), len(scanResults))
 }
 
 func TestMixedDatatypesRange_String(t *testing.T) {
-	fmt.Println("In TestMixedDatatypesRange_String()")
+	log.Printf("In TestMixedDatatypesRange_String()")
 
 	field := "mixed_field"
 	indexName := "index_mixeddt"
@@ -137,7 +136,7 @@ func TestMixedDatatypesRange_String(t *testing.T) {
 
 	mixeddtdocs = generateJSONSMixedDatatype(1000, field)
 	seed++
-	fmt.Println("Setting mixed datatypes JSON docs in KV")
+	log.Printf("Setting mixed datatypes JSON docs in KV")
 	kvutility.SetKeyValues(mixeddtdocs, "default", "", clusterconfig.KVAddress)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
@@ -148,11 +147,11 @@ func TestMixedDatatypesRange_String(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
-	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+	log.Printf("Lengths of expected and actual scan results are:  %d and %d", len(docScanResults), len(scanResults))
 }
 
 func TestMixedDatatypesRange_Json(t *testing.T) {
-	fmt.Println("In TestMixedDatatypesRange_Json()")
+	log.Printf("In TestMixedDatatypesRange_Json()")
 
 	field := "mixed_field"
 	indexName := "index_mixeddt"
@@ -165,7 +164,7 @@ func TestMixedDatatypesRange_Json(t *testing.T) {
 
 	mixeddtdocs = generateJSONSMixedDatatype(1000, field)
 	seed++
-	fmt.Println("Setting mixed datatypes JSON docs in KV")
+	log.Printf("Setting mixed datatypes JSON docs in KV")
 	kvutility.SetKeyValues(mixeddtdocs, "default", "", clusterconfig.KVAddress)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
@@ -185,11 +184,11 @@ func TestMixedDatatypesRange_Json(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
-	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+	log.Printf("Lengths of expected and actual scan results are:  %d and %d", len(docScanResults), len(scanResults))
 }
 
 func TestMixedDatatypesScan_Bool(t *testing.T) {
-	fmt.Println("In TestMixedDatatypesScan_Bool()")
+	log.Printf("In TestMixedDatatypesScan_Bool()")
 
 	field := "mixed_field"
 	indexName := "index_mixeddt"
@@ -202,7 +201,7 @@ func TestMixedDatatypesScan_Bool(t *testing.T) {
 
 	mixeddtdocs = generateJSONSMixedDatatype(1000, field)
 	seed++
-	fmt.Println("Setting mixed datatypes JSON docs in KV")
+	log.Printf("Setting mixed datatypes JSON docs in KV")
 	kvutility.SetKeyValues(mixeddtdocs, "default", "", clusterconfig.KVAddress)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
@@ -213,19 +212,19 @@ func TestMixedDatatypesScan_Bool(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
-	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+	log.Printf("Lengths of expected and actual scan results are:  %d and %d", len(docScanResults), len(scanResults))
 
 	docScanResults = datautility.ExpectedScanResponse_bool(mixeddtdocs, field, false, 3)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{false}, []interface{}{false}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
-	fmt.Println("Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+	log.Printf("Lengths of expected and actual scan results are:  %d and %d", len(docScanResults), len(scanResults))
 }
 
 // Test case for testing secondary key field values as very huge
 func TestLargeSecondaryKeyLength(t *testing.T) {
-	fmt.Println("In TestLargeSecondaryKeyLength()")
+	log.Printf("In TestLargeSecondaryKeyLength()")
 
 	field := "LongSecField"
 	indexName := "index_LongSecField"
@@ -238,7 +237,7 @@ func TestLargeSecondaryKeyLength(t *testing.T) {
 
 	largeKeyDocs := generateLargeSecondayKeyDocs(1000, field)
 	seed++
-	fmt.Println("Setting JSON docs in KV")
+	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(largeKeyDocs, "default", "", clusterconfig.KVAddress)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
@@ -247,21 +246,21 @@ func TestLargeSecondaryKeyLength(t *testing.T) {
 	docScanResults := datautility.ExpectedScanAllResponse(largeKeyDocs, field)
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("ScanAll: Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+	log.Printf("ScanAll: Lengths of expected and actual scan results are:  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
 	docScanResults = datautility.ExpectedScanResponse_string(largeKeyDocs, field, "A", "zzzz", 3)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"zzzz"}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Range: Lengths of expected and actual scan results are: ", len(docScanResults), len(scanResults))
+	log.Printf("Range: Lengths of expected and actual scan results are:  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Test case for testing primary key values with longest length possible
 func TestLargePrimaryKeyLength(t *testing.T) {
-	fmt.Println("In TestLargePrimaryKeyLength()")
+	log.Printf("In TestLargePrimaryKeyLength()")
 
 	indexName := "index_LongPrimaryField"
 	bucketName := "default"
@@ -273,7 +272,7 @@ func TestLargePrimaryKeyLength(t *testing.T) {
 
 	largePrimaryKeyDocs := generateLargePrimaryKeyDocs(1000, "docid")
 	seed++
-	fmt.Println("Setting JSON docs in KV")
+	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(largePrimaryKeyDocs, "default", "", clusterconfig.KVAddress)
 
 	err := secondaryindex.CreatePrimaryIndex(indexName, bucketName, indexManagementAddress, true)
@@ -282,15 +281,15 @@ func TestLargePrimaryKeyLength(t *testing.T) {
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
 	if len(scanResults) != len(largePrimaryKeyDocs) {
-		fmt.Println("Len of scanResults is incorrect. Expected and Actual are", len(largePrimaryKeyDocs), len(scanResults))
+		log.Printf("Len of scanResults is incorrect. Expected and Actual are:  %d and %d", len(largePrimaryKeyDocs), len(scanResults))
 		err = errors.New("Len of scanResults is incorrect.")
 	}
 	FailTestIfError(err, "Len of scanResults is incorrect", t)
-	fmt.Println("Lengths of scanReuslts and num of docs are: ", len(scanResults), len(largePrimaryKeyDocs))
+	log.Printf("Lengths of scanReuslts and num of docs are:  %d and %d", len(scanResults), len(largePrimaryKeyDocs))
 }
 
 func TestCompositeIndex(t *testing.T) {
-	fmt.Println("In TestCompositeIndex()")
+	log.Printf("In TestCompositeIndex()")
 
 	var bucketName = "default"
 	var indexName = "index_comp"
@@ -302,7 +301,7 @@ func TestCompositeIndex(t *testing.T) {
 
 	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
-	fmt.Println("Populating the default bucket")
+	log.Printf("Populating the default bucket")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 	time.Sleep(2 * time.Second)
 
@@ -310,7 +309,7 @@ func TestCompositeIndex(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
 	if len(scanResults) != len(docs) {
-		fmt.Println("ScanAll of composite index is wrong. Expected and actual num of results: ", len(docs), len(scanResults))
+		log.Printf("ScanAll of composite index is wrong. Expected and actual num of results:  %d and %d", len(docs), len(scanResults))
 		e := errors.New("ScanAll of composite index is wrong")
 		FailTestIfError(e, "Error in TestCompositeIndex", t)
 
@@ -330,7 +329,7 @@ func TestCompositeIndex(t *testing.T) {
 
 // Backindexing
 func TestUpdateMutations_DeleteField(t *testing.T) {
-	fmt.Println("In TestUpdateMutations_DeleteField()")
+	log.Printf("In TestUpdateMutations_DeleteField()")
 
 	var bucketName = "default"
 	var indexName = "index_bal"
@@ -342,7 +341,7 @@ func TestUpdateMutations_DeleteField(t *testing.T) {
 	tc.ClearMap(docs)
 	docs = generateDocs(1000, "users.prod")
 	seed++
-	fmt.Println("Setting JSON docs in KV")
+	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
@@ -365,7 +364,7 @@ func TestUpdateMutations_DeleteField(t *testing.T) {
 }
 
 func TestUpdateMutations_AddField(t *testing.T) {
-	fmt.Println("In TestUpdateMutations_AddField()")
+	log.Printf("In TestUpdateMutations_AddField()")
 
 	var bucketName = "default"
 	var indexName = "index_newField"
@@ -377,7 +376,7 @@ func TestUpdateMutations_AddField(t *testing.T) {
 	tc.ClearMap(docs)
 	docs = generateDocs(1000, "users.prod")
 	seed++
-	fmt.Println("Setting JSON docs in KV")
+	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true)
@@ -386,7 +385,7 @@ func TestUpdateMutations_AddField(t *testing.T) {
 	docScanResults := datautility.ExpectedScanAllResponse(docs, field)
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Count of scan results before add field mutations: ", len(scanResults))
+	log.Printf("Count of scan results before add field mutations:  %d", len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
@@ -397,13 +396,13 @@ func TestUpdateMutations_AddField(t *testing.T) {
 	docScanResults = datautility.ExpectedScanAllResponse(docs, field)
 	scanResults, err = secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Count of scan results after add field mutations: ", len(scanResults))
+	log.Printf("Count of scan results after add field mutations:  %d", len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestUpdateMutations_DataTypeChange(t *testing.T) {
-	fmt.Println("In TestUpdateMutations_DataTypeChange()")
+	log.Printf("In TestUpdateMutations_DataTypeChange()")
 
 	var bucketName = "default"
 	var indexName = "index_isUserActive"
@@ -416,7 +415,7 @@ func TestUpdateMutations_DataTypeChange(t *testing.T) {
 	tc.ClearMap(docs)
 	docs = generateDocs(1000, "users.prod")
 	seed++
-	fmt.Println("Setting JSON docs in KV")
+	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 	time.Sleep(2 * time.Second)
 
@@ -451,7 +450,7 @@ func TestUpdateMutations_DataTypeChange(t *testing.T) {
 }
 
 func TestMultipleBuckets(t *testing.T) {
-	fmt.Println("In TestMultipleBuckets()")
+	log.Printf("In TestMultipleBuckets()")
 
 	numOfBuckets := 4
 	indexNames := [...]string{"bucket1_age", "bucket2_city", "bucket3_gender", "bucket4_balance"}
@@ -474,7 +473,7 @@ func TestMultipleBuckets(t *testing.T) {
 		kvutility.CreateBucket(bucketNames[i], "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "300", proxyPorts[i])
 	}
 
-	fmt.Println("Generating docs and Populating all the buckets")
+	log.Printf("Generating docs and Populating all the buckets")
 	for i := 0; i < numOfBuckets; i++ {
 		bucketDocs[i] = generateDocs(1000, "users.prod")
 		kvutility.SetKeyValues(bucketDocs[i], bucketNames[i], "", clusterconfig.KVAddress)
@@ -549,7 +548,7 @@ func TestBucketFlush(t *testing.T) {
 		scanResults, err := secondaryindex.ScanAll(indexNames[i], bucketName, indexScanAddress, defaultlimit)
 		FailTestIfError(err, "Error in scan ", t)
 		if len(scanResults) != 0 {
-			fmt.Println("Scan results should be empty after bucket but it is : \n", scanResults)
+			log.Printf("Scan results should be empty after bucket but it is : %v\n", scanResults)
 			e := errors.New("Scan failed after bucket flush")
 			FailTestIfError(e, "Error in TestBucketFlush", t)
 		}
@@ -557,7 +556,7 @@ func TestBucketFlush(t *testing.T) {
 }
 
 func TestSaslBucket(t *testing.T) {
-	fmt.Println("In TestSaslBucket()")
+	log.Printf("In TestSaslBucket()")
 	var bucketName = "BucketA"
 	var bucketPassword = "password1"
 	var indexName = "i_age"
@@ -611,11 +610,11 @@ func generateJSONSMixedDatatype(numDocs int, fieldName string) tc.KeyValues {
 		}
 		docs[k] = json
 	}
-	fmt.Println("Number of number fields is: ", numberCount)
-	fmt.Println("Number of string fields is: ", stringCount)
-	fmt.Println("Number of json fields is: ", objCount)
-	fmt.Println("Number of true bool fields is: ", trueBoolCount)
-	fmt.Println("Number of false bool fields is: ", falseBoolCount)
+	log.Printf("Number of number fields is: %d", numberCount)
+	log.Printf("Number of string fields is: %d", stringCount)
+	log.Printf("Number of json fields is: %d", objCount)
+	log.Printf("Number of true bool fields is: %d", trueBoolCount)
+	log.Printf("Number of false bool fields is: %d", falseBoolCount)
 	return docs
 }
 

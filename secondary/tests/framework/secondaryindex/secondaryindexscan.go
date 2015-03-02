@@ -2,12 +2,12 @@ package secondaryindex
 
 import (
 	"errors"
-	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/query/value"
+	"log"
 )
 
 var CheckCollation = false
@@ -265,7 +265,7 @@ func RangeStatistics(indexName, bucketName, server string, low, high []interface
 	if err != nil {
 		return err
 	} else {
-		fmt.Println("Statistics: \n\n", statistics)
+		log.Println("Statistics: %v\n\n", statistics)
 		return nil
 	}
 }

@@ -1,9 +1,9 @@
 package kvutility
 
 import (
-	"fmt"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbaselabs/go-couchbase"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -110,15 +110,15 @@ func CreateBucket(bucketName, authenticationType, saslBucketPassword, serverUser
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	resp, err := client.Do(req)
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		fmt.Println(address)
-		fmt.Println(req)
-		fmt.Println(resp)
-		fmt.Println("CreateBucket failed for bucket: ", bucketName)
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("CreateBucket failed for bucket %v \n", bucketName)
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Create Bucket")
 	time.Sleep(30 * time.Second)
-	fmt.Println("Created bucket ", bucketName)
+	log.Printf("Created bucket %v", bucketName)
 }
 
 func DeleteBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
@@ -129,15 +129,15 @@ func DeleteBucket(bucketName, bucketPassword, serverUserName, serverPassword, ho
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	resp, err := client.Do(req)
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		fmt.Println(address)
-		fmt.Println(req)
-		fmt.Println(resp)
-		fmt.Println("DeleteBucket failed for bucket: ", bucketName)
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("DeleteBucket failed for bucket %v \n", bucketName)
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Delete Bucket "+address)
 	time.Sleep(30 * time.Second)
-	fmt.Println("Deleted bucket ", bucketName)
+	log.Printf("Deleted bucket %v", bucketName)
 }
 
 func EnableBucketFlush(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
@@ -151,15 +151,15 @@ func EnableBucketFlush(bucketName, bucketPassword, serverUserName, serverPasswor
 	resp, err := client.Do(req)
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		fmt.Println(address)
-		fmt.Println(req)
-		fmt.Println(resp)
-		fmt.Println("EnableBucketFlush failed for bucket: ", bucketName)
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("EnableBucketFlush failed for bucket %v \n", bucketName)
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Enable Bucket")
 	time.Sleep(3 * time.Second)
-	fmt.Println("Flush Enabled on bucket ", bucketName)
+	log.Printf("Flush Enabled on bucket %v", bucketName)
 }
 
 func FlushBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
@@ -170,15 +170,15 @@ func FlushBucket(bucketName, bucketPassword, serverUserName, serverPassword, hos
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	resp, err := client.Do(req)
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		fmt.Println(address)
-		fmt.Println(req)
-		fmt.Println(resp)
-		fmt.Println("Flush Bucket failed for bucket: ", bucketName)
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("Flush Bucket failed for bucket %v \n", bucketName)
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Delete Bucket "+address)
 	time.Sleep(3 * time.Second)
-	fmt.Println("Flushed the bucket ", bucketName)
+	log.Printf("Flushed the bucket %v", bucketName)
 }
 
 func EditBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress, bucketRamQuota string) {
@@ -191,13 +191,13 @@ func EditBucket(bucketName, bucketPassword, serverUserName, serverPassword, host
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	resp, err := client.Do(req)
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		fmt.Println(address)
-		fmt.Println(req)
-		fmt.Println(resp)
-		fmt.Println("EditBucket failed for bucket: ", bucketName)
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("EditBucket failed for bucket %v \n", bucketName)
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Edit Bucket")
 	time.Sleep(3 * time.Second)
-	fmt.Println("Modified parameters of bucket: ", bucketName)
+	log.Printf("Modified parameters of bucket %v", bucketName)
 }

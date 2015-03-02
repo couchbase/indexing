@@ -1,16 +1,16 @@
 package functionaltests
 
 import (
-	"fmt"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
+	"log"
 	"testing"
 	"time"
 )
 
 func TestThreeIndexCreates(t *testing.T) {
-	fmt.Println("In TestThreeIndexCreates()")
+	log.Printf("In TestThreeIndexCreates()")
 	var i1 = "index_balance"
 	var i2 = "index_email"
 	var i3 = "index_pin"
@@ -20,7 +20,7 @@ func TestThreeIndexCreates(t *testing.T) {
 	FailTestIfError(e, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
-	fmt.Println("Create docs mutations")
+	log.Printf("Create docs mutations")
 	CreateDocs(100)
 	time.Sleep(15 * time.Second) // Wait for mutations to be updated in 2i
 
@@ -34,7 +34,7 @@ func TestThreeIndexCreates(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
-	fmt.Println("Create docs mutations")
+	log.Printf("Create docs mutations")
 	CreateDocs(100)
 	time.Sleep(15 * time.Second) // Wait for mutations to be updated in 2i
 
@@ -48,7 +48,7 @@ func TestThreeIndexCreates(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	//Delete docs mutations:  Delete docs from KV
-	fmt.Println("Delete docs mutations")
+	log.Printf("Delete docs mutations")
 	DeleteDocs(150)
 	time.Sleep(15 * time.Second) // Wait for mutations to be updated in 2i
 
@@ -60,7 +60,7 @@ func TestThreeIndexCreates(t *testing.T) {
 }
 
 func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
-	fmt.Println("In TestThreeIndexCreates()")
+	log.Printf("In TestThreeIndexCreates()")
 	var i1 = "index_state"
 	var i2 = "index_registered"
 	var i3 = "index_gender"
@@ -78,7 +78,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	FailTestIfError(e, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
-	fmt.Println("Create docs mutations")
+	log.Printf("Create docs mutations")
 	CreateDocs(100)
 	time.Sleep(15 * time.Second) // Wait for mutations to be updated in 2i
 
@@ -92,7 +92,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
-	fmt.Println("Create docs mutations")
+	log.Printf("Create docs mutations")
 	CreateDocs(100)
 	time.Sleep(15 * time.Second) // Wait for mutations to be updated in 2i
 
@@ -106,7 +106,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
-	fmt.Println("Create docs mutations")
+	log.Printf("Create docs mutations")
 	CreateDocs(100)
 	time.Sleep(15 * time.Second) // Wait for mutations to be updated in 2i
 
@@ -120,12 +120,12 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	FailTestIfError(err, "Error dropping index", t)
 
 	//Create docs mutations: Add new docs to KV
-	fmt.Println("Create docs mutations")
+	log.Printf("Create docs mutations")
 	CreateDocs(100)
 	time.Sleep(15 * time.Second) // Wait for mutations to be updated in 2i
 
 	//Delete docs mutations:  Delete docs from KV
-	fmt.Println("Delete docs mutations")
+	log.Printf("Delete docs mutations")
 	DeleteDocs(150)
 	time.Sleep(15 * time.Second) // Wait for mutations to be updated in 2i
 
@@ -139,7 +139,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
-	fmt.Println("Create docs mutations")
+	log.Printf("Create docs mutations")
 	CreateDocs(100)
 	time.Sleep(15 * time.Second) // Wait for mutations to be updated in 2i
 
@@ -151,7 +151,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 }
 
 func TestCreateDropScan(t *testing.T) {
-	fmt.Println("In TestCreateDropScan()")
+	log.Printf("In TestCreateDropScan()")
 	var indexName = "index_cd"
 	var bucketName = "default"
 
@@ -171,12 +171,12 @@ func TestCreateDropScan(t *testing.T) {
 	if e == nil {
 		t.Fatal("Error excpected when scanning for dropped index but scan didnt fail \n")
 	} else {
-		fmt.Printf("Scan failed as expected with error: %v\n", e)
+		log.Printf("Scan failed as expected with error: %v\n", e)
 	}
 }
 
 func TestCreateDropCreate(t *testing.T) {
-	fmt.Println("In TestCreateDropCreate()")
+	log.Printf("In TestCreateDropCreate()")
 	var indexName = "index_cdc"
 	var bucketName = "default"
 
@@ -196,7 +196,7 @@ func TestCreateDropCreate(t *testing.T) {
 	if err == nil {
 		t.Fatal("Error excpected when scanning for dropped index but scan didnt fail \n")
 	} else {
-		fmt.Printf("Scan failed as expected with error: %v\n", err)
+		log.Printf("Scan failed as expected with error: %v\n", err)
 	}
 
 	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
@@ -210,7 +210,7 @@ func TestCreateDropCreate(t *testing.T) {
 }
 
 func TestCreate2Drop1Scan2(t *testing.T) {
-	fmt.Println("In TestCreate2Drop1Scan2()")
+	log.Printf("In TestCreate2Drop1Scan2()")
 	var index1 = "index_i1"
 	var index2 = "index_i2"
 	var bucketName = "default"
@@ -242,7 +242,7 @@ func TestCreate2Drop1Scan2(t *testing.T) {
 }
 
 func TestIndexNameCaseSensitivity(t *testing.T) {
-	fmt.Println("In TestIndexNameCaseSensitivity()")
+	log.Printf("In TestIndexNameCaseSensitivity()")
 	var indexName = "index_age"
 	var bucketName = "default"
 
@@ -259,12 +259,12 @@ func TestIndexNameCaseSensitivity(t *testing.T) {
 	if err == nil {
 		t.Fatal("Error excpected when scanning for non existent index but scan didnt fail \n")
 	} else {
-		fmt.Printf("Scan failed as expected with error: %v\n", err)
+		log.Printf("Scan failed as expected with error: %v\n", err)
 	}
 }
 
 func TestCreateDuplicateIndex(t *testing.T) {
-	fmt.Println("In TestCreateDuplicateIndex()")
+	log.Printf("In TestCreateDuplicateIndex()")
 	var index1 = "index_di1"
 	var bucketName = "default"
 
@@ -274,23 +274,23 @@ func TestCreateDuplicateIndex(t *testing.T) {
 	if err == nil {
 		t.Fatal("Error excpected creating dupliate index but create didnt fail \n")
 	} else {
-		fmt.Printf("Create failed as expected with error: %v\n", err)
+		log.Printf("Create failed as expected with error: %v\n", err)
 	}
 }
 
 // Negative test - Drop a secondary index that doesnt exist
 func TestDropNonExistingIndex(t *testing.T) {
-	fmt.Println("In TestDropNonExistingIndex()")
+	log.Printf("In TestDropNonExistingIndex()")
 	err := secondaryindex.DropSecondaryIndexByID(123456, indexManagementAddress)
 	if err == nil {
 		t.Fatal("Error excpected when deleting non existent index but index drop didnt fail \n")
 	} else {
-		fmt.Println("Index drop failed as expected with error: ", err)
+		log.Printf("Index drop failed as expected with error: %v", err)
 	}
 }
 
 func TestCreateIndexNonExistentBucket(t *testing.T) {
-	fmt.Println("In TestCreateIndexNonExistentBucket()")
+	log.Printf("In TestCreateIndexNonExistentBucket()")
 	var indexName = "index_BlahBucket"
 	var bucketName = "BlahBucket"
 
@@ -298,6 +298,6 @@ func TestCreateIndexNonExistentBucket(t *testing.T) {
 	if err == nil {
 		t.Fatal("Error excpected when creating index on non-existent bucket but error didnt occur\n")
 	} else {
-		fmt.Println("Index create failed as expected with error: ", err)
+		log.Printf("Index create failed as expected with error: %v", err)
 	}
 }

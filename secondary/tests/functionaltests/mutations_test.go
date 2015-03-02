@@ -1,12 +1,12 @@
 package functionaltests
 
 import (
-	"fmt"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
+	"log"
 	"testing"
 	"time"
 )
@@ -74,14 +74,14 @@ func UpdateDocs(num int) {
 		docs[k] = value
 		keysToBeSet[k] = value
 	}
-	fmt.Println("Num of keysFromMutDocs: ", len(keysFromMutDocs))
-	fmt.Println("Updating number of documents: ", len(keysToBeSet))
+	log.Printf("Num of keysFromMutDocs: %d", len(keysFromMutDocs))
+	log.Printf("Updating number of documents: %d", len(keysToBeSet))
 	kv.SetKeyValues(keysToBeSet, "default", "", clusterconfig.KVAddress)
 }
 
 // Test with mutations delay wait of 1s. Skipping currently because of failure
 func SkipTestCreateDocsMutation_LessDelay(t *testing.T) {
-	fmt.Println("In TestCreateDocsMutation_LessDelay()")
+	log.Printf("In TestCreateDocsMutation_LessDelay()")
 	var indexName = "index_age"
 	var bucketName = "default"
 
@@ -91,7 +91,7 @@ func SkipTestCreateDocsMutation_LessDelay(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are : %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
@@ -102,14 +102,14 @@ func SkipTestCreateDocsMutation_LessDelay(t *testing.T) {
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Test with mutations delay wait of 1s. Skipping currently because of failure
 func SkipTestDeleteDocsMutation_LessDelay(t *testing.T) {
-	fmt.Println("In TestDeleteDocsMutation_LessDelay()")
+	log.Printf("In TestDeleteDocsMutation_LessDelay()")
 	var indexName = "index_age"
 	var bucketName = "default"
 
@@ -119,7 +119,7 @@ func SkipTestDeleteDocsMutation_LessDelay(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
@@ -130,13 +130,13 @@ func SkipTestDeleteDocsMutation_LessDelay(t *testing.T) {
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func SkipTestRestartIndexer(t *testing.T) {
-	fmt.Println("In TestRestartIndexer()")
+	log.Printf("In TestRestartIndexer()")
 
 	tc.KillIndexer()
 	time.Sleep(60 * time.Second)
@@ -147,13 +147,13 @@ func SkipTestRestartIndexer(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestCreateDocsMutation(t *testing.T) {
-	fmt.Println("In TestCreateDocsMutation()")
+	log.Printf("In TestCreateDocsMutation()")
 	var indexName = "index_age"
 	var bucketName = "default"
 
@@ -163,7 +163,7 @@ func TestCreateDocsMutation(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
@@ -174,13 +174,13 @@ func TestCreateDocsMutation(t *testing.T) {
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestRestartProjector(t *testing.T) {
-	fmt.Println("In TestRestartProjector()")
+	log.Printf("In TestRestartProjector()")
 
 	tc.KillProjector()
 	time.Sleep(60 * time.Second)
@@ -191,14 +191,14 @@ func TestRestartProjector(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Test with mutations delay wait of 15s
 func TestDeleteDocsMutation(t *testing.T) {
-	fmt.Println("In TestDeleteDocsMutation()")
+	log.Printf("In TestDeleteDocsMutation()")
 	var indexName = "index_age"
 	var bucketName = "default"
 
@@ -208,7 +208,7 @@ func TestDeleteDocsMutation(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
@@ -219,14 +219,14 @@ func TestDeleteDocsMutation(t *testing.T) {
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Test with mutations delay wait of 15s
 func TestUpdateDocsMutation(t *testing.T) {
-	fmt.Println("In TestUpdateDocsMutation()")
+	log.Printf("In TestUpdateDocsMutation()")
 	var indexName = "index_age"
 	var bucketName = "default"
 
@@ -236,7 +236,7 @@ func TestUpdateDocsMutation(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 20, 40, 2)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{20}, []interface{}{40}, 2, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
@@ -247,7 +247,7 @@ func TestUpdateDocsMutation(t *testing.T) {
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 20, 40, 2)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{20}, []interface{}{40}, 2, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	fmt.Println("Len of expected and actual scan results are : ", len(docScanResults), len(scanResults))
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 }

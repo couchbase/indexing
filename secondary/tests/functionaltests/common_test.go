@@ -3,7 +3,6 @@ package functionaltests
 import (
 	"encoding/json"
 	"flag"
-	"fmt"
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/logging"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -31,7 +30,7 @@ var clusterconfig tc.ClusterConfiguration
 var dataFilePath, mutationFilePath string
 
 func init() {
-	fmt.Println("In init()")
+	log.Printf("In init()")
 	logging.SetLogLevel(logging.Warn)
 
 	var configpath string
@@ -61,12 +60,12 @@ func init() {
 	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, true)
 	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
-	fmt.Println("Emptying the default bucket")
+	log.Printf("Emptying the default bucket")
 	kvutility.EnableBucketFlush("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	time.Sleep(5 * time.Second)
 
-	fmt.Println("In TestCreateIndexOnEmptyBucket()")
+	log.Printf("In TestCreateIndexOnEmptyBucket()")
 	var indexName = "index_eyeColor"
 	var bucketName = "default"
 
@@ -74,7 +73,7 @@ func init() {
 	tc.HandleError(err, "Error in creating the index")
 
 	// Populate the bucket now
-	fmt.Println("Populating the default bucket")
+	log.Printf("Populating the default bucket")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 	time.Sleep(20 * time.Second) // Sleep for mutations to catch up
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
@@ -143,10 +142,6 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 		}
 		dockey := dat["docid"].(string)
 		keyValues[dockey] = dat
-		// outtext := fmt.Sprintf("%v\n", val)
-		// if _, err := outfd.Write([]byte(outtext)); err != nil {
-		//log.Fatal(err)
-		// }
 	}
 
 	return keyValues
