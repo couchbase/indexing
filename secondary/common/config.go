@@ -89,9 +89,9 @@ var SystemConfig = Config{
 		10000,
 	},
 	"projector.feedChanSize": ConfigValue{
-		100,
+		10000,
 		"channel size for feed's control path and its back-channel.",
-		100,
+		10000,
 	},
 	"projector.vbucketSyncTimeout": ConfigValue{
 		500,
@@ -103,6 +103,17 @@ var SystemConfig = Config{
 		"periodic tick, in milli-seconds to check for stale feeds, " +
 			"a feed is considered stale when all its endpoint go stale.",
 		5 * 60 * 1000,
+	},
+	// projector dcp parameters
+	"projector.dcp.genChanSize": ConfigValue{
+		2048,
+		"channel size for DCP's gen-server routine.",
+		2048,
+	},
+	"projector.dcp.dataChanSize": ConfigValue{
+		10000,
+		"channel size for DCP's data path routines.",
+		10000,
 	},
 	// projector adminport parameters
 	"projector.adminport.name": ConfigValue{

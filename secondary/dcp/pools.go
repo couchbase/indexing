@@ -26,7 +26,7 @@ var HTTPTransport = &http.Transport{MaxIdleConnsPerHost: MaxIdleConnsPerHost}
 var HTTPClient = &http.Client{Transport: HTTPTransport}
 
 // PoolSize is the size of each connection pool (per host).
-var PoolSize = 4
+var PoolSize = 64
 
 // PoolOverflow is the number of overflow connections allowed in a
 // pool.
@@ -285,14 +285,12 @@ func queryRestAPI(
 	return nil
 }
 
-// Helper function to process streaming URI responses
-func notificationIterHelper(
-	baseURL *url.URL,
-	path string,
-	authHandler AuthHandler,
-	callb func([]byte, error) bool) error {
-	u := *baseURL
+// NodeServices streaming API based observe-callback wrapper
+func (c *Client) RunObserveNodeServices(pool string, callb func(PoolServices) error, cancel chan bool) error {
+	u := c.BaseURL
+	path := "/pools/" + pool + "/nodeServicesStreaming"
 	u.User = nil
+	authHandler := c.ah
 	if q := strings.Index(path, "?"); q > 0 {
 		u.Path = path[:q]
 		u.RawQuery = path[q+1:]
@@ -319,34 +317,36 @@ func notificationIterHelper(
 	}
 
 	reader := bufio.NewReader(res.Body)
-	go func() {
-		for {
-			bs, err := reader.ReadBytes('\n')
-			if len(bs) == 1 && bs[0] == '\n' {
-				continue
-			}
-			cont := callb(bs, err)
-			if !cont || err != nil {
-				res.Body.Close()
-				return
+	defer res.Body.Close()
+	for {
+		if cancel != nil {
+			select {
+			case <-cancel:
+				return nil
+			default:
 			}
 		}
-	}()
 
-	return err
-}
-
-// NodeServices streaming API handler
-func (c *Client) NodeServicesCallback(pool string, callb func(PoolServices, error) bool) error {
-	poolURI := "/pools/" + pool + "/nodeServicesStreaming"
-	callb2 := func(data []byte, err error) bool {
+		bs, err := reader.ReadBytes('\n')
+		if err != nil {
+			return err
+		}
+		if len(bs) == 1 && bs[0] == '\n' {
+			continue
+		}
 		var ps PoolServices
-		if err == nil {
-			err = json.Unmarshal(data, &ps)
+		err = json.Unmarshal(bs, &ps)
+		if err != nil {
+			return err
 		}
-		return callb(ps, err)
+
+		err = callb(ps)
+		if err != nil {
+			return err
+		}
 	}
-	return notificationIterHelper(c.BaseURL, poolURI, c.ah, callb2)
+
+	return nil
 }
 
 func (c *Client) parseURLResponse(path string, out interface{}) error {

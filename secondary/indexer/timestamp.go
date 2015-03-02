@@ -9,6 +9,8 @@
 
 package indexer
 
+import "fmt"
+
 //list of seqno per vbucket
 type Timestamp []Seqno
 
@@ -97,4 +99,19 @@ func (ts Timestamp) IsZeroTs() bool {
 		}
 	}
 	return true
+}
+
+func (ts Timestamp) String() string {
+
+	str := "["
+	if ts != nil {
+		for i, s := range ts {
+			if i > 0 {
+				str += ","
+			}
+			str += fmt.Sprintf("%d=%d", i, s)
+		}
+	}
+	str += "]"
+	return str
 }

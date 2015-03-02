@@ -12,8 +12,8 @@ package indexer
 import (
 	"errors"
 	"fmt"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"net"
 	"strconv"
 	"time"
@@ -73,24 +73,31 @@ func GetCurrentKVTs(cluster, bucket string, numVbs int) (Timestamp, error) {
 	ts := NewTimestamp(numVbs)
 	start := time.Now()
 	if b, err := common.ConnectBucket(cluster, "default", bucket); err == nil {
+		defer b.Close()
+
 		//get all the vb seqnum
-		stats := b.GetStats("vbucket-seqno")
+		stats := b.GetStats("vbucket-details")
 
 		//for all nodes in cluster
 		for _, nodestat := range stats {
 			//for all vbuckets
 			for i := 0; i < numVbs; i++ {
-				vbkey := "vb_" + strconv.Itoa(i) + ":high_seqno"
-				if highseqno, ok := nodestat[vbkey]; ok {
-					if s, err := strconv.Atoi(highseqno); err == nil {
-						ts[i] = Seqno(s)
+				vbStateKey := "vb_" + strconv.Itoa(i)
+				if state, ok := nodestat[vbStateKey]; ok {
+					//only active vbuckets
+					if state == "active" {
+						vbSeqKey := "vb_" + strconv.Itoa(i) + ":high_seqno"
+						if highseqno, ok := nodestat[vbSeqKey]; ok {
+							if s, err := strconv.Atoi(highseqno); err == nil {
+								ts[i] = Seqno(s)
+							}
+						}
 					}
 				}
 			}
 		}
 		elapsed := time.Since(start)
-		logging.Debugf("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
-		b.Close()
+		logging.Tracef("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
 		return ts, nil
 
 	} else {

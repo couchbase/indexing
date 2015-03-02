@@ -195,13 +195,13 @@ func OpError(err error, vals []interface{}, idx int) error {
 
 // cbauth admin authentication helper
 // Uses default cbauth env variables internally to provide auth creds
-type cbAuthHandler struct {
-	hostport string
-	bucket   string
+type CbAuthHandler struct {
+	Hostport string
+	Bucket   string
 }
 
-func (ah *cbAuthHandler) GetCredentials() (string, string) {
-	u, p, err := cbauth.GetHTTPServiceAuth(ah.hostport)
+func (ah *CbAuthHandler) GetCredentials() (string, string) {
+	u, p, err := cbauth.GetHTTPServiceAuth(ah.Hostport)
 	if err != nil {
 		panic(err)
 	}
@@ -209,13 +209,13 @@ func (ah *cbAuthHandler) GetCredentials() (string, string) {
 	return u, p
 }
 
-func (ah *cbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.Client) error {
+func (ah *CbAuthHandler) AuthenticateMemcachedConn(host string, conn *memcached.Client) error {
 	u, p, err := cbauth.GetMemcachedServiceAuth(host)
 	if err != nil {
 		panic(err)
 	}
 	_, err = conn.Auth(u, p)
-	_, err = conn.SelectBucket(ah.bucket)
+	_, err = conn.SelectBucket(ah.Bucket)
 	return err
 }
 
@@ -430,9 +430,9 @@ func EquivalentIP(
 // ConnectBucket will instantiate a couchbase-bucket instance with cluster.
 // caller's responsibility to close the bucket.
 func ConnectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
-	ah := &cbAuthHandler{
-		hostport: cluster,
-		bucket:   bucketn,
+	ah := &CbAuthHandler{
+		Hostport: cluster,
+		Bucket:   bucketn,
 	}
 	couch, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
 	if err != nil {
@@ -469,16 +469,20 @@ func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64) {
 	for _, nodestat := range bucket.GetStats("vbucket-seqno") {
 		// for all vbuckets
 		for i := 0; i < maxvb; i++ {
-			vbkey := "vb_" + strconv.Itoa(i) + ":high_seqno"
-			if highseqno, ok := nodestat[vbkey]; ok {
-				if s, err := strconv.Atoi(highseqno); err == nil {
-					seqnos[i] = uint64(s)
+			vbno_str := strconv.Itoa(i)
+			vbstatkey := "vb_" + vbno_str
+			if state, ok := nodestat[vbstatkey]; ok && state == "active" {
+				vbkey := "vb_" + vbno_str + ":high_seqno"
+				if highseqno, ok := nodestat[vbkey]; ok {
+					if s, err := strconv.Atoi(highseqno); err == nil {
+						seqnos[i] = uint64(s)
+					}
 				}
-			}
-			vbkey = "vb_" + strconv.Itoa(i) + ":uuid"
-			if vbuuid, ok := nodestat[vbkey]; ok {
-				if uuid, err := strconv.Atoi(vbuuid); err == nil {
-					vbuuids[i] = uint64(uuid)
+				vbkey = "vb_" + vbno_str + ":uuid"
+				if vbuuid, ok := nodestat[vbkey]; ok {
+					if uuid, err := strconv.Atoi(vbuuid); err == nil {
+						vbuuids[i] = uint64(uuid)
+					}
 				}
 			}
 		}

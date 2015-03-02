@@ -148,6 +148,7 @@ func CreateDropIndexesForDuration(wg *sync.WaitGroup, seconds float64, t *testin
 	fmt.Println("Create and Drop index operations")
 	defer wg.Done()
 	client := secondaryindex.CreateClient(clusterconfig.KVAddress, "CDIndex")
+	defer client.Close()
 	start := time.Now()
 	for {
 		elapsed := time.Since(start)
@@ -163,7 +164,7 @@ func CreateDropIndexesForDuration(wg *sync.WaitGroup, seconds float64, t *testin
 		scanResults, err := secondaryindex.RangeWithClient(index1, bucketName, indexScanAddress, []interface{}{random_num(15, 80)}, []interface{}{random_num(15, 80)}, 3, true, defaultlimit, client)
 		FailTestIfError(err, "CreateDropIndexesForDuration:: Error in scan", t)
 		log.Printf("%v RangeScan CreateDropIndexesForDuration:: Len of scanResults is: %d\n", index1, len(scanResults))
-		
+
 		var index2 = "index_firstname"
 		err = secondaryindex.CreateSecondaryIndexWithClient(index2, bucketName, indexManagementAddress, []string{"`first-name`"}, true, client)
 		FailTestIfError(err, "Error in creating the index", t)
@@ -179,7 +180,6 @@ func CreateDropIndexesForDuration(wg *sync.WaitGroup, seconds float64, t *testin
 		FailTestIfError(err, "Error in drop index", t)
 		time.Sleep(1 * time.Second)
 	}
-	client.Close()
 }
 
 func SequentialRangeScanForDuration(indexName, bucketName string, seconds float64, t *testing.T) {

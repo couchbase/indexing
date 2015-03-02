@@ -409,14 +409,20 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.mutMgrCmdCh <- msg
 		<-idx.mutMgrCmdCh
 
-	case MUT_MGR_FLUSH_DONE, MUT_MGR_ABORT_DONE:
+	case MUT_MGR_FLUSH_DONE:
+
+		idx.storageMgrCmdCh <- msg
+		<-idx.storageMgrCmdCh
+
+	case MUT_MGR_ABORT_DONE:
+
+		idx.tkCmdCh <- msg
+		<-idx.tkCmdCh
+
+	case STORAGE_SNAP_DONE:
 
 		bucket := msg.(*MsgMutMgrFlushDone).GetBucket()
 		streamId := msg.(*MsgMutMgrFlushDone).GetStreamId()
-
-		//fwd the message to storage manager
-		idx.storageMgrCmdCh <- msg
-		<-idx.storageMgrCmdCh
 
 		idx.streamBucketFlushInProgress[streamId][bucket] = false
 
@@ -797,7 +803,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	indexInstId := msg.(*MsgDropIndex).GetIndexInstId()
 	clientCh := msg.(*MsgDropIndex).GetResponseChannel()
 
-	logging.Debugf("Indexer::handleDropIndex - IndexInstId %v", indexInstId)
+	logging.Infof("Indexer::handleDropIndex - IndexInstId %v", indexInstId)
 
 	var indexInst common.IndexInst
 	var ok bool
@@ -855,7 +861,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	if indexInst.Stream == common.MAINT_STREAM &&
 		!idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.MAINT_STREAM) &&
 		idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.INIT_STREAM) {
-		logging.Debugf("Indexer::handleDropIndex Pre-Catchup Index Found for %v "+
+		logging.Warnf("Indexer::handleDropIndex Pre-Catchup Index Found for %v "+
 			"%v. Stream Cleanup Skipped.", indexInst.Stream, indexInst.Defn.Bucket)
 		clientCh <- &MsgSuccess{}
 		return

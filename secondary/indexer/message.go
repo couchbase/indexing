@@ -62,6 +62,7 @@ const (
 	STORAGE_INDEX_SNAP_REQUEST
 	STORAGE_INDEX_STORAGE_STATS
 	STORAGE_INDEX_COMPACT
+	STORAGE_SNAP_DONE
 
 	//KVSender
 	KV_SENDER_SHUTDOWN
@@ -439,6 +440,7 @@ func (m *MsgUpdatePartnMap) String() string {
 
 //MUT_MGR_FLUSH_DONE
 //MUT_MGR_ABORT_DONE
+//STORAGE_SNAP_DONE
 type MsgMutMgrFlushDone struct {
 	mType    MsgType
 	ts       *common.TsVbuuid
@@ -699,6 +701,7 @@ type MsgRestartVbuckets struct {
 	streamId  common.StreamId
 	bucket    string
 	restartTs *common.TsVbuuid
+	connErr   bool
 	respCh    MsgChannel
 	stopCh    StopChannel
 }
@@ -719,6 +722,10 @@ func (m *MsgRestartVbuckets) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
 }
 
+func (m *MsgRestartVbuckets) HasConnErr() bool {
+	return m.connErr
+}
+
 func (m *MsgRestartVbuckets) GetResponseCh() MsgChannel {
 	return m.respCh
 }
@@ -730,6 +737,7 @@ func (m *MsgRestartVbuckets) GetStopChannel() StopChannel {
 func (m *MsgRestartVbuckets) String() string {
 	str := "\n\tMessage: MsgRestartVbuckets"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	str += fmt.Sprintf("\n\tRestartTS: %v", m.restartTs)
 	return str
 }
@@ -1122,6 +1130,8 @@ func (m MsgType) String() string {
 		return "STORAGE_INDEX_STORAGE_STATS"
 	case STORAGE_INDEX_COMPACT:
 		return "STORAGE_INDEX_COMPACT"
+	case STORAGE_SNAP_DONE:
+		return "STORAGE_SNAP_DONE"
 
 	case CONFIG_SETTINGS_UPDATE:
 		return "CONFIG_SETTINGS_UPDATE"

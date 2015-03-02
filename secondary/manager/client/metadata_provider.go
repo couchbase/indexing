@@ -113,10 +113,15 @@ func (o *MetadataProvider) WatchMetadata(indexAdminPort string) (c.IndexerId, er
 			return watcher.getIndexerId(), nil
 		}
 	}
+	
+	startTime := time.Now().String()
 
 	watcher, err := o.startWatcher(indexAdminPort)
 	if err != nil {
-		return c.INDEXER_ID_NIL, errors.New(fmt.Sprintf("Cannot initiate connection to indexer port %s.", indexAdminPort))
+		errTime := time.Now().String()
+		return c.INDEXER_ID_NIL, 
+			errors.New(fmt.Sprintf("Cannot initiate connection to indexer port %s. Error = %v. Start time %v.  Error time %v", 
+			indexAdminPort, err, startTime, errTime))
 	}
 
 	if err := watcher.updateServiceMap(indexAdminPort); err != nil {

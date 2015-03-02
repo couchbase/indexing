@@ -149,7 +149,7 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case TK_DISABLE_FLUSH:
 		tk.handleFlushStateChange(cmd)
 
-	case MUT_MGR_FLUSH_DONE:
+	case STORAGE_SNAP_DONE:
 		tk.handleFlushDone(cmd)
 
 	case MUT_MGR_ABORT_DONE:
@@ -920,6 +920,9 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 
 	streamId := cmd.(*MsgStreamInfo).GetStreamId()
 	bucket := cmd.(*MsgStreamInfo).GetBucket()
+	vbList := cmd.(*MsgStreamInfo).GetVbList()
+
+	logging.Debugf("TK ConnError %v %v %v", streamId, bucket, vbList)
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -935,8 +938,6 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 	switch state {
 
 	case STREAM_ACTIVE:
-		vbList := cmd.(*MsgStreamInfo).GetVbList()
-		bucket := cmd.(*MsgStreamInfo).GetBucket()
 		tk.ss.updateVbStatus(streamId, bucket, vbList, VBS_CONN_ERROR)
 		if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
 			tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
@@ -1613,7 +1614,7 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 	//prepare repairTs with all vbs in STREAM_END, REPAIR status and
 	//send that to KVSender to repair
-	if repairTs, ok := tk.ss.getRepairTsForBucket(streamId, bucket); ok {
+	if repairTs, needRepair, connErr := tk.ss.getRepairTsForBucket(streamId, bucket); needRepair {
 
 		respCh := make(MsgChannel)
 		stopCh := tk.ss.streamBucketRepairStopCh[streamId][bucket]
@@ -1622,7 +1623,8 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 			bucket:    bucket,
 			restartTs: repairTs,
 			respCh:    respCh,
-			stopCh:    stopCh}
+			stopCh:    stopCh,
+			connErr:   connErr}
 
 		go tk.sendRestartMsg(restartMsg)
 
@@ -1630,6 +1632,9 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
 		logging.Debugf("Timekeeper::repairStream Nothing to repair for "+
 			"Stream %v and Bucket %v", streamId, bucket)
+
+		//process any merge that was missed due to stream repair
+		tk.checkPendingStreamMerge(streamId, bucket)
 	}
 
 }
@@ -1720,68 +1725,72 @@ func (tk *timekeeper) handleStats(cmd Message) {
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
 
-	// Populate current KV timestamps for all buckets
-	bucketTsMap := make(map[string]Timestamp)
-	for _, inst := range tk.indexInstMap {
-		if _, ok := bucketTsMap[inst.Defn.Bucket]; !ok {
-			kvTs, err := GetCurrentKVTs(tk.config["clusterAddr"].String(),
-				inst.Defn.Bucket, tk.config["numVbuckets"].Int())
-			if err != nil {
-				logging.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
-				replych <- statsMap
-				return
-			}
+	indexInstMap := common.CopyIndexInstMap(tk.indexInstMap)
 
-			bucketTsMap[inst.Defn.Bucket] = kvTs
-		}
-	}
-
-	tk.lock.Lock()
-	defer tk.lock.Unlock()
-
-	for _, inst := range tk.indexInstMap {
-		k := fmt.Sprintf("%s:%s:num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
-		sum := uint64(0)
-		flushedTs := tk.ss.streamBucketLastFlushedTsMap[inst.Stream][inst.Defn.Bucket]
-		if flushedTs != nil {
-			for _, seqno := range flushedTs.Seqnos {
-				sum += seqno
-			}
-		}
-		v := fmt.Sprint(sum)
-		statsMap[k] = v
-
-		receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
-		queued := uint64(0)
-		if receivedTs != nil {
-			for i, seqno := range receivedTs.Seqnos {
-				flushSeqno := uint64(0)
-				if flushedTs != nil {
-					flushSeqno = flushedTs.Seqnos[i]
+	go func() {
+		// Populate current KV timestamps for all buckets
+		bucketTsMap := make(map[string]Timestamp)
+		for _, inst := range indexInstMap {
+			if _, ok := bucketTsMap[inst.Defn.Bucket]; !ok {
+				kvTs, err := GetCurrentKVTs(tk.config["clusterAddr"].String(),
+					inst.Defn.Bucket, tk.config["numVbuckets"].Int())
+				if err != nil {
+					logging.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
+					replych <- statsMap
+					return
 				}
 
-				queued += seqno - flushSeqno
+				bucketTsMap[inst.Defn.Bucket] = kvTs
 			}
 		}
-		k = fmt.Sprintf("%s:%s:num_docs_queued", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(queued)
-		statsMap[k] = v
 
-		pending := uint64(0)
-		kvTs := bucketTsMap[inst.Defn.Bucket]
-		for i, seqno := range kvTs {
-			recvdSeqno := uint64(0)
+		tk.lock.Lock()
+		defer tk.lock.Unlock()
+
+		for _, inst := range tk.indexInstMap {
+			k := fmt.Sprintf("%s:%s:num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
+			sum := uint64(0)
+			flushedTs := tk.ss.streamBucketLastFlushedTsMap[inst.Stream][inst.Defn.Bucket]
+			if flushedTs != nil {
+				for _, seqno := range flushedTs.Seqnos {
+					sum += seqno
+				}
+			}
+			v := fmt.Sprint(sum)
+			statsMap[k] = v
+
+			receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
+			queued := uint64(0)
 			if receivedTs != nil {
-				recvdSeqno = receivedTs.Seqnos[i]
-			}
-			pending += uint64(seqno) - recvdSeqno
-		}
-		k = fmt.Sprintf("%s:%s:num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(pending)
-		statsMap[k] = v
-	}
+				for i, seqno := range receivedTs.Seqnos {
+					flushSeqno := uint64(0)
+					if flushedTs != nil {
+						flushSeqno = flushedTs.Seqnos[i]
+					}
 
-	replych <- statsMap
+					queued += seqno - flushSeqno
+				}
+			}
+			k = fmt.Sprintf("%s:%s:num_docs_queued", inst.Defn.Bucket, inst.Defn.Name)
+			v = fmt.Sprint(queued)
+			statsMap[k] = v
+
+			pending := uint64(0)
+			kvTs := bucketTsMap[inst.Defn.Bucket]
+			for i, seqno := range kvTs {
+				recvdSeqno := uint64(0)
+				if receivedTs != nil {
+					recvdSeqno = receivedTs.Seqnos[i]
+				}
+				pending += uint64(seqno) - recvdSeqno
+			}
+			k = fmt.Sprintf("%s:%s:num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
+			v = fmt.Sprint(pending)
+			statsMap[k] = v
+		}
+
+		replych <- statsMap
+	}()
 }
 
 func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
@@ -1803,4 +1812,27 @@ func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
 	}
 
 	return false
+}
+
+//check any stream merge that was missed due to stream repair
+func (tk *timekeeper) checkPendingStreamMerge(streamId common.StreamId,
+	bucket string) {
+
+	//for repair done of MAINT_STREAM, if there is any corresponding INIT_STREAM,
+	//check the possibility of merge
+	if streamId == common.MAINT_STREAM {
+		if tk.ss.streamBucketStatus[common.INIT_STREAM][bucket] == STREAM_ACTIVE {
+			streamId = common.INIT_STREAM
+		} else {
+			return
+		}
+	}
+
+	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
+		!tk.ss.checkAnyAbortPending(streamId, bucket) {
+
+		lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+		tk.checkInitStreamReadyToMerge(streamId, bucket, lastFlushedTs)
+
+	}
 }

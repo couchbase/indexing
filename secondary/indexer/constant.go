@@ -63,4 +63,7 @@ const SLICE_COMMIT_POLL_INTERVAL = 20
 //Max Length of Secondary Key
 const MAX_SEC_KEY_LEN = 4096
 
+//Buffer Length for encoded Sec Key
+const MAX_SEC_KEY_BUFFER_LEN = MAX_SEC_KEY_LEN * 3
+
 const INDEXER_ID_KEY = "IndexerId"

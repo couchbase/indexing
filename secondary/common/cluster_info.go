@@ -32,13 +32,10 @@ type ClusterInfoCache struct {
 	logPrefix string
 	retries   int
 
-	client          couchbase.Client
-	pool            couchbase.Pool
-	nodes           []couchbase.Node
-	nodesvs         []couchbase.NodeServices
-	poolsvsCh       chan couchbase.PoolServices
-	poolsvsIsActive bool
-	poolsvsErr      error
+	client  couchbase.Client
+	pool    couchbase.Pool
+	nodes   []couchbase.Node
+	nodesvs []couchbase.NodeServices
 }
 
 type ServiceAddressProvider interface {
@@ -52,11 +49,9 @@ type NodeId int
 
 func NewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, error) {
 	c := &ClusterInfoCache{
-		url:             clusterUrl,
-		poolName:        pool,
-		poolsvsCh:       make(chan couchbase.PoolServices),
-		poolsvsIsActive: false,
-		retries:         0,
+		url:      clusterUrl,
+		poolName: pool,
+		retries:  0,
 	}
 
 	return c, nil
@@ -114,19 +109,6 @@ func (c *ClusterInfoCache) Fetch() error {
 		}
 		c.nodesvs = poolServs.NodesExt
 
-		// Streaming nodeServices API background callback setup
-		// If Fetch() is called for the first time, nodeServices callback is setup
-		// Otherwise if streaming API handler is in error state, that means handler
-		// is not present anymore and we need to setup a new handler.
-		if c.poolsvsIsActive == false || c.poolsvsErr != nil {
-			err = c.client.NodeServicesCallback(c.poolName, c.nodeServicesCallback)
-			if err != nil {
-				return err
-			}
-			c.poolsvsIsActive = true
-			c.poolsvsErr = nil
-		}
-
 		return nil
 	}
 
@@ -142,30 +124,6 @@ func (c ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	}
 
 	return
-}
-
-func (c *ClusterInfoCache) nodeServicesCallback(ps couchbase.PoolServices, err error) bool {
-	if err != nil {
-		c.poolsvsErr = err
-		close(c.poolsvsCh)
-		return false
-	}
-
-	c.poolsvsCh <- ps
-	return true
-}
-
-func (c *ClusterInfoCache) WaitAndUpdateServices() error {
-	if c.poolsvsErr != nil {
-		return c.poolsvsErr
-	}
-
-	ps := <-c.poolsvsCh
-	if c.poolsvsErr == nil {
-		c.nodesvs = ps.NodesExt
-	}
-
-	return c.poolsvsErr
 }
 
 func (c ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err error) {

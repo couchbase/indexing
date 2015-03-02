@@ -111,6 +111,8 @@ func (p *Projector) GetFeedConfig(topic string) c.Config {
 	config.Set("mutationChanSize", pconf["mutationChanSize"])
 	config.Set("vbucketSyncTimeout", pconf["vbucketSyncTimeout"])
 	config.Set("routerEndpointFactory", pconf["routerEndpointFactory"])
+	config.Set("dcp.genChanSize", pconf["dcp.genChanSize"])
+	config.Set("dcp.dataChanSize", pconf["dcp.dataChanSize"])
 	return config
 }
 
@@ -170,9 +172,8 @@ func (p *Projector) DelFeed(topic string) (err error) {
 
 // - return couchbase SDK error if any.
 func (p *Projector) doVbmapRequest(
-	request *protobuf.VbmapRequest) ap.MessageMarshaller {
+	request *protobuf.VbmapRequest, opaque uint16) ap.MessageMarshaller {
 
-	logging.Tracef("%v doVbmapRequest\n", p.logPrefix)
 	response := &protobuf.VbmapResponse{}
 
 	pooln := request.GetPool()
@@ -180,9 +181,12 @@ func (p *Projector) doVbmapRequest(
 	kvaddrs := request.GetKvaddrs()
 
 	// get vbmap from bucket connection.
+	fmsg := "%v ##%x doVbmapRequest() {%q, %q, %v}\n"
+	logging.Debugf(fmsg, p.logPrefix, pooln, bucketn, kvaddrs, opaque)
 	bucket, err := c.ConnectBucket(p.clusterAddr, pooln, bucketn)
 	if err != nil {
-		logging.Errorf("%v for bucket %q, %v\n", p.logPrefix, bucketn, err)
+		fmsg := "%v ##%x ConnectBucket(): %v\n"
+		logging.Errorf(fmsg, p.logPrefix, opaque, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -191,7 +195,8 @@ func (p *Projector) doVbmapRequest(
 	bucket.Refresh()
 	m, err := bucket.GetVBmap(kvaddrs)
 	if err != nil {
-		logging.Errorf("%v for bucket %q, %v\n", p.logPrefix, bucketn, err)
+		fmsg := "%v ##%x GetVBmap(): %v\n"
+		logging.Errorf(fmsg, p.logPrefix, opaque, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -209,18 +214,20 @@ func (p *Projector) doVbmapRequest(
 
 // - return couchbase SDK error if any.
 func (p *Projector) doFailoverLog(
-	request *protobuf.FailoverLogRequest) ap.MessageMarshaller {
+	request *protobuf.FailoverLogRequest, opaque uint16) ap.MessageMarshaller {
 
-	logging.Tracef("%v doFailoverLog\n", p.logPrefix)
 	response := &protobuf.FailoverLogResponse{}
 
 	pooln := request.GetPool()
 	bucketn := request.GetBucket()
 	vbuckets := request.GetVbnos()
 
+	fmsg := "%v ##%x doFailoverLog() {%q, %q, %v}\n"
+	logging.Debugf(fmsg, p.logPrefix, opaque, pooln, bucketn, vbuckets)
 	bucket, err := c.ConnectBucket(p.clusterAddr, pooln, bucketn)
 	if err != nil {
-		logging.Errorf("%v %s, %v\n", p.logPrefix, bucketn, err)
+		fmsg := "%v ##%x ConnectBucket(): %v\n"
+		logging.Errorf(fmsg, p.logPrefix, opaque, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -228,7 +235,12 @@ func (p *Projector) doFailoverLog(
 
 	protoFlogs := make([]*protobuf.FailoverLog, 0, len(vbuckets))
 	vbnos := c.Vbno32to16(vbuckets)
-	if flogs, err := bucket.GetFailoverLogs(vbnos); err == nil {
+	dcpConfig := map[string]interface{}{
+		"genChanSize":  p.config["projector.dcp.genChanSize"].Int(),
+		"dataChanSize": p.config["projector.dcp.dataChanSize"].Int(),
+	}
+	flogs, err := bucket.GetFailoverLogs(vbnos, dcpConfig)
+	if err == nil {
 		for vbno, flog := range flogs {
 			vbuuids := make([]uint64, 0, len(flog))
 			seqnos := make([]uint64, 0, len(flog))
@@ -244,7 +256,8 @@ func (p *Projector) doFailoverLog(
 			protoFlogs = append(protoFlogs, protoFlog)
 		}
 	} else {
-		logging.Errorf("%v %s.GetFailoverLogs() %v\n", p.logPrefix, bucketn, err)
+		fmsg := "%v ##%x GetFailoverLogs(): %v\n"
+		logging.Errorf(fmsg, p.logPrefix, opaque, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -258,21 +271,24 @@ func (p *Projector) doFailoverLog(
 // - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doMutationTopic(
-	request *protobuf.MutationTopicRequest) ap.MessageMarshaller {
+	request *protobuf.MutationTopicRequest,
+	opaque uint16) ap.MessageMarshaller {
 
-	logging.Tracef("%v doMutationTopic()\n", p.logPrefix)
 	topic := request.GetTopic()
+
+	fmsg := "%v ##%x doMutationTopic() %q\n"
+	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
 
 	var err error
 	feed, _ := p.GetFeed(topic)
 	if feed == nil {
 		config := p.GetFeedConfig(topic)
-		feed, err = NewFeed(topic, config)
+		feed, err = NewFeed(topic, config, opaque)
 		if err != nil {
 			return (&protobuf.TopicResponse{}).SetErr(err)
 		}
 	}
-	response, err := feed.MutationTopic(request)
+	response, err := feed.MutationTopic(request, opaque)
 	if err != nil {
 		response.SetErr(err)
 	}
@@ -286,14 +302,17 @@ func (p *Projector) doMutationTopic(
 // - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doRestartVbuckets(
-	request *protobuf.RestartVbucketsRequest) ap.MessageMarshaller {
+	request *protobuf.RestartVbucketsRequest,
+	opaque uint16) ap.MessageMarshaller {
 
-	logging.Tracef("%v doRestartVbuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
+
+	fmsg := "%v ##%x doRestartVbuckets() %q\n"
+	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
 		response := &protobuf.TopicResponse{}
 		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
@@ -301,7 +320,7 @@ func (p *Projector) doRestartVbuckets(
 		return response.SetErr(err)
 	}
 
-	response, err := feed.RestartVbuckets(request)
+	response, err := feed.RestartVbuckets(request, opaque)
 	if err == nil {
 		return response
 	}
@@ -314,18 +333,21 @@ func (p *Projector) doRestartVbuckets(
 // - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doShutdownVbuckets(
-	request *protobuf.ShutdownVbucketsRequest) ap.MessageMarshaller {
+	request *protobuf.ShutdownVbucketsRequest,
+	opaque uint16) ap.MessageMarshaller {
 
-	logging.Tracef("%v doShutdownVbuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
+
+	fmsg := "%v ##%x doShutdownVbuckets() %q\n"
+	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
-	err = feed.ShutdownVbuckets(request)
+	err = feed.ShutdownVbuckets(request, opaque)
 	return protobuf.NewError(err)
 }
 
@@ -335,14 +357,16 @@ func (p *Projector) doShutdownVbuckets(
 // - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doAddBuckets(
-	request *protobuf.AddBucketsRequest) ap.MessageMarshaller {
+	request *protobuf.AddBucketsRequest, opaque uint16) ap.MessageMarshaller {
 
-	logging.Tracef("%v doAddBuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
+
+	fmsg := "%v ##%x doAddBuckets() %q\n"
+	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
 		response := &protobuf.TopicResponse{}
 		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
@@ -350,7 +374,7 @@ func (p *Projector) doAddBuckets(
 		return response.SetErr(err)
 	}
 
-	response, err := feed.AddBuckets(request)
+	response, err := feed.AddBuckets(request, opaque)
 	if err == nil {
 		return response
 	}
@@ -363,18 +387,20 @@ func (p *Projector) doAddBuckets(
 // - return dcp-client failures.
 // - return ErrorResponseTimeout if request is not completed within timeout.
 func (p *Projector) doDelBuckets(
-	request *protobuf.DelBucketsRequest) ap.MessageMarshaller {
+	request *protobuf.DelBucketsRequest, opaque uint16) ap.MessageMarshaller {
 
-	logging.Tracef("%v doDelBuckets()\n", p.logPrefix)
 	topic := request.GetTopic()
+
+	fmsg := "%v ##%x doDelBuckets() %q\n"
+	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
-	err = feed.DelBuckets(request)
+	err = feed.DelBuckets(request, opaque)
 	return protobuf.NewError(err)
 }
 
@@ -382,78 +408,88 @@ func (p *Projector) doDelBuckets(
 // - return ErrorInconsistentFeed for malformed feed request
 // - otherwise, error is empty string.
 func (p *Projector) doAddInstances(
-	request *protobuf.AddInstancesRequest) ap.MessageMarshaller {
+	request *protobuf.AddInstancesRequest, opaque uint16) ap.MessageMarshaller {
 
-	logging.Tracef("%v doAddInstances()\n", p.logPrefix)
 	topic := request.GetTopic()
+
+	fmsg := "%v ##%x doAddInstances() %q\n"
+	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
-	err = feed.AddInstances(request)
+	err = feed.AddInstances(request, opaque)
 	return protobuf.NewError(err)
 }
 
 // - return ErrorTopicMissing if feed is not started.
 // - otherwise, error is empty string.
 func (p *Projector) doDelInstances(
-	request *protobuf.DelInstancesRequest) ap.MessageMarshaller {
+	request *protobuf.DelInstancesRequest, opaque uint16) ap.MessageMarshaller {
 
-	logging.Tracef("%v doDelInstances()\n", p.logPrefix)
 	topic := request.GetTopic()
+
+	fmsg := "%v ##%x doDelInstances() %q\n"
+	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
-	err = feed.DelInstances(request)
+	err = feed.DelInstances(request, opaque)
 	return protobuf.NewError(err)
 }
 
 // - return ErrorTopicMissing if feed is not started.
 // - otherwise, error is empty string.
 func (p *Projector) doRepairEndpoints(
-	request *protobuf.RepairEndpointsRequest) ap.MessageMarshaller {
+	request *protobuf.RepairEndpointsRequest,
+	opaque uint16) ap.MessageMarshaller {
 
-	logging.Tracef("%v doRepairEndpoints()\n", p.logPrefix)
 	topic := request.GetTopic()
+
+	fmsg := "%v ##%x doRepairEndpoints() %q\n"
+	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v %v\n", p.logPrefix, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
-	err = feed.RepairEndpoints(request)
+	err = feed.RepairEndpoints(request, opaque)
 	return protobuf.NewError(err)
 }
 
 // - return ErrorTopicMissing if feed is not started.
 // - otherwise, error is empty string.
 func (p *Projector) doShutdownTopic(
-	request *protobuf.ShutdownTopicRequest) ap.MessageMarshaller {
+	request *protobuf.ShutdownTopicRequest,
+	opaque uint16) ap.MessageMarshaller {
 
-	logging.Tracef("%v doShutdownTopic()\n", p.logPrefix)
 	topic := request.GetTopic()
+
+	fmsg := "%v ##%x doShutdownTopic() %q\n"
+	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v topic %v: %v\n", p.logPrefix, topic, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
 	p.DelFeed(topic)
-	feed.Shutdown()
+	feed.Shutdown(opaque)
 	return protobuf.NewError(err)
 }
 
 func (p *Projector) doStatistics() interface{} {
-	logging.Tracef("%v doStatistics()\n", p.logPrefix)
+	logging.Debugf("%v doStatistics()\n", p.logPrefix)
 
 	m := map[string]interface{}{
 		"clusterAddr": p.clusterAddr,

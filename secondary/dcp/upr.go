@@ -2,9 +2,10 @@ package couchbase
 
 import (
 	"errors"
+	"fmt"
 	"sync"
+	"time"
 
-	"github.com/couchbase/indexing/secondary/dcp/transport"
 	"github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
 )
@@ -12,36 +13,34 @@ import (
 // ErrorInvalidVbucket
 var ErrorInvalidVbucket = errors.New("dcp.invalidVbucket")
 
-// ErrorConnection
-var ErrorConnection = errors.New("dcp.connection")
-
 // ErrorFailoverLog
 var ErrorFailoverLog = errors.New("dcp.failoverLog")
 
 // ErrorInvalidBucket
 var ErrorInvalidBucket = errors.New("dcp.invalidBucket")
 
-// ErrorInvalidFeed
-var ErrorInvalidFeed = errors.New("dcp.invalidFeed")
-
 // ErrorClosed
 var ErrorClosed = errors.New("dcp.closed")
 
+// FailoverLog for list of vbuckets.
+type FailoverLog map[uint16]memcached.FailoverLog
+
 // GetFailoverLogs, get the failover logs for a set of vbucket ids
-func (b *Bucket) GetFailoverLogs(vBuckets []uint16) (FailoverLog, error) {
+func (b *Bucket) GetFailoverLogs(
+	vBuckets []uint16, config map[string]interface{}) (FailoverLog, error) {
 	// map vbids to their corresponding hosts
 	vbHostList := make(map[string][]uint16)
 	vbm := b.VBServerMap()
 	for _, vb := range vBuckets {
 		if l := len(vbm.VBucketMap); int(vb) >= l {
-			logging.Errorf("error invalid vbucket id %d >= %d\n", vb, l)
+			logging.Errorf("DCP[] invalid vbucket id %d >= %d", vb, l)
 			return nil, ErrorInvalidVbucket
 		}
 
 		masterID := vbm.VBucketMap[vb][0]
 		master := b.getMasterNode(masterID)
 		if master == "" {
-			logging.Errorf("error master node not found for vbucket %d\n", vb)
+			logging.Errorf("DCP[] master node not found for vbucket %d", vb)
 			return nil, ErrorInvalidVbucket
 		}
 
@@ -60,19 +59,16 @@ func (b *Bucket) GetFailoverLogs(vBuckets []uint16) (FailoverLog, error) {
 			continue
 		}
 
-		mc, err := serverConn.Get()
+		name := fmt.Sprintf("getfailoverlog-%s-%v", b.Name, time.Now().UnixNano())
+		singleFeed, err := serverConn.StartDcpFeed(name, 0, nil, config)
 		if err != nil {
-			logging.Errorf("in serverConn.Get() for vblist %v: %v\n", vbList, err)
-			return nil, ErrorConnection
+			return nil, err
 		}
-		mc.Hijack()
+		defer singleFeed.Close()
 
-		failoverlogs, err := mc.DcpGetFailoverLog(vbList)
-		serverConn.Return(mc)
+		failoverlogs, err := singleFeed.DcpGetFailoverLog(vbList)
 		if err != nil {
-			format := "error getting failover log for host %s: %v\n"
-			logging.Errorf(format, serverConn.host, err)
-			return nil, ErrorFailoverLog
+			return nil, err
 		}
 		for vb, log := range failoverlogs {
 			failoverLogMap[vb] = *log
@@ -81,17 +77,7 @@ func (b *Bucket) GetFailoverLogs(vBuckets []uint16) (FailoverLog, error) {
 	return failoverLogMap, nil
 }
 
-// DcpFeed from a single connection
-type FeedInfo struct {
-	dcpFeed *memcached.DcpFeed // DCP feed handle
-	host    string             // hostname
-	healthy bool
-	mu      sync.Mutex
-}
-
-type FailoverLog map[uint16]memcached.FailoverLog
-
-// A DcpFeed streams mutation events from a bucket.
+// DcpFeed streams mutation events from a bucket.
 //
 // Events from the bucket can be read from the channel 'C'.
 // Remember to call Close() on it when you're done, unless
@@ -105,16 +91,19 @@ type DcpFeed struct {
 	name      string                   // name of this DCP feed
 	sequence  uint32                   // sequence number for this feed
 	// gen-server
-	reqch  chan []interface{}
-	finch  chan bool
-	wgroup sync.WaitGroup
+	reqch     chan []interface{}
+	finch     chan bool
+	logPrefix string
 }
 
 // StartDcpFeed creates and starts a new Dcp feed.
 // No data will be sent on the channel unless vbuckets streams
 // are requested.
-func (b *Bucket) StartDcpFeed(name string, sequence uint32) (*DcpFeed, error) {
-	return b.StartDcpFeedOver(name, sequence, nil)
+func (b *Bucket) StartDcpFeed(
+	name string, sequence uint32,
+	config map[string]interface{}) (*DcpFeed, error) {
+
+	return b.StartDcpFeedOver(name, sequence, nil, config)
 }
 
 // StartDcpFeed creates and starts a new Dcp feed.
@@ -123,21 +112,25 @@ func (b *Bucket) StartDcpFeed(name string, sequence uint32) (*DcpFeed, error) {
 // kvnodes `kvaddrs`, to connect will all kvnodes hosting the bucket,
 // pass `kvaddrs` as nil
 func (b *Bucket) StartDcpFeedOver(
-	name string, sequence uint32, kvaddrs []string) (*DcpFeed, error) {
+	name string,
+	sequence uint32,
+	kvaddrs []string,
+	config map[string]interface{}) (*DcpFeed, error) {
 
+	genChanSize := config["genChanSize"].(int)
+	dataChanSize := config["dataChanSize"].(int)
 	feed := &DcpFeed{
 		bucket:    b,
-		output:    make(chan *memcached.DcpEvent, 10), // TODO: no magic num.
 		nodeFeeds: make(map[string]*FeedInfo),
+		output:    make(chan *memcached.DcpEvent, dataChanSize),
 		name:      name,
 		sequence:  sequence,
-		reqch:     make(chan []interface{}, 16), // TODO: no magic num.
+		reqch:     make(chan []interface{}, genChanSize),
 		finch:     make(chan bool),
+		logPrefix: fmt.Sprintf("DCP[%v]", name),
 	}
 	feed.C = feed.output
-	err := feed.connectToNodes(kvaddrs)
-	if err != nil {
-		logging.Errorf("error cannot connect to bucket %v\n", err)
+	if feed.connectToNodes(kvaddrs, config) != nil {
 		return nil, ErrorInvalidBucket
 	}
 	go feed.genServer(feed.reqch)
@@ -154,7 +147,8 @@ const (
 // and immediately returns, it is upto the channel listener
 // to detect StreamBegin.
 // Synchronous call.
-func (feed *DcpFeed) DcpRequestStream(vb uint16, opaque uint16, flags uint32,
+func (feed *DcpFeed) DcpRequestStream(
+	vb uint16, opaque uint16, flags uint32,
 	vbuuid, startSequence, endSequence, snapStart, snapEnd uint64) error {
 
 	respch := make(chan []interface{}, 1)
@@ -185,10 +179,16 @@ func (feed *DcpFeed) Close() error {
 
 func (feed *DcpFeed) genServer(reqch chan []interface{}) {
 	defer func() { // panic safe
+		close(feed.finch)
 		if r := recover(); r != nil {
-			logging.Errorf("error DcpFeed for %v crashed: %v\n", feed.bucket, r)
+			logging.Errorf("%v crashed: %v\n", feed.logPrefix, r)
 			logging.Errorf("%s", logging.StackTrace())
 		}
+		for _, nodeFeed := range feed.nodeFeeds {
+			nodeFeed.dcpFeed.Close()
+		}
+		feed.nodeFeeds = nil
+		close(feed.output)
 	}()
 
 loop:
@@ -221,18 +221,17 @@ loop:
 			}
 		}
 	}
-
-	close(feed.finch)
-	feed.wgroup.Wait()
-	feed.nodeFeeds = nil
-	close(feed.output)
 }
 
-func (feed *DcpFeed) connectToNodes(kvaddrs []string) error {
+func (feed *DcpFeed) connectToNodes(
+	kvaddrs []string, config map[string]interface{}) error {
+
+	prefix := feed.logPrefix
 	kvcache := make(map[string]bool)
 	m, err := feed.bucket.GetVBmap(kvaddrs)
 	if err != nil {
-		return err
+		logging.Fatalf("%v GetVBmap(%v) failed: %v\n", prefix, kvaddrs, err)
+		return memcached.ErrorInvalidFeed
 	}
 	for kvaddr := range m {
 		kvcache[kvaddr] = true
@@ -242,9 +241,10 @@ func (feed *DcpFeed) connectToNodes(kvaddrs []string) error {
 		if _, ok := kvcache[serverConn.host]; !ok {
 			continue
 		}
-		feedInfo := feed.nodeFeeds[serverConn.host]
-		if feedInfo != nil && feedInfo.isHealthy() == true {
-			continue
+		nodeFeed := feed.nodeFeeds[serverConn.host]
+		if nodeFeed != nil {
+			nodeFeed.dcpFeed.Close()
+			// and continue to spawn a new one ...
 		}
 
 		var name string
@@ -253,121 +253,78 @@ func (feed *DcpFeed) connectToNodes(kvaddrs []string) error {
 		} else {
 			name = feed.name
 		}
-		singleFeed, err := serverConn.StartDcpFeed(name, feed.sequence)
+		singleFeed, err := serverConn.StartDcpFeed(
+			name, feed.sequence, feed.output, config)
 		if err != nil {
-			format := "dcp-client: Error connecting to dcp feed of %s: %v"
-			logging.Errorf(format, serverConn.host, err)
-			for _, f := range feed.nodeFeeds {
-				f.dcpFeed.Close()
+			for _, nodeFeed := range feed.nodeFeeds {
+				nodeFeed.dcpFeed.Close()
 			}
-			return ErrorInvalidFeed
+			return memcached.ErrorInvalidFeed
 		}
 		// add the node to the connection map
-		feedInfo = &FeedInfo{
+		feedInfo := &FeedInfo{
 			dcpFeed: singleFeed,
-			healthy: true,
 			host:    serverConn.host,
 		}
 		feed.nodeFeeds[serverConn.host] = feedInfo
-		feed.wgroup.Add(1)
-		go feed.forwardDcpEvents(feedInfo, feed.finch)
 	}
 	return nil
 }
 
-func (feed *DcpFeed) dcpRequestStream(vb uint16, opaque uint16, flags uint32,
+func (feed *DcpFeed) dcpRequestStream(
+	vb uint16, opaque uint16, flags uint32,
 	vbuuid, startSequence, endSequence, snapStart, snapEnd uint64) error {
 
+	prefix := feed.logPrefix
 	vbm := feed.bucket.VBServerMap()
 	if l := len(vbm.VBucketMap); int(vb) >= l {
-		logging.Errorf("error invalid vbucket id %d >= %d\n", vb, l)
+		logging.Errorf("%v invalid vbucket id %d >= %d\n", prefix, vb, l)
 		return ErrorInvalidVbucket
 	}
 
 	masterID := vbm.VBucketMap[vb][0]
 	master := feed.bucket.getMasterNode(masterID)
 	if master == "" {
-		logging.Errorf("error master node not found for vbucket %d\n", vb)
+		logging.Errorf("%v notFound master node for vbucket %d\n", prefix, vb)
 		return ErrorInvalidVbucket
 	}
-	logging.Infof("Posting DCP_REQUEST to %v\n", master)
 	singleFeed, ok := feed.nodeFeeds[master]
 	if !ok {
-		logging.Errorf("error DcpFeed for host %q (vb:%d) not found", master, vb)
-		return ErrorInvalidFeed
+		logging.Errorf("%v notFound DcpFeed host: %q vb:%d\n", prefix, master, vb)
+		return memcached.ErrorInvalidFeed
 	}
-	if err := singleFeed.dcpFeed.DcpRequestStream(vb, opaque, flags,
-		vbuuid, startSequence, endSequence, snapStart, snapEnd); err != nil {
+	err := singleFeed.dcpFeed.DcpRequestStream(
+		vb, opaque, flags, vbuuid, startSequence, endSequence,
+		snapStart, snapEnd)
+	if err != nil {
 		return err
 	}
 	return nil
 }
 
 func (feed *DcpFeed) dcpCloseStream(vb, opaqueMSB uint16) error {
+	prefix := feed.logPrefix
 	vbm := feed.bucket.VBServerMap()
 	if l := len(vbm.VBucketMap); int(vb) >= l {
-		logging.Errorf("error invalid vbucket id %d >= %d\n", vb, l)
+		logging.Errorf("%v invalid vbucket id %d >= %d\n", prefix, vb, l)
 		return ErrorInvalidVbucket
 	}
 
 	masterID := vbm.VBucketMap[vb][0]
 	master := feed.bucket.getMasterNode(masterID)
 	if master == "" {
-		logging.Errorf("error master node not found for vbucket %d\n", vb)
+		logging.Errorf("%v notFound master node for vbucket %d\n", prefix, vb)
 		return ErrorInvalidVbucket
 	}
 	singleFeed, ok := feed.nodeFeeds[master]
 	if !ok {
-		logging.Errorf("error DcpFeed for host %q (vb:%d) not found", master, vb)
-		return ErrorInvalidFeed
+		logging.Errorf("%v notFound DcpFeed host: %q vb:%d", prefix, master, vb)
+		return memcached.ErrorInvalidFeed
 	}
 	if err := singleFeed.dcpFeed.CloseStream(vb, opaqueMSB); err != nil {
 		return err
 	}
 	return nil
-}
-
-// go routine
-func (feed *DcpFeed) forwardDcpEvents(nodeFeed *FeedInfo, finch chan bool) {
-	singleFeed := nodeFeed.dcpFeed
-loop:
-	for {
-		select {
-		case event, ok := <-singleFeed.C:
-			if !ok {
-				if singleFeed.Error != nil {
-					format := "dcp-client: Dcp feed from %s failed: %v"
-					logging.Errorf(format, nodeFeed.host, singleFeed.Error)
-				}
-				break loop
-			}
-			feed.output <- event
-			if event.Status == transport.NOT_MY_VBUCKET {
-				logging.Warnf("Got a not my vbucket error !! ")
-				if err := feed.bucket.Refresh(); err != nil {
-					logging.Errorf("error unable to refresh bucket : %v", err)
-					break loop
-				}
-			}
-
-		case <-finch:
-			break loop
-		}
-	}
-
-	feed.wgroup.Done()
-	go feed.Close()
-	nodeFeed.dcpFeed.Close()
-
-	nodeFeed.mu.Lock()
-	defer nodeFeed.mu.Unlock()
-	nodeFeed.healthy = false
-}
-
-func (nodeFeed *FeedInfo) isHealthy() bool {
-	nodeFeed.mu.Lock()
-	defer nodeFeed.mu.Unlock()
-	return nodeFeed.healthy
 }
 
 // failsafeOp can be used by gen-server implementors to avoid infinitely
@@ -401,4 +358,11 @@ func opError(err error, vals []interface{}, idx int) error {
 		return nil
 	}
 	return vals[idx].(error)
+}
+
+// FeedInfo is dcp-feed from a single connection
+type FeedInfo struct {
+	dcpFeed *memcached.DcpFeed // DCP feed handle
+	host    string             // hostname
+	mu      sync.Mutex         // protects the following field.
 }

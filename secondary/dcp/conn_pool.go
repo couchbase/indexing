@@ -198,9 +198,13 @@ func (cp *connectionPool) StartTapFeed(args *memcached.TapArguments) (*memcached
 	return mc.StartTapFeed(*args)
 }
 
-const DEFAULT_WINDOW_SIZE = 20 * 1024 * 1024 // 20 Mb
+const DEFAULT_WINDOW_SIZE = uint32(20 * 1024 * 1024) // 20 Mb
 
-func (cp *connectionPool) StartDcpFeed(name string, sequence uint32) (*memcached.DcpFeed, error) {
+func (cp *connectionPool) StartDcpFeed(
+	name string, sequence uint32,
+	outch chan *memcached.DcpEvent,
+	config map[string]interface{}) (*memcached.DcpFeed, error) {
+
 	if cp == nil {
 		return nil, errNoPool
 	}
@@ -213,18 +217,13 @@ func (cp *connectionPool) StartDcpFeed(name string, sequence uint32) (*memcached
 	// Dont' count it against the connection pool capacity
 	<-cp.createsem
 
-	uf, err := mc.NewDcpFeed()
-	if err != nil {
-		return nil, err
+	dcpf, err := memcached.NewDcpFeed(mc, name, outch, config)
+	if err == nil {
+		err = dcpf.DcpOpen(name, sequence, DEFAULT_WINDOW_SIZE)
+		if err == nil {
+			return dcpf, err
+		}
 	}
-
-	if err := uf.DcpOpen(name, sequence, DEFAULT_WINDOW_SIZE); err != nil {
-		return nil, err
-	}
-
-	if err := uf.StartFeed(); err != nil {
-		return nil, err
-	}
-
-	return uf, nil
+	mc.Close()
+	return nil, err
 }

@@ -21,6 +21,8 @@ var reqRepairEndpoints = &protobuf.RepairEndpointsRequest{}
 var reqShutdownFeed = &protobuf.ShutdownTopicRequest{}
 var reqStats = c.Statistics{}
 
+var angioToken = uint16(1)
+
 // admin-port entry point, once started never shutsdown.
 func (p *Projector) mainAdminPort(reqch chan ap.Request) {
 	p.admind.Register(reqVbmap)
@@ -51,7 +53,11 @@ loop:
 			}
 			// a go-routine is spawned so that requests to
 			// different feeds can be simultaneously executed.
-			go p.handleRequest(req)
+			go p.handleRequest(req, angioToken)
+			angioToken++
+			if angioToken >= 0xFFFE {
+				angioToken = 1
+			}
 		}
 	}
 
@@ -60,34 +66,34 @@ loop:
 }
 
 // re-entrant / concurrent request handler.
-func (p *Projector) handleRequest(req ap.Request) {
+func (p *Projector) handleRequest(req ap.Request, opaque uint16) {
 	var response ap.MessageMarshaller
 	var err error
 
 	msg := req.GetMessage()
 	switch request := msg.(type) {
 	case *protobuf.VbmapRequest:
-		response = p.doVbmapRequest(request)
+		response = p.doVbmapRequest(request, opaque)
 	case *protobuf.FailoverLogRequest:
-		response = p.doFailoverLog(request)
+		response = p.doFailoverLog(request, opaque)
 	case *protobuf.MutationTopicRequest:
-		response = p.doMutationTopic(request)
+		response = p.doMutationTopic(request, opaque)
 	case *protobuf.RestartVbucketsRequest:
-		response = p.doRestartVbuckets(request)
+		response = p.doRestartVbuckets(request, opaque)
 	case *protobuf.ShutdownVbucketsRequest:
-		response = p.doShutdownVbuckets(request)
+		response = p.doShutdownVbuckets(request, opaque)
 	case *protobuf.AddBucketsRequest:
-		response = p.doAddBuckets(request)
+		response = p.doAddBuckets(request, opaque)
 	case *protobuf.DelBucketsRequest:
-		response = p.doDelBuckets(request)
+		response = p.doDelBuckets(request, opaque)
 	case *protobuf.AddInstancesRequest:
-		response = p.doAddInstances(request)
+		response = p.doAddInstances(request, opaque)
 	case *protobuf.DelInstancesRequest:
-		response = p.doDelInstances(request)
+		response = p.doDelInstances(request, opaque)
 	case *protobuf.RepairEndpointsRequest:
-		response = p.doRepairEndpoints(request)
+		response = p.doRepairEndpoints(request, opaque)
 	case *protobuf.ShutdownTopicRequest:
-		response = p.doShutdownTopic(request)
+		response = p.doShutdownTopic(request, opaque)
 	default:
 		err = c.ErrorInvalidRequest
 	}

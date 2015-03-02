@@ -12,9 +12,9 @@ package indexer
 import (
 	"errors"
 
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
+	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
 )
 
@@ -312,7 +312,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 //startMutationStreamWorker is the worker which processes mutation in a worker queue
 func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch StopChannel) {
 
-	logging.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
+	logging.Debugf("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
 		"Started for Stream %v.", workerId, r.streamId)
 
 	for {
@@ -320,7 +320,7 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 		case mut := <-r.workerch[workerId]:
 			r.handleSingleMutation(mut)
 		case <-stopch:
-			logging.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
+			logging.Debugf("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
 				"Stopped for Stream %v", workerId, r.streamId)
 			return
 		}

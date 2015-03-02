@@ -51,10 +51,14 @@ type bucketDcp struct {
 
 // OpenBucketFeed opens feed for bucket.
 func OpenBucketFeed(
-	feedname string, b *couchbase.Bucket) (feeder BucketFeeder, err error) {
+	feedname string,
+	b *couchbase.Bucket,
+	config map[string]interface{}) (feeder BucketFeeder, err error) {
 
 	bdcp := &bucketDcp{bucket: b}
-	if bdcp.dcpFeed, err = b.StartDcpFeed(feedname, uint32(0)); err != nil {
+	// TODO: use StartDcpFeedOver()
+	bdcp.dcpFeed, err = b.StartDcpFeed(feedname, uint32(0), config)
+	if err != nil {
 		return nil, err
 	}
 	return bdcp, nil
