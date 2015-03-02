@@ -97,7 +97,7 @@ func GetCurrentKVTs(cluster, bucket string, numVbs int) (Timestamp, error) {
 			}
 		}
 		elapsed := time.Since(start)
-		logging.Debugf("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
+		logging.Tracef("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
 		return ts, nil
 
 	} else {
