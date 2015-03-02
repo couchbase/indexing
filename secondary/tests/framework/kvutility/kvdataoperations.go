@@ -101,17 +101,20 @@ func DeleteKeys(keyValues tc.KeyValues, bucketName string, password string, host
 	b.Close()
 }
 
-func CreateBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string, bucketRamQuota int) {
+func CreateBucket(bucketName, authenticationType, saslBucketPassword, serverUserName, serverPassword, hostaddress, bucketRamQuota, proxyPort string) {
 	client := &http.Client{}
 	address := "http://" + hostaddress + "/pools/default/buckets"
-	data := url.Values{"name": {bucketName}, "ramQuotaMB": {"256"}, "authType": {"none"}, "replicaNumber": {"1"}, "proxyPort": {"11211"}}
+	data := url.Values{"name": {bucketName}, "ramQuotaMB": {bucketRamQuota}, "authType": {authenticationType}, "saslPassword": {saslBucketPassword}, "flushEnabled": {"1"}, "replicaNumber": {"1"}, "proxyPort": {proxyPort}}
 	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	resp, err := client.Do(req)
-	fmt.Println(address)
-	fmt.Println(req)
-	fmt.Println(resp)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		fmt.Println(address)
+		fmt.Println(req)
+		fmt.Println(resp)
+		fmt.Println("CreateBucket failed for bucket: ", bucketName)
+	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Create Bucket")
 	time.Sleep(30 * time.Second)
@@ -125,45 +128,76 @@ func DeleteBucket(bucketName, bucketPassword, serverUserName, serverPassword, ho
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	resp, err := client.Do(req)
-	fmt.Println(address)
-	fmt.Println(req)
-	fmt.Println(resp)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		fmt.Println(address)
+		fmt.Println(req)
+		fmt.Println(resp)
+		fmt.Println("DeleteBucket failed for bucket: ", bucketName)
+	}
 	// todo : error out if response is error
-	tc.HandleError(err, "Delete Bucket " + address)
+	tc.HandleError(err, "Delete Bucket "+address)
 	time.Sleep(30 * time.Second)
 	fmt.Println("Deleted bucket ", bucketName)
 }
 
-func FlushBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
+func EnableBucketFlush(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
 	client := &http.Client{}
 	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName
-	data := url.Values{"name": {bucketName}, "flushEnabled" : {"1"}}
-	
+	data := url.Values{"name": {bucketName}, "flushEnabled": {"1"}}
+
 	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	resp, err := client.Do(req)
-	
-	fmt.Println(address)
-	fmt.Println(req)
-	fmt.Println(resp)
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		fmt.Println(address)
+		fmt.Println(req)
+		fmt.Println(resp)
+		fmt.Println("EnableBucketFlush failed for bucket: ", bucketName)
+	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Enable Bucket")
 	time.Sleep(3 * time.Second)
 	fmt.Println("Flush Enabled on bucket ", bucketName)
-	
-	
-	client = &http.Client{}
-	address = "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/controller/doFlush"
-	req, _ = http.NewRequest("POST", address, nil)
+}
+
+func FlushBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) {
+	client := &http.Client{}
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName + "/controller/doFlush"
+	req, _ := http.NewRequest("POST", address, nil)
 	req.SetBasicAuth(serverUserName, serverPassword)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-	resp, err = client.Do(req)
-	fmt.Println(address)
-	fmt.Println(req)
-	fmt.Println(resp)
+	resp, err := client.Do(req)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		fmt.Println(address)
+		fmt.Println(req)
+		fmt.Println(resp)
+		fmt.Println("Flush Bucket failed for bucket: ", bucketName)
+	}
 	// todo : error out if response is error
-	tc.HandleError(err, "Delete Bucket " + address)
+	tc.HandleError(err, "Delete Bucket "+address)
 	time.Sleep(3 * time.Second)
 	fmt.Println("Flushed the bucket ", bucketName)
+}
+
+func EditBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress, bucketRamQuota string) {
+	client := &http.Client{}
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName
+	data := url.Values{"name": {bucketName}, "ramQuotaMB": {bucketRamQuota}}
+
+	req, _ := http.NewRequest("POST", address, strings.NewReader(data.Encode()))
+	req.SetBasicAuth(serverUserName, serverPassword)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	resp, err := client.Do(req)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		fmt.Println(address)
+		fmt.Println(req)
+		fmt.Println(resp)
+		fmt.Println("EditBucket failed for bucket: ", bucketName)
+	}
+	// todo : error out if response is error
+	tc.HandleError(err, "Edit Bucket")
+	time.Sleep(3 * time.Second)
+	fmt.Println("Modified parameters of bucket: ", bucketName)
 }

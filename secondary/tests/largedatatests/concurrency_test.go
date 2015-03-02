@@ -5,7 +5,6 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	kv "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
-	"log"
 	"math/rand"
 	"path/filepath"
 	"sync"
@@ -101,7 +100,11 @@ func CreateDeleteDocsForDuration(wg *sync.WaitGroup, seconds float64) {
 func RangeScanForDuration_ltr(header string, wg *sync.WaitGroup, seconds float64, t *testing.T, indexName, bucketName, server string) {
 	fmt.Println("In Range Scan")
 	defer wg.Done()
-	client := secondaryindex.CreateClient(clusterconfig.KVAddress, "RangeForDuration")
+	client, e := secondaryindex.CreateClient(clusterconfig.KVAddress, "RangeForDuration")
+	if e != nil {
+		FailTestIfError(e, "RangeScanForDuration Thread:: Error in gsi client creation", t)
+	}
+
 	defer client.Close()
 	start := time.Now()
 	i := 1
@@ -114,11 +117,10 @@ func RangeScanForDuration_ltr(header string, wg *sync.WaitGroup, seconds float64
 		high := random_letter()
 
 		rangeStart := time.Now()
-		scanResults, err := secondaryindex.RangeWithClient(indexName, bucketName, server, []interface{}{low}, []interface{}{high}, 3, true, defaultlimit, client)
+		_, err := secondaryindex.RangeWithClient(indexName, bucketName, server, []interface{}{low}, []interface{}{high}, 3, true, defaultlimit, client)
 		rangeElapsed := time.Since(rangeStart)
 		FailTestIfError(err, "RangeScanForDuration Thread:: Error in scan", t)
 		fmt.Printf("Range Scan of %d user documents took %s\n", len(kvdocs), rangeElapsed)
-		log.Printf("%v %d  RangeScanForDuration:: Len of scanResults is: %d\n", header, i, len(scanResults))
 		i++
 	}
 }
@@ -126,7 +128,11 @@ func RangeScanForDuration_ltr(header string, wg *sync.WaitGroup, seconds float64
 func RangeScanForDuration_num(header string, wg *sync.WaitGroup, seconds float64, t *testing.T, indexName, bucketName, server string) {
 	fmt.Println("In Range Scan")
 	defer wg.Done()
-	client := secondaryindex.CreateClient(clusterconfig.KVAddress, "RangeForDuration")
+	client, e := secondaryindex.CreateClient(clusterconfig.KVAddress, "RangeForDuration")
+	if e != nil {
+		FailTestIfError(e, "RangeScanForDuration Thread:: Error in gsi client creation", t)
+	}
+
 	defer client.Close()
 	start := time.Now()
 	i := 1
@@ -137,8 +143,7 @@ func RangeScanForDuration_num(header string, wg *sync.WaitGroup, seconds float64
 		}
 		low := random_num(15, 80)
 		high := random_num(15, 80)
-		scanResults, err := secondaryindex.RangeWithClient(indexName, bucketName, server, []interface{}{low}, []interface{}{high}, 3, true, defaultlimit, client)
-		log.Printf("%v %d  RangeScanForDuration:: Len of scanResults is: %d\n", header, i, len(scanResults))
+		_, err := secondaryindex.RangeWithClient(indexName, bucketName, server, []interface{}{low}, []interface{}{high}, 3, true, defaultlimit, client)
 		i++
 		FailTestIfError(err, "Error in scan", t)
 	}
@@ -147,7 +152,11 @@ func RangeScanForDuration_num(header string, wg *sync.WaitGroup, seconds float64
 func CreateDropIndexesForDuration(wg *sync.WaitGroup, seconds float64, t *testing.T) {
 	fmt.Println("Create and Drop index operations")
 	defer wg.Done()
-	client := secondaryindex.CreateClient(clusterconfig.KVAddress, "CDIndex")
+	client, e := secondaryindex.CreateClient(clusterconfig.KVAddress, "CDIndex")
+	if e != nil {
+		FailTestIfError(e, "CreateDropIndexesForDuration Thread:: Error in gsi client creation", t)
+	}
+
 	defer client.Close()
 	start := time.Now()
 	for {
@@ -158,31 +167,33 @@ func CreateDropIndexesForDuration(wg *sync.WaitGroup, seconds float64, t *testin
 
 		var index1 = "index_age"
 		var bucketName = "default"
+		log.Printf("Creating index " + index1)
 		err := secondaryindex.CreateSecondaryIndexWithClient(index1, bucketName, indexManagementAddress, []string{"age"}, true, client)
 		FailTestIfError(err, "Error in creating the index", t)
 		time.Sleep(1 * time.Second)
-		scanResults, err := secondaryindex.RangeWithClient(index1, bucketName, indexScanAddress, []interface{}{random_num(15, 80)}, []interface{}{random_num(15, 80)}, 3, true, defaultlimit, client)
+		_, err = secondaryindex.RangeWithClient(index1, bucketName, indexScanAddress, []interface{}{random_num(15, 80)}, []interface{}{random_num(15, 80)}, 3, true, defaultlimit, client)
 		FailTestIfError(err, "CreateDropIndexesForDuration:: Error in scan", t)
-		log.Printf("%v RangeScan CreateDropIndexesForDuration:: Len of scanResults is: %d\n", index1, len(scanResults))
 
 		var index2 = "index_firstname"
+		log.Printf("Creating index " + index2)
 		err = secondaryindex.CreateSecondaryIndexWithClient(index2, bucketName, indexManagementAddress, []string{"`first-name`"}, true, client)
 		FailTestIfError(err, "Error in creating the index", t)
 		time.Sleep(1 * time.Second)
-		scanResults, err = secondaryindex.RangeWithClient(index2, bucketName, indexScanAddress, []interface{}{"M"}, []interface{}{"Z"}, 3, true, defaultlimit, client)
+		_, err = secondaryindex.RangeWithClient(index2, bucketName, indexScanAddress, []interface{}{"M"}, []interface{}{"Z"}, 3, true, defaultlimit, client)
 		FailTestIfError(err, "CreateDropIndexesForDuration:: Error in scan", t)
-		log.Printf("%v  RangeScan CreateDropIndexesForDuration:: Len of scanResults is: %d", index2, len(scanResults))
 
+		log.Printf("Dropping index " + index1)
 		err = secondaryindex.DropSecondaryIndexWithClient(index1, bucketName, indexManagementAddress, client)
 		FailTestIfError(err, "Error in drop index", t)
 		time.Sleep(1 * time.Second)
+		log.Printf("Dropping index " + index2)
 		err = secondaryindex.DropSecondaryIndexWithClient(index2, bucketName, indexManagementAddress, client)
 		FailTestIfError(err, "Error in drop index", t)
 		time.Sleep(1 * time.Second)
 	}
 }
 
-func SequentialRangeScanForDuration(indexName, bucketName string, seconds float64, t *testing.T) {
+func SequentialRangeScanForDuration(indexName, bucketName string, seconds float64, t *testing.T) error {
 	fmt.Println("In Range Scan")
 	start := time.Now()
 	i := 1
@@ -191,19 +202,26 @@ func SequentialRangeScanForDuration(indexName, bucketName string, seconds float6
 		if elapsed.Seconds() >= seconds {
 			break
 		}
-		client := secondaryindex.CreateClient(clusterconfig.KVAddress, "SeqTest")
-		scanResults, err := secondaryindex.RangeWithClient(indexName, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"z"}, 3, true, defaultlimit, client)
-		log.Printf("%d  RangeScan:: Len of scanResults is: %d", i, len(scanResults))
+		client, e := secondaryindex.CreateClient(clusterconfig.KVAddress, "SeqTest")
+		if e != nil {
+			return e
+		}
+
+		_, err := secondaryindex.RangeWithClient(indexName, bucketName, indexScanAddress, []interface{}{"a"}, []interface{}{"z"}, 3, true, defaultlimit, client)
+		// log.Printf("%d  RangeScan:: Len of scanResults is: %d", i, len(scanResults))
 		i++
 		FailTestIfError(err, "Error in scan", t)
 		client.Close()
 	}
+
+	return nil
 }
 
 func SkipTestSequentialRangeScans(t *testing.T) {
 	fmt.Println("In TestSequentialRangeScans()")
 	prodfile = filepath.Join(proddir, "test.prod")
-	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 
 	fmt.Println("Generating JSON docs")
 	kvdocs = GenerateJsons(1000, seed, prodfile, bagdir)
@@ -225,7 +243,8 @@ func TestRangeWithConcurrentAddMuts(t *testing.T) {
 	fmt.Println("In TestRangeWithConcurrentAddMuts()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
-	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 
 	fmt.Println("Generating JSON docs")
 	kvdocs = GenerateJsons(1000, seed, prodfile, bagdir)

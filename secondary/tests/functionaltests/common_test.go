@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/logging"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
@@ -14,7 +15,7 @@ import (
 	"github.com/prataprc/monster"
 	"github.com/prataprc/monster/common"
 	"log"
-	"os"
+	//"os"
 	"io/ioutil"
 	"os/user"
 	"path/filepath"
@@ -31,6 +32,8 @@ var dataFilePath, mutationFilePath string
 
 func init() {
 	fmt.Println("In init()")
+	logging.SetLogLevel(logging.Silent)
+
 	var configpath string
 	flag.StringVar(&configpath, "cbconfig", "../config/clusterrun_conf.json", "Path of the configuration file with data about Couchbase Cluster")
 	flag.Parse()
@@ -40,23 +43,26 @@ func init() {
 	indexScanAddress = clusterconfig.KVAddress
 	seed = 1
 	proddir, bagdir = tc.FetchMonsterToolPath()
-	
+
 	// setup cbauth
 	if _, err := cbauth.InternalRetryDefaultInit(kvaddress, clusterconfig.Username, clusterconfig.Password); err != nil {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
 	}
 	secondaryindex.CheckCollation = true
-	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	tc.HandleError(e, "Error in DropAllSecondaryIndexes")
+
 	time.Sleep(5 * time.Second)
 	// Working with Users10k and Users_mut dataset.
 	u, _ := user.Current()
 	dataFilePath = filepath.Join(u.HomeDir, "testdata/Users10k.txt.gz")
 	mutationFilePath = filepath.Join(u.HomeDir, "testdata/Users_mut.txt.gz")
-	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath, false)
-	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, false)
+	tc.DownloadDataFile(tc.IndexTypesStaticJSONDataS3, dataFilePath, true)
+	tc.DownloadDataFile(tc.IndexTypesMutationJSONDataS3, mutationFilePath, true)
 	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
 	fmt.Println("Emptying the default bucket")
+	kvutility.EnableBucketFlush("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	time.Sleep(5 * time.Second)
 
@@ -113,14 +119,7 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 	options.seed = seed
 
 	var err error
-	outfd := os.Stdout
-	if options.outfile != "-" && options.outfile != "" {
-		outfd, err = os.Create(options.outfile)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-	
+
 	// read production-file
 	text, err := ioutil.ReadFile(prodfile)
 	if err != nil {
@@ -133,34 +132,23 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 	scope = monster.BuildContext(scope, uint64(options.seed), options.bagdir)
 	scope["_prodfile"] = prodfile
 
-	if options.nonterm != "" {
-		for i := 0; i < options.count; i++ {
-			val := evaluate("root", scope, nterms[options.nonterm])
-			fmt.Println(val)
-			outtext := fmt.Sprintf("%v\n", val)
-			if _, err := outfd.Write([]byte(outtext)); err != nil {
-				log.Fatal(err)
-			}
+	// evaluate
+	for i := 0; i < options.count; i++ {
+		val := evaluate("root", scope, nterms["s"])
+		jsonString := val.(string)
+		byt := []byte(jsonString)
+		var dat map[string]interface{}
+		if err := json.Unmarshal(byt, &dat); err != nil {
+			panic(err)
 		}
-
-	} else {
-		// evaluate
-		for i := 0; i < options.count; i++ {
-			val := evaluate("root", scope, nterms["s"])
-			jsonString := val.(string)
-			byt := []byte(jsonString)
-			var dat map[string]interface{}
-			if err := json.Unmarshal(byt, &dat); err != nil {
-				panic(err)
-			}
-			dockey := dat["docid"].(string)
-			keyValues[dockey] = dat
-			outtext := fmt.Sprintf("%v\n", val)
-			if _, err := outfd.Write([]byte(outtext)); err != nil {
-				log.Fatal(err)
-			}
-		}
+		dockey := dat["docid"].(string)
+		keyValues[dockey] = dat
+		// outtext := fmt.Sprintf("%v\n", val)
+		// if _, err := outfd.Write([]byte(outtext)); err != nil {
+		//log.Fatal(err)
+		// }
 	}
+
 	return keyValues
 }
 

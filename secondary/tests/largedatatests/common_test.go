@@ -5,13 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/logging"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
 	"github.com/prataprc/monster/common"
 	"io/ioutil"
 	"log"
-	"os"
 	"runtime"
 	"testing"
 )
@@ -24,6 +24,8 @@ var proddir, bagdir string
 
 func init() {
 	fmt.Println("In init()")
+
+	logging.SetLogLevel(logging.Silent)
 	var configpath string
 	seed = 1
 	flag.StringVar(&configpath, "cbconfig", "../config/clusterrun_conf.json", "Path of the configuration file with data about Couchbase Cluster")
@@ -66,13 +68,6 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 	options.seed = seed
 
 	var err error
-	outfd := os.Stdout
-	if options.outfile != "-" && options.outfile != "" {
-		outfd, err = os.Create(options.outfile)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
 
 	// read production-file
 	text, err := ioutil.ReadFile(prodfile)
@@ -86,34 +81,19 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 	scope = monster.BuildContext(scope, uint64(options.seed), options.bagdir)
 	scope["_prodfile"] = prodfile
 
-	if options.nonterm != "" {
-		for i := 0; i < options.count; i++ {
-			val := evaluate("root", scope, nterms[options.nonterm])
-			fmt.Println(val)
-			outtext := fmt.Sprintf("%v\n", val)
-			if _, err := outfd.Write([]byte(outtext)); err != nil {
-				log.Fatal(err)
-			}
+	// evaluate
+	for i := 0; i < options.count; i++ {
+		val := evaluate("root", scope, nterms["s"])
+		jsonString := val.(string)
+		byt := []byte(jsonString)
+		var dat map[string]interface{}
+		if err := json.Unmarshal(byt, &dat); err != nil {
+			panic(err)
 		}
-
-	} else {
-		// evaluate
-		for i := 0; i < options.count; i++ {
-			val := evaluate("root", scope, nterms["s"])
-			jsonString := val.(string)
-			byt := []byte(jsonString)
-			var dat map[string]interface{}
-			if err := json.Unmarshal(byt, &dat); err != nil {
-				panic(err)
-			}
-			dockey := dat["docid"].(string)
-			keyValues[dockey] = dat
-			outtext := fmt.Sprintf("%v\n", val)
-			if _, err := outfd.Write([]byte(outtext)); err != nil {
-				log.Fatal(err)
-			}
-		}
+		dockey := dat["docid"].(string)
+		keyValues[dockey] = dat
 	}
+
 	return keyValues
 }
 

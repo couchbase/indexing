@@ -23,7 +23,8 @@ func TestSimpleIndex_FloatDataType(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 35, 40, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Test for single index field of data type string
@@ -38,12 +39,14 @@ func TestSimpleIndex_StringDataType(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "G", "M", 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"G"}, []interface{}{"M"}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan 1", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "BIOSPAN", "ZILLANET", 1)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"BIOSPAN"}, []interface{}{"ZILLANET"}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan 2", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Test for case sensitivity of index field values
@@ -58,12 +61,14 @@ func TestSimpleIndex_FieldValueCaseSensitivity(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "B", "C", 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"B"}, []interface{}{"C"}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan 1", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "B", "c", 1)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"B"}, []interface{}{"c"}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan 2", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Test for single index field of data type bool
@@ -78,7 +83,8 @@ func TestSimpleIndex_BoolDataType(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_bool(docs, "isActive", true, 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{true}, []interface{}{true}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestBasicLookup(t *testing.T) {
@@ -92,7 +98,8 @@ func TestBasicLookup(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "BIOSPAN", "BIOSPAN", 3)
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{"BIOSPAN"}, true, 10000000)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestIndexOnNonExistentField(t *testing.T) {
@@ -106,7 +113,8 @@ func TestIndexOnNonExistentField(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "height", 6.0, 6.5, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{6.0}, []interface{}{6.5}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestIndexPartiallyMissingField(t *testing.T) {
@@ -120,7 +128,8 @@ func TestIndexPartiallyMissingField(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "nationality", "A", "z", 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"z"}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Index field is float but scan for string
@@ -135,7 +144,8 @@ func TestScanNonMatchingDatatype(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "age", "35", "40", 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"35"}, []interface{}{"40"}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Inclusion tests
@@ -152,7 +162,8 @@ func TestInclusionNeither(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 0)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{32}, []interface{}{36}, 0, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Inclusion 1
@@ -167,7 +178,8 @@ func TestInclusionLow(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{32}, []interface{}{36}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Inclusion 2
@@ -182,7 +194,8 @@ func TestInclusionHigh(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 2)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{32}, []interface{}{36}, 2, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 // Inclusion 3
@@ -197,7 +210,8 @@ func TestInclusionBoth(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{32}, []interface{}{36}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestNestedIndex_String(t *testing.T) {
@@ -211,7 +225,8 @@ func TestNestedIndex_String(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "address.streetaddress.streetname", "A", "z", 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"A"}, []interface{}{"z"}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestNestedIndex_Float(t *testing.T) {
@@ -225,7 +240,8 @@ func TestNestedIndex_Float(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "address.streetaddress.floor", 3, 6, 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{3}, []interface{}{6}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestNestedIndex_Bool(t *testing.T) {
@@ -239,7 +255,8 @@ func TestNestedIndex_Bool(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_bool(docs, "address.isresidential", false, 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{false}, []interface{}{false}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestLookupJsonObject(t *testing.T) {
@@ -264,7 +281,8 @@ func TestLookupJsonObject(t *testing.T) {
 	tc.PrintScanResults(docScanResults, "docScanResults")
 	tc.PrintScanResults(scanResults, "scanResults")
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestLookupObjDifferentOrdering(t *testing.T) {
@@ -285,7 +303,8 @@ func TestLookupObjDifferentOrdering(t *testing.T) {
 	tc.PrintScanResults(docScanResults, "docScanResults")
 	tc.PrintScanResults(scanResults, "scanResults")
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestRangeJsonObject(t *testing.T) {
@@ -324,7 +343,8 @@ func TestRangeJsonObject(t *testing.T) {
 	tc.PrintScanResults(scanResults, "scanResults")
 	tc.PrintScanResults(docScanResults, "docScanResults")
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestLookupFloatDiffForms(t *testing.T) {
@@ -340,40 +360,46 @@ func TestLookupFloatDiffForms(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "latitude", -13, 70, 1)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-13}, []interface{}{70}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	// Scan 2
 	fmt.Println("Scan 2")
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", 4.112783, 4.112783, 3)
 	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{4.112783}, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	// Scan 3
 	fmt.Println("Scan 3")
 	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{20.563915 / 5}, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	// Scan 4
 	fmt.Println("Scan 4")
 	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{2.0563915 * 2}, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	// Scan 5
 	fmt.Println("Scan 5")
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", 4.112783000, 4.112783000, 3)
 	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{4.112783000}, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	// Scan 6
 	fmt.Println("Scan 6")
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", 4.112783333, 4.112783333, 3)
 	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{4.112783333}, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestRangeFloatInclVariations(t *testing.T) {
@@ -389,42 +415,48 @@ func TestRangeFloatInclVariations(t *testing.T) {
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "latitude", -67.373365, -67.373165, 0)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.373365}, []interface{}{-67.373165}, 0, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	// Scan 2. Value close to  -67.373265, Inclusion 1 ( >= low && < high) (val < low && val < high : Expected 0 result)
 	fmt.Println("Scan 2")
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", -67.3732649999, -67.373264, 1)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.3732649999}, []interface{}{-67.373264}, 1, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	// Scan 3. Value close to  -67.373265, Inclusion 2 ( > low && <= high) (val > low && val > high: Expect 0 result)
 	fmt.Println("Scan 3")
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", -67.373265999, -67.37326500001, 2)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.373265999}, []interface{}{-67.37326500001}, 2, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	// Scan 4. Value close to  -67.373265, Inclusion 2 ( > low && <= high) ( val > low && val < high: Expect 1 result)
 	fmt.Println("Scan 4")
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", -67.37326500001, -67.3732649999, 2)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.37326500001}, []interface{}{-67.3732649999}, 2, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	// Scan 5. Value close to  -67.373265, Inclusion 3 ( val == low && val < high : Expect 1 result)
 	fmt.Println("Scan 5")
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", -67.373265, -67.3732649999, 3)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.373265}, []interface{}{-67.3732649999}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	// Scan 6. Value close to  -67.373265, Inclusion 3 ( val == low && val > high : Expect 0 results)
 	fmt.Println("Scan 6")
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "latitude", -67.373265, -67.37326500001, 3)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{-67.373265}, []interface{}{-67.37326500001}, 3, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestScanAll(t *testing.T) {
@@ -440,7 +472,8 @@ func TestScanAll(t *testing.T) {
 	scanResults, err := secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit)
 	fmt.Println("Length of scanResults = ", len(scanResults))
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestScanAllNestedField(t *testing.T) {
@@ -456,7 +489,8 @@ func TestScanAllNestedField(t *testing.T) {
 	scanResults, err := secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit)
 	fmt.Println("Length of scanResults = ", len(scanResults))
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestBasicPrimaryIndex(t *testing.T) {
@@ -488,7 +522,8 @@ func TestBasicNullDataType(t *testing.T) {
 	docScanResults := datautility.ExpectedLookupResponse_nil(docs, "email")
 	scanResults, err := secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{nil}, true, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 
 	// Scan all should include null : todo
 }
@@ -504,7 +539,8 @@ func TestBasicArrayDataType_ScanAll(t *testing.T) {
 	docScanResults := datautility.ExpectedScanAllResponse(docs, "tags")
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
 	FailTestIfError(err, "Error in scan", t)
-	tv.Validate(docScanResults, scanResults)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestBasicArrayDataType_Lookup(t *testing.T) {

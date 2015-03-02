@@ -59,7 +59,11 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	var previousSecKey value.Value
 
 	// ToDo: Create a client pool
-	client := CreateClient(server, "2itest")
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return nil, e
+	}
+
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
 	connErr := client.Range(
@@ -115,7 +119,11 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	var scanErr error
 	scanErr = nil
 	// ToDo: Create a client pool
-	client := CreateClient(server, "2itest")
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return nil, e
+	}
+
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
 	connErr := client.Lookup(
@@ -158,7 +166,11 @@ func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse
 	var previousSecKey value.Value
 
 	// ToDo: Create a client pool
-	client := CreateClient(server, "2itest")
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return nil, e
+	}
+
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
 	connErr := client.ScanAll(
@@ -211,7 +223,11 @@ func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse
 
 func CountRange(indexName, bucketName, server string, low, high []interface{}, inclusion uint32) (int64, error) {
 	// ToDo: Create a client pool
-	client := CreateClient(server, "2itest")
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return 0, e
+	}
+
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	count, err := client.CountRange(uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
 	if err != nil {
@@ -223,7 +239,11 @@ func CountRange(indexName, bucketName, server string, low, high []interface{}, i
 
 func CountLookup(indexName, bucketName, server string, values []interface{}) (int64, error) {
 	// ToDo: Create a client pool
-	client := CreateClient(server, "2itest")
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return 0, e
+	}
+
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	count, err := client.CountLookup(uint64(defnID), []c.SecondaryKey{values})
 	if err != nil {
@@ -235,7 +255,11 @@ func CountLookup(indexName, bucketName, server string, values []interface{}) (in
 
 func RangeStatistics(indexName, bucketName, server string, low, high []interface{}, inclusion uint32) error {
 	// ToDo: Create a client pool
-	client := CreateClient(server, "2itest")
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return e
+	}
+
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	statistics, err := client.RangeStatistics(uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
 	if err != nil {
