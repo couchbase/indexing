@@ -1,0 +1,123 @@
+#!/bin/bash
+
+echo '</pre><h3>Testing</h3><pre>'
+
+if [ "$WORKSPACE" = "" ]; then
+  echo 'WORKSPACE not set'
+  exit 2
+fi
+
+if [ "$TS" = "" ]; then
+  TS="adhoc"
+fi
+
+cleanup() {
+  pkill -f cluster_
+  pkill -f $WORKSPACE/install/bin
+  pkill -f /opt/couchbase
+  killall beam.smp epmd memcached projector indexer gometa 1>/dev/null 2>&1
+  sleep 3
+  cd $WORKSPACE/ns_server
+  make dataclean 1>/dev/null 2>&1
+  rm -rf *_index_* meta
+  rm -rf /tmp/core-*
+  find ~/testdata/* -mtime +1 -exec rm {} \; 1>/dev/null 2>&1
+}
+
+collect_logs_cores() {
+  gzip /tmp/core-* 2>&1 1>/dev/null
+  tar cf $WORKSPACE/cores.tar /tmp/core-* 1>/dev/null 2>&1
+  tar cf $WORKSPACE/logs.tar $WORKSPACE/ns_server/logs 1>/dev/null 2>&1
+  tar uf $WORKSPACE/logs.tar $WORKSPACE/test.log 1>/dev/null 2>&1
+  tar uf $WORKSPACE/logs.tar $WORKSPACE/run.log 1>/dev/null 2>&1
+  tar uf $WORKSPACE/logs.tar /home/buildbot/bin/do* 1>/dev/null 2>&1
+}
+
+error_exit() {
+  echo "</pre><h3>Testing Failed: $1</h3><pre>"
+  collect_logs_cores
+  cleanup
+  exit 2
+}
+
+cleanup
+rm -f $WORKSPACE/logs.tar $WORKSPACE/test.log $WORKSPACE/run.log
+warmed="never"
+
+# Core dumps
+export GOTRACEBACK=crash
+ulimit -c unlimited
+sudo bash -c "echo /tmp/core-%e.$TS > /proc/sys/kernel/core_pattern"
+
+echo "Starting server"
+cd $WORKSPACE/ns_server
+./cluster_run -n2 1>$WORKSPACE/run.log 2>&1 &
+disown
+for i in {1..120}; do
+  grep -qs 'Couchbase Server has started' logs/n_0/info.log && \
+    grep -qs 'Couchbase Server has started' logs/n_1/info.log && \
+      wget -qO- http://localhost:9000/ &>/dev/null &&
+        wget -qO- http://localhost:9001/ &>/dev/null &&
+          ok_run=1 && break
+  sleep 3
+done
+test "$ok_run" || error_exit "Server startup failed"
+
+sleep 30
+./cluster_connect -n2 -s 3072 -T n0:kv,n1:kv+index >$WORKSPACE/run.log 2>&1 &
+for i in {1..120}; do
+  grep -qs 'Bucket "default" marked as warmed' logs/n_0/info.log && \
+    grep -qs 'Bucket "default" marked as warmed' logs/n_1/info.log && \
+      ok_connect=1 && break
+  sleep 3
+done
+test "$ok_connect" || error_exit "Server connect failed"
+
+sleep 30
+warmed="`date`"
+mkdir -p "$WORKSPACE/go"
+
+export GOROOT=/usr/local/go
+export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
+> $WORKSPACE/test.log
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests
+go get -t ./... 1>/dev/null 2>&1
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/functionaltests
+go test -timeout 30m -v -cbconfig ../config/build_validation.json | annotate-output +%T tee -a $WORKSPACE/test.log
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
+go test -timeout 1h -v -cbconfig ../config/build_validation.json | annotate-output +%T tee -a $WORKSPACE/test.log
+
+cd $WORKSPACE/testrunner
+make test-2i-integrations-tests 1>>$WORKSPACE/test.log 2>&1
+
+for tst in `cat stable_tests.txt`; do
+  grep -qs -- "-- PASS: $tst" $WORKSPACE/test.log || error_exit "Required test failed: $tst"
+done
+grep 'summary so far' $WORKSPACE/test.log | grep -v -qs 'fail 0' && error_exit "Integration test failed"
+
+echo "Test $TS" > $WORKSPACE/timing.log
+sed 's/^--- PASS: \(.*\) (\(.*\) seconds)$/\1 \2/;tx;d;:x' $WORKSPACE/test.log | sort >> $WORKSPACE/timing.log
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
+git rev-parse HEAD > ~/indexing.good
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/query
+git rev-parse HEAD > ~/query.good
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
+git rev-parse HEAD > ~/gometa.good
+
+cd $WORKSPACE/godeps/src/github.com/couchbaselabs/goforestdb
+git rev-parse HEAD > ~/goforestdb.good
+
+cd $WORKSPACE/forestdb
+git rev-parse HEAD > ~/forestdb.good
+
+echo "</pre><h3>Testing Succeeded</h3><pre>"
+collect_logs_cores
+cleanup
+exit 0
+
