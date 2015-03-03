@@ -255,7 +255,7 @@ loop:
 				}
 
 			case vrCmdClose:
-				logging.Debugf("%v ##%x closed\n", vr.logPrefix, vr.opaque)
+				logging.Infof("%v ##%x closed\n", vr.logPrefix, vr.opaque)
 				break loop
 			}
 
