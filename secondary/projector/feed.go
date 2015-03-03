@@ -435,9 +435,13 @@ loop:
 					logging.Infof("%v self deleting bucket\n", prefix)
 					feed.cleanupBucket(cmd.bucket, false)
 
-				} else {
+				} else if actTs != nil && actTs.Len() == 0 {
 					fmsg := "%v FinKVData before StreamEnds %v\n"
 					logging.Fatalf(fmsg, prefix, actTs)
+
+				} else {
+					fmsg := "%v FinKVData can't find bucket %q\n"
+					logging.Fatalf(fmsg, prefix, cmd.bucket)
 				}
 
 			} else {
