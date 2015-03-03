@@ -388,7 +388,7 @@ loop:
 				seqno, vbuuid, sStart, sEnd, err := reqTs.Get(cmd.vbno)
 				if err != nil {
 					fmsg := "%v ##%x backch flush %T: %v\n"
-					logging.Fatalf(fmsg, prefix, cmd, cmd.opaque, err)
+					logging.Fatalf(fmsg, prefix, cmd.opaque, cmd, err)
 
 				} else if ok {
 					reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
@@ -414,7 +414,7 @@ loop:
 
 			} else if cmd, ok := msg[0].(*controlStreamEnd); ok {
 				fmsg := "%v ##%x backch flush %T: %v\n"
-				logging.Infof(fmsg, prefix, cmd.opaque, cmd.Repr())
+				logging.Infof(fmsg, prefix, cmd.opaque, cmd, cmd.Repr())
 				reqTs := feed.reqTss[cmd.bucket]
 				reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
 				feed.reqTss[cmd.bucket] = reqTs
@@ -436,7 +436,8 @@ loop:
 					feed.cleanupBucket(cmd.bucket, false)
 
 				} else {
-					logging.Fatalf("%v FinKVData before StreamEnds\n", prefix)
+					fmsg := "%v FinKVData before StreamEnds %v\n"
+					logging.Fatalf(fmsg, prefix, actTs)
 				}
 
 			} else {
