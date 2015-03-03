@@ -182,7 +182,7 @@ func (p *Projector) doVbmapRequest(
 
 	// get vbmap from bucket connection.
 	fmsg := "%v ##%x doVbmapRequest() {%q, %q, %v}\n"
-	logging.Debugf(fmsg, p.logPrefix, pooln, bucketn, kvaddrs, opaque)
+	logging.Infof(fmsg, p.logPrefix, pooln, bucketn, kvaddrs, opaque)
 	bucket, err := c.ConnectBucket(p.clusterAddr, pooln, bucketn)
 	if err != nil {
 		fmsg := "%v ##%x ConnectBucket(): %v\n"
@@ -223,7 +223,7 @@ func (p *Projector) doFailoverLog(
 	vbuckets := request.GetVbnos()
 
 	fmsg := "%v ##%x doFailoverLog() {%q, %q, %v}\n"
-	logging.Debugf(fmsg, p.logPrefix, opaque, pooln, bucketn, vbuckets)
+	logging.Infof(fmsg, p.logPrefix, opaque, pooln, bucketn, vbuckets)
 	bucket, err := c.ConnectBucket(p.clusterAddr, pooln, bucketn)
 	if err != nil {
 		fmsg := "%v ##%x ConnectBucket(): %v\n"
@@ -277,7 +277,7 @@ func (p *Projector) doMutationTopic(
 	topic := request.GetTopic()
 
 	fmsg := "%v ##%x doMutationTopic() %q\n"
-	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
+	logging.Infof(fmsg, p.logPrefix, opaque, topic)
 
 	var err error
 	feed, _ := p.GetFeed(topic)
@@ -308,7 +308,7 @@ func (p *Projector) doRestartVbuckets(
 	topic := request.GetTopic()
 
 	fmsg := "%v ##%x doRestartVbuckets() %q\n"
-	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
+	logging.Infof(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
@@ -339,7 +339,7 @@ func (p *Projector) doShutdownVbuckets(
 	topic := request.GetTopic()
 
 	fmsg := "%v ##%x doShutdownVbuckets() %q\n"
-	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
+	logging.Infof(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
@@ -362,7 +362,7 @@ func (p *Projector) doAddBuckets(
 	topic := request.GetTopic()
 
 	fmsg := "%v ##%x doAddBuckets() %q\n"
-	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
+	logging.Infof(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
@@ -392,7 +392,7 @@ func (p *Projector) doDelBuckets(
 	topic := request.GetTopic()
 
 	fmsg := "%v ##%x doDelBuckets() %q\n"
-	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
+	logging.Infof(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
@@ -413,7 +413,7 @@ func (p *Projector) doAddInstances(
 	topic := request.GetTopic()
 
 	fmsg := "%v ##%x doAddInstances() %q\n"
-	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
+	logging.Infof(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
@@ -433,7 +433,7 @@ func (p *Projector) doDelInstances(
 	topic := request.GetTopic()
 
 	fmsg := "%v ##%x doDelInstances() %q\n"
-	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
+	logging.Infof(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
@@ -454,7 +454,7 @@ func (p *Projector) doRepairEndpoints(
 	topic := request.GetTopic()
 
 	fmsg := "%v ##%x doRepairEndpoints() %q\n"
-	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
+	logging.Infof(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
@@ -475,7 +475,7 @@ func (p *Projector) doShutdownTopic(
 	topic := request.GetTopic()
 
 	fmsg := "%v ##%x doShutdownTopic() %q\n"
-	logging.Debugf(fmsg, p.logPrefix, opaque, topic)
+	logging.Infof(fmsg, p.logPrefix, opaque, topic)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
@@ -489,7 +489,7 @@ func (p *Projector) doShutdownTopic(
 }
 
 func (p *Projector) doStatistics() interface{} {
-	logging.Debugf("%v doStatistics()\n", p.logPrefix)
+	logging.Infof("%v doStatistics()\n", p.logPrefix)
 
 	m := map[string]interface{}{
 		"clusterAddr": p.clusterAddr,
