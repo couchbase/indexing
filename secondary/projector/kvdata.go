@@ -272,6 +272,9 @@ loop:
 				respch <- []interface{}{nil}
 
 			case kvCmdClose:
+				for _, vr := range kvdata.vrs {
+					vr.Close()
+				}
 				respch := msg[1].(chan []interface{})
 				respch <- []interface{}{nil}
 				break loop

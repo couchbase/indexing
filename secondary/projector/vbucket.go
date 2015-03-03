@@ -74,6 +74,7 @@ const (
 	vrCmdDeleteEngines
 	vrCmdGetStatistics
 	vrCmdSetConfig
+	vrCmdClose
 )
 
 // Event will post an DcpEvent, asychronous call.
@@ -120,6 +121,14 @@ func (vr *VbucketRoutine) GetStatistics() (map[string]interface{}, error) {
 func (vr *VbucketRoutine) SetConfig(config c.Config) error {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vrCmdSetConfig, config, respch}
+	_, err := c.FailsafeOp(vr.reqch, respch, cmd, vr.finch)
+	return err
+}
+
+// Close vbucket-routine, synchronous call.
+func (vr *VbucketRoutine) Close() error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{vrCmdClose, respch}
 	_, err := c.FailsafeOp(vr.reqch, respch, cmd, vr.finch)
 	return err
 }
@@ -244,6 +253,10 @@ loop:
 				case mcd.DCP_STREAMEND:
 					break loop
 				}
+
+			case vrCmdClose:
+				logging.Debugf("%v ##%x closed\n", vr.logPrefix, vr.opaque)
+				break loop
 			}
 
 		case <-heartBeat:
