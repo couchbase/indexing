@@ -74,6 +74,7 @@ const (
 	vrCmdDeleteEngines
 	vrCmdGetStatistics
 	vrCmdSetConfig
+	vrCmdClose
 )
 
 // Event will post an DcpEvent, asychronous call.
@@ -124,6 +125,14 @@ func (vr *VbucketRoutine) SetConfig(config c.Config) error {
 	return err
 }
 
+// Close vbucket-routine, synchronous call.
+func (vr *VbucketRoutine) Close() error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{vrCmdClose, respch}
+	_, err := c.FailsafeOp(vr.reqch, respch, cmd, vr.finch)
+	return err
+}
+
 // routine handles data path for a single vbucket.
 func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 	defer func() { // panic safe
@@ -138,7 +147,7 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 			logging.Errorf(fmsg, vr.logPrefix, vr.opaque)
 
 		} else { // publish stream-end
-			logging.Debugf("%v ##%x StreamEnd\n", vr.logPrefix, vr.opaque)
+			logging.Infof("%v ##%x StreamEnd\n", vr.logPrefix, vr.opaque)
 			vr.broadcast2Endpoints(data)
 		}
 
@@ -231,7 +240,7 @@ loop:
 				if m.Opcode == mcd.DCP_STREAMREQ { // opens up the path
 					heartBeat = time.Tick(vr.syncTimeout)
 					fmsg := "%v ##%x heartbeat (%v) loaded ...\n"
-					logging.Debugf(fmsg, vr.logPrefix, m.Opaque, vr.syncTimeout)
+					logging.Infof(fmsg, vr.logPrefix, m.Opaque, vr.syncTimeout)
 				}
 
 				// count statistics
@@ -244,6 +253,10 @@ loop:
 				case mcd.DCP_STREAMEND:
 					break loop
 				}
+
+			case vrCmdClose:
+				logging.Infof("%v ##%x closed\n", vr.logPrefix, vr.opaque)
+				break loop
 			}
 
 		case <-heartBeat:

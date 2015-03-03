@@ -127,7 +127,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	raddr := conn.RemoteAddr()
 	defer func() {
 		conn.Close()
-		logging.Debugf("%v connection %v closed\n", s.logPrefix, raddr)
+		logging.Infof("%v connection %v closed\n", s.logPrefix, raddr)
 	}()
 
 	// start a receive routine.
@@ -145,7 +145,7 @@ loop:
 		case req, ok := <-rcvch:
 			if _, yes := req.(*protobuf.EndStreamRequest); yes { // skip
 				format := "%v connection %q skip protobuf.EndStreamRequest\n"
-				logging.Debugf(format, s.logPrefix, raddr)
+				logging.Infof(format, s.logPrefix, raddr)
 				break
 			} else if !ok {
 				break loop
@@ -174,7 +174,7 @@ func (s *Server) handleRequest(
 		err := tpkt.Send(conn, resp)
 		if err != nil {
 			format := "%v connection %v response transport failed `%v`\n"
-			logging.Debugf(format, s.logPrefix, raddr, err)
+			logging.Infof(format, s.logPrefix, raddr, err)
 		}
 		return err
 	}
@@ -188,7 +188,7 @@ loop:
 			if !ok {
 				if err := transmit(&protobuf.StreamEndResponse{}); err == nil {
 					format := "%v protobuf.StreamEndResponse -> %q\n"
-					logging.Debugf(format, s.logPrefix, raddr)
+					logging.Infof(format, s.logPrefix, raddr)
 				}
 				break loop
 			}
@@ -200,7 +200,7 @@ loop:
 			if _, yes := req.(*protobuf.EndStreamRequest); ok && yes {
 				if err := transmit(&protobuf.StreamEndResponse{}); err == nil {
 					format := "%v protobuf.StreamEndResponse -> %q\n"
-					logging.Debugf(format, s.logPrefix, raddr)
+					logging.Infof(format, s.logPrefix, raddr)
 				}
 				break loop
 
@@ -224,7 +224,7 @@ func (s *Server) doReceive(conn net.Conn, rcvch chan<- interface{}) {
 	rpkt := transport.NewTransportPacket(s.maxPayload, flags)
 	rpkt.SetDecoder(transport.EncodingProtobuf, protobuf.ProtobufDecode)
 
-	logging.Debugf("%v connection %q doReceive() ...\n", s.logPrefix, raddr)
+	logging.Infof("%v connection %q doReceive() ...\n", s.logPrefix, raddr)
 
 loop:
 	for {

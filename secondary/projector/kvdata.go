@@ -272,6 +272,9 @@ loop:
 				respch <- []interface{}{nil}
 
 			case kvCmdClose:
+				for _, vr := range kvdata.vrs {
+					vr.Close()
+				}
 				respch := msg[1].(chan []interface{})
 				respch <- []interface{}{nil}
 				break loop
@@ -289,7 +292,7 @@ func (kvdata *KVData) scatterMutation(
 	case mcd.DCP_STREAMREQ:
 		if m.Status == mcd.ROLLBACK {
 			fmsg := "%v ##%x StreamRequest ROLLBACK: %v\n"
-			logging.Debugf(fmsg, kvdata.logPrefix, m.Opaque, m)
+			logging.Infof(fmsg, kvdata.logPrefix, m.Opaque, m)
 
 		} else if m.Status != mcd.SUCCESS {
 			fmsg := "%v ##%x StreamRequest %s: %v\n"

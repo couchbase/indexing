@@ -1,0 +1,11 @@
+#!/bin/bash
+
+cd ~
+killall build
+killall dobuild
+killall make
+pkill -e -f cluster_
+pkill -e -f /opt/
+sleep 3
+build &
+

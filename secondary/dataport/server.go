@@ -177,7 +177,7 @@ func (s *Server) addUuids(started, hostUuids keeper) keeper {
 			logging.Errorf("%v duplicate vbucket %#v\n", s.logPrefix, newvb)
 		}
 		hostUuids[x] = newvb
-		logging.Debugf("%v added vbucket %v\n", s.logPrefix, newvb.id())
+		logging.Infof("%v added vbucket %v\n", s.logPrefix, newvb.id())
 	}
 	return hostUuids
 }
@@ -187,7 +187,7 @@ func (s *Server) delUuids(finished, hostUuids keeper) keeper {
 		avb, ok := hostUuids[x]
 		if ok {
 			delete(hostUuids, x)
-			logging.Debugf("%v deleted vbucket %v\n", s.logPrefix, avb.id())
+			logging.Infof("%v deleted vbucket %v\n", s.logPrefix, avb.id())
 
 		} else {
 			logging.Errorf("%v not active vbucket %#v\n", s.logPrefix, avb)

@@ -1731,6 +1731,10 @@ func (tk *timekeeper) handleStats(cmd Message) {
 		// Populate current KV timestamps for all buckets
 		bucketTsMap := make(map[string]Timestamp)
 		for _, inst := range indexInstMap {
+			//skip deleted indexes
+			if inst.State == common.INDEX_STATE_DELETED {
+				continue
+			}
 			if _, ok := bucketTsMap[inst.Defn.Bucket]; !ok {
 				kvTs, err := GetCurrentKVTs(tk.config["clusterAddr"].String(),
 					inst.Defn.Bucket, tk.config["numVbuckets"].Int())
@@ -1748,6 +1752,11 @@ func (tk *timekeeper) handleStats(cmd Message) {
 		defer tk.lock.Unlock()
 
 		for _, inst := range tk.indexInstMap {
+			//skip deleted indexes
+			if inst.State == common.INDEX_STATE_DELETED {
+				continue
+			}
+
 			k := fmt.Sprintf("%s:%s:num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
 			sum := uint64(0)
 			flushedTs := tk.ss.streamBucketLastFlushedTsMap[inst.Stream][inst.Defn.Bucket]
