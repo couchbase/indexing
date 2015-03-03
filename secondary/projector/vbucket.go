@@ -312,7 +312,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.DcpEvent, seqno uint64) uint64 {
 
 	case mcd.DCP_SNAPSHOT: // broadcast Snapshot
 		typ, start, end := m.SnapshotType, m.SnapstartSeq, m.SnapendSeq
-		logging.Infof(ssFormat, vr.logPrefix, m.Opaque, start, end, typ)
+		logging.Debugf(ssFormat, vr.logPrefix, m.Opaque, start, end, typ)
 		if data := vr.makeSnapshotData(m, seqno); data != nil {
 			vr.broadcast2Endpoints(data)
 		} else {
@@ -342,7 +342,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.DcpEvent, seqno uint64) uint64 {
 				// or ErrorClosed
 				if err := endpoint.Send(data); err != nil {
 					msg := "%v ##%x endpoint(%q).Send() failed: %v"
-					logging.Infof(msg, vr.logPrefix, m.Opaque, raddr, err)
+					logging.Debugf(msg, vr.logPrefix, m.Opaque, raddr, err)
 					endpoint.Close()
 					delete(vr.endpoints, raddr)
 				}
@@ -361,7 +361,7 @@ func (vr *VbucketRoutine) broadcast2Endpoints(data interface{}) {
 		// or ErrorClosed
 		if err := endpoint.Send(data); err != nil {
 			msg := "%v ##%x endpoint(%q).Send() failed: %v"
-			logging.Infof(msg, vr.logPrefix, vr.opaque, raddr, err)
+			logging.Debugf(msg, vr.logPrefix, vr.opaque, raddr, err)
 			endpoint.Close()
 			delete(vr.endpoints, raddr)
 		}

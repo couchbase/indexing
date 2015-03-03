@@ -275,7 +275,7 @@ func (feed *DcpFeed) handlePacket(
 		feed.stats.TotalSnapShot++
 		sendAck = true
 		fmsg := "%v ##%x DCP_SNAPSHOT for vb %d\n"
-		logging.Infof(fmsg, prefix, stream.AppOpaque, vb)
+		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 
 	case transport.DCP_FLUSH:
 		event = newDcpEvent(pkt, stream) // special processing ?
@@ -317,12 +317,6 @@ func (feed *DcpFeed) handlePacket(
 
 	if event != nil {
 		feed.outch <- event
-	}
-	l := len(feed.vbstreams)
-	if event.Opcode == transport.DCP_CLOSESTREAM && l == 0 {
-		fmsg := "%v last DCP_CLOSESTREAM received exiting"
-		logging.Infof(fmsg, prefix)
-		return "exit"
 	}
 	feed.sendBufferAck(sendAck, uint32(bytes))
 	return "ok"
@@ -584,7 +578,12 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 			bufferAck.Extras = make([]byte, 4)
 			binary.BigEndian.PutUint32(bufferAck.Extras[:4], uint32(totalBytes))
 			feed.stats.TotalBufferAckSent++
-			logging.Infof("%v buffer-ack %v\n", prefix, totalBytes)
+			if err := feed.conn.Transmit(bufferAck); err != nil {
+				logging.Errorf("%v NOOP.Transmit(): %v", prefix, err)
+
+			} else {
+				logging.Infof("%v buffer-ack %v\n", prefix, totalBytes)
+			}
 		}
 		feed.toAckBytes += bytes
 	}
