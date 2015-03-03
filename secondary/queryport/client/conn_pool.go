@@ -106,7 +106,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 		if !ok {
 			return nil, ErrorClosedPool
 		}
-		logging.Debugf("%v new connection from pool\n", cp.logPrefix)
+		logging.Infof("%v new connection from pool\n", cp.logPrefix)
 		return connectn, nil
 	default:
 	}
@@ -121,7 +121,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 		if !ok {
 			return nil, ErrorClosedPool
 		}
-		logging.Debugf("%v new connection (avail1) from pool\n", cp.logPrefix)
+		logging.Infof("%v new connection (avail1) from pool\n", cp.logPrefix)
 		return connectn, nil
 
 	case <-t.C:
@@ -134,7 +134,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 			if !ok {
 				return nil, ErrorClosedPool
 			}
-			logging.Debugf("%v new connection (avail2) from pool\n", cp.logPrefix)
+			logging.Infof("%v new connection (avail2) from pool\n", cp.logPrefix)
 			return connectn, nil
 
 		case cp.createsem <- true:
@@ -147,7 +147,7 @@ func (cp *connectionPool) GetWithTimeout(d time.Duration) (connectn *connection,
 				// On error, release our create hold
 				<-cp.createsem
 			}
-			logging.Debugf("%v new connection (create) from pool\n", cp.logPrefix)
+			logging.Infof("%v new connection (create) from pool\n", cp.logPrefix)
 			return connectn, err
 
 		case <-t.C:
@@ -184,9 +184,9 @@ func (cp *connectionPool) Return(connectn *connection, healthy bool) {
 
 		select {
 		case cp.connections <- connectn:
-			logging.Debugf("%v connection %q reclaimed to pool\n", cp.logPrefix, laddr)
+			logging.Infof("%v connection %q reclaimed to pool\n", cp.logPrefix, laddr)
 		default:
-			logging.Debugf("%v closing overflow connection %q\n", cp.logPrefix, laddr)
+			logging.Infof("%v closing overflow connection %q\n", cp.logPrefix, laddr)
 			<-cp.createsem
 			connectn.conn.Close()
 		}

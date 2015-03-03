@@ -280,7 +280,7 @@ func (feed *Feed) PostStreamRequest(bucket string, m *mc.DcpEvent) {
 		seqno:  m.Seqno, // can also be roll-back seqno, based on status
 	}
 	fmsg := "%v ##%x backch %T %v\n"
-	logging.Debugf(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
+	logging.Infof(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
 	err := c.FailsafeOpNoblock(feed.backch, []interface{}{cmd}, feed.finch)
 	if err == c.ErrorChannelFull {
 		fmsg := "%v ##%x backch blocked on PostStreamRequest\n"
@@ -313,7 +313,7 @@ func (feed *Feed) PostStreamEnd(bucket string, m *mc.DcpEvent) {
 		vbno:   m.VBucket,
 	}
 	fmsg := "%v ##%x backch %T %v\n"
-	logging.Debugf(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
+	logging.Infof(fmsg, feed.logPrefix, m.Opaque, cmd, cmd.Repr())
 	err := c.FailsafeOpNoblock(feed.backch, []interface{}{cmd}, feed.finch)
 	if err == c.ErrorChannelFull {
 		fmsg := "%v ##%x backch blocked on PostStreamEnd\n"
@@ -337,7 +337,7 @@ func (feed *Feed) PostFinKVdata(bucket string) {
 	var respch chan []interface{}
 	cmd := &controlFinKVData{bucket: bucket}
 	fmsg := "%v backch %T %v\n"
-	logging.Debugf(fmsg, feed.logPrefix, cmd, cmd.Repr())
+	logging.Infof(fmsg, feed.logPrefix, cmd, cmd.Repr())
 	err := c.FailsafeOpNoblock(feed.backch, []interface{}{cmd}, feed.finch)
 	if err == c.ErrorChannelFull {
 		fmsg := "%v backch blocked on PostFinKVdata\n"
@@ -396,13 +396,13 @@ loop:
 
 					if cmd.status == mcd.ROLLBACK {
 						fmsg := "%v ##%x backch flush rollback %T: %v\n"
-						logging.Debugf(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
+						logging.Infof(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
 						rollTs := feed.rollTss[cmd.bucket]
 						rollTs.Append(cmd.vbno, cmd.seqno, vbuuid, sStart, sEnd)
 
 					} else if cmd.status == mcd.SUCCESS {
 						fmsg := "%v ##%x backch flush success %T: %v\n"
-						logging.Debugf(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
+						logging.Infof(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
 						actTs := feed.actTss[cmd.bucket]
 						actTs.Append(cmd.vbno, seqno, vbuuid, sStart, sEnd)
 
@@ -414,7 +414,7 @@ loop:
 
 			} else if cmd, ok := msg[0].(*controlStreamEnd); ok {
 				fmsg := "%v ##%x backch flush %T: %v\n"
-				logging.Debugf(fmsg, prefix, cmd.opaque, cmd.Repr())
+				logging.Infof(fmsg, prefix, cmd.opaque, cmd.Repr())
 				reqTs := feed.reqTss[cmd.bucket]
 				reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
 				feed.reqTss[cmd.bucket] = reqTs
@@ -429,10 +429,10 @@ loop:
 
 			} else if cmd, ok := msg[0].(*controlFinKVData); ok {
 				fmsg := "%v backch flush %T -- %v\n"
-				logging.Debugf(fmsg, prefix, cmd, cmd.Repr())
+				logging.Infof(fmsg, prefix, cmd, cmd.Repr())
 				actTs, ok := feed.actTss[cmd.bucket]
 				if ok && actTs != nil && actTs.Len() == 0 { // bucket is done
-					logging.Debugf("%v self deleting bucket\n", prefix)
+					logging.Infof("%v self deleting bucket\n", prefix)
 					feed.cleanupBucket(cmd.bucket, false)
 
 				} else {
@@ -445,7 +445,7 @@ loop:
 
 		case <-timeout:
 			if len(feed.backch) > 0 { // can happend during rebalance.
-				logging.Debugf(ctrlMsg, feed.logPrefix, len(feed.backch))
+				logging.Infof(ctrlMsg, feed.logPrefix, len(feed.backch))
 			}
 		}
 	}
@@ -900,7 +900,7 @@ func (feed *Feed) repairEndpoints(
 
 	prefix := feed.logPrefix
 	for _, raddr := range req.GetEndpoints() {
-		logging.Debugf("%v ##%x trying to repair %q\n", prefix, opaque, raddr)
+		logging.Infof("%v ##%x trying to repair %q\n", prefix, opaque, raddr)
 		raddr1, endpoint, e := feed.getEndpoint(raddr, opaque)
 		if e != nil {
 			err = e
