@@ -738,6 +738,10 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 			if idxInst.Defn.Bucket != bucket && idxInst.Stream != streamId {
 				continue
 			}
+			//skip deleted indexes
+			if idxInst.State == common.INDEX_STATE_DELETED {
+				continue
+			}
 		}
 
 		//there is only one partition for now

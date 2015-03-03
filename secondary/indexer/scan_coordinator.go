@@ -341,6 +341,11 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 
 	for instId, stat := range s.scanStatsMap {
 		inst := s.indexInstMap[instId]
+		//skip deleted indexes
+		if inst.State == common.INDEX_STATE_DELETED {
+			continue
+		}
+
 		k := fmt.Sprintf("%s:%s:num_requests", inst.Defn.Bucket, inst.Defn.Name)
 		v := fmt.Sprint(*stat.Requests)
 		statsMap[k] = v
