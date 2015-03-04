@@ -775,7 +775,7 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 		ts.Snapshots[meta.vbucket][1] = snapshot.end
 
 		tk.ss.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
-		logging.Debugf("TK Snapshot %v %v %v %v %v %v", streamId, meta.bucket,
+		logging.Tracef("TK Snapshot %v %v %v %v %v %v", streamId, meta.bucket,
 			meta.vbucket, meta.vbuuid, snapshot.start, snapshot.end)
 	} else {
 		logging.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker. "+
