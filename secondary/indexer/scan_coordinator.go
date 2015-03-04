@@ -17,7 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
-	"github.com/couchbaselabs/goprotobuf/proto"
+	"code.google.com/p/goprotobuf/proto"
 	"net"
 	"sync"
 	"sync/atomic"

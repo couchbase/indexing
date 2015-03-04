@@ -6,7 +6,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	queryclient "github.com/couchbase/indexing/secondary/queryport/client"
-	"github.com/couchbaselabs/goprotobuf/proto"
+	"code.google.com/p/goprotobuf/proto"
 	"reflect"
 	"testing"
 )

@@ -6,7 +6,7 @@ import "errors"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
-import "github.com/couchbaselabs/goprotobuf/proto"
+import "code.google.com/p/goprotobuf/proto"
 
 // ErrorTransportVersion
 var ErrorTransportVersion = errors.New("dataport.transportVersion")

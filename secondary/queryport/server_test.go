@@ -9,7 +9,7 @@ import "time"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/queryport/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import "github.com/couchbaselabs/goprotobuf/proto"
+import "code.google.com/p/goprotobuf/proto"
 
 var testStatisticsResponse = &protobuf.StatisticsResponse{
 	Stats: &protobuf.IndexStatistics{

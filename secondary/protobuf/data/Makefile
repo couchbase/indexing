@@ -13,7 +13,7 @@ clean:
 
 %.pb.go: FORCE
 	@echo "Fixing import for $@ ..."
-	@sed 's:import proto "code.google.com/p/goprotobuf/proto":import proto "github.com/couchbaselabs/goprotobuf/proto":' < $@  > tmpfile; mv tmpfile $@
+	@sed 's:import proto "code.google.com/p/goprotobuf/proto":import proto "code.google.com/p/goprotobuf/proto":' < $@  > tmpfile; mv tmpfile $@
 
 FORCE:
 
