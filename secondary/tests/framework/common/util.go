@@ -133,17 +133,17 @@ func ClearMap(docs KeyValues) {
 func KillIndexer() {
 	out, err := exec.Command("pkill", "indexer").CombinedOutput()
 	if err != nil {
-		log.Printf(err)
+		log.Printf("%v", err)
 	} else {
-		log.Printf(out)
+		log.Printf("%v", out)
 	}
 }
 
 func KillProjector() {
 	out, err := exec.Command("pkill", "projector").CombinedOutput()
 	if err != nil {
-		log.Printf(err)
+		log.Printf("%v", err)
 	} else {
-		log.Printf(out)
+		log.Printf("%v", out)
 	}
 }
