@@ -111,6 +111,10 @@ func (b *Bucket) StartDcpFeed(
 // are requested. Connections will be made only to specified
 // kvnodes `kvaddrs`, to connect will all kvnodes hosting the bucket,
 // pass `kvaddrs` as nil
+//
+// configuration parameters,
+//      "genChanSize", buffer channel size for control path.
+//      "dataChanSize", buffer channel size for data path.
 func (b *Bucket) StartDcpFeedOver(
 	name string,
 	sequence uint32,

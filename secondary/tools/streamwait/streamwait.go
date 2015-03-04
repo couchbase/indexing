@@ -2,24 +2,25 @@ package main
 
 import "flag"
 import "os"
-import "fmt"
 import "strings"
 import "log"
 import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/logging"
+import "github.com/couchbase/cbauth"
 
 var options struct {
 	maxVbs   int
+	vbuckets []uint16
+	auth     string
 	debug    bool
 	trace    bool
-	vbuckets []uint16
 }
 
 func argParse() []string {
-	flag.IntVar(&options.maxVbs, "maxvbs", 1024,
-		"configured number vbuckets")
+	flag.StringVar(&options.auth, "auth", "",
+		"Auth user and password")
 	flag.BoolVar(&options.debug, "debug", false,
 		"run in debug mode")
 	flag.BoolVar(&options.trace, "trace", false,
@@ -35,11 +36,6 @@ func argParse() []string {
 		logging.SetLogLevel(logging.Info)
 	}
 
-	options.vbuckets = make([]uint16, 0, options.maxVbs)
-	for i := 0; i < options.maxVbs; i++ {
-		options.vbuckets = append(options.vbuckets, uint16(i))
-	}
-
 	args := flag.Args()
 	if len(args) < 1 {
 		os.Exit(1)
@@ -49,14 +45,40 @@ func argParse() []string {
 
 func main() {
 	cluster := argParse()[0]
-	bucket, err := c.ConnectBucket(cluster, "default", "beer-sample")
+
+	// setup cbauth
+	if options.auth != "" {
+		up := strings.Split(options.auth, ":")
+		if _, err := cbauth.InternalRetryDefaultInit(cluster, up[0], up[1]); err != nil {
+			logging.Fatalf("Failed to initialize cbauth: %s", err)
+		}
+	}
+	go startFeed(cluster, "streamwait-feed1")
+	go startFeed(cluster, "streamwait-feed2")
+	time.Sleep(1000 * time.Second)
+}
+
+func startFeed(cluster, name string) {
+	bucket, err := c.ConnectBucket(cluster, "default", "default")
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer bucket.Close()
+	options.maxVbs, err = c.MaxVbuckets(bucket)
+	if err != nil {
+		log.Fatal(err)
+	}
+	options.vbuckets = make([]uint16, 0, options.maxVbs)
+	for i := 0; i < options.maxVbs; i++ {
+		options.vbuckets = append(options.vbuckets, uint16(i))
+	}
+
 	// get dcp feed for this bucket.
-	suffix := uint32(time.Now().UnixNano() >> 24)
-	name := fmt.Sprintf("streamwait-test-%v", suffix)
-	dcpFeed, err := bucket.StartDcpFeed(name, uint32(0))
+	config := map[string]interface{}{
+		"genChanSize":  10000,
+		"dataChanSize": 10000,
+	}
+	dcpFeed, err := bucket.StartDcpFeed(name, uint32(0), config)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -74,7 +96,7 @@ func main() {
 			}
 			// FIXME/TODO: the below sleep avoid back-to-back dispatch of
 			// StreamRequest to DCP, which seem to cause some problems.
-			//time.Sleep(2 * time.Millisecond)
+			time.Sleep(1 * time.Millisecond)
 		}
 	}()
 	tick := time.Tick(time.Second)

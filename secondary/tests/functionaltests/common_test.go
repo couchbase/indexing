@@ -28,6 +28,7 @@ var defaultlimit int64 = 10000000
 var kvaddress, indexManagementAddress, indexScanAddress string
 var clusterconfig tc.ClusterConfiguration
 var dataFilePath, mutationFilePath string
+var defaultIndexActiveTimeout int64 = 600  // 10 mins to wait for index to become active
 
 func init() {
 	log.Printf("In init()")
@@ -69,7 +70,7 @@ func init() {
 	var indexName = "index_eyeColor"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"eyeColor"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"eyeColor"}, true, defaultIndexActiveTimeout)
 	tc.HandleError(err, "Error in creating the index")
 
 	// Populate the bucket now

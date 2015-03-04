@@ -10,7 +10,7 @@ properties  : type ",\n"
               "\"first-name\": \"" fname DQ ",\n"
               lastname ",\n"
               emailid ",\n"
-              gender ",\n".
+              gender.
 
 type       : "\"type\": \"user\"".
 docid      : "\"docid\": \"" (sprintf "User-%v" $guid) DQ.

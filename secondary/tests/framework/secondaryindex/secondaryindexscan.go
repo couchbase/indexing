@@ -265,7 +265,7 @@ func RangeStatistics(indexName, bucketName, server string, low, high []interface
 	if err != nil {
 		return err
 	} else {
-		log.Println("Statistics: %v\n\n", statistics)
+		log.Print("Statistics: %v\n\n", statistics)
 		return nil
 	}
 }

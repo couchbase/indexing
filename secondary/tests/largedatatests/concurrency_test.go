@@ -168,7 +168,7 @@ func CreateDropIndexesForDuration(wg *sync.WaitGroup, seconds float64, t *testin
 		var index1 = "index_age"
 		var bucketName = "default"
 		log.Printf("Creating index " + index1)
-		err := secondaryindex.CreateSecondaryIndexWithClient(index1, bucketName, indexManagementAddress, []string{"age"}, true, client)
+		err := secondaryindex.CreateSecondaryIndexWithClient(index1, bucketName, indexManagementAddress, []string{"age"}, true, client, defaultIndexActiveTimeout)
 		FailTestIfError(err, "Error in creating the index", t)
 		time.Sleep(1 * time.Second)
 		_, err = secondaryindex.RangeWithClient(index1, bucketName, indexScanAddress, []interface{}{random_num(15, 80)}, []interface{}{random_num(15, 80)}, 3, true, defaultlimit, client)
@@ -176,7 +176,7 @@ func CreateDropIndexesForDuration(wg *sync.WaitGroup, seconds float64, t *testin
 
 		var index2 = "index_firstname"
 		log.Printf("Creating index " + index2)
-		err = secondaryindex.CreateSecondaryIndexWithClient(index2, bucketName, indexManagementAddress, []string{"`first-name`"}, true, client)
+		err = secondaryindex.CreateSecondaryIndexWithClient(index2, bucketName, indexManagementAddress, []string{"`first-name`"}, true, client, defaultIndexActiveTimeout)
 		FailTestIfError(err, "Error in creating the index", t)
 		time.Sleep(1 * time.Second)
 		_, err = secondaryindex.RangeWithClient(index2, bucketName, indexScanAddress, []interface{}{"M"}, []interface{}{"Z"}, 3, true, defaultlimit, client)
@@ -234,7 +234,7 @@ func SkipTestSequentialRangeScans(t *testing.T) {
 	var bucketName = "default"
 
 	log.Printf("Creating a 2i")
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 	SequentialRangeScanForDuration(indexName, bucketName, 60, t)
 }
@@ -257,7 +257,7 @@ func TestRangeWithConcurrentAddMuts(t *testing.T) {
 	var bucketName = "default"
 
 	log.Printf("Creating a 2i")
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	wg.Add(2)
@@ -283,7 +283,7 @@ func TestRangeWithConcurrentDelMuts(t *testing.T) {
 	var bucketName = "default"
 
 	log.Printf("Creating a 2i")
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	wg.Add(2)
@@ -309,7 +309,7 @@ func TestScanWithConcurrentIndexOps(t *testing.T) {
 	var bucketName = "default"
 
 	log.Printf("Creating a 2i")
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	wg.Add(2)
@@ -335,7 +335,7 @@ func TestConcurrentScans_SameIndex(t *testing.T) {
 	var bucketName = "default"
 
 	log.Printf("Creating a 2i")
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	wg.Add(6)
@@ -367,13 +367,13 @@ func TestConcurrentScans_MultipleIndexes(t *testing.T) {
 	var bucketName = "default"
 
 	log.Printf("Creating multiple indexes")
-	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"company"}, true)
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	err = secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, []string{"age"}, true)
+	err = secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
-	err = secondaryindex.CreateSecondaryIndex(index3, bucketName, indexManagementAddress, []string{"`first-name`"}, true)
+	err = secondaryindex.CreateSecondaryIndex(index3, bucketName, indexManagementAddress, []string{"`first-name`"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	wg.Add(3)

@@ -580,9 +580,9 @@ func (feed *Feed) start(
 			ts = ts.FilterByVbuckets(c.Vbno32to16(reqTs.GetVbnos()))
 		}
 		reqTs = ts.Union(reqTs)
-		// start upstream, after filtering out remove vbuckets.
-		feeder, e := feed.bucketFeed(opaque, false, true, ts)
-		if e != nil { // all feed errors are fatal, skip this bucket.
+		// open or acquire the upstream feeder object.
+		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
+		if e != nil {
 			err = e
 			feed.cleanupBucket(bucketn, false)
 			continue
@@ -593,6 +593,13 @@ func (feed *Feed) start(
 		engines, _ := feed.engines[bucketn]
 		kvdata.AddEngines(opaque, engines, feed.endpoints)
 		feed.kvdata[bucketn] = kvdata // :SideEffect:
+		// start upstream, after filtering out vbuckets.
+		e = feed.bucketFeed(opaque, false, true, ts, feeder)
+		if e != nil { // all feed errors are fatal, skip this bucket.
+			err = e
+			feed.cleanupBucket(bucketn, false)
+			continue
+		}
 		// wait for stream to start ...
 		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
 		feed.rollTss[bucketn] = rollTs.Union(r) // :SideEffect:
@@ -655,24 +662,23 @@ func (feed *Feed) restartVbuckets(
 			ts = ts.FilterByVbuckets(c.Vbno32to16(reqTs.GetVbnos()))
 		}
 		reqTs = ts.Union(ts)
-		// if bucket already present update kvdata first.
-		if _, ok := feed.kvdata[bucketn]; ok {
-			feed.kvdata[bucketn].UpdateTs(opaque, ts)
-		}
-		// (re)start the upstream, after filtering out remote vbuckets.
-		feeder, e := feed.bucketFeed(opaque, false, true, ts)
-		if e != nil { // all feed errors are fatal, skip this bucket.
+		// open or acquire the upstream feeder object.
+		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
+		if e != nil {
 			err = e
 			feed.cleanupBucket(bucketn, false)
 			continue
 		}
 		feed.feeders[bucketn] = feeder // :SideEffect:
 		// open data-path, if not already open.
-		if _, ok := feed.kvdata[bucketn]; !ok {
-			kvdata := feed.startDataPath(bucketn, feeder, opaque, ts)
-			engines, _ := feed.engines[bucketn]
-			kvdata.AddEngines(opaque, engines, feed.endpoints)
-			feed.kvdata[bucketn] = kvdata // :SideEffect:
+		kvdata := feed.startDataPath(bucketn, feeder, opaque, ts)
+		feed.kvdata[bucketn] = kvdata // :SideEffect:
+		// (re)start the upstream, after filtering out remote vbuckets.
+		e = feed.bucketFeed(opaque, false, true, ts, feeder)
+		if e != nil { // all feed errors are fatal, skip this bucket.
+			err = e
+			feed.cleanupBucket(bucketn, false)
+			continue
 		}
 		// wait stream to start ...
 		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
@@ -728,8 +734,15 @@ func (feed *Feed) shutdownVbuckets(
 			err = projC.ErrorInvalidBucket
 			continue
 		}
+		feeder, ok := feed.feeders[bucketn]
+		if !ok {
+			fmsg := "%v ##%x shutdownVbuckets() invalid-feeder %v\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
+			err = projC.ErrorInvalidBucket
+			continue
+		}
 		// shutdown upstream
-		_, e = feed.bucketFeed(opaque, true, false, ts)
+		e = feed.bucketFeed(opaque, true, false, ts, feeder)
 		if e != nil {
 			err = e
 			//FIXME: in case of shutdown we are not cleaning the bucket !
@@ -793,9 +806,9 @@ func (feed *Feed) addBuckets(
 			ts = ts.FilterByVbuckets(c.Vbno32to16(reqTs.GetVbnos()))
 		}
 		reqTs = ts.Union(ts)
-		// start upstream
-		feeder, e := feed.bucketFeed(opaque, false, true, ts)
-		if e != nil { // all feed errors are fatal, skip this bucket.
+		// open or acquire the upstream feeder object.
+		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
+		if e != nil {
 			err = e
 			feed.cleanupBucket(bucketn, false)
 			continue
@@ -806,6 +819,13 @@ func (feed *Feed) addBuckets(
 		engines, _ := feed.engines[bucketn]
 		kvdata.AddEngines(opaque, engines, feed.endpoints)
 		feed.kvdata[bucketn] = kvdata // :SideEffect:
+		// start upstream
+		e = feed.bucketFeed(opaque, false, true, ts, feeder)
+		if e != nil { // all feed errors are fatal, skip this bucket.
+			err = e
+			feed.cleanupBucket(bucketn, false)
+			continue
+		}
 		// wait for stream to start ...
 		r, f, a, e := feed.waitStreamRequests(opaque, pooln, bucketn, ts)
 		feed.rollTss[bucketn] = rollTs.Union(r) // :SideEffect:
@@ -1042,68 +1062,50 @@ func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
 	delete(feed.kvdata, bucketn) // :SideEffect:
 }
 
-// start a feed for a bucket with a set of kvfeeder,
-// based on vbmap and failover-logs.
-func (feed *Feed) bucketFeed(
-	opaque uint16,
-	stop, start bool,
-	reqTs *protobuf.TsVbuuid) (feeder BucketFeeder, err error) {
+func (feed *Feed) openFeeder(
+	opaque uint16, pooln, bucketn string) (BucketFeeder, error) {
 
-	pooln, bucketn := reqTs.GetPool(), reqTs.GetBucket()
-
-	defer func() {
-		// FIXME: cleanupBucket is called (except for shutdownVbuckets)
-		// anyways, so don't bother to close the upstream.
-		//if err != nil && feeder != nil {
-		//    feed.infof("closing upstream-feed for", bucketn, nil)
-		//    feeder.CloseFeed()
-		//    feeder = nil
-		//}
-	}()
-
-	vbnos := c.Vbno32to16(reqTs.GetVbnos())
-	_ /*vbuuids*/, err = feed.bucketDetails(pooln, bucketn, opaque, vbnos)
+	feeder, ok := feed.feeders[bucketn]
+	if ok {
+		return feeder, nil
+	}
+	bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn)
 	if err != nil {
 		return nil, projC.ErrorFeeder
 	}
 
-	// if streams need to be started, make sure that branch
-	// histories are the same.
-	// FIXME: this is any way redundant during a race between
-	// KV and indexer. We will allow DCP to fail.
-	//
-	//if start {
-	//    if reqTs.VerifyBranch(vbnos, vbuuids) == false {
-	//        feed.errorf("VerifyBranch()", bucketn, vbuuids)
-	//        return nil, projC.ErrorInvalidVbucketBranch
-	//    }
-	//}
+	uuid, err := c.NewUUID()
+	if err != nil {
+		fmsg := "%v ##%x c.NewUUID(): %v"
+		logging.Errorf(fmsg, feed.logPrefix, opaque, err)
+		return nil, err
+	}
+	name := newDCPConnectionName(bucket.Name, feed.topic, uuid.Uint64())
+	dcpConfig := map[string]interface{}{
+		"genChanSize":  feed.config["dcp.genChanSize"].Int(),
+		"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
+	}
+	feeder, err = OpenBucketFeed(name, bucket, dcpConfig)
+	if err != nil {
+		fmsg := "%v ##%x OpenBucketFeed(%q): %v"
+		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
+		return nil, projC.ErrorFeeder
+	}
+	return feeder, nil
+}
 
-	var ok bool
+// start a feed for a bucket with a set of kvfeeder,
+// based on vbmap and failover-logs.
+func (feed *Feed) bucketFeed(
+	opaque uint16, stop, start bool,
+	reqTs *protobuf.TsVbuuid, feeder BucketFeeder) error {
 
-	feeder, ok = feed.feeders[bucketn]
-	if !ok { // the feed is being started for the first time
-		bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn)
-		if err != nil {
-			return nil, projC.ErrorFeeder
-		}
-		uuid, err := c.NewUUID()
-		if err != nil {
-			fmsg := "%v ##%x c.NewUUID(): %v"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
-			return nil, err
-		}
-		name := newDCPConnectionName(bucket.Name, feed.topic, uuid.Uint64())
-		dcpConfig := map[string]interface{}{
-			"genChanSize":  feed.config["dcp.genChanSize"].Int(),
-			"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
-		}
-		feeder, err = OpenBucketFeed(name, bucket, dcpConfig)
-		if err != nil {
-			fmsg := "%v ##%x OpenBucketFeed(%q): %v"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
-			return nil, projC.ErrorFeeder
-		}
+	pooln, bucketn := reqTs.GetPool(), reqTs.GetBucket()
+
+	vbnos := c.Vbno32to16(reqTs.GetVbnos())
+	_ /*vbuuids*/, err := feed.bucketDetails(pooln, bucketn, opaque, vbnos)
+	if err != nil {
+		return projC.ErrorFeeder
 	}
 
 	// stop and start are mutually exclusive
@@ -1113,7 +1115,7 @@ func (feed *Feed) bucketFeed(
 		if err = feeder.EndVbStreams(opaque, reqTs); err != nil {
 			fmsg := "%v ##%x EndVbStreams(%q): %v"
 			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
-			return feeder, projC.ErrorFeeder
+			return projC.ErrorFeeder
 		}
 
 	} else if start {
@@ -1122,10 +1124,10 @@ func (feed *Feed) bucketFeed(
 		if err = feeder.StartVbStreams(opaque, reqTs); err != nil {
 			fmsg := "%v ##%x StartVbStreams(%q): %v"
 			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
-			return feeder, projC.ErrorFeeder
+			return projC.ErrorFeeder
 		}
 	}
-	return feeder, nil
+	return nil
 }
 
 // - return dcp-client failures.
