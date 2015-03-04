@@ -20,6 +20,7 @@ var defaultlimit int64 = 10000000
 var kvaddress, indexManagementAddress, indexScanAddress string
 var clusterconfig tc.ClusterConfiguration
 var proddir, bagdir string
+var defaultIndexActiveTimeout int64 = 900  // 15 mins to wait for index to become active
 
 func init() {
 	log.Printf("In init()")

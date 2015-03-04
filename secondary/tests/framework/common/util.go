@@ -17,7 +17,7 @@ import (
 func PrintScanResults(results ScanResponse, resultType string) {
 	log.Printf("Count of %v is %d\n", resultType, len(results))
 	for key, value := range results {
-		log.Println("Key: %v  Value: %v", key, value)
+		log.Printf("Key: %v  Value: %v", key, value)
 	}
 }
 
@@ -133,17 +133,17 @@ func ClearMap(docs KeyValues) {
 func KillIndexer() {
 	out, err := exec.Command("pkill", "indexer").CombinedOutput()
 	if err != nil {
-		log.Println(err)
+		log.Printf(err)
 	} else {
-		log.Println(out)
+		log.Printf(out)
 	}
 }
 
 func KillProjector() {
 	out, err := exec.Command("pkill", "projector").CombinedOutput()
 	if err != nil {
-		log.Println(err)
+		log.Printf(err)
 	} else {
-		log.Println(out)
+		log.Printf(out)
 	}
 }

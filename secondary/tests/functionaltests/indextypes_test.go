@@ -18,7 +18,7 @@ func TestSimpleIndex_FloatDataType(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 35, 40, 1)
@@ -34,7 +34,7 @@ func TestSimpleIndex_StringDataType(t *testing.T) {
 	var indexName = "index_company"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "G", "M", 1)
@@ -56,7 +56,7 @@ func TestSimpleIndex_FieldValueCaseSensitivity(t *testing.T) {
 	var indexName = "index_company"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "B", "C", 1)
@@ -78,7 +78,7 @@ func TestSimpleIndex_BoolDataType(t *testing.T) {
 	var indexName = "index_isActive"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"isActive"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"isActive"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_bool(docs, "isActive", true, 3)
@@ -93,7 +93,7 @@ func TestBasicLookup(t *testing.T) {
 	var indexName = "index_company"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "BIOSPAN", "BIOSPAN", 3)
@@ -108,7 +108,7 @@ func TestIndexOnNonExistentField(t *testing.T) {
 	var indexName = "index_height"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"height"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"height"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "height", 6.0, 6.5, 1)
@@ -123,7 +123,7 @@ func TestIndexPartiallyMissingField(t *testing.T) {
 	var indexName = "index_nationality"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"nationality"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"nationality"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "nationality", "A", "z", 1)
@@ -139,7 +139,7 @@ func TestScanNonMatchingDatatype(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "age", "35", "40", 1)
@@ -157,7 +157,7 @@ func TestInclusionNeither(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 0)
@@ -173,7 +173,7 @@ func TestInclusionLow(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 1)
@@ -189,7 +189,7 @@ func TestInclusionHigh(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 2)
@@ -205,7 +205,7 @@ func TestInclusionBoth(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 32, 36, 3)
@@ -220,7 +220,7 @@ func TestNestedIndex_String(t *testing.T) {
 	var indexName = "index_streetname"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress.streetname"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress.streetname"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "address.streetaddress.streetname", "A", "z", 3)
@@ -235,7 +235,7 @@ func TestNestedIndex_Float(t *testing.T) {
 	var indexName = "index_floor"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress.floor"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress.floor"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "address.streetaddress.floor", 3, 6, 3)
@@ -250,7 +250,7 @@ func TestNestedIndex_Bool(t *testing.T) {
 	var indexName = "index_isresidential"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.isresidential"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.isresidential"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_bool(docs, "address.isresidential", false, 3)
@@ -269,7 +269,7 @@ func TestLookupJsonObject(t *testing.T) {
 	addDocIfNotPresentInKV("Userbb48952f-f8d1-4e04-a0e1-96b9019706fb")
 	time.Sleep(2 * time.Second)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	value := map[string]interface{}{
@@ -291,7 +291,7 @@ func TestLookupObjDifferentOrdering(t *testing.T) {
 	var indexName = "index_streetaddress"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	value := map[string]interface{}{
@@ -313,7 +313,7 @@ func TestRangeJsonObject(t *testing.T) {
 	var indexName = "index_streetaddress"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"address.streetaddress"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	low := map[string]interface{}{
@@ -353,7 +353,7 @@ func TestLookupFloatDiffForms(t *testing.T) {
 	var indexName = "index_latitude"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"latitude"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"latitude"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	// Scan 1
@@ -408,7 +408,7 @@ func TestRangeFloatInclVariations(t *testing.T) {
 	var indexName = "index_latitude"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"latitude"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"latitude"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	// Scan 1. Value close to  -67.373265, Inclusion 0
@@ -465,7 +465,7 @@ func TestScanAll(t *testing.T) {
 	var index1 = "index_name"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"name"}, true)
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"name"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "name", "A", "z", 3)
@@ -482,7 +482,7 @@ func TestScanAllNestedField(t *testing.T) {
 	var index1 = "index_streetname"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"address.streetaddress.streetname"}, true)
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"address.streetaddress.streetname"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "address.streetaddress.streetname", "A", "z", 3)
@@ -517,7 +517,7 @@ func TestBasicNullDataType(t *testing.T) {
 	var indexName = "index_email"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"email"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"email"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedLookupResponse_nil(docs, "email")
@@ -534,7 +534,7 @@ func TestBasicArrayDataType_ScanAll(t *testing.T) {
 	var indexName = "index_tags"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanAllResponse(docs, "tags")
@@ -552,7 +552,7 @@ func TestBasicArrayDataType_Lookup(t *testing.T) {
 	addDocIfNotPresentInKV("Usere46cea01-38f6-4e7b-92e5-69d64668ae75")
 	time.Sleep(2 * time.Second)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	// Document has array: "reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"
@@ -578,7 +578,7 @@ func TestArrayDataType_LookupMissingArrayValue(t *testing.T) {
 	var indexName = "index_tags"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	// Document has array: "reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"
@@ -597,7 +597,7 @@ func SkipTestArrayDataType_LookupWrongOrder(t *testing.T) {
 	var indexName = "index_tags"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	// Document has array: "reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"
@@ -616,7 +616,7 @@ func SkipTestArrayDataType_LookupSubset(t *testing.T) {
 	var indexName = "index_tags"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"tags"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	// Document has array: "reprehenderit", "tempor", "officia", "exercitation", "labore", "sunt", "tempor"
@@ -638,7 +638,7 @@ func TestScanLimitParameter(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	limit := 500
@@ -665,7 +665,7 @@ func SkipTestScanDistinctParameter(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	// var limit int
@@ -681,7 +681,7 @@ func TestCountRange(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 35, 40, 1)
@@ -735,7 +735,7 @@ func TestCountLookup(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 25, 25, 3)
@@ -762,6 +762,6 @@ func TestRangeStatistics(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 }
