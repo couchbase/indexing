@@ -113,15 +113,15 @@ func (o *MetadataProvider) WatchMetadata(indexAdminPort string) (c.IndexerId, er
 			return watcher.getIndexerId(), nil
 		}
 	}
-	
+
 	startTime := time.Now().String()
 
 	watcher, err := o.startWatcher(indexAdminPort)
 	if err != nil {
 		errTime := time.Now().String()
-		return c.INDEXER_ID_NIL, 
-			errors.New(fmt.Sprintf("Cannot initiate connection to indexer port %s. Error = %v. Start time %v.  Error time %v", 
-			indexAdminPort, err, startTime, errTime))
+		return c.INDEXER_ID_NIL,
+			errors.New(fmt.Sprintf("Cannot initiate connection to indexer port %s. Error = %v. Start time %v.  Error time %v",
+				indexAdminPort, err, startTime, errTime))
 	}
 
 	if err := watcher.updateServiceMap(indexAdminPort); err != nil {
@@ -1069,7 +1069,11 @@ func (w *watcher) Commit(txid common.Txnid) error {
 
 	msg, ok := w.pendings[txid]
 	if !ok {
-		logging.Warnf("Watcher.commit(): unknown txnid %d.  Txn not processed at commit", txid)
+		// Once the watcher is synchronized with the server, it is possible that the first message
+		// is a commit.  It is OK to ignore this commit, since during server synchronization, the
+		// server is responsible to send a snapshot of the repository that includes this commit txid.
+		// If the server cannot send a snapshot that is as recent as this commit's txid, server
+		// synchronization will fail, so it won't even come to this function.
 		return nil
 	}
 
