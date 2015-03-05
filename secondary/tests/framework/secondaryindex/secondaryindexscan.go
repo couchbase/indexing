@@ -19,7 +19,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
 	connErr := client.Range(
-		uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
+		defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
 		c.AnyConsistency, nil,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
@@ -67,7 +67,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
 	connErr := client.Range(
-		uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
+		defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
 		c.AnyConsistency, nil,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
@@ -127,7 +127,7 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
 	connErr := client.Lookup(
-		uint64(defnID), []c.SecondaryKey{values}, distinct, limit,
+		defnID, []c.SecondaryKey{values}, distinct, limit,
 		c.AnyConsistency, nil,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
@@ -174,7 +174,7 @@ func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
 	connErr := client.ScanAll(
-		uint64(defnID), limit,
+		defnID, limit,
 		c.AnyConsistency, nil,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
@@ -229,7 +229,7 @@ func CountRange(indexName, bucketName, server string, low, high []interface{}, i
 	}
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	count, err := client.CountRange(uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
+	count, err := client.CountRange(defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
 	if err != nil {
 		return 0, err
 	} else {
@@ -245,7 +245,7 @@ func CountLookup(indexName, bucketName, server string, values []interface{}) (in
 	}
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	count, err := client.CountLookup(uint64(defnID), []c.SecondaryKey{values})
+	count, err := client.CountLookup(defnID, []c.SecondaryKey{values})
 	if err != nil {
 		return 0, err
 	} else {
@@ -261,7 +261,7 @@ func RangeStatistics(indexName, bucketName, server string, low, high []interface
 	}
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	statistics, err := client.RangeStatistics(uint64(defnID), c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
+	statistics, err := client.RangeStatistics(defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
 	if err != nil {
 		return err
 	} else {

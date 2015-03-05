@@ -11,7 +11,7 @@ import (
 
 func Validate(expectedResponse, actualResponse tc.ScanResponse) error {
 	if len(expectedResponse) != len(actualResponse) {
-		errorStr := fmt.Sprintf("Expected scan count %d does not match actual scan count %d: ", len(expectedResponse), len(actualResponse))
+		errorStr := fmt.Sprintf("Expected scan count %d does not match actual scan count %d", len(expectedResponse), len(actualResponse))
 		log.Printf("%v", errorStr)
 		e := errors.New(errorStr)
 		return e

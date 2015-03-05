@@ -85,7 +85,7 @@ func SkipTestCreateDocsMutation_LessDelay(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
@@ -113,7 +113,7 @@ func SkipTestDeleteDocsMutation_LessDelay(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
@@ -157,7 +157,7 @@ func TestCreateDocsMutation(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
@@ -202,7 +202,7 @@ func TestDeleteDocsMutation(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
@@ -230,7 +230,7 @@ func TestUpdateDocsMutation(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 20, 40, 2)

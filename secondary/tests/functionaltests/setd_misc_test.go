@@ -48,7 +48,7 @@ func TestBucketDefaultDelete(t *testing.T) {
 	log.Printf("Populating the default bucket after it was deleted")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 
-	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
+	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "BIOSPAN", "BIOSPAN", 3)
@@ -76,7 +76,7 @@ func TestMixedDatatypesScanAll(t *testing.T) {
 	log.Printf("Setting mixed datatypes JSON docs in KV")
 	kvutility.SetKeyValues(mixeddtdocs, "default", "", clusterconfig.KVAddress)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanAllResponse(mixeddtdocs, field)
@@ -104,7 +104,7 @@ func TestMixedDatatypesRange_Float(t *testing.T) {
 	log.Printf("Setting mixed datatypes JSON docs in KV")
 	kvutility.SetKeyValues(mixeddtdocs, "default", "", clusterconfig.KVAddress)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(mixeddtdocs, field, 100, 1000, 3)
@@ -139,7 +139,7 @@ func TestMixedDatatypesRange_String(t *testing.T) {
 	log.Printf("Setting mixed datatypes JSON docs in KV")
 	kvutility.SetKeyValues(mixeddtdocs, "default", "", clusterconfig.KVAddress)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(mixeddtdocs, field, "A", "Z", 3)
@@ -167,7 +167,7 @@ func TestMixedDatatypesRange_Json(t *testing.T) {
 	log.Printf("Setting mixed datatypes JSON docs in KV")
 	kvutility.SetKeyValues(mixeddtdocs, "default", "", clusterconfig.KVAddress)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	low := map[string]interface{}{
@@ -204,7 +204,7 @@ func TestMixedDatatypesScan_Bool(t *testing.T) {
 	log.Printf("Setting mixed datatypes JSON docs in KV")
 	kvutility.SetKeyValues(mixeddtdocs, "default", "", clusterconfig.KVAddress)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_bool(mixeddtdocs, field, true, 3)
@@ -240,7 +240,7 @@ func TestLargeSecondaryKeyLength(t *testing.T) {
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(largeKeyDocs, "default", "", clusterconfig.KVAddress)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanAllResponse(largeKeyDocs, field)
@@ -275,7 +275,8 @@ func TestLargePrimaryKeyLength(t *testing.T) {
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(largePrimaryKeyDocs, "default", "", clusterconfig.KVAddress)
 
-	err := secondaryindex.CreatePrimaryIndex(indexName, bucketName, indexManagementAddress, true)
+	// Create a primary index
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", nil, true, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
@@ -305,7 +306,7 @@ func TestCompositeIndex(t *testing.T) {
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 	time.Sleep(2 * time.Second)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age", "company"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age", "company"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
 	if len(scanResults) != len(docs) {
@@ -344,7 +345,7 @@ func TestUpdateMutations_DeleteField(t *testing.T) {
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 	docScanResults := datautility.ExpectedScanAllResponse(docs, field)
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit)
@@ -379,7 +380,7 @@ func TestUpdateMutations_AddField(t *testing.T) {
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanAllResponse(docs, field)
@@ -419,7 +420,7 @@ func TestUpdateMutations_DataTypeChange(t *testing.T) {
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 	time.Sleep(2 * time.Second)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanAllResponse(docs, field)
@@ -459,25 +460,25 @@ func TestMultipleBuckets(t *testing.T) {
 	proxyPorts := [...]string{"11212", "11213", "11214", "11215"}
 	var bucketDocs [4]tc.KeyValues
 
-	// Update default bucket ram to 300
-	// Create two more buckets with ram 300 each
+	// Update default bucket ram to 256
+	// Create two more buckets with ram 256 each
 	// Add different docs to all 3 buckets
 	// Create index on each of them
 	// Query the indexes
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 	kvutility.FlushBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "300")
+	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 
 	for i := 1; i < numOfBuckets; i++ {
-		kvutility.CreateBucket(bucketNames[i], "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "300", proxyPorts[i])
+		kvutility.CreateBucket(bucketNames[i], "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
 	}
 
 	log.Printf("Generating docs and Populating all the buckets")
 	for i := 0; i < numOfBuckets; i++ {
 		bucketDocs[i] = generateDocs(1000, "users.prod")
 		kvutility.SetKeyValues(bucketDocs[i], bucketNames[i], "", clusterconfig.KVAddress)
-		err := secondaryindex.CreateSecondaryIndex(indexNames[i], bucketNames[i], indexManagementAddress, []string{indexFields[i]}, true, defaultIndexActiveTimeout)
+		err := secondaryindex.CreateSecondaryIndex(indexNames[i], bucketNames[i], indexManagementAddress, "", []string{indexFields[i]}, false, nil, true, defaultIndexActiveTimeout, nil)
 		FailTestIfError(err, "Error in creating the index", t)
 	}
 	time.Sleep(3 * time.Second)
@@ -513,7 +514,7 @@ func TestMultipleBuckets(t *testing.T) {
 	kvutility.DeleteBucket(bucketNames[1], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.DeleteBucket(bucketNames[2], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "1024")
+	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
 	time.Sleep(3 * time.Second)
 }
 
@@ -532,7 +533,7 @@ func TestBucketFlush(t *testing.T) {
 	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)
 
 	for i := 0; i < 3; i++ {
-		err := secondaryindex.CreateSecondaryIndex(indexNames[i], bucketName, indexManagementAddress, []string{indexFields[i]}, true, defaultIndexActiveTimeout)
+		err := secondaryindex.CreateSecondaryIndex(indexNames[i], bucketName, indexManagementAddress, "", []string{indexFields[i]}, false, nil, true, defaultIndexActiveTimeout, nil)
 		FailTestIfError(err, "Error in creating the index", t)
 		docScanResults := datautility.ExpectedScanAllResponse(kvdocs, indexFields[i])
 		scanResults, err := secondaryindex.ScanAll(indexNames[i], bucketName, indexScanAddress, defaultlimit)
@@ -565,7 +566,7 @@ func TestSaslBucket(t *testing.T) {
 	kvutility.CreateBucket(bucketName, "sasl", bucketPassword, clusterconfig.Username, clusterconfig.Password, kvaddress, "300", "11212")
 	kvdocs := generateDocs(1000, "users.prod")
 	kvutility.SetKeyValues(kvdocs, bucketName, bucketPassword, clusterconfig.KVAddress)
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{field}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(kvdocs, field, 35, 40, 1)

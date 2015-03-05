@@ -21,85 +21,112 @@ func CreateClient(server, serviceAddr string) (*qc.GsiClient, error) {
 	return client, nil
 }
 
-func GetDefnID(client *qc.GsiClient, bucket, indexName string) (defnID c.IndexDefnId, ok bool) {
+func GetDefnID(client *qc.GsiClient, bucket, indexName string) (defnID uint64, ok bool) {
 	indexes, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the indexes")
 	for _, index := range indexes {
 		defn := index.Definition
 		if defn.Bucket == bucket && defn.Name == indexName {
-			return index.Definition.DefnId, true
+			return uint64(index.Definition.DefnId), true
 		}
 	}
-	return c.IndexDefnId(0), false
+	return uint64(c.IndexDefnId(0)), false
 }
 
-func CreatePrimaryIndex(indexName, bucketName, server string, skipIfExists bool) error {
-	indexExists, e := IndexExists(indexName, bucketName, server)
-	if e != nil {
-		return e
+// Creates an index and waits for it to become active
+func CreateSecondaryIndex(
+	indexName, bucketName, server, whereExpr string, indexFields []string, isPrimary bool, with []byte,
+	skipIfExists bool, indexActiveTimeoutSeconds int64, client *qc.GsiClient) error {
+
+	if client == nil {
+		c, e := CreateClient(server, "2itest")
+		if e != nil {
+			return e
+		}
+		client = c
+		defer client.Close()
 	}
 
-	if skipIfExists == true && indexExists == true {
-		return nil
-	}
-	client, e := CreateClient(server, "2itest")
-	if e != nil {
-		return e
-	}
-
-	var secExprs []string
-
-	using := "gsi"
-	exprType := "N1QL"
-	partnExp := ""
-	where := ""
-	isPrimary := true
-
-	defnID, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary, nil)
-	if err == nil {
-		log.Printf("Created the gsi primary index %v", indexName)
-		return WaitTillIndexActive(defnID, client, 900)
-	}
-
-	client.Close()
-	return err
-}
-
-func CreateSecondaryIndex(indexName, bucketName, server string, indexFields []string, skipIfExists bool, indexActiveTimeoutSeconds int64) error {
-	client, e := CreateClient(server, "2itest")
-	if e != nil {
-		return e
-	}
-	
-	defer client.Close()
-	return CreateSecondaryIndexWithClient(indexName, bucketName, server, indexFields, skipIfExists, client, indexActiveTimeoutSeconds)
-}
-
-func CreateSecondaryIndexWithClient(indexName, bucketName, server string, indexFields []string, skipIfExists bool, client *qc.GsiClient, indexActiveTimeoutSeconds int64) error {
 	indexExists := IndexExistsWithClient(indexName, bucketName, server, client)
 	if skipIfExists == true && indexExists == true {
 		return nil
 	}
-
 	var secExprs []string
-	for _, indexField := range indexFields {
-		expr, err := n1ql.ParseExpression(indexField)
-		if err != nil {
-			log.Printf("Creating index %v. Error while parsing the expression (%v) : %v", indexName, indexField, err)
+	if isPrimary == false {
+		for _, indexField := range indexFields {
+			expr, err := n1ql.ParseExpression(indexField)
+			if err != nil {
+				log.Printf("Creating index %v. Error while parsing the expression (%v) : %v", indexName, indexField, err)
+			}
+
+			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
 		}
-
-		secExprs = append(secExprs, expression.NewStringer().Visit(expr))
 	}
-
 	using := "gsi"
 	exprType := "N1QL"
 	partnExp := ""
-	where := ""
-	isPrimary := false
 
-	defnID, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, where, secExprs, isPrimary, nil)
+	defnID, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
+	if err == nil {
+		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)
+		return WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
+	}
+	return err
+}
+
+// Creates an index and DOES NOT wait for it to become active
+func CreateSecondaryIndexAsync(
+	indexName, bucketName, server, whereExpr string, indexFields []string, isPrimary bool, with []byte,
+	skipIfExists bool, client *qc.GsiClient) error {
+
+	if client == nil {
+		c, e := CreateClient(server, "2itest")
+		if e != nil {
+			return e
+		}
+		client = c
+		defer client.Close()
+	}
+
+	indexExists := IndexExistsWithClient(indexName, bucketName, server, client)
+	if skipIfExists == true && indexExists == true {
+		return nil
+	}
+	var secExprs []string
+	if isPrimary == false {
+		for _, indexField := range indexFields {
+			expr, err := n1ql.ParseExpression(indexField)
+			if err != nil {
+				log.Printf("Creating index %v. Error while parsing the expression (%v) : %v", indexName, indexField, err)
+			}
+
+			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
+		}
+	}
+	using := "gsi"
+	exprType := "N1QL"
+	partnExp := ""
+
+	_, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
 	if err == nil {
 		log.Printf("Created the secondary index %v", indexName)
+		return nil
+	}
+	return err
+}
+
+func BuildIndex(indexName, bucketName, server string, indexActiveTimeoutSeconds int64) error {
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return e
+	}
+
+	defer client.Close()
+
+	defnID, _ := GetDefnID(client, bucketName, indexName)
+	err := client.BuildIndexes([]uint64{defnID})
+	if err == nil {
+		log.Printf("Build the deferred index %v. Waiting for the index to become active", indexName)
 		return WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
 	}
 
@@ -120,12 +147,28 @@ func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeout
 		}
 
 		if state == c.INDEX_STATE_ACTIVE {
+			log.Printf("Index is now active")
 			return nil
 		} else {
 			time.Sleep(1 * time.Second)
 		}
 	}
 	return nil
+}
+
+func IndexState(indexName, bucketName, server string) (string, error) {
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return "", e
+	}
+	defnID, _ := GetDefnID(client, bucketName, indexName)
+	state, e := client.IndexState(defnID)
+	if e != nil {
+		log.Printf("Error while fetching index state for defnID %v", defnID)
+		return "", e
+	}
+
+	return state.String(), nil
 }
 
 func IndexExists(indexName, bucketName, server string) (bool, error) {
@@ -196,7 +239,6 @@ func DropSecondaryIndexWithClient(indexName, bucketName, server string, client *
 			if e == nil {
 				log.Printf("Index dropped")
 			} else {
-				client.Close()
 				return e
 			}
 		}

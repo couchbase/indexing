@@ -16,7 +16,7 @@ func TestThreeIndexCreates(t *testing.T) {
 	var i3 = "index_pin"
 	var bucketName = "default"
 
-	e := secondaryindex.CreateSecondaryIndex(i1, bucketName, indexManagementAddress, []string{"balance"}, true, defaultIndexActiveTimeout)
+	e := secondaryindex.CreateSecondaryIndex(i1, bucketName, indexManagementAddress, "", []string{"balance"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(e, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
@@ -30,7 +30,7 @@ func TestThreeIndexCreates(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	err = secondaryindex.CreateSecondaryIndex(i2, bucketName, indexManagementAddress, []string{"email"}, true, defaultIndexActiveTimeout)
+	err = secondaryindex.CreateSecondaryIndex(i2, bucketName, indexManagementAddress, "", []string{"email"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
@@ -44,7 +44,7 @@ func TestThreeIndexCreates(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	err = secondaryindex.CreateSecondaryIndex(i3, bucketName, indexManagementAddress, []string{"address.pin"}, true, defaultIndexActiveTimeout)
+	err = secondaryindex.CreateSecondaryIndex(i3, bucketName, indexManagementAddress, "", []string{"address.pin"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	//Delete docs mutations:  Delete docs from KV
@@ -74,7 +74,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	// Drop i2, create/delete mutations, scan i1
 	// Create i4, create mutations, scan i4
 
-	e := secondaryindex.CreateSecondaryIndex(i1, bucketName, indexManagementAddress, []string{"address.street"}, true, defaultIndexActiveTimeout)
+	e := secondaryindex.CreateSecondaryIndex(i1, bucketName, indexManagementAddress, "", []string{"address.street"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(e, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
@@ -88,7 +88,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	err = secondaryindex.CreateSecondaryIndex(i2, bucketName, indexManagementAddress, []string{"registered"}, true, defaultIndexActiveTimeout)
+	err = secondaryindex.CreateSecondaryIndex(i2, bucketName, indexManagementAddress, "", []string{"registered"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
@@ -102,7 +102,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	err = secondaryindex.CreateSecondaryIndex(i3, bucketName, indexManagementAddress, []string{"gender"}, true, defaultIndexActiveTimeout)
+	err = secondaryindex.CreateSecondaryIndex(i3, bucketName, indexManagementAddress, "", []string{"gender"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
@@ -135,7 +135,7 @@ func TestMultipleIndexCreatesDropsWithMutations(t *testing.T) {
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
 
-	err = secondaryindex.CreateSecondaryIndex(i4, bucketName, indexManagementAddress, []string{"longitude"}, true, defaultIndexActiveTimeout)
+	err = secondaryindex.CreateSecondaryIndex(i4, bucketName, indexManagementAddress, "", []string{"longitude"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	//Create docs mutations: Add new docs to KV
@@ -155,7 +155,7 @@ func TestCreateDropScan(t *testing.T) {
 	var indexName = "index_cd"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 1)
@@ -180,7 +180,7 @@ func TestCreateDropCreate(t *testing.T) {
 	var indexName = "index_cdc"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 2)
@@ -199,7 +199,7 @@ func TestCreateDropCreate(t *testing.T) {
 		log.Printf("Scan failed as expected with error: %v\n", err)
 	}
 
-	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
+	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 1)
@@ -215,9 +215,9 @@ func TestCreate2Drop1Scan2(t *testing.T) {
 	var index2 = "index_i2"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"company"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
-	err = secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
+	err = secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 1)
@@ -246,7 +246,7 @@ func TestIndexNameCaseSensitivity(t *testing.T) {
 	var indexName = "index_age"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 35, 40, 1)
@@ -268,9 +268,9 @@ func TestCreateDuplicateIndex(t *testing.T) {
 	var index1 = "index_di1"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"age"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
-	err = secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, []string{"age"}, false, defaultIndexActiveTimeout)
+	err = secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, false, defaultIndexActiveTimeout, nil)
 	if err == nil {
 		t.Fatal("Error excpected creating dupliate index but create didnt fail \n")
 	} else {
@@ -294,7 +294,7 @@ func TestCreateIndexNonExistentBucket(t *testing.T) {
 	var indexName = "index_BlahBucket"
 	var bucketName = "BlahBucket"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"score"}, true, defaultIndexActiveTimeout)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"score"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	if err == nil {
 		t.Fatal("Error excpected when creating index on non-existent bucket but error didnt occur\n")
 	} else {
