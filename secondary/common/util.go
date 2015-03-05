@@ -9,6 +9,7 @@ import "os"
 import "strconv"
 import "strings"
 import "net/http"
+import "runtime"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
@@ -506,4 +507,13 @@ func IsAuthValid(r *http.Request, server string) (bool, error) {
 		return false, err
 	}
 	return resp.StatusCode == http.StatusOK, nil
+}
+
+func SetNumCPUs(percent int) int {
+	ncpu := percent / 100
+	if ncpu == 0 {
+		ncpu = runtime.NumCPU()
+	}
+	runtime.GOMAXPROCS(ncpu)
+	return ncpu
 }

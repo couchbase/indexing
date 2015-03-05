@@ -66,6 +66,13 @@ var SystemConfig = Config{
 			"`kvaddrs` specified above will be discarded",
 		true,
 	},
+	"projector.maxCpuPercent": ConfigValue{
+		200,
+		"Maximum percent of CPU that projector can use. " +
+			"EG, 200% in 4-core (400%) machine would set indexer to " +
+			"use 2 cores",
+		200,
+	},
 	// Projector feed settings
 	"projector.routerEndpointFactory": ConfigValue{
 		RouterEndpointFactory(nil),
@@ -423,7 +430,9 @@ var SystemConfig = Config{
 	},
 	"indexer.settings.max_cpu_percent": ConfigValue{
 		400,
-		"Maximum nCPUs percent used by the processes",
+		"Maximum percent of CPU that indexer can use. " +
+			"EG, 200% in 4-core (400%) machine would set indexer to " +
+			"use 2 cores",
 		400,
 	},
 	"indexer.settings.log_level": ConfigValue{
@@ -460,6 +469,7 @@ func NewConfig(data interface{}) (Config, error) {
 // Update config object with data, can be a Config, map[string]interface{},
 // []byte.
 func (config Config) Update(data interface{}) error {
+	fmsg := "Skipping setting key '%v' value '%v' due to %v"
 	switch v := data.(type) {
 	case Config: // Clone
 		for key, value := range v {
@@ -469,7 +479,7 @@ func (config Config) Update(data interface{}) error {
 	case map[string]interface{}: // transform
 		for key, value := range v {
 			if err := config.SetValue(key, value); err != nil {
-				logging.Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
+				logging.Warnf(fmsg, key, value, err)
 			}
 		}
 
@@ -480,7 +490,7 @@ func (config Config) Update(data interface{}) error {
 		}
 		for key, value := range m {
 			if err := config.SetValue(key, value); err != nil {
-				logging.Warnf("Skipping setting key '%v' value '%v' due to %v", key, value, err)
+				logging.Warnf(fmsg, key, value, err)
 			}
 		}
 

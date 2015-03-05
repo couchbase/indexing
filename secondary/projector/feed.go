@@ -1194,8 +1194,8 @@ func (feed *Feed) getLocalVbuckets(
 	nodeID := cinfo.GetCurrentNode()
 	vbnos32, err := cinfo.GetVBuckets(nodeID, bucketn)
 	if err != nil {
-		fmsg := "%v ##%x cinfo.GetVBuckets(`%v`): %v\n"
-		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
+		fmsg := "%v ##%x cinfo.GetVBuckets(%d, `%v`): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, nodeID, bucketn, err)
 		return nil, projC.ErrorClusterInfo
 	}
 	vbnos := c.Vbno32to16(vbnos32)
