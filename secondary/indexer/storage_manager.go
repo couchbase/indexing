@@ -15,8 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbaselabs/goforestdb"
 	"sync"
 )
 

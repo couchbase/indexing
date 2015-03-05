@@ -11,7 +11,7 @@ package indexer
 
 import (
 	"errors"
-	"github.com/couchbaselabs/goforestdb"
+	"github.com/couchbase/indexing/secondary/fdb"
 	"sync/atomic"
 )
 
