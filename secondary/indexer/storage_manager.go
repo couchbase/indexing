@@ -807,7 +807,8 @@ func (s *storageMgr) needSnapshot(streamId common.StreamId, bucket string,
 	if streamId == common.MAINT_STREAM && !isPersisted {
 		for _, inst := range s.indexInstMap {
 			if inst.Defn.Bucket == bucket &&
-				inst.State == common.INDEX_STATE_INITIAL {
+				inst.State == common.INDEX_STATE_INITIAL &&
+				inst.Stream == common.MAINT_STREAM {
 				return false
 			}
 		}
