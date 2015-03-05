@@ -74,12 +74,12 @@ func NewSettingsManager(supvCmdch MsgChannel,
 }
 
 func (s *settingsManager) writeOk(w http.ResponseWriter) {
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK\n"))
 }
 
 func (s *settingsManager) writeError(w http.ResponseWriter, err error) {
-	w.WriteHeader(400)
+	w.WriteHeader(http.StatusBadRequest)
 	w.Write([]byte(err.Error() + "\n"))
 }
 
@@ -92,6 +92,16 @@ func (s *settingsManager) writeJson(w http.ResponseWriter, json []byte) {
 }
 
 func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Request) {
+	valid, err := common.IsAuthValid(r, s.config["indexer.clusterAddr"].String())
+	if err != nil {
+		s.writeError(w, err)
+		return
+	} else if valid == false {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized\n"))
+		return
+	}
+
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
 

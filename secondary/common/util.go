@@ -8,6 +8,7 @@ import "net/url"
 import "os"
 import "strconv"
 import "strings"
+import "net/http"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
@@ -488,4 +489,21 @@ func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64) {
 		}
 	}
 	return seqnos, vbuuids
+}
+
+func IsAuthValid(r *http.Request, server string) (bool, error) {
+	auth := r.Header.Get("Authorization")
+	url := fmt.Sprintf("http://%s/pools", server)
+	if auth == "" {
+		return false, nil
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
+	client := http.Client{}
+	req.Header.Set("Authorization", auth)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	return resp.StatusCode == http.StatusOK, nil
 }
