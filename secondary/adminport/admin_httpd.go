@@ -117,8 +117,7 @@ func (s *httpServer) Register(msg MessageMarshaller) (err error) {
 
 // RegisterHandler is part of Server interface.
 func (s *httpServer) RegisterHTTPHandler(
-	path string,
-	handler func(http.ResponseWriter, *http.Request)) (err error) {
+	path string, handler interface{}) (err error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -127,8 +126,16 @@ func (s *httpServer) RegisterHTTPHandler(
 		logging.Errorf("%v can't register, server already started\n", s.logPrefix)
 		return ErrorRegisteringRequest
 	}
-	s.mux.HandleFunc(path, handler)
-	logging.Infof("%s registered %s\n", s.logPrefix, path)
+
+	switch handl := handler.(type) {
+	case http.Handler:
+		s.mux.Handle(path, handl)
+		logging.Infof("%s registered handler-obj %s\n", s.logPrefix, path)
+
+	case func(http.ResponseWriter, *http.Request):
+		s.mux.HandleFunc(path, handl)
+		logging.Infof("%s registered handler-func %s\n", s.logPrefix, path)
+	}
 	return
 }
 

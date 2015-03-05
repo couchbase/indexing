@@ -1,6 +1,7 @@
 package projector
 
 import "expvar"
+import "net/http/pprof"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -39,6 +40,19 @@ func (p *Projector) mainAdminPort(reqch chan ap.Request) {
 	p.admind.Register(reqStats)
 	p.admind.RegisterHTTPHandler("/stats", p.handleStats)
 	p.admind.RegisterHTTPHandler("/settings", p.handleSettings)
+
+	// debug pprof hanlders.
+	blockHandler := pprof.Handler("block")
+	grHandler := pprof.Handler("goroutine")
+	hpHandler := pprof.Handler("heap")
+	tcHandler := pprof.Handler("threadcreate")
+	profHandler := pprof.Handler("profile")
+	p.admind.RegisterHTTPHandler("/debug/pprof", pprof.Index)
+	p.admind.RegisterHTTPHandler("/debug/pprof/block", blockHandler)
+	p.admind.RegisterHTTPHandler("/debug/pprof/goroutine", grHandler)
+	p.admind.RegisterHTTPHandler("/debug/pprof/heap", hpHandler)
+	p.admind.RegisterHTTPHandler("/debug/pprof/threadcreate", tcHandler)
+	p.admind.RegisterHTTPHandler("/debug/pprof/profile", profHandler)
 
 	expvar.Publish("projector", expvar.Func(p.doStatistics))
 
