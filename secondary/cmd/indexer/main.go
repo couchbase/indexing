@@ -16,9 +16,9 @@ import (
 
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/indexer"
 	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbaselabs/goforestdb"
 )
 
 var (

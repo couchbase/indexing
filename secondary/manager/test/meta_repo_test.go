@@ -12,9 +12,9 @@ package test
 import (
 	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/indexing/secondary/common"
+	fdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
-	fdb "github.com/couchbaselabs/goforestdb"
 	"os"
 	"testing"
 	"time"

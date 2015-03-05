@@ -1,7 +1,7 @@
 package indexer
 
 import (
-	forestdb "github.com/couchbaselabs/goforestdb"
+	forestdb "github.com/couchbase/indexing/secondary/fdb"
 	"os"
 	"testing"
 )

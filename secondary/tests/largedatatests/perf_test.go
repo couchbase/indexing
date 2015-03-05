@@ -28,7 +28,7 @@ func SkipTestPerfInitialIndexBuild_SimpleJson(t *testing.T) {
 
 	log.Printf("Creating a 2i")
 	start := time.Now()
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, 1500)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, 1500, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 	elapsed := time.Since(start)
 	log.Printf("Index build of %d user documents took %s\n", count, elapsed)
@@ -51,7 +51,7 @@ func SkipTestPerfPrimaryIndexBuild_SimpleJson(t *testing.T) {
 
 	log.Printf("Creating a 2i")
 	start := time.Now()
-	err := secondaryindex.CreatePrimaryIndex(indexName, bucketName, indexManagementAddress, true)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", nil, true, nil, true, 1500, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 	elapsed := time.Since(start)
 	log.Printf("Index build of %d user documents took %s\n", count, elapsed)
@@ -82,7 +82,7 @@ func SkipTestPerfInitialIndexBuild_ComplexJson(t *testing.T) {
 
 	log.Printf("Creating a 2i")
 	start := time.Now()
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, 1500)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, 1500, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 	elapsed := time.Since(start)
 	log.Printf("Index build of %d user documents took %s\n", count, elapsed)
@@ -106,7 +106,7 @@ func SkipTestPerfRangeWithoutMutations_1M(t *testing.T) {
 
 	log.Printf("Creating a 2i")
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, 1500)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, 1500, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	start := time.Now()
@@ -134,7 +134,7 @@ func SkipTestPerfLookupWithoutMutations_1M(t *testing.T) {
 
 	log.Printf("Creating a 2i")
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, 1500)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, 1500, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	start := time.Now()
@@ -161,7 +161,7 @@ func SkipTestPerfScanAllWithoutMutations_1M(t *testing.T) {
 
 	log.Printf("Creating a 2i")
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, 1500)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, 1500, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	start := time.Now()
@@ -188,7 +188,7 @@ func SkipTestPerfRangeWithoutMutations_10M(t *testing.T) {
 	var bucketName = "default"
 
 	log.Printf("Creating a 2i")
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, 1500)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, 1500, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	start := time.Now()
@@ -217,7 +217,7 @@ func SkipTestPerfRangeWithConcurrentKVMuts(t *testing.T) {
 	var bucketName = "default"
 
 	log.Printf("Creating a 2i")
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, []string{"company"}, true, 1500)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, 1500, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	wg.Add(2)

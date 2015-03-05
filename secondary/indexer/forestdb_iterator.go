@@ -11,7 +11,7 @@ package indexer
 
 import (
 	"errors"
-	"github.com/couchbaselabs/goforestdb"
+	"github.com/couchbase/indexing/secondary/fdb"
 	"sync/atomic"
 )
 
@@ -28,6 +28,9 @@ type ForestDBIterator struct {
 func newFDBSnapshotIterator(s Snapshot) (*ForestDBIterator, error) {
 	var seq forestdb.SeqNum
 	fdbSnap := s.(*fdbSnapshot)
+	fdbSnap.lock.Lock()
+	defer fdbSnap.lock.Unlock()
+
 	if !fdbSnap.committed {
 		seq = FORESTDB_INMEMSEQ
 	} else {

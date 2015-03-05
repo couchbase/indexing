@@ -268,7 +268,7 @@ func (s *Coordinator) bootstrap(config string) (err error) {
 
 	// Initialize the state to enable voting
 	repoName := filepath.Join(s.basepath, COORDINATOR_CONFIG_STORE)
-	s.configRepo, err = r.OpenRepositoryWithName(repoName)
+	s.configRepo, err = r.OpenRepositoryWithName(repoName, s.idxMgr.GetMemoryQuota())
 	if err != nil {
 		return err
 	}

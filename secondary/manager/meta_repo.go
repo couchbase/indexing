@@ -16,8 +16,8 @@ import (
 	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
 	gometa "github.com/couchbase/gometa/server"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"net/rpc"
 	"strconv"
 	"strings"
@@ -102,9 +102,10 @@ func NewMetadataRepo(requestAddr string,
 func NewLocalMetadataRepo(msgAddr string,
 	eventMgr *eventManager,
 	reqHandler protocol.CustomRequestHandler,
-	repoName string) (*MetadataRepo, RequestServer, error) {
+	repoName string,
+	quota uint64) (*MetadataRepo, RequestServer, error) {
 
-	ref, err := newLocalRepoRef(msgAddr, eventMgr, reqHandler, repoName)
+	ref, err := newLocalRepoRef(msgAddr, eventMgr, reqHandler, repoName, quota)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -432,10 +433,11 @@ func (i *TopologyIterator) Close() {
 func newLocalRepoRef(msgAddr string,
 	eventMgr *eventManager,
 	reqHandler protocol.CustomRequestHandler,
-	repoName string) (*LocalRepoRef, error) {
+	repoName string,
+	quota uint64) (*LocalRepoRef, error) {
 
 	repoRef := &LocalRepoRef{eventMgr: eventMgr, notifier: nil}
-	server, err := gometa.RunEmbeddedServerWithCustomHandler(msgAddr, nil, reqHandler, repoName)
+	server, err := gometa.RunEmbeddedServerWithCustomHandler(msgAddr, nil, reqHandler, repoName, quota)
 	if err != nil {
 		return nil, err
 	}

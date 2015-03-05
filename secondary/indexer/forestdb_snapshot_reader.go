@@ -23,6 +23,9 @@ var (
 
 //Counter interface
 func (s *fdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	info, err := s.main.Info()
 	if err != nil {
 		return 0, err

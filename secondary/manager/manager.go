@@ -37,6 +37,7 @@ type IndexManager struct {
 	lifecycleMgr  *LifecycleMgr
 	requestServer RequestServer
 	basepath      string
+	quota         uint64
 	addrProvider  common.ServiceAddressProvider
 
 	// stream management
@@ -130,6 +131,7 @@ func NewIndexManagerInternal(
 	mgr = new(IndexManager)
 	mgr.isClosed = false
 	mgr.addrProvider = addrProvider
+	mgr.quota = config["settings.memory_quota"].Uint64()
 
 	// stream mgmt  - stream services will start if the indexer node becomes master
 	mgr.streamMgr = nil
@@ -166,7 +168,7 @@ func NewIndexManagerInternal(
 		return nil, err
 	}
 
-	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(adminPort, mgr.eventMgr, mgr.lifecycleMgr, repoName)
+	mgr.repo, mgr.requestServer, err = NewLocalMetadataRepo(adminPort, mgr.eventMgr, mgr.lifecycleMgr, repoName, mgr.quota)
 	if err != nil {
 		mgr.Close()
 		return nil, err
@@ -259,6 +261,10 @@ func (m *IndexManager) getServiceAddrProvider() common.ServiceAddressProvider {
 ///////////////////////////////////////////////////////
 // public function - Metadata Operation
 ///////////////////////////////////////////////////////
+
+func (m *IndexManager) GetMemoryQuota() uint64 {
+	return m.quota
+}
 
 func (m *IndexManager) RegisterNotifier(notifier MetadataNotifier) {
 	m.repo.RegisterNotifier(notifier)
