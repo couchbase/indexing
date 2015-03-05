@@ -571,11 +571,19 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	// Otherwise add into waiters list so that next snapshot creation event
 	// can notify the requester when a snapshot with matching timestamp
 	// is available.
-	is := s.indexSnapMap[req.GetIndexId()]
+	var snapTs *common.TsVbuuid
+	is, ok := s.indexSnapMap[req.GetIndexId()]
+	if !ok {
+		// No snapshot present and hence all vbseqs = 0
+		snapTs = common.NewTsVbuuid(inst.Defn.Bucket, s.config["numVbuckets"].Int())
+	} else {
+		snapTs = is.Timestamp()
+	}
+
 	// - If atleast-ts is nil and no snapshot is available, send nil ts
 	// - If atleast-ts is not-nil and no snapshot is available, wait until
 	// it is available.
-	if req.GetTS() == nil || is.Timestamp().AsRecent(req.GetTS()) {
+	if req.GetTS() == nil || snapTs.AsRecent(req.GetTS()) {
 		snap := CloneIndexSnapshot(is)
 		req.respch <- snap
 	} else {
