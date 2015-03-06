@@ -159,8 +159,8 @@ func (c *gsiScanClient) Lookup(
 
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		msg := "%v Scan() request transport failed `%v`\n"
-		logging.Errorf(msg, c.logPrefix, err)
+		fmsg := "%v Lookup() request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, err)
 		healthy = false
 		return err
 	}
@@ -170,8 +170,8 @@ func (c *gsiScanClient) Lookup(
 		// <--- protobuf.ResponseStream
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
 		if err != nil {
-			msg := "%v Scan() response failed `%v`\n"
-			logging.Errorf(msg, c.logPrefix, err)
+			fmsg := "%v Lookup() response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, err)
 		}
 	}
 	return err
@@ -220,8 +220,8 @@ func (c *gsiScanClient) Range(
 	}
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		msg := "%v Scan() request transport failed `%v`\n"
-		logging.Errorf(msg, c.logPrefix, err)
+		fmsg := "%v Range() request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, err)
 		healthy = false
 		return err
 	}
@@ -231,8 +231,8 @@ func (c *gsiScanClient) Range(
 		// <--- protobuf.ResponseStream
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
 		if err != nil {
-			msg := "%v Scan() response failed `%v`\n"
-			logging.Errorf(msg, c.logPrefix, err)
+			fmsg := "%v Range() response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, err)
 		}
 	}
 	return err
@@ -264,9 +264,8 @@ func (c *gsiScanClient) ScanAll(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
 	}
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		logging.Errorf(
-			"%v ScanAll() request transport failed `%v`\n",
-			c.logPrefix, err)
+		fmsg := "%v ScanAll() request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, err)
 		healthy = false
 		return err
 	}
@@ -276,8 +275,8 @@ func (c *gsiScanClient) ScanAll(
 		// <--- protobuf.ResponseStream
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
 		if err != nil {
-			msg := "%v ScanAll() response failed `%v`\n"
-			logging.Errorf(msg, c.logPrefix, err)
+			fmsg := "%v ScanAll() response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, err)
 		}
 	}
 	return err
@@ -364,8 +363,8 @@ func (c *gsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 
 	// ---> protobuf.*Request
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		msg := "%v %T request transport failed `%v`\n"
-		logging.Errorf(msg, c.logPrefix, req, err)
+		fmsg := "%v %T request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, req, err)
 		healthy = false
 		return nil, err
 	}
@@ -375,8 +374,8 @@ func (c *gsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 	// <--- protobuf.*Response
 	resp, err := pkt.Receive(conn)
 	if err != nil {
-		msg := "%v %T response transport failed `%v`\n"
-		logging.Errorf(msg, c.logPrefix, req, err)
+		fmsg := "%v %T response transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, req, err)
 		healthy = false
 		return nil, err
 	}
@@ -418,13 +417,13 @@ func (c *gsiScanClient) streamResponse(
 		callb(resp) // callback with error
 		cont, healthy = false, false
 		if err != io.EOF {
-			msg := "%v connection %q response transport failed `%v`\n"
-			logging.Errorf(msg, c.logPrefix, laddr, err)
+			fmsg := "%v connection %q response transport failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, laddr, err)
 		}
 
 	} else if endResp, finish = resp.(*protobuf.StreamEndResponse); finish {
-		msg := "%v connection %q received StreamEndResponse"
-		logging.Tracef(msg, c.logPrefix, laddr)
+		fmsg := "%v connection %q received StreamEndResponse"
+		logging.Tracef(fmsg, c.logPrefix, laddr)
 		callb(endResp) // callback most likely return true
 		cont, healthy = false, true
 
@@ -448,12 +447,12 @@ func (c *gsiScanClient) closeStream(
 	// request server to end the stream.
 	err = c.sendRequest(conn, pkt, &protobuf.EndStreamRequest{})
 	if err != nil {
-		msg := "%v closeStream() request transport failed `%v`\n"
-		logging.Errorf(msg, c.logPrefix, err)
+		fmsg := "%v closeStream() request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, err)
 		return
 	}
-	msg := "%v connection %q transmitted protobuf.EndStreamRequest"
-	logging.Tracef(msg, c.logPrefix, laddr)
+	fmsg := "%v connection %q transmitted protobuf.EndStreamRequest"
+	logging.Tracef(fmsg, c.logPrefix, laddr)
 
 	timeoutMs := c.readDeadline * time.Millisecond
 	// flush the connection until stream has ended.
@@ -465,8 +464,8 @@ func (c *gsiScanClient) closeStream(
 			return
 
 		} else if err != nil {
-			msg := "%v connection %q response transport failed `%v`\n"
-			logging.Errorf(msg, c.logPrefix, laddr, err)
+			fmsg := "%v connection %q response transport failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, laddr, err)
 			return
 
 		} else if _, ok := resp.(*protobuf.StreamEndResponse); ok {
