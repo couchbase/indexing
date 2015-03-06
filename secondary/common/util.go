@@ -468,22 +468,23 @@ func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64) {
 	seqnos = make([]uint64, maxvb)
 	vbuuids = make([]uint64, maxvb)
 	// for all nodes in cluster
-	for _, nodestat := range bucket.GetStats("vbucket-seqno") {
+	for _, nodestat := range bucket.GetStats("vbucket-details") {
 		// for all vbuckets
 		for i := 0; i < maxvb; i++ {
 			vbno_str := strconv.Itoa(i)
-			vbstatkey := "vb_" + vbno_str
-			if state, ok := nodestat[vbstatkey]; ok && state == "active" {
-				vbkey := "vb_" + vbno_str + ":high_seqno"
-				if highseqno, ok := nodestat[vbkey]; ok {
-					if s, err := strconv.Atoi(highseqno); err == nil {
+			vbstatekey := "vb_" + vbno_str
+			vbhseqkey := "vb_" + vbno_str + ":high_seqno"
+			vbuuidkey := "vb_" + vbno_str + ":uuid"
+			vbstate, ok := nodestat[vbstatekey]
+			highseqno_s, hseq_ok := nodestat[vbhseqkey]
+			vbuuid_s, uuid_ok := nodestat[vbuuidkey]
+			if ok && hseq_ok && uuid_ok && vbstate == "active" {
+				if s, err := strconv.Atoi(highseqno_s); err == nil {
+					if uint64(s) > seqnos[i] {
 						seqnos[i] = uint64(s)
-					}
-				}
-				vbkey = "vb_" + vbno_str + ":uuid"
-				if vbuuid, ok := nodestat[vbkey]; ok {
-					if uuid, err := strconv.Atoi(vbuuid); err == nil {
-						vbuuids[i] = uint64(uuid)
+						if uuid, err := strconv.Atoi(vbuuid_s); err == nil {
+							vbuuids[i] = uint64(uuid)
+						}
 					}
 				}
 			}
