@@ -1,6 +1,8 @@
 package secondaryindex
 
 import (
+	"errors"
+	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -138,7 +140,8 @@ func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeout
 	for {
 		elapsed := time.Since(start)
 		if elapsed.Seconds() >= float64(indexActiveTimeoutSeconds) {
-			break
+			err := errors.New(fmt.Sprintf("Index did not become active after %d seconds", indexActiveTimeoutSeconds))
+			return err
 		}
 		state, e := client.IndexState(defnID)
 		if e != nil {
