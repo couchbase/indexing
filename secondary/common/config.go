@@ -294,9 +294,9 @@ var SystemConfig = Config{
 		2,
 	},
 	"queryport.client.retryIntervalScanport": ConfigValue{
-		1,
+		10,
 		"wait, in milliseconds, before re-trying for a scanport",
-		1,
+		10,
 	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
