@@ -140,7 +140,7 @@ func (c *gsiScanClient) Lookup(
 		return err
 	}
 	healthy := true
-	defer c.pool.Return(connectn, healthy)
+	defer func() { c.pool.Return(connectn, healthy) }()
 
 	conn, pkt := connectn.conn, connectn.pkt
 
@@ -174,7 +174,7 @@ func (c *gsiScanClient) Lookup(
 			logging.Errorf(msg, c.logPrefix, err)
 		}
 	}
-	return nil
+	return err
 }
 
 // Range scan index between low and high.
@@ -198,7 +198,7 @@ func (c *gsiScanClient) Range(
 		return err
 	}
 	healthy := true
-	defer c.pool.Return(connectn, healthy)
+	defer func() { c.pool.Return(connectn, healthy) }()
 
 	conn, pkt := connectn.conn, connectn.pkt
 
@@ -235,7 +235,7 @@ func (c *gsiScanClient) Range(
 			logging.Errorf(msg, c.logPrefix, err)
 		}
 	}
-	return nil
+	return err
 }
 
 // ScanAll for full table scan.
@@ -249,7 +249,7 @@ func (c *gsiScanClient) ScanAll(
 		return err
 	}
 	healthy := true
-	defer c.pool.Return(connectn, healthy)
+	defer func() { c.pool.Return(connectn, healthy) }()
 
 	conn, pkt := connectn.conn, connectn.pkt
 
@@ -273,13 +273,14 @@ func (c *gsiScanClient) ScanAll(
 
 	cont := true
 	for cont {
+		// <--- protobuf.ResponseStream
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
 		if err != nil {
 			msg := "%v ScanAll() response failed `%v`\n"
 			logging.Errorf(msg, c.logPrefix, err)
 		}
 	}
-	return nil
+	return err
 }
 
 // CountLookup to count number entries for given set of keys.
@@ -357,7 +358,7 @@ func (c *gsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 		return nil, err
 	}
 	healthy := true
-	defer c.pool.Return(connectn, healthy)
+	defer func() { c.pool.Return(connectn, healthy) }()
 
 	conn, pkt := connectn.conn, connectn.pkt
 
@@ -384,6 +385,7 @@ func (c *gsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 	// <--- protobuf.StreamEndResponse (skipped) TODO: knock this off.
 	endResp, err := pkt.Receive(conn)
 	if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
+		healthy = false
 		return nil, ErrorProtocol
 	}
 	return resp, nil
