@@ -267,14 +267,14 @@ var SystemConfig = Config{
 		4000,
 	},
 	"queryport.client.poolSize": ConfigValue{
-		2,
+		20,
 		"number simultaneous active connections connections in a pool",
-		2,
+		20,
 	},
 	"queryport.client.poolOverflow": ConfigValue{
-		4,
+		30,
 		"maximum number of connections in a pool",
-		4,
+		30,
 	},
 	"queryport.client.connPoolTimeout": ConfigValue{
 		1000,
