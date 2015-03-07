@@ -350,19 +350,19 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 		instList = append(instList, inst)
 
 		k := fmt.Sprintf("%s:%s:num_requests", inst.Defn.Bucket, inst.Defn.Name)
-		v := fmt.Sprint(*stat.Requests)
+		v := fmt.Sprint(atomic.LoadUint64(stat.Requests))
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:num_rows_returned", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(*stat.Rows)
+		v = fmt.Sprint(atomic.LoadUint64(stat.Rows))
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:scan_bytes_read", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(*stat.BytesRead)
+		v = fmt.Sprint(atomic.LoadUint64(stat.BytesRead))
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:total_scan_duration", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(*stat.ScanTime)
+		v = fmt.Sprint(atomic.LoadInt64(stat.ScanTime))
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:scan_wait_duration", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(*stat.WaitTime)
+		v = fmt.Sprint(atomic.LoadInt64(stat.WaitTime))
 		statsMap[k] = v
 
 		st := s.serv.Statistics()
@@ -567,7 +567,7 @@ func (s *scanCoordinator) requestHandler(
 
 	// Update statistics
 	s.mu.RLock()
-	(*s.scanStatsMap[indexInst.InstId].Requests)++
+	atomic.AddUint64(s.scanStatsMap[indexInst.InstId].Requests, 1)
 	s.mu.RUnlock()
 
 	p.indexName, p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
@@ -714,10 +714,10 @@ func (s *scanCoordinator) requestHandler(
 		}
 
 		s.mu.RLock()
-		(*s.scanStatsMap[indexInst.InstId].Rows) += rdr.ReturnedRows()
-		(*s.scanStatsMap[indexInst.InstId].BytesRead) += rdr.ReturnedBytes()
-		(*s.scanStatsMap[indexInst.InstId].ScanTime) += time.Now().Sub(startTime).Nanoseconds()
-		(*s.scanStatsMap[indexInst.InstId].WaitTime) += waitDuration.Nanoseconds()
+		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].Rows, rdr.ReturnedRows())
+		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].BytesRead, rdr.ReturnedBytes())
+		atomic.AddInt64(s.scanStatsMap[indexInst.InstId].ScanTime, time.Now().Sub(startTime).Nanoseconds())
+		atomic.AddInt64(s.scanStatsMap[indexInst.InstId].WaitTime, waitDuration.Nanoseconds())
 		s.mu.RUnlock()
 		logging.Infof("%v: SCAN_ID: %v finished scan (%s)", s.logPrefix, sd.scanId, status)
 	}
