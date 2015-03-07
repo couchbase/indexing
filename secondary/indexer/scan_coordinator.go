@@ -554,20 +554,21 @@ func (s *scanCoordinator) requestHandler(
 		indexInst, err = s.findIndexInstance(p.defnID)
 	}
 
-	// Update statistics
-	s.mu.RLock()
-	(*s.scanStatsMap[indexInst.InstId].Requests)++
-	s.mu.RUnlock()
-
 	if err == nil && indexInst.State != common.INDEX_STATE_ACTIVE {
 		err = ErrIndexNotReady
 	}
+
 	if err != nil {
 		logging.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
 		respch <- s.makeResponseMessage(sd, err)
 		close(respch)
 		return
 	}
+
+	// Update statistics
+	s.mu.RLock()
+	(*s.scanStatsMap[indexInst.InstId].Requests)++
+	s.mu.RUnlock()
 
 	p.indexName, p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
 	if p.ts != nil {
