@@ -336,6 +336,7 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 	statsMap := make(map[string]string)
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
+	var instList []common.IndexInst
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -345,6 +346,8 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 		if inst.State == common.INDEX_STATE_DELETED {
 			continue
 		}
+
+		instList = append(instList, inst)
 
 		k := fmt.Sprintf("%s:%s:num_requests", inst.Defn.Bucket, inst.Defn.Name)
 		v := fmt.Sprint(*stat.Requests)
@@ -364,19 +367,23 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 
 		st := s.serv.Statistics()
 		statsMap["num_connections"] = fmt.Sprint(st.Connections)
-
-		c, err := s.getItemsCount(instId)
-		if err == nil {
-			k := fmt.Sprintf("%s:%s:items_count", inst.Defn.Bucket, inst.Defn.Name)
-			v := fmt.Sprint(c)
-			statsMap[k] = v
-		} else {
-			logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
-				inst.Defn.Bucket, inst.Defn.Name, err)
-		}
 	}
 
-	replych <- statsMap
+	// Compute counts asynchronously and reply to stats request
+	go func() {
+		for _, inst := range instList {
+			c, err := s.getItemsCount(inst.InstId)
+			if err == nil {
+				k := fmt.Sprintf("%s:%s:items_count", inst.Defn.Bucket, inst.Defn.Name)
+				v := fmt.Sprint(c)
+				statsMap[k] = v
+			} else {
+				logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
+					inst.Defn.Bucket, inst.Defn.Name, err)
+			}
+		}
+		replych <- statsMap
+	}()
 }
 
 func (s *scanCoordinator) run() {
