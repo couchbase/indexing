@@ -245,8 +245,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	// Setup http server
+	addr := net.JoinHostPort("", idx.config["httpPort"].String())
+	logging.PeriodicProfile(addr, "goroutine")
 	go func() {
-		addr := net.JoinHostPort("", idx.config["httpPort"].String())
 		if err := http.ListenAndServe(addr, nil); err != nil {
 			logging.Errorf("indexer:: Error Starting Http Server: %v", err)
 			common.CrashOnError(err)
@@ -255,7 +256,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	//start the main indexer loop
 	idx.run()
-
 	return idx, &MsgSuccess{}
 
 }

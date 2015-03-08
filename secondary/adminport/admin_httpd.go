@@ -200,6 +200,8 @@ func (s *httpServer) Start() (err error) {
 			logging.Errorf("%s %v\n", s.logPrefix, err)
 		}
 	}()
+
+	logging.PeriodicProfile(s.srv.Addr, "goroutine")
 	return
 }
 

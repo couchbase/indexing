@@ -346,6 +346,7 @@ func HandleCommand(
 		}
 		host, sport, _ := net.SplitHostPort(adminurl)
 		iport, _ := strconv.Atoi(sport)
+		client := http.Client{}
 
 		//
 		// hack, fix this
@@ -353,7 +354,13 @@ func HandleCommand(
 		ihttp := iport + 2
 		url := "http://" + host + ":" + strconv.Itoa(ihttp) + "/settings"
 
-		oresp, err := http.Get(url)
+		oreq, err := http.NewRequest("GET", url, nil)
+		if cmd.Auth != "" {
+			up := strings.Split(cmd.Auth, ":")
+			oreq.SetBasicAuth(up[0], up[1])
+		}
+
+		oresp, err := client.Do(oreq)
 		if err != nil {
 			return err
 		}
@@ -380,13 +387,16 @@ func HandleCommand(
 			if err != nil {
 				return err
 			}
-			_, err = http.Post(url, "text/json", bytes.NewBuffer(pbody))
+			preq, err := http.NewRequest("POST", url, bytes.NewBuffer(pbody))
+			if cmd.Auth != "" {
+				up := strings.Split(cmd.Auth, ":")
+				preq.SetBasicAuth(up[0], up[1])
+			}
+			_, err = client.Do(preq)
 			if err != nil {
 				return err
 			}
-
-			fmt.Printf("New Settings:\n%s\n", string(pretty))
-			nresp, err := http.Get(url)
+			nresp, err := client.Do(oreq)
 			if err != nil {
 				return err
 			}

@@ -7,6 +7,8 @@ import "strings"
 import "time"
 import "bytes"
 import "strconv"
+import "net/http"
+import "io/ioutil"
 import "runtime"
 import "runtime/debug"
 import l "log"
@@ -174,6 +176,44 @@ func (log *destination) SetLogLevel(to LogLevel) {
 // Get stack trace
 func (log *destination) StackTrace() string {
 	return log.getStackTrace(2, debug.Stack())
+}
+
+// Get profiling info
+func Profile(port string, endpoints ...string) func() string {
+	if strings.HasPrefix(port, ":") {
+		port = port[1:]
+	}
+	return func() string {
+		var buf bytes.Buffer
+		for _, endpoint := range endpoints {
+			addr := fmt.Sprintf("http://localhost:%s/debug/pprof/%s?debug=1", port, endpoint)
+			resp, err := http.Get(addr)
+			if err != nil {
+				continue
+			}
+			defer resp.Body.Close()
+			body, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				continue
+			}
+			buf.Write(body)
+		}
+		return buf.String()
+	}
+}
+
+// Dump profiling info periodically
+func PeriodicProfile(port string, endpoints ...string) {
+	profiler := Profile(port, endpoints...)
+	tick := time.NewTicker(60 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-tick.C:
+				LazyDebug(profiler)
+			}
+		}
+	}()
 }
 
 // Run function only if output will be logged at debug level
