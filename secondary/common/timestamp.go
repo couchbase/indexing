@@ -28,6 +28,7 @@ type TsVbuuid struct {
 	Vbuuids   []uint64
 	Snapshots [][2]uint64
 	Persisted bool
+	LargeSnap bool
 }
 
 // NewTsVbuuid returns reference to new instance of TsVbuuid.
@@ -113,6 +114,16 @@ func (ts *TsVbuuid) SetPersisted(persist bool) {
 	ts.Persisted = persist
 }
 
+//HasLargeSnapshot returns the value of largeSnap flag
+func (ts *TsVbuuid) HasLargeSnapshot() bool {
+	return ts.LargeSnap
+}
+
+//SetLargeSnapshot sets the largeSnap flag
+func (ts *TsVbuuid) SetLargeSnapshot(largeSnap bool) {
+	ts.LargeSnap = largeSnap
+}
+
 // Copy will return a clone of this timestamp.
 func (ts *TsVbuuid) Copy() *TsVbuuid {
 	newTs := NewTsVbuuid(ts.Bucket, len(ts.Seqnos))
@@ -120,6 +131,7 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 	copy(newTs.Vbuuids, ts.Vbuuids)
 	copy(newTs.Snapshots, ts.Snapshots)
 	newTs.Persisted = ts.Persisted
+	newTs.LargeSnap = ts.LargeSnap
 	return newTs
 }
 
@@ -235,4 +247,20 @@ func (ts *TsVbuuid) Diff(other *TsVbuuid) string {
 	}
 
 	return buf.String()
+}
+
+//check if seqnum of all vbuckets are aligned with the snapshot end
+func (ts *TsVbuuid) IsSnapAligned() bool {
+
+	if ts == nil {
+		return false
+	}
+
+	for i, s := range ts.Snapshots {
+		if ts.Seqnos[i] != s[1] {
+			return false
+		}
+	}
+	return true
+
 }

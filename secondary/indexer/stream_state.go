@@ -311,6 +311,23 @@ func (ss *StreamState) checkAllStreamBeginsReceived(streamId common.StreamId,
 	return true
 }
 
+//checks snapshot markers have been received for all vbuckets where
+//the buildTs is non-nil.
+func (ss *StreamState) checkAllSnapMarkersReceived(streamId common.StreamId,
+	bucket string, buildTs Timestamp) bool {
+
+	ts := ss.streamBucketHWTMap[streamId][bucket]
+
+	//all snapshot markers should be present, except if buildTs has 0
+	//seqnum for the vbucket
+	for i, s := range ts.Snapshots {
+		if s[1] == 0 && buildTs[i] != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 //checks if the given bucket in this stream has any flush in progress
 func (ss *StreamState) checkAnyFlushPending(streamId common.StreamId,
 	bucket string) bool {
@@ -395,8 +412,7 @@ func (ss *StreamState) checkNewTSDue(streamId common.StreamId, bucket string) bo
 	maxSyncCount := snapInterval / syncPeriod
 
 	if bucketSyncCountMap[bucket] >= maxSyncCount &&
-		bucketNewTsReqd[bucket] == true &&
-		ss.checkAllStreamBeginsReceived(streamId, bucket) == true {
+		bucketNewTsReqd[bucket] == true {
 		return true
 	}
 	return false
@@ -428,11 +444,25 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 		ss.streamBucketInMemTsCountMap[streamId][bucket]++
 	}
 
+	ss.checkLargeSnapshot(tsVbuuid)
+
 	//reset state for next TS
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
 	ss.streamBucketSyncCountMap[streamId][bucket] = 0
 
 	return tsVbuuid
+}
+
+//check for presence of large snapshot in a TS and set the flag
+func (ss *StreamState) checkLargeSnapshot(ts *common.TsVbuuid) {
+
+	for _, s := range ts.Snapshots {
+		if s[1]-s[0] > largeSnapshotThreshold {
+			ts.SetLargeSnapshot(true)
+			return
+		}
+	}
+
 }
 
 func (ss *StreamState) canFlushNewTS(streamId common.StreamId,

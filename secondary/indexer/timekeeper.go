@@ -23,7 +23,8 @@ import (
 )
 
 const (
-	maxStatsRetries = 5
+	maxStatsRetries        = 5
+	largeSnapshotThreshold = 200
 )
 
 //Timekeeper manages the Stability Timestamp Generation and also
@@ -1127,9 +1128,9 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 		//for. We may end up discarding one TS worth of mutations unnecessarily,
 		//but that is fine for now.
 		tsVbuuidHWT := tk.ss.streamBucketHWTMap[streamId][bucket]
-		tsHWT := getStabilityTSFromTsVbuuid(tsVbuuidHWT)
+		tsHWT := getSeqTsFromTsVbuuid(tsVbuuidHWT)
 
-		flushTs := getStabilityTSFromTsVbuuid(ts)
+		flushTs := getSeqTsFromTsVbuuid(ts)
 
 		//if HWT is greater than flush in progress TS, this means the flush
 		//in progress will finish.
@@ -1189,9 +1190,11 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 				initBuildDone = true
 			} else if flushTs == nil {
 				initBuildDone = false
+			} else if !flushTs.IsSnapAligned() {
+				initBuildDone = false
 			} else {
 				//check if the flushTS is greater than buildTS
-				ts := getStabilityTSFromTsVbuuid(flushTs)
+				ts := getSeqTsFromTsVbuuid(flushTs)
 				if ts.GreaterThanEqual(buildInfo.buildTs) {
 					initBuildDone = true
 				}
@@ -1245,6 +1248,13 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		return false
 	}
 
+	//if flushTs is not on snap boundary, merge cannot be done
+	if !flushTs.IsSnapAligned() {
+		logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tFlushTs Not Snapshot " +
+			"Snapshot Aligned. Continue both streams.")
+		return false
+	}
+
 	//INIT_STREAM cannot be merged to MAINT_STREAM if its not ACTIVE
 	if tk.ss.streamBucketStatus[common.MAINT_STREAM][bucket] != STREAM_ACTIVE {
 		logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tMAINT_STREAM in %v. "+
@@ -1288,8 +1298,8 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			if lastFlushedTsVbuuid == nil {
 				readyToMerge = true
 			} else {
-				lastFlushedTs := getStabilityTSFromTsVbuuid(lastFlushedTsVbuuid)
-				ts := getStabilityTSFromTsVbuuid(flushTs)
+				lastFlushedTs := getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
+				ts := getSeqTsFromTsVbuuid(flushTs)
 				if ts.GreaterThanEqual(lastFlushedTs) {
 					readyToMerge = true
 				}
@@ -1381,7 +1391,6 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	bucket string) {
 
 	if tk.ss.checkNewTSDue(streamId, bucket) {
-
 		tsVbuuid := tk.ss.getNextStabilityTS(streamId, bucket)
 
 		//persist TS which completes the build
@@ -1397,11 +1406,53 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			//store the ts in list
 			logging.Debugf("Timekeeper::generateNewStabilityTS \n\tAdding TS: %v to Pending "+
 				"List for Bucket: %v Stream: %v.", tsVbuuid, bucket, streamId)
-			tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
-			tsList.PushBack(tsVbuuid)
-			tk.drainQueueIfOverflow(streamId, bucket)
+
+			tk.maybeMergeTs(streamId, bucket, tsVbuuid)
+		}
+	} else {
+		tk.processPendingTS(streamId, bucket)
+	}
+
+}
+
+//merge a new Ts with one already pending for the stream-bucket,
+//if large snapshots are being processed
+func (tk *timekeeper) maybeMergeTs(streamId common.StreamId,
+	bucket string, newTs *common.TsVbuuid) {
+
+	tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
+	var lts *common.TsVbuuid
+	merge := false
+
+	//get the last generated but not yet processed timestamp
+	if tsList.Len() > 0 {
+		e := tsList.Back()
+		lts = e.Value.(*common.TsVbuuid)
+	}
+
+	//if either of the last generated or newTs has a large snapshot,
+	//merging is required
+	if lts != nil {
+		if lts.HasLargeSnapshot() || newTs.HasLargeSnapshot() {
+			merge = true
 		}
 	}
+
+	//when TS merge happens, all the pending TS in list are merged such that
+	//there is only a single TS in list which has all the latest snapshots seen
+	//by indexer.
+	if merge {
+		if lts.IsPersisted() {
+			newTs.SetPersisted(true)
+		}
+		if lts.HasLargeSnapshot() {
+			newTs.SetLargeSnapshot(true)
+		}
+		tsList.Init()
+	}
+
+	tsList.PushBack(newTs)
+
 }
 
 //processPendingTS checks if there is any pending TS for the given stream and
@@ -1419,7 +1470,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 	}
 
 	tsVbuuidHWT := tk.ss.streamBucketHWTMap[streamId][bucket]
-	tsHWT := getStabilityTSFromTsVbuuid(tsVbuuidHWT)
+	tsHWT := getSeqTsFromTsVbuuid(tsVbuuidHWT)
 
 	//if there are pending TS for this bucket, send New TS
 	bucketTsListMap := tk.ss.streamBucketTsListMap[streamId]
@@ -1428,7 +1479,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 		e := tsList.Front()
 		tsVbuuid := e.Value.(*common.TsVbuuid)
 		tsList.Remove(e)
-		ts := getStabilityTSFromTsVbuuid(tsVbuuid)
+		ts := getSeqTsFromTsVbuuid(tsVbuuid)
 
 		if tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
 			tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_DONE {
@@ -1464,19 +1515,51 @@ func (tk *timekeeper) sendNewStabilityTS(ts *common.TsVbuuid, bucket string,
 	logging.Tracef("Timekeeper::sendNewStabilityTS \n\tBucket: %v "+
 		"Stream: %v TS: %v", bucket, streamId, ts)
 
-	changeVec, noChange := tk.ss.computeTsChangeVec(streamId, bucket, ts)
+	flushTs := tk.maybeSplitTs(ts, bucket, streamId)
+
+	changeVec, noChange := tk.ss.computeTsChangeVec(streamId, bucket, flushTs)
 	if noChange {
 		return
 	}
 
-	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = ts
+	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = flushTs
 
 	go func() {
-		tk.supvRespch <- &MsgTKStabilityTS{ts: ts,
+		tk.supvRespch <- &MsgTKStabilityTS{ts: flushTs,
 			bucket:    bucket,
 			streamId:  streamId,
 			changeVec: changeVec}
 	}()
+}
+
+//splits a Ts if current HWT is less than Snapshot End for the vbucket.
+//It is important to send TS to flusher only upto the HWT as that's the
+//only guaranteed seqno that can be flushed.
+func (tk *timekeeper) maybeSplitTs(ts *common.TsVbuuid, bucket string,
+	streamId common.StreamId) *common.TsVbuuid {
+
+	hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
+
+	var newTs *common.TsVbuuid
+	for i, s := range ts.Snapshots {
+
+		//process upto hwt or snapEnd, whichever is lower
+		if hwt.Seqnos[i] < s[1] {
+			if newTs == nil {
+				newTs = ts.Copy()
+				newTs.SetPersisted(false)
+			}
+			newTs.Seqnos[i] = hwt.Seqnos[i]
+		}
+	}
+
+	if newTs != nil {
+		tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
+		tsList.PushFront(ts)
+		return newTs
+	} else {
+		return ts
+	}
 }
 
 //changeIndexStateForBucket changes the state of all indexes in the given bucket
@@ -1544,36 +1627,13 @@ func getStabilityTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 }
 
 //helper function to extract Seqnum Timestamp from TsVbuuid
-func getTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
+func getSeqTsFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 	numVbuckets := len(tsVbuuid.Snapshots)
 	ts := NewTimestamp(numVbuckets)
 	for i, s := range tsVbuuid.Seqnos {
 		ts[i] = Seqno(s)
 	}
 	return ts
-}
-
-//if there are more mutations in this queue than configured,
-//drain the queue
-func (tk *timekeeper) drainQueueIfOverflow(streamId common.StreamId, bucket string) {
-
-	if !tk.ss.streamBucketDrainEnabledMap[streamId][bucket] {
-		return
-	}
-
-	switch streamId {
-
-	case common.MAINT_STREAM:
-		//TODO
-
-		//if the number of mutation are more than configured
-
-		//if stream is in PREPARE_RECOVERY, nothing to do
-
-		//if RECOVERY, drain on TS from queue
-
-		//if stream is in ACTIVE state, flush the queue
-	}
 }
 
 func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
@@ -1958,7 +2018,7 @@ func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
 			idx.State == common.INDEX_STATE_INITIAL {
 
 			//if flushTs is greater than or equal to buildTs
-			ts := getStabilityTSFromTsVbuuid(flushTs)
+			ts := getSeqTsFromTsVbuuid(flushTs)
 			if ts.GreaterThanEqual(buildInfo.buildTs) {
 				return true
 			}

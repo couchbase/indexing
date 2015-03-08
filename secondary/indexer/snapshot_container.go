@@ -76,11 +76,11 @@ func (sc *snapshotInfoContainer) RemoveOldest() error {
 //which are more recent than the given timestamp. The snaphots
 //being removed are closed as well.
 func (sc *snapshotInfoContainer) RemoveRecentThanTS(tsVbuuid *common.TsVbuuid) error {
-	ts := getStabilityTSFromTsVbuuid(tsVbuuid)
+	ts := getSeqTsFromTsVbuuid(tsVbuuid)
 	for e := sc.snapshotList.Front(); e != nil; e = e.Next() {
 		snapshot := e.Value.(SnapshotInfo)
 		snapTsVbuuid := snapshot.Timestamp()
-		snapTs := getStabilityTSFromTsVbuuid(snapTsVbuuid)
+		snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
 		if snapTs.GreaterThan(ts) {
 			sc.snapshotList.Remove(e)
 		}
@@ -131,11 +131,11 @@ func (sc *snapshotInfoContainer) GetOldest() SnapshotInfo {
 //GetEqualToTS returns the snapshot from container matching the
 //given timestamp or nil if its not able to find any match
 func (sc *snapshotInfoContainer) GetEqualToTS(tsVbuuid *common.TsVbuuid) SnapshotInfo {
-	ts := getStabilityTSFromTsVbuuid(tsVbuuid)
+	ts := getSeqTsFromTsVbuuid(tsVbuuid)
 	for e := sc.snapshotList.Front(); e != nil; e = e.Next() {
 		snapshot := e.Value.(SnapshotInfo)
 		snapTsVbuuid := snapshot.Timestamp()
-		snapTs := getStabilityTSFromTsVbuuid(snapTsVbuuid)
+		snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
 		if ts.Equals(snapTs) {
 			return snapshot
 		}
@@ -147,11 +147,11 @@ func (sc *snapshotInfoContainer) GetEqualToTS(tsVbuuid *common.TsVbuuid) Snapsho
 //GetOlderThanTS returns a snapshot which is older than the
 //given TS or atleast equal. Returns nil if its not able to find any match
 func (sc *snapshotInfoContainer) GetOlderThanTS(tsVbuuid *common.TsVbuuid) SnapshotInfo {
-	ts := getStabilityTSFromTsVbuuid(tsVbuuid)
+	ts := getSeqTsFromTsVbuuid(tsVbuuid)
 	for e := sc.snapshotList.Front(); e != nil; e = e.Next() {
 		snapshot := e.Value.(SnapshotInfo)
 		snapTsVbuuid := snapshot.Timestamp()
-		snapTs := getStabilityTSFromTsVbuuid(snapTsVbuuid)
+		snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
 		if ts.GreaterThanEqual(snapTs) {
 			return snapshot
 		} else {
