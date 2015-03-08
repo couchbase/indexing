@@ -171,33 +171,48 @@ func TestCreateDropCreate(t *testing.T) {
 	var indexName = "index_cdc"
 	var bucketName = "default"
 
+	// Create an index
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
+	// Scan after index create
 	docScanResults := datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 2)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 2, true, defaultlimit, c.SessionConsistency, nil)
-	FailTestIfError(err, "Error in scan 1", t)
+	FailTestIfError(err, "Error in scan 1: ", t)
 	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
+	FailTestIfError(err, "Error in scan 1 result validation: ", t)
 
+	// Drop the created index
 	err = secondaryindex.DropSecondaryIndex(indexName, bucketName, indexManagementAddress)
 
+	// Scan after dropping the index. Error expected
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "BIOSPAN", "ZILLANET", 0)
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"BIOSPAN"}, []interface{}{"ZILLANET"}, 0, true, defaultlimit, c.SessionConsistency, nil)
 	if err == nil {
-		t.Fatal("Error excpected when scanning for dropped index but scan didnt fail \n")
+		t.Fatal("Scan 2: Error excpected when scanning for dropped index but scan didnt fail \n")
 	} else {
-		log.Printf("Scan failed as expected with error: %v\n", err)
+		log.Printf("Scan 2 failed as expected with error: %v\n", err)
 	}
 
+	// Create the same index again
 	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
+	// Scan the created index with inclusion 1
 	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 1)
-	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 3, true, defaultlimit, c.SessionConsistency, nil)
-	FailTestIfError(err, "Error in scan 2", t)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan 3: ", t)
 	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
+	FailTestIfError(err, "Error in scan 3 result validation: ", t)
+	log.Printf("(Inclusion 1) Lengths of expected and actual scan results are %d and %d. Num of docs in bucket = %d", len(docScanResults), len(scanResults), len(docs))
+
+	// Scan the created index with inclusion 3
+	docScanResults = datautility.ExpectedScanResponse_string(docs, "company", "FI", "SR", 3)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"FI"}, []interface{}{"SR"}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan 4: ", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan 4 result validation: ", t)
+	log.Printf("(Inclusion 3) Lengths of expected and actual scan results are %d and %d. Num of docs in bucket = %d", len(docScanResults), len(scanResults), len(docs))
 }
 
 func TestCreate2Drop1Scan2(t *testing.T) {
