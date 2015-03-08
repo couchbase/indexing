@@ -98,7 +98,7 @@ sed 's/^--- PASS: \(.*\) (\(.*\) seconds)$/\1 \2/;tx;d;:x' $WORKSPACE/test.log |
 # Integration tests
 echo "</pre><h3>Integration tests</h3><pre>"
 cd $WORKSPACE/testrunner
-(make test-2i-integrations-tests 2>&1) | tee -a $WORKSPACE/test.log
+(timeout 1h make test-2i-integrations-tests 2>&1) | tee -a $WORKSPACE/test.log
 stop_cluster
 
 # Verify results
