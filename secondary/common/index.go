@@ -57,10 +57,8 @@ const (
 type IndexType string
 
 const (
-	View     IndexType = "View"
-	Llrb               = "Llrb"
-	LevelDB            = "LevelDB"
-	ForestDB           = "ForestDB"
+	ForestDB = "forestdb"
+	MemDB    = "memdb"
 )
 
 type IndexState int

@@ -1535,17 +1535,8 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 		logging.Infof("Indexer::initPartnInstance Initialized Partition: \n\t Index: %v Partition: %v",
 			indexInst.InstId, partnInst)
 
-		storage_dir := idx.config["storage_dir"].String()
-		os.Mkdir(storage_dir, 0755)
-		if _, e := os.Stat(storage_dir); e != nil {
-			common.CrashOnError(e)
-		}
-		path := filepath.Join(storage_dir, IndexPath(&indexInst, SliceId(0)))
 		//add a single slice per partition for now
-		if slice, err := NewForestDBSlice(path,
-			0, indexInst.Defn.DefnId, indexInst.InstId,
-			indexInst.Defn.IsPrimary, idx.config); err == nil {
-
+		if slice, err := NewSlice(SliceId(0), &indexInst, idx.config); err == nil {
 			partnInst.Sc.AddSlice(0, slice)
 			logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
 				indexInst.InstId, slice)
@@ -3052,4 +3043,23 @@ func (idx *indexer) handleStats(cmd Message) {
 	replych := req.GetReplyChannel()
 	statsMap["needs_restart"] = idx.needsRestart
 	replych <- statsMap
+}
+
+func NewSlice(id SliceId, indInst *common.IndexInst,
+	conf common.Config) (slice Slice, err error) {
+
+	if indInst.Defn.Using == common.MemDB {
+		slice, err = NewMemDBSlice(id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf)
+	} else {
+		// Default storage is forestdb
+		storage_dir := conf["storage_dir"].String()
+		os.Mkdir(storage_dir, 0755)
+		if _, e := os.Stat(storage_dir); e != nil {
+			common.CrashOnError(e)
+		}
+		path := filepath.Join(storage_dir, IndexPath(indInst, id))
+		slice, err = NewForestDBSlice(path, id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf)
+	}
+
+	return
 }
