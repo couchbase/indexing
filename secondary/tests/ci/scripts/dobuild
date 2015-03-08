@@ -114,22 +114,22 @@ else
   echo "none"
 fi
 
-cd ${WORKSPACE}
+cd $WORKSPACE
 PRODUCT_VERSION=${RELEASE}-${BLD_NUM}-rel
 rm -f *.rpm *.deb
 rm -rf ~/rpmbuild
-rm -rf ${WORKSPACE}/voltron/build/deb
+rm -rf $WORKSPACE/voltron/build/deb
 rm -rf /opt/couchbase/*
 find goproj godeps -name \*.a -print0 | xargs -0 rm -f
 
-cd ${WORKSPACE}
+cd $WORKSPACE
 mkdir -p build
 cd build
 
 echo "Building main product"
 cmake -D CMAKE_INSTALL_PREFIX=/opt/couchbase \
       -D CMAKE_PREFIX_PATH=/opt/couchbase \
-      -D CMAKE_BUILD_TYPE=Release \
+      -D CMAKE_BUILD_TYPE=Debug \
       -D PRODUCT_VERSION=${PRODUCT_VERSION} \
       -D BUILD_ENTERPRISE=TRUE \
       -D CB_DOWNLOAD_DEPS=1 \
@@ -140,28 +140,30 @@ test $? -eq 0 || error_exit "Main build"
 make install 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Making Install"
 
-cd ${WORKSPACE}
+cd $WORKSPACE
 repo manifest -r > current.xml
 
-cd ${WORKSPACE}/voltron
+cd $WORKSPACE/voltron
 make PRODUCT_VERSION=${PRODUCT_VERSION} LICENSE=LICENSE-enterprise.txt \
-     BUILD_DIR=${WORKSPACE} \
-     TOPDIR=${WORKSPACE}/voltron build-filter overlay 1>>$WORKSPACE/make.log 2>&1
+     BUILD_DIR=$WORKSPACE \
+     TOPDIR=$WORKSPACE/voltron build-filter overlay 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Make overlay"
 
-cp -R server-overlay-deb/* /opt/couchbase
+cd $WORKSPACE/voltron
+cp -R server-overlay-deb/common/* /opt/couchbase
 PRODUCT_VERSION=${PRODUCT_VERSION} LD_LIBRARY_PATH=/opt/couchbase/lib \
    ./server-deb.rb /opt/couchbase couchbase-server couchbase server 1.0.0 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Packaging installer"
-mv build/deb/*.deb ${WORKSPACE}/installer.deb
+cd $WORKSPACE/voltron/build/deb/
+tar cf $WORKSPACE/installer.tar couchbase*.deb 1>/dev/null 2>&1
 
-echo "Base Manifest:" >> ${WORKSPACE}/versions.cfg
-cd $WORKSPACE/voltron/build/deb/couchbase-server_$RELEASE-$BLD_NUM/opt/couchbase
-cat manifest.xml >> ${WORKSPACE}/versions.cfg
+echo "Base Manifest:" >> $WORKSPACE/versions.cfg
+cd $WORKSPACE/voltron/build/deb/couchbase-server_${RELEASE}-${BLD_NUM}/opt/couchbase
+cat manifest.xml >> $WORKSPACE/versions.cfg
 
-echo "Actual Versions:" >> ${WORKSPACE}/versions.cfg
+echo "Actual Versions:" >> $WORKSPACE/versions.cfg
 cd $WORKSPACE
-repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' >> ${WORKSPACE}/versions.cfg
+repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' >> $WORKSPACE/versions.cfg
 
 chmod a+r /var/www/*
 
