@@ -354,9 +354,14 @@ func (feed *DcpFeed) doDcpGetFailoverLog(
 			Key:    pkt.Key,
 			Body:   pkt.Body,
 		}
-		if req.Opcode != transport.DCP_FAILOVERLOG || req.Status != transport.SUCCESS {
-			fmsg := "%v unexpected #opcode %v"
+		if req.Opcode != transport.DCP_FAILOVERLOG {
+			fmsg := "%v for failover log request unexpected #opcode %v"
 			logging.Errorf(fmsg, feed.logPrefix, req.Opcode)
+			return nil, ErrorInvalidFeed
+
+		} else if req.Status != transport.SUCCESS {
+			fmsg := "%v for failover log request unexpected #status %v"
+			logging.Errorf(fmsg, feed.logPrefix, req.Status)
 			return nil, ErrorInvalidFeed
 		}
 		flog, err := parseFailoverLog(req.Body)
