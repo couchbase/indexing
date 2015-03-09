@@ -519,9 +519,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.settings.log_level": ConfigValue{
-		"info",
+		"debug",
 		"Projector logging level",
-		"info",
+		"debug",
 		false, // mutable
 	},
 	"projector.settings.log_override": ConfigValue{
