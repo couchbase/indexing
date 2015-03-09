@@ -20,7 +20,6 @@ var options struct {
 	adminport   string
 	numVbuckets int
 	kvaddrs     string
-	colocate    bool
 	logFile     string
 	auth        string
 	loglevel    string
@@ -33,8 +32,6 @@ func argParse() string {
 		"maximum number of vbuckets configured.")
 	flag.StringVar(&options.kvaddrs, "kvaddrs", "127.0.0.1:12000",
 		"comma separated list of kvaddrs")
-	flag.BoolVar(&options.colocate, "colocate", true,
-		"whether projector will be colocated with KV")
 	flag.StringVar(&options.logFile, "logFile", "",
 		"output logs to file default is stdout")
 	flag.StringVar(&options.loglevel, "logLevel", "Info",
@@ -78,10 +75,6 @@ func main() {
 		config.SetValue("log.file", f.Name())
 	}
 	config.SetValue("projector.clusterAddr", cluster)
-	if options.colocate == false {
-		logging.Fatalf("Only colocation policy is supported for now!\n")
-	}
-	config.SetValue("projector.colocate", options.colocate)
 	config.SetValue("projector.adminport.listenAddr", options.adminport)
 
 	// setup cbauth
@@ -92,8 +85,7 @@ func main() {
 		}
 	}
 
-	econf := c.SystemConfig.SectionConfig("endpoint.dataport.", true)
-	epfactory := NewEndpointFactory(cluster, options.numVbuckets, econf)
+	epfactory := NewEndpointFactory(cluster, options.numVbuckets)
 	config.SetValue("projector.routerEndpointFactory", epfactory)
 
 	go c.ExitOnStdinClose()
@@ -102,14 +94,12 @@ func main() {
 }
 
 // NewEndpointFactory to create endpoint instances based on config.
-func NewEndpointFactory(
-	cluster string, numVbuckets int, econf c.Config) c.RouterEndpointFactory {
+func NewEndpointFactory(cluster string, nvbs int) c.RouterEndpointFactory {
 
-	return func(topic, endpointType, addr string) (c.RouterEndpoint, error) {
+	return func(topic, endpointType, addr string, config c.Config) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":
-			return dataport.NewRouterEndpoint(
-				cluster, topic, addr, numVbuckets, econf)
+			return dataport.NewRouterEndpoint(cluster, topic, addr, nvbs, config)
 		default:
 			logging.Fatalf("Unknown endpoint type\n")
 		}

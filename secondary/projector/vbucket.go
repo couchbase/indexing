@@ -73,7 +73,7 @@ const (
 	vrCmdAddEngines
 	vrCmdDeleteEngines
 	vrCmdGetStatistics
-	vrCmdSetConfig
+	vrCmdResetConfig
 	vrCmdClose
 )
 
@@ -117,10 +117,10 @@ func (vr *VbucketRoutine) GetStatistics() (map[string]interface{}, error) {
 	return resp[0].(map[string]interface{}), nil
 }
 
-// SetConfig for vbucket-routine.
-func (vr *VbucketRoutine) SetConfig(config c.Config) error {
+// ResetConfig for vbucket-routine.
+func (vr *VbucketRoutine) ResetConfig(config c.Config) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{vrCmdSetConfig, config, respch}
+	cmd := []interface{}{vrCmdResetConfig, config, respch}
 	_, err := c.FailsafeOp(vr.reqch, respch, cmd, vr.finch)
 	return err
 }
@@ -219,7 +219,7 @@ loop:
 				stats.Set("mutations", mutationCount)
 				respch <- []interface{}{stats.ToMap()}
 
-			case vrCmdSetConfig:
+			case vrCmdResetConfig:
 				config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
 				vr.syncTimeout = time.Duration(config["vbucketSyncTimeout"].Int())
 				vr.syncTimeout *= time.Millisecond

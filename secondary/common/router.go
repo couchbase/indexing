@@ -45,16 +45,16 @@ type Router interface {
 // RouterEndpointFactory will create a new endpoint instance for
 // {topic, remote-address}
 type RouterEndpointFactory func(
-	topic, endpointType, raddr string) (RouterEndpoint, error)
+	topic, endpointType, raddr string, econfig Config) (RouterEndpoint, error)
 
 // RouterEndpoint abstracts downstream for feed.
 type RouterEndpoint interface {
 	// Ping will check whether endpoint is active, synchronous call.
 	Ping() bool
 
-	// SetConfig will live update configuration parameters for endpoint,
+	// ResetConfig will live update configuration parameters for endpoint,
 	// synchronous call.
-	SetConfig(config Config) error
+	ResetConfig(config Config) error
 
 	// Send will post data to endpoint client, asynchronous call.
 	Send(data interface{}) error

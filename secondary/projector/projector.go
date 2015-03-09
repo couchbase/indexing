@@ -37,16 +37,28 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	p := &Projector{
 		topics: make(map[string]*Feed),
 		maxvbs: maxvbs,
-		config: config,
 	}
 
 	// Setup dynamic configuration propagation
 	config, err := c.GetSettingsConfig(config)
 	c.CrashOnError(err)
 
-	p.SetConfig(config)
+	pconfig := config.SectionConfig("projector.", true /*trim*/)
+	p.name = pconfig["name"].String()
+	p.clusterAddr = pconfig["clusterAddr"].String()
+	p.adminport = pconfig["adminport.listenAddr"].String()
+	ef := config["projector.routerEndpointFactory"]
+	config["projector.routerEndpointFactory"] = ef
+
+	p.config = config
+	p.ResetConfig(config)
+
+	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
+
 	callb := func(cfg c.Config) {
-		p.SetConfig(cfg)
+		logging.Infof("%v settings notifier from metakv\n", p.logPrefix)
+		cfg.LogConfig()
+		p.ResetConfig(cfg)
 	}
 	c.SetupSettingsNotifier(callb, make(chan struct{}))
 
@@ -54,15 +66,14 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	if !strings.HasPrefix(p.clusterAddr, "http://") {
 		cluster = "http://" + cluster
 	}
-	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
 
-	apConfig := p.config.SectionConfig("projector.adminport.", true)
+	apConfig := config.SectionConfig("projector.adminport.", true)
 	apConfig.SetValue("name", "PRAM")
 	reqch := make(chan ap.Request)
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
 
 	go p.mainAdminPort(reqch)
-	go p.watcherDameon(p.config["projector.watchInterval"].Int())
+	go p.watcherDameon(config["projector.watchInterval"].Int())
 	logging.Infof("%v started ...\n", p.logPrefix)
 	return p
 }
@@ -74,48 +85,36 @@ func (p *Projector) GetConfig() c.Config {
 	return p.config
 }
 
-// SetConfig accepts a full-set or subset of global configuration
+// ResetConfig accepts a full-set or subset of global configuration
 // and updates projector related fields.
-func (p *Projector) SetConfig(config c.Config) {
+func (p *Projector) ResetConfig(config c.Config) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	ef := p.config["projector.routerEndpointFactory"]
+	// reset configuration.
+	if cv, ok := config["projector.settings.log_level"]; ok {
+		logging.SetLogLevel(logging.Level(cv.String()))
+	}
+	if cv, ok := config["projector.settings.log_override"]; ok {
+		logging.AddOverride(cv.String())
+	}
+	if cv, ok := config["projector.maxCpuPercent"]; ok {
+		c.SetNumCPUs(cv.Int())
+	}
 	p.config = p.config.Override(config)
-
-	pconf := p.config.SectionConfig("projector.", true /*trim*/)
-	p.name = pconf["name"].String()
-	p.clusterAddr = pconf["clusterAddr"].String()
-	p.adminport = pconf["adminport.listenAddr"].String()
-	p.config["projector.routerEndpointFactory"] = ef // IMPORTANT: skip override
-
-	// update loglevel
-	level := p.config["projector.settings.log_level"].String()
-	logging.SetLogLevel(logging.Level(level))
-	override := p.config["projector.settings.log_override"].String()
-	logging.AddOverride(override)
-
-	// update cpu configuration
-	c.SetNumCPUs(config["projector.maxCpuPercent"].Int())
 }
 
 // GetFeedConfig from current configuration settings.
-func (p *Projector) GetFeedConfig(topic string) c.Config {
+func (p *Projector) GetFeedConfig() c.Config {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	config, _ := c.NewConfig(map[string]interface{}{})
-	pconf := p.config.SectionConfig("projector.", true /*trim*/)
-	config.SetValue("maxVbuckets", p.maxvbs)
-	config.Set("clusterAddr", pconf["clusterAddr"])
-	config.Set("feedWaitStreamReqTimeout", pconf["feedWaitStreamReqTimeout"])
-	config.Set("feedWaitStreamEndTimeout", pconf["feedWaitStreamEndTimeout"])
-	config.Set("feedChanSize", pconf["feedChanSize"])
-	config.Set("mutationChanSize", pconf["mutationChanSize"])
-	config.Set("vbucketSyncTimeout", pconf["vbucketSyncTimeout"])
-	config.Set("routerEndpointFactory", pconf["routerEndpointFactory"])
-	config.Set("dcp.genChanSize", pconf["dcp.genChanSize"])
-	config.Set("dcp.dataChanSize", pconf["dcp.dataChanSize"])
+	config["clusterAddr"] = p.config["clusterAddr"] // copy by value.
+	pconfig := p.config.SectionConfig("projector.", true /*trim*/)
+	for _, key := range FeedConfigParams() {
+		config.Set(key, pconfig[key])
+	}
 	return config
 }
 
@@ -285,7 +284,7 @@ func (p *Projector) doMutationTopic(
 	var err error
 	feed, _ := p.GetFeed(topic)
 	if feed == nil {
-		config := p.GetFeedConfig(topic)
+		config := p.GetFeedConfig()
 		feed, err = NewFeed(topic, config, opaque)
 		if err != nil {
 			return (&protobuf.TopicResponse{}).SetErr(err)
@@ -558,10 +557,12 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 		// update projector settings
 		logging.Infof("%v updating projector config ...\n", p.logPrefix)
 		config, _ := c.NewConfig(newConfig)
-		p.SetConfig(config)
+		config.LogConfig()
+		p.ResetConfig(config)
 		// update feed settings
+		feedConfig := config.SectionConfig("projector.", true /*trim*/)
 		for _, feed := range p.GetFeeds() {
-			feed.SetConfig(p.GetConfig())
+			feed.ResetConfig(feedConfig)
 		}
 
 	default:

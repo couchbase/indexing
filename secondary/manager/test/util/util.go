@@ -1,9 +1,9 @@
 package test
 
 import (
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
+	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/couchbase/indexing/secondary/transport"
@@ -79,7 +79,7 @@ func NewFakeProjector(port string) *fakeProjector {
 	p := new(fakeProjector)
 
 	addr := net.JoinHostPort("127.0.0.1", port)
-	prefix := "endpoint.dataport."
+	prefix := "projector.dataport."
 	config := common.SystemConfig.SectionConfig(prefix, true)
 	maxvbs := common.SystemConfig["maxVbuckets"].Int()
 	flag := transport.TransportFlag(0).SetProtobuf()

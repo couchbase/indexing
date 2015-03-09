@@ -43,17 +43,15 @@ type Feed struct {
 	stale int
 
 	// config params
-	maxVbuckets int
-	reqTimeout  time.Duration
-	endTimeout  time.Duration
-	epFactory   c.RouterEndpointFactory
-	config      c.Config
-	logPrefix   string
+	reqTimeout time.Duration
+	endTimeout time.Duration
+	epFactory  c.RouterEndpointFactory
+	config     c.Config
+	logPrefix  string
 }
 
 // NewFeed creates a new topic feed.
 // `config` contains following keys.
-//    maxVbuckets: configured number vbuckets per bucket.
 //    clusterAddr: KV cluster address <host:port>.
 //    feedWaitStreamReqTimeout: wait for a response to StreamRequest
 //    feedWaitStreamEndTimeout: wait for a response to StreamEnd
@@ -82,11 +80,10 @@ func NewFeed(topic string, config c.Config, opaque uint16) (*Feed, error) {
 		backch: make(chan []interface{}, chsize),
 		finch:  make(chan bool),
 
-		maxVbuckets: config["maxVbuckets"].Int(),
-		reqTimeout:  time.Duration(config["feedWaitStreamReqTimeout"].Int()),
-		endTimeout:  time.Duration(config["feedWaitStreamEndTimeout"].Int()),
-		epFactory:   epf,
-		config:      config,
+		reqTimeout: time.Duration(config["feedWaitStreamReqTimeout"].Int()),
+		endTimeout: time.Duration(config["feedWaitStreamEndTimeout"].Int()),
+		epFactory:  epf,
+		config:     config,
 	}
 	feed.logPrefix = fmt.Sprintf("FEED[<=>%v(%v)]", topic, feed.cluster)
 
@@ -108,13 +105,13 @@ const (
 	fCmdShutdown
 	fCmdGetTopicResponse
 	fCmdGetStatistics
-	fCmdSetConfig
+	fCmdResetConfig
 )
 
-// SetConfig for this feed.
-func (feed *Feed) SetConfig(config c.Config) error {
+// ResetConfig for this feed.
+func (feed *Feed) ResetConfig(config c.Config) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdSetConfig, config, respch}
+	cmd := []interface{}{fCmdResetConfig, config, respch}
 	_, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return err
 }
@@ -524,9 +521,9 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.getStatistics()}
 
-	case fCmdSetConfig:
+	case fCmdResetConfig:
 		config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
-		feed.setConfig(config)
+		feed.resetConfig(config)
 		respch <- []interface{}{nil}
 
 	case fCmdShutdown:
@@ -945,7 +942,8 @@ func (feed *Feed) repairEndpoints(
 
 		} else if (endpoint == nil) || !endpoint.Ping() {
 			topic, typ := feed.topic, feed.endpointType
-			endpoint, e = feed.epFactory(topic, typ, raddr)
+			config := feed.config.SectionConfig("dataport.", true /*trim*/)
+			endpoint, e = feed.epFactory(topic, typ, raddr, config)
 			if e != nil {
 				fmsg := "%v ##%x endpoint-factory %q: %v\n"
 				logging.Errorf(fmsg, prefix, opaque, raddr1, e)
@@ -1002,27 +1000,23 @@ func (feed *Feed) getStatistics() c.Statistics {
 	return stats
 }
 
-func (feed *Feed) setConfig(config c.Config) {
-	feed.config = feed.config.Override(config)
-
-	pconf := feed.config.SectionConfig("projector.", true /*trim*/)
-	epf := pconf["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
-	feed.reqTimeout = time.Duration(pconf["feedWaitStreamReqTimeout"].Int())
-	feed.endTimeout = time.Duration(pconf["feedWaitStreamEndTimeout"].Int())
-	feed.epFactory = epf
-	logging.Infof("%v updated configuration ...\n", feed.logPrefix)
-	logging.Infof(
-		"%v feedWaitStreamReqTimeout : %v\n", feed.logPrefix, feed.reqTimeout)
-	logging.Infof(
-		"%v feedWaitStreamEndTimeout : %v\n", feed.logPrefix, feed.endTimeout)
+func (feed *Feed) resetConfig(config c.Config) {
+	if cv, ok := config["feedWaitStreamReqTimeout"]; ok {
+		feed.reqTimeout = time.Duration(cv.Int())
+	}
+	if cv, ok := config["feedWaitStreamEndTimeout"]; ok {
+		feed.endTimeout = time.Duration(cv.Int())
+	}
+	// pass the configuration to active kvdata
 	for _, kvdata := range feed.kvdata {
-		kvdata.SetConfig(pconf)
+		kvdata.ResetConfig(config)
 	}
-
-	econf := feed.config.SectionConfig("endpoint.dataport.", true /*trim*/)
+	// pass the configuration to active endpoints
+	econf := config.SectionConfig("dataport.", true /*trim*/)
 	for _, endpoint := range feed.endpoints {
-		endpoint.SetConfig(econf)
+		endpoint.ResetConfig(econf)
 	}
+	feed.config = feed.config.Override(config)
 }
 
 func (feed *Feed) shutdown(opaque uint16) error {
@@ -1276,7 +1270,8 @@ func (feed *Feed) startEndpoints(
 
 			} else if endpoint == nil || !endpoint.Ping() {
 				topic, typ := feed.topic, feed.endpointType
-				endpoint, e = feed.epFactory(topic, typ, raddr)
+				config := feed.config.SectionConfig("dataport.", true /*trim*/)
+				endpoint, e = feed.epFactory(topic, typ, raddr, config)
 				if e != nil {
 					fmsg := "%v ##%x endpoint-factory %q: %v\n"
 					logging.Errorf(fmsg, prefix, opaque, raddr1, e)
@@ -1557,4 +1552,26 @@ func (feed *Feed) connectBucket(
 		return nil, projC.ErrorDCPBucket
 	}
 	return bucket, nil
+}
+
+func FeedConfigParams() []string {
+	paramNames := []string{
+		"clusterAddr",
+		"feedChanSize",
+		"feedWaitStreamEndTimeout",
+		"feedWaitStreamReqTimeout",
+		"mutationChanSize",
+		"routerEndpointFactory",
+		"vbucketSyncTimeout",
+		// dcp configuration
+		"dcp.dataChanSize",
+		"dcp.genChanSize",
+		// dataport
+		"dataport.remoteBlock",
+		"dataport.keyChanSize",
+		"dataport.bufferSize",
+		"dataport.bufferTimeout",
+		"dataport.harakiriTimeout",
+		"dataport.maxPayload"}
+	return paramNames
 }

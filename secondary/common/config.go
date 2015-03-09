@@ -28,6 +28,7 @@ type ConfigValue struct {
 	Value      interface{}
 	Help       string
 	DefaultVal interface{}
+	Immutable  bool
 }
 
 // SystemConfig is default configuration for system and components.
@@ -42,29 +43,20 @@ var SystemConfig = Config{
 		1024,
 		"number of vbuckets configured in KV",
 		1024,
+		true, // immutable
 	},
 	// projector parameters
 	"projector.name": ConfigValue{
 		"projector",
 		"human readable name for this projector",
 		"projector",
+		true, // immutable
 	},
 	"projector.clusterAddr": ConfigValue{
 		"localhost:9000",
 		"KV cluster's address to be used by projector",
 		"localhost:9000",
-	},
-	"projector.kvAddrs": ConfigValue{
-		"127.0.0.1:9000",
-		"Comma separated list of KV-address to read mutations, this need to " +
-			"exactly match with KV-node's configured address",
-		"127.0.0.1:9000",
-	},
-	"projector.colocate": ConfigValue{
-		true,
-		"Whether projector will be colocated with KV. In which case " +
-			"`kvaddrs` specified above will be discarded",
-		true,
+		true, // immutable
 	},
 	"projector.maxCpuPercent": ConfigValue{
 		200,
@@ -72,6 +64,7 @@ var SystemConfig = Config{
 			"EG, 200% in 4-core (400%) machine would set indexer to " +
 			"use 2 cores",
 		200,
+		false, // mutable
 	},
 	// Projector feed settings
 	"projector.routerEndpointFactory": ConfigValue{
@@ -79,312 +72,381 @@ var SystemConfig = Config{
 		"RouterEndpointFactory callback to generate endpoint instances " +
 			"to push data to downstream",
 		RouterEndpointFactory(nil),
+		true, // immutable
 	},
 	"projector.feedWaitStreamReqTimeout": ConfigValue{
 		10 * 1000,
 		"timeout, in milliseconds, to await a response for StreamRequest",
 		10 * 1000,
+		false, // mutable
 	},
 	"projector.feedWaitStreamEndTimeout": ConfigValue{
 		10 * 1000,
 		"timeout, in milliseconds, to await a response for StreamEnd",
 		10 * 1000,
+		false, // mutable
 	},
 	"projector.mutationChanSize": ConfigValue{
 		10000,
-		"channel size of projector's vbucket workers",
+		"channel size of projector's vbucket workers, " +
+			"changing this value does not affect existing feeds.",
 		10000,
+		false, // mutable
 	},
 	"projector.feedChanSize": ConfigValue{
 		10000,
-		"channel size for feed's control path and its back-channel.",
+		"channel size for feed's control path and its back-channel, " +
+			"changing this value does not affect existing feeds.",
 		10000,
+		false, // mutable
 	},
 	"projector.vbucketSyncTimeout": ConfigValue{
 		500,
-		"timeout, in milliseconds, for sending periodic Sync messages.",
+		"timeout, in milliseconds, for sending periodic Sync messages, " +
+			"changing this value does not affect existing feeds.",
 		500,
+		false, // mutable
 	},
 	"projector.watchInterval": ConfigValue{
 		5 * 60 * 1000, // 5 minutes
 		"periodic tick, in milli-seconds to check for stale feeds, " +
 			"a feed is considered stale when all its endpoint go stale.",
 		5 * 60 * 1000,
+		true, // immutable
 	},
 	// projector dcp parameters
 	"projector.dcp.genChanSize": ConfigValue{
 		2048,
-		"channel size for DCP's gen-server routine.",
+		"channel size for DCP's gen-server routine, " +
+			"changing this value does not affect existing feeds.",
 		2048,
+		false, // mutable
 	},
 	"projector.dcp.dataChanSize": ConfigValue{
 		10000,
-		"channel size for DCP's data path routines.",
+		"channel size for DCP's data path routines, " +
+			"changing this value does not affect existing feeds.",
 		10000,
+		false, // mutable
 	},
 	// projector adminport parameters
 	"projector.adminport.name": ConfigValue{
 		"projector.adminport",
 		"human readable name for this adminport, must be supplied",
 		"projector.adminport",
+		true, // immutable
+
 	},
 	"projector.adminport.listenAddr": ConfigValue{
 		"",
 		"projector's adminport address listen for request.",
 		"",
+		true, // immutable
 	},
 	"projector.adminport.urlPrefix": ConfigValue{
 		"/adminport/",
 		"url prefix (script-path) for adminport used by projector",
 		"/adminport/",
+		true, // immutable
 	},
 	"projector.adminport.readTimeout": ConfigValue{
 		0,
 		"timeout in milliseconds, is http server's read timeout",
 		0,
+		true, // immutable
 	},
 	"projector.adminport.writeTimeout": ConfigValue{
 		0,
 		"timeout in milliseconds, is http server's write timeout",
 		0,
+		true, // immutable
 	},
 	"projector.adminport.maxHeaderBytes": ConfigValue{
 		1 << 20, // 1 MegaByte
 		"in bytes, is max. length of adminport http header",
 		1 << 20, // 1 MegaByte
+		true,    // immutable
 	},
 	// projector dataport client parameters
-	"endpoint.dataport.remoteBlock": ConfigValue{
+	"projector.dataport.remoteBlock": ConfigValue{
 		true,
-		"should dataport endpoint block when remote is slow ?",
+		"should dataport endpoint block when remote is slow, " +
+			"does not affect existing feeds.",
 		true,
+		false, // mutable
 	},
-	"endpoint.dataport.keyChanSize": ConfigValue{
+	"projector.dataport.keyChanSize": ConfigValue{
 		10000,
-		"channel size of dataport endpoints data input",
+		"channel size of dataport endpoints data input, " +
+			"does not affect existing feeds.",
 		10000,
+		true, // immutable
 	},
-	"endpoint.dataport.bufferSize": ConfigValue{
+	"projector.dataport.bufferSize": ConfigValue{
 		100,
 		"number of entries to buffer before flushing it, where each entry " +
-			"is for a vbucket's set of mutations that was flushed by the endpoint.",
+			"is for a vbucket's set of mutations that was flushed, " +
+			"by the endpoint, does not affect existing feeds.",
 		100,
+		false, // mutable
 	},
-	"endpoint.dataport.bufferTimeout": ConfigValue{
+	"projector.dataport.bufferTimeout": ConfigValue{
 		1,
-		"timeout in milliseconds, to flush vbucket-mutations from endpoint",
-		1, // 1ms
+		"timeout in milliseconds, to flush vbucket-mutations from, " +
+			"endpoint, does not affect existing feeds.",
+		1,     // 1ms
+		false, // mutable
 	},
-	"endpoint.dataport.harakiriTimeout": ConfigValue{
+	"projector.dataport.harakiriTimeout": ConfigValue{
 		10 * 1000,
 		"timeout in milliseconds, after which endpoint will commit harakiri " +
-			"if not activity",
+			"if not activity, does not affect existing feeds.",
 		10 * 1000, //10s
+		false,     // mutable
 	},
-	"endpoint.dataport.maxPayload": ConfigValue{
-		1000 * 1024,
+	"projector.dataport.maxPayload": ConfigValue{
+		1024 * 1024,
 		"maximum payload length, in bytes, for transmission data from " +
-			"router to downstream client",
-		1000 * 1024, // bytes
+			"router to downstream client, does not affect eixting feeds.",
+		1024 * 1024, // 1MB
+		true,        // immutable
 	},
 	// projector's adminport client, can be used by manager
 	"manager.projectorclient.retryInterval": ConfigValue{
 		16,
 		"retryInterval, in milliseconds when connection refused by server",
 		16,
+		true, // immutable
 	},
 	"manager.projectorclient.maxRetries": ConfigValue{
 		5,
 		"maximum number of times to retry",
 		5,
+		true, // immutable
 	},
 	"manager.projectorclient.exponentialBackoff": ConfigValue{
 		2,
 		"multiplying factor on retryInterval for every attempt with server",
 		2,
+		true, // immutable
 	},
 	"manager.projectorclient.urlPrefix": ConfigValue{
 		"/adminport/",
 		"url prefix (script-path) for adminport used by projector",
 		"/adminport/",
+		true, // immutable
 	},
 	// indexer dataport parameters
 	"indexer.dataport.genServerChanSize": ConfigValue{
 		64,
 		"request channel size of indexer dataport's gen-server routine",
 		64,
+		true, // immutable
 	},
 	"indexer.dataport.maxPayload": ConfigValue{
 		1000 * 1024,
 		"maximum payload length, in bytes, for receiving data from router",
 		1000 * 1024, // bytes
+		true,        // immutable
 	},
 	"indexer.dataport.tcpReadDeadline": ConfigValue{
 		10 * 1000,
 		"timeout, in milliseconds, while reading from socket",
 		10 * 1000, // 10s
+		true,      // immutable
 	},
 	// indexer queryport configuration
 	"indexer.queryport.maxPayload": ConfigValue{
 		1000 * 1024,
 		"maximum payload, in bytes, for receiving data from client",
 		1000 * 1024,
+		true, // immutable
 	},
 	"indexer.queryport.readDeadline": ConfigValue{
 		4000,
 		"timeout, in milliseconds, is timeout while reading from socket",
 		4000,
+		true, // immutable
 	},
 	"indexer.queryport.writeDeadline": ConfigValue{
 		4000,
 		"timeout, in milliseconds, is timeout while writing to socket",
 		4000,
+		true, // immutable
 	},
 	"indexer.queryport.pageSize": ConfigValue{
 		1,
 		"number of index-entries that shall be returned as single payload",
 		1,
+		true, // immutable
 	},
 	"indexer.queryport.streamChanSize": ConfigValue{
 		16,
 		"size of the buffered channels used to stream request and response.",
 		16,
+		true, // immutable
 	},
 	// queryport client configuration
 	"queryport.client.maxPayload": ConfigValue{
 		1000 * 1024,
 		"maximum payload, in bytes, for receiving data from server",
 		1000 * 1024,
+		true, // immutable
 	},
 	"queryport.client.readDeadline": ConfigValue{
 		300000,
 		"timeout, in milliseconds, is timeout while reading from socket",
 		300000,
+		true, // immutable
 	},
 	"queryport.client.writeDeadline": ConfigValue{
 		4000,
 		"timeout, in milliseconds, is timeout while writing to socket",
 		4000,
+		true, // immutable
 	},
 	"queryport.client.poolSize": ConfigValue{
 		20,
 		"number simultaneous active connections connections in a pool",
 		20,
+		true, // immutable
 	},
 	"queryport.client.poolOverflow": ConfigValue{
 		30,
 		"maximum number of connections in a pool",
 		30,
+		true, // immutable
 	},
 	"queryport.client.connPoolTimeout": ConfigValue{
 		1000,
 		"timeout, in milliseconds, is timeout for retrieving a connection " +
 			"from the pool",
 		1000,
+		true, // immutable
 	},
 	"queryport.client.connPoolAvailWaitTimeout": ConfigValue{
 		1,
 		"timeout, in milliseconds, to wait for an existing connection " +
 			"from the pool before considering the creation of a new one",
 		1,
+		true, // immutable
 	},
 	"queryport.client.retryScanPort": ConfigValue{
 		2,
 		"number of times to retry when scanport is not detectable",
 		2,
+		true, // immutable
 	},
 	"queryport.client.retryIntervalScanport": ConfigValue{
 		10,
 		"wait, in milliseconds, before re-trying for a scanport",
 		10,
+		true, // immutable
 	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,
 		"retryInterval, in milliseconds when connection refused by server",
 		16,
+		true, // immutable
 	},
 	"indexer.projectorclient.maxRetries": ConfigValue{
 		5,
 		"maximum number of times to retry",
 		5,
+		true, // immutable
 	},
 	"indexer.projectorclient.exponentialBackoff": ConfigValue{
 		2,
 		"multiplying factor on retryInterval for every attempt with server",
 		2,
+		true, // immutable
 	},
 	"indexer.projectorclient.urlPrefix": ConfigValue{
 		"/adminport/",
 		"url prefix (script-path) for adminport used by projector",
 		"/adminport/",
+		true, // immutable
 	},
 	// indexer configuration
 	"indexer.scanTimeout": ConfigValue{
 		120000,
 		"timeout, in milliseconds, timeout for index scan processing",
 		120000,
+		true, // immutable
 	},
 	"indexer.adminPort": ConfigValue{
 		"9100",
 		"port for index ddl and status operations",
 		"9100",
+		true, // immutable
 	},
 	"indexer.scanPort": ConfigValue{
 		"9101",
 		"port for index scan operations",
 		"9101",
+		true, // immutable
 	},
 	"indexer.httpPort": ConfigValue{
 		"9102",
 		"port for external stats amd settings",
 		"9102",
+		true, // immutable
 	},
 	"indexer.streamInitPort": ConfigValue{
 		"9103",
 		"port for inital build stream",
 		"9103",
+		true, // immutable
 	},
 	"indexer.streamCatchupPort": ConfigValue{
 		"9104",
 		"port for catchup stream",
 		"9104",
+		true, // immutable
 	},
 	"indexer.streamMaintPort": ConfigValue{
 		"9105",
 		"port for maintenance stream",
 		"9105",
+		true, // immutable
 	},
 	"indexer.clusterAddr": ConfigValue{
 		"127.0.0.1:8091",
 		"Local cluster manager address",
 		"127.0.0.1:8091",
+		true, // immutable
 	},
 	"indexer.numVbuckets": ConfigValue{
 		1024,
 		"Number of vbuckets",
 		1024,
+		true, // immutable
 	},
 	"indexer.enableManager": ConfigValue{
 		false,
 		"Enable index manager",
 		false,
+		true, // immutable
 	},
 	"indexer.storage_dir": ConfigValue{
 		"./",
 		"Index file storage directory",
 		"./",
+		true, // immutable
 	},
 	"indexer.numSliceWriters": ConfigValue{
 		1,
 		"Number of Writer Threads for a Slice",
 		1,
+		true, // immutable
 	},
 
 	"indexer.sync_period": ConfigValue{
 		uint64(100),
 		"Stream message sync interval in millis",
 		uint64(100),
+		true, // immutable
 	},
 
 	// Indexer dynamic settings
@@ -392,41 +454,49 @@ var SystemConfig = Config{
 		1200000,
 		"Compaction poll interval in seconds",
 		1200000,
+		false, // mutable
 	},
 	"indexer.settings.compaction.interval": ConfigValue{
 		"00:00,00:00",
 		"Compaction allowed interval",
 		"00:00,00:00",
+		false, // mutable
 	},
 	"indexer.settings.compaction.min_frag": ConfigValue{
 		30,
 		"Compaction fragmentation threshold percentage",
 		30,
+		false, // mutable
 	},
 	"indexer.settings.compaction.min_size": ConfigValue{
 		uint64(1024 * 1024),
 		"Compaction min file size",
 		uint64(1024 * 1024),
+		false, // mutable
 	},
 	"indexer.settings.persisted_snapshot.interval": ConfigValue{
 		uint64(30000),
 		"Persisted snapshotting interval in milliseconds",
 		uint64(30000),
+		false, // mutable
 	},
 	"indexer.settings.inmemory_snapshot.interval": ConfigValue{
 		uint64(200),
 		"InMemory snapshotting interval in milliseconds",
 		uint64(200),
+		false, // mutable
 	},
 	"indexer.settings.recovery.max_rollbacks": ConfigValue{
 		5,
 		"Maximum number of committed rollback points",
 		5,
+		false, // mutable
 	},
 	"indexer.settings.memory_quota": ConfigValue{
 		uint64(0),
 		"Maximum memory used by the indexer buffercache",
 		uint64(0),
+		false, // mutable
 	},
 	"indexer.settings.max_cpu_percent": ConfigValue{
 		400,
@@ -434,26 +504,31 @@ var SystemConfig = Config{
 			"EG, 200% in 4-core (400%) machine would set indexer to " +
 			"use 2 cores",
 		400,
+		false, // mutable
 	},
 	"indexer.settings.log_level": ConfigValue{
 		"debug",
 		"Indexer logging level",
 		"debug",
+		false, // mutable
 	},
 	"indexer.settings.log_override": ConfigValue{
 		"",
 		"Indexer override log level.format is [relpath/]filename[:line]=LogLevel[,...] (wildcard * is allowed)",
 		"",
+		false, // mutable
 	},
 	"projector.settings.log_level": ConfigValue{
 		"info",
 		"Projector logging level",
 		"info",
+		false, // mutable
 	},
 	"projector.settings.log_override": ConfigValue{
 		"",
 		"Projector override log level. format is [relpath/]filename[:line]=LogLevel[,...] (wildcard * is allowed)",
 		"",
+		false, // mutable
 	},
 }
 
@@ -461,7 +536,7 @@ var SystemConfig = Config{
 // Config object or from map[string]interface{} object
 // or from []byte slice, a byte-slice of JSON string.
 func NewConfig(data interface{}) (Config, error) {
-	config := SystemConfig.Clone()
+	config := make(Config)
 	err := config.Update(data)
 	return config, err
 }
@@ -469,18 +544,11 @@ func NewConfig(data interface{}) (Config, error) {
 // Update config object with data, can be a Config, map[string]interface{},
 // []byte.
 func (config Config) Update(data interface{}) error {
-	fmsg := "Skipping setting key '%v' value '%v' due to %v"
+	fmsg := "Skipping setting key %q value '%v': %v"
 	switch v := data.(type) {
 	case Config: // Clone
 		for key, value := range v {
 			config.Set(key, value)
-		}
-
-	case map[string]interface{}: // transform
-		for key, value := range v {
-			if err := config.SetValue(key, value); err != nil {
-				logging.Warnf(fmsg, key, value, err)
-			}
 		}
 
 	case []byte: // parse JSON
@@ -488,9 +556,20 @@ func (config Config) Update(data interface{}) error {
 		if err := json.Unmarshal(v, &m); err != nil {
 			return err
 		}
-		for key, value := range m {
-			if err := config.SetValue(key, value); err != nil {
-				logging.Warnf(fmsg, key, value, err)
+		config.Update(m)
+
+	case map[string]interface{}: // transform
+		for key, value := range v {
+			if cv, ok := SystemConfig[key]; ok { // valid config.
+				if _, ok := config[key]; !ok {
+					config[key] = cv // copy by value
+				}
+				if err := config.SetValue(key, value); err != nil {
+					logging.Warnf(fmsg, key, value, err)
+				}
+
+			} else {
+				logging.Errorf("Invalid config param %q", key)
 			}
 		}
 
@@ -510,8 +589,30 @@ func (config Config) Clone() Config {
 }
 
 // Override will clone `config` object and update parameters with
-// values from `others` instance.
+// values from `others` instance. Will skip immutable fields.
 func (config Config) Override(others ...Config) Config {
+	newconfig := config.Clone()
+	for _, other := range others {
+		for key, cv := range other {
+			if newconfig[key].Immutable { // skip immutables.
+				continue
+			}
+			ocv, ok := newconfig[key]
+			if !ok {
+				ocv = cv
+			} else {
+				ocv.Value = cv.Value
+			}
+			config[key] = ocv
+		}
+	}
+	return config
+}
+
+// OverrideForce will clone `config` object and update parameters with
+// values from `others` instance. Will force override immutable fields
+// as well.
+func (config Config) OverrideForce(others ...Config) Config {
 	newconfig := config.Clone()
 	for _, other := range others {
 		for key, cv := range other {
@@ -525,6 +626,20 @@ func (config Config) Override(others ...Config) Config {
 		}
 	}
 	return config
+}
+
+// LogConfig will check wether a configuration parameter is
+// mutable and log that information.
+func (config Config) LogConfig() {
+	for key, cv := range config {
+		if cv.Immutable {
+			fmsg := "immutable settings %v cannot be update to `%v`\n"
+			logging.Warnf(fmsg, key, cv.Value)
+		} else {
+			fmsg := "settings %v will updated to `%v`\n"
+			logging.Infof(fmsg, key, cv.Value)
+		}
+	}
 }
 
 // SectionConfig will create a new config object with parameters
@@ -600,7 +715,12 @@ func (config Config) Json() []byte {
 
 // Int assumes config value is an integer and returns the same.
 func (cv ConfigValue) Int() int {
-	return cv.Value.(int)
+	if val, ok := cv.Value.(int); ok {
+		return val
+	} else if val, ok := cv.Value.(float64); ok {
+		return int(val)
+	}
+	panic(fmt.Errorf("not support Int() on %v", cv))
 }
 
 // Uint64 assumes config value is 64-bit integer and returns the same.

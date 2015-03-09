@@ -24,7 +24,7 @@ func TestTimeout(t *testing.T) {
 	}
 
 	// start endpoint
-	config := c.SystemConfig.SectionConfig("endpoint.dataport.", true /*trim*/)
+	config := c.SystemConfig.SectionConfig("projector.dataport.", true /*trim*/)
 	endp, err := NewRouterEndpoint("clust", "topic", raddr, maxvbuckets, config)
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestLoopback(t *testing.T) {
 	}
 
 	// start endpoint
-	config = c.SystemConfig.SectionConfig("endpoint.dataport.", true /*trim*/)
+	config = c.SystemConfig.SectionConfig("projector.dataport.", true /*trim*/)
 	endp, err := NewRouterEndpoint("clust", "topic", raddr, maxvbuckets, config)
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +209,7 @@ func BenchmarkLoopback(b *testing.B) {
 	}
 
 	// start endpoint
-	config = c.SystemConfig.SectionConfig("endpoint.dataport.", true /*trim*/)
+	config = c.SystemConfig.SectionConfig("projector.dataport.", true /*trim*/)
 	endp, err := NewRouterEndpoint("clust", "topic", raddr, maxvbuckets, config)
 	if err != nil {
 		b.Fatal(err)
