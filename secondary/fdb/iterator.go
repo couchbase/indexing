@@ -43,10 +43,14 @@ const (
 // Iterator handle
 type Iterator struct {
 	iter *C.fdb_iterator
+	db   *KVStore
 }
 
 // Prev advances the iterator backwards
 func (i *Iterator) Prev() error {
+	i.db.Lock()
+	defer i.db.Unlock()
+
 	Log.Tracef("fdb_iterator_prev call i:%p iter:%v", i, i.iter)
 	errNo := C.fdb_iterator_prev(i.iter)
 	Log.Tracef("fdb_iterator_prev retn i:%p iter:%v", i, errNo, i.iter)
@@ -58,6 +62,9 @@ func (i *Iterator) Prev() error {
 
 // Next advances the iterator forward
 func (i *Iterator) Next() error {
+	i.db.Lock()
+	defer i.db.Unlock()
+
 	Log.Tracef("fdb_iterator_next call i:%p iter:%v", i, i.iter)
 	errNo := C.fdb_iterator_next(i.iter)
 	Log.Tracef("fdb_iterator_next retn i:%p iter:%v", i, errNo, i.iter)
@@ -69,6 +76,9 @@ func (i *Iterator) Next() error {
 
 // Get gets the current item (key, metadata, doc body) from the iterator
 func (i *Iterator) Get() (*Doc, error) {
+	i.db.Lock()
+	defer i.db.Unlock()
+
 	rv := Doc{}
 	Log.Tracef("fdb_iterator_get call i:%p iter:%v", i, i.iter)
 	errNo := C.fdb_iterator_get(i.iter, &rv.doc)
@@ -82,6 +92,9 @@ func (i *Iterator) Get() (*Doc, error) {
 // GetPreAlloc gets the current item (key, metadata, doc body) from the iterator
 // but uses the pre-allocated memory for the Doc
 func (i *Iterator) GetPreAlloc(rv *Doc) error {
+	i.db.Lock()
+	defer i.db.Unlock()
+
 	Log.Tracef("fdb_iterator_get call i:%p iter:%v", i, i.iter)
 	errNo := C.fdb_iterator_get(i.iter, &rv.doc)
 	Log.Tracef("fdb_iterator_get retn i:%p iter:%v doc:%v", i, errNo, i.iter, rv.doc)
@@ -93,6 +106,9 @@ func (i *Iterator) GetPreAlloc(rv *Doc) error {
 
 // GetMetaOnly gets the current item (key, metadata, offset to doc body) from the iterator
 func (i *Iterator) GetMetaOnly() (*Doc, error) {
+	i.db.Lock()
+	defer i.db.Unlock()
+
 	rv := Doc{}
 	Log.Tracef("fdb_iterator_get_metaonly call i:%p iter:%v", i, i.iter)
 	errNo := C.fdb_iterator_get_metaonly(i.iter, &rv.doc)
@@ -109,6 +125,9 @@ func (i *Iterator) GetMetaOnly() (*Doc, error) {
 // exist, the iterator is positioned based on
 // the specified dir (either before or after).
 func (i *Iterator) Seek(seekKey []byte, dir SeekOpt) error {
+	i.db.Lock()
+	defer i.db.Unlock()
+
 	var sk unsafe.Pointer
 	lensk := len(seekKey)
 	if lensk != 0 {
@@ -126,6 +145,9 @@ func (i *Iterator) Seek(seekKey []byte, dir SeekOpt) error {
 // SeekMin moves iterator to the smallest key
 // of the iteration
 func (i *Iterator) SeekMin() error {
+	i.db.Lock()
+	defer i.db.Unlock()
+
 	Log.Tracef("fdb_iterator_seek_to_min call i:%p iter:%v", i, i.iter)
 	errNo := C.fdb_iterator_seek_to_min(i.iter)
 	Log.Tracef("fdb_iterator_seek_to_min retn i:%p errNo:%v iter:%v", i, errNo, i.iter)
@@ -138,6 +160,9 @@ func (i *Iterator) SeekMin() error {
 // SeekMax moves iterator to the largest key
 // of the iteration
 func (i *Iterator) SeekMax() error {
+	i.db.Lock()
+	defer i.db.Unlock()
+
 	Log.Tracef("fdb_iterator_seek_to_max call i:%p iter:%v", i, i.iter)
 	errNo := C.fdb_iterator_seek_to_max(i.iter)
 	Log.Tracef("fdb_iterator_seek_to_max retn i:%p errNo:%v iter:%v", i, errNo, i.iter)
@@ -149,6 +174,9 @@ func (i *Iterator) SeekMax() error {
 
 // Close the iterator and free its associated resources
 func (i *Iterator) Close() error {
+	i.db.Lock()
+	defer i.db.Unlock()
+
 	Log.Tracef("fdb_iterator_close call i:%p iter:%v", i, i.iter)
 	errNo := C.fdb_iterator_close(i.iter)
 	Log.Tracef("fdb_iterator_close retn i:%p errNo:%v iter:%v", i, errNo, i.iter)
@@ -160,6 +188,9 @@ func (i *Iterator) Close() error {
 
 // IteratorInit creates an iterator to traverse a ForestDB snapshot by key range
 func (k *KVStore) IteratorInit(startKey, endKey []byte, opt IteratorOpt) (*Iterator, error) {
+	k.Lock()
+	defer k.Unlock()
+
 	var sk, ek unsafe.Pointer
 
 	lensk := len(startKey)
@@ -173,7 +204,7 @@ func (k *KVStore) IteratorInit(startKey, endKey []byte, opt IteratorOpt) (*Itera
 		ek = unsafe.Pointer(&endKey[0])
 	}
 
-	rv := Iterator{}
+	rv := Iterator{db: k}
 	Log.Tracef("fdb_iterator_init call k:%p db:%v sk:%v ek:%v opt:%v", k, k.db, sk, ek, opt)
 	errNo := C.fdb_iterator_init(k.db, &rv.iter, sk, C.size_t(lensk), ek, C.size_t(lenek), C.fdb_iterator_opt_t(opt))
 	Log.Tracef("fdb_iterator_init retn k:%p rv:%v", k, rv.iter)
@@ -185,7 +216,10 @@ func (k *KVStore) IteratorInit(startKey, endKey []byte, opt IteratorOpt) (*Itera
 
 // IteratorSequenceInit create an iterator to traverse a ForestDB snapshot by sequence number range
 func (k *KVStore) IteratorSequenceInit(startSeq, endSeq SeqNum, opt IteratorOpt) (*Iterator, error) {
-	rv := Iterator{}
+	k.Lock()
+	defer k.Unlock()
+
+	rv := Iterator{db: k}
 	Log.Tracef("fdb_iterator_sequence_init call k:%p db:%v sseq:%v eseq:%v opt:%v", k, k.db, startSeq, endSeq, opt)
 	errNo := C.fdb_iterator_sequence_init(k.db, &rv.iter, C.fdb_seqnum_t(startSeq), C.fdb_seqnum_t(endSeq), C.fdb_iterator_opt_t(opt))
 	Log.Tracef("fdb_iterator_sequence_init retn k:%p rv:%v", k, rv.iter)

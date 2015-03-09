@@ -15,14 +15,13 @@ package forestdb
 import "C"
 
 import (
-	"sync"
 	"unsafe"
 )
 
 // Database handle
 type File struct {
 	dbfile *C.fdb_file_handle
-	sync.Mutex
+	advLock
 }
 
 // Open opens the database with a given file name
