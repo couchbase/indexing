@@ -14,7 +14,7 @@
 package indexer
 
 import (
-	"fmt"
+	//	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"sync"
@@ -1725,81 +1725,86 @@ func (tk *timekeeper) handleStats(cmd Message) {
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
 
-	indexInstMap := common.CopyIndexInstMap(tk.indexInstMap)
+	//Commented out till the issue of ep-engine getting stuck
+	//with the stats call is investigated.
+	/*
+		indexInstMap := common.CopyIndexInstMap(tk.indexInstMap)
 
-	go func() {
-		// Populate current KV timestamps for all buckets
-		bucketTsMap := make(map[string]Timestamp)
-		for _, inst := range indexInstMap {
-			//skip deleted indexes
-			if inst.State == common.INDEX_STATE_DELETED {
-				continue
-			}
-			if _, ok := bucketTsMap[inst.Defn.Bucket]; !ok {
-				kvTs, err := GetCurrentKVTs(tk.config["clusterAddr"].String(),
-					inst.Defn.Bucket, tk.config["numVbuckets"].Int())
-				if err != nil {
-					logging.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
-					replych <- statsMap
-					return
+		go func() {
+			// Populate current KV timestamps for all buckets
+			bucketTsMap := make(map[string]Timestamp)
+			for _, inst := range indexInstMap {
+				//skip deleted indexes
+				if inst.State == common.INDEX_STATE_DELETED {
+					continue
 				}
-
-				bucketTsMap[inst.Defn.Bucket] = kvTs
-			}
-		}
-
-		tk.lock.Lock()
-		defer tk.lock.Unlock()
-
-		for _, inst := range tk.indexInstMap {
-			//skip deleted indexes
-			if inst.State == common.INDEX_STATE_DELETED {
-				continue
-			}
-
-			k := fmt.Sprintf("%s:%s:num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
-			sum := uint64(0)
-			flushedTs := tk.ss.streamBucketLastFlushedTsMap[inst.Stream][inst.Defn.Bucket]
-			if flushedTs != nil {
-				for _, seqno := range flushedTs.Seqnos {
-					sum += seqno
-				}
-			}
-			v := fmt.Sprint(sum)
-			statsMap[k] = v
-
-			receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
-			queued := uint64(0)
-			if receivedTs != nil {
-				for i, seqno := range receivedTs.Seqnos {
-					flushSeqno := uint64(0)
-					if flushedTs != nil {
-						flushSeqno = flushedTs.Seqnos[i]
+				if _, ok := bucketTsMap[inst.Defn.Bucket]; !ok {
+					kvTs, err := GetCurrentKVTs(tk.config["clusterAddr"].String(),
+						inst.Defn.Bucket, tk.config["numVbuckets"].Int())
+					if err != nil {
+						logging.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
+						replych <- statsMap
+						return
 					}
 
-					queued += seqno - flushSeqno
+					bucketTsMap[inst.Defn.Bucket] = kvTs
 				}
 			}
-			k = fmt.Sprintf("%s:%s:num_docs_queued", inst.Defn.Bucket, inst.Defn.Name)
-			v = fmt.Sprint(queued)
-			statsMap[k] = v
 
-			pending := uint64(0)
-			kvTs := bucketTsMap[inst.Defn.Bucket]
-			for i, seqno := range kvTs {
-				recvdSeqno := uint64(0)
+			tk.lock.Lock()
+			defer tk.lock.Unlock()
+
+			for _, inst := range tk.indexInstMap {
+				//skip deleted indexes
+				if inst.State == common.INDEX_STATE_DELETED {
+					continue
+				}
+
+				k := fmt.Sprintf("%s:%s:num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
+				sum := uint64(0)
+				flushedTs := tk.ss.streamBucketLastFlushedTsMap[inst.Stream][inst.Defn.Bucket]
+				if flushedTs != nil {
+					for _, seqno := range flushedTs.Seqnos {
+						sum += seqno
+					}
+				}
+				v := fmt.Sprint(sum)
+				statsMap[k] = v
+
+				receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
+				queued := uint64(0)
 				if receivedTs != nil {
-					recvdSeqno = receivedTs.Seqnos[i]
-				}
-				pending += uint64(seqno) - recvdSeqno
-			}
-			k = fmt.Sprintf("%s:%s:num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
-			v = fmt.Sprint(pending)
-			statsMap[k] = v
-		}
+					for i, seqno := range receivedTs.Seqnos {
+						flushSeqno := uint64(0)
+						if flushedTs != nil {
+							flushSeqno = flushedTs.Seqnos[i]
+						}
 
-		replych <- statsMap
-	}()
+						queued += seqno - flushSeqno
+					}
+				}
+				k = fmt.Sprintf("%s:%s:num_docs_queued", inst.Defn.Bucket, inst.Defn.Name)
+				v = fmt.Sprint(queued)
+				statsMap[k] = v
+
+				pending := uint64(0)
+				kvTs := bucketTsMap[inst.Defn.Bucket]
+				for i, seqno := range kvTs {
+					recvdSeqno := uint64(0)
+					if receivedTs != nil {
+						recvdSeqno = receivedTs.Seqnos[i]
+					}
+					pending += uint64(seqno) - recvdSeqno
+				}
+				k = fmt.Sprintf("%s:%s:num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
+				v = fmt.Sprint(pending)
+				statsMap[k] = v
+			}
+
+			replych <- statsMap
+		}()
+	*/
+	replych <- statsMap
 }
 
 func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
