@@ -59,6 +59,14 @@ type scanDescriptor struct {
 	respch chan interface{}
 }
 
+func (sd *scanDescriptor) ParseIndexInstance(indexInst *common.IndexInst) {
+	sd.isPrimary = indexInst.Defn.IsPrimary
+	sd.p.indexName, sd.p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
+	if sd.p.ts != nil {
+		sd.p.ts.Bucket = sd.p.bucket
+	}
+}
+
 func (sd scanDescriptor) String() string {
 	var incl, span string
 
@@ -88,8 +96,8 @@ func (sd scanDescriptor) String() string {
 		span = span + ")"
 	}
 
-	str := fmt.Sprintf("scan id: %v, index: %v/%v, type: %v, span: %s", sd.scanId,
-		sd.p.bucket, sd.p.indexName, sd.p.scanType, span)
+	str := fmt.Sprintf("scan id: %v, defnId: %v, index: %v/%v, type: %v, span: %s", sd.scanId,
+		sd.p.defnID, sd.p.bucket, sd.p.indexName, sd.p.scanType, span)
 
 	if sd.p.pageSize > 0 {
 		str += fmt.Sprintf(" pagesize: %d", sd.p.pageSize)
@@ -551,7 +559,9 @@ func (s *scanCoordinator) requestHandler(
 	}
 
 	if err == nil {
-		indexInst, err = s.findIndexInstance(p.defnID)
+		if indexInst, err = s.findIndexInstance(p.defnID); err == nil {
+			sd.ParseIndexInstance(indexInst)
+		}
 	}
 
 	if err == nil && indexInst.State != common.INDEX_STATE_ACTIVE {
@@ -569,14 +579,6 @@ func (s *scanCoordinator) requestHandler(
 	s.mu.RLock()
 	atomic.AddUint64(s.scanStatsMap[indexInst.InstId].Requests, 1)
 	s.mu.RUnlock()
-
-	p.indexName, p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
-	if p.ts != nil {
-		p.ts.Bucket = p.bucket
-	}
-
-	// Its a primary index scan
-	sd.isPrimary = indexInst.Defn.IsPrimary
 
 	logging.Infof("%v: SCAN_REQ %v", s.logPrefix, sd)
 	// Before starting the index scan, we have to find out the snapshot timestamp
