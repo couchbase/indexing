@@ -64,7 +64,7 @@ func NewDcpFeed(
 	feed.conn = mc
 	rcvch := make(chan []interface{}, dataChanSize)
 	go feed.genServer(feed.reqch, feed.finch, rcvch)
-	go feed.doReceive(rcvch)
+	go feed.doReceive(rcvch, mc)
 	logging.Infof("%v feed started ...", feed.logPrefix)
 	return feed, nil
 }
@@ -491,14 +491,13 @@ func (feed *DcpFeed) doDcpRequestStream(
 }
 
 func (feed *DcpFeed) doDcpCloseStream(vbno, opaqueMSB uint16) error {
-	stream, ok := feed.vbstreams[vbno]
-	stream.CloseOpaque = opaqueMSB
 	prefix := feed.logPrefix
+	stream, ok := feed.vbstreams[vbno]
 	if !ok || stream == nil {
-		fmsg := "%v ##%x stream for vb %d is not active"
-		logging.Errorf(fmsg, prefix, stream.AppOpaque, vbno)
-		return ErrorConnection
+		logging.Warnf("%v stream for vb %d is not active", prefix, vbno)
+		return nil // TODO: should we return error here ?
 	}
+	stream.CloseOpaque = opaqueMSB
 	rq := &transport.MCRequest{
 		Opcode:  transport.DCP_CLOSESTREAM,
 		VBucket: vbno,
@@ -749,14 +748,14 @@ func parseFailoverLog(body []byte) (*FailoverLog, error) {
 }
 
 // receive loop
-func (feed *DcpFeed) doReceive(rcvch chan []interface{}) {
+func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 	defer close(rcvch)
 
 	var headerBuf [transport.HDR_LEN]byte
 
 	for {
 		pkt := transport.MCRequest{} // always a new instance.
-		bytes, err := pkt.Receive(feed.conn.conn, headerBuf[:])
+		bytes, err := pkt.Receive(conn.conn, headerBuf[:])
 		if err != nil && err == io.EOF {
 			logging.Infof("%v EOF received\n", feed.logPrefix)
 			break
