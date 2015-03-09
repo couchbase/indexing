@@ -436,9 +436,9 @@ var SystemConfig = Config{
 		400,
 	},
 	"indexer.settings.log_level": ConfigValue{
-		"info",
+		"debug",
 		"Indexer logging level",
-		"info",
+		"debug",
 	},
 	"indexer.settings.log_override": ConfigValue{
 		"",
