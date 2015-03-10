@@ -449,6 +449,12 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 
+	"indexer.stats_cache_timeout": ConfigValue{
+		uint64(300),
+		"Stats cache ttl in millis",
+		uint64(300),
+	},
+
 	// Indexer dynamic settings
 	"indexer.settings.compaction.check_period": ConfigValue{
 		1200000,
