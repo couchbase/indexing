@@ -2595,6 +2595,15 @@ func (idx *indexer) validateIndexInstMap() {
 		if !bucketValid[bucket] {
 			logging.Errorf("Indexer::validateIndexInstMap \n\t Bucket %v Not Found."+
 				"Not Recovering Index %v", bucket, index)
+			//update metadata with new state
+			index.State = common.INDEX_STATE_DELETED
+			idx.indexInstMap[instId] = index
+			if idx.enableManager {
+				instIdList := []common.IndexInstId{instId}
+				if err := idx.updateMetaInfoForIndexList(instIdList, true, false, false, false); err != nil {
+					common.CrashOnError(err)
+				}
+			}
 			delete(idx.indexInstMap, instId)
 		}
 	}
