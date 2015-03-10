@@ -17,7 +17,7 @@ func (k *KVStore) SnapshotOpen(sn SeqNum) (*KVStore, error) {
 	k.Lock()
 	defer k.Unlock()
 
-	rv := KVStore{}
+	rv := KVStore{advLock: newAdvLock()}
 
 	Log.Tracef("fdb_snapshot_open call k:%p db:%v sn:%v", k, k.db, sn)
 	errNo := C.fdb_snapshot_open(k.db, &rv.db, C.fdb_seqnum_t(sn))

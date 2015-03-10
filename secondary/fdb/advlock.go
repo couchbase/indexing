@@ -7,13 +7,26 @@ type advLock struct {
 	ch          chan int
 }
 
-func (l *advLock) Lock() {
+func newAdvLock() advLock {
+	l := advLock{}
+	l.Init()
+	return l
+}
+
+func (l *advLock) Init() {
 	if !l.initialized {
 		l.ch = make(chan int, 1)
-		l.initialized = true
 		l.ch <- 1
+		l.initialized = true
 	}
+}
 
+func (l *advLock) Destroy() {
+	l.initialized = false
+	close(l.ch)
+}
+
+func (l *advLock) Lock() {
 	printStack := true
 loop:
 	for {
