@@ -14,7 +14,7 @@ const MAX_NUM_VBUCKETS = 1024
 
 //Supervisor's channel capacity to buffer requests
 //from workers
-const WORKER_MSG_QUEUE_LEN = 100000
+const WORKER_MSG_QUEUE_LEN = 1000000
 
 // Default cluster address
 const DEFAULT_CLUSTER_ENDPOINT = "127.0.0.1:9000"
