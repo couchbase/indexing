@@ -90,12 +90,16 @@ func startBucket(cluster, bucketn string) int {
 	b, err := common.ConnectBucket(cluster, "default", bucketn)
 	mf(err, "bucket")
 
-	dcpFeed, err := b.StartDcpFeed("rawupr", uint32(0), nil /*TODO: pass valid config*/)
+	dcpConfig := map[string]interface{}{
+		"genChanSize":  10000,
+		"dataChanSize": 10000,
+	}
+	dcpFeed, err := b.StartDcpFeed("rawupr", uint32(0), 0xABCD, dcpConfig)
 	mf(err, "- upr")
 
 	vbnos := listOfVbnos(options.maxVbno)
 
-	flogs, err := b.GetFailoverLogs(vbnos, nil /*TODO: pass valid config*/)
+	flogs, err := b.GetFailoverLogs(0xABCD, vbnos, nil /*TODO: pass valid config*/)
 	mf(err, "- dcp failoverlogs")
 
 	if options.printflogs {
