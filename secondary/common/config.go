@@ -544,7 +544,7 @@ func NewConfig(data interface{}) (Config, error) {
 // Update config object with data, can be a Config, map[string]interface{},
 // []byte.
 func (config Config) Update(data interface{}) error {
-	fmsg := "Skipping setting key %q value '%v': %v"
+	fmsg := "CONF[] skipping setting key %q value '%v': %v"
 	switch v := data.(type) {
 	case Config: // Clone
 		for key, value := range v {
@@ -569,7 +569,7 @@ func (config Config) Update(data interface{}) error {
 				}
 
 			} else {
-				logging.Errorf("Invalid config param %q", key)
+				logging.Errorf("invalid config param %q", key)
 			}
 		}
 
@@ -630,14 +630,14 @@ func (config Config) OverrideForce(others ...Config) Config {
 
 // LogConfig will check wether a configuration parameter is
 // mutable and log that information.
-func (config Config) LogConfig() {
+func (config Config) LogConfig(prefix string) {
 	for key, cv := range config {
 		if cv.Immutable {
-			fmsg := "immutable settings %v cannot be update to `%v`\n"
-			logging.Warnf(fmsg, key, cv.Value)
+			fmsg := "%v immutable settings %v cannot be update to `%v`\n"
+			logging.Warnf(fmsg, prefix, key, cv.Value)
 		} else {
-			fmsg := "settings %v will updated to `%v`\n"
-			logging.Infof(fmsg, key, cv.Value)
+			fmsg := "%v settings %v will updated to `%v`\n"
+			logging.Infof(fmsg, prefix, key, cv.Value)
 		}
 	}
 }
