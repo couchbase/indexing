@@ -58,8 +58,12 @@ func main() {
 	}
 
 	// start dcp feed
+	dcpConfig := map[string]interface{}{
+		"genChanSize":  10000,
+		"dataChanSize": 10000,
+	}
 	name := fmt.Sprintf("%v", time.Now().UnixNano())
-	feed, err := bucket.StartDcpFeed(name, 0)
+	feed, err := bucket.StartDcpFeed(name, 0, 0xABCD, dcpConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -79,7 +83,7 @@ func main() {
 	for i := 0; i < options.maxVb; i++ {
 		vbList = append(vbList, uint16(i))
 	}
-	failoverlogMap, err := bucket.GetFailoverLogs(vbList)
+	failoverlogMap, err := bucket.GetFailoverLogs(0xABCD, vbList, dcpConfig)
 	if err != nil {
 		log.Printf(" error in failover log request %s", err.Error())
 
@@ -96,7 +100,7 @@ func main() {
 	addKVset(bucket1, mutationCount)
 
 	log.Println("Restarting ....")
-	feed, err = bucket.StartDcpFeed(name, 0)
+	feed, err = bucket.StartDcpFeed(name, 0, 0xABCD, dcpConfig)
 	if err != nil {
 		panic(err)
 	}

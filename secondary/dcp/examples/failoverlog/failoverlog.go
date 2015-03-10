@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/couchbase/go-couchbase"
+	"github.com/couchbase/indexing/secondary/dcp"
 )
 
 const clusterAddr = "http://localhost:9000"
@@ -71,8 +71,13 @@ func main() {
 	}
 
 	// Get failover log for a vbucket
+	dcpConfig := map[string]interface{}{
+		"genChanSize":  10000,
+		"dataChanSize": 10000,
+	}
 	for options.repeat > 0 {
-		flogs, err := bucket.GetFailoverLogs(options.vbuckets)
+		opaque := uint16(options.repeat)
+		flogs, err := bucket.GetFailoverLogs(opaque, options.vbuckets, dcpConfig)
 		if err != nil {
 			panic(err)
 		}

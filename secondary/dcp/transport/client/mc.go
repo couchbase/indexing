@@ -129,7 +129,7 @@ func (c *Client) Auth(user, pass string) (*transport.MCResponse, error) {
 	return res, fmt.Errorf("auth mechanism PLAIN not supported")
 }
 
-// select bucket
+// SelectBucket for this connection.
 func (c *Client) SelectBucket(bucket string) (*transport.MCResponse, error) {
 
 	return c.Send(&transport.MCRequest{
