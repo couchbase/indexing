@@ -118,21 +118,19 @@ func (e *secondaryIndexEntry) lenDocId() int {
 	return int(l)
 }
 
-func (e *secondaryIndexEntry) ReadDocId(buf []byte) ([]byte, error) {
-	rbuf := []byte(*e)
+func (e secondaryIndexEntry) ReadDocId(buf []byte) ([]byte, error) {
 	doclen := e.lenDocId()
-	offset := len(rbuf) - doclen - 2
-	buf = append(buf, rbuf[offset:offset+doclen]...)
+	offset := len(e) - doclen - 2
+	buf = append(buf, e[offset:offset+doclen]...)
 
 	return buf, nil
 }
 
-func (e *secondaryIndexEntry) ReadSecKey(buf []byte) ([]byte, error) {
+func (e secondaryIndexEntry) ReadSecKey(buf []byte) ([]byte, error) {
 	var err error
-	rbuf := []byte(*e)
 	doclen := e.lenDocId()
 
-	encoded := rbuf[0 : len(rbuf)-doclen-2]
+	encoded := e[0 : len(e)-doclen-2]
 	if buf, err = jsonEncoder.Decode(encoded, buf); err != nil {
 		return nil, err
 	}
