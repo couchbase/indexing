@@ -203,13 +203,13 @@ loop:
 					kv.Commands, buffers.raddr)
 				messageCount++ // count cummulative mutations
 				// reload harakiri
-				harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
 				mutationCount++ // count queued up mutations.
 				if mutationCount > int64(endpoint.bufferSize) {
 					if err := flushBuffers(); err != nil {
 						break loop
 					}
 				}
+				harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
 
 			case endpCmdSetConfig:
 				prefix := endpoint.logPrefix
@@ -251,6 +251,12 @@ loop:
 			if err := flushBuffers(); err != nil {
 				break loop
 			}
+			// FIXME: Ideally we don't have to reload the harakir here,
+			// because _this_ execution path happens only when there is
+			// little activity in the data-path. On the other hand,
+			// downstream can block for reasons independant of datapath,
+			// hence the precaution.
+			harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
 
 		case <-harakiri:
 			logging.Infof("%v committed harakiri\n", endpoint.logPrefix)

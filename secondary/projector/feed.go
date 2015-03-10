@@ -263,7 +263,7 @@ type controlStreamRequest struct {
 }
 
 func (v *controlStreamRequest) Repr() string {
-	return fmt.Sprintf("{controlStreamRequest, %v, %s, %d, %x, %d, %x}",
+	return fmt.Sprintf("{controlStreamRequest, %v, %s, %d, %x, %d, ##%x}",
 		v.status, v.bucket, v.vbno, v.vbuuid, v.seqno, v.opaque)
 }
 
@@ -563,7 +563,7 @@ func (feed *Feed) start(
 			feed.cleanupBucket(bucketn, false)
 			continue
 		}
-		ts := ts.SelectByVbuckets(vbnos)
+		ts := ts.SelectByVbuckets(vbnos) // take only local vbuckets
 
 		actTs, ok := feed.actTss[bucketn]
 		if ok { // don't re-request for already active vbuckets
@@ -611,6 +611,8 @@ func (feed *Feed) start(
 		feed.reqTss[bucketn] = reqTs // :SideEffect:
 		if e != nil {
 			err = e
+			fmsg := "%v ##%x stream-request: %v\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
 		}
 		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
 		logging.Infof(
@@ -691,6 +693,8 @@ func (feed *Feed) restartVbuckets(
 		feed.reqTss[bucketn] = reqTs // :SideEffect:
 		if e != nil {
 			err = e
+			fmsg := "%v ##%x stream-request: %v\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
 		}
 		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
 		logging.Infof(
@@ -734,6 +738,10 @@ func (feed *Feed) shutdownVbuckets(
 			err = projC.ErrorInvalidBucket
 			continue
 		}
+		// only shutdown active-streams.
+		if ok1 && actTs != nil {
+			ts = ts.FilterByVbuckets(c.Vbno32to16(actTs.GetVbnos()))
+		}
 		feeder, ok := feed.feeders[bucketn]
 		if !ok {
 			fmsg := "%v ##%x shutdownVbuckets() invalid-feeder %v\n"
@@ -758,6 +766,8 @@ func (feed *Feed) shutdownVbuckets(
 		feed.rollTss[bucketn] = rollTs.FilterByVbuckets(vbnos) // :SideEffect:
 		if e != nil {
 			err = e
+			fmsg := "%v ##%x stream-end: %v\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
 		}
 		fmsg := "%v ##%x stream-end completed for bucket %v, vbnos %v\n"
 		logging.Infof(fmsg, feed.logPrefix, opaque, bucketn, vbnos)
@@ -837,6 +847,8 @@ func (feed *Feed) addBuckets(
 		feed.reqTss[bucketn] = reqTs // :SideEffect:
 		if e != nil {
 			err = e
+			fmsg := "%v ##%x stream-request: %v\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
 		}
 		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
 		logging.Infof(
@@ -1194,8 +1206,8 @@ func (feed *Feed) getLocalVbuckets(
 	nodeID := cinfo.GetCurrentNode()
 	vbnos32, err := cinfo.GetVBuckets(nodeID, bucketn)
 	if err != nil {
-		fmsg := "%v ##%x cinfo.GetVBuckets(`%v`): %v\n"
-		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
+		fmsg := "%v ##%x cinfo.GetVBuckets(%d, `%v`): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, nodeID, bucketn, err)
 		return nil, projC.ErrorClusterInfo
 	}
 	vbnos := c.Vbno32to16(vbnos32)
@@ -1475,6 +1487,10 @@ loop:
 		}
 	}
 	// re-populate in the same order.
+	if len(msgs) > 0 {
+		fmsg := "%v ##%x re-populating back-channel with %d messages"
+		logging.Infof(fmsg, feed.logPrefix, len(msgs))
+	}
 	for _, msg := range msgs {
 		feed.backch <- msg
 	}
@@ -1491,11 +1507,13 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 	}
 	xs := make([]*protobuf.TsVbuuid, 0, len(feed.actTss))
 	for _, ts := range feed.actTss {
-		xs = append(xs, ts)
+		if ts != nil {
+			xs = append(xs, ts)
+		}
 	}
 	ys := make([]*protobuf.TsVbuuid, 0, len(feed.rollTss))
 	for _, ts := range feed.rollTss {
-		if !ts.IsEmpty() {
+		if ts != nil && !ts.IsEmpty() {
 			ys = append(ys, ts)
 		}
 	}

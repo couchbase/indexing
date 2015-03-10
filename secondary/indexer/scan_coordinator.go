@@ -59,6 +59,14 @@ type scanDescriptor struct {
 	respch chan interface{}
 }
 
+func (sd *scanDescriptor) ParseIndexInstance(indexInst *common.IndexInst) {
+	sd.isPrimary = indexInst.Defn.IsPrimary
+	sd.p.indexName, sd.p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
+	if sd.p.ts != nil {
+		sd.p.ts.Bucket = sd.p.bucket
+	}
+}
+
 func (sd scanDescriptor) String() string {
 	var incl, span string
 
@@ -88,8 +96,8 @@ func (sd scanDescriptor) String() string {
 		span = span + ")"
 	}
 
-	str := fmt.Sprintf("scan id: %v, index: %v/%v, type: %v, span: %s", sd.scanId,
-		sd.p.bucket, sd.p.indexName, sd.p.scanType, span)
+	str := fmt.Sprintf("scan id: %v, defnId: %v, index: %v/%v, type: %v, span: %s", sd.scanId,
+		sd.p.defnID, sd.p.bucket, sd.p.indexName, sd.p.scanType, span)
 
 	if sd.p.pageSize > 0 {
 		str += fmt.Sprintf(" pagesize: %d", sd.p.pageSize)
@@ -336,6 +344,7 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 	statsMap := make(map[string]string)
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
+	var instList []common.IndexInst
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -346,37 +355,43 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 			continue
 		}
 
+		instList = append(instList, inst)
+
 		k := fmt.Sprintf("%s:%s:num_requests", inst.Defn.Bucket, inst.Defn.Name)
-		v := fmt.Sprint(*stat.Requests)
+		v := fmt.Sprint(atomic.LoadUint64(stat.Requests))
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:num_rows_returned", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(*stat.Rows)
+		v = fmt.Sprint(atomic.LoadUint64(stat.Rows))
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:scan_bytes_read", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(*stat.BytesRead)
+		v = fmt.Sprint(atomic.LoadUint64(stat.BytesRead))
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:total_scan_duration", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(*stat.ScanTime)
+		v = fmt.Sprint(atomic.LoadInt64(stat.ScanTime))
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:scan_wait_duration", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(*stat.WaitTime)
+		v = fmt.Sprint(atomic.LoadInt64(stat.WaitTime))
 		statsMap[k] = v
 
 		st := s.serv.Statistics()
 		statsMap["num_connections"] = fmt.Sprint(st.Connections)
-
-		c, err := s.getItemsCount(instId)
-		if err == nil {
-			k := fmt.Sprintf("%s:%s:items_count", inst.Defn.Bucket, inst.Defn.Name)
-			v := fmt.Sprint(c)
-			statsMap[k] = v
-		} else {
-			logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
-				inst.Defn.Bucket, inst.Defn.Name, err)
-		}
 	}
 
-	replych <- statsMap
+	// Compute counts asynchronously and reply to stats request
+	go func() {
+		for _, inst := range instList {
+			c, err := s.getItemsCount(inst.InstId)
+			if err == nil {
+				k := fmt.Sprintf("%s:%s:items_count", inst.Defn.Bucket, inst.Defn.Name)
+				v := fmt.Sprint(c)
+				statsMap[k] = v
+			} else {
+				logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
+					inst.Defn.Bucket, inst.Defn.Name, err)
+			}
+		}
+		replych <- statsMap
+	}()
 }
 
 func (s *scanCoordinator) run() {
@@ -544,17 +559,15 @@ func (s *scanCoordinator) requestHandler(
 	}
 
 	if err == nil {
-		indexInst, err = s.findIndexInstance(p.defnID)
+		if indexInst, err = s.findIndexInstance(p.defnID); err == nil {
+			sd.ParseIndexInstance(indexInst)
+		}
 	}
-
-	// Update statistics
-	s.mu.RLock()
-	(*s.scanStatsMap[indexInst.InstId].Requests)++
-	s.mu.RUnlock()
 
 	if err == nil && indexInst.State != common.INDEX_STATE_ACTIVE {
 		err = ErrIndexNotReady
 	}
+
 	if err != nil {
 		logging.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
 		respch <- s.makeResponseMessage(sd, err)
@@ -562,13 +575,10 @@ func (s *scanCoordinator) requestHandler(
 		return
 	}
 
-	p.indexName, p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
-	if p.ts != nil {
-		p.ts.Bucket = p.bucket
-	}
-
-	// Its a primary index scan
-	sd.isPrimary = indexInst.Defn.IsPrimary
+	// Update statistics
+	s.mu.RLock()
+	atomic.AddUint64(s.scanStatsMap[indexInst.InstId].Requests, 1)
+	s.mu.RUnlock()
 
 	logging.Infof("%v: SCAN_REQ %v", s.logPrefix, sd)
 	// Before starting the index scan, we have to find out the snapshot timestamp
@@ -706,10 +716,10 @@ func (s *scanCoordinator) requestHandler(
 		}
 
 		s.mu.RLock()
-		(*s.scanStatsMap[indexInst.InstId].Rows) += rdr.ReturnedRows()
-		(*s.scanStatsMap[indexInst.InstId].BytesRead) += rdr.ReturnedBytes()
-		(*s.scanStatsMap[indexInst.InstId].ScanTime) += time.Now().Sub(startTime).Nanoseconds()
-		(*s.scanStatsMap[indexInst.InstId].WaitTime) += waitDuration.Nanoseconds()
+		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].Rows, rdr.ReturnedRows())
+		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].BytesRead, rdr.ReturnedBytes())
+		atomic.AddInt64(s.scanStatsMap[indexInst.InstId].ScanTime, time.Now().Sub(startTime).Nanoseconds())
+		atomic.AddInt64(s.scanStatsMap[indexInst.InstId].WaitTime, waitDuration.Nanoseconds())
 		s.mu.RUnlock()
 		logging.Infof("%v: SCAN_ID: %v finished scan (%s)", s.logPrefix, sd.scanId, status)
 	}

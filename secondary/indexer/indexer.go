@@ -245,8 +245,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	// Setup http server
+	addr := net.JoinHostPort("", idx.config["httpPort"].String())
+	logging.PeriodicProfile(addr, "goroutine")
 	go func() {
-		addr := net.JoinHostPort("", idx.config["httpPort"].String())
 		if err := http.ListenAndServe(addr, nil); err != nil {
 			logging.Errorf("indexer:: Error Starting Http Server: %v", err)
 			common.CrashOnError(err)
@@ -255,7 +256,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	//start the main indexer loop
 	idx.run()
-
 	return idx, &MsgSuccess{}
 
 }
@@ -2595,6 +2595,15 @@ func (idx *indexer) validateIndexInstMap() {
 		if !bucketValid[bucket] {
 			logging.Errorf("Indexer::validateIndexInstMap \n\t Bucket %v Not Found."+
 				"Not Recovering Index %v", bucket, index)
+			//update metadata with new state
+			index.State = common.INDEX_STATE_DELETED
+			idx.indexInstMap[instId] = index
+			if idx.enableManager {
+				instIdList := []common.IndexInstId{instId}
+				if err := idx.updateMetaInfoForIndexList(instIdList, true, false, false, false); err != nil {
+					common.CrashOnError(err)
+				}
+			}
 			delete(idx.indexInstMap, instId)
 		}
 	}

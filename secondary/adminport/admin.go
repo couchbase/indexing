@@ -6,7 +6,6 @@
 package adminport
 
 import "errors"
-import "net/http"
 import c "github.com/couchbase/indexing/secondary/common"
 
 // errors codes
@@ -72,7 +71,7 @@ type Server interface {
 
 	// RegisterHandler a request message that shall be supported by
 	// adminport-server
-	RegisterHTTPHandler(string, func(http.ResponseWriter, *http.Request)) error
+	RegisterHTTPHandler(pattern string, handler interface{}) error
 
 	// Unregister a previously registered request message
 	Unregister(msg MessageMarshaller) error

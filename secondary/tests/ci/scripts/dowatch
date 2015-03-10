@@ -13,12 +13,12 @@ for i in {1..240}; do
   current="`git ls-remote git://github.com/couchbase/indexing $branch | awk '{print $1}'`"
   good="`cat ~/indexing.good`"
   if [ "$current" != "$good" ]; then exit 0; fi
-
+  
   branch=unstable
   current="`git ls-remote git://github.com/couchbase/gometa $branch | awk '{print $1}'`"
   good="`cat ~/gometa.good`"
   if [ "$current" != "$good" ]; then exit 0; fi
-
+  
   branch=master
   current="`git ls-remote git://github.com/couchbase/query $branch | awk '{print $1}'`"
   good="`cat ~/query.good`"

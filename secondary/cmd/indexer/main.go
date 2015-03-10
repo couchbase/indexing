@@ -47,8 +47,7 @@ func main() {
 	logging.Infof("Indexer started with command line: %v\n", os.Args)
 	flag.Parse()
 
-	//logging.SetLogLevel(logging.Level(*logLevel))
-	logging.SetLogLevel(logging.Debug)
+	logging.SetLogLevel(logging.Level(*logLevel))
 	forestdb.Log = &logging.SystemLogger
 
 	// setup cbauth

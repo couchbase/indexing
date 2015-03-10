@@ -13,11 +13,10 @@ package forestdb
 //#include <stdlib.h>
 //#include <libforestdb/forestdb.h>
 import "C"
-import "sync"
 
 // KVStore handle
 type KVStore struct {
-	sync.Mutex
+	advLock
 	f  *File
 	db *C.fdb_kvs_handle
 }

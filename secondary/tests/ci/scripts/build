@@ -6,7 +6,7 @@ while true; do
   (ls -t make-*.log | head -n 15; ls -t make-*.log) | sort | uniq -u | xargs -r rm
   (ls -t logs-*.tar | head -n 15; ls -t logs-*.tar) | sort | uniq -u | xargs -r rm
   (ls -t cores-*.tar* | head -n 15; ls -t cores-*.tar*) | sort | uniq -u | xargs -r rm
-  (ls -t installer-*.deb | head -n 15; ls -t installer-*.deb) | sort | uniq -u | xargs -r rm
+  (ls -t installer-*.tar | head -n 15; ls -t installer-*.tar) | sort | uniq -u | xargs -r rm
   export TS="`date +%d.%m-%H.%M`"
   export WORKSPACE="/opt/build"
   echo '<html><head><meta http-equiv="refresh" content="3"></head><body><pre>' > /var/www/sherlock-current.html
@@ -21,7 +21,7 @@ while true; do
   echo "Build Log: <a href='make-$TS.log'>make-$TS.log</a>" >> /var/www/sherlock-current.html
   echo "Server Log: <a href='logs-$TS.tar'>logs-$TS.tar</a>" >> /var/www/sherlock-current.html
   echo "Core Files: <a href='cores-$TS.tar'>cores-$TS.tar</a>" >> /var/www/sherlock-current.html
-  echo "Install: <a href='installer-$TS.deb'>installer-$TS.deb</a>" >> /var/www/sherlock-current.html
+  echo "Install: <a href='installer-$TS.tar'>installer-$TS.tar</a>" >> /var/www/sherlock-current.html
   sed 's/<meta [^>]*>//' /var/www/sherlock-current.html > /var/www/sherlock-$TS.$status.html
   echo "</pre></body></html>" >> /var/www/sherlock-$TS.$status.html
   echo "</pre><script>window.location.href='sherlock-$TS.$status.html'</script></body></html>" >> /var/www/sherlock-current.html
@@ -30,7 +30,7 @@ while true; do
   mv ${WORKSPACE}/logs.tar /var/www/logs-$TS.tar
   mv ${WORKSPACE}/cores.tar /var/www/cores-$TS.tar
   mv ${WORKSPACE}/versions.cfg /var/www/versions-$TS.cfg
-  mv ${WORKSPACE}/installer.deb /var/www/installer-$TS.deb
+  mv ${WORKSPACE}/installer.tar /var/www/installer-$TS.tar
   ln /var/www/sherlock-$TS.$status.html /var/www/sherlock-$TS.htm
   dowatch
   dotiming

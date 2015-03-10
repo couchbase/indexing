@@ -37,6 +37,9 @@ var ErrorInstanceNotFound = errors.New("queryport.instanceNotFound")
 // ErrorIndexNotReady
 var ErrorIndexNotReady = errors.New("queryport.indexNotReady")
 
+// ErrorClientUninitialized
+var ErrorClientUninitialized = errors.New("queryport.clientUninitialized")
+
 // ResponseHandler shall interpret response packets from server
 // and handle them. If handler is not interested in receiving any
 // more response it shall return false, else it shall continue
@@ -211,16 +214,25 @@ func NewGsiClient(
 
 // IndexState implements BridgeAccessor{} interface.
 func (c *GsiClient) IndexState(defnID uint64) (common.IndexState, error) {
+	if c.bridge == nil {
+		return common.INDEX_STATE_ERROR, ErrorClientUninitialized
+	}
 	return c.bridge.IndexState(defnID)
 }
 
 // Refresh implements BridgeAccessor{} interface.
 func (c *GsiClient) Refresh() ([]*mclient.IndexMetadata, error) {
+	if c.bridge == nil {
+		return nil, ErrorClientUninitialized
+	}
 	return c.bridge.Refresh()
 }
 
 // Nodes implements BridgeAccessor{} interface.
 func (c *GsiClient) Nodes() (map[string]string, error) {
+	if c.bridge == nil {
+		return nil, ErrorClientUninitialized
+	}
 	return c.bridge.Nodes()
 }
 
@@ -250,6 +262,9 @@ func (c *GsiClient) CreateIndex(
 	secExprs []string, isPrimary bool,
 	with []byte) (defnID uint64, err error) {
 
+	if c.bridge == nil {
+		return defnID, ErrorClientUninitialized
+	}
 	defnID, err = c.bridge.CreateIndex(
 		name, bucket, using, exprType, partnExpr, whereExpr,
 		secExprs, isPrimary, with)
@@ -258,17 +273,27 @@ func (c *GsiClient) CreateIndex(
 
 // BuildIndexes implements BridgeAccessor{} interface.
 func (c *GsiClient) BuildIndexes(defnIDs []uint64) error {
+	if c.bridge == nil {
+		return ErrorClientUninitialized
+	}
 	return c.bridge.BuildIndexes(defnIDs)
 }
 
 // DropIndex implements BridgeAccessor{} interface.
 func (c *GsiClient) DropIndex(defnID uint64) error {
+	if c.bridge == nil {
+		return ErrorClientUninitialized
+	}
 	return c.bridge.DropIndex(defnID)
 }
 
 // LookupStatistics for a single secondary-key.
 func (c *GsiClient) LookupStatistics(
 	defnID uint64, value common.SecondaryKey) (common.IndexStatistics, error) {
+
+	if c.bridge == nil {
+		return nil, ErrorClientUninitialized
+	}
 
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
@@ -289,6 +314,10 @@ func (c *GsiClient) RangeStatistics(
 	defnID uint64, low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
+	if c.bridge == nil {
+		return nil, ErrorClientUninitialized
+	}
+
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		return nil, err
@@ -308,6 +337,10 @@ func (c *GsiClient) Lookup(
 	distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) error {
+
+	if c.bridge == nil {
+		return ErrorClientUninitialized
+	}
 
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
@@ -335,6 +368,10 @@ func (c *GsiClient) Range(
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) error {
 
+	if c.bridge == nil {
+		return ErrorClientUninitialized
+	}
+
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		protoResp := &protobuf.ResponseStream{
@@ -361,6 +398,10 @@ func (c *GsiClient) ScanAll(
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) error {
 
+	if c.bridge == nil {
+		return ErrorClientUninitialized
+	}
+
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		protoResp := &protobuf.ResponseStream{
@@ -384,6 +425,10 @@ func (c *GsiClient) ScanAll(
 func (c *GsiClient) CountLookup(
 	defnID uint64, values []common.SecondaryKey) (count int64, err error) {
 
+	if c.bridge == nil {
+		return count, ErrorClientUninitialized
+	}
+
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		return 0, err
@@ -401,6 +446,10 @@ func (c *GsiClient) CountRange(
 	low, high common.SecondaryKey,
 	inclusion Inclusion) (count int64, err error) {
 
+	if c.bridge == nil {
+		return count, ErrorClientUninitialized
+	}
+
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		return 0, err
@@ -414,6 +463,9 @@ func (c *GsiClient) CountRange(
 
 // Close the client and all open connections with server.
 func (c *GsiClient) Close() {
+	if c.bridge == nil {
+		return
+	}
 	c.bridge.Close()
 	for _, queryClient := range c.queryClients {
 		queryClient.Close()

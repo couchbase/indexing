@@ -17,7 +17,6 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"io/ioutil"
 	"net/http"
-	"runtime"
 	"time"
 )
 
@@ -53,7 +52,9 @@ func NewSettingsManager(supvCmdch MsgChannel,
 			}}
 	}
 
-	setNumCPUs(config)
+	ncpu := common.SetNumCPUs(config["indexer.settings.max_cpu_percent"].Int())
+	logging.Infof("Setting maxcpus = %d", ncpu)
+
 	setLogger(config)
 
 	http.HandleFunc("/settings", s.handleSettingsReq)
@@ -180,7 +181,10 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 		config := s.config.Clone()
 		config.Update(value)
 		s.config = config
-		setNumCPUs(config)
+
+		ncpu := common.SetNumCPUs(config["indexer.settings.max_cpu_percent"].Int())
+		logging.Infof("Setting maxcpus = %d", ncpu)
+
 		setLogger(config)
 
 		indexerConfig := s.config.SectionConfig("indexer.", true)
@@ -220,16 +224,6 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 	}
 
 	return nil
-}
-
-func setNumCPUs(config common.Config) {
-	ncpu := config["indexer.settings.max_cpu_percent"].Int() / 100
-	if ncpu == 0 {
-		ncpu = runtime.NumCPU()
-	}
-
-	logging.Infof("Setting maxcpus = %d", ncpu)
-	runtime.GOMAXPROCS(ncpu)
 }
 
 func setLogger(config common.Config) {

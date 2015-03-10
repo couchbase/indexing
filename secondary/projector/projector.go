@@ -23,7 +23,7 @@ type Projector struct {
 	mu     sync.RWMutex
 	topics map[string]*Feed // active topics
 	config c.Config         // full configuration information.
-	// config params
+	// immutable config params
 	name        string // human readable name of the projector
 	clusterAddr string // kv cluster's address to connect
 	adminport   string // projector listens on this adminport
@@ -94,6 +94,9 @@ func (p *Projector) SetConfig(config c.Config) {
 	logging.SetLogLevel(logging.Level(level))
 	override := p.config["projector.settings.log_override"].String()
 	logging.AddOverride(override)
+
+	// update cpu configuration
+	c.SetNumCPUs(config["projector.maxCpuPercent"].Int())
 }
 
 // GetFeedConfig from current configuration settings.

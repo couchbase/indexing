@@ -40,7 +40,7 @@ cat >>/tmp/timing.html <<'EOF'
         tdata[i][0] = tlink;
       }
       $("#timing").DataTable({
-         "data":     tdata,
+         "data":     tdata, 
          "columns":  tcols,
          "paging":   false,
          "ordering": false,

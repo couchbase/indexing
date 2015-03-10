@@ -13,14 +13,14 @@ import (
 var CheckCollation = false
 
 func RangeWithClient(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
-	distinct bool, limit int64, client *qc.GsiClient) (tc.ScanResponse, error) {
+	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency, client *qc.GsiClient) (tc.ScanResponse, error) {
 	var scanErr error
 	scanErr = nil
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
 	connErr := client.Range(
 		defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
-		c.AnyConsistency, nil,
+		consistency, vector,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
 				scanErr = err
@@ -53,7 +53,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 }
 
 func Range(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
-	distinct bool, limit int64) (tc.ScanResponse, error) {
+	distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
 	var scanErr error
 	scanErr = nil
 	var previousSecKey value.Value
@@ -68,7 +68,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	scanResults := make(tc.ScanResponse)
 	connErr := client.Range(
 		defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
-		c.AnyConsistency, nil,
+		consistency, vector,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
 				scanErr = err
@@ -115,7 +115,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	return scanResults, nil
 }
 
-func Lookup(indexName, bucketName, server string, values []interface{}, distinct bool, limit int64) (tc.ScanResponse, error) {
+func Lookup(indexName, bucketName, server string, values []interface{}, distinct bool, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
 	var scanErr error
 	scanErr = nil
 	// ToDo: Create a client pool
@@ -128,7 +128,7 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	scanResults := make(tc.ScanResponse)
 	connErr := client.Lookup(
 		defnID, []c.SecondaryKey{values}, distinct, limit,
-		c.AnyConsistency, nil,
+		consistency, vector,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
 				scanErr = err
@@ -160,7 +160,7 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	return scanResults, nil
 }
 
-func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse, error) {
+func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Consistency, vector *qc.TsConsistency) (tc.ScanResponse, error) {
 	var scanErr error
 	scanErr = nil
 	var previousSecKey value.Value
@@ -175,7 +175,7 @@ func ScanAll(indexName, bucketName, server string, limit int64) (tc.ScanResponse
 	scanResults := make(tc.ScanResponse)
 	connErr := client.ScanAll(
 		defnID, limit,
-		c.AnyConsistency, nil,
+		consistency, vector,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
 				scanErr = err
