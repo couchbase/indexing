@@ -16,6 +16,7 @@ import "code.google.com/p/goprotobuf/proto"
 type Feed struct {
 	cluster      string // immutable
 	topic        string // immutable
+	opaque       uint16 // opaque that created this feed.
 	endpointType string // immutable
 
 	// upstream
@@ -65,6 +66,7 @@ func NewFeed(topic string, config c.Config, opaque uint16) (*Feed, error) {
 	feed := &Feed{
 		cluster: config["clusterAddr"].String(),
 		topic:   topic,
+		opaque:  opaque,
 
 		// upstream
 		reqTss:  make(map[string]*protobuf.TsVbuuid),
@@ -88,8 +90,13 @@ func NewFeed(topic string, config c.Config, opaque uint16) (*Feed, error) {
 	feed.logPrefix = fmt.Sprintf("FEED[<=>%v(%v)]", topic, feed.cluster)
 
 	go feed.genServer()
-	logging.Infof("%v feed started ...\n", feed.logPrefix)
+	logging.Infof("%v ##%x feed started ...\n", feed.logPrefix, opaque)
 	return feed, nil
+}
+
+// GetOpaque return the opaque id that created this feed.
+func (feed *Feed) GetOpaque() uint16 {
+	return feed.opaque
 }
 
 const (
@@ -349,14 +356,15 @@ func (feed *Feed) genServer() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v feed gen-server crashed: %v\n", feed.logPrefix, r)
 			logging.Errorf("%s", logging.StackTrace())
-			feed.shutdown(0xFFFF)
+			feed.shutdown(feed.opaque)
 		}
 	}()
 
 	var msg []interface{}
 
 	timeout := time.Tick(1000 * time.Millisecond)
-	ctrlMsg := "%v control channel has %v messages"
+	ctrlMsg := "%v ##%x control channel has %v messages"
+	prefix := feed.logPrefix
 
 loop:
 	for {
@@ -379,7 +387,6 @@ loop:
 			}
 
 		case msg = <-feed.backch:
-			prefix := feed.logPrefix
 			if cmd, ok := msg[0].(*controlStreamRequest); ok {
 				reqTs, ok := feed.reqTss[cmd.bucket]
 				seqno, vbuuid, sStart, sEnd, err := reqTs.Get(cmd.vbno)
@@ -425,29 +432,31 @@ loop:
 				feed.rollTss[cmd.bucket] = rollTs
 
 			} else if cmd, ok := msg[0].(*controlFinKVData); ok {
-				fmsg := "%v backch flush %T -- %v\n"
-				logging.Infof(fmsg, prefix, cmd, cmd.Repr())
+				fmsg := "%v ##%x backch flush %T -- %v\n"
+				logging.Infof(fmsg, prefix, feed.opaque, cmd, cmd.Repr())
 				actTs, ok := feed.actTss[cmd.bucket]
 				if ok && actTs != nil && actTs.Len() == 0 { // bucket is done
-					logging.Infof("%v self deleting bucket\n", prefix)
+					fmsg = "%v ##%x self deleting bucket\n"
+					logging.Infof(fmsg, prefix, feed.opaque)
 					feed.cleanupBucket(cmd.bucket, false)
 
 				} else if actTs != nil && actTs.Len() == 0 {
-					fmsg := "%v FinKVData before StreamEnds %v\n"
-					logging.Fatalf(fmsg, prefix, actTs)
+					fmsg = "%v ##%x FinKVData before StreamEnds %v\n"
+					logging.Fatalf(fmsg, prefix, feed.opaque, actTs)
 
 				} else {
-					fmsg := "%v FinKVData can't find bucket %q\n"
-					logging.Fatalf(fmsg, prefix, cmd.bucket)
+					fmsg := "%v ##%x FinKVData can't find bucket %q\n"
+					logging.Fatalf(fmsg, prefix, feed.opaque, cmd.bucket)
 				}
 
 			} else {
-				logging.Fatalf("%v backch flush %T: %v\n", prefix, msg[0], msg[0])
+				fmsg := "%v ##%x backch flush %T: %v\n"
+				logging.Fatalf(fmsg, prefix, feed.opaque, msg[0], msg[0])
 			}
 
 		case <-timeout:
 			if len(feed.backch) > 0 { // can happend during rebalance.
-				logging.Infof(ctrlMsg, feed.logPrefix, len(feed.backch))
+				logging.Warnf(ctrlMsg, prefix, feed.opaque, len(feed.backch))
 			}
 		}
 	}
@@ -608,15 +617,18 @@ func (feed *Feed) start(
 		feed.reqTss[bucketn] = reqTs // :SideEffect:
 		if e != nil {
 			err = e
-			fmsg := "%v ##%x stream-request: %v\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
+			logging.Errorf(
+				"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque, err,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
+		} else {
+			logging.Infof(
+				"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
 		}
-		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
-		logging.Infof(
-			fmsg,
-			feed.logPrefix, opaque, bucketn,
-			feed.rollTss[bucketn].GetVbnos(),
-			feed.actTss[bucketn].GetVbnos())
 	}
 	return err
 }
@@ -690,15 +702,18 @@ func (feed *Feed) restartVbuckets(
 		feed.reqTss[bucketn] = reqTs // :SideEffect:
 		if e != nil {
 			err = e
-			fmsg := "%v ##%x stream-request: %v\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
+			logging.Errorf(
+				"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque, err,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
+		} else {
+			logging.Infof(
+				"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
 		}
-		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
-		logging.Infof(
-			fmsg,
-			feed.logPrefix, opaque, bucketn,
-			feed.rollTss[bucketn].GetVbnos(),
-			feed.actTss[bucketn].GetVbnos())
 	}
 	return err
 }
@@ -763,11 +778,14 @@ func (feed *Feed) shutdownVbuckets(
 		feed.rollTss[bucketn] = rollTs.FilterByVbuckets(vbnos) // :SideEffect:
 		if e != nil {
 			err = e
-			fmsg := "%v ##%x stream-end: %v\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
+			logging.Errorf(
+				"%v ##%x stream-end (err: %v) vbnos: %v\n",
+				feed.logPrefix, opaque, err, vbnos)
+		} else {
+			logging.Infof(
+				"%v ##%x stream-end (success) vbnos: %v\n",
+				feed.logPrefix, opaque, vbnos)
 		}
-		fmsg := "%v ##%x stream-end completed for bucket %v, vbnos %v\n"
-		logging.Infof(fmsg, feed.logPrefix, opaque, bucketn, vbnos)
 	}
 	return err
 }
@@ -844,14 +862,18 @@ func (feed *Feed) addBuckets(
 		feed.reqTss[bucketn] = reqTs // :SideEffect:
 		if e != nil {
 			err = e
-			fmsg := "%v ##%x stream-request: %v\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
+			logging.Errorf(
+				"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque, err,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
+		} else {
+			logging.Infof(
+				"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
 		}
-		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
-		logging.Infof(
-			fmsg, feed.logPrefix, opaque, bucketn,
-			feed.rollTss[bucketn].GetVbnos(),
-			feed.actTss[bucketn].GetVbnos())
 	}
 	return err
 }
@@ -1075,7 +1097,7 @@ func (feed *Feed) openFeeder(
 	if ok {
 		return feeder, nil
 	}
-	bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn)
+	bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn, opaque)
 	if err != nil {
 		return nil, projC.ErrorFeeder
 	}
@@ -1091,7 +1113,7 @@ func (feed *Feed) openFeeder(
 		"genChanSize":  feed.config["dcp.genChanSize"].Int(),
 		"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
 	}
-	feeder, err = OpenBucketFeed(name, bucket, dcpConfig)
+	feeder, err = OpenBucketFeed(name, bucket, opaque, dcpConfig)
 	if err != nil {
 		fmsg := "%v ##%x OpenBucketFeed(%q): %v"
 		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
@@ -1140,7 +1162,7 @@ func (feed *Feed) bucketFeed(
 func (feed *Feed) bucketDetails(
 	pooln, bucketn string, opaque uint16, vbnos []uint16) ([]uint64, error) {
 
-	bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn)
+	bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn, opaque)
 	if err != nil {
 		return nil, err
 	}
@@ -1151,7 +1173,7 @@ func (feed *Feed) bucketDetails(
 		"genChanSize":  feed.config["dcp.genChanSize"].Int(),
 		"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
 	}
-	flogs, err := bucket.GetFailoverLogs(vbnos, dcpConfig)
+	flogs, err := bucket.GetFailoverLogs(opaque, vbnos, dcpConfig)
 	if err != nil {
 		fmsg := "%v ##%x GetFailoverLogs(%q): %v"
 		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
@@ -1530,30 +1552,32 @@ func newDCPConnectionName(bucketn, topic string, uuid uint64) string {
 // connectBucket will instantiate a couchbase-bucket instance with cluster.
 // caller's responsibility to close the bucket.
 func (feed *Feed) connectBucket(
-	cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
+	cluster, pooln, bucketn string, opaque uint16) (*couchbase.Bucket, error) {
 
 	ah := &c.CbAuthHandler{Hostport: cluster, Bucket: bucketn}
 	couch, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
 	if err != nil {
-		fmsg := "%v connectBucket(`%v`): %v"
-		logging.Errorf(fmsg, feed.logPrefix, bucketn, err)
+		fmsg := "%v ##%x connectBucket(`%v`): %v"
+		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
 		return nil, projC.ErrorDCPConnection
 	}
 	pool, err := couch.GetPool(pooln)
 	if err != nil {
-		fmsg := "%v GetPool(`%v`): %v"
-		logging.Errorf(fmsg, feed.logPrefix, pooln, err)
+		fmsg := "%v ##%x GetPool(`%v`): %v"
+		logging.Errorf(fmsg, feed.logPrefix, opaque, pooln, err)
 		return nil, projC.ErrorDCPPool
 	}
 	bucket, err := pool.GetBucket(bucketn)
 	if err != nil {
-		fmsg := "%v GetBucket(`%v`): %v"
-		logging.Errorf(fmsg, feed.logPrefix, bucketn, err)
+		fmsg := "%v ##%x GetBucket(`%v`): %v"
+		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
 		return nil, projC.ErrorDCPBucket
 	}
 	return bucket, nil
 }
 
+// FeedConfigParams return the list of configuration params
+// supported by a feed.
 func FeedConfigParams() []string {
 	paramNames := []string{
 		"clusterAddr",

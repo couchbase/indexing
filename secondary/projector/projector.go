@@ -57,7 +57,7 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 
 	callb := func(cfg c.Config) {
 		logging.Infof("%v settings notifier from metakv\n", p.logPrefix)
-		cfg.LogConfig()
+		cfg.LogConfig(p.logPrefix)
 		p.ResetConfig(cfg)
 	}
 	c.SetupSettingsNotifier(callb, make(chan struct{}))
@@ -152,7 +152,8 @@ func (p *Projector) AddFeed(topic string, feed *Feed) (err error) {
 		return projC.ErrorTopicExist
 	}
 	p.topics[topic] = feed
-	logging.Infof("%v %q feed added ...\n", p.logPrefix, topic)
+	opaque := feed.GetOpaque()
+	logging.Debugf("%v ##%x feed %q added ...\n", p.logPrefix, opaque, topic)
 	return
 }
 
@@ -162,11 +163,13 @@ func (p *Projector) DelFeed(topic string) (err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if _, ok := p.topics[topic]; ok == false {
+	feed, ok := p.topics[topic]
+	if ok == false {
 		return projC.ErrorTopicMissing
 	}
 	delete(p.topics, topic)
-	logging.Infof("%v ... %q feed deleted\n", p.logPrefix, topic)
+	opaque := feed.GetOpaque()
+	logging.Debugf("%v ##%x ... feed %q deleted\n", p.logPrefix, opaque, topic)
 	return
 }
 
@@ -182,13 +185,16 @@ func (p *Projector) doVbmapRequest(
 	bucketn := request.GetBucket()
 	kvaddrs := request.GetKvaddrs()
 
-	// get vbmap from bucket connection.
+	// log this request.
+	prefix := p.logPrefix
 	fmsg := "%v ##%x doVbmapRequest() {%q, %q, %v}\n"
-	logging.Infof(fmsg, p.logPrefix, pooln, bucketn, kvaddrs, opaque)
+	logging.Infof(fmsg, prefix, pooln, bucketn, kvaddrs, opaque)
+	defer logging.Infof("%v ##%x doVbmapRequest() returns ...\n", prefix, opaque)
+
+	// get vbmap from bucket connection.
 	bucket, err := c.ConnectBucket(p.clusterAddr, pooln, bucketn)
 	if err != nil {
-		fmsg := "%v ##%x ConnectBucket(): %v\n"
-		logging.Errorf(fmsg, p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x ConnectBucket(): %v\n", prefix, opaque, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -197,8 +203,7 @@ func (p *Projector) doVbmapRequest(
 	bucket.Refresh()
 	m, err := bucket.GetVBmap(kvaddrs)
 	if err != nil {
-		fmsg := "%v ##%x GetVBmap(): %v\n"
-		logging.Errorf(fmsg, p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x GetVBmap(): %v\n", prefix, opaque, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -224,12 +229,15 @@ func (p *Projector) doFailoverLog(
 	bucketn := request.GetBucket()
 	vbuckets := request.GetVbnos()
 
+	// log this request.
+	prefix := p.logPrefix
 	fmsg := "%v ##%x doFailoverLog() {%q, %q, %v}\n"
-	logging.Infof(fmsg, p.logPrefix, opaque, pooln, bucketn, vbuckets)
+	logging.Infof(fmsg, prefix, opaque, pooln, bucketn, vbuckets)
+	defer logging.Infof("%v ##%x doFailoverLog() returns ...\n", prefix, opaque)
+
 	bucket, err := c.ConnectBucket(p.clusterAddr, pooln, bucketn)
 	if err != nil {
-		fmsg := "%v ##%x ConnectBucket(): %v\n"
-		logging.Errorf(fmsg, p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x ConnectBucket(): %v\n", prefix, opaque, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -241,7 +249,7 @@ func (p *Projector) doFailoverLog(
 		"genChanSize":  p.config["projector.dcp.genChanSize"].Int(),
 		"dataChanSize": p.config["projector.dcp.dataChanSize"].Int(),
 	}
-	flogs, err := bucket.GetFailoverLogs(vbnos, dcpConfig)
+	flogs, err := bucket.GetFailoverLogs(opaque, vbnos, dcpConfig)
 	if err == nil {
 		for vbno, flog := range flogs {
 			vbuuids := make([]uint64, 0, len(flog))
@@ -258,8 +266,7 @@ func (p *Projector) doFailoverLog(
 			protoFlogs = append(protoFlogs, protoFlog)
 		}
 	} else {
-		fmsg := "%v ##%x GetFailoverLogs(): %v\n"
-		logging.Errorf(fmsg, p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x GetFailoverLogs(): %v\n", prefix, opaque, err)
 		response.Err = protobuf.NewError(err)
 		return response
 	}
@@ -278,8 +285,10 @@ func (p *Projector) doMutationTopic(
 
 	topic := request.GetTopic()
 
-	fmsg := "%v ##%x doMutationTopic() %q\n"
-	logging.Infof(fmsg, p.logPrefix, opaque, topic)
+	// log this request.
+	prefix := p.logPrefix
+	logging.Infof("%v ##%x doMutationTopic() %q\n", prefix, opaque, topic)
+	defer logging.Infof("%v ##%x doMutationTopic() returns ...\n", prefix, opaque)
 
 	var err error
 	feed, _ := p.GetFeed(topic)
@@ -287,6 +296,8 @@ func (p *Projector) doMutationTopic(
 		config := p.GetFeedConfig()
 		feed, err = NewFeed(topic, config, opaque)
 		if err != nil {
+			fmsg := "%v ##%x unable to create feed %v\n"
+			logging.Errorf(fmsg, prefix, opaque, topic)
 			return (&protobuf.TopicResponse{}).SetErr(err)
 		}
 	}
@@ -309,12 +320,14 @@ func (p *Projector) doRestartVbuckets(
 
 	topic := request.GetTopic()
 
-	fmsg := "%v ##%x doRestartVbuckets() %q\n"
-	logging.Infof(fmsg, p.logPrefix, opaque, topic)
+	// log this request.
+	prefix := p.logPrefix
+	logging.Infof("%v ##%x doRestartVbuckets() %q\n", prefix, opaque, topic)
+	defer logging.Infof("%v ##%x doRestartVbuckets() returns ...\n", prefix, opaque)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		response := &protobuf.TopicResponse{}
 		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
@@ -340,12 +353,14 @@ func (p *Projector) doShutdownVbuckets(
 
 	topic := request.GetTopic()
 
-	fmsg := "%v ##%x doShutdownVbuckets() %q\n"
-	logging.Infof(fmsg, p.logPrefix, opaque, topic)
+	// log this request.
+	prefix := p.logPrefix
+	logging.Infof("%v ##%x doShutdownVbuckets() %q\n", prefix, opaque, topic)
+	defer logging.Infof("%v ##%x doShutdownVbuckets() returns ...\n", prefix, opaque)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
@@ -363,12 +378,14 @@ func (p *Projector) doAddBuckets(
 
 	topic := request.GetTopic()
 
-	fmsg := "%v ##%x doAddBuckets() %q\n"
-	logging.Infof(fmsg, p.logPrefix, opaque, topic)
+	// log this request.
+	prefix := p.logPrefix
+	logging.Infof("%v ##%x doAddBuckets() %q\n", prefix, opaque, topic)
+	defer logging.Infof("%v ##%x doAddBuckets() returns ...\n", prefix, opaque)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		response := &protobuf.TopicResponse{}
 		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
@@ -393,12 +410,14 @@ func (p *Projector) doDelBuckets(
 
 	topic := request.GetTopic()
 
-	fmsg := "%v ##%x doDelBuckets() %q\n"
-	logging.Infof(fmsg, p.logPrefix, opaque, topic)
+	// log this request.
+	prefix := p.logPrefix
+	logging.Infof("%v ##%x doDelBuckets() %q\n", prefix, opaque, topic)
+	defer logging.Infof("%v ##%x doDelBuckets() returns ...\n", prefix, opaque)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
@@ -414,12 +433,14 @@ func (p *Projector) doAddInstances(
 
 	topic := request.GetTopic()
 
-	fmsg := "%v ##%x doAddInstances() %q\n"
-	logging.Infof(fmsg, p.logPrefix, opaque, topic)
+	// log this request.
+	prefix := p.logPrefix
+	logging.Infof("%v ##%x doAddInstances() %q\n", prefix, opaque, topic)
+	defer logging.Infof("%v ##%x doAddInstances() returns ...\n", prefix, opaque)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
@@ -434,12 +455,14 @@ func (p *Projector) doDelInstances(
 
 	topic := request.GetTopic()
 
-	fmsg := "%v ##%x doDelInstances() %q\n"
-	logging.Infof(fmsg, p.logPrefix, opaque, topic)
+	// log this request.
+	prefix := p.logPrefix
+	logging.Infof("%v ##%x doDelInstances() %q\n", prefix, opaque, topic)
+	defer logging.Infof("%v ##%x doDelInstances() returns ...\n", prefix, opaque)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
@@ -455,12 +478,14 @@ func (p *Projector) doRepairEndpoints(
 
 	topic := request.GetTopic()
 
-	fmsg := "%v ##%x doRepairEndpoints() %q\n"
-	logging.Infof(fmsg, p.logPrefix, opaque, topic)
+	// log this request.
+	prefix := p.logPrefix
+	logging.Infof("%v ##%x doRepairEndpoints() %q\n", prefix, opaque, topic)
+	defer logging.Infof("%v ##%x doRepairEndpoints() returns ...\n", prefix, opaque)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
@@ -476,8 +501,10 @@ func (p *Projector) doShutdownTopic(
 
 	topic := request.GetTopic()
 
-	fmsg := "%v ##%x doShutdownTopic() %q\n"
-	logging.Infof(fmsg, p.logPrefix, opaque, topic)
+	// log this request.
+	prefix := p.logPrefix
+	logging.Infof("%v ##%x doShutdownTopic() %q\n", prefix, opaque, topic)
+	defer logging.Infof("%v ##%x doShutdownTopic() returns ...\n", prefix, opaque)
 
 	feed, err := p.GetFeed(topic) // only existing feed
 	if err != nil {
@@ -492,6 +519,7 @@ func (p *Projector) doShutdownTopic(
 
 func (p *Projector) doStatistics() interface{} {
 	logging.Infof("%v doStatistics()\n", p.logPrefix)
+	defer logging.Infof("%v doStatistics() returns ...\n", p.logPrefix)
 
 	m := map[string]interface{}{
 		"clusterAddr": p.clusterAddr,
@@ -557,7 +585,7 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 		// update projector settings
 		logging.Infof("%v updating projector config ...\n", p.logPrefix)
 		config, _ := c.NewConfig(newConfig)
-		config.LogConfig()
+		config.LogConfig(p.logPrefix)
 		p.ResetConfig(config)
 		// update feed settings
 		feedConfig := config.SectionConfig("projector.", true /*trim*/)

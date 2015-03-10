@@ -20,7 +20,9 @@ type BucketAccess interface {
 	GetVBmap(kvaddrs []string) (map[string][]uint16, error)
 
 	// FailoverLog fetch the failover log for specified vbucket
-	GetFailoverLogs(vbuckets []uint16) (flogs couchbase.FailoverLog, err error)
+	GetFailoverLogs(
+		opaque uint16,
+		vbuckets []uint16, config map[string]interface{}) (couchbase.FailoverLog, error)
 
 	// Close this bucket.
 	Close()
@@ -53,11 +55,12 @@ type bucketDcp struct {
 func OpenBucketFeed(
 	feedname string,
 	b *couchbase.Bucket,
+	opaque uint16,
 	config map[string]interface{}) (feeder BucketFeeder, err error) {
 
 	bdcp := &bucketDcp{bucket: b}
 	// TODO: use StartDcpFeedOver()
-	bdcp.dcpFeed, err = b.StartDcpFeed(feedname, uint32(0), config)
+	bdcp.dcpFeed, err = b.StartDcpFeed(feedname, uint32(0), opaque, config)
 	if err != nil {
 		return nil, err
 	}
