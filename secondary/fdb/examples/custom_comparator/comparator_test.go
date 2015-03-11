@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/couchbaselabs/goforestdb"
+	"github.com/couchbase/goforestdb"
 )
 
 func TestForestCustomComparator(t *testing.T) {

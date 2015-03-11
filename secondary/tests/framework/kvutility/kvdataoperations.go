@@ -2,7 +2,7 @@ package kvutility
 
 import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
-	"github.com/couchbaselabs/go-couchbase"
+	"github.com/couchbase/go-couchbase"
 	"log"
 	"net/http"
 	"net/url"

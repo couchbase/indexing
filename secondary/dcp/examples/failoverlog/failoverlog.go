@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/couchbaselabs/go-couchbase"
+	"github.com/couchbase/go-couchbase"
 )
 
 const clusterAddr = "http://localhost:9000"

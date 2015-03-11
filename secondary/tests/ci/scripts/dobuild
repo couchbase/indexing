@@ -99,16 +99,16 @@ else
 fi
 
 branch=master
-cd $WORKSPACE/godeps/src/github.com/couchbaselabs/goforestdb
+cd $WORKSPACE/godeps/src/github.com/couchbase/goforestdb
 git fetch -q couchbaselabs
 git checkout -q couchbaselabs/$branch
 current="`git rev-parse HEAD`"
 test -f ~/goforestdb.good || (echo $current > ~/goforestdb.good)
 good="`cat ~/goforestdb.good`"
-echo -n "Switched goforestdb to $branch at <a href='https://github.com/couchbaselabs/goforestdb/commit/$current'>${current:0:7}</a>, changes since last good build: "
+echo -n "Switched goforestdb to $branch at <a href='https://github.com/couchbase/goforestdb/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbaselabs/goforestdb/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/goforestdb/commit/%H">%h</a> %s' HEAD...$good
   echo
 else
   echo "none"
