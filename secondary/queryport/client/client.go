@@ -5,7 +5,7 @@ import "time"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
-import "github.com/couchbaselabs/goprotobuf/proto"
+import "code.google.com/p/goprotobuf/proto"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 

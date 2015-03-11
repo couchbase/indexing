@@ -10,7 +10,7 @@
 package indexer
 
 import (
-	slab "github.com/couchbaselabs/go-slab"
+	slab "github.com/couchbase/go-slab"
 	"sync"
 )
 

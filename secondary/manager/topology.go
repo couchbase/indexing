@@ -13,7 +13,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-	"github.com/couchbaselabs/goprotobuf/proto"
+	"code.google.com/p/goprotobuf/proto"
 )
 
 /////////////////////////////////////////////////////////////////////////

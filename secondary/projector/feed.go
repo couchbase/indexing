@@ -10,7 +10,7 @@ import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import projC "github.com/couchbase/indexing/secondary/projector/client"
-import "github.com/couchbaselabs/goprotobuf/proto"
+import "code.google.com/p/goprotobuf/proto"
 
 // Feed is mutation stream - for maintenance, initial-load, catchup etc...
 type Feed struct {

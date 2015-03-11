@@ -1,6 +1,6 @@
 package protobuf
 
-import "github.com/couchbaselabs/goprotobuf/proto"
+import "code.google.com/p/goprotobuf/proto"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 
 // NewSinglePartition return a new partition instance,

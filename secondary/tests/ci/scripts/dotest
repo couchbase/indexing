@@ -121,7 +121,7 @@ cd $WORKSPACE/goproj/src/github.com/couchbase/query
 git rev-parse HEAD > ~/query.good
 cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
 git rev-parse HEAD > ~/gometa.good
-cd $WORKSPACE/godeps/src/github.com/couchbaselabs/goforestdb
+cd $WORKSPACE/godeps/src/github.com/couchbase/goforestdb
 git rev-parse HEAD > ~/goforestdb.good
 cd $WORKSPACE/forestdb
 git rev-parse HEAD > ~/forestdb.good

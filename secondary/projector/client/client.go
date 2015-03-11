@@ -71,7 +71,7 @@ import "github.com/couchbase/indexing/secondary/logging"
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-import "github.com/couchbaselabs/goprotobuf/proto"
+import "code.google.com/p/goprotobuf/proto"
 
 // error codes
 

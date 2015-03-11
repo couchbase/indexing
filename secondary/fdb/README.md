@@ -7,11 +7,11 @@ Go bindings for ForestDB
 1.  Obtain and build forestdb: https://github.com/couchbaselabs/forestdb (run `make install` to install the library)
 1.  Install header files to system location
   1. On Ubuntu 14.04: `cd <forestdb_project_dir> && mkdir /usr/local/include/libforestdb && cp include/libforestdb/* /usr/local/include/libforestdb`
-1.  `go get -u -v -t github.com/couchbaselabs/goforestdb`
+1.  `go get -u -v -t github.com/couchbase/goforestdb`
 
 ## Documentation
 
-See [godocs](http://godoc.org/github.com/couchbaselabs/goforestdb)
+See [godocs](http://godoc.org/github.com/couchbase/goforestdb)
 
 ## Sample usage (without proper error handling):
 

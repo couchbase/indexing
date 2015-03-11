@@ -3,7 +3,7 @@ package projector
 import "time"
 
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-import "github.com/couchbaselabs/goprotobuf/proto"
+import "code.google.com/p/goprotobuf/proto"
 
 // watch for,
 // 1. stale feeds and shut them down.

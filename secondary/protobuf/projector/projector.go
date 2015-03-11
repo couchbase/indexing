@@ -6,7 +6,7 @@ import "sort"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/dcp"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-import "github.com/couchbaselabs/goprotobuf/proto"
+import "code.google.com/p/goprotobuf/proto"
 
 var ErrorInvalidVbmap = errors.New("protobuf.errorInvalidVbmap")
 
