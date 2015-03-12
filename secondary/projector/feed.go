@@ -445,8 +445,10 @@ loop:
 					logging.Fatalf(fmsg, prefix, feed.opaque, actTs)
 
 				} else {
+					// Note: bucket could have gone because of a downstream
+					// delBucket() request.
 					fmsg := "%v ##%x FinKVData can't find bucket %q\n"
-					logging.Fatalf(fmsg, prefix, feed.opaque, cmd.bucket)
+					logging.Warnf(fmsg, prefix, feed.opaque, cmd.bucket)
 				}
 
 			} else {
