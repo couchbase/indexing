@@ -56,6 +56,7 @@ func NewKVData(
 
 	kvdata := &KVData{
 		feed:      feed,
+		opaque:    opaque,
 		topic:     feed.topic,
 		bucket:    bucket,
 		vrs:       make(map[uint16]*VbucketRoutine),

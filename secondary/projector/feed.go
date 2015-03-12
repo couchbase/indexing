@@ -1067,7 +1067,7 @@ func (feed *Feed) shutdown(opaque uint16) error {
 	}
 	// cleanup
 	close(feed.finch)
-	logging.Infof("%v ##%x feed ... stopped\n", feed.logPrefix, opaque)
+	logging.Infof("%v ##%x feed ... stopped\n", feed.logPrefix, feed.opaque)
 	return nil
 }
 
