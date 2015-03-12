@@ -8,6 +8,7 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/query/value"
 	"log"
+	"time"
 )
 
 var CheckCollation = false
@@ -18,6 +19,8 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 	scanErr = nil
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
+
+	start := time.Now()
 	connErr := client.Range(
 		defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
 		consistency, vector,
@@ -42,6 +45,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 			}
 			return false
 		})
+	elapsed := time.Since(start)
 
 	if connErr != nil {
 		tc.HandleError(connErr, "Connection error in Scan")
@@ -49,6 +53,8 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 	} else if scanErr != nil {
 		return scanResults, scanErr
 	}
+
+	tc.LogPerfStat("Range", elapsed)
 	return scanResults, nil
 }
 
@@ -66,6 +72,8 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
+
+	start := time.Now()
 	connErr := client.Range(
 		defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
 		consistency, vector,
@@ -104,6 +112,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 			}
 			return false
 		})
+	elapsed := time.Since(start)
 
 	client.Close()
 	if connErr != nil {
@@ -112,6 +121,8 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	} else if scanErr != nil {
 		return scanResults, scanErr
 	}
+
+	tc.LogPerfStat("Range", elapsed)
 	return scanResults, nil
 }
 
@@ -126,6 +137,8 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
+
+	start := time.Now()
 	connErr := client.Lookup(
 		defnID, []c.SecondaryKey{values}, distinct, limit,
 		consistency, vector,
@@ -150,6 +163,7 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 			}
 			return false
 		})
+	elapsed := time.Since(start)
 
 	client.Close()
 	if connErr != nil {
@@ -157,6 +171,8 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	} else if scanErr != nil {
 		return scanResults, scanErr
 	}
+
+	tc.LogPerfStat("Lookup", elapsed)
 	return scanResults, nil
 }
 
@@ -173,6 +189,8 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
+
+	start := time.Now()
 	connErr := client.ScanAll(
 		defnID, limit,
 		consistency, vector,
@@ -211,6 +229,7 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 			}
 			return false
 		})
+	elapsed := time.Since(start)
 
 	client.Close()
 	if connErr != nil {
@@ -218,6 +237,8 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 	} else if scanErr != nil {
 		return scanResults, scanErr
 	}
+
+	tc.LogPerfStat("ScanAll", elapsed)
 	return scanResults, nil
 }
 

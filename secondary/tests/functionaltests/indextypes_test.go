@@ -829,12 +829,12 @@ func TestDeferredIndexCreate(t *testing.T) {
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
-func TestCompositeIndex(t *testing.T) {
+func TestCompositeIndex_NumAndString(t *testing.T) {
 	log.Printf("In TestCompositeIndex()")
 
 	var bucketName = "default"
-	var indexName = "index_composite"
-	
+	var indexName = "index_composite1"
+
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age", "company"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
@@ -855,4 +855,22 @@ func TestCompositeIndex(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
+}
+
+func TestCompositeIndex_TwoNumberFields(t *testing.T) {
+	log.Printf("In TestCompositeIndex()")
+
+	var bucketName = "default"
+	var indexName = "index_composite2"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"latitude", "longitude"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	scanResults, err := secondaryindex.ScanAll(indexName, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	if len(scanResults) != len(docs) {
+		log.Printf("ScanAll of composite index is wrong. Expected and actual num of results:  %d and %d", len(docs), len(scanResults))
+		e := errors.New("ScanAll of composite index is wrong")
+		FailTestIfError(e, "Error in TestCompositeIndex", t)
+
+	}
 }
