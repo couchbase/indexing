@@ -594,7 +594,7 @@ func TestArrayDataType_LookupMissingArrayValue(t *testing.T) {
 	}
 }
 
-func SkipTestArrayDataType_LookupWrongOrder(t *testing.T) {
+func TestArrayDataType_LookupWrongOrder(t *testing.T) {
 	log.Printf("In TestArrayDataType_LookupWrongOrder()")
 	var indexName = "index_tags"
 	var bucketName = "default"
@@ -613,7 +613,7 @@ func SkipTestArrayDataType_LookupWrongOrder(t *testing.T) {
 	}
 }
 
-func SkipTestArrayDataType_LookupSubset(t *testing.T) {
+func TestArrayDataType_LookupSubset(t *testing.T) {
 	log.Printf("In TestArrayDataType_LookupSubset()")
 	var indexName = "index_tags"
 	var bucketName = "default"

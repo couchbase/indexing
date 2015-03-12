@@ -172,7 +172,10 @@ func TestCreateDocsMutation(t *testing.T) {
 	CreateDocs(100)
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
+	start := time.Now()
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	elapsed := time.Since(start)
+	log.Printf("Index Scan after mutations took %s\n", elapsed)
 	FailTestIfError(err, "Error in scan", t)
 	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
@@ -216,7 +219,10 @@ func TestDeleteDocsMutation(t *testing.T) {
 	DeleteDocs(200)
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
+	start := time.Now()
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	elapsed := time.Since(start)
+	log.Printf("Index Scan after mutations took %s\n", elapsed)
 	FailTestIfError(err, "Error in scan", t)
 	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
@@ -243,7 +249,10 @@ func TestUpdateDocsMutation(t *testing.T) {
 	UpdateDocs(100)
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 20, 40, 2)
+	start := time.Now()
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{20}, []interface{}{40}, 2, true, defaultlimit, c.SessionConsistency, nil)
+	elapsed := time.Since(start)
+	log.Printf("Index Scan after mutations took %s\n", elapsed)
 	FailTestIfError(err, "Error in scan", t)
 	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
