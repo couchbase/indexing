@@ -25,7 +25,9 @@ var proddir, bagdir string
 // 4) list indexes: should list only new indexes
 func TestBucketDefaultDelete(t *testing.T) {
 	kvutility.DeleteBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 	kvutility.CreateBucket("default", "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11212")
+	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
 	log.Printf("Populating the default bucket")
@@ -278,7 +280,7 @@ func TestLargePrimaryKeyLength(t *testing.T) {
 		err = errors.New("Len of scanResults is incorrect.")
 		FailTestIfError(err, "Len of scanResults is incorrect", t)
 	}
-	
+
 	log.Printf("Lengths of num of docs and scanResults are:  %d and %d", len(docs), len(scanResults))
 	log.Printf("End: Length of kv docs is %d", len(docs))
 }
@@ -290,7 +292,7 @@ func TestUpdateMutations_DeleteField(t *testing.T) {
 	var bucketName = "default"
 	var indexName = "index_bal"
 	var field = "balance"
-	
+
 	docsToCreate := generateDocs(1000, "users.prod")
 	UpdateKVDocs(docsToCreate, docs)
 
@@ -325,7 +327,7 @@ func TestUpdateMutations_AddField(t *testing.T) {
 
 	docsToCreate := generateDocs(1000, "users.prod")
 	UpdateKVDocs(docsToCreate, docs)
-	
+
 	seed++
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
@@ -360,7 +362,7 @@ func TestUpdateMutations_DataTypeChange(t *testing.T) {
 
 	docsToCreate := generateDocs(1000, "users.prod")
 	UpdateKVDocs(docsToCreate, docs)
-	
+
 	seed++
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
@@ -418,6 +420,7 @@ func TestMultipleBuckets(t *testing.T) {
 	for i := 1; i < numOfBuckets; i++ {
 		kvutility.CreateBucket(bucketNames[i], "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
 	}
+	time.Sleep(30 * time.Second)
 
 	log.Printf("Generating docs and Populating all the buckets")
 	for i := 0; i < numOfBuckets; i++ {
@@ -460,7 +463,7 @@ func TestMultipleBuckets(t *testing.T) {
 	kvutility.DeleteBucket(bucketNames[2], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
-	time.Sleep(3 * time.Second)
+	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 }
 
 func TestBucketFlush(t *testing.T) {
@@ -509,6 +512,7 @@ func TestSaslBucket(t *testing.T) {
 	var field = "age"
 
 	kvutility.CreateBucket(bucketName, "sasl", bucketPassword, clusterconfig.Username, clusterconfig.Password, kvaddress, "300", "11212")
+	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 	kvdocs := generateDocs(1000, "users.prod")
 	kvutility.SetKeyValues(kvdocs, bucketName, bucketPassword, clusterconfig.KVAddress)
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)

@@ -1,8 +1,8 @@
 package kvutility
 
 import (
-	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/go-couchbase"
+	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"log"
 	"net/http"
 	"net/url"
@@ -117,7 +117,6 @@ func CreateBucket(bucketName, authenticationType, saslBucketPassword, serverUser
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Create Bucket")
-	time.Sleep(30 * time.Second)
 	log.Printf("Created bucket %v", bucketName)
 }
 
@@ -136,7 +135,6 @@ func DeleteBucket(bucketName, bucketPassword, serverUserName, serverPassword, ho
 	}
 	// todo : error out if response is error
 	tc.HandleError(err, "Delete Bucket "+address)
-	time.Sleep(30 * time.Second)
 	log.Printf("Deleted bucket %v", bucketName)
 }
 
