@@ -183,18 +183,19 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 }
 
 // GetScanport implements BridgeAccessor{} interface.
-func (b *metadataClient) GetScanport(defnID uint64) (queryport string, ok bool) {
+func (b *metadataClient) GetScanport(defnID uint64) (queryport string, targetDefnID uint64, ok bool) {
 	b.rw.RLock()
 	defer b.rw.RUnlock()
 
-	defnID = b.pickOptimal(defnID) // defnID (aka index) under least load
+	targetDefnID = b.pickOptimal(defnID) // defnID (aka index) under least load
 	_, queryport, err :=
-		b.mdClient.FindServiceForIndex(common.IndexDefnId(defnID))
+		b.mdClient.FindServiceForIndex(common.IndexDefnId(targetDefnID))
 	if err != nil {
-		return "", false
+		return "", 0, false
 	}
-	logging.Debugf("Scan port %s for index %d", queryport, defnID)
-	return queryport, true
+	logging.Debugf("Scan port %s for index defnID %d of equivalent index defnId %d",
+		queryport, targetDefnID, defnID)
+	return queryport, targetDefnID, true
 }
 
 // Timeit implement BridgeAccessor{} interface.
