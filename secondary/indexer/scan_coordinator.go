@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"code.google.com/p/goprotobuf/proto"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +18,6 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
-	"code.google.com/p/goprotobuf/proto"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -721,7 +721,7 @@ func (s *scanCoordinator) requestHandler(
 		atomic.AddInt64(s.scanStatsMap[indexInst.InstId].ScanTime, time.Now().Sub(startTime).Nanoseconds())
 		atomic.AddInt64(s.scanStatsMap[indexInst.InstId].WaitTime, waitDuration.Nanoseconds())
 		s.mu.RUnlock()
-		logging.Infof("%v: SCAN_ID: %v finished scan (%s)", s.logPrefix, sd.scanId, status)
+		logging.Infof("%v: SCAN_RESULT scan id: %v rows: %v finished scan (%s)", s.logPrefix, sd.scanId, rdr.ReturnedRows(), status)
 	}
 }
 
