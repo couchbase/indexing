@@ -80,63 +80,7 @@ func UpdateDocs(num int) {
 	kv.SetKeyValues(keysToBeSet, "default", "", clusterconfig.KVAddress)
 }
 
-// Test with mutations delay wait of 1s. Skipping currently because of failure
-func SkipTestCreateDocsMutation_LessDelay(t *testing.T) {
-	log.Printf("In TestCreateDocsMutation_LessDelay()")
-	var indexName = "index_age"
-	var bucketName = "default"
-
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
-	FailTestIfError(err, "Error in creating the index", t)
-
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
-	FailTestIfError(err, "Error in scan", t)
-	log.Printf("Len of expected and actual scan results are : %d and %d", len(docScanResults), len(scanResults))
-	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
-
-	//Create docs mutations: Add new docs to KV
-	CreateDocs(100)
-	time.Sleep(5 * time.Second) // Wait for mutations to be updated in 2i
-
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
-	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
-	FailTestIfError(err, "Error in scan", t)
-	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
-	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
-}
-
-// Test with mutations delay wait of 1s. Skipping currently because of failure
-func SkipTestDeleteDocsMutation_LessDelay(t *testing.T) {
-	log.Printf("In TestDeleteDocsMutation_LessDelay()")
-	var indexName = "index_age"
-	var bucketName = "default"
-
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
-	FailTestIfError(err, "Error in creating the index", t)
-
-	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
-	FailTestIfError(err, "Error in scan", t)
-	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
-	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
-
-	//Delete docs mutations:  Delete docs from KV
-	DeleteDocs(200)
-	time.Sleep(5 * time.Second) // Wait for mutations to be updated in 2i
-
-	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 0, 90, 1)
-	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{0}, []interface{}{90}, 1, true, defaultlimit, c.SessionConsistency, nil)
-	FailTestIfError(err, "Error in scan", t)
-	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
-	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
-}
-
-func SkipTestRestartIndexer(t *testing.T) {
+func TestRestartIndexer(t *testing.T) {
 	log.Printf("In TestRestartIndexer()")
 
 	tc.KillIndexer()
