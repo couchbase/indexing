@@ -163,6 +163,7 @@ func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeout
 			return err
 		}
 		state, e := client.IndexState(defnID)
+		log.Printf("Index state is %v", state)
 		if e != nil {
 			log.Printf("Error while fetching index state for defnID %v", defnID)
 			return e
