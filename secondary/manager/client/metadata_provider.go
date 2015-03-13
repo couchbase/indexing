@@ -89,7 +89,7 @@ func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 	s = new(MetadataProvider)
 	s.watchers = make(map[c.IndexerId]*watcher)
 	s.repo = newMetadataRepo()
-	s.timeout = int64(time.Second) * 30 
+	s.timeout = int64(time.Second) * 30
 
 	s.providerId, err = s.getWatcherAddr(providerId)
 	if err != nil {
@@ -169,12 +169,28 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	var nodes []string = nil
 
 	if plan != nil {
+		logging.Debugf("MetadataProvider:CreateIndexWithPlan(): plan %v", plan)
+
 		ns, ok := plan["nodes"].([]interface{})
 		if ok {
 			if len(ns) != 1 {
 				return c.IndexDefnId(0), errors.New("Create Index is allowed for one and only one node")
 			}
-			nodes = []string{ns[0].(string)}
+			n, ok := ns[0].(string)
+			if ok {
+				nodes = []string{n}
+			} else {
+				return c.IndexDefnId(0),
+					errors.New(fmt.Sprintf("Fails to create index.  Node '%v' is not valid", plan["nodes"]))
+			}
+		} else {
+			n, ok := plan["nodes"].(string)
+			if ok {
+				nodes = []string{n}
+			} else if _, ok := plan["nodes"]; ok {
+				return c.IndexDefnId(0),
+					errors.New(fmt.Sprintf("Fails to create index.  Node '%v' is not valid", plan["nodes"]))
+			}
 		}
 
 		deferred, ok = plan["defer_build"].(bool)
@@ -182,6 +198,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			deferred = false
 		}
 	}
+
+	logging.Debugf("MetadataProvider:CreateIndexWithPlan(): nodes %v", nodes)
 
 	var watcher *watcher
 	if nodes == nil {
