@@ -77,7 +77,17 @@ func (m *LifecycleMgr) Terminate() {
 func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 	logging.Debugf("LifecycleMgr.OnNewRequest(): queuing new request. reqId %v", request.GetReqId())
 
-	m.incomings <- &requestHolder{request: request, fid: fid}
+	req := &requestHolder{request: request, fid: fid}
+	op := c.OpCode(request.GetOpCode())
+
+	if op == client.OPCODE_SERVICE_MAP {
+		// short cut the connection request by spawn its own go-routine
+		// This call does not change the state of the repository, so it
+		// is OK to shortcut.
+		go m.dispatchRequest(req, message.NewConcreteMsgFactory())
+	} else {
+		m.incomings <- req
+	}
 }
 
 func (m *LifecycleMgr) GetResponseChannel() <-chan c.Packet {
