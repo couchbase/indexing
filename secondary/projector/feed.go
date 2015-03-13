@@ -1115,7 +1115,12 @@ func (feed *Feed) openFeeder(
 		"genChanSize":  feed.config["dcp.genChanSize"].Int(),
 		"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
 	}
-	feeder, err = OpenBucketFeed(name, bucket, opaque, dcpConfig)
+	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
+	if err != nil {
+		return nil, err
+	}
+	kvaddrs := []string{kvaddr}
+	feeder, err = OpenBucketFeed(name, bucket, opaque, kvaddrs, dcpConfig)
 	if err != nil {
 		fmsg := "%v ##%x OpenBucketFeed(%q): %v"
 		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
@@ -1199,6 +1204,36 @@ func (feed *Feed) bucketDetails(
 	}
 
 	return vbuuids, nil
+}
+
+func (feed *Feed) getLocalKVAddrs(
+	pooln, bucketn string, opaque uint16) (string, error) {
+
+	prefix := feed.logPrefix
+	url, err := c.ClusterAuthUrl(feed.config["clusterAddr"].String())
+	if err != nil {
+		fmsg := "%v ##%x ClusterAuthUrl(): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, err)
+		return "", projC.ErrorClusterInfo
+	}
+	cinfo, err := c.NewClusterInfoCache(url, pooln)
+	if err != nil {
+		fmsg := "%v ##%x ClusterInfoCache(`%v`): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
+		return "", projC.ErrorClusterInfo
+	}
+	if err := cinfo.Fetch(); err != nil {
+		fmsg := "%v ##%x cinfo.Fetch(`%v`): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
+		return "", projC.ErrorClusterInfo
+	}
+	kvaddr, err := cinfo.GetLocalServiceAddress("kv")
+	if err != nil {
+		fmsg := "%v ##%x cinfo.GetLocalServiceAddress(`kv`): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, err)
+		return "", projC.ErrorClusterInfo
+	}
+	return kvaddr, nil
 }
 
 func (feed *Feed) getLocalVbuckets(
