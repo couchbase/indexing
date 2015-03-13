@@ -99,9 +99,8 @@ type IndexStatus struct {
 	SecExprs   []string           `json:"secExprs,omitempty"`
 	WhereExpr  string             `json:"where,omitempty"`
 	Status     string             `json:"status,omitempty"`
-	Host       string             `json:"host,omitempty"`
+	Hosts      []string           `json:"hosts,omitempty"`
 	Error      string             `json:"error,omitempty"`
-	Completion uint64             `json:"completion,omitempty"`
 }
 
 //
@@ -309,8 +308,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) (
 							WhereExpr:  defn.WhereExpr,
 							Status:     stateStr,
 							Error:      errStr,
-							Host:       curl,
-							Completion: 100} // TODO: Get real completion rate from indexer
+							Hosts:      []string{curl}}
 
 						list = append(list, status)
 					}
