@@ -387,6 +387,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		ts := msg.(*MsgTKStabilityTS).GetTimestamp()
 		bucket := msg.(*MsgTKStabilityTS).GetBucket()
 		streamId := msg.(*MsgTKStabilityTS).GetStreamId()
+		changeVec := msg.(*MsgTKStabilityTS).GetChangeVector()
 
 		if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
 			logging.Debugf("Indexer: Skipped PersistTs for %v %v. "+
@@ -397,10 +398,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.streamBucketFlushInProgress[streamId][bucket] = true
 
 		idx.mutMgrCmdCh <- &MsgMutMgrFlushMutationQueue{
-			mType:    MUT_MGR_PERSIST_MUTATION_QUEUE,
-			bucket:   bucket,
-			ts:       ts,
-			streamId: streamId}
+			mType:     MUT_MGR_PERSIST_MUTATION_QUEUE,
+			bucket:    bucket,
+			ts:        ts,
+			streamId:  streamId,
+			changeVec: changeVec}
 
 		<-idx.mutMgrCmdCh
 
