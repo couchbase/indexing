@@ -455,6 +455,39 @@ func (ss *StreamState) canFlushNewTS(streamId common.StreamId,
 
 }
 
+//computes which vbuckets have mutations compared to last flush
+func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
+	bucket string, ts *common.TsVbuuid) ([]bool, bool) {
+
+	numVbuckets := len(ts.Snapshots)
+	changeVec := make([]bool, numVbuckets)
+	noChange := true
+
+	//if there is a lastFlushedTs, compare with that
+	if lts, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && lts != nil {
+
+		for i, s := range ts.Seqnos {
+			//if currentTs has seqno greater than last flushed
+			if s > lts.Seqnos[i] {
+				changeVec[i] = true
+				noChange = false
+			}
+		}
+
+	} else {
+
+		//if this is the first ts, check seqno > 0
+		for i, s := range ts.Seqnos {
+			if s > 0 {
+				changeVec[i] = true
+				noChange = false
+			}
+		}
+	}
+
+	return changeVec, noChange
+}
+
 func (ss *StreamState) UpdateConfig(cfg common.Config) {
 	ss.config = cfg
 }

@@ -1392,8 +1392,7 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 		if tk.ss.canFlushNewTS(streamId, bucket) {
 			logging.Debugf("Timekeeper::generateNewStabilityTS \n\tFlushing new "+
 				"TS: %v Bucket: %v Stream: %v.", tsVbuuid, bucket, streamId)
-			tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = tsVbuuid
-			go tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
+			tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		} else {
 			//store the ts in list
 			logging.Debugf("Timekeeper::generateNewStabilityTS \n\tAdding TS: %v to Pending "+
@@ -1451,8 +1450,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 		logging.Debugf("Timekeeper::processPendingTS \n\tFound Pending Stability TS Bucket: %v "+
 			"Stream: %v TS: %v", bucket, streamId, ts)
 
-		tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = tsVbuuid
-		go tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
+		tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		return true
 	}
 
@@ -1466,9 +1464,19 @@ func (tk *timekeeper) sendNewStabilityTS(ts *common.TsVbuuid, bucket string,
 	logging.Tracef("Timekeeper::sendNewStabilityTS \n\tBucket: %v "+
 		"Stream: %v TS: %v", bucket, streamId, ts)
 
-	tk.supvRespch <- &MsgTKStabilityTS{ts: ts,
-		bucket:   bucket,
-		streamId: streamId}
+	changeVec, noChange := tk.ss.computeTsChangeVec(streamId, bucket, ts)
+	if noChange {
+		return
+	}
+
+	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = ts
+
+	go func() {
+		tk.supvRespch <- &MsgTKStabilityTS{ts: ts,
+			bucket:    bucket,
+			streamId:  streamId,
+			changeVec: changeVec}
+	}()
 }
 
 //changeIndexStateForBucket changes the state of all indexes in the given bucket

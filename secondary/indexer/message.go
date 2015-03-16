@@ -345,10 +345,11 @@ func (m *MsgStreamUpdate) String() string {
 //MUT_MGR_ABORT_PERSIST
 //MUT_MGR_DRAIN_MUTATION_QUEUE
 type MsgMutMgrFlushMutationQueue struct {
-	mType    MsgType
-	bucket   string
-	streamId common.StreamId
-	ts       *common.TsVbuuid
+	mType     MsgType
+	bucket    string
+	streamId  common.StreamId
+	ts        *common.TsVbuuid
+	changeVec []bool
 }
 
 func (m *MsgMutMgrFlushMutationQueue) GetMsgType() MsgType {
@@ -365,6 +366,10 @@ func (m *MsgMutMgrFlushMutationQueue) GetStreamId() common.StreamId {
 
 func (m *MsgMutMgrFlushMutationQueue) GetTimestamp() *common.TsVbuuid {
 	return m.ts
+}
+
+func (m *MsgMutMgrFlushMutationQueue) GetChangeVector() []bool {
+	return m.changeVec
 }
 
 func (m *MsgMutMgrFlushMutationQueue) String() string {
@@ -476,9 +481,10 @@ func (m *MsgMutMgrFlushDone) String() string {
 
 //TK_STABILITY_TIMESTAMP
 type MsgTKStabilityTS struct {
-	ts       *common.TsVbuuid
-	streamId common.StreamId
-	bucket   string
+	ts        *common.TsVbuuid
+	streamId  common.StreamId
+	bucket    string
+	changeVec []bool
 }
 
 func (m *MsgTKStabilityTS) GetMsgType() MsgType {
@@ -495,6 +501,10 @@ func (m *MsgTKStabilityTS) GetBucket() string {
 
 func (m *MsgTKStabilityTS) GetTimestamp() *common.TsVbuuid {
 	return m.ts
+}
+
+func (m *MsgTKStabilityTS) GetChangeVector() []bool {
+	return m.changeVec
 }
 
 func (m *MsgTKStabilityTS) String() string {
