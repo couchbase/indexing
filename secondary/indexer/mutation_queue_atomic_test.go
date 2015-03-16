@@ -8,7 +8,7 @@ import (
 
 func TestBasicsA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1)
+	q := NewAtomicMutationQueue(1, 10)
 
 	if q == nil {
 		t.Errorf("expected new queue allocation to work")
@@ -57,7 +57,7 @@ func checkItemA(t *testing.T, m1 *MutationKeys, m2 *MutationKeys) {
 
 func TestSizeA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1)
+	q := NewAtomicMutationQueue(1, 10000)
 
 	m := make([]*MutationKeys, 10000)
 	for i := 0; i < 10000; i++ {
@@ -77,7 +77,7 @@ func TestSizeA(t *testing.T) {
 
 func TestSizeWithFreelistA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1)
+	q := NewAtomicMutationQueue(1, 10000)
 
 	m := make([]*MutationKeys, 10000)
 	for i := 0; i < 10000; i++ {
@@ -97,7 +97,7 @@ func TestSizeWithFreelistA(t *testing.T) {
 
 func TestDequeueUptoSeqnoA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1)
+	q := NewAtomicMutationQueue(1, 100)
 
 	m := make([]*MutationKeys, 10)
 	//multiple items with dup seqno
@@ -169,7 +169,7 @@ func TestDequeueUptoSeqnoA(t *testing.T) {
 
 func TestDequeueA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1)
+	q := NewAtomicMutationQueue(1, 100)
 
 	mut := make([]*MutationKeys, 10)
 	for i := 0; i < 10; i++ {
@@ -200,7 +200,7 @@ func TestDequeueA(t *testing.T) {
 
 func TestMultipleVbucketsA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(3)
+	q := NewAtomicMutationQueue(3, 100)
 
 	mut := make([]*MutationKeys, 15)
 	for i := 0; i < 15; i++ {
@@ -234,7 +234,7 @@ func TestMultipleVbucketsA(t *testing.T) {
 
 func BenchmarkEnqueueA(b *testing.B) {
 
-	q := NewAtomicMutationQueue(1)
+	q := NewAtomicMutationQueue(1, int64(b.N))
 
 	mut := make([]*MutationKeys, b.N)
 	for i := 0; i < b.N; i++ {
@@ -250,7 +250,7 @@ func BenchmarkEnqueueA(b *testing.B) {
 }
 func BenchmarkDequeueA(b *testing.B) {
 
-	q := NewAtomicMutationQueue(1)
+	q := NewAtomicMutationQueue(1, int64(b.N))
 
 	mut := make([]*MutationKeys, b.N)
 	for i := 0; i < b.N; i++ {
@@ -272,7 +272,7 @@ func BenchmarkDequeueA(b *testing.B) {
 
 func BenchmarkSingleVbucketA(b *testing.B) {
 
-	q := NewAtomicMutationQueue(1)
+	q := NewAtomicMutationQueue(1, int64(b.N))
 
 	mut := make([]*MutationKeys, b.N)
 	for i := 0; i < b.N; i++ {

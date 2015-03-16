@@ -318,7 +318,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(m.numVbuckets); queue == nil {
+			if queue = NewAtomicMutationQueue(m.numVbuckets, MAX_VB_QUEUE_LENGTH); queue == nil {
 				m.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,
@@ -414,7 +414,7 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(m.numVbuckets); queue == nil {
+			if queue = NewAtomicMutationQueue(m.numVbuckets, MAX_VB_QUEUE_LENGTH); queue == nil {
 				return &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,
