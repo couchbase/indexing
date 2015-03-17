@@ -10,10 +10,10 @@
 package manager
 
 import (
+	"code.google.com/p/goprotobuf/proto"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-	"code.google.com/p/goprotobuf/proto"
 )
 
 /////////////////////////////////////////////////////////////////////////
@@ -42,7 +42,6 @@ type IndexInstDistribution struct {
 	State      uint32                  `json:"state,omitempty"`
 	StreamId   uint32                  `json:"steamId,omitempty"`
 	Error      string                  `json:"error,omitempty"`
-	BuildTime  []uint64                `json:"buildTime,omitempty"`
 	Partitions []IndexPartDistribution `json:"partitions,omitempty"`
 }
 
@@ -215,66 +214,64 @@ func (t *IndexTopology) GetIndexInstByDefn(defnId common.IndexDefnId) *IndexInst
 //
 // Update Index Status on instance
 //
-func (t *IndexTopology) UpdateStateForIndexInstByDefn(defnId common.IndexDefnId, state common.IndexState) {
+func (t *IndexTopology) UpdateStateForIndexInstByDefn(defnId common.IndexDefnId, state common.IndexState) bool {
 
+	changed := false
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				t.Definitions[i].Instances[j].State = uint32(state)
-				logging.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
-					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
+				if t.Definitions[i].Instances[j].State != uint32(state) {
+					t.Definitions[i].Instances[j].State = uint32(state)
+					logging.Debugf("IndexTopology.UpdateStateForIndexInstByDefn(): Update index '%v' inst '%v' state to '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].State)
+					changed = true
+				}
 			}
 		}
 	}
+	return changed
 }
 
 //
 // Update StreamId on instance
 //
-func (t *IndexTopology) UpdateStreamForIndexInstByDefn(defnId common.IndexDefnId, stream common.StreamId) {
+func (t *IndexTopology) UpdateStreamForIndexInstByDefn(defnId common.IndexDefnId, stream common.StreamId) bool {
 
+	changed := false
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				t.Definitions[i].Instances[j].StreamId = uint32(stream)
-				logging.Debugf("IndexTopology.UpdateStreamForIndexInstByDefn(): Update index '%v' inst '%v stream to '%v'",
-					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].StreamId)
+				if t.Definitions[i].Instances[j].StreamId != uint32(stream) {
+					t.Definitions[i].Instances[j].StreamId = uint32(stream)
+					logging.Debugf("IndexTopology.UpdateStreamForIndexInstByDefn(): Update index '%v' inst '%v stream to '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].StreamId)
+					changed = true
+				}
 			}
 		}
 	}
+	return changed
 }
 
 //
 // Set Error on instance
 //
-func (t *IndexTopology) SetErrorForIndexInstByDefn(defnId common.IndexDefnId, errorStr string) {
+func (t *IndexTopology) SetErrorForIndexInstByDefn(defnId common.IndexDefnId, errorStr string) bool {
 
+	changed := false
 	for i, _ := range t.Definitions {
 		if t.Definitions[i].DefnId == uint64(defnId) {
 			for j, _ := range t.Definitions[i].Instances {
-				t.Definitions[i].Instances[j].Error = errorStr
-				logging.Debugf("IndexTopology.SetErrorForIndexInstByDefn(): Set error for index '%v' inst '%v.  Error = '%v'",
-					defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Error)
+				if t.Definitions[i].Instances[j].Error != errorStr {
+					t.Definitions[i].Instances[j].Error = errorStr
+					logging.Debugf("IndexTopology.SetErrorForIndexInstByDefn(): Set error for index '%v' inst '%v.  Error = '%v'",
+						defnId, t.Definitions[i].Instances[j].InstId, t.Definitions[i].Instances[j].Error)
+					changed = true
+				}
 			}
 		}
 	}
-}
-
-//
-// Set BuildTime on instance
-//
-func (t *IndexTopology) SetBuildTimeForIndexInstByDefn(defnId common.IndexDefnId, buildTime []uint64) {
-
-	for i, _ := range t.Definitions {
-		if t.Definitions[i].DefnId == uint64(defnId) {
-			for j, _ := range t.Definitions[i].Instances {
-				t.Definitions[i].Instances[j].BuildTime = make([]uint64, len(buildTime))
-				copy(t.Definitions[i].Instances[j].BuildTime, buildTime)
-				logging.Debugf("IndexTopology.SetBuildTimeForIndexInstByDefn(): Set buildTime for index '%v' inst '%v, len(Buildtime) %d",
-					defnId, t.Definitions[i].Instances[j].InstId, len(t.Definitions[i].Instances[j].BuildTime))
-			}
-		}
-	}
+	return changed
 }
 
 //
