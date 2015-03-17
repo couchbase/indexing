@@ -79,7 +79,17 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 				// topology.
 				b.topology[id] = make([]*mclient.IndexMetadata, 0)
 			}
-			b.topology[id] = append(b.topology[id], index)
+
+			found := false
+			for _, meta := range b.topology[id] {
+				if meta.Definition.DefnId == index.Definition.DefnId {
+					found = true
+				}
+			}
+
+			if !found {
+				b.topology[id] = append(b.topology[id], index)
+			}
 		}
 	}
 	// compute replicas
@@ -379,9 +389,20 @@ func (b *metadataClient) updateIndexerList() error {
 	m := make(map[string]common.IndexerId)
 	for _, adminport := range adminports { // add new indexer-nodes if any
 		if indexerID, ok := b.adminports[adminport]; !ok {
+			// This adminport is provided by cluster manager.  Meta client will
+			// honor cluster manager to treat this adminport as a healthy node.
+			// If the indexer is unavail during initialization, WatchMetadata()
+			// will return afer timeout.   A background watcher will keep retrying,
+			// since it can be tranisent partitioning error.  If retry eventually
+			// successful, this callback will be invoked to update meta_client.
+			// The metadata client has to rely on the cluster manager to send a
+			// notification if this node is detected to be down, such that the
+			// metadata client can stop the background watcher.
+			fn := func(ad string, n_id common.IndexerId, o_id common.IndexerId) { b.updateIndexer(ad, n_id, o_id) }
+
 			// WatchMetadata will "unwatch" an old metadata watcher which
 			// shares the same indexer Id (but the adminport may be different).
-			indexerID, err = b.mdClient.WatchMetadata(adminport)
+			indexerID = b.mdClient.WatchMetadata(adminport, fn)
 			m[adminport] = indexerID
 			b.topology[indexerID] = make([]*mclient.IndexMetadata, 0)
 		} else {
@@ -411,6 +432,19 @@ func (b *metadataClient) updateIndexerList() error {
 	}
 	b.adminports = m
 	return err
+}
+
+func (b *metadataClient) updateIndexer(adminport string, newIndexerId, oldIndexerId common.IndexerId) {
+	func() {
+		b.rw.Lock()
+		defer b.rw.Unlock()
+
+		delete(b.topology, oldIndexerId)
+		b.adminports[adminport] = newIndexerId
+		b.topology[newIndexerId] = make([]*mclient.IndexMetadata, 0)
+	}()
+
+	b.Refresh()
 }
 
 // return adminports for all known indexers.
