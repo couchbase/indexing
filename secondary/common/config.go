@@ -453,6 +453,7 @@ var SystemConfig = Config{
 		uint64(300),
 		"Stats cache ttl in millis",
 		uint64(300),
+		true, // immutable
 	},
 
 	// Indexer dynamic settings
