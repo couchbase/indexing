@@ -3,6 +3,7 @@ package client
 import "sync"
 import "fmt"
 import "errors"
+import "time"
 import "encoding/json"
 
 import "github.com/couchbase/indexing/secondary/logging"
@@ -10,9 +11,10 @@ import common "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 
 type metadataClient struct {
-	clusterURL string
-	mdClient   *mclient.MetadataProvider
-	rw         sync.RWMutex // protects all fields listed below
+	cluster  string
+	finch    chan bool
+	mdClient *mclient.MetadataProvider
+	rw       sync.RWMutex // protects all fields listed below
 	// sherlock topology management, multi-node & single-partition.
 	adminports map[string]common.IndexerId                   // book-keeping for cluster changes
 	topology   map[common.IndexerId][]*mclient.IndexMetadata //indexerId->indexes
@@ -20,24 +22,21 @@ type metadataClient struct {
 	replicas map[common.IndexDefnId][]common.IndexDefnId
 	// shelock load balancing.
 	loads map[common.IndexDefnId]*loadHeuristics // index -> loadHeuristics
-
-	// For observing node services config
-	scn *common.ServicesChangeNotifier
+	// config
+	servicesNotifierRetryTm int
 }
 
-func newMetaBridgeClient(cluster string) (c *metadataClient, err error) {
-	clusterURL := common.ClusterUrl(cluster)
-	cinfo, err :=
-		common.NewClusterInfoCache(clusterURL, "default")
-	if err != nil {
-		return nil, err
-	}
+func newMetaBridgeClient(
+	cluster string, config common.Config) (c *metadataClient, err error) {
+
 	b := &metadataClient{
-		clusterURL: cluster,
+		cluster:    cluster,
+		finch:      make(chan bool),
 		adminports: make(map[string]common.IndexerId),
 		loads:      make(map[common.IndexDefnId]*loadHeuristics),
 		topology:   make(map[common.IndexerId][]*mclient.IndexMetadata),
 	}
+	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
 	// initialize meta-data-provide.
 	uuid, err := common.NewUUID()
 	if err != nil {
@@ -48,19 +47,14 @@ func newMetaBridgeClient(cluster string) (c *metadataClient, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := b.updateIndexerList(cinfo); err != nil {
+
+	if err := b.updateIndexerList(); err != nil {
 		b.mdClient.Close()
 		return nil, err
 	}
 
-	b.scn, err = common.NewServicesChangeNotifier(clusterURL, "default")
-	if err != nil {
-		err := fmt.Errorf("error common.NewServicesChangeNotifier(): %v", err)
-		return nil, err
-	}
-
 	b.Refresh()
-	go b.watchClusterChanges(cluster)
+	go b.watchClusterChanges() // will also update the indexer list
 	return b, nil
 }
 
@@ -245,8 +239,9 @@ func (b *metadataClient) IndexState(defnID uint64) (common.IndexState, error) {
 // close this bridge, to be called when a new indexer is added or
 // an active indexer leaves the cluster or during system shutdown.
 func (b *metadataClient) Close() {
+	defer func() { recover() }() // in case async Close is called.
 	b.mdClient.Close()
-	b.scn.Close()
+	close(b.finch)
 }
 
 //--------------------------------
@@ -360,7 +355,12 @@ func (b *metadataClient) getNode(defnID uint64) (adminport string, ok bool) {
 }
 
 // update 2i cluster information
-func (b *metadataClient) updateIndexerList(cinfo *common.ClusterInfoCache) error {
+func (b *metadataClient) updateIndexerList() error {
+	clusterURL := common.ClusterUrl(b.cluster)
+	cinfo, err := common.NewClusterInfoCache(clusterURL, "default")
+	if err != nil {
+		return err
+	}
 	if err := cinfo.Fetch(); err != nil {
 		return err
 	}
@@ -450,26 +450,36 @@ func getIndexerAdminports(
 //       indexes -- but we cannot query on it. N1QL should still degrade
 //       to bucket scan.
 
-func (b *metadataClient) watchClusterChanges(cluster string) {
-	clusterURL := common.ClusterUrl(cluster)
-	cinfo, err := common.NewClusterInfoCache(clusterURL, "default")
-	if err != nil {
-		err := fmt.Errorf("error NewClusterInfoCache(): %v", err)
-		panic(err)
+func (b *metadataClient) watchClusterChanges() {
+	selfRestart := func() {
+		time.Sleep(time.Duration(b.servicesNotifierRetryTm) * time.Millisecond)
+		go b.watchClusterChanges()
 	}
 
+	clusterURL := common.ClusterUrl(b.cluster)
+	scn, err := common.NewServicesChangeNotifier(clusterURL, "default")
+	if err != nil {
+		logging.Errorf("common.NewServicesChangeNotifier(): %v", err)
+		selfRestart()
+		return
+	}
+	defer scn.Close()
+
+	// For observing node services config
+	ch := scn.GetNotifyCh()
 	for {
-		if _, err := b.scn.Get(); err != nil {
-			if err == common.ErrNodeServicesCancel {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				selfRestart()
+				return
+			} else if err := b.updateIndexerList(); err != nil {
+				logging.Errorf("updateIndexerList(): %v", err)
+				selfRestart()
 				return
 			}
-
-			err := fmt.Errorf("error while waiting for node services config change: %v", err)
-			panic(err)
-		}
-		if err = b.updateIndexerList(cinfo); err != nil {
-			err := fmt.Errorf("error while updating indexer nodes: %v", err)
-			panic(err)
+		case <-b.finch:
+			return
 		}
 	}
 }

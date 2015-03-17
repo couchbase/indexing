@@ -549,7 +549,7 @@ func makeWithMetaProvider(
 		config:       config,
 		queryClients: make(map[string]*gsiScanClient),
 	}
-	c.bridge, err = newMetaBridgeClient(cluster)
+	c.bridge, err = newMetaBridgeClient(cluster, config)
 	if err != nil {
 		return nil, err
 	}

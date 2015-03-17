@@ -343,6 +343,12 @@ var SystemConfig = Config{
 		10,
 		true, // immutable
 	},
+	"queryport.client.servicesNotifierRetryTm": ConfigValue{
+		1000,
+		"wait, in milliseconds, before restarting the ServicesNotifier",
+		1000,
+		true, // immutable
+	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,

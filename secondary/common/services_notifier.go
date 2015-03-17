@@ -177,6 +177,10 @@ func (sn *ServicesChangeNotifier) Get() (n Notification, err error) {
 	return
 }
 
+func (sn *ServicesChangeNotifier) GetNotifyCh() chan couchbase.PoolServices {
+	return sn.ch
+}
+
 // Consumer can cancel and invalidate notifier object by calling Close()
 func (sn *ServicesChangeNotifier) Close() {
 	sn.instance.Lock()
