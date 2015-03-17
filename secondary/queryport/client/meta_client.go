@@ -416,11 +416,15 @@ func getIndexerAdminports(
 
 	iAdminports := make([]string, 0)
 	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
-		adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
-		if err != nil {
-			return nil, err
+		yes, err := cinfo.IsNodeHealthy(node)
+		common.CrashOnError(err)
+		if yes {
+			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
+			if err != nil {
+				return nil, err
+			}
+			iAdminports = append(iAdminports, adminport)
 		}
-		iAdminports = append(iAdminports, adminport)
 	}
 	return iAdminports, nil
 }
