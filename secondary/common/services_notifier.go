@@ -177,7 +177,7 @@ func (sn *ServicesChangeNotifier) Get() (n Notification, err error) {
 	return
 }
 
-func (sn *ServicesChangeNotifier) GetNotifyCh() chan couchbase.PoolServices {
+func (sn *ServicesChangeNotifier) GetNotifyCh() chan Notification {
 	return sn.ch
 }
 
