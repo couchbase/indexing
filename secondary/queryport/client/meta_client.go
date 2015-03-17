@@ -40,7 +40,7 @@ func newMetaBridgeClient(
 	// initialize meta-data-provide.
 	uuid, err := common.NewUUID()
 	if err != nil {
-		logging.Errorf("Could not generate UUID in common.NewUUID")
+		logging.Errorf("Could not generate UUID in common.NewUUID\n")
 		return nil, err
 	}
 	b.mdClient, err = mclient.NewMetadataProvider(uuid.Str())
@@ -356,7 +356,10 @@ func (b *metadataClient) getNode(defnID uint64) (adminport string, ok bool) {
 
 // update 2i cluster information
 func (b *metadataClient) updateIndexerList() error {
-	clusterURL := common.ClusterUrl(b.cluster)
+	clusterURL, err := common.ClusterAuthUrl(b.cluster)
+	if err != nil {
+		return err
+	}
 	cinfo, err := common.NewClusterInfoCache(clusterURL, "default")
 	if err != nil {
 		return err
@@ -411,9 +414,7 @@ func (b *metadataClient) updateIndexerList() error {
 }
 
 // return adminports for all known indexers.
-func getIndexerAdminports(
-	cinfo *common.ClusterInfoCache) ([]string, error) {
-
+func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, error) {
 	iAdminports := make([]string, 0)
 	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
 		yes, err := cinfo.IsNodeHealthy(node)
@@ -456,10 +457,14 @@ func (b *metadataClient) watchClusterChanges() {
 		go b.watchClusterChanges()
 	}
 
-	clusterURL := common.ClusterUrl(b.cluster)
+	clusterURL, err := common.ClusterAuthUrl(b.cluster)
+	if err != nil {
+		logging.Errorf("common.ClusterAuthUrl(): %v\n", err)
+		selfRestart()
+	}
 	scn, err := common.NewServicesChangeNotifier(clusterURL, "default")
 	if err != nil {
-		logging.Errorf("common.NewServicesChangeNotifier(): %v", err)
+		logging.Errorf("common.NewServicesChangeNotifier(): %v\n", err)
 		selfRestart()
 		return
 	}
@@ -474,7 +479,7 @@ func (b *metadataClient) watchClusterChanges() {
 				selfRestart()
 				return
 			} else if err := b.updateIndexerList(); err != nil {
-				logging.Errorf("updateIndexerList(): %v", err)
+				logging.Errorf("updateIndexerList(): %v\n", err)
 				selfRestart()
 				return
 			}

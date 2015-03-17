@@ -49,7 +49,11 @@ type cbqClient struct {
 
 // newCbqClient create cbq-cluster client.
 func newCbqClient(cluster string) (*cbqClient, error) {
-	cinfo, err := common.NewClusterInfoCache(common.ClusterUrl(cluster), "default" /*pooln*/)
+	clusterUrl, err := common.ClusterAuthUrl(cluster)
+	if err != nil {
+		return nil, err
+	}
+	cinfo, err := common.NewClusterInfoCache(clusterUrl, "default" /*pooln*/)
 	if err != nil {
 		return nil, err
 	}
