@@ -624,6 +624,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:data_size", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(st.Stats.DataSize)
+		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:get_bytes", inst.Defn.Bucket, inst.Defn.Name)
 		v = fmt.Sprint(st.Stats.GetBytes)
 		statsMap[k] = v

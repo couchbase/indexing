@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ToDo: Point out the exact difference between two responses
@@ -146,4 +147,8 @@ func KillProjector() {
 	} else {
 		log.Printf("%v", out)
 	}
+}
+
+func LogPerfStat(apiName string, elapsed time.Duration) {
+	log.Printf("PERFSTAT %v %.4f seconds\n", apiName, elapsed.Seconds())
 }

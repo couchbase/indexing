@@ -1,7 +1,9 @@
 #!/bin/bash
 killall build
 killall dobuild
+killall dotest
 killall make
 pkill -e -f cluster_
 pkill -e -f /opt/
+killall beam.smp epmd
 

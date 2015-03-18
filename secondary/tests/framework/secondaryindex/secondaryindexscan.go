@@ -8,6 +8,7 @@ import (
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/query/value"
 	"log"
+	"time"
 )
 
 var CheckCollation = false
@@ -18,6 +19,8 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 	scanErr = nil
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
+
+	start := time.Now()
 	connErr := client.Range(
 		defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
 		consistency, vector,
@@ -42,6 +45,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 			}
 			return false
 		})
+	elapsed := time.Since(start)
 
 	if connErr != nil {
 		tc.HandleError(connErr, "Connection error in Scan")
@@ -49,6 +53,8 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 	} else if scanErr != nil {
 		return scanResults, scanErr
 	}
+
+	tc.LogPerfStat("Range", elapsed)
 	return scanResults, nil
 }
 
@@ -63,9 +69,12 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	if e != nil {
 		return nil, e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
+
+	start := time.Now()
 	connErr := client.Range(
 		defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
 		consistency, vector,
@@ -104,14 +113,16 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 			}
 			return false
 		})
+	elapsed := time.Since(start)
 
-	client.Close()
 	if connErr != nil {
 		tc.HandleError(connErr, "Connection error in Scan")
 		return scanResults, connErr
 	} else if scanErr != nil {
 		return scanResults, scanErr
 	}
+
+	tc.LogPerfStat("Range", elapsed)
 	return scanResults, nil
 }
 
@@ -123,9 +134,12 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	if e != nil {
 		return nil, e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
+
+	start := time.Now()
 	connErr := client.Lookup(
 		defnID, []c.SecondaryKey{values}, distinct, limit,
 		consistency, vector,
@@ -150,13 +164,15 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 			}
 			return false
 		})
+	elapsed := time.Since(start)
 
-	client.Close()
 	if connErr != nil {
 		return scanResults, connErr
 	} else if scanErr != nil {
 		return scanResults, scanErr
 	}
+
+	tc.LogPerfStat("Lookup", elapsed)
 	return scanResults, nil
 }
 
@@ -170,9 +186,12 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 	if e != nil {
 		return nil, e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
+
+	start := time.Now()
 	connErr := client.ScanAll(
 		defnID, limit,
 		consistency, vector,
@@ -211,13 +230,15 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 			}
 			return false
 		})
+	elapsed := time.Since(start)
 
-	client.Close()
 	if connErr != nil {
 		return scanResults, connErr
 	} else if scanErr != nil {
 		return scanResults, scanErr
 	}
+
+	tc.LogPerfStat("ScanAll", elapsed)
 	return scanResults, nil
 }
 
@@ -227,6 +248,7 @@ func CountRange(indexName, bucketName, server string, low, high []interface{}, i
 	if e != nil {
 		return 0, e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	count, err := client.CountRange(defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
@@ -243,6 +265,7 @@ func CountLookup(indexName, bucketName, server string, values []interface{}) (in
 	if e != nil {
 		return 0, e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	count, err := client.CountLookup(defnID, []c.SecondaryKey{values})
@@ -259,6 +282,7 @@ func RangeStatistics(indexName, bucketName, server string, low, high []interface
 	if e != nil {
 		return e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	statistics, err := client.RangeStatistics(defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))

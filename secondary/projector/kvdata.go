@@ -56,6 +56,7 @@ func NewKVData(
 
 	kvdata := &KVData{
 		feed:      feed,
+		opaque:    opaque,
 		topic:     feed.topic,
 		bucket:    bucket,
 		vrs:       make(map[uint16]*VbucketRoutine),
@@ -85,7 +86,7 @@ const (
 	kvCmdDelEngines
 	kvCmdTs
 	kvCmdGetStats
-	kvCmdSetConfig
+	kvCmdResetConfig
 	kvCmdClose
 )
 
@@ -131,10 +132,10 @@ func (kvdata *KVData) GetStatistics() map[string]interface{} {
 	return resp[0].(map[string]interface{})
 }
 
-// SetConfig for kvdata.
-func (kvdata *KVData) SetConfig(config c.Config) error {
+// ResetConfig for kvdata.
+func (kvdata *KVData) ResetConfig(config c.Config) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{kvCmdSetConfig, config, respch}
+	cmd := []interface{}{kvCmdResetConfig, config, respch}
 	_, err := c.FailsafeOp(kvdata.sbch, respch, cmd, kvdata.finch)
 	return err
 }
@@ -261,14 +262,14 @@ loop:
 				stats.Set("vbuckets", statVbuckets)
 				respch <- []interface{}{map[string]interface{}(stats)}
 
-			case kvCmdSetConfig:
+			case kvCmdResetConfig:
 				config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
-				kvdata.config = config
 				for _, vr := range kvdata.vrs {
-					if err := vr.SetConfig(config); err != nil {
+					if err := vr.ResetConfig(config); err != nil {
 						panic(err)
 					}
 				}
+				kvdata.config = kvdata.config.Override(config)
 				respch <- []interface{}{nil}
 
 			case kvCmdClose:

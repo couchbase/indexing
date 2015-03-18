@@ -4,6 +4,8 @@ cd /var/www
 > /tmp/timing.html
 > /tmp/timing.data
 
+exit 0
+
 for i in `ls -t timing-*.log`; do
   len="`wc -l $i | awk '{print $1}'`"
   if [ "$len" -lt 5 ]; then continue; fi

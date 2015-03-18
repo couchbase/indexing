@@ -285,10 +285,39 @@ func queryRestAPI(
 	return nil
 }
 
+// Pool streaming API based observe-callback wrapper
+func (c *Client) RunObservePool(pool string, callb func(interface{}) error, cancel chan bool) error {
+
+	path := "/poolsStreaming/" + pool
+	decoder := func(bs []byte) (interface{}, error) {
+		var pool Pool
+		err := json.Unmarshal(bs, &pool)
+		return &pool, err
+	}
+
+	return c.runObserveStreamingEndpoint(path, decoder, callb, cancel)
+}
+
 // NodeServices streaming API based observe-callback wrapper
-func (c *Client) RunObserveNodeServices(pool string, callb func(PoolServices) error, cancel chan bool) error {
-	u := c.BaseURL
+func (c *Client) RunObserveNodeServices(pool string, callb func(interface{}) error, cancel chan bool) error {
+
 	path := "/pools/" + pool + "/nodeServicesStreaming"
+	decoder := func(bs []byte) (interface{}, error) {
+		var ps PoolServices
+		err := json.Unmarshal(bs, &ps)
+		return &ps, err
+	}
+
+	return c.runObserveStreamingEndpoint(path, decoder, callb, cancel)
+}
+
+// Helper for observing and calling back streaming endpoint
+func (c *Client) runObserveStreamingEndpoint(path string,
+	decoder func([]byte) (interface{}, error),
+	callb func(interface{}) error,
+	cancel chan bool) error {
+
+	u := c.BaseURL
 	u.User = nil
 	authHandler := c.ah
 	if q := strings.Index(path, "?"); q > 0 {
@@ -334,13 +363,13 @@ func (c *Client) RunObserveNodeServices(pool string, callb func(PoolServices) er
 		if len(bs) == 1 && bs[0] == '\n' {
 			continue
 		}
-		var ps PoolServices
-		err = json.Unmarshal(bs, &ps)
+
+		object, err := decoder(bs)
 		if err != nil {
 			return err
 		}
 
-		err = callb(ps)
+		err = callb(object)
 		if err != nil {
 			return err
 		}

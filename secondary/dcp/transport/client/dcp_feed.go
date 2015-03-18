@@ -47,7 +47,7 @@ type DcpFeed struct {
 // NewDcpFeed creates a new DCP Feed.
 func NewDcpFeed(
 	mc *Client, name string, outch chan<- *DcpEvent,
-	config map[string]interface{}) (*DcpFeed, error) {
+	opaque uint16, config map[string]interface{}) (*DcpFeed, error) {
 
 	genChanSize := config["genChanSize"].(int)
 	dataChanSize := config["dataChanSize"].(int)
@@ -63,9 +63,9 @@ func NewDcpFeed(
 	mc.Hijack()
 	feed.conn = mc
 	rcvch := make(chan []interface{}, dataChanSize)
-	go feed.genServer(feed.reqch, feed.finch, rcvch)
+	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch)
 	go feed.doReceive(rcvch, mc)
-	logging.Infof("%v feed started ...", feed.logPrefix)
+	logging.Infof("%v ##%x feed started ...", feed.logPrefix, opaque)
 	return feed, nil
 }
 
@@ -73,19 +73,21 @@ func NewDcpFeed(
 // Name: name of te DCP connection
 // sequence: sequence number for the connection
 // bufsize: max size of the application
-func (feed *DcpFeed) DcpOpen(name string, sequence, bufsize uint32) error {
+func (feed *DcpFeed) DcpOpen(
+	name string, sequence, bufsize uint32, opaque uint16) error {
+
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{dfCmdOpen, name, sequence, bufsize, respch}
+	cmd := []interface{}{dfCmdOpen, name, sequence, bufsize, opaque, respch}
 	resp, err := failsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return opError(err, resp, 0)
 }
 
 // DcpGetFailoverLog for given list of vbuckets.
 func (feed *DcpFeed) DcpGetFailoverLog(
-	vblist []uint16) (map[uint16]*FailoverLog, error) {
+	opaque uint16, vblist []uint16) (map[uint16]*FailoverLog, error) {
 
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{dfCmdGetFailoverlog, vblist, respch}
+	cmd := []interface{}{dfCmdGetFailoverlog, opaque, vblist, respch}
 	resp, err := failsafeOp(feed.reqch, respch, cmd, feed.finch)
 	err = opError(err, resp, 1)
 	return resp[0].(map[uint16]*FailoverLog), err
@@ -128,17 +130,18 @@ const (
 )
 
 func (feed *DcpFeed) genServer(
+	opaque uint16,
 	reqch chan []interface{}, finch chan bool, rcvch chan []interface{}) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
-			logging.Errorf("%v crashed: %v\n", feed.logPrefix, r)
+			logging.Errorf("%v ##%x crashed: %v\n", feed.logPrefix, opaque, r)
 			logging.Errorf("%s", logging.StackTrace())
 		}
 		close(feed.finch)
 		feed.conn.Close()
 		feed.conn = nil
-		logging.Infof("%v ... stopped\n", feed.logPrefix)
+		logging.Infof("%v ##%x ... stopped\n", feed.logPrefix, opaque)
 	}()
 
 	prefix := feed.logPrefix
@@ -163,18 +166,20 @@ loop:
 			switch cmd {
 			case dfCmdOpen:
 				name, sequence := msg[1].(string), msg[2].(uint32)
-				bufsize, respch := msg[3].(uint32), msg[4].(chan []interface{})
-				err := feed.doDcpOpen(name, sequence, bufsize, rcvch)
+				bufsize, opaque := msg[3].(uint32), msg[4].(uint16)
+				respch := msg[5].(chan []interface{})
+				err := feed.doDcpOpen(name, sequence, bufsize, opaque, rcvch)
 				respch <- []interface{}{err}
 
 			case dfCmdGetFailoverlog:
-				vblist, respch := msg[1].([]uint16), msg[2].(chan []interface{})
+				opaque := msg[1].(uint16)
+				vblist, respch := msg[2].([]uint16), msg[3].(chan []interface{})
 				if len(feed.vbstreams) > 0 {
-					fmsg := "%v active streams in doDcpGetFailoverLog"
-					logging.Errorf(fmsg, prefix)
+					fmsg := "%v %##x active streams in doDcpGetFailoverLog"
+					logging.Errorf(fmsg, prefix, opaque)
 					respch <- []interface{}{nil, ErrorInvalidFeed}
 				}
-				flog, err := feed.doDcpGetFailoverLog(vblist, rcvch)
+				flog, err := feed.doDcpGetFailoverLog(opaque, vblist, rcvch)
 				respch <- []interface{}{flog, err}
 
 			case dfCmdRequestStream:
@@ -323,6 +328,7 @@ func (feed *DcpFeed) handlePacket(
 }
 
 func (feed *DcpFeed) doDcpGetFailoverLog(
+	opaque uint16,
 	vblist []uint16,
 	rcvch chan []interface{}) (map[uint16]*FailoverLog, error) {
 
@@ -334,14 +340,14 @@ func (feed *DcpFeed) doDcpGetFailoverLog(
 	for _, vBucket := range vblist {
 		rq.VBucket = vBucket
 		if err := feed.conn.Transmit(rq); err != nil {
-			fmsg := "%v doDcpGetFailoverLog.Transmit(): %v"
-			logging.Errorf(fmsg, feed.logPrefix, err)
+			fmsg := "%v ##%x doDcpGetFailoverLog.Transmit(): %v"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
 			return nil, err
 		}
 		msg, ok := <-rcvch
 		if !ok {
-			fmsg := "%v doDcpGetFailoverLog.rcvch closed"
-			logging.Errorf(fmsg, feed.logPrefix)
+			fmsg := "%v ##%x doDcpGetFailoverLog.rcvch closed"
+			logging.Errorf(fmsg, feed.logPrefix, opaque)
 			return nil, ErrorConnection
 		}
 		pkt := msg[0].(*transport.MCRequest)
@@ -354,15 +360,20 @@ func (feed *DcpFeed) doDcpGetFailoverLog(
 			Key:    pkt.Key,
 			Body:   pkt.Body,
 		}
-		if req.Opcode != transport.DCP_FAILOVERLOG || req.Status != transport.SUCCESS {
-			fmsg := "%v unexpected #opcode %v"
-			logging.Errorf(fmsg, feed.logPrefix, req.Opcode)
+		if req.Opcode != transport.DCP_FAILOVERLOG {
+			fmsg := "%v ##%x for failover log request unexpected #opcode %v"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, req.Opcode)
+			return nil, ErrorInvalidFeed
+
+		} else if req.Status != transport.SUCCESS {
+			fmsg := "%v ##%x for failover log request unexpected #status %v"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, req.Status)
 			return nil, ErrorInvalidFeed
 		}
 		flog, err := parseFailoverLog(req.Body)
 		if err != nil {
-			fmsg := "%v parse failover logs for vb %d"
-			logging.Errorf(fmsg, feed.logPrefix, vBucket)
+			fmsg := "%v ##%x parse failover logs for vb %d"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, vBucket)
 			return nil, ErrorInvalidFeed
 		}
 		failoverLogs[vBucket] = flog
@@ -371,7 +382,9 @@ func (feed *DcpFeed) doDcpGetFailoverLog(
 }
 
 func (feed *DcpFeed) doDcpOpen(
-	name string, sequence, bufsize uint32, rcvch chan []interface{}) error {
+	name string, sequence, bufsize uint32,
+	opaque uint16,
+	rcvch chan []interface{}) error {
 
 	rq := &transport.MCRequest{
 		Opcode: transport.DCP_OPEN,
@@ -388,7 +401,7 @@ func (feed *DcpFeed) doDcpOpen(
 	}
 	msg, ok := <-rcvch
 	if !ok {
-		logging.Errorf("%v doDcpOpen.rcvch closed", prefix)
+		logging.Errorf("%v ##%x doDcpOpen.rcvch closed", prefix, opaque)
 		return ErrorConnection
 	}
 	pkt := msg[0].(*transport.MCRequest)
@@ -402,15 +415,15 @@ func (feed *DcpFeed) doDcpOpen(
 		Body:   pkt.Body,
 	}
 	if req.Opcode != transport.DCP_OPEN {
-		logging.Errorf("%v unexpected #%v", prefix, req.Opcode)
+		logging.Errorf("%v ##%x unexpected #%v", prefix, opaque, req.Opcode)
 		return ErrorConnection
 	} else if rq.Opaque != req.Opaque {
-		fmsg := "%v opaque mismatch, %v != %v"
-		logging.Errorf(fmsg, prefix, req.Opaque, req.Opaque)
+		fmsg := "%v ##%x opaque mismatch, %v != %v"
+		logging.Errorf(fmsg, prefix, opaque, req.Opaque, req.Opaque)
 		return ErrorConnection
 	} else if req.Status != transport.SUCCESS {
-		fmsg := "%v doDcpOpen response status %v"
-		logging.Errorf(fmsg, prefix, req.Status)
+		fmsg := "%v ##%x doDcpOpen response status %v"
+		logging.Errorf(fmsg, prefix, opaque, req.Status)
 		return ErrorConnection
 	}
 
@@ -423,13 +436,14 @@ func (feed *DcpFeed) doDcpOpen(
 			Body:   []byte(strconv.Itoa(int(bufsize))),
 		}
 		if err := feed.conn.Transmit(rq); err != nil {
-			fmsg := "%v doDcpOpen.DCP_CONTROL.Transmit(): %v"
-			logging.Errorf(fmsg, prefix, err)
+			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.Transmit(): %v"
+			logging.Errorf(fmsg, prefix, opaque, err)
 			return err
 		}
 		msg, ok := <-rcvch
 		if !ok {
-			logging.Errorf("%v doDcpOpen.DCP_CONTROL.rcvch closed", prefix)
+			fmsg := "%v ##%x doDcpOpen.DCP_CONTROL.rcvch closed"
+			logging.Errorf(fmsg, prefix, opaque)
 			return ErrorConnection
 		}
 		pkt := msg[0].(*transport.MCRequest)
@@ -443,11 +457,12 @@ func (feed *DcpFeed) doDcpOpen(
 			Body:   pkt.Body,
 		}
 		if req.Opcode != transport.DCP_CONTROL {
-			logging.Errorf("%v DCP_CONTROL != #%v", prefix, req.Opcode)
+			fmsg := "%v ##%x DCP_CONTROL != #%v"
+			logging.Errorf(fmsg, prefix, opaque, req.Opcode)
 			return ErrorConnection
 		} else if req.Status != transport.SUCCESS {
-			fmsg := "%v doDcpOpen response status %v"
-			logging.Errorf(fmsg, prefix, req.Status)
+			fmsg := "%v ##%x doDcpOpen response status %v"
+			logging.Errorf(fmsg, prefix, opaque, req.Status)
 			return ErrorConnection
 		}
 		feed.maxAckBytes = uint32(bufferAckThreshold * float32(bufsize))
@@ -494,7 +509,8 @@ func (feed *DcpFeed) doDcpCloseStream(vbno, opaqueMSB uint16) error {
 	prefix := feed.logPrefix
 	stream, ok := feed.vbstreams[vbno]
 	if !ok || stream == nil {
-		logging.Warnf("%v stream for vb %d is not active", prefix, vbno)
+		fmsg := "%v ##%x stream for vb %d is not active"
+		logging.Warnf(fmsg, prefix, opaqueMSB, vbno)
 		return nil // TODO: should we return error here ?
 	}
 	stream.CloseOpaque = opaqueMSB
@@ -504,8 +520,8 @@ func (feed *DcpFeed) doDcpCloseStream(vbno, opaqueMSB uint16) error {
 		Opaque:  composeOpaque(vbno, opaqueMSB),
 	}
 	if err := feed.conn.Transmit(rq); err != nil {
-		fmsg := "%v ##%x doDcpCloseStream.Transmit(): %v"
-		logging.Errorf(fmsg, prefix, stream.AppOpaque, err)
+		fmsg := "%v ##%x (##%x) doDcpCloseStream.Transmit(): %v"
+		logging.Errorf(fmsg, prefix, opaqueMSB, stream.AppOpaque, err)
 		return err
 	}
 	return nil

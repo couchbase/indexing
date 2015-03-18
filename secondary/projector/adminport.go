@@ -110,12 +110,12 @@ func (p *Projector) handleRequest(req ap.Request, opaque uint16) {
 		response = p.doShutdownTopic(request, opaque)
 	default:
 		err = c.ErrorInvalidRequest
+		logging.Errorf("%v %v\n", p.logPrefix, err)
 	}
 
 	if err == nil {
 		req.Send(response)
 	} else {
-		logging.Errorf("%v %v\n", p.logPrefix, err)
 		req.SendError(err)
 	}
 }

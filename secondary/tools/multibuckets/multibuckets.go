@@ -136,7 +136,7 @@ func main() {
 			config := c.SystemConfig.Clone()
 			config.SetValue("projector.clusterAddr", cluster)
 			config.SetValue("projector.adminport.listenAddr", adminport)
-			econf := c.SystemConfig.SectionConfig("endpoint.dataport.", true)
+			econf := c.SystemConfig.SectionConfig("projector.dataport.", true)
 			epfactory := NewEndpointFactory(cluster, maxvbs, econf)
 			config.SetValue("projector.routerEndpointFactory", epfactory)
 			projector.NewProjector(maxvbs, config) // start projector daemon
@@ -229,13 +229,12 @@ func getProjectorAdminport(cluster, pooln string) string {
 }
 
 // NewEndpointFactory to create endpoint instances based on config.
-func NewEndpointFactory(
-	cluster string, maxvbs int, econf c.Config) c.RouterEndpointFactory {
+func NewEndpointFactory(cluster string, nvbs int) c.RouterEndpointFactory {
 
-	return func(topic, endpointType, addr string) (c.RouterEndpoint, error) {
+	return func(topic, endpointType, addr string, config c.Config) (c.RouterEndpoint, error) {
 		switch endpointType {
 		case "dataport":
-			return dataport.NewRouterEndpoint(cluster, topic, addr, maxvbs, econf)
+			return dataport.NewRouterEndpoint(cluster, topic, addr, nvbs, config)
 		default:
 			log.Fatal("Unknown endpoint type")
 		}

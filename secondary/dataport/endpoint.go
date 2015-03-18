@@ -93,7 +93,7 @@ func NewRouterEndpoint(
 const (
 	endpCmdPing byte = iota + 1
 	endpCmdSend
-	endpCmdSetConfig
+	endpCmdResetConfig
 	endpCmdGetStatistics
 	endpCmdClose
 )
@@ -109,10 +109,10 @@ func (endpoint *RouterEndpoint) Ping() bool {
 	return resp[0].(bool)
 }
 
-// SetConfig synchronous call.
-func (endpoint *RouterEndpoint) SetConfig(config c.Config) error {
+// ResetConfig synchronous call.
+func (endpoint *RouterEndpoint) ResetConfig(config c.Config) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{endpCmdSetConfig, config, respch}
+	cmd := []interface{}{endpCmdResetConfig, config, respch}
 	_, err := c.FailsafeOp(endpoint.ch, respch, cmd, endpoint.finch)
 	return err
 }
@@ -211,7 +211,7 @@ loop:
 				}
 				harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
 
-			case endpCmdSetConfig:
+			case endpCmdResetConfig:
 				prefix := endpoint.logPrefix
 				config := msg[1].(c.Config)
 				endpoint.block = config["remoteBlock"].Bool()
@@ -221,10 +221,6 @@ loop:
 				endpoint.harakiriTm =
 					time.Duration(config["harakiriTimeout"].Int())
 				flushTimeout = time.Tick(endpoint.bufferTm * time.Millisecond)
-				logging.Infof("%v updated configuration ...\n", prefix)
-				logging.Infof("%v block : %v\n", prefix, endpoint.block)
-				logging.Infof("%v bufferSize : %v\n", prefix, endpoint.bufferSize)
-				logging.Infof("%v bufferTm : %v\n", prefix, endpoint.bufferTm)
 				if harakiri != nil { // load harakiri only when it is active
 					harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
 					infomsg := "%v reloaded harakiriTm: %v\n"

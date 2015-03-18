@@ -127,7 +127,7 @@ type BridgeAccessor interface {
 
 	// GetScanport shall fetch queryport address for indexer, under least
 	// load, hosting index `defnID` or an equivalent of `defnID`
-	GetScanport(defnID uint64) (queryport string, ok bool)
+	GetScanport(defnID uint64) (queryport string, targetDefnID uint64, ok bool)
 
 	// GetIndex will return the index-definition structure for defnID.
 	GetIndexDefn(defnID uint64) *common.IndexDefn
@@ -302,8 +302,8 @@ func (c *GsiClient) LookupStatistics(
 
 	var stats common.IndexStatistics
 	var err error
-	err = c.doScan(defnID, func(qc *gsiScanClient) error {
-		stats, err = qc.LookupStatistics(defnID, value)
+	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+		stats, err = qc.LookupStatistics(targetDefnID, value)
 		return err
 	})
 	return stats, err
@@ -324,8 +324,8 @@ func (c *GsiClient) RangeStatistics(
 	}
 	var stats common.IndexStatistics
 	var err error
-	err = c.doScan(defnID, func(qc *gsiScanClient) error {
-		stats, err = qc.RangeStatistics(defnID, low, high, inclusion)
+	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+		stats, err = qc.RangeStatistics(targetDefnID, low, high, inclusion)
 		return err
 	})
 	return stats, err
@@ -350,14 +350,14 @@ func (c *GsiClient) Lookup(
 		callb(protoResp)
 		return nil
 	}
-	return c.doScan(defnID, func(qc *gsiScanClient) (err error) {
-		index := c.bridge.GetIndexDefn(defnID)
+	return c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) (err error) {
+		index := c.bridge.GetIndexDefn(targetDefnID)
 		if cons == common.SessionConsistency && vector == nil {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
 				return err
 			}
 		}
-		return qc.Lookup(defnID, values, distinct, limit, cons, vector, callb)
+		return qc.Lookup(targetDefnID, values, distinct, limit, cons, vector, callb)
 	})
 }
 
@@ -380,15 +380,15 @@ func (c *GsiClient) Range(
 		callb(protoResp)
 		return nil
 	}
-	return c.doScan(defnID, func(qc *gsiScanClient) (err error) {
-		index := c.bridge.GetIndexDefn(defnID)
+	return c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) (err error) {
+		index := c.bridge.GetIndexDefn(targetDefnID)
 		if cons == common.SessionConsistency && vector == nil {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
 				return err
 			}
 		}
 		return qc.Range(
-			defnID, low, high, inclusion, distinct, limit, cons, vector, callb)
+			targetDefnID, low, high, inclusion, distinct, limit, cons, vector, callb)
 	})
 }
 
@@ -410,14 +410,14 @@ func (c *GsiClient) ScanAll(
 		callb(protoResp)
 		return nil
 	}
-	return c.doScan(defnID, func(qc *gsiScanClient) (err error) {
-		index := c.bridge.GetIndexDefn(defnID)
+	return c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) (err error) {
+		index := c.bridge.GetIndexDefn(targetDefnID)
 		if cons == common.SessionConsistency && vector == nil {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
 				return err
 			}
 		}
-		return qc.ScanAll(defnID, limit, cons, vector, callb)
+		return qc.ScanAll(targetDefnID, limit, cons, vector, callb)
 	})
 }
 
@@ -433,8 +433,8 @@ func (c *GsiClient) CountLookup(
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		return 0, err
 	}
-	err = c.doScan(defnID, func(qc *gsiScanClient) error {
-		count, err = qc.CountLookup(defnID, values)
+	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+		count, err = qc.CountLookup(targetDefnID, values)
 		return err
 	})
 	return count, err
@@ -454,8 +454,8 @@ func (c *GsiClient) CountRange(
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		return 0, err
 	}
-	err = c.doScan(defnID, func(qc *gsiScanClient) error {
-		count, err = qc.CountRange(defnID, low, high, inclusion)
+	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+		count, err = qc.CountRange(targetDefnID, low, high, inclusion)
 		return err
 	})
 	return count, err
@@ -491,27 +491,28 @@ func (c *GsiClient) updateScanClients() {
 }
 
 func (c *GsiClient) doScan(
-	defnID uint64, callb func(*gsiScanClient) error) error {
+	defnID uint64, callb func(*gsiScanClient, uint64) error) error {
 
 	var qc *gsiScanClient
 	var err error
 	var ok1, ok2 bool
 	var queryport string
+	var targetDefnID uint64
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
 	for i := 0; i < retry; i++ {
-		if queryport, ok1 = c.bridge.GetScanport(defnID); ok1 {
+		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID); ok1 {
 			if qc, ok2 = c.queryClients[queryport]; ok2 {
 				begin := time.Now().UnixNano()
-				if err = callb(qc); err == nil {
-					c.bridge.Timeit(defnID, float64(time.Now().UnixNano()-begin))
+				if err = callb(qc, targetDefnID); err == nil {
+					c.bridge.Timeit(targetDefnID, float64(time.Now().UnixNano()-begin))
 					return nil
 				}
 			}
 		}
 		logging.Infof(
-			"Retrying scan for index %v (%v %v) ...\n", defnID, ok1, ok2)
+			"Retrying scan for index %v (%v %v) ...\n", targetDefnID, ok1, ok2)
 		c.updateScanClients()
 		time.Sleep(time.Duration(wait) * time.Millisecond)
 	}
@@ -548,7 +549,7 @@ func makeWithMetaProvider(
 		config:       config,
 		queryClients: make(map[string]*gsiScanClient),
 	}
-	c.bridge, err = newMetaBridgeClient(cluster)
+	c.bridge, err = newMetaBridgeClient(cluster, config)
 	if err != nil {
 		return nil, err
 	}

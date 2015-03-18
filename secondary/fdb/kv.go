@@ -39,7 +39,7 @@ func (k *KVStore) GetKV(key []byte) ([]byte, error) {
 	}
 
 	body := C.GoBytes(bodyPointer, C.int(bodyLen))
-	C.free(bodyPointer)
+	C.fdb_free_block(bodyPointer)
 	return body, nil
 }
 

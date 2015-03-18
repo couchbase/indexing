@@ -3,6 +3,7 @@ package client
 import "sync"
 import "fmt"
 import "errors"
+import "time"
 import "encoding/json"
 
 import "github.com/couchbase/indexing/secondary/logging"
@@ -10,9 +11,10 @@ import common "github.com/couchbase/indexing/secondary/common"
 import mclient "github.com/couchbase/indexing/secondary/manager/client"
 
 type metadataClient struct {
-	clusterURL string
-	mdClient   *mclient.MetadataProvider
-	rw         sync.RWMutex // protects all fields listed below
+	cluster  string
+	finch    chan bool
+	mdClient *mclient.MetadataProvider
+	rw       sync.RWMutex // protects all fields listed below
 	// sherlock topology management, multi-node & single-partition.
 	adminports map[string]common.IndexerId                   // book-keeping for cluster changes
 	topology   map[common.IndexerId][]*mclient.IndexMetadata //indexerId->indexes
@@ -20,47 +22,39 @@ type metadataClient struct {
 	replicas map[common.IndexDefnId][]common.IndexDefnId
 	// shelock load balancing.
 	loads map[common.IndexDefnId]*loadHeuristics // index -> loadHeuristics
-
-	// For observing node services config
-	scn *common.ServicesChangeNotifier
+	// config
+	servicesNotifierRetryTm int
 }
 
-func newMetaBridgeClient(cluster string) (c *metadataClient, err error) {
-	clusterURL := common.ClusterUrl(cluster)
-	cinfo, err :=
-		common.NewClusterInfoCache(clusterURL, "default")
-	if err != nil {
-		return nil, err
-	}
+func newMetaBridgeClient(
+	cluster string, config common.Config) (c *metadataClient, err error) {
+
 	b := &metadataClient{
-		clusterURL: cluster,
+		cluster:    cluster,
+		finch:      make(chan bool),
 		adminports: make(map[string]common.IndexerId),
 		loads:      make(map[common.IndexDefnId]*loadHeuristics),
 		topology:   make(map[common.IndexerId][]*mclient.IndexMetadata),
 	}
+	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
 	// initialize meta-data-provide.
 	uuid, err := common.NewUUID()
 	if err != nil {
-		logging.Errorf("Could not generate UUID in common.NewUUID")
+		logging.Errorf("Could not generate UUID in common.NewUUID\n")
 		return nil, err
 	}
 	b.mdClient, err = mclient.NewMetadataProvider(uuid.Str())
 	if err != nil {
 		return nil, err
 	}
-	if err := b.updateIndexerList(cinfo); err != nil {
+
+	if err := b.updateIndexerList(); err != nil {
 		b.mdClient.Close()
 		return nil, err
 	}
 
-	b.scn, err = common.NewServicesChangeNotifier(clusterURL, "default")
-	if err != nil {
-		err := fmt.Errorf("error common.NewServicesChangeNotifier(): %v", err)
-		return nil, err
-	}
-
 	b.Refresh()
-	go b.watchClusterChanges(cluster)
+	go b.watchClusterChanges() // will also update the indexer list
 	return b, nil
 }
 
@@ -85,7 +79,17 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 				// topology.
 				b.topology[id] = make([]*mclient.IndexMetadata, 0)
 			}
-			b.topology[id] = append(b.topology[id], index)
+
+			found := false
+			for _, meta := range b.topology[id] {
+				if meta.Definition.DefnId == index.Definition.DefnId {
+					found = true
+				}
+			}
+
+			if !found {
+				b.topology[id] = append(b.topology[id], index)
+			}
 		}
 	}
 	// compute replicas
@@ -183,18 +187,19 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 }
 
 // GetScanport implements BridgeAccessor{} interface.
-func (b *metadataClient) GetScanport(defnID uint64) (queryport string, ok bool) {
+func (b *metadataClient) GetScanport(defnID uint64) (queryport string, targetDefnID uint64, ok bool) {
 	b.rw.RLock()
 	defer b.rw.RUnlock()
 
-	defnID = b.pickOptimal(defnID) // defnID (aka index) under least load
+	targetDefnID = b.pickOptimal(defnID) // defnID (aka index) under least load
 	_, queryport, err :=
-		b.mdClient.FindServiceForIndex(common.IndexDefnId(defnID))
+		b.mdClient.FindServiceForIndex(common.IndexDefnId(targetDefnID))
 	if err != nil {
-		return "", false
+		return "", 0, false
 	}
-	logging.Debugf("Scan port %s for index %d", queryport, defnID)
-	return queryport, true
+	logging.Debugf("Scan port %s for index defnID %d of equivalent index defnId %d",
+		queryport, targetDefnID, defnID)
+	return queryport, targetDefnID, true
 }
 
 // Timeit implement BridgeAccessor{} interface.
@@ -244,8 +249,9 @@ func (b *metadataClient) IndexState(defnID uint64) (common.IndexState, error) {
 // close this bridge, to be called when a new indexer is added or
 // an active indexer leaves the cluster or during system shutdown.
 func (b *metadataClient) Close() {
+	defer func() { recover() }() // in case async Close is called.
 	b.mdClient.Close()
-	b.scn.Close()
+	close(b.finch)
 }
 
 //--------------------------------
@@ -359,7 +365,15 @@ func (b *metadataClient) getNode(defnID uint64) (adminport string, ok bool) {
 }
 
 // update 2i cluster information
-func (b *metadataClient) updateIndexerList(cinfo *common.ClusterInfoCache) error {
+func (b *metadataClient) updateIndexerList() error {
+	clusterURL, err := common.ClusterAuthUrl(b.cluster)
+	if err != nil {
+		return err
+	}
+	cinfo, err := common.NewClusterInfoCache(clusterURL, "default")
+	if err != nil {
+		return err
+	}
 	if err := cinfo.Fetch(); err != nil {
 		return err
 	}
@@ -375,9 +389,20 @@ func (b *metadataClient) updateIndexerList(cinfo *common.ClusterInfoCache) error
 	m := make(map[string]common.IndexerId)
 	for _, adminport := range adminports { // add new indexer-nodes if any
 		if indexerID, ok := b.adminports[adminport]; !ok {
+			// This adminport is provided by cluster manager.  Meta client will
+			// honor cluster manager to treat this adminport as a healthy node.
+			// If the indexer is unavail during initialization, WatchMetadata()
+			// will return afer timeout.   A background watcher will keep retrying,
+			// since it can be tranisent partitioning error.  If retry eventually
+			// successful, this callback will be invoked to update meta_client.
+			// The metadata client has to rely on the cluster manager to send a
+			// notification if this node is detected to be down, such that the
+			// metadata client can stop the background watcher.
+			fn := func(ad string, n_id common.IndexerId, o_id common.IndexerId) { b.updateIndexer(ad, n_id, o_id) }
+
 			// WatchMetadata will "unwatch" an old metadata watcher which
 			// shares the same indexer Id (but the adminport may be different).
-			indexerID, err = b.mdClient.WatchMetadata(adminport)
+			indexerID = b.mdClient.WatchMetadata(adminport, fn)
 			m[adminport] = indexerID
 			b.topology[indexerID] = make([]*mclient.IndexMetadata, 0)
 		} else {
@@ -409,17 +434,32 @@ func (b *metadataClient) updateIndexerList(cinfo *common.ClusterInfoCache) error
 	return err
 }
 
-// return adminports for all known indexers.
-func getIndexerAdminports(
-	cinfo *common.ClusterInfoCache) ([]string, error) {
+func (b *metadataClient) updateIndexer(adminport string, newIndexerId, oldIndexerId common.IndexerId) {
+	func() {
+		b.rw.Lock()
+		defer b.rw.Unlock()
 
+		delete(b.topology, oldIndexerId)
+		b.adminports[adminport] = newIndexerId
+		b.topology[newIndexerId] = make([]*mclient.IndexMetadata, 0)
+	}()
+
+	b.Refresh()
+}
+
+// return adminports for all known indexers.
+func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, error) {
 	iAdminports := make([]string, 0)
 	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
-		adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
-		if err != nil {
-			return nil, err
+		yes, err := cinfo.IsNodeHealthy(node)
+		common.CrashOnError(err)
+		if yes {
+			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
+			if err != nil {
+				return nil, err
+			}
+			iAdminports = append(iAdminports, adminport)
 		}
-		iAdminports = append(iAdminports, adminport)
 	}
 	return iAdminports, nil
 }
@@ -445,26 +485,40 @@ func getIndexerAdminports(
 //       indexes -- but we cannot query on it. N1QL should still degrade
 //       to bucket scan.
 
-func (b *metadataClient) watchClusterChanges(cluster string) {
-	clusterURL := common.ClusterUrl(cluster)
-	cinfo, err := common.NewClusterInfoCache(clusterURL, "default")
-	if err != nil {
-		err := fmt.Errorf("error NewClusterInfoCache(): %v", err)
-		panic(err)
+func (b *metadataClient) watchClusterChanges() {
+	selfRestart := func() {
+		time.Sleep(time.Duration(b.servicesNotifierRetryTm) * time.Millisecond)
+		go b.watchClusterChanges()
 	}
 
+	clusterURL, err := common.ClusterAuthUrl(b.cluster)
+	if err != nil {
+		logging.Errorf("common.ClusterAuthUrl(): %v\n", err)
+		selfRestart()
+	}
+	scn, err := common.NewServicesChangeNotifier(clusterURL, "default")
+	if err != nil {
+		logging.Errorf("common.NewServicesChangeNotifier(): %v\n", err)
+		selfRestart()
+		return
+	}
+	defer scn.Close()
+
+	// For observing node services config
+	ch := scn.GetNotifyCh()
 	for {
-		if _, err := b.scn.Get(); err != nil {
-			if err == common.ErrNodeServicesCancel {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				selfRestart()
+				return
+			} else if err := b.updateIndexerList(); err != nil {
+				logging.Errorf("updateIndexerList(): %v\n", err)
+				selfRestart()
 				return
 			}
-
-			err := fmt.Errorf("error while waiting for node services config change: %v", err)
-			panic(err)
-		}
-		if err = b.updateIndexerList(cinfo); err != nil {
-			err := fmt.Errorf("error while updating indexer nodes: %v", err)
-			panic(err)
+		case <-b.finch:
+			return
 		}
 	}
 }

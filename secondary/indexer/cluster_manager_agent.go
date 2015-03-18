@@ -230,10 +230,9 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 		}
 
 		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
-			Defn:    idxDefn,
-			State:   state,
-			Stream:  common.StreamId(inst.StreamId),
-			BuildTs: inst.BuildTime,
+			Defn:   idxDefn,
+			State:  state,
+			Stream: common.StreamId(inst.StreamId),
 		}
 
 		indexInstMap[idxInst.InstId] = idxInst

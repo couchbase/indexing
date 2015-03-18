@@ -13,6 +13,7 @@ package forestdb
 import "C"
 
 import (
+	"fmt"
 	"unsafe"
 )
 
@@ -20,7 +21,8 @@ type SeqNum uint64
 
 // ForestDB doc structure definition
 type Doc struct {
-	doc *C.fdb_doc
+	doc   *C.fdb_doc
+	freed bool
 }
 
 // NewDoc creates a new FDB_DOC instance on heap with a given key, its metadata, and its doc body
@@ -117,11 +119,17 @@ func (d *Doc) Deleted() bool {
 
 // Close releases resources allocated to this document
 func (d *Doc) Close() error {
+	if d.freed {
+		err := fmt.Errorf("Double freed goforestdb doc %v", d)
+		Log.Errorf("%v", err)
+		return err
+	}
 	Log.Tracef("fdb_doc_free call d:%p doc:%v", d, d.doc)
 	errNo := C.fdb_doc_free(d.doc)
 	Log.Tracef("fdb_doc_free retn d:%p errNo:%v", d, errNo)
 	if errNo != RESULT_SUCCESS {
 		return Error(errNo)
 	}
+	d.freed = true
 	return nil
 }

@@ -68,11 +68,20 @@ func CreateSecondaryIndex(
 	exprType := "N1QL"
 	partnExp := ""
 
+	start := time.Now()
 	defnID, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
 	if err == nil {
 		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)
-		return WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
+		e := WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
+		if e != nil {
+			return e
+		} else {
+			elapsed := time.Since(start)
+			tc.LogPerfStat("CreateAndBuildIndex", elapsed)
+			return nil
+		}
 	}
+
 	return err
 }
 
@@ -122,14 +131,23 @@ func BuildIndex(indexName, bucketName, server string, indexActiveTimeoutSeconds 
 	if e != nil {
 		return e
 	}
-
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
+
+	start := time.Now()
 	err := client.BuildIndexes([]uint64{defnID})
+
 	if err == nil {
 		log.Printf("Build the deferred index %v. Waiting for the index to become active", indexName)
-		return WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
+		e := WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
+		if e != nil {
+			return e
+		} else {
+			elapsed := time.Since(start)
+			tc.LogPerfStat("BuildIndex", elapsed)
+			return nil
+		}
 	}
 
 	return err
@@ -144,6 +162,7 @@ func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeout
 			return err
 		}
 		state, e := client.IndexState(defnID)
+		log.Printf("Index state is %v", state)
 		if e != nil {
 			log.Printf("Error while fetching index state for defnID %v", defnID)
 			return e
@@ -164,6 +183,8 @@ func IndexState(indexName, bucketName, server string) (string, error) {
 	if e != nil {
 		return "", e
 	}
+	defer client.Close()
+
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	state, e := client.IndexState(defnID)
 	if e != nil {
@@ -179,9 +200,9 @@ func IndexExists(indexName, bucketName, server string) (bool, error) {
 	if e != nil {
 		return false, e
 	}
+	defer client.Close()
 
 	indexes, err := client.Refresh()
-	client.Close()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -212,22 +233,24 @@ func DropSecondaryIndex(indexName, bucketName, server string) error {
 	if e != nil {
 		return e
 	}
+	defer client.Close()
 
 	indexes, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
 		if (defn.Name == indexName) && (defn.Bucket == bucketName) {
+			start := time.Now()
 			e := client.DropIndex(uint64(defn.DefnId))
+			elapsed := time.Since(start)
 			if e == nil {
 				log.Printf("Index dropped")
+				tc.LogPerfStat("DropIndex", elapsed)
 			} else {
-				client.Close()
 				return e
 			}
 		}
 	}
-	client.Close()
 	return nil
 }
 
@@ -238,9 +261,12 @@ func DropSecondaryIndexWithClient(indexName, bucketName, server string, client *
 	for _, index := range indexes {
 		defn := index.Definition
 		if (defn.Name == indexName) && (defn.Bucket == bucketName) {
+			start := time.Now()
 			e := client.DropIndex(uint64(defn.DefnId))
+			elapsed := time.Since(start)
 			if e == nil {
 				log.Printf("Index dropped")
+				tc.LogPerfStat("DropIndex", elapsed)
 			} else {
 				return e
 			}
@@ -255,18 +281,21 @@ func DropAllSecondaryIndexes(server string) error {
 	if e != nil {
 		return e
 	}
+	defer client.Close()
 
 	indexes, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
+		// start := time.Now()
 		e := client.DropIndex(uint64(defn.DefnId))
+		// elapsed := time.Since(start)
 		if e != nil {
 			return e
 		}
 		log.Printf("Dropped index %v", defn.Name)
+		// tc.LogPerfStat("DropIndex", elapsed)  // Commenting out this log as it is used only in setup
 	}
-	client.Close()
 	return nil
 }
 
@@ -276,12 +305,12 @@ func DropSecondaryIndexByID(indexDefnID uint64, server string) error {
 	if e != nil {
 		return e
 	}
+	defer client.Close()
 
 	e = client.DropIndex(indexDefnID)
 	if e != nil {
 		return e
 	}
-	client.Close()
 	log.Printf("Index dropped")
 	return nil
 }

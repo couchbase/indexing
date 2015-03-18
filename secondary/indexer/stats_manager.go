@@ -11,22 +11,30 @@ package indexer
 
 import (
 	"encoding/json"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"net/http"
 	"runtime"
+	"sync"
+	"time"
 )
 
 type statsManager struct {
-	supvCmdch MsgChannel
-	supvMsgch MsgChannel
+	sync.Mutex
+	conf          common.Config
+	supvCmdch     MsgChannel
+	supvMsgch     MsgChannel
+	statsCache    map[string]string
+	lastCacheTime time.Time
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
 	supvMsgch MsgChannel, config common.Config) (statsManager, Message) {
 	s := statsManager{
-		supvCmdch: supvCmdch,
-		supvMsgch: supvMsgch,
+		conf:          config,
+		supvCmdch:     supvCmdch,
+		supvMsgch:     supvMsgch,
+		lastCacheTime: time.Unix(0, 0),
 	}
 
 	http.HandleFunc("/stats", s.handleStatsReq)
@@ -35,23 +43,33 @@ func NewStatsManager(supvCmdch MsgChannel,
 }
 
 func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
+	s.Lock()
+	defer s.Unlock()
+
+	statsMap := make(map[string]string)
 	if r.Method == "POST" || r.Method == "GET" {
-		statsMap := make(map[string]string)
-		stats_list := []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS}
-		for _, t := range stats_list {
-			ch := make(chan map[string]string)
-			msg := &MsgStatsRequest{
-				mType:  t,
-				respch: ch,
+		timeout := time.Millisecond * time.Duration(s.conf["stats_cache_timeout"].Uint64())
+		// Refresh cache if cache ttl has expired
+		if time.Now().Sub(s.lastCacheTime) > timeout {
+			stats_list := []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS}
+			for _, t := range stats_list {
+				ch := make(chan map[string]string)
+				msg := &MsgStatsRequest{
+					mType:  t,
+					respch: ch,
+				}
+
+				s.supvMsgch <- msg
+				for k, v := range <-ch {
+					statsMap[k] = v
+				}
 			}
 
-			s.supvMsgch <- msg
-			for k, v := range <-ch {
-				statsMap[k] = v
-			}
+			s.statsCache = statsMap
+			s.lastCacheTime = time.Now()
 		}
 
-		bytes, _ := json.Marshal(statsMap)
+		bytes, _ := json.Marshal(s.statsCache)
 		w.WriteHeader(200)
 		w.Write(bytes)
 	} else {

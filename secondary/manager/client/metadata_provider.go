@@ -31,11 +31,13 @@ import (
 ///////////////////////////////////////////////////////
 
 type MetadataProvider struct {
-	providerId string
-	watchers   map[c.IndexerId]*watcher
-	timeout    int64
-	repo       *metadataRepo
-	mutex      sync.Mutex
+	providerId   string
+	watchers     map[c.IndexerId]*watcher
+	pendings     map[c.IndexerId]chan bool
+	timeout      int64
+	repo         *metadataRepo
+	mutex        sync.Mutex
+	watcherCount int
 }
 
 type metadataRepo struct {
@@ -76,6 +78,8 @@ type InstanceDefn struct {
 	Endpts    []c.Endpoint
 }
 
+type watcherCallback func(string, c.IndexerId, c.IndexerId)
+
 var REQUEST_CHANNEL_COUNT = 1000
 
 ///////////////////////////////////////////////////////
@@ -88,8 +92,9 @@ func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 
 	s = new(MetadataProvider)
 	s.watchers = make(map[c.IndexerId]*watcher)
+	s.pendings = make(map[c.IndexerId]chan bool)
 	s.repo = newMetadataRepo()
-	s.timeout = int64(time.Second) * 30 
+	s.timeout = int64(time.Second) * 30
 
 	s.providerId, err = s.getWatcherAddr(providerId)
 	if err != nil {
@@ -104,55 +109,70 @@ func (o *MetadataProvider) SetTimeout(timeout int64) {
 	o.timeout = timeout
 }
 
-func (o *MetadataProvider) WatchMetadata(indexAdminPort string) (c.IndexerId, error) {
+func (o *MetadataProvider) WatchMetadata(indexAdminPort string, callback watcherCallback) c.IndexerId {
+
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
 
+	logging.Debugf("MetadataProvider.WatchMetadata(): indexer %v", indexAdminPort)
+
 	for _, watcher := range o.watchers {
 		if watcher.getAdminAddr() == indexAdminPort {
-			return watcher.getIndexerId(), nil
+			return watcher.getIndexerId()
 		}
 	}
 
-	startTime := time.Now().String()
+	// start a watcher to the indexer admin
+	watcher, readych := o.startWatcher(indexAdminPort)
 
-	watcher, err := o.startWatcher(indexAdminPort)
-	if err != nil {
-		errTime := time.Now().String()
-		return c.INDEXER_ID_NIL,
-			errors.New(fmt.Sprintf("Cannot initiate connection to indexer port %s. Error = %v. Start time %v.  Error time %v",
-				indexAdminPort, err, startTime, errTime))
+	// wait for indexer to connect
+	success, _ := watcher.waitForReady(readych, 1000, nil)
+	if success {
+		// if successfully connected, retrieve indexerId
+		success, _ = watcher.notifyReady(indexAdminPort, 0, nil)
+		if success {
+			// watcher succesfully initialized, add it to MetadataProvider
+			o.addWatcher(watcher, c.INDEXER_ID_NIL)
+			return watcher.getIndexerId()
+
+		} else {
+			// watcher is ready, but no able to read indexerId
+			readych = nil
+		}
 	}
 
-	if err := watcher.updateServiceMap(indexAdminPort); err != nil {
-		return c.INDEXER_ID_NIL, err
-	}
+	// watcher is not connected to indexer or fail to get indexer id,
+	// create a temporary index id
+	o.watcherCount = o.watcherCount + 1
+	tempIndexerId := c.IndexerId(fmt.Sprintf("%v_Indexer_Id_%d", indexAdminPort, o.watcherCount))
+	killch := make(chan bool, 1)
+	o.pendings[tempIndexerId] = killch
 
-	indexerId := watcher.getIndexerId()
-
-	oldWatcher, ok := o.watchers[indexerId]
-	if ok {
-		// there is an old watcher with an matching indexerId.  Close it ...
-		oldWatcher.close()
-	}
-
-	o.watchers[indexerId] = watcher
-	return indexerId, nil
+	// retry it in the background.  Return a temporary indexerId for book-keeping.
+	go o.retryHelper(watcher, readych, indexAdminPort, tempIndexerId, killch, callback)
+	return tempIndexerId
 }
 
 func (o *MetadataProvider) UnwatchMetadata(indexerId c.IndexerId) {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
 
+	logging.Debugf("MetadataProvider.UnwatchMetadata(): indexer %v", indexerId)
+
 	watcher, ok := o.watchers[indexerId]
 	if !ok {
+		killch, ok := o.pendings[indexerId]
+		if ok {
+			delete(o.pendings, indexerId)
+			killch <- true
+		}
 		return
 	}
 
 	delete(o.watchers, indexerId)
 	if watcher != nil {
-		watcher.cleanupIndices(o.repo)
 		watcher.close()
+		watcher.cleanupIndices(o.repo)
 	}
 }
 
@@ -169,12 +189,28 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	var nodes []string = nil
 
 	if plan != nil {
+		logging.Debugf("MetadataProvider:CreateIndexWithPlan(): plan %v", plan)
+
 		ns, ok := plan["nodes"].([]interface{})
 		if ok {
 			if len(ns) != 1 {
 				return c.IndexDefnId(0), errors.New("Create Index is allowed for one and only one node")
 			}
-			nodes = []string{ns[0].(string)}
+			n, ok := ns[0].(string)
+			if ok {
+				nodes = []string{n}
+			} else {
+				return c.IndexDefnId(0),
+					errors.New(fmt.Sprintf("Fails to create index.  Node '%v' is not valid", plan["nodes"]))
+			}
+		} else {
+			n, ok := plan["nodes"].(string)
+			if ok {
+				nodes = []string{n}
+			} else if _, ok := plan["nodes"]; ok {
+				return c.IndexDefnId(0),
+					errors.New(fmt.Sprintf("Fails to create index.  Node '%v' is not valid", plan["nodes"]))
+			}
 		}
 
 		deferred, ok = plan["defer_build"].(bool)
@@ -182,6 +218,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			deferred = false
 		}
 	}
+
+	logging.Debugf("MetadataProvider:CreateIndexWithPlan(): nodes %v", nodes)
 
 	var watcher *watcher
 	if nodes == nil {
@@ -317,12 +355,12 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 }
 
 func (o *MetadataProvider) ListIndex() []*IndexMetadata {
-	o.repo.mutex.Lock()
-	defer o.repo.mutex.Unlock()
 
-	result := make([]*IndexMetadata, 0, len(o.repo.indices))
-	for _, meta := range o.repo.indices {
-		if isValidIndex(meta) {
+	indices := o.repo.listDefn()
+	result := make([]*IndexMetadata, 0, len(indices))
+
+	for _, meta := range indices {
+		if o.isValidIndexFromActiveIndexer(meta) {
 			result = append(result, meta)
 		}
 	}
@@ -331,11 +369,10 @@ func (o *MetadataProvider) ListIndex() []*IndexMetadata {
 }
 
 func (o *MetadataProvider) FindIndex(id c.IndexDefnId) *IndexMetadata {
-	o.repo.mutex.Lock()
-	defer o.repo.mutex.Unlock()
 
-	if meta, ok := o.repo.indices[id]; ok {
-		if isValidIndex(meta) {
+	indices := o.repo.listDefn()
+	if meta, ok := indices[id]; ok {
+		if o.isValidIndexFromActiveIndexer(meta) {
 			return meta
 		}
 	}
@@ -381,11 +418,10 @@ func (o *MetadataProvider) UpdateServiceAddrForIndexer(id c.IndexerId, adminport
 }
 
 func (o *MetadataProvider) FindIndexByName(name string, bucket string) *IndexMetadata {
-	o.repo.mutex.Lock()
-	defer o.repo.mutex.Unlock()
 
-	for _, meta := range o.repo.indices {
-		if isValidIndex(meta) {
+	indices := o.repo.listDefn()
+	for _, meta := range indices {
+		if o.isValidIndexFromActiveIndexer(meta) {
 			if meta.Definition.Name == name && meta.Definition.Bucket == bucket {
 				return meta
 			}
@@ -408,7 +444,60 @@ func (o *MetadataProvider) Close() {
 // private function : MetadataProvider
 ///////////////////////////////////////////////////////
 
-func (o *MetadataProvider) startWatcher(addr string) (*watcher, error) {
+func (o *MetadataProvider) isActiveWatcherNoLock(indexerId c.IndexerId) bool {
+
+	for _, watcher := range o.watchers {
+		if watcher.getIndexerId() == indexerId {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (o *MetadataProvider) retryHelper(watcher *watcher, readych chan bool, indexAdminPort string,
+	tempIndexerId c.IndexerId, killch chan bool, callback watcherCallback) {
+
+	if readych != nil {
+		// if watcher is not ready, let's wait.
+		if _, killed := watcher.waitForReady(readych, 0, killch); killed {
+			watcher.cleanupIndices(o.repo)
+			return
+		}
+	}
+
+	// get the indexerId
+	if _, killed := watcher.notifyReady(indexAdminPort, -1, killch); killed {
+		watcher.close()
+		watcher.cleanupIndices(o.repo)
+		return
+	}
+
+	// add the watcher
+	func() {
+		o.mutex.Lock()
+		defer o.mutex.Unlock()
+		o.addWatcher(watcher, tempIndexerId)
+	}()
+
+	indexerId := watcher.getIndexerId()
+	callback(indexAdminPort, indexerId, tempIndexerId)
+}
+
+func (o *MetadataProvider) addWatcher(watcher *watcher, tempIndexerId c.IndexerId) {
+
+	delete(o.pendings, tempIndexerId)
+
+	indexerId := watcher.getIndexerId()
+	oldWatcher, ok := o.watchers[indexerId]
+	if ok {
+		// there is an old watcher with an matching indexerId.  Close it ...
+		oldWatcher.close()
+	}
+	o.watchers[indexerId] = watcher
+}
+
+func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 
 	s := newWatcher(o, addr)
 	readych := make(chan bool)
@@ -422,24 +511,13 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, error) {
 		s.killch,
 		readych)
 
-	// TODO: timeout
-	<-readych
-
-	s.startTimer()
-
-	if err := s.refreshServiceMap(); err != nil {
-		s.close()
-		return nil, err
-	}
-
-	return s, nil
+	return s, readych
 }
 
 func (o *MetadataProvider) findIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadata {
-	o.repo.mutex.Lock()
-	defer o.repo.mutex.Unlock()
 
-	if meta, ok := o.repo.indices[id]; ok {
+	indices := o.repo.listDefn()
+	if meta, ok := indices[id]; ok {
 		return meta
 	}
 
@@ -530,6 +608,17 @@ func (o *MetadataProvider) findWatcherByNodeAddr(nodeAddr string) *watcher {
 	return nil
 }
 
+func (o *MetadataProvider) isValidIndexFromActiveIndexer(meta *IndexMetadata) bool {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	if !isValidIndex(meta) {
+		return false
+	}
+
+	return o.isActiveWatcherNoLock(meta.Instances[0].IndexerId)
+}
+
 func isValidIndex(meta *IndexMetadata) bool {
 
 	if meta.Definition == nil {
@@ -558,6 +647,19 @@ func newMetadataRepo() *metadataRepo {
 		definitions: make(map[c.IndexDefnId]*c.IndexDefn),
 		instances:   make(map[c.IndexDefnId]*IndexInstDistribution),
 		indices:     make(map[c.IndexDefnId]*IndexMetadata)}
+}
+
+func (r *metadataRepo) listDefn() map[c.IndexDefnId]*IndexMetadata {
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	result := make(map[c.IndexDefnId]*IndexMetadata)
+	for id, meta := range r.indices {
+		result[id] = meta
+	}
+
+	return result
 }
 
 func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
@@ -688,6 +790,75 @@ func newWatcher(o *MetadataProvider, addr string) *watcher {
 	s.isClosed = false
 
 	return s
+}
+
+func (w *watcher) waitForReady(readych chan bool, timeout int, killch chan bool) (done bool, killed bool) {
+
+	if killch == nil {
+		killch = make(chan bool, 1)
+	}
+
+	if timeout > 0 {
+		// if there is a timeout
+		ticker := time.NewTicker(time.Duration(timeout) * time.Millisecond)
+		select {
+		case <-readych:
+			return true, false
+		case <-ticker.C:
+			return false, false
+		case <-killch:
+			w.killch <- true
+			return false, true
+		}
+	} else {
+		// if there is no timeout
+		select {
+		case <-readych:
+			return true, false
+		case <-killch:
+			w.killch <- true
+			return false, true
+		}
+	}
+
+	return true, false
+}
+
+func (w *watcher) notifyReady(addr string, retry int, killch chan bool) (done bool, killed bool) {
+
+	if killch == nil {
+		killch = make(chan bool, 1)
+	}
+
+	// start a timer if it has not restarted yet
+	if w.timerKillCh == nil {
+		w.startTimer()
+	}
+
+RETRY:
+	// get IndexerId from indexer
+	err := w.refreshServiceMap()
+	if err == nil {
+		err = w.updateServiceMap(addr)
+	}
+
+	if err != nil && retry != 0 {
+		ticker := time.NewTicker(time.Duration(500) * time.Millisecond)
+		select {
+		case <-killch:
+			return false, true
+		case <-ticker.C:
+			// do nothing
+		}
+		retry--
+		goto RETRY
+	}
+
+	if err != nil {
+		return false, false
+	}
+
+	return true, false
 }
 
 func (w *watcher) updateServiceMap(adminport string) error {

@@ -1,3 +1,40 @@
+## Indes Status
+
+### Status can be obtained from:
+
+    $ curl localhost:9102/getIndexStatus
+    {
+      "code": "success",
+      "status": [
+        {
+            "defnId": 15184130463866081000,
+            "name": "breweries",
+            "bucket": "beer-sample",
+            "secExprs": [ "`name`" ],
+            "status": "Ready",
+            "hosts": [ "127.0.0.1:8091" ]
+        },
+        {
+        
+            "defnId": 16833079877526070000,
+            "name": "#primary",
+            "bucket": "beer-sample",
+            "isPrimary": true,
+            "status": "Ready",
+            "hosts": [ "127.0.0.1:8091" ]
+        },
+      ]
+    }
+
+* defnId     = Internal id of the index
+* name       = User supplied name
+* bucket     = The bucket the index is defined on
+* secExpres  = Expressions defining the index fields (ordered)
+* status     = Index status (Not Available / Created / Build / Ready)
+* isPrimary  = Indicates if index is primary (index on document key)
+* host       = Indexer node serving this index
+
+              
 ## Index Statistics
 
 ### Stats can be obtained from:

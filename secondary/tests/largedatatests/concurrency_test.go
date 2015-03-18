@@ -66,6 +66,7 @@ func DeleteDocsForDuration(wg *sync.WaitGroup, seconds float64) {
 func CreateDeleteDocsForDuration(wg *sync.WaitGroup, seconds float64) {
 	log.Printf("CreateDocs:: Creating mutations")
 	defer wg.Done()
+
 	start := time.Now()
 	for {
 		elapsed := time.Since(start)
@@ -101,12 +102,13 @@ func CreateDeleteDocsForDuration(wg *sync.WaitGroup, seconds float64) {
 func RangeScanForDuration_ltr(header string, wg *sync.WaitGroup, seconds float64, t *testing.T, indexName, bucketName, server string) {
 	log.Printf("In Range Scan")
 	defer wg.Done()
+
 	client, e := secondaryindex.CreateClient(clusterconfig.KVAddress, "RangeForDuration")
 	if e != nil {
 		FailTestIfError(e, "RangeScanForDuration Thread:: Error in gsi client creation", t)
 	}
-
 	defer client.Close()
+
 	start := time.Now()
 	i := 1
 	for {
@@ -129,12 +131,13 @@ func RangeScanForDuration_ltr(header string, wg *sync.WaitGroup, seconds float64
 func RangeScanForDuration_num(header string, wg *sync.WaitGroup, seconds float64, t *testing.T, indexName, bucketName, server string) {
 	log.Printf("In Range Scan")
 	defer wg.Done()
+
 	client, e := secondaryindex.CreateClient(clusterconfig.KVAddress, "RangeForDuration")
 	if e != nil {
 		FailTestIfError(e, "RangeScanForDuration Thread:: Error in gsi client creation", t)
 	}
-
 	defer client.Close()
+
 	start := time.Now()
 	i := 1
 	for {
@@ -153,12 +156,13 @@ func RangeScanForDuration_num(header string, wg *sync.WaitGroup, seconds float64
 func CreateDropIndexesForDuration(wg *sync.WaitGroup, seconds float64, t *testing.T) {
 	log.Printf("Create and Drop index operations")
 	defer wg.Done()
+
 	client, e := secondaryindex.CreateClient(clusterconfig.KVAddress, "CDIndex")
 	if e != nil {
 		FailTestIfError(e, "CreateDropIndexesForDuration Thread:: Error in gsi client creation", t)
 	}
-
 	defer client.Close()
+
 	start := time.Now()
 	for {
 		elapsed := time.Since(start)

@@ -47,7 +47,11 @@ func (b *FakeBucket) GetVBmap(kvaddrs []string) (map[string][]uint16, error) {
 }
 
 // GetFailoverLogs is method receiver for BucketAccess interface
-func (b *FakeBucket) GetFailoverLogs(vbnos []uint16) (couchbase.FailoverLog, error) {
+func (b *FakeBucket) GetFailoverLogs(
+	opaque uint16,
+	vbnos []uint16,
+	conf map[string]interface{}) (couchbase.FailoverLog, error) {
+
 	return b.flogs, nil
 }
 

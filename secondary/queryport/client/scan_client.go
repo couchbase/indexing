@@ -416,7 +416,9 @@ func (c *gsiScanClient) streamResponse(
 		}
 		callb(resp) // callback with error
 		cont, healthy = false, false
-		if err != io.EOF {
+		if err == io.EOF {
+			err = fmt.Errorf("server closed connection (EOF)")
+		} else {
 			fmsg := "%v connection %q response transport failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, laddr, err)
 		}

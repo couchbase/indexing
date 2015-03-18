@@ -16,6 +16,7 @@ import "code.google.com/p/goprotobuf/proto"
 type Feed struct {
 	cluster      string // immutable
 	topic        string // immutable
+	opaque       uint16 // opaque that created this feed.
 	endpointType string // immutable
 
 	// upstream
@@ -43,17 +44,15 @@ type Feed struct {
 	stale int
 
 	// config params
-	maxVbuckets int
-	reqTimeout  time.Duration
-	endTimeout  time.Duration
-	epFactory   c.RouterEndpointFactory
-	config      c.Config
-	logPrefix   string
+	reqTimeout time.Duration
+	endTimeout time.Duration
+	epFactory  c.RouterEndpointFactory
+	config     c.Config
+	logPrefix  string
 }
 
 // NewFeed creates a new topic feed.
 // `config` contains following keys.
-//    maxVbuckets: configured number vbuckets per bucket.
 //    clusterAddr: KV cluster address <host:port>.
 //    feedWaitStreamReqTimeout: wait for a response to StreamRequest
 //    feedWaitStreamEndTimeout: wait for a response to StreamEnd
@@ -67,6 +66,7 @@ func NewFeed(topic string, config c.Config, opaque uint16) (*Feed, error) {
 	feed := &Feed{
 		cluster: config["clusterAddr"].String(),
 		topic:   topic,
+		opaque:  opaque,
 
 		// upstream
 		reqTss:  make(map[string]*protobuf.TsVbuuid),
@@ -82,17 +82,21 @@ func NewFeed(topic string, config c.Config, opaque uint16) (*Feed, error) {
 		backch: make(chan []interface{}, chsize),
 		finch:  make(chan bool),
 
-		maxVbuckets: config["maxVbuckets"].Int(),
-		reqTimeout:  time.Duration(config["feedWaitStreamReqTimeout"].Int()),
-		endTimeout:  time.Duration(config["feedWaitStreamEndTimeout"].Int()),
-		epFactory:   epf,
-		config:      config,
+		reqTimeout: time.Duration(config["feedWaitStreamReqTimeout"].Int()),
+		endTimeout: time.Duration(config["feedWaitStreamEndTimeout"].Int()),
+		epFactory:  epf,
+		config:     config,
 	}
 	feed.logPrefix = fmt.Sprintf("FEED[<=>%v(%v)]", topic, feed.cluster)
 
 	go feed.genServer()
-	logging.Infof("%v feed started ...\n", feed.logPrefix)
+	logging.Infof("%v ##%x feed started ...\n", feed.logPrefix, opaque)
 	return feed, nil
+}
+
+// GetOpaque return the opaque id that created this feed.
+func (feed *Feed) GetOpaque() uint16 {
+	return feed.opaque
 }
 
 const (
@@ -108,13 +112,13 @@ const (
 	fCmdShutdown
 	fCmdGetTopicResponse
 	fCmdGetStatistics
-	fCmdSetConfig
+	fCmdResetConfig
 )
 
-// SetConfig for this feed.
-func (feed *Feed) SetConfig(config c.Config) error {
+// ResetConfig for this feed.
+func (feed *Feed) ResetConfig(config c.Config) error {
 	respch := make(chan []interface{}, 1)
-	cmd := []interface{}{fCmdSetConfig, config, respch}
+	cmd := []interface{}{fCmdResetConfig, config, respch}
 	_, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return err
 }
@@ -352,14 +356,15 @@ func (feed *Feed) genServer() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v feed gen-server crashed: %v\n", feed.logPrefix, r)
 			logging.Errorf("%s", logging.StackTrace())
-			feed.shutdown(0xFFFF)
+			feed.shutdown(feed.opaque)
 		}
 	}()
 
 	var msg []interface{}
 
 	timeout := time.Tick(1000 * time.Millisecond)
-	ctrlMsg := "%v control channel has %v messages"
+	ctrlMsg := "%v ##%x control channel has %v messages"
+	prefix := feed.logPrefix
 
 loop:
 	for {
@@ -382,7 +387,6 @@ loop:
 			}
 
 		case msg = <-feed.backch:
-			prefix := feed.logPrefix
 			if cmd, ok := msg[0].(*controlStreamRequest); ok {
 				reqTs, ok := feed.reqTss[cmd.bucket]
 				seqno, vbuuid, sStart, sEnd, err := reqTs.Get(cmd.vbno)
@@ -428,29 +432,33 @@ loop:
 				feed.rollTss[cmd.bucket] = rollTs
 
 			} else if cmd, ok := msg[0].(*controlFinKVData); ok {
-				fmsg := "%v backch flush %T -- %v\n"
-				logging.Infof(fmsg, prefix, cmd, cmd.Repr())
+				fmsg := "%v ##%x backch flush %T -- %v\n"
+				logging.Infof(fmsg, prefix, feed.opaque, cmd, cmd.Repr())
 				actTs, ok := feed.actTss[cmd.bucket]
 				if ok && actTs != nil && actTs.Len() == 0 { // bucket is done
-					logging.Infof("%v self deleting bucket\n", prefix)
+					fmsg = "%v ##%x self deleting bucket\n"
+					logging.Infof(fmsg, prefix, feed.opaque)
 					feed.cleanupBucket(cmd.bucket, false)
 
 				} else if actTs != nil && actTs.Len() == 0 {
-					fmsg := "%v FinKVData before StreamEnds %v\n"
-					logging.Fatalf(fmsg, prefix, actTs)
+					fmsg = "%v ##%x FinKVData before StreamEnds %v\n"
+					logging.Fatalf(fmsg, prefix, feed.opaque, actTs)
 
 				} else {
-					fmsg := "%v FinKVData can't find bucket %q\n"
-					logging.Fatalf(fmsg, prefix, cmd.bucket)
+					// Note: bucket could have gone because of a downstream
+					// delBucket() request.
+					fmsg := "%v ##%x FinKVData can't find bucket %q\n"
+					logging.Warnf(fmsg, prefix, feed.opaque, cmd.bucket)
 				}
 
 			} else {
-				logging.Fatalf("%v backch flush %T: %v\n", prefix, msg[0], msg[0])
+				fmsg := "%v ##%x backch flush %T: %v\n"
+				logging.Fatalf(fmsg, prefix, feed.opaque, msg[0], msg[0])
 			}
 
 		case <-timeout:
 			if len(feed.backch) > 0 { // can happend during rebalance.
-				logging.Infof(ctrlMsg, feed.logPrefix, len(feed.backch))
+				logging.Warnf(ctrlMsg, prefix, feed.opaque, len(feed.backch))
 			}
 		}
 	}
@@ -524,9 +532,9 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 		respch := msg[1].(chan []interface{})
 		respch <- []interface{}{feed.getStatistics()}
 
-	case fCmdSetConfig:
+	case fCmdResetConfig:
 		config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
-		feed.setConfig(config)
+		feed.resetConfig(config)
 		respch <- []interface{}{nil}
 
 	case fCmdShutdown:
@@ -611,15 +619,18 @@ func (feed *Feed) start(
 		feed.reqTss[bucketn] = reqTs // :SideEffect:
 		if e != nil {
 			err = e
-			fmsg := "%v ##%x stream-request: %v\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
+			logging.Errorf(
+				"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque, err,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
+		} else {
+			logging.Infof(
+				"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
 		}
-		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
-		logging.Infof(
-			fmsg,
-			feed.logPrefix, opaque, bucketn,
-			feed.rollTss[bucketn].GetVbnos(),
-			feed.actTss[bucketn].GetVbnos())
 	}
 	return err
 }
@@ -693,15 +704,18 @@ func (feed *Feed) restartVbuckets(
 		feed.reqTss[bucketn] = reqTs // :SideEffect:
 		if e != nil {
 			err = e
-			fmsg := "%v ##%x stream-request: %v\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
+			logging.Errorf(
+				"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque, err,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
+		} else {
+			logging.Infof(
+				"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
 		}
-		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
-		logging.Infof(
-			fmsg,
-			feed.logPrefix, opaque, bucketn,
-			feed.rollTss[bucketn].GetVbnos(),
-			feed.actTss[bucketn].GetVbnos())
 	}
 	return err
 }
@@ -766,11 +780,14 @@ func (feed *Feed) shutdownVbuckets(
 		feed.rollTss[bucketn] = rollTs.FilterByVbuckets(vbnos) // :SideEffect:
 		if e != nil {
 			err = e
-			fmsg := "%v ##%x stream-end: %v\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
+			logging.Errorf(
+				"%v ##%x stream-end (err: %v) vbnos: %v\n",
+				feed.logPrefix, opaque, err, vbnos)
+		} else {
+			logging.Infof(
+				"%v ##%x stream-end (success) vbnos: %v\n",
+				feed.logPrefix, opaque, vbnos)
 		}
-		fmsg := "%v ##%x stream-end completed for bucket %v, vbnos %v\n"
-		logging.Infof(fmsg, feed.logPrefix, opaque, bucketn, vbnos)
 	}
 	return err
 }
@@ -847,14 +864,18 @@ func (feed *Feed) addBuckets(
 		feed.reqTss[bucketn] = reqTs // :SideEffect:
 		if e != nil {
 			err = e
-			fmsg := "%v ##%x stream-request: %v\n"
-			logging.Errorf(fmsg, feed.logPrefix, opaque, err)
+			logging.Errorf(
+				"%v ##%x stream-request (err: %v) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque, err,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
+		} else {
+			logging.Infof(
+				"%v ##%x stream-request (success) rollback: %v; vbnos: %v\n",
+				feed.logPrefix, opaque,
+				feed.rollTss[bucketn].GetVbnos(),
+				feed.actTss[bucketn].GetVbnos())
 		}
-		fmsg := "%v ##%x stream-request %s, rollback: %v, success: vbnos %v\n"
-		logging.Infof(
-			fmsg, feed.logPrefix, opaque, bucketn,
-			feed.rollTss[bucketn].GetVbnos(),
-			feed.actTss[bucketn].GetVbnos())
 	}
 	return err
 }
@@ -945,7 +966,8 @@ func (feed *Feed) repairEndpoints(
 
 		} else if (endpoint == nil) || !endpoint.Ping() {
 			topic, typ := feed.topic, feed.endpointType
-			endpoint, e = feed.epFactory(topic, typ, raddr)
+			config := feed.config.SectionConfig("dataport.", true /*trim*/)
+			endpoint, e = feed.epFactory(topic, typ, raddr, config)
 			if e != nil {
 				fmsg := "%v ##%x endpoint-factory %q: %v\n"
 				logging.Errorf(fmsg, prefix, opaque, raddr1, e)
@@ -1002,27 +1024,23 @@ func (feed *Feed) getStatistics() c.Statistics {
 	return stats
 }
 
-func (feed *Feed) setConfig(config c.Config) {
-	feed.config = feed.config.Override(config)
-
-	pconf := feed.config.SectionConfig("projector.", true /*trim*/)
-	epf := pconf["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
-	feed.reqTimeout = time.Duration(pconf["feedWaitStreamReqTimeout"].Int())
-	feed.endTimeout = time.Duration(pconf["feedWaitStreamEndTimeout"].Int())
-	feed.epFactory = epf
-	logging.Infof("%v updated configuration ...\n", feed.logPrefix)
-	logging.Infof(
-		"%v feedWaitStreamReqTimeout : %v\n", feed.logPrefix, feed.reqTimeout)
-	logging.Infof(
-		"%v feedWaitStreamEndTimeout : %v\n", feed.logPrefix, feed.endTimeout)
+func (feed *Feed) resetConfig(config c.Config) {
+	if cv, ok := config["feedWaitStreamReqTimeout"]; ok {
+		feed.reqTimeout = time.Duration(cv.Int())
+	}
+	if cv, ok := config["feedWaitStreamEndTimeout"]; ok {
+		feed.endTimeout = time.Duration(cv.Int())
+	}
+	// pass the configuration to active kvdata
 	for _, kvdata := range feed.kvdata {
-		kvdata.SetConfig(pconf)
+		kvdata.ResetConfig(config)
 	}
-
-	econf := feed.config.SectionConfig("endpoint.dataport.", true /*trim*/)
+	// pass the configuration to active endpoints
+	econf := config.SectionConfig("dataport.", true /*trim*/)
 	for _, endpoint := range feed.endpoints {
-		endpoint.SetConfig(econf)
+		endpoint.ResetConfig(econf)
 	}
+	feed.config = feed.config.Override(config)
 }
 
 func (feed *Feed) shutdown(opaque uint16) error {
@@ -1049,7 +1067,7 @@ func (feed *Feed) shutdown(opaque uint16) error {
 	}
 	// cleanup
 	close(feed.finch)
-	logging.Infof("%v ##%x feed ... stopped\n", feed.logPrefix, opaque)
+	logging.Infof("%v ##%x feed ... stopped\n", feed.logPrefix, feed.opaque)
 	return nil
 }
 
@@ -1081,7 +1099,7 @@ func (feed *Feed) openFeeder(
 	if ok {
 		return feeder, nil
 	}
-	bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn)
+	bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn, opaque)
 	if err != nil {
 		return nil, projC.ErrorFeeder
 	}
@@ -1097,7 +1115,12 @@ func (feed *Feed) openFeeder(
 		"genChanSize":  feed.config["dcp.genChanSize"].Int(),
 		"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
 	}
-	feeder, err = OpenBucketFeed(name, bucket, dcpConfig)
+	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
+	if err != nil {
+		return nil, err
+	}
+	kvaddrs := []string{kvaddr}
+	feeder, err = OpenBucketFeed(name, bucket, opaque, kvaddrs, dcpConfig)
 	if err != nil {
 		fmsg := "%v ##%x OpenBucketFeed(%q): %v"
 		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
@@ -1146,7 +1169,7 @@ func (feed *Feed) bucketFeed(
 func (feed *Feed) bucketDetails(
 	pooln, bucketn string, opaque uint16, vbnos []uint16) ([]uint64, error) {
 
-	bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn)
+	bucket, err := feed.connectBucket(feed.cluster, pooln, bucketn, opaque)
 	if err != nil {
 		return nil, err
 	}
@@ -1157,7 +1180,7 @@ func (feed *Feed) bucketDetails(
 		"genChanSize":  feed.config["dcp.genChanSize"].Int(),
 		"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
 	}
-	flogs, err := bucket.GetFailoverLogs(vbnos, dcpConfig)
+	flogs, err := bucket.GetFailoverLogs(opaque, vbnos, dcpConfig)
 	if err != nil {
 		fmsg := "%v ##%x GetFailoverLogs(%q): %v"
 		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
@@ -1181,6 +1204,36 @@ func (feed *Feed) bucketDetails(
 	}
 
 	return vbuuids, nil
+}
+
+func (feed *Feed) getLocalKVAddrs(
+	pooln, bucketn string, opaque uint16) (string, error) {
+
+	prefix := feed.logPrefix
+	url, err := c.ClusterAuthUrl(feed.config["clusterAddr"].String())
+	if err != nil {
+		fmsg := "%v ##%x ClusterAuthUrl(): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, err)
+		return "", projC.ErrorClusterInfo
+	}
+	cinfo, err := c.NewClusterInfoCache(url, pooln)
+	if err != nil {
+		fmsg := "%v ##%x ClusterInfoCache(`%v`): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
+		return "", projC.ErrorClusterInfo
+	}
+	if err := cinfo.Fetch(); err != nil {
+		fmsg := "%v ##%x cinfo.Fetch(`%v`): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, bucketn, err)
+		return "", projC.ErrorClusterInfo
+	}
+	kvaddr, err := cinfo.GetLocalServiceAddress("kv")
+	if err != nil {
+		fmsg := "%v ##%x cinfo.GetLocalServiceAddress(`kv`): %v\n"
+		logging.Errorf(fmsg, prefix, opaque, err)
+		return "", projC.ErrorClusterInfo
+	}
+	return kvaddr, nil
 }
 
 func (feed *Feed) getLocalVbuckets(
@@ -1276,7 +1329,8 @@ func (feed *Feed) startEndpoints(
 
 			} else if endpoint == nil || !endpoint.Ping() {
 				topic, typ := feed.topic, feed.endpointType
-				endpoint, e = feed.epFactory(topic, typ, raddr)
+				config := feed.config.SectionConfig("dataport.", true /*trim*/)
+				endpoint, e = feed.epFactory(topic, typ, raddr, config)
 				if e != nil {
 					fmsg := "%v ##%x endpoint-factory %q: %v\n"
 					logging.Errorf(fmsg, prefix, opaque, raddr1, e)
@@ -1535,26 +1589,50 @@ func newDCPConnectionName(bucketn, topic string, uuid uint64) string {
 // connectBucket will instantiate a couchbase-bucket instance with cluster.
 // caller's responsibility to close the bucket.
 func (feed *Feed) connectBucket(
-	cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
+	cluster, pooln, bucketn string, opaque uint16) (*couchbase.Bucket, error) {
 
 	ah := &c.CbAuthHandler{Hostport: cluster, Bucket: bucketn}
 	couch, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
 	if err != nil {
-		fmsg := "%v connectBucket(`%v`): %v"
-		logging.Errorf(fmsg, feed.logPrefix, bucketn, err)
+		fmsg := "%v ##%x connectBucket(`%v`): %v"
+		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
 		return nil, projC.ErrorDCPConnection
 	}
 	pool, err := couch.GetPool(pooln)
 	if err != nil {
-		fmsg := "%v GetPool(`%v`): %v"
-		logging.Errorf(fmsg, feed.logPrefix, pooln, err)
+		fmsg := "%v ##%x GetPool(`%v`): %v"
+		logging.Errorf(fmsg, feed.logPrefix, opaque, pooln, err)
 		return nil, projC.ErrorDCPPool
 	}
 	bucket, err := pool.GetBucket(bucketn)
 	if err != nil {
-		fmsg := "%v GetBucket(`%v`): %v"
-		logging.Errorf(fmsg, feed.logPrefix, bucketn, err)
+		fmsg := "%v ##%x GetBucket(`%v`): %v"
+		logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn, err)
 		return nil, projC.ErrorDCPBucket
 	}
 	return bucket, nil
+}
+
+// FeedConfigParams return the list of configuration params
+// supported by a feed.
+func FeedConfigParams() []string {
+	paramNames := []string{
+		"clusterAddr",
+		"feedChanSize",
+		"feedWaitStreamEndTimeout",
+		"feedWaitStreamReqTimeout",
+		"mutationChanSize",
+		"routerEndpointFactory",
+		"vbucketSyncTimeout",
+		// dcp configuration
+		"dcp.dataChanSize",
+		"dcp.genChanSize",
+		// dataport
+		"dataport.remoteBlock",
+		"dataport.keyChanSize",
+		"dataport.bufferSize",
+		"dataport.bufferTimeout",
+		"dataport.harakiriTimeout",
+		"dataport.maxPayload"}
+	return paramNames
 }

@@ -77,7 +77,17 @@ func (m *LifecycleMgr) Terminate() {
 func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 	logging.Debugf("LifecycleMgr.OnNewRequest(): queuing new request. reqId %v", request.GetReqId())
 
-	m.incomings <- &requestHolder{request: request, fid: fid}
+	req := &requestHolder{request: request, fid: fid}
+	op := c.OpCode(request.GetOpCode())
+
+	if op == client.OPCODE_SERVICE_MAP {
+		// short cut the connection request by spawn its own go-routine
+		// This call does not change the state of the repository, so it
+		// is OK to shortcut.
+		go m.dispatchRequest(req, message.NewConcreteMsgFactory())
+	} else {
+		m.incomings <- req
+	}
 }
 
 func (m *LifecycleMgr) GetResponseChannel() <-chan c.Packet {
@@ -321,23 +331,22 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 		return err
 	}
 
+	changed := false
 	if state != common.INDEX_STATE_NIL {
-		topology.UpdateStateForIndexInstByDefn(common.IndexDefnId(defnId), common.IndexState(state))
+		changed = topology.UpdateStateForIndexInstByDefn(common.IndexDefnId(defnId), common.IndexState(state)) || changed
 	}
 
 	if streamId != common.NIL_STREAM {
-		topology.UpdateStreamForIndexInstByDefn(common.IndexDefnId(defnId), common.StreamId(streamId))
+		changed = topology.UpdateStreamForIndexInstByDefn(common.IndexDefnId(defnId), common.StreamId(streamId)) || changed
 	}
 
-	topology.SetErrorForIndexInstByDefn(common.IndexDefnId(defnId), errStr)
+	changed = topology.SetErrorForIndexInstByDefn(common.IndexDefnId(defnId), errStr) || changed
 
-	if len(buildTime) > 0 {
-		topology.SetBuildTimeForIndexInstByDefn(common.IndexDefnId(defnId), buildTime)
-	}
-
-	if err := m.repo.SetTopologyByBucket(bucket, topology); err != nil {
-		logging.Errorf("LifecycleMgr.handleTopologyChange() : index instance update fails. Reason = %v", err)
-		return err
+	if changed {
+		if err := m.repo.SetTopologyByBucket(bucket, topology); err != nil {
+			logging.Errorf("LifecycleMgr.handleTopologyChange() : index instance update fails. Reason = %v", err)
+			return err
+		}
 	}
 
 	return nil

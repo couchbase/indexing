@@ -154,6 +154,14 @@ func (c ClusterInfoCache) GetCurrentNode() NodeId {
 	panic("Current node is not in active membership")
 }
 
+func (c ClusterInfoCache) IsNodeHealthy(nid NodeId) (bool, error) {
+	if int(nid) >= len(c.nodes) {
+		return false, ErrInvalidNodeId
+	}
+
+	return c.nodes[nid].Status == "healthy", nil
+}
+
 func (c ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr string, err error) {
 	var port int
 	var ok bool
