@@ -354,6 +354,15 @@ func CrashOnError(err error) {
 }
 
 func ClusterAuthUrl(cluster string) (string, error) {
+
+	if strings.HasPrefix(cluster, "http") {
+		u, err := url.Parse(cluster)
+		if err != nil {
+			return "", err
+		}
+		cluster = u.Host
+	}
+
 	adminUser, adminPasswd, err := cbauth.GetHTTPServiceAuth(cluster)
 	if err != nil {
 		return "", err
