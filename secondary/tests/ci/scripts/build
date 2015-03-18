@@ -3,10 +3,11 @@ export PATH=$PATH:~/bin
 
 while true; do
   cd /var/www
-  (ls -t make-*.log | head -n 15; ls -t make-*.log) | sort | uniq -u | xargs -r rm
-  (ls -t logs-*.tar | head -n 15; ls -t logs-*.tar) | sort | uniq -u | xargs -r rm
-  (ls -t cores-*.tar* | head -n 15; ls -t cores-*.tar*) | sort | uniq -u | xargs -r rm
-  (ls -t installer-*.tar | head -n 15; ls -t installer-*.tar) | sort | uniq -u | xargs -r rm
+  (ls -t ws-*.tar* | head -n 3; ls -t ws-*.tar*) | sort | uniq -u | xargs -r rm
+  (ls -t make-*.log | head -n 3; ls -t make-*.log) | sort | uniq -u | xargs -r rm
+  (ls -t logs-*.tar* | head -n 3; ls -t logs-*.tar*) | sort | uniq -u | xargs -r rm
+  (ls -t cores-*.tar* | head -n 3; ls -t cores-*.tar*) | sort | uniq -u | xargs -r rm
+  (ls -t installer-*.tar | head -n 3; ls -t installer-*.tar) | sort | uniq -u | xargs -r rm
   export TS="`date +%d.%m-%H.%M`"
   export WORKSPACE="/opt/build"
   echo '<html><head><meta http-equiv="refresh" content="3"></head><body><pre>' > /var/www/sherlock-current.html
@@ -16,19 +17,24 @@ while true; do
   echo '</pre>' >> /var/www/sherlock-current.html
   if [ $rc -eq 0 ]; then status=pass; else status=fail; fi
   echo '<pre>' >> /var/www/sherlock-current.html
+  gzip ${WORKSPACE}/ws.tar 2>&1 1>/dev/null
+  gzip ${WORKSPACE}/logs.tar 2>&1 1>/dev/null
+  gzip ${WORKSPACE}/cores.tar 2>&1 1>/dev/null
   echo "Version: <a href='versions-$TS.cfg'>versions-$TS.cfg</a>" >> /var/www/sherlock-current.html
   echo "Timing: <a href='timing-$TS.log'>timing-$TS.log</a>" >> /var/www/sherlock-current.html
   echo "Build Log: <a href='make-$TS.log'>make-$TS.log</a>" >> /var/www/sherlock-current.html
-  echo "Server Log: <a href='logs-$TS.tar'>logs-$TS.tar</a>" >> /var/www/sherlock-current.html
-  echo "Core Files: <a href='cores-$TS.tar'>cores-$TS.tar</a>" >> /var/www/sherlock-current.html
+  echo "Server Log: <a href='logs-$TS.tar.gz'>logs-$TS.tar.gz</a>" >> /var/www/sherlock-current.html
+  echo "Core Files: <a href='cores-$TS.tar.gz'>cores-$TS.tar.gz</a>" >> /var/www/sherlock-current.html
   echo "Install: <a href='installer-$TS.tar'>installer-$TS.tar</a>" >> /var/www/sherlock-current.html
+  echo "Workspace: <a href='ws-$TS.tar.gz'>ws-$TS.tar.gz</a>" >> /var/www/sherlock-current.html
   sed 's/<meta [^>]*>//' /var/www/sherlock-current.html > /var/www/sherlock-$TS.$status.html
   echo "</pre></body></html>" >> /var/www/sherlock-$TS.$status.html
   echo "</pre><script>window.location.href='sherlock-$TS.$status.html'</script></body></html>" >> /var/www/sherlock-current.html
+  mv ${WORKSPACE}/ws.tar.gz /var/www/ws-$TS.tar.gz
   mv ${WORKSPACE}/timing.log /var/www/timing-$TS.log
   mv ${WORKSPACE}/make.log /var/www/make-$TS.log
-  mv ${WORKSPACE}/logs.tar /var/www/logs-$TS.tar
-  mv ${WORKSPACE}/cores.tar /var/www/cores-$TS.tar
+  mv ${WORKSPACE}/logs.tar.gz /var/www/logs-$TS.tar.gz
+  mv ${WORKSPACE}/cores.tar.gz /var/www/cores-$TS.tar.gz
   mv ${WORKSPACE}/versions.cfg /var/www/versions-$TS.cfg
   mv ${WORKSPACE}/installer.tar /var/www/installer-$TS.tar
   ln /var/www/sherlock-$TS.$status.html /var/www/sherlock-$TS.htm

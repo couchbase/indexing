@@ -66,14 +66,11 @@ else
   echo "none"
 fi
 
-branch=master
 cd $WORKSPACE/goproj/src/github.com/couchbase/query
-git fetch -q couchbase
-git checkout -q couchbase/$branch
 current="`git rev-parse HEAD`"
 test -f ~/query.good || (echo $current > ~/query.good)
 good="`cat ~/query.good`"
-echo -n "Switched query to $branch at <a href='https://github.com/couchbase/query/commit/$current'>${current:0:7}</a>, changes since last good build: "
+echo -n "query is at <a href='https://github.com/couchbase/query/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
   git log --pretty='format: <a href="https://github.com/couchbase/query/commit/%H">%h</a> %s' HEAD...$good
@@ -82,33 +79,30 @@ else
   echo "none"
 fi
 
-branch=master
 cd $WORKSPACE/forestdb
-git fetch -q couchbaselabs
-git checkout -q couchbaselabs/$branch
+#echo "Pinning forestdb to 8b94664 and cherry-picking 1ab735"
+#git checkout 8b94664
+#git cherry-pick 1ab735
 current="`git rev-parse HEAD`"
 test -f ~/forestdb.good || (echo $current > ~/forestdb.good)
 good="`cat ~/forestdb.good`"
-echo -n "Switched forestdb to $branch at <a href='https://github.com/couchbaselabs/forestdb/commit/$current'>${current:0:7}</a>, changes since last good build: "
+echo -n "forestdb is at <a href='https://github.com/couchbase/forestdb/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbaselabs/forestdb/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/forestdb/commit/%H">%h</a> %s' HEAD...$good
   echo
 else
   echo "none"
 fi
 
-branch=master
-cd $WORKSPACE/godeps/src/github.com/couchbase/goforestdb
-git fetch -q couchbaselabs
-git checkout -q couchbaselabs/$branch
+cd $WORKSPACE/testrunner
 current="`git rev-parse HEAD`"
-test -f ~/goforestdb.good || (echo $current > ~/goforestdb.good)
-good="`cat ~/goforestdb.good`"
-echo -n "Switched goforestdb to $branch at <a href='https://github.com/couchbase/goforestdb/commit/$current'>${current:0:7}</a>, changes since last good build: "
+test -f ~/testrunner.good || (echo $current > ~/testrunner.good)
+good="`cat ~/testrunner.good`"
+echo -n "testrunner is at <a href='https://github.com/couchbase/testrunner/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
-  git log --pretty='format: <a href="https://github.com/couchbase/goforestdb/commit/%H">%h</a> %s' HEAD...$good
+  git log --pretty='format: <a href="https://github.com/couchbase/testrunner/commit/%H">%h</a> %s' HEAD...$good
   echo
 else
   echo "none"
@@ -154,8 +148,10 @@ cp -R server-overlay-deb/common/* /opt/couchbase
 PRODUCT_VERSION=${PRODUCT_VERSION} LD_LIBRARY_PATH=/opt/couchbase/lib \
    ./server-deb.rb /opt/couchbase couchbase-server couchbase server 1.0.0 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Packaging installer"
+
 cd $WORKSPACE/voltron/build/deb/
 tar cf $WORKSPACE/installer.tar couchbase*.deb 1>/dev/null 2>&1
+tar uf $WORKSPACE/ws.tar --exclude '*.tar' --exclude '*.deb' $WORKSPACE/ 1>/dev/null 2>&1
 
 echo "Base Manifest:" >> $WORKSPACE/versions.cfg
 cd $WORKSPACE/voltron/build/deb/couchbase-server_${RELEASE}-${BLD_NUM}/opt/couchbase

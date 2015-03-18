@@ -12,11 +12,14 @@ if [ "$TS" = "" ]; then
 fi
 
 stop_cluster() {
+  killall -ABRT indexer 1>/dev/null 2>&1
+  killall -ABRT projector 1>/dev/null 2>&1
   pkill -f cluster_
   pkill -f $WORKSPACE/install/bin
   pkill -f testrunner
   pkill -f /opt/couchbase
-  killall beam.smp epmd memcached projector indexer gometa 1>/dev/null 2>&1
+  pkill -f testrunner
+  killall beam.smp epmd memcached projector indexer gometa python 1>/dev/null 2>&1
   sleep 10
   cd $WORKSPACE/ns_server
   make dataclean 1>/dev/null 2>&1
@@ -24,34 +27,41 @@ stop_cluster() {
 }
 
 collect_logs_cores() {
-  gzip /tmp/core-* 2>&1 1>/dev/null
-  tar cf $WORKSPACE/cores.tar /tmp/core-* 1>/dev/null 2>&1
-  tar cf $WORKSPACE/logs.tar $WORKSPACE/ns_server/logs 1>/dev/null 2>&1
-  tar uf $WORKSPACE/logs.tar $WORKSPACE/test.log 1>/dev/null 2>&1
-  tar uf $WORKSPACE/logs.tar $WORKSPACE/run.log 1>/dev/null 2>&1
-  tar uf $WORKSPACE/logs.tar /home/buildbot/bin/do* 1>/dev/null 2>&1
+  if [ "$phase" = "" ]; then phase=unknown; fi
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar ns_server/logs 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar test.log 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar run.log 1>/dev/null 2>&1
 }
 
 error_exit() {
-  echo "</pre><h3>Testing Failed: $1</h3><pre>"
-  stop_cluster
+  echo "</pre><h4>Testing Failed: $1</h4><pre>"
+  echo "$2"
   collect_logs_cores
+  stop_cluster
   exit 2
 }
 
 # Setup workspace
+export phase=sanity
 stop_cluster
-rm -f $WORKSPACE/logs.tar $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-*
+rm -f $WORKSPACE/logs.tar.* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-*
 find ~/testdata/* -mtime +1 -exec rm {} \; 1>/dev/null 2>&1
 warmed="never"
 > $WORKSPACE/test.log
 
+# Test the base
+echo "</pre><h4>Simple Test</h4><pre>"
+cd $WORKSPACE/testrunner
+(timeout 1h make simple-test 2>&1) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
+stop_cluster
+
 # Core dumps
 export GOTRACEBACK=crash
 ulimit -c unlimited
-sudo bash -c "echo /tmp/core-%e.$TS > /proc/sys/kernel/core_pattern"
+sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
 
-echo "</pre><h3>Functional tests</h3><pre>"
+# Start server
+echo "</pre><h4>Functional tests</h4><pre>"
 echo "Starting server"
 cd $WORKSPACE/ns_server
 ./cluster_run -n2 1>$WORKSPACE/run.log 2>&1 &
@@ -78,6 +88,7 @@ warmed="`date`"
 sleep 30
 
 echo "Starting functional tests"
+export phase=functional
 mkdir -p "$WORKSPACE/go" 
 export GOROOT=/usr/local/go
 export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
@@ -86,24 +97,29 @@ go get -t ./... 1>/dev/null 2>&1
 
 # Go tests
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/functionaltests
-go test -timeout 30m -v -cbconfig ../config/build_validation.json | annotate-output +%T tee -a $WORKSPACE/test.log
+go test -timeout 30m -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
-go test -timeout 2h -v -cbconfig ../config/build_validation.json | annotate-output +%T tee -a $WORKSPACE/test.log
+go test -timeout 2h -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
+collect_logs_cores
 stop_cluster
 
 # Timing
 echo "Test $TS" > $WORKSPACE/timing.log
-sed 's/^--- PASS: \(.*\) (\(.*\) seconds)$/\1 \2/;tx;d;:x' $WORKSPACE/test.log | sort >> $WORKSPACE/timing.log
+grep PERFSTAT $WORKSPACE/test.log | sed 's/^.*PERFSTAT \(.*\) \(.*\) seconds$/\1 \2/' | sort >> $WORKSPACE/timing.log
 
 # Integration tests
-echo "</pre><h3>Integration tests</h3><pre>"
+echo "</pre><h4>Integration tests</h4><pre>"
+export phase=integration
 cd $WORKSPACE/testrunner
 (timeout 1h make test-2i-integrations-tests 2>&1) | tee -a $WORKSPACE/test.log
+collect_logs_cores
 stop_cluster
 
 # Verify results
+> /tmp/fail.log
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/ci/
-grep -- '--- FAIL:' $WORKSPACE/test.log > /tmp/fail.log
+grep '\sfail\s*$' $WORKSPACE/test.log >> /tmp/fail.log
+grep -- '--- FAIL:' $WORKSPACE/test.log >> /tmp/fail.log
 grep '^\s*2i' $WORKSPACE/test.log | grep 'fail\s*$' >> /tmp/fail.log
 for tst in `cat skip.txt`; do
   echo "$tst" | grep -qs '^\s*#' && continue
@@ -112,7 +128,7 @@ for tst in `cat skip.txt`; do
   mv /tmp/fail-out.log /tmp/fail.log
 done
 faillog="`cat /tmp/fail.log`"
-if [ "$faillog" != "" ]; then error_exit "Integration test failed: $faillog"; fi
+if [ "$faillog" != "" ]; then error_exit "Integration test failed" "$faillog"; fi
 
 # Note versions
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
@@ -121,12 +137,11 @@ cd $WORKSPACE/goproj/src/github.com/couchbase/query
 git rev-parse HEAD > ~/query.good
 cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
 git rev-parse HEAD > ~/gometa.good
-cd $WORKSPACE/godeps/src/github.com/couchbase/goforestdb
-git rev-parse HEAD > ~/goforestdb.good
 cd $WORKSPACE/forestdb
 git rev-parse HEAD > ~/forestdb.good
+cd $WORKSPACE/testrunner
+git rev-parse HEAD > ~/testrunner.good
 
-echo "</pre><h3>Testing Succeeded</h3><pre>"
-collect_logs_cores
+echo "</pre><h4>Testing Succeeded</h4><pre>"
 exit 0
 

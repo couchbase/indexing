@@ -25,8 +25,13 @@ for i in {1..240}; do
   if [ "$current" != "$good" ]; then exit 0; fi
 
   branch=master
-  current="`git ls-remote git://github.com/couchbaselabs/forestdb $branch | awk '{print $1}'`"
+  current="`git ls-remote git://github.com/couchbase/forestdb $branch | awk '{print $1}'`"
   good="`cat ~/forestdb.good`"
+  if [ "$current" != "$good" ]; then exit 0; fi
+
+  branch=master
+  current="`git ls-remote git://github.com/couchbase/testrunner $branch | awk '{print $1}'`"
+  good="`cat ~/testrunner.good`"
   if [ "$current" != "$good" ]; then exit 0; fi
 done
 
