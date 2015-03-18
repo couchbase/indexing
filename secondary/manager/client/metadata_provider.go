@@ -355,11 +355,11 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 }
 
 func (o *MetadataProvider) ListIndex() []*IndexMetadata {
-	o.repo.mutex.Lock()
-	defer o.repo.mutex.Unlock()
 
-	result := make([]*IndexMetadata, 0, len(o.repo.indices))
-	for _, meta := range o.repo.indices {
+	indices := o.repo.listDefn()
+	result := make([]*IndexMetadata, 0, len(indices))
+
+	for _, meta := range indices {
 		if o.isValidIndexFromActiveIndexer(meta) {
 			result = append(result, meta)
 		}
@@ -369,10 +369,9 @@ func (o *MetadataProvider) ListIndex() []*IndexMetadata {
 }
 
 func (o *MetadataProvider) FindIndex(id c.IndexDefnId) *IndexMetadata {
-	o.repo.mutex.Lock()
-	defer o.repo.mutex.Unlock()
 
-	if meta, ok := o.repo.indices[id]; ok {
+	indices := o.repo.listDefn()
+	if meta, ok := indices[id]; ok {
 		if o.isValidIndexFromActiveIndexer(meta) {
 			return meta
 		}
@@ -419,10 +418,9 @@ func (o *MetadataProvider) UpdateServiceAddrForIndexer(id c.IndexerId, adminport
 }
 
 func (o *MetadataProvider) FindIndexByName(name string, bucket string) *IndexMetadata {
-	o.repo.mutex.Lock()
-	defer o.repo.mutex.Unlock()
 
-	for _, meta := range o.repo.indices {
+	indices := o.repo.listDefn()
+	for _, meta := range indices {
 		if o.isValidIndexFromActiveIndexer(meta) {
 			if meta.Definition.Name == name && meta.Definition.Bucket == bucket {
 				return meta
@@ -517,10 +515,9 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 }
 
 func (o *MetadataProvider) findIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadata {
-	o.repo.mutex.Lock()
-	defer o.repo.mutex.Unlock()
 
-	if meta, ok := o.repo.indices[id]; ok {
+	indices := o.repo.listDefn()
+	if meta, ok := indices[id]; ok {
 		return meta
 	}
 
@@ -650,6 +647,19 @@ func newMetadataRepo() *metadataRepo {
 		definitions: make(map[c.IndexDefnId]*c.IndexDefn),
 		instances:   make(map[c.IndexDefnId]*IndexInstDistribution),
 		indices:     make(map[c.IndexDefnId]*IndexMetadata)}
+}
+
+func (r *metadataRepo) listDefn() map[c.IndexDefnId]*IndexMetadata {
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	result := make(map[c.IndexDefnId]*IndexMetadata)
+	for id, meta := range r.indices {
+		result[id] = meta
+	}
+
+	return result
 }
 
 func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
