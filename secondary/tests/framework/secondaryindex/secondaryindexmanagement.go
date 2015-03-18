@@ -131,7 +131,6 @@ func BuildIndex(indexName, bucketName, server string, indexActiveTimeoutSeconds 
 	if e != nil {
 		return e
 	}
-
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
@@ -184,6 +183,8 @@ func IndexState(indexName, bucketName, server string) (string, error) {
 	if e != nil {
 		return "", e
 	}
+	defer client.Close()
+
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	state, e := client.IndexState(defnID)
 	if e != nil {
@@ -199,9 +200,9 @@ func IndexExists(indexName, bucketName, server string) (bool, error) {
 	if e != nil {
 		return false, e
 	}
+	defer client.Close()
 
 	indexes, err := client.Refresh()
-	client.Close()
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
@@ -232,6 +233,7 @@ func DropSecondaryIndex(indexName, bucketName, server string) error {
 	if e != nil {
 		return e
 	}
+	defer client.Close()
 
 	indexes, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
@@ -245,12 +247,10 @@ func DropSecondaryIndex(indexName, bucketName, server string) error {
 				log.Printf("Index dropped")
 				tc.LogPerfStat("DropIndex", elapsed)
 			} else {
-				client.Close()
 				return e
 			}
 		}
 	}
-	client.Close()
 	return nil
 }
 
@@ -281,6 +281,7 @@ func DropAllSecondaryIndexes(server string) error {
 	if e != nil {
 		return e
 	}
+	defer client.Close()
 
 	indexes, err := client.Refresh()
 	tc.HandleError(err, "Error while listing the secondary indexes")
@@ -295,7 +296,6 @@ func DropAllSecondaryIndexes(server string) error {
 		log.Printf("Dropped index %v", defn.Name)
 		// tc.LogPerfStat("DropIndex", elapsed)  // Commenting out this log as it is used only in setup
 	}
-	client.Close()
 	return nil
 }
 
@@ -305,12 +305,12 @@ func DropSecondaryIndexByID(indexDefnID uint64, server string) error {
 	if e != nil {
 		return e
 	}
+	defer client.Close()
 
 	e = client.DropIndex(indexDefnID)
 	if e != nil {
 		return e
 	}
-	client.Close()
 	log.Printf("Index dropped")
 	return nil
 }

@@ -69,6 +69,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	if e != nil {
 		return nil, e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
@@ -114,7 +115,6 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 		})
 	elapsed := time.Since(start)
 
-	client.Close()
 	if connErr != nil {
 		tc.HandleError(connErr, "Connection error in Scan")
 		return scanResults, connErr
@@ -134,6 +134,7 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	if e != nil {
 		return nil, e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
@@ -165,7 +166,6 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 		})
 	elapsed := time.Since(start)
 
-	client.Close()
 	if connErr != nil {
 		return scanResults, connErr
 	} else if scanErr != nil {
@@ -186,6 +186,7 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 	if e != nil {
 		return nil, e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	scanResults := make(tc.ScanResponse)
@@ -231,7 +232,6 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 		})
 	elapsed := time.Since(start)
 
-	client.Close()
 	if connErr != nil {
 		return scanResults, connErr
 	} else if scanErr != nil {
@@ -248,6 +248,7 @@ func CountRange(indexName, bucketName, server string, low, high []interface{}, i
 	if e != nil {
 		return 0, e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	count, err := client.CountRange(defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
@@ -264,6 +265,7 @@ func CountLookup(indexName, bucketName, server string, values []interface{}) (in
 	if e != nil {
 		return 0, e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	count, err := client.CountLookup(defnID, []c.SecondaryKey{values})
@@ -280,6 +282,7 @@ func RangeStatistics(indexName, bucketName, server string, low, high []interface
 	if e != nil {
 		return e
 	}
+	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
 	statistics, err := client.RangeStatistics(defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
