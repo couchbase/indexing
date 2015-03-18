@@ -537,6 +537,15 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 	sic := NewSnapshotInfoContainer(infos)
 	sic.RemoveRecentThanTS(info.Timestamp())
 
+	//rollback meta-store first, if main/back index rollback fails, recovery
+	//will pick up the rolled-back meta information.
+	err = fdb.meta.Rollback(snapInfo.MetaSeq)
+	if err != nil {
+		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
+			"Meta Index to Snapshot %v. Error %v", fdb.id, fdb.idxInstId, info, err)
+		return err
+	}
+
 	//call forestdb to rollback for each kv store
 	err = fdb.main[0].Rollback(snapInfo.MainSeq)
 	if err != nil {
@@ -555,13 +564,6 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 		}
 	}
 
-	err = fdb.meta.Rollback(snapInfo.MetaSeq)
-	if err != nil {
-		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
-			"Meta Index to Snapshot %v. Error %v", fdb.id, fdb.idxInstId, info, err)
-		return err
-	}
-
 	// Update valid snapshot list and commit
 	err = fdb.updateSnapshotsMeta(sic.List())
 	if err != nil {
@@ -576,9 +578,18 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 func (fdb *fdbSlice) RollbackToZero() error {
 
 	zeroSeqNum := forestdb.SeqNum(0)
+	var err error
+
+	//rollback meta-store first, if main/back index rollback fails, recovery
+	//will pick up the rolled-back meta information.
+	err = fdb.meta.Rollback(zeroSeqNum)
+	if err != nil {
+		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
+			"Meta Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
+		return err
+	}
 
 	//call forestdb to rollback
-	var err error
 	err = fdb.main[0].Rollback(zeroSeqNum)
 	if err != nil {
 		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
@@ -594,13 +605,6 @@ func (fdb *fdbSlice) RollbackToZero() error {
 				"Back Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
 			return err
 		}
-	}
-
-	err = fdb.meta.Rollback(zeroSeqNum)
-	if err != nil {
-		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
-			"Meta Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
-		return err
 	}
 
 	return nil
