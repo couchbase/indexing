@@ -174,8 +174,8 @@ func FlushBucket(bucketName, bucketPassword, serverUserName, serverPassword, hos
 		log.Printf("Flush Bucket failed for bucket %v \n", bucketName)
 	}
 	// todo : error out if response is error
-	tc.HandleError(err, "Delete Bucket "+address)
-	time.Sleep(3 * time.Second)
+	tc.HandleError(err, "Flush Bucket "+address)
+	time.Sleep(20 * time.Second)
 	log.Printf("Flushed the bucket %v", bucketName)
 }
 
