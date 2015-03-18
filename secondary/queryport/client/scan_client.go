@@ -382,8 +382,12 @@ func (c *gsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 
 	conn.SetReadDeadline(time.Now().Add(timeoutMs))
 	// <--- protobuf.StreamEndResponse (skipped) TODO: knock this off.
-	endResp, err := pkt.Receive(conn)
-	if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
+	if endResp, err := pkt.Receive(conn); err != nil {
+		fmsg := "%v %T response transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, req, err)
+		healthy = false
+		return nil, err
+	} else if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
 		healthy = false
 		return nil, ErrorProtocol
 	}
@@ -436,21 +440,23 @@ func (c *gsiScanClient) streamResponse(
 	}
 
 	if cont == false && healthy == true && finish == false {
-		err = c.closeStream(conn, pkt)
+		err, healthy = c.closeStream(conn, pkt)
 	}
 	return
 }
 
 func (c *gsiScanClient) closeStream(
-	conn net.Conn, pkt *transport.TransportPacket) (err error) {
+	conn net.Conn, pkt *transport.TransportPacket) (err error, healthy bool) {
 
 	var resp interface{}
 	laddr := conn.LocalAddr()
+	healthy = true
 	// request server to end the stream.
 	err = c.sendRequest(conn, pkt, &protobuf.EndStreamRequest{})
 	if err != nil {
 		fmsg := "%v closeStream() request transport failed `%v`\n"
 		logging.Errorf(fmsg, c.logPrefix, err)
+		healthy = false
 		return
 	}
 	fmsg := "%v connection %q transmitted protobuf.EndStreamRequest"
@@ -461,11 +467,12 @@ func (c *gsiScanClient) closeStream(
 	for true {
 		conn.SetReadDeadline(time.Now().Add(timeoutMs))
 		resp, err = pkt.Receive(conn)
-		if err == io.EOF {
-			logging.Errorf("%v connection %q closed \n", c.logPrefix, laddr)
-			return
-
-		} else if err != nil {
+		if err != nil {
+			healthy = false
+			if err == io.EOF {
+				logging.Errorf("%v connection %q closed \n", c.logPrefix, laddr)
+				return
+			}
 			fmsg := "%v connection %q response transport failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, laddr, err)
 			return
