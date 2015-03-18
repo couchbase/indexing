@@ -3,3 +3,4 @@ TestConcurrentScans_MultipleIndexes
 TestConcurrentScans_SameIndex
 TestScanWithConcurrentIndexOps
 xdcr.uniXDCR.unidirectional.load_with_ops
+xdcr.uniXDCR.unidirectional.load_with_failover
