@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"flag"
 	"github.com/couchbase/cbauth"
-	c "github.com/couchbase/indexing/secondary/common"
+	// c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
-	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
+	// tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
 	"github.com/prataprc/monster/common"
@@ -67,7 +67,7 @@ func init() {
 	kvutility.FlushBucket("default", "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	time.Sleep(5 * time.Second)
 
-	log.Printf("In TestCreateIndexOnEmptyBucket()")
+	log.Printf("Create Index On the empty default Bucket()")
 	var indexName = "index_eyeColor"
 	var bucketName = "default"
 
@@ -77,10 +77,10 @@ func init() {
 	// Populate the bucket now
 	log.Printf("Populating the default bucket")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
-	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
+	/*docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
 	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, true, defaultlimit, c.SessionConsistency, nil)
 	tc.HandleError(err, "Error in scan")
-	tv.Validate(docScanResults, scanResults)
+	tv.Validate(docScanResults, scanResults)*/
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {
