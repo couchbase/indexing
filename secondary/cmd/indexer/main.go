@@ -40,6 +40,7 @@ var (
 )
 
 func main() {
+	common.AllowCoreDump()
 	common.HideConsole(true)
 	defer common.HideConsole(false)
 	common.SeedProcess()

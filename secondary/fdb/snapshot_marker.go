@@ -10,6 +10,7 @@ package forestdb
 //  and limitations under the License.
 
 //#cgo LDFLAGS: -lforestdb
+//#cgo CFLAGS: -O0
 //#include <stdlib.h>
 //#include <libforestdb/forestdb.h>
 import "C"
