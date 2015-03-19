@@ -181,6 +181,8 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketIndexCountMap[streamId], bucket)
 	delete(ss.streamBucketRepairStopCh[streamId], bucket)
 
+	ss.streamBucketRestartTsMap[streamId][bucket] = nil
+
 	ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
 	logging.Debugf("StreamState::cleanupBucketFromStream \n\tBucket %v Deleted from "+
@@ -243,7 +245,7 @@ func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
 
 	if bucketRestartTs, ok := ss.streamBucketRestartTsMap[streamId]; ok {
 
-		if restartTs, ok := bucketRestartTs[bucket]; ok {
+		if restartTs, ok := bucketRestartTs[bucket]; ok && restartTs != nil {
 
 			//update HWT
 			ss.streamBucketHWTMap[streamId][bucket] = restartTs.Copy()
