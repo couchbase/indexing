@@ -769,7 +769,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//send Stream Update to workers
 		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, bucket, buildTs, clientCh)
 
-		if _, ok := idx.streamBucketStatus[buildStream][bucket]; !ok {
+		if _, ok := idx.streamBucketStatus[buildStream]; !ok {
 			idx.streamBucketStatus[buildStream] = make(BucketStatus)
 		}
 		idx.streamBucketStatus[buildStream][bucket] = STREAM_ACTIVE
