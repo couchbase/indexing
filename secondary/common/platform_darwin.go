@@ -19,9 +19,6 @@ import (
 
 import "C"
 
-func AllowCoreDump() {
-}
-
 func DumpOnSignal() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGUSR2)

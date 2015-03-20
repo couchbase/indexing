@@ -29,10 +29,6 @@ void ResetHandlers() {
 */
 import "C"
 
-func AllowCoreDump() {
-	C.ResetHandlers()
-}
-
 func DumpOnSignal() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGUSR2)
