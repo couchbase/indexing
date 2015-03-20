@@ -8,6 +8,7 @@ package main
 import "flag"
 import "fmt"
 import "io/ioutil"
+import "path/filepath"
 import "log"
 import "net/url"
 import "os"
@@ -15,6 +16,7 @@ import "strings"
 import "time"
 
 import "github.com/couchbase/indexing/secondary/dcp"
+import c "github.com/couchbase/indexing/secondary/common"
 import parsec "github.com/prataprc/goparsec"
 import "github.com/prataprc/monster"
 import mcommon "github.com/prataprc/monster/common"
@@ -127,7 +129,7 @@ func genDocuments(b *couchbase.Bucket, prodfile string, idx, n int) {
 	// evaluate
 	for i := 0; i < options.count; i++ {
 		doc := evaluate("root", scope, nterms["s"]).(string)
-		key := fmt.Sprintf("%s-%v-%v", b.Name, idx, i+1)
+		key := makeKey(prodfile, idx, i+1)
 		err = b.SetRaw(key, options.expiry, []byte(doc))
 		if err != nil {
 			fmt.Printf("%T %v\n", err, err)
@@ -162,4 +164,10 @@ func mf(err error, msg string) {
 	if err != nil {
 		log.Fatalf("%v: %v", msg, err)
 	}
+}
+
+func makeKey(prodfile string, idx, i int) string {
+	fname := filepath.Base(prodfile)
+	uuid, _ := c.NewUUID()
+	return fmt.Sprintf("%s-%s-%v-%v", fname, uuid.Str(), idx, i+1)
 }
