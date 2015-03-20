@@ -632,10 +632,10 @@ func guessAuth(server string) string {
 	client := http.Client{}
 	for _, auth := range auths {
 		up := strings.Split(auth, ":")
-		req, err := http.NewRequest("GET", "http://"+server+"/pools", nil)
+		req, err := http.NewRequest("GET", "http://"+server+"/settings/web", nil)
 		req.SetBasicAuth(up[0], up[1])
 		resp, err := client.Do(req)
-		if err != nil {
+		if err != nil || resp.StatusCode != http.StatusOK {
 			continue
 		}
 		resp.Body.Close()
