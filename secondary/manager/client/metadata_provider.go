@@ -307,7 +307,16 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 		}
 
 		if meta.Instances != nil && meta.Instances[0].State != c.INDEX_STATE_READY {
-			return errors.New(fmt.Sprintf("Index %s is not in READY state.", meta.Definition.Name))
+
+			if meta.Instances[0].State == c.INDEX_STATE_INITIAL || meta.Instances[0].State == c.INDEX_STATE_CATCHUP {
+				return errors.New(fmt.Sprintf("Index %s is being built .", meta.Definition.Name))
+			}
+
+			if meta.Instances[0].State == c.INDEX_STATE_ACTIVE {
+				return errors.New(fmt.Sprintf("Index %s is already built .", meta.Definition.Name))
+			}
+
+			return errors.New("Cannot build index. Index Definition not found")
 		}
 
 		// find watcher -- This method does not check index status (return the watcher even

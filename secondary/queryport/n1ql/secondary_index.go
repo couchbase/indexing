@@ -100,6 +100,7 @@ func NewGSIIndexer(
 	client, err := getSingletonClient(clusterURL)
 	if err != nil {
 		logging.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
+		return nil, errors.NewError(err, "GSI client instantiation failed")
 	}
 	gsi.gsiClient = client
 	// refresh indexes for this service->namespace->keyspace
@@ -139,7 +140,7 @@ func (gsi *gsiKeyspace) IndexIds() ([]string, errors.Error) {
 	for _, index := range gsi.primaryIndexes {
 		ids = append(ids, index.Id())
 	}
-	logging.Debugf("%v IndexIds %v", gsi.logPrefix, ids)
+	l.Debugf("%v IndexIds %v", gsi.logPrefix, ids)
 	return ids, nil
 }
 
@@ -159,7 +160,7 @@ func (gsi *gsiKeyspace) IndexNames() ([]string, errors.Error) {
 	for _, index := range gsi.primaryIndexes {
 		names = append(names, index.Name())
 	}
-	logging.Debugf("%v IndexNames %v", gsi.logPrefix, names)
+	l.Debugf("%v IndexNames %v", gsi.logPrefix, names)
 	return names, nil
 }
 
@@ -178,6 +179,7 @@ func (gsi *gsiKeyspace) IndexById(id string) (datastore.Index, errors.Error) {
 			return nil, err
 		}
 	}
+	l.Debugf("%v IndexById %v = %v", gsi.logPrefix, id, index)
 	return index, nil
 }
 
@@ -217,6 +219,8 @@ func (gsi *gsiKeyspace) Indexes() ([]datastore.Index, errors.Error) {
 	for _, index := range gsi.primaryIndexes {
 		indexes = append(indexes, index)
 	}
+
+	l.Debugf("%v gsiKeySpace.Indexes(): %v", gsi.logPrefix, indexes)
 	return indexes, nil
 }
 
@@ -233,6 +237,7 @@ func (gsi *gsiKeyspace) PrimaryIndexes() ([]datastore.PrimaryIndex, errors.Error
 	for _, index := range gsi.primaryIndexes {
 		indexes = append(indexes, index)
 	}
+	logging.Debugf("%v gsiKeySpace.PrimaryIndexes(): %v", gsi.logPrefix, indexes)
 	return indexes, nil
 }
 
@@ -339,6 +344,7 @@ func (gsi *gsiKeyspace) BuildIndexes(names ...string) errors.Error {
 
 // Refresh list of indexes and scanner clients.
 func (gsi *gsiKeyspace) Refresh() errors.Error {
+	l.Tracef("%v gsiKeyspace.Refresh()", gsi.logPrefix)
 	indexes, err := gsi.gsiClient.Refresh()
 	if err != nil {
 		return errors.NewError(err, "GSI Refresh()")
