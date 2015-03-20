@@ -9,6 +9,7 @@ package forestdb
 //  either express or implied. See the License for the specific language governing permissions
 //  and limitations under the License.
 
+//#cgo CFLAGS: -O0
 //#include <libforestdb/forestdb.h>
 import "C"
 
@@ -19,9 +20,9 @@ func (k *KVStore) SnapshotOpen(sn SeqNum) (*KVStore, error) {
 
 	rv := KVStore{advLock: newAdvLock()}
 
-	Log.Tracef("fdb_snapshot_open call k:%p db:%v sn:%v", k, k.db, sn)
+	Log.Debugf("fdb_snapshot_open call k:%p db:%v sn:%v", k, k.db, sn)
 	errNo := C.fdb_snapshot_open(k.db, &rv.db, C.fdb_seqnum_t(sn))
-	Log.Tracef("fdb_snapshot_open retn k:%p errNo:%v rv:%v", k, errNo, rv.db)
+	Log.Debugf("fdb_snapshot_open retn k:%p errNo:%v rv:%v", k, errNo, rv.db)
 	if errNo != RESULT_SUCCESS {
 		return nil, Error(errNo)
 	}
@@ -33,9 +34,9 @@ func (k *KVStore) Rollback(sn SeqNum) error {
 	k.Lock()
 	defer k.Unlock()
 
-	Log.Tracef("fdb_rollback call k:%p db:%v sn:%v", k, k.db, sn)
+	Log.Infof("fdb_rollback call k:%p db:%v sn:%v", k, k.db, sn)
 	errNo := C.fdb_rollback(&k.db, C.fdb_seqnum_t(sn))
-	Log.Tracef("fdb_rollback retn k:%p errNo:%v db:%v", k, errNo, k.db)
+	Log.Infof("fdb_rollback retn k:%p errNo:%v db:%v", k, errNo, k.db)
 	if errNo != RESULT_SUCCESS {
 		return Error(errNo)
 	}

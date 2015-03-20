@@ -495,6 +495,7 @@ func (b *metadataClient) watchClusterChanges() {
 	if err != nil {
 		logging.Errorf("common.ClusterAuthUrl(): %v\n", err)
 		selfRestart()
+		return
 	}
 	scn, err := common.NewServicesChangeNotifier(clusterURL, "default")
 	if err != nil {

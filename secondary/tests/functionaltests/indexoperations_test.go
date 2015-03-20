@@ -9,6 +9,19 @@ import (
 	"testing"
 )
 
+func TestScanAfterBucketPopulate(t *testing.T) {
+	log.Printf("In TestScanAfterBucketPopulate()")
+	log.Printf("Create an index on empty bucket, populate the bucket and Run a scan on the index")
+	var indexName = "index_eyeColor"
+	var bucketName = "default"
+	
+	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation: ", t)
+}
+
 func TestThreeIndexCreates(t *testing.T) {
 	log.Printf("In TestThreeIndexCreates()")
 	var i1 = "index_balance"

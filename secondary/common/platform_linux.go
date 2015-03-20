@@ -7,8 +7,6 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
-// +build !windows
-
 package common
 
 import (
@@ -19,6 +17,18 @@ import (
 	"syscall"
 )
 
+/*
+#include <signal.h>
+void ResetHandlers() {
+  signal(SIGILL,  SIG_DFL);
+  signal(SIGABRT, SIG_DFL);
+  signal(SIGFPE,  SIG_DFL);
+  signal(SIGBUS,  SIG_DFL);
+  signal(SIGSEGV, SIG_DFL);
+}
+*/
+import "C"
+
 func DumpOnSignal() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGUSR2)
@@ -28,5 +38,4 @@ func DumpOnSignal() {
 }
 
 func HideConsole(_ bool) {
-	// not implemented
 }

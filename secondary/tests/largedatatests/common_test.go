@@ -45,7 +45,7 @@ func init() {
 
 func FailTestIfError(err error, msg string, t *testing.T) {
 	if err != nil {
-		t.Errorf("%v: %v\n", msg, err)
+		t.Fatalf("%v: %v\n", msg, err)
 	}
 }
 

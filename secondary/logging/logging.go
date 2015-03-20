@@ -205,7 +205,7 @@ func Profile(port string, endpoints ...string) func() string {
 // Dump profiling info periodically
 func PeriodicProfile(port string, endpoints ...string) {
 	profiler := Profile(port, endpoints...)
-	tick := time.NewTicker(60 * time.Second)
+	tick := time.NewTicker(5 * time.Minute)
 	go func() {
 		for {
 			select {

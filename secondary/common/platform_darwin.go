@@ -9,26 +9,23 @@
 
 package common
 
-import "syscall"
+import (
+	_ "net/http/pprof"
+	"os"
+	"os/signal"
+	"runtime/pprof"
+	"syscall"
+)
+
+import "C"
 
 func DumpOnSignal() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGUSR2)
+	for _ = range c {
+		pprof.Lookup("goroutine").WriteTo(os.Stderr, 1)
+	}
 }
 
-// Hide console on windows without removing it unlike -H windowsgui.
-func HideConsole(hide bool) {
-	var k32 = syscall.NewLazyDLL("kernel32.dll")
-	var cw = k32.NewProc("GetConsoleWindow")
-	var u32 = syscall.NewLazyDLL("user32.dll")
-	var sw = u32.NewProc("ShowWindow")
-	hwnd, _, _ := cw.Call()
-	if hwnd == 0 {
-		return
-	}
-	if hide {
-		var SW_HIDE uintptr = 0
-		sw.Call(hwnd, SW_HIDE)
-	} else {
-		var SW_RESTORE uintptr = 9
-		sw.Call(hwnd, SW_RESTORE)
-	}
+func HideConsole(_ bool) {
 }

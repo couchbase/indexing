@@ -168,9 +168,9 @@ func (s *Server) handleRequest(
 
 	raddr := conn.RemoteAddr()
 
-	timeoutMs := s.writeDeadline * time.Millisecond
+	//timeoutMs := s.writeDeadline * time.Millisecond
 	transmit := func(resp interface{}) error {
-		conn.SetWriteDeadline(time.Now().Add(timeoutMs))
+		//conn.SetWriteDeadline(time.Now().Add(timeoutMs))
 		err := tpkt.Send(conn, resp)
 		if err != nil {
 			format := "%v connection %v response transport failed `%v`\n"

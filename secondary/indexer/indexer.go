@@ -769,7 +769,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//send Stream Update to workers
 		idx.sendStreamUpdateForBuildIndex(instIdList, buildStream, bucket, buildTs, clientCh)
 
-		if _, ok := idx.streamBucketStatus[buildStream][bucket]; !ok {
+		if _, ok := idx.streamBucketStatus[buildStream]; !ok {
 			idx.streamBucketStatus[buildStream] = make(BucketStatus)
 		}
 		idx.streamBucketStatus[buildStream][bucket] = STREAM_ACTIVE
@@ -1065,6 +1065,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
+	mergeList := msg.(*MsgTKMergeStream).GetMergeList()
 
 	logging.Debugf("Indexer::handleMergeStreamAck StreamId %v Bucket %v",
 		streamId, bucket)
@@ -1097,7 +1098,12 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 				delete(idx.bucketCreateClientChMap, bucket)
 			}
 		} else {
-			if err := idx.updateMetaInfoForBucket(bucket, true, true, false); err != nil {
+			var instIdList []common.IndexInstId
+			for _, inst := range mergeList {
+				instIdList = append(instIdList, inst.InstId)
+			}
+
+			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -1955,9 +1961,10 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 				case MSG_SUCCESS:
 					idx.internalRecvCh <- &MsgTKMergeStream{
-						mType:    TK_MERGE_STREAM_ACK,
-						streamId: streamId,
-						bucket:   bucket}
+						mType:     TK_MERGE_STREAM_ACK,
+						streamId:  streamId,
+						bucket:    bucket,
+						mergeList: indexList}
 					break retryloop
 
 				default:

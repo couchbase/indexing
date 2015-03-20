@@ -9,6 +9,7 @@ package forestdb
 //  either express or implied. See the License for the specific language governing permissions
 //  and limitations under the License.
 
+//#cgo CFLAGS: -O0
 //#include <libforestdb/forestdb.h>
 import "C"
 
@@ -205,9 +206,9 @@ func (k *KVStore) IteratorInit(startKey, endKey []byte, opt IteratorOpt) (*Itera
 	}
 
 	rv := Iterator{db: k}
-	Log.Tracef("fdb_iterator_init call k:%p db:%v sk:%v ek:%v opt:%v", k, k.db, sk, ek, opt)
+	Log.Debugf("fdb_iterator_init call k:%p db:%v sk:%v ek:%v opt:%v", k, k.db, sk, ek, opt)
 	errNo := C.fdb_iterator_init(k.db, &rv.iter, sk, C.size_t(lensk), ek, C.size_t(lenek), C.fdb_iterator_opt_t(opt))
-	Log.Tracef("fdb_iterator_init retn k:%p rv:%v", k, rv.iter)
+	Log.Debugf("fdb_iterator_init retn k:%p rv:%v", k, rv.iter)
 	if errNo != RESULT_SUCCESS {
 		return nil, Error(errNo)
 	}

@@ -12,6 +12,7 @@ import "errors"
 import "time"
 import "net/http"
 import "io/ioutil"
+import "os"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/logging"
@@ -66,15 +67,12 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset := flag.NewFlagSet("cmd", flag.ExitOnError)
 
 	// basic options
-	fset.StringVar(&cmdOptions.Server, "server", "127.0.0.1:9000", "Cluster server address")
-	fset.StringVar(&cmdOptions.OpType, "type", "scanAll", "Command: scan|stats|scanAll|count|nodes|create|build|drop|list|config")
+	fset.StringVar(&cmdOptions.Server, "server", "•", "Cluster server address")
+	fset.StringVar(&cmdOptions.Auth, "auth", "•", "Auth user and password")
+	fset.StringVar(&cmdOptions.Bucket, "bucket", "", "Bucket name")
+	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|drop|list|config")
 	fset.StringVar(&cmdOptions.IndexName, "index", "", "Index name")
-	fset.StringVar(&cmdOptions.Bucket, "bucket", "default", "Bucket name")
-	fset.StringVar(&cmdOptions.Auth, "auth", "", "Auth user and password")
 	// options for create-index
-	fset.StringVar(&cmdOptions.Using, "using", "gsi", "using clause for create index")
-	fset.StringVar(&cmdOptions.ExprType, "exprType", "N1QL", "type of expression for create index")
-	fset.StringVar(&cmdOptions.PartnStr, "partn", "", "partition expression for create index")
 	fset.StringVar(&cmdOptions.WhereStr, "where", "", "where clause for create index")
 	fset.StringVar(&fields, "fields", "", "Comma separated on-index fields") // secStrs
 	fset.BoolVar(&cmdOptions.IsPrimary, "primary", false, "Is primary index")
@@ -92,10 +90,30 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.StringVar(&cmdOptions.ConfigKey, "ckey", "", "Config key")
 	fset.StringVar(&cmdOptions.ConfigVal, "cval", "", "Config value")
 
+	// not useful to expose in sherlock
+	cmdOptions.Using = "gsi"
+	cmdOptions.ExprType = "N1QL"
+	cmdOptions.PartnStr = "partn"
+
 	if err := fset.Parse(arguments); err != nil {
 		return nil, nil, fset, err
 	}
 
+	// if server is not specified, try guessing
+	if cmdOptions.Server == "•" {
+		cmdOptions.Server = guessServer()
+	}
+
+	// if server is not specified, try guessing
+	if cmdOptions.Auth == "•" {
+		cmdOptions.Auth = guessAuth(cmdOptions.Server)
+	}
+
+	// validate combinations
+	err := validate(cmdOptions, fset)
+	if err != nil {
+		return nil, nil, fset, err
+	}
 	// bindexes
 	if len(bindexes) > 0 {
 		cmdOptions.Bindexes = strings.Split(bindexes, ",")
@@ -126,6 +144,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 		err := json.Unmarshal([]byte(cmdOptions.With), &cmdOptions.WithPlan)
 		if err != nil {
 			logging.Fatalf("%v\n", err)
+			os.Exit(1)
 		}
 	}
 
@@ -135,10 +154,11 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 		_, err := cbauth.InternalRetryDefaultInit(cmdOptions.Server, up[0], up[1])
 		if err != nil {
 			logging.Fatalf("Failed to initialize cbauth: %s\n", err)
+			os.Exit(1)
 		}
 	}
 
-	return cmdOptions, fset.Args(), fset, nil
+	return cmdOptions, fset.Args(), fset, err
 }
 
 // HandleCommand after parsing it with ParseArgs().
@@ -225,21 +245,16 @@ func HandleCommand(
 		}
 
 	case "drop":
-		for _, bindex := range cmd.Bindexes {
-			v := strings.Split(bindex, ":")
-			if len(v) != 2 {
-				return fmt.Errorf("invalid index specified : %v", bindex)
-			}
-			bucket, iname = v[0], v[1]
-			defnID, ok := GetDefnID(client, bucket, iname)
-			if ok {
-				err = client.DropIndex(defnID)
-				if err == nil {
-					fmt.Fprintf(w, "Index dropped %v/%v\n", bucket, iname)
-				}
-			} else {
-				err = fmt.Errorf("index %v/%v unknown", bucket, iname)
-			}
+		defnID, ok := GetDefnID(client, cmd.Bucket, cmd.IndexName)
+		if !ok {
+			return fmt.Errorf("invalid index specified : %v", cmd.IndexName)
+		}
+		err = client.DropIndex(defnID)
+		if err == nil {
+			fmt.Fprintf(w, "Index dropped %v/%v\n", bucket, iname)
+		} else {
+			err = fmt.Errorf("index %v/%v drop failed", bucket, iname)
+			break
 		}
 
 	case "scan":
@@ -432,6 +447,7 @@ func GetDefnID(
 	indexes, err := client.Refresh()
 	if err != nil {
 		logging.Fatalf("%v\n", err)
+		os.Exit(1)
 	}
 	for _, index := range indexes {
 		defn := index.Definition
@@ -486,6 +502,139 @@ func Arg2Key(arg []byte) []interface{} {
 	var key []interface{}
 	if err := json.Unmarshal(arg, &key); err != nil {
 		logging.Fatalf("%v\n", err)
+		os.Exit(1)
 	}
 	return key
+}
+
+func validate(cmd *Command, fset *flag.FlagSet) error {
+	var have []string
+	var dont []string
+
+	switch cmd.OpType {
+	case "":
+		have = []string{}
+		dont = []string{"type", "server", "index", "bucket", "auth", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+
+	case "nodes":
+		have = []string{"type", "server", "auth"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+
+	case "list":
+		have = []string{"type", "server", "auth"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+
+	case "create":
+		have = []string{"type", "server", "auth", "index", "bucket", "fields", "primary"}
+		dont = []string{"h", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+
+	case "build":
+		have = []string{"type", "server", "auth", "indexes"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+
+	case "drop":
+		have = []string{"type", "server", "auth", "index", "bucket"}
+		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+
+	case "scan":
+		have = []string{"type", "server", "auth", "index", "bucket"}
+		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "ckey", "cval"}
+
+	case "scanAll":
+		have = []string{"type", "server", "auth", "index", "bucket"}
+		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "ckey", "cval"}
+
+	case "stats":
+		have = []string{"type", "server", "auth", "index", "bucket"}
+		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "limit", "ckey", "cval"}
+
+	case "count":
+		have = []string{"type", "server", "auth", "index", "bucket"}
+		dont = []string{"h", "where", "fields", "primary", "with", "indexes", "ckey", "cval"}
+
+	case "config":
+		have = []string{"type", "server", "auth"}
+		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit"}
+
+	default:
+		return fmt.Errorf("Specified operation type '%s' has no validation rule. Please add one to use.", cmd.OpType)
+	}
+
+	err := mustHave(fset, have...)
+	if err != nil {
+		return err
+	}
+
+	err = mustNotHave(fset, dont...)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func mustHave(fset *flag.FlagSet, keys ...string) error {
+	for _, key := range keys {
+		found := false
+		fset.Visit(
+			func(f *flag.Flag) {
+				if f.Name == key {
+					found = true
+				}
+			})
+		if !found {
+			flag := fset.Lookup(key)
+			if flag == nil || flag.DefValue == "" {
+				return fmt.Errorf("Invalid flags. Flag '%s' is required for this operation", key)
+			}
+		}
+	}
+	return nil
+}
+
+func mustNotHave(fset *flag.FlagSet, keys ...string) error {
+	for _, key := range keys {
+		found := false
+		fset.Visit(
+			func(f *flag.Flag) {
+				if f.Name == key {
+					found = true
+				}
+			})
+		if found {
+			return fmt.Errorf("Invalid flags. Flag '%s' cannot appear for this operation", key)
+		}
+	}
+	return nil
+}
+
+func guessServer() string {
+	ports := []string{"8091", "9000"}
+	for _, port := range ports {
+		server := "localhost:" + port
+		resp, err := http.Get("http://" + server + "/pools")
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+		return server
+	}
+	return ""
+}
+
+func guessAuth(server string) string {
+	auths := []string{"Administrator:asdasd", "Administrator:couchbase"}
+	client := http.Client{}
+	for _, auth := range auths {
+		up := strings.Split(auth, ":")
+		req, err := http.NewRequest("GET", "http://"+server+"/settings/web", nil)
+		req.SetBasicAuth(up[0], up[1])
+		resp, err := client.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			continue
+		}
+		resp.Body.Close()
+		return auth
+	}
+	return ""
 }
