@@ -33,7 +33,7 @@ var (
 	ErrUnsupportedRequest = errors.New("Unsupported query request")
 	ErrIndexNotFound      = errors.New("Index not found")
 	ErrNotMyIndex         = errors.New("Not my index")
-	ErrIndexNotReady      = errors.New("Index not ready")
+	ErrIndexNotReady      = errors.New("Index does not exist or has not built")
 	ErrInternal           = errors.New("Internal server error occured")
 	ErrSnapNotAvailable   = errors.New("No snapshot available for scan")
 	ErrScanTimedOut       = errors.New("Index scan timed out")
