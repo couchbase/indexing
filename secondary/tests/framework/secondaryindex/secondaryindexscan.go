@@ -48,7 +48,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 	elapsed := time.Since(start)
 
 	if connErr != nil {
-		tc.HandleError(connErr, "Connection error in Scan")
+		log.Printf("Connection error in Scan occured: %v", connErr)
 		return scanResults, connErr
 	} else if scanErr != nil {
 		return scanResults, scanErr
@@ -116,7 +116,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 	elapsed := time.Since(start)
 
 	if connErr != nil {
-		tc.HandleError(connErr, "Connection error in Scan")
+		log.Printf("Connection error in Scan occured: %v", connErr)
 		return scanResults, connErr
 	} else if scanErr != nil {
 		return scanResults, scanErr
@@ -167,6 +167,7 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 	elapsed := time.Since(start)
 
 	if connErr != nil {
+		log.Printf("Connection error in Scan occured: %v", connErr)
 		return scanResults, connErr
 	} else if scanErr != nil {
 		return scanResults, scanErr
@@ -233,6 +234,7 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 	elapsed := time.Since(start)
 
 	if connErr != nil {
+		log.Printf("Connection error in Scan occured: %v", connErr)
 		return scanResults, connErr
 	} else if scanErr != nil {
 		return scanResults, scanErr
