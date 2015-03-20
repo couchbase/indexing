@@ -535,10 +535,11 @@ func (m *MsgTKInitBuildDone) GetStreamId() common.StreamId {
 //TK_MERGE_STREAM
 //TK_MERGE_STREAM_ACK
 type MsgTKMergeStream struct {
-	mType    MsgType
-	streamId common.StreamId
-	bucket   string
-	mergeTs  Timestamp
+	mType     MsgType
+	streamId  common.StreamId
+	bucket    string
+	mergeTs   Timestamp
+	mergeList []common.IndexInst
 }
 
 func (m *MsgTKMergeStream) GetMsgType() MsgType {
@@ -555,6 +556,10 @@ func (m *MsgTKMergeStream) GetBucket() string {
 
 func (m *MsgTKMergeStream) GetMergeTS() Timestamp {
 	return m.mergeTs
+}
+
+func (m *MsgTKMergeStream) GetMergeList() []common.IndexInst {
+	return m.mergeList
 }
 
 //TK_ENABLE_FLUSH
