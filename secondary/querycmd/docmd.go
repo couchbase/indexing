@@ -245,21 +245,16 @@ func HandleCommand(
 		}
 
 	case "drop":
-		for _, bindex := range cmd.Bindexes {
-			v := strings.Split(bindex, ":")
-			if len(v) != 2 {
-				return fmt.Errorf("invalid index specified : %v", bindex)
-			}
-			bucket, iname = v[0], v[1]
-			defnID, ok := GetDefnID(client, bucket, iname)
-			if ok {
-				err = client.DropIndex(defnID)
-				if err == nil {
-					fmt.Fprintf(w, "Index dropped %v/%v\n", bucket, iname)
-				}
-			} else {
-				err = fmt.Errorf("index %v/%v unknown", bucket, iname)
-			}
+		defnID, ok := GetDefnID(client, cmd.Bucket, cmd.IndexName)
+		if !ok {
+			return fmt.Errorf("invalid index specified : %v", cmd.IndexName)
+		}
+		err = client.DropIndex(defnID)
+		if err == nil {
+			fmt.Fprintf(w, "Index dropped %v/%v\n", bucket, iname)
+		} else {
+			err = fmt.Errorf("index %v/%v drop failed", bucket, iname)
+			break
 		}
 
 	case "scan":
