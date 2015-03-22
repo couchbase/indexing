@@ -1,24 +1,29 @@
-json : "{" properties "}".
+s : value.
 
-properties : properties "," property {10}
-           | property.
+object : "{" properties "}".
 
-property   : DQ bag("web2") DQ ":" value.
+properties : property
+           | properties "," property.
 
-value   : TRUE
-        | FALSE
-        | NULL
-        | number
-        | string
-        | array
-        | json {2}.
-
-string  : DQ bag("web2") DQ.
-
-number  : range(0, 100000)
-        | rangef(0.0, 100.0) {900}.
+property   : DQ (bag "./web2") DQ ":" value.
 
 array   : "[" values "]".
 
-values  : values "," value
-        | value.
+value   : (weigh 0.1 0.1) basic
+        | (weigh 0.4 0.1) array
+        | (weigh 0.4 0.1) object.
+
+values  : value
+        | values "," value.
+
+basic   : (weigh 0.1 0.1) "true"
+        | (weigh 0.2 0.1) "false"
+        | (weigh 0.3 0.1) "null"
+        | (weigh 0.4 0.1) number
+        | (weigh 0.5 0.1) string.
+
+string  : DQ (bag "./web2") DQ.
+
+number  : (range 0 100000)
+        | (rangef 0.0 100.0).
+
