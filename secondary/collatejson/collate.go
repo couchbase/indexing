@@ -23,13 +23,14 @@
 //   are compared with property's value.
 package collatejson
 
-import (
-	"bytes"
-	"encoding/json"
-	"errors"
-	"sort"
-	"strconv"
-)
+import "bytes"
+import "encoding/json"
+import "errors"
+import "sort"
+import "fmt"
+import "strconv"
+
+var _ = fmt.Sprintf("dummy print")
 
 // ErrorNumberType means configured number type is not supported by codec.
 var ErrorNumberType = errors.New("collatejson.numberType")
@@ -48,7 +49,10 @@ type Missing string
 // MissingLiteral is special string to denote missing item.
 // IMPORTANT: we are assuming that MissingLiteral will not
 // occur in the keyspace.
-var MissingLiteral = Missing("~[]{}falsenilNA~")
+const MissingLiteral = Missing("~[]{}falsenilNA~")
+
+// MinBufferSize for target buffer to encode or decode.
+const MinBufferSize = 16
 
 // While encoding JSON data-element, both basic and composite, encoded string
 // is prefixed with a type-byte. `Terminator` terminates encoded datum.
@@ -93,26 +97,30 @@ func NewCodec(propSize int) *Codec {
 	}
 }
 
-// SortbyArrayLen sorts array by length before sorting by array elements. Use
-// `false` to sort only by array elements. Default is `true`.
+// SortbyArrayLen sorts array by length before sorting by array
+// elements. Use `false` to sort only by array elements.
+// Default is `true`.
 func (codec *Codec) SortbyArrayLen(what bool) {
 	codec.arrayLenPrefix = what
 }
 
-// SortbyPropertyLen sorts property by length before sorting by property items.
-// Use `false` to sort only by proprety items. Default is `true`.
+// SortbyPropertyLen sorts property by length before sorting by
+// property items. Use `false` to sort only by proprety items.
+// Default is `true`.
 func (codec *Codec) SortbyPropertyLen(what bool) {
 	codec.propertyLenPrefix = what
 }
 
-// UseMissing will interpret special string MissingLiteral and encode them
-// as TypeMissing. Default is `true`.
+// UseMissing will interpret special string MissingLiteral and
+// encode them as TypeMissing.
+// Default is `true`.
 func (codec *Codec) UseMissing(what bool) {
 	codec.doMissing = what
 }
 
-// NumberType chooses type of encoding / decoding for JSON numbers. Can be
-// "float64", "int64", "decimal". Default is "float64"
+// NumberType chooses type of encoding / decoding for JSON
+// numbers. Can be "float64", "int64", "decimal".
+// Default is "float64"
 func (codec *Codec) NumberType(what string) {
 	switch what {
 	case "float64":
@@ -126,13 +134,14 @@ func (codec *Codec) NumberType(what string) {
 
 // Encode json documents to order preserving binary representation.
 // `code` is the output buffer for encoding and expected to have
-// enough capacity, atleast 3x of input `text`.
+// enough capacity, atleast 3x of input `text` and > MinBufferSize.
 func (codec *Codec) Encode(text, code []byte) ([]byte, error) {
 	code = code[:0]
-	if cap(code) < (3 * len(text)) {
+	if cap(code) < (3*len(text)) || cap(code) < MinBufferSize {
 		return nil, ErrorOutputLen
+	} else if len(text) == 0 {
+		return code, nil
 	}
-
 	var m interface{}
 	if err := json.Unmarshal(text, &m); err != nil {
 		return nil, err
@@ -142,10 +151,11 @@ func (codec *Codec) Encode(text, code []byte) ([]byte, error) {
 
 // Decode a slice of byte into json string and return them as
 // slice of byte. `text` is the output buffer for decoding and
-// expected to have enough capacity, atleast 3x of input `code`,
+// expected to have enough capacity, atleast 3x of input `code`
+// and > MinBufferSize.
 func (codec *Codec) Decode(code, text []byte) ([]byte, error) {
 	text = text[:0]
-	if cap(text) < len(code) {
+	if cap(text) < len(code) || cap(code) < MinBufferSize {
 		return nil, ErrorOutputLen
 	}
 	text, _, err := codec.code2json(code, text)
