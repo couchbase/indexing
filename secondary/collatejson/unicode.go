@@ -4,12 +4,10 @@
 
 package collatejson
 
-import (
-//"code.google.com/p/go.text/collate"
-//"code.google.com/p/go.text/collate/colltab"
-//"code.google.com/p/go.text/language"
-//"code.google.com/p/go.text/unicode/norm"
-)
+//import "code.google.com/p/go.text/collate"
+//import "code.google.com/p/go.text/collate/colltab"
+//import "code.google.com/p/go.text/language"
+//import "code.google.com/p/go.text/unicode/norm"
 
 // UnicodeCollationPriority sets collate.Collator properties for unicode
 // collation.

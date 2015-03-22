@@ -2,26 +2,23 @@
 
 package main
 
-import (
-	"encoding/json"
-	"flag"
-	"fmt"
-	"log"
-	"math/rand"
-	"sort"
-	"strconv"
-	"time"
-	//"reflect"
-	"io/ioutil"
-	"path"
-	"runtime"
+import "encoding/json"
+import "flag"
+import "fmt"
+import "log"
+import "math/rand"
+import "sort"
+import "strconv"
+import "time"
+import "io/ioutil"
+import "path"
+import "runtime"
 
-	qv "github.com/couchbase/query/value"
-	"github.com/prataprc/collatejson"
-	"github.com/prataprc/goparsec"
-	"github.com/prataprc/monster"
-	mcommon "github.com/prataprc/monster/common"
-)
+import qv "github.com/couchbase/query/value"
+import "github.com/prataprc/collatejson"
+import "github.com/prataprc/goparsec"
+import "github.com/prataprc/monster"
+import mcommon "github.com/prataprc/monster/common"
 
 var options struct {
 	count   int

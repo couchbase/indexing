@@ -2,18 +2,16 @@
 
 package collatejson
 
-import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
-	"log"
-	"path/filepath"
-	"reflect"
-	"sort"
-	"strings"
-	"testing"
-)
+import "bytes"
+import "encoding/json"
+import "fmt"
+import "io/ioutil"
+import "log"
+import "path/filepath"
+import "reflect"
+import "sort"
+import "strings"
+import "testing"
 
 var testcases = []struct {
 	text string

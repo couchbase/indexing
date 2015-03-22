@@ -2,12 +2,11 @@
 
 package collatejson
 
-import (
-	"encoding/json"
-	qv "github.com/couchbase/query/value"
-	"reflect"
-	"testing"
-)
+import "encoding/json"
+import "reflect"
+import "testing"
+
+import qv "github.com/couchbase/query/value"
 
 func BenchmarkN1QLValue(b *testing.B) {
 	for i := 0; i < b.N; i++ {

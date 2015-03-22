@@ -2,13 +2,11 @@
 
 package main
 
-import (
-	"flag"
-	"fmt"
-	"log"
+import "flag"
+import "fmt"
+import "log"
 
-	"github.com/prataprc/collatejson"
-)
+import "github.com/prataprc/collatejson"
 
 var options struct {
 	in string

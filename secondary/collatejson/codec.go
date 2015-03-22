@@ -2,11 +2,9 @@
 
 package collatejson
 
-import (
-	"bytes"
-	"errors"
-	"strconv"
-)
+import "bytes"
+import "errors"
+import "strconv"
 
 // error codes
 var ErrorSuffixDecoding = errors.New("collatejson.suffixDecoding")

@@ -2,11 +2,9 @@
 
 package collatejson
 
-import (
-	"bytes"
-	"strconv"
-	"testing"
-)
+import "bytes"
+import "strconv"
+import "testing"
 
 var code = make([]byte, 0, 1024)
 var text = make([]byte, 0, 1024)
