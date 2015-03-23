@@ -126,6 +126,7 @@ func CreateSecondaryIndexAsync(
 	return err
 }
 
+// Todo: Remove this function and update functional tests to use BuildIndexes
 func BuildIndex(indexName, bucketName, server string, indexActiveTimeoutSeconds int64) error {
 	client, e := CreateClient(server, "2itest")
 	if e != nil {
@@ -150,6 +151,31 @@ func BuildIndex(indexName, bucketName, server string, indexActiveTimeoutSeconds 
 		}
 	}
 
+	return err
+}
+
+func BuildIndexes(indexNames []string, bucketName, server string, indexActiveTimeoutSeconds int64) error {
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return e
+	}
+	defer client.Close()
+	defnIds := make([]uint64, len(indexNames))
+	for i := range indexNames {
+		defnIds[i], _ = GetDefnID(client, bucketName, indexNames[i])
+	}
+	err := client.BuildIndexes(defnIds)
+	log.Printf("Build command issued for the deferred indexes %v", indexNames)
+
+	if err == nil {
+		for i := range indexNames {
+			log.Printf("Waiting for the index %v to become active", indexNames[i])
+			e := WaitTillIndexActive(defnIds[i], client, indexActiveTimeoutSeconds)
+			if e != nil {
+				return e
+			}
+		}
+	}
 	return err
 }
 
