@@ -178,7 +178,8 @@ func NewIndexManagerInternal(
 	mgr.lifecycleMgr.Run(mgr.repo)
 
 	// register request handler
-	registerRequestHandler(mgr)
+	clusterAddr := config["clusterAddr"].String()
+	registerRequestHandler(mgr, clusterAddr)
 
 	// coordinator
 	mgr.coordinator = nil
