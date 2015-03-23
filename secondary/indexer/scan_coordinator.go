@@ -1101,8 +1101,7 @@ func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, erro
 	for _, ps := range is.Partitions() {
 		for _, ss := range ps.Slices() {
 			snap := ss.Snapshot()
-			stopch := make(StopChannel)
-			c, err := snap.CountTotal(stopch)
+			c, err := snap.StatCount()
 			if err != nil {
 				return 0, err
 			}
