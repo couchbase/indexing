@@ -861,14 +861,14 @@ func (m *MsgIndexStorageStats) GetReplyChannel() chan []IndexStorageStats {
 
 type MsgStatsRequest struct {
 	mType  MsgType
-	respch chan map[string]string
+	respch chan map[string]interface{}
 }
 
 func (m *MsgStatsRequest) GetMsgType() MsgType {
 	return m.mType
 }
 
-func (m *MsgStatsRequest) GetReplyChannel() chan map[string]string {
+func (m *MsgStatsRequest) GetReplyChannel() chan map[string]interface{} {
 	return m.respch
 }
 

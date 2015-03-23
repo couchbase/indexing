@@ -279,8 +279,8 @@ type indexScanStats struct {
 	Requests  *uint64
 	Rows      *uint64
 	BytesRead *uint64
-	ScanTime  *int64
-	WaitTime  *int64
+	ScanTime  *uint64
+	WaitTime  *uint64
 }
 
 type scanCoordinator struct {
@@ -341,7 +341,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 func (s *scanCoordinator) handleStats(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
-	statsMap := make(map[string]string)
+	statsMap := make(map[string]interface{})
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
 	var instList []common.IndexInst
@@ -358,23 +358,23 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 		instList = append(instList, inst)
 
 		k := fmt.Sprintf("%s:%s:num_requests", inst.Defn.Bucket, inst.Defn.Name)
-		v := fmt.Sprint(atomic.LoadUint64(stat.Requests))
+		v := atomic.LoadUint64(stat.Requests)
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:num_rows_returned", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(atomic.LoadUint64(stat.Rows))
+		v = atomic.LoadUint64(stat.Rows)
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:scan_bytes_read", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(atomic.LoadUint64(stat.BytesRead))
+		v = atomic.LoadUint64(stat.BytesRead)
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:total_scan_duration", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(atomic.LoadInt64(stat.ScanTime))
+		v = atomic.LoadUint64(stat.ScanTime)
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:scan_wait_duration", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(atomic.LoadInt64(stat.WaitTime))
+		v = atomic.LoadUint64(stat.WaitTime)
 		statsMap[k] = v
 
 		st := s.serv.Statistics()
-		statsMap["num_connections"] = fmt.Sprint(st.Connections)
+		statsMap["num_connections"] = st.Connections
 	}
 
 	// Compute counts asynchronously and reply to stats request
@@ -383,8 +383,7 @@ func (s *scanCoordinator) handleStats(cmd Message) {
 			c, err := s.getItemsCount(inst.InstId)
 			if err == nil {
 				k := fmt.Sprintf("%s:%s:items_count", inst.Defn.Bucket, inst.Defn.Name)
-				v := fmt.Sprint(c)
-				statsMap[k] = v
+				statsMap[k] = c
 			} else {
 				logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
 					inst.Defn.Bucket, inst.Defn.Name, err)
@@ -718,8 +717,8 @@ func (s *scanCoordinator) requestHandler(
 		s.mu.RLock()
 		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].Rows, rdr.ReturnedRows())
 		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].BytesRead, rdr.ReturnedBytes())
-		atomic.AddInt64(s.scanStatsMap[indexInst.InstId].ScanTime, time.Now().Sub(startTime).Nanoseconds())
-		atomic.AddInt64(s.scanStatsMap[indexInst.InstId].WaitTime, waitDuration.Nanoseconds())
+		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].ScanTime, uint64(time.Now().Sub(startTime).Nanoseconds()))
+		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].WaitTime, uint64(waitDuration.Nanoseconds()))
 		s.mu.RUnlock()
 		logging.Infof("%v: SCAN_RESULT scan id: %v rows: %v finished scan (%s)", s.logPrefix, sd.scanId, rdr.ReturnedRows(), status)
 	}
@@ -1047,8 +1046,8 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 				Requests:  new(uint64),
 				Rows:      new(uint64),
 				BytesRead: new(uint64),
-				ScanTime:  new(int64),
-				WaitTime:  new(int64),
+				ScanTime:  new(uint64),
+				WaitTime:  new(uint64),
 			}
 		}
 	}

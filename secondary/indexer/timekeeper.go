@@ -1721,7 +1721,7 @@ func (tk *timekeeper) handleUpdateIndexPartnMap(cmd Message) {
 func (tk *timekeeper) handleStats(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 
-	statsMap := make(map[string]string)
+	statsMap := make(map[string]interface{})
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
 
@@ -1765,7 +1765,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					sum += seqno
 				}
 			}
-			v := fmt.Sprint(sum)
+			v := sum
 			statsMap[k] = v
 
 			receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
@@ -1781,7 +1781,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				}
 			}
 			k = fmt.Sprintf("%s:%s:num_docs_queued", inst.Defn.Bucket, inst.Defn.Name)
-			v = fmt.Sprint(queued)
+			v = queued
 			statsMap[k] = v
 
 			pending := uint64(0)
@@ -1794,7 +1794,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				pending += uint64(seqno) - recvdSeqno
 			}
 			k = fmt.Sprintf("%s:%s:num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
-			v = fmt.Sprint(pending)
+			v = pending
 			statsMap[k] = v
 		}
 
