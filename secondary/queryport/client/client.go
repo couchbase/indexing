@@ -77,6 +77,11 @@ const (
 
 // BridgeAccessor for Create,Drop,List,Refresh operations.
 type BridgeAccessor interface {
+	// Synchronously update current server metadata to the client
+	// A Refresh call followed by a Sync() ensures that client is
+	// up to date wrt the server.
+	Sync() error
+
 	// Refresh shall refresh to latest set of index managed by GSI
 	// cluster, cache it locally and return the list of index.
 	Refresh() ([]*mclient.IndexMetadata, error)
@@ -218,6 +223,14 @@ func (c *GsiClient) IndexState(defnID uint64) (common.IndexState, error) {
 		return common.INDEX_STATE_ERROR, ErrorClientUninitialized
 	}
 	return c.bridge.IndexState(defnID)
+}
+
+// Sync implements BridgeAccessor{} interface.
+func (c *GsiClient) Sync() error {
+	if c.bridge == nil {
+		return ErrorClientUninitialized
+	}
+	return c.bridge.Sync()
 }
 
 // Refresh implements BridgeAccessor{} interface.

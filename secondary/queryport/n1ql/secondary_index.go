@@ -359,6 +359,15 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 	return nil
 }
 
+// Synchronise gsi client with the servers and refresh the indexes list.
+func (gsi *gsiKeyspace) SyncRefresh() errors.Error {
+	err := gsi.gsiClient.Sync()
+	if err != nil {
+		return errors.NewError(err, "GSI SyncRefresh()")
+	}
+	return gsi.Refresh()
+}
+
 //------------------------------------------
 // private functions for datastore.Indexer{}
 //------------------------------------------
