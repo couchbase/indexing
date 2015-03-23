@@ -1,4 +1,5 @@
 *.swp
+*.pyc
 .gdb
 .vimsession
 *.idat.*
