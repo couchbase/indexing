@@ -17,12 +17,15 @@ import "time"
 
 import "github.com/couchbase/indexing/secondary/dcp"
 import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/logging"
 import parsec "github.com/prataprc/goparsec"
 import "github.com/prataprc/monster"
 import mcommon "github.com/prataprc/monster/common"
+import "github.com/couchbase/cbauth"
 
 var options struct {
-	seed     int      // seed for monster tool
+	seed     int // seed for monster tool
+	auth     string
 	buckets  []string // buckets to populate
 	prods    []string
 	bagdir   string
@@ -39,6 +42,8 @@ func argParse() string {
 	seed := time.Now().UTC().Second()
 	flag.IntVar(&options.seed, "seed", seed,
 		"seed for monster tool")
+	flag.StringVar(&options.auth, "auth", "",
+		"Auth user and password")
 	flag.StringVar(&buckets, "buckets", "default",
 		"comma separated list of buckets")
 	flag.StringVar(&prods, "prods", "users.prod",
@@ -82,6 +87,14 @@ func main() {
 	cluster := argParse()
 	if !strings.HasPrefix(cluster, "http://") {
 		cluster = "http://" + cluster
+	}
+
+	// setup cbauth
+	if options.auth != "" {
+		up := strings.Split(options.auth, ":")
+		if _, err := cbauth.InternalRetryDefaultInit(cluster, up[0], up[1]); err != nil {
+			logging.Fatalf("Failed to initialize cbauth: %s", err)
+		}
 	}
 
 	n := 0
