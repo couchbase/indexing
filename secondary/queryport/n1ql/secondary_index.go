@@ -27,12 +27,17 @@ import "github.com/couchbase/query/expression/parser"
 import "github.com/couchbase/query/timestamp"
 import "github.com/couchbase/query/value"
 import "github.com/couchbase/query/logging"
+import "github.com/couchbase/indexing/secondary/indexer"
 
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(nil, "gsi.empty")
 
 // ErrorEmptyHost is no valid node hosting an index.
 var ErrorEmptyHost = errors.NewError(nil, "gsi.emptyHost")
+
+// ErrorCauseStaleMetadata means client indexes list needs to be
+// refreshed.
+var ErrorCauseStaleMetadata = fmt.Errorf("Stale metadata")
 
 var n1ql2GsiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 	datastore.NEITHER: qclient.Neither,
@@ -510,7 +515,7 @@ func (si *secondaryIndex) Statistics(
 		seek := values2SKey(span.Seek)
 		pstats, err := client.LookupStatistics(defnID, seek)
 		if err != nil {
-			return nil, errors.NewError(err, "GSI Statistics()")
+			return nil, gsiError(err, "GSI Statistics()")
 		}
 		return newStatistics(pstats), nil
 	}
@@ -519,7 +524,7 @@ func (si *secondaryIndex) Statistics(
 	incl := n1ql2GsiInclusion[span.Range.Inclusion]
 	pstats, err := client.RangeStatistics(defnID, low, high, incl)
 	if err != nil {
-		return nil, errors.NewError(err, "GSI Statistics()")
+		return nil, gsiError(err, "GSI Statistics()")
 	}
 	return newStatistics(pstats), nil
 }
@@ -535,7 +540,7 @@ func (si *secondaryIndex) Count(span *datastore.Span) (int64, errors.Error) {
 		seek := values2SKey(span.Seek)
 		count, e := client.CountLookup(si.defnID, []c.SecondaryKey{seek})
 		if e != nil {
-			return 0, errors.NewError(e, "GSI CountLookup()")
+			return 0, gsiError(e, "GSI CountLookup()")
 		}
 		return count, nil
 
@@ -544,7 +549,7 @@ func (si *secondaryIndex) Count(span *datastore.Span) (int64, errors.Error) {
 	incl := n1ql2GsiInclusion[span.Range.Inclusion]
 	count, e := client.CountRange(si.defnID, low, high, incl)
 	if e != nil {
-		return 0, errors.NewError(e, "GSI CountRange()")
+		return 0, gsiError(e, "GSI CountRange()")
 	}
 	return count, nil
 }
@@ -614,8 +619,9 @@ func makeResponsehandler(
 	stopChannel := conn.StopChannel()
 
 	return func(data qclient.ResponseReader) bool {
+
 		if err := data.Error(); err != nil {
-			conn.Error(errors.NewError(nil, err.Error()))
+			conn.Error(gsiError(err, "GSI scan error"))
 			return false
 
 		}
@@ -641,6 +647,32 @@ func makeResponsehandler(
 		conn.Error(errors.NewError(nil, err.Error()))
 		return false
 	}
+}
+
+func isStaleMetaError(err error) bool {
+	switch err.Error() {
+	case indexer.ErrIndexNotFound.Error():
+		fallthrough
+	case indexer.ErrIndexNotReady.Error():
+		return true
+	}
+
+	return false
+}
+
+func gsiError(err error, desc string) errors.Error {
+	var cause error
+	var errStr string
+
+	if isStaleMetaError(err) {
+		cause = ErrorCauseStaleMetadata
+		errStr = err.Error()
+	} else {
+		cause = err
+		errStr = desc
+	}
+
+	return errors.NewError(cause, errStr)
 }
 
 //-----------------------
