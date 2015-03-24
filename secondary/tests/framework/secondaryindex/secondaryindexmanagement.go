@@ -232,7 +232,7 @@ func IndexExists(indexName, bucketName, server string) (bool, error) {
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
-		if defn.Name == indexName {
+		if defn.Name == indexName && defn.Bucket == bucketName {
 			log.Printf("Index found:  %v", indexName)
 			return true, nil
 		}
@@ -245,7 +245,7 @@ func IndexExistsWithClient(indexName, bucketName, server string, client *qc.GsiC
 	tc.HandleError(err, "Error while listing the secondary indexes")
 	for _, index := range indexes {
 		defn := index.Definition
-		if defn.Name == indexName {
+		if defn.Name == indexName && defn.Bucket == bucketName {
 			log.Printf("Index found:  %v", indexName)
 			return true
 		}
