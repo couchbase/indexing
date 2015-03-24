@@ -469,6 +469,18 @@ func (s *scanCoordinator) parseScanParams(
 		return nil
 	}
 
+	setConsistency := func(cons common.Consistency, vector *protobuf.TsConsistency) {
+		checkVector :=
+			cons == common.QueryConsistency || cons == common.SessionConsistency
+		if checkVector && vector != nil {
+			p.ts = common.NewTsVbuuid("", s.config["numVbuckets"].Int())
+			for i, vbno := range vector.Vbnos {
+				p.ts.Seqnos[vbno] = vector.Seqnos[i]
+				p.ts.Vbuuids[vbno] = vector.Vbuuids[i]
+			}
+		}
+	}
+
 	switch r := req.(type) {
 	case *protobuf.StatisticsRequest:
 		p.scanType = queryStats
@@ -486,6 +498,9 @@ func (s *scanCoordinator) parseScanParams(
 			r.GetSpan().GetRange().GetLow(),
 			r.GetSpan().GetRange().GetHigh(),
 			r.GetSpan().GetEquals())
+		cons := common.Consistency(r.GetCons())
+		vector := r.GetVector()
+		setConsistency(cons, vector)
 	case *protobuf.ScanRequest:
 		p.scanType = queryScan
 		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
@@ -496,35 +511,17 @@ func (s *scanCoordinator) parseScanParams(
 		p.limit = r.GetLimit()
 		p.defnID = r.GetDefnID()
 		p.pageSize = r.GetPageSize()
-		vector := r.GetVector()
 		cons := common.Consistency(r.GetCons())
-		checkVector :=
-			cons == common.QueryConsistency || cons == common.SessionConsistency
-		if checkVector && vector != nil {
-			p.ts = common.NewTsVbuuid("", s.config["numVbuckets"].Int())
-			tsCons := r.GetVector()
-			for i, vbno := range tsCons.Vbnos {
-				p.ts.Seqnos[vbno] = tsCons.Seqnos[i]
-				p.ts.Vbuuids[vbno] = tsCons.Vbuuids[i]
-			}
-		}
+		vector := r.GetVector()
+		setConsistency(cons, vector)
 	case *protobuf.ScanAllRequest:
 		p.scanType = queryScanAll
 		p.limit = r.GetLimit()
 		p.defnID = r.GetDefnID()
 		p.pageSize = r.GetPageSize()
-		vector := r.GetVector()
 		cons := common.Consistency(r.GetCons())
-		checkVector :=
-			cons == common.QueryConsistency || cons == common.SessionConsistency
-		if checkVector && vector != nil {
-			p.ts = common.NewTsVbuuid("", s.config["numVbuckets"].Int())
-			tsCons := r.GetVector()
-			for i, vbno := range tsCons.Vbnos {
-				p.ts.Seqnos[vbno] = tsCons.Seqnos[i]
-				p.ts.Vbuuids[vbno] = tsCons.Vbuuids[i]
-			}
-		}
+		vector := r.GetVector()
+		setConsistency(cons, vector)
 	default:
 		err = ErrUnsupportedRequest
 	}

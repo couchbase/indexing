@@ -74,8 +74,10 @@ message StreamEndResponse {
 
 // Count request to indexer.
 message CountRequest {
-    required uint64 defnID    = 1;
-    required Span   span      = 2;
+    required uint64        defnID   = 1;
+    required Span          span     = 2;
+    required uint32        cons     = 3;
+    optional TsConsistency vector   = 4;
 }
 
 // total number of entries in index.

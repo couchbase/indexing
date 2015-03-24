@@ -687,7 +687,7 @@ func TestCountRange(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 35, 40, 1)
-	rangeCount, err := secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1)
+	rangeCount, err := secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{35}, []interface{}{40}, 1, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range is:  %d and %d", len(docScanResults), rangeCount)
 	if int64(len(docScanResults)) != rangeCount {
@@ -696,7 +696,7 @@ func TestCountRange(t *testing.T) {
 	}
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", -10, 50, 2)
-	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{-10}, []interface{}{50}, 2)
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{-10}, []interface{}{50}, 2, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range is: %d and %d", len(docScanResults), rangeCount)
 	if int64(len(docScanResults)) != rangeCount {
@@ -705,7 +705,7 @@ func TestCountRange(t *testing.T) {
 	}
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 45, 46, 2)
-	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{45}, []interface{}{46}, 2)
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{45}, []interface{}{46}, 2, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range are: %d and %d", len(docScanResults), rangeCount)
 	if int64(len(docScanResults)) != rangeCount {
@@ -714,7 +714,7 @@ func TestCountRange(t *testing.T) {
 	}
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 40, 50, 3)
-	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{40}, []interface{}{50}, 3)
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{40}, []interface{}{50}, 3, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range are: %d and %d", len(docScanResults), rangeCount)
 	if int64(len(docScanResults)) != rangeCount {
@@ -723,7 +723,7 @@ func TestCountRange(t *testing.T) {
 	}
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 55, 45, 3)
-	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{55}, []interface{}{45}, 3)
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{55}, []interface{}{45}, 3, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range are: %d and %d", len(docScanResults), rangeCount)
 	if int64(len(docScanResults)) != rangeCount {
@@ -741,7 +741,7 @@ func TestCountLookup(t *testing.T) {
 	FailTestIfError(err, "Error in creating the index", t)
 
 	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 25, 25, 3)
-	rangeCount, err := secondaryindex.CountLookup(indexName, bucketName, indexScanAddress, []interface{}{25})
+	rangeCount, err := secondaryindex.CountLookup(indexName, bucketName, indexScanAddress, []interface{}{25}, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range are: %d and %d", len(docScanResults), rangeCount)
 	if int64(len(docScanResults)) != rangeCount {
@@ -750,7 +750,7 @@ func TestCountLookup(t *testing.T) {
 	}
 
 	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 75, 75, 3)
-	rangeCount, err = secondaryindex.CountLookup(indexName, bucketName, indexScanAddress, []interface{}{75})
+	rangeCount, err = secondaryindex.CountLookup(indexName, bucketName, indexScanAddress, []interface{}{75}, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range are: %d and %d", len(docScanResults), rangeCount)
 	if int64(len(docScanResults)) != rangeCount {

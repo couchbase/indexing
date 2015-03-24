@@ -181,10 +181,14 @@ type GsiAccessor interface {
 		callb ResponseHandler) error
 
 	// CountLookup of all entries in index.
-	CountLookup(defnID uint64) (int64, error)
+	CountLookup(
+		defnID uint64,
+		cons common.Consistency, vector *TsConsistency) (int64, error)
 
 	// CountRange of all entries in index.
-	CountRange(defnID uint64) (int64, error)
+	CountRange(
+		defnID uint64,
+		cons common.Consistency, vector *TsConsistency) (int64, error)
 }
 
 var useMetadataProvider = true
@@ -436,7 +440,8 @@ func (c *GsiClient) ScanAll(
 
 // CountLookup to count number entries for given set of keys.
 func (c *GsiClient) CountLookup(
-	defnID uint64, values []common.SecondaryKey) (count int64, err error) {
+	defnID uint64, values []common.SecondaryKey,
+	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
 	if c.bridge == nil {
 		return count, ErrorClientUninitialized
@@ -447,7 +452,7 @@ func (c *GsiClient) CountLookup(
 		return 0, err
 	}
 	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
-		count, err = qc.CountLookup(targetDefnID, values)
+		count, err = qc.CountLookup(targetDefnID, values, cons, vector)
 		return err
 	})
 	return count, err
@@ -457,7 +462,8 @@ func (c *GsiClient) CountLookup(
 func (c *GsiClient) CountRange(
 	defnID uint64,
 	low, high common.SecondaryKey,
-	inclusion Inclusion) (count int64, err error) {
+	inclusion Inclusion,
+	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
 	if c.bridge == nil {
 		return count, ErrorClientUninitialized
@@ -468,7 +474,7 @@ func (c *GsiClient) CountRange(
 		return 0, err
 	}
 	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
-		count, err = qc.CountRange(targetDefnID, low, high, inclusion)
+		count, err = qc.CountRange(targetDefnID, low, high, inclusion, cons, vector)
 		return err
 	})
 	return count, err

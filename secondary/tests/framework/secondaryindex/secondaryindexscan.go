@@ -244,7 +244,8 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 	return scanResults, nil
 }
 
-func CountRange(indexName, bucketName, server string, low, high []interface{}, inclusion uint32) (int64, error) {
+func CountRange(indexName, bucketName, server string, low, high []interface{}, inclusion uint32,
+	consistency c.Consistency, vector *qc.TsConsistency) (int64, error) {
 	// ToDo: Create a client pool
 	client, e := CreateClient(server, "2itest")
 	if e != nil {
@@ -253,7 +254,7 @@ func CountRange(indexName, bucketName, server string, low, high []interface{}, i
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	count, err := client.CountRange(defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
+	count, err := client.CountRange(defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), consistency, vector)
 	if err != nil {
 		return 0, err
 	} else {
@@ -261,7 +262,8 @@ func CountRange(indexName, bucketName, server string, low, high []interface{}, i
 	}
 }
 
-func CountLookup(indexName, bucketName, server string, values []interface{}) (int64, error) {
+func CountLookup(indexName, bucketName, server string, values []interface{},
+	consistency c.Consistency, vector *qc.TsConsistency) (int64, error) {
 	// ToDo: Create a client pool
 	client, e := CreateClient(server, "2itest")
 	if e != nil {
@@ -270,7 +272,7 @@ func CountLookup(indexName, bucketName, server string, values []interface{}) (in
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	count, err := client.CountLookup(defnID, []c.SecondaryKey{values})
+	count, err := client.CountLookup(defnID, []c.SecondaryKey{values}, consistency, vector)
 	if err != nil {
 		return 0, err
 	} else {

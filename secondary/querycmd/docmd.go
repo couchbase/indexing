@@ -337,14 +337,14 @@ func HandleCommand(
 		} else if cmd.Equal != nil {
 			fmt.Fprintln(w, "CountLookup:")
 			equals := []c.SecondaryKey{cmd.Equal}
-			count, err := client.CountLookup(uint64(defnID), equals)
+			count, err := client.CountLookup(uint64(defnID), equals, c.AnyConsistency, nil)
 			if err == nil {
 				fmt.Fprintf(w, "Index %q/%q has %v entries\n", bucket, iname, count)
 			}
 
 		} else {
 			fmt.Fprintln(w, "CountRange:")
-			count, err = client.CountRange(uint64(defnID), low, high, incl)
+			count, err = client.CountRange(uint64(defnID), low, high, incl, c.AnyConsistency, nil)
 			if err == nil {
 				fmt.Fprintf(w, "Index %q/%q has %v entries\n", bucket, iname, count)
 			}

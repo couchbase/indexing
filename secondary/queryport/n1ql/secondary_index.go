@@ -539,7 +539,8 @@ func (si *secondaryIndex) Statistics(
 }
 
 // Count implement Index{} interface.
-func (si *secondaryIndex) Count(span *datastore.Span) (int64, errors.Error) {
+func (si *secondaryIndex) Count(span *datastore.Span,
+	cons datastore.ScanConsistency, vector timestamp.Vector) (int64, errors.Error) {
 	if si == nil {
 		return 0, ErrorIndexEmpty
 	}
@@ -547,7 +548,8 @@ func (si *secondaryIndex) Count(span *datastore.Span) (int64, errors.Error) {
 
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
-		count, e := client.CountLookup(si.defnID, []c.SecondaryKey{seek})
+		count, e := client.CountLookup(si.defnID, []c.SecondaryKey{seek},
+			n1ql2GsiConsistency[cons], vector2ts(vector))
 		if e != nil {
 			return 0, gsiError(e, "GSI CountLookup()")
 		}
@@ -556,7 +558,8 @@ func (si *secondaryIndex) Count(span *datastore.Span) (int64, errors.Error) {
 	}
 	low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
 	incl := n1ql2GsiInclusion[span.Range.Inclusion]
-	count, e := client.CountRange(si.defnID, low, high, incl)
+	count, e := client.CountRange(si.defnID, low, high, incl,
+		n1ql2GsiConsistency[cons], vector2ts(vector))
 	if e != nil {
 		return 0, gsiError(e, "GSI CountRange()")
 	}
