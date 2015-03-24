@@ -87,17 +87,17 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.mutationChanSize": ConfigValue{
-		10000,
+		100,
 		"channel size of projector's vbucket workers, " +
 			"changing this value does not affect existing feeds.",
-		10000,
+		100,
 		false, // mutable
 	},
 	"projector.feedChanSize": ConfigValue{
-		10000,
+		100,
 		"channel size for feed's control path and its back-channel, " +
 			"changing this value does not affect existing feeds.",
-		10000,
+		100,
 		false, // mutable
 	},
 	"projector.vbucketSyncTimeout": ConfigValue{
@@ -113,6 +113,30 @@ var SystemConfig = Config{
 			"a feed is considered stale when all its endpoint go stale.",
 		5 * 60 * 1000,
 		true, // immutable
+	},
+	"projector.cpuProfFname": ConfigValue{
+		"",
+		"filename to dump cpu-profile for projector.",
+		"",
+		false, // mutable
+	},
+	"projector.cpuProfile": ConfigValue{
+		false,
+		"boolean indicate whether to start or stop projector cpu profiling.",
+		false,
+		false, // mutable
+	},
+	"projector.memProfFname": ConfigValue{
+		"",
+		"filename to dump mem-profile for projector.",
+		"",
+		false, // mutable
+	},
+	"projector.memProfile": ConfigValue{
+		false,
+		"boolean to take current mem profile from projector.",
+		false,
+		false, // mutable
 	},
 	// projector dcp parameters
 	"projector.dcp.genChanSize": ConfigValue{
@@ -176,10 +200,10 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.dataport.keyChanSize": ConfigValue{
-		10000,
+		1000,
 		"channel size of dataport endpoints data input, " +
 			"does not affect existing feeds.",
-		10000,
+		1000,
 		true, // immutable
 	},
 	"projector.dataport.bufferSize": ConfigValue{

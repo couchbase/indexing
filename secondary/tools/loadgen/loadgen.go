@@ -137,10 +137,11 @@ func genDocuments(b *couchbase.Bucket, prodfile string, idx, n int) {
 	root := compile(parsec.NewScanner(text))
 	scope := root.(mcommon.Scope)
 	nterms := scope["_nonterminals"].(mcommon.NTForms)
-	scope = monster.BuildContext(scope, uint64(options.seed), options.bagdir)
-	scope["_prodfile"] = prodfile
+	seed := uint64(options.seed)
 	// evaluate
 	for i := 0; i < options.count; i++ {
+		scope = monster.BuildContext(scope, seed, options.bagdir)
+		scope["_prodfile"] = prodfile
 		doc := evaluate("root", scope, nterms["s"]).(string)
 		key := makeKey(prodfile, idx, i+1)
 		err = b.SetRaw(key, options.expiry, []byte(doc))
