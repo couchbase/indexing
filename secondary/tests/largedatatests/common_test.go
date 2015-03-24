@@ -20,7 +20,7 @@ var defaultlimit int64 = 10000000
 var kvaddress, indexManagementAddress, indexScanAddress string
 var clusterconfig tc.ClusterConfiguration
 var proddir, bagdir string
-var defaultIndexActiveTimeout int64 = 900  // 15 mins to wait for index to become active
+var defaultIndexActiveTimeout int64 = 900 // 15 mins to wait for index to become active
 
 func init() {
 	log.Printf("In init()")
@@ -78,11 +78,11 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 	root := compile(parsec.NewScanner(text))
 	scope := root.(common.Scope)
 	nterms := scope["_nonterminals"].(common.NTForms)
-	scope = monster.BuildContext(scope, uint64(options.seed), options.bagdir)
-	scope["_prodfile"] = prodfile
 
 	// evaluate
 	for i := 0; i < options.count; i++ {
+		scope = monster.BuildContext(scope, uint64(options.seed), options.bagdir)
+		scope["_prodfile"] = prodfile
 		val := evaluate("root", scope, nterms["s"])
 		jsonString := val.(string)
 		byt := []byte(jsonString)
