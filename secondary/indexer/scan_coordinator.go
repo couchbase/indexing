@@ -936,7 +936,15 @@ func (s *scanCoordinator) scanSliceSnapshot(sd *scanDescriptor,
 }
 
 func (s *scanCoordinator) queryStats(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
-	totalRows, err := snap.CountRange(sd.p.low, sd.p.high, sd.p.incl, stopch)
+	var totalRows uint64
+	var err error
+
+	if sd.p.low.IsNull() && sd.p.high.IsNull() && sd.p.incl == Both {
+		totalRows, err = snap.StatCountTotal()
+	} else {
+		totalRows, err = snap.CountRange(sd.p.low, sd.p.high, sd.p.incl, stopch)
+	}
+
 	// TODO: Implement min, max, unique (maybe)
 	if err != nil {
 		sd.respch <- err
@@ -1097,7 +1105,7 @@ func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, erro
 	for _, ps := range is.Partitions() {
 		for _, ss := range ps.Slices() {
 			snap := ss.Snapshot()
-			c, err := snap.StatCount()
+			c, err := snap.StatCountTotal()
 			if err != nil {
 				return 0, err
 			}

@@ -124,6 +124,10 @@ func (k *Key) Raw() []byte {
 	return k.raw
 }
 
+func (k *Key) IsNull() bool {
+	return k.encoded == nil
+}
+
 func (k *Key) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("%v", string(k.raw)))

@@ -34,7 +34,7 @@ func (s *fdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
 }
 
 // Approximate items count
-func (s *fdbSnapshot) StatCount() (uint64, error) {
+func (s *fdbSnapshot) StatCountTotal() (uint64, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 

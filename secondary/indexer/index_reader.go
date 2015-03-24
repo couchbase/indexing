@@ -32,7 +32,7 @@ const (
 type Counter interface {
 	CountTotal(stopch StopChannel) (uint64, error)
 	// Approximate count
-	StatCount() (uint64, error)
+	StatCountTotal() (uint64, error)
 }
 
 // Exister is a class of algorithms that allow testing if a key exists in the
