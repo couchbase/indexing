@@ -628,6 +628,8 @@ func makeResponsehandler(
 				}
 				e.EntryKey = skey2Values(skey)
 
+				fmsg := "%v current enqueued length: %d (max %d)\n"
+				l.Tracef(fmsg, len(entryChannel), cap(entryChannel))
 				select {
 				case entryChannel <- e:
 				case <-stopChannel:
