@@ -273,7 +273,9 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 
 	case TypeMissing:
 		datum, remaining = getDatum(code)
-		text = append(text, []byte(MissingLiteral)...)
+		text = append(text, '"')
+		text = append(text, MissingLiteral...)
+		text = append(text, '"')
 
 	case TypeNull:
 		datum, remaining = getDatum(code)
