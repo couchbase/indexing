@@ -63,6 +63,7 @@ type Feed struct {
 func NewFeed(topic string, config c.Config, opaque uint16) (*Feed, error) {
 	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
 	chsize := config["feedChanSize"].Int()
+	backchsize := config["backChanSize"].Int()
 	feed := &Feed{
 		cluster: config["clusterAddr"].String(),
 		topic:   topic,
@@ -79,7 +80,7 @@ func NewFeed(topic string, config c.Config, opaque uint16) (*Feed, error) {
 		endpoints: make(map[string]c.RouterEndpoint),
 		// genServer channel
 		reqch:  make(chan []interface{}, chsize),
-		backch: make(chan []interface{}, chsize),
+		backch: make(chan []interface{}, backchsize),
 		finch:  make(chan bool),
 
 		reqTimeout: time.Duration(config["feedWaitStreamReqTimeout"].Int()),
@@ -1619,6 +1620,7 @@ func FeedConfigParams() []string {
 	paramNames := []string{
 		"clusterAddr",
 		"feedChanSize",
+		"backChanSize",
 		"feedWaitStreamEndTimeout",
 		"feedWaitStreamReqTimeout",
 		"mutationChanSize",

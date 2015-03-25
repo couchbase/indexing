@@ -95,9 +95,16 @@ var SystemConfig = Config{
 	},
 	"projector.feedChanSize": ConfigValue{
 		100,
-		"channel size for feed's control path and its back-channel, " +
+		"channel size for feed's control path, " +
 			"changing this value does not affect existing feeds.",
 		100,
+		false, // mutable
+	},
+	"projector.backChanSize": ConfigValue{
+		10000,
+		"channel size of projector feed's back-channel, " +
+			"changing this value does not affect existing feeds.",
+		10000,
 		false, // mutable
 	},
 	"projector.vbucketSyncTimeout": ConfigValue{
