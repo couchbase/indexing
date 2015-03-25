@@ -178,11 +178,11 @@ func (o *MetadataProvider) UnwatchMetadata(indexerId c.IndexerId) {
 
 func (o *MetadataProvider) CreateIndexWithPlan(
 	name, bucket, using, exprType, partnExpr, whereExpr string,
-	secExprs []string, isPrimary bool, plan map[string]interface{}) (c.IndexDefnId, error) {
+	secExprs []string, isPrimary bool, plan map[string]interface{}) (c.IndexDefnId, error, bool) {
 
 	// FindIndexByName will only return valid index
 	if o.FindIndexByName(name, bucket) != nil {
-		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %s already exist.", name))
+		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %s already exist.", name)), false
 	}
 
 	var deferred bool = false
@@ -194,14 +194,15 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		ns, ok := plan["nodes"].([]interface{})
 		if ok {
 			if len(ns) != 1 {
-				return c.IndexDefnId(0), errors.New("Create Index is allowed for one and only one node")
+				return c.IndexDefnId(0), errors.New("Create Index is allowed for one and only one node"), false
 			}
 			n, ok := ns[0].(string)
 			if ok {
 				nodes = []string{n}
 			} else {
 				return c.IndexDefnId(0),
-					errors.New(fmt.Sprintf("Fails to create index.  Node '%v' is not valid", plan["nodes"]))
+					errors.New(fmt.Sprintf("Fails to create index.  Node '%v' is not valid", plan["nodes"])),
+					false
 			}
 		} else {
 			n, ok := plan["nodes"].(string)
@@ -209,7 +210,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 				nodes = []string{n}
 			} else if _, ok := plan["nodes"]; ok {
 				return c.IndexDefnId(0),
-					errors.New(fmt.Sprintf("Fails to create index.  Node '%v' is not valid", plan["nodes"]))
+					errors.New(fmt.Sprintf("Fails to create index.  Node '%v' is not valid", plan["nodes"])),
+					false
 			}
 		}
 
@@ -226,13 +228,15 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		watcher = o.findNextAvailWatcher()
 		if watcher == nil {
 			return c.IndexDefnId(0),
-				errors.New(fmt.Sprintf("Fails to create index.  Cannot find available node for new index"))
+				errors.New(fmt.Sprintf("Fails to create index.  Cannot find available node for new index")),
+				false
 		}
 	} else {
 		watcher = o.findWatcherByNodeAddr(nodes[0])
 		if watcher == nil {
 			return c.IndexDefnId(0),
-				errors.New(fmt.Sprintf("Fails to create index.  Node %s does not exist or is not running", nodes[0]))
+				errors.New(fmt.Sprintf("Fails to create index.  Node %s does not exist or is not running", nodes[0])),
+				true
 		}
 	}
 
@@ -241,7 +245,9 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 	defnID, err := c.NewIndexDefnId()
 	if err != nil {
-		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Fails to create index. Fail to create uuid for index definition."))
+		return c.IndexDefnId(0),
+			errors.New(fmt.Sprintf("Fails to create index. Fail to create uuid for index definition.")),
+			false
 	}
 
 	idxDefn := &c.IndexDefn{
@@ -260,13 +266,13 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 	content, err := c.MarshallIndexDefn(idxDefn)
 	if err != nil {
-		return 0, err
+		return 0, err, false
 	}
 
 	key := fmt.Sprintf("%d", defnID)
 	_, err = watcher.makeRequest(OPCODE_CREATE_INDEX, key, content)
 
-	return defnID, err
+	return defnID, err, false
 }
 
 func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {

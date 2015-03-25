@@ -143,9 +143,19 @@ func (b *metadataClient) CreateIndex(
 		}
 	}
 
-	defnID, err := b.mdClient.CreateIndexWithPlan(
+	refreshCnt := 0
+RETRY:
+	defnID, err, needRefresh := b.mdClient.CreateIndexWithPlan(
 		indexName, bucket, using, exprType, partnExpr, whereExpr,
 		secExprs, isPrimary, plan)
+
+	if needRefresh && refreshCnt == 0 {
+		logging.Debugf("GsiClient: Indexer Node List is out-of-date.  Require refresh.")
+		b.updateIndexerList()
+		refreshCnt++
+		goto RETRY
+	}
+
 	b.Refresh() // refresh so that we too have IndexMetadata table.
 	return uint64(defnID), err
 }
