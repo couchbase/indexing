@@ -490,8 +490,9 @@ func (si *secondaryIndex) State() (datastore.IndexState, string, errors.Error) {
 	if si.err != "" {
 		// if err is not empty, return OFFLINE with error reason
 		// and the state in which the error occured.
-		msg := fmt.Sprintf("error %s while in state %v", si.err, si.state)
-		return datastore.OFFLINE, msg, errors.NewError(nil, msg)
+		msg := fmt.Sprintf("error: %s. Index %s(%s). Index state: %s",
+			si.err, si.Name(), si.RangeKey().String(), si.state.String())
+		return datastore.OFFLINE, msg, errors.NewCbIndexStateError(msg)
 	}
 	return si.state, "", nil
 }
