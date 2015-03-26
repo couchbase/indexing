@@ -16,8 +16,8 @@ import (
 
 const (
 	IndexingMetaDir          = "/indexing/"
-	IndexingSettingsMetaDir  = IndexingMetaDir + "/settings/"
-	IndexingSettingsMetaPath = IndexingSettingsMetaDir + "/config"
+	IndexingSettingsMetaDir  = IndexingMetaDir + "settings/"
+	IndexingSettingsMetaPath = IndexingSettingsMetaDir + "config"
 )
 
 func GetSettingsConfig(cfg Config) (Config, error) {
