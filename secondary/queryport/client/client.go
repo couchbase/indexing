@@ -451,6 +451,12 @@ func (c *GsiClient) CountLookup(
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		return 0, err
 	}
+
+	if cons == common.SessionConsistency && vector == nil {
+		if vector, err = c.BucketTs(index.Bucket); err != nil {
+			return err
+		}
+	}
 	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
 		count, err = qc.CountLookup(targetDefnID, values, cons, vector)
 		return err
@@ -472,6 +478,12 @@ func (c *GsiClient) CountRange(
 	// check whether the index is present and available.
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		return 0, err
+	}
+
+	if cons == common.SessionConsistency && vector == nil {
+		if vector, err = c.BucketTs(index.Bucket); err != nil {
+			return err
+		}
 	}
 	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
 		count, err = qc.CountRange(targetDefnID, low, high, inclusion, cons, vector)
