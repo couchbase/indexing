@@ -9,14 +9,14 @@ import "log"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
 import "github.com/couchbase/indexing/secondary/querycmd"
 
-//----------------------------------
-// sanity check for queryport client
-//----------------------------------
+//------------------------
+// memdb sanity test cases
+//------------------------
 
-func doSanityTests(
+func doMemdbTests(
 	cluster string, client *qclient.GsiClient) (err error) {
 
-	for _, args := range sanityCommands {
+	for _, args := range memdbCommands {
 		cmd, _, _, err := querycmd.ParseArgs(args)
 		if err != nil {
 			log.Fatal(err)
@@ -31,19 +31,20 @@ func doSanityTests(
 	return
 }
 
-var sanityCommands = [][]string{
+var memdbCommands = [][]string{
 	[]string{
 		"-type", "nodes",
 	},
 	[]string{
-		"-type", "create", "-bucket", "beer-sample", "-index", "index-city",
-		"-fields", "city",
+		"-type", "create", "-using", "memdb", "-bucket", "beer-sample",
+		"-index", "index-city", "-fields", "city",
 	},
 	[]string{
-		"-type", "create", "-bucket", "beer-sample", "-index", "index-abv",
-		"-fields", "abv", "-with", "{\"defer_build\": true}",
+		"-type", "create", "-using", "memdb", "-bucket", "beer-sample",
+		"-index", "index-abv", "-fields", "abv",
+		"-with", "{\"defer_build\": true}",
 	},
-	[]string{"-type", "list"},
+	[]string{"-type", "list", "-bucket", "beer-sample"},
 
 	// Query on index-city
 	[]string{
@@ -67,7 +68,7 @@ var sanityCommands = [][]string{
 		"-type", "count", "-bucket", "beer-sample", "-index", "index-city",
 	},
 	[]string{
-		"-type", "drop", "-bucket", "beer-sample", "-index", "index-city",
+		"-type", "drop", "-indexes", "beer-sample:index-city",
 	},
 
 	// Deferred build
@@ -97,7 +98,7 @@ var sanityCommands = [][]string{
 		"-type", "count", "-bucket", "beer-sample", "-index", "index-abv",
 	},
 	[]string{
-		"-type", "drop", "-bucket", "beer-sample", "-index", "index-abv",
+		"-type", "drop", "-indexes", "beer-sample:index-abv",
 	},
 }
 
