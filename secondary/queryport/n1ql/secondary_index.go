@@ -85,7 +85,7 @@ type gsiKeyspace struct {
 func NewGSIIndexer(
 	clusterURL, namespace, keyspace string) (datastore.Indexer, errors.Error) {
 
-	l.SetLogLevel(l.Trace)
+	l.SetLogLevel(l.Info)
 
 	gsi := &gsiKeyspace{
 		clusterURL:     clusterURL,
@@ -641,7 +641,6 @@ func makeResponsehandler(
 		if err := data.Error(); err != nil {
 			conn.Error(gsiError(err, "GSI scan error"))
 			return false
-
 		}
 		skeys, pkeys, err := data.GetEntries()
 		if err == nil {
@@ -652,7 +651,7 @@ func makeResponsehandler(
 				}
 				e.EntryKey = skey2Values(skey)
 
-				fmsg := "%v current enqueued length: %d (max %d)\n"
+				fmsg := "current enqueued length: %d (max %d)\n"
 				l.Tracef(fmsg, len(entryChannel), cap(entryChannel))
 				select {
 				case entryChannel <- e:
