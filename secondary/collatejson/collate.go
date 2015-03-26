@@ -147,7 +147,7 @@ func (codec *Codec) Encode(text, code []byte) ([]byte, error) {
 // and > MinBufferSize.
 func (codec *Codec) Decode(code, text []byte) ([]byte, error) {
 	text = text[:0]
-	if cap(text) < len(code) || cap(code) < MinBufferSize {
+	if cap(text) < len(code) || cap(text) < MinBufferSize {
 		return nil, ErrorOutputLen
 	}
 	text, _, err := codec.code2json(code, text)
