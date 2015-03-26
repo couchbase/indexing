@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/logging"
+	"sync"
 )
 
 // Key is an array of JSON objects, per encoding/json
@@ -34,6 +35,17 @@ type Valuedata struct {
 	Docid []byte
 }
 
+var codecPool = sync.Pool{New: newCodec}
+var codecBufPool = sync.Pool{New: newCodecBuf}
+
+func newCodec() interface{} {
+	return collatejson.NewCodec(16)
+}
+
+func newCodecBuf() interface{} {
+	return make([]byte, 0, MAX_SEC_KEY_BUFFER_LEN)
+}
+
 func NewKey(data []byte) (Key, error) {
 	var err error
 	var key Key
@@ -49,10 +61,12 @@ func NewKey(data []byte) (Key, error) {
 		return key, nil
 	}
 
-	jsoncodec := collatejson.NewCodec(16)
+	jsoncodec := codecPool.Get().(*collatejson.Codec)
+	defer codecPool.Put(jsoncodec)
 	//TODO collatejson needs 3x buffer size. see if that can
 	//be reduced. Also reuse buffer.
-	buf := make([]byte, 0, MAX_SEC_KEY_BUFFER_LEN)
+	buf := codecBufPool.Get().([]byte)
+	defer codecBufPool.Put(buf)
 	if buf, err = jsoncodec.Encode(data, buf); err != nil {
 		return key, err
 	}
