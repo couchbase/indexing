@@ -21,7 +21,7 @@ func usage(fset *flag.FlagSet) {
     cbindex -type=scan -index name_state_age -low='["Ar"]' -high='["Arlette", "N"]'
     cbindex -type scan -index '#primary' -equal='["Adena_54605074"]'
 - Create/Drop
-    cbindex -type create -bucket default -index first_name -fields=first_name,last_name
+    cbindex -type create -bucket default -using memdb -index first_name -fields=first_name,last_name
     cbindex -type create -bucket default -primary=true -index primary
     cbindex -type drop -instanceid 1234
 - List

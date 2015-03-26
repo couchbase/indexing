@@ -255,13 +255,13 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex(
 	}
 	defnID, err := gsi.gsiClient.CreateIndex(
 		name,
-		gsi.keyspace,          /*bucket-name*/
-		string(datastore.GSI), /*using*/
-		"N1QL",                /*exprType*/
-		"",                    /*partnStr*/
-		"",                    /*whereStr*/
-		nil,                   /*secStrs*/
-		true,                  /*isPrimary*/
+		gsi.keyspace,       /*bucket-name*/
+		string(c.ForestDB), /*using, by default always forestdb*/
+		"N1QL",             /*exprType*/
+		"",                 /*partnStr*/
+		"",                 /*whereStr*/
+		nil,                /*secStrs*/
+		true,               /*isPrimary*/
 		withJSON)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreatePrimaryIndex()")
@@ -309,9 +309,9 @@ func (gsi *gsiKeyspace) CreateIndex(
 	}
 	defnID, err := gsi.gsiClient.CreateIndex(
 		name,
-		gsi.keyspace,          /*bucket-name*/
-		string(datastore.GSI), /*using*/
-		"N1QL",                /*exprType*/
+		gsi.keyspace,       /*bucket-name*/
+		string(c.ForestDB), /*using, by default always forestdb*/
+		"N1QL",             /*exprType*/
 		partnStr, whereStr, secStrs,
 		false, /*isPrimary*/
 		withJSON)
@@ -418,7 +418,7 @@ type secondaryIndex struct {
 	name      string // name of the index
 	defnID    uint64
 	isPrimary bool
-	using     datastore.IndexType
+	using     c.IndexType
 	partnExpr string
 	secExprs  []string
 	whereExpr string
@@ -443,7 +443,7 @@ func newSecondaryIndexFromMetaData(
 		name:      indexDefn.Name,
 		defnID:    defnID,
 		isPrimary: indexDefn.IsPrimary,
-		using:     datastore.IndexType(indexDefn.Using),
+		using:     indexDefn.Using,
 		partnExpr: indexDefn.PartitionKey,
 		secExprs:  indexDefn.SecExprs,
 		whereExpr: "", // TODO: where-clause.
@@ -471,7 +471,7 @@ func (si *secondaryIndex) Name() string {
 
 // Type implement Index{} interface.
 func (si *secondaryIndex) Type() datastore.IndexType {
-	return si.using
+	return datastore.GSI
 }
 
 // SeekKey implement Index{} interface.
