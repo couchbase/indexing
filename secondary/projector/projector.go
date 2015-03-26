@@ -107,13 +107,19 @@ func (p *Projector) ResetConfig(config c.Config) {
 	p.config = p.config.Override(config)
 
 	// CPU-profiling
-	cpuProfFname := config["projector.cpuProfFname"].String()
-	if config["projector.cpuProfile"].Bool() && p.cpuProfFd == nil {
-		fmsg := "%v cpu profiling => %q\n"
-		logging.Infof(fmsg, p.logPrefix, cpuProfFname)
-		p.cpuProfFd = p.startCPUProfile(cpuProfFname)
+	cpuProfile, ok := config["projector.cpuProfile"]
+	if ok && cpuProfile.Bool() && p.cpuProfFd == nil {
+		cpuProfFname, ok := config["projector.cpuProfFname"]
+		if ok {
+			fname := cpuProfFname.String()
+			logging.Infof("%v cpu profiling => %q\n", p.logPrefix, fname)
+			p.cpuProfFd = p.startCPUProfile(fname)
 
-	} else if config["projector.cpuProfile"].Bool() == false {
+		} else {
+			logging.Errorf("Missing cpu-profile o/p filename\n")
+		}
+
+	} else if ok && !cpuProfile.Bool() {
 		if p.cpuProfFd != nil {
 			pprof.StopCPUProfile()
 			logging.Infof("%v cpu profiling stopped\n", p.logPrefix)
@@ -125,11 +131,16 @@ func (p *Projector) ResetConfig(config c.Config) {
 	}
 
 	// MEM-profiling
-	memProfFname := config["projector.memProfFname"].String()
-	if config["projector.memProfile"].Bool() {
-		if p.takeMEMProfile(memProfFname) {
-			fmsg := "%v mem profile => %q\n"
-			logging.Infof(fmsg, p.logPrefix, memProfFname)
+	memProfile, ok := config["projector.memProfile"]
+	if ok && memProfile.Bool() {
+		memProfFname, ok := config["projector.memProfFname"]
+		if ok {
+			fname := memProfFname.String()
+			if p.takeMEMProfile(fname) {
+				logging.Infof("%v mem profile => %q\n", p.logPrefix, fname)
+			}
+		} else {
+			logging.Errorf("Missing mem-profile o/p filename\n")
 		}
 	}
 }
