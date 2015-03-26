@@ -151,7 +151,7 @@ RETRY:
 
 	if needRefresh && refreshCnt == 0 {
 		logging.Debugf("GsiClient: Indexer Node List is out-of-date.  Require refresh.")
-		b.updateIndexerList()
+		b.updateIndexerList(false)
 		refreshCnt++
 		goto RETRY
 	}
