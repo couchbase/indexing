@@ -12,6 +12,25 @@ import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import projC "github.com/couchbase/indexing/secondary/projector/client"
 import "code.google.com/p/goprotobuf/proto"
 
+// NOTE1:
+// https://github.com/couchbase/indexing/commit/
+//         9a2ea0f0ffaf9f103ace6ffe54e253001b28b9a8
+// above commit mandates that back-channel should be sufficiently large to
+// consume all DCP response for STREAM_REQ posted for 1 or more bucket. Here
+// is the way it plays out,
+//
+//   * once a stream is opened DCP will start batch pushing data for that
+//     stream.
+//   * while data for each stream is pushed to vbucket-routines the control
+//     messages, STREAMREQ & SNAPSHOT, are sent to back-channel.
+//   * by the time the last vbucket is StreamRequested and corresponding
+//     response and snapshot message is back-channeled, there would have
+//     been a lot of data pushed to vbucket-routines.
+//   * data will eventually drained to downstream endpoints and its
+//     connection, but back-channel cannot be blocked until all STREAMREQ
+//     is posted to DCP server. In simple terms,
+//     THIS IS IMPORTANT: NEVER REDUCE THE BACK-CHANNEL SIZE TO < MAXVBUCKETS
+
 // Feed is mutation stream - for maintenance, initial-load, catchup etc...
 type Feed struct {
 	cluster      string // immutable
