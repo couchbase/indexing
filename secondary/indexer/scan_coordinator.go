@@ -30,13 +30,15 @@ import (
 
 // Errors
 var (
-	ErrUnsupportedRequest = errors.New("Unsupported query request")
+	// Error strings for ErrIndexNotFound and ErrIndexNotReady need to be
+	// in sync with errors defined in queryport/n1ql/secondary_index.go
 	ErrIndexNotFound      = errors.New("Index not found")
+	ErrIndexNotReady      = errors.New("Index not ready for serving queries")
 	ErrNotMyIndex         = errors.New("Not my index")
-	ErrIndexNotReady      = errors.New("Index does not exist or has not built")
 	ErrInternal           = errors.New("Internal server error occured")
 	ErrSnapNotAvailable   = errors.New("No snapshot available for scan")
 	ErrScanTimedOut       = errors.New("Index scan timed out")
+	ErrUnsupportedRequest = errors.New("Unsupported query request")
 )
 
 type scanType string

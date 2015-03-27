@@ -27,7 +27,6 @@ import "github.com/couchbase/query/expression/parser"
 import "github.com/couchbase/query/timestamp"
 import "github.com/couchbase/query/value"
 import "github.com/couchbase/query/logging"
-import "github.com/couchbase/indexing/secondary/indexer"
 
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(nil, "gsi.empty")
@@ -38,6 +37,11 @@ var ErrorEmptyHost = errors.NewError(nil, "gsi.emptyHost")
 // ErrorCauseStaleMetadata means client indexes list needs to be
 // refreshed.
 var ErrorCauseStaleMetadata = fmt.Errorf("Stale metadata")
+
+// These error strings need to be in sync with indexer.ErrIndexNotFound
+// and indexer.ErrIndexNotFound.
+var ErrIndexNotFound = fmt.Errorf("Index not found")
+var ErrIndexNotReady = fmt.Errorf("Index not ready for serving queries")
 
 var n1ql2GsiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 	datastore.NEITHER: qclient.Neither,
@@ -668,9 +672,9 @@ func makeResponsehandler(
 
 func isStaleMetaError(err error) bool {
 	switch err.Error() {
-	case indexer.ErrIndexNotFound.Error():
+	case ErrIndexNotFound.Error():
 		fallthrough
-	case indexer.ErrIndexNotReady.Error():
+	case ErrIndexNotReady.Error():
 		return true
 	}
 
