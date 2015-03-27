@@ -18,6 +18,22 @@ import "fmt"
 import "reflect"
 import "errors"
 import "github.com/couchbase/indexing/secondary/logging"
+import "sync/atomic"
+import "unsafe"
+
+// Threadsafe config holder object
+type ConfigHolder struct {
+	ptr unsafe.Pointer
+}
+
+func (h *ConfigHolder) Store(conf Config) {
+	atomic.StorePointer(&h.ptr, unsafe.Pointer(&conf))
+}
+
+func (h *ConfigHolder) Load() Config {
+	confptr := atomic.LoadPointer(&h.ptr)
+	return *(*Config)(confptr)
+}
 
 // Config is a key, value map with key always being a string
 // represents a config-parameter.
@@ -405,13 +421,6 @@ var SystemConfig = Config{
 		"/adminport/",
 		true, // immutable
 	},
-	// indexer configuration
-	"indexer.scanTimeout": ConfigValue{
-		120000,
-		"timeout, in milliseconds, timeout for index scan processing",
-		120000,
-		true, // immutable
-	},
 	"indexer.adminPort": ConfigValue{
 		"9100",
 		"port for index ddl and status operations",
@@ -561,6 +570,12 @@ var SystemConfig = Config{
 		"Indexer override log level.format is [relpath/]filename[:line]=LogLevel[,...] (wildcard * is allowed)",
 		"",
 		false, // mutable
+	},
+	"indexer.settings.scan_timeout": ConfigValue{
+		120000,
+		"timeout, in milliseconds, timeout for index scan processing",
+		120000,
+		true, // immutable
 	},
 	"projector.settings.log_level": ConfigValue{
 		"debug",

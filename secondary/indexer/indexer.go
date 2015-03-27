@@ -466,6 +466,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		<-idx.compactMgrCmdCh
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
+		idx.scanCoordCmdCh <- msg
+		<-idx.scanCoordCmdCh
 
 	case INDEXER_INIT_PREP_RECOVERY:
 		idx.handleInitPrepRecovery(msg)

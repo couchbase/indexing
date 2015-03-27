@@ -296,7 +296,7 @@ type scanCoordinator struct {
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 
-	config common.Config
+	config common.ConfigHolder
 
 	scanStatsMap map[common.IndexInstId]indexScanStats
 }
@@ -314,13 +314,13 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		supvCmdch:    supvCmdch,
 		supvMsgch:    supvMsgch,
 		logPrefix:    "ScanCoordinator",
-		config:       config,
 		scanStatsMap: make(map[common.IndexInstId]indexScanStats),
 	}
 
+	s.config.Store(config)
+
 	addr := net.JoinHostPort("", config["scanPort"].String())
-	// TODO: Move queryport config to indexer.queryport base
-	queryportCfg := common.SystemConfig.SectionConfig("indexer.queryport.", true)
+	queryportCfg := config.SectionConfig("queryport.", true)
 	s.serv, err = queryport.NewServer(addr, s.requestHandler, queryportCfg)
 
 	if err != nil {
@@ -427,6 +427,9 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 	case SCAN_STATS:
 		s.handleStats(cmd)
 
+	case CONFIG_SETTINGS_UPDATE:
+		s.handleConfigUpdate(cmd)
+
 	default:
 		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
 		s.supvCmdch <- &MsgError{
@@ -475,7 +478,8 @@ func (s *scanCoordinator) parseScanParams(
 		checkVector :=
 			cons == common.QueryConsistency || cons == common.SessionConsistency
 		if checkVector && vector != nil {
-			p.ts = common.NewTsVbuuid("", s.config["numVbuckets"].Int())
+			cfg := s.config.Load()
+			p.ts = common.NewTsVbuuid("", cfg["numVbuckets"].Int())
 			for i, vbno := range vector.Vbnos {
 				p.ts.Seqnos[vbno] = vector.Seqnos[i]
 				p.ts.Vbuuids[vbno] = vector.Vbuuids[i]
@@ -546,7 +550,8 @@ func (s *scanCoordinator) requestHandler(
 	}
 
 	scanId := atomic.AddUint64(&s.reqCounter, 1)
-	timeout := time.Millisecond * time.Duration(s.config["scanTimeout"].Int())
+	cfg := s.config.Load()
+	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
 	startTime := time.Now()
 	sd := &scanDescriptor{
 		scanId:    scanId,
@@ -1070,6 +1075,12 @@ func (s *scanCoordinator) handleUpdateIndexPartnMap(cmd Message) {
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	s.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *scanCoordinator) handleConfigUpdate(cmd Message) {
+	cfgUpdate := cmd.(*MsgConfigUpdate)
+	s.config.Store(cfgUpdate.GetConfig())
 	s.supvCmdch <- &MsgSuccess{}
 }
 
