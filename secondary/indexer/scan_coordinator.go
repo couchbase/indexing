@@ -11,7 +11,6 @@ package indexer
 
 import (
 	"code.google.com/p/goprotobuf/proto"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
@@ -61,14 +60,6 @@ type scanDescriptor struct {
 	respch chan interface{}
 }
 
-func (sd *scanDescriptor) ParseIndexInstance(indexInst *common.IndexInst) {
-	sd.isPrimary = indexInst.Defn.IsPrimary
-	sd.p.indexName, sd.p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
-	if sd.p.ts != nil {
-		sd.p.ts.Bucket = sd.p.bucket
-	}
-}
-
 func (sd scanDescriptor) String() string {
 	var incl, span string
 
@@ -85,15 +76,14 @@ func (sd scanDescriptor) String() string {
 
 	if len(sd.p.keys) == 0 {
 		if sd.p.scanType == queryStats || sd.p.scanType == queryScan {
-			span = fmt.Sprintf("range (%s,%s %s)", string(sd.p.low.Raw()),
-				string(sd.p.high.Raw()), incl)
+			span = fmt.Sprintf("range (%s,%s %s)", sd.p.low, sd.p.high, incl)
 		} else {
 			span = "all"
 		}
 	} else {
 		span = "keys ( "
 		for _, k := range sd.p.keys {
-			span = span + string(k.Raw()) + " "
+			span = span + k.String() + " "
 		}
 		span = span + ")"
 	}
@@ -112,23 +102,35 @@ func (sd scanDescriptor) String() string {
 	return str
 }
 
+type indexRow struct {
+	k     []byte
+	docid []byte
+}
+
+func (r *indexRow) Size() int {
+	return len(r.k) + len(r.docid)
+}
+
 type scanParams struct {
-	scanType  scanType
-	defnID    uint64
-	indexName string
-	bucket    string
-	ts        *common.TsVbuuid
-	low       Key
-	high      Key
-	keys      []Key
-	partnKey  []byte
-	incl      Inclusion
-	limit     int64
-	pageSize  int64
+	scanType            scanType
+	defnID              uint64
+	indexName           string
+	bucket              string
+	ts                  *common.TsVbuuid
+	low                 IndexKey
+	high                IndexKey
+	keys                []IndexKey
+	lowbytes, highbytes []byte
+	keysbytes           [][]byte
+	partnKey            []byte
+	incl                Inclusion
+	limit               int64
+	pageSize            int64
+	isPrimary           bool
 }
 
 type statsResponse struct {
-	min, max Key
+	min, max []byte
 	unique   uint64
 	count    uint64
 }
@@ -144,7 +146,7 @@ type countResponse struct {
 // - To perform graceful termination of stream scanning
 type scanStreamReader struct {
 	sd        *scanDescriptor
-	keysBuf   *[]Key
+	rowsBuf   *[]*indexRow
 	bufSize   int64
 	count     int64
 	bytesRead int64
@@ -154,14 +156,14 @@ type scanStreamReader struct {
 func newResponseReader(sd *scanDescriptor) *scanStreamReader {
 	r := new(scanStreamReader)
 	r.sd = sd
-	r.keysBuf = new([]Key)
+	r.rowsBuf = new([]*indexRow)
 	r.hasNext = true
 	r.bufSize = 0
 	return r
 }
 
 // Read a chunk of keys from scan results with a maximum batch size equals page size
-func (r *scanStreamReader) ReadKeyBatch() (keys *[]Key, done bool, err error) {
+func (r *scanStreamReader) ReadRowBatch() (rows *[]*indexRow, done bool, err error) {
 	var resp interface{}
 	done = false
 
@@ -176,28 +178,40 @@ loop:
 		}
 		if r.hasNext {
 			switch resp.(type) {
-			case Key:
+			case IndexEntry:
 				// Limit constraint
 				if r.sd.p.limit > 0 && r.sd.p.limit == r.count {
 					r.Done()
 					break loop
 				}
 
-				k := resp.(Key)
-				sz := int64(len(k.Raw()))
+				entry := resp.(IndexEntry)
+				buf := make([]byte, 0, MAX_SEC_KEY_LEN+MAX_DOCID_LEN)
+				sk, encErr := entry.ReadSecKey(buf)
+				buf = sk[len(sk):]
+				common.CrashOnError(encErr)
+				docid, encErr := entry.ReadDocId(buf)
+				common.CrashOnError(encErr)
+
+				row := &indexRow{
+					k:     sk,
+					docid: docid,
+				}
+
+				sz := int64(row.Size())
 				r.bytesRead += sz
 				// Page size constraint
 				if r.bufSize > 0 && r.bufSize+sz > r.sd.p.pageSize {
-					keys = r.keysBuf
+					rows = r.rowsBuf
 					r.bufSize = sz
-					r.keysBuf = new([]Key)
-					*r.keysBuf = append(*r.keysBuf, k)
+					r.rowsBuf = new([]*indexRow)
+					*r.rowsBuf = append(*r.rowsBuf, row)
 					r.count++
 					return
 				}
 
 				r.bufSize += sz
-				*r.keysBuf = append(*r.keysBuf, k)
+				*r.rowsBuf = append(*r.rowsBuf, row)
 				r.count++
 			case error:
 				err = resp.(error)
@@ -208,12 +222,12 @@ loop:
 	}
 
 	// No more item left to be read from buffer
-	if len(*r.keysBuf) == 0 {
+	if len(*r.rowsBuf) == 0 {
 		done = true
 	}
 
-	keys = r.keysBuf
-	r.keysBuf = new([]Key)
+	rows = r.rowsBuf
+	r.rowsBuf = new([]*indexRow)
 
 	return
 }
@@ -442,33 +456,49 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 
 // Parse scan params from queryport request
 func (s *scanCoordinator) parseScanParams(
-	req interface{}) (p *scanParams, err error) {
+	req interface{}) (indexInst *common.IndexInst, p *scanParams, err error) {
 
 	p = new(scanParams)
 	p.partnKey = []byte("default")
 
+	NewKey := func(k []byte) (IndexKey, error) {
+		if p.isPrimary {
+			return NewPrimaryKey(k)
+		} else {
+			return NewSecondaryKey(k)
+		}
+	}
+
 	fillRanges := func(low, high []byte, keys [][]byte) error {
 		var err error
-		var key Key
+		var key IndexKey
 
 		// range
-		if p.low, err = NewKey(low); err != nil {
-			msg := fmt.Sprintf("Invalid low key %s (%s)", string(low), err.Error())
-			return errors.New(msg)
-		}
+		p.lowbytes = low
+		p.highbytes = high
 
-		if p.high, err = NewKey(high); err != nil {
-			msg := fmt.Sprintf("Invalid high key %s (%s)", string(high), err.Error())
-			return errors.New(msg)
+		if err == nil {
+			if p.low, err = NewKey(low); err != nil {
+				msg := fmt.Sprintf("Invalid low key %s (%s)", string(low), err.Error())
+				return errors.New(msg)
+			}
+
+			if p.high, err = NewKey(high); err != nil {
+				msg := fmt.Sprintf("Invalid high key %s (%s)", string(high), err.Error())
+				return errors.New(msg)
+			}
 		}
 
 		// point query for keys
 		for _, k := range keys {
-			if key, err = NewKey(k); err != nil {
-				msg := fmt.Sprintf("Invalid equal key %s (%s)", string(k), err.Error())
-				return errors.New(msg)
+			p.keysbytes = append(p.keysbytes, k)
+			if err == nil {
+				if key, err = NewKey(k); err != nil {
+					msg := fmt.Sprintf("Invalid equal key %s (%s)", string(k), err.Error())
+					return errors.New(msg)
+				}
+				p.keys = append(p.keys, key)
 			}
-			p.keys = append(p.keys, key)
 		}
 
 		return nil
@@ -487,27 +517,46 @@ func (s *scanCoordinator) parseScanParams(
 		}
 	}
 
+	setIndexParams := func() {
+		indexInst, err = s.findIndexInstance(p.defnID)
+		if err == nil {
+			p.isPrimary = indexInst.Defn.IsPrimary
+			p.indexName, p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
+			if p.ts != nil {
+				p.ts.Bucket = p.bucket
+			}
+		}
+	}
+
 	switch r := req.(type) {
 	case *protobuf.StatisticsRequest:
+		p.defnID = r.GetDefnID()
+		setIndexParams()
 		p.scanType = queryStats
 		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
 		err = fillRanges(
 			r.GetSpan().GetRange().GetLow(),
 			r.GetSpan().GetRange().GetHigh(),
 			r.GetSpan().GetEquals())
-		p.defnID = r.GetDefnID()
 	case *protobuf.CountRequest:
+		p.defnID = r.GetDefnID()
+		cons := common.Consistency(r.GetCons())
+		vector := r.GetVector()
+		setConsistency(cons, vector)
+		setIndexParams()
 		p.scanType = queryCount
 		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
-		p.defnID = r.GetDefnID()
 		err = fillRanges(
 			r.GetSpan().GetRange().GetLow(),
 			r.GetSpan().GetRange().GetHigh(),
 			r.GetSpan().GetEquals())
+
+	case *protobuf.ScanRequest:
+		p.defnID = r.GetDefnID()
 		cons := common.Consistency(r.GetCons())
 		vector := r.GetVector()
 		setConsistency(cons, vector)
-	case *protobuf.ScanRequest:
+		setIndexParams()
 		p.scanType = queryScan
 		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
 		err = fillRanges(
@@ -515,19 +564,16 @@ func (s *scanCoordinator) parseScanParams(
 			r.GetSpan().GetRange().GetHigh(),
 			r.GetSpan().GetEquals())
 		p.limit = r.GetLimit()
-		p.defnID = r.GetDefnID()
 		p.pageSize = r.GetPageSize()
+	case *protobuf.ScanAllRequest:
+		p.defnID = r.GetDefnID()
 		cons := common.Consistency(r.GetCons())
 		vector := r.GetVector()
 		setConsistency(cons, vector)
-	case *protobuf.ScanAllRequest:
+		setIndexParams()
 		p.scanType = queryScanAll
 		p.limit = r.GetLimit()
-		p.defnID = r.GetDefnID()
 		p.pageSize = r.GetPageSize()
-		cons := common.Consistency(r.GetCons())
-		vector := r.GetVector()
-		setConsistency(cons, vector)
 	default:
 		err = ErrUnsupportedRequest
 	}
@@ -541,9 +587,7 @@ func (s *scanCoordinator) requestHandler(
 	respch chan<- interface{},
 	quitch <-chan interface{}) {
 
-	var indexInst *common.IndexInst
-
-	p, err := s.parseScanParams(req)
+	indexInst, p, err := s.parseScanParams(req)
 	if err == ErrUnsupportedRequest {
 		// TODO: Add error response for invalid queryport reqs
 		panic(err)
@@ -559,12 +603,6 @@ func (s *scanCoordinator) requestHandler(
 		stopch:    make(StopChannel),
 		respch:    make(chan interface{}),
 		timeoutch: time.After(timeout),
-	}
-
-	if err == nil {
-		if indexInst, err = s.findIndexInstance(p.defnID); err == nil {
-			sd.ParseIndexInstance(indexInst)
-		}
 	}
 
 	if err == nil && indexInst.State != common.INDEX_STATE_ACTIVE {
@@ -670,7 +708,7 @@ func (s *scanCoordinator) requestHandler(
 	case queryScan:
 		fallthrough
 	case queryScanAll:
-		var keys *[]Key
+		var rows *[]*indexRow
 		var msg interface{}
 		var done bool
 		var reqquit bool = false
@@ -680,7 +718,7 @@ func (s *scanCoordinator) requestHandler(
 		// Closing respch indicates that we have no more messages to be sent
 	loop:
 		for {
-			keys, done, err = rdr.ReadKeyBatch()
+			rows, done, err = rdr.ReadRowBatch()
 			// We have already finished reading from response stream
 			if done {
 				break loop
@@ -693,7 +731,7 @@ func (s *scanCoordinator) requestHandler(
 				}
 				msg = s.makeResponseMessage(sd, err)
 			} else {
-				msg = s.makeResponseMessage(sd, keys)
+				msg = s.makeResponseMessage(sd, rows)
 			}
 
 			// Send protobuf message response to queryport
@@ -730,50 +768,14 @@ func (s *scanCoordinator) requestHandler(
 	}
 }
 
-func ProtoIndexEntryFromKey(k Key, isPrimary bool) *protobuf.IndexEntry {
-	// TODO: Return error instead of panic
-	var tmp []interface{}
-	var err error
-	var secKeyBytes, pKeyBytes []byte
-
-	kbytes := k.Raw()
-	err = json.Unmarshal(kbytes, &tmp)
-	if err != nil {
-		panic("corruption detected " + string(kbytes) + " " + err.Error())
-	}
-
-	l := len(tmp)
-	if l == 0 || (isPrimary == false && l == 1) {
-		panic("corruption detected")
-	}
-
-	if isPrimary == true {
-		secKeyBytes = []byte{}
-	} else {
-		secKey := tmp[:l-1]
-		secKeyBytes, err = json.Marshal(secKey)
-		if err != nil {
-			panic("corruption detected " + err.Error())
-		}
-	}
-
-	// Primary key should be in raw bytes
-	pKeyBytes = []byte(tmp[l-1].(string))
-	entry := &protobuf.IndexEntry{
-		EntryKey: secKeyBytes, PrimaryKey: pKeyBytes,
-	}
-
-	return entry
-}
-
 // Create a queryport response message
 // Response message can be StreamResponse or StatisticsResponse
 func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
 	payload interface{}) (r interface{}) {
 
-	switch payload.(type) {
+	switch v := payload.(type) {
 	case error:
-		err := payload.(error)
+		err := v
 		protoErr := &protobuf.Error{Error: proto.String(err.Error())}
 		switch sd.p.scanType {
 		case queryStats:
@@ -797,26 +799,28 @@ func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
 				Err: protoErr,
 			}
 		}
-	case *[]Key:
+	case *[]*indexRow:
 		var entries []*protobuf.IndexEntry
-		keys := *payload.(*[]Key)
-		for _, k := range keys {
-			entry := ProtoIndexEntryFromKey(k, sd.isPrimary)
+		rows := v
+		for _, row := range *rows {
+			entry := &protobuf.IndexEntry{
+				EntryKey: row.k, PrimaryKey: row.docid,
+			}
 			entries = append(entries, entry)
 		}
 		r = &protobuf.ResponseStream{IndexEntries: entries}
 	case statsResponse:
-		stats := payload.(statsResponse)
+		stats := v
 		r = &protobuf.StatisticsResponse{
 			Stats: &protobuf.IndexStatistics{
 				KeysCount:       proto.Uint64(stats.count),
 				UniqueKeysCount: proto.Uint64(stats.unique),
-				KeyMin:          stats.min.Raw(),
-				KeyMax:          stats.max.Raw(),
+				KeyMin:          stats.min,
+				KeyMax:          stats.max,
 			},
 		}
 	case countResponse:
-		counts := payload.(countResponse)
+		counts := v
 		r = &protobuf.CountResponse{Count: proto.Int64(counts.count)}
 	}
 	return
@@ -948,7 +952,7 @@ func (s *scanCoordinator) queryStats(sd *scanDescriptor, snap Snapshot, stopch S
 	var totalRows uint64
 	var err error
 
-	if sd.p.low.IsNull() && sd.p.high.IsNull() && sd.p.incl == Both {
+	if sd.p.low.Bytes() == nil && sd.p.high.Bytes() == nil && sd.p.incl == Both {
 		totalRows, err = snap.StatCountTotal()
 	} else {
 		totalRows, err = snap.CountRange(sd.p.low, sd.p.high, sd.p.incl, stopch)
@@ -958,15 +962,14 @@ func (s *scanCoordinator) queryStats(sd *scanDescriptor, snap Snapshot, stopch S
 	if err != nil {
 		sd.respch <- err
 	} else {
-		min, _ := NewKey([]byte("min"))
-		max, _ := NewKey([]byte("max"))
+		min := []byte("min")
+		max := []byte("max")
 		sd.respch <- statsResponse{count: totalRows, min: min, max: max}
 	}
 }
 
 func (s *scanCoordinator) queryCount(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
 	p := sd.p
-	lowkey, highkey := p.low.Encoded(), p.high.Encoded()
 	if p.keys != nil && len(p.keys) > 0 { // handle lookup counts
 		allCounts := uint64(0)
 		for _, key := range p.keys {
@@ -979,7 +982,7 @@ func (s *scanCoordinator) queryCount(sd *scanDescriptor, snap Snapshot, stopch S
 		}
 		sd.respch <- countResponse{count: int64(allCounts)}
 
-	} else if lowkey != nil || highkey != nil { // handle range counts
+	} else if p.low.Bytes() != nil || p.high.Bytes() != nil { // handle range counts
 		count, err := snap.CountRange(p.low, p.high, p.incl, stopch)
 		if err != nil {
 			sd.respch <- err
@@ -1001,34 +1004,35 @@ func (s *scanCoordinator) queryScan(sd *scanDescriptor, snap Snapshot, stopch St
 	if len(sd.p.keys) != 0 {
 		for _, k := range sd.p.keys {
 			ch, cherr, _ := snap.KeyRange(k, k, Both, stopch)
-			s.receiveKeys(sd, ch, cherr)
+			s.receiveEntries(sd, ch, cherr)
 		}
 	} else {
 		ch, cherr, _ := snap.KeyRange(sd.p.low, sd.p.high, sd.p.incl, stopch)
-		s.receiveKeys(sd, ch, cherr)
+		s.receiveEntries(sd, ch, cherr)
 	}
 
 }
 
 func (s *scanCoordinator) queryScanAll(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
 	ch, cherr := snap.KeySet(stopch)
-	s.receiveKeys(sd, ch, cherr)
+	s.receiveEntries(sd, ch, cherr)
 }
 
-// receiveKeys receives results/errors from snapshot reader and forwards it to
+// receiveEntries receives results/errors from snapshot reader and forwards it to
 // the caller till the result channel is closed by the snapshot reader
-func (s *scanCoordinator) receiveKeys(sd *scanDescriptor, chkey chan Key, cherr chan error) {
+func (s *scanCoordinator) receiveEntries(
+	sd *scanDescriptor, chentry chan IndexEntry, cherr chan error) {
 	ok := true
-	var key Key
+	var entry IndexEntry
 	var err error
 
 	for ok {
 		select {
-		case key, ok = <-chkey:
+		case entry, ok = <-chentry:
 			if ok {
-				logging.Tracef("%v: SCAN_ID: %v Received key: %v)",
-					s.logPrefix, sd.scanId, string(key.Raw()))
-				sd.respch <- key
+				logging.Tracef("%v: SCAN_ID: %v Received key: %s)",
+					s.logPrefix, sd.scanId, entry)
+				sd.respch <- entry
 			}
 		case err, _ = <-cherr:
 			if err != nil {

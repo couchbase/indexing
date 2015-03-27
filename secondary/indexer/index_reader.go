@@ -38,7 +38,7 @@ type Counter interface {
 // Exister is a class of algorithms that allow testing if a key exists in the
 // index
 type Exister interface {
-	Exists(key Key, stopch StopChannel) (bool, error)
+	Exists(key IndexKey, stopch StopChannel) (bool, error)
 }
 
 // Looker is a class of algorithms that allow looking up a key in an index.
@@ -47,24 +47,21 @@ type Exister interface {
 //
 type Looker interface {
 	Exister
-	Lookup(key Key, stopch StopChannel) (chan Value, chan error)
-	KeySet(stop StopChannel) (chan Key, chan error)
-	ValueSet(stop StopChannel) (chan Value, chan error)
+	Lookup(key IndexKey, stopch StopChannel) (chan IndexEntry, chan error)
+	KeySet(stop StopChannel) (chan IndexEntry, chan error)
 }
 
 // Ranger is a class of algorithms that can extract a range of keys from the
 // index.
 type Ranger interface {
 	Looker
-	KeyRange(low, high Key, inclusion Inclusion, stopch StopChannel) (
-		chan Key, chan error, SortOrder)
-	ValueRange(low, high Key, inclusion Inclusion, stopch StopChannel) (
-		chan Value, chan error, SortOrder)
+	KeyRange(low, high IndexKey, inclusion Inclusion, stopch StopChannel) (
+		chan IndexEntry, chan error, SortOrder)
 }
 
 // RangeCounter is a class of algorithms that can count a range efficiently
 type RangeCounter interface {
-	CountRange(low Key, high Key, inclusion Inclusion, stopch StopChannel) (
+	CountRange(low, high IndexKey, inclusion Inclusion, stopch StopChannel) (
 		uint64, error)
 }
 

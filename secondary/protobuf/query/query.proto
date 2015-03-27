@@ -100,7 +100,7 @@ message Range {
 }
 
 message IndexEntry {
-    required bytes  entryKey   = 1;
+    optional bytes  entryKey   = 1;
     required bytes  primaryKey = 2;
 }
 

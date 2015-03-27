@@ -511,7 +511,7 @@ func (m *Range) GetInclusion() uint32 {
 }
 
 type IndexEntry struct {
-	EntryKey         []byte `protobuf:"bytes,1,req,name=entryKey" json:"entryKey,omitempty"`
+	EntryKey         []byte `protobuf:"bytes,1,opt,name=entryKey" json:"entryKey,omitempty"`
 	PrimaryKey       []byte `protobuf:"bytes,2,req,name=primaryKey" json:"primaryKey,omitempty"`
 	XXX_unrecognized []byte `json:"-"`
 }

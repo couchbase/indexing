@@ -69,7 +69,8 @@ type secondaryIndexEntry []byte
 
 func NewSecondaryIndexEntry(key []byte, docid []byte) (*secondaryIndexEntry, error) {
 	var err error
-	if bytes.Equal([]byte("[]"), key) {
+
+	if isNilJsonKey(key) {
 		return nil, ErrSecKeyNil
 	}
 
@@ -191,7 +192,7 @@ func (k *primaryKey) String() string {
 type secondaryKey []byte
 
 func NewSecondaryKey(key []byte) (IndexKey, error) {
-	if len(key) == 0 {
+	if isNilJsonKey(key) {
 		return &NilIndexKey{}, nil
 	}
 
@@ -251,4 +252,8 @@ func (k *secondaryKey) String() string {
 	codec := collatejson.NewCodec(16)
 	buf, _ = codec.Decode(*k, buf)
 	return string(buf)
+}
+
+func isNilJsonKey(k []byte) bool {
+	return bytes.Equal([]byte("[]"), k) || len(k) == 0
 }

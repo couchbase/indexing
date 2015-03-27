@@ -25,7 +25,7 @@ type StorageStatistics struct {
 type IndexWriter interface {
 
 	//Persist a key/value pair
-	Insert(key Key, value Value) error
+	Insert(secKey []byte, docid []byte) error
 
 	//Delete a key/value pair by docId
 	Delete(docid []byte) error
