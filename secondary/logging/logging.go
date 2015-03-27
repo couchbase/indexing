@@ -291,7 +291,8 @@ func (log *destination) isEnabled(at LogLevel, skip int) bool {
 
 func (log *destination) printf(at LogLevel, skip int, format string, v ...interface{}) {
 	if log.isEnabled(at, skip+1) {
-		log.target.Printf("["+at.String()+"] "+format, v...)
+		ts := time.Now().Format("2006-01-02T15:04:05.999Z-07:00")
+		log.target.Printf(ts+" ["+at.String()+"] "+format, v...)
 	}
 }
 
@@ -324,13 +325,13 @@ func (_ *emptyClock) End() {
 var SystemLogger destination
 
 func init() {
-	dest := l.New(os.Stdout, "", l.Lmicroseconds)
+	dest := l.New(os.Stdout, "", 0)
 	SystemLogger = destination{baselevel: Info, target: dest, overrides: nil}
 }
 
 // SetLogWriter sets a new default destination
 func SetLogWriter(w io.Writer) {
-	dest := l.New(w, "", l.Lmicroseconds)
+	dest := l.New(w, "", 0)
 	SystemLogger = destination{baselevel: Info, target: dest, overrides: nil}
 }
 
