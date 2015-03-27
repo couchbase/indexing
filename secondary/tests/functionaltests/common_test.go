@@ -132,7 +132,7 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 
 	// evaluate
 	for i := 0; i < options.count; i++ {
-		scope = monster.BuildContext(scope, uint64(options.seed), options.bagdir)
+		scope = monster.BuildContext(scope, uint64(i), options.bagdir)
 		scope["_prodfile"] = prodfile
 		val := evaluate("root", scope, nterms["s"])
 		jsonString := val.(string)
