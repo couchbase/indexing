@@ -461,6 +461,9 @@ func (s *scanCoordinator) parseScanParams(
 	p = new(scanParams)
 	p.partnKey = []byte("default")
 
+	cfg := s.config.Load()
+	p.pageSize = int64(cfg["settings.send_buffer_size"].Int())
+
 	NewKey := func(k []byte) (IndexKey, error) {
 		if p.isPrimary {
 			return NewPrimaryKey(k)
@@ -564,7 +567,6 @@ func (s *scanCoordinator) parseScanParams(
 			r.GetSpan().GetRange().GetHigh(),
 			r.GetSpan().GetEquals())
 		p.limit = r.GetLimit()
-		p.pageSize = r.GetPageSize()
 	case *protobuf.ScanAllRequest:
 		p.defnID = r.GetDefnID()
 		cons := common.Consistency(r.GetCons())
@@ -573,7 +575,6 @@ func (s *scanCoordinator) parseScanParams(
 		setIndexParams()
 		p.scanType = queryScanAll
 		p.limit = r.GetLimit()
-		p.pageSize = r.GetPageSize()
 	default:
 		err = ErrUnsupportedRequest
 	}

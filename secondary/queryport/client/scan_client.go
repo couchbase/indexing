@@ -148,7 +148,6 @@ func (c *gsiScanClient) Lookup(
 		DefnID:   proto.Uint64(defnID),
 		Span:     &protobuf.Span{Equals: equals},
 		Distinct: proto.Bool(distinct),
-		PageSize: proto.Int64(1),
 		Limit:    proto.Int64(limit),
 		Cons:     proto.Uint32(uint32(cons)),
 	}
@@ -210,7 +209,6 @@ func (c *gsiScanClient) Range(
 			},
 		},
 		Distinct: proto.Bool(distinct),
-		PageSize: proto.Int64(1),
 		Limit:    proto.Int64(limit),
 		Cons:     proto.Uint32(uint32(cons)),
 	}
@@ -254,10 +252,9 @@ func (c *gsiScanClient) ScanAll(
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanAllRequest{
-		DefnID:   proto.Uint64(defnID),
-		PageSize: proto.Int64(1),
-		Limit:    proto.Int64(limit),
-		Cons:     proto.Uint32(uint32(cons)),
+		DefnID: proto.Uint64(defnID),
+		Limit:  proto.Int64(limit),
+		Cons:   proto.Uint32(uint32(cons)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(

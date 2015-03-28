@@ -577,6 +577,12 @@ var SystemConfig = Config{
 		120000,
 		true, // immutable
 	},
+	"indexer.settings.send_buffer_size": ConfigValue{
+		1024 * 16,
+		"Buffer size for batching rows during scan result streaming",
+		1024 * 16,
+		true, // immutable
+	},
 	"projector.settings.log_level": ConfigValue{
 		"debug",
 		"Projector logging level",
