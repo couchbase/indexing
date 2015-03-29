@@ -314,15 +314,14 @@ func generateJSON(prodfile string, items int) []string {
 	if err != nil {
 		log.Fatal(err)
 	}
+	seed := uint64(10)
+	root := compile(parsec.NewScanner(text)).(mcommon.Scope)
+	scope := monster.BuildContext(root, seed, bagdir, prodfile)
+	nterms := scope["_nonterminals"].(mcommon.NTForms)
+
 	// compile monster production file.
 	jsons := make([]string, items)
 	for i := 0; i < items; i++ {
-		root := compile(parsec.NewScanner(text))
-		seed := uint64(time.Now().UnixNano())
-		scope := root.(mcommon.Scope)
-		nterms := scope["_nonterminals"].(mcommon.NTForms)
-		scope = monster.BuildContext(scope, seed, bagdir)
-		scope["_prodfile"] = prodfile
 		jsons[i] = evaluate("root", scope, nterms["s"]).(string)
 	}
 	return jsons
@@ -344,7 +343,6 @@ func evaluate(name string, scope mcommon.Scope, forms []*mcommon.Form) interface
 			log.Printf("%v", r)
 		}
 	}()
-	scope = scope.ApplyGlobalForms()
 	return monster.EvalForms(name, scope, forms)
 }
 
