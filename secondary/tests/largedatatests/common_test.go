@@ -65,7 +65,6 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 	options.outfile = "./out.txt"
 	options.bagdir = bagdir
 	options.count = count
-	options.seed = seed
 
 	var err error
 
@@ -74,15 +73,11 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// compile
-	root := compile(parsec.NewScanner(text))
-	scope := root.(common.Scope)
+	scope := compile(parsec.NewScanner(text)).(common.Scope)
+	scope = monster.BuildContext(scope, uint64(seed), bagdir, prodfile)
 	nterms := scope["_nonterminals"].(common.NTForms)
-
 	// evaluate
 	for i := 0; i < options.count; i++ {
-		scope = monster.BuildContext(scope, uint64(i), options.bagdir)
-		scope["_prodfile"] = prodfile
 		val := evaluate("root", scope, nterms["s"])
 		jsonString := val.(string)
 		byt := []byte(jsonString)
@@ -113,6 +108,5 @@ func evaluate(name string, scope common.Scope, forms []*common.Form) interface{}
 			log.Printf("%v", r)
 		}
 	}()
-	scope = scope.ApplyGlobalForms()
 	return monster.EvalForms(name, scope, forms)
 }
