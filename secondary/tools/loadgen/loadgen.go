@@ -134,14 +134,13 @@ func genDocuments(b *couchbase.Bucket, prodfile string, idx, n int) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	root := compile(parsec.NewScanner(text))
-	scope := root.(mcommon.Scope)
+	scope := compile(parsec.NewScanner(text)).(mcommon.Scope)
+	seed, bagdir := uint64(options.seed), options.bagdir
+	scope = monster.BuildContext(scope, seed, bagdir, prodfile)
 	nterms := scope["_nonterminals"].(mcommon.NTForms)
-	seed := uint64(options.seed)
 	// evaluate
 	for i := 0; i < options.count; i++ {
-		scope = monster.BuildContext(scope, seed, options.bagdir)
-		scope["_prodfile"] = prodfile
+		scope = scope.RebuildContext()
 		doc := evaluate("root", scope, nterms["s"]).(string)
 		key := makeKey(prodfile, idx, i+1)
 		err = b.SetRaw(key, options.expiry, []byte(doc))
@@ -170,7 +169,6 @@ func evaluate(name string, scope mcommon.Scope, forms []*mcommon.Form) interface
 			log.Printf("%v", r)
 		}
 	}()
-	scope = scope.ApplyGlobalForms()
 	return monster.EvalForms(name, scope, forms)
 }
 
