@@ -322,6 +322,7 @@ func generateJSON(prodfile string, items int) []string {
 	// compile monster production file.
 	jsons := make([]string, items)
 	for i := 0; i < items; i++ {
+		scope = scope.RebuildContext()
 		jsons[i] = evaluate("root", scope, nterms["s"]).(string)
 	}
 	return jsons
