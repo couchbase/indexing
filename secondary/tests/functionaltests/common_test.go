@@ -132,6 +132,7 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 
 	// evaluate
 	for i := 0; i < options.count; i++ {
+		scope = scope.RebuildContext()
 		val := evaluate("root", scope, nterms["s"])
 		jsonString := val.(string)
 		byt := []byte(jsonString)

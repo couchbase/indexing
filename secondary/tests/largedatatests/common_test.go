@@ -78,6 +78,7 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 	nterms := scope["_nonterminals"].(common.NTForms)
 	// evaluate
 	for i := 0; i < options.count; i++ {
+		scope = scope.RebuildContext()
 		val := evaluate("root", scope, nterms["s"])
 		jsonString := val.(string)
 		byt := []byte(jsonString)
