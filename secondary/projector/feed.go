@@ -774,7 +774,7 @@ func (feed *Feed) shutdownVbuckets(
 		}
 		// only shutdown active-streams.
 		if ok1 && actTs != nil {
-			ts = ts.FilterByVbuckets(c.Vbno32to16(actTs.GetVbnos()))
+			ts = ts.SelectByVbuckets(c.Vbno32to16(actTs.GetVbnos()))
 		}
 		feeder, ok := feed.feeders[bucketn]
 		if !ok {
