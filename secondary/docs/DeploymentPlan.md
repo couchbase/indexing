@@ -16,8 +16,6 @@ WITH `{"nodes": ["node_addr"], "defer_build": true}````
 
 **defer_build** determines if index build is immediate or after an explicit build index command
 
-**Note** Currently due to a bug the **node_addr** needs to have the **indexAdmin** port rather than the ns_server port. This port can be discovered for an Indexer Node from the nodeServices url (e.g.  http://127.0.0.1:9000/pools/default/nodeServices and look up indexAdmin port for the current node). If the indexAdmin port is 9100, the **node_addr** would be "127.0.0.1:9100".
-
 ###Examples of Deployment Plan Usage
 
 ####Setup
