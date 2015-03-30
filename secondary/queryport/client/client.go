@@ -40,6 +40,9 @@ var ErrorIndexNotReady = errors.New("queryport.indexNotReady")
 // ErrorClientUninitialized
 var ErrorClientUninitialized = errors.New("queryport.clientUninitialized")
 
+// ErrorNotImplemented
+var ErrorNotImplemented = errors.New("queryport.notImplemented")
+
 // ResponseHandler shall interpret response packets from server
 // and handle them. If handler is not interested in receiving any
 // more response it shall return false, else it shall continue
@@ -308,22 +311,28 @@ func (c *GsiClient) DropIndex(defnID uint64) error {
 func (c *GsiClient) LookupStatistics(
 	defnID uint64, value common.SecondaryKey) (common.IndexStatistics, error) {
 
-	if c.bridge == nil {
-		return nil, ErrorClientUninitialized
-	}
+	return nil, ErrorNotImplemented
 
-	// check whether the index is present and available.
-	if _, err := c.bridge.IndexState(defnID); err != nil {
-		return nil, err
-	}
+	// FIXME: this API is marked not-implemented because UniqueKeyCount
+	// is not yet available from indexer.
+	// Refer: https://issues.couchbase.com/browse/MB-13375
+	//
+	//if c.bridge == nil {
+	//    return nil, ErrorClientUninitialized
+	//}
 
-	var stats common.IndexStatistics
-	var err error
-	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
-		stats, err = qc.LookupStatistics(targetDefnID, value)
-		return err
-	})
-	return stats, err
+	//// check whether the index is present and available.
+	//if _, err := c.bridge.IndexState(defnID); err != nil {
+	//    return nil, err
+	//}
+
+	//var stats common.IndexStatistics
+	//var err error
+	//err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+	//    stats, err = qc.LookupStatistics(targetDefnID, value)
+	//    return err
+	//})
+	//return stats, err
 }
 
 // RangeStatistics for index range.
@@ -331,21 +340,27 @@ func (c *GsiClient) RangeStatistics(
 	defnID uint64, low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
-	if c.bridge == nil {
-		return nil, ErrorClientUninitialized
-	}
+	return nil, ErrorNotImplemented
 
-	// check whether the index is present and available.
-	if _, err := c.bridge.IndexState(defnID); err != nil {
-		return nil, err
-	}
-	var stats common.IndexStatistics
-	var err error
-	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
-		stats, err = qc.RangeStatistics(targetDefnID, low, high, inclusion)
-		return err
-	})
-	return stats, err
+	// FIXME: this API is marked not-implemented because UniqueKeyCount
+	// is not yet available from indexer.
+	// Refer: https://issues.couchbase.com/browse/MB-13375
+	//
+	//if c.bridge == nil {
+	//    return nil, ErrorClientUninitialized
+	//}
+
+	//// check whether the index is present and available.
+	//if _, err := c.bridge.IndexState(defnID); err != nil {
+	//    return nil, err
+	//}
+	//var stats common.IndexStatistics
+	//var err error
+	//err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+	//    stats, err = qc.RangeStatistics(targetDefnID, low, high, inclusion)
+	//    return err
+	//})
+	//return stats, err
 }
 
 // Lookup scan index between low and high.
