@@ -67,7 +67,8 @@ func (s *fdbSnapshot) KeySet(stopch StopChannel) (chan IndexEntry, chan error) {
 	chentry := make(chan IndexEntry)
 	cherr := make(chan error)
 
-	go s.GetEntriesForKeyRange(nilKey, nilKey, Both, true, chentry, cherr, stopch)
+	prefixCmp := !s.isPrimary()
+	go s.GetEntriesForKeyRange(nilKey, nilKey, Both, prefixCmp, chentry, cherr, stopch)
 	return chentry, cherr
 }
 
@@ -77,7 +78,8 @@ func (s *fdbSnapshot) KeyRange(low, high IndexKey, inclusion Inclusion,
 	chentry := make(chan IndexEntry)
 	cherr := make(chan error)
 
-	go s.GetEntriesForKeyRange(low, high, inclusion, true, chentry, cherr, stopch)
+	prefixCmp := !s.isPrimary()
+	go s.GetEntriesForKeyRange(low, high, inclusion, prefixCmp, chentry, cherr, stopch)
 	return chentry, cherr, Asc
 }
 
@@ -166,7 +168,8 @@ func (s *fdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
 
 	chentry := make(chan IndexEntry)
 	cherr := make(chan error)
-	go s.GetEntriesForKeyRange(low, high, inclusion, true, chentry, cherr, stopch)
+	prefixCmp := !s.isPrimary()
+	go s.GetEntriesForKeyRange(low, high, inclusion, prefixCmp, chentry, cherr, stopch)
 
 	var count uint64
 loop:
@@ -198,6 +201,10 @@ func (s *fdbSnapshot) readEqualKeys(k IndexKey, it *ForestDBIterator, prefixCmp 
 			break
 		}
 	}
+}
+
+func (s *fdbSnapshot) isPrimary() bool {
+	return s.slice.(*fdbSlice).isPrimary
 }
 
 func closeIterator(it *ForestDBIterator) {
