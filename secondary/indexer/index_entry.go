@@ -5,11 +5,26 @@ import (
 	"encoding/binary"
 	"errors"
 	"github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/indexing/secondary/common"
 )
 
 var (
 	ErrSecKeyNil = errors.New("Secondary key array is empty")
 )
+
+var (
+	jsonEncoder *collatejson.Codec
+	encBufPool  *common.BytesBufPool
+)
+
+const (
+	maxIndexEntrySize = MAX_SEC_KEY_BUFFER_LEN + MAX_DOCID_LEN + 2
+)
+
+func init() {
+	jsonEncoder = collatejson.NewCodec(16)
+	encBufPool = common.NewByteBufferPool(maxIndexEntrySize)
+}
 
 // Generic index entry abstraction (primary or secondary)
 // Represents a row in the index
@@ -69,14 +84,15 @@ type secondaryIndexEntry []byte
 
 func NewSecondaryIndexEntry(key []byte, docid []byte) (*secondaryIndexEntry, error) {
 	var err error
+	var buf []byte
 
 	if isNilJsonKey(key) {
 		return nil, ErrSecKeyNil
 	}
 
-	buf := make([]byte, 0, MAX_SEC_KEY_LEN+len(docid)+2)
-	codec := collatejson.NewCodec(16)
-	if buf, err = codec.Encode(key, buf); err != nil {
+	poolBuf := encBufPool.Get()
+	defer encBufPool.Put(poolBuf)
+	if buf, err = jsonEncoder.Encode(key, poolBuf); err != nil {
 		return nil, err
 	}
 
@@ -116,9 +132,8 @@ func (e *secondaryIndexEntry) ReadSecKey(buf []byte) ([]byte, error) {
 	rbuf := []byte(*e)
 	doclen := e.lenDocId()
 
-	codec := collatejson.NewCodec(16)
 	encoded := rbuf[0 : len(rbuf)-doclen-2]
-	if buf, err = codec.Decode(encoded, buf); err != nil {
+	if buf, err = jsonEncoder.Decode(encoded, buf); err != nil {
 		return nil, err
 	}
 
@@ -198,8 +213,7 @@ func NewSecondaryKey(key []byte) (IndexKey, error) {
 
 	var err error
 	buf := make([]byte, 0, MAX_SEC_KEY_LEN)
-	codec := collatejson.NewCodec(16)
-	if buf, err = codec.Encode(key, buf); err != nil {
+	if buf, err = jsonEncoder.Encode(key, buf); err != nil {
 		return nil, err
 	}
 
@@ -249,8 +263,7 @@ func (k *secondaryKey) Bytes() []byte {
 
 func (k *secondaryKey) String() string {
 	buf := make([]byte, 0, MAX_SEC_KEY_LEN)
-	codec := collatejson.NewCodec(16)
-	buf, _ = codec.Decode(*k, buf)
+	buf, _ = jsonEncoder.Decode(*k, buf)
 	return string(buf)
 }
 
