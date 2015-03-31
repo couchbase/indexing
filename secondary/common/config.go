@@ -18,6 +18,22 @@ import "fmt"
 import "reflect"
 import "errors"
 import "github.com/couchbase/indexing/secondary/logging"
+import "sync/atomic"
+import "unsafe"
+
+// Threadsafe config holder object
+type ConfigHolder struct {
+	ptr unsafe.Pointer
+}
+
+func (h *ConfigHolder) Store(conf Config) {
+	atomic.StorePointer(&h.ptr, unsafe.Pointer(&conf))
+}
+
+func (h *ConfigHolder) Load() Config {
+	confptr := atomic.LoadPointer(&h.ptr)
+	return *(*Config)(confptr)
+}
 
 // Config is a key, value map with key always being a string
 // represents a config-parameter.
@@ -87,15 +103,22 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.mutationChanSize": ConfigValue{
-		10000,
+		100,
 		"channel size of projector's vbucket workers, " +
 			"changing this value does not affect existing feeds.",
-		10000,
+		100,
 		false, // mutable
 	},
 	"projector.feedChanSize": ConfigValue{
+		100,
+		"channel size for feed's control path, " +
+			"changing this value does not affect existing feeds.",
+		100,
+		false, // mutable
+	},
+	"projector.backChanSize": ConfigValue{
 		10000,
-		"channel size for feed's control path and its back-channel, " +
+		"channel size of projector feed's back-channel, " +
 			"changing this value does not affect existing feeds.",
 		10000,
 		false, // mutable
@@ -113,6 +136,30 @@ var SystemConfig = Config{
 			"a feed is considered stale when all its endpoint go stale.",
 		5 * 60 * 1000,
 		true, // immutable
+	},
+	"projector.cpuProfFname": ConfigValue{
+		"",
+		"filename to dump cpu-profile for projector.",
+		"",
+		false, // mutable
+	},
+	"projector.cpuProfile": ConfigValue{
+		false,
+		"boolean indicate whether to start or stop projector cpu profiling.",
+		false,
+		false, // mutable
+	},
+	"projector.memProfFname": ConfigValue{
+		"",
+		"filename to dump mem-profile for projector.",
+		"",
+		false, // mutable
+	},
+	"projector.memProfile": ConfigValue{
+		false,
+		"boolean to take current mem profile from projector.",
+		false,
+		false, // mutable
 	},
 	// projector dcp parameters
 	"projector.dcp.genChanSize": ConfigValue{
@@ -176,10 +223,10 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.dataport.keyChanSize": ConfigValue{
-		10000,
+		1000,
 		"channel size of dataport endpoints data input, " +
 			"does not affect existing feeds.",
-		10000,
+		1000,
 		true, // immutable
 	},
 	"projector.dataport.bufferSize": ConfigValue{
@@ -374,13 +421,6 @@ var SystemConfig = Config{
 		"/adminport/",
 		true, // immutable
 	},
-	// indexer configuration
-	"indexer.scanTimeout": ConfigValue{
-		120000,
-		"timeout, in milliseconds, timeout for index scan processing",
-		120000,
-		true, // immutable
-	},
 	"indexer.adminPort": ConfigValue{
 		"9100",
 		"port for index ddl and status operations",
@@ -530,6 +570,12 @@ var SystemConfig = Config{
 		"Indexer override log level.format is [relpath/]filename[:line]=LogLevel[,...] (wildcard * is allowed)",
 		"",
 		false, // mutable
+	},
+	"indexer.settings.scan_timeout": ConfigValue{
+		120000,
+		"timeout, in milliseconds, timeout for index scan processing",
+		120000,
+		true, // immutable
 	},
 	"projector.settings.log_level": ConfigValue{
 		"debug",

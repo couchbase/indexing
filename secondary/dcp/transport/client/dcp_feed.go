@@ -545,14 +545,14 @@ func (feed *DcpFeed) handleStreamRequest(
 
 	prefix := feed.logPrefix
 	switch {
-	case res.Status == transport.ROLLBACK && len(res.Extras) != 8:
+	case res.Status == transport.ROLLBACK && len(res.Body) != 8:
 		event.Status, event.Seqno = res.Status, 0
 		fmsg := "%v ##%x STREAMREQ(%v) invalid rollback: %v\n"
-		logging.Errorf(fmsg, prefix, stream.AppOpaque, vb, res.Extras)
+		logging.Errorf(fmsg, prefix, stream.AppOpaque, vb, res.Body)
 		delete(feed.vbstreams, vb)
 
 	case res.Status == transport.ROLLBACK:
-		rollback := binary.BigEndian.Uint64(res.Extras)
+		rollback := binary.BigEndian.Uint64(res.Body)
 		event.Status, event.Seqno = res.Status, rollback
 		fmsg := "%v ##%x STREAMREQ(%v) with rollback %d\n"
 		logging.Warnf(fmsg, prefix, stream.AppOpaque, vb, rollback)

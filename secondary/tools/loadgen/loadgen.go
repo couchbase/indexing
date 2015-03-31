@@ -8,6 +8,7 @@ package main
 import "flag"
 import "fmt"
 import "io/ioutil"
+import "path/filepath"
 import "log"
 import "net/url"
 import "os"
@@ -15,12 +16,16 @@ import "strings"
 import "time"
 
 import "github.com/couchbase/indexing/secondary/dcp"
+import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/logging"
 import parsec "github.com/prataprc/goparsec"
 import "github.com/prataprc/monster"
 import mcommon "github.com/prataprc/monster/common"
+import "github.com/couchbase/cbauth"
 
 var options struct {
-	seed     int      // seed for monster tool
+	seed     int // seed for monster tool
+	auth     string
 	buckets  []string // buckets to populate
 	prods    []string
 	bagdir   string
@@ -37,6 +42,8 @@ func argParse() string {
 	seed := time.Now().UTC().Second()
 	flag.IntVar(&options.seed, "seed", seed,
 		"seed for monster tool")
+	flag.StringVar(&options.auth, "auth", "",
+		"Auth user and password")
 	flag.StringVar(&buckets, "buckets", "default",
 		"comma separated list of buckets")
 	flag.StringVar(&prods, "prods", "users.prod",
@@ -82,6 +89,14 @@ func main() {
 		cluster = "http://" + cluster
 	}
 
+	// setup cbauth
+	if options.auth != "" {
+		up := strings.Split(options.auth, ":")
+		if _, err := cbauth.InternalRetryDefaultInit(cluster, up[0], up[1]); err != nil {
+			logging.Fatalf("Failed to initialize cbauth: %s", err)
+		}
+	}
+
 	n := 0
 	for i, bucket := range options.buckets {
 		prodfile := options.prods[i]
@@ -119,15 +134,15 @@ func genDocuments(b *couchbase.Bucket, prodfile string, idx, n int) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	root := compile(parsec.NewScanner(text))
-	scope := root.(mcommon.Scope)
+	scope := compile(parsec.NewScanner(text)).(mcommon.Scope)
+	seed, bagdir := uint64(options.seed), options.bagdir
+	scope = monster.BuildContext(scope, seed, bagdir, prodfile)
 	nterms := scope["_nonterminals"].(mcommon.NTForms)
-	scope = monster.BuildContext(scope, uint64(options.seed), options.bagdir)
-	scope["_prodfile"] = prodfile
 	// evaluate
 	for i := 0; i < options.count; i++ {
+		scope = scope.RebuildContext()
 		doc := evaluate("root", scope, nterms["s"]).(string)
-		key := fmt.Sprintf("%s-%v-%v", b.Name, idx, i+1)
+		key := makeKey(prodfile, idx, i+1)
 		err = b.SetRaw(key, options.expiry, []byte(doc))
 		if err != nil {
 			fmt.Printf("%T %v\n", err, err)
@@ -154,7 +169,6 @@ func evaluate(name string, scope mcommon.Scope, forms []*mcommon.Form) interface
 			log.Printf("%v", r)
 		}
 	}()
-	scope = scope.ApplyGlobalForms()
 	return monster.EvalForms(name, scope, forms)
 }
 
@@ -162,4 +176,10 @@ func mf(err error, msg string) {
 	if err != nil {
 		log.Fatalf("%v: %v", msg, err)
 	}
+}
+
+func makeKey(prodfile string, idx, i int) string {
+	fname := filepath.Base(prodfile)
+	uuid, _ := c.NewUUID()
+	return fmt.Sprintf("%s-%s-%v-%v", fname, uuid.Str(), idx, i+1)
 }

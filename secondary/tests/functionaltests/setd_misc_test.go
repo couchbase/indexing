@@ -28,6 +28,9 @@ func TestBucketDefaultDelete(t *testing.T) {
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 	kvutility.CreateBucket("default", "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11212")
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+
+	tc.ClearMap(docs)
+	tc.ClearMap(mut_docs)
 	docs = datautility.LoadJSONFromCompressedFile(dataFilePath, "docid")
 	mut_docs = datautility.LoadJSONFromCompressedFile(mutationFilePath, "docid")
 	log.Printf("Populating the default bucket")
@@ -330,7 +333,7 @@ func TestUpdateMutations_AddField(t *testing.T) {
 
 	seed++
 	log.Printf("Setting JSON docs in KV")
-	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
@@ -365,7 +368,7 @@ func TestUpdateMutations_DataTypeChange(t *testing.T) {
 
 	seed++
 	log.Printf("Setting JSON docs in KV")
-	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
+	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
 	time.Sleep(2 * time.Second)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
@@ -464,6 +467,9 @@ func TestMultipleBuckets(t *testing.T) {
 	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+
+	tc.ClearMap(docs)
+	UpdateKVDocs(bucketDocs[0], docs)
 }
 
 func TestBucketFlush(t *testing.T) {
@@ -502,6 +508,8 @@ func TestBucketFlush(t *testing.T) {
 			FailTestIfError(e, "Error in TestBucketFlush", t)
 		}
 	}
+
+	tc.ClearMap(docs)
 }
 
 func TestSaslBucket(t *testing.T) {
@@ -619,11 +627,22 @@ func randString(n int) string {
 	return string(b)
 }
 
+func randSpecialString(n int) string {
+	chars := []rune("0123vwxyz€ƒ†Š™š£§©®¶µß,#")
+	rand.Seed(time.Now().UnixNano())
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = chars[rand.Intn(len(chars))]
+	}
+	return string(b)
+}
+
 func random_char() string {
 	chars := []rune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 	return string(chars[rand.Intn(len(chars))])
 }
 
+// Copy newDocs to docs
 func UpdateKVDocs(newDocs, docs tc.KeyValues) {
 	for k, v := range newDocs {
 		docs[k] = v

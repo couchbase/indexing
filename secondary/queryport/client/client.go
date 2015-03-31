@@ -40,6 +40,9 @@ var ErrorIndexNotReady = errors.New("queryport.indexNotReady")
 // ErrorClientUninitialized
 var ErrorClientUninitialized = errors.New("queryport.clientUninitialized")
 
+// ErrorNotImplemented
+var ErrorNotImplemented = errors.New("queryport.notImplemented")
+
 // ResponseHandler shall interpret response packets from server
 // and handle them. If handler is not interested in receiving any
 // more response it shall return false, else it shall continue
@@ -77,6 +80,11 @@ const (
 
 // BridgeAccessor for Create,Drop,List,Refresh operations.
 type BridgeAccessor interface {
+	// Synchronously update current server metadata to the client
+	// A Refresh call followed by a Sync() ensures that client is
+	// up to date wrt the server.
+	Sync() error
+
 	// Refresh shall refresh to latest set of index managed by GSI
 	// cluster, cache it locally and return the list of index.
 	Refresh() ([]*mclient.IndexMetadata, error)
@@ -176,10 +184,14 @@ type GsiAccessor interface {
 		callb ResponseHandler) error
 
 	// CountLookup of all entries in index.
-	CountLookup(defnID uint64) (int64, error)
+	CountLookup(
+		defnID uint64,
+		cons common.Consistency, vector *TsConsistency) (int64, error)
 
 	// CountRange of all entries in index.
-	CountRange(defnID uint64) (int64, error)
+	CountRange(
+		defnID uint64,
+		cons common.Consistency, vector *TsConsistency) (int64, error)
 }
 
 var useMetadataProvider = true
@@ -218,6 +230,14 @@ func (c *GsiClient) IndexState(defnID uint64) (common.IndexState, error) {
 		return common.INDEX_STATE_ERROR, ErrorClientUninitialized
 	}
 	return c.bridge.IndexState(defnID)
+}
+
+// Sync implements BridgeAccessor{} interface.
+func (c *GsiClient) Sync() error {
+	if c.bridge == nil {
+		return ErrorClientUninitialized
+	}
+	return c.bridge.Sync()
 }
 
 // Refresh implements BridgeAccessor{} interface.
@@ -291,22 +311,28 @@ func (c *GsiClient) DropIndex(defnID uint64) error {
 func (c *GsiClient) LookupStatistics(
 	defnID uint64, value common.SecondaryKey) (common.IndexStatistics, error) {
 
-	if c.bridge == nil {
-		return nil, ErrorClientUninitialized
-	}
+	return nil, ErrorNotImplemented
 
-	// check whether the index is present and available.
-	if _, err := c.bridge.IndexState(defnID); err != nil {
-		return nil, err
-	}
+	// FIXME: this API is marked not-implemented because UniqueKeyCount
+	// is not yet available from indexer.
+	// Refer: https://issues.couchbase.com/browse/MB-13375
+	//
+	//if c.bridge == nil {
+	//    return nil, ErrorClientUninitialized
+	//}
 
-	var stats common.IndexStatistics
-	var err error
-	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
-		stats, err = qc.LookupStatistics(targetDefnID, value)
-		return err
-	})
-	return stats, err
+	//// check whether the index is present and available.
+	//if _, err := c.bridge.IndexState(defnID); err != nil {
+	//    return nil, err
+	//}
+
+	//var stats common.IndexStatistics
+	//var err error
+	//err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+	//    stats, err = qc.LookupStatistics(targetDefnID, value)
+	//    return err
+	//})
+	//return stats, err
 }
 
 // RangeStatistics for index range.
@@ -314,21 +340,27 @@ func (c *GsiClient) RangeStatistics(
 	defnID uint64, low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
-	if c.bridge == nil {
-		return nil, ErrorClientUninitialized
-	}
+	return nil, ErrorNotImplemented
 
-	// check whether the index is present and available.
-	if _, err := c.bridge.IndexState(defnID); err != nil {
-		return nil, err
-	}
-	var stats common.IndexStatistics
-	var err error
-	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
-		stats, err = qc.RangeStatistics(targetDefnID, low, high, inclusion)
-		return err
-	})
-	return stats, err
+	// FIXME: this API is marked not-implemented because UniqueKeyCount
+	// is not yet available from indexer.
+	// Refer: https://issues.couchbase.com/browse/MB-13375
+	//
+	//if c.bridge == nil {
+	//    return nil, ErrorClientUninitialized
+	//}
+
+	//// check whether the index is present and available.
+	//if _, err := c.bridge.IndexState(defnID); err != nil {
+	//    return nil, err
+	//}
+	//var stats common.IndexStatistics
+	//var err error
+	//err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+	//    stats, err = qc.RangeStatistics(targetDefnID, low, high, inclusion)
+	//    return err
+	//})
+	//return stats, err
 }
 
 // Lookup scan index between low and high.
@@ -423,7 +455,8 @@ func (c *GsiClient) ScanAll(
 
 // CountLookup to count number entries for given set of keys.
 func (c *GsiClient) CountLookup(
-	defnID uint64, values []common.SecondaryKey) (count int64, err error) {
+	defnID uint64, values []common.SecondaryKey,
+	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
 	if c.bridge == nil {
 		return count, ErrorClientUninitialized
@@ -433,8 +466,15 @@ func (c *GsiClient) CountLookup(
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		return 0, err
 	}
+
 	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
-		count, err = qc.CountLookup(targetDefnID, values)
+		index := c.bridge.GetIndexDefn(targetDefnID)
+		if cons == common.SessionConsistency && vector == nil {
+			if vector, err = c.BucketTs(index.Bucket); err != nil {
+				return err
+			}
+		}
+		count, err = qc.CountLookup(targetDefnID, values, cons, vector)
 		return err
 	})
 	return count, err
@@ -444,7 +484,8 @@ func (c *GsiClient) CountLookup(
 func (c *GsiClient) CountRange(
 	defnID uint64,
 	low, high common.SecondaryKey,
-	inclusion Inclusion) (count int64, err error) {
+	inclusion Inclusion,
+	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
 	if c.bridge == nil {
 		return count, ErrorClientUninitialized
@@ -455,7 +496,13 @@ func (c *GsiClient) CountRange(
 		return 0, err
 	}
 	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
-		count, err = qc.CountRange(targetDefnID, low, high, inclusion)
+		index := c.bridge.GetIndexDefn(targetDefnID)
+		if cons == common.SessionConsistency && vector == nil {
+			if vector, err = c.BucketTs(index.Bucket); err != nil {
+				return err
+			}
+		}
+		count, err = qc.CountRange(targetDefnID, low, high, inclusion, cons, vector)
 		return err
 	})
 	return count, err

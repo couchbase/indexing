@@ -23,6 +23,18 @@ var (
 
 //Counter interface
 func (s *fdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
+
+	var nilKey Key
+	var err error
+	if nilKey, err = NewKeyFromEncodedBytes(nil); err != nil {
+		return 0, err
+	}
+
+	return s.CountRange(nilKey, nilKey, Both, stopch)
+}
+
+// Approximate items count
+func (s *fdbSnapshot) StatCountTotal() (uint64, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 

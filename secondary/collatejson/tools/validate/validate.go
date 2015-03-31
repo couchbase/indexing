@@ -1,38 +1,28 @@
 //  Copyright (c) 2013 Couchbase, Inc.
-//  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
-//  except in compliance with the License. You may obtain a copy of the License at
-//    http://www.apache.org/licenses/LICENSE-2.0
-//  Unless required by applicable law or agreed to in writing, software distributed under the
-//  License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
-//  either express or implied. See the License for the specific language governing permissions
-//  and limitations under the License.
 
 package main
 
-import (
-	"encoding/json"
-	"flag"
-	"fmt"
-	"log"
-	"math/rand"
-	"sort"
-	"strconv"
-	"time"
-	//"reflect"
-	"io/ioutil"
-	"path"
-	"runtime"
+import "encoding/json"
+import "flag"
+import "fmt"
+import "log"
+import "math/rand"
+import "sort"
+import "strconv"
+import "time"
+import "io/ioutil"
+import "path"
+import "runtime"
 
-	qv "github.com/couchbase/query/value"
-	"github.com/prataprc/collatejson"
-	"github.com/prataprc/goparsec"
-	"github.com/prataprc/monster"
-	mcommon "github.com/prataprc/monster/common"
-)
+import qv "github.com/couchbase/query/value"
+import "github.com/prataprc/collatejson"
+import "github.com/prataprc/goparsec"
+import "github.com/prataprc/monster"
+import mcommon "github.com/prataprc/monster/common"
 
 var options struct {
 	count   int
-	n       int
+	items   int
 	integer bool
 	float   bool
 	sd      bool
@@ -42,8 +32,8 @@ var options struct {
 }
 
 func argParse() []string {
-	flag.IntVar(&options.n, "m", 1, "number of validations")
-	flag.IntVar(&options.count, "n", 1, "number elements to use for validation")
+	flag.IntVar(&options.count, "count", 1, "number of validations")
+	flag.IntVar(&options.items, "items", 1, "number elements to use for validation")
 	flag.BoolVar(&options.integer, "i", false, "validate integer codec")
 	flag.BoolVar(&options.sd, "sd", false, "validate small-decimal codec")
 	flag.BoolVar(&options.ld, "ld", false, "validate large-decimal codec")
@@ -74,7 +64,7 @@ func main() {
 }
 
 func runValidations(fn func()) {
-	for i := 0; i < options.n; i++ {
+	for i := 0; i < options.count; i++ {
 		fn()
 	}
 }
@@ -82,25 +72,33 @@ func runValidations(fn func()) {
 func validateInteger() {
 	fmt.Println("Validating Integers")
 	fmt.Println("-------------------")
-	ints := generateInteger(options.count)
-	bints := make([][]byte, 0, options.count)
+	ints := generateInteger(options.items)
+	bints := make([][]byte, 0, options.items)
+	jints := make([]string, 0, options.items)
 	for _, x := range ints {
 		y := collatejson.EncodeInt([]byte(strconv.Itoa(x)), make([]byte, 0, 64))
 		bints = append(bints, y)
+		js, err := json.Marshal(x)
+		if err != nil {
+			log.Fatal(err)
+		}
+		jints = append(jints, string(js))
 	}
-
-	fmt.Printf("standard sort took %v for %v items\n",
-		timeIt(func() { sort.IntSlice(ints).Sort() }), options.count)
+	raw := &jsonList{vals: jints, compares: 0}
+	ts := timeIt(func() { sort.Sort(raw) })
+	fmt.Printf("standard sort took %v for %v items (%v compares)\n",
+		ts, options.items, raw.compares)
 	fmt.Printf("collatejson sort took %v for %v items\n",
-		timeIt(func() { sort.Sort(collatejson.ByteSlices(bints)) }), options.count)
+		timeIt(func() { sort.Sort(collatejson.ByteSlices(bints)) }), options.items)
 
+	sort.IntSlice(ints).Sort()
 	for i, x := range ints {
 		_, y := collatejson.DecodeInt(bints[i], make([]byte, 0, 64))
 		z, err := strconv.Atoi(string(y))
 		if err != nil {
-			log.Fatalf(err.Error())
+			log.Fatal(err)
 		} else if x != z {
-			log.Fatalf("failed validateInteger() on, %v == %v", x, y)
+			log.Fatalf("failed validateInteger() on, %v == %q", x, string(y))
 		}
 	}
 	fmt.Println()
@@ -109,24 +107,33 @@ func validateInteger() {
 func validateSD() {
 	fmt.Println("Validating -1 < small-decimal < 1")
 	fmt.Println("---------------------------------")
-	sds := generateSD(options.count)
-	bfloats := make([][]byte, 0, options.count)
+	sds := generateSD(options.items)
+	bfloats := make([][]byte, 0, options.items)
+	jfloats := make([]string, 0, options.items)
 	for _, sd := range sds {
 		s := strconv.FormatFloat(sd, 'f', -1, 64)
 		y := collatejson.EncodeSD([]byte(s), make([]byte, 0, 64))
 		bfloats = append(bfloats, y)
+		js, err := json.Marshal(sd)
+		if err != nil {
+			log.Fatal(err)
+		}
+		jfloats = append(jfloats, string(js))
 	}
 
-	fmt.Printf("standard sort took %v for %v items\n",
-		timeIt(func() { sort.Float64Slice(sds).Sort() }), options.count)
+	raw := &jsonList{vals: jfloats, compares: 0}
+	ts := timeIt(func() { sort.Sort(raw) })
+	fmt.Printf("standard sort took %v for %v items (%v compares)\n",
+		ts, options.items, raw.compares)
 	fmt.Printf("collatejson sort took %v for %v items\n",
-		timeIt(func() { sort.Sort(collatejson.ByteSlices(bfloats)) }), options.count)
+		timeIt(func() { sort.Sort(collatejson.ByteSlices(bfloats)) }), options.items)
 
+	sort.Float64Slice(sds).Sort()
 	for i, sd := range sds {
 		y := collatejson.DecodeSD(bfloats[i], make([]byte, 0, 64))
 		z, err := strconv.ParseFloat(string(y), 64)
 		if err != nil {
-			log.Fatalf(err.Error())
+			log.Fatal(err)
 		} else if sd != z {
 			log.Fatalf("failed validateSD() on, %v == %v", sd, y)
 		}
@@ -137,24 +144,33 @@ func validateSD() {
 func validateLD() {
 	fmt.Println("Validating Large decimals")
 	fmt.Println("-------------------------")
-	floats := generateLD(options.count)
-	bfloats := make([][]byte, 0, options.count)
+	floats := generateLD(options.items)
+	bfloats := make([][]byte, 0, options.items)
+	jfloats := make([]string, 0, options.items)
 	for _, x := range floats {
 		fvalue := strconv.FormatFloat(x, 'f', -1, 64)
 		y := collatejson.EncodeLD([]byte(fvalue), make([]byte, 0, 64))
 		bfloats = append(bfloats, y)
+		js, err := json.Marshal(x)
+		if err != nil {
+			log.Fatal(err)
+		}
+		jfloats = append(jfloats, string(js))
 	}
 
-	fmt.Printf("standard sort took %v for %v items\n",
-		timeIt(func() { sort.Float64Slice(floats).Sort() }), options.count)
+	raw := &jsonList{vals: jfloats, compares: 0}
+	ts := timeIt(func() { sort.Sort(raw) })
+	fmt.Printf("standard sort took %v for %v items (%v compares)\n",
+		ts, options.items, raw.compares)
 	fmt.Printf("collatejson sort took %v for %v items\n",
-		timeIt(func() { sort.Sort(collatejson.ByteSlices(bfloats)) }), options.count)
+		timeIt(func() { sort.Sort(collatejson.ByteSlices(bfloats)) }), options.items)
 
+	sort.Float64Slice(floats).Sort()
 	for i, x := range floats {
 		y := collatejson.DecodeLD(bfloats[i], make([]byte, 0, 64))
 		z, err := strconv.ParseFloat(string(y), 64)
 		if err != nil {
-			log.Fatalf(err.Error())
+			log.Fatal(err)
 		} else if x != z {
 			log.Println(string(bfloats[i]), string(y))
 			log.Fatalf("failed validateLD() on, %v == %v", x, z)
@@ -166,24 +182,33 @@ func validateLD() {
 func validateFloats() {
 	fmt.Println("Validating Floats")
 	fmt.Println("-----------------")
-	floats := generateFloats(options.count)
-	bfloats := make([][]byte, 0, options.count)
+	floats := generateFloats(options.items)
+	bfloats := make([][]byte, 0, options.items)
+	jfloats := make([]string, 0, options.items)
 	for _, x := range floats {
 		fvalue := strconv.FormatFloat(x, 'e', -1, 64)
 		y := collatejson.EncodeFloat([]byte(fvalue), make([]byte, 0, 64))
 		bfloats = append(bfloats, y)
+		js, err := json.Marshal(x)
+		if err != nil {
+			log.Fatal(err)
+		}
+		jfloats = append(jfloats, string(js))
 	}
 
-	fmt.Printf("standard sort took %v for %v items\n",
-		timeIt(func() { sort.Float64Slice(floats).Sort() }), options.count)
+	raw := &jsonList{vals: jfloats, compares: 0}
+	ts := timeIt(func() { sort.Sort(raw) })
+	fmt.Printf("standard sort took %v for %v items (%v compares)\n",
+		ts, options.items, raw.compares)
 	fmt.Printf("collatejson sort took %v for %v items\n",
-		timeIt(func() { sort.Sort(collatejson.ByteSlices(bfloats)) }), options.count)
+		timeIt(func() { sort.Sort(collatejson.ByteSlices(bfloats)) }), options.items)
 
+	sort.Float64Slice(floats).Sort()
 	for i, x := range floats {
 		y := collatejson.DecodeFloat(bfloats[i], make([]byte, 0, 64))
 		z, err := strconv.ParseFloat(string(y), 64)
 		if err != nil {
-			log.Fatalf(err.Error())
+			log.Fatal(err)
 		} else if x != z {
 			log.Fatalf("failed validateFloats() on, %v == %v", x, y)
 		}
@@ -199,12 +224,13 @@ func validateJSON() {
 	prodfile := path.Join(path.Dir(filename), "json.prod")
 
 	codec := collatejson.NewCodec(32)
-	jsons := generateJSON(prodfile, options.count)
+	jsons := generateJSON(prodfile, options.items)
 	bjsons := make([][]byte, 0, len(jsons))
 	for _, j := range jsons {
-		b, err := codec.Encode([]byte(j), make([]byte, 0, len(j)*2))
+		outbuf := make([]byte, 0, len(j)*3+collatejson.MinBufferSize)
+		b, err := codec.Encode([]byte(j), outbuf)
 		if err != nil {
-			log.Fatalf(err.Error())
+			log.Fatal(err)
 		}
 		bjsons = append(bjsons, b)
 	}
@@ -212,23 +238,24 @@ func validateJSON() {
 	raw := &jsonList{vals: jsons, compares: 0}
 	ts := timeIt(func() { sort.Sort(raw) })
 	fmt.Printf("standard sort took %v for %v items (%v compares)\n",
-		ts, options.count, raw.compares)
+		ts, options.items, raw.compares)
 	fmt.Printf("collatejson sort took %v for %v items\n",
-		timeIt(func() { sort.Sort(collatejson.ByteSlices(bjsons)) }), options.count)
+		timeIt(func() { sort.Sort(collatejson.ByteSlices(bjsons)) }), options.items)
 
-	var one, two map[string]interface{}
+	var one, two interface{}
 
 	for i, x := range jsons {
-		y, err := codec.Decode(bjsons[i], make([]byte, 0, len(bjsons[i])*2))
+		outbuf := make([]byte, 0, len(bjsons[i])*3+collatejson.MinBufferSize)
+		y, err := codec.Decode(bjsons[i], outbuf)
 		if err != nil {
-			log.Fatalf(err.Error())
+			log.Fatal(err)
 		}
 
 		if err := json.Unmarshal([]byte(x), &one); err != nil {
-			log.Fatalf(err.Error())
+			log.Fatal(err)
 		}
 		if err := json.Unmarshal(y, &two); err != nil {
-			log.Fatalf(err.Error())
+			log.Fatal(err)
 		}
 		//if !reflect.DeepEqual(one, two) {
 		//    log.Fatalf("json failed %q != %q", x, string(y))
@@ -237,10 +264,10 @@ func validateJSON() {
 	fmt.Println()
 }
 
-func generateInteger(count int) []int {
-	ints := make([]int, 0, count)
-	for i := 0; i < count; i++ {
-		x := rand.Int()
+func generateInteger(items int) []int {
+	ints := make([]int, 0, items)
+	for i := 0; i < items; i++ {
+		x := rand.Int() % 1000000000
 		if (x % 3) == 0 {
 			ints = append(ints, -x)
 		} else {
@@ -250,18 +277,18 @@ func generateInteger(count int) []int {
 	return ints
 }
 
-func generateSD(count int) []float64 {
-	ints := generateInteger(count)
-	sds := make([]float64, 0, count)
+func generateSD(items int) []float64 {
+	ints := generateInteger(items)
+	sds := make([]float64, 0, items)
 	for _, x := range ints {
 		sds = append(sds, 1/float64(x+1))
 	}
 	return sds
 }
 
-func generateLD(count int) []float64 {
-	ints := generateInteger(count)
-	lds := make([]float64, 0, count)
+func generateLD(items int) []float64 {
+	ints := generateInteger(items)
+	lds := make([]float64, 0, items)
 	for _, x := range ints {
 		y := float64(x)/float64(rand.Int()+1) + 1
 		if -1.0 < y && y < 1.0 {
@@ -272,32 +299,52 @@ func generateLD(count int) []float64 {
 	return lds
 }
 
-func generateFloats(count int) []float64 {
-	ints := generateInteger(count)
-	lds := make([]float64, 0, count)
+func generateFloats(items int) []float64 {
+	ints := generateInteger(items)
+	lds := make([]float64, 0, items)
 	for _, x := range ints {
 		lds = append(lds, float64(x)/float64(rand.Int()+1))
 	}
 	return lds
 }
 
-func generateJSON(prodfile string, count int) []string {
-	seed := int(time.Now().UnixNano())
+func generateJSON(prodfile string, items int) []string {
 	bagdir := path.Dir(prodfile)
 	text, err := ioutil.ReadFile(prodfile)
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := parsec.NewScanner(text)
-	root, _ := monster.Y(s)
-	scope := root.(mcommon.Scope)
+	seed := uint64(10)
+	root := compile(parsec.NewScanner(text)).(mcommon.Scope)
+	scope := monster.BuildContext(root, seed, bagdir, prodfile)
 	nterms := scope["_nonterminals"].(mcommon.NTForms)
-	scope = monster.BuildContext(scope, uint64(seed), bagdir)
-	jsons := make([]string, count)
-	for i := 0; i < count; i++ {
-		jsons[i] = monster.EvalForms("root", scope, nterms["s"]).(string)
+
+	// compile monster production file.
+	jsons := make([]string, items)
+	for i := 0; i < items; i++ {
+		scope = scope.RebuildContext()
+		jsons[i] = evaluate("root", scope, nterms["s"]).(string)
 	}
 	return jsons
+}
+
+func compile(s parsec.Scanner) parsec.ParsecNode {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("%v at %v", r, s.GetCursor())
+		}
+	}()
+	root, _ := monster.Y(s)
+	return root
+}
+
+func evaluate(name string, scope mcommon.Scope, forms []*mcommon.Form) interface{} {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("%v", r)
+		}
+	}()
+	return monster.EvalForms(name, scope, forms)
 }
 
 func timeIt(fn func()) time.Duration {

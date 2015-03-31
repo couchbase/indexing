@@ -20,7 +20,7 @@ var defaultlimit int64 = 10000000
 var kvaddress, indexManagementAddress, indexScanAddress string
 var clusterconfig tc.ClusterConfiguration
 var proddir, bagdir string
-var defaultIndexActiveTimeout int64 = 900  // 15 mins to wait for index to become active
+var defaultIndexActiveTimeout int64 = 900 // 15 mins to wait for index to become active
 
 func init() {
 	log.Printf("In init()")
@@ -60,12 +60,11 @@ var options struct {
 }
 
 func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
-	runtime.GOMAXPROCS(50)
+	runtime.GOMAXPROCS(45)
 	keyValues := make(tc.KeyValues)
 	options.outfile = "./out.txt"
 	options.bagdir = bagdir
 	options.count = count
-	options.seed = seed
 
 	var err error
 
@@ -74,15 +73,12 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// compile
-	root := compile(parsec.NewScanner(text))
-	scope := root.(common.Scope)
+	scope := compile(parsec.NewScanner(text)).(common.Scope)
+	scope = monster.BuildContext(scope, uint64(seed), bagdir, prodfile)
 	nterms := scope["_nonterminals"].(common.NTForms)
-	scope = monster.BuildContext(scope, uint64(options.seed), options.bagdir)
-	scope["_prodfile"] = prodfile
-
 	// evaluate
 	for i := 0; i < options.count; i++ {
+		scope = scope.RebuildContext()
 		val := evaluate("root", scope, nterms["s"])
 		jsonString := val.(string)
 		byt := []byte(jsonString)
@@ -113,6 +109,5 @@ func evaluate(name string, scope common.Scope, forms []*common.Form) interface{}
 			log.Printf("%v", r)
 		}
 	}()
-	scope = scope.ApplyGlobalForms()
 	return monster.EvalForms(name, scope, forms)
 }

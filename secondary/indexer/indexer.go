@@ -466,6 +466,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		<-idx.compactMgrCmdCh
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
+		idx.scanCoordCmdCh <- msg
+		<-idx.scanCoordCmdCh
 
 	case INDEXER_INIT_PREP_RECOVERY:
 		idx.handleInitPrepRecovery(msg)
@@ -2971,9 +2973,9 @@ func (idx *indexer) checkBucketExists(bucket string,
 }
 
 func (idx *indexer) handleStats(cmd Message) {
-	statsMap := make(map[string]string)
+	statsMap := make(map[string]interface{})
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
-	statsMap["needs_restart"] = fmt.Sprint(idx.needsRestart)
+	statsMap["needs_restart"] = idx.needsRestart
 	replych <- statsMap
 }

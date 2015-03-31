@@ -1,3 +1,19 @@
+* codec.Encode() converts the input JSON to golang native before
+  applying the encoding algorithm,
+    if err := json.Unmarshal(text, &m); err != nil {
+        return nil, err
+    }
+  explore possibilities to avoid a call to json.Unmarshal()
+
+* codec.Decode() returns JSON output, for couchbase 2i project
+  the JSON string will always the following JSON format.
+        [expr1, docid] - for simple key
+        [expr1, expr2, ..., docid] - for composite key
+  it would be a good optimization to implement a variant of Decode()
+  that will return as,
+        [expr1], docid - for simple key
+        [expr1, expr2 ...], docid - for composite key
+
 * Jens' comments,
   * Also BTW, there’s a lot of appending of byte slices going on in
     collate.go. I suspect this is inefficient, allocating lots of small slices
@@ -8,13 +24,8 @@
     solved this by creating a mapping table that converts the bytes 0-127 into
     their priority in the Unicode collation.
 
-* If a string contains escaped null values it will conflict with TERMINATOR
-  encoding. JSON strings must be byte stuffed for TERMINATOR byte.
-
 * create a new directory examples_len/ that contains the sorted list of json
   items without using `lenprefix`
-
-* How to handle missing value ?
 
 * Are we going to differentiate between float and integer ?
   Looks like dparval is parsing input json's number type as all float values.

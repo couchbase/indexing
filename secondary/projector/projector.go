@@ -3,9 +3,11 @@ package projector
 import "fmt"
 import "sync"
 import "io"
+import "os"
 import "net/http"
 import "strings"
 import "encoding/json"
+import "runtime/pprof"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -28,6 +30,7 @@ type Projector struct {
 	clusterAddr string // kv cluster's address to connect
 	adminport   string // projector listens on this adminport
 	maxvbs      int
+	cpuProfFd   *os.File
 	logPrefix   string
 }
 
@@ -102,6 +105,44 @@ func (p *Projector) ResetConfig(config c.Config) {
 		c.SetNumCPUs(cv.Int())
 	}
 	p.config = p.config.Override(config)
+
+	// CPU-profiling
+	cpuProfile, ok := config["projector.cpuProfile"]
+	if ok && cpuProfile.Bool() && p.cpuProfFd == nil {
+		cpuProfFname, ok := config["projector.cpuProfFname"]
+		if ok {
+			fname := cpuProfFname.String()
+			logging.Infof("%v cpu profiling => %q\n", p.logPrefix, fname)
+			p.cpuProfFd = p.startCPUProfile(fname)
+
+		} else {
+			logging.Errorf("Missing cpu-profile o/p filename\n")
+		}
+
+	} else if ok && !cpuProfile.Bool() {
+		if p.cpuProfFd != nil {
+			pprof.StopCPUProfile()
+			logging.Infof("%v cpu profiling stopped\n", p.logPrefix)
+		}
+		p.cpuProfFd = nil
+
+	} else {
+		logging.Warnf("%v cpu profiling already active !!\n", p.logPrefix)
+	}
+
+	// MEM-profiling
+	memProfile, ok := config["projector.memProfile"]
+	if ok && memProfile.Bool() {
+		memProfFname, ok := config["projector.memProfFname"]
+		if ok {
+			fname := memProfFname.String()
+			if p.takeMEMProfile(fname) {
+				logging.Infof("%v mem profile => %q\n", p.logPrefix, fname)
+			}
+		} else {
+			logging.Errorf("Missing mem-profile o/p filename\n")
+		}
+	}
 }
 
 // GetFeedConfig from current configuration settings.
@@ -579,8 +620,10 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 		// parse settings
 		newConfig := make(map[string]interface{})
 		if err := json.Unmarshal(dataIn, &newConfig); err != nil {
-			logging.Errorf("%v handleSettings() json decoding: %v\n", p.logPrefix, err)
+			fmsg := "%v handleSettings() json decoding: %v\n"
+			logging.Errorf(fmsg, p.logPrefix, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		// update projector settings
 		logging.Infof("%v updating projector config ...\n", p.logPrefix)
@@ -596,6 +639,37 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "only GET POST supported", http.StatusMethodNotAllowed)
 	}
+}
+
+// start cpu profiling.
+func (p *Projector) startCPUProfile(filename string) *os.File {
+	if filename == "" {
+		fmsg := "%v empty cpu profile filename\n"
+		logging.Errorf(fmsg, p.logPrefix, filename)
+		return nil
+	}
+	fd, err := os.Create(filename)
+	if err != nil {
+		logging.Errorf("%v unable to create %q: %v\n", p.logPrefix, filename, err)
+	}
+	pprof.StartCPUProfile(fd)
+	return fd
+}
+
+func (p *Projector) takeMEMProfile(filename string) bool {
+	if filename == "" {
+		fmsg := "%v empty mem profile filename\n"
+		logging.Errorf(fmsg, p.logPrefix, filename)
+		return false
+	}
+	fd, err := os.Create(filename)
+	if err != nil {
+		logging.Errorf("%v unable to create %q: %v\n", p.logPrefix, filename, err)
+		return false
+	}
+	pprof.WriteHeapProfile(fd)
+	defer fd.Close()
+	return true
 }
 
 // return list of active topics

@@ -48,7 +48,7 @@ func newMetaBridgeClient(
 		return nil, err
 	}
 
-	if err := b.updateIndexerList(); err != nil {
+	if err := b.updateIndexerList(false); err != nil {
 		b.mdClient.Close()
 		return nil, err
 	}
@@ -143,9 +143,19 @@ func (b *metadataClient) CreateIndex(
 		}
 	}
 
-	defnID, err := b.mdClient.CreateIndexWithPlan(
+	refreshCnt := 0
+RETRY:
+	defnID, err, needRefresh := b.mdClient.CreateIndexWithPlan(
 		indexName, bucket, using, exprType, partnExpr, whereExpr,
 		secExprs, isPrimary, plan)
+
+	if needRefresh && refreshCnt == 0 {
+		logging.Debugf("GsiClient: Indexer Node List is out-of-date.  Require refresh.")
+		b.updateIndexerList(false)
+		refreshCnt++
+		goto RETRY
+	}
+
 	b.Refresh() // refresh so that we too have IndexMetadata table.
 	return uint64(defnID), err
 }
@@ -365,7 +375,7 @@ func (b *metadataClient) getNode(defnID uint64) (adminport string, ok bool) {
 }
 
 // update 2i cluster information
-func (b *metadataClient) updateIndexerList() error {
+func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 	clusterURL, err := common.ClusterAuthUrl(b.cluster)
 	if err != nil {
 		return err
@@ -385,6 +395,14 @@ func (b *metadataClient) updateIndexerList() error {
 
 	b.rw.Lock()
 	defer b.rw.Unlock()
+
+	if discardExisting {
+		for _, indexerID := range b.adminports {
+			b.mdClient.UnwatchMetadata(indexerID)
+		}
+		b.adminports = nil
+	}
+
 	// watch all indexers
 	m := make(map[string]common.IndexerId)
 	for _, adminport := range adminports { // add new indexer-nodes if any
@@ -412,26 +430,33 @@ func (b *metadataClient) updateIndexerList() error {
 		}
 	}
 	// delete indexer-nodes that got removed from cluster.
-	for _, indexerID := range b.adminports {
+	if !discardExisting {
+		for _, indexerID := range b.adminports {
 
-		// check if the indexerId exists in var "m".  In case the
-		// adminport changes for the same index node, there would
-		// be two adminport mapping to the same indexerId, one
-		// in b.adminport (old) and the other in "m" (new).  So
-		// make sure not to accidently unwatch the indexer.
-		found := false
-		for _, id := range m {
-			if indexerID == id {
-				found = true
+			// check if the indexerId exists in var "m".  In case the
+			// adminport changes for the same index node, there would
+			// be two adminport mapping to the same indexerId, one
+			// in b.adminport (old) and the other in "m" (new).  So
+			// make sure not to accidently unwatch the indexer.
+			found := false
+			for _, id := range m {
+				if indexerID == id {
+					found = true
+				}
+			}
+			if !found {
+				b.mdClient.UnwatchMetadata(indexerID)
+				delete(b.topology, indexerID)
 			}
 		}
-		if !found {
-			b.mdClient.UnwatchMetadata(indexerID)
-			delete(b.topology, indexerID)
-		}
 	}
+
 	b.adminports = m
 	return err
+}
+
+func (b *metadataClient) Sync() error {
+	return b.updateIndexerList(true)
 }
 
 func (b *metadataClient) updateIndexer(adminport string, newIndexerId, oldIndexerId common.IndexerId) {
@@ -513,7 +538,7 @@ func (b *metadataClient) watchClusterChanges() {
 			if !ok {
 				selfRestart()
 				return
-			} else if err := b.updateIndexerList(); err != nil {
+			} else if err := b.updateIndexerList(false); err != nil {
 				logging.Errorf("updateIndexerList(): %v\n", err)
 				selfRestart()
 				return

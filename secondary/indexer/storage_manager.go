@@ -608,7 +608,7 @@ func (s *storageMgr) handleGetIndexStorageStats(cmd Message) {
 func (s *storageMgr) handleStats(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
-	statsMap := make(map[string]string)
+	statsMap := make(map[string]interface{})
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
 	stats := s.getIndexStorageStats()
@@ -620,19 +620,19 @@ func (s *storageMgr) handleStats(cmd Message) {
 		}
 
 		k := fmt.Sprintf("%s:%s:disk_size", inst.Defn.Bucket, inst.Defn.Name)
-		v := fmt.Sprint(st.Stats.DiskSize)
+		v := st.Stats.DiskSize
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:data_size", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(st.Stats.DataSize)
+		v = st.Stats.DataSize
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:get_bytes", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(st.Stats.GetBytes)
+		v = st.Stats.GetBytes
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:insert_bytes", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(st.Stats.InsertBytes)
+		v = st.Stats.InsertBytes
 		statsMap[k] = v
 		k = fmt.Sprintf("%s:%s:delete_bytes", inst.Defn.Bucket, inst.Defn.Name)
-		v = fmt.Sprint(st.Stats.DeleteBytes)
+		v = st.Stats.DeleteBytes
 		statsMap[k] = v
 	}
 

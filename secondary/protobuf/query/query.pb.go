@@ -390,9 +390,11 @@ func (m *StreamEndResponse) GetErr() *Error {
 
 // Count request to indexer.
 type CountRequest struct {
-	DefnID           *uint64 `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
-	Span             *Span   `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
-	XXX_unrecognized []byte  `json:"-"`
+	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
+	Span             *Span          `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
+	Cons             *uint32        `protobuf:"varint,3,req,name=cons" json:"cons,omitempty"`
+	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
+	XXX_unrecognized []byte         `json:"-"`
 }
 
 func (m *CountRequest) Reset()         { *m = CountRequest{} }
@@ -409,6 +411,20 @@ func (m *CountRequest) GetDefnID() uint64 {
 func (m *CountRequest) GetSpan() *Span {
 	if m != nil {
 		return m.Span
+	}
+	return nil
+}
+
+func (m *CountRequest) GetCons() uint32 {
+	if m != nil && m.Cons != nil {
+		return *m.Cons
+	}
+	return 0
+}
+
+func (m *CountRequest) GetVector() *TsConsistency {
+	if m != nil {
+		return m.Vector
 	}
 	return nil
 }

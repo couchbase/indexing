@@ -11,11 +11,11 @@ package indexer
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/logging"
+	"sync"
 )
 
 // Key is an array of JSON objects, per encoding/json
@@ -25,13 +25,17 @@ type Key struct {
 }
 
 // Value is the primary key of the relavent document
-type Value struct {
-	raw     Valuedata
-	encoded []byte
+type Value []byte
+
+var codecPool = sync.Pool{New: newCodec}
+var codecBufPool = sync.Pool{New: newCodecBuf}
+
+func newCodec() interface{} {
+	return collatejson.NewCodec(16)
 }
 
-type Valuedata struct {
-	Docid []byte
+func newCodecBuf() interface{} {
+	return make([]byte, 0, MAX_SEC_KEY_BUFFER_LEN)
 }
 
 func NewKey(data []byte) (Key, error) {
@@ -49,10 +53,12 @@ func NewKey(data []byte) (Key, error) {
 		return key, nil
 	}
 
-	jsoncodec := collatejson.NewCodec(16)
+	jsoncodec := codecPool.Get().(*collatejson.Codec)
+	defer codecPool.Put(jsoncodec)
 	//TODO collatejson needs 3x buffer size. see if that can
 	//be reduced. Also reuse buffer.
-	buf := make([]byte, 0, MAX_SEC_KEY_BUFFER_LEN)
+	buf := codecBufPool.Get().([]byte)
+	defer codecBufPool.Put(buf)
 	if buf, err = jsoncodec.Encode(data, buf); err != nil {
 		return key, err
 	}
@@ -63,14 +69,7 @@ func NewKey(data []byte) (Key, error) {
 
 func NewValue(docid []byte) (Value, error) {
 
-	var val Value
-
-	val.raw.Docid = docid
-
-	var err error
-	if val.encoded, err = json.Marshal(val.raw); err != nil {
-		return val, err
-	}
+	val := Value(docid)
 	return val, nil
 }
 
@@ -84,13 +83,8 @@ func NewKeyFromEncodedBytes(encoded []byte) (Key, error) {
 
 func NewValueFromEncodedBytes(b []byte) (Value, error) {
 
-	var val Value
-	var err error
-	if b != nil {
-		err = json.Unmarshal(b, &val.raw)
-	}
-	val.encoded = b
-	return val, err
+	val := Value(b)
+	return val, nil
 
 }
 
@@ -124,6 +118,10 @@ func (k *Key) Raw() []byte {
 	return k.raw
 }
 
+func (k *Key) IsNull() bool {
+	return k.encoded == nil
+}
+
 func (k *Key) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("%v", string(k.raw)))
@@ -131,19 +129,19 @@ func (k *Key) String() string {
 }
 
 func (v *Value) Encoded() []byte {
-	return v.encoded
+	return []byte(*v)
 }
 
-func (v *Value) Raw() Valuedata {
-	return v.raw
+func (v *Value) Raw() []byte {
+	return []byte(*v)
 }
 
 func (v *Value) Docid() []byte {
-	return v.raw.Docid
+	return []byte(*v)
 }
 
 func (v *Value) String() string {
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("Docid:%v ", v.raw.Docid))
+	buf.WriteString(fmt.Sprintf("Docid:%s ", string(*v)))
 	return buf.String()
 }

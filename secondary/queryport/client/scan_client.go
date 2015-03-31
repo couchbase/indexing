@@ -284,7 +284,8 @@ func (c *gsiScanClient) ScanAll(
 
 // CountLookup to count number entries for given set of keys.
 func (c *gsiScanClient) CountLookup(
-	defnID uint64, values []common.SecondaryKey) (int64, error) {
+	defnID uint64, values []common.SecondaryKey,
+	cons common.Consistency, vector *TsConsistency) (int64, error) {
 
 	// serialize match value.
 	equals := make([][]byte, 0, len(values))
@@ -299,6 +300,11 @@ func (c *gsiScanClient) CountLookup(
 	req := &protobuf.CountRequest{
 		DefnID: proto.Uint64(defnID),
 		Span:   &protobuf.Span{Equals: equals},
+		Cons:   proto.Uint32(uint32(cons)),
+	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
 	}
 	resp, err := c.doRequestResponse(req)
 	if err != nil {
@@ -314,8 +320,8 @@ func (c *gsiScanClient) CountLookup(
 
 // CountRange to count number entries in the given range.
 func (c *gsiScanClient) CountRange(
-	defnID uint64, low, high common.SecondaryKey,
-	inclusion Inclusion) (int64, error) {
+	defnID uint64, low, high common.SecondaryKey, inclusion Inclusion,
+	cons common.Consistency, vector *TsConsistency) (int64, error) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
@@ -334,7 +340,13 @@ func (c *gsiScanClient) CountRange(
 				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
 			},
 		},
+		Cons: proto.Uint32(uint32(cons)),
 	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
+	}
+
 	resp, err := c.doRequestResponse(req)
 	if err != nil {
 		return 0, err

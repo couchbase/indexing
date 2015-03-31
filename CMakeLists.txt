@@ -45,3 +45,7 @@ GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/
 GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
  INSTALL_PATH bin OUTPUT cbindex)
+
+GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
+  GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
+ INSTALL_PATH bin OUTPUT cbindexperf)

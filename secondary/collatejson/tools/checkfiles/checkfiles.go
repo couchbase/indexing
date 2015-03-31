@@ -1,27 +1,18 @@
 //  Copyright (c) 2013 Couchbase, Inc.
-//  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
-//  except in compliance with the License. You may obtain a copy of the License at
-//    http://www.apache.org/licenses/LICENSE-2.0
-//  Unless required by applicable law or agreed to in writing, software distributed under the
-//  License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
-//  either express or implied. See the License for the specific language governing permissions
-//  and limitations under the License.
 
 package main
 
-import (
-	"bytes"
-	"flag"
-	"fmt"
-	"github.com/prataprc/collatejson"
-	"io/ioutil"
-	"log"
+import "bytes"
+import "flag"
+import "fmt"
+import "io/ioutil"
+import "log"
+import "os"
+import "path"
+import "sort"
+import "strings"
 
-	"os"
-	"path"
-	"sort"
-	"strings"
-)
+import "github.com/prataprc/collatejson"
 
 type codeObj struct {
 	off  int
@@ -30,14 +21,32 @@ type codeObj struct {
 type codeList []codeObj
 
 var options struct {
-	lenprefix bool
+	arrLenPrefix bool
+	mapLenPrefix bool
 }
 
+var usageHelp = `Usage : checkfiles [OPTIONS] <file> | <dir>
+specifying a file <file> will sort each line in the file,
+    assuming each line as valid json.
+specifying a dir <dir> will pick each file in dir and sort each
+    line in the file, if corresponding <file>.ref is found inside
+    the same dir, the output will compared with <file>.ref file.
+
+`
+
 func argParse() string {
-	flag.BoolVar(&options.lenprefix, "lenprefix", false, "Show the ast of production")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, usageHelp)
+		flag.PrintDefaults()
+	}
+	flag.BoolVar(&options.arrLenPrefix, "arrlen", false,
+		"sort array by length")
+	flag.BoolVar(&options.mapLenPrefix, "maplen", true,
+		"sort json object by length")
 	flag.Parse()
 
 	args := flag.Args()
+
 	if len(args) < 1 {
 		flag.Usage()
 		os.Exit(64)
@@ -67,6 +76,7 @@ func runTests(rootdir string) {
 				if ref, err := ioutil.ReadFile(file + ".ref"); err != nil {
 					panic(fmt.Errorf("error reading reference file %v", file))
 				} else if strings.Trim(string(ref), "\n") != out {
+					fmt.Println(out)
 					panic(fmt.Errorf("sort mismatch in %v", file))
 				}
 			}
@@ -94,16 +104,9 @@ func sortFile(filename string) (outs []string) {
 		panic(err.Error())
 	}
 	codec := collatejson.NewCodec(100)
-	switch options.lenprefix {
-	case true:
-		codec.SortbyArrayLen(true)
-		codec.SortbyPropertyLen(true)
-		outs = encodeLines(codec, s)
-	case false:
-		codec.SortbyArrayLen(false)
-		codec.SortbyPropertyLen(false)
-		outs = encodeLines(codec, s)
-	}
+	codec.SortbyArrayLen(options.arrLenPrefix)
+	codec.SortbyPropertyLen(options.mapLenPrefix)
+	outs = encodeLines(codec, s)
 	return
 }
 
@@ -111,7 +114,7 @@ func encodeLines(codec *collatejson.Codec, s []byte) []string {
 	var err error
 	texts, codes := lines(s), make(codeList, 0)
 	for i, x := range texts {
-		code := make([]byte, 0, len(x)*3)
+		code := make([]byte, 0, len(x)*3+collatejson.MinBufferSize)
 		if code, err = codec.Encode(x, code); err != nil {
 			log.Fatal(err)
 		}

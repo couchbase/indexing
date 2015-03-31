@@ -384,6 +384,38 @@ func TestConcurrentScans_MultipleIndexes(t *testing.T) {
 	wg.Wait()
 }
 
+func TestMutationsWithMultipleIndexBuilds(t *testing.T) {
+	log.Printf("In TestMutationsWithMultipleIndexBuilds()")
+	prodfile = filepath.Join(proddir, "test.prod")
+	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+
+	log.Printf("Generating JSON docs")
+	kvdocs = GenerateJsons(500000, seed, prodfile, bagdir)
+	seed++
+
+	log.Printf("Setting initial JSON docs in KV")
+	kv.SetKeyValues(kvdocs, "default", "", clusterconfig.KVAddress)
+
+	var index_p = "index_primary"
+	var bucketName = "default"
+	indexes := []string{"index_company", "index_age", "index_firstname", "index_lastname"}
+	fields := []string{"company", "age", "`first-name`", "`last-name`"}
+
+	// Create a primary index
+	err := secondaryindex.CreateSecondaryIndex(index_p, bucketName, indexManagementAddress, "", nil, true, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	log.Printf("Creating multiple indexes in deferred mode")
+	for i := range indexes {
+		e := secondaryindex.CreateSecondaryIndexAsync(indexes[i], bucketName, indexManagementAddress, "", []string{fields[i]}, false, []byte("{\"defer_build\": true}"), true, nil)
+		FailTestIfError(e, "Error in creating the index", t)
+	}
+
+	log.Printf("Build Indexes and wait for indexes to become active: %v", indexes)
+	err = secondaryindex.BuildIndexes(indexes, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error in deferred index build", t)
+}
+
 func init() {
 	rand.Seed(time.Now().UnixNano())
 }

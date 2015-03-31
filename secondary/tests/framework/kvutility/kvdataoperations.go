@@ -1,8 +1,10 @@
 package kvutility
 
 import (
+	"encoding/json"
 	"github.com/couchbase/go-couchbase"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -198,4 +200,35 @@ func EditBucket(bucketName, bucketPassword, serverUserName, serverPassword, host
 	tc.HandleError(err, "Edit Bucket")
 	time.Sleep(3 * time.Second)
 	log.Printf("Modified parameters of bucket %v", bucketName)
+}
+
+func GetItemCountInBucket(bucketName, bucketPassword, serverUserName, serverPassword, hostaddress string) int {
+	client := &http.Client{}
+	address := "http://" + hostaddress + "/pools/default/buckets/" + bucketName
+
+	req, _ := http.NewRequest("GET", address, nil)
+	req.SetBasicAuth(serverUserName, serverPassword)
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+	resp, err := client.Do(req)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		log.Printf(address)
+		log.Printf("%v", req)
+		log.Printf("%v", resp)
+		log.Printf("Get Bucket failed for bucket %v \n", bucketName)
+	}
+	// todo : error out if response is error
+	tc.HandleError(err, "Get Bucket")
+	defer resp.Body.Close()
+
+	response := make(map[string]interface{})
+	body, _ := ioutil.ReadAll(resp.Body)
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		tc.HandleError(err, "Get Bucket :: Unmarshal of response body")
+	}
+
+	var itemcount float64
+	basicstats := response["basicStats"].(map[string]interface{})
+	itemcount = basicstats["itemCount"].(float64)
+	return int(itemcount)
 }

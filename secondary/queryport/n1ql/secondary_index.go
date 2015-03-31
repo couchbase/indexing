@@ -34,6 +34,15 @@ var ErrorIndexEmpty = errors.NewError(nil, "gsi.empty")
 // ErrorEmptyHost is no valid node hosting an index.
 var ErrorEmptyHost = errors.NewError(nil, "gsi.emptyHost")
 
+// ErrorCauseStaleMetadata means client indexes list needs to be
+// refreshed.
+var ErrorCauseStaleMetadata = fmt.Errorf("Stale metadata")
+
+// These error strings need to be in sync with indexer.ErrIndexNotFound
+// and indexer.ErrIndexNotFound.
+var ErrIndexNotFound = fmt.Errorf("Index not found")
+var ErrIndexNotReady = fmt.Errorf("Index not ready for serving queries")
+
 var n1ql2GsiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 	datastore.NEITHER: qclient.Neither,
 	datastore.LOW:     qclient.Low,
@@ -80,7 +89,7 @@ type gsiKeyspace struct {
 func NewGSIIndexer(
 	clusterURL, namespace, keyspace string) (datastore.Indexer, errors.Error) {
 
-	l.SetLogLevel(l.Trace)
+	l.SetLogLevel(l.Info)
 
 	gsi := &gsiKeyspace{
 		clusterURL:     clusterURL,
@@ -95,6 +104,7 @@ func NewGSIIndexer(
 	client, err := getSingletonClient(clusterURL)
 	if err != nil {
 		logging.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
+		return nil, errors.NewError(err, "GSI client instantiation failed")
 	}
 	gsi.gsiClient = client
 	// refresh indexes for this service->namespace->keyspace
@@ -134,7 +144,7 @@ func (gsi *gsiKeyspace) IndexIds() ([]string, errors.Error) {
 	for _, index := range gsi.primaryIndexes {
 		ids = append(ids, index.Id())
 	}
-	logging.Debugf("%v IndexIds %v", gsi.logPrefix, ids)
+	l.Debugf("%v IndexIds %v", gsi.logPrefix, ids)
 	return ids, nil
 }
 
@@ -154,7 +164,7 @@ func (gsi *gsiKeyspace) IndexNames() ([]string, errors.Error) {
 	for _, index := range gsi.primaryIndexes {
 		names = append(names, index.Name())
 	}
-	logging.Debugf("%v IndexNames %v", gsi.logPrefix, names)
+	l.Debugf("%v IndexNames %v", gsi.logPrefix, names)
 	return names, nil
 }
 
@@ -173,6 +183,7 @@ func (gsi *gsiKeyspace) IndexById(id string) (datastore.Index, errors.Error) {
 			return nil, err
 		}
 	}
+	l.Debugf("%v IndexById %v = %v", gsi.logPrefix, id, index)
 	return index, nil
 }
 
@@ -212,6 +223,8 @@ func (gsi *gsiKeyspace) Indexes() ([]datastore.Index, errors.Error) {
 	for _, index := range gsi.primaryIndexes {
 		indexes = append(indexes, index)
 	}
+
+	l.Debugf("%v gsiKeySpace.Indexes(): %v", gsi.logPrefix, indexes)
 	return indexes, nil
 }
 
@@ -228,6 +241,7 @@ func (gsi *gsiKeyspace) PrimaryIndexes() ([]datastore.PrimaryIndex, errors.Error
 	for _, index := range gsi.primaryIndexes {
 		indexes = append(indexes, index)
 	}
+	logging.Debugf("%v gsiKeySpace.PrimaryIndexes(): %v", gsi.logPrefix, indexes)
 	return indexes, nil
 }
 
@@ -245,13 +259,13 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex(
 	}
 	defnID, err := gsi.gsiClient.CreateIndex(
 		name,
-		gsi.keyspace,          /*bucket-name*/
-		string(datastore.GSI), /*using*/
-		"N1QL",                /*exprType*/
-		"",                    /*partnStr*/
-		"",                    /*whereStr*/
-		nil,                   /*secStrs*/
-		true,                  /*isPrimary*/
+		gsi.keyspace,       /*bucket-name*/
+		string(c.ForestDB), /*using, by default always forestdb*/
+		"N1QL",             /*exprType*/
+		"",                 /*partnStr*/
+		"",                 /*whereStr*/
+		nil,                /*secStrs*/
+		true,               /*isPrimary*/
 		withJSON)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreatePrimaryIndex()")
@@ -299,9 +313,9 @@ func (gsi *gsiKeyspace) CreateIndex(
 	}
 	defnID, err := gsi.gsiClient.CreateIndex(
 		name,
-		gsi.keyspace,          /*bucket-name*/
-		string(datastore.GSI), /*using*/
-		"N1QL",                /*exprType*/
+		gsi.keyspace,       /*bucket-name*/
+		string(c.ForestDB), /*using, by default always forestdb*/
+		"N1QL",             /*exprType*/
 		partnStr, whereStr, secStrs,
 		false, /*isPrimary*/
 		withJSON)
@@ -334,6 +348,7 @@ func (gsi *gsiKeyspace) BuildIndexes(names ...string) errors.Error {
 
 // Refresh list of indexes and scanner clients.
 func (gsi *gsiKeyspace) Refresh() errors.Error {
+	l.Tracef("%v gsiKeyspace.Refresh()", gsi.logPrefix)
 	indexes, err := gsi.gsiClient.Refresh()
 	if err != nil {
 		return errors.NewError(err, "GSI Refresh()")
@@ -352,6 +367,15 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 		}
 	}
 	return nil
+}
+
+// Synchronise gsi client with the servers and refresh the indexes list.
+func (gsi *gsiKeyspace) SyncRefresh() errors.Error {
+	err := gsi.gsiClient.Sync()
+	if err != nil {
+		return errors.NewError(err, "GSI SyncRefresh()")
+	}
+	return gsi.Refresh()
 }
 
 //------------------------------------------
@@ -398,7 +422,7 @@ type secondaryIndex struct {
 	name      string // name of the index
 	defnID    uint64
 	isPrimary bool
-	using     datastore.IndexType
+	using     c.IndexType
 	partnExpr string
 	secExprs  []string
 	whereExpr string
@@ -423,7 +447,7 @@ func newSecondaryIndexFromMetaData(
 		name:      indexDefn.Name,
 		defnID:    defnID,
 		isPrimary: indexDefn.IsPrimary,
-		using:     datastore.IndexType(indexDefn.Using),
+		using:     indexDefn.Using,
 		partnExpr: indexDefn.PartitionKey,
 		secExprs:  indexDefn.SecExprs,
 		whereExpr: "", // TODO: where-clause.
@@ -451,7 +475,7 @@ func (si *secondaryIndex) Name() string {
 
 // Type implement Index{} interface.
 func (si *secondaryIndex) Type() datastore.IndexType {
-	return si.using
+	return datastore.GSI
 }
 
 // SeekKey implement Index{} interface.
@@ -511,7 +535,7 @@ func (si *secondaryIndex) Statistics(
 		seek := values2SKey(span.Seek)
 		pstats, err := client.LookupStatistics(defnID, seek)
 		if err != nil {
-			return nil, errors.NewError(err, "GSI Statistics()")
+			return nil, gsiError(err, "GSI Statistics()")
 		}
 		return newStatistics(pstats), nil
 	}
@@ -520,13 +544,14 @@ func (si *secondaryIndex) Statistics(
 	incl := n1ql2GsiInclusion[span.Range.Inclusion]
 	pstats, err := client.RangeStatistics(defnID, low, high, incl)
 	if err != nil {
-		return nil, errors.NewError(err, "GSI Statistics()")
+		return nil, gsiError(err, "GSI Statistics()")
 	}
 	return newStatistics(pstats), nil
 }
 
 // Count implement Index{} interface.
-func (si *secondaryIndex) Count(span *datastore.Span) (int64, errors.Error) {
+func (si *secondaryIndex) Count(span *datastore.Span,
+	cons datastore.ScanConsistency, vector timestamp.Vector) (int64, errors.Error) {
 	if si == nil {
 		return 0, ErrorIndexEmpty
 	}
@@ -534,18 +559,20 @@ func (si *secondaryIndex) Count(span *datastore.Span) (int64, errors.Error) {
 
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
-		count, e := client.CountLookup(si.defnID, []c.SecondaryKey{seek})
+		count, e := client.CountLookup(si.defnID, []c.SecondaryKey{seek},
+			n1ql2GsiConsistency[cons], vector2ts(vector))
 		if e != nil {
-			return 0, errors.NewError(e, "GSI CountLookup()")
+			return 0, gsiError(e, "GSI CountLookup()")
 		}
 		return count, nil
 
 	}
 	low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
 	incl := n1ql2GsiInclusion[span.Range.Inclusion]
-	count, e := client.CountRange(si.defnID, low, high, incl)
+	count, e := client.CountRange(si.defnID, low, high, incl,
+		n1ql2GsiConsistency[cons], vector2ts(vector))
 	if e != nil {
-		return 0, errors.NewError(e, "GSI CountRange()")
+		return 0, gsiError(e, "GSI CountRange()")
 	}
 	return count, nil
 }
@@ -615,10 +642,10 @@ func makeResponsehandler(
 	stopChannel := conn.StopChannel()
 
 	return func(data qclient.ResponseReader) bool {
-		if err := data.Error(); err != nil {
-			conn.Error(errors.NewError(nil, err.Error()))
-			return false
 
+		if err := data.Error(); err != nil {
+			conn.Error(gsiError(err, "GSI scan error"))
+			return false
 		}
 		skeys, pkeys, err := data.GetEntries()
 		if err == nil {
@@ -629,6 +656,8 @@ func makeResponsehandler(
 				}
 				e.EntryKey = skey2Values(skey)
 
+				fmsg := "current enqueued length: %d (max %d)\n"
+				l.Tracef(fmsg, len(entryChannel), cap(entryChannel))
 				select {
 				case entryChannel <- e:
 				case <-stopChannel:
@@ -640,6 +669,32 @@ func makeResponsehandler(
 		conn.Error(errors.NewError(nil, err.Error()))
 		return false
 	}
+}
+
+func isStaleMetaError(err error) bool {
+	switch err.Error() {
+	case ErrIndexNotFound.Error():
+		fallthrough
+	case ErrIndexNotReady.Error():
+		return true
+	}
+
+	return false
+}
+
+func gsiError(err error, desc string) errors.Error {
+	var cause error
+	var errStr string
+
+	if isStaleMetaError(err) {
+		cause = ErrorCauseStaleMetadata
+		errStr = err.Error()
+	} else {
+		cause = err
+		errStr = desc
+	}
+
+	return errors.NewError(cause, errStr)
 }
 
 //-----------------------

@@ -24,7 +24,7 @@ type statsManager struct {
 	conf          common.Config
 	supvCmdch     MsgChannel
 	supvMsgch     MsgChannel
-	statsCache    map[string]string
+	statsCache    map[string]interface{}
 	lastCacheTime time.Time
 }
 
@@ -46,14 +46,14 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 	s.Lock()
 	defer s.Unlock()
 
-	statsMap := make(map[string]string)
+	statsMap := make(map[string]interface{})
 	if r.Method == "POST" || r.Method == "GET" {
 		timeout := time.Millisecond * time.Duration(s.conf["stats_cache_timeout"].Uint64())
 		// Refresh cache if cache ttl has expired
 		if time.Now().Sub(s.lastCacheTime) > timeout {
 			stats_list := []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS}
 			for _, t := range stats_list {
-				ch := make(chan map[string]string)
+				ch := make(chan map[string]interface{})
 				msg := &MsgStatsRequest{
 					mType:  t,
 					respch: ch,

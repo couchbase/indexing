@@ -89,9 +89,9 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	// options for setting configuration
 	fset.StringVar(&cmdOptions.ConfigKey, "ckey", "", "Config key")
 	fset.StringVar(&cmdOptions.ConfigVal, "cval", "", "Config value")
+	fset.StringVar(&cmdOptions.Using, "using", c.ForestDB, "storate type to use")
 
 	// not useful to expose in sherlock
-	cmdOptions.Using = "gsi"
 	cmdOptions.ExprType = "N1QL"
 	cmdOptions.PartnStr = "partn"
 
@@ -337,14 +337,14 @@ func HandleCommand(
 		} else if cmd.Equal != nil {
 			fmt.Fprintln(w, "CountLookup:")
 			equals := []c.SecondaryKey{cmd.Equal}
-			count, err := client.CountLookup(uint64(defnID), equals)
+			count, err := client.CountLookup(uint64(defnID), equals, c.AnyConsistency, nil)
 			if err == nil {
 				fmt.Fprintf(w, "Index %q/%q has %v entries\n", bucket, iname, count)
 			}
 
 		} else {
 			fmt.Fprintln(w, "CountRange:")
-			count, err = client.CountRange(uint64(defnID), low, high, incl)
+			count, err = client.CountRange(uint64(defnID), low, high, incl, c.AnyConsistency, nil)
 			if err == nil {
 				fmt.Fprintf(w, "Index %q/%q has %v entries\n", bucket, iname, count)
 			}

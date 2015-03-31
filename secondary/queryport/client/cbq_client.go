@@ -83,6 +83,10 @@ func newCbqClient(cluster string) (*cbqClient, error) {
 	return b, nil
 }
 
+func (b *cbqClient) Sync() error {
+	return nil
+}
+
 // Refresh implement BridgeAccessor{} interface.
 func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	var resp *http.Response

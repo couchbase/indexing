@@ -78,9 +78,9 @@ func init() {
 	log.Printf("Populating the default bucket")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
 	/*docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, true, defaultlimit, c.SessionConsistency, nil)
-	tc.HandleError(err, "Error in scan")
-	tv.Validate(docScanResults, scanResults)*/
+	  scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	  tc.HandleError(err, "Error in scan")
+	  tv.Validate(docScanResults, scanResults)*/
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {
@@ -126,14 +126,13 @@ func GenerateJsons(count, seed int, prodfile, bagdir string) tc.KeyValues {
 		log.Fatal(err)
 	}
 	// compile
-	root := compile(parsec.NewScanner(text))
-	scope := root.(common.Scope)
+	scope := compile(parsec.NewScanner(text)).(common.Scope)
+	scope = monster.BuildContext(scope, uint64(seed), bagdir, prodfile)
 	nterms := scope["_nonterminals"].(common.NTForms)
-	scope = monster.BuildContext(scope, uint64(options.seed), options.bagdir)
-	scope["_prodfile"] = prodfile
 
 	// evaluate
 	for i := 0; i < options.count; i++ {
+		scope = scope.RebuildContext()
 		val := evaluate("root", scope, nterms["s"])
 		jsonString := val.(string)
 		byt := []byte(jsonString)
@@ -164,6 +163,5 @@ func evaluate(name string, scope common.Scope, forms []*common.Form) interface{}
 			log.Printf("%v", r)
 		}
 	}()
-	scope = scope.ApplyGlobalForms()
 	return monster.EvalForms(name, scope, forms)
 }

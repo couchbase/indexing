@@ -15,11 +15,12 @@ func usage(fset *flag.FlagSet) {
 }
 
 func main() {
-	logging.SetLogLevel(logging.Silent)
+	logging.SetLogLevel(logging.Error)
 
 	cmdOptions, args, fset, err := querycmd.ParseArgs(os.Args[1:])
 	if err != nil {
 		logging.Fatalf("%v", err)
+		os.Exit(0)
 	} else if cmdOptions.Help {
 		usage(fset)
 		os.Exit(0)
