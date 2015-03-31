@@ -401,7 +401,7 @@ func (o *MetadataProvider) FindServiceForIndex(id c.IndexDefnId) (adminport stri
 	// status (but defn exists).
 	meta := o.FindIndex(id)
 	if meta == nil {
-		return "", "", errors.New(fmt.Sprintf("Index %s does not exist.", meta.Definition.Name))
+		return "", "", errors.New(fmt.Sprintf("Index does not exist."))
 	}
 
 	watcher, err := o.findWatcherByDefnIdIgnoreStatus(id)
