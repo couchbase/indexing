@@ -11,11 +11,13 @@ package indexer
 
 import (
 	"errors"
+	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/data"
+	"sync"
 )
 
 //MutationStreamReader reads a Dataport and stores the incoming mutations
@@ -25,6 +27,8 @@ type MutationStreamReader interface {
 }
 
 var mutationCount uint64
+
+const DEFAULT_SYNC_TIMEOUT = 40
 
 type mutationStreamReader struct {
 	stream   *dataport.Server //handle to the Dataport server
@@ -40,9 +44,13 @@ type mutationStreamReader struct {
 	workerch     []MutationChannel //buffered channel for each worker
 	workerStopCh []StopChannel     //stop channels of workers
 
+	syncStopCh StopChannel
+	syncLock   sync.Mutex
+
 	bucketQueueMap BucketQueueMap //indexId to mutation queue map
 
 	bucketFilterMap map[string]*common.TsVbuuid
+	bucketSyncDue   map[string]bool
 }
 
 //CreateMutationStreamReader creates a new mutation stream and starts
@@ -53,7 +61,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	MutationStreamReader, Message) {
 
 	//start a new mutation stream
-	streamMutch := make(chan interface{})
+	streamMutch := make(chan interface{}, DATAPORT_MUTATION_BUFFER)
 	config := common.SystemConfig.SectionConfig(
 		"indexer.dataport.", true /*trim*/)
 	stream, err := dataport.NewServer(
@@ -82,14 +90,18 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		numWorkers:      numWorkers,
 		workerch:        make([]MutationChannel, numWorkers),
 		workerStopCh:    make([]StopChannel, numWorkers),
+		syncStopCh:      make(StopChannel),
 		bucketQueueMap:  CopyBucketQueueMap(bucketQueueMap),
 		bucketFilterMap: make(map[string]*common.TsVbuuid),
+		bucketSyncDue:   make(map[string]bool),
 	}
 
 	r.initBucketFilter()
 
 	//start the main reader loop
 	go r.run()
+
+	go r.syncWorker()
 
 	//init worker buffers
 	for w := 0; w < r.numWorkers; w++ {
@@ -114,6 +126,9 @@ func (r *mutationStreamReader) Shutdown() {
 
 	//stop all workers
 	r.stopWorkers()
+
+	//stop sync worker
+	close(r.syncStopCh)
 }
 
 //run starts the stream reader loop which listens to message from
@@ -251,12 +266,6 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 			mut.commands = append(mut.commands,
 				byte(kv.GetCommands()[i]))
 			mut.partnkeys = append(mut.partnkeys, kv.GetKeys()[i])
-
-		case common.Sync:
-			msg := &MsgStream{mType: STREAM_READER_SYNC,
-				streamId: r.streamId,
-				meta:     meta}
-			r.supvRespch <- msg
 
 		case common.DropData:
 			//send message to supervisor to take decision
@@ -462,6 +471,9 @@ func (r *mutationStreamReader) stopWorkers() {
 //initBucketFilter initializes the bucket filter
 func (r *mutationStreamReader) initBucketFilter() {
 
+	r.syncLock.Lock()
+	defer r.syncLock.Unlock()
+
 	//allocate a new filter for the buckets which don't
 	//have a filter yet
 	for b, q := range r.bucketQueueMap {
@@ -469,6 +481,7 @@ func (r *mutationStreamReader) initBucketFilter() {
 			logging.Tracef("MutationStreamReader::initBucketFilter Added new filter "+
 				"for Bucket %v Stream %v", b, r.streamId)
 			r.bucketFilterMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
+			r.bucketSyncDue[b] = false
 		}
 	}
 
@@ -478,6 +491,7 @@ func (r *mutationStreamReader) initBucketFilter() {
 			logging.Tracef("MutationStreamReader::initBucketFilter Deleted filter "+
 				"for Bucket %v Stream %v", b, r.streamId)
 			delete(r.bucketFilterMap, b)
+			delete(r.bucketSyncDue, b)
 		}
 	}
 
@@ -486,6 +500,9 @@ func (r *mutationStreamReader) initBucketFilter() {
 //setBucketFilter sets the bucket filter based on seqno/vbuuid of mutation.
 //filter is set when stream begin is received.
 func (r *mutationStreamReader) setBucketFilter(meta *MutationMeta) {
+
+	r.syncLock.Lock()
+	defer r.syncLock.Unlock()
 
 	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
 		filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
@@ -504,10 +521,14 @@ func (r *mutationStreamReader) setBucketFilter(meta *MutationMeta) {
 //seqno/vbuuid if mutations can be processed.
 func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool {
 
+	r.syncLock.Lock()
+	defer r.syncLock.Unlock()
+
 	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
 		if uint64(meta.seqno) > filter.Seqnos[meta.vbucket] {
 			filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
 			filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+			r.bucketSyncDue[meta.bucket] = true
 			return true
 		} else {
 			logging.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Skipped "+
@@ -519,6 +540,40 @@ func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool 
 		logging.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Missing"+
 			"bucket %v in Filter for Stream %v", meta.bucket, r.streamId)
 		return false
+	}
+}
+
+func (r *mutationStreamReader) syncWorker() {
+
+	ticker := time.NewTicker(time.Millisecond * DEFAULT_SYNC_TIMEOUT)
+
+	for {
+		select {
+		case <-ticker.C:
+			r.maybeSendSync()
+		case <-r.syncStopCh:
+			return
+		}
+	}
+}
+
+//send a sync message if its due
+func (r *mutationStreamReader) maybeSendSync() {
+
+	r.syncLock.Lock()
+	defer r.syncLock.Unlock()
+
+	for bucket, syncDue := range r.bucketSyncDue {
+		if syncDue {
+			hwt := r.bucketFilterMap[bucket].Copy()
+			r.bucketSyncDue[bucket] = false
+			go func(hwt *common.TsVbuuid, bucket string) {
+				r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,
+					streamId: r.streamId,
+					bucket:   bucket,
+					ts:       hwt}
+			}(hwt, bucket)
+		}
 	}
 }
 
@@ -538,7 +593,7 @@ func logPerfStat() {
 
 	mutationCount++
 	if (mutationCount%10000 == 0) || mutationCount == 1 {
-		logging.Infof("MutationStreamReader::logPerfStat \n"+
+		logging.Infof("MutationStreamReader::logPerfStat "+
 			"MutationCount %v", mutationCount)
 	}
 

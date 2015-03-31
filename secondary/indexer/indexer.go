@@ -349,7 +349,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	switch msg.GetMsgType() {
 
-	case STREAM_READER_SYNC:
+	case STREAM_READER_HWT:
 		//fwd the message to timekeeper
 		idx.tkCmdCh <- msg
 		<-idx.tkCmdCh
