@@ -23,6 +23,10 @@ import (
 	"time"
 )
 
+var (
+	scanBufPool *common.BytesBufPool
+)
+
 // TODO:
 // 1. Add distinct unsupported error
 // 2. Add unique count unsupported error
@@ -186,17 +190,21 @@ loop:
 				}
 
 				entry := resp.(IndexEntry)
-				buf := make([]byte, 0, MAX_SEC_KEY_LEN+MAX_DOCID_LEN)
-				sk, encErr := entry.ReadSecKey(buf)
-				buf = sk[len(sk):]
+				poolBuf := scanBufPool.Get()
+				sk, encErr := entry.ReadSecKey((*poolBuf)[:0])
+				buf := sk[len(sk):]
 				common.CrashOnError(encErr)
 				docid, encErr := entry.ReadDocId(buf)
 				common.CrashOnError(encErr)
 
+				rowBuf := append([]byte(nil), sk...)
+				rowBuf = append(rowBuf, docid...)
+
 				row := &indexRow{
-					k:     sk,
-					docid: docid,
+					k:     rowBuf[:len(sk)],
+					docid: rowBuf[len(sk):],
 				}
+				scanBufPool.Put(poolBuf)
 
 				sz := int64(row.Size())
 				r.bytesRead += sz
@@ -323,6 +331,8 @@ type scanCoordinator struct {
 func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	config common.Config) (ScanCoordinator, Message) {
 	var err error
+
+	scanBufPool = common.NewByteBufferPool(MAX_SEC_KEY_LEN + MAX_DOCID_LEN)
 
 	s := &scanCoordinator{
 		supvCmdch:    supvCmdch,

@@ -3,13 +3,17 @@ package common
 import "sync"
 
 // Thread safe byte buffer pool
+// A buffer pointer received by Get() method should be
+// put back using Put() method. This ensures that we not
+// need to create a new buf slice with len == 0
 type BytesBufPool struct {
 	pool *sync.Pool
 }
 
 func NewByteBufferPool(size int) *BytesBufPool {
 	newBufFn := func() interface{} {
-		return make([]byte, 0, size)
+		b := make([]byte, size, size)
+		return &b
 	}
 
 	return &BytesBufPool{
@@ -19,13 +23,11 @@ func NewByteBufferPool(size int) *BytesBufPool {
 	}
 }
 
-func (p *BytesBufPool) Get() []byte {
+func (p *BytesBufPool) Get() *[]byte {
 
-	return p.pool.Get().([]byte)
+	return p.pool.Get().(*[]byte)
 }
 
-func (p *BytesBufPool) Put(buf []byte) {
-	// Reset len = 0
-	buf = buf[:0]
+func (p *BytesBufPool) Put(buf *[]byte) {
 	p.pool.Put(buf)
 }

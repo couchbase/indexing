@@ -92,7 +92,7 @@ func NewSecondaryIndexEntry(key []byte, docid []byte) (*secondaryIndexEntry, err
 
 	poolBuf := encBufPool.Get()
 	defer encBufPool.Put(poolBuf)
-	if buf, err = jsonEncoder.Encode(key, poolBuf); err != nil {
+	if buf, err = jsonEncoder.Encode(key, (*poolBuf)[:0]); err != nil {
 		return nil, err
 	}
 
