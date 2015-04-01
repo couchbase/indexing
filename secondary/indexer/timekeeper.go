@@ -323,10 +323,21 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 		tk.ss.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] += 1
 		logging.Debugf("Timekeeper::addIndextoStream IndexCount %v", tk.ss.streamBucketIndexCountMap)
 
-		if idx.State == common.INDEX_STATE_INITIAL {
-			tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
-				indexInst: idx,
-				buildTs:   buildTs}
+		// buildInfo can be reomved when the corresponding is closed.   A stream can be closed for
+		// various condition, such as recovery.   When the stream is re-opened, index will be added back
+		// to the stream.  It is necesasry to ensure that buildInfo is added back accordingly to ensure
+		// that build index will converge.
+		if _, ok := tk.indexBuildInfo[idx.InstId]; !ok {
+
+			if idx.State == common.INDEX_STATE_INITIAL ||
+				(streamId == common.INIT_STREAM && idx.State == common.INDEX_STATE_CATCHUP) {
+
+				logging.Debugf("Timekeeper::addIndextoStream add BuildInfo index %v stream %v bucket %v",
+					idx.InstId, streamId, idx.Defn.Bucket)
+				tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
+					indexInst: idx,
+					buildTs:   buildTs}
+			}
 		}
 	}
 
@@ -365,8 +376,11 @@ func (tk *timekeeper) removeIndexFromStream(cmd Message) {
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 
 	for _, idx := range indexInstList {
-		//if the index in internal map, delete it
+		// This is only called for DROP INDEX.   Therefore, it is OK to remove buildInfo.
+		// If this is used for other purpose, it is necessary to ensure there is no side effect.
 		if _, ok := tk.indexBuildInfo[idx.InstId]; ok {
+			logging.Debugf("Timekeeper::removeIndexFromStream remove index %v from stream %v bucket %v",
+				idx.InstId, streamId, idx.Defn.Bucket)
 			delete(tk.indexBuildInfo, idx.InstId)
 		}
 		if tk.ss.streamBucketIndexCountMap[streamId][idx.Defn.Bucket] == 0 {
@@ -385,9 +399,14 @@ func (tk *timekeeper) removeBucketFromStream(streamId common.StreamId,
 
 	status := tk.ss.streamBucketStatus[streamId][bucket]
 
-	//delete all indexes for this bucket
+	// This is called when closing a stream or remove a bucket from a stream.  If this
+	// is called during recovery,  it is necessary to ensure that the buildInfo is added
+	// back to timekeeper accordingly.
 	for instId, idx := range tk.indexBuildInfo {
-		if idx.indexInst.Defn.Bucket == bucket {
+		// remove buildInfo only for the given bucket AND stream
+		if idx.indexInst.Defn.Bucket == bucket && idx.indexInst.Stream == streamId {
+			logging.Debugf("Timekeeper::removeBucketFromStream remove index %v from stream %v bucket %v",
+				instId, streamId, bucket)
 			delete(tk.indexBuildInfo, instId)
 		}
 	}
@@ -501,7 +520,9 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 		//check if any of the initial build index is past its Build TS.
 		//Generate msg for Build Done and change the state of the index.
 		flushTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+
 		tk.checkInitialBuildDone(streamId, bucket, flushTs)
+		tk.checkPendingStreamMerge(streamId, bucket)
 
 		//check if there is any pending TS for this bucket/stream.
 		//It can be processed now.
@@ -1172,6 +1193,8 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 					//cleanup all indexes for bucket as build is done
 					for _, buildInfo := range tk.indexBuildInfo {
 						if buildInfo.indexInst.Defn.Bucket == bucket {
+							logging.Debugf("Timekeeper::checkInitialBuildDone remove index %v from stream %v bucket %v",
+								buildInfo.indexInst.InstId, streamId, bucket)
 							delete(tk.indexBuildInfo, buildInfo.indexInst.InstId)
 						}
 					}
@@ -1201,8 +1224,8 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	bucket string, flushTs *common.TsVbuuid) bool {
 
-	logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v Bucket %v "+
-		"FlushTs %v", streamId, bucket, flushTs)
+	logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v Bucket %v len(buildInfo) %v "+
+		"FlushTs %v", streamId, bucket, len(tk.indexBuildInfo), flushTs)
 
 	if streamId != common.INIT_STREAM {
 		return false
@@ -1232,6 +1255,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	}
 
 	for _, buildInfo := range tk.indexBuildInfo {
+
 		//if index belongs to the flushed bucket and in CATCHUP state and
 		//buildDoneAck has been received
 		idx := buildInfo.indexInst
@@ -1286,6 +1310,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 					"Bucket %v State Changed to INACTIVE", streamId, bucket)
 				tk.ss.cleanupBucketFromStream(streamId, bucket)
 				return true
+
 			}
 		}
 	}
@@ -1826,6 +1851,8 @@ func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
 //check any stream merge that was missed due to stream repair
 func (tk *timekeeper) checkPendingStreamMerge(streamId common.StreamId,
 	bucket string) {
+
+	logging.Debugf("Timekeeper::checkPendingStreamMerge Stream: %v Bucket: %v", streamId, bucket)
 
 	//for repair done of MAINT_STREAM, if there is any corresponding INIT_STREAM,
 	//check the possibility of merge
