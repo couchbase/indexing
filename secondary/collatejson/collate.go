@@ -21,6 +21,20 @@ import "errors"
 import "sort"
 import "fmt"
 import "strconv"
+import "sync"
+
+var bufPool *sync.Pool
+
+const bufSize = 1024
+
+func init() {
+	bufPool = &sync.Pool{
+		New: func() interface{} {
+			b := make([]byte, bufSize, bufSize)
+			return &b
+		},
+	}
+}
 
 var _ = fmt.Sprintf("dummy print")
 
@@ -302,13 +316,12 @@ func (codec *Codec) code2json(code, text []byte) ([]byte, []byte, error) {
 		text = append(text, ts...)
 
 	case TypeString:
-		s := make([]byte, 0)
-		s, remaining, err = suffixDecodeString(code[1:], s)
+		var strb []byte
+		tmp := bufPool.Get().(*[]byte)
+		strb, remaining, err = suffixDecodeString(code[1:], (*tmp)[:0])
 		if err == nil {
-			s, err = json.Marshal(string(s))
-			if err == nil {
-				text = append(text, s...)
-			}
+			text, err = encodeString(strb, text)
+			bufPool.Put(tmp)
 		}
 
 	case TypeArray:
