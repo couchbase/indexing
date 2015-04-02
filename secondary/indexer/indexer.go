@@ -732,7 +732,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//if there is already an index for this bucket in MAINT_STREAM,
 		//add this index to INIT_STREAM
 		var buildStream common.StreamId
-		if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM) {
+		if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM, false) {
 			buildStream = common.INIT_STREAM
 		} else {
 			buildStream = common.MAINT_STREAM
@@ -861,8 +861,8 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	//in InitStream, don't cleanup bucket from stream. It is needed for merge to
 	//happen.
 	if indexInst.Stream == common.MAINT_STREAM &&
-		!idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.MAINT_STREAM) &&
-		idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.INIT_STREAM) {
+		!idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.MAINT_STREAM, false) &&
+		idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.INIT_STREAM, false) {
 		logging.Warnf("Indexer::handleDropIndex Pre-Catchup Index Found for %v "+
 			"%v. Stream Cleanup Skipped.", indexInst.Stream, indexInst.Defn.Bucket)
 		clientCh <- &MsgSuccess{}
@@ -1430,7 +1430,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 
 		respCh := make(MsgChannel)
 
-		if idx.checkBucketExistsInStream(indexInst.Defn.Bucket, streamId) {
+		if idx.checkBucketExistsInStream(indexInst.Defn.Bucket, streamId, false) {
 
 			cmd = &MsgStreamUpdate{mType: REMOVE_INDEX_LIST_FROM_STREAM,
 				streamId:  streamId,
@@ -1741,7 +1741,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 
 	//MAINT_STREAM should already be running for this bucket,
 	//as first index gets added to MAINT_STREAM always
-	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM) == false {
+	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM, true) == false {
 		logging.Errorf("Indexer::handleInitialBuildDone MAINT_STREAM not enabled for Bucket: %v. "+
 			"Cannot Process Initial Build Done.", bucket)
 		common.CrashOnError(ErrMaintStreamMissingBucket)
@@ -1859,7 +1859,7 @@ func (idx *indexer) handleMergeStream(msg Message) {
 
 	//MAINT_STREAM should already be running for this bucket,
 	//as first index gets added to MAINT_STREAM always
-	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM) == false {
+	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM, true) == false {
 		logging.Errorf("Indexer::handleMergeStream \n\tMAINT_STREAM not enabled for Bucket: %v ."+
 			"Cannot Process Merge Stream", bucket)
 		common.CrashOnError(ErrMaintStreamMissingBucket)
@@ -1985,15 +1985,18 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 //checkBucketExistsInStream returns true if there is no index in the given stream
 //which belongs to the given bucket, else false
-func (idx *indexer) checkBucketExistsInStream(bucket string, streamId common.StreamId) bool {
+func (idx *indexer) checkBucketExistsInStream(bucket string, streamId common.StreamId, checkDelete bool) bool {
 
 	//check if any index of the given bucket is in the Stream
 	for _, index := range idx.indexInstMap {
 
+		// use checkDelete to verify index in DELETED status.   If an index is dropped while
+		// there is concurrent build, the stream will not be cleaned up.   
 		if index.Defn.Bucket == bucket && index.Stream == streamId &&
 			(index.State == common.INDEX_STATE_ACTIVE ||
 				index.State == common.INDEX_STATE_CATCHUP ||
-				index.State == common.INDEX_STATE_INITIAL) {
+				index.State == common.INDEX_STATE_INITIAL ||
+				(index.State == common.INDEX_STATE_DELETED && checkDelete))  {
 			return true
 		}
 	}
