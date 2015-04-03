@@ -668,7 +668,9 @@ func (feed *Feed) restartVbuckets(
 	// FIXME: restart-vbuckets implies a repair Endpoint.
 	raddrs := feed.endpointRaddrs()
 	rpReq := protobuf.NewRepairEndpointsRequest(feed.topic, raddrs)
-	feed.repairEndpoints(rpReq, opaque)
+	if err := feed.repairEndpoints(rpReq, opaque); err != nil {
+		return err
+	}
 
 	for _, ts := range req.GetRestartTimestamps() {
 		pooln, bucketn := ts.GetPool(), ts.GetBucket()
@@ -1012,7 +1014,8 @@ func (feed *Feed) repairEndpoints(
 		// though only endpoints have been updated
 		kvdata.AddEngines(opaque, feed.engines[bucketn], feed.endpoints)
 	}
-	return nil
+	//return nil
+	return err
 }
 
 // return,
@@ -1370,7 +1373,8 @@ func (feed *Feed) startEndpoints(
 			feed.endpoints[raddr1] = endpoint // :SideEffect:
 		}
 	}
-	return nil
+	//return nil
+	return err
 }
 
 func (feed *Feed) getEndpoint(
