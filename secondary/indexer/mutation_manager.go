@@ -814,8 +814,8 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 
 		flusher := NewFlusher()
 		sts := getSeqTsFromTsVbuuid(ts)
-		msgch := flusher.PersistUptoTS(q.queue,
-			streamId, m.indexInstMap, m.indexPartnMap, sts, changeVec, stopch)
+		msgch := flusher.PersistUptoTS(q.queue, streamId, ts.Bucket,
+			m.indexInstMap, m.indexPartnMap, sts, changeVec, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
 
@@ -879,7 +879,7 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 
 		flusher := NewFlusher()
 		sts := getSeqTsFromTsVbuuid(ts)
-		msgch := flusher.DrainUptoTS(q.queue, streamId,
+		msgch := flusher.DrainUptoTS(q.queue, streamId, ts.Bucket,
 			sts, changeVec, stopch)
 		//wait for flusher to finish
 		msg := <-msgch

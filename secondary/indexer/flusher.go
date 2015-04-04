@@ -26,7 +26,7 @@ type Flusher interface {
 	//Any error condition is reported back on the MsgChannel.
 	//Caller can wait on MsgChannel after closing StopChannel
 	//to get notified about shutdown completion.
-	PersistUptoTS(q MutationQueue, streamId common.StreamId, indexInstMap common.IndexInstMap,
+	PersistUptoTS(q MutationQueue, streamId common.StreamId, bucket string, indexInstMap common.IndexInstMap,
 		indexPartnMap IndexPartnMap, ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel
 
 	//DrainUptoTS will flush the mutation queue upto Timestamp
@@ -36,7 +36,7 @@ type Flusher interface {
 	//Any error condition is reported back on the MsgChannel.
 	//Caller can wait on MsgChannel after closing StopChannel
 	//to get notified about shutdown completion.
-	DrainUptoTS(q MutationQueue, streamId common.StreamId, ts Timestamp,
+	DrainUptoTS(q MutationQueue, streamId common.StreamId, bucket string, ts Timestamp,
 		changeVec []bool, stopch StopChannel) MsgChannel
 
 	//Persist will keep flushing the mutation queue till caller closes
@@ -44,7 +44,7 @@ type Flusher interface {
 	//Any error condition is reported back on the MsgChannel.
 	//Caller can wait on MsgChannel after closing StopChannel to get
 	//notified about shutdown completion.
-	Persist(q MutationQueue, streamId common.StreamId, indexInstMap common.IndexInstMap,
+	Persist(q MutationQueue, streamId common.StreamId, bucket string, indexInstMap common.IndexInstMap,
 		indexPartnMap IndexPartnMap, stopch StopChannel) MsgChannel
 
 	//Drain will keep flushing the mutation queue till caller closes
@@ -53,7 +53,7 @@ type Flusher interface {
 	//Any error condition is reported back on the MsgChannel.
 	//Caller can wait on MsgChannel after closing StopChannel to get
 	//notified about shutdown completion.
-	Drain(q MutationQueue, streamId common.StreamId, stopch StopChannel) MsgChannel
+	Drain(q MutationQueue, streamId common.StreamId, bucket string, stopch StopChannel) MsgChannel
 
 	//IsTimestampGreaterThanQueueLWT checks if each Vbucket in the Queue
 	//has mutation with Seqno lower than the corresponding Seqno present
@@ -89,17 +89,17 @@ func NewFlusher() *flusher {
 //Caller can wait on MsgChannel after closing StopChannel to get notified
 //about shutdown completion.
 func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
-	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
+	bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel {
 
-	logging.Infof("Flusher::PersistUptoTS StreamId: %v Timestamp: %v",
-		streamId, ts)
+	logging.Infof("Flusher::PersistUptoTS %v %v Timestamp: %v",
+		streamId, bucket, ts)
 
 	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, ts, changeVec, true, stopch, msgch)
+	go f.flushQueue(q, streamId, bucket, ts, changeVec, true, stopch, msgch)
 	return msgch
 }
 
@@ -111,13 +111,13 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 //Caller can wait on MsgChannel after closing StopChannel to get notified
 //about shutdown completion.
 func (f *flusher) DrainUptoTS(q MutationQueue, streamId common.StreamId,
-	ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel {
+	bucket string, ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel {
 
-	logging.Infof("Flusher::DrainUptoTS StreamId: %v Timestamp: %v",
-		streamId, ts)
+	logging.Infof("Flusher::DrainUptoTS %v %v Timestamp: %v",
+		streamId, bucket, ts)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, ts, changeVec, false, stopch, msgch)
+	go f.flushQueue(q, streamId, bucket, ts, changeVec, false, stopch, msgch)
 	return msgch
 }
 
@@ -130,16 +130,16 @@ func (f *flusher) DrainUptoTS(q MutationQueue, streamId common.StreamId,
 //Caller can wait on MsgChannel after closing StopChannel to get notified
 //about shutdown completion.
 func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
-	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
+	bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	stopch StopChannel) MsgChannel {
 
-	logging.Infof("Flusher::Persist StreamId: %v", streamId)
+	logging.Infof("Flusher::Persist %v %v", streamId, bucket)
 
 	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, nil, nil, true, stopch, msgch)
+	go f.flushQueue(q, streamId, bucket, nil, nil, true, stopch, msgch)
 	return msgch
 }
 
@@ -150,19 +150,19 @@ func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
 //Caller can wait on MsgChannel after closing StopChannel to get notified
 //about shutdown completion.
 func (f *flusher) Drain(q MutationQueue, streamId common.StreamId,
-	stopch StopChannel) MsgChannel {
+	bucket string, stopch StopChannel) MsgChannel {
 
-	logging.Infof("Flusher::Drain StreamId: %v", streamId)
+	logging.Infof("Flusher::Drain %v %v", streamId, bucket)
 
 	msgch := make(MsgChannel)
-	go f.flushQueue(q, streamId, nil, nil, false, stopch, msgch)
+	go f.flushQueue(q, streamId, bucket, nil, nil, false, stopch, msgch)
 	return msgch
 }
 
 //flushQueue starts and waits for actual workers to flush the mutation queue.
 //This function will close the done channel once all workers have finished.
 //It also listens on the stop channel and will stop all workers if stop signal is received.
-func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId,
+func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, bucket string,
 	ts Timestamp, changeVec []bool, persist bool, stopch StopChannel, msgch MsgChannel) {
 
 	var wg sync.WaitGroup
@@ -181,14 +181,14 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId,
 			wg.Add(1)
 			stopch := make(StopChannel)
 			workerStopChannels = append(workerStopChannels, stopch)
-			go f.flushSingleVbucket(q, streamId, Vbucket(i),
+			go f.flushSingleVbucket(q, streamId, bucket, Vbucket(i),
 				persist, stopch, workerMsgCh, &wg)
 		} else {
 			if changeVec[i] {
 				wg.Add(1)
 				stopch := make(StopChannel)
 				workerStopChannels = append(workerStopChannels, stopch)
-				go f.flushSingleVbucketUptoSeqno(q, streamId, Vbucket(i),
+				go f.flushSingleVbucketUptoSeqno(q, streamId, bucket, Vbucket(i),
 					ts[i], persist, stopch, workerMsgCh, &wg)
 			}
 		}
@@ -237,7 +237,7 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId,
 //flushSingleVbucket is the actual implementation which flushes the given queue
 //for a single vbucket till stop signal
 func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
-	vbucket Vbucket, persist bool, stopch StopChannel,
+	bucket string, vbucket Vbucket, persist bool, stopch StopChannel,
 	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()
@@ -274,7 +274,7 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 //flushSingleVbucket is the actual implementation which flushes the given queue
 //for a single vbucket till the given seqno or till the stop signal(whichever is earlier)
 func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.StreamId,
-	vbucket Vbucket, seqno Seqno, persist bool, stopch StopChannel,
+	bucket string, vbucket Vbucket, seqno Seqno, persist bool, stopch StopChannel,
 	workerMsgCh MsgChannel, wg *sync.WaitGroup) {
 
 	defer wg.Done()

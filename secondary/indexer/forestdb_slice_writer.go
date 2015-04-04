@@ -623,10 +623,13 @@ func (fdb *fdbSlice) RollbackToZero() error {
 	return nil
 }
 
-//Commit persists the outstanding writes in underlying
-//forestdb database. If Commit returns error, slice
-//should be rolled back to previous snapshot.
-func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
+//slice insert/delete methods are async. There
+//can be outstanding mutations in internal queue to flush even
+//after insert/delete have return success to caller.
+//This method provides a mechanism to wait till internal
+//queue is empty.
+func (fdb *fdbSlice) waitPersist() {
+
 	//every SLICE_COMMIT_POLL_INTERVAL milliseconds,
 	//check for outstanding mutations. If there are
 	//none, proceed with the commit.
@@ -636,6 +639,15 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 			break
 		}
 	}
+
+}
+
+//Commit persists the outstanding writes in underlying
+//forestdb database. If Commit returns error, slice
+//should be rolled back to previous snapshot.
+func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
+
+	fdb.waitPersist()
 
 	mainDbInfo, err := fdb.main[0].Info()
 	if err != nil {
