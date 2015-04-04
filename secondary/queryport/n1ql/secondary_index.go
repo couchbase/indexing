@@ -509,6 +509,11 @@ func (si *secondaryIndex) Condition() expression.Expression {
 	return nil
 }
 
+// IsPrimary implements Index{} interface.
+func (si *secondaryIndex) IsPrimary() bool {
+	return si.isPrimary
+}
+
 // State implement Index{} interface.
 func (si *secondaryIndex) State() (datastore.IndexState, string, errors.Error) {
 	if si.err != "" {
