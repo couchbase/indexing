@@ -248,7 +248,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 				continue
 			}
 
-			logPerfStat()
+			logReaderStat()
 
 			//allocate new mutation first time
 			if mut == nil {
@@ -589,11 +589,11 @@ func copyVbList(vbList []uint16) []Vbucket {
 	return c
 }
 
-func logPerfStat() {
+func logReaderStat() {
 
 	mutationCount++
 	if (mutationCount%10000 == 0) || mutationCount == 1 {
-		logging.Infof("MutationStreamReader::logPerfStat "+
+		logging.Infof("logReaderStat:: "+
 			"MutationCount %v", mutationCount)
 	}
 

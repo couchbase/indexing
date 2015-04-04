@@ -27,6 +27,7 @@ import (
 
 var (
 	snapshotMetaListKey = []byte("snapshots-list")
+	flushedCount        uint64
 )
 
 //NewForestDBSlice initiailizes a new slice with forestdb backend.
@@ -259,6 +260,7 @@ func (fdb *fdbSlice) insert(k []byte, docid []byte, workerId int) {
 		fdb.insertSecIndex(k, docid, workerId)
 	}
 
+	fdb.logWriterStat()
 }
 
 func (fdb *fdbSlice) insertPrimaryIndex(docid []byte, workerId int) {
@@ -375,6 +377,8 @@ func (fdb *fdbSlice) delete(docid []byte, workerId int) {
 	} else {
 		fdb.deleteSecIndex(docid, workerId)
 	}
+
+	fdb.logWriterStat()
 
 }
 
@@ -1005,4 +1009,14 @@ func newFdbFile(dirpath string, newVersion bool) string {
 
 	newFilename := fmt.Sprintf("data.fdb.%d", version)
 	return filepath.Join(dirpath, newFilename)
+}
+
+func (fdb *fdbSlice) logWriterStat() {
+
+	flushedCount++
+	if (flushedCount%10000 == 0) || flushedCount == 1 {
+		logging.Infof("logWriterStat:: "+
+			"FlushedCount %v QueuedCount %v", flushedCount, len(fdb.cmdCh))
+	}
+
 }
