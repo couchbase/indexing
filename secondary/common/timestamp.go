@@ -174,6 +174,7 @@ func (ts *TsVbuuid) CopyFrom(src *TsVbuuid) {
 	copy(ts.Vbuuids, src.Vbuuids)
 	copy(ts.Snapshots, src.Snapshots)
 	ts.Persisted = src.Persisted
+	ts.LargeSnap = src.LargeSnap
 }
 
 // Equal returns whether `ts` and `other` compare equal.
