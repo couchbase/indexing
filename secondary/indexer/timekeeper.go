@@ -205,7 +205,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 
 func (tk *timekeeper) handleStreamOpen(cmd Message) {
 
-	logging.Debugf("Timekeeper::handleStreamOpen %v", cmd)
+	if logging.Level(tk.config["settings.log_level"].String()) >= logging.Debug {
+		logging.Debugf("Timekeeper::handleStreamOpen %v", cmd)
+	}
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
@@ -468,6 +470,7 @@ func (tk *timekeeper) handleSync(cmd Message) {
 
 	//update HWT for the bucket
 	tk.ss.updateHWT(streamId, bucket, hwt)
+	hwt.Free()
 
 	tk.supvCmdch <- &MsgSuccess{}
 
@@ -778,6 +781,8 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
+	defer meta.Free()
+
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
@@ -843,6 +848,8 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
+	defer meta.Free()
+
 	logging.Debugf("TK StreamBegin %v %v %v %v %v", streamId, meta.bucket,
 		meta.vbucket, meta.vbuuid, meta.seqno)
 
@@ -896,6 +903,8 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	defer meta.Free()
 
 	logging.Debugf("TK StreamEnd %v %v %v %v %v", streamId, meta.bucket,
 		meta.vbucket, meta.vbuuid, meta.seqno)
@@ -1405,14 +1414,13 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 		}
 
 		if tk.ss.canFlushNewTS(streamId, bucket) {
-			logging.Debugf("Timekeeper::generateNewStabilityTS \n\tFlushing new "+
-				"TS: %v Bucket: %v Stream: %v.", tsVbuuid, bucket, streamId)
 			tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		} else {
 			//store the ts in list
-			logging.Debugf("Timekeeper::generateNewStabilityTS \n\tAdding TS: %v to Pending "+
-				"List for Bucket: %v Stream: %v.", tsVbuuid, bucket, streamId)
-
+			if logging.Level(tk.config["settings.log_level"].String()) >= logging.Debug {
+				logging.Debugf("Timekeeper::generateNewStabilityTS %v %v Added TS to Pending List "+
+					"%v ", bucket, streamId, tsVbuuid)
+			}
 			tk.maybeMergeTs(streamId, bucket, tsVbuuid)
 		}
 	} else {
@@ -1504,9 +1512,6 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 			}
 
 		}
-		logging.Debugf("Timekeeper::processPendingTS \n\tFound Pending Stability TS Bucket: %v "+
-			"Stream: %v TS: %v", bucket, streamId, ts)
-
 		tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		return true
 	}
@@ -1518,8 +1523,10 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 func (tk *timekeeper) sendNewStabilityTS(ts *common.TsVbuuid, bucket string,
 	streamId common.StreamId) {
 
-	logging.Tracef("Timekeeper::sendNewStabilityTS \n\tBucket: %v "+
-		"Stream: %v TS: %v", bucket, streamId, ts)
+	if logging.Level(tk.config["settings.log_level"].String()) >= logging.Trace {
+		logging.Tracef("Timekeeper::sendNewStabilityTS Bucket: %v "+
+			"Stream: %v TS: %v", bucket, streamId, ts)
+	}
 
 	flushTs := tk.maybeSplitTs(ts, bucket, streamId)
 

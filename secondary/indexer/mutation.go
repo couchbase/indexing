@@ -12,6 +12,7 @@ package indexer
 import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"sync"
 )
 
 //MutationMeta represents meta information for a KV Mutation
@@ -20,6 +21,29 @@ type MutationMeta struct {
 	vbucket Vbucket //vbucket
 	vbuuid  Vbuuid  //uuid for vbucket
 	seqno   Seqno   //vbucket sequence number for this mutation
+}
+
+var mutMetaPool = sync.Pool{New: newMutationMeta}
+
+func NewMutationMeta() *MutationMeta {
+	return mutMetaPool.Get().(*MutationMeta)
+}
+
+func newMutationMeta() interface{} {
+	return &MutationMeta{}
+}
+
+func (m *MutationMeta) Clone() *MutationMeta {
+	meta := NewMutationMeta()
+	meta.bucket = m.bucket
+	meta.vbucket = m.vbucket
+	meta.vbuuid = m.vbuuid
+	meta.seqno = m.seqno
+	return meta
+}
+
+func (m *MutationMeta) Free() {
+	mutMetaPool.Put(m)
 }
 
 func (m MutationMeta) String() string {
@@ -39,10 +63,47 @@ type MutationKeys struct {
 	mut   []*Mutation //list of mutations for each index-id
 }
 
+var mutkeysPool = sync.Pool{New: newMutationKeys}
+
+func NewMutationKeys() *MutationKeys {
+	return mutkeysPool.Get().(*MutationKeys)
+}
+
+func newMutationKeys() interface{} {
+	return &MutationKeys{}
+}
+
+func (mk *MutationKeys) Free() {
+	mk.meta.Free()
+	mk.docid = mk.docid[:0]
+	for _, m := range mk.mut {
+		m.Free()
+	}
+	mk.mut = mk.mut[:0]
+	mutkeysPool.Put(mk)
+}
+
 type Mutation struct {
 	uuid     common.IndexInstId // index-id
 	command  byte               // command the index
 	key      []byte             // key-version for index
 	oldkey   []byte             // previous key-version, if available
 	partnkey []byte             // partition key
+}
+
+var mutPool = sync.Pool{New: newMutation}
+
+func NewMutation() *Mutation {
+	return mutPool.Get().(*Mutation)
+}
+
+func newMutation() interface{} {
+	return &Mutation{}
+}
+
+func (m *Mutation) Free() {
+	m.key = m.key[:0]
+	m.oldkey = m.oldkey[:0]
+	m.partnkey = m.partnkey[:0]
+	mutPool.Put(m)
 }

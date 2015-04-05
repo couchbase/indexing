@@ -6,6 +6,7 @@ package common
 import "github.com/couchbase/indexing/secondary/logging"
 import "bytes"
 import "fmt"
+import "sync"
 
 // TsVb is logical clock for a subset of vbuckets.
 type TsVb struct {
@@ -40,6 +41,39 @@ func NewTsVbuuid(bucket string, numVbuckets int) *TsVbuuid {
 		Vbuuids:   make([]uint64, numVbuckets),
 		Snapshots: make([][2]uint64, numVbuckets),
 	}
+}
+
+func newTsVbuuid() interface{} {
+	return &TsVbuuid{
+		Bucket:    "",
+		Seqnos:    make([]uint64, NUM_VBUCKETS),
+		Vbuuids:   make([]uint64, NUM_VBUCKETS),
+		Snapshots: make([][2]uint64, NUM_VBUCKETS),
+	}
+}
+
+var tsVbuuidPool = sync.Pool{New: newTsVbuuid}
+var NUM_VBUCKETS int
+
+func NewTsVbuuidCached(bucket string, numVbuckets int) *TsVbuuid {
+
+	NUM_VBUCKETS = numVbuckets
+
+	ts := tsVbuuidPool.Get().(*TsVbuuid)
+
+	//re-init
+	for i, _ := range ts.Vbuuids {
+		ts.Seqnos[i] = 0
+		ts.Vbuuids[i] = 0
+		ts.Snapshots[i][0] = 0
+		ts.Snapshots[i][1] = 0
+	}
+	ts.Bucket = bucket
+	return ts
+}
+
+func (ts *TsVbuuid) Free() {
+	tsVbuuidPool.Put(ts)
 }
 
 // GetVbnos will return the list of all vbnos.
@@ -133,6 +167,13 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 	newTs.Persisted = ts.Persisted
 	newTs.LargeSnap = ts.LargeSnap
 	return newTs
+}
+
+func (ts *TsVbuuid) CopyFrom(src *TsVbuuid) {
+	copy(ts.Seqnos, src.Seqnos)
+	copy(ts.Vbuuids, src.Vbuuids)
+	copy(ts.Snapshots, src.Snapshots)
+	ts.Persisted = src.Persisted
 }
 
 // Equal returns whether `ts` and `other` compare equal.

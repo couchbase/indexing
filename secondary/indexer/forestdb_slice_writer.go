@@ -215,23 +215,33 @@ func (fdb *fdbSlice) Delete(docid []byte) error {
 //shutdown channel is closed.
 func (fdb *fdbSlice) handleCommandsWorker(workerId int) {
 
+	var start time.Time
+	var elapsed time.Duration
+	var c interface{}
+	var icmd *indexItem
+	var dcmd []byte
+
 loop:
 	for {
 		select {
-		case c := <-fdb.cmdCh:
+		case c = <-fdb.cmdCh:
+
 			switch c.(type) {
+
 			case *indexItem:
-				cmd := c.(*indexItem)
+				icmd = c.(*indexItem)
 				start := time.Now()
-				fdb.insert((*cmd).key, (*cmd).docid, workerId)
+				fdb.insert((*icmd).key, (*icmd).docid, workerId)
 				elapsed := time.Since(start)
 				fdb.totalFlushTime += elapsed
+
 			case []byte:
-				cmd := c.([]byte)
-				start := time.Now()
-				fdb.delete(cmd, workerId)
-				elapsed := time.Since(start)
+				dcmd = c.([]byte)
+				start = time.Now()
+				fdb.delete(dcmd, workerId)
+				elapsed = time.Since(start)
 				fdb.totalFlushTime += elapsed
+
 			default:
 				logging.Errorf("ForestDBSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v Received "+
 					"Unknown Command %v", fdb.id, fdb.idxInstId, c)
@@ -306,8 +316,8 @@ func (fdb *fdbSlice) insertSecIndex(k []byte, docid []byte, workerId int) {
 	}
 	common.CrashOnError(err)
 
-	logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s "+
-		"DocId - %s", fdb.id, fdb.idxInstId, k, docid)
+	//logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s "+
+	//	"Value - %s", fdb.id, fdb.idxInstId, k, v)
 
 	//check if the docid exists in the back index
 	if olditm, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
@@ -384,8 +394,8 @@ func (fdb *fdbSlice) delete(docid []byte, workerId int) {
 
 func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 
-	logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
-		fdb.id, fdb.idxInstId, docid)
+	//logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
+	//	fdb.id, fdb.idxInstId, docid)
 
 	if docid == nil {
 		common.CrashOnError(errors.New("Nil Primary Key"))
@@ -410,8 +420,8 @@ func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 
 func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 
-	logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
-		fdb.id, fdb.idxInstId, docid)
+	//logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
+	//	fdb.id, fdb.idxInstId, docid)
 
 	var olditm []byte
 	var err error
@@ -456,13 +466,13 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 //given the docid
 func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) ([]byte, error) {
 
-	logging.Tracef("ForestDBSlice::getBackIndexEntry \n\tSliceId %v IndexInstId %v Get BackIndex Key - %s",
-		fdb.id, fdb.idxInstId, docid)
+	//	logging.Tracef("ForestDBSlice::getBackIndexEntry \n\tSliceId %v IndexInstId %v Get BackIndex Key - %s",
+	//		fdb.id, fdb.idxInstId, docid)
 
 	var kbytes []byte
 	var err error
 
-	kbytes, err = fdb.back[workerId].GetKV([]byte(docid))
+	kbytes, err = fdb.back[workerId].GetKV(docid)
 	atomic.AddInt64(&fdb.get_bytes, int64(len(kbytes)))
 
 	//forestdb reports get in a non-existent key as an

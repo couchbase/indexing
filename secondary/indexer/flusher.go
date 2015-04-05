@@ -301,6 +301,7 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 					continue
 				}
 				f.flushSingleMutation(mut, streamId)
+				mut.Free()
 			}
 		}
 	}

@@ -38,19 +38,21 @@ func newCodecBuf() interface{} {
 	return make([]byte, 0, MAX_SEC_KEY_BUFFER_LEN)
 }
 
-func NewKey(data []byte) (Key, error) {
+var emptyKey = []byte("[]")
+
+func NewKey(data []byte) (*Key, error) {
 	var err error
 	var key Key
 
 	if len(data) > MAX_SEC_KEY_LEN {
-		return key, errors.New("Key Too Long")
+		return nil, errors.New("Key Too Long")
 	}
 
 	key.raw = data
 
-	if bytes.Compare([]byte("[]"), data) == 0 || len(data) == 0 {
+	if bytes.Compare(emptyKey, data) == 0 || len(data) == 0 {
 		key.encoded = nil
-		return key, nil
+		return &key, nil
 	}
 
 	jsoncodec := codecPool.Get().(*collatejson.Codec)
@@ -60,17 +62,18 @@ func NewKey(data []byte) (Key, error) {
 	buf := codecBufPool.Get().([]byte)
 	defer codecBufPool.Put(buf)
 	if buf, err = jsoncodec.Encode(data, buf); err != nil {
-		return key, err
+		return nil, err
 	}
 
 	key.encoded = append([]byte(nil), buf...)
-	return key, nil
+	buf = buf[:0]
+	return &key, nil
 }
 
-func NewValue(docid []byte) (Value, error) {
+func NewValue(docid []byte) (*Value, error) {
 
 	val := Value(docid)
-	return val, nil
+	return &val, nil
 }
 
 func NewKeyFromEncodedBytes(encoded []byte) (Key, error) {

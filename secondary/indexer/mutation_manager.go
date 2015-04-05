@@ -293,7 +293,7 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 //mutations in.
 func (m *mutationMgr) handleOpenStream(cmd Message) {
 
-	logging.Infof("MutationMgr::handleOpenStream %v", cmd)
+	logging.Debugf("MutationMgr::handleOpenStream %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()

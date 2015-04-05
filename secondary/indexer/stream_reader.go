@@ -26,7 +26,11 @@ type MutationStreamReader interface {
 	Shutdown()
 }
 
-var mutationCount uint64
+var (
+	mutationCount uint64
+	skipMutation  bool
+	evalFilter    bool
+)
 
 const DEFAULT_SYNC_TIMEOUT = 40
 
@@ -213,15 +217,17 @@ func (r *mutationStreamReader) handleKeyVersions(bucket string, vbucket Vbucket,
 func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbucket, vbuuid Vbuuid,
 	kv *protobuf.KeyVersions) {
 
-	meta := &MutationMeta{}
+	meta := NewMutationMeta()
 	meta.bucket = bucket
 	meta.vbucket = vbucket
 	meta.vbuuid = vbuuid
 	meta.seqno = Seqno(kv.GetSeqno())
 
+	defer meta.Free()
+
 	var mutk *MutationKeys
-	skipMutation := false
-	evalFilter := true
+	skipMutation = false
+	evalFilter = true
 
 	logging.Tracef("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
 
@@ -253,23 +259,23 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 			//allocate new mutation first time
 			if mutk == nil {
 				//TODO use free list here to reuse the struct and reduce garbage
-				mutk = &MutationKeys{}
-				mutk.meta = meta
+				mutk = NewMutationKeys()
+				mutk.meta = meta.Clone()
 				mutk.docid = kv.GetDocid()
 			}
 
-			mut := &Mutation{
-				uuid:    common.IndexInstId(kv.GetUuids()[i]),
-				command: byte(kv.GetCommands()[i]),
-				key:     kv.GetKeys()[i],
-			}
+			mut := NewMutation()
+			mut.uuid = common.IndexInstId(kv.GetUuids()[i])
+			mut.key = kv.GetKeys()[i]
+			mut.command = byte(kv.GetCommands()[i])
+
 			mutk.mut = append(mutk.mut, mut)
 
 		case common.DropData:
 			//send message to supervisor to take decision
 			msg := &MsgStream{mType: STREAM_READER_STREAM_DROP_DATA,
 				streamId: r.streamId,
-				meta:     meta}
+				meta:     meta.Clone()}
 			r.supvRespch <- msg
 
 		case common.StreamBegin:
@@ -280,14 +286,14 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 			//send message to supervisor to take decision
 			msg := &MsgStream{mType: STREAM_READER_STREAM_BEGIN,
 				streamId: r.streamId,
-				meta:     meta}
+				meta:     meta.Clone()}
 			r.supvRespch <- msg
 
 		case common.StreamEnd:
 			//send message to supervisor to take decision
 			msg := &MsgStream{mType: STREAM_READER_STREAM_END,
 				streamId: r.streamId,
-				meta:     meta}
+				meta:     meta.Clone()}
 			r.supvRespch <- msg
 
 		case common.Snapshot:
@@ -302,7 +308,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 			//send message to supervisor to take decision
 			msg := &MsgStream{mType: STREAM_READER_SNAPSHOT_MARKER,
 				streamId: r.streamId,
-				meta:     meta,
+				meta:     meta.Clone(),
 				snapshot: snapshot}
 
 			r.supvRespch <- msg
@@ -322,9 +328,11 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 	logging.Debugf("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
 		"Started for Stream %v.", workerId, r.streamId)
 
+	var mut *MutationKeys
+
 	for {
 		select {
-		case mut := <-r.workerch[workerId]:
+		case mut = <-r.workerch[workerId]:
 			r.handleSingleMutation(mut)
 		case <-stopch:
 			logging.Debugf("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
@@ -563,7 +571,8 @@ func (r *mutationStreamReader) maybeSendSync() {
 
 	for bucket, syncDue := range r.bucketSyncDue {
 		if syncDue {
-			hwt := r.bucketFilterMap[bucket].Copy()
+			hwt := common.NewTsVbuuidCached(bucket, len(r.bucketFilterMap[bucket].Seqnos))
+			hwt.CopyFrom(r.bucketFilterMap[bucket])
 			r.bucketSyncDue[bucket] = false
 			go func(hwt *common.TsVbuuid, bucket string) {
 				r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,

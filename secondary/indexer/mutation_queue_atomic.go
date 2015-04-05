@@ -277,8 +277,8 @@ func (q *atomicMutationQueue) GetNumVbuckets() uint16 {
 func (q *atomicMutationQueue) allocNode(vbucket Vbucket) *node {
 
 	//get node from freelist
-	n, err := q.popFreeList(vbucket)
-	if err == nil {
+	n := q.popFreeList(vbucket)
+	if n != nil {
 		return n
 	} else {
 		currLen := atomic.LoadInt64(&q.size[vbucket])
@@ -294,8 +294,8 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket) *node {
 	var totalWait int
 	for _ = range ticker.C {
 		totalWait += ALLOC_POLL_INTERVAL
-		n, err := q.popFreeList(vbucket)
-		if err == nil {
+		n = q.popFreeList(vbucket)
+		if n != nil {
 			return n
 		}
 		if totalWait > 5000 {
@@ -310,16 +310,16 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket) *node {
 
 //popFreeList removes a node from freelist and returns to caller.
 //if freelist is empty, it returns nil.
-func (q *atomicMutationQueue) popFreeList(vbucket Vbucket) (*node, error) {
+func (q *atomicMutationQueue) popFreeList(vbucket Vbucket) *node {
 
 	if q.free[vbucket] != (*node)(atomic.LoadPointer(&q.head[vbucket])) {
 		n := q.free[vbucket]
 		q.free[vbucket] = q.free[vbucket].next
 		n.mutation = nil
 		n.next = nil
-		return n, nil
+		return n
 	} else {
-		return nil, errors.New("Free List Empty")
+		return nil
 	}
 
 }
