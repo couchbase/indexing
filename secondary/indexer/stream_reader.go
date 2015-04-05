@@ -219,7 +219,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 	meta.vbuuid = vbuuid
 	meta.seqno = Seqno(kv.GetSeqno())
 
-	var mut *MutationKeys
+	var mutk *MutationKeys
 	skipMutation := false
 	evalFilter := true
 
@@ -251,21 +251,19 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 			logReaderStat()
 
 			//allocate new mutation first time
-			if mut == nil {
+			if mutk == nil {
 				//TODO use free list here to reuse the struct and reduce garbage
-				mut = &MutationKeys{}
-				mut.meta = meta
-				mut.docid = kv.GetDocid()
+				mutk = &MutationKeys{}
+				mutk.meta = meta
+				mutk.docid = kv.GetDocid()
 			}
 
-			//copy the mutation data so underlying stream library can reuse the
-			//KeyVersions structs
-			mut.uuids = append(mut.uuids, common.IndexInstId(kv.GetUuids()[i]))
-			mut.keys = append(mut.keys, kv.GetKeys()[i])
-			mut.oldkeys = append(mut.oldkeys, kv.GetOldkeys()[i])
-			mut.commands = append(mut.commands,
-				byte(kv.GetCommands()[i]))
-			mut.partnkeys = append(mut.partnkeys, kv.GetKeys()[i])
+			mut := &Mutation{
+				uuid:    common.IndexInstId(kv.GetUuids()[i]),
+				command: byte(kv.GetCommands()[i]),
+				key:     kv.GetKeys()[i],
+			}
+			mutk.mut = append(mutk.mut, mut)
 
 		case common.DropData:
 			//send message to supervisor to take decision
@@ -312,8 +310,8 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 	}
 
 	//place secKey in the right worker's queue
-	if mut != nil {
-		r.workerch[int(vbucket)%r.numWorkers] <- mut
+	if mutk != nil {
+		r.workerch[int(vbucket)%r.numWorkers] <- mutk
 	}
 
 }

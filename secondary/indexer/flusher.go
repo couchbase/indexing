@@ -320,18 +320,18 @@ func (f *flusher) flushSingleMutation(mut *MutationKeys, streamId common.StreamI
 	}
 }
 
-func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
+func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 
-	logging.Tracef("Flusher::flush Flushing Stream %v Mutations %v", streamId, mut)
+	logging.Tracef("Flusher::flush Flushing Stream %v Mutations %v", streamId, mutk)
 
 	var processedUpserts []common.IndexInstId
-	for i, cmd := range mut.commands {
+	for _, mut := range mutk.mut {
 
 		var idxInst common.IndexInst
 		var ok bool
-		if idxInst, ok = f.indexInstMap[mut.uuids[i]]; !ok {
+		if idxInst, ok = f.indexInstMap[mut.uuid]; !ok {
 			logging.Tracef("Flusher::flush Unknown Index Instance Id %v. "+
-				"Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
+				"Skipped Mutation Key %v", mut.uuid, mut.key)
 			continue
 		}
 
@@ -339,7 +339,7 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 		if streamId != idxInst.Stream && streamId != common.CATCHUP_STREAM {
 			logging.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v Stream: %v In "+
 				"Stream: %v. Skipped Mutation Key %v", idxInst.InstId, idxInst.Stream,
-				streamId, mut.keys[i])
+				streamId, mut.key)
 			continue
 		}
 
@@ -347,19 +347,19 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 		//couldn't happen when processing drop index.
 		if idxInst.State == common.INDEX_STATE_DELETED {
 			logging.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v In "+
-				"DELETED State. Skipped Mutation Key %v", idxInst.InstId, mut.keys[i])
+				"DELETED State. Skipped Mutation Key %v", idxInst.InstId, mut.key)
 			continue
 		}
 
-		switch cmd {
+		switch mut.command {
 
 		case common.Upsert:
-			processedUpserts = append(processedUpserts, mut.uuids[i])
+			processedUpserts = append(processedUpserts, mut.uuid)
 
-			f.processUpsert(mut, i)
+			f.processUpsert(mut, mutk.docid)
 
 		case common.Deletion:
-			f.processDelete(mut, i)
+			f.processDelete(mut, mutk.docid)
 
 		case common.UpsertDeletion:
 
@@ -367,7 +367,7 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 			//if Upsert has been processed for this IndexInstId,
 			//skip processing UpsertDeletion
 			for _, id := range processedUpserts {
-				if id == mut.uuids[i] {
+				if id == mut.uuid {
 					skipUpsertDeletion = true
 				}
 			}
@@ -375,65 +375,66 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 			if skipUpsertDeletion {
 				continue
 			} else {
-				f.processDelete(mut, i)
+				f.processDelete(mut, mutk.docid)
 			}
 
 		default:
 			logging.Errorf("Flusher::flush Unknown mutation type received. Skipped %v",
-				mut.keys[i])
+				mut.key)
 		}
 	}
 }
 
-func (f *flusher) processUpsert(mut *MutationKeys, i int) {
-	idxInst, _ := f.indexInstMap[mut.uuids[i]]
+func (f *flusher) processUpsert(mut *Mutation, docid []byte) {
 
-	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkeys[i])
+	idxInst, _ := f.indexInstMap[mut.uuid]
+
+	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey)
 
 	var partnInstMap PartitionInstMap
 	var ok bool
-	if partnInstMap, ok = f.indexPartnMap[mut.uuids[i]]; !ok {
+	if partnInstMap, ok = f.indexPartnMap[mut.uuid]; !ok {
 		logging.Errorf("Flusher::processUpsert Missing Partition Instance Map"+
-			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuids[i], mut.keys[i])
+			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, mut.key)
 		return
 	}
 
 	if partnInst := partnInstMap[partnId]; ok {
-		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.keys[i]))
-		if err := slice.Insert(mut.keys[i], mut.docid); err != nil {
+		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
+		if err := slice.Insert(mut.key, docid); err != nil {
 			logging.Errorf("Flusher::processUpsert Error Inserting Key: %v "+
-				"docid: %s in Slice: %v. Error: %v", mut.keys[i], mut.docid, slice.Id(), err)
+				"docid: %s in Slice: %v. Error: %v", mut.key, docid, slice.Id(), err)
 		}
 	} else {
 		logging.Errorf("Flusher::processUpsert Partition Instance not found "+
-			"for Id: %v Skipped Mutation Key: %v", partnId, mut.keys[i])
+			"for Id: %v Skipped Mutation Key: %v", partnId, mut.key)
 	}
 
 }
 
-func (f *flusher) processDelete(mut *MutationKeys, i int) {
+func (f *flusher) processDelete(mut *Mutation, docid []byte) {
 
-	idxInst, _ := f.indexInstMap[mut.uuids[i]]
+	idxInst, _ := f.indexInstMap[mut.uuid]
 
-	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkeys[i])
+	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkey)
 
 	var partnInstMap PartitionInstMap
 	var ok bool
-	if partnInstMap, ok = f.indexPartnMap[mut.uuids[i]]; !ok {
+	if partnInstMap, ok = f.indexPartnMap[mut.uuid]; !ok {
 		logging.Errorf("Flusher:processDelete Missing Partition Instance Map"+
-			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuids[i], mut.keys[i])
+			"for IndexInstId: %v. Skipped Mutation Key: %v", mut.uuid, mut.key)
 		return
 	}
 
 	if partnInst := partnInstMap[partnId]; ok {
-		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.keys[i]))
-		if err := slice.Delete(mut.docid); err != nil {
+		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
+		if err := slice.Delete(docid); err != nil {
 			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
-				"from Slice: %v", mut.docid, slice.Id())
+				"from Slice: %v", docid, slice.Id())
 		}
 	} else {
 		logging.Errorf("Flusher::processDelete Partition Instance not found "+
-			"for Id: %v. Skipped Mutation Key: %v", partnId, mut.keys[i])
+			"for Id: %v. Skipped Mutation Key: %v", partnId, mut.key)
 	}
 }
 

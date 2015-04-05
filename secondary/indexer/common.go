@@ -77,35 +77,6 @@ type Vbucket uint32
 type Vbuuid uint64
 type Seqno uint64
 
-//MutationMeta represents meta information for a KV Mutation
-type MutationMeta struct {
-	bucket  string  //bucket for the mutation
-	vbucket Vbucket //vbucket
-	vbuuid  Vbuuid  //uuid for vbucket
-	seqno   Seqno   // vbucket sequence number for this mutation
-}
-
-func (m MutationMeta) String() string {
-
-	str := fmt.Sprintf("Bucket: %v ", m.bucket)
-	str += fmt.Sprintf("Vbucket: %v ", m.vbucket)
-	str += fmt.Sprintf("Vbuuid: %v ", m.vbuuid)
-	str += fmt.Sprintf("Seqno: %v ", m.seqno)
-	return str
-
-}
-
-//MutationKeys holds the Secondary Keys from a single KV Mutation
-type MutationKeys struct {
-	meta      *MutationMeta
-	docid     []byte               // primary document id
-	uuids     []common.IndexInstId // list of unique ids, like index-ids
-	commands  []byte               // list of commands for each index
-	keys      [][]byte             // list of key-versions for each index
-	oldkeys   [][]byte             // previous key-versions, if available
-	partnkeys [][]byte             // list of partition keys
-}
-
 //MutationSnapshot represents snapshot information of KV
 type MutationSnapshot struct {
 	snapType uint32
