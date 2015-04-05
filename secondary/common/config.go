@@ -581,12 +581,39 @@ var SystemConfig = Config{
 		120000,
 		true, // immutable
 	},
+
 	"indexer.settings.send_buffer_size": ConfigValue{
 		1024,
 		"Buffer size for batching rows during scan result streaming",
 		1024,
 		true, // immutable
 	},
+
+	"indexer.settings.cpuProfFname": ConfigValue{
+		"",
+		"filename to dump cpu-profile for indexer.",
+		"",
+		false, // mutable
+	},
+	"indexer.settings.cpuProfile": ConfigValue{
+		false,
+		"boolean indicate whether to start or stop indexer cpu profiling.",
+		false,
+		false, // mutable
+	},
+	"indexer.settings.memProfFname": ConfigValue{
+		"",
+		"filename to dump mem-profile for indexer.",
+		"",
+		false, // mutable
+	},
+	"indexer.settings.memProfile": ConfigValue{
+		false,
+		"boolean to take current mem profile from indexer.",
+		false,
+		false, // mutable
+	},
+
 	"projector.settings.log_level": ConfigValue{
 		"debug",
 		"Projector logging level",

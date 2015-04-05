@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -109,6 +110,8 @@ type indexer struct {
 
 	enableManager bool
 	needsRestart  bool
+
+	cpuProfFd *os.File
 }
 
 func NewIndexer(config common.Config) (Indexer, Message) {
@@ -463,6 +466,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 			idx.config["settings.memory_quota"].Uint64() {
 			idx.needsRestart = true
 		}
+		idx.setProfilerOptions(newConfig)
 		idx.config = newConfig
 		idx.compactMgrCmdCh <- msg
 		<-idx.compactMgrCmdCh
@@ -3062,4 +3066,76 @@ func NewSlice(id SliceId, indInst *common.IndexInst,
 	}
 
 	return
+}
+
+func (idx *indexer) setProfilerOptions(config common.Config) {
+
+	logging.Infof("New Settings Received ")
+
+	// CPU-profiling
+	cpuProfile, ok := config["settings.cpuProfile"]
+	if ok && cpuProfile.Bool() && idx.cpuProfFd == nil {
+		cpuProfFname, ok := config["settings.cpuProfFname"]
+		if ok {
+			fname := cpuProfFname.String()
+			logging.Infof("Indexer:: cpu profiling => %q\n", fname)
+			idx.cpuProfFd = startCPUProfile(fname)
+
+		} else {
+			logging.Errorf("Indexer:: Missing cpu-profile o/p filename\n")
+		}
+
+	} else if ok && !cpuProfile.Bool() {
+		if idx.cpuProfFd != nil {
+			pprof.StopCPUProfile()
+			logging.Infof("Indexer:: cpu profiling stopped\n")
+		}
+		idx.cpuProfFd = nil
+
+	}
+
+	// MEM-profiling
+	memProfile, ok := config["settings.memProfile"]
+	if ok && memProfile.Bool() {
+		memProfFname, ok := config["settings.memProfFname"]
+		if ok {
+			fname := memProfFname.String()
+			if dumpMemProfile(fname) {
+				logging.Infof("Indexer:: mem profile => %q\n", fname)
+			}
+		} else {
+			logging.Errorf("Indexer:: Missing mem-profile o/p filename\n")
+		}
+	}
+}
+
+// start cpu profiling.
+func startCPUProfile(filename string) *os.File {
+	if filename == "" {
+		fmsg := "Indexer:: empty cpu profile filename\n"
+		logging.Errorf(fmsg, filename)
+		return nil
+	}
+	fd, err := os.Create(filename)
+	if err != nil {
+		logging.Errorf("Indexer:: unable to create %q: %v\n", filename, err)
+	}
+	pprof.StartCPUProfile(fd)
+	return fd
+}
+
+func dumpMemProfile(filename string) bool {
+	if filename == "" {
+		fmsg := "Indexer:: empty mem profile filename\n"
+		logging.Errorf(fmsg, filename)
+		return false
+	}
+	fd, err := os.Create(filename)
+	if err != nil {
+		logging.Errorf("Indexer:: unable to create %q: %v\n", filename, err)
+		return false
+	}
+	pprof.WriteHeapProfile(fd)
+	defer fd.Close()
+	return true
 }
