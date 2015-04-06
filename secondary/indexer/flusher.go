@@ -323,7 +323,7 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 		var idxInst common.IndexInst
 		var ok bool
 		if idxInst, ok = f.indexInstMap[mut.uuids[i]]; !ok {
-			logging.Errorf("Flusher::flush Unknown Index Instance Id %v. "+
+			logging.Tracef("Flusher::flush Unknown Index Instance Id %v. "+
 				"Skipped Mutation Key %v", mut.uuids[i], mut.keys[i])
 			continue
 		}
