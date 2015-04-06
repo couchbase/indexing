@@ -22,9 +22,10 @@ import "github.com/couchbase/indexing/secondary/logging"
 type Projector struct {
 	admind ap.Server // admin-port server
 	// lock protected fields.
-	mu     sync.RWMutex
-	topics map[string]*Feed // active topics
-	config c.Config         // full configuration information.
+	rw             sync.RWMutex
+	topics         map[string]*Feed // active topics
+	topicSerialize map[string]*sync.Mutex
+	config         c.Config // full configuration information.
 	// immutable config params
 	name        string // human readable name of the projector
 	clusterAddr string // kv cluster's address to connect
@@ -38,8 +39,9 @@ type Projector struct {
 // starts a corresponding adminport.
 func NewProjector(maxvbs int, config c.Config) *Projector {
 	p := &Projector{
-		topics: make(map[string]*Feed),
-		maxvbs: maxvbs,
+		topics:         make(map[string]*Feed),
+		topicSerialize: make(map[string]*sync.Mutex),
+		maxvbs:         maxvbs,
 	}
 
 	// Setup dynamic configuration propagation
@@ -83,16 +85,16 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 
 // GetConfig returns the config object from projector.
 func (p *Projector) GetConfig() c.Config {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.rw.Lock()
+	defer p.rw.Unlock()
 	return p.config
 }
 
 // ResetConfig accepts a full-set or subset of global configuration
 // and updates projector related fields.
 func (p *Projector) ResetConfig(config c.Config) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.rw.Lock()
+	defer p.rw.Unlock()
 
 	// reset configuration.
 	if cv, ok := config["projector.settings.log_level"]; ok {
@@ -147,8 +149,8 @@ func (p *Projector) ResetConfig(config c.Config) {
 
 // GetFeedConfig from current configuration settings.
 func (p *Projector) GetFeedConfig() c.Config {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.rw.Lock()
+	defer p.rw.Unlock()
 
 	config, _ := c.NewConfig(map[string]interface{}{})
 	config["clusterAddr"] = p.config["clusterAddr"] // copy by value.
@@ -162,8 +164,8 @@ func (p *Projector) GetFeedConfig() c.Config {
 // GetFeed object for `topic`.
 // - return ErrorTopicMissing if topic is not started.
 func (p *Projector) GetFeed(topic string) (*Feed, error) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	p.rw.RLock()
+	defer p.rw.RUnlock()
 
 	if feed, ok := p.topics[topic]; ok {
 		return feed, nil
@@ -173,8 +175,8 @@ func (p *Projector) GetFeed(topic string) (*Feed, error) {
 
 // GetFeeds return a list of all feeds.
 func (p *Projector) GetFeeds() []*Feed {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	p.rw.RLock()
+	defer p.rw.RUnlock()
 
 	feeds := make([]*Feed, 0)
 	for _, feed := range p.topics {
@@ -186,8 +188,8 @@ func (p *Projector) GetFeeds() []*Feed {
 // AddFeed object for `topic`.
 // - return ErrorTopicExist if topic is duplicate.
 func (p *Projector) AddFeed(topic string, feed *Feed) (err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.rw.Lock()
+	defer p.rw.Unlock()
 
 	if _, ok := p.topics[topic]; ok {
 		return projC.ErrorTopicExist
@@ -201,8 +203,8 @@ func (p *Projector) AddFeed(topic string, feed *Feed) (err error) {
 // DelFeed object for `topic`.
 // - return ErrorTopicMissing if topic is not started.
 func (p *Projector) DelFeed(topic string) (err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.rw.Lock()
+	defer p.rw.Unlock()
 
 	feed, ok := p.topics[topic]
 	if ok == false {
@@ -332,7 +334,8 @@ func (p *Projector) doMutationTopic(
 	defer logging.Infof("%v ##%x doMutationTopic() returns ...\n", prefix, opaque)
 
 	var err error
-	feed, _ := p.GetFeed(topic)
+	feed, _ := p.acquireFeed(topic)
+	defer p.releaseFeed(topic)
 	if feed == nil {
 		config := p.GetFeedConfig()
 		feed, err = NewFeed(topic, config, opaque)
@@ -366,7 +369,8 @@ func (p *Projector) doRestartVbuckets(
 	logging.Infof("%v ##%x doRestartVbuckets() %q\n", prefix, opaque, topic)
 	defer logging.Infof("%v ##%x doRestartVbuckets() returns ...\n", prefix, opaque)
 
-	feed, err := p.GetFeed(topic) // only existing feed
+	feed, err := p.acquireFeed(topic)
+	defer p.releaseFeed(topic)
 	if err != nil {
 		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		response := &protobuf.TopicResponse{}
@@ -399,7 +403,8 @@ func (p *Projector) doShutdownVbuckets(
 	logging.Infof("%v ##%x doShutdownVbuckets() %q\n", prefix, opaque, topic)
 	defer logging.Infof("%v ##%x doShutdownVbuckets() returns ...\n", prefix, opaque)
 
-	feed, err := p.GetFeed(topic) // only existing feed
+	feed, err := p.acquireFeed(topic)
+	defer p.releaseFeed(topic)
 	if err != nil {
 		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
@@ -424,7 +429,8 @@ func (p *Projector) doAddBuckets(
 	logging.Infof("%v ##%x doAddBuckets() %q\n", prefix, opaque, topic)
 	defer logging.Infof("%v ##%x doAddBuckets() returns ...\n", prefix, opaque)
 
-	feed, err := p.GetFeed(topic) // only existing feed
+	feed, err := p.acquireFeed(topic)
+	defer p.releaseFeed(topic)
 	if err != nil {
 		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		response := &protobuf.TopicResponse{}
@@ -456,7 +462,8 @@ func (p *Projector) doDelBuckets(
 	logging.Infof("%v ##%x doDelBuckets() %q\n", prefix, opaque, topic)
 	defer logging.Infof("%v ##%x doDelBuckets() returns ...\n", prefix, opaque)
 
-	feed, err := p.GetFeed(topic) // only existing feed
+	feed, err := p.acquireFeed(topic)
+	defer p.releaseFeed(topic)
 	if err != nil {
 		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
@@ -479,7 +486,8 @@ func (p *Projector) doAddInstances(
 	logging.Infof("%v ##%x doAddInstances() %q\n", prefix, opaque, topic)
 	defer logging.Infof("%v ##%x doAddInstances() returns ...\n", prefix, opaque)
 
-	feed, err := p.GetFeed(topic) // only existing feed
+	feed, err := p.acquireFeed(topic)
+	defer p.releaseFeed(topic)
 	if err != nil {
 		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
@@ -501,7 +509,8 @@ func (p *Projector) doDelInstances(
 	logging.Infof("%v ##%x doDelInstances() %q\n", prefix, opaque, topic)
 	defer logging.Infof("%v ##%x doDelInstances() returns ...\n", prefix, opaque)
 
-	feed, err := p.GetFeed(topic) // only existing feed
+	feed, err := p.acquireFeed(topic)
+	defer p.releaseFeed(topic)
 	if err != nil {
 		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
@@ -524,7 +533,8 @@ func (p *Projector) doRepairEndpoints(
 	logging.Infof("%v ##%x doRepairEndpoints() %q\n", prefix, opaque, topic)
 	defer logging.Infof("%v ##%x doRepairEndpoints() returns ...\n", prefix, opaque)
 
-	feed, err := p.GetFeed(topic) // only existing feed
+	feed, err := p.acquireFeed(topic)
+	defer p.releaseFeed(topic)
 	if err != nil {
 		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
@@ -547,7 +557,8 @@ func (p *Projector) doShutdownTopic(
 	logging.Infof("%v ##%x doShutdownTopic() %q\n", prefix, opaque, topic)
 	defer logging.Infof("%v ##%x doShutdownTopic() returns ...\n", prefix, opaque)
 
-	feed, err := p.GetFeed(topic) // only existing feed
+	feed, err := p.acquireFeed(topic)
+	defer p.releaseFeed(topic)
 	if err != nil {
 		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
 		return protobuf.NewError(err)
@@ -641,6 +652,10 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+//----------------
+// local functions
+//----------------
+
 // start cpu profiling.
 func (p *Projector) startCPUProfile(filename string) *os.File {
 	if filename == "" {
@@ -674,13 +689,32 @@ func (p *Projector) takeMEMProfile(filename string) bool {
 
 // return list of active topics
 func (p *Projector) listTopics() []string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.rw.Lock()
+	defer p.rw.Unlock()
 	topics := make([]string, 0, len(p.topics))
 	for topic := range p.topics {
 		topics = append(topics, topic)
 	}
 	return topics
+}
+
+func (p *Projector) acquireFeed(topic string) (*Feed, error) {
+	p.rw.Lock()
+	mu, ok := p.topicSerialize[topic]
+	if !ok {
+		mu = new(sync.Mutex)
+	}
+	p.topicSerialize[topic] = mu
+	p.rw.Unlock()
+	mu.Lock()
+	return p.GetFeed(topic)
+}
+
+func (p *Projector) releaseFeed(topic string) {
+	p.rw.RLock()
+	mu := p.topicSerialize[topic]
+	p.rw.RUnlock()
+	mu.Unlock()
 }
 
 func requestRead(r io.Reader, data []byte) (err error) {

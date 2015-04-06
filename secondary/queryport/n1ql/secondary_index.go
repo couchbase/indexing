@@ -450,7 +450,7 @@ func newSecondaryIndexFromMetaData(
 		using:     indexDefn.Using,
 		partnExpr: indexDefn.PartitionKey,
 		secExprs:  indexDefn.SecExprs,
-		whereExpr: "", // TODO: where-clause.
+		whereExpr: indexDefn.WhereExpr,
 		state:     gsi2N1QLState[instn.State],
 		err:       instn.Error,
 		deferred:  indexDefn.Deferred,

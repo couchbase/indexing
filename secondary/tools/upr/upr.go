@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dcp"
 	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
@@ -21,6 +22,7 @@ var options struct {
 	maxVbno    int      // maximum number of vbuckets
 	stats      int      // periodic timeout(ms) to print stats, 0 will disable
 	printflogs bool
+	auth       string
 	info       bool
 	debug      bool
 	trace      bool
@@ -40,6 +42,8 @@ func argParse() string {
 		"periodic timeout in mS, to print statistics, `0` will disable stats")
 	flag.BoolVar(&options.printflogs, "flogs", false,
 		"display failover logs")
+	flag.StringVar(&options.auth, "auth", "",
+		"Auth user and password")
 	flag.BoolVar(&options.info, "info", false,
 		"display informational logs")
 	flag.BoolVar(&options.debug, "debug", false,
@@ -73,6 +77,15 @@ func usage() {
 
 func main() {
 	cluster := argParse()
+
+	// setup cbauth
+	if options.auth != "" {
+		up := strings.Split(options.auth, ":")
+		if _, err := cbauth.InternalRetryDefaultInit(cluster, up[0], up[1]); err != nil {
+			logging.Fatalf("Failed to initialize cbauth: %s", err)
+		}
+	}
+
 	for _, bucket := range options.buckets {
 		go startBucket(cluster, bucket)
 	}
@@ -99,7 +112,7 @@ func startBucket(cluster, bucketn string) int {
 
 	vbnos := listOfVbnos(options.maxVbno)
 
-	flogs, err := b.GetFailoverLogs(0xABCD, vbnos, nil /*TODO: pass valid config*/)
+	flogs, err := b.GetFailoverLogs(0xABCD, vbnos, dcpConfig)
 	mf(err, "- dcp failoverlogs")
 
 	if options.printflogs {
