@@ -2620,6 +2620,57 @@ func (idx *indexer) validateIndexInstMap() {
 		}
 	}
 
+	idx.checkMissingMaintBucket()
+
+}
+
+//On recovery, deleted indexes are ignored. There can be
+//a case where the last maint stream index was dropped and
+//indexer crashes while there is an index in Init stream.
+//Such indexes need to be moved to Maint Stream.
+func (idx *indexer) checkMissingMaintBucket() {
+
+	missingBucket := make(map[string]bool)
+
+	//get all unique buckets in init stream
+	for _, index := range idx.indexInstMap {
+		if index.Stream == common.INIT_STREAM {
+			missingBucket[index.Defn.Bucket] = true
+		}
+	}
+
+	//remove those present in maint stream
+	for _, index := range idx.indexInstMap {
+		if index.Stream == common.MAINT_STREAM {
+			if _, ok := missingBucket[index.Defn.Bucket]; ok {
+				delete(missingBucket, index.Defn.Bucket)
+			}
+		}
+	}
+
+	//move indexes of these buckets to Maint Stream
+	if len(missingBucket) > 0 {
+		var updatedList []common.IndexInstId
+		for bucket, _ := range missingBucket {
+			//for all indexes for this bucket
+			for instId, index := range idx.indexInstMap {
+				if index.Defn.Bucket == bucket {
+					//state is set to Initial, no catchup in Maint
+					index.State = common.INDEX_STATE_INITIAL
+					index.Stream = common.MAINT_STREAM
+					idx.indexInstMap[instId] = index
+					updatedList = append(updatedList, instId)
+				}
+			}
+		}
+
+		if idx.enableManager {
+			if err := idx.updateMetaInfoForIndexList(updatedList,
+				true, true, false, false); err != nil {
+				common.CrashOnError(err)
+			}
+		}
+	}
 }
 
 func isValidRecoveryState(state common.IndexState) bool {
