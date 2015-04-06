@@ -1041,14 +1041,19 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	if streamId == common.INIT_STREAM {
-
-		if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
-			!tk.ss.checkAnyAbortPending(streamId, bucket) {
-			lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
-			tk.checkInitialBuildDone(streamId, bucket, lastFlushedTs)
-		}
+	//Check for possiblity of build done after stream request done.
+	//In case of crash recovery, if there are no mutations, there is
+	//no flush happening, which can cause index to be in initial state.
+	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
+		!tk.ss.checkAnyAbortPending(streamId, bucket) {
+		lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+		tk.checkInitialBuildDone(streamId, bucket, lastFlushedTs)
 	}
+
+	//If the indexer crashed after processing all mutations but before
+	//merge of an index in Catchup state, the merge needs to happen here,
+	//as no flush would happen in case there are no more mutations.
+	tk.checkPendingStreamMerge(streamId, bucket)
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
