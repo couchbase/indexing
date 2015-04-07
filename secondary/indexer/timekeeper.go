@@ -16,6 +16,7 @@ package indexer
 import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
 	"sync"
 	"time"
@@ -39,6 +40,9 @@ type timekeeper struct {
 
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
+
+	statsLock  sync.Mutex
+	bucketConn map[string]*couchbase.Bucket
 
 	lock sync.Mutex //lock to protect this structure
 }
@@ -71,6 +75,7 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel,
 		indexInstMap:   make(common.IndexInstMap),
 		indexPartnMap:  make(IndexPartnMap),
 		indexBuildInfo: make(map[common.IndexInstId]*InitialBuildInfo),
+		bucketConn:     make(map[string]*couchbase.Bucket),
 	}
 
 	//start timekeeper loop which listens to commands from its supervisor
@@ -1748,6 +1753,23 @@ func (tk *timekeeper) handleUpdateIndexPartnMap(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
+func (tk *timekeeper) getBucketConn(name string, refresh bool) (*couchbase.Bucket, error) {
+	var ok bool
+	var b *couchbase.Bucket
+
+	tk.statsLock.Lock()
+	defer tk.statsLock.Unlock()
+
+	b, ok = tk.bucketConn[name]
+	if ok && !refresh {
+		return b, nil
+	} else {
+		b, err := common.ConnectBucket(tk.config["clusterAddr"].String(), "default", name)
+		tk.bucketConn[name] = b
+		return b, err
+	}
+}
+
 func (tk *timekeeper) handleStats(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 
@@ -1765,10 +1787,26 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			if inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
+
+			var b *couchbase.Bucket
+			var kvTs Timestamp
+			var err error
+
 			if _, ok := bucketTsMap[inst.Defn.Bucket]; !ok {
-				kvTs, err := GetCurrentKVTs(tk.config["clusterAddr"].String(),
-					inst.Defn.Bucket, tk.config["numVbuckets"].Int())
-				if err != nil {
+				rh := common.NewRetryHelper(5, time.Second, 1, func(a int, err error) error {
+					if a == 0 {
+						b, err = tk.getBucketConn(inst.Defn.Bucket, false)
+					} else {
+						b, err = tk.getBucketConn(inst.Defn.Bucket, true)
+					}
+					if err != nil {
+						return err
+					}
+					kvTs, err = GetCurrentKVTs(b, tk.config["numVbuckets"].Int())
+					return err
+				})
+
+				if rh.Run() != nil {
 					logging.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
 					replych <- statsMap
 					return

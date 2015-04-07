@@ -699,10 +699,16 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
+		var buildTs Timestamp
 		//get current timestamp from KV and set it as Initial Build Timestamp
-		buildTs, err := GetCurrentKVTs(idx.config["clusterAddr"].String(),
-			bucket,
-			idx.config["numVbuckets"].Int())
+		b, err := common.ConnectBucket(idx.config["clusterAddr"].String(),
+			"default", bucket)
+		defer b.Close()
+
+		if err == nil {
+			buildTs, err = GetCurrentKVTs(b,
+				idx.config["numVbuckets"].Int())
+		}
 
 		if err != nil {
 			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
@@ -1991,12 +1997,12 @@ func (idx *indexer) checkBucketExistsInStream(bucket string, streamId common.Str
 	for _, index := range idx.indexInstMap {
 
 		// use checkDelete to verify index in DELETED status.   If an index is dropped while
-		// there is concurrent build, the stream will not be cleaned up.   
+		// there is concurrent build, the stream will not be cleaned up.
 		if index.Defn.Bucket == bucket && index.Stream == streamId &&
 			(index.State == common.INDEX_STATE_ACTIVE ||
 				index.State == common.INDEX_STATE_CATCHUP ||
 				index.State == common.INDEX_STATE_INITIAL ||
-				(index.State == common.INDEX_STATE_DELETED && checkDelete))  {
+				(index.State == common.INDEX_STATE_DELETED && checkDelete)) {
 			return true
 		}
 	}
@@ -2593,9 +2599,12 @@ func (idx *indexer) validateIndexInstMap() {
 			//also set the buildTs for initial state index.
 			//TODO buildTs to be part of index instance
 			if bucketValid[bucket] {
-				buildTs, err := GetCurrentKVTs(idx.config["clusterAddr"].String(),
-					bucket,
-					idx.config["numVbuckets"].Int())
+				var buildTs Timestamp
+				b, err := common.ConnectBucket(idx.config["clusterAddr"].String(),
+					"default", bucket)
+				defer b.Close()
+
+				buildTs, err = GetCurrentKVTs(b, idx.config["numVbuckets"].Int())
 				if err != nil {
 					common.CrashOnError(err)
 				} else {
