@@ -1859,7 +1859,12 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				if receivedTs != nil {
 					recvdSeqno = receivedTs.Seqnos[i]
 				}
-				pending += uint64(seqno) - recvdSeqno
+
+				// By the time we compute index stats, kv timestamp would have
+				// become old.
+				if uint64(seqno) > recvdSeqno {
+					pending += uint64(seqno) - recvdSeqno
+				}
 			}
 			k = fmt.Sprintf("%s:%s:num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
 			v = pending
