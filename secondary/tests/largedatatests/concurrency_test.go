@@ -390,7 +390,7 @@ func TestMutationsWithMultipleIndexBuilds(t *testing.T) {
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 
 	log.Printf("Generating JSON docs")
-	kvdocs = GenerateJsons(500000, seed, prodfile, bagdir)
+	kvdocs = GenerateJsons(100000, seed, prodfile, bagdir)
 	seed++
 
 	log.Printf("Setting initial JSON docs in KV")
@@ -412,7 +412,7 @@ func TestMutationsWithMultipleIndexBuilds(t *testing.T) {
 	}
 
 	log.Printf("Build Indexes and wait for indexes to become active: %v", indexes)
-	err = secondaryindex.BuildIndexes(indexes, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
+	err = secondaryindex.BuildIndexes(indexes, bucketName, indexManagementAddress, 2000)
 	FailTestIfError(err, "Error in deferred index build", t)
 }
 
