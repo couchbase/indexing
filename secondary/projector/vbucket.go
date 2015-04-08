@@ -285,6 +285,7 @@ func (vr *VbucketRoutine) updateEndpoints(
 			if _, ok := eps[raddr]; !ok {
 				fmsg := "%v ##%x endpoint %v not found\n"
 				logging.Errorf(fmsg, vr.logPrefix, opaque, raddr)
+				continue
 			}
 			fmsg := "%v ##%x UpdateEndpoint %v to %v\n"
 			logging.Tracef(fmsg, vr.logPrefix, opaque, raddr, engine)
