@@ -22,6 +22,10 @@ import (
 	"time"
 )
 
+const (
+	maxStatsRetries = 5
+)
+
 //Timekeeper manages the Stability Timestamp Generation and also
 //keeps track of the HWTimestamp for each bucket
 type Timekeeper interface {
@@ -1756,6 +1760,7 @@ func (tk *timekeeper) handleUpdateIndexPartnMap(cmd Message) {
 func (tk *timekeeper) getBucketConn(name string, refresh bool) (*couchbase.Bucket, error) {
 	var ok bool
 	var b *couchbase.Bucket
+	var err error
 
 	tk.statsLock.Lock()
 	defer tk.statsLock.Unlock()
@@ -1764,9 +1769,12 @@ func (tk *timekeeper) getBucketConn(name string, refresh bool) (*couchbase.Bucke
 	if ok && !refresh {
 		return b, nil
 	} else {
-		b, err := common.ConnectBucket(tk.config["clusterAddr"].String(), "default", name)
+		b, err = common.ConnectBucket(tk.config["clusterAddr"].String(), "default", name)
+		if err != nil {
+			return nil, err
+		}
 		tk.bucketConn[name] = b
-		return b, err
+		return b, nil
 	}
 }
 
@@ -1793,7 +1801,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			var err error
 
 			if _, ok := bucketTsMap[inst.Defn.Bucket]; !ok {
-				rh := common.NewRetryHelper(5, time.Second, 1, func(a int, err error) error {
+				rh := common.NewRetryHelper(maxStatsRetries, time.Second, 1, func(a int, err error) error {
 					if a == 0 {
 						b, err = tk.getBucketConn(inst.Defn.Bucket, false)
 					} else {
