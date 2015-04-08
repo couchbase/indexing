@@ -1826,14 +1826,14 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			}
 
 			k := fmt.Sprintf("%s:%s:num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
-			sum := uint64(0)
+			flushedCount := uint64(0)
 			flushedTs := tk.ss.streamBucketLastFlushedTsMap[inst.Stream][inst.Defn.Bucket]
 			if flushedTs != nil {
 				for _, seqno := range flushedTs.Seqnos {
-					sum += seqno
+					flushedCount += seqno
 				}
 			}
-			v := sum
+			v := flushedCount
 			statsMap[k] = v
 
 			receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
@@ -1869,6 +1869,24 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			k = fmt.Sprintf("%s:%s:num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
 			v = pending
 			statsMap[k] = v
+
+			if inst.State == common.INDEX_STATE_INITIAL {
+				totalToBeflushed := uint64(0)
+				infoMap, ok := tk.indexBuildInfo[inst.InstId]
+				if ok {
+					for _, seqno := range infoMap.buildTs {
+						totalToBeflushed += uint64(seqno)
+					}
+					logging.Errorf("total_to_be_flushed", totalToBeflushed)
+					k = fmt.Sprintf("%s:%s:build_progress", inst.Defn.Bucket, inst.Defn.Name)
+					if totalToBeflushed > flushedCount {
+						v = flushedCount * 100 / totalToBeflushed
+					} else {
+						v = 100
+					}
+					statsMap[k] = v
+				}
+			}
 		}
 
 		replych <- statsMap
