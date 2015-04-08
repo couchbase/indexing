@@ -1878,23 +1878,25 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			v = pending
 			statsMap[k] = v
 
-			if inst.State == common.INDEX_STATE_INITIAL {
+			k = fmt.Sprintf("%s:%s:build_progress", inst.Defn.Bucket, inst.Defn.Name)
+			switch inst.State {
+			default:
+				v = 0
+			case common.INDEX_STATE_ACTIVE:
+				v = 100
+			case common.INDEX_STATE_INITIAL, common.INDEX_STATE_CATCHUP:
 				totalToBeflushed := uint64(0)
-				infoMap, ok := tk.indexBuildInfo[inst.InstId]
-				if ok {
-					for _, seqno := range infoMap.buildTs {
-						totalToBeflushed += uint64(seqno)
-					}
-					logging.Errorf("total_to_be_flushed", totalToBeflushed)
-					k = fmt.Sprintf("%s:%s:build_progress", inst.Defn.Bucket, inst.Defn.Name)
-					if totalToBeflushed > flushedCount {
-						v = flushedCount * 100 / totalToBeflushed
-					} else {
-						v = 100
-					}
-					statsMap[k] = v
+				for _, seqno := range kvTs {
+					totalToBeflushed += uint64(seqno)
+				}
+
+				if totalToBeflushed > flushedCount {
+					v = flushedCount * 100 / totalToBeflushed
+				} else {
+					v = 100
 				}
 			}
+			statsMap[k] = v
 		}
 
 		replych <- statsMap
