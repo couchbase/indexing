@@ -528,3 +528,30 @@ func SetNumCPUs(percent int) int {
 	runtime.GOMAXPROCS(ncpu)
 	return ncpu
 }
+
+func IndexStatement(def IndexDefn) string {
+	var stmt string
+	primCreate := "CREATE PRIMARY INDEX %s ON %s"
+	secCreate := "CREATE INDEX %s ON %s(%s)"
+	where := " WHERE %s"
+	using := " USING GSI"
+
+	if def.IsPrimary {
+		stmt = fmt.Sprintf(primCreate, def.Name, def.Bucket)
+	} else {
+		exprs := ""
+		for _, exp := range def.SecExprs {
+			if exprs != "" {
+				exprs += ","
+			}
+			exprs += exp
+		}
+		stmt = fmt.Sprintf(secCreate, def.Name, def.Bucket, exprs)
+		if def.WhereExpr != "" {
+			stmt += fmt.Sprintf(where, def.WhereExpr)
+		}
+	}
+
+	stmt += using
+	return stmt
+}
