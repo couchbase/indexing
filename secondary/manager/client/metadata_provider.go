@@ -217,7 +217,20 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 		deferred, ok = plan["defer_build"].(bool)
 		if !ok {
-			deferred = false
+			deferred_str, ok := plan["defer_build"].(string)
+			if ok {
+				var err error
+				deferred, err = strconv.ParseBool(deferred_str)
+				if err != nil {
+					return c.IndexDefnId(0),
+						errors.New("Fails to create index.  Parameter defer_build must be a boolean value of (true or false)."),
+						false
+				}
+			} else {
+				return c.IndexDefnId(0),
+					errors.New("Fails to create index.  Parameter defer_build must be a boolean value of (true or false)."),
+					false
+			}
 		}
 	}
 
