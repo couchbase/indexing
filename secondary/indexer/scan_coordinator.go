@@ -308,19 +308,18 @@ type indexScanStats struct {
 }
 
 type scanCoordinator struct {
-	supvCmdch  MsgChannel //supervisor sends commands on this channel
-	supvMsgch  MsgChannel //channel to send any async message to supervisor
-	serv       *queryport.Server
-	logPrefix  string
-	reqCounter uint64
+	supvCmdch MsgChannel //supervisor sends commands on this channel
+	supvMsgch MsgChannel //channel to send any async message to supervisor
+	serv      *queryport.Server
+	logPrefix string
 
 	mu            sync.RWMutex
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 
-	config common.ConfigHolder
-
+	config       common.ConfigHolder
 	scanStatsMap map[common.IndexInstId]indexScanStats
+	reqCounter   *uint64
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -339,6 +338,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		supvMsgch:    supvMsgch,
 		logPrefix:    "ScanCoordinator",
 		scanStatsMap: make(map[common.IndexInstId]indexScanStats),
+		reqCounter:   new(uint64),
 	}
 
 	s.config.Store(config)
@@ -604,7 +604,7 @@ func (s *scanCoordinator) requestHandler(
 		panic(err)
 	}
 
-	scanId := atomic.AddUint64(&s.reqCounter, 1)
+	scanId := atomic.AddUint64(s.reqCounter, 1)
 	cfg := s.config.Load()
 	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
 	startTime := time.Now()

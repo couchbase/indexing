@@ -93,6 +93,11 @@ type VBucketServerMap struct {
 
 // Bucket is the primary entry point for most data operations.
 type Bucket struct {
+	// IMPORTANT: following 3 fields should be should be 64 bit aligned.
+	connPools        unsafe.Pointer // *[]*connectionPool
+	vBucketServerMap unsafe.Pointer // *VBucketServerMap
+	nodeList         unsafe.Pointer // *[]Node
+
 	AuthType            string                 `json:"authType"`
 	Capabilities        []string               `json:"bucketCapabilities"`
 	CapabilitiesVersion string                 `json:"bucketCapabilitiesVer"`
@@ -114,11 +119,8 @@ type Bucket struct {
 	VBSMJson  VBucketServerMap `json:"vBucketServerMap"`
 	NodesJSON []Node           `json:"nodes"`
 
-	pool             *Pool
-	connPools        unsafe.Pointer // *[]*connectionPool
-	vBucketServerMap unsafe.Pointer // *VBucketServerMap
-	nodeList         unsafe.Pointer // *[]Node
-	commonSufix      string
+	pool        *Pool
+	commonSufix string
 }
 
 // PoolServices is all the bucket-independent services in a pool

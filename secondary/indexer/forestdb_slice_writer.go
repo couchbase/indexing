@@ -122,6 +122,9 @@ type indexItem struct {
 
 //fdbSlice represents a forestdb slice
 type fdbSlice struct {
+	// IMPORTANT: following 3 fields should be 64 bit aligned.
+	get_bytes, insert_bytes, delete_bytes int64
+
 	path     string
 	currfile string
 	id       SliceId //slice id
@@ -159,9 +162,6 @@ type fdbSlice struct {
 	//captured by the stats library
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
-
-	// Statistics
-	get_bytes, insert_bytes, delete_bytes int64
 }
 
 func (fdb *fdbSlice) IncrRef() {

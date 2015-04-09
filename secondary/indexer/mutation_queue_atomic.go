@@ -57,11 +57,13 @@ type MutationQueue interface {
 //It provides safe concurrent read/write access across vbucket queues.
 
 type atomicMutationQueue struct {
-	head        []unsafe.Pointer //head pointer per vbucket queue
-	tail        []unsafe.Pointer //tail pointer per vbucket queue
-	free        []*node          //free pointer per vbucket queue
-	numVbuckets uint16           //num vbuckets for the queue
-	size        []int64          //size of queue per vbucket
+	// IMPORTANT: should be 64 bit aligned.
+	head []unsafe.Pointer //head pointer per vbucket queue
+	tail []unsafe.Pointer //tail pointer per vbucket queue
+	size []int64          //size of queue per vbucket
+
+	free        []*node //free pointer per vbucket queue
+	numVbuckets uint16  //num vbuckets for the queue
 }
 
 //NewAtomicMutationQueue allocates a new Atomic Mutation Queue and initializes it

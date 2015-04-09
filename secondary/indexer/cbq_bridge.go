@@ -11,8 +11,8 @@ package indexer
 
 import (
 	"encoding/json"
-	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"math/rand"
 	"net"
 	"net/http"

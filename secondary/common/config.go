@@ -23,7 +23,7 @@ import "unsafe"
 
 // Threadsafe config holder object
 type ConfigHolder struct {
-	ptr unsafe.Pointer
+	ptr unsafe.Pointer // IMPORTANT: should be 64 bit aligned.
 }
 
 func (h *ConfigHolder) Store(conf Config) {
