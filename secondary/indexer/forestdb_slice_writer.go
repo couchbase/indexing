@@ -60,6 +60,13 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 		return nil, err
 	}
 
+	slice.config = config
+
+	config.SetOpenFlags(forestdb.OPEN_FLAG_RDONLY)
+	if slice.statFd, err = forestdb.Open(filepath, config); err != nil {
+		return nil, err
+	}
+
 	slice.numWriters = sysconf["numSliceWriters"].Int()
 	slice.main = make([]*forestdb.KVStore, slice.numWriters)
 	for i := 0; i < slice.numWriters; i++ {
@@ -85,7 +92,6 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 
 	slice.path = path
 	slice.currfile = filepath
-	slice.config = config
 	slice.idxInstId = idxInstId
 	slice.idxDefnId = idxDefnId
 	slice.id = sliceId
@@ -123,6 +129,7 @@ type fdbSlice struct {
 	refCount int
 	lock     sync.RWMutex
 	dbfile   *forestdb.File
+	statFd   *forestdb.File
 	metaLock sync.Mutex
 	meta     *forestdb.KVStore   // handle for index meta
 	main     []*forestdb.KVStore // handle for forward index
@@ -870,7 +877,7 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 		return sts, err
 	}
 
-	sts.DataSize = int64(fdb.dbfile.EstimateSpaceUsed())
+	sts.DataSize = int64(fdb.statFd.EstimateSpaceUsed())
 	sts.DiskSize = fi.Size()
 	sts.GetBytes = atomic.LoadInt64(&fdb.get_bytes)
 	sts.InsertBytes = atomic.LoadInt64(&fdb.insert_bytes)
@@ -971,6 +978,7 @@ func tryCloseFdbSlice(fdb *fdbSlice) {
 		fdb.meta.Close()
 	}
 
+	fdb.statFd.Close()
 	fdb.dbfile.Close()
 }
 
