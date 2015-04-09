@@ -113,7 +113,7 @@ func (w *ItemWriter) CloseWithError(err error) {
 	}
 
 	select {
-	case w.wchan <- w.err:
+	case w.wchan <- err:
 		close(w.wchan)
 		w.closed = true
 	case <-w.killch:
@@ -198,7 +198,7 @@ type ItemReadWriter struct {
 
 func (rw *ItemReadWriter) InitReadWriter() {
 	rw.InitWriter()
-	rw.ItemReader.killch = rw.ItemReader.killch
+	rw.ItemReader.killch = rw.ItemWriter.killch
 }
 
 func (rw *ItemReadWriter) Kill() {

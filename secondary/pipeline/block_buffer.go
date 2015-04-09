@@ -16,13 +16,17 @@ var (
 	ErrNoMoreItem   = errors.New("No more item to be read from buffer")
 )
 
-func init() {
+func SetupBlockPool(sz int) {
 	blockPool = &sync.Pool{
 		New: func() interface{} {
-			b := make([]byte, blockBufferSize, blockBufferSize)
+			b := make([]byte, sz, sz)
 			return &b
 		},
 	}
+}
+
+func init() {
+	SetupBlockPool(blockBufferSize)
 }
 
 func GetBlock() *[]byte {
