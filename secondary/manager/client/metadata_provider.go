@@ -227,9 +227,10 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	if nodes == nil {
 		watcher = o.findNextAvailWatcher()
 		if watcher == nil {
-			return c.IndexDefnId(0),
-				errors.New(fmt.Sprintf("Fails to create index.  Cannot find available node for new index")),
-				false
+			stmt1 := "Fails to create index.  There is no available index service that can process this request at this time."
+			stmt2 := "Index Service can be in bootstrap, recovery, or non-reachable."
+			stmt3 := "Please retry the operation at a later time."
+			return c.IndexDefnId(0), errors.New(fmt.Sprintf("%s %s %s", stmt1, stmt2, stmt3)), false
 		}
 	} else {
 		watcher = o.findWatcherByNodeAddr(nodes[0])
