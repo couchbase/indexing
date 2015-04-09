@@ -2145,10 +2145,17 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	case common.MAINT_STREAM:
 
 		for _, indexInst := range idx.indexInstMap {
-			if indexInst.Defn.Bucket == bucket &&
-				(indexInst.State == common.INDEX_STATE_ACTIVE ||
-					indexInst.State == common.INDEX_STATE_CATCHUP) {
-				indexList = append(indexList, indexInst)
+
+			if indexInst.Defn.Bucket == bucket {
+				switch indexInst.State {
+				case common.INDEX_STATE_ACTIVE,
+					common.INDEX_STATE_INITIAL:
+					if indexInst.Stream == streamId {
+						indexList = append(indexList, indexInst)
+					}
+				case common.INDEX_STATE_CATCHUP:
+					indexList = append(indexList, indexInst)
+				}
 			}
 		}
 
@@ -2156,9 +2163,12 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 		for _, indexInst := range idx.indexInstMap {
 			if indexInst.Defn.Bucket == bucket &&
-				indexInst.State == common.INDEX_STATE_INITIAL ||
-				indexInst.State == common.INDEX_STATE_CATCHUP {
-				indexList = append(indexList, indexInst)
+				indexInst.Stream == streamId {
+				switch indexInst.State {
+				case common.INDEX_STATE_INITIAL,
+					common.INDEX_STATE_CATCHUP:
+					indexList = append(indexList, indexInst)
+				}
 			}
 		}
 
