@@ -1,26 +1,69 @@
 package pipeline
 
+import "sync"
+
 type ItemWriter struct {
+	errLock sync.Mutex
+	err     error
+
 	wblock *[]byte
 	wchan  chan interface{}
 	wr     BlockBufferWriter
+	closed bool
+
+	killch chan struct{}
 }
 
-func (w *ItemWriter) Shutdown(err error) {}
+func (w *ItemWriter) InitWriter() {
+	w.killch = make(chan struct{})
+	w.wchan = make(chan interface{}, 1)
+}
+
+func (w *ItemWriter) SetNumBuffers(n int) {
+	w.wchan = make(chan interface{}, n)
+}
+
+func (w *ItemWriter) Shutdown(err error) {
+	w.errLock.Lock()
+	defer w.errLock.Unlock()
+	w.err = err
+}
+
+func (w *ItemWriter) Kill() {
+	close(w.killch)
+}
 
 func (w *ItemWriter) grabBlock() {
 	w.wblock = blockPool.Get().(*[]byte)
 	w.wr.Init(w.wblock)
 }
 
+func (w *ItemWriter) sendBlock() error {
+	w.wr.Close()
+	select {
+	case w.wchan <- w.wblock:
+	case <-w.killch:
+		return ErrSupervisorKill
+	}
+
+	return nil
+}
+
 func (w *ItemWriter) WriteItem(itm ...[]byte) error {
+	var err error
 	if w.wblock == nil {
 		w.grabBlock()
 	}
 
 	if w.wr.Put(itm...) == ErrNoBlockSpace {
-		w.wr.Close()
-		w.wchan <- w.wblock
+		err = w.HasShutdown()
+		if err != nil {
+			return err
+		}
+		err = w.sendBlock()
+		if err != nil {
+			return err
+		}
 		w.grabBlock()
 		return w.wr.Put(itm...)
 	}
@@ -33,39 +76,85 @@ func (w *ItemWriter) Channel() chan interface{} {
 }
 
 func (w *ItemWriter) CloseWrite() error {
+	if w.closed {
+		return nil
+	}
+
+	err := w.HasShutdown()
+	if err != nil {
+		return err
+	}
+
 	if w.wr.IsEmpty() {
 		blockPool.Put(w.wblock)
 	} else {
-		w.wr.Close()
-		w.wchan <- w.wblock
+		w.sendBlock()
 	}
-	w.wblock = nil
 	close(w.wchan)
+	w.closed = true
 
 	return nil
+}
+
+func (w *ItemWriter) HasShutdown() error {
+	w.errLock.Lock()
+	defer w.errLock.Unlock()
+
+	return w.err
+}
+
+func (w *ItemWriter) CloseWithError(err error) {
+	if w.closed {
+		return
+	}
+
+	if w.wblock != nil {
+		blockPool.Put(w.wblock)
+	}
+
+	select {
+	case w.wchan <- w.err:
+		close(w.wchan)
+		w.closed = true
+	case <-w.killch:
+	}
 }
 
 type ItemReader struct {
 	rblock *[]byte
 	rchan  chan interface{}
 	rr     BlockBufferReader
+
+	killch chan struct{}
 }
 
 func (r *ItemReader) SetSource(w Writer) {
 	r.rchan = w.Channel()
 }
 
+func (w *ItemReader) InitReader() {
+	w.killch = make(chan struct{})
+}
+
+func (r *ItemReader) Kill() {
+	close(r.killch)
+}
+
 func (r *ItemReader) grabBlock() error {
-	x, ok := <-r.rchan
-	if !ok {
-		return ErrNoMoreItem
-	}
-	switch v := x.(type) {
-	case *[]byte:
-		r.rblock = v
-		r.rr.Init(r.rblock)
-	case error:
-		return v
+	select {
+	case x, ok := <-r.rchan:
+		if !ok {
+			return ErrNoMoreItem
+		}
+		switch v := x.(type) {
+		case *[]byte:
+			r.rblock = v
+			r.rr.Init(r.rblock)
+		case error:
+			return v
+		}
+	case <-r.killch:
+		return ErrSupervisorKill
 	}
 
 	return nil
@@ -100,4 +189,18 @@ func (r *ItemReader) CloseRead() error {
 	}
 
 	return nil
+}
+
+type ItemReadWriter struct {
+	ItemReader
+	ItemWriter
+}
+
+func (rw *ItemReadWriter) InitReadWriter() {
+	rw.InitWriter()
+	rw.ItemReader.killch = rw.ItemReader.killch
+}
+
+func (rw *ItemReadWriter) Kill() {
+	close(rw.ItemWriter.killch)
 }

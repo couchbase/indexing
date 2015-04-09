@@ -11,7 +11,7 @@ type src struct {
 
 func newSrc(c int) *src {
 	s := &src{count: c}
-	s.wchan = make(chan interface{}, 1)
+	s.InitWriter()
 
 	return s
 
@@ -28,13 +28,12 @@ func (s *src) Routine() error {
 }
 
 type filter struct {
-	ItemWriter
-	ItemReader
+	ItemReadWriter
 }
 
 func newFilter() *filter {
 	f := &filter{}
-	f.wchan = make(chan interface{}, 1)
+	f.InitReadWriter()
 	return f
 }
 
@@ -60,7 +59,9 @@ type sink struct {
 }
 
 func newSink(t *testing.T, c int) *sink {
-	return &sink{t: t, count: c}
+	s := &sink{t: t, count: c}
+	s.InitReader()
+	return s
 }
 
 func (s *sink) Routine() error {
@@ -100,9 +101,9 @@ func TestSimplePipeline(t *testing.T) {
 		f.SetSource(s)
 		si.SetSource(f)
 
-		p.AddSource(s)
-		p.AddFilter(f)
-		p.AddSink(si)
+		p.AddSource("src", s)
+		p.AddFilter("filter", f)
+		p.AddSink("sink", si)
 		p.Execute()
 	}
 

@@ -2,14 +2,18 @@ package pipeline
 
 import (
 	"errors"
+	"github.com/couchbase/indexing/secondary/logging"
+	"sync"
 )
 
 var (
-	ErrSinkExist = errors.New("Sink already exist")
+	ErrSinkExist      = errors.New("Sink already exist")
+	ErrSupervisorKill = errors.New("Supervisor requested exit")
 )
 
 type Runnable interface {
 	Routine() error
+	Kill()
 }
 
 type Writer interface {
@@ -34,24 +38,30 @@ type Sink interface {
 }
 
 type Pipeline struct {
-	sources []Source
-	filters []Filter
-	sink    Sink
+	sources []*pipelineObject
+	filters []*pipelineObject
+	sink    *pipelineObject
+	wg      sync.WaitGroup
 }
 
-func (p *Pipeline) AddSource(s Source) error {
-	p.sources = append(p.sources, s)
+type pipelineObject struct {
+	n string
+	r Runnable
+}
+
+func (p *Pipeline) AddSource(name string, s Source) error {
+	p.sources = append(p.sources, &pipelineObject{n: name, r: s.(Runnable)})
 	return nil
 }
 
-func (p *Pipeline) AddFilter(f Filter) error {
-	p.filters = append(p.filters, f)
+func (p *Pipeline) AddFilter(name string, f Filter) error {
+	p.filters = append(p.filters, &pipelineObject{n: name, r: f.(Runnable)})
 	return nil
 }
 
-func (p *Pipeline) AddSink(s Sink) error {
+func (p *Pipeline) AddSink(name string, s Sink) error {
 	if p.sink == nil {
-		p.sink = s
+		p.sink = &pipelineObject{n: name, r: s.(Runnable)}
 	} else {
 		return ErrSinkExist
 	}
@@ -59,15 +69,27 @@ func (p *Pipeline) AddSink(s Sink) error {
 	return nil
 }
 
-func (p *Pipeline) runIt(r Runnable) {
+func (p *Pipeline) runIt(o *pipelineObject) {
+	p.wg.Add(1)
 	go func() {
-		err := r.Routine()
+		err := o.r.Routine()
 		if err != nil {
-			for _, src := range p.sources {
-				src.Shutdown(err)
-			}
+			logging.Errorf("%v exited with error %v", o.n, err)
 		}
+		p.wg.Done()
 	}()
+}
+
+func (p *Pipeline) Finalize() {
+	for _, src := range p.sources {
+		src.r.Kill()
+	}
+
+	for _, filter := range p.filters {
+		filter.r.Kill()
+	}
+
+	p.wg.Wait()
 }
 
 func (p *Pipeline) Execute() error {
@@ -79,5 +101,7 @@ func (p *Pipeline) Execute() error {
 		p.runIt(filter)
 	}
 
-	return p.sink.Routine()
+	err := p.sink.r.Routine()
+	p.Finalize()
+	return err
 }
