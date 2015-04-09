@@ -208,7 +208,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			n, ok := plan["nodes"].(string)
 			if ok {
 				nodes = []string{n}
-			} else if _, ok := plan["nodes"]; ok {
+			} else if _, ok := plan["nodes"];   ok {
 				return c.IndexDefnId(0),
 					errors.New(fmt.Sprintf("Fails to create index.  Node '%v' is not valid", plan["nodes"])),
 					false
