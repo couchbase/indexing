@@ -93,15 +93,16 @@ type IndexStatusResponse struct {
 }
 
 type IndexStatus struct {
-	DefnId    common.IndexDefnId `json:"defnId,omitempty"`
-	Name      string             `json:"name,omitempty"`
-	Bucket    string             `json:"bucket,omitempty"`
-	IsPrimary bool               `json:"isPrimary,omitempty"`
-	SecExprs  []string           `json:"secExprs,omitempty"`
-	WhereExpr string             `json:"where,omitempty"`
-	Status    string             `json:"status,omitempty"`
-	Hosts     []string           `json:"hosts,omitempty"`
-	Error     string             `json:"error,omitempty"`
+	DefnId     common.IndexDefnId `json:"defnId,omitempty"`
+	Name       string             `json:"name,omitempty"`
+	Bucket     string             `json:"bucket,omitempty"`
+	IsPrimary  bool               `json:"isPrimary,omitempty"`
+	SecExprs   []string           `json:"secExprs,omitempty"`
+	WhereExpr  string             `json:"where,omitempty"`
+	Status     string             `json:"status,omitempty"`
+	Definition string             `json:"definition"`
+	Hosts      []string           `json:"hosts,omitempty"`
+	Error      string             `json:"error,omitempty"`
 }
 
 //
@@ -311,15 +312,17 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, a
 						}
 
 						status := IndexStatus{
-							DefnId:    defn.DefnId,
-							Name:      defn.Name,
-							Bucket:    defn.Bucket,
-							IsPrimary: defn.IsPrimary,
-							SecExprs:  defn.SecExprs,
-							WhereExpr: defn.WhereExpr,
-							Status:    stateStr,
-							Error:     errStr,
-							Hosts:     []string{curl}}
+							DefnId:     defn.DefnId,
+							Name:       defn.Name,
+							Bucket:     defn.Bucket,
+							IsPrimary:  defn.IsPrimary,
+							SecExprs:   defn.SecExprs,
+							WhereExpr:  defn.WhereExpr,
+							Status:     stateStr,
+							Error:      errStr,
+							Hosts:      []string{curl},
+							Definition: common.IndexStatement(defn),
+						}
 
 						list = append(list, status)
 					}

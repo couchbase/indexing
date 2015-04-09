@@ -699,10 +699,16 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
+		var buildTs Timestamp
 		//get current timestamp from KV and set it as Initial Build Timestamp
-		buildTs, err := GetCurrentKVTs(idx.config["clusterAddr"].String(),
-			bucket,
-			idx.config["numVbuckets"].Int())
+		b, err := common.ConnectBucket(idx.config["clusterAddr"].String(),
+			"default", bucket)
+		defer b.Close()
+
+		if err == nil {
+			buildTs, err = GetCurrentKVTs(b,
+				idx.config["numVbuckets"].Int())
+		}
 
 		if err != nil {
 			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
@@ -1991,12 +1997,12 @@ func (idx *indexer) checkBucketExistsInStream(bucket string, streamId common.Str
 	for _, index := range idx.indexInstMap {
 
 		// use checkDelete to verify index in DELETED status.   If an index is dropped while
-		// there is concurrent build, the stream will not be cleaned up.   
+		// there is concurrent build, the stream will not be cleaned up.
 		if index.Defn.Bucket == bucket && index.Stream == streamId &&
 			(index.State == common.INDEX_STATE_ACTIVE ||
 				index.State == common.INDEX_STATE_CATCHUP ||
 				index.State == common.INDEX_STATE_INITIAL ||
-				(index.State == common.INDEX_STATE_DELETED && checkDelete))  {
+				(index.State == common.INDEX_STATE_DELETED && checkDelete)) {
 			return true
 		}
 	}
@@ -2139,10 +2145,17 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	case common.MAINT_STREAM:
 
 		for _, indexInst := range idx.indexInstMap {
-			if indexInst.Defn.Bucket == bucket &&
-				(indexInst.State == common.INDEX_STATE_ACTIVE ||
-					indexInst.State == common.INDEX_STATE_CATCHUP) {
-				indexList = append(indexList, indexInst)
+
+			if indexInst.Defn.Bucket == bucket {
+				switch indexInst.State {
+				case common.INDEX_STATE_ACTIVE,
+					common.INDEX_STATE_INITIAL:
+					if indexInst.Stream == streamId {
+						indexList = append(indexList, indexInst)
+					}
+				case common.INDEX_STATE_CATCHUP:
+					indexList = append(indexList, indexInst)
+				}
 			}
 		}
 
@@ -2150,9 +2163,12 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 		for _, indexInst := range idx.indexInstMap {
 			if indexInst.Defn.Bucket == bucket &&
-				indexInst.State == common.INDEX_STATE_INITIAL ||
-				indexInst.State == common.INDEX_STATE_CATCHUP {
-				indexList = append(indexList, indexInst)
+				indexInst.Stream == streamId {
+				switch indexInst.State {
+				case common.INDEX_STATE_INITIAL,
+					common.INDEX_STATE_CATCHUP:
+					indexList = append(indexList, indexInst)
+				}
 			}
 		}
 
@@ -2593,9 +2609,12 @@ func (idx *indexer) validateIndexInstMap() {
 			//also set the buildTs for initial state index.
 			//TODO buildTs to be part of index instance
 			if bucketValid[bucket] {
-				buildTs, err := GetCurrentKVTs(idx.config["clusterAddr"].String(),
-					bucket,
-					idx.config["numVbuckets"].Int())
+				var buildTs Timestamp
+				b, err := common.ConnectBucket(idx.config["clusterAddr"].String(),
+					"default", bucket)
+				defer b.Close()
+
+				buildTs, err = GetCurrentKVTs(b, idx.config["numVbuckets"].Int())
 				if err != nil {
 					common.CrashOnError(err)
 				} else {
@@ -2620,6 +2639,57 @@ func (idx *indexer) validateIndexInstMap() {
 		}
 	}
 
+	idx.checkMissingMaintBucket()
+
+}
+
+//On recovery, deleted indexes are ignored. There can be
+//a case where the last maint stream index was dropped and
+//indexer crashes while there is an index in Init stream.
+//Such indexes need to be moved to Maint Stream.
+func (idx *indexer) checkMissingMaintBucket() {
+
+	missingBucket := make(map[string]bool)
+
+	//get all unique buckets in init stream
+	for _, index := range idx.indexInstMap {
+		if index.Stream == common.INIT_STREAM {
+			missingBucket[index.Defn.Bucket] = true
+		}
+	}
+
+	//remove those present in maint stream
+	for _, index := range idx.indexInstMap {
+		if index.Stream == common.MAINT_STREAM {
+			if _, ok := missingBucket[index.Defn.Bucket]; ok {
+				delete(missingBucket, index.Defn.Bucket)
+			}
+		}
+	}
+
+	//move indexes of these buckets to Maint Stream
+	if len(missingBucket) > 0 {
+		var updatedList []common.IndexInstId
+		for bucket, _ := range missingBucket {
+			//for all indexes for this bucket
+			for instId, index := range idx.indexInstMap {
+				if index.Defn.Bucket == bucket {
+					//state is set to Initial, no catchup in Maint
+					index.State = common.INDEX_STATE_INITIAL
+					index.Stream = common.MAINT_STREAM
+					idx.indexInstMap[instId] = index
+					updatedList = append(updatedList, instId)
+				}
+			}
+		}
+
+		if idx.enableManager {
+			if err := idx.updateMetaInfoForIndexList(updatedList,
+				true, true, false, false); err != nil {
+				common.CrashOnError(err)
+			}
+		}
+	}
 }
 
 func isValidRecoveryState(state common.IndexState) bool {

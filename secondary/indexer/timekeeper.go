@@ -16,9 +16,14 @@ package indexer
 import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
 	"sync"
 	"time"
+)
+
+const (
+	maxStatsRetries = 5
 )
 
 //Timekeeper manages the Stability Timestamp Generation and also
@@ -39,6 +44,9 @@ type timekeeper struct {
 
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
+
+	statsLock  sync.Mutex
+	bucketConn map[string]*couchbase.Bucket
 
 	lock sync.Mutex //lock to protect this structure
 }
@@ -71,6 +79,7 @@ func NewTimekeeper(supvCmdch MsgChannel, supvRespch MsgChannel,
 		indexInstMap:   make(common.IndexInstMap),
 		indexPartnMap:  make(IndexPartnMap),
 		indexBuildInfo: make(map[common.IndexInstId]*InitialBuildInfo),
+		bucketConn:     make(map[string]*couchbase.Bucket),
 	}
 
 	//start timekeeper loop which listens to commands from its supervisor
@@ -1041,14 +1050,19 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	if streamId == common.INIT_STREAM {
-
-		if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
-			!tk.ss.checkAnyAbortPending(streamId, bucket) {
-			lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
-			tk.checkInitialBuildDone(streamId, bucket, lastFlushedTs)
-		}
+	//Check for possiblity of build done after stream request done.
+	//In case of crash recovery, if there are no mutations, there is
+	//no flush happening, which can cause index to be in initial state.
+	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
+		!tk.ss.checkAnyAbortPending(streamId, bucket) {
+		lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+		tk.checkInitialBuildDone(streamId, bucket, lastFlushedTs)
 	}
+
+	//If the indexer crashed after processing all mutations but before
+	//merge of an index in Catchup state, the merge needs to happen here,
+	//as no flush would happen in case there are no more mutations.
+	tk.checkPendingStreamMerge(streamId, bucket)
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -1743,6 +1757,27 @@ func (tk *timekeeper) handleUpdateIndexPartnMap(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
+func (tk *timekeeper) getBucketConn(name string, refresh bool) (*couchbase.Bucket, error) {
+	var ok bool
+	var b *couchbase.Bucket
+	var err error
+
+	tk.statsLock.Lock()
+	defer tk.statsLock.Unlock()
+
+	b, ok = tk.bucketConn[name]
+	if ok && !refresh {
+		return b, nil
+	} else {
+		b, err = common.ConnectBucket(tk.config["clusterAddr"].String(), "default", name)
+		if err != nil {
+			return nil, err
+		}
+		tk.bucketConn[name] = b
+		return b, nil
+	}
+}
+
 func (tk *timekeeper) handleStats(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 
@@ -1760,10 +1795,26 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			if inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
+
+			var b *couchbase.Bucket
+			var kvTs Timestamp
+			var err error
+
 			if _, ok := bucketTsMap[inst.Defn.Bucket]; !ok {
-				kvTs, err := GetCurrentKVTs(tk.config["clusterAddr"].String(),
-					inst.Defn.Bucket, tk.config["numVbuckets"].Int())
-				if err != nil {
+				rh := common.NewRetryHelper(maxStatsRetries, time.Second, 1, func(a int, err error) error {
+					if a == 0 {
+						b, err = tk.getBucketConn(inst.Defn.Bucket, false)
+					} else {
+						b, err = tk.getBucketConn(inst.Defn.Bucket, true)
+					}
+					if err != nil {
+						return err
+					}
+					kvTs, err = GetCurrentKVTs(b, tk.config["numVbuckets"].Int())
+					return err
+				})
+
+				if rh.Run() != nil {
 					logging.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
 					replych <- statsMap
 					return
@@ -1783,14 +1834,14 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			}
 
 			k := fmt.Sprintf("%s:%s:num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
-			sum := uint64(0)
+			flushedCount := uint64(0)
 			flushedTs := tk.ss.streamBucketLastFlushedTsMap[inst.Stream][inst.Defn.Bucket]
 			if flushedTs != nil {
 				for _, seqno := range flushedTs.Seqnos {
-					sum += seqno
+					flushedCount += seqno
 				}
 			}
-			v := sum
+			v := flushedCount
 			statsMap[k] = v
 
 			receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
@@ -1816,10 +1867,35 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				if receivedTs != nil {
 					recvdSeqno = receivedTs.Seqnos[i]
 				}
-				pending += uint64(seqno) - recvdSeqno
+
+				// By the time we compute index stats, kv timestamp would have
+				// become old.
+				if uint64(seqno) > recvdSeqno {
+					pending += uint64(seqno) - recvdSeqno
+				}
 			}
 			k = fmt.Sprintf("%s:%s:num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
 			v = pending
+			statsMap[k] = v
+
+			k = fmt.Sprintf("%s:%s:build_progress", inst.Defn.Bucket, inst.Defn.Name)
+			switch inst.State {
+			default:
+				v = 0
+			case common.INDEX_STATE_ACTIVE:
+				v = 100
+			case common.INDEX_STATE_INITIAL, common.INDEX_STATE_CATCHUP:
+				totalToBeflushed := uint64(0)
+				for _, seqno := range kvTs {
+					totalToBeflushed += uint64(seqno)
+				}
+
+				if totalToBeflushed > flushedCount {
+					v = flushedCount * 100 / totalToBeflushed
+				} else {
+					v = 100
+				}
+			}
 			statsMap[k] = v
 		}
 

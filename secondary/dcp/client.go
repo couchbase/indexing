@@ -108,6 +108,7 @@ func (b *Bucket) Do(k string, f func(mc *memcached.Client, vb uint16) error) (er
 
 type gatheredStats struct {
 	sn   string
+	err  error
 	vals map[string]string
 }
 
@@ -120,13 +121,13 @@ func getStatsParallel(b *Bucket, offset int, which string,
 	conn, err := pool.Get()
 	defer pool.Return(conn)
 	if err != nil {
-		ch <- gatheredStats{sn, results}
+		ch <- gatheredStats{sn, err, results}
 	} else {
 		st, err := conn.StatsMap(which)
 		if err == nil {
-			ch <- gatheredStats{sn, st}
+			ch <- gatheredStats{sn, nil, st}
 		} else {
-			ch <- gatheredStats{sn, results}
+			ch <- gatheredStats{sn, err, results}
 		}
 	}
 }
@@ -134,12 +135,14 @@ func getStatsParallel(b *Bucket, offset int, which string,
 // GetStats gets a set of stats from all servers.
 //
 // Returns a map of server ID -> map of stat key to map value.
-func (b *Bucket) GetStats(which string) map[string]map[string]string {
+func (b *Bucket) GetStats(which string) (map[string]map[string]string, error) {
 	rv := map[string]map[string]string{}
+	var errStr string = ""
+	var err error
 
 	vsm := b.VBServerMap()
 	if vsm.ServerList == nil {
-		return rv
+		return rv, nil
 	}
 	// Go grab all the things at once.
 	todo := len(vsm.ServerList)
@@ -155,9 +158,19 @@ func (b *Bucket) GetStats(which string) map[string]map[string]string {
 		if len(g.vals) > 0 {
 			rv[g.sn] = g.vals
 		}
+		if g.err != nil {
+			if errStr != "" {
+				errStr += ", "
+			}
+			errStr += fmt.Sprintf("%v: %v", g.sn, g.err)
+		}
 	}
 
-	return rv
+	if errStr != "" {
+		err = fmt.Errorf(errStr)
+	}
+
+	return rv, err
 }
 
 func isAuthError(err error) bool {

@@ -268,7 +268,10 @@ func (c *GsiClient) BucketTs(bucketn string) (*TsConsistency, error) {
 			return nil, err
 		}
 	}
-	seqnos, vbuuids := common.BucketTs(b, c.maxvb)
+	seqnos, vbuuids, err := common.BucketTs(b, c.maxvb)
+	if err != nil {
+		return nil, err
+	}
 	vbnos := make([]uint16, c.maxvb)
 	for i := range vbnos {
 		vbnos[i] = uint16(i)

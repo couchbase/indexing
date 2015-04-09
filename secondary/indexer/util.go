@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
 	"net"
 	"strconv"
@@ -69,41 +70,36 @@ func IndexPath(inst *common.IndexInst, sliceId SliceId) string {
 	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, inst.InstId, sliceId)
 }
 
-func GetCurrentKVTs(cluster, bucket string, numVbs int) (Timestamp, error) {
+func GetCurrentKVTs(bucket *couchbase.Bucket, numVbs int) (Timestamp, error) {
 	ts := NewTimestamp(numVbs)
 	start := time.Now()
-	if b, err := common.ConnectBucket(cluster, "default", bucket); err == nil {
-		defer b.Close()
 
-		//get all the vb seqnum
-		stats := b.GetStats("vbucket-details")
-
-		//for all nodes in cluster
-		for _, nodestat := range stats {
-			//for all vbuckets
-			for i := 0; i < numVbs; i++ {
-				vbStateKey := "vb_" + strconv.Itoa(i)
-				if state, ok := nodestat[vbStateKey]; ok {
-					//only active vbuckets
-					if state == "active" {
-						vbSeqKey := "vb_" + strconv.Itoa(i) + ":high_seqno"
-						if highseqno, ok := nodestat[vbSeqKey]; ok {
-							if s, err := strconv.Atoi(highseqno); err == nil {
-								ts[i] = Seqno(s)
-							}
+	//get all the vb seqnum
+	stats, err := bucket.GetStats("vbucket-details")
+	//for all nodes in cluster
+	for _, nodestat := range stats {
+		//for all vbuckets
+		for i := 0; i < numVbs; i++ {
+			vbStateKey := "vb_" + strconv.Itoa(i)
+			if state, ok := nodestat[vbStateKey]; ok {
+				//only active vbuckets
+				if state == "active" {
+					vbSeqKey := "vb_" + strconv.Itoa(i) + ":high_seqno"
+					if highseqno, ok := nodestat[vbSeqKey]; ok {
+						if s, err := strconv.Atoi(highseqno); err == nil {
+							ts[i] = Seqno(s)
 						}
 					}
 				}
 			}
 		}
-		elapsed := time.Since(start)
-		logging.Tracef("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
-		return ts, nil
-
-	} else {
-		logging.Errorf("Indexer::getCurrentKVTs Error Connecting to KV Cluster %v", err)
-		return nil, err
 	}
+	elapsed := time.Since(start)
+	logging.Tracef("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
+	if err != nil {
+		logging.Errorf("Indexer::getCurrentKVTs Error Connecting to KV Cluster %v", err)
+	}
+	return ts, err
 }
 
 func ValidateBucket(cluster, bucket string) bool {

@@ -473,11 +473,12 @@ func MaxVbuckets(bucket *couchbase.Bucket) (int, error) {
 }
 
 // BucketTs return bucket timestamp for all vbucket.
-func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64) {
+func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64, err error) {
 	seqnos = make([]uint64, maxvb)
 	vbuuids = make([]uint64, maxvb)
+	stats, err := bucket.GetStats("vbucket-details")
 	// for all nodes in cluster
-	for _, nodestat := range bucket.GetStats("vbucket-details") {
+	for _, nodestat := range stats {
 		// for all vbuckets
 		for i := 0; i < maxvb; i++ {
 			vbno_str := strconv.Itoa(i)
@@ -499,7 +500,7 @@ func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64) {
 			}
 		}
 	}
-	return seqnos, vbuuids
+	return seqnos, vbuuids, err
 }
 
 func IsAuthValid(r *http.Request, server string) (bool, error) {
@@ -526,4 +527,31 @@ func SetNumCPUs(percent int) int {
 	}
 	runtime.GOMAXPROCS(ncpu)
 	return ncpu
+}
+
+func IndexStatement(def IndexDefn) string {
+	var stmt string
+	primCreate := "CREATE PRIMARY INDEX %s ON %s"
+	secCreate := "CREATE INDEX %s ON %s(%s)"
+	where := " WHERE %s"
+	using := " USING GSI"
+
+	if def.IsPrimary {
+		stmt = fmt.Sprintf(primCreate, def.Name, def.Bucket)
+	} else {
+		exprs := ""
+		for _, exp := range def.SecExprs {
+			if exprs != "" {
+				exprs += ","
+			}
+			exprs += exp
+		}
+		stmt = fmt.Sprintf(secCreate, def.Name, def.Bucket, exprs)
+		if def.WhereExpr != "" {
+			stmt += fmt.Sprintf(where, def.WhereExpr)
+		}
+	}
+
+	stmt += using
+	return stmt
 }

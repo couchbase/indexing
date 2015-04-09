@@ -496,9 +496,9 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stats_cache_timeout": ConfigValue{
-		uint64(300),
+		uint64(5000),
 		"Stats cache ttl in millis",
-		uint64(300),
+		uint64(5000),
 		true, // immutable
 	},
 
@@ -546,9 +546,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.memory_quota": ConfigValue{
-		uint64(0),
+		uint64(256 * 1024 * 1024),
 		"Maximum memory used by the indexer buffercache",
-		uint64(0),
+		uint64(256 * 1024 * 1024),
 		false, // mutable
 	},
 	"indexer.settings.max_cpu_percent": ConfigValue{
