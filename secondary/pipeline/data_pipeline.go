@@ -15,6 +15,8 @@ type ItemWriter struct {
 }
 
 func (w *ItemWriter) InitWriter() {
+	w.wblock = nil
+	w.closed = false
 	w.killch = make(chan struct{})
 	w.wchan = make(chan interface{}, 1)
 }
@@ -34,7 +36,7 @@ func (w *ItemWriter) Kill() {
 }
 
 func (w *ItemWriter) grabBlock() {
-	w.wblock = blockPool.Get().(*[]byte)
+	w.wblock = GetBlock()
 	w.wr.Init(w.wblock)
 }
 
@@ -86,7 +88,7 @@ func (w *ItemWriter) CloseWrite() error {
 	}
 
 	if w.wr.IsEmpty() {
-		blockPool.Put(w.wblock)
+		PutBlock(w.wblock)
 	} else {
 		w.sendBlock()
 	}
@@ -109,7 +111,7 @@ func (w *ItemWriter) CloseWithError(err error) {
 	}
 
 	if w.wblock != nil {
-		blockPool.Put(w.wblock)
+		PutBlock(w.wblock)
 	}
 
 	select {
@@ -132,8 +134,9 @@ func (r *ItemReader) SetSource(w Writer) {
 	r.rchan = w.Channel()
 }
 
-func (w *ItemReader) InitReader() {
-	w.killch = make(chan struct{})
+func (r *ItemReader) InitReader() {
+	r.rblock = nil
+	r.killch = make(chan struct{})
 }
 
 func (r *ItemReader) Kill() {
@@ -160,6 +163,23 @@ func (r *ItemReader) grabBlock() error {
 	return nil
 }
 
+func (r *ItemReader) PeekBlock() ([]byte, error) {
+	if r.rblock == nil {
+		if err := r.grabBlock(); err != nil {
+			return nil, err
+		}
+	}
+
+	return (*r.rblock)[2 : 2+r.rr.Len()-2], nil
+}
+
+func (r *ItemReader) FlushBlock() {
+	if r.rblock != nil {
+		PutBlock(r.rblock)
+		r.rblock = nil
+	}
+}
+
 func (r *ItemReader) ReadItem() ([]byte, error) {
 	if r.rblock == nil {
 		if err := r.grabBlock(); err != nil {
@@ -169,7 +189,7 @@ func (r *ItemReader) ReadItem() ([]byte, error) {
 
 	itm, err := r.rr.Get()
 	if err == ErrNoMoreItem {
-		blockPool.Put(r.rblock)
+		PutBlock(r.rblock)
 		r.rblock = nil
 		if err := r.grabBlock(); err != nil {
 			return nil, err
@@ -185,7 +205,7 @@ func (r *ItemReader) ReadItem() ([]byte, error) {
 
 func (r *ItemReader) CloseRead() error {
 	if r.rblock != nil {
-		blockPool.Put(r.rblock)
+		PutBlock(r.rblock)
 	}
 
 	return nil
@@ -197,6 +217,8 @@ type ItemReadWriter struct {
 }
 
 func (rw *ItemReadWriter) InitReadWriter() {
+	rw.rblock = nil
+	rw.closed = false
 	rw.InitWriter()
 	rw.ItemReader.killch = rw.ItemWriter.killch
 }
