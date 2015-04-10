@@ -226,7 +226,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 						errors.New("Fails to create index.  Parameter defer_build must be a boolean value of (true or false)."),
 						false
 				}
-			} else {
+			} else if _, ok := plan["defer_build"]; ok {
 				return c.IndexDefnId(0),
 					errors.New("Fails to create index.  Parameter defer_build must be a boolean value of (true or false)."),
 					false
