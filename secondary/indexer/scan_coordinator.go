@@ -600,6 +600,8 @@ func (s *scanCoordinator) requestHandler(
 		idxInstId: indexInst.InstId,
 	}
 
+	logging.Debugf("%v: SCAN_ID: %v requested timestamp: %v",
+		s.logPrefix, sd.scanId, ScanTStoString(sd.p.ts))
 	// Block wait until a ts is available for fullfilling the request
 	s.supvMsgch <- snapReqMsg
 	var msg interface{}
