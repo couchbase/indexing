@@ -131,8 +131,9 @@ func (o *MetadataProvider) WatchMetadata(indexAdminPort string, callback watcher
 		// if successfully connected, retrieve indexerId
 		success, _ = watcher.notifyReady(indexAdminPort, 0, nil)
 		if success {
+			logging.Infof("WatchMetadata(): successfully reach indexer at %v.", indexAdminPort)
 			// watcher succesfully initialized, add it to MetadataProvider
-			o.addWatcher(watcher, c.INDEXER_ID_NIL)
+			o.addWatcherNoLock(watcher, c.INDEXER_ID_NIL)
 			return watcher.getIndexerId()
 
 		} else {
@@ -140,6 +141,8 @@ func (o *MetadataProvider) WatchMetadata(indexAdminPort string, callback watcher
 			readych = nil
 		}
 	}
+
+	logging.Infof("WatchMetadata(): unable to reach indexer at %v. Retry in background.", indexAdminPort)
 
 	// watcher is not connected to indexer or fail to get indexer id,
 	// create a temporary index id
@@ -157,7 +160,7 @@ func (o *MetadataProvider) UnwatchMetadata(indexerId c.IndexerId) {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
 
-	logging.Debugf("MetadataProvider.UnwatchMetadata(): indexer %v", indexerId)
+	logging.Infof("UnwatchMetadata(): indexer %v", indexerId)
 
 	watcher, ok := o.watchers[indexerId]
 	if !ok {
@@ -208,7 +211,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			n, ok := plan["nodes"].(string)
 			if ok {
 				nodes = []string{n}
-			} else if _, ok := plan["nodes"];   ok {
+			} else if _, ok := plan["nodes"]; ok {
 				return c.IndexDefnId(0),
 					errors.New(fmt.Sprintf("Fails to create index.  Node '%v' is not valid", plan["nodes"])),
 					false
@@ -463,6 +466,7 @@ func (o *MetadataProvider) FindIndexByName(name string, bucket string) *IndexMet
 func (o *MetadataProvider) Close() {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
+	logging.Infof("MetadataProvider is terminated. Cleaning up ...")
 
 	for _, watcher := range o.watchers {
 		watcher.close()
@@ -506,14 +510,16 @@ func (o *MetadataProvider) retryHelper(watcher *watcher, readych chan bool, inde
 	func() {
 		o.mutex.Lock()
 		defer o.mutex.Unlock()
-		o.addWatcher(watcher, tempIndexerId)
+		o.addWatcherNoLock(watcher, tempIndexerId)
 	}()
+
+	logging.Infof("WatchMetadata(): Successfully connected to indexer at %v after retry.", indexAdminPort)
 
 	indexerId := watcher.getIndexerId()
 	callback(indexAdminPort, indexerId, tempIndexerId)
 }
 
-func (o *MetadataProvider) addWatcher(watcher *watcher, tempIndexerId c.IndexerId) {
+func (o *MetadataProvider) addWatcherNoLock(watcher *watcher, tempIndexerId c.IndexerId) {
 
 	delete(o.pendings, tempIndexerId)
 
@@ -1035,6 +1041,8 @@ func (w *watcher) cleanupIndices(repo *metadataRepo) {
 }
 
 func (w *watcher) close() {
+
+	logging.Infof("Unwatching metadata for indexer at %v.", w.leaderAddr)
 
 	// kill the watcherServer
 	if len(w.killch) == 0 {
