@@ -21,7 +21,7 @@ user2i = "Administrator"
 passw2i = "asdasd"
 ramsize2i = 8192
 gopath2i = "/opt/goproj"
-goroot2i = ""
+goroot2i = "/usr/local/go"
 install2i = "/opt/couchbase"
 binpath2i = "/opt/goproj/bin:$PATH"
 # TODO: will IP address change with node restart ?
@@ -334,8 +334,9 @@ def install_protobuf():
     packages = "protobuf-compiler"
     trycmd("apt-get install %s --assume-yes" % packages, op="sudo")
     path = os.sep.join([gopath2i, "src", "code.google.com", "p", "goprotobuf"])
-    with cd(path), shell_env(GOPATH=env.gopath2i, GOROOT=env.goroot2i) :
+    with shell_env(GOPATH=env.gopath2i, GOROOT=env.goroot2i):
         trycmd("go get -d github.com/couchbase/indexing/...")
+    with cd(path), shell_env(GOPATH=env.gopath2i, GOROOT=env.goroot2i) :
         trycmd("go install ./...", v=True)
 
 def pp_for_host(host_string) :
