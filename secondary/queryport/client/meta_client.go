@@ -197,18 +197,24 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 }
 
 // GetScanport implements BridgeAccessor{} interface.
-func (b *metadataClient) GetScanport(defnID uint64) (queryport string, targetDefnID uint64, ok bool) {
+func (b *metadataClient) GetScanport(
+	defnID uint64,
+	retry int) (queryport string, targetDefnID uint64, ok bool) {
+
 	b.rw.RLock()
 	defer b.rw.RUnlock()
-
-	targetDefnID = b.pickOptimal(defnID) // defnID (aka index) under least load
+	if retry == 0 {
+		targetDefnID = b.pickOptimal(defnID) // index under least load
+	} else {
+		targetDefnID = b.roundRobin(defnID, retry)
+	}
 	_, queryport, err :=
 		b.mdClient.FindServiceForIndex(common.IndexDefnId(targetDefnID))
 	if err != nil {
 		return "", 0, false
 	}
-	logging.Debugf("Scan port %s for index defnID %d of equivalent index defnId %d",
-		queryport, targetDefnID, defnID)
+	fmsg := "Scan port %s for index defnID %d of equivalent index defnId %d"
+	logging.Debugf(fmsg, queryport, targetDefnID, defnID)
 	return queryport, targetDefnID, true
 }
 
@@ -316,9 +322,9 @@ func (b *metadataClient) equivalentIndex(
 	return true
 }
 
-//--------------------------------
-// local functions to map replicas
-//--------------------------------
+//--------------------------------------
+// local functions to work with replicas
+//--------------------------------------
 
 // manage load statistics.
 type loadHeuristics struct {
@@ -344,6 +350,15 @@ func (b *metadataClient) pickOptimal(defnID uint64) uint64 {
 		}
 	}
 	return uint64(optimalID)
+}
+
+func (b *metadataClient) roundRobin(defnID uint64, retry int) uint64 {
+	id := common.IndexDefnId(defnID)
+	replicas, ok := b.replicas[id]
+	if l := len(replicas); ok && l > 0 {
+		return uint64(replicas[retry%l])
+	}
+	return defnID
 }
 
 //----------------

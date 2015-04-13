@@ -139,9 +139,14 @@ type BridgeAccessor interface {
 	// the cluster.
 	GetScanports() (queryports []string)
 
-	// GetScanport shall fetch queryport address for indexer, under least
-	// load, hosting index `defnID` or an equivalent of `defnID`
-	GetScanport(defnID uint64) (queryport string, targetDefnID uint64, ok bool)
+	// GetScanport shall fetch queryport address for indexer,
+	// if `retry` is ZERO, pick the indexer under least
+	// load, else do a round-robin, based on the retry count,
+	// if more than one indexer is found hosing the index or an
+	// equivalent index.
+	GetScanport(
+		defnID uint64,
+		retry int) (queryport string, targetDefnID uint64, ok bool)
 
 	// GetIndex will return the index-definition structure for defnID.
 	GetIndexDefn(defnID uint64) *common.IndexDefn
@@ -553,7 +558,7 @@ func (c *GsiClient) doScan(
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
 	for i := 0; i < retry; i++ {
-		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID); ok1 {
+		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i); ok1 {
 			if qc, ok2 = c.queryClients[queryport]; ok2 {
 				begin := time.Now().UnixNano()
 				if err = callb(qc, targetDefnID); err == nil {
