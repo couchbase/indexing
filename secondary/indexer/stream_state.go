@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"container/list"
+	"errors"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 )
@@ -287,7 +288,37 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 		}
 	}
 
+	ss.adjustNonSnapAlignedVbs(repairTs, streamId, bucket)
+
 	return repairTs, anythingToRepair, hasConnErr
+
+}
+
+//If a snapshot marker has been received but no mutation for that snapshot,
+//the repairTs seqno will be outside the snapshot marker range and
+//DCP will refuse to accept such seqno for restart. Such VBs need to
+//use lastFlushTs or restartTs.
+func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
+	streamId common.StreamId, bucket string) {
+
+	for _, vbno := range repairTs.GetVbnos() {
+		seqno := repairTs.Seqnos[vbno]
+		snapBegin := repairTs.Snapshots[vbno][0]
+		snapEnd := repairTs.Snapshots[vbno][1]
+		if !(seqno >= snapBegin && seqno <= snapEnd) {
+			if fts, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && fts != nil {
+				repairTs.Seqnos[vbno] = fts.Seqnos[vbno]
+			} else if rts, ok := ss.streamBucketRestartTsMap[streamId][bucket]; ok && rts != nil {
+				//if no flush has been done yet, use restart TS
+				repairTs.Seqnos[vbno] = rts.Seqnos[vbno]
+			}
+			//if seqno is still not with snapshot range, something is wrong as
+			//flush happens at snapshot boundary
+			if !(repairTs.Seqnos[vbno] >= snapBegin && repairTs.Seqnos[vbno] <= snapEnd) {
+				common.CrashOnError(errors.New("No Valid Restart Seqno Found"))
+			}
+		}
+	}
 
 }
 
