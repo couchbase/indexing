@@ -1136,11 +1136,11 @@ func ScanTStoString(ts *common.TsVbuuid) string {
 	var seqsStr string = "["
 
 	if ts != nil {
-		for i, s := range ts.Snapshots {
+		for i, s := range ts.Seqnos {
 			if i > 0 {
 				seqsStr += ","
 			}
-			seqsStr += fmt.Sprintf("%d=%d", i, s[1])
+			seqsStr += fmt.Sprintf("%d=%d", i, s)
 		}
 	}
 
