@@ -514,7 +514,7 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 	switch cmd.OpType {
 	case "":
 		have = []string{}
-		dont = []string{"type", "server", "index", "bucket", "auth", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
+		dont = []string{"type", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
 
 	case "nodes":
 		have = []string{"type", "server", "auth"}
