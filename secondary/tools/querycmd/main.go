@@ -4,6 +4,7 @@ import "flag"
 import "fmt"
 import "log"
 import "os"
+import "runtime"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -16,6 +17,7 @@ func usage(fset *flag.FlagSet) {
 
 func main() {
 	logging.SetLogLevel(logging.Error)
+	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	cmdOptions, args, fset, err := querycmd.ParseArgs(os.Args[1:])
 	if err != nil {
@@ -58,7 +60,7 @@ func main() {
 		}
 
 	case "benchmark":
-		doBenchmark(cmdOptions.Server, "localhost:9101")
+		doBenchmark(cmdOptions.Server, "localhost:8101")
 
 	case "consistency":
 		doConsistency(cmdOptions.Server, maxvb, client)

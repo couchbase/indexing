@@ -11,8 +11,7 @@ import "github.com/couchbase/indexing/secondary/queryport"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "code.google.com/p/goprotobuf/proto"
 
-var mock_nclients = 1
-var mock_duration = 1
+var mock_duration = 10
 
 var testStatisticsResponse = &protobuf.StatisticsResponse{
 	Stats: &protobuf.IndexStatistics{
@@ -43,18 +42,19 @@ func doBenchmark(cluster, addr string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	loopback(cluster, addr)
+	loopback(cluster, addr, 1)
+	loopback(cluster, addr, 2)
+	loopback(cluster, addr, 4)
+	loopback(cluster, addr, 8)
+	loopback(cluster, addr, 16)
 	s.Close()
 }
 
-func loopback(cluster, raddr string) {
+func loopback(cluster, raddr string, mock_nclients int) {
 	qconf := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qconf.SetValue("poolSize", 10)
-	qconf.SetValue("poolOverflow", mock_nclients)
-	client, err := qclient.NewGsiClient(cluster, qconf)
-	if err != nil {
-		log.Fatal(err)
-	}
+	qconf.SetValue("poolSize", 20)
+	qconf.SetValue("poolOverflow", 20+mock_nclients)
+	client := qclient.NewGsiScanClient(raddr, qconf)
 	quitch := make(chan int)
 	for i := 0; i < mock_nclients; i++ {
 		t := time.After(time.Duration(mock_duration) * time.Second)
@@ -68,10 +68,11 @@ func loopback(cluster, raddr string) {
 	}
 
 	client.Close()
-	fmt.Printf("Completed %v queries in %v seconds\n", count, mock_duration)
+	fmsg := "Completed %v queries in %v seconds with %v routines\n"
+	fmt.Printf(fmsg, count, mock_duration, mock_nclients)
 }
 
-func runClient(client *qclient.GsiClient, t <-chan time.Time, quitch chan<- int) {
+func runClient(client *qclient.GsiScanClient, t <-chan time.Time, quitch chan<- int) {
 	count := 0
 
 loop:
@@ -84,7 +85,7 @@ loop:
 		default:
 			l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 			err := client.Range(
-				0xABBA /*defnID*/, l, h, 100, true, 1000,
+				0xABBA /*defnID*/, l, h, 100, true, 1,
 				c.AnyConsistency, nil,
 				func(val qclient.ResponseReader) bool {
 					switch v := val.(type) {
