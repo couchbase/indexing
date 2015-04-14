@@ -442,7 +442,7 @@ func (tk *timekeeper) handleSync(cmd Message) {
 
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, meta.bucket) == false {
-		logging.Warnf("Timekeeper::handleSync \n\tReceived Sync for "+
+		logging.Tracef("Timekeeper::handleSync \n\tReceived Sync for "+
 			"Inactive Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
 		return
 	}
@@ -1506,7 +1506,7 @@ func (tk *timekeeper) checkBucketActiveInStream(streamId common.StreamId,
 	bucket string) bool {
 
 	if bucketStatus, ok := tk.ss.streamBucketStatus[streamId]; !ok {
-		logging.Errorf("Timekeeper::checkBucketActiveInStream "+
+		logging.Tracef("Timekeeper::checkBucketActiveInStream "+
 			"\n\tUnknown Stream: %v", streamId)
 		tk.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_TK_UNKNOWN_STREAM,
@@ -1514,7 +1514,7 @@ func (tk *timekeeper) checkBucketActiveInStream(streamId common.StreamId,
 				category: TIMEKEEPER}}
 		return false
 	} else if status, ok := bucketStatus[bucket]; !ok || status != STREAM_ACTIVE {
-		logging.Errorf("Timekeeper::checkBucketActiveInStream "+
+		logging.Tracef("Timekeeper::checkBucketActiveInStream "+
 			"\n\tUnknown Bucket %v In Stream %v", bucket, streamId)
 		tk.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_TK_UNKNOWN_STREAM,
