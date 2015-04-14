@@ -204,7 +204,7 @@ type GsiClient struct {
 	cluster      string
 	maxvb        int
 	config       common.Config
-	queryClients map[string]*gsiScanClient
+	queryClients map[string]*GsiScanClient
 }
 
 // NewGsiClient returns client to access GSI cluster.
@@ -331,7 +331,7 @@ func (c *GsiClient) LookupStatistics(
 
 	//var stats common.IndexStatistics
 	//var err error
-	//err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+	//err = c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) error {
 	//    stats, err = qc.LookupStatistics(targetDefnID, value)
 	//    return err
 	//})
@@ -359,7 +359,7 @@ func (c *GsiClient) RangeStatistics(
 	//}
 	//var stats common.IndexStatistics
 	//var err error
-	//err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+	//err = c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) error {
 	//    stats, err = qc.RangeStatistics(targetDefnID, low, high, inclusion)
 	//    return err
 	//})
@@ -385,7 +385,7 @@ func (c *GsiClient) Lookup(
 		callb(protoResp)
 		return nil
 	}
-	return c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) (err error) {
+	return c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) (err error) {
 		index := c.bridge.GetIndexDefn(targetDefnID)
 		if cons == common.SessionConsistency {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
@@ -415,7 +415,7 @@ func (c *GsiClient) Range(
 		callb(protoResp)
 		return nil
 	}
-	return c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) (err error) {
+	return c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) (err error) {
 		index := c.bridge.GetIndexDefn(targetDefnID)
 		if cons == common.SessionConsistency {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
@@ -445,7 +445,7 @@ func (c *GsiClient) ScanAll(
 		callb(protoResp)
 		return nil
 	}
-	return c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) (err error) {
+	return c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) (err error) {
 		index := c.bridge.GetIndexDefn(targetDefnID)
 		if cons == common.SessionConsistency {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
@@ -470,7 +470,7 @@ func (c *GsiClient) CountLookup(
 		return 0, err
 	}
 
-	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+	err = c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) error {
 		index := c.bridge.GetIndexDefn(targetDefnID)
 		if cons == common.SessionConsistency {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
@@ -498,7 +498,7 @@ func (c *GsiClient) CountRange(
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		return 0, err
 	}
-	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
+	err = c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) error {
 		index := c.bridge.GetIndexDefn(targetDefnID)
 		if cons == common.SessionConsistency {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
@@ -528,7 +528,7 @@ func (c *GsiClient) updateScanClients() {
 	for _, queryport := range c.bridge.GetScanports() {
 		cache[queryport] = true
 		if _, ok := c.queryClients[queryport]; !ok {
-			c.queryClients[queryport] = newGsiScanClient(queryport, c.config)
+			c.queryClients[queryport] = NewGsiScanClient(queryport, c.config)
 		}
 	}
 	// forget removed indexer-nodes.
@@ -541,9 +541,9 @@ func (c *GsiClient) updateScanClients() {
 }
 
 func (c *GsiClient) doScan(
-	defnID uint64, callb func(*gsiScanClient, uint64) error) error {
+	defnID uint64, callb func(*GsiScanClient, uint64) error) error {
 
-	var qc *gsiScanClient
+	var qc *GsiScanClient
 	var err error
 	var ok1, ok2 bool
 	var queryport string
@@ -579,13 +579,13 @@ func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
 	c := &GsiClient{
 		cluster:      cluster,
 		config:       config,
-		queryClients: make(map[string]*gsiScanClient),
+		queryClients: make(map[string]*GsiScanClient),
 	}
 	if c.bridge, err = newCbqClient(cluster); err != nil {
 		return nil, err
 	}
 	for _, queryport := range c.bridge.GetScanports() {
-		queryClient := newGsiScanClient(queryport, config)
+		queryClient := NewGsiScanClient(queryport, config)
 		c.queryClients[queryport] = queryClient
 	}
 	return c, nil
@@ -597,7 +597,7 @@ func makeWithMetaProvider(
 	c = &GsiClient{
 		cluster:      cluster,
 		config:       config,
-		queryClients: make(map[string]*gsiScanClient),
+		queryClients: make(map[string]*GsiScanClient),
 	}
 	c.bridge, err = newMetaBridgeClient(cluster, config)
 	if err != nil {
