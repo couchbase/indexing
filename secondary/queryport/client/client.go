@@ -387,7 +387,7 @@ func (c *GsiClient) Lookup(
 	}
 	return c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) (err error) {
 		index := c.bridge.GetIndexDefn(targetDefnID)
-		if cons == common.SessionConsistency && vector == nil {
+		if cons == common.SessionConsistency {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
 				return err
 			}
@@ -417,7 +417,7 @@ func (c *GsiClient) Range(
 	}
 	return c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) (err error) {
 		index := c.bridge.GetIndexDefn(targetDefnID)
-		if cons == common.SessionConsistency && vector == nil {
+		if cons == common.SessionConsistency {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
 				return err
 			}
@@ -447,7 +447,7 @@ func (c *GsiClient) ScanAll(
 	}
 	return c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) (err error) {
 		index := c.bridge.GetIndexDefn(targetDefnID)
-		if cons == common.SessionConsistency && vector == nil {
+		if cons == common.SessionConsistency {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
 				return err
 			}
@@ -472,7 +472,7 @@ func (c *GsiClient) CountLookup(
 
 	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
 		index := c.bridge.GetIndexDefn(targetDefnID)
-		if cons == common.SessionConsistency && vector == nil {
+		if cons == common.SessionConsistency {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
 				return err
 			}
@@ -500,7 +500,7 @@ func (c *GsiClient) CountRange(
 	}
 	err = c.doScan(defnID, func(qc *gsiScanClient, targetDefnID uint64) error {
 		index := c.bridge.GetIndexDefn(targetDefnID)
-		if cons == common.SessionConsistency && vector == nil {
+		if cons == common.SessionConsistency {
 			if vector, err = c.BucketTs(index.Bucket); err != nil {
 				return err
 			}
