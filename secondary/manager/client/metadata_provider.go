@@ -62,6 +62,8 @@ type watcher struct {
 	incomingReqs chan *protocol.RequestHandle
 	pendingReqs  map[uint64]*protocol.RequestHandle // key : request id
 	loggedReqs   map[common.Txnid]*protocol.RequestHandle
+
+	notifiers map[c.IndexDefnId]*event
 }
 
 type IndexMetadata struct {
@@ -76,6 +78,12 @@ type InstanceDefn struct {
 	BuildTime []uint64
 	IndexerId c.IndexerId
 	Endpts    []c.Endpoint
+}
+
+type event struct {
+	defnId   c.IndexDefnId
+	status   c.IndexState
+	notifyCh chan error
 }
 
 type watcherCallback func(string, c.IndexerId, c.IndexerId)
@@ -189,6 +197,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	var deferred bool = false
+	var wait bool = false
 	var nodes []string = nil
 
 	if plan != nil {
@@ -218,26 +227,35 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			}
 		}
 
-		deferred, ok = plan["defer_build"].(bool)
+		deferred2, ok := plan["defer_build"].(bool)
 		if !ok {
 			deferred_str, ok := plan["defer_build"].(string)
 			if ok {
 				var err error
-				deferred, err = strconv.ParseBool(deferred_str)
+				deferred2, err = strconv.ParseBool(deferred_str)
 				if err != nil {
 					return c.IndexDefnId(0),
 						errors.New("Fails to create index.  Parameter defer_build must be a boolean value of (true or false)."),
 						false
+				}
+				deferred = deferred2
+				if !deferred {
+					wait = true
 				}
 			} else if _, ok := plan["defer_build"]; ok {
 				return c.IndexDefnId(0),
 					errors.New("Fails to create index.  Parameter defer_build must be a boolean value of (true or false)."),
 					false
 			}
+		} else {
+			deferred = deferred2
+			if !deferred {
+				wait = true
+			}
 		}
 	}
 
-	logging.Debugf("MetadataProvider:CreateIndexWithPlan(): nodes %v", nodes)
+	logging.Debugf("MetadataProvider:CreateIndex(): deferred_build %v sync %v nodes %v", deferred, wait, nodes)
 
 	var watcher *watcher
 	if nodes == nil {
@@ -287,9 +305,16 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	key := fmt.Sprintf("%d", defnID)
-	_, err = watcher.makeRequest(OPCODE_CREATE_INDEX, key, content)
+	if _, err = watcher.makeRequest(OPCODE_CREATE_INDEX, key, content); err != nil {
+		return defnID, err, false
+	}
 
-	return defnID, err, false
+	if wait {
+		err := watcher.waitForEvent(defnID, c.INDEX_STATE_ACTIVE)
+		return defnID, err, false
+	}
+
+	return defnID, nil, false
 }
 
 func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
@@ -717,7 +742,28 @@ func (r *metadataRepo) hasDefnIgnoreStatus(indexerId c.IndexerId, defnId c.Index
 	defer r.mutex.Unlock()
 
 	meta, ok := r.indices[defnId]
-	return ok && meta.Instances[0].IndexerId == indexerId
+	return ok && meta.Instances != nil && meta.Instances[0].IndexerId == indexerId
+}
+
+func (r *metadataRepo) hasDefnMatchingStatus(defnId c.IndexDefnId, status c.IndexState) bool {
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	meta, ok := r.indices[defnId]
+	return ok && meta != nil && meta.Instances != nil && meta.Instances[0].State == status
+}
+
+func (r *metadataRepo) getDefnError(defnId c.IndexDefnId) error {
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	meta, ok := r.indices[defnId]
+	if ok && meta.Instances != nil && len(meta.Instances[0].Error) != 0 {
+		return errors.New(meta.Instances[0].Error)
+	}
+	return nil
 }
 
 func (r *metadataRepo) getValidDefnCount(indexerId c.IndexerId) int {
@@ -782,8 +828,7 @@ func (r *metadataRepo) unmarshallAndAddInst(content []byte) error {
 
 func (r *metadataRepo) makeIndexMetadata(defn *c.IndexDefn) *IndexMetadata {
 
-	return &IndexMetadata{Definition: defn,
-		Instances: nil}
+	return &IndexMetadata{Definition: defn, Instances: nil}
 }
 
 func (r *metadataRepo) updateIndexMetadataNoLock(defnId c.IndexDefnId, inst *IndexInstDistribution) {
@@ -821,6 +866,7 @@ func newWatcher(o *MetadataProvider, addr string) *watcher {
 	s.incomingReqs = make(chan *protocol.RequestHandle, REQUEST_CHANNEL_COUNT)
 	s.pendingReqs = make(map[uint64]*protocol.RequestHandle)
 	s.loggedReqs = make(map[common.Txnid]*protocol.RequestHandle)
+	s.notifiers = make(map[c.IndexDefnId]*event)
 	s.indices = make(map[c.IndexDefnId]interface{})
 	s.isClosed = false
 
@@ -933,6 +979,51 @@ func (w *watcher) updateServiceMap(adminport string) error {
 	}
 
 	return nil
+}
+
+func (w *watcher) waitForEvent(defnId c.IndexDefnId, status c.IndexState) error {
+
+	event := &event{defnId: defnId, status: status, notifyCh: make(chan error, 1)}
+	if w.registerEvent(event) {
+		logging.Debugf("watcher.waitForEvent(): wait event : id %v status %v", event.defnId, event.status)
+		err, ok := <-event.notifyCh
+		if ok && err != nil {
+			logging.Debugf("watcher.waitForEvent(): wait arrives : id %v status %v", event.defnId, event.status)
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *watcher) registerEvent(event *event) bool {
+
+	// by locking the watcher, it will not process any commit
+	// while this function is executing
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if !w.provider.repo.hasDefnMatchingStatus(event.defnId, event.status) {
+		logging.Debugf("watcher.registerEvent(): add event : id %v status %v", event.defnId, event.status)
+		w.notifiers[event.defnId] = event
+		return true
+	}
+
+	logging.Debugf("watcher.registerEvent(): found event existed: id %v status %v", event.defnId, event.status)
+	return false
+}
+
+func (w *watcher) notifyEventNoLock() {
+
+	for defnId, event := range w.notifiers {
+		if w.provider.repo.hasDefnMatchingStatus(defnId, event.status) {
+			delete(w.notifiers, defnId)
+			close(event.notifyCh)
+		} else if err := w.provider.repo.getDefnError(defnId); err != nil {
+			delete(w.notifiers, defnId)
+			event.notifyCh <- err
+			close(event.notifyCh)
+		}
+	}
 }
 
 func (w *watcher) getIndexerId() c.IndexerId {
@@ -1153,6 +1244,12 @@ func (w *watcher) cleanupOnClose() {
 	for key, request := range w.loggedReqs {
 		delete(w.loggedReqs, key)
 		w.signalError(request, "Terminate Request during cleanup")
+	}
+
+	for key, event := range w.notifiers {
+		delete(w.notifiers, key)
+		event.notifyCh <- errors.New("Terminate Request due to client termination")
+		close(event.notifyCh)
 	}
 }
 
@@ -1432,13 +1529,19 @@ func (w *watcher) processChange(op uint32, key string, content []byte) error {
 				return err
 			}
 			w.addDefnWithNoLock(c.IndexDefnId(id))
-			return w.provider.repo.unmarshallAndAddDefn(content)
+			if err := w.provider.repo.unmarshallAndAddDefn(content); err != nil {
+				return err
+			}
+			w.notifyEventNoLock()
 
 		} else if isIndexTopologyKey(key) {
 			if len(content) == 0 {
 				logging.Debugf("watcher.processChange(): content of key = %v is empty.", key)
 			}
-			return w.provider.repo.unmarshallAndAddInst(content)
+			if err := w.provider.repo.unmarshallAndAddInst(content); err != nil {
+				return err
+			}
+			w.notifyEventNoLock()
 		}
 	case common.OPCODE_DELETE:
 		if isIndexDefnKey(key) {
@@ -1449,6 +1552,7 @@ func (w *watcher) processChange(op uint32, key string, content []byte) error {
 			}
 			w.removeDefnWithNoLock(c.IndexDefnId(id))
 			w.provider.repo.removeDefn(c.IndexDefnId(id))
+			w.notifyEventNoLock()
 		}
 	}
 

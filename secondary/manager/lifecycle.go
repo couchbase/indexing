@@ -175,6 +175,13 @@ func (m *LifecycleMgr) handleCreateIndex(key string, content []byte) error {
 
 func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 
+	if !defn.Deferred && !m.canBuildIndex(defn.Bucket) {
+		logging.Errorf("LifecycleMgr.handleCreateIndex() : Cannot create index %s.%s while another index is being built",
+			defn.Bucket, defn.Name)
+		return errors.New(fmt.Sprintf("Cannot create Index %s.%s while another index is being built.",
+			defn.Bucket, defn.Name))
+	}
+
 	existDefn, err := m.repo.GetIndexDefnByName(defn.Bucket, defn.Name)
 	if err != nil {
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
@@ -368,6 +375,25 @@ func (m *LifecycleMgr) updateIndexState(bucket string, defnId common.IndexDefnId
 	}
 
 	return nil
+}
+
+func (m *LifecycleMgr) canBuildIndex(bucket string) bool {
+
+	t, _ := m.repo.GetTopologyByBucket(bucket)
+	if t == nil {
+		return true
+	}
+
+	for i, _ := range t.Definitions {
+		for j, _ := range t.Definitions[i].Instances {
+			if t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_CATCHUP) ||
+				t.Definitions[i].Instances[j].State == uint32(common.INDEX_STATE_INITIAL) {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func (m *LifecycleMgr) handleServiceMap(content []byte) ([]byte, error) {
