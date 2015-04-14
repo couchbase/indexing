@@ -441,10 +441,19 @@ func EquivalentIP(
 // ConnectBucket will instantiate a couchbase-bucket instance with cluster.
 // caller's responsibility to close the bucket.
 func ConnectBucket(cluster, pooln, bucketn string) (*couchbase.Bucket, error) {
+	if strings.HasPrefix(cluster, "http") {
+		u, err := url.Parse(cluster)
+		if err != nil {
+			return nil, err
+		}
+		cluster = u.Host
+	}
+
 	ah := &CbAuthHandler{
 		Hostport: cluster,
 		Bucket:   bucketn,
 	}
+
 	couch, err := couchbase.ConnectWithAuth("http://"+cluster, ah)
 	if err != nil {
 		return nil, err
