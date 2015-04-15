@@ -43,21 +43,21 @@ func NewStatsManager(supvCmdch MsgChannel,
 	return s, &MsgSuccess{}
 }
 
-func (s *statsManager) tryUpdateStats() {
-	var sync bool
+func (s *statsManager) tryUpdateStats(sync bool) {
 	waitCh := make(chan struct{})
 	statsMap := make(map[string]interface{})
 	timeout := time.Millisecond * time.Duration(s.conf["stats_cache_timeout"].Uint64())
 
 	s.Lock()
 	cacheTime := s.lastCacheTime
-	shouldProceed := !s.cacheUpdateInProgress
+	shouldUpdate := !s.cacheUpdateInProgress
+
 	if s.statsCache == nil {
 		sync = true
 	}
 
 	// Refresh cache if cache ttl has expired
-	if time.Now().Sub(cacheTime) > timeout && shouldProceed {
+	if shouldUpdate && time.Now().Sub(cacheTime) > timeout || sync {
 		s.cacheUpdateInProgress = true
 		s.Unlock()
 
@@ -93,8 +93,12 @@ func (s *statsManager) tryUpdateStats() {
 }
 
 func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
+	sync := false
 	if r.Method == "POST" || r.Method == "GET" {
-		s.tryUpdateStats()
+		if r.URL.Query().Get("async") == "false" {
+			sync = true
+		}
+		s.tryUpdateStats(sync)
 		s.Lock()
 		bytes, _ := json.Marshal(s.statsCache)
 		s.Unlock()
