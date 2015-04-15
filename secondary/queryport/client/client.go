@@ -43,6 +43,12 @@ var ErrorClientUninitialized = errors.New("queryport.clientUninitialized")
 // ErrorNotImplemented
 var ErrorNotImplemented = errors.New("queryport.notImplemented")
 
+// ErrorInvalidConsistency
+var ErrorInvalidConsistency = errors.New("queryport.invalidConsistency")
+
+// ErrorExpectedTimestamp
+var ErrorExpectedTimestamp = errors.New("queryport.expectedTimestamp")
+
 // ResponseHandler shall interpret response packets from server
 // and handle them. If handler is not interested in receiving any
 // more response it shall return false, else it shall continue
@@ -387,10 +393,9 @@ func (c *GsiClient) Lookup(
 	}
 	return c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) (err error) {
 		index := c.bridge.GetIndexDefn(targetDefnID)
-		if cons == common.SessionConsistency {
-			if vector, err = c.BucketTs(index.Bucket); err != nil {
-				return err
-			}
+		vector, err = c.getConsistency(cons, vector, index.Bucket)
+		if err != nil {
+			return err
 		}
 		return qc.Lookup(targetDefnID, values, distinct, limit, cons, vector, callb)
 	})
@@ -417,10 +422,9 @@ func (c *GsiClient) Range(
 	}
 	return c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) (err error) {
 		index := c.bridge.GetIndexDefn(targetDefnID)
-		if cons == common.SessionConsistency {
-			if vector, err = c.BucketTs(index.Bucket); err != nil {
-				return err
-			}
+		vector, err = c.getConsistency(cons, vector, index.Bucket)
+		if err != nil {
+			return err
 		}
 		return qc.Range(
 			targetDefnID, low, high, inclusion, distinct, limit, cons, vector, callb)
@@ -447,10 +451,9 @@ func (c *GsiClient) ScanAll(
 	}
 	return c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) (err error) {
 		index := c.bridge.GetIndexDefn(targetDefnID)
-		if cons == common.SessionConsistency {
-			if vector, err = c.BucketTs(index.Bucket); err != nil {
-				return err
-			}
+		vector, err = c.getConsistency(cons, vector, index.Bucket)
+		if err != nil {
+			return err
 		}
 		return qc.ScanAll(targetDefnID, limit, cons, vector, callb)
 	})
@@ -472,10 +475,9 @@ func (c *GsiClient) CountLookup(
 
 	err = c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) error {
 		index := c.bridge.GetIndexDefn(targetDefnID)
-		if cons == common.SessionConsistency {
-			if vector, err = c.BucketTs(index.Bucket); err != nil {
-				return err
-			}
+		vector, err = c.getConsistency(cons, vector, index.Bucket)
+		if err != nil {
+			return err
 		}
 		count, err = qc.CountLookup(targetDefnID, values, cons, vector)
 		return err
@@ -500,10 +502,9 @@ func (c *GsiClient) CountRange(
 	}
 	err = c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) error {
 		index := c.bridge.GetIndexDefn(targetDefnID)
-		if cons == common.SessionConsistency {
-			if vector, err = c.BucketTs(index.Bucket); err != nil {
-				return err
-			}
+		vector, err = c.getConsistency(cons, vector, index.Bucket)
+		if err != nil {
+			return err
 		}
 		count, err = qc.CountRange(targetDefnID, low, high, inclusion, cons, vector)
 		return err
@@ -570,6 +571,26 @@ func (c *GsiClient) doScan(
 		return err
 	}
 	return ErrorNoHost
+}
+
+func (c *GsiClient) getConsistency(
+	cons common.Consistency,
+	vector *TsConsistency, bucket string) (*TsConsistency, error) {
+
+	var err error
+
+	if cons == common.QueryConsistency && vector == nil {
+		return nil, ErrorExpectedTimestamp
+	} else if cons == common.SessionConsistency {
+		if vector, err = c.BucketTs(bucket); err != nil {
+			return nil, err
+		}
+	} else if cons == common.AnyConsistency {
+		vector = nil
+	} else {
+		return nil, ErrorInvalidConsistency
+	}
+	return vector, nil
 }
 
 // create GSI client using cbqBridge and ScanCoordinator
