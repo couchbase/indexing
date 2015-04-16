@@ -1113,6 +1113,8 @@ func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
 		kvdata.Close()
 	}
 	delete(feed.kvdata, bucketn) // :SideEffect:
+	fmsg := "%v ##%x bucket %v removed ..."
+	logging.Infof(fmsg, feed.logPrefix, feed.opaque, bucketn)
 }
 
 func (feed *Feed) openFeeder(
