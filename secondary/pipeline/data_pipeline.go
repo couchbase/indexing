@@ -87,7 +87,8 @@ func (w *ItemWriter) CloseWrite() error {
 		return err
 	}
 
-	if w.wr.IsEmpty() {
+	if w.wblock == nil {
+	} else if w.wr.IsEmpty() {
 		PutBlock(w.wblock)
 	} else {
 		w.sendBlock()

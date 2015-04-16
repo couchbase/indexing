@@ -141,7 +141,7 @@ loop:
 
 func TestSimplePipeline(t *testing.T) {
 
-	tests := []int{100, 500, 799, 10000, 49999}
+	tests := []int{0, 100, 500, 799, 10000, 49999}
 	for _, i := range tests {
 		var p Pipeline
 		t.Logf("Running test for %v items\n", i)
