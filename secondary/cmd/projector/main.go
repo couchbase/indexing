@@ -68,6 +68,9 @@ func main() {
 	config := c.SystemConfig.Clone()
 	logging.SetLogLevel(logging.Level(options.loglevel))
 
+	logging.Infof("%v\n", c.Os())
+	logging.Infof("%v\n", c.Runtime())
+
 	config.SetValue("maxVbuckets", options.numVbuckets)
 	if f := getlogFile(); f != nil {
 		fmt.Printf("Projector logging to %q\n", f.Name())
