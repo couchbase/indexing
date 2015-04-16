@@ -752,11 +752,11 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//initial build is not required.
 		var buildState common.IndexState
 		if buildTs.IsZeroTs() && buildStream == common.MAINT_STREAM {
-			buildState = common.INDEX_STATE_ACTIVE
 			initialBuildReqd = false
-		} else {
-			buildState = common.INDEX_STATE_INITIAL
 		}
+		//always set state to Initial, once stream request/build is done,
+		//this will get changed to active
+		buildState = common.INDEX_STATE_INITIAL
 
 		idx.bulkUpdateState(instIdList, buildState)
 
