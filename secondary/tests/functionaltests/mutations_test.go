@@ -222,7 +222,7 @@ func TestUpdateDocsMutation(t *testing.T) {
 }
 
 // Test with large number of mutations
-func TestLargeMutations(t *testing.T) {
+func SkipTestLargeMutations(t *testing.T) {
 	log.Printf("In TestLargeMutations()")
 	var index1 = "indexmut_1"
 	var index2 = "indexmut_2"
