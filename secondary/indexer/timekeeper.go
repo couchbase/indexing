@@ -63,6 +63,8 @@ type InitialBuildInfo struct {
 //together for repair message
 const REPAIR_BATCH_TIMEOUT = 1000
 const KV_RETRY_INTERVAL = 5000
+//const REPAIR_RETRY_INTERVAL = 5000
+const REPAIR_RETRY_BEFORE_SHUTDOWN = 5
 
 //NewTimekeeper returns an instance of timekeeper or err message.
 //It listens on supvCmdch for command and every command is followed
@@ -842,13 +844,28 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	case STREAM_ACTIVE:
 
+		// When receivng a StreamBegin, it means that the projector claims ownership
+		// of a vbucket.   Keep track of how many projectors are claiming ownership.
+		tk.ss.incVbRefCount(streamId, meta.bucket, meta.vbucket)
+
 		//update the HWT of this stream and bucket with the vbuuid
 		bucketHWTMap := tk.ss.streamBucketHWTMap[streamId]
 
-		//TODO: Check if this is duplicate StreamBegin. Treat it as StreamEnd.
+		// Always use the vbuuid of the last StreamBegin
 		ts := bucketHWTMap[meta.bucket]
 		ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
 		tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_BEGIN)
+
+		count := tk.ss.getVbRefCount(streamId, meta.bucket, meta.vbucket)
+		if count > 1 {
+			if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
+				tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
+				tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
+				logging.Debugf("Timekeeper::handleStreamBegin \n\tRepairStream due to vb ref count > 1. "+
+					"StreamId %v MutationMeta %v", streamId, meta)
+				go tk.repairStream(streamId, meta.bucket)
+			}
+		}
 
 	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE, STREAM_INACTIVE:
 		//ignore stream begin in prepare_recovery
@@ -896,12 +913,40 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 	switch state {
 
 	case STREAM_ACTIVE:
-		tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_END)
-		if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
-			tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
-			logging.Debugf("Timekeeper::handleStreamEnd \n\tRepairStream due to StreamEnd. "+
-				"StreamId %v MutationMeta %v", streamId, meta)
-			go tk.repairStream(streamId, meta.bucket)
+
+		// When receivng a StreamEnd, it means that the projector releases ownership of vb.
+		// Update the vb count since there is one less owner.  Ignore any StreamEnd if
+		// (1) vb has not received a STREAM_BEGIN, (2) recovering from CONN_ERROR
+		//
+		vbState := tk.ss.getVbStatus(streamId, meta.bucket, meta.vbucket)
+		if vbState != VBS_CONN_ERROR {
+
+			tk.ss.decVbRefCount(streamId, meta.bucket, meta.vbucket)
+			count := tk.ss.getVbRefCount(streamId, meta.bucket, meta.vbucket)
+
+			if count < 0 {
+				// If count < 0, after CONN_ERROR, count is reset to 0.   During rebalancing,
+				// residue StreamEnd from old master can still arrive.   Therefore, after
+				// CONN_ERROR, the total number of StreamEnd > total number of StreamBegin,
+				// and count will be negative in this case.
+				logging.Debugf("Timekeeper::handleStreamEnd \n\tOwner count < 0. Treat as CONN_ERR. "+
+					"StreamId %v MutationMeta %v", streamId, meta)
+
+				tk.handleStreamConnErrorInternal(streamId, meta.bucket, []Vbucket{meta.vbucket})
+				return
+
+			} else {
+
+				// If Count => 0.  This could be just normal vb take-over during rebalancing.
+				tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_END)
+				if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
+					tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
+					tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
+					logging.Debugf("Timekeeper::handleStreamEnd \n\tRepairStream due to StreamEnd. "+
+						"StreamId %v MutationMeta %v", streamId, meta)
+					go tk.repairStream(streamId, meta.bucket)
+				}
+			}
 		}
 
 	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE, STREAM_INACTIVE:
@@ -917,6 +962,7 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 
 }
+
 func (tk *timekeeper) handleStreamConnError(cmd Message) {
 
 	logging.Debugf("Timekeeper::handleStreamConnError %v", cmd)
@@ -930,6 +976,11 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	tk.handleStreamConnErrorInternal(streamId, bucket, vbList)
+}
+
+func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, bucket string, vbList []Vbucket) {
+
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, bucket) == false {
 		logging.Warnf("Timekeeper::handleStreamConnError \n\tReceived ConnError for "+
@@ -941,7 +992,76 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 	switch state {
 
 	case STREAM_ACTIVE:
-		tk.ss.updateVbStatus(streamId, bucket, vbList, VBS_CONN_ERROR)
+
+		// ConnErr is generated by dataport when the physical connection is disconnected.
+		// Dataport keeps track of the active vb for each connection/projector (by
+		// book-keeping StreamBegin and StreamEnd).  So we know that for that vb, the last
+		// control msg from the connection is a StreamBegin.  Dataport is sensitive to order
+		// of messages arriving at indexer.   As such, bookkeeping at dataport is only
+		// advisory and provides the following semantics:
+		// 1) Any StreamBegin and StreamEnd will pass through to the indexer. Each
+		//    StreamBegin and StreamEnd will carry corresponding vb information.
+		// 2) For connection error, dataport provides a list of "potential" vb that
+		//    require repair, but this list is not an exhaustive list.
+		//    a) Dataport could recieve a StreamEnd from old projector owner, while
+		//       getting a connection error from new vb owner, therefore missing a
+		//       StreamBegin.  Therefore, dataport will not know that projector owns a vb.
+		//    b) Dataport could receive StreamBegin from the new owner, before getting
+		//       StreamBegin from the old owner, if the vb owner can change hands
+		//       multiple times in a short span.   Theforefore, if the connection to
+		//       the old owner dies, dataport may think that the vb needs repair.
+
+		// Upon receiving connection error, the state of the projecto is unclear, so it is
+		// required for the projector to relinquish its vb ownership.  This is done by
+		// explicitly asking the projector to shutdown/restart vb.  By shutdown/restart,
+		// the current vb master (according to ns-server vbmap) will send a new pair
+		// of StreamEnd/StreamBegin sequence.  Note that the proejctor may not send
+		// StreamEnd if vb has not started yet at the current vb master.  Any message
+		// after CONN_ERR is dropped until the shutdown/restart sequence kick off.
+		// Messages from a single projector is ordered, but indexer can no longer
+		// guarantee that the vb ref count is accurate upon connection error.
+
+		// In case of rebalancing, the vb ownership can change during CONN_ERROR.
+		// Mutliple projectors can send StreamBegin/StreamEnd to indexer,  and
+		// there is no certainty if any StreamBegin/StreamEnd message may be lost
+		// due to 1 or more CONN_ERROR.   Messages from different projectors can
+		// also be out-of-order.
+		// 1) For each projector, StreamBegin must happen before StreamEnd.
+		// 2) For CONN_ERROR on a projector, indexer may miss both StreamBegin/StreamEnd,
+		//    or missing StreamEnd.   But it cannot miss a StreamBegin and not missing
+		//    StreamEnd.
+		// 3) Base on (1) and (2), during CONN_ERROR, num of StreamBegin can be
+		//    greater than StreamEnd, even if there is no projector owning that vb (restart
+		//    sequence has not started).
+
+		// As such, once the indexer receives connection error, it will do the following:
+		// 1) Reset the vb ownership counter to 0.
+		// 2) Vb state would remain to be CONN_ERR until a new STREAM_BEGIN arrives.
+		// 3) While vb state in CONN_ERROR, indexer will not decrement counter when it
+		//    receives a StreamEnd.  Once it receives a new StreamBegin, it would restart
+		//    the counting sequence.
+		// 4) If counter < 0, it indicates StreamEnd and StreamBegin are out-of-order,
+		//    possibly because count is reset at CONN_ERROR during rebalancing.
+		//    Vb state will set to CONN_ERROR before repair stream.
+		// 5) If counter == 0, it could be normal rebalancing, or out-of-order
+		//    StreamBegin and StreamEnd.   Vb state will be set to STREAM_END.   If
+		//    repair is not successfully after N tries, vb state will be set to CONN_ERROR.
+		// 6) After the stream is repaired, if there is any vb with count != 1, then the
+		//    vb needs to be shutdown/retart.
+
+		// By resetting count on CONN_ERROR, indexer ignores any counting based on previous
+		// StreamBegin and StreamEnd.   Any residual StreamBegin or StreamEnd (arrive after
+		// CONN_ERROR) can bring the count <= 0 or count > 1.   In either case, a new
+		// shutdown/restart sequence will be triggered with count being reset at each try,
+		// until there is no residual message and there is one projector acknowledges as
+		// the vb master.   Acknowledgement means that indexer is assured that at least
+		// one projector does not return an error during restart, without relying on
+		// arrival of StreamBegin as indication of successful restart.
+
+		for _, vb := range vbList {
+			tk.ss.makeConnectionError(streamId, bucket, vb)
+		}
+
 		if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
 			tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
 			logging.Debugf("Timekeeper::handleStreamConnError \n\tRepairStream due to ConnError. "+
@@ -1737,17 +1857,20 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 
 	//prepare repairTs with all vbs in STREAM_END, REPAIR status and
 	//send that to KVSender to repair
-	if repairTs, needRepair, connErr := tk.ss.getRepairTsForBucket(streamId, bucket); needRepair {
+	if repairTs, needRepair, connErrVbs := tk.ss.getRepairTsForBucket(streamId, bucket); needRepair {
 
 		respCh := make(MsgChannel)
 		stopCh := tk.ss.streamBucketRepairStopCh[streamId][bucket]
 
 		restartMsg := &MsgRestartVbuckets{streamId: streamId,
-			bucket:    bucket,
-			restartTs: repairTs,
-			respCh:    respCh,
-			stopCh:    stopCh,
-			connErr:   connErr}
+			bucket:     bucket,
+			restartTs:  repairTs,
+			respCh:     respCh,
+			stopCh:     stopCh,
+			connErrVbs: connErrVbs}
+
+		// before retrying, clear up the previous marker on retry error.
+		tk.ss.clearRestartVbError(streamId, bucket)
 
 		go tk.sendRestartMsg(restartMsg)
 
@@ -1821,6 +1944,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		} else {
 			logging.Fatalf("Timekeeper::sendRestartMsg Error Response "+
 				"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
+			tk.ss.markRestartVbError(streamId, bucket)
 			tk.repairStream(streamId, bucket)
 		}
 	}

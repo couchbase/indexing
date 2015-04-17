@@ -726,12 +726,12 @@ func (m *MsgBucketHWT) String() string {
 
 //KV_SENDER_RESTART_VBUCKETS
 type MsgRestartVbuckets struct {
-	streamId  common.StreamId
-	bucket    string
-	restartTs *common.TsVbuuid
-	connErr   bool
-	respCh    MsgChannel
-	stopCh    StopChannel
+	streamId   common.StreamId
+	bucket     string
+	restartTs  *common.TsVbuuid
+	connErrVbs []Vbucket
+	respCh     MsgChannel
+	stopCh     StopChannel
 }
 
 func (m *MsgRestartVbuckets) GetMsgType() MsgType {
@@ -750,8 +750,8 @@ func (m *MsgRestartVbuckets) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
 }
 
-func (m *MsgRestartVbuckets) HasConnErr() bool {
-	return m.connErr
+func (m *MsgRestartVbuckets) ConnErrVbs() []Vbucket {
+	return m.connErrVbs
 }
 
 func (m *MsgRestartVbuckets) GetResponseCh() MsgChannel {

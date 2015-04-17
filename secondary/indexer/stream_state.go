@@ -19,9 +19,10 @@ import (
 type StreamState struct {
 	config common.Config
 
-	streamStatus            map[common.StreamId]StreamStatus
-	streamBucketStatus      map[common.StreamId]BucketStatus
-	streamBucketVbStatusMap map[common.StreamId]BucketVbStatusMap
+	streamStatus              map[common.StreamId]StreamStatus
+	streamBucketStatus        map[common.StreamId]BucketStatus
+	streamBucketVbStatusMap   map[common.StreamId]BucketVbStatusMap
+	streamBucketVbRefCountMap map[common.StreamId]BucketVbRefCountMap
 
 	streamBucketHWTMap           map[common.StreamId]BucketHWTMap
 	streamBucketInMemTsCountMap  map[common.StreamId]BucketInMemTsCountMap
@@ -29,6 +30,10 @@ type StreamState struct {
 	streamBucketTsListMap        map[common.StreamId]BucketTsListMap
 	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
 	streamBucketRestartTsMap     map[common.StreamId]BucketRestartTsMap
+
+	streamBucketRestartVbErrMap   map[common.StreamId]BucketRestartVbErrMap
+	streamBucketRestartVbTsMap    map[common.StreamId]BucketRestartVbTsMap
+	streamBucketRestartVbRetryMap map[common.StreamId]BucketRestartVbRetryMap
 
 	streamBucketFlushInProgressTsMap map[common.StreamId]BucketFlushInProgressTsMap
 	streamBucketAbortInProgressMap   map[common.StreamId]BucketAbortInProgressMap
@@ -52,7 +57,12 @@ type BucketAbortInProgressMap map[string]bool
 type BucketFlushEnabledMap map[string]bool
 type BucketDrainEnabledMap map[string]bool
 
+type BucketRestartVbErrMap map[string]bool
+type BucketRestartVbTsMap map[string]*common.TsVbuuid
+type BucketRestartVbRetryMap map[string]Timestamp
+
 type BucketVbStatusMap map[string]Timestamp
+type BucketVbRefCountMap map[string]Timestamp
 type BucketRepairStopCh map[string]StopChannel
 type BucketTimerStopCh map[string]StopChannel
 
@@ -73,6 +83,10 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketFlushEnabledMap:      make(map[common.StreamId]BucketFlushEnabledMap),
 		streamBucketDrainEnabledMap:      make(map[common.StreamId]BucketDrainEnabledMap),
 		streamBucketVbStatusMap:          make(map[common.StreamId]BucketVbStatusMap),
+		streamBucketVbRefCountMap:        make(map[common.StreamId]BucketVbRefCountMap),
+		streamBucketRestartVbErrMap:      make(map[common.StreamId]BucketRestartVbErrMap),
+		streamBucketRestartVbTsMap:       make(map[common.StreamId]BucketRestartVbTsMap),
+		streamBucketRestartVbRetryMap:    make(map[common.StreamId]BucketRestartVbRetryMap),
 		streamStatus:                     make(map[common.StreamId]StreamStatus),
 		streamBucketStatus:               make(map[common.StreamId]BucketStatus),
 		streamBucketIndexCountMap:        make(map[common.StreamId]BucketIndexCountMap),
@@ -120,6 +134,18 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketVbStatusMap := make(BucketVbStatusMap)
 	ss.streamBucketVbStatusMap[streamId] = bucketVbStatusMap
 
+	bucketVbRefCountMap := make(BucketVbRefCountMap)
+	ss.streamBucketVbRefCountMap[streamId] = bucketVbRefCountMap
+
+	bucketRestartVbRetryMap := make(BucketRestartVbRetryMap)
+	ss.streamBucketRestartVbRetryMap[streamId] = bucketRestartVbRetryMap
+
+	bucketRestartVbErrMap := make(BucketRestartVbErrMap)
+	ss.streamBucketRestartVbErrMap[streamId] = bucketRestartVbErrMap
+
+	bucketRestartVbTsMap := make(BucketRestartVbTsMap)
+	ss.streamBucketRestartVbTsMap[streamId] = bucketRestartVbTsMap
+
 	bucketIndexCountMap := make(BucketIndexCountMap)
 	ss.streamBucketIndexCountMap[streamId] = bucketIndexCountMap
 
@@ -150,6 +176,10 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketFlushEnabledMap[streamId][bucket] = true
 	ss.streamBucketDrainEnabledMap[streamId][bucket] = true
 	ss.streamBucketVbStatusMap[streamId][bucket] = NewTimestamp(numVbuckets)
+	ss.streamBucketVbRefCountMap[streamId][bucket] = NewTimestamp(numVbuckets)
+	ss.streamBucketRestartVbRetryMap[streamId][bucket] = NewTimestamp(numVbuckets)
+	ss.streamBucketRestartVbTsMap[streamId][bucket] = nil
+	ss.streamBucketRestartVbErrMap[streamId][bucket] = false
 	ss.streamBucketIndexCountMap[streamId][bucket] = 0
 	ss.streamBucketRepairStopCh[streamId][bucket] = nil
 	ss.streamBucketTimerStopCh[streamId][bucket] = make(StopChannel)
@@ -178,6 +208,10 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketFlushEnabledMap[streamId], bucket)
 	delete(ss.streamBucketDrainEnabledMap[streamId], bucket)
 	delete(ss.streamBucketVbStatusMap[streamId], bucket)
+	delete(ss.streamBucketVbRefCountMap[streamId], bucket)
+	delete(ss.streamBucketRestartVbRetryMap[streamId], bucket)
+	delete(ss.streamBucketRestartVbErrMap[streamId], bucket)
+	delete(ss.streamBucketRestartVbTsMap[streamId], bucket)
 	delete(ss.streamBucketIndexCountMap[streamId], bucket)
 	delete(ss.streamBucketRepairStopCh[streamId], bucket)
 	delete(ss.streamBucketTimerStopCh[streamId], bucket)
@@ -204,12 +238,21 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketFlushEnabledMap, streamId)
 	delete(ss.streamBucketDrainEnabledMap, streamId)
 	delete(ss.streamBucketVbStatusMap, streamId)
+	delete(ss.streamBucketVbRefCountMap, streamId)
+	delete(ss.streamBucketRestartVbRetryMap, streamId)
+	delete(ss.streamBucketRestartVbErrMap, streamId)
+	delete(ss.streamBucketRestartVbTsMap, streamId)
 	delete(ss.streamBucketIndexCountMap, streamId)
 	delete(ss.streamBucketStatus, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
 	logging.Debugf("StreamState::resetStreamState \n\tReset Stream %v State", streamId)
+}
+
+func (ss *StreamState) getVbStatus(streamId common.StreamId, bucket string, vb Vbucket) VbStatus {
+
+	return VbStatus(ss.streamBucketVbStatusMap[streamId][bucket][vb])
 }
 
 func (ss *StreamState) updateVbStatus(streamId common.StreamId, bucket string,
@@ -220,6 +263,43 @@ func (ss *StreamState) updateVbStatus(streamId common.StreamId, bucket string,
 		vbs[vb] = Seqno(status)
 	}
 
+}
+
+func (ss *StreamState) clearRestartVbRetry(streamId common.StreamId, bucket string, vb Vbucket) {
+
+	ss.streamBucketRestartVbRetryMap[streamId][bucket][vb] = Seqno(0)
+}
+
+func (ss *StreamState) markRestartVbError(streamId common.StreamId, bucket string) {
+
+	ss.streamBucketRestartVbErrMap[streamId][bucket] = true
+}
+
+func (ss *StreamState) clearRestartVbError(streamId common.StreamId, bucket string) {
+
+	ss.streamBucketRestartVbErrMap[streamId][bucket] = false
+}
+
+func (ss *StreamState) getVbRefCount(streamId common.StreamId, bucket string, vb Vbucket) int {
+
+	return int(ss.streamBucketVbRefCountMap[streamId][bucket][vb])
+}
+
+func (ss *StreamState) clearVbRefCount(streamId common.StreamId, bucket string, vb Vbucket) {
+
+	ss.streamBucketVbRefCountMap[streamId][bucket][vb] = Seqno(0)
+}
+
+func (ss *StreamState) incVbRefCount(streamId common.StreamId, bucket string, vb Vbucket) {
+
+	vbs := ss.streamBucketVbRefCountMap[streamId][bucket]
+	vbs[vb] = Seqno(int(vbs[vb]) + 1)
+}
+
+func (ss *StreamState) decVbRefCount(streamId common.StreamId, bucket string, vb Vbucket) {
+
+	vbs := ss.streamBucketVbRefCountMap[streamId][bucket]
+	vbs[vb] = Seqno(int(vbs[vb]) - 1)
 }
 
 //computes the restart Ts for the given bucket and stream
@@ -262,36 +342,144 @@ func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
 	}
 }
 
+// This function gets the list of vb and seqno to repair stream.
+// Termination condition for stream repair:
+// 1) All vb are in StreamBegin state
+// 2) All vb have ref count == 1
+// 3) There is no error in stream repair
 func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
-	bucket string) (*common.TsVbuuid, bool, bool) {
+	bucket string) (*common.TsVbuuid, bool, []Vbucket) {
 
-	anythingToRepair := false
-	hasConnErr := false
+	// always repair if the last repair is not successful
+	anythingToRepair := ss.streamBucketRestartVbErrMap[streamId][bucket]
 
 	numVbuckets := ss.config["numVbuckets"].Int()
 	repairTs := common.NewTsVbuuid(bucket, numVbuckets)
+	var shutdownVbs []Vbucket = nil
 
 	hwtTs := ss.streamBucketHWTMap[streamId][bucket]
+	hasConnError := ss.hasConnectionError(streamId, bucket)
+
+	// First step : Find out if there is any StreamEnd or ConnError on any vb.
 	for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
 		if s == VBS_STREAM_END || s == VBS_CONN_ERROR {
-			repairTs.Seqnos[i] = hwtTs.Seqnos[i]
-			repairTs.Vbuuids[i] = hwtTs.Vbuuids[i]
-			repairTs.Snapshots[i][0] = hwtTs.Snapshots[i][0]
-			repairTs.Snapshots[i][1] = hwtTs.Snapshots[i][1]
 
-			//connection error needs special handling in repair
-			//shutdownVbuckets needs to be called before restart
-			if s == VBS_CONN_ERROR {
-				hasConnErr = true
-			}
+			ss.addRepairTs(repairTs, hwtTs, Vbucket(i))
 			anythingToRepair = true
+			if hasConnError {
+				// Make sure that we shutdown vb for BOTH StreamEnd and
+				// ConnErr.  This is to ensure to cover the case where
+				// indexer may miss a StreamBegin from the new owner
+				// due to connection error. Dataport will not be able
+				// to tell indexer that vb needs to start since
+				// StreamBegin never arrives.
+				shutdownVbs = append(shutdownVbs, Vbucket(i))
+			}
 		}
+	}
+
+	// Second step: Find out if any StreamEnd over max retry limit.  If so,
+	// add it to ShutdownVbs (for shutdown/restart).  Only need to do this
+	// if there is no vb marked with conn error because vb with StreamEnd
+	// would already be in shutdownVbs, if there is connErr.
+	if !hasConnError {
+		for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
+			if s == VBS_STREAM_END {
+				vbs := ss.streamBucketRestartVbRetryMap[streamId][bucket]
+				vbs[i] = Seqno(int(vbs[i]) + 1)
+
+				if int(vbs[i]) > REPAIR_RETRY_BEFORE_SHUTDOWN {
+					logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
+						"Bucket %v StreamId %v Vbucket %v repair is being retried for %v times.",
+						bucket, streamId, i, vbs[i])
+					ss.clearRestartVbRetry(streamId, bucket, Vbucket(i))
+					shutdownVbs = append(shutdownVbs, Vbucket(i))
+				}
+			}
+		}
+	}
+
+	// Third step: If there is nothing to repair, then double check if every vb has
+	// exactly one vb owner.  If not, then the accounting is wrong (most likely due
+	// to connection error).  Make the vb as ConnErr and continue to repair.
+	// Note: This will also take care of vb in VBS_INIT state.
+	if !anythingToRepair {
+		for i, _ := range ss.streamBucketVbStatusMap[streamId][bucket] {
+			count := ss.streamBucketVbRefCountMap[streamId][bucket][i]
+			if count != 1 {
+				logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
+					"Bucket %v StreamId %v Vbucket %v have ref count (%v != 1). Convert to CONN_ERROR.",
+					bucket, streamId, i, count)
+				// Make it a ConnErr such that subsequent retry will
+				// force a shutdown/restart sequence.
+				ss.makeConnectionError(streamId, bucket, Vbucket(i))
+				ss.addRepairTs(repairTs, hwtTs, Vbucket(i))
+				shutdownVbs = append(shutdownVbs, Vbucket(i))
+				anythingToRepair = true
+			}
+		}
+	}
+
+	// Forth Step: If there is something to repair, but indexer has received StreamBegin for
+	// all vb, then retry with the last timestamp.
+	if anythingToRepair && repairTs.Len() == 0 {
+		logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
+			"Bucket %v StreamId %v previous repair fails. Retry using previous repairTs",
+			bucket, streamId)
+
+		ts := ss.streamBucketRestartVbTsMap[streamId][bucket]
+		if ts != nil {
+			repairTs = ts.Copy()
+		} else {
+			repairTs = hwtTs.Copy()
+		}
+
+		shutdownVbs = nil
+		vbnos := repairTs.GetVbnos()
+		for _, vbno := range vbnos {
+			shutdownVbs = append(shutdownVbs, Vbucket(vbno))
+		}
+	}
+
+	if !anythingToRepair {
+		ss.streamBucketRestartVbTsMap[streamId][bucket] = nil
+		ss.clearRestartVbError(streamId, bucket)
+	} else {
+		ss.streamBucketRestartVbTsMap[streamId][bucket] = repairTs.Copy()
 	}
 
 	ss.adjustNonSnapAlignedVbs(repairTs, streamId, bucket)
 
-	return repairTs, anythingToRepair, hasConnErr
+	return repairTs, anythingToRepair, shutdownVbs
+}
 
+func (ss *StreamState) hasConnectionError(streamId common.StreamId, bucket string) bool {
+
+	for _, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
+		if s == VBS_CONN_ERROR {
+			return true
+		}
+	}
+	return false
+}
+
+//
+// When making a vb to have connection error, the ref count must also set to 0.  No counting
+// will start until it gets its first StreamBegin message.
+//
+func (ss *StreamState) makeConnectionError(streamId common.StreamId, bucket string, vbno Vbucket) {
+
+	ss.clearVbRefCount(streamId, bucket, vbno)
+	ss.streamBucketVbStatusMap[streamId][bucket][vbno] = VBS_CONN_ERROR
+	ss.clearRestartVbRetry(streamId, bucket, vbno)
+}
+
+func (ss *StreamState) addRepairTs(repairTs *common.TsVbuuid, hwtTs *common.TsVbuuid, vbno Vbucket) {
+
+	repairTs.Seqnos[vbno] = hwtTs.Seqnos[vbno]
+	repairTs.Vbuuids[vbno] = hwtTs.Vbuuids[vbno]
+	repairTs.Snapshots[vbno][0] = hwtTs.Snapshots[vbno][0]
+	repairTs.Snapshots[vbno][1] = hwtTs.Snapshots[vbno][1]
 }
 
 //If a snapshot marker has been received but no mutation for that snapshot,
