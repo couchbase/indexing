@@ -1467,8 +1467,8 @@ func (feed *Feed) waitStreamRequests(
 
 	timeout := time.After(feed.reqTimeout * time.Millisecond)
 	err1 := feed.waitOnFeedback(timeout, opaque, func(msg interface{}) string {
-		if val, ok := msg.(*controlStreamRequest); ok && val.bucket == bucketn && val.opaque == opaque &&
-			ts.Contains(val.vbno) {
+		if val, ok := msg.(*controlStreamRequest); ok && val.bucket == bucketn &&
+			val.opaque == opaque && ts.Contains(val.vbno) {
 
 			if val.status == mcd.SUCCESS {
 				actTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
@@ -1513,7 +1513,7 @@ func (feed *Feed) waitStreamEnds(
 
 	timeout := time.After(feed.endTimeout * time.Millisecond)
 	err1 := feed.waitOnFeedback(timeout, opaque, func(msg interface{}) string {
-		if val, ok := msg.(*controlStreamEnd); ok && val.bucket == bucketn && val.opaque == opaque &&
+		if val, ok := msg.(*controlStreamEnd); ok && val.bucket == bucketn &&
 			ts.Contains(val.vbno) {
 
 			if val.status == mcd.SUCCESS {
@@ -1567,7 +1567,7 @@ loop:
 	// re-populate in the same order.
 	if len(msgs) > 0 {
 		fmsg := "%v ##%x re-populating back-channel with %d messages"
-		logging.Infof(fmsg, feed.logPrefix, len(msgs))
+		logging.Infof(fmsg, feed.logPrefix, opaque, len(msgs))
 	}
 	for _, msg := range msgs {
 		feed.backch <- msg
