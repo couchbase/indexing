@@ -56,12 +56,15 @@ func (instance *serviceNotifierInstance) getNotifyCallback(t NotificationType) f
 			Msg:  msg,
 		}
 
-		for _, w := range instance.waiters {
+		logging.Infof("serviceChangeNotifier: received %s", notifMsg)
+
+		for id, w := range instance.waiters {
 			select {
 			case w <- notifMsg:
 			case <-time.After(notifyWaitTimeout):
 				logging.Warnf("servicesChangeNotifier: Consumer for %v took too long to read notification, making the consumer invalid", instance.clusterUrl)
 				close(w)
+				delete(instance.waiters, id)
 			}
 		}
 		return nil
@@ -74,7 +77,7 @@ func (instance *serviceNotifierInstance) RunPoolObserver() {
 	poolCallback := instance.getNotifyCallback(PoolChangeNotification)
 	err := instance.client.RunObservePool(instance.pool, poolCallback, nil)
 	if err != nil {
-		logging.Errorf("servicesChangeNotifier: Connection terminated for pool notifier instance of %s, %s (%v)", instance.clusterUrl, instance.pool, err)
+		logging.Warnf("servicesChangeNotifier: Connection terminated for pool notifier instance of %s, %s (%v)", instance.clusterUrl, instance.pool, err)
 	}
 	instance.cleanup()
 }
@@ -83,7 +86,7 @@ func (instance *serviceNotifierInstance) RunServicesObserver() {
 	servicesCallback := instance.getNotifyCallback(ServiceChangeNotification)
 	err := instance.client.RunObserveNodeServices(instance.pool, servicesCallback, nil)
 	if err != nil {
-		logging.Errorf("servicesChangeNotifier: Connection terminated for services notifier instance of %s, %s (%v)", instance.clusterUrl, instance.pool, err)
+		logging.Warnf("servicesChangeNotifier: Connection terminated for services notifier instance of %s, %s (%v)", instance.clusterUrl, instance.pool, err)
 	}
 	instance.cleanup()
 }
@@ -107,6 +110,14 @@ func (instance *serviceNotifierInstance) cleanup() {
 type Notification struct {
 	Type NotificationType
 	Msg  interface{}
+}
+
+func (n Notification) String() string {
+	var t string = "ServiceChangeNotification"
+	if n.Type == PoolChangeNotification {
+		t = "PoolChangeNotification"
+	}
+	return t
 }
 
 type ServicesChangeNotifier struct {
