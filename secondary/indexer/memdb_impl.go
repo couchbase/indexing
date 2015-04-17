@@ -100,7 +100,10 @@ func (s *memDBSlice) Insert(k []byte, docid []byte) error {
 	s.Lock()
 	defer s.Unlock()
 
-	entry, _ := NewSecondaryIndexEntry(k, docid)
+	entry, err := NewSecondaryIndexEntry(k, docid)
+	if err == ErrSecKeyNil {
+		return nil
+	}
 
 	mainItm := &KV{
 		k: entry.Bytes(),
@@ -240,23 +243,17 @@ func (s *memDBSnapshot) Exists(key IndexKey, stopch StopChannel) (bool, error) {
 	return s.db.Get(itm) != nil, nil
 }
 
-func (s *memDBSnapshot) Lookup(key IndexKey, stopch StopChannel) (chan IndexEntry, chan error) {
-	return nil, nil
+func (s *memDBSnapshot) Lookup(key IndexKey, callb EntryCallback) error {
+	return nil
 }
 
-func (s *memDBSnapshot) KeySet(stopch StopChannel) (chan IndexEntry, chan error) {
-	kch := make(chan IndexEntry)
-	ech := make(chan error)
-
+func (s *memDBSnapshot) All(callb EntryCallback) error {
 	cb := func(i memdb.Item) bool {
-		select {
-		case <-stopch:
-			return false
-		default:
-		}
 		kv := i.(*KV)
-		key, _ := BytesToSecondaryIndexEntry(kv.k)
-		kch <- key
+		if callb(kv.k) != nil {
+			return false
+		}
+
 		return true
 	}
 
@@ -264,18 +261,13 @@ func (s *memDBSnapshot) KeySet(stopch StopChannel) (chan IndexEntry, chan error)
 		k: []byte(nil),
 	}
 
-	go func() {
-		s.db.AscendGreaterOrEqual(nilK, cb)
-		close(kch)
-	}()
+	s.db.AscendGreaterOrEqual(nilK, cb)
 
-	return kch, ech
+	return nil
 }
 
-func (s *memDBSnapshot) KeyRange(low, high IndexKey, inclusion Inclusion,
-	stopch StopChannel) (chan IndexEntry, chan error, SortOrder) {
-	kch := make(chan IndexEntry)
-	ech := make(chan error)
+func (s *memDBSnapshot) Range(low, high IndexKey, inclusion Inclusion,
+	callb EntryCallback) error {
 
 	stK := &KV{
 		k: low.Bytes(),
@@ -285,41 +277,31 @@ func (s *memDBSnapshot) KeyRange(low, high IndexKey, inclusion Inclusion,
 		k: high.Bytes(),
 	}
 	cb := func(i memdb.Item) bool {
-		select {
-		case <-stopch:
-			return false
-		default:
-		}
 		kv := i.(*KV)
-		key, _ := BytesToSecondaryIndexEntry(kv.k)
 		if len(high.Bytes()) > 0 && !kv.Less(endK) {
 			return false
 		}
-		kch <- key
+
+		if callb(kv.k) != nil {
+			return false
+		}
 
 		return true
 	}
 
-	go func() {
-		s.db.AscendGreaterOrEqual(stK, cb)
-		close(kch)
-	}()
+	s.db.AscendGreaterOrEqual(stK, cb)
 
-	return kch, ech, Asc
-}
-
-func (s *memDBSnapshot) GetKeySetForKeyRange(low IndexKey, high IndexKey,
-	inclusion Inclusion, chkey chan IndexKey, cherr chan error, stopch StopChannel) {
-	panic("not implemented")
+	return nil
 }
 
 func (s *memDBSnapshot) CountRange(low IndexKey, high IndexKey, inclusion Inclusion,
 	stopch StopChannel) (uint64, error) {
 	count := uint64(0)
-	kch, _, _ := s.KeyRange(low, high, inclusion, stopch)
-	for _ = range kch {
-		count++
-	}
+	return count, nil
+}
+
+func (s *memDBSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64, error) {
+	count := uint64(0)
 	return count, nil
 }
 

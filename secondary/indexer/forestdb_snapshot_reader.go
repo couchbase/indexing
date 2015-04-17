@@ -9,6 +9,7 @@
 
 package indexer
 
+// This file implements IndexReader interface
 import (
 	"errors"
 	"github.com/couchbase/indexing/secondary/common"
@@ -17,13 +18,10 @@ import (
 
 var (
 	ErrUnsupportedInclusion = errors.New("Unsupported range inclusion option")
-	nilKey                  = &NilIndexKey{}
 )
 
-//Counter interface
-func (s *fdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
-	return s.CountRange(nilKey, nilKey, Both, stopch)
-}
+type CmpEntry func(IndexKey, IndexEntry) int
+type EntryCallback func([]byte) error
 
 // Approximate items count
 func (s *fdbSnapshot) StatCountTotal() (uint64, error) {
@@ -37,50 +35,150 @@ func (s *fdbSnapshot) StatCountTotal() (uint64, error) {
 	return info.DocCount(), nil
 }
 
-//Exister interface
-func (s *fdbSnapshot) Exists(key IndexKey, stopch StopChannel) (bool, error) {
+func (s *fdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
+	return s.CountRange(MinIndexKey, MaxIndexKey, Both, stopch)
+}
 
-	var totalRows uint64
+func (s *fdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
+	stopch StopChannel) (uint64, error) {
+
+	var count uint64
+	callb := func([]byte) error {
+		select {
+		case <-stopch:
+			return ErrClientCancel
+		default:
+			count++
+		}
+
+		return nil
+	}
+
+	err := s.Range(low, high, inclusion, callb)
+	return count, err
+}
+
+func (s *fdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64, error) {
 	var err error
-	if totalRows, err = s.CountRange(key, key, Both, stopch); err != nil {
-		return false, nil
+	var count uint64
+
+	callb := func([]byte) error {
+		select {
+		case <-stopch:
+			return ErrClientCancel
+		default:
+			count++
+		}
+
+		return nil
+	}
+
+	for _, k := range keys {
+		if err = s.Lookup(k, callb); err != nil {
+			break
+		}
+	}
+
+	return count, err
+}
+
+func (s *fdbSnapshot) Exists(key IndexKey, stopch StopChannel) (bool, error) {
+	var count uint64
+	callb := func([]byte) error {
+		select {
+		case <-stopch:
+			return ErrClientCancel
+		default:
+			count++
+		}
+
+		return nil
+	}
+
+	err := s.Lookup(key, callb)
+	return count != 0, err
+}
+
+func (s *fdbSnapshot) Lookup(key IndexKey, callb EntryCallback) error {
+	return s.Iterate(key, key, Both, compareExact, callb)
+}
+
+func (s *fdbSnapshot) Range(low, high IndexKey, inclusion Inclusion,
+	callb EntryCallback) error {
+
+	var cmpFn CmpEntry
+	if s.isPrimary() {
+		cmpFn = compareExact
 	} else {
-		return false, err
+		cmpFn = comparePrefix
 	}
 
-	if totalRows > 0 {
-		return true, nil
+	return s.Iterate(low, high, inclusion, cmpFn, callb)
+}
+
+func (s *fdbSnapshot) All(callb EntryCallback) error {
+	return s.Range(MinIndexKey, MaxIndexKey, Both, callb)
+}
+
+func (s *fdbSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
+	cmpFn CmpEntry, callback EntryCallback) error {
+
+	var entry IndexEntry
+	it, err := newFDBSnapshotIterator(s)
+	if err != nil {
+		return err
 	}
-	return false, nil
+	defer closeIterator(it)
+
+	if low.Bytes() == nil {
+		it.SeekFirst()
+	} else {
+		it.Seek(low.Bytes())
+
+		// Discard equal keys if low inclusion is requested
+		if inclusion == Neither || inclusion == High {
+			err = s.iterEqualKeys(low, it, cmpFn, nil)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+loop:
+	for ; it.Valid(); it.Next() {
+		entry = s.newIndexEntry(it.Key())
+
+		// Iterator has reached past the high key, no need to scan further
+		if cmpFn(high, entry) <= 0 {
+			break loop
+		}
+
+		err = callback(it.Key())
+		if err != nil {
+			return err
+		}
+	}
+
+	// Include equal keys if high inclusion is requested
+	if inclusion == Both || inclusion == High {
+		err = s.iterEqualKeys(high, it, cmpFn, callback)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
-//Looker interface
-func (s *fdbSnapshot) Lookup(key IndexKey, stopch StopChannel) (chan IndexEntry, chan error) {
-	chentry := make(chan IndexEntry)
-	cherr := make(chan error)
-
-	go s.GetEntriesForKeyRange(key, key, Both, false, chentry, cherr, stopch)
-	return chentry, cherr
+func (s *fdbSnapshot) isPrimary() bool {
+	return s.slice.(*fdbSlice).isPrimary
 }
 
-func (s *fdbSnapshot) KeySet(stopch StopChannel) (chan IndexEntry, chan error) {
-	chentry := make(chan IndexEntry)
-	cherr := make(chan error)
-
-	prefixCmp := !s.isPrimary()
-	go s.GetEntriesForKeyRange(nilKey, nilKey, Both, prefixCmp, chentry, cherr, stopch)
-	return chentry, cherr
-}
-
-func (s *fdbSnapshot) KeyRange(low, high IndexKey, inclusion Inclusion,
-	stopch StopChannel) (chan IndexEntry, chan error, SortOrder) {
-
-	chentry := make(chan IndexEntry)
-	cherr := make(chan error)
-
-	prefixCmp := !s.isPrimary()
-	go s.GetEntriesForKeyRange(low, high, inclusion, prefixCmp, chentry, cherr, stopch)
-	return chentry, cherr, Asc
+func closeIterator(it *ForestDBIterator) {
+	err := it.Close()
+	if err != nil {
+		logging.Errorf("ForestDB iterator: dealloc failed (%v)", err)
+	}
 }
 
 func (s *fdbSnapshot) newIndexEntry(b []byte) IndexEntry {
@@ -96,130 +194,32 @@ func (s *fdbSnapshot) newIndexEntry(b []byte) IndexEntry {
 	return entry
 }
 
-func (s *fdbSnapshot) GetEntriesForKeyRange(low, high IndexKey, inclusion Inclusion,
-	prefixCmp bool, chentry chan IndexEntry, cherr chan error, stopch StopChannel) {
-
-	defer close(chentry)
-
-	logging.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
-		low.String(), high.String())
-
-	it, err := newFDBSnapshotIterator(s)
-	if err != nil {
-		cherr <- err
-		return
-	}
-	defer closeIterator(it)
-
-	if low.Bytes() == nil {
-		it.SeekFirst()
-	} else {
-		it.Seek(low.Bytes())
-
-		// Discard equal keys if low inclusion is requested
-		if inclusion == Neither || inclusion == High {
-			s.readEqualKeys(low, it, prefixCmp, chentry, cherr, stopch, true)
-		}
-	}
-
-	var entry IndexEntry
-loop:
-	for ; it.Valid(); it.Next() {
-		select {
-		case <-stopch:
-			// stop signalled, end processing
-			return
-
-		default:
-			logging.Tracef("ForestDB Got Key - %s", string(it.Key()))
-
-			entry = s.newIndexEntry(it.Key())
-
-			var highcmp int
-			if high.Bytes() == nil {
-				// if high key is nil, iterate through the fullset
-				highcmp = 1
-			} else {
-				highcmp = keyCmp(prefixCmp, high, entry)
-			}
-
-			// if we have reached past the high key, no need to scan further
-			if highcmp <= 0 {
-				logging.Tracef("ForestDB Discarding Key - %s since >= high", string(it.Key()))
-				break loop
-			}
-
-			chentry <- entry
-		}
-	}
-
-	// Include equal keys if high inclusion is requested
-	if inclusion == Both || inclusion == High {
-		s.readEqualKeys(high, it, prefixCmp, chentry, cherr, stopch, false)
-	}
-}
-
-//RangeCounter interface
-func (s *fdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
-	stopch StopChannel) (uint64, error) {
-
-	logging.Debugf("ForestDB Received Key Low - %s High - %s for Scan",
-		low.String(), high.String())
-
-	chentry := make(chan IndexEntry)
-	cherr := make(chan error)
-	prefixCmp := !s.isPrimary()
-	go s.GetEntriesForKeyRange(low, high, inclusion, prefixCmp, chentry, cherr, stopch)
-
-	var count uint64
-loop:
-	for {
-		select {
-		case _, ok := <-chentry:
-			if !ok {
-				break loop
-			}
-			count++
-		case err := <-cherr:
-			return 0, err
-		}
-	}
-	return count, nil
-}
-
-func (s *fdbSnapshot) readEqualKeys(k IndexKey, it *ForestDBIterator, prefixCmp bool,
-	chentry chan IndexEntry, cherr chan error, stopch StopChannel, discard bool) {
+func (s *fdbSnapshot) iterEqualKeys(k IndexKey, it *ForestDBIterator,
+	cmpFn CmpEntry, callback func([]byte) error) error {
+	var err error
 
 	var entry IndexEntry
 	for ; it.Valid(); it.Next() {
 		entry = s.newIndexEntry(it.Key())
-		if keyCmp(prefixCmp, k, entry) == 0 {
-			if !discard {
-				chentry <- entry
+		if cmpFn(k, entry) == 0 {
+			if callback != nil {
+				err = callback(it.Key())
+				if err != nil {
+					return err
+				}
 			}
 		} else {
 			break
 		}
 	}
+
+	return err
 }
 
-func (s *fdbSnapshot) isPrimary() bool {
-	return s.slice.(*fdbSlice).isPrimary
+func compareExact(k IndexKey, entry IndexEntry) int {
+	return k.Compare(entry)
 }
 
-func closeIterator(it *ForestDBIterator) {
-	err := it.Close()
-	if err != nil {
-		logging.Errorf("ForestDB iterator: dealloc failed (%v)", err)
-	}
-}
-
-func keyCmp(prefixCmp bool, k IndexKey, entry IndexEntry) int {
-	var cmp int
-	if prefixCmp {
-		cmp = k.ComparePrefixFields(entry)
-	} else {
-		cmp = k.Compare(entry)
-	}
-	return cmp
+func comparePrefix(k IndexKey, entry IndexEntry) int {
+	return k.ComparePrefixFields(entry)
 }

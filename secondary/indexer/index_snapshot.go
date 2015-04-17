@@ -106,3 +106,17 @@ func CloneIndexSnapshot(is IndexSnapshot) IndexSnapshot {
 	}
 	return is
 }
+
+func GetSliceSnapshots(is IndexSnapshot) (s []SliceSnapshot) {
+	if is == nil {
+		return
+	}
+
+	for _, p := range is.Partitions() {
+		for _, sl := range p.Slices() {
+			s = append(s, sl)
+		}
+	}
+
+	return
+}

@@ -15,7 +15,12 @@ const (
 
 func EncodeAndWrite(w io.Writer, buf []byte, r interface{}) (err error) {
 	var n int
-	data, err := ProtobufEncode(r)
+	var data []byte
+
+	data, err = ProtobufEncode(r)
+	if err != nil {
+		return
+	}
 	l := LenSize + FlagSize + len(data)
 	if maxLen := len(buf); l > maxLen {
 		err = fmt.Errorf("buffer full")

@@ -12,6 +12,12 @@ var (
 	ErrSecKeyNil = errors.New("Secondary key array is empty")
 )
 
+// Special index keys
+var (
+	MinIndexKey = &NilIndexKey{cmp: -1, pcmp: -1}
+	MaxIndexKey = &NilIndexKey{cmp: 1, pcmp: 1}
+)
+
 var (
 	jsonEncoder *collatejson.Codec
 	encBufPool  *common.BytesBufPool
@@ -66,7 +72,7 @@ func (e *primaryIndexEntry) ReadDocId(buf []byte) ([]byte, error) {
 }
 
 func (e *primaryIndexEntry) ReadSecKey(buf []byte) ([]byte, error) {
-	return nil, nil
+	return buf, nil
 }
 
 func (e *primaryIndexEntry) Bytes() []byte {
@@ -151,14 +157,17 @@ func (e *secondaryIndexEntry) String() string {
 	return string(buf)
 }
 
-type NilIndexKey []byte
+type NilIndexKey struct {
+	cmp  int
+	pcmp int
+}
 
 func (k *NilIndexKey) Compare(entry IndexEntry) int {
-	return -1
+	return k.cmp
 }
 
 func (k *NilIndexKey) ComparePrefixFields(entry IndexEntry) int {
-	return 0
+	return k.pcmp
 }
 
 func (k *NilIndexKey) Bytes() []byte {
