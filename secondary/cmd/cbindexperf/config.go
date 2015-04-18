@@ -22,18 +22,22 @@ type ScanConfig struct {
 }
 
 type Config struct {
-	ScanSpecs []*ScanConfig
+	ScanSpecs   []*ScanConfig
+	Concurrency int
+	Clients     int
 }
 
 type ScanResult struct {
-	Id       uint64
-	Rows     uint64
-	Duration int64
-	Error    string
+	Id         uint64
+	Rows       uint64
+	Duration   int64
+	ErrorCount uint64
 }
 
 type Result struct {
 	ScanResults []*ScanResult
+	Rows        uint64
+	Duration    float64
 }
 
 func parseConfig(filepath string) (*Config, error) {
