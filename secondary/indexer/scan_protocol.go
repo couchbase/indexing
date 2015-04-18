@@ -17,8 +17,6 @@ import (
 	"net"
 )
 
-const rowBufSize = 8 * 1024
-
 type ScanResponseWriter interface {
 	Error(err error) error
 	Stats(rows, unique uint64, min, max []byte) error
@@ -31,7 +29,8 @@ type ScanResponseWriter interface {
 type protoResponseWriter struct {
 	scanType   ScanReqType
 	conn       net.Conn
-	buf        *[]byte
+	encBuf     *[]byte
+	rowBuf     *[]byte
 	rowEntries []*protobuf.IndexEntry
 	rowSize    int
 }
@@ -40,13 +39,14 @@ func newProtoWriter(t ScanReqType, conn net.Conn) *protoResponseWriter {
 	return &protoResponseWriter{
 		scanType: t,
 		conn:     conn,
-		buf:      p.GetBlock(),
+		encBuf:   p.GetBlock(),
+		rowBuf:   p.GetBlock(),
 	}
 }
 
 func (w *protoResponseWriter) writeLen(l int) error {
-	binary.LittleEndian.PutUint16((*w.buf)[:2], uint16(l))
-	_, err := w.conn.Write((*w.buf)[:2])
+	binary.LittleEndian.PutUint16((*w.encBuf)[:2], uint16(l))
+	_, err := w.conn.Write((*w.rowBuf)[:2])
 	return err
 }
 
@@ -69,7 +69,7 @@ func (w *protoResponseWriter) Error(err error) error {
 		}
 	}
 
-	return protobuf.EncodeAndWrite(w.conn, *w.buf, res)
+	return protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
 }
 
 func (w *protoResponseWriter) Stats(rows, unique uint64, min, max []byte) error {
@@ -82,7 +82,7 @@ func (w *protoResponseWriter) Stats(rows, unique uint64, min, max []byte) error 
 		},
 	}
 
-	return protobuf.EncodeAndWrite(w.conn, *w.buf, res)
+	return protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
 }
 
 func (w *protoResponseWriter) Count(c uint64) error {
@@ -90,7 +90,7 @@ func (w *protoResponseWriter) Count(c uint64) error {
 		Count: proto.Int64(int64(c)),
 	}
 
-	return protobuf.EncodeAndWrite(w.conn, *w.buf, res)
+	return protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
 }
 
 func (w *protoResponseWriter) RawBytes(b []byte) error {
@@ -104,16 +104,10 @@ func (w *protoResponseWriter) RawBytes(b []byte) error {
 }
 
 func (w *protoResponseWriter) Row(pk, sk []byte) error {
-	row := &protobuf.IndexEntry{
-		EntryKey:   append([]byte(nil), sk...),
-		PrimaryKey: append([]byte(nil), pk...),
-	}
 
-	w.rowSize += len(sk) + len(pk)
-	w.rowEntries = append(w.rowEntries, row)
-	if w.rowSize >= rowBufSize {
+	if w.rowSize+len(pk)+len(sk) > len(*w.rowBuf) {
 		res := &protobuf.ResponseStream{IndexEntries: w.rowEntries}
-		err := protobuf.EncodeAndWrite(w.conn, *w.buf, res)
+		err := protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
 		if err != nil {
 			return err
 		}
@@ -121,15 +115,31 @@ func (w *protoResponseWriter) Row(pk, sk []byte) error {
 		w.rowSize = 0
 		w.rowEntries = nil
 	}
+
+	pkCopy := (*w.rowBuf)[w.rowSize : w.rowSize+len(pk)]
+	w.rowSize += len(pk)
+	skCopy := (*w.rowBuf)[w.rowSize : w.rowSize+len(sk)]
+	w.rowSize += len(sk)
+
+	copy(pkCopy, pk)
+	copy(skCopy, sk)
+	row := &protobuf.IndexEntry{
+		EntryKey:   skCopy,
+		PrimaryKey: pkCopy,
+	}
+
+	w.rowSize += len(sk) + len(pk)
+	w.rowEntries = append(w.rowEntries, row)
 	return nil
 }
 
 func (w *protoResponseWriter) Done() error {
-	defer p.PutBlock(w.buf)
+	defer p.PutBlock(w.encBuf)
+	defer p.PutBlock(w.rowBuf)
 
 	if (w.scanType == ScanReq || w.scanType == ScanAllReq) && w.rowSize > 0 {
 		res := &protobuf.ResponseStream{IndexEntries: w.rowEntries}
-		err := protobuf.EncodeAndWrite(w.conn, *w.buf, res)
+		err := protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
 		if err != nil {
 			return err
 		}
