@@ -18,7 +18,6 @@ import (
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
-	"io"
 	"net"
 	"strings"
 	"sync"
@@ -518,7 +517,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	return
 }
 
-func (s *scanCoordinator) respondWithError(w io.Writer, req *ScanRequest, err error) {
+func (s *scanCoordinator) respondWithError(conn net.Conn, req *ScanRequest, err error) {
 	var res interface{}
 
 	buf := p.GetBlock()
@@ -541,12 +540,12 @@ func (s *scanCoordinator) respondWithError(w io.Writer, req *ScanRequest, err er
 		}
 	}
 
-	err2 := protobuf.EncodeAndWrite(w, *buf, res)
+	err2 := protobuf.EncodeAndWrite(conn, *buf, res)
 	if err2 != nil {
 		err = fmt.Errorf("%s, %s", err, err2)
 		goto finish
 	}
-	err2 = protobuf.EncodeAndWrite(w, *buf, &protobuf.StreamEndResponse{})
+	err2 = protobuf.EncodeAndWrite(conn, *buf, &protobuf.StreamEndResponse{})
 	if err2 != nil {
 		err = fmt.Errorf("%s, %s", err, err2)
 	}
@@ -571,7 +570,7 @@ func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanReq
 	return false
 }
 
-func (s *scanCoordinator) serverCallback(protoReq interface{}, conn io.Writer,
+func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	cancelCh <-chan interface{}) {
 
 	req, err := s.newRequest(protoReq, cancelCh)

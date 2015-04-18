@@ -3,7 +3,7 @@ package queryport
 import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import "io"
+import "net"
 
 // Application is example application logic that uses query-port server
 func Application(config c.Config) {
@@ -11,8 +11,8 @@ func Application(config c.Config) {
 	s, err := NewServer(
 		"localhost:9990",
 		func(req interface{},
-			w io.Writer, quitch <-chan interface{}) {
-			requestHandler(req, w, quitch, killch)
+			conn net.Conn, quitch <-chan interface{}) {
+			requestHandler(req, conn, quitch, killch)
 		},
 		config)
 
@@ -26,7 +26,7 @@ func Application(config c.Config) {
 // will be spawned as a go-routine by server's connection handler.
 func requestHandler(
 	req interface{},
-	w io.Writer, // Write handle to the tcp socket
+	conn net.Conn, // Write handle to the tcp socket
 	quitch <-chan interface{}, // client / connection might have quit (done)
 	killch chan bool, // application is shutting down the server.
 ) {
@@ -46,13 +46,13 @@ func requestHandler(
 loop:
 	for _, resp := range responses {
 		// query storage backend for request
-		protobuf.EncodeAndWrite(w, buf, resp)
+		protobuf.EncodeAndWrite(conn, buf, resp)
 		select {
 		case <-quitch:
 			close(killch)
 			break loop
 		}
 	}
-	protobuf.EncodeAndWrite(w, buf, &protobuf.StreamEndResponse{})
+	protobuf.EncodeAndWrite(conn, buf, &protobuf.StreamEndResponse{})
 	// Free resources.
 }

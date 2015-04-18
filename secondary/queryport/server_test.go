@@ -5,7 +5,7 @@ package queryport
 import "reflect"
 import "testing"
 import "time"
-import "io"
+import "net"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/queryport/client"
@@ -38,13 +38,13 @@ func TestStatistics(t *testing.T) {
 	buf := make([]byte, 1024)
 	addr := "localhost:9101"
 	serverCallb := func(
-		req interface{}, w io.Writer, quitch <-chan interface{}) {
+		req interface{}, conn net.Conn, quitch <-chan interface{}) {
 
 		switch req.(type) {
 		case *protobuf.StatisticsRequest:
 			resp := testStatisticsResponse
-			protobuf.EncodeAndWrite(w, buf, resp)
-			protobuf.EncodeAndWrite(w, buf, &protobuf.StreamEndResponse{})
+			protobuf.EncodeAndWrite(conn, buf, resp)
+			protobuf.EncodeAndWrite(conn, buf, &protobuf.StreamEndResponse{})
 			select {
 			case <-quitch:
 				t.Fatal("unexpected quit", req)
@@ -81,14 +81,14 @@ func TestRange(t *testing.T) {
 	//logging.LogIgnore()
 	addr := "localhost:9101"
 	serverCallb := func(
-		req interface{}, w io.Writer, quitch <-chan interface{}) {
+		req interface{}, conn net.Conn, quitch <-chan interface{}) {
 
 		switch req.(type) {
 		case *protobuf.ScanRequest:
 		default:
 			t.Fatal("unknown request", req)
 		}
-		sendResponse(t, 10000, w, quitch)
+		sendResponse(t, 10000, conn, quitch)
 	}
 	s := startServer(t, addr, serverCallb)
 	time.Sleep(100 * time.Millisecond)
@@ -140,14 +140,14 @@ func TestScanAll(t *testing.T) {
 	//logging.LogIgnore()
 	addr := "localhost:9101"
 	callb := func(
-		req interface{}, w io.Writer, quitch <-chan interface{}) {
+		req interface{}, conn net.Conn, quitch <-chan interface{}) {
 
 		switch req.(type) {
 		case *protobuf.ScanAllRequest:
 		default:
 			t.Fatal("unknown request", req)
 		}
-		sendResponse(t, 10000, w, quitch)
+		sendResponse(t, 10000, conn, quitch)
 	}
 	s := startServer(t, addr, callb)
 	time.Sleep(100 * time.Millisecond)
@@ -197,10 +197,10 @@ func BenchmarkStatistics(b *testing.B) {
 	addr := "localhost:9101"
 	buf := make([]byte, 1024)
 	callb := func(
-		req interface{}, w io.Writer, quitch <-chan interface{}) {
+		req interface{}, conn net.Conn, quitch <-chan interface{}) {
 
-		protobuf.EncodeAndWrite(w, buf, testStatisticsResponse)
-		protobuf.EncodeAndWrite(w, buf, &protobuf.StreamEndResponse{})
+		protobuf.EncodeAndWrite(conn, buf, testStatisticsResponse)
+		protobuf.EncodeAndWrite(conn, buf, &protobuf.StreamEndResponse{})
 	}
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
@@ -227,10 +227,10 @@ func BenchmarkRange1(b *testing.B) {
 	addr := "localhost:9101"
 	buf := make([]byte, 1024)
 	callb := func(
-		req interface{}, w io.Writer, quitch <-chan interface{}) {
+		req interface{}, conn net.Conn, quitch <-chan interface{}) {
 
-		protobuf.EncodeAndWrite(w, buf, testResponseStream)
-		protobuf.EncodeAndWrite(w, buf, &protobuf.StreamEndResponse{})
+		protobuf.EncodeAndWrite(conn, buf, testResponseStream)
+		protobuf.EncodeAndWrite(conn, buf, &protobuf.StreamEndResponse{})
 	}
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
@@ -263,13 +263,13 @@ func BenchmarkRange100(b *testing.B) {
 	addr := "localhost:9101"
 	buf := make([]byte, 1024)
 	callb := func(
-		req interface{}, w io.Writer, quitch <-chan interface{}) {
+		req interface{}, conn net.Conn, quitch <-chan interface{}) {
 
 		for i := 0; i < 100; i++ {
-			protobuf.EncodeAndWrite(w, buf, testResponseStream)
+			protobuf.EncodeAndWrite(conn, buf, testResponseStream)
 		}
 
-		protobuf.EncodeAndWrite(w, buf, &protobuf.StreamEndResponse{})
+		protobuf.EncodeAndWrite(conn, buf, &protobuf.StreamEndResponse{})
 	}
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
@@ -302,10 +302,10 @@ func BenchmarkRangeParallel10(b *testing.B) {
 	buf := make([]byte, 1024)
 	addr := "localhost:9101"
 	callb := func(
-		req interface{}, w io.Writer, quitch <-chan interface{}) {
+		req interface{}, conn net.Conn, quitch <-chan interface{}) {
 
-		protobuf.EncodeAndWrite(w, buf, testResponseStream)
-		protobuf.EncodeAndWrite(w, buf, &protobuf.StreamEndResponse{})
+		protobuf.EncodeAndWrite(conn, buf, testResponseStream)
+		protobuf.EncodeAndWrite(conn, buf, &protobuf.StreamEndResponse{})
 	}
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
@@ -338,10 +338,10 @@ func BenchmarkScanAll(b *testing.B) {
 	buf := make([]byte, 1024)
 	addr := "localhost:9101"
 	callb := func(
-		req interface{}, w io.Writer, quitch <-chan interface{}) {
+		req interface{}, conn net.Conn, quitch <-chan interface{}) {
 
-		protobuf.EncodeAndWrite(w, buf, testResponseStream)
-		protobuf.EncodeAndWrite(w, buf, &protobuf.StreamEndResponse{})
+		protobuf.EncodeAndWrite(conn, buf, testResponseStream)
+		protobuf.EncodeAndWrite(conn, buf, &protobuf.StreamEndResponse{})
 	}
 	s := startServer(b, addr, callb)
 	time.Sleep(100 * time.Millisecond)
@@ -380,13 +380,13 @@ func startServer(tb testing.TB, laddr string, callb RequestHandler) *Server {
 // server callback
 func sendResponse(
 	tb testing.TB, count int,
-	w io.Writer, quitch <-chan interface{}) {
+	conn net.Conn, quitch <-chan interface{}) {
 
 	buf := make([]byte, 1024)
 	i := 0
 loop:
 	for ; i < count; i++ {
-		protobuf.EncodeAndWrite(w, buf, testResponseStream)
+		protobuf.EncodeAndWrite(conn, buf, testResponseStream)
 		select {
 		case <-quitch:
 			break loop
@@ -394,5 +394,5 @@ loop:
 		}
 	}
 
-	protobuf.EncodeAndWrite(w, buf, &protobuf.StreamEndResponse{})
+	protobuf.EncodeAndWrite(conn, buf, &protobuf.StreamEndResponse{})
 }

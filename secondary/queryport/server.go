@@ -17,7 +17,7 @@ import "github.com/couchbase/indexing/secondary/transport"
 // channel, until `quitch` is closed. When there are
 // no more response to post handler shall close `respch`.
 type RequestHandler func(
-	req interface{}, w io.Writer, quitch <-chan interface{})
+	req interface{}, conn net.Conn, quitch <-chan interface{})
 
 // Server handles queryport connections.
 type Server struct {
