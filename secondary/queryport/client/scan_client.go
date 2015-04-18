@@ -396,7 +396,7 @@ func (c *GsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 		logging.Errorf(fmsg, c.logPrefix, req, err)
 		healthy = false
 		return nil, err
-	} else if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
+	} else if endResp != nil {
 		healthy = false
 		return nil, ErrorProtocol
 	}
@@ -417,7 +417,6 @@ func (c *GsiScanClient) streamResponse(
 	callb ResponseHandler) (cont bool, healthy bool, err error) {
 
 	var resp interface{}
-	var endResp *protobuf.StreamEndResponse
 	var finish bool
 
 	laddr := conn.LocalAddr()
@@ -436,10 +435,11 @@ func (c *GsiScanClient) streamResponse(
 			logging.Errorf(fmsg, c.logPrefix, laddr, err)
 		}
 
-	} else if endResp, finish = resp.(*protobuf.StreamEndResponse); finish {
+	} else if resp == nil {
+		finish = true
 		fmsg := "%v connection %q received StreamEndResponse"
 		logging.Tracef(fmsg, c.logPrefix, laddr)
-		callb(endResp) // callback most likely return true
+		callb(&protobuf.StreamEndResponse{}) // callback most likely return true
 		cont, healthy = false, true
 
 	} else {

@@ -34,6 +34,12 @@ func Send(conn transporter, buf []byte, flags TransportFlag, payload []byte) (er
 	return
 }
 
+func SendResponseEnd(conn transporter) error {
+	buf := make([]byte, pktLenSize+pktFlagSize)
+	// Special 0 byte payload and flag to indicate end of response
+	return Send(conn, buf, 0, nil)
+}
+
 func Receive(conn transporter, buf []byte) (flags TransportFlag, payload []byte, err error) {
 	// transport de-framing
 	if err = fullRead(conn, buf[:pktDataOffset]); err != nil {

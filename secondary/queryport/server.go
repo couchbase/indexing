@@ -34,8 +34,6 @@ type Server struct {
 	streamChanSize int
 	logPrefix      string
 	nConnections   *int64
-
-	pktBuf []byte
 }
 
 type ServerStats struct {
@@ -57,7 +55,6 @@ func NewServer(
 		streamChanSize: config["streamChanSize"].Int(),
 		logPrefix:      fmt.Sprintf("[Queryport %q]", laddr),
 		nConnections:   new(int64),
-		pktBuf:         make([]byte, 100),
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
 		logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
@@ -158,8 +155,8 @@ loop:
 			// End response should be only sent after monitor is shutdown
 			// otherwise it could lead to loss of next request coming through
 			// same connection.
-			// TODO (sarath): Make end response packet encoding independent
-			protobuf.EncodeAndWrite(conn, s.pktBuf, &protobuf.StreamEndResponse{})
+
+			transport.SendResponseEnd(conn)
 
 		case <-s.killch:
 			break loop

@@ -102,14 +102,6 @@ func (pkt *TransportPacket) Send(conn transporter, payload interface{}) (err err
 		return
 	}
 
-	// transport framing
-	l := pktLenSize + pktFlagSize + len(data)
-	if maxLen := len(pkt.buf); l > maxLen {
-		logging.Errorf("sending packet length %v > %v\n", l, maxLen)
-		err = ErrorPacketOverflow
-		return
-	}
-
 	err = Send(conn, pkt.buf, pkt.flags, data)
 	return
 }
@@ -118,11 +110,19 @@ func (pkt *TransportPacket) Send(conn transporter, payload interface{}) (err err
 // payload.
 func (pkt *TransportPacket) Receive(conn transporter) (payload interface{}, err error) {
 	var data []byte
+	var flags TransportFlag
 
-	pkt.flags, data, err = Receive(conn, pkt.buf)
+	flags, data, err = Receive(conn, pkt.buf)
 	if err != nil {
 		return
 	}
+
+	// Special packet to indicate end response
+	if len(data) == 0 && flags == 0 {
+		return nil, nil
+	}
+
+	pkt.flags = flags
 
 	laddr, raddr := conn.LocalAddr(), conn.RemoteAddr()
 	logging.Tracef("read %v bytes on connection %v<-%v", len(data), laddr, raddr)
