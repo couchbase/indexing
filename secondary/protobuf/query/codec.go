@@ -17,6 +17,10 @@ var ErrorMissingPayload = errors.New("dataport.missingPlayload")
 // `data` can be transported to the other end and decoded back to Payload
 // message.
 func ProtobufEncode(payload interface{}) (data []byte, err error) {
+	return ProtobufEncodeInBuf(payload, nil)
+}
+
+func ProtobufEncodeInBuf(payload interface{}, buf []byte) (data []byte, err error) {
 	pl := &QueryPayload{Version: proto.Uint32(uint32(ProtobufVersion()))}
 	switch val := payload.(type) {
 	// request
@@ -51,7 +55,10 @@ func ProtobufEncode(payload interface{}) (data []byte, err error) {
 	default:
 		return nil, ErrorMissingPayload
 	}
-	data, err = proto.Marshal(pl)
+
+	p := proto.NewBuffer(buf)
+	err = p.Marshal(pl)
+	data = p.Bytes()
 	return
 }
 

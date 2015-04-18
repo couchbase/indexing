@@ -8,7 +8,7 @@ func Send(conn transporter, buf []byte, flags TransportFlag, payload []byte) (er
 	var n int
 
 	// transport framing
-	l := pktLenSize + pktFlagSize + len(payload)
+	l := pktLenSize + pktFlagSize
 	if maxLen := len(buf); l > maxLen {
 		logging.Errorf("sending packet length %v > %v\n", l, maxLen)
 		err = ErrorPacketOverflow

@@ -13,7 +13,7 @@ const (
 
 func EncodeAndWrite(conn net.Conn, buf []byte, r interface{}) (err error) {
 	var data []byte
-	data, err = ProtobufEncode(r)
+	data, err = ProtobufEncodeInBuf(r, buf[transport.MaxSendBufSize:][:0])
 	if err != nil {
 		return
 	}

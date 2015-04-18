@@ -28,11 +28,12 @@ var ErrorDecoderUnknown = errors.New("transport.decoderUnknown")
 
 // packet field offset and size in bytes
 const (
-	pktLenOffset  int = 0
-	pktLenSize    int = 4
-	pktFlagOffset int = pktLenOffset + pktLenSize
-	pktFlagSize   int = 2
-	pktDataOffset int = pktFlagOffset + pktFlagSize
+	pktLenOffset   int = 0
+	pktLenSize     int = 4
+	pktFlagOffset  int = pktLenOffset + pktLenSize
+	pktFlagSize    int = 2
+	pktDataOffset  int = pktFlagOffset + pktFlagSize
+	MaxSendBufSize int = pktLenSize + pktFlagSize
 )
 
 type transporter interface { // facilitates unit testing
