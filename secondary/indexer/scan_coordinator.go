@@ -334,6 +334,13 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	r.cancelCh = cancelCh
 
+	isNil := func(k []byte) bool {
+		if len(k) == 0 || (!r.isPrimary && string(k) == "[]") {
+			return true
+		}
+		return false
+	}
+
 	newKey := func(k []byte) (IndexKey, error) {
 		if len(k) == 0 {
 			return nil, fmt.Errorf("Key is null")
@@ -347,7 +354,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	}
 
 	newLowKey := func(k []byte) (IndexKey, error) {
-		if len(k) == 0 {
+		if isNil(k) {
 			return MinIndexKey, nil
 		}
 
@@ -355,46 +362,46 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	}
 
 	newHighKey := func(k []byte) (IndexKey, error) {
-		if len(k) == 0 {
+		if isNil(k) {
 			return MaxIndexKey, nil
 		}
 
 		return newKey(k)
 	}
 
-	fillRanges := func(low, high []byte, keys [][]byte) error {
-		var err error
+	fillRanges := func(low, high []byte, keys [][]byte) {
 		var key IndexKey
+		var localErr error
+		defer func() {
+			if err == nil {
+				err = localErr
+			}
+		}()
 
 		// range
 		r.lowBytes = low
 		r.highBytes = high
 
-		if err == nil {
-			if r.low, err = newLowKey(low); err != nil {
-				msg := fmt.Sprintf("Invalid low key %s (%s)", string(low), err.Error())
-				return errors.New(msg)
-			}
+		if r.low, localErr = newLowKey(low); localErr != nil {
+			localErr = fmt.Errorf("Invalid low key %s (%s)", string(low), localErr)
+			return
+		}
 
-			if r.high, err = newHighKey(high); err != nil {
-				msg := fmt.Sprintf("Invalid high key %s (%s)", string(high), err.Error())
-				return errors.New(msg)
-			}
+		if r.high, localErr = newHighKey(high); localErr != nil {
+			localErr = fmt.Errorf("Invalid high key %s (%s)", string(high), localErr)
+			return
 		}
 
 		// point query for keys
 		for _, k := range keys {
 			r.keysBytes = append(r.keysBytes, k)
-			if err == nil {
-				if key, err = newKey(k); err != nil {
-					msg := fmt.Sprintf("Invalid equal key %s (%s)", string(k), err.Error())
-					return errors.New(msg)
-				}
-				r.keys = append(r.keys, key)
+			if key, localErr = newKey(k); localErr != nil {
+				localErr = fmt.Errorf("Invalid equal key %s (%s)", string(k), localErr)
+				return
 			}
+			r.keys = append(r.keys, key)
 		}
 
-		return nil
 	}
 
 	setConsistency := func(cons common.Consistency, vector *protobuf.TsConsistency) {
@@ -411,12 +418,17 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}
 	}
 
-	// This should be the last func to be called as part of req parse
 	setIndexParams := func() {
+		var localErr error
+		defer func() {
+			if err == nil {
+				err = localErr
+			}
+		}()
 		s.mu.RLock()
 		defer s.mu.RUnlock()
-		indexInst, err = s.findIndexInstance(r.defnID)
-		if err == nil {
+		indexInst, localErr = s.findIndexInstance(r.defnID)
+		if localErr == nil {
 			r.isPrimary = indexInst.Defn.IsPrimary
 			r.indexName, r.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
 			r.indexInstId = indexInst.InstId
@@ -424,7 +436,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				r.ts.Bucket = r.bucket
 			}
 			if indexInst.State != common.INDEX_STATE_ACTIVE {
-				err = ErrIndexNotReady
+				localErr = ErrIndexNotReady
 			} else {
 				r.stats = s.scanStatsMap[r.indexInstId]
 			}
@@ -436,11 +448,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.defnID = req.GetDefnID()
 		r.scanType = StatsReq
 		r.incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
-		err = fillRanges(
+		setIndexParams()
+		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
-		setIndexParams()
+
 	case *protobuf.CountRequest:
 		r.defnID = req.GetDefnID()
 		cons := common.Consistency(req.GetCons())
@@ -448,11 +461,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		setConsistency(cons, vector)
 		r.scanType = CountReq
 		r.incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
-		err = fillRanges(
+		setIndexParams()
+		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
-		setIndexParams()
+
 	case *protobuf.ScanRequest:
 		r.defnID = req.GetDefnID()
 		cons := common.Consistency(req.GetCons())
@@ -460,12 +474,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		setConsistency(cons, vector)
 		r.scanType = ScanReq
 		r.incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
-		err = fillRanges(
+		setIndexParams()
+		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
 		r.limit = req.GetLimit()
-		setIndexParams()
 	case *protobuf.ScanAllRequest:
 		r.defnID = req.GetDefnID()
 		cons := common.Consistency(req.GetCons())
