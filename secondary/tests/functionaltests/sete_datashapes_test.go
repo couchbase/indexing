@@ -185,6 +185,61 @@ func TestSameIndexNameInTwoBuckets(t *testing.T) {
 	UpdateKVDocs(bucketDocs[0], docs)
 }
 
+// Test with large number of mutations
+func TestLargeMutations(t *testing.T) {
+	log.Printf("In TestLargeMutations()")
+	var index1 = "indexmut_1"
+	var index2 = "indexmut_2"
+	var bucketName = "default"
+	var field1 = "company"
+	var field2 = "gender"
+
+	// e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	// FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	docsToCreate := generateDocs(20000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", []string{field1}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedScanAllResponse(docs, field1)
+	scanResults, err := secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
+
+	for i := 0; i <= 10; i++ {
+		log.Printf("ITERATION %v\n", i)
+
+		docsToCreate = generateDocs(10000, "users.prod")
+		UpdateKVDocs(docsToCreate, docs)
+		kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+		err := secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, "", []string{field2}, false, nil, true, defaultIndexActiveTimeout, nil)
+		FailTestIfError(err, "Error in creating the index", t)
+
+		docScanResults = datautility.ExpectedScanAllResponse(docs, field1)
+		scanResults, err = secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.Validate(docScanResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+		log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
+
+		docScanResults = datautility.ExpectedScanAllResponse(docs, field2)
+		scanResults, err = secondaryindex.ScanAll(index2, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.Validate(docScanResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+		log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
+
+		err = secondaryindex.DropSecondaryIndex(index2, bucketName, indexManagementAddress)
+		FailTestIfError(err, "Error in drop index", t)
+	}
+}
+
 func generateDocsWithSpecialCharacters(numDocs int, prodFileName, field string) tc.KeyValues {
 	prodfile := filepath.Join(proddir, prodFileName)
 	docsToCreate := GenerateJsons(numDocs, seed, prodfile, bagdir)
