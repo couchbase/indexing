@@ -526,6 +526,7 @@ func IsAuthValid(r *http.Request, server string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK, nil
 }
 
