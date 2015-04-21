@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"io"
@@ -244,8 +245,7 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 		return
 	}
 
-	auth := r.Header.Get("Authorization")
-	list, err := m.getIndexStatus(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), auth)
+	list, err := m.getIndexStatus(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache))
 	if err == nil {
 		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
 		send(w, resp)
@@ -256,7 +256,7 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 	}
 }
 
-func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, auth string) ([]IndexStatus, error) {
+func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) ([]IndexStatus, error) {
 
 	if err := cinfo.Fetch(); err != nil {
 		return nil, err
@@ -272,7 +272,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, a
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 		if err == nil {
 
-			resp, err := getWithAuth(addr+"/getLocalIndexMetadata", auth)
+			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
 			if err != nil {
 				return nil, errors.New(fmt.Sprintf("Fail to retrieve index definition from url %s", addr))
 			}
@@ -346,9 +346,8 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 		return
 	}
 
-	auth := r.Header.Get("Authorization")
 	indexerHostMap := make(map[common.IndexerId]string)
-	meta, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap, auth)
+	meta, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap)
 	if err == nil {
 		resp := &BackupResponse{Code: RESP_SUCCESS, Result: *meta}
 		send(w, resp)
@@ -360,7 +359,7 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 }
 
 func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
-	indexerHostMap map[common.IndexerId]string, auth string) (*ClusterIndexMetadata, error) {
+	indexerHostMap map[common.IndexerId]string) (*ClusterIndexMetadata, error) {
 
 	if err := cinfo.Fetch(); err != nil {
 		return nil, err
@@ -376,7 +375,7 @@ func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 		if err == nil {
 
-			resp, err := getWithAuth(addr+"/getLocalIndexMetadata", auth)
+			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
 			if err != nil {
 				return nil, errors.New(fmt.Sprintf("Fail to retrieve index definition from url %s", addr))
 			}
@@ -500,9 +499,8 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 		return
 	}
 
-	auth := r.Header.Get("Authorization")
 	indexerHostMap := make(map[common.IndexerId]string)
-	current, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap, auth)
+	current, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap)
 	if err != nil {
 		send(w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to get the latest index metadata for restore"})
 		return
@@ -539,7 +537,7 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 	}
 
 	// recreate index
-	success := m.restoreIndex(current, context, indexerHostMap, auth)
+	success := m.restoreIndex(current, context, indexerHostMap)
 
 	if success {
 		send(w, &RestoreResponse{Code: RESP_SUCCESS})
@@ -611,7 +609,7 @@ func (m *requestHandlerContext) findIndexToRestoreByName(current *ClusterIndexMe
 }
 
 func (m *requestHandlerContext) restoreIndex(current *ClusterIndexMetadata,
-	context *RestoreContext, indexerHostMap map[common.IndexerId]string, auth string) bool {
+	context *RestoreContext, indexerHostMap map[common.IndexerId]string) bool {
 
 	indexerCountMap := make(map[common.IndexerId]int)
 	for _, meta := range current.Metadata {
@@ -628,7 +626,7 @@ func (m *requestHandlerContext) restoreIndex(current *ClusterIndexMetadata,
 			}
 
 			logging.Debugf("requestHandler.restoreIndex(): restore index definition (%v,%v) on host %v", defn.Bucket, defn.Name, host)
-			result = result && m.makeCreateIndexRequest(defn, host, auth)
+			result = result && m.makeCreateIndexRequest(defn, host)
 
 			indexerCountMap[indexerId] = indexerCountMap[indexerId] + 1
 		}
@@ -637,7 +635,7 @@ func (m *requestHandlerContext) restoreIndex(current *ClusterIndexMetadata,
 	return result
 }
 
-func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, host string, auth string) bool {
+func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, host string) bool {
 
 	id, err := common.NewIndexDefnId()
 	if err != nil {
@@ -658,7 +656,7 @@ func (m *requestHandlerContext) makeCreateIndexRequest(defn common.IndexDefn, ho
 
 	bodybuf := bytes.NewBuffer(body)
 
-	resp, err := postWithAuth(host+"/createIndex", "application/json", bodybuf, auth)
+	resp, err := postWithAuth(host+"/createIndex", "application/json", bodybuf)
 	if err != nil {
 		logging.Debugf("requestHandler.makeCreateIndexRequest(): create index request fails %v", err)
 		return false
@@ -764,7 +762,7 @@ func doAuth(r *http.Request, w http.ResponseWriter, clusterUrl string) bool {
 	return true
 }
 
-func getWithAuth(url string, auth string) (*http.Response, error) {
+func getWithAuth(url string) (*http.Response, error) {
 
 	if !strings.HasPrefix(url, "http://") {
 		url = "http://" + url
@@ -774,13 +772,13 @@ func getWithAuth(url string, auth string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", auth)
+	cbauth.SetRequestAuthVia(req, nil)
 
 	client := http.Client{}
 	return client.Do(req)
 }
 
-func postWithAuth(url string, bodyType string, body io.Reader, auth string) (*http.Response, error) {
+func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, error) {
 
 	if !strings.HasPrefix(url, "http://") {
 		url = "http://" + url
@@ -790,8 +788,8 @@ func postWithAuth(url string, bodyType string, body io.Reader, auth string) (*ht
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", auth)
 	req.Header.Set("Content-Type", bodyType)
+	cbauth.SetRequestAuthVia(req, nil)
 
 	client := http.Client{}
 	return client.Do(req)
