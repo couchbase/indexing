@@ -69,6 +69,7 @@ func js(mtx *aggmtx, agg *aggstats) string {
 	files, tests, stats := agg.dimensions()
 	lint := len(*files) / 5
 	buf := NewBytesBuffer()
+	buf.Printf("\nvar label2file = {};\n")
 	buf.Printf("function drawChart() {\n")
 	for ti, test := range *tests {
 		lbl := fmt.Sprintf("%v", ti)
@@ -78,8 +79,10 @@ func js(mtx *aggmtx, agg *aggstats) string {
 			buf.Printf("data_%v.addColumn('number', '%s');\n", lbl, string(stat))
 		}
 		for fi, fn := range *files {
+			fnp := strings.Split(string(fn), "/")
 			buf.Printf("data_%v.addRow();\n", lbl)
 			buf.Printf("data_%v.setCell(%v, 0, '%v');\n", lbl, fi, prettyLabel(fn))
+			buf.Printf("label2file['%v'] = '%v';\n", prettyLabel(fn), fnp[len(fnp)-1])
 			for si, stat := range *stats {
 				val := float64(mtx.data[test][fn][stat])
 				if val == 0 {
@@ -92,6 +95,13 @@ func js(mtx *aggmtx, agg *aggstats) string {
 		buf.Printf("var options_%v = {title:'%v', curveType:'function', legend:{position:'right'}, hAxis:{showTextEvery:%v}};\n", lbl, prettyName(test), lint)
 		buf.Printf("var chart_%v = new google.visualization.LineChart(document.getElementById('curve_chart_%v'));\n", lbl, lbl)
 		buf.Printf("chart_%v.draw(data_%v, options_%v);\n", lbl, lbl, lbl)
+		buf.Printf("google.visualization.events.addListener(chart_%v, 'select', function() {\n", lbl)
+		buf.Printf(" var selection = chart_%v.getSelection();\n", lbl)
+		buf.Printf(" var row = selection[0].row;\n")
+		buf.Printf(" var label = data_%v.getValue(row, 0);\n", lbl)
+		buf.Printf(" var fname = label2file[label];\n")
+		buf.Printf(" document.location.href = fname;\n")
+		buf.Printf("});\n")
 		buf.Printf("NProgress.set(%f);\n", float64(ti)/float64(len(*tests))+0.2)
 	}
 	buf.Printf("NProgress.done();\n")
