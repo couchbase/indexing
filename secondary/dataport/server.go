@@ -288,20 +288,6 @@ loop:
 	}
 }
 
-// handle new connection
-func (s *Server) handleNewConnection(conn net.Conn, raddr string) error {
-	logging.Tracef("%v connection request from %q\n", s.logPrefix, raddr)
-	if _, ok := s.conns[raddr]; ok {
-		logging.Errorf("%v %q already active\n", s.logPrefix, raddr)
-		return ErrorDuplicateClient
-	}
-	// connection accepted
-	worker := make(chan interface{}, s.maxVbuckets)
-	s.conns[raddr] = &netConn{conn: conn, worker: worker, active: false}
-	logging.Tracef("%v total active connections %v\n", s.logPrefix, len(s.conns))
-	return nil
-}
-
 // shutdown this gen server and all its routines.
 func (s *Server) handleClose() {
 	defer func() {
