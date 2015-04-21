@@ -240,7 +240,7 @@ func SkipTestSequentialRangeScans(t *testing.T) {
 	SequentialRangeScanForDuration(indexName, bucketName, 60, t)
 }
 
-func TestRangeWithConcurrentAddMuts(t *testing.T) {
+func SkipTestRangeWithConcurrentAddMuts(t *testing.T) {
 	log.Printf("In TestRangeWithConcurrentAddMuts()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
@@ -267,7 +267,7 @@ func TestRangeWithConcurrentAddMuts(t *testing.T) {
 	wg.Wait()
 }
 
-func TestRangeWithConcurrentDelMuts(t *testing.T) {
+func SkipTestRangeWithConcurrentDelMuts(t *testing.T) {
 	log.Printf("In TestRangeWithConcurrentDelMuts()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
@@ -293,7 +293,7 @@ func TestRangeWithConcurrentDelMuts(t *testing.T) {
 	wg.Wait()
 }
 
-func TestScanWithConcurrentIndexOps(t *testing.T) {
+func SkipTestScanWithConcurrentIndexOps(t *testing.T) {
 	log.Printf("In TestScanWithConcurrentIndexOps()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
@@ -319,7 +319,7 @@ func TestScanWithConcurrentIndexOps(t *testing.T) {
 	wg.Wait()
 }
 
-func TestConcurrentScans_SameIndex(t *testing.T) {
+func SkipTestConcurrentScans_SameIndex(t *testing.T) {
 	log.Printf("In TestConcurrentScans_SameIndex()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
@@ -349,7 +349,7 @@ func TestConcurrentScans_SameIndex(t *testing.T) {
 	wg.Wait()
 }
 
-func TestConcurrentScans_MultipleIndexes(t *testing.T) {
+func SkipTestConcurrentScans_MultipleIndexes(t *testing.T) {
 	log.Printf("In TestConcurrentScans_MultipleIndexes()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
@@ -384,7 +384,7 @@ func TestConcurrentScans_MultipleIndexes(t *testing.T) {
 	wg.Wait()
 }
 
-func TestMutationsWithMultipleIndexBuilds(t *testing.T) {
+func SkipTestMutationsWithMultipleIndexBuilds(t *testing.T) {
 	log.Printf("In TestMutationsWithMultipleIndexBuilds()")
 	prodfile = filepath.Join(proddir, "test.prod")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
