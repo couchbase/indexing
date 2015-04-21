@@ -327,18 +327,8 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 				return
 			}
 
-			//init slab manager
-			var slabMgr SlabManager
-			var errMsg Message
-			if slabMgr, errMsg = NewSlabManager(DEFAULT_START_CHUNK_SIZE,
-				DEFAULT_SLAB_SIZE, DEFAULT_MAX_SLAB_MEMORY); slabMgr == nil {
-				m.supvCmdch <- errMsg
-				return
-			}
-
 			bucketQueueMap[i.Defn.Bucket] = IndexerMutationQueue{
-				queue:   queue,
-				slabMgr: slabMgr}
+				queue: queue}
 		}
 		indexQueueMap[i.InstId] = bucketQueueMap[i.Defn.Bucket]
 	}
@@ -422,17 +412,8 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 						category: MUTATION_QUEUE}}
 			}
 
-			//init slab manager
-			var slabMgr SlabManager
-			var errMsg Message
-			if slabMgr, errMsg = NewSlabManager(DEFAULT_START_CHUNK_SIZE,
-				DEFAULT_SLAB_SIZE, DEFAULT_MAX_SLAB_MEMORY); slabMgr == nil {
-				return errMsg
-			}
-
 			bucketQueueMap[i.Defn.Bucket] = IndexerMutationQueue{
-				queue:   queue,
-				slabMgr: slabMgr}
+				queue: queue}
 			bucketMapDirty = true
 		}
 		indexQueueMap[i.InstId] = bucketQueueMap[i.Defn.Bucket]
