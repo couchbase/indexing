@@ -136,7 +136,7 @@ func (d *IndexScanDecoder) Routine() error {
 	defer d.CloseWrite()
 	defer d.CloseRead()
 
-	var entry IndexEntry
+	var sk, docid []byte
 	tmpBuf := p.GetBlock()
 	defer p.PutBlock(tmpBuf)
 
@@ -152,22 +152,15 @@ loop:
 			break loop
 		}
 
-		if d.p.req.isPrimary {
-			e := primaryIndexEntry(row)
-			entry = &e
-		} else {
-			e := secondaryIndexEntry(row)
-			entry = &e
-		}
-		c.CrashOnError(err)
-
 		t := (*tmpBuf)[:0]
-		sk, err := entry.ReadSecKey(t)
-		c.CrashOnError(err)
-		docid, err := entry.ReadDocId(sk)
-		c.CrashOnError(err)
-		d.p.bytesRead += uint64(len(docid))
-		err = d.WriteItem(sk, docid[len(sk):])
+		if d.p.req.isPrimary {
+			sk, docid = piSplitEntry(row, t)
+		} else {
+			sk, docid = siSplitEntry(row, t)
+		}
+
+		d.p.bytesRead += uint64(len(sk) + len(docid))
+		err = d.WriteItem(sk, docid)
 		if err != nil {
 			break
 		}
@@ -217,4 +210,20 @@ loop:
 	}
 
 	return nil
+}
+
+func piSplitEntry(entry []byte, tmp []byte) ([]byte, []byte) {
+	e := primaryIndexEntry(entry)
+	sk, err := e.ReadSecKey(tmp)
+	c.CrashOnError(err)
+	docid, err := e.ReadDocId(sk)
+	return sk, docid[len(sk):]
+}
+
+func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte) {
+	e := secondaryIndexEntry(entry)
+	sk, err := e.ReadSecKey(tmp)
+	c.CrashOnError(err)
+	docid, err := e.ReadDocId(sk)
+	return sk, docid[len(sk):]
 }
