@@ -49,32 +49,31 @@ const (
 )
 
 type ScanRequest struct {
-	scanType    ScanReqType
-	defnID      uint64
-	indexInstId common.IndexInstId
-	indexName   string
-	bucket      string
-	ts          *common.TsVbuuid
-	low         IndexKey
-	high        IndexKey
-	keys        []IndexKey
-	consistency *common.Consistency
-	stats       *indexScanStats
+	ScanType    ScanReqType
+	DefnID      uint64
+	IndexInstId common.IndexInstId
+	IndexName   string
+	Bucket      string
+	Ts          *common.TsVbuuid
+	Low         IndexKey
+	High        IndexKey
+	Keys        []IndexKey
+	Consistency *common.Consistency
+	Stats       *indexScanStats
 
 	// user supplied
-	lowBytes, highBytes []byte
-	keysBytes           [][]byte
+	LowBytes, HighBytes []byte
+	KeysBytes           [][]byte
 
-	partnKey  []byte
-	incl      Inclusion
-	limit     int64
+	Incl      Inclusion
+	Limit     int64
 	isPrimary bool
 
-	scanId    uint64
-	timeoutCh <-chan time.Time
-	cancelCh  <-chan interface{}
+	ScanId    uint64
+	TimeoutCh <-chan time.Time
+	CancelCh  <-chan interface{}
 
-	logPrefix string
+	LogPrefix string
 }
 
 type CancelCb struct {
@@ -103,8 +102,8 @@ func (c *CancelCb) Done() {
 func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 	return &CancelCb{
 		done:    make(chan struct{}),
-		timeout: req.timeoutCh,
-		cancel:  req.cancelCh,
+		timeout: req.TimeoutCh,
+		cancel:  req.CancelCh,
 		callb:   callb,
 	}
 }
@@ -112,7 +111,7 @@ func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 func (r ScanRequest) String() string {
 	var incl, span string
 
-	switch r.incl {
+	switch r.Incl {
 	case Low:
 		incl = "incl:low"
 	case High:
@@ -123,29 +122,29 @@ func (r ScanRequest) String() string {
 		incl = "incl:none"
 	}
 
-	if len(r.keys) == 0 {
-		if r.scanType == StatsReq || r.scanType == ScanReq {
-			span = fmt.Sprintf("range (%s,%s %s)", r.low, r.high, incl)
+	if len(r.Keys) == 0 {
+		if r.ScanType == StatsReq || r.ScanType == ScanReq {
+			span = fmt.Sprintf("range (%s,%s %s)", r.Low, r.High, incl)
 		} else {
 			span = "all"
 		}
 	} else {
 		span = "keys ( "
-		for _, k := range r.keys {
+		for _, k := range r.Keys {
 			span = span + k.String() + " "
 		}
 		span = span + ")"
 	}
 
 	str := fmt.Sprintf("defnId:%v, index:%v/%v, type:%v, span:%s",
-		r.defnID, r.bucket, r.indexName, r.scanType, span)
+		r.DefnID, r.Bucket, r.IndexName, r.ScanType, span)
 
-	if r.limit > 0 {
-		str += fmt.Sprintf(", limit:%d", r.limit)
+	if r.Limit > 0 {
+		str += fmt.Sprintf(", limit:%d", r.Limit)
 	}
 
-	if r.consistency != nil {
-		str += fmt.Sprintf(", consistency:%s", strings.ToLower(r.consistency.String()))
+	if r.Consistency != nil {
+		str += fmt.Sprintf(", consistency:%s", strings.ToLower(r.Consistency.String()))
 	}
 
 	return str
@@ -322,17 +321,16 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	var indexInst *common.IndexInst
 	r = new(ScanRequest)
-	r.partnKey = []byte("default")
-	r.scanId = atomic.AddUint64(s.reqCounter, 1)
-	r.logPrefix = fmt.Sprintf("SCAN##%d", r.scanId)
+	r.ScanId = atomic.AddUint64(s.reqCounter, 1)
+	r.LogPrefix = fmt.Sprintf("SCAN##%d", r.ScanId)
 
 	cfg := s.config.Load()
 	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
 	if timeout != 0 {
-		r.timeoutCh = time.After(timeout)
+		r.TimeoutCh = time.After(timeout)
 	}
 
-	r.cancelCh = cancelCh
+	r.CancelCh = cancelCh
 
 	isNil := func(k []byte) bool {
 		if len(k) == 0 || (!r.isPrimary && string(k) == "[]") {
@@ -379,41 +377,40 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}()
 
 		// range
-		r.lowBytes = low
-		r.highBytes = high
+		r.LowBytes = low
+		r.HighBytes = high
 
-		if r.low, localErr = newLowKey(low); localErr != nil {
+		if r.Low, localErr = newLowKey(low); localErr != nil {
 			localErr = fmt.Errorf("Invalid low key %s (%s)", string(low), localErr)
 			return
 		}
 
-		if r.high, localErr = newHighKey(high); localErr != nil {
+		if r.High, localErr = newHighKey(high); localErr != nil {
 			localErr = fmt.Errorf("Invalid high key %s (%s)", string(high), localErr)
 			return
 		}
 
 		// point query for keys
 		for _, k := range keys {
-			r.keysBytes = append(r.keysBytes, k)
+			r.KeysBytes = append(r.KeysBytes, k)
 			if key, localErr = newKey(k); localErr != nil {
 				localErr = fmt.Errorf("Invalid equal key %s (%s)", string(k), localErr)
 				return
 			}
-			r.keys = append(r.keys, key)
+			r.Keys = append(r.Keys, key)
 		}
-
 	}
 
 	setConsistency := func(cons common.Consistency, vector *protobuf.TsConsistency) {
-		r.consistency = &cons
+		r.Consistency = &cons
 		checkVector :=
 			cons == common.QueryConsistency || cons == common.SessionConsistency
 		if checkVector && vector != nil {
 			cfg := s.config.Load()
-			r.ts = common.NewTsVbuuid("", cfg["numVbuckets"].Int())
+			r.Ts = common.NewTsVbuuid("", cfg["numVbuckets"].Int())
 			for i, vbno := range vector.Vbnos {
-				r.ts.Seqnos[vbno] = vector.Seqnos[i]
-				r.ts.Vbuuids[vbno] = vector.Vbuuids[i]
+				r.Ts.Seqnos[vbno] = vector.Seqnos[i]
+				r.Ts.Vbuuids[vbno] = vector.Vbuuids[i]
 			}
 		}
 	}
@@ -427,27 +424,27 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}()
 		s.mu.RLock()
 		defer s.mu.RUnlock()
-		indexInst, localErr = s.findIndexInstance(r.defnID)
+		indexInst, localErr = s.findIndexInstance(r.DefnID)
 		if localErr == nil {
 			r.isPrimary = indexInst.Defn.IsPrimary
-			r.indexName, r.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
-			r.indexInstId = indexInst.InstId
-			if r.ts != nil {
-				r.ts.Bucket = r.bucket
+			r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
+			r.IndexInstId = indexInst.InstId
+			if r.Ts != nil {
+				r.Ts.Bucket = r.Bucket
 			}
 			if indexInst.State != common.INDEX_STATE_ACTIVE {
 				localErr = ErrIndexNotReady
 			} else {
-				r.stats = s.scanStatsMap[r.indexInstId]
+				r.Stats = s.scanStatsMap[r.IndexInstId]
 			}
 		}
 	}
 
 	switch req := protoReq.(type) {
 	case *protobuf.StatisticsRequest:
-		r.defnID = req.GetDefnID()
-		r.scanType = StatsReq
-		r.incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		r.DefnID = req.GetDefnID()
+		r.ScanType = StatsReq
+		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		setIndexParams()
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
@@ -455,12 +452,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			req.GetSpan().GetEquals())
 
 	case *protobuf.CountRequest:
-		r.defnID = req.GetDefnID()
+		r.DefnID = req.GetDefnID()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		setConsistency(cons, vector)
-		r.scanType = CountReq
-		r.incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		r.ScanType = CountReq
+		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		setIndexParams()
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
@@ -468,25 +465,25 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			req.GetSpan().GetEquals())
 
 	case *protobuf.ScanRequest:
-		r.defnID = req.GetDefnID()
+		r.DefnID = req.GetDefnID()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		setConsistency(cons, vector)
-		r.scanType = ScanReq
-		r.incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		r.ScanType = ScanReq
+		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		setIndexParams()
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
-		r.limit = req.GetLimit()
+		r.Limit = req.GetLimit()
 	case *protobuf.ScanAllRequest:
-		r.defnID = req.GetDefnID()
+		r.DefnID = req.GetDefnID()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		setConsistency(cons, vector)
-		r.scanType = ScanAllReq
-		r.limit = req.GetLimit()
+		r.ScanType = ScanAllReq
+		r.Limit = req.GetLimit()
 		setIndexParams()
 	default:
 		err = ErrUnsupportedRequest
@@ -506,9 +503,9 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexSnapshot, err error) {
 	snapResch := make(chan interface{}, 1)
 	snapReqMsg := &MsgIndexSnapRequest{
-		ts:        r.ts,
+		ts:        r.Ts,
 		respch:    snapResch,
-		idxInstId: r.indexInstId,
+		idxInstId: r.IndexInstId,
 	}
 
 	// Block wait until a ts is available for fullfilling the request
@@ -516,7 +513,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	var msg interface{}
 	select {
 	case msg = <-snapResch:
-	case <-r.timeoutCh:
+	case <-r.TimeoutCh:
 		go readDeallocSnapshot(snapResch)
 		msg = ErrScanTimedOut
 	}
@@ -539,7 +536,7 @@ func (s *scanCoordinator) respondWithError(conn net.Conn, req *ScanRequest, err 
 
 	protoErr := &protobuf.Error{Error: proto.String(err.Error())}
 
-	switch req.scanType {
+	switch req.ScanType {
 	case StatsReq:
 		res = &protobuf.StatisticsResponse{
 			Err: protoErr,
@@ -565,7 +562,7 @@ func (s *scanCoordinator) respondWithError(conn net.Conn, req *ScanRequest, err 
 	}
 
 finish:
-	logging.Errorf("%s RESPONSE Failed with error (%s)", req.logPrefix, err)
+	logging.Errorf("%s RESPONSE Failed with error (%s)", req.LogPrefix, err)
 }
 
 func (s *scanCoordinator) handleError(prefix string, err error) {
@@ -576,8 +573,8 @@ func (s *scanCoordinator) handleError(prefix string, err error) {
 
 func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanRequest, err error) bool {
 	if err != nil {
-		logging.Infof("%s RESPONSE status:(error = %s)", req.logPrefix, err)
-		s.handleError(req.logPrefix, w.Error(err))
+		logging.Infof("%s RESPONSE status:(error = %s)", req.LogPrefix, err)
+		s.handleError(req.LogPrefix, w.Error(err))
 		return true
 	}
 
@@ -588,20 +585,20 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	cancelCh <-chan interface{}) {
 
 	req, err := s.newRequest(protoReq, cancelCh)
-	w := newProtoWriter(req.scanType, conn)
-	defer func() { s.handleError(req.logPrefix, w.Done()) }()
+	w := NewProtoWriter(req.ScanType, conn)
+	defer func() { s.handleError(req.LogPrefix, w.Done()) }()
 
-	logging.Infof("%s REQUEST %s", req.logPrefix, req)
-	if req.consistency != nil {
-		logging.Debugf("%s requested timestamp: %s => %s", req.logPrefix,
-			strings.ToLower(req.consistency.String()), ScanTStoString(req.ts))
+	logging.Infof("%s REQUEST %s", req.LogPrefix, req)
+	if req.Consistency != nil {
+		logging.Debugf("%s requested timestamp: %s => %s", req.LogPrefix,
+			strings.ToLower(req.Consistency.String()), ScanTStoString(req.Ts))
 	}
 
 	if s.tryRespondWithError(w, req, err) {
 		return
 	}
 
-	atomic.AddUint64(req.stats.Requests, 1)
+	atomic.AddUint64(req.Stats.Requests, 1)
 
 	t0 := time.Now()
 	is, err := s.getRequestedIndexSnapshot(req)
@@ -611,14 +608,14 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 
 	defer DestroyIndexSnapshot(is)
 
-	logging.Infof("%s snapshot timestamp: %s", req.logPrefix, ScanTStoString(is.Timestamp()))
+	logging.Infof("%s snapshot timestamp: %s", req.LogPrefix, ScanTStoString(is.Timestamp()))
 	s.processRequest(req, w, is, t0)
 }
 
 func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
 	is IndexSnapshot, t0 time.Time) {
 
-	switch req.scanType {
+	switch req.ScanType {
 	case ScanReq, ScanAllReq:
 		s.handleScanRequest(req, w, is, t0)
 	case CountReq:
@@ -642,10 +639,10 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	err := scanPipeline.Execute()
 	scanTime := time.Now().Sub(t0)
 
-	atomic.AddUint64(req.stats.Rows, scanPipeline.RowsRead())
-	atomic.AddUint64(req.stats.BytesRead, scanPipeline.BytesRead())
-	atomic.AddUint64(req.stats.ScanTime, uint64(scanTime.Nanoseconds()))
-	atomic.AddUint64(req.stats.WaitTime, uint64(waitTime.Nanoseconds()))
+	atomic.AddUint64(req.Stats.Rows, scanPipeline.RowsRead())
+	atomic.AddUint64(req.Stats.BytesRead, scanPipeline.BytesRead())
+	atomic.AddUint64(req.Stats.ScanTime, uint64(scanTime.Nanoseconds()))
+	atomic.AddUint64(req.Stats.WaitTime, uint64(waitTime.Nanoseconds()))
 
 	var status string
 	if err != nil {
@@ -655,7 +652,7 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	}
 
 	logging.Infof("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s",
-		req.logPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status)
+		req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status)
 }
 
 func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWriter,
@@ -674,12 +671,12 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 	for _, s := range GetSliceSnapshots(is) {
 		var r uint64
 		snap := s.Snapshot()
-		if len(req.keys) > 0 {
-			r, err = snap.CountLookup(req.keys, stopch)
-		} else if req.low.Bytes() == nil && req.low.Bytes() == nil {
+		if len(req.Keys) > 0 {
+			r, err = snap.CountLookup(req.Keys, stopch)
+		} else if req.Low.Bytes() == nil && req.Low.Bytes() == nil {
 			r, err = snap.CountTotal(stopch)
 		} else {
-			r, err = snap.CountRange(req.low, req.high, req.incl, stopch)
+			r, err = snap.CountRange(req.Low, req.High, req.Incl, stopch)
 		}
 
 		if err != nil {
@@ -693,9 +690,9 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 		return
 	}
 
-	logging.Infof("%s RESPONSE count:%d status:ok", req.logPrefix, rows)
+	logging.Infof("%s RESPONSE count:%d status:ok", req.LogPrefix, rows)
 	err = w.Count(rows)
-	s.handleError(req.logPrefix, err)
+	s.handleError(req.LogPrefix, err)
 }
 
 func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWriter,
@@ -714,10 +711,10 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 	for _, s := range GetSliceSnapshots(is) {
 		var r uint64
 		snap := s.Snapshot()
-		if req.low.Bytes() == nil && req.low.Bytes() == nil {
+		if req.Low.Bytes() == nil && req.Low.Bytes() == nil {
 			r, err = snap.StatCountTotal()
 		} else {
-			r, err = snap.CountRange(req.low, req.high, req.incl, stopch)
+			r, err = snap.CountRange(req.Low, req.High, req.Incl, stopch)
 		}
 
 		if err != nil {
@@ -731,9 +728,9 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 		return
 	}
 
-	logging.Infof("%s RESPONSE status:ok", req.logPrefix)
+	logging.Infof("%s RESPONSE status:ok", req.LogPrefix)
 	err = w.Stats(rows, 0, nil, nil)
-	s.handleError(req.logPrefix, err)
+	s.handleError(req.LogPrefix, err)
 }
 
 // Find and return data structures for the specified index

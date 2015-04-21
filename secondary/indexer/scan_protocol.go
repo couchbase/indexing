@@ -35,7 +35,7 @@ type protoResponseWriter struct {
 	rowSize    int
 }
 
-func newProtoWriter(t ScanReqType, conn net.Conn) *protoResponseWriter {
+func NewProtoWriter(t ScanReqType, conn net.Conn) *protoResponseWriter {
 	return &protoResponseWriter{
 		scanType: t,
 		conn:     conn,

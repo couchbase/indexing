@@ -95,7 +95,7 @@ func (s *IndexScanSource) Routine() error {
 			return wrErr
 		}
 
-		if s.p.rowsRead == uint64(s.p.req.limit) {
+		if s.p.rowsRead == uint64(s.p.req.Limit) {
 			return ErrLimitReached
 		}
 
@@ -105,17 +105,17 @@ func (s *IndexScanSource) Routine() error {
 	r := s.p.req
 loop:
 	for _, snap := range GetSliceSnapshots(s.is) {
-		if r.scanType == ScanAllReq {
+		if r.ScanType == ScanAllReq {
 			err = snap.Snapshot().All(fn)
 		} else {
-			if len(r.keys) > 0 {
-				for _, k := range r.keys {
+			if len(r.Keys) > 0 {
+				for _, k := range r.Keys {
 					if err = snap.Snapshot().Lookup(k, fn); err != nil {
 						break
 					}
 				}
 			} else {
-				err = snap.Snapshot().Range(r.low, r.high, r.incl, fn)
+				err = snap.Snapshot().Range(r.Low, r.High, r.Incl, fn)
 			}
 		}
 
