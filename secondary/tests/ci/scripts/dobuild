@@ -80,9 +80,6 @@ else
 fi
 
 cd $WORKSPACE/forestdb
-#echo "Pinning forestdb to 8b94664 and cherry-picking 1ab735"
-#git checkout 8b94664
-#git cherry-pick 1ab735
 current="`git rev-parse HEAD`"
 test -f ~/forestdb.good || (echo $current > ~/forestdb.good)
 good="`cat ~/forestdb.good`"

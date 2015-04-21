@@ -28,9 +28,11 @@ stop_cluster() {
 
 collect_logs_cores() {
   if [ "$phase" = "" ]; then phase=unknown; fi
-  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar ns_server/logs 1>/dev/null 2>&1
-  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar test.log 1>/dev/null 2>&1
-  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar run.log 1>/dev/null 2>&1
+  tar -C /tmp       --transform "s/^/cores-$phase-/" -uf $WORKSPACE/cores.tar core* 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/"  -uf $WORKSPACE/logs.tar ns_server/logs 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/"  -uf $WORKSPACE/logs.tar testrunner/logs 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/"  -uf $WORKSPACE/logs.tar test.log 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/"  -uf $WORKSPACE/logs.tar run.log 1>/dev/null 2>&1
 }
 
 error_exit() {
@@ -56,7 +58,7 @@ cd $WORKSPACE/testrunner
 stop_cluster
 
 # Core dumps
-export GOTRACEBACK=crash
+# export GOTRACEBACK=crash
 ulimit -c unlimited
 sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
 
@@ -97,15 +99,11 @@ go get -t ./... 1>/dev/null 2>&1
 
 # Go tests
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/functionaltests
-go test -timeout 30m -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
+go test -timeout 1h -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
-go test -timeout 2h -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
+go test -timeout 3h -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
 collect_logs_cores
 stop_cluster
-
-# Timing
-echo "Test $TS" > $WORKSPACE/timing.log
-grep PERFSTAT $WORKSPACE/test.log | sed 's/^.*PERFSTAT \(.*\) \(.*\) seconds$/\1 \2/' | sort >> $WORKSPACE/timing.log
 
 # Integration tests
 echo "</pre><h4>Integration tests</h4><pre>"
@@ -120,15 +118,17 @@ stop_cluster
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/ci/
 grep '\sfail\s*$' $WORKSPACE/test.log >> /tmp/fail.log
 grep -- '--- FAIL:' $WORKSPACE/test.log >> /tmp/fail.log
+grep '^\s*FAIL\s*github.com/couchbase/indexing' $WORKSPACE/test.log >> /tmp/fail.log
 grep '^\s*2i' $WORKSPACE/test.log | grep 'fail\s*$' >> /tmp/fail.log
-for tst in `cat skip.txt`; do
+skiplist="`cat skip.txt`"
+for tst in $skiplist; do
   echo "$tst" | grep -qs '^\s*#' && continue
   echo "$tst" | grep -qs '^\s*$' && continue
   grep -v "$tst" /tmp/fail.log > /tmp/fail-out.log
   mv /tmp/fail-out.log /tmp/fail.log
 done
 faillog="`cat /tmp/fail.log`"
-if [ "$faillog" != "" ]; then error_exit "Integration test failed" "$faillog"; fi
+if [ "$faillog" != "" ]; then error_exit "Required test failed" "$faillog"; fi
 
 # Note versions
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
@@ -143,5 +143,10 @@ cd $WORKSPACE/testrunner
 git rev-parse HEAD > ~/testrunner.good
 
 echo "</pre><h4>Testing Succeeded</h4><pre>"
+if [ "$skiplist" != "" ]; then
+  echo "But we ignored these tests:"
+  echo "$skiplist"
+fi
+echo
 exit 0
 

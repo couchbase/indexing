@@ -21,7 +21,6 @@ while true; do
   gzip ${WORKSPACE}/logs.tar 2>&1 1>/dev/null
   gzip ${WORKSPACE}/cores.tar 2>&1 1>/dev/null
   echo "Version: <a href='versions-$TS.cfg'>versions-$TS.cfg</a>" >> /var/www/sherlock-current.html
-  echo "Timing: <a href='timing-$TS.log'>timing-$TS.log</a>" >> /var/www/sherlock-current.html
   echo "Build Log: <a href='make-$TS.log'>make-$TS.log</a>" >> /var/www/sherlock-current.html
   echo "Server Log: <a href='logs-$TS.tar.gz'>logs-$TS.tar.gz</a>" >> /var/www/sherlock-current.html
   echo "Core Files: <a href='cores-$TS.tar.gz'>cores-$TS.tar.gz</a>" >> /var/www/sherlock-current.html
@@ -31,7 +30,6 @@ while true; do
   echo "</pre></body></html>" >> /var/www/sherlock-$TS.$status.html
   echo "</pre><script>window.location.href='sherlock-$TS.$status.html'</script></body></html>" >> /var/www/sherlock-current.html
   mv ${WORKSPACE}/ws.tar.gz /var/www/ws-$TS.tar.gz
-  mv ${WORKSPACE}/timing.log /var/www/timing-$TS.log
   mv ${WORKSPACE}/make.log /var/www/make-$TS.log
   mv ${WORKSPACE}/logs.tar.gz /var/www/logs-$TS.tar.gz
   mv ${WORKSPACE}/cores.tar.gz /var/www/cores-$TS.tar.gz
