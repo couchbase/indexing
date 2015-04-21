@@ -4,9 +4,16 @@ import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+)
+
+var (
+	defaultLatencyBuckets = []int64{
+		500, 1000, 10000, 200000, 500000, 800000,
+	}
 )
 
 type Job struct {
@@ -17,6 +24,7 @@ type Job struct {
 func RunScan(client *qclient.GsiClient,
 	spec *ScanConfig, result *ScanResult) {
 	var err error
+	var rows int64
 
 	result.Id = spec.Id
 
@@ -36,7 +44,7 @@ func RunScan(client *qclient.GsiClient,
 				return false
 			}
 
-			atomic.AddUint64(&result.Rows, uint64(len(pkeys)))
+			rows += int64(len(pkeys))
 		}
 
 		return true
@@ -58,7 +66,13 @@ func RunScan(client *qclient.GsiClient,
 		errFn(err.Error())
 	}
 
+	var lat int64
 	dur := time.Now().Sub(startTime)
+	atomic.AddUint64(&result.Rows, uint64(rows))
+	if rows > 0 {
+		lat = dur.Nanoseconds() / rows
+	}
+	result.LatencyHisto.Add(lat)
 	atomic.AddInt64(&result.Duration, dur.Nanoseconds())
 }
 
@@ -78,6 +92,10 @@ func RunCommands(cluster string, cfg *Config) (*Result, error) {
 	var clientQ chan *qclient.GsiClient
 	var jobQ chan Job
 	var wg sync.WaitGroup
+
+	if len(cfg.LatencyBuckets) == 0 {
+		cfg.LatencyBuckets = defaultLatencyBuckets
+	}
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 	client, err := qclient.NewGsiClient(cluster, config)
@@ -120,7 +138,17 @@ func RunCommands(cluster string, cfg *Config) (*Result, error) {
 			}
 		}
 
+		hFn := func(v int64) string {
+			if v == math.MinInt64 {
+				return "0"
+			} else if v == math.MaxInt64 {
+				return "inf"
+			}
+			return fmt.Sprint(time.Nanosecond * time.Duration(v))
+		}
+
 		res := new(ScanResult)
+		res.LatencyHisto.Init(cfg.LatencyBuckets, hFn)
 		res.Id = spec.Id
 		for i := 0; i < spec.Repeat+1; i++ {
 			j := Job{

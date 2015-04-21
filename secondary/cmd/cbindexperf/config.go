@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/stats"
 	"io/ioutil"
 	"os"
 )
@@ -22,16 +23,18 @@ type ScanConfig struct {
 }
 
 type Config struct {
-	ScanSpecs   []*ScanConfig
-	Concurrency int
-	Clients     int
+	LatencyBuckets []int64
+	ScanSpecs      []*ScanConfig
+	Concurrency    int
+	Clients        int
 }
 
 type ScanResult struct {
-	Id         uint64
-	Rows       uint64
-	Duration   int64
-	ErrorCount uint64
+	Id           uint64
+	Rows         uint64
+	Duration     int64
+	LatencyHisto stats.Histogram
+	ErrorCount   uint64
 }
 
 type Result struct {
