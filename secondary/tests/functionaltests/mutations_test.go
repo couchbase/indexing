@@ -230,8 +230,8 @@ func TestLargeMutations(t *testing.T) {
 	var field1 = "company"
 	var field2 = "gender"
 
-	// e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
-	// FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 
 	docsToCreate := generateDocs(20000, "users.prod")
 	UpdateKVDocs(docsToCreate, docs)
