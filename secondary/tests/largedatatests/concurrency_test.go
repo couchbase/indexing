@@ -240,7 +240,7 @@ func SkipTestSequentialRangeScans(t *testing.T) {
 	SequentialRangeScanForDuration(indexName, bucketName, 60, t)
 }
 
-func SkipTestRangeWithConcurrentAddMuts(t *testing.T) {
+func TestRangeWithConcurrentAddMuts(t *testing.T) {
 	log.Printf("In TestRangeWithConcurrentAddMuts()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
@@ -267,7 +267,7 @@ func SkipTestRangeWithConcurrentAddMuts(t *testing.T) {
 	wg.Wait()
 }
 
-func SkipTestRangeWithConcurrentDelMuts(t *testing.T) {
+func TestRangeWithConcurrentDelMuts(t *testing.T) {
 	log.Printf("In TestRangeWithConcurrentDelMuts()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
@@ -293,7 +293,7 @@ func SkipTestRangeWithConcurrentDelMuts(t *testing.T) {
 	wg.Wait()
 }
 
-func SkipTestScanWithConcurrentIndexOps(t *testing.T) {
+func TestScanWithConcurrentIndexOps(t *testing.T) {
 	log.Printf("In TestScanWithConcurrentIndexOps()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
@@ -319,7 +319,7 @@ func SkipTestScanWithConcurrentIndexOps(t *testing.T) {
 	wg.Wait()
 }
 
-func SkipTestConcurrentScans_SameIndex(t *testing.T) {
+func TestConcurrentScans_SameIndex(t *testing.T) {
 	log.Printf("In TestConcurrentScans_SameIndex()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
@@ -349,7 +349,7 @@ func SkipTestConcurrentScans_SameIndex(t *testing.T) {
 	wg.Wait()
 }
 
-func SkipTestConcurrentScans_MultipleIndexes(t *testing.T) {
+func TestConcurrentScans_MultipleIndexes(t *testing.T) {
 	log.Printf("In TestConcurrentScans_MultipleIndexes()")
 	var wg sync.WaitGroup
 	prodfile = filepath.Join(proddir, "test.prod")
@@ -384,7 +384,7 @@ func SkipTestConcurrentScans_MultipleIndexes(t *testing.T) {
 	wg.Wait()
 }
 
-func SkipTestMutationsWithMultipleIndexBuilds(t *testing.T) {
+func TestMutationsWithMultipleIndexBuilds(t *testing.T) {
 	log.Printf("In TestMutationsWithMultipleIndexBuilds()")
 	prodfile = filepath.Join(proddir, "test.prod")
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)

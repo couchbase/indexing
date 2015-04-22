@@ -259,14 +259,14 @@ func TestLargeMutations(t *testing.T) {
 
 		docScanResults = datautility.ExpectedScanAllResponse(docs, field1)
 		scanResults, err = secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
-		tc.HandleError(err, "Error in scan")
+		FailTestIfError(err, "Error in scan", t)
 		err = tv.Validate(docScanResults, scanResults)
 		FailTestIfError(err, "Error in scan result validation", t)
 		log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 
 		docScanResults = datautility.ExpectedScanAllResponse(docs, field2)
 		scanResults, err = secondaryindex.ScanAll(index2, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
-		tc.HandleError(err, "Error in scan")
+		FailTestIfError(err, "Error in scan", t)
 		err = tv.Validate(docScanResults, scanResults)
 		FailTestIfError(err, "Error in scan result validation", t)
 		log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
