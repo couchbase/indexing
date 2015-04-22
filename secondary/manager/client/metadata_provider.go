@@ -257,22 +257,9 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 	logging.Debugf("MetadataProvider:CreateIndex(): deferred_build %v sync %v nodes %v", deferred, wait, nodes)
 
-	var watcher *watcher
-	if nodes == nil {
-		watcher = o.findNextAvailWatcher()
-		if watcher == nil {
-			stmt1 := "Fails to create index.  There is no available index service that can process this request at this time."
-			stmt2 := "Index Service can be in bootstrap, recovery, or non-reachable."
-			stmt3 := "Please retry the operation at a later time."
-			return c.IndexDefnId(0), errors.New(fmt.Sprintf("%s %s %s", stmt1, stmt2, stmt3)), false
-		}
-	} else {
-		watcher = o.findWatcherByNodeAddr(nodes[0])
-		if watcher == nil {
-			return c.IndexDefnId(0),
-				errors.New(fmt.Sprintf("Fails to create index.  Node %s does not exist or is not running", nodes[0])),
-				true
-		}
+	watcher, err, retry := o.findWatcherWithRetry(nodes)
+	if err != nil {
+		return c.IndexDefnId(0), err, retry
 	}
 
 	// set the node list using indexerId
@@ -315,6 +302,47 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	return defnID, nil, false
+}
+
+func (o *MetadataProvider) findWatcherWithRetry(nodes []string) (*watcher, error, bool) {
+
+	var watcher *watcher
+	count := 0
+
+RETRY1:
+	watcher = nil
+	errCode := 0
+	if nodes == nil {
+		watcher = o.findNextAvailWatcher()
+		if watcher == nil {
+			errCode = 1
+		}
+	} else {
+		watcher = o.findWatcherByNodeAddr(nodes[0])
+		if watcher == nil {
+			errCode = 2
+		}
+	}
+
+	if errCode != 0 && count < 10 {
+		logging.Debugf("MetadataProvider:findWatcherWithRetry(): cannot find available watcher. Retrying ...")
+		time.Sleep(time.Duration(500) * time.Millisecond)
+		count++
+		goto RETRY1
+	}
+
+	if errCode == 1 {
+		stmt1 := "Fails to create index.  There is no available index service that can process this request at this time."
+		stmt2 := "Index Service can be in bootstrap, recovery, or non-reachable."
+		stmt3 := "Please retry the operation at a later time."
+		return nil, errors.New(fmt.Sprintf("%s %s %s", stmt1, stmt2, stmt3)), false
+
+	} else if errCode == 2 {
+		stmt1 := "Fails to create index.  Node %s does not exist or is not running"
+		return nil, errors.New(fmt.Sprintf(stmt1, nodes[0])), true
+	}
+
+	return watcher, nil, false
 }
 
 func (o *MetadataProvider) DropIndex(defnID c.IndexDefnId) error {
@@ -916,7 +944,7 @@ func (w *watcher) notifyReady(addr string, retry int, killch chan bool) (done bo
 		w.startTimer()
 	}
 
-RETRY:
+RETRY2:
 	// get IndexerId from indexer
 	err := w.refreshServiceMap()
 	if err == nil {
@@ -932,7 +960,7 @@ RETRY:
 			// do nothing
 		}
 		retry--
-		goto RETRY
+		goto RETRY2
 	}
 
 	if err != nil {
