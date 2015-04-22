@@ -221,13 +221,15 @@ loop:
 
 			case vrCmdResetConfig:
 				config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
-				vr.syncTimeout = time.Duration(config["vbucketSyncTimeout"].Int())
-				vr.syncTimeout *= time.Millisecond
-				// re-initialize the heart beat only if it is already started.
-				if heartBeat != nil {
-					infomsg := "%v ##%x heart-beat reloaded: %v\n"
-					logging.Infof(infomsg, vr.logPrefix, vr.opaque, vr.syncTimeout)
-					heartBeat = time.Tick(vr.syncTimeout)
+				if cv, ok := config["vbucketSyncTimeout"]; ok {
+					vr.syncTimeout = time.Duration(cv.Int()) * time.Millisecond
+					// re-initialize the heart beat only if it is already
+					// started.
+					if heartBeat != nil {
+						fmsg := "%v ##%x heart-beat reloaded: %v\n"
+						logging.Infof(fmsg, vr.logPrefix, vr.opaque, vr.syncTimeout)
+						heartBeat = time.Tick(vr.syncTimeout)
+					}
 				}
 				respch <- []interface{}{nil}
 

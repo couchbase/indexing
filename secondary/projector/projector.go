@@ -128,7 +128,7 @@ func (p *Projector) ResetConfig(config c.Config) {
 		}
 		p.cpuProfFd = nil
 
-	} else {
+	} else if ok {
 		logging.Warnf("%v cpu profiling already active !!\n", p.logPrefix)
 	}
 

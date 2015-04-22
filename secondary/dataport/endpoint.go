@@ -214,17 +214,23 @@ loop:
 			case endpCmdResetConfig:
 				prefix := endpoint.logPrefix
 				config := msg[1].(c.Config)
-				endpoint.block = config["remoteBlock"].Bool()
-				endpoint.bufferSize = config["bufferSize"].Int()
-				endpoint.bufferTm =
-					time.Duration(config["bufferTimeout"].Int())
-				endpoint.harakiriTm =
-					time.Duration(config["harakiriTimeout"].Int())
-				flushTimeout = time.Tick(endpoint.bufferTm * time.Millisecond)
-				if harakiri != nil { // load harakiri only when it is active
-					harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
-					infomsg := "%v reloaded harakiriTm: %v\n"
-					logging.Infof(infomsg, prefix, endpoint.harakiriTm)
+				if cv, ok := config["remoteBlock"]; ok {
+					endpoint.block = cv.Bool()
+				}
+				if cv, ok := config["bufferSize"]; ok {
+					endpoint.bufferSize = cv.Int()
+				}
+				if cv, ok := config["bufferTimeout"]; ok {
+					endpoint.bufferTm = time.Duration(cv.Int())
+					flushTimeout = time.Tick(endpoint.bufferTm * time.Millisecond)
+				}
+				if cv, ok := config["harakiriTimeout"]; ok {
+					endpoint.harakiriTm = time.Duration(cv.Int())
+					if harakiri != nil { // load harakiri only when it is active
+						harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
+						fmsg := "%v reloaded harakiriTm: %v\n"
+						logging.Infof(fmsg, prefix, endpoint.harakiriTm)
+					}
 				}
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{nil}

@@ -174,7 +174,7 @@ func NewServer(
 func (s *Server) addUuids(started, hostUuids keeper) keeper {
 	for x, newvb := range started {
 		if hostUuids.isActive(newvb.bucket, newvb.vbno) {
-			logging.Errorf("%v duplicate vbucket %#v\n", s.logPrefix, newvb)
+			logging.Errorf("%v duplicate vbucket %v\n", s.logPrefix, newvb.id())
 		}
 		hostUuids[x] = newvb
 		logging.Infof("%v added vbucket %v\n", s.logPrefix, newvb.id())
@@ -190,7 +190,7 @@ func (s *Server) delUuids(finished, hostUuids keeper) keeper {
 			logging.Infof("%v deleted vbucket %v\n", s.logPrefix, avb.id())
 
 		} else {
-			logging.Errorf("%v not active vbucket %#v\n", s.logPrefix, avb)
+			logging.Errorf("%v not active vbucket %v\n", s.logPrefix, x)
 		}
 	}
 	return hostUuids
