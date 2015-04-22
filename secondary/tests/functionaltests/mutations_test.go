@@ -48,6 +48,24 @@ func DeleteDocs(num int) {
 	}
 }
 
+// delete docs and do not update mut_docs object
+func DeleteDocs2(num int) {
+	i := 0
+	keysToBeDeleted := make(tc.KeyValues)
+	for key, value := range docs {
+		keysToBeDeleted[key] = value
+		i++
+		if i == num {
+			break
+		}
+	}
+	kv.DeleteKeys(keysToBeDeleted, "default", "", clusterconfig.KVAddress)
+	// Update docs object with deleted keys
+	for key, _ := range keysToBeDeleted {
+		delete(docs, key)
+	}
+}
+
 func UpdateDocs(num int) {
 	i := 0
 
@@ -201,4 +219,59 @@ func TestUpdateDocsMutation(t *testing.T) {
 	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
+}
+
+// Test with large number of mutations
+func TestLargeMutations(t *testing.T) {
+	log.Printf("In TestLargeMutations()")
+	var index1 = "indexmut_1"
+	var index2 = "indexmut_2"
+	var bucketName = "default"
+	var field1 = "company"
+	var field2 = "gender"
+
+	// e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	// FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	docsToCreate := generateDocs(20000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	kv.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", []string{field1}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedScanAllResponse(docs, field1)
+	scanResults, err := secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+	log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
+
+	for i := 0; i <= 10; i++ {
+		log.Printf("ITERATION %v\n", i)
+
+		docsToCreate = generateDocs(10000, "users.prod")
+		UpdateKVDocs(docsToCreate, docs)
+		kv.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+		err := secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, "", []string{field2}, false, nil, true, defaultIndexActiveTimeout, nil)
+		FailTestIfError(err, "Error in creating the index", t)
+
+		docScanResults = datautility.ExpectedScanAllResponse(docs, field1)
+		scanResults, err = secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.Validate(docScanResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+		log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
+
+		docScanResults = datautility.ExpectedScanAllResponse(docs, field2)
+		scanResults, err = secondaryindex.ScanAll(index2, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+		FailTestIfError(err, "Error in scan", t)
+		err = tv.Validate(docScanResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+		log.Printf("Len of expected and actual scan results are :  %d and %d", len(docScanResults), len(scanResults))
+
+		err = secondaryindex.DropSecondaryIndex(index2, bucketName, indexManagementAddress)
+		FailTestIfError(err, "Error in drop index", t)
+	}
 }

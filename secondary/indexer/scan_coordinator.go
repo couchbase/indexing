@@ -600,6 +600,8 @@ func (s *scanCoordinator) requestHandler(
 		idxInstId: indexInst.InstId,
 	}
 
+	logging.Debugf("%v: SCAN_ID: %v requested timestamp: %v",
+		s.logPrefix, sd.scanId, ScanTStoString(sd.p.ts))
 	// Block wait until a ts is available for fullfilling the request
 	s.supvMsgch <- snapReqMsg
 	var msg interface{}
@@ -1134,11 +1136,11 @@ func ScanTStoString(ts *common.TsVbuuid) string {
 	var seqsStr string = "["
 
 	if ts != nil {
-		for i, s := range ts.Snapshots {
+		for i, s := range ts.Seqnos {
 			if i > 0 {
 				seqsStr += ","
 			}
-			seqsStr += fmt.Sprintf("%d=%d", i, s[1])
+			seqsStr += fmt.Sprintf("%d=%d", i, s)
 		}
 	}
 

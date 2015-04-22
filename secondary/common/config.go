@@ -124,10 +124,10 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.vbucketSyncTimeout": ConfigValue{
-		500,
+		2000,
 		"timeout, in milliseconds, for sending periodic Sync messages, " +
 			"changing this value does not affect existing feeds.",
-		500,
+		2000,
 		false, // mutable
 	},
 	"projector.watchInterval": ConfigValue{
@@ -223,10 +223,10 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.dataport.keyChanSize": ConfigValue{
-		1000,
+		10000,
 		"channel size of dataport endpoints data input, " +
 			"does not affect existing feeds.",
-		1000,
+		10000,
 		true, // immutable
 	},
 	"projector.dataport.bufferSize": ConfigValue{
@@ -489,9 +489,9 @@ var SystemConfig = Config{
 	},
 
 	"indexer.sync_period": ConfigValue{
-		uint64(100),
+		uint64(2000),
 		"Stream message sync interval in millis",
-		uint64(100),
+		uint64(2000),
 		true, // immutable
 	},
 

@@ -752,11 +752,11 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//initial build is not required.
 		var buildState common.IndexState
 		if buildTs.IsZeroTs() && buildStream == common.MAINT_STREAM {
-			buildState = common.INDEX_STATE_ACTIVE
 			initialBuildReqd = false
-		} else {
-			buildState = common.INDEX_STATE_INITIAL
 		}
+		//always set state to Initial, once stream request/build is done,
+		//this will get changed to active
+		buildState = common.INDEX_STATE_INITIAL
 
 		idx.bulkUpdateState(instIdList, buildState)
 
@@ -2333,25 +2333,24 @@ func (idx *indexer) processDropAfterFlushDone(indexInst common.IndexInst,
 func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 	respCh MsgChannel) bool {
 
-	//if there is any observer for flush done for this bucket,
+	//if there is any observer for flush done for this stream/bucket,
 	//drop is already in progress
-	for _, bucketObserver := range idx.streamBucketObserveFlushDone {
+	stream := indexInst.Stream
+	bucket := indexInst.Defn.Bucket
+	if obs, ok := idx.streamBucketObserveFlushDone[stream][bucket]; ok && obs != nil {
 
-		if _, ok := bucketObserver[indexInst.Defn.Bucket]; ok {
-			errStr := "Index Drop Already In Progress. Multiple Drop " +
-				"Request On A Bucket Are Not Supported By Indexer."
+		errStr := "Index Drop Already In Progress."
 
-			logging.Errorf(errStr)
-			if respCh != nil {
-				respCh <- &MsgError{
-					err: Error{code: ERROR_INDEX_DROP_IN_PROGRESS,
-						severity: FATAL,
-						cause:    errors.New(errStr),
-						category: INDEXER}}
+		logging.Errorf(errStr)
+		if respCh != nil {
+			respCh <- &MsgError{
+				err: Error{code: ERROR_INDEX_DROP_IN_PROGRESS,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
 
-			}
-			return true
 		}
+		return true
 	}
 	return false
 }

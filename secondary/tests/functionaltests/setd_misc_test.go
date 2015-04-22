@@ -519,6 +519,9 @@ func TestSaslBucket(t *testing.T) {
 	var indexName = "i_age"
 	var field = "age"
 
+	kvutility.DeleteBucket(bucketName, "sasl", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+
 	kvutility.CreateBucket(bucketName, "sasl", bucketPassword, clusterconfig.Username, clusterconfig.Password, kvaddress, "300", "11212")
 	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
 	kvdocs := generateDocs(1000, "users.prod")

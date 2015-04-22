@@ -743,8 +743,8 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 		//if bucket and stream have been provided
 		if bucket != "" && streamId != common.ALL_STREAMS {
 			idxInst := s.indexInstMap[idxInstId]
-			//skip the index if bucket and stream don't match
-			if idxInst.Defn.Bucket != bucket && idxInst.Stream != streamId {
+			//skip the index if either bucket or stream don't match
+			if idxInst.Defn.Bucket != bucket || idxInst.Stream != streamId {
 				continue
 			}
 			//skip deleted indexes

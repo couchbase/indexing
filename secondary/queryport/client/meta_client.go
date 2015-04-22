@@ -393,6 +393,9 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 		return err
 	}
 
+	logging.Infof("Refreshing indexer list due to cluster changes or auto-refresh.")
+	logging.Infof("Refreshed Indexer List: %v", adminports)
+
 	b.rw.Lock()
 	defer b.rw.Unlock()
 
@@ -463,6 +466,8 @@ func (b *metadataClient) updateIndexer(adminport string, newIndexerId, oldIndexe
 	func() {
 		b.rw.Lock()
 		defer b.rw.Unlock()
+
+		logging.Infof("Acknowledged that new indexer is registered.  Indexer = %v, id = %v", adminport, newIndexerId)
 
 		delete(b.topology, oldIndexerId)
 		b.adminports[adminport] = newIndexerId
