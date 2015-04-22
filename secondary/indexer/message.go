@@ -150,6 +150,10 @@ func (m *MsgError) GetError() Error {
 	return m.err
 }
 
+func (m *MsgError) String() string {
+	return fmt.Sprintf("%v", m.err)
+}
+
 //Success Message
 type MsgSuccess struct {
 }
