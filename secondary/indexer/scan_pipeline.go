@@ -170,26 +170,35 @@ loop:
 }
 
 func (d *IndexScanWriter) Routine() error {
-	defer d.CloseRead()
+	var err error
+	var sk, pk []byte
+
+	defer func() {
+		// Send error to the client if not client requested cancel.
+		if err != nil && err != ErrClientCancel {
+			d.w.Error(err)
+		}
+		d.CloseRead()
+	}()
 
 loop:
 	for {
-		sk, err := d.ReadItem()
+		sk, err = d.ReadItem()
 		switch err {
 		case nil:
 		case p.ErrNoMoreItem:
+			err = nil
 			break loop
 		default:
-			return err
+			break loop
 		}
 
-		pk, err := d.ReadItem()
+		pk, err = d.ReadItem()
 		if err != nil {
 			return err
 		}
 
 		if err = d.w.Row(pk, sk); err != nil {
-			d.w.Error(err)
 			return err
 		}
 
@@ -209,7 +218,7 @@ loop:
 		*/
 	}
 
-	return nil
+	return err
 }
 
 func piSplitEntry(entry []byte, tmp []byte) ([]byte, []byte) {

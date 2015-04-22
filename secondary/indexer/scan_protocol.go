@@ -54,6 +54,10 @@ func (w *protoResponseWriter) Error(err error) error {
 	var res interface{}
 	protoErr := &protobuf.Error{Error: proto.String(err.Error())}
 
+	// Drop all collected rows
+	w.rowEntries = nil
+	w.rowSize = 0
+
 	switch w.scanType {
 	case StatsReq:
 		res = &protobuf.StatisticsResponse{
