@@ -77,7 +77,7 @@ type Feed struct {
 //    feedWaitStreamEndTimeout: wait for a response to StreamEnd
 //    feedChanSize: channel size for feed's control path and back path
 //    mutationChanSize: channel size of projector's data path routine
-//    vbucketSyncTimeout: timeout, in ms, for sending periodic Sync messages
+//    syncTimeout: timeout, in ms, for sending periodic Sync messages
 //    routerEndpointFactory: endpoint factory
 func NewFeed(topic string, config c.Config, opaque uint16) (*Feed, error) {
 	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
@@ -1650,7 +1650,7 @@ func FeedConfigParams() []string {
 		"feedWaitStreamReqTimeout",
 		"mutationChanSize",
 		"routerEndpointFactory",
-		"vbucketSyncTimeout",
+		"syncTimeout",
 		// dcp configuration
 		"dcp.dataChanSize",
 		"dcp.genChanSize",

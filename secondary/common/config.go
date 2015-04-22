@@ -123,7 +123,7 @@ var SystemConfig = Config{
 		10000,
 		false, // mutable
 	},
-	"projector.vbucketSyncTimeout": ConfigValue{
+	"projector.syncTimeout": ConfigValue{
 		2000,
 		"timeout, in milliseconds, for sending periodic Sync messages, " +
 			"changing this value does not affect existing feeds.",
@@ -223,10 +223,10 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.dataport.keyChanSize": ConfigValue{
-		10000,
+		50000,
 		"channel size of dataport endpoints data input, " +
 			"does not affect existing feeds.",
-		10000,
+		50000,
 		true, // immutable
 	},
 	"projector.dataport.bufferSize": ConfigValue{
@@ -238,10 +238,10 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.dataport.bufferTimeout": ConfigValue{
-		1,
+		25,
 		"timeout in milliseconds, to flush vbucket-mutations from, " +
 			"endpoint, does not affect existing feeds.",
-		1,     // 1ms
+		25,    // 25ms
 		false, // mutable
 	},
 	"projector.dataport.harakiriTimeout": ConfigValue{

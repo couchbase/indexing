@@ -16,7 +16,6 @@
 package projector
 
 import "fmt"
-import "time"
 
 import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
@@ -36,7 +35,6 @@ type VbucketRoutine struct {
 	finch chan bool
 	// config params
 	mutChanSize int
-	syncTimeout time.Duration // in milliseconds
 	logPrefix   string
 }
 
@@ -60,8 +58,6 @@ func NewVbucketRoutine(
 	}
 	vr.logPrefix = fmt.Sprintf("VBRT[<-%v<-%v<-%v #%v]", vbno, bucket, cluster, topic)
 	vr.mutChanSize = mutChanSize
-	vr.syncTimeout = time.Duration(config["vbucketSyncTimeout"].Int())
-	vr.syncTimeout *= time.Millisecond
 
 	go vr.run(vr.reqch, startSeqno)
 	logging.Infof("%v ##%x started ...\n", vr.logPrefix, opaque)
@@ -70,6 +66,7 @@ func NewVbucketRoutine(
 
 const (
 	vrCmdEvent byte = iota + 1
+	vrCmdSyncPulse
 	vrCmdAddEngines
 	vrCmdDeleteEngines
 	vrCmdGetStatistics
@@ -80,6 +77,13 @@ const (
 // Event will post an DcpEvent, asychronous call.
 func (vr *VbucketRoutine) Event(m *mc.DcpEvent) error {
 	cmd := []interface{}{vrCmdEvent, m}
+	return c.FailsafeOpAsync(vr.reqch, cmd, vr.finch)
+}
+
+// SyncPulse will trigger vb-routine to generate a sync pulse for this
+// vbucket, asychronous call.
+func (vr *VbucketRoutine) SyncPulse() error {
+	cmd := []interface{}{vrCmdSyncPulse}
 	return c.FailsafeOpAsync(vr.reqch, cmd, vr.finch)
 }
 
@@ -155,8 +159,6 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 		logging.Infof("%v ##%x ... stopped\n", vr.logPrefix, vr.opaque)
 	}()
 
-	var heartBeat <-chan time.Time // for Sync message
-
 	stats := vr.newStats()
 	addEngineCount := stats.Get("addInsts").(float64)
 	delEngineCount := stats.Get("delInsts").(float64)
@@ -166,112 +168,97 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 
 loop:
 	for {
-		select {
-		case msg := <-reqch:
-			cmd := msg[0].(byte)
-			switch cmd {
-			case vrCmdAddEngines:
-				vr.engines = make(map[uint64]*Engine)
-				opaque := msg[1].(uint16)
-				fmsg := "%v ##%x vrCmdAddEngines\n"
-				logging.Tracef(fmsg, vr.logPrefix, opaque)
-				if msg[2] != nil {
-					fmsg := "%v ##%x AddEngine %v\n"
-					for uuid, engine := range msg[2].(map[uint64]*Engine) {
-						vr.engines[uuid] = engine
-						logging.Tracef(fmsg, vr.logPrefix, opaque, uuid)
-					}
-					vr.printCtrl(vr.engines)
-				}
+		msg := <-reqch
+		cmd := msg[0].(byte)
+		switch cmd {
+		case vrCmdSyncPulse:
+			if len(vr.engines) > 0 {
+				if data := vr.makeSyncData(seqno); data != nil {
+					syncCount++
+					fmsg := "%v ##%x sync count %v\n"
+					logging.Tracef(fmsg, vr.logPrefix, vr.opaque, syncCount)
+					vr.broadcast2Endpoints(data)
 
-				if msg[3] != nil {
-					endpoints := msg[3].(map[string]c.RouterEndpoint)
-					vr.endpoints = vr.updateEndpoints(opaque, endpoints)
-					vr.printCtrl(vr.endpoints)
+				} else {
+					fmsg := "%v ##%x Sync NOT PUBLISHED\n"
+					logging.Errorf(fmsg, vr.logPrefix, vr.opaque)
 				}
-				respch := msg[4].(chan []interface{})
-				respch <- []interface{}{nil}
-				addEngineCount++
+			}
 
-			case vrCmdDeleteEngines:
-				opaque := msg[1].(uint16)
-				fmsg := "%v ##%x vrCmdDeleteEngines\n"
-				logging.Tracef(fmsg, vr.logPrefix, opaque)
-				engineKeys := msg[2].([]uint64)
-				fmsg = "%v ##%x DelEngine %v\n"
-				for _, uuid := range engineKeys {
-					delete(vr.engines, uuid)
+		case vrCmdAddEngines:
+			vr.engines = make(map[uint64]*Engine)
+			opaque := msg[1].(uint16)
+			fmsg := "%v ##%x vrCmdAddEngines\n"
+			logging.Tracef(fmsg, vr.logPrefix, opaque)
+			if msg[2] != nil {
+				fmsg := "%v ##%x AddEngine %v\n"
+				for uuid, engine := range msg[2].(map[uint64]*Engine) {
+					vr.engines[uuid] = engine
 					logging.Tracef(fmsg, vr.logPrefix, opaque, uuid)
 				}
-				fmsg = "%v ##%x deleted engines %v\n"
-				logging.Tracef(fmsg, vr.logPrefix, opaque, engineKeys)
-				respch := msg[3].(chan []interface{})
-				respch <- []interface{}{nil}
-				delEngineCount++
+				vr.printCtrl(vr.engines)
+			}
 
-			case vrCmdGetStatistics:
-				logging.Tracef("%v vrCmdStatistics\n", vr.logPrefix)
-				respch := msg[1].(chan []interface{})
-				stats.Set("addInsts", addEngineCount)
-				stats.Set("delInsts", delEngineCount)
-				stats.Set("syncs", syncCount)
-				stats.Set("snapshots", sshotCount)
-				stats.Set("mutations", mutationCount)
-				respch <- []interface{}{stats.ToMap()}
+			if msg[3] != nil {
+				endpoints := msg[3].(map[string]c.RouterEndpoint)
+				vr.endpoints = vr.updateEndpoints(opaque, endpoints)
+				vr.printCtrl(vr.endpoints)
+			}
+			respch := msg[4].(chan []interface{})
+			respch <- []interface{}{nil}
+			addEngineCount++
 
-			case vrCmdResetConfig:
-				config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
-				if cv, ok := config["vbucketSyncTimeout"]; ok {
-					vr.syncTimeout = time.Duration(cv.Int()) * time.Millisecond
-					// re-initialize the heart beat only if it is already
-					// started.
-					if heartBeat != nil {
-						fmsg := "%v ##%x heart-beat reloaded: %v\n"
-						logging.Infof(fmsg, vr.logPrefix, vr.opaque, vr.syncTimeout)
-						heartBeat = time.Tick(vr.syncTimeout)
-					}
-				}
-				respch <- []interface{}{nil}
+		case vrCmdDeleteEngines:
+			opaque := msg[1].(uint16)
+			fmsg := "%v ##%x vrCmdDeleteEngines\n"
+			logging.Tracef(fmsg, vr.logPrefix, opaque)
+			engineKeys := msg[2].([]uint64)
+			fmsg = "%v ##%x DelEngine %v\n"
+			for _, uuid := range engineKeys {
+				delete(vr.engines, uuid)
+				logging.Tracef(fmsg, vr.logPrefix, opaque, uuid)
+			}
+			fmsg = "%v ##%x deleted engines %v\n"
+			logging.Tracef(fmsg, vr.logPrefix, opaque, engineKeys)
+			respch := msg[3].(chan []interface{})
+			respch <- []interface{}{nil}
+			delEngineCount++
 
-			case vrCmdEvent:
-				m := msg[1].(*mc.DcpEvent)
-				if m.Opaque != vr.opaque {
-					fmsg := "%v ##%x mismatch with vr.##%x %v"
-					logging.Fatalf(fmsg, vr.logPrefix, m.Opaque, vr.opaque, m.Opcode)
-				}
-				if m.Opcode == mcd.DCP_STREAMREQ { // opens up the path
-					heartBeat = time.Tick(vr.syncTimeout)
-					fmsg := "%v ##%x heartbeat (%v) loaded ...\n"
-					logging.Infof(fmsg, vr.logPrefix, m.Opaque, vr.syncTimeout)
-				}
+		case vrCmdGetStatistics:
+			logging.Tracef("%v vrCmdStatistics\n", vr.logPrefix)
+			respch := msg[1].(chan []interface{})
+			stats.Set("addInsts", addEngineCount)
+			stats.Set("delInsts", delEngineCount)
+			stats.Set("syncs", syncCount)
+			stats.Set("snapshots", sshotCount)
+			stats.Set("mutations", mutationCount)
+			respch <- []interface{}{stats.ToMap()}
 
-				// count statistics
-				seqno = vr.handleEvent(m, seqno)
-				switch m.Opcode {
-				case mcd.DCP_SNAPSHOT:
-					sshotCount++
-				case mcd.DCP_MUTATION, mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
-					mutationCount++
-				case mcd.DCP_STREAMEND:
-					break loop
-				}
+		case vrCmdResetConfig:
+			_, respch := msg[1].(c.Config), msg[2].(chan []interface{})
+			respch <- []interface{}{nil}
 
-			case vrCmdClose:
-				logging.Infof("%v ##%x closed\n", vr.logPrefix, vr.opaque)
+		case vrCmdEvent:
+			m := msg[1].(*mc.DcpEvent)
+			if m.Opaque != vr.opaque {
+				fmsg := "%v ##%x mismatch with vr.##%x %v"
+				logging.Fatalf(fmsg, vr.logPrefix, m.Opaque, vr.opaque, m.Opcode)
+			}
+
+			// count statistics
+			seqno = vr.handleEvent(m, seqno)
+			switch m.Opcode {
+			case mcd.DCP_SNAPSHOT:
+				sshotCount++
+			case mcd.DCP_MUTATION, mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
+				mutationCount++
+			case mcd.DCP_STREAMEND:
 				break loop
 			}
 
-		case <-heartBeat:
-			if data := vr.makeSyncData(seqno); data != nil {
-				syncCount++
-				fmsg := "%v ##%x sync count %v\n"
-				logging.Tracef(fmsg, vr.logPrefix, vr.opaque, syncCount)
-				vr.broadcast2Endpoints(data)
-
-			} else {
-				fmsg := "%v ##%x Sync NOT PUBLISHED\n"
-				logging.Errorf(fmsg, vr.logPrefix, vr.opaque)
-			}
+		case vrCmdClose:
+			logging.Infof("%v ##%x closed\n", vr.logPrefix, vr.opaque)
+			break loop
 		}
 	}
 }
