@@ -6,6 +6,7 @@ import (
 	"github.com/couchbase/cbauth"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"strings"
 	"time"
 )
@@ -24,6 +25,7 @@ func main() {
 	cpus := flag.Int("cpus", runtime.NumCPU(), "Number of CPUs")
 	cluster := flag.String("cluster", "127.0.0.1:9000", "Cluster server address")
 	auth := flag.String("auth", "Administrator:asdasd", "Auth")
+	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
 
 	flag.Parse()
 
@@ -32,6 +34,15 @@ func main() {
 		os.Exit(0)
 	}
 
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fmt.Println("Failed create cpu profile file")
+			os.Exit(1)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 	runtime.GOMAXPROCS(*cpus)
 	up := strings.Split(*auth, ":")
 	_, err := cbauth.InternalRetryDefaultInit(*cluster, up[0], up[1])
