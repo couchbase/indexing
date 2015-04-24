@@ -527,7 +527,7 @@ func validate(cmd *Command, fset *flag.FlagSet) error {
 		dont = []string{"h", "index", "bucket", "where", "fields", "primary", "with", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
 
 	case "create":
-		have = []string{"type", "server", "auth", "index", "bucket", "fields", "primary"}
+		have = []string{"type", "server", "auth", "index", "bucket", "primary"}
 		dont = []string{"h", "indexes", "low", "high", "equal", "incl", "limit", "ckey", "cval"}
 
 	case "build":
