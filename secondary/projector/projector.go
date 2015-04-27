@@ -95,6 +95,7 @@ func (p *Projector) GetConfig() c.Config {
 func (p *Projector) ResetConfig(config c.Config) {
 	p.rw.Lock()
 	defer p.rw.Unlock()
+	defer logging.Infof("%v\n", c.LogRuntime())
 
 	// reset configuration.
 	if cv, ok := config["projector.settings.log_level"]; ok {

@@ -566,14 +566,15 @@ func IndexStatement(def IndexDefn) string {
 	return stmt
 }
 
-func Runtime() string {
+func LogRuntime() string {
 	n := runtime.NumCPU()
 	v := runtime.Version()
-	fmsg := "%v %v; cpus: %v; version: %v"
-	return fmt.Sprintf(fmsg, runtime.GOARCH, runtime.GOOS, n, v)
+	m := runtime.GOMAXPROCS(-1)
+	fmsg := "%v %v; cpus: %v; GOMAXPROCS: %v; version: %v"
+	return fmt.Sprintf(fmsg, runtime.GOARCH, runtime.GOOS, n, m, v)
 }
 
-func Os() string {
+func LogOs() string {
 	gid := os.Getgid()
 	uid := os.Getuid()
 	hostname, _ := os.Hostname()

@@ -20,6 +20,10 @@ import "errors"
 import "github.com/couchbase/indexing/secondary/logging"
 import "sync/atomic"
 import "unsafe"
+import "runtime"
+
+// formula to compute the default CPU allocation for projector.
+var projector_maxCpuPercent = (1 + (runtime.NumCPU() / 6)) * 100
 
 // Threadsafe config holder object
 type ConfigHolder struct {
@@ -75,11 +79,11 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 	"projector.maxCpuPercent": ConfigValue{
-		200,
+		projector_maxCpuPercent,
 		"Maximum percent of CPU that projector can use. " +
 			"EG, 200% in 4-core (400%) machine would set indexer to " +
 			"use 2 cores",
-		200,
+		projector_maxCpuPercent,
 		false, // mutable
 	},
 	// Projector feed settings

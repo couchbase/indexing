@@ -68,9 +68,6 @@ func main() {
 	config := c.SystemConfig.Clone()
 	logging.SetLogLevel(logging.Level(options.loglevel))
 
-	logging.Infof("%v\n", c.Os())
-	logging.Infof("%v\n", c.Runtime())
-
 	config.SetValue("maxVbuckets", options.numVbuckets)
 	if f := getlogFile(); f != nil {
 		fmt.Printf("Projector logging to %q\n", f.Name())
@@ -91,8 +88,12 @@ func main() {
 	epfactory := NewEndpointFactory(cluster, options.numVbuckets)
 	config.SetValue("projector.routerEndpointFactory", epfactory)
 
+	logging.Infof("%v\n", c.LogOs())
+	logging.Infof("%v\n", c.LogRuntime())
+
 	go c.ExitOnStdinClose()
 	projector.NewProjector(options.numVbuckets, config)
+
 	<-done
 }
 
