@@ -430,7 +430,6 @@ func (r *mutationStreamReader) panicHandler() {
 	//panic recovery
 	if rc := recover(); rc != nil {
 		logging.Fatalf("MutationStreamReader::panicHandler \n\tReceived Panic for Stream %v", r.streamId)
-		//TODO Log the stack trace here
 		var err error
 		switch x := rc.(type) {
 		case string:
@@ -440,6 +439,10 @@ func (r *mutationStreamReader) panicHandler() {
 		default:
 			err = errors.New("Unknown panic")
 		}
+
+		logging.Fatalf("StreamReader Panic Err %v", err)
+		logging.Fatalf("%s", logging.StackTrace())
+
 		//panic from stream library, propagate to supervisor
 		msg := &MsgStreamError{streamId: r.streamId,
 			err: Error{code: ERROR_STREAM_READER_PANIC,
