@@ -604,7 +604,7 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 				logging.Errorf("%v NOOP.Transmit(): %v", prefix, err)
 
 			} else {
-				logging.Infof("%v buffer-ack %v\n", prefix, totalBytes)
+				logging.Tracef("%v buffer-ack %v\n", prefix, totalBytes)
 			}
 		}
 		feed.toAckBytes += bytes
