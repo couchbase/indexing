@@ -319,7 +319,7 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 	callb func(interface{}) error,
 	cancel chan bool) error {
 
-	u := c.BaseURL
+	u := *c.BaseURL
 	u.User = nil
 	authHandler := c.ah
 	if q := strings.Index(path, "?"); q > 0 {
