@@ -1187,6 +1187,7 @@ func (w *watcher) makeRequest(opCode common.OpCode, key string, content []byte) 
 	request := w.factory.CreateRequest(id, uint32(opCode), key, content)
 
 	handle := &protocol.RequestHandle{Request: request, Err: nil, StartTime: 0, Content: nil}
+	handle.StartTime = time.Now().UnixNano()
 	handle.CondVar = sync.NewCond(&handle.Mutex)
 
 	handle.CondVar.L.Lock()
