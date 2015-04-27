@@ -653,6 +653,7 @@ func UpdateKVDocs(newDocs, docs tc.KeyValues) {
 }
 
 func generateDocs(numDocs int, prodFileName string) tc.KeyValues {
+	seed++
 	prodfile := filepath.Join(proddir, prodFileName)
 	docsToCreate := GenerateJsons(numDocs, seed, prodfile, bagdir)
 	return docsToCreate
