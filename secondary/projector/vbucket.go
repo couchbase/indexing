@@ -303,7 +303,7 @@ func (vr *VbucketRoutine) handleEvent(m *mc.DcpEvent, seqno uint64) uint64 {
 
 	case mcd.DCP_SNAPSHOT: // broadcast Snapshot
 		typ, start, end := m.SnapshotType, m.SnapstartSeq, m.SnapendSeq
-		logging.Debugf(ssFormat, vr.logPrefix, m.Opaque, start, end, typ)
+		logging.Tracef(ssFormat, vr.logPrefix, m.Opaque, start, end, typ)
 		if data := vr.makeSnapshotData(m, seqno); data != nil {
 			vr.broadcast2Endpoints(data)
 		} else {
