@@ -1752,17 +1752,49 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 }
 
 func (tk *timekeeper) handleUpdateIndexInstMap(cmd Message) {
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
 	logging.Tracef("Timekeeper::handleUpdateIndexInstMap %v", cmd)
 	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+
+	// Cleanup bucket conn cache for unused buckets
+	validBuckets := make(map[string]bool)
+	for _, inst := range indexInstMap {
+		validBuckets[inst.Defn.Bucket] = true
+	}
+
+	for _, inst := range tk.indexInstMap {
+		if _, ok := validBuckets[inst.Defn.Bucket]; !ok {
+			tk.removeBucketConn(inst.Defn.Bucket)
+		}
+	}
+
 	tk.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	tk.supvCmdch <- &MsgSuccess{}
 }
 
 func (tk *timekeeper) handleUpdateIndexPartnMap(cmd Message) {
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
 	logging.Tracef("Timekeeper::handleUpdateIndexPartnMap %v", cmd)
 	indexPartnMap := cmd.(*MsgUpdatePartnMap).GetIndexPartnMap()
 	tk.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
 	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) removeBucketConn(name string) {
+	tk.statsLock.Lock()
+	defer tk.statsLock.Unlock()
+	tk.removeBucketConnUnlocked(name)
+}
+
+func (tk *timekeeper) removeBucketConnUnlocked(name string) {
+	if b, ok := tk.bucketConn[name]; ok {
+		b.Close()
+		delete(tk.bucketConn, name)
+	}
 }
 
 func (tk *timekeeper) getBucketConn(name string, refresh bool) (*couchbase.Bucket, error) {
@@ -1777,6 +1809,8 @@ func (tk *timekeeper) getBucketConn(name string, refresh bool) (*couchbase.Bucke
 	if ok && !refresh {
 		return b, nil
 	} else {
+		// Close the old bucket instance
+		tk.removeBucketConnUnlocked(name)
 		b, err = common.ConnectBucket(tk.config["clusterAddr"].String(), "default", name)
 		if err != nil {
 			return nil, err
@@ -1793,7 +1827,9 @@ func (tk *timekeeper) handleStats(cmd Message) {
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
 
+	tk.lock.Lock()
 	indexInstMap := common.CopyIndexInstMap(tk.indexInstMap)
+	tk.lock.Unlock()
 
 	go func() {
 		// Populate current KV timestamps for all buckets
