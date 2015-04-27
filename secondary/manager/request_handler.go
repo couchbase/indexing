@@ -718,7 +718,7 @@ func send(w http.ResponseWriter, res interface{}) {
 	header["Content-Type"] = []string{"application/json"}
 
 	if buf, err := json.Marshal(res); err == nil {
-		logging.Debugf("RequestHandler::sendResponse: sending response back to caller. %v", string(buf))
+		logging.Tracef("RequestHandler::sendResponse: sending response back to caller. %v", string(buf))
 		w.Write(buf)
 	} else {
 		// note : buf is nil if err != nil
