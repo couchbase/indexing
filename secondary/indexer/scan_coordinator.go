@@ -589,9 +589,12 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	defer func() { s.handleError(req.LogPrefix, w.Done()) }()
 
 	logging.Infof("%s REQUEST %s", req.LogPrefix, req)
+
 	if req.Consistency != nil {
-		logging.Debugf("%s requested timestamp: %s => %s", req.LogPrefix,
-			strings.ToLower(req.Consistency.String()), ScanTStoString(req.Ts))
+		logging.LazyDebug(func() string {
+			return fmt.Sprintf("%s requested timestamp: %s => %s", req.LogPrefix,
+				strings.ToLower(req.Consistency.String()), ScanTStoString(req.Ts))
+		})
 	}
 
 	if s.tryRespondWithError(w, req, err) {
@@ -608,7 +611,10 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 
 	defer DestroyIndexSnapshot(is)
 
-	logging.Infof("%s snapshot timestamp: %s", req.LogPrefix, ScanTStoString(is.Timestamp()))
+	logging.LazyDebug(func() string {
+		return fmt.Sprintf("%s snapshot timestamp: %s",
+			req.LogPrefix, ScanTStoString(is.Timestamp()))
+	})
 	s.processRequest(req, w, is, t0)
 }
 
