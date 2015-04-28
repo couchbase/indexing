@@ -42,7 +42,7 @@ func TestForestDBIterator(t *testing.T) {
 	}
 	lastSeqNum := info.LastSeqNum()
 
-	iter, err := newForestDBIterator(kvstore, lastSeqNum)
+	iter, err := newForestDBIterator(nil, kvstore, lastSeqNum)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestForestDBIteratorSeek(t *testing.T) {
 	}
 	lastSeqNum := info.LastSeqNum()
 
-	iter, err := newForestDBIterator(kvstore, lastSeqNum)
+	iter, err := newForestDBIterator(nil, kvstore, lastSeqNum)
 	if err != nil {
 		t.Fatal(err)
 	}

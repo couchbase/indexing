@@ -77,7 +77,7 @@ type Feed struct {
 //    feedWaitStreamEndTimeout: wait for a response to StreamEnd
 //    feedChanSize: channel size for feed's control path and back path
 //    mutationChanSize: channel size of projector's data path routine
-//    vbucketSyncTimeout: timeout, in ms, for sending periodic Sync messages
+//    syncTimeout: timeout, in ms, for sending periodic Sync messages
 //    routerEndpointFactory: endpoint factory
 func NewFeed(topic string, config c.Config, opaque uint16) (*Feed, error) {
 	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
@@ -1113,6 +1113,8 @@ func (feed *Feed) cleanupBucket(bucketn string, enginesOk bool) {
 		kvdata.Close()
 	}
 	delete(feed.kvdata, bucketn) // :SideEffect:
+	fmsg := "%v ##%x bucket %v removed ..."
+	logging.Infof(fmsg, feed.logPrefix, feed.opaque, bucketn)
 }
 
 func (feed *Feed) openFeeder(
@@ -1467,8 +1469,8 @@ func (feed *Feed) waitStreamRequests(
 
 	timeout := time.After(feed.reqTimeout * time.Millisecond)
 	err1 := feed.waitOnFeedback(timeout, opaque, func(msg interface{}) string {
-		if val, ok := msg.(*controlStreamRequest); ok && val.bucket == bucketn && val.opaque == opaque &&
-			ts.Contains(val.vbno) {
+		if val, ok := msg.(*controlStreamRequest); ok && val.bucket == bucketn &&
+			val.opaque == opaque && ts.Contains(val.vbno) {
 
 			if val.status == mcd.SUCCESS {
 				actTs.Append(val.vbno, val.seqno, val.vbuuid, 0, 0)
@@ -1513,7 +1515,7 @@ func (feed *Feed) waitStreamEnds(
 
 	timeout := time.After(feed.endTimeout * time.Millisecond)
 	err1 := feed.waitOnFeedback(timeout, opaque, func(msg interface{}) string {
-		if val, ok := msg.(*controlStreamEnd); ok && val.bucket == bucketn && val.opaque == opaque &&
+		if val, ok := msg.(*controlStreamEnd); ok && val.bucket == bucketn &&
 			ts.Contains(val.vbno) {
 
 			if val.status == mcd.SUCCESS {
@@ -1567,7 +1569,7 @@ loop:
 	// re-populate in the same order.
 	if len(msgs) > 0 {
 		fmsg := "%v ##%x re-populating back-channel with %d messages"
-		logging.Infof(fmsg, feed.logPrefix, len(msgs))
+		logging.Infof(fmsg, feed.logPrefix, opaque, len(msgs))
 	}
 	for _, msg := range msgs {
 		feed.backch <- msg
@@ -1648,7 +1650,7 @@ func FeedConfigParams() []string {
 		"feedWaitStreamReqTimeout",
 		"mutationChanSize",
 		"routerEndpointFactory",
-		"vbucketSyncTimeout",
+		"syncTimeout",
 		// dcp configuration
 		"dcp.dataChanSize",
 		"dcp.genChanSize",

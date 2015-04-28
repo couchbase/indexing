@@ -203,13 +203,19 @@ func setValueConst(
 	b *couchbase.Bucket,
 	maxvb int, value map[string]interface{}) ([]uint64, []uint64, uint16, uint64, uint64) {
 
-	seqnos1, _ := common.BucketTs(b, maxvb)
-	// identify vbucket for `docid`
-	err := b.Set(docid, 0, value)
+	seqnos1, _, err := common.BucketTs(b, maxvb)
 	if err != nil {
 		log.Fatal(err)
 	}
-	seqnos2, vbuuids2 := common.BucketTs(b, maxvb)
+	// identify vbucket for `docid`
+	err = b.Set(docid, 0, value)
+	if err != nil {
+		log.Fatal(err)
+	}
+	seqnos2, vbuuids2, err := common.BucketTs(b, maxvb)
+	if err != nil {
+		log.Fatal(err)
+	}
 	vbno, vbuuid, seqno := diffSeqno(seqnos1, seqnos2, vbuuids2)
 	fmt.Printf(
 		"Updated %v on vbucket: %v(%v) seqno: %v\n",

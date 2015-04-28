@@ -50,18 +50,19 @@ func N1QLTransform(docid, doc []byte, cExprs []interface{}) ([]byte, error) {
 
 	if len(cExprs) == 1 && len(arrValue) == 1 && docid == nil {
 		// used for partition-key evaluation and where predicate.
+		// Marshal partition-key and where as a basic JSON data-type.
 		return arrValue[0].MarshalJSON()
 
 	} else if len(arrValue) > 0 {
-		// A strictly internal hack to make secondary keys unique by
-		// appending the docid. The shape of the secondary key looks like,
-		//     [expr1, docid] - for simple key
-		//     [expr1, expr2, ..., docid] - for composite key
-		//
-		// above hack is applicable only when docid is not `nil`
-		if docid != nil {
-			arrValue = append(arrValue, qvalue.NewValue(string(docid)))
-		}
+		// The shape of the secondary key looks like,
+		//     [expr1] - for simple key
+		//     [expr1, expr2] - for composite key
+
+		// in case we need to append docid to skeys, it is applicable
+		// only when docid is not `nil`
+		//if docid != nil {
+		//    arrValue = append(arrValue, qvalue.NewValue(string(docid)))
+		//}
 		secKey := qvalue.NewValue(make([]interface{}, len(arrValue)))
 		for i, key := range arrValue {
 			secKey.SetIndex(i, key)

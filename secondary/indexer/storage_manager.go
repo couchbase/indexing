@@ -256,7 +256,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 				//create snapshot for all the slices
 				for _, slice := range sc.GetAllSlices() {
 					var latestSnapshot Snapshot
-					if lastIndexSnap != nil {
+					if lastIndexSnap.Partitions() != nil {
 						lastSliceSnap := lastPartnSnap.Slices()[slice.Id()]
 						latestSnapshot = lastSliceSnap.Snapshot()
 					}
@@ -477,6 +477,17 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		rollbackTs: respTs}
 }
 
+func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string) {
+	if _, ok := s.indexSnapMap[idxInstId]; !ok {
+		ts := common.NewTsVbuuid(bucket, s.config["numVbuckets"].Int())
+		snap := &indexSnapshot{
+			instId: idxInstId,
+			ts:     ts,
+		}
+		s.indexSnapMap[idxInstId] = snap
+	}
+}
+
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 	logging.Tracef("StorageMgr::handleUpdateIndexInstMap %v", cmd)
@@ -504,6 +515,11 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 			DestroyIndexSnapshot(is)
 			delete(s.indexSnapMap, idxInstId)
 		}
+	}
+
+	// Add 0 items index snapshots for newly added indexes
+	for idxInstId, inst := range s.indexInstMap {
+		s.addNilSnapshot(idxInstId, inst.Defn.Bucket)
 	}
 
 	//if manager is not enable, store the updated InstMap in
@@ -571,14 +587,8 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	// Otherwise add into waiters list so that next snapshot creation event
 	// can notify the requester when a snapshot with matching timestamp
 	// is available.
-	var snapTs *common.TsVbuuid
-	is, ok := s.indexSnapMap[req.GetIndexId()]
-	if !ok {
-		// No snapshot present and hence all vbseqs = 0
-		snapTs = common.NewTsVbuuid(inst.Defn.Bucket, s.config["numVbuckets"].Int())
-	} else {
-		snapTs = is.Timestamp()
-	}
+	is := s.indexSnapMap[req.GetIndexId()]
+	snapTs := is.Timestamp()
 
 	// - If atleast-ts is nil and no snapshot is available, send nil ts
 	// - If atleast-ts is not-nil and no snapshot is available, wait until
@@ -799,6 +809,8 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 				partns: map[common.PartitionId]PartitionSnapshot{pid: ps},
 			}
 			s.indexSnapMap[idxInstId] = is
+		} else {
+			s.addNilSnapshot(idxInstId, bucket)
 		}
 	}
 }

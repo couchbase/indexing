@@ -230,9 +230,8 @@ type ScanRequest struct {
 	Span             *Span          `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
 	Distinct         *bool          `protobuf:"varint,3,req,name=distinct" json:"distinct,omitempty"`
 	Limit            *int64         `protobuf:"varint,4,req,name=limit" json:"limit,omitempty"`
-	PageSize         *int64         `protobuf:"varint,5,req,name=pageSize" json:"pageSize,omitempty"`
-	Cons             *uint32        `protobuf:"varint,6,req,name=cons" json:"cons,omitempty"`
-	Vector           *TsConsistency `protobuf:"bytes,7,opt,name=vector" json:"vector,omitempty"`
+	Cons             *uint32        `protobuf:"varint,5,req,name=cons" json:"cons,omitempty"`
+	Vector           *TsConsistency `protobuf:"bytes,6,opt,name=vector" json:"vector,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -268,13 +267,6 @@ func (m *ScanRequest) GetLimit() int64 {
 	return 0
 }
 
-func (m *ScanRequest) GetPageSize() int64 {
-	if m != nil && m.PageSize != nil {
-		return *m.PageSize
-	}
-	return 0
-}
-
 func (m *ScanRequest) GetCons() uint32 {
 	if m != nil && m.Cons != nil {
 		return *m.Cons
@@ -292,10 +284,9 @@ func (m *ScanRequest) GetVector() *TsConsistency {
 // Full table scan request from indexer.
 type ScanAllRequest struct {
 	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
-	PageSize         *int64         `protobuf:"varint,2,req,name=pageSize" json:"pageSize,omitempty"`
-	Limit            *int64         `protobuf:"varint,3,req,name=limit" json:"limit,omitempty"`
-	Cons             *uint32        `protobuf:"varint,4,req,name=cons" json:"cons,omitempty"`
-	Vector           *TsConsistency `protobuf:"bytes,5,opt,name=vector" json:"vector,omitempty"`
+	Limit            *int64         `protobuf:"varint,2,req,name=limit" json:"limit,omitempty"`
+	Cons             *uint32        `protobuf:"varint,3,req,name=cons" json:"cons,omitempty"`
+	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -306,13 +297,6 @@ func (*ScanAllRequest) ProtoMessage()    {}
 func (m *ScanAllRequest) GetDefnID() uint64 {
 	if m != nil && m.DefnID != nil {
 		return *m.DefnID
-	}
-	return 0
-}
-
-func (m *ScanAllRequest) GetPageSize() int64 {
-	if m != nil && m.PageSize != nil {
-		return *m.PageSize
 	}
 	return 0
 }
@@ -511,7 +495,7 @@ func (m *Range) GetInclusion() uint32 {
 }
 
 type IndexEntry struct {
-	EntryKey         []byte `protobuf:"bytes,1,req,name=entryKey" json:"entryKey,omitempty"`
+	EntryKey         []byte `protobuf:"bytes,1,opt,name=entryKey" json:"entryKey,omitempty"`
 	PrimaryKey       []byte `protobuf:"bytes,2,req,name=primaryKey" json:"primaryKey,omitempty"`
 	XXX_unrecognized []byte `json:"-"`
 }

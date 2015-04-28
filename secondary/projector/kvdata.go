@@ -17,6 +17,7 @@
 package projector
 
 import "fmt"
+import "time"
 import "strconv"
 
 import "github.com/couchbase/indexing/secondary/logging"
@@ -41,7 +42,8 @@ type KVData struct {
 	sbch  chan []interface{}
 	finch chan bool
 	// misc.
-	logPrefix string
+	syncTimeout time.Duration // in milliseconds
+	logPrefix   string
 }
 
 // NewKVData create a new data-path instance.
@@ -54,6 +56,7 @@ func NewKVData(
 	mutch <-chan *mc.DcpEvent,
 	config c.Config) *KVData {
 
+	cluster, topic := feed.cluster, feed.topic
 	kvdata := &KVData{
 		feed:      feed,
 		opaque:    opaque,
@@ -67,8 +70,10 @@ func NewKVData(
 		// control calls on this feed.
 		sbch:      make(chan []interface{}, 16),
 		finch:     make(chan bool),
-		logPrefix: fmt.Sprintf("KVDT[<-%v<-%v #%v]", bucket, feed.cluster, feed.topic),
+		logPrefix: fmt.Sprintf("KVDT[<-%v<-%v #%v]", bucket, cluster, topic),
 	}
+	kvdata.syncTimeout = time.Duration(config["syncTimeout"].Int())
+	kvdata.syncTimeout *= time.Millisecond
 	for uuid, engine := range engines {
 		kvdata.engines[uuid] = engine
 	}
@@ -168,6 +173,9 @@ func (kvdata *KVData) runScatter(
 	// stats
 	eventCount, addCount, delCount := int64(0), int64(0), int64(0)
 	tsCount := int64(0)
+	heartBeat := time.Tick(kvdata.syncTimeout)
+	fmsg := "%v ##%x heartbeat (%v) loaded ...\n"
+	logging.Infof(fmsg, kvdata.logPrefix, kvdata.opaque, kvdata.syncTimeout)
 
 loop:
 	for {
@@ -184,6 +192,11 @@ loop:
 			//if len(kvdata.vrs) == 0 {
 			//    break loop
 			//}
+
+		case <-heartBeat:
+			for _, vr := range kvdata.vrs {
+				vr.SyncPulse()
+			}
 
 		case msg := <-kvdata.sbch:
 			cmd := msg[0].(byte)
@@ -264,6 +277,13 @@ loop:
 
 			case kvCmdResetConfig:
 				config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
+				if cv, ok := config["syncTimeout"]; ok {
+					kvdata.syncTimeout = time.Duration(cv.Int()) * time.Millisecond
+					logging.Infof(
+						"%v ##%x heart-beat reloaded: %v\n",
+						kvdata.logPrefix, kvdata.opaque, kvdata.syncTimeout)
+					heartBeat = time.Tick(kvdata.syncTimeout)
+				}
 				for _, vr := range kvdata.vrs {
 					if err := vr.ResetConfig(config); err != nil {
 						panic(err)

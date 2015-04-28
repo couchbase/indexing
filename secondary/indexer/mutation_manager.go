@@ -10,9 +10,9 @@
 package indexer
 
 import (
-	"github.com/couchbase/indexing/secondary/logging"
-	"github.com/couchbase/indexing/secondary/common"
 	"errors"
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"sync"
 )
 

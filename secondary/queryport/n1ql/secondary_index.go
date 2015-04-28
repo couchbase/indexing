@@ -812,15 +812,16 @@ func string2defnID(id string) uint64 {
 }
 
 func vector2ts(vector timestamp.Vector) *qclient.TsConsistency {
+	if vector == nil {
+		return nil
+	}
 	vbnos := make([]uint16, 0, 1024)
 	seqnos := make([]uint64, 0, 1024)
 	vbuuids := make([]uint64, 0, 1024)
-	if vector != nil {
-		for _, entry := range vector.Entries() {
-			vbnos = append(vbnos, uint16(entry.Position()))
-			seqnos = append(seqnos, uint64(entry.Value()))
-			vbuuids = append(vbuuids, uint64(guard2Vbuuid(entry.Guard())))
-		}
+	for _, entry := range vector.Entries() {
+		vbnos = append(vbnos, uint16(entry.Position()))
+		seqnos = append(seqnos, uint64(entry.Value()))
+		vbuuids = append(vbuuids, uint64(guard2Vbuuid(entry.Guard())))
 	}
 	return qclient.NewTsConsistency(vbnos, seqnos, vbuuids)
 }

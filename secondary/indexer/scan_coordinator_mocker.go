@@ -1,3 +1,5 @@
+// +build ignore
+
 package indexer
 
 import (
@@ -156,7 +158,7 @@ func (s *mockSlice) SetActive(b bool) {
 func (s *mockSlice) SetStatus(ss SliceStatus) {
 }
 
-func (s *mockSlice) Insert(k Key, v Value) error {
+func (s *mockSlice) Insert(k []byte, docid []byte) error {
 	return s.err
 }
 

@@ -81,6 +81,9 @@ func (bdcp *bucketDcp) StartVbStreams(
 
 	var err error
 
+	if bdcp.bucket != nil {
+		bdcp.bucket.Refresh()
+	}
 	vbnos := c.Vbno32to16(reqTs.GetVbnos())
 	vbuuids, seqnos := reqTs.GetVbuuids(), reqTs.GetSeqnos()
 	for i, vbno := range vbnos {
@@ -104,6 +107,9 @@ func (bdcp *bucketDcp) StartVbStreams(
 func (bdcp *bucketDcp) EndVbStreams(
 	opaque uint16, ts *protobuf.TsVbuuid) (err error) {
 
+	if bdcp.bucket != nil {
+		bdcp.bucket.Refresh()
+	}
 	vbnos := c.Vbno32to16(ts.GetVbnos())
 	for _, vbno := range vbnos {
 		if e := bdcp.dcpFeed.DcpCloseStream(vbno, opaque); e != nil {

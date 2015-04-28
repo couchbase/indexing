@@ -44,18 +44,16 @@ message ScanRequest {
     required Span          span     = 2;
     required bool          distinct = 3;
     required int64         limit    = 4;
-    required int64         pageSize = 5;
-    required uint32        cons     = 6;
-    optional TsConsistency vector   = 7;
+    required uint32        cons     = 5;
+    optional TsConsistency vector   = 6;
 }
 
 // Full table scan request from indexer.
 message ScanAllRequest {
     required uint64        defnID   = 1;
-    required int64         pageSize = 2;
-    required int64         limit    = 3;
-    required uint32        cons     = 4;
-    optional TsConsistency vector   = 5;
+    required int64         limit    = 2;
+    required uint32        cons     = 3;
+    optional TsConsistency vector   = 4;
 }
 
 // Request by client to stop streaming the query results.
@@ -100,7 +98,7 @@ message Range {
 }
 
 message IndexEntry {
-    required bytes  entryKey   = 1;
+    optional bytes  entryKey   = 1;
     required bytes  primaryKey = 2;
 }
 

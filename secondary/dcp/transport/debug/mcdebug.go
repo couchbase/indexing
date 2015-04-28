@@ -11,7 +11,7 @@ import (
 )
 
 type mcops struct {
-	moved, success, errored [257]uint64
+	moved, success, errored [257]uint64 // IMPORTANT: should be 64 bit aligned.
 }
 
 func addToMap(m map[string]uint64, i int, counters [257]uint64) {

@@ -9,6 +9,8 @@ Bulk scan request perf reporting tool for secondary indexes
 
     $ cat config.json
     {
+       "Concurrency" : 1,
+       "Clients": 1,
        "ScanSpecs" : [
           {
              "Type" : "All",
@@ -56,6 +58,8 @@ Bulk scan request perf reporting tool for secondary indexes
 
     $ cat result.json
     {
+       "Rows" : 300000,
+       "Duration" : 1.5,
        "ScanResults" : [
           {
              "Rows" : 100,

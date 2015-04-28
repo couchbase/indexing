@@ -6,4 +6,5 @@ killall make
 pkill -e -f cluster_
 pkill -e -f /opt/
 killall beam.smp epmd
+killall python
 

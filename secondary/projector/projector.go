@@ -95,6 +95,7 @@ func (p *Projector) GetConfig() c.Config {
 func (p *Projector) ResetConfig(config c.Config) {
 	p.rw.Lock()
 	defer p.rw.Unlock()
+	defer logging.Infof("%v\n", c.LogRuntime())
 
 	// reset configuration.
 	if cv, ok := config["projector.settings.log_level"]; ok {
@@ -128,7 +129,7 @@ func (p *Projector) ResetConfig(config c.Config) {
 		}
 		p.cpuProfFd = nil
 
-	} else {
+	} else if ok {
 		logging.Warnf("%v cpu profiling already active !!\n", p.logPrefix)
 	}
 

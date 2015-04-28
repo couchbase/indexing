@@ -11,22 +11,19 @@ package indexer
 
 import (
 	"code.google.com/p/goprotobuf/proto"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	p "github.com/couchbase/indexing/secondary/pipeline"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
-
-// TODO:
-// 1. Add distinct unsupported error
-// 2. Add unique count unsupported error
 
 // Errors
 var (
@@ -39,40 +36,82 @@ var (
 	ErrSnapNotAvailable   = errors.New("No snapshot available for scan")
 	ErrScanTimedOut       = errors.New("Index scan timed out")
 	ErrUnsupportedRequest = errors.New("Unsupported query request")
+	ErrClientCancel       = errors.New("Client requested cancel")
 )
 
-type scanType string
+type ScanReqType string
 
 const (
-	queryStats   scanType = "stats"
-	queryCount   scanType = "count"
-	queryScan    scanType = "scan"
-	queryScanAll scanType = "scanall"
+	StatsReq   ScanReqType = "stats"
+	CountReq               = "count"
+	ScanReq                = "scan"
+	ScanAllReq             = "scanAll"
 )
 
-// Internal scan handle for a request
-type scanDescriptor struct {
-	scanId    uint64
-	p         *scanParams
-	isPrimary bool
-	stopch    StopChannel
-	timeoutch <-chan time.Time
+type ScanRequest struct {
+	ScanType    ScanReqType
+	DefnID      uint64
+	IndexInstId common.IndexInstId
+	IndexName   string
+	Bucket      string
+	Ts          *common.TsVbuuid
+	Low         IndexKey
+	High        IndexKey
+	Keys        []IndexKey
+	Consistency *common.Consistency
+	Stats       *indexScanStats
 
-	respch chan interface{}
+	// user supplied
+	LowBytes, HighBytes []byte
+	KeysBytes           [][]byte
+
+	Incl      Inclusion
+	Limit     int64
+	isPrimary bool
+
+	ScanId    uint64
+	TimeoutCh <-chan time.Time
+	CancelCh  <-chan interface{}
+
+	LogPrefix string
 }
 
-func (sd *scanDescriptor) ParseIndexInstance(indexInst *common.IndexInst) {
-	sd.isPrimary = indexInst.Defn.IsPrimary
-	sd.p.indexName, sd.p.bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
-	if sd.p.ts != nil {
-		sd.p.ts.Bucket = sd.p.bucket
+type CancelCb struct {
+	done    chan struct{}
+	timeout <-chan time.Time
+	cancel  <-chan interface{}
+	callb   func(error)
+}
+
+func (c *CancelCb) Run() {
+	go func() {
+		select {
+		case <-c.done:
+		case <-c.cancel:
+			c.callb(ErrClientCancel)
+		case <-c.timeout:
+			c.callb(ErrScanTimedOut)
+		}
+	}()
+}
+
+func (c *CancelCb) Done() {
+	close(c.done)
+}
+
+func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
+	return &CancelCb{
+		done:    make(chan struct{}),
+		timeout: req.TimeoutCh,
+		cancel:  req.CancelCh,
+		callb:   callb,
 	}
 }
 
-func (sd scanDescriptor) String() string {
+func (r ScanRequest) String() string {
 	var incl, span string
 
-	switch sd.p.incl {
+	switch r.Incl {
 	case Low:
 		incl = "incl:low"
 	case High:
@@ -83,196 +122,33 @@ func (sd scanDescriptor) String() string {
 		incl = "incl:none"
 	}
 
-	if len(sd.p.keys) == 0 {
-		if sd.p.scanType == queryStats || sd.p.scanType == queryScan {
-			span = fmt.Sprintf("range (%s,%s %s)", string(sd.p.low.Raw()),
-				string(sd.p.high.Raw()), incl)
+	if len(r.Keys) == 0 {
+		if r.ScanType == StatsReq || r.ScanType == ScanReq {
+			span = fmt.Sprintf("range (%s,%s %s)", r.Low, r.High, incl)
 		} else {
 			span = "all"
 		}
 	} else {
 		span = "keys ( "
-		for _, k := range sd.p.keys {
-			span = span + string(k.Raw()) + " "
+		for _, k := range r.Keys {
+			span = span + k.String() + " "
 		}
 		span = span + ")"
 	}
 
-	str := fmt.Sprintf("scan id: %v, defnId: %v, index: %v/%v, type: %v, span: %s", sd.scanId,
-		sd.p.defnID, sd.p.bucket, sd.p.indexName, sd.p.scanType, span)
+	str := fmt.Sprintf("defnId:%v, index:%v/%v, type:%v, span:%s",
+		r.DefnID, r.Bucket, r.IndexName, r.ScanType, span)
 
-	if sd.p.pageSize > 0 {
-		str += fmt.Sprintf(" pagesize: %d", sd.p.pageSize)
+	if r.Limit > 0 {
+		str += fmt.Sprintf(", limit:%d", r.Limit)
 	}
 
-	if sd.p.limit > 0 {
-		str += fmt.Sprintf(" limit: %d", sd.p.limit)
+	if r.Consistency != nil {
+		str += fmt.Sprintf(", consistency:%s", strings.ToLower(r.Consistency.String()))
 	}
 
 	return str
 }
-
-type scanParams struct {
-	scanType  scanType
-	defnID    uint64
-	indexName string
-	bucket    string
-	ts        *common.TsVbuuid
-	low       Key
-	high      Key
-	keys      []Key
-	partnKey  []byte
-	incl      Inclusion
-	limit     int64
-	pageSize  int64
-}
-
-type statsResponse struct {
-	min, max Key
-	unique   uint64
-	count    uint64
-}
-
-type countResponse struct {
-	count int64
-}
-
-// Streaming scan results reader helper
-// Used for:
-// - Reading batched entries of page size from scan res stream
-// - To apply limit clause on streaming scan results
-// - To perform graceful termination of stream scanning
-type scanStreamReader struct {
-	sd        *scanDescriptor
-	keysBuf   *[]Key
-	bufSize   int64
-	count     int64
-	bytesRead int64
-	hasNext   bool
-}
-
-func newResponseReader(sd *scanDescriptor) *scanStreamReader {
-	r := new(scanStreamReader)
-	r.sd = sd
-	r.keysBuf = new([]Key)
-	r.hasNext = true
-	r.bufSize = 0
-	return r
-}
-
-// Read a chunk of keys from scan results with a maximum batch size equals page size
-func (r *scanStreamReader) ReadKeyBatch() (keys *[]Key, done bool, err error) {
-	var resp interface{}
-	done = false
-
-loop:
-	for r.hasNext {
-		select {
-		case resp, r.hasNext = <-r.sd.respch:
-		case <-r.sd.timeoutch:
-			// Since error is set as response, cleanup happens in the following
-			// code block by calling r.Done()
-			resp = ErrScanTimedOut
-		}
-		if r.hasNext {
-			switch resp.(type) {
-			case Key:
-				// Limit constraint
-				if r.sd.p.limit > 0 && r.sd.p.limit == r.count {
-					r.Done()
-					break loop
-				}
-
-				k := resp.(Key)
-				sz := int64(len(k.Raw()))
-				r.bytesRead += sz
-				// Page size constraint
-				if r.bufSize > 0 && r.bufSize+sz > r.sd.p.pageSize {
-					keys = r.keysBuf
-					r.bufSize = sz
-					r.keysBuf = new([]Key)
-					*r.keysBuf = append(*r.keysBuf, k)
-					r.count++
-					return
-				}
-
-				r.bufSize += sz
-				*r.keysBuf = append(*r.keysBuf, k)
-				r.count++
-			case error:
-				err = resp.(error)
-				r.Done()
-				return
-			}
-		}
-	}
-
-	// No more item left to be read from buffer
-	if len(*r.keysBuf) == 0 {
-		done = true
-	}
-
-	keys = r.keysBuf
-	r.keysBuf = new([]Key)
-
-	return
-}
-
-func (r *scanStreamReader) ReadStat() (stat statsResponse, err error) {
-	resp := <-r.sd.respch
-	switch resp.(type) {
-	case statsResponse:
-		stat = resp.(statsResponse)
-	case error:
-		err = resp.(error)
-	}
-	return
-}
-
-func (r *scanStreamReader) ReadCount() (count countResponse, err error) {
-	resp := <-r.sd.respch
-	switch val := resp.(type) {
-	case countResponse:
-		return val, nil
-	case error:
-		return count, val
-	}
-	return count, err
-}
-
-func (r *scanStreamReader) Done() {
-	r.hasNext = false
-	if r.sd.stopch != nil {
-		close(r.sd.stopch)
-		r.sd.stopch = nil
-	}
-
-	// Drain any leftover responses when client requests for graceful
-	// termination
-	go func() {
-		for {
-			_, ok := <-r.sd.respch
-			if !ok {
-				break
-			}
-		}
-	}()
-}
-
-func (r *scanStreamReader) ReturnedRows() uint64 {
-	return uint64(r.count)
-}
-
-func (r *scanStreamReader) ReturnedBytes() uint64 {
-	return uint64(r.bytesRead)
-}
-
-//TODO
-//For any query request, check if the replica is available. And use replica in case
-//its more recent or serving less queries.
-
-//ScanCoordinator handles scanning for an incoming index query. It will figure out
-//the partitions/slices required to be scanned as per query parameters.
 
 type ScanCoordinator interface {
 }
@@ -286,19 +162,18 @@ type indexScanStats struct {
 }
 
 type scanCoordinator struct {
-	supvCmdch  MsgChannel //supervisor sends commands on this channel
-	supvMsgch  MsgChannel //channel to send any async message to supervisor
-	serv       *queryport.Server
-	logPrefix  string
-	reqCounter uint64
+	supvCmdch MsgChannel //supervisor sends commands on this channel
+	supvMsgch MsgChannel //channel to send any async message to supervisor
+	serv      *queryport.Server
+	logPrefix string
 
 	mu            sync.RWMutex
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 
-	config common.ConfigHolder
-
-	scanStatsMap map[common.IndexInstId]indexScanStats
+	reqCounter   *uint64
+	config       common.ConfigHolder
+	scanStatsMap map[common.IndexInstId]*indexScanStats
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -314,14 +189,15 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		supvCmdch:    supvCmdch,
 		supvMsgch:    supvMsgch,
 		logPrefix:    "ScanCoordinator",
-		scanStatsMap: make(map[common.IndexInstId]indexScanStats),
+		reqCounter:   new(uint64),
+		scanStatsMap: make(map[common.IndexInstId]*indexScanStats),
 	}
 
 	s.config.Store(config)
 
 	addr := net.JoinHostPort("", config["scanPort"].String())
 	queryportCfg := config.SectionConfig("queryport.", true)
-	s.serv, err = queryport.NewServer(addr, s.requestHandler, queryportCfg)
+	s.serv, err = queryport.NewServer(addr, s.serverCallback, queryportCfg)
 
 	if err != nil {
 		errMsg := &MsgError{err: Error{code: ERROR_SCAN_COORD_QUERYPORT_FAIL,
@@ -440,94 +316,175 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 
 }
 
-// Parse scan params from queryport request
-func (s *scanCoordinator) parseScanParams(
-	req interface{}) (p *scanParams, err error) {
+func (s *scanCoordinator) newRequest(protoReq interface{},
+	cancelCh <-chan interface{}) (r *ScanRequest, err error) {
 
-	p = new(scanParams)
-	p.partnKey = []byte("default")
+	var indexInst *common.IndexInst
+	r = new(ScanRequest)
+	r.ScanId = atomic.AddUint64(s.reqCounter, 1)
+	r.LogPrefix = fmt.Sprintf("SCAN##%d", r.ScanId)
 
-	fillRanges := func(low, high []byte, keys [][]byte) error {
-		var err error
-		var key Key
+	cfg := s.config.Load()
+	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
+	if timeout != 0 {
+		r.TimeoutCh = time.After(timeout)
+	}
 
-		// range
-		if p.low, err = NewKey(low); err != nil {
-			msg := fmt.Sprintf("Invalid low key %s (%s)", string(low), err.Error())
-			return errors.New(msg)
+	r.CancelCh = cancelCh
+
+	isNil := func(k []byte) bool {
+		if len(k) == 0 || (!r.isPrimary && string(k) == "[]") {
+			return true
+		}
+		return false
+	}
+
+	newKey := func(k []byte) (IndexKey, error) {
+		if len(k) == 0 {
+			return nil, fmt.Errorf("Key is null")
 		}
 
-		if p.high, err = NewKey(high); err != nil {
-			msg := fmt.Sprintf("Invalid high key %s (%s)", string(high), err.Error())
-			return errors.New(msg)
+		if r.isPrimary {
+			return NewPrimaryKey(k)
+		} else {
+			return NewSecondaryKey(k)
+		}
+	}
+
+	newLowKey := func(k []byte) (IndexKey, error) {
+		if isNil(k) {
+			return MinIndexKey, nil
+		}
+
+		return newKey(k)
+	}
+
+	newHighKey := func(k []byte) (IndexKey, error) {
+		if isNil(k) {
+			return MaxIndexKey, nil
+		}
+
+		return newKey(k)
+	}
+
+	fillRanges := func(low, high []byte, keys [][]byte) {
+		var key IndexKey
+		var localErr error
+		defer func() {
+			if err == nil {
+				err = localErr
+			}
+		}()
+
+		// range
+		r.LowBytes = low
+		r.HighBytes = high
+
+		if r.Low, localErr = newLowKey(low); localErr != nil {
+			localErr = fmt.Errorf("Invalid low key %s (%s)", string(low), localErr)
+			return
+		}
+
+		if r.High, localErr = newHighKey(high); localErr != nil {
+			localErr = fmt.Errorf("Invalid high key %s (%s)", string(high), localErr)
+			return
 		}
 
 		// point query for keys
 		for _, k := range keys {
-			if key, err = NewKey(k); err != nil {
-				msg := fmt.Sprintf("Invalid equal key %s (%s)", string(k), err.Error())
-				return errors.New(msg)
+			r.KeysBytes = append(r.KeysBytes, k)
+			if key, localErr = newKey(k); localErr != nil {
+				localErr = fmt.Errorf("Invalid equal key %s (%s)", string(k), localErr)
+				return
 			}
-			p.keys = append(p.keys, key)
+			r.Keys = append(r.Keys, key)
 		}
-
-		return nil
 	}
 
 	setConsistency := func(cons common.Consistency, vector *protobuf.TsConsistency) {
+		r.Consistency = &cons
 		checkVector :=
 			cons == common.QueryConsistency || cons == common.SessionConsistency
 		if checkVector && vector != nil {
 			cfg := s.config.Load()
-			p.ts = common.NewTsVbuuid("", cfg["numVbuckets"].Int())
+			r.Ts = common.NewTsVbuuid("", cfg["numVbuckets"].Int())
 			for i, vbno := range vector.Vbnos {
-				p.ts.Seqnos[vbno] = vector.Seqnos[i]
-				p.ts.Vbuuids[vbno] = vector.Vbuuids[i]
+				r.Ts.Seqnos[vbno] = vector.Seqnos[i]
+				r.Ts.Vbuuids[vbno] = vector.Vbuuids[i]
 			}
 		}
 	}
 
-	switch r := req.(type) {
+	setIndexParams := func() {
+		var localErr error
+		defer func() {
+			if err == nil {
+				err = localErr
+			}
+		}()
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		indexInst, localErr = s.findIndexInstance(r.DefnID)
+		if localErr == nil {
+			r.isPrimary = indexInst.Defn.IsPrimary
+			r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
+			r.IndexInstId = indexInst.InstId
+			if r.Ts != nil {
+				r.Ts.Bucket = r.Bucket
+			}
+			if indexInst.State != common.INDEX_STATE_ACTIVE {
+				localErr = ErrIndexNotReady
+			} else {
+				r.Stats = s.scanStatsMap[r.IndexInstId]
+			}
+		}
+	}
+
+	switch req := protoReq.(type) {
 	case *protobuf.StatisticsRequest:
-		p.scanType = queryStats
-		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
-		err = fillRanges(
-			r.GetSpan().GetRange().GetLow(),
-			r.GetSpan().GetRange().GetHigh(),
-			r.GetSpan().GetEquals())
-		p.defnID = r.GetDefnID()
+		r.DefnID = req.GetDefnID()
+		r.ScanType = StatsReq
+		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		setIndexParams()
+		fillRanges(
+			req.GetSpan().GetRange().GetLow(),
+			req.GetSpan().GetRange().GetHigh(),
+			req.GetSpan().GetEquals())
+
 	case *protobuf.CountRequest:
-		p.scanType = queryCount
-		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
-		p.defnID = r.GetDefnID()
-		err = fillRanges(
-			r.GetSpan().GetRange().GetLow(),
-			r.GetSpan().GetRange().GetHigh(),
-			r.GetSpan().GetEquals())
-		cons := common.Consistency(r.GetCons())
-		vector := r.GetVector()
+		r.DefnID = req.GetDefnID()
+		cons := common.Consistency(req.GetCons())
+		vector := req.GetVector()
 		setConsistency(cons, vector)
+		r.ScanType = CountReq
+		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		setIndexParams()
+		fillRanges(
+			req.GetSpan().GetRange().GetLow(),
+			req.GetSpan().GetRange().GetHigh(),
+			req.GetSpan().GetEquals())
+
 	case *protobuf.ScanRequest:
-		p.scanType = queryScan
-		p.incl = Inclusion(r.GetSpan().GetRange().GetInclusion())
-		err = fillRanges(
-			r.GetSpan().GetRange().GetLow(),
-			r.GetSpan().GetRange().GetHigh(),
-			r.GetSpan().GetEquals())
-		p.limit = r.GetLimit()
-		p.defnID = r.GetDefnID()
-		p.pageSize = r.GetPageSize()
-		cons := common.Consistency(r.GetCons())
-		vector := r.GetVector()
+		r.DefnID = req.GetDefnID()
+		cons := common.Consistency(req.GetCons())
+		vector := req.GetVector()
 		setConsistency(cons, vector)
+		r.ScanType = ScanReq
+		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		setIndexParams()
+		fillRanges(
+			req.GetSpan().GetRange().GetLow(),
+			req.GetSpan().GetRange().GetHigh(),
+			req.GetSpan().GetEquals())
+		r.Limit = req.GetLimit()
 	case *protobuf.ScanAllRequest:
-		p.scanType = queryScanAll
-		p.limit = r.GetLimit()
-		p.defnID = r.GetDefnID()
-		p.pageSize = r.GetPageSize()
-		cons := common.Consistency(r.GetCons())
-		vector := r.GetVector()
+		r.DefnID = req.GetDefnID()
+		cons := common.Consistency(req.GetCons())
+		vector := req.GetVector()
 		setConsistency(cons, vector)
+		r.ScanType = ScanAllReq
+		r.Limit = req.GetLimit()
+		setIndexParams()
 	default:
 		err = ErrUnsupportedRequest
 	}
@@ -535,299 +492,250 @@ func (s *scanCoordinator) parseScanParams(
 	return
 }
 
-// Handle query requests arriving through queryport
-func (s *scanCoordinator) requestHandler(
-	req interface{},
-	respch chan<- interface{},
-	quitch <-chan interface{}) {
-
-	var indexInst *common.IndexInst
-
-	p, err := s.parseScanParams(req)
-	if err == ErrUnsupportedRequest {
-		// TODO: Add error response for invalid queryport reqs
-		panic(err)
-	}
-
-	scanId := atomic.AddUint64(&s.reqCounter, 1)
-	cfg := s.config.Load()
-	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
-	startTime := time.Now()
-	sd := &scanDescriptor{
-		scanId:    scanId,
-		p:         p,
-		stopch:    make(StopChannel),
-		respch:    make(chan interface{}),
-		timeoutch: time.After(timeout),
-	}
-
-	if err == nil {
-		if indexInst, err = s.findIndexInstance(p.defnID); err == nil {
-			sd.ParseIndexInstance(indexInst)
-		}
-	}
-
-	if err == nil && indexInst.State != common.INDEX_STATE_ACTIVE {
-		err = ErrIndexNotReady
-	}
-
-	if err != nil {
-		logging.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
-		respch <- s.makeResponseMessage(sd, err)
-		close(respch)
-		return
-	}
-
-	// Update statistics
-	s.mu.RLock()
-	atomic.AddUint64(s.scanStatsMap[indexInst.InstId].Requests, 1)
-	s.mu.RUnlock()
-
-	logging.Infof("%v: SCAN_REQ %v", s.logPrefix, sd)
-	// Before starting the index scan, we have to find out the snapshot timestamp
-	// that can fullfil this query by considering atleast-timestamp provided in
-	// the query request. A timestamp request message is sent to the storage
-	// manager. The storage manager will respond immediately if a snapshot
-	// is available, otherwise it will wait until a matching snapshot is
-	// available and return the timestamp. Util then, the query processor
-	// will block wait.
-	// This mechanism can be used to implement RYOW.
-
+// Before starting the index scan, we have to find out the snapshot timestamp
+// that can fullfil this query by considering atleast-timestamp provided in
+// the query request. A timestamp request message is sent to the storage
+// manager. The storage manager will respond immediately if a snapshot
+// is available, otherwise it will wait until a matching snapshot is
+// available and return the timestamp. Util then, the query processor
+// will block wait.
+// This mechanism can be used to implement RYOW.
+func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexSnapshot, err error) {
 	snapResch := make(chan interface{}, 1)
 	snapReqMsg := &MsgIndexSnapRequest{
-		ts:        sd.p.ts,
+		ts:        r.Ts,
 		respch:    snapResch,
-		idxInstId: indexInst.InstId,
+		idxInstId: r.IndexInstId,
 	}
 
-	logging.Debugf("%v: SCAN_ID: %v requested timestamp: %v",
-		s.logPrefix, sd.scanId, ScanTStoString(sd.p.ts))
 	// Block wait until a ts is available for fullfilling the request
 	s.supvMsgch <- snapReqMsg
 	var msg interface{}
 	select {
 	case msg = <-snapResch:
-	case <-sd.timeoutch:
+	case <-r.TimeoutCh:
 		go readDeallocSnapshot(snapResch)
 		msg = ErrScanTimedOut
 	}
 
-	var snap IndexSnapshot
-	var ts *common.TsVbuuid
-
 	switch msg.(type) {
 	case IndexSnapshot:
 		snap = msg.(IndexSnapshot)
-		if snap != nil {
-			ts = snap.Timestamp()
-		}
 	case error:
-		err := msg.(error)
-		respch <- s.makeResponseMessage(sd, err)
-		logging.Infof("%v: SCAN_REQ: %v, Error (%v)", s.logPrefix, sd, err)
-		close(respch)
-		return
+		err = msg.(error)
 	}
 
-	waitDuration := time.Now().Sub(startTime)
-
-	logging.Infof("%v: SCAN_ID: %v scan timestamp: %v",
-		s.logPrefix, sd.scanId, ScanTStoString(ts))
-	// Index has no scannable snapshot available
-	if snap == nil {
-		close(respch)
-		return
-	}
-
-	go s.scanIndexSnapshot(sd, snap)
-
-	rdr := newResponseReader(sd)
-	switch sd.p.scanType {
-	case queryStats:
-		var msg interface{}
-		stat, err := rdr.ReadStat()
-		if err != nil {
-			msg = s.makeResponseMessage(sd, err)
-		} else {
-			msg = s.makeResponseMessage(sd, stat)
-		}
-
-		respch <- msg
-		close(respch)
-
-	case queryCount:
-		var msg interface{}
-		count, err := rdr.ReadCount()
-		if err != nil {
-			msg = s.makeResponseMessage(sd, err)
-		} else {
-			msg = s.makeResponseMessage(sd, count)
-		}
-
-		respch <- msg
-		close(respch)
-
-	case queryScan:
-		fallthrough
-	case queryScanAll:
-		var keys *[]Key
-		var msg interface{}
-		var done bool
-		var reqquit bool = false
-		var status string
-
-		// Read scan entries and send it to the client
-		// Closing respch indicates that we have no more messages to be sent
-	loop:
-		for {
-			keys, done, err = rdr.ReadKeyBatch()
-			// We have already finished reading from response stream
-			if done {
-				break loop
-			}
-
-			if err != nil {
-				if err == ErrScanTimedOut {
-					logging.Warnf("%v: SCAN_ID: %v scan request timed out in index db reads",
-						s.logPrefix, sd.scanId)
-				}
-				msg = s.makeResponseMessage(sd, err)
-			} else {
-				msg = s.makeResponseMessage(sd, keys)
-			}
-
-			// Send protobuf message response to queryport
-			select {
-			case _, ok := <-quitch:
-				if !ok {
-					reqquit = true
-					rdr.Done()
-					break loop
-				}
-			case respch <- msg:
-			}
-
-			if err != nil {
-				break loop
-			}
-		}
-		close(respch)
-		if reqquit {
-			status = "client requested quit"
-		} else if err != nil {
-			status = "error occured " + err.Error()
-		} else {
-			status = "successful"
-		}
-
-		s.mu.RLock()
-		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].Rows, rdr.ReturnedRows())
-		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].BytesRead, rdr.ReturnedBytes())
-		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].ScanTime, uint64(time.Now().Sub(startTime).Nanoseconds()))
-		atomic.AddUint64(s.scanStatsMap[indexInst.InstId].WaitTime, uint64(waitDuration.Nanoseconds()))
-		s.mu.RUnlock()
-		logging.Infof("%v: SCAN_RESULT scan id: %v rows: %v finished scan (%s)", s.logPrefix, sd.scanId, rdr.ReturnedRows(), status)
-	}
-}
-
-func ProtoIndexEntryFromKey(k Key, isPrimary bool) *protobuf.IndexEntry {
-	// TODO: Return error instead of panic
-	var tmp []interface{}
-	var err error
-	var secKeyBytes, pKeyBytes []byte
-
-	kbytes := k.Raw()
-	err = json.Unmarshal(kbytes, &tmp)
-	if err != nil {
-		panic("corruption detected " + string(kbytes) + " " + err.Error())
-	}
-
-	l := len(tmp)
-	if l == 0 || (isPrimary == false && l == 1) {
-		panic("corruption detected")
-	}
-
-	if isPrimary == true {
-		secKeyBytes = []byte{}
-	} else {
-		secKey := tmp[:l-1]
-		secKeyBytes, err = json.Marshal(secKey)
-		if err != nil {
-			panic("corruption detected " + err.Error())
-		}
-	}
-
-	// Primary key should be in raw bytes
-	pKeyBytes = []byte(tmp[l-1].(string))
-	entry := &protobuf.IndexEntry{
-		EntryKey: secKeyBytes, PrimaryKey: pKeyBytes,
-	}
-
-	return entry
-}
-
-// Create a queryport response message
-// Response message can be StreamResponse or StatisticsResponse
-func (s *scanCoordinator) makeResponseMessage(sd *scanDescriptor,
-	payload interface{}) (r interface{}) {
-
-	switch payload.(type) {
-	case error:
-		err := payload.(error)
-		protoErr := &protobuf.Error{Error: proto.String(err.Error())}
-		switch sd.p.scanType {
-		case queryStats:
-			r = &protobuf.StatisticsResponse{
-				Stats: &protobuf.IndexStatistics{
-					KeysCount:       proto.Uint64(0),
-					UniqueKeysCount: proto.Uint64(0),
-					KeyMin:          []byte{},
-					KeyMax:          []byte{},
-				},
-				Err: protoErr,
-			}
-		case queryCount:
-			r = &protobuf.CountResponse{
-				Count: proto.Int64(0), Err: protoErr,
-			}
-		case queryScan:
-			fallthrough
-		case queryScanAll:
-			r = &protobuf.ResponseStream{
-				Err: protoErr,
-			}
-		}
-	case *[]Key:
-		var entries []*protobuf.IndexEntry
-		keys := *payload.(*[]Key)
-		for _, k := range keys {
-			entry := ProtoIndexEntryFromKey(k, sd.isPrimary)
-			entries = append(entries, entry)
-		}
-		r = &protobuf.ResponseStream{IndexEntries: entries}
-	case statsResponse:
-		stats := payload.(statsResponse)
-		r = &protobuf.StatisticsResponse{
-			Stats: &protobuf.IndexStatistics{
-				KeysCount:       proto.Uint64(stats.count),
-				UniqueKeysCount: proto.Uint64(stats.unique),
-				KeyMin:          stats.min.Raw(),
-				KeyMax:          stats.max.Raw(),
-			},
-		}
-	case countResponse:
-		counts := payload.(countResponse)
-		r = &protobuf.CountResponse{Count: proto.Int64(counts.count)}
-	}
 	return
+}
+
+func (s *scanCoordinator) respondWithError(conn net.Conn, req *ScanRequest, err error) {
+	var res interface{}
+
+	buf := p.GetBlock()
+	defer p.PutBlock(buf)
+
+	protoErr := &protobuf.Error{Error: proto.String(err.Error())}
+
+	switch req.ScanType {
+	case StatsReq:
+		res = &protobuf.StatisticsResponse{
+			Err: protoErr,
+		}
+	case CountReq:
+		res = &protobuf.CountResponse{
+			Count: proto.Int64(0), Err: protoErr,
+		}
+	case ScanAllReq, ScanReq:
+		res = &protobuf.ResponseStream{
+			Err: protoErr,
+		}
+	}
+
+	err2 := protobuf.EncodeAndWrite(conn, *buf, res)
+	if err2 != nil {
+		err = fmt.Errorf("%s, %s", err, err2)
+		goto finish
+	}
+	err2 = protobuf.EncodeAndWrite(conn, *buf, &protobuf.StreamEndResponse{})
+	if err2 != nil {
+		err = fmt.Errorf("%s, %s", err, err2)
+	}
+
+finish:
+	logging.Errorf("%s RESPONSE Failed with error (%s)", req.LogPrefix, err)
+}
+
+func (s *scanCoordinator) handleError(prefix string, err error) {
+	if err != nil {
+		logging.Errorf("%s Error occured %s", prefix, err)
+	}
+}
+
+func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanRequest, err error) bool {
+	if err != nil {
+		logging.Infof("%s RESPONSE status:(error = %s)", req.LogPrefix, err)
+		s.handleError(req.LogPrefix, w.Error(err))
+		return true
+	}
+
+	return false
+}
+
+func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
+	cancelCh <-chan interface{}) {
+
+	req, err := s.newRequest(protoReq, cancelCh)
+	w := NewProtoWriter(req.ScanType, conn)
+	defer func() { s.handleError(req.LogPrefix, w.Done()) }()
+
+	logging.Infof("%s REQUEST %s", req.LogPrefix, req)
+	if req.Consistency != nil {
+		logging.Debugf("%s requested timestamp: %s => %s", req.LogPrefix,
+			strings.ToLower(req.Consistency.String()), ScanTStoString(req.Ts))
+	}
+
+	if s.tryRespondWithError(w, req, err) {
+		return
+	}
+
+	atomic.AddUint64(req.Stats.Requests, 1)
+
+	t0 := time.Now()
+	is, err := s.getRequestedIndexSnapshot(req)
+	if s.tryRespondWithError(w, req, err) {
+		return
+	}
+
+	defer DestroyIndexSnapshot(is)
+
+	logging.Infof("%s snapshot timestamp: %s", req.LogPrefix, ScanTStoString(is.Timestamp()))
+	s.processRequest(req, w, is, t0)
+}
+
+func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
+	is IndexSnapshot, t0 time.Time) {
+
+	switch req.ScanType {
+	case ScanReq, ScanAllReq:
+		s.handleScanRequest(req, w, is, t0)
+	case CountReq:
+		s.handleCountRequest(req, w, is, t0)
+	case StatsReq:
+		s.handleStatsRequest(req, w, is)
+	}
+}
+
+func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWriter,
+	is IndexSnapshot, t0 time.Time) {
+	waitTime := time.Now().Sub(t0)
+
+	scanPipeline := NewScanPipeline(req, w, is)
+	cancelCb := NewCancelCallback(req, func(e error) {
+		scanPipeline.Cancel(e)
+	})
+	cancelCb.Run()
+	defer cancelCb.Done()
+
+	err := scanPipeline.Execute()
+	scanTime := time.Now().Sub(t0)
+
+	atomic.AddUint64(req.Stats.Rows, scanPipeline.RowsRead())
+	atomic.AddUint64(req.Stats.BytesRead, scanPipeline.BytesRead())
+	atomic.AddUint64(req.Stats.ScanTime, uint64(scanTime.Nanoseconds()))
+	atomic.AddUint64(req.Stats.WaitTime, uint64(waitTime.Nanoseconds()))
+
+	var status string
+	if err != nil {
+		status = fmt.Sprintf("(error = %s)", err)
+	} else {
+		status = "ok"
+	}
+
+	logging.Infof("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s",
+		req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status)
+}
+
+func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWriter,
+	is IndexSnapshot, t0 time.Time) {
+	var rows uint64
+	var err error
+
+	stopch := make(StopChannel)
+	cancelCb := NewCancelCallback(req, func(e error) {
+		err = e
+		close(stopch)
+	})
+	cancelCb.Run()
+	defer cancelCb.Done()
+
+	for _, s := range GetSliceSnapshots(is) {
+		var r uint64
+		snap := s.Snapshot()
+		if len(req.Keys) > 0 {
+			r, err = snap.CountLookup(req.Keys, stopch)
+		} else if req.Low.Bytes() == nil && req.Low.Bytes() == nil {
+			r, err = snap.CountTotal(stopch)
+		} else {
+			r, err = snap.CountRange(req.Low, req.High, req.Incl, stopch)
+		}
+
+		if err != nil {
+			break
+		}
+
+		rows += r
+	}
+
+	if s.tryRespondWithError(w, req, err) {
+		return
+	}
+
+	logging.Infof("%s RESPONSE count:%d status:ok", req.LogPrefix, rows)
+	err = w.Count(rows)
+	s.handleError(req.LogPrefix, err)
+}
+
+func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWriter,
+	is IndexSnapshot) {
+	var rows uint64
+	var err error
+
+	stopch := make(StopChannel)
+	cancelCb := NewCancelCallback(req, func(e error) {
+		err = e
+		close(stopch)
+	})
+	cancelCb.Run()
+	defer cancelCb.Done()
+
+	for _, s := range GetSliceSnapshots(is) {
+		var r uint64
+		snap := s.Snapshot()
+		if req.Low.Bytes() == nil && req.Low.Bytes() == nil {
+			r, err = snap.StatCountTotal()
+		} else {
+			r, err = snap.CountRange(req.Low, req.High, req.Incl, stopch)
+		}
+
+		if err != nil {
+			break
+		}
+
+		rows += r
+	}
+
+	if s.tryRespondWithError(w, req, err) {
+		return
+	}
+
+	logging.Infof("%s RESPONSE status:ok", req.LogPrefix)
+	err = w.Stats(rows, 0, nil, nil)
+	s.handleError(req.LogPrefix, err)
 }
 
 // Find and return data structures for the specified index
 func (s *scanCoordinator) findIndexInstance(
 	defnID uint64) (*common.IndexInst, error) {
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	for _, inst := range s.indexInstMap {
 		if inst.Defn.DefnId == common.IndexDefnId(defnID) {
@@ -838,204 +746,6 @@ func (s *scanCoordinator) findIndexInstance(
 		}
 	}
 	return nil, ErrIndexNotFound
-}
-
-// Scan entries from the target partitions from index snapshot
-// Scan entries/errors are written back into sd.respch channel
-func (s *scanCoordinator) scanIndexSnapshot(sd *scanDescriptor, snap IndexSnapshot) {
-	// TODO: Multiple partition scanner needs a stream merger/stats reducer to
-	// work with multiple partitions and slices.
-	logging.Debugf("%v: scanIndexSnapshot: SCAN_ID: %v instance_id: %v",
-		s.logPrefix, sd.scanId, snap.IndexInstId())
-
-	var wg sync.WaitGroup
-	var workerStopChannels []StopChannel
-
-	for _, ps := range snap.Partitions() {
-		wg.Add(1)
-		stopch := make(StopChannel)
-		workerStopChannels = append(workerStopChannels, stopch)
-		go s.scanPartitionSnapshot(sd, ps, stopch, &wg)
-	}
-
-	s.monitorWorkers(&wg, sd.stopch, workerStopChannels, "scanPartitions")
-	// We have no more responses to be sent
-	close(sd.respch)
-}
-
-// Waits for the provided workers to finish and return
-// It also listens to the stop channel and if that gets closed, all workers
-// are stopped using workerStopChannels. Once all workers stop, the
-// method retuns.
-func (s *scanCoordinator) monitorWorkers(wg *sync.WaitGroup,
-	stopch StopChannel, workerStopChannels []StopChannel, debugStr string) {
-
-	allWorkersDoneCh := make(DoneChannel)
-
-	//wait for all workers to finish
-	go func() {
-		logging.Tracef("ScanCoordinator: %s: Waiting for workers to finish.", debugStr)
-		wg.Wait()
-		//send signal on channel to indicate all workers have finished
-		logging.Tracef("ScanCoordinator: %s: All workers finished", debugStr)
-		close(allWorkersDoneCh)
-	}()
-
-	//wait for upstream to signal stop or for all workers to signal done
-	select {
-	case <-stopch:
-		logging.Debugf("ScanCoordinator: %s: Stopping All Workers.", debugStr)
-		//stop all workers
-		for _, ch := range workerStopChannels {
-			close(ch)
-		}
-		//wait for all workers to stop
-		<-allWorkersDoneCh
-		logging.Debugf("ScanCoordinator: %s: Stopped All Workers.", debugStr)
-
-		//wait for notification of all workers finishing
-	case <-allWorkersDoneCh:
-
-	}
-
-}
-
-func (s *scanCoordinator) scanPartitionSnapshot(sd *scanDescriptor,
-	snap PartitionSnapshot, stopch StopChannel, wg *sync.WaitGroup) {
-
-	defer wg.Done()
-	logging.Debugf("%v: scanPartitionSnapshot: SCAN_ID: %v partition: %v",
-		s.logPrefix, sd.scanId, snap.PartitionId())
-
-	var workerWg sync.WaitGroup
-	var workerStopChannels []StopChannel
-
-	for _, sliceSnap := range snap.Slices() {
-		workerWg.Add(1)
-		workerStopCh := make(StopChannel)
-		workerStopChannels = append(workerStopChannels, workerStopCh)
-		go s.scanSliceSnapshot(sd, sliceSnap, workerStopCh, &workerWg)
-	}
-
-	s.monitorWorkers(&workerWg, stopch, workerStopChannels, "scanPartitionSnapshot")
-}
-
-func (s *scanCoordinator) scanSliceSnapshot(sd *scanDescriptor,
-	ss SliceSnapshot, stopch StopChannel, wg *sync.WaitGroup) {
-
-	defer wg.Done()
-	logging.Debugf("%v: scanLocalSlice: SCAN_ID: %v Slice : %v",
-		s.logPrefix, sd.scanId, ss.SliceId())
-
-	switch sd.p.scanType {
-	case queryStats:
-		s.queryStats(sd, ss.Snapshot(), stopch)
-	case queryCount:
-		s.queryCount(sd, ss.Snapshot(), stopch)
-	case queryScan:
-		s.queryScan(sd, ss.Snapshot(), stopch)
-	case queryScanAll:
-		s.queryScanAll(sd, ss.Snapshot(), stopch)
-
-	}
-
-	// Top level request handler may go away even before scan worker go-routine is died.
-	// Hence snapshot cleanup should be done at scan worker level
-	ss.Snapshot().Close()
-}
-
-func (s *scanCoordinator) queryStats(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
-	var totalRows uint64
-	var err error
-
-	if sd.p.low.IsNull() && sd.p.high.IsNull() && sd.p.incl == Both {
-		totalRows, err = snap.StatCountTotal()
-	} else {
-		totalRows, err = snap.CountRange(sd.p.low, sd.p.high, sd.p.incl, stopch)
-	}
-
-	// TODO: Implement min, max, unique (maybe)
-	if err != nil {
-		sd.respch <- err
-	} else {
-		min, _ := NewKey([]byte("min"))
-		max, _ := NewKey([]byte("max"))
-		sd.respch <- statsResponse{count: totalRows, min: min, max: max}
-	}
-}
-
-func (s *scanCoordinator) queryCount(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
-	p := sd.p
-	lowkey, highkey := p.low.Encoded(), p.high.Encoded()
-	if p.keys != nil && len(p.keys) > 0 { // handle lookup counts
-		allCounts := uint64(0)
-		for _, key := range p.keys {
-			count, err := snap.CountRange(key, key, Both, stopch)
-			if err != nil {
-				sd.respch <- err
-				break
-			}
-			allCounts += count
-		}
-		sd.respch <- countResponse{count: int64(allCounts)}
-
-	} else if lowkey != nil || highkey != nil { // handle range counts
-		count, err := snap.CountRange(p.low, p.high, p.incl, stopch)
-		if err != nil {
-			sd.respch <- err
-		}
-		sd.respch <- countResponse{count: int64(count)}
-
-	} else { // handle full total
-		count, err := snap.CountTotal(stopch)
-		if err != nil {
-			sd.respch <- err
-		} else {
-			sd.respch <- countResponse{count: int64(count)}
-		}
-	}
-}
-
-func (s *scanCoordinator) queryScan(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
-	// TODO: Decide whether a missing response should be provided point query for keys
-	if len(sd.p.keys) != 0 {
-		for _, k := range sd.p.keys {
-			ch, cherr, _ := snap.KeyRange(k, k, Both, stopch)
-			s.receiveKeys(sd, ch, cherr)
-		}
-	} else {
-		ch, cherr, _ := snap.KeyRange(sd.p.low, sd.p.high, sd.p.incl, stopch)
-		s.receiveKeys(sd, ch, cherr)
-	}
-
-}
-
-func (s *scanCoordinator) queryScanAll(sd *scanDescriptor, snap Snapshot, stopch StopChannel) {
-	ch, cherr := snap.KeySet(stopch)
-	s.receiveKeys(sd, ch, cherr)
-}
-
-// receiveKeys receives results/errors from snapshot reader and forwards it to
-// the caller till the result channel is closed by the snapshot reader
-func (s *scanCoordinator) receiveKeys(sd *scanDescriptor, chkey chan Key, cherr chan error) {
-	ok := true
-	var key Key
-	var err error
-
-	for ok {
-		select {
-		case key, ok = <-chkey:
-			if ok {
-				logging.Tracef("%v: SCAN_ID: %v Received key: %v)",
-					s.logPrefix, sd.scanId, string(key.Raw()))
-				sd.respch <- key
-			}
-		case err, _ = <-cherr:
-			if err != nil {
-				sd.respch <- err
-			}
-		}
-	}
 }
 
 func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
@@ -1056,7 +766,7 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 	// Add newly added indexes
 	for instId, _ := range s.indexInstMap {
 		if _, ok := s.scanStatsMap[instId]; !ok {
-			s.scanStatsMap[instId] = indexScanStats{
+			s.scanStatsMap[instId] = &indexScanStats{
 				Requests:  new(uint64),
 				Rows:      new(uint64),
 				BytesRead: new(uint64),

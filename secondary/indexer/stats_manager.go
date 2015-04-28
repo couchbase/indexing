@@ -21,11 +21,12 @@ import (
 
 type statsManager struct {
 	sync.Mutex
-	conf          common.Config
-	supvCmdch     MsgChannel
-	supvMsgch     MsgChannel
-	statsCache    map[string]interface{}
-	lastCacheTime time.Time
+	conf                  common.Config
+	supvCmdch             MsgChannel
+	supvMsgch             MsgChannel
+	lastCacheTime         time.Time
+	statsCache            map[string]interface{}
+	cacheUpdateInProgress bool
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
@@ -42,15 +43,25 @@ func NewStatsManager(supvCmdch MsgChannel,
 	return s, &MsgSuccess{}
 }
 
-func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
-	s.Lock()
-	defer s.Unlock()
-
+func (s *statsManager) tryUpdateStats(sync bool) {
+	waitCh := make(chan struct{})
 	statsMap := make(map[string]interface{})
-	if r.Method == "POST" || r.Method == "GET" {
-		timeout := time.Millisecond * time.Duration(s.conf["stats_cache_timeout"].Uint64())
-		// Refresh cache if cache ttl has expired
-		if time.Now().Sub(s.lastCacheTime) > timeout {
+	timeout := time.Millisecond * time.Duration(s.conf["stats_cache_timeout"].Uint64())
+
+	s.Lock()
+	cacheTime := s.lastCacheTime
+	shouldUpdate := !s.cacheUpdateInProgress
+
+	if s.statsCache == nil {
+		sync = true
+	}
+
+	// Refresh cache if cache ttl has expired
+	if shouldUpdate && time.Now().Sub(cacheTime) > timeout || sync {
+		s.cacheUpdateInProgress = true
+		s.Unlock()
+
+		go func() {
 			stats_list := []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS}
 			for _, t := range stats_list {
 				ch := make(chan map[string]interface{})
@@ -65,11 +76,32 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			s.Lock()
 			s.statsCache = statsMap
 			s.lastCacheTime = time.Now()
-		}
+			s.cacheUpdateInProgress = false
+			s.Unlock()
+			close(waitCh)
+		}()
 
+		if sync {
+			<-waitCh
+		}
+	} else {
+		s.Unlock()
+	}
+}
+
+func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
+	sync := false
+	if r.Method == "POST" || r.Method == "GET" {
+		if r.URL.Query().Get("async") == "false" {
+			sync = true
+		}
+		s.tryUpdateStats(sync)
+		s.Lock()
 		bytes, _ := json.Marshal(s.statsCache)
+		s.Unlock()
 		w.WriteHeader(200)
 		w.Write(bytes)
 	} else {

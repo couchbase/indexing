@@ -88,8 +88,12 @@ func main() {
 	epfactory := NewEndpointFactory(cluster, options.numVbuckets)
 	config.SetValue("projector.routerEndpointFactory", epfactory)
 
+	logging.Infof("%v\n", c.LogOs())
+	logging.Infof("%v\n", c.LogRuntime())
+
 	go c.ExitOnStdinClose()
 	projector.NewProjector(options.numVbuckets, config)
+
 	<-done
 }
 

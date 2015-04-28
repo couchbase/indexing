@@ -138,6 +138,7 @@ func BuildIndex(indexName, bucketName, server string, indexActiveTimeoutSeconds 
 
 	start := time.Now()
 	err := client.BuildIndexes([]uint64{defnID})
+	time.Sleep(2 * time.Second) // This wait is required for index state to get updated from error to initial, for example
 
 	if err == nil {
 		log.Printf("Build the deferred index %v. Waiting for the index to become active", indexName)

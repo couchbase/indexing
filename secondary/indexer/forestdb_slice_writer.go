@@ -115,13 +115,16 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 }
 
 //kv represents a key/value pair in storage format
-type kv struct {
-	k Key
-	v Value
+type indexItem struct {
+	key   []byte
+	docid []byte
 }
 
 //fdbSlice represents a forestdb slice
 type fdbSlice struct {
+	// IMPORTANT: following 3 fields should be 64 bit aligned.
+	get_bytes, insert_bytes, delete_bytes int64
+
 	path     string
 	currfile string
 	id       SliceId //slice id
@@ -159,9 +162,6 @@ type fdbSlice struct {
 	//captured by the stats library
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
-
-	// Statistics
-	get_bytes, insert_bytes, delete_bytes int64
 }
 
 func (fdb *fdbSlice) IncrRef() {
@@ -190,9 +190,9 @@ func (fdb *fdbSlice) DecrRef() {
 //Internally the request is buffered and executed async.
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
-func (fdb *fdbSlice) Insert(k Key, v Value) error {
+func (fdb *fdbSlice) Insert(secKey []byte, docid []byte) error {
 
-	fdb.cmdCh <- kv{k: k, v: v}
+	fdb.cmdCh <- &indexItem{key: secKey, docid: docid}
 	return fdb.fatalDbErr
 
 }
@@ -219,10 +219,10 @@ loop:
 		select {
 		case c := <-fdb.cmdCh:
 			switch c.(type) {
-			case kv:
-				cmd := c.(kv)
+			case *indexItem:
+				cmd := c.(*indexItem)
 				start := time.Now()
-				fdb.insert(cmd.k, cmd.v, workerId)
+				fdb.insert((*cmd).key, (*cmd).docid, workerId)
 				elapsed := time.Since(start)
 				fdb.totalFlushTime += elapsed
 			case []byte:
@@ -251,113 +251,120 @@ loop:
 }
 
 //insert does the actual insert in forestdb
-func (fdb *fdbSlice) insert(k Key, v Value, workerId int) {
+func (fdb *fdbSlice) insert(k []byte, docid []byte, workerId int) {
 
 	if fdb.isPrimary {
-		fdb.insertPrimaryIndex(k, v, workerId)
+		fdb.insertPrimaryIndex(docid, workerId)
 	} else {
-		fdb.insertSecIndex(k, v, workerId)
+		fdb.insertSecIndex(k, docid, workerId)
 	}
 
 }
 
-func (fdb *fdbSlice) insertPrimaryIndex(k Key, v Value, workerId int) {
+func (fdb *fdbSlice) insertPrimaryIndex(docid []byte, workerId int) {
 	var err error
 
-	logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s "+
-		"Value - %s", fdb.id, fdb.idxInstId, k, v)
+	logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", fdb.id, fdb.idxInstId, docid)
 
-	//primary index cannot have nil key
-	if k.Encoded() == nil {
-		common.CrashOnError(errors.New("Nil Primary Key"))
-	}
+	entry, err := NewPrimaryIndexEntry(docid)
+	common.CrashOnError(err)
 
 	//check if the docid exists in the main index
-	if _, err = fdb.main[workerId].GetKV(k.Encoded()); err == nil {
+	if _, err = fdb.main[workerId].GetKV(entry.Bytes()); err == nil {
 		//skip
 		logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Key %v Already Exists. "+
-			"Primary Index Update Skipped.", fdb.id, fdb.idxInstId, v.Docid())
+			"Primary Index Update Skipped.", fdb.id, fdb.idxInstId, string(docid))
 	} else if err != nil && err != forestdb.RESULT_KEY_NOT_FOUND {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error locating "+
 			"mainindex entry %v", fdb.id, fdb.idxInstId, err)
 	} else if err == forestdb.RESULT_KEY_NOT_FOUND {
 		//set in main index
-		if err = fdb.main[workerId].SetKV(k.Encoded(), nil); err != nil {
+		if err = fdb.main[workerId].SetKV(entry.Bytes(), nil); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
-				"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, k, v, err)
+				"Skipped Key %s. Error %v", fdb.id, fdb.idxInstId, string(docid), err)
 		}
-		atomic.AddInt64(&fdb.insert_bytes, int64(len(k.Encoded())))
+		atomic.AddInt64(&fdb.insert_bytes, int64(len(entry.Bytes())))
 	}
 }
 
-func (fdb *fdbSlice) insertSecIndex(k Key, v Value, workerId int) {
+func (fdb *fdbSlice) insertSecIndex(k []byte, docid []byte, workerId int) {
 	var err error
-	var oldkey Key
+	var olditm, itm []byte
+	var isDeletedFieldEntry bool
+
+	entry, err := NewSecondaryIndexEntry(k, docid)
+	switch err {
+	case nil:
+		itm = entry.Bytes()
+	case ErrSecKeyNil:
+		err = nil
+		isDeletedFieldEntry = true
+	}
+	common.CrashOnError(err)
 
 	logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s "+
-		"Value - %s", fdb.id, fdb.idxInstId, k, v)
+		"DocId - %s", fdb.id, fdb.idxInstId, k, docid)
 
 	//check if the docid exists in the back index
-	if oldkey, err = fdb.getBackIndexEntry(v.Docid(), workerId); err != nil {
+	if olditm, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error locating "+
 			"backindex entry %v", fdb.id, fdb.idxInstId, err)
 		return
-	} else if oldkey.Encoded() != nil {
+	} else if olditm != nil {
 		//If old-key from backindex matches with the new-key
 		//in mutation, skip it.
-		if bytes.Compare(oldkey.Encoded(), k.Encoded()) == 0 {
+		if bytes.Equal(olditm, itm) {
 			logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
-				"Doc Id %v. Key %v. Skipped.", fdb.id, fdb.idxInstId, v.Docid(), k.Encoded())
+				"Doc Id %v. Key %v. Skipped.", fdb.id, fdb.idxInstId, string(docid), itm)
 			return
 		}
 
 		//there is already an entry in main index for this docid
 		//delete from main index
-		if err = fdb.main[workerId].DeleteKV(oldkey.Encoded()); err != nil {
+		if err = fdb.main[workerId].DeleteKV(olditm); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
 				"entry from main index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
-		atomic.AddInt64(&fdb.delete_bytes, int64(len(oldkey.Encoded())))
+		atomic.AddInt64(&fdb.delete_bytes, int64(len(olditm)))
 
 		//delete from back index
-		if err = fdb.back[workerId].DeleteKV(v.Docid()); err != nil {
+		if err = fdb.back[workerId].DeleteKV(docid); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
 				"entry from back index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
-		atomic.AddInt64(&fdb.delete_bytes, int64(len(v.Docid())))
+		atomic.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 	}
 
-	//if the Key is nil, nothing needs to be done
-	if k.Encoded() == nil {
+	if isDeletedFieldEntry {
 		logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Received NIL Key for "+
-			"Doc Id %v. Skipped.", fdb.id, fdb.idxInstId, v.Docid())
+			"Doc Id %s. Skipped.", fdb.id, fdb.idxInstId, docid)
 		return
 	}
 
 	//set the back index entry <docid, encodedkey>
-	if err = fdb.back[workerId].SetKV([]byte(v.Docid()), k.Encoded()); err != nil {
+	if err = fdb.back[workerId].SetKV(docid, itm); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Back Index Set. "+
-			"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, v, k, err)
+			"Skipped Key %s. Value %v. Error %v", fdb.id, fdb.idxInstId, string(docid), itm, err)
 		return
 	}
-	atomic.AddInt64(&fdb.insert_bytes, int64(len(v.Docid())+len(k.Encoded())))
+	atomic.AddInt64(&fdb.insert_bytes, int64(len(docid)+len(itm)))
 
 	//set in main index
-	if err = fdb.main[workerId].SetKV(k.Encoded(), nil); err != nil {
+	if err = fdb.main[workerId].SetKV(itm, nil); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
-			"Skipped Key %s. Value %s. Error %v", fdb.id, fdb.idxInstId, k, v, err)
+			"Skipped Key %v. Error %v", fdb.id, fdb.idxInstId, itm, err)
 		return
 	}
-	atomic.AddInt64(&fdb.insert_bytes, int64(len(k.Encoded())))
+	atomic.AddInt64(&fdb.insert_bytes, int64(len(itm)))
 }
 
 //delete does the actual delete in forestdb
@@ -382,20 +389,18 @@ func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 	}
 
 	//docid -> key format
-	key, err := NewKey([]byte(`["` + string(docid) + `"]`))
-	if err != nil {
-		common.CrashOnError(err)
-	}
+	entry, err := NewPrimaryIndexEntry(docid)
+	common.CrashOnError(err)
 
 	//delete from main index
-	if err := fdb.main[workerId].DeleteKV(key.Encoded()); err != nil {
+	if err := fdb.main[workerId].DeleteKV(entry.Bytes()); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error deleting "+
-			"entry from main index for Doc %s. Key %v. Error %v", fdb.id, fdb.idxInstId,
-			docid, key, err)
+			"entry from main index for Doc %s. Error %v", fdb.id, fdb.idxInstId,
+			docid, err)
 		return
 	}
-	atomic.AddInt64(&fdb.delete_bytes, int64(len(key.Encoded())))
+	atomic.AddInt64(&fdb.delete_bytes, int64(len(entry.Bytes())))
 
 }
 
@@ -404,10 +409,10 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 	logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
 		fdb.id, fdb.idxInstId, docid)
 
-	var oldkey Key
+	var olditm []byte
 	var err error
 
-	if oldkey, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
+	if olditm, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error locating "+
 			"backindex entry for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
@@ -416,21 +421,21 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 
 	//if the oldkey is nil, nothing needs to be done. This is the case of deletes
 	//which happened before index was created.
-	if oldkey.Encoded() == nil {
+	if olditm == nil {
 		logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v Received NIL Key for "+
 			"Doc Id %v. Skipped.", fdb.id, fdb.idxInstId, docid)
 		return
 	}
 
 	//delete from main index
-	if err = fdb.main[workerId].DeleteKV(oldkey.Encoded()); err != nil {
+	if err = fdb.main[workerId].DeleteKV(olditm); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error deleting "+
 			"entry from main index for Doc %s. Key %v. Error %v", fdb.id, fdb.idxInstId,
-			docid, oldkey, err)
+			docid, olditm, err)
 		return
 	}
-	atomic.AddInt64(&fdb.delete_bytes, int64(len(oldkey.Encoded())))
+	atomic.AddInt64(&fdb.delete_bytes, int64(len(olditm)))
 
 	//delete from the back index
 	if err = fdb.back[workerId].DeleteKV(docid); err != nil {
@@ -445,27 +450,24 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 
 //getBackIndexEntry returns an existing back index entry
 //given the docid
-func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) (Key, error) {
+func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) ([]byte, error) {
 
 	logging.Tracef("ForestDBSlice::getBackIndexEntry \n\tSliceId %v IndexInstId %v Get BackIndex Key - %s",
 		fdb.id, fdb.idxInstId, docid)
 
-	var k Key
-	var kbyte []byte
+	var kbytes []byte
 	var err error
 
-	kbyte, err = fdb.back[workerId].GetKV([]byte(docid))
-	atomic.AddInt64(&fdb.get_bytes, int64(len(kbyte)))
+	kbytes, err = fdb.back[workerId].GetKV([]byte(docid))
+	atomic.AddInt64(&fdb.get_bytes, int64(len(kbytes)))
 
 	//forestdb reports get in a non-existent key as an
 	//error, skip that
 	if err != nil && err != forestdb.RESULT_KEY_NOT_FOUND {
-		return k, err
+		return nil, err
 	}
 
-	k, err = NewKeyFromEncodedBytes(kbyte)
-
-	return k, err
+	return kbytes, nil
 }
 
 //checkFatalDbError checks if the error returned from DB

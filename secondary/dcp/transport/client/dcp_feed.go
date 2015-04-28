@@ -153,6 +153,10 @@ loop:
 		case <-inactivityTick:
 			now := time.Now().UnixNano()
 			for _, stream := range feed.vbstreams {
+				strm_seqno := stream.Seqno
+				if stream.Snapend == 0 || strm_seqno == stream.Snapend {
+					continue
+				}
 				delta := (now - stream.LastSeen) / 1000000000 // in Seconds
 				if stream.LastSeen != 0 && delta > 10 /*seconds*/ {
 					fmsg := "%v ##%x event for vb %v lastSeen %vSec before\n"
@@ -262,6 +266,7 @@ func (feed *DcpFeed) handlePacket(
 	case transport.DCP_MUTATION, transport.DCP_DELETION,
 		transport.DCP_EXPIRATION:
 		event = newDcpEvent(pkt, stream)
+		stream.Seqno = event.Seqno
 		feed.stats.TotalMutation++
 		sendAck = true
 
@@ -277,6 +282,8 @@ func (feed *DcpFeed) handlePacket(
 		event.SnapstartSeq = binary.BigEndian.Uint64(pkt.Extras[0:8])
 		event.SnapendSeq = binary.BigEndian.Uint64(pkt.Extras[8:16])
 		event.SnapshotType = binary.BigEndian.Uint32(pkt.Extras[16:20])
+		stream.Snapstart = event.SnapstartSeq
+		stream.Snapend = event.SnapendSeq
 		feed.stats.TotalSnapShot++
 		sendAck = true
 		fmsg := "%v ##%x DCP_SNAPSHOT for vb %d\n"
@@ -597,7 +604,7 @@ func (feed *DcpFeed) sendBufferAck(sendAck bool, bytes uint32) {
 				logging.Errorf("%v NOOP.Transmit(): %v", prefix, err)
 
 			} else {
-				logging.Infof("%v buffer-ack %v\n", prefix, totalBytes)
+				logging.Tracef("%v buffer-ack %v\n", prefix, totalBytes)
 			}
 		}
 		feed.toAckBytes += bytes
@@ -622,9 +629,12 @@ type DcpStream struct {
 	CloseOpaque uint16
 	Vbucket     uint16 // Vbucket id
 	Vbuuid      uint64 // vbucket uuid
+	Seqno       uint64
 	StartSeq    uint64 // start sequence number
 	EndSeq      uint64 // end sequence number
-	LastSeen    int64  // UnixNano value of last seen
+	Snapstart   uint64
+	Snapend     uint64
+	LastSeen    int64 // UnixNano value of last seen
 	connected   bool
 }
 

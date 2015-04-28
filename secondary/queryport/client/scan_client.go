@@ -23,8 +23,8 @@ import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbase/indexing/secondary/transport"
 import "code.google.com/p/goprotobuf/proto"
 
-// gsiScanClient for scan operations.
-type gsiScanClient struct {
+// GsiScanClient for scan operations.
+type GsiScanClient struct {
 	queryport string
 	pool      *connectionPool
 	// config params
@@ -38,9 +38,9 @@ type gsiScanClient struct {
 	logPrefix          string
 }
 
-func newGsiScanClient(queryport string, config common.Config) *gsiScanClient {
+func NewGsiScanClient(queryport string, config common.Config) *GsiScanClient {
 	t := time.Duration(config["connPoolAvailWaitTimeout"].Int())
-	c := &gsiScanClient{
+	c := &GsiScanClient{
 		queryport:          queryport,
 		maxPayload:         config["maxPayload"].Int(),
 		readDeadline:       time.Duration(config["readDeadline"].Int()),
@@ -59,7 +59,7 @@ func newGsiScanClient(queryport string, config common.Config) *gsiScanClient {
 }
 
 // LookupStatistics for a single secondary-key.
-func (c *gsiScanClient) LookupStatistics(
+func (c *GsiScanClient) LookupStatistics(
 	defnID uint64, value common.SecondaryKey) (common.IndexStatistics, error) {
 
 	// serialize lookup value.
@@ -84,7 +84,7 @@ func (c *gsiScanClient) LookupStatistics(
 }
 
 // RangeStatistics for index range.
-func (c *gsiScanClient) RangeStatistics(
+func (c *GsiScanClient) RangeStatistics(
 	defnID uint64, low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
@@ -119,7 +119,7 @@ func (c *gsiScanClient) RangeStatistics(
 }
 
 // Lookup scan index between low and high.
-func (c *gsiScanClient) Lookup(
+func (c *GsiScanClient) Lookup(
 	defnID uint64, values []common.SecondaryKey,
 	distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
@@ -148,7 +148,6 @@ func (c *gsiScanClient) Lookup(
 		DefnID:   proto.Uint64(defnID),
 		Span:     &protobuf.Span{Equals: equals},
 		Distinct: proto.Bool(distinct),
-		PageSize: proto.Int64(1),
 		Limit:    proto.Int64(limit),
 		Cons:     proto.Uint32(uint32(cons)),
 	}
@@ -178,7 +177,7 @@ func (c *gsiScanClient) Lookup(
 }
 
 // Range scan index between low and high.
-func (c *gsiScanClient) Range(
+func (c *GsiScanClient) Range(
 	defnID uint64, low, high common.SecondaryKey, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) error {
@@ -210,7 +209,6 @@ func (c *gsiScanClient) Range(
 			},
 		},
 		Distinct: proto.Bool(distinct),
-		PageSize: proto.Int64(1),
 		Limit:    proto.Int64(limit),
 		Cons:     proto.Uint32(uint32(cons)),
 	}
@@ -239,7 +237,7 @@ func (c *gsiScanClient) Range(
 }
 
 // ScanAll for full table scan.
-func (c *gsiScanClient) ScanAll(
+func (c *GsiScanClient) ScanAll(
 	defnID uint64, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) error {
@@ -254,10 +252,9 @@ func (c *gsiScanClient) ScanAll(
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanAllRequest{
-		DefnID:   proto.Uint64(defnID),
-		PageSize: proto.Int64(1),
-		Limit:    proto.Int64(limit),
-		Cons:     proto.Uint32(uint32(cons)),
+		DefnID: proto.Uint64(defnID),
+		Limit:  proto.Int64(limit),
+		Cons:   proto.Uint32(uint32(cons)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -283,7 +280,7 @@ func (c *gsiScanClient) ScanAll(
 }
 
 // CountLookup to count number entries for given set of keys.
-func (c *gsiScanClient) CountLookup(
+func (c *GsiScanClient) CountLookup(
 	defnID uint64, values []common.SecondaryKey,
 	cons common.Consistency, vector *TsConsistency) (int64, error) {
 
@@ -319,7 +316,7 @@ func (c *gsiScanClient) CountLookup(
 }
 
 // CountRange to count number entries in the given range.
-func (c *gsiScanClient) CountRange(
+func (c *GsiScanClient) CountRange(
 	defnID uint64, low, high common.SecondaryKey, inclusion Inclusion,
 	cons common.Consistency, vector *TsConsistency) (int64, error) {
 
@@ -359,11 +356,11 @@ func (c *gsiScanClient) CountRange(
 	return countResp.GetCount(), nil
 }
 
-func (c *gsiScanClient) Close() error {
+func (c *GsiScanClient) Close() error {
 	return c.pool.Close()
 }
 
-func (c *gsiScanClient) doRequestResponse(req interface{}) (interface{}, error) {
+func (c *GsiScanClient) doRequestResponse(req interface{}) (interface{}, error) {
 	connectn, err := c.pool.Get()
 	if err != nil {
 		return nil, err
@@ -399,14 +396,14 @@ func (c *gsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 		logging.Errorf(fmsg, c.logPrefix, req, err)
 		healthy = false
 		return nil, err
-	} else if _, ok := endResp.(*protobuf.StreamEndResponse); !ok {
+	} else if endResp != nil {
 		healthy = false
 		return nil, ErrorProtocol
 	}
 	return resp, nil
 }
 
-func (c *gsiScanClient) sendRequest(
+func (c *GsiScanClient) sendRequest(
 	conn net.Conn, pkt *transport.TransportPacket, req interface{}) (err error) {
 
 	timeoutMs := c.writeDeadline * time.Millisecond
@@ -414,13 +411,12 @@ func (c *gsiScanClient) sendRequest(
 	return pkt.Send(conn, req)
 }
 
-func (c *gsiScanClient) streamResponse(
+func (c *GsiScanClient) streamResponse(
 	conn net.Conn,
 	pkt *transport.TransportPacket,
 	callb ResponseHandler) (cont bool, healthy bool, err error) {
 
 	var resp interface{}
-	var endResp *protobuf.StreamEndResponse
 	var finish bool
 
 	laddr := conn.LocalAddr()
@@ -439,13 +435,14 @@ func (c *gsiScanClient) streamResponse(
 			logging.Errorf(fmsg, c.logPrefix, laddr, err)
 		}
 
-	} else if endResp, finish = resp.(*protobuf.StreamEndResponse); finish {
+	} else if resp == nil {
+		finish = true
 		fmsg := "%v connection %q received StreamEndResponse"
 		logging.Tracef(fmsg, c.logPrefix, laddr)
-		callb(endResp) // callback most likely return true
+		callb(&protobuf.StreamEndResponse{}) // callback most likely return true
 		cont, healthy = false, true
 
-	} else {
+	} else { // End of stream marker
 		streamResp := resp.(*protobuf.ResponseStream)
 		cont = callb(streamResp)
 		healthy = true
@@ -457,7 +454,7 @@ func (c *gsiScanClient) streamResponse(
 	return
 }
 
-func (c *gsiScanClient) closeStream(
+func (c *GsiScanClient) closeStream(
 	conn net.Conn, pkt *transport.TransportPacket) (err error, healthy bool) {
 
 	var resp interface{}
@@ -489,7 +486,7 @@ func (c *gsiScanClient) closeStream(
 			logging.Errorf(fmsg, c.logPrefix, laddr, err)
 			return
 
-		} else if _, ok := resp.(*protobuf.StreamEndResponse); ok {
+		} else if resp == nil { // End of stream marker
 			return
 		}
 	}

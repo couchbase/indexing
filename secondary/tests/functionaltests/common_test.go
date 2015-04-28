@@ -77,10 +77,6 @@ func init() {
 	// Populate the bucket now
 	log.Printf("Populating the default bucket")
 	kvutility.SetKeyValues(docs, "default", "", clusterconfig.KVAddress)
-	/*docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
-	  scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, true, defaultlimit, c.SessionConsistency, nil)
-	  tc.HandleError(err, "Error in scan")
-	  tv.Validate(docScanResults, scanResults)*/
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {

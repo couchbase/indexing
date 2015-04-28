@@ -386,25 +386,6 @@ func (f *flusher) flush(mut *MutationKeys, streamId common.StreamId) {
 }
 
 func (f *flusher) processUpsert(mut *MutationKeys, i int) {
-
-	var key Key
-	var value Value
-	var err error
-
-	if key, err = NewKey(mut.keys[i]); err != nil {
-
-		logging.Errorf("Flusher::processUpsert Error Generating Key"+
-			"From Mutation: %v. Skipped. Error: %v", mut.keys[i], err)
-		return
-	}
-
-	if value, err = NewValue(mut.docid); err != nil {
-
-		logging.Errorf("Flusher::processUpsert Error Generating Value"+
-			"From Mutation: %v. Skipped. Error: %v", mut.keys[i], err)
-		return
-	}
-
 	idxInst, _ := f.indexInstMap[mut.uuids[i]]
 
 	partnId := idxInst.Pc.GetPartitionIdByPartitionKey(mut.partnkeys[i])
@@ -419,9 +400,9 @@ func (f *flusher) processUpsert(mut *MutationKeys, i int) {
 
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.keys[i]))
-		if err := slice.Insert(key, value); err != nil {
+		if err := slice.Insert(mut.keys[i], mut.docid); err != nil {
 			logging.Errorf("Flusher::processUpsert Error Inserting Key: %v "+
-				"Value: %v in Slice: %v. Error: %v", key, value, slice.Id(), err)
+				"docid: %s in Slice: %v. Error: %v", mut.keys[i], mut.docid, slice.Id(), err)
 		}
 	} else {
 		logging.Errorf("Flusher::processUpsert Partition Instance not found "+
