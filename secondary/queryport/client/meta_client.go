@@ -513,13 +513,12 @@ func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, error) {
 		status, err := cinfo.GetNodeStatus(node)
 		common.CrashOnError(err)
 		logging.Warnf("node %v status: %q", node, status)
-		if status == "healthy" || status == "active" || status == "warmup " {
+		if status == "healthy" || status == "active" || status == "warmup" {
 			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
 			if err != nil {
 				return nil, err
 			}
 			iAdminports = append(iAdminports, adminport)
-
 		}
 	}
 	return iAdminports, nil
