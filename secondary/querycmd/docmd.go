@@ -197,8 +197,9 @@ func HandleCommand(
 		if err != nil {
 			return err
 		}
-		for adminport, queryport := range nodes {
-			fmt.Fprintf(w, "    {%v, %v}\n", adminport, queryport)
+		for _, n := range nodes {
+			fmsg := "    {%v, %v, %q}\n"
+			fmt.Fprintf(w, fmsg, n.Adminport, n.Queryport, n.Status)
 		}
 
 	case "list":
@@ -356,7 +357,8 @@ func HandleCommand(
 			return err
 		}
 		var adminurl string
-		for adminurl, _ = range nodes {
+		for _, indexer := range nodes {
+			adminurl = indexer.Adminport
 			break
 		}
 		host, sport, _ := net.SplitHostPort(adminurl)

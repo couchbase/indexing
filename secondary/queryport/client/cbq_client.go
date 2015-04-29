@@ -121,8 +121,13 @@ func (b *cbqClient) Refresh() ([]*mclient.IndexMetadata, error) {
 }
 
 // Nodes implement BridgeAccessor{} interface.
-func (b *cbqClient) Nodes() (map[string]string, error) {
-	return map[string]string{b.adminport: b.queryport}, nil
+func (b *cbqClient) Nodes() ([]*IndexerService, error) {
+	node := &IndexerService{
+		Adminport: b.adminport,
+		Queryport: b.queryport,
+		Status:    "online",
+	}
+	return []*IndexerService{node}, nil
 }
 
 // CreateIndex implement BridgeAccessor{} interface.

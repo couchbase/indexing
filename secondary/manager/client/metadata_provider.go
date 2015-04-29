@@ -89,8 +89,8 @@ type event struct {
 }
 
 type IndexerStatus struct {
-	adminport string
-	connected bool
+	Adminport string
+	Connected bool
 }
 
 type watcherCallback func(string, c.IndexerId, c.IndexerId)
@@ -201,9 +201,9 @@ func (o *MetadataProvider) CheckIndexerStatus() []IndexerStatus {
 	status := make([]IndexerStatus, len(o.watchers))
 	i := 0
 	for _, watcher := range o.watchers {
-		status[i].adminport = watcher.leaderAddr
-		status[i].connected = watcher.isAlive()
-		logging.Infof("MetadataProvider.CheckIndexerStatus(): adminport=%v connected=%v", status[i].adminport, status[i].connected)
+		status[i].Adminport = watcher.leaderAddr
+		status[i].Connected = watcher.isAlive()
+		logging.Infof("MetadataProvider.CheckIndexerStatus(): adminport=%v connected=%v", status[i].Adminport, status[i].Connected)
 		i++
 	}
 

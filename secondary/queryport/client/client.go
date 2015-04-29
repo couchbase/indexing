@@ -97,7 +97,7 @@ type BridgeAccessor interface {
 
 	// Nodes shall return a map of adminport and queryport for indexer
 	// nodes.
-	Nodes() (map[string]string, error)
+	Nodes() ([]*IndexerService, error)
 
 	// CreateIndex and return defnID of created index.
 	// name
@@ -207,6 +207,14 @@ type GsiAccessor interface {
 
 var useMetadataProvider = true
 
+// IndexerService returns the status of the indexer node
+// as observed by the GsiClient.
+type IndexerService struct {
+	Adminport string
+	Queryport string
+	Status    string // one of "initial", "online", "recovery"
+}
+
 // GsiClient for accessing GSI cluster. The client shall
 // use `adminport` for meta-data operation and `queryport`
 // for index-scan related operations.
@@ -260,7 +268,7 @@ func (c *GsiClient) Refresh() ([]*mclient.IndexMetadata, error) {
 }
 
 // Nodes implements BridgeAccessor{} interface.
-func (c *GsiClient) Nodes() (map[string]string, error) {
+func (c *GsiClient) Nodes() ([]*IndexerService, error) {
 	if c.bridge == nil {
 		return nil, ErrorClientUninitialized
 	}
