@@ -116,6 +116,7 @@ stop_cluster
 # Verify results
 > /tmp/fail.log
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/ci/
+grep 'make:\s\*\*\*\s\[test-2i-integrations-tests\]\s' $WORKSPACE/test.log >> /tmp/fail.log
 grep '\sfail\s*$' $WORKSPACE/test.log >> /tmp/fail.log
 grep -- '--- FAIL:' $WORKSPACE/test.log >> /tmp/fail.log
 grep '^\s*FAIL\s*github.com/couchbase/indexing' $WORKSPACE/test.log >> /tmp/fail.log
