@@ -427,6 +427,12 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
+func (m *IndexManager) DeleteIndexForBucket(bucket string) error {
+
+	logging.Debugf("IndexManager.DeleteIndexForBucket(): making request for deleting index for bucket")
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_DELETE_BUCKET, bucket, []byte(""))
+}
+
 //
 // Get Topology from dictionary
 //
