@@ -119,6 +119,9 @@ func (k *kvSender) handleSupvervisorCommands(cmd Message) {
 	case KV_SENDER_RESTART_VBUCKETS:
 		k.handleRestartVbuckets(cmd)
 
+	case CONFIG_SETTINGS_UPDATE:
+		k.handleConfigUpdate(cmd)
+
 	default:
 		logging.Errorf("KVSender::handleSupvervisorCommands "+
 			"Received Unknown Command %v", cmd)
@@ -972,6 +975,13 @@ func (k *kvSender) getProjAddrsForVbuckets(bucket string, vbnos []uint16) ([]str
 
 	return addrList, nil
 
+}
+
+func (k *kvSender) handleConfigUpdate(cmd Message) {
+	cfgUpdate := cmd.(*MsgConfigUpdate)
+	k.config = cfgUpdate.GetConfig()
+
+	k.supvCmdch <- &MsgSuccess{}
 }
 
 // convert IndexInst to protobuf format

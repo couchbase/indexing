@@ -70,11 +70,12 @@ type Flusher interface {
 type flusher struct {
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
+	config        common.Config
 }
 
 //NewFlusher returns new instance of flusher
-func NewFlusher() *flusher {
-	return &flusher{}
+func NewFlusher(config common.Config) *flusher {
+	return &flusher{config: config}
 }
 
 //PersistUptoTS will flush the mutation queue upto the
@@ -92,8 +93,10 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel {
 
-	logging.Infof("Flusher::PersistUptoTS %v %v Timestamp: %v",
-		streamId, bucket, ts)
+	if logging.Level(f.config["settings.log_level"].String()) >= logging.Debug {
+		logging.Debugf("Flusher::PersistUptoTS %v %v Timestamp: %v",
+			streamId, bucket, ts)
+	}
 
 	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
