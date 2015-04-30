@@ -191,6 +191,9 @@ func (r *mutationMgr) panicHandler() {
 			err = errors.New("Unknown panic")
 		}
 
+		logging.Fatalf("MutationManager Panic Err %v", err)
+		logging.Fatalf("%s", logging.StackTrace())
+
 		//shutdown the mutation manager
 		select {
 		case <-r.shutdownCh:
@@ -257,11 +260,8 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 		m.handleAbortPersist(cmd)
 
 	default:
-		logging.Errorf("MutationMgr::handleSupervisorCommands \n\tReceived Unknown Command %v", cmd)
-		m.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_MUT_MGR_UNKNOWN_COMMAND,
-				severity: NORMAL,
-				category: MUTATION_MANAGER}}
+		logging.Errorf("MutationMgr::handleSupervisorCommands Received Unknown Command %v", cmd)
+		common.CrashOnError(errors.New("Unknown Command On Supervisor Channel"))
 	}
 }
 
@@ -274,16 +274,16 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		STREAM_READER_STREAM_BEGIN,
 		STREAM_READER_STREAM_END,
 		STREAM_READER_ERROR,
-		STREAM_READER_SYNC,
-		STREAM_READER_SNAPSHOT_MARKER,
 		STREAM_READER_CONN_ERROR,
 		STREAM_READER_HWT:
 		//send message to supervisor to take decision
-		logging.Tracef("MutationMgr::handleWorkerMessage \n\tReceived %v from worker", cmd)
+		logging.Tracef("MutationMgr::handleWorkerMessage Received %v from worker", cmd)
 		m.supvRespch <- cmd
 
 	default:
-		logging.Errorf("MutationMgr::handleWorkerMessage \n\tReceived unhandled message from worker %v", cmd)
+		logging.Errorf("MutationMgr::handleWorkerMessage Received unhandled "+
+			"message from worker %v", cmd)
+		common.CrashOnError(errors.New("Unknown Message On Worker Channel"))
 	}
 
 }

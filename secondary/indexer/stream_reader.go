@@ -30,6 +30,9 @@ var (
 	mutationCount uint64
 	skipMutation  bool
 	evalFilter    bool
+	snapType      uint32
+	snapStart     uint64
+	snapEnd       uint64
 )
 
 const DEFAULT_SYNC_TIMEOUT = 40
@@ -298,20 +301,14 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 
 		case common.Snapshot:
 			//get snapshot information from message
-			typ, start, end := kv.Snapshot()
+			snapType, snapStart, snapEnd = kv.Snapshot()
 
-			snapshot := &MutationSnapshot{
-				snapType: typ,
-				start:    start,
-				end:      end}
+			// Snapshot marker can be processed only if
+			// they belong to ondisk type or inmemory type.
+			if snapType&(0x1|0x2) != 0 {
+				r.updateSnapInFilter(meta, snapStart, snapEnd)
+			}
 
-			//send message to supervisor to take decision
-			msg := &MsgStream{mType: STREAM_READER_SNAPSHOT_MARKER,
-				streamId: r.streamId,
-				meta:     meta.Clone(),
-				snapshot: snapshot}
-
-			r.supvRespch <- msg
 		}
 	}
 
@@ -415,7 +412,7 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		return &MsgSuccess{}
 
 	default:
-		logging.Errorf("MutationStreamReader::handleSupervisorCommands \n\tReceived Unknown Command %v", cmd)
+		logging.Errorf("MutationStreamReader::handleSupervisorCommands Received Unknown Command %v", cmd)
 		return &MsgError{
 			err: Error{code: ERROR_STREAM_READER_UNKNOWN_COMMAND,
 				severity: NORMAL,
@@ -429,7 +426,7 @@ func (r *mutationStreamReader) panicHandler() {
 
 	//panic recovery
 	if rc := recover(); rc != nil {
-		logging.Fatalf("MutationStreamReader::panicHandler \n\tReceived Panic for Stream %v", r.streamId)
+		logging.Fatalf("MutationStreamReader::panicHandler Received Panic for Stream %v", r.streamId)
 		var err error
 		switch x := rc.(type) {
 		case string:
@@ -540,16 +537,39 @@ func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool 
 			r.bucketSyncDue[meta.bucket] = true
 			return true
 		} else {
-			logging.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Skipped "+
+			logging.Errorf("MutationStreamReader::checkAndSetBucketFilter Skipped "+
 				"Mutation %v for Bucket %v Stream %v. Current Filter %v", meta,
 				meta.bucket, r.streamId, filter)
 			return false
 		}
 	} else {
-		logging.Errorf("MutationStreamReader::checkAndSetBucketFilter \n\t Missing"+
+		logging.Errorf("MutationStreamReader::checkAndSetBucketFilter Missing"+
 			"bucket %v in Filter for Stream %v", meta.bucket, r.streamId)
 		return false
 	}
+}
+
+//updates snapshot information in bucket filter
+func (r *mutationStreamReader) updateSnapInFilter(meta *MutationMeta,
+	snapStart uint64, snapEnd uint64) {
+
+	r.syncLock.Lock()
+	defer r.syncLock.Unlock()
+
+	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
+		if snapEnd > filter.Snapshots[meta.vbucket][1] {
+			filter.Snapshots[meta.vbucket][0] = snapStart
+			filter.Snapshots[meta.vbucket][1] = snapEnd
+		} else {
+			logging.Errorf("MutationStreamReader::updateSnapInFilter Skipped "+
+				"Snapshot %v-%v for vb %v %v %v. Current Filter %v", snapStart,
+				snapEnd, meta.vbucket, meta.bucket, r.streamId, filter)
+		}
+	} else {
+		logging.Errorf("MutationStreamReader::updateSnapInFilter Missing"+
+			"bucket %v in Filter for Stream %v", meta.bucket, r.streamId)
+	}
+
 }
 
 func (r *mutationStreamReader) syncWorker() {
