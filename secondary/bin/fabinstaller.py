@@ -283,7 +283,7 @@ GOMAXPROCS=%s go run ./loadgen.go -auth %s:%s -bagdir %s -count %s -par %s \
 
 @task
 @parallel
-def loadgen(count=100, par=1, buckets="default", prods="users.prod") :
+def loadgen(count=100, par=1, procs=4, buckets="default", prods="users.prod") :
     """genetate load over couchbase buckets"""
     repopath = os.sep.join(["src", "github.com", "couchbase", "indexing"])
     path_loadgen = os.sep.join(["secondary", "tools", "loadgen"])
@@ -297,7 +297,7 @@ def loadgen(count=100, par=1, buckets="default", prods="users.prod") :
     prodfiles = ",".join(list(prodfiles))
     with shell_env(GOPATH=env.gopath2i, GOROOT=env.goroot2i), cd(path) :
         params = (
-            par, user2i, passw2i, bagdir, count, par, buckets, prodfiles,
+            procs, user2i, passw2i, bagdir, count, par, buckets, prodfiles,
             cluster)
         trycmd(fmt_loadgen % params, op="run")
 

@@ -276,7 +276,8 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		STREAM_READER_ERROR,
 		STREAM_READER_SYNC,
 		STREAM_READER_SNAPSHOT_MARKER,
-		STREAM_READER_CONN_ERROR:
+		STREAM_READER_CONN_ERROR,
+		STREAM_READER_HWT:
 		//send message to supervisor to take decision
 		logging.Tracef("MutationMgr::handleWorkerMessage \n\tReceived %v from worker", cmd)
 		m.supvRespch <- cmd
@@ -292,7 +293,7 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 //mutations in.
 func (m *mutationMgr) handleOpenStream(cmd Message) {
 
-	logging.Infof("MutationMgr::handleOpenStream %v", cmd)
+	logging.Debugf("MutationMgr::handleOpenStream %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()
@@ -318,7 +319,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(m.numVbuckets); queue == nil {
+			if queue = NewAtomicMutationQueue(m.numVbuckets, MAX_VB_QUEUE_LENGTH); queue == nil {
 				m.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,
@@ -326,18 +327,8 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 				return
 			}
 
-			//init slab manager
-			var slabMgr SlabManager
-			var errMsg Message
-			if slabMgr, errMsg = NewSlabManager(DEFAULT_START_CHUNK_SIZE,
-				DEFAULT_SLAB_SIZE, DEFAULT_MAX_SLAB_MEMORY); slabMgr == nil {
-				m.supvCmdch <- errMsg
-				return
-			}
-
 			bucketQueueMap[i.Defn.Bucket] = IndexerMutationQueue{
-				queue:   queue,
-				slabMgr: slabMgr}
+				queue: queue}
 		}
 		indexQueueMap[i.InstId] = bucketQueueMap[i.Defn.Bucket]
 	}
@@ -414,24 +405,15 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(m.numVbuckets); queue == nil {
+			if queue = NewAtomicMutationQueue(m.numVbuckets, MAX_VB_QUEUE_LENGTH); queue == nil {
 				return &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,
 						category: MUTATION_QUEUE}}
 			}
 
-			//init slab manager
-			var slabMgr SlabManager
-			var errMsg Message
-			if slabMgr, errMsg = NewSlabManager(DEFAULT_START_CHUNK_SIZE,
-				DEFAULT_SLAB_SIZE, DEFAULT_MAX_SLAB_MEMORY); slabMgr == nil {
-				return errMsg
-			}
-
 			bucketQueueMap[i.Defn.Bucket] = IndexerMutationQueue{
-				queue:   queue,
-				slabMgr: slabMgr}
+				queue: queue}
 			bucketMapDirty = true
 		}
 		indexQueueMap[i.InstId] = bucketQueueMap[i.Defn.Bucket]
@@ -812,9 +794,9 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 		defer m.flusherWaitGroup.Done()
 
 		flusher := NewFlusher()
-		sts := getStabilityTSFromTsVbuuid(ts)
-		msgch := flusher.PersistUptoTS(q.queue,
-			streamId, m.indexInstMap, m.indexPartnMap, sts, changeVec, stopch)
+		sts := getSeqTsFromTsVbuuid(ts)
+		msgch := flusher.PersistUptoTS(q.queue, streamId, ts.Bucket,
+			m.indexInstMap, m.indexPartnMap, sts, changeVec, stopch)
 		//wait for flusher to finish
 		msg := <-msgch
 
@@ -877,8 +859,8 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 		defer m.flusherWaitGroup.Done()
 
 		flusher := NewFlusher()
-		sts := getStabilityTSFromTsVbuuid(ts)
-		msgch := flusher.DrainUptoTS(q.queue, streamId,
+		sts := getSeqTsFromTsVbuuid(ts)
+		msgch := flusher.DrainUptoTS(q.queue, streamId, ts.Bucket,
 			sts, changeVec, stopch)
 		//wait for flusher to finish
 		msg := <-msgch

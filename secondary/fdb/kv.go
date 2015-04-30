@@ -24,17 +24,17 @@ func (k *KVStore) GetKV(key []byte) ([]byte, error) {
 	defer k.Unlock()
 
 	var kk unsafe.Pointer
-	if len(key) != 0 {
+	lenk := len(key)
+	if lenk != 0 {
 		kk = unsafe.Pointer(&key[0])
 	}
-	lenk := len(key)
 
 	var bodyLen C.size_t
 	var bodyPointer unsafe.Pointer
 
-	Log.Tracef("fdb_get_kv call k:%p db:%v kk:%v", k, k.db, kk)
+	//Log.Tracef("fdb_get_kv call k:%p db:%v kk:%v", k, k.db, kk)
 	errNo := C.fdb_get_kv(k.db, kk, C.size_t(lenk), &bodyPointer, &bodyLen)
-	Log.Tracef("fdb_get_kv retn k:%p errNo:%v body:%p len:%v", k, errNo, bodyPointer, bodyLen)
+	//Log.Tracef("fdb_get_kv retn k:%p errNo:%v body:%p len:%v", k, errNo, bodyPointer, bodyLen)
 	if errNo != RESULT_SUCCESS {
 		return nil, Error(errNo)
 	}
@@ -51,20 +51,20 @@ func (k *KVStore) SetKV(key, value []byte) error {
 
 	var kk, v unsafe.Pointer
 
-	if len(key) != 0 {
+	lenk := len(key)
+	lenv := len(value)
+	if lenk != 0 {
 		kk = unsafe.Pointer(&key[0])
 	}
 
-	if len(value) != 0 {
+	if lenv != 0 {
 		v = unsafe.Pointer(&value[0])
 	}
 
-	lenk := len(key)
-	lenv := len(value)
-
-	Log.Tracef("fdb_set_kv call k:%p db:%v kk:%v v:%v", k, k.db, kk, v)
+	//Log.Tracef("fdb_set_kv call k:%p db:%v kk:%v v:%v", k, k.db, kk, v)
 	errNo := C.fdb_set_kv(k.db, kk, C.size_t(lenk), v, C.size_t(lenv))
-	Log.Tracef("fdb_set_kv retn k:%p errNo:%v", k, errNo)
+	//Log.Tracef("fdb_set_kv retn k:%p errNo:%v", k, errNo)
+
 	if errNo != RESULT_SUCCESS {
 		return Error(errNo)
 	}
@@ -77,11 +77,10 @@ func (k *KVStore) DeleteKV(key []byte) error {
 	defer k.Unlock()
 
 	var kk unsafe.Pointer
-	if len(key) != 0 {
+	lenk := len(key)
+	if lenk != 0 {
 		kk = unsafe.Pointer(&key[0])
 	}
-
-	lenk := len(key)
 
 	Log.Tracef("fdb_del_kv call k:%p db:%v kk:%v", k, k.db, kk)
 	errNo := C.fdb_del_kv(k.db, kk, C.size_t(lenk))

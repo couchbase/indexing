@@ -23,7 +23,8 @@ import (
 )
 
 const (
-	maxStatsRetries = 5
+	maxStatsRetries        = 5
+	largeSnapshotThreshold = 200
 )
 
 //Timekeeper manages the Stability Timestamp Generation and also
@@ -146,7 +147,7 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case STREAM_READER_SNAPSHOT_MARKER:
 		tk.handleSnapshotMarker(cmd)
 
-	case STREAM_READER_SYNC:
+	case STREAM_READER_HWT:
 		tk.handleSync(cmd)
 
 	case STREAM_READER_CONN_ERROR:
@@ -204,7 +205,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 
 func (tk *timekeeper) handleStreamOpen(cmd Message) {
 
-	logging.Debugf("Timekeeper::handleStreamOpen %v", cmd)
+	if logging.Level(tk.config["settings.log_level"].String()) >= logging.Debug {
+		logging.Debugf("Timekeeper::handleStreamOpen %v", cmd)
+	}
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
@@ -231,6 +234,7 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 		tk.ss.initBucketInStream(streamId, bucket)
 		tk.ss.setHWTFromRestartTs(streamId, bucket)
 		tk.addIndextoStream(cmd)
+		tk.startTimer(streamId, bucket)
 
 	//repair
 	default:
@@ -425,6 +429,7 @@ func (tk *timekeeper) removeBucketFromStream(streamId common.StreamId,
 	if status == STREAM_PREPARE_RECOVERY {
 		tk.ss.streamBucketStatus[streamId][bucket] = STREAM_PREPARE_RECOVERY
 	} else {
+		tk.stopTimer(streamId, bucket)
 		tk.ss.cleanupBucketFromStream(streamId, bucket)
 	}
 
@@ -434,41 +439,38 @@ func (tk *timekeeper) handleSync(cmd Message) {
 
 	logging.Tracef("Timekeeper::handleSync %v", cmd)
 
-	streamId := cmd.(*MsgStream).GetStreamId()
-	meta := cmd.(*MsgStream).GetMutationMeta()
+	streamId := cmd.(*MsgBucketHWT).GetStreamId()
+	bucket := cmd.(*MsgBucketHWT).GetBucket()
+	hwt := cmd.(*MsgBucketHWT).GetHWT()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
 	//check if bucket is active in stream
-	if tk.checkBucketActiveInStream(streamId, meta.bucket) == false {
+	if tk.checkBucketActiveInStream(streamId, bucket) == false {
 		logging.Tracef("Timekeeper::handleSync \n\tReceived Sync for "+
-			"Inactive Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
+			"Inactive Bucket %v Stream %v. Ignored.", bucket, streamId)
 		return
 	}
 
 	//if there are no indexes for this bucket and stream, ignore
-	if c, ok := tk.ss.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
+	if c, ok := tk.ss.streamBucketIndexCountMap[streamId][bucket]; !ok || c <= 0 {
 		logging.Tracef("Timekeeper::handleSync \n\tIgnore Sync for StreamId %v "+
-			"Bucket %v. IndexCount %v. ", streamId, meta.bucket, c)
+			"Bucket %v. IndexCount %v. ", streamId, bucket, c)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
-	if _, ok := tk.ss.streamBucketHWTMap[streamId][meta.bucket]; !ok {
+	if _, ok := tk.ss.streamBucketHWTMap[streamId][bucket]; !ok {
 		logging.Debugf("Timekeeper::handleSync \n\tIgnoring Sync Marker "+
-			"for StreamId %v Bucket %v. Bucket Not Found.", streamId, meta.bucket)
+			"for StreamId %v Bucket %v. Bucket Not Found.", streamId, bucket)
 		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
 	//update HWT for the bucket
-	tk.ss.updateHWT(streamId, meta)
-
-	//update Sync Count for the bucket
-	tk.ss.incrSyncCount(streamId, meta.bucket)
-
-	tk.generateNewStabilityTS(streamId, meta.bucket)
+	tk.ss.updateHWT(streamId, bucket, hwt)
+	hwt.Free()
 
 	tk.supvCmdch <- &MsgSuccess{}
 
@@ -779,6 +781,8 @@ func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
 
+	defer meta.Free()
+
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
@@ -820,14 +824,14 @@ func (tk *timekeeper) handleGetBucketHWT(cmd Message) {
 
 	logging.Debugf("Timekeeper::handleGetBucketHWT %v", cmd)
 
-	streamId := cmd.(*MsgTKGetBucketHWT).GetStreamId()
-	bucket := cmd.(*MsgTKGetBucketHWT).GetBucket()
+	streamId := cmd.(*MsgBucketHWT).GetStreamId()
+	bucket := cmd.(*MsgBucketHWT).GetBucket()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
 	//set the return ts to nil
-	msg := cmd.(*MsgTKGetBucketHWT)
+	msg := cmd.(*MsgBucketHWT)
 	msg.ts = nil
 
 	if bucketHWTMap, ok := tk.ss.streamBucketHWTMap[streamId]; ok {
@@ -843,6 +847,8 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	defer meta.Free()
 
 	logging.Debugf("TK StreamBegin %v %v %v %v %v", streamId, meta.bucket,
 		meta.vbucket, meta.vbuuid, meta.seqno)
@@ -897,6 +903,8 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
 	streamId := cmd.(*MsgStream).GetStreamId()
 	meta := cmd.(*MsgStream).GetMutationMeta()
+
+	defer meta.Free()
 
 	logging.Debugf("TK StreamEnd %v %v %v %v %v", streamId, meta.bucket,
 		meta.vbucket, meta.vbuuid, meta.seqno)
@@ -1127,9 +1135,9 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 		//for. We may end up discarding one TS worth of mutations unnecessarily,
 		//but that is fine for now.
 		tsVbuuidHWT := tk.ss.streamBucketHWTMap[streamId][bucket]
-		tsHWT := getStabilityTSFromTsVbuuid(tsVbuuidHWT)
+		tsHWT := getSeqTsFromTsVbuuid(tsVbuuidHWT)
 
-		flushTs := getStabilityTSFromTsVbuuid(ts)
+		flushTs := getSeqTsFromTsVbuuid(ts)
 
 		//if HWT is greater than flush in progress TS, this means the flush
 		//in progress will finish.
@@ -1189,9 +1197,11 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 				initBuildDone = true
 			} else if flushTs == nil {
 				initBuildDone = false
+			} else if !flushTs.IsSnapAligned() {
+				initBuildDone = false
 			} else {
 				//check if the flushTS is greater than buildTS
-				ts := getStabilityTSFromTsVbuuid(flushTs)
+				ts := getSeqTsFromTsVbuuid(flushTs)
 				if ts.GreaterThanEqual(buildInfo.buildTs) {
 					initBuildDone = true
 				}
@@ -1245,6 +1255,13 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		return false
 	}
 
+	//if flushTs is not on snap boundary, merge cannot be done
+	if !flushTs.IsSnapAligned() {
+		logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tFlushTs Not Snapshot " +
+			"Snapshot Aligned. Continue both streams.")
+		return false
+	}
+
 	//INIT_STREAM cannot be merged to MAINT_STREAM if its not ACTIVE
 	if tk.ss.streamBucketStatus[common.MAINT_STREAM][bucket] != STREAM_ACTIVE {
 		logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\tMAINT_STREAM in %v. "+
@@ -1288,8 +1305,8 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			if lastFlushedTsVbuuid == nil {
 				readyToMerge = true
 			} else {
-				lastFlushedTs := getStabilityTSFromTsVbuuid(lastFlushedTsVbuuid)
-				ts := getStabilityTSFromTsVbuuid(flushTs)
+				lastFlushedTs := getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
+				ts := getSeqTsFromTsVbuuid(flushTs)
 				if ts.GreaterThanEqual(lastFlushedTs) {
 					readyToMerge = true
 				}
@@ -1322,6 +1339,7 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 
 				logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v "+
 					"Bucket %v State Changed to INACTIVE", streamId, bucket)
+				tk.stopTimer(streamId, bucket)
 				tk.ss.cleanupBucketFromStream(streamId, bucket)
 				return true
 
@@ -1380,8 +1398,14 @@ func (tk *timekeeper) checkCatchupStreamReadyToMerge(cmd Message) bool {
 func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	bucket string) {
 
-	if tk.ss.checkNewTSDue(streamId, bucket) {
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
 
+	if status, ok := tk.ss.streamBucketStatus[streamId][bucket]; !ok || status != STREAM_ACTIVE {
+		return
+	}
+
+	if tk.ss.checkNewTSDue(streamId, bucket) {
 		tsVbuuid := tk.ss.getNextStabilityTS(streamId, bucket)
 
 		//persist TS which completes the build
@@ -1390,18 +1414,59 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 		}
 
 		if tk.ss.canFlushNewTS(streamId, bucket) {
-			logging.Debugf("Timekeeper::generateNewStabilityTS \n\tFlushing new "+
-				"TS: %v Bucket: %v Stream: %v.", tsVbuuid, bucket, streamId)
 			tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		} else {
 			//store the ts in list
-			logging.Debugf("Timekeeper::generateNewStabilityTS \n\tAdding TS: %v to Pending "+
-				"List for Bucket: %v Stream: %v.", tsVbuuid, bucket, streamId)
-			tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
-			tsList.PushBack(tsVbuuid)
-			tk.drainQueueIfOverflow(streamId, bucket)
+			if logging.Level(tk.config["settings.log_level"].String()) >= logging.Debug {
+				logging.Debugf("Timekeeper::generateNewStabilityTS %v %v Added TS to Pending List "+
+					"%v ", bucket, streamId, tsVbuuid)
+			}
+			tk.maybeMergeTs(streamId, bucket, tsVbuuid)
+		}
+	} else {
+		tk.processPendingTS(streamId, bucket)
+	}
+
+}
+
+//merge a new Ts with one already pending for the stream-bucket,
+//if large snapshots are being processed
+func (tk *timekeeper) maybeMergeTs(streamId common.StreamId,
+	bucket string, newTs *common.TsVbuuid) {
+
+	tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
+	var lts *common.TsVbuuid
+	merge := false
+
+	//get the last generated but not yet processed timestamp
+	if tsList.Len() > 0 {
+		e := tsList.Back()
+		lts = e.Value.(*common.TsVbuuid)
+	}
+
+	//if either of the last generated or newTs has a large snapshot,
+	//merging is required
+	if lts != nil {
+		if lts.HasLargeSnapshot() || newTs.HasLargeSnapshot() {
+			merge = true
 		}
 	}
+
+	//when TS merge happens, all the pending TS in list are merged such that
+	//there is only a single TS in list which has all the latest snapshots seen
+	//by indexer.
+	if merge {
+		if lts.IsPersisted() {
+			newTs.SetPersisted(true)
+		}
+		if lts.HasLargeSnapshot() {
+			newTs.SetLargeSnapshot(true)
+		}
+		tsList.Init()
+	}
+
+	tsList.PushBack(newTs)
+
 }
 
 //processPendingTS checks if there is any pending TS for the given stream and
@@ -1419,7 +1484,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 	}
 
 	tsVbuuidHWT := tk.ss.streamBucketHWTMap[streamId][bucket]
-	tsHWT := getStabilityTSFromTsVbuuid(tsVbuuidHWT)
+	tsHWT := getSeqTsFromTsVbuuid(tsVbuuidHWT)
 
 	//if there are pending TS for this bucket, send New TS
 	bucketTsListMap := tk.ss.streamBucketTsListMap[streamId]
@@ -1428,7 +1493,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 		e := tsList.Front()
 		tsVbuuid := e.Value.(*common.TsVbuuid)
 		tsList.Remove(e)
-		ts := getStabilityTSFromTsVbuuid(tsVbuuid)
+		ts := getSeqTsFromTsVbuuid(tsVbuuid)
 
 		if tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
 			tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_DONE {
@@ -1447,9 +1512,6 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 			}
 
 		}
-		logging.Debugf("Timekeeper::processPendingTS \n\tFound Pending Stability TS Bucket: %v "+
-			"Stream: %v TS: %v", bucket, streamId, ts)
-
 		tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		return true
 	}
@@ -1461,22 +1523,56 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 func (tk *timekeeper) sendNewStabilityTS(ts *common.TsVbuuid, bucket string,
 	streamId common.StreamId) {
 
-	logging.Tracef("Timekeeper::sendNewStabilityTS \n\tBucket: %v "+
-		"Stream: %v TS: %v", bucket, streamId, ts)
+	if logging.Level(tk.config["settings.log_level"].String()) >= logging.Trace {
+		logging.Tracef("Timekeeper::sendNewStabilityTS Bucket: %v "+
+			"Stream: %v TS: %v", bucket, streamId, ts)
+	}
 
-	changeVec, noChange := tk.ss.computeTsChangeVec(streamId, bucket, ts)
+	flushTs := tk.maybeSplitTs(ts, bucket, streamId)
+
+	changeVec, noChange := tk.ss.computeTsChangeVec(streamId, bucket, flushTs)
 	if noChange {
 		return
 	}
 
-	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = ts
+	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = flushTs
 
 	go func() {
-		tk.supvRespch <- &MsgTKStabilityTS{ts: ts,
+		tk.supvRespch <- &MsgTKStabilityTS{ts: flushTs,
 			bucket:    bucket,
 			streamId:  streamId,
 			changeVec: changeVec}
 	}()
+}
+
+//splits a Ts if current HWT is less than Snapshot End for the vbucket.
+//It is important to send TS to flusher only upto the HWT as that's the
+//only guaranteed seqno that can be flushed.
+func (tk *timekeeper) maybeSplitTs(ts *common.TsVbuuid, bucket string,
+	streamId common.StreamId) *common.TsVbuuid {
+
+	hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
+
+	var newTs *common.TsVbuuid
+	for i, s := range ts.Snapshots {
+
+		//process upto hwt or snapEnd, whichever is lower
+		if hwt.Seqnos[i] < s[1] {
+			if newTs == nil {
+				newTs = ts.Copy()
+				newTs.SetPersisted(false)
+			}
+			newTs.Seqnos[i] = hwt.Seqnos[i]
+		}
+	}
+
+	if newTs != nil {
+		tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
+		tsList.PushFront(ts)
+		return newTs
+	} else {
+		return ts
+	}
 }
 
 //changeIndexStateForBucket changes the state of all indexes in the given bucket
@@ -1544,36 +1640,13 @@ func getStabilityTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 }
 
 //helper function to extract Seqnum Timestamp from TsVbuuid
-func getTSFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
+func getSeqTsFromTsVbuuid(tsVbuuid *common.TsVbuuid) Timestamp {
 	numVbuckets := len(tsVbuuid.Snapshots)
 	ts := NewTimestamp(numVbuckets)
 	for i, s := range tsVbuuid.Seqnos {
 		ts[i] = Seqno(s)
 	}
 	return ts
-}
-
-//if there are more mutations in this queue than configured,
-//drain the queue
-func (tk *timekeeper) drainQueueIfOverflow(streamId common.StreamId, bucket string) {
-
-	if !tk.ss.streamBucketDrainEnabledMap[streamId][bucket] {
-		return
-	}
-
-	switch streamId {
-
-	case common.MAINT_STREAM:
-		//TODO
-
-		//if the number of mutation are more than configured
-
-		//if stream is in PREPARE_RECOVERY, nothing to do
-
-		//if RECOVERY, drain on TS from queue
-
-		//if stream is in ACTIVE state, flush the queue
-	}
 }
 
 func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
@@ -1584,6 +1657,7 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 	if tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_DONE {
 
 		restartTs := tk.ss.computeRestartTs(streamId, bucket)
+		tk.stopTimer(streamId, bucket)
 		tk.ss.cleanupBucketFromStream(streamId, bucket)
 
 		//send message for recovery
@@ -1958,7 +2032,7 @@ func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
 			idx.State == common.INDEX_STATE_INITIAL {
 
 			//if flushTs is greater than or equal to buildTs
-			ts := getStabilityTSFromTsVbuuid(flushTs)
+			ts := getSeqTsFromTsVbuuid(flushTs)
 			if ts.GreaterThanEqual(buildInfo.buildTs) {
 				return true
 			}
@@ -1991,4 +2065,41 @@ func (tk *timekeeper) checkPendingStreamMerge(streamId common.StreamId,
 		tk.checkInitStreamReadyToMerge(streamId, bucket, lastFlushedTs)
 
 	}
+}
+
+//startTimer starts a per stream/bucket timer to periodically check and
+//generate a new stability timestamp
+func (tk *timekeeper) startTimer(streamId common.StreamId,
+	bucket string) {
+
+	logging.Debugf("Timekeeper::startTimer %v %v", streamId, bucket)
+
+	snapInterval := tk.config["settings.inmemory_snapshot.interval"].Uint64()
+	ticker := time.NewTicker(time.Millisecond * time.Duration(snapInterval))
+	stopCh := tk.ss.streamBucketTimerStopCh[streamId][bucket]
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				tk.generateNewStabilityTS(streamId, bucket)
+
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+
+}
+
+//stopTimer stops the stream/bucket timer started by startTimer
+func (tk *timekeeper) stopTimer(streamId common.StreamId, bucket string) {
+
+	logging.Debugf("Timekeeper::stopTimer %v %v", streamId, bucket)
+
+	stopCh := tk.ss.streamBucketTimerStopCh[streamId][bucket]
+	if stopCh != nil {
+		close(stopCh)
+	}
+
 }

@@ -58,6 +58,11 @@ func newMetaBridgeClient(
 	return b, nil
 }
 
+// Sync will update the indexer list.
+func (b *metadataClient) Sync() error {
+	return b.updateIndexerList(true)
+}
+
 // Refresh implement BridgeAccessor{} interface.
 func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	b.rw.Lock()
@@ -98,20 +103,33 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 }
 
 // Nodes implement BridgeAccessor{} interface.
-func (b *metadataClient) Nodes() (map[string]string, error) {
+func (b *metadataClient) Nodes() ([]*IndexerService, error) {
 	b.rw.RLock()
 	defer b.rw.RUnlock()
 
-	nodes := make(map[string]string)
+	// gather Indexer services
+	nodes := make(map[string]*IndexerService)
 	for indexerID := range b.topology {
 		if indexerID != common.INDEXER_ID_NIL {
 			a, q, err := b.mdClient.FindServiceForIndexer(indexerID)
 			if err == nil {
-				nodes[a] = q
+				nodes[a] = &IndexerService{
+					Adminport: a, Queryport: q, Status: "initial",
+				}
 			}
 		}
 	}
-	return nodes, nil
+	// gather indexer status
+	for _, indexer := range b.mdClient.CheckIndexerStatus() {
+		if node, ok := nodes[indexer.Adminport]; ok && indexer.Connected {
+			node.Status = "online"
+		}
+	}
+	services := make([]*IndexerService, 0, len(nodes))
+	for _, node := range nodes {
+		services = append(services, node)
+	}
+	return services, nil
 }
 
 // GetIndexDefn implements BridgeAccessor{} interface.
@@ -473,10 +491,6 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 	return err
 }
 
-func (b *metadataClient) Sync() error {
-	return b.updateIndexerList(true)
-}
-
 func (b *metadataClient) updateIndexer(adminport string, newIndexerId, oldIndexerId common.IndexerId) {
 	func() {
 		b.rw.Lock()
@@ -496,9 +510,10 @@ func (b *metadataClient) updateIndexer(adminport string, newIndexerId, oldIndexe
 func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, error) {
 	iAdminports := make([]string, 0)
 	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
-		yes, err := cinfo.IsNodeHealthy(node)
+		status, err := cinfo.GetNodeStatus(node)
 		common.CrashOnError(err)
-		if yes {
+		logging.Warnf("node %v status: %q", node, status)
+		if status == "healthy" || status == "active" || status == "warmup" {
 			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
 			if err != nil {
 				return nil, err

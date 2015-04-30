@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"errors"
+	"github.com/couchbase/indexing/secondary/logging"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -58,22 +59,24 @@ type MutationQueue interface {
 
 type atomicMutationQueue struct {
 	// IMPORTANT: should be 64 bit aligned.
-	head []unsafe.Pointer //head pointer per vbucket queue
-	tail []unsafe.Pointer //tail pointer per vbucket queue
-	size []int64          //size of queue per vbucket
+	head   []unsafe.Pointer //head pointer per vbucket queue
+	tail   []unsafe.Pointer //tail pointer per vbucket queue
+	size   []int64          //size of queue per vbucket
+	maxLen int64            //max length of queue per vbucket
 
 	free        []*node //free pointer per vbucket queue
 	numVbuckets uint16  //num vbuckets for the queue
 }
 
 //NewAtomicMutationQueue allocates a new Atomic Mutation Queue and initializes it
-func NewAtomicMutationQueue(numVbuckets uint16) *atomicMutationQueue {
+func NewAtomicMutationQueue(numVbuckets uint16, maxLenPerVb int64) *atomicMutationQueue {
 
 	q := &atomicMutationQueue{head: make([]unsafe.Pointer, numVbuckets),
 		tail:        make([]unsafe.Pointer, numVbuckets),
 		free:        make([]*node, numVbuckets),
 		size:        make([]int64, numVbuckets),
 		numVbuckets: numVbuckets,
+		maxLen:      maxLenPerVb,
 	}
 
 	var x uint16
@@ -95,7 +98,9 @@ type node struct {
 }
 
 //Poll Interval for dequeue thread
-const DEQUEUE_POLL_INTERVAL = 5
+const DEQUEUE_POLL_INTERVAL = 20
+const ALLOC_POLL_INTERVAL = 30
+const MAX_VB_QUEUE_LENGTH = 1000
 
 //Enqueue will enqueue the mutation reference for given vbucket.
 //Caller should not free the mutation till it is dequeued.
@@ -272,28 +277,49 @@ func (q *atomicMutationQueue) GetNumVbuckets() uint16 {
 func (q *atomicMutationQueue) allocNode(vbucket Vbucket) *node {
 
 	//get node from freelist
-	n, err := q.popFreeList(vbucket)
-	if err == nil {
+	n := q.popFreeList(vbucket)
+	if n != nil {
 		return n
 	} else {
-		//allocate new node and return
-		return &node{}
+		currLen := atomic.LoadInt64(&q.size[vbucket])
+		if currLen < q.maxLen {
+			//allocate new node and return
+			return &node{}
+		}
 	}
+
+	//every ALLOC_POLL_INTERVAL milliseconds, check for free nodes
+	ticker := time.NewTicker(time.Millisecond * ALLOC_POLL_INTERVAL)
+
+	var totalWait int
+	for _ = range ticker.C {
+		totalWait += ALLOC_POLL_INTERVAL
+		n = q.popFreeList(vbucket)
+		if n != nil {
+			return n
+		}
+		if totalWait > 5000 {
+			logging.Warnf("Indexer::MutationQueue Waiting for Node "+
+				"Alloc for %v Milliseconds Vbucket %v", totalWait, vbucket)
+		}
+	}
+
+	return nil
 
 }
 
 //popFreeList removes a node from freelist and returns to caller.
 //if freelist is empty, it returns nil.
-func (q *atomicMutationQueue) popFreeList(vbucket Vbucket) (*node, error) {
+func (q *atomicMutationQueue) popFreeList(vbucket Vbucket) *node {
 
 	if q.free[vbucket] != (*node)(atomic.LoadPointer(&q.head[vbucket])) {
 		n := q.free[vbucket]
 		q.free[vbucket] = q.free[vbucket].next
 		n.mutation = nil
 		n.next = nil
-		return n, nil
+		return n
 	} else {
-		return nil, errors.New("Free List Empty")
+		return nil
 	}
 
 }

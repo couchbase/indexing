@@ -162,6 +162,14 @@ func (c ClusterInfoCache) IsNodeHealthy(nid NodeId) (bool, error) {
 	return c.nodes[nid].Status == "healthy", nil
 }
 
+func (c ClusterInfoCache) GetNodeStatus(nid NodeId) (string, error) {
+	if int(nid) >= len(c.nodes) {
+		return "", ErrInvalidNodeId
+	}
+
+	return c.nodes[nid].Status, nil
+}
+
 func (c ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr string, err error) {
 	var port int
 	var ok bool

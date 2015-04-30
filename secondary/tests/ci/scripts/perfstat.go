@@ -56,7 +56,13 @@ func html(mtx *aggmtx, agg *aggstats) string {
   </head>
   <body>
 `)
-	for ti := range *tests {
+        buf.Printf("   <small><ul style='list-style-type:circle'>\n")
+	for _, tn := range *tests {
+		buf.Printf("   <li><a href='#%v'>%v</a></li>\n", tn, prettyName(tn))
+	}
+	buf.Printf("   </ul></small>\n")
+	for ti, tn := range *tests {
+		buf.Printf("   <a name='%v'></a>\n", tn)
 		buf.Printf("   <div id='curve_chart_%v' style='width: 900px; height: 500px'></div>\n", ti)
 	}
 	buf.Printf("%v", `  </body>
@@ -305,15 +311,21 @@ func timestamp(fn filename) time.Time {
 func prettyName(test testname) string {
 	name := string(test)
 	var pretty string
+        spacing := false
 	for i := 0; i < len(name); i++ {
 		switch {
 		case name[i] >= 'A' && name[i] <= 'Z':
-			pretty += " "
+			if !spacing {
+				pretty += " "
+				spacing = true
+			}
 			pretty += name[i : i+1]
 		case name[i] == '_':
 			pretty += ":"
+			spacing = false
 		default:
 			pretty += name[i : i+1]
+			spacing = false
 		}
 	}
 	return pretty

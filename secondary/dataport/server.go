@@ -117,6 +117,7 @@ type netConn struct {
 	conn   net.Conn
 	worker chan interface{}
 	active bool
+	tpkt   *transport.TransportPacket
 }
 
 // Server handles an active dataport server of mutation for all vbuckets.
@@ -241,7 +242,7 @@ loop:
 					conn.Close()
 				} else { // connection accepted
 					worker := make(chan interface{}, s.maxVbuckets)
-					s.conns[raddr] = &netConn{conn: conn, worker: worker}
+					s.conns[raddr] = &netConn{conn: conn, worker: worker, tpkt: newTransportPkt(s.maxPayload)}
 					n := len(s.conns)
 					logging.Infof("%v new connection %q +%d\n", s.logPrefix, raddr, n)
 					s.startWorker(raddr)
@@ -285,20 +286,6 @@ loop:
 			}
 		}
 	}
-}
-
-// handle new connection
-func (s *Server) handleNewConnection(conn net.Conn, raddr string) error {
-	logging.Tracef("%v connection request from %q\n", s.logPrefix, raddr)
-	if _, ok := s.conns[raddr]; ok {
-		logging.Errorf("%v %q already active\n", s.logPrefix, raddr)
-		return ErrorDuplicateClient
-	}
-	// connection accepted
-	worker := make(chan interface{}, s.maxVbuckets)
-	s.conns[raddr] = &netConn{conn: conn, worker: worker, active: false}
-	logging.Tracef("%v total active connections %v\n", s.logPrefix, len(s.conns))
-	return nil
 }
 
 // shutdown this gen server and all its routines.
@@ -457,12 +444,7 @@ func doReceive(
 
 	conn, worker := nc.conn, nc.worker
 
-	// TODO: make it configurable
-	flags := transport.TransportFlag(0).SetProtobuf()
-	pkt := transport.NewTransportPacket(maxPayload, flags)
-	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
-	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
-
+	pkt := nc.tpkt
 	msg := serverMessage{raddr: conn.RemoteAddr().String()}
 
 	// create it here to avoid repeated allocation.
@@ -578,4 +560,12 @@ func (ce ConnectionError) Append(hostUuids keeper, raddr string) keeper {
 		ce[avb.bucket] = vbs
 	}
 	return finished
+}
+
+func newTransportPkt(maxPayload int) *transport.TransportPacket {
+	flags := transport.TransportFlag(0).SetProtobuf()
+	pkt := transport.NewTransportPacket(maxPayload, flags)
+	pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
+	pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
+	return pkt
 }

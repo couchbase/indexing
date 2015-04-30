@@ -53,6 +53,8 @@ type watcher struct {
 	factory     protocol.MsgFactory
 	pendings    map[common.Txnid]protocol.LogEntryMsg
 	killch      chan bool
+	alivech     chan bool
+	pingch      chan bool
 	mutex       sync.Mutex
 	indices     map[c.IndexDefnId]interface{}
 	timerKillCh chan bool
@@ -84,6 +86,11 @@ type event struct {
 	defnId   c.IndexDefnId
 	status   c.IndexState
 	notifyCh chan error
+}
+
+type IndexerStatus struct {
+	Adminport string
+	Connected bool
 }
 
 type watcherCallback func(string, c.IndexerId, c.IndexerId)
@@ -185,6 +192,22 @@ func (o *MetadataProvider) UnwatchMetadata(indexerId c.IndexerId) {
 		watcher.close()
 		watcher.cleanupIndices(o.repo)
 	}
+}
+
+func (o *MetadataProvider) CheckIndexerStatus() []IndexerStatus {
+	o.mutex.Lock()
+	defer o.mutex.Unlock()
+
+	status := make([]IndexerStatus, len(o.watchers))
+	i := 0
+	for _, watcher := range o.watchers {
+		status[i].Adminport = watcher.leaderAddr
+		status[i].Connected = watcher.isAlive()
+		logging.Infof("MetadataProvider.CheckIndexerStatus(): adminport=%v connected=%v", status[i].Adminport, status[i].Connected)
+		i++
+	}
+
+	return status
 }
 
 func (o *MetadataProvider) CreateIndexWithPlan(
@@ -597,7 +620,9 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 		s,
 		s.factory,
 		s.killch,
-		readych)
+		readych,
+		s.alivech,
+		s.pingch)
 
 	return s, readych
 }
@@ -889,6 +914,8 @@ func newWatcher(o *MetadataProvider, addr string) *watcher {
 	s.provider = o
 	s.leaderAddr = addr
 	s.killch = make(chan bool, 1) // make it buffered to unblock sender
+	s.alivech = make(chan bool, 1)
+	s.pingch = make(chan bool, 1)
 	s.factory = message.NewConcreteMsgFactory()
 	s.pendings = make(map[common.Txnid]protocol.LogEntryMsg)
 	s.incomingReqs = make(chan *protocol.RequestHandle, REQUEST_CHANNEL_COUNT)
@@ -968,6 +995,29 @@ RETRY2:
 	}
 
 	return true, false
+}
+
+func (w *watcher) isAlive() bool {
+
+	for len(w.pingch) != 0 {
+		<-w.pingch
+	}
+
+	for len(w.alivech) != 0 {
+		<-w.alivech
+	}
+
+	w.pingch <- true
+
+	ticker := time.NewTicker(time.Duration(100) * time.Millisecond)
+	select {
+	case <-w.alivech:
+		return true
+	case <-ticker.C:
+		return false
+	}
+
+	return false
 }
 
 func (w *watcher) updateServiceMap(adminport string) error {
@@ -1187,6 +1237,7 @@ func (w *watcher) makeRequest(opCode common.OpCode, key string, content []byte) 
 	request := w.factory.CreateRequest(id, uint32(opCode), key, content)
 
 	handle := &protocol.RequestHandle{Request: request, Err: nil, StartTime: 0, Content: nil}
+	handle.StartTime = time.Now().UnixNano()
 	handle.CondVar = sync.NewCond(&handle.Mutex)
 
 	handle.CondVar.L.Lock()

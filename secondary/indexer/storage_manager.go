@@ -197,7 +197,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	if !s.needSnapshot(streamId, bucket, needsCommit) {
 
-		logging.Debugf("StorageMgr::handleCreateSnapshot \n\tSkip Snapshot For %v "+
+		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
 			"%v Persisted %v", streamId, bucket, needsCommit)
 
 		s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
@@ -205,6 +205,19 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 			bucket:   bucket,
 			ts:       tsVbuuid}
 		return
+	}
+
+	if !tsVbuuid.IsSnapAligned() {
+
+		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
+			"%v. Not Snapshot Aligned.", streamId, bucket)
+
+		s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
+			streamId: streamId,
+			bucket:   bucket,
+			ts:       tsVbuuid}
+		return
+
 	}
 
 	s.muSnap.Lock()
@@ -266,10 +279,10 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 					snapTs := NewTimestamp(numVbuckets)
 					if latestSnapshot != nil {
 						snapTsVbuuid := latestSnapshot.Timestamp()
-						snapTs = getStabilityTSFromTsVbuuid(snapTsVbuuid)
+						snapTs = getSeqTsFromTsVbuuid(snapTsVbuuid)
 					}
 
-					ts := getStabilityTSFromTsVbuuid(tsVbuuid)
+					ts := getSeqTsFromTsVbuuid(tsVbuuid)
 
 					//if the flush TS is greater than the last snapshot TS
 					//TODO Is it better to have a IsDirty() in Slice interface

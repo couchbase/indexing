@@ -35,6 +35,7 @@ const (
 	STREAM_READER_ERROR
 	STREAM_READER_SHUTDOWN
 	STREAM_READER_CONN_ERROR
+	STREAM_READER_HWT
 
 	//MUTATION_MANAGER
 	MUT_MGR_PERSIST_MUTATION_QUEUE
@@ -147,6 +148,10 @@ func (m *MsgError) GetMsgType() MsgType {
 
 func (m *MsgError) GetError() Error {
 	return m.err
+}
+
+func (m *MsgError) String() string {
+	return fmt.Sprintf("%v", m.err)
 }
 
 //Success Message
@@ -675,31 +680,33 @@ func (m *MsgDropIndex) GetString() string {
 }
 
 //TK_GET_BUCKET_HWT
-type MsgTKGetBucketHWT struct {
+//STREAM_READER_HWT
+type MsgBucketHWT struct {
+	mType    MsgType
 	streamId common.StreamId
 	bucket   string
 	ts       *common.TsVbuuid
 }
 
-func (m *MsgTKGetBucketHWT) GetMsgType() MsgType {
-	return TK_GET_BUCKET_HWT
+func (m *MsgBucketHWT) GetMsgType() MsgType {
+	return m.mType
 }
 
-func (m *MsgTKGetBucketHWT) GetStreamId() common.StreamId {
+func (m *MsgBucketHWT) GetStreamId() common.StreamId {
 	return m.streamId
 }
 
-func (m *MsgTKGetBucketHWT) GetBucket() string {
+func (m *MsgBucketHWT) GetBucket() string {
 	return m.bucket
 }
 
-func (m *MsgTKGetBucketHWT) GetHWT() *common.TsVbuuid {
+func (m *MsgBucketHWT) GetHWT() *common.TsVbuuid {
 	return m.ts
 }
 
-func (m *MsgTKGetBucketHWT) String() string {
+func (m *MsgBucketHWT) String() string {
 
-	str := "\n\tMessage: MsgTKGetBucketHWT"
+	str := "\n\tMessage: MsgBucketHWT"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	if m.ts != nil {
@@ -1021,6 +1028,8 @@ func (m MsgType) String() string {
 		return "STREAM_READER_SHUTDOWN"
 	case STREAM_READER_CONN_ERROR:
 		return "STREAM_READER_CONN_ERROR"
+	case STREAM_READER_HWT:
+		return "STREAM_READER_HWT"
 
 	case MUT_MGR_PERSIST_MUTATION_QUEUE:
 		return "MUT_MGR_PERSIST_MUTATION_QUEUE"

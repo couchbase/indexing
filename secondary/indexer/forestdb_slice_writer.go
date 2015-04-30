@@ -27,6 +27,7 @@ import (
 
 var (
 	snapshotMetaListKey = []byte("snapshots-list")
+	flushedCount        uint64
 )
 
 //NewForestDBSlice initiailizes a new slice with forestdb backend.
@@ -214,23 +215,33 @@ func (fdb *fdbSlice) Delete(docid []byte) error {
 //shutdown channel is closed.
 func (fdb *fdbSlice) handleCommandsWorker(workerId int) {
 
+	var start time.Time
+	var elapsed time.Duration
+	var c interface{}
+	var icmd *indexItem
+	var dcmd []byte
+
 loop:
 	for {
 		select {
-		case c := <-fdb.cmdCh:
+		case c = <-fdb.cmdCh:
+
 			switch c.(type) {
+
 			case *indexItem:
-				cmd := c.(*indexItem)
+				icmd = c.(*indexItem)
 				start := time.Now()
-				fdb.insert((*cmd).key, (*cmd).docid, workerId)
+				fdb.insert((*icmd).key, (*icmd).docid, workerId)
 				elapsed := time.Since(start)
 				fdb.totalFlushTime += elapsed
+
 			case []byte:
-				cmd := c.([]byte)
-				start := time.Now()
-				fdb.delete(cmd, workerId)
-				elapsed := time.Since(start)
+				dcmd = c.([]byte)
+				start = time.Now()
+				fdb.delete(dcmd, workerId)
+				elapsed = time.Since(start)
 				fdb.totalFlushTime += elapsed
+
 			default:
 				logging.Errorf("ForestDBSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v Received "+
 					"Unknown Command %v", fdb.id, fdb.idxInstId, c)
@@ -259,6 +270,7 @@ func (fdb *fdbSlice) insert(k []byte, docid []byte, workerId int) {
 		fdb.insertSecIndex(k, docid, workerId)
 	}
 
+	fdb.logWriterStat()
 }
 
 func (fdb *fdbSlice) insertPrimaryIndex(docid []byte, workerId int) {
@@ -304,8 +316,8 @@ func (fdb *fdbSlice) insertSecIndex(k []byte, docid []byte, workerId int) {
 	}
 	common.CrashOnError(err)
 
-	logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s "+
-		"DocId - %s", fdb.id, fdb.idxInstId, k, docid)
+	//logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s "+
+	//	"Value - %s", fdb.id, fdb.idxInstId, k, v)
 
 	//check if the docid exists in the back index
 	if olditm, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
@@ -376,12 +388,14 @@ func (fdb *fdbSlice) delete(docid []byte, workerId int) {
 		fdb.deleteSecIndex(docid, workerId)
 	}
 
+	fdb.logWriterStat()
+
 }
 
 func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 
-	logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
-		fdb.id, fdb.idxInstId, docid)
+	//logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
+	//	fdb.id, fdb.idxInstId, docid)
 
 	if docid == nil {
 		common.CrashOnError(errors.New("Nil Primary Key"))
@@ -406,8 +420,8 @@ func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 
 func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 
-	logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
-		fdb.id, fdb.idxInstId, docid)
+	//logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
+	//	fdb.id, fdb.idxInstId, docid)
 
 	var olditm []byte
 	var err error
@@ -452,13 +466,13 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 //given the docid
 func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) ([]byte, error) {
 
-	logging.Tracef("ForestDBSlice::getBackIndexEntry \n\tSliceId %v IndexInstId %v Get BackIndex Key - %s",
-		fdb.id, fdb.idxInstId, docid)
+	//	logging.Tracef("ForestDBSlice::getBackIndexEntry \n\tSliceId %v IndexInstId %v Get BackIndex Key - %s",
+	//		fdb.id, fdb.idxInstId, docid)
 
 	var kbytes []byte
 	var err error
 
-	kbytes, err = fdb.back[workerId].GetKV([]byte(docid))
+	kbytes, err = fdb.back[workerId].GetKV(docid)
 	atomic.AddInt64(&fdb.get_bytes, int64(len(kbytes)))
 
 	//forestdb reports get in a non-existent key as an
@@ -619,10 +633,13 @@ func (fdb *fdbSlice) RollbackToZero() error {
 	return nil
 }
 
-//Commit persists the outstanding writes in underlying
-//forestdb database. If Commit returns error, slice
-//should be rolled back to previous snapshot.
-func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
+//slice insert/delete methods are async. There
+//can be outstanding mutations in internal queue to flush even
+//after insert/delete have return success to caller.
+//This method provides a mechanism to wait till internal
+//queue is empty.
+func (fdb *fdbSlice) waitPersist() {
+
 	//every SLICE_COMMIT_POLL_INTERVAL milliseconds,
 	//check for outstanding mutations. If there are
 	//none, proceed with the commit.
@@ -632,6 +649,15 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 			break
 		}
 	}
+
+}
+
+//Commit persists the outstanding writes in underlying
+//forestdb database. If Commit returns error, slice
+//should be rolled back to previous snapshot.
+func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
+
+	fdb.waitPersist()
 
 	mainDbInfo, err := fdb.main[0].Info()
 	if err != nil {
@@ -1005,4 +1031,14 @@ func newFdbFile(dirpath string, newVersion bool) string {
 
 	newFilename := fmt.Sprintf("data.fdb.%d", version)
 	return filepath.Join(dirpath, newFilename)
+}
+
+func (fdb *fdbSlice) logWriterStat() {
+
+	flushedCount++
+	if (flushedCount%10000 == 0) || flushedCount == 1 {
+		logging.Infof("logWriterStat:: "+
+			"FlushedCount %v QueuedCount %v", flushedCount, len(fdb.cmdCh))
+	}
+
 }

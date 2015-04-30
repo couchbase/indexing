@@ -37,11 +37,15 @@ const DEFAULT_POOL = "default"
 //to processed incoming mutation. Max can be upto the
 //number of vbuckets and minimum must be equal to the
 //number of vbuckets
-const DEFAULT_NUM_STREAM_READER_WORKERS = 8
+const DEFAULT_NUM_STREAM_READER_WORKERS = 1
 
 //Buffer for each of stream reader worker to queue
 //up mutations before processing
-const MAX_STREAM_READER_WORKER_BUFFER = 1000
+const MAX_STREAM_READER_WORKER_BUFFER = 0
+
+//Buffer for dataport to queue up mutations
+//before stream reader reads it
+const DATAPORT_MUTATION_BUFFER = 20000
 
 //Max number of snapshot to be retained per index.
 //Older snapshots are deleted.
@@ -54,7 +58,7 @@ const DEFAULT_MAX_SLAB_MEMORY = DEFAULT_SLAB_SIZE * 1024
 
 //Internal Buffer Size for Each Slice to store incoming
 //requests
-const SLICE_COMMAND_BUFFER_SIZE = 10000
+const SLICE_COMMAND_BUFFER_SIZE = 20000
 
 //Time in milliseconds for a slice to poll for
 //any outstanding writes before commit

@@ -9,6 +9,10 @@
 
 package indexer
 
+import (
+	"fmt"
+)
+
 type errCode int16
 
 const (
@@ -107,4 +111,8 @@ type Error struct {
 	category errCategory
 	cause    error
 	msg      string
+}
+
+func (e Error) String() string {
+	return fmt.Sprintf("%v", e.cause)
 }

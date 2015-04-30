@@ -23,7 +23,6 @@ type StreamState struct {
 	streamBucketVbStatusMap map[common.StreamId]BucketVbStatusMap
 
 	streamBucketHWTMap           map[common.StreamId]BucketHWTMap
-	streamBucketSyncCountMap     map[common.StreamId]BucketSyncCountMap
 	streamBucketInMemTsCountMap  map[common.StreamId]BucketInMemTsCountMap
 	streamBucketNewTsReqdMap     map[common.StreamId]BucketNewTsReqdMap
 	streamBucketTsListMap        map[common.StreamId]BucketTsListMap
@@ -37,12 +36,12 @@ type StreamState struct {
 
 	streamBucketIndexCountMap map[common.StreamId]BucketIndexCountMap
 	streamBucketRepairStopCh  map[common.StreamId]BucketRepairStopCh
+	streamBucketTimerStopCh   map[common.StreamId]BucketTimerStopCh
 }
 
 type BucketHWTMap map[string]*common.TsVbuuid
 type BucketLastFlushedTsMap map[string]*common.TsVbuuid
 type BucketRestartTsMap map[string]*common.TsVbuuid
-type BucketSyncCountMap map[string]uint64
 type BucketInMemTsCountMap map[string]uint64
 type BucketNewTsReqdMap map[string]bool
 
@@ -54,6 +53,7 @@ type BucketDrainEnabledMap map[string]bool
 
 type BucketVbStatusMap map[string]Timestamp
 type BucketRepairStopCh map[string]StopChannel
+type BucketTimerStopCh map[string]StopChannel
 
 type BucketStatus map[string]StreamStatus
 
@@ -62,7 +62,6 @@ func InitStreamState(config common.Config) *StreamState {
 	ss := &StreamState{
 		config:                           config,
 		streamBucketHWTMap:               make(map[common.StreamId]BucketHWTMap),
-		streamBucketSyncCountMap:         make(map[common.StreamId]BucketSyncCountMap),
 		streamBucketInMemTsCountMap:      make(map[common.StreamId]BucketInMemTsCountMap),
 		streamBucketNewTsReqdMap:         make(map[common.StreamId]BucketNewTsReqdMap),
 		streamBucketTsListMap:            make(map[common.StreamId]BucketTsListMap),
@@ -77,6 +76,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketStatus:               make(map[common.StreamId]BucketStatus),
 		streamBucketIndexCountMap:        make(map[common.StreamId]BucketIndexCountMap),
 		streamBucketRepairStopCh:         make(map[common.StreamId]BucketRepairStopCh),
+		streamBucketTimerStopCh:          make(map[common.StreamId]BucketTimerStopCh),
 	}
 
 	return ss
@@ -88,9 +88,6 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	//init all internal maps for this stream
 	bucketHWTMap := make(BucketHWTMap)
 	ss.streamBucketHWTMap[streamId] = bucketHWTMap
-
-	bucketSyncCountMap := make(BucketSyncCountMap)
-	ss.streamBucketSyncCountMap[streamId] = bucketSyncCountMap
 
 	bucketInMemTsCountMap := make(BucketInMemTsCountMap)
 	ss.streamBucketInMemTsCountMap[streamId] = bucketInMemTsCountMap
@@ -128,6 +125,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketRepairStopChMap := make(BucketRepairStopCh)
 	ss.streamBucketRepairStopCh[streamId] = bucketRepairStopChMap
 
+	bucketTimerStopChMap := make(BucketTimerStopCh)
+	ss.streamBucketTimerStopCh[streamId] = bucketTimerStopChMap
+
 	bucketStatus := make(BucketStatus)
 	ss.streamBucketStatus[streamId] = bucketStatus
 
@@ -140,7 +140,6 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 
 	numVbuckets := ss.config["numVbuckets"].Int()
 	ss.streamBucketHWTMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketSyncCountMap[streamId][bucket] = 0
 	ss.streamBucketInMemTsCountMap[streamId][bucket] = 0
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
 	ss.streamBucketFlushInProgressTsMap[streamId][bucket] = nil
@@ -152,6 +151,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketVbStatusMap[streamId][bucket] = NewTimestamp(numVbuckets)
 	ss.streamBucketIndexCountMap[streamId][bucket] = 0
 	ss.streamBucketRepairStopCh[streamId][bucket] = nil
+	ss.streamBucketTimerStopCh[streamId][bucket] = make(StopChannel)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 
@@ -168,7 +168,6 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	}
 
 	delete(ss.streamBucketHWTMap[streamId], bucket)
-	delete(ss.streamBucketSyncCountMap[streamId], bucket)
 	delete(ss.streamBucketInMemTsCountMap[streamId], bucket)
 	delete(ss.streamBucketNewTsReqdMap[streamId], bucket)
 	delete(ss.streamBucketTsListMap[streamId], bucket)
@@ -180,6 +179,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketVbStatusMap[streamId], bucket)
 	delete(ss.streamBucketIndexCountMap[streamId], bucket)
 	delete(ss.streamBucketRepairStopCh[streamId], bucket)
+	delete(ss.streamBucketTimerStopCh[streamId], bucket)
 
 	ss.streamBucketRestartTsMap[streamId][bucket] = nil
 
@@ -194,7 +194,6 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 
 	//delete this stream from internal maps
 	delete(ss.streamBucketHWTMap, streamId)
-	delete(ss.streamBucketSyncCountMap, streamId)
 	delete(ss.streamBucketInMemTsCountMap, streamId)
 	delete(ss.streamBucketNewTsReqdMap, streamId)
 	delete(ss.streamBucketTsListMap, streamId)
@@ -311,6 +310,23 @@ func (ss *StreamState) checkAllStreamBeginsReceived(streamId common.StreamId,
 	return true
 }
 
+//checks snapshot markers have been received for all vbuckets where
+//the buildTs is non-nil.
+func (ss *StreamState) checkAllSnapMarkersReceived(streamId common.StreamId,
+	bucket string, buildTs Timestamp) bool {
+
+	ts := ss.streamBucketHWTMap[streamId][bucket]
+
+	//all snapshot markers should be present, except if buildTs has 0
+	//seqnum for the vbucket
+	for i, s := range ts.Snapshots {
+		if s[1] == 0 && buildTs[i] != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 //checks if the given bucket in this stream has any flush in progress
 func (ss *StreamState) checkAnyFlushPending(streamId common.StreamId,
 	bucket string) bool {
@@ -338,68 +354,27 @@ func (ss *StreamState) checkAnyAbortPending(streamId common.StreamId,
 	return false
 }
 
-func (ss *StreamState) incrSyncCount(streamId common.StreamId,
-	bucket string) {
-
-	bucketSyncCountMap := ss.streamBucketSyncCountMap[streamId]
-
-	//update sync count for this bucket
-	if syncCount, ok := bucketSyncCountMap[bucket]; ok {
-		syncCount++
-
-		logging.Tracef("StreamState::incrSyncCount \n\tUpdating Sync Count for Bucket: %v "+
-			"Stream: %v. SyncCount: %v.", bucket, streamId, syncCount)
-		//update only if its less than trigger count, otherwise it makes no
-		//difference. On long running systems, syncCount may overflow otherwise
-
-		snapInterval := ss.config["settings.inmemory_snapshot.interval"].Uint64() * uint64(ss.config["numVbuckets"].Int())
-		syncPeriod := ss.config["sync_period"].Uint64()
-		// Number of sync messages after which an inmemory snapshot is triggered.
-		maxSyncCount := snapInterval / syncPeriod
-
-		if syncCount <= maxSyncCount {
-			bucketSyncCountMap[bucket] = syncCount
-		}
-
-	} else {
-		//add a new counter for this bucket
-		logging.Debugf("StreamState::incrSyncCount \n\tAdding new Sync Count for Bucket: %v "+
-			"Stream: %v. SyncCount: %v.", bucket, streamId, syncCount)
-		bucketSyncCountMap[bucket] = 1
-	}
-
-}
-
 //updateHWT will update the HW Timestamp for a bucket in the stream
 //based on the Sync message received.
 func (ss *StreamState) updateHWT(streamId common.StreamId,
-	meta *MutationMeta) {
+	bucket string, hwt *common.TsVbuuid) {
 
 	//if seqno has incremented, update it
-	ts := ss.streamBucketHWTMap[streamId][meta.bucket]
-	if uint64(meta.seqno) > ts.Seqnos[meta.vbucket] {
-		ts.Seqnos[meta.vbucket] = uint64(meta.seqno)
-		ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
-		logging.Tracef("StreamState::updateHWT \n\tHWT Updated : %v", ts)
+	ts := ss.streamBucketHWTMap[streamId][bucket]
+
+	for i, seq := range hwt.Seqnos {
+		if seq > ts.Seqnos[i] {
+			ts.Seqnos[i] = seq
+			ts.Vbuuids[i] = hwt.Vbuuids[i]
+		}
 	}
 
+	logging.Tracef("StreamState::updateHWT \n\tHWT Updated : %v", ts)
 }
 
 func (ss *StreamState) checkNewTSDue(streamId common.StreamId, bucket string) bool {
-
-	bucketNewTsReqd := ss.streamBucketNewTsReqdMap[streamId]
-	bucketSyncCountMap := ss.streamBucketSyncCountMap[streamId]
-	snapInterval := ss.config["settings.inmemory_snapshot.interval"].Uint64() * uint64(ss.config["numVbuckets"].Int())
-	syncPeriod := ss.config["sync_period"].Uint64()
-	// Number of sync messages after which an inmemory snapshot is triggered.
-	maxSyncCount := snapInterval / syncPeriod
-
-	if bucketSyncCountMap[bucket] >= maxSyncCount &&
-		bucketNewTsReqd[bucket] == true &&
-		ss.checkAllStreamBeginsReceived(streamId, bucket) == true {
-		return true
-	}
-	return false
+	newTsReqd := ss.streamBucketNewTsReqdMap[streamId][bucket]
+	return newTsReqd
 }
 
 //gets the stability timestamp based on the current HWT
@@ -428,11 +403,24 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 		ss.streamBucketInMemTsCountMap[streamId][bucket]++
 	}
 
+	ss.checkLargeSnapshot(tsVbuuid)
+
 	//reset state for next TS
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
-	ss.streamBucketSyncCountMap[streamId][bucket] = 0
 
 	return tsVbuuid
+}
+
+//check for presence of large snapshot in a TS and set the flag
+func (ss *StreamState) checkLargeSnapshot(ts *common.TsVbuuid) {
+
+	for _, s := range ts.Snapshots {
+		if s[1]-s[0] > largeSnapshotThreshold {
+			ts.SetLargeSnapshot(true)
+			return
+		}
+	}
+
 }
 
 func (ss *StreamState) canFlushNewTS(streamId common.StreamId,
