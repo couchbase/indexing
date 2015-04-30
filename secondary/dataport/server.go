@@ -356,12 +356,10 @@ func (s *Server) jumboErrorHandler(
 	switch whatJumbo {
 	case "closeremote":
 		ce := NewConnectionError()
-		for _, raddr := range remoteConnections(raddr, s.conns) {
-			finished := ce.Append(hostUuids, raddr)
-			actvUuids = s.delUuids(finished, hostUuids)
-			closeConnection(s.logPrefix, raddr, s.conns[raddr])
-			delete(s.conns, raddr)
-		}
+		finished := ce.Append(hostUuids, raddr)
+		actvUuids = s.delUuids(finished, hostUuids)
+		closeConnection(s.logPrefix, raddr, s.conns[raddr])
+		delete(s.conns, raddr)
 		msg = ce
 
 	case "closeall":
