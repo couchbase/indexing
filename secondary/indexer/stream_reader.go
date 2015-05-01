@@ -539,7 +539,7 @@ func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool 
 		} else {
 			logging.Errorf("MutationStreamReader::checkAndSetBucketFilter Skipped "+
 				"Mutation %v for Bucket %v Stream %v. Current Filter %v", meta,
-				meta.bucket, r.streamId, filter)
+				meta.bucket, r.streamId, filter.Seqnos[meta.vbucket])
 			return false
 		}
 	} else {
@@ -563,7 +563,8 @@ func (r *mutationStreamReader) updateSnapInFilter(meta *MutationMeta,
 		} else {
 			logging.Errorf("MutationStreamReader::updateSnapInFilter Skipped "+
 				"Snapshot %v-%v for vb %v %v %v. Current Filter %v", snapStart,
-				snapEnd, meta.vbucket, meta.bucket, r.streamId, filter)
+				snapEnd, meta.vbucket, meta.bucket, r.streamId,
+				filter.Snapshots[meta.vbucket][1])
 		}
 	} else {
 		logging.Errorf("MutationStreamReader::updateSnapInFilter Missing"+
