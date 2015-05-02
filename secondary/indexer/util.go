@@ -102,7 +102,7 @@ func GetCurrentKVTs(bucket *couchbase.Bucket, numVbs int) (Timestamp, error) {
 	return ts, err
 }
 
-func ValidateBucket(cluster, bucket string) bool {
+func ValidateBucket(cluster, bucket string, uuids []string) bool {
 
 	var cinfo *common.ClusterInfoCache
 	url, err := common.ClusterAuthUrl(cluster)
@@ -123,8 +123,16 @@ func ValidateBucket(cluster, bucket string) bool {
 	}
 
 	if nids, err := cinfo.GetNodesByBucket(bucket); err == nil && len(nids) != 0 {
+		// verify UUID
+		currentUUID := cinfo.GetBucketUUID(bucket)
+		for _, uuid := range uuids {
+			if uuid != currentUUID {
+				return false
+			}
+		}
 		return true
 	} else {
 		return false
 	}
+
 }

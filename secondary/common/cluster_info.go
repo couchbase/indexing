@@ -21,6 +21,8 @@ const (
 	INDEX_HTTP_SERVICE  = "indexHttp"
 )
 
+const BUCKET_UUID_NIL = ""
+
 // Helper object for fetching cluster information
 // Can be used by services running on a cluster node to connect with
 // local management service for obtaining cluster information.
@@ -142,6 +144,30 @@ func (c ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err er
 	}
 
 	return
+}
+
+//
+// Return UUID of a given bucket.
+//
+func (c ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
+
+	b, err := c.pool.GetBucket(bucket)
+	if err != nil {
+		return BUCKET_UUID_NIL
+	}
+	defer b.Close()
+
+	// This node recognize this bucket.   Make sure its vb is resided in at least one node.
+	for i, _ := range c.nodes {
+		nid := NodeId(i)
+		if _, ok := c.findVBServerIndex(b, nid); ok {
+			// find the bucket resides in at least one node
+			return b.UUID
+		}
+	}
+
+	// no nodes recognize this bucket
+	return BUCKET_UUID_NIL
 }
 
 func (c ClusterInfoCache) GetCurrentNode() NodeId {

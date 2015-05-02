@@ -966,6 +966,7 @@ type MsgClustMgrUpdate struct {
 	indexList     []common.IndexInst
 	updatedFields MetaUpdateFields
 	bucket        string
+	streamId      common.StreamId
 }
 
 func (m *MsgClustMgrUpdate) GetMsgType() MsgType {
@@ -982,6 +983,10 @@ func (m *MsgClustMgrUpdate) GetUpdatedFields() MetaUpdateFields {
 
 func (m *MsgClustMgrUpdate) GetBucket() string {
 	return m.bucket
+}
+
+func (m *MsgClustMgrUpdate) GetStreamId() common.StreamId {
+	return m.streamId
 }
 
 //CLUST_MGR_GET_GLOBAL_TOPOLOGY

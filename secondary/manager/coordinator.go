@@ -801,7 +801,7 @@ func (c *Coordinator) deleteIndex(key string) bool {
 		return false
 	}
 
-	if err := c.idxMgr.getLifecycleMgr().DeleteIndex(id); err != nil {
+	if err := c.idxMgr.getLifecycleMgr().DeleteIndex(id, true); err != nil {
 		logging.Debugf("Coordinator.deleteIndex() : deleteIndex fails. Reason = %s", err.Error())
 		return false
 	}

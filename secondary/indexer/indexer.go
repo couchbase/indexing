@@ -736,7 +736,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	logging.Infof("Indexer::handleCreateIndex %v", indexInst)
 
-	if !ValidateBucket(idx.config["clusterAddr"].String(), indexInst.Defn.Bucket) {
+	if !ValidateBucket(idx.config["clusterAddr"].String(), indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID}) {
 		logging.Errorf("Indexer::handleCreateIndex \n\t Bucket %v Not Found")
 
 		if clientCh != nil {
@@ -1326,14 +1326,16 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	logging.Debugf("Indexer::handleBucketNotFound StreamId %v Bucket %v",
 		streamId, bucket)
 
-	var instIdList []common.IndexInstId
 	for _, index := range idx.indexInstMap {
 		if index.Stream == streamId &&
 			index.Defn.Bucket == bucket {
-			instIdList = append(instIdList, index.InstId)
 			idx.stats.RemoveIndex(index.InstId)
 		}
 	}
+
+	// delete index inst on the bucket from metadata repository and
+	// return the list of deleted inst
+	instIdList := idx.deleteIndexInstOnDeletedBucket(bucket, streamId)
 
 	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
 	logging.Debugf("Indexer::handleBucketNotFound Updated Index State to DELETED %v",
@@ -1343,12 +1345,6 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
-	}
-
-	if idx.enableManager {
-		if err := idx.updateMetaInfoForDeleteBucket(bucket); err != nil {
-			common.CrashOnError(err)
-		}
 	}
 
 	//TODO cleanup streambucket internal maps
@@ -1459,9 +1455,11 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	var cmd Message
 	var indexList []common.IndexInst
+	var bucketUUIDList []string
 	for _, instId := range instIdList {
 		indexInst := idx.indexInstMap[instId]
 		indexList = append(indexList, indexInst)
+		bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
 	}
 
 	respCh := make(MsgChannel)
@@ -1511,7 +1509,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	retryloop:
 		for {
-			if !ValidateBucket(clustAddr, bucket) {
+			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
 				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex \n\tBucket Not Found "+
 					"For Stream %v Bucket %v", buildStream, bucket)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
@@ -1682,7 +1680,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 			idx.waitStreamRequestLock(reqLock)
 		retryloop:
 			for {
-				if !ValidateBucket(clustAddr, indexInst.Defn.Bucket) {
+				if !ValidateBucket(clustAddr, indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID}) {
 					logging.Errorf("Indexer::sendStreamUpdateForDropIndex \n\tBucket Not Found "+
 						"For Stream %v Bucket %v", streamId, indexInst.Defn.Bucket)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
@@ -1954,6 +1952,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	//get the list of indexes for this bucket and stream in INITIAL state
 	var indexList []common.IndexInst
 	var instIdList []common.IndexInstId
+	var bucketUUIDList []string
 	for _, index := range idx.indexInstMap {
 		if index.Defn.Bucket == bucket && index.Stream == streamId &&
 			index.State == common.INDEX_STATE_INITIAL {
@@ -1965,6 +1964,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 			}
 			indexList = append(indexList, index)
 			instIdList = append(instIdList, index.InstId)
+			bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
 		}
 	}
 
@@ -2031,7 +2031,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
-			if !ValidateBucket(clustAddr, bucket) {
+			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
 				logging.Errorf("Indexer::handleInitialBuildDone \n\tBucket Not Found "+
 					"For Stream %v Bucket %v", streamId, bucket)
 				break retryloop
@@ -2098,6 +2098,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	//get the list of indexes for this bucket in CATCHUP state
 	var indexList []common.IndexInst
+	var bucketUUIDList []string
 	for _, index := range idx.indexInstMap {
 		if index.Defn.Bucket == bucket && index.Stream == streamId &&
 			index.State == common.INDEX_STATE_CATCHUP {
@@ -2105,6 +2106,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 			index.State = common.INDEX_STATE_ACTIVE
 			index.Stream = common.MAINT_STREAM
 			indexList = append(indexList, index)
+			bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
 		}
 	}
 
@@ -2165,7 +2167,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
-			if !ValidateBucket(clustAddr, bucket) {
+			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
 				logging.Errorf("Indexer::handleMergeInitStream \n\tBucket Not Found "+
 					"For Stream %v Bucket %v", streamId, bucket)
 				break retryloop
@@ -2353,6 +2355,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		streamId, bucket, restartTs)
 
 	var indexList []common.IndexInst
+	var bucketUUIDList []string
 
 	switch streamId {
 
@@ -2366,9 +2369,11 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 					common.INDEX_STATE_INITIAL:
 					if indexInst.Stream == streamId {
 						indexList = append(indexList, indexInst)
+						bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
 					}
 				case common.INDEX_STATE_CATCHUP:
 					indexList = append(indexList, indexInst)
+					bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
 				}
 			}
 		}
@@ -2382,6 +2387,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 				case common.INDEX_STATE_INITIAL,
 					common.INDEX_STATE_CATCHUP:
 					indexList = append(indexList, indexInst)
+					bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
 				}
 			}
 		}
@@ -2441,7 +2447,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	retryloop:
 		for {
 			//validate bucket before every try
-			if !ValidateBucket(clustAddr, bucket) {
+			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
 				logging.Errorf("Indexer::startBucketStream \n\tBucket Not Found "+
 					"For Stream %v Bucket %v", streamId, bucket)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
@@ -2813,7 +2819,7 @@ func (idx *indexer) recoverInstMapFromFile() error {
 
 func (idx *indexer) validateIndexInstMap() {
 
-	bucketValidated := make(map[string]bool)
+	bucketUUIDMap := make(map[string]bool)
 	bucketValid := make(map[string]bool)
 
 	for instId, index := range idx.indexInstMap {
@@ -2828,19 +2834,22 @@ func (idx *indexer) validateIndexInstMap() {
 		}
 
 		//if bucket doesn't exist, cleanup
-		bucket := index.Defn.Bucket
-		if !bucketValidated[bucket] {
+		bucketUUID := index.Defn.Bucket + "::" + index.Defn.BucketUUID
+		if _, ok := bucketUUIDMap[bucketUUID]; !ok {
 
-			if ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
-				bucketValid[bucket] = true
+			bucket := index.Defn.Bucket
+			bucketUUIDValid := ValidateBucket(idx.config["clusterAddr"].String(), bucket, []string{index.Defn.BucketUUID})
+			bucketUUIDMap[bucketUUID] = bucketUUIDValid
+
+			if _, ok := bucketValid[bucket]; ok {
+				bucketValid[bucket] = bucketValid[bucket] && bucketUUIDValid
 			} else {
-				bucketValid[bucket] = false
+				bucketValid[bucket] = bucketUUIDValid
 			}
-			bucketValidated[bucket] = true
 
 			//also set the buildTs for initial state index.
 			//TODO buildTs to be part of index instance
-			if bucketValid[bucket] {
+			if bucketUUIDValid {
 				var buildTs Timestamp
 				b, err := common.ConnectBucket(idx.config["clusterAddr"].String(),
 					"default", bucket)
@@ -2854,20 +2863,17 @@ func (idx *indexer) validateIndexInstMap() {
 				}
 			}
 		}
-
-		if !bucketValid[bucket] {
-			logging.Errorf("Indexer::validateIndexInstMap \n\t Bucket %v Not Found."+
-				"Not Recovering Index %v", bucket, index)
-			delete(idx.indexInstMap, instId)
-		}
 	}
 
-	for bucket, _ := range bucketValidated {
-		if !bucketValid[bucket] {
-			if idx.enableManager {
-				if err := idx.updateMetaInfoForDeleteBucket(bucket); err != nil {
-					common.CrashOnError(err)
-				}
+	// handle bucket that fails validation
+	for bucket, valid := range bucketValid {
+		if !valid {
+			instList := idx.deleteIndexInstOnDeletedBucket(bucket, common.NIL_STREAM)
+			for _, instId := range instList {
+				index := idx.indexInstMap[instId]
+				logging.Errorf("Indexer::validateIndexInstMap \n\t Bucket %v Not Found."+
+					"Not Recovering Index %v", bucket, index)
+				delete(idx.indexInstMap, instId)
 			}
 		}
 	}
@@ -3107,9 +3113,9 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 
 }
 
-func (idx *indexer) updateMetaInfoForDeleteBucket(bucket string) error {
+func (idx *indexer) updateMetaInfoForDeleteBucket(bucket string, streamId common.StreamId) error {
 
-	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_DEL_BUCKET, bucket: bucket}
+	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_DEL_BUCKET, bucket: bucket, streamId: streamId}
 	return idx.sendMsgToClusterMgr(msg)
 }
 
@@ -3265,7 +3271,15 @@ func (idx *indexer) groupIndexListByBucket(instIdList []common.IndexInstId) map[
 func (idx *indexer) checkBucketExists(bucket string,
 	instIdList []common.IndexInstId, clientCh MsgChannel) bool {
 
-	if !ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
+	var bucketUUIDList []string
+	for _, instId := range instIdList {
+		indexInst := idx.indexInstMap[instId]
+		if indexInst.Defn.Bucket == bucket {
+			bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
+		}
+	}
+
+	if !ValidateBucket(idx.config["clusterAddr"].String(), bucket, bucketUUIDList) {
 		if idx.enableManager {
 			errStr := fmt.Sprintf("Unknown Bucket %v In Build Request", bucket)
 			idx.bulkUpdateError(instIdList, errStr)
@@ -3354,6 +3368,67 @@ func (idx *indexer) setProfilerOptions(config common.Config) {
 			logging.Errorf("Indexer:: Missing mem-profile o/p filename\n")
 		}
 	}
+}
+
+func (idx *indexer) getIndexInstForBucket(bucket string) ([]common.IndexInstId, error) {
+
+	idx.clustMgrAgentCmdCh <- &MsgClustMgrTopology{}
+	resp := <-idx.clustMgrAgentCmdCh
+
+	var result []common.IndexInstId = nil
+
+	switch resp.GetMsgType() {
+	case CLUST_MGR_GET_GLOBAL_TOPOLOGY:
+		instMap := resp.(*MsgClustMgrTopology).GetInstMap()
+		for id, inst := range instMap {
+			if inst.Defn.Bucket == bucket {
+				result = append(result, id)
+			}
+		}
+	default:
+		return nil, errors.New("Fail to read Metadata")
+	}
+
+	return result, nil
+}
+
+func (idx *indexer) deleteIndexInstOnDeletedBucket(bucket string, streamId common.StreamId) []common.IndexInstId {
+
+	var instIdList []common.IndexInstId = nil
+	var remainingInst []common.IndexInstId = nil
+
+	if idx.enableManager {
+		if err := idx.updateMetaInfoForDeleteBucket(bucket, streamId); err != nil {
+			common.CrashOnError(err)
+		}
+
+		// Find the remaining inst after bucket deletion
+		var err error
+		remainingInst, err = idx.getIndexInstForBucket(bucket)
+		if err != nil {
+			common.CrashOnError(err)
+		}
+	}
+
+	// Only mark index inst as DELETED if it is actually got deleted in metadata.
+	for _, index := range idx.indexInstMap {
+		if index.Defn.Bucket == bucket &&
+			(streamId == common.NIL_STREAM || index.Stream == streamId) {
+
+			found := false
+			for _, id := range remainingInst {
+				if index.InstId == id {
+					found = true
+				}
+			}
+
+			if !found {
+				instIdList = append(instIdList, index.InstId)
+			}
+		}
+	}
+
+	return instIdList
 }
 
 // start cpu profiling.
