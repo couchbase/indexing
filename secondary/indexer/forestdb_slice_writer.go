@@ -112,6 +112,8 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 	logging.Debugf("ForestDBSlice:NewForestDBSlice \n\t Created New Slice Id %v IndexInstId %v "+
 		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
 
+	slice.setCommittedCount()
+
 	return slice, nil
 }
 
@@ -140,6 +142,9 @@ type fdbSlice struct {
 	back     []*forestdb.KVStore // handle for reverse index
 
 	config *forestdb.Config
+
+	// persistted items count
+	committedCount uint64
 
 	idxDefnId common.IndexDefnId
 	idxInstId common.IndexInstId
@@ -531,6 +536,19 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	return s, err
 }
 
+func (fdb *fdbSlice) setCommittedCount() {
+	mainDbInfo, err := fdb.main[0].Info()
+	if err == nil {
+		atomic.StoreUint64(&fdb.committedCount, mainDbInfo.DocCount())
+	} else {
+		logging.Errorf("ForestDB setCommittedCount failed %v", err)
+	}
+}
+
+func (fdb *fdbSlice) GetCommittedCount() uint64 {
+	return atomic.LoadUint64(&fdb.committedCount)
+}
+
 //Rollback slice to given snapshot. Return error if
 //not possible
 func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
@@ -562,6 +580,8 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 			"Main Index to Snapshot %v. Error %v", fdb.id, fdb.idxInstId, info, err)
 		return err
 	}
+
+	fdb.setCommittedCount()
 
 	//rollback back-index only for non-primary indexes
 	if !fdb.isPrimary {
@@ -605,6 +625,8 @@ func (fdb *fdbSlice) RollbackToZero() error {
 			"Main Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
 		return err
 	}
+
+	fdb.setCommittedCount()
 
 	//rollback back-index only for non-primary indexes
 	if !fdb.isPrimary {
@@ -666,14 +688,12 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 	}
 
 	if commit {
-
 		metaDbInfo, err := fdb.meta.Info()
 		if err != nil {
 			return nil, err
 		}
 		//the next meta seqno after this update
 		newSnapshotInfo.MetaSeq = metaDbInfo.LastSeqNum() + 1
-
 		infos, err := fdb.getSnapshotsMeta()
 		if err != nil {
 			return nil, err
@@ -683,11 +703,6 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 
 		if sic.Len() > MAX_SNAPSHOTS_PER_INDEX {
 			sic.RemoveOldest()
-		}
-
-		err = fdb.updateSnapshotsMeta(sic.List())
-		if err != nil {
-			return nil, err
 		}
 
 		// Commit database file
@@ -704,6 +719,12 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 				"Index Commit %v", fdb.id, fdb.idxInstId, err)
 			return nil, err
 		}
+
+		err = fdb.updateSnapshotsMeta(sic.List())
+		if err != nil {
+			return nil, err
+		}
+		fdb.setCommittedCount()
 	}
 
 	return newSnapshotInfo, nil

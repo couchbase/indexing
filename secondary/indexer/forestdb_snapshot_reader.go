@@ -25,14 +25,8 @@ type EntryCallback func([]byte) error
 
 // Approximate items count
 func (s *fdbSnapshot) StatCountTotal() (uint64, error) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	info, err := s.main.Info()
-	if err != nil {
-		return 0, err
-	}
-	return info.DocCount(), nil
+	c := s.slice.(*fdbSlice).GetCommittedCount()
+	return c, nil
 }
 
 func (s *fdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
