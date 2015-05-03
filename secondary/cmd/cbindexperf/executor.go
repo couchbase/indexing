@@ -76,20 +76,18 @@ func RunScan(client *qclient.GsiClient,
 	atomic.AddInt64(&result.Duration, dur.Nanoseconds())
 }
 
-func Worker(jobQ chan Job, clientQ chan *qclient.GsiClient, wg *sync.WaitGroup) {
+func Worker(jobQ chan Job, c *qclient.GsiClient, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for job := range jobQ {
-		c := <-clientQ
 		RunScan(c, job.spec, job.result)
-		clientQ <- c
 	}
 }
 
 func RunCommands(cluster string, cfg *Config) (*Result, error) {
 	var result Result
 
-	var clientQ chan *qclient.GsiClient
+	var clients []*qclient.GsiClient
 	var jobQ chan Job
 	var wg sync.WaitGroup
 
@@ -109,7 +107,7 @@ func RunCommands(cluster string, cfg *Config) (*Result, error) {
 		return nil, err
 	}
 
-	clientQ = make(chan *qclient.GsiClient, cfg.Clients)
+	clients = make([]*qclient.GsiClient, cfg.Clients)
 	for i := 0; i < cfg.Clients; i++ {
 		c, err := qclient.NewGsiClient(cluster, config)
 		if err != nil {
@@ -117,13 +115,13 @@ func RunCommands(cluster string, cfg *Config) (*Result, error) {
 		}
 
 		defer c.Close()
-		clientQ <- c
+		clients[i] = c
 	}
 
-	jobQ = make(chan Job, cfg.Concurrency)
+	jobQ = make(chan Job, cfg.Concurrency*1000)
 	for i := 0; i < cfg.Concurrency; i++ {
 		wg.Add(1)
-		go Worker(jobQ, clientQ, &wg)
+		go Worker(jobQ, clients[i%cfg.Clients], &wg)
 	}
 
 	for i, spec := range cfg.ScanSpecs {
