@@ -436,7 +436,9 @@ func (tk *timekeeper) removeBucketFromStream(streamId common.StreamId,
 
 func (tk *timekeeper) handleSync(cmd Message) {
 
-	logging.Tracef("Timekeeper::handleSync %v", cmd)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("Timekeeper::handleSync %v", cmd)
+	})
 
 	streamId := cmd.(*MsgBucketHWT).GetStreamId()
 	bucket := cmd.(*MsgBucketHWT).GetBucket()
@@ -516,7 +518,9 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 
-	logging.Tracef("Timekeeper::handleFlushDoneMaintStream %v", cmd)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("Timekeeper::handleFlushDoneMaintStream %v", cmd)
+	})
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -612,7 +616,9 @@ func (tk *timekeeper) handleFlushDoneCatchupStream(cmd Message) {
 
 func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 
-	logging.Tracef("Timekeeper::handleFlushDoneInitStream %v", cmd)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("Timekeeper::handleFlushDoneInitStream %v", cmd)
+	})
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
@@ -1203,8 +1209,10 @@ func (tk *timekeeper) checkInitialBuildDone(streamId common.StreamId,
 func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 	bucket string, flushTs *common.TsVbuuid) bool {
 
-	logging.Debugf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v Bucket %v len(buildInfo) %v "+
-		"FlushTs %v", streamId, bucket, len(tk.indexBuildInfo), flushTs)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("Timekeeper::checkInitStreamReadyToMerge \n\t Stream %v Bucket %v len(buildInfo) %v "+
+			"FlushTs %v", streamId, bucket, len(tk.indexBuildInfo), flushTs)
+	})
 
 	if streamId != common.INIT_STREAM {
 		return false
@@ -1417,6 +1425,7 @@ func (tk *timekeeper) maybeMergeTs(streamId common.StreamId,
 		if lts.HasLargeSnapshot() {
 			newTs.SetLargeSnapshot(true)
 		}
+
 		tsList.Init()
 	}
 
@@ -1974,6 +1983,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 		replych <- statsMap
 	}()
+
 }
 
 func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
