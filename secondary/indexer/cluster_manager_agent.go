@@ -201,6 +201,7 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 	if err != nil {
 		common.CrashOnError(err)
 	}
+	defer metaIter.Close()
 
 	indexInstMap := make(common.IndexInstMap)
 

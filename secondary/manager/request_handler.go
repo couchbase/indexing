@@ -479,6 +479,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata() (meta *LocalIndexMetadat
 	if err != nil {
 		return nil, err
 	}
+	defer iter.Close()
 
 	var defn *common.IndexDefn
 	_, defn, err = iter.Next()
@@ -491,6 +492,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata() (meta *LocalIndexMetadat
 	if err != nil {
 		return nil, err
 	}
+	defer iter1.Close()
 
 	var topology *IndexTopology
 	topology, err = iter1.Next()
