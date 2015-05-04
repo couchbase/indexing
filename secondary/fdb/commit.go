@@ -34,9 +34,9 @@ func (k *KVStore) Rollback(sn SeqNum) error {
 	k.Lock()
 	defer k.Unlock()
 
-	Log.Infof("fdb_rollback call k:%p db:%v sn:%v", k, k.db, sn)
+	Log.Debugf("fdb_rollback call k:%p db:%v sn:%v", k, k.db, sn)
 	errNo := C.fdb_rollback(&k.db, C.fdb_seqnum_t(sn))
-	Log.Infof("fdb_rollback retn k:%p errNo:%v db:%v", k, errNo, k.db)
+	Log.Debugf("fdb_rollback retn k:%p errNo:%v db:%v", k, errNo, k.db)
 	if errNo != RESULT_SUCCESS {
 		return Error(errNo)
 	}
