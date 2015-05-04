@@ -23,7 +23,7 @@
 //          serverCmdClose       ^           |                    |
 //                               |           *---- doReceive()----*
 //                serverCmdVbmap |           |                    |
-//            serverCmdVbcontrol |           *---- doReceive()----*
+//        serverCmdVbKeyVersions |           *---- doReceive()----*
 //                serverCmdError |                                |
 //                               *--------------------------------*
 //                                          (control & faults)
@@ -210,7 +210,7 @@ func (s *Server) Close() (err error) {
 const (
 	serverCmdNewConnection byte = iota + 1
 	serverCmdVbmap
-	serverCmdVbcontrol
+	serverCmdVbKeyVersions
 	serverCmdError
 	serverCmdClose
 )
@@ -228,6 +228,54 @@ func (s *Server) genServer(reqch chan []interface{}) {
 	}()
 
 	hostUuids := make(keeper) // id() -> activeVb
+	parseVbs := func(msg serverMessage) []*protobuf.VbKeyVersions {
+		vbs := msg.args[0].([]*protobuf.VbKeyVersions)
+		prune_off := 0
+		for i := 0; i < len(vbs); i++ { //for each vbucket
+			vb := vbs[i]
+			bucket, vbno := vb.GetBucketname(), uint16(vb.GetVbucket())
+			id := (&activeVb{msg.raddr, bucket, vbno}).id()
+			// filter mutations for vbucket that is not from the same
+			// source as its StreamBegin.
+			if avb, ok := hostUuids[id]; ok && (msg.raddr != avb.raddr) {
+				continue
+			}
+			kvs := vb.GetKvs() // mutations for each vbucket
+			vbok := false
+			for _, kv := range kvs {
+				if len(kv.GetCommands()) == 0 {
+					continue
+				}
+				switch byte(kv.GetCommands()[0]) {
+				case c.StreamBegin: // new vbucket stream(s) have started
+					avb := &activeVb{msg.raddr, bucket, vbno}
+					hostUuids = s.addUuids(keeper{id: avb}, hostUuids)
+					vbok = true
+
+				case c.StreamEnd: // vbucket stream(s) have finished
+					avb := &activeVb{msg.raddr, bucket, vbno}
+					if _, ok := hostUuids[id]; ok {
+						hostUuids = s.delUuids(keeper{id: avb}, hostUuids)
+						vbok = true
+					} else {
+						fmsg := "%v StreamEnd without StreamBegin for %v\n"
+						logging.Warnf(fmsg, s.logPrefix, id)
+					}
+				}
+			}
+			if _, ok := hostUuids[id]; ok || vbok {
+				vbs[prune_off] = vb
+				prune_off++
+			} else {
+				fmsg := "%v mutations filtered for %v\n"
+				logging.Warnf(fmsg, s.logPrefix, id)
+			}
+			logging.Tracef("%v {%v, %v}\n", s.logPrefix, bucket, vbno)
+		}
+		vbs = vbs[:prune_off]
+		return vbs
+	}
+
 loop:
 	for {
 		appmsg = nil
@@ -240,11 +288,16 @@ loop:
 				if _, ok := s.conns[raddr]; ok {
 					logging.Errorf("%v %q already active\n", s.logPrefix, raddr)
 					conn.Close()
+
 				} else { // connection accepted
 					worker := make(chan interface{}, s.maxVbuckets)
-					s.conns[raddr] = &netConn{conn: conn, worker: worker, tpkt: newTransportPkt(s.maxPayload)}
+					s.conns[raddr] = &netConn{
+						conn: conn, worker: worker,
+						tpkt: newTransportPkt(s.maxPayload),
+					}
 					n := len(s.conns)
-					logging.Infof("%v new connection %q +%d\n", s.logPrefix, raddr, n)
+					fmsg := "%v new connection %q +%d\n"
+					logging.Infof(fmsg, s.logPrefix, raddr, n)
 					s.startWorker(raddr)
 				}
 
@@ -257,16 +310,8 @@ loop:
 				}
 				s.startWorker(msg.raddr)
 
-			case serverCmdVbcontrol:
-				started := msg.args[0].(keeper)
-				finished := msg.args[1].(keeper)
-				if len(started) > 0 { // new vbucket stream(s) have started
-					hostUuids = s.addUuids(started, hostUuids)
-				}
-				if len(finished) > 0 { // vbucket stream(s) have finished
-					hostUuids = s.delUuids(finished, hostUuids)
-				}
-				s.startWorker(msg.raddr)
+			case serverCmdVbKeyVersions:
+				s.appch <- parseVbs(msg)
 
 			case serverCmdClose:
 				// This execution path never panics !!
@@ -345,7 +390,8 @@ func (s *Server) jumboErrorHandler(
 		whatJumbo = "closeremote"
 
 	} else if err != nil {
-		logging.Errorf("%v remote %q unknown error: %v\n", s.logPrefix, raddr, err)
+		fmsg := "%v remote %q unknown error: %v\n"
+		logging.Errorf(fmsg, s.logPrefix, raddr, err)
 		whatJumbo = "closeall"
 
 	} else {
@@ -445,32 +491,6 @@ func doReceive(
 	pkt := nc.tpkt
 	msg := serverMessage{raddr: conn.RemoteAddr().String()}
 
-	// create it here to avoid repeated allocation.
-	started := make(keeper)  // id() -> activeVb
-	finished := make(keeper) // id() -> activeVb
-
-	beginsAndEnds := func(vbs []*protobuf.VbKeyVersions) {
-		for _, vb := range vbs { // for each vbucket
-			bucket, vbno := vb.GetBucketname(), uint16(vb.GetVbucket())
-			avb := &activeVb{msg.raddr, bucket, vbno}
-			id := avb.id()
-			kvs := vb.GetKvs() // mutations for each vbucket
-
-			for _, kv := range kvs {
-				if len(kv.GetCommands()) == 0 {
-					continue
-				}
-				switch byte(kv.GetCommands()[0]) {
-				case c.StreamBegin:
-					started[id] = avb
-				case c.StreamEnd:
-					finished[id] = avb
-				}
-			}
-			logging.Tracef("%v {%v, %v}\n", prefix, bucket, vbno)
-		}
-	}
-
 loop:
 	for {
 		timeoutMs := readDeadline * time.Millisecond
@@ -485,27 +505,19 @@ loop:
 		} else if vbmap, ok := payload.(*protobuf.VbConnectionMap); ok {
 			msg.cmd, msg.args = serverCmdVbmap, []interface{}{vbmap}
 			reqch <- []interface{}{msg}
-			format := "%v worker %q exit: `serverCmdVbmap`\n"
-			logging.Tracef(format, prefix, msg.raddr)
+			fmsg := "%v worker %q exit: `serverCmdVbmap`\n"
+			logging.Tracef(fmsg, prefix, msg.raddr)
 			break loop
 
 		} else if vbs, ok := payload.([]*protobuf.VbKeyVersions); ok {
-			beginsAndEnds(vbs)
+			msg.cmd, msg.args = serverCmdVbKeyVersions, []interface{}{vbs}
 			select {
-			case appch <- vbs:
-				if len(started) > 0 || len(finished) > 0 {
-					msg.cmd = serverCmdVbcontrol
-					msg.args = []interface{}{started, finished}
-					reqch <- []interface{}{msg}
-					format := "%v worker %q exit: serverCmdVbcontrol {%v,%v}\n"
-					logging.Tracef(format, prefix, msg.raddr, len(started), len(finished))
-					break loop
-				}
-
+			case reqch <- []interface{}{msg}:
 			case <-worker:
 				msg.cmd, msg.err = serverCmdError, ErrorWorkerKilled
 				reqch <- []interface{}{msg}
-				logging.Errorf("%v worker %q exit: %v\n", prefix, msg.raddr, msg.err)
+				fmsg := "%v worker %q exit: %v\n"
+				logging.Errorf(fmsg, prefix, msg.raddr, msg.err)
 				break loop
 			}
 
