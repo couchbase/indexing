@@ -62,7 +62,7 @@ type InitialBuildInfo struct {
 //timeout in milliseconds to batch the vbuckets
 //together for repair message
 const REPAIR_BATCH_TIMEOUT = 1000
-const REPAIR_RETRY_INTERVAL = 5000
+const KV_RETRY_INTERVAL = 5000
 
 //NewTimekeeper returns an instance of timekeeper or err message.
 //It listens on supvCmdch for command and every command is followed
@@ -180,6 +180,9 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 
 	case STREAM_REQUEST_DONE:
 		tk.handleStreamRequestDone(cmd)
+
+	case INDEXER_RECOVERY_DONE:
+		tk.handleRecoveryDone(cmd)
 
 	case CONFIG_SETTINGS_UPDATE:
 		tk.handleConfigUpdate(cmd)
@@ -348,7 +351,8 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 					idx.InstId, streamId, idx.Defn.Bucket)
 				tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
 					indexInst: idx,
-					buildTs:   buildTs}
+					buildTs:   buildTs,
+				}
 			}
 		}
 	}
@@ -1012,6 +1016,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 
 	streamId := cmd.(*MsgStreamInfo).GetStreamId()
 	bucket := cmd.(*MsgStreamInfo).GetBucket()
+	buildTs := cmd.(*MsgStreamInfo).GetBuildTs()
 
 	logging.Debugf("Timekeeper::handleStreamRequestDone StreamId %v Bucket %v",
 		streamId, bucket)
@@ -1019,7 +1024,40 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	tk.setBuildTs(streamId, bucket, buildTs)
+
 	//Check for possiblity of build done after stream request done.
+	//In case of crash recovery, if there are no mutations, there is
+	//no flush happening, which can cause index to be in initial state.
+	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
+		!tk.ss.checkAnyAbortPending(streamId, bucket) {
+		lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+		tk.checkInitialBuildDone(streamId, bucket, lastFlushedTs)
+	}
+
+	//If the indexer crashed after processing all mutations but before
+	//merge of an index in Catchup state, the merge needs to happen here,
+	//as no flush would happen in case there are no more mutations.
+	tk.checkPendingStreamMerge(streamId, bucket)
+
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
+func (tk *timekeeper) handleRecoveryDone(cmd Message) {
+
+	streamId := cmd.(*MsgRecovery).GetStreamId()
+	bucket := cmd.(*MsgRecovery).GetBucket()
+	buildTs := cmd.(*MsgRecovery).GetBuildTs()
+
+	logging.Debugf("Timekeeper::handleRecoveryDone StreamId %v Bucket %v",
+		streamId, bucket)
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	tk.setBuildTs(streamId, bucket, buildTs)
+
+	//Check for possiblity of build done after recovery is done.
 	//In case of crash recovery, if there are no mutations, there is
 	//no flush happening, which can cause index to be in initial state.
 	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
@@ -1739,7 +1777,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	case MSG_SUCCESS:
 		//allow sufficient time for control messages to come in
 		//after projector has confirmed success
-		time.Sleep(REPAIR_RETRY_INTERVAL * time.Millisecond)
+		time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
 		//check for more vbuckets in repair state
 		tk.repairStream(streamId, bucket)
@@ -1996,11 +2034,14 @@ func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,
 			idx.Stream == streamId &&
 			idx.State == common.INDEX_STATE_INITIAL {
 
-			//if flushTs is greater than or equal to buildTs
-			ts := getSeqTsFromTsVbuuid(flushTs)
-			if ts.GreaterThanEqual(buildInfo.buildTs) {
-				return true
+			if buildInfo.buildTs != nil {
+				//if flushTs is greater than or equal to buildTs
+				ts := getSeqTsFromTsVbuuid(flushTs)
+				if ts.GreaterThanEqual(buildInfo.buildTs) {
+					return true
+				}
 			}
+			return false
 		}
 	}
 
@@ -2065,6 +2106,21 @@ func (tk *timekeeper) stopTimer(streamId common.StreamId, bucket string) {
 	stopCh := tk.ss.streamBucketTimerStopCh[streamId][bucket]
 	if stopCh != nil {
 		close(stopCh)
+	}
+
+}
+
+func (tk *timekeeper) setBuildTs(streamId common.StreamId, bucket string,
+	buildTs Timestamp) {
+
+	for _, buildInfo := range tk.indexBuildInfo {
+		//if index belongs to the given bucket/stream and in INITIAL state
+		idx := buildInfo.indexInst
+		if idx.Defn.Bucket == bucket &&
+			idx.Stream == streamId &&
+			idx.State == common.INDEX_STATE_INITIAL {
+			buildInfo.buildTs = buildTs
+		}
 	}
 
 }

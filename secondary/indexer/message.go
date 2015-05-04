@@ -237,6 +237,7 @@ type MsgStreamInfo struct {
 	streamId common.StreamId
 	bucket   string
 	vbList   []Vbucket
+	buildTs  Timestamp
 }
 
 func (m *MsgStreamInfo) GetMsgType() MsgType {
@@ -253,6 +254,10 @@ func (m *MsgStreamInfo) GetBucket() string {
 
 func (m *MsgStreamInfo) GetVbList() []Vbucket {
 	return m.vbList
+}
+
+func (m *MsgStreamInfo) GetBuildTs() Timestamp {
+	return m.buildTs
 }
 
 func (m *MsgStreamInfo) String() string {
@@ -801,6 +806,7 @@ type MsgRecovery struct {
 	streamId  common.StreamId
 	bucket    string
 	restartTs *common.TsVbuuid
+	buildTs   Timestamp
 }
 
 func (m *MsgRecovery) GetMsgType() MsgType {
@@ -817,6 +823,10 @@ func (m *MsgRecovery) GetBucket() string {
 
 func (m *MsgRecovery) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
+}
+
+func (m *MsgRecovery) GetBuildTs() Timestamp {
+	return m.buildTs
 }
 
 type MsgRollback struct {
