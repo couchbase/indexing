@@ -149,6 +149,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		err = m.handleBuildIndexes(content)
 	case client.OPCODE_SERVICE_MAP:
 		result, err = m.handleServiceMap(content)
+	case client.OPCODE_DELETE_BUCKET:
+		err = m.handleDeleteBucket(key)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -427,4 +429,16 @@ func (m *LifecycleMgr) handleServiceMap(content []byte) ([]byte, error) {
 	}
 
 	return client.MarshallServiceMap(srvMap)
+}
+
+func (m *LifecycleMgr) handleDeleteBucket(bucket string) error {
+
+	topology, err := m.repo.GetTopologyByBucket(bucket)
+	if err == nil {
+		for _, defnRef := range topology.Definitions {
+			m.DeleteIndex(common.IndexDefnId(defnRef.DefnId))
+		}
+	}
+
+	return nil
 }

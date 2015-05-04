@@ -53,6 +53,8 @@ type mutationMgr struct {
 
 	lock  sync.Mutex //lock to protect this structure
 	flock sync.Mutex //fine-grain lock for streamFlusherStopChMap
+
+	config common.Config
 }
 
 //NewMutationManager creates a new Mutation Manager which listens for commands from
@@ -83,6 +85,7 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		supvCmdch:              supvCmdch,
 		supvRespch:             supvRespch,
 		numVbuckets:            uint16(config["numVbuckets"].Int()),
+		config:                 config,
 	}
 
 	//start Mutation Manager loop which listens to commands from its supervisor
@@ -191,6 +194,9 @@ func (r *mutationMgr) panicHandler() {
 			err = errors.New("Unknown panic")
 		}
 
+		logging.Fatalf("MutationManager Panic Err %v", err)
+		logging.Fatalf("%s", logging.StackTrace())
+
 		//shutdown the mutation manager
 		select {
 		case <-r.shutdownCh:
@@ -256,12 +262,12 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 	case MUT_MGR_ABORT_PERSIST:
 		m.handleAbortPersist(cmd)
 
+	case CONFIG_SETTINGS_UPDATE:
+		m.handleConfigUpdate(cmd)
+
 	default:
-		logging.Errorf("MutationMgr::handleSupervisorCommands \n\tReceived Unknown Command %v", cmd)
-		m.supvCmdch <- &MsgError{
-			err: Error{code: ERROR_MUT_MGR_UNKNOWN_COMMAND,
-				severity: NORMAL,
-				category: MUTATION_MANAGER}}
+		logging.Errorf("MutationMgr::handleSupervisorCommands Received Unknown Command %v", cmd)
+		common.CrashOnError(errors.New("Unknown Command On Supervisor Channel"))
 	}
 }
 
@@ -274,16 +280,16 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		STREAM_READER_STREAM_BEGIN,
 		STREAM_READER_STREAM_END,
 		STREAM_READER_ERROR,
-		STREAM_READER_SYNC,
-		STREAM_READER_SNAPSHOT_MARKER,
 		STREAM_READER_CONN_ERROR,
 		STREAM_READER_HWT:
 		//send message to supervisor to take decision
-		logging.Tracef("MutationMgr::handleWorkerMessage \n\tReceived %v from worker", cmd)
+		logging.Tracef("MutationMgr::handleWorkerMessage Received %v from worker", cmd)
 		m.supvRespch <- cmd
 
 	default:
-		logging.Errorf("MutationMgr::handleWorkerMessage \n\tReceived unhandled message from worker %v", cmd)
+		logging.Errorf("MutationMgr::handleWorkerMessage Received unhandled "+
+			"message from worker %v", cmd)
+		common.CrashOnError(errors.New("Unknown Message On Worker Channel"))
 	}
 
 }
@@ -790,10 +796,10 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 	m.streamFlusherStopChMap[streamId][bucket] = stopch
 	m.flusherWaitGroup.Add(1)
 
-	go func() {
+	go func(config common.Config) {
 		defer m.flusherWaitGroup.Done()
 
-		flusher := NewFlusher()
+		flusher := NewFlusher(config)
 		sts := getSeqTsFromTsVbuuid(ts)
 		msgch := flusher.PersistUptoTS(q.queue, streamId, ts.Bucket,
 			m.indexInstMap, m.indexPartnMap, sts, changeVec, stopch)
@@ -818,7 +824,7 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 		} else {
 			m.supvRespch <- msg
 		}
-	}()
+	}(m.config)
 
 }
 
@@ -855,10 +861,10 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 	m.streamFlusherStopChMap[streamId][bucket] = stopch
 	m.flusherWaitGroup.Add(1)
 
-	go func() {
+	go func(config common.Config) {
 		defer m.flusherWaitGroup.Done()
 
-		flusher := NewFlusher()
+		flusher := NewFlusher(config)
 		sts := getSeqTsFromTsVbuuid(ts)
 		msgch := flusher.DrainUptoTS(q.queue, streamId, ts.Bucket,
 			sts, changeVec, stopch)
@@ -876,7 +882,7 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 
 		//send the response to supervisor
 		m.supvRespch <- msg
-	}()
+	}(m.config)
 
 }
 
@@ -894,11 +900,11 @@ func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 
 	q := m.streamBucketQueueMap[streamId][bucket]
 
-	go func() {
-		flusher := NewFlusher()
+	go func(config common.Config) {
+		flusher := NewFlusher(config)
 		ts := flusher.GetQueueHWT(q.queue)
 		m.supvCmdch <- &MsgTimestamp{ts: ts}
-	}()
+	}(m.config)
 }
 
 //handleGetMutationQueueLWT calculates LWT for a mutation queue
@@ -914,11 +920,11 @@ func (m *mutationMgr) handleGetMutationQueueLWT(cmd Message) {
 
 	q := m.streamBucketQueueMap[streamId][bucket]
 
-	go func() {
-		flusher := NewFlusher()
+	go func(config common.Config) {
+		flusher := NewFlusher(config)
 		ts := flusher.GetQueueLWT(q.queue)
 		m.supvCmdch <- &MsgTimestamp{ts: ts}
-	}()
+	}(m.config)
 }
 
 //handleUpdateIndexInstMap updates the indexInstMap
@@ -986,4 +992,11 @@ func (m *mutationMgr) handleAbortPersist(cmd Message) {
 
 	m.supvCmdch <- &MsgSuccess{}
 
+}
+
+func (m *mutationMgr) handleConfigUpdate(cmd Message) {
+	cfgUpdate := cmd.(*MsgConfigUpdate)
+	m.config = cfgUpdate.GetConfig()
+
+	m.supvCmdch <- &MsgSuccess{}
 }

@@ -87,10 +87,11 @@ type RestoreContext struct {
 //
 
 type IndexStatusResponse struct {
-	Version uint64        `json:"version,omitempty"`
-	Code    string        `json:"code,omitempty"`
-	Error   string        `json:"error,omitempty"`
-	Status  []IndexStatus `json:"status,omitempty"`
+	Version     uint64        `json:"version,omitempty"`
+	Code        string        `json:"code,omitempty"`
+	Error       string        `json:"error,omitempty"`
+	FailedNodes []string      `json:"failedNodes,omitempty"`
+	Status      []IndexStatus `json:"status,omitempty"`
 }
 
 type IndexStatus struct {
@@ -104,6 +105,7 @@ type IndexStatus struct {
 	Definition string             `json:"definition"`
 	Hosts      []string           `json:"hosts,omitempty"`
 	Error      string             `json:"error,omitempty"`
+	Completion string             `json:"completion,omitempty"`
 }
 
 //
@@ -245,27 +247,29 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 		return
 	}
 
-	list, err := m.getIndexStatus(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache))
-	if err == nil {
+	list, failedNodes, err := m.getIndexStatus(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache))
+	if err == nil && len(failedNodes) == 0 {
 		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
 		send(w, resp)
 	} else {
-		logging.Debugf("RequestHandler::handleIndexStatusRequest: err %v", err)
-		resp := &IndexStatusResponse{Code: RESP_ERROR, Error: "Fail to retrieve cluster-wide metadata from index service"}
+		logging.Debugf("RequestHandler::handleIndexStatusRequest: failed nodes %v", failedNodes)
+		resp := &IndexStatusResponse{Code: RESP_ERROR, Error: "Fail to retrieve cluster-wide metadata from index service",
+			Status: list, FailedNodes: failedNodes}
 		send(w, resp)
 	}
 }
 
-func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) ([]IndexStatus, error) {
+func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) ([]IndexStatus, []string, error) {
 
 	if err := cinfo.Fetch(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// find all nodes that has a index http service
 	nids := cinfo.GetNodesByServiceType(common.INDEX_HTTP_SERVICE)
 
 	list := make([]IndexStatus, 0)
+	failedNodes := make([]string, 0)
 
 	for _, nid := range nids {
 
@@ -274,18 +278,34 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) (
 
 			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
 			if err != nil {
-				return nil, errors.New(fmt.Sprintf("Fail to retrieve index definition from url %s", addr))
+				failedNodes = append(failedNodes, addr)
+				continue
 			}
 
 			localMeta := new(LocalIndexMetadata)
 			status := convertResponse(resp, localMeta)
 			if status == RESP_ERROR {
-				return nil, errors.New(fmt.Sprintf("Fail to retrieve local metadata from url %s.", addr))
+				failedNodes = append(failedNodes, addr)
+				continue
 			}
 
 			curl, err := cinfo.GetServiceAddress(nid, "mgmt")
 			if err != nil {
-				return nil, errors.New(fmt.Sprintf("Fail to retrieve mgmt endpoint for index node"))
+				failedNodes = append(failedNodes, addr)
+				continue
+			}
+
+			resp, err = getWithAuth(addr + "/stats")
+			if err != nil {
+				failedNodes = append(failedNodes, addr)
+				continue
+			}
+
+			stats := new(common.Statistics)
+			status = convertResponse(resp, stats)
+			if status == RESP_ERROR {
+				failedNodes = append(failedNodes, addr)
+				continue
 			}
 
 			for _, defn := range localMeta.IndexDefinitions {
@@ -311,6 +331,12 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) (
 							stateStr = "Error"
 						}
 
+						completion := "0"
+						key := fmt.Sprintf("%v:%v:build_progress", defn.Bucket, defn.Name)
+						if progress, ok := stats.ToMap()[key]; ok {
+							completion = fmt.Sprintf("%v", progress)
+						}
+
 						status := IndexStatus{
 							DefnId:     defn.DefnId,
 							Name:       defn.Name,
@@ -322,6 +348,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) (
 							Error:      errStr,
 							Hosts:      []string{curl},
 							Definition: common.IndexStatement(defn),
+							Completion: completion,
 						}
 
 						list = append(list, status)
@@ -329,11 +356,12 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) (
 				}
 			}
 		} else {
-			return nil, errors.New(fmt.Sprintf("Fail to retrieve http endpoint for index node"))
+			failedNodes = append(failedNodes, addr)
+			continue
 		}
 	}
 
-	return list, nil
+	return list, failedNodes, nil
 }
 
 ///////////////////////////////////////////////////////
@@ -451,6 +479,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata() (meta *LocalIndexMetadat
 	if err != nil {
 		return nil, err
 	}
+	defer iter.Close()
 
 	var defn *common.IndexDefn
 	_, defn, err = iter.Next()
@@ -463,6 +492,7 @@ func (m *requestHandlerContext) getLocalIndexMetadata() (meta *LocalIndexMetadat
 	if err != nil {
 		return nil, err
 	}
+	defer iter1.Close()
 
 	var topology *IndexTopology
 	topology, err = iter1.Next()

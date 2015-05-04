@@ -84,6 +84,7 @@ const (
 	CLUST_MGR_GET_GLOBAL_TOPOLOGY
 	CLUST_MGR_GET_LOCAL
 	CLUST_MGR_SET_LOCAL
+	CLUST_MGR_DEL_BUCKET
 
 	//CBQ_BRIDGE_SHUTDOWN
 	CBQ_BRIDGE_SHUTDOWN
@@ -934,6 +935,7 @@ type MsgClustMgrUpdate struct {
 	mType         MsgType
 	indexList     []common.IndexInst
 	updatedFields MetaUpdateFields
+	bucket        string
 }
 
 func (m *MsgClustMgrUpdate) GetMsgType() MsgType {
@@ -946,6 +948,10 @@ func (m *MsgClustMgrUpdate) GetIndexList() []common.IndexInst {
 
 func (m *MsgClustMgrUpdate) GetUpdatedFields() MetaUpdateFields {
 	return m.updatedFields
+}
+
+func (m *MsgClustMgrUpdate) GetBucket() string {
+	return m.bucket
 }
 
 //CLUST_MGR_GET_GLOBAL_TOPOLOGY

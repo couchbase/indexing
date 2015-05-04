@@ -150,6 +150,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_SET_LOCAL:
 		c.handleSetLocalValue(cmd)
 
+	case CLUST_MGR_DEL_BUCKET:
+		c.handleDeleteBucket(cmd)
+
 	default:
 		logging.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
 	}
@@ -198,6 +201,7 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 	if err != nil {
 		common.CrashOnError(err)
 	}
+	defer metaIter.Close()
 
 	indexInstMap := make(common.IndexInstMap)
 
@@ -275,6 +279,18 @@ func (c *clustMgrAgent) handleSetLocalValue(cmd Message) {
 		err:   err,
 	}
 
+}
+
+func (c *clustMgrAgent) handleDeleteBucket(cmd Message) {
+
+	logging.Debugf("ClustMgr:handleDeleteBucket %v", cmd)
+
+	bucket := cmd.(*MsgClustMgrUpdate).GetBucket()
+
+	err := c.mgr.DeleteIndexForBucket(bucket)
+	common.CrashOnError(err)
+
+	c.supvCmdch <- &MsgSuccess{}
 }
 
 //panicHandler handles the panic from index manager

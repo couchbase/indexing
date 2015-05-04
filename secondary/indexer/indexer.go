@@ -474,6 +474,10 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		<-idx.tkCmdCh
 		idx.scanCoordCmdCh <- msg
 		<-idx.scanCoordCmdCh
+		idx.kvSenderCmdCh <- msg
+		<-idx.kvSenderCmdCh
+		idx.mutMgrCmdCh <- msg
+		<-idx.mutMgrCmdCh
 
 	case INDEXER_INIT_PREP_RECOVERY:
 		idx.handleInitPrepRecovery(msg)
@@ -1172,7 +1176,7 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	}
 
 	if idx.enableManager {
-		if err := idx.updateMetaInfoForIndexList(instIdList, true, false, false, false); err != nil {
+		if err := idx.updateMetaInfoForDeleteBucket(bucket); err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -2622,16 +2626,17 @@ func (idx *indexer) validateIndexInstMap() {
 		if !bucketValid[bucket] {
 			logging.Errorf("Indexer::validateIndexInstMap \n\t Bucket %v Not Found."+
 				"Not Recovering Index %v", bucket, index)
-			//update metadata with new state
-			index.State = common.INDEX_STATE_DELETED
-			idx.indexInstMap[instId] = index
+			delete(idx.indexInstMap, instId)
+		}
+	}
+
+	for bucket, _ := range bucketValidated {
+		if !bucketValid[bucket] {
 			if idx.enableManager {
-				instIdList := []common.IndexInstId{instId}
-				if err := idx.updateMetaInfoForIndexList(instIdList, true, false, false, false); err != nil {
+				if err := idx.updateMetaInfoForDeleteBucket(bucket); err != nil {
 					common.CrashOnError(err)
 				}
 			}
-			delete(idx.indexInstMap, instId)
 		}
 	}
 
@@ -2867,6 +2872,12 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 
 	return idx.sendMsgToClusterMgr(msg)
 
+}
+
+func (idx *indexer) updateMetaInfoForDeleteBucket(bucket string) error {
+
+	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_DEL_BUCKET, bucket: bucket}
+	return idx.sendMsgToClusterMgr(msg)
 }
 
 func (idx *indexer) sendMsgToClusterMgr(msg Message) error {

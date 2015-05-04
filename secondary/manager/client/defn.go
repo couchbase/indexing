@@ -26,6 +26,7 @@ const (
 	OPCODE_BUILD_INDEX                     = OPCODE_DROP_INDEX + 1
 	OPCODE_UPDATE_INDEX_INST               = OPCODE_BUILD_INDEX + 1
 	OPCODE_SERVICE_MAP                     = OPCODE_UPDATE_INDEX_INST + 1
+	OPCODE_DELETE_BUCKET                   = OPCODE_SERVICE_MAP + 1
 )
 
 /////////////////////////////////////////////////////////////////////////

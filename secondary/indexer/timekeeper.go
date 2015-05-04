@@ -14,6 +14,7 @@
 package indexer
 
 import (
+	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dcp"
@@ -144,9 +145,6 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	case STREAM_READER_STREAM_END:
 		tk.handleStreamEnd(cmd)
 
-	case STREAM_READER_SNAPSHOT_MARKER:
-		tk.handleSnapshotMarker(cmd)
-
 	case STREAM_READER_HWT:
 		tk.handleSync(cmd)
 
@@ -198,6 +196,7 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 	default:
 		logging.Errorf("Timekeeper::handleSupvervisorCommands "+
 			"Received Unknown Command %v", cmd)
+		common.CrashOnError(errors.New("Unknown Command On Supervisor Channel"))
 
 	}
 
@@ -771,50 +770,6 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 		} else {
 			bucketFlushEnabledMap[bucket] = false
 		}
-	}
-
-	tk.supvCmdch <- &MsgSuccess{}
-}
-
-func (tk *timekeeper) handleSnapshotMarker(cmd Message) {
-
-	streamId := cmd.(*MsgStream).GetStreamId()
-	meta := cmd.(*MsgStream).GetMutationMeta()
-
-	defer meta.Free()
-
-	tk.lock.Lock()
-	defer tk.lock.Unlock()
-
-	//check if bucket is active in stream
-	if tk.checkBucketActiveInStream(streamId, meta.bucket) == false {
-		logging.Warnf("Timekeeper::handleSnapshotMarker \n\tReceived Snapshot Marker for "+
-			"Inactive Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
-		return
-	}
-
-	//if there are no indexes for this bucket and stream, ignore
-	if c, ok := tk.ss.streamBucketIndexCountMap[streamId][meta.bucket]; !ok || c <= 0 {
-		logging.Warnf("Timekeeper::handleSnapshotMarker \n\tIgnore Snapshot for StreamId %v "+
-			"Bucket %v. IndexCount %v. ", streamId, meta.bucket, c)
-		tk.supvCmdch <- &MsgSuccess{}
-		return
-	}
-
-	snapshot := cmd.(*MsgStream).GetSnapshot()
-	if snapshot.CanProcess() == true {
-		//update the snapshot seqno in internal map
-		ts := tk.ss.streamBucketHWTMap[streamId][meta.bucket]
-		ts.Snapshots[meta.vbucket][0] = snapshot.start
-		ts.Snapshots[meta.vbucket][1] = snapshot.end
-
-		tk.ss.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
-		logging.Tracef("TK Snapshot %v %v %v %v %v %v", streamId, meta.bucket,
-			meta.vbucket, meta.vbuuid, snapshot.start, snapshot.end)
-	} else {
-		logging.Debugf("Timekeeper::handleSnapshotMarker \n\tIgnoring Snapshot Marker. "+
-			"Unknown Type %v. Bucket %v. StreamId %v", snapshot.snapType, meta.bucket,
-			streamId)
 	}
 
 	tk.supvCmdch <- &MsgSuccess{}

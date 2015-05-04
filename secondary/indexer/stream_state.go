@@ -359,17 +359,25 @@ func (ss *StreamState) checkAnyAbortPending(streamId common.StreamId,
 func (ss *StreamState) updateHWT(streamId common.StreamId,
 	bucket string, hwt *common.TsVbuuid) {
 
-	//if seqno has incremented, update it
 	ts := ss.streamBucketHWTMap[streamId][bucket]
 
 	for i, seq := range hwt.Seqnos {
+		//if seqno has incremented, update it
 		if seq > ts.Seqnos[i] {
 			ts.Seqnos[i] = seq
 			ts.Vbuuids[i] = hwt.Vbuuids[i]
 		}
+		//if snapEnd is greater than current hwt snapEnd
+		if hwt.Snapshots[i][1] > ts.Snapshots[i][1] {
+			ts.Snapshots[i][0] = hwt.Snapshots[i][0]
+			ts.Snapshots[i][1] = hwt.Snapshots[i][1]
+			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
+		}
 	}
 
-	logging.Tracef("StreamState::updateHWT \n\tHWT Updated : %v", ts)
+	if logging.Level(ss.config["settings.log_level"].String()) >= logging.Trace {
+		logging.Tracef("StreamState::updateHWT HWT Updated : %v", ts)
+	}
 }
 
 func (ss *StreamState) checkNewTSDue(streamId common.StreamId, bucket string) bool {
