@@ -295,7 +295,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) (
 				continue
 			}
 
-			resp, err = getWithAuth(addr + "/stats")
+			resp, err = getWithAuth(addr + "/stats?async=true")
 			if err != nil {
 				failedNodes = append(failedNodes, addr)
 				continue
