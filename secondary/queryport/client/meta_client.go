@@ -16,8 +16,8 @@ type metadataClient struct {
 	mdClient *mclient.MetadataProvider
 	rw       sync.RWMutex // protects all fields listed below
 	// sherlock topology management, multi-node & single-partition.
-	adminports map[string]common.IndexerId                   // book-keeping for cluster changes
-	topology   map[common.IndexerId][]*mclient.IndexMetadata //indexerId->indexes
+	adminports map[string]common.IndexerId // book-keeping for cluster changes
+	topology   map[common.IndexerId]map[common.IndexDefnId]*mclient.IndexMetadata
 	// shelock load replicas.
 	replicas map[common.IndexDefnId][]common.IndexDefnId
 	// shelock load balancing.
@@ -34,8 +34,8 @@ func newMetaBridgeClient(
 		finch:      make(chan bool),
 		adminports: make(map[string]common.IndexerId),
 		loads:      make(map[common.IndexDefnId]*loadHeuristics),
-		topology:   make(map[common.IndexerId][]*mclient.IndexMetadata),
 	}
+	b.topology = make(map[common.IndexerId]map[common.IndexDefnId]*mclient.IndexMetadata)
 	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
 	// initialize meta-data-provide.
 	uuid, err := common.NewUUID()
@@ -65,40 +65,40 @@ func (b *metadataClient) Sync() error {
 
 // Refresh implement BridgeAccessor{} interface.
 func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
-	b.rw.Lock()
-	defer b.rw.Unlock()
-
 	mindexes := b.mdClient.ListIndex()
 	indexes := make([]*mclient.IndexMetadata, 0, len(mindexes))
 	for _, mindex := range mindexes {
 		indexes = append(indexes, mindex)
 	}
 
+	b.rw.Lock()
+	defer b.rw.Unlock()
+
+	// b.adminports is the source of truth for list of indexers.
+	newtopo :=
+		make(map[common.IndexerId]map[common.IndexDefnId]*mclient.IndexMetadata)
+	for _, indexerID := range b.adminports {
+		newtopo[indexerID] = make(map[common.IndexDefnId]*mclient.IndexMetadata)
+	}
 	// gather topology of each index.
-	for _, index := range indexes {
+	for _, index := range mindexes {
 		for _, instance := range index.Instances {
 			id := instance.IndexerId
-			if _, ok := b.topology[id]; !ok {
-				// there could be a race between Refresh() and
-				// watchClusterChanges() so create an entry in
-				// topology.
-				b.topology[id] = make([]*mclient.IndexMetadata, 0)
-			}
-
-			found := false
-			for _, meta := range b.topology[id] {
-				if meta.Definition.DefnId == index.Definition.DefnId {
-					found = true
-				}
-			}
-
-			if !found {
-				b.topology[id] = append(b.topology[id], index)
+			if _, ok := newtopo[id]; ok {
+				newtopo[id][index.Definition.DefnId] = index
 			}
 		}
 	}
+
+	b.topology = newtopo
 	// compute replicas
 	b.replicas = b.computeReplicas()
+	// remove loads for indexes that is been deleted / gone-offline.
+	for defnId := range b.loads {
+		if _, ok := b.replicas[defnId]; !ok {
+			delete(b.loads, defnId)
+		}
+	}
 	return indexes, nil
 }
 
@@ -138,8 +138,8 @@ func (b *metadataClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
 	defer b.rw.RUnlock()
 
 	for _, indexes := range b.topology {
-		for _, index := range indexes {
-			if defnID == uint64(index.Definition.DefnId) {
+		for id, index := range indexes {
+			if defnID == uint64(id) {
 				return index.Definition
 			}
 		}
@@ -168,7 +168,8 @@ RETRY:
 		secExprs, isPrimary, plan)
 
 	if needRefresh && refreshCnt == 0 {
-		logging.Debugf("GsiClient: Indexer Node List is out-of-date.  Require refresh.")
+		fmsg := "GsiClient: Indexer Node List is out-of-date.  Require refresh."
+		logging.Debugf(fmsg)
 		b.updateIndexerList(false)
 		refreshCnt++
 		goto RETRY
@@ -193,7 +194,11 @@ func (b *metadataClient) BuildIndexes(defnIDs []uint64) error {
 
 // DropIndex implements BridgeAccessor{} interface.
 func (b *metadataClient) DropIndex(defnID uint64) error {
-	return b.mdClient.DropIndex(common.IndexDefnId(defnID))
+	err := b.mdClient.DropIndex(common.IndexDefnId(defnID))
+	if err == nil { // cleanup index local cache.
+		b.deleteIndex(defnID)
+	}
+	return err
 }
 
 // GetScanports implements BridgeAccessor{} interface.
@@ -221,6 +226,7 @@ func (b *metadataClient) GetScanport(
 
 	b.rw.RLock()
 	defer b.rw.RUnlock()
+
 	if retry == 0 {
 		targetDefnID = b.pickOptimal(defnID) // index under least load
 	} else {
@@ -294,7 +300,8 @@ func (b *metadataClient) Close() {
 
 // compute a map of replicas for each index in 2i.
 func (b *metadataClient) computeReplicas() map[common.IndexDefnId][]common.IndexDefnId {
-	replicaMap := make(map[common.IndexDefnId][]common.IndexDefnId, 0)
+
+	replicaMap := make(map[common.IndexDefnId][]common.IndexDefnId)
 	for id1, indexes1 := range b.topology {
 		for _, index1 := range indexes1 {
 			replicas := make([]common.IndexDefnId, 0)
@@ -383,6 +390,19 @@ func (b *metadataClient) roundRobin(defnID uint64, retry int) uint64 {
 // local functions
 //----------------
 
+func (b *metadataClient) deleteIndex(defnID uint64) {
+	b.rw.Lock()
+	defer b.rw.Unlock()
+
+	id := common.IndexDefnId(defnID)
+	for indexerID, indexes := range b.topology {
+		delete(indexes, id)
+		b.topology[indexerID] = indexes
+	}
+	b.replicas = b.computeReplicas()
+	delete(b.loads, common.IndexDefnId(defnID))
+}
+
 // getNodes return the set of nodes hosting the specified set
 // of indexes
 func (b *metadataClient) getNodes(defnIDs []uint64) ([]string, bool) {
@@ -407,7 +427,8 @@ func (b *metadataClient) getNode(defnID uint64) (adminport string, ok bool) {
 	return aport, true
 }
 
-// update 2i cluster information
+// update 2i cluster information,
+// IMPORTANT: make sure to call Refresh() after calling updateIndexerList()
 func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 	clusterURL, err := common.ClusterAuthUrl(b.cluster)
 	if err != nil {
@@ -426,7 +447,8 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 		return err
 	}
 
-	logging.Infof("Refreshing indexer list due to cluster changes or auto-refresh.")
+	fmsg := "Refreshing indexer list due to cluster changes or auto-refresh."
+	logging.Infof(fmsg)
 	logging.Infof("Refreshed Indexer List: %v", adminports)
 
 	b.rw.Lock()
@@ -446,19 +468,21 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 			// This adminport is provided by cluster manager.  Meta client will
 			// honor cluster manager to treat this adminport as a healthy node.
 			// If the indexer is unavail during initialization, WatchMetadata()
-			// will return afer timeout.   A background watcher will keep retrying,
-			// since it can be tranisent partitioning error.  If retry eventually
-			// successful, this callback will be invoked to update meta_client.
-			// The metadata client has to rely on the cluster manager to send a
-			// notification if this node is detected to be down, such that the
-			// metadata client can stop the background watcher.
-			fn := func(ad string, n_id common.IndexerId, o_id common.IndexerId) { b.updateIndexer(ad, n_id, o_id) }
+			// will return afer timeout. A background watcher will keep
+			// retrying, since it can be tranisent partitioning error.
+			// If retry eventually successful, this callback will be invoked
+			// to update meta_client. The metadata client has to rely on the
+			// cluster manager to send a notification if this node is detected
+			// to be down, such that the metadata client can stop the
+			// background watcher.
+			fn := func(ad string, n_id common.IndexerId, o_id common.IndexerId) {
+				b.updateIndexer(ad, n_id, o_id)
+			}
 
 			// WatchMetadata will "unwatch" an old metadata watcher which
 			// shares the same indexer Id (but the adminport may be different).
 			indexerID = b.mdClient.WatchMetadata(adminport, fn)
 			m[adminport] = indexerID
-			b.topology[indexerID] = make([]*mclient.IndexMetadata, 0)
 		} else {
 			err = b.mdClient.UpdateServiceAddrForIndexer(indexerID, adminport)
 			m[adminport] = indexerID
@@ -466,43 +490,37 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 		}
 	}
 	// delete indexer-nodes that got removed from cluster.
-	if !discardExisting {
-		for _, indexerID := range b.adminports {
-
-			// check if the indexerId exists in var "m".  In case the
-			// adminport changes for the same index node, there would
-			// be two adminport mapping to the same indexerId, one
-			// in b.adminport (old) and the other in "m" (new).  So
-			// make sure not to accidently unwatch the indexer.
-			found := false
-			for _, id := range m {
-				if indexerID == id {
-					found = true
-				}
-			}
-			if !found {
-				b.mdClient.UnwatchMetadata(indexerID)
-				delete(b.topology, indexerID)
+	for _, indexerID := range b.adminports {
+		// check if the indexerId exists in var "m".  In case the
+		// adminport changes for the same index node, there would
+		// be two adminport mapping to the same indexerId, one
+		// in b.adminport (old) and the other in "m" (new).  So
+		// make sure not to accidently unwatch the indexer.
+		found := false
+		for _, id := range m {
+			if indexerID == id {
+				found = true
 			}
 		}
+		if !found {
+			b.mdClient.UnwatchMetadata(indexerID)
+		}
 	}
-
 	b.adminports = m
 	return err
 }
 
-func (b *metadataClient) updateIndexer(adminport string, newIndexerId, oldIndexerId common.IndexerId) {
+func (b *metadataClient) updateIndexer(
+	adminport string, newIndexerId, oldIndexerId common.IndexerId) {
+
 	func() {
 		b.rw.Lock()
 		defer b.rw.Unlock()
-
-		logging.Infof("Acknowledged that new indexer is registered.  Indexer = %v, id = %v", adminport, newIndexerId)
-
-		delete(b.topology, oldIndexerId)
+		logging.Infof(
+			"Acknowledged that new indexer is registered.  Indexer = %v, id = %v",
+			adminport, newIndexerId)
 		b.adminports[adminport] = newIndexerId
-		b.topology[newIndexerId] = make([]*mclient.IndexMetadata, 0)
 	}()
-
 	b.Refresh()
 }
 
@@ -568,6 +586,7 @@ func (b *metadataClient) watchClusterChanges() {
 	// For observing node services config
 	ch := scn.GetNotifyCh()
 	for {
+		b.Refresh()
 		select {
 		case _, ok := <-ch:
 			if !ok {
