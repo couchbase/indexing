@@ -14,7 +14,7 @@
 package indexer
 
 import (
-	"code.google.com/p/goprotobuf/proto"
+	"github.com/golang/protobuf/proto"
 	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
@@ -212,9 +212,9 @@ func (k *kvSender) handleRestartVbuckets(cmd Message) {
 	restartTs := cmd.(*MsgRestartVbuckets).GetRestartTs()
 	respCh := cmd.(*MsgRestartVbuckets).GetResponseCh()
 	stopCh := cmd.(*MsgRestartVbuckets).GetStopChannel()
-	connErr := cmd.(*MsgRestartVbuckets).HasConnErr()
+	connErrVbs := cmd.(*MsgRestartVbuckets).ConnErrVbs()
 
-	go k.restartVbuckets(streamId, restartTs, connErr, respCh, stopCh)
+	go k.restartVbuckets(streamId, restartTs, connErrVbs, respCh, stopCh)
 	k.supvCmdch <- &MsgSuccess{}
 }
 
@@ -327,7 +327,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 }
 
 func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
-	connErr bool, respCh MsgChannel, stopCh StopChannel) {
+	connErrVbs []Vbucket, respCh MsgChannel, stopCh StopChannel) {
 
 	addrs, err := k.getProjAddrsForVbuckets(restartTs.Bucket, restartTs.GetVbnos())
 	if err != nil {
@@ -355,7 +355,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 		for _, addr := range addrs {
 			ap := newProjClient(addr)
 
-			if res, ret := k.sendRestartVbuckets(ap, topic, connErr, protoRestartTs); ret != nil {
+			if res, ret := k.sendRestartVbuckets(ap, topic, connErrVbs, protoRestartTs); ret != nil {
 				//retry for all errors
 				logging.Errorf("KVSender::restartVbuckets Error Received %v from %v", ret, addr)
 				err = ret
@@ -626,7 +626,7 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 }
 
 func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
-	topic string, connErr bool,
+	topic string, connErrVbs []Vbucket,
 	restartTs *protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
 
 	logging.Infof("KVSender::sendRestartVbuckets Projector %v Topic %v", ap, topic)
@@ -636,12 +636,23 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 
 	//Shutdown the vbucket before restart if there was a ConnErr. If the vbucket is already
 	//running, projector will ignore the request otherwise
-	if connErr {
+	if len(connErrVbs) != 0 {
 
-		logging.Infof("KVSender::sendRestartVbuckets ShutdownVbuckets Projector %v Topic %v \n\tRestartTs %v",
-			ap, topic, restartTs.Repr())
+		logging.Infof("KVSender::sendRestartVbuckets ShutdownVbuckets ConnErrVbs %v", connErrVbs)
 
-		if err := ap.ShutdownVbuckets(topic, []*protobuf.TsVbuuid{restartTs}); err != nil {
+		// Only shutting down the Vb that receieve connection error.  It is probably not harmful
+		// to shutdown every VB in the repairTS, including those that only receive StreamEnd.
+		// But due to network / projecctor latency, a VB StreamBegin may be coming on the way
+		// for those VB (especially when RepairStream has already retried a couple of times).
+		// So shutting all VB in restartTs may unnecessarily causing race condition and
+		// make the protocol longer to converge. ShutdownVbuckets should have no effect on
+		// projector that does not own the Vb.
+		shutdownTs := k.computeShutdownTs(restartTs, connErrVbs)
+
+		logging.Infof("KVSender::sendRestartVbuckets ShutdownVbuckets Projector %v Topic %v \n\tShutdownTs %v",
+			ap, topic, shutdownTs.Repr())
+
+		if err := ap.ShutdownVbuckets(topic, []*protobuf.TsVbuuid{shutdownTs}); err != nil {
 			logging.Errorf("KVSender::sendRestartVbuckets Unexpected Error During "+
 				"ShutdownVbuckets Request for Projector %v Topic %v. Err %v.", ap,
 				topic, err)
@@ -748,6 +759,23 @@ func getTopicForStreamId(streamId c.StreamId) string {
 
 	return StreamTopicName[streamId]
 
+}
+
+func (k *kvSender) computeShutdownTs(restartTs *protobuf.TsVbuuid, connErrVbs []Vbucket) *protobuf.TsVbuuid {
+
+	numVbuckets := k.config["numVbuckets"].Int()
+	shutdownTs := protobuf.NewTsVbuuid(*restartTs.Pool, *restartTs.Bucket, numVbuckets)
+	for _, vbno1 := range connErrVbs {
+		for i, vbno2 := range restartTs.Vbnos {
+			// connErrVbs is a subset of Vb in restartTs.
+			if uint32(vbno1) == vbno2 {
+				shutdownTs.Append(uint16(vbno1), restartTs.Seqnos[i], restartTs.Vbuuids[i],
+					*restartTs.Snapshots[i].Start, *restartTs.Snapshots[i].End)
+			}
+		}
+	}
+
+	return shutdownTs
 }
 
 func (k *kvSender) makeRestartTsForVbs(bucket string, tsVbuuid *c.TsVbuuid,

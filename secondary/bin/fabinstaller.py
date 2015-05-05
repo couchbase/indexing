@@ -333,7 +333,7 @@ def install_golang():
 def install_protobuf():
     packages = "protobuf-compiler"
     trycmd("apt-get install %s --assume-yes" % packages, op="sudo")
-    path = os.sep.join([gopath2i, "src", "code.google.com", "p", "goprotobuf"])
+    path = os.sep.join([gopath2i, "src", "golang", "protobuf"])
     with shell_env(GOPATH=env.gopath2i, GOROOT=env.goroot2i):
         trycmd("go get -d github.com/couchbase/indexing/...")
     with cd(path), shell_env(GOPATH=env.gopath2i, GOROOT=env.goroot2i) :

@@ -237,6 +237,7 @@ type MsgStreamInfo struct {
 	streamId common.StreamId
 	bucket   string
 	vbList   []Vbucket
+	buildTs  Timestamp
 }
 
 func (m *MsgStreamInfo) GetMsgType() MsgType {
@@ -253,6 +254,10 @@ func (m *MsgStreamInfo) GetBucket() string {
 
 func (m *MsgStreamInfo) GetVbList() []Vbucket {
 	return m.vbList
+}
+
+func (m *MsgStreamInfo) GetBuildTs() Timestamp {
+	return m.buildTs
 }
 
 func (m *MsgStreamInfo) String() string {
@@ -721,12 +726,12 @@ func (m *MsgBucketHWT) String() string {
 
 //KV_SENDER_RESTART_VBUCKETS
 type MsgRestartVbuckets struct {
-	streamId  common.StreamId
-	bucket    string
-	restartTs *common.TsVbuuid
-	connErr   bool
-	respCh    MsgChannel
-	stopCh    StopChannel
+	streamId   common.StreamId
+	bucket     string
+	restartTs  *common.TsVbuuid
+	connErrVbs []Vbucket
+	respCh     MsgChannel
+	stopCh     StopChannel
 }
 
 func (m *MsgRestartVbuckets) GetMsgType() MsgType {
@@ -745,8 +750,8 @@ func (m *MsgRestartVbuckets) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
 }
 
-func (m *MsgRestartVbuckets) HasConnErr() bool {
-	return m.connErr
+func (m *MsgRestartVbuckets) ConnErrVbs() []Vbucket {
+	return m.connErrVbs
 }
 
 func (m *MsgRestartVbuckets) GetResponseCh() MsgChannel {
@@ -801,6 +806,7 @@ type MsgRecovery struct {
 	streamId  common.StreamId
 	bucket    string
 	restartTs *common.TsVbuuid
+	buildTs   Timestamp
 }
 
 func (m *MsgRecovery) GetMsgType() MsgType {
@@ -817,6 +823,10 @@ func (m *MsgRecovery) GetBucket() string {
 
 func (m *MsgRecovery) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
+}
+
+func (m *MsgRecovery) GetBuildTs() Timestamp {
+	return m.buildTs
 }
 
 type MsgRollback struct {

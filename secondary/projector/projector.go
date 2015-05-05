@@ -13,7 +13,7 @@ import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
 import projC "github.com/couchbase/indexing/secondary/projector/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-import "code.google.com/p/goprotobuf/proto"
+import "github.com/golang/protobuf/proto"
 import "github.com/couchbase/indexing/secondary/logging"
 
 // Projector data structure, a projector is connected to

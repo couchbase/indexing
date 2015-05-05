@@ -1,6 +1,6 @@
 package protobuf
 
-import "code.google.com/p/goprotobuf/proto"
+import "github.com/golang/protobuf/proto"
 import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 
 // NewTestParitition return a new partition instance,

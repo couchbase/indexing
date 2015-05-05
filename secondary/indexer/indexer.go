@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Indexer interface {
@@ -67,8 +68,7 @@ type indexer struct {
 	streamBucketRequestStopCh map[common.StreamId]BucketRequestStopCh
 	streamBucketRollbackTs    map[common.StreamId]BucketRollbackTs
 
-	//TODO move this as part of index instance
-	bucketBuildTs map[string]Timestamp //only for init stream
+	bucketBuildTs map[string]Timestamp
 
 	//TODO Remove this once cbq bridge support goes away
 	bucketCreateClientChMap map[string]MsgChannel
@@ -740,9 +740,6 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 						category: INDEXER}}
 				return
 			}
-		} else {
-			idx.bucketBuildTs[bucket] = buildTs
-			idx.bulkUpdateBuildTs(instIdList, buildTs)
 		}
 
 		//if there is already an index for this bucket in MAINT_STREAM,
@@ -1025,12 +1022,19 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 
 	bucket := msg.(*MsgRecovery).GetBucket()
 	streamId := msg.(*MsgRecovery).GetStreamId()
+	buildTs := msg.(*MsgRecovery).GetBuildTs()
 
 	logging.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v",
 		streamId, bucket)
 
+	//send the msg to timekeeper
+	idx.tkCmdCh <- msg
+	<-idx.tkCmdCh
+
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
 	delete(idx.streamBucketRollbackTs[streamId], bucket)
+
+	idx.bucketBuildTs[bucket] = buildTs
 
 	//change status to Active
 	idx.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
@@ -1138,6 +1142,7 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 
 	streamId := msg.(*MsgStreamInfo).GetStreamId()
 	bucket := msg.(*MsgStreamInfo).GetBucket()
+	buildTs := msg.(*MsgStreamInfo).GetBuildTs()
 
 	logging.Debugf("Indexer::handleStreamRequestDone StreamId %v Bucket %v",
 		streamId, bucket)
@@ -1147,6 +1152,7 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	<-idx.tkCmdCh
 
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
+	idx.bucketBuildTs[bucket] = buildTs
 }
 
 func (idx *indexer) handleBucketNotFound(msg Message) {
@@ -1327,10 +1333,13 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	}
 	idx.streamBucketRequestStopCh[buildStream][bucket] = stopCh
 
+	clustAddr := idx.config["clusterAddr"].String()
+	numVb := idx.config["numVbuckets"].Int()
+
 	go func() {
 	retryloop:
 		for {
-			if !ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
+			if !ValidateBucket(clustAddr, bucket) {
 				logging.Errorf("Indexer::sendStreamUpdateForBuildIndex \n\tBucket Not Found "+
 					"For Stream %v Bucket %v", buildStream, bucket)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
@@ -1345,13 +1354,18 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
-					//delete stopCh to indicate this request is done
-					//TODO Add a separate message for this as there is no lock now
 					logging.Debugf("Indexer::sendStreamUpdateForBuildIndex \n\tStream Request Success For "+
 						"Stream %v Bucket %v.", buildStream, bucket)
+
+					//once stream request is successful re-calculate the KV timestamp.
+					//This makes sure indexer doesn't use a timestamp which can never
+					//be caught up to (due to kv rollback).
+					//if there is a failover after this, it will be observed as a rollback
+					buildTs := computeBucketBuildTs(clustAddr, bucket, numVb)
 					idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
 						streamId: buildStream,
 						bucket:   bucket,
+						buildTs:  buildTs,
 					}
 					break retryloop
 
@@ -1366,6 +1380,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					respErr := resp.(*MsgError).GetError()
 					logging.Errorf("Indexer::sendStreamUpdateForBuildIndex - "+
 						"Error from Projector %v. Retrying.", respErr.cause)
+					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
 				}
 			}
@@ -1487,11 +1502,12 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 			respErr := resp.(*MsgError).GetError()
 			common.CrashOnError(respErr.cause)
 		}
+		clustAddr := idx.config["clusterAddr"].String()
 
 		go func() {
 		retryloop:
 			for {
-				if !ValidateBucket(idx.config["clusterAddr"].String(), indexInst.Defn.Bucket) {
+				if !ValidateBucket(clustAddr, indexInst.Defn.Bucket) {
 					logging.Errorf("Indexer::sendStreamUpdateForDropIndex \n\tBucket Not Found "+
 						"For Stream %v Bucket %v", streamId, indexInst.Defn.Bucket)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
@@ -1514,6 +1530,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 						respErr := resp.(*MsgError).GetError()
 						logging.Errorf("Indexer::sendStreamUpdateForDropIndex - "+
 							"Error from Projector %v. Retrying.", respErr.cause)
+						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
 					}
 				}
@@ -1826,10 +1843,12 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		common.CrashOnError(respErr.cause)
 	}
 
+	clustAddr := idx.config["clusterAddr"].String()
+
 	go func() {
 	retryloop:
 		for {
-			if !ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
+			if !ValidateBucket(clustAddr, bucket) {
 				logging.Errorf("Indexer::handleInitialBuildDone \n\tBucket Not Found "+
 					"For Stream %v Bucket %v", streamId, bucket)
 				break retryloop
@@ -1852,6 +1871,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 					respErr := resp.(*MsgError).GetError()
 					logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v \n\t"+
 						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
 			}
 		}
@@ -1954,10 +1974,12 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
 
+	clustAddr := idx.config["clusterAddr"].String()
+
 	go func() {
 	retryloop:
 		for {
-			if !ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
+			if !ValidateBucket(clustAddr, bucket) {
 				logging.Errorf("Indexer::handleMergeInitStream \n\tBucket Not Found "+
 					"For Stream %v Bucket %v", streamId, bucket)
 				break retryloop
@@ -1981,6 +2003,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 					respErr := resp.(*MsgError).GetError()
 					logging.Errorf("Indexer::handleMergeInitStream Stream %v Bucket %v \n\t"+
 						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
 			}
 		}
@@ -2126,6 +2149,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 					respErr := resp.(*MsgError).GetError()
 					logging.Errorf("Indexer::stopBucketStream Stream %v Bucket %v \n\t"+
 						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
 				}
 			}
@@ -2218,11 +2242,14 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 	idx.streamBucketStatus[streamId][bucket] = STREAM_RECOVERY
 
+	clustAddr := idx.config["clusterAddr"].String()
+	numVb := idx.config["numVbuckets"].Int()
+
 	go func() {
 	retryloop:
 		for {
 			//validate bucket before every try
-			if !ValidateBucket(idx.config["clusterAddr"].String(), bucket) {
+			if !ValidateBucket(clustAddr, bucket) {
 				logging.Errorf("Indexer::startBucketStream \n\tBucket Not Found "+
 					"For Stream %v Bucket %v", streamId, bucket)
 				idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
@@ -2238,9 +2265,16 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
+
+					//once stream request is successful re-calculate the KV timestamp.
+					//This makes sure indexer doesn't use a timestamp which can never
+					//be caught up to (due to kv rollback).
+					//if there is a failover after this, it will be observed as a rollback
+					buildTs := computeBucketBuildTs(clustAddr, bucket, numVb)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
 						streamId: streamId,
-						bucket:   bucket}
+						bucket:   bucket,
+						buildTs:  buildTs}
 					break retryloop
 
 				case INDEXER_ROLLBACK:
@@ -2259,6 +2293,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 					logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v \n\t"+
 						"Error from Projector %v. Retrying.", streamId, bucket,
 						respErr.cause)
+					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
 			}
 		}
@@ -2812,6 +2847,7 @@ func (idx *indexer) closeAllStreams() {
 					respErr := resp.(*MsgError).GetError()
 					logging.Errorf("Indexer::closeAllStreams Stream %v \n\t"+
 						"Error from Projector %v. Retrying.", common.StreamId(i), respErr.cause)
+					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
 			}
 		}
@@ -3149,4 +3185,32 @@ func dumpMemProfile(filename string) bool {
 	pprof.WriteHeapProfile(fd)
 	defer fd.Close()
 	return true
+}
+
+//calculates buildTs for bucket. This is a blocking call
+//which will keep trying till success as indexer cannot work
+//without a buildts.
+func computeBucketBuildTs(clustAddr string, bucket string, numVb int) Timestamp {
+
+	var buildTs Timestamp
+kvtsloop:
+	for {
+		b, err := common.ConnectBucket(clustAddr, "default", bucket)
+		if err != nil {
+			logging.Errorf("Indexer::computeBucketBuildTs Error Fetching BuildTs %v", err)
+			time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
+			goto kvtsloop
+		}
+		defer b.Close()
+
+		buildTs, err = GetCurrentKVTs(b, numVb)
+		if err != nil {
+			logging.Errorf("Indexer::computeBucketBuildTs Error Fetching BuildTs %v", err)
+			time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
+		} else {
+			break kvtsloop
+		}
+	}
+
+	return buildTs
 }

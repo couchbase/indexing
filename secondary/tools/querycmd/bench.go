@@ -9,7 +9,7 @@ import c "github.com/couchbase/indexing/secondary/common"
 import qclient "github.com/couchbase/indexing/secondary/queryport/client"
 import "github.com/couchbase/indexing/secondary/queryport"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import "code.google.com/p/goprotobuf/proto"
+import "github.com/golang/protobuf/proto"
 
 var mock_duration = 10
 

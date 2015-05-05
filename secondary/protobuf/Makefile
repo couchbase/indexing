@@ -1,4 +1,4 @@
-.PHONY: clean build fiximport
+.PHONY: clean build
 
 build:
 	make -C data
