@@ -49,6 +49,7 @@ func newMetaBridgeClient(
 	}
 
 	if err := b.updateIndexerList(false); err != nil {
+		logging.Errorf("updateIndexerList(): %v\n", err)
 		b.mdClient.Close()
 		return nil, err
 	}
@@ -60,7 +61,11 @@ func newMetaBridgeClient(
 
 // Sync will update the indexer list.
 func (b *metadataClient) Sync() error {
-	return b.updateIndexerList(true)
+	err := b.updateIndexerList(true)
+	if err != nil {
+		logging.Errorf("updateIndexerList(): %v\n", err)
+	}
+	return err
 }
 
 // Refresh implement BridgeAccessor{} interface.
@@ -170,7 +175,10 @@ RETRY:
 	if needRefresh && refreshCnt == 0 {
 		fmsg := "GsiClient: Indexer Node List is out-of-date.  Require refresh."
 		logging.Debugf(fmsg)
-		b.updateIndexerList(false)
+		if err := b.updateIndexerList(false); err != nil {
+			logging.Errorf("updateIndexerList(): %v\n", err)
+			return uint64(defnID), err
+		}
 		refreshCnt++
 		goto RETRY
 	}
@@ -529,7 +537,9 @@ func getIndexerAdminports(cinfo *common.ClusterInfoCache) ([]string, error) {
 	iAdminports := make([]string, 0)
 	for _, node := range cinfo.GetNodesByServiceType("indexAdmin") {
 		status, err := cinfo.GetNodeStatus(node)
-		common.CrashOnError(err)
+		if err != nil {
+			return nil, err
+		}
 		logging.Warnf("node %v status: %q", node, status)
 		if status == "healthy" || status == "active" || status == "warmup" {
 			adminport, err := cinfo.GetServiceAddress(node, "indexAdmin")
