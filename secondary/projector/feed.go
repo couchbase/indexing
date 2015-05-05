@@ -10,7 +10,7 @@ import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import projC "github.com/couchbase/indexing/secondary/projector/client"
-import "code.google.com/p/goprotobuf/proto"
+import "github.com/golang/protobuf/proto"
 
 // NOTE1:
 // https://github.com/couchbase/indexing/commit/

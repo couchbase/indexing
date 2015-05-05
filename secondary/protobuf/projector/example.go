@@ -1,6 +1,6 @@
 package protobuf
 
-import "code.google.com/p/goprotobuf/proto"
+import "github.com/golang/protobuf/proto"
 
 var defn1 = &IndexDefn{
 	DefnID:          proto.Uint64(10),

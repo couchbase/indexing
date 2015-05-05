@@ -10,7 +10,7 @@ import "net"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/queryport/client"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
-import "code.google.com/p/goprotobuf/proto"
+import "github.com/golang/protobuf/proto"
 
 var testStatisticsResponse = &protobuf.StatisticsResponse{
 	Stats: &protobuf.IndexStatistics{

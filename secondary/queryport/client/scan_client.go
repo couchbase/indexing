@@ -21,7 +21,7 @@ import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbase/indexing/secondary/transport"
-import "code.google.com/p/goprotobuf/proto"
+import "github.com/golang/protobuf/proto"
 
 // GsiScanClient for scan operations.
 type GsiScanClient struct {

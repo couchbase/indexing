@@ -14,7 +14,7 @@
 package indexer
 
 import (
-	"code.google.com/p/goprotobuf/proto"
+	"github.com/golang/protobuf/proto"
 	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"

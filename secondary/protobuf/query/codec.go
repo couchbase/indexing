@@ -5,7 +5,7 @@ package protobuf
 import "errors"
 
 import c "github.com/couchbase/indexing/secondary/common"
-import "code.google.com/p/goprotobuf/proto"
+import "github.com/golang/protobuf/proto"
 
 // ErrorTransportVersion
 var ErrorTransportVersion = errors.New("dataport.transportVersion")

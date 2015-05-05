@@ -17,7 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
-	"code.google.com/p/goprotobuf/proto"
+	"github.com/golang/protobuf/proto"
 	"sync"
 	"time"
 )

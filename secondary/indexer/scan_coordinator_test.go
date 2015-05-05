@@ -5,7 +5,7 @@ package indexer
 /*
 TODO: Fix tests
 import (
-	"code.google.com/p/goprotobuf/proto"
+	"github.com/golang/protobuf/proto"
 	"encoding/json"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
