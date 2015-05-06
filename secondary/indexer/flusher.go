@@ -405,7 +405,8 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte) {
 
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
-		if err := slice.Insert(mut.key, docid); err != nil {
+		key := getIndexEntryBytesFromKey(mut.key, docid, idxInst.Defn.IsPrimary)
+		if err := slice.Insert(key, docid); err != nil {
 			logging.Errorf("Flusher::processUpsert Error Inserting Key: %v "+
 				"docid: %s in Slice: %v. Error: %v", mut.key, docid, slice.Id(), err)
 		}
@@ -486,4 +487,22 @@ func (f *flusher) GetQueueHWT(q MutationQueue) Timestamp {
 		}
 	}
 	return ts
+}
+
+func getIndexEntryBytesFromKey(key []byte, docid []byte, isPrimary bool) []byte {
+
+	var entry IndexEntry
+	var err error
+	if isPrimary {
+		entry, err = NewPrimaryIndexEntry(docid)
+		common.CrashOnError(err)
+	} else {
+		entry, err = NewSecondaryIndexEntry(key, docid)
+		if err == ErrSecKeyNil {
+			return nil
+		}
+		common.CrashOnError(err)
+	}
+	return entry.Bytes()
+
 }
