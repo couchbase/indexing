@@ -13,13 +13,19 @@ package forestdb
 //#cgo CFLAGS: -O0
 //#include <stdlib.h>
 //#include <libforestdb/forestdb.h>
+//extern void LogCallback(int, char*, char*);
+//void log_callback(int errcode, char *msg, void *ctx) {
+//    LogCallback(errcode, msg, ctx);
+//}
 import "C"
+import "unsafe"
 
 // KVStore handle
 type KVStore struct {
 	advLock
-	f  *File
-	db *C.fdb_kvs_handle
+	f    *File
+	db   *C.fdb_kvs_handle
+	name string
 }
 
 // Close the KVStore and release related resources.
@@ -147,6 +153,10 @@ func (k *KVStore) Delete(doc *Doc) error {
 		return Error(errNo)
 	}
 	return nil
+}
+
+func (k *KVStore) setupLogging() {
+	C.fdb_set_log_callback(k.db, C.fdb_log_callback(C.log_callback), unsafe.Pointer(C.CString(k.name)))
 }
 
 // Shutdown destroys all the resources (e.g., buffer cache, in-memory WAL indexes, daemon compaction thread, etc.) and then shutdown the ForestDB engine

@@ -16,6 +16,8 @@ package forestdb
 import "C"
 
 import (
+	"fmt"
+	"path"
 	"unsafe"
 )
 
@@ -23,6 +25,7 @@ import (
 type File struct {
 	dbfile *C.fdb_file_handle
 	advLock
+	name string
 }
 
 // Open opens the database with a given file name
@@ -35,7 +38,7 @@ func Open(filename string, config *Config) (*File, error) {
 	dbname := C.CString(filename)
 	defer C.free(unsafe.Pointer(dbname))
 
-	rv := File{advLock: newAdvLock()}
+	rv := File{advLock: newAdvLock(), name: path.Base(filename)}
 	Log.Tracef("fdb_open call rv:%p dbname:%v conf:%v", &rv, dbname, config.config)
 	errNo := C.fdb_open(&rv.dbfile, dbname, config.config)
 	Log.Tracef("fdb_open ret rv:%p errNo:%v rv:%v", &rv, errNo, rv)
@@ -160,7 +163,9 @@ func (f *File) OpenKVStore(name string, config *KVStoreConfig) (*KVStore, error)
 	rv := KVStore{
 		advLock: newAdvLock(),
 		f:       f,
+		name:    fmt.Sprintf("%s/%s", f.name, name),
 	}
+
 	kvsname := C.CString(name)
 	defer C.free(unsafe.Pointer(kvsname))
 	Log.Debugf("fdb_kvs_open call f:%p dbfile:%v kvsname:%v config:%v", f, f.dbfile, kvsname, config.config)
@@ -169,6 +174,7 @@ func (f *File) OpenKVStore(name string, config *KVStoreConfig) (*KVStore, error)
 	if errNo != RESULT_SUCCESS {
 		return nil, Error(errNo)
 	}
+	rv.setupLogging()
 	return &rv, nil
 }
 
