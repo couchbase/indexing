@@ -57,7 +57,13 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 
 	kvconfig := forestdb.DefaultKVStoreConfig()
 
+retry:
 	if slice.dbfile, err = forestdb.Open(filepath, config); err != nil {
+		if err == forestdb.RESULT_NO_DB_HEADERS {
+			logging.Warnf("NewForestDBSlice(): Open failed with no_db_header error...Resetting the forestdb file")
+			os.Remove(filepath)
+			goto retry
+		}
 		return nil, err
 	}
 
