@@ -1,2 +1,5 @@
 xdcr.uniXDCR.unidirectional.load_with_ops
 xdcr.uniXDCR.unidirectional.load_with_failover
+TestMultipleDeferredIndexes_BuildTogether
+TestMultipleDeferredIndexes_BuildOneByOne
+TestDropMultipleBuildingDeferredIndexes
