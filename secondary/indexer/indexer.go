@@ -108,6 +108,7 @@ type indexer struct {
 
 	kvlock sync.Mutex //fine-grain lock for KVSender
 
+	memQuota      uint64
 	enableManager bool
 	needsRestart  bool
 
@@ -157,6 +158,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Errorf("Indexer::NewIndexer settingsMgr Init Error", res)
 		return nil, res
 	}
+
+	// Read memquota setting
+	idx.memQuota = idx.config["settings.memory_quota"].Uint64()
 
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
@@ -3093,7 +3097,13 @@ func (idx *indexer) handleStats(cmd Message) {
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
 	statsMap["needs_restart"] = idx.needsRestart
+	statsMap["memory_used"] = idx.memoryUsed()
+	statsMap["memory_quota"] = idx.memQuota
 	replych <- statsMap
+}
+
+func (idx *indexer) memoryUsed() uint64 {
+	return forestdb.BufferCacheUsed()
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst,
