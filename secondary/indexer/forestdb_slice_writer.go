@@ -711,6 +711,13 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 			sic.RemoveOldest()
 		}
 
+		// Meta update should be done before commit
+		// Otherwise, metadata will not be atomically updated along with disk commit.
+		err = fdb.updateSnapshotsMeta(sic.List())
+		if err != nil {
+			return nil, err
+		}
+
 		// Commit database file
 		start := time.Now()
 		err = fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
@@ -726,10 +733,6 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 			return nil, err
 		}
 
-		err = fdb.updateSnapshotsMeta(sic.List())
-		if err != nil {
-			return nil, err
-		}
 		fdb.setCommittedCount()
 	}
 
