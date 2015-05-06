@@ -159,3 +159,8 @@ func Shutdown() error {
 	}
 	return nil
 }
+
+// Buffer cache used by the forestdb global pool
+func BufferCacheUsed() uint64 {
+	return uint64(C.fdb_get_buffer_cache_used())
+}
