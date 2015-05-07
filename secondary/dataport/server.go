@@ -87,6 +87,8 @@ type activeVb struct {
 	raddr  string // remote connection carrying this vbucket.
 	bucket string
 	vbno   uint16
+	kvers  uint64
+	seqno  uint64
 }
 
 type keeper map[string]*activeVb
@@ -234,13 +236,17 @@ func (s *Server) genServer(reqch chan []interface{}) {
 		for i := 0; i < len(vbs); i++ { //for each vbucket
 			vb := vbs[i]
 			bucket, vbno := vb.GetBucketname(), uint16(vb.GetVbucket())
-			id := (&activeVb{msg.raddr, bucket, vbno}).id()
+			id := (&activeVb{raddr: msg.raddr, bucket: bucket, vbno: vbno}).id()
+			kvs := vb.GetKvs() // mutations for each vbucket
+
 			// filter mutations for vbucket that is not from the same
 			// source as its StreamBegin.
-			if avb, ok := hostUuids[id]; ok && (msg.raddr != avb.raddr) {
+			avb, ok := hostUuids[id]
+			if ok && (msg.raddr != avb.raddr) {
+				fmsg := "%v filter %d mutations for %v\n"
+				logging.Warnf(fmsg, s.logPrefix, len(kvs), id)
 				continue
 			}
-			kvs := vb.GetKvs() // mutations for each vbucket
 			vbok := false
 			for _, kv := range kvs {
 				if len(kv.GetCommands()) == 0 {
@@ -248,12 +254,12 @@ func (s *Server) genServer(reqch chan []interface{}) {
 				}
 				switch byte(kv.GetCommands()[0]) {
 				case c.StreamBegin: // new vbucket stream(s) have started
-					avb := &activeVb{msg.raddr, bucket, vbno}
+					avb = &activeVb{raddr: msg.raddr, bucket: bucket, vbno: vbno}
 					hostUuids = s.addUuids(keeper{id: avb}, hostUuids)
 					vbok = true
 
 				case c.StreamEnd: // vbucket stream(s) have finished
-					avb := &activeVb{msg.raddr, bucket, vbno}
+					avb = &activeVb{raddr: msg.raddr, bucket: bucket, vbno: vbno}
 					if _, ok := hostUuids[id]; ok {
 						hostUuids = s.delUuids(keeper{id: avb}, hostUuids)
 						vbok = true
@@ -261,6 +267,9 @@ func (s *Server) genServer(reqch chan []interface{}) {
 						fmsg := "%v StreamEnd without StreamBegin for %v\n"
 						logging.Warnf(fmsg, s.logPrefix, id)
 					}
+				case c.Upsert, c.Deletion, c.UpsertDeletion:
+					avb.seqno = kv.GetSeqno()
+					avb.kvers++
 				}
 			}
 			if _, ok := hostUuids[id]; ok || vbok {
@@ -305,7 +314,7 @@ loop:
 				vbmap := msg.args[0].(*protobuf.VbConnectionMap)
 				b, raddr := vbmap.GetBucket(), msg.raddr
 				for _, vbno := range vbmap.GetVbuckets() {
-					avb := &activeVb{raddr, b, uint16(vbno)}
+					avb := &activeVb{raddr: raddr, bucket: b, vbno: uint16(vbno)}
 					hostUuids[avb.id()] = avb
 				}
 				s.startWorker(msg.raddr)
@@ -313,8 +322,10 @@ loop:
 			case serverCmdVbKeyVersions:
 				s.appch <- parseVbs(msg)
 
-			case serverCmdClose:
-				// This execution path never panics !!
+			case serverCmdClose: // This execution path never panics !!
+				// before closing the dataport-server log a consolidated
+				// stats on the active-vbuckets.
+				s.logStats(hostUuids)
 				respch := cmd[1].(chan []interface{})
 				s.handleClose()
 				respch <- []interface{}{nil}
@@ -418,6 +429,31 @@ func (s *Server) jumboErrorHandler(
 		go s.Close()
 	}
 	return actvUuids, msg
+}
+
+func (s *Server) logStats(hostUuids keeper) {
+	bucketkvs := make(map[string][]uint64)    // bucket -> []count
+	bucketseqnos := make(map[string][]uint64) // bucket -> []seqno
+	total := uint64(0)
+	for _, avb := range hostUuids {
+		counts, ok := bucketkvs[avb.bucket]
+		seqnos, ok := bucketseqnos[avb.bucket]
+		if !ok {
+			counts = make([]uint64, s.maxVbuckets)
+			seqnos = make([]uint64, s.maxVbuckets)
+		}
+		counts[avb.vbno] = avb.kvers
+		seqnos[avb.vbno] = avb.seqno
+		bucketkvs[avb.bucket] = counts
+		bucketseqnos[avb.bucket] = seqnos
+	}
+	for bucket, counts := range bucketkvs {
+		seqnos := bucketseqnos[bucket]
+		fmsg := "%v bucket %v total received key-versions: %v, %v\n"
+		logging.Infof(fmsg, s.logPrefix, total, counts)
+		fmsg = "%v bucket %v latest sequence numbers %v\n"
+		logging.Infof(fmsg, s.logPrefix, seqnos)
+	}
 }
 
 func closeConnection(prefix, raddr string, nc *netConn) {
