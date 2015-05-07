@@ -41,6 +41,9 @@ type MutationQueue interface {
 
 	//returns the numbers of vbuckets for the queue
 	GetNumVbuckets() uint16
+
+	//destroy the resources
+	Destroy()
 }
 
 //AtomicMutationQueue is a lock-free multi-queue with internal queue per
@@ -65,7 +68,9 @@ type atomicMutationQueue struct {
 	maxLen int64            //max length of queue per vbucket
 
 	free        []*node //free pointer per vbucket queue
-	numVbuckets uint16  //num vbuckets for the queue
+	stopch      []StopChannel
+	numVbuckets uint16 //num vbuckets for the queue
+	isDestroyed bool
 }
 
 //NewAtomicMutationQueue allocates a new Atomic Mutation Queue and initializes it
@@ -77,6 +82,7 @@ func NewAtomicMutationQueue(numVbuckets uint16, maxLenPerVb int64) *atomicMutati
 		size:        make([]int64, numVbuckets),
 		numVbuckets: numVbuckets,
 		maxLen:      maxLenPerVb,
+		stopch:      make([]StopChannel, numVbuckets),
 	}
 
 	var x uint16
@@ -85,6 +91,7 @@ func NewAtomicMutationQueue(numVbuckets uint16, maxLenPerVb int64) *atomicMutati
 		q.head[x] = unsafe.Pointer(node)
 		q.tail[x] = unsafe.Pointer(node)
 		q.free[x] = node
+		q.stopch[x] = make(StopChannel)
 	}
 
 	return q
@@ -111,8 +118,18 @@ func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys, vbucket Vbucket) e
 		return errors.New("vbucket out of range")
 	}
 
+	//no more requests are taken once queue
+	//is marked as destroyed
+	if q.isDestroyed {
+		return nil
+	}
+
 	//create a new node
 	n := q.allocNode(vbucket)
+	if n == nil {
+		return nil
+	}
+
 	n.mutation = mutation
 	n.next = nil
 
@@ -235,6 +252,8 @@ func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) *MutationKey
 		head := (*node)(atomic.LoadPointer(&q.head[vbucket]))
 		//copy the mutation pointer
 		m := head.next.mutation
+		//free mutation pointer
+		head.next.mutation = nil
 		//move head to next
 		atomic.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
 		atomic.AddInt64(&q.size[vbucket], -1)
@@ -292,15 +311,22 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket) *node {
 	ticker := time.NewTicker(time.Millisecond * ALLOC_POLL_INTERVAL)
 
 	var totalWait int
-	for _ = range ticker.C {
-		totalWait += ALLOC_POLL_INTERVAL
-		n = q.popFreeList(vbucket)
-		if n != nil {
-			return n
-		}
-		if totalWait > 5000 {
-			logging.Warnf("Indexer::MutationQueue Waiting for Node "+
-				"Alloc for %v Milliseconds Vbucket %v", totalWait, vbucket)
+	for {
+		select {
+		case <-ticker.C:
+			totalWait += ALLOC_POLL_INTERVAL
+			n = q.popFreeList(vbucket)
+			if n != nil {
+				return n
+			}
+			if totalWait > 5000 {
+				logging.Warnf("Indexer::MutationQueue Waiting for Node "+
+					"Alloc for %v Milliseconds Vbucket %v", totalWait, vbucket)
+			}
+
+		case <-q.stopch[vbucket]:
+			return nil
+
 		}
 	}
 
@@ -320,6 +346,36 @@ func (q *atomicMutationQueue) popFreeList(vbucket Vbucket) *node {
 		return n
 	} else {
 		return nil
+	}
+
+}
+
+//Destroy will free up all resources of the queue.
+//Importantly it will free up pending mutations as well.
+//Once destroy have been called, further enqueue operations
+//will be no-op.
+func (q *atomicMutationQueue) Destroy() {
+
+	//set the flag so no more Enqueue requests
+	//are taken on this queue
+	q.isDestroyed = true
+
+	//ensure all pending allocs get stopped
+	var i uint16
+	for i = 0; i < q.numVbuckets; i++ {
+		close(q.stopch[i])
+	}
+
+	//dequeue all the items in the queue and free
+	for i = 0; i < q.numVbuckets; i++ {
+		mutch := make(chan *MutationKeys)
+		go func() {
+			for mutk := range mutch {
+				mutk.Free()
+			}
+		}()
+		q.dequeue(Vbucket(i), mutch)
+		close(mutch)
 	}
 
 }
