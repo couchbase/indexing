@@ -26,15 +26,6 @@ type MutationStreamReader interface {
 	Shutdown()
 }
 
-var (
-	mutationCount uint64
-	skipMutation  bool
-	evalFilter    bool
-	snapType      uint32
-	snapStart     uint64
-	snapEnd       uint64
-)
-
 const DEFAULT_SYNC_TIMEOUT = 40
 
 type mutationStreamReader struct {
@@ -58,6 +49,14 @@ type mutationStreamReader struct {
 
 	bucketFilterMap map[string]*common.TsVbuuid
 	bucketSyncDue   map[string]bool
+
+	//local variables
+	mutationCount uint64
+	skipMutation  bool
+	evalFilter    bool
+	snapType      uint32
+	snapStart     uint64
+	snapEnd       uint64
 }
 
 //CreateMutationStreamReader creates a new mutation stream and starts
@@ -229,8 +228,8 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 	defer meta.Free()
 
 	var mutk *MutationKeys
-	skipMutation = false
-	evalFilter = true
+	r.skipMutation = false
+	r.evalFilter = true
 
 	logging.Tracef("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
 
@@ -244,20 +243,20 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 
 			//As there can multiple keys in a KeyVersion for a mutation,
 			//filter needs to be evaluated and set only once.
-			if evalFilter {
-				evalFilter = false
+			if r.evalFilter {
+				r.evalFilter = false
 				//check the bucket filter to see if this mutation can be processed
 				//valid mutation will increment seqno of the filter
 				if !r.checkAndSetBucketFilter(meta) {
-					skipMutation = true
+					r.skipMutation = true
 				}
 			}
 
-			if skipMutation {
+			if r.skipMutation {
 				continue
 			}
 
-			logReaderStat()
+			r.logReaderStat()
 
 			//allocate new mutation first time
 			if mutk == nil {
@@ -265,6 +264,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 				mutk = NewMutationKeys()
 				mutk.meta = meta.Clone()
 				mutk.docid = kv.GetDocid()
+				mutk.mut = mutk.mut[:0]
 			}
 
 			mut := NewMutation()
@@ -301,12 +301,12 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 
 		case common.Snapshot:
 			//get snapshot information from message
-			snapType, snapStart, snapEnd = kv.Snapshot()
+			r.snapType, r.snapStart, r.snapEnd = kv.Snapshot()
 
 			// Snapshot marker can be processed only if
 			// they belong to ondisk type or inmemory type.
-			if snapType&(0x1|0x2) != 0 {
-				r.updateSnapInFilter(meta, snapStart, snapEnd)
+			if r.snapType&(0x1|0x2) != 0 {
+				r.updateSnapInFilter(meta, r.snapStart, r.snapEnd)
 			}
 
 		}
@@ -620,12 +620,12 @@ func copyVbList(vbList []uint16) []Vbucket {
 	return c
 }
 
-func logReaderStat() {
+func (r *mutationStreamReader) logReaderStat() {
 
-	mutationCount++
-	if (mutationCount%10000 == 0) || mutationCount == 1 {
-		logging.Infof("logReaderStat:: "+
-			"MutationCount %v", mutationCount)
+	r.mutationCount++
+	if (r.mutationCount%10000 == 0) || r.mutationCount == 1 {
+		logging.Infof("logReaderStat:: %v "+
+			"MutationCount %v", r.streamId, r.mutationCount)
 	}
 
 }
