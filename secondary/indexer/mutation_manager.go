@@ -488,6 +488,10 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 			}
 		}
 		if dropBucket == true {
+			//destroy the queue explicitly so that
+			//any pending mutations in queue get freed
+			mq := bucketQueueMap[b].queue
+			mq.Destroy()
 			delete(bucketQueueMap, b)
 			bucketMapDirty = true
 		}
@@ -549,6 +553,10 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 
 	if _, ok := bucketQueueMap[bucket]; ok {
 		bucketMapDirty = true
+		//destroy the queue explicitly so that
+		//any pending mutations in queue get freed
+		mq := bucketQueueMap[bucket].queue
+		mq.Destroy()
 		delete(bucketQueueMap, bucket)
 	}
 
