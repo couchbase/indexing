@@ -588,10 +588,13 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() { s.handleError(req.LogPrefix, w.Done()) }()
 
-	logging.Infof("%s REQUEST %s", req.LogPrefix, req)
+	logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
+
 	if req.Consistency != nil {
-		logging.Debugf("%s requested timestamp: %s => %s", req.LogPrefix,
-			strings.ToLower(req.Consistency.String()), ScanTStoString(req.Ts))
+		logging.LazyVerbose(func() string {
+			return fmt.Sprintf("%s requested timestamp: %s => %s", req.LogPrefix,
+				strings.ToLower(req.Consistency.String()), ScanTStoString(req.Ts))
+		})
 	}
 
 	if s.tryRespondWithError(w, req, err) {
@@ -608,7 +611,10 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 
 	defer DestroyIndexSnapshot(is)
 
-	logging.Infof("%s snapshot timestamp: %s", req.LogPrefix, ScanTStoString(is.Timestamp()))
+	logging.LazyVerbose(func() string {
+		return fmt.Sprintf("%s snapshot timestamp: %s",
+			req.LogPrefix, ScanTStoString(is.Timestamp()))
+	})
 	s.processRequest(req, w, is, t0)
 }
 
@@ -644,15 +650,17 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	atomic.AddUint64(req.Stats.ScanTime, uint64(scanTime.Nanoseconds()))
 	atomic.AddUint64(req.Stats.WaitTime, uint64(waitTime.Nanoseconds()))
 
-	var status string
-	if err != nil {
-		status = fmt.Sprintf("(error = %s)", err)
-	} else {
-		status = "ok"
-	}
+	logging.LazyVerbose(func() string {
+		var status string
+		if err != nil {
+			status = fmt.Sprintf("(error = %s)", err)
+		} else {
+			status = "ok"
+		}
 
-	logging.Infof("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s",
-		req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status)
+		return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s",
+			req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status)
+	})
 }
 
 func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWriter,

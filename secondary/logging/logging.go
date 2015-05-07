@@ -23,6 +23,7 @@ const (
 	Error
 	Warn
 	Info
+	Verbose
 	Timing
 	Debug
 	Trace
@@ -38,6 +39,8 @@ type Logger interface {
 	Fatalf(format string, v ...interface{})
 	// Informational messages.
 	Infof(format string, v ...interface{})
+	// Verbose messages like request logging
+	Verbosef(format string, v ...interface{})
 	// Get stack trace
 	StackTrace() string
 	// Timing utility
@@ -46,6 +49,8 @@ type Logger interface {
 	Debugf(format string, v ...interface{})
 	// Program execution
 	Tracef(format string, v ...interface{})
+	// Call and print the stringer if verbose enabled
+	LazyVerbose(fn func() string)
 	// Call and print the stringer if debugging enabled
 	LazyDebug(fn func() string)
 	// Call and print the stringer if tracing enabled
@@ -80,6 +85,8 @@ func (t LogLevel) String() string {
 		return "Warn"
 	case Info:
 		return "Info"
+	case Verbose:
+		return "Verbose"
 	case Timing:
 		return "Timing"
 	case Debug:
@@ -103,6 +110,8 @@ func Level(s string) LogLevel {
 		return Warn
 	case "INFO":
 		return Info
+	case "VERBOSE":
+		return Verbose
 	case "TIMING":
 		return Timing
 	case "DEBUG":
@@ -144,6 +153,12 @@ func (log *destination) Fatalf(format string, v ...interface{}) {
 // Info messages are those that are logged but not expected to be read.
 func (log *destination) Infof(format string, v ...interface{}) {
 	log.printf(Info, 1, format, v...)
+}
+
+// Used for logging additional information that are not logged by info level
+// This may slightly impact performance
+func (log *destination) Verbosef(format string, v ...interface{}) {
+	log.printf(Verbose, 1, format, v...)
 }
 
 // Function timing. Use as:
@@ -220,6 +235,12 @@ func PeriodicProfile(port string, endpoints ...string) {
 func (log *destination) LazyDebug(fn func() string) {
 	if log.isEnabled(Debug, 1) {
 		log.printf(Debug, 1, "%s", fn())
+	}
+}
+
+func (log *destination) LazyVerbose(fn func() string) {
+	if log.isEnabled(Verbose, 1) {
+		log.printf(Verbose, 1, "%s", fn())
 	}
 }
 
@@ -358,6 +379,11 @@ func Infof(format string, v ...interface{}) {
 	SystemLogger.printf(Info, 1, format, v...)
 }
 
+// Verbosef to log message at verbose level.
+func Verbosef(format string, v ...interface{}) {
+	SystemLogger.printf(Verbose, 1, format, v...)
+}
+
 // Debugf to log message at info level.
 func Debugf(format string, v ...interface{}) {
 	SystemLogger.printf(Debug, 1, format, v...)
@@ -391,6 +417,13 @@ func AddOverride(line string) {
 // Clear all overrides
 func ClearOverrides() {
 	SystemLogger.ClearOverrides()
+}
+
+// Run function only if output will be logged at verbose level
+func LazyVerbose(fn func() string) {
+	if SystemLogger.isEnabled(Verbose, 1) {
+		SystemLogger.printf(Verbose, 1, "%s", fn())
+	}
 }
 
 // Run function only if output will be logged at debug level

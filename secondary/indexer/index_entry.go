@@ -16,6 +16,7 @@ var (
 var (
 	MinIndexKey = &NilIndexKey{cmp: -1, pcmp: -1}
 	MaxIndexKey = &NilIndexKey{cmp: 1, pcmp: 1}
+	NilJsonKey  = []byte("[]")
 )
 
 var (
@@ -275,5 +276,5 @@ func (k *secondaryKey) String() string {
 }
 
 func isNilJsonKey(k []byte) bool {
-	return bytes.Equal([]byte("[]"), k) || len(k) == 0
+	return bytes.Equal(NilJsonKey, k) || len(k) == 0
 }

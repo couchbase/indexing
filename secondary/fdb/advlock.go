@@ -35,7 +35,7 @@ loop:
 			break loop
 		default:
 			if printStack {
-				Log.Infof("Unable to acquire lock\n%s", string(debug.Stack()))
+				Log.Debugf("Unable to acquire lock\n%s", string(debug.Stack()))
 				printStack = false
 			}
 		}

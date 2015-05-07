@@ -2011,6 +2011,7 @@ func (tk *timekeeper) getBucketConn(name string, refresh bool) (*couchbase.Bucke
 	} else {
 		// Close the old bucket instance
 		tk.removeBucketConnUnlocked(name)
+		logging.Infof("Timekeeper::getBucketConn Creating new conn for bucket: %v", name)
 		b, err = common.ConnectBucket(tk.config["clusterAddr"].String(), "default", name)
 		if err != nil {
 			return nil, err
@@ -2058,7 +2059,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					return err
 				})
 
-				if rh.Run() != nil {
+				if err = rh.Run(); err != nil {
 					logging.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
 					replych <- statsMap
 					return

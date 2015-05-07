@@ -180,6 +180,18 @@ func BuildIndexes(indexNames []string, bucketName, server string, indexActiveTim
 	return err
 }
 
+func BuildIndexesAsync(defnIds []uint64, server string, indexActiveTimeoutSeconds int64) error {
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return e
+	}
+	defer client.Close()
+
+	err := client.BuildIndexes(defnIds)
+	log.Printf("Build command issued for the deferred indexes %v", defnIds)
+	return err
+}
+
 func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeoutSeconds int64) error {
 	start := time.Now()
 	for {

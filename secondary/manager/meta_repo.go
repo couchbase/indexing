@@ -12,6 +12,7 @@ package manager
 import (
 	//"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/couchbase/gometa/protocol"
 	repo "github.com/couchbase/gometa/repository"
@@ -25,16 +26,19 @@ import (
 )
 
 type MetadataRepo struct {
-	repo     RepoRef
-	mutex    sync.Mutex
-	isClosed bool
+	repo       RepoRef
+	mutex      sync.Mutex
+	isClosed   bool
+	defnCache  map[common.IndexDefnId]*common.IndexDefn
+	topoCache  map[string]*IndexTopology
+	globalTopo *GlobalTopology
 }
 
 type RepoRef interface {
 	getMeta(name string) ([]byte, error)
 	setMeta(name string, value []byte) error
 	deleteMeta(name string) error
-	newIterator() (*MetaIterator, error)
+	newIterator() (*repo.RepoIterator, error)
 	registerNotifier(notifier MetadataNotifier)
 	setLocalValue(name string, value string) error
 	getLocalValue(name string) (string, error)
@@ -55,11 +59,13 @@ type LocalRepoRef struct {
 }
 
 type MetaIterator struct {
-	iterator *repo.RepoIterator
+	arr []*common.IndexDefn
+	pos int
 }
 
 type TopologyIterator struct {
-	iterator *repo.RepoIterator
+	arr []*IndexTopology
+	pos int
 }
 
 type Request struct {
@@ -95,7 +101,20 @@ func NewMetadataRepo(requestAddr string,
 	if err != nil {
 		return nil, err
 	}
-	repo := &MetadataRepo{repo: ref, isClosed: false}
+	repo := &MetadataRepo{repo: ref,
+		isClosed:   false,
+		defnCache:  make(map[common.IndexDefnId]*common.IndexDefn),
+		topoCache:  make(map[string]*IndexTopology),
+		globalTopo: nil}
+
+	if err := repo.loadDefn(); err != nil {
+		return nil, err
+	}
+
+	if err := repo.loadTopology(); err != nil {
+		return nil, err
+	}
+
 	return repo, nil
 }
 
@@ -109,7 +128,20 @@ func NewLocalMetadataRepo(msgAddr string,
 	if err != nil {
 		return nil, nil, err
 	}
-	repo := &MetadataRepo{repo: ref, isClosed: false}
+	repo := &MetadataRepo{repo: ref,
+		isClosed:   false,
+		defnCache:  make(map[common.IndexDefnId]*common.IndexDefn),
+		topoCache:  make(map[string]*IndexTopology),
+		globalTopo: nil}
+
+	if err := repo.loadDefn(); err != nil {
+		return nil, nil,  err
+	}
+
+	if err := repo.loadTopology(); err != nil {
+		return nil, nil, err
+	}
+
 	return repo, ref.server, nil
 }
 
@@ -195,29 +227,38 @@ func (c *MetadataRepo) GetNextIndexInstId() (common.IndexInstId, error) {
 ///////////////////////////////////////////////////////
 
 func (c *MetadataRepo) GetIndexDefnById(id common.IndexDefnId) (*common.IndexDefn, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	defn, ok := c.defnCache[id]
+	if ok && defn != nil {
+		return defn, nil
+	}
+
 	lookupName := indexDefnKeyById(id)
 	data, err := c.getMeta(lookupName)
 	if err != nil {
 		return nil, err
 	}
 
-	return common.UnmarshallIndexDefn(data)
+	defn, err = common.UnmarshallIndexDefn(data)
+	if err != nil {
+		return nil, err
+	}
+
+	c.defnCache[id] = defn
+	return defn, nil
 }
 
 func (c *MetadataRepo) GetIndexDefnByName(bucket string, name string) (*common.IndexDefn, error) {
 
-	iter, err := c.NewIterator()
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 
-	_, defn, err := iter.Next()
-	for err == nil {
-		if defn.Bucket == bucket && defn.Name == name {
+	for _, defn := range c.defnCache {
+		if defn.Name == name && defn.Bucket == bucket {
 			return defn, nil
 		}
-		_, defn, err = iter.Next()
 	}
 
 	return nil, nil
@@ -254,6 +295,13 @@ func (c *MetadataRepo) SetStabilityTimestamps(timestamps *timestampListSerializa
 ///////////////////////////////////////////////////////
 
 func (c *MetadataRepo) GetTopologyByBucket(bucket string) (*IndexTopology, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	topology, ok := c.topoCache[bucket]
+	if ok && topology != nil {
+		return topology, nil
+	}
 
 	lookupName := indexTopologyKey(bucket)
 	data, err := c.getMeta(lookupName)
@@ -261,10 +309,18 @@ func (c *MetadataRepo) GetTopologyByBucket(bucket string) (*IndexTopology, error
 		return nil, err
 	}
 
-	return unmarshallIndexTopology(data)
+	topology, err = unmarshallIndexTopology(data)
+	if err != nil {
+		return nil, err
+	}
+
+	c.topoCache[bucket] = topology
+	return topology, nil
 }
 
 func (c *MetadataRepo) SetTopologyByBucket(bucket string, topology *IndexTopology) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 
 	topology.Version = topology.Version + 1
 
@@ -274,10 +330,21 @@ func (c *MetadataRepo) SetTopologyByBucket(bucket string, topology *IndexTopolog
 	}
 
 	lookupName := indexTopologyKey(bucket)
-	return c.setMeta(lookupName, data)
+	if err := c.setMeta(lookupName, data); err != nil {
+		return err
+	}
+
+	c.topoCache[bucket] = topology
+	return nil
 }
 
 func (c *MetadataRepo) GetGlobalTopology() (*GlobalTopology, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if c.globalTopo != nil {
+		return c.globalTopo, nil
+	}
 
 	lookupName := globalTopologyKey()
 	data, err := c.getMeta(lookupName)
@@ -285,10 +352,18 @@ func (c *MetadataRepo) GetGlobalTopology() (*GlobalTopology, error) {
 		return nil, err
 	}
 
-	return unmarshallGlobalTopology(data)
+	topo, err := unmarshallGlobalTopology(data)
+	if err != nil {
+		return nil, err
+	}
+
+	c.globalTopo = topo
+	return topo, nil
 }
 
 func (c *MetadataRepo) SetGlobalTopology(topology *GlobalTopology) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 
 	data, err := marshallGlobalTopology(topology)
 	if err != nil {
@@ -296,7 +371,12 @@ func (c *MetadataRepo) SetGlobalTopology(topology *GlobalTopology) error {
 	}
 
 	lookupName := globalTopologyKey()
-	return c.setMeta(lookupName, data)
+	if err := c.setMeta(lookupName, data); err != nil {
+		return err
+	}
+
+	c.globalTopo = topology
+	return nil
 }
 
 ///////////////////////////////////////////////////////
@@ -328,6 +408,11 @@ func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 		return err
 	}
 
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.defnCache[defn.DefnId] = defn
+
 	return nil
 }
 
@@ -346,7 +431,70 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 		return err
 	}
 
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	delete(c.defnCache, id)
+
 	return nil
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// Private Function : Initialization
+/////////////////////////////////////////////////////////////////////////////
+
+func (c *MetadataRepo) loadDefn() error {
+
+	iter, err := c.repo.newIterator()
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	for {
+		key, content, err := iter.Next()
+		if err != nil {
+			return nil
+		}
+
+		if isIndexDefnKey(key) {
+			id := indexDefnIdFromKey(key)
+			if id != "" {
+				defn, err := common.UnmarshallIndexDefn(content)
+				if err != nil {
+					return err
+				}
+
+				c.defnCache[defn.DefnId] = defn
+			}
+		}
+	}
+}
+
+func (c *MetadataRepo) loadTopology() error {
+
+	iter, err := c.repo.newIterator()
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+
+	for {
+		key, content, err := iter.Next()
+		if err != nil {
+			return nil
+		}
+
+		if isIndexTopologyKey(key) {
+			topology, err := unmarshallIndexTopology(content)
+			if err != nil {
+				return err
+			}
+
+			bucket := getBucketFromTopologyKey(key)
+			c.topoCache[bucket] = topology
+		}
+	}
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -357,73 +505,61 @@ func (c *MetadataRepo) DropIndexById(id common.IndexDefnId) error {
 // Create a new iterator
 //
 func (c *MetadataRepo) NewIterator() (*MetaIterator, error) {
-	return c.repo.newIterator()
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	iter := &MetaIterator{pos: 0, arr: nil}
+	for _, defn := range c.defnCache {
+		iter.arr = append(iter.arr, defn)
+	}
+	return iter, nil
 }
 
 // Get value from iterator
 func (i *MetaIterator) Next() (string, *common.IndexDefn, error) {
 
-	for {
-		key, content, err := i.iterator.Next()
-		if err != nil {
-			return "", nil, err
-		}
-
-		if isIndexDefnKey(key) {
-			name := indexDefnIdFromKey(key)
-			if name != "" {
-				defn, err := common.UnmarshallIndexDefn(content)
-				if err != nil {
-					return "", nil, err
-				}
-				return name, defn, nil
-			}
-			return "", nil, NewError(ERROR_META_WRONG_KEY, NORMAL, METADATA_REPO, nil,
-				fmt.Sprintf("Index Definition Key %s is mal-formed", key))
-		}
+	if i.pos >= len(i.arr) {
+		return "", nil, errors.New("No data")
 	}
+	defn := i.arr[i.pos]
+	i.pos++
+	return fmt.Sprintf("%v", defn.DefnId), defn, nil
 }
 
 // close iterator
 func (i *MetaIterator) Close() {
-
-	i.iterator.Close()
+	// no op
 }
 
 //
 // Create a new topology iterator
 //
 func (c *MetadataRepo) NewTopologyIterator() (*TopologyIterator, error) {
-	iter, err := c.repo.newIterator()
-	if err != nil {
-		return nil, err
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	iter := &TopologyIterator{pos: 0, arr: nil}
+	for _, topo := range c.topoCache {
+		iter.arr = append(iter.arr, topo)
 	}
-	return &TopologyIterator{iterator: iter.iterator}, nil
+	return iter, nil
 }
 
 // Get value from iterator
 func (i *TopologyIterator) Next() (*IndexTopology, error) {
 
-	for {
-		key, content, err := i.iterator.Next()
-		if err != nil {
-			return nil, err
-		}
-
-		if isIndexTopologyKey(key) {
-			topology, err := unmarshallIndexTopology(content)
-			if err != nil {
-				return nil, err
-			}
-			return topology, nil
-		}
+	if i.pos >= len(i.arr) {
+		return nil, errors.New("No data")
 	}
+	topo := i.arr[i.pos]
+	i.pos++
+	return topo, nil
 }
 
 // close iterator
 func (i *TopologyIterator) Close() {
-
-	i.iterator.Close()
+	// no op
 }
 
 ///////////////////////////////////////////////////////
@@ -473,15 +609,8 @@ func (c *LocalRepoRef) deleteMeta(name string) error {
 	return nil
 }
 
-func (c *LocalRepoRef) newIterator() (*MetaIterator, error) {
-	iter, err := c.server.GetIterator("/", "")
-	if err != nil {
-		return nil, err
-	}
-
-	result := &MetaIterator{iterator: iter}
-
-	return result, nil
+func (c *LocalRepoRef) newIterator() (*repo.RepoIterator, error) {
+	return c.server.GetIterator("/", "")
 }
 
 func (c *LocalRepoRef) close() {
@@ -562,15 +691,8 @@ func newRemoteRepoRef(requestAddr string,
 	return repoRef, nil
 }
 
-func (c *RemoteRepoRef) newIterator() (*MetaIterator, error) {
-	iter, err := c.repository.NewIterator(repo.MAIN, "/", "")
-	if err != nil {
-		return nil, err
-	}
-
-	result := &MetaIterator{iterator: iter}
-
-	return result, nil
+func (c *RemoteRepoRef) newIterator() (*repo.RepoIterator, error) {
+	return c.repository.NewIterator(repo.MAIN, "/", "")
 }
 
 func (c *RemoteRepoRef) getMetaFromWatcher(name string) ([]byte, error) {

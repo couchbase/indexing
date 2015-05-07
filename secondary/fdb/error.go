@@ -42,6 +42,7 @@ const (
 	RESULT_FILE_RENAME_FAIL        Error        = -25
 	RESULT_TRANSACTION_FAIL        Error        = -26
 	RESULT_FAIL                    Error        = -100
+	RESULT_NO_DB_HEADERS           Error        = -38
 )
 
 type Error int
@@ -78,5 +79,6 @@ var resultMessages = map[int]string{
 	-24:  "file remove fail",
 	-25:  "file rename fail",
 	-26:  "transaction fail",
+	-38:  "no db header found",
 	-100: "fail",
 }
