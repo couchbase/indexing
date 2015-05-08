@@ -63,6 +63,7 @@ type InitialBuildInfo struct {
 //together for repair message
 const REPAIR_BATCH_TIMEOUT = 1000
 const KV_RETRY_INTERVAL = 5000
+
 //const REPAIR_RETRY_INTERVAL = 5000
 const REPAIR_RETRY_BEFORE_SHUTDOWN = 5
 
@@ -1577,9 +1578,6 @@ func (tk *timekeeper) maybeMergeTs(streamId common.StreamId,
 	//there is only a single TS in list which has all the latest snapshots seen
 	//by indexer.
 	if merge {
-		if lts.IsPersisted() {
-			newTs.SetPersisted(true)
-		}
 		if lts.HasLargeSnapshot() {
 			newTs.SetLargeSnapshot(true)
 		}
@@ -1657,6 +1655,8 @@ func (tk *timekeeper) sendNewStabilityTS(ts *common.TsVbuuid, bucket string,
 		return
 	}
 
+	tk.maybeSetPersistFlag(streamId, bucket, flushTs)
+
 	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = flushTs
 
 	go func() {
@@ -1665,6 +1665,22 @@ func (tk *timekeeper) sendNewStabilityTS(ts *common.TsVbuuid, bucket string,
 			streamId:  streamId,
 			changeVec: changeVec}
 	}()
+}
+
+//sets the persisted flag based on configuration
+func (tk *timekeeper) maybeSetPersistFlag(streamId common.StreamId, bucket string,
+	flushTs *common.TsVbuuid) {
+
+	snapPersistInterval := tk.config["settings.persisted_snapshot.interval"].Uint64()
+
+	persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
+	lastPersistTime := tk.ss.streamBucketLastPersistTime[streamId][bucket]
+
+	if time.Since(lastPersistTime) > persistDuration {
+		flushTs.SetPersisted(true)
+		tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
+	}
+
 }
 
 //splits a Ts if current HWT is less than Snapshot End for the vbucket.
