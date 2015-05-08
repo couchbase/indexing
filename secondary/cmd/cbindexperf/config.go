@@ -20,6 +20,8 @@ type ScanConfig struct {
 	High      c.SecondaryKey
 	Inclusion int
 	Repeat    int
+
+	iteration int
 }
 
 type Config struct {

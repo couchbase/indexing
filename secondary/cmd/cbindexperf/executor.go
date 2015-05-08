@@ -148,16 +148,30 @@ func RunCommands(cluster string, cfg *Config) (*Result, error) {
 		res := new(ScanResult)
 		res.LatencyHisto.Init(cfg.LatencyBuckets, hFn)
 		res.Id = spec.Id
-		for i := 0; i < spec.Repeat+1; i++ {
-			j := Job{
-				spec:   spec,
-				result: res,
-			}
+		result.ScanResults = append(result.ScanResults, res)
+	}
 
-			jobQ <- j
+	// Round robin scheduling of jobs
+	var allFinished bool
+loop:
+	for {
+		allFinished = true
+		for i, spec := range cfg.ScanSpecs {
+			if spec.iteration < spec.Repeat {
+				j := Job{
+					spec:   spec,
+					result: result.ScanResults[i],
+				}
+
+				jobQ <- j
+				spec.iteration++
+				allFinished = false
+			}
 		}
 
-		result.ScanResults = append(result.ScanResults, res)
+		if allFinished {
+			break loop
+		}
 	}
 
 	close(jobQ)
