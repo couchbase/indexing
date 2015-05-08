@@ -1676,9 +1676,13 @@ func (tk *timekeeper) maybeSetPersistFlag(streamId common.StreamId, bucket strin
 	persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 	lastPersistTime := tk.ss.streamBucketLastPersistTime[streamId][bucket]
 
+	//for init build, just follow wall clock time
+	//for incremental build, persist only if ts is snap aligned
 	if time.Since(lastPersistTime) > persistDuration {
-		flushTs.SetPersisted(true)
-		tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
+		if tk.hasInitStateIndex(streamId, bucket) || flushTs.IsSnapAligned() {
+			flushTs.SetPersisted(true)
+			tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
+		}
 	}
 
 }
@@ -2264,4 +2268,23 @@ func (tk *timekeeper) setBuildTs(streamId common.StreamId, bucket string,
 		}
 	}
 
+}
+
+func (tk *timekeeper) hasInitStateIndex(streamId common.StreamId,
+	bucket string) bool {
+
+	if streamId == common.INIT_STREAM {
+		return true
+	}
+
+	for _, buildInfo := range tk.indexBuildInfo {
+		//if index belongs to the flushed bucket and in INITIAL state
+		idx := buildInfo.indexInst
+		if idx.Defn.Bucket == bucket &&
+			idx.Stream == streamId &&
+			idx.State == common.INDEX_STATE_INITIAL {
+			return true
+		}
+	}
+	return false
 }
