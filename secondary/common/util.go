@@ -410,12 +410,21 @@ func EquivalentIP(
 	if err != nil {
 		return "", "", err
 	}
+
+	if host == "localhost" {
+		host = "127.0.0.1"
+	}
+
 	netIP := net.ParseIP(host)
 
 	for _, raddr1 := range raddrs {
 		host1, port1, err := net.SplitHostPort(raddr1)
 		if err != nil {
 			return "", "", err
+		}
+
+		if host1 == "localhost" {
+			host1 = "127.0.0.1"
 		}
 		netIP1 := net.ParseIP(host1)
 		// check whether ports are same.
@@ -424,14 +433,17 @@ func EquivalentIP(
 		}
 		// check whether both are local-ip.
 		if IsIPLocal(host) && IsIPLocal(host1) {
-			return raddr, raddr1, nil // raddr => raddr1
+			return host + ":" + port,
+				host1 + ":" + port, nil // raddr => raddr1
 		}
-		// check wethere they are coming from the same remote.
+		// check whether they are coming from the same remote.
 		if netIP.Equal(netIP1) {
-			return raddr, raddr1, nil // raddr == raddr1
+			return host + ":" + port,
+				host1 + ":" + port1, nil // raddr == raddr1
 		}
 	}
-	return raddr, raddr, nil
+	return host + ":" + port,
+		host + ":" + port, nil
 }
 
 //---------------------

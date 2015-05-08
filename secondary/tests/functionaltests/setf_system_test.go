@@ -10,6 +10,7 @@ import (
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 	"log"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -786,4 +787,402 @@ func TestDropBuildingIndex2(t *testing.T) {
 	FailTestIfError(err, "Error in scan index2", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation", t)
+}
+
+// 5. Drop index when front end load is going and there are multiple indexes
+func TestDropIndexWithDataLoad(t *testing.T) {
+	log.Printf("In TestDropIndexWithDataLoad()")
+	var wg sync.WaitGroup
+
+	var bucketName = "default"
+	var index1 = "id_company"
+	var index2 = "id_age"
+	var index3 = "id_gender"
+	var index4 = "id_isActive"
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	docsToCreate := generateDocs(10000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	log.Printf("Setting JSON docs in KV")
+	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second)
+
+	err = secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second)
+
+	err = secondaryindex.CreateSecondaryIndex(index3, bucketName, indexManagementAddress, "", []string{"gender"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second)
+
+	err = secondaryindex.CreateSecondaryIndex(index4, bucketName, indexManagementAddress, "", []string{"isActive"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second)
+
+	docsToCreate = generateDocs(30000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	log.Printf("Setting JSON docs in KV")
+
+	wg.Add(2)
+	go DropIndexWhileKVLoad(&wg, t, index1, bucketName)
+	go LoadKVBucket(&wg, t, docsToCreate, bucketName, "")
+	wg.Wait()
+
+	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 30, 45, 1)
+	scanResults, err := secondaryindex.Range(index2, bucketName, indexScanAddress, []interface{}{30}, []interface{}{45}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan index2", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+	log.Printf("Number of docScanResults and scanResults = %v and %v", len(docScanResults), len(scanResults))
+
+	docScanResults = datautility.ExpectedScanAllResponse(docs, "gender")
+	scanResults, err = secondaryindex.ScanAll(index3, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan index3", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+	log.Printf("Number of docScanResults and scanResults = %v and %v", len(docScanResults), len(scanResults))
+}
+
+// 7. Drop all indexes when frond end load is going on and there are multiple indexes.
+func TestDropAllIndexesWithDataLoad(t *testing.T) {
+	log.Printf("In TestDropAllIndexesWithDataLoad()")
+	var wg sync.WaitGroup
+
+	var bucketName = "default"
+	var index1 = "id_company"
+	var index2 = "id_age"
+	var index3 = "id_gender"
+	var index4 = "id_isActive"
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	docsToCreate := generateDocs(10000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	log.Printf("Setting JSON docs in KV")
+	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second)
+
+	err = secondaryindex.CreateSecondaryIndex(index2, bucketName, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second)
+
+	err = secondaryindex.CreateSecondaryIndex(index3, bucketName, indexManagementAddress, "", []string{"gender"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second)
+
+	err = secondaryindex.CreateSecondaryIndex(index4, bucketName, indexManagementAddress, "", []string{"isActive"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(1 * time.Second)
+
+	docsToCreate = generateDocs(30000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	log.Printf("Setting JSON docs in KV")
+
+	wg.Add(5)
+	go DropIndexWhileKVLoad(&wg, t, index1, bucketName)
+	go DropIndexWhileKVLoad(&wg, t, index2, bucketName)
+	go DropIndexWhileKVLoad(&wg, t, index3, bucketName)
+	go DropIndexWhileKVLoad(&wg, t, index4, bucketName)
+	go LoadKVBucket(&wg, t, docsToCreate, bucketName, "")
+	wg.Wait()
+
+	scanResults, e := secondaryindex.Range(index1, bucketName, indexScanAddress, []interface{}{"BIOSPAN"}, []interface{}{"ZILLANET"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	if e == nil {
+		t.Fatal("Error excpected when scanning for dropped index but scan didnt fail \n")
+		log.Printf("Length of scanResults = %v", len(scanResults))
+	} else {
+		log.Printf("Scan failed as expected with error: %v\n", e)
+	}
+}
+
+// Multiple Buckets
+// 2. create bucket and an index on it when another index is building.
+func TestCreateBucket_AnotherIndexBuilding(t *testing.T) {
+	log.Printf("In TestCreateBucket_AnotherIndexBuilding()")
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	index1 := "buck1_idx"
+	index2 := "buck2_idx"
+	bucket1 := "default"
+	bucket2 := "multi_buck2"
+
+	kvutility.FlushBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
+	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.ClearMap(docs)
+	time.Sleep(30 * time.Second)
+
+	log.Printf("Setting JSON docs in KV")
+	bucket1docs := generateDocs(200000, "test.prod")
+	bucket2docs := generateDocs(10000, "test.prod")
+	kvutility.SetKeyValues(bucket1docs, bucket1, "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndexAsync(index1, bucket1, indexManagementAddress, "", []string{"company"}, false, nil, true, nil)
+	FailTestIfError(err, "Error in creating the index1", t)
+
+	kvutility.CreateBucket(bucket2, "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
+	time.Sleep(10 * time.Second)
+	kvutility.SetKeyValues(bucket2docs, bucket2, "", clusterconfig.KVAddress)
+	err = secondaryindex.CreateSecondaryIndexAsync(index2, bucket2, indexManagementAddress, "", []string{"age"}, false, nil, true, nil)
+	FailTestIfError(err, "Error in creating the index1", t)
+
+	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test4client")
+	defer client.Close()
+	defn1, _ := secondaryindex.GetDefnID(client, bucket1, index1)
+	defn2, _ := secondaryindex.GetDefnID(client, bucket2, index2)
+
+	e = secondaryindex.WaitTillIndexActive(defn1, client, defaultIndexActiveTimeout)
+	if e != nil {
+		FailTestIfError(e, "Error in WaitTillIndexActive for index1", t)
+	}
+
+	e = secondaryindex.WaitTillIndexActive(defn2, client, defaultIndexActiveTimeout)
+	if e != nil {
+		FailTestIfError(e, "Error in WaitTillIndexActive for index2", t)
+	}
+
+	docScanResults := datautility.ExpectedScanAllResponse(bucket2docs, "age")
+	scanResults, err := secondaryindex.ScanAll(index2, bucket2, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan index2", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+	log.Printf("Number of docScanResults and scanResults = %v and %v", len(docScanResults), len(scanResults))
+
+	docScanResults = datautility.ExpectedScanAllResponse(bucket1docs, "company")
+	scanResults, err = secondaryindex.ScanAll(index1, bucket1, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan index1", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+	log.Printf("Number of docScanResults and scanResults = %v and %v", len(docScanResults), len(scanResults))
+
+	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.FlushBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.ClearMap(docs)
+}
+
+// 3. create bucket and an index on it and drop another index in another bucket.
+func TestDropBucket2Index_Bucket1IndexBuilding(t *testing.T) {
+	log.Printf("In TestDropBucket2Index_Bucket1IndexBuilding()")
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	index1 := "buck1_idx"
+	index2 := "buck2_idx"
+	bucket1 := "default"
+	bucket2 := "multibucket_test3"
+
+	kvutility.FlushBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
+	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.CreateBucket(bucket2, "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
+	tc.ClearMap(docs)
+	time.Sleep(30 * time.Second)
+
+	log.Printf("Setting JSON docs in KV")
+	bucket1docs := generateDocs(100000, "test.prod")
+	bucket2docs := generateDocs(10000, "test.prod")
+	kvutility.SetKeyValues(bucket1docs, bucket1, "", clusterconfig.KVAddress)
+	kvutility.SetKeyValues(bucket2docs, bucket2, "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndex(index2, bucket2, indexManagementAddress, "", []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index2", t)
+
+	err = secondaryindex.CreateSecondaryIndexAsync(index1, bucket1, indexManagementAddress, "", []string{"company"}, false, nil, true, nil)
+	FailTestIfError(err, "Error in creating the index1", t)
+	time.Sleep(2 * time.Second)
+
+	err = secondaryindex.DropSecondaryIndex(index2, bucket2, indexManagementAddress)
+	FailTestIfError(err, "Error dropping index2", t)
+
+	client, _ := secondaryindex.CreateClient(indexManagementAddress, "test5client")
+	defer client.Close()
+	defn1, _ := secondaryindex.GetDefnID(client, bucket1, index1)
+	e = secondaryindex.WaitTillIndexActive(defn1, client, defaultIndexActiveTimeout)
+	if e != nil {
+		FailTestIfError(e, "Error in WaitTillIndexActive for index1", t)
+	}
+
+	docScanResults := datautility.ExpectedScanAllResponse(bucket1docs, "company")
+	scanResults, err := secondaryindex.ScanAll(index1, bucket1, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan index1", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+	log.Printf("Number of docScanResults and scanResults = %v and %v", len(docScanResults), len(scanResults))
+
+	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.FlushBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.ClearMap(docs)
+}
+
+//5. bucket delete when initial index build is in progress. there needs to be
+//   multiple buckets with valid indexes.
+func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
+	log.Printf("In TestDeleteBucketWithDataLoad()")
+
+	numOfBuckets := 4
+	indexNames := [...]string{"bucket1_age", "bucket1_gender", "bucket2_city", "bucket2_company", "bucket3_gender", "bucket3_address", "bucket4_balance", "bucket4_isActive"}
+	indexFields := [...]string{"age", "gender", "address.city", "company", "gender", "address", "balance", "isActive"}
+	bucketNames := [...]string{"default", "testbucket2", "testbucket3", "testbucket4"}
+	proxyPorts := [...]string{"11212", "11213", "11214", "11215"}
+	var bucketDocs [4]tc.KeyValues
+
+	// Update default bucket ram to 256
+	// Create two more buckets with ram 256 each
+	// Add different docs to all 3 buckets
+	// Create two indexes on each of them
+	// Query the indexes
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+	kvutility.FlushBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
+
+	for i := 1; i < numOfBuckets; i++ {
+		kvutility.DeleteBucket(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+		kvutility.CreateBucket(bucketNames[i], "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
+	}
+	time.Sleep(30 * time.Second)
+
+	log.Printf("Generating docs and Populating all the buckets")
+	j := 0
+	for i := 0; i < numOfBuckets-1; i++ {
+		bucketDocs[i] = generateDocs(1000, "users.prod")
+		kvutility.SetKeyValues(bucketDocs[i], bucketNames[i], "", clusterconfig.KVAddress)
+		err := secondaryindex.CreateSecondaryIndex(indexNames[j], bucketNames[i], indexManagementAddress, "", []string{indexFields[j]}, false, nil, true, defaultIndexActiveTimeout, nil)
+		FailTestIfError(err, "Error in creating the index", t)
+		j++
+		err = secondaryindex.CreateSecondaryIndex(indexNames[j], bucketNames[i], indexManagementAddress, "", []string{indexFields[j]}, false, nil, true, defaultIndexActiveTimeout, nil)
+		FailTestIfError(err, "Error in creating the index", t)
+		j++
+	}
+
+	// Scan index of first bucket
+	docScanResults := datautility.ExpectedScanResponse_float64(bucketDocs[0], indexFields[0], 30, 50, 1)
+	scanResults, err := secondaryindex.Range(indexNames[0], bucketNames[0], indexScanAddress, []interface{}{30}, []interface{}{50}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan 1", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	bucketDocs[3] = generateDocs(50000, "users.prod")
+	kvutility.SetKeyValues(bucketDocs[3], bucketNames[3], "", clusterconfig.KVAddress)
+	FailTestIfError(err, "Error in creating the index", t)
+	err = secondaryindex.CreateSecondaryIndexAsync(indexNames[6], bucketNames[3], indexManagementAddress, "", []string{indexFields[j]}, false, nil, true, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+	time.Sleep(2 * time.Second)
+	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+
+	// Scan index of first bucket
+	docScanResults = datautility.ExpectedScanResponse_float64(bucketDocs[0], indexFields[0], 30, 50, 1)
+	scanResults, err = secondaryindex.Range(indexNames[0], bucketNames[0], indexScanAddress, []interface{}{30}, []interface{}{50}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan 1", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	// Scan index of second bucket
+	docScanResults = datautility.ExpectedScanResponse_string(bucketDocs[1], indexFields[2], "F", "Q", 2)
+	scanResults, err = secondaryindex.Range(indexNames[2], bucketNames[1], indexScanAddress, []interface{}{"F"}, []interface{}{"Q"}, 2, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan 2", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	// Scan index of third bucket
+	docScanResults = datautility.ExpectedScanResponse_string(bucketDocs[2], indexFields[4], "male", "male", 3)
+	scanResults, err = secondaryindex.Range(indexNames[4], bucketNames[2], indexScanAddress, []interface{}{"male"}, []interface{}{"male"}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan 3", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+
+	kvutility.DeleteBucket(bucketNames[1], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.DeleteBucket(bucketNames[2], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.DeleteBucket(bucketNames[3], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "512")
+	time.Sleep(30 * time.Second) // Sleep after bucket create or delete
+
+	tc.ClearMap(docs)
+	UpdateKVDocs(bucketDocs[0], docs)
+}
+
+// WHERE clause
+
+// 1. Create Index with where clause. Update document so it moves out of index.
+// Update document so it moves back again.
+func TestWherClause_UpdateDocument(t *testing.T) {
+	log.Printf("In TestWherClause_UpdateDocument()")
+
+	var bucketName = "default"
+	var index1 = "id_ageGreaterThan40"
+
+	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
+	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.ClearMap(docs)
+
+	docsToCreate := generateDocs(10000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	log.Printf("Setting JSON docs in KV")
+	kvutility.SetKeyValues(docsToCreate, bucketName, "", clusterconfig.KVAddress)
+
+	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, `age>40`, []string{"age"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedScanResponse_float64(docs, "age", 40, 1000, 2)
+	scanResults, err := secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan index1", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+	log.Printf("Number of docScanResults and scanResults = %v and %v", len(docScanResults), len(scanResults))
+
+	i := 0
+	keysToBeUpdated := make(tc.KeyValues)
+	for key, value := range docs {
+		if i >= 500 {
+			break
+		}
+		json := value.(map[string]interface{})
+		oldAge := json["age"].(float64)
+		if oldAge > 40 {
+			json["age"] = 25
+			docs[key] = json
+			keysToBeUpdated[key] = json
+			i++
+		}
+	}
+	kvutility.SetKeyValues(keysToBeUpdated, "default", "", clusterconfig.KVAddress)
+
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 40, 1000, 2)
+	scanResults, err = secondaryindex.ScanAll(index1, bucketName, indexScanAddress, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan index1", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+	log.Printf("Number of docScanResults and scanResults = %v and %v", len(docScanResults), len(scanResults))
+}
+
+func DropIndexWhileKVLoad(wg *sync.WaitGroup, t *testing.T, index, bucket string) {
+	log.Printf("In DropIndexWhileKVLoad")
+	defer wg.Done()
+
+	time.Sleep(1 * time.Second)
+
+	err := secondaryindex.DropSecondaryIndex(index, bucket, indexManagementAddress)
+	FailTestIfError(err, "Error dropping index1", t)
+}
+
+func LoadKVBucket(wg *sync.WaitGroup, t *testing.T, docsToCreate tc.KeyValues, bucketName, bucketPassword string) {
+	log.Printf("In LoadKVBucket")
+	defer wg.Done()
+
+	log.Printf("Bucket name = %v", bucketName)
+	kvutility.SetKeyValues(docsToCreate, bucketName, bucketPassword, clusterconfig.KVAddress)
 }

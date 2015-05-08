@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/couchbase/cbauth"
+	"io"
 	"os"
 	"runtime"
 	"runtime/pprof"
@@ -25,6 +26,7 @@ func main() {
 	cpus := flag.Int("cpus", runtime.NumCPU(), "Number of CPUs")
 	cluster := flag.String("cluster", "127.0.0.1:9000", "Cluster server address")
 	auth := flag.String("auth", "Administrator:asdasd", "Auth")
+	statsfile := flag.String("statsfile", "", "Periodic statistics report file")
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
 
 	flag.Parse()
@@ -54,8 +56,18 @@ func main() {
 	cfg, err := parseConfig(*config)
 	handleError(err)
 
+	var statsW io.Writer
+	if *statsfile != "" {
+		if f, err := os.Create(*statsfile); err != nil {
+			handleError(err)
+		} else {
+			statsW = f
+			defer f.Close()
+		}
+	}
+
 	t0 := time.Now()
-	res, err := RunCommands(*cluster, cfg)
+	res, err := RunCommands(*cluster, cfg, statsW)
 	handleError(err)
 	dur := time.Now().Sub(t0)
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
+	"io"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -19,13 +20,21 @@ var (
 type Job struct {
 	spec   *ScanConfig
 	result *ScanResult
+	sw     io.Writer
 }
 
-func RunScan(client *qclient.GsiClient,
-	spec *ScanConfig, result *ScanResult) {
+type JobResult struct {
+	job  *Job
+	rows int64
+	dur  int64
+}
+
+func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 	var err error
 	var rows int64
 
+	spec := job.spec
+	result := job.result
 	result.Id = spec.Id
 
 	errFn := func(e string) {
@@ -66,30 +75,59 @@ func RunScan(client *qclient.GsiClient,
 		errFn(err.Error())
 	}
 
-	var lat int64
 	dur := time.Now().Sub(startTime)
-	atomic.AddUint64(&result.Rows, uint64(rows))
-	if rows > 0 {
-		lat = dur.Nanoseconds() / rows
+
+	aggrQ <- &JobResult{
+		job:  job,
+		dur:  dur.Nanoseconds(),
+		rows: rows,
 	}
-	result.LatencyHisto.Add(lat)
-	atomic.AddInt64(&result.Duration, dur.Nanoseconds())
 }
 
-func Worker(jobQ chan Job, c *qclient.GsiClient, wg *sync.WaitGroup) {
+func Worker(jobQ chan *Job, c *qclient.GsiClient, aggrQ chan *JobResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for job := range jobQ {
-		RunScan(c, job.spec, job.result)
+		RunJob(c, job, aggrQ)
 	}
 }
 
-func RunCommands(cluster string, cfg *Config) (*Result, error) {
+func ResultAggregator(ch chan *JobResult, sw io.Writer, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for jr := range ch {
+		var lat int64
+		result := jr.job.result
+		spec := jr.job.spec
+		result.Rows += uint64(jr.rows)
+		result.Duration += jr.dur
+
+		result.statsRows += uint64(jr.rows)
+		result.statsDuration += jr.dur
+
+		if jr.rows > 0 {
+			lat = jr.dur / jr.rows
+		}
+		result.LatencyHisto.Add(lat)
+
+		result.iter++
+		if sw != nil && spec.NInterval > 0 &&
+			(result.iter%spec.NInterval == 0 || result.iter == spec.Repeat+1) {
+			fmt.Fprintf(sw, "id:%d, rows:%d, duration:%d\n",
+				spec.Id, result.statsRows, result.statsDuration)
+			result.statsRows = 0
+			result.statsDuration = 0
+		}
+	}
+}
+
+func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error) {
 	var result Result
 
 	var clients []*qclient.GsiClient
-	var jobQ chan Job
-	var wg sync.WaitGroup
+	var jobQ chan *Job
+	var aggrQ chan *JobResult
+	var wg1, wg2 sync.WaitGroup
 
 	if len(cfg.LatencyBuckets) == 0 {
 		cfg.LatencyBuckets = defaultLatencyBuckets
@@ -118,11 +156,15 @@ func RunCommands(cluster string, cfg *Config) (*Result, error) {
 		clients[i] = c
 	}
 
-	jobQ = make(chan Job, cfg.Concurrency*1000)
+	jobQ = make(chan *Job, cfg.Concurrency*1000)
+	aggrQ = make(chan *JobResult, cfg.Concurrency*1000)
 	for i := 0; i < cfg.Concurrency; i++ {
-		wg.Add(1)
-		go Worker(jobQ, clients[i%cfg.Clients], &wg)
+		wg1.Add(1)
+		go Worker(jobQ, clients[i%cfg.Clients], aggrQ, &wg1)
 	}
+
+	wg2.Add(1)
+	go ResultAggregator(aggrQ, statsW, &wg2)
 
 	for i, spec := range cfg.ScanSpecs {
 		if spec.Id == 0 {
@@ -148,20 +190,36 @@ func RunCommands(cluster string, cfg *Config) (*Result, error) {
 		res := new(ScanResult)
 		res.LatencyHisto.Init(cfg.LatencyBuckets, hFn)
 		res.Id = spec.Id
-		for i := 0; i < spec.Repeat+1; i++ {
-			j := Job{
-				spec:   spec,
-				result: res,
-			}
-
-			jobQ <- j
-		}
-
 		result.ScanResults = append(result.ScanResults, res)
 	}
 
+	// Round robin scheduling of jobs
+	var allFinished bool
+loop:
+	for {
+		allFinished = true
+		for i, spec := range cfg.ScanSpecs {
+			if iter := atomic.LoadUint32(&spec.iteration); iter < spec.Repeat+1 {
+				j := &Job{
+					spec:   spec,
+					result: result.ScanResults[i],
+				}
+
+				jobQ <- j
+				atomic.AddUint32(&spec.iteration, 1)
+				allFinished = false
+			}
+		}
+
+		if allFinished {
+			break loop
+		}
+	}
+
 	close(jobQ)
-	wg.Wait()
+	wg1.Wait()
+	close(aggrQ)
+	wg2.Wait()
 
 	return &result, err
 }

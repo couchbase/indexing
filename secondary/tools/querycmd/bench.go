@@ -3,6 +3,7 @@ package main
 import "time"
 import "log"
 import "fmt"
+import "net"
 import "reflect"
 
 import c "github.com/couchbase/indexing/secondary/common"
@@ -106,27 +107,14 @@ loop:
 	}
 }
 
+// FIXME: this function is broken.
 func serverCallb(
-	req interface{}, respch chan<- interface{}, quitch <-chan interface{}) {
+	req interface{}, conn net.Conn, quitch <-chan interface{}) {
 
 	switch req.(type) {
 	case *protobuf.StatisticsRequest:
-		resp := testStatisticsResponse
-		select {
-		case respch <- resp:
-			close(respch)
-
-		case <-quitch:
-			log.Fatal("unexpected quit", req)
-		}
-
 	case *protobuf.ScanRequest:
-		sendResponse(1, respch, quitch)
-		close(respch)
-
 	case *protobuf.ScanAllRequest:
-		sendResponse(1, respch, quitch)
-		close(respch)
 	}
 }
 

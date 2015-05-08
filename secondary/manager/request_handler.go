@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 ///////////////////////////////////////////////////////
@@ -105,7 +106,7 @@ type IndexStatus struct {
 	Definition string             `json:"definition"`
 	Hosts      []string           `json:"hosts,omitempty"`
 	Error      string             `json:"error,omitempty"`
-	Completion string             `json:"completion,omitempty"`
+	Completion int                `json:"completion,omitempty"`
 }
 
 //
@@ -331,10 +332,10 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) (
 							stateStr = "Error"
 						}
 
-						completion := "0"
+						completion := int(0)
 						key := fmt.Sprintf("%v:%v:build_progress", defn.Bucket, defn.Name)
 						if progress, ok := stats.ToMap()[key]; ok {
-							completion = fmt.Sprintf("%v", progress)
+							completion = int(progress.(float64))
 						}
 
 						status := IndexStatus{
@@ -804,7 +805,7 @@ func getWithAuth(url string) (*http.Response, error) {
 	}
 	cbauth.SetRequestAuthVia(req, nil)
 
-	client := http.Client{}
+	client := http.Client{Timeout: time.Duration(10 * time.Second)}
 	return client.Do(req)
 }
 
@@ -821,6 +822,6 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 	req.Header.Set("Content-Type", bodyType)
 	cbauth.SetRequestAuthVia(req, nil)
 
-	client := http.Client{}
+	client := http.Client{Timeout: time.Duration(10 * time.Second)}
 	return client.Do(req)
 }

@@ -53,6 +53,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
 		}
 
+	case "mb14786":
+		err = doMB14786(cmdOptions.Server, client)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
+		}
+
 	case "mb13339":
 		err = doMB13339(cmdOptions.Server, client)
 		if err != nil {
