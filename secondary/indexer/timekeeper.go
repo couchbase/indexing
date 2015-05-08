@@ -24,8 +24,7 @@ import (
 )
 
 const (
-	maxStatsRetries        = 5
-	largeSnapshotThreshold = 200
+	maxStatsRetries = 5
 )
 
 //Timekeeper manages the Stability Timestamp Generation and also

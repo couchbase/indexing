@@ -614,6 +614,22 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 
+	"indexer.settings.maxVbQueueLength": ConfigValue{
+		uint64(10000),
+		"Maximum Length of Mutation Queue Per Vbucket. This " +
+			"allocation is done per bucket.",
+		uint64(10000),
+		false, // mutable
+	},
+
+	"indexer.settings.largeSnapshotThreshold": ConfigValue{
+		uint64(200),
+		"Threshold For Considering a DCP Snapshot as Large. " +
+			"Must be less than maxVbQueueLength.",
+		uint64(200),
+		false, // mutable
+	},
+
 	"projector.settings.log_level": ConfigValue{
 		"debug",
 		"Projector logging level",

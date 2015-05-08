@@ -637,6 +637,7 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 //check for presence of large snapshot in a TS and set the flag
 func (ss *StreamState) checkLargeSnapshot(ts *common.TsVbuuid) {
 
+	largeSnapshotThreshold := ss.config["settings.largeSnapshotThreshold"].Uint64()
 	for _, s := range ts.Snapshots {
 		if s[1]-s[0] > largeSnapshotThreshold {
 			ts.SetLargeSnapshot(true)
