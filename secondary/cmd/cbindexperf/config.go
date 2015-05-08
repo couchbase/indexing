@@ -19,9 +19,10 @@ type ScanConfig struct {
 	Lookups   []c.SecondaryKey
 	High      c.SecondaryKey
 	Inclusion int
-	Repeat    int
+	Repeat    uint32
+	NInterval uint32 // Stats dump nrequests interval
 
-	iteration int
+	iteration uint32
 }
 
 type Config struct {
@@ -37,6 +38,11 @@ type ScanResult struct {
 	Duration     int64
 	LatencyHisto stats.Histogram
 	ErrorCount   uint64
+
+	// periodic stats
+	iter          uint32
+	statsRows     uint64
+	statsDuration int64
 }
 
 type Result struct {
