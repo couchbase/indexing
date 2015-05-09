@@ -220,7 +220,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	var deferred bool = false
-	var wait bool = false
+	var wait bool = true
 	var nodes []string = nil
 
 	if plan != nil {
@@ -262,9 +262,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 						false
 				}
 				deferred = deferred2
-				if !deferred {
-					wait = true
-				}
+				wait = !deferred
+
 			} else if _, ok := plan["defer_build"]; ok {
 				return c.IndexDefnId(0),
 					errors.New("Fails to create index.  Parameter defer_build must be a boolean value of (true or false)."),
@@ -272,9 +271,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			}
 		} else {
 			deferred = deferred2
-			if !deferred {
-				wait = true
-			}
+			wait = !deferred
 		}
 	}
 
