@@ -102,7 +102,8 @@ retry:
 	slice.idxDefnId = idxDefnId
 	slice.id = sliceId
 
-	slice.cmdCh = make(chan interface{}, SLICE_COMMAND_BUFFER_SIZE)
+	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
+	slice.cmdCh = make(chan interface{}, sliceBufSize)
 	slice.workerDone = make([]chan bool, slice.numWriters)
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 

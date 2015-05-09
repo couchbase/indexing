@@ -630,6 +630,14 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 
+	"indexer.settings.sliceBufSize": ConfigValue{
+		uint64(50000),
+		"Buffer for each slice to queue mutations before flush " +
+			"to storage.",
+		uint64(50000),
+		false, // mutable
+	},
+
 	"projector.settings.log_level": ConfigValue{
 		"debug",
 		"Projector logging level",
