@@ -10,6 +10,7 @@
 package indexer
 
 import (
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"sync"
@@ -282,8 +283,10 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 
 	defer wg.Done()
 
-	logging.Tracef("Flusher::flushSingleVbucketUptoSeqno Started worker to flush vbucket: "+
-		"%v till Seqno: %v for Stream: %v", vbucket, seqno, streamId)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("Flusher::flushSingleVbucketUptoSeqno Started worker to flush vbucket: "+
+			"%v till Seqno: %v for Stream: %v", vbucket, seqno, streamId)
+	})
 
 	mutch, err := q.DequeueUptoSeqno(vbucket, seqno)
 	if err != nil {
@@ -326,7 +329,9 @@ func (f *flusher) flushSingleMutation(mut *MutationKeys, streamId common.StreamI
 
 func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 
-	logging.Tracef("Flusher::flush Flushing Stream %v Mutations %v", streamId, mutk)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("Flusher::flush Flushing Stream %v Mutations %v", streamId, mutk)
+	})
 
 	var processedUpserts []common.IndexInstId
 	for _, mut := range mutk.mut {
@@ -334,24 +339,30 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 		var idxInst common.IndexInst
 		var ok bool
 		if idxInst, ok = f.indexInstMap[mut.uuid]; !ok {
-			logging.Tracef("Flusher::flush Unknown Index Instance Id %v. "+
-				"Skipped Mutation Key %v", mut.uuid, mut.key)
+			logging.LazyTrace(func() string {
+				return fmt.Sprintf("Flusher::flush Unknown Index Instance Id %v. "+
+					"Skipped Mutation Key %v", mut.uuid, mut.key)
+			})
 			continue
 		}
 
 		//Skip this mutation if the index doesn't belong to the stream being flushed
 		if streamId != idxInst.Stream && streamId != common.CATCHUP_STREAM {
-			logging.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v Stream: %v In "+
-				"Stream: %v. Skipped Mutation Key %v", idxInst.InstId, idxInst.Stream,
-				streamId, mut.key)
+			logging.LazyTrace(func() string {
+				return fmt.Sprintf("Flusher::flush \n\tFound Mutation For IndexId: %v Stream: %v In "+
+					"Stream: %v. Skipped Mutation Key %v", idxInst.InstId, idxInst.Stream,
+					streamId, mut.key)
+			})
 			continue
 		}
 
 		//Skip mutations for indexes in DELETED state. This may happen if complete
 		//couldn't happen when processing drop index.
 		if idxInst.State == common.INDEX_STATE_DELETED {
-			logging.Tracef("Flusher::flush \n\tFound Mutation For IndexId: %v In "+
-				"DELETED State. Skipped Mutation Key %v", idxInst.InstId, mut.key)
+			logging.LazyTrace(func() string {
+				return fmt.Sprintf("Flusher::flush \n\tFound Mutation For IndexId: %v In "+
+					"DELETED State. Skipped Mutation Key %v", idxInst.InstId, mut.key)
+			})
 			continue
 		}
 

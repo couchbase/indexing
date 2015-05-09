@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/couchbase/indexing/secondary/common"
@@ -231,7 +232,9 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 	r.skipMutation = false
 	r.evalFilter = true
 
-	logging.Tracef("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
+	})
 
 	for i, cmd := range kv.GetCommands() {
 
@@ -343,7 +346,9 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 //handleSingleMutation enqueues mutation in the mutation queue
 func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys) {
 
-	logging.Tracef("MutationStreamReader::handleSingleMutation received mutation %v", mut)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("MutationStreamReader::handleSingleMutation received mutation %v", mut)
+	})
 
 	//based on the index, enqueue the mutation in the right queue
 	if q, ok := r.bucketQueueMap[mut.meta.bucket]; ok {
