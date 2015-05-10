@@ -1542,7 +1542,8 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 				logging.Debugf("Timekeeper::generateNewStabilityTS %v %v Added TS to Pending List "+
 					"%v ", bucket, streamId, tsVbuuid)
 			}
-			tk.maybeMergeTs(streamId, bucket, tsVbuuid)
+			tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
+			tsList.PushBack(tsVbuuid)
 		}
 	} else {
 		tk.processPendingTS(streamId, bucket)
@@ -1608,6 +1609,7 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 	//if there are pending TS for this bucket, send New TS
 	bucketTsListMap := tk.ss.streamBucketTsListMap[streamId]
 	tsList := bucketTsListMap[bucket]
+
 	if tsList.Len() > 0 {
 		e := tsList.Front()
 		tsVbuuid := e.Value.(*common.TsVbuuid)
@@ -1639,15 +1641,15 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 }
 
 //sendNewStabilityTS sends the given TS to supervisor
-func (tk *timekeeper) sendNewStabilityTS(ts *common.TsVbuuid, bucket string,
+func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string,
 	streamId common.StreamId) {
 
 	if logging.Level(tk.config["settings.log_level"].String()) >= logging.Trace {
 		logging.Tracef("Timekeeper::sendNewStabilityTS Bucket: %v "+
-			"Stream: %v TS: %v", bucket, streamId, ts)
+			"Stream: %v TS: %v", bucket, streamId, flushTs)
 	}
 
-	flushTs := tk.maybeSplitTs(ts, bucket, streamId)
+	tk.mayBeMakeSnapAligned(streamId, bucket, flushTs)
 
 	changeVec, noChange := tk.ss.computeTsChangeVec(streamId, bucket, flushTs)
 	if noChange {
@@ -1684,6 +1686,31 @@ func (tk *timekeeper) maybeSetPersistFlag(streamId common.StreamId, bucket strin
 		}
 	}
 
+}
+
+//mayBeMakeSnapAligned makes a Ts snap aligned if all seqnos
+//have been received till Snapshot End and the difference is not
+//greater than largeSnapThreshold
+func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
+	bucket string, flushTs *common.TsVbuuid) {
+
+	if tk.hasInitStateIndex(streamId, bucket) {
+		return
+	}
+
+	hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
+
+	largeSnap := tk.ss.config["settings.largeSnapshotThreshold"].Uint64()
+
+	for i, s := range flushTs.Snapshots {
+
+		//if diff between snapEnd and seqno is with largeSnap limit
+		//and all mutations have been received till snapEnd
+		if s[1]-flushTs.Seqnos[i] < largeSnap &&
+			hwt.Seqnos[i] >= s[1] {
+			flushTs.Seqnos[i] = s[1]
+		}
+	}
 }
 
 //splits a Ts if current HWT is less than Snapshot End for the vbucket.

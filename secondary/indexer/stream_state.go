@@ -595,6 +595,7 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 		if seq > ts.Seqnos[i] {
 			ts.Seqnos[i] = seq
 			ts.Vbuuids[i] = hwt.Vbuuids[i]
+			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
 		}
 		//if snapEnd is greater than current hwt snapEnd
 		if hwt.Snapshots[i][1] > ts.Snapshots[i][1] {
@@ -620,13 +621,6 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 
 	//generate new stability timestamp
 	tsVbuuid := ss.streamBucketHWTMap[streamId][bucket].Copy()
-
-	//HWT may have less Seqno than Snapshot marker as mutation come later than
-	//snapshot markers. Once a TS is generated, update the Seqnos with the
-	//snapshot high seq num as that persistence will happen at these seqnums.
-	updateTsSeqNumToSnapshot(tsVbuuid)
-
-	ss.checkLargeSnapshot(tsVbuuid)
 
 	//reset state for next TS
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
