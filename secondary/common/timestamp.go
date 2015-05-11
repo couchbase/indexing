@@ -241,8 +241,8 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 func (ts *TsVbuuid) String() string {
 	var buf bytes.Buffer
 	vbnos := ts.GetVbnos()
-	fmsg := "bucket: %v, vbuckets: %v -\n"
-	buf.WriteString(fmt.Sprintf(fmsg, ts.Bucket, len(vbnos)))
+	fmsg := "bucket: %v, vbuckets: %v persisted %v -\n"
+	buf.WriteString(fmt.Sprintf(fmsg, ts.Bucket, len(vbnos), ts.Persisted))
 	fmsg = "    {vbno, vbuuid, seqno, snapshot-start, snapshot-end}\n"
 	buf.WriteString(fmt.Sprintf(fmsg))
 	for _, v := range vbnos {

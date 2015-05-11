@@ -44,7 +44,7 @@ type metadataRepo struct {
 	definitions map[c.IndexDefnId]*c.IndexDefn
 	instances   map[c.IndexDefnId]*IndexInstDistribution
 	indices     map[c.IndexDefnId]*IndexMetadata
-	mutex       sync.Mutex
+	mutex       sync.RWMutex
 }
 
 type watcher struct {
@@ -764,8 +764,8 @@ func newMetadataRepo() *metadataRepo {
 
 func (r *metadataRepo) listDefn() map[c.IndexDefnId]*IndexMetadata {
 
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
 
 	result := make(map[c.IndexDefnId]*IndexMetadata)
 	for id, meta := range r.indices {
@@ -791,8 +791,8 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 
 func (r *metadataRepo) hasDefnIgnoreStatus(indexerId c.IndexerId, defnId c.IndexDefnId) bool {
 
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
 
 	meta, ok := r.indices[defnId]
 	return ok && meta.Instances != nil && meta.Instances[0].IndexerId == indexerId
@@ -800,8 +800,8 @@ func (r *metadataRepo) hasDefnIgnoreStatus(indexerId c.IndexerId, defnId c.Index
 
 func (r *metadataRepo) hasDefnMatchingStatus(defnId c.IndexDefnId, status c.IndexState) bool {
 
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
 
 	meta, ok := r.indices[defnId]
 	return ok && meta != nil && meta.Instances != nil && meta.Instances[0].State == status
@@ -809,8 +809,8 @@ func (r *metadataRepo) hasDefnMatchingStatus(defnId c.IndexDefnId, status c.Inde
 
 func (r *metadataRepo) getDefnError(defnId c.IndexDefnId) error {
 
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
 
 	meta, ok := r.indices[defnId]
 	if ok && meta.Instances != nil && len(meta.Instances[0].Error) != 0 {
@@ -821,8 +821,8 @@ func (r *metadataRepo) getDefnError(defnId c.IndexDefnId) error {
 
 func (r *metadataRepo) getValidDefnCount(indexerId c.IndexerId) int {
 
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
 
 	count := 0
 

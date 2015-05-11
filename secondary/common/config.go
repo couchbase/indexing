@@ -532,9 +532,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.persisted_snapshot.interval": ConfigValue{
-		uint64(30000),
+		uint64(20000),
 		"Persisted snapshotting interval in milliseconds",
-		uint64(30000),
+		uint64(20000),
 		false, // mutable
 	},
 	"indexer.settings.inmemory_snapshot.interval": ConfigValue{
@@ -611,6 +611,30 @@ var SystemConfig = Config{
 		false,
 		"boolean to take current mem profile from indexer.",
 		false,
+		false, // mutable
+	},
+
+	"indexer.settings.maxVbQueueLength": ConfigValue{
+		uint64(10000),
+		"Maximum Length of Mutation Queue Per Vbucket. This " +
+			"allocation is done per bucket.",
+		uint64(10000),
+		false, // mutable
+	},
+
+	"indexer.settings.largeSnapshotThreshold": ConfigValue{
+		uint64(200),
+		"Threshold For Considering a DCP Snapshot as Large. " +
+			"Must be less than maxVbQueueLength.",
+		uint64(200),
+		false, // mutable
+	},
+
+	"indexer.settings.sliceBufSize": ConfigValue{
+		uint64(50000),
+		"Buffer for each slice to queue mutations before flush " +
+			"to storage.",
+		uint64(50000),
 		false, // mutable
 	},
 

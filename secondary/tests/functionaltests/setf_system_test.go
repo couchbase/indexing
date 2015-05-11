@@ -3,11 +3,14 @@ package functionaltests
 import (
 	"errors"
 	c "github.com/couchbase/indexing/secondary/common"
+	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 	"github.com/couchbase/indexing/secondary/tests/framework/datautility"
 	"github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
+	"github.com/couchbase/query/expression"
+	"github.com/couchbase/query/parser/n1ql"
 	"log"
 	"strings"
 	"sync"
@@ -829,7 +832,7 @@ func TestDropIndexWithDataLoad(t *testing.T) {
 	log.Printf("Setting JSON docs in KV")
 
 	wg.Add(2)
-	go DropIndexWhileKVLoad(&wg, t, index1, bucketName)
+	go DropIndexThread(&wg, t, index1, bucketName)
 	go LoadKVBucket(&wg, t, docsToCreate, bucketName, "")
 	wg.Wait()
 
@@ -888,10 +891,10 @@ func TestDropAllIndexesWithDataLoad(t *testing.T) {
 	log.Printf("Setting JSON docs in KV")
 
 	wg.Add(5)
-	go DropIndexWhileKVLoad(&wg, t, index1, bucketName)
-	go DropIndexWhileKVLoad(&wg, t, index2, bucketName)
-	go DropIndexWhileKVLoad(&wg, t, index3, bucketName)
-	go DropIndexWhileKVLoad(&wg, t, index4, bucketName)
+	go DropIndexThread(&wg, t, index1, bucketName)
+	go DropIndexThread(&wg, t, index2, bucketName)
+	go DropIndexThread(&wg, t, index3, bucketName)
+	go DropIndexThread(&wg, t, index4, bucketName)
 	go LoadKVBucket(&wg, t, docsToCreate, bucketName, "")
 	wg.Wait()
 
@@ -1169,7 +1172,99 @@ func TestWherClause_UpdateDocument(t *testing.T) {
 	log.Printf("Number of docScanResults and scanResults = %v and %v", len(docScanResults), len(scanResults))
 }
 
-func DropIndexWhileKVLoad(wg *sync.WaitGroup, t *testing.T, index, bucket string) {
+// Sync-Async Tests
+
+func TestDeferFalse(t *testing.T) {
+	log.Printf("In TestDeferFalse()")
+
+	docsToCreate := generateDocs(10000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	log.Printf("Setting JSON docs in KV")
+	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	var indexName = "index_deferfalse1"
+	var bucketName = "default"
+
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"address.city"}, false, []byte("{\"defer_build\": false}"), true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedScanResponse_string(docs, "address.city", "G", "M", 1)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"G"}, []interface{}{"M"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan of index", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+}
+
+func TestDeferFalse_CloseClientConnection(t *testing.T) {
+	log.Printf("In TestDeferFalse_CloseClientConnection()")
+
+	var wg sync.WaitGroup
+	indexName := "index_deferfalse2"
+	bucketName := "default"
+	server := indexManagementAddress
+	whereExpr := ""
+	indexFields := []string{"address.state"}
+	isPrimary := false
+	with := []byte("{\"defer_build\": false}")
+
+	client, e := secondaryindex.CreateClient(server, "2itest")
+	FailTestIfError(e, "Error in creation of client", t)
+
+	wg.Add(2)
+	go CreateIndexThread(&wg, t, indexName, bucketName, server, whereExpr, indexFields, isPrimary, with, client)
+	go CloseClientThread(&wg, t, client)
+	wg.Wait()
+
+	client1, _ := secondaryindex.CreateClient(indexManagementAddress, "test6client")
+	defer client1.Close()
+	defn1, _ := secondaryindex.GetDefnID(client1, bucketName, indexName)
+	e = secondaryindex.WaitTillIndexActive(defn1, client1, defaultIndexActiveTimeout)
+	if e != nil {
+		FailTestIfError(e, "Error in WaitTillIndexActive for index_deferfalse2", t)
+	}
+
+	docScanResults := datautility.ExpectedScanResponse_string(docs, "address.state", "C", "M", 2)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"C"}, []interface{}{"M"}, 2, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan of index", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
+}
+
+func SkipTestDeferFalse_DropIndexWhileBuilding(t *testing.T) {
+	log.Printf("In TestDeferFalse_DropIndexWhileBuilding()")
+
+	var wg sync.WaitGroup
+	indexName := "index_deferfalse3"
+	bucketName := "default"
+	server := indexManagementAddress
+	whereExpr := ""
+	indexFields := []string{"email"}
+	isPrimary := false
+	with := []byte("{\"defer_build\": false}")
+
+	docsToCreate := generateDocs(500000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	log.Printf("Setting JSON docs in KV")
+	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+
+	client, e := secondaryindex.CreateClient(server, "2itest")
+	FailTestIfError(e, "Error in creation of client", t)
+
+	wg.Add(2)
+	go CreateIndexThread(&wg, t, indexName, bucketName, server, whereExpr, indexFields, isPrimary, with, client)
+	go DropIndexThread(&wg, t, indexName, bucketName)
+	wg.Wait()
+
+	scanResults, e := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"B"}, []interface{}{"T"}, 1, true, defaultlimit, c.SessionConsistency, nil)
+	if e == nil {
+		t.Fatal("Error excpected when scanning for dropped index but scan didnt fail \n")
+		log.Printf("Length of scanResults = %v", len(scanResults))
+	} else {
+		log.Printf("Scan failed as expected with error: %v\n", e)
+	}
+}
+
+func DropIndexThread(wg *sync.WaitGroup, t *testing.T, index, bucket string) {
 	log.Printf("In DropIndexWhileKVLoad")
 	defer wg.Done()
 
@@ -1185,4 +1280,41 @@ func LoadKVBucket(wg *sync.WaitGroup, t *testing.T, docsToCreate tc.KeyValues, b
 
 	log.Printf("Bucket name = %v", bucketName)
 	kvutility.SetKeyValues(docsToCreate, bucketName, bucketPassword, clusterconfig.KVAddress)
+}
+
+func CreateIndexThread(wg *sync.WaitGroup, t *testing.T, indexName, bucketName, server, whereExpr string, indexFields []string, isPrimary bool, with []byte, client *qc.GsiClient) {
+	log.Printf("In CreateIndexThread")
+	defer wg.Done()
+
+	var secExprs []string
+	if isPrimary == false {
+		for _, indexField := range indexFields {
+			expr, err := n1ql.ParseExpression(indexField)
+			if err != nil {
+				log.Printf("Creating index %v. Error while parsing the expression (%v) : %v", indexName, indexField, err)
+			}
+
+			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
+		}
+	}
+	using := "gsi"
+	exprType := "N1QL"
+	partnExp := ""
+
+	_, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
+	if err != nil {
+		if strings.Contains(err.Error(), "Terminate Request due to client termination") {
+			log.Printf("Create Index call failed as expected due to error : %v", err)
+		} else {
+			FailTestIfError(err, "Error in index create", t)
+		}
+	}
+}
+
+func CloseClientThread(wg *sync.WaitGroup, t *testing.T, client *qc.GsiClient) {
+	log.Printf("In CloseClientThread")
+	defer wg.Done()
+
+	time.Sleep(2 * time.Second)
+	client.Close()
 }

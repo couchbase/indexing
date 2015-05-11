@@ -27,7 +27,6 @@ import (
 
 var (
 	snapshotMetaListKey = []byte("snapshots-list")
-	flushedCount        uint64
 )
 
 //NewForestDBSlice initiailizes a new slice with forestdb backend.
@@ -103,7 +102,8 @@ retry:
 	slice.idxDefnId = idxDefnId
 	slice.id = sliceId
 
-	slice.cmdCh = make(chan interface{}, SLICE_COMMAND_BUFFER_SIZE)
+	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
+	slice.cmdCh = make(chan interface{}, sliceBufSize)
 	slice.workerDone = make([]chan bool, slice.numWriters)
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
@@ -134,6 +134,11 @@ type fdbSlice struct {
 	// IMPORTANT: following 3 fields should be 64 bit aligned.
 	get_bytes, insert_bytes, delete_bytes int64
 
+	flushedCount uint64
+
+	// persistted items count
+	committedCount uint64
+
 	path     string
 	currfile string
 	id       SliceId //slice id
@@ -148,9 +153,6 @@ type fdbSlice struct {
 	back     []*forestdb.KVStore // handle for reverse index
 
 	config *forestdb.Config
-
-	// persistted items count
-	committedCount uint64
 
 	idxDefnId common.IndexDefnId
 	idxInstId common.IndexInstId
@@ -1051,10 +1053,11 @@ func newFdbFile(dirpath string, newVersion bool) string {
 
 func (fdb *fdbSlice) logWriterStat() {
 
-	flushedCount++
-	if (flushedCount%10000 == 0) || flushedCount == 1 {
-		logging.Infof("logWriterStat:: "+
-			"FlushedCount %v QueuedCount %v", flushedCount, len(fdb.cmdCh))
+	fdb.flushedCount++
+	if (fdb.flushedCount%10000 == 0) || fdb.flushedCount == 1 {
+		logging.Infof("logWriterStat:: %v "+
+			"FlushedCount %v QueuedCount %v", fdb.idxInstId,
+			fdb.flushedCount, len(fdb.cmdCh))
 	}
 
 }

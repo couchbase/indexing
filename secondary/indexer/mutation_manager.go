@@ -325,7 +325,8 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(m.numVbuckets, MAX_VB_QUEUE_LENGTH); queue == nil {
+			maxVbQueueLen := m.config["settings.maxVbQueueLength"].Uint64()
+			if queue = NewAtomicMutationQueue(m.numVbuckets, int64(maxVbQueueLen)); queue == nil {
 				m.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,
@@ -411,7 +412,8 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			if queue = NewAtomicMutationQueue(m.numVbuckets, MAX_VB_QUEUE_LENGTH); queue == nil {
+			maxVbQueueLen := m.config["settings.maxVbQueueLength"].Uint64()
+			if queue = NewAtomicMutationQueue(m.numVbuckets, int64(maxVbQueueLen)); queue == nil {
 				return &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,
@@ -488,6 +490,10 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 			}
 		}
 		if dropBucket == true {
+			//destroy the queue explicitly so that
+			//any pending mutations in queue get freed
+			mq := bucketQueueMap[b].queue
+			mq.Destroy()
 			delete(bucketQueueMap, b)
 			bucketMapDirty = true
 		}
@@ -549,6 +555,10 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 
 	if _, ok := bucketQueueMap[bucket]; ok {
 		bucketMapDirty = true
+		//destroy the queue explicitly so that
+		//any pending mutations in queue get freed
+		mq := bucketQueueMap[bucket].queue
+		mq.Destroy()
 		delete(bucketQueueMap, bucket)
 	}
 

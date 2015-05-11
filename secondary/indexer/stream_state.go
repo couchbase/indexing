@@ -14,6 +14,7 @@ import (
 	"errors"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"time"
 )
 
 type StreamState struct {
@@ -40,9 +41,10 @@ type StreamState struct {
 	streamBucketFlushEnabledMap      map[common.StreamId]BucketFlushEnabledMap
 	streamBucketDrainEnabledMap      map[common.StreamId]BucketDrainEnabledMap
 
-	streamBucketIndexCountMap map[common.StreamId]BucketIndexCountMap
-	streamBucketRepairStopCh  map[common.StreamId]BucketRepairStopCh
-	streamBucketTimerStopCh   map[common.StreamId]BucketTimerStopCh
+	streamBucketIndexCountMap   map[common.StreamId]BucketIndexCountMap
+	streamBucketRepairStopCh    map[common.StreamId]BucketRepairStopCh
+	streamBucketTimerStopCh     map[common.StreamId]BucketTimerStopCh
+	streamBucketLastPersistTime map[common.StreamId]BucketLastPersistTime
 }
 
 type BucketHWTMap map[string]*common.TsVbuuid
@@ -65,6 +67,7 @@ type BucketVbStatusMap map[string]Timestamp
 type BucketVbRefCountMap map[string]Timestamp
 type BucketRepairStopCh map[string]StopChannel
 type BucketTimerStopCh map[string]StopChannel
+type BucketLastPersistTime map[string]time.Time
 
 type BucketStatus map[string]StreamStatus
 
@@ -92,6 +95,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketIndexCountMap:        make(map[common.StreamId]BucketIndexCountMap),
 		streamBucketRepairStopCh:         make(map[common.StreamId]BucketRepairStopCh),
 		streamBucketTimerStopCh:          make(map[common.StreamId]BucketTimerStopCh),
+		streamBucketLastPersistTime:      make(map[common.StreamId]BucketLastPersistTime),
 	}
 
 	return ss
@@ -155,6 +159,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketTimerStopChMap := make(BucketTimerStopCh)
 	ss.streamBucketTimerStopCh[streamId] = bucketTimerStopChMap
 
+	bucketLastPersistTime := make(BucketLastPersistTime)
+	ss.streamBucketLastPersistTime[streamId] = bucketLastPersistTime
+
 	bucketStatus := make(BucketStatus)
 	ss.streamBucketStatus[streamId] = bucketStatus
 
@@ -183,6 +190,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketIndexCountMap[streamId][bucket] = 0
 	ss.streamBucketRepairStopCh[streamId][bucket] = nil
 	ss.streamBucketTimerStopCh[streamId][bucket] = make(StopChannel)
+	ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 
@@ -215,6 +223,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketIndexCountMap[streamId], bucket)
 	delete(ss.streamBucketRepairStopCh[streamId], bucket)
 	delete(ss.streamBucketTimerStopCh[streamId], bucket)
+	delete(ss.streamBucketLastPersistTime[streamId], bucket)
 
 	ss.streamBucketRestartTsMap[streamId][bucket] = nil
 
@@ -243,6 +252,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketRestartVbErrMap, streamId)
 	delete(ss.streamBucketRestartVbTsMap, streamId)
 	delete(ss.streamBucketIndexCountMap, streamId)
+	delete(ss.streamBucketLastPersistTime, streamId)
 	delete(ss.streamBucketStatus, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
@@ -585,6 +595,7 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 		if seq > ts.Seqnos[i] {
 			ts.Seqnos[i] = seq
 			ts.Vbuuids[i] = hwt.Vbuuids[i]
+			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
 		}
 		//if snapEnd is greater than current hwt snapEnd
 		if hwt.Snapshots[i][1] > ts.Snapshots[i][1] {
@@ -611,27 +622,6 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	//generate new stability timestamp
 	tsVbuuid := ss.streamBucketHWTMap[streamId][bucket].Copy()
 
-	//HWT may have less Seqno than Snapshot marker as mutation come later than
-	//snapshot markers. Once a TS is generated, update the Seqnos with the
-	//snapshot high seq num as that persistence will happen at these seqnums.
-	updateTsSeqNumToSnapshot(tsVbuuid)
-
-	snapInterval := ss.config["settings.inmemory_snapshot.interval"].Uint64()
-	snapPersistInterval := ss.config["settings.persisted_snapshot.interval"].Uint64()
-	// Number of inmemory ts after which a persisted timestamp should be generated
-	numInMemTs := snapPersistInterval / snapInterval
-
-	if ss.streamBucketInMemTsCountMap[streamId][bucket] == numInMemTs {
-		//set persisted flag
-		tsVbuuid.SetPersisted(true)
-		ss.streamBucketInMemTsCountMap[streamId][bucket] = 0
-	} else {
-		tsVbuuid.SetPersisted(false)
-		ss.streamBucketInMemTsCountMap[streamId][bucket]++
-	}
-
-	ss.checkLargeSnapshot(tsVbuuid)
-
 	//reset state for next TS
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
 
@@ -641,6 +631,7 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 //check for presence of large snapshot in a TS and set the flag
 func (ss *StreamState) checkLargeSnapshot(ts *common.TsVbuuid) {
 
+	largeSnapshotThreshold := ss.config["settings.largeSnapshotThreshold"].Uint64()
 	for _, s := range ts.Snapshots {
 		if s[1]-s[0] > largeSnapshotThreshold {
 			ts.SetLargeSnapshot(true)
