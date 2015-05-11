@@ -417,6 +417,7 @@ func (m *MsgMutMgrGetTimestamp) GetStreamId() common.StreamId {
 //UPDATE_INSTANCE_MAP
 type MsgUpdateInstMap struct {
 	indexInstMap common.IndexInstMap
+	stats        *IndexerStats
 }
 
 func (m *MsgUpdateInstMap) GetMsgType() MsgType {
@@ -425,6 +426,10 @@ func (m *MsgUpdateInstMap) GetMsgType() MsgType {
 
 func (m *MsgUpdateInstMap) GetIndexInstMap() common.IndexInstMap {
 	return m.indexInstMap
+}
+
+func (m *MsgUpdateInstMap) GetStatsObject() *IndexerStats {
+	return m.stats
 }
 
 func (m *MsgUpdateInstMap) String() string {
@@ -889,14 +894,14 @@ func (m *MsgIndexStorageStats) GetReplyChannel() chan []IndexStorageStats {
 
 type MsgStatsRequest struct {
 	mType  MsgType
-	respch chan map[string]interface{}
+	respch chan bool
 }
 
 func (m *MsgStatsRequest) GetMsgType() MsgType {
 	return m.mType
 }
 
-func (m *MsgStatsRequest) GetReplyChannel() chan map[string]interface{} {
+func (m *MsgStatsRequest) GetReplyChannel() chan bool {
 	return m.respch
 }
 

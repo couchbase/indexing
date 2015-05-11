@@ -108,11 +108,10 @@ type indexer struct {
 
 	kvlock sync.Mutex //fine-grain lock for KVSender
 
-	memQuota      uint64
-	enableManager bool
-	needsRestart  bool
+	stats *IndexerStats
 
-	cpuProfFd *os.File
+	enableManager bool
+	cpuProfFd     *os.File
 }
 
 func NewIndexer(config common.Config) (Indexer, Message) {
@@ -159,9 +158,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
-	// Read memquota setting
-	idx.memQuota = idx.config["settings.memory_quota"].Uint64()
+	idx.stats = NewIndexerStats()
 
+	// Read memquota setting
+	idx.stats.memoryQuota.Set(int64(idx.config["settings.memory_quota"].Uint64()))
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
 	idx.initStreamAddressMap()
@@ -205,16 +205,16 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		}
 	}
 
-	//read persisted indexer state
-	if err := idx.bootstrap(); err != nil {
-		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
-		return nil, &MsgError{err: Error{cause: err}}
-	}
-
 	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Errorf("Indexer::NewIndexer statsMgr Init Error", res)
 		return nil, res
+	}
+
+	//read persisted indexer state
+	if err := idx.bootstrap(); err != nil {
+		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
+		return nil, &MsgError{err: Error{cause: err}}
 	}
 
 	if !idx.enableManager {
@@ -468,7 +468,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		newConfig := cfgUpdate.GetConfig()
 		if newConfig["settings.memory_quota"].Uint64() !=
 			idx.config["settings.memory_quota"].Uint64() {
-			idx.needsRestart = true
+			idx.stats.needsRestart.Set(true)
 		}
 		idx.setProfilerOptions(newConfig)
 		idx.config = newConfig
@@ -625,7 +625,9 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	idx.indexInstMap[indexInst.InstId] = indexInst
 	idx.indexPartnMap[indexInst.InstId] = partnInstMap
 
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	idx.stats.AddIndex(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name)
+
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
@@ -772,7 +774,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		logging.Debugf("Indexer::handleBuildIndex \n\tAdded Index: %v to Stream: %v State: %v",
 			instIdList, buildStream, buildState)
 
-		msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 
 		if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 			if clientCh != nil {
@@ -863,7 +865,8 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	indexInst.State = common.INDEX_STATE_DELETED
 	idx.indexInstMap[indexInst.InstId] = indexInst
 
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	idx.stats.RemoveIndex(indexInst.InstId)
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		clientCh <- &MsgError{
@@ -1179,7 +1182,7 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	logging.Debugf("Indexer::handleBucketNotFound Updated Index State to DELETED %v",
 		instIdList)
 
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -1199,6 +1202,10 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 
 }
 
+func (idx indexer) newIndexInstMsg(m common.IndexInstMap) *MsgUpdateInstMap {
+	return &MsgUpdateInstMap{indexInstMap: m, stats: idx.stats.Clone()}
+}
+
 func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	clientCh MsgChannel) {
 
@@ -1209,7 +1216,7 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	delete(idx.indexInstMap, indexInstId)
 	delete(idx.indexPartnMap, indexInstId)
 
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
@@ -1614,6 +1621,11 @@ func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
 		"Timekeeper"); err != nil {
 		return err
 	}
+
+	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.statsMgrCmdCh,
+		"statsMgr"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1798,7 +1810,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	}
 
 	//send updated maps to all workers
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -1935,7 +1947,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	}
 
 	//send updated maps to all workers
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -2418,16 +2430,18 @@ func (idx *indexer) bootstrap() error {
 		return err.cause
 	}
 
+	//send updated maps
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
+
+	// Distribute current stats object and index information
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
+		common.CrashOnError(err)
+	}
+
 	//if there are no indexes, return from here
 	if len(idx.indexInstMap) == 0 {
 		return nil
-	}
-	//send updated maps
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
-	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
-
-	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
-		common.CrashOnError(err)
 	}
 
 	if ok := idx.startStreams(); !ok {
@@ -2509,6 +2523,9 @@ func (idx *indexer) initFromPersistedState() error {
 	idx.validateIndexInstMap()
 
 	for _, inst := range idx.indexInstMap {
+		if inst.State != common.INDEX_STATE_DELETED {
+			idx.stats.AddIndex(inst.InstId, inst.Defn.Bucket, inst.Defn.Name)
+		}
 
 		newpc := common.NewKeyPartitionContainer()
 
@@ -3093,17 +3110,14 @@ func (idx *indexer) checkBucketExists(bucket string,
 }
 
 func (idx *indexer) handleStats(cmd Message) {
-	statsMap := make(map[string]interface{})
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
-	statsMap["needs_restart"] = idx.needsRestart
-	statsMap["memory_used"] = idx.memoryUsed()
-	statsMap["memory_quota"] = idx.memQuota
-	replych <- statsMap
+	idx.stats.memoryUsed.Set(idx.memoryUsed())
+	replych <- true
 }
 
-func (idx *indexer) memoryUsed() uint64 {
-	return forestdb.BufferCacheUsed()
+func (idx *indexer) memoryUsed() int64 {
+	return int64(forestdb.BufferCacheUsed())
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst,

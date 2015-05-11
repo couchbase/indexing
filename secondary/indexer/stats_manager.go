@@ -11,48 +11,181 @@ package indexer
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/stats"
 	"net/http"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unsafe"
 )
+
+type IndexStats struct {
+	name, bucket string
+
+	scanDuration     stats.Int64Val
+	insertBytes      stats.Int64Val
+	numDocsPending   stats.Int64Val
+	scanWaitDuration stats.Int64Val
+	numDocsIndexed   stats.Int64Val
+	numRequests      stats.Int64Val
+	numRowsReturned  stats.Int64Val
+	diskSize         stats.Int64Val
+	buildProgress    stats.Int64Val
+	numDocsQueued    stats.Int64Val
+	deleteBytes      stats.Int64Val
+	dataSize         stats.Int64Val
+	scanBytesRead    stats.Int64Val
+	getBytes         stats.Int64Val
+	itemsCount       stats.Int64Val
+}
+
+type IndexerStatsHolder struct {
+	ptr unsafe.Pointer
+}
+
+func (h IndexerStatsHolder) Get() *IndexerStats {
+	return (*IndexerStats)(atomic.LoadPointer(&h.ptr))
+}
+
+func (h *IndexerStatsHolder) Set(s *IndexerStats) {
+	atomic.StorePointer(&h.ptr, unsafe.Pointer(s))
+}
+
+func (s *IndexStats) Init() {
+	s.scanDuration.Init()
+	s.insertBytes.Init()
+	s.numDocsPending.Init()
+	s.scanWaitDuration.Init()
+	s.numDocsIndexed.Init()
+	s.numRequests.Init()
+	s.numRowsReturned.Init()
+	s.diskSize.Init()
+	s.buildProgress.Init()
+	s.numDocsQueued.Init()
+	s.deleteBytes.Init()
+	s.dataSize.Init()
+	s.scanBytesRead.Init()
+	s.getBytes.Init()
+	s.itemsCount.Init()
+}
+
+type IndexerStats struct {
+	indexes map[common.IndexInstId]*IndexStats
+
+	numConnections stats.Int64Val
+	memoryQuota    stats.Int64Val
+	memoryUsed     stats.Int64Val
+	needsRestart   stats.BoolVal
+}
+
+func (s *IndexerStats) Init() {
+	s.indexes = make(map[common.IndexInstId]*IndexStats)
+	s.numConnections.Init()
+	s.memoryQuota.Init()
+	s.memoryUsed.Init()
+	s.needsRestart.Init()
+}
+
+func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name string) {
+	idxStats := &IndexStats{name: name, bucket: bucket}
+	idxStats.Init()
+	s.indexes[id] = idxStats
+}
+
+func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
+	delete(s.indexes, id)
+}
+
+func (is IndexerStats) MarshalJSON() ([]byte, error) {
+	var prefix string
+
+	statsMap := make(map[string]interface{})
+	addStat := func(k string, v interface{}) {
+		statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
+	}
+
+	addStat("num_connections", is.numConnections.Value())
+	addStat("memory_quota", is.memoryQuota.Value())
+	addStat("memory_used", is.memoryUsed.Value())
+	addStat("needs_restart", is.needsRestart.Value())
+
+	for _, s := range is.indexes {
+		prefix = fmt.Sprintf("%s:%s:", s.bucket, s.name)
+		addStat("total_scan_duration", s.scanDuration.Value())
+		addStat("insert_bytes", s.insertBytes.Value())
+		addStat("num_docs_pending", s.numDocsPending.Value())
+		addStat("scan_wait_duration", s.scanWaitDuration.Value())
+		addStat("num_docs_indexed", s.numDocsIndexed.Value())
+		addStat("num_requests", s.numRequests.Value())
+		addStat("num_rows_returned", s.numRowsReturned.Value())
+		addStat("disk_size", s.diskSize.Value())
+		addStat("build_progress", s.buildProgress.Value())
+		addStat("num_docs_queued", s.numDocsQueued.Value())
+		addStat("delete_bytes", s.deleteBytes.Value())
+		addStat("data_size", s.dataSize.Value())
+		addStat("scan_bytes_read", s.scanBytesRead.Value())
+		addStat("get_bytes", s.getBytes.Value())
+		addStat("items_count", s.itemsCount.Value())
+	}
+
+	return json.Marshal(statsMap)
+}
+
+func (s IndexerStats) Clone() *IndexerStats {
+	var clone IndexerStats
+	clone = s
+	clone.indexes = make(map[common.IndexInstId]*IndexStats)
+	for k, v := range s.indexes {
+		clone.indexes[k] = v
+	}
+
+	return &clone
+}
+
+func NewIndexerStats() *IndexerStats {
+	s := &IndexerStats{}
+	s.Init()
+	return s
+}
 
 type statsManager struct {
 	sync.Mutex
 	conf                  common.Config
+	stats                 IndexerStatsHolder
 	supvCmdch             MsgChannel
 	supvMsgch             MsgChannel
-	lastCacheTime         time.Time
-	statsCache            map[string]interface{}
+	lastStatTime          time.Time
 	cacheUpdateInProgress bool
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
 	supvMsgch MsgChannel, config common.Config) (statsManager, Message) {
 	s := statsManager{
-		conf:          config,
-		supvCmdch:     supvCmdch,
-		supvMsgch:     supvMsgch,
-		lastCacheTime: time.Unix(0, 0),
+		conf:         config,
+		supvCmdch:    supvCmdch,
+		supvMsgch:    supvMsgch,
+		lastStatTime: time.Unix(0, 0),
 	}
 
 	http.HandleFunc("/stats", s.handleStatsReq)
 	http.HandleFunc("/stats/mem", s.handleMemStatsReq)
+	go s.run()
 	return s, &MsgSuccess{}
 }
 
 func (s *statsManager) tryUpdateStats(sync bool) {
 	waitCh := make(chan struct{})
-	statsMap := make(map[string]interface{})
 	timeout := time.Millisecond * time.Duration(s.conf["stats_cache_timeout"].Uint64())
 
 	s.Lock()
-	cacheTime := s.lastCacheTime
+	cacheTime := s.lastStatTime
 	shouldUpdate := !s.cacheUpdateInProgress
 
-	if s.statsCache == nil {
+	if s.lastStatTime.Unix() == 0 {
 		sync = true
 	}
 
@@ -64,21 +197,18 @@ func (s *statsManager) tryUpdateStats(sync bool) {
 		go func() {
 			stats_list := []MsgType{STORAGE_STATS, SCAN_STATS, INDEX_PROGRESS_STATS, INDEXER_STATS}
 			for _, t := range stats_list {
-				ch := make(chan map[string]interface{})
+				ch := make(chan bool)
 				msg := &MsgStatsRequest{
 					mType:  t,
 					respch: ch,
 				}
 
 				s.supvMsgch <- msg
-				for k, v := range <-ch {
-					statsMap[k] = v
-				}
+				<-ch
 			}
 
 			s.Lock()
-			s.statsCache = statsMap
-			s.lastCacheTime = time.Now()
+			s.lastStatTime = time.Now()
 			s.cacheUpdateInProgress = false
 			s.Unlock()
 			close(waitCh)
@@ -100,7 +230,8 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		}
 		s.tryUpdateStats(sync)
 		s.Lock()
-		bytes, _ := json.Marshal(s.statsCache)
+		stats := s.stats.Get()
+		bytes, _ := stats.MarshalJSON()
 		s.Unlock()
 		w.WriteHeader(200)
 		w.Write(bytes)
@@ -129,14 +260,26 @@ loop:
 		select {
 		case cmd, ok := <-s.supvCmdch:
 			if ok {
-				if cmd.GetMsgType() == STORAGE_MGR_SHUTDOWN {
+				switch cmd.GetMsgType() {
+				case STORAGE_MGR_SHUTDOWN:
 					logging.Infof("SettingsManager::run Shutting Down")
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
+				case UPDATE_INDEX_INSTANCE_MAP:
+					s.handleIndexInstanceUpdate(cmd)
+				case UPDATE_INDEX_PARTITION_MAP:
+					// Ignore - not interested
+					s.supvCmdch <- &MsgSuccess{}
 				}
 			} else {
 				break loop
 			}
 		}
 	}
+}
+
+func (s *statsManager) handleIndexInstanceUpdate(cmd Message) {
+	req := cmd.(*MsgUpdateInstMap)
+	s.stats.Set(req.GetStatsObject())
+	s.supvCmdch <- &MsgSuccess{}
 }

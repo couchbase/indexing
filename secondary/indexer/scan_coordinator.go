@@ -10,7 +10,6 @@
 package indexer
 
 import (
-	"github.com/golang/protobuf/proto"
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
@@ -18,6 +17,7 @@ import (
 	p "github.com/couchbase/indexing/secondary/pipeline"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
+	"github.com/golang/protobuf/proto"
 	"net"
 	"strings"
 	"sync"
@@ -59,7 +59,7 @@ type ScanRequest struct {
 	High        IndexKey
 	Keys        []IndexKey
 	Consistency *common.Consistency
-	Stats       *indexScanStats
+	Stats       *IndexStats
 
 	// user supplied
 	LowBytes, HighBytes []byte
@@ -153,14 +153,6 @@ func (r ScanRequest) String() string {
 type ScanCoordinator interface {
 }
 
-type indexScanStats struct {
-	Requests  *uint64
-	Rows      *uint64
-	BytesRead *uint64
-	ScanTime  *uint64
-	WaitTime  *uint64
-}
-
 type scanCoordinator struct {
 	supvCmdch MsgChannel //supervisor sends commands on this channel
 	supvMsgch MsgChannel //channel to send any async message to supervisor
@@ -171,9 +163,10 @@ type scanCoordinator struct {
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 
-	reqCounter   *uint64
-	config       common.ConfigHolder
-	scanStatsMap map[common.IndexInstId]*indexScanStats
+	reqCounter *uint64
+	config     common.ConfigHolder
+
+	stats IndexerStatsHolder
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -186,11 +179,10 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 	var err error
 
 	s := &scanCoordinator{
-		supvCmdch:    supvCmdch,
-		supvMsgch:    supvMsgch,
-		logPrefix:    "ScanCoordinator",
-		reqCounter:   new(uint64),
-		scanStatsMap: make(map[common.IndexInstId]*indexScanStats),
+		supvCmdch:  supvCmdch,
+		supvMsgch:  supvMsgch,
+		logPrefix:  "ScanCoordinator",
+		reqCounter: new(uint64),
 	}
 
 	s.config.Store(config)
@@ -219,55 +211,27 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 func (s *scanCoordinator) handleStats(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
-	statsMap := make(map[string]interface{})
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
-	var instList []common.IndexInst
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for instId, stat := range s.scanStatsMap {
-		inst := s.indexInstMap[instId]
-		//skip deleted indexes
-		if inst.State == common.INDEX_STATE_DELETED {
-			continue
-		}
-
-		instList = append(instList, inst)
-
-		k := fmt.Sprintf("%s:%s:num_requests", inst.Defn.Bucket, inst.Defn.Name)
-		v := atomic.LoadUint64(stat.Requests)
-		statsMap[k] = v
-		k = fmt.Sprintf("%s:%s:num_rows_returned", inst.Defn.Bucket, inst.Defn.Name)
-		v = atomic.LoadUint64(stat.Rows)
-		statsMap[k] = v
-		k = fmt.Sprintf("%s:%s:scan_bytes_read", inst.Defn.Bucket, inst.Defn.Name)
-		v = atomic.LoadUint64(stat.BytesRead)
-		statsMap[k] = v
-		k = fmt.Sprintf("%s:%s:total_scan_duration", inst.Defn.Bucket, inst.Defn.Name)
-		v = atomic.LoadUint64(stat.ScanTime)
-		statsMap[k] = v
-		k = fmt.Sprintf("%s:%s:scan_wait_duration", inst.Defn.Bucket, inst.Defn.Name)
-		v = atomic.LoadUint64(stat.WaitTime)
-		statsMap[k] = v
-
-		st := s.serv.Statistics()
-		statsMap["num_connections"] = st.Connections
-	}
+	stats := s.stats.Get()
+	st := s.serv.Statistics()
+	stats.numConnections.Set(st.Connections)
 
 	// Compute counts asynchronously and reply to stats request
 	go func() {
-		for _, inst := range instList {
-			c, err := s.getItemsCount(inst.InstId)
+		for id, idxStats := range stats.indexes {
+			c, err := s.getItemsCount(id)
 			if err == nil {
-				k := fmt.Sprintf("%s:%s:items_count", inst.Defn.Bucket, inst.Defn.Name)
-				statsMap[k] = c
+				idxStats.itemsCount.Set(int64(c))
 			} else {
 				logging.Errorf("%v: Unable compute index count for %v/%v (%v)", s.logPrefix,
-					inst.Defn.Bucket, inst.Defn.Name, err)
+					idxStats.bucket, idxStats.name, err)
 			}
 		}
-		replych <- statsMap
+		replych <- true
 	}()
 }
 
@@ -424,6 +388,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}()
 		s.mu.RLock()
 		defer s.mu.RUnlock()
+
+		stats := s.stats.Get()
 		indexInst, localErr = s.findIndexInstance(r.DefnID)
 		if localErr == nil {
 			r.isPrimary = indexInst.Defn.IsPrimary
@@ -435,7 +401,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			if indexInst.State != common.INDEX_STATE_ACTIVE {
 				localErr = ErrIndexNotReady
 			} else {
-				r.Stats = s.scanStatsMap[r.IndexInstId]
+				r.Stats = stats.indexes[r.IndexInstId]
 			}
 		}
 	}
@@ -601,7 +567,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		return
 	}
 
-	atomic.AddUint64(req.Stats.Requests, 1)
+	req.Stats.numRequests.Add(1)
 
 	t0 := time.Now()
 	is, err := s.getRequestedIndexSnapshot(req)
@@ -645,10 +611,10 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	err := scanPipeline.Execute()
 	scanTime := time.Now().Sub(t0)
 
-	atomic.AddUint64(req.Stats.Rows, scanPipeline.RowsRead())
-	atomic.AddUint64(req.Stats.BytesRead, scanPipeline.BytesRead())
-	atomic.AddUint64(req.Stats.ScanTime, uint64(scanTime.Nanoseconds()))
-	atomic.AddUint64(req.Stats.WaitTime, uint64(waitTime.Nanoseconds()))
+	req.Stats.numRowsReturned.Add(int64(scanPipeline.RowsRead()))
+	req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
+	req.Stats.scanDuration.Add(scanTime.Nanoseconds())
+	req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
 
 	logging.LazyVerbose(func() string {
 		var status string
@@ -760,29 +726,11 @@ func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	req := cmd.(*MsgUpdateInstMap)
 	logging.Tracef("ScanCoordinator::handleUpdateIndexInstMap %v", cmd)
-	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+	indexInstMap := req.GetIndexInstMap()
+	s.stats.Set(req.GetStatsObject())
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
-
-	// Remove invalid indexes
-	for instId, _ := range s.scanStatsMap {
-		if _, ok := s.indexInstMap[instId]; !ok {
-			delete(s.scanStatsMap, instId)
-		}
-	}
-
-	// Add newly added indexes
-	for instId, _ := range s.indexInstMap {
-		if _, ok := s.scanStatsMap[instId]; !ok {
-			s.scanStatsMap[instId] = &indexScanStats{
-				Requests:  new(uint64),
-				Rows:      new(uint64),
-				BytesRead: new(uint64),
-				ScanTime:  new(uint64),
-				WaitTime:  new(uint64),
-			}
-		}
-	}
 
 	s.supvCmdch <- &MsgSuccess{}
 }
