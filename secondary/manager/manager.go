@@ -131,7 +131,7 @@ func NewIndexManagerInternal(
 	mgr = new(IndexManager)
 	mgr.isClosed = false
 	mgr.addrProvider = addrProvider
-	totalQuota = config["settings.memory_quota"].Uint64()
+	totalQuota := config["settings.memory_quota"].Uint64()
 	mgr.quota = mgr.calcBufCacheFromMemQuota(totalQuota)
 
 	// stream mgmt  - stream services will start if the indexer node becomes master
@@ -647,9 +647,9 @@ func (m *IndexManager) calcBufCacheFromMemQuota(quota uint64) uint64 {
 	if quota <= 2*1024*1024*1024 {
 		return 256 * 1024 * 1024
 	} else if quota <= 4*1024*1024*1024 {
-		return 0.4 * quota
+		return uint64(0.4 * float64(quota))
 	} else {
-		return 0.6 * quota
+		return uint64(0.6 * float64(quota))
 	}
 
 }
