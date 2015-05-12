@@ -131,12 +131,11 @@ type indexItem struct {
 
 //fdbSlice represents a forestdb slice
 type fdbSlice struct {
-	// IMPORTANT: following 3 fields should be 64 bit aligned.
+	// IMPORTANT: following 5 fields should be 64 bit aligned.
 	get_bytes, insert_bytes, delete_bytes int64
-
+	//flushed count
 	flushedCount uint64
-
-	// persistted items count
+	// persisted items count
 	committedCount uint64
 
 	path     string

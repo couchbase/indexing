@@ -30,6 +30,11 @@ type MutationStreamReader interface {
 const DEFAULT_SYNC_TIMEOUT = 40
 
 type mutationStreamReader struct {
+	// IMPORTANT: following 3 fields should be 64 bit aligned.
+	mutationCount uint64
+	snapStart     uint64
+	snapEnd       uint64
+
 	stream   *dataport.Server //handle to the Dataport server
 	streamId common.StreamId
 
@@ -52,12 +57,9 @@ type mutationStreamReader struct {
 	bucketSyncDue   map[string]bool
 
 	//local variables
-	mutationCount uint64
-	skipMutation  bool
-	evalFilter    bool
-	snapType      uint32
-	snapStart     uint64
-	snapEnd       uint64
+	skipMutation bool
+	evalFilter   bool
+	snapType     uint32
 }
 
 //CreateMutationStreamReader creates a new mutation stream and starts
