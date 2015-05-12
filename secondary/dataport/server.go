@@ -434,7 +434,6 @@ func (s *Server) jumboErrorHandler(
 func (s *Server) logStats(hostUuids keeper) {
 	bucketkvs := make(map[string][]uint64)    // bucket -> []count
 	bucketseqnos := make(map[string][]uint64) // bucket -> []seqno
-	total := uint64(0)
 	for _, avb := range hostUuids {
 		counts, ok := bucketkvs[avb.bucket]
 		seqnos, ok := bucketseqnos[avb.bucket]
@@ -449,9 +448,9 @@ func (s *Server) logStats(hostUuids keeper) {
 	}
 	for bucket, counts := range bucketkvs {
 		seqnos := bucketseqnos[bucket]
-		fmsg := "%v bucket %v total received key-versions: %v, %v\n"
-		logging.Infof(fmsg, s.logPrefix, total, counts)
-		fmsg = "%v bucket %v latest sequence numbers %v\n"
+		fmsg := "%v bucket total received key-versions: %v\n"
+		logging.Infof(fmsg, s.logPrefix, counts)
+		fmsg = "%v bucket latest sequence numbers: %v\n"
 		logging.Infof(fmsg, s.logPrefix, seqnos)
 	}
 }
