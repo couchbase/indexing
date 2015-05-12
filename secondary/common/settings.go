@@ -27,8 +27,9 @@ func GetSettingsConfig(cfg Config) (Config, error) {
 		if len(current) > 0 {
 			newConfig.Update(current)
 		}
+	} else {
+		logging.Errorf("GetSettingsConfig() failed: %v", err)
 	}
-
 	return newConfig, err
 }
 
