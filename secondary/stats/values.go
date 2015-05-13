@@ -2,31 +2,33 @@ package stats
 
 import (
 	"fmt"
-	"sync/atomic"
+	"github.com/couchbase/indexing/secondary/platform"
 )
 
 type Int64Val struct {
-	val *int64
+	val *platform.AlignedInt64
 }
 
 func (v *Int64Val) Init() {
-	v.val = new(int64)
+	v.val = new(platform.AlignedInt64)
 }
 
 func (v *Int64Val) Add(delta int64) {
-	atomic.AddInt64(v.val, delta)
+	platform.AddInt64(v.val, delta)
 }
 
 func (v *Int64Val) Set(nv int64) {
-	atomic.StoreInt64(v.val, nv)
+	platform.StoreInt64(v.val, nv)
 }
 
 func (v Int64Val) MarshalJSON() ([]byte, error) {
-	return []byte(fmt.Sprint(*v.val)), nil
+	value := platform.LoadInt64(v.val)
+	return []byte(fmt.Sprint(value)), nil
 }
 
 func (v Int64Val) Value() int64 {
-	return *v.val
+	value := platform.LoadInt64(v.val)
+	return value
 }
 
 type BoolVal struct {
@@ -46,11 +48,12 @@ func (v *BoolVal) Set(nv bool) {
 		x = 0
 	}
 
-	atomic.StoreInt32(v.val, x)
+	platform.StoreInt32(v.val, x)
 }
 
 func (v BoolVal) MarshalJSON() ([]byte, error) {
-	if *v.val == 1 {
+	value := platform.LoadInt32(v.val)
+	if value == 1 {
 		return []byte("true"), nil
 	}
 
@@ -58,5 +61,6 @@ func (v BoolVal) MarshalJSON() ([]byte, error) {
 }
 
 func (v BoolVal) Value() bool {
-	return *v.val == 1
+	value := platform.LoadInt32(v.val)
+	return value == 1
 }

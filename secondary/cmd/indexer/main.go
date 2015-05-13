@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/indexer"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/platform"
 )
 
 var (
@@ -40,8 +41,8 @@ var (
 )
 
 func main() {
-	common.HideConsole(true)
-	defer common.HideConsole(false)
+	platform.HideConsole(true)
+	defer platform.HideConsole(false)
 	common.SeedProcess()
 
 	logging.Infof("Indexer started with command line: %v\n", os.Args)
@@ -59,7 +60,7 @@ func main() {
 		}
 	}
 
-	go common.DumpOnSignal()
+	go platform.DumpOnSignal()
 	go common.ExitOnStdinClose()
 
 	config := common.SystemConfig

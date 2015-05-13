@@ -3,11 +3,11 @@ package main
 import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/platform"
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
 	"io"
 	"math"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -39,7 +39,7 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 
 	errFn := func(e string) {
 		fmt.Printf("REQ:%d scan error occured: %s\n", spec.Id, e)
-		atomic.AddUint64(&result.ErrorCount, 1)
+		platform.AddUint64(&result.ErrorCount, 1)
 	}
 
 	callb := func(res qclient.ResponseReader) bool {
@@ -206,14 +206,14 @@ loop:
 	for {
 		allFinished = true
 		for i, spec := range cfg.ScanSpecs {
-			if iter := atomic.LoadUint32(&spec.iteration); iter < spec.Repeat+1 {
+			if iter := platform.LoadUint32(&spec.iteration); iter < spec.Repeat+1 {
 				j := &Job{
 					spec:   spec,
 					result: result.ScanResults[i],
 				}
 
 				jobQ <- j
-				atomic.AddUint32(&spec.iteration, 1)
+				platform.AddUint32(&spec.iteration, 1)
 				allFinished = false
 			}
 		}

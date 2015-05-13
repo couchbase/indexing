@@ -30,7 +30,6 @@ type MutationStreamReader interface {
 const DEFAULT_SYNC_TIMEOUT = 40
 
 type mutationStreamReader struct {
-	// IMPORTANT: following 3 fields should be 64 bit aligned.
 	mutationCount uint64
 	snapStart     uint64
 	snapEnd       uint64

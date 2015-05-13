@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/platform"
 	"github.com/couchbase/indexing/secondary/stats"
 	"io/ioutil"
 	"os"
@@ -38,7 +39,7 @@ type ScanResult struct {
 	Rows         uint64
 	Duration     int64
 	LatencyHisto stats.Histogram
-	ErrorCount   uint64
+	ErrorCount   platform.AlignedUint64
 
 	// periodic stats
 	iter          uint32

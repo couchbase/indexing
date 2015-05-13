@@ -11,6 +11,7 @@ import (
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/dataport"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/platform"
 	"github.com/couchbase/indexing/secondary/projector"
 )
 
@@ -59,8 +60,8 @@ func usage() {
 }
 
 func main() {
-	c.HideConsole(true)
-	defer c.HideConsole(false)
+	platform.HideConsole(true)
+	defer platform.HideConsole(false)
 	c.SeedProcess()
 
 	cluster := argParse() // eg. "localhost:9000"

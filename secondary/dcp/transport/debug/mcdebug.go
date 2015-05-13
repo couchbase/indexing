@@ -4,18 +4,18 @@ package mcdebug
 import (
 	"encoding/json"
 	"expvar"
-	"sync/atomic"
+	"github.com/couchbase/indexing/secondary/platform"
 
 	"github.com/couchbase/indexing/secondary/dcp/transport"
 	"github.com/couchbase/indexing/secondary/dcp/transport/client"
 )
 
 type mcops struct {
-	moved, success, errored [257]uint64 // IMPORTANT: should be 64 bit aligned.
+	moved, success, errored [257]platform.AlignedUint64
 }
 
-func addToMap(m map[string]uint64, i int, counters [257]uint64) {
-	v := atomic.LoadUint64(&counters[i])
+func addToMap(m map[string]uint64, i int, counters [257]platform.AlignedUint64) {
+	v := platform.LoadUint64(&counters[i])
 	if v > 0 {
 		k := "unknown"
 		if i < 256 {
@@ -49,11 +49,11 @@ func (m *mcops) count(i, n int, err error) {
 		i = 256
 	}
 	if err == nil {
-		atomic.AddUint64(&m.success[i], 1)
+		platform.AddUint64(&m.success[i], 1)
 	} else {
-		atomic.AddUint64(&m.errored[i], 1)
+		platform.AddUint64(&m.errored[i], 1)
 	}
-	atomic.AddUint64(&m.moved[i], uint64(n))
+	platform.AddUint64(&m.moved[i], uint64(n))
 }
 
 func (m *mcops) countReq(req *transport.MCRequest, n int, err error) {

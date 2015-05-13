@@ -15,13 +15,13 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
+	"github.com/couchbase/indexing/secondary/platform"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 	"github.com/couchbase/indexing/secondary/queryport"
 	"github.com/golang/protobuf/proto"
 	"net"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -163,7 +163,7 @@ type scanCoordinator struct {
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 
-	reqCounter *uint64
+	reqCounter *platform.AlignedUint64
 	config     common.ConfigHolder
 
 	stats IndexerStatsHolder
@@ -182,7 +182,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		supvCmdch:  supvCmdch,
 		supvMsgch:  supvMsgch,
 		logPrefix:  "ScanCoordinator",
-		reqCounter: new(uint64),
+		reqCounter: new(platform.AlignedUint64),
 	}
 
 	s.config.Store(config)
@@ -285,7 +285,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	var indexInst *common.IndexInst
 	r = new(ScanRequest)
-	r.ScanId = atomic.AddUint64(s.reqCounter, 1)
+	r.ScanId = platform.AddUint64(s.reqCounter, 1)
 	r.LogPrefix = fmt.Sprintf("SCAN##%d", r.ScanId)
 
 	cfg := s.config.Load()

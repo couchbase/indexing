@@ -1,12 +1,12 @@
 package stats
 
-import "sync/atomic"
+import "github.com/couchbase/indexing/secondary/platform"
 import "math"
 import "fmt"
 
 type Histogram struct {
 	buckets    []int64
-	vals       []int64
+	vals       []platform.AlignedInt64
 	humanizeFn func(int64) string
 }
 
@@ -16,7 +16,7 @@ func (h *Histogram) Init(buckets []int64, humanizeFn func(int64) string) {
 	copy(h.buckets[1:l], buckets)
 	h.buckets[0] = math.MinInt64
 	h.buckets[l] = math.MaxInt64
-	h.vals = make([]int64, l)
+	h.vals = make([]platform.AlignedInt64, l)
 
 	if humanizeFn == nil {
 		humanizeFn = func(v int64) string { return fmt.Sprint(v) }
@@ -27,7 +27,7 @@ func (h *Histogram) Init(buckets []int64, humanizeFn func(int64) string) {
 
 func (h *Histogram) Add(val int64) {
 	i := h.findBucket(val)
-	atomic.AddInt64(&h.vals[i], 1)
+	platform.AddInt64(&h.vals[i], 1)
 }
 
 func (h *Histogram) findBucket(val int64) int {

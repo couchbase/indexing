@@ -14,11 +14,11 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/platform"
 	"github.com/couchbase/indexing/secondary/stats"
 	"net/http"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -48,11 +48,11 @@ type IndexerStatsHolder struct {
 }
 
 func (h IndexerStatsHolder) Get() *IndexerStats {
-	return (*IndexerStats)(atomic.LoadPointer(&h.ptr))
+	return (*IndexerStats)(platform.LoadPointer(&h.ptr))
 }
 
 func (h *IndexerStatsHolder) Set(s *IndexerStats) {
-	atomic.StorePointer(&h.ptr, unsafe.Pointer(s))
+	platform.StorePointer(&h.ptr, unsafe.Pointer(s))
 }
 
 func (s *IndexStats) Init() {

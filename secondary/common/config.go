@@ -18,7 +18,7 @@ import "fmt"
 import "reflect"
 import "errors"
 import "github.com/couchbase/indexing/secondary/logging"
-import "sync/atomic"
+import "github.com/couchbase/indexing/secondary/platform"
 import "unsafe"
 import "runtime"
 
@@ -27,15 +27,15 @@ var projector_maxCpuPercent = (1 + (runtime.NumCPU() / 6)) * 100
 
 // Threadsafe config holder object
 type ConfigHolder struct {
-	ptr unsafe.Pointer // IMPORTANT: should be 64 bit aligned.
+	ptr unsafe.Pointer
 }
 
 func (h *ConfigHolder) Store(conf Config) {
-	atomic.StorePointer(&h.ptr, unsafe.Pointer(&conf))
+	platform.StorePointer(&h.ptr, unsafe.Pointer(&conf))
 }
 
 func (h *ConfigHolder) Load() Config {
-	confptr := atomic.LoadPointer(&h.ptr)
+	confptr := platform.LoadPointer(&h.ptr)
 	return *(*Config)(confptr)
 }
 
@@ -508,9 +508,9 @@ var SystemConfig = Config{
 
 	// Indexer dynamic settings
 	"indexer.settings.compaction.check_period": ConfigValue{
-		1200000,
+		120,
 		"Compaction poll interval in seconds",
-		1200000,
+		120,
 		false, // mutable
 	},
 	"indexer.settings.compaction.interval": ConfigValue{
