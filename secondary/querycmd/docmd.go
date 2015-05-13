@@ -45,11 +45,12 @@ type Command struct {
 	// options for build index
 	Bindexes []string
 	// options for Range, Statistics, Count
-	Low       c.SecondaryKey
-	High      c.SecondaryKey
-	Equal     c.SecondaryKey
-	Inclusion qclient.Inclusion
-	Limit     int64
+	Low         c.SecondaryKey
+	High        c.SecondaryKey
+	Equal       c.SecondaryKey
+	Inclusion   qclient.Inclusion
+	Limit       int64
+	Consistency c.Consistency
 	// Configuration
 	ConfigKey string
 	ConfigVal string
@@ -63,7 +64,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	var inclusion uint
 	var equal, low, high string
 
-	cmdOptions := &Command{}
+	cmdOptions := &Command{Consistency: c.AnyConsistency}
 	fset := flag.NewFlagSet("cmd", flag.ExitOnError)
 
 	// basic options
@@ -170,6 +171,7 @@ func HandleCommand(
 
 	iname, bucket, limit := cmd.IndexName, cmd.Bucket, cmd.Limit
 	low, high, equal, incl := cmd.Low, cmd.High, cmd.Equal, cmd.Inclusion
+	cons := cmd.Consistency
 
 	indexes, err := client.Refresh()
 
@@ -274,11 +276,11 @@ func HandleCommand(
 			equals := []c.SecondaryKey{cmd.Equal}
 			client.Lookup(
 				uint64(defnID), equals, false, limit,
-				c.AnyConsistency, nil, callb)
+				cons, nil, callb)
 		} else {
 			err = client.Range(
 				uint64(defnID), low, high, incl, false, limit,
-				c.AnyConsistency, nil, callb)
+				cons, nil, callb)
 		}
 		if err == nil {
 			fmt.Fprintln(w, "Total number of entries: ", entries)
@@ -297,7 +299,7 @@ func HandleCommand(
 			fmt.Fprintf(w, "Index state: {%v, %v} \n", state, err)
 		} else {
 			err = client.ScanAll(
-				uint64(defnID), limit, c.AnyConsistency, nil, callb)
+				uint64(defnID), limit, cons, nil, callb)
 		}
 		if err == nil {
 			fmt.Fprintln(w, "Total number of entries: ", entries)
@@ -338,14 +340,14 @@ func HandleCommand(
 		} else if cmd.Equal != nil {
 			fmt.Fprintln(w, "CountLookup:")
 			equals := []c.SecondaryKey{cmd.Equal}
-			count, err := client.CountLookup(uint64(defnID), equals, c.AnyConsistency, nil)
+			count, err := client.CountLookup(uint64(defnID), equals, cons, nil)
 			if err == nil {
 				fmt.Fprintf(w, "Index %q/%q has %v entries\n", bucket, iname, count)
 			}
 
 		} else {
 			fmt.Fprintln(w, "CountRange:")
-			count, err = client.CountRange(uint64(defnID), low, high, incl, c.AnyConsistency, nil)
+			count, err = client.CountRange(uint64(defnID), low, high, incl, cons, nil)
 			if err == nil {
 				fmt.Fprintf(w, "Index %q/%q has %v entries\n", bucket, iname, count)
 			}

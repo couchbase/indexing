@@ -59,16 +59,23 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 		return true
 	}
 
+	var cons c.Consistency
+	if spec.Consistency {
+		cons = c.SessionConsistency
+	} else {
+		cons = c.AnyConsistency
+	}
+
 	startTime := time.Now()
 	switch spec.Type {
 	case "All":
-		err = client.ScanAll(spec.DefnId, spec.Limit, c.AnyConsistency, nil, callb)
+		err = client.ScanAll(spec.DefnId, spec.Limit, cons, nil, callb)
 	case "Range":
 		err = client.Range(spec.DefnId, spec.Low, spec.High,
-			qclient.Inclusion(spec.Inclusion), false, spec.Limit, c.AnyConsistency, nil, callb)
+			qclient.Inclusion(spec.Inclusion), false, spec.Limit, cons, nil, callb)
 	case "Lookup":
 		err = client.Lookup(spec.DefnId, spec.Lookups, false,
-			spec.Limit, c.AnyConsistency, nil, callb)
+			spec.Limit, cons, nil, callb)
 	}
 
 	if err != nil {

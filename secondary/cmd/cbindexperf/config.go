@@ -9,18 +9,19 @@ import (
 )
 
 type ScanConfig struct {
-	Id        uint64
-	Bucket    string
-	Index     string
-	DefnId    uint64
-	Type      string
-	Limit     int64
-	Low       c.SecondaryKey
-	Lookups   []c.SecondaryKey
-	High      c.SecondaryKey
-	Inclusion int
-	Repeat    uint32
-	NInterval uint32 // Stats dump nrequests interval
+	Id          uint64
+	Bucket      string
+	Index       string
+	DefnId      uint64
+	Type        string
+	Limit       int64
+	Low         c.SecondaryKey
+	Lookups     []c.SecondaryKey
+	High        c.SecondaryKey
+	Inclusion   int
+	Repeat      uint32
+	NInterval   uint32 // Stats dump nrequests interval
+	Consistency bool   // Use session consistency
 
 	iteration uint32
 }
