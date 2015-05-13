@@ -1175,6 +1175,7 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 		if index.Stream == streamId &&
 			index.Defn.Bucket == bucket {
 			instIdList = append(instIdList, index.InstId)
+			idx.stats.RemoveIndex(index.InstId)
 		}
 	}
 
@@ -1622,7 +1623,7 @@ func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
 		return err
 	}
 
-	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.statsMgrCmdCh,
+	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, nil, idx.statsMgrCmdCh,
 		"statsMgr"); err != nil {
 		return err
 	}

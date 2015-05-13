@@ -267,9 +267,6 @@ loop:
 					break loop
 				case UPDATE_INDEX_INSTANCE_MAP:
 					s.handleIndexInstanceUpdate(cmd)
-				case UPDATE_INDEX_PARTITION_MAP:
-					// Ignore - not interested
-					s.supvCmdch <- &MsgSuccess{}
 				}
 			} else {
 				break loop
