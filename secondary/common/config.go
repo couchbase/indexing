@@ -356,13 +356,13 @@ var SystemConfig = Config{
 		4000,
 		true, // immutable
 	},
-	"queryport.client.poolSize": ConfigValue{
+	"queryport.client.settings.poolSize": ConfigValue{
 		1000,
 		"number simultaneous active connections connections in a pool",
 		1000,
 		true, // immutable
 	},
-	"queryport.client.poolOverflow": ConfigValue{
+	"queryport.client.settings.poolOverflow": ConfigValue{
 		30,
 		"maximum number of connections in a pool",
 		30,

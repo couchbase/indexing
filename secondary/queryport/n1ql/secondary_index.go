@@ -843,7 +843,12 @@ func getSingletonClient(clusterURL string) (*qclient.GsiClient, error) {
 	defer muclient.Unlock()
 	if singletonClient == nil {
 		logging.Debugf("creating singleton for URL %v", clusterURL)
-		qconf := c.SystemConfig.SectionConfig("queryport.client.", true /*trim*/)
+		conf, err := c.GetSettingsConfig(c.SystemConfig)
+		if err != nil {
+			return nil, err
+		}
+
+		qconf := conf.SectionConfig("queryport.client.", true /*trim*/)
 		client, err := qclient.NewGsiClient(clusterURL, qconf)
 		if err != nil {
 			return nil, fmt.Errorf("in NewGsiClient(): %v", err)
