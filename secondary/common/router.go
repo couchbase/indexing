@@ -66,6 +66,9 @@ type RouterEndpoint interface {
 	// Close will shutdown this endpoint and release its resources,
 	// synchronous call.
 	Close() error
+
+	// WaitForExit will block until endpoint exits
+	WaitForExit() error
 }
 
 // MarshalJSON implements encoding/json.Marshaler{} interface

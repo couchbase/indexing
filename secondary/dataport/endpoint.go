@@ -143,6 +143,11 @@ func (endpoint *RouterEndpoint) Close() error {
 	return c.OpError(err, resp, 0)
 }
 
+// WaitForExit will block until endpoint exits.
+func (endpoint *RouterEndpoint) WaitForExit() error {
+	return c.FailsafeOpAsync(nil, []interface{}{}, endpoint.finch)
+}
+
 // run
 func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 	defer func() { // panic safe
