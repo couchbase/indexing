@@ -33,12 +33,18 @@ func TestBuildDeferredAnotherBuilding(t *testing.T) {
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
 
-	err := secondaryindex.CreateSecondaryIndexAsync(index1, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, nil)
+	err := secondaryindex.CreateSecondaryIndexAsync(index1, bucketName, indexManagementAddress, "", []string{"company"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 
 	err = secondaryindex.CreateSecondaryIndexAsync(index2, bucketName, indexManagementAddress, "", []string{"age"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
+
+	client1, _ := secondaryindex.CreateClient(indexManagementAddress, "test7client")
+	defer client1.Close()
+	defn1, _ := secondaryindex.GetDefnID(client1, bucketName, index1)
+	err = secondaryindex.BuildIndexesAsync([]uint64{defn1}, indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error from BuildIndexesAsync of index1", t)
+	time.Sleep(1 * time.Second)
 
 	err = secondaryindex.BuildIndex(index2, bucketName, indexManagementAddress, defaultIndexActiveTimeout)
 	if err == nil {
@@ -105,10 +111,10 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 	bucket2docs := generateDocs(50000, "users.prod")
 	kvutility.SetKeyValues(bucket1docs, bucket1, "", clusterconfig.KVAddress)
 	kvutility.SetKeyValues(bucket2docs, bucket2, "", clusterconfig.KVAddress)
+	UpdateKVDocs(bucket1docs, docs)
 
-	err := secondaryindex.CreateSecondaryIndexAsync(index1, bucket1, indexManagementAddress, "", []string{"company"}, false, nil, true, nil)
+	err := secondaryindex.CreateSecondaryIndexAsync(index1, bucket1, indexManagementAddress, "", []string{"company"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
-	time.Sleep(1 * time.Second)
 
 	err = secondaryindex.CreateSecondaryIndexAsync(index2, bucket1, indexManagementAddress, "", []string{"email"}, false, []byte("{\"defer_build\": true}"), true, nil)
 	FailTestIfError(err, "Error in creating the index", t)
@@ -121,9 +127,12 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 	defn1, _ := secondaryindex.GetDefnID(client, bucket1, index1)
 	defn2, _ := secondaryindex.GetDefnID(client, bucket1, index2)
 	defn3, _ := secondaryindex.GetDefnID(client, bucket2, index3)
-	defnIds := []uint64{defn2, defn3}
 
-	err = secondaryindex.BuildIndexesAsync(defnIds, indexManagementAddress, defaultIndexActiveTimeout)
+	err = secondaryindex.BuildIndexesAsync([]uint64{defn1}, indexManagementAddress, defaultIndexActiveTimeout)
+	FailTestIfError(err, "Error from BuildIndexesAsync of index1", t)
+	time.Sleep(1 * time.Second)
+
+	err = secondaryindex.BuildIndexesAsync([]uint64{defn2, defn3}, indexManagementAddress, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error from BuildIndexesAsync", t)
 
 	// Get status of first : should fail
@@ -171,7 +180,6 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "1024")
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	UpdateKVDocs(bucket1docs, docs)
 }
 
 // Create/drop/create a deferred build index without actually building it.
