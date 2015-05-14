@@ -39,8 +39,6 @@ var (
 	ErrClientCancel       = errors.New("Client requested cancel")
 )
 
-var timerPool sync.Pool
-
 type ScanReqType string
 
 const (
@@ -71,17 +69,11 @@ type ScanRequest struct {
 	Limit     int64
 	isPrimary bool
 
-	ScanId   uint64
-	Timer    *time.Timer
-	CancelCh <-chan interface{}
+	ScanId    uint64
+	TimeoutCh <-chan time.Time
+	CancelCh  <-chan interface{}
 
 	LogPrefix string
-}
-
-func (r ScanRequest) Done() {
-	if r.Timer != nil {
-		freeTimer(r.Timer)
-	}
 }
 
 type CancelCb struct {
@@ -110,7 +102,7 @@ func (c *CancelCb) Done() {
 func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 	return &CancelCb{
 		done:    make(chan struct{}),
-		timeout: req.Timer.C,
+		timeout: req.TimeoutCh,
 		cancel:  req.CancelCh,
 		callb:   callb,
 	}
@@ -156,28 +148,6 @@ func (r ScanRequest) String() string {
 	}
 
 	return str
-}
-
-func init() {
-	timerPool = sync.Pool{
-		New: func() interface{} {
-			return time.NewTimer(time.Duration(-1))
-		},
-	}
-}
-
-func allocTimer() *time.Timer {
-	return timerPool.Get().(*time.Timer)
-}
-
-func freeTimer(t *time.Timer) {
-	if stopped := t.Stop(); stopped {
-		select {
-		case <-t.C:
-		default:
-		}
-	}
-	timerPool.Put(t)
 }
 
 type ScanCoordinator interface {
@@ -321,9 +291,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	cfg := s.config.Load()
 	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
 	if timeout != 0 {
-		t := allocTimer()
-		t.Reset(timeout)
-		r.Timer = t
+		r.TimeoutCh = time.After(timeout)
 	}
 
 	r.CancelCh = cancelCh
@@ -511,7 +479,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	var msg interface{}
 	select {
 	case msg = <-snapResch:
-	case <-r.Timer.C:
+	case <-r.TimeoutCh:
 		go readDeallocSnapshot(snapResch)
 		msg = ErrScanTimedOut
 	}
@@ -583,7 +551,6 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	cancelCh <-chan interface{}) {
 
 	req, err := s.newRequest(protoReq, cancelCh)
-	defer req.Done()
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() { s.handleError(req.LogPrefix, w.Done()) }()
 
