@@ -391,7 +391,7 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
 
 	return nil
 }
-func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId) error {
+func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId, buckets []string) error {
 
 	logging.Infof("clustMgrAgent::OnIndexBuild Notification "+
 		"Received for Build Index %v", indexDefnList)
@@ -404,7 +404,8 @@ func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId) error
 	}
 
 	meta.adminCh <- &MsgBuildIndex{indexInstList: indexInstList,
-		respCh: respCh}
+		respCh:     respCh,
+		bucketList: buckets}
 
 	//wait for response
 	if res, ok := <-respCh; ok {
@@ -439,7 +440,7 @@ func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId) error
 	return nil
 }
 
-func (meta *metaNotifier) OnIndexDelete(defnId common.IndexDefnId) error {
+func (meta *metaNotifier) OnIndexDelete(defnId common.IndexDefnId, bucket string) error {
 
 	logging.Infof("clustMgrAgent::OnIndexDelete Notification "+
 		"Received for Drop IndexId %v", defnId)
@@ -449,7 +450,8 @@ func (meta *metaNotifier) OnIndexDelete(defnId common.IndexDefnId) error {
 	//Treat DefnId as InstId for now
 	meta.adminCh <- &MsgDropIndex{mType: CLUST_MGR_DROP_INDEX_DDL,
 		indexInstId: common.IndexInstId(defnId),
-		respCh:      respCh}
+		respCh:      respCh,
+		bucket:      bucket}
 
 	//wait for response
 	if res, ok := <-respCh; ok {

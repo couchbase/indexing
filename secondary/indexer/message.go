@@ -639,6 +639,7 @@ func (m *MsgCreateIndex) GetString() string {
 //CLUST_MGR_BUILD_INDEX_DDL
 type MsgBuildIndex struct {
 	indexInstList []common.IndexInstId
+	bucketList    []string
 	respCh        MsgChannel
 }
 
@@ -648,6 +649,10 @@ func (m *MsgBuildIndex) GetMsgType() MsgType {
 
 func (m *MsgBuildIndex) GetIndexList() []common.IndexInstId {
 	return m.indexInstList
+}
+
+func (m *MsgBuildIndex) GetBucketList() []string {
+	return m.bucketList
 }
 
 func (m *MsgBuildIndex) GetRespCh() MsgChannel {
@@ -667,6 +672,7 @@ func (m *MsgBuildIndex) GetString() string {
 type MsgDropIndex struct {
 	mType       MsgType
 	indexInstId common.IndexInstId
+	bucket      string
 	respCh      MsgChannel
 }
 
@@ -676,6 +682,10 @@ func (m *MsgDropIndex) GetMsgType() MsgType {
 
 func (m *MsgDropIndex) GetIndexInstId() common.IndexInstId {
 	return m.indexInstId
+}
+
+func (m *MsgDropIndex) GetBucket() string {
+	return m.bucket
 }
 
 func (m *MsgDropIndex) GetResponseChannel() MsgChannel {
