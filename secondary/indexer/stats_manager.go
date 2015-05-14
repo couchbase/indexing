@@ -41,6 +41,9 @@ type IndexStats struct {
 	scanBytesRead    stats.Int64Val
 	getBytes         stats.Int64Val
 	itemsCount       stats.Int64Val
+
+	avgTsInterval stats.Int64Val
+	lastTsTime    stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -71,6 +74,8 @@ func (s *IndexStats) Init() {
 	s.scanBytesRead.Init()
 	s.getBytes.Init()
 	s.itemsCount.Init()
+	s.avgTsInterval.Init()
+	s.lastTsTime.Init()
 }
 
 type IndexerStats struct {
@@ -130,6 +135,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("scan_bytes_read", s.scanBytesRead.Value())
 		addStat("get_bytes", s.getBytes.Value())
 		addStat("items_count", s.itemsCount.Value())
+		addStat("avg_ts_interval", s.avgTsInterval.Value())
 	}
 
 	return json.Marshal(statsMap)

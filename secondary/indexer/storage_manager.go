@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"sync"
+	"time"
 )
 
 var (
@@ -289,6 +290,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 						logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
 							"Index: %v PartitionId: %v SliceId: %v Commit: %v", idxInstId, partnId, slice.Id(), needsCommit)
 
+						s.updateSnapIntervalStat(idxInstId)
+
 						if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
 							logging.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
 								"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
@@ -356,6 +359,18 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 		bucket:   bucket,
 		ts:       tsVbuuid}
 
+}
+
+func (s *storageMgr) updateSnapIntervalStat(idxId common.IndexInstId) {
+	stats := s.stats.Get()
+	idxStats := stats.indexes[idxId]
+	last := idxStats.lastTsTime.Value()
+	next := int64(time.Now().Nanosecond())
+	avg := idxStats.avgTsInterval.Value()
+	if last != 0 {
+		idxStats.avgTsInterval.Set(((last + next) + avg) / 2)
+	}
+	idxStats.lastTsTime.Set(next)
 }
 
 // Update index-snapshot map whenever a snapshot is created for an index
