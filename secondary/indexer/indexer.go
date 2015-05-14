@@ -79,6 +79,7 @@ type indexer struct {
 	internalRecvCh      MsgChannel //buffered channel to queue worker requests
 	adminRecvCh         MsgChannel //channel to receive admin messages
 	internalAdminRecvCh MsgChannel //internal channel to receive admin messages
+	internalAdminRespCh chan bool  //internal channel to respond admin messages
 	shutdownInitCh      MsgChannel //internal shutdown channel for indexer
 	shutdownCompleteCh  MsgChannel //indicate shutdown completion
 
@@ -130,7 +131,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		wrkrRecvCh:          make(MsgChannel),
 		internalRecvCh:      make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		adminRecvCh:         make(MsgChannel, WORKER_MSG_QUEUE_LEN),
-		internalAdminRecvCh: make(MsgChannel, 1),
+		internalAdminRecvCh: make(MsgChannel),
+		internalAdminRespCh: make(chan bool),
 		shutdownInitCh:      make(MsgChannel),
 		shutdownCompleteCh:  make(MsgChannel),
 
@@ -398,6 +400,7 @@ func (idx *indexer) run() {
 		case msg, ok := <-idx.internalAdminRecvCh:
 			if ok {
 				idx.handleAdminMsgs(msg)
+				idx.internalAdminRespCh <- true
 			}
 
 		case <-idx.shutdownInitCh:
@@ -427,6 +430,7 @@ func (idx *indexer) listenAdminMsgs() {
 				// internalAdminRecvCh size is 1.   So it will blocked if the previous msg is being
 				// processed.
 				idx.internalAdminRecvCh <- msg
+				<- idx.internalAdminRespCh
 
 				if waitForStream {
 					// now that indexer has processed the message.  Let's make sure that
