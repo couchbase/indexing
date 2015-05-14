@@ -4,6 +4,7 @@
 //
 
 // +build !386
+
 package platform
 
 import "unsafe"
