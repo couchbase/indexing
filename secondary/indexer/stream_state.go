@@ -32,6 +32,8 @@ type StreamState struct {
 	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
 	streamBucketRestartTsMap     map[common.StreamId]BucketRestartTsMap
 
+	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
+
 	streamBucketRestartVbErrMap   map[common.StreamId]BucketRestartVbErrMap
 	streamBucketRestartVbTsMap    map[common.StreamId]BucketRestartVbTsMap
 	streamBucketRestartVbRetryMap map[common.StreamId]BucketRestartVbRetryMap
@@ -74,28 +76,29 @@ type BucketStatus map[string]StreamStatus
 func InitStreamState(config common.Config) *StreamState {
 
 	ss := &StreamState{
-		config:                           config,
-		streamBucketHWTMap:               make(map[common.StreamId]BucketHWTMap),
-		streamBucketInMemTsCountMap:      make(map[common.StreamId]BucketInMemTsCountMap),
-		streamBucketNewTsReqdMap:         make(map[common.StreamId]BucketNewTsReqdMap),
-		streamBucketTsListMap:            make(map[common.StreamId]BucketTsListMap),
-		streamBucketFlushInProgressTsMap: make(map[common.StreamId]BucketFlushInProgressTsMap),
-		streamBucketAbortInProgressMap:   make(map[common.StreamId]BucketAbortInProgressMap),
-		streamBucketLastFlushedTsMap:     make(map[common.StreamId]BucketLastFlushedTsMap),
-		streamBucketRestartTsMap:         make(map[common.StreamId]BucketRestartTsMap),
-		streamBucketFlushEnabledMap:      make(map[common.StreamId]BucketFlushEnabledMap),
-		streamBucketDrainEnabledMap:      make(map[common.StreamId]BucketDrainEnabledMap),
-		streamBucketVbStatusMap:          make(map[common.StreamId]BucketVbStatusMap),
-		streamBucketVbRefCountMap:        make(map[common.StreamId]BucketVbRefCountMap),
-		streamBucketRestartVbErrMap:      make(map[common.StreamId]BucketRestartVbErrMap),
-		streamBucketRestartVbTsMap:       make(map[common.StreamId]BucketRestartVbTsMap),
-		streamBucketRestartVbRetryMap:    make(map[common.StreamId]BucketRestartVbRetryMap),
-		streamStatus:                     make(map[common.StreamId]StreamStatus),
-		streamBucketStatus:               make(map[common.StreamId]BucketStatus),
-		streamBucketIndexCountMap:        make(map[common.StreamId]BucketIndexCountMap),
-		streamBucketRepairStopCh:         make(map[common.StreamId]BucketRepairStopCh),
-		streamBucketTimerStopCh:          make(map[common.StreamId]BucketTimerStopCh),
-		streamBucketLastPersistTime:      make(map[common.StreamId]BucketLastPersistTime),
+		config:                                config,
+		streamBucketHWTMap:                    make(map[common.StreamId]BucketHWTMap),
+		streamBucketInMemTsCountMap:           make(map[common.StreamId]BucketInMemTsCountMap),
+		streamBucketNewTsReqdMap:              make(map[common.StreamId]BucketNewTsReqdMap),
+		streamBucketTsListMap:                 make(map[common.StreamId]BucketTsListMap),
+		streamBucketFlushInProgressTsMap:      make(map[common.StreamId]BucketFlushInProgressTsMap),
+		streamBucketAbortInProgressMap:        make(map[common.StreamId]BucketAbortInProgressMap),
+		streamBucketLastFlushedTsMap:          make(map[common.StreamId]BucketLastFlushedTsMap),
+		streamBucketLastSnapAlignFlushedTsMap: make(map[common.StreamId]BucketLastFlushedTsMap),
+		streamBucketRestartTsMap:              make(map[common.StreamId]BucketRestartTsMap),
+		streamBucketFlushEnabledMap:           make(map[common.StreamId]BucketFlushEnabledMap),
+		streamBucketDrainEnabledMap:           make(map[common.StreamId]BucketDrainEnabledMap),
+		streamBucketVbStatusMap:               make(map[common.StreamId]BucketVbStatusMap),
+		streamBucketVbRefCountMap:             make(map[common.StreamId]BucketVbRefCountMap),
+		streamBucketRestartVbErrMap:           make(map[common.StreamId]BucketRestartVbErrMap),
+		streamBucketRestartVbTsMap:            make(map[common.StreamId]BucketRestartVbTsMap),
+		streamBucketRestartVbRetryMap:         make(map[common.StreamId]BucketRestartVbRetryMap),
+		streamStatus:                          make(map[common.StreamId]StreamStatus),
+		streamBucketStatus:                    make(map[common.StreamId]BucketStatus),
+		streamBucketIndexCountMap:             make(map[common.StreamId]BucketIndexCountMap),
+		streamBucketRepairStopCh:              make(map[common.StreamId]BucketRepairStopCh),
+		streamBucketTimerStopCh:               make(map[common.StreamId]BucketTimerStopCh),
+		streamBucketLastPersistTime:           make(map[common.StreamId]BucketLastPersistTime),
 	}
 
 	return ss
@@ -128,6 +131,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 
 	bucketLastFlushedTsMap := make(BucketLastFlushedTsMap)
 	ss.streamBucketLastFlushedTsMap[streamId] = bucketLastFlushedTsMap
+
+	bucketLastSnapAlignFlushedTsMap := make(BucketLastFlushedTsMap)
+	ss.streamBucketLastSnapAlignFlushedTsMap[streamId] = bucketLastSnapAlignFlushedTsMap
 
 	bucketFlushEnabledMap := make(BucketFlushEnabledMap)
 	ss.streamBucketFlushEnabledMap[streamId] = bucketFlushEnabledMap
@@ -180,6 +186,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketAbortInProgressMap[streamId][bucket] = false
 	ss.streamBucketTsListMap[streamId][bucket] = list.New()
 	ss.streamBucketLastFlushedTsMap[streamId][bucket] = nil
+	ss.streamBucketLastSnapAlignFlushedTsMap[streamId][bucket] = nil
 	ss.streamBucketFlushEnabledMap[streamId][bucket] = true
 	ss.streamBucketDrainEnabledMap[streamId][bucket] = true
 	ss.streamBucketVbStatusMap[streamId][bucket] = NewTimestamp(numVbuckets)
@@ -213,6 +220,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketFlushInProgressTsMap[streamId], bucket)
 	delete(ss.streamBucketAbortInProgressMap[streamId], bucket)
 	delete(ss.streamBucketLastFlushedTsMap[streamId], bucket)
+	delete(ss.streamBucketLastSnapAlignFlushedTsMap[streamId], bucket)
 	delete(ss.streamBucketFlushEnabledMap[streamId], bucket)
 	delete(ss.streamBucketDrainEnabledMap[streamId], bucket)
 	delete(ss.streamBucketVbStatusMap[streamId], bucket)
@@ -244,6 +252,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketFlushInProgressTsMap, streamId)
 	delete(ss.streamBucketAbortInProgressMap, streamId)
 	delete(ss.streamBucketLastFlushedTsMap, streamId)
+	delete(ss.streamBucketLastSnapAlignFlushedTsMap, streamId)
 	delete(ss.streamBucketFlushEnabledMap, streamId)
 	delete(ss.streamBucketDrainEnabledMap, streamId)
 	delete(ss.streamBucketVbStatusMap, streamId)
@@ -504,14 +513,27 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 		snapBegin := repairTs.Snapshots[vbno][0]
 		snapEnd := repairTs.Snapshots[vbno][1]
 		if !(seqno >= snapBegin && seqno <= snapEnd) {
+			// First, use the last flush TS seqno if avaliable
 			if fts, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && fts != nil {
 				repairTs.Seqnos[vbno] = fts.Seqnos[vbno]
-			} else if rts, ok := ss.streamBucketRestartTsMap[streamId][bucket]; ok && rts != nil {
-				//if no flush has been done yet, use restart TS
-				repairTs.Seqnos[vbno] = rts.Seqnos[vbno]
 			}
-			//if seqno is still not with snapshot range, something is wrong as
-			//flush happens at snapshot boundary
+
+			// If last flush TS is still out-of-bound, use last Snap-aligned flushed TS if available
+			if !(repairTs.Seqnos[vbno] >= snapBegin && repairTs.Seqnos[vbno] <= snapEnd) {
+				if fts, ok := ss.streamBucketLastSnapAlignFlushedTsMap[streamId][bucket]; ok && fts != nil {
+					repairTs.Seqnos[vbno] = fts.Seqnos[vbno]
+				}
+			}
+
+			// If last snap-aligned flushed TS is not avail, then use restartTS
+			if !(repairTs.Seqnos[vbno] >= snapBegin && repairTs.Seqnos[vbno] <= snapEnd) {
+				if rts, ok := ss.streamBucketRestartTsMap[streamId][bucket]; ok && rts != nil {
+					//if no flush has been done yet, use restart TS
+					repairTs.Seqnos[vbno] = rts.Seqnos[vbno]
+				}
+			}
+
+			//if seqno is still not with snapshot range, then it is likely a bug in state management
 			if !(repairTs.Seqnos[vbno] >= snapBegin && repairTs.Seqnos[vbno] <= snapEnd) {
 				common.CrashOnError(errors.New("No Valid Restart Seqno Found"))
 			}

@@ -498,7 +498,14 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 	if _, ok := bucketFlushInProgressTsMap[bucket]; ok {
 		//store the last flushed TS
-		bucketLastFlushedTsMap[bucket] = bucketFlushInProgressTsMap[bucket]
+		fts := bucketFlushInProgressTsMap[bucket]
+		bucketLastFlushedTsMap[bucket] = fts
+
+		// check if each flush time is snap aligned. If so, make a copy.
+		if fts != nil && fts.IsSnapAligned() {
+			tk.ss.streamBucketLastSnapAlignFlushedTsMap[streamId][bucket] = fts.Copy()
+		}
+
 		//update internal map to reflect flush is done
 		bucketFlushInProgressTsMap[bucket] = nil
 	} else {
