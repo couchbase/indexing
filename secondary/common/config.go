@@ -508,9 +508,9 @@ var SystemConfig = Config{
 
 	// Indexer dynamic settings
 	"indexer.settings.compaction.check_period": ConfigValue{
-		120,
+		1200000,
 		"Compaction poll interval in seconds",
-		120,
+		1200000,
 		false, // mutable
 	},
 	"indexer.settings.compaction.interval": ConfigValue{
