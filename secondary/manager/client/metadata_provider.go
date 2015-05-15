@@ -84,7 +84,7 @@ type InstanceDefn struct {
 
 type event struct {
 	defnId   c.IndexDefnId
-	status   c.IndexState
+	status   []c.IndexState
 	notifyCh chan error
 }
 
@@ -109,7 +109,7 @@ func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 	s.watchers = make(map[c.IndexerId]*watcher)
 	s.pendings = make(map[c.IndexerId]chan bool)
 	s.repo = newMetadataRepo()
-	s.timeout = int64(time.Second) * 30
+	s.timeout = int64(time.Second) * 60
 
 	s.providerId, err = s.getWatcherAddr(providerId)
 	if err != nil {
@@ -317,7 +317,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 	}
 
 	if wait {
-		err := watcher.waitForEvent(defnID, c.INDEX_STATE_ACTIVE)
+		err := watcher.waitForEvent(defnID, []c.IndexState{c.INDEX_STATE_ACTIVE, c.INDEX_STATE_DELETED})
 		return defnID, err, false
 	}
 
@@ -344,7 +344,7 @@ RETRY1:
 		}
 	}
 
-	if errCode != 0 && count < 10 {
+	if errCode != 0 && count < 20 {
 		logging.Debugf("MetadataProvider:findWatcherWithRetry(): cannot find available watcher. Retrying ...")
 		time.Sleep(time.Duration(500) * time.Millisecond)
 		count++
@@ -795,13 +795,19 @@ func (r *metadataRepo) hasDefnIgnoreStatus(indexerId c.IndexerId, defnId c.Index
 	return ok && meta.Instances != nil && meta.Instances[0].IndexerId == indexerId
 }
 
-func (r *metadataRepo) hasDefnMatchingStatus(defnId c.IndexDefnId, status c.IndexState) bool {
+func (r *metadataRepo) hasDefnMatchingStatus(defnId c.IndexDefnId, status []c.IndexState) bool {
 
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	meta, ok := r.indices[defnId]
-	return ok && meta != nil && meta.Instances != nil && meta.Instances[0].State == status
+	if meta, ok := r.indices[defnId]; ok && meta != nil && len(meta.Instances) != 0 {
+		for _, s := range status {
+			if meta.Instances[0].State == s {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (r *metadataRepo) getDefnError(defnId c.IndexDefnId) error {
@@ -1056,7 +1062,7 @@ func (w *watcher) updateServiceMap(adminport string) error {
 	return nil
 }
 
-func (w *watcher) waitForEvent(defnId c.IndexDefnId, status c.IndexState) error {
+func (w *watcher) waitForEvent(defnId c.IndexDefnId, status []c.IndexState) error {
 
 	event := &event{defnId: defnId, status: status, notifyCh: make(chan error, 1)}
 	if w.registerEvent(event) {
