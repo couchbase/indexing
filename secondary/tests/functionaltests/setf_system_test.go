@@ -28,7 +28,7 @@ func TestBuildDeferredAnotherBuilding(t *testing.T) {
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 
-	docsToCreate := generateDocs(50000, "users.prod")
+	docsToCreate := generateDocs(200000, "users.prod")
 	UpdateKVDocs(docsToCreate, docs)
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
