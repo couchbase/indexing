@@ -21,10 +21,8 @@ import (
 //needs to implement
 type MutationQueue interface {
 
-	//enqueue a mutation reference based on vbucket. This is a blocking call which
-	//will wait in case there is no free slot available for allocation.
-	//caller can close the appch to force this call to return.
-	Enqueue(mutation *MutationKeys, vbucket Vbucket, appch StopChannel) error
+	//enqueue a mutation reference based on vbucket
+	Enqueue(mutation *MutationKeys, vbucket Vbucket) error
 
 	//dequeue a vbucket's mutation and keep sending on a channel until stop signal
 	Dequeue(vbucket Vbucket) (<-chan *MutationKeys, chan<- bool, error)
@@ -113,10 +111,7 @@ const MAX_VB_QUEUE_LENGTH = 1000
 //Enqueue will enqueue the mutation reference for given vbucket.
 //Caller should not free the mutation till it is dequeued.
 //Mutation will not be copied internally by the queue.
-//caller can call appch to force this call to return. Otherwise
-//this is a blocking call till there is a slot available for enqueue.
-func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys,
-	vbucket Vbucket, appch StopChannel) error {
+func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys, vbucket Vbucket) error {
 
 	if vbucket < 0 || vbucket > Vbucket(q.numVbuckets)-1 {
 		return errors.New("vbucket out of range")
@@ -129,7 +124,7 @@ func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys,
 	}
 
 	//create a new node
-	n := q.allocNode(vbucket, appch)
+	n := q.allocNode(vbucket)
 	if n == nil {
 		return nil
 	}
@@ -297,7 +292,7 @@ func (q *atomicMutationQueue) GetNumVbuckets() uint16 {
 }
 
 //allocNode tries to get node from freelist, otherwise allocates a new node and returns
-func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *node {
+func (q *atomicMutationQueue) allocNode(vbucket Vbucket) *node {
 
 	//get node from freelist
 	n := q.popFreeList(vbucket)
@@ -330,11 +325,6 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *nod
 
 		case <-q.stopch[vbucket]:
 			return nil
-
-		case <-appch:
-			//caller no longer wants to wait
-			//allocate new node and return
-			return &node{}
 
 		}
 	}
