@@ -446,7 +446,7 @@ func (idx *indexer) listenAdminMsgs() {
 				// internalAdminRecvCh size is 1.   So it will blocked if the previous msg is being
 				// processed.
 				idx.internalAdminRecvCh <- msg
-				<- idx.internalAdminRespCh
+				<-idx.internalAdminRespCh
 
 				if waitForStream {
 					// now that indexer has processed the message.  Let's make sure that
