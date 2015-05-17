@@ -109,7 +109,7 @@ func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 	s.watchers = make(map[c.IndexerId]*watcher)
 	s.pendings = make(map[c.IndexerId]chan bool)
 	s.repo = newMetadataRepo()
-	s.timeout = int64(time.Second) * 60
+	s.timeout = int64(time.Second) * 120
 
 	s.providerId, err = s.getWatcherAddr(providerId)
 	if err != nil {
