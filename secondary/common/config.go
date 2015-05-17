@@ -18,7 +18,7 @@ import "fmt"
 import "reflect"
 import "errors"
 import "github.com/couchbase/indexing/secondary/logging"
-import "sync/atomic"
+import "github.com/couchbase/indexing/secondary/platform"
 import "unsafe"
 import "runtime"
 
@@ -27,15 +27,15 @@ var projector_maxCpuPercent = (1 + (runtime.NumCPU() / 6)) * 100
 
 // Threadsafe config holder object
 type ConfigHolder struct {
-	ptr unsafe.Pointer // IMPORTANT: should be 64 bit aligned.
+	ptr unsafe.Pointer
 }
 
 func (h *ConfigHolder) Store(conf Config) {
-	atomic.StorePointer(&h.ptr, unsafe.Pointer(&conf))
+	platform.StorePointer(&h.ptr, unsafe.Pointer(&conf))
 }
 
 func (h *ConfigHolder) Load() Config {
-	confptr := atomic.LoadPointer(&h.ptr)
+	confptr := platform.LoadPointer(&h.ptr)
 	return *(*Config)(confptr)
 }
 
@@ -356,13 +356,13 @@ var SystemConfig = Config{
 		4000,
 		true, // immutable
 	},
-	"queryport.client.poolSize": ConfigValue{
+	"queryport.client.settings.poolSize": ConfigValue{
 		1000,
 		"number simultaneous active connections connections in a pool",
 		1000,
 		true, // immutable
 	},
-	"queryport.client.poolOverflow": ConfigValue{
+	"queryport.client.settings.poolOverflow": ConfigValue{
 		30,
 		"maximum number of connections in a pool",
 		30,

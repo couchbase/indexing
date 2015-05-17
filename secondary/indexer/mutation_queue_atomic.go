@@ -12,7 +12,7 @@ package indexer
 import (
 	"errors"
 	"github.com/couchbase/indexing/secondary/logging"
-	"sync/atomic"
+	"github.com/couchbase/indexing/secondary/platform"
 	"time"
 	"unsafe"
 )
@@ -21,8 +21,10 @@ import (
 //needs to implement
 type MutationQueue interface {
 
-	//enqueue a mutation reference based on vbucket
-	Enqueue(mutation *MutationKeys, vbucket Vbucket) error
+	//enqueue a mutation reference based on vbucket. This is a blocking call which
+	//will wait in case there is no free slot available for allocation.
+	//caller can close the appch to force this call to return.
+	Enqueue(mutation *MutationKeys, vbucket Vbucket, appch StopChannel) error
 
 	//dequeue a vbucket's mutation and keep sending on a channel until stop signal
 	Dequeue(vbucket Vbucket) (<-chan *MutationKeys, chan<- bool, error)
@@ -61,11 +63,10 @@ type MutationQueue interface {
 //It provides safe concurrent read/write access across vbucket queues.
 
 type atomicMutationQueue struct {
-	// IMPORTANT: should be 64 bit aligned.
-	head   []unsafe.Pointer //head pointer per vbucket queue
-	tail   []unsafe.Pointer //tail pointer per vbucket queue
-	size   []int64          //size of queue per vbucket
-	maxLen int64            //max length of queue per vbucket
+	head   []unsafe.Pointer        //head pointer per vbucket queue
+	tail   []unsafe.Pointer        //tail pointer per vbucket queue
+	size   []platform.AlignedInt64 //size of queue per vbucket
+	maxLen int64                   //max length of queue per vbucket
 
 	free        []*node //free pointer per vbucket queue
 	stopch      []StopChannel
@@ -79,7 +80,7 @@ func NewAtomicMutationQueue(numVbuckets uint16, maxLenPerVb int64) *atomicMutati
 	q := &atomicMutationQueue{head: make([]unsafe.Pointer, numVbuckets),
 		tail:        make([]unsafe.Pointer, numVbuckets),
 		free:        make([]*node, numVbuckets),
-		size:        make([]int64, numVbuckets),
+		size:        make([]platform.AlignedInt64, numVbuckets),
 		numVbuckets: numVbuckets,
 		maxLen:      maxLenPerVb,
 		stopch:      make([]StopChannel, numVbuckets),
@@ -112,7 +113,10 @@ const MAX_VB_QUEUE_LENGTH = 1000
 //Enqueue will enqueue the mutation reference for given vbucket.
 //Caller should not free the mutation till it is dequeued.
 //Mutation will not be copied internally by the queue.
-func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys, vbucket Vbucket) error {
+//caller can call appch to force this call to return. Otherwise
+//this is a blocking call till there is a slot available for enqueue.
+func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys,
+	vbucket Vbucket, appch StopChannel) error {
 
 	if vbucket < 0 || vbucket > Vbucket(q.numVbuckets)-1 {
 		return errors.New("vbucket out of range")
@@ -125,7 +129,7 @@ func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys, vbucket Vbucket) e
 	}
 
 	//create a new node
-	n := q.allocNode(vbucket)
+	n := q.allocNode(vbucket, appch)
 	if n == nil {
 		return nil
 	}
@@ -134,12 +138,12 @@ func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys, vbucket Vbucket) e
 	n.next = nil
 
 	//point tail's next to new node
-	tail := (*node)(atomic.LoadPointer(&q.tail[vbucket]))
+	tail := (*node)(platform.LoadPointer(&q.tail[vbucket]))
 	tail.next = n
 	//update tail to new node
-	atomic.StorePointer(&q.tail[vbucket], unsafe.Pointer(tail.next))
+	platform.StorePointer(&q.tail[vbucket], unsafe.Pointer(tail.next))
 
-	atomic.AddInt64(&q.size[vbucket], 1)
+	platform.AddInt64(&q.size[vbucket], 1)
 
 	return nil
 
@@ -172,18 +176,18 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 	var dequeueSeq Seqno
 
 	for _ = range ticker.C {
-		for atomic.LoadPointer(&q.head[vbucket]) !=
-			atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
+		for platform.LoadPointer(&q.head[vbucket]) !=
+			platform.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
 
-			head := (*node)(atomic.LoadPointer(&q.head[vbucket]))
+			head := (*node)(platform.LoadPointer(&q.head[vbucket]))
 			//copy the mutation pointer
 			m := head.next.mutation
 			if seqno >= m.meta.seqno {
 				//free mutation pointer
 				head.next.mutation = nil
 				//move head to next
-				atomic.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
-				atomic.AddInt64(&q.size[vbucket], -1)
+				platform.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
+				platform.AddInt64(&q.size[vbucket], -1)
 				//send mutation to caller
 				dequeueSeq = m.meta.seqno
 				datach <- m
@@ -246,17 +250,17 @@ func (q *atomicMutationQueue) dequeue(vbucket Vbucket, datach chan *MutationKeys
 //Returns nil in case of empty queue.
 func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) *MutationKeys {
 
-	if atomic.LoadPointer(&q.head[vbucket]) !=
-		atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
+	if platform.LoadPointer(&q.head[vbucket]) !=
+		platform.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
 
-		head := (*node)(atomic.LoadPointer(&q.head[vbucket]))
+		head := (*node)(platform.LoadPointer(&q.head[vbucket]))
 		//copy the mutation pointer
 		m := head.next.mutation
 		//free mutation pointer
 		head.next.mutation = nil
 		//move head to next
-		atomic.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
-		atomic.AddInt64(&q.size[vbucket], -1)
+		platform.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
+		platform.AddInt64(&q.size[vbucket], -1)
 		return m
 	}
 	return nil
@@ -264,9 +268,9 @@ func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) *MutationKey
 
 //PeekTail returns reference to a vbucket's mutation at tail of queue without dequeue
 func (q *atomicMutationQueue) PeekTail(vbucket Vbucket) *MutationKeys {
-	if atomic.LoadPointer(&q.head[vbucket]) !=
-		atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
-		tail := (*node)(atomic.LoadPointer(&q.tail[vbucket]))
+	if platform.LoadPointer(&q.head[vbucket]) !=
+		platform.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
+		tail := (*node)(platform.LoadPointer(&q.tail[vbucket]))
 		return tail.mutation
 	}
 	return nil
@@ -274,9 +278,9 @@ func (q *atomicMutationQueue) PeekTail(vbucket Vbucket) *MutationKeys {
 
 //PeekHead returns reference to a vbucket's mutation at head of queue without dequeue
 func (q *atomicMutationQueue) PeekHead(vbucket Vbucket) *MutationKeys {
-	if atomic.LoadPointer(&q.head[vbucket]) !=
-		atomic.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
-		head := (*node)(atomic.LoadPointer(&q.head[vbucket]))
+	if platform.LoadPointer(&q.head[vbucket]) !=
+		platform.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
+		head := (*node)(platform.LoadPointer(&q.head[vbucket]))
 		return head.mutation
 	}
 	return nil
@@ -284,7 +288,7 @@ func (q *atomicMutationQueue) PeekHead(vbucket Vbucket) *MutationKeys {
 
 //GetSize returns the size of the vbucket queue
 func (q *atomicMutationQueue) GetSize(vbucket Vbucket) int64 {
-	return atomic.LoadInt64(&q.size[vbucket])
+	return platform.LoadInt64(&q.size[vbucket])
 }
 
 //GetNumVbuckets returns the numbers of vbuckets for the queue
@@ -293,14 +297,14 @@ func (q *atomicMutationQueue) GetNumVbuckets() uint16 {
 }
 
 //allocNode tries to get node from freelist, otherwise allocates a new node and returns
-func (q *atomicMutationQueue) allocNode(vbucket Vbucket) *node {
+func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *node {
 
 	//get node from freelist
 	n := q.popFreeList(vbucket)
 	if n != nil {
 		return n
 	} else {
-		currLen := atomic.LoadInt64(&q.size[vbucket])
+		currLen := platform.LoadInt64(&q.size[vbucket])
 		if currLen < q.maxLen {
 			//allocate new node and return
 			return &node{}
@@ -327,6 +331,11 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket) *node {
 		case <-q.stopch[vbucket]:
 			return nil
 
+		case <-appch:
+			//caller no longer wants to wait
+			//allocate new node and return
+			return &node{}
+
 		}
 	}
 
@@ -338,7 +347,7 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket) *node {
 //if freelist is empty, it returns nil.
 func (q *atomicMutationQueue) popFreeList(vbucket Vbucket) *node {
 
-	if q.free[vbucket] != (*node)(atomic.LoadPointer(&q.head[vbucket])) {
+	if q.free[vbucket] != (*node)(platform.LoadPointer(&q.head[vbucket])) {
 		n := q.free[vbucket]
 		q.free[vbucket] = q.free[vbucket].next
 		n.mutation = nil

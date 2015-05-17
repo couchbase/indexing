@@ -5,8 +5,7 @@ import "net"
 import "sync"
 import "time"
 import "io"
-import "sync/atomic"
-
+import "github.com/couchbase/indexing/secondary/platform"
 import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
@@ -33,7 +32,7 @@ type Server struct {
 	writeDeadline  time.Duration
 	streamChanSize int
 	logPrefix      string
-	nConnections   *int64
+	nConnections   *platform.AlignedInt64
 }
 
 type ServerStats struct {
@@ -54,7 +53,7 @@ func NewServer(
 		writeDeadline:  time.Duration(config["writeDeadline"].Int()),
 		streamChanSize: config["streamChanSize"].Int(),
 		logPrefix:      fmt.Sprintf("[Queryport %q]", laddr),
-		nConnections:   new(int64),
+		nConnections:   new(platform.AlignedInt64),
 	}
 	if s.lis, err = net.Listen("tcp", laddr); err != nil {
 		logging.Errorf("%v failed starting %v !!\n", s.logPrefix, err)
@@ -68,7 +67,7 @@ func NewServer(
 
 func (s *Server) Statistics() ServerStats {
 	return ServerStats{
-		Connections: atomic.LoadInt64(s.nConnections),
+		Connections: platform.LoadInt64(s.nConnections),
 	}
 }
 
@@ -119,9 +118,9 @@ func (s *Server) listener() {
 // handle connection request. connection might be kept open in client's
 // connection pool.
 func (s *Server) handleConnection(conn net.Conn) {
-	atomic.AddInt64(s.nConnections, 1)
+	platform.AddInt64(s.nConnections, 1)
 	defer func() {
-		atomic.AddInt64(s.nConnections, -1)
+		platform.AddInt64(s.nConnections, -1)
 	}()
 
 	raddr := conn.RemoteAddr()

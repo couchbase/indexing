@@ -417,6 +417,7 @@ func (m *MsgMutMgrGetTimestamp) GetStreamId() common.StreamId {
 //UPDATE_INSTANCE_MAP
 type MsgUpdateInstMap struct {
 	indexInstMap common.IndexInstMap
+	stats        *IndexerStats
 }
 
 func (m *MsgUpdateInstMap) GetMsgType() MsgType {
@@ -425,6 +426,10 @@ func (m *MsgUpdateInstMap) GetMsgType() MsgType {
 
 func (m *MsgUpdateInstMap) GetIndexInstMap() common.IndexInstMap {
 	return m.indexInstMap
+}
+
+func (m *MsgUpdateInstMap) GetStatsObject() *IndexerStats {
+	return m.stats
 }
 
 func (m *MsgUpdateInstMap) String() string {
@@ -634,6 +639,7 @@ func (m *MsgCreateIndex) GetString() string {
 //CLUST_MGR_BUILD_INDEX_DDL
 type MsgBuildIndex struct {
 	indexInstList []common.IndexInstId
+	bucketList    []string
 	respCh        MsgChannel
 }
 
@@ -643,6 +649,10 @@ func (m *MsgBuildIndex) GetMsgType() MsgType {
 
 func (m *MsgBuildIndex) GetIndexList() []common.IndexInstId {
 	return m.indexInstList
+}
+
+func (m *MsgBuildIndex) GetBucketList() []string {
+	return m.bucketList
 }
 
 func (m *MsgBuildIndex) GetRespCh() MsgChannel {
@@ -662,6 +672,7 @@ func (m *MsgBuildIndex) GetString() string {
 type MsgDropIndex struct {
 	mType       MsgType
 	indexInstId common.IndexInstId
+	bucket      string
 	respCh      MsgChannel
 }
 
@@ -671,6 +682,10 @@ func (m *MsgDropIndex) GetMsgType() MsgType {
 
 func (m *MsgDropIndex) GetIndexInstId() common.IndexInstId {
 	return m.indexInstId
+}
+
+func (m *MsgDropIndex) GetBucket() string {
+	return m.bucket
 }
 
 func (m *MsgDropIndex) GetResponseChannel() MsgChannel {
@@ -889,14 +904,14 @@ func (m *MsgIndexStorageStats) GetReplyChannel() chan []IndexStorageStats {
 
 type MsgStatsRequest struct {
 	mType  MsgType
-	respch chan map[string]interface{}
+	respch chan bool
 }
 
 func (m *MsgStatsRequest) GetMsgType() MsgType {
 	return m.mType
 }
 
-func (m *MsgStatsRequest) GetReplyChannel() chan map[string]interface{} {
+func (m *MsgStatsRequest) GetReplyChannel() chan bool {
 	return m.respch
 }
 

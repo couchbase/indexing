@@ -227,7 +227,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
 
 		if m.notifier != nil {
-			m.notifier.OnIndexDelete(defn.DefnId)
+			m.notifier.OnIndexDelete(defn.DefnId, defn.Bucket)
 		}
 		m.repo.DropIndexById(defn.DefnId)
 		m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
@@ -237,7 +237,7 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 	if !defn.Deferred {
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.handleCreateIndex() : start Index Build")
-			if err := m.notifier.OnIndexBuild([]common.IndexDefnId{defn.DefnId}); err != nil {
+			if err := m.notifier.OnIndexBuild([]common.IndexDefnId{defn.DefnId}, []string{defn.Bucket}); err != nil {
 				logging.Errorf("LifecycleMgr.hanaleCreateIndex() : createIndex fails. Reason = %v", err)
 				return err
 			}
@@ -267,16 +267,28 @@ func (m *LifecycleMgr) handleBuildIndexes(content []byte) error {
 
 func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId) error {
 
+	buckets := []string(nil)
 	for _, id := range ids {
-		_, err := m.repo.GetIndexDefnById(id)
+		defn, err := m.repo.GetIndexDefnById(id)
 		if err != nil {
 			logging.Errorf("LifecycleMgr.handleBuildIndexes() : buildIndex fails. Reason = %v", err)
 			return err
 		}
+
+		found := false
+		for _, bucket := range buckets {
+			if bucket == defn.Bucket {
+				found = true
+			}
+		}
+
+		if !found {
+			buckets = append(buckets, defn.Bucket)
+		}
 	}
 
 	if m.notifier != nil {
-		if err := m.notifier.OnIndexBuild(ids); err != nil {
+		if err := m.notifier.OnIndexBuild(ids, buckets); err != nil {
 			logging.Errorf("LifecycleMgr.hanaleBuildIndexes() : buildIndex fails. Reason = %v", err)
 			return err
 		}
@@ -312,7 +324,7 @@ func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId) error {
 
 	// Can call index delete again on already deleted defn
 	if m.notifier != nil {
-		m.notifier.OnIndexDelete(defn.DefnId)
+		m.notifier.OnIndexDelete(defn.DefnId, defn.Bucket)
 	}
 	m.repo.DropIndexById(defn.DefnId)
 	m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)

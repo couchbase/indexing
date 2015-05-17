@@ -49,6 +49,8 @@ type timekeeper struct {
 	statsLock  sync.Mutex
 	bucketConn map[string]*couchbase.Bucket
 
+	stats IndexerStatsHolder
+
 	lock sync.Mutex //lock to protect this structure
 }
 
@@ -2001,8 +2003,9 @@ func (tk *timekeeper) handleUpdateIndexInstMap(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	req := cmd.(*MsgUpdateInstMap)
 	logging.Tracef("Timekeeper::handleUpdateIndexInstMap %v", cmd)
-	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+	indexInstMap := req.GetIndexInstMap()
 
 	// Cleanup bucket conn cache for unused buckets
 	validBuckets := make(map[string]bool)
@@ -2016,6 +2019,7 @@ func (tk *timekeeper) handleUpdateIndexInstMap(cmd Message) {
 		}
 	}
 
+	tk.stats.Set(req.GetStatsObject())
 	tk.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -2070,7 +2074,6 @@ func (tk *timekeeper) getBucketConn(name string, refresh bool) (*couchbase.Bucke
 func (tk *timekeeper) handleStats(cmd Message) {
 	tk.supvCmdch <- &MsgSuccess{}
 
-	statsMap := make(map[string]interface{})
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
 
@@ -2107,7 +2110,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 
 				if err = rh.Run(); err != nil {
 					logging.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
-					replych <- statsMap
+					replych <- true
 					return
 				}
 
@@ -2118,13 +2121,14 @@ func (tk *timekeeper) handleStats(cmd Message) {
 		tk.lock.Lock()
 		defer tk.lock.Unlock()
 
+		stats := tk.stats.Get()
 		for _, inst := range tk.indexInstMap {
 			//skip deleted indexes
 			if inst.State == common.INDEX_STATE_DELETED {
 				continue
 			}
 
-			k := fmt.Sprintf("%s:%s:num_docs_indexed", inst.Defn.Bucket, inst.Defn.Name)
+			idxStats := stats.indexes[inst.InstId]
 			flushedCount := uint64(0)
 			flushedTs := tk.ss.streamBucketLastFlushedTsMap[inst.Stream][inst.Defn.Bucket]
 			if flushedTs != nil {
@@ -2133,7 +2137,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				}
 			}
 			v := flushedCount
-			statsMap[k] = v
+			idxStats.numDocsIndexed.Set(int64(flushedCount))
 
 			receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
 			queued := uint64(0)
@@ -2147,9 +2151,8 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					queued += seqno - flushSeqno
 				}
 			}
-			k = fmt.Sprintf("%s:%s:num_docs_queued", inst.Defn.Bucket, inst.Defn.Name)
-			v = queued
-			statsMap[k] = v
+
+			idxStats.numDocsQueued.Set(int64(queued))
 
 			pending := uint64(0)
 			kvTs := bucketTsMap[inst.Defn.Bucket]
@@ -2165,11 +2168,9 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					pending += uint64(seqno) - recvdSeqno
 				}
 			}
-			k = fmt.Sprintf("%s:%s:num_docs_pending", inst.Defn.Bucket, inst.Defn.Name)
-			v = pending
-			statsMap[k] = v
 
-			k = fmt.Sprintf("%s:%s:build_progress", inst.Defn.Bucket, inst.Defn.Name)
+			idxStats.numDocsPending.Set(int64(pending))
+
 			switch inst.State {
 			default:
 				v = 0
@@ -2187,12 +2188,11 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					v = 100
 				}
 			}
-			statsMap[k] = v
+			idxStats.buildProgress.Set(int64(v))
 		}
 
-		replych <- statsMap
+		replych <- true
 	}()
-
 }
 
 func (tk *timekeeper) isBuildCompletionTs(streamId common.StreamId,

@@ -7,35 +7,30 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
-package common
+// +build windows
 
-import (
-	_ "net/http/pprof"
-	"os"
-	"os/signal"
-	"runtime/pprof"
-	"syscall"
-)
+package platform
 
-/*
-#include <signal.h>
-void ResetHandlers() {
-  signal(SIGILL,  SIG_DFL);
-  signal(SIGABRT, SIG_DFL);
-  signal(SIGFPE,  SIG_DFL);
-  signal(SIGBUS,  SIG_DFL);
-  signal(SIGSEGV, SIG_DFL);
-}
-*/
-import "C"
+import "syscall"
 
 func DumpOnSignal() {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGUSR2)
-	for _ = range c {
-		pprof.Lookup("goroutine").WriteTo(os.Stderr, 1)
-	}
 }
 
-func HideConsole(_ bool) {
+// Hide console on windows without removing it unlike -H windowsgui.
+func HideConsole(hide bool) {
+	var k32 = syscall.NewLazyDLL("kernel32.dll")
+	var cw = k32.NewProc("GetConsoleWindow")
+	var u32 = syscall.NewLazyDLL("user32.dll")
+	var sw = u32.NewProc("ShowWindow")
+	hwnd, _, _ := cw.Call()
+	if hwnd == 0 {
+		return
+	}
+	if hide {
+		var SW_HIDE uintptr = 0
+		sw.Call(hwnd, SW_HIDE)
+	} else {
+		var SW_RESTORE uintptr = 9
+		sw.Call(hwnd, SW_RESTORE)
+	}
 }

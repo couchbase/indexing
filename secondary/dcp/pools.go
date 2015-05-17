@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/platform"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -16,7 +17,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"unsafe"
 )
 
@@ -93,7 +93,6 @@ type VBucketServerMap struct {
 
 // Bucket is the primary entry point for most data operations.
 type Bucket struct {
-	// IMPORTANT: following 3 fields should be should be 64 bit aligned.
 	connPools        unsafe.Pointer // *[]*connectionPool
 	vBucketServerMap unsafe.Pointer // *VBucketServerMap
 	nodeList         unsafe.Pointer // *[]Node
@@ -139,7 +138,7 @@ type NodeServices struct {
 
 // VBServerMap returns the current VBucketServerMap.
 func (b *Bucket) VBServerMap() *VBucketServerMap {
-	return (*VBucketServerMap)(atomic.LoadPointer(&(b.vBucketServerMap)))
+	return (*VBucketServerMap)(platform.LoadPointer(&(b.vBucketServerMap)))
 }
 
 func (b *Bucket) GetVBmap(addrs []string) (map[string][]uint16, error) {
@@ -164,17 +163,17 @@ func (b *Bucket) GetVBmap(addrs []string) (map[string][]uint16, error) {
 
 // Nodes returns teh current list of nodes servicing this bucket.
 func (b Bucket) Nodes() []Node {
-	return *(*[]Node)(atomic.LoadPointer(&b.nodeList))
+	return *(*[]Node)(platform.LoadPointer(&b.nodeList))
 }
 
 func (b Bucket) getConnPools() []*connectionPool {
-	return *(*[]*connectionPool)(atomic.LoadPointer(&b.connPools))
+	return *(*[]*connectionPool)(platform.LoadPointer(&b.connPools))
 }
 
 func (b *Bucket) replaceConnPools(with []*connectionPool) {
 	for {
-		old := atomic.LoadPointer(&b.connPools)
-		if atomic.CompareAndSwapPointer(&b.connPools, old, unsafe.Pointer(&with)) {
+		old := platform.LoadPointer(&b.connPools)
+		if platform.CompareAndSwapPointer(&b.connPools, old, unsafe.Pointer(&with)) {
 			if old != nil {
 				for _, pool := range *(*[]*connectionPool)(old) {
 					if pool != nil {
@@ -505,8 +504,8 @@ func (b *Bucket) init(nb *Bucket) {
 			b.authHandler(), PoolSize, PoolOverflow)
 	}
 	b.replaceConnPools(newcps)
-	atomic.StorePointer(&b.vBucketServerMap, unsafe.Pointer(&nb.VBSMJson))
-	atomic.StorePointer(&b.nodeList, unsafe.Pointer(&nb.NodesJSON))
+	platform.StorePointer(&b.vBucketServerMap, unsafe.Pointer(&nb.VBSMJson))
+	platform.StorePointer(&b.nodeList, unsafe.Pointer(&nb.NodesJSON))
 }
 
 func (p *Pool) refresh() (err error) {

@@ -145,7 +145,11 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 			logging.Fatalf(fmsg, vr.logPrefix, vr.opaque, r)
 			logging.Errorf("%v", logging.StackTrace())
 		}
+		close(vr.finch)
+		logging.Infof("%v ##%x ... stopped\n", vr.logPrefix, vr.opaque)
+	}()
 
+	sendStreamEnd := func() {
 		if data := vr.makeStreamEndData(seqno); data == nil {
 			fmsg := "%v ##%x StreamEnd NOT PUBLISHED\n"
 			logging.Errorf(fmsg, vr.logPrefix, vr.opaque)
@@ -154,10 +158,7 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 			logging.Infof("%v ##%x StreamEnd\n", vr.logPrefix, vr.opaque)
 			vr.broadcast2Endpoints(data)
 		}
-
-		close(vr.finch)
-		logging.Infof("%v ##%x ... stopped\n", vr.logPrefix, vr.opaque)
-	}()
+	}
 
 	stats := vr.newStats()
 	addEngineCount := stats.Get("addInsts").(float64)
@@ -253,11 +254,15 @@ loop:
 			case mcd.DCP_MUTATION, mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
 				mutationCount++
 			case mcd.DCP_STREAMEND:
+				sendStreamEnd()
 				break loop
 			}
 
 		case vrCmdClose:
-			logging.Infof("%v ##%x closed\n", vr.logPrefix, vr.opaque)
+			sendStreamEnd()
+			logging.Debugf("%v ##%x closed\n", vr.logPrefix, vr.opaque)
+			respch := msg[1].(chan []interface{})
+			respch <- []interface{}{nil}
 			break loop
 		}
 	}

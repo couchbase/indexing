@@ -12,7 +12,7 @@ package indexer
 import (
 	"errors"
 	"github.com/couchbase/indexing/secondary/fdb"
-	"sync/atomic"
+	"github.com/couchbase/indexing/secondary/platform"
 )
 
 //ForestDBIterator taken from
@@ -132,7 +132,7 @@ func (f *ForestDBIterator) Current() ([]byte, []byte, bool) {
 func (f *ForestDBIterator) Key() []byte {
 	if f.valid && f.curr != nil {
 		if f.slice != nil {
-			atomic.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Key())))
+			platform.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Key())))
 		}
 		return f.curr.Key()
 	}
@@ -142,7 +142,7 @@ func (f *ForestDBIterator) Key() []byte {
 func (f *ForestDBIterator) Value() []byte {
 	if f.valid && f.curr != nil {
 		if f.slice != nil {
-			atomic.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Body())))
+			platform.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Body())))
 		}
 		return f.curr.Body()
 	}

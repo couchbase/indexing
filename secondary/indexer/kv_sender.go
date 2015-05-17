@@ -14,13 +14,13 @@
 package indexer
 
 import (
-	"github.com/golang/protobuf/proto"
 	"errors"
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
+	"github.com/golang/protobuf/proto"
 	"time"
 )
 

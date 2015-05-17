@@ -17,11 +17,11 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/platform"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -131,13 +131,11 @@ type indexItem struct {
 
 //fdbSlice represents a forestdb slice
 type fdbSlice struct {
-	// IMPORTANT: following 3 fields should be 64 bit aligned.
-	get_bytes, insert_bytes, delete_bytes int64
-
-	flushedCount uint64
-
-	// persistted items count
-	committedCount uint64
+	get_bytes, insert_bytes, delete_bytes platform.AlignedInt64
+	//flushed count
+	flushedCount platform.AlignedUint64
+	// persisted items count
+	committedCount platform.AlignedUint64
 
 	path     string
 	currfile string
@@ -307,7 +305,7 @@ func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) 
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
 				"Skipped Key %s. Error %v", fdb.id, fdb.idxInstId, string(docid), err)
 		}
-		atomic.AddInt64(&fdb.insert_bytes, int64(len(key)))
+		platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
 	}
 }
 
@@ -341,7 +339,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 				"entry from main index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
-		atomic.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
+		platform.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
 
 		//delete from back index
 		if err = fdb.back[workerId].DeleteKV(docid); err != nil {
@@ -350,7 +348,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 				"entry from back index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
-		atomic.AddInt64(&fdb.delete_bytes, int64(len(docid)))
+		platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 	}
 
 	if key == nil {
@@ -366,7 +364,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 			"Skipped Key %s. Value %v. Error %v", fdb.id, fdb.idxInstId, string(docid), key, err)
 		return
 	}
-	atomic.AddInt64(&fdb.insert_bytes, int64(len(docid)+len(key)))
+	platform.AddInt64(&fdb.insert_bytes, int64(len(docid)+len(key)))
 
 	//set in main index
 	if err = fdb.main[workerId].SetKV(key, nil); err != nil {
@@ -375,7 +373,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 			"Skipped Key %v. Error %v", fdb.id, fdb.idxInstId, key, err)
 		return
 	}
-	atomic.AddInt64(&fdb.insert_bytes, int64(len(key)))
+	platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
 }
 
 //delete does the actual delete in forestdb
@@ -413,7 +411,7 @@ func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 			docid, err)
 		return
 	}
-	atomic.AddInt64(&fdb.delete_bytes, int64(len(entry.Bytes())))
+	platform.AddInt64(&fdb.delete_bytes, int64(len(entry.Bytes())))
 
 }
 
@@ -448,7 +446,7 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 			docid, olditm, err)
 		return
 	}
-	atomic.AddInt64(&fdb.delete_bytes, int64(len(olditm)))
+	platform.AddInt64(&fdb.delete_bytes, int64(len(olditm)))
 
 	//delete from the back index
 	if err = fdb.back[workerId].DeleteKV(docid); err != nil {
@@ -457,7 +455,7 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 			"entry from back index for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
 		return
 	}
-	atomic.AddInt64(&fdb.delete_bytes, int64(len(docid)))
+	platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 
 }
 
@@ -472,7 +470,7 @@ func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) ([]byte, erro
 	var err error
 
 	kbytes, err = fdb.back[workerId].GetKV(docid)
-	atomic.AddInt64(&fdb.get_bytes, int64(len(kbytes)))
+	platform.AddInt64(&fdb.get_bytes, int64(len(kbytes)))
 
 	//forestdb reports get in a non-existent key as an
 	//error, skip that
@@ -547,14 +545,14 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 func (fdb *fdbSlice) setCommittedCount() {
 	mainDbInfo, err := fdb.main[0].Info()
 	if err == nil {
-		atomic.StoreUint64(&fdb.committedCount, mainDbInfo.DocCount())
+		platform.StoreUint64(&fdb.committedCount, mainDbInfo.DocCount())
 	} else {
 		logging.Errorf("ForestDB setCommittedCount failed %v", err)
 	}
 }
 
 func (fdb *fdbSlice) GetCommittedCount() uint64 {
-	return atomic.LoadUint64(&fdb.committedCount)
+	return platform.LoadUint64(&fdb.committedCount)
 }
 
 //Rollback slice to given snapshot. Return error if
@@ -925,9 +923,9 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 
 	sts.DataSize = int64(fdb.statFd.EstimateSpaceUsed())
 	sts.DiskSize = fi.Size()
-	sts.GetBytes = atomic.LoadInt64(&fdb.get_bytes)
-	sts.InsertBytes = atomic.LoadInt64(&fdb.insert_bytes)
-	sts.DeleteBytes = atomic.LoadInt64(&fdb.delete_bytes)
+	sts.GetBytes = platform.LoadInt64(&fdb.get_bytes)
+	sts.InsertBytes = platform.LoadInt64(&fdb.insert_bytes)
+	sts.DeleteBytes = platform.LoadInt64(&fdb.delete_bytes)
 
 	return sts, nil
 }
@@ -1052,12 +1050,11 @@ func newFdbFile(dirpath string, newVersion bool) string {
 }
 
 func (fdb *fdbSlice) logWriterStat() {
-
-	fdb.flushedCount++
-	if (fdb.flushedCount%10000 == 0) || fdb.flushedCount == 1 {
+	count := platform.AddUint64(&fdb.flushedCount, 1)
+	if (count%10000 == 0) || count == 1 {
 		logging.Infof("logWriterStat:: %v "+
 			"FlushedCount %v QueuedCount %v", fdb.idxInstId,
-			fdb.flushedCount, len(fdb.cmdCh))
+			count, len(fdb.cmdCh))
 	}
 
 }

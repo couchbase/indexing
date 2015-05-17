@@ -97,8 +97,8 @@ type IndexManager struct {
 //
 type MetadataNotifier interface {
 	OnIndexCreate(*common.IndexDefn) error
-	OnIndexDelete(common.IndexDefnId) error
-	OnIndexBuild([]common.IndexDefnId) error
+	OnIndexDelete(common.IndexDefnId, string) error
+	OnIndexBuild([]common.IndexDefnId, []string) error
 }
 
 type RequestServer interface {
@@ -131,7 +131,8 @@ func NewIndexManagerInternal(
 	mgr = new(IndexManager)
 	mgr.isClosed = false
 	mgr.addrProvider = addrProvider
-	mgr.quota = config["settings.memory_quota"].Uint64()
+	totalQuota := config["settings.memory_quota"].Uint64()
+	mgr.quota = mgr.calcBufCacheFromMemQuota(totalQuota)
 
 	// stream mgmt  - stream services will start if the indexer node becomes master
 	mgr.streamMgr = nil
@@ -634,6 +635,23 @@ func (m *IndexManager) stopMasterServiceNoLock() {
 			m.timekeeperStopCh = nil
 		}
 	}
+}
+
+//Calculate forestdb  buffer cache from memory quota
+func (m *IndexManager) calcBufCacheFromMemQuota(quota uint64) uint64 {
+
+	//Formula for calculation(see MB-14876)
+	//Below 2GB - 256MB to buffercache
+	//2GB to 4GB - 40% to buffercache
+	//Above 4GB - 60% to buffercache
+	if quota <= 2*1024*1024*1024 {
+		return 256 * 1024 * 1024
+	} else if quota <= 4*1024*1024*1024 {
+		return uint64(0.4 * float64(quota))
+	} else {
+		return uint64(0.6 * float64(quota))
+	}
+
 }
 
 ///////////////////////////////////////////////////////

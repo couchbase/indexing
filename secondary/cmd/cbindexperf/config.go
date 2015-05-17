@@ -3,24 +3,26 @@ package main
 import (
 	"encoding/json"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/platform"
 	"github.com/couchbase/indexing/secondary/stats"
 	"io/ioutil"
 	"os"
 )
 
 type ScanConfig struct {
-	Id        uint64
-	Bucket    string
-	Index     string
-	DefnId    uint64
-	Type      string
-	Limit     int64
-	Low       c.SecondaryKey
-	Lookups   []c.SecondaryKey
-	High      c.SecondaryKey
-	Inclusion int
-	Repeat    uint32
-	NInterval uint32 // Stats dump nrequests interval
+	Id          uint64
+	Bucket      string
+	Index       string
+	DefnId      uint64
+	Type        string
+	Limit       int64
+	Low         c.SecondaryKey
+	Lookups     []c.SecondaryKey
+	High        c.SecondaryKey
+	Inclusion   int
+	Repeat      uint32
+	NInterval   uint32 // Stats dump nrequests interval
+	Consistency bool   // Use session consistency
 
 	iteration uint32
 }
@@ -37,7 +39,7 @@ type ScanResult struct {
 	Rows         uint64
 	Duration     int64
 	LatencyHisto stats.Histogram
-	ErrorCount   uint64
+	ErrorCount   platform.AlignedUint64
 
 	// periodic stats
 	iter          uint32

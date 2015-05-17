@@ -67,17 +67,21 @@ type indexer struct {
 
 	streamBucketRequestStopCh map[common.StreamId]BucketRequestStopCh
 	streamBucketRollbackTs    map[common.StreamId]BucketRollbackTs
+	streamBucketRequestQueue  map[common.StreamId]map[string]chan *kvRequest
+	streamBucketRequestLock   map[common.StreamId]map[string]chan *sync.Mutex
 
 	bucketBuildTs map[string]Timestamp
 
 	//TODO Remove this once cbq bridge support goes away
 	bucketCreateClientChMap map[string]MsgChannel
 
-	wrkrRecvCh         MsgChannel //channel to receive messages from workers
-	internalRecvCh     MsgChannel //buffered channel to queue worker requests
-	adminRecvCh        MsgChannel //channel to receive admin messages
-	shutdownInitCh     MsgChannel //internal shutdown channel for indexer
-	shutdownCompleteCh MsgChannel //indicate shutdown completion
+	wrkrRecvCh          MsgChannel //channel to receive messages from workers
+	internalRecvCh      MsgChannel //buffered channel to queue worker requests
+	adminRecvCh         MsgChannel //channel to receive admin messages
+	internalAdminRecvCh MsgChannel //internal channel to receive admin messages
+	internalAdminRespCh chan bool  //internal channel to respond admin messages
+	shutdownInitCh      MsgChannel //internal shutdown channel for indexer
+	shutdownCompleteCh  MsgChannel //indicate shutdown completion
 
 	mutMgrCmdCh        MsgChannel //channel to send commands to mutation manager
 	storageMgrCmdCh    MsgChannel //channel to send commands to storage manager
@@ -108,21 +112,29 @@ type indexer struct {
 
 	kvlock sync.Mutex //fine-grain lock for KVSender
 
-	memQuota      uint64
-	enableManager bool
-	needsRestart  bool
+	stats *IndexerStats
 
-	cpuProfFd *os.File
+	enableManager bool
+	cpuProfFd     *os.File
+}
+
+type kvRequest struct {
+	lock     *sync.Mutex
+	bucket   string
+	streamId common.StreamId
+	grantCh  chan bool
 }
 
 func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx := &indexer{
-		wrkrRecvCh:         make(MsgChannel),
-		internalRecvCh:     make(MsgChannel, WORKER_MSG_QUEUE_LEN),
-		adminRecvCh:        make(MsgChannel, WORKER_MSG_QUEUE_LEN),
-		shutdownInitCh:     make(MsgChannel),
-		shutdownCompleteCh: make(MsgChannel),
+		wrkrRecvCh:          make(MsgChannel),
+		internalRecvCh:      make(MsgChannel, WORKER_MSG_QUEUE_LEN),
+		adminRecvCh:         make(MsgChannel, WORKER_MSG_QUEUE_LEN),
+		internalAdminRecvCh: make(MsgChannel),
+		internalAdminRespCh: make(chan bool),
+		shutdownInitCh:      make(MsgChannel),
+		shutdownCompleteCh:  make(MsgChannel),
 
 		mutMgrCmdCh:        make(MsgChannel),
 		storageMgrCmdCh:    make(MsgChannel),
@@ -146,6 +158,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		streamBucketObserveFlushDone: make(map[common.StreamId]BucketObserveFlushDoneMap),
 		streamBucketRequestStopCh:    make(map[common.StreamId]BucketRequestStopCh),
 		streamBucketRollbackTs:       make(map[common.StreamId]BucketRollbackTs),
+		streamBucketRequestQueue:     make(map[common.StreamId]map[string]chan *kvRequest),
+		streamBucketRequestLock:      make(map[common.StreamId]map[string]chan *sync.Mutex),
 		bucketBuildTs:                make(map[string]Timestamp),
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
 	}
@@ -159,9 +173,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
-	// Read memquota setting
-	idx.memQuota = idx.config["settings.memory_quota"].Uint64()
+	idx.stats = NewIndexerStats()
 
+	// Read memquota setting
+	idx.stats.memoryQuota.Set(int64(idx.config["settings.memory_quota"].Uint64()))
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
 	idx.initStreamAddressMap()
@@ -205,16 +220,16 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		}
 	}
 
-	//read persisted indexer state
-	if err := idx.bootstrap(); err != nil {
-		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
-		return nil, &MsgError{err: Error{cause: err}}
-	}
-
 	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Errorf("Indexer::NewIndexer statsMgr Init Error", res)
 		return nil, res
+	}
+
+	//read persisted indexer state
+	if err := idx.bootstrap(); err != nil {
+		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
+		return nil, &MsgError{err: Error{cause: err}}
 	}
 
 	if !idx.enableManager {
@@ -261,10 +276,104 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		}
 	}()
 
-	//start the main indexer loop
-	idx.run()
+	//start the main indexer loop. It is important that main indexer loop is running
+	//before starting the streams so that the messages coming from projectors get
+	//processed
+	go idx.run()
+
+	//if there are existing indexes, start the streams to recover
+	if len(idx.indexInstMap) != 0 {
+		if ok := idx.startStreams(); !ok {
+			err := errors.New("Unable To Start DCP Streams")
+			logging.Fatalf("Indexer::NewIndexer %v", err)
+			return nil, &MsgError{err: Error{cause: err}}
+		}
+	}
+
+	//It is important to start listening to cluster manager messages after
+	//bootstrap is done so that no new DDL gets processed before
+	//recovery of existing indexes.
+	idx.listenAdminMsgs()
+
 	return idx, &MsgSuccess{}
 
+}
+
+func (idx *indexer) acquireStreamRequestLock(bucket string, streamId common.StreamId) *kvRequest {
+
+	// queue request
+	request := &kvRequest{grantCh: make(chan bool, 1), lock: nil, bucket: bucket, streamId: streamId}
+
+	idx.kvlock.Lock()
+	defer idx.kvlock.Unlock()
+
+	// allocate the request queue
+	rq, ok := idx.streamBucketRequestQueue[streamId][bucket]
+	if !ok {
+		rq = make(chan *kvRequest, 5000)
+
+		if _, ok = idx.streamBucketRequestQueue[streamId]; !ok {
+			idx.streamBucketRequestQueue[streamId] = make(map[string]chan *kvRequest)
+		}
+		idx.streamBucketRequestQueue[streamId][bucket] = rq
+	}
+
+	// allocate the lock
+	lq, ok := idx.streamBucketRequestLock[streamId][bucket]
+	if !ok {
+		lq = make(chan *sync.Mutex, 1) // hold one lock
+
+		if _, ok = idx.streamBucketRequestLock[streamId]; !ok {
+			idx.streamBucketRequestLock[streamId] = make(map[string]chan *sync.Mutex)
+		}
+		idx.streamBucketRequestLock[streamId][bucket] = lq
+
+		// seed the lock
+		lq <- new(sync.Mutex)
+	}
+
+	// acquire the lock if it is available and there is no other request ahead of me
+	if len(rq) == 0 && len(lq) == 1 {
+		request.lock = <-lq
+		request.grantCh <- true
+	} else if len(rq) < 5000 {
+		rq <- request
+	} else {
+		common.CrashOnError(errors.New("acquireStreamRequestLock: too many requests acquiring stream request lock"))
+	}
+
+	return request
+}
+
+func (idx *indexer) waitStreamRequestLock(req *kvRequest) {
+
+	<-req.grantCh
+}
+
+func (idx *indexer) releaseStreamRequestLock(req *kvRequest) {
+
+	if req.lock == nil {
+		return
+	}
+
+	idx.kvlock.Lock()
+	defer idx.kvlock.Unlock()
+
+	streamId := req.streamId
+	bucket := req.bucket
+
+	rq, ok := idx.streamBucketRequestQueue[streamId][bucket]
+	if ok && len(rq) != 0 {
+		next := <-rq
+		next.lock = req.lock
+		next.grantCh <- true
+	} else {
+		if lq, ok := idx.streamBucketRequestLock[streamId][bucket]; ok {
+			lq <- req.lock
+		} else {
+			common.CrashOnError(errors.New("releaseStreamRequestLock: streamBucketRequestLock is not initialized"))
+		}
+	}
 }
 
 func (idx *indexer) registerWithCoordinator() error {
@@ -304,9 +413,10 @@ func (idx *indexer) run() {
 				idx.handleWorkerMsgs(msg)
 			}
 
-		case msg, ok := <-idx.adminRecvCh:
+		case msg, ok := <-idx.internalAdminRecvCh:
 			if ok {
 				idx.handleAdminMsgs(msg)
+				idx.internalAdminRespCh <- true
 			}
 
 		case <-idx.shutdownInitCh:
@@ -322,6 +432,66 @@ func (idx *indexer) run() {
 
 	}
 
+}
+
+//run starts the main loop for the indexer
+func (idx *indexer) listenAdminMsgs() {
+
+	waitForStream := true
+
+	for {
+		select {
+		case msg, ok := <-idx.adminRecvCh:
+			if ok {
+				// internalAdminRecvCh size is 1.   So it will blocked if the previous msg is being
+				// processed.
+				idx.internalAdminRecvCh <- msg
+				<- idx.internalAdminRespCh
+
+				if waitForStream {
+					// now that indexer has processed the message.  Let's make sure that
+					// the stream request is finished before processing the next admin
+					// msg.  This is done by acquiring a lock on the stream request for each
+					// bucket (on both streams).   The lock is FIFO, so if this function
+					// can get a lock, it will mean that previous stream request would have
+					// been cleared.
+					buckets := idx.getBucketForAdminMsg(msg)
+					for _, bucket := range buckets {
+						f := func(streamId common.StreamId, bucket string) {
+							lock := idx.acquireStreamRequestLock(bucket, streamId)
+							defer idx.releaseStreamRequestLock(lock)
+							idx.waitStreamRequestLock(lock)
+						}
+
+						f(common.INIT_STREAM, bucket)
+						f(common.MAINT_STREAM, bucket)
+					}
+				}
+			}
+		case <-idx.shutdownInitCh:
+			return
+		}
+	}
+}
+
+func (idx *indexer) getBucketForAdminMsg(msg Message) []string {
+	switch msg.GetMsgType() {
+
+	case CLUST_MGR_CREATE_INDEX_DDL, CBQ_CREATE_INDEX_DDL:
+		createMsg := msg.(*MsgCreateIndex)
+		return []string{createMsg.GetIndexInst().Defn.Bucket}
+
+	case CLUST_MGR_BUILD_INDEX_DDL:
+		buildMsg := msg.(*MsgBuildIndex)
+		return buildMsg.GetBucketList()
+
+	case CLUST_MGR_DROP_INDEX_DDL, CBQ_DROP_INDEX_DDL:
+		dropMsg := msg.(*MsgDropIndex)
+		return []string{dropMsg.GetBucket()}
+
+	default:
+		return nil
+	}
 }
 
 func (idx *indexer) listenWorkerMsgs() {
@@ -468,7 +638,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		newConfig := cfgUpdate.GetConfig()
 		if newConfig["settings.memory_quota"].Uint64() !=
 			idx.config["settings.memory_quota"].Uint64() {
-			idx.needsRestart = true
+			idx.stats.needsRestart.Set(true)
 		}
 		idx.setProfilerOptions(newConfig)
 		idx.config = newConfig
@@ -625,7 +795,9 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	idx.indexInstMap[indexInst.InstId] = indexInst
 	idx.indexPartnMap[indexInst.InstId] = partnInstMap
 
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	idx.stats.AddIndex(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name)
+
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
@@ -772,7 +944,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		logging.Debugf("Indexer::handleBuildIndex \n\tAdded Index: %v to Stream: %v State: %v",
 			instIdList, buildStream, buildState)
 
-		msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 
 		if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 			if clientCh != nil {
@@ -863,7 +1035,8 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	indexInst.State = common.INDEX_STATE_DELETED
 	idx.indexInstMap[indexInst.InstId] = indexInst
 
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	idx.stats.RemoveIndex(indexInst.InstId)
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		clientCh <- &MsgError{
@@ -1172,6 +1345,7 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 		if index.Stream == streamId &&
 			index.Defn.Bucket == bucket {
 			instIdList = append(instIdList, index.InstId)
+			idx.stats.RemoveIndex(index.InstId)
 		}
 	}
 
@@ -1179,7 +1353,7 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	logging.Debugf("Indexer::handleBucketNotFound Updated Index State to DELETED %v",
 		instIdList)
 
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -1199,6 +1373,10 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 
 }
 
+func (idx indexer) newIndexInstMsg(m common.IndexInstMap) *MsgUpdateInstMap {
+	return &MsgUpdateInstMap{indexInstMap: m, stats: idx.stats.Clone()}
+}
+
 func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	clientCh MsgChannel) {
 
@@ -1209,7 +1387,7 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	delete(idx.indexInstMap, indexInstId)
 	delete(idx.indexPartnMap, indexInstId)
 
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
@@ -1340,7 +1518,11 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 	clustAddr := idx.config["clusterAddr"].String()
 	numVb := idx.config["numVbuckets"].Int()
 
-	go func() {
+	reqLock := idx.acquireStreamRequestLock(bucket, buildStream)
+	go func(reqLock *kvRequest) {
+		defer idx.releaseStreamRequestLock(reqLock)
+		idx.waitStreamRequestLock(reqLock)
+
 	retryloop:
 		for {
 			if !ValidateBucket(clustAddr, bucket) {
@@ -1389,7 +1571,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 				}
 			}
 		}
-	}()
+	}(reqLock)
 
 	return true
 
@@ -1508,7 +1690,10 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 		}
 		clustAddr := idx.config["clusterAddr"].String()
 
-		go func() {
+		reqLock := idx.acquireStreamRequestLock(indexInst.Defn.Bucket, streamId)
+		go func(reqLock *kvRequest) {
+			defer idx.releaseStreamRequestLock(reqLock)
+			idx.waitStreamRequestLock(reqLock)
 		retryloop:
 			for {
 				if !ValidateBucket(clustAddr, indexInst.Defn.Bucket) {
@@ -1539,7 +1724,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 					}
 				}
 			}
-		}()
+		}(reqLock)
 	}
 
 	return true
@@ -1612,6 +1797,11 @@ func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
 
 	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, msgUpdateIndexPartnMap, idx.tkCmdCh,
 		"Timekeeper"); err != nil {
+		return err
+	}
+
+	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, nil, idx.statsMgrCmdCh,
+		"statsMgr"); err != nil {
 		return err
 	}
 	return nil
@@ -1798,7 +1988,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	}
 
 	//send updated maps to all workers
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -1849,7 +2039,10 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 
 	clustAddr := idx.config["clusterAddr"].String()
 
-	go func() {
+	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	go func(reqLock *kvRequest) {
+		defer idx.releaseStreamRequestLock(reqLock)
+		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
 			if !ValidateBucket(clustAddr, bucket) {
@@ -1879,7 +2072,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				}
 			}
 		}
-	}()
+	}(reqLock)
 
 }
 
@@ -1935,7 +2128,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	}
 
 	//send updated maps to all workers
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
 		common.CrashOnError(err)
@@ -1980,7 +2173,10 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	clustAddr := idx.config["clusterAddr"].String()
 
-	go func() {
+	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	go func(reqLock *kvRequest) {
+		defer idx.releaseStreamRequestLock(reqLock)
+		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
 			if !ValidateBucket(clustAddr, bucket) {
@@ -2011,7 +2207,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 				}
 			}
 		}
-	}()
+	}(reqLock)
 
 	logging.Debugf("Indexer::handleMergeInitStream Merge Done Bucket: %v Stream: %v",
 		bucket, streamId)
@@ -2132,7 +2328,10 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
 
-	go func() {
+	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	go func(reqLock *kvRequest) {
+		defer idx.releaseStreamRequestLock(reqLock)
+		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
 
@@ -2158,7 +2357,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 				}
 			}
 		}
-	}()
+	}(reqLock)
 }
 
 func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
@@ -2249,7 +2448,10 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	clustAddr := idx.config["clusterAddr"].String()
 	numVb := idx.config["numVbuckets"].Int()
 
-	go func() {
+	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
+	go func(reqLock *kvRequest) {
+		defer idx.releaseStreamRequestLock(reqLock)
+		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
 			//validate bucket before every try
@@ -2301,7 +2503,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 				}
 			}
 		}
-	}()
+	}(reqLock)
 }
 
 func (idx *indexer) processRollback(streamId common.StreamId,
@@ -2418,20 +2620,13 @@ func (idx *indexer) bootstrap() error {
 		return err.cause
 	}
 
-	//if there are no indexes, return from here
-	if len(idx.indexInstMap) == 0 {
-		return nil
-	}
 	//send updated maps
-	msgUpdateIndexInstMap := &MsgUpdateInstMap{indexInstMap: idx.indexInstMap}
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
+	// Distribute current stats object and index information
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
 		common.CrashOnError(err)
-	}
-
-	if ok := idx.startStreams(); !ok {
-		return errors.New("Unable To Start DCP Streams")
 	}
 
 	return nil
@@ -2509,6 +2704,9 @@ func (idx *indexer) initFromPersistedState() error {
 	idx.validateIndexInstMap()
 
 	for _, inst := range idx.indexInstMap {
+		if inst.State != common.INDEX_STATE_DELETED {
+			idx.stats.AddIndex(inst.InstId, inst.Defn.Bucket, inst.Defn.Name)
+		}
 
 		newpc := common.NewKeyPartitionContainer()
 
@@ -3093,17 +3291,14 @@ func (idx *indexer) checkBucketExists(bucket string,
 }
 
 func (idx *indexer) handleStats(cmd Message) {
-	statsMap := make(map[string]interface{})
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
-	statsMap["needs_restart"] = idx.needsRestart
-	statsMap["memory_used"] = idx.memoryUsed()
-	statsMap["memory_quota"] = idx.memQuota
-	replych <- statsMap
+	idx.stats.memoryUsed.Set(idx.memoryUsed())
+	replych <- true
 }
 
-func (idx *indexer) memoryUsed() uint64 {
-	return forestdb.BufferCacheUsed()
+func (idx *indexer) memoryUsed() int64 {
+	return int64(forestdb.BufferCacheUsed())
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst,

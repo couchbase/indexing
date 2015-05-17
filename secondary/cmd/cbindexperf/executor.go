@@ -3,11 +3,11 @@ package main
 import (
 	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/platform"
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
 	"io"
 	"math"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -39,7 +39,7 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 
 	errFn := func(e string) {
 		fmt.Printf("REQ:%d scan error occured: %s\n", spec.Id, e)
-		atomic.AddUint64(&result.ErrorCount, 1)
+		platform.AddUint64(&result.ErrorCount, 1)
 	}
 
 	callb := func(res qclient.ResponseReader) bool {
@@ -59,16 +59,23 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 		return true
 	}
 
+	var cons c.Consistency
+	if spec.Consistency {
+		cons = c.SessionConsistency
+	} else {
+		cons = c.AnyConsistency
+	}
+
 	startTime := time.Now()
 	switch spec.Type {
 	case "All":
-		err = client.ScanAll(spec.DefnId, spec.Limit, c.AnyConsistency, nil, callb)
+		err = client.ScanAll(spec.DefnId, spec.Limit, cons, nil, callb)
 	case "Range":
 		err = client.Range(spec.DefnId, spec.Low, spec.High,
-			qclient.Inclusion(spec.Inclusion), false, spec.Limit, c.AnyConsistency, nil, callb)
+			qclient.Inclusion(spec.Inclusion), false, spec.Limit, cons, nil, callb)
 	case "Lookup":
 		err = client.Lookup(spec.DefnId, spec.Lookups, false,
-			spec.Limit, c.AnyConsistency, nil, callb)
+			spec.Limit, cons, nil, callb)
 	}
 
 	if err != nil {
@@ -199,14 +206,14 @@ loop:
 	for {
 		allFinished = true
 		for i, spec := range cfg.ScanSpecs {
-			if iter := atomic.LoadUint32(&spec.iteration); iter < spec.Repeat+1 {
+			if iter := platform.LoadUint32(&spec.iteration); iter < spec.Repeat+1 {
 				j := &Job{
 					spec:   spec,
 					result: result.ScanResults[i],
 				}
 
 				jobQ <- j
-				atomic.AddUint32(&spec.iteration, 1)
+				platform.AddUint32(&spec.iteration, 1)
 				allFinished = false
 			}
 		}

@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"errors"
-	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
@@ -49,6 +48,8 @@ type storageMgr struct {
 	meta   *forestdb.KVStore // handle for index meta
 
 	config common.Config
+
+	stats IndexerStatsHolder
 
 	muSnap sync.Mutex //lock to protect snapMap and waitersMap
 }
@@ -491,7 +492,9 @@ func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string)
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 
 	logging.Tracef("StorageMgr::handleUpdateIndexInstMap %v", cmd)
-	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+	req := cmd.(*MsgUpdateInstMap)
+	indexInstMap := req.GetIndexInstMap()
+	s.stats.Set(req.GetStatsObject())
 	s.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 
 	s.muSnap.Lock()
@@ -618,35 +621,26 @@ func (s *storageMgr) handleGetIndexStorageStats(cmd Message) {
 func (s *storageMgr) handleStats(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 
-	statsMap := make(map[string]interface{})
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
-	stats := s.getIndexStorageStats()
+	storageStats := s.getIndexStorageStats()
 
-	for _, st := range stats {
+	stats := s.stats.Get()
+	for _, st := range storageStats {
 		inst := s.indexInstMap[st.InstId]
 		if inst.State == common.INDEX_STATE_DELETED {
 			continue
 		}
 
-		k := fmt.Sprintf("%s:%s:disk_size", inst.Defn.Bucket, inst.Defn.Name)
-		v := st.Stats.DiskSize
-		statsMap[k] = v
-		k = fmt.Sprintf("%s:%s:data_size", inst.Defn.Bucket, inst.Defn.Name)
-		v = st.Stats.DataSize
-		statsMap[k] = v
-		k = fmt.Sprintf("%s:%s:get_bytes", inst.Defn.Bucket, inst.Defn.Name)
-		v = st.Stats.GetBytes
-		statsMap[k] = v
-		k = fmt.Sprintf("%s:%s:insert_bytes", inst.Defn.Bucket, inst.Defn.Name)
-		v = st.Stats.InsertBytes
-		statsMap[k] = v
-		k = fmt.Sprintf("%s:%s:delete_bytes", inst.Defn.Bucket, inst.Defn.Name)
-		v = st.Stats.DeleteBytes
-		statsMap[k] = v
+		idxStats := stats.indexes[st.InstId]
+		idxStats.diskSize.Set(st.Stats.DiskSize)
+		idxStats.dataSize.Set(st.Stats.DataSize)
+		idxStats.getBytes.Set(st.Stats.GetBytes)
+		idxStats.insertBytes.Set(st.Stats.InsertBytes)
+		idxStats.deleteBytes.Set(st.Stats.DeleteBytes)
 	}
 
-	replych <- statsMap
+	replych <- true
 }
 
 func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
@@ -656,9 +650,9 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 
 	for idxInstId, partnMap := range s.indexPartnMap {
 
-		inst := s.indexInstMap[idxInstId]
+		inst, ok := s.indexInstMap[idxInstId]
 		//skip deleted indexes
-		if inst.State == common.INDEX_STATE_DELETED {
+		if !ok || inst.State == common.INDEX_STATE_DELETED {
 			continue
 		}
 
