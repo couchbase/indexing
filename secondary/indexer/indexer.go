@@ -1013,6 +1013,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		return
 	}
 
+	idx.stats.RemoveIndex(indexInst.InstId)
 	//if the index state is Created/Ready/Deleted, only data cleanup is
 	//required. No stream updates are required.
 	if indexInst.State == common.INDEX_STATE_CREATED ||
@@ -1035,7 +1036,6 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	indexInst.State = common.INDEX_STATE_DELETED
 	idx.indexInstMap[indexInst.InstId] = indexInst
 
-	idx.stats.RemoveIndex(indexInst.InstId)
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
