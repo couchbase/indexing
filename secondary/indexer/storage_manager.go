@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"sync"
+	"time"
 )
 
 var (
@@ -215,15 +216,16 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	indexSnapMap := copyIndexSnapMap(s.indexSnapMap)
 	indexInstMap := common.CopyIndexInstMap(s.indexInstMap)
 	indexPartnMap := CopyIndexPartnMap(s.indexPartnMap)
+	stats := s.stats.Get()
 
 	go s.createSnapshotWorker(streamId, bucket, tsVbuuid, indexSnapMap,
-		numVbuckets, indexInstMap, indexPartnMap)
+		numVbuckets, indexInstMap, indexPartnMap, stats)
 
 }
 
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket string,
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap, numVbuckets int,
-	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap) {
+	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, stats *IndexerStats) {
 
 	defer destroyIndexSnapMap(indexSnapMap)
 
@@ -288,6 +290,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 
 						logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
 							"Index: %v PartitionId: %v SliceId: %v Commit: %v", idxInstId, partnId, slice.Id(), needsCommit)
+
+						s.updateSnapIntervalStat(idxInstId, stats)
 
 						if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
 							logging.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
@@ -356,6 +360,19 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 		bucket:   bucket,
 		ts:       tsVbuuid}
 
+}
+
+func (s *storageMgr) updateSnapIntervalStat(idxId common.IndexInstId,
+	stats *IndexerStats) {
+
+	idxStats := stats.indexes[idxId]
+	last := idxStats.lastTsTime.Value()
+	next := int64(time.Now().Nanosecond())
+	avg := idxStats.avgTsInterval.Value()
+	if last != 0 {
+		idxStats.avgTsInterval.Set(((last + next) + avg) / 2)
+	}
+	idxStats.lastTsTime.Set(next)
 }
 
 // Update index-snapshot map whenever a snapshot is created for an index

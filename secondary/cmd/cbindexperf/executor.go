@@ -120,8 +120,8 @@ func ResultAggregator(ch chan *JobResult, sw io.Writer, wg *sync.WaitGroup) {
 		result.iter++
 		if sw != nil && spec.NInterval > 0 &&
 			(result.iter%spec.NInterval == 0 || result.iter == spec.Repeat+1) {
-			fmt.Fprintf(sw, "id:%d, rows:%d, duration:%d\n",
-				spec.Id, result.statsRows, result.statsDuration)
+			fmt.Fprintf(sw, "id:%d, rows:%d, duration:%d, Nth-latency:%d\n",
+				spec.Id, result.statsRows, result.statsDuration, jr.dur)
 			result.statsRows = 0
 			result.statsDuration = 0
 		}

@@ -100,14 +100,19 @@ func (s *memDBSlice) Insert(k []byte, docid []byte) error {
 	s.Lock()
 	defer s.Unlock()
 
-	entry, err := NewSecondaryIndexEntry(k, docid)
-	if err == ErrSecKeyNil {
+	mainItm := &KV{
+		k: k,
+	}
+
+	if s.isPrimary {
+		exists := s.main.Get(mainItm)
+		if exists == nil {
+			s.main.InsertNoReplace(mainItm)
+		}
+
 		return nil
 	}
 
-	mainItm := &KV{
-		k: entry.Bytes(),
-	}
 	backItm := &KV{
 		k: docid,
 		v: k,
@@ -133,6 +138,11 @@ func (s *memDBSlice) Delete(d []byte) error {
 	defer s.Unlock()
 	backItm := &KV{
 		k: d,
+	}
+
+	if s.isPrimary {
+		s.main.Delete(backItm)
+		return nil
 	}
 
 	oldkey := s.back.Get(backItm)

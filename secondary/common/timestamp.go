@@ -294,8 +294,9 @@ func (ts *TsVbuuid) Diff(other *TsVbuuid) string {
 //check if seqnum of all vbuckets are aligned with the snapshot end
 func (ts *TsVbuuid) IsSnapAligned() bool {
 
+	// Nil timestamp can be considered equivalent to all vbs with seqno=0 (empty bucket)
 	if ts == nil {
-		return false
+		return true
 	}
 
 	for i, s := range ts.Snapshots {

@@ -102,6 +102,7 @@ func (m *mutationMgr) run() {
 
 	defer m.panicHandler()
 
+	go m.handleWorkerMsgs()
 	go m.listenWorkerMsgs()
 
 	//main Mutation Manager loop
@@ -124,11 +125,30 @@ loop:
 				m.shutdown()
 				break loop
 			}
-		case msg, _ := <-m.internalRecvCh:
-			m.handleWorkerMessage(msg)
 		}
 	}
 
+}
+
+func (m *mutationMgr) handleWorkerMsgs() {
+
+	for {
+		select {
+		// internalRecvCh is a big buffer to bridge a fast sender (mutMgrRecvCh)
+		// and a slow receiver (supvRespch).  This is used for stream management.
+		// Use a separate go-routine for this so that it wouldn't block the admin
+		// operation (in main go-routine).
+		case msg, ok := <-m.internalRecvCh:
+			if ok {
+				m.handleWorkerMessage(msg)
+			}
+		case _, ok := <-m.shutdownCh:
+			if !ok {
+				//shutdown signalled. exit this loop.
+				return
+			}
+		}
+	}
 }
 
 func (m *mutationMgr) listenWorkerMsgs() {
