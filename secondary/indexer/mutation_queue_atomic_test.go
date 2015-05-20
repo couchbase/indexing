@@ -17,7 +17,7 @@ func TestBasicsA(t *testing.T) {
 	m := &MutationKeys{meta: &MutationMeta{vbucket: 0,
 		seqno: 1}}
 
-	q.Enqueue(m, 0, nil)
+	q.Enqueue(m, 0)
 	checkSizeA(t, q, 0, 1)
 
 	m1 := q.DequeueSingleElement(0)
@@ -27,8 +27,8 @@ func TestBasicsA(t *testing.T) {
 	m2 := &MutationKeys{meta: &MutationMeta{vbucket: 0,
 		seqno: 2}}
 
-	q.Enqueue(m, 0, nil)
-	q.Enqueue(m2, 0, nil)
+	q.Enqueue(m, 0)
+	q.Enqueue(m2, 0)
 	checkSizeA(t, q, 0, 2)
 
 	m1 = q.DequeueSingleElement(0)
@@ -63,7 +63,7 @@ func TestSizeA(t *testing.T) {
 	for i := 0; i < 10000; i++ {
 		m[i] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 			seqno: Seqno(i)}}
-		q.Enqueue(m[i], 0, nil)
+		q.Enqueue(m[i], 0)
 	}
 	checkSizeA(t, q, 0, 10000)
 
@@ -83,7 +83,7 @@ func TestSizeWithFreelistA(t *testing.T) {
 	for i := 0; i < 10000; i++ {
 		m[i] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 			seqno: Seqno(i)}}
-		q.Enqueue(m[i], 0, nil)
+		q.Enqueue(m[i], 0)
 		if (i+1)%100 == 0 {
 			checkSizeA(t, q, 0, 100)
 			for j := 0; j < 100; j++ {
@@ -108,9 +108,9 @@ func TestDequeueUptoSeqnoA(t *testing.T) {
 	m[2] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 		seqno: 2}}
 
-	q.Enqueue(m[0], 0, nil)
-	q.Enqueue(m[1], 0, nil)
-	q.Enqueue(m[2], 0, nil)
+	q.Enqueue(m[0], 0)
+	q.Enqueue(m[1], 0)
+	q.Enqueue(m[2], 0)
 	checkSizeA(t, q, 0, 3)
 
 	ch, err := q.DequeueUptoSeqno(0, 1)
@@ -135,7 +135,7 @@ func TestDequeueUptoSeqnoA(t *testing.T) {
 	//one more
 	m[3] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 		seqno: 3}}
-	q.Enqueue(m[3], 0, nil)
+	q.Enqueue(m[3], 0)
 	ch, err = q.DequeueUptoSeqno(0, 2)
 	for p := range ch {
 		checkItemA(t, m[2], p)
@@ -149,13 +149,13 @@ func TestDequeueUptoSeqnoA(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		m[4] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 			seqno: 3}}
-		q.Enqueue(m[4], 0, nil)
+		q.Enqueue(m[4], 0)
 		m[5] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 			seqno: 3}}
-		q.Enqueue(m[5], 0, nil)
+		q.Enqueue(m[5], 0)
 		m[6] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 			seqno: 4}}
-		q.Enqueue(m[6], 0, nil)
+		q.Enqueue(m[6], 0)
 	}()
 
 	i = 3
@@ -182,7 +182,7 @@ func TestDequeueA(t *testing.T) {
 	ch, stop, _ := q.Dequeue(0)
 	go func() {
 		for _, m := range mut {
-			q.Enqueue(m, 0, nil)
+			q.Enqueue(m, 0)
 			time.Sleep(100 * time.Millisecond)
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -212,9 +212,9 @@ func TestMultipleVbucketsA(t *testing.T) {
 	checkSizeA(t, q, 2, 0)
 
 	for i := 0; i < 5; i++ {
-		q.Enqueue(mut[i], 0, nil)
-		q.Enqueue(mut[i+5], 1, nil)
-		q.Enqueue(mut[i+10], 2, nil)
+		q.Enqueue(mut[i], 0)
+		q.Enqueue(mut[i+5], 1)
+		q.Enqueue(mut[i+10], 2)
 	}
 	checkSizeA(t, q, 0, 5)
 	checkSizeA(t, q, 1, 5)
@@ -240,7 +240,7 @@ func TestDequeueUptoFreelistA(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		m[i] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 			seqno: Seqno(i)}}
-		q.Enqueue(m[i], 0, nil)
+		q.Enqueue(m[i], 0)
 		if (i+1)%10 == 0 {
 			checkSizeA(t, q, 0, 10)
 			retch, _ := q.DequeueUptoSeqno(0, Seqno(i))
@@ -262,8 +262,8 @@ func TestDequeueUptoFreelistMultVbA(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		m[i] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 			seqno: Seqno(i)}}
-		q.Enqueue(m[i], 0, nil)
-		q.Enqueue(m[i], 1, nil)
+		q.Enqueue(m[i], 0)
+		q.Enqueue(m[i], 1)
 		if (i+1)%10 == 0 {
 			checkSizeA(t, q, 0, 10)
 			retch, _ := q.DequeueUptoSeqno(0, Seqno(i))
@@ -294,7 +294,7 @@ func TestConcurrentEnqueueDequeueA(t *testing.T) {
 		for i := 0; i < 100; i++ {
 			m[i] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 				seqno: Seqno(i)}}
-			q.Enqueue(m[i], 0, nil)
+			q.Enqueue(m[i], 0)
 		}
 	}()
 
@@ -327,7 +327,7 @@ func TestConcurrentEnqueueDequeueA1(t *testing.T) {
 		for i := 0; i < 100; i++ {
 			m[i] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 				seqno: Seqno(i)}}
-			q.Enqueue(m[i], 0, nil)
+			q.Enqueue(m[i], 0)
 		}
 	}()
 
@@ -350,33 +350,6 @@ func TestConcurrentEnqueueDequeueA1(t *testing.T) {
 		t.Errorf("Unexpected Dequeue Count %v, expected %v", dequeueCount, 100)
 	}
 }
-
-func TestEnqueueAppCh(t *testing.T) {
-
-	q := NewAtomicMutationQueue(1, 10)
-	appch := make(StopChannel)
-
-	m := make([]*MutationKeys, 20)
-	go func() {
-		for i := 0; i < 20; i++ {
-			m[i] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
-				seqno: Seqno(i)}}
-			q.Enqueue(m[i], 0, appch)
-		}
-	}()
-
-	//wait for first batch to enqueue
-	time.Sleep(time.Second * 1)
-	checkSizeA(t, q, 0, 10)
-
-	//close the app ch to allow next enqueue
-	//to proceed
-	close(appch)
-	time.Sleep(time.Second * 1)
-	checkSizeA(t, q, 0, 20)
-
-}
-
 func BenchmarkEnqueueA(b *testing.B) {
 
 	q := NewAtomicMutationQueue(1, int64(b.N))
@@ -389,7 +362,7 @@ func BenchmarkEnqueueA(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		q.Enqueue(mut[i], 0, nil)
+		q.Enqueue(mut[i], 0)
 	}
 
 }
@@ -403,7 +376,7 @@ func BenchmarkDequeueA(b *testing.B) {
 			seqno: Seqno(i)}}
 	}
 	for _, m := range mut {
-		q.Enqueue(m, 0, nil)
+		q.Enqueue(m, 0)
 	}
 
 	//start blocking dequeue call
@@ -431,7 +404,7 @@ func BenchmarkSingleVbucketA(b *testing.B) {
 	//start blocking dequeue call
 	go func() {
 		for i := 0; i < b.N; i++ {
-			q.Enqueue(mut[i], 0, nil)
+			q.Enqueue(mut[i], 0)
 		}
 	}()
 

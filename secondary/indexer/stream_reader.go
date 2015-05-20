@@ -44,9 +44,8 @@ type mutationStreamReader struct {
 
 	numWorkers int // number of workers to process mutation stream
 
-	workerch      []MutationChannel //buffered channel for each worker
-	workerStopCh  []StopChannel     //stop channels of workers
-	workerWaitGrp sync.WaitGroup
+	workerch     []MutationChannel //buffered channel for each worker
+	workerStopCh []StopChannel     //stop channels of workers
 
 	syncStopCh StopChannel
 	syncLock   sync.Mutex
@@ -130,15 +129,14 @@ func (r *mutationStreamReader) Shutdown() {
 
 	logging.Infof("MutationStreamReader:Shutdown StreamReader %v", r.streamId)
 
-	//stop sync worker
-	close(r.syncStopCh)
-
 	//close the mutation stream
 	r.stream.Close()
 
 	//stop all workers
 	r.stopWorkers()
 
+	//stop sync worker
+	close(r.syncStopCh)
 }
 
 //run starts the stream reader loop which listens to message from
@@ -331,14 +329,12 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 	logging.Debugf("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
 		"Started for Stream %v.", workerId, r.streamId)
 
-	defer r.workerWaitGrp.Done()
-
 	var mut *MutationKeys
 
 	for {
 		select {
 		case mut = <-r.workerch[workerId]:
-			r.handleSingleMutation(mut, stopch)
+			r.handleSingleMutation(mut)
 		case <-stopch:
 			logging.Debugf("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
 				"Stopped for Stream %v", workerId, r.streamId)
@@ -349,7 +345,7 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 }
 
 //handleSingleMutation enqueues mutation in the mutation queue
-func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys, stopch StopChannel) {
+func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys) {
 
 	logging.LazyTrace(func() string {
 		return fmt.Sprintf("MutationStreamReader::handleSingleMutation received mutation %v", mut)
@@ -357,7 +353,7 @@ func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys, stopch St
 
 	//based on the index, enqueue the mutation in the right queue
 	if q, ok := r.bucketQueueMap[mut.meta.bucket]; ok {
-		q.queue.Enqueue(mut, mut.meta.vbucket, stopch)
+		q.queue.Enqueue(mut, mut.meta.vbucket)
 
 	} else {
 		logging.Errorf("MutationStreamReader::handleSingleMutation got mutation for "+
@@ -468,7 +464,6 @@ func (r *mutationStreamReader) startWorkers() {
 
 	//start worker goroutines to process incoming mutation concurrently
 	for w := 0; w < r.numWorkers; w++ {
-		r.workerWaitGrp.Add(1)
 		go r.startMutationStreamWorker(w, r.workerStopCh[w])
 	}
 }
@@ -481,11 +476,8 @@ func (r *mutationStreamReader) stopWorkers() {
 
 	//stop all workers
 	for _, ch := range r.workerStopCh {
-		close(ch)
+		ch <- true
 	}
-
-	//wait for all workers to finish
-	r.workerWaitGrp.Wait()
 }
 
 //initBucketFilter initializes the bucket filter
