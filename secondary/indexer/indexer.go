@@ -276,24 +276,8 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		}
 	}()
 
-	//start the main indexer loop. It is important that main indexer loop is running
-	//before starting the streams so that the messages coming from projectors get
-	//processed
-	go idx.run()
-
-	//if there are existing indexes, start the streams to recover
-	if len(idx.indexInstMap) != 0 {
-		if ok := idx.startStreams(); !ok {
-			err := errors.New("Unable To Start DCP Streams")
-			logging.Fatalf("Indexer::NewIndexer %v", err)
-			return nil, &MsgError{err: Error{cause: err}}
-		}
-	}
-
-	//It is important to start listening to cluster manager messages after
-	//bootstrap is done so that no new DDL gets processed before
-	//recovery of existing indexes.
-	idx.listenAdminMsgs()
+	//start the main indexer loop
+	idx.run()
 
 	return idx, &MsgSuccess{}
 
@@ -403,6 +387,7 @@ func (idx *indexer) recoverPersistedSnapshots() error {
 func (idx *indexer) run() {
 
 	go idx.listenWorkerMsgs()
+	go idx.listenAdminMsgs()
 
 	for {
 
@@ -2627,6 +2612,15 @@ func (idx *indexer) bootstrap() error {
 	// Distribute current stats object and index information
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
 		common.CrashOnError(err)
+	}
+
+	//if there are no indexes, return from here
+	if len(idx.indexInstMap) == 0 {
+		return nil
+	}
+
+	if ok := idx.startStreams(); !ok {
+		return errors.New("Unable To Start DCP Streams")
 	}
 
 	return nil
