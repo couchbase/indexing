@@ -723,12 +723,15 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	var slices []Slice
 
 	inst, ok := s.indexInstMap[req.GetInstId()]
+	stats := s.stats.Get()
 	if !ok || inst.State == common.INDEX_STATE_DELETED {
 		errch <- ErrIndexNotFound
 		return
 	}
 
 	partnMap, _ := s.indexPartnMap[req.GetInstId()]
+	idxStats := stats.indexes[req.GetInstId()]
+	idxStats.numCompactions.Add(1)
 
 	// Increment rc for slices
 	for _, partnInst := range partnMap {

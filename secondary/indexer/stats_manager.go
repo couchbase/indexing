@@ -43,6 +43,7 @@ type IndexStats struct {
 	itemsCount       stats.Int64Val
 	numCommits       stats.Int64Val
 	numSnapshots     stats.Int64Val
+	numCompactions   stats.Int64Val
 
 	avgTsInterval stats.Int64Val
 	lastTsTime    stats.Int64Val
@@ -80,6 +81,7 @@ func (s *IndexStats) Init() {
 	s.lastTsTime.Init()
 	s.numCommits.Init()
 	s.numSnapshots.Init()
+	s.numCompactions.Init()
 }
 
 type IndexerStats struct {
@@ -142,6 +144,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("avg_ts_interval", s.avgTsInterval.Value())
 		addStat("num_commits", s.numCommits.Value())
 		addStat("num_snapshots", s.numSnapshots.Value())
+		addStat("num_compactions", s.numCompactions.Value())
 	}
 
 	return json.Marshal(statsMap)
