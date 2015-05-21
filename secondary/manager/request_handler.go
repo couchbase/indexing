@@ -106,7 +106,7 @@ type IndexStatus struct {
 	Definition string             `json:"definition"`
 	Hosts      []string           `json:"hosts,omitempty"`
 	Error      string             `json:"error,omitempty"`
-	Completion int                `json:"completion,omitempty"`
+	Completion int                `json:"completion"`
 }
 
 //
