@@ -55,6 +55,8 @@ type Logger interface {
 	LazyDebug(fn func() string)
 	// Call and print the stringer if tracing enabled
 	LazyTrace(fn func() string)
+
+	LazyError(fn func() string)
 }
 
 // Timer interface
@@ -244,6 +246,12 @@ func (log *destination) LazyVerbose(fn func() string) {
 	}
 }
 
+func (log *destination) LazyError(fn func() string) {
+	if log.isEnabled(Error, 1) {
+		log.printf(Error, 1, "%s", fn())
+	}
+}
+
 // Run function only if output will be logged at trace level
 func (log *destination) LazyTrace(fn func() string) {
 	if log.isEnabled(Trace, 1) {
@@ -423,6 +431,12 @@ func ClearOverrides() {
 func LazyVerbose(fn func() string) {
 	if SystemLogger.isEnabled(Verbose, 1) {
 		SystemLogger.printf(Verbose, 1, "%s", fn())
+	}
+}
+
+func LazyError(fn func() string) {
+	if SystemLogger.isEnabled(Error, 1) {
+		SystemLogger.printf(Error, 1, "%s", fn())
 	}
 }
 
