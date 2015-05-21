@@ -855,7 +855,7 @@ func (fdb *fdbSlice) Compact() error {
 
 	osnap := sic.GetOldest()
 	if osnap == nil {
-		logging.Debugf("ForestDBSlice::Compact \n\tNo Snapshot Found. Skipped Compaction."+
+		logging.Infof("ForestDBSlice::Compact No Snapshot Found. Skipped Compaction."+
 			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 		return nil
 	}
@@ -887,11 +887,11 @@ snaploop:
 	}
 
 	if snapMarker == nil {
-		logging.Debugf("ForestDBSlice::Compact \n\tNo Valid SnapMarker Found. Skipped Compaction."+
+		logging.Infof("ForestDBSlice::Compact No Valid SnapMarker Found. Skipped Compaction."+
 			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 		return nil
 	} else {
-		logging.Debugf("ForestDBSlice::Compact \n\tCompacting upto SeqNum %v. "+
+		logging.Infof("ForestDBSlice::Compact Compacting upto SeqNum %v. "+
 			"Slice Id %v, IndexInstId %v, IndexDefnId %v", compactSeqNum, fdb.id,
 			fdb.idxInstId, fdb.idxDefnId)
 	}
