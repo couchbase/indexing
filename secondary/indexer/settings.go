@@ -92,14 +92,19 @@ func (s *settingsManager) writeJson(w http.ResponseWriter, json []byte) {
 	w.Write([]byte("\n"))
 }
 
-func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Request) {
+func (s *settingsManager) validateAuth(w http.ResponseWriter, r *http.Request) bool {
 	valid, err := common.IsAuthValid(r, s.config["indexer.clusterAddr"].String())
 	if err != nil {
 		s.writeError(w, err)
-		return
 	} else if valid == false {
 		w.WriteHeader(401)
 		w.Write([]byte("401 Unauthorized\n"))
+	}
+	return valid
+}
+
+func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Request) {
+	if !s.validateAuth(w, r) {
 		return
 	}
 
@@ -141,6 +146,9 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *settingsManager) handleCompactionTrigger(w http.ResponseWriter, r *http.Request) {
+	if !s.validateAuth(w, r) {
+		return
+	}
 	_, rev, err := metakv.Get(indexCompactonMetaPath)
 	if err != nil {
 		s.writeError(w, err)
@@ -194,7 +202,7 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 	} else if path == indexCompactonMetaPath {
 		currentToken := s.compactionToken
 		s.compactionToken = value
-		if currentToken == nil || bytes.Equal(currentToken, value) {
+		if bytes.Equal(currentToken, value) {
 			return nil
 		}
 
