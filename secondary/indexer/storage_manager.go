@@ -302,6 +302,12 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 							continue
 						}
 
+						idxStats := stats.indexes[idxInstId]
+						idxStats.numSnapshots.Add(1)
+						if needsCommit {
+							idxStats.numCommits.Add(1)
+						}
+
 						if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
 							logging.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
 								"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
