@@ -59,13 +59,15 @@ type mutationStreamReader struct {
 	skipMutation bool
 	evalFilter   bool
 	snapType     uint32
+
+	stats *IndexerStats
 }
 
 //CreateMutationStreamReader creates a new mutation stream and starts
 //a reader to listen and process the mutations.
 //In case returned MutationStreamReader is nil, Message will have the error msg.
 func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQueueMap,
-	supvCmdch MsgChannel, supvRespch MsgChannel, numWorkers int) (
+	supvCmdch MsgChannel, supvRespch MsgChannel, numWorkers int, stats *IndexerStats) (
 	MutationStreamReader, Message) {
 
 	//start a new mutation stream
@@ -102,6 +104,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		bucketQueueMap:  CopyBucketQueueMap(bucketQueueMap),
 		bucketFilterMap: make(map[string]*common.TsVbuuid),
 		bucketSyncDue:   make(map[string]bool),
+		stats:           stats,
 	}
 
 	r.initBucketFilter()
@@ -353,6 +356,7 @@ func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys) {
 
 	//based on the index, enqueue the mutation in the right queue
 	if q, ok := r.bucketQueueMap[mut.meta.bucket]; ok {
+		r.stats.buckets[mut.meta.bucket].mutationQueueSize.Add(1)
 		q.queue.Enqueue(mut, mut.meta.vbucket)
 
 	} else {

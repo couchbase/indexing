@@ -23,6 +23,17 @@ import (
 	"unsafe"
 )
 
+type BucketStats struct {
+	bucket     string
+	indexCount int
+
+	mutationQueueSize stats.Int64Val
+}
+
+func (s *BucketStats) Init() {
+	s.mutationQueueSize.Init()
+}
+
 type IndexStats struct {
 	name, bucket string
 
@@ -88,6 +99,7 @@ func (s *IndexStats) Init() {
 
 type IndexerStats struct {
 	indexes map[common.IndexInstId]*IndexStats
+	buckets map[string]*BucketStats
 
 	numConnections stats.Int64Val
 	memoryQuota    stats.Int64Val
@@ -97,6 +109,7 @@ type IndexerStats struct {
 
 func (s *IndexerStats) Init() {
 	s.indexes = make(map[common.IndexInstId]*IndexStats)
+	s.buckets = make(map[string]*BucketStats)
 	s.numConnections.Init()
 	s.memoryQuota.Init()
 	s.memoryUsed.Init()
@@ -107,10 +120,25 @@ func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name strin
 	idxStats := &IndexStats{name: name, bucket: bucket}
 	idxStats.Init()
 	s.indexes[id] = idxStats
+
+	b, ok := s.buckets[bucket]
+	if !ok {
+		b = &BucketStats{bucket: bucket}
+		b.Init()
+		s.buckets[bucket] = b
+	}
+
+	b.indexCount++
 }
 
 func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
+	idx := s.indexes[id]
 	delete(s.indexes, id)
+	b := s.buckets[idx.bucket]
+	b.indexCount--
+	if b.indexCount == 0 {
+		delete(s.buckets, idx.bucket)
+	}
 }
 
 func (is IndexerStats) MarshalJSON() ([]byte, error) {
@@ -148,6 +176,11 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_snapshots", s.numSnapshots.Value())
 		addStat("num_compactions", s.numCompactions.Value())
 		addStat("flush_queue_size", s.flushQueueSize.Value())
+	}
+
+	for _, s := range is.buckets {
+		prefix = fmt.Sprintf("%s:", s.bucket)
+		addStat("mutation_queue_size", s.mutationQueueSize.Value())
 	}
 
 	return json.Marshal(statsMap)
