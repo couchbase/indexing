@@ -357,6 +357,7 @@ func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys) {
 	//based on the index, enqueue the mutation in the right queue
 	if q, ok := r.bucketQueueMap[mut.meta.bucket]; ok {
 		r.stats.buckets[mut.meta.bucket].mutationQueueSize.Add(1)
+		r.stats.buckets[mut.meta.bucket].numMutationsQueued.Add(1)
 		q.queue.Enqueue(mut, mut.meta.vbucket)
 
 	} else {
