@@ -769,6 +769,7 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 		return
 	}
 
+	idx.stats.AddIndex(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name)
 	//allocate partition/slice
 	var partnInstMap PartitionInstMap
 	var err error
@@ -779,8 +780,6 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	//update index maps with this index
 	idx.indexInstMap[indexInst.InstId] = indexInst
 	idx.indexPartnMap[indexInst.InstId] = partnInstMap
-
-	idx.stats.AddIndex(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
@@ -1735,7 +1734,7 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 			indexInst.InstId, partnInst)
 
 		//add a single slice per partition for now
-		if slice, err := NewSlice(SliceId(0), &indexInst, idx.config); err == nil {
+		if slice, err := NewSlice(SliceId(0), &indexInst, idx.config, idx.stats); err == nil {
 			partnInst.Sc.AddSlice(0, slice)
 			logging.Infof("Indexer::initPartnInstance Initialized Slice: \n\t Index: %v Slice: %v",
 				indexInst.InstId, slice)
@@ -3296,7 +3295,7 @@ func (idx *indexer) memoryUsed() int64 {
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst,
-	conf common.Config) (slice Slice, err error) {
+	conf common.Config, stats *IndexerStats) (slice Slice, err error) {
 
 	if indInst.Defn.Using == common.MemDB {
 		slice, err = NewMemDBSlice(id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf)
@@ -3308,7 +3307,7 @@ func NewSlice(id SliceId, indInst *common.IndexInst,
 			common.CrashOnError(e)
 		}
 		path := filepath.Join(storage_dir, IndexPath(indInst, id))
-		slice, err = NewForestDBSlice(path, id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf)
+		slice, err = NewForestDBSlice(path, id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
 	}
 
 	return
