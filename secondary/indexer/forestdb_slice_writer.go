@@ -208,6 +208,7 @@ func (fdb *fdbSlice) DecrRef() {
 //it will be returned as error.
 func (fdb *fdbSlice) Insert(key []byte, docid []byte) error {
 	fdb.idxStats.flushQueueSize.Add(1)
+	fdb.idxStats.numFlushQueued.Add(1)
 	fdb.cmdCh <- &indexItem{key: key, docid: docid}
 	return fdb.fatalDbErr
 }
@@ -218,6 +219,7 @@ func (fdb *fdbSlice) Insert(key []byte, docid []byte) error {
 //it will be returned as error.
 func (fdb *fdbSlice) Delete(docid []byte) error {
 	fdb.idxStats.flushQueueSize.Add(1)
+	fdb.idxStats.numFlushQueued.Add(1)
 	fdb.cmdCh <- docid
 	return fdb.fatalDbErr
 }
