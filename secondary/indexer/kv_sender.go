@@ -131,9 +131,7 @@ func (k *kvSender) handleSupvervisorCommands(cmd Message) {
 
 func (k *kvSender) handleOpenStream(cmd Message) {
 
-	if logging.Level(k.config["settings.log_level"].String()) >= logging.Debug {
-		logging.Debugf("KVSender::handleOpenStream %v", cmd)
-	}
+	logging.Debugf("KVSender::handleOpenStream %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	indexInstList := cmd.(*MsgStreamUpdate).GetIndexList()
@@ -204,9 +202,7 @@ func (k *kvSender) handleCloseStream(cmd Message) {
 
 func (k *kvSender) handleRestartVbuckets(cmd Message) {
 
-	if logging.Level(k.config["settings.log_level"].String()) >= logging.Debug {
-		logging.Debugf("KVSender::handleRestartVbuckets %v", cmd)
-	}
+	logging.Debugf("KVSender::handleRestartVbuckets %v", cmd)
 
 	streamId := cmd.(*MsgRestartVbuckets).GetStreamId()
 	restartTs := cmd.(*MsgRestartVbuckets).GetRestartTs()
@@ -603,9 +599,7 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 	logging.Infof("KVSender::sendMutationTopicRequest Projector %v Topic %v \n\tInstances %v",
 		ap, topic, instances)
 
-	if logging.Level(k.config["settings.log_level"].String()) >= logging.Debug {
-		logging.Debugf("KVSender::sendMutationTopicRequest RequestTS %v", reqTimestamps.Repr())
-	}
+	logging.LazyDebugf("KVSender::sendMutationTopicRequest RequestTS %v", reqTimestamps.Repr)
 
 	endpointType := "dataport"
 
@@ -616,7 +610,7 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 
 		return res, err
 	} else {
-		if logging.Level(k.config["settings.log_level"].String()) >= logging.Debug {
+		if logging.IsEnabled(logging.Debug) {
 			logging.Debugf("KVSender::sendMutationTopicRequest Response Projector %v Topic %v "+
 				"\n\tInstanceIds %v \n\tActiveTs %v \n\tRollbackTs %v", ap, topic, res.GetInstanceIds(),
 				debugPrintTs(res.GetActiveTimestamps()), debugPrintTs(res.GetRollbackTimestamps()))
@@ -630,9 +624,7 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 	restartTs *protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
 
 	logging.Infof("KVSender::sendRestartVbuckets Projector %v Topic %v", ap, topic)
-	if logging.Level(k.config["settings.log_level"].String()) >= logging.Debug {
-		logging.Debugf("KVSender::sendRestartVbuckets RestartTs %v", restartTs.Repr())
-	}
+	logging.LazyDebugf("KVSender::sendRestartVbuckets RestartTs %v", restartTs.Repr)
 
 	//Shutdown the vbucket before restart if there was a ConnErr. If the vbucket is already
 	//running, projector will ignore the request otherwise
@@ -669,7 +661,7 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 
 		return res, err
 	} else {
-		if logging.Level(k.config["settings.log_level"].String()) >= logging.Debug {
+		if logging.IsEnabled(logging.Debug) {
 			logging.Debugf("KVSender::sendRestartVbuckets Response Projector %v Topic %v "+
 				"\nInstanceIds %v \nActiveTs %v \nRollbackTs %v", ap, topic, res.GetInstanceIds(),
 				debugPrintTs(res.GetActiveTimestamps()), debugPrintTs(res.GetRollbackTimestamps()))
@@ -897,13 +889,11 @@ loop:
 		}
 	}
 
-	if logging.Level(k.config["settings.log_level"].String()) >= logging.Debug {
-
+	if logging.IsEnabled(logging.Debug) {
 		s := ""
 		for _, l := range res.GetLogs() {
 			s += fmt.Sprintf("\t%v\n", l)
 		}
-
 		logging.Debugf("KVSender::getFailoverLogs Failover Log Response Error %v \n%v", err, s)
 	}
 
@@ -1183,5 +1173,4 @@ func debugPrintTs(tsList []*protobuf.TsVbuuid) string {
 
 	ts := tsList[0]
 	return ts.Repr()
-
 }

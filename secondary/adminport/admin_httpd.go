@@ -201,7 +201,7 @@ func (s *httpServer) Start() (err error) {
 		}
 	}()
 
-	logging.PeriodicProfile(s.srv.Addr, "goroutine")
+	logging.PeriodicProfile(logging.Trace, s.srv.Addr, "goroutine")
 	return
 }
 

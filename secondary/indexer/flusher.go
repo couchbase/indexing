@@ -94,10 +94,8 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel {
 
-	if logging.Level(f.config["settings.log_level"].String()) >= logging.Debug {
-		logging.Debugf("Flusher::PersistUptoTS %v %v Timestamp: %v",
-			streamId, bucket, ts)
-	}
+	logging.Debugf("Flusher::PersistUptoTS %v %v Timestamp: %v",
+		streamId, bucket, ts)
 
 	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)

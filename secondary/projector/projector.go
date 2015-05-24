@@ -101,9 +101,6 @@ func (p *Projector) ResetConfig(config c.Config) {
 	if cv, ok := config["projector.settings.log_level"]; ok {
 		logging.SetLogLevel(logging.Level(cv.String()))
 	}
-	if cv, ok := config["projector.settings.log_override"]; ok {
-		logging.AddOverride(cv.String())
-	}
 	if cv, ok := config["projector.maxCpuPercent"]; ok {
 		c.SetNumCPUs(cv.Int())
 	}

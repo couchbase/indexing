@@ -236,14 +236,7 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 
 func setLogger(config common.Config) {
 	logLevel := config["indexer.settings.log_level"].String()
-	logOverride := config["indexer.settings.log_override"].String()
-
-	if len(logOverride) > 0 {
-		logging.Infof("Setting log override = %v", logOverride)
-		logging.AddOverride(logOverride)
-	} else {
-		level := logging.Level(logLevel)
-		logging.Infof("Setting log level to %v", level)
-		logging.SetLogLevel(level)
-	}
+	level := logging.Level(logLevel)
+	logging.Infof("Setting log level to %v", level)
+	logging.SetLogLevel(level)
 }
