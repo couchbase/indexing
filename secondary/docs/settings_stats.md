@@ -41,24 +41,36 @@
 
         $ curl localhost:9102/stats
         {
-           "default:first_name7:num_requests" : 3,
-           "default:first_name7:items_count" : 10000,
-           "default:first_name7:insert_bytes" : 1271211,
-           "default:first_name7:disk_size" : 3563520,
-           "default:first_name7:delete_bytes" : 0,
-           "default:first_name7:total_scan_duration" : 1693478681,
-           "default:first_name7:num_docs_queued" : 0,
-           "default:first_name7:scan_bytes_read" : 799260,
-           "default:first_name7:scan_wait_duration" : 331286,
-           "default:first_name7:num_docs_indexed" : 10000,
-           "default:first_name7:num_docs_pending" : 0,
-           "needs_restart" : "false",
-           "default:first_name7:num_rows_returned" : 30000,
+           "default:num_mutations_queued" : 0,
+           "default:first_name:scan_bytes_read" : 0,
+           "default:first_name:avg_scan_latency" : 0,
+           "default:first_name:total_scan_duration" : 0,
+           "default:first_name:get_bytes" : 0,
+           "default:first_name:num_docs_queued" : 0,
+           "default:first_name:num_compactions" : 0,
+           "memory_quota" : 268435456,
+           "needs_restart" : false,
+           "memory_used" : 823296,
+           "default:first_name:num_docs_pending" : 0,
+           "default:first_name:scan_wait_duration" : 0,
+           "default:first_name:delete_bytes" : 0,
+           "default:first_name:flush_queue_size" : 0,
+           "default:first_name:num_flush_queued" : 0,
+           "default:first_name:num_rows_returned" : 0,
+           "default:first_name:avg_ts_interval" : 0,
+           "default:mutation_queue_size" : 0,
+           "default:first_name:num_snapshots" : 0,
+           "default:first_name:disk_size" : 20480,
+           "default:first_name:insert_bytes" : 0,
+           "default:first_name:items_count" : 0,
+           "default:first_name:data_size" : 0,
            "num_connections" : 0,
-           "default:first_name7:get_bytes" : 3869880,
-           "default:first_name7:build_progress: 93
+           "default:first_name:num_commits" : 0,
+           "default:first_name:avg_scan_wait_latency" : 0,
+           "default:first_name:build_progress" : 100,
+           "default:first_name:num_requests" : 0,
+           "default:first_name:num_docs_indexed" : 0
         }
-
 
 ### Per Index Statistics
 
@@ -67,6 +79,29 @@ For each index following set of stats will be published with bucket:index\_name:
 ##### "default:first\_name32:num\_requests" : 4,
 Number of scan requests served by the indexer
 
+##### "default:first\_name:flush\_queue\_size" : 0,
+Number of items currently in the flusher queue
+
+##### "default:first\_name:num\_flush\_queued" : 0,
+Number of items inserted into flusher queue so far
+
+##### "default:first\_name:avg\_scan\_latency" : 0,
+Mean scan latency
+
+##### "default:first\_name:avg\_scan\_wait\_latency" : 0,
+Mean latency incurred in waiting for read snapshot
+
+##### "default:first\_name:num\_compactions" : 0,
+Number of compactions performed the indexer
+
+##### "default:first\_name:num\_compactions" : 0,
+Number of database commits performed by the indexer
+
+##### "default:first\_name:num\_snapshots" : 0,
+Number of storage snapshots generated
+
+##### "default:first\_name:avg\_ts\_interval" : 0,
+Average interval for snapshot generation
 
 ##### "default:first\_name32:num\_docs\_pending" : 0,
 Number of documents pending to be indexed
@@ -125,6 +160,18 @@ Total time taken (ns) for readable snapshot to be available for consistent query
 
 ##### "default:first\_name7:total\_scan\_duration" : 1693478681,
 Time taken for index scans
+
+##### "default:num\_mutations\_queued" : 1000,
+Total mutations queued so far
+
+#### "default:mutation\_queue\_size": 10,
+Current number of items in the mutations queue
+
+#### "memory\_quota" : 256000,
+Memory quota set for the indexer
+
+#### "memory\_used" : 1000,
+Memory used by the storage engine
 
 
 ## Indexer settings
