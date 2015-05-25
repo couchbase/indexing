@@ -158,6 +158,16 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 	addStat("needs_restart", is.needsRestart.Value())
 
 	for _, s := range is.indexes {
+		var scanLat, waitLat int64
+		reqs := s.numRequests.Value()
+
+		if reqs > 0 {
+			scanDur := s.scanDuration.Value()
+			waitDur := s.scanWaitDuration.Value()
+			scanLat = scanDur / reqs
+			waitLat = waitDur / reqs
+		}
+
 		prefix = fmt.Sprintf("%s:%s:", s.bucket, s.name)
 		addStat("total_scan_duration", s.scanDuration.Value())
 		addStat("insert_bytes", s.insertBytes.Value())
@@ -179,8 +189,8 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_snapshots", s.numSnapshots.Value())
 		addStat("num_compactions", s.numCompactions.Value())
 		addStat("flush_queue_size", s.flushQueueSize.Value())
-		addStat("avg_scan_latency", s.scanDuration.Value()/s.numRequests.Value())
-		addStat("avg_scan_wait_latency", s.scanWaitDuration.Value()/s.numRequests.Value())
+		addStat("avg_scan_latency", scanLat)
+		addStat("avg_scan_wait_latency", waitLat)
 		addStat("num_flush_queued", s.numFlushQueued.Value())
 	}
 
