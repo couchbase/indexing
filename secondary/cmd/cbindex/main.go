@@ -28,7 +28,6 @@ func usage(fset *flag.FlagSet) {
     cbindex -type list
     cbindex -type nodes
 - Misc
-    cbindex -type config -ckey=indexer.settings.log_override -cvalue="goforestdb/*=Trace"
     cbindex -par 100 -duration 10 benchmark
     `)
 }

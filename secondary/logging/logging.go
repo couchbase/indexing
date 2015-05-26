@@ -6,13 +6,10 @@ import "fmt"
 import "strings"
 import "time"
 import "bytes"
-import "strconv"
 import "net/http"
 import "io/ioutil"
-import "runtime"
 import "runtime/debug"
 import l "log"
-import rx "regexp"
 
 // Log levels
 type LogLevel int16
@@ -66,11 +63,6 @@ type Ender interface {
 //
 // Implementation
 //
-
-type overrideLoc struct {
-	matcher *rx.Regexp
-	level   LogLevel
-}
 
 // Messages administrator should eventually see.
 func (t LogLevel) String() string {
@@ -126,61 +118,41 @@ func Level(s string) LogLevel {
 type destination struct {
 	baselevel LogLevel
 	target    *l.Logger
-	overrides *[]overrideLoc
-}
-
-type stopClock struct {
-	comment string
-	skip    int
-	start   time.Time
-	log     *destination
 }
 
 func (log *destination) Warnf(format string, v ...interface{}) {
-	log.printf(Warn, 1, format, v...)
+	log.printf(Warn, format, v...)
 }
 
 // Errors that caused problems in execution logic.
 func (log *destination) Errorf(format string, v ...interface{}) {
-	log.printf(Error, 1, format, v...)
+	log.printf(Error, format, v...)
 }
 
 // Fatal messages are to be logged prior to exiting due to errors.
 func (log *destination) Fatalf(format string, v ...interface{}) {
-	log.printf(Fatal, 1, format, v...)
+	log.printf(Fatal, format, v...)
 }
 
 // Info messages are those that are logged but not expected to be read.
 func (log *destination) Infof(format string, v ...interface{}) {
-	log.printf(Info, 1, format, v...)
+	log.printf(Info, format, v...)
 }
 
 // Used for logging additional information that are not logged by info level
 // This may slightly impact performance
 func (log *destination) Verbosef(format string, v ...interface{}) {
-	log.printf(Verbose, 1, format, v...)
-}
-
-// Function timing. Use as:
-//    defer Time("Waiting for backfill").End()
-//     ... function to be timed
-// or
-//    timer := Timer("For vbucket %d mutation %d", vbid, seq)
-//     ... lines to be timed
-//    timer.End()
-//
-func (log *destination) Timer(format string, v ...interface{}) Ender {
-	return log.timer(1, format, v...)
+	log.printf(Verbose, format, v...)
 }
 
 // Debug messages to help analyze problem. Default off.
 func (log *destination) Debugf(format string, v ...interface{}) {
-	log.printf(Debug, 1, format, v...)
+	log.printf(Debug, format, v...)
 }
 
 // Execution trace showing the program flow. Default off.
 func (log *destination) Tracef(format string, v ...interface{}) {
-	log.printf(Trace, 1, format, v...)
+	log.printf(Trace, format, v...)
 }
 
 // Set the base log level
@@ -194,38 +166,35 @@ func (log *destination) StackTrace() string {
 }
 
 // Get profiling info
-func Profile(port string, endpoints ...string) func() string {
+func Profile(port string, endpoints ...string) string {
 	if strings.HasPrefix(port, ":") {
 		port = port[1:]
 	}
-	return func() string {
-		var buf bytes.Buffer
-		for _, endpoint := range endpoints {
-			addr := fmt.Sprintf("http://localhost:%s/debug/pprof/%s?debug=1", port, endpoint)
-			resp, err := http.Get(addr)
-			if err != nil {
-				continue
-			}
-			defer resp.Body.Close()
-			body, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				continue
-			}
-			buf.Write(body)
+	var buf bytes.Buffer
+	for _, endpoint := range endpoints {
+		addr := fmt.Sprintf("http://localhost:%s/debug/pprof/%s?debug=1", port, endpoint)
+		resp, err := http.Get(addr)
+		if err != nil {
+			continue
 		}
-		return buf.String()
+		defer resp.Body.Close()
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			continue
+		}
+		buf.Write(body)
 	}
+	return buf.String()
 }
 
 // Dump profiling info periodically
-func PeriodicProfile(port string, endpoints ...string) {
-	profiler := Profile(port, endpoints...)
+func PeriodicProfile(level LogLevel, port string, endpoints ...string) {
 	tick := time.NewTicker(5 * time.Minute)
 	go func() {
 		for {
 			select {
 			case <-tick.C:
-				LazyDebug(profiler)
+				SystemLogger.printf(level, "%v", Profile(port, endpoints...))
 			}
 		}
 	}()
@@ -233,85 +202,32 @@ func PeriodicProfile(port string, endpoints ...string) {
 
 // Run function only if output will be logged at debug level
 func (log *destination) LazyDebug(fn func() string) {
-	if log.isEnabled(Debug, 1) {
-		log.printf(Debug, 1, "%s", fn())
+	if log.IsEnabled(Debug) {
+		log.printf(Debug, "%s", fn())
 	}
 }
 
+// Run function only if output will be logged at verbose level
 func (log *destination) LazyVerbose(fn func() string) {
-	if log.isEnabled(Verbose, 1) {
-		log.printf(Verbose, 1, "%s", fn())
+	if log.IsEnabled(Verbose) {
+		log.printf(Verbose, "%s", fn())
 	}
 }
 
 // Run function only if output will be logged at trace level
 func (log *destination) LazyTrace(fn func() string) {
-	if log.isEnabled(Trace, 1) {
-		log.printf(Trace, 1, "%s", fn())
+	if log.IsEnabled(Trace) {
+		log.printf(Trace, "%s", fn())
 	}
-}
-
-// Add logging override. Format: filename[:line]=Level[,...]
-func (log *destination) AddOverride(line string) {
-	// infrequent, so clone to avoid locks
-	added := make([]overrideLoc, 0, 16)
-	if log.overrides != nil {
-		added = append(added, *log.overrides...)
-	}
-	specs := strings.Split(line, ",")
-	for _, spec := range specs {
-		kv := strings.Split(spec, "=")
-		if len(kv) != 2 {
-			continue
-		}
-		exp, slvl := kv[0], kv[1]
-		exp = strings.Replace(exp, `*`, `.*`, -1)
-		if !strings.Contains(exp, ":") {
-			exp += `:[\d]+`
-		}
-		exp = exp + "$"
-		level := Level(slvl)
-		re, err := rx.Compile(exp)
-		if err == nil {
-			entry := overrideLoc{matcher: re, level: level}
-			added = append(added, entry)
-		}
-	}
-	log.overrides = &added
-}
-
-// Clear all overrides
-func (log *destination) ClearOverrides() {
-	log.overrides = nil
-}
-
-// Stop the running timer and print timing
-func (watch *stopClock) End() {
-	elapsed := time.Since(watch.start).Nanoseconds()
-	watch.log.printf(Timing, watch.skip, "%.1f μs - %s", float64(elapsed)/1000, watch.comment)
 }
 
 // Check if enabled
-func (log *destination) isEnabled(at LogLevel, skip int) bool {
-	// normal production case
-	if log.overrides == nil {
-		return log.baselevel >= at
-	}
-
-	// unusual case, perhaps troubleshooting
-	_, file, line, _ := runtime.Caller(skip + 1)
-	loc := file + ":" + strconv.Itoa(line)
-	for _, spec := range *log.overrides {
-		if spec.matcher.MatchString(loc) {
-			return spec.level >= at
-		}
-	}
-
+func (log *destination) IsEnabled(at LogLevel) bool {
 	return log.baselevel >= at
 }
 
-func (log *destination) printf(at LogLevel, skip int, format string, v ...interface{}) {
-	if log.isEnabled(at, skip+1) {
+func (log *destination) printf(at LogLevel, format string, v ...interface{}) {
+	if log.IsEnabled(at) {
 		ts := time.Now().Format("2006-01-02T15:04:05.999Z-07:00")
 		log.target.Printf(ts+" ["+at.String()+"] "+format, v...)
 	}
@@ -326,34 +242,18 @@ func (log *destination) getStackTrace(skip int, stack []byte) string {
 	return buf.String()
 }
 
-func (log *destination) timer(skip int, format string, v ...interface{}) Ender {
-	if !log.isEnabled(Timing, skip) {
-		return emptyclock
-	}
-	comment := fmt.Sprintf(format, v...)
-	return &stopClock{comment: comment, skip: skip, start: time.Now(), log: log}
-}
-
-// No op clock
-var emptyclock = &emptyClock{}
-
-type emptyClock struct{}
-
-func (_ *emptyClock) End() {
-}
-
 // The default logger
 var SystemLogger destination
 
 func init() {
 	dest := l.New(os.Stdout, "", 0)
-	SystemLogger = destination{baselevel: Info, target: dest, overrides: nil}
+	SystemLogger = destination{baselevel: Info, target: dest}
 }
 
 // SetLogWriter sets a new default destination
 func SetLogWriter(w io.Writer) {
 	dest := l.New(w, "", 0)
-	SystemLogger = destination{baselevel: Info, target: dest, overrides: nil}
+	SystemLogger = destination{baselevel: Info, target: dest}
 }
 
 //
@@ -361,37 +261,37 @@ func SetLogWriter(w io.Writer) {
 // See correspond methods on destination for details
 //
 func Warnf(format string, v ...interface{}) {
-	SystemLogger.printf(Warn, 1, format, v...)
+	SystemLogger.printf(Warn, format, v...)
 }
 
 // Errorf to log message and warning messages will be logged.
 func Errorf(format string, v ...interface{}) {
-	SystemLogger.printf(Error, 1, format, v...)
+	SystemLogger.printf(Error, format, v...)
 }
 
 // Fatalf to log message and warning messages will be logged.
 func Fatalf(format string, v ...interface{}) {
-	SystemLogger.printf(Fatal, 1, format, v...)
+	SystemLogger.printf(Fatal, format, v...)
 }
 
 // Infof to log message at info level.
 func Infof(format string, v ...interface{}) {
-	SystemLogger.printf(Info, 1, format, v...)
+	SystemLogger.printf(Info, format, v...)
 }
 
 // Verbosef to log message at verbose level.
 func Verbosef(format string, v ...interface{}) {
-	SystemLogger.printf(Verbose, 1, format, v...)
+	SystemLogger.printf(Verbose, format, v...)
 }
 
 // Debugf to log message at info level.
 func Debugf(format string, v ...interface{}) {
-	SystemLogger.printf(Debug, 1, format, v...)
+	SystemLogger.printf(Debug, format, v...)
 }
 
 // Tracef to log message at info level.
 func Tracef(format string, v ...interface{}) {
-	SystemLogger.printf(Trace, 1, format, v...)
+	SystemLogger.printf(Trace, format, v...)
 }
 
 // StackTrace prints current stack at specified log level
@@ -399,43 +299,69 @@ func StackTrace() string {
 	return SystemLogger.getStackTrace(2, debug.Stack())
 }
 
-// Timing utility function
-func Timer(format string, v ...interface{}) Ender {
-	return SystemLogger.timer(2, format, v...)
-}
-
 // Set the base log level
 func SetLogLevel(to LogLevel) {
 	SystemLogger.SetLogLevel(to)
 }
 
-// Add logging override. Format: filename[:line]=Level[,...]
-func AddOverride(line string) {
-	SystemLogger.AddOverride(line)
-}
-
-// Clear all overrides
-func ClearOverrides() {
-	SystemLogger.ClearOverrides()
+// Check if logging is enabled
+func IsEnabled(lvl LogLevel) bool {
+	return SystemLogger.IsEnabled(lvl)
 }
 
 // Run function only if output will be logged at verbose level
 func LazyVerbose(fn func() string) {
-	if SystemLogger.isEnabled(Verbose, 1) {
-		SystemLogger.printf(Verbose, 1, "%s", fn())
+	if SystemLogger.IsEnabled(Verbose) {
+		SystemLogger.printf(Verbose, "%s", fn())
 	}
 }
 
 // Run function only if output will be logged at debug level
 func LazyDebug(fn func() string) {
-	if SystemLogger.isEnabled(Debug, 1) {
-		SystemLogger.printf(Debug, 1, "%s", fn())
+	if SystemLogger.IsEnabled(Debug) {
+		SystemLogger.printf(Debug, "%s", fn())
 	}
 }
 
 // Run function only if output will be logged at trace level
 func LazyTrace(fn func() string) {
-	if SystemLogger.isEnabled(Trace, 1) {
-		SystemLogger.printf(Trace, 1, "%s", fn())
+	if SystemLogger.IsEnabled(Trace) {
+		SystemLogger.printf(Trace, "%s", fn())
+	}
+}
+
+// Run function only if output will be logged at verbose level
+// Only %v is allowable in format string
+func LazyVerbosef(fmt string, fns ...func() string) {
+	if SystemLogger.IsEnabled(Verbose) {
+		snippets := make([]interface{}, len(fns))
+		for i, fn := range fns {
+			snippets[i] = fn()
+		}
+		SystemLogger.printf(Verbose, fmt, snippets...)
+	}
+}
+
+// Run function only if output will be logged at debug level
+// Only %v is allowable in format string
+func LazyDebugf(fmt string, fns ...func() string) {
+	if SystemLogger.IsEnabled(Debug) {
+		snippets := make([]interface{}, len(fns))
+		for i, fn := range fns {
+			snippets[i] = fn()
+		}
+		SystemLogger.printf(Debug, fmt, snippets...)
+	}
+}
+
+// Run function only if output will be logged at trace level
+// Only %v is allowable in format string
+func LazyTracef(fmt string, fns ...func() string) {
+	if SystemLogger.IsEnabled(Trace) {
+		snippets := make([]interface{}, len(fns))
+		for i, fn := range fns {
+			snippets[i] = fn()
+		}
+		SystemLogger.printf(Trace, fmt, snippets...)
 	}
 }

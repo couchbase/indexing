@@ -569,12 +569,6 @@ var SystemConfig = Config{
 		"debug",
 		false, // mutable
 	},
-	"indexer.settings.log_override": ConfigValue{
-		"",
-		"Indexer override log level.format is [relpath/]filename[:line]=LogLevel[,...] (wildcard * is allowed)",
-		"",
-		false, // mutable
-	},
 	"indexer.settings.scan_timeout": ConfigValue{
 		120000,
 		"timeout, in milliseconds, timeout for index scan processing",
@@ -642,12 +636,6 @@ var SystemConfig = Config{
 		"debug",
 		"Projector logging level",
 		"debug",
-		false, // mutable
-	},
-	"projector.settings.log_override": ConfigValue{
-		"",
-		"Projector override log level. format is [relpath/]filename[:line]=LogLevel[,...] (wildcard * is allowed)",
-		"",
 		false, // mutable
 	},
 }

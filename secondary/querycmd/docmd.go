@@ -68,8 +68,8 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset := flag.NewFlagSet("cmd", flag.ExitOnError)
 
 	// basic options
-	fset.StringVar(&cmdOptions.Server, "server", "•", "Cluster server address")
-	fset.StringVar(&cmdOptions.Auth, "auth", "•", "Auth user and password")
+	fset.StringVar(&cmdOptions.Server, "server", "", "Cluster server address")
+	fset.StringVar(&cmdOptions.Auth, "auth", "", "Auth user and password")
 	fset.StringVar(&cmdOptions.Bucket, "bucket", "", "Bucket name")
 	fset.StringVar(&cmdOptions.OpType, "type", "", "Command: scan|stats|scanAll|count|nodes|create|build|drop|list|config")
 	fset.StringVar(&cmdOptions.IndexName, "index", "", "Index name")
@@ -101,13 +101,19 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	}
 
 	// if server is not specified, try guessing
-	if cmdOptions.Server == "•" {
-		cmdOptions.Server = guessServer()
+	if cmdOptions.Server == "" {
+		if guess := guessServer(); guess != "" {
+			cmdOptions.Server = guess
+			fset.Set("server", guess)
+		}
 	}
 
 	// if server is not specified, try guessing
-	if cmdOptions.Auth == "•" {
-		cmdOptions.Auth = guessAuth(cmdOptions.Server)
+	if cmdOptions.Auth == "" {
+		if guess := guessAuth(cmdOptions.Server); guess != "" {
+			cmdOptions.Auth = guess
+			fset.Set("auth", guess)
+		}
 	}
 
 	// validate combinations
@@ -626,8 +632,11 @@ func guessServer() string {
 	return ""
 }
 
+//
+// For ease of testing. Will be removed soon.
+//
 func guessAuth(server string) string {
-	auths := []string{"Administrator:asdasd", "Administrator:couchbase"}
+	auths := []string{"Administrator:asdasd", "Administrator:couchbase", "Administrator:password"}
 	client := http.Client{}
 	for _, auth := range auths {
 		up := strings.Split(auth, ":")

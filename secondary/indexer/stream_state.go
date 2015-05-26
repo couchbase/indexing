@@ -627,9 +627,7 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 		}
 	}
 
-	if logging.Level(ss.config["settings.log_level"].String()) >= logging.Trace {
-		logging.Tracef("StreamState::updateHWT HWT Updated : %v", ts)
-	}
+	logging.Tracef("StreamState::updateHWT HWT Updated : %v", ts)
 }
 
 func (ss *StreamState) checkNewTSDue(streamId common.StreamId, bucket string) bool {

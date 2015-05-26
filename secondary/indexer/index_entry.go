@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 )
 
 var (
-	ErrSecKeyNil = errors.New("Secondary key array is empty")
+	ErrSecKeyNil     = errors.New("Secondary key array is empty")
+	ErrSecKeyTooLong = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", MAX_SEC_KEY_LEN))
 )
 
 // Special index keys
@@ -215,12 +217,16 @@ func (k *primaryKey) String() string {
 type secondaryKey []byte
 
 func NewSecondaryKey(key []byte) (IndexKey, error) {
+	if len(key) > MAX_SEC_KEY_LEN {
+		return nil, ErrSecKeyTooLong
+	}
+
 	if isNilJsonKey(key) {
 		return &NilIndexKey{}, nil
 	}
 
 	var err error
-	buf := make([]byte, 0, MAX_SEC_KEY_LEN)
+	buf := make([]byte, 0, MAX_SEC_KEY_BUFFER_LEN)
 	if buf, err = jsonEncoder.Encode(key, buf); err != nil {
 		return nil, err
 	}

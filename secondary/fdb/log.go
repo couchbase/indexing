@@ -14,8 +14,6 @@ type Logger interface {
 	Debugf(format string, v ...interface{})
 	// Program execution tracing. Not logged by default
 	Tracef(format string, v ...interface{})
-
-	LazyDebug(func() string)
 }
 
 type Dummy struct {
@@ -37,11 +35,6 @@ func (*Dummy) Debugf(_ string, _ ...interface{}) {
 }
 
 func (*Dummy) Tracef(_ string, _ ...interface{}) {
-}
-
-func (d *Dummy) LazyDebug(fn func() string) {
-	s := fn()
-	d.Debugf(s)
 }
 
 // Logger to use
