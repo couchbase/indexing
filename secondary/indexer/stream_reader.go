@@ -354,10 +354,13 @@ func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys) {
 		return fmt.Sprintf("MutationStreamReader::handleSingleMutation received mutation %v", mut)
 	})
 
+	// do stats.
+	if rstats, ok := r.stats.buckets[mut.meta.bucket]; ok {
+		rstats.mutationQueueSize.Add(1)
+		rstats.numMutationsQueued.Add(1)
+	}
 	//based on the index, enqueue the mutation in the right queue
 	if q, ok := r.bucketQueueMap[mut.meta.bucket]; ok {
-		r.stats.buckets[mut.meta.bucket].mutationQueueSize.Add(1)
-		r.stats.buckets[mut.meta.bucket].numMutationsQueued.Add(1)
 		q.queue.Enqueue(mut, mut.meta.vbucket)
 
 	} else {
