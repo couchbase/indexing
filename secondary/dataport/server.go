@@ -526,6 +526,12 @@ func doReceive(
 	pkt := nc.tpkt
 	msg := serverMessage{raddr: conn.RemoteAddr().String()}
 
+	var duration time.Duration
+	var start time.Time
+	var blocked bool
+
+	epoc := time.Now()
+	tick := time.Tick(time.Minute * 5) // log every 5 minutes.
 loop:
 	for {
 		timeoutMs := readDeadline * time.Millisecond
@@ -546,6 +552,9 @@ loop:
 
 		} else if vbs, ok := payload.([]*protobuf.VbKeyVersions); ok {
 			msg.cmd, msg.args = serverCmdVbKeyVersions, []interface{}{vbs}
+			if len(reqch) == cap(reqch) {
+				start, blocked = time.Now(), true
+			}
 			select {
 			case reqch <- []interface{}{msg}:
 			case <-worker:
@@ -554,6 +563,17 @@ loop:
 				fmsg := "%v worker %q exit: %v\n"
 				logging.Errorf(fmsg, prefix, msg.raddr, msg.err)
 				break loop
+			}
+			if blocked {
+				duration += time.Since(start)
+				blocked = false
+				select {
+				case <-tick:
+					percent := float64(duration) / float64(time.Since(epoc))
+					fmsg := "%v DATP -> Indexer %f%% blocked"
+					logging.Infof(fmsg, prefix, percent)
+				default:
+				}
 			}
 
 		} else {

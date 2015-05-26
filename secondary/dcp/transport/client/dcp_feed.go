@@ -778,7 +778,12 @@ func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 	defer close(rcvch)
 
 	var headerBuf [transport.HDR_LEN]byte
+	var duration time.Duration
+	var start time.Time
+	var blocked bool
 
+	epoc := time.Now()
+	tick := time.Tick(time.Minute * 5) // log every 5 minutes.
 	for {
 		pkt := transport.MCRequest{} // always a new instance.
 		bytes, err := pkt.Receive(conn.conn, headerBuf[:])
@@ -795,6 +800,20 @@ func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 			break
 		}
 		logging.Tracef("%v packet received %#v", feed.logPrefix, pkt)
+		if len(rcvch) == cap(rcvch) {
+			start, blocked = time.Now(), true
+		}
 		rcvch <- []interface{}{&pkt, bytes}
+		if blocked {
+			duration += time.Since(start)
+			blocked = false
+			select {
+			case <-tick:
+				percent := float64(duration) / float64(time.Since(epoc))
+				fmsg := "%v DCP-socket -> projector %f%% blocked"
+				logging.Infof(fmsg, feed.logPrefix, percent)
+			default:
+			}
+		}
 	}
 }
