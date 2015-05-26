@@ -75,6 +75,11 @@ func main() {
 	config.SetValue("indexer.streamMaintPort", *streamMaintPort)
 	config.SetValue("indexer.storage_dir", *storageDir)
 
+	storage_dir := config["indexer.storage_dir"].String()
+	if err := os.MkdirAll(storage_dir, 0755); err != nil {
+		common.CrashOnError(err)
+	}
+
 	_, msg := indexer.NewIndexer(config)
 
 	if msg.GetMsgType() != indexer.MSG_SUCCESS {
