@@ -35,9 +35,6 @@ var (
 	storageDir        = flag.String("storageDir", "./", "Index file storage directory path")
 	enableManager     = flag.Bool("enable_manager", true, "Enable Index Manager")
 	auth              = flag.String("auth", "", "Auth user and password")
-
-	// so we don't need to sync with ns_server for merge. remove this soon
-	unused = flag.String("log", "", "Ignored")
 )
 
 func main() {
