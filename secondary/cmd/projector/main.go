@@ -64,6 +64,8 @@ func main() {
 	defer platform.HideConsole(false)
 	c.SeedProcess()
 
+	logging.Infof("Projector started with command line: %v\n", os.Args)
+
 	cluster := argParse() // eg. "localhost:9000"
 
 	config := c.SystemConfig.Clone()
