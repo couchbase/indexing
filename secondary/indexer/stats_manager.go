@@ -135,7 +135,10 @@ func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name strin
 }
 
 func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
-	idx := s.indexes[id]
+	idx, ok := s.indexes[id]
+	if !ok {
+		return
+	}
 	delete(s.indexes, id)
 	b := s.buckets[idx.bucket]
 	b.indexCount--
