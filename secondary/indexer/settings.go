@@ -15,6 +15,7 @@ import (
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/pipeline"
 	"io/ioutil"
 	"net/http"
 	"time"
@@ -55,6 +56,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	ncpu := common.SetNumCPUs(config["indexer.settings.max_cpu_percent"].Int())
 	logging.Infof("Setting maxcpus = %d", ncpu)
 
+	setBlockPoolSize(nil, config)
 	setLogger(config)
 
 	http.HandleFunc("/settings", s.handleSettingsReq)
@@ -188,6 +190,7 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 		logging.Infof("New settings received: \n%s", string(value))
 		config := s.config.Clone()
 		config.Update(value)
+		setBlockPoolSize(s.config, config)
 		s.config = config
 
 		ncpu := common.SetNumCPUs(config["indexer.settings.max_cpu_percent"].Int())
@@ -239,4 +242,22 @@ func setLogger(config common.Config) {
 	level := logging.Level(logLevel)
 	logging.Infof("Setting log level to %v", level)
 	logging.SetLogLevel(level)
+}
+
+func setBlockPoolSize(o, n common.Config) {
+	var oldSz, newSz int
+	if o != nil {
+		oldSz = o["indexer.settings.bufferPoolBlockSize"].Int()
+	}
+
+	newSz = n["indexer.settings.bufferPoolBlockSize"].Int()
+
+	if oldSz < newSz {
+		pipeline.SetupBlockPool(newSz)
+		logging.Infof("Setting buffer block size to %d bytes", newSz)
+	} else if oldSz > newSz {
+		logging.Errorf("Setting buffer block size from %d to %d failed "+
+			" - Only sizes higher than current size is allowed during runtime",
+			oldSz, newSz)
+	}
 }

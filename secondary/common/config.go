@@ -631,7 +631,12 @@ var SystemConfig = Config{
 		uint64(50000),
 		false, // mutable
 	},
-
+	"indexer.settings.bufferPoolBlockSize": ConfigValue{
+		16 * 1024,
+		"Size of memory block in memory pool",
+		16 * 1024,
+		false,
+	},
 	"projector.settings.log_level": ConfigValue{
 		"debug",
 		"Projector logging level",
