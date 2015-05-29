@@ -421,15 +421,6 @@ loop:
 			switch feed.handleCommand(msg) {
 			case "ok":
 				feed.stale = 0
-
-			case "stale":
-				if feed.stale == 1 { // already gone stale.
-					logging.Warnf("%v feed collect stale...", feed.logPrefix)
-					break loop
-				}
-				logging.Warnf("%v feed mark stale...", feed.logPrefix)
-				feed.stale++
-
 			case "exit":
 				break loop
 			}
@@ -568,9 +559,16 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 
 	case fCmdStaleCheck:
 		respch := msg[1].(chan []interface{})
-		what := feed.staleCheck()
-		status = what
-		respch <- []interface{}{what}
+		status = feed.staleCheck()
+		if status == "stale" && feed.stale == 1 { // already gone stale.
+			status = "exit"
+			feed.shutdown(feed.opaque)
+			logging.Warnf("%v feed collect stale...", feed.logPrefix)
+		} else if status == "stale" {
+			logging.Warnf("%v feed mark stale...", feed.logPrefix)
+			feed.stale++
+		}
+		respch <- []interface{}{status}
 
 	case fCmdGetTopicResponse:
 		respch := msg[1].(chan []interface{})
@@ -603,7 +601,7 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 		if len(feed.endpoints) == 0 {
 			fmsg := "%v no endpoint left automatic shutdown\n"
 			logging.Infof(fmsg, feed.logPrefix)
-			respch <- []interface{}{feed.shutdown(0x0 /*opaque*/)}
+			respch <- []interface{}{feed.shutdown(feed.opaque /*opaque*/)}
 			status = "exit"
 		}
 
