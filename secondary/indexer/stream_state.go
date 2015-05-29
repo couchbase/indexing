@@ -515,13 +515,21 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 		if !(seqno >= snapBegin && seqno <= snapEnd) {
 			// First, use the last flush TS seqno if avaliable
 			if fts, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && fts != nil {
+				repairTs.Snapshots[vbno][0] = fts.Snapshots[vbno][0]
+				repairTs.Snapshots[vbno][1] = fts.Snapshots[vbno][1]
 				repairTs.Seqnos[vbno] = fts.Seqnos[vbno]
+				snapBegin = repairTs.Snapshots[vbno][0]
+				snapEnd = repairTs.Snapshots[vbno][1]
 			}
 
 			// If last flush TS is still out-of-bound, use last Snap-aligned flushed TS if available
 			if !(repairTs.Seqnos[vbno] >= snapBegin && repairTs.Seqnos[vbno] <= snapEnd) {
 				if fts, ok := ss.streamBucketLastSnapAlignFlushedTsMap[streamId][bucket]; ok && fts != nil {
+					repairTs.Snapshots[vbno][0] = fts.Snapshots[vbno][0]
+					repairTs.Snapshots[vbno][1] = fts.Snapshots[vbno][1]
 					repairTs.Seqnos[vbno] = fts.Seqnos[vbno]
+					snapBegin = repairTs.Snapshots[vbno][0]
+					snapEnd = repairTs.Snapshots[vbno][1]
 				}
 			}
 
@@ -529,7 +537,11 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 			if !(repairTs.Seqnos[vbno] >= snapBegin && repairTs.Seqnos[vbno] <= snapEnd) {
 				if rts, ok := ss.streamBucketRestartTsMap[streamId][bucket]; ok && rts != nil {
 					//if no flush has been done yet, use restart TS
+					repairTs.Snapshots[vbno][0] = rts.Snapshots[vbno][0]
+					repairTs.Snapshots[vbno][1] = rts.Snapshots[vbno][1]
 					repairTs.Seqnos[vbno] = rts.Seqnos[vbno]
+					snapBegin = repairTs.Snapshots[vbno][0]
+					snapEnd = repairTs.Snapshots[vbno][1]
 				}
 			}
 
