@@ -133,6 +133,7 @@ const (
 	fCmdGetTopicResponse
 	fCmdGetStatistics
 	fCmdResetConfig
+	fCmdDeleteEndpoint
 )
 
 // ResetConfig for this feed.
@@ -151,7 +152,11 @@ func (feed *Feed) MutationTopic(
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{fCmdStart, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
-	return resp[0].(*protobuf.TopicResponse), c.OpError(err, resp, 1)
+	err = c.OpError(err, resp, 1)
+	if err != nil {
+		return nil, err
+	}
+	return resp[0].(*protobuf.TopicResponse), nil
 }
 
 // RestartVbuckets will restart upstream vbuckets for specified buckets.
@@ -162,7 +167,11 @@ func (feed *Feed) RestartVbuckets(
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{fCmdRestartVbuckets, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
-	return resp[0].(*protobuf.TopicResponse), c.OpError(err, resp, 1)
+	err = c.OpError(err, resp, 1)
+	if err != nil {
+		return nil, err
+	}
+	return resp[0].(*protobuf.TopicResponse), nil
 }
 
 // ShutdownVbuckets will shutdown streams for
@@ -186,7 +195,11 @@ func (feed *Feed) AddBuckets(
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{fCmdAddBuckets, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
-	return resp[0].(*protobuf.TopicResponse), c.OpError(err, resp, 1)
+	err = c.OpError(err, resp, 1)
+	if err != nil {
+		return nil, err
+	}
+	return resp[0].(*protobuf.TopicResponse), nil
 }
 
 // DelBuckets will remove buckets and all its upstream
@@ -255,8 +268,11 @@ func (feed *Feed) StaleCheck() (string, error) {
 func (feed *Feed) GetTopicResponse() *protobuf.TopicResponse {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{fCmdGetTopicResponse, respch}
-	resp, _ := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
-	return resp[0].(*protobuf.TopicResponse)
+	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	if resp != nil && err == nil {
+		return resp[0].(*protobuf.TopicResponse)
+	}
+	return nil
 }
 
 // GetStatistics for this feed.
@@ -264,8 +280,11 @@ func (feed *Feed) GetTopicResponse() *protobuf.TopicResponse {
 func (feed *Feed) GetStatistics() c.Statistics {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{fCmdGetStatistics, respch}
-	resp, _ := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
-	return resp[0].(c.Statistics)
+	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	if resp != nil && err == nil {
+		return resp[0].(c.Statistics)
+	}
+	return nil
 }
 
 // Shutdown feed, its upstream connection with kv and downstream endpoints.
@@ -273,6 +292,15 @@ func (feed *Feed) GetStatistics() c.Statistics {
 func (feed *Feed) Shutdown(opaque uint16) error {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{fCmdShutdown, opaque, respch}
+	_, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return err
+}
+
+// DeleteEndpoint will delete the specified endpoint address
+// from feed.
+func (feed *Feed) DeleteEndpoint(raddr string) error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdDeleteEndpoint, raddr, respch}
 	_, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return err
 }
@@ -393,15 +421,6 @@ loop:
 			switch feed.handleCommand(msg) {
 			case "ok":
 				feed.stale = 0
-
-			case "stale":
-				if feed.stale == 1 { // already gone stale.
-					logging.Warnf("%v feed collect stale...", feed.logPrefix)
-					break loop
-				}
-				logging.Warnf("%v feed mark stale...", feed.logPrefix)
-				feed.stale++
-
 			case "exit":
 				break loop
 			}
@@ -540,9 +559,16 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 
 	case fCmdStaleCheck:
 		respch := msg[1].(chan []interface{})
-		what := feed.staleCheck()
-		status = what
-		respch <- []interface{}{what}
+		status = feed.staleCheck()
+		if status == "stale" && feed.stale == 1 { // already gone stale.
+			status = "exit"
+			feed.shutdown(feed.opaque)
+			logging.Warnf("%v feed collect stale...", feed.logPrefix)
+		} else if status == "stale" {
+			logging.Warnf("%v feed mark stale...", feed.logPrefix)
+			feed.stale++
+		}
+		respch <- []interface{}{status}
 
 	case fCmdGetTopicResponse:
 		respch := msg[1].(chan []interface{})
@@ -562,6 +588,22 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 		respch := msg[2].(chan []interface{})
 		respch <- []interface{}{feed.shutdown(opaque)}
 		status = "exit"
+
+	case fCmdDeleteEndpoint:
+		raddr := msg[1].(string)
+		respch := msg[2].(chan []interface{})
+		endpoint, ok := feed.endpoints[raddr]
+		if ok && !endpoint.Ping() { // delete endpoint only if not alive.
+			delete(feed.endpoints, raddr)
+			logging.Infof("%v endpoint %v deleted\n", feed.logPrefix, raddr)
+		}
+		// if there are no more endpoints, shutdown the feed.
+		if len(feed.endpoints) == 0 {
+			fmsg := "%v no endpoint left automatic shutdown\n"
+			logging.Infof(fmsg, feed.logPrefix)
+			respch <- []interface{}{feed.shutdown(feed.opaque /*opaque*/)}
+			status = "exit"
+		}
 
 	}
 	return status
@@ -996,6 +1038,7 @@ func (feed *Feed) repairEndpoints(
 				err = e
 				continue
 			}
+			go feed.watchEndpoint(raddr, endpoint)
 			fmsg := "%v ##%x endpoint %q restarted\n"
 			logging.Infof(fmsg, prefix, opaque, raddr)
 
@@ -1362,6 +1405,7 @@ func (feed *Feed) startEndpoints(
 					err = e
 					continue
 				}
+				go feed.watchEndpoint(raddr, endpoint)
 				fmsg := "%v ##%x endpoint %q started\n"
 				logging.Infof(fmsg, prefix, opaque, raddr)
 
@@ -1608,6 +1652,14 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 // generate a unique opaque identifier.
 func newDCPConnectionName(bucketn, topic string, uuid uint64) string {
 	return fmt.Sprintf("proj-%s-%s-%v", bucketn, topic, uuid)
+}
+
+//---- endpoint watcher
+
+func (feed *Feed) watchEndpoint(raddr string, endpoint c.RouterEndpoint) {
+	err := endpoint.WaitForExit() // <-- will block until endpoint exits.
+	logging.Debugf("%v endpoint exited: %v", err)
+	feed.DeleteEndpoint(raddr)
 }
 
 //---- local function

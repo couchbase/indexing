@@ -227,10 +227,10 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.dataport.keyChanSize": ConfigValue{
-		50000,
+		100000,
 		"channel size of dataport endpoints data input, " +
 			"does not affect existing feeds.",
-		50000,
+		100000,
 		true, // immutable
 	},
 	"projector.dataport.bufferSize": ConfigValue{

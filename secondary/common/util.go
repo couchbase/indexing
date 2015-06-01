@@ -189,10 +189,14 @@ func FailsafeOpNoblock(
 func OpError(err error, vals []interface{}, idx int) error {
 	if err != nil {
 		return err
-	} else if vals[idx] == nil {
-		return nil
+	} else if vals != nil {
+		if vals[idx] != nil {
+			return vals[idx].(error)
+		} else {
+			return nil
+		}
 	}
-	return vals[idx].(error)
+	return nil
 }
 
 // cbauth admin authentication helper

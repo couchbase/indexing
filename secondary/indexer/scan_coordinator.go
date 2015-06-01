@@ -664,7 +664,7 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 		return
 	}
 
-	logging.Infof("%s RESPONSE count:%d status:ok", req.LogPrefix, rows)
+	logging.Verbosef("%s RESPONSE count:%d status:ok", req.LogPrefix, rows)
 	err = w.Count(rows)
 	s.handleError(req.LogPrefix, err)
 }
@@ -702,7 +702,7 @@ func (s *scanCoordinator) handleStatsRequest(req *ScanRequest, w ScanResponseWri
 		return
 	}
 
-	logging.Infof("%s RESPONSE status:ok", req.LogPrefix)
+	logging.Verbosef("%s RESPONSE status:ok", req.LogPrefix)
 	err = w.Stats(rows, 0, nil, nil)
 	s.handleError(req.LogPrefix, err)
 }

@@ -434,7 +434,6 @@ func (s *Server) jumboErrorHandler(
 func (s *Server) logStats(hostUuids keeper) {
 	bucketkvs := make(map[string][]uint64)    // bucket -> []count
 	bucketseqnos := make(map[string][]uint64) // bucket -> []seqno
-	total := uint64(0)
 	for _, avb := range hostUuids {
 		counts, ok := bucketkvs[avb.bucket]
 		seqnos, ok := bucketseqnos[avb.bucket]
@@ -449,9 +448,9 @@ func (s *Server) logStats(hostUuids keeper) {
 	}
 	for bucket, counts := range bucketkvs {
 		seqnos := bucketseqnos[bucket]
-		fmsg := "%v bucket %v total received key-versions: %v, %v\n"
-		logging.Infof(fmsg, s.logPrefix, total, counts)
-		fmsg = "%v bucket %v latest sequence numbers %v\n"
+		fmsg := "%v bucket total received key-versions: %v\n"
+		logging.Infof(fmsg, s.logPrefix, counts)
+		fmsg = "%v bucket latest sequence numbers: %v\n"
 		logging.Infof(fmsg, s.logPrefix, seqnos)
 	}
 }
@@ -527,6 +526,12 @@ func doReceive(
 	pkt := nc.tpkt
 	msg := serverMessage{raddr: conn.RemoteAddr().String()}
 
+	var duration time.Duration
+	var start time.Time
+	var blocked bool
+
+	epoc := time.Now()
+	tick := time.Tick(time.Minute * 5) // log every 5 minutes.
 loop:
 	for {
 		timeoutMs := readDeadline * time.Millisecond
@@ -547,6 +552,9 @@ loop:
 
 		} else if vbs, ok := payload.([]*protobuf.VbKeyVersions); ok {
 			msg.cmd, msg.args = serverCmdVbKeyVersions, []interface{}{vbs}
+			if len(reqch) == cap(reqch) {
+				start, blocked = time.Now(), true
+			}
 			select {
 			case reqch <- []interface{}{msg}:
 			case <-worker:
@@ -555,6 +563,17 @@ loop:
 				fmsg := "%v worker %q exit: %v\n"
 				logging.Errorf(fmsg, prefix, msg.raddr, msg.err)
 				break loop
+			}
+			if blocked {
+				duration += time.Since(start)
+				blocked = false
+				select {
+				case <-tick:
+					percent := float64(duration) / float64(time.Since(epoc))
+					fmsg := "%v DATP -> Indexer %f%% blocked"
+					logging.Infof(fmsg, prefix, percent)
+				default:
+				}
 			}
 
 		} else {

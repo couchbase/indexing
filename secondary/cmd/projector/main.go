@@ -40,10 +40,6 @@ func argParse() string {
 	flag.StringVar(&options.auth, "auth", "",
 		"Auth user and password")
 
-	// so we don't need to sync merge with ns_server. remove soon
-	var unused string
-	flag.StringVar(&unused, "debug", "", "Not Used")
-
 	flag.Parse()
 
 	args := flag.Args()
@@ -63,6 +59,8 @@ func main() {
 	platform.HideConsole(true)
 	defer platform.HideConsole(false)
 	c.SeedProcess()
+
+	logging.Infof("Projector started with command line: %v\n", os.Args)
 
 	cluster := argParse() // eg. "localhost:9000"
 

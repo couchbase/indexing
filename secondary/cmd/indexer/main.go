@@ -35,9 +35,6 @@ var (
 	storageDir        = flag.String("storageDir", "./", "Index file storage directory path")
 	enableManager     = flag.Bool("enable_manager", true, "Enable Index Manager")
 	auth              = flag.String("auth", "", "Auth user and password")
-
-	// so we don't need to sync with ns_server for merge. remove this soon
-	unused = flag.String("log", "", "Ignored")
 )
 
 func main() {
@@ -74,6 +71,11 @@ func main() {
 	config.SetValue("indexer.streamCatchupPort", *streamCatchupPort)
 	config.SetValue("indexer.streamMaintPort", *streamMaintPort)
 	config.SetValue("indexer.storage_dir", *storageDir)
+
+	storage_dir := config["indexer.storage_dir"].String()
+	if err := os.MkdirAll(storage_dir, 0755); err != nil {
+		common.CrashOnError(err)
+	}
 
 	_, msg := indexer.NewIndexer(config)
 

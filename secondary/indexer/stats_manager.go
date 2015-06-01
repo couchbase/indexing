@@ -23,6 +23,19 @@ import (
 	"unsafe"
 )
 
+type BucketStats struct {
+	bucket     string
+	indexCount int
+
+	mutationQueueSize  stats.Int64Val
+	numMutationsQueued stats.Int64Val
+}
+
+func (s *BucketStats) Init() {
+	s.mutationQueueSize.Init()
+	s.numMutationsQueued.Init()
+}
+
 type IndexStats struct {
 	name, bucket string
 
@@ -44,9 +57,10 @@ type IndexStats struct {
 	numCommits       stats.Int64Val
 	numSnapshots     stats.Int64Val
 	numCompactions   stats.Int64Val
-
-	avgTsInterval stats.Int64Val
-	lastTsTime    stats.Int64Val
+	flushQueueSize   stats.Int64Val
+	avgTsInterval    stats.Int64Val
+	lastTsTime       stats.Int64Val
+	numFlushQueued   stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -82,10 +96,13 @@ func (s *IndexStats) Init() {
 	s.numCommits.Init()
 	s.numSnapshots.Init()
 	s.numCompactions.Init()
+	s.flushQueueSize.Init()
+	s.numFlushQueued.Init()
 }
 
 type IndexerStats struct {
 	indexes map[common.IndexInstId]*IndexStats
+	buckets map[string]*BucketStats
 
 	numConnections stats.Int64Val
 	memoryQuota    stats.Int64Val
@@ -95,6 +112,7 @@ type IndexerStats struct {
 
 func (s *IndexerStats) Init() {
 	s.indexes = make(map[common.IndexInstId]*IndexStats)
+	s.buckets = make(map[string]*BucketStats)
 	s.numConnections.Init()
 	s.memoryQuota.Init()
 	s.memoryUsed.Init()
@@ -105,10 +123,28 @@ func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name strin
 	idxStats := &IndexStats{name: name, bucket: bucket}
 	idxStats.Init()
 	s.indexes[id] = idxStats
+
+	b, ok := s.buckets[bucket]
+	if !ok {
+		b = &BucketStats{bucket: bucket}
+		b.Init()
+		s.buckets[bucket] = b
+	}
+
+	b.indexCount++
 }
 
 func (s *IndexerStats) RemoveIndex(id common.IndexInstId) {
+	idx, ok := s.indexes[id]
+	if !ok {
+		return
+	}
 	delete(s.indexes, id)
+	b := s.buckets[idx.bucket]
+	b.indexCount--
+	if b.indexCount == 0 {
+		delete(s.buckets, idx.bucket)
+	}
 }
 
 func (is IndexerStats) MarshalJSON() ([]byte, error) {
@@ -125,6 +161,16 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 	addStat("needs_restart", is.needsRestart.Value())
 
 	for _, s := range is.indexes {
+		var scanLat, waitLat int64
+		reqs := s.numRequests.Value()
+
+		if reqs > 0 {
+			scanDur := s.scanDuration.Value()
+			waitDur := s.scanWaitDuration.Value()
+			scanLat = scanDur / reqs
+			waitLat = waitDur / reqs
+		}
+
 		prefix = fmt.Sprintf("%s:%s:", s.bucket, s.name)
 		addStat("total_scan_duration", s.scanDuration.Value())
 		addStat("insert_bytes", s.insertBytes.Value())
@@ -145,6 +191,16 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_commits", s.numCommits.Value())
 		addStat("num_snapshots", s.numSnapshots.Value())
 		addStat("num_compactions", s.numCompactions.Value())
+		addStat("flush_queue_size", s.flushQueueSize.Value())
+		addStat("avg_scan_latency", scanLat)
+		addStat("avg_scan_wait_latency", waitLat)
+		addStat("num_flush_queued", s.numFlushQueued.Value())
+	}
+
+	for _, s := range is.buckets {
+		prefix = fmt.Sprintf("%s:", s.bucket)
+		addStat("mutation_queue_size", s.mutationQueueSize.Value())
+		addStat("num_mutations_queued", s.numMutationsQueued.Value())
 	}
 
 	return json.Marshal(statsMap)

@@ -92,6 +92,7 @@ const (
 	kvCmdTs
 	kvCmdGetStats
 	kvCmdResetConfig
+	kvCmdReloadHeartBeat
 	kvCmdClose
 )
 
@@ -145,6 +146,14 @@ func (kvdata *KVData) ResetConfig(config c.Config) error {
 	return err
 }
 
+// ReloadHeartbeat for kvdata.
+func (kvdata *KVData) ReloadHeartbeat() error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{kvCmdReloadHeartBeat, respch}
+	_, err := c.FailsafeOp(kvdata.sbch, respch, cmd, kvdata.finch)
+	return err
+}
+
 // Close kvdata kv data path, synchronous call.
 func (kvdata *KVData) Close() error {
 	respch := make(chan []interface{}, 1)
@@ -173,7 +182,7 @@ func (kvdata *KVData) runScatter(
 	// stats
 	eventCount, addCount, delCount := int64(0), int64(0), int64(0)
 	tsCount := int64(0)
-	heartBeat := time.Tick(kvdata.syncTimeout)
+	heartBeat := time.After(kvdata.syncTimeout)
 	fmsg := "%v ##%x heartbeat (%v) loaded ...\n"
 	logging.Infof(fmsg, kvdata.logPrefix, kvdata.opaque, kvdata.syncTimeout)
 
@@ -187,16 +196,27 @@ loop:
 			kvdata.scatterMutation(m, ts)
 			eventCount++
 
-			// all vbuckets have ended for this stream, exit kvdata.
-			// FIXME : For now don't cleanup the bucket because of this.
-			//if len(kvdata.vrs) == 0 {
-			//    break loop
-			//}
-
 		case <-heartBeat:
+			vrs := make([]*VbucketRoutine, 0, len(kvdata.vrs))
 			for _, vr := range kvdata.vrs {
-				vr.SyncPulse()
+				vrs = append(vrs, vr)
 			}
+
+			heartBeat = nil
+
+			// propogate the sync-pulse via separate routine so that
+			// the data-path is not blocked.
+			go func() {
+				// during cleanup, as long as the vbucket-routines are
+				// shutdown this routine will eventually exit.
+				for _, vr := range vrs {
+					vr.SyncPulse()
+				}
+				if err := kvdata.ReloadHeartbeat(); err != nil {
+					fmsg := "%v ##%x ReloadHeartbeat(): %v\n"
+					logging.Errorf(fmsg, kvdata.logPrefix, kvdata.opaque, err)
+				}
+			}()
 
 		case msg := <-kvdata.sbch:
 			cmd := msg[0].(byte)
@@ -277,12 +297,13 @@ loop:
 
 			case kvCmdResetConfig:
 				config, respch := msg[1].(c.Config), msg[2].(chan []interface{})
-				if cv, ok := config["syncTimeout"]; ok {
-					kvdata.syncTimeout = time.Duration(cv.Int()) * time.Millisecond
+				if cv, ok := config["syncTimeout"]; ok && heartBeat != nil {
+					kvdata.syncTimeout = time.Duration(cv.Int())
+					kvdata.syncTimeout *= time.Millisecond
 					logging.Infof(
-						"%v ##%x heart-beat reloaded: %v\n",
+						"%v ##%x heart-beat settings reloaded: %v\n",
 						kvdata.logPrefix, kvdata.opaque, kvdata.syncTimeout)
-					heartBeat = time.Tick(kvdata.syncTimeout)
+					heartBeat = time.After(kvdata.syncTimeout)
 				}
 				for _, vr := range kvdata.vrs {
 					if err := vr.ResetConfig(config); err != nil {
@@ -290,6 +311,11 @@ loop:
 					}
 				}
 				kvdata.config = kvdata.config.Override(config)
+				respch <- []interface{}{nil}
+
+			case kvCmdReloadHeartBeat:
+				respch := msg[1].(chan []interface{})
+				heartBeat = time.After(kvdata.syncTimeout)
 				respch <- []interface{}{nil}
 
 			case kvCmdClose:

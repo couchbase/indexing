@@ -55,6 +55,7 @@ type mutationMgr struct {
 	flock sync.Mutex //fine-grain lock for streamFlusherStopChMap
 
 	config common.Config
+	stats  IndexerStatsHolder
 }
 
 //NewMutationManager creates a new Mutation Manager which listens for commands from
@@ -362,7 +363,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	cmdCh := make(MsgChannel)
 
 	reader, errMsg := CreateMutationStreamReader(streamId, bucketQueueMap,
-		cmdCh, m.mutMgrRecvCh, DEFAULT_NUM_STREAM_READER_WORKERS)
+		cmdCh, m.mutMgrRecvCh, DEFAULT_NUM_STREAM_READER_WORKERS, m.stats.Get())
 
 	if reader == nil {
 		//send the error back on supv channel
@@ -809,7 +810,7 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 	defer m.lock.Unlock()
 
 	q := m.streamBucketQueueMap[streamId][bucket]
-	go m.persistMutationQueue(q, streamId, bucket, ts, changeVec)
+	go m.persistMutationQueue(q, streamId, bucket, ts, changeVec, m.stats.Get())
 	m.supvCmdch <- &MsgSuccess{}
 
 }
@@ -817,7 +818,7 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 //persistMutationQueue implements the actual persist for the queue
 func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 	streamId common.StreamId, bucket string, ts *common.TsVbuuid,
-	changeVec []bool) {
+	changeVec []bool, stats *IndexerStats) {
 
 	m.flock.Lock()
 	defer m.flock.Unlock()
@@ -829,7 +830,7 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 	go func(config common.Config) {
 		defer m.flusherWaitGroup.Done()
 
-		flusher := NewFlusher(config)
+		flusher := NewFlusher(config, stats)
 		sts := getSeqTsFromTsVbuuid(ts)
 		msgch := flusher.PersistUptoTS(q.queue, streamId, ts.Bucket,
 			m.indexInstMap, m.indexPartnMap, sts, changeVec, stopch)
@@ -875,14 +876,14 @@ func (m *mutationMgr) handleDrainMutationQueue(cmd Message) {
 	defer m.lock.Unlock()
 
 	q := m.streamBucketQueueMap[streamId][bucket]
-	go m.drainMutationQueue(q, streamId, bucket, ts, changeVec)
+	go m.drainMutationQueue(q, streamId, bucket, ts, changeVec, m.stats.Get())
 	m.supvCmdch <- &MsgSuccess{}
 }
 
 //drainMutationQueue implements the actual drain for the queue
 func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 	streamId common.StreamId, bucket string, ts *common.TsVbuuid,
-	changeVec []bool) {
+	changeVec []bool, stats *IndexerStats) {
 
 	m.flock.Lock()
 	defer m.flock.Unlock()
@@ -894,7 +895,7 @@ func (m *mutationMgr) drainMutationQueue(q IndexerMutationQueue,
 	go func(config common.Config) {
 		defer m.flusherWaitGroup.Done()
 
-		flusher := NewFlusher(config)
+		flusher := NewFlusher(config, stats)
 		sts := getSeqTsFromTsVbuuid(ts)
 		msgch := flusher.DrainUptoTS(q.queue, streamId, ts.Bucket,
 			sts, changeVec, stopch)
@@ -931,7 +932,7 @@ func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 	q := m.streamBucketQueueMap[streamId][bucket]
 
 	go func(config common.Config) {
-		flusher := NewFlusher(config)
+		flusher := NewFlusher(config, m.stats.Get())
 		ts := flusher.GetQueueHWT(q.queue)
 		m.supvCmdch <- &MsgTimestamp{ts: ts}
 	}(m.config)
@@ -951,7 +952,7 @@ func (m *mutationMgr) handleGetMutationQueueLWT(cmd Message) {
 	q := m.streamBucketQueueMap[streamId][bucket]
 
 	go func(config common.Config) {
-		flusher := NewFlusher(config)
+		flusher := NewFlusher(config, m.stats.Get())
 		ts := flusher.GetQueueLWT(q.queue)
 		m.supvCmdch <- &MsgTimestamp{ts: ts}
 	}(m.config)
@@ -965,9 +966,10 @@ func (m *mutationMgr) handleUpdateIndexInstMap(cmd Message) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	indexInstMap := cmd.(*MsgUpdateInstMap).GetIndexInstMap()
+	req := cmd.(*MsgUpdateInstMap)
+	indexInstMap := req.GetIndexInstMap()
 	m.indexInstMap = common.CopyIndexInstMap(indexInstMap)
-
+	m.stats.Set(req.GetStatsObject())
 	m.supvCmdch <- &MsgSuccess{}
 
 }

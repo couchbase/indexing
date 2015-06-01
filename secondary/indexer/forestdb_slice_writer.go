@@ -36,7 +36,8 @@ var (
 //Delete can be called concurrently.
 //Returns error in case slice cannot be initialized.
 func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
-	idxInstId common.IndexInstId, isPrimary bool, sysconf common.Config) (*fdbSlice, error) {
+	idxInstId common.IndexInstId, isPrimary bool,
+	sysconf common.Config, idxStats *IndexStats) (*fdbSlice, error) {
 
 	info, err := os.Stat(path)
 	if err != nil || err == nil && info.IsDir() {
@@ -45,6 +46,7 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 
 	filepath := newFdbFile(path, false)
 	slice := &fdbSlice{}
+	slice.idxStats = idxStats
 
 	config := forestdb.DefaultConfig()
 	config.SetDurabilityOpt(forestdb.DRB_ASYNC)
@@ -174,6 +176,8 @@ type fdbSlice struct {
 	//captured by the stats library
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
+
+	idxStats *IndexStats
 }
 
 func (fdb *fdbSlice) IncrRef() {
@@ -203,10 +207,10 @@ func (fdb *fdbSlice) DecrRef() {
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Insert(key []byte, docid []byte) error {
-
+	fdb.idxStats.flushQueueSize.Add(1)
+	fdb.idxStats.numFlushQueued.Add(1)
 	fdb.cmdCh <- &indexItem{key: key, docid: docid}
 	return fdb.fatalDbErr
-
 }
 
 //Delete will delete the given document from slice.
@@ -214,10 +218,10 @@ func (fdb *fdbSlice) Insert(key []byte, docid []byte) error {
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Delete(docid []byte) error {
-
+	fdb.idxStats.flushQueueSize.Add(1)
+	fdb.idxStats.numFlushQueued.Add(1)
 	fdb.cmdCh <- docid
 	return fdb.fatalDbErr
-
 }
 
 //handleCommands keep listening to any buffered
@@ -236,7 +240,6 @@ loop:
 	for {
 		select {
 		case c = <-fdb.cmdCh:
-
 			switch c.(type) {
 
 			case *indexItem:
@@ -257,6 +260,8 @@ loop:
 				logging.Errorf("ForestDBSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v Received "+
 					"Unknown Command %v", fdb.id, fdb.idxInstId, c)
 			}
+
+			fdb.idxStats.flushQueueSize.Add(-1)
 
 		case <-fdb.stopCh[workerId]:
 			fdb.stopCh[workerId] <- true
