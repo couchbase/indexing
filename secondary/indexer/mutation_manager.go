@@ -450,7 +450,7 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 
 	if bucketMapDirty {
 		respMsg := m.sendMsgToStreamReader(streamId,
-			&MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap})
+			&MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap, stats: m.stats.Get()})
 
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures

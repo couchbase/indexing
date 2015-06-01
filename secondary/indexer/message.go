@@ -273,6 +273,7 @@ func (m *MsgStreamInfo) String() string {
 //STREAM_READER_UPDATE_QUEUE_MAP
 type MsgUpdateBucketQueue struct {
 	bucketQueueMap BucketQueueMap
+	stats          *IndexerStats
 }
 
 func (m *MsgUpdateBucketQueue) GetMsgType() MsgType {
@@ -281,6 +282,10 @@ func (m *MsgUpdateBucketQueue) GetMsgType() MsgType {
 
 func (m *MsgUpdateBucketQueue) GetBucketQueueMap() BucketQueueMap {
 	return m.bucketQueueMap
+}
+
+func (m *MsgUpdateBucketQueue) GetStatsObject() *IndexerStats {
+	return m.stats
 }
 
 func (m *MsgUpdateBucketQueue) String() string {
