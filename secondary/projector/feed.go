@@ -1658,7 +1658,7 @@ func newDCPConnectionName(bucketn, topic string, uuid uint64) string {
 
 func (feed *Feed) watchEndpoint(raddr string, endpoint c.RouterEndpoint) {
 	err := endpoint.WaitForExit() // <-- will block until endpoint exits.
-	logging.Debugf("%v endpoint exited: %v", err)
+	logging.Infof("%v endpoint exited: %v", err)
 	feed.DeleteEndpoint(raddr)
 }
 

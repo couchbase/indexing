@@ -155,7 +155,7 @@ func (vr *VbucketRoutine) run(reqch chan []interface{}, seqno uint64) {
 			logging.Errorf(fmsg, vr.logPrefix, vr.opaque)
 
 		} else { // publish stream-end
-			logging.Infof("%v ##%x StreamEnd\n", vr.logPrefix, vr.opaque)
+			logging.Debugf("%v ##%x StreamEnd\n", vr.logPrefix, vr.opaque)
 			vr.broadcast2Endpoints(data)
 		}
 	}

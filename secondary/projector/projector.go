@@ -194,7 +194,7 @@ func (p *Projector) AddFeed(topic string, feed *Feed) (err error) {
 	}
 	p.topics[topic] = feed
 	opaque := feed.GetOpaque()
-	logging.Debugf("%v ##%x feed %q added ...\n", p.logPrefix, opaque, topic)
+	logging.Infof("%v ##%x feed %q added ...\n", p.logPrefix, opaque, topic)
 	return
 }
 
@@ -210,7 +210,7 @@ func (p *Projector) DelFeed(topic string) (err error) {
 	}
 	delete(p.topics, topic)
 	opaque := feed.GetOpaque()
-	logging.Debugf("%v ##%x ... feed %q deleted\n", p.logPrefix, opaque, topic)
+	logging.Infof("%v ##%x ... feed %q deleted\n", p.logPrefix, opaque, topic)
 	return
 }
 
