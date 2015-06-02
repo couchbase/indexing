@@ -532,9 +532,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.persisted_snapshot.interval": ConfigValue{
-		uint64(20000),
+		uint64(5000),
 		"Persisted snapshotting interval in milliseconds",
-		uint64(20000),
+		uint64(5000),
 		false, // mutable
 	},
 	"indexer.settings.inmemory_snapshot.interval": ConfigValue{
