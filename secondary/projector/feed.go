@@ -254,14 +254,38 @@ func (feed *Feed) RepairEndpoints(
 // StaleCheck will check for feed sanity and return "exit" if feed
 // has was already stale and still stale.
 // Synchronous call.
-func (feed *Feed) StaleCheck() (string, error) {
+func (feed *Feed) StaleCheck(staleTimeout int) (string, error) {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{fCmdStaleCheck, respch}
-	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
-	if err != nil {
-		return "exit", err
+
+	// modified `FailsafeOp()` to implement a nuke-switch
+	// for indefinitely blocked feeds.
+	tm := time.After(time.Duration(staleTimeout) * time.Millisecond)
+	select {
+	case feed.reqch <- cmd:
+		select {
+		case resp := <-respch:
+			return resp[0].(string), nil
+		case <-feed.finch:
+			return "exit", c.ErrorClosed
+			// NOTE: don't use the nuke-timeout if feed's gen-server has
+			// accepted to service the request. Reason being,
+			// a. staleCheck() will try to ping endpoint() for its health, and
+			//    if endpoint is stuck with downstream, it might trigger the
+			//    the following timeout.
+			//case <-tm:
+			//    logging.Fatalf("%v StaleCheck() timesout !!", feed.logPrefix)
+			//    feed.shutdown(feed.opaque)
+			//    return "exit", c.ErrorClosed
+		}
+	case <-feed.finch:
+		return "exit", c.ErrorClosed
+	case <-tm:
+		logging.Fatalf("%v StaleCheck() timesout !!", feed.logPrefix)
+		feed.shutdown(feed.opaque)
+		return "exit", c.ErrorClosed
 	}
-	return resp[0].(string), nil
+	return "exit", c.ErrorClosed
 }
 
 // GetTopicResponse for this feed.
@@ -1125,26 +1149,26 @@ func (feed *Feed) resetConfig(config c.Config) {
 }
 
 func (feed *Feed) shutdown(opaque uint16) error {
-	defer func() {
+	recovery := func() {
 		if r := recover(); r != nil {
 			fmsg := "%v ##%x shutdown() crashed: %v\n"
 			logging.Errorf(fmsg, feed.logPrefix, opaque, r)
 			logging.Errorf("%s", logging.StackTrace())
 		}
-	}()
+	}
 
 	// close upstream
 	for _, feeder := range feed.feeders {
-		feeder.CloseFeed()
+		func() { defer recovery(); feeder.CloseFeed() }()
 	}
 	// close data-path
 	for bucketn, kvdata := range feed.kvdata {
-		kvdata.Close()
+		func() { defer recovery(); kvdata.Close() }()
 		delete(feed.kvdata, bucketn) // :SideEffect:
 	}
 	// close downstream
 	for _, endpoint := range feed.endpoints {
-		endpoint.Close()
+		func() { defer recovery(); endpoint.Close() }()
 	}
 	// cleanup
 	close(feed.finch)
@@ -1675,8 +1699,11 @@ func newDCPConnectionName(bucketn, topic string, uuid uint64) string {
 
 func (feed *Feed) watchEndpoint(raddr string, endpoint c.RouterEndpoint) {
 	err := endpoint.WaitForExit() // <-- will block until endpoint exits.
-	logging.Infof("%v endpoint exited: %v", err)
-	feed.DeleteEndpoint(raddr)
+	logging.Infof("%v endpoint exited: %v", feed.logPrefix, err)
+	if err := feed.DeleteEndpoint(raddr); err != nil && err != c.ErrorClosed {
+		fmsg := "%v failed DeleteEndpoint(): %v"
+		logging.Errorf(fmsg, feed.logPrefix, err)
+	}
 }
 
 //---- local function
