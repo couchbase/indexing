@@ -637,6 +637,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		<-idx.kvSenderCmdCh
 		idx.mutMgrCmdCh <- msg
 		<-idx.mutMgrCmdCh
+		idx.statsMgrCmdCh <- msg
+		<-idx.statsMgrCmdCh
 
 	case INDEXER_INIT_PREP_RECOVERY:
 		idx.handleInitPrepRecovery(msg)

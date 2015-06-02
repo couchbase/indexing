@@ -637,6 +637,12 @@ var SystemConfig = Config{
 		16 * 1024,
 		false,
 	},
+	"indexer.settings.statsLogDumpInterval": ConfigValue{
+		uint64(60),
+		"Periodic stats dump logging interval in seconds",
+		uint64(60),
+		false,
+	},
 	"projector.settings.log_level": ConfigValue{
 		"debug",
 		"Projector logging level",
