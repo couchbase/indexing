@@ -375,6 +375,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	numVbuckets := ss.config["numVbuckets"].Int()
 	repairTs := common.NewTsVbuuid(bucket, numVbuckets)
 	var shutdownVbs []Vbucket = nil
+	var count = 0
 
 	hwtTs := ss.streamBucketHWTMap[streamId][bucket]
 	hasConnError := ss.hasConnectionError(streamId, bucket)
@@ -384,6 +385,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 		if s == VBS_STREAM_END || s == VBS_CONN_ERROR {
 
 			ss.addRepairTs(repairTs, hwtTs, Vbucket(i))
+			count++
 			anythingToRepair = true
 			if hasConnError {
 				// Make sure that we shutdown vb for BOTH StreamEnd and
@@ -433,6 +435,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 				// force a shutdown/restart sequence.
 				ss.makeConnectionError(streamId, bucket, Vbucket(i))
 				ss.addRepairTs(repairTs, hwtTs, Vbucket(i))
+				count++
 				shutdownVbs = append(shutdownVbs, Vbucket(i))
 				anythingToRepair = true
 			}
@@ -441,7 +444,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 
 	// Forth Step: If there is something to repair, but indexer has received StreamBegin for
 	// all vb, then retry with the last timestamp.
-	if anythingToRepair && repairTs.Len() == 0 {
+	if anythingToRepair && count == 0 {
 		logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
 			"Bucket %v StreamId %v previous repair fails. Retry using previous repairTs",
 			bucket, streamId)
