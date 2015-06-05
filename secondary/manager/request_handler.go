@@ -19,6 +19,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -108,6 +109,8 @@ type IndexStatus struct {
 	Error      string             `json:"error,omitempty"`
 	Completion int                `json:"completion"`
 }
+
+type indexStatusSorter []IndexStatus
 
 //
 // Response
@@ -250,10 +253,12 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 
 	list, failedNodes, err := m.getIndexStatus(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache))
 	if err == nil && len(failedNodes) == 0 {
+		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
 		send(w, resp)
 	} else {
 		logging.Debugf("RequestHandler::handleIndexStatusRequest: failed nodes %v", failedNodes)
+		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_ERROR, Error: "Fail to retrieve cluster-wide metadata from index service",
 			Status: list, FailedNodes: failedNodes}
 		send(w, resp)
@@ -824,4 +829,28 @@ func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, 
 
 	client := http.Client{Timeout: time.Duration(10 * time.Second)}
 	return client.Do(req)
+}
+
+///////////////////////////////////////////////////////
+// indexStatusSorter
+///////////////////////////////////////////////////////
+
+func (s indexStatusSorter) Len() int {
+	return len(s)
+}
+
+func (s indexStatusSorter) Swap(i, j int) {
+	s[i], s[j] = s[j], s[i]
+}
+
+func (s indexStatusSorter) Less(i, j int) bool {
+	if s[i].Name < s[j].Name {
+		return true
+	}
+
+	if s[i].Name > s[j].Name {
+		return false
+	}
+
+	return s[i].Bucket < s[j].Bucket
 }
