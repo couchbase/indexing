@@ -766,7 +766,8 @@ func (r *metadataRepo) listDefn() map[c.IndexDefnId]*IndexMetadata {
 
 	result := make(map[c.IndexDefnId]*IndexMetadata)
 	for id, meta := range r.indices {
-		result[id] = meta
+		tmp := &IndexMetadata{Definition: meta.Definition, Instances: []*InstanceDefn{meta.Instances[0]}}
+		result[id] = tmp
 	}
 
 	return result

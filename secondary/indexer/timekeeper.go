@@ -1979,7 +1979,15 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		tk.supvRespch <- resp
 
 	default:
-		if !ValidateBucket(tk.config["clusterAddr"].String(), bucket) {
+
+		var bucketUUIDList []string
+		for _, indexInst := range tk.indexInstMap {
+			if indexInst.Defn.Bucket == bucket {
+				bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
+			}
+		}
+
+		if !ValidateBucket(tk.config["clusterAddr"].String(), bucket, bucketUUIDList) {
 			logging.Errorf("Timekeeper::sendRestartMsg \n\tBucket Not Found "+
 				"For Stream %v Bucket %v", streamId, bucket)
 

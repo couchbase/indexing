@@ -286,8 +286,9 @@ func (c *clustMgrAgent) handleDeleteBucket(cmd Message) {
 	logging.Debugf("ClustMgr:handleDeleteBucket %v", cmd)
 
 	bucket := cmd.(*MsgClustMgrUpdate).GetBucket()
+	streamId := cmd.(*MsgClustMgrUpdate).GetStreamId()
 
-	err := c.mgr.DeleteIndexForBucket(bucket)
+	err := c.mgr.DeleteIndexForBucket(bucket, streamId)
 	common.CrashOnError(err)
 
 	c.supvCmdch <- &MsgSuccess{}

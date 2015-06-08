@@ -508,9 +508,9 @@ var SystemConfig = Config{
 
 	// Indexer dynamic settings
 	"indexer.settings.compaction.check_period": ConfigValue{
-		1200000,
+		30,
 		"Compaction poll interval in seconds",
-		1200000,
+		30,
 		false, // mutable
 	},
 	"indexer.settings.compaction.interval": ConfigValue{
@@ -532,9 +532,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.persisted_snapshot.interval": ConfigValue{
-		uint64(20000),
+		uint64(5000),
 		"Persisted snapshotting interval in milliseconds",
-		uint64(20000),
+		uint64(5000),
 		false, // mutable
 	},
 	"indexer.settings.inmemory_snapshot.interval": ConfigValue{
@@ -631,7 +631,18 @@ var SystemConfig = Config{
 		uint64(50000),
 		false, // mutable
 	},
-
+	"indexer.settings.bufferPoolBlockSize": ConfigValue{
+		16 * 1024,
+		"Size of memory block in memory pool",
+		16 * 1024,
+		false,
+	},
+	"indexer.settings.statsLogDumpInterval": ConfigValue{
+		uint64(60),
+		"Periodic stats dump logging interval in seconds",
+		uint64(60),
+		false,
+	},
 	"projector.settings.log_level": ConfigValue{
 		"debug",
 		"Projector logging level",

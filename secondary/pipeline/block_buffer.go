@@ -3,11 +3,13 @@ package pipeline
 import (
 	"encoding/binary"
 	"errors"
+	"github.com/couchbase/indexing/secondary/platform"
 	"sync"
+	"unsafe"
 )
 
 var (
-	blockPool       *sync.Pool
+	blockPool       unsafe.Pointer
 	blockBufferSize = 16 * 1024
 )
 
@@ -17,24 +19,32 @@ var (
 )
 
 func SetupBlockPool(sz int) {
-	blockPool = &sync.Pool{
+	p := &sync.Pool{
 		New: func() interface{} {
 			b := make([]byte, sz, sz)
 			return &b
 		},
 	}
+
+	platform.StorePointer(&blockPool, unsafe.Pointer(p))
 }
 
 func init() {
 	SetupBlockPool(blockBufferSize)
 }
 
+func getBlockPool() *sync.Pool {
+	return (*sync.Pool)(platform.LoadPointer(&blockPool))
+}
+
 func GetBlock() *[]byte {
-	return blockPool.Get().(*[]byte)
+	p := getBlockPool()
+	return p.Get().(*[]byte)
 }
 
 func PutBlock(b *[]byte) {
-	blockPool.Put(b)
+	p := getBlockPool()
+	p.Put(b)
 }
 
 type BlockBufferWriter struct {

@@ -145,6 +145,7 @@ type IndexDefn struct {
 	Name            string          `json:"name,omitempty"`
 	Using           IndexType       `json:"using,omitempty"`
 	Bucket          string          `json:"bucket,omitempty"`
+	BucketUUID      string          `json:"bucketUUID,omitempty"`
 	IsPrimary       bool            `json:"isPrimary,omitempty"`
 	SecExprs        []string        `json:"secExprs,omitempty"`
 	ExprType        ExprType        `json:"exprType,omitempty"`

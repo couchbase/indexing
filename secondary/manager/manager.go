@@ -153,7 +153,8 @@ func NewIndexManagerInternal(
 	}
 
 	// Initialize LifecycleMgr.
-	mgr.lifecycleMgr = NewLifecycleMgr(addrProvider, nil)
+	clusterURL := config["clusterAddr"].String()
+	mgr.lifecycleMgr = NewLifecycleMgr(addrProvider, nil, clusterURL)
 
 	// Initialize MetadataRepo.  This a blocking call until the
 	// the metadataRepo (including watcher) is operational (e.g.
@@ -424,14 +425,16 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 		return e
 	}
 
+	// Update index instance is an async operation.  Since indexer may update index instance during
+	// callback from MetadataNotifier.  By making async, it avoids deadlock.
 	logging.Debugf("IndexManager.UpdateIndexInstance(): making request for Index instance update")
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_UPDATE_INDEX_INST, fmt.Sprintf("%v", defnId), buf)
 }
 
-func (m *IndexManager) DeleteIndexForBucket(bucket string) error {
+func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.StreamId) error {
 
 	logging.Debugf("IndexManager.DeleteIndexForBucket(): making request for deleting index for bucket")
-	return m.requestServer.MakeAsyncRequest(client.OPCODE_DELETE_BUCKET, bucket, []byte(""))
+	return m.requestServer.MakeRequest(client.OPCODE_DELETE_BUCKET, bucket, []byte{byte(streamId)})
 }
 
 //

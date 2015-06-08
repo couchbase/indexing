@@ -596,3 +596,30 @@ func LogOs() string {
 	hostname, _ := os.Hostname()
 	return fmt.Sprintf("uid: %v; gid: %v; hostname: %v", uid, gid, hostname)
 }
+
+//
+// This method fetch the bucket UUID.  If this method return an error,
+// then it means that the node is not able to connect in order to fetch
+// bucket UUID.
+//
+func GetBucketUUID(cluster, bucket string) (string, error) {
+
+	url, err := ClusterAuthUrl(cluster)
+	if err != nil {
+		return BUCKET_UUID_NIL, err
+	}
+
+	cinfo, err := NewClusterInfoCache(url, "default")
+	if err != nil {
+		return BUCKET_UUID_NIL, err
+	}
+
+	cinfo.Lock()
+	defer cinfo.Unlock()
+
+	if err := cinfo.Fetch(); err != nil {
+		return BUCKET_UUID_NIL, err
+	}
+
+	return cinfo.GetBucketUUID(bucket), nil
+}
