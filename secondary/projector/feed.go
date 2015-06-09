@@ -1464,7 +1464,7 @@ func (feed *Feed) subscribers(
 	}
 
 	if len(evaluators) != len(routers) {
-		fmsg := "%v ##%x malformed evaluators/routers\n"
+		fmsg := "%v ##%x mismatch in evaluators/routers\n"
 		logging.Fatalf(fmsg, feed.logPrefix, opaque)
 		return nil, nil, projC.ErrorInconsistentFeed
 	}
