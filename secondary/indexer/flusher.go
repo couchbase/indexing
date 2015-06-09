@@ -267,7 +267,9 @@ func (f *flusher) flushSingleVbucket(q MutationQueue, streamId common.StreamId,
 					continue
 				}
 				f.flushSingleMutation(mut, streamId)
-				bucketStats.mutationQueueSize.Add(-1)
+				if bucketStats != nil {
+					bucketStats.mutationQueueSize.Add(-1)
+				}
 			}
 		case <-stopch:
 			qstopch <- true
@@ -310,7 +312,9 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 				}
 				f.flushSingleMutation(mut, streamId)
 				mut.Free()
-				bucketStats.mutationQueueSize.Add(-1)
+				if bucketStats != nil {
+					bucketStats.mutationQueueSize.Add(-1)
+				}
 			}
 		}
 	}
