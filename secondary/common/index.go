@@ -273,3 +273,13 @@ func NewIndexDefnId() (IndexDefnId, error) {
 
 	return IndexDefnId(uuid.Uint64()), nil
 }
+
+//IndexSnapType represents the snapshot type
+//created in indexer storage
+type IndexSnapType uint16
+
+const (
+	NO_SNAP IndexSnapType = iota
+	DISK_SNAP
+	INMEM_SNAP
+)

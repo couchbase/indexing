@@ -28,7 +28,7 @@ type TsVbuuid struct {
 	Seqnos      []uint64
 	Vbuuids     []uint64
 	Snapshots   [][2]uint64
-	Persisted   bool
+	SnapType    IndexSnapType
 	LargeSnap   bool
 	SnapAligned bool
 }
@@ -140,13 +140,13 @@ func (ts *TsVbuuid) Len() int {
 }
 
 //Persisted returns the value of persisted flag
-func (ts *TsVbuuid) IsPersisted() bool {
-	return ts.Persisted
+func (ts *TsVbuuid) GetSnapType() IndexSnapType {
+	return ts.SnapType
 }
 
 //Persisted sets the persisted flag
-func (ts *TsVbuuid) SetPersisted(persist bool) {
-	ts.Persisted = persist
+func (ts *TsVbuuid) SetSnapType(typ IndexSnapType) {
+	ts.SnapType = typ
 }
 
 //HasLargeSnapshot returns the value of largeSnap flag
@@ -165,7 +165,7 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 	copy(newTs.Seqnos, ts.Seqnos)
 	copy(newTs.Vbuuids, ts.Vbuuids)
 	copy(newTs.Snapshots, ts.Snapshots)
-	newTs.Persisted = ts.Persisted
+	newTs.SnapType = ts.SnapType
 	newTs.LargeSnap = ts.LargeSnap
 	newTs.SnapAligned = ts.SnapAligned
 	return newTs
@@ -175,7 +175,7 @@ func (ts *TsVbuuid) CopyFrom(src *TsVbuuid) {
 	copy(ts.Seqnos, src.Seqnos)
 	copy(ts.Vbuuids, src.Vbuuids)
 	copy(ts.Snapshots, src.Snapshots)
-	ts.Persisted = src.Persisted
+	ts.SnapType = src.SnapType
 	ts.LargeSnap = src.LargeSnap
 	ts.SnapAligned = src.SnapAligned
 }
@@ -244,8 +244,8 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 func (ts *TsVbuuid) String() string {
 	var buf bytes.Buffer
 	vbnos := ts.GetVbnos()
-	fmsg := "bucket: %v, vbuckets: %v persisted %v -\n"
-	buf.WriteString(fmt.Sprintf(fmsg, ts.Bucket, len(vbnos), ts.Persisted))
+	fmsg := "bucket: %v, vbuckets: %v snapType %v -\n"
+	buf.WriteString(fmt.Sprintf(fmsg, ts.Bucket, len(vbnos), ts.SnapType))
 	fmsg = "    {vbno, vbuuid, seqno, snapshot-start, snapshot-end}\n"
 	buf.WriteString(fmt.Sprintf(fmsg))
 	for _, v := range vbnos {

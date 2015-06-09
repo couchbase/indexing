@@ -1537,8 +1537,8 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 		tsVbuuid := tk.ss.getNextStabilityTS(streamId, bucket)
 
 		//persist TS which completes the build
-		if !tsVbuuid.IsPersisted() && tk.isBuildCompletionTs(streamId, bucket, tsVbuuid) {
-			tsVbuuid.SetPersisted(true)
+		if tk.isBuildCompletionTs(streamId, bucket, tsVbuuid) {
+			tsVbuuid.SetSnapType(common.DISK_SNAP)
 		}
 
 		if tk.ss.canFlushNewTS(streamId, bucket) {
@@ -1659,7 +1659,7 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 		return
 	}
 
-	tk.maybeSetPersistFlag(streamId, bucket, flushTs)
+	tk.setSnapshotType(streamId, bucket, flushTs)
 
 	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = flushTs
 
@@ -1671,8 +1671,8 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 	}()
 }
 
-//sets the persisted flag based on configuration
-func (tk *timekeeper) maybeSetPersistFlag(streamId common.StreamId, bucket string,
+//set the snapshot type
+func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	flushTs *common.TsVbuuid) {
 
 	snapPersistInterval := tk.config["settings.persisted_snapshot.interval"].Uint64()
@@ -1680,12 +1680,23 @@ func (tk *timekeeper) maybeSetPersistFlag(streamId common.StreamId, bucket strin
 	persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 	lastPersistTime := tk.ss.streamBucketLastPersistTime[streamId][bucket]
 
-	//for init build, just follow wall clock time
-	//for incremental build, persist only if ts is snap aligned
-	if time.Since(lastPersistTime) > persistDuration {
-		if tk.hasInitStateIndex(streamId, bucket) || flushTs.IsSnapAligned() {
-			flushTs.SetPersisted(true)
+	//for init build, create disk snapshot based on wall clock time
+	if tk.hasInitStateIndex(streamId, bucket) {
+		if time.Since(lastPersistTime) > persistDuration {
+			flushTs.SetSnapType(common.DISK_SNAP)
 			tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
+		}
+	}
+
+	//for incremental build, snapshot only if ts is snap aligned
+	if flushTs.IsSnapAligned() {
+		//set either in-mem or persist snapshot based on wall clock time
+		if time.Since(lastPersistTime) > persistDuration {
+			flushTs.SetSnapType(common.DISK_SNAP)
+			tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
+		} else {
+			//set flag for in-mem snapshot
+			flushTs.SetSnapType(common.INMEM_SNAP)
 		}
 	}
 
@@ -1736,7 +1747,6 @@ func (tk *timekeeper) maybeSplitTs(ts *common.TsVbuuid, bucket string,
 		if hwt.Seqnos[i] < s[1] {
 			if newTs == nil {
 				newTs = ts.Copy()
-				newTs.SetPersisted(false)
 			}
 			newTs.Seqnos[i] = hwt.Seqnos[i]
 		}

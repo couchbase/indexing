@@ -195,12 +195,11 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	streamId := msgFlushDone.GetStreamId()
 
 	numVbuckets := s.config["numVbuckets"].Int()
-	needsCommit := tsVbuuid.IsPersisted()
+	snapType := tsVbuuid.GetSnapType()
 
-	if !s.needSnapshot(streamId, bucket, tsVbuuid, needsCommit) {
-
+	if snapType == common.NO_SNAP {
 		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
-			"%v Persisted %v", streamId, bucket, needsCommit)
+			"%v SnapType %v", streamId, bucket, snapType)
 
 		s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 			streamId: streamId,
@@ -229,7 +228,11 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 
 	defer destroyIndexSnapMap(indexSnapMap)
 
-	needsCommit := tsVbuuid.IsPersisted()
+	var needsCommit bool
+	snapType := tsVbuuid.GetSnapType()
+	if snapType == common.DISK_SNAP {
+		needsCommit = true
+	}
 
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range indexPartnMap {
@@ -837,38 +840,6 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 			s.addNilSnapshot(idxInstId, bucket)
 		}
 	}
-}
-
-func (s *storageMgr) needSnapshot(streamId common.StreamId, bucket string,
-	ts *common.TsVbuuid, isPersisted bool) bool {
-
-	initBuild := false
-
-	if streamId == common.INIT_STREAM {
-		initBuild = true
-	}
-
-	if streamId == common.MAINT_STREAM {
-		for _, inst := range s.indexInstMap {
-			if inst.Defn.Bucket == bucket &&
-				inst.State == common.INDEX_STATE_INITIAL &&
-				inst.Stream == common.MAINT_STREAM {
-				initBuild = true
-			}
-		}
-	}
-
-	//skip in-memory snapshots for Init Build
-	if initBuild && !isPersisted {
-		return false
-	}
-
-	//skip non snap-aligned snapshots for Incremental Build
-	if !initBuild && !ts.IsSnapAligned() {
-		return false
-	}
-
-	return true
 }
 
 func copyIndexSnapMap(inMap IndexSnapMap) IndexSnapMap {
