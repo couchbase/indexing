@@ -1680,26 +1680,66 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 	lastPersistTime := tk.ss.streamBucketLastPersistTime[streamId][bucket]
 
-	//for init build, create disk snapshot based on wall clock time
+	//for init build, if there is no snapshot option set
 	if tk.hasInitStateIndex(streamId, bucket) {
-		if time.Since(lastPersistTime) > persistDuration {
-			flushTs.SetSnapType(common.DISK_SNAP)
-			tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
-		}
-	}
+		if flushTs.GetSnapType() == common.NO_SNAP {
+			//if this TS is a merge candidate, generate in-mem snapshot
+			if tk.checkMergeCandidateTs(streamId, bucket, flushTs) {
+				flushTs.SetSnapType(common.INMEM_SNAP)
+			}
 
-	//for incremental build, snapshot only if ts is snap aligned
-	if flushTs.IsSnapAligned() {
+			//create disk snapshot based on wall clock time
+			if time.Since(lastPersistTime) > persistDuration {
+				flushTs.SetSnapType(common.DISK_SNAP)
+				tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
+			}
+		}
+	} else if flushTs.IsSnapAligned() {
+		//for incremental build, snapshot only if ts is snap aligned
 		//set either in-mem or persist snapshot based on wall clock time
 		if time.Since(lastPersistTime) > persistDuration {
 			flushTs.SetSnapType(common.DISK_SNAP)
 			tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
 		} else {
-			//set flag for in-mem snapshot
 			flushTs.SetSnapType(common.INMEM_SNAP)
 		}
 	}
 
+}
+
+//checkMergeCandidateTs check if a TS is a candidate for merge with
+//MAINT_STREAM
+func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
+	bucket string, flushTs *common.TsVbuuid) bool {
+
+	//if stream is not INIT_STREAM, merge is not required
+	if streamId != common.INIT_STREAM {
+		return false
+	}
+
+	//if flushTs is not on snap boundary, it is not merge candidate
+	if !flushTs.IsSnapAligned() {
+		return false
+	}
+
+	//if the flushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
+	//this TS is a merge candidate
+	bucketLastFlushedTsMap := tk.ss.streamBucketLastFlushedTsMap[common.MAINT_STREAM]
+	lastFlushedTsVbuuid := bucketLastFlushedTsMap[bucket]
+
+	mergeCandidate := false
+	//if no flush has happened yet, its a merge candidate
+	if lastFlushedTsVbuuid == nil {
+		mergeCandidate = true
+	} else {
+		lastFlushedTs := getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
+		ts := getSeqTsFromTsVbuuid(flushTs)
+		if ts.GreaterThanEqual(lastFlushedTs) {
+			mergeCandidate = true
+		}
+	}
+
+	return mergeCandidate
 }
 
 //mayBeMakeSnapAligned makes a Ts snap aligned if all seqnos
