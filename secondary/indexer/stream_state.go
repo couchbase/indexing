@@ -660,6 +660,10 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	//reset state for next TS
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
 
+	if tsVbuuid.CheckSnapAligned() {
+		tsVbuuid.SetSnapAligned(true)
+	}
+
 	return tsVbuuid
 }
 

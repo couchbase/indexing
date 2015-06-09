@@ -24,12 +24,13 @@ type TsVbFull struct {
 // TsVbuuid is logical clock for full set of vbuckets along with branch value
 // and last seen snapshot.
 type TsVbuuid struct {
-	Bucket    string
-	Seqnos    []uint64
-	Vbuuids   []uint64
-	Snapshots [][2]uint64
-	Persisted bool
-	LargeSnap bool
+	Bucket      string
+	Seqnos      []uint64
+	Vbuuids     []uint64
+	Snapshots   [][2]uint64
+	Persisted   bool
+	LargeSnap   bool
+	SnapAligned bool
 }
 
 // NewTsVbuuid returns reference to new instance of TsVbuuid.
@@ -166,6 +167,7 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 	copy(newTs.Snapshots, ts.Snapshots)
 	newTs.Persisted = ts.Persisted
 	newTs.LargeSnap = ts.LargeSnap
+	newTs.SnapAligned = ts.SnapAligned
 	return newTs
 }
 
@@ -175,6 +177,7 @@ func (ts *TsVbuuid) CopyFrom(src *TsVbuuid) {
 	copy(ts.Snapshots, src.Snapshots)
 	ts.Persisted = src.Persisted
 	ts.LargeSnap = src.LargeSnap
+	ts.SnapAligned = src.SnapAligned
 }
 
 // Equal returns whether `ts` and `other` compare equal.
@@ -292,7 +295,7 @@ func (ts *TsVbuuid) Diff(other *TsVbuuid) string {
 }
 
 //check if seqnum of all vbuckets are aligned with the snapshot end
-func (ts *TsVbuuid) IsSnapAligned() bool {
+func (ts *TsVbuuid) CheckSnapAligned() bool {
 
 	// Nil timestamp can be considered equivalent to all vbs with seqno=0 (empty bucket)
 	if ts == nil {
@@ -306,4 +309,19 @@ func (ts *TsVbuuid) IsSnapAligned() bool {
 	}
 	return true
 
+}
+
+//IsSnapAligned returns the value of SnapAligned flag
+func (ts *TsVbuuid) IsSnapAligned() bool {
+
+	if ts == nil {
+		return true
+	}
+
+	return ts.SnapAligned
+}
+
+//SetSnapAligned sets the SnapAligned flag
+func (ts *TsVbuuid) SetSnapAligned(snapAligned bool) {
+	ts.SnapAligned = snapAligned
 }

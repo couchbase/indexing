@@ -1714,6 +1714,11 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 			flushTs.Seqnos[i] = s[1]
 		}
 	}
+
+	if flushTs.CheckSnapAligned() {
+		flushTs.SetSnapAligned(true)
+	}
+
 }
 
 //splits a Ts if current HWT is less than Snapshot End for the vbucket.
