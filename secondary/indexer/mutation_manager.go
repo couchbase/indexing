@@ -810,7 +810,8 @@ func (m *mutationMgr) handlePersistMutationQueue(cmd Message) {
 	defer m.lock.Unlock()
 
 	q := m.streamBucketQueueMap[streamId][bucket]
-	go m.persistMutationQueue(q, streamId, bucket, ts, changeVec, m.stats.Get())
+	stats := m.stats.Get()
+	go m.persistMutationQueue(q, streamId, bucket, ts, changeVec, stats)
 	m.supvCmdch <- &MsgSuccess{}
 
 }
@@ -876,7 +877,8 @@ func (m *mutationMgr) handleDrainMutationQueue(cmd Message) {
 	defer m.lock.Unlock()
 
 	q := m.streamBucketQueueMap[streamId][bucket]
-	go m.drainMutationQueue(q, streamId, bucket, ts, changeVec, m.stats.Get())
+	stats := m.stats.Get()
+	go m.drainMutationQueue(q, streamId, bucket, ts, changeVec, stats)
 	m.supvCmdch <- &MsgSuccess{}
 }
 
@@ -930,9 +932,9 @@ func (m *mutationMgr) handleGetMutationQueueHWT(cmd Message) {
 	defer m.lock.Unlock()
 
 	q := m.streamBucketQueueMap[streamId][bucket]
-
+	stats := m.stats.Get()
 	go func(config common.Config) {
-		flusher := NewFlusher(config, m.stats.Get())
+		flusher := NewFlusher(config, stats)
 		ts := flusher.GetQueueHWT(q.queue)
 		m.supvCmdch <- &MsgTimestamp{ts: ts}
 	}(m.config)
@@ -950,9 +952,9 @@ func (m *mutationMgr) handleGetMutationQueueLWT(cmd Message) {
 	defer m.lock.Unlock()
 
 	q := m.streamBucketQueueMap[streamId][bucket]
-
+	stats := m.stats.Get()
 	go func(config common.Config) {
-		flusher := NewFlusher(config, m.stats.Get())
+		flusher := NewFlusher(config, stats)
 		ts := flusher.GetQueueLWT(q.queue)
 		m.supvCmdch <- &MsgTimestamp{ts: ts}
 	}(m.config)
