@@ -56,6 +56,10 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 	config.SetBufferCacheSize(memQuota)
 	logging.Debugf("NewForestDBSlice(): buffer cache size %d", memQuota)
 
+	prob := sysconf["settings.max_writer_lock_prob"].Int()
+	config.SetMaxWriterLockProb(uint8(prob))
+	logging.Debugf("NewForestDBSlice(): max writer lock prob %d", prob)
+
 	kvconfig := forestdb.DefaultKVStoreConfig()
 
 retry:

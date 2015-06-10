@@ -643,6 +643,12 @@ var SystemConfig = Config{
 		uint64(60),
 		false,
 	},
+	"indexer.settings.max_writer_lock_prob": ConfigValue{
+		50,
+		"Controls the write rate for compaction to catch up",
+		50,
+		false, // mutable
+	},
 	"projector.settings.log_level": ConfigValue{
 		"debug",
 		"Projector logging level",

@@ -180,6 +180,14 @@ func (c *Config) SetCompactorSleepDuration(s uint64) {
 	c.config.compactor_sleep_duration = C.uint64_t(s)
 }
 
+func (c *Config) MaxWriterLockProb() uint8 {
+	return uint8(c.config.max_writer_lock_prob)
+}
+
+func (c *Config) SetMaxWriterLockProb(s uint8) {
+	c.config.max_writer_lock_prob = C.size_t(s)
+}
+
 // DefaultConfig gets the default ForestDB config
 func DefaultConfig() *Config {
 	Log.Tracef("fdb_get_default_config call")
