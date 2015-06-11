@@ -1545,8 +1545,11 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		} else {
 			//store the ts in list
-			logging.Debugf("Timekeeper::generateNewStabilityTS %v %v Added TS to Pending List "+
-				"%v ", bucket, streamId, tsVbuuid)
+			logging.LazyDebug(func() string {
+				return fmt.Sprintf(
+					"Timekeeper::generateNewStabilityTS %v %v Added TS to Pending List "+
+						"%v ", bucket, streamId, tsVbuuid)
+			})
 			tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
 			tsList.PushBack(tsVbuuid)
 		}
@@ -1625,14 +1628,20 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 			tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_DONE {
 			//if HWT is greater than flush TS, this TS can be flush
 			if tsHWT.GreaterThanEqual(ts) {
-				logging.Debugf("Timekeeper::processPendingTS \n\tProcessing Flush TS %v "+
-					"before recovery for bucket %v streamId %v", ts, bucket, streamId)
+				logging.LazyDebug(func() string {
+					return fmt.Sprintf(
+						"Timekeeper::processPendingTS \n\tProcessing Flush TS %v "+
+							"before recovery for bucket %v streamId %v", ts, bucket, streamId)
+				})
 			} else {
 				//empty the TSList for this bucket and stream so
 				//there is no further processing for this bucket.
-				logging.Debugf("Timekeeper::processPendingTS \n\tCannot Flush TS %v "+
-					"before recovery for bucket %v streamId %v. Clearing Ts List", ts,
-					bucket, streamId)
+				logging.LazyDebug(func() string {
+					return fmt.Sprintf(
+						"Timekeeper::processPendingTS \n\tCannot Flush TS %v "+
+							"before recovery for bucket %v streamId %v. Clearing Ts List", ts,
+						bucket, streamId)
+				})
 				tsList.Init()
 				return false
 			}
@@ -1649,8 +1658,10 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string,
 	streamId common.StreamId) {
 
-	logging.Tracef("Timekeeper::sendNewStabilityTS Bucket: %v "+
-		"Stream: %v TS: %v", bucket, streamId, flushTs)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("Timekeeper::sendNewStabilityTS Bucket: %v "+
+			"Stream: %v TS: %v", bucket, streamId, flushTs)
+	})
 
 	tk.mayBeMakeSnapAligned(streamId, bucket, flushTs)
 
