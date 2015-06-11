@@ -1423,9 +1423,15 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			buildInfo.buildDoneAckReceived == true {
 
 			//if the flushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
-			//this index can be merged to MAINT_STREAM
-			bucketLastFlushedTsMap := tk.ss.streamBucketLastFlushedTsMap[common.MAINT_STREAM]
-			lastFlushedTsVbuuid := bucketLastFlushedTsMap[idx.Defn.Bucket]
+			//this index can be merged to MAINT_STREAM. If there is a flush in progress,
+			//it is important to use that for comparison as after merge MAINT_STREAM will
+			//include merged indexes after the in progress flush finishes.
+			var lastFlushedTsVbuuid *common.TsVbuuid
+			if lts, ok := tk.ss.streamBucketFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
+				lastFlushedTsVbuuid = lts
+			} else {
+				lastFlushedTsVbuuid = tk.ss.streamBucketLastFlushedTsMap[common.MAINT_STREAM][bucket]
+			}
 
 			//if no flush has happened yet, its good to merge
 			readyToMerge := false
@@ -1433,8 +1439,8 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			if lastFlushedTsVbuuid == nil {
 				readyToMerge = true
 			} else {
-				lastFlushedTs := getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
-				ts := getSeqTsFromTsVbuuid(flushTs)
+				lastFlushedTs = getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
+				ts = getSeqTsFromTsVbuuid(flushTs)
 				if ts.GreaterThanEqual(lastFlushedTs) {
 					readyToMerge = true
 				}
@@ -1734,9 +1740,15 @@ func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
 	}
 
 	//if the flushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
-	//this TS is a merge candidate
-	bucketLastFlushedTsMap := tk.ss.streamBucketLastFlushedTsMap[common.MAINT_STREAM]
-	lastFlushedTsVbuuid := bucketLastFlushedTsMap[bucket]
+	//this index can be merged to MAINT_STREAM. If there is a flush in progress,
+	//it is important to use that for comparison as after merge MAINT_STREAM will
+	//include merged indexes after the in progress flush finishes.
+	var lastFlushedTsVbuuid *common.TsVbuuid
+	if lts, ok := tk.ss.streamBucketFlushInProgressTsMap[common.MAINT_STREAM][bucket]; ok && lts != nil {
+		lastFlushedTsVbuuid = lts
+	} else {
+		lastFlushedTsVbuuid = tk.ss.streamBucketLastFlushedTsMap[common.MAINT_STREAM][bucket]
+	}
 
 	mergeCandidate := false
 	//if no flush has happened yet, its a merge candidate
