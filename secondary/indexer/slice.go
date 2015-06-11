@@ -38,5 +38,7 @@ type Slice interface {
 	SetActive(bool)
 	SetStatus(SliceStatus)
 
+	UpdateConfig(common.Config)
+
 	IndexWriter
 }
