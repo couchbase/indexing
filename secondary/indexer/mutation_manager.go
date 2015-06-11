@@ -346,7 +346,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			maxVbQueueLen := m.config["settings.maxVbQueueLength"].Uint64()
+			maxVbQueueLen := m.calcQueueLenFromMemQuota()
 			if queue = NewAtomicMutationQueue(m.numVbuckets, int64(maxVbQueueLen)); queue == nil {
 				m.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
@@ -1033,4 +1033,33 @@ func (m *mutationMgr) handleConfigUpdate(cmd Message) {
 	m.config = cfgUpdate.GetConfig()
 
 	m.supvCmdch <- &MsgSuccess{}
+}
+
+//Calculate mutation queue length from memory quota
+func (m *mutationMgr) calcQueueLenFromMemQuota() uint64 {
+
+	memQuota := m.config["settings.memory_quota"].Uint64()
+	maxVbLen := m.config["settings.maxVbQueueLength"].Uint64()
+	maxVbLenDef := m.config["settings.maxVbQueueLength"].DefaultVal.(uint64)
+
+	//if there is a user specified value, use that
+	if maxVbLen != 0 {
+		logging.Debugf("MutationMgr:: Set maxVbQueueLength %v", maxVbLen)
+		return maxVbLen
+	} else {
+		//Formula for calculation(see MB-14876)
+		//Below 2GB - 5000 per vbucket
+		//2GB to 4GB - 8000 per vbucket
+		//Above 4GB - 10000 per vbucket
+		if memQuota <= 2*1024*1024*1024 {
+			maxVbLen = 5000
+		} else if memQuota <= 4*1024*1024*1024 {
+			maxVbLen = 8000
+		} else {
+			maxVbLen = maxVbLenDef
+		}
+		logging.Debugf("MutationMgr:: Set maxVbQueueLength %v", maxVbLen)
+		return maxVbLen
+	}
+
 }

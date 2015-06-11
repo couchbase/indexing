@@ -609,7 +609,7 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.maxVbQueueLength": ConfigValue{
-		uint64(10000),
+		uint64(0),
 		"Maximum Length of Mutation Queue Per Vbucket. This " +
 			"allocation is done per bucket.",
 		uint64(10000),
