@@ -656,11 +656,15 @@ func (s *storageMgr) handleStats(cmd Message) {
 		}
 
 		idxStats := stats.indexes[st.InstId]
-		idxStats.diskSize.Set(st.Stats.DiskSize)
-		idxStats.dataSize.Set(st.Stats.DataSize)
-		idxStats.getBytes.Set(st.Stats.GetBytes)
-		idxStats.insertBytes.Set(st.Stats.InsertBytes)
-		idxStats.deleteBytes.Set(st.Stats.DeleteBytes)
+		// TODO(sarath): Investigate the reason for inconsistent stats map
+		// This nil check is a workaround to avoid indexer crashes for now.
+		if idxStats != nil {
+			idxStats.diskSize.Set(st.Stats.DiskSize)
+			idxStats.dataSize.Set(st.Stats.DataSize)
+			idxStats.getBytes.Set(st.Stats.GetBytes)
+			idxStats.insertBytes.Set(st.Stats.InsertBytes)
+			idxStats.deleteBytes.Set(st.Stats.DeleteBytes)
+		}
 	}
 
 	replych <- true
