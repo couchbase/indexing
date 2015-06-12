@@ -275,7 +275,7 @@ func (feed *DcpFeed) handlePacket(
 		sendAck = true
 		delete(feed.vbstreams, vb)
 		fmsg := "%v ##%x DCP_STREAMEND for vb %d\n"
-		logging.Infof(fmsg, prefix, stream.AppOpaque, vb)
+		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 
 	case transport.DCP_SNAPSHOT:
 		event = newDcpEvent(pkt, stream)
@@ -304,7 +304,7 @@ func (feed *DcpFeed) handlePacket(
 		sendAck = true
 		delete(feed.vbstreams, vb)
 		fmsg := "%v ##%x DCP_CLOSESTREAM for vb %d\n"
-		logging.Infof(fmsg, prefix, stream.AppOpaque, vb)
+		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 
 	case transport.DCP_CONTROL, transport.DCP_BUFFERACK:
 		if res.Status != transport.SUCCESS {
@@ -575,7 +575,7 @@ func (feed *DcpFeed) handleStreamRequest(
 		event.FailoverLog = flog
 		stream.connected = true
 		fmsg := "%v ##%x STREAMREQ(%d) successful\n"
-		logging.Infof(fmsg, prefix, stream.AppOpaque, vb)
+		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 
 	default:
 		event.Status = res.Status

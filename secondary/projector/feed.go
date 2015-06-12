@@ -154,7 +154,7 @@ func (feed *Feed) MutationTopic(
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	err = c.OpError(err, resp, 1)
 	if err != nil {
-		return nil, err
+		return &protobuf.TopicResponse{}, err
 	}
 	return resp[0].(*protobuf.TopicResponse), nil
 }
@@ -169,7 +169,7 @@ func (feed *Feed) RestartVbuckets(
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	err = c.OpError(err, resp, 1)
 	if err != nil {
-		return nil, err
+		return &protobuf.TopicResponse{}, err
 	}
 	return resp[0].(*protobuf.TopicResponse), nil
 }
@@ -197,7 +197,7 @@ func (feed *Feed) AddBuckets(
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	err = c.OpError(err, resp, 1)
 	if err != nil {
-		return nil, err
+		return &protobuf.TopicResponse{}, err
 	}
 	return resp[0].(*protobuf.TopicResponse), nil
 }
@@ -1464,7 +1464,7 @@ func (feed *Feed) subscribers(
 	}
 
 	if len(evaluators) != len(routers) {
-		fmsg := "%v ##%x malformed evaluators/routers\n"
+		fmsg := "%v ##%x mismatch in evaluators/routers\n"
 		logging.Fatalf(fmsg, feed.logPrefix, opaque)
 		return nil, nil, projC.ErrorInconsistentFeed
 	}
@@ -1650,6 +1650,8 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 }
 
 // generate a unique opaque identifier.
+// NOTE: be careful while changing the DCP name, it might affect other
+// parts of the system. ref: https://issues.couchbase.com/browse/MB-14300
 func newDCPConnectionName(bucketn, topic string, uuid uint64) string {
 	return fmt.Sprintf("proj-%s-%s-%v", bucketn, topic, uuid)
 }
@@ -1658,7 +1660,7 @@ func newDCPConnectionName(bucketn, topic string, uuid uint64) string {
 
 func (feed *Feed) watchEndpoint(raddr string, endpoint c.RouterEndpoint) {
 	err := endpoint.WaitForExit() // <-- will block until endpoint exits.
-	logging.Debugf("%v endpoint exited: %v", err)
+	logging.Infof("%v endpoint exited: %v", err)
 	feed.DeleteEndpoint(raddr)
 }
 
