@@ -570,9 +570,9 @@ func (c *GsiClient) doScan(
 	for i := 0; i < retry; i++ {
 		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i); ok1 {
 			if qc, ok2 = c.queryClients[queryport]; ok2 {
-				begin := time.Now().UnixNano()
+				begin := time.Now()
 				if err = callb(qc, targetDefnID); err == nil {
-					c.bridge.Timeit(targetDefnID, float64(time.Now().UnixNano()-begin))
+					c.bridge.Timeit(targetDefnID, float64(time.Since(begin)))
 					return nil
 				} else {
 					c.bridge.Timeit(targetDefnID, -1) // add deterant to targetDefnID
@@ -599,6 +599,9 @@ func (c *GsiClient) getConsistency(
 	if cons == common.QueryConsistency && vector == nil {
 		return nil, ErrorExpectedTimestamp
 	} else if cons == common.SessionConsistency {
+		begin := time.Now()
+		fmsg := "Time taken by STATS call, %v"
+		defer logging.Debugf(fmsg, time.Since(begin))
 		if vector, err = c.BucketTs(bucket); err != nil {
 			return nil, err
 		}

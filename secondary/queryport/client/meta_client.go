@@ -234,6 +234,8 @@ func (b *metadataClient) GetScanport(
 
 // Timeit implement BridgeAccessor{} interface.
 func (b *metadataClient) Timeit(defnID uint64, value float64) {
+	fmsg := "Time taken to query index %v: %v"
+	logging.Debugf(fmsg, defnID, time.Duration(value))
 	b.loadb.Timeit(defnID, value)
 }
 
