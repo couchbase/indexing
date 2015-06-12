@@ -154,7 +154,7 @@ func (feed *Feed) MutationTopic(
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	err = c.OpError(err, resp, 1)
 	if err != nil {
-		return nil, err
+		return &protobuf.TopicResponse{}, err
 	}
 	return resp[0].(*protobuf.TopicResponse), nil
 }
@@ -169,7 +169,7 @@ func (feed *Feed) RestartVbuckets(
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	err = c.OpError(err, resp, 1)
 	if err != nil {
-		return nil, err
+		return &protobuf.TopicResponse{}, err
 	}
 	return resp[0].(*protobuf.TopicResponse), nil
 }
@@ -197,7 +197,7 @@ func (feed *Feed) AddBuckets(
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	err = c.OpError(err, resp, 1)
 	if err != nil {
-		return nil, err
+		return &protobuf.TopicResponse{}, err
 	}
 	return resp[0].(*protobuf.TopicResponse), nil
 }
