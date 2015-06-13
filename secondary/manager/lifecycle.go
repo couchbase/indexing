@@ -250,8 +250,13 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 	if !defn.Deferred {
 		if m.notifier != nil {
 			logging.Debugf("LifecycleMgr.handleCreateIndex() : start Index Build")
-			if err := m.notifier.OnIndexBuild([]common.IndexDefnId{defn.DefnId}, []string{defn.Bucket}); err != nil {
+			if errMap := m.notifier.OnIndexBuild([]common.IndexDefnId{defn.DefnId}, []string{defn.Bucket}); len(errMap) != 0 {
+				err := errMap[common.IndexInstId(defn.DefnId)]
 				logging.Errorf("LifecycleMgr.hanaleCreateIndex() : createIndex fails. Reason = %v", err)
+
+				m.notifier.OnIndexDelete(defn.DefnId, defn.Bucket)
+				m.repo.DropIndexById(defn.DefnId)
+				m.repo.deleteIndexFromTopology(defn.Bucket, defn.DefnId)
 				return err
 			}
 		}
@@ -301,9 +306,25 @@ func (m *LifecycleMgr) BuildIndexes(ids []common.IndexDefnId) error {
 	}
 
 	if m.notifier != nil {
-		if err := m.notifier.OnIndexBuild(ids, buckets); err != nil {
-			logging.Errorf("LifecycleMgr.hanaleBuildIndexes() : buildIndex fails. Reason = %v", err)
-			return err
+		if errMap := m.notifier.OnIndexBuild(ids, buckets); len(errMap) != 0 {
+			logging.Errorf("LifecycleMgr.hanaleBuildIndexes() : buildIndex fails. Reason = %v", errMap)
+			result := error(nil)
+
+			for instId, build_err := range errMap {
+				defnId := common.IndexDefnId(instId)
+
+				if defn, err := m.repo.GetIndexDefnById(defnId); err == nil {
+					m.UpdateIndexInstance(defn.Bucket, defnId, common.INDEX_STATE_NIL, common.NIL_STREAM, build_err.Error(), nil)
+				}
+
+				if result == nil {
+					result = build_err
+				} else if result.Error() != build_err.Error() {
+					result = errors.New("Build index fails. Please check index status for error.")
+				}
+			}
+
+			return result
 		}
 	}
 

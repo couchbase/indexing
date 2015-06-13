@@ -98,7 +98,7 @@ type IndexManager struct {
 type MetadataNotifier interface {
 	OnIndexCreate(*common.IndexDefn) error
 	OnIndexDelete(common.IndexDefnId, string) error
-	OnIndexBuild([]common.IndexDefnId, []string) error
+	OnIndexBuild([]common.IndexDefnId, []string) map[common.IndexInstId]error
 }
 
 type RequestServer interface {

@@ -826,11 +826,12 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 	}
 
 	bucketIndexList := idx.groupIndexListByBucket(instIdList)
+	errMap := make(map[common.IndexInstId]error)
 
 	initialBuildReqd := true
 	for bucket, instIdList := range bucketIndexList {
 
-		if ok := idx.checkValidIndexInst(bucket, instIdList, clientCh); !ok {
+		if ok := idx.checkValidIndexInst(bucket, instIdList, clientCh, errMap); !ok {
 			logging.Errorf("Indexer::handleBuildIndex \n\tInvalid Index List "+
 				"Bucket %v. IndexList %v", bucket, instIdList)
 			if idx.enableManager {
@@ -841,7 +842,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
-		if !idx.checkBucketExists(bucket, instIdList, clientCh) {
+		if !idx.checkBucketExists(bucket, instIdList, clientCh, errMap) {
 			logging.Errorf("Indexer::handleBuildIndex \n\tCannot Process Build Index."+
 				"Unknown Bucket %v.", bucket)
 			if idx.enableManager {
@@ -852,7 +853,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
-		if ok := idx.checkBucketInRecovery(bucket, instIdList, clientCh); ok {
+		if ok := idx.checkBucketInRecovery(bucket, instIdList, clientCh, errMap); ok {
 			logging.Errorf("Indexer::handleBuildIndex \n\tCannot Process Build Index "+
 				"In Recovery Mode. Bucket %v. IndexList %v", bucket, instIdList)
 			if idx.enableManager {
@@ -864,7 +865,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 
 		//check if Initial Build is already running for this index's bucket
-		if ok := idx.checkDuplicateInitialBuildRequest(bucket, instIdList, clientCh); !ok {
+		if ok := idx.checkDuplicateInitialBuildRequest(bucket, instIdList, clientCh, errMap); !ok {
 			logging.Errorf("Indexer::handleBuildIndex \n\tBuild Already In"+
 				"Progress. Bucket %v.", bucket)
 			if idx.enableManager {
@@ -892,9 +893,8 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
 			if idx.enableManager {
 				idx.bulkUpdateError(instIdList, errStr)
-				if err := idx.updateMetaInfoForIndexList(instIdList, false,
-					false, true, false); err != nil {
-					common.CrashOnError(err)
+				for _, instId := range instIdList {
+					errMap[instId] = errors.New(errStr)
 				}
 				delete(bucketIndexList, bucket)
 				continue
@@ -974,7 +974,11 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		}
 	}
 
-	clientCh <- &MsgSuccess{}
+	if idx.enableManager {
+		clientCh <- &MsgBuildIndexResponse{errMap: errMap}
+	} else {
+		clientCh <- &MsgSuccess{}
+	}
 
 }
 
@@ -1898,7 +1902,7 @@ func (idx *indexer) checkDuplicateIndex(indexInst common.IndexInst,
 //checkDuplicateInitialBuildRequest check if any other index on the given bucket
 //is already building
 func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
-	instIdList []common.IndexInstId, respCh MsgChannel) bool {
+	instIdList []common.IndexInstId, respCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
 	//if initial build is already running for some other index on this bucket,
 	//cannot start another one
@@ -1912,8 +1916,8 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
 			errStr := fmt.Sprintf("Build Already In Progress. Bucket %v", bucket)
 			if idx.enableManager {
 				idx.bulkUpdateError(instIdList, errStr)
-				if err := idx.updateMetaInfoForIndexList(instIdList, false, false, true, false); err != nil {
-					common.CrashOnError(err)
+				for _, instId := range instIdList {
+					errMap[instId] = errors.New(errStr)
 				}
 			} else if respCh != nil {
 				respCh <- &MsgError{
@@ -3197,7 +3201,7 @@ func (idx *indexer) bulkUpdateBuildTs(instIdList []common.IndexInstId,
 }
 
 func (idx *indexer) checkBucketInRecovery(bucket string,
-	instIdList []common.IndexInstId, clientCh MsgChannel) bool {
+	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
 	if idx.streamBucketStatus[common.INIT_STREAM][bucket] == STREAM_RECOVERY ||
 		idx.streamBucketStatus[common.MAINT_STREAM][bucket] == STREAM_RECOVERY {
@@ -3205,9 +3209,8 @@ func (idx *indexer) checkBucketInRecovery(bucket string,
 		if idx.enableManager {
 			errStr := fmt.Sprintf("Bucket %v In Recovery", bucket)
 			idx.bulkUpdateError(instIdList, errStr)
-			if err := idx.updateMetaInfoForIndexList(instIdList, false,
-				false, true, false); err != nil {
-				common.CrashOnError(err)
+			for _, instId := range instIdList {
+				errMap[instId] = errors.New(errStr)
 			}
 		} else if clientCh != nil {
 			clientCh <- &MsgError{
@@ -3222,7 +3225,7 @@ func (idx *indexer) checkBucketInRecovery(bucket string,
 }
 
 func (idx *indexer) checkValidIndexInst(bucket string,
-	instIdList []common.IndexInstId, clientCh MsgChannel) bool {
+	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
 	//validate instance list
 	for _, instId := range instIdList {
@@ -3230,9 +3233,8 @@ func (idx *indexer) checkValidIndexInst(bucket string,
 			if idx.enableManager {
 				errStr := fmt.Sprintf("Unknown Index Instance %v In Build Request", instId)
 				idx.bulkUpdateError(instIdList, errStr)
-				if err := idx.updateMetaInfoForIndexList(instIdList, false,
-					false, true, false); err != nil {
-					common.CrashOnError(err)
+				for _, instId := range instIdList {
+					errMap[instId] = errors.New(errStr)
 				}
 			} else if clientCh != nil {
 				clientCh <- &MsgError{
@@ -3244,6 +3246,7 @@ func (idx *indexer) checkValidIndexInst(bucket string,
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -3266,7 +3269,7 @@ func (idx *indexer) groupIndexListByBucket(instIdList []common.IndexInstId) map[
 }
 
 func (idx *indexer) checkBucketExists(bucket string,
-	instIdList []common.IndexInstId, clientCh MsgChannel) bool {
+	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
 	var bucketUUIDList []string
 	for _, instId := range instIdList {
@@ -3280,9 +3283,8 @@ func (idx *indexer) checkBucketExists(bucket string,
 		if idx.enableManager {
 			errStr := fmt.Sprintf("Unknown Bucket %v In Build Request", bucket)
 			idx.bulkUpdateError(instIdList, errStr)
-			if err := idx.updateMetaInfoForIndexList(instIdList, false,
-				false, true, false); err != nil {
-				common.CrashOnError(err)
+			for _, instId := range instIdList {
+				errMap[instId] = errors.New(errStr)
 			}
 		} else if clientCh != nil {
 			clientCh <- &MsgError{
