@@ -449,9 +449,7 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 	}
 
 	if bucketMapDirty {
-		respMsg := m.sendMsgToStreamReader(streamId,
-			&MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap, stats: m.stats.Get()})
-
+		respMsg := m.sendMsgToStreamReader(streamId, m.newUpdateBucketQueuesMsg(bucketQueueMap))
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamBucketQueueMap[streamId] = bucketQueueMap
@@ -461,6 +459,10 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 	}
 
 	return &MsgSuccess{}
+}
+
+func (m *mutationMgr) newUpdateBucketQueuesMsg(bucketQueueMap BucketQueueMap) *MsgUpdateBucketQueue {
+	return &MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap, stats: m.stats.Get()}
 }
 
 //handleRemoveIndexListFromStream removes a list of indexes from an
@@ -521,9 +523,7 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 	}
 
 	if bucketMapDirty {
-		respMsg := m.sendMsgToStreamReader(streamId,
-			&MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap})
-
+		respMsg := m.sendMsgToStreamReader(streamId, m.newUpdateBucketQueuesMsg(bucketQueueMap))
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamBucketQueueMap[streamId] = bucketQueueMap
@@ -591,9 +591,7 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 
 		m.supvCmdch <- &MsgSuccess{}
 	} else if bucketMapDirty {
-		respMsg := m.sendMsgToStreamReader(streamId,
-			&MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap})
-
+		respMsg := m.sendMsgToStreamReader(streamId, m.newUpdateBucketQueuesMsg(bucketQueueMap))
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamBucketQueueMap[streamId] = bucketQueueMap

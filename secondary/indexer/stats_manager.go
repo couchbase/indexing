@@ -211,8 +211,12 @@ func (s IndexerStats) Clone() *IndexerStats {
 	var clone IndexerStats
 	clone = s
 	clone.indexes = make(map[common.IndexInstId]*IndexStats)
+	clone.buckets = make(map[string]*BucketStats)
 	for k, v := range s.indexes {
 		clone.indexes[k] = v
+	}
+	for k, v := range s.buckets {
+		clone.buckets[k] = v
 	}
 
 	return &clone
