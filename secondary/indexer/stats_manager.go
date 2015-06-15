@@ -120,6 +120,15 @@ func (s *IndexerStats) Init() {
 	s.needsRestart.Init()
 }
 
+func (s *IndexerStats) Reset() {
+	old := *s
+	*s = IndexerStats{}
+	s.Init()
+	for k, v := range old.indexes {
+		s.AddIndex(k, v.bucket, v.name)
+	}
+}
+
 func (s *IndexerStats) AddIndex(id common.IndexInstId, bucket string, name string) {
 	idxStats := &IndexStats{name: name, bucket: bucket}
 	idxStats.Init()
@@ -230,7 +239,7 @@ func NewIndexerStats() *IndexerStats {
 
 type statsManager struct {
 	sync.Mutex
-	conf                  common.Config
+	config                common.ConfigHolder
 	stats                 IndexerStatsHolder
 	supvCmdch             MsgChannel
 	supvMsgch             MsgChannel
@@ -243,15 +252,17 @@ type statsManager struct {
 func NewStatsManager(supvCmdch MsgChannel,
 	supvMsgch MsgChannel, config common.Config) (statsManager, Message) {
 	s := statsManager{
-		conf:                 config,
 		supvCmdch:            supvCmdch,
 		supvMsgch:            supvMsgch,
 		lastStatTime:         time.Unix(0, 0),
 		statsLogDumpInterval: config["settings.statsLogDumpInterval"].Uint64(),
 	}
 
+	s.config.Store(config)
+
 	http.HandleFunc("/stats", s.handleStatsReq)
 	http.HandleFunc("/stats/mem", s.handleMemStatsReq)
+	http.HandleFunc("/stats/reset", s.handleStatsResetReq)
 	go s.run()
 	go s.runStatsDumpLogger()
 	return s, &MsgSuccess{}
@@ -259,7 +270,8 @@ func NewStatsManager(supvCmdch MsgChannel,
 
 func (s *statsManager) tryUpdateStats(sync bool) {
 	waitCh := make(chan struct{})
-	timeout := time.Millisecond * time.Duration(s.conf["stats_cache_timeout"].Uint64())
+	conf := s.config.Load()
+	timeout := time.Millisecond * time.Duration(conf["stats_cache_timeout"].Uint64())
 
 	s.Lock()
 	cacheTime := s.lastStatTime
@@ -334,6 +346,25 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Request) {
+	conf := s.config.Load()
+	valid, _ := common.IsAuthValid(r, conf["clusterAddr"].String())
+	if !valid {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized"))
+		return
+	}
+
+	if r.Method == "POST" || r.Method == "GET" {
+		s.supvMsgch <- &MsgResetStats{}
+		w.WriteHeader(200)
+		w.Write([]byte("OK"))
+	} else {
+		w.WriteHeader(400)
+		w.Write([]byte("Unsupported method"))
+	}
+}
+
 func (s *statsManager) run() {
 loop:
 	for {
@@ -365,8 +396,8 @@ func (s *statsManager) handleIndexInstanceUpdate(cmd Message) {
 
 func (s *statsManager) handleConfigUpdate(cmd Message) {
 	cfg := cmd.(*MsgConfigUpdate)
-	config := cfg.GetConfig()
-	atomic.StoreUint64(&s.statsLogDumpInterval, config["settings.statsLogDumpInterval"].Uint64())
+	s.config.Store(cfg.GetConfig())
+	atomic.StoreUint64(&s.statsLogDumpInterval, cfg.GetConfig()["settings.statsLogDumpInterval"].Uint64())
 	s.supvCmdch <- &MsgSuccess{}
 }
 
