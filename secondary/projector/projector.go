@@ -166,6 +166,9 @@ func (p *Projector) GetFeed(topic string) (*Feed, error) {
 	defer p.rw.RUnlock()
 
 	if feed, ok := p.topics[topic]; ok {
+		if err := feed.Ping(); err != nil {
+			return nil, err
+		}
 		return feed, nil
 	}
 	return nil, projC.ErrorTopicMissing
@@ -370,7 +373,7 @@ func (p *Projector) doRestartVbuckets(
 	feed, err := p.acquireFeed(topic)
 	defer p.releaseFeed(topic)
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
+		logging.Errorf("%v ##%x acquireFeed(): %v\n", prefix, opaque, err)
 		response := &protobuf.TopicResponse{}
 		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
@@ -404,7 +407,7 @@ func (p *Projector) doShutdownVbuckets(
 	feed, err := p.acquireFeed(topic)
 	defer p.releaseFeed(topic)
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
+		logging.Errorf("%v ##%x acquireFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
@@ -430,7 +433,7 @@ func (p *Projector) doAddBuckets(
 	feed, err := p.acquireFeed(topic)
 	defer p.releaseFeed(topic)
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
+		logging.Errorf("%v ##%x acquireFeed(): %v\n", prefix, opaque, err)
 		response := &protobuf.TopicResponse{}
 		if err != projC.ErrorTopicMissing {
 			response = feed.GetTopicResponse()
@@ -463,7 +466,7 @@ func (p *Projector) doDelBuckets(
 	feed, err := p.acquireFeed(topic)
 	defer p.releaseFeed(topic)
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
+		logging.Errorf("%v ##%x acquireFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
@@ -487,7 +490,7 @@ func (p *Projector) doAddInstances(
 	feed, err := p.acquireFeed(topic)
 	defer p.releaseFeed(topic)
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
+		logging.Errorf("%v ##%x acquireFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
@@ -510,7 +513,7 @@ func (p *Projector) doDelInstances(
 	feed, err := p.acquireFeed(topic)
 	defer p.releaseFeed(topic)
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
+		logging.Errorf("%v ##%x acquireFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
@@ -534,7 +537,7 @@ func (p *Projector) doRepairEndpoints(
 	feed, err := p.acquireFeed(topic)
 	defer p.releaseFeed(topic)
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", prefix, opaque, err)
+		logging.Errorf("%v ##%x acquireFeed(): %v\n", prefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
@@ -558,7 +561,7 @@ func (p *Projector) doShutdownTopic(
 	feed, err := p.acquireFeed(topic)
 	defer p.releaseFeed(topic)
 	if err != nil {
-		logging.Errorf("%v ##%x GetFeed(): %v\n", p.logPrefix, opaque, err)
+		logging.Errorf("%v ##%x acquireFeed(): %v\n", p.logPrefix, opaque, err)
 		return protobuf.NewError(err)
 	}
 
@@ -704,8 +707,15 @@ func (p *Projector) acquireFeed(topic string) (*Feed, error) {
 	}
 	p.topicSerialize[topic] = mu
 	p.rw.Unlock()
-	mu.Lock()
-	return p.GetFeed(topic)
+
+	mu.Lock() // every acquireFeed is accompanied by releaseFeed. lock always!
+
+	feed, err := p.GetFeed(topic)
+	if err != nil {
+		p.DelFeed(topic)
+		return nil, projC.ErrorTopicMissing
+	}
+	return feed, nil
 }
 
 func (p *Projector) releaseFeed(topic string) {
