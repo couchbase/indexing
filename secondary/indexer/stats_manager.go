@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -246,16 +245,17 @@ type statsManager struct {
 	lastStatTime          time.Time
 	cacheUpdateInProgress bool
 
-	statsLogDumpInterval uint64
+	statsLogDumpInterval platform.AlignedUint64
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
 	supvMsgch MsgChannel, config common.Config) (statsManager, Message) {
 	s := statsManager{
-		supvCmdch:            supvCmdch,
-		supvMsgch:            supvMsgch,
-		lastStatTime:         time.Unix(0, 0),
-		statsLogDumpInterval: config["settings.statsLogDumpInterval"].Uint64(),
+		supvCmdch:    supvCmdch,
+		supvMsgch:    supvMsgch,
+		lastStatTime: time.Unix(0, 0),
+		statsLogDumpInterval: platform.AlignedUint64(
+			config["settings.statsLogDumpInterval"].Uint64()),
 	}
 
 	s.config.Store(config)
@@ -397,7 +397,7 @@ func (s *statsManager) handleIndexInstanceUpdate(cmd Message) {
 func (s *statsManager) handleConfigUpdate(cmd Message) {
 	cfg := cmd.(*MsgConfigUpdate)
 	s.config.Store(cfg.GetConfig())
-	atomic.StoreUint64(&s.statsLogDumpInterval, cfg.GetConfig()["settings.statsLogDumpInterval"].Uint64())
+	platform.StoreUint64(&s.statsLogDumpInterval, cfg.GetConfig()["settings.statsLogDumpInterval"].Uint64())
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -409,6 +409,6 @@ func (s *statsManager) runStatsDumpLogger() {
 			logging.Infof("PeriodicStats = %s", string(bytes))
 		}
 
-		time.Sleep(time.Second * time.Duration(atomic.LoadUint64(&s.statsLogDumpInterval)))
+		time.Sleep(time.Second * time.Duration(platform.LoadUint64(&s.statsLogDumpInterval)))
 	}
 }
