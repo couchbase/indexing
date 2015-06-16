@@ -433,7 +433,7 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			maxVbQueueLen := m.config["settings.maxVbQueueLength"].Uint64()
+			maxVbQueueLen := m.calcQueueLenFromMemQuota()
 			if queue = NewAtomicMutationQueue(m.numVbuckets, int64(maxVbQueueLen)); queue == nil {
 				return &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
