@@ -1537,16 +1537,19 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 		tsVbuuid := tk.ss.getNextStabilityTS(streamId, bucket)
 
 		//persist TS which completes the build
-		if !tsVbuuid.IsPersisted() && tk.isBuildCompletionTs(streamId, bucket, tsVbuuid) {
-			tsVbuuid.SetPersisted(true)
+		if tk.isBuildCompletionTs(streamId, bucket, tsVbuuid) {
+			tsVbuuid.SetSnapType(common.DISK_SNAP)
 		}
 
 		if tk.ss.canFlushNewTS(streamId, bucket) {
 			tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		} else {
 			//store the ts in list
-			logging.Debugf("Timekeeper::generateNewStabilityTS %v %v Added TS to Pending List "+
-				"%v ", bucket, streamId, tsVbuuid)
+			logging.LazyDebug(func() string {
+				return fmt.Sprintf(
+					"Timekeeper::generateNewStabilityTS %v %v Added TS to Pending List "+
+						"%v ", bucket, streamId, tsVbuuid)
+			})
 			tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
 			tsList.PushBack(tsVbuuid)
 		}
@@ -1625,14 +1628,20 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 			tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_DONE {
 			//if HWT is greater than flush TS, this TS can be flush
 			if tsHWT.GreaterThanEqual(ts) {
-				logging.Debugf("Timekeeper::processPendingTS \n\tProcessing Flush TS %v "+
-					"before recovery for bucket %v streamId %v", ts, bucket, streamId)
+				logging.LazyDebug(func() string {
+					return fmt.Sprintf(
+						"Timekeeper::processPendingTS \n\tProcessing Flush TS %v "+
+							"before recovery for bucket %v streamId %v", ts, bucket, streamId)
+				})
 			} else {
 				//empty the TSList for this bucket and stream so
 				//there is no further processing for this bucket.
-				logging.Debugf("Timekeeper::processPendingTS \n\tCannot Flush TS %v "+
-					"before recovery for bucket %v streamId %v. Clearing Ts List", ts,
-					bucket, streamId)
+				logging.LazyDebug(func() string {
+					return fmt.Sprintf(
+						"Timekeeper::processPendingTS \n\tCannot Flush TS %v "+
+							"before recovery for bucket %v streamId %v. Clearing Ts List", ts,
+						bucket, streamId)
+				})
 				tsList.Init()
 				return false
 			}
@@ -1649,8 +1658,10 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string,
 	streamId common.StreamId) {
 
-	logging.Tracef("Timekeeper::sendNewStabilityTS Bucket: %v "+
-		"Stream: %v TS: %v", bucket, streamId, flushTs)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("Timekeeper::sendNewStabilityTS Bucket: %v "+
+			"Stream: %v TS: %v", bucket, streamId, flushTs)
+	})
 
 	tk.mayBeMakeSnapAligned(streamId, bucket, flushTs)
 
@@ -1659,7 +1670,7 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 		return
 	}
 
-	tk.maybeSetPersistFlag(streamId, bucket, flushTs)
+	tk.setSnapshotType(streamId, bucket, flushTs)
 
 	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = flushTs
 
@@ -1671,8 +1682,8 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 	}()
 }
 
-//sets the persisted flag based on configuration
-func (tk *timekeeper) maybeSetPersistFlag(streamId common.StreamId, bucket string,
+//set the snapshot type
+func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	flushTs *common.TsVbuuid) {
 
 	snapPersistInterval := tk.config["settings.persisted_snapshot.interval"].Uint64()
@@ -1680,15 +1691,66 @@ func (tk *timekeeper) maybeSetPersistFlag(streamId common.StreamId, bucket strin
 	persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 	lastPersistTime := tk.ss.streamBucketLastPersistTime[streamId][bucket]
 
-	//for init build, just follow wall clock time
-	//for incremental build, persist only if ts is snap aligned
-	if time.Since(lastPersistTime) > persistDuration {
-		if tk.hasInitStateIndex(streamId, bucket) || flushTs.IsSnapAligned() {
-			flushTs.SetPersisted(true)
+	//for init build, if there is no snapshot option set
+	if tk.hasInitStateIndex(streamId, bucket) {
+		if flushTs.GetSnapType() == common.NO_SNAP {
+			//if this TS is a merge candidate, generate in-mem snapshot
+			if tk.checkMergeCandidateTs(streamId, bucket, flushTs) {
+				flushTs.SetSnapType(common.INMEM_SNAP)
+			}
+
+			//create disk snapshot based on wall clock time
+			if time.Since(lastPersistTime) > persistDuration {
+				flushTs.SetSnapType(common.DISK_SNAP)
+				tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
+			}
+		}
+	} else if flushTs.IsSnapAligned() {
+		//for incremental build, snapshot only if ts is snap aligned
+		//set either in-mem or persist snapshot based on wall clock time
+		if time.Since(lastPersistTime) > persistDuration {
+			flushTs.SetSnapType(common.DISK_SNAP)
 			tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
+		} else {
+			flushTs.SetSnapType(common.INMEM_SNAP)
 		}
 	}
 
+}
+
+//checkMergeCandidateTs check if a TS is a candidate for merge with
+//MAINT_STREAM
+func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
+	bucket string, flushTs *common.TsVbuuid) bool {
+
+	//if stream is not INIT_STREAM, merge is not required
+	if streamId != common.INIT_STREAM {
+		return false
+	}
+
+	//if flushTs is not on snap boundary, it is not merge candidate
+	if !flushTs.IsSnapAligned() {
+		return false
+	}
+
+	//if the flushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
+	//this TS is a merge candidate
+	bucketLastFlushedTsMap := tk.ss.streamBucketLastFlushedTsMap[common.MAINT_STREAM]
+	lastFlushedTsVbuuid := bucketLastFlushedTsMap[bucket]
+
+	mergeCandidate := false
+	//if no flush has happened yet, its a merge candidate
+	if lastFlushedTsVbuuid == nil {
+		mergeCandidate = true
+	} else {
+		lastFlushedTs := getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
+		ts := getSeqTsFromTsVbuuid(flushTs)
+		if ts.GreaterThanEqual(lastFlushedTs) {
+			mergeCandidate = true
+		}
+	}
+
+	return mergeCandidate
 }
 
 //mayBeMakeSnapAligned makes a Ts snap aligned if all seqnos
@@ -1714,6 +1776,11 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 			flushTs.Seqnos[i] = s[1]
 		}
 	}
+
+	if flushTs.CheckSnapAligned() {
+		flushTs.SetSnapAligned(true)
+	}
+
 }
 
 //splits a Ts if current HWT is less than Snapshot End for the vbucket.
@@ -1731,7 +1798,6 @@ func (tk *timekeeper) maybeSplitTs(ts *common.TsVbuuid, bucket string,
 		if hwt.Seqnos[i] < s[1] {
 			if newTs == nil {
 				newTs = ts.Copy()
-				newTs.SetPersisted(false)
 			}
 			newTs.Seqnos[i] = hwt.Seqnos[i]
 		}

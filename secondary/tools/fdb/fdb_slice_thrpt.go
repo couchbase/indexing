@@ -2,14 +2,21 @@ package main
 
 import (
 	"fmt"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/indexer"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"runtime/pprof"
 	"time"
 )
 
 func main() {
+
+	go func() {
+		http.ListenAndServe("localhost:6060", nil)
+	}()
 
 	f, _ := os.Create("cpu.prof")
 	pprof.StartCPUProfile(f)
@@ -26,18 +33,24 @@ func do_test1() {
 
 	log.Println("***** TEST1 TWO KV STORE 5M INSERT EACH WITH GET *****")
 
-	slice, _ := indexer.NewForestDBSlice(".", 0, 1, 1, false, nil)
+	config := common.SystemConfig.SectionConfig(
+		"indexer.", true /*trim*/)
+
+	stats := &indexer.IndexStats{}
+	stats.Init()
+
+	slice, _ := indexer.NewForestDBSlice(".", 0, 1, 1, false, config, stats)
 
 	log.Println("***** GENERATING *****")
-	numItems := 1000000
-	keys := make([]*indexer.Key, numItems)
+	numItems := 5000000
+	keys := make([][]byte, numItems)
 	//lenkeys := make([]int, numItems)
-	vals := make([]*indexer.Value, numItems)
+	vals := make([][]byte, numItems)
 	//lenvals := make([]int, numItems)
 	for i := 0; i < numItems; i++ {
-		keys[i], _ = indexer.NewKey([]byte(fmt.Sprintf("perf%v", i)))
+		keys[i] = []byte(fmt.Sprintf("perf%v", i))
 		//lenkeys[i] = len(keys[i])
-		vals[i], _ = indexer.NewValue([]byte(fmt.Sprintf("body%v", i)))
+		vals[i] = []byte(fmt.Sprintf("body%v", i))
 		//	lenvals[i] = len(vals[i])
 	}
 

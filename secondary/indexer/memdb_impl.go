@@ -96,6 +96,10 @@ func (s *memDBSlice) SetStatus(ss SliceStatus) {
 	s.status = ss
 }
 
+func (s *memDBSlice) UpdateConfig(cfg c.Config) {
+	s.conf = cfg
+}
+
 func (s *memDBSlice) Insert(k []byte, docid []byte) error {
 	s.Lock()
 	defer s.Unlock()

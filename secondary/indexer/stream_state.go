@@ -12,6 +12,7 @@ package indexer
 import (
 	"container/list"
 	"errors"
+	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"time"
@@ -642,7 +643,9 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 		}
 	}
 
-	logging.Tracef("StreamState::updateHWT HWT Updated : %v", ts)
+	logging.LazyTrace(func() string {
+		return fmt.Sprintf("StreamState::updateHWT HWT Updated : %v", ts)
+	})
 }
 
 func (ss *StreamState) checkNewTSDue(streamId common.StreamId, bucket string) bool {
@@ -659,6 +662,10 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 
 	//reset state for next TS
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
+
+	if tsVbuuid.CheckSnapAligned() {
+		tsVbuuid.SetSnapAligned(true)
+	}
 
 	return tsVbuuid
 }

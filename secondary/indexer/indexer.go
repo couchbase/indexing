@@ -639,6 +639,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		<-idx.mutMgrCmdCh
 		idx.statsMgrCmdCh <- msg
 		<-idx.statsMgrCmdCh
+		idx.updateSliceWithConfig(newConfig)
 
 	case INDEXER_INIT_PREP_RECOVERY:
 		idx.handleInitPrepRecovery(msg)
@@ -3488,4 +3489,23 @@ kvtsloop:
 	}
 
 	return buildTs
+}
+
+func (idx *indexer) updateSliceWithConfig(config common.Config) {
+
+	//for every index managed by this indexer
+	for _, partnMap := range idx.indexPartnMap {
+
+		//for all partitions managed by this indexer
+		for _, partnInst := range partnMap {
+
+			sc := partnInst.Sc
+
+			//update config for all the slices
+			for _, slice := range sc.GetAllSlices() {
+				slice.UpdateConfig(config)
+			}
+		}
+	}
+
 }

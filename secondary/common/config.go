@@ -609,7 +609,7 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.maxVbQueueLength": ConfigValue{
-		uint64(10000),
+		uint64(0),
 		"Maximum Length of Mutation Queue Per Vbucket. This " +
 			"allocation is done per bucket.",
 		uint64(10000),
@@ -642,6 +642,12 @@ var SystemConfig = Config{
 		"Periodic stats dump logging interval in seconds",
 		uint64(60),
 		false,
+	},
+	"indexer.settings.max_writer_lock_prob": ConfigValue{
+		50,
+		"Controls the write rate for compaction to catch up",
+		50,
+		false, // mutable
 	},
 	"projector.settings.log_level": ConfigValue{
 		"debug",

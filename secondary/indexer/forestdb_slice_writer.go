@@ -56,6 +56,10 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 	config.SetBufferCacheSize(memQuota)
 	logging.Debugf("NewForestDBSlice(): buffer cache size %d", memQuota)
 
+	prob := sysconf["settings.max_writer_lock_prob"].Int()
+	config.SetMaxWriterLockProb(uint8(prob))
+	logging.Debugf("NewForestDBSlice(): max writer lock prob %d", prob)
+
 	kvconfig := forestdb.DefaultKVStoreConfig()
 
 retry:
@@ -69,6 +73,7 @@ retry:
 	}
 
 	slice.config = config
+	slice.sysconf = sysconf
 
 	config.SetOpenFlags(forestdb.OPEN_FLAG_RDONLY)
 	if slice.statFd, err = forestdb.Open(filepath, config); err != nil {
@@ -178,6 +183,8 @@ type fdbSlice struct {
 	totalCommitTime time.Duration
 
 	idxStats *IndexStats
+	sysconf  common.Config
+	confLock sync.Mutex
 }
 
 func (fdb *fdbSlice) IncrRef() {
@@ -712,7 +719,11 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 		sic := NewSnapshotInfoContainer(infos)
 		sic.Add(newSnapshotInfo)
 
-		if sic.Len() > MAX_SNAPSHOTS_PER_INDEX {
+		fdb.confLock.Lock()
+		maxRollbacks := fdb.sysconf["settings.recovery.max_rollbacks"].Int()
+		fdb.confLock.Unlock()
+
+		if sic.Len() > maxRollbacks {
 			sic.RemoveOldest()
 		}
 
@@ -933,6 +944,13 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 	sts.DeleteBytes = platform.LoadInt64(&fdb.delete_bytes)
 
 	return sts, nil
+}
+
+func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {
+	fdb.confLock.Lock()
+	defer fdb.confLock.Unlock()
+
+	fdb.sysconf = cfg
 }
 
 func (fdb *fdbSlice) String() string {
