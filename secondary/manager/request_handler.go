@@ -329,6 +329,8 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) (
 							stateStr = "Created"
 						case common.INDEX_STATE_INITIAL:
 							stateStr = "Building"
+						case common.INDEX_STATE_CATCHUP:
+							stateStr = "Building"
 						case common.INDEX_STATE_ACTIVE:
 							stateStr = "Ready"
 						}
