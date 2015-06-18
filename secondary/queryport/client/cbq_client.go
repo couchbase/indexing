@@ -232,6 +232,11 @@ func (b *cbqClient) IndexState(defnID uint64) (common.IndexState, error) {
 	return common.INDEX_STATE_ACTIVE, nil
 }
 
+// IsPrimary implement BridgeAccessor{} interface.
+func (b *cbqClient) IsPrimary(defnID uint64) bool {
+	return false
+}
+
 // Close implement BridgeAccessor
 func (b *cbqClient) Close() {
 	// TODO: do nothing ?

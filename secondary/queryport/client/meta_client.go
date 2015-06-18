@@ -239,6 +239,23 @@ func (b *metadataClient) Timeit(defnID uint64, value float64) {
 	b.loadb.Timeit(defnID, value)
 }
 
+// IsPrimary implement BridgeAccessor{} interface.
+func (b *metadataClient) IsPrimary(defnID uint64) bool {
+	b.Refresh()
+
+	b.rw.RLock()
+	defer b.rw.RUnlock()
+
+	for _, indexes := range b.topology {
+		for _, index := range indexes {
+			if index.Definition.DefnId == common.IndexDefnId(defnID) {
+				return index.Definition.IsPrimary
+			}
+		}
+	}
+	return false
+}
+
 // IndexState implement BridgeAccessor{} interface.
 func (b *metadataClient) IndexState(defnID uint64) (common.IndexState, error) {
 	b.Refresh()

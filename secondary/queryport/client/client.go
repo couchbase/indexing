@@ -156,6 +156,9 @@ type BridgeAccessor interface {
 	// IndexState returns the current state of index `defnID` and error.
 	IndexState(defnID uint64) (common.IndexState, error)
 
+	// IsPrimary returns whether index is on primary key.
+	IsPrimary(defnID uint64) bool
+
 	// Timeit will add `value` to incrementalAvg for index-load.
 	Timeit(defnID uint64, value float64)
 
@@ -441,6 +444,19 @@ func (c *GsiClient) Range(
 		if err != nil {
 			return err
 		}
+		if c.bridge.IsPrimary(targetDefnID) {
+			var l, h []byte
+			// primary keys are plain sequence of binary.
+			if low != nil && len(low) > 0 {
+				l = []byte(low[0].(string))
+			}
+			if high != nil && len(high) > 0 {
+				h = []byte(high[0].(string))
+			}
+			return qc.RangePrimary(
+				targetDefnID, l, h, inclusion, distinct, limit, cons, vector, callb)
+		}
+		// dealing with secondary index.
 		return qc.Range(
 			targetDefnID, low, high, inclusion, distinct, limit, cons, vector, callb)
 	})
