@@ -472,7 +472,7 @@ func TestMultipleBuckets(t *testing.T) {
 	UpdateKVDocs(bucketDocs[0], docs)
 }
 
-func TestBucketFlush(t *testing.T) {
+func SkipTestBucketFlush(t *testing.T) {
 	log.Printf("In TestBucketFlush()")
 
 	var bucketName = "default"
