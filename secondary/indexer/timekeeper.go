@@ -2211,8 +2211,9 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					flushedCount += seqno
 				}
 			}
-
 			v := flushedCount
+			idxStats.numDocsIndexed.Set(int64(flushedCount))
+
 			receivedTs := tk.ss.streamBucketHWTMap[inst.Stream][inst.Defn.Bucket]
 			queued := uint64(0)
 			if receivedTs != nil {
@@ -2225,6 +2226,8 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					queued += seqno - flushSeqno
 				}
 			}
+
+			idxStats.numDocsQueued.Set(int64(queued))
 
 			pending := uint64(0)
 			kvTs := bucketTsMap[inst.Defn.Bucket]
@@ -2240,6 +2243,8 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					pending += uint64(seqno) - recvdSeqno
 				}
 			}
+
+			idxStats.numDocsPending.Set(int64(pending))
 
 			switch inst.State {
 			default:
@@ -2258,13 +2263,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 					v = 100
 				}
 			}
-
-			if idxStats != nil {
-				idxStats.numDocsIndexed.Set(int64(flushedCount))
-				idxStats.numDocsQueued.Set(int64(queued))
-				idxStats.numDocsPending.Set(int64(pending))
-				idxStats.buildProgress.Set(int64(v))
-			}
+			idxStats.buildProgress.Set(int64(v))
 		}
 
 		replych <- true

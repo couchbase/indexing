@@ -1330,6 +1330,13 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	logging.Debugf("Indexer::handleBucketNotFound StreamId %v Bucket %v",
 		streamId, bucket)
 
+	for _, index := range idx.indexInstMap {
+		if index.Stream == streamId &&
+			index.Defn.Bucket == bucket {
+			idx.stats.RemoveIndex(index.InstId)
+		}
+	}
+
 	// delete index inst on the bucket from metadata repository and
 	// return the list of deleted inst
 	instIdList := idx.deleteIndexInstOnDeletedBucket(bucket, streamId)
@@ -3429,7 +3436,6 @@ func (idx *indexer) deleteIndexInstOnDeletedBucket(bucket string, streamId commo
 
 			if !found {
 				instIdList = append(instIdList, index.InstId)
-				idx.stats.RemoveIndex(index.InstId)
 			}
 		}
 	}
