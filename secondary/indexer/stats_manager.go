@@ -36,6 +36,32 @@ func (s *BucketStats) Init() {
 	s.numMutationsQueued.Init()
 }
 
+type IndexTimingStats struct {
+	stCloneHandle    stats.TimingStat
+	stNewIterator    stats.TimingStat
+	stIteratorNext   stats.TimingStat
+	stSnapshotCreate stats.TimingStat
+	stSnapshotClose  stats.TimingStat
+	stHandleOpen     stats.TimingStat
+	stCommit         stats.TimingStat
+	stKVGet          stats.TimingStat
+	stKVSet          stats.TimingStat
+	stKVDelete       stats.TimingStat
+}
+
+func (it *IndexTimingStats) Init() {
+	it.stCloneHandle.Init()
+	it.stCommit.Init()
+	it.stNewIterator.Init()
+	it.stSnapshotCreate.Init()
+	it.stSnapshotClose.Init()
+	it.stHandleOpen.Init()
+	it.stKVGet.Init()
+	it.stKVSet.Init()
+	it.stIteratorNext.Init()
+	it.stKVDelete.Init()
+}
+
 type IndexStats struct {
 	name, bucket string
 
@@ -62,6 +88,8 @@ type IndexStats struct {
 	lastTsTime       stats.Int64Val
 	numFlushQueued   stats.Int64Val
 	fragPercent      stats.Int64Val
+
+	Timings IndexTimingStats
 }
 
 type IndexerStatsHolder struct {
@@ -100,6 +128,7 @@ func (s *IndexStats) Init() {
 	s.numCompactions.Init()
 	s.flushQueueSize.Init()
 	s.numFlushQueued.Init()
+	s.Timings.Init()
 }
 
 type IndexerStats struct {
@@ -207,6 +236,17 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("avg_scan_latency", scanLat)
 		addStat("avg_scan_wait_latency", waitLat)
 		addStat("num_flush_queued", s.numFlushQueued.Value())
+
+		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
+		addStat("timings/storage_commit", s.Timings.stCommit.Value())
+		addStat("timings/storage_new_iterator", s.Timings.stNewIterator.Value())
+		addStat("timings/storage_snapshot_create", s.Timings.stSnapshotCreate.Value())
+		addStat("timings/storage_snapshot_close", s.Timings.stSnapshotClose.Value())
+		addStat("timings/storage_handle_open", s.Timings.stHandleOpen.Value())
+		addStat("timings/storage_get", s.Timings.stKVGet.Value())
+		addStat("timings/storage_set", s.Timings.stKVSet.Value())
+		addStat("timings/storage_iterator_next", s.Timings.stIteratorNext.Value())
+		addStat("timings/storage_del", s.Timings.stKVDelete.Value())
 	}
 
 	for _, s := range is.buckets {

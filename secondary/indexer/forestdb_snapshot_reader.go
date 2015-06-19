@@ -25,7 +25,7 @@ type EntryCallback func([]byte) error
 
 // Approximate items count
 func (s *fdbSnapshot) StatCountTotal() (uint64, error) {
-	c := s.slice.(*fdbSlice).GetCommittedCount()
+	c := s.slice.GetCommittedCount()
 	return c, nil
 }
 
@@ -165,7 +165,7 @@ loop:
 }
 
 func (s *fdbSnapshot) isPrimary() bool {
-	return s.slice.(*fdbSlice).isPrimary
+	return s.slice.isPrimary
 }
 
 func closeIterator(it *ForestDBIterator) {
@@ -179,7 +179,7 @@ func (s *fdbSnapshot) newIndexEntry(b []byte) IndexEntry {
 	var entry IndexEntry
 	var err error
 
-	if s.slice.(*fdbSlice).isPrimary {
+	if s.slice.isPrimary {
 		entry, err = BytesToPrimaryIndexEntry(b)
 	} else {
 		entry, err = BytesToSecondaryIndexEntry(b)

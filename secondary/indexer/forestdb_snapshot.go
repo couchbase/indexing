@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/platform"
 	"math"
+	"time"
 )
 
 var FORESTDB_INMEMSEQ = forestdb.SeqNum(math.MaxUint64)
@@ -43,7 +44,7 @@ func (info *fdbSnapshotInfo) String() string {
 }
 
 type fdbSnapshot struct {
-	slice Slice
+	slice *fdbSlice
 
 	main *forestdb.KVStore // handle for forward index
 	back *forestdb.KVStore // handle for reverse index
@@ -72,6 +73,7 @@ func (s *fdbSnapshot) Create() error {
 		backSeq = FORESTDB_INMEMSEQ
 	}
 	var err error
+	t0 := time.Now()
 	s.main, err = s.main.SnapshotOpen(mainSeq)
 	if err != nil {
 		logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
@@ -96,6 +98,9 @@ func (s *fdbSnapshot) Create() error {
 				"Opening Meta DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), s.metaSeqNum, err)
 			return err
 		}
+		s.slice.idxStats.Timings.stHandleOpen.Put(time.Now().Sub(t0))
+	} else {
+		s.slice.idxStats.Timings.stSnapshotCreate.Put(time.Now().Sub(t0))
 	}
 
 	s.slice.IncrRef()
@@ -161,6 +166,8 @@ func (s *fdbSnapshot) Destroy() {
 
 	//close the main index
 	defer s.slice.DecrRef()
+
+	t0 := time.Now()
 	if s.main != nil {
 		err := s.main.Close()
 		if err != nil {
@@ -194,8 +201,9 @@ func (s *fdbSnapshot) Destroy() {
 		} else {
 			logging.Errorf("ForestDBSnapshot::Close Meta DB Handle Nil")
 		}
+	} else {
+		s.slice.idxStats.Timings.stSnapshotClose.Put(time.Now().Sub(t0))
 	}
-
 }
 
 func (s *fdbSnapshot) String() string {
