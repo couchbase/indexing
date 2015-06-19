@@ -61,6 +61,7 @@ type IndexStats struct {
 	avgTsInterval    stats.Int64Val
 	lastTsTime       stats.Int64Val
 	numFlushQueued   stats.Int64Val
+	fragPercent      stats.Int64Val
 }
 
 type IndexerStatsHolder struct {
@@ -88,6 +89,7 @@ func (s *IndexStats) Init() {
 	s.numDocsQueued.Init()
 	s.deleteBytes.Init()
 	s.dataSize.Init()
+	s.fragPercent.Init()
 	s.scanBytesRead.Init()
 	s.getBytes.Init()
 	s.itemsCount.Init()
@@ -193,6 +195,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_docs_queued", s.numDocsQueued.Value())
 		addStat("delete_bytes", s.deleteBytes.Value())
 		addStat("data_size", s.dataSize.Value())
+		addStat("frag_percent", s.fragPercent.Value())
 		addStat("scan_bytes_read", s.scanBytesRead.Value())
 		addStat("get_bytes", s.getBytes.Value())
 		addStat("items_count", s.itemsCount.Value())

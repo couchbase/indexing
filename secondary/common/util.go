@@ -623,3 +623,18 @@ func GetBucketUUID(cluster, bucket string) (string, error) {
 
 	return cinfo.GetBucketUUID(bucket), nil
 }
+
+func FileSize(name string) (int64, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+
+	return fi.Size(), nil
+}

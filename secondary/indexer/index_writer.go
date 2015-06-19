@@ -14,8 +14,9 @@ import (
 )
 
 type StorageStatistics struct {
-	DataSize int64
-	DiskSize int64
+	DataSize      int64
+	DiskSize      int64
+	Fragmentation int64
 
 	GetBytes    int64
 	InsertBytes int64

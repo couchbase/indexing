@@ -144,6 +144,9 @@ type fdbSlice struct {
 	// persisted items count
 	committedCount platform.AlignedUint64
 
+	// Fragmentation percent computed after last compaction
+	fragAfterCompaction platform.AlignedInt64
+
 	path     string
 	currfile string
 	id       SliceId //slice id
@@ -923,22 +926,48 @@ snaploop:
 	}
 
 	fdb.currfile = newpath
+
+	diskSz, err := common.FileSize(fdb.currfile)
+	config := forestdb.DefaultConfig()
+	config.SetOpenFlags(forestdb.OPEN_FLAG_RDONLY)
+	fdb.statFd.Close()
+	if fdb.statFd, err = forestdb.Open(fdb.currfile, config); err != nil {
+		return err
+	}
+	dataSz := int64(fdb.statFd.EstimateSpaceUsed())
+	frag := (diskSz - dataSz) * 100 / dataSz
+
+	platform.StoreInt64(&fdb.fragAfterCompaction, frag)
 	return err
 }
 
 func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 	var sts StorageStatistics
-	f, err := os.Open(fdb.currfile)
-	if err != nil {
-		return sts, err
-	}
-	fi, err := f.Stat()
+
+	sz, err := common.FileSize(fdb.currfile)
 	if err != nil {
 		return sts, err
 	}
 
 	sts.DataSize = int64(fdb.statFd.EstimateSpaceUsed())
-	sts.DiskSize = fi.Size()
+	sts.DiskSize = sz
+
+	// Compute approximate fragmentation percentage
+	// Since we keep multiple index snapshots after compaction, it is not
+	// trivial to compute fragmentation as ration of data size to disk size.
+	// Hence we compute approximate fragmentation by removing fragmentation
+	// threshold caused as a result of compaction.
+	sts.Fragmentation = 0
+	if sts.DataSize > 0 {
+		sts.Fragmentation = ((sts.DiskSize - sts.DataSize) * 100) / sts.DataSize
+	}
+	compactionFrag := platform.LoadInt64(&fdb.fragAfterCompaction)
+	sts.Fragmentation -= compactionFrag
+
+	if sts.Fragmentation < 0 {
+		sts.Fragmentation = 0
+	}
+
 	sts.GetBytes = platform.LoadInt64(&fdb.get_bytes)
 	sts.InsertBytes = platform.LoadInt64(&fdb.insert_bytes)
 	sts.DeleteBytes = platform.LoadInt64(&fdb.delete_bytes)
