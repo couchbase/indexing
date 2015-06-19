@@ -245,6 +245,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range indexPartnMap {
 		idxInst := indexInstMap[idxInstId]
+		idxStats := stats.indexes[idxInst.InstId]
 
 		//if index belongs to the flushed bucket and stream
 		if idxInst.Defn.Bucket == bucket &&
@@ -301,8 +302,6 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 
 						logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
 							"Index: %v PartitionId: %v SliceId: %v Commit: %v", idxInstId, partnId, slice.Id(), needsCommit)
-
-						s.updateSnapIntervalStat(idxInstId, stats)
 
 						if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
 							logging.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
@@ -365,10 +364,11 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 			}
 
 			if isSnapCreated {
-				s.updateSnapMapAndNotify(is)
+				s.updateSnapMapAndNotify(is, idxStats)
 			} else {
 				DestroyIndexSnapshot(is)
 			}
+			s.updateSnapIntervalStat(idxStats)
 		}
 	}
 
@@ -379,21 +379,24 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 
 }
 
-func (s *storageMgr) updateSnapIntervalStat(idxId common.IndexInstId,
-	stats *IndexerStats) {
-
-	idxStats := stats.indexes[idxId]
+func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
 	last := idxStats.lastTsTime.Value()
-	next := int64(time.Now().UnixNano())
+	curr := int64(time.Now().UnixNano())
 	avg := idxStats.avgTsInterval.Value()
-	if last != 0 {
-		idxStats.avgTsInterval.Set(((next - last) + avg) / 2)
+	interval := curr - last
+	if avg == 0 {
+		avg = interval
 	}
-	idxStats.lastTsTime.Set(next)
+
+	if last != 0 {
+		idxStats.avgTsInterval.Set((interval + avg) / 2)
+		idxStats.sinceLastSnapshot.Set(interval)
+	}
+	idxStats.lastTsTime.Set(curr)
 }
 
 // Update index-snapshot map whenever a snapshot is created for an index
-func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot) {
+func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexStats) {
 
 	s.muSnap.Lock()
 	defer s.muSnap.Unlock()
@@ -407,7 +410,8 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot) {
 
 	// Also notify any waiters for snapshots creation
 	var newWaiters []*snapshotWaiter
-	for _, w := range s.waitersMap[is.IndexInstId()] {
+	waiters := s.waitersMap[is.IndexInstId()]
+	for _, w := range waiters {
 		if isSnapshotConsistent(is, w.cons, w.ts) {
 			w.Notify(CloneIndexSnapshot(is))
 			continue
@@ -415,6 +419,7 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot) {
 		newWaiters = append(newWaiters, w)
 	}
 	s.waitersMap[is.IndexInstId()] = newWaiters
+	idxStats.numSnapshotWaiters.Set(int64(len(newWaiters)))
 }
 
 //handleRollback will rollback to given timestamp

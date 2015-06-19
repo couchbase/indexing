@@ -65,29 +65,31 @@ func (it *IndexTimingStats) Init() {
 type IndexStats struct {
 	name, bucket string
 
-	scanDuration     stats.Int64Val
-	insertBytes      stats.Int64Val
-	numDocsPending   stats.Int64Val
-	scanWaitDuration stats.Int64Val
-	numDocsIndexed   stats.Int64Val
-	numRequests      stats.Int64Val
-	numRowsReturned  stats.Int64Val
-	diskSize         stats.Int64Val
-	buildProgress    stats.Int64Val
-	numDocsQueued    stats.Int64Val
-	deleteBytes      stats.Int64Val
-	dataSize         stats.Int64Val
-	scanBytesRead    stats.Int64Val
-	getBytes         stats.Int64Val
-	itemsCount       stats.Int64Val
-	numCommits       stats.Int64Val
-	numSnapshots     stats.Int64Val
-	numCompactions   stats.Int64Val
-	flushQueueSize   stats.Int64Val
-	avgTsInterval    stats.Int64Val
-	lastTsTime       stats.Int64Val
-	numFlushQueued   stats.Int64Val
-	fragPercent      stats.Int64Val
+	scanDuration       stats.Int64Val
+	insertBytes        stats.Int64Val
+	numDocsPending     stats.Int64Val
+	scanWaitDuration   stats.Int64Val
+	numDocsIndexed     stats.Int64Val
+	numRequests        stats.Int64Val
+	numRowsReturned    stats.Int64Val
+	diskSize           stats.Int64Val
+	buildProgress      stats.Int64Val
+	numDocsQueued      stats.Int64Val
+	deleteBytes        stats.Int64Val
+	dataSize           stats.Int64Val
+	scanBytesRead      stats.Int64Val
+	getBytes           stats.Int64Val
+	itemsCount         stats.Int64Val
+	numCommits         stats.Int64Val
+	numSnapshots       stats.Int64Val
+	numCompactions     stats.Int64Val
+	flushQueueSize     stats.Int64Val
+	avgTsInterval      stats.Int64Val
+	lastTsTime         stats.Int64Val
+	numFlushQueued     stats.Int64Val
+	fragPercent        stats.Int64Val
+	sinceLastSnapshot  stats.Int64Val
+	numSnapshotWaiters stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -128,6 +130,9 @@ func (s *IndexStats) Init() {
 	s.numCompactions.Init()
 	s.flushQueueSize.Init()
 	s.numFlushQueued.Init()
+	s.sinceLastSnapshot.Init()
+	s.numSnapshotWaiters.Init()
+
 	s.Timings.Init()
 }
 
@@ -236,6 +241,8 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("avg_scan_latency", scanLat)
 		addStat("avg_scan_wait_latency", waitLat)
 		addStat("num_flush_queued", s.numFlushQueued.Value())
+		addStat("since_last_snapshot", s.sinceLastSnapshot.Value())
+		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
 
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
 		addStat("timings/storage_commit", s.Timings.stCommit.Value())
