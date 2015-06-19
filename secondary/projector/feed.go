@@ -134,6 +134,7 @@ const (
 	fCmdGetStatistics
 	fCmdResetConfig
 	fCmdDeleteEndpoint
+	fCmdPing
 )
 
 // ResetConfig for this feed.
@@ -301,6 +302,14 @@ func (feed *Feed) Shutdown(opaque uint16) error {
 func (feed *Feed) DeleteEndpoint(raddr string) error {
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{fCmdDeleteEndpoint, raddr, respch}
+	_, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
+	return err
+}
+
+// Ping whether the feed is active or not.
+func (feed *Feed) Ping() error {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{fCmdPing, respch}
 	_, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return err
 }
@@ -597,7 +606,10 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 			delete(feed.endpoints, raddr)
 			logging.Infof("%v endpoint %v deleted\n", feed.logPrefix, raddr)
 		}
-		// if there are no more endpoints, shutdown the feed.
+		// If there are no more endpoints, shutdown the feed.
+		// Note that this feed might still be referred by the applications
+		// book-keeping entries. It is upto the application to detect
+		// that this feed has closed and clean up itself.
 		if len(feed.endpoints) == 0 {
 			fmsg := "%v no endpoint left automatic shutdown\n"
 			logging.Infof(fmsg, feed.logPrefix)
@@ -605,6 +617,9 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 			status = "exit"
 		}
 
+	case fCmdPing:
+		respch := msg[1].(chan []interface{})
+		respch <- []interface{}{true}
 	}
 	return status
 }

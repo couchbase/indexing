@@ -691,6 +691,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		err := msg.(*MsgError).GetError()
 		common.CrashOnError(err.cause)
 
+	case STATS_RESET:
+		idx.handleResetStats()
+
 	default:
 		logging.Errorf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -3305,6 +3308,14 @@ func (idx *indexer) handleStats(cmd Message) {
 	replych := req.GetReplyChannel()
 	idx.stats.memoryUsed.Set(idx.memoryUsed())
 	replych <- true
+}
+
+func (idx *indexer) handleResetStats() {
+	idx.stats.Reset()
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
+	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, nil); err != nil {
+		common.CrashOnError(err)
+	}
 }
 
 func (idx *indexer) memoryUsed() int64 {

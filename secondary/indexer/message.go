@@ -123,6 +123,8 @@ const (
 	SCAN_STATS
 	INDEX_PROGRESS_STATS
 	INDEXER_STATS
+
+	STATS_RESET
 )
 
 type Message interface {
@@ -1039,6 +1041,13 @@ func (m *MsgConfigUpdate) GetConfig() common.Config {
 	return m.cfg
 }
 
+type MsgResetStats struct {
+}
+
+func (m *MsgResetStats) GetMsgType() MsgType {
+	return STATS_RESET
+}
+
 //Helper function to return string for message type
 
 func (m MsgType) String() string {
@@ -1200,6 +1209,9 @@ func (m MsgType) String() string {
 
 	case CONFIG_SETTINGS_UPDATE:
 		return "CONFIG_SETTINGS_UPDATE"
+
+	case STATS_RESET:
+		return "STATS_RESET"
 
 	default:
 		return "UNKNOWN_MSG_TYPE"

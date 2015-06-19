@@ -61,7 +61,7 @@ type mutationStreamReader struct {
 	evalFilter   bool
 	snapType     uint32
 
-	stats *IndexerStats
+	stats IndexerStatsHolder
 }
 
 //CreateMutationStreamReader creates a new mutation stream and starts
@@ -105,9 +105,9 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		bucketQueueMap:  CopyBucketQueueMap(bucketQueueMap),
 		bucketFilterMap: make(map[string]*common.TsVbuuid),
 		bucketSyncDue:   make(map[string]bool),
-		stats:           stats,
 	}
 
+	r.stats.Set(stats)
 	r.initBucketFilter()
 
 	//start the main reader loop
@@ -361,7 +361,8 @@ func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys, stopch St
 	if q, ok := r.bucketQueueMap[mut.meta.bucket]; ok {
 		q.queue.Enqueue(mut, mut.meta.vbucket, stopch)
 
-		if rstats, ok := r.stats.buckets[mut.meta.bucket]; ok {
+		stats := r.stats.Get()
+		if rstats, ok := stats.buckets[mut.meta.bucket]; ok {
 			rstats.mutationQueueSize.Add(1)
 			rstats.numMutationsQueued.Add(1)
 		}
@@ -421,7 +422,7 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		req := cmd.(*MsgUpdateBucketQueue)
 		bucketQueueMap := req.GetBucketQueueMap()
 		r.bucketQueueMap = CopyBucketQueueMap(bucketQueueMap)
-		r.stats = req.GetStatsObject()
+		r.stats.Set(req.GetStatsObject())
 
 		r.initBucketFilter()
 

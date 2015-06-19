@@ -241,8 +241,8 @@ func (s *Server) genServer(reqch chan []interface{}) {
 
 			// filter mutations for vbucket that is not from the same
 			// source as its StreamBegin.
-			avb, ok := hostUuids[id]
-			if ok && (msg.raddr != avb.raddr) {
+			avb, avbok := hostUuids[id]
+			if avbok && (msg.raddr != avb.raddr) {
 				fmsg := "%v filter %d mutations for %v\n"
 				logging.Warnf(fmsg, s.logPrefix, len(kvs), id)
 				continue
@@ -268,8 +268,10 @@ func (s *Server) genServer(reqch chan []interface{}) {
 						logging.Warnf(fmsg, s.logPrefix, id)
 					}
 				case c.Upsert, c.Deletion, c.UpsertDeletion:
-					avb.seqno = kv.GetSeqno()
-					avb.kvers++
+					if avbok && avb != nil {
+						avb.seqno = kv.GetSeqno()
+						avb.kvers++
+					}
 				}
 			}
 			// mutations received without a STREAM_BEGIN
