@@ -2048,7 +2048,8 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		var bucketUUIDList []string
 		for _, indexInst := range tk.indexInstMap {
-			if indexInst.Defn.Bucket == bucket {
+			if indexInst.Defn.Bucket == bucket && indexInst.Stream == streamId &&
+				indexInst.State != common.INDEX_STATE_DELETED {
 				bucketUUIDList = append(bucketUUIDList, indexInst.Defn.BucketUUID)
 			}
 		}
