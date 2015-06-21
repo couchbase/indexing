@@ -254,7 +254,7 @@ func NewStatsManager(supvCmdch MsgChannel,
 		supvCmdch:    supvCmdch,
 		supvMsgch:    supvMsgch,
 		lastStatTime: time.Unix(0, 0),
-		statsLogDumpInterval: platform.AlignedUint64(
+		statsLogDumpInterval: platform.NewAlignedUint64(
 			config["settings.statsLogDumpInterval"].Uint64()),
 	}
 
