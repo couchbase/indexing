@@ -486,9 +486,16 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 		// the bucket.  Otherwise, delete index defn that does not have the
 		// same bucket UUID.  Note that any other create index request will
 		// be blocked while this call is run.
-		for _, defnRef := range topology.Definitions {
+		definitions := make([]IndexDefnDistribution, len(topology.Definitions))
+		copy(definitions, topology.Definitions)
+
+		for _, defnRef := range definitions {
 
 			if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil {
+
+				logging.Debugf("LifecycleMgr.handleDeleteBucket() : index instance: id %v, streamId %v.",
+					defn.DefnId, defnRef.Instances[0].StreamId)
+
 				// delete index defn from the bucket if bucket uuid is not specified or
 				// index does *not* belong to bucket uuid
 				if /* (uuid == common.BUCKET_UUID_NIL || defn.BucketUUID != uuid) && */
@@ -497,6 +504,8 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 						result = err
 					}
 				}
+			} else {
+				logging.Debugf("LifecycleMgr.handleDeleteBucket() : Cannot find index instance %v.  Skip.", defnRef.DefnId)
 			}
 		}
 	} else if err != fdb.RESULT_KEY_NOT_FOUND {
