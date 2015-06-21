@@ -154,8 +154,11 @@ type ScanCoordinator interface {
 }
 
 type scanCoordinator struct {
-	supvCmdch MsgChannel //supervisor sends commands on this channel
-	supvMsgch MsgChannel //channel to send any async message to supervisor
+	supvCmdch        MsgChannel //supervisor sends commands on this channel
+	supvMsgch        MsgChannel //channel to send any async message to supervisor
+	snapshotNotifych chan IndexSnapshot
+	lastSnapshot     map[common.IndexInstId]IndexSnapshot
+
 	serv      *queryport.Server
 	logPrefix string
 
@@ -175,14 +178,16 @@ type scanCoordinator struct {
 // Any async message to supervisor is sent to supvMsgch.
 // If supvCmdch get closed, ScanCoordinator will shut itself down.
 func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
-	config common.Config) (ScanCoordinator, Message) {
+	config common.Config, snapshotNotifych chan IndexSnapshot) (ScanCoordinator, Message) {
 	var err error
 
 	s := &scanCoordinator{
-		supvCmdch:  supvCmdch,
-		supvMsgch:  supvMsgch,
-		logPrefix:  "ScanCoordinator",
-		reqCounter: new(platform.AlignedUint64),
+		supvCmdch:        supvCmdch,
+		supvMsgch:        supvMsgch,
+		lastSnapshot:     make(map[common.IndexInstId]IndexSnapshot),
+		snapshotNotifych: snapshotNotifych,
+		logPrefix:        "ScanCoordinator",
+		reqCounter:       new(platform.AlignedUint64),
 	}
 
 	s.config.Store(config)
@@ -203,9 +208,31 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 
 	// main loop
 	go s.run()
+	go s.listenSnapshot()
 
 	return s, &MsgSuccess{}
 
+}
+
+func (s *scanCoordinator) listenSnapshot() {
+	for snapshot := range s.snapshotNotifych {
+		func(ss IndexSnapshot) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+
+			if oldSnap, ok := s.lastSnapshot[ss.IndexInstId()]; ok {
+				delete(s.lastSnapshot, ss.IndexInstId())
+				if oldSnap != nil {
+					DestroyIndexSnapshot(oldSnap)
+				}
+			}
+
+			if ss.Timestamp() != nil {
+				s.lastSnapshot[ss.IndexInstId()] = ss
+			}
+
+		}(snapshot)
+	}
 }
 
 func (s *scanCoordinator) handleStats(cmd Message) {
@@ -467,6 +494,25 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 // will block wait.
 // This mechanism can be used to implement RYOW.
 func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexSnapshot, err error) {
+
+	snapshot := func() IndexSnapshot {
+		s.mu.RLock()
+		s.mu.RUnlock()
+
+		if ss, ok := s.lastSnapshot[r.IndexInstId]; ok && ss != nil && ss.Timestamp() != nil {
+			if r.Ts == nil || ss.Timestamp().AsRecent(r.Ts) {
+				result := CloneIndexSnapshot(ss)
+				return result
+			}
+		}
+
+		return nil
+	}()
+
+	if snapshot != nil {
+		return snapshot, nil
+	}
+
 	snapResch := make(chan interface{}, 1)
 	snapReqMsg := &MsgIndexSnapRequest{
 		ts:        r.Ts,

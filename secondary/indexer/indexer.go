@@ -165,6 +165,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	logging.Infof("Indexer::NewIndexer Status INIT")
+	snapshotNotifych := make(chan IndexSnapshot, 100)
 
 	var res Message
 	idx.settingsMgr, idx.config, res = NewSettingsManager(idx.settingsMgrCmdCh, idx.wrkrRecvCh, config)
@@ -204,7 +205,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//Start Scan Coordinator
-	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh, idx.config)
+	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh, idx.config, snapshotNotifych)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Errorf("Indexer::NewIndexer Scan Coordinator Init Error", res)
 		return nil, res
@@ -227,7 +228,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	//read persisted indexer state
-	if err := idx.bootstrap(); err != nil {
+	if err := idx.bootstrap(snapshotNotifych); err != nil {
 		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
 		return nil, &MsgError{err: Error{cause: err}}
 	}
@@ -2588,7 +2589,7 @@ func (idx *indexer) checkDuplicateDropRequest(indexInst common.IndexInst,
 	return false
 }
 
-func (idx *indexer) bootstrap() error {
+func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 
 	idx.genIndexerId()
 
@@ -2606,7 +2607,7 @@ func (idx *indexer) bootstrap() error {
 	//Start Storage Manager
 	var res Message
 	idx.storageMgr, res = NewStorageManager(idx.storageMgrCmdCh, idx.wrkrRecvCh,
-		idx.indexPartnMap, idx.config)
+		idx.indexPartnMap, idx.config, snapshotNotifych)
 	if res.GetMsgType() == MSG_ERROR {
 		err := res.(*MsgError).GetError()
 		logging.Errorf("Indexer::NewIndexer Storage Manager Init Error %v", err)
