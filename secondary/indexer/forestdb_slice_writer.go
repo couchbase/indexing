@@ -954,6 +954,8 @@ snaploop:
 	}
 
 	newpath := newFdbFile(fdb.path, true)
+	// Remove any existing files leftover due to a crash during last compaction attempt
+	os.Remove(newpath)
 	err = fdb.compactFd.CompactUpto(newpath, snapMarker)
 	if err != nil {
 		return err
