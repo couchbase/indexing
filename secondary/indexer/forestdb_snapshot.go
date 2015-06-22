@@ -39,8 +39,8 @@ func (info *fdbSnapshotInfo) IsCommitted() bool {
 }
 
 func (info *fdbSnapshotInfo) String() string {
-	return fmt.Sprintf("SnapshotInfo: seqnos: %v, %v, %v", info.MainSeq,
-		info.BackSeq, info.MetaSeq)
+	return fmt.Sprintf("SnapshotInfo: seqnos: %v,%v,%v committed:%v", info.MainSeq,
+		info.BackSeq, info.MetaSeq, info.Committed)
 }
 
 type fdbSnapshot struct {
