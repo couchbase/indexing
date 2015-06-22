@@ -13,6 +13,14 @@ import orig "sync/atomic"
 type AlignedInt64 int64
 type AlignedUint64 uint64
 
+func NewAlignedInt64(v int64) AlignedInt64 {
+	return AlignedInt64(v)
+}
+
+func NewAlignedUint64(v uint64) AlignedUint64 {
+	return AlignedUint64(v)
+}
+
 func SwapInt32(addr *int32, new int32) int32 {
 	return orig.SwapInt32(addr, new)
 }

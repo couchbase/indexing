@@ -132,6 +132,7 @@ func ValidateBucket(cluster, bucket string, uuids []string) bool {
 		}
 		return true
 	} else {
+		logging.Fatalf("Indexer::Error Fetching Bucket Info: %v Nids: %v", err, nids)
 		return false
 	}
 
