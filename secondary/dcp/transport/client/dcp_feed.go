@@ -18,6 +18,7 @@ const dcpMutationExtraLen = 16
 const bufferAckThreshold = 0.2
 const opaqueOpen = 0xBEAF0001
 const opaqueFailover = 0xDEADBEEF
+const opaqueGetseqno = 0xDEADBEEF
 
 // error codes
 var ErrorInvalidLog = errors.New("couchbase.errorInvalidLog")
@@ -93,6 +94,17 @@ func (feed *DcpFeed) DcpGetFailoverLog(
 	return resp[0].(map[uint16]*FailoverLog), err
 }
 
+// DcpGetSeqnos for vbuckets hosted by this node.
+func (feed *DcpFeed) DcpGetSeqnos() (map[uint16]uint64, error) {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{dfCmdGetSeqnos, respch}
+	resp, err := failsafeOp(feed.reqch, respch, cmd, feed.finch)
+	if err = opError(err, resp, 1); err != nil {
+		return nil, err
+	}
+	return resp[0].(map[uint16]uint64), nil
+}
+
 // DcpRequestStream for a single vbucket.
 func (feed *DcpFeed) DcpRequestStream(vbno, opaqueMSB uint16, flags uint32,
 	vuuid, startSequence, endSequence, snapStart, snapEnd uint64) error {
@@ -124,6 +136,7 @@ func (feed *DcpFeed) Close() error {
 const (
 	dfCmdOpen byte = iota + 1
 	dfCmdGetFailoverlog
+	dfCmdGetSeqnos
 	dfCmdRequestStream
 	dfCmdCloseStream
 	dfCmdClose
@@ -185,6 +198,11 @@ loop:
 				}
 				flog, err := feed.doDcpGetFailoverLog(opaque, vblist, rcvch)
 				respch <- []interface{}{flog, err}
+
+			case dfCmdGetSeqnos:
+				respch := msg[1].(chan []interface{})
+				seqnos, err := feed.doDcpGetSeqnos(rcvch)
+				respch <- []interface{}{seqnos, err}
 
 			case dfCmdRequestStream:
 				vbno, opaqueMSB := msg[1].(uint16), msg[2].(uint16)
@@ -386,6 +404,53 @@ func (feed *DcpFeed) doDcpGetFailoverLog(
 		failoverLogs[vBucket] = flog
 	}
 	return failoverLogs, nil
+}
+
+func (feed *DcpFeed) doDcpGetSeqnos(
+	rcvch chan []interface{}) (map[uint16]uint64, error) {
+
+	rq := &transport.MCRequest{
+		Opcode: transport.DCP_GET_SEQNO,
+		Opaque: opaqueGetseqno,
+	}
+	if err := feed.conn.Transmit(rq); err != nil {
+		fmsg := "%v ##%x doDcpGetSeqnos.Transmit(): %v"
+		logging.Errorf(fmsg, feed.logPrefix, rq.Opaque, err)
+		return nil, err
+	}
+	msg, ok := <-rcvch
+	if !ok {
+		fmsg := "%v ##%x doDcpGetSeqnos.rcvch closed"
+		logging.Errorf(fmsg, feed.logPrefix, rq.Opaque)
+		return nil, ErrorConnection
+	}
+	pkt := msg[0].(*transport.MCRequest)
+	req := &transport.MCResponse{
+		Opcode: pkt.Opcode,
+		Cas:    pkt.Cas,
+		Opaque: pkt.Opaque,
+		Status: transport.Status(pkt.VBucket),
+		Extras: pkt.Extras,
+		Key:    pkt.Key,
+		Body:   pkt.Body,
+	}
+	if req.Opcode != transport.DCP_GET_SEQNO {
+		fmsg := "%v ##%x for get-seqno request unexpected #opcode %v"
+		logging.Errorf(fmsg, feed.logPrefix, req.Opaque, req.Opcode)
+		return nil, ErrorInvalidFeed
+
+	} else if req.Status != transport.SUCCESS {
+		fmsg := "%v ##%x for get-seqno request unexpected #status %v"
+		logging.Errorf(fmsg, feed.logPrefix, req.Opaque, req.Status)
+		return nil, ErrorInvalidFeed
+	}
+	seqnos, err := parseGetSeqnos(req.Body)
+	if err != nil {
+		fmsg := "%v ##%x parsing get-seqnos: %v"
+		logging.Errorf(fmsg, feed.logPrefix, req.Opaque, err)
+		return nil, ErrorInvalidFeed
+	}
+	return seqnos, nil
 }
 
 func (feed *DcpFeed) doDcpOpen(
@@ -760,7 +825,8 @@ func opError(err error, vals []interface{}, idx int) error {
 // parse failover log fields from response body.
 func parseFailoverLog(body []byte) (*FailoverLog, error) {
 	if len(body)%16 != 0 {
-		err := fmt.Errorf("invalid body length %v, in failover-log", len(body))
+		fmsg := "invalid body length %v, in failover-log\n"
+		err := fmt.Errorf(fmsg, len(body))
 		return nil, err
 	}
 	log := make(FailoverLog, len(body)/16)
@@ -771,6 +837,22 @@ func parseFailoverLog(body []byte) (*FailoverLog, error) {
 		j++
 	}
 	return &log, nil
+}
+
+// parse vbno,seqno from response body for get-seqnos.
+func parseGetSeqnos(body []byte) (map[uint16]uint64, error) {
+	if len(body)%10 != 0 {
+		fmsg := "invalid body length %v, in get-seqnos\n"
+		err := fmt.Errorf(fmsg, len(body))
+		return nil, err
+	}
+	seqnos := make(map[uint16]uint64)
+	for i := 0; i < len(body); i += 10 {
+		vbno := binary.BigEndian.Uint16(body[i : i+2])
+		seqno := binary.BigEndian.Uint64(body[i+2 : i+10])
+		seqnos[vbno] = seqno
+	}
+	return seqnos, nil
 }
 
 // receive loop

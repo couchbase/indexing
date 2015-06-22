@@ -4,6 +4,7 @@ import "errors"
 import "encoding/json"
 
 import c "github.com/couchbase/indexing/secondary/common"
+import "github.com/golang/protobuf/proto"
 
 // GetEntries implements queryport.client.ResponseReader{} method.
 func (r *ResponseStream) GetEntries() ([]c.SecondaryKey, [][]byte, error) {
@@ -85,11 +86,15 @@ func (s *IndexStatistics) Bins() ([]c.IndexStatistics, error) {
 }
 
 func NewTsConsistency(
-	vbnos []uint16, seqnos []uint64, vbuuids []uint64) *TsConsistency {
+	vbnos []uint16, seqnos []uint64, vbuuids []uint64,
+	crc64 uint64) *TsConsistency {
 
 	vbnos32 := make([]uint32, len(vbnos))
 	for i, vbno := range vbnos {
 		vbnos32[i] = uint32(vbno)
 	}
-	return &TsConsistency{Vbnos: vbnos32, Seqnos: seqnos, Vbuuids: vbuuids}
+	return &TsConsistency{
+		Vbnos: vbnos32, Seqnos: seqnos, Vbuuids: vbuuids,
+		Crc64: proto.Uint64(crc64),
+	}
 }

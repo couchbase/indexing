@@ -19,6 +19,12 @@ var ErrorFailoverLog = errors.New("dcp.failoverLog")
 // ErrorInvalidBucket
 var ErrorInvalidBucket = errors.New("dcp.invalidBucket")
 
+// ErrorInconsistentDcpStats
+var ErrorInconsistentDcpStats = errors.New("dcp.insconsistentDcpStats")
+
+// ErrorTimeoutDcpStats
+var ErrorTimeoutDcpStats = errors.New("dcp.timeoutDcpStats")
+
 // ErrorClosed
 var ErrorClosed = errors.New("dcp.closed")
 
@@ -149,6 +155,7 @@ func (b *Bucket) StartDcpFeedOver(
 const (
 	ufCmdRequestStream byte = iota + 1
 	ufCmdCloseStream
+	ufCmdGetSeqnos
 	ufCmdClose
 )
 
@@ -176,6 +183,18 @@ func (feed *DcpFeed) DcpCloseStream(vb, opaqueMSB uint16) error {
 	cmd := []interface{}{ufCmdCloseStream, vb, opaqueMSB, respch}
 	resp, err := failsafeOp(feed.reqch, respch, cmd, feed.finch)
 	return opError(err, resp, 0)
+}
+
+// DcpGetSeqnos return the list of seqno for vbuckets,
+// synchronous call.
+func (feed *DcpFeed) DcpGetSeqnos() (map[uint16]uint64, error) {
+	respch := make(chan []interface{}, 1)
+	cmd := []interface{}{ufCmdGetSeqnos, respch}
+	resp, err := failsafeOp(feed.reqch, respch, cmd, feed.finch)
+	if err = opError(err, resp, 1); err != nil {
+		return nil, err
+	}
+	return resp[0].(map[uint16]uint64), nil
 }
 
 // Close DcpFeed. Synchronous call.
@@ -222,6 +241,11 @@ loop:
 				err := feed.dcpCloseStream(vb, opaqueMSB)
 				respch := msg[3].(chan []interface{})
 				respch <- []interface{}{err}
+
+			case ufCmdGetSeqnos:
+				respch := msg[1].(chan []interface{})
+				seqnos, err := feed.dcpGetSeqnos()
+				respch <- []interface{}{seqnos, err}
 
 			case ufCmdClose:
 				respch := msg[1].(chan []interface{})
@@ -341,6 +365,41 @@ func (feed *DcpFeed) dcpCloseStream(vb, opaqueMSB uint16) error {
 		return err
 	}
 	return nil
+}
+
+func (feed *DcpFeed) dcpGetSeqnos() (map[uint16]uint64, error) {
+	count := len(feed.nodeFeeds)
+	ch := make(chan []interface{}, count)
+	for _, singleFeed := range feed.nodeFeeds {
+		go func() {
+			nodeTs, err := singleFeed.dcpFeed.DcpGetSeqnos()
+			ch <- []interface{}{nodeTs, err}
+		}()
+	}
+
+	prefix := feed.logPrefix
+	seqnos := make(map[uint16]uint64)
+	timeout := time.After(3 * time.Second)
+	for count > 0 {
+		select {
+		case <-timeout:
+			fmsg := "%v stats-seqno timed-out %s waiting for stats"
+			logging.Errorf(fmsg, prefix, timeout)
+			return nil, ErrorTimeoutDcpStats
+		case result := <-ch:
+			nodeTs := result[0].(map[uint16]uint64)
+			if result[1] != nil {
+				return nil, result[1].(error)
+			}
+			for vbno, seqno := range nodeTs {
+				if prev, ok := seqnos[vbno]; !ok || prev < seqno {
+					seqnos[vbno] = seqno
+				}
+			}
+		}
+		count--
+	}
+	return seqnos, nil
 }
 
 // failsafeOp can be used by gen-server implementors to avoid infinitely

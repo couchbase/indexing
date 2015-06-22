@@ -37,6 +37,7 @@ var (
 	ErrScanTimedOut       = errors.New("Index scan timed out")
 	ErrUnsupportedRequest = errors.New("Unsupported query request")
 	ErrClientCancel       = errors.New("Client requested cancel")
+	ErrVbuuidMismatch     = errors.New("Mismatch in session vbuuids")
 )
 
 type ScanReqType string
@@ -392,17 +393,23 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}
 	}
 
-	setConsistency := func(cons common.Consistency, vector *protobuf.TsConsistency) {
+	setConsistency := func(
+		cons common.Consistency, vector *protobuf.TsConsistency) {
+
 		r.Consistency = &cons
-		checkVector :=
-			cons == common.QueryConsistency || cons == common.SessionConsistency
-		if checkVector && vector != nil {
-			cfg := s.config.Load()
+		cfg := s.config.Load()
+		if cons == common.QueryConsistency && vector != nil {
 			r.Ts = common.NewTsVbuuid("", cfg["numVbuckets"].Int())
+			// if vector == nil, it is similar to AnyConsistency
 			for i, vbno := range vector.Vbnos {
 				r.Ts.Seqnos[vbno] = vector.Seqnos[i]
 				r.Ts.Vbuuids[vbno] = vector.Vbuuids[i]
 			}
+
+		} else if cons == common.SessionConsistency {
+			r.Ts = common.NewTsVbuuid("", cfg["numVbuckets"].Int())
+			r.Ts.Seqnos = vector.Seqnos // full set of seqnos.
+			r.Ts.Crc64 = vector.GetCrc64()
 		}
 	}
 
@@ -495,27 +502,28 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 // This mechanism can be used to implement RYOW.
 func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexSnapshot, err error) {
 
-	snapshot := func() IndexSnapshot {
+	snapshot, err := func() (IndexSnapshot, error) {
 		s.mu.RLock()
 		s.mu.RUnlock()
 
-		if ss, ok := s.lastSnapshot[r.IndexInstId]; ok && ss != nil && ss.Timestamp() != nil {
-			if r.Ts == nil || ss.Timestamp().AsRecent(r.Ts) {
-				result := CloneIndexSnapshot(ss)
-				return result
-			}
+		ss, ok := s.lastSnapshot[r.IndexInstId]
+		cons := *r.Consistency
+		if ok && ss != nil && isSnapshotConsistent(ss, cons, r.Ts) {
+			return CloneIndexSnapshot(ss), nil
 		}
-
-		return nil
+		return nil, nil
 	}()
 
-	if snapshot != nil {
+	if err != nil {
+		return nil, err
+	} else if snapshot != nil {
 		return snapshot, nil
 	}
 
 	snapResch := make(chan interface{}, 1)
 	snapReqMsg := &MsgIndexSnapRequest{
 		ts:        r.Ts,
+		cons:      *r.Consistency,
 		respch:    snapResch,
 		idxInstId: r.IndexInstId,
 	}
@@ -538,6 +546,29 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	}
 
 	return
+}
+
+func isSnapshotConsistent(
+	ss IndexSnapshot, cons common.Consistency, reqTs *common.TsVbuuid) bool {
+
+	if snapTs := ss.Timestamp(); snapTs != nil {
+		if cons == common.QueryConsistency && snapTs.AsRecent(reqTs) {
+			return true
+		} else if cons == common.SessionConsistency {
+			if ss.IsEpoch() && reqTs.IsEpoch() {
+				return true
+			}
+			if snapTs.CheckCrc64(reqTs) && snapTs.AsRecentTs(reqTs) {
+				return true
+			}
+			// don't return error because client might be ahead of
+			// in receiving a rollback.
+			// return nil, ErrVbuuidMismatch
+			return false
+		}
+		return true // AnyConsistency
+	}
+	return false
 }
 
 func (s *scanCoordinator) respondWithError(conn net.Conn, req *ScanRequest, err error) {

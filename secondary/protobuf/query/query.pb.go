@@ -54,10 +54,14 @@ func (m *Error) GetError() string {
 }
 
 // consistency timestamp specifying a subset of vbucket.
+// AnyConsistency, this message is typically ignored.
+// SessionConsistency, {vbnos, seqnos, crc64} are to be considered.
+// QueryConsistency, {vbnos, seqnos, vbuuids} are to be considered.
 type TsConsistency struct {
 	Vbnos            []uint32 `protobuf:"varint,1,rep,name=vbnos" json:"vbnos,omitempty"`
 	Seqnos           []uint64 `protobuf:"varint,2,rep,name=seqnos" json:"seqnos,omitempty"`
 	Vbuuids          []uint64 `protobuf:"varint,3,rep,name=vbuuids" json:"vbuuids,omitempty"`
+	Crc64            *uint64  `protobuf:"varint,4,opt,name=crc64" json:"crc64,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -84,6 +88,13 @@ func (m *TsConsistency) GetVbuuids() []uint64 {
 		return m.Vbuuids
 	}
 	return nil
+}
+
+func (m *TsConsistency) GetCrc64() uint64 {
+	if m != nil && m.Crc64 != nil {
+		return *m.Crc64
+	}
+	return 0
 }
 
 // Request can be one of the optional field.

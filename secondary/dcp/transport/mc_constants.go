@@ -67,6 +67,7 @@ const (
 	TAP_VBUCKET_SET      = CommandCode(0x45) // Sets state of vbucket in receiver (used in takeover)
 	TAP_CHECKPOINT_START = CommandCode(0x46) // Notifies start of new checkpoint
 	TAP_CHECKPOINT_END   = CommandCode(0x47) // Notifies end of checkpoint
+	DCP_GET_SEQNO        = CommandCode(0x48) // Get sequence number for all vbuckets.
 
 	DCP_OPEN        = CommandCode(0x50) // Open a DCP connection with a name
 	DCP_ADDSTREAM   = CommandCode(0x51) // Sent by ebucketMigrator to DCP Consumer
@@ -193,6 +194,7 @@ func init() {
 	CommandNames[DCP_NOOP] = "DCP_NOOP"
 	CommandNames[DCP_BUFFERACK] = "DCP_BUFFERACK"
 	CommandNames[DCP_CONTROL] = "DCP_CONTROL"
+	CommandNames[DCP_GET_SEQNO] = "DCP_GET_SEQNO"
 
 	StatusNames = make(map[Status]string)
 	StatusNames[SUCCESS] = "SUCCESS"

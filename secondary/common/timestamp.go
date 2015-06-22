@@ -27,6 +27,7 @@ type TsVbuuid struct {
 	Bucket      string
 	Seqnos      []uint64
 	Vbuuids     []uint64
+	Crc64       uint64
 	Snapshots   [][2]uint64
 	SnapType    IndexSnapType
 	LargeSnap   bool
@@ -106,6 +107,27 @@ func (ts *TsVbuuid) CompareVbuuids(other *TsVbuuid) bool {
 	return true
 }
 
+func (ts *TsVbuuid) IsEpoch() bool {
+	for _, seqno := range ts.Seqnos {
+		if seqno != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// CheckVbuuids will check whether vbuuids in timestamp `ts` is same
+// as that of `other`.
+func (ts *TsVbuuid) CheckCrc64(other *TsVbuuid) bool {
+	if ts == nil || other == nil {
+		return false
+	}
+	if ts.Bucket != other.Bucket {
+		return false
+	}
+	return ts.Crc64 == other.Crc64
+}
+
 // AsRecent will check whether timestamp `ts` is atleast as recent as
 // timestamp `other`.
 func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
@@ -120,8 +142,24 @@ func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
 		if other.Vbuuids[i] == 0 {
 			continue
 		}
-
 		if vbuuid != other.Vbuuids[i] || ts.Seqnos[i] < other.Seqnos[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// AsRecentTs will check whether timestamp `ts` is atleast as recent as
+// timestamp `other`.
+func (ts *TsVbuuid) AsRecentTs(other *TsVbuuid) bool {
+	if ts == nil || other == nil {
+		return false
+	}
+	if ts.Bucket != other.Bucket {
+		return false
+	}
+	for i, seqno := range ts.Seqnos {
+		if seqno < other.Seqnos[i] {
 			return false
 		}
 	}

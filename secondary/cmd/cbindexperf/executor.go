@@ -35,11 +35,15 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 
 	spec := job.spec
 	result := job.result
-	result.Id = spec.Id
+	if result != nil {
+		result.Id = spec.Id
+	}
 
 	errFn := func(e string) {
 		fmt.Printf("REQ:%d scan error occured: %s\n", spec.Id, e)
-		platform.AddUint64(&result.ErrorCount, 1)
+		if result != nil {
+			platform.AddUint64(&result.ErrorCount, 1)
+		}
 	}
 
 	callb := func(res qclient.ResponseReader) bool {
@@ -84,10 +88,12 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 
 	dur := time.Now().Sub(startTime)
 
-	aggrQ <- &JobResult{
-		job:  job,
-		dur:  dur.Nanoseconds(),
-		rows: rows,
+	if result != nil {
+		aggrQ <- &JobResult{
+			job:  job,
+			dur:  dur.Nanoseconds(),
+			rows: rows,
+		}
 	}
 }
 
@@ -202,6 +208,17 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 
 	// Round robin scheduling of jobs
 	var allFinished bool
+
+	// warming up GsiClient
+	for _, spec := range cfg.ScanSpecs {
+		jobQ <- &Job{spec: spec, result: nil}
+		time.Sleep(3 * time.Second)
+		jobQ <- &Job{spec: spec, result: nil}
+		time.Sleep(1 * time.Second)
+		break
+	}
+	fmt.Println("GsiClient warmed up ...")
+
 loop:
 	for {
 		allFinished = true

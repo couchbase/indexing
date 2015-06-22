@@ -28,6 +28,7 @@ func main() {
 	auth := flag.String("auth", "Administrator:asdasd", "Auth")
 	statsfile := flag.String("statsfile", "", "Periodic statistics report file")
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
+	memprofile := flag.String("memprofile", "", "write mem profile to file")
 
 	flag.Parse()
 
@@ -37,14 +38,23 @@ func main() {
 	}
 
 	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
+		fd, err := os.Create(*cpuprofile)
 		if err != nil {
 			fmt.Println("Failed create cpu profile file")
 			os.Exit(1)
 		}
-		pprof.StartCPUProfile(f)
+		pprof.StartCPUProfile(fd)
 		defer pprof.StopCPUProfile()
 	}
+	if *memprofile != "" {
+		fd, err := os.Create(*memprofile)
+		if err != nil {
+			fmt.Println("Failed create mem profile file")
+			os.Exit(1)
+		}
+		defer pprof.WriteHeapProfile(fd)
+	}
+
 	runtime.GOMAXPROCS(*cpus)
 	up := strings.Split(*auth, ":")
 	_, err := cbauth.InternalRetryDefaultInit(*cluster, up[0], up[1])
@@ -75,11 +85,10 @@ func main() {
 	for _, result := range res.ScanResults {
 		totalRows += result.Rows
 	}
-
 	res.Rows = totalRows
-	res.Duration = dur.Seconds()
+	res.Duration = dur.Seconds() - 4 // account for warmup
 
-	rate := int(float64(totalRows) / dur.Seconds())
+	rate := int(float64(totalRows) / res.Duration)
 
 	fmt.Printf("Throughput = %d rows/sec\n", rate)
 
