@@ -369,6 +369,10 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 	return nil
 }
 
+func (gsi *gsiKeyspace) SetLogLevel(level logging.Level) {
+	// TODO: Implementation by 2i team
+}
+
 // Synchronise gsi client with the servers and refresh the indexes list.
 func (gsi *gsiKeyspace) SyncRefresh() errors.Error {
 	err := gsi.gsiClient.Sync()
