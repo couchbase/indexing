@@ -29,19 +29,12 @@ import "github.com/couchbase/query/value"
 import "github.com/couchbase/query/logging"
 
 // ErrorIndexEmpty is index not initialized.
-var ErrorIndexEmpty = errors.NewError(nil, "gsi.empty")
+var ErrorIndexEmpty = errors.NewError(
+	fmt.Errorf("gsi.indexEmpty"), "Fatal null reference to index")
 
-// ErrorEmptyHost is no valid node hosting an index.
-var ErrorEmptyHost = errors.NewError(nil, "gsi.emptyHost")
-
-// ErrorCauseStaleMetadata means client indexes list needs to be
+// ErrorIndexNotAvailable means client indexes list needs to be
 // refreshed.
-var ErrorCauseStaleMetadata = fmt.Errorf("Stale metadata")
-
-// These error strings need to be in sync with indexer.ErrIndexNotFound
-// and indexer.ErrIndexNotFound.
-var ErrIndexNotFound = fmt.Errorf("Index not found")
-var ErrIndexNotReady = fmt.Errorf("Index not ready for serving queries")
+var ErrorIndexNotAvailable = fmt.Errorf("index not available")
 
 var n1ql2GsiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 	datastore.NEITHER: qclient.Neither,
@@ -544,7 +537,7 @@ func (si *secondaryIndex) Statistics(
 		seek := values2SKey(span.Seek)
 		pstats, err := client.LookupStatistics(defnID, seek)
 		if err != nil {
-			return nil, gsiError(err, "GSI Statistics()")
+			return nil, n1qlError(client, err)
 		}
 		return newStatistics(pstats), nil
 	}
@@ -553,7 +546,7 @@ func (si *secondaryIndex) Statistics(
 	incl := n1ql2GsiInclusion[span.Range.Inclusion]
 	pstats, err := client.RangeStatistics(defnID, low, high, incl)
 	if err != nil {
-		return nil, gsiError(err, "GSI Statistics()")
+		return nil, n1qlError(client, err)
 	}
 	return newStatistics(pstats), nil
 }
@@ -571,7 +564,7 @@ func (si *secondaryIndex) Count(span *datastore.Span,
 		count, e := client.CountLookup(si.defnID, []c.SecondaryKey{seek},
 			n1ql2GsiConsistency[cons], vector2ts(vector))
 		if e != nil {
-			return 0, gsiError(e, "GSI CountLookup()")
+			return 0, n1qlError(client, e)
 		}
 		return count, nil
 
@@ -581,7 +574,7 @@ func (si *secondaryIndex) Count(span *datastore.Span,
 	count, e := client.CountRange(si.defnID, low, high, incl,
 		n1ql2GsiConsistency[cons], vector2ts(vector))
 	if e != nil {
-		return 0, gsiError(e, "GSI CountRange()")
+		return 0, n1qlError(client, e)
 	}
 	return count, nil
 }
@@ -613,7 +606,7 @@ func (si *secondaryIndex) Scan(
 		client.Lookup(
 			si.defnID, []c.SecondaryKey{seek}, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeResponsehandler(conn))
+			makeResponsehandler(client, conn))
 
 	} else {
 		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
@@ -621,7 +614,7 @@ func (si *secondaryIndex) Scan(
 		client.Range(
 			si.defnID, low, high, incl, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeResponsehandler(conn))
+			makeResponsehandler(client, conn))
 	}
 }
 
@@ -637,7 +630,7 @@ func (si *secondaryIndex) ScanEntries(
 	client.ScanAll(
 		si.defnID, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		makeResponsehandler(conn))
+		makeResponsehandler(client, conn))
 }
 
 //-------------------------------------
@@ -645,7 +638,7 @@ func (si *secondaryIndex) ScanEntries(
 //-------------------------------------
 
 func makeResponsehandler(
-	conn *datastore.IndexConnection) qclient.ResponseHandler {
+	client *qclient.GsiClient, conn *datastore.IndexConnection) qclient.ResponseHandler {
 
 	entryChannel := conn.EntryChannel()
 	stopChannel := conn.StopChannel()
@@ -653,7 +646,7 @@ func makeResponsehandler(
 	return func(data qclient.ResponseReader) bool {
 
 		if err := data.Error(); err != nil {
-			conn.Error(gsiError(err, "GSI scan error"))
+			conn.Error(n1qlError(client, err))
 			return false
 		}
 		skeys, pkeys, err := data.GetEntries()
@@ -682,28 +675,17 @@ func makeResponsehandler(
 
 func isStaleMetaError(err error) bool {
 	switch err.Error() {
-	case ErrIndexNotFound.Error():
+	case qclient.ErrIndexNotFound.Error():
 		fallthrough
-	case ErrIndexNotReady.Error():
+	case qclient.ErrIndexNotReady.Error():
 		return true
 	}
 
 	return false
 }
 
-func gsiError(err error, desc string) errors.Error {
-	var cause error
-	var errStr string
-
-	if isStaleMetaError(err) {
-		cause = ErrorCauseStaleMetadata
-		errStr = err.Error()
-	} else {
-		cause = err
-		errStr = desc
-	}
-
-	return errors.NewError(cause, errStr)
+func n1qlError(client *qclient.GsiClient, err error) errors.Error {
+	return errors.NewError(err, client.DescribeError(err))
 }
 
 //-----------------------

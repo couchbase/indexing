@@ -1,6 +1,5 @@
 package client
 
-import "errors"
 import "time"
 
 import "github.com/couchbase/indexing/secondary/logging"
@@ -12,42 +11,6 @@ import mclient "github.com/couchbase/indexing/secondary/manager/client"
 // TODO:
 // - Timeit() uses the wall-clock time instead of process-time to compute
 //   load. This is very crude.
-
-// ErrorProtocol
-var ErrorProtocol = errors.New("queryport.client.protocol")
-
-// ErrorNoHost
-var ErrorNoHost = errors.New("queryport.client.noHost")
-
-// ErrorEmptyDeployment
-var ErrorEmptyDeployment = errors.New("queryport.client.emptyDeployment")
-
-// ErrorManyDeployment
-var ErrorManyDeployment = errors.New("queryport.client.manyDeployment")
-
-// ErrorInvalidDeploymentNode
-var ErrorInvalidDeploymentNode = errors.New("queryport.client.invdDeployPlan")
-
-// ErrorIndexNotFound
-var ErrorIndexNotFound = errors.New("queryport.indexNotFound")
-
-// ErrorInstanceNotFound
-var ErrorInstanceNotFound = errors.New("queryport.instanceNotFound")
-
-// ErrorIndexNotReady
-var ErrorIndexNotReady = errors.New("queryport.indexNotReady")
-
-// ErrorClientUninitialized
-var ErrorClientUninitialized = errors.New("queryport.clientUninitialized")
-
-// ErrorNotImplemented
-var ErrorNotImplemented = errors.New("queryport.notImplemented")
-
-// ErrorInvalidConsistency
-var ErrorInvalidConsistency = errors.New("queryport.invalidConsistency")
-
-// ErrorExpectedTimestamp
-var ErrorExpectedTimestamp = errors.New("queryport.expectedTimestamp")
 
 // ResponseHandler shall interpret response packets from server
 // and handle them. If handler is not interested in receiving any
@@ -539,6 +502,14 @@ func (c *GsiClient) CountRange(
 		return err
 	})
 	return count, err
+}
+
+// DescribeError return error description as human readable string.
+func (c *GsiClient) DescribeError(err error) string {
+	if desc, ok := errorDescriptions[err.Error()]; ok {
+		return desc
+	}
+	return err.Error()
 }
 
 // Close the client and all open connections with server.
