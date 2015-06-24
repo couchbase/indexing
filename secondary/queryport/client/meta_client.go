@@ -18,7 +18,10 @@ type metadataClient struct {
 	// sherlock topology management, multi-node & single-partition.
 	adminports map[string]common.IndexerId // book-keeping for cluster changes
 	topology   map[common.IndexerId]map[common.IndexDefnId]*mclient.IndexMetadata
-	loadb      *RoundRobin // TODO: abstract this behind interface
+	// shelock load replicas.
+	replicas map[common.IndexDefnId][]common.IndexDefnId
+	// shelock load balancing.
+	loads map[common.IndexDefnId]*loadHeuristics // index -> loadHeuristics
 	// config
 	servicesNotifierRetryTm int
 }
@@ -30,9 +33,9 @@ func newMetaBridgeClient(
 		cluster:    cluster,
 		finch:      make(chan bool),
 		adminports: make(map[string]common.IndexerId),
+		loads:      make(map[common.IndexDefnId]*loadHeuristics),
 	}
 	b.topology = make(map[common.IndexerId]map[common.IndexDefnId]*mclient.IndexMetadata)
-	b.loadb = NewRoundRobin()
 	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
 	// initialize meta-data-provide.
 	uuid, err := common.NewUUID()
@@ -93,7 +96,14 @@ func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	}
 
 	b.topology = newtopo
-	b.loadb.SetReplicas(b.computeReplicas())
+	// compute replicas
+	b.replicas = b.computeReplicas()
+	// remove loads for indexes that is been deleted / gone-offline.
+	for defnId := range b.loads {
+		if _, ok := b.replicas[defnId]; !ok {
+			delete(b.loads, defnId)
+		}
+	}
 	return indexes, nil
 }
 
@@ -219,9 +229,17 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 
 // GetScanport implements BridgeAccessor{} interface.
 func (b *metadataClient) GetScanport(
-	defnID uint64, retry int) (queryport string, targetDefnID uint64, ok bool) {
+	defnID uint64,
+	retry int) (queryport string, targetDefnID uint64, ok bool) {
 
-	targetDefnID = b.loadb.Pick(defnID, retry)
+	b.rw.RLock()
+	defer b.rw.RUnlock()
+
+	if retry == 0 {
+		targetDefnID = b.pickOptimal(defnID) // index under least load
+	} else {
+		targetDefnID = b.roundRobin(defnID, retry)
+	}
 	_, queryport, err :=
 		b.mdClient.FindServiceForIndex(common.IndexDefnId(targetDefnID))
 	if err != nil {
@@ -234,9 +252,18 @@ func (b *metadataClient) GetScanport(
 
 // Timeit implement BridgeAccessor{} interface.
 func (b *metadataClient) Timeit(defnID uint64, value float64) {
-	fmsg := "Time taken to query index %v: %v"
-	logging.Debugf(fmsg, defnID, time.Duration(value))
-	b.loadb.Timeit(defnID, value)
+	b.rw.Lock()
+	defer b.rw.Unlock()
+
+	id := common.IndexDefnId(defnID)
+	if load, ok := b.loads[id]; !ok {
+		b.loads[id] = &loadHeuristics{avgLoad: value, count: 1}
+	} else {
+		// compute incremental average.
+		avg, n := load.avgLoad, load.count
+		load.avgLoad = (float64(n)*avg + float64(value)) / float64(n+1)
+		load.count = n + 1
+	}
 }
 
 // IsPrimary implement BridgeAccessor{} interface.
@@ -297,8 +324,9 @@ func (b *metadataClient) Close() {
 //--------------------------------
 
 // compute a map of replicas for each index in 2i.
-func (b *metadataClient) computeReplicas() Replicas {
-	replicaMap := make(Replicas)
+func (b *metadataClient) computeReplicas() map[common.IndexDefnId][]common.IndexDefnId {
+
+	replicaMap := make(map[common.IndexDefnId][]common.IndexDefnId)
 	for id1, indexes1 := range b.topology {
 		for _, index1 := range indexes1 {
 			replicas := make([]common.IndexDefnId, 0)
@@ -355,6 +383,35 @@ type loadHeuristics struct {
 	count   uint64
 }
 
+// pick an optimal replica for the index `defnID` under least load.
+func (b *metadataClient) pickOptimal(defnID uint64) uint64 {
+	id := common.IndexDefnId(defnID)
+	optimalID, currLoad := id, 0.0
+	if load, ok := b.loads[id]; ok {
+		currLoad = load.avgLoad
+	}
+	for _, replicaID := range b.replicas[id] {
+		load, ok := b.loads[replicaID]
+		if !ok { // no load for this replica
+			return uint64(replicaID)
+		}
+		if currLoad == 0.0 || load.avgLoad < currLoad {
+			// found an index under less load
+			optimalID, currLoad = replicaID, load.avgLoad
+		}
+	}
+	return uint64(optimalID)
+}
+
+func (b *metadataClient) roundRobin(defnID uint64, retry int) uint64 {
+	id := common.IndexDefnId(defnID)
+	replicas, ok := b.replicas[id]
+	if l := len(replicas); ok && l > 0 {
+		return uint64(replicas[retry%l])
+	}
+	return defnID
+}
+
 //----------------
 // local functions
 //----------------
@@ -368,7 +425,8 @@ func (b *metadataClient) deleteIndex(defnID uint64) {
 		delete(indexes, id)
 		b.topology[indexerID] = indexes
 	}
-	b.loadb.SetReplicas(b.computeReplicas())
+	b.replicas = b.computeReplicas()
+	delete(b.loads, common.IndexDefnId(defnID))
 }
 
 // getNodes return the set of nodes hosting the specified set

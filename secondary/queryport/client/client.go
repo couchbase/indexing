@@ -73,8 +73,6 @@ type Remoteaddr string
 // Inclusion specifier for range queries.
 type Inclusion uint32
 
-type Replicas map[common.IndexDefnId][]common.IndexDefnId
-
 const (
 	// Neither does not include low-key and high-key
 	Neither Inclusion = iota
@@ -590,8 +588,6 @@ func (c *GsiClient) doScan(
 				if err = callb(qc, targetDefnID); err == nil {
 					c.bridge.Timeit(targetDefnID, float64(time.Since(begin)))
 					return nil
-				} else {
-					c.bridge.Timeit(targetDefnID, -1) // add deterant to targetDefnID
 				}
 			}
 		}
