@@ -133,7 +133,7 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	err = secondaryindex.BuildIndexesAsync([]uint64{defn2, defn3}, indexManagementAddress, defaultIndexActiveTimeout)
-	FailTestIfError(err, "Error from BuildIndexesAsync", t)
+	FailTestIfNoError(err, "Error from BuildIndexesAsync", t)
 
 	// Get status of first : should fail
 	// Get status of second: should be building. Wait for it to get active

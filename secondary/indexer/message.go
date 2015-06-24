@@ -79,6 +79,7 @@ const (
 	CLUST_MGR_AGENT_SHUTDOWN
 	CLUST_MGR_CREATE_INDEX_DDL
 	CLUST_MGR_BUILD_INDEX_DDL
+	CLUST_MGR_BUILD_INDEX_DDL_RESPONSE
 	CLUST_MGR_DROP_INDEX_DDL
 	CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX
 	CLUST_MGR_GET_GLOBAL_TOPOLOGY
@@ -671,6 +672,27 @@ func (m *MsgBuildIndex) GetString() string {
 	str := "\n\tMessage: MsgBuildIndex"
 	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_BUILD_INDEX_DDL)
 	str += fmt.Sprintf("\n\tIndex: %v", m.indexInstList)
+	return str
+}
+
+//CLUST_MGR_BUILD_INDEX_DDL_RESPONSE
+type MsgBuildIndexResponse struct {
+	errMap map[common.IndexInstId]error
+}
+
+func (m *MsgBuildIndexResponse) GetMsgType() MsgType {
+	return CLUST_MGR_BUILD_INDEX_DDL_RESPONSE
+}
+
+func (m *MsgBuildIndexResponse) GetErrorMap() map[common.IndexInstId]error {
+	return m.errMap
+}
+
+func (m *MsgBuildIndexResponse) GetString() string {
+
+	str := "\n\tMessage: MsgBuildIndexResponse"
+	str += fmt.Sprintf("\n\tType: %v", CLUST_MGR_BUILD_INDEX_DDL_RESPONSE)
+	str += fmt.Sprintf("\n\terrMap: %v", m.errMap)
 	return str
 }
 

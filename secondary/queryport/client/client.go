@@ -154,6 +154,9 @@ type BridgeAccessor interface {
 	// IndexState returns the current state of index `defnID` and error.
 	IndexState(defnID uint64) (common.IndexState, error)
 
+	// IsPrimary returns whether index is on primary key.
+	IsPrimary(defnID uint64) bool
+
 	// Timeit will add `value` to incrementalAvg for index-load.
 	Timeit(defnID uint64, value float64)
 
@@ -439,6 +442,19 @@ func (c *GsiClient) Range(
 		if err != nil {
 			return err
 		}
+		if c.bridge.IsPrimary(targetDefnID) {
+			var l, h []byte
+			// primary keys are plain sequence of binary.
+			if low != nil && len(low) > 0 {
+				l = []byte(low[0].(string))
+			}
+			if high != nil && len(high) > 0 {
+				h = []byte(high[0].(string))
+			}
+			return qc.RangePrimary(
+				targetDefnID, l, h, inclusion, distinct, limit, cons, vector, callb)
+		}
+		// dealing with secondary index.
 		return qc.Range(
 			targetDefnID, low, high, inclusion, distinct, limit, cons, vector, callb)
 	})
@@ -568,9 +584,9 @@ func (c *GsiClient) doScan(
 	for i := 0; i < retry; i++ {
 		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i); ok1 {
 			if qc, ok2 = c.queryClients[queryport]; ok2 {
-				begin := time.Now().UnixNano()
+				begin := time.Now()
 				if err = callb(qc, targetDefnID); err == nil {
-					c.bridge.Timeit(targetDefnID, float64(time.Now().UnixNano()-begin))
+					c.bridge.Timeit(targetDefnID, float64(time.Since(begin)))
 					return nil
 				}
 			}
@@ -595,6 +611,9 @@ func (c *GsiClient) getConsistency(
 	if cons == common.QueryConsistency && vector == nil {
 		return nil, ErrorExpectedTimestamp
 	} else if cons == common.SessionConsistency {
+		begin := time.Now()
+		fmsg := "Time taken by STATS call, %v"
+		defer logging.Debugf(fmsg, time.Since(begin))
 		if vector, err = c.BucketTs(bucket); err != nil {
 			return nil, err
 		}

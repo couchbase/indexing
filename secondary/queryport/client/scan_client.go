@@ -236,6 +236,57 @@ func (c *GsiScanClient) Range(
 	return err
 }
 
+// Range scan index between low and high.
+func (c *GsiScanClient) RangePrimary(
+	defnID uint64, low, high []byte, inclusion Inclusion,
+	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) error {
+
+	connectn, err := c.pool.Get()
+	if err != nil {
+		return err
+	}
+	healthy := true
+	defer func() { c.pool.Return(connectn, healthy) }()
+
+	conn, pkt := connectn.conn, connectn.pkt
+
+	req := &protobuf.ScanRequest{
+		DefnID: proto.Uint64(defnID),
+		Span: &protobuf.Span{
+			Range: &protobuf.Range{
+				Low: low, High: high,
+				Inclusion: proto.Uint32(uint32(inclusion)),
+			},
+		},
+		Distinct: proto.Bool(distinct),
+		Limit:    proto.Int64(limit),
+		Cons:     proto.Uint32(uint32(cons)),
+	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
+	}
+	// ---> protobuf.ScanRequest
+	if err := c.sendRequest(conn, pkt, req); err != nil {
+		fmsg := "%v RangePrimary() request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, err)
+		healthy = false
+		return err
+	}
+
+	cont := true
+	for cont {
+		// <--- protobuf.ResponseStream
+		cont, healthy, err = c.streamResponse(conn, pkt, callb)
+		if err != nil {
+			fmsg := "%v RangePrimary() response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, err)
+		}
+	}
+	return err
+}
+
 // ScanAll for full table scan.
 func (c *GsiScanClient) ScanAll(
 	defnID uint64, limit int64,

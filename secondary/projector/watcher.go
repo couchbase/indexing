@@ -2,14 +2,15 @@ package projector
 
 import "time"
 
+import c "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 import "github.com/golang/protobuf/proto"
 
 // watch for,
 // 1. stale feeds and shut them down.
 // 2. crashed routines and cleanup feeds.
-func (p *Projector) watcherDameon(tick int) {
-	watchTick := time.Tick(time.Duration(tick) * time.Millisecond)
+func (p *Projector) watcherDameon(watchInterval, staleTimeout int) {
+	watchTick := time.Tick(time.Duration(watchInterval) * time.Millisecond)
 	for {
 		<-watchTick
 		topics := p.listTopics()
@@ -18,8 +19,8 @@ func (p *Projector) watcherDameon(tick int) {
 			if err != nil {
 				continue
 			}
-			status, err := feed.StaleCheck()
-			if status == "exit" || err != nil {
+			status, err := feed.StaleCheck(staleTimeout)
+			if status == "exit" && err != c.ErrorClosed {
 				req := &protobuf.ShutdownTopicRequest{
 					Topic: proto.String(topic),
 				}

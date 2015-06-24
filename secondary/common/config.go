@@ -141,6 +141,13 @@ var SystemConfig = Config{
 		5 * 60 * 1000,
 		true, // immutable
 	},
+	"projector.staleTimeout": ConfigValue{
+		5 * 60 * 1000, // 5 minutes
+		"timeout, in milli-seconds to wait for response for feed's genserver" +
+			"feed will be force-shutdown if timeout expires",
+		5 * 60 * 1000,
+		true, // immutable
+	},
 	"projector.cpuProfFname": ConfigValue{
 		"",
 		"filename to dump cpu-profile for projector.",

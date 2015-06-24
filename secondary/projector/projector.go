@@ -77,8 +77,10 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	reqch := make(chan ap.Request)
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
 
+	watchInterval := config["projector.watchInterval"].Int()
+	staleTimeout := config["projector.staleTimeout"].Int()
 	go p.mainAdminPort(reqch)
-	go p.watcherDameon(config["projector.watchInterval"].Int())
+	go p.watcherDameon(watchInterval, staleTimeout)
 	logging.Infof("%v started ...\n", p.logPrefix)
 	return p
 }
@@ -566,7 +568,7 @@ func (p *Projector) doShutdownTopic(
 	}
 
 	p.DelFeed(topic)
-	feed.Shutdown(opaque)
+	err = feed.Shutdown(opaque)
 	return protobuf.NewError(err)
 }
 
@@ -645,7 +647,10 @@ func (p *Projector) handleSettings(w http.ResponseWriter, r *http.Request) {
 		// update feed settings
 		feedConfig := config.SectionConfig("projector.", true /*trim*/)
 		for _, feed := range p.GetFeeds() {
-			feed.ResetConfig(feedConfig)
+			if err := feed.ResetConfig(feedConfig); err != nil {
+				fmsg := "%v feed(`%v`).ResetConfig: %v"
+				logging.Errorf(fmsg, p.logPrefix, feed.topic, err)
+			}
 		}
 
 	default:

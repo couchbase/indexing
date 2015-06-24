@@ -392,7 +392,7 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
 
 	return nil
 }
-func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId, buckets []string) error {
+func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId, buckets []string) map[common.IndexInstId]error {
 
 	logging.Infof("clustMgrAgent::OnIndexBuild Notification "+
 		"Received for Build Index %v", indexDefnList)
@@ -413,16 +413,21 @@ func (meta *metaNotifier) OnIndexBuild(indexDefnList []common.IndexDefnId, bucke
 
 		switch res.GetMsgType() {
 
-		case MSG_SUCCESS:
-			logging.Infof("clustMgrAgent::OnIndexBuild Success "+
+		case CLUST_MGR_BUILD_INDEX_DDL_RESPONSE:
+			errMap := res.(*MsgBuildIndexResponse).GetErrorMap()
+			logging.Infof("clustMgrAgent::OnIndexBuild returns "+
 				"for Build Index %v", indexDefnList)
-			return nil
+			return errMap
 
 		case MSG_ERROR:
 			logging.Errorf("clustMgrAgent::OnIndexBuild Error "+
 				"for Build Index %v. Error %v.", indexDefnList, res)
 			err := res.(*MsgError).GetError()
-			return err.cause
+			errMap := make(map[common.IndexInstId]error)
+			for _, instId := range indexDefnList {
+				errMap[common.IndexInstId(instId)] = errors.New(err.String())
+			}
+			return errMap
 
 		default:
 			logging.Fatalf("clustMgrAgent::OnIndexBuild Unknown Response "+

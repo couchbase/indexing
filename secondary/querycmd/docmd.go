@@ -240,9 +240,9 @@ func HandleCommand(
 				return fmt.Errorf("invalid index specified : %v", bindex)
 			}
 			bucket, iname = v[0], v[1]
-			defnID, ok := GetDefnID(client, bucket, iname)
+			index, ok := GetIndex(client, bucket, iname)
 			if ok {
-				defnIDs = append(defnIDs, defnID)
+				defnIDs = append(defnIDs, uint64(index.Definition.DefnId))
 			} else {
 				err = fmt.Errorf("index %v/%v unknown", bucket, iname)
 				break
@@ -254,11 +254,11 @@ func HandleCommand(
 		}
 
 	case "drop":
-		defnID, ok := GetDefnID(client, cmd.Bucket, cmd.IndexName)
+		index, ok := GetIndex(client, cmd.Bucket, cmd.IndexName)
 		if !ok {
 			return fmt.Errorf("invalid index specified : %v", cmd.IndexName)
 		}
-		err = client.DropIndex(defnID)
+		err = client.DropIndex(uint64(index.Definition.DefnId))
 		if err == nil {
 			fmt.Fprintf(w, "Index dropped %v/%v\n", bucket, iname)
 		} else {
@@ -269,7 +269,8 @@ func HandleCommand(
 	case "scan":
 		var state c.IndexState
 
-		defnID, _ := GetDefnID(client, bucket, iname)
+		index, _ := GetIndex(client, bucket, iname)
+		defnID := uint64(index.Definition.DefnId)
 		fmt.Fprintln(w, "Scan index:")
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
@@ -295,7 +296,8 @@ func HandleCommand(
 	case "scanAll":
 		var state c.IndexState
 
-		defnID, _ := GetDefnID(client, bucket, iname)
+		index, _ := GetIndex(client, bucket, iname)
+		defnID := uint64(index.Definition.DefnId)
 		fmt.Fprintln(w, "ScanAll index:")
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
@@ -315,7 +317,8 @@ func HandleCommand(
 		var state c.IndexState
 		var statsResp c.IndexStatistics
 
-		defnID, _ := GetDefnID(client, bucket, iname)
+		index, _ := GetIndex(client, bucket, iname)
+		defnID := uint64(index.Definition.DefnId)
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
 			100 /*period*/, 20000 /*timeout*/)
@@ -336,7 +339,8 @@ func HandleCommand(
 		var state c.IndexState
 		var count int64
 
-		defnID, _ := GetDefnID(client, bucket, iname)
+		index, _ := GetIndex(client, bucket, iname)
+		defnID := uint64(index.Definition.DefnId)
 		_, err = WaitUntilIndexState(
 			client, []uint64{defnID}, c.INDEX_STATE_ACTIVE,
 			100 /*period*/, 20000 /*timeout*/)
@@ -449,10 +453,10 @@ func printIndexInfo(w io.Writer, index *mclient.IndexMetadata) {
 	}
 }
 
-// GetDefnID for bucket/indexName.
-func GetDefnID(
+// GetIndex for bucket/indexName.
+func GetIndex(
 	client *qclient.GsiClient,
-	bucket, indexName string) (defnID uint64, ok bool) {
+	bucket, indexName string) (*mclient.IndexMetadata, bool) {
 
 	indexes, err := client.Refresh()
 	if err != nil {
@@ -462,10 +466,11 @@ func GetDefnID(
 	for _, index := range indexes {
 		defn := index.Definition
 		if defn.Bucket == bucket && defn.Name == indexName {
-			return uint64(index.Definition.DefnId), true
+			return index, true
+			//return uint64(index.Definition.DefnId), true
 		}
 	}
-	return 0, false
+	return nil, false
 }
 
 // WaitUntilIndexState comes to desired `state`,
@@ -515,6 +520,13 @@ func Arg2Key(arg []byte) []interface{} {
 		os.Exit(1)
 	}
 	return key
+}
+
+func first(key c.SecondaryKey) []byte {
+	if key == nil || len(key) == 0 {
+		return nil
+	}
+	return []byte(key[0].(string))
 }
 
 func validate(cmd *Command, fset *flag.FlagSet) error {

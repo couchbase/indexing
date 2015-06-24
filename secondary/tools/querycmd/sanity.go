@@ -43,12 +43,22 @@ var sanityCommands = [][]string{
 		"-type", "create", "-bucket", "beer-sample", "-index", "index-abv",
 		"-fields", "abv", "-with", "{\"defer_build\": true}",
 	},
+	[]string{
+		"-type", "create", "-bucket", "beer-sample", "-index", "#primary",
+		"-primary", "-fields", "dummy",
+	},
 	[]string{"-type", "list"},
 
 	// Query on index-city
 	[]string{
 		"-type", "scan", "-bucket", "beer-sample", "-index", "index-city",
 		"-low", "[\"B\"]", "-high", "[\"D\"]", "-incl", "3", "-limit",
+		"1000000000",
+	},
+	[]string{
+		"-type", "scan", "-bucket", "beer-sample", "-index", "#primary",
+		"-low", "[\"21st_amendment_brewery_cafe-north_star_red\"]",
+		"-high", "[\"512_brewing_company\"]", "-incl", "3", "-limit",
 		"1000000000",
 	},
 	[]string{
@@ -98,6 +108,9 @@ var sanityCommands = [][]string{
 	},
 	[]string{
 		"-type", "drop", "-bucket", "beer-sample", "-index", "index-abv",
+	},
+	[]string{
+		"-type", "drop", "-bucket", "beer-sample", "-index", "#primary",
 	},
 }
 

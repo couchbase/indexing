@@ -85,6 +85,12 @@ func FailTestIfError(err error, msg string, t *testing.T) {
 	}
 }
 
+func FailTestIfNoError(err error, msg string, t *testing.T) {
+	if err == nil {
+		t.Fatalf("%v: %v\n", msg, err)
+	}
+}
+
 func addDocIfNotPresentInKV(docKey string) {
 	if _, present := docs[docKey]; present == false {
 		keysToBeSet := make(tc.KeyValues)

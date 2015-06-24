@@ -54,10 +54,11 @@ func doConsistency(
 	querycmd.HandleCommand(client, cmd, true, os.Stdout)
 
 	// Wait for index to come active.
-	defnID, ok := querycmd.GetDefnID(client, "beer-sample", "index-city")
+	index, ok := querycmd.GetIndex(client, "beer-sample", "index-city")
 	if !ok {
 		log.Fatalf("cannot get definition ID")
 	}
+	defnID := uint64(index.Definition.DefnId)
 	_, err = querycmd.WaitUntilIndexState(
 		client, []uint64{defnID}, common.INDEX_STATE_ACTIVE,
 		100 /*period*/, 20000 /*timeout*/)
