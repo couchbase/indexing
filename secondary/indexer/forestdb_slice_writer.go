@@ -75,6 +75,11 @@ retry:
 	slice.config = config
 	slice.sysconf = sysconf
 
+	//open a separate file handle for compaction
+	if slice.compactFd, err = forestdb.Open(filepath, config); err != nil {
+		return nil, err
+	}
+
 	config.SetOpenFlags(forestdb.OPEN_FLAG_RDONLY)
 	if slice.statFd, err = forestdb.Open(filepath, config); err != nil {
 		return nil, err
@@ -155,6 +160,11 @@ type fdbSlice struct {
 	lock     sync.RWMutex
 	dbfile   *forestdb.File
 	statFd   *forestdb.File
+	//forestdb requires a separate file handle to be used for compaction
+	//as we need to allow concurrent db updates to happen on existing file handle
+	//while compaction is running in the background.
+	compactFd *forestdb.File
+
 	metaLock sync.Mutex
 	meta     *forestdb.KVStore   // handle for index meta
 	main     []*forestdb.KVStore // handle for forward index
@@ -882,7 +892,7 @@ func (fdb *fdbSlice) Compact() error {
 	mainSeq := osnap.(*fdbSnapshotInfo).MainSeq
 
 	//find the db snapshot lower than oldest snapshot
-	snap, err := fdb.dbfile.GetAllSnapMarkers()
+	snap, err := fdb.compactFd.GetAllSnapMarkers()
 	if err != nil {
 		return err
 	}
@@ -916,7 +926,7 @@ snaploop:
 	}
 
 	newpath := newFdbFile(fdb.path, true)
-	err = fdb.dbfile.CompactUpto(newpath, snapMarker)
+	err = fdb.compactFd.CompactUpto(newpath, snapMarker)
 	if err != nil {
 		return err
 	}
@@ -1075,6 +1085,7 @@ func tryCloseFdbSlice(fdb *fdbSlice) {
 	}
 
 	fdb.statFd.Close()
+	fdb.compactFd.Close()
 	fdb.dbfile.Close()
 }
 
