@@ -34,9 +34,6 @@ func (k *KVStore) SnapshotOpen(sn SeqNum) (*KVStore, error) {
 // It is expected that the kvstore is only used for cloning so that
 // it is possible not to retain lock.
 func (k *KVStore) SnapshotClone(sn SeqNum) (*KVStore, error) {
-	// TODO: remove this lock once fdb has tested concurrent fdb_snapshot_open
-	k.Lock()
-	defer k.Unlock()
 
 	rv := KVStore{advLock: newAdvLock(), name: k.name}
 
