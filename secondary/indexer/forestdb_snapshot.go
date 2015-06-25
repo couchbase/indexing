@@ -15,8 +15,8 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/platform"
 	"math"
-	"sync"
 )
 
 var FORESTDB_INMEMSEQ = forestdb.SeqNum(math.MaxUint64)
@@ -58,71 +58,62 @@ type fdbSnapshot struct {
 	ts        *common.TsVbuuid   //timestamp
 	committed bool
 
-	refCount int          //Reader count for this snapshot
-	lock     sync.RWMutex //lock to atomically increment the refCount
+	refCount int32        //Reader count for this snapshot
+}
+
+func (s *fdbSnapshot) Create() error {
+
+	var mainSeq, backSeq forestdb.SeqNum
+	if s.committed {
+		mainSeq = s.mainSeqNum
+		backSeq = s.backSeqNum
+	} else {
+		mainSeq = FORESTDB_INMEMSEQ
+		backSeq = FORESTDB_INMEMSEQ
+	}
+	var err error
+	s.main, err = s.main.SnapshotOpen(mainSeq)
+	if err != nil {
+		logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+			"Opening Main DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), mainSeq, err)
+		return err
+	}
+
+	//if there is a back-index(non-primary index)
+	if s.back != nil {
+		s.back, err = s.back.SnapshotOpen(backSeq)
+		if err != nil {
+			logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+				"Opening Back DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), backSeq, err)
+			return err
+		}
+	}
+
+	if s.committed {
+		s.meta, err = s.meta.SnapshotOpen(s.metaSeqNum)
+		if err != nil {
+			logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
+				"Opening Meta DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), s.metaSeqNum, err)
+			return err
+		}
+	}
+
+	s.slice.IncrRef()
+	platform.StoreInt32(&s.refCount, 1)
+
+	return nil
 }
 
 func (s *fdbSnapshot) Open() error {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if s.refCount > 0 {
-		s.refCount++
-		return nil
-	} else {
-		var mainSeq, backSeq forestdb.SeqNum
-		if s.committed {
-			mainSeq = s.mainSeqNum
-			backSeq = s.backSeqNum
-		} else {
-			mainSeq = FORESTDB_INMEMSEQ
-			backSeq = FORESTDB_INMEMSEQ
-		}
-		var err error
-		s.main, err = s.main.SnapshotOpen(mainSeq)
-		if err != nil {
-			logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
-				"Opening Main DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), mainSeq, err)
-			return err
-		}
-
-		//if there is a back-index(non-primary index)
-		if s.back != nil {
-			s.back, err = s.back.SnapshotOpen(backSeq)
-			if err != nil {
-				logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
-					"Opening Back DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), backSeq, err)
-				return err
-			}
-		}
-
-		if s.committed {
-			s.meta, err = s.meta.SnapshotOpen(s.metaSeqNum)
-			if err != nil {
-				logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
-					"Opening Meta DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), s.metaSeqNum, err)
-				return err
-			}
-		}
-
-		s.slice.IncrRef()
-		s.refCount = 1
-	}
+	platform.AddInt32(&s.refCount, int32(1))
 
 	return nil
 }
 
 func (s *fdbSnapshot) IsOpen() bool {
 
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	if s.refCount > 0 {
-		return true
-	} else {
-		return false
-	}
-
+	count := platform.LoadInt32(&s.refCount)
+	return count > 0
 }
 
 func (s *fdbSnapshot) Id() SliceId {
@@ -152,61 +143,59 @@ func (s *fdbSnapshot) BackIndexSeqNum() forestdb.SeqNum {
 //Close the snapshot
 func (s *fdbSnapshot) Close() error {
 
-	s.lock.Lock()
-	defer s.lock.Unlock()
+	count := platform.AddInt32(&s.refCount, int32(-1))
 
-	if s.refCount <= 0 {
+	if count < 0 {
 		logging.Errorf("ForestDBSnapshot::Close Close operation requested " +
 			"on already closed snapshot")
 		return errors.New("Snapshot Already Closed")
-	} else {
-		s.refCount--
-		if s.refCount == 0 {
-			//close the main index
-			defer s.slice.DecrRef()
-			if s.main != nil {
-				err := s.main.Close()
-				if err != nil {
-					logging.Errorf("ForestDBSnapshot::Close Unexpected error "+
-						"closing Main DB Snapshot %v", err)
-					return err
-				}
-			} else {
-				logging.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
-				return errors.New("Main DB Handle Nil")
-			}
 
-			//close the back index
-			if s.back != nil {
-				err := s.back.Close()
-				if err != nil {
-					logging.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
-						"Back DB Snapshot %v", err)
-					return err
-				}
-			} else {
-				//valid to be nil in case of primary index
-				logging.Warnf("ForestDBSnapshot::Close Back DB Handle Nil")
-			}
-
-			//close the meta index
-			if s.committed {
-				if s.meta != nil {
-					err := s.meta.Close()
-					if err != nil {
-						logging.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
-							"Meta DB Snapshot %v", err)
-						return err
-					}
-				} else {
-					logging.Errorf("ForestDBSnapshot::Close Meta DB Handle Nil")
-					return errors.New("Meta DB Handle Nil")
-				}
-			}
-		}
+	} else if count == 0 {
+		go s.Destroy()
 	}
 
 	return nil
+}
+
+func (s *fdbSnapshot) Destroy() {
+
+	//close the main index
+	defer s.slice.DecrRef()
+	if s.main != nil {
+		err := s.main.Close()
+		if err != nil {
+			logging.Errorf("ForestDBSnapshot::Close Unexpected error "+
+				"closing Main DB Snapshot %v", err)
+		}
+	} else {
+		logging.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
+	}
+
+	//close the back index
+	if s.back != nil {
+		err := s.back.Close()
+		if err != nil {
+			logging.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
+				"Back DB Snapshot %v", err)
+		}
+	} else {
+		//valid to be nil in case of primary index
+		logging.Warnf("ForestDBSnapshot::Close Back DB Handle Nil")
+	}
+
+	//close the meta index
+	if s.committed {
+		if s.meta != nil {
+			err := s.meta.Close()
+			if err != nil {
+				logging.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
+					"Meta DB Snapshot %v", err)
+			}
+		} else {
+			logging.Errorf("ForestDBSnapshot::Close Meta DB Handle Nil")
+		}
+	}
+
 }
 
 func (s *fdbSnapshot) String() string {

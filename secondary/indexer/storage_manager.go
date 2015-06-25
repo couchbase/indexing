@@ -36,6 +36,8 @@ type storageMgr struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any async message to supervisor
 
+	snapshotNotifych chan IndexSnapshot
+
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 
@@ -87,16 +89,17 @@ func (w *snapshotWaiter) Error(err error) {
 //Any async response to supervisor is sent to supvRespch.
 //If supvCmdch get closed, storageMgr will shut itself down.
 func NewStorageManager(supvCmdch MsgChannel, supvRespch MsgChannel,
-	indexPartnMap IndexPartnMap, config common.Config) (
+	indexPartnMap IndexPartnMap, config common.Config, snapshotNotifych chan IndexSnapshot) (
 	StorageManager, Message) {
 
 	//Init the storageMgr struct
 	s := &storageMgr{
-		supvCmdch:    supvCmdch,
-		supvRespch:   supvRespch,
-		indexSnapMap: make(map[common.IndexInstId]IndexSnapshot),
-		waitersMap:   make(map[common.IndexInstId][]*snapshotWaiter),
-		config:       config,
+		supvCmdch:        supvCmdch,
+		supvRespch:       supvRespch,
+		snapshotNotifych: snapshotNotifych,
+		indexSnapMap:     make(map[common.IndexInstId]IndexSnapshot),
+		waitersMap:       make(map[common.IndexInstId][]*snapshotWaiter),
+		config:           config,
 	}
 
 	//if manager is not enabled, create meta file
@@ -137,6 +140,7 @@ loop:
 			if ok {
 				if cmd.GetMsgType() == STORAGE_MGR_SHUTDOWN {
 					logging.Infof("StorageManager::run Shutting Down")
+					close(s.snapshotNotifych)
 					s.supvCmdch <- &MsgSuccess{}
 					break loop
 				}
@@ -393,6 +397,10 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot) {
 	DestroyIndexSnapshot(s.indexSnapMap[is.IndexInstId()])
 	s.indexSnapMap[is.IndexInstId()] = is
 
+	// notify a new snapshot through channel
+	// the channel receiver needs to destroy snapshot when done
+	s.notifySnapshotCreation(is)
+
 	// Also notify any waiters for snapshots creation
 	var newWaiters []*snapshotWaiter
 	tsVbuuid := is.Timestamp()
@@ -512,7 +520,32 @@ func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string)
 			ts:     ts,
 		}
 		s.indexSnapMap[idxInstId] = snap
+		s.notifySnapshotCreation(snap)
 	}
+}
+
+func (s *storageMgr) notifySnapshotDeletion(instId common.IndexInstId) {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("storageMgr::notifySnapshot %v", r)
+		}
+	}()
+
+	snap := &indexSnapshot{
+		instId: instId,
+		ts:     nil, // signal deletion with nil timestamp
+	}
+	s.snapshotNotifych <- snap
+}
+
+func (s *storageMgr) notifySnapshotCreation(is IndexSnapshot) {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.Errorf("storageMgr::notifySnapshot %v", r)
+		}
+	}()
+
+	s.snapshotNotifych <- CloneIndexSnapshot(is)
 }
 
 func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
@@ -543,6 +576,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 			inst.State == common.INDEX_STATE_DELETED {
 			DestroyIndexSnapshot(is)
 			delete(s.indexSnapMap, idxInstId)
+			s.notifySnapshotDeletion(idxInstId)
 		}
 	}
 
@@ -810,6 +844,7 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 
 		DestroyIndexSnapshot(s.indexSnapMap[idxInstId])
 		delete(s.indexSnapMap, idxInstId)
+		s.notifySnapshotDeletion(idxInstId)
 
 		snapInfoContainer := NewSnapshotInfoContainer(infos)
 		latestSnapshotInfo := snapInfoContainer.GetLatest()
@@ -842,6 +877,7 @@ func (s *storageMgr) updateIndexSnapMap(indexPartnMap IndexPartnMap,
 				partns: map[common.PartitionId]PartitionSnapshot{pid: ps},
 			}
 			s.indexSnapMap[idxInstId] = is
+			s.notifySnapshotCreation(is)
 		} else {
 			s.addNilSnapshot(idxInstId, bucket)
 		}

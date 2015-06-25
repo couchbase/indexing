@@ -30,6 +30,23 @@ func (k *KVStore) SnapshotOpen(sn SeqNum) (*KVStore, error) {
 	return &rv, nil
 }
 
+// SnapshotClone clones a snapshot of a database file in ForestDB
+// It is expected that the kvstore is only used for cloning so that
+// it is possible not to retain lock.
+func (k *KVStore) SnapshotClone(sn SeqNum) (*KVStore, error) {
+
+	rv := KVStore{advLock: newAdvLock(), name: k.name}
+
+	Log.Debugf("fdb_snapshot_open call k:%p db:%v sn:%v", k, k.db, sn)
+	errNo := C.fdb_snapshot_open(k.db, &rv.db, C.fdb_seqnum_t(sn))
+	Log.Debugf("fdb_snapshot_open retn k:%p errNo:%v rv:%v", k, errNo, rv.db)
+	if errNo != RESULT_SUCCESS {
+		return nil, Error(errNo)
+	}
+	rv.setupLogging()
+	return &rv, nil
+}
+
 // Rollback a database to a specified point represented by the sequence number
 func (k *KVStore) Rollback(sn SeqNum) error {
 	k.Lock()
