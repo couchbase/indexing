@@ -651,9 +651,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.settings.max_writer_lock_prob": ConfigValue{
-		50,
+		20,
 		"Controls the write rate for compaction to catch up",
-		50,
+		20,
 		false, // mutable
 	},
 	"projector.settings.log_level": ConfigValue{
