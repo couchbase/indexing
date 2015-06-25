@@ -578,17 +578,10 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 			idxDefnId:  fdb.idxDefnId,
 			idxInstId:  fdb.idxInstId,
 			main:       fdb.main[0],
-			back:       fdb.back[0],
 			ts:         snapInfo.Timestamp(),
 			mainSeqNum: snapInfo.MainSeq,
-			backSeqNum: snapInfo.BackSeq,
 			committed:  info.IsCommitted(),
 		}
-	}
-
-	if info.IsCommitted() {
-		s.meta = fdb.meta
-		s.metaSeqNum = snapInfo.MetaSeq
 	}
 
 	logging.Debugf("ForestDBSlice::OpenSnapshot \n\tSliceId %v IndexInstId %v Creating New "+
