@@ -21,6 +21,8 @@ const (
 	INDEX_HTTP_SERVICE  = "indexHttp"
 )
 
+const CLUSTER_INFO_INIT_RETRIES = 5
+
 const BUCKET_UUID_NIL = ""
 
 // Helper object for fetching cluster information
@@ -53,7 +55,7 @@ func NewClusterInfoCache(clusterUrl string, pool string) (*ClusterInfoCache, err
 	c := &ClusterInfoCache{
 		url:      clusterUrl,
 		poolName: pool,
-		retries:  0,
+		retries:  CLUSTER_INFO_INIT_RETRIES,
 	}
 
 	return c, nil
