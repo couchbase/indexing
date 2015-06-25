@@ -379,16 +379,20 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 		fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 		platform.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
 
-		//delete from back index
-		t0 = time.Now()
-		if err = fdb.back[workerId].DeleteKV(docid); err != nil {
-			fdb.checkFatalDbError(err)
-			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
-				"entry from back index %v", fdb.id, fdb.idxInstId, err)
-			return
+		// If a field value changed from "existing" to "missing" (ie, key = nil),
+		// we need to remove back index entry corresponding to the previous "existing" value.
+		if key == nil {
+			t0 := time.Now()
+			if err = fdb.back[workerId].DeleteKV(docid); err != nil {
+				fdb.checkFatalDbError(err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
+					"entry from back index %v", fdb.id, fdb.idxInstId, err)
+				return
+			}
+
+			fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+			platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 		}
-		fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-		platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 	}
 
 	if key == nil {
