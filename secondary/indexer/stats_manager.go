@@ -374,12 +374,15 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 			sync = true
 		}
 		s.tryUpdateStats(sync)
-		s.Lock()
 		stats := s.stats.Get()
-		bytes, _ := stats.MarshalJSON()
-		s.Unlock()
-		w.WriteHeader(200)
-		w.Write(bytes)
+		if stats == nil {
+			w.WriteHeader(500)
+			w.Write([]byte("Indexer not ready"))
+		} else {
+			bytes, _ := stats.MarshalJSON()
+			w.WriteHeader(200)
+			w.Write(bytes)
+		}
 	} else {
 		w.WriteHeader(400)
 		w.Write([]byte("Unsupported method"))
