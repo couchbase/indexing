@@ -11,11 +11,12 @@ This document describes the flow of execution of a query engine request.
 1. Index Coordinator will periodically notify the Indexer about the latest changes in index toplogy. This enables Indexer to maintain a local copy of latest index topologies.
 2. Index Client(query catalog implementation which resides on query server) receives index scan request from the Query Server Component. 
 3. Index Client will choose a Indexer node to send this request to. Index Client will have a list of available indexer nodes.
-4. Index Client will choose(or will be provided by query engine) a Consistency/Stability option for the index scan. This is based on the consistency/latency requirements of the application issuing the query.
+4. The Index Client will interpret the Consistency/Stability option specified by Query and send the request to the server.
 
   __Consistency Options__
-  - `Any Consistency` : The indexer would return the most current data available at the moment.  
-  - `Session Consistency` : The indexer would query the latest timestamp from each KV node.   It will ensure that the scan   result is at least as recent as the KV timestamp.  In other words, this option ensures the query result is at least as recent as what the user session has observed so far.   
+  - `Any Consistency` : The indexer would return the most current data available at the moment. 
+  - `Query Consistency` : The Query server would specify the minimum acceptable timestamp to it. The index needs to be at or ahead of this to respond. The timestamp may be sparse, in the sense that sequence numbers may be specified for only some vbuckets, but not others. This option allows the query to implement RYOW semantics.
+  - `Session Consistency` : The index client would query the latest timestamp from each KV node. It will ensure that the scan result is at least as recent as the KV timestamp. In other words, this option ensures the query result has seen all mutations globally up to the point when the request was originated.
 
   __Stability Options__
   - `No Stability` : The indexer does not ensure any stability of data within each scan.  This is the only stability option for consistency-Any.
@@ -26,8 +27,7 @@ This document describes the flow of execution of a query engine request.
 6. The Indexer receiving the Scan request will become the scan co-ordinator. It checks the local topology information to decide which Indexer nodes will participate in this scan.
   - If index is not found, scan coordinator will return an error "INDEX_NOT_FOUND"
   - If index exists but is in rollback mode, scan coordinator will return an error "INDEX_IN_ROLLBACK"
-7. Scan co-ordinator decides on the Scan Timestamp for this scan. Based on consistency/stability options, it would either: 
-  - Poll all KV nodes for the latest timestamp(`Session Consistency`) and choose a Stability Timestamp later than that. Otherwise wait for such Stability Timestamp to be available.
+7. Based on the consistency option, the indexer will choose a suitable Stability Timestamp. If none is available, it will wait for such Stability Timestamp to become available.
   - Choose latest Stability Timestamp as the Scan Timestamp for the Scan (`Any Consistency` + `Scan/Query Stability`).
   - Choose a nil Scan Timestamp for scanning the tip(`Any Consistency` + `No Stability`).
 8. Scan coordinator will send all participating indexers(identified in Step 6) the Scan request with Scan Timestamp.
