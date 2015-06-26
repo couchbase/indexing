@@ -539,19 +539,19 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.persisted_snapshot.interval": ConfigValue{
-		uint64(5000),
+		uint64(5000), // keep in sync with index_settings_manager.erl
 		"Persisted snapshotting interval in milliseconds",
 		uint64(5000),
 		false, // mutable
 	},
 	"indexer.settings.inmemory_snapshot.interval": ConfigValue{
-		uint64(200),
+		uint64(200), // keep in sync with index_settings_manager.erl
 		"InMemory snapshotting interval in milliseconds",
 		uint64(200),
 		false, // mutable
 	},
 	"indexer.settings.recovery.max_rollbacks": ConfigValue{
-		5,
+		5, // keep in sync with index_settings_manager.erl
 		"Maximum number of committed rollback points",
 		5,
 		false, // mutable
@@ -571,7 +571,7 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.log_level": ConfigValue{
-		"debug",
+		"debug", // keep in sync with index_settings_manager.erl
 		"Indexer logging level",
 		"debug",
 		false, // mutable
