@@ -248,7 +248,7 @@ func (gsi *gsiKeyspace) PrimaryIndexes() ([]datastore.PrimaryIndex, errors.Error
 // CreatePrimaryIndex implements datastore.Indexer{} interface. Create or
 // return a primary index on this keyspace
 func (gsi *gsiKeyspace) CreatePrimaryIndex(
-	name string, with value.Value) (datastore.PrimaryIndex, errors.Error) {
+	requestId, name string, with value.Value) (datastore.PrimaryIndex, errors.Error) {
 
 	var withJSON []byte
 	var err error
@@ -284,9 +284,9 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex(
 // CreateIndex implements datastore.Indexer{} interface. Create a secondary
 // index on this keyspace
 func (gsi *gsiKeyspace) CreateIndex(
-	name string, seekKey, rangeKey expression.Expressions,
-	where expression.Expression,
-	with value.Value) (datastore.Index, errors.Error) {
+	requestId, name string, seekKey, rangeKey expression.Expressions,
+	where expression.Expression, with value.Value) (
+	datastore.Index, errors.Error) {
 
 	var partnStr string
 	if seekKey != nil && len(seekKey) > 0 {
@@ -330,7 +330,7 @@ func (gsi *gsiKeyspace) CreateIndex(
 }
 
 // BuildIndexes implements datastore.Indexer{} interface.
-func (gsi *gsiKeyspace) BuildIndexes(names ...string) errors.Error {
+func (gsi *gsiKeyspace) BuildIndexes(requestId string, names ...string) errors.Error {
 	defnIDs := make([]uint64, len(names))
 	for i, name := range names {
 		index, err := gsi.IndexByName(name)
@@ -532,7 +532,7 @@ func (si *secondaryIndex) State() (datastore.IndexState, string, errors.Error) {
 
 // Statistics implement Index{} interface.
 func (si *secondaryIndex) Statistics(
-	span *datastore.Span) (datastore.Statistics, errors.Error) {
+	requestId string, span *datastore.Span) (datastore.Statistics, errors.Error) {
 
 	if si == nil {
 		return nil, ErrorIndexEmpty
@@ -587,7 +587,7 @@ func (si *secondaryIndex) Count(span *datastore.Span,
 }
 
 // Drop implement Index{} interface.
-func (si *secondaryIndex) Drop() errors.Error {
+func (si *secondaryIndex) Drop(requestId string) errors.Error {
 	if si == nil {
 		return ErrorIndexEmpty
 	}
@@ -600,7 +600,7 @@ func (si *secondaryIndex) Drop() errors.Error {
 
 // Scan implement Index{} interface.
 func (si *secondaryIndex) Scan(
-	span *datastore.Span, distinct bool, limit int64,
+	requestId string, span *datastore.Span, distinct bool, limit int64,
 	cons datastore.ScanConsistency, vector timestamp.Vector,
 	conn *datastore.IndexConnection) {
 
@@ -627,7 +627,7 @@ func (si *secondaryIndex) Scan(
 
 // Scan implement PrimaryIndex{} interface.
 func (si *secondaryIndex) ScanEntries(
-	limit int64, cons datastore.ScanConsistency,
+	requestId string, limit int64, cons datastore.ScanConsistency,
 	vector timestamp.Vector, conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
