@@ -421,7 +421,7 @@ func TestMultipleBuckets(t *testing.T) {
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 
 	for i := 1; i < numOfBuckets; i++ {
-		kvutility.CreateBucket(bucketNames[i], "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
+		kvutility.CreateBucket(bucketNames[i], "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
 	}
 	time.Sleep(30 * time.Second)
 
