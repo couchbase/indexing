@@ -29,11 +29,16 @@ type BucketStats struct {
 
 	mutationQueueSize  stats.Int64Val
 	numMutationsQueued stats.Int64Val
+
+	tsQueueSize   stats.Int64Val
+	numNonAlignTS stats.Int64Val
 }
 
 func (s *BucketStats) Init() {
 	s.mutationQueueSize.Init()
 	s.numMutationsQueued.Init()
+	s.tsQueueSize.Init()
+	s.numNonAlignTS.Init()
 }
 
 type IndexTimingStats struct {
@@ -263,6 +268,8 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		prefix = fmt.Sprintf("%s:", s.bucket)
 		addStat("mutation_queue_size", s.mutationQueueSize.Value())
 		addStat("num_mutations_queued", s.numMutationsQueued.Value())
+		addStat("ts_queue_size", s.tsQueueSize.Value())
+		addStat("num_nonalign_ts", s.numNonAlignTS.Value())
 	}
 
 	return json.Marshal(statsMap)

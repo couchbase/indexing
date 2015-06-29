@@ -1558,6 +1558,11 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			})
 			tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
 			tsList.PushBack(tsVbuuid)
+			stats := tk.stats.Get()
+			if stat, ok := stats.buckets[bucket]; ok {
+				stat.tsQueueSize.Set(int64(tsList.Len()))
+			}
+
 		}
 	} else {
 		tk.processPendingTS(streamId, bucket)
@@ -1719,6 +1724,11 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 			tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
 		} else {
 			flushTs.SetSnapType(common.INMEM_SNAP)
+		}
+	} else {
+		stats := tk.stats.Get()
+		if stat, ok := stats.buckets[bucket]; ok {
+			stat.numNonAlignTS.Add(1)
 		}
 	}
 
