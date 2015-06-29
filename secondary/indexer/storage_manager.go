@@ -384,10 +384,10 @@ func (s *storageMgr) updateSnapIntervalStat(idxId common.IndexInstId,
 
 	idxStats := stats.indexes[idxId]
 	last := idxStats.lastTsTime.Value()
-	next := int64(time.Now().Nanosecond())
+	next := int64(time.Now().UnixNano())
 	avg := idxStats.avgTsInterval.Value()
 	if last != 0 {
-		idxStats.avgTsInterval.Set(((last + next) + avg) / 2)
+		idxStats.avgTsInterval.Set(((next - last) + avg) / 2)
 	}
 	idxStats.lastTsTime.Set(next)
 }
