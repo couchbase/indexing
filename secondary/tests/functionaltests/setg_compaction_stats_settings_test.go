@@ -117,27 +117,27 @@ type compactionStats struct {
 	disk_size       float64
 }
 
-func TestDefaultCompactionBehavior(t *testing.T) {
+func SkipTestDefaultCompactionBehavior(t *testing.T) {
 	log.Printf("In TestDefaultCompactionBehavior()")
 	compactionFragmentationTest(float64(30), false, "index_compactiontest1", "default", "company", 100, t)
 }
 
-func TestLowFragmentation(t *testing.T) {
+func SkipTestLowFragmentation(t *testing.T) {
 	log.Printf("In TestLowFragmentation()")
 	compactionFragmentationTest(float64(5), true, "index_compactiontest1", "default", "company", 100, t)
 }
 
-func TestHighFragmentation(t *testing.T) {
+func SkipTestHighFragmentation(t *testing.T) {
 	log.Printf("In TestLowFragmentation()")
 	compactionFragmentationTest(float64(70), true, "index_compactiontest1", "default", "company", 150, t)
 }
 
-func TestHighCompactionMinSize(t *testing.T) {
+func SkipTestHighCompactionMinSize(t *testing.T) {
 	log.Printf("In TestHighCompactionMinSize()")
 	compactionFragmentationTest(float64(70), true, "index_compactiontest1", "default", "company", 150, t)
 }
 
-func TestCompactionDiskMinSize(t *testing.T) {
+func SkipTestCompactionDiskMinSize(t *testing.T) {
 	log.Printf("In TestCompactionDiskMinSize()")
 
 	secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
@@ -189,7 +189,7 @@ func TestCompactionDiskMinSize(t *testing.T) {
 		}
 		prev_compactionnumber = stats2.num_compactions
 	}
-	
+
 	err = secondaryindex.ChangeIndexerSettings("indexer.settings.compaction.min_size", float64(1048576), clusterconfig.Username, clusterconfig.Password, kvaddress)
 	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
 }
