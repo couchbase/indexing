@@ -1356,9 +1356,13 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	//TODO cleanup streambucket internal maps
-
 	idx.stopBucketStream(streamId, bucket)
+
+	//cleanup index data for all indexes in the bucket
+	for _, instId := range instIdList {
+		index := idx.indexInstMap[instId]
+		idx.cleanupIndexData(index, nil)
+	}
 
 	idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
@@ -1382,11 +1386,13 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
-		clientCh <- &MsgError{
-			err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
-				severity: FATAL,
-				cause:    err,
-				category: INDEXER}}
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+					severity: FATAL,
+					cause:    err,
+					category: INDEXER}}
+		}
 		common.CrashOnError(err)
 	}
 
