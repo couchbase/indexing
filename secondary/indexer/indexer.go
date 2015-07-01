@@ -1200,8 +1200,15 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 
 	idx.bucketBuildTs[bucket] = buildTs
 
-	//change status to Active
-	idx.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
+	//during recovery, if all indexes of a bucket gets dropped,
+	//the stream needs to be stopped for that bucket.
+	if !idx.checkBucketExistsInStream(bucket, streamId, false) {
+		idx.stopBucketStream(streamId, bucket)
+		idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+	} else {
+		//change status to Active
+		idx.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
+	}
 
 }
 
@@ -1211,10 +1218,18 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	streamId := msg.(*MsgKVStreamRepair).GetStreamId()
 	restartTs := msg.(*MsgKVStreamRepair).GetRestartTs()
 
+	//repair is not required for inactive bucket streams
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
+		logging.Debugf("Indexer::handleKVStreamRepair Skip Stream Repair %v Inactive Bucket %v",
+			streamId, bucket)
+		return
+	}
+
 	//if there is already a repair in progress for this bucket stream
 	//ignore the request
 	if idx.checkStreamRequestPending(streamId, bucket) == false {
-		logging.Debugf("Indexer::handleKVStreamRepair Initiate Stream Repair %v Bucket %v", streamId, bucket)
+		logging.Debugf("Indexer::handleKVStreamRepair Initiate Stream Repair %v Bucket %v",
+			streamId, bucket)
 		idx.startBucketStream(streamId, bucket, restartTs)
 	} else {
 		logging.Debugf("Indexer::handleKVStreamRepair Ignore Stream Repair Request for Stream "+
@@ -2397,6 +2412,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	if len(indexList) == 0 {
 		logging.Debugf("Indexer::startBucketStream Nothing to Start. Stream: %v Bucket: %v",
 			streamId, bucket)
+		idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 		return
 	}
 
