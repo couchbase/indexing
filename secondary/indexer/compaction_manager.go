@@ -29,15 +29,16 @@ type compactionManager struct {
 type compactionDaemon struct {
 	quitch  chan bool
 	started bool
-	ticker  *time.Ticker
+	timer   *time.Timer
 	msgch   MsgChannel
-	config  common.Config
+	config  common.ConfigHolder
 }
 
 func (cd *compactionDaemon) Start() {
 	if !cd.started {
-		dur := time.Second * time.Duration(cd.config["check_period"].Int())
-		cd.ticker = time.NewTicker(dur)
+		conf := cd.config.Load()
+		dur := time.Second * time.Duration(conf["check_period"].Int())
+		cd.timer = time.NewTimer(dur)
 		cd.started = true
 		go cd.loop()
 	}
@@ -45,17 +46,21 @@ func (cd *compactionDaemon) Start() {
 
 func (cd *compactionDaemon) Stop() {
 	if cd.started {
-		cd.ticker.Stop()
+		cd.timer.Stop()
 		cd.quitch <- true
 		<-cd.quitch
 	}
 }
 
-func (cd *compactionDaemon) needsCompaction(is IndexStorageStats) bool {
+func (cd *compactionDaemon) ResetConfig(c common.Config) {
+	cd.config.Store(c)
+}
+
+func (cd *compactionDaemon) needsCompaction(is IndexStorageStats, config common.Config) bool {
 	logging.Infof("CompactionDaemon: Checking fragmentation of index instance:%v (Data:%v, Disk:%v, Fragmentation:%v%%)",
 		is.InstId, is.Stats.DataSize, is.Stats.DiskSize, is.Stats.Fragmentation)
 
-	interval := cd.config["interval"].String()
+	interval := config["interval"].String()
 	isCompactionInterval := true
 	if interval != "00:00,00:00" {
 		var start_hr, start_min, end_hr, end_min int
@@ -78,8 +83,8 @@ func (cd *compactionDaemon) needsCompaction(is IndexStorageStats) bool {
 		return false
 	}
 
-	if uint64(is.Stats.DiskSize) > cd.config["min_size"].Uint64() {
-		if int(is.Stats.Fragmentation) >= cd.config["min_frag"].Int() {
+	if uint64(is.Stats.DiskSize) > config["min_size"].Uint64() {
+		if int(is.Stats.Fragmentation) >= config["min_frag"].Int() {
 			return true
 		}
 	}
@@ -92,7 +97,8 @@ func (cd *compactionDaemon) loop() {
 loop:
 	for {
 		select {
-		case _, ok := <-cd.ticker.C:
+		case _, ok := <-cd.timer.C:
+			conf := cd.config.Load()
 			if ok {
 				replych := make(chan []IndexStorageStats)
 				statReq := &MsgIndexStorageStats{respch: replych}
@@ -100,7 +106,7 @@ loop:
 				stats = <-replych
 
 				for _, is := range stats {
-					if cd.needsCompaction(is) {
+					if cd.needsCompaction(is, conf) {
 						errch := make(chan error)
 						compactReq := &MsgIndexCompact{
 							instId: is.InstId,
@@ -117,6 +123,9 @@ loop:
 					}
 				}
 			}
+
+			dur := time.Second * time.Duration(conf["check_period"].Int())
+			cd.timer.Reset(dur)
 
 		case <-cd.quitch:
 			cd.quitch <- true
@@ -152,10 +161,9 @@ loop:
 				} else if cmd.GetMsgType() == CONFIG_SETTINGS_UPDATE {
 					logging.Infof("%v: Refreshing settings", cm.logPrefix)
 					cfgUpdate := cmd.(*MsgConfigUpdate)
-					cm.config = cfgUpdate.GetConfig()
-					cd.Stop()
-					cd = cm.newCompactionDaemon()
-					cd.Start()
+					fullConfig := cfgUpdate.GetConfig()
+					cfg := fullConfig.SectionConfig("settings.compaction.", true)
+					cd.ResetConfig(cfg)
 					cm.supvCmdCh <- &MsgSuccess{}
 				}
 			} else {
@@ -171,9 +179,10 @@ func (cm *compactionManager) newCompactionDaemon() *compactionDaemon {
 	cfg := cm.config.SectionConfig("settings.compaction.", true)
 	cd := &compactionDaemon{
 		quitch:  make(chan bool),
-		config:  cfg,
 		started: false,
 		msgch:   cm.supvMsgCh,
 	}
+	cd.config.Store(cfg)
+
 	return cd
 }
