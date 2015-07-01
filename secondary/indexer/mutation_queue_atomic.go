@@ -93,6 +93,7 @@ func NewAtomicMutationQueue(numVbuckets uint16, maxLenPerVb int64) *atomicMutati
 		q.tail[x] = unsafe.Pointer(node)
 		q.free[x] = node
 		q.stopch[x] = make(StopChannel)
+		q.size[x] = platform.NewAlignedInt64(0)
 	}
 
 	return q

@@ -167,7 +167,7 @@ type scanCoordinator struct {
 	indexInstMap  common.IndexInstMap
 	indexPartnMap IndexPartnMap
 
-	reqCounter *platform.AlignedUint64
+	reqCounter platform.AlignedUint64
 	config     common.ConfigHolder
 
 	stats IndexerStatsHolder
@@ -188,7 +188,7 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		lastSnapshot:     make(map[common.IndexInstId]IndexSnapshot),
 		snapshotNotifych: snapshotNotifych,
 		logPrefix:        "ScanCoordinator",
-		reqCounter:       new(platform.AlignedUint64),
+		reqCounter:       platform.NewAlignedUint64(0),
 	}
 
 	s.config.Store(config)
@@ -313,7 +313,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	var indexInst *common.IndexInst
 	r = new(ScanRequest)
-	r.ScanId = platform.AddUint64(s.reqCounter, 1)
+	r.ScanId = platform.AddUint64(&s.reqCounter, 1)
 	r.LogPrefix = fmt.Sprintf("SCAN##%d", r.ScanId)
 
 	cfg := s.config.Load()

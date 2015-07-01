@@ -9,18 +9,20 @@ package platform
 import "unsafe"
 import orig "sync/atomic"
 
-type AlignedInt64 struct{ data int64 }
-type AlignedUint64 struct{ data uint64 }
+type AlignedInt64 struct{ data *int64 }
+type AlignedUint64 struct{ data *uint64 }
 
 func NewAlignedInt64(v int64) AlignedInt64 {
 	var nw AlignedInt64
-	nw.data = v
+	nw.data = new(int64)
+	*nw.data = v
 	return nw
 }
 
 func NewAlignedUint64(v uint64) AlignedUint64 {
 	var nw AlignedUint64
-	nw.data = v
+	nw.data = new(uint64)
+	*nw.data = v
 	return nw
 }
 

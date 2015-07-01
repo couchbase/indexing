@@ -48,6 +48,13 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 	slice := &fdbSlice{}
 	slice.idxStats = idxStats
 
+	slice.get_bytes = platform.NewAlignedInt64(0)
+	slice.insert_bytes = platform.NewAlignedInt64(0)
+	slice.delete_bytes = platform.NewAlignedInt64(0)
+	slice.fragAfterCompaction = platform.NewAlignedInt64(0)
+	slice.flushedCount = platform.NewAlignedUint64(0)
+	slice.committedCount = platform.NewAlignedUint64(0)
+
 	config := forestdb.DefaultConfig()
 	config.SetDurabilityOpt(forestdb.DRB_ASYNC)
 

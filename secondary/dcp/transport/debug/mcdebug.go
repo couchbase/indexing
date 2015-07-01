@@ -27,9 +27,9 @@ func addToMap(m map[string]uint64, i int, counters [257]platform.AlignedUint64) 
 }
 
 func (m *mcops) String() string {
-	bytes := map[string]uint64{}
-	ops := map[string]uint64{}
-	errs := map[string]uint64{}
+	bytes := map[string]platform.AlignedUint64{}
+	ops := map[string]platform.AlignedUint64{}
+	errs := map[string]platform.AlignedUint64{}
 	for i := range m.moved {
 		addToMap(bytes, i, m.moved)
 		addToMap(ops, i, m.success)
@@ -72,10 +72,19 @@ func (m *mcops) countRes(res *transport.MCResponse, n int, err error) {
 	m.count(i, n, err)
 }
 
+func newMCops() *mcops {
+	return &mcops{
+		moved:   platform.NewAlignedUint64(0),
+		success: platform.NewAlignedUint64(0),
+		errored: platform.NewAlignedUint64(0),
+	}
+
+}
+
 func init() {
-	mcSent := &mcops{}
-	mcRecvd := &mcops{}
-	tapRecvd := &mcops{}
+	mcSent := newMCops()
+	mcRecvd := newMCops()
+	tapRecvd := newMCops()
 
 	memcached.TransmitHook = mcSent.countReq
 	memcached.ReceiveHook = mcRecvd.countRes

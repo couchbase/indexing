@@ -18,6 +18,10 @@ func (h *Histogram) Init(buckets []int64, humanizeFn func(int64) string) {
 	h.buckets[l] = math.MaxInt64
 	h.vals = make([]platform.AlignedInt64, l)
 
+	for i, _ := range h.vals {
+		h.vals[i] = platform.NewAlignedInt64(0)
+	}
+
 	if humanizeFn == nil {
 		humanizeFn = func(v int64) string { return fmt.Sprint(v) }
 	}

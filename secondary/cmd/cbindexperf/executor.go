@@ -201,6 +201,7 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		}
 
 		res := new(ScanResult)
+		res.ErrorCount = platform.NewAlignedUint64(0)
 		res.LatencyHisto.Init(cfg.LatencyBuckets, hFn)
 		res.Id = spec.Id
 		result.ScanResults = append(result.ScanResults, res)
