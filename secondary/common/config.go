@@ -256,10 +256,10 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.dataport.harakiriTimeout": ConfigValue{
-		10 * 1000,
+		30 * 1000,
 		"timeout in milliseconds, after which endpoint will commit harakiri " +
 			"if not activity, does not affect existing feeds.",
-		10 * 1000, //10s
+		30 * 1000, //10s
 		false,     // mutable
 	},
 	"projector.dataport.maxPayload": ConfigValue{
@@ -651,9 +651,9 @@ var SystemConfig = Config{
 		false,
 	},
 	"indexer.settings.max_writer_lock_prob": ConfigValue{
-		50,
+		20,
 		"Controls the write rate for compaction to catch up",
-		50,
+		20,
 		false, // mutable
 	},
 	"projector.settings.log_level": ConfigValue{

@@ -877,17 +877,9 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 			}
 		}
 
-		var buildTs Timestamp
-		//get current timestamp from KV and set it as Initial Build Timestamp
-		b, err := common.ConnectBucket(idx.config["clusterAddr"].String(),
-			"default", bucket)
-		defer b.Close()
-
-		if err == nil {
-			buildTs, err = GetCurrentKVTs(b,
-				idx.config["numVbuckets"].Int())
-		}
-
+		cluster := idx.config["clusterAddr"].String()
+		numVbuckets := idx.config["numVbuckets"].Int()
+		buildTs, err := GetCurrentKVTs(cluster, "default", bucket, numVbuckets)
 		if err != nil {
 			errStr := fmt.Sprintf("Error Connecting KV %v Err %v",
 				idx.config["clusterAddr"].String(), err)
@@ -1208,8 +1200,15 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 
 	idx.bucketBuildTs[bucket] = buildTs
 
-	//change status to Active
-	idx.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
+	//during recovery, if all indexes of a bucket gets dropped,
+	//the stream needs to be stopped for that bucket.
+	if !idx.checkBucketExistsInStream(bucket, streamId, false) {
+		idx.stopBucketStream(streamId, bucket)
+		idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+	} else {
+		//change status to Active
+		idx.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
+	}
 
 }
 
@@ -1219,10 +1218,18 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	streamId := msg.(*MsgKVStreamRepair).GetStreamId()
 	restartTs := msg.(*MsgKVStreamRepair).GetRestartTs()
 
+	//repair is not required for inactive bucket streams
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
+		logging.Debugf("Indexer::handleKVStreamRepair Skip Stream Repair %v Inactive Bucket %v",
+			streamId, bucket)
+		return
+	}
+
 	//if there is already a repair in progress for this bucket stream
 	//ignore the request
 	if idx.checkStreamRequestPending(streamId, bucket) == false {
-		logging.Debugf("Indexer::handleKVStreamRepair Initiate Stream Repair %v Bucket %v", streamId, bucket)
+		logging.Debugf("Indexer::handleKVStreamRepair Initiate Stream Repair %v Bucket %v",
+			streamId, bucket)
 		idx.startBucketStream(streamId, bucket, restartTs)
 	} else {
 		logging.Debugf("Indexer::handleKVStreamRepair Ignore Stream Repair Request for Stream "+
@@ -1533,13 +1540,15 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 					//This makes sure indexer doesn't use a timestamp which can never
 					//be caught up to (due to kv rollback).
 					//if there is a failover after this, it will be observed as a rollback
-					buildTs := computeBucketBuildTs(clustAddr, bucket, numVb)
-					idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
-						streamId: buildStream,
-						bucket:   bucket,
-						buildTs:  buildTs,
+					buildTs, err := computeBucketBuildTs(clustAddr, bucket, numVb)
+					if err == nil {
+						idx.internalRecvCh <- &MsgStreamInfo{mType: STREAM_REQUEST_DONE,
+							streamId: buildStream,
+							bucket:   bucket,
+							buildTs:  buildTs,
+						}
+						break retryloop
 					}
-					break retryloop
 
 				case INDEXER_ROLLBACK:
 					//an initial build request should never receive rollback message
@@ -2403,6 +2412,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	if len(indexList) == 0 {
 		logging.Debugf("Indexer::startBucketStream Nothing to Start. Stream: %v Bucket: %v",
 			streamId, bucket)
+		idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 		return
 	}
 
@@ -2470,12 +2480,14 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 					//This makes sure indexer doesn't use a timestamp which can never
 					//be caught up to (due to kv rollback).
 					//if there is a failover after this, it will be observed as a rollback
-					buildTs := computeBucketBuildTs(clustAddr, bucket, numVb)
-					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
-						streamId: streamId,
-						bucket:   bucket,
-						buildTs:  buildTs}
-					break retryloop
+					buildTs, err := computeBucketBuildTs(clustAddr, bucket, numVb)
+					if err == nil {
+						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
+							streamId: streamId,
+							bucket:   bucket,
+							buildTs:  buildTs}
+						break retryloop
+					}
 
 				case INDEXER_ROLLBACK:
 					logging.Infof("Indexer::startBucketStream \n\tRollback from "+
@@ -2852,12 +2864,9 @@ func (idx *indexer) validateIndexInstMap() {
 			//also set the buildTs for initial state index.
 			//TODO buildTs to be part of index instance
 			if bucketUUIDValid {
-				var buildTs Timestamp
-				b, err := common.ConnectBucket(idx.config["clusterAddr"].String(),
-					"default", bucket)
-				defer b.Close()
-
-				buildTs, err = GetCurrentKVTs(b, idx.config["numVbuckets"].Int())
+				cluster := idx.config["clusterAddr"].String()
+				numVbuckets := idx.config["numVbuckets"].Int()
+				buildTs, err := GetCurrentKVTs(cluster, "default", bucket, numVbuckets)
 				if err != nil {
 					common.CrashOnError(err)
 				} else {
@@ -3474,20 +3483,10 @@ func dumpMemProfile(filename string) bool {
 //calculates buildTs for bucket. This is a blocking call
 //which will keep trying till success as indexer cannot work
 //without a buildts.
-func computeBucketBuildTs(clustAddr string, bucket string, numVb int) Timestamp {
-
-	var buildTs Timestamp
+func computeBucketBuildTs(clustAddr string, bucket string, numVb int) (buildTs Timestamp, err error) {
 kvtsloop:
 	for {
-		b, err := common.ConnectBucket(clustAddr, "default", bucket)
-		if err != nil {
-			logging.Errorf("Indexer::computeBucketBuildTs Error Fetching BuildTs %v", err)
-			time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
-			goto kvtsloop
-		}
-		defer b.Close()
-
-		buildTs, err = GetCurrentKVTs(b, numVb)
+		buildTs, err = GetCurrentKVTs(clustAddr, "default", bucket, numVb)
 		if err != nil {
 			logging.Errorf("Indexer::computeBucketBuildTs Error Fetching BuildTs %v", err)
 			time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
@@ -3495,8 +3494,7 @@ kvtsloop:
 			break kvtsloop
 		}
 	}
-
-	return buildTs
+	return
 }
 
 func (idx *indexer) updateSliceWithConfig(config common.Config) {

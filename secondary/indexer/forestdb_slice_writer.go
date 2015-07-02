@@ -48,6 +48,13 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 	slice := &fdbSlice{}
 	slice.idxStats = idxStats
 
+	slice.get_bytes = platform.NewAlignedInt64(0)
+	slice.insert_bytes = platform.NewAlignedInt64(0)
+	slice.delete_bytes = platform.NewAlignedInt64(0)
+	slice.fragAfterCompaction = platform.NewAlignedInt64(0)
+	slice.flushedCount = platform.NewAlignedUint64(0)
+	slice.committedCount = platform.NewAlignedUint64(0)
+
 	config := forestdb.DefaultConfig()
 	config.SetDurabilityOpt(forestdb.DRB_ASYNC)
 
@@ -945,7 +952,7 @@ snaploop:
 		return err
 	}
 	dataSz := int64(fdb.statFd.EstimateSpaceUsed())
-	frag := (diskSz - dataSz) * 100 / dataSz
+	frag := (diskSz - dataSz) * 100 / diskSz
 
 	platform.StoreInt64(&fdb.fragAfterCompaction, frag)
 	return err
@@ -969,7 +976,7 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 	// threshold caused as a result of compaction.
 	sts.Fragmentation = 0
 	if sts.DataSize > 0 {
-		sts.Fragmentation = ((sts.DiskSize - sts.DataSize) * 100) / sts.DataSize
+		sts.Fragmentation = ((sts.DiskSize - sts.DataSize) * 100) / sts.DiskSize
 	}
 	compactionFrag := platform.LoadInt64(&fdb.fragAfterCompaction)
 	sts.Fragmentation -= compactionFrag

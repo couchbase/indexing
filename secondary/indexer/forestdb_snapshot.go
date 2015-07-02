@@ -58,7 +58,7 @@ type fdbSnapshot struct {
 	ts        *common.TsVbuuid   //timestamp
 	committed bool
 
-	refCount int32        //Reader count for this snapshot
+	refCount int32 //Reader count for this snapshot
 }
 
 func (s *fdbSnapshot) Create() error {

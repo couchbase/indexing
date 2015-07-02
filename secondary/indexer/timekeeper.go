@@ -2178,24 +2178,16 @@ func (tk *timekeeper) handleStats(cmd Message) {
 				continue
 			}
 
-			var b *couchbase.Bucket
 			var kvTs Timestamp
 			var err error
 
 			if _, ok := bucketTsMap[inst.Defn.Bucket]; !ok {
 				rh := common.NewRetryHelper(maxStatsRetries, time.Second, 1, func(a int, err error) error {
-					if a == 0 {
-						b, err = tk.getBucketConn(inst.Defn.Bucket, false)
-					} else {
-						b, err = tk.getBucketConn(inst.Defn.Bucket, true)
-					}
-					if err != nil {
-						return err
-					}
-					kvTs, err = GetCurrentKVTs(b, tk.config["numVbuckets"].Int())
+					cluster := tk.config["clusterAddr"].String()
+					numVbuckets := tk.config["numVbuckets"].Int()
+					kvTs, err = GetCurrentKVTs(cluster, "default", inst.Defn.Bucket, numVbuckets)
 					return err
 				})
-
 				if err = rh.Run(); err != nil {
 					logging.Errorf("Timekeeper::handleStats Error occured while obtaining KV seqnos - %v", err)
 					replych <- true

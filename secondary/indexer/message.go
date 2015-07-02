@@ -897,6 +897,7 @@ func (m *MsgRollback) GetRollbackTs() *common.TsVbuuid {
 
 type MsgIndexSnapRequest struct {
 	ts        *common.TsVbuuid
+	cons      common.Consistency
 	idxInstId common.IndexInstId
 
 	// Send error or index snapshot
@@ -909,6 +910,10 @@ func (m *MsgIndexSnapRequest) GetMsgType() MsgType {
 
 func (m *MsgIndexSnapRequest) GetTS() *common.TsVbuuid {
 	return m.ts
+}
+
+func (m *MsgIndexSnapRequest) GetConsistency() common.Consistency {
+	return m.cons
 }
 
 func (m *MsgIndexSnapRequest) GetReplyChannel() chan interface{} {

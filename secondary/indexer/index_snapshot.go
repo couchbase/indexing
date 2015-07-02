@@ -26,6 +26,7 @@ import (
 type IndexSnapshot interface {
 	IndexInstId() common.IndexInstId
 	Timestamp() *common.TsVbuuid
+	IsEpoch() bool
 	Partitions() map[common.PartitionId]PartitionSnapshot
 }
 
@@ -42,11 +43,16 @@ type SliceSnapshot interface {
 type indexSnapshot struct {
 	instId common.IndexInstId
 	ts     *common.TsVbuuid
+	epoch  bool
 	partns map[common.PartitionId]PartitionSnapshot
 }
 
 func (is *indexSnapshot) IndexInstId() common.IndexInstId {
 	return is.instId
+}
+
+func (is *indexSnapshot) IsEpoch() bool {
+	return is.epoch
 }
 
 func (is *indexSnapshot) Timestamp() *common.TsVbuuid {

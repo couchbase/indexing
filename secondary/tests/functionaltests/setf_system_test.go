@@ -102,7 +102,7 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 	kvutility.FlushBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	kvutility.CreateBucket(bucket2, "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
+	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
 	tc.ClearMap(docs)
 	time.Sleep(30 * time.Second)
 
@@ -942,7 +942,7 @@ func TestCreateBucket_AnotherIndexBuilding(t *testing.T) {
 	err := secondaryindex.CreateSecondaryIndexAsync(index1, bucket1, indexManagementAddress, "", []string{"company"}, false, nil, true, nil)
 	FailTestIfError(err, "Error in creating the index1", t)
 
-	kvutility.CreateBucket(bucket2, "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
+	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
 	time.Sleep(10 * time.Second)
 	kvutility.SetKeyValues(bucket2docs, bucket2, "", clusterconfig.KVAddress)
 	err = secondaryindex.CreateSecondaryIndexAsync(index2, bucket2, indexManagementAddress, "", []string{"age"}, false, nil, true, nil)
@@ -997,7 +997,7 @@ func TestDropBucket2Index_Bucket1IndexBuilding(t *testing.T) {
 	kvutility.FlushBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	kvutility.CreateBucket(bucket2, "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
+	kvutility.CreateBucket(bucket2, "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", "11213")
 	tc.ClearMap(docs)
 	time.Sleep(30 * time.Second)
 
@@ -1058,10 +1058,11 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
 	kvutility.FlushBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
-
+	tc.ClearMap(docs)
+	
 	for i := 1; i < numOfBuckets; i++ {
 		kvutility.DeleteBucket(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-		kvutility.CreateBucket(bucketNames[i], "none", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
+		kvutility.CreateBucket(bucketNames[i], "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
 	}
 	time.Sleep(30 * time.Second)
 

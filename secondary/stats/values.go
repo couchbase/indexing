@@ -11,6 +11,7 @@ type Int64Val struct {
 
 func (v *Int64Val) Init() {
 	v.val = new(platform.AlignedInt64)
+	*v.val = platform.NewAlignedInt64(0)
 }
 
 func (v *Int64Val) Add(delta int64) {

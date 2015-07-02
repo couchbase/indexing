@@ -13,10 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
 	"net"
-	"strconv"
 	"time"
 )
 
@@ -70,35 +68,27 @@ func IndexPath(inst *common.IndexInst, sliceId SliceId) string {
 	return fmt.Sprintf("%s_%s_%d_%d.index", inst.Defn.Bucket, inst.Defn.Name, inst.InstId, sliceId)
 }
 
-func GetCurrentKVTs(bucket *couchbase.Bucket, numVbs int) (Timestamp, error) {
-	ts := NewTimestamp(numVbs)
+func GetCurrentKVTs(cluster, pooln, bucketn string, numVbs int) (Timestamp, error) {
 	start := time.Now()
-
-	//get all the vb seqnum
-	stats, err := bucket.GetStats("vbucket-details")
-	//for all nodes in cluster
-	for _, nodestat := range stats {
-		//for all vbuckets
-		for i := 0; i < numVbs; i++ {
-			vbStateKey := "vb_" + strconv.Itoa(i)
-			if state, ok := nodestat[vbStateKey]; ok {
-				//only active vbuckets
-				if state == "active" {
-					vbSeqKey := "vb_" + strconv.Itoa(i) + ":high_seqno"
-					if highseqno, ok := nodestat[vbSeqKey]; ok {
-						if s, err := strconv.Atoi(highseqno); err == nil {
-							ts[i] = Seqno(s)
-						}
-					}
-				}
-			}
-		}
+	seqnos, err := common.BucketSeqnos(cluster, pooln, bucketn)
+	if err != nil {
+		// then log an error and give-up
+		fmsg := "Indexer::getCurrentKVTs Error Connecting to KV Cluster %v"
+		logging.Errorf(fmsg, err)
+		return nil, err
 	}
+	if len(seqnos) != numVbs {
+		fmsg := "BucketSeqnos(): got ts only for %v vbs"
+		return nil, fmt.Errorf(fmsg, len(seqnos))
+	}
+
+	ts := NewTimestamp(numVbs)
+	for i, seqno := range seqnos {
+		ts[i] = Seqno(seqno)
+	}
+
 	elapsed := time.Since(start)
 	logging.Tracef("Indexer::getCurrentKVTs Time Taken %v \n\t TS Returned %v", elapsed, ts)
-	if err != nil {
-		logging.Errorf("Indexer::getCurrentKVTs Error Connecting to KV Cluster %v", err)
-	}
 	return ts, err
 }
 

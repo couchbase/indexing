@@ -27,6 +27,7 @@ type TsVbuuid struct {
 	Bucket      string
 	Seqnos      []uint64
 	Vbuuids     []uint64
+	Crc64       uint64
 	Snapshots   [][2]uint64
 	SnapType    IndexSnapType
 	LargeSnap   bool
@@ -68,6 +69,7 @@ func NewTsVbuuidCached(bucket string, numVbuckets int) *TsVbuuid {
 		ts.Vbuuids[i] = 0
 		ts.Snapshots[i][0] = 0
 		ts.Snapshots[i][1] = 0
+		ts.Crc64 = 0
 	}
 	ts.Bucket = bucket
 	return ts
@@ -106,6 +108,27 @@ func (ts *TsVbuuid) CompareVbuuids(other *TsVbuuid) bool {
 	return true
 }
 
+func (ts *TsVbuuid) IsEpoch() bool {
+	for _, seqno := range ts.Seqnos {
+		if seqno != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// CheckVbuuids will check whether vbuuids in timestamp `ts` is same
+// as that of `other`.
+func (ts *TsVbuuid) CheckCrc64(other *TsVbuuid) bool {
+	if ts == nil || other == nil {
+		return false
+	}
+	if ts.Bucket != other.Bucket {
+		return false
+	}
+	return ts.Crc64 == other.Crc64
+}
+
 // AsRecent will check whether timestamp `ts` is atleast as recent as
 // timestamp `other`.
 func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
@@ -120,8 +143,24 @@ func (ts *TsVbuuid) AsRecent(other *TsVbuuid) bool {
 		if other.Vbuuids[i] == 0 {
 			continue
 		}
-
 		if vbuuid != other.Vbuuids[i] || ts.Seqnos[i] < other.Seqnos[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// AsRecentTs will check whether timestamp `ts` is atleast as recent as
+// timestamp `other`.
+func (ts *TsVbuuid) AsRecentTs(other *TsVbuuid) bool {
+	if ts == nil || other == nil {
+		return false
+	}
+	if ts.Bucket != other.Bucket {
+		return false
+	}
+	for i, seqno := range ts.Seqnos {
+		if seqno < other.Seqnos[i] {
 			return false
 		}
 	}
@@ -168,6 +207,7 @@ func (ts *TsVbuuid) Copy() *TsVbuuid {
 	newTs.SnapType = ts.SnapType
 	newTs.LargeSnap = ts.LargeSnap
 	newTs.SnapAligned = ts.SnapAligned
+	newTs.Crc64 = ts.Crc64
 	return newTs
 }
 
@@ -178,6 +218,7 @@ func (ts *TsVbuuid) CopyFrom(src *TsVbuuid) {
 	ts.SnapType = src.SnapType
 	ts.LargeSnap = src.LargeSnap
 	ts.SnapAligned = src.SnapAligned
+	ts.Crc64 = src.Crc64
 }
 
 // Equal returns whether `ts` and `other` compare equal.
@@ -236,6 +277,7 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 		other.Snapshots[i][0] = sn[0]
 		other.Snapshots[i][1] = sn[1]
 	}
+	other.Crc64 = ts.Crc64
 
 	return other
 }
@@ -244,8 +286,8 @@ func (ts *TsVbuuid) Clone() *TsVbuuid {
 func (ts *TsVbuuid) String() string {
 	var buf bytes.Buffer
 	vbnos := ts.GetVbnos()
-	fmsg := "bucket: %v, vbuckets: %v snapType %v -\n"
-	buf.WriteString(fmt.Sprintf(fmsg, ts.Bucket, len(vbnos), ts.SnapType))
+	fmsg := "bucket: %v, vbuckets: %v Crc64: %v snapType %v -\n"
+	buf.WriteString(fmt.Sprintf(fmsg, ts.Bucket, len(vbnos), ts.Crc64, ts.SnapType))
 	fmsg = "    {vbno, vbuuid, seqno, snapshot-start, snapshot-end}\n"
 	buf.WriteString(fmt.Sprintf(fmsg))
 	for _, v := range vbnos {

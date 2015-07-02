@@ -7,10 +7,14 @@ message Error {
 }
 
 // consistency timestamp specifying a subset of vbucket.
+// AnyConsistency, this message is typically ignored.
+// SessionConsistency, {vbnos, seqnos, crc64} are to be considered.
+// QueryConsistency, {vbnos, seqnos, vbuuids} are to be considered.
 message TsConsistency {
     repeated uint32 vbnos   = 1; // subset of vbucket numbers
     repeated uint64 seqnos  = 2; // corresponding seqno. for each vbucket
     repeated uint64 vbuuids = 3; // corresponding vbuuid for each vbucket
+    optional uint64 crc64   = 4; // if present, crc64 hash value of all vbuuids
 }
 
 // Request can be one of the optional field.

@@ -10,6 +10,9 @@ import "strconv"
 import "strings"
 import "net/http"
 import "runtime"
+import "hash/crc64"
+import "reflect"
+import "unsafe"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
@@ -514,12 +517,12 @@ func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64, er
 			highseqno_s, hseq_ok := nodestat[vbhseqkey]
 			vbuuid_s, uuid_ok := nodestat[vbuuidkey]
 			if ok && hseq_ok && uuid_ok && vbstate == "active" {
+				if uuid, err := strconv.Atoi(vbuuid_s); err == nil {
+					vbuuids[i] = uint64(uuid)
+				}
 				if s, err := strconv.Atoi(highseqno_s); err == nil {
 					if uint64(s) > seqnos[i] {
 						seqnos[i] = uint64(s)
-						if uuid, err := strconv.Atoi(vbuuid_s); err == nil {
-							vbuuids[i] = uint64(uuid)
-						}
 					}
 				}
 			}
@@ -637,4 +640,15 @@ func FileSize(name string) (int64, error) {
 	}
 
 	return fi.Size(), nil
+}
+
+// HashVbuuid return crc64 value of list of 64-bit vbuuids.
+func HashVbuuid(vbuuids []uint64) uint64 {
+	var bytes []byte
+	vbuuids_sl := (*reflect.SliceHeader)(unsafe.Pointer(&vbuuids))
+	bytes_sl := (*reflect.SliceHeader)(unsafe.Pointer(&bytes))
+	bytes_sl.Data = vbuuids_sl.Data
+	bytes_sl.Len = vbuuids_sl.Len * 8
+	bytes_sl.Cap = vbuuids_sl.Cap * 8
+	return crc64.Checksum(bytes, crc64.MakeTable(crc64.ECMA))
 }

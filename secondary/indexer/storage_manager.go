@@ -62,14 +62,17 @@ type IndexSnapMap map[common.IndexInstId]IndexSnapshot
 type snapshotWaiter struct {
 	wch       chan interface{}
 	ts        *common.TsVbuuid
+	cons      common.Consistency
 	idxInstId common.IndexInstId
 }
 
 func newSnapshotWaiter(idxId common.IndexInstId, ts *common.TsVbuuid,
+	cons common.Consistency,
 	ch chan interface{}) *snapshotWaiter {
 
 	return &snapshotWaiter{
 		ts:        ts,
+		cons:      cons,
 		wch:       ch,
 		idxInstId: idxId,
 	}
@@ -200,6 +203,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 
 	numVbuckets := s.config["numVbuckets"].Int()
 	snapType := tsVbuuid.GetSnapType()
+	tsVbuuid.Crc64 = common.HashVbuuid(tsVbuuid.Vbuuids)
 
 	if snapType == common.NO_SNAP {
 		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
@@ -403,14 +407,12 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot) {
 
 	// Also notify any waiters for snapshots creation
 	var newWaiters []*snapshotWaiter
-	tsVbuuid := is.Timestamp()
 	for _, w := range s.waitersMap[is.IndexInstId()] {
-		if w.ts == nil || tsVbuuid.AsRecent(w.ts) {
-			snap := CloneIndexSnapshot(is)
-			w.Notify(snap)
-		} else {
-			newWaiters = append(newWaiters, w)
+		if isSnapshotConsistent(is, w.cons, w.ts) {
+			w.Notify(CloneIndexSnapshot(is))
+			continue
 		}
+		newWaiters = append(newWaiters, w)
 	}
 	s.waitersMap[is.IndexInstId()] = newWaiters
 }
@@ -517,7 +519,8 @@ func (s *storageMgr) addNilSnapshot(idxInstId common.IndexInstId, bucket string)
 		ts := common.NewTsVbuuid(bucket, s.config["numVbuckets"].Int())
 		snap := &indexSnapshot{
 			instId: idxInstId,
-			ts:     ts,
+			ts:     ts, // nil snapshot should have ZERO Crc64 :)
+			epoch:  true,
 		}
 		s.indexSnapMap[idxInstId] = snap
 		s.notifySnapshotCreation(snap)
@@ -651,22 +654,17 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	// can notify the requester when a snapshot with matching timestamp
 	// is available.
 	is := s.indexSnapMap[req.GetIndexId()]
-	snapTs := is.Timestamp()
-
-	// - If atleast-ts is nil and no snapshot is available, send nil ts
-	// - If atleast-ts is not-nil and no snapshot is available, wait until
-	// it is available.
-	if req.GetTS() == nil || snapTs.AsRecent(req.GetTS()) {
-		snap := CloneIndexSnapshot(is)
-		req.respch <- snap
+	if is != nil && isSnapshotConsistent(is, req.GetConsistency(), req.GetTS()) {
+		req.respch <- CloneIndexSnapshot(is)
+		return
+	}
+	w := newSnapshotWaiter(
+		req.GetIndexId(), req.GetTS(), req.GetConsistency(),
+		req.GetReplyChannel())
+	if ws, ok := s.waitersMap[req.GetIndexId()]; ok {
+		s.waitersMap[req.idxInstId] = append(ws, w)
 	} else {
-		w := newSnapshotWaiter(req.GetIndexId(), req.GetTS(), req.GetReplyChannel())
-		ws, exists := s.waitersMap[req.GetIndexId()]
-		if exists {
-			s.waitersMap[req.idxInstId] = append(ws, w)
-		} else {
-			s.waitersMap[req.idxInstId] = []*snapshotWaiter{w}
-		}
+		s.waitersMap[req.idxInstId] = []*snapshotWaiter{w}
 	}
 }
 

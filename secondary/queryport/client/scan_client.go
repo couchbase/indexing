@@ -153,7 +153,7 @@ func (c *GsiScanClient) Lookup(
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
-			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
 	// ---> protobuf.ScanRequest
@@ -214,7 +214,7 @@ func (c *GsiScanClient) Range(
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
-			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
@@ -265,7 +265,7 @@ func (c *GsiScanClient) RangePrimary(
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
-			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
@@ -309,7 +309,7 @@ func (c *GsiScanClient) ScanAll(
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
-			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 	if err := c.sendRequest(conn, pkt, req); err != nil {
 		fmsg := "%v ScanAll() request transport failed `%v`\n"
@@ -352,7 +352,7 @@ func (c *GsiScanClient) CountLookup(
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
-			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 	resp, err := c.doRequestResponse(req)
 	if err != nil {
@@ -392,7 +392,7 @@ func (c *GsiScanClient) CountRange(
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
-			vector.Vbnos, vector.Seqnos, vector.Vbuuids)
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
 	resp, err := c.doRequestResponse(req)
