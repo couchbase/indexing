@@ -678,7 +678,9 @@ func sendAddInstancesRequest(ap *projClient.Client,
 	logging.Infof("KVSender::sendAddInstancesRequest Projector %v Topic %v \nInstances %v",
 		ap, topic, instances)
 
-	if err := ap.AddInstances(topic, instances); err != nil {
+	// TODO: interpret the `_` as
+	// protobuf/projector/projector.proto:TimestampResponse{}
+	if _, err := ap.AddInstances(topic, instances); err != nil {
 		logging.Fatalf("KVSender::sendAddInstancesRequest Unexpected Error During "+
 			"Add Instances Request Projector %v Topic %v IndexInst %v. Err %v", ap,
 			topic, instances, err)

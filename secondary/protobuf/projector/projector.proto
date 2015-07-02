@@ -53,6 +53,14 @@ message TopicResponse {
     optional Error    err                = 5;
 }
 
+// Response back for
+// AddInstancesRequest
+message TimestampResponse {
+    required string   topic             = 1;
+    repeated TsVbuuid currentTimestamps = 2;
+    optional Error    err               = 3;
+}
+
 // RestartVbucketsRequest will restart a subset
 // of vbuckets for each specified buckets.
 // Respond back with TopicResponse
@@ -88,7 +96,7 @@ message DelBucketsRequest {
 }
 
 // AddInstancesRequest to add index-instances to a topic.
-// Respond back with TopicResponse
+// Respond back with TimestampResponse
 message AddInstancesRequest {
     required string   topic     = 1;
     repeated Instance instances = 2; // instances to be added to this topic

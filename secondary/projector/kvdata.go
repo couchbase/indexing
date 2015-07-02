@@ -100,7 +100,7 @@ const (
 func (kvdata *KVData) AddEngines(
 	opaque uint16,
 	engines map[uint64]*Engine,
-	endpoints map[string]c.RouterEndpoint) error {
+	endpoints map[string]c.RouterEndpoint) (map[uint16]uint64, error) {
 
 	// copy them to local map and then pass down the reference.
 	eps := make(map[string]c.RouterEndpoint)
@@ -110,8 +110,11 @@ func (kvdata *KVData) AddEngines(
 
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{kvCmdAddEngines, opaque, engines, eps, respch}
-	_, err := c.FailsafeOp(kvdata.sbch, respch, cmd, kvdata.finch)
-	return err
+	resp, err := c.FailsafeOp(kvdata.sbch, respch, cmd, kvdata.finch)
+	if err = c.OpError(err, resp, 1); err != nil {
+		return nil, err
+	}
+	return resp[0].(map[uint16]uint64), nil
 }
 
 // DeleteEngines synchronous call.
@@ -241,17 +244,19 @@ loop:
 						kvdata.endpoints[raddr] = endp
 					}
 				}
+				curSeqnos := make(map[uint16]uint64)
 				if kvdata.engines != nil || kvdata.endpoints != nil {
 					engines, endpoints := kvdata.engines, kvdata.endpoints
 					for _, vr := range kvdata.vrs {
-						err := vr.AddEngines(opaque, engines, endpoints)
+						curSeqno, err := vr.AddEngines(opaque, engines, endpoints)
 						if err != nil {
 							panic(err)
 						}
+						curSeqnos[vr.vbno] = curSeqno
 					}
 				}
 				addCount++
-				respch <- []interface{}{nil}
+				respch <- []interface{}{curSeqnos, nil}
 
 			case kvCmdDelEngines:
 				opaque := msg[1].(uint16)
@@ -361,7 +366,8 @@ func (kvdata *KVData) scatterMutation(
 			vr := NewVbucketRoutine(
 				cluster, topic, bucket,
 				m.Opaque, vbno, m.VBuuid, m.Seqno, config)
-			if vr.AddEngines(0xFFFF, kvdata.engines, kvdata.endpoints) != nil {
+			_, err := vr.AddEngines(0xFFFF, kvdata.engines, kvdata.endpoints)
+			if err != nil {
 				panic(err)
 			}
 			if vr.Event(m) != nil {

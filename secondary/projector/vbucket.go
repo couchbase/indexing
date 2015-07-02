@@ -92,12 +92,15 @@ func (vr *VbucketRoutine) SyncPulse() error {
 func (vr *VbucketRoutine) AddEngines(
 	opaque uint16,
 	engines map[uint64]*Engine,
-	endpoints map[string]c.RouterEndpoint) error {
+	endpoints map[string]c.RouterEndpoint) (uint64, error) {
 
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{vrCmdAddEngines, opaque, engines, endpoints, respch}
-	_, err := c.FailsafeOp(vr.reqch, respch, cmd, vr.finch)
-	return err
+	resp, err := c.FailsafeOp(vr.reqch, respch, cmd, vr.finch)
+	if err = c.OpError(err, resp, 1); err != nil {
+		return 0, err
+	}
+	return resp[0].(uint64), nil
 }
 
 // DeleteEngines delete engines and update endpoints
@@ -206,7 +209,7 @@ loop:
 				vr.printCtrl(vr.endpoints)
 			}
 			respch := msg[4].(chan []interface{})
-			respch <- []interface{}{nil}
+			respch <- []interface{}{seqno, nil}
 			addEngineCount++
 
 		case vrCmdDeleteEngines:
