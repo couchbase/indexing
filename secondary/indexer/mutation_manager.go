@@ -324,6 +324,11 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()
+	bucket := cmd.(*MsgStreamUpdate).GetBucket()
+	restartTs := cmd.(*MsgStreamUpdate).GetRestartTs()
+
+	bucketFilter := make(map[string]*common.TsVbuuid)
+	bucketFilter[bucket] = restartTs
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -331,7 +336,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	//if this stream is already open, add to existing stream
 	if _, ok := m.streamReaderMap[streamId]; ok {
 
-		respMsg := m.addIndexListToExistingStream(streamId, indexList)
+		respMsg := m.addIndexListToExistingStream(streamId, indexList, bucketFilter)
 		m.supvCmdch <- respMsg
 		return
 	}
@@ -362,7 +367,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	}
 	cmdCh := make(MsgChannel)
 
-	reader, errMsg := CreateMutationStreamReader(streamId, bucketQueueMap,
+	reader, errMsg := CreateMutationStreamReader(streamId, bucketQueueMap, bucketFilter,
 		cmdCh, m.mutMgrRecvCh, DEFAULT_NUM_STREAM_READER_WORKERS, m.stats.Get())
 
 	if reader == nil {
@@ -415,14 +420,14 @@ func (m *mutationMgr) handleAddIndexListToStream(cmd Message) {
 		return
 	}
 
-	respMsg := m.addIndexListToExistingStream(streamId, indexList)
+	respMsg := m.addIndexListToExistingStream(streamId, indexList, nil)
 	//send the message back on supv channel
 	m.supvCmdch <- respMsg
 
 }
 
 func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
-	indexList []common.IndexInst) Message {
+	indexList []common.IndexInst, bucketFilter map[string]*common.TsVbuuid) Message {
 
 	bucketQueueMap := m.streamBucketQueueMap[streamId]
 	indexQueueMap := m.streamIndexQueueMap[streamId]
@@ -449,7 +454,9 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 	}
 
 	if bucketMapDirty {
-		respMsg := m.sendMsgToStreamReader(streamId, m.newUpdateBucketQueuesMsg(bucketQueueMap))
+		respMsg := m.sendMsgToStreamReader(streamId,
+			m.newUpdateBucketQueuesMsg(bucketQueueMap, bucketFilter))
+
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamBucketQueueMap[streamId] = bucketQueueMap
@@ -461,8 +468,11 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 	return &MsgSuccess{}
 }
 
-func (m *mutationMgr) newUpdateBucketQueuesMsg(bucketQueueMap BucketQueueMap) *MsgUpdateBucketQueue {
-	return &MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap, stats: m.stats.Get()}
+func (m *mutationMgr) newUpdateBucketQueuesMsg(bucketQueueMap BucketQueueMap,
+	bucketFilter map[string]*common.TsVbuuid) *MsgUpdateBucketQueue {
+	return &MsgUpdateBucketQueue{bucketQueueMap: bucketQueueMap,
+		bucketFilter: bucketFilter,
+		stats:        m.stats.Get()}
 }
 
 //handleRemoveIndexListFromStream removes a list of indexes from an
@@ -523,7 +533,7 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 	}
 
 	if bucketMapDirty {
-		respMsg := m.sendMsgToStreamReader(streamId, m.newUpdateBucketQueuesMsg(bucketQueueMap))
+		respMsg := m.sendMsgToStreamReader(streamId, m.newUpdateBucketQueuesMsg(bucketQueueMap, nil))
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamBucketQueueMap[streamId] = bucketQueueMap
@@ -591,7 +601,7 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 
 		m.supvCmdch <- &MsgSuccess{}
 	} else if bucketMapDirty {
-		respMsg := m.sendMsgToStreamReader(streamId, m.newUpdateBucketQueuesMsg(bucketQueueMap))
+		respMsg := m.sendMsgToStreamReader(streamId, m.newUpdateBucketQueuesMsg(bucketQueueMap, nil))
 		if respMsg.GetMsgType() == MSG_SUCCESS {
 			//update internal structures
 			m.streamBucketQueueMap[streamId] = bucketQueueMap

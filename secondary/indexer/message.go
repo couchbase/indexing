@@ -279,6 +279,7 @@ func (m *MsgStreamInfo) String() string {
 type MsgUpdateBucketQueue struct {
 	bucketQueueMap BucketQueueMap
 	stats          *IndexerStats
+	bucketFilter   map[string]*common.TsVbuuid
 }
 
 func (m *MsgUpdateBucketQueue) GetMsgType() MsgType {
@@ -291,6 +292,10 @@ func (m *MsgUpdateBucketQueue) GetBucketQueueMap() BucketQueueMap {
 
 func (m *MsgUpdateBucketQueue) GetStatsObject() *IndexerStats {
 	return m.stats
+}
+
+func (m *MsgUpdateBucketQueue) GetBucketFilter() map[string]*common.TsVbuuid {
+	return m.bucketFilter
 }
 
 func (m *MsgUpdateBucketQueue) String() string {

@@ -68,8 +68,8 @@ type mutationStreamReader struct {
 //a reader to listen and process the mutations.
 //In case returned MutationStreamReader is nil, Message will have the error msg.
 func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQueueMap,
-	supvCmdch MsgChannel, supvRespch MsgChannel, numWorkers int, stats *IndexerStats) (
-	MutationStreamReader, Message) {
+	bucketFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
+	numWorkers int, stats *IndexerStats) (MutationStreamReader, Message) {
 
 	//start a new mutation stream
 	streamMutch := make(chan interface{}, DATAPORT_MUTATION_BUFFER)
@@ -108,7 +108,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	}
 
 	r.stats.Set(stats)
-	r.initBucketFilter()
+	r.initBucketFilter(bucketFilter)
 
 	//start the main reader loop
 	go r.run()
@@ -291,9 +291,6 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 
 		case common.StreamBegin:
 
-			//set bucket filter on receiving stream begin
-			r.setBucketFilter(meta)
-
 			//send message to supervisor to take decision
 			msg := &MsgStream{mType: STREAM_READER_STREAM_BEGIN,
 				streamId: r.streamId,
@@ -424,7 +421,8 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		r.bucketQueueMap = CopyBucketQueueMap(bucketQueueMap)
 		r.stats.Set(req.GetStatsObject())
 
-		r.initBucketFilter()
+		bucketFilter := req.GetBucketFilter()
+		r.initBucketFilter(bucketFilter)
 
 		//start all workers again
 		r.startWorkers()
@@ -500,7 +498,7 @@ func (r *mutationStreamReader) stopWorkers() {
 }
 
 //initBucketFilter initializes the bucket filter
-func (r *mutationStreamReader) initBucketFilter() {
+func (r *mutationStreamReader) initBucketFilter(bucketFilter map[string]*common.TsVbuuid) {
 
 	r.syncLock.Lock()
 	defer r.syncLock.Unlock()
@@ -511,7 +509,14 @@ func (r *mutationStreamReader) initBucketFilter() {
 		if _, ok := r.bucketFilterMap[b]; !ok {
 			logging.Tracef("MutationStreamReader::initBucketFilter Added new filter "+
 				"for Bucket %v Stream %v", b, r.streamId)
-			r.bucketFilterMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
+
+			//if there is non-nil filter, use that. otherwise use a zero filter.
+			if filter, ok := bucketFilter[b]; ok && filter != nil {
+				r.bucketFilterMap[b] = filter.Copy()
+			} else {
+				r.bucketFilterMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
+			}
+
 			r.bucketSyncDue[b] = false
 		}
 	}
@@ -562,7 +567,7 @@ func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool 
 			r.bucketSyncDue[meta.bucket] = true
 			return true
 		} else {
-			logging.Errorf("MutationStreamReader::checkAndSetBucketFilter Skipped "+
+			logging.Tracef("MutationStreamReader::checkAndSetBucketFilter Skipped "+
 				"Mutation %v for Bucket %v Stream %v. Current Filter %v", meta,
 				meta.bucket, r.streamId, filter.Seqnos[meta.vbucket])
 			return false
