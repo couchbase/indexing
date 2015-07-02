@@ -31,7 +31,7 @@ func SwapInt32(addr *int32, new int32) int32 {
 }
 
 func SwapInt64(addr *AlignedInt64, new int64) int64 {
-	return orig.SwapInt64(&addr.data, new)
+	return orig.SwapInt64(addr.data, new)
 }
 
 func SwapUint32(addr *uint32, new uint32) uint32 {
@@ -39,7 +39,7 @@ func SwapUint32(addr *uint32, new uint32) uint32 {
 }
 
 func SwapUint64(addr *AlignedUint64, new uint64) uint64 {
-	return orig.SwapUint64(&(addr.data), new)
+	return orig.SwapUint64(addr.data, new)
 }
 
 func SwapUintptr(addr *uintptr, new uintptr) uintptr {
@@ -55,7 +55,7 @@ func CompareAndSwapInt32(addr *int32, old, new int32) bool {
 }
 
 func CompareAndSwapInt64(addr *AlignedInt64, old, new int64) bool {
-	return orig.CompareAndSwapInt64(&addr.data, old, new)
+	return orig.CompareAndSwapInt64(addr.data, old, new)
 }
 
 func CompareAndSwapUint32(addr *uint32, old, new uint32) bool {
@@ -63,7 +63,7 @@ func CompareAndSwapUint32(addr *uint32, old, new uint32) bool {
 }
 
 func CompareAndSwapUint64(addr *AlignedUint64, old, new uint64) bool {
-	return orig.CompareAndSwapUint64(&addr.data, old, new)
+	return orig.CompareAndSwapUint64(addr.data, old, new)
 }
 
 func CompareAndSwapUintptr(addr *uintptr, old, new uintptr) bool {
@@ -83,11 +83,11 @@ func AddUint32(addr *uint32, delta uint32) uint32 {
 }
 
 func AddInt64(addr *AlignedInt64, delta int64) int64 {
-	return orig.AddInt64(&addr.data, delta)
+	return orig.AddInt64(addr.data, delta)
 }
 
 func AddUint64(addr *AlignedUint64, delta uint64) uint64 {
-	return orig.AddUint64(&addr.data, delta)
+	return orig.AddUint64(addr.data, delta)
 }
 
 func AddUintptr(addr *uintptr, delta uintptr) uintptr {
@@ -99,7 +99,7 @@ func LoadInt32(addr *int32) int32 {
 }
 
 func LoadInt64(addr *AlignedInt64) int64 {
-	return orig.LoadInt64(&addr.data)
+	return orig.LoadInt64(addr.data)
 }
 
 func LoadUint32(addr *uint32) uint32 {
@@ -107,7 +107,7 @@ func LoadUint32(addr *uint32) uint32 {
 }
 
 func LoadUint64(addr *AlignedUint64) uint64 {
-	return orig.LoadUint64(&addr.data)
+	return orig.LoadUint64(addr.data)
 }
 
 func LoadUintptr(addr *uintptr) uintptr {
@@ -123,7 +123,7 @@ func StoreInt32(addr *int32, val int32) {
 }
 
 func StoreInt64(addr *AlignedInt64, val int64) {
-	orig.StoreInt64(&addr.data, val)
+	orig.StoreInt64(addr.data, val)
 }
 
 func StoreUint32(addr *uint32, val uint32) {
@@ -131,7 +131,7 @@ func StoreUint32(addr *uint32, val uint32) {
 }
 
 func StoreUint64(addr *AlignedUint64, val uint64) {
-	orig.StoreUint64(&addr.data, val)
+	orig.StoreUint64(addr.data, val)
 }
 
 func StoreUintptr(addr *uintptr, val uintptr) {
