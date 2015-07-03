@@ -12,6 +12,7 @@ package indexer
 import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"time"
 )
 
 type MsgType int16
@@ -896,9 +897,10 @@ func (m *MsgRollback) GetRollbackTs() *common.TsVbuuid {
 }
 
 type MsgIndexSnapRequest struct {
-	ts        *common.TsVbuuid
-	cons      common.Consistency
-	idxInstId common.IndexInstId
+	ts          *common.TsVbuuid
+	cons        common.Consistency
+	idxInstId   common.IndexInstId
+	expiredTime time.Time
 
 	// Send error or index snapshot
 	respch chan interface{}
@@ -914,6 +916,10 @@ func (m *MsgIndexSnapRequest) GetTS() *common.TsVbuuid {
 
 func (m *MsgIndexSnapRequest) GetConsistency() common.Consistency {
 	return m.cons
+}
+
+func (m *MsgIndexSnapRequest) GetExpiredTime() time.Time {
+	return m.expiredTime
 }
 
 func (m *MsgIndexSnapRequest) GetReplyChannel() chan interface{} {
