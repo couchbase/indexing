@@ -31,8 +31,10 @@ type LifecycleMgr struct {
 	notifier     MetadataNotifier
 	clusterURL   string
 	incomings    chan *requestHolder
+	bootstraps   chan *requestHolder
 	outgoings    chan c.Packet
 	killch       chan bool
+	indexerReady bool
 }
 
 type requestHolder struct {
@@ -57,7 +59,9 @@ func NewLifecycleMgr(addrProvider common.ServiceAddressProvider, notifier Metada
 		clusterURL:   clusterURL,
 		incomings:    make(chan *requestHolder, 1000),
 		outgoings:    make(chan c.Packet, 1000),
-		killch:       make(chan bool)}
+		killch:       make(chan bool),
+		bootstraps:   make(chan *requestHolder, 1000),
+		indexerReady: false}
 
 	return mgr
 }
@@ -79,17 +83,35 @@ func (m *LifecycleMgr) Terminate() {
 }
 
 func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
-	logging.Debugf("LifecycleMgr.OnNewRequest(): queuing new request. reqId %v", request.GetReqId())
 
 	req := &requestHolder{request: request, fid: fid}
 	op := c.OpCode(request.GetOpCode())
 
-	if op == client.OPCODE_SERVICE_MAP {
+	logging.Debugf("LifecycleMgr.OnNewRequest(): queuing new request. reqId %v opCode %v", request.GetReqId(), op)
+
+	if op == client.OPCODE_INDEXER_READY {
+		m.indexerReady = true
+		close(m.bootstraps)
+
+	} else if op == client.OPCODE_SERVICE_MAP {
 		// short cut the connection request by spawn its own go-routine
 		// This call does not change the state of the repository, so it
 		// is OK to shortcut.
 		go m.dispatchRequest(req, message.NewConcreteMsgFactory())
+
 	} else {
+		// if indexer is not yet ready, put them in the bootstrap queue so
+		// they can get processed.  For client side, they will be queued
+		// up in the regular queue until indexer is ready.
+		if !m.indexerReady {
+			if op == client.OPCODE_UPDATE_INDEX_INST || op == client.OPCODE_DELETE_BUCKET {
+				m.bootstraps <- req
+				return
+			}
+		}
+
+		// for create/drop/build index, always go to the client queue -- which will wait for
+		// indexer to be ready.
 		m.incomings <- req
 	}
 }
@@ -112,6 +134,28 @@ func (m *LifecycleMgr) processRequest() {
 	logging.Debugf("LifecycleMgr.processRequest(): LifecycleMgr is ready to proces request")
 	factory := message.NewConcreteMsgFactory()
 
+	// process any requests form the boostrap phase.   Once indexer is ready, this channel
+	// will be closed, and this go-routine will proceed to process regular message.
+END_BOOTSTRAP:
+	for {
+		select {
+		case request, ok := <-m.bootstraps:
+			if ok {
+				m.dispatchRequest(request, factory)
+			} else {
+				logging.Debugf("LifecycleMgr.handleRequest(): closing bootstrap channel")
+				break END_BOOTSTRAP
+			}
+		case <-m.killch:
+			// server shutdown
+			logging.Debugf("LifecycleMgr.processRequest(): receive kill signal. Stop boostrap request processing.")
+			return
+		}
+	}
+
+	logging.Debugf("LifecycleMgr.processRequest(): indexer is ready to process new client request.")
+
+	// Indexer is ready and all bootstrap requests are processed.  Proceed to handle regular messages.
 	for {
 		select {
 		case request, ok := <-m.incomings:
@@ -121,10 +165,12 @@ func (m *LifecycleMgr) processRequest() {
 			} else {
 				// server shutdown.
 				logging.Debugf("LifecycleMgr.handleRequest(): channel for receiving client request is closed. Terminate.")
+				return
 			}
 		case <-m.killch:
 			// server shutdown
 			logging.Debugf("LifecycleMgr.processRequest(): receive kill signal. Stop Client request processing.")
+			return
 		}
 	}
 }

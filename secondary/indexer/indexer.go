@@ -2636,6 +2636,12 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		common.CrashOnError(err)
 	}
 
+	// ready to process DDL
+	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_INDEXER_READY}
+	if err := idx.sendMsgToClusterMgr(msg); err != nil {
+		return err
+	}
+
 	//if there are no indexes, return from here
 	if len(idx.indexInstMap) == 0 {
 		return nil
@@ -2646,7 +2652,6 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 	}
 
 	return nil
-
 }
 
 func (idx *indexer) genIndexerId() {

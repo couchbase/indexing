@@ -437,6 +437,12 @@ func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.Strea
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_DELETE_BUCKET, bucket, []byte{byte(streamId)})
 }
 
+func (m *IndexManager) NotifyIndexerReady() error {
+
+	logging.Debugf("IndexManager.NotifyIndexerReady(): making request to notify indexer is ready ")
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_INDEXER_READY, "", []byte{})
+}
+
 //
 // Get Topology from dictionary
 //
