@@ -423,9 +423,21 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte) {
 
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
-		key := GetIndexEntryBytesFromKey(mut.key, docid, idxInst.Defn.IsPrimary)
+		key, err := GetIndexEntryBytesFromKey(mut.key, docid, idxInst.Defn.IsPrimary)
+		if err != nil {
+			logging.Errorf("Flusher::processUpsert Error indexing Key: %s "+
+				"docid: %s in Slice: %v. Error: %v. Skipped.",
+				mut.key, docid, slice.Id(), err)
+
+			if err2 := slice.Delete(docid); err2 != nil {
+				logging.Errorf("Flusher::processUpsert Error removing entry due to error %v Key: %s "+
+					"docid: %s in Slice: %v. Error: %v", err, mut.key, docid, slice.Id(), err2)
+			}
+			return
+		}
+
 		if err := slice.Insert(key, docid); err != nil {
-			logging.Errorf("Flusher::processUpsert Error Inserting Key: %v "+
+			logging.Errorf("Flusher::processUpsert Error Inserting Key: %s "+
 				"docid: %s in Slice: %v. Error: %v", mut.key, docid, slice.Id(), err)
 		}
 	} else {
@@ -507,20 +519,23 @@ func (f *flusher) GetQueueHWT(q MutationQueue) Timestamp {
 	return ts
 }
 
-func GetIndexEntryBytesFromKey(key []byte, docid []byte, isPrimary bool) []byte {
-
+func GetIndexEntryBytesFromKey(key []byte, docid []byte, isPrimary bool) ([]byte, error) {
 	var entry IndexEntry
 	var err error
-	if isPrimary {
-		entry, err = NewPrimaryIndexEntry(docid)
-		common.CrashOnError(err)
-	} else {
-		entry, err = NewSecondaryIndexEntry(key, docid)
-		if err == ErrSecKeyNil {
-			return nil
-		}
-		common.CrashOnError(err)
-	}
-	return entry.Bytes()
 
+	if isPrimary {
+		if entry, err = NewPrimaryIndexEntry(docid); err != nil {
+			return nil, err
+		}
+	} else {
+		if entry, err = NewSecondaryIndexEntry(key, docid); err != nil {
+			if err == ErrSecKeyNil {
+				return nil, nil
+			}
+
+			return nil, err
+		}
+	}
+
+	return entry.Bytes(), err
 }
