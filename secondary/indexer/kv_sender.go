@@ -860,7 +860,7 @@ func makeRestartTsFromTsVbuuid(bucket string, tsVbuuid *c.TsVbuuid,
 
 	ts := protobuf.NewTsVbuuid(DEFAULT_POOL, bucket, len(vbnos))
 	for _, vbno := range vbnos {
-		ts.Append(uint16(vbno), tsVbuuid.Snapshots[vbno][1],
+		ts.Append(uint16(vbno), tsVbuuid.Seqnos[vbno],
 			tsVbuuid.Vbuuids[vbno], tsVbuuid.Snapshots[vbno][0],
 			tsVbuuid.Snapshots[vbno][1])
 	}
