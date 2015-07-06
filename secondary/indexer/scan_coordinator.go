@@ -629,7 +629,10 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 
 	req, err := s.newRequest(protoReq, cancelCh)
 	w := NewProtoWriter(req.ScanType, conn)
-	defer func() { s.handleError(req.LogPrefix, w.Done()) }()
+	defer func() {
+		s.handleError(req.LogPrefix, w.Done())
+		req.Stats.numCompletedRequests.Add(1)
+	}()
 
 	logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
 

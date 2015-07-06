@@ -29,39 +29,75 @@ type BucketStats struct {
 
 	mutationQueueSize  stats.Int64Val
 	numMutationsQueued stats.Int64Val
+
+	tsQueueSize   stats.Int64Val
+	numNonAlignTS stats.Int64Val
 }
 
 func (s *BucketStats) Init() {
 	s.mutationQueueSize.Init()
 	s.numMutationsQueued.Init()
+	s.tsQueueSize.Init()
+	s.numNonAlignTS.Init()
+}
+
+type IndexTimingStats struct {
+	stCloneHandle    stats.TimingStat
+	stNewIterator    stats.TimingStat
+	stIteratorNext   stats.TimingStat
+	stSnapshotCreate stats.TimingStat
+	stSnapshotClose  stats.TimingStat
+	stHandleOpen     stats.TimingStat
+	stCommit         stats.TimingStat
+	stKVGet          stats.TimingStat
+	stKVSet          stats.TimingStat
+	stKVDelete       stats.TimingStat
+}
+
+func (it *IndexTimingStats) Init() {
+	it.stCloneHandle.Init()
+	it.stCommit.Init()
+	it.stNewIterator.Init()
+	it.stSnapshotCreate.Init()
+	it.stSnapshotClose.Init()
+	it.stHandleOpen.Init()
+	it.stKVGet.Init()
+	it.stKVSet.Init()
+	it.stIteratorNext.Init()
+	it.stKVDelete.Init()
 }
 
 type IndexStats struct {
 	name, bucket string
 
-	scanDuration     stats.Int64Val
-	insertBytes      stats.Int64Val
-	numDocsPending   stats.Int64Val
-	scanWaitDuration stats.Int64Val
-	numDocsIndexed   stats.Int64Val
-	numRequests      stats.Int64Val
-	numRowsReturned  stats.Int64Val
-	diskSize         stats.Int64Val
-	buildProgress    stats.Int64Val
-	numDocsQueued    stats.Int64Val
-	deleteBytes      stats.Int64Val
-	dataSize         stats.Int64Val
-	scanBytesRead    stats.Int64Val
-	getBytes         stats.Int64Val
-	itemsCount       stats.Int64Val
-	numCommits       stats.Int64Val
-	numSnapshots     stats.Int64Val
-	numCompactions   stats.Int64Val
-	flushQueueSize   stats.Int64Val
-	avgTsInterval    stats.Int64Val
-	lastTsTime       stats.Int64Val
-	numFlushQueued   stats.Int64Val
-	fragPercent      stats.Int64Val
+	scanDuration         stats.Int64Val
+	insertBytes          stats.Int64Val
+	numDocsPending       stats.Int64Val
+	scanWaitDuration     stats.Int64Val
+	numDocsIndexed       stats.Int64Val
+	numRequests          stats.Int64Val
+	numCompletedRequests stats.Int64Val
+	numRowsReturned      stats.Int64Val
+	diskSize             stats.Int64Val
+	buildProgress        stats.Int64Val
+	numDocsQueued        stats.Int64Val
+	deleteBytes          stats.Int64Val
+	dataSize             stats.Int64Val
+	scanBytesRead        stats.Int64Val
+	getBytes             stats.Int64Val
+	itemsCount           stats.Int64Val
+	numCommits           stats.Int64Val
+	numSnapshots         stats.Int64Val
+	numCompactions       stats.Int64Val
+	flushQueueSize       stats.Int64Val
+	avgTsInterval        stats.Int64Val
+	lastTsTime           stats.Int64Val
+	numFlushQueued       stats.Int64Val
+	fragPercent          stats.Int64Val
+	sinceLastSnapshot    stats.Int64Val
+	numSnapshotWaiters   stats.Int64Val
+
+	Timings IndexTimingStats
 }
 
 type IndexerStatsHolder struct {
@@ -83,6 +119,7 @@ func (s *IndexStats) Init() {
 	s.scanWaitDuration.Init()
 	s.numDocsIndexed.Init()
 	s.numRequests.Init()
+	s.numCompletedRequests.Init()
 	s.numRowsReturned.Init()
 	s.diskSize.Init()
 	s.buildProgress.Init()
@@ -100,6 +137,10 @@ func (s *IndexStats) Init() {
 	s.numCompactions.Init()
 	s.flushQueueSize.Init()
 	s.numFlushQueued.Init()
+	s.sinceLastSnapshot.Init()
+	s.numSnapshotWaiters.Init()
+
+	s.Timings.Init()
 }
 
 type IndexerStats struct {
@@ -189,6 +230,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("scan_wait_duration", s.scanWaitDuration.Value())
 		addStat("num_docs_indexed", s.numDocsIndexed.Value())
 		addStat("num_requests", s.numRequests.Value())
+		addStat("num_completed_requests", s.numCompletedRequests.Value())
 		addStat("num_rows_returned", s.numRowsReturned.Value())
 		addStat("disk_size", s.diskSize.Value())
 		addStat("build_progress", s.buildProgress.Value())
@@ -207,12 +249,27 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("avg_scan_latency", scanLat)
 		addStat("avg_scan_wait_latency", waitLat)
 		addStat("num_flush_queued", s.numFlushQueued.Value())
+		addStat("since_last_snapshot", s.sinceLastSnapshot.Value())
+		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
+
+		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
+		addStat("timings/storage_commit", s.Timings.stCommit.Value())
+		addStat("timings/storage_new_iterator", s.Timings.stNewIterator.Value())
+		addStat("timings/storage_snapshot_create", s.Timings.stSnapshotCreate.Value())
+		addStat("timings/storage_snapshot_close", s.Timings.stSnapshotClose.Value())
+		addStat("timings/storage_handle_open", s.Timings.stHandleOpen.Value())
+		addStat("timings/storage_get", s.Timings.stKVGet.Value())
+		addStat("timings/storage_set", s.Timings.stKVSet.Value())
+		addStat("timings/storage_iterator_next", s.Timings.stIteratorNext.Value())
+		addStat("timings/storage_del", s.Timings.stKVDelete.Value())
 	}
 
 	for _, s := range is.buckets {
 		prefix = fmt.Sprintf("%s:", s.bucket)
 		addStat("mutation_queue_size", s.mutationQueueSize.Value())
 		addStat("num_mutations_queued", s.numMutationsQueued.Value())
+		addStat("ts_queue_size", s.tsQueueSize.Value())
+		addStat("num_nonalign_ts", s.numNonAlignTS.Value())
 	}
 
 	return json.Marshal(statsMap)
@@ -324,12 +381,15 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 			sync = true
 		}
 		s.tryUpdateStats(sync)
-		s.Lock()
 		stats := s.stats.Get()
-		bytes, _ := stats.MarshalJSON()
-		s.Unlock()
-		w.WriteHeader(200)
-		w.Write(bytes)
+		if stats == nil {
+			w.WriteHeader(500)
+			w.Write([]byte("Indexer not ready"))
+		} else {
+			bytes, _ := stats.MarshalJSON()
+			w.WriteHeader(200)
+			w.Write(bytes)
+		}
 	} else {
 		w.WriteHeader(400)
 		w.Write([]byte("Unsupported method"))

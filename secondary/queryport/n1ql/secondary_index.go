@@ -26,7 +26,7 @@ import "github.com/couchbase/query/expression"
 import "github.com/couchbase/query/expression/parser"
 import "github.com/couchbase/query/timestamp"
 import "github.com/couchbase/query/value"
-import "github.com/couchbase/query/logging"
+import qlog "github.com/couchbase/query/logging"
 
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(
@@ -96,16 +96,16 @@ func NewGSIIndexer(
 	// get the singleton-client
 	client, err := getSingletonClient(clusterURL)
 	if err != nil {
-		logging.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
+		l.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
 		return nil, errors.NewError(err, "GSI client instantiation failed")
 	}
 	gsi.gsiClient = client
 	// refresh indexes for this service->namespace->keyspace
 	if err := gsi.Refresh(); err != nil {
-		logging.Errorf("%v Refresh() failed: %v", gsi.logPrefix, err)
+		l.Errorf("%v Refresh() failed: %v", gsi.logPrefix, err)
 		return nil, err
 	}
-	logging.Debugf("%v instantiated ...", gsi.logPrefix)
+	l.Debugf("%v instantiated ...", gsi.logPrefix)
 	return gsi, nil
 }
 
@@ -234,7 +234,7 @@ func (gsi *gsiKeyspace) PrimaryIndexes() ([]datastore.PrimaryIndex, errors.Error
 	for _, index := range gsi.primaryIndexes {
 		indexes = append(indexes, index)
 	}
-	logging.Debugf("%v gsiKeySpace.PrimaryIndexes(): %v", gsi.logPrefix, indexes)
+	l.Debugf("%v gsiKeySpace.PrimaryIndexes(): %v", gsi.logPrefix, indexes)
 	return indexes, nil
 }
 
@@ -362,8 +362,27 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 	return nil
 }
 
-func (gsi *gsiKeyspace) SetLogLevel(level logging.Level) {
-	// TODO: Implementation by 2i team
+func (gsi *gsiKeyspace) SetLogLevel(level qlog.Level) {
+	switch level {
+	case qlog.NONE:
+		l.SetLogLevel(l.Silent)
+	case qlog.SEVERE:
+		l.SetLogLevel(l.Fatal)
+	case qlog.ERROR:
+		l.SetLogLevel(l.Error)
+	case qlog.WARN:
+		l.SetLogLevel(l.Warn)
+	case qlog.INFO:
+		l.SetLogLevel(l.Info)
+	case qlog.REQUEST:
+		l.SetLogLevel(l.Timing)
+	case qlog.TRACE:
+		l.SetLogLevel(l.Debug) //reversed
+	case qlog.DEBUG:
+		l.SetLogLevel(l.Trace)
+	default:
+		l.Warnf("Unknown query log level '%v'", level)
+	}
 }
 
 // Synchronise gsi client with the servers and refresh the indexes list.
@@ -828,7 +847,7 @@ func getSingletonClient(clusterURL string) (*qclient.GsiClient, error) {
 	muclient.Lock()
 	defer muclient.Unlock()
 	if singletonClient == nil {
-		logging.Debugf("creating singleton for URL %v", clusterURL)
+		l.Debugf("creating singleton for URL %v", clusterURL)
 		conf, err := c.GetSettingsConfig(c.SystemConfig)
 		if err != nil {
 			return nil, err

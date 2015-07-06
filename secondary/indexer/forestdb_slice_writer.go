@@ -322,7 +322,9 @@ func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) 
 	logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", fdb.id, fdb.idxInstId, docid)
 
 	//check if the docid exists in the main index
+	t0 := time.Now()
 	if _, err = fdb.main[workerId].GetKV(key); err == nil {
+		fdb.idxStats.Timings.stKVGet.Put(time.Now().Sub(t0))
 		//skip
 		logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Key %v Already Exists. "+
 			"Primary Index Update Skipped.", fdb.id, fdb.idxInstId, string(docid))
@@ -332,11 +334,13 @@ func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) 
 			"mainindex entry %v", fdb.id, fdb.idxInstId, err)
 	} else if err == forestdb.RESULT_KEY_NOT_FOUND {
 		//set in main index
+		t0 := time.Now()
 		if err = fdb.main[workerId].SetKV(key, nil); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
 				"Skipped Key %s. Error %v", fdb.id, fdb.idxInstId, string(docid), err)
 		}
+		fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 		platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
 	}
 }
@@ -365,22 +369,30 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 
 		//there is already an entry in main index for this docid
 		//delete from main index
+		t0 := time.Now()
 		if err = fdb.main[workerId].DeleteKV(oldkey); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
 				"entry from main index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
+		fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 		platform.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
 
-		//delete from back index
-		if err = fdb.back[workerId].DeleteKV(docid); err != nil {
-			fdb.checkFatalDbError(err)
-			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
-				"entry from back index %v", fdb.id, fdb.idxInstId, err)
-			return
+		// If a field value changed from "existing" to "missing" (ie, key = nil),
+		// we need to remove back index entry corresponding to the previous "existing" value.
+		if key == nil {
+			t0 := time.Now()
+			if err = fdb.back[workerId].DeleteKV(docid); err != nil {
+				fdb.checkFatalDbError(err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
+					"entry from back index %v", fdb.id, fdb.idxInstId, err)
+				return
+			}
+
+			fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+			platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 		}
-		platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 	}
 
 	if key == nil {
@@ -390,14 +402,17 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 	}
 
 	//set the back index entry <docid, encodedkey>
+	t0 := time.Now()
 	if err = fdb.back[workerId].SetKV(docid, key); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Back Index Set. "+
 			"Skipped Key %s. Value %v. Error %v", fdb.id, fdb.idxInstId, string(docid), key, err)
 		return
 	}
+	fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.insert_bytes, int64(len(docid)+len(key)))
 
+	t0 = time.Now()
 	//set in main index
 	if err = fdb.main[workerId].SetKV(key, nil); err != nil {
 		fdb.checkFatalDbError(err)
@@ -405,6 +420,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 			"Skipped Key %v. Error %v", fdb.id, fdb.idxInstId, key, err)
 		return
 	}
+	fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
 }
 
@@ -436,6 +452,7 @@ func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 	common.CrashOnError(err)
 
 	//delete from main index
+	t0 := time.Now()
 	if err := fdb.main[workerId].DeleteKV(entry.Bytes()); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error deleting "+
@@ -443,6 +460,7 @@ func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 			docid, err)
 		return
 	}
+	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.delete_bytes, int64(len(entry.Bytes())))
 
 }
@@ -471,6 +489,7 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 	}
 
 	//delete from main index
+	t0 := time.Now()
 	if err = fdb.main[workerId].DeleteKV(olditm); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error deleting "+
@@ -478,15 +497,18 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 			docid, olditm, err)
 		return
 	}
+	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.delete_bytes, int64(len(olditm)))
 
 	//delete from the back index
+	t0 = time.Now()
 	if err = fdb.back[workerId].DeleteKV(docid); err != nil {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error deleting "+
 			"entry from back index for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
 		return
 	}
+	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 
 }
@@ -501,7 +523,9 @@ func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) ([]byte, erro
 	var kbytes []byte
 	var err error
 
+	t0 := time.Now()
 	kbytes, err = fdb.back[workerId].GetKV(docid)
+	fdb.idxStats.Timings.stKVGet.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.get_bytes, int64(len(kbytes)))
 
 	//forestdb reports get in a non-existent key as an
@@ -554,17 +578,10 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 			idxDefnId:  fdb.idxDefnId,
 			idxInstId:  fdb.idxInstId,
 			main:       fdb.main[0],
-			back:       fdb.back[0],
 			ts:         snapInfo.Timestamp(),
 			mainSeqNum: snapInfo.MainSeq,
-			backSeqNum: snapInfo.BackSeq,
 			committed:  info.IsCommitted(),
 		}
-	}
-
-	if info.IsCommitted() {
-		s.meta = fdb.meta
-		s.metaSeqNum = snapInfo.MetaSeq
 	}
 
 	logging.Debugf("ForestDBSlice::OpenSnapshot \n\tSliceId %v IndexInstId %v Creating New "+
@@ -758,6 +775,7 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 		start := time.Now()
 		err = fdb.dbfile.Commit(forestdb.COMMIT_MANUAL_WAL_FLUSH)
 		elapsed := time.Since(start)
+		fdb.idxStats.Timings.stCommit.Put(elapsed)
 
 		fdb.totalCommitTime += elapsed
 		logging.Debugf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v TotalFlushTime %v "+
@@ -933,6 +951,8 @@ snaploop:
 	}
 
 	newpath := newFdbFile(fdb.path, true)
+	// Remove any existing files leftover due to a crash during last compaction attempt
+	os.Remove(newpath)
 	err = fdb.compactFd.CompactUpto(newpath, snapMarker)
 	if err != nil {
 		return err

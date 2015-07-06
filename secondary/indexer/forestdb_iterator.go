@@ -13,6 +13,7 @@ import (
 	"errors"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/platform"
+	"time"
 )
 
 //ForestDBIterator taken from
@@ -37,13 +38,17 @@ func newFDBSnapshotIterator(s Snapshot) (*ForestDBIterator, error) {
 		seq = fdbSnap.mainSeqNum
 	}
 
-	itr, err := newForestDBIterator(fdbSnap.slice.(*fdbSlice), fdbSnap.main, seq)
+	itr, err := newForestDBIterator(fdbSnap.slice, fdbSnap.main, seq)
 	return itr, err
 }
 
 func newForestDBIterator(slice *fdbSlice, db *forestdb.KVStore,
 	seq forestdb.SeqNum) (*ForestDBIterator, error) {
+
+	t0 := time.Now()
 	dbInst, err := db.SnapshotClone(seq)
+	slice.idxStats.Timings.stCloneHandle.Put(time.Now().Sub(t0))
+
 	rv := ForestDBIterator{
 		db:    dbInst,
 		slice: slice,
@@ -61,7 +66,9 @@ func (f *ForestDBIterator) SeekFirst() {
 		f.iter = nil
 	}
 	var err error
+	t0 := time.Now()
 	f.iter, err = f.db.IteratorInit([]byte{}, nil, forestdb.ITR_NONE|forestdb.ITR_NO_DELETES)
+	f.slice.idxStats.Timings.stNewIterator.Put(time.Now().Sub(t0))
 	if err != nil {
 		f.valid = false
 		return
@@ -85,7 +92,9 @@ func (f *ForestDBIterator) Seek(key []byte) {
 		f.iter = nil
 	}
 	var err error
+	t0 := time.Now()
 	f.iter, err = f.db.IteratorInit(key, nil, forestdb.ITR_NONE|forestdb.ITR_NO_DELETES)
+	f.slice.idxStats.Timings.stNewIterator.Put(time.Now().Sub(t0))
 	if err != nil {
 		f.valid = false
 		return
@@ -105,7 +114,9 @@ func (f *ForestDBIterator) Seek(key []byte) {
 
 func (f *ForestDBIterator) Next() {
 	var err error
+	t0 := time.Now()
 	err = f.iter.Next()
+	f.slice.idxStats.Timings.stIteratorNext.Put(time.Now().Sub(t0))
 	if err != nil {
 		f.valid = false
 		return

@@ -22,6 +22,13 @@ import "github.com/couchbase/indexing/secondary/platform"
 import "unsafe"
 import "runtime"
 
+// NOTE:
+// following settings are related to each other.
+//      "projector.adminport.readTimeout",
+//      "projector.dataport.harakiriTimeout",
+//      "indexer.dataport.tcpReadDeadline",
+//
+
 // formula to compute the default CPU allocation for projector.
 var projector_maxCpuPercent = (1 + (runtime.NumCPU() / 6)) * 100
 
@@ -209,7 +216,9 @@ var SystemConfig = Config{
 	},
 	"projector.adminport.readTimeout": ConfigValue{
 		0,
-		"timeout in milliseconds, is http server's read timeout",
+		"timeout in milliseconds, is http server's read timeout, " +
+			"also refer to projector.dataport.harakiriTimeout and " +
+			"indexer.dataport.tcpReadDeadline",
 		0,
 		true, // immutable
 	},
@@ -258,7 +267,9 @@ var SystemConfig = Config{
 	"projector.dataport.harakiriTimeout": ConfigValue{
 		30 * 1000,
 		"timeout in milliseconds, after which endpoint will commit harakiri " +
-			"if not activity, does not affect existing feeds.",
+			"if not active, does not affect existing feeds, " +
+			"also refer to projector.adminport.readTimeout and " +
+			"indexer.dataport.tcpReadDeadline.",
 		30 * 1000, //10s
 		false,     // mutable
 	},
@@ -308,9 +319,11 @@ var SystemConfig = Config{
 		true,        // immutable
 	},
 	"indexer.dataport.tcpReadDeadline": ConfigValue{
-		10 * 1000,
-		"timeout, in milliseconds, while reading from socket",
-		10 * 1000, // 10s
+		30 * 1000,
+		"timeout, in milliseconds, while reading from socket, " +
+			"also refer to projector.adminport.readTimeout and " +
+			"projector.dataport.harakiriTimeout.",
+		30 * 1000, // 10s
 		true,      // immutable
 	},
 	// indexer queryport configuration
@@ -539,19 +552,19 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.persisted_snapshot.interval": ConfigValue{
-		uint64(5000),
+		uint64(5000), // keep in sync with index_settings_manager.erl
 		"Persisted snapshotting interval in milliseconds",
 		uint64(5000),
 		false, // mutable
 	},
 	"indexer.settings.inmemory_snapshot.interval": ConfigValue{
-		uint64(200),
+		uint64(200), // keep in sync with index_settings_manager.erl
 		"InMemory snapshotting interval in milliseconds",
 		uint64(200),
 		false, // mutable
 	},
 	"indexer.settings.recovery.max_rollbacks": ConfigValue{
-		5,
+		5, // keep in sync with index_settings_manager.erl
 		"Maximum number of committed rollback points",
 		5,
 		false, // mutable
@@ -571,7 +584,7 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.log_level": ConfigValue{
-		"debug",
+		"debug", // keep in sync with index_settings_manager.erl
 		"Indexer logging level",
 		"debug",
 		false, // mutable

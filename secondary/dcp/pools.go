@@ -511,6 +511,7 @@ func (b *Bucket) init(nb *Bucket) {
 func (p *Pool) refresh() (err error) {
 	p.BucketMap = make(map[string]Bucket)
 
+loop:
 	buckets := []Bucket{}
 	err = p.client.parseURLResponse(p.BucketURL["uri"], &buckets)
 	if err != nil {
@@ -518,8 +519,14 @@ func (p *Pool) refresh() (err error) {
 	}
 	for _, b := range buckets {
 		nb := &Bucket{}
-		err = p.client.parseURLResponse(p.BucketURL["terseBucketsBase"]+"/"+b.Name, nb)
+		err = p.client.parseURLResponse(p.BucketURL["terseBucketsBase"]+b.Name, nb)
 		if err != nil {
+			// bucket list is out of sync with cluster bucket list
+			// bucket might have got deleted.
+			if strings.Contains(err.Error(), "HTTP error 404") {
+				logging.Warnf("cluster_info: Out of sync for bucket %s. Retrying..", b.Name)
+				goto loop
+			}
 			return err
 		}
 		b.pool = p

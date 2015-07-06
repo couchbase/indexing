@@ -84,6 +84,7 @@ func (w *ItemWriter) CloseWrite() error {
 
 	err := w.HasShutdown()
 	if err != nil {
+		w.CloseWithError(err)
 		return err
 	}
 

@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/platform"
 	"math"
+	"time"
 )
 
 var FORESTDB_INMEMSEQ = forestdb.SeqNum(math.MaxUint64)
@@ -38,20 +39,15 @@ func (info *fdbSnapshotInfo) IsCommitted() bool {
 }
 
 func (info *fdbSnapshotInfo) String() string {
-	return fmt.Sprintf("SnapshotInfo: seqnos: %v, %v, %v", info.MainSeq,
-		info.BackSeq, info.MetaSeq)
+	return fmt.Sprintf("SnapshotInfo: seqnos: %v, %v, %v committed:%v", info.MainSeq,
+		info.BackSeq, info.MetaSeq, info.Committed)
 }
 
 type fdbSnapshot struct {
-	slice Slice
+	slice *fdbSlice
 
-	main *forestdb.KVStore // handle for forward index
-	back *forestdb.KVStore // handle for reverse index
-	meta *forestdb.KVStore // handle for meta
-
+	main       *forestdb.KVStore // handle for forward index
 	mainSeqNum forestdb.SeqNum
-	backSeqNum forestdb.SeqNum
-	metaSeqNum forestdb.SeqNum
 
 	idxDefnId common.IndexDefnId //index definition id
 	idxInstId common.IndexInstId //index instance id
@@ -63,15 +59,15 @@ type fdbSnapshot struct {
 
 func (s *fdbSnapshot) Create() error {
 
-	var mainSeq, backSeq forestdb.SeqNum
+	var mainSeq forestdb.SeqNum
 	if s.committed {
 		mainSeq = s.mainSeqNum
-		backSeq = s.backSeqNum
 	} else {
 		mainSeq = FORESTDB_INMEMSEQ
-		backSeq = FORESTDB_INMEMSEQ
 	}
+
 	var err error
+	t0 := time.Now()
 	s.main, err = s.main.SnapshotOpen(mainSeq)
 	if err != nil {
 		logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
@@ -79,23 +75,10 @@ func (s *fdbSnapshot) Create() error {
 		return err
 	}
 
-	//if there is a back-index(non-primary index)
-	if s.back != nil {
-		s.back, err = s.back.SnapshotOpen(backSeq)
-		if err != nil {
-			logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
-				"Opening Back DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), backSeq, err)
-			return err
-		}
-	}
-
 	if s.committed {
-		s.meta, err = s.meta.SnapshotOpen(s.metaSeqNum)
-		if err != nil {
-			logging.Errorf("ForestDBSnapshot::Open \n\tUnexpected Error "+
-				"Opening Meta DB Snapshot (%v) SeqNum %v %v", s.slice.Path(), s.metaSeqNum, err)
-			return err
-		}
+		s.slice.idxStats.Timings.stHandleOpen.Put(time.Now().Sub(t0))
+	} else {
+		s.slice.idxStats.Timings.stSnapshotCreate.Put(time.Now().Sub(t0))
 	}
 
 	s.slice.IncrRef()
@@ -136,10 +119,6 @@ func (s *fdbSnapshot) MainIndexSeqNum() forestdb.SeqNum {
 	return s.mainSeqNum
 }
 
-func (s *fdbSnapshot) BackIndexSeqNum() forestdb.SeqNum {
-	return s.backSeqNum
-}
-
 //Close the snapshot
 func (s *fdbSnapshot) Close() error {
 
@@ -159,8 +138,9 @@ func (s *fdbSnapshot) Close() error {
 
 func (s *fdbSnapshot) Destroy() {
 
-	//close the main index
 	defer s.slice.DecrRef()
+
+	t0 := time.Now()
 	if s.main != nil {
 		err := s.main.Close()
 		if err != nil {
@@ -171,31 +151,9 @@ func (s *fdbSnapshot) Destroy() {
 		logging.Errorf("ForestDBSnapshot::Close Main DB Handle Nil")
 	}
 
-	//close the back index
-	if s.back != nil {
-		err := s.back.Close()
-		if err != nil {
-			logging.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
-				"Back DB Snapshot %v", err)
-		}
-	} else {
-		//valid to be nil in case of primary index
-		logging.Warnf("ForestDBSnapshot::Close Back DB Handle Nil")
+	if !s.committed {
+		s.slice.idxStats.Timings.stSnapshotClose.Put(time.Now().Sub(t0))
 	}
-
-	//close the meta index
-	if s.committed {
-		if s.meta != nil {
-			err := s.meta.Close()
-			if err != nil {
-				logging.Errorf("ForestDBSnapshot::Close Unexpected error closing "+
-					"Meta DB Snapshot %v", err)
-			}
-		} else {
-			logging.Errorf("ForestDBSnapshot::Close Meta DB Handle Nil")
-		}
-	}
-
 }
 
 func (s *fdbSnapshot) String() string {
@@ -203,7 +161,6 @@ func (s *fdbSnapshot) String() string {
 	str := fmt.Sprintf("Index: %v ", s.idxInstId)
 	str += fmt.Sprintf("SliceId: %v ", s.slice.Id())
 	str += fmt.Sprintf("MainSeqNum: %v ", s.mainSeqNum)
-	str += fmt.Sprintf("BackSeqNum: %v ", s.backSeqNum)
 	str += fmt.Sprintf("TS: %v ", s.ts)
 	return str
 }
@@ -211,8 +168,6 @@ func (s *fdbSnapshot) String() string {
 func (s *fdbSnapshot) Info() SnapshotInfo {
 	return &fdbSnapshotInfo{
 		MainSeq:   s.mainSeqNum,
-		BackSeq:   s.backSeqNum,
-		MetaSeq:   s.metaSeqNum,
 		Committed: s.committed,
 		Ts:        s.ts,
 	}
