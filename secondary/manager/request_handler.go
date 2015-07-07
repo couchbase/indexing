@@ -251,7 +251,9 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 		return
 	}
 
-	list, failedNodes, err := m.getIndexStatus(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache))
+	bucket := m.getBucket(r)
+
+	list, failedNodes, err := m.getIndexStatus(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), bucket)
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
@@ -265,7 +267,12 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 	}
 }
 
-func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) ([]IndexStatus, []string, error) {
+func (m *requestHandlerContext) getBucket(r *http.Request) string {
+
+	return r.FormValue("bucket")
+}
+
+func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, bucket string) ([]IndexStatus, []string, error) {
 
 	if err := cinfo.Fetch(); err != nil {
 		return nil, nil, err
@@ -315,6 +322,10 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache) (
 			}
 
 			for _, defn := range localMeta.IndexDefinitions {
+
+				if len(bucket) != 0 && bucket != defn.Bucket {
+					continue
+				}
 
 				if topology := m.findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
 					state, errStr := topology.GetStatusByDefn(defn.DefnId)
