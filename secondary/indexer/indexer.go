@@ -1243,6 +1243,12 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
 
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
+		logging.Debugf("Indexer::handleInitBuildDoneAck Skip InitBuildDoneAck %v Inactive Bucket %v",
+			streamId, bucket)
+		return
+	}
+
 	logging.Debugf("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v",
 		streamId, bucket)
 
@@ -1275,6 +1281,12 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 
 	case common.INIT_STREAM:
 		delete(idx.streamBucketRequestStopCh[streamId], bucket)
+
+		if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
+			logging.Debugf("Indexer::handleMergeStreamAck Skip MergeStreamAck %v Inactive Bucket %v",
+				streamId, bucket)
+			return
+		}
 
 		idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
@@ -1310,7 +1322,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 		}
 
 	default:
-		logging.Debugf("Indexer::handleMergeStreamAck Unexpected Initial Build Ack Done "+
+		logging.Debugf("Indexer::handleMergeStreamAck Unexpected Merge Stream Ack "+
 			"Received for Stream %v Bucket %v", streamId, bucket)
 		common.CrashOnError(errors.New("Unexpected Merge Stream Ack"))
 	}
@@ -1957,6 +1969,12 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
+		logging.Debugf("Indexer::handleInitialBuildDone Skip InitBuildDone %v Inactive Bucket %v",
+			streamId, bucket)
+		return
+	}
+
 	logging.Debugf("Indexer::handleInitialBuildDone Bucket: %v Stream: %v", bucket, streamId)
 
 	//MAINT_STREAM should already be running for this bucket,
@@ -1984,6 +2002,12 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 			instIdList = append(instIdList, index.InstId)
 			bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
 		}
+	}
+
+	if len(instIdList) == 0 {
+		logging.Debugf("Indexer::handleInitialBuildDone Empty IndexList %v %v. Nothing to do.",
+			streamId, bucket)
+		return
 	}
 
 	//update the IndexInstMap
@@ -2084,6 +2108,12 @@ func (idx *indexer) handleMergeStream(msg Message) {
 
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
+
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
+		logging.Debugf("Indexer::handleMergeStream Skip MergeStream %v Inactive Bucket %v",
+			streamId, bucket)
+		return
+	}
 
 	//MAINT_STREAM should already be running for this bucket,
 	//as first index gets added to MAINT_STREAM always
