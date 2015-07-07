@@ -232,11 +232,11 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 
 	//fresh start or recovery
 	case STREAM_INACTIVE, STREAM_PREPARE_DONE:
+		tk.ss.initBucketInStream(streamId, bucket)
 		if restartTs != nil {
 			tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
+			tk.ss.setHWTFromRestartTs(streamId, bucket)
 		}
-		tk.ss.initBucketInStream(streamId, bucket)
-		tk.ss.setHWTFromRestartTs(streamId, bucket)
 		tk.addIndextoStream(cmd)
 		tk.startTimer(streamId, bucket)
 
@@ -1934,7 +1934,6 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 			streamId:  streamId,
 			bucket:    bucket,
 			restartTs: restartTs}
-		tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
 		logging.Debugf("Timekeeper::initiateRecovery StreamId %v "+
 			"RestartTs %v", streamId, restartTs)
 	} else {

@@ -199,6 +199,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketRepairStopCh[streamId][bucket] = nil
 	ss.streamBucketTimerStopCh[streamId][bucket] = make(StopChannel)
 	ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
+	ss.streamBucketRestartTsMap[streamId][bucket] = nil
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 
@@ -233,8 +234,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketRepairStopCh[streamId], bucket)
 	delete(ss.streamBucketTimerStopCh[streamId], bucket)
 	delete(ss.streamBucketLastPersistTime[streamId], bucket)
-
-	ss.streamBucketRestartTsMap[streamId][bucket] = nil
+	delete(ss.streamBucketRestartTsMap[streamId], bucket)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
@@ -264,6 +264,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketIndexCountMap, streamId)
 	delete(ss.streamBucketLastPersistTime, streamId)
 	delete(ss.streamBucketStatus, streamId)
+	delete(ss.streamBucketRestartTsMap, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
