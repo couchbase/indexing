@@ -269,7 +269,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	// Setup http server
 	addr := net.JoinHostPort("", idx.config["httpPort"].String())
-	logging.PeriodicProfile(logging.Trace, addr, "goroutine")
+	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
 	go func() {
 		if err := http.ListenAndServe(addr, nil); err != nil {
 			logging.Errorf("indexer:: Error Starting Http Server: %v", err)
@@ -1691,6 +1691,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 			idx.waitStreamRequestLock(reqLock)
 		retryloop:
 			for {
+
 				if !ValidateBucket(clustAddr, indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID}) {
 					logging.Errorf("Indexer::sendStreamUpdateForDropIndex \n\tBucket Not Found "+
 						"For Stream %v Bucket %v", streamId, indexInst.Defn.Bucket)
@@ -2635,6 +2636,12 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		common.CrashOnError(err)
 	}
 
+	// ready to process DDL
+	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_INDEXER_READY}
+	if err := idx.sendMsgToClusterMgr(msg); err != nil {
+		return err
+	}
+
 	//if there are no indexes, return from here
 	if len(idx.indexInstMap) == 0 {
 		return nil
@@ -2645,7 +2652,6 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 	}
 
 	return nil
-
 }
 
 func (idx *indexer) genIndexerId() {
@@ -3412,17 +3418,9 @@ func (idx *indexer) getIndexInstForBucket(bucket string) ([]common.IndexInstId, 
 func (idx *indexer) deleteIndexInstOnDeletedBucket(bucket string, streamId common.StreamId) []common.IndexInstId {
 
 	var instIdList []common.IndexInstId = nil
-	var remainingInst []common.IndexInstId = nil
 
 	if idx.enableManager {
 		if err := idx.updateMetaInfoForDeleteBucket(bucket, streamId); err != nil {
-			common.CrashOnError(err)
-		}
-
-		// Find the remaining inst after bucket deletion
-		var err error
-		remainingInst, err = idx.getIndexInstForBucket(bucket)
-		if err != nil {
 			common.CrashOnError(err)
 		}
 	}
@@ -3432,17 +3430,8 @@ func (idx *indexer) deleteIndexInstOnDeletedBucket(bucket string, streamId commo
 		if index.Defn.Bucket == bucket &&
 			(streamId == common.NIL_STREAM || index.Stream == streamId) {
 
-			found := false
-			for _, id := range remainingInst {
-				if index.InstId == id {
-					found = true
-				}
-			}
-
-			if !found {
-				instIdList = append(instIdList, index.InstId)
-				idx.stats.RemoveIndex(index.InstId)
-			}
+			instIdList = append(instIdList, index.InstId)
+			idx.stats.RemoveIndex(index.InstId)
 		}
 	}
 

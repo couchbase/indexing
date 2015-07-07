@@ -64,17 +64,19 @@ type snapshotWaiter struct {
 	ts        *common.TsVbuuid
 	cons      common.Consistency
 	idxInstId common.IndexInstId
+	expired   time.Time
 }
 
 func newSnapshotWaiter(idxId common.IndexInstId, ts *common.TsVbuuid,
 	cons common.Consistency,
-	ch chan interface{}) *snapshotWaiter {
+	ch chan interface{}, expired time.Time) *snapshotWaiter {
 
 	return &snapshotWaiter{
 		ts:        ts,
 		cons:      cons,
 		wch:       ch,
 		idxInstId: idxId,
+		expired:   expired,
 	}
 }
 
@@ -408,10 +410,17 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 	// the channel receiver needs to destroy snapshot when done
 	s.notifySnapshotCreation(is)
 
+	t := time.Now()
 	// Also notify any waiters for snapshots creation
 	var newWaiters []*snapshotWaiter
 	waiters := s.waitersMap[is.IndexInstId()]
 	for _, w := range waiters {
+		// Clean up expired requests from queue
+		if !w.expired.IsZero() && t.After(w.expired) {
+			w.Error(ErrScanTimedOut)
+			continue
+		}
+
 		if isSnapshotConsistent(is, w.cons, w.ts) {
 			w.Notify(CloneIndexSnapshot(is))
 			continue
@@ -665,7 +674,7 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	}
 	w := newSnapshotWaiter(
 		req.GetIndexId(), req.GetTS(), req.GetConsistency(),
-		req.GetReplyChannel())
+		req.GetReplyChannel(), req.GetExpiredTime())
 	if ws, ok := s.waitersMap[req.GetIndexId()]; ok {
 		s.waitersMap[req.idxInstId] = append(ws, w)
 	} else {

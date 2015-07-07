@@ -12,6 +12,7 @@ package indexer
 import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"time"
 )
 
 type MsgType int16
@@ -86,6 +87,7 @@ const (
 	CLUST_MGR_GET_LOCAL
 	CLUST_MGR_SET_LOCAL
 	CLUST_MGR_DEL_BUCKET
+	CLUST_MGR_INDEXER_READY
 
 	//CBQ_BRIDGE_SHUTDOWN
 	CBQ_BRIDGE_SHUTDOWN
@@ -277,6 +279,7 @@ func (m *MsgStreamInfo) String() string {
 type MsgUpdateBucketQueue struct {
 	bucketQueueMap BucketQueueMap
 	stats          *IndexerStats
+	bucketFilter   map[string]*common.TsVbuuid
 }
 
 func (m *MsgUpdateBucketQueue) GetMsgType() MsgType {
@@ -289,6 +292,10 @@ func (m *MsgUpdateBucketQueue) GetBucketQueueMap() BucketQueueMap {
 
 func (m *MsgUpdateBucketQueue) GetStatsObject() *IndexerStats {
 	return m.stats
+}
+
+func (m *MsgUpdateBucketQueue) GetBucketFilter() map[string]*common.TsVbuuid {
+	return m.bucketFilter
 }
 
 func (m *MsgUpdateBucketQueue) String() string {
@@ -896,9 +903,10 @@ func (m *MsgRollback) GetRollbackTs() *common.TsVbuuid {
 }
 
 type MsgIndexSnapRequest struct {
-	ts        *common.TsVbuuid
-	cons      common.Consistency
-	idxInstId common.IndexInstId
+	ts          *common.TsVbuuid
+	cons        common.Consistency
+	idxInstId   common.IndexInstId
+	expiredTime time.Time
 
 	// Send error or index snapshot
 	respch chan interface{}
@@ -914,6 +922,10 @@ func (m *MsgIndexSnapRequest) GetTS() *common.TsVbuuid {
 
 func (m *MsgIndexSnapRequest) GetConsistency() common.Consistency {
 	return m.cons
+}
+
+func (m *MsgIndexSnapRequest) GetExpiredTime() time.Time {
+	return m.expiredTime
 }
 
 func (m *MsgIndexSnapRequest) GetReplyChannel() chan interface{} {

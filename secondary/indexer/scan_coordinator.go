@@ -70,9 +70,10 @@ type ScanRequest struct {
 	Limit     int64
 	isPrimary bool
 
-	ScanId    uint64
-	TimeoutCh <-chan time.Time
-	CancelCh  <-chan interface{}
+	ScanId      uint64
+	ExpiredTime time.Time
+	TimeoutCh   <-chan time.Time
+	CancelCh    <-chan interface{}
 
 	LogPrefix string
 }
@@ -318,7 +319,9 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	cfg := s.config.Load()
 	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
+
 	if timeout != 0 {
+		r.ExpiredTime = time.Now().Add(timeout)
 		r.TimeoutCh = time.After(timeout)
 	}
 
@@ -522,10 +525,11 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 
 	snapResch := make(chan interface{}, 1)
 	snapReqMsg := &MsgIndexSnapRequest{
-		ts:        r.Ts,
-		cons:      *r.Consistency,
-		respch:    snapResch,
-		idxInstId: r.IndexInstId,
+		ts:          r.Ts,
+		cons:        *r.Consistency,
+		respch:      snapResch,
+		idxInstId:   r.IndexInstId,
+		expiredTime: r.ExpiredTime,
 	}
 
 	// Block wait until a ts is available for fullfilling the request

@@ -151,6 +151,7 @@ type IndexerStats struct {
 	memoryQuota    stats.Int64Val
 	memoryUsed     stats.Int64Val
 	needsRestart   stats.BoolVal
+	statsResponse  stats.TimingStat
 }
 
 func (s *IndexerStats) Init() {
@@ -160,6 +161,7 @@ func (s *IndexerStats) Init() {
 	s.memoryQuota.Init()
 	s.memoryUsed.Init()
 	s.needsRestart.Init()
+	s.statsResponse.Init()
 }
 
 func (s *IndexerStats) Reset() {
@@ -211,6 +213,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 	addStat("memory_quota", is.memoryQuota.Value())
 	addStat("memory_used", is.memoryUsed.Value())
 	addStat("needs_restart", is.needsRestart.Value())
+	addStat("timings/stats_response", is.statsResponse.Value())
 
 	for _, s := range is.indexes {
 		var scanLat, waitLat int64
@@ -380,8 +383,10 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("async") == "false" {
 			sync = true
 		}
-		s.tryUpdateStats(sync)
 		stats := s.stats.Get()
+		t0 := time.Now()
+		s.tryUpdateStats(sync)
+
 		if stats == nil {
 			w.WriteHeader(500)
 			w.Write([]byte("Indexer not ready"))
@@ -389,6 +394,7 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 			bytes, _ := stats.MarshalJSON()
 			w.WriteHeader(200)
 			w.Write(bytes)
+			stats.statsResponse.Put(time.Since(t0))
 		}
 	} else {
 		w.WriteHeader(400)

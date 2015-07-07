@@ -1916,6 +1916,9 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 	if tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_DONE {
 
 		restartTs := tk.ss.computeRestartTs(streamId, bucket)
+		//adjust for non-snap aligned ts
+		tk.ss.adjustNonSnapAlignedVbs(restartTs, streamId, bucket)
+
 		tk.stopTimer(streamId, bucket)
 		tk.ss.cleanupBucketFromStream(streamId, bucket)
 
@@ -2061,7 +2064,14 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		resp := kvresp.(*MsgKVStreamRepair)
 
-		resp.restartTs = tk.ss.computeRestartTs(streamId, bucket)
+		//for stream repair, use the HWT. If there has been a rollback, it will
+		//be detected as response of the MTR. Without rollback, even if a vbucket
+		//has moved to a new node, using HWT is sufficient.
+		resp.restartTs = tk.ss.streamBucketHWTMap[streamId][bucket].Copy()
+
+		//adjust for non-snap aligned ts
+		tk.ss.adjustNonSnapAlignedVbs(resp.restartTs, streamId, bucket)
+
 		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
 
 		tk.supvRespch <- resp

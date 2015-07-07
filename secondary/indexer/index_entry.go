@@ -12,6 +12,7 @@ import (
 var (
 	ErrSecKeyNil     = errors.New("Secondary key array is empty")
 	ErrSecKeyTooLong = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", MAX_SEC_KEY_LEN))
+	ErrDocIdTooLong  = errors.New(fmt.Sprintf("DocID is too long (>%d)", MAX_DOCID_LEN))
 )
 
 // Special index keys
@@ -59,6 +60,10 @@ type IndexKey interface {
 type primaryIndexEntry []byte
 
 func NewPrimaryIndexEntry(docid []byte) (*primaryIndexEntry, error) {
+	if isDocIdLarge(docid) {
+		return nil, ErrDocIdTooLong
+	}
+
 	buf := append([]byte(nil), docid...)
 	e := primaryIndexEntry(buf)
 	return &e, nil
@@ -97,6 +102,10 @@ func NewSecondaryIndexEntry(key []byte, docid []byte) (*secondaryIndexEntry, err
 
 	if isNilJsonKey(key) {
 		return nil, ErrSecKeyNil
+	}
+
+	if isSecKeyLarge(key) {
+		return nil, ErrSecKeyTooLong
 	}
 
 	poolBuf := encBufPool.Get()
@@ -217,12 +226,12 @@ func (k *primaryKey) String() string {
 type secondaryKey []byte
 
 func NewSecondaryKey(key []byte) (IndexKey, error) {
-	if len(key) > MAX_SEC_KEY_LEN {
-		return nil, ErrSecKeyTooLong
-	}
-
 	if isNilJsonKey(key) {
 		return &NilIndexKey{}, nil
+	}
+
+	if isSecKeyLarge(key) {
+		return nil, ErrSecKeyTooLong
 	}
 
 	var err error
@@ -283,4 +292,12 @@ func (k *secondaryKey) String() string {
 
 func isNilJsonKey(k []byte) bool {
 	return bytes.Equal(NilJsonKey, k) || len(k) == 0
+}
+
+func isSecKeyLarge(k []byte) bool {
+	return len(k) > MAX_SEC_KEY_LEN
+}
+
+func isDocIdLarge(k []byte) bool {
+	return len(k) > MAX_DOCID_LEN
 }

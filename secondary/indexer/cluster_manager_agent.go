@@ -138,6 +138,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 
 	switch cmd.GetMsgType() {
 
+	case CLUST_MGR_INDEXER_READY:
+		c.handleIndexerReady(cmd)
+
 	case CLUST_MGR_UPDATE_TOPOLOGY_FOR_INDEX:
 		c.handleUpdateTopologyForIndex(cmd)
 
@@ -289,6 +292,16 @@ func (c *clustMgrAgent) handleDeleteBucket(cmd Message) {
 	streamId := cmd.(*MsgClustMgrUpdate).GetStreamId()
 
 	err := c.mgr.DeleteIndexForBucket(bucket, streamId)
+	common.CrashOnError(err)
+
+	c.supvCmdch <- &MsgSuccess{}
+}
+
+func (c *clustMgrAgent) handleIndexerReady(cmd Message) {
+
+	logging.Debugf("ClustMgr:handleIndexerReady %v", cmd)
+
+	err := c.mgr.NotifyIndexerReady()
 	common.CrashOnError(err)
 
 	c.supvCmdch <- &MsgSuccess{}

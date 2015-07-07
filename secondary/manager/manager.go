@@ -434,7 +434,13 @@ func (m *IndexManager) UpdateIndexInstance(bucket string, defnId common.IndexDef
 func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.StreamId) error {
 
 	logging.Debugf("IndexManager.DeleteIndexForBucket(): making request for deleting index for bucket")
-	return m.requestServer.MakeRequest(client.OPCODE_DELETE_BUCKET, bucket, []byte{byte(streamId)})
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_DELETE_BUCKET, bucket, []byte{byte(streamId)})
+}
+
+func (m *IndexManager) NotifyIndexerReady() error {
+
+	logging.Debugf("IndexManager.NotifyIndexerReady(): making request to notify indexer is ready ")
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_INDEXER_READY, "", []byte{})
 }
 
 //
