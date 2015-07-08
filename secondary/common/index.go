@@ -283,3 +283,18 @@ const (
 	DISK_SNAP
 	INMEM_SNAP
 )
+
+func (s IndexSnapType) String() string {
+
+	switch s {
+	case NO_SNAP:
+		return "NO_SNAP"
+	case DISK_SNAP:
+		return "DISK_SNAP"
+	case INMEM_SNAP:
+		return "INMEM_SNAP"
+	default:
+		return "INVALID_SNAP_TYPE"
+	}
+
+}
