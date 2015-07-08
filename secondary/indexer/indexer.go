@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	"math/rand"
 	"net"
 	"net/http"
@@ -2094,9 +2095,21 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v \n\t"+
-						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
-					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
+
+					//If projector returns TopicMissing/GenServerClosed, AddInstance
+					//cannot succeed. This needs to be aborted so that stream lock is
+					//released and MTR can proceed to repair the Topic.
+					if respErr.cause.Error() == common.ErrorClosed.Error() ||
+						respErr.cause.Error() == projClient.ErrorTopicMissing.Error() {
+						logging.Warnf("Indexer::handleInitialBuildDone Stream %v Bucket %v \n\t"+
+							"Error from Projector %v. Aborting.", streamId, bucket, respErr.cause)
+						break retryloop
+					} else {
+
+						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v \n\t"+
+							"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
+					}
 				}
 			}
 		}
