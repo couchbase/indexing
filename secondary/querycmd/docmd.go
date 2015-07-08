@@ -63,6 +63,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	var fields, bindexes string
 	var inclusion uint
 	var equal, low, high string
+	var useSessionCons bool
 
 	cmdOptions := &Command{Consistency: c.AnyConsistency}
 	fset := flag.NewFlagSet("cmd", flag.ExitOnError)
@@ -87,6 +88,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.UintVar(&inclusion, "incl", 0, "Range: 0|1|2|3")
 	fset.Int64Var(&cmdOptions.Limit, "limit", 10, "Row limit")
 	fset.BoolVar(&cmdOptions.Help, "h", false, "print help")
+	fset.BoolVar(&useSessionCons, "consistency", false, "Use session consistency")
 	// options for setting configuration
 	fset.StringVar(&cmdOptions.ConfigKey, "ckey", "", "Config key")
 	fset.StringVar(&cmdOptions.ConfigVal, "cval", "", "Config value")
@@ -98,6 +100,10 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 
 	if err := fset.Parse(arguments); err != nil {
 		return nil, nil, fset, err
+	}
+
+	if useSessionCons {
+		cmdOptions.Consistency = c.SessionConsistency
 	}
 
 	// if server is not specified, try guessing

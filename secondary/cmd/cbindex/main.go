@@ -17,6 +17,7 @@ func usage(fset *flag.FlagSet) {
 - Scan
     cbindex -type=scanAll -bucket default -index abcd
     cbindex -type=scanAll -index abcd -limit 0
+    cbindex -type=scanAll -index abcd -limit 0 -consistency true
     cbindex -type=scan -index state -low='["Ar"]' -high='["Co"]' -buffersz=300
     cbindex -type=scan -index name_state_age -low='["Ar"]' -high='["Arlette", "N"]'
     cbindex -type scan -index '#primary' -equal='["Adena_54605074"]'
