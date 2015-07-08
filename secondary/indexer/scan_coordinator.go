@@ -152,6 +152,13 @@ func (r ScanRequest) String() string {
 	return str
 }
 
+func (r *ScanRequest) Done() {
+	// If the requested DefnID in invalid, stats object will not be populated
+	if r.Stats != nil {
+		r.Stats.numCompletedRequests.Add(1)
+	}
+}
+
 type ScanCoordinator interface {
 }
 
@@ -635,7 +642,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() {
 		s.handleError(req.LogPrefix, w.Done())
-		req.Stats.numCompletedRequests.Add(1)
+		req.Done()
 	}()
 
 	logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
