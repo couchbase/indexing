@@ -91,7 +91,7 @@ func main() {
 		totalRows += result.Rows
 	}
 	res.Rows = totalRows
-	res.Duration = dur.Seconds() - 4 // account for warmup
+	res.Duration = dur.Seconds() - res.WarmupDuration
 
 	rate := int(float64(totalRows) / res.Duration)
 

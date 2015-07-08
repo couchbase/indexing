@@ -48,9 +48,10 @@ type ScanResult struct {
 }
 
 type Result struct {
-	ScanResults []*ScanResult
-	Rows        uint64
-	Duration    float64
+	ScanResults    []*ScanResult
+	Rows           uint64
+	Duration       float64
+	WarmupDuration float64
 }
 
 func parseConfig(filepath string) (*Config, error) {
