@@ -302,7 +302,12 @@ func HandleCommand(
 	case "scanAll":
 		var state c.IndexState
 
-		index, _ := GetIndex(client, bucket, iname)
+		index, found := GetIndex(client, bucket, iname)
+		if !found {
+			fmt.Fprintln(w, "Index not found")
+			os.Exit(1)
+		}
+
 		defnID := uint64(index.Definition.DefnId)
 		fmt.Fprintln(w, "ScanAll index:")
 		_, err = WaitUntilIndexState(

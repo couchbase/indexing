@@ -35,7 +35,7 @@ func main() {
 	flag.Parse()
 
 	logging.SetLogLevel(logging.Level(*logLevel))
-	fmt.Println("Log Level = %v", *logLevel)
+	fmt.Println("Log Level =", *logLevel)
 
 	if *help {
 		flag.PrintDefaults()
