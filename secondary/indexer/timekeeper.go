@@ -232,11 +232,11 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 
 	//fresh start or recovery
 	case STREAM_INACTIVE, STREAM_PREPARE_DONE:
+		tk.ss.initBucketInStream(streamId, bucket)
 		if restartTs != nil {
 			tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
+			tk.ss.setHWTFromRestartTs(streamId, bucket)
 		}
-		tk.ss.initBucketInStream(streamId, bucket)
-		tk.ss.setHWTFromRestartTs(streamId, bucket)
 		tk.addIndextoStream(cmd)
 		tk.startTimer(streamId, bucket)
 
@@ -754,10 +754,16 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 	logging.Debugf("Timekeeper::handleFlushStateChange \n\t Received Flush State Change "+
 		"for Bucket: %v StreamId: %v Type: %v", bucket, streamId, t)
 
-	//TODO Check if stream is valid
-
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
+
+	state := tk.ss.streamBucketStatus[streamId][bucket]
+
+	if state == STREAM_INACTIVE {
+		logging.Debugf("Timekeeper::handleFlushStateChange Ignore Flush State Change "+
+			"for Bucket: %v StreamId: %v Type: %v State: %v", bucket, streamId, t, state)
+		return
+	}
 
 	switch t {
 
@@ -1622,9 +1628,6 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 		return false
 	}
 
-	tsVbuuidHWT := tk.ss.streamBucketHWTMap[streamId][bucket]
-	tsHWT := getSeqTsFromTsVbuuid(tsVbuuidHWT)
-
 	//if there are pending TS for this bucket, send New TS
 	bucketTsListMap := tk.ss.streamBucketTsListMap[streamId]
 	tsList := bucketTsListMap[bucket]
@@ -1637,6 +1640,10 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 
 		if tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
 			tk.ss.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_DONE {
+
+			tsVbuuidHWT := tk.ss.streamBucketHWTMap[streamId][bucket]
+			tsHWT := getSeqTsFromTsVbuuid(tsVbuuidHWT)
+
 			//if HWT is greater than flush TS, this TS can be flush
 			if tsHWT.GreaterThanEqual(ts) {
 				logging.LazyDebug(func() string {
@@ -1927,7 +1934,6 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 			streamId:  streamId,
 			bucket:    bucket,
 			restartTs: restartTs}
-		tk.ss.streamBucketRestartTsMap[streamId][bucket] = restartTs
 		logging.Debugf("Timekeeper::initiateRecovery StreamId %v "+
 			"RestartTs %v", streamId, restartTs)
 	} else {

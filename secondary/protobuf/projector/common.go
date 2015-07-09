@@ -371,8 +371,8 @@ func (ts *TsVbuuid) SeqnoFor(vbno uint16) (uint64, error) {
 
 func (ts *TsVbuuid) Repr() string {
 	vbnos := ts.GetVbnos()
-	s := fmt.Sprintf("pool: %v, bucket: %v, vbuckets: %v -\n",
-		ts.GetPool(), ts.GetBucket(), len(vbnos))
+	s := fmt.Sprintf("bucket: %v, vbuckets: %v -\n",
+		ts.GetBucket(), len(vbnos))
 	seqnos, vbuuids := ts.GetSeqnos(), ts.GetVbuuids()
 	snapshots := ts.GetSnapshots()
 	s += fmt.Sprintf("    {vbno, vbuuid, seqno, snapshot-start, snapshot-end}\n")

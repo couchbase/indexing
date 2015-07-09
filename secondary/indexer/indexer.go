@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	"math/rand"
 	"net"
 	"net/http"
@@ -1243,6 +1244,12 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
 
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
+		logging.Debugf("Indexer::handleInitBuildDoneAck Skip InitBuildDoneAck %v Inactive Bucket %v",
+			streamId, bucket)
+		return
+	}
+
 	logging.Debugf("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v",
 		streamId, bucket)
 
@@ -1275,6 +1282,12 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 
 	case common.INIT_STREAM:
 		delete(idx.streamBucketRequestStopCh[streamId], bucket)
+
+		if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
+			logging.Debugf("Indexer::handleMergeStreamAck Skip MergeStreamAck %v Inactive Bucket %v",
+				streamId, bucket)
+			return
+		}
 
 		idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
@@ -1310,7 +1323,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 		}
 
 	default:
-		logging.Debugf("Indexer::handleMergeStreamAck Unexpected Initial Build Ack Done "+
+		logging.Debugf("Indexer::handleMergeStreamAck Unexpected Merge Stream Ack "+
 			"Received for Stream %v Bucket %v", streamId, bucket)
 		common.CrashOnError(errors.New("Unexpected Merge Stream Ack"))
 	}
@@ -1356,9 +1369,13 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	//TODO cleanup streambucket internal maps
-
 	idx.stopBucketStream(streamId, bucket)
+
+	//cleanup index data for all indexes in the bucket
+	for _, instId := range instIdList {
+		index := idx.indexInstMap[instId]
+		idx.cleanupIndexData(index, nil)
+	}
 
 	idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
@@ -1382,11 +1399,13 @@ func (idx *indexer) cleanupIndexData(indexInst common.IndexInst,
 	msgUpdateIndexPartnMap := &MsgUpdatePartnMap{indexPartnMap: idx.indexPartnMap}
 
 	if err := idx.distributeIndexMapsToWorkers(msgUpdateIndexInstMap, msgUpdateIndexPartnMap); err != nil {
-		clientCh <- &MsgError{
-			err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
-				severity: FATAL,
-				cause:    err,
-				category: INDEXER}}
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
+					severity: FATAL,
+					cause:    err,
+					category: INDEXER}}
+		}
 		common.CrashOnError(err)
 	}
 
@@ -1951,6 +1970,12 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
+		logging.Debugf("Indexer::handleInitialBuildDone Skip InitBuildDone %v Inactive Bucket %v",
+			streamId, bucket)
+		return
+	}
+
 	logging.Debugf("Indexer::handleInitialBuildDone Bucket: %v Stream: %v", bucket, streamId)
 
 	//MAINT_STREAM should already be running for this bucket,
@@ -1978,6 +2003,12 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 			instIdList = append(instIdList, index.InstId)
 			bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
 		}
+	}
+
+	if len(instIdList) == 0 {
+		logging.Debugf("Indexer::handleInitialBuildDone Empty IndexList %v %v. Nothing to do.",
+			streamId, bucket)
+		return
 	}
 
 	//update the IndexInstMap
@@ -2064,9 +2095,21 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v \n\t"+
-						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
-					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
+
+					//If projector returns TopicMissing/GenServerClosed, AddInstance
+					//cannot succeed. This needs to be aborted so that stream lock is
+					//released and MTR can proceed to repair the Topic.
+					if respErr.cause.Error() == common.ErrorClosed.Error() ||
+						respErr.cause.Error() == projClient.ErrorTopicMissing.Error() {
+						logging.Warnf("Indexer::handleInitialBuildDone Stream %v Bucket %v \n\t"+
+							"Error from Projector %v. Aborting.", streamId, bucket, respErr.cause)
+						break retryloop
+					} else {
+
+						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v \n\t"+
+							"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
+						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
+					}
 				}
 			}
 		}
@@ -2078,6 +2121,12 @@ func (idx *indexer) handleMergeStream(msg Message) {
 
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
+
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
+		logging.Debugf("Indexer::handleMergeStream Skip MergeStream %v Inactive Bucket %v",
+			streamId, bucket)
+		return
+	}
 
 	//MAINT_STREAM should already be running for this bucket,
 	//as first index gets added to MAINT_STREAM always

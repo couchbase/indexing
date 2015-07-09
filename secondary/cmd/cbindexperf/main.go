@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/couchbase/cbauth"
+	"github.com/couchbase/indexing/secondary/logging"
 	"io"
 	"os"
 	"runtime"
@@ -29,8 +30,12 @@ func main() {
 	statsfile := flag.String("statsfile", "", "Periodic statistics report file")
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
 	memprofile := flag.String("memprofile", "", "write mem profile to file")
+	logLevel := flag.String("logLevel", "error", "Log Level")
 
 	flag.Parse()
+
+	logging.SetLogLevel(logging.Level(*logLevel))
+	fmt.Println("Log Level = %v", *logLevel)
 
 	if *help {
 		flag.PrintDefaults()
