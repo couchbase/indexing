@@ -1229,9 +1229,13 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
 
-	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
-		logging.Debugf("Indexer::handleInitBuildDoneAck Skip InitBuildDoneAck %v Inactive Bucket %v",
-			streamId, bucket)
+	//skip processing initial build done ack for inactive or recovery streams.
+	//the streams would be restarted and then build done would get recomputed.
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
+		logging.Debugf("Indexer::handleInitBuildDoneAck Skip InitBuildDoneAck %v %v %v",
+			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 		return
 	}
 
@@ -1268,9 +1272,12 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 	case common.INIT_STREAM:
 		delete(idx.streamBucketRequestStopCh[streamId], bucket)
 
-		if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
-			logging.Debugf("Indexer::handleMergeStreamAck Skip MergeStreamAck %v Inactive Bucket %v",
-				streamId, bucket)
+		//skip processing merge ack for inactive or recovery streams.
+		if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
+			idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
+			idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
+			logging.Debugf("Indexer::handleMergeStreamAck Skip MergeStreamAck %v %v %v",
+				streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 			return
 		}
 
@@ -1974,9 +1981,13 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 
-	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
-		logging.Debugf("Indexer::handleInitialBuildDone Skip InitBuildDone %v Inactive Bucket %v",
-			streamId, bucket)
+	//skip processing initial build done for inactive or recovery streams.
+	//the streams would be restarted and then build done would get recomputed.
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
+		logging.Debugf("Indexer::handleInitialBuildDone Skip InitBuildDone %v %v %v",
+			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 		return
 	}
 
@@ -2126,9 +2137,12 @@ func (idx *indexer) handleMergeStream(msg Message) {
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 
-	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
-		logging.Debugf("Indexer::handleMergeStream Skip MergeStream %v Inactive Bucket %v",
-			streamId, bucket)
+	//skip processing stream merge for inactive or recovery streams.
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
+		logging.Debugf("Indexer::handleMergeStream Skip MergeStream %v %v %v",
+			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 		return
 	}
 
