@@ -1210,6 +1210,8 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	//during recovery, if all indexes of a bucket gets dropped,
 	//the stream needs to be stopped for that bucket.
 	if !idx.checkBucketExistsInStream(bucket, streamId, false) {
+		logging.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v. No Index Found."+
+			"Cleaning up.", streamId, bucket)
 		idx.stopBucketStream(streamId, bucket)
 		idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 	} else {
@@ -1364,9 +1366,25 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	logging.Debugf("Indexer::handleBucketNotFound StreamId %v Bucket %v",
 		streamId, bucket)
 
+	//If stream is inactive, no cleanup is required.
+	//If stream is prepare_recovery, recovery will take care of
+	//validating the bucket and taking corrective action.
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY {
+		logging.Debugf("Indexer::handleBucketNotFound Skip %v %v %v",
+			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
+		return
+	}
+
 	// delete index inst on the bucket from metadata repository and
 	// return the list of deleted inst
 	instIdList := idx.deleteIndexInstOnDeletedBucket(bucket, streamId)
+
+	if len(instIdList) == 0 {
+		logging.Debugf("Indexer::handleBucketNotFound Empty IndexList %v %v. Nothing to do.",
+			streamId, bucket)
+		return
+	}
 
 	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
 	logging.Debugf("Indexer::handleBucketNotFound Updated Index State to DELETED %v",
@@ -1387,6 +1405,9 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	}
 
 	idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+
+	logging.Debugf("Indexer::handleBucketNotFound %v %v %v",
+		streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 
 }
 
