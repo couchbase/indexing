@@ -617,9 +617,6 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
-	case INDEXER_ROLLBACK:
-		idx.handleRollback(msg)
-
 	case CONFIG_SETTINGS_UPDATE:
 		cfgUpdate := msg.(*MsgConfigUpdate)
 		newConfig := cfgUpdate.GetConfig()
@@ -1085,29 +1082,6 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	} else {
 		idx.cleanupIndex(indexInst, clientCh)
 	}
-
-}
-
-func (idx *indexer) handleRollback(msg Message) {
-
-	bucket := msg.(*MsgRollback).GetBucket()
-	streamId := msg.(*MsgRollback).GetStreamId()
-	rollbackTs := msg.(*MsgRollback).GetRollbackTs()
-
-	logging.Debugf("Indexer::handleRollback StreamId %v Bucket %v",
-		streamId, bucket)
-
-	if _, ok := idx.streamBucketRollbackTs[streamId]; ok {
-		idx.streamBucketRollbackTs[streamId][bucket] = rollbackTs
-	} else {
-		bucketRollbackTs := make(BucketRollbackTs)
-		bucketRollbackTs[bucket] = rollbackTs
-		idx.streamBucketRollbackTs[streamId] = bucketRollbackTs
-	}
-
-	idx.streamBucketStatus[streamId][bucket] = STREAM_RECOVERY
-
-	idx.stopBucketStream(streamId, bucket)
 
 }
 
