@@ -1113,6 +1113,17 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	state := tk.ss.streamBucketStatus[streamId][bucket]
+
+	//ignore build done ack for Inactive and Recovery phase. For recovery, stream
+	//will get reopen and build done will get recomputed.
+	if state == STREAM_INACTIVE || state == STREAM_PREPARE_DONE ||
+		state == STREAM_PREPARE_RECOVERY {
+		logging.Debugf("Timekeeper::handleInitBuildDoneAck Ignore BuildDoneAck "+
+			"for Bucket: %v StreamId: %v State: %v", bucket, streamId, state)
+		return
+	}
+
 	if streamId == common.INIT_STREAM {
 		for _, buildInfo := range tk.indexBuildInfo {
 			if buildInfo.indexInst.Defn.Bucket == bucket {
