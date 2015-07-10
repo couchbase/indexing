@@ -633,7 +633,6 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 		//if seqno has incremented, update it
 		if seq > ts.Seqnos[i] {
 			ts.Seqnos[i] = seq
-			ts.Vbuuids[i] = hwt.Vbuuids[i]
 			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
 		}
 		//if snapEnd is greater than current hwt snapEnd
@@ -719,6 +718,11 @@ func (ss *StreamState) computeTsChangeVec(streamId common.StreamId,
 			//if currentTs has seqno greater than last flushed
 			if s > lts.Seqnos[i] {
 				changeVec[i] = true
+				noChange = false
+			}
+			//if vbuuid has changed, consider that as a change as well.
+			//new snapshot is required for stale=false
+			if ts.Vbuuids[i] != lts.Vbuuids[i] {
 				noChange = false
 			}
 		}

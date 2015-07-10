@@ -710,18 +710,24 @@ type DcpEvent struct {
 	VBucket    uint16                // VBucket this event applies to
 	Opaque     uint16                // 16 MSB of opaque
 	VBuuid     uint64                // This field is set by downstream
-	Flags      uint32                // Item flags
-	Expiry     uint32                // Item expiration time
 	Key, Value []byte                // Item key/value
 	OldValue   []byte                // TODO: TBD: old document value
 	Cas        uint64                // CAS value of the item
-	// sequence number of the mutation, also doubles as rollback-seqno.
-	Seqno        uint64
-	SnapstartSeq uint64       // start sequence number of this snapshot
-	SnapendSeq   uint64       // End sequence number of the snapshot
-	SnapshotType uint32       // 0: disk 1: memory
-	FailoverLog  *FailoverLog // Failover log containing vvuid and sequnce number
-	Error        error        // Error value in case of a failure
+	// meta fields
+	Seqno uint64 // seqno. of the mutation, doubles as rollback-seqno
+	// https://issues.couchbase.com/browse/MB-15333,
+	RevSeqno uint64
+	Flags    uint32 // Item flags
+	Expiry   uint32 // Item expiration time
+	LockTime uint32
+	Nru      byte
+	// snapshots
+	SnapstartSeq uint64 // start sequence number of this snapshot
+	SnapendSeq   uint64 // End sequence number of the snapshot
+	SnapshotType uint32 // 0: disk 1: memory
+	// failoverlog
+	FailoverLog *FailoverLog // Failover log containing vvuid and sequnce number
+	Error       error        // Error value in case of a failure
 }
 
 func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
@@ -739,15 +745,20 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
 
 	if len(rq.Extras) >= tapMutationExtraLen {
 		event.Seqno = binary.BigEndian.Uint64(rq.Extras[:8])
-	}
+		switch event.Opcode {
+		case transport.DCP_MUTATION:
+			event.RevSeqno = binary.BigEndian.Uint64(rq.Extras[8:])
+			event.Flags = binary.BigEndian.Uint32(rq.Extras[16:])
+			event.Expiry = binary.BigEndian.Uint32(rq.Extras[20:])
+			event.LockTime = binary.BigEndian.Uint32(rq.Extras[24:])
+			event.Nru = rq.Extras[30]
 
-	if len(rq.Extras) >= tapMutationExtraLen &&
-		event.Opcode == transport.DCP_MUTATION ||
-		event.Opcode == transport.DCP_DELETION ||
-		event.Opcode == transport.DCP_EXPIRATION {
+		case transport.DCP_DELETION:
+			event.RevSeqno = binary.BigEndian.Uint64(rq.Extras[8:])
 
-		event.Flags = binary.BigEndian.Uint32(rq.Extras[8:])
-		event.Expiry = binary.BigEndian.Uint32(rq.Extras[12:])
+		case transport.DCP_EXPIRATION:
+			event.RevSeqno = binary.BigEndian.Uint64(rq.Extras[8:])
+		}
 
 	} else if len(rq.Extras) >= tapMutationExtraLen &&
 		event.Opcode == transport.DCP_SNAPSHOT {

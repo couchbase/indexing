@@ -24,15 +24,6 @@ func init() {
 }
 
 func addDBSbucket(cluster, pooln, bucketn string) (err error) {
-	dcp_buckets_seqnos.rw.Lock()
-	defer func() {
-		dcp_buckets_seqnos.rw.Unlock()
-		// if there is an error while building the kvfeeds, cleanup!
-		if err != nil {
-			delDBSbucket(bucketn)
-		}
-	}()
-
 	var bucket *couchbase.Bucket
 
 	bucket, err = ConnectBucket(cluster, pooln, bucketn)
@@ -124,22 +115,23 @@ func BucketSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error)
 		}
 	}()
 
-	dcp_buckets_seqnos.rw.RLock()
-	bucket, ok := dcp_buckets_seqnos.buckets[bucketn]
-	kvfeeds, ok := dcp_buckets_seqnos.feeds[bucketn]
-	dcp_buckets_seqnos.rw.RUnlock()
+	var kvfeeds map[string]*couchbase.DcpFeed
 
-	if !ok { // no {bucket,kvfeeds} found, create!
-		delDBSbucket(bucketn)
-		if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
-			return nil, err
-		}
-		func() {
-			dcp_buckets_seqnos.rw.RLock()
-			defer dcp_buckets_seqnos.rw.RUnlock()
-			bucket = dcp_buckets_seqnos.buckets[bucketn]
+	kvfeeds, err = func() (map[string]*couchbase.DcpFeed, error) {
+		dcp_buckets_seqnos.rw.Lock()
+		defer dcp_buckets_seqnos.rw.Unlock()
+
+		kvfeeds, ok := dcp_buckets_seqnos.feeds[bucketn]
+		if !ok { // no {bucket,kvfeeds} found, create!
+			if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
+				return nil, err
+			}
 			kvfeeds = dcp_buckets_seqnos.feeds[bucketn]
-		}()
+		}
+		return kvfeeds, nil
+	}()
+	if err != nil {
+		return nil, err
 	}
 
 	var kv_seqnos map[uint16]uint64
@@ -185,13 +177,20 @@ func pollForDeletedBuckets() {
 		time.Sleep(10 * time.Second)
 		todels := []string{}
 		func() {
-			dcp_buckets_seqnos.rw.RLock()
-			defer dcp_buckets_seqnos.rw.RUnlock()
+			dcp_buckets_seqnos.rw.Lock()
+			defer dcp_buckets_seqnos.rw.Unlock()
 			for bucketn, bucket := range dcp_buckets_seqnos.buckets {
 				if bucket.Refresh() != nil {
 					// lazy detect bucket deletes
 					todels = append(todels, bucketn)
-				} else if m, err := bucket.GetVBmap(nil); err != nil {
+				}
+			}
+		}()
+		func() {
+			dcp_buckets_seqnos.rw.RLock()
+			defer dcp_buckets_seqnos.rw.RUnlock()
+			for bucketn, bucket := range dcp_buckets_seqnos.buckets {
+				if m, err := bucket.GetVBmap(nil); err != nil {
 					// idle detect failures.
 					todels = append(todels, bucketn)
 				} else if len(m) != len(dcp_buckets_seqnos.feeds[bucketn]) {

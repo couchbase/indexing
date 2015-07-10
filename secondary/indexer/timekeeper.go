@@ -867,6 +867,13 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 		// Always use the vbuuid of the last StreamBegin
 		ts := bucketHWTMap[meta.bucket]
 		ts.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+
+		// New TS needs to be generated for vbuuid change as stale=false scans
+		// can only succeed if all vbuuids are latest. Also if there are no docs
+		// in a vbucket and its stream begin arrives later than all mutations,
+		// there will be no TS with that vbuuid.
+		tk.ss.streamBucketNewTsReqdMap[streamId][meta.bucket] = true
+
 		tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_BEGIN)
 
 		count := tk.ss.getVbRefCount(streamId, meta.bucket, meta.vbucket)

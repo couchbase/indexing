@@ -13,7 +13,9 @@ import (
 
 var (
 	defaultLatencyBuckets = []int64{
-		500, 1000, 10000, 200000, 500000, 800000,
+		500, 1000, 10000, 100000, 500000, 1000000, 5000000, 10000000, 50000000,
+		100000000, 300000000, 500000000, 1000000000, 2000000000, 3000000000,
+		5000000000, 10000000000,
 	}
 )
 
@@ -135,6 +137,7 @@ func ResultAggregator(ch chan *JobResult, sw io.Writer, wg *sync.WaitGroup) {
 }
 
 func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error) {
+	t0 := time.Now()
 	var result Result
 
 	var clients []*qclient.GsiClient
@@ -167,6 +170,7 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 
 		defer c.Close()
 		clients[i] = c
+
 	}
 
 	jobQ = make(chan *Job, cfg.Concurrency*1000)
@@ -207,18 +211,20 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		result.ScanResults = append(result.ScanResults, res)
 	}
 
+	// warming up GsiClient
+	for _, client := range clients {
+		for _, spec := range cfg.ScanSpecs {
+			job := &Job{spec: spec, result: nil}
+			RunJob(client, job, nil)
+			break
+		}
+	}
+
+	fmt.Println("GsiClients warmed up ...")
+	result.WarmupDuration = float64(time.Since(t0).Nanoseconds()) / float64(time.Second)
+
 	// Round robin scheduling of jobs
 	var allFinished bool
-
-	// warming up GsiClient
-	for _, spec := range cfg.ScanSpecs {
-		jobQ <- &Job{spec: spec, result: nil}
-		time.Sleep(3 * time.Second)
-		jobQ <- &Job{spec: spec, result: nil}
-		time.Sleep(1 * time.Second)
-		break
-	}
-	fmt.Println("GsiClient warmed up ...")
 
 loop:
 	for {

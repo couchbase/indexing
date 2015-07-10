@@ -197,24 +197,25 @@ func (ie *IndexEvaluator) TransformRoute(
 	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
 	instn := ie.instance
 
-	where, err := ie.wherePredicate(m.Value)
+	meta := dcpEvent2Meta(m)
+	where, err := ie.wherePredicate(m.Value, meta)
 	if err != nil {
 		return err
 	}
 
 	if where && len(m.Value) > 0 { // project new secondary key
-		if npkey, err = ie.partitionKey(m.Value); err != nil {
+		if npkey, err = ie.partitionKey(m.Value, meta); err != nil {
 			return err
 		}
-		if nkey, err = ie.evaluate(m.Key, m.Value); err != nil {
+		if nkey, err = ie.evaluate(m.Key, m.Value, meta); err != nil {
 			return err
 		}
 	}
 	if len(m.OldValue) > 0 { // project old secondary key
-		if opkey, err = ie.partitionKey(m.OldValue); err != nil {
+		if opkey, err = ie.partitionKey(m.OldValue, meta); err != nil {
 			return err
 		}
-		if okey, err = ie.evaluate(m.Key, m.OldValue); err != nil {
+		if okey, err = ie.evaluate(m.Key, m.OldValue, meta); err != nil {
 			return err
 		}
 	}
@@ -280,7 +281,9 @@ func (ie *IndexEvaluator) TransformRoute(
 	return nil
 }
 
-func (ie *IndexEvaluator) evaluate(docid, doc []byte) ([]byte, error) {
+func (ie *IndexEvaluator) evaluate(
+	docid, doc []byte, meta map[string]interface{}) ([]byte, error) {
+
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // primary index supported !!
 		return []byte(`["` + string(docid) + `"]`), nil
@@ -290,12 +293,14 @@ func (ie *IndexEvaluator) evaluate(docid, doc []byte) ([]byte, error) {
 	switch exprType {
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
-		return N1QLTransform(docid, doc, ie.skExprs)
+		return N1QLTransform(docid, doc, ie.skExprs, meta)
 	}
 	return nil, nil
 }
 
-func (ie *IndexEvaluator) partitionKey(doc []byte) ([]byte, error) {
+func (ie *IndexEvaluator) partitionKey(
+	doc []byte, meta map[string]interface{}) ([]byte, error) {
+
 	defn := ie.instance.GetDefinition()
 	if defn.GetIsPrimary() { // TODO: strategy for primary index ???
 		return nil, nil
@@ -307,12 +312,14 @@ func (ie *IndexEvaluator) partitionKey(doc []byte) ([]byte, error) {
 	switch exprType {
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
-		return N1QLTransform(nil, doc, []interface{}{ie.pkExpr})
+		return N1QLTransform(nil, doc, []interface{}{ie.pkExpr}, meta)
 	}
 	return nil, nil
 }
 
-func (ie *IndexEvaluator) wherePredicate(doc []byte) (bool, error) {
+func (ie *IndexEvaluator) wherePredicate(
+	doc []byte, meta map[string]interface{}) (bool, error) {
+
 	// if where predicate is not supplied - always evaluate to `true`
 	if ie.whExpr == nil {
 		return true, nil
@@ -323,7 +330,7 @@ func (ie *IndexEvaluator) wherePredicate(doc []byte) (bool, error) {
 	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
-		out, err := N1QLTransform(nil, doc, []interface{}{ie.whExpr})
+		out, err := N1QLTransform(nil, doc, []interface{}{ie.whExpr}, meta)
 		if out == nil { // missing is treated as false
 			return false, err
 		} else if err != nil { // errors are treated as false
@@ -334,4 +341,17 @@ func (ie *IndexEvaluator) wherePredicate(doc []byte) (bool, error) {
 		return false, nil // predicate is false
 	}
 	return true, nil
+}
+
+// helper functions
+func dcpEvent2Meta(m *mc.DcpEvent) map[string]interface{} {
+	return map[string]interface{}{
+		"id":       m.Key,
+		"byseqno":  m.Seqno,
+		"revseqno": m.RevSeqno,
+		"flags":    m.Flags,
+		"expiry":   m.Expiry,
+		"locktime": m.LockTime,
+		"nru":      m.Nru,
+	}
 }

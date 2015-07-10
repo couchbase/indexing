@@ -346,7 +346,7 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 	if err != nil {
 		return errors.NewError(err, "GSI Refresh()")
 	}
-	gsi.clearIndexes()
+	si_s := make([]*secondaryIndex, 0, len(indexes))
 	for _, index := range indexes {
 		if index.Definition.Bucket != gsi.keyspace {
 			continue
@@ -355,9 +355,10 @@ func (gsi *gsiKeyspace) Refresh() errors.Error {
 		if err != nil {
 			return err
 		}
-		if err := gsi.setIndex(si); err != nil {
-			return err
-		}
+		si_s = append(si_s, si)
+	}
+	if err := gsi.setIndexes(si_s); err != nil {
+		return err
 	}
 	return nil
 }
@@ -398,13 +399,17 @@ func (gsi *gsiKeyspace) SyncRefresh() errors.Error {
 // private functions for datastore.Indexer{}
 //------------------------------------------
 
-func (gsi *gsiKeyspace) setIndex(si *secondaryIndex) errors.Error {
+func (gsi *gsiKeyspace) setIndexes(si []*secondaryIndex) errors.Error {
 	gsi.rw.Lock()
 	defer gsi.rw.Unlock()
-	if si.isPrimary {
-		gsi.primaryIndexes[si.defnID] = si
-	} else {
-		gsi.indexes[si.defnID] = si
+	gsi.indexes = make(map[uint64]*secondaryIndex)        // defnID -> index
+	gsi.primaryIndexes = make(map[uint64]*secondaryIndex) // defnID -> index
+	for _, si := range si {
+		if si.isPrimary {
+			gsi.primaryIndexes[si.defnID] = si
+		} else {
+			gsi.indexes[si.defnID] = si
+		}
 	}
 	return nil
 }
@@ -417,13 +422,6 @@ func (gsi *gsiKeyspace) delIndex(id string) {
 	defnID := string2defnID(id)
 	delete(gsi.indexes, defnID)
 	delete(gsi.primaryIndexes, defnID)
-}
-
-func (gsi *gsiKeyspace) clearIndexes() {
-	gsi.rw.Lock()
-	defer gsi.rw.Unlock()
-	gsi.indexes = make(map[uint64]*secondaryIndex)        // defnID -> index
-	gsi.primaryIndexes = make(map[uint64]*secondaryIndex) // defnID -> index
 }
 
 //------------------
