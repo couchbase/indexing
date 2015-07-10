@@ -1451,6 +1451,10 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			var ts, lastFlushedTs Timestamp
 			if lastFlushedTsVbuuid == nil {
 				readyToMerge = true
+			} else if flushTs == nil {
+				//if flushTs is nil for INIT_STREAM and non-nil for MAINT_STREAM
+				//merge cannot happen
+				readyToMerge = false
 			} else {
 				lastFlushedTs = getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
 				ts = getSeqTsFromTsVbuuid(flushTs)
