@@ -349,11 +349,21 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 			if idx.State == common.INDEX_STATE_INITIAL ||
 				(streamId == common.INIT_STREAM && idx.State == common.INDEX_STATE_CATCHUP) {
 
-				logging.Debugf("Timekeeper::addIndextoStream add BuildInfo index %v stream %v bucket %v",
-					idx.InstId, streamId, idx.Defn.Bucket)
+				logging.Debugf("Timekeeper::addIndextoStream add BuildInfo index %v "+
+					"stream %v bucket %v state %v", idx.InstId, streamId, idx.Defn.Bucket, idx.State)
+
+				//for indexes in catchup state, MTR has already added it to stream.
+				//set buildDoneAckReceived so that merge can happen. This case can happen
+				//in recovery(rollback or crash) where index moves to catchup state and then
+				//streams get restarted.
+				buildDoneAckReceived := false
+				if idx.State == common.INDEX_STATE_CATCHUP {
+					buildDoneAckReceived = true
+				}
 				tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
-					indexInst: idx,
-					buildTs:   buildTs,
+					indexInst:            idx,
+					buildTs:              buildTs,
+					buildDoneAckReceived: buildDoneAckReceived,
 				}
 			}
 		}
