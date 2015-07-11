@@ -417,6 +417,7 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 	// the channel receiver needs to destroy snapshot when done
 	s.notifySnapshotCreation(is)
 
+	var numReplies int64
 	t := time.Now()
 	// Also notify any waiters for snapshots creation
 	var newWaiters []*snapshotWaiter
@@ -425,17 +426,20 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 		// Clean up expired requests from queue
 		if !w.expired.IsZero() && t.After(w.expired) {
 			w.Error(ErrScanTimedOut)
+			idxStats.numSnapshotWaiters.Add(-1)
 			continue
 		}
 
 		if isSnapshotConsistent(is, w.cons, w.ts) {
 			w.Notify(CloneIndexSnapshot(is))
+			numReplies++
+			idxStats.numSnapshotWaiters.Add(-1)
 			continue
 		}
 		newWaiters = append(newWaiters, w)
 	}
 	s.waitersMap[is.IndexInstId()] = newWaiters
-	idxStats.numSnapshotWaiters.Set(int64(len(newWaiters)))
+	idxStats.numLastSnapshotReply.Set(numReplies)
 }
 
 //handleRollback will rollback to given timestamp
@@ -667,6 +671,9 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 		return
 	}
 
+	stats := s.stats.Get()
+	idxStats := stats.indexes[req.GetIndexId()]
+
 	s.muSnap.Lock()
 	defer s.muSnap.Unlock()
 
@@ -679,9 +686,15 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 		req.respch <- CloneIndexSnapshot(is)
 		return
 	}
+
+	if idxStats != nil {
+		idxStats.numSnapshotWaiters.Add(1)
+	}
+
 	w := newSnapshotWaiter(
 		req.GetIndexId(), req.GetTS(), req.GetConsistency(),
 		req.GetReplyChannel(), req.GetExpiredTime())
+
 	if ws, ok := s.waitersMap[req.GetIndexId()]; ok {
 		s.waitersMap[req.idxInstId] = append(ws, w)
 	} else {

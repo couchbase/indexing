@@ -96,6 +96,7 @@ type IndexStats struct {
 	fragPercent          stats.Int64Val
 	sinceLastSnapshot    stats.Int64Val
 	numSnapshotWaiters   stats.Int64Val
+	numLastSnapshotReply stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -139,6 +140,7 @@ func (s *IndexStats) Init() {
 	s.numFlushQueued.Init()
 	s.sinceLastSnapshot.Init()
 	s.numSnapshotWaiters.Init()
+	s.numLastSnapshotReply.Init()
 
 	s.Timings.Init()
 }
@@ -254,6 +256,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_flush_queued", s.numFlushQueued.Value())
 		addStat("since_last_snapshot", s.sinceLastSnapshot.Value())
 		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
+		addStat("num_last_snapshot_reply", s.numLastSnapshotReply.Value())
 
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
 		addStat("timings/storage_commit", s.Timings.stCommit.Value())
