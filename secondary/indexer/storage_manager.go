@@ -334,7 +334,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 							}
 
 							logging.Infof("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
-								"PartitionId: %v SliceId: %v (%v)", idxInstId, partnId, slice.Id(), info)
+								"PartitionId: %v SliceId: %v Crc64: %v (%v)", idxInstId, partnId, slice.Id(), tsVbuuid.Crc64, info)
 
 							ss := &sliceSnapshot{
 								id:   slice.Id(),
