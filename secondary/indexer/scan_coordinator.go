@@ -650,7 +650,7 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	if req.Consistency != nil {
 		logging.LazyVerbose(func() string {
 			return fmt.Sprintf("%s requested timestamp: %s => %s Crc64 => %v", req.LogPrefix,
-				strings.ToLower(req.Consistency.String()), ScanTStoString(req.Ts), req.Ts.Crc64)
+				strings.ToLower(req.Consistency.String()), ScanTStoString(req.Ts), req.Ts.GetCrc64())
 		})
 	}
 
