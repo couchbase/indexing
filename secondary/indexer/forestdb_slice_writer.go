@@ -974,9 +974,9 @@ snaploop:
 	}
 
 	dataSz := int64(fdb.statFd.EstimateSpaceUsed())
-	var int64 extraSnapDataSize
+	var extraSnapDataSize int64
 	if diskSz > dataSz {
-		extraSnapDataSize := diskSz - dataSz
+		extraSnapDataSize = diskSz - dataSz
 	}
 
 	platform.StoreInt64(&fdb.extraSnapDataSize, extraSnapDataSize)
