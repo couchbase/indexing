@@ -365,7 +365,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 
 				is := &indexSnapshot{
 					instId: idxInstId,
-					ts:     tsVbuuid,
+					ts:     tsVbuuid.Copy(),
 					partns: partnSnaps,
 				}
 
