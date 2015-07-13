@@ -152,6 +152,13 @@ func (r ScanRequest) String() string {
 	return str
 }
 
+func (r *ScanRequest) Done() {
+	// If the requested DefnID in invalid, stats object will not be populated
+	if r.Stats != nil {
+		r.Stats.numCompletedRequests.Add(1)
+	}
+}
+
 type ScanCoordinator interface {
 }
 
@@ -635,15 +642,15 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() {
 		s.handleError(req.LogPrefix, w.Done())
-		req.Stats.numCompletedRequests.Add(1)
+		req.Done()
 	}()
 
 	logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
 
 	if req.Consistency != nil {
 		logging.LazyVerbose(func() string {
-			return fmt.Sprintf("%s requested timestamp: %s => %s", req.LogPrefix,
-				strings.ToLower(req.Consistency.String()), ScanTStoString(req.Ts))
+			return fmt.Sprintf("%s requested timestamp: %s => %s Crc64 => %v", req.LogPrefix,
+				strings.ToLower(req.Consistency.String()), ScanTStoString(req.Ts), req.Ts.GetCrc64())
 		})
 	}
 

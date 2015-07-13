@@ -349,11 +349,21 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 			if idx.State == common.INDEX_STATE_INITIAL ||
 				(streamId == common.INIT_STREAM && idx.State == common.INDEX_STATE_CATCHUP) {
 
-				logging.Debugf("Timekeeper::addIndextoStream add BuildInfo index %v stream %v bucket %v",
-					idx.InstId, streamId, idx.Defn.Bucket)
+				logging.Debugf("Timekeeper::addIndextoStream add BuildInfo index %v "+
+					"stream %v bucket %v state %v", idx.InstId, streamId, idx.Defn.Bucket, idx.State)
+
+				//for indexes in catchup state, MTR has already added it to stream.
+				//set buildDoneAckReceived so that merge can happen. This case can happen
+				//in recovery(rollback or crash) where index moves to catchup state and then
+				//streams get restarted.
+				buildDoneAckReceived := false
+				if idx.State == common.INDEX_STATE_CATCHUP {
+					buildDoneAckReceived = true
+				}
 				tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
-					indexInst: idx,
-					buildTs:   buildTs,
+					indexInst:            idx,
+					buildTs:              buildTs,
+					buildDoneAckReceived: buildDoneAckReceived,
 				}
 			}
 		}
@@ -1113,6 +1123,17 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	state := tk.ss.streamBucketStatus[streamId][bucket]
+
+	//ignore build done ack for Inactive and Recovery phase. For recovery, stream
+	//will get reopen and build done will get recomputed.
+	if state == STREAM_INACTIVE || state == STREAM_PREPARE_DONE ||
+		state == STREAM_PREPARE_RECOVERY {
+		logging.Debugf("Timekeeper::handleInitBuildDoneAck Ignore BuildDoneAck "+
+			"for Bucket: %v StreamId: %v State: %v", bucket, streamId, state)
+		return
+	}
+
 	if streamId == common.INIT_STREAM {
 		for _, buildInfo := range tk.indexBuildInfo {
 			if buildInfo.indexInst.Defn.Bucket == bucket {
@@ -1451,6 +1472,10 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			var ts, lastFlushedTs Timestamp
 			if lastFlushedTsVbuuid == nil {
 				readyToMerge = true
+			} else if flushTs == nil {
+				//if flushTs is nil for INIT_STREAM and non-nil for MAINT_STREAM
+				//merge cannot happen
+				readyToMerge = false
 			} else {
 				lastFlushedTs = getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
 				ts = getSeqTsFromTsVbuuid(flushTs)

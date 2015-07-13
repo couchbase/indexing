@@ -244,135 +244,142 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 		needsCommit = true
 	}
 
+	var wg sync.WaitGroup
 	//for every index managed by this indexer
 	for idxInstId, partnMap := range indexPartnMap {
-		idxInst := indexInstMap[idxInstId]
-		idxStats := stats.indexes[idxInst.InstId]
+		// Create snapshots for all indexes in parallel
+		wg.Add(1)
+		go func(idxInstId common.IndexInstId, partnMap PartitionInstMap) {
+			defer wg.Done()
 
-		//if index belongs to the flushed bucket and stream
-		if idxInst.Defn.Bucket == bucket &&
-			idxInst.Stream == streamId &&
-			idxInst.State != common.INDEX_STATE_DELETED {
-
-			// List of snapshots for reading current timestamp
-			var isSnapCreated bool = true
-
+			idxInst := indexInstMap[idxInstId]
+			idxStats := stats.indexes[idxInst.InstId]
 			lastIndexSnap := indexSnapMap[idxInstId]
+			//if index belongs to the flushed bucket and stream
+			if idxInst.Defn.Bucket == bucket &&
+				idxInst.Stream == streamId &&
+				idxInst.State != common.INDEX_STATE_DELETED {
 
-			partnSnaps := make(map[common.PartitionId]PartitionSnapshot)
-			//for all partitions managed by this indexer
-			for partnId, partnInst := range partnMap {
-				var lastPartnSnap PartitionSnapshot
+				// List of snapshots for reading current timestamp
+				var isSnapCreated bool = true
 
-				if lastIndexSnap != nil {
-					lastPartnSnap = lastIndexSnap.Partitions()[partnId]
-				}
-				sc := partnInst.Sc
+				partnSnaps := make(map[common.PartitionId]PartitionSnapshot)
+				//for all partitions managed by this indexer
+				for partnId, partnInst := range partnMap {
+					var lastPartnSnap PartitionSnapshot
 
-				sliceSnaps := make(map[SliceId]SliceSnapshot)
-				//create snapshot for all the slices
-				for _, slice := range sc.GetAllSlices() {
-					var latestSnapshot Snapshot
-					if lastIndexSnap.Partitions() != nil {
-						lastSliceSnap := lastPartnSnap.Slices()[slice.Id()]
-						latestSnapshot = lastSliceSnap.Snapshot()
+					if lastIndexSnap != nil {
+						lastPartnSnap = lastIndexSnap.Partitions()[partnId]
 					}
+					sc := partnInst.Sc
 
-					//if flush timestamp is greater than last
-					//snapshot timestamp, create a new snapshot
-					snapTs := NewTimestamp(numVbuckets)
-					if latestSnapshot != nil {
-						snapTsVbuuid := latestSnapshot.Timestamp()
-						snapTs = getSeqTsFromTsVbuuid(snapTsVbuuid)
-					}
+					sliceSnaps := make(map[SliceId]SliceSnapshot)
+					//create snapshot for all the slices
+					for _, slice := range sc.GetAllSlices() {
+						var latestSnapshot Snapshot
+						if lastIndexSnap.Partitions() != nil {
+							lastSliceSnap := lastPartnSnap.Slices()[slice.Id()]
+							latestSnapshot = lastSliceSnap.Snapshot()
+						}
 
-					ts := getSeqTsFromTsVbuuid(tsVbuuid)
+						//if flush timestamp is greater than last
+						//snapshot timestamp, create a new snapshot
+						snapTs := NewTimestamp(numVbuckets)
+						if latestSnapshot != nil {
+							snapTsVbuuid := latestSnapshot.Timestamp()
+							snapTs = getSeqTsFromTsVbuuid(snapTsVbuuid)
+						}
 
-					//if the flush TS is greater than the last snapshot TS
-					//TODO Is it better to have a IsDirty() in Slice interface
-					//rather than comparing the last snapshot?
-					if latestSnapshot == nil || ts.GreaterThan(snapTs) {
-						//commit the outstanding data
+						ts := getSeqTsFromTsVbuuid(tsVbuuid)
 
-						logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
-							"%v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
+						//if the flush TS is greater than the last snapshot TS
+						//TODO Is it better to have a IsDirty() in Slice interface
+						//rather than comparing the last snapshot?
+						if latestSnapshot == nil || ts.GreaterThan(snapTs) {
+							//commit the outstanding data
 
-						newTsVbuuid := tsVbuuid.Copy()
-						var err error
-						var info SnapshotInfo
-						var newSnapshot Snapshot
+							logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
+								"%v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
 
-						logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
-							"Index: %v PartitionId: %v SliceId: %v Commit: %v", idxInstId, partnId, slice.Id(), needsCommit)
+							newTsVbuuid := tsVbuuid.Copy()
+							var err error
+							var info SnapshotInfo
+							var newSnapshot Snapshot
 
-						if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
-							logging.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
-								"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
-								slice.Id(), err)
-							isSnapCreated = false
-							common.CrashOnError(err)
+							logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
+								"Index: %v PartitionId: %v SliceId: %v Commit: %v", idxInstId, partnId, slice.Id(), needsCommit)
+
+							if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
+								logging.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
+									"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
+									slice.Id(), err)
+								isSnapCreated = false
+								common.CrashOnError(err)
+								continue
+							}
+
+							idxStats := stats.indexes[idxInstId]
+							idxStats.numSnapshots.Add(1)
+							if needsCommit {
+								idxStats.numCommits.Add(1)
+							}
+
+							if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
+								logging.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
+									"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
+									slice.Id(), err)
+								isSnapCreated = false
+								common.CrashOnError(err)
+								continue
+							}
+
+							logging.Infof("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
+								"PartitionId: %v SliceId: %v Crc64: %v (%v)", idxInstId, partnId, slice.Id(), tsVbuuid.Crc64, info)
+
+							ss := &sliceSnapshot{
+								id:   slice.Id(),
+								snap: newSnapshot,
+							}
+							sliceSnaps[slice.Id()] = ss
+						} else {
+							// Increment reference
+							latestSnapshot.Open()
+							ss := &sliceSnapshot{
+								id:   slice.Id(),
+								snap: latestSnapshot,
+							}
+							sliceSnaps[slice.Id()] = ss
+							logging.Warnf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
+								"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
+							logging.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
 							continue
 						}
-
-						idxStats := stats.indexes[idxInstId]
-						idxStats.numSnapshots.Add(1)
-						if needsCommit {
-							idxStats.numCommits.Add(1)
-						}
-
-						if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
-							logging.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
-								"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
-								slice.Id(), err)
-							isSnapCreated = false
-							common.CrashOnError(err)
-							continue
-						}
-
-						logging.Infof("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
-							"PartitionId: %v SliceId: %v (%v)", idxInstId, partnId, slice.Id(), info)
-
-						ss := &sliceSnapshot{
-							id:   slice.Id(),
-							snap: newSnapshot,
-						}
-						sliceSnaps[slice.Id()] = ss
-					} else {
-						// Increment reference
-						latestSnapshot.Open()
-						ss := &sliceSnapshot{
-							id:   slice.Id(),
-							snap: latestSnapshot,
-						}
-						sliceSnaps[slice.Id()] = ss
-						logging.Warnf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
-							"PartitionId %v SliceId %v. No New Mutations.", idxInstId, partnId, slice.Id())
-						logging.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
-						continue
 					}
+
+					ps := &partitionSnapshot{
+						id:     partnId,
+						slices: sliceSnaps,
+					}
+					partnSnaps[partnId] = ps
 				}
 
-				ps := &partitionSnapshot{
-					id:     partnId,
-					slices: sliceSnaps,
+				is := &indexSnapshot{
+					instId: idxInstId,
+					ts:     tsVbuuid.Copy(),
+					partns: partnSnaps,
 				}
-				partnSnaps[partnId] = ps
-			}
 
-			is := &indexSnapshot{
-				instId: idxInstId,
-				ts:     tsVbuuid,
-				partns: partnSnaps,
+				if isSnapCreated {
+					s.updateSnapMapAndNotify(is, idxStats)
+				} else {
+					DestroyIndexSnapshot(is)
+				}
+				s.updateSnapIntervalStat(idxStats)
 			}
-
-			if isSnapCreated {
-				s.updateSnapMapAndNotify(is, idxStats)
-			} else {
-				DestroyIndexSnapshot(is)
-			}
-			s.updateSnapIntervalStat(idxStats)
-		}
+		}(idxInstId, partnMap)
 	}
+
+	wg.Wait()
 
 	s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 		streamId: streamId,
@@ -410,6 +417,7 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 	// the channel receiver needs to destroy snapshot when done
 	s.notifySnapshotCreation(is)
 
+	var numReplies int64
 	t := time.Now()
 	// Also notify any waiters for snapshots creation
 	var newWaiters []*snapshotWaiter
@@ -418,17 +426,20 @@ func (s *storageMgr) updateSnapMapAndNotify(is IndexSnapshot, idxStats *IndexSta
 		// Clean up expired requests from queue
 		if !w.expired.IsZero() && t.After(w.expired) {
 			w.Error(ErrScanTimedOut)
+			idxStats.numSnapshotWaiters.Add(-1)
 			continue
 		}
 
 		if isSnapshotConsistent(is, w.cons, w.ts) {
 			w.Notify(CloneIndexSnapshot(is))
+			numReplies++
+			idxStats.numSnapshotWaiters.Add(-1)
 			continue
 		}
 		newWaiters = append(newWaiters, w)
 	}
 	s.waitersMap[is.IndexInstId()] = newWaiters
-	idxStats.numSnapshotWaiters.Set(int64(len(newWaiters)))
+	idxStats.numLastSnapshotReply.Set(numReplies)
 }
 
 //handleRollback will rollback to given timestamp
@@ -660,6 +671,9 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 		return
 	}
 
+	stats := s.stats.Get()
+	idxStats := stats.indexes[req.GetIndexId()]
+
 	s.muSnap.Lock()
 	defer s.muSnap.Unlock()
 
@@ -672,9 +686,15 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 		req.respch <- CloneIndexSnapshot(is)
 		return
 	}
+
+	if idxStats != nil {
+		idxStats.numSnapshotWaiters.Add(1)
+	}
+
 	w := newSnapshotWaiter(
 		req.GetIndexId(), req.GetTS(), req.GetConsistency(),
 		req.GetReplyChannel(), req.GetExpiredTime())
+
 	if ws, ok := s.waitersMap[req.GetIndexId()]; ok {
 		s.waitersMap[req.idxInstId] = append(ws, w)
 	} else {
@@ -710,7 +730,7 @@ func (s *storageMgr) handleStats(cmd Message) {
 		if idxStats != nil {
 			idxStats.diskSize.Set(st.Stats.DiskSize)
 			idxStats.dataSize.Set(st.Stats.DataSize)
-			idxStats.fragPercent.Set(st.Stats.Fragmentation)
+			idxStats.fragPercent.Set(int64(st.GetFragmentation()))
 			idxStats.getBytes.Set(st.Stats.GetBytes)
 			idxStats.insertBytes.Set(st.Stats.InsertBytes)
 			idxStats.deleteBytes.Set(st.Stats.DeleteBytes)
@@ -733,8 +753,8 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 			continue
 		}
 
-		var dataSz, diskSz int64
-		var getBytes, insertBytes, deleteBytes, fragPercent int64
+		var dataSz, diskSz, extraSnapDataSize int64
+		var getBytes, insertBytes, deleteBytes int64
 		var nslices int64
 	loop:
 		for _, partnInst := range partnMap {
@@ -751,7 +771,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 				getBytes += sts.GetBytes
 				insertBytes += sts.InsertBytes
 				deleteBytes += sts.DeleteBytes
-				fragPercent += sts.Fragmentation
+				extraSnapDataSize += sts.ExtraSnapDataSize
 			}
 		}
 
@@ -759,12 +779,12 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 			stat := IndexStorageStats{
 				InstId: idxInstId,
 				Stats: StorageStatistics{
-					DataSize:      dataSz,
-					DiskSize:      diskSz,
-					GetBytes:      getBytes,
-					InsertBytes:   insertBytes,
-					DeleteBytes:   deleteBytes,
-					Fragmentation: fragPercent / nslices,
+					DataSize:          dataSz,
+					DiskSize:          diskSz,
+					GetBytes:          getBytes,
+					InsertBytes:       insertBytes,
+					DeleteBytes:       deleteBytes,
+					ExtraSnapDataSize: extraSnapDataSize,
 				},
 			}
 

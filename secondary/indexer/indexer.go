@@ -617,9 +617,6 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.storageMgrCmdCh <- msg
 		<-idx.storageMgrCmdCh
 
-	case INDEXER_ROLLBACK:
-		idx.handleRollback(msg)
-
 	case CONFIG_SETTINGS_UPDATE:
 		cfgUpdate := msg.(*MsgConfigUpdate)
 		newConfig := cfgUpdate.GetConfig()
@@ -757,7 +754,9 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	if idx.streamBucketStatus[common.INIT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY ||
-		idx.streamBucketStatus[common.MAINT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY {
+		idx.streamBucketStatus[common.INIT_STREAM][indexInst.Defn.Bucket] == STREAM_PREPARE_RECOVERY ||
+		idx.streamBucketStatus[common.MAINT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY ||
+		idx.streamBucketStatus[common.MAINT_STREAM][indexInst.Defn.Bucket] == STREAM_PREPARE_RECOVERY {
 		logging.Errorf("Indexer::handleCreateIndex \n\tCannot Process Create Index " +
 			"In Recovery Mode.")
 
@@ -1048,7 +1047,9 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	}
 
 	if idx.streamBucketStatus[common.MAINT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY ||
-		idx.streamBucketStatus[common.INIT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY {
+		idx.streamBucketStatus[common.MAINT_STREAM][indexInst.Defn.Bucket] == STREAM_PREPARE_RECOVERY ||
+		idx.streamBucketStatus[common.INIT_STREAM][indexInst.Defn.Bucket] == STREAM_RECOVERY ||
+		idx.streamBucketStatus[common.INIT_STREAM][indexInst.Defn.Bucket] == STREAM_PREPARE_RECOVERY {
 
 		logging.Errorf("Indexer::handleDropIndex Cannot Process Drop Index " +
 			"In Recovery Mode.")
@@ -1084,29 +1085,6 @@ func (idx *indexer) handleDropIndex(msg Message) {
 
 }
 
-func (idx *indexer) handleRollback(msg Message) {
-
-	bucket := msg.(*MsgRollback).GetBucket()
-	streamId := msg.(*MsgRollback).GetStreamId()
-	rollbackTs := msg.(*MsgRollback).GetRollbackTs()
-
-	logging.Debugf("Indexer::handleRollback StreamId %v Bucket %v",
-		streamId, bucket)
-
-	if _, ok := idx.streamBucketRollbackTs[streamId]; ok {
-		idx.streamBucketRollbackTs[streamId][bucket] = rollbackTs
-	} else {
-		bucketRollbackTs := make(BucketRollbackTs)
-		bucketRollbackTs[bucket] = rollbackTs
-		idx.streamBucketRollbackTs[streamId] = bucketRollbackTs
-	}
-
-	idx.streamBucketStatus[streamId][bucket] = STREAM_RECOVERY
-
-	idx.stopBucketStream(streamId, bucket)
-
-}
-
 func (idx *indexer) handlePrepareRecovery(msg Message) {
 
 	streamId := msg.(*MsgRecovery).GetStreamId()
@@ -1125,9 +1103,6 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	rollbackTs := msg.(*MsgRecovery).GetRestartTs()
 
-	logging.Debugf("Indexer::handleInitPrepRecovery StreamId %v Bucket %v",
-		streamId, bucket)
-
 	if rollbackTs != nil {
 		if _, ok := idx.streamBucketRollbackTs[streamId]; ok {
 			idx.streamBucketRollbackTs[streamId][bucket] = rollbackTs
@@ -1138,7 +1113,10 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 		}
 	}
 
-	idx.streamBucketStatus[streamId][bucket] = STREAM_RECOVERY
+	idx.streamBucketStatus[streamId][bucket] = STREAM_PREPARE_RECOVERY
+
+	logging.Debugf("Indexer::handleInitPrepRecovery StreamId %v Bucket %v %v",
+		streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 
 	//fwd the msg to timekeeper
 	idx.tkCmdCh <- msg
@@ -1167,8 +1145,10 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 	bucket := msg.(*MsgRecovery).GetBucket()
 	restartTs := msg.(*MsgRecovery).GetRestartTs()
 
-	logging.Debugf("Indexer::handleInitRecovery StreamId %v Bucket %v",
-		streamId, bucket)
+	idx.streamBucketStatus[streamId][bucket] = STREAM_RECOVERY
+
+	logging.Debugf("Indexer::handleInitRecovery StreamId %v Bucket %v %v",
+		streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 
 	//if there is a rollbackTs, process rollback
 	if ts, ok := idx.streamBucketRollbackTs[streamId][bucket]; ok && ts != nil {
@@ -1189,7 +1169,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	buildTs := msg.(*MsgRecovery).GetBuildTs()
 
-	logging.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v",
+	logging.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v ",
 		streamId, bucket)
 
 	//send the msg to timekeeper
@@ -1204,12 +1184,17 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	//during recovery, if all indexes of a bucket gets dropped,
 	//the stream needs to be stopped for that bucket.
 	if !idx.checkBucketExistsInStream(bucket, streamId, false) {
+		logging.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v. No Index Found."+
+			"Cleaning up.", streamId, bucket)
 		idx.stopBucketStream(streamId, bucket)
 		idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 	} else {
 		//change status to Active
 		idx.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 	}
+
+	logging.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v %v",
+		streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 
 }
 
@@ -1244,9 +1229,13 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
 
-	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
-		logging.Debugf("Indexer::handleInitBuildDoneAck Skip InitBuildDoneAck %v Inactive Bucket %v",
-			streamId, bucket)
+	//skip processing initial build done ack for inactive or recovery streams.
+	//the streams would be restarted and then build done would get recomputed.
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
+		logging.Debugf("Indexer::handleInitBuildDoneAck Skip InitBuildDoneAck %v %v %v",
+			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 		return
 	}
 
@@ -1283,9 +1272,12 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 	case common.INIT_STREAM:
 		delete(idx.streamBucketRequestStopCh[streamId], bucket)
 
-		if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
-			logging.Debugf("Indexer::handleMergeStreamAck Skip MergeStreamAck %v Inactive Bucket %v",
-				streamId, bucket)
+		//skip processing merge ack for inactive or recovery streams.
+		if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
+			idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
+			idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
+			logging.Debugf("Indexer::handleMergeStreamAck Skip MergeStreamAck %v %v %v",
+				streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 			return
 		}
 
@@ -1355,9 +1347,25 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	logging.Debugf("Indexer::handleBucketNotFound StreamId %v Bucket %v",
 		streamId, bucket)
 
+	//If stream is inactive, no cleanup is required.
+	//If stream is prepare_recovery, recovery will take care of
+	//validating the bucket and taking corrective action.
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY {
+		logging.Debugf("Indexer::handleBucketNotFound Skip %v %v %v",
+			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
+		return
+	}
+
 	// delete index inst on the bucket from metadata repository and
 	// return the list of deleted inst
 	instIdList := idx.deleteIndexInstOnDeletedBucket(bucket, streamId)
+
+	if len(instIdList) == 0 {
+		logging.Debugf("Indexer::handleBucketNotFound Empty IndexList %v %v. Nothing to do.",
+			streamId, bucket)
+		return
+	}
 
 	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
 	logging.Debugf("Indexer::handleBucketNotFound Updated Index State to DELETED %v",
@@ -1378,6 +1386,9 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	}
 
 	idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+
+	logging.Debugf("Indexer::handleBucketNotFound %v %v %v",
+		streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 
 }
 
@@ -1970,9 +1981,13 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	bucket := msg.(*MsgTKInitBuildDone).GetBucket()
 	streamId := msg.(*MsgTKInitBuildDone).GetStreamId()
 
-	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
-		logging.Debugf("Indexer::handleInitialBuildDone Skip InitBuildDone %v Inactive Bucket %v",
-			streamId, bucket)
+	//skip processing initial build done for inactive or recovery streams.
+	//the streams would be restarted and then build done would get recomputed.
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
+		logging.Debugf("Indexer::handleInitialBuildDone Skip InitBuildDone %v %v %v",
+			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 		return
 	}
 
@@ -2122,9 +2137,12 @@ func (idx *indexer) handleMergeStream(msg Message) {
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 
-	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
-		logging.Debugf("Indexer::handleMergeStream Skip MergeStream %v Inactive Bucket %v",
-			streamId, bucket)
+	//skip processing stream merge for inactive or recovery streams.
+	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
+		idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
+		logging.Debugf("Indexer::handleMergeStream Skip MergeStream %v %v %v",
+			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 		return
 	}
 
@@ -2496,8 +2514,6 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
-
-	idx.streamBucketStatus[streamId][bucket] = STREAM_RECOVERY
 
 	clustAddr := idx.config["clusterAddr"].String()
 	numVb := idx.config["numVbuckets"].Int()
@@ -3022,6 +3038,7 @@ func (idx *indexer) startStreams() bool {
 	idx.streamBucketStatus[common.MAINT_STREAM] = make(BucketStatus)
 	for bucket, ts := range restartTs {
 		idx.startBucketStream(common.MAINT_STREAM, bucket, ts)
+		idx.streamBucketStatus[common.MAINT_STREAM][bucket] = STREAM_ACTIVE
 	}
 
 	//Start INIT_STREAM
@@ -3030,6 +3047,7 @@ func (idx *indexer) startStreams() bool {
 	idx.streamBucketStatus[common.INIT_STREAM] = make(BucketStatus)
 	for bucket, ts := range restartTs {
 		idx.startBucketStream(common.INIT_STREAM, bucket, ts)
+		idx.streamBucketStatus[common.INIT_STREAM][bucket] = STREAM_ACTIVE
 	}
 
 	return true
@@ -3269,7 +3287,9 @@ func (idx *indexer) checkBucketInRecovery(bucket string,
 	instIdList []common.IndexInstId, clientCh MsgChannel, errMap map[common.IndexInstId]error) bool {
 
 	if idx.streamBucketStatus[common.INIT_STREAM][bucket] == STREAM_RECOVERY ||
-		idx.streamBucketStatus[common.MAINT_STREAM][bucket] == STREAM_RECOVERY {
+		idx.streamBucketStatus[common.INIT_STREAM][bucket] == STREAM_PREPARE_RECOVERY ||
+		idx.streamBucketStatus[common.MAINT_STREAM][bucket] == STREAM_RECOVERY ||
+		idx.streamBucketStatus[common.MAINT_STREAM][bucket] == STREAM_PREPARE_RECOVERY {
 
 		if idx.enableManager {
 			errStr := fmt.Sprintf("Bucket %v In Recovery", bucket)

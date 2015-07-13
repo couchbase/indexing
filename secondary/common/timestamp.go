@@ -198,6 +198,15 @@ func (ts *TsVbuuid) SetLargeSnapshot(largeSnap bool) {
 	ts.LargeSnap = largeSnap
 }
 
+func (ts *TsVbuuid) GetCrc64() uint64 {
+
+	if ts == nil {
+		return 0
+	}
+
+	return ts.Crc64
+}
+
 // Copy will return a clone of this timestamp.
 func (ts *TsVbuuid) Copy() *TsVbuuid {
 	newTs := NewTsVbuuid(ts.Bucket, len(ts.Seqnos))
