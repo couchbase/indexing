@@ -51,7 +51,7 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 	slice.get_bytes = platform.NewAlignedInt64(0)
 	slice.insert_bytes = platform.NewAlignedInt64(0)
 	slice.delete_bytes = platform.NewAlignedInt64(0)
-	slice.fragAfterCompaction = platform.NewAlignedInt64(0)
+	slice.extraSnapDataSize = platform.NewAlignedInt64(0)
 	slice.flushedCount = platform.NewAlignedUint64(0)
 	slice.committedCount = platform.NewAlignedUint64(0)
 
@@ -156,8 +156,9 @@ type fdbSlice struct {
 	// persisted items count
 	committedCount platform.AlignedUint64
 
-	// Fragmentation percent computed after last compaction
-	fragAfterCompaction platform.AlignedInt64
+	// Extra data overhead due to additional snapshots
+	// in the file. This is computed immediately after compaction.
+	extraSnapDataSize platform.AlignedInt64
 
 	path     string
 	currfile string
@@ -971,10 +972,14 @@ snaploop:
 	if fdb.statFd, err = forestdb.Open(fdb.currfile, config); err != nil {
 		return err
 	}
-	dataSz := int64(fdb.statFd.EstimateSpaceUsed())
-	frag := (diskSz - dataSz) * 100 / diskSz
 
-	platform.StoreInt64(&fdb.fragAfterCompaction, frag)
+	dataSz := int64(fdb.statFd.EstimateSpaceUsed())
+	var int64 extraSnapDataSize
+	if diskSz > dataSz {
+		extraSnapDataSize := diskSz - dataSz
+	}
+
+	platform.StoreInt64(&fdb.extraSnapDataSize, extraSnapDataSize)
 	return err
 }
 
@@ -986,24 +991,15 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 		return sts, err
 	}
 
-	sts.DataSize = int64(fdb.statFd.EstimateSpaceUsed())
-	sts.DiskSize = sz
-
 	// Compute approximate fragmentation percentage
 	// Since we keep multiple index snapshots after compaction, it is not
 	// trivial to compute fragmentation as ration of data size to disk size.
-	// Hence we compute approximate fragmentation by removing fragmentation
-	// threshold caused as a result of compaction.
-	sts.Fragmentation = 0
-	if sts.DataSize > 0 {
-		sts.Fragmentation = ((sts.DiskSize - sts.DataSize) * 100) / sts.DiskSize
-	}
-	compactionFrag := platform.LoadInt64(&fdb.fragAfterCompaction)
-	sts.Fragmentation -= compactionFrag
-
-	if sts.Fragmentation < 0 {
-		sts.Fragmentation = 0
-	}
+	// Hence we compute approximate fragmentation by adding overhead data size
+	// caused by extra snapshots.
+	extraSnapDataSize := platform.LoadInt64(&fdb.extraSnapDataSize)
+	sts.DataSize = int64(fdb.statFd.EstimateSpaceUsed()) + extraSnapDataSize
+	sts.DiskSize = sz
+	sts.ExtraSnapDataSize = extraSnapDataSize
 
 	sts.GetBytes = platform.LoadInt64(&fdb.get_bytes)
 	sts.InsertBytes = platform.LoadInt64(&fdb.insert_bytes)

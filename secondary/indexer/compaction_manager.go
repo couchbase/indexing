@@ -57,8 +57,7 @@ func (cd *compactionDaemon) ResetConfig(c common.Config) {
 }
 
 func (cd *compactionDaemon) needsCompaction(is IndexStorageStats, config common.Config) bool {
-	logging.Infof("CompactionDaemon: Checking fragmentation of index instance:%v (Data:%v, Disk:%v, Fragmentation:%v%%)",
-		is.InstId, is.Stats.DataSize, is.Stats.DiskSize, is.Stats.Fragmentation)
+	logging.Infof("CompactionDaemon: Checking fragmentation, %s", is.String())
 
 	interval := config["interval"].String()
 	isCompactionInterval := true
@@ -84,7 +83,7 @@ func (cd *compactionDaemon) needsCompaction(is IndexStorageStats, config common.
 	}
 
 	if uint64(is.Stats.DiskSize) > config["min_size"].Uint64() {
-		if int(is.Stats.Fragmentation) >= config["min_frag"].Int() {
+		if is.GetFragmentation() >= float64(config["min_frag"].Int()) {
 			return true
 		}
 	}

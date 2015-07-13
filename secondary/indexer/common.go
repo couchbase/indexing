@@ -110,6 +110,28 @@ type IndexStorageStats struct {
 	Stats  StorageStatistics
 }
 
+func (s IndexStorageStats) String() string {
+	return fmt.Sprintf("IndexInstId: %v Data:%v, Disk:%v, "+
+		"ExtraSnapshotData:%v, Fragmentation:%v%%",
+		s.InstId, s.Stats.DataSize, s.Stats.DiskSize,
+		s.Stats.ExtraSnapDataSize, s.GetFragmentation())
+}
+
+func (s IndexStorageStats) GetFragmentation() float64 {
+	var fragPercent float64
+
+	var wastedSpace int64
+	if s.Stats.DiskSize > s.Stats.DataSize {
+		wastedSpace = s.Stats.DiskSize - s.Stats.DataSize
+	}
+
+	if s.Stats.DiskSize > 0 {
+		fragPercent = float64(wastedSpace) * 100 / float64(s.Stats.DiskSize)
+	}
+
+	return fragPercent
+}
+
 type VbStatus Seqno
 
 const (
