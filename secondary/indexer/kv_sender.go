@@ -150,11 +150,12 @@ func (k *kvSender) handleAddIndexListToStream(cmd Message) {
 	logging.Debugf("KVSender::handleAddIndexListToStream %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
+	bucket := cmd.(*MsgStreamUpdate).GetBucket()
 	addIndexList := cmd.(*MsgStreamUpdate).GetIndexList()
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 
-	go k.addIndexForExistingBucket(streamId, addIndexList, respCh, stopCh)
+	go k.addIndexForExistingBucket(streamId, bucket, addIndexList, respCh, stopCh)
 
 	k.supvCmdch <- &MsgSuccess{}
 }
@@ -400,7 +401,7 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 	}
 }
 
-func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInstList []c.IndexInst,
+func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, bucket string, indexInstList []c.IndexInst,
 	respCh MsgChannel, stopCh StopChannel) {
 
 	addrs, err := k.getAllProjectorAddrs()
@@ -413,6 +414,7 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInstList 
 		return
 	}
 
+	var currentTs *protobuf.TsVbuuid
 	protoInstList := convertIndexListToProto(k.config, k.cInfoCache, indexInstList, streamId)
 	topic := getTopicForStreamId(streamId)
 
@@ -421,13 +423,23 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInstList 
 		for _, addr := range addrs {
 			execWithStopCh(func() {
 				ap := newProjClient(addr)
-				if ret := sendAddInstancesRequest(ap, topic, protoInstList); ret != nil {
+				if res, ret := sendAddInstancesRequest(ap, topic, protoInstList); ret != nil {
 					logging.Errorf("KVSender::addIndexForExistingBucket Error Received %v from %v", ret, addr)
 					err = ret
+				} else {
+					currentTs = updateCurrentTsFromResponse(bucket, currentTs, res)
 				}
 			}, stopCh)
 		}
-		return err
+
+		//check if we have received currentTs for all vbuckets
+		numVbuckets := k.config["numVbuckets"].Int()
+		if currentTs == nil || currentTs.Len() != numVbuckets {
+			return errors.New("ErrPartialVbStart")
+		} else {
+			return err
+		}
+
 	}
 
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
@@ -441,7 +453,13 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, indexInstList 
 		return
 	}
 
-	respCh <- &MsgSuccess{}
+	numVbuckets := k.config["numVbuckets"].Int()
+	nativeTs := currentTs.ToTsVbuuid(numVbuckets)
+
+	respCh <- &MsgStreamUpdate{mType: MSG_SUCCESS,
+		streamId:  streamId,
+		bucket:    bucket,
+		restartTs: nativeTs}
 }
 
 func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []c.IndexInst,
@@ -673,21 +691,24 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 //send the actual AddInstances request on adminport
 func sendAddInstancesRequest(ap *projClient.Client,
 	topic string,
-	instances []*protobuf.Instance) error {
+	instances []*protobuf.Instance) (*protobuf.TimestampResponse, error) {
 
 	logging.Infof("KVSender::sendAddInstancesRequest Projector %v Topic %v \nInstances %v",
 		ap, topic, instances)
 
-	// TODO: interpret the `_` as
-	// protobuf/projector/projector.proto:TimestampResponse{}
-	if _, err := ap.AddInstances(topic, instances); err != nil {
+	if res, err := ap.AddInstances(topic, instances); err != nil {
 		logging.Fatalf("KVSender::sendAddInstancesRequest Unexpected Error During "+
 			"Add Instances Request Projector %v Topic %v IndexInst %v. Err %v", ap,
 			topic, instances, err)
 
-		return err
+		return res, err
 	} else {
-		return nil
+		logging.LazyDebug(func() string {
+			return fmt.Sprintf(
+				"KVSender::sendAddInstancesRequest Response Projector %v Topic %v "+
+					"\n\tActiveTs %v ", ap, topic, debugPrintTs(res.GetCurrentTimestamps()))
+		})
+		return res, nil
 
 	}
 
@@ -822,6 +843,23 @@ func updateRollbackTsFromResponse(bucket string,
 	}
 
 	return rollbackTs
+
+}
+
+func updateCurrentTsFromResponse(bucket string,
+	currentTs *protobuf.TsVbuuid, res *protobuf.TimestampResponse) *protobuf.TsVbuuid {
+
+	currentTsList := res.GetCurrentTimestamps()
+	for _, ts := range currentTsList {
+		if ts != nil && !ts.IsEmpty() && ts.GetBucket() == bucket {
+			if currentTs == nil {
+				currentTs = ts.Clone()
+			} else {
+				currentTs = currentTs.Union(ts)
+			}
+		}
+	}
+	return currentTs
 
 }
 

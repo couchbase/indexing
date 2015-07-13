@@ -58,6 +58,7 @@ type InitialBuildInfo struct {
 	indexInst            common.IndexInst
 	buildTs              Timestamp
 	buildDoneAckReceived bool
+	minMergeTs           *common.TsVbuuid //minimum merge ts for init stream
 }
 
 //timeout in milliseconds to batch the vbuckets
@@ -352,18 +353,9 @@ func (tk *timekeeper) addIndextoStream(cmd Message) {
 				logging.Debugf("Timekeeper::addIndextoStream add BuildInfo index %v "+
 					"stream %v bucket %v state %v", idx.InstId, streamId, idx.Defn.Bucket, idx.State)
 
-				//for indexes in catchup state, MTR has already added it to stream.
-				//set buildDoneAckReceived so that merge can happen. This case can happen
-				//in recovery(rollback or crash) where index moves to catchup state and then
-				//streams get restarted.
-				buildDoneAckReceived := false
-				if idx.State == common.INDEX_STATE_CATCHUP {
-					buildDoneAckReceived = true
-				}
 				tk.indexBuildInfo[idx.InstId] = &InitialBuildInfo{
-					indexInst:            idx,
-					buildTs:              buildTs,
-					buildDoneAckReceived: buildDoneAckReceived,
+					indexInst: idx,
+					buildTs:   buildTs,
 				}
 			}
 		}
@@ -1116,6 +1108,7 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 
 	streamId := cmd.(*MsgTKInitBuildDone).GetStreamId()
 	bucket := cmd.(*MsgTKInitBuildDone).GetBucket()
+	mergeTs := cmd.(*MsgTKInitBuildDone).GetMergeTs()
 
 	logging.Debugf("Timekeeper::handleInitBuildDoneAck StreamId %v Bucket %v",
 		streamId, bucket)
@@ -1134,12 +1127,11 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 		return
 	}
 
+	//if buildDoneAck is received for INIT_STREAM, this means the index got
+	//successfully added to MAINT_STREAM. Set the buildDoneAck flag and the
+	//mergeTs for the Catchup state indexes.
 	if streamId == common.INIT_STREAM {
-		for _, buildInfo := range tk.indexBuildInfo {
-			if buildInfo.indexInst.Defn.Bucket == bucket {
-				buildInfo.buildDoneAckReceived = true
-			}
-		}
+		tk.setMergeTs(streamId, bucket, mergeTs)
 	}
 
 	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
@@ -1209,6 +1201,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	streamId := cmd.(*MsgRecovery).GetStreamId()
 	bucket := cmd.(*MsgRecovery).GetBucket()
 	buildTs := cmd.(*MsgRecovery).GetBuildTs()
+	mergeTs := cmd.(*MsgRecovery).GetRestartTs()
 
 	logging.Debugf("Timekeeper::handleRecoveryDone StreamId %v Bucket %v",
 		streamId, bucket)
@@ -1217,6 +1210,13 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	defer tk.lock.Unlock()
 
 	tk.setBuildTs(streamId, bucket, buildTs)
+
+	//once MAINT_STREAM gets successfully restarted in recovery, use the restartTs
+	//as the mergeTs for Catchup indexes. As part of the MTR, Catchup state indexes
+	//get added to MAINT_STREAM.
+	if streamId == common.MAINT_STREAM {
+		tk.setMergeTs(streamId, bucket, mergeTs)
+	}
 
 	//Check for possiblity of build done after recovery is done.
 	//In case of crash recovery, if there are no mutations, there is
@@ -1454,7 +1454,8 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		idx := buildInfo.indexInst
 		if idx.Defn.Bucket == bucket &&
 			idx.State == common.INDEX_STATE_CATCHUP &&
-			buildInfo.buildDoneAckReceived == true {
+			buildInfo.buildDoneAckReceived == true &&
+			buildInfo.minMergeTs != nil {
 
 			//if the flushTs is past the lastFlushTs of this bucket in MAINT_STREAM,
 			//this index can be merged to MAINT_STREAM. If there is a flush in progress,
@@ -1467,9 +1468,9 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 				lastFlushedTsVbuuid = tk.ss.streamBucketLastFlushedTsMap[common.MAINT_STREAM][bucket]
 			}
 
-			//if no flush has happened yet, its good to merge
 			readyToMerge := false
 			var ts, lastFlushedTs Timestamp
+			//if no flush has happened yet, its good to merge
 			if lastFlushedTsVbuuid == nil {
 				readyToMerge = true
 			} else if flushTs == nil {
@@ -1479,7 +1480,9 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 			} else {
 				lastFlushedTs = getSeqTsFromTsVbuuid(lastFlushedTsVbuuid)
 				ts = getSeqTsFromTsVbuuid(flushTs)
-				if ts.GreaterThanEqual(lastFlushedTs) {
+				minMergeTs := getSeqTsFromTsVbuuid(buildInfo.minMergeTs)
+				if ts.GreaterThanEqual(lastFlushedTs) &&
+					ts.GreaterThanEqual(minMergeTs) {
 					readyToMerge = true
 				}
 			}
@@ -2433,6 +2436,22 @@ func (tk *timekeeper) setBuildTs(streamId common.StreamId, bucket string,
 		}
 	}
 
+}
+
+//setMergeTs sets the mergeTs for catchup state indexes in case of recovery.
+func (tk *timekeeper) setMergeTs(streamId common.StreamId, bucket string,
+	mergeTs *common.TsVbuuid) {
+
+	for _, buildInfo := range tk.indexBuildInfo {
+		if buildInfo.indexInst.Defn.Bucket == bucket &&
+			buildInfo.indexInst.State == common.INDEX_STATE_CATCHUP {
+			buildInfo.buildDoneAckReceived = true
+			//set minMergeTs. stream merge can only happen at or above this
+			//TS as projector guarantees new index definitions have been applied
+			//to the MAINT_STREAM only at or above this.
+			buildInfo.minMergeTs = mergeTs.Copy()
+		}
+	}
 }
 
 func (tk *timekeeper) hasInitStateIndex(streamId common.StreamId,

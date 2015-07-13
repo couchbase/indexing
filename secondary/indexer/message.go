@@ -555,6 +555,7 @@ type MsgTKInitBuildDone struct {
 	streamId common.StreamId
 	buildTs  Timestamp
 	bucket   string
+	mergeTs  *common.TsVbuuid
 }
 
 func (m *MsgTKInitBuildDone) GetMsgType() MsgType {
@@ -571,6 +572,10 @@ func (m *MsgTKInitBuildDone) GetTimestamp() Timestamp {
 
 func (m *MsgTKInitBuildDone) GetStreamId() common.StreamId {
 	return m.streamId
+}
+
+func (m *MsgTKInitBuildDone) GetMergeTs() *common.TsVbuuid {
+	return m.mergeTs
 }
 
 //TK_MERGE_STREAM
