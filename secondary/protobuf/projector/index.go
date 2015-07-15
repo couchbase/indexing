@@ -346,7 +346,7 @@ func (ie *IndexEvaluator) wherePredicate(
 // helper functions
 func dcpEvent2Meta(m *mc.DcpEvent) map[string]interface{} {
 	return map[string]interface{}{
-		"id":       m.Key,
+		"id":       string(m.Key),
 		"byseqno":  m.Seqno,
 		"revseqno": m.RevSeqno,
 		"flags":    m.Flags,
