@@ -204,15 +204,32 @@ func BucketSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error)
 }
 
 func CollectSeqnos(kvfeeds map[string]*couchbase.DcpFeed) (l_seqnos []uint64, err error) {
-	var kv_seqnos map[uint16]uint64
+	var wg sync.WaitGroup
+
+	// Buffer for storing kv_seqs from each node
+	kv_seqnos_node := make([]map[uint16]uint64, len(kvfeeds))
+	errors := make([]error, len(kvfeeds))
+
+	i := 0
+	for _, feed := range kvfeeds {
+		wg.Add(1)
+		go func(index int, feed *couchbase.DcpFeed) {
+			defer wg.Done()
+			kv_seqnos_node[index], errors[index] = feed.DcpGetSeqnos()
+		}(i, feed)
+		i++
+	}
+
+	wg.Wait()
 
 	seqnos := make(map[uint16]uint64)
-	for _, feed := range kvfeeds {
-		kv_seqnos, err = feed.DcpGetSeqnos()
+	for i, kv_seqnos := range kv_seqnos_node {
+		err := errors[i]
 		if err != nil {
 			logging.Errorf("feed.DcpGetSeqnos(): %v\n", err)
 			return nil, err
 		}
+
 		for vbno, seqno := range kv_seqnos {
 			if prev, ok := seqnos[vbno]; !ok || prev < seqno {
 				seqnos[vbno] = seqno
