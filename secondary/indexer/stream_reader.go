@@ -384,11 +384,21 @@ func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 
 		//send a separate message for each bucket. If the ConnError is with empty vblist,
 		//the message is ignored.
-		for bucket, vbList := range msg.(dataport.ConnectionError) {
+		connErr := msg.(dataport.ConnectionError)
+		if len(connErr) != 0 {
+			for bucket, vbList := range connErr {
+				supvMsg = &MsgStreamInfo{mType: STREAM_READER_CONN_ERROR,
+					streamId: r.streamId,
+					bucket:   bucket,
+					vbList:   copyVbList(vbList),
+				}
+				r.supvRespch <- supvMsg
+			}
+		} else {
 			supvMsg = &MsgStreamInfo{mType: STREAM_READER_CONN_ERROR,
 				streamId: r.streamId,
-				bucket:   bucket,
-				vbList:   copyVbList(vbList),
+				bucket:   "",
+				vbList:   []Vbucket(nil),
 			}
 			r.supvRespch <- supvMsg
 		}

@@ -319,7 +319,8 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 				severity: FATAL,
 				cause:    err}}
 	} else {
-		respCh <- &MsgSuccess{}
+		numVbuckets := k.config["numVbuckets"].Int()
+		respCh <- &MsgSuccessOpenStream{activeTs: activeTs.ToTsVbuuid(numVbuckets)}
 	}
 }
 

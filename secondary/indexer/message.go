@@ -72,6 +72,7 @@ const (
 	KV_SENDER_RESTART_VBUCKETS
 	KV_SENDER_REPAIR_ENDPOINTS
 	KV_STREAM_REPAIR
+	MSG_SUCCESS_OPEN_STREAM
 
 	//ADMIN_MGR
 	ADMIN_MGR_SHUTDOWN
@@ -168,6 +169,19 @@ func (m *MsgSuccess) GetMsgType() MsgType {
 	return MSG_SUCCESS
 }
 
+//Success Message
+type MsgSuccessOpenStream struct {
+	activeTs *common.TsVbuuid
+}
+
+func (m *MsgSuccessOpenStream) GetMsgType() MsgType {
+	return MSG_SUCCESS_OPEN_STREAM
+}
+
+func (m *MsgSuccessOpenStream) GetActiveTs() *common.TsVbuuid {
+	return m.activeTs
+}
+
 //Timestamp Message
 type MsgTimestamp struct {
 	mType MsgType
@@ -243,6 +257,7 @@ type MsgStreamInfo struct {
 	bucket   string
 	vbList   []Vbucket
 	buildTs  Timestamp
+	activeTs *common.TsVbuuid
 }
 
 func (m *MsgStreamInfo) GetMsgType() MsgType {
@@ -263,6 +278,10 @@ func (m *MsgStreamInfo) GetVbList() []Vbucket {
 
 func (m *MsgStreamInfo) GetBuildTs() Timestamp {
 	return m.buildTs
+}
+
+func (m *MsgStreamInfo) GetActiveTs() *common.TsVbuuid {
+	return m.activeTs
 }
 
 func (m *MsgStreamInfo) String() string {
@@ -863,6 +882,7 @@ type MsgRecovery struct {
 	bucket    string
 	restartTs *common.TsVbuuid
 	buildTs   Timestamp
+	activeTs  *common.TsVbuuid
 }
 
 func (m *MsgRecovery) GetMsgType() MsgType {
@@ -879,6 +899,10 @@ func (m *MsgRecovery) GetBucket() string {
 
 func (m *MsgRecovery) GetRestartTs() *common.TsVbuuid {
 	return m.restartTs
+}
+
+func (m *MsgRecovery) GetActiveTs() *common.TsVbuuid {
+	return m.activeTs
 }
 
 func (m *MsgRecovery) GetBuildTs() Timestamp {

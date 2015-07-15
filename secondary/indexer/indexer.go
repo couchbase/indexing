@@ -1562,7 +1562,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 				switch resp.GetMsgType() {
 
-				case MSG_SUCCESS:
+				case MSG_SUCCESS_OPEN_STREAM:
 					logging.Debugf("Indexer::sendStreamUpdateForBuildIndex \n\tStream Request Success For "+
 						"Stream %v Bucket %v.", buildStream, bucket)
 
@@ -1576,6 +1576,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 							streamId: buildStream,
 							bucket:   bucket,
 							buildTs:  buildTs,
+							activeTs: resp.(*MsgSuccessOpenStream).GetActiveTs(),
 						}
 						break retryloop
 					}
@@ -2544,7 +2545,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 				switch resp.GetMsgType() {
 
-				case MSG_SUCCESS:
+				case MSG_SUCCESS_OPEN_STREAM:
 
 					//once stream request is successful re-calculate the KV timestamp.
 					//This makes sure indexer doesn't use a timestamp which can never
@@ -2556,7 +2557,8 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 							streamId:  streamId,
 							bucket:    bucket,
 							buildTs:   buildTs,
-							restartTs: restartTs}
+							restartTs: restartTs,
+							activeTs:  resp.(*MsgSuccessOpenStream).GetActiveTs()}
 						break retryloop
 					}
 
