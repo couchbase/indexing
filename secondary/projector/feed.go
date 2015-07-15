@@ -34,6 +34,7 @@ import "github.com/golang/protobuf/proto"
 // Feed is mutation stream - for maintenance, initial-load, catchup etc...
 type Feed struct {
 	cluster      string // immutable
+	pooln        string // immutable
 	topic        string // immutable
 	opaque       uint16 // opaque that created this feed.
 	endpointType string // immutable
@@ -79,12 +80,15 @@ type Feed struct {
 //    mutationChanSize: channel size of projector's data path routine
 //    syncTimeout: timeout, in ms, for sending periodic Sync messages
 //    routerEndpointFactory: endpoint factory
-func NewFeed(topic string, config c.Config, opaque uint16) (*Feed, error) {
+func NewFeed(
+	pooln, topic string, config c.Config, opaque uint16) (*Feed, error) {
+
 	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
 	chsize := config["feedChanSize"].Int()
 	backchsize := config["backChanSize"].Int()
 	feed := &Feed{
 		cluster: config["clusterAddr"].String(),
+		pooln:   pooln,
 		topic:   topic,
 		opaque:  opaque,
 
@@ -219,12 +223,17 @@ func (feed *Feed) DelBuckets(
 // it is not active already.
 // Synchronous call.
 func (feed *Feed) AddInstances(
-	req *protobuf.AddInstancesRequest, opaque uint16) error {
+	req *protobuf.AddInstancesRequest,
+	opaque uint16) (*protobuf.TimestampResponse, error) {
 
 	respch := make(chan []interface{}, 1)
 	cmd := []interface{}{fCmdAddInstances, req, opaque, respch}
 	resp, err := c.FailsafeOp(feed.reqch, respch, cmd, feed.finch)
-	return c.OpError(err, resp, 0)
+	err = c.OpError(err, resp, 1)
+	if err != nil {
+		return &protobuf.TimestampResponse{}, err
+	}
+	return resp[0].(*protobuf.TimestampResponse), nil
 }
 
 // DelInstances will restart specified endpoint-address if
@@ -578,7 +587,8 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 	case fCmdAddInstances:
 		req := msg[1].(*protobuf.AddInstancesRequest)
 		opaque, respch := msg[2].(uint16), msg[3].(chan []interface{})
-		respch <- []interface{}{feed.addInstances(req, opaque)}
+		resp, err := feed.addInstances(req, opaque)
+		respch <- []interface{}{resp, err}
 
 	case fCmdDelInstances:
 		req := msg[1].(*protobuf.DelInstancesRequest)
@@ -997,24 +1007,35 @@ func (feed *Feed) delBuckets(
 // only data-path shall be updated.
 // - return ErrorInconsistentFeed for malformed feed request
 func (feed *Feed) addInstances(
-	req *protobuf.AddInstancesRequest, opaque uint16) error {
+	req *protobuf.AddInstancesRequest,
+	opaque uint16) (*protobuf.TimestampResponse, error) {
+
+	tsResp := &protobuf.TimestampResponse{
+		Topic:             proto.String(feed.topic),
+		CurrentTimestamps: make([]*protobuf.TsVbuuid, 0, 4),
+	}
 
 	// update engines and endpoints
 	if err := feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
-		return err
+		return &protobuf.TimestampResponse{}, err
 	}
 	var err error
 	// post to kv data-path
 	for bucketn, engines := range feed.engines {
-		if _, ok := feed.kvdata[bucketn]; ok {
-			feed.kvdata[bucketn].AddEngines(opaque, engines, feed.endpoints)
+		if kvdata, ok := feed.kvdata[bucketn]; ok {
+			curSeqnos, err := kvdata.AddEngines(opaque, engines, feed.endpoints)
+			if err != nil {
+				return &protobuf.TimestampResponse{}, err
+			}
+			tsResp = tsResp.AddCurrentTimestamp(feed.pooln, bucketn, curSeqnos)
+
 		} else {
 			fmsg := "%v ##%x addInstances() invalid-bucket %q\n"
 			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
 			err = projC.ErrorInvalidBucket
 		}
 	}
-	return err
+	return tsResp, err
 }
 
 // only data-path shall be updated.

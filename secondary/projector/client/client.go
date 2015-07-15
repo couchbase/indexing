@@ -524,24 +524,25 @@ func (client *Client) DelBuckets(topic string, buckets []string) error {
 // - ErrorTopicMissing if feed is not started.
 // - ErrorInconsistentFeed for malformed feed request.
 func (client *Client) AddInstances(
-	topic string, instances []*protobuf.Instance) error {
+	topic string,
+	instances []*protobuf.Instance) (*protobuf.TimestampResponse, error) {
 
 	req := protobuf.NewAddInstancesRequest(topic, instances)
-	res := &protobuf.Error{}
+	res := &protobuf.TimestampResponse{}
 	err := client.withRetry(
 		func() error {
 			err := client.ap.Request(req, res)
 			if err != nil {
 				return err
-			} else if s := res.GetError(); s != "" {
-				return fmt.Errorf(s)
+			} else if protoerr := res.GetErr(); protoerr != nil {
+				return fmt.Errorf(protoerr.GetError())
 			}
 			return err // nil
 		})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return res, nil
 }
 
 // DelInstances will delete one or more instances from one or more buckets.

@@ -228,6 +228,40 @@ func (m *TopicResponse) GetErr() *Error {
 	return nil
 }
 
+// Response back for
+// AddInstancesRequest
+type TimestampResponse struct {
+	Topic             *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	CurrentTimestamps []*TsVbuuid `protobuf:"bytes,2,rep,name=currentTimestamps" json:"currentTimestamps,omitempty"`
+	Err               *Error      `protobuf:"bytes,3,opt,name=err" json:"err,omitempty"`
+	XXX_unrecognized  []byte      `json:"-"`
+}
+
+func (m *TimestampResponse) Reset()         { *m = TimestampResponse{} }
+func (m *TimestampResponse) String() string { return proto.CompactTextString(m) }
+func (*TimestampResponse) ProtoMessage()    {}
+
+func (m *TimestampResponse) GetTopic() string {
+	if m != nil && m.Topic != nil {
+		return *m.Topic
+	}
+	return ""
+}
+
+func (m *TimestampResponse) GetCurrentTimestamps() []*TsVbuuid {
+	if m != nil {
+		return m.CurrentTimestamps
+	}
+	return nil
+}
+
+func (m *TimestampResponse) GetErr() *Error {
+	if m != nil {
+		return m.Err
+	}
+	return nil
+}
+
 // RestartVbucketsRequest will restart a subset
 // of vbuckets for each specified buckets.
 // Respond back with TopicResponse
@@ -346,7 +380,7 @@ func (m *DelBucketsRequest) GetBuckets() []string {
 }
 
 // AddInstancesRequest to add index-instances to a topic.
-// Respond back with TopicResponse
+// Respond back with TimestampResponse
 type AddInstancesRequest struct {
 	Topic            *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	Instances        []*Instance `protobuf:"bytes,2,rep,name=instances" json:"instances,omitempty"`

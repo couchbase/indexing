@@ -29,6 +29,7 @@ type Projector struct {
 	// immutable config params
 	name        string // human readable name of the projector
 	clusterAddr string // kv cluster's address to connect
+	pooln       string // kv pool-name
 	adminport   string // projector listens on this adminport
 	maxvbs      int
 	cpuProfFd   *os.File
@@ -42,6 +43,7 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 		topics:         make(map[string]*Feed),
 		topicSerialize: make(map[string]*sync.Mutex),
 		maxvbs:         maxvbs,
+		pooln:          "default", // TODO: should this be configurable ?
 	}
 
 	// Setup dynamic configuration propagation
@@ -341,7 +343,7 @@ func (p *Projector) doMutationTopic(
 	defer p.releaseFeed(topic)
 	if feed == nil {
 		config := p.GetFeedConfig()
-		feed, err = NewFeed(topic, config, opaque)
+		feed, err = NewFeed(p.pooln, topic, config, opaque)
 		if err != nil {
 			fmsg := "%v ##%x unable to create feed %v\n"
 			logging.Errorf(fmsg, prefix, opaque, topic)
@@ -496,8 +498,11 @@ func (p *Projector) doAddInstances(
 		return protobuf.NewError(err)
 	}
 
-	err = feed.AddInstances(request, opaque)
-	return protobuf.NewError(err)
+	response, err := feed.AddInstances(request, opaque)
+	if err != nil {
+		response.SetErr(err)
+	}
+	return response
 }
 
 // - return ErrorTopicMissing if feed is not started.

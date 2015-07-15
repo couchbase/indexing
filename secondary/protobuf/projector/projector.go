@@ -362,6 +362,49 @@ func (resp *TopicResponse) SetErr(err error) *TopicResponse {
 	return resp
 }
 
+// *****************
+// TimestampResponse
+// *****************
+
+// Name implement MessageMarshaller{} interface
+func (tsResp *TimestampResponse) Name() string {
+	return "timestampResponse"
+}
+
+// ContentType implement MessageMarshaller{} interface
+func (tsResp *TimestampResponse) ContentType() string {
+	return "application/protobuf"
+}
+
+// Encode implement MessageMarshaller{} interface
+func (tsResp *TimestampResponse) Encode() (data []byte, err error) {
+	return proto.Marshal(tsResp)
+}
+
+// Decode implement MessageMarshaller{} interface
+func (tsResp *TimestampResponse) Decode(data []byte) (err error) {
+	return proto.Unmarshal(data, tsResp)
+}
+
+// AddCurrentTimestamp will add a subset of vbucket's
+// rollback-timestamp for a `bucket`.
+func (tsResp *TimestampResponse) AddCurrentTimestamp(
+	pooln, bucketn string, curSeqnos map[uint16]uint64) *TimestampResponse {
+
+	ts := NewTsVbuuid(pooln, bucketn, len(curSeqnos))
+	for vbno, seqno := range curSeqnos {
+		ts.Append(vbno, seqno, 0 /*vbuuid*/, 0 /*start*/, 0 /*end*/)
+	}
+	tsResp.CurrentTimestamps = append(tsResp.CurrentTimestamps, ts)
+	return tsResp
+}
+
+// SetErr update error value in response's.
+func (tsResp *TimestampResponse) SetErr(err error) *TimestampResponse {
+	tsResp.Err = NewError(err)
+	return tsResp
+}
+
 // **********************
 // RestartVbucketsRequest
 // **********************

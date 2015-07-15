@@ -32,6 +32,7 @@ type StreamState struct {
 	streamBucketTsListMap        map[common.StreamId]BucketTsListMap
 	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
 	streamBucketRestartTsMap     map[common.StreamId]BucketRestartTsMap
+	streamBucketLastSnapMarker   map[common.StreamId]BucketLastSnapMarker
 
 	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
 
@@ -55,6 +56,7 @@ type BucketLastFlushedTsMap map[string]*common.TsVbuuid
 type BucketRestartTsMap map[string]*common.TsVbuuid
 type BucketInMemTsCountMap map[string]uint64
 type BucketNewTsReqdMap map[string]bool
+type BucketLastSnapMarker map[string]*common.TsVbuuid
 
 type BucketTsListMap map[string]*list.List
 type BucketFlushInProgressTsMap map[string]*common.TsVbuuid
@@ -100,6 +102,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketRepairStopCh:              make(map[common.StreamId]BucketRepairStopCh),
 		streamBucketTimerStopCh:               make(map[common.StreamId]BucketTimerStopCh),
 		streamBucketLastPersistTime:           make(map[common.StreamId]BucketLastPersistTime),
+		streamBucketLastSnapMarker:            make(map[common.StreamId]BucketLastSnapMarker),
 	}
 
 	return ss
@@ -172,6 +175,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketStatus := make(BucketStatus)
 	ss.streamBucketStatus[streamId] = bucketStatus
 
+	bucketLastSnapMarker := make(BucketLastSnapMarker)
+	ss.streamBucketLastSnapMarker[streamId] = bucketLastSnapMarker
+
 	ss.streamStatus[streamId] = STREAM_ACTIVE
 
 }
@@ -200,6 +206,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketTimerStopCh[streamId][bucket] = make(StopChannel)
 	ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
 	ss.streamBucketRestartTsMap[streamId][bucket] = nil
+	ss.streamBucketLastSnapMarker[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 
@@ -235,6 +242,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketTimerStopCh[streamId], bucket)
 	delete(ss.streamBucketLastPersistTime[streamId], bucket)
 	delete(ss.streamBucketRestartTsMap[streamId], bucket)
+	delete(ss.streamBucketLastSnapMarker[streamId], bucket)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
@@ -265,6 +273,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketLastPersistTime, streamId)
 	delete(ss.streamBucketStatus, streamId)
 	delete(ss.streamBucketRestartTsMap, streamId)
+	delete(ss.streamBucketLastSnapMarker, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
@@ -637,6 +646,12 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 		}
 		//if snapEnd is greater than current hwt snapEnd
 		if hwt.Snapshots[i][1] > ts.Snapshots[i][1] {
+			lastSnap := ss.streamBucketLastSnapMarker[streamId][bucket]
+			//store the current snap marker in the lastSnapMarker map
+			lastSnap.Snapshots[i][0] = ts.Snapshots[i][0]
+			lastSnap.Snapshots[i][1] = ts.Snapshots[i][1]
+
+			//store the new snap marker in hwt
 			ts.Snapshots[i][0] = hwt.Snapshots[i][0]
 			ts.Snapshots[i][1] = hwt.Snapshots[i][1]
 			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
@@ -660,6 +675,8 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	//generate new stability timestamp
 	tsVbuuid := ss.streamBucketHWTMap[streamId][bucket].Copy()
 
+	ss.alignSnapBoundary(streamId, bucket, tsVbuuid)
+
 	//reset state for next TS
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
 
@@ -668,6 +685,26 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	}
 
 	return tsVbuuid
+}
+
+//align the snap boundary of TS if the seqno of the TS falls within the range of
+//last snap marker
+func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
+	bucket string, ts *common.TsVbuuid) {
+
+	lastSnap := ss.streamBucketLastSnapMarker[streamId][bucket]
+	for i, s := range ts.Snapshots {
+		//if seqno is not between snap boundary
+		if !(ts.Seqnos[i] >= s[0] && ts.Seqnos[i] <= s[1]) {
+
+			//if seqno is between the snap boundary of last snap marker
+			//use that to align the TS
+			if ts.Seqnos[i] >= lastSnap.Snapshots[i][0] && ts.Seqnos[i] <= lastSnap.Snapshots[i][1] {
+				ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
+				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
+			}
+		}
+	}
 }
 
 //check for presence of large snapshot in a TS and set the flag

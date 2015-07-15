@@ -2065,6 +2065,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 
 	cmd := &MsgStreamUpdate{mType: ADD_INDEX_LIST_TO_STREAM,
 		streamId:  common.MAINT_STREAM,
+		bucket:    bucket,
 		indexList: indexList,
 		respCh:    respCh,
 		stopCh:    stopCh}
@@ -2101,10 +2102,13 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
+					mergeTs := resp.(*MsgStreamUpdate).GetRestartTs()
+
 					idx.internalRecvCh <- &MsgTKInitBuildDone{
 						mType:    TK_INIT_BUILD_DONE_ACK,
 						streamId: streamId,
-						bucket:   bucket}
+						bucket:   bucket,
+						mergeTs:  mergeTs}
 					break retryloop
 
 				default:
@@ -2549,9 +2553,10 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 					buildTs, err := computeBucketBuildTs(clustAddr, bucket, numVb)
 					if err == nil {
 						idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_RECOVERY_DONE,
-							streamId: streamId,
-							bucket:   bucket,
-							buildTs:  buildTs}
+							streamId:  streamId,
+							bucket:    bucket,
+							buildTs:   buildTs,
+							restartTs: restartTs}
 						break retryloop
 					}
 
