@@ -383,9 +383,10 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 		respCh <- &MsgRollback{streamId: streamId,
 			rollbackTs: nativeTs}
 	} else if err != nil {
-		//if there is a topicMissing error, a fresh
+		//if there is a topicMissing/genServer.Closed error, a fresh
 		//MutationTopicRequest is required.
-		if err.Error() == projClient.ErrorTopicMissing.Error() {
+		if err.Error() == projClient.ErrorTopicMissing.Error() ||
+			err.Error() == c.ErrorClosed.Error() {
 			respCh <- &MsgKVStreamRepair{
 				streamId: streamId,
 				bucket:   restartTs.Bucket,
@@ -490,7 +491,9 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []
 				ap := newProjClient(addr)
 				if ret := sendDelInstancesRequest(ap, topic, uuids); ret != nil {
 					logging.Errorf("KVSender::deleteIndexesFromStream Error Received %v from %v", ret, addr)
-					if ret.Error() == projClient.ErrorTopicMissing.Error() {
+					//Treat TopicMissing/GenServer.Closed as success
+					if ret.Error() == projClient.ErrorTopicMissing.Error() ||
+						ret.Error() == c.ErrorClosed.Error() {
 						logging.Infof("KVSender::deleteIndexesFromStream Treating TopicMissing As Success")
 					} else {
 						err = ret
@@ -537,7 +540,9 @@ func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string
 				ap := newProjClient(addr)
 				if ret := sendDelBucketsRequest(ap, topic, buckets); ret != nil {
 					logging.Errorf("KVSender::deleteBucketsFromStream Error Received %v from %v", ret, addr)
-					if ret.Error() == projClient.ErrorTopicMissing.Error() {
+					//Treat TopicMissing/GenServer.Closed as success
+					if ret.Error() == projClient.ErrorTopicMissing.Error() ||
+						ret.Error() == c.ErrorClosed.Error() {
 						logging.Infof("KVSender::deleteBucketsFromStream Treating TopicMissing As Success")
 					} else {
 						err = ret
@@ -584,7 +589,9 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId,
 				ap := newProjClient(addr)
 				if ret := sendShutdownTopic(ap, topic); ret != nil {
 					logging.Errorf("KVSender::closeMutationStream Error Received %v from %v", ret, addr)
-					if ret.Error() == projClient.ErrorTopicMissing.Error() {
+					//Treat TopicMissing/GenServer.Closed as success
+					if ret.Error() == projClient.ErrorTopicMissing.Error() ||
+						ret.Error() == c.ErrorClosed.Error() {
 						logging.Infof("KVSender::closeMutationStream Treating TopicMissing As Success")
 					} else {
 						err = ret
