@@ -614,7 +614,7 @@ func (c *GsiClient) doScan(
 			}
 		}
 		logging.Warnf(
-			"Retrying scan for index %v (%v %v) ...\n", targetDefnID, ok1, ok2)
+			"Retrying scan for index %v (%v %v): %v ...\n", targetDefnID, ok1, ok2, err)
 		c.updateScanClients()
 		time.Sleep(time.Duration(wait) * time.Millisecond)
 	}
@@ -636,15 +636,15 @@ func (c *GsiClient) getConsistency(
 	} else if cons == common.SessionConsistency {
 		if hash64, ok := c.getBucketHash(bucket); ok && hash64 != 0 {
 			begin := time.Now()
-			fmsg := "Time taken by GET_SEQNOS call, %v"
-			defer func() { logging.Debugf(fmsg, time.Since(begin)) }()
+			fmsg := "Time taken by GET_SEQNOS call, %v CRC: %v\n"
+			defer func() { logging.Debugf(fmsg, time.Since(begin), hash64) }()
 			if vector, err = c.BucketSeqnos(bucket, hash64); err != nil {
 				return nil, err
 			}
 
 		} else {
 			begin := time.Now()
-			fmsg := "Time taken by STATS call, %v"
+			fmsg := "Time taken by STATS call, %v\n"
 			defer func() { logging.Debugf(fmsg, time.Since(begin)) }()
 			if vector, err = c.BucketTs(bucket); err != nil {
 				return nil, err
@@ -652,6 +652,7 @@ func (c *GsiClient) getConsistency(
 			vector.Crc64 = common.HashVbuuid(vector.Vbuuids)
 			vector.Vbuuids = nil
 			c.setBucketHash(bucket, vector.Crc64)
+			logging.Debugf("STATS CRC: %v\n", vector.Crc64)
 		}
 
 	} else if cons == common.AnyConsistency {

@@ -493,14 +493,18 @@ func (c *GsiScanClient) streamResponse(
 		callb(&protobuf.StreamEndResponse{}) // callback most likely return true
 		cont, healthy = false, true
 
-	} else { // End of stream marker
+	} else {
 		streamResp := resp.(*protobuf.ResponseStream)
 		cont = callb(streamResp)
+		err = streamResp.Error()
 		healthy = true
 	}
 
+	var closeErr error
 	if cont == false && healthy == true && finish == false {
-		err, healthy = c.closeStream(conn, pkt)
+		if closeErr, healthy = c.closeStream(conn, pkt); err == nil {
+			err = closeErr
+		}
 	}
 	return
 }
