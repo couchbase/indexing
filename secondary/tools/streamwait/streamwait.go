@@ -78,7 +78,7 @@ func startFeed(cluster, name string) {
 		"genChanSize":  10000,
 		"dataChanSize": 10000,
 	}
-	dcpFeed, err := bucket.StartDcpFeed(name, uint32(0), 0xABCD, config)
+	dcpFeed, err := bucket.StartDcpFeed(couchbase.NewDcpFeedName(name), uint32(0), 0xABCD, config)
 	if err != nil {
 		log.Fatal(err)
 	}
