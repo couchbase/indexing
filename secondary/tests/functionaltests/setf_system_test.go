@@ -906,6 +906,7 @@ func TestDropAllIndexesWithDataLoad(t *testing.T) {
 	go LoadKVBucket(&wg, t, docsToCreate, bucketName, "")
 	wg.Wait()
 
+	time.Sleep(time.Second)
 	scanResults, e := secondaryindex.Range(index1, bucketName, indexScanAddress, []interface{}{"BIOSPAN"}, []interface{}{"ZILLANET"}, 1, true, defaultlimit, c.SessionConsistency, nil)
 	if e == nil {
 		t.Fatal("Error excpected when scanning for dropped index but scan didnt fail \n")
