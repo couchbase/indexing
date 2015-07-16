@@ -1729,7 +1729,7 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		} else {
 			//store the ts in list
-			logging.LazyDebug(func() string {
+			logging.LazyTrace(func() string {
 				return fmt.Sprintf(
 					"Timekeeper::generateNewStabilityTS %v %v Added TS to Pending List "+
 						"%v ", bucket, streamId, tsVbuuid)
