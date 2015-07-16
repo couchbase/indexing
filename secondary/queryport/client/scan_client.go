@@ -123,21 +123,21 @@ func (c *GsiScanClient) Lookup(
 	defnID uint64, values []common.SecondaryKey,
 	distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler) error {
+	callb ResponseHandler) (error, bool) {
 
 	// serialize lookup value.
 	equals := make([][]byte, 0, len(values))
 	for _, value := range values {
 		val, err := json.Marshal(value)
 		if err != nil {
-			return err
+			return err, false
 		}
 		equals = append(equals, val)
 	}
 
 	connectn, err := c.pool.Get()
 	if err != nil {
-		return err
+		return err, false
 	}
 	healthy := true
 	defer func() { c.pool.Return(connectn, healthy) }()
@@ -161,40 +161,42 @@ func (c *GsiScanClient) Lookup(
 		fmsg := "%v Lookup() request transport failed `%v`\n"
 		logging.Errorf(fmsg, c.logPrefix, err)
 		healthy = false
-		return err
+		return err, false
 	}
 
-	cont := true
+	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
-		if err != nil {
+		if err != nil { // if err, cont should have been set to false
 			fmsg := "%v Lookup() response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, err)
+		} else { // partially succeeded
+			partial = true
 		}
 	}
-	return err
+	return err, partial
 }
 
 // Range scan index between low and high.
 func (c *GsiScanClient) Range(
 	defnID uint64, low, high common.SecondaryKey, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler) error {
+	callb ResponseHandler) (error, bool) {
 
 	// serialize low and high values.
 	l, err := json.Marshal(low)
 	if err != nil {
-		return err
+		return err, false
 	}
 	h, err := json.Marshal(high)
 	if err != nil {
-		return err
+		return err, false
 	}
 
 	connectn, err := c.pool.Get()
 	if err != nil {
-		return err
+		return err, false
 	}
 	healthy := true
 	defer func() { c.pool.Return(connectn, healthy) }()
@@ -221,30 +223,32 @@ func (c *GsiScanClient) Range(
 		fmsg := "%v Range() request transport failed `%v`\n"
 		logging.Errorf(fmsg, c.logPrefix, err)
 		healthy = false
-		return err
+		return err, false
 	}
 
-	cont := true
+	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
-		if err != nil {
+		if err != nil { // if err, cont should have been set to false
 			fmsg := "%v Range() response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, err)
+		} else { // partial succeeded
+			partial = true
 		}
 	}
-	return err
+	return err, partial
 }
 
 // Range scan index between low and high.
 func (c *GsiScanClient) RangePrimary(
 	defnID uint64, low, high []byte, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler) error {
+	callb ResponseHandler) (error, bool) {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
-		return err
+		return err, false
 	}
 	healthy := true
 	defer func() { c.pool.Return(connectn, healthy) }()
@@ -272,30 +276,32 @@ func (c *GsiScanClient) RangePrimary(
 		fmsg := "%v RangePrimary() request transport failed `%v`\n"
 		logging.Errorf(fmsg, c.logPrefix, err)
 		healthy = false
-		return err
+		return err, false
 	}
 
-	cont := true
+	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
-		if err != nil {
+		if err != nil { // if err, cont should have been set to false
 			fmsg := "%v RangePrimary() response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, err)
+		} else {
+			partial = true
 		}
 	}
-	return err
+	return err, partial
 }
 
 // ScanAll for full table scan.
 func (c *GsiScanClient) ScanAll(
 	defnID uint64, limit int64,
 	cons common.Consistency, vector *TsConsistency,
-	callb ResponseHandler) error {
+	callb ResponseHandler) (error, bool) {
 
 	connectn, err := c.pool.Get()
 	if err != nil {
-		return err
+		return err, false
 	}
 	healthy := true
 	defer func() { c.pool.Return(connectn, healthy) }()
@@ -315,19 +321,21 @@ func (c *GsiScanClient) ScanAll(
 		fmsg := "%v ScanAll() request transport failed `%v`\n"
 		logging.Errorf(fmsg, c.logPrefix, err)
 		healthy = false
-		return err
+		return err, false
 	}
 
-	cont := true
+	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
 		cont, healthy, err = c.streamResponse(conn, pkt, callb)
-		if err != nil {
+		if err != nil { // if err, cont should have been set to false
 			fmsg := "%v ScanAll() response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, err)
+		} else {
+			partial = true
 		}
 	}
-	return err
+	return err, partial
 }
 
 // CountLookup to count number entries for given set of keys.
@@ -474,10 +482,10 @@ func (c *GsiScanClient) streamResponse(
 	timeoutMs := c.readDeadline * time.Millisecond
 	conn.SetReadDeadline(time.Now().Add(timeoutMs))
 	if resp, err = pkt.Receive(conn); err != nil {
-		resp := &protobuf.ResponseStream{
-			Err: &protobuf.Error{Error: proto.String(err.Error())},
-		}
-		callb(resp) // callback with error
+		//resp := &protobuf.ResponseStream{
+		//    Err: &protobuf.Error{Error: proto.String(err.Error())},
+		//}
+		//callb(resp) // callback with error
 		cont, healthy = false, false
 		if err == io.EOF {
 			err = fmt.Errorf("server closed connection (EOF)")
@@ -495,8 +503,9 @@ func (c *GsiScanClient) streamResponse(
 
 	} else {
 		streamResp := resp.(*protobuf.ResponseStream)
-		cont = callb(streamResp)
-		err = streamResp.Error()
+		if err = streamResp.Error(); err == nil {
+			cont = callb(streamResp)
+		}
 		healthy = true
 	}
 
