@@ -1838,6 +1838,11 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 
 		}
 		tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
+		//update tsQueueSize when processing queued TS
+		stats := tk.stats.Get()
+		if stat, ok := stats.buckets[bucket]; ok {
+			stat.tsQueueSize.Set(int64(tsList.Len()))
+		}
 		return true
 	}
 
