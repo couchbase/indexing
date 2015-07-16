@@ -11,16 +11,84 @@ import "github.com/couchbase/indexing/secondary/logging"
 // cache Bucket{} and DcpFeed{} objects, its underlying connections
 // to make Stats-Seqnos fast.
 var dcp_buckets_seqnos struct {
-	rw      sync.RWMutex
-	numVbs  int
-	buckets map[string]*couchbase.Bucket
-	feeds   map[string]map[string]*couchbase.DcpFeed // bucket->kvaddr->feed
+	rw        sync.RWMutex
+	numVbs    int
+	buckets   map[string]*couchbase.Bucket
+	readerMap map[string]*vbSeqnosReader // bucket->kvaddr->feed
 }
 
 func init() {
 	dcp_buckets_seqnos.buckets = make(map[string]*couchbase.Bucket)
-	dcp_buckets_seqnos.feeds = make(map[string]map[string]*couchbase.DcpFeed)
+	dcp_buckets_seqnos.readerMap = make(map[string]*vbSeqnosReader)
 	go pollForDeletedBuckets()
+}
+
+type vbSeqnosResponse struct {
+	seqnos []uint64
+	err    error
+}
+
+type vbSeqnosRequest chan *vbSeqnosResponse
+
+func (ch *vbSeqnosRequest) Reply(response *vbSeqnosResponse) {
+	*ch <- response
+}
+
+func (ch *vbSeqnosRequest) Response() ([]uint64, error) {
+	response := <-*ch
+	return response.seqnos, response.err
+}
+
+// Bucket level seqnos reader for the cluster
+type vbSeqnosReader struct {
+	kvfeeds   map[string]*couchbase.DcpFeed
+	requestCh chan vbSeqnosRequest
+}
+
+func newVbSeqnosReader(kvfeeds map[string]*couchbase.DcpFeed) *vbSeqnosReader {
+	r := &vbSeqnosReader{
+		kvfeeds:   kvfeeds,
+		requestCh: make(chan vbSeqnosRequest, 5000),
+	}
+
+	go r.Routine()
+	return r
+}
+
+func (r *vbSeqnosReader) Close() {
+	close(r.requestCh)
+}
+
+func (r *vbSeqnosReader) GetSeqnos() ([]uint64, error) {
+	req := make(vbSeqnosRequest, 1)
+	r.requestCh <- req
+	return req.Response()
+}
+
+// This routine is responsible for computing request batches on the fly
+// and issue single 'dcp seqno' per batch.
+func (r *vbSeqnosReader) Routine() {
+	for req := range r.requestCh {
+		l := len(r.requestCh)
+		seqnos, err := CollectSeqnos(r.kvfeeds)
+		response := &vbSeqnosResponse{
+			seqnos: seqnos,
+			err:    err,
+		}
+		req.Reply(response)
+
+		// Read outstanding requests that can be served by
+		// using the same response
+		for i := 0; i < l; i++ {
+			req := <-r.requestCh
+			req.Reply(response)
+		}
+	}
+
+	// Cleanup all feeds
+	for _, kvfeed := range r.kvfeeds {
+		kvfeed.Close()
+	}
 }
 
 func addDBSbucket(cluster, pooln, bucketn string) (err error) {
@@ -57,7 +125,7 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 	var kvfeed *couchbase.DcpFeed
 
 	kvfeeds := make(map[string]*couchbase.DcpFeed)
-	config := map[string]interface{}{"genChanSize": 10, "dataChanSize": 10}
+	config := map[string]interface{}{"genChanSize": 1000, "dataChanSize": 10}
 	for kvaddr := range m {
 		uuid, _ := NewUUID()
 		name := uuid.Str()
@@ -75,7 +143,7 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 		}
 		kvfeeds[kvaddr] = kvfeed
 	}
-	dcp_buckets_seqnos.feeds[bucketn] = kvfeeds
+	dcp_buckets_seqnos.readerMap[bucketn] = newVbSeqnosReader(kvfeeds)
 
 	logging.Infof("{bucket,feeds} %q created for dcp_seqno cache...\n", bucketn)
 	return nil
@@ -91,13 +159,11 @@ func delDBSbucket(bucketn string) {
 	}
 	delete(dcp_buckets_seqnos.buckets, bucketn)
 
-	kvfeeds, ok := dcp_buckets_seqnos.feeds[bucketn]
-	if ok && kvfeeds != nil {
-		for _, kvfeed := range kvfeeds {
-			kvfeed.Close()
-		}
+	reader, ok := dcp_buckets_seqnos.readerMap[bucketn]
+	if ok && reader != nil {
+		reader.Close()
 	}
-	delete(dcp_buckets_seqnos.feeds, bucketn)
+	delete(dcp_buckets_seqnos.readerMap, bucketn)
 }
 
 // BucketSeqnos return list of {{vbno,seqno}..} for all vbuckets.
@@ -115,34 +181,55 @@ func BucketSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error)
 		}
 	}()
 
-	var kvfeeds map[string]*couchbase.DcpFeed
+	var reader *vbSeqnosReader
 
-	kvfeeds, err = func() (map[string]*couchbase.DcpFeed, error) {
+	reader, err = func() (*vbSeqnosReader, error) {
 		dcp_buckets_seqnos.rw.Lock()
 		defer dcp_buckets_seqnos.rw.Unlock()
 
-		kvfeeds, ok := dcp_buckets_seqnos.feeds[bucketn]
+		reader, ok := dcp_buckets_seqnos.readerMap[bucketn]
 		if !ok { // no {bucket,kvfeeds} found, create!
 			if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
 				return nil, err
 			}
-			kvfeeds = dcp_buckets_seqnos.feeds[bucketn]
+			reader = dcp_buckets_seqnos.readerMap[bucketn]
 		}
-		return kvfeeds, nil
+		return reader, nil
 	}()
 	if err != nil {
 		return nil, err
 	}
 
-	var kv_seqnos map[uint16]uint64
+	return reader.GetSeqnos()
+}
+
+func CollectSeqnos(kvfeeds map[string]*couchbase.DcpFeed) (l_seqnos []uint64, err error) {
+	var wg sync.WaitGroup
+
+	// Buffer for storing kv_seqs from each node
+	kv_seqnos_node := make([]map[uint16]uint64, len(kvfeeds))
+	errors := make([]error, len(kvfeeds))
+
+	i := 0
+	for _, feed := range kvfeeds {
+		wg.Add(1)
+		go func(index int, feed *couchbase.DcpFeed) {
+			defer wg.Done()
+			kv_seqnos_node[index], errors[index] = feed.DcpGetSeqnos()
+		}(i, feed)
+		i++
+	}
+
+	wg.Wait()
 
 	seqnos := make(map[uint16]uint64)
-	for _, feed := range kvfeeds {
-		kv_seqnos, err = feed.DcpGetSeqnos()
+	for i, kv_seqnos := range kv_seqnos_node {
+		err := errors[i]
 		if err != nil {
 			logging.Errorf("feed.DcpGetSeqnos(): %v\n", err)
 			return nil, err
 		}
+
 		for vbno, seqno := range kv_seqnos {
 			if prev, ok := seqnos[vbno]; !ok || prev < seqno {
 				seqnos[vbno] = seqno
@@ -193,7 +280,7 @@ func pollForDeletedBuckets() {
 				if m, err := bucket.GetVBmap(nil); err != nil {
 					// idle detect failures.
 					todels = append(todels, bucketn)
-				} else if len(m) != len(dcp_buckets_seqnos.feeds[bucketn]) {
+				} else if len(m) != len(dcp_buckets_seqnos.readerMap[bucketn].kvfeeds) {
 					// lazy detect kv-rebalance
 					todels = append(todels, bucketn)
 				}
