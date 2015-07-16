@@ -1563,7 +1563,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS_OPEN_STREAM:
-					logging.Debugf("Indexer::sendStreamUpdateForBuildIndex \n\tStream Request Success For "+
+					logging.Debugf("Indexer::sendStreamUpdateForBuildIndex Stream Request Success For "+
 						"Stream %v Bucket %v.", buildStream, bucket)
 
 					//once stream request is successful re-calculate the KV timestamp.
@@ -1583,15 +1583,15 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 				case INDEXER_ROLLBACK:
 					//an initial build request should never receive rollback message
-					logging.Errorf("Indexer::sendStreamUpdateForBuildIndex \n\tUnexpected Rollback from "+
+					logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Unexpected Rollback from "+
 						"Projector during Initial Stream Request %v", resp)
 					common.CrashOnError(ErrKVRollbackForInitRequest)
 
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::sendStreamUpdateForBuildIndex - "+
-						"Error from Projector %v. Retrying.", respErr.cause)
+					logging.Errorf("Indexer::sendStreamUpdateForBuildIndex Stream %v Bucket %v."+
+						"Error from Projector %v. Retrying.", buildStream, bucket, respErr.cause)
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
 				}
@@ -1684,6 +1684,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 				//promote to close stream
 				cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
 					streamId: streamId,
+					bucket:   indexInst.Defn.Bucket,
 					respCh:   respCh}
 
 			} else {
@@ -1744,8 +1745,8 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 					default:
 						//log and retry for all other responses
 						respErr := resp.(*MsgError).GetError()
-						logging.Errorf("Indexer::sendStreamUpdateForDropIndex - "+
-							"Error from Projector %v. Retrying.", respErr.cause)
+						logging.Errorf("Indexer::sendStreamUpdateForDropIndex - Stream %v Bucket %v"+
+							"Error from Projector %v. Retrying.", streamId, indexInst.Defn.Bucket, respErr.cause)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
 					}
@@ -2121,12 +2122,12 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 					//released and MTR can proceed to repair the Topic.
 					if respErr.cause.Error() == common.ErrorClosed.Error() ||
 						respErr.cause.Error() == projClient.ErrorTopicMissing.Error() {
-						logging.Warnf("Indexer::handleInitialBuildDone Stream %v Bucket %v \n\t"+
+						logging.Warnf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
 							"Error from Projector %v. Aborting.", streamId, bucket, respErr.cause)
 						break retryloop
 					} else {
 
-						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v \n\t"+
+						logging.Errorf("Indexer::handleInitialBuildDone Stream %v Bucket %v "+
 							"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
 						time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 					}
@@ -2215,6 +2216,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 		//promote to close stream
 		cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
 			streamId: streamId,
+			bucket:   bucket,
 			respCh:   respCh,
 			stopCh:   stopCh}
 	} else {
@@ -2252,7 +2254,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	retryloop:
 		for {
 			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::handleMergeInitStream \n\tBucket Not Found "+
+				logging.Errorf("Indexer::handleMergeInitStream Bucket Not Found "+
 					"For Stream %v Bucket %v", streamId, bucket)
 				break retryloop
 			}
@@ -2273,7 +2275,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::handleMergeInitStream Stream %v Bucket %v \n\t"+
+					logging.Errorf("Indexer::handleMergeInitStream Stream %v Bucket %v "+
 						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
@@ -2371,6 +2373,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 		//promote to close stream
 		cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
 			streamId: streamId,
+			bucket:   bucket,
 			respCh:   respCh,
 			stopCh:   stopCh}
 	} else {
@@ -2422,7 +2425,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::stopBucketStream Stream %v Bucket %v \n\t"+
+					logging.Errorf("Indexer::stopBucketStream Stream %v Bucket %v "+
 						"Error from Projector %v. Retrying.", streamId, bucket, respErr.cause)
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 
@@ -2575,7 +2578,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v \n\t"+
+					logging.Errorf("Indexer::startBucketStream Stream %v Bucket %v "+
 						"Error from Projector %v. Retrying.", streamId, bucket,
 						respErr.cause)
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
@@ -3139,7 +3142,7 @@ func (idx *indexer) closeAllStreams() {
 				default:
 					//log and retry for all other responses
 					respErr := resp.(*MsgError).GetError()
-					logging.Errorf("Indexer::closeAllStreams Stream %v \n\t"+
+					logging.Errorf("Indexer::closeAllStreams Stream %v "+
 						"Error from Projector %v. Retrying.", common.StreamId(i), respErr.cause)
 					time.Sleep(KV_RETRY_INTERVAL * time.Millisecond)
 				}
