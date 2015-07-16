@@ -688,6 +688,7 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 			//store the current snap marker in the lastSnapMarker map
 			lastSnap.Snapshots[i][0] = ts.Snapshots[i][0]
 			lastSnap.Snapshots[i][1] = ts.Snapshots[i][1]
+			lastSnap.Vbuuids[i] = ts.Vbuuids[i]
 
 			//store the new snap marker in hwt
 			ts.Snapshots[i][0] = hwt.Snapshots[i][0]
@@ -740,6 +741,7 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 			if ts.Seqnos[i] >= lastSnap.Snapshots[i][0] && ts.Seqnos[i] <= lastSnap.Snapshots[i][1] {
 				ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
 				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
+				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
 			}
 		}
 	}
