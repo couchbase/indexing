@@ -96,8 +96,8 @@ message Span {
 }
 
 message Range {
-    required bytes  low       = 1;
-    required bytes  high      = 2;
+    optional bytes  low       = 1;
+    optional bytes  high      = 2;
     required uint32 inclusion = 3;
 }
 

@@ -474,8 +474,8 @@ func (m *Span) GetEquals() [][]byte {
 }
 
 type Range struct {
-	Low              []byte  `protobuf:"bytes,1,req,name=low" json:"low,omitempty"`
-	High             []byte  `protobuf:"bytes,2,req,name=high" json:"high,omitempty"`
+	Low              []byte  `protobuf:"bytes,1,opt,name=low" json:"low,omitempty"`
+	High             []byte  `protobuf:"bytes,2,opt,name=high" json:"high,omitempty"`
 	Inclusion        *uint32 `protobuf:"varint,3,req,name=inclusion" json:"inclusion,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
