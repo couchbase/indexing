@@ -773,21 +773,30 @@ func (feed *Feed) restartVbuckets(
 		}
 		ts := ts.SelectByVbuckets(vbnos)
 
-		actTs, ok := feed.actTss[bucketn]
-		if ok { // don't re-request for already active vbuckets
+		actTs, ok1 := feed.actTss[bucketn]
+		rollTs, ok2 := feed.rollTss[bucketn]
+		reqTs, ok3 := feed.reqTss[bucketn]
+		engines, ok4 := feed.engines[bucketn]
+
+		if !ok1 || !ok2 || !ok3 || !ok4 || len(engines) == 0 {
+			fmsg := "%v ##%x restartVbuckets() invalid-bucket %v\n"
+			logging.Errorf(fmsg, feed.logPrefix, opaque, bucketn)
+			err = projC.ErrorInvalidBucket
+			continue
+		}
+		if ok1 { // don't re-request for already active vbuckets
 			ts = ts.FilterByVbuckets(c.Vbno32to16(actTs.GetVbnos()))
 		}
-		rollTs, ok := feed.rollTss[bucketn]
-		if ok { // forget previous rollback for the current set of vbuckets
+		if ok2 { // forget previous rollback for the current set of vbuckets
 			rollTs = rollTs.FilterByVbuckets(c.Vbno32to16(ts.GetVbnos()))
 		}
-		reqTs, ok := feed.reqTss[bucketn]
 		// book-keeping of out-standing request, vbuckets that have
 		// out-standing request will be ignored.
-		if ok {
+		if ok3 {
 			ts = ts.FilterByVbuckets(c.Vbno32to16(reqTs.GetVbnos()))
 		}
 		reqTs = ts.Union(ts)
+
 		// open or acquire the upstream feeder object.
 		feeder, e := feed.openFeeder(opaque, pooln, bucketn)
 		if e != nil {
