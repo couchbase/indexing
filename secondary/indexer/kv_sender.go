@@ -397,7 +397,8 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 		//if there is a topicMissing/genServer.Closed error, a fresh
 		//MutationTopicRequest is required.
 		if err.Error() == projClient.ErrorTopicMissing.Error() ||
-			err.Error() == c.ErrorClosed.Error() {
+			err.Error() == c.ErrorClosed.Error() ||
+			err.Error() == projClient.ErrorInvalidBucket.Error() {
 			respCh <- &MsgKVStreamRepair{
 				streamId: streamId,
 				bucket:   restartTs.Bucket,
