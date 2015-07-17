@@ -49,7 +49,8 @@ type timekeeper struct {
 	statsLock  sync.Mutex
 	bucketConn map[string]*couchbase.Bucket
 
-	stats IndexerStatsHolder
+	stats           IndexerStatsHolder
+	vbCheckerStopCh chan bool
 
 	lock sync.Mutex //lock to protect this structure
 }
@@ -110,6 +111,7 @@ loop:
 				if cmd.GetMsgType() == TK_SHUTDOWN {
 					logging.Infof("Timekeeper::run Shutting Down")
 					tk.supvCmdch <- &MsgSuccess{}
+					close(tk.vbCheckerStopCh)
 					break loop
 				}
 				tk.handleSupervisorCommands(cmd)
@@ -941,7 +943,7 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 		// (1) vb has not received a STREAM_BEGIN, (2) recovering from CONN_ERROR
 		//
 		vbState := tk.ss.getVbStatus(streamId, meta.bucket, meta.vbucket)
-		if vbState != VBS_CONN_ERROR {
+		if vbState != VBS_CONN_ERROR && vbState != VBS_INIT {
 
 			tk.ss.decVbRefCount(streamId, meta.bucket, meta.vbucket)
 			count := tk.ss.getVbRefCount(streamId, meta.bucket, meta.vbucket)
@@ -998,7 +1000,138 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
-	tk.handleStreamConnErrorInternal(streamId, bucket, vbList)
+	if len(bucket) != 0 && len(vbList) != 0 {
+		tk.handleStreamConnErrorInternal(streamId, bucket, vbList)
+	} else {
+		tk.supvCmdch <- &MsgSuccess{}
+	}
+
+	if tk.vbCheckerStopCh == nil {
+		tk.vbCheckerStopCh = make(chan bool)
+		go tk.handleConnErrOnVbWithMissingStreamBegin(streamId)
+	}
+}
+
+func (tk *timekeeper) computeVbWithMissingStreamBegin(streamId common.StreamId) BucketVbStatusMap {
+
+	result := make(BucketVbStatusMap)
+
+	for bucket, ts := range tk.ss.streamBucketVbStatusMap[streamId] {
+
+		// only check for stream in ACTIVE or RECOVERY state
+		bucketStatus := tk.ss.streamBucketStatus[streamId][bucket]
+		if bucketStatus == STREAM_ACTIVE || bucketStatus == STREAM_RECOVERY {
+			hasMissing := false
+			for _, status := range ts {
+				if status == VBS_INIT {
+					hasMissing = true
+				}
+			}
+
+			if hasMissing {
+				result[bucket] = CopyTimestamp(ts)
+			}
+		}
+	}
+
+	return result
+}
+
+func (tk *timekeeper) handleConnErrOnVbWithMissingStreamBegin(streamId common.StreamId) {
+
+	logging.Debugf("timekeeper.handleConnErrOnVbWithMissingStreamBegin stream %v", streamId)
+
+	defer func() {
+		tk.lock.Lock()
+		defer tk.lock.Unlock()
+		tk.vbCheckerStopCh = nil
+	}()
+
+	// compute any vb that is missing StreamBegin
+	missing := func() BucketVbStatusMap {
+		tk.lock.Lock()
+		defer tk.lock.Unlock()
+		return tk.computeVbWithMissingStreamBegin(streamId)
+	}()
+
+	for len(missing) != 0 {
+
+		// Let's sleep and check for vb at a later time.  If a vb has missing StreamBegin,
+		// it could mean that the projector is still sending StreamBegin to indexer.  So
+		// let's wait a little longer for TK to recieve those in-flight streamBegin.
+		ticker := time.After(2 * time.Second)
+		select {
+		case <-tk.vbCheckerStopCh:
+			return
+		case <-ticker:
+		}
+
+		missing = func() BucketVbStatusMap {
+
+			tk.lock.Lock()
+			defer tk.lock.Unlock()
+
+			// After sleep, find the vb that has not yet received StreamBegin.  If the same set
+			// of vb are still missing before and after sleep, then we can assume those vb will
+			// need to repair.   If the set of vb are not identical, then retry again.
+			newMissing := tk.computeVbWithMissingStreamBegin(streamId)
+
+			toFix := make(map[string][]Vbucket)
+			for bucket, oldTs := range missing {
+
+				vbList := []Vbucket(nil)
+
+				// if stream request is not done (we have not yet got
+				// the activeTs), then do not process this.
+				if tk.ss.streamBucketOpenTsMap[streamId][bucket] == nil {
+					// if the bucket still exist
+					if newTs, ok := newMissing[bucket]; ok && newTs != nil {
+						delete(newMissing, bucket)
+						newMissing[bucket] = oldTs
+					}
+				} else {
+					// compare the vb status before and after sleep
+					for i, oldStatus := range oldTs {
+						if oldStatus == VBS_INIT {
+							if newStatus, ok := newMissing[bucket]; ok && newStatus[i] == oldStatus {
+								vbList = append(vbList, Vbucket(i))
+							}
+						}
+					}
+				}
+
+				// if the vb are still missing StreamBegin, then we need to repair this bucket.
+				if len(vbList) != 0 {
+					toFix[bucket] = vbList
+					delete(newMissing, bucket)
+				}
+			}
+
+			// Repair the vb in the bucket
+			for bucket, vbList := range toFix {
+
+				bucketStatus := tk.ss.streamBucketStatus[streamId][bucket]
+				if len(vbList) != 0 && (bucketStatus == STREAM_ACTIVE || bucketStatus == STREAM_RECOVERY) {
+					logging.Infof("timekeeper.handleConnErrOnVbWithMissingStreamBegin. "+
+						"Raise ConnectionError stream %v bucket %v vblist %v",
+						streamId, bucket, vbList)
+
+					msg := &MsgStreamInfo{mType: STREAM_READER_CONN_ERROR,
+						streamId: streamId,
+						bucket:   bucket,
+						vbList:   vbList,
+					}
+
+					tk.supvRespch <- msg
+				}
+			}
+
+			// Return any vb that still has missing streamBegin
+			return newMissing
+		}()
+	}
+
+	logging.Debugf("timekeeper.handleConnErrOnVbWithMissingStreamBegin stream %v done", streamId)
 }
 
 func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, bucket string, vbList []Vbucket) {
@@ -1170,6 +1303,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	streamId := cmd.(*MsgStreamInfo).GetStreamId()
 	bucket := cmd.(*MsgStreamInfo).GetBucket()
 	buildTs := cmd.(*MsgStreamInfo).GetBuildTs()
+	activeTs := cmd.(*MsgStreamInfo).GetActiveTs()
 
 	logging.Debugf("Timekeeper::handleStreamRequestDone StreamId %v Bucket %v",
 		streamId, bucket)
@@ -1178,6 +1312,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	defer tk.lock.Unlock()
 
 	tk.setBuildTs(streamId, bucket, buildTs)
+	tk.ss.streamBucketOpenTsMap[streamId][bucket] = activeTs
 
 	//Check for possiblity of build done after stream request done.
 	//In case of crash recovery, if there are no mutations, there is
@@ -1202,6 +1337,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	bucket := cmd.(*MsgRecovery).GetBucket()
 	buildTs := cmd.(*MsgRecovery).GetBuildTs()
 	mergeTs := cmd.(*MsgRecovery).GetRestartTs()
+	activeTs := cmd.(*MsgRecovery).GetActiveTs()
 
 	logging.Debugf("Timekeeper::handleRecoveryDone StreamId %v Bucket %v",
 		streamId, bucket)
@@ -1210,6 +1346,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	defer tk.lock.Unlock()
 
 	tk.setBuildTs(streamId, bucket, buildTs)
+	tk.ss.streamBucketOpenTsMap[streamId][bucket] = activeTs
 
 	//once MAINT_STREAM gets successfully restarted in recovery, use the restartTs
 	//as the mergeTs for Catchup indexes. As part of the MTR, Catchup state indexes
@@ -1592,7 +1729,7 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
 		} else {
 			//store the ts in list
-			logging.LazyDebug(func() string {
+			logging.LazyTrace(func() string {
 				return fmt.Sprintf(
 					"Timekeeper::generateNewStabilityTS %v %v Added TS to Pending List "+
 						"%v ", bucket, streamId, tsVbuuid)
@@ -1701,6 +1838,11 @@ func (tk *timekeeper) processPendingTS(streamId common.StreamId, bucket string) 
 
 		}
 		tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
+		//update tsQueueSize when processing queued TS
+		stats := tk.stats.Get()
+		if stat, ok := stats.buckets[bucket]; ok {
+			stat.tsQueueSize.Set(int64(tsList.Len()))
+		}
 		return true
 	}
 

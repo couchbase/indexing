@@ -32,6 +32,7 @@ type StreamState struct {
 	streamBucketTsListMap        map[common.StreamId]BucketTsListMap
 	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
 	streamBucketRestartTsMap     map[common.StreamId]BucketRestartTsMap
+	streamBucketOpenTsMap        map[common.StreamId]BucketOpenTsMap
 	streamBucketLastSnapMarker   map[common.StreamId]BucketLastSnapMarker
 
 	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
@@ -54,6 +55,7 @@ type StreamState struct {
 type BucketHWTMap map[string]*common.TsVbuuid
 type BucketLastFlushedTsMap map[string]*common.TsVbuuid
 type BucketRestartTsMap map[string]*common.TsVbuuid
+type BucketOpenTsMap map[string]*common.TsVbuuid
 type BucketInMemTsCountMap map[string]uint64
 type BucketNewTsReqdMap map[string]bool
 type BucketLastSnapMarker map[string]*common.TsVbuuid
@@ -89,6 +91,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketLastFlushedTsMap:          make(map[common.StreamId]BucketLastFlushedTsMap),
 		streamBucketLastSnapAlignFlushedTsMap: make(map[common.StreamId]BucketLastFlushedTsMap),
 		streamBucketRestartTsMap:              make(map[common.StreamId]BucketRestartTsMap),
+		streamBucketOpenTsMap:                 make(map[common.StreamId]BucketOpenTsMap),
 		streamBucketFlushEnabledMap:           make(map[common.StreamId]BucketFlushEnabledMap),
 		streamBucketDrainEnabledMap:           make(map[common.StreamId]BucketDrainEnabledMap),
 		streamBucketVbStatusMap:               make(map[common.StreamId]BucketVbStatusMap),
@@ -123,6 +126,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 
 	bucketRestartTsMap := make(BucketRestartTsMap)
 	ss.streamBucketRestartTsMap[streamId] = bucketRestartTsMap
+
+	bucketOpenTsMap := make(BucketOpenTsMap)
+	ss.streamBucketOpenTsMap[streamId] = bucketOpenTsMap
 
 	bucketTsListMap := make(BucketTsListMap)
 	ss.streamBucketTsListMap[streamId] = bucketTsListMap
@@ -206,6 +212,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketTimerStopCh[streamId][bucket] = make(StopChannel)
 	ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
 	ss.streamBucketRestartTsMap[streamId][bucket] = nil
+	ss.streamBucketOpenTsMap[streamId][bucket] = nil
 	ss.streamBucketLastSnapMarker[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
@@ -242,6 +249,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketTimerStopCh[streamId], bucket)
 	delete(ss.streamBucketLastPersistTime[streamId], bucket)
 	delete(ss.streamBucketRestartTsMap[streamId], bucket)
+	delete(ss.streamBucketOpenTsMap[streamId], bucket)
 	delete(ss.streamBucketLastSnapMarker[streamId], bucket)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
@@ -273,6 +281,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketLastPersistTime, streamId)
 	delete(ss.streamBucketStatus, streamId)
 	delete(ss.streamBucketRestartTsMap, streamId)
+	delete(ss.streamBucketOpenTsMap, streamId)
 	delete(ss.streamBucketLastSnapMarker, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
@@ -395,7 +404,10 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
 		if s == VBS_STREAM_END || s == VBS_CONN_ERROR {
 
-			ss.addRepairTs(repairTs, hwtTs, Vbucket(i))
+			logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
+				"Bucket %v StreamId %v Vbucket %v -- add to repair timestamp.",
+				bucket, streamId, i)
+			ss.addRepairTs(repairTs, hwtTs, Vbucket(i), ss.streamBucketOpenTsMap[streamId][bucket])
 			count++
 			anythingToRepair = true
 			if hasConnError {
@@ -445,7 +457,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 				// Make it a ConnErr such that subsequent retry will
 				// force a shutdown/restart sequence.
 				ss.makeConnectionError(streamId, bucket, Vbucket(i))
-				ss.addRepairTs(repairTs, hwtTs, Vbucket(i))
+				ss.addRepairTs(repairTs, hwtTs, Vbucket(i), ss.streamBucketOpenTsMap[streamId][bucket])
 				count++
 				shutdownVbs = append(shutdownVbs, Vbucket(i))
 				anythingToRepair = true
@@ -483,6 +495,10 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 
 	ss.adjustNonSnapAlignedVbs(repairTs, streamId, bucket)
 
+	logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
+		"Bucket %v StreamId %v repairTS %v",
+		bucket, streamId, repairTs)
+
 	return repairTs, anythingToRepair, shutdownVbs
 }
 
@@ -507,12 +523,18 @@ func (ss *StreamState) makeConnectionError(streamId common.StreamId, bucket stri
 	ss.clearRestartVbRetry(streamId, bucket, vbno)
 }
 
-func (ss *StreamState) addRepairTs(repairTs *common.TsVbuuid, hwtTs *common.TsVbuuid, vbno Vbucket) {
+func (ss *StreamState) addRepairTs(repairTs *common.TsVbuuid, hwtTs *common.TsVbuuid, vbno Vbucket, streamOpenTs *common.TsVbuuid) {
 
 	repairTs.Seqnos[vbno] = hwtTs.Seqnos[vbno]
 	repairTs.Vbuuids[vbno] = hwtTs.Vbuuids[vbno]
 	repairTs.Snapshots[vbno][0] = hwtTs.Snapshots[vbno][0]
 	repairTs.Snapshots[vbno][1] = hwtTs.Snapshots[vbno][1]
+
+	// if repair TS has a invalid vbuuid, use the vbuuid from the TS which starts
+	// the stream.
+	if repairTs.Vbuuids[vbno] == 0 && streamOpenTs != nil {
+		repairTs.Vbuuids[vbno] = streamOpenTs.Vbuuids[vbno]
+	}
 }
 
 //If a snapshot marker has been received but no mutation for that snapshot,
@@ -532,6 +554,7 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 				repairTs.Snapshots[vbno][0] = fts.Snapshots[vbno][0]
 				repairTs.Snapshots[vbno][1] = fts.Snapshots[vbno][1]
 				repairTs.Seqnos[vbno] = fts.Seqnos[vbno]
+				repairTs.Vbuuids[vbno] = fts.Vbuuids[vbno]
 				snapBegin = repairTs.Snapshots[vbno][0]
 				snapEnd = repairTs.Snapshots[vbno][1]
 			}
@@ -542,6 +565,7 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 					repairTs.Snapshots[vbno][0] = fts.Snapshots[vbno][0]
 					repairTs.Snapshots[vbno][1] = fts.Snapshots[vbno][1]
 					repairTs.Seqnos[vbno] = fts.Seqnos[vbno]
+					repairTs.Vbuuids[vbno] = fts.Vbuuids[vbno]
 					snapBegin = repairTs.Snapshots[vbno][0]
 					snapEnd = repairTs.Snapshots[vbno][1]
 				}
@@ -554,18 +578,32 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 					repairTs.Snapshots[vbno][0] = rts.Snapshots[vbno][0]
 					repairTs.Snapshots[vbno][1] = rts.Snapshots[vbno][1]
 					repairTs.Seqnos[vbno] = rts.Seqnos[vbno]
+					repairTs.Vbuuids[vbno] = rts.Vbuuids[vbno]
 					snapBegin = repairTs.Snapshots[vbno][0]
 					snapEnd = repairTs.Snapshots[vbno][1]
 				}
 			}
 
-			//if seqno is still not with snapshot range, then it is likely a bug in state management
+			//if seqno is still not with snapshot range, then create an 0 timestamp
 			if !(repairTs.Seqnos[vbno] >= snapBegin && repairTs.Seqnos[vbno] <= snapEnd) {
-				common.CrashOnError(errors.New("No Valid Restart Seqno Found"))
+				logging.Debugf("StreamState::adjustNonSnapAlignedVbsg - No Valid Restart Seqno Found")
+				logging.Debugf("StreamState::adjustNonSnapAlignedVbsg - Use 0 seqno for Bucket %v StreamId %v Vbucket %d",
+					bucket, streamId, vbno)
+
+				repairTs.Snapshots[vbno][0] = 0
+				repairTs.Snapshots[vbno][1] = 0
+				repairTs.Seqnos[vbno] = 0
+
+				if repairTs.Vbuuids[vbno] == 0 {
+					if ss.streamBucketOpenTsMap[streamId][bucket] != nil {
+						repairTs.Vbuuids[vbno] = ss.streamBucketOpenTsMap[streamId][bucket].Vbuuids[vbno]
+					} else {
+						common.CrashOnError(errors.New("No Valid Restart Seqno Found. Cannot create 0 timestamp"))
+					}
+				}
 			}
 		}
 	}
-
 }
 
 func (ss *StreamState) checkAllStreamBeginsReceived(streamId common.StreamId,
@@ -650,6 +688,7 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 			//store the current snap marker in the lastSnapMarker map
 			lastSnap.Snapshots[i][0] = ts.Snapshots[i][0]
 			lastSnap.Snapshots[i][1] = ts.Snapshots[i][1]
+			lastSnap.Vbuuids[i] = ts.Vbuuids[i]
 
 			//store the new snap marker in hwt
 			ts.Snapshots[i][0] = hwt.Snapshots[i][0]
@@ -702,6 +741,7 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 			if ts.Seqnos[i] >= lastSnap.Snapshots[i][0] && ts.Seqnos[i] <= lastSnap.Snapshots[i][1] {
 				ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
 				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
+				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
 			}
 		}
 	}

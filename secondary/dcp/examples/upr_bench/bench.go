@@ -97,7 +97,7 @@ func startBucket(cluster, bucketn string, rch chan []interface{}) int {
 		"genChanSize":  10000,
 		"dataChanSize": 10000,
 	}
-	dcpFeed, err := b.StartDcpFeed("rawupr", uint32(0), 0xABCD, dcpConfig)
+	dcpFeed, err := b.StartDcpFeed(couchbase.NewDcpFeedName("rawupr"), uint32(0), 0xABCD, dcpConfig)
 	mf(err, "- upr")
 
 	vbnos := listOfVbnos(options.maxVbno)

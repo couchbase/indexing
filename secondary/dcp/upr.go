@@ -31,6 +31,13 @@ var ErrorClosed = errors.New("dcp.closed")
 // FailoverLog for list of vbuckets.
 type FailoverLog map[uint16]memcached.FailoverLog
 
+// Make a valid DCP feed name. These always begin with secidx-
+type DcpFeedName string
+
+func NewDcpFeedName(name string) DcpFeedName {
+	return DcpFeedName("secidx-" + name)
+}
+
 // GetFailoverLogs get the failover logs for a set of vbucket ids
 func (b *Bucket) GetFailoverLogs(
 	opaque uint16,
@@ -68,7 +75,7 @@ func (b *Bucket) GetFailoverLogs(
 			continue
 		}
 
-		name := fmt.Sprintf("getfailoverlog-%s-%v", b.Name, time.Now().UnixNano())
+		name := NewDcpFeedName(fmt.Sprintf("getfailoverlog-%s-%v", b.Name, time.Now().UnixNano()))
 		singleFeed, err := serverConn.StartDcpFeed(name, 0, nil, opaque, config)
 		if err != nil {
 			return nil, err
@@ -97,7 +104,7 @@ type DcpFeed struct {
 	bucket    *Bucket
 	nodeFeeds map[string]*FeedInfo     // The DCP feeds of the individual nodes
 	output    chan *memcached.DcpEvent // Same as C but writeably-typed
-	name      string                   // name of this DCP feed
+	name      DcpFeedName              // name of this DCP feed
 	sequence  uint32                   // sequence number for this feed
 	// gen-server
 	reqch     chan []interface{}
@@ -109,7 +116,7 @@ type DcpFeed struct {
 // No data will be sent on the channel unless vbuckets streams
 // are requested.
 func (b *Bucket) StartDcpFeed(
-	name string, sequence uint32,
+	name DcpFeedName, sequence uint32,
 	opaque uint16,
 	config map[string]interface{}) (*DcpFeed, error) {
 
@@ -126,7 +133,7 @@ func (b *Bucket) StartDcpFeed(
 //      "genChanSize", buffer channel size for control path.
 //      "dataChanSize", buffer channel size for data path.
 func (b *Bucket) StartDcpFeedOver(
-	name string,
+	name DcpFeedName,
 	sequence uint32,
 	kvaddrs []string,
 	opaque uint16,
@@ -281,9 +288,9 @@ func (feed *DcpFeed) connectToNodes(
 			// and continue to spawn a new one ...
 		}
 
-		var name string
+		var name DcpFeedName
 		if feed.name == "" {
-			name = "DefaultDcpClient"
+			name = NewDcpFeedName("DefaultDcpClient")
 		} else {
 			name = feed.name
 		}

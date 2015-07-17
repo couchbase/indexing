@@ -62,7 +62,7 @@ func main() {
 		"genChanSize":  10000,
 		"dataChanSize": 10000,
 	}
-	name := fmt.Sprintf("%v", time.Now().UnixNano())
+	name := couchbase.NewDcpFeedName(fmt.Sprintf("%v", time.Now().UnixNano()))
 	feed, err := bucket.StartDcpFeed(name, 0, 0xABCD, dcpConfig)
 	if err != nil {
 		log.Fatal(err)

@@ -396,16 +396,24 @@ func (c *GsiClient) Lookup(
 
 	err = c.doScan(
 		defnID,
-		func(qc *GsiScanClient, index *common.IndexDefn) (err error) {
+		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+			var err error
 
 			vector, err = c.getConsistency(cons, vector, index.Bucket)
 			if err != nil {
-				return err
+				return err, false
 			}
 			return qc.Lookup(
 				uint64(index.DefnId), values, distinct, limit, cons,
 				vector, callb)
 		})
+
+	if err != nil { // callback with error
+		resp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(resp)
+	}
 
 	return
 }
@@ -432,11 +440,12 @@ func (c *GsiClient) Range(
 
 	err = c.doScan(
 		defnID,
-		func(qc *GsiScanClient, index *common.IndexDefn) (err error) {
+		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+			var err error
 
 			vector, err = c.getConsistency(cons, vector, index.Bucket)
 			if err != nil {
-				return err
+				return err, false
 			}
 			if c.bridge.IsPrimary(uint64(index.DefnId)) {
 				var l, h []byte
@@ -456,6 +465,13 @@ func (c *GsiClient) Range(
 				uint64(index.DefnId), low, high, inclusion, distinct, limit,
 				cons, vector, callb)
 		})
+
+	if err != nil { // callback with error
+		resp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(resp)
+	}
 
 	return
 }
@@ -480,14 +496,22 @@ func (c *GsiClient) ScanAll(
 	}
 	err = c.doScan(
 		defnID,
-		func(qc *GsiScanClient, index *common.IndexDefn) (err error) {
+		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+			var err error
 
 			vector, err = c.getConsistency(cons, vector, index.Bucket)
 			if err != nil {
-				return err
+				return err, false
 			}
 			return qc.ScanAll(uint64(index.DefnId), limit, cons, vector, callb)
 		})
+
+	if err != nil { // callback with error
+		resp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(resp)
+	}
 
 	return
 }
@@ -507,14 +531,15 @@ func (c *GsiClient) CountLookup(
 	}
 
 	err = c.doScan(
-		defnID, func(qc *GsiScanClient, index *common.IndexDefn) error {
+		defnID, func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+			var err error
 
 			vector, err = c.getConsistency(cons, vector, index.Bucket)
 			if err != nil {
-				return err
+				return err, false
 			}
 			count, err = qc.CountLookup(uint64(index.DefnId), values, cons, vector)
-			return err
+			return err, false
 		})
 
 	return count, err
@@ -536,15 +561,16 @@ func (c *GsiClient) CountRange(
 		return 0, err
 	}
 	err = c.doScan(
-		defnID, func(qc *GsiScanClient, index *common.IndexDefn) error {
+		defnID, func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+			var err error
 
 			vector, err = c.getConsistency(cons, vector, index.Bucket)
 			if err != nil {
-				return err
+				return err, false
 			}
 			count, err = qc.CountRange(
 				uint64(index.DefnId), low, high, inclusion, cons, vector)
-			return err
+			return err, false
 		})
 
 	return count, err
@@ -589,23 +615,27 @@ func (c *GsiClient) updateScanClients() {
 
 func (c *GsiClient) doScan(
 	defnID uint64,
-	callb func(*GsiScanClient, *common.IndexDefn) error) (err error) {
+	callb func(*GsiScanClient, *common.IndexDefn) (error, bool)) (err error) {
 
 	var qc *GsiScanClient
-	var ok1, ok2 bool
+	var ok1, ok2, partial bool
 	var queryport string
 	var targetDefnID uint64
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
-	for i := 0; i < retry; i++ {
+	for i := 0; true; {
 		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i); ok1 {
 			index := c.bridge.GetIndexDefn(targetDefnID)
 			if qc, ok2 = c.queryClients[queryport]; ok2 {
 				begin := time.Now()
-				if err = callb(qc, index); err == nil {
+				if err, partial = callb(qc, index); err == nil {
 					c.bridge.Timeit(targetDefnID, float64(time.Since(begin)))
 					return nil
+				} else if partial {
+					// partially succeeded scans, we don't reset-hash and we
+					// don't retry
+					return err
 				} else { // TODO: make this error message precise
 					// reset the hash so that we do a full STATS for next
 					// query.
@@ -613,10 +643,15 @@ func (c *GsiClient) doScan(
 				}
 			}
 		}
-		logging.Warnf(
-			"Retrying scan for index %v (%v %v): %v ...\n", targetDefnID, ok1, ok2, err)
-		c.updateScanClients()
-		time.Sleep(time.Duration(wait) * time.Millisecond)
+		if i = i + 1; i < retry {
+			logging.Warnf(
+				"Trying scan again for index %v (%v %v): %v ...\n",
+				targetDefnID, ok1, ok2, err)
+			c.updateScanClients()
+			time.Sleep(time.Duration(wait) * time.Millisecond)
+			continue
+		}
+		break
 	}
 	if err != nil {
 		return err

@@ -1712,8 +1712,8 @@ func (feed *Feed) topicResponse() *protobuf.TopicResponse {
 // generate a unique opaque identifier.
 // NOTE: be careful while changing the DCP name, it might affect other
 // parts of the system. ref: https://issues.couchbase.com/browse/MB-14300
-func newDCPConnectionName(bucketn, topic string, uuid uint64) string {
-	return fmt.Sprintf("proj-%s-%s-%v", bucketn, topic, uuid)
+func newDCPConnectionName(bucketn, topic string, uuid uint64) couchbase.DcpFeedName {
+	return couchbase.NewDcpFeedName(fmt.Sprintf("proj-%s-%s-%v", bucketn, topic, uuid))
 }
 
 //---- endpoint watcher
