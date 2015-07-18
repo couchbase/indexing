@@ -13,8 +13,8 @@ import "github.com/couchbase/indexing/secondary/logging"
 var dcp_buckets_seqnos struct {
 	rw        sync.RWMutex
 	numVbs    int
-	buckets   map[string]*couchbase.Bucket
-	readerMap map[string]*vbSeqnosReader // bucket->kvaddr->feed
+	buckets   map[string]*couchbase.Bucket // bucket ->*couchbase.Bucket
+	readerMap map[string]*vbSeqnosReader   // bucket->*vbSeqnosReader
 }
 
 func init() {
@@ -99,7 +99,19 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 		logging.Errorf("Unable to connect with bucket %q\n", bucketn)
 		return err
 	}
-	dcp_buckets_seqnos.buckets[bucketn] = bucket
+
+	kvfeeds := make(map[string]*couchbase.DcpFeed)
+
+	defer func() {
+		if err == nil {
+			dcp_buckets_seqnos.buckets[bucketn] = bucket
+			dcp_buckets_seqnos.readerMap[bucketn] = newVbSeqnosReader(kvfeeds)
+		} else {
+			for _, kvfeed := range kvfeeds {
+				kvfeed.Close()
+			}
+		}
+	}()
 
 	// get all kv-nodes
 	if err = bucket.Refresh(); err != nil {
@@ -124,7 +136,6 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 	// make sure a feed is available for all kv-nodes
 	var kvfeed *couchbase.DcpFeed
 
-	kvfeeds := make(map[string]*couchbase.DcpFeed)
 	config := map[string]interface{}{"genChanSize": 1000, "dataChanSize": 10}
 	for kvaddr := range m {
 		uuid, _ := NewUUID()
@@ -136,14 +147,14 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 		}
 		name = "getseqnos-" + name
 		kvfeed, err = bucket.StartDcpFeedOver(
-			couchbase.NewDcpFeedName(name), uint32(0), []string{kvaddr}, uint16(0xABBA), config)
+			couchbase.NewDcpFeedName(name), uint32(0), []string{kvaddr},
+			uint16(0xABBA), config)
 		if err != nil {
 			logging.Errorf("StartDcpFeedOver(): %v\n", err)
 			return err
 		}
 		kvfeeds[kvaddr] = kvfeed
 	}
-	dcp_buckets_seqnos.readerMap[bucketn] = newVbSeqnosReader(kvfeeds)
 
 	logging.Infof("{bucket,feeds} %q created for dcp_seqno cache...\n", bucketn)
 	return nil
