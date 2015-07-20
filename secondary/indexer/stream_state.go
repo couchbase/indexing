@@ -395,6 +395,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	numVbuckets := ss.config["numVbuckets"].Int()
 	repairTs := common.NewTsVbuuid(bucket, numVbuckets)
 	var shutdownVbs []Vbucket = nil
+	var repairVbs []Vbucket = nil
 	var count = 0
 
 	hwtTs := ss.streamBucketHWTMap[streamId][bucket]
@@ -404,10 +405,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
 		if s == VBS_STREAM_END || s == VBS_CONN_ERROR {
 
-			logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
-				"Bucket %v StreamId %v Vbucket %v -- add to repair timestamp.",
-				bucket, streamId, i)
-			ss.addRepairTs(repairTs, hwtTs, Vbucket(i), ss.streamBucketOpenTsMap[streamId][bucket])
+			repairVbs = ss.addRepairTs(repairTs, hwtTs, Vbucket(i), repairVbs)
 			count++
 			anythingToRepair = true
 			if hasConnError {
@@ -446,18 +444,19 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	// Third step: If there is nothing to repair, then double check if every vb has
 	// exactly one vb owner.  If not, then the accounting is wrong (most likely due
 	// to connection error).  Make the vb as ConnErr and continue to repair.
-	// Note: This will also take care of vb in VBS_INIT state.
+	// Note: Do not check for VBS_INIT.  RepairMissingStreamBegin will ensure that
+	// indexer is getting all StreamBegin.
 	if !anythingToRepair {
-		for i, _ := range ss.streamBucketVbStatusMap[streamId][bucket] {
+		for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
 			count := ss.streamBucketVbRefCountMap[streamId][bucket][i]
-			if count != 1 {
+			if count != 1 && s != VBS_INIT {
 				logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
 					"Bucket %v StreamId %v Vbucket %v have ref count (%v != 1). Convert to CONN_ERROR.",
 					bucket, streamId, i, count)
 				// Make it a ConnErr such that subsequent retry will
 				// force a shutdown/restart sequence.
 				ss.makeConnectionError(streamId, bucket, Vbucket(i))
-				ss.addRepairTs(repairTs, hwtTs, Vbucket(i), ss.streamBucketOpenTsMap[streamId][bucket])
+				repairVbs = ss.addRepairTs(repairTs, hwtTs, Vbucket(i), repairVbs)
 				count++
 				shutdownVbs = append(shutdownVbs, Vbucket(i))
 				anythingToRepair = true
@@ -493,7 +492,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 		ss.streamBucketRestartVbTsMap[streamId][bucket] = repairTs.Copy()
 	}
 
-	ss.adjustNonSnapAlignedVbs(repairTs, streamId, bucket)
+	ss.adjustNonSnapAlignedVbs(repairTs, streamId, bucket, repairVbs, true)
 
 	logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
 		"Bucket %v StreamId %v repairTS %v",
@@ -523,81 +522,102 @@ func (ss *StreamState) makeConnectionError(streamId common.StreamId, bucket stri
 	ss.clearRestartVbRetry(streamId, bucket, vbno)
 }
 
-func (ss *StreamState) addRepairTs(repairTs *common.TsVbuuid, hwtTs *common.TsVbuuid, vbno Vbucket, streamOpenTs *common.TsVbuuid) {
+func (ss *StreamState) addRepairTs(repairTs *common.TsVbuuid, hwtTs *common.TsVbuuid, vbno Vbucket, repairSeqno []Vbucket) []Vbucket {
 
 	repairTs.Seqnos[vbno] = hwtTs.Seqnos[vbno]
 	repairTs.Vbuuids[vbno] = hwtTs.Vbuuids[vbno]
 	repairTs.Snapshots[vbno][0] = hwtTs.Snapshots[vbno][0]
 	repairTs.Snapshots[vbno][1] = hwtTs.Snapshots[vbno][1]
 
-	// if repair TS has a invalid vbuuid, use the vbuuid from the TS which starts
-	// the stream.
-	if repairTs.Vbuuids[vbno] == 0 && streamOpenTs != nil {
-		repairTs.Vbuuids[vbno] = streamOpenTs.Vbuuids[vbno]
-	}
+	return append(repairSeqno, vbno)
 }
 
 //If a snapshot marker has been received but no mutation for that snapshot,
 //the repairTs seqno will be outside the snapshot marker range and
 //DCP will refuse to accept such seqno for restart. Such VBs need to
 //use lastFlushTs or restartTs.
+//
 func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
-	streamId common.StreamId, bucket string) {
+	streamId common.StreamId, bucket string, repairVbs []Vbucket, forStreamRepair bool) {
 
-	for _, vbno := range repairTs.GetVbnos() {
-		seqno := repairTs.Seqnos[vbno]
-		snapBegin := repairTs.Snapshots[vbno][0]
-		snapEnd := repairTs.Snapshots[vbno][1]
-		if !(seqno >= snapBegin && seqno <= snapEnd) {
+	// The caller either provide a vector of vb to repair, or this function will
+	// look for any vb in the repairTS that has a non-zero vbuuid.
+	if repairVbs == nil {
+		for _, vbno := range repairTs.GetVbnos() {
+			repairVbs = append(repairVbs, Vbucket(vbno))
+		}
+	}
+
+	logging.Debugf("StreamState::adjustNonSnapAlignedVbs\n\t"+
+		"Bucket %v StreamId %v Vbuckets %v.",
+		bucket, streamId, repairVbs)
+
+	for _, vbno := range repairVbs {
+
+		if !(repairTs.Seqnos[vbno] >= repairTs.Snapshots[vbno][0] &&
+			repairTs.Seqnos[vbno] <= repairTs.Snapshots[vbno][1]) ||
+			repairTs.Vbuuids[vbno] == 0 {
+
 			// First, use the last flush TS seqno if avaliable
 			if fts, ok := ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && fts != nil {
 				repairTs.Snapshots[vbno][0] = fts.Snapshots[vbno][0]
 				repairTs.Snapshots[vbno][1] = fts.Snapshots[vbno][1]
 				repairTs.Seqnos[vbno] = fts.Seqnos[vbno]
 				repairTs.Vbuuids[vbno] = fts.Vbuuids[vbno]
-				snapBegin = repairTs.Snapshots[vbno][0]
-				snapEnd = repairTs.Snapshots[vbno][1]
 			}
 
 			// If last flush TS is still out-of-bound, use last Snap-aligned flushed TS if available
-			if !(repairTs.Seqnos[vbno] >= snapBegin && repairTs.Seqnos[vbno] <= snapEnd) {
+			if !(repairTs.Seqnos[vbno] >= repairTs.Snapshots[vbno][0] &&
+				repairTs.Seqnos[vbno] <= repairTs.Snapshots[vbno][1]) ||
+				repairTs.Vbuuids[vbno] == 0 {
 				if fts, ok := ss.streamBucketLastSnapAlignFlushedTsMap[streamId][bucket]; ok && fts != nil {
 					repairTs.Snapshots[vbno][0] = fts.Snapshots[vbno][0]
 					repairTs.Snapshots[vbno][1] = fts.Snapshots[vbno][1]
 					repairTs.Seqnos[vbno] = fts.Seqnos[vbno]
 					repairTs.Vbuuids[vbno] = fts.Vbuuids[vbno]
-					snapBegin = repairTs.Snapshots[vbno][0]
-					snapEnd = repairTs.Snapshots[vbno][1]
 				}
 			}
 
-			// If last snap-aligned flushed TS is not avail, then use restartTS
-			if !(repairTs.Seqnos[vbno] >= snapBegin && repairTs.Seqnos[vbno] <= snapEnd) {
+			// If timestamp used for open stream is available, use it
+			if !(repairTs.Seqnos[vbno] >= repairTs.Snapshots[vbno][0] &&
+				repairTs.Seqnos[vbno] <= repairTs.Snapshots[vbno][1]) ||
+				repairTs.Vbuuids[vbno] == 0 {
+				if rts, ok := ss.streamBucketOpenTsMap[streamId][bucket]; ok && rts != nil {
+					repairTs.Snapshots[vbno][0] = rts.Snapshots[vbno][0]
+					repairTs.Snapshots[vbno][1] = rts.Snapshots[vbno][1]
+					repairTs.Seqnos[vbno] = rts.Seqnos[vbno]
+					repairTs.Vbuuids[vbno] = rts.Vbuuids[vbno]
+				}
+			}
+
+			// If open stream TS is not avail, then use restartTS
+			if !(repairTs.Seqnos[vbno] >= repairTs.Snapshots[vbno][0] &&
+				repairTs.Seqnos[vbno] <= repairTs.Snapshots[vbno][1]) ||
+				repairTs.Vbuuids[vbno] == 0 {
 				if rts, ok := ss.streamBucketRestartTsMap[streamId][bucket]; ok && rts != nil {
 					//if no flush has been done yet, use restart TS
 					repairTs.Snapshots[vbno][0] = rts.Snapshots[vbno][0]
 					repairTs.Snapshots[vbno][1] = rts.Snapshots[vbno][1]
 					repairTs.Seqnos[vbno] = rts.Seqnos[vbno]
 					repairTs.Vbuuids[vbno] = rts.Vbuuids[vbno]
-					snapBegin = repairTs.Snapshots[vbno][0]
-					snapEnd = repairTs.Snapshots[vbno][1]
 				}
 			}
 
-			//if seqno is still not with snapshot range, then create an 0 timestamp
-			if !(repairTs.Seqnos[vbno] >= snapBegin && repairTs.Seqnos[vbno] <= snapEnd) {
-				logging.Debugf("StreamState::adjustNonSnapAlignedVbsg - No Valid Restart Seqno Found")
-				logging.Debugf("StreamState::adjustNonSnapAlignedVbsg - Use 0 seqno for Bucket %v StreamId %v Vbucket %d",
-					bucket, streamId, vbno)
+			//if seqno is still not with snapshot range or invalid vbuuid, then create an 0 timestamp
+			if !(repairTs.Seqnos[vbno] >= repairTs.Snapshots[vbno][0] &&
+				repairTs.Seqnos[vbno] <= repairTs.Snapshots[vbno][1]) ||
+				repairTs.Vbuuids[vbno] == 0 {
 
 				repairTs.Snapshots[vbno][0] = 0
 				repairTs.Snapshots[vbno][1] = 0
 				repairTs.Seqnos[vbno] = 0
 
 				if repairTs.Vbuuids[vbno] == 0 {
-					if ss.streamBucketOpenTsMap[streamId][bucket] != nil {
-						repairTs.Vbuuids[vbno] = ss.streamBucketOpenTsMap[streamId][bucket].Vbuuids[vbno]
-					} else {
+					if ts, ok := ss.streamBucketOpenTsMap[streamId][bucket]; ok && ts != nil {
+						repairTs.Vbuuids[vbno] = ts.Vbuuids[vbno]
+					}
+
+					if repairTs.Vbuuids[vbno] == 0 && forStreamRepair {
 						common.CrashOnError(errors.New("No Valid Restart Seqno Found. Cannot create 0 timestamp"))
 					}
 				}
