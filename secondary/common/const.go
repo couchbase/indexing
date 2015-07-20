@@ -34,3 +34,6 @@ var ProtobufDataPathMajorNum byte // = 0
 
 // ProtobufDataPathMinorNum minor version number for mutation data path.
 var ProtobufDataPathMinorNum byte = 1
+
+// ErrScanTimedOut from indexer
+var ErrScanTimedOut = errors.New("Index scan timed out")

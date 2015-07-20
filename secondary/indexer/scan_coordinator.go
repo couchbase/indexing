@@ -34,7 +34,6 @@ var (
 	ErrNotMyIndex         = errors.New("Not my index")
 	ErrInternal           = errors.New("Internal server error occured")
 	ErrSnapNotAvailable   = errors.New("No snapshot available for scan")
-	ErrScanTimedOut       = errors.New("Index scan timed out")
 	ErrUnsupportedRequest = errors.New("Unsupported query request")
 	ErrClientCancel       = errors.New("Client requested cancel")
 	ErrVbuuidMismatch     = errors.New("Mismatch in session vbuuids")
@@ -92,7 +91,7 @@ func (c *CancelCb) Run() {
 		case <-c.cancel:
 			c.callb(ErrClientCancel)
 		case <-c.timeout:
-			c.callb(ErrScanTimedOut)
+			c.callb(common.ErrScanTimedOut)
 		}
 	}()
 }
@@ -546,7 +545,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	case msg = <-snapResch:
 	case <-r.TimeoutCh:
 		go readDeallocSnapshot(snapResch)
-		msg = ErrScanTimedOut
+		msg = common.ErrScanTimedOut
 	}
 
 	switch msg.(type) {
