@@ -245,7 +245,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	restartTsList, err := k.makeRestartTsForVbs(bucket, restartTs, vbnos)
 	if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error making restart ts %v",
-			streamId, restartTs.Bucket, err)
+			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
@@ -256,7 +256,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	addrs, err := k.getAllProjectorAddrs()
 	if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error Fetching Projector Addrs %v",
-			streamId, restartTs.Bucket, err)
+			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
@@ -277,7 +277,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 				if res, ret := k.sendMutationTopicRequest(ap, topic, restartTsList, protoInstList); ret != nil {
 					//for all errors, retry
 					logging.Errorf("KVSender::openMutationStream %v %v Error Received %v from %v",
-						streamId, restartTs.Bucket, ret, addr)
+						streamId, bucket, ret, addr)
 					err = ret
 				} else {
 					activeTs = updateActiveTsFromResponse(bucket, activeTs, res)
@@ -313,7 +313,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 
 	if rollbackTs != nil {
 		logging.Infof("KVSender::openMutationStream %v %v Rollback Received %v",
-			streamId, restartTs.Bucket, rollbackTs)
+			streamId, bucket, rollbackTs)
 		//convert from protobuf to native format
 		numVbuckets := k.config["numVbuckets"].Int()
 		nativeTs := rollbackTs.ToTsVbuuid(numVbuckets)
@@ -322,7 +322,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 			rollbackTs: nativeTs}
 	} else if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error Received %v",
-			streamId, restartTs.Bucket, err)
+			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
