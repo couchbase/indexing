@@ -665,7 +665,8 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 		if logging.IsEnabled(logging.Debug) {
 			logging.Debugf("KVSender::sendMutationTopicRequest Response Projector %v Topic %v %v "+
 				"\n\tInstanceIds %v \n\tActiveTs %v \n\tRollbackTs %v", ap, topic, reqTimestamps.GetBucket(),
-				res.GetInstanceIds(), debugPrintTs(res.GetActiveTimestamps()), debugPrintTs(res.GetRollbackTimestamps()))
+				res.GetInstanceIds(), debugPrintTs(res.GetActiveTimestamps(), reqTimestamps.GetBucket()),
+				debugPrintTs(res.GetRollbackTimestamps(), reqTimestamps.GetBucket()))
 		}
 		return res, nil
 	}
@@ -717,7 +718,8 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 		if logging.IsEnabled(logging.Debug) {
 			logging.Debugf("KVSender::sendRestartVbuckets Response Projector %v Topic %v %v "+
 				"\nInstanceIds %v \nActiveTs %v \nRollbackTs %v", ap, topic, restartTs.GetBucket(),
-				res.GetInstanceIds(), debugPrintTs(res.GetActiveTimestamps()), debugPrintTs(res.GetRollbackTimestamps()))
+				res.GetInstanceIds(), debugPrintTs(res.GetActiveTimestamps(), restartTs.GetBucket()),
+				debugPrintTs(res.GetRollbackTimestamps(), restartTs.GetBucket()))
 		}
 		return res, nil
 	}
@@ -741,7 +743,7 @@ func sendAddInstancesRequest(ap *projClient.Client,
 		logging.LazyDebug(func() string {
 			return fmt.Sprintf(
 				"KVSender::sendAddInstancesRequest Response Projector %v Topic %v "+
-					"\n\tActiveTs %v ", ap, topic, debugPrintTs(res.GetCurrentTimestamps()))
+					"\n\tActiveTs %v ", ap, topic, debugPrintTs(res.GetCurrentTimestamps(), ""))
 		})
 		return res, nil
 
@@ -1240,12 +1242,19 @@ func execWithStopCh(fn func(), stopCh StopChannel) {
 
 }
 
-func debugPrintTs(tsList []*protobuf.TsVbuuid) string {
+func debugPrintTs(tsList []*protobuf.TsVbuuid, bucket string) string {
 
 	if len(tsList) == 0 {
 		return ""
 	}
 
-	ts := tsList[0]
-	return ts.Repr()
+	for _, ts := range tsList {
+		if bucket == "" {
+			return ts.Repr()
+		} else if ts.GetBucket() == bucket {
+			return ts.Repr()
+		}
+	}
+
+	return ""
 }
