@@ -133,6 +133,11 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 		}
 	}
 
+	if dcp_buckets_seqnos.numVbs == 0 {
+		err = fmt.Errorf("Expected numVbs > 0")
+		return
+	}
+
 	// make sure a feed is available for all kv-nodes
 	var kvfeed *couchbase.DcpFeed
 
@@ -252,7 +257,7 @@ func CollectSeqnos(kvfeeds map[string]*couchbase.DcpFeed) (l_seqnos []uint64, er
 	// seqnos.
 	if len(seqnos) < dcp_buckets_seqnos.numVbs {
 		fmsg := "unable to get seqnos ts for all vbuckets (%v out of %v)"
-		fmt.Errorf(fmsg, len(seqnos), dcp_buckets_seqnos.numVbs)
+		err = fmt.Errorf(fmsg, len(seqnos), dcp_buckets_seqnos.numVbs)
 		logging.Errorf("%v\n", err)
 		return nil, err
 	}

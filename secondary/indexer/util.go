@@ -18,6 +18,10 @@ import (
 	"time"
 )
 
+const (
+	MAX_GETSEQS_RETRIES = 10
+)
+
 func IsIPLocal(ip string) bool {
 
 	netIP := net.ParseIP(ip)
@@ -69,8 +73,22 @@ func IndexPath(inst *common.IndexInst, sliceId SliceId) string {
 }
 
 func GetCurrentKVTs(cluster, pooln, bucketn string, numVbs int) (Timestamp, error) {
+
+	var seqnos []uint64
+
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Warnf("Indexer::getCurrentKVTs error=%v Retrying (%d)", err, r)
+		}
+
+		seqnos, err = common.BucketSeqnos(cluster, pooln, bucketn)
+		return err
+	}
+
 	start := time.Now()
-	seqnos, err := common.BucketSeqnos(cluster, pooln, bucketn)
+	rh := common.NewRetryHelper(MAX_GETSEQS_RETRIES, time.Millisecond, 1, fn)
+	err := rh.Run()
+
 	if err != nil {
 		// then log an error and give-up
 		fmsg := "Indexer::getCurrentKVTs Error Connecting to KV Cluster %v"
