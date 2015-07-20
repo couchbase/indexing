@@ -293,6 +293,11 @@ func (c *GsiClient) CreateIndex(
 	secExprs []string, isPrimary bool,
 	with []byte) (defnID uint64, err error) {
 
+	err = common.IsValidIndexName(name)
+	if err != nil {
+		return 0, err
+	}
+
 	if c.bridge == nil {
 		return defnID, ErrorClientUninitialized
 	}
