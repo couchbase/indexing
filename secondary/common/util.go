@@ -19,7 +19,7 @@ import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
 import "github.com/couchbase/indexing/secondary/dcp/transport/client"
 
-const IndexNamePattern = "^[A-Za-z0-9_-]+$"
+const IndexNamePattern = "^[A-Za-z0-9#_-]+$"
 
 var ErrInvalidIndexName = fmt.Errorf("Invalid index name")
 
