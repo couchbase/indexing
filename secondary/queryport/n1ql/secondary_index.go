@@ -685,7 +685,7 @@ func makeResponsehandler(
 			}
 			return true
 		}
-		conn.Error(errors.NewError(nil, err.Error()))
+		conn.Error(n1qlError(client, err))
 		return false
 	}
 }
@@ -702,6 +702,9 @@ func isStaleMetaError(err error) bool {
 }
 
 func n1qlError(client *qclient.GsiClient, err error) errors.Error {
+	if err.Error() == c.ErrScanTimedOut.Error() {
+		return errors.NewCbIndexScanTimeoutError(err)
+	}
 	return errors.NewError(err, client.DescribeError(err))
 }
 

@@ -245,7 +245,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	restartTsList, err := k.makeRestartTsForVbs(bucket, restartTs, vbnos)
 	if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error making restart ts %v",
-			streamId, restartTs.Bucket, err)
+			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
@@ -256,7 +256,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	addrs, err := k.getAllProjectorAddrs()
 	if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error Fetching Projector Addrs %v",
-			streamId, restartTs.Bucket, err)
+			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
@@ -277,7 +277,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 				if res, ret := k.sendMutationTopicRequest(ap, topic, restartTsList, protoInstList); ret != nil {
 					//for all errors, retry
 					logging.Errorf("KVSender::openMutationStream %v %v Error Received %v from %v",
-						streamId, restartTs.Bucket, ret, addr)
+						streamId, bucket, ret, addr)
 					err = ret
 				} else {
 					activeTs = updateActiveTsFromResponse(bucket, activeTs, res)
@@ -313,7 +313,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 
 	if rollbackTs != nil {
 		logging.Infof("KVSender::openMutationStream %v %v Rollback Received %v",
-			streamId, restartTs.Bucket, rollbackTs)
+			streamId, bucket, rollbackTs)
 		//convert from protobuf to native format
 		numVbuckets := k.config["numVbuckets"].Int()
 		nativeTs := rollbackTs.ToTsVbuuid(numVbuckets)
@@ -322,7 +322,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 			rollbackTs: nativeTs}
 	} else if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error Received %v",
-			streamId, restartTs.Bucket, err)
+			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
@@ -397,7 +397,8 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 		//if there is a topicMissing/genServer.Closed error, a fresh
 		//MutationTopicRequest is required.
 		if err.Error() == projClient.ErrorTopicMissing.Error() ||
-			err.Error() == c.ErrorClosed.Error() {
+			err.Error() == c.ErrorClosed.Error() ||
+			err.Error() == projClient.ErrorInvalidBucket.Error() {
 			respCh <- &MsgKVStreamRepair{
 				streamId: streamId,
 				bucket:   restartTs.Bucket,
@@ -664,7 +665,8 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 		if logging.IsEnabled(logging.Debug) {
 			logging.Debugf("KVSender::sendMutationTopicRequest Response Projector %v Topic %v %v "+
 				"\n\tInstanceIds %v \n\tActiveTs %v \n\tRollbackTs %v", ap, topic, reqTimestamps.GetBucket(),
-				res.GetInstanceIds(), debugPrintTs(res.GetActiveTimestamps()), debugPrintTs(res.GetRollbackTimestamps()))
+				res.GetInstanceIds(), debugPrintTs(res.GetActiveTimestamps(), reqTimestamps.GetBucket()),
+				debugPrintTs(res.GetRollbackTimestamps(), reqTimestamps.GetBucket()))
 		}
 		return res, nil
 	}
@@ -716,7 +718,8 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 		if logging.IsEnabled(logging.Debug) {
 			logging.Debugf("KVSender::sendRestartVbuckets Response Projector %v Topic %v %v "+
 				"\nInstanceIds %v \nActiveTs %v \nRollbackTs %v", ap, topic, restartTs.GetBucket(),
-				res.GetInstanceIds(), debugPrintTs(res.GetActiveTimestamps()), debugPrintTs(res.GetRollbackTimestamps()))
+				res.GetInstanceIds(), debugPrintTs(res.GetActiveTimestamps(), restartTs.GetBucket()),
+				debugPrintTs(res.GetRollbackTimestamps(), restartTs.GetBucket()))
 		}
 		return res, nil
 	}
@@ -740,7 +743,7 @@ func sendAddInstancesRequest(ap *projClient.Client,
 		logging.LazyDebug(func() string {
 			return fmt.Sprintf(
 				"KVSender::sendAddInstancesRequest Response Projector %v Topic %v "+
-					"\n\tActiveTs %v ", ap, topic, debugPrintTs(res.GetCurrentTimestamps()))
+					"\n\tActiveTs %v ", ap, topic, debugPrintTs(res.GetCurrentTimestamps(), ""))
 		})
 		return res, nil
 
@@ -1239,12 +1242,19 @@ func execWithStopCh(fn func(), stopCh StopChannel) {
 
 }
 
-func debugPrintTs(tsList []*protobuf.TsVbuuid) string {
+func debugPrintTs(tsList []*protobuf.TsVbuuid, bucket string) string {
 
 	if len(tsList) == 0 {
 		return ""
 	}
 
-	ts := tsList[0]
-	return ts.Repr()
+	for _, ts := range tsList {
+		if bucket == "" {
+			return ts.Repr()
+		} else if ts.GetBucket() == bucket {
+			return ts.Repr()
+		}
+	}
+
+	return ""
 }

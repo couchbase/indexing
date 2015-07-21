@@ -136,6 +136,10 @@ func (e *secondaryIndexEntry) lenDocId() int {
 	return int(l)
 }
 
+func (e *secondaryIndexEntry) lenKey() int {
+	return len(*e) - e.lenDocId() - 2
+}
+
 func (e secondaryIndexEntry) ReadDocId(buf []byte) ([]byte, error) {
 	doclen := e.lenDocId()
 	offset := len(e) - doclen - 2
@@ -204,15 +208,11 @@ func (k *primaryKey) Compare(entry IndexEntry) int {
 	return bytes.Compare(*k, entry.Bytes())
 }
 
+// This function will be never called since do not support prefix equality
+// for primary keys.
 func (k *primaryKey) ComparePrefixFields(entry IndexEntry) int {
-	kbytes := []byte(*k)
-	klen := len(kbytes)
-
-	if klen > len(entry.Bytes()) {
-		return 1
-	}
-
-	return bytes.Compare(*k, entry.Bytes()[:klen])
+	panic("prefix compare is not implemented for primary key")
+	return 0
 }
 
 func (k *primaryKey) Bytes() []byte {
@@ -250,8 +250,10 @@ func (k *secondaryKey) Compare(entry IndexEntry) int {
 	kbytes := []byte(*k)
 	klen := len(kbytes)
 
-	if klen > len(entry.Bytes()) {
-		return 1
+	secEntry := entry.(*secondaryIndexEntry)
+	entryKeylen := secEntry.lenKey()
+	if klen > entryKeylen {
+		klen = entryKeylen
 	}
 
 	return bytes.Compare(kbytes[:klen], entry.Bytes()[:klen])
@@ -274,10 +276,15 @@ func (k *secondaryKey) Compare(entry IndexEntry) int {
 func (k *secondaryKey) ComparePrefixFields(entry IndexEntry) int {
 	kbytes := []byte(*k)
 	klen := len(kbytes)
-	if klen > len(entry.Bytes()) {
-		return 1
+	secEntry := entry.(*secondaryIndexEntry)
+
+	prefixLen := klen - 1 // Ignore last byte
+	entryKeylen := secEntry.lenKey()
+	// Compare full secondary entry
+	if klen > entryKeylen {
+		prefixLen = entryKeylen
 	}
-	return bytes.Compare(kbytes[:klen-1], entry.Bytes()[:klen-1])
+	return bytes.Compare(kbytes[:prefixLen], entry.Bytes()[:prefixLen])
 }
 
 func (k *secondaryKey) Bytes() []byte {

@@ -13,10 +13,15 @@ import "runtime"
 import "hash/crc64"
 import "reflect"
 import "unsafe"
+import "regexp"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
 import "github.com/couchbase/indexing/secondary/dcp/transport/client"
+
+const IndexNamePattern = "^[A-Za-z0-9_-]+$"
+
+var ErrInvalidIndexName = fmt.Errorf("Invalid index name")
 
 // ExcludeStrings will exclude strings in `excludes` from `strs`. preserves the
 // order of `strs` in the result.
@@ -651,4 +656,13 @@ func HashVbuuid(vbuuids []uint64) uint64 {
 	bytes_sl.Len = vbuuids_sl.Len * 8
 	bytes_sl.Cap = vbuuids_sl.Cap * 8
 	return crc64.Checksum(bytes, crc64.MakeTable(crc64.ECMA))
+}
+
+func IsValidIndexName(n string) error {
+	valid, _ := regexp.MatchString(IndexNamePattern, n)
+	if !valid {
+		return ErrInvalidIndexName
+	}
+
+	return nil
 }

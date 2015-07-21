@@ -69,8 +69,8 @@ func TestFieldsWithSpecialCharacters(t *testing.T) {
 	FailTestIfError(err, "Error in scan result validation", t)
 }
 
-func TestIndexNameUTF8(t *testing.T) {
-	log.Printf("In TestIndexNameUTF8()")
+func TestIndexNameValidation(t *testing.T) {
+	log.Printf("In TestIndexNameValidation()")
 
 	var bucketName = "default"
 	var indexName = "ÌñÐÉx_utf8"
@@ -84,13 +84,7 @@ func TestIndexNameUTF8(t *testing.T) {
 	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
 
 	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
-	FailTestIfError(err, "Error in creating the index", t)
-
-	docScanResults := datautility.ExpectedScanResponse_string(docs, field, "$4", "$7", 3)
-	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"$4"}, []interface{}{"$7"}, 3, true, defaultlimit, c.SessionConsistency, nil)
-	FailTestIfError(err, "Error in scan", t)
-	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
+	FailTestIfNoError(err, "Expected index name validation error", t)
 }
 
 func TestSameFieldNameAtDifferentLevels(t *testing.T) {
