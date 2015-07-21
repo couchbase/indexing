@@ -291,6 +291,8 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 
 		case common.StreamBegin:
 
+			r.updateVbuuidInFilter(meta)
+
 			//send message to supervisor to take decision
 			msg := &MsgStream{mType: STREAM_READER_STREAM_BEGIN,
 				streamId: r.streamId,
@@ -523,6 +525,12 @@ func (r *mutationStreamReader) initBucketFilter(bucketFilter map[string]*common.
 			//if there is non-nil filter, use that. otherwise use a zero filter.
 			if filter, ok := bucketFilter[b]; ok && filter != nil {
 				r.bucketFilterMap[b] = filter.Copy()
+				//reset vbuuids to 0 in filter. mutations for a vbucket are
+				//only processed after streambegin is received, which will set
+				//the vbuuid again.
+				for i := 0; i < len(filter.Vbuuids); i++ {
+					r.bucketFilterMap[b].Vbuuids[i] = 0
+				}
 			} else {
 				r.bucketFilterMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
 			}
@@ -571,7 +579,16 @@ func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool 
 	defer r.syncLock.Unlock()
 
 	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
-		if uint64(meta.seqno) > filter.Seqnos[meta.vbucket] {
+		//the filter only checks if seqno of incoming mutation is greater than
+		//the existing filter. Also there should be a valid StreamBegin(vbuuid)
+		//for the vbucket. The vbuuid check is only to ensure that after stream
+		//restart for a bucket, mutations get processed only after StreamBegin.
+		//There can be residual mutations in projector endpoint queue after
+		//a bucket gets deleted from stream in case of multiple buckets.
+		//The vbuuid doesn't get reset after StreamEnd/StreamBegin. The
+		//filter can be extended for that check if required.
+		if uint64(meta.seqno) > filter.Seqnos[meta.vbucket] &&
+			filter.Vbuuids[meta.vbucket] != 0 {
 			filter.Seqnos[meta.vbucket] = uint64(meta.seqno)
 			filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
 			r.bucketSyncDue[meta.bucket] = true
@@ -613,6 +630,21 @@ func (r *mutationStreamReader) updateSnapInFilter(meta *MutationMeta,
 
 }
 
+//updates vbuuid information in bucket filter
+func (r *mutationStreamReader) updateVbuuidInFilter(meta *MutationMeta) {
+
+	r.syncLock.Lock()
+	defer r.syncLock.Unlock()
+
+	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
+		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
+	} else {
+		logging.Errorf("MutationStreamReader::updateVbuuidInFilter Missing"+
+			"bucket %v vb %v vbuuid %v in Filter for Stream %v", meta.bucket,
+			meta.vbucket, meta.vbuuid, r.streamId)
+	}
+
+}
 func (r *mutationStreamReader) syncWorker() {
 
 	ticker := time.NewTicker(time.Millisecond * DEFAULT_SYNC_TIMEOUT)
