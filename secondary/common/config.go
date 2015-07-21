@@ -557,6 +557,12 @@ var SystemConfig = Config{
 		uint64(5000),
 		false, // mutable
 	},
+	"indexer.settings.persisted_snapshot_init_build.interval": ConfigValue{
+		uint64(5000),
+		"Persisted snapshotting interval in milliseconds for initial build",
+		uint64(5000),
+		false, // mutable
+	},
 	"indexer.settings.inmemory_snapshot.interval": ConfigValue{
 		uint64(200), // keep in sync with index_settings_manager.erl
 		"InMemory snapshotting interval in milliseconds",

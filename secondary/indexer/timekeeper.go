@@ -1921,9 +1921,6 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	flushTs *common.TsVbuuid) {
 
-	snapPersistInterval := tk.config["settings.persisted_snapshot.interval"].Uint64()
-
-	persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 	lastPersistTime := tk.ss.streamBucketLastPersistTime[streamId][bucket]
 
 	//for init build, if there is no snapshot option set
@@ -1932,6 +1929,19 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 			//if this TS is a merge candidate, generate in-mem snapshot
 			if tk.checkMergeCandidateTs(streamId, bucket, flushTs) {
 				flushTs.SetSnapType(common.INMEM_SNAP)
+			}
+
+			//during catchup phase, in-memory snapshots are generated for merging.
+			//it is better to use smaller persist duration during this phase.
+			//Otherwise use the persist interval for initial build.
+			var snapPersistInterval uint64
+			var persistDuration time.Duration
+			if flushTs.GetSnapType() == common.INMEM_SNAP {
+				snapPersistInterval = tk.config["settings.persisted_snapshot.interval"].Uint64()
+				persistDuration = time.Duration(snapPersistInterval) * time.Millisecond
+			} else {
+				snapPersistInterval = tk.config["settings.persisted_snapshot_init_build.interval"].Uint64()
+				persistDuration = time.Duration(snapPersistInterval) * time.Millisecond
 			}
 
 			//create disk snapshot based on wall clock time
@@ -1943,6 +1953,9 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	} else if flushTs.IsSnapAligned() {
 		//for incremental build, snapshot only if ts is snap aligned
 		//set either in-mem or persist snapshot based on wall clock time
+		snapPersistInterval := tk.config["settings.persisted_snapshot.interval"].Uint64()
+		persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
+
 		if time.Since(lastPersistTime) > persistDuration {
 			flushTs.SetSnapType(common.DISK_SNAP)
 			tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
