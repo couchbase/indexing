@@ -2245,19 +2245,13 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
 
-	clustAddr := idx.config["clusterAddr"].String()
-
 	reqLock := idx.acquireStreamRequestLock(bucket, streamId)
 	go func(reqLock *kvRequest) {
 		defer idx.releaseStreamRequestLock(reqLock)
 		idx.waitStreamRequestLock(reqLock)
 	retryloop:
 		for {
-			if !ValidateBucket(clustAddr, bucket, bucketUUIDList) {
-				logging.Errorf("Indexer::handleMergeInitStream Bucket Not Found "+
-					"For Stream %v Bucket %v", streamId, bucket)
-				break retryloop
-			}
+
 			idx.sendMsgToKVSender(cmd)
 
 			if resp, ok := <-respCh; ok {
