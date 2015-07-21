@@ -1680,19 +1680,10 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 				indexList: indexList,
 				respCh:    respCh}
 		} else {
-			if idx.checkLastBucketInStream(indexInst.Defn.Bucket, streamId) {
-				//promote to close stream
-				cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
-					streamId: streamId,
-					bucket:   indexInst.Defn.Bucket,
-					respCh:   respCh}
-
-			} else {
-				cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-					streamId: streamId,
-					bucket:   indexInst.Defn.Bucket,
-					respCh:   respCh}
-			}
+			cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+				streamId: streamId,
+				bucket:   indexInst.Defn.Bucket,
+				respCh:   respCh}
 			idx.streamBucketStatus[streamId][indexInst.Defn.Bucket] = STREAM_INACTIVE
 		}
 
@@ -2212,20 +2203,11 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 
 	//remove bucket from INIT_STREAM
 	var cmd Message
-	if idx.checkLastBucketInStream(bucket, streamId) {
-		//promote to close stream
-		cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
-			streamId: streamId,
-			bucket:   bucket,
-			respCh:   respCh,
-			stopCh:   stopCh}
-	} else {
-		cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-			streamId: streamId,
-			bucket:   bucket,
-			respCh:   respCh,
-			stopCh:   stopCh,
-		}
+	cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+		streamId: streamId,
+		bucket:   bucket,
+		respCh:   respCh,
+		stopCh:   stopCh,
 	}
 
 	//send stream update to timekeeper
@@ -2363,20 +2345,11 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 	stopCh := make(StopChannel)
 
 	var cmd Message
-	if idx.checkLastBucketInStream(bucket, streamId) {
-		//promote to close stream
-		cmd = &MsgStreamUpdate{mType: CLOSE_STREAM,
-			streamId: streamId,
-			bucket:   bucket,
-			respCh:   respCh,
-			stopCh:   stopCh}
-	} else {
-		cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
-			streamId: streamId,
-			bucket:   bucket,
-			respCh:   respCh,
-			stopCh:   stopCh}
-	}
+	cmd = &MsgStreamUpdate{mType: REMOVE_BUCKET_FROM_STREAM,
+		streamId: streamId,
+		bucket:   bucket,
+		respCh:   respCh,
+		stopCh:   stopCh}
 
 	//send stream update to mutation manager
 	if resp := idx.sendStreamUpdateToWorker(cmd, idx.mutMgrCmdCh,
