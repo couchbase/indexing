@@ -449,8 +449,6 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
 	bucket := cmd.(*MsgRollback).GetBucket()
 
-	numVbuckets := sm.config["numVbuckets"].Int()
-
 	var respTs *common.TsVbuuid
 
 	//for every index managed by this indexer
@@ -499,7 +497,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 							logging.Infof("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
 								slice.Id())
-							respTs = common.NewTsVbuuid(bucket, numVbuckets)
+							//once rollback to zero has happened, set response ts to nil
+							//to represent the initial state of storage
+							respTs = nil
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback
