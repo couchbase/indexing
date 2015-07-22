@@ -1272,7 +1272,15 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 	//successfully added to MAINT_STREAM. Set the buildDoneAck flag and the
 	//mergeTs for the Catchup state indexes.
 	if streamId == common.INIT_STREAM {
-		tk.setMergeTs(streamId, bucket, mergeTs)
+		if mergeTs != nil {
+			tk.setMergeTs(streamId, bucket, mergeTs)
+		} else {
+			//BuildDoneAck should always have a valid mergeTs. This comes from projector when
+			//the index gets added to stream. It cannot be nil otherwise merge will get stuck.
+			logging.Fatalf("Timekeeper::handleInitBuildDoneAck %v %v. Received unexpected nil mergeTs.",
+				streamId, bucket)
+			common.CrashOnError(errors.New("Nil MergeTs Received"))
+		}
 	}
 
 	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
@@ -1376,7 +1384,12 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	//as the mergeTs for Catchup indexes. As part of the MTR, Catchup state indexes
 	//get added to MAINT_STREAM.
 	if streamId == common.MAINT_STREAM {
-		tk.setMergeTs(streamId, bucket, mergeTs)
+		if mergeTs != nil {
+			tk.setMergeTs(streamId, bucket, mergeTs)
+		} else {
+			logging.Warnf("Timekeeper::handleRecoveryDone %v %v. Received nil mergeTs. Ignored",
+				streamId, bucket)
+		}
 	}
 
 	//Check for possiblity of build done after recovery is done.
