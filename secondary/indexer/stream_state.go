@@ -33,6 +33,7 @@ type StreamState struct {
 	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
 	streamBucketRestartTsMap     map[common.StreamId]BucketRestartTsMap
 	streamBucketOpenTsMap        map[common.StreamId]BucketOpenTsMap
+	streamBucketStartTimeMap     map[common.StreamId]BucketStartTimeMap
 	streamBucketLastSnapMarker   map[common.StreamId]BucketLastSnapMarker
 
 	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
@@ -56,6 +57,7 @@ type BucketHWTMap map[string]*common.TsVbuuid
 type BucketLastFlushedTsMap map[string]*common.TsVbuuid
 type BucketRestartTsMap map[string]*common.TsVbuuid
 type BucketOpenTsMap map[string]*common.TsVbuuid
+type BucketStartTimeMap map[string]uint64
 type BucketInMemTsCountMap map[string]uint64
 type BucketNewTsReqdMap map[string]bool
 type BucketLastSnapMarker map[string]*common.TsVbuuid
@@ -92,6 +94,7 @@ func InitStreamState(config common.Config) *StreamState {
 		streamBucketLastSnapAlignFlushedTsMap: make(map[common.StreamId]BucketLastFlushedTsMap),
 		streamBucketRestartTsMap:              make(map[common.StreamId]BucketRestartTsMap),
 		streamBucketOpenTsMap:                 make(map[common.StreamId]BucketOpenTsMap),
+		streamBucketStartTimeMap:              make(map[common.StreamId]BucketStartTimeMap),
 		streamBucketFlushEnabledMap:           make(map[common.StreamId]BucketFlushEnabledMap),
 		streamBucketDrainEnabledMap:           make(map[common.StreamId]BucketDrainEnabledMap),
 		streamBucketVbStatusMap:               make(map[common.StreamId]BucketVbStatusMap),
@@ -129,6 +132,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 
 	bucketOpenTsMap := make(BucketOpenTsMap)
 	ss.streamBucketOpenTsMap[streamId] = bucketOpenTsMap
+
+	bucketStartTimeMap := make(BucketStartTimeMap)
+	ss.streamBucketStartTimeMap[streamId] = bucketStartTimeMap
 
 	bucketTsListMap := make(BucketTsListMap)
 	ss.streamBucketTsListMap[streamId] = bucketTsListMap
@@ -213,6 +219,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
 	ss.streamBucketRestartTsMap[streamId][bucket] = nil
 	ss.streamBucketOpenTsMap[streamId][bucket] = nil
+	ss.streamBucketStartTimeMap[streamId][bucket] = uint64(0)
 	ss.streamBucketLastSnapMarker[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
@@ -250,6 +257,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	delete(ss.streamBucketLastPersistTime[streamId], bucket)
 	delete(ss.streamBucketRestartTsMap[streamId], bucket)
 	delete(ss.streamBucketOpenTsMap[streamId], bucket)
+	delete(ss.streamBucketStartTimeMap[streamId], bucket)
 	delete(ss.streamBucketLastSnapMarker[streamId], bucket)
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
@@ -282,6 +290,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	delete(ss.streamBucketStatus, streamId)
 	delete(ss.streamBucketRestartTsMap, streamId)
 	delete(ss.streamBucketOpenTsMap, streamId)
+	delete(ss.streamBucketStartTimeMap, streamId)
 	delete(ss.streamBucketLastSnapMarker, streamId)
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE

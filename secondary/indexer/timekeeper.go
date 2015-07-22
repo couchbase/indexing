@@ -246,6 +246,10 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	//repair
 	default:
 		//no-op
+		//reset timer for open stream
+		tk.ss.streamBucketOpenTsMap[streamId][bucket] = nil
+		tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(0)
+
 		logging.Debugf("Timekeeper::handleStreamOpen %v %v Status %v. "+
 			"Nothing to do.", streamId, bucket, status)
 
@@ -1065,7 +1069,7 @@ func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 		// Let's sleep and check for vb at a later time.  If a vb has missing StreamBegin,
 		// it could mean that the projector is still sending StreamBegin to indexer.  So
 		// let's wait a little longer for TK to recieve those in-flight streamBegin.
-		ticker := time.After(30 * time.Second)
+		ticker := time.After(2 * time.Second)
 		select {
 		case <-tk.vbCheckerStopCh:
 			return
@@ -1076,6 +1080,8 @@ func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 
 			tk.lock.Lock()
 			defer tk.lock.Unlock()
+
+			now := uint64(time.Now().UnixNano())
 
 			// After sleep, find the vb that has not yet received StreamBegin.  If the same set
 			// of vb are still missing before and after sleep, then we can assume those vb will
@@ -1088,8 +1094,11 @@ func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 				vbList := []Vbucket(nil)
 
 				// if stream request is not done (we have not yet got
-				// the activeTs), then do not process this.
-				if tk.ss.streamBucketOpenTsMap[streamId][bucket] == nil {
+				// the activeTs), then do not process this. Also wait for
+				// 30s after stream request before checking.
+				if tk.ss.streamBucketOpenTsMap[streamId][bucket] == nil ||
+					tk.ss.streamBucketStartTimeMap[streamId][bucket] == 0 ||
+					now-tk.ss.streamBucketStartTimeMap[streamId][bucket] < uint64(30*time.Second) {
 					// if the bucket still exist
 					if newTs, ok := newMissing[bucket]; ok && newTs != nil {
 						delete(newMissing, bucket)
@@ -1329,6 +1338,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 
 	tk.setBuildTs(streamId, bucket, buildTs)
 	tk.ss.streamBucketOpenTsMap[streamId][bucket] = activeTs
+	tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(time.Now().UnixNano())
 
 	//Check for possiblity of build done after stream request done.
 	//In case of crash recovery, if there are no mutations, there is
@@ -1379,6 +1389,7 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 
 	tk.setBuildTs(streamId, bucket, buildTs)
 	tk.ss.streamBucketOpenTsMap[streamId][bucket] = activeTs
+	tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(time.Now().UnixNano())
 
 	//once MAINT_STREAM gets successfully restarted in recovery, use the restartTs
 	//as the mergeTs for Catchup indexes. As part of the MTR, Catchup state indexes
