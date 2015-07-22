@@ -666,3 +666,17 @@ func IsValidIndexName(n string) error {
 
 	return nil
 }
+
+func ComputeAvg(lastAvg, lastValue, currValue int64) int64 {
+	if lastValue == 0 {
+		return 0
+	}
+
+	diff := currValue - lastValue
+	// Compute avg for first time
+	if lastAvg == 0 {
+		return diff
+	}
+
+	return (diff + lastAvg) / 2
+}
