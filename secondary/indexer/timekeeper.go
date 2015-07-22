@@ -246,6 +246,10 @@ func (tk *timekeeper) handleStreamOpen(cmd Message) {
 	//repair
 	default:
 		//no-op
+		//reset timer for open stream
+		tk.ss.streamBucketOpenTsMap[streamId][bucket] = nil
+		tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(0)
+
 		logging.Debugf("Timekeeper::handleStreamOpen %v %v Status %v. "+
 			"Nothing to do.", streamId, bucket, status)
 
@@ -766,6 +770,7 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 	if state == STREAM_INACTIVE {
 		logging.Debugf("Timekeeper::handleFlushStateChange Ignore Flush State Change "+
 			"for Bucket: %v StreamId: %v Type: %v State: %v", bucket, streamId, t, state)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -882,12 +887,14 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 		count := tk.ss.getVbRefCount(streamId, meta.bucket, meta.vbucket)
 		if count > 1 {
-			if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
-				tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
-				tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
-				logging.Debugf("Timekeeper::handleStreamBegin \n\tRepairStream due to vb ref count > 1. "+
-					"StreamId %v MutationMeta %v", streamId, meta)
-				go tk.repairStream(streamId, meta.bucket)
+			if ts, ok := tk.ss.streamBucketOpenTsMap[streamId][meta.bucket]; ok && ts != nil {
+				if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
+					tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
+					tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
+					logging.Debugf("Timekeeper::handleStreamBegin \n\tRepairStream due to vb ref count > 1. "+
+						"StreamId %v MutationMeta %v", streamId, meta)
+					go tk.repairStream(streamId, meta.bucket)
+				}
 			}
 		}
 
@@ -963,12 +970,14 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
 				// If Count => 0.  This could be just normal vb take-over during rebalancing.
 				tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_END)
-				if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
-					tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
-					tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
-					logging.Debugf("Timekeeper::handleStreamEnd \n\tRepairStream due to StreamEnd. "+
-						"StreamId %v MutationMeta %v", streamId, meta)
-					go tk.repairStream(streamId, meta.bucket)
+				if ts, ok := tk.ss.streamBucketOpenTsMap[streamId][meta.bucket]; ok && ts != nil {
+					if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
+						tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
+						tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
+						logging.Debugf("Timekeeper::handleStreamEnd \n\tRepairStream due to StreamEnd. "+
+							"StreamId %v MutationMeta %v", streamId, meta)
+						go tk.repairStream(streamId, meta.bucket)
+					}
 				}
 			}
 		}
@@ -1007,8 +1016,10 @@ func (tk *timekeeper) handleStreamConnError(cmd Message) {
 	}
 
 	if tk.vbCheckerStopCh == nil {
+		logging.Debugf("Timekeeper::handleStreamConnError \n\t Call RepairMissingStreamBegin to check for vbucket for repair. "+
+			"StreamId %v bucket %v", streamId, bucket)
 		tk.vbCheckerStopCh = make(chan bool)
-		go tk.handleConnErrOnVbWithMissingStreamBegin(streamId)
+		go tk.repairMissingStreamBegin(streamId)
 	}
 }
 
@@ -1037,9 +1048,9 @@ func (tk *timekeeper) computeVbWithMissingStreamBegin(streamId common.StreamId) 
 	return result
 }
 
-func (tk *timekeeper) handleConnErrOnVbWithMissingStreamBegin(streamId common.StreamId) {
+func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 
-	logging.Debugf("timekeeper.handleConnErrOnVbWithMissingStreamBegin stream %v", streamId)
+	logging.Debugf("timekeeper.repairMissingStreamBegin stream %v", streamId)
 
 	defer func() {
 		tk.lock.Lock()
@@ -1071,6 +1082,8 @@ func (tk *timekeeper) handleConnErrOnVbWithMissingStreamBegin(streamId common.St
 			tk.lock.Lock()
 			defer tk.lock.Unlock()
 
+			now := uint64(time.Now().UnixNano())
+
 			// After sleep, find the vb that has not yet received StreamBegin.  If the same set
 			// of vb are still missing before and after sleep, then we can assume those vb will
 			// need to repair.   If the set of vb are not identical, then retry again.
@@ -1082,8 +1095,11 @@ func (tk *timekeeper) handleConnErrOnVbWithMissingStreamBegin(streamId common.St
 				vbList := []Vbucket(nil)
 
 				// if stream request is not done (we have not yet got
-				// the activeTs), then do not process this.
-				if tk.ss.streamBucketOpenTsMap[streamId][bucket] == nil {
+				// the activeTs), then do not process this. Also wait for
+				// 30s after stream request before checking.
+				if tk.ss.streamBucketOpenTsMap[streamId][bucket] == nil ||
+					tk.ss.streamBucketStartTimeMap[streamId][bucket] == 0 ||
+					now-tk.ss.streamBucketStartTimeMap[streamId][bucket] < uint64(30*time.Second) {
 					// if the bucket still exist
 					if newTs, ok := newMissing[bucket]; ok && newTs != nil {
 						delete(newMissing, bucket)
@@ -1112,7 +1128,7 @@ func (tk *timekeeper) handleConnErrOnVbWithMissingStreamBegin(streamId common.St
 
 				bucketStatus := tk.ss.streamBucketStatus[streamId][bucket]
 				if len(vbList) != 0 && (bucketStatus == STREAM_ACTIVE || bucketStatus == STREAM_RECOVERY) {
-					logging.Infof("timekeeper.handleConnErrOnVbWithMissingStreamBegin. "+
+					logging.Infof("timekeeper.repairWithMissingStreamBegin. "+
 						"Raise ConnectionError stream %v bucket %v vblist %v",
 						streamId, bucket, vbList)
 
@@ -1131,7 +1147,7 @@ func (tk *timekeeper) handleConnErrOnVbWithMissingStreamBegin(streamId common.St
 		}()
 	}
 
-	logging.Debugf("timekeeper.handleConnErrOnVbWithMissingStreamBegin stream %v done", streamId)
+	logging.Debugf("timekeeper.repairMissingStreamBegin stream %v done", streamId)
 }
 
 func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, bucket string, vbList []Vbucket) {
@@ -1217,11 +1233,13 @@ func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, bu
 			tk.ss.makeConnectionError(streamId, bucket, vb)
 		}
 
-		if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
-			tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
-			logging.Debugf("Timekeeper::handleStreamConnError \n\tRepairStream due to ConnError. "+
-				"StreamId %v Bucket %v VbList %v", streamId, bucket, vbList)
-			go tk.repairStream(streamId, bucket)
+		if ts, ok := tk.ss.streamBucketOpenTsMap[streamId][bucket]; ok && ts != nil {
+			if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
+				tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
+				logging.Debugf("Timekeeper::handleStreamConnError \n\tRepairStream due to ConnError. "+
+					"StreamId %v Bucket %v VbList %v", streamId, bucket, vbList)
+				go tk.repairStream(streamId, bucket)
+			}
 		}
 
 	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE, STREAM_INACTIVE:
@@ -1257,6 +1275,7 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 		state == STREAM_PREPARE_RECOVERY {
 		logging.Debugf("Timekeeper::handleInitBuildDoneAck Ignore BuildDoneAck "+
 			"for Bucket: %v StreamId: %v State: %v", bucket, streamId, state)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -1264,7 +1283,15 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 	//successfully added to MAINT_STREAM. Set the buildDoneAck flag and the
 	//mergeTs for the Catchup state indexes.
 	if streamId == common.INIT_STREAM {
-		tk.setMergeTs(streamId, bucket, mergeTs)
+		if mergeTs != nil {
+			tk.setMergeTs(streamId, bucket, mergeTs)
+		} else {
+			//BuildDoneAck should always have a valid mergeTs. This comes from projector when
+			//the index gets added to stream. It cannot be nil otherwise merge will get stuck.
+			logging.Fatalf("Timekeeper::handleInitBuildDoneAck %v %v. Received unexpected nil mergeTs.",
+				streamId, bucket)
+			common.CrashOnError(errors.New("Nil MergeTs Received"))
+		}
 	}
 
 	if !tk.ss.checkAnyFlushPending(streamId, bucket) &&
@@ -1313,6 +1340,7 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 
 	tk.setBuildTs(streamId, bucket, buildTs)
 	tk.ss.streamBucketOpenTsMap[streamId][bucket] = activeTs
+	tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(time.Now().UnixNano())
 
 	//Check for possiblity of build done after stream request done.
 	//In case of crash recovery, if there are no mutations, there is
@@ -1327,6 +1355,22 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	//merge of an index in Catchup state, the merge needs to happen here,
 	//as no flush would happen in case there are no more mutations.
 	tk.checkPendingStreamMerge(streamId, bucket)
+
+	// Check if the stream needs repair for streamEnd and ConnErr
+	if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
+		tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
+		logging.Debugf("Timekeeper::handleStreamRequestDone \n\t Call RepairStream to check for vbucket for repair. "+
+			"StreamId %v bucket %v", streamId, bucket)
+		go tk.repairStream(streamId, bucket)
+	}
+
+	// Check if the stream needs repair for missing streamBegin
+	if tk.vbCheckerStopCh == nil {
+		logging.Debugf("Timekeeper::handleStreamRequestDone \n\t Call RepairMissingStreamBegin to check for vbucket for repair. "+
+			"StreamId %v bucket %v", streamId, bucket)
+		tk.vbCheckerStopCh = make(chan bool)
+		go tk.repairMissingStreamBegin(streamId)
+	}
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -1347,12 +1391,18 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 
 	tk.setBuildTs(streamId, bucket, buildTs)
 	tk.ss.streamBucketOpenTsMap[streamId][bucket] = activeTs
+	tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(time.Now().UnixNano())
 
 	//once MAINT_STREAM gets successfully restarted in recovery, use the restartTs
 	//as the mergeTs for Catchup indexes. As part of the MTR, Catchup state indexes
 	//get added to MAINT_STREAM.
 	if streamId == common.MAINT_STREAM {
-		tk.setMergeTs(streamId, bucket, mergeTs)
+		if mergeTs != nil {
+			tk.setMergeTs(streamId, bucket, mergeTs)
+		} else {
+			logging.Warnf("Timekeeper::handleRecoveryDone %v %v. Received nil mergeTs. Ignored",
+				streamId, bucket)
+		}
 	}
 
 	//Check for possiblity of build done after recovery is done.
@@ -1368,6 +1418,22 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	//merge of an index in Catchup state, the merge needs to happen here,
 	//as no flush would happen in case there are no more mutations.
 	tk.checkPendingStreamMerge(streamId, bucket)
+
+	// Check if the stream needs repair
+	if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
+		tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
+		logging.Debugf("Timekeeper::handleRecoveryDone \n\t Call RepairStream to check for vbucket for repair. "+
+			"StreamId %v bucket %v", streamId, bucket)
+		go tk.repairStream(streamId, bucket)
+	}
+
+	// Check if the stream needs repair for missing streamBegin
+	if tk.vbCheckerStopCh == nil {
+		logging.Debugf("Timekeeper::handleStreamRequestDone \n\t Call RepairMissingStreamBegin to check for vbucket for repair. "+
+			"StreamId %v bucket %v", streamId, bucket)
+		tk.vbCheckerStopCh = make(chan bool)
+		go tk.repairMissingStreamBegin(streamId)
+	}
 
 	tk.supvCmdch <- &MsgSuccess{}
 }
@@ -1881,9 +1947,6 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	flushTs *common.TsVbuuid) {
 
-	snapPersistInterval := tk.config["settings.persisted_snapshot.interval"].Uint64()
-
-	persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 	lastPersistTime := tk.ss.streamBucketLastPersistTime[streamId][bucket]
 
 	//for init build, if there is no snapshot option set
@@ -1892,6 +1955,19 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 			//if this TS is a merge candidate, generate in-mem snapshot
 			if tk.checkMergeCandidateTs(streamId, bucket, flushTs) {
 				flushTs.SetSnapType(common.INMEM_SNAP)
+			}
+
+			//during catchup phase, in-memory snapshots are generated for merging.
+			//it is better to use smaller persist duration during this phase.
+			//Otherwise use the persist interval for initial build.
+			var snapPersistInterval uint64
+			var persistDuration time.Duration
+			if flushTs.GetSnapType() == common.INMEM_SNAP {
+				snapPersistInterval = tk.config["settings.persisted_snapshot.interval"].Uint64()
+				persistDuration = time.Duration(snapPersistInterval) * time.Millisecond
+			} else {
+				snapPersistInterval = tk.config["settings.persisted_snapshot_init_build.interval"].Uint64()
+				persistDuration = time.Duration(snapPersistInterval) * time.Millisecond
 			}
 
 			//create disk snapshot based on wall clock time
@@ -1903,6 +1979,9 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	} else if flushTs.IsSnapAligned() {
 		//for incremental build, snapshot only if ts is snap aligned
 		//set either in-mem or persist snapshot based on wall clock time
+		snapPersistInterval := tk.config["settings.persisted_snapshot.interval"].Uint64()
+		persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
+
 		if time.Since(lastPersistTime) > persistDuration {
 			flushTs.SetSnapType(common.DISK_SNAP)
 			tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
@@ -2101,7 +2180,7 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 
 		restartTs := tk.ss.computeRestartTs(streamId, bucket)
 		//adjust for non-snap aligned ts
-		tk.ss.adjustNonSnapAlignedVbs(restartTs, streamId, bucket)
+		tk.ss.adjustNonSnapAlignedVbs(restartTs, streamId, bucket, nil, false)
 
 		tk.stopTimer(streamId, bucket)
 		tk.ss.cleanupBucketFromStream(streamId, bucket)
@@ -2253,7 +2332,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		resp.restartTs = tk.ss.streamBucketHWTMap[streamId][bucket].Copy()
 
 		//adjust for non-snap aligned ts
-		tk.ss.adjustNonSnapAlignedVbs(resp.restartTs, streamId, bucket)
+		tk.ss.adjustNonSnapAlignedVbs(resp.restartTs, streamId, bucket, nil, false)
 
 		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
 

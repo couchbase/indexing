@@ -508,11 +508,12 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []
 				if ret := sendDelInstancesRequest(ap, topic, uuids); ret != nil {
 					logging.Errorf("KVSender::deleteIndexesFromStream %v %v Error Received %v from %v",
 						streamId, indexInstList[0].Defn.Bucket, ret, addr)
-					//Treat TopicMissing/GenServer.Closed as success
+					//Treat TopicMissing/GenServer.Closed/InvalidBucket as success
 					if ret.Error() == projClient.ErrorTopicMissing.Error() ||
-						ret.Error() == c.ErrorClosed.Error() {
-						logging.Infof("KVSender::deleteIndexesFromStream %v %v Treating TopicMissing As Success",
-							streamId, indexInstList[0].Defn.Bucket)
+						ret.Error() == c.ErrorClosed.Error() ||
+						ret.Error() == projClient.ErrorInvalidBucket.Error() {
+						logging.Infof("KVSender::deleteIndexesFromStream %v %v Treating %v As Success",
+							streamId, indexInstList[0].Defn.Bucket, ret)
 					} else {
 						err = ret
 					}
@@ -564,8 +565,8 @@ func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string
 					//Treat TopicMissing/GenServer.Closed as success
 					if ret.Error() == projClient.ErrorTopicMissing.Error() ||
 						ret.Error() == c.ErrorClosed.Error() {
-						logging.Infof("KVSender::deleteBucketsFromStream %v %v Treating TopicMissing As Success",
-							streamId, buckets[0])
+						logging.Infof("KVSender::deleteBucketsFromStream %v %v Treating %v As Success",
+							streamId, buckets[0], ret)
 					} else {
 						err = ret
 					}
@@ -617,8 +618,8 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string,
 					//Treat TopicMissing/GenServer.Closed as success
 					if ret.Error() == projClient.ErrorTopicMissing.Error() ||
 						ret.Error() == c.ErrorClosed.Error() {
-						logging.Infof("KVSender::closeMutationStream %v %v Treating TopicMissing As Success",
-							streamId, bucket)
+						logging.Infof("KVSender::closeMutationStream %v %v Treating %v As Success",
+							streamId, bucket, ret)
 					} else {
 						err = ret
 					}

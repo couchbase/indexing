@@ -35,7 +35,6 @@ var (
 	ErrInternal           = errors.New("Internal server error occured")
 	ErrSnapNotAvailable   = errors.New("No snapshot available for scan")
 	ErrUnsupportedRequest = errors.New("Unsupported query request")
-	ErrClientCancel       = errors.New("Client requested cancel")
 	ErrVbuuidMismatch     = errors.New("Mismatch in session vbuuids")
 )
 
@@ -89,7 +88,7 @@ func (c *CancelCb) Run() {
 		select {
 		case <-c.done:
 		case <-c.cancel:
-			c.callb(ErrClientCancel)
+			c.callb(common.ErrClientCancel)
 		case <-c.timeout:
 			c.callb(common.ErrScanTimedOut)
 		}

@@ -134,7 +134,7 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 	}
 
 	if dcp_buckets_seqnos.numVbs == 0 {
-		err = fmt.Errorf("Expected numVbs > 0")
+		err = fmt.Errorf("Found 0 vbuckets - perhaps the bucket is not ready yet")
 		return
 	}
 

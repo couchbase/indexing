@@ -73,7 +73,8 @@ func TestIndexNameValidation(t *testing.T) {
 	log.Printf("In TestIndexNameValidation()")
 
 	var bucketName = "default"
-	var indexName = "ÌñÐÉx_utf8"
+	var validIndexName = "#primary-Index_test"
+	var invalidIndexName = "ÌñÐÉx&(abc_%"
 	var field = "balance"
 
 	docsToCreate := generateDocs(1000, "users.prod")
@@ -83,8 +84,19 @@ func TestIndexNameValidation(t *testing.T) {
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
-	FailTestIfNoError(err, "Expected index name validation error", t)
+	err := secondaryindex.CreateSecondaryIndex(invalidIndexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
+	errMsg := "Expected index name validation error for index " + invalidIndexName
+	FailTestIfNoError(err, errMsg, t)
+	log.Printf("Creation of index with invalid name %v failed as expected", invalidIndexName)
+
+	err = secondaryindex.CreateSecondaryIndex(validIndexName, bucketName, indexManagementAddress, "", []string{field}, false, nil, true, defaultIndexActiveTimeout, nil)
+	FailTestIfError(err, "Error in creating the index", t)
+
+	docScanResults := datautility.ExpectedScanResponse_string(docs, field, "$4", "$7", 3)
+	scanResults, err := secondaryindex.Range(validIndexName, bucketName, indexScanAddress, []interface{}{"$4"}, []interface{}{"$7"}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation", t)
 }
 
 func TestSameFieldNameAtDifferentLevels(t *testing.T) {

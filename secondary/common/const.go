@@ -37,3 +37,6 @@ var ProtobufDataPathMinorNum byte = 1
 
 // ErrScanTimedOut from indexer
 var ErrScanTimedOut = errors.New("Index scan timed out")
+
+// ErrClientCancel when query client cancels an ongoing scan request.
+var ErrClientCancel = errors.New("Client requested cancel")

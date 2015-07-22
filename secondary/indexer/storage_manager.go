@@ -389,19 +389,26 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 }
 
 func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
+	// Compute avgTsInterval
 	last := idxStats.lastTsTime.Value()
 	curr := int64(time.Now().UnixNano())
 	avg := idxStats.avgTsInterval.Value()
-	interval := curr - last
-	if avg == 0 {
-		avg = interval
-	}
 
-	if last != 0 {
-		idxStats.avgTsInterval.Set((interval + avg) / 2)
-		idxStats.sinceLastSnapshot.Set(interval)
+	avg = common.ComputeAvg(avg, last, curr)
+	if avg != 0 {
+		idxStats.avgTsInterval.Set(avg)
+		idxStats.sinceLastSnapshot.Set(curr - last)
 	}
 	idxStats.lastTsTime.Set(curr)
+
+	// Compute avgTsItemsCount
+	last = idxStats.lastNumFlushQueued.Value()
+	curr = idxStats.numFlushQueued.Value()
+	avg = idxStats.avgTsItemsCount.Value()
+
+	avg = common.ComputeAvg(avg, last, curr)
+	idxStats.avgTsItemsCount.Set(avg)
+	idxStats.lastNumFlushQueued.Set(curr)
 }
 
 // Update index-snapshot map whenever a snapshot is created for an index
@@ -448,8 +455,6 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	streamId := cmd.(*MsgRollback).GetStreamId()
 	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
 	bucket := cmd.(*MsgRollback).GetBucket()
-
-	numVbuckets := sm.config["numVbuckets"].Int()
 
 	var respTs *common.TsVbuuid
 
@@ -499,7 +504,9 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 							logging.Infof("StorageMgr::handleRollback \n\t Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
 								slice.Id())
-							respTs = common.NewTsVbuuid(bucket, numVbuckets)
+							//once rollback to zero has happened, set response ts to nil
+							//to represent the initial state of storage
+							respTs = nil
 						} else {
 							//send error response back
 							//TODO handle the case where some of the slices fail to rollback

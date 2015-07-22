@@ -582,7 +582,14 @@ func (feed *Feed) handleCommand(msg []interface{}) (status string) {
 	case fCmdDelBuckets:
 		req := msg[1].(*protobuf.DelBucketsRequest)
 		opaque, respch := msg[2].(uint16), msg[3].(chan []interface{})
-		respch <- []interface{}{feed.delBuckets(req, opaque)}
+		err := feed.delBuckets(req, opaque)
+		if len(feed.kvdata) == 0 {
+			status = "exit"
+			fmsg := "%v no more buckets left, closing the feed ..."
+			logging.Warnf(fmsg, feed.logPrefix)
+			feed.shutdown(feed.opaque)
+		}
+		respch <- []interface{}{err}
 
 	case fCmdAddInstances:
 		req := msg[1].(*protobuf.AddInstancesRequest)

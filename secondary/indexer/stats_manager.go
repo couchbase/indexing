@@ -91,6 +91,8 @@ type IndexStats struct {
 	numCompactions       stats.Int64Val
 	flushQueueSize       stats.Int64Val
 	avgTsInterval        stats.Int64Val
+	avgTsItemsCount      stats.Int64Val
+	lastNumFlushQueued   stats.Int64Val
 	lastTsTime           stats.Int64Val
 	numFlushQueued       stats.Int64Val
 	fragPercent          stats.Int64Val
@@ -132,6 +134,8 @@ func (s *IndexStats) Init() {
 	s.getBytes.Init()
 	s.itemsCount.Init()
 	s.avgTsInterval.Init()
+	s.avgTsItemsCount.Init()
+	s.lastNumFlushQueued.Init()
 	s.lastTsTime.Init()
 	s.numCommits.Init()
 	s.numSnapshots.Init()
@@ -247,6 +251,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("get_bytes", s.getBytes.Value())
 		addStat("items_count", s.itemsCount.Value())
 		addStat("avg_ts_interval", s.avgTsInterval.Value())
+		addStat("avg_ts_items_count", s.avgTsItemsCount.Value())
 		addStat("num_commits", s.numCommits.Value())
 		addStat("num_snapshots", s.numSnapshots.Value())
 		addStat("num_compactions", s.numCompactions.Value())
