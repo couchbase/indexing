@@ -770,6 +770,7 @@ func (tk *timekeeper) handleFlushStateChange(cmd Message) {
 	if state == STREAM_INACTIVE {
 		logging.Debugf("Timekeeper::handleFlushStateChange Ignore Flush State Change "+
 			"for Bucket: %v StreamId: %v Type: %v State: %v", bucket, streamId, t, state)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
@@ -1274,6 +1275,7 @@ func (tk *timekeeper) handleInitBuildDoneAck(cmd Message) {
 		state == STREAM_PREPARE_RECOVERY {
 		logging.Debugf("Timekeeper::handleInitBuildDoneAck Ignore BuildDoneAck "+
 			"for Bucket: %v StreamId: %v State: %v", bucket, streamId, state)
+		tk.supvCmdch <- &MsgSuccess{}
 		return
 	}
 
