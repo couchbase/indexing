@@ -634,10 +634,12 @@ func (c *GsiClient) doScan(
 			index := c.bridge.GetIndexDefn(targetDefnID)
 			if qc, ok2 = c.queryClients[queryport]; ok2 {
 				begin := time.Now()
-				if err, partial = callb(qc, index); err == nil {
+				err, partial = callb(qc, index)
+				if c.isTimeit(err) {
 					c.bridge.Timeit(targetDefnID, float64(time.Since(begin)))
-					return nil
-				} else if partial {
+					return err
+				}
+				if err != nil && partial {
 					// partially succeeded scans, we don't reset-hash and we
 					// don't retry
 					return err
@@ -662,6 +664,15 @@ func (c *GsiClient) doScan(
 		return err
 	}
 	return ErrorNoHost
+}
+
+func (c *GsiClient) isTimeit(err error) bool {
+	if err == nil {
+		return true
+	} else if err.Error() == common.ErrClientCancel.Error() {
+		return true
+	}
+	return false
 }
 
 func (c *GsiClient) getConsistency(

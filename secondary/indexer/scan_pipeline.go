@@ -175,7 +175,7 @@ func (d *IndexScanWriter) Routine() error {
 
 	defer func() {
 		// Send error to the client if not client requested cancel.
-		if err != nil && err != ErrClientCancel {
+		if err != nil && err.Error() != c.ErrClientCancel.Error() {
 			d.w.Error(err)
 		}
 		d.CloseRead()
@@ -203,18 +203,18 @@ loop:
 		}
 
 		/*
-			TODO(sarath): Use block chunk send protocol
-			Instead of collecting rows and encoding into protobuf,
-			we can send full 16kb block.
+		   TODO(sarath): Use block chunk send protocol
+		   Instead of collecting rows and encoding into protobuf,
+		   we can send full 16kb block.
 
-				b, err := d.PeekBlock()
-				if err == p.ErrNoMoreItem {
-					d.CloseRead()
-					return nil
-				}
+		       b, err := d.PeekBlock()
+		       if err == p.ErrNoMoreItem {
+		           d.CloseRead()
+		           return nil
+		       }
 
-				d.W.RawBytes(b)
-				d.FlushBlock()
+		       d.W.RawBytes(b)
+		       d.FlushBlock()
 		*/
 	}
 

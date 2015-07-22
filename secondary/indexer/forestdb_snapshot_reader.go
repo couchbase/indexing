@@ -40,7 +40,7 @@ func (s *fdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
 	callb := func([]byte) error {
 		select {
 		case <-stopch:
-			return ErrClientCancel
+			return common.ErrClientCancel
 		default:
 			count++
 		}
@@ -59,7 +59,7 @@ func (s *fdbSnapshot) CountLookup(keys []IndexKey, stopch StopChannel) (uint64, 
 	callb := func([]byte) error {
 		select {
 		case <-stopch:
-			return ErrClientCancel
+			return common.ErrClientCancel
 		default:
 			count++
 		}
@@ -81,7 +81,7 @@ func (s *fdbSnapshot) Exists(key IndexKey, stopch StopChannel) (bool, error) {
 	callb := func([]byte) error {
 		select {
 		case <-stopch:
-			return ErrClientCancel
+			return common.ErrClientCancel
 		default:
 			count++
 		}
