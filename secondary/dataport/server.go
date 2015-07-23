@@ -406,7 +406,7 @@ func (s *Server) jumboErrorHandler(
 	} else if err != nil {
 		fmsg := "%v remote %q unknown error: %v\n"
 		logging.Errorf(fmsg, s.logPrefix, raddr, err)
-		whatJumbo = "closeall"
+		whatJumbo = "closeremote"
 
 	} else {
 		logging.Errorf("%v no error why did you call jumbo !!!\n", s.logPrefix)
@@ -422,6 +422,8 @@ func (s *Server) jumboErrorHandler(
 		delete(s.conns, raddr)
 		msg = ce
 
+	// NOTE: application does not expect dataport-server to be automatically
+	// closed.
 	case "closeall":
 		ce := NewConnectionError()
 		for raddr := range s.conns {
@@ -485,20 +487,13 @@ func remoteConnections(raddr string, conns map[string]*netConn) []string {
 // go-routine to listen for new connections, if this routine goes down -
 // server is shutdown and reason notified back to application.
 func listener(prefix string, lis net.Listener, reqch chan []interface{}) {
-	defer func() {
-		if r := recover(); r != nil {
-			logging.Errorf("%v listener crashed: %v\n", prefix, r)
-			logging.Errorf("%s", logging.StackTrace())
-			msg := serverMessage{cmd: serverCmdError, err: ErrorDaemonExit}
-			reqch <- []interface{}{msg}
-		}
-	}()
-
 loop:
 	for {
 		// TODO: handle `err` for lis.Close() and avoid panic(err)
 		if conn, err := lis.Accept(); err != nil {
-			if e, ok := err.(*net.OpError); ok && e.Op == "accept" {
+			e, ok := err.(*net.OpError)
+			// NOTE: AcceptEx for windows op.
+			if ok && (e.Op == "accept" || e.Op == "AcceptEx") {
 				logging.Infof("%v ... stopped\n", prefix)
 				break loop
 			} else {
