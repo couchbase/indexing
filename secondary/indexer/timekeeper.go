@@ -2324,6 +2324,10 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		tk.lock.Lock()
 		defer tk.lock.Unlock()
 
+		//reset timer for open stream
+		tk.ss.streamBucketOpenTsMap[streamId][bucket] = nil
+		tk.ss.streamBucketStartTimeMap[streamId][bucket] = uint64(0)
+
 		resp := kvresp.(*MsgKVStreamRepair)
 
 		//for stream repair, use the HWT. If there has been a rollback, it will
