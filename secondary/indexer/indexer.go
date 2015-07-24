@@ -2914,9 +2914,20 @@ func (idx *indexer) validateIndexInstMap() {
 			if bucketUUIDValid {
 				cluster := idx.config["clusterAddr"].String()
 				numVbuckets := idx.config["numVbuckets"].Int()
-				buildTs, err := GetCurrentKVTs(cluster, "default", bucket, numVbuckets)
+
+				var buildTs Timestamp
+				fn := func(r int, err error) error {
+					if r > 0 {
+						logging.Warnf("Indexer::validateIndexInstMap Bucket %s is not yet ready (err = %v) Retrying(%d)..", bucket, err, r)
+					}
+					buildTs, err = GetCurrentKVTs(cluster, "default", bucket, numVbuckets)
+					return err
+				}
+				rh := common.NewRetryHelper(MAX_KVWARMUP_RETRIES, time.Second, 1, fn)
+				err := rh.Run()
 				if err != nil {
-					common.CrashOnError(err)
+					logging.Errorf("Indexer::validateIndexInstMap Bucket %s not ready even after max retries. Restarting indexer.", bucket)
+					os.Exit(1)
 				} else {
 					idx.bucketBuildTs[bucket] = buildTs
 				}

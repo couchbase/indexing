@@ -216,7 +216,8 @@ func BucketSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error)
 		return nil, err
 	}
 
-	return reader.GetSeqnos()
+	l_seqnos, err = reader.GetSeqnos()
+	return
 }
 
 func CollectSeqnos(kvfeeds map[string]*couchbase.DcpFeed) (l_seqnos []uint64, err error) {
@@ -290,9 +291,18 @@ func pollForDeletedBuckets() {
 			}
 		}()
 		func() {
+			var bucketn string
+			var bucket *couchbase.Bucket
+
 			dcp_buckets_seqnos.rw.RLock()
-			defer dcp_buckets_seqnos.rw.RUnlock()
-			for bucketn, bucket := range dcp_buckets_seqnos.buckets {
+			defer func() {
+				if r := recover(); r != nil {
+					logging.Warnf("failover race in bucket: %v", r)
+					todels = append(todels, bucketn)
+				}
+				dcp_buckets_seqnos.rw.RUnlock()
+			}()
+			for bucketn, bucket = range dcp_buckets_seqnos.buckets {
 				if m, err := bucket.GetVBmap(nil); err != nil {
 					// idle detect failures.
 					todels = append(todels, bucketn)

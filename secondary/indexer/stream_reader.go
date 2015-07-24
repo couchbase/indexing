@@ -61,6 +61,8 @@ type mutationStreamReader struct {
 	evalFilter   bool
 	snapType     uint32
 
+	killch chan bool // kill chan for the main loop
+
 	stats IndexerStatsHolder
 }
 
@@ -105,6 +107,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		bucketQueueMap:  CopyBucketQueueMap(bucketQueueMap),
 		bucketFilterMap: make(map[string]*common.TsVbuuid),
 		bucketSyncDue:   make(map[string]bool),
+		killch:          make(chan bool),
 	}
 
 	r.stats.Set(stats)
@@ -112,6 +115,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 
 	//start the main reader loop
 	go r.run()
+	go r.listenSupvCmd()
 
 	go r.syncWorker()
 
@@ -144,7 +148,7 @@ func (r *mutationStreamReader) Shutdown() {
 }
 
 //run starts the stream reader loop which listens to message from
-//mutation stream and the supervisor
+//mutation stream
 func (r *mutationStreamReader) run() {
 
 	//panic handler
@@ -177,26 +181,40 @@ func (r *mutationStreamReader) run() {
 				r.supvRespch <- msgErr
 			}
 
-		case cmd, ok := <-r.supvCmdch:
-			if ok {
-				//handle commands from supervisor
-				if cmd.GetMsgType() == STREAM_READER_SHUTDOWN {
-					//shutdown and exit the stream reader loop
-					r.Shutdown()
-					r.supvCmdch <- &MsgSuccess{}
-					return
-				}
-				msg := r.handleSupervisorCommands(cmd)
-				r.supvCmdch <- msg
-			} else {
-				//supervisor channel closed. Shutdown stream reader.
-				r.Shutdown()
-				return
-
-			}
+		case <-r.killch:
+			return
 		}
 	}
 
+}
+
+//run starts the stream reader loop which listens to message from
+//the supervisor
+func (r *mutationStreamReader) listenSupvCmd() {
+
+	//panic handler
+	defer r.panicHandler()
+
+	for {
+		cmd, ok := <-r.supvCmdch
+		if ok {
+			//handle commands from supervisor
+			if cmd.GetMsgType() == STREAM_READER_SHUTDOWN {
+				//shutdown and exit the stream reader loop
+				r.Shutdown()
+				r.supvCmdch <- &MsgSuccess{}
+				return
+			}
+			msg := r.handleSupervisorCommands(cmd)
+			r.supvCmdch <- msg
+		} else {
+			//supervisor channel closed. Shutdown stream reader.
+			close(r.killch)
+			r.Shutdown()
+			return
+
+		}
+	}
 }
 
 func (r *mutationStreamReader) handleVbKeyVersions(vbKeyVers []*protobuf.VbKeyVersions) {

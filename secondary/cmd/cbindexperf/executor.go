@@ -150,6 +150,7 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 	}
 
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
+	config.SetValue("settings.poolSize", int(cfg.Concurrency))
 	client, err := qclient.NewGsiClient(cluster, config)
 	if err != nil {
 		return nil, err
