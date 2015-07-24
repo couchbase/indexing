@@ -675,6 +675,12 @@ var SystemConfig = Config{
 		20,
 		false, // mutable
 	},
+	"indexer.settings.wal_size": ConfigValue{
+		uint64(4096),
+		"WAL threshold size",
+		uint64(4096),
+		false, // mutable
+	},
 	"projector.settings.log_level": ConfigValue{
 		"debug",
 		"Projector logging level",

@@ -65,7 +65,10 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 
 	prob := sysconf["settings.max_writer_lock_prob"].Int()
 	config.SetMaxWriterLockProb(uint8(prob))
+	walSize := sysconf["settings.wal_size"].Uint64()
+	config.SetWalThreshold(walSize)
 	logging.Debugf("NewForestDBSlice(): max writer lock prob %d", prob)
+	logging.Debugf("NewForestDBSlice(): wal size %d", walSize)
 
 	kvconfig := forestdb.DefaultKVStoreConfig()
 
