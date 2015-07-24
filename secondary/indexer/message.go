@@ -767,6 +767,7 @@ type MsgBucketHWT struct {
 	streamId common.StreamId
 	bucket   string
 	ts       *common.TsVbuuid
+	prevSnap *common.TsVbuuid
 }
 
 func (m *MsgBucketHWT) GetMsgType() MsgType {
@@ -783,6 +784,10 @@ func (m *MsgBucketHWT) GetBucket() string {
 
 func (m *MsgBucketHWT) GetHWT() *common.TsVbuuid {
 	return m.ts
+}
+
+func (m *MsgBucketHWT) GetPrevSnap() *common.TsVbuuid {
+	return m.prevSnap
 }
 
 func (m *MsgBucketHWT) String() string {
