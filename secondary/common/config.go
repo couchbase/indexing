@@ -650,6 +650,13 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 
+	"indexer.settings.smallSnapshotThreshold": ConfigValue{
+		uint64(30),
+		"Threshold For Considering a DCP Snapshot as Small.",
+		uint64(30),
+		false, // mutable
+	},
+
 	"indexer.settings.sliceBufSize": ConfigValue{
 		uint64(50000),
 		"Buffer for each slice to queue mutations before flush " +
