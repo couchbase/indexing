@@ -644,7 +644,7 @@ func mustNotHave(fset *flag.FlagSet, keys ...string) error {
 func guessServer() string {
 	ports := []string{"8091", "9000"}
 	for _, port := range ports {
-		server := "localhost:" + port
+		server := "127.0.0.1:" + port
 		resp, err := http.Get("http://" + server + "/pools")
 		if err != nil {
 			continue
