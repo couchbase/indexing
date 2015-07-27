@@ -688,6 +688,12 @@ var SystemConfig = Config{
 		uint64(4096),
 		false, // mutable
 	},
+	"indexer.settings.fast_flush_mode": ConfigValue{
+		true,
+		"Skips InMem Snapshots When Indexer Is Backed Up",
+		true,
+		false, // mutable
+	},
 	"projector.settings.log_level": ConfigValue{
 		"debug",
 		"Projector logging level",
