@@ -849,10 +849,15 @@ func (config Config) SetValue(key string, value interface{}) error {
 		valType = defType
 	}
 
+	if valType.Kind() == reflect.String {
+		value = strings.ToLower(value.(string))
+	}
+
 	if defType != reflect.TypeOf(value) {
 		return fmt.Errorf("%v: Value type mismatch, %v != %v (%v)",
 			key, valType, defType, value)
 	}
+
 	cv.Value = value
 	config[key] = cv
 
