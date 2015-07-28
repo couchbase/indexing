@@ -309,6 +309,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 							logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
 								"Index: %v PartitionId: %v SliceId: %v Commit: %v", idxInstId, partnId, slice.Id(), needsCommit)
 
+							snapCreateStart := time.Now()
 							if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
 								logging.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
 									"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
@@ -317,6 +318,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 								common.CrashOnError(err)
 								continue
 							}
+							snapCreateDur := time.Since(snapCreateStart)
 
 							idxStats := stats.indexes[idxInstId]
 							idxStats.numSnapshots.Add(1)
@@ -324,6 +326,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 								idxStats.numCommits.Add(1)
 							}
 
+							snapOpenStart := time.Now()
 							if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
 								logging.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
 									"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
@@ -332,9 +335,10 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 								common.CrashOnError(err)
 								continue
 							}
+							snapOpenDur := time.Since(snapOpenStart)
 
 							logging.Infof("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
-								"PartitionId: %v SliceId: %v Crc64: %v (%v)", idxInstId, partnId, slice.Id(), tsVbuuid.Crc64, info)
+								"PartitionId: %v SliceId: %v Crc64: %v (%v) SnapCreateDur %v SnapOpenDur %v", idxInstId, partnId, slice.Id(), tsVbuuid.Crc64, info, snapCreateDur, snapOpenDur)
 
 							ss := &sliceSnapshot{
 								id:   slice.Id(),
