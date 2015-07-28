@@ -1030,10 +1030,11 @@ func (feed *Feed) addInstances(
 		Topic:             proto.String(feed.topic),
 		CurrentTimestamps: make([]*protobuf.TsVbuuid, 0, 4),
 	}
+	errResp := &protobuf.TimestampResponse{Topic: proto.String(feed.topic)}
 
 	// update engines and endpoints
 	if err := feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
-		return &protobuf.TimestampResponse{}, err
+		return errResp, err
 	}
 	var err error
 	// post to kv data-path
@@ -1041,7 +1042,7 @@ func (feed *Feed) addInstances(
 		if kvdata, ok := feed.kvdata[bucketn]; ok {
 			curSeqnos, err := kvdata.AddEngines(opaque, engines, feed.endpoints)
 			if err != nil {
-				return &protobuf.TimestampResponse{}, err
+				return errResp, err
 			}
 			tsResp = tsResp.AddCurrentTimestamp(feed.pooln, bucketn, curSeqnos)
 
