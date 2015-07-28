@@ -31,11 +31,11 @@ var ErrorClosed = errors.New("dcp.closed")
 // FailoverLog for list of vbuckets.
 type FailoverLog map[uint16]memcached.FailoverLog
 
-// Make a valid DCP feed name. These always begin with secidx-
+// Make a valid DCP feed name. These always begin with secidx:
 type DcpFeedName string
 
 func NewDcpFeedName(name string) DcpFeedName {
-	return DcpFeedName("secidx-" + name)
+	return DcpFeedName("secidx:" + name)
 }
 
 // GetFailoverLogs get the failover logs for a set of vbucket ids
