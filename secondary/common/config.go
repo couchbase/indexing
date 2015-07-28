@@ -546,9 +546,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.compaction.min_size": ConfigValue{
-		uint64(1024 * 1024),
+		uint64(1024 * 1024 * 500),
 		"Compaction min file size",
-		uint64(1024 * 1024),
+		uint64(1024 * 1024 * 500),
 		false, // mutable
 	},
 	"indexer.settings.persisted_snapshot.interval": ConfigValue{

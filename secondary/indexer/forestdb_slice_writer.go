@@ -970,7 +970,6 @@ snaploop:
 
 	fdb.currfile = newpath
 
-	diskSz, err := common.FileSize(fdb.currfile)
 	config := forestdb.DefaultConfig()
 	config.SetOpenFlags(forestdb.OPEN_FLAG_RDONLY)
 	fdb.statFd.Close()
@@ -978,13 +977,18 @@ snaploop:
 		return err
 	}
 
-	dataSz := int64(fdb.statFd.EstimateSpaceUsed())
-	var extraSnapDataSize int64
-	if diskSz > dataSz {
-		extraSnapDataSize = diskSz - dataSz
-	}
+	/*
+		FIXME: Use correct accounting of extra snapshots size
+			diskSz, err := common.FileSize(fdb.currfile)
+			dataSz := int64(fdb.statFd.EstimateSpaceUsed())
+			var extraSnapDataSize int64
+			if diskSz > dataSz {
+				extraSnapDataSize = diskSz - dataSz
+			}
 
-	platform.StoreInt64(&fdb.extraSnapDataSize, extraSnapDataSize)
+			platform.StoreInt64(&fdb.extraSnapDataSize, extraSnapDataSize)
+	*/
+
 	return err
 }
 
