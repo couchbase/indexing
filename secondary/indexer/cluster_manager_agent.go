@@ -164,7 +164,7 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 
 func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 
-	logging.Debugf("ClustMgr:handleUpdateTopologyForIndex %v", cmd)
+	logging.Infof("ClustMgr:handleUpdateTopologyForIndex %v", cmd)
 
 	indexList := cmd.(*MsgClustMgrUpdate).GetIndexList()
 	updatedFields := cmd.(*MsgClustMgrUpdate).GetUpdatedFields()
@@ -197,7 +197,7 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 
 func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 
-	logging.Debugf("ClustMgr:handleGetGlobalTopology %v", cmd)
+	logging.Infof("ClustMgr:handleGetGlobalTopology %v", cmd)
 
 	//get the latest topology from manager
 	metaIter, err := c.mgr.NewIndexDefnIterator()
@@ -253,7 +253,7 @@ func (c *clustMgrAgent) handleGetLocalValue(cmd Message) {
 
 	key := cmd.(*MsgClustMgrLocal).GetKey()
 
-	logging.Debugf("ClustMgr:handleGetLocalValue Key %v", key)
+	logging.Infof("ClustMgr:handleGetLocalValue Key %v", key)
 
 	val, err := c.mgr.GetLocalValue(key)
 
@@ -271,7 +271,7 @@ func (c *clustMgrAgent) handleSetLocalValue(cmd Message) {
 	key := cmd.(*MsgClustMgrLocal).GetKey()
 	val := cmd.(*MsgClustMgrLocal).GetValue()
 
-	logging.Debugf("ClustMgr:handleSetLocalValue Key %v Value %v", key, val)
+	logging.Infof("ClustMgr:handleSetLocalValue Key %v Value %v", key, val)
 
 	err := c.mgr.SetLocalValue(key, val)
 
@@ -286,7 +286,7 @@ func (c *clustMgrAgent) handleSetLocalValue(cmd Message) {
 
 func (c *clustMgrAgent) handleDeleteBucket(cmd Message) {
 
-	logging.Debugf("ClustMgr:handleDeleteBucket %v", cmd)
+	logging.Infof("ClustMgr:handleDeleteBucket %v", cmd)
 
 	bucket := cmd.(*MsgClustMgrUpdate).GetBucket()
 	streamId := cmd.(*MsgClustMgrUpdate).GetStreamId()
@@ -299,7 +299,7 @@ func (c *clustMgrAgent) handleDeleteBucket(cmd Message) {
 
 func (c *clustMgrAgent) handleIndexerReady(cmd Message) {
 
-	logging.Debugf("ClustMgr:handleIndexerReady %v", cmd)
+	logging.Infof("ClustMgr:handleIndexerReady %v", cmd)
 
 	err := c.mgr.NotifyIndexerReady()
 	common.CrashOnError(err)

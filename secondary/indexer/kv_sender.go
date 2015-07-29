@@ -138,7 +138,9 @@ func (k *kvSender) handleOpenStream(cmd Message) {
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 	bucket := cmd.(*MsgStreamUpdate).GetBucket()
 
-	logging.Debugf("KVSender::handleOpenStream %v %v %v", streamId, bucket, cmd)
+	logging.LazyDebug(func() string {
+		return fmt.Sprintf("KVSender::handleOpenStream %v %v %v", streamId, bucket, cmd)
+	})
 
 	go k.openMutationStream(streamId, indexInstList, restartTs, respCh, stopCh)
 
@@ -154,7 +156,9 @@ func (k *kvSender) handleAddIndexListToStream(cmd Message) {
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 
-	logging.Debugf("KVSender::handleAddIndexListToStream %v %v %v", streamId, bucket, cmd)
+	logging.LazyDebug(func() string {
+		return fmt.Sprintf("KVSender::handleAddIndexListToStream %v %v %v", streamId, bucket, cmd)
+	})
 
 	go k.addIndexForExistingBucket(streamId, bucket, addIndexList, respCh, stopCh)
 
@@ -163,7 +167,9 @@ func (k *kvSender) handleAddIndexListToStream(cmd Message) {
 
 func (k *kvSender) handleRemoveIndexListFromStream(cmd Message) {
 
-	logging.Debugf("KVSender::handleRemoveIndexListFromStream %v", cmd)
+	logging.LazyDebug(func() string {
+		return fmt.Sprintf("KVSender::handleRemoveIndexListFromStream %v", cmd)
+	})
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	delIndexList := cmd.(*MsgStreamUpdate).GetIndexList()
@@ -182,7 +188,9 @@ func (k *kvSender) handleRemoveBucketFromStream(cmd Message) {
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 
-	logging.Debugf("KVSender::handleRemoveBucketFromStream %v %v %v", streamId, bucket, cmd)
+	logging.LazyDebug(func() string {
+		return fmt.Sprintf("KVSender::handleRemoveBucketFromStream %v %v %v", streamId, bucket, cmd)
+	})
 
 	go k.deleteBucketsFromStream(streamId, []string{bucket}, respCh, stopCh)
 
@@ -196,7 +204,9 @@ func (k *kvSender) handleCloseStream(cmd Message) {
 	respCh := cmd.(*MsgStreamUpdate).GetResponseChannel()
 	stopCh := cmd.(*MsgStreamUpdate).GetStopChannel()
 
-	logging.Debugf("KVSender::handleCloseStream %v %v %v", streamId, bucket, cmd)
+	logging.LazyDebug(func() string {
+		return fmt.Sprintf("KVSender::handleCloseStream %v %v %v", streamId, bucket, cmd)
+	})
 
 	go k.closeMutationStream(streamId, bucket, respCh, stopCh)
 
@@ -212,7 +222,9 @@ func (k *kvSender) handleRestartVbuckets(cmd Message) {
 	stopCh := cmd.(*MsgRestartVbuckets).GetStopChannel()
 	connErrVbs := cmd.(*MsgRestartVbuckets).ConnErrVbs()
 
-	logging.Debugf("KVSender::handleRestartVbuckets %v %v %v", streamId, bucket, cmd)
+	logging.LazyDebug(func() string {
+		return fmt.Sprintf("KVSender::handleRestartVbuckets %v %v %v", streamId, bucket, cmd)
+	})
 
 	go k.restartVbuckets(streamId, restartTs, connErrVbs, respCh, stopCh)
 	k.supvCmdch <- &MsgSuccess{}
@@ -652,7 +664,7 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 	logging.Infof("KVSender::sendMutationTopicRequest Projector %v Topic %v %v \n\tInstances %v",
 		ap, topic, reqTimestamps.GetBucket(), instances)
 
-	logging.LazyDebugf("KVSender::sendMutationTopicRequest RequestTS %v", reqTimestamps.Repr)
+	logging.LazyVerbosef("KVSender::sendMutationTopicRequest RequestTS %v", reqTimestamps.Repr)
 
 	endpointType := "dataport"
 
@@ -663,10 +675,11 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 
 		return res, err
 	} else {
-		if logging.IsEnabled(logging.Debug) {
-			logging.Debugf("KVSender::sendMutationTopicRequest Response Projector %v Topic %v %v "+
-				"\n\tInstanceIds %v \n\tActiveTs %v \n\tRollbackTs %v", ap, topic, reqTimestamps.GetBucket(),
-				res.GetInstanceIds(), debugPrintTs(res.GetActiveTimestamps(), reqTimestamps.GetBucket()),
+		logging.Infof("KVSender::sendMutationTopicRequest Success Projector %v Topic %v %v InstanceIds %v",
+			ap, topic, reqTimestamps.GetBucket(), res.GetInstanceIds())
+		if logging.IsEnabled(logging.Verbose) {
+			logging.Verbosef("KVSender::sendMutationTopicRequest ActiveTs %v \n\tRollbackTs %v",
+				debugPrintTs(res.GetActiveTimestamps(), reqTimestamps.GetBucket()),
 				debugPrintTs(res.GetRollbackTimestamps(), reqTimestamps.GetBucket()))
 		}
 		return res, nil
@@ -678,7 +691,7 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 	restartTs *protobuf.TsVbuuid) (*protobuf.TopicResponse, error) {
 
 	logging.Infof("KVSender::sendRestartVbuckets Projector %v Topic %v %v", ap, topic, restartTs.GetBucket())
-	logging.LazyDebugf("KVSender::sendRestartVbuckets RestartTs %v", restartTs.Repr)
+	logging.LazyVerbosef("KVSender::sendRestartVbuckets RestartTs %v", restartTs.Repr)
 
 	//Shutdown the vbucket before restart if there was a ConnErr. If the vbucket is already
 	//running, projector will ignore the request otherwise
@@ -716,10 +729,10 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 
 		return res, err
 	} else {
-		if logging.IsEnabled(logging.Debug) {
-			logging.Debugf("KVSender::sendRestartVbuckets Response Projector %v Topic %v %v "+
-				"\nInstanceIds %v \nActiveTs %v \nRollbackTs %v", ap, topic, restartTs.GetBucket(),
-				res.GetInstanceIds(), debugPrintTs(res.GetActiveTimestamps(), restartTs.GetBucket()),
+		logging.Infof("KVSender::sendRestartVbuckets Success Projector %v Topic %v %v", ap, topic, restartTs.GetBucket())
+		if logging.IsEnabled(logging.Verbose) {
+			logging.Verbosef("KVSender::sendRestartVbuckets \nActiveTs %v \nRollbackTs %v",
+				debugPrintTs(res.GetActiveTimestamps(), restartTs.GetBucket()),
 				debugPrintTs(res.GetRollbackTimestamps(), restartTs.GetBucket()))
 		}
 		return res, nil
@@ -741,10 +754,11 @@ func sendAddInstancesRequest(ap *projClient.Client,
 
 		return res, err
 	} else {
+		logging.Infof("KVSender::sendAddInstancesRequest Success Projector %v Topic %v",
+			ap, topic)
 		logging.LazyDebug(func() string {
 			return fmt.Sprintf(
-				"KVSender::sendAddInstancesRequest Response Projector %v Topic %v "+
-					"\n\tActiveTs %v ", ap, topic, debugPrintTs(res.GetCurrentTimestamps(), ""))
+				"KVSender::sendAddInstancesRequest \n\tActiveTs %v ", debugPrintTs(res.GetCurrentTimestamps(), ""))
 		})
 		return res, nil
 
@@ -767,6 +781,8 @@ func sendDelInstancesRequest(ap *projClient.Client,
 
 		return err
 	} else {
+		logging.Infof("KVSender::sendDelInstancesRequest Success Projector %v Topic %v",
+			ap, topic)
 		return nil
 
 	}
@@ -788,6 +804,8 @@ func sendDelBucketsRequest(ap *projClient.Client,
 
 		return err
 	} else {
+		logging.Infof("KVSender::sendDelBucketsRequest Success Projector %v Topic %v Buckets %v",
+			ap, topic, buckets)
 		return nil
 	}
 }
@@ -804,6 +822,7 @@ func sendShutdownTopic(ap *projClient.Client,
 
 		return err
 	} else {
+		logging.Infof("KVSender::sendShutdownTopic Success Projector %v Topic %v", ap, topic)
 		return nil
 	}
 }

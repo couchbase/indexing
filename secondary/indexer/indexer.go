@@ -171,7 +171,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	var res Message
 	idx.settingsMgr, idx.config, res = NewSettingsManager(idx.settingsMgrCmdCh, idx.wrkrRecvCh, config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Errorf("Indexer::NewIndexer settingsMgr Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer settingsMgr Init Error", res)
 		return nil, res
 	}
 
@@ -187,28 +187,28 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Errorf("Indexer::NewIndexer Mutation Manager Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer Mutation Manager Init Error", res)
 		return nil, res
 	}
 
 	//Start KV Sender
 	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Errorf("Indexer::NewIndexer KVSender Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer KVSender Init Error", res)
 		return nil, res
 	}
 
 	//Start Timekeeper
 	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Errorf("Indexer::NewIndexer Timekeeper Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer Timekeeper Init Error", res)
 		return nil, res
 	}
 
 	//Start Scan Coordinator
 	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh, idx.config, snapshotNotifych)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Errorf("Indexer::NewIndexer Scan Coordinator Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer Scan Coordinator Init Error", res)
 		return nil, res
 	}
 
@@ -217,14 +217,14 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	if idx.enableManager {
 		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config)
 		if res.GetMsgType() != MSG_SUCCESS {
-			logging.Errorf("Indexer::NewIndexer ClusterMgrAgent Init Error", res)
+			logging.Fatalf("Indexer::NewIndexer ClusterMgrAgent Init Error", res)
 			return nil, res
 		}
 	}
 
 	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Errorf("Indexer::NewIndexer statsMgr Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer statsMgr Init Error", res)
 		return nil, res
 	}
 
@@ -238,7 +238,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		//Start CbqBridge
 		idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh, idx.indexInstMap, idx.config)
 		if res.GetMsgType() != MSG_SUCCESS {
-			logging.Errorf("Indexer::NewIndexer CbqBridge Init Error", res)
+			logging.Fatalf("Indexer::NewIndexer CbqBridge Init Error", res)
 			return nil, res
 		}
 	}
@@ -256,7 +256,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	//Start Admin port listener
 	idx.adminMgr, res = NewAdminManager(idx.adminMgrCmdCh, idx.adminRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Errorf("Indexer::NewIndexer Admin Manager Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer Admin Manager Init Error", res)
 		return nil, res
 	}
 
@@ -264,7 +264,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Errorf("Indexer::NewCompactionmanager Init Error", res)
+		logging.Fatalf("Indexer::NewCompactionmanager Init Error", res)
 		return nil, res
 	}
 
@@ -273,7 +273,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
 	go func() {
 		if err := http.ListenAndServe(addr, nil); err != nil {
-			logging.Errorf("indexer:: Error Starting Http Server: %v", err)
+			logging.Fatalf("indexer:: Error Starting Http Server: %v", err)
 			common.CrashOnError(err)
 		}
 	}()
@@ -531,9 +531,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		<-idx.tkCmdCh
 
 	case STREAM_READER_STREAM_DROP_DATA:
-		//TODO
-		logging.Debugf("Indexer::handleWorkerMsgs Received Drop Data "+
-			"From Mutation Mgr %v", msg)
+
+		logging.Warnf("Indexer::handleWorkerMsgs Received Drop Data "+
+			"From Mutation Mgr %v. Ignored.", msg)
 
 	case STREAM_READER_SNAPSHOT_MARKER:
 		//fwd the message to timekeeper
@@ -554,7 +554,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		changeVec := msg.(*MsgTKStabilityTS).GetChangeVector()
 
 		if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
-			logging.Debugf("Indexer: Skipped PersistTs for %v %v. "+
+			logging.Warnf("Indexer: Skipped PersistTs for %v %v. "+
 				"STREAM_INACTIVE", streamId, bucket)
 			return
 		}
@@ -694,7 +694,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		idx.handleResetStats()
 
 	default:
-		logging.Errorf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
+		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
 	}
 
@@ -924,7 +924,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 
 		idx.bulkUpdateState(instIdList, buildState)
 
-		logging.Debugf("Indexer::handleBuildIndex \n\tAdded Index: %v to Stream: %v State: %v",
+		logging.Infof("Indexer::handleBuildIndex \n\tAdded Index: %v to Stream: %v State: %v",
 			instIdList, buildStream, buildState)
 
 		msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
@@ -1008,7 +1008,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		indexInst.State == common.INDEX_STATE_DELETED {
 
 		idx.cleanupIndexData(indexInst, clientCh)
-		logging.Debugf("Indexer::handleDropIndex Cleanup Successful for "+
+		logging.Infof("Indexer::handleDropIndex Cleanup Successful for "+
 			"Index Data %v", indexInst)
 		clientCh <- &MsgSuccess{}
 		return
@@ -1040,7 +1040,7 @@ func (idx *indexer) handleDropIndex(msg Message) {
 	if indexInst.Stream == common.MAINT_STREAM &&
 		!idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.MAINT_STREAM, false) &&
 		idx.checkBucketExistsInStream(indexInst.Defn.Bucket, common.INIT_STREAM, false) {
-		logging.Warnf("Indexer::handleDropIndex Pre-Catchup Index Found for %v "+
+		logging.Infof("Indexer::handleDropIndex Pre-Catchup Index Found for %v "+
 			"%v. Stream Cleanup Skipped.", indexInst.Stream, indexInst.Defn.Bucket)
 		clientCh <- &MsgSuccess{}
 		return
@@ -1090,7 +1090,7 @@ func (idx *indexer) handlePrepareRecovery(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	bucket := msg.(*MsgRecovery).GetBucket()
 
-	logging.Debugf("Indexer::handlePrepareRecovery StreamId %v Bucket %v",
+	logging.Infof("Indexer::handlePrepareRecovery StreamId %v Bucket %v",
 		streamId, bucket)
 
 	idx.stopBucketStream(streamId, bucket)
@@ -1115,7 +1115,7 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 
 	idx.streamBucketStatus[streamId][bucket] = STREAM_PREPARE_RECOVERY
 
-	logging.Debugf("Indexer::handleInitPrepRecovery StreamId %v Bucket %v %v",
+	logging.Infof("Indexer::handleInitPrepRecovery StreamId %v Bucket %v %v",
 		streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 
 	//fwd the msg to timekeeper
@@ -1128,7 +1128,7 @@ func (idx *indexer) handlePrepareDone(msg Message) {
 	bucket := msg.(*MsgRecovery).GetBucket()
 	streamId := msg.(*MsgRecovery).GetStreamId()
 
-	logging.Debugf("Indexer::handlePrepareDone StreamId %v Bucket %v",
+	logging.Infof("Indexer::handlePrepareDone StreamId %v Bucket %v",
 		streamId, bucket)
 
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
@@ -1147,7 +1147,7 @@ func (idx *indexer) handleInitRecovery(msg Message) {
 
 	idx.streamBucketStatus[streamId][bucket] = STREAM_RECOVERY
 
-	logging.Debugf("Indexer::handleInitRecovery StreamId %v Bucket %v %v",
+	logging.Infof("Indexer::handleInitRecovery StreamId %v Bucket %v %v",
 		streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 
 	//if there is a rollbackTs, process rollback
@@ -1169,7 +1169,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	buildTs := msg.(*MsgRecovery).GetBuildTs()
 
-	logging.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v ",
+	logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v ",
 		streamId, bucket)
 
 	//send the msg to timekeeper
@@ -1185,7 +1185,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	//the stream needs to be stopped for that bucket.
 	if !idx.checkBucketExistsInStream(bucket, streamId, false) {
 		if idx.streamBucketStatus[streamId][bucket] != STREAM_INACTIVE {
-			logging.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v State %v. No Index Found."+
+			logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v State %v. No Index Found."+
 				"Cleaning up.", streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 			idx.stopBucketStream(streamId, bucket)
 			idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
@@ -1195,7 +1195,7 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 		idx.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 	}
 
-	logging.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v %v",
+	logging.Infof("Indexer::handleRecoveryDone StreamId %v Bucket %v %v",
 		streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 
 }
@@ -1208,7 +1208,7 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 
 	//repair is not required for inactive bucket streams
 	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE {
-		logging.Debugf("Indexer::handleKVStreamRepair Skip Stream Repair %v Inactive Bucket %v",
+		logging.Infof("Indexer::handleKVStreamRepair Skip Stream Repair %v Inactive Bucket %v",
 			streamId, bucket)
 		return
 	}
@@ -1216,11 +1216,11 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	//if there is already a repair in progress for this bucket stream
 	//ignore the request
 	if idx.checkStreamRequestPending(streamId, bucket) == false {
-		logging.Debugf("Indexer::handleKVStreamRepair Initiate Stream Repair %v Bucket %v",
+		logging.Infof("Indexer::handleKVStreamRepair Initiate Stream Repair %v Bucket %v",
 			streamId, bucket)
 		idx.startBucketStream(streamId, bucket, restartTs)
 	} else {
-		logging.Debugf("Indexer::handleKVStreamRepair Ignore Stream Repair Request for Stream "+
+		logging.Infof("Indexer::handleKVStreamRepair Ignore Stream Repair Request for Stream "+
 			"%v Bucket %v. Request In Progress.", streamId, bucket)
 	}
 
@@ -1236,12 +1236,12 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
 		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
 		idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
-		logging.Debugf("Indexer::handleInitBuildDoneAck Skip InitBuildDoneAck %v %v %v",
+		logging.Infof("Indexer::handleInitBuildDoneAck Skip InitBuildDoneAck %v %v %v",
 			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 		return
 	}
 
-	logging.Debugf("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v",
+	logging.Infof("Indexer::handleInitBuildDoneAck StreamId %v Bucket %v",
 		streamId, bucket)
 
 	switch streamId {
@@ -1253,7 +1253,7 @@ func (idx *indexer) handleInitBuildDoneAck(msg Message) {
 		<-idx.tkCmdCh
 
 	default:
-		logging.Debugf("Indexer::handleInitBuildDoneAck Unexpected Initial Build Ack Done "+
+		logging.Fatalf("Indexer::handleInitBuildDoneAck Unexpected Initial Build Ack Done "+
 			"Received for Stream %v Bucket %v", streamId, bucket)
 		common.CrashOnError(errors.New("Unexpected Initial Build Ack Done"))
 	}
@@ -1266,7 +1266,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
 	mergeList := msg.(*MsgTKMergeStream).GetMergeList()
 
-	logging.Debugf("Indexer::handleMergeStreamAck StreamId %v Bucket %v",
+	logging.Infof("Indexer::handleMergeStreamAck StreamId %v Bucket %v",
 		streamId, bucket)
 
 	switch streamId {
@@ -1277,7 +1277,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 		//skip processing merge ack for inactive or recovery streams.
 		if idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
 			idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
-			logging.Debugf("Indexer::handleMergeStreamAck Skip MergeStreamAck %v %v %v",
+			logging.Infof("Indexer::handleMergeStreamAck Skip MergeStreamAck %v %v %v",
 				streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 			return
 		}
@@ -1316,7 +1316,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 		}
 
 	default:
-		logging.Debugf("Indexer::handleMergeStreamAck Unexpected Merge Stream Ack "+
+		logging.Fatalf("Indexer::handleMergeStreamAck Unexpected Merge Stream Ack "+
 			"Received for Stream %v Bucket %v", streamId, bucket)
 		common.CrashOnError(errors.New("Unexpected Merge Stream Ack"))
 	}
@@ -1329,7 +1329,7 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	bucket := msg.(*MsgStreamInfo).GetBucket()
 	buildTs := msg.(*MsgStreamInfo).GetBuildTs()
 
-	logging.Debugf("Indexer::handleStreamRequestDone StreamId %v Bucket %v",
+	logging.Infof("Indexer::handleStreamRequestDone StreamId %v Bucket %v",
 		streamId, bucket)
 
 	//send the ack to timekeeper
@@ -1345,7 +1345,7 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	streamId := msg.(*MsgRecovery).GetStreamId()
 	bucket := msg.(*MsgRecovery).GetBucket()
 
-	logging.Debugf("Indexer::handleBucketNotFound StreamId %v Bucket %v",
+	logging.Infof("Indexer::handleBucketNotFound StreamId %v Bucket %v",
 		streamId, bucket)
 
 	//If stream is inactive, no cleanup is required.
@@ -1353,7 +1353,7 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	//validating the bucket and taking corrective action.
 	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
 		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY {
-		logging.Debugf("Indexer::handleBucketNotFound Skip %v %v %v",
+		logging.Infof("Indexer::handleBucketNotFound Skip %v %v %v",
 			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 		return
 	}
@@ -1363,13 +1363,13 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 	instIdList := idx.deleteIndexInstOnDeletedBucket(bucket, streamId)
 
 	if len(instIdList) == 0 {
-		logging.Debugf("Indexer::handleBucketNotFound Empty IndexList %v %v. Nothing to do.",
+		logging.Infof("Indexer::handleBucketNotFound Empty IndexList %v %v. Nothing to do.",
 			streamId, bucket)
 		return
 	}
 
 	idx.bulkUpdateState(instIdList, common.INDEX_STATE_DELETED)
-	logging.Debugf("Indexer::handleBucketNotFound Updated Index State to DELETED %v",
+	logging.Infof("Indexer::handleBucketNotFound Updated Index State to DELETED %v",
 		instIdList)
 
 	msgUpdateIndexInstMap := idx.newIndexInstMsg(idx.indexInstMap)
@@ -1388,7 +1388,7 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 
 	idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
-	logging.Debugf("Indexer::handleBucketNotFound %v %v %v",
+	logging.Infof("Indexer::handleBucketNotFound %v %v %v",
 		streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 
 }
@@ -1564,7 +1564,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS_OPEN_STREAM:
-					logging.Debugf("Indexer::sendStreamUpdateForBuildIndex Stream Request Success For "+
+					logging.Infof("Indexer::sendStreamUpdateForBuildIndex Stream Request Success For "+
 						"Stream %v Bucket %v.", buildStream, bucket)
 
 					//once stream request is successful re-calculate the KV timestamp.
@@ -1666,7 +1666,7 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 		}
 
 	default:
-		logging.Errorf("Indexer::sendStreamUpdateForDropIndex \n\t Unsupported StreamId %v", indexInst.Stream)
+		logging.Fatalf("Indexer::sendStreamUpdateForDropIndex \n\t Unsupported StreamId %v", indexInst.Stream)
 		common.CrashOnError(ErrInvalidStream)
 	}
 
@@ -1732,6 +1732,8 @@ func (idx *indexer) sendStreamUpdateForDropIndex(indexInst common.IndexInst,
 					switch resp.GetMsgType() {
 
 					case MSG_SUCCESS:
+						logging.Infof("Indexer::sendStreamUpdateForDropIndex Success Stream %v Bucket %v",
+							streamId, indexInst.Defn.Bucket)
 						break retryloop
 
 					default:
@@ -1980,17 +1982,17 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
 		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
 		idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
-		logging.Debugf("Indexer::handleInitialBuildDone Skip InitBuildDone %v %v %v",
+		logging.Infof("Indexer::handleInitialBuildDone Skip InitBuildDone %v %v %v",
 			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 		return
 	}
 
-	logging.Debugf("Indexer::handleInitialBuildDone Bucket: %v Stream: %v", bucket, streamId)
+	logging.Infof("Indexer::handleInitialBuildDone Bucket: %v Stream: %v", bucket, streamId)
 
 	//MAINT_STREAM should already be running for this bucket,
 	//as first index gets added to MAINT_STREAM always
 	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM, true) == false {
-		logging.Errorf("Indexer::handleInitialBuildDone MAINT_STREAM not enabled for Bucket: %v. "+
+		logging.Fatalf("Indexer::handleInitialBuildDone MAINT_STREAM not enabled for Bucket: %v. "+
 			"Cannot Process Initial Build Done.", bucket)
 		common.CrashOnError(ErrMaintStreamMissingBucket)
 	}
@@ -2015,7 +2017,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 	}
 
 	if len(instIdList) == 0 {
-		logging.Debugf("Indexer::handleInitialBuildDone Empty IndexList %v %v. Nothing to do.",
+		logging.Infof("Indexer::handleInitialBuildDone Empty IndexList %v %v. Nothing to do.",
 			streamId, bucket)
 		return
 	}
@@ -2096,6 +2098,9 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
+					logging.Infof("Indexer::handleInitialBuildDone Success Stream %v Bucket %v ",
+						streamId, bucket)
+
 					mergeTs := resp.(*MsgStreamUpdate).GetRestartTs()
 
 					idx.internalRecvCh <- &MsgTKInitBuildDone{
@@ -2139,7 +2144,7 @@ func (idx *indexer) handleMergeStream(msg Message) {
 	if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
 		idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
 		idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
-		logging.Debugf("Indexer::handleMergeStream Skip MergeStream %v %v %v",
+		logging.Infof("Indexer::handleMergeStream Skip MergeStream %v %v %v",
 			streamId, bucket, idx.streamBucketStatus[streamId][bucket])
 		return
 	}
@@ -2147,7 +2152,7 @@ func (idx *indexer) handleMergeStream(msg Message) {
 	//MAINT_STREAM should already be running for this bucket,
 	//as first index gets added to MAINT_STREAM always
 	if idx.checkBucketExistsInStream(bucket, common.MAINT_STREAM, true) == false {
-		logging.Errorf("Indexer::handleMergeStream \n\tMAINT_STREAM not enabled for Bucket: %v ."+
+		logging.Fatalf("Indexer::handleMergeStream \n\tMAINT_STREAM not enabled for Bucket: %v ."+
 			"Cannot Process Merge Stream", bucket)
 		common.CrashOnError(ErrMaintStreamMissingBucket)
 	}
@@ -2158,7 +2163,7 @@ func (idx *indexer) handleMergeStream(msg Message) {
 		idx.handleMergeInitStream(msg)
 
 	default:
-		logging.Errorf("Indexer::handleMergeStream \n\tOnly INIT_STREAM can be merged "+
+		logging.Fatalf("Indexer::handleMergeStream \n\tOnly INIT_STREAM can be merged "+
 			"to MAINT_STREAM. Found Stream: %v.", streamId)
 		common.CrashOnError(ErrInvalidStream)
 	}
@@ -2171,7 +2176,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	bucket := msg.(*MsgTKMergeStream).GetBucket()
 	streamId := msg.(*MsgTKMergeStream).GetStreamId()
 
-	logging.Debugf("Indexer::handleMergeInitStream Bucket: %v Stream: %v", bucket, streamId)
+	logging.Infof("Indexer::handleMergeInitStream Bucket: %v Stream: %v", bucket, streamId)
 
 	//get the list of indexes for this bucket in CATCHUP state
 	var indexList []common.IndexInst
@@ -2246,6 +2251,8 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
+					logging.Infof("Indexer::handleMergeInitStream Success Stream %v Bucket %v ",
+						streamId, bucket)
 					idx.internalRecvCh <- &MsgTKMergeStream{
 						mType:     TK_MERGE_STREAM_ACK,
 						streamId:  streamId,
@@ -2264,7 +2271,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 		}
 	}(reqLock)
 
-	logging.Debugf("Indexer::handleMergeInitStream Merge Done Bucket: %v Stream: %v",
+	logging.Infof("Indexer::handleMergeInitStream Merge Done Bucket: %v Stream: %v",
 		bucket, streamId)
 }
 
@@ -2344,7 +2351,7 @@ func (idx *indexer) getIndexListForBucketAndStream(streamId common.StreamId,
 
 func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 
-	logging.Debugf("Indexer::stopBucketStream Stream: %v Bucket %v", streamId, bucket)
+	logging.Infof("Indexer::stopBucketStream Stream: %v Bucket %v", streamId, bucket)
 
 	respCh := make(MsgChannel)
 	stopCh := make(StopChannel)
@@ -2389,6 +2396,8 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 				switch resp.GetMsgType() {
 
 				case MSG_SUCCESS:
+					logging.Errorf("Indexer::stopBucketStream Success Stream %v Bucket %v ",
+						streamId, bucket)
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_PREPARE_DONE,
 						streamId: streamId,
 						bucket:   bucket}
@@ -2410,7 +2419,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 	restartTs *common.TsVbuuid) {
 
-	logging.Debugf("Indexer::startBucketStream Stream: %v Bucket: %v RestartTS %v",
+	logging.Infof("Indexer::startBucketStream Stream: %v Bucket: %v RestartTS %v",
 		streamId, bucket, restartTs)
 
 	var indexList []common.IndexInst
@@ -2452,13 +2461,13 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		}
 
 	default:
-		logging.Errorf("Indexer::startBucketStream \n\t Unsupported StreamId %v", streamId)
+		logging.Fatalf("Indexer::startBucketStream \n\t Unsupported StreamId %v", streamId)
 		common.CrashOnError(ErrInvalidStream)
 
 	}
 
 	if len(indexList) == 0 {
-		logging.Debugf("Indexer::startBucketStream Nothing to Start. Stream: %v Bucket: %v",
+		logging.Infof("Indexer::startBucketStream Nothing to Start. Stream: %v Bucket: %v",
 			streamId, bucket)
 		idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 		return
@@ -2522,6 +2531,9 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 
 				case MSG_SUCCESS_OPEN_STREAM:
 
+					logging.Infof("Indexer::startBucketStream Success "+
+						"Stream %v Bucket %v", streamId, bucket)
+
 					//once stream request is successful re-calculate the KV timestamp.
 					//This makes sure indexer doesn't use a timestamp which can never
 					//be caught up to (due to kv rollback).
@@ -2538,7 +2550,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 					}
 
 				case INDEXER_ROLLBACK:
-					logging.Infof("Indexer::startBucketStream \n\tRollback from "+
+					logging.Infof("Indexer::startBucketStream Rollback from "+
 						"Projector For Stream %v Bucket %v", streamId, bucket)
 					rollbackTs := resp.(*MsgRollback).GetRollbackTs()
 					idx.internalRecvCh <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
@@ -2670,7 +2682,7 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		idx.indexPartnMap, idx.config, snapshotNotifych)
 	if res.GetMsgType() == MSG_ERROR {
 		err := res.(*MsgError).GetError()
-		logging.Errorf("Indexer::NewIndexer Storage Manager Init Error %v", err)
+		logging.Fatalf("Indexer::NewIndexer Storage Manager Init Error %v", err)
 		return err.cause
 	}
 
@@ -2740,13 +2752,13 @@ func (idx *indexer) genIndexerId() {
 
 			errMsg := resp.GetError()
 			if errMsg != nil {
-				logging.Errorf("Indexer::genIndexerId Unable to set IndexerId In Local"+
+				logging.Fatalf("Indexer::genIndexerId Unable to set IndexerId In Local"+
 					"Meta Storage. Err %v", errMsg)
 				common.CrashOnError(errMsg)
 			}
 
 		} else {
-			logging.Errorf("Indexer::genIndexerId Error Fetching IndexerId From Local"+
+			logging.Fatalf("Indexer::genIndexerId Error Fetching IndexerId From Local"+
 				"Meta Storage. Err %v", err)
 			common.CrashOnError(err)
 		}
@@ -2763,11 +2775,11 @@ func (idx *indexer) initFromPersistedState() error {
 
 	err := idx.recoverIndexInstMap()
 	if err != nil {
-		logging.Errorf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
+		logging.Fatalf("Indexer::initFromPersistedState Error Recovering IndexInstMap %v", err)
 		return err
 	}
 
-	logging.Debugf("Indexer::initFromPersistedState Recovered IndexInstMap %v", idx.indexInstMap)
+	logging.Infof("Indexer::initFromPersistedState Recovered IndexInstMap %v", idx.indexInstMap)
 
 	idx.validateIndexInstMap()
 
@@ -2878,7 +2890,7 @@ func (idx *indexer) recoverInstMapFromFile() error {
 	err = dec.Decode(&idx.indexInstMap)
 
 	if err != nil {
-		logging.Errorf("Indexer::recoverInstMapFromFile Decode Error %v", err)
+		logging.Fatalf("Indexer::recoverInstMapFromFile Decode Error %v", err)
 		return err
 	}
 	return nil
@@ -2894,7 +2906,7 @@ func (idx *indexer) validateIndexInstMap() {
 		//only indexes in created, initial, catchup, active state
 		//are valid for recovery
 		if !isValidRecoveryState(index.State) {
-			logging.Debugf("Indexer::validateIndexInstMap \n\t State %v Not Recoverable. "+
+			logging.Warnf("Indexer::validateIndexInstMap \n\t State %v Not Recoverable. "+
 				"Not Recovering Index %v", index.State, index)
 			delete(idx.indexInstMap, instId)
 			continue
@@ -2931,7 +2943,7 @@ func (idx *indexer) validateIndexInstMap() {
 				rh := common.NewRetryHelper(MAX_KVWARMUP_RETRIES, time.Second, 1, fn)
 				err := rh.Run()
 				if err != nil {
-					logging.Errorf("Indexer::validateIndexInstMap Bucket %s not ready even after max retries. Restarting indexer.", bucket)
+					logging.Fatalf("Indexer::validateIndexInstMap Bucket %s not ready even after max retries. Restarting indexer.", bucket)
 					os.Exit(1)
 				} else {
 					idx.bucketBuildTs[bucket] = buildTs
@@ -2946,7 +2958,7 @@ func (idx *indexer) validateIndexInstMap() {
 			instList := idx.deleteIndexInstOnDeletedBucket(bucket, common.NIL_STREAM)
 			for _, instId := range instList {
 				index := idx.indexInstMap[instId]
-				logging.Errorf("Indexer::validateIndexInstMap \n\t Bucket %v Not Found."+
+				logging.Warnf("Indexer::validateIndexInstMap \n\t Bucket %v Not Found."+
 					"Not Recovering Index %v", bucket, index)
 				delete(idx.indexInstMap, instId)
 			}
@@ -3208,13 +3220,13 @@ func (idx *indexer) sendMsgToClusterMgr(msg Message) error {
 			return nil
 
 		case MSG_ERROR:
-			logging.Debugf("Indexer::sendMsgToClusterMgr Error "+
+			logging.Errorf("Indexer::sendMsgToClusterMgr Error "+
 				"from Cluster Manager %v", res)
 			err := res.(*MsgError).GetError()
 			return err.cause
 
 		default:
-			logging.Debugf("Indexer::sendMsgToClusterMgr Unknown Response "+
+			logging.Fatalf("Indexer::sendMsgToClusterMgr Unknown Response "+
 				"from Cluster Manager %v", res)
 			common.CrashOnError(errors.New("Unknown Response"))
 
@@ -3222,7 +3234,7 @@ func (idx *indexer) sendMsgToClusterMgr(msg Message) error {
 
 	} else {
 
-		logging.Debugf("clustMgrAgent::sendMsgToClusterMgr Unexpected Channel Close " +
+		logging.Fatalf("clustMgrAgent::sendMsgToClusterMgr Unexpected Channel Close " +
 			"from Cluster Manager")
 		common.CrashOnError(errors.New("Unknown Response"))
 

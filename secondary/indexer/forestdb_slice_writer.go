@@ -67,8 +67,8 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId
 	config.SetMaxWriterLockProb(uint8(prob))
 	walSize := sysconf["settings.wal_size"].Uint64()
 	config.SetWalThreshold(walSize)
-	logging.Debugf("NewForestDBSlice(): max writer lock prob %d", prob)
-	logging.Debugf("NewForestDBSlice(): wal size %d", walSize)
+	logging.Verbosef("NewForestDBSlice(): max writer lock prob %d", prob)
+	logging.Verbosef("NewForestDBSlice(): wal size %d", walSize)
 
 	kvconfig := forestdb.DefaultKVStoreConfig()
 
@@ -137,7 +137,7 @@ retry:
 		go slice.handleCommandsWorker(i)
 	}
 
-	logging.Debugf("ForestDBSlice:NewForestDBSlice \n\t Created New Slice Id %v IndexInstId %v "+
+	logging.Infof("ForestDBSlice:NewForestDBSlice Created New Slice Id %v IndexInstId %v "+
 		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
 
 	slice.setCommittedCount()
@@ -595,7 +595,7 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 		}
 	}
 
-	logging.Debugf("ForestDBSlice::OpenSnapshot \n\tSliceId %v IndexInstId %v Creating New "+
+	logging.Infof("ForestDBSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
 		"Snapshot %v", fdb.id, fdb.idxInstId, snapInfo)
 	err := s.Create()
 
@@ -679,7 +679,7 @@ func (fdb *fdbSlice) RollbackToZero() error {
 	//will pick up the rolled-back meta information.
 	err = fdb.meta.Rollback(zeroSeqNum)
 	if err != nil {
-		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
+		logging.Errorf("ForestDBSlice::Rollback SliceId %v IndexInstId %v. Error Rollback "+
 			"Meta Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
 		return err
 	}
@@ -687,7 +687,7 @@ func (fdb *fdbSlice) RollbackToZero() error {
 	//call forestdb to rollback
 	err = fdb.main[0].Rollback(zeroSeqNum)
 	if err != nil {
-		logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
+		logging.Errorf("ForestDBSlice::Rollback SliceId %v IndexInstId %v. Error Rollback "+
 			"Main Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
 		return err
 	}
@@ -698,7 +698,7 @@ func (fdb *fdbSlice) RollbackToZero() error {
 	if !fdb.isPrimary {
 		err = fdb.back[0].Rollback(zeroSeqNum)
 		if err != nil {
-			logging.Errorf("ForestDBSlice::Rollback \n\tSliceId %v IndexInstId %v. Error Rollback "+
+			logging.Errorf("ForestDBSlice::Rollback SliceId %v IndexInstId %v. Error Rollback "+
 				"Back Index to Zero. Error %v", fdb.id, fdb.idxInstId, err)
 			return err
 		}
@@ -795,7 +795,7 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 		fdb.idxStats.Timings.stCommit.Put(elapsed)
 
 		fdb.totalCommitTime += elapsed
-		logging.Infof("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v FlushTime %v CommitTime %v TotalFlushTime %v "+
+		logging.Infof("ForestDBSlice::Commit SliceId %v IndexInstId %v FlushTime %v CommitTime %v TotalFlushTime %v "+
 			"TotalCommitTime %v", fdb.id, fdb.idxInstId, flushTime, elapsed, fdb.totalFlushTime, fdb.totalCommitTime)
 
 		if err != nil {
@@ -833,7 +833,7 @@ func (fdb *fdbSlice) Close() {
 	fdb.lock.Lock()
 	defer fdb.lock.Unlock()
 
-	logging.Infof("ForestDBSlice::Close \n\tClosing Slice Id %v, IndexInstId %v, "+
+	logging.Infof("ForestDBSlice::Close Closing Slice Id %v, IndexInstId %v, "+
 		"IndexDefnId %v", fdb.idxInstId, fdb.idxDefnId, fdb.id)
 
 	//signal shutdown for command handler routines
@@ -856,7 +856,7 @@ func (fdb *fdbSlice) Destroy() {
 	defer fdb.lock.Unlock()
 
 	if fdb.refCount > 0 {
-		logging.Infof("ForestDBSlice::Destroy \n\tSoftdeleted Slice Id %v, IndexInstId %v, "+
+		logging.Infof("ForestDBSlice::Destroy Softdeleted Slice Id %v, IndexInstId %v, "+
 			"IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 		fdb.isSoftDeleted = true
 	} else {
@@ -1109,17 +1109,17 @@ handle_err:
 }
 
 func tryDeleteFdbSlice(fdb *fdbSlice) {
-	logging.Infof("ForestDBSlice::Destroy \n\tDestroying Slice Id %v, IndexInstId %v, "+
+	logging.Infof("ForestDBSlice::Destroy Destroying Slice Id %v, IndexInstId %v, "+
 		"IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 
 	if err := forestdb.Destroy(fdb.currfile, fdb.config); err != nil {
-		logging.Errorf("ForestDBSlice::Destroy \n\t Error Destroying  Slice Id %v, "+
+		logging.Errorf("ForestDBSlice::Destroy Error Destroying  Slice Id %v, "+
 			"IndexInstId %v, IndexDefnId %v. Error %v", fdb.id, fdb.idxInstId, fdb.idxDefnId, err)
 	}
 
 	//cleanup the disk directory
 	if err := os.RemoveAll(fdb.path); err != nil {
-		logging.Errorf("ForestDBSlice::Destroy \n\t Error Cleaning Up Slice Id %v, "+
+		logging.Errorf("ForestDBSlice::Destroy Error Cleaning Up Slice Id %v, "+
 			"IndexInstId %v, IndexDefnId %v. Error %v", fdb.id, fdb.idxInstId, fdb.idxDefnId, err)
 	}
 }
