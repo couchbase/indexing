@@ -724,7 +724,9 @@ func (fdb *fdbSlice) waitPersist() {
 //should be rolled back to previous snapshot.
 func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
 
+	flushStart := time.Now()
 	fdb.waitPersist()
+	flushTime := time.Since(flushStart)
 
 	mainDbInfo, err := fdb.main[0].Info()
 	if err != nil {
@@ -782,8 +784,8 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 		fdb.idxStats.Timings.stCommit.Put(elapsed)
 
 		fdb.totalCommitTime += elapsed
-		logging.Debugf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v TotalFlushTime %v "+
-			"TotalCommitTime %v", fdb.id, fdb.idxInstId, fdb.totalFlushTime, fdb.totalCommitTime)
+		logging.Infof("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v FlushTime %v CommitTime %v TotalFlushTime %v "+
+			"TotalCommitTime %v", fdb.id, fdb.idxInstId, flushTime, elapsed, fdb.totalFlushTime, fdb.totalCommitTime)
 
 		if err != nil {
 			logging.Errorf("ForestDBSlice::Commit \n\tSliceId %v IndexInstId %v Error in "+
