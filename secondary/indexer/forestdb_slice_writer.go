@@ -714,13 +714,15 @@ func (fdb *fdbSlice) RollbackToZero() error {
 //queue is empty.
 func (fdb *fdbSlice) waitPersist() {
 
-	//every SLICE_COMMIT_POLL_INTERVAL milliseconds,
-	//check for outstanding mutations. If there are
-	//none, proceed with the commit.
-	ticker := time.NewTicker(time.Millisecond * SLICE_COMMIT_POLL_INTERVAL)
-	for _ = range ticker.C {
-		if fdb.checkAllWorkersDone() {
-			break
+	if !fdb.checkAllWorkersDone() {
+		//every SLICE_COMMIT_POLL_INTERVAL milliseconds,
+		//check for outstanding mutations. If there are
+		//none, proceed with the commit.
+		ticker := time.NewTicker(time.Millisecond * SLICE_COMMIT_POLL_INTERVAL)
+		for _ = range ticker.C {
+			if fdb.checkAllWorkersDone() {
+				break
+			}
 		}
 	}
 
