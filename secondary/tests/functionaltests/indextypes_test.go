@@ -512,6 +512,12 @@ func TestBasicPrimaryIndex(t *testing.T) {
 		err = errors.New("Len of scanResults is incorrect.")
 	}
 	FailTestIfError(err, "Len of scanResults is incorrect", t)
+
+	docScanResults := datautility.ExpectedScanResponse_RangePrimary(docs, "User2", "User5", 3)
+	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"User2"}, []interface{}{"User5"}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation of Primary Range", t)
 }
 
 func TestBasicNullDataType(t *testing.T) {
@@ -848,9 +854,9 @@ func TestCompositeIndex_NumAndString(t *testing.T) {
 	scanResults, err = secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{25, "F"}, []interface{}{30, "M"}, 3, true, defaultlimit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
 	// todo: validate the results
-	
+
 	addDocIfNotPresentInKV("User22a44f1c-3f15-4ada-9cf5-6c24a7690a37")
-	
+
 	docScanResults := make(tc.ScanResponse)
 	docScanResults["User22a44f1c-3f15-4ada-9cf5-6c24a7690a37"] = []interface{}{25.0, "ZIGGLES"}
 	scanResults, err = secondaryindex.Lookup(indexName, bucketName, indexScanAddress, []interface{}{25, "ZIGGLES"}, true, defaultlimit, c.SessionConsistency, nil)

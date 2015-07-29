@@ -284,3 +284,41 @@ func ExpectedLookupResponse_json(docs tc.KeyValues, jsonPath string, value map[s
 	}
 	return results
 }
+
+// Range scan for Primary index
+func ExpectedScanResponse_RangePrimary(docs tc.KeyValues, low, high string, inclusion int64) tc.ScanResponse {
+	results := make(tc.ScanResponse)
+
+	// var json map[string]interface{}
+	// var f string
+	// var i int
+
+	for k, _ := range docs {
+		field := k
+		switch inclusion {
+		case 0:
+			if field > low && field < high {
+				// results[k] = []interface{}{}
+				results[k] = nil
+			}
+		case 1:
+			if field >= low && field < high {
+				results[k] = nil
+			}
+		case 2:
+			if field > low && field <= high {
+				results[k] = nil
+			}
+		case 3:
+			if field >= low && field <= high {
+				results[k] = nil
+			}
+		default:
+			if field > low && field < high {
+				results[k] = nil
+			}
+		}
+	}
+
+	return results
+}

@@ -53,8 +53,9 @@ type mutationStreamReader struct {
 
 	bucketQueueMap BucketQueueMap //indexId to mutation queue map
 
-	bucketFilterMap map[string]*common.TsVbuuid
-	bucketSyncDue   map[string]bool
+	bucketFilterMap   map[string]*common.TsVbuuid
+	bucketPrevSnapMap map[string]*common.TsVbuuid
+	bucketSyncDue     map[string]bool
 
 	//local variables
 	skipMutation bool
@@ -96,18 +97,19 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 
 	//init the reader
 	r := &mutationStreamReader{streamId: streamId,
-		stream:          stream,
-		streamMutch:     streamMutch,
-		supvCmdch:       supvCmdch,
-		supvRespch:      supvRespch,
-		numWorkers:      numWorkers,
-		workerch:        make([]MutationChannel, numWorkers),
-		workerStopCh:    make([]StopChannel, numWorkers),
-		syncStopCh:      make(StopChannel),
-		bucketQueueMap:  CopyBucketQueueMap(bucketQueueMap),
-		bucketFilterMap: make(map[string]*common.TsVbuuid),
-		bucketSyncDue:   make(map[string]bool),
-		killch:          make(chan bool),
+		stream:            stream,
+		streamMutch:       streamMutch,
+		supvCmdch:         supvCmdch,
+		supvRespch:        supvRespch,
+		numWorkers:        numWorkers,
+		workerch:          make([]MutationChannel, numWorkers),
+		workerStopCh:      make([]StopChannel, numWorkers),
+		syncStopCh:        make(StopChannel),
+		bucketQueueMap:    CopyBucketQueueMap(bucketQueueMap),
+		bucketFilterMap:   make(map[string]*common.TsVbuuid),
+		bucketPrevSnapMap: make(map[string]*common.TsVbuuid),
+		bucketSyncDue:     make(map[string]bool),
+		killch:            make(chan bool),
 	}
 
 	r.stats.Set(stats)
@@ -543,6 +545,7 @@ func (r *mutationStreamReader) initBucketFilter(bucketFilter map[string]*common.
 			//if there is non-nil filter, use that. otherwise use a zero filter.
 			if filter, ok := bucketFilter[b]; ok && filter != nil {
 				r.bucketFilterMap[b] = filter.Copy()
+				r.bucketPrevSnapMap[b] = filter.Copy()
 				//reset vbuuids to 0 in filter. mutations for a vbucket are
 				//only processed after streambegin is received, which will set
 				//the vbuuid again.
@@ -551,6 +554,7 @@ func (r *mutationStreamReader) initBucketFilter(bucketFilter map[string]*common.
 				}
 			} else {
 				r.bucketFilterMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
+				r.bucketPrevSnapMap[b] = common.NewTsVbuuid(b, int(q.queue.GetNumVbuckets()))
 			}
 
 			r.bucketSyncDue[b] = false
@@ -563,6 +567,7 @@ func (r *mutationStreamReader) initBucketFilter(bucketFilter map[string]*common.
 			logging.Tracef("MutationStreamReader::initBucketFilter Deleted filter "+
 				"for Bucket %v Stream %v", b, r.streamId)
 			delete(r.bucketFilterMap, b)
+			delete(r.bucketPrevSnapMap, b)
 			delete(r.bucketSyncDue, b)
 		}
 	}
@@ -633,6 +638,12 @@ func (r *mutationStreamReader) updateSnapInFilter(meta *MutationMeta,
 
 	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
 		if snapEnd > filter.Snapshots[meta.vbucket][1] {
+			//store the existing snap marker in prevSnap map
+			prevSnap := r.bucketPrevSnapMap[meta.bucket]
+			prevSnap.Snapshots[meta.vbucket][0] = filter.Snapshots[meta.vbucket][0]
+			prevSnap.Snapshots[meta.vbucket][1] = filter.Snapshots[meta.vbucket][1]
+			prevSnap.Vbuuids[meta.vbucket] = filter.Vbuuids[meta.vbucket]
+
 			filter.Snapshots[meta.vbucket][0] = snapStart
 			filter.Snapshots[meta.vbucket][1] = snapEnd
 		} else {
@@ -687,13 +698,16 @@ func (r *mutationStreamReader) maybeSendSync() {
 		if syncDue {
 			hwt := common.NewTsVbuuidCached(bucket, len(r.bucketFilterMap[bucket].Seqnos))
 			hwt.CopyFrom(r.bucketFilterMap[bucket])
+			prevSnap := common.NewTsVbuuidCached(bucket, len(r.bucketFilterMap[bucket].Seqnos))
+			prevSnap.CopyFrom(r.bucketPrevSnapMap[bucket])
 			r.bucketSyncDue[bucket] = false
-			go func(hwt *common.TsVbuuid, bucket string) {
+			go func(hwt *common.TsVbuuid, prevSnap *common.TsVbuuid, bucket string) {
 				r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,
 					streamId: r.streamId,
 					bucket:   bucket,
-					ts:       hwt}
-			}(hwt, bucket)
+					ts:       hwt,
+					prevSnap: prevSnap}
+			}(hwt, prevSnap, bucket)
 		}
 	}
 }

@@ -293,10 +293,10 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 						ts := getSeqTsFromTsVbuuid(tsVbuuid)
 
 						//if the flush TS is greater than the last snapshot TS
-						//TODO Is it better to have a IsDirty() in Slice interface
-						//rather than comparing the last snapshot?
-						if latestSnapshot == nil || ts.GreaterThan(snapTs) {
-							//commit the outstanding data
+						//and slice has some changes. Skip only in-memory snapshot
+						//in case of unchanged data.
+						if latestSnapshot == nil || (ts.GreaterThan(snapTs) &&
+							(slice.IsDirty() || needsCommit)) {
 
 							logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
 								"%v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())

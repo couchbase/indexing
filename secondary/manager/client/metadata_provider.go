@@ -103,8 +103,6 @@ var REQUEST_CHANNEL_COUNT = 1000
 
 func NewMetadataProvider(providerId string) (s *MetadataProvider, err error) {
 
-	gometaL.Current = &logging.SystemLogger
-
 	s = new(MetadataProvider)
 	s.watchers = make(map[c.IndexerId]*watcher)
 	s.pendings = make(map[c.IndexerId]chan bool)
@@ -1652,4 +1650,8 @@ func extractDefnIdFromKey(key string) (c.IndexDefnId, error) {
 	}
 
 	return c.IndexDefnId(0), errors.New("watcher.processChange() : cannot parse index definition id")
+}
+
+func init() {
+	gometaL.Current = &logging.SystemLogger
 }

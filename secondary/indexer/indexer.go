@@ -1184,10 +1184,12 @@ func (idx *indexer) handleRecoveryDone(msg Message) {
 	//during recovery, if all indexes of a bucket gets dropped,
 	//the stream needs to be stopped for that bucket.
 	if !idx.checkBucketExistsInStream(bucket, streamId, false) {
-		logging.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v. No Index Found."+
-			"Cleaning up.", streamId, bucket)
-		idx.stopBucketStream(streamId, bucket)
-		idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+		if idx.streamBucketStatus[streamId][bucket] != STREAM_INACTIVE {
+			logging.Debugf("Indexer::handleRecoveryDone StreamId %v Bucket %v State %v. No Index Found."+
+				"Cleaning up.", streamId, bucket, idx.streamBucketStatus[streamId][bucket])
+			idx.stopBucketStream(streamId, bucket)
+			idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+		}
 	} else {
 		//change status to Active
 		idx.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE

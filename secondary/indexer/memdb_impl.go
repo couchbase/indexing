@@ -96,6 +96,10 @@ func (s *memDBSlice) SetStatus(ss SliceStatus) {
 	s.status = ss
 }
 
+func (s *memDBSlice) IsDirty() bool {
+	return true
+}
+
 func (s *memDBSlice) UpdateConfig(cfg c.Config) {
 	s.conf = cfg
 }

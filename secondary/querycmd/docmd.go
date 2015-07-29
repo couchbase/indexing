@@ -217,6 +217,8 @@ func HandleCommand(
 		}
 
 	case "list":
+		time.Sleep(2 * time.Second)
+		indexes, err = client.Refresh()
 		if err != nil {
 			return err
 		}
