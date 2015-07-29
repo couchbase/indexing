@@ -3412,9 +3412,6 @@ func NewSlice(id SliceId, indInst *common.IndexInst,
 }
 
 func (idx *indexer) setProfilerOptions(config common.Config) {
-
-	logging.Infof("New Settings Received ")
-
 	// CPU-profiling
 	cpuProfile, ok := config["settings.cpuProfile"]
 	if ok && cpuProfile.Bool() && idx.cpuProfFd == nil {
