@@ -710,7 +710,7 @@ func (ss *StreamState) checkAnyAbortPending(streamId common.StreamId,
 //updateHWT will update the HW Timestamp for a bucket in the stream
 //based on the Sync message received.
 func (ss *StreamState) updateHWT(streamId common.StreamId,
-	bucket string, hwt *common.TsVbuuid, prevSnap *common.TsVbuuid) {
+	bucket string, hwt *common.TsVbuuid) {
 
 	ts := ss.streamBucketHWTMap[streamId][bucket]
 
@@ -723,10 +723,10 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 		//if snapEnd is greater than current hwt snapEnd
 		if hwt.Snapshots[i][1] > ts.Snapshots[i][1] {
 			lastSnap := ss.streamBucketLastSnapMarker[streamId][bucket]
-			//store the prev snap marker in the lastSnapMarker map
-			lastSnap.Snapshots[i][0] = prevSnap.Snapshots[i][0]
-			lastSnap.Snapshots[i][1] = prevSnap.Snapshots[i][1]
-			lastSnap.Vbuuids[i] = prevSnap.Vbuuids[i]
+			//store the current snap marker in the lastSnapMarker map
+			lastSnap.Snapshots[i][0] = ts.Snapshots[i][0]
+			lastSnap.Snapshots[i][1] = ts.Snapshots[i][1]
+			lastSnap.Vbuuids[i] = ts.Vbuuids[i]
 
 			//store the new snap marker in hwt
 			ts.Snapshots[i][0] = hwt.Snapshots[i][0]

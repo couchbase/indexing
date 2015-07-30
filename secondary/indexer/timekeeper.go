@@ -457,7 +457,6 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	streamId := cmd.(*MsgBucketHWT).GetStreamId()
 	bucket := cmd.(*MsgBucketHWT).GetBucket()
 	hwt := cmd.(*MsgBucketHWT).GetHWT()
-	prevSnap := cmd.(*MsgBucketHWT).GetPrevSnap()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -485,9 +484,8 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	}
 
 	//update HWT for the bucket
-	tk.ss.updateHWT(streamId, bucket, hwt, prevSnap)
+	tk.ss.updateHWT(streamId, bucket, hwt)
 	hwt.Free()
-	prevSnap.Free()
 
 	tk.supvCmdch <- &MsgSuccess{}
 
