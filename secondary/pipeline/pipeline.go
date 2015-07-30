@@ -74,7 +74,7 @@ func (p *Pipeline) runIt(o *pipelineObject) {
 	go func() {
 		err := o.r.Routine()
 		if err != nil {
-			logging.Errorf("%v exited with error %v", o.n, err)
+			logging.Warnf("%v exited with error %v", o.n, err)
 		}
 		p.wg.Done()
 	}()
@@ -103,7 +103,7 @@ func (p *Pipeline) Execute() error {
 
 	err := p.sink.r.Routine()
 	if err != nil {
-		logging.Errorf("%v exited with error %v", p.sink.n, err)
+		logging.Debugf("%v exited with error %v", p.sink.n, err)
 	}
 	p.Finalize()
 	return err

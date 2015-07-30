@@ -457,7 +457,6 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	streamId := cmd.(*MsgBucketHWT).GetStreamId()
 	bucket := cmd.(*MsgBucketHWT).GetBucket()
 	hwt := cmd.(*MsgBucketHWT).GetHWT()
-	prevSnap := cmd.(*MsgBucketHWT).GetPrevSnap()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
@@ -485,9 +484,8 @@ func (tk *timekeeper) handleSync(cmd Message) {
 	}
 
 	//update HWT for the bucket
-	tk.ss.updateHWT(streamId, bucket, hwt, prevSnap)
+	tk.ss.updateHWT(streamId, bucket, hwt)
 	hwt.Free()
-	prevSnap.Free()
 
 	tk.supvCmdch <- &MsgSuccess{}
 
@@ -1987,24 +1985,8 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 		if time.Since(lastPersistTime) > persistDuration {
 			flushTs.SetSnapType(common.DISK_SNAP)
 			tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
-			tk.ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
 		} else {
-			fastFlush := tk.config["settings.fast_flush_mode"].Bool()
-			if fastFlush {
-				//if fast flush mode is enabled, skip in-mem snapshots based
-				//on number of pending ts to be processed.
-				skipFactor := tk.calcSkipFactorForFastFlush(streamId, bucket)
-				if skipFactor != 0 && (tk.ss.streamBucketSkippedInMemTs[streamId][bucket] < skipFactor) {
-					tk.ss.streamBucketSkippedInMemTs[streamId][bucket]++
-					flushTs.SetSnapType(common.NO_SNAP)
-				} else {
-					flushTs.SetSnapType(common.INMEM_SNAP)
-					tk.ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
-				}
-			} else {
-				flushTs.SetSnapType(common.INMEM_SNAP)
-				tk.ss.streamBucketSkippedInMemTs[streamId][bucket] = 0
-			}
+			flushTs.SetSnapType(common.INMEM_SNAP)
 		}
 	} else {
 		stats := tk.stats.Get()
@@ -2714,23 +2696,4 @@ func (tk *timekeeper) hasInitStateIndex(streamId common.StreamId,
 		}
 	}
 	return false
-}
-
-func (tk *timekeeper) calcSkipFactorForFastFlush(streamId common.StreamId,
-	bucket string) uint64 {
-	tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
-
-	numPendingTs := tsList.Len()
-
-	if numPendingTs > 150 {
-		return 5
-	} else if numPendingTs > 50 {
-		return 3
-	} else if numPendingTs > 10 {
-		return 2
-	} else if numPendingTs > 5 {
-		return 1
-	} else {
-		return 0
-	}
 }

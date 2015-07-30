@@ -63,9 +63,9 @@ func (f *File) Commit(opt CommitOpt) error {
 	f.Lock()
 	defer f.Unlock()
 
-	Log.Debugf("fdb_commit call f:%p dbfile:%v opt:%v", f, f.dbfile, opt)
+	Log.Tracef("fdb_commit call f:%p dbfile:%v opt:%v", f, f.dbfile, opt)
 	errNo := C.fdb_commit(f.dbfile, C.fdb_commit_opt_t(opt))
-	Log.Debugf("fdb_commit retn f:%p errNo:%v", f, errNo)
+	Log.Tracef("fdb_commit retn f:%p errNo:%v", f, errNo)
 	if errNo != RESULT_SUCCESS {
 		return Error(errNo)
 	}
@@ -80,9 +80,9 @@ func (f *File) Compact(newfilename string) error {
 	fn := C.CString(newfilename)
 	defer C.free(unsafe.Pointer(fn))
 
-	Log.Debugf("fdb_compact call f:%p dbfile:%v fn:%v", f, f.dbfile, fn)
+	Log.Tracef("fdb_compact call f:%p dbfile:%v fn:%v", f, f.dbfile, fn)
 	errNo := C.fdb_compact(f.dbfile, fn)
-	Log.Debugf("fdb_compact retn f:%p errNo:%v", f, errNo)
+	Log.Tracef("fdb_compact retn f:%p errNo:%v", f, errNo)
 	if errNo != RESULT_SUCCESS {
 		return Error(errNo)
 	}
@@ -98,9 +98,9 @@ func (f *File) CompactUpto(newfilename string, sm *SnapMarker) error {
 	fn := C.CString(newfilename)
 	defer C.free(unsafe.Pointer(fn))
 
-	Log.Debugf("fdb_compact_upto call f:%p dbfile:%v fn:%v marker:%v", f, f.dbfile, fn, sm.marker)
+	Log.Tracef("fdb_compact_upto call f:%p dbfile:%v fn:%v marker:%v", f, f.dbfile, fn, sm.marker)
 	errNo := C.fdb_compact_upto(f.dbfile, fn, sm.marker)
-	Log.Debugf("fdb_compact_upto retn f:%p errNo:%v", f, errNo)
+	Log.Tracef("fdb_compact_upto retn f:%p errNo:%v", f, errNo)
 	if errNo != RESULT_SUCCESS {
 		return Error(errNo)
 	}
@@ -168,9 +168,9 @@ func (f *File) OpenKVStore(name string, config *KVStoreConfig) (*KVStore, error)
 
 	kvsname := C.CString(name)
 	defer C.free(unsafe.Pointer(kvsname))
-	Log.Debugf("fdb_kvs_open call f:%p dbfile:%v kvsname:%v config:%v", f, f.dbfile, kvsname, config.config)
+	Log.Tracef("fdb_kvs_open call f:%p dbfile:%v kvsname:%v config:%v", f, f.dbfile, kvsname, config.config)
 	errNo := C.fdb_kvs_open(f.dbfile, &rv.db, kvsname, config.config)
-	Log.Debugf("fdb_kvs_open retn f:%p errNo:%v db:%v", f, errNo, rv.db)
+	Log.Tracef("fdb_kvs_open retn f:%p errNo:%v db:%v", f, errNo, rv.db)
 	if errNo != RESULT_SUCCESS {
 		return nil, Error(errNo)
 	}

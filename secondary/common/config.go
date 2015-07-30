@@ -650,13 +650,6 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 
-	"indexer.settings.smallSnapshotThreshold": ConfigValue{
-		uint64(30),
-		"Threshold For Considering a DCP Snapshot as Small.",
-		uint64(30),
-		false, // mutable
-	},
-
 	"indexer.settings.sliceBufSize": ConfigValue{
 		uint64(50000),
 		"Buffer for each slice to queue mutations before flush " +
@@ -686,12 +679,6 @@ var SystemConfig = Config{
 		uint64(4096),
 		"WAL threshold size",
 		uint64(4096),
-		false, // mutable
-	},
-	"indexer.settings.fast_flush_mode": ConfigValue{
-		true,
-		"Skips InMem Snapshots When Indexer Is Backed Up",
-		true,
 		false, // mutable
 	},
 	"projector.settings.log_level": ConfigValue{

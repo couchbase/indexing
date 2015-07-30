@@ -20,9 +20,9 @@ func (k *KVStore) SnapshotOpen(sn SeqNum) (*KVStore, error) {
 
 	rv := KVStore{advLock: newAdvLock(), name: k.name}
 
-	Log.Debugf("fdb_snapshot_open call k:%p db:%v sn:%v", k, k.db, sn)
+	Log.Tracef("fdb_snapshot_open call k:%p db:%v sn:%v", k, k.db, sn)
 	errNo := C.fdb_snapshot_open(k.db, &rv.db, C.fdb_seqnum_t(sn))
-	Log.Debugf("fdb_snapshot_open retn k:%p errNo:%v rv:%v", k, errNo, rv.db)
+	Log.Tracef("fdb_snapshot_open retn k:%p errNo:%v rv:%v", k, errNo, rv.db)
 	if errNo != RESULT_SUCCESS {
 		return nil, Error(errNo)
 	}
@@ -37,9 +37,9 @@ func (k *KVStore) SnapshotClone(sn SeqNum) (*KVStore, error) {
 
 	rv := KVStore{advLock: newAdvLock(), name: k.name}
 
-	Log.Debugf("fdb_snapshot_open call k:%p db:%v sn:%v", k, k.db, sn)
+	Log.Tracef("fdb_snapshot_open call k:%p db:%v sn:%v", k, k.db, sn)
 	errNo := C.fdb_snapshot_open(k.db, &rv.db, C.fdb_seqnum_t(sn))
-	Log.Debugf("fdb_snapshot_open retn k:%p errNo:%v rv:%v", k, errNo, rv.db)
+	Log.Tracef("fdb_snapshot_open retn k:%p errNo:%v rv:%v", k, errNo, rv.db)
 	if errNo != RESULT_SUCCESS {
 		return nil, Error(errNo)
 	}
@@ -52,9 +52,9 @@ func (k *KVStore) Rollback(sn SeqNum) error {
 	k.Lock()
 	defer k.Unlock()
 
-	Log.Debugf("fdb_rollback call k:%p db:%v sn:%v", k, k.db, sn)
+	Log.Tracef("fdb_rollback call k:%p db:%v sn:%v", k, k.db, sn)
 	errNo := C.fdb_rollback(&k.db, C.fdb_seqnum_t(sn))
-	Log.Debugf("fdb_rollback retn k:%p errNo:%v db:%v", k, errNo, k.db)
+	Log.Tracef("fdb_rollback retn k:%p errNo:%v db:%v", k, errNo, k.db)
 	if errNo != RESULT_SUCCESS {
 		return Error(errNo)
 	}
