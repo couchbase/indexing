@@ -769,10 +769,7 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 	bucket string, ts *common.TsVbuuid) {
 
-	smallSnap := ss.config["settings.smallSnapshotThreshold"].Uint64()
 	lastSnap := ss.streamBucketLastSnapMarker[streamId][bucket]
-	tsList := ss.streamBucketTsListMap[streamId][bucket]
-
 	for i, s := range ts.Snapshots {
 		//if seqno is not between snap boundary
 		if !(ts.Seqnos[i] >= s[0] && ts.Seqnos[i] <= s[1]) {
@@ -784,16 +781,7 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
 				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
 			}
-		} else if ts.Seqnos[i] != s[1] && (s[1]-s[0]) <= smallSnap && tsList.Len() < 10 {
-			//for small snapshots, if all the mutations have not been received for the
-			//snapshot, use the last snapshot marker to make it snap aligned.
-			//this snapshot will get picked up in the next TS.
-			ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
-			ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
-			ts.Seqnos[i] = lastSnap.Snapshots[i][1]
-			ts.Vbuuids[i] = lastSnap.Vbuuids[i]
 		}
-
 	}
 }
 
