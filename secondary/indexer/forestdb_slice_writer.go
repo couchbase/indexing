@@ -188,7 +188,6 @@ type fdbSlice struct {
 
 	status        SliceStatus
 	isActive      bool
-	isDirty       bool
 	isPrimary     bool
 	isSoftDeleted bool
 	isSoftClosed  bool
@@ -347,7 +346,6 @@ func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) 
 		}
 		fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 		platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
-		fdb.isDirty = true
 	}
 }
 
@@ -399,7 +397,6 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 			fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 			platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 		}
-		fdb.isDirty = true
 	}
 
 	if key == nil {
@@ -429,7 +426,6 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 	}
 	fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
-	fdb.isDirty = true
 }
 
 //delete does the actual delete in forestdb
@@ -470,7 +466,6 @@ func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 	}
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.delete_bytes, int64(len(entry.Bytes())))
-	fdb.isDirty = true
 
 }
 
@@ -519,7 +514,6 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 	}
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
-	fdb.isDirty = true
 
 }
 
@@ -734,8 +728,6 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 	fdb.waitPersist()
 	flushTime := time.Since(flushStart)
 
-	fdb.isDirty = false
-
 	mainDbInfo, err := fdb.main[0].Info()
 	if err != nil {
 		return nil, err
@@ -907,13 +899,6 @@ func (fdb *fdbSlice) IndexDefnId() common.IndexDefnId {
 func (fdb *fdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	infos, err := fdb.getSnapshotsMeta()
 	return infos, err
-}
-
-// IsDirty returns true if there has been any change in
-// in the slice storage after last in-mem/persistent snapshot
-func (fdb *fdbSlice) IsDirty() bool {
-	fdb.waitPersist()
-	return fdb.isDirty
 }
 
 func (fdb *fdbSlice) Compact() error {

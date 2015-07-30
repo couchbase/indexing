@@ -34,7 +34,6 @@ type Slice interface {
 	IndexInstId() common.IndexInstId
 	IndexDefnId() common.IndexDefnId
 	IsActive() bool
-	IsDirty() bool
 
 	SetActive(bool)
 	SetStatus(SliceStatus)
