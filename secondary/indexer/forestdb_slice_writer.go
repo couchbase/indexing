@@ -206,9 +206,10 @@ type fdbSlice struct {
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
 
-	idxStats *IndexStats
-	sysconf  common.Config
-	confLock sync.Mutex
+	idxStats   *IndexStats
+	sysconf    common.Config
+	confLock   sync.Mutex
+	statFdLock sync.Mutex
 }
 
 func (fdb *fdbSlice) IncrRef() {
@@ -972,10 +973,13 @@ snaploop:
 
 	config := forestdb.DefaultConfig()
 	config.SetOpenFlags(forestdb.OPEN_FLAG_RDONLY)
+
+	fdb.statFdLock.Lock()
 	fdb.statFd.Close()
 	if fdb.statFd, err = forestdb.Open(fdb.currfile, config); err != nil {
 		return err
 	}
+	fdb.statFdLock.Unlock()
 
 	/*
 		FIXME: Use correct accounting of extra snapshots size
@@ -1006,7 +1010,11 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 	// Hence we compute approximate fragmentation by adding overhead data size
 	// caused by extra snapshots.
 	extraSnapDataSize := platform.LoadInt64(&fdb.extraSnapDataSize)
+
+	fdb.statFdLock.Lock()
 	sts.DataSize = int64(fdb.statFd.EstimateSpaceUsed()) + extraSnapDataSize
+	fdb.statFdLock.Unlock()
+
 	sts.DiskSize = sz
 	sts.ExtraSnapDataSize = extraSnapDataSize
 
