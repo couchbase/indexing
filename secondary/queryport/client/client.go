@@ -399,6 +399,8 @@ func (c *GsiClient) Lookup(
 		return
 	}
 
+	begin := time.Now()
+
 	err = c.doScan(
 		defnID,
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
@@ -420,6 +422,7 @@ func (c *GsiClient) Lookup(
 		callb(resp)
 	}
 
+	logging.Verbosef("Lookup elapsed(%v) err(%v)", time.Since(begin), err)
 	return
 }
 
@@ -442,6 +445,8 @@ func (c *GsiClient) Range(
 		callb(protoResp)
 		return
 	}
+
+	begin := time.Now()
 
 	err = c.doScan(
 		defnID,
@@ -478,6 +483,7 @@ func (c *GsiClient) Range(
 		callb(resp)
 	}
 
+	logging.Verbosef("Range elapsed(%v) err(%v)", time.Since(begin), err)
 	return
 }
 
@@ -499,6 +505,9 @@ func (c *GsiClient) ScanAll(
 		callb(protoResp)
 		return
 	}
+
+	begin := time.Now()
+
 	err = c.doScan(
 		defnID,
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
@@ -518,6 +527,7 @@ func (c *GsiClient) ScanAll(
 		callb(resp)
 	}
 
+	logging.Verbosef("ScanAll elapsed(%v) err(%v)", time.Since(begin), err)
 	return
 }
 
@@ -535,6 +545,8 @@ func (c *GsiClient) CountLookup(
 		return 0, err
 	}
 
+	begin := time.Now()
+
 	err = c.doScan(
 		defnID, func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
@@ -547,6 +559,7 @@ func (c *GsiClient) CountLookup(
 			return err, false
 		})
 
+	logging.Verbosef("CountLookup elapsed(%v) err(%v)", time.Since(begin), err)
 	return count, err
 }
 
@@ -565,6 +578,9 @@ func (c *GsiClient) CountRange(
 	if _, err := c.bridge.IndexState(defnID); err != nil {
 		return 0, err
 	}
+
+	begin := time.Now()
+
 	err = c.doScan(
 		defnID, func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
@@ -578,6 +594,7 @@ func (c *GsiClient) CountRange(
 			return err, false
 		})
 
+	logging.Verbosef("CountRange elapsed(%v) err(%v)", time.Since(begin), err)
 	return count, err
 }
 
