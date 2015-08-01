@@ -565,18 +565,17 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 		//It can be processed now.
 		tk.processPendingTS(streamId, bucket)
 
-	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE:
+	case STREAM_PREPARE_RECOVERY:
 
 		//check if there is any pending TS for this bucket/stream.
 		//It can be processed now.
 		found := tk.processPendingTS(streamId, bucket)
 
-		//if no more pending TS were found and there is no abort or flush
-		//in progress recovery can be initiated
 		if !found {
-			if tk.checkBucketReadyForRecovery(streamId, bucket) {
-				tk.initiateRecovery(streamId, bucket)
-			}
+			//send message to stop running stream
+			tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
+				streamId: streamId,
+				bucket:   bucket}
 		}
 
 	case STREAM_INACTIVE:
@@ -674,18 +673,17 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 		//It can be processed now.
 		tk.processPendingTS(streamId, bucket)
 
-	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE:
+	case STREAM_PREPARE_RECOVERY:
 
 		//check if there is any pending TS for this bucket/stream.
 		//It can be processed now.
 		found := tk.processPendingTS(streamId, bucket)
 
-		//if no more pending TS were found and there is no abort or flush
-		//in progress recovery can be initiated
 		if !found {
-			if tk.checkBucketReadyForRecovery(streamId, bucket) {
-				tk.initiateRecovery(streamId, bucket)
-			}
+			//send message to stop running stream
+			tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
+				streamId: streamId,
+				bucket:   bucket}
 		}
 
 	default:
@@ -736,11 +734,10 @@ func (tk *timekeeper) handleFlushAbortDone(cmd Message) {
 		bucketAbortInProgressMap := tk.ss.streamBucketAbortInProgressMap[streamId]
 		bucketAbortInProgressMap[bucket] = false
 
-		//if flush for all buckets is done and no abort is in progress,
-		//recovery can be initiated
-		if tk.checkBucketReadyForRecovery(streamId, bucket) {
-			tk.initiateRecovery(streamId, bucket)
-		}
+		//send message to stop running stream
+		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
+			streamId: streamId,
+			bucket:   bucket}
 
 	case STREAM_RECOVERY, STREAM_INACTIVE:
 		logging.Errorf("Timekeeper::handleFlushAbortDone Unexpected Flush Abort "+
@@ -1474,11 +1471,6 @@ func (tk *timekeeper) prepareRecovery(streamId common.StreamId,
 
 	}
 
-	//send message to stop running stream
-	tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
-		streamId: streamId,
-		bucket:   bucket}
-
 	return true
 
 }
@@ -1539,6 +1531,12 @@ func (tk *timekeeper) flushOrAbortInProgressTS(streamId common.StreamId,
 		//recovery can be initiated.
 		logging.Debugf("Timekeeper::flushOrAbortInProgressTS \n\tRecovery can be initiated for "+
 			"Bucket %v Stream %v", bucket, streamId)
+
+		//send message to stop running stream
+		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
+			streamId: streamId,
+			bucket:   bucket}
+
 	}
 
 }
