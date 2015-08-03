@@ -1275,8 +1275,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 		delete(idx.streamBucketRequestStopCh[streamId], bucket)
 
 		//skip processing merge ack for inactive or recovery streams.
-		if idx.streamBucketStatus[streamId][bucket] == STREAM_INACTIVE ||
-			idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
+		if idx.streamBucketStatus[streamId][bucket] == STREAM_PREPARE_RECOVERY ||
 			idx.streamBucketStatus[streamId][bucket] == STREAM_RECOVERY {
 			logging.Debugf("Indexer::handleMergeStreamAck Skip MergeStreamAck %v %v %v",
 				streamId, bucket, idx.streamBucketStatus[streamId][bucket])
@@ -2223,6 +2222,10 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 		respErr := resp.(*MsgError).GetError()
 		common.CrashOnError(respErr.cause)
 	}
+
+	//at this point, the stream is inactive in all sub-components, so the status
+	//can be set to inactive.
+	idx.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
 	if _, ok := idx.streamBucketRequestStopCh[streamId][bucket]; !ok {
 		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
