@@ -11,7 +11,6 @@ package indexer
 
 import (
 	"container/list"
-	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
