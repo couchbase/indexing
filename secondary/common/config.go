@@ -590,9 +590,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.log_level": ConfigValue{
-		"debug", // keep in sync with index_settings_manager.erl
+		"info", // keep in sync with index_settings_manager.erl
 		"Indexer logging level",
-		"debug",
+		"info",
 		false, // mutable
 	},
 	"indexer.settings.scan_timeout": ConfigValue{
@@ -695,9 +695,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.settings.log_level": ConfigValue{
-		"debug",
+		"info",
 		"Projector logging level",
-		"debug",
+		"info",
 		false, // mutable
 	},
 }
