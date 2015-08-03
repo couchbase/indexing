@@ -886,14 +886,12 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 
 		count := tk.ss.getVbRefCount(streamId, meta.bucket, meta.vbucket)
 		if count > 1 {
-			if ts, ok := tk.ss.streamBucketOpenTsMap[streamId][meta.bucket]; ok && ts != nil {
-				if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
-					tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
-					tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
-					logging.Debugf("Timekeeper::handleStreamBegin \n\tRepairStream due to vb ref count > 1. "+
-						"StreamId %v MutationMeta %v", streamId, meta)
-					go tk.repairStream(streamId, meta.bucket)
-				}
+			if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
+				tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
+				tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
+				logging.Debugf("Timekeeper::handleStreamBegin \n\tRepairStream due to vb ref count > 1. "+
+					"StreamId %v MutationMeta %v", streamId, meta)
+				go tk.repairStream(streamId, meta.bucket)
 			}
 		}
 
@@ -969,14 +967,12 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
 				// If Count => 0.  This could be just normal vb take-over during rebalancing.
 				tk.ss.updateVbStatus(streamId, meta.bucket, []Vbucket{meta.vbucket}, VBS_STREAM_END)
-				if ts, ok := tk.ss.streamBucketOpenTsMap[streamId][meta.bucket]; ok && ts != nil {
-					if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
-						tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
-						tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
-						logging.Debugf("Timekeeper::handleStreamEnd \n\tRepairStream due to StreamEnd. "+
-							"StreamId %v MutationMeta %v", streamId, meta)
-						go tk.repairStream(streamId, meta.bucket)
-					}
+				if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][meta.bucket]; !ok || stopCh == nil {
+					tk.ss.clearRestartVbRetry(streamId, meta.bucket, meta.vbucket)
+					tk.ss.streamBucketRepairStopCh[streamId][meta.bucket] = make(StopChannel)
+					logging.Debugf("Timekeeper::handleStreamEnd \n\tRepairStream due to StreamEnd. "+
+						"StreamId %v MutationMeta %v", streamId, meta)
+					go tk.repairStream(streamId, meta.bucket)
 				}
 			}
 		}
@@ -1232,13 +1228,11 @@ func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, bu
 			tk.ss.makeConnectionError(streamId, bucket, vb)
 		}
 
-		if ts, ok := tk.ss.streamBucketOpenTsMap[streamId][bucket]; ok && ts != nil {
-			if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
-				tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
-				logging.Debugf("Timekeeper::handleStreamConnError \n\tRepairStream due to ConnError. "+
-					"StreamId %v Bucket %v VbList %v", streamId, bucket, vbList)
-				go tk.repairStream(streamId, bucket)
-			}
+		if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
+			tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
+			logging.Debugf("Timekeeper::handleStreamConnError \n\tRepairStream due to ConnError. "+
+				"StreamId %v Bucket %v VbList %v", streamId, bucket, vbList)
+			go tk.repairStream(streamId, bucket)
 		}
 
 	case STREAM_PREPARE_RECOVERY, STREAM_PREPARE_DONE, STREAM_INACTIVE:

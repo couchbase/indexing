@@ -629,16 +629,7 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 				repairTs.Snapshots[vbno][0] = 0
 				repairTs.Snapshots[vbno][1] = 0
 				repairTs.Seqnos[vbno] = 0
-
-				if repairTs.Vbuuids[vbno] == 0 {
-					if ts, ok := ss.streamBucketOpenTsMap[streamId][bucket]; ok && ts != nil {
-						repairTs.Vbuuids[vbno] = ts.Vbuuids[vbno]
-					}
-
-					if repairTs.Vbuuids[vbno] == 0 && forStreamRepair {
-						common.CrashOnError(errors.New("No Valid Restart Seqno Found. Cannot create 0 timestamp"))
-					}
-				}
+				repairTs.Vbuuids[vbno] = 0
 			}
 		}
 	}
