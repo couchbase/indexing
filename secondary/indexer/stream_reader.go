@@ -84,7 +84,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		config, streamMutch)
 	if err != nil {
 		//return stream init error
-		logging.Errorf("MutationStreamReader: Error returned from NewServer."+
+		logging.Fatalf("MutationStreamReader: Error returned from NewServer."+
 			"StreamId: %v, Err: %v", streamId, err)
 
 		msgErr := &MsgError{
@@ -174,7 +174,7 @@ func (r *mutationStreamReader) run() {
 			} else {
 				//stream library has closed this channel indicating
 				//unexpected stream closure send the message to supervisor
-				logging.Errorf("MutationStreamReader::run Unexpected Mutation "+
+				logging.Fatalf("MutationStreamReader::run Unexpected Mutation "+
 					"Channel Close for Stream %v", r.streamId)
 				msgErr := &MsgError{
 					err: Error{code: ERROR_STREAM_READER_STREAM_SHUTDOWN,
@@ -349,7 +349,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 //startMutationStreamWorker is the worker which processes mutation in a worker queue
 func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch StopChannel) {
 
-	logging.Debugf("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
+	logging.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
 		"Started for Stream %v.", workerId, r.streamId)
 
 	defer r.workerWaitGrp.Done()
@@ -361,7 +361,7 @@ func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch St
 		case mut = <-r.workerch[workerId]:
 			r.handleSingleMutation(mut, stopch)
 		case <-stopch:
-			logging.Debugf("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
+			logging.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
 				"Stopped for Stream %v", workerId, r.streamId)
 			return
 		}
@@ -387,7 +387,7 @@ func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys, stopch St
 		}
 
 	} else {
-		logging.Errorf("MutationStreamReader::handleSingleMutation got mutation for "+
+		logging.Warnf("MutationStreamReader::handleSingleMutation got mutation for "+
 			"unknown bucket. Skipped  %v", mut)
 	}
 
@@ -401,7 +401,7 @@ func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 	switch msg.(type) {
 
 	case dataport.ConnectionError:
-		logging.Debugf("MutationStreamReader::handleStreamInfoMsg \n\tReceived ConnectionError "+
+		logging.Infof("MutationStreamReader::handleStreamInfoMsg \n\tReceived ConnectionError "+
 			"from Client for Stream %v %v.", r.streamId, msg.(dataport.ConnectionError))
 
 		//send a separate message for each bucket. If the ConnError is with empty vblist,
@@ -426,7 +426,7 @@ func (r *mutationStreamReader) handleStreamInfoMsg(msg interface{}) {
 		}
 
 	default:
-		logging.Errorf("MutationStreamReader::handleStreamError \n\tReceived Unknown Message "+
+		logging.Fatalf("MutationStreamReader::handleStreamError \n\tReceived Unknown Message "+
 			"from Client for Stream %v.", r.streamId)
 		supvMsg = &MsgError{
 			err: Error{code: ERROR_STREAM_READER_UNKNOWN_ERROR,
@@ -443,7 +443,7 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 
 	case STREAM_READER_UPDATE_QUEUE_MAP:
 
-		logging.Debugf("MutationStreamReader::handleSupervisorCommands %v", cmd)
+		logging.Infof("MutationStreamReader::handleSupervisorCommands %v", cmd)
 		//stop all workers
 		r.stopWorkers()
 
@@ -504,7 +504,7 @@ func (r *mutationStreamReader) panicHandler() {
 //a StopChannel to each worker
 func (r *mutationStreamReader) startWorkers() {
 
-	logging.Debugf("MutationStreamReader::startWorkers Starting All Stream Workers")
+	logging.Infof("MutationStreamReader::startWorkers Starting All Stream Workers %v", r.streamId)
 
 	//start worker goroutines to process incoming mutation concurrently
 	for w := 0; w < r.numWorkers; w++ {
@@ -518,7 +518,7 @@ func (r *mutationStreamReader) startWorkers() {
 //all workers are stopped
 func (r *mutationStreamReader) stopWorkers() {
 
-	logging.Debugf("MutationStreamReader::stopWorkers Stopping All Stream Workers")
+	logging.Infof("MutationStreamReader::stopWorkers Stopping All Stream Workers %v", r.streamId)
 
 	//stop all workers
 	for _, ch := range r.workerStopCh {
@@ -539,7 +539,7 @@ func (r *mutationStreamReader) initBucketFilter(bucketFilter map[string]*common.
 	//have a filter yet
 	for b, q := range r.bucketQueueMap {
 		if _, ok := r.bucketFilterMap[b]; !ok {
-			logging.Tracef("MutationStreamReader::initBucketFilter Added new filter "+
+			logging.Debugf("MutationStreamReader::initBucketFilter Added new filter "+
 				"for Bucket %v Stream %v", b, r.streamId)
 
 			//if there is non-nil filter, use that. otherwise use a zero filter.
@@ -564,7 +564,7 @@ func (r *mutationStreamReader) initBucketFilter(bucketFilter map[string]*common.
 	//remove the bucket filters for which bucket doesn't exist anymore
 	for b, _ := range r.bucketFilterMap {
 		if _, ok := r.bucketQueueMap[b]; !ok {
-			logging.Tracef("MutationStreamReader::initBucketFilter Deleted filter "+
+			logging.Debugf("MutationStreamReader::initBucketFilter Deleted filter "+
 				"for Bucket %v Stream %v", b, r.streamId)
 			delete(r.bucketFilterMap, b)
 			delete(r.bucketPrevSnapMap, b)

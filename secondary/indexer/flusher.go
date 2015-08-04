@@ -95,7 +95,7 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 	bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel {
 
-	logging.Debugf("Flusher::PersistUptoTS %v %v Timestamp: %v",
+	logging.Verbosef("Flusher::PersistUptoTS %v %v Timestamp: %v",
 		streamId, bucket, ts)
 
 	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
@@ -116,7 +116,7 @@ func (f *flusher) PersistUptoTS(q MutationQueue, streamId common.StreamId,
 func (f *flusher) DrainUptoTS(q MutationQueue, streamId common.StreamId,
 	bucket string, ts Timestamp, changeVec []bool, stopch StopChannel) MsgChannel {
 
-	logging.Infof("Flusher::DrainUptoTS %v %v Timestamp: %v",
+	logging.Verbosef("Flusher::DrainUptoTS %v %v Timestamp: %v",
 		streamId, bucket, ts)
 
 	msgch := make(MsgChannel)
@@ -136,7 +136,7 @@ func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
 	bucket string, indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap,
 	stopch StopChannel) MsgChannel {
 
-	logging.Infof("Flusher::Persist %v %v", streamId, bucket)
+	logging.Verbosef("Flusher::Persist %v %v", streamId, bucket)
 
 	f.indexInstMap = common.CopyIndexInstMap(indexInstMap)
 	f.indexPartnMap = CopyIndexPartnMap(indexPartnMap)
@@ -155,7 +155,7 @@ func (f *flusher) Persist(q MutationQueue, streamId common.StreamId,
 func (f *flusher) Drain(q MutationQueue, streamId common.StreamId,
 	bucket string, stopch StopChannel) MsgChannel {
 
-	logging.Infof("Flusher::Drain %v %v", streamId, bucket)
+	logging.Verbosef("Flusher::Drain %v %v", streamId, bucket)
 
 	msgch := make(MsgChannel)
 	go f.flushQueue(q, streamId, bucket, nil, nil, false, stopch, msgch)
@@ -356,7 +356,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 		//Skip this mutation if the index doesn't belong to the stream being flushed
 		if streamId != idxInst.Stream && streamId != common.CATCHUP_STREAM {
 			logging.LazyTrace(func() string {
-				return fmt.Sprintf("Flusher::flush \n\tFound Mutation For IndexId: %v Stream: %v In "+
+				return fmt.Sprintf("Flusher::flush Found Mutation For IndexId: %v Stream: %v In "+
 					"Stream: %v. Skipped Mutation Key %v", idxInst.InstId, idxInst.Stream,
 					streamId, mut.key)
 			})
@@ -367,7 +367,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 		//couldn't happen when processing drop index.
 		if idxInst.State == common.INDEX_STATE_DELETED {
 			logging.LazyTrace(func() string {
-				return fmt.Sprintf("Flusher::flush \n\tFound Mutation For IndexId: %v In "+
+				return fmt.Sprintf("Flusher::flush Found Mutation For IndexId: %v In "+
 					"DELETED State. Skipped Mutation Key %v", idxInst.InstId, mut.key)
 			})
 			continue

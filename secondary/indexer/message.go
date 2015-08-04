@@ -379,6 +379,7 @@ func (m *MsgStreamUpdate) String() string {
 	str := "\n\tMessage: MsgStreamUpdate"
 	str += fmt.Sprintf("\n\tType: %v", m.mType)
 	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
+	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	str += fmt.Sprintf("\n\tBuildTS: %v", m.buildTs)
 	str += fmt.Sprintf("\n\tIndexList: %v", m.indexList)
 	str += fmt.Sprintf("\n\tRestartTs: %v", m.restartTs)
@@ -423,7 +424,6 @@ func (m *MsgMutMgrFlushMutationQueue) String() string {
 	str += fmt.Sprintf("\n\tType: %v", m.mType)
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
-	str += fmt.Sprintf("\n\tTS: %v", m.ts)
 	return str
 
 }
@@ -795,11 +795,6 @@ func (m *MsgBucketHWT) String() string {
 	str := "\n\tMessage: MsgBucketHWT"
 	str += fmt.Sprintf("\n\tStreamId: %v", m.streamId)
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
-	if m.ts != nil {
-		str += fmt.Sprintf("\n\tTS Seqnos: %v", m.ts.Seqnos)
-		str += fmt.Sprintf("\n\tTS Vbuuids: %v", m.ts.Vbuuids)
-		str += fmt.Sprintf("\n\tTS Snapshots: %v", m.ts.Snapshots)
-	}
 	return str
 
 }

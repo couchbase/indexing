@@ -121,7 +121,7 @@ loop:
 					m.handleSupervisorCommands(cmd)
 				}
 			} else {
-				logging.Errorf("Supervisor Channel Closed Unexpectedly." +
+				logging.Fatalf("Supervisor Channel Closed Unexpectedly." +
 					"Mutation Manager Shutting Itself Down.")
 				m.shutdown()
 				break loop
@@ -170,7 +170,7 @@ func (m *mutationMgr) listenWorkerMsgs() {
 					//if panic, stream reader cannot be sent any more commands
 					//cleanup any blocked requests and internals structs
 					if err.code == ERROR_STREAM_READER_PANIC {
-						logging.Errorf("MutationMgr::listenWorkerMsgs \n\tStream Reader "+
+						logging.Errorf("MutationMgr::listenWorkerMsgs Stream Reader "+
 							"Received for StreamId: %v, Err: %v", streamId, err)
 
 						//signal to any blocked request that stream reader has exited
@@ -287,7 +287,7 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 		m.handleConfigUpdate(cmd)
 
 	default:
-		logging.Errorf("MutationMgr::handleSupervisorCommands Received Unknown Command %v", cmd)
+		logging.Fatalf("MutationMgr::handleSupervisorCommands Received Unknown Command %v", cmd)
 		common.CrashOnError(errors.New("Unknown Command On Supervisor Channel"))
 	}
 }
@@ -308,7 +308,7 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 		m.supvRespch <- cmd
 
 	default:
-		logging.Errorf("MutationMgr::handleWorkerMessage Received unhandled "+
+		logging.Fatalf("MutationMgr::handleWorkerMessage Received unhandled "+
 			"message from worker %v", cmd)
 		common.CrashOnError(errors.New("Unknown Message On Worker Channel"))
 	}
@@ -320,7 +320,7 @@ func (m *mutationMgr) handleWorkerMessage(cmd Message) {
 //mutations in.
 func (m *mutationMgr) handleOpenStream(cmd Message) {
 
-	logging.Debugf("MutationMgr::handleOpenStream %v", cmd)
+	logging.Infof("MutationMgr::handleOpenStream %v", cmd)
 
 	streamId := cmd.(*MsgStreamUpdate).GetStreamId()
 	indexList := cmd.(*MsgStreamUpdate).GetIndexList()
@@ -491,7 +491,7 @@ func (m *mutationMgr) handleRemoveIndexListFromStream(cmd Message) {
 	if _, ok := m.streamReaderMap[streamId]; !ok {
 
 		logging.Errorf("MutationMgr::handleRemoveIndexListFromStream "+
-			"\n\tStream Already Closed %v", streamId)
+			"Stream Already Closed %v", streamId)
 
 		m.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_MUT_MGR_STREAM_ALREADY_CLOSED,
@@ -562,7 +562,7 @@ func (m *mutationMgr) handleRemoveBucketFromStream(cmd Message) {
 	if _, ok := m.streamReaderMap[streamId]; !ok {
 
 		logging.Errorf("MutationMgr::handleRemoveIndexListFromStream "+
-			"\n\tStream Already Closed %v", streamId)
+			"Stream Already Closed %v", streamId)
 
 		m.supvCmdch <- &MsgError{
 			err: Error{code: ERROR_MUT_MGR_STREAM_ALREADY_CLOSED,
@@ -629,7 +629,7 @@ func (m *mutationMgr) handleCloseStream(cmd Message) {
 	//return error if this stream is already closed
 	if _, ok := m.streamReaderMap[streamId]; !ok {
 
-		logging.Errorf("MutationMgr::handleCloseStream \n\tStream "+
+		logging.Errorf("MutationMgr::handleCloseStream Stream "+
 			"Already Closed %v", streamId)
 
 		m.supvCmdch <- &MsgError{
@@ -751,7 +751,7 @@ func (m *mutationMgr) sendMsgToStreamReader(streamId common.StreamId, msg Messag
 	case m.streamReaderCmdChMap[streamId] <- msg:
 
 	case <-m.streamReaderExitChMap[streamId]:
-		logging.Fatalf("MutationMgr::sendMsgToStreamReader \n\tUnexpected Stream Reader Exit")
+		logging.Fatalf("MutationMgr::sendMsgToStreamReader Unexpected Stream Reader Exit")
 		return &MsgError{
 			err: Error{code: ERROR_STREAM_READER_PANIC,
 				severity: FATAL,
@@ -767,7 +767,7 @@ func (m *mutationMgr) sendMsgToStreamReader(streamId common.StreamId, msg Messag
 		if ok {
 			return respMsg
 		} else {
-			logging.Fatalf("MutationMgr:sendMsgToStreamReader \n\tInternal Error. Unexpected" +
+			logging.Fatalf("MutationMgr:sendMsgToStreamReader Internal Error. Unexpected" +
 				"Close for Stream Reader Command Channel")
 			return &MsgError{
 				err: Error{code: ERROR_MUT_MGR_INTERNAL_ERROR,
@@ -776,7 +776,7 @@ func (m *mutationMgr) sendMsgToStreamReader(streamId common.StreamId, msg Messag
 		}
 
 	case <-m.streamReaderExitChMap[streamId]:
-		logging.Fatalf("MutationMgr::sendMsgToStreamReader \n\tUnexpected Stream Reader Exit")
+		logging.Fatalf("MutationMgr::sendMsgToStreamReader Unexpected Stream Reader Exit")
 		return &MsgError{
 			err: Error{code: ERROR_STREAM_READER_PANIC,
 				severity: FATAL,
@@ -1010,7 +1010,7 @@ func CopyBucketQueueMap(inMap BucketQueueMap) BucketQueueMap {
 
 func (m *mutationMgr) handleAbortPersist(cmd Message) {
 
-	logging.Debugf("MutationMgr::handleAbortPersist %v", cmd)
+	logging.Infof("MutationMgr::handleAbortPersist %v", cmd)
 
 	bucket := cmd.(*MsgMutMgrFlushMutationQueue).GetBucket()
 	streamId := cmd.(*MsgMutMgrFlushMutationQueue).GetStreamId()
@@ -1052,7 +1052,7 @@ func (m *mutationMgr) calcQueueLenFromMemQuota() uint64 {
 
 	//if there is a user specified value, use that
 	if maxVbLen != 0 {
-		logging.Debugf("MutationMgr:: Set maxVbQueueLength %v", maxVbLen)
+		logging.Infof("MutationMgr:: Set maxVbQueueLength %v", maxVbLen)
 		return maxVbLen
 	} else {
 		//Formula for calculation(see MB-14876)
@@ -1066,7 +1066,7 @@ func (m *mutationMgr) calcQueueLenFromMemQuota() uint64 {
 		} else {
 			maxVbLen = maxVbLenDef
 		}
-		logging.Debugf("MutationMgr:: Set maxVbQueueLength %v", maxVbLen)
+		logging.Infof("MutationMgr:: Set maxVbQueueLength %v", maxVbLen)
 		return maxVbLen
 	}
 

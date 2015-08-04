@@ -230,7 +230,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_ACTIVE
 
-	logging.Debugf("StreamState::initBucketInStream \n\tNew Bucket %v Added for "+
+	logging.Infof("StreamState::initBucketInStream New Bucket %v Added for "+
 		"Stream %v", bucket, streamId)
 }
 
@@ -269,7 +269,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 
 	ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
 
-	logging.Debugf("StreamState::cleanupBucketFromStream \n\tBucket %v Deleted from "+
+	logging.Infof("StreamState::cleanupBucketFromStream Bucket %v Deleted from "+
 		"Stream %v", bucket, streamId)
 
 }
@@ -303,7 +303,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 
 	ss.streamStatus[streamId] = STREAM_INACTIVE
 
-	logging.Debugf("StreamState::resetStreamState \n\tReset Stream %v State", streamId)
+	logging.Infof("StreamState::resetStreamState Reset Stream %v State", streamId)
 }
 
 func (ss *StreamState) getVbStatus(streamId common.StreamId, bucket string, vb Vbucket) VbStatus {
@@ -388,11 +388,11 @@ func (ss *StreamState) setHWTFromRestartTs(streamId common.StreamId,
 
 			//update Last Flushed Ts
 			ss.streamBucketLastFlushedTsMap[streamId][bucket] = restartTs.Copy()
-			logging.Debugf("StreamState::setHWTFromRestartTs \n\tHWT Set For "+
+			logging.Verbosef("StreamState::setHWTFromRestartTs HWT Set For "+
 				"Bucket %v StreamId %v. TS %v.", bucket, streamId, restartTs)
 
 		} else {
-			logging.Warnf("StreamState::setHWTFromRestartTs \n\tRestartTs Not Found For "+
+			logging.Warnf("StreamState::setHWTFromRestartTs RestartTs Not Found For "+
 				"Bucket %v StreamId %v. No Value Set.", bucket, streamId)
 		}
 	}
@@ -448,7 +448,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 				vbs[i] = Seqno(int(vbs[i]) + 1)
 
 				if int(vbs[i]) > REPAIR_RETRY_BEFORE_SHUTDOWN {
-					logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
+					logging.Infof("StreamState::getRepairTsForBucket\n\t"+
 						"Bucket %v StreamId %v Vbucket %v repair is being retried for %v times.",
 						bucket, streamId, i, vbs[i])
 					ss.clearRestartVbRetry(streamId, bucket, Vbucket(i))
@@ -467,7 +467,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 		for i, s := range ss.streamBucketVbStatusMap[streamId][bucket] {
 			count := ss.streamBucketVbRefCountMap[streamId][bucket][i]
 			if count != 1 && s != VBS_INIT {
-				logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
+				logging.Infof("StreamState::getRepairTsForBucket\n\t"+
 					"Bucket %v StreamId %v Vbucket %v have ref count (%v != 1). Convert to CONN_ERROR.",
 					bucket, streamId, i, count)
 				// Make it a ConnErr such that subsequent retry will
@@ -484,7 +484,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 	// Forth Step: If there is something to repair, but indexer has received StreamBegin for
 	// all vb, then retry with the last timestamp.
 	if anythingToRepair && count == 0 {
-		logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
+		logging.Infof("StreamState::getRepairTsForBucket\n\t"+
 			"Bucket %v StreamId %v previous repair fails. Retry using previous repairTs",
 			bucket, streamId)
 
@@ -511,7 +511,7 @@ func (ss *StreamState) getRepairTsForBucket(streamId common.StreamId,
 
 	ss.adjustNonSnapAlignedVbs(repairTs, streamId, bucket, repairVbs, true)
 
-	logging.Debugf("StreamState::getRepairTsForBucket\n\t"+
+	logging.Verbosef("StreamState::getRepairTsForBucket\n\t"+
 		"Bucket %v StreamId %v repairTS %v",
 		bucket, streamId, repairTs)
 
@@ -565,7 +565,7 @@ func (ss *StreamState) adjustNonSnapAlignedVbs(repairTs *common.TsVbuuid,
 		}
 	}
 
-	logging.Debugf("StreamState::adjustNonSnapAlignedVbs\n\t"+
+	logging.Infof("StreamState::adjustNonSnapAlignedVbs\n\t"+
 		"Bucket %v StreamId %v Vbuckets %v.",
 		bucket, streamId, repairVbs)
 

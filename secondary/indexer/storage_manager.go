@@ -208,7 +208,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	tsVbuuid.Crc64 = common.HashVbuuid(tsVbuuid.Vbuuids)
 
 	if snapType == common.NO_SNAP {
-		logging.Debugf("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
+		logging.Infof("StorageMgr::handleCreateSnapshot Skip Snapshot For %v "+
 			"%v SnapType %v", streamId, bucket, snapType)
 
 		s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
@@ -298,20 +298,17 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 						if latestSnapshot == nil || (ts.GreaterThan(snapTs) &&
 							(slice.IsDirty() || needsCommit)) {
 
-							logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCommit Data Index: "+
-								"%v PartitionId: %v SliceId: %v", idxInstId, partnId, slice.Id())
-
 							newTsVbuuid := tsVbuuid.Copy()
 							var err error
 							var info SnapshotInfo
 							var newSnapshot Snapshot
 
-							logging.Tracef("StorageMgr::handleCreateSnapshot \n\tCreating New Snapshot "+
+							logging.Tracef("StorageMgr::handleCreateSnapshot Creating New Snapshot "+
 								"Index: %v PartitionId: %v SliceId: %v Commit: %v", idxInstId, partnId, slice.Id(), needsCommit)
 
 							snapCreateStart := time.Now()
 							if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
-								logging.Errorf("handleCreateSnapshot::handleCreateSnapshot \n\tError "+
+								logging.Errorf("handleCreateSnapshot::handleCreateSnapshot Error "+
 									"Creating new snapshot Slice Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 									slice.Id(), err)
 								isSnapCreated = false
@@ -328,7 +325,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 
 							snapOpenStart := time.Now()
 							if newSnapshot, err = slice.OpenSnapshot(info); err != nil {
-								logging.Errorf("StorageMgr::handleCreateSnapshot \n\tError Creating Snapshot "+
+								logging.Errorf("StorageMgr::handleCreateSnapshot Error Creating Snapshot "+
 									"for Index: %v Slice: %v. Skipped. Error %v", idxInstId,
 									slice.Id(), err)
 								isSnapCreated = false
@@ -337,7 +334,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 							}
 							snapOpenDur := time.Since(snapOpenStart)
 
-							logging.Infof("StorageMgr::handleCreateSnapshot \n\tAdded New Snapshot Index: %v "+
+							logging.Infof("StorageMgr::handleCreateSnapshot Added New Snapshot Index: %v "+
 								"PartitionId: %v SliceId: %v Crc64: %v (%v) SnapCreateDur %v SnapOpenDur %v", idxInstId, partnId, slice.Id(), tsVbuuid.Crc64, info, snapCreateDur, snapOpenDur)
 
 							ss := &sliceSnapshot{
@@ -353,7 +350,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 								snap: latestSnapshot,
 							}
 							sliceSnaps[slice.Id()] = ss
-							logging.Warnf("StorageMgr::handleCreateSnapshot \n\tSkipped Creating New Snapshot for Index %v "+
+							logging.Warnf("StorageMgr::handleCreateSnapshot Skipped Creating New Snapshot for Index %v "+
 								"PartitionId %v SliceId %v. No New Mutations. IsDirty %v", idxInstId, partnId, slice.Id(), slice.IsDirty())
 							logging.Debugf("StorageMgr::handleCreateSnapshot SnapTs %v FlushTs %v", snapTs, ts)
 							continue
@@ -487,7 +484,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 					if snapInfo != nil {
 						err := slice.Rollback(snapInfo)
 						if err == nil {
-							logging.Infof("StorageMgr::handleRollback \n\t Rollback Index: %v "+
+							logging.Infof("StorageMgr::handleRollback Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Snapshot %v ", idxInstId, partnId,
 								slice.Id(), snapInfo)
 							respTs = snapInfo.Timestamp()
@@ -505,7 +502,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 						//if there is no snapshot available, rollback to zero
 						err := slice.RollbackToZero()
 						if err == nil {
-							logging.Infof("StorageMgr::handleRollback \n\t Rollback Index: %v "+
+							logging.Infof("StorageMgr::handleRollback Rollback Index: %v "+
 								"PartitionId: %v SliceId: %v To Zero ", idxInstId, partnId,
 								slice.Id())
 							//once rollback to zero has happened, set response ts to nil
