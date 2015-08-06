@@ -683,9 +683,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.wal_size": ConfigValue{
-		uint64(40960),
+		uint64(4096),
 		"WAL threshold size",
-		uint64(40960),
+		uint64(4096),
 		false, // mutable
 	},
 	"indexer.settings.fast_flush_mode": ConfigValue{
