@@ -26,7 +26,7 @@ import (
 
 const (
 	HTTP_PREFIX             string = "http://"
-	MAX_KV_REQUEST_RETRY    int    = 1
+	MAX_KV_REQUEST_RETRY    int    = 0
 	BACKOFF_FACTOR          int    = 2
 	MAX_CLUSTER_FETCH_RETRY int    = 600
 )
@@ -282,6 +282,8 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 
 	fn := func(r int, err error) error {
 
+		//clear the error before every retry
+		err = nil
 		for _, addr := range addrs {
 
 			execWithStopCh(func() {
@@ -447,6 +449,8 @@ func (k *kvSender) addIndexForExistingBucket(streamId c.StreamId, bucket string,
 
 	fn := func(r int, err error) error {
 
+		//clear the error before every retry
+		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
 				ap := newProjClient(addr)
@@ -514,6 +518,8 @@ func (k *kvSender) deleteIndexesFromStream(streamId c.StreamId, indexInstList []
 
 	fn := func(r int, err error) error {
 
+		//clear the error before every retry
+		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
 				ap := newProjClient(addr)
@@ -568,6 +574,8 @@ func (k *kvSender) deleteBucketsFromStream(streamId c.StreamId, buckets []string
 
 	fn := func(r int, err error) error {
 
+		//clear the error before every retry
+		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
 				ap := newProjClient(addr)
@@ -621,6 +629,8 @@ func (k *kvSender) closeMutationStream(streamId c.StreamId, bucket string,
 
 	fn := func(r int, err error) error {
 
+		//clear the error before every retry
+		err = nil
 		for _, addr := range addrs {
 			execWithStopCh(func() {
 				ap := newProjClient(addr)
@@ -1252,7 +1262,6 @@ func execWithStopCh(fn func(), stopCh StopChannel) {
 	select {
 
 	case <-stopCh:
-		stopCh <- true
 		return
 
 	default:
