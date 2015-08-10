@@ -1644,6 +1644,13 @@ func (tk *timekeeper) checkInitStreamReadyToMerge(streamId common.StreamId,
 		return false
 	}
 
+	if ts, ok := tk.ss.streamBucketOpenTsMap[common.INIT_STREAM][bucket]; !ok || ts == nil {
+
+		logging.Infof("Timekeeper::checkInitStreamReadyToMerge INIT_STREAM MTR In Progress." +
+			"INIT_STREAM cannot be merged. Continue both streams.")
+		return false
+	}
+
 	for _, buildInfo := range tk.indexBuildInfo {
 
 		//if index belongs to the flushed bucket and in CATCHUP state and
