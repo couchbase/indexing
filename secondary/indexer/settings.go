@@ -127,8 +127,8 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		settingsConfig := config.FilterConfig(".settings.")
-		newSettingsBytes := settingsConfig.Json()
+		//settingsConfig := config.FilterConfig(".settings.")
+		newSettingsBytes := config.Json()
 		if err = metakv.Set(common.IndexingSettingsMetaPath, newSettingsBytes, rev); err != nil {
 			s.writeError(w, err)
 			return
@@ -140,7 +140,8 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 			s.writeError(w, err)
 			return
 		}
-		s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
+		s.writeJson(w, settingsConfig.Json())
+		// s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
 		return

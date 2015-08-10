@@ -301,9 +301,16 @@ func (c *GsiClient) CreateIndex(
 	if c.bridge == nil {
 		return defnID, ErrorClientUninitialized
 	}
+	begin := time.Now()
 	defnID, err = c.bridge.CreateIndex(
 		name, bucket, using, exprType, partnExpr, whereExpr,
 		secExprs, isPrimary, with)
+	fmsg := "CreateIndex %v %v/%v using:%v exprType:%v partnExpr:%v " +
+		"whereExpr:%v secExprs:%v isPrimary:%v with:%v - " +
+		"elapsed(%v) err(%v)"
+	logging.Infof(
+		fmsg, defnID, bucket, name, using, exprType, partnExpr, whereExpr,
+		secExprs, isPrimary, with, time.Since(begin), err)
 	return defnID, err
 }
 
@@ -312,7 +319,11 @@ func (c *GsiClient) BuildIndexes(defnIDs []uint64) error {
 	if c.bridge == nil {
 		return ErrorClientUninitialized
 	}
-	return c.bridge.BuildIndexes(defnIDs)
+	begin := time.Now()
+	err := c.bridge.BuildIndexes(defnIDs)
+	fmsg := "BuildIndexes %v - elapsed(%v), err(%v)"
+	logging.Infof(fmsg, defnIDs, time.Since(begin), err)
+	return err
 }
 
 // DropIndex implements BridgeAccessor{} interface.
@@ -320,7 +331,11 @@ func (c *GsiClient) DropIndex(defnID uint64) error {
 	if c.bridge == nil {
 		return ErrorClientUninitialized
 	}
-	return c.bridge.DropIndex(defnID)
+	begin := time.Now()
+	err := c.bridge.DropIndex(defnID)
+	fmsg := "DropIndex %v - elapsed(%v), err(%v)"
+	logging.Infof(fmsg, defnID, time.Since(begin), err)
+	return err
 }
 
 // LookupStatistics for a single secondary-key.
@@ -422,7 +437,8 @@ func (c *GsiClient) Lookup(
 		callb(resp)
 	}
 
-	logging.Verbosef("Lookup elapsed(%v) err(%v)", time.Since(begin), err)
+	fmsg := "Lookup %v - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, time.Since(begin), err)
 	return
 }
 
@@ -483,7 +499,8 @@ func (c *GsiClient) Range(
 		callb(resp)
 	}
 
-	logging.Verbosef("Range elapsed(%v) err(%v)", time.Since(begin), err)
+	fmsg := "Range %v - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, time.Since(begin), err)
 	return
 }
 
@@ -527,7 +544,8 @@ func (c *GsiClient) ScanAll(
 		callb(resp)
 	}
 
-	logging.Verbosef("ScanAll elapsed(%v) err(%v)", time.Since(begin), err)
+	fmsg := "ScanAll %v - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, time.Since(begin), err)
 	return
 }
 
@@ -559,7 +577,8 @@ func (c *GsiClient) CountLookup(
 			return err, false
 		})
 
-	logging.Verbosef("CountLookup elapsed(%v) err(%v)", time.Since(begin), err)
+	fmsg := "CountLookup %v - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, time.Since(begin), err)
 	return count, err
 }
 
@@ -594,7 +613,8 @@ func (c *GsiClient) CountRange(
 			return err, false
 		})
 
-	logging.Verbosef("CountRange elapsed(%v) err(%v)", time.Since(begin), err)
+	fmsg := "CountRange %v - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, time.Since(begin), err)
 	return count, err
 }
 
