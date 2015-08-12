@@ -113,7 +113,7 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
 
-		config := s.config.Clone()
+		config := s.config.FilterConfig(".settings.")
 		current, rev, err := metakv.Get(common.IndexingSettingsMetaPath)
 		if err == nil {
 			if len(current) > 0 {
@@ -140,8 +140,7 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 			s.writeError(w, err)
 			return
 		}
-		s.writeJson(w, settingsConfig.Json())
-		// s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
+		s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
 		return
