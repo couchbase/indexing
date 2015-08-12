@@ -113,7 +113,7 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
 
-		config := s.config.Clone()
+		config := s.config.FilterConfig(".settings.")
 		current, rev, err := metakv.Get(common.IndexingSettingsMetaPath)
 		if err == nil {
 			if len(current) > 0 {
