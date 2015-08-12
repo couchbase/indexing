@@ -140,8 +140,7 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 			s.writeError(w, err)
 			return
 		}
-		s.writeJson(w, settingsConfig.Json())
-		// s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
+		s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
 		return
