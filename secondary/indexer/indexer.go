@@ -1354,23 +1354,6 @@ func (idx *indexer) handleStreamRequestDone(msg Message) {
 	delete(idx.streamBucketRequestStopCh[streamId], bucket)
 	idx.bucketBuildTs[bucket] = buildTs
 
-	//during stream request, if all indexes of a bucket gets dropped,
-	//the stream needs to be stopped for that bucket.
-	if !idx.checkBucketExistsInStream(bucket, streamId, false) {
-		if idx.getStreamBucketState(streamId, bucket) != STREAM_INACTIVE {
-			logging.Infof("Indexer::handleStreamRequestDone StreamId %v Bucket %v State %v. No Index Found."+
-				"Cleaning up.", streamId, bucket, idx.getStreamBucketState(streamId, bucket))
-			idx.stopBucketStream(streamId, bucket)
-
-			idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
-		}
-	} else {
-		//change status to Active
-		idx.setStreamBucketState(streamId, bucket, STREAM_ACTIVE)
-	}
-
-	logging.Infof("Indexer::handleStreamRequestDone StreamId %v Bucket %v %v",
-		streamId, bucket, idx.getStreamBucketState(streamId, bucket))
 }
 
 func (idx *indexer) handleBucketNotFound(msg Message) {
