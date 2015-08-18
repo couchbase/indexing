@@ -3462,17 +3462,17 @@ func (idx *indexer) memoryUsed() int64 {
 
 func NewSlice(id SliceId, indInst *common.IndexInst,
 	conf common.Config, stats *IndexerStats) (slice Slice, err error) {
+	// Default storage is forestdb
+	storage_dir := conf["storage_dir"].String()
+	os.Mkdir(storage_dir, 0755)
+	if _, e := os.Stat(storage_dir); e != nil {
+		common.CrashOnError(e)
+	}
+	path := filepath.Join(storage_dir, IndexPath(indInst, id))
 
 	if indInst.Defn.Using == common.MemDB {
-		slice, err = NewMemDBSlice(id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf)
+		slice, err = NewMemDBSlice(path, id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
 	} else {
-		// Default storage is forestdb
-		storage_dir := conf["storage_dir"].String()
-		os.Mkdir(storage_dir, 0755)
-		if _, e := os.Stat(storage_dir); e != nil {
-			common.CrashOnError(e)
-		}
-		path := filepath.Join(storage_dir, IndexPath(indInst, id))
 		slice, err = NewForestDBSlice(path, id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
 	}
 
