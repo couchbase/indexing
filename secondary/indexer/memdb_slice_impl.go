@@ -552,8 +552,10 @@ func (mdb *memdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotIn
 	newSnapshotInfo := &memdbSnapshotInfo{
 		Ts:        ts,
 		MainSnap:  mdb.mainstore.NewSnapshot(),
-		BackSnap:  mdb.backstore.NewSnapshot(),
 		Committed: commit,
+	}
+	if !mdb.isPrimary {
+		newSnapshotInfo.BackSnap = mdb.backstore.NewSnapshot()
 	}
 	mdb.setCommittedCount()
 
@@ -787,7 +789,9 @@ func (s *memdbSnapshot) Close() error {
 
 func (s *memdbSnapshot) Destroy() {
 	s.info.MainSnap.Close()
-	s.info.BackSnap.Close()
+	if s.info.BackSnap != nil {
+		s.info.BackSnap.Close()
+	}
 
 	defer s.slice.DecrRef()
 }
