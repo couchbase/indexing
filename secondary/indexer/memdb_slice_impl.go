@@ -50,7 +50,7 @@ func (b *byteItem) Value() []byte {
 	return buf[b.valOffset():]
 }
 
-func byteItemKeyCompare(a, b []byte) int {
+func byteItemKeyPrefixCompare(a, b []byte) int {
 	var l int
 	itm1 := byteItem(a)
 	itm2 := byteItem(b)
@@ -65,6 +65,16 @@ func byteItemKeyCompare(a, b []byte) int {
 	}
 
 	return bytes.Compare(k1[:l], k2[:l])
+}
+
+func byteItemKeyCompare(a, b []byte) int {
+	itm1 := byteItem(a)
+	itm2 := byteItem(b)
+
+	k1 := []byte(itm1)[2:itm1.valOffset()]
+	k2 := []byte(itm2)[2:itm2.valOffset()]
+
+	return bytes.Compare(k1, k2)
 }
 
 type memdbSlice struct {
@@ -145,7 +155,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 	slice.isPrimary = isPrimary
 
 	slice.mainstore = memdb.New()
-	slice.mainstore.SetKeyComparator(byteItemKeyCompare)
+	slice.mainstore.SetKeyComparator(byteItemKeyPrefixCompare)
 	slice.main = make([]*memdb.Writer, slice.numWriters)
 	for i := 0; i < slice.numWriters; i++ {
 		slice.main[i] = slice.mainstore.NewWriter()
