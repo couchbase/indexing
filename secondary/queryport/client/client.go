@@ -2,6 +2,7 @@ package client
 
 import "time"
 import "unsafe"
+import "io"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/platform"
@@ -666,6 +667,7 @@ func (c *GsiClient) doScan(
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
+	evictRetry := c.config["settings.poolSize"].Int()
 	for i := 0; true; {
 		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i); ok1 {
 			index := c.bridge.GetIndexDefn(targetDefnID)
@@ -676,10 +678,14 @@ func (c *GsiClient) doScan(
 					c.bridge.Timeit(targetDefnID, float64(time.Since(begin)))
 					return err
 				}
-				if err != nil && partial {
+				if err != nil && err != io.EOF && partial {
 					// partially succeeded scans, we don't reset-hash and we
 					// don't retry
 					return err
+				} else if err == io.EOF && evictRetry > 0 {
+					logging.Warnf("evict retry (%v)...\n", evictRetry)
+					evictRetry--
+					continue
 				} else { // TODO: make this error message precise
 					// reset the hash so that we do a full STATS for next
 					// query.
@@ -687,6 +693,7 @@ func (c *GsiClient) doScan(
 				}
 			}
 		}
+
 		if i = i + 1; i < retry {
 			logging.Warnf(
 				"Trying scan again for index %v (%v %v): %v ...\n",

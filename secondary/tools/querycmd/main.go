@@ -16,7 +16,7 @@ func usage(fset *flag.FlagSet) {
 }
 
 func main() {
-	logging.SetLogLevel(logging.Error)
+	logging.SetLogLevel(logging.Info)
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	cmdOptions, args, fset, err := querycmd.ParseArgs(os.Args[1:])
@@ -61,6 +61,12 @@ func main() {
 
 	case "mb13339":
 		err = doMB13339(cmdOptions.Server, client)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
+		}
+
+	case "mb16115":
+		err = doMB16115(cmdOptions.Server, client)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
 		}

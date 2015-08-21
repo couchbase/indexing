@@ -85,7 +85,7 @@ loop:
 
 		default:
 			l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
-			err := client.Range(
+			err, _ := client.Range(
 				0xABBA /*defnID*/, l, h, 100, true, 1,
 				c.AnyConsistency, nil,
 				func(val qclient.ResponseReader) bool {
