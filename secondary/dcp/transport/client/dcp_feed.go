@@ -64,7 +64,7 @@ func NewDcpFeed(
 	mc.Hijack()
 	feed.conn = mc
 	rcvch := make(chan []interface{}, dataChanSize)
-	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch)
+	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
 	go feed.doReceive(rcvch, mc)
 	logging.Infof("%v ##%x feed started ...", feed.logPrefix, opaque)
 	return feed, nil
@@ -143,8 +143,9 @@ const (
 )
 
 func (feed *DcpFeed) genServer(
-	opaque uint16,
-	reqch chan []interface{}, finch chan bool, rcvch chan []interface{}) {
+	opaque uint16, reqch chan []interface{}, finch chan bool,
+	rcvch chan []interface{},
+	config map[string]interface{}) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -158,20 +159,24 @@ func (feed *DcpFeed) genServer(
 	}()
 
 	prefix := feed.logPrefix
-	inactivityTick := time.Tick(1 * 60 * time.Second) // 1 minute
+	streamPauseTm := int64(10 * 1000) // in milli-seconds
+	if val, ok := config["streamPauseTm"]; ok && val != nil {
+		streamPauseTm = int64(val.(int)) // in milli-seconds
+	}
+	streamPauseTick := time.Tick(time.Duration(streamPauseTm) * time.Millisecond)
 
 loop:
 	for {
 		select {
-		case <-inactivityTick:
+		case <-streamPauseTick:
 			now := time.Now().UnixNano()
 			for _, stream := range feed.vbstreams {
 				strm_seqno := stream.Seqno
 				if stream.Snapend == 0 || strm_seqno == stream.Snapend {
 					continue
 				}
-				delta := (now - stream.LastSeen) / 1000000000 // in Seconds
-				if stream.LastSeen != 0 && delta > 10 /*seconds*/ {
+				delta := (now - stream.LastSeen) / 1000000 // in milli-seconds
+				if stream.LastSeen != 0 && delta > streamPauseTm {
 					fmsg := "%v ##%x event for vb %v lastSeen %vSec before\n"
 					logging.Warnf(
 						fmsg, prefix, stream.AppOpaque, stream.Vbucket, delta)
