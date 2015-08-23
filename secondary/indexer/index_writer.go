@@ -26,10 +26,10 @@ type StorageStatistics struct {
 type IndexWriter interface {
 
 	//Persist a key/value pair
-	Insert(secKey []byte, docid []byte) error
+	Insert(secKey []byte, docid []byte, meta *MutationMeta) error
 
 	//Delete a key/value pair by docId
-	Delete(docid []byte) error
+	Delete(docid []byte, meta *MutationMeta) error
 
 	// Create commited commited snapshot or inmemory snapshot
 	NewSnapshot(*common.TsVbuuid, bool) (SnapshotInfo, error)

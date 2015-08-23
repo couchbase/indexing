@@ -176,14 +176,14 @@ func (mdb *memdbSlice) DecrRef() {
 	}
 }
 
-func (mdb *memdbSlice) Insert(key []byte, docid []byte) error {
+func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.flushQueueSize.Add(1)
 	mdb.idxStats.numFlushQueued.Add(1)
 	mdb.cmdCh <- &indexItem{key: key, docid: docid}
 	return mdb.fatalDbErr
 }
 
-func (mdb *memdbSlice) Delete(docid []byte) error {
+func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.flushQueueSize.Add(1)
 	mdb.idxStats.numFlushQueued.Add(1)
 	mdb.cmdCh <- docid

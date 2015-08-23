@@ -239,7 +239,7 @@ func (fdb *fdbSlice) DecrRef() {
 //Internally the request is buffered and executed async.
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
-func (fdb *fdbSlice) Insert(key []byte, docid []byte) error {
+func (fdb *fdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
 	fdb.idxStats.flushQueueSize.Add(1)
 	fdb.idxStats.numFlushQueued.Add(1)
 	fdb.cmdCh <- &indexItem{key: key, docid: docid}
@@ -250,7 +250,7 @@ func (fdb *fdbSlice) Insert(key []byte, docid []byte) error {
 //Internally the request is buffered and executed async.
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
-func (fdb *fdbSlice) Delete(docid []byte) error {
+func (fdb *fdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	fdb.idxStats.flushQueueSize.Add(1)
 	fdb.idxStats.numFlushQueued.Add(1)
 	fdb.cmdCh <- docid

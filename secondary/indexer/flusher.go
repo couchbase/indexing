@@ -378,10 +378,10 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 		case common.Upsert:
 			processedUpserts = append(processedUpserts, mut.uuid)
 
-			f.processUpsert(mut, mutk.docid)
+			f.processUpsert(mut, mutk.docid, mutk.meta)
 
 		case common.Deletion:
-			f.processDelete(mut, mutk.docid)
+			f.processDelete(mut, mutk.docid, mutk.meta)
 
 		case common.UpsertDeletion:
 
@@ -397,7 +397,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 			if skipUpsertDeletion {
 				continue
 			} else {
-				f.processDelete(mut, mutk.docid)
+				f.processDelete(mut, mutk.docid, mutk.meta)
 			}
 
 		default:
@@ -407,7 +407,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 	}
 }
 
-func (f *flusher) processUpsert(mut *Mutation, docid []byte) {
+func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta) {
 
 	idxInst, _ := f.indexInstMap[mut.uuid]
 
@@ -429,14 +429,14 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte) {
 				"docid: %s in Slice: %v. Error: %v. Skipped.",
 				mut.key, docid, slice.Id(), err)
 
-			if err2 := slice.Delete(docid); err2 != nil {
+			if err2 := slice.Delete(docid, meta); err2 != nil {
 				logging.Errorf("Flusher::processUpsert Error removing entry due to error %v Key: %s "+
 					"docid: %s in Slice: %v. Error: %v", err, mut.key, docid, slice.Id(), err2)
 			}
 			return
 		}
 
-		if err := slice.Insert(key, docid); err != nil {
+		if err := slice.Insert(key, docid, meta); err != nil {
 			logging.Errorf("Flusher::processUpsert Error Inserting Key: %s "+
 				"docid: %s in Slice: %v. Error: %v", mut.key, docid, slice.Id(), err)
 		}
@@ -447,7 +447,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte) {
 
 }
 
-func (f *flusher) processDelete(mut *Mutation, docid []byte) {
+func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta) {
 
 	idxInst, _ := f.indexInstMap[mut.uuid]
 
@@ -463,7 +463,7 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte) {
 
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
-		if err := slice.Delete(docid); err != nil {
+		if err := slice.Delete(docid, meta); err != nil {
 			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
 				"from Slice: %v", docid, slice.Id())
 		}
