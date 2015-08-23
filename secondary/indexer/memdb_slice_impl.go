@@ -76,7 +76,7 @@ type memdbSlice struct {
 	isSoftDeleted bool
 	isSoftClosed  bool
 
-	cmdCh  chan interface{}
+	cmdCh  []chan interface{}
 	stopCh []DoneChannel
 
 	workerDone []chan bool
@@ -118,7 +118,10 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 	slice.numWriters = sysconf["numSliceWriters"].Int()
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
-	slice.cmdCh = make(chan interface{}, sliceBufSize)
+	slice.cmdCh = make([]chan interface{}, slice.numWriters)
+	for i := 0; i < slice.numWriters; i++ {
+		slice.cmdCh[i] = make(chan interface{}, sliceBufSize)
+	}
 	slice.workerDone = make([]chan bool, slice.numWriters)
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
@@ -179,14 +182,14 @@ func (mdb *memdbSlice) DecrRef() {
 func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.flushQueueSize.Add(1)
 	mdb.idxStats.numFlushQueued.Add(1)
-	mdb.cmdCh <- &indexItem{key: key, docid: docid}
+	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexItem{key: key, docid: docid}
 	return mdb.fatalDbErr
 }
 
 func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.flushQueueSize.Add(1)
 	mdb.idxStats.numFlushQueued.Add(1)
-	mdb.cmdCh <- docid
+	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- docid
 	return mdb.fatalDbErr
 }
 
@@ -200,7 +203,7 @@ func (mdb *memdbSlice) handleCommandsWorker(workerId int) {
 loop:
 	for {
 		select {
-		case c = <-mdb.cmdCh:
+		case c = <-mdb.cmdCh[workerId]:
 			switch c.(type) {
 
 			case *indexItem:
@@ -537,7 +540,7 @@ func (mdb *memdbSlice) checkAllWorkersDone() bool {
 
 	//if there are mutations in the cmdCh, workers are
 	//not yet done
-	if len(mdb.cmdCh) > 0 {
+	if mdb.getCmdsCount() > 0 {
 		return false
 	}
 
@@ -677,12 +680,21 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 func tryClosememdbSlice(mdb *memdbSlice) {
 }
 
+func (mdb *memdbSlice) getCmdsCount() int {
+	c := 0
+	for i := 0; i < mdb.numWriters; i++ {
+		c += len(mdb.cmdCh[i])
+	}
+
+	return c
+}
+
 func (mdb *memdbSlice) logWriterStat() {
 	count := platform.AddUint64(&mdb.flushedCount, 1)
 	if (count%10000 == 0) || count == 1 {
 		logging.Infof("logWriterStat:: %v "+
 			"FlushedCount %v QueuedCount %v", mdb.idxInstId,
-			count, len(mdb.cmdCh))
+			count, mdb.getCmdsCount())
 	}
 
 }
