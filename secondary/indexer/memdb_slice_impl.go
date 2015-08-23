@@ -12,13 +12,18 @@ package indexer
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/platform"
+	"io/ioutil"
 	"os"
+	"path"
+	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -83,7 +88,8 @@ type memdbSlice struct {
 
 	fatalDbErr error
 
-	numWriters int
+	numWriters   int
+	maxRollbacks int
 
 	totalFlushTime  time.Duration
 	totalCommitTime time.Duration
@@ -91,6 +97,8 @@ type memdbSlice struct {
 	idxStats *IndexStats
 	sysconf  common.Config
 	confLock sync.Mutex
+
+	isPersistorActive int32
 }
 
 func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
@@ -116,6 +124,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 	slice.idxDefnId = idxDefnId
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
+	slice.maxRollbacks = sysconf["settings.recovery.max_rollbacks"].Int()
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
 	slice.cmdCh = make([]chan interface{}, slice.numWriters)
@@ -421,10 +430,12 @@ func (mdb *memdbSlice) checkFatalDbError(err error) {
 }
 
 type memdbSnapshotInfo struct {
-	Ts        *common.TsVbuuid
-	MainSnap  *memdb.Snapshot
-	BackSnap  *memdb.Snapshot
-	Committed bool
+	Ts       *common.TsVbuuid
+	MainSnap *memdb.Snapshot `json:"-"`
+	BackSnap *memdb.Snapshot `json:"-"`
+
+	Committed bool `json:"-"`
+	dataPath  string
 }
 
 type memdbSnapshot struct {
@@ -444,32 +455,103 @@ type memdbSnapshot struct {
 func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	snapInfo := info.(*memdbSnapshotInfo)
 
-	var s *memdbSnapshot
-	if mdb.isPrimary {
-		s = &memdbSnapshot{slice: mdb,
-			idxDefnId: mdb.idxDefnId,
-			idxInstId: mdb.idxInstId,
-			info:      info.(*memdbSnapshotInfo),
-			ts:        snapInfo.Timestamp(),
-			committed: info.IsCommitted(),
-		}
-	} else {
-		s = &memdbSnapshot{slice: mdb,
-			idxDefnId: mdb.idxDefnId,
-			idxInstId: mdb.idxInstId,
-			info:      info.(*memdbSnapshotInfo),
-			ts:        snapInfo.Timestamp(),
-			committed: info.IsCommitted(),
-		}
+	s := &memdbSnapshot{slice: mdb,
+		idxDefnId: mdb.idxDefnId,
+		idxInstId: mdb.idxInstId,
+		info:      info.(*memdbSnapshotInfo),
+		ts:        snapInfo.Timestamp(),
+		committed: info.IsCommitted(),
 	}
 
 	s.Open()
 	s.slice.IncrRef()
+	if s.committed {
+		s.Open()
+		go mdb.doPersistSnapshot(s)
+	}
+
+	if s.info.MainSnap == nil {
+		mdb.loadSnapshot(s.info)
+	}
 
 	logging.Infof("MemDBSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
 		"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
 
 	return s, nil
+}
+
+func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
+	defer s.Close()
+	if platform.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
+		defer platform.StoreInt32(&mdb.isPersistorActive, 0)
+
+		dir := newSnapshotPath(mdb.path, true)
+		tmpdir := filepath.Join(mdb.path, "tmp")
+		datadir := filepath.Join(tmpdir, "data")
+		manifest := filepath.Join(tmpdir, "manifest.json")
+		os.RemoveAll(tmpdir)
+		err := mdb.mainstore.StoreToDisk(datadir, s.info.MainSnap, nil)
+		if err == nil {
+			var fd *os.File
+			bs, err := json.Marshal(s.info)
+			if err == nil {
+				fd, err = os.OpenFile(manifest, os.O_WRONLY|os.O_CREATE, 0755)
+				_, err = fd.Write(bs)
+				if err == nil {
+					err = fd.Close()
+				}
+			}
+
+			if err == nil {
+				err = os.Rename(tmpdir, dir)
+				if err == nil {
+					mdb.cleanupOldSnapshotFiles()
+				}
+			}
+		}
+	}
+}
+
+func (mdb *memdbSlice) cleanupOldSnapshotFiles() {
+	manifests := mdb.getSnapshotManifests()
+	if len(manifests) > mdb.maxRollbacks {
+		toRemove := len(manifests) - mdb.maxRollbacks
+		manifests = manifests[:toRemove]
+		for _, m := range manifests {
+			dir := path.Dir(m)
+			os.RemoveAll(dir)
+		}
+	}
+}
+
+func (mdb *memdbSlice) getSnapshotManifests() []string {
+	pattern := fmt.Sprintf("*/manifest.json")
+	files, _ := filepath.Glob(filepath.Join(mdb.path, pattern))
+	sort.Strings(files)
+	return files
+}
+
+// Returns snapshot info list
+func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
+	var infos []SnapshotInfo
+
+	files := mdb.getSnapshotManifests()
+	for _, f := range files {
+		info := &memdbSnapshotInfo{dataPath: path.Dir(f)}
+		fd, err := os.Open(f)
+		if err == nil {
+			defer fd.Close()
+			bs, err := ioutil.ReadAll(fd)
+			if err == nil {
+				err = json.Unmarshal(bs, info)
+				if err == nil {
+					infos = append(infos, info)
+				}
+			}
+		}
+
+	}
+	return infos, nil
 }
 
 func (mdb *memdbSlice) setCommittedCount() {
@@ -483,12 +565,74 @@ func (mdb *memdbSlice) GetCommittedCount() uint64 {
 //Rollback slice to given snapshot. Return error if
 //not possible
 func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
-	return nil
+	snapInfo := info.(*memdbSnapshotInfo)
+	mdb.mainstore.Reset()
+	if mdb.backstore != nil {
+		mdb.backstore.Reset()
+	}
+
+	return mdb.loadSnapshot(snapInfo)
+}
+
+func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
+	var wg sync.WaitGroup
+
+	var backIndexCallback memdb.ItemCallback
+	entryCh := make(chan []byte, 1000)
+
+	logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v reading %v",
+		mdb.id, mdb.idxInstId, snapInfo.dataPath)
+
+	t0 := time.Now()
+	datadir := filepath.Join(snapInfo.dataPath, "data")
+
+	if !mdb.isPrimary {
+		for wId := 0; wId < mdb.numWriters; wId++ {
+			wg.Add(1)
+			go func(i int, wg *sync.WaitGroup) {
+				defer wg.Done()
+				for entry := range entryCh {
+					if !mdb.isPrimary {
+						itm := memdb.NewItem(entry)
+						mdb.back[i].Put(itm)
+					}
+				}
+			}(wId, &wg)
+		}
+
+		backIndexCallback = func(itm *memdb.Item) {
+			entryCh <- itm.Bytes()
+		}
+	}
+
+	snap, err := mdb.mainstore.LoadFromDisk(datadir, backIndexCallback)
+
+	if !mdb.isPrimary {
+		close(entryCh)
+		wg.Wait()
+	}
+
+	if err == nil {
+		snapInfo.MainSnap = snap
+		if !mdb.isPrimary {
+			snapInfo.BackSnap = mdb.backstore.NewSnapshot()
+		}
+	}
+
+	dur := time.Since(t0)
+	logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v finished reading %v. Took %v",
+		mdb.id, mdb.idxInstId, snapInfo.dataPath, dur)
+
+	return err
 }
 
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
 func (mdb *memdbSlice) RollbackToZero() error {
+	mdb.mainstore.Reset()
+	if !mdb.isPrimary {
+		mdb.backstore.Reset()
+	}
 	return nil
 }
 
@@ -628,11 +772,6 @@ func (mdb *memdbSlice) IndexInstId() common.IndexInstId {
 //is associated with
 func (mdb *memdbSlice) IndexDefnId() common.IndexDefnId {
 	return mdb.idxDefnId
-}
-
-// Returns snapshot info list
-func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
-	return nil, nil
 }
 
 // IsDirty returns true if there has been any change in
@@ -964,4 +1103,27 @@ func (s *memdbSnapshot) iterEqualKeys(k IndexKey, it *memdb.Iterator,
 	}
 
 	return err
+}
+
+func newSnapshotPath(dirpath string, newVersion bool) string {
+	var version int = 0
+	pattern := fmt.Sprintf("snapshot.*")
+	files, _ := filepath.Glob(filepath.Join(dirpath, pattern))
+	sort.Strings(files)
+
+	// Pick the first file with highest version
+	if len(files) > 0 {
+		filename := filepath.Base(files[len(files)-1])
+		_, err := fmt.Sscanf(filename, "snapshot.%d", &version)
+		if err != nil {
+			panic(fmt.Sprintf("Invalid data file %s (%v)", files[0], err))
+		}
+	}
+
+	if newVersion {
+		version++
+	}
+
+	newFilename := fmt.Sprintf("snapshot.%d", version)
+	return filepath.Join(dirpath, newFilename)
 }
