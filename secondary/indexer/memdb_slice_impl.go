@@ -432,7 +432,6 @@ func (mdb *memdbSlice) checkFatalDbError(err error) {
 type memdbSnapshotInfo struct {
 	Ts       *common.TsVbuuid
 	MainSnap *memdb.Snapshot `json:"-"`
-	BackSnap *memdb.Snapshot `json:"-"`
 
 	Committed bool `json:"-"`
 	dataPath  string
@@ -614,9 +613,6 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 
 	if err == nil {
 		snapInfo.MainSnap = snap
-		if !mdb.isPrimary {
-			snapInfo.BackSnap = mdb.backstore.NewSnapshot()
-		}
 	}
 
 	dur := time.Since(t0)
@@ -669,9 +665,6 @@ func (mdb *memdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotIn
 		Ts:        ts,
 		MainSnap:  mdb.mainstore.NewSnapshot(),
 		Committed: commit,
-	}
-	if !mdb.isPrimary {
-		newSnapshotInfo.BackSnap = mdb.backstore.NewSnapshot()
 	}
 	mdb.setCommittedCount()
 
@@ -901,9 +894,6 @@ func (s *memdbSnapshot) Close() error {
 
 func (s *memdbSnapshot) Destroy() {
 	s.info.MainSnap.Close()
-	if s.info.BackSnap != nil {
-		s.info.BackSnap.Close()
-	}
 
 	defer s.slice.DecrRef()
 }
