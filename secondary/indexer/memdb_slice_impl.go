@@ -484,6 +484,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	if platform.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
 		defer platform.StoreInt32(&mdb.isPersistorActive, 0)
 
+		t0 := time.Now()
 		dir := newSnapshotPath(mdb.path, true)
 		tmpdir := filepath.Join(mdb.path, "tmp")
 		datadir := filepath.Join(tmpdir, "data")
@@ -508,7 +509,12 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 				}
 			}
 		}
+
+		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v created ondisk snapshot %v. Took %v", mdb.id, mdb.IndexInstId, dir, time.Since(t0))
+	} else {
+		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk snapshot. A snapshot writer is in progress.", mdb.id, mdb.IndexInstId)
 	}
+
 }
 
 func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
