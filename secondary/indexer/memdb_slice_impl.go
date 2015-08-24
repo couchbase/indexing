@@ -504,20 +504,21 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			if err == nil {
 				err = os.Rename(tmpdir, dir)
 				if err == nil {
-					mdb.cleanupOldSnapshotFiles()
+					mdb.cleanupOldSnapshotFiles(mdb.maxRollbacks)
 				}
 			}
 		}
 	}
 }
 
-func (mdb *memdbSlice) cleanupOldSnapshotFiles() {
+func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 	manifests := mdb.getSnapshotManifests()
-	if len(manifests) > mdb.maxRollbacks {
-		toRemove := len(manifests) - mdb.maxRollbacks
+	if len(manifests) > keepn {
+		toRemove := len(manifests) - keepn
 		manifests = manifests[:toRemove]
 		for _, m := range manifests {
 			dir := path.Dir(m)
+			logging.Infof("MemDBSlice Removing disk snapshot %v", dir)
 			os.RemoveAll(dir)
 		}
 	}
@@ -629,6 +630,8 @@ func (mdb *memdbSlice) RollbackToZero() error {
 	if !mdb.isPrimary {
 		mdb.backstore.Reset()
 	}
+
+	mdb.cleanupOldSnapshotFiles(0)
 	return nil
 }
 
