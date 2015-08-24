@@ -1123,6 +1123,6 @@ func newSnapshotPath(dirpath string, newVersion bool) string {
 		version++
 	}
 
-	newFilename := fmt.Sprintf("snapshot.%d", version)
+	newFilename := fmt.Sprintf("snapshot.%010d", version)
 	return filepath.Join(dirpath, newFilename)
 }
