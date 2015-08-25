@@ -38,6 +38,12 @@ var (
 	ErrVbuuidMismatch     = errors.New("Mismatch in session vbuuids")
 )
 
+var secKeyBufPool *common.BytesBufPool
+
+func init() {
+	secKeyBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN)
+}
+
 type ScanReqType string
 
 const (
@@ -74,6 +80,8 @@ type ScanRequest struct {
 	CancelCh    <-chan interface{}
 
 	LogPrefix string
+
+	keyBufList []*[]byte
 }
 
 type CancelCb struct {
@@ -155,6 +163,12 @@ func (r *ScanRequest) Done() {
 	if r.Stats != nil {
 		r.Stats.numCompletedRequests.Add(1)
 	}
+
+	for _, buf := range r.keyBufList {
+		secKeyBufPool.Put(buf)
+	}
+
+	r.keyBufList = nil
 }
 
 type ScanCoordinator interface {
@@ -347,7 +361,9 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		if r.isPrimary {
 			return NewPrimaryKey(k)
 		} else {
-			return NewSecondaryKey(k)
+			buf := secKeyBufPool.Get()
+			r.keyBufList = append(r.keyBufList, buf)
+			return NewSecondaryKey(k, *buf)
 		}
 	}
 
