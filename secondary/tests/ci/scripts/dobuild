@@ -20,7 +20,7 @@ echo '</pre><h3>Building</h3><pre>'
 if [ ! -d $WORKSPACE/.repo ]; then
   mkdir -p $WORKSPACE
   cd $WORKSPACE
-  repo init -u https://git@github.com/couchbase/manifest -m sherlock.xml -g all 1>$WORKSPACE/make.log 2>&1
+  repo init -u git://github.com/couchbase/manifest -b sherlock-4.0.0 -m sherlock.xml -g all 1>$WORKSPACE/make.log 2>&1
   test $? -eq 0 || error_exit "Repo Init"
 fi
 
@@ -148,7 +148,6 @@ test $? -eq 0 || error_exit "Packaging installer"
 
 cd $WORKSPACE/voltron/build/deb/
 tar cf $WORKSPACE/installer.tar couchbase*.deb 1>/dev/null 2>&1
-tar uf $WORKSPACE/ws.tar --exclude '*.tar' --exclude '*.deb' $WORKSPACE/ 1>/dev/null 2>&1
 
 echo "Base Manifest:" >> $WORKSPACE/versions.cfg
 cd $WORKSPACE/voltron/build/deb/couchbase-server_${RELEASE}-${BLD_NUM}/opt/couchbase

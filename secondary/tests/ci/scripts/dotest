@@ -26,19 +26,24 @@ stop_cluster() {
   sleep 10
 }
 
-collect_logs_cores() {
+collects_logs() {
   if [ "$phase" = "" ]; then phase=unknown; fi
-  tar -C /tmp       --transform "s/^/cores-$phase-/" -uf $WORKSPACE/cores.tar core* 1>/dev/null 2>&1
-  tar -C $WORKSPACE --transform "s/^/logs-$phase-/"  -uf $WORKSPACE/logs.tar ns_server/logs 1>/dev/null 2>&1
-  tar -C $WORKSPACE --transform "s/^/logs-$phase-/"  -uf $WORKSPACE/logs.tar testrunner/logs 1>/dev/null 2>&1
-  tar -C $WORKSPACE --transform "s/^/logs-$phase-/"  -uf $WORKSPACE/logs.tar test.log 1>/dev/null 2>&1
-  tar -C $WORKSPACE --transform "s/^/logs-$phase-/"  -uf $WORKSPACE/logs.tar run.log 1>/dev/null 2>&1
+  for ndir in $WORKSPACE/ns_server/data/n_*; do 
+    ext="`basename $ndir`"
+    /opt/couchbase/bin/cbcollect_info --initargs $ndir/initargs $WORKSPACE/collects-$ext.zip 1>/tmp/collect-$ext.log 2>&1
+    tar -C $WORKSPACE --transform "s/^/collects-$phase-/" -uf $WORKSPACE/collects.tar $WORKSPACE/collects-$ext.zip 1>/dev/null 2>&1
+    rm $WORKSPACE/collects-$ext.zip
+  done
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar ns_server/logs 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar testrunner/logs 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar test.log 1>/dev/null 2>&1
+  tar -C $WORKSPACE --transform "s/^/logs-$phase-/" -uf $WORKSPACE/logs.tar run.log 1>/dev/null 2>&1
 }
 
 error_exit() {
   echo "</pre><h4>Testing Failed: $1</h4><pre>"
   echo "$2"
-  collect_logs_cores
+  collects_logs
   stop_cluster
   exit 2
 }
@@ -46,7 +51,7 @@ error_exit() {
 # Setup workspace
 export phase=sanity
 stop_cluster
-rm -f $WORKSPACE/logs.tar.* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-*
+rm -f $WORKSPACE/logs.tar.* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-* $WORKSPACE/collects*.zip $WORKSPACE/collects*.tar
 find ~/testdata/* -mtime +1 -exec rm {} \; 1>/dev/null 2>&1
 warmed="never"
 > $WORKSPACE/test.log
@@ -60,6 +65,7 @@ cd $WORKSPACE/testrunner
 # export GOTRACEBACK=crash
 ulimit -c unlimited
 sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
+perl -pi -e 's/num_files, 10/num_files, 50/' /opt/couchbase/etc/couchbase/static_config
 
 # Start server
 echo "</pre><h4>Functional tests</h4><pre>"
@@ -106,10 +112,10 @@ go get -t ./... 1>/dev/null 2>&1
 
 # Go tests
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/functionaltests
-go test -timeout 2h -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
-cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
 go test -timeout 4h -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
-collect_logs_cores
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
+go test -timeout 8h -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
+collects_logs
 stop_cluster
 
 # Integration tests
@@ -117,7 +123,7 @@ echo "</pre><h4>Integration tests</h4><pre>"
 export phase=integration
 cd $WORKSPACE/testrunner
 (timeout 1h make test-2i-integrations-tests 2>&1) | tee -a $WORKSPACE/test.log
-collect_logs_cores
+collects_logs
 stop_cluster
 
 # Verify results
@@ -125,6 +131,7 @@ stop_cluster
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/ci/
 grep 'make:\s\*\*\*\s\[test-2i-integrations-tests\]\s' $WORKSPACE/test.log >> /tmp/fail.log
 grep '\sfail\s*$' $WORKSPACE/test.log >> /tmp/fail.log
+grep 'FAIL\s*github.com/couchbase' $WORKSPACE/test.log >> /tmp/fail.log
 grep -- '--- FAIL:' $WORKSPACE/test.log >> /tmp/fail.log
 grep '^\s*2i' $WORKSPACE/test.log | grep 'fail\s*$' >> /tmp/fail.log
 skiplist="`cat skip.txt`"
