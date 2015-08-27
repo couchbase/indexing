@@ -108,13 +108,16 @@ loop:
 }
 
 // FIXME: this function is broken.
-func serverCallb(
-	req interface{}, conn net.Conn, quitch <-chan interface{}) {
+func serverCallb(req interface{}, conn net.Conn, quitch <-chan interface{}) {
+	var buf [1024]byte
 
 	switch req.(type) {
 	case *protobuf.StatisticsRequest:
+		protobuf.EncodeAndWrite(conn, buf[:], testStatisticsResponse)
 	case *protobuf.ScanRequest:
+		protobuf.EncodeAndWrite(conn, buf[:], testResponseStream)
 	case *protobuf.ScanAllRequest:
+		protobuf.EncodeAndWrite(conn, buf[:], testResponseStream)
 	}
 }
 

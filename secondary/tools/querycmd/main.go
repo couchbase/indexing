@@ -16,7 +16,7 @@ func usage(fset *flag.FlagSet) {
 }
 
 func main() {
-	logging.SetLogLevel(logging.Info)
+	logging.SetLogLevel(logging.Warn)
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	cmdOptions, args, fset, err := querycmd.ParseArgs(os.Args[1:])
