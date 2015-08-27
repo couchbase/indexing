@@ -81,6 +81,7 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 
 	watchInterval := config["projector.watchInterval"].Int()
 	staleTimeout := config["projector.staleTimeout"].Int()
+	go memstatLogger(int64(config["projector.memstatTick"].Int()))
 	go p.mainAdminPort(reqch)
 	go p.watcherDameon(watchInterval, staleTimeout)
 	logging.Infof("%v started ...\n", p.logPrefix)
@@ -107,6 +108,9 @@ func (p *Projector) ResetConfig(config c.Config) {
 	}
 	if cv, ok := config["projector.maxCpuPercent"]; ok {
 		c.SetNumCPUs(cv.Int())
+	}
+	if cv, ok := config["projector.memstatTick"]; ok {
+		memstatch <- int64(cv.Int())
 	}
 	p.config = p.config.Override(config)
 

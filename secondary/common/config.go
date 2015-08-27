@@ -93,6 +93,12 @@ var SystemConfig = Config{
 		projector_maxCpuPercent,
 		false, // mutable
 	},
+	"projector.memstatTick": ConfigValue{
+		0, // in milli-second
+		"in milli-second, periodically log runtime memory-stats.",
+		0,
+		false, // mutable
+	},
 	// Projector feed settings
 	"projector.routerEndpointFactory": ConfigValue{
 		RouterEndpointFactory(nil),
