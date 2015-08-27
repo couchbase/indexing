@@ -27,8 +27,8 @@ var ErrorInvalidConsistency = errors.New("queryport.invalidConsistency")
 // ErrorExpectedTimestamp
 var ErrorExpectedTimestamp = errors.New("queryport.expectedTimestamp")
 
-// These error strings need to be in sync with indexer.ErrIndexNotFound
-// and indexer.ErrIndexNotFound.
+// These error strings need to be in sync with common.ErrIndexNotFound
+// and common.ErrIndexNotReady.
 var ErrIndexNotFound = fmt.Errorf("Index not found")
 var ErrIndexNotReady = fmt.Errorf("Index not ready for serving queries")
 

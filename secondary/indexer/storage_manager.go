@@ -600,7 +600,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 		if inst, ok := s.indexInstMap[id]; !ok ||
 			inst.State == common.INDEX_STATE_DELETED {
 			for _, w := range ws {
-				w.Error(ErrIndexNotFound)
+				w.Error(common.ErrIndexNotFound)
 			}
 			delete(s.waitersMap, id)
 		}
@@ -675,7 +675,7 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	req := cmd.(*MsgIndexSnapRequest)
 	inst, found := s.indexInstMap[req.GetIndexId()]
 	if !found || inst.State == common.INDEX_STATE_DELETED {
-		req.respch <- ErrIndexNotFound
+		req.respch <- common.ErrIndexNotFound
 		return
 	}
 
@@ -812,7 +812,7 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	inst, ok := s.indexInstMap[req.GetInstId()]
 	stats := s.stats.Get()
 	if !ok || inst.State == common.INDEX_STATE_DELETED {
-		errch <- ErrIndexNotFound
+		errch <- common.ErrIndexNotFound
 		return
 	}
 

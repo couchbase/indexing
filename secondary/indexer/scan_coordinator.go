@@ -27,10 +27,6 @@ import (
 
 // Errors
 var (
-	// Error strings for ErrIndexNotFound and ErrIndexNotReady need to be
-	// in sync with errors defined in queryport/n1ql/secondary_index.go
-	ErrIndexNotFound      = errors.New("Index not found")
-	ErrIndexNotReady      = errors.New("Index not ready for serving queries")
 	ErrNotMyIndex         = errors.New("Not my index")
 	ErrInternal           = errors.New("Internal server error occured")
 	ErrSnapNotAvailable   = errors.New("No snapshot available for scan")
@@ -441,7 +437,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				r.Ts.Bucket = r.Bucket
 			}
 			if indexInst.State != common.INDEX_STATE_ACTIVE {
-				localErr = ErrIndexNotReady
+				localErr = common.ErrIndexNotReady
 			} else {
 				r.Stats = stats.indexes[r.IndexInstId]
 			}
@@ -808,7 +804,7 @@ func (s *scanCoordinator) findIndexInstance(
 			return nil, ErrNotMyIndex
 		}
 	}
-	return nil, ErrIndexNotFound
+	return nil, common.ErrIndexNotFound
 }
 
 func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {
