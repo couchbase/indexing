@@ -43,6 +43,7 @@ type DcpFeed struct {
 	toAckBytes  uint32   // bytes client has read
 	maxAckBytes uint32   // Max buffer control ack bytes
 	stats       DcpStats // Stats for dcp client
+	dcplatency  *Average
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -58,7 +59,8 @@ func NewDcpFeed(
 		reqch:     make(chan []interface{}, genChanSize),
 		finch:     make(chan bool),
 		// TODO: would be nice to add host-addr as part of prefix.
-		logPrefix: fmt.Sprintf("DCPT[%s]", name),
+		logPrefix:  fmt.Sprintf("DCPT[%s]", name),
+		dcplatency: &Average{},
 	}
 
 	mc.Hijack()
@@ -159,29 +161,18 @@ func (feed *DcpFeed) genServer(
 	}()
 
 	prefix := feed.logPrefix
-	streamPauseTm := int64(10 * 1000) // in milli-seconds
-	if val, ok := config["streamPauseTm"]; ok && val != nil {
-		streamPauseTm = int64(val.(int)) // in milli-seconds
+	latencyTick := int64(10 * 1000) // in milli-seconds
+	if val, ok := config["latencyTick"]; ok && val != nil {
+		latencyTick = int64(val.(int)) // in milli-seconds
 	}
-	streamPauseTick := time.Tick(time.Duration(streamPauseTm) * time.Millisecond)
+	latencyTm := time.Tick(time.Duration(latencyTick) * time.Millisecond)
 
 loop:
 	for {
 		select {
-		case <-streamPauseTick:
-			now := time.Now().UnixNano()
-			for _, stream := range feed.vbstreams {
-				strm_seqno := stream.Seqno
-				if stream.Snapend == 0 || strm_seqno == stream.Snapend {
-					continue
-				}
-				delta := (now - stream.LastSeen) / 1000000 // in milli-seconds
-				if stream.LastSeen != 0 && delta > streamPauseTm {
-					fmsg := "%v ##%x event for vb %v lastSeen %vSec before\n"
-					logging.Warnf(
-						fmsg, prefix, stream.AppOpaque, stream.Vbucket, delta)
-				}
-			}
+		case <-latencyTm:
+			fmsg := "%v dcp latency stats %v\n"
+			logging.Infof(fmsg, prefix, feed.dcplatency)
 
 		case msg := <-reqch:
 			cmd := msg[0].(byte)
@@ -275,6 +266,7 @@ func (feed *DcpFeed) handlePacket(
 	sendAck := false
 	prefix := feed.logPrefix
 	stream := feed.vbstreams[vb]
+	defer func() { feed.dcplatency.Add(computeLatency(stream)) }()
 	if stream == nil {
 		fmsg := "%v spurious %v for %d: %#v\n"
 		logging.Fatalf(fmsg, prefix, pkt.Opcode, vb, pkt)
@@ -871,6 +863,17 @@ func parseGetSeqnos(body []byte) (map[uint16]uint64, error) {
 	return seqnos, nil
 }
 
+func computeLatency(stream *DcpStream) int64 {
+	now := time.Now().UnixNano()
+	strm_seqno := stream.Seqno
+	if stream.Snapend == 0 || strm_seqno == stream.Snapend {
+		return 0
+	}
+	delta := now - stream.LastSeen
+	stream.LastSeen = now
+	return delta
+}
+
 // receive loop
 func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 	defer close(rcvch)
@@ -903,13 +906,14 @@ func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 		}
 		rcvch <- []interface{}{&pkt, bytes}
 		if blocked {
-			duration += time.Since(start)
+			blockedTs := time.Since(start)
+			duration += blockedTs
 			blocked = false
 			select {
 			case <-tick:
 				percent := float64(duration) / float64(time.Since(epoc))
-				fmsg := "%v DCP-socket -> projector %f%% blocked"
-				logging.Infof(fmsg, feed.logPrefix, percent)
+				fmsg := "%v DCP-socket -> projector blocked %v (%f%%)"
+				logging.Infof(fmsg, feed.logPrefix, blockedTs, percent)
 			default:
 			}
 		}

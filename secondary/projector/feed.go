@@ -1261,9 +1261,9 @@ func (feed *Feed) openFeeder(
 	}
 	name := newDCPConnectionName(bucket.Name, feed.topic, uuid.Uint64())
 	dcpConfig := map[string]interface{}{
-		"genChanSize":   feed.config["dcp.genChanSize"].Int(),
-		"dataChanSize":  feed.config["dcp.dataChanSize"].Int(),
-		"streamPauseTm": feed.config["dcp.streamPauseTm"].Int(),
+		"genChanSize":  feed.config["dcp.genChanSize"].Int(),
+		"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
+		"latencyTick":  feed.config["dcp.latencyTick"].Int(),
 	}
 	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
 	if err != nil {
@@ -1793,7 +1793,7 @@ func FeedConfigParams() []string {
 		// dcp configuration
 		"dcp.dataChanSize",
 		"dcp.genChanSize",
-		"dcp.streamPauseTm",
+		"dcp.latencyTick",
 		// dataport
 		"dataport.remoteBlock",
 		"dataport.keyChanSize",

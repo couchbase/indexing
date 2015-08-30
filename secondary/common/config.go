@@ -205,9 +205,9 @@ var SystemConfig = Config{
 		10000,
 		false, // mutable
 	},
-	"projector.dcp.streamPauseTm": ConfigValue{
+	"projector.dcp.latencyTick": ConfigValue{
 		1000, // 1 second
-		"in milliseconds, periodically check for inactive vb-streams",
+		"in milliseconds, periodically log cumulative stats of dcp latency",
 		1000,
 		false, // mutable
 	},
