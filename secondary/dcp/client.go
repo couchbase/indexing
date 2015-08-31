@@ -188,7 +188,8 @@ func isConnError(err error) bool {
 	}
 	estr := err.Error()
 	return strings.Contains(estr, "broken pipe") ||
-		strings.Contains(estr, "connection reset")
+		strings.Contains(estr, "connection reset") ||
+		strings.Contains(estr, "connection refused")
 }
 
 func (b *Bucket) doBulkGet(vb uint16, keys []string,
