@@ -528,7 +528,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 
 	snapshot, err := func() (IndexSnapshot, error) {
 		s.mu.RLock()
-		s.mu.RUnlock()
+		defer s.mu.RUnlock()
 
 		ss, ok := s.lastSnapshot[r.IndexInstId]
 		cons := *r.Consistency
