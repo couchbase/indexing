@@ -725,8 +725,11 @@ func (c *GsiClient) getConsistency(
 
 	var err error
 
-	if cons == common.QueryConsistency && vector == nil {
-		return nil, ErrorExpectedTimestamp
+	if cons == common.QueryConsistency {
+		if vector == nil {
+			return nil, ErrorExpectedTimestamp
+		}
+		return vector, nil
 
 	} else if cons == common.SessionConsistency {
 		if hash64, ok := c.getBucketHash(bucket); ok && hash64 != 0 {
