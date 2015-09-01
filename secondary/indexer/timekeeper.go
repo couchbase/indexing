@@ -2197,7 +2197,9 @@ func (tk *timekeeper) initiateRecovery(streamId common.StreamId,
 
 		restartTs := tk.ss.computeRestartTs(streamId, bucket)
 		//adjust for non-snap aligned ts
-		tk.ss.adjustNonSnapAlignedVbs(restartTs, streamId, bucket, nil, false)
+		if restartTs != nil {
+			tk.ss.adjustNonSnapAlignedVbs(restartTs, streamId, bucket, nil, false)
+		}
 
 		tk.stopTimer(streamId, bucket)
 		tk.ss.cleanupBucketFromStream(streamId, bucket)
