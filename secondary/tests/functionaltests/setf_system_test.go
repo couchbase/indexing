@@ -180,6 +180,7 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "1024")
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
+	time.Sleep(3 * time.Second)
 }
 
 // Create/drop/create a deferred build index without actually building it.
