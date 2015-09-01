@@ -60,10 +60,6 @@ const DEFAULT_MAX_SLAB_MEMORY = DEFAULT_SLAB_SIZE * 1024
 //requests
 const SLICE_COMMAND_BUFFER_SIZE = 20000
 
-//Time in milliseconds for a slice to poll for
-//any outstanding writes before commit
-const SLICE_COMMIT_POLL_INTERVAL = 10
-
 //Max Length of Secondary Key
 const MAX_SEC_KEY_LEN = 4096
 

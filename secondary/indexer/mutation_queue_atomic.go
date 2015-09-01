@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"errors"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/platform"
 	"time"
@@ -68,6 +69,9 @@ type atomicMutationQueue struct {
 	size   []platform.AlignedInt64 //size of queue per vbucket
 	maxLen int64                   //max length of queue per vbucket
 
+	allocPollInterval   uint64 //poll interval for new allocs, if queue is full
+	dequeuePollInterval uint64 //poll interval for dequeue, if waiting for mutations
+
 	free        []*node //free pointer per vbucket queue
 	stopch      []StopChannel
 	numVbuckets uint16 //num vbuckets for the queue
@@ -75,15 +79,18 @@ type atomicMutationQueue struct {
 }
 
 //NewAtomicMutationQueue allocates a new Atomic Mutation Queue and initializes it
-func NewAtomicMutationQueue(numVbuckets uint16, maxLenPerVb int64) *atomicMutationQueue {
+func NewAtomicMutationQueue(numVbuckets uint16, maxLenPerVb int64,
+	config common.Config) *atomicMutationQueue {
 
 	q := &atomicMutationQueue{head: make([]unsafe.Pointer, numVbuckets),
-		tail:        make([]unsafe.Pointer, numVbuckets),
-		free:        make([]*node, numVbuckets),
-		size:        make([]platform.AlignedInt64, numVbuckets),
-		numVbuckets: numVbuckets,
-		maxLen:      maxLenPerVb,
-		stopch:      make([]StopChannel, numVbuckets),
+		tail:                make([]unsafe.Pointer, numVbuckets),
+		free:                make([]*node, numVbuckets),
+		size:                make([]platform.AlignedInt64, numVbuckets),
+		numVbuckets:         numVbuckets,
+		maxLen:              maxLenPerVb,
+		stopch:              make([]StopChannel, numVbuckets),
+		allocPollInterval:   config["mutation_queue.allocPollInterval"].Uint64(),
+		dequeuePollInterval: config["mutation_queue.dequeuePollInterval"].Uint64(),
 	}
 
 	var x uint16
@@ -105,11 +112,6 @@ type node struct {
 	mutation *MutationKeys
 	next     *node
 }
-
-//Poll Interval for dequeue thread
-const DEQUEUE_POLL_INTERVAL = 20
-const ALLOC_POLL_INTERVAL = 30
-const MAX_VB_QUEUE_LENGTH = 1000
 
 //Enqueue will enqueue the mutation reference for given vbucket.
 //Caller should not free the mutation till it is dequeued.
@@ -171,8 +173,8 @@ func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (
 func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 	datach chan *MutationKeys) {
 
-	//every DEQUEUE_POLL_INTERVAL milliseconds, check for new mutations
-	ticker := time.NewTicker(time.Millisecond * DEQUEUE_POLL_INTERVAL)
+	//every dequeuePollInterval milliseconds, check for new mutations
+	ticker := time.NewTicker(time.Millisecond * time.Duration(q.dequeuePollInterval))
 
 	var dequeueSeq Seqno
 
@@ -213,8 +215,8 @@ func (q *atomicMutationQueue) Dequeue(vbucket Vbucket) (<-chan *MutationKeys,
 	datach := make(chan *MutationKeys)
 	stopch := make(chan bool)
 
-	//every DEQUEUE_POLL_INTERVAL milliseconds, check for new mutations
-	ticker := time.NewTicker(time.Millisecond * DEQUEUE_POLL_INTERVAL)
+	//every dequeuePollInterval milliseconds, check for new mutations
+	ticker := time.NewTicker(time.Millisecond * time.Duration(q.dequeuePollInterval))
 
 	go func() {
 		for {
@@ -312,14 +314,14 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *nod
 		}
 	}
 
-	//every ALLOC_POLL_INTERVAL milliseconds, check for free nodes
-	ticker := time.NewTicker(time.Millisecond * ALLOC_POLL_INTERVAL)
+	//every allocPollInterval milliseconds, check for free nodes
+	ticker := time.NewTicker(time.Millisecond * time.Duration(q.allocPollInterval))
 
-	var totalWait int
+	var totalWait uint64
 	for {
 		select {
 		case <-ticker.C:
-			totalWait += ALLOC_POLL_INTERVAL
+			totalWait += q.allocPollInterval
 			n = q.popFreeList(vbucket)
 			if n != nil {
 				return n

@@ -27,12 +27,11 @@ type MutationStreamReader interface {
 	Shutdown()
 }
 
-const DEFAULT_SYNC_TIMEOUT = 40
-
 type mutationStreamReader struct {
-	mutationCount uint64
-	snapStart     uint64
-	snapEnd       uint64
+	mutationCount     uint64
+	snapStart         uint64
+	snapEnd           uint64
+	syncBatchInterval uint64 //batch interval for sync message
 
 	stream   *dataport.Server //handle to the Dataport server
 	streamId common.StreamId
@@ -72,16 +71,16 @@ type mutationStreamReader struct {
 //In case returned MutationStreamReader is nil, Message will have the error msg.
 func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQueueMap,
 	bucketFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
-	numWorkers int, stats *IndexerStats) (MutationStreamReader, Message) {
+	numWorkers int, stats *IndexerStats, config common.Config) (MutationStreamReader, Message) {
 
 	//start a new mutation stream
 	streamMutch := make(chan interface{}, DATAPORT_MUTATION_BUFFER)
-	config := common.SystemConfig.SectionConfig(
-		"indexer.dataport.", true /*trim*/)
+	dpconf := config.SectionConfig(
+		"dataport.", true /*trim*/)
 	stream, err := dataport.NewServer(
 		string(StreamAddrMap[streamId]),
 		common.SystemConfig["maxVbuckets"].Int(),
-		config, streamMutch)
+		dpconf, streamMutch)
 	if err != nil {
 		//return stream init error
 		logging.Fatalf("MutationStreamReader: Error returned from NewServer."+
@@ -110,6 +109,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		bucketPrevSnapMap: make(map[string]*common.TsVbuuid),
 		bucketSyncDue:     make(map[string]bool),
 		killch:            make(chan bool),
+		syncBatchInterval: config["syncBatchInterval"].Uint64(),
 	}
 
 	r.stats.Set(stats)
@@ -677,7 +677,7 @@ func (r *mutationStreamReader) updateVbuuidInFilter(meta *MutationMeta) {
 }
 func (r *mutationStreamReader) syncWorker() {
 
-	ticker := time.NewTicker(time.Millisecond * DEFAULT_SYNC_TIMEOUT)
+	ticker := time.NewTicker(time.Millisecond * time.Duration(r.syncBatchInterval))
 
 	for {
 		select {

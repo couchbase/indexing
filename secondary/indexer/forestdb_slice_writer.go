@@ -718,7 +718,10 @@ func (fdb *fdbSlice) waitPersist() {
 		//every SLICE_COMMIT_POLL_INTERVAL milliseconds,
 		//check for outstanding mutations. If there are
 		//none, proceed with the commit.
-		ticker := time.NewTicker(time.Millisecond * SLICE_COMMIT_POLL_INTERVAL)
+		fdb.confLock.Lock()
+		commitPollInterval := fdb.sysconf["storage.commitPollInterval"].Uint64()
+		fdb.confLock.Unlock()
+		ticker := time.NewTicker(time.Millisecond * time.Duration(commitPollInterval))
 		for _ = range ticker.C {
 			if fdb.checkAllWorkersDone() {
 				break
