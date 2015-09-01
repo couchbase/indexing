@@ -1,21 +1,19 @@
 // Tool receives raw events from dcp-client.
 package main
 
-import (
-	"flag"
-	"fmt"
-	"log"
-	"os"
-	"strings"
-	"time"
+import "flag"
+import "fmt"
+import "log"
+import "os"
+import "strings"
+import "time"
 
-	"github.com/couchbase/cbauth"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/dcp"
-	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
-	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-	"github.com/couchbase/indexing/secondary/logging"
-)
+import "github.com/couchbase/cbauth"
+import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/dcp"
+import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+import "github.com/couchbase/indexing/secondary/logging"
 
 var options struct {
 	buckets    []string // buckets to connect with

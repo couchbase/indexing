@@ -138,7 +138,7 @@ func processMutations(
 				if err := json.Unmarshal([]byte(key), &secvalues); err != nil {
 					logging.Fatalf("Error in unmarshalling - %v", err)
 				} else if len(secvalues) > 0 {
-					secJSON, err := json.Marshal(secvalues[:len(secvalues)-1])
+					secJSON, err := json.Marshal(secvalues[:len(secvalues)])
 					if err != nil {
 						logging.Fatalf("Error in marshaling - %v", err)
 					}

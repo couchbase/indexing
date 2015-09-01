@@ -107,8 +107,7 @@ func main() {
 			config := c.SystemConfig.Clone()
 			config.SetValue("projector.clusterAddr", cluster)
 			config.SetValue("projector.adminport.listenAddr", adminport)
-			econf := c.SystemConfig.SectionConfig("projector.dataport.", true)
-			epfactory := NewEndpointFactory(cluster, maxvbs, econf)
+			epfactory := NewEndpointFactory(cluster, maxvbs)
 			config.SetValue("projector.routerEndpointFactory", epfactory)
 			projector.NewProjector(maxvbs, config) // start projector daemon
 		}

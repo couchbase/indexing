@@ -9,7 +9,7 @@ var defn1 = &IndexDefn{
 	Name:            proto.String("index1"),
 	Using:           StorageType_View.Enum(),
 	ExprType:        ExprType_N1QL.Enum(),
-	SecExpressions:  []string{`age`, `"first-name"`},
+	SecExpressions:  []string{`eyeColor`},
 	PartitionScheme: PartitionScheme_SINGLE.Enum(),
 	PartnExpression: proto.String(`city`),
 	WhereExpression: proto.String(`age > 30`),
@@ -22,7 +22,7 @@ var defn2 = &IndexDefn{
 	Name:            proto.String("index2"),
 	Using:           StorageType_View.Enum(),
 	ExprType:        ExprType_N1QL.Enum(),
-	SecExpressions:  []string{`city`},
+	SecExpressions:  []string{`age`},
 	PartitionScheme: PartitionScheme_SINGLE.Enum(),
 	PartnExpression: proto.String(`gender`),
 }
