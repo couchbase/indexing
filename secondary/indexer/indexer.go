@@ -3383,7 +3383,7 @@ func (idx *indexer) checkValidIndexInst(bucket string,
 				clientCh <- &MsgError{
 					err: Error{code: ERROR_INDEXER_UNKNOWN_INDEX,
 						severity: FATAL,
-						cause:    ErrIndexNotFound,
+						cause:    common.ErrIndexNotFound,
 						category: INDEXER}}
 			}
 			return false
