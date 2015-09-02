@@ -505,6 +505,12 @@ var SystemConfig = Config{
 		"./",
 		true, // immutable
 	},
+	"indexer.diagnostics_dir": ConfigValue{
+		"./",
+		"Index diagnostics information directory",
+		"./",
+		true, // immutable
+	},
 	"indexer.numSliceWriters": ConfigValue{
 		1,
 		"Number of Writer Threads for a Slice",
@@ -699,6 +705,12 @@ var SystemConfig = Config{
 		"Projector logging level",
 		"info",
 		false, // mutable
+	},
+	"projector.diagnostics_dir": ConfigValue{
+		"./",
+		"Projector diagnostics information directory",
+		"./",
+		true, // immutable
 	},
 }
 
