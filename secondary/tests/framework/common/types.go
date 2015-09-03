@@ -11,7 +11,8 @@ type ScanResponse map[string][]interface{}
 type KeyValues map[string]interface{}
 
 type ClusterConfiguration struct {
-	KVAddress string
-	Username  string
-	Password  string
+	KVAddress  string
+	Username   string
+	Password   string
+	IndexUsing string
 }

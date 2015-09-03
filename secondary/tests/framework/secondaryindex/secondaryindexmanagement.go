@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+var IndexUsing = "gsi"
+
 func CreateClient(server, serviceAddr string) (*qc.GsiClient, error) {
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 	client, err := qc.NewGsiClient(server, config)
@@ -64,12 +66,11 @@ func CreateSecondaryIndex(
 			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
 		}
 	}
-	using := "gsi"
 	exprType := "N1QL"
 	partnExp := ""
 
 	start := time.Now()
-	defnID, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
+	defnID, err := client.CreateIndex(indexName, bucketName, IndexUsing, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
 	if err == nil {
 		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)
 		e := WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
@@ -114,11 +115,10 @@ func CreateSecondaryIndexAsync(
 			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
 		}
 	}
-	using := "gsi"
 	exprType := "N1QL"
 	partnExp := ""
 
-	_, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
+	_, err := client.CreateIndex(indexName, bucketName, IndexUsing, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
 	if err == nil {
 		log.Printf("Created the secondary index %v", indexName)
 		return nil
