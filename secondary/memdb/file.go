@@ -3,7 +3,7 @@ package memdb
 import "os"
 import "bufio"
 import "errors"
-import "github.com/couchbase/goforestdb"
+import "github.com/couchbase/indexing/secondary/fdb"
 import "bytes"
 
 const DiskBlockSize = 512 * 1024
