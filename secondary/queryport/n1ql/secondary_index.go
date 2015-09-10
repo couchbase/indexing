@@ -43,10 +43,10 @@ var n1ql2GsiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 	datastore.BOTH:    qclient.Both,
 }
 var gsi2N1QLState = map[c.IndexState]datastore.IndexState{
-	c.INDEX_STATE_CREATED: datastore.PENDING, // might also be DEFERRED
-	c.INDEX_STATE_READY:   datastore.PENDING, // might also be DEFERRED
-	c.INDEX_STATE_INITIAL: datastore.BUILDING,
-	c.INDEX_STATE_CATCHUP: datastore.BUILDING,
+	c.INDEX_STATE_CREATED: datastore.PENDING,
+	c.INDEX_STATE_READY:   datastore.PENDING,
+	c.INDEX_STATE_INITIAL: datastore.PENDING,
+	c.INDEX_STATE_CATCHUP: datastore.PENDING,
 	c.INDEX_STATE_ACTIVE:  datastore.ONLINE,
 	c.INDEX_STATE_DELETED: datastore.OFFLINE,
 	c.INDEX_STATE_ERROR:   datastore.OFFLINE,
@@ -468,11 +468,6 @@ func newSecondaryIndexFromMetaData(
 		state:     gsi2N1QLState[instn.State],
 		err:       instn.Error,
 		deferred:  indexDefn.Deferred,
-	}
-	if indexDefn.Deferred &&
-		(instn.State == c.INDEX_STATE_CREATED ||
-			instn.State == c.INDEX_STATE_READY) {
-		si.state = datastore.DEFERRED
 	}
 	return si, nil
 }
