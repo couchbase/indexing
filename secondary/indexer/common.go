@@ -121,7 +121,7 @@ func (s IndexStorageStats) GetFragmentation() float64 {
 	var fragPercent float64
 
 	var wastedSpace int64
-	if s.Stats.DiskSize > s.Stats.DataSize {
+	if s.Stats.DataSize != 0 && s.Stats.DiskSize > s.Stats.DataSize {
 		wastedSpace = s.Stats.DiskSize - s.Stats.DataSize
 	}
 
