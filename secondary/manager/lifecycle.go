@@ -569,7 +569,8 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 				// delete index defn from the bucket if bucket uuid is not specified or
 				// index does *not* belong to bucket uuid
 				if /* (uuid == common.BUCKET_UUID_NIL || defn.BucketUUID != uuid) && */
-				streamId == common.NIL_STREAM || common.StreamId(defnRef.Instances[0].StreamId) == streamId {
+				streamId == common.NIL_STREAM || (common.StreamId(defnRef.Instances[0].StreamId) == streamId ||
+					common.StreamId(defnRef.Instances[0].StreamId) == common.NIL_STREAM) {
 					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false); err != nil {
 						result = err
 					}

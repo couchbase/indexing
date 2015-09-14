@@ -3552,7 +3552,8 @@ func (idx *indexer) deleteIndexInstOnDeletedBucket(bucket string, streamId commo
 	// Only mark index inst as DELETED if it is actually got deleted in metadata.
 	for _, index := range idx.indexInstMap {
 		if index.Defn.Bucket == bucket &&
-			(streamId == common.NIL_STREAM || index.Stream == streamId) {
+			(streamId == common.NIL_STREAM || (index.Stream == streamId ||
+				index.Stream == common.NIL_STREAM)) {
 
 			instIdList = append(instIdList, index.InstId)
 			idx.stats.RemoveIndex(index.InstId)
