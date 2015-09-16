@@ -437,13 +437,14 @@ func (c *GsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 		return nil, err
 	}
 
+	laddr := conn.LocalAddr()
 	timeoutMs := c.readDeadline * time.Millisecond
 	conn.SetReadDeadline(time.Now().Add(timeoutMs))
 	// <--- protobuf.*Response
 	resp, err := pkt.Receive(conn)
 	if err != nil {
-		fmsg := "%v %T response transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, req, err)
+		fmsg := "%v connection %v response %T transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, laddr, req, err)
 		healthy = false
 		return nil, err
 	}
@@ -451,8 +452,8 @@ func (c *GsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 	conn.SetReadDeadline(time.Now().Add(timeoutMs))
 	// <--- protobuf.StreamEndResponse (skipped) TODO: knock this off.
 	if endResp, err := pkt.Receive(conn); err != nil {
-		fmsg := "%v %T response transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, req, err)
+		fmsg := "%v connection %v response %T transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, laddr, req, err)
 		healthy = false
 		return nil, err
 	} else if endResp != nil {
@@ -487,7 +488,10 @@ func (c *GsiScanClient) streamResponse(
 		//}
 		//callb(resp) // callback with error
 		cont, healthy = false, false
-		if err != io.EOF {
+		if err == io.EOF {
+			fmsg := "%v connection %q closed `%v` \n"
+			logging.Errorf(fmsg, c.logPrefix, laddr, err)
+		} else {
 			fmsg := "%v connection %q response transport failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, laddr, err)
 		}
@@ -541,7 +545,8 @@ func (c *GsiScanClient) closeStream(
 		if err != nil {
 			healthy = false
 			if err == io.EOF {
-				logging.Errorf("%v connection %q closed \n", c.logPrefix, laddr)
+				fmsg := "%v connection %q closed `%v`\n"
+				logging.Errorf(fmsg, c.logPrefix, laddr, err)
 				return
 			}
 			fmsg := "%v connection %q response transport failed `%v`\n"

@@ -3,6 +3,7 @@ package client
 import "time"
 import "unsafe"
 import "io"
+import "fmt"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/platform"
@@ -664,25 +665,26 @@ func (c *GsiClient) doScan(
 	var ok1, ok2, partial bool
 	var queryport string
 	var targetDefnID uint64
+	var scan_err error
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
-	evictRetry := c.config["settings.poolSize"].Int()
+	evictRetry := 2 // c.config["settings.poolSize"].Int()
 	for i := 0; true; {
 		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i); ok1 {
 			index := c.bridge.GetIndexDefn(targetDefnID)
 			if qc, ok2 = c.queryClients[queryport]; ok2 {
 				begin := time.Now()
-				err, partial = callb(qc, index)
-				if c.isTimeit(err) {
+				scan_err, partial = callb(qc, index)
+				if c.isTimeit(scan_err) {
 					c.bridge.Timeit(targetDefnID, float64(time.Since(begin)))
-					return err
+					return scan_err
 				}
-				if err != nil && err != io.EOF && partial {
+				if scan_err != nil && scan_err != io.EOF && partial {
 					// partially succeeded scans, we don't reset-hash and we
 					// don't retry
-					return err
-				} else if err == io.EOF && evictRetry > 0 {
+					return scan_err
+				} else if scan_err == io.EOF && evictRetry > 0 {
 					logging.Warnf("evict retry (%v)...\n", evictRetry)
 					evictRetry--
 					continue
@@ -692,12 +694,13 @@ func (c *GsiClient) doScan(
 					c.setBucketHash(index.Bucket, 0)
 				}
 			}
+			err = fmt.Errorf("%v from %v", scan_err, queryport)
 		}
 
 		if i = i + 1; i < retry {
 			logging.Warnf(
 				"Trying scan again for index %v (%v %v): %v ...\n",
-				targetDefnID, ok1, ok2, err)
+				targetDefnID, ok1, ok2, scan_err)
 			c.updateScanClients()
 			time.Sleep(time.Duration(wait) * time.Millisecond)
 			continue
