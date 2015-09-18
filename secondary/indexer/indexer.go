@@ -1552,7 +1552,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	stopCh := make(StopChannel)
 
-	if _, ok := idx.streamBucketRequestStopCh[buildStream][bucket]; !ok {
+	if _, ok := idx.streamBucketRequestStopCh[buildStream]; !ok {
 		idx.streamBucketRequestStopCh[buildStream] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[buildStream][bucket] = stopCh
@@ -2265,7 +2265,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	//can be set to inactive.
 	idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
 
-	if _, ok := idx.streamBucketRequestStopCh[streamId][bucket]; !ok {
+	if _, ok := idx.streamBucketRequestStopCh[streamId]; !ok {
 		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
@@ -2410,7 +2410,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 		common.CrashOnError(respErr.cause)
 	}
 
-	if _, ok := idx.streamBucketRequestStopCh[streamId][bucket]; !ok {
+	if _, ok := idx.streamBucketRequestStopCh[streamId]; !ok {
 		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
@@ -2532,7 +2532,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		common.CrashOnError(respErr.cause)
 	}
 
-	if _, ok := idx.streamBucketRequestStopCh[streamId][bucket]; !ok {
+	if _, ok := idx.streamBucketRequestStopCh[streamId]; !ok {
 		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
