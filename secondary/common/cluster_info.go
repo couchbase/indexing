@@ -13,6 +13,7 @@ var (
 	ErrInvalidNodeId       = errors.New("Invalid NodeId")
 	ErrInvalidService      = errors.New("Invalid service")
 	ErrNodeNotBucketMember = errors.New("Node is not a member of bucket")
+	ErrValidationFailed    = errors.New("ClusterInfo Validation Failed")
 )
 
 const (
@@ -22,6 +23,7 @@ const (
 )
 
 const CLUSTER_INFO_INIT_RETRIES = 5
+const CLUSTER_INFO_VALIDATION_RETRIES = 10
 
 const BUCKET_UUID_NIL = ""
 
@@ -77,6 +79,8 @@ func (c *ClusterInfoCache) Fetch() error {
 				c.logPrefix, err, r)
 		}
 
+		vretry := 0
+	retry:
 		c.client, err = couchbase.Connect(c.url)
 		if err != nil {
 			return err
@@ -112,6 +116,19 @@ func (c *ClusterInfoCache) Fetch() error {
 			return err
 		}
 		c.nodesvs = poolServs.NodesExt
+
+		if !c.validateCache() {
+			if vretry < CLUSTER_INFO_VALIDATION_RETRIES {
+				vretry++
+				logging.Infof("%vValidation Failed for cluster info.. Retrying(%d)",
+					c.logPrefix, vretry)
+				goto retry
+			} else {
+				logging.Infof("%vValidation Failed for cluster info.. %v",
+					c.logPrefix, c)
+				return ErrValidationFailed
+			}
+		}
 
 		return nil
 	}
@@ -317,4 +334,33 @@ func (c ClusterInfoCache) GetLocalHostAddress() (string, error) {
 	}
 
 	return net.JoinHostPort(h, p), nil
+}
+
+func (c ClusterInfoCache) validateCache() bool {
+
+	var hostList1, hostList2 []string
+
+	for _, n := range c.nodes {
+		hostList1 = append(hostList1, n.Hostname)
+	}
+
+	for i, svc := range c.nodesvs {
+		h := svc.Hostname
+		p := svc.Services["mgmt"]
+
+		if h == "" {
+			h = "127.0.0.1"
+		}
+		hostList2 = append(hostList2, net.JoinHostPort(h, fmt.Sprint(p)))
+
+		if hostList1[i] != hostList2[i] {
+			return false
+		}
+	}
+
+	if len(hostList1) != len(hostList2) {
+		return false
+	}
+
+	return true
 }
