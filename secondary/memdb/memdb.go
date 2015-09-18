@@ -29,10 +29,12 @@ const (
 	RawdbFile
 )
 
+const gcchanBufSize = 256
+
 func DefaultConfig() Config {
 	var cfg Config
 	cfg.SetKeyComparator(defaultKeyCmp)
-	cfg.SetFileType(ForestdbFile)
+	cfg.SetFileType(RawdbFile)
 	return cfg
 }
 
@@ -117,9 +119,12 @@ func defaultKeyCmp(this []byte, that []byte) int {
 //
 //compare item,sn
 type Writer struct {
-	rand *rand.Rand
-	buf  *skiplist.ActionBuffer
-	iter *skiplist.Iterator
+	rand   *rand.Rand
+	buf    *skiplist.ActionBuffer
+	iter   *skiplist.Iterator
+	gchead *skiplist.Node
+	gctail *skiplist.Node
+	next   *Writer
 	*MemDB
 }
 
@@ -137,15 +142,25 @@ func (w *Writer) Delete(x *Item) (success bool) {
 		}
 	}()
 
-	gotItem := w.Get(x)
-	if gotItem != nil {
+	gotNode := w.GetNode(x)
+	if gotNode != nil {
 		sn := w.getCurrSn()
+		gotItem := gotNode.Item().(*Item)
 		if gotItem.bornSn == sn {
-			success = w.store.Delete(gotItem, w.insCmp, w.buf)
+			success = w.store.DeleteNode(gotNode, w.insCmp, w.buf)
 			return
 		}
 
 		success = atomic.CompareAndSwapUint32(&gotItem.deadSn, 0, sn)
+		if success {
+			if w.gctail == nil {
+				w.gctail = gotNode
+				w.gchead = w.gctail
+			} else {
+				w.gctail.GClink = gotNode
+				w.gctail = gotNode
+			}
+		}
 		return
 	}
 
@@ -153,28 +168,39 @@ func (w *Writer) Delete(x *Item) (success bool) {
 }
 
 func (w *Writer) Get(x *Item) *Item {
-	var curr *Item
+	n := w.GetNode(x)
+	if n != nil {
+		return n.Item().(*Item)
+	}
+	return nil
+}
+
+func (w *Writer) GetNode(x *Item) *skiplist.Node {
+	var curr *skiplist.Node
 	found := w.iter.Seek(x)
 	if !found {
 		return nil
 	}
 
 	// Seek until most recent item for key is found
-	curr = w.iter.Get().(*Item)
+	curr = w.iter.GetNode()
 	for {
 		w.iter.Next()
 		if !w.iter.Valid() {
 			break
 		}
-		next := w.iter.Get().(*Item)
-		if w.iterCmp(next, curr) != 0 {
+		next := w.iter.GetNode()
+		nxtItm := next.Item().(*Item)
+		currItm := curr.Item().(*Item)
+		if w.iterCmp(nxtItm, currItm) != 0 {
 			break
 		}
 
 		curr = next
 	}
 
-	if curr.deadSn != 0 {
+	currItm := curr.Item().(*Item)
+	if currItm.deadSn != 0 {
 		return nil
 	}
 
@@ -207,22 +233,29 @@ func (cfg *Config) SetFileType(t FileType) error {
 }
 
 type MemDB struct {
-	store       *skiplist.Skiplist
-	currSn      uint32
-	snapshots   *skiplist.Skiplist
-	isGCRunning int32
-	lastGCSn    uint32
-	count       int64
+	store        *skiplist.Skiplist
+	currSn       uint32
+	snapshots    *skiplist.Skiplist
+	gcsnapshots  *skiplist.Skiplist
+	isGCRunning  int32
+	lastGCSn     uint32
+	leastUnrefSn uint32
+	count        int64
+
+	wlist  *Writer
+	gcchan chan *skiplist.Node
 
 	Config
 }
 
 func NewWithConfig(cfg Config) *MemDB {
 	m := &MemDB{
-		store:     skiplist.New(),
-		snapshots: skiplist.New(),
-		currSn:    1,
-		Config:    cfg,
+		store:       skiplist.New(),
+		snapshots:   skiplist.New(),
+		gcsnapshots: skiplist.New(),
+		currSn:      1,
+		Config:      cfg,
+		gcchan:      make(chan *skiplist.Node, gcchanBufSize),
 	}
 
 	return m
@@ -239,19 +272,45 @@ func (m *MemDB) Reset() {
 	m.currSn = 1
 }
 
+func (m *MemDB) Close() {
+	close(m.gcchan)
+}
+
 func (m *MemDB) getCurrSn() uint32 {
 	return atomic.LoadUint32(&m.currSn)
+}
+
+func (m *MemDB) setLeastUnrefSn() {
+	buf := m.snapshots.MakeBuf()
+	defer m.snapshots.FreeBuf(buf)
+	iter := m.snapshots.NewIterator(CompareSnapshot, buf)
+	iter.SeekFirst()
+	if iter.Valid() {
+		snap := iter.Get().(*Snapshot)
+		atomic.StoreUint32(&m.leastUnrefSn, snap.sn-1)
+	}
+}
+
+func (m *MemDB) getLeastUnrefSn() uint32 {
+	return atomic.LoadUint32(&m.leastUnrefSn)
 }
 
 func (m *MemDB) NewWriter() *Writer {
 	buf := m.store.MakeBuf()
 
-	return &Writer{
+	w := &Writer{
 		rand:  rand.New(rand.NewSource(int64(rand.Int()))),
 		buf:   buf,
 		iter:  m.store.NewIterator(m.iterCmp, buf),
+		next:  m.wlist,
 		MemDB: m,
 	}
+
+	m.wlist = w
+
+	go m.collectionWorker()
+
+	return w
 }
 
 type Snapshot struct {
@@ -259,6 +318,8 @@ type Snapshot struct {
 	refCount int32
 	db       *MemDB
 	count    int64
+
+	gclist *skiplist.Node
 }
 
 func (s Snapshot) Count() int64 {
@@ -301,7 +362,11 @@ func (s *Snapshot) Close() {
 	if newRefcount == 0 {
 		buf := s.db.snapshots.MakeBuf()
 		defer s.db.snapshots.FreeBuf(buf)
+
+		// Move from live snapshot list to dead list
 		s.db.snapshots.Delete(s, CompareSnapshot, buf)
+		s.db.gcsnapshots.Insert(s, CompareSnapshot, buf)
+		s.db.setLeastUnrefSn()
 		if atomic.CompareAndSwapInt32(&s.db.isGCRunning, 0, 1) {
 			go s.db.GC()
 		}
@@ -326,6 +391,25 @@ func (m *MemDB) NewSnapshot() *Snapshot {
 	snap := &Snapshot{db: m, sn: m.getCurrSn(), refCount: 1, count: m.ItemsCount()}
 	m.snapshots.Insert(snap, CompareSnapshot, buf)
 	atomic.AddUint32(&m.currSn, 1)
+
+	// Stitch all local gclists from all writers to create snapshot gclist
+	var head, tail *skiplist.Node
+
+	for w := m.wlist; w != nil; w = w.next {
+		if tail == nil {
+			head = w.gchead
+			tail = w.gctail
+		} else if w.gchead != nil {
+			tail.GClink = w.gchead
+			tail = w.gctail
+		}
+
+		w.gchead = nil
+		w.gctail = nil
+	}
+
+	snap.gclist = head
+
 	return snap
 }
 
@@ -391,18 +475,34 @@ func (m *MemDB) ItemsCount() int64 {
 	return atomic.LoadInt64(&m.count)
 }
 
+func (m *MemDB) collectionWorker() {
+	buf := m.store.MakeBuf()
+	defer m.store.FreeBuf(buf)
+
+	for gclist := range m.gcchan {
+		for n := gclist; n != nil; n = n.GClink {
+			m.store.DeleteNode(n, m.insCmp, buf)
+		}
+	}
+}
+
 func (m *MemDB) collectDead(sn uint32) {
 	buf1 := m.snapshots.MakeBuf()
 	buf2 := m.snapshots.MakeBuf()
 	defer m.snapshots.FreeBuf(buf1)
 	defer m.snapshots.FreeBuf(buf2)
-	iter := m.store.NewIterator(m.iterCmp, buf1)
+	iter := m.gcsnapshots.NewIterator(CompareSnapshot, buf1)
 	iter.SeekFirst()
 	for ; iter.Valid(); iter.Next() {
-		itm := iter.Get().(*Item)
-		if itm.deadSn > 0 && itm.deadSn <= sn {
-			m.store.Delete(itm, m.insCmp, buf2)
+		node := iter.GetNode()
+		sn := node.Item().(*Snapshot)
+
+		if sn.sn > m.getLeastUnrefSn() {
+			return
 		}
+
+		m.gcchan <- sn.gclist
+		m.gcsnapshots.DeleteNode(node, CompareSnapshot, buf2)
 	}
 }
 
@@ -410,14 +510,10 @@ func (m *MemDB) GC() {
 	buf := m.snapshots.MakeBuf()
 	defer m.snapshots.FreeBuf(buf)
 
-	iter := m.snapshots.NewIterator(CompareSnapshot, buf)
-	iter.SeekFirst()
-	if iter.Valid() {
-		snap := iter.Get().(*Snapshot)
-		if snap.sn != m.lastGCSn && snap.sn > 1 {
-			m.lastGCSn = snap.sn - 1
-			m.collectDead(m.lastGCSn)
-		}
+	sn := m.getLeastUnrefSn()
+	if sn != m.lastGCSn && sn > 0 {
+		m.lastGCSn = sn
+		m.collectDead(m.lastGCSn)
 	}
 
 	atomic.CompareAndSwapInt32(&m.isGCRunning, 1, 0)
