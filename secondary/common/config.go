@@ -35,7 +35,7 @@ import "runtime"
 //	"indexer.dataport.tcpReadDeadline": 300 * 1000
 
 // formula to compute the default CPU allocation for projector.
-var projector_maxCpuPercent = (1 + (runtime.NumCPU() / 6)) * 100
+var projector_maxCpuPercent = runtime.NumCPU() * 100
 
 // Threadsafe config holder object
 type ConfigHolder struct {
