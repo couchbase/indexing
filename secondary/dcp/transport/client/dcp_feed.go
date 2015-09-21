@@ -884,7 +884,7 @@ func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 	var blocked bool
 
 	epoc := time.Now()
-	tick := time.Tick(time.Minute * 5) // log every 5 minutes.
+	tick := time.Tick(time.Second * 5) // log every 5 second, if blocked.
 	for {
 		pkt := transport.MCRequest{} // always a new instance.
 		bytes, err := pkt.Receive(conn.conn, headerBuf[:])
