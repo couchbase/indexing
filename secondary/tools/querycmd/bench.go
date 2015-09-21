@@ -43,34 +43,33 @@ func doBenchmark(cluster, addr string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	loopback(cluster, addr, 1)
-	loopback(cluster, addr, 2)
-	loopback(cluster, addr, 4)
-	loopback(cluster, addr, 8)
-	loopback(cluster, addr, 16)
+	loopback(cluster, addr, 10, 1000)
+	loopback(cluster, addr, 40, 1000)
+	loopback(cluster, addr, 100, 1000)
+	loopback(cluster, addr, 200, 1000)
 	s.Close()
 }
 
-func loopback(cluster, raddr string, mock_nclients int) {
+func loopback(cluster, raddr string, routines, pool_size int) {
 	qconf := c.SystemConfig.SectionConfig("queryport.client.", true)
-	qconf.SetValue("poolSize", 20)
-	qconf.SetValue("poolOverflow", 20+mock_nclients)
+	qconf.SetValue("poolSize", pool_size)
+	qconf.SetValue("poolOverflow", 20+routines)
 	client := qclient.NewGsiScanClient(raddr, qconf)
 	quitch := make(chan int)
-	for i := 0; i < mock_nclients; i++ {
+	for i := 0; i < routines; i++ {
 		t := time.After(time.Duration(mock_duration) * time.Second)
 		go runClient(client, t, quitch)
 	}
 
 	count := 0
-	for i := 0; i < mock_nclients; i++ {
+	for i := 0; i < routines; i++ {
 		n := <-quitch
 		count += n
 	}
 
 	client.Close()
-	fmsg := "Completed %v queries in %v seconds with %v routines\n"
-	fmt.Printf(fmsg, count, mock_duration, mock_nclients)
+	fmsg := "Completed %v queries in %v seconds with %v routines & %v pool_size\n"
+	fmt.Printf(fmsg, count, mock_duration, routines, pool_size)
 }
 
 func runClient(client *qclient.GsiScanClient, t <-chan time.Time, quitch chan<- int) {

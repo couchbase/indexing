@@ -19,6 +19,13 @@ func main() {
 	logging.SetLogLevel(logging.Warn)
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
+	fd, err := os.Create("queryport.pprof")
+	if err != nil {
+		panic(err)
+	}
+	pprof.StartCPUProfile(fd)
+	defer pprof.StopCPUProfile()
+
 	cmdOptions, args, fset, err := querycmd.ParseArgs(os.Args[1:])
 	if err != nil {
 		logging.Fatalf("%v", err)
