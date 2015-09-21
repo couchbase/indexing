@@ -99,7 +99,7 @@ func main() {
 			endpoint, options.stat, options.timeout, maxvbs, dconf,
 			func(addr string, msg interface{}) bool { return true })
 	}
-	go dataport.Application(options.coordEndpoint, 0, 0, maxvbs, dconf, nil)
+	//go dataport.Application(options.coordEndpoint, 0, 0, maxvbs, dconf, nil)
 
 	for _, cluster := range clusters {
 		adminport := getProjectorAdminport(cluster, "default")

@@ -6,7 +6,6 @@ import "fmt"
 import "sort"
 import "strings"
 import "time"
-import "encoding/json"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -107,8 +106,6 @@ func processMutations(
 	bucketWise map[string]map[byte]int,
 	keys map[uint64]map[string]int) int {
 
-	var secvalues []interface{}
-
 	mutations := 0
 	for _, vb := range vbs {
 		bucket, kvs := vb.GetBucketname(), vb.GetKvs()
@@ -131,24 +128,16 @@ func processMutations(
 					continue
 				}
 
-				m, ok := keys[uuid]
-				if !ok {
-					m = make(map[string]int)
-				}
-				if err := json.Unmarshal([]byte(key), &secvalues); err != nil {
-					logging.Fatalf("Error in unmarshalling - %v", err)
-				} else if len(secvalues) > 0 {
-					secJSON, err := json.Marshal(secvalues[:len(secvalues)])
-					if err != nil {
-						logging.Fatalf("Error in marshaling - %v", err)
-					}
-					key = string(secJSON)
-					if _, ok := m[key]; !ok {
-						m[key] = 0
-					}
-					m[key]++
-					keys[uuid] = m
-				}
+				//m, ok := keys[uuid]
+				//if !ok {
+				//	m = make(map[string]int)
+				//}
+				//key = string(secJSON)
+				//if _, ok := m[key]; !ok {
+				//	m[key] = 0
+				//}
+				//m[key]++
+				//keys[uuid] = m
 			}
 		}
 		bucketWise[bucket] = commandWise
