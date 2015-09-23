@@ -637,6 +637,7 @@ func (s *scanCoordinator) handleError(prefix string, err error) {
 
 func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanRequest, err error) bool {
 	if err != nil {
+		logging.Infof("%s REQUEST %s", req.LogPrefix, req)
 		logging.Infof("%s RESPONSE status:(error = %s)", req.LogPrefix, err)
 		s.handleError(req.LogPrefix, w.Error(err))
 		return true
