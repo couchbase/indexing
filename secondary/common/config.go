@@ -28,6 +28,11 @@ import "runtime"
 //      "projector.dataport.harakiriTimeout",
 //      "indexer.dataport.tcpReadDeadline",
 //
+// configurations for underprovisioned nodes,
+//	"projector.feedWaitStreamReqTimeout": 300 * 1000,
+//	"projector.feedWaitStreamEndTimeout": 300 * 1000,
+//	"projector.dataport.harakiriTimeout": 300 * 1000,
+//	"indexer.dataport.tcpReadDeadline": 300 * 1000
 
 // formula to compute the default CPU allocation for projector.
 var projector_maxCpuPercent = runtime.NumCPU() * 100
