@@ -26,7 +26,7 @@ var defaultIndexActiveTimeout int64 = 900 // 15 mins to wait for index to become
 func init() {
 	log.Printf("In init()")
 
-	logging.SetLogLevel(logging.Info)
+	logging.SetLogLevel(logging.Debug)
 	var configpath string
 	seed = 1
 	flag.StringVar(&configpath, "cbconfig", "../config/clusterrun_conf.json", "Path of the configuration file with data about Couchbase Cluster")
