@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/memdb"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	"math/rand"
 	"net"
@@ -3457,7 +3458,7 @@ func (idx *indexer) handleResetStats() {
 }
 
 func (idx *indexer) memoryUsed() int64 {
-	return int64(forestdb.BufferCacheUsed())
+	return int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse())
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst,
