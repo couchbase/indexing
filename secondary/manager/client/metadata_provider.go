@@ -139,7 +139,7 @@ func (o *MetadataProvider) WatchMetadata(indexAdminPort string, callback watcher
 	watcher, readych := o.startWatcher(indexAdminPort)
 
 	// wait for indexer to connect
-	success, _ := watcher.waitForReady(readych, 1000, nil)
+	success, _ := watcher.waitForReady(readych, 5000, nil)
 	if success {
 		// if successfully connected, retrieve indexerId
 		success, _ = watcher.notifyReady(indexAdminPort, 0, nil)
