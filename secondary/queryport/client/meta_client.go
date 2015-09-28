@@ -261,6 +261,10 @@ func (b *metadataClient) Timeit(defnID uint64, value float64) {
 	} else {
 		// compute incremental average.
 		avg, n := load.avgLoad, load.count
+		// only consider recent 16 requests for load average.
+		if load.count > 16 {
+			n = 16
+		}
 		load.avgLoad = (float64(n)*avg + float64(value)) / float64(n+1)
 		load.count = n + 1
 	}
