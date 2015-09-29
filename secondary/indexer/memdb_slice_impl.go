@@ -573,7 +573,7 @@ func (mdb *memdbSlice) GetCommittedCount() uint64 {
 func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	snapInfo := info.(*memdbSnapshotInfo)
 	mdb.mainstore.Reset()
-	if mdb.backstore != nil {
+	if !mdb.isPrimary {
 		mdb.backstore.Reset()
 	}
 
@@ -828,6 +828,10 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 }
 
 func tryClosememdbSlice(mdb *memdbSlice) {
+	mdb.mainstore.Close()
+	if !mdb.isPrimary {
+		mdb.backstore.Close()
+	}
 }
 
 func (mdb *memdbSlice) getCmdsCount() int {
