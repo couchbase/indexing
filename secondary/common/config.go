@@ -529,9 +529,9 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 	"indexer.numSliceWriters": ConfigValue{
-		1,
+		runtime.NumCPU(),
 		"Number of Writer Threads for a Slice",
-		1,
+		runtime.NumCPU(),
 		true, // immutable
 	},
 

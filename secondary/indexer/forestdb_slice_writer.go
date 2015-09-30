@@ -95,7 +95,8 @@ retry:
 		return nil, err
 	}
 
-	slice.numWriters = sysconf["numSliceWriters"].Int()
+	// ForestDB does not support multiwriters
+	slice.numWriters = 1
 	slice.main = make([]*forestdb.KVStore, slice.numWriters)
 	for i := 0; i < slice.numWriters; i++ {
 		if slice.main[i], err = slice.dbfile.OpenKVStore("main", kvconfig); err != nil {
