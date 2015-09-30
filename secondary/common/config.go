@@ -345,9 +345,9 @@ var SystemConfig = Config{
 	},
 	// indexer queryport configuration
 	"indexer.queryport.maxPayload": ConfigValue{
-		1000 * 1024,
+		64 * 1024,
 		"maximum payload, in bytes, for receiving data from client",
-		1000 * 1024,
+		64 * 1024,
 		true, // immutable
 	},
 	"indexer.queryport.readDeadline": ConfigValue{
