@@ -216,6 +216,8 @@ func (s StreamId) String() string {
 		return "CATCHUP_STREAM"
 	case INIT_STREAM:
 		return "INIT_STREAM"
+	case NIL_STREAM:
+		return "NIL_STREAM"
 	default:
 		return "INVALID_STREAM"
 	}
