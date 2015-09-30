@@ -260,12 +260,9 @@ func (b *metadataClient) Timeit(defnID uint64, value float64) {
 		b.loads[id] = &loadHeuristics{avgLoad: value, count: 1}
 	} else {
 		// compute incremental average.
-		if load.count == 0 {
-			load.avgLoad = value
-		} else {
-			load.avgLoad = (load.avgLoad + float64(value)) / 2.0
-		}
-		load.count += 1
+		avg, n := load.avgLoad, load.count
+		load.avgLoad = (float64(n)*avg + float64(value)) / float64(n+1)
+		load.count = n + 1
 	}
 }
 

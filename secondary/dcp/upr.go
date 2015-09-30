@@ -213,20 +213,16 @@ func (feed *DcpFeed) Close() error {
 }
 
 func (feed *DcpFeed) genServer(reqch chan []interface{}, opaque uint16) {
-	closeNodeFeeds := func() {
-		for _, nodeFeed := range feed.nodeFeeds {
-			nodeFeed.dcpFeed.Close()
-		}
-		feed.nodeFeeds = nil
-	}
-
 	defer func() { // panic safe
 		close(feed.finch)
 		if r := recover(); r != nil {
 			logging.Errorf("%v ##%x crashed: %v\n", feed.logPrefix, opaque, r)
 			logging.Errorf("%s", logging.StackTrace())
 		}
-		closeNodeFeeds()
+		for _, nodeFeed := range feed.nodeFeeds {
+			nodeFeed.dcpFeed.Close()
+		}
+		feed.nodeFeeds = nil
 		close(feed.output)
 	}()
 
@@ -259,7 +255,6 @@ loop:
 				respch <- []interface{}{seqnos, err}
 
 			case ufCmdClose:
-				closeNodeFeeds()
 				respch := msg[1].(chan []interface{})
 				respch <- []interface{}{nil}
 				break loop

@@ -108,9 +108,6 @@ func (ts *TsVbuuid) IsEmpty() bool {
 func (ts *TsVbuuid) Append(
 	vbno uint16, seqno, vbuuid, start, end uint64) *TsVbuuid {
 
-	if ts == nil {
-		return ts
-	}
 	snapshot := NewSnapshot(start, end)
 	ts.Vbnos = append(ts.Vbnos, uint32(vbno))
 	ts.Seqnos = append(ts.Seqnos, seqno)
