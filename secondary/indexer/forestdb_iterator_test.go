@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+func createSlice() *fdbSlice {
+	slice := &fdbSlice{}
+	slice.idxStats = &IndexStats{}
+	slice.idxStats.Init()
+	return slice
+}
+
 func TestForestDBIterator(t *testing.T) {
 	defer os.RemoveAll("test")
 
@@ -42,7 +49,7 @@ func TestForestDBIterator(t *testing.T) {
 	}
 	lastSeqNum := info.LastSeqNum()
 
-	iter, err := newForestDBIterator(nil, kvstore, lastSeqNum)
+	iter, err := newForestDBIterator(createSlice(), kvstore, lastSeqNum)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +117,7 @@ func TestForestDBIteratorSeek(t *testing.T) {
 	}
 	lastSeqNum := info.LastSeqNum()
 
-	iter, err := newForestDBIterator(nil, kvstore, lastSeqNum)
+	iter, err := newForestDBIterator(createSlice(), kvstore, lastSeqNum)
 	if err != nil {
 		t.Fatal(err)
 	}
