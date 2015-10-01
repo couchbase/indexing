@@ -180,7 +180,7 @@ func TestMultipleBucketsDeferredBuild(t *testing.T) {
 
 	kvutility.EditBucket(bucket1, "", clusterconfig.Username, clusterconfig.Password, kvaddress, "1024")
 	kvutility.DeleteBucket(bucket2, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
-	time.Sleep(3 * time.Second)
+	time.Sleep(5 * time.Second) // Wait for bucket delete to complete
 }
 
 // Create/drop/create a deferred build index without actually building it.
@@ -1061,7 +1061,7 @@ func TestDeleteBucketWhileInitialIndexBuild(t *testing.T) {
 	kvutility.FlushBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	kvutility.EditBucket(bucketNames[0], "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256")
 	tc.ClearMap(docs)
-	
+
 	for i := 1; i < numOfBuckets; i++ {
 		kvutility.DeleteBucket(bucketNames[i], "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 		kvutility.CreateBucket(bucketNames[i], "sasl", "", clusterconfig.Username, clusterconfig.Password, kvaddress, "256", proxyPorts[i])
