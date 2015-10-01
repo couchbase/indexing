@@ -62,10 +62,12 @@ from fabric.contrib.console import confirm
 import os
 import time
 
-packages = [
+pkgs = [
     "git", "mercurial", "libsasl2-2", "sasl2-bin", "gcc", "cmake", "make",
     "libsnappy-dev", "g++", "protobuf-compiler",
 ]
+
+env.use_ssh_config = True
 
 (user2i, passw2i) = "Administrator", "asdasd"
 ramsize2i = 8192
@@ -82,7 +84,6 @@ fabric.state.output["stdout"] = False
 #---- node tasks
 
 @task
-@parallel
 def uname():
     """uname returns the OS installed on all remote nodes"""
     trycmd("uname -a", v=True)
@@ -95,7 +96,7 @@ govers = {
 }
 @task
 @parallel
-def setup(gover="143"):
+def setup(os="deb", gover="143"):
     """setup target nodes in the cluster
     - create package dir under /opt
     - create gopath dir under /opt
@@ -103,21 +104,25 @@ def setup(gover="143"):
     - install golang 1.3.3 version
     - go get github.com/couchbase/indexing repository and all its deps
     """
-    for package in packages :
-        trycmd("apt-get install %s --assume-yes" % package, op="sudo")
+    if os == "deb" :
+        for package in pkgs :
+            trycmd("apt-get install %s --assume-yes" % package, op="sudo")
+    if os == "centos" :
+        for package in pkgs :
+            trycmd("yum install %s -y" % package, op="sudo")
 
     for d in [pkgdir, installdir, goproj, godeps] :
-        trycmd("rm -rf %s" % d, op="sudo")
-        trycmd("mkdir -p %s" % d, op="sudo")
-        trycmd("chown %s:%s %s" % (env.user, env.user, d), op="sudo")
+        trycmd("rm -rf %s" % d)
+        trycmd("mkdir -p %s" % d)
+        trycmd("chown %s:%s %s" % (env.user, env.user, d))
 
     # install golang
     trycmd("rm -rf %s" % goroot, op="sudo") # first un-install
     with cd(pkgdir):
         link = govers[gover]
         targz = link.split("/")[-1]
-        trycmd("wget %s" % link, op="sudo")
-        trycmd("tar -C /usr/local -xzf %s" % targz, op="sudo")
+        trycmd("wget %s" % link)
+        trycmd("tar -C /usr/local -xzf %s" % targz)
     with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot):
          trycmd("go version", v=True)
 
@@ -142,10 +147,14 @@ def setup(gover="143"):
 @parallel
 def cleanall():
     for d in [pkgdir, installdir, goproj, godeps] :
-        trycmd("rm -rf %s" %d , op="sudo")
-    trycmd("rm -f /tmp/patch*", op="sudo")
+        trycmd("rm -rf %s" %d)
+    trycmd("rm -f /tmp/patch*")
     trycmd("rm -rf %s" % goroot, op="sudo")
 
+@task
+@parallel
+def shutdown():
+    trycmd("shutdown -r now", op="sudo")
 
 @task
 @parallel
@@ -166,14 +175,16 @@ def cb_install(url=""):
         pp("error please provide a url")
         return
 
+    for d in [pkgdir, installdir, goproj, godeps] :
+        trycmd("mkdir -p %s" % d, op="sudo")
+        trycmd("chown %s:%s %s" % (env.user, env.user, d), op="sudo")
+
     installfile = url.split("/")[-1]
     commands = [
         ["rm -f couchbase-server* installer*", {}],
         ["wget %s" % url, {}],
         ["tar xvf %s" % installfile, {}],
-        ["rm -rf /opt/couchbase/", {"op":"sudo"}],
         ["dpkg -i couchbase-server_*", {"op":"sudo"}],
-        ["dpkg -i couchbase-server-dbg*", {"op":"sudo"}],
     ]
     with cd(pkgdir) :
         all(map(lambda x: trycmd(x[0], **x[1]), commands))
@@ -182,8 +193,10 @@ def cb_install(url=""):
 @parallel
 def cb_uninstall():
     """uninstall couchbase server and debug symbols"""
-    trycmd("dpkg -r couchbase-server-dbg", op="sudo")
+    for d in [pkgdir, installdir, goproj, godeps] :
+        trycmd("rm -rf %s" %d, op="sudo")
     trycmd("dpkg -r couchbase-server", op="sudo")
+    trycmd("dpkg --purge couchbase-server", op="sudo")
 
 @task
 @parallel
@@ -226,6 +239,36 @@ def server_add(services="", cluster=""):
         # server-add
         cmd = fmt_server_add % (cluster,  user2i, passw2i, env.host,
               user2i, passw2i, services)
+        trycmd(cmd, op="run")
+
+fmt_failover = "\
+./couchbase-cli failover --cluster=%s:8091 --user=%s --password=%s \
+--server-failover=%s --force"
+@task
+def failover(cluster=""):
+    pp = pp_for_host(env.host)
+    if cluster == "" :
+        print("please provide the cluster address to this node")
+        return
+
+    with cd("/opt/couchbase/bin"):
+        # server-add
+        cmd = fmt_failover % (cluster,  user2i, passw2i, env.host)
+        trycmd(cmd, op="run")
+
+fmt_rebalanceout = "\
+./couchbase-cli rebalance --cluster=%s:8091 --user=%s --password=%s \
+--server-remove=%s"
+@task
+def rebalance_out(cluster=""):
+    pp = pp_for_host(env.host)
+    if cluster == "" :
+        print("please provide the cluster address to this node")
+        return
+
+    with cd("/opt/couchbase/bin"):
+        # server-add
+        cmd = fmt_rebalanceout % (cluster,  user2i, passw2i, env.host)
         trycmd(cmd, op="run")
 
 fmt_create_bucket = "\
@@ -364,8 +407,8 @@ def rebuild_indexing(R1=""):
     target = os.sep.join([installdir, "bin"])
     with cd(path), shell_env(PATH=binpath2i,GOPATH=gopath, GOROOT=goroot):
         trycmd("cd secondary; ./build.sh; cd ..", v=True)
-        trycmd("mv secondary/cmd/projector/projector %s" % target, op="sudo", v=True)
-        trycmd("mv secondary/cmd/indexer/indexer %s" % target, op="sudo", v=True)
+        trycmd("mv secondary/cmd/projector/projector %s" % target, v=True)
+        trycmd("mv secondary/cmd/indexer/indexer %s" % target, v=True)
 
 
 @task
@@ -394,7 +437,12 @@ def pp_for_host(host_string) :
 
 def trycmd(cmd, op="run", v=False):
     pp = pp_for_host(env.host)
-    out = {"sudo": sudo, "run": run, "local": local}[op](cmd) # execute
+    if op == "sudo" :
+        out = sudo(cmd)
+    elif op == "run" :
+        out = run(cmd)
+    elif op == "local" :
+        out = local(cmd)
 
     if out.failed :
         pp("cmd failed: %s" % cmd)
