@@ -217,6 +217,39 @@ func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeout
 	return nil
 }
 
+func WaitTillAllIndexNodesActive(server string, indexerActiveTimeoutSeconds int64) error {
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return e
+	}
+	
+	start := time.Now()
+	for {
+		elapsed := time.Since(start)
+		if elapsed.Seconds() >= float64(indexerActiveTimeoutSeconds) {
+			err := errors.New(fmt.Sprintf("Indexer(s) did not become online after %d seconds", indexerActiveTimeoutSeconds))
+			return err
+		}
+		indexers, e := client.Nodes()
+		if e != nil {
+			log.Printf("Error while fetching Nodes() %v", e)
+			return e
+		}
+		
+		allIndexersActive := true
+		for _, indexer := range indexers {
+			if indexer.Status != "online" {
+				allIndexersActive = false
+			}
+		}
+		
+		if allIndexersActive == true {
+			return nil
+		}
+	}
+	return nil
+}
+
 func IndexState(indexName, bucketName, server string) (string, error) {
 	client, e := CreateClient(server, "2itest")
 	if e != nil {
