@@ -244,6 +244,7 @@ func WaitTillAllIndexNodesActive(server string, indexerActiveTimeoutSeconds int6
 		}
 		
 		if allIndexersActive == true {
+			log.Printf("All indexers are active")
 			return nil
 		}
 	}
