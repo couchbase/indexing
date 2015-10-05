@@ -31,11 +31,19 @@ IF (DEFINED FORESTDB_TARGET)
   SET (_forestdb_dep DEPENDS ${FORESTDB_TARGET})
 ENDIF (DEFINED FORESTDB_TARGET)
 
+IF (APPLE)
+  # On OS X 10.11 (El Capitan) upwards we can no longer use DYLD_LIBRARY_PATH to locate
+  # runtime dependancies. Instead add the location of forestdb etc to the actual
+  # binary itself.
+  SET (_ldflags "-extldflags '-Wl,-rpath,@executable_path/../lib'")
+ENDIF ()
+
 GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/indexer
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   ${_forestdb_dep}
   CGO_INCLUDE_DIRS "${FORESTDB_INCLUDE_DIR};${Platform_SOURCE_DIR}/include"
   CGO_LIBRARY_DIRS "${FORESTDB_LIBRARY_DIR};${Platform_BINARY_DIR}"
+  LDFLAGS "${_ldflags}"
   INSTALL_PATH bin OUTPUT indexer)
 
 GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
