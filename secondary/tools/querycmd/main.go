@@ -5,6 +5,7 @@ import "fmt"
 import "log"
 import "os"
 import "runtime"
+import "runtime/pprof"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
