@@ -27,10 +27,6 @@ import (
 
 // Errors
 var (
-	// Error strings for ErrIndexNotFound and ErrIndexNotReady need to be
-	// in sync with errors defined in queryport/n1ql/secondary_index.go
-	ErrIndexNotFound      = errors.New("Index not found")
-	ErrIndexNotReady      = errors.New("Index not ready for serving queries")
 	ErrNotMyIndex         = errors.New("Not my index")
 	ErrInternal           = errors.New("Internal server error occured")
 	ErrSnapNotAvailable   = errors.New("No snapshot available for scan")
@@ -441,7 +437,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				r.Ts.Bucket = r.Bucket
 			}
 			if indexInst.State != common.INDEX_STATE_ACTIVE {
-				localErr = ErrIndexNotReady
+				localErr = common.ErrIndexNotReady
 			} else {
 				r.Stats = stats.indexes[r.IndexInstId]
 			}
@@ -512,7 +508,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 
 	snapshot, err := func() (IndexSnapshot, error) {
 		s.mu.RLock()
-		s.mu.RUnlock()
+		defer s.mu.RUnlock()
 
 		ss, ok := s.lastSnapshot[r.IndexInstId]
 		cons := *r.Consistency
@@ -625,6 +621,7 @@ func (s *scanCoordinator) handleError(prefix string, err error) {
 
 func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanRequest, err error) bool {
 	if err != nil {
+		logging.Infof("%s REQUEST %s", req.LogPrefix, req)
 		logging.Infof("%s RESPONSE status:(error = %s)", req.LogPrefix, err)
 		s.handleError(req.LogPrefix, w.Error(err))
 		return true
@@ -808,7 +805,7 @@ func (s *scanCoordinator) findIndexInstance(
 			return nil, ErrNotMyIndex
 		}
 	}
-	return nil, ErrIndexNotFound
+	return nil, common.ErrIndexNotFound
 }
 
 func (s *scanCoordinator) handleUpdateIndexInstMap(cmd Message) {

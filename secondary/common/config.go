@@ -28,6 +28,11 @@ import "runtime"
 //      "projector.dataport.harakiriTimeout",
 //      "indexer.dataport.tcpReadDeadline",
 //
+// configurations for underprovisioned nodes,
+//		"projector.feedWaitStreamReqTimeout": 300 * 1000,
+//		"projector.feedWaitStreamEndTimeout": 300 * 1000,
+//		"projector.dataport.harakiriTimeout": 300 * 1000,
+//		"indexer.dataport.tcpReadDeadline": 300 * 1000
 
 // formula to compute the default CPU allocation for projector.
 var projector_maxCpuPercent = (1 + (runtime.NumCPU() / 6)) * 100
@@ -102,15 +107,15 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 	"projector.feedWaitStreamReqTimeout": ConfigValue{
-		10 * 1000,
+		300 * 1000,
 		"timeout, in milliseconds, to await a response for StreamRequest",
-		10 * 1000,
+		300 * 1000,
 		false, // mutable
 	},
 	"projector.feedWaitStreamEndTimeout": ConfigValue{
-		10 * 1000,
+		300 * 1000,
 		"timeout, in milliseconds, to await a response for StreamEnd",
-		10 * 1000,
+		300 * 1000,
 		false, // mutable
 	},
 	"projector.mutationChanSize": ConfigValue{
@@ -265,13 +270,13 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.dataport.harakiriTimeout": ConfigValue{
-		30 * 1000,
+		300 * 1000,
 		"timeout in milliseconds, after which endpoint will commit harakiri " +
 			"if not active, does not affect existing feeds, " +
 			"also refer to projector.adminport.readTimeout and " +
 			"indexer.dataport.tcpReadDeadline.",
-		30 * 1000, //10s
-		false,     // mutable
+		300 * 1000, //10s
+		false,      // mutable
 	},
 	"projector.dataport.maxPayload": ConfigValue{
 		1024 * 1024,
@@ -319,12 +324,12 @@ var SystemConfig = Config{
 		true,        // immutable
 	},
 	"indexer.dataport.tcpReadDeadline": ConfigValue{
-		30 * 1000,
+		300 * 1000,
 		"timeout, in milliseconds, while reading from socket, " +
 			"also refer to projector.adminport.readTimeout and " +
 			"projector.dataport.harakiriTimeout.",
-		30 * 1000, // 10s
-		true,      // immutable
+		300 * 1000, // 10s
+		false,      // mutable
 	},
 	// indexer queryport configuration
 	"indexer.queryport.maxPayload": ConfigValue{
@@ -502,6 +507,12 @@ var SystemConfig = Config{
 	"indexer.storage_dir": ConfigValue{
 		"./",
 		"Index file storage directory",
+		"./",
+		true, // immutable
+	},
+	"indexer.diagnostics_dir": ConfigValue{
+		"./",
+		"Index diagnostics information directory",
 		"./",
 		true, // immutable
 	},
@@ -699,6 +710,12 @@ var SystemConfig = Config{
 		"Projector logging level",
 		"info",
 		false, // mutable
+	},
+	"projector.diagnostics_dir": ConfigValue{
+		"./",
+		"Projector diagnostics information directory",
+		"./",
+		true, // immutable
 	},
 }
 

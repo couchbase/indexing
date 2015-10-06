@@ -522,12 +522,12 @@ func BucketTs(bucket *couchbase.Bucket, maxvb int) (seqnos, vbuuids []uint64, er
 			highseqno_s, hseq_ok := nodestat[vbhseqkey]
 			vbuuid_s, uuid_ok := nodestat[vbuuidkey]
 			if ok && hseq_ok && uuid_ok && vbstate == "active" {
-				if uuid, err := strconv.Atoi(vbuuid_s); err == nil {
-					vbuuids[i] = uint64(uuid)
+				if uuid, err := strconv.ParseUint(vbuuid_s, 10, 64); err == nil {
+					vbuuids[i] = uuid
 				}
-				if s, err := strconv.Atoi(highseqno_s); err == nil {
-					if uint64(s) > seqnos[i] {
-						seqnos[i] = uint64(s)
+				if s, err := strconv.ParseUint(highseqno_s, 10, 64); err == nil {
+					if s > seqnos[i] {
+						seqnos[i] = s
 					}
 				}
 			}

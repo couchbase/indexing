@@ -24,25 +24,32 @@ var options struct {
 	logFile     string
 	auth        string
 	loglevel    string
+	diagDir     string
 }
 
 func argParse() string {
-	flag.StringVar(&options.adminport, "adminport", "",
-		"adminport address")
-	flag.IntVar(&options.numVbuckets, "vbuckets", 1024,
-		"maximum number of vbuckets configured.")
-	flag.StringVar(&options.kvaddrs, "kvaddrs", "127.0.0.1:12000",
-		"comma separated list of kvaddrs")
-	flag.StringVar(&options.logFile, "logFile", "",
-		"output logs to file default is stdout")
-	flag.StringVar(&options.loglevel, "logLevel", "Info",
-		"Log Level - Silent, Fatal, Error, Info, Debug, Trace")
-	flag.StringVar(&options.auth, "auth", "",
-		"Auth user and password")
+	fset := flag.NewFlagSet("projector", flag.ContinueOnError)
+	fset.StringVar(&options.adminport, "adminport", "", "adminport address")
+	fset.IntVar(&options.numVbuckets, "vbuckets", 1024, "maximum number of vbuckets configured.")
+	fset.StringVar(&options.kvaddrs, "kvaddrs", "127.0.0.1:12000", "comma separated list of kvaddrs")
+	fset.StringVar(&options.logFile, "logFile", "", "output logs to file default is stdout")
+	fset.StringVar(&options.loglevel, "logLevel", "Info", "Log Level - Silent, Fatal, Error, Info, Debug, Trace")
+	fset.StringVar(&options.auth, "auth", "", "Auth user and password")
+	fset.StringVar(&options.diagDir, "diagDir", "./", "Directory for writing projector diagnostic information")
 
-	flag.Parse()
+	logging.Infof("Parsing the args")
 
-	args := flag.Args()
+	for i := 1; i < len(os.Args); i++ {
+		if err := fset.Parse(os.Args[i:i+1]); err != nil {
+			if strings.Contains(err.Error(), "flag provided but not defined") {
+				logging.Warnf("Ignoring the unspecified argument error: %v", err)
+			} else {
+				c.CrashOnError(err)
+			}
+		}
+	}
+
+	args := fset.Args()
 	if len(args) == 0 {
 		usage()
 		os.Exit(1)
@@ -75,6 +82,11 @@ func main() {
 	}
 	config.SetValue("projector.clusterAddr", cluster)
 	config.SetValue("projector.adminport.listenAddr", options.adminport)
+	config.SetValue("projector.diagnostics_dir", options.diagDir)
+
+	if err := os.MkdirAll(options.diagDir, 0755); err != nil {
+		c.CrashOnError(err)
+	}
 
 	// setup cbauth
 	if options.auth != "" {

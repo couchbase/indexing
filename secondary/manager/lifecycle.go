@@ -257,8 +257,11 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 	// is still existing in the cluster (due to race condition or network partitioned).
 	bucketUUID, err := m.verifyBucket(defn.Bucket)
 	if err != nil || bucketUUID == common.BUCKET_UUID_NIL {
-		return errors.New("Bucket does not exist or temporarily unavaible for creating new index." +
-			" Please retry the operation at a later time.")
+		if err == nil {
+			err = errors.New("Bucket not found")
+		}
+		return fmt.Errorf("Bucket does not exist or temporarily unavailable for creating new index."+
+			" Please retry the operation at a later time (err=%v).", err)
 	}
 	defn.BucketUUID = bucketUUID
 
@@ -566,7 +569,8 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 				// delete index defn from the bucket if bucket uuid is not specified or
 				// index does *not* belong to bucket uuid
 				if /* (uuid == common.BUCKET_UUID_NIL || defn.BucketUUID != uuid) && */
-				streamId == common.NIL_STREAM || common.StreamId(defnRef.Instances[0].StreamId) == streamId {
+				streamId == common.NIL_STREAM || (common.StreamId(defnRef.Instances[0].StreamId) == streamId ||
+					common.StreamId(defnRef.Instances[0].StreamId) == common.NIL_STREAM) {
 					if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), false); err != nil {
 						result = err
 					}
@@ -617,7 +621,7 @@ func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 			if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil {
 				if defn.BucketUUID != currentUUID {
 					return common.BUCKET_UUID_NIL,
-						errors.New("Bucket does not exist or temporarily unavaible for creating new index." +
+						errors.New("Bucket does not exist or temporarily unavailable for creating new index." +
 							" Please retry the operation at a later time.")
 				}
 			}

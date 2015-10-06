@@ -174,3 +174,7 @@ func Shutdown() error {
 func BufferCacheUsed() uint64 {
 	return uint64(C.fdb_get_buffer_cache_used())
 }
+
+func SetFatalErrorCallback(callback uintptr) {
+	C.fdb_set_fatal_error_callback(C.fdb_fatal_error_callback(unsafe.Pointer(callback)))
+}
