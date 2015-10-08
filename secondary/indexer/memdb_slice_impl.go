@@ -146,6 +146,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 	if !isPrimary {
 		slice.backstore = memdb.New()
 		slice.backstore.SetKeyComparator(byteItemDocIdCompare)
+		slice.backstore.DisableSnapshots()
 		slice.back = make([]*memdb.Writer, slice.numWriters)
 		for i := 0; i < slice.numWriters; i++ {
 			slice.back[i] = slice.backstore.NewWriter()
@@ -281,57 +282,49 @@ func (mdb *memdbSlice) insertPrimaryIndex(entry []byte, docid []byte, workerId i
 }
 
 func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) {
-	var oldentry []byte
-	var lookupentry []byte
 	if entry == nil {
-		lookupentry = entryBytesFromDocId(docid)
-	} else {
-		lookupentry = entry
-	}
+		// Delete existing entries from main and back
+		lookupentry := entryBytesFromDocId(docid)
 
-	oldentry = mdb.getBackIndexEntry(lookupentry, workerId)
-	if oldentry != nil {
-		if bytes.Equal(oldentry, entry) {
-			logging.Tracef("MemDBSlice::insert \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
-				"Doc Id %v. Key %v. Skipped.", mdb.id, mdb.idxInstId, string(docid), entry)
-			return
+		itm := memdb.NewItem(lookupentry)
+		t0 := time.Now()
+		n, found := mdb.back[workerId].Delete2(itm)
+		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+		platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
+
+		if found {
+			t0 := time.Now()
+			mdb.main[workerId].DeleteNode(n.GClink)
+			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+			platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
 		}
 
+	} else {
+		// 1. Replace existing back index entry
+		// 2. Delete old entry from main index
+		// 3. Insert new entry into main index
+		itm := memdb.NewItem(entry)
 		t0 := time.Now()
-		itm := memdb.NewItem(oldentry)
-		mdb.main[workerId].Delete(itm)
-		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-		platform.AddInt64(&mdb.delete_bytes, int64(len(oldentry)))
+		n, updated := mdb.back[workerId].Upsert2(itm)
+		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 
+		if updated {
+			t0 = time.Now()
+			mdb.main[workerId].DeleteNode(n.GClink)
+			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+			platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+		}
+		itm2 := memdb.NewItem(entry)
 		t0 = time.Now()
-		mdb.back[workerId].Delete(itm)
-		mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-		platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
-		mdb.isDirty = true
+		// Link back index entry with pointer to main index node
+		n.GClink = mdb.main[workerId].Put2(itm2)
+		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+		platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 	}
 
-	if entry == nil {
-		logging.Tracef("MemDBSlice::insert \n\tSliceId %v IndexInstId %v Received NIL Key for "+
-			"Doc Id %s. Skipped.", mdb.id, mdb.idxInstId, docid)
-		return
-	}
-
-	//set the back index entry <docid, encodedkey>
-	t0 := time.Now()
-	itm := memdb.NewItem(entry)
-	mdb.back[workerId].Put(itm)
-	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
-
-	t0 = time.Now()
-	itm = memdb.NewItem(entry)
-	mdb.main[workerId].Put(itm)
-	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 	mdb.isDirty = true
 }
 
-//delete does the actual delete in forestdb
 func (mdb *memdbSlice) delete(docid []byte, workerId int) {
 	if mdb.isPrimary {
 		mdb.deletePrimaryIndex(docid, workerId)
@@ -348,11 +341,11 @@ func (mdb *memdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 		return
 	}
 
-	//docid -> key format
+	// docid -> key format
 	entry, err := NewPrimaryIndexEntry(docid)
 	common.CrashOnError(err)
 
-	//delete from main index
+	// Delete from main index
 	t0 := time.Now()
 	itm := memdb.NewItem(entry.Bytes())
 	mdb.main[workerId].Delete(itm)
@@ -364,49 +357,19 @@ func (mdb *memdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 
 func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) {
 	lookupentry := entryBytesFromDocId(docid)
-	oldentry := mdb.getBackIndexEntry(lookupentry, workerId)
 
-	//if the oldkey is nil, nothing needs to be done. This is the case of deletes
-	//which happened before index was created.
-	if oldentry == nil {
-		logging.Tracef("MemDBSlice::delete \n\tSliceId %v IndexInstId %v Received NIL Key for "+
-			"Doc Id %v. Skipped.", mdb.id, mdb.idxInstId, docid)
-		return
-	}
-
-	//delete from main index
+	// Delete entry from back and main index if present
 	t0 := time.Now()
-	itm := memdb.NewItem(oldentry)
-	mdb.main[workerId].Delete(itm)
-	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.delete_bytes, int64(len(oldentry)))
-
-	//delete from the back index
-	t0 = time.Now()
-	itm = memdb.NewItem(oldentry)
-	mdb.back[workerId].Delete(itm)
-	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+	itm := memdb.NewItem(lookupentry)
+	n, success := mdb.back[workerId].Delete2(itm)
+	if success {
+		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+		platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+		t0 = time.Now()
+		mdb.main[workerId].DeleteNode(n.GClink)
+		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+	}
 	mdb.isDirty = true
-}
-
-//getBackIndexEntry returns an existing back index entry
-//given the docid
-func (mdb *memdbSlice) getBackIndexEntry(entry []byte, workerId int) []byte {
-	var gotBytes []byte
-
-	t0 := time.Now()
-	itm := memdb.NewItem(entry)
-	gotItm := mdb.back[workerId].Get(itm)
-	if gotItm == nil {
-		gotBytes = nil
-	} else {
-		gotBytes = gotItm.Bytes()
-	}
-	mdb.idxStats.Timings.stKVGet.Put(time.Now().Sub(t0))
-	platform.AddInt64(&mdb.get_bytes, int64(len(gotBytes)))
-
-	return gotBytes
 }
 
 //checkFatalDbError checks if the error returned from DB
