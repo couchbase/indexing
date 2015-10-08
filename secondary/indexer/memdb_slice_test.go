@@ -1,14 +1,24 @@
 package indexer
 
 import (
+	"flag"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"math/rand"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
 )
+
+var N *int
+
+func init() {
+	N = flag.Int("n", 10000000, "total number of docs")
+	flag.Parse()
+	logging.SetLogLevel(logging.Info)
+}
 
 const keySize = 25
 const snapIncrInterval = time.Millisecond * 10
@@ -93,10 +103,9 @@ func runFlusher(interval time.Duration, streams []chan *ientry, slice Slice, fin
 
 func TestMemDBInsertionPerf(t *testing.T) {
 	var wg sync.WaitGroup
-
 	finch := make(chan bool)
-	nPerWriter := 1000000
 	nw := runtime.GOMAXPROCS(0)
+	nPerWriter := *N / nw
 	streams := make([]chan *ientry, nw)
 	stats := &IndexStats{}
 	stats.Init()
@@ -115,6 +124,10 @@ func TestMemDBInsertionPerf(t *testing.T) {
 	for i := 0; i < nw; i++ {
 		wg.Add(1)
 		streams[i] = make(chan *ientry, 500000)
+		if i == nw-1 {
+			nPerWriter = *N - nPerWriter*i
+		}
+
 		go mutationProducer(&wg, slice, i*nPerWriter, nPerWriter, i, false, streams[i])
 	}
 
