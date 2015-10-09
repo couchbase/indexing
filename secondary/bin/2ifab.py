@@ -67,6 +67,8 @@
 # $ echo "%{group} ALL=(ALL) ALL" >> # /etc/sudoers
 # $ adduser {user} {group}
 # $ echo "{user}:{password}" | chpasswd
+# $ cbcollect-info <filename.zip>"
+# $ curl -v --upload-file logs232.tar https://s3.amazonaws.com/bugdb/jira/MB-16033/logs232.tar
 #
 
 from __future__ import with_statement
@@ -76,11 +78,13 @@ import fabric.utils
 from fabric.api import *
 from fabric.contrib.console import confirm
 import os
+import os.path
 import time
 
 pkgs = [
     "git", "mercurial", "libsasl2-2", "sasl2-bin", "gcc", "cmake", "make",
-    "libsnappy-dev", "g++", "protobuf-compiler",
+    "libsnappy-dev", "g++", "protobuf-compiler", "sysstat", "graphviz",
+    "atop", "htop", "iostats",
 ]
 
 env.use_ssh_config = True
@@ -99,11 +103,28 @@ fabric.state.output["stdout"] = False
 
 #---- node tasks
 
+ulimit_conf = """#<domain> <type> <item> <value>
+* soft nofile {flimit}
+* hard nofile {flimit}
+"""
 @task
-def uname():
+def ulimit(flimit=20000):
     """you might want to use `fab -f 2ifab.py -- <command>`"""
-    trycmd("uname -a", v=True)
+    txt = ulimit_conf.format(flimit=flimit)
+    cmd = 'echo "{txt}" >> /etc/security/limits.conf'.format(txt=txt)
+    trycmd(cmd.format(ulimit_conf=ulimit_conf), op="sudo")
 
+@task
+@parallel
+def new_user(user, passw, group) :
+    """create a new user and group"""
+    env.warn_only = True
+    trycmd('adduser {user} --disabled-password --gecos ""'.format(user=user),
+           op="sudo")
+    trycmd('adduser {user} {group}'.format(user=user,group=group), op="sudo")
+    trycmd('echo "{user}:{passw}" | chpasswd'.format(user=user,passw=passw),
+            op="sudo")
+    env.warn_only = False
 
 govers = {
     "133": "https://storage.googleapis.com/golang/go1.3.3.linux-amd64.tar.gz",
@@ -120,19 +141,16 @@ def setup(targetos="deb", gover="143"):
     - install golang specified version
     - install github.com/couchbase/indexing repository and all its deps
     """
+    packages = " ".join(pkgs)
     if targetos == "deb" :
-        for package in pkgs :
-            trycmd("apt-get install %s --assume-yes" % package, op="sudo")
+        trycmd("apt-get install %s --assume-yes" % packages, op="sudo")
     if targetos == "centos" :
-        for package in pkgs :
-            trycmd("yum install %s -y" % package, op="sudo")
+        trycmd("yum install %s -y" % packages, op="sudo")
 
-    for d in [pkgdir, installdir, goproj, godeps] :
+    for d in [pkgdir, goproj, godeps] :
        trycmd("rm -rf %s" % d, op="sudo")
        trycmd("mkdir -p %s" % d, op="sudo")
        trycmd("chown %s:%s %s" % (env.user, env.user, d), op="sudo")
-
-    trycmd("chown couchbase:couchbase %s" % installdir, op="sudo")
 
     # install golang
     trycmd("rm -rf %s" % goroot, op="sudo") # first un-install
@@ -146,32 +164,40 @@ def setup(targetos="deb", gover="143"):
 
     # clone 2i repository and all its dependencies
     with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot) :
-        trycmd("go get -d github.com/couchbase/indexing/...")
+        trycmd("go get -u -d github.com/couchbase/indexing/...")
 
     # set up protobuf
     path = os.sep.join([goproj, "src", "github.com", "golang", "protobuf"])
     with cd(path), shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot) :
-        trycmd("go install ./...", v=True)
+        trycmd("go get -u -d ./...")
+        trycmd("go install ./...")
 
 @task
 @parallel
 def cleanall():
     """cleanup /opts/{pkgs,couchbase,goproj,godeps}"""
-    for d in [pkgdir, installdir, goproj, godeps] :
+    for d in [pkgdir, goproj, godeps] :
         trycmd("rm -rf %s" %d)
     trycmd("rm -f /tmp/patch*")
     trycmd("rm -rf %s" % goroot, op="sudo")
 
 @task
 @parallel
-def shutdown():
+def reboot():
     trycmd("shutdown -r now", op="sudo")
+
+@task
+@parallel
+def killall(programs="indexer;projector"):
+    [ trycmd("killall {program}".format(program=program), op="sudo")
+      for program in programs.split(";") ]
 
 @task
 @parallel
 def fix_dpkg():
     """fix dpkg in case of broken ssh connection"""
     trycmd("dpkg --configure -a", op="sudo")
+    trycmd("apt-get update", op="sudo")
 
 
 #---- coucbase node tasks
@@ -185,12 +211,6 @@ def cb_install(url=""):
     if url == "" :
         pp("error please provide a url")
         return
-
-    for d in [pkgdir, installdir, goproj, godeps] :
-        trycmd("mkdir -p %s" % d, op="sudo")
-        trycmd("chown %s:%s %s" % (env.user, env.user, d), op="sudo")
-
-    trycmd("chown couchbase:couchbase %s" % installdir, op="sudo")
 
     installfile = url.split("/")[-1]
     commands = [
@@ -206,10 +226,13 @@ def cb_install(url=""):
 @parallel
 def cb_uninstall():
     """uninstall couchbase server"""
-    for d in [pkgdir, installdir, goproj, godeps] :
+    env.warn_only = True
+    trycmd("/etc/init.d/couchbase-server stop", op="sudo")
+    for d in [installdir] :
         trycmd("rm -rf %s" %d, op="sudo")
     trycmd("dpkg -r couchbase-server", op="sudo")
     trycmd("dpkg --purge couchbase-server", op="sudo")
+    env.warn_only = False
 
 @task
 @parallel
@@ -219,7 +242,7 @@ def cb_service(do="restart"):
 
 fmt_cluster_init = "\
 ./couchbase-cli cluster-init \
---cluster=%s:8091 --cluster-username=%s --cluster-password=%s \
+--cluster=%s --cluster-username=%s --cluster-password=%s \
 --cluster-ramsize=%s -d --services=%s"
 @task
 def cluster_init(services="",ramsize=8192):
@@ -237,12 +260,17 @@ def cluster_init(services="",ramsize=8192):
         trycmd(cmd, op="run")
 
 fmt_server_add = "\
-./couchbase-cli rebalance --cluster=%s:8091 --user=%s --password=%s \
+./couchbase-cli server-add --cluster=%s --user=%s --password=%s \
+--server-add=%s --server-add-username=%s --server-add-password=%s \
+--services='%s'"
+fmt_rebalance_in = "\
+./couchbase-cli rebalance --cluster=%s --user=%s --password=%s \
 --server-add=%s --server-add-username=%s --server-add-password=%s \
 --services='%s'"
 @task
 def server_add(services="", cluster=""):
     """add node to server"""
+
     pp = pp_for_host(env.host)
     if services == "" :
         print("please provide the services to start for this node")
@@ -254,12 +282,12 @@ def server_add(services="", cluster=""):
     services = services.replace(";",",")
     with cd("/opt/couchbase/bin"):
         # server-add
-        cmd = fmt_server_add % (cluster,  user2i, passw2i, env.host,
+        cmd = fmt_rebalance_in % (cluster,  user2i, passw2i, env.host,
               user2i, passw2i, services)
         trycmd(cmd, op="run")
 
 fmt_failover = "\
-./couchbase-cli failover --cluster=%s:8091 --user=%s --password=%s \
+./couchbase-cli failover --cluster=%s --user=%s --password=%s \
 --server-failover=%s --force"
 @task
 def failover(cluster=""):
@@ -274,7 +302,7 @@ def failover(cluster=""):
         trycmd(cmd, op="run")
 
 fmt_rebalanceout = "\
-./couchbase-cli rebalance --cluster=%s:8091 --user=%s --password=%s \
+./couchbase-cli rebalance --cluster=%s --user=%s --password=%s \
 --server-remove=%s"
 @task
 def rebalance_out(cluster=""):
@@ -290,7 +318,7 @@ def rebalance_out(cluster=""):
 
 fmt_create_bucket = "\
 ./couchbase-cli bucket-create \
---cluster=%s:8091 --user=%s --password=%s \
+--cluster=%s --user=%s --password=%s \
 --bucket=%s \
 --bucket-password="" \
 --bucket-ramsize=%s \
@@ -311,33 +339,32 @@ def create_buckets(buckets="", ramsize="2048"):
 
 fmt_bucket_flush = "\
 ./couchbase-cli bucket-flush \
---cluster=%s:8091 --user=%s --password=%s \
+--cluster=%s:%s --user=%s --password=%s \
 --bucket=%s \
 --force"
 @task
-def bucket_flush(buckets=""):
+def bucket_flush(buckets="",port="8091"):
     """flush one or more buckets"""
     if buckets == "" :
         print("please provided comma-separated list of buckets to create")
 
     for bucket in buckets.split(";") :
         with cd("/opt/couchbase/bin"):
-            cmd = fmt_bucket_flush % (env.host, user2i, passw2i, bucket)
+            cmd = fmt_bucket_flush % (env.host, port, user2i, passw2i, bucket)
             trycmd(cmd, op="run")
 
 
 fmt_loadgen = "\
-GOMAXPROCS=%s go run ./loadgen.go -v -auth %s:%s -bagdir %s -count %s -par %s \
+GOMAXPROCS=%s go run ./loadgen.go -auth %s:%s -bagdir %s -count %s -par %s \
 -buckets %s -prods %s -ratio %s %s"
 @task
 @parallel
 def loadgen(
-        cluster="localhost:9000", procs=32, count=100000, par=16, buckets="default",
-        prods="projects.prod", ratio="0;0;0") :
+        cluster="localhost:9000", procs=32, count=100000, par=16,
+        buckets="default", prods="projects.prod", ratio="0;0;0") :
     """genetate load over couchbase buckets"""
     repopath = os.sep.join(["src", "github.com", "couchbase", "indexing"])
-    path_loadgen = os.sep.join(["secondary", "tools", "loadgen"])
-    path = os.sep.join([goproj, repopath, path_loadgen])
+    pathldgn = os.sep.join([goproj, repopath, "secondary", "tools", "loadgen"])
 
     path_monster = os.sep.join(["src", "github.com", "prataprc", "monster"])
     bagdir = os.sep.join([goproj, path_monster, "bags"])
@@ -347,11 +374,64 @@ def loadgen(
     ratio = ratio.replace(";", ",")
     prodfiles = [ os.sep.join([prodpath, prod]) for prod in prods.split(";") ]
     prodfiles = ",".join(list(prodfiles))
-    with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(path) :
+    with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(pathldgn) :
         params = (
             procs, user2i, passw2i, bagdir, count, par, buckets, prodfiles,
             ratio, cluster)
         trycmd(fmt_loadgen % params, op="run")
+
+@task
+def doindex(scriptfile, cluster) :
+    """execute cbindex commands listed in the scriptfile"""
+    # build query parser
+    repopath = os.sep.join(["src", "github.com", "couchbase", "query"])
+    pathq = os.sep.join([goproj, repopath, "parser", "n1ql"])
+    with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(pathq) :
+        trycmd("./build.sh")
+
+    # build and run cbindex
+    repopath = os.sep.join(["src", "github.com", "couchbase", "indexing"])
+    pathcbidx = os.sep.join([goproj, repopath, "secondary", "cmd", "cbindex"])
+    with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(pathcbidx) :
+        trycmd("go build")
+        with open(scriptfile) as fd :
+            [ trycmd(cmd.format(cluster=cluster, user=user2i, passw=passw2i),
+                op="run", v=True)
+            for cmd in fd.readlines() if cmd.strip(" \t")[0] != '#' ]
+
+
+fmt_log2i = """\
+gunzip {comp}.log.*; cat `ls -1 {comp}.log* | sort -t. -nk3 -r` > \
+{comp}.full.log;"""
+@task
+@parallel
+def log2i(target, comps=""):
+    target = os.sep.join([target, env.host])
+    trycmd("mkdir -p {target}".format(target=target, host=env.host), op="local")
+    trycmd("rm -rf {target}".format(target=target))
+    logpath = os.sep.join([installdir, "var", "lib", "couchbase", "logs"])
+    with cd(logpath), lcd(target):
+        for comp in comps.replace(";", ",").split(";") :
+            fulllog = comp + ".full.log"
+            trycmd(fmt_log2i.format(comp=comp), op="sudo")
+            trycmd("chown {user}:{group} {f}".format(user=env.user, group=env.user, f=fulllog), op="sudo")
+            targetfile = os.sep.join([logpath, fulllog])
+            cmd = "scp -i {keyfile} {user}@{host}:{targetfile} .".format(
+                    keyfile=env.key_filename[0], user=env.user, host=env.host,
+                    targetfile=targetfile)
+            trycmd(cmd, op="local")
+
+fmt_indexperf = "\
+time GOMAXPROCS={procs} ./cbindexperf -configfile {f} -cluster {cluster}"
+@task
+@parallel
+def indexperf(cluster, configfile, procs=60):
+    """indexer performance tool"""
+    targetfile = "/" + os.sep.join(["tmp", os.path.basename(configfile)])
+    trycmd("rm -rf {f}".format(f=targetfile))
+    put(configfile, targetfile)
+    with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(path) :
+        trycmd(fmt_indexperf.format(procs=procs,f=targetfile,cluster=cluster))
 
 #---- patching and building target
 
