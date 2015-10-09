@@ -99,9 +99,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.memstatTick": ConfigValue{
-		0, // in milli-second
+		60 * 1000, // in milli-second
 		"in milli-second, periodically log runtime memory-stats.",
-		0,
+		60 * 1000,
 		false, // mutable
 	},
 	// Projector feed settings

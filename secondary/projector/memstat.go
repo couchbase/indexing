@@ -26,6 +26,7 @@ func memstatLogger(tick int64) {
 	logging.Infof("MSAT starting with %v tick ...", tick)
 
 	var oldNumGC uint32
+	var PauseNs [256]uint64
 	for {
 		oldNumGC = ms.NumGC
 		select {
@@ -38,7 +39,7 @@ func memstatLogger(tick int64) {
 				ms.HeapReleased, ms.HeapObjects,
 				ms.GCSys, ms.LastGC,
 				ms.PauseTotalNs,
-				reprList(newPauseNs(ms.PauseNs[:], oldNumGC, ms.NumGC)),
+				reprList(newPauseNs(PauseNs[:], ms.PauseNs[:], oldNumGC, ms.NumGC)),
 				ms.NumGC)
 
 		case tick = <-memstatch:
@@ -49,15 +50,15 @@ func memstatLogger(tick int64) {
 	}
 }
 
-func newPauseNs(pauseNs []uint64, oldcount, newcount uint32) []uint64 {
+func newPauseNs(pad, pauseNs []uint64, oldcount, newcount uint32) []uint64 {
 	diff := (newcount - oldcount)
 	if diff >= 256 {
 		return pauseNs[:]
 	}
-	for i := oldcount + 1; i <= newcount; i++ {
-		pauseNs[i] = pauseNs[(i+255)%256]
+	for i, j := 0, oldcount+1; j <= newcount; i, j = i+1, j+1 {
+		pad[i] = pauseNs[(j+255)%256]
 	}
-	return pauseNs[:diff]
+	return pad[:diff]
 }
 
 func reprList(pauseNs []uint64) string {
