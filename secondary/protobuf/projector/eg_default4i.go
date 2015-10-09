@@ -4,54 +4,50 @@ import "github.com/golang/protobuf/proto"
 
 var defn1 = &IndexDefn{
 	DefnID:          proto.Uint64(10),
-	Bucket:          proto.String("users"),
+	Bucket:          proto.String("default"),
 	IsPrimary:       proto.Bool(false),
 	Name:            proto.String("index1"),
 	Using:           StorageType_View.Enum(),
 	ExprType:        ExprType_N1QL.Enum(),
-	SecExpressions:  []string{`eyeColor`},
+	SecExpressions:  []string{`name`},
 	PartitionScheme: PartitionScheme_SINGLE.Enum(),
-	PartnExpression: proto.String(`city`),
-	WhereExpression: proto.String(`age > 30`),
 }
 
 var defn2 = &IndexDefn{
 	DefnID:          proto.Uint64(11),
-	Bucket:          proto.String("users"),
+	Bucket:          proto.String("default"),
 	IsPrimary:       proto.Bool(false),
 	Name:            proto.String("index2"),
 	Using:           StorageType_View.Enum(),
 	ExprType:        ExprType_N1QL.Enum(),
-	SecExpressions:  []string{`age`},
+	SecExpressions:  []string{`members`},
 	PartitionScheme: PartitionScheme_SINGLE.Enum(),
-	PartnExpression: proto.String(`gender`),
 }
 
 var defn3 = &IndexDefn{
 	DefnID:          proto.Uint64(12),
-	Bucket:          proto.String("projects"),
+	Bucket:          proto.String("default"),
 	IsPrimary:       proto.Bool(false),
 	Name:            proto.String("index3"),
 	Using:           StorageType_View.Enum(),
 	ExprType:        ExprType_N1QL.Enum(),
-	SecExpressions:  []string{`name`},
+	SecExpressions:  []string{`language`},
 	PartitionScheme: PartitionScheme_SINGLE.Enum(),
-	PartnExpression: proto.String(`language`),
 }
 
 var defn4 = &IndexDefn{
 	DefnID:          proto.Uint64(13),
-	Bucket:          proto.String("beer-sample"),
+	Bucket:          proto.String("default"),
 	IsPrimary:       proto.Bool(false),
 	Name:            proto.String("index4"),
 	Using:           StorageType_View.Enum(),
 	ExprType:        ExprType_N1QL.Enum(),
-	SecExpressions:  []string{`name`},
+	SecExpressions:  []string{`type`},
 	PartitionScheme: PartitionScheme_SINGLE.Enum(),
 }
 
-// ExampleIndexInstances on buckets and documents created by tools/loadgen.
-func ExampleIndexInstances(
+// ScaleDefault4i on buckets and documents created by tools/loadgen.
+func ScaleDefault4i(
 	buckets, endpoints []string, coordEndpoint string) []*Instance {
 
 	partn := NewSinglePartition(endpoints).SetCoordinatorEndpoint(coordEndpoint)

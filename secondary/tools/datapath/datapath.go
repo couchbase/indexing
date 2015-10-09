@@ -119,7 +119,7 @@ func main() {
 	}
 
 	// index instances for specified buckets.
-	instances := protobuf.ExampleIndexInstances(
+	instances := protobuf.ScaleDefault4i(
 		options.buckets, options.endpoints, options.coordEndpoint)
 
 	// start backfill stream on each projector
