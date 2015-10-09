@@ -92,6 +92,7 @@ func main() {
 
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	dconf := c.SystemConfig.SectionConfig("indexer.dataport.", true)
+	dconf.SetValue("genServerChanSize", 1000000)
 
 	// start dataport servers.
 	for _, endpoint := range options.endpoints {
