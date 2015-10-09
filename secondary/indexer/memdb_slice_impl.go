@@ -294,7 +294,7 @@ func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) 
 
 		if found {
 			t0 := time.Now()
-			mdb.main[workerId].DeleteNode(n.GClink)
+			mdb.main[workerId].DeleteNode(n.GetLink())
 			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 			platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
 		}
@@ -310,14 +310,14 @@ func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) 
 
 		if updated {
 			t0 = time.Now()
-			mdb.main[workerId].DeleteNode(n.GClink)
+			mdb.main[workerId].DeleteNode(n.GetLink())
 			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 			platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
 		itm2 := memdb.NewItem(entry)
 		t0 = time.Now()
 		// Link back index entry with pointer to main index node
-		n.GClink = mdb.main[workerId].Put2(itm2)
+		n.SetLink(mdb.main[workerId].Put2(itm2))
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 		platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 	}
@@ -366,7 +366,7 @@ func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) {
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 		platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		t0 = time.Now()
-		mdb.main[workerId].DeleteNode(n.GClink)
+		mdb.main[workerId].DeleteNode(n.GetLink())
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 	}
 	mdb.isDirty = true
@@ -547,7 +547,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 	var wg sync.WaitGroup
 
 	var backIndexCallback memdb.ItemCallback
-	entryCh := make(chan []byte, 1000)
+	entryCh := make(chan *memdb.ItemEntry, 1000)
 
 	logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v reading %v",
 		mdb.id, mdb.idxInstId, snapInfo.dataPath)
@@ -562,15 +562,16 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 				defer wg.Done()
 				for entry := range entryCh {
 					if !mdb.isPrimary {
-						itm := memdb.NewItem(entry)
-						mdb.back[i].Put(itm)
+						itm := memdb.NewItem(entry.Item().Bytes())
+						n := mdb.back[i].Put2(itm)
+						n.SetLink(entry.Node())
 					}
 				}
 			}(wId, &wg)
 		}
 
-		backIndexCallback = func(itm *memdb.Item) {
-			entryCh <- itm.Bytes()
+		backIndexCallback = func(e *memdb.ItemEntry) {
+			entryCh <- e
 		}
 	}
 
