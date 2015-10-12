@@ -74,7 +74,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	numWorkers int, stats *IndexerStats, config common.Config) (MutationStreamReader, Message) {
 
 	//start a new mutation stream
-	streamMutch := make(chan interface{}, DATAPORT_MUTATION_BUFFER)
+	streamMutch := make(chan interface{}, config["stream_reader.mutationBuffer"].Uint64())
 	dpconf := config.SectionConfig(
 		"dataport.", true /*trim*/)
 	stream, err := dataport.NewServer(
@@ -109,7 +109,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		bucketPrevSnapMap: make(map[string]*common.TsVbuuid),
 		bucketSyncDue:     make(map[string]bool),
 		killch:            make(chan bool),
-		syncBatchInterval: config["syncBatchInterval"].Uint64(),
+		syncBatchInterval: config["stream_reader.syncBatchInterval"].Uint64(),
 	}
 
 	r.stats.Set(stats)
@@ -123,7 +123,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 
 	//init worker buffers
 	for w := 0; w < r.numWorkers; w++ {
-		r.workerch[w] = make(MutationChannel, MAX_STREAM_READER_WORKER_BUFFER)
+		r.workerch[w] = make(MutationChannel, config["stream_reader.workerBuffer"].Uint64())
 	}
 
 	//start stream workers
