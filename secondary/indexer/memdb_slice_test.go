@@ -13,9 +13,13 @@ import (
 )
 
 var N *int
+var isPrimary *bool
+var lockThreads *bool
 
 func init() {
 	N = flag.Int("n", 10000000, "total number of docs")
+	isPrimary = flag.Bool("primary", false, "Is primary index")
+	lockThreads = flag.Bool("lockThreads", false, "Lock worker goroutines to a thread")
 	flag.Parse()
 	logging.SetLogLevel(logging.Info)
 }
@@ -42,6 +46,10 @@ func randString(r *rand.Rand, n int) string {
 func mutationProducer(wg *sync.WaitGroup, s Slice, offset, n, id int, isRand bool, stream chan *ientry) {
 	defer wg.Done()
 
+	if *lockThreads {
+		runtime.LockOSThread()
+	}
+
 	rnd := rand.New(rand.NewSource(int64(rand.Int())))
 	for i := 0; i < n; i++ {
 		docN := i + offset
@@ -64,6 +72,10 @@ func mutationProducer(wg *sync.WaitGroup, s Slice, offset, n, id int, isRand boo
 
 func flushWorker(wg *sync.WaitGroup, stream chan *ientry, n int, slice Slice) {
 	defer wg.Done()
+
+	if *lockThreads {
+		runtime.LockOSThread()
+	}
 
 	for i := 0; i < n; i++ {
 		entry := <-stream
@@ -113,11 +125,9 @@ func TestMemDBInsertionPerf(t *testing.T) {
 	cfg.SetValue("numSliceWriters", nw)
 
 	slice, err := NewMemDBSlice("/tmp/mdbslice",
-		SliceId(0), common.IndexDefnId(0), common.IndexInstId(0), false,
+		SliceId(0), common.IndexDefnId(0), common.IndexInstId(0), *isPrimary,
 		cfg, stats)
 	common.CrashOnError(err)
-
-	n := nw * nPerWriter
 
 	// Initial build
 	t1 := time.Now()
@@ -153,6 +163,10 @@ func TestMemDBInsertionPerf(t *testing.T) {
 
 	runFlusher(snapIncrInterval, streams, slice, finch)
 	dur2 := time.Since(t2)
-	fmt.Printf("Initial build: %d items took %v -> %v items/s\n", n, dur1, float64(n)/dur1.Seconds())
-	fmt.Printf("Incr build: %d items took %v -> %v items/s\n", n, dur2, float64(n)/dur2.Seconds())
+	fmt.Printf("Initial build: %d items took %v -> %v items/s\n", *N, dur1, float64(*N)/dur1.Seconds())
+	fmt.Printf("Incr build: %d items took %v -> %v items/s\n", *N, dur2, float64(*N)/dur2.Seconds())
+	fmt.Println("Main Index:", slice.mainstore.DumpStats())
+	if !*isPrimary {
+		fmt.Println("Back Index:", slice.backstore.DumpStats())
+	}
 }
