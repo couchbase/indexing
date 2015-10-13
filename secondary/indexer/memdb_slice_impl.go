@@ -259,26 +259,14 @@ func (mdb *memdbSlice) insert(entry []byte, docid []byte, workerId int) {
 }
 
 func (mdb *memdbSlice) insertPrimaryIndex(entry []byte, docid []byte, workerId int) {
-	var found *memdb.Item
-
 	logging.Tracef("MemDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", mdb.id, mdb.idxInstId, docid)
 
-	//check if the docid exists in the main index
 	t0 := time.Now()
 	itm := memdb.NewItem(entry)
-	if found = mdb.main[workerId].Get(itm); found != nil {
-		mdb.idxStats.Timings.stKVGet.Put(time.Now().Sub(t0))
-		//skip
-		logging.Tracef("MemDBSlice::insert \n\tSliceId %v IndexInstId %v Key %v Already Exists. "+
-			"Primary Index Update Skipped.", mdb.id, mdb.idxInstId, string(docid))
-	} else {
-		t0 := time.Now()
-		itm := memdb.NewItem(entry)
-		mdb.main[workerId].Put(itm)
-		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-		platform.AddInt64(&mdb.insert_bytes, int64(len(entry)))
-		mdb.isDirty = true
-	}
+	mdb.main[workerId].Put(itm)
+	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+	platform.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+	mdb.isDirty = true
 }
 
 func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) {
