@@ -190,6 +190,7 @@ func (m *QueryPayload) GetStreamEnd() *StreamEndResponse {
 type StatisticsRequest struct {
 	DefnID           *uint64 `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
 	Span             *Span   `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
+	RequestId        *string `protobuf:"bytes,3,opt,name=requestId" json:"requestId,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
@@ -202,6 +203,13 @@ func (m *StatisticsRequest) GetDefnID() uint64 {
 		return *m.DefnID
 	}
 	return 0
+}
+
+func (m *StatisticsRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
 }
 
 func (m *StatisticsRequest) GetSpan() *Span {
@@ -243,6 +251,7 @@ type ScanRequest struct {
 	Limit            *int64         `protobuf:"varint,4,req,name=limit" json:"limit,omitempty"`
 	Cons             *uint32        `protobuf:"varint,5,req,name=cons" json:"cons,omitempty"`
 	Vector           *TsConsistency `protobuf:"bytes,6,opt,name=vector" json:"vector,omitempty"`
+	RequestId        *string        `protobuf:"bytes,7,opt,name=requestId" json:"requestId,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -255,6 +264,13 @@ func (m *ScanRequest) GetDefnID() uint64 {
 		return *m.DefnID
 	}
 	return 0
+}
+
+func (m *ScanRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
 }
 
 func (m *ScanRequest) GetSpan() *Span {
@@ -298,6 +314,7 @@ type ScanAllRequest struct {
 	Limit            *int64         `protobuf:"varint,2,req,name=limit" json:"limit,omitempty"`
 	Cons             *uint32        `protobuf:"varint,3,req,name=cons" json:"cons,omitempty"`
 	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
+	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -310,6 +327,13 @@ func (m *ScanAllRequest) GetDefnID() uint64 {
 		return *m.DefnID
 	}
 	return 0
+}
+
+func (m *ScanAllRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
 }
 
 func (m *ScanAllRequest) GetLimit() int64 {
@@ -389,6 +413,7 @@ type CountRequest struct {
 	Span             *Span          `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
 	Cons             *uint32        `protobuf:"varint,3,req,name=cons" json:"cons,omitempty"`
 	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
+	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -401,6 +426,13 @@ func (m *CountRequest) GetDefnID() uint64 {
 		return *m.DefnID
 	}
 	return 0
+}
+
+func (m *CountRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
 }
 
 func (m *CountRequest) GetSpan() *Span {

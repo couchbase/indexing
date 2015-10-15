@@ -33,8 +33,9 @@ message QueryPayload {
 
 // Get Index statistics. StatisticsResponse is returned back from indexer.
 message StatisticsRequest {
-    required uint64 defnID = 1;
-    required Span   span   = 2;
+    required uint64 defnID    = 1;
+    required Span   span      = 2;
+    optional string requestId = 3;
 }
 
 message StatisticsResponse {
@@ -44,20 +45,22 @@ message StatisticsResponse {
 
 // Scan request to indexer.
 message ScanRequest {
-    required uint64        defnID   = 1;
-    required Span          span     = 2;
-    required bool          distinct = 3;
-    required int64         limit    = 4;
-    required uint32        cons     = 5;
-    optional TsConsistency vector   = 6;
+    required uint64        defnID    = 1;
+    required Span          span      = 2;
+    required bool          distinct  = 3;
+    required int64         limit     = 4;
+    required uint32        cons      = 5;
+    optional TsConsistency vector    = 6;
+    optional string        requestId = 7;
 }
 
 // Full table scan request from indexer.
 message ScanAllRequest {
-    required uint64        defnID   = 1;
-    required int64         limit    = 2;
-    required uint32        cons     = 3;
-    optional TsConsistency vector   = 4;
+    required uint64        defnID     = 1;
+    required int64         limit     = 2;
+    required uint32        cons      = 3;
+    optional TsConsistency vector    = 4;
+    optional string        requestId = 5;
 }
 
 // Request by client to stop streaming the query results.
@@ -76,10 +79,11 @@ message StreamEndResponse {
 
 // Count request to indexer.
 message CountRequest {
-    required uint64        defnID   = 1;
-    required Span          span     = 2;
-    required uint32        cons     = 3;
-    optional TsConsistency vector   = 4;
+    required uint64        defnID    = 1;
+    required Span          span      = 2;
+    required uint32        cons      = 3;
+    optional TsConsistency vector    = 4;
+    optional string        requestId = 5;
 }
 
 // total number of entries in index.
