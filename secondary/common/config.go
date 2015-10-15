@@ -595,7 +595,12 @@ var SystemConfig = Config{
 		uint64(1),
 		false, // mutable
 	},
-
+	"indexer.memstatTick": ConfigValue{
+		60 * 1000, // in milli-second
+		"in milli-second, periodically log runtime memory-stats.",
+		60 * 1000,
+		false, // mutable
+	},
 	// Indexer dynamic settings
 	"indexer.settings.compaction.check_period": ConfigValue{
 		30,

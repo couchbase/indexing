@@ -626,6 +626,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 			idx.config["settings.memory_quota"].Uint64() {
 			idx.stats.needsRestart.Set(true)
 		}
+		if cv, ok := newConfig["memstatTick"]; ok {
+			common.Memstatch <- int64(cv.Int())
+		}
 		idx.setProfilerOptions(newConfig)
 		idx.config = newConfig
 		idx.compactMgrCmdCh <- msg

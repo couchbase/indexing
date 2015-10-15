@@ -1,4 +1,4 @@
-package projector
+package common
 
 import "time"
 import "runtime"
@@ -7,7 +7,7 @@ import "strconv"
 
 import "github.com/couchbase/indexing/secondary/logging"
 
-var memstatch = make(chan int64, 16)
+var Memstatch = make(chan int64, 16)
 var fmemsg = strings.Replace(`memstats {
 "Alloc":%v, "TotalAlloc":%v, "Sys":%v, "Lookups":%v, "Mallocs":%v,
 "Frees":%v, "HeapAlloc":%v, "HeapSys":%v, "HeapIdle":%v, "HeapInuse":%v,
@@ -16,7 +16,7 @@ var fmemsg = strings.Replace(`memstats {
 "PauseTotalNs":%v, "PauseNs":%v, "NumGC":%v
 }`, "\n", "", -1)
 
-func memstatLogger(tick int64) {
+func MemstatLogger(tick int64) {
 	var ms runtime.MemStats
 	var tickTm <-chan time.Time
 
@@ -42,7 +42,7 @@ func memstatLogger(tick int64) {
 				reprList(newPauseNs(PauseNs[:], ms.PauseNs[:], oldNumGC, ms.NumGC)),
 				ms.NumGC)
 
-		case tick = <-memstatch:
+		case tick = <-Memstatch:
 			if tick > 0 {
 				tickTm = time.Tick(time.Duration(tick) * time.Millisecond)
 			}

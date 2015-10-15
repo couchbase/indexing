@@ -31,22 +31,22 @@ func main() {
 
 	fset := flag.NewFlagSet("indexer", flag.ContinueOnError)
 
-	logLevel          := fset.String("loglevel", "Info", "Log Level - Silent, Fatal, Error, Info, Debug, Trace")
-	numVbuckets       := fset.Int("vbuckets", indexer.MAX_NUM_VBUCKETS, "Number of vbuckets configured in Couchbase")
-	cluster           := fset.String("cluster", indexer.DEFAULT_CLUSTER_ENDPOINT, "Couchbase cluster address")
-	adminPort         := fset.String("adminPort", "9100", "Index ddl and status port")
-	scanPort          := fset.String("scanPort", "9101", "Index scanner port")
-	httpPort          := fset.String("httpPort", "9102", "Index http mgmt port")
-	streamInitPort    := fset.String("streamInitPort", "9103", "Index initial stream port")
+	logLevel := fset.String("loglevel", "Info", "Log Level - Silent, Fatal, Error, Info, Debug, Trace")
+	numVbuckets := fset.Int("vbuckets", indexer.MAX_NUM_VBUCKETS, "Number of vbuckets configured in Couchbase")
+	cluster := fset.String("cluster", indexer.DEFAULT_CLUSTER_ENDPOINT, "Couchbase cluster address")
+	adminPort := fset.String("adminPort", "9100", "Index ddl and status port")
+	scanPort := fset.String("scanPort", "9101", "Index scanner port")
+	httpPort := fset.String("httpPort", "9102", "Index http mgmt port")
+	streamInitPort := fset.String("streamInitPort", "9103", "Index initial stream port")
 	streamCatchupPort := fset.String("streamCatchupPort", "9104", "Index catchup stream port")
-	streamMaintPort   := fset.String("streamMaintPort", "9105", "Index maintenance stream port")
-	storageDir        := fset.String("storageDir", "./", "Index file storage directory path")
-	diagDir           := fset.String("diagDir", "./", "Directory for writing index diagnostic information")
-	enableManager     := fset.Bool("enable_manager", true, "Enable Index Manager")
-	auth              := fset.String("auth", "", "Auth user and password")
+	streamMaintPort := fset.String("streamMaintPort", "9105", "Index maintenance stream port")
+	storageDir := fset.String("storageDir", "./", "Index file storage directory path")
+	diagDir := fset.String("diagDir", "./", "Directory for writing index diagnostic information")
+	enableManager := fset.Bool("enable_manager", true, "Enable Index Manager")
+	auth := fset.String("auth", "", "Auth user and password")
 
 	for i := 1; i < len(os.Args); i++ {
-		if err := fset.Parse(os.Args[i:i+1]); err != nil {
+		if err := fset.Parse(os.Args[i : i+1]); err != nil {
 			if strings.Contains(err.Error(), "flag provided but not defined") {
 				logging.Warnf("Ignoring the unspecified argument error: %v", err)
 			} else {
@@ -101,6 +101,7 @@ func main() {
 	if msg.GetMsgType() != indexer.MSG_SUCCESS {
 		logging.Warnf("Indexer Failure to Init %v", msg)
 	}
+	go common.MemstatLogger(int64(config["indexer.memstatTick"].Int()))
 
 	logging.Infof("Indexer exiting normally\n")
 }

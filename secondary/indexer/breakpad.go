@@ -34,9 +34,9 @@ func BreakpadInitialize(minidump_dir string) {
 }
 
 func BreakpadWriteMinidump() {
-     C.breakpad_write_minidump()
+	C.breakpad_write_minidump()
 }
 
 func BreakpadGetWriteMinidumpAsUintptr() uintptr {
-    return uintptr(C.breakpad_get_write_minidump_addr())
+	return uintptr(C.breakpad_get_write_minidump_addr())
 }
