@@ -37,6 +37,7 @@ var options struct {
 	dn       int
 	bagdir   string
 	randkey  bool
+	prefix   string
 	parallel int // number of parallel routines per bucket
 	count    int // number of documents to be generated per routine
 	expiry   int // set expiry for the document, in seconds
@@ -66,6 +67,8 @@ func argParse() string {
 		"bagdirectory for production files.")
 	flag.IntVar(&options.parallel, "par", 1,
 		"number of parallel routines per bucket")
+	flag.StringVar(&options.prefix, "prefix", "",
+		"prefix to doc key")
 	flag.BoolVar(&options.randkey, "randkey", false,
 		"generate random key")
 	flag.IntVar(&options.count, "count", 0,
@@ -322,9 +325,9 @@ func makeKey(prodfile string, idx, i int) string {
 	fname := filepath.Base(prodfile)
 	if options.randkey {
 		uuid, _ := c.NewUUID()
-		return fmt.Sprintf("%s-%s-%v-%v", fname, uuid.Str(), idx, i+1)
+		return fmt.Sprintf("%v-%s-%s-%v-%v", options.prefix, fname, uuid.Str(), idx, i+1)
 	}
-	return fmt.Sprintf("%s-%v-%v", fname, idx, i+1)
+	return fmt.Sprintf("%v-%s-%v-%v", options.prefix, fname, idx, i+1)
 }
 
 func bytes2str(bytes []byte) string {
