@@ -32,6 +32,7 @@ type Config struct {
 	ScanSpecs      []*ScanConfig
 	Concurrency    int
 	Clients        int
+	ClientBootTime int
 }
 
 type ScanResult struct {

@@ -17,6 +17,8 @@ var (
 		100000000, 300000000, 500000000, 1000000000, 2000000000, 3000000000,
 		5000000000, 10000000000,
 	}
+
+	clientBootTime = 5 // Seconds
 )
 
 type Job struct {
@@ -149,6 +151,10 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		cfg.LatencyBuckets = defaultLatencyBuckets
 	}
 
+	if cfg.ClientBootTime == 0 {
+		cfg.ClientBootTime = clientBootTime
+	}
+
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 	config.SetValue("settings.poolSize", int(cfg.Concurrency))
 	client, err := qclient.NewGsiClient(cluster, config)
@@ -156,11 +162,6 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		return nil, err
 	}
 	defer client.Close()
-
-	indexes, err := client.Refresh()
-	if err != nil {
-		return nil, err
-	}
 
 	clients = make([]*qclient.GsiClient, cfg.Clients)
 	for i := 0; i < cfg.Clients; i++ {
@@ -172,6 +173,12 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		defer c.Close()
 		clients[i] = c
 
+	}
+
+	time.Sleep(time.Second * time.Duration(cfg.ClientBootTime))
+	indexes, err := client.Refresh()
+	if err != nil {
+		return nil, err
 	}
 
 	jobQ = make(chan *Job, cfg.Concurrency*1000)
