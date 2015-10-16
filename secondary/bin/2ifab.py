@@ -356,12 +356,13 @@ def bucket_flush(buckets="",port="8091"):
 
 fmt_loadgen = "\
 GOMAXPROCS=%s go run ./loadgen.go -auth %s:%s -bagdir %s -count %s -par %s \
--buckets %s -prods %s -ratio %s %s"
+-buckets %s -prods %s -ratio %s -randkey=%s -prefix %s %s"
 @task
 @parallel
 def loadgen(
         cluster="localhost:9000", procs=32, count=100000, par=16,
-        buckets="default", prods="projects.prod", ratio="0;0;0") :
+        buckets="default", prods="projects.prod", randkey=True, prefix="",
+        ratio="0;0;0") :
     """genetate load over couchbase buckets"""
     repopath = os.sep.join(["src", "github.com", "couchbase", "indexing"])
     pathldgn = os.sep.join([goproj, repopath, "secondary", "tools", "loadgen"])
@@ -374,10 +375,12 @@ def loadgen(
     ratio = ratio.replace(";", ",")
     prodfiles = [ os.sep.join([prodpath, prod]) for prod in prods.split(";") ]
     prodfiles = ",".join(list(prodfiles))
+    if prefix == "" :
+        prefix = env.host
     with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(pathldgn) :
         params = (
             procs, user2i, passw2i, bagdir, count, par, buckets, prodfiles,
-            ratio, cluster)
+            ratio, randkey.lower(), prefix, cluster)
         trycmd(fmt_loadgen % params, op="run")
 
 @task

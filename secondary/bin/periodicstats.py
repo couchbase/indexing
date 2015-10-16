@@ -38,22 +38,17 @@ def normalizeJson(value) :
             val = value
         return val
 
-def loadJson(data) :
+def loadJson(dstr) :
+    nval, val = {}, {}
     try :
         val = json.loads(dstr)
     except:
-        val = {}
+        pass
     for param, value in val.items() :
         nval[param] = normalizeJson(value)
+    return nval
 
-def handler_periodicstats(lines, line, dstr) :
-    lines = [ line.strip("\n") for line in lines ]
-    dstr = dstr.strip("\n")
-    dstr = dstr + "".join(lines[1:])
-    val = loadJson(dstr)
-    stats.append(val)
-
-def exec_matchers(lines) :
+def exec_matchers(lines, matchers) :
     if len(lines) == 0 :
         return
     for regx, fn in matchers :
@@ -61,7 +56,7 @@ def exec_matchers(lines) :
         if m :
             fn(lines, m.group(), *m.groups())
 
-def graph_idxstats() :
+def graph_idxstats(stats) :
     x, params, scatters = {}, {}, []
     print("gathering data ...")
     if len(args.params) == 1 and args.params[0] == "all" :
@@ -190,6 +185,15 @@ def kind_dcplatency(logfile):
 
 def kind_idxstats() :
     print("parsing lines ...")
+    stats = []
+
+    def handler_periodicstats(lines, line, dstr) :
+        lines = [ line.strip("\n") for line in lines ]
+        dstr = dstr.strip("\n")
+        dstr = dstr + "".join(lines[1:])
+        val = loadJson(dstr)
+        stats.append(val)
+
     re_log = re.compile(r'^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*')
     matchers = [
       [ re.compile(r'.*\[Info\].*PeriodicStats = (.*)'),
@@ -198,10 +202,11 @@ def kind_idxstats() :
     loglines = []
     for line in open(args.logfile[0]).readlines() :
         if re_log.match(line) :
-            exec_matchers(loglines)
+            exec_matchers(loglines, matchers)
             loglines = []
         loglines.append(line)
-    exec_matchers(loglines)
+    exec_matchers(loglines, matchers)
+    graph_idxstats(stats)
 
 if args.kind[0] == "dcplatency" :
     kind_dcplatency(args.logfile[0])
