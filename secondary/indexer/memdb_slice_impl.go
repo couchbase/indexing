@@ -147,6 +147,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 		slice.backstore = memdb.New()
 		slice.backstore.SetKeyComparator(byteItemDocIdCompare)
 		slice.backstore.DisableSnapshots()
+		slice.backstore.IgnoreItemSize()
 		slice.back = make([]*memdb.Writer, slice.numWriters)
 		for i := 0; i < slice.numWriters; i++ {
 			slice.back[i] = slice.backstore.NewWriter()
