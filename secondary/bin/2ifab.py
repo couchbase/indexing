@@ -383,26 +383,6 @@ def loadgen(
             ratio, randkey.lower(), prefix, cluster)
         trycmd(fmt_loadgen % params, op="run")
 
-@task
-def doindex(scriptfile, cluster) :
-    """execute cbindex commands listed in the scriptfile"""
-    # build query parser
-    repopath = os.sep.join(["src", "github.com", "couchbase", "query"])
-    pathq = os.sep.join([goproj, repopath, "parser", "n1ql"])
-    with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(pathq) :
-        trycmd("./build.sh")
-
-    # build and run cbindex
-    repopath = os.sep.join(["src", "github.com", "couchbase", "indexing"])
-    pathcbidx = os.sep.join([goproj, repopath, "secondary", "cmd", "cbindex"])
-    with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(pathcbidx) :
-        trycmd("go build")
-        with open(scriptfile) as fd :
-            [ trycmd(cmd.format(cluster=cluster, user=user2i, passw=passw2i),
-                op="run", v=True)
-            for cmd in fd.readlines() if cmd.strip(" \t")[0] != '#' ]
-
-
 fmt_log2i = """\
 gunzip {comp}.log.*; cat `ls -1 {comp}.log* | sort -t. -nk3 -r` > \
 {comp}.full.log;"""
@@ -425,16 +405,18 @@ def log2i(target, comps=""):
             trycmd(cmd, op="local")
 
 fmt_indexperf = "\
-time GOMAXPROCS={procs} ./cbindexperf -configfile {f} -cluster {cluster}"
+go build; ./cbindexperf -configfile {f} -cluster {cluster} -auth {user}:{passw}"
 @task
 @parallel
-def indexperf(cluster, configfile, procs=60):
+def indexperf(cluster, configfile):
     """indexer performance tool"""
+    repopath = os.sep.join(["src", "github.com", "couchbase", "indexing"])
+    pathcbp = os.sep.join([goproj, repopath, "secondary", "cmd", "cbindexperf"])
     targetfile = "/" + os.sep.join(["tmp", os.path.basename(configfile)])
     trycmd("rm -rf {f}".format(f=targetfile))
     put(configfile, targetfile)
-    with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(path) :
-        trycmd(fmt_indexperf.format(procs=procs,f=targetfile,cluster=cluster))
+    with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(pathcbp) :
+        trycmd(fmt_indexperf.format(f=targetfile,cluster=cluster,user=user2i,passw=passw2i))
 
 #---- patching and building target
 
