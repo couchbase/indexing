@@ -134,13 +134,23 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		s.writeOk(w)
+
 	} else if r.Method == "GET" {
 		settingsConfig, err := common.GetSettingsConfig(s.config)
 		if err != nil {
 			s.writeError(w, err)
 			return
 		}
+		// handle ?internal=ok
+		if query := r.URL.Query(); query != nil {
+			param, ok := query["internal"]
+			if ok && len(param) > 0 && param[0] == "ok" {
+				s.writeJson(w, settingsConfig.Json())
+				return
+			}
+		}
 		s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
+
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
 		return
