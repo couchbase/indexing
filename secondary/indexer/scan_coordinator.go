@@ -73,7 +73,7 @@ type ScanRequest struct {
 	ScanId      uint64
 	ExpiredTime time.Time
 	TimeoutCh   <-chan time.Time
-	CancelCh    <-chan interface{}
+	CancelCh    <-chan bool
 
 	LogPrefix string
 
@@ -83,7 +83,7 @@ type ScanRequest struct {
 type CancelCb struct {
 	done    chan struct{}
 	timeout <-chan time.Time
-	cancel  <-chan interface{}
+	cancel  <-chan bool
 	callb   func(error)
 }
 
@@ -325,7 +325,7 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 }
 
 func (s *scanCoordinator) newRequest(protoReq interface{},
-	cancelCh <-chan interface{}) (r *ScanRequest, err error) {
+	cancelCh <-chan bool) (r *ScanRequest, err error) {
 
 	var indexInst *common.IndexInst
 	r = new(ScanRequest)
@@ -647,7 +647,7 @@ func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanReq
 }
 
 func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
-	cancelCh <-chan interface{}) {
+	cancelCh <-chan bool) {
 
 	req, err := s.newRequest(protoReq, cancelCh)
 	w := NewProtoWriter(req.ScanType, conn)
