@@ -124,13 +124,15 @@ func main() {
 
 	// start backfill stream on each projector
 	for _, client := range projectors {
-		// start backfill stream on each projector
-		_, err := client.InitialTopicRequest(
-			"backfill" /*topic*/, "default", /*pooln*/
-			"dataport" /*endpointType*/, instances)
-		if err != nil {
-			log.Fatal(err)
-		}
+		go func(client *projc.Client) {
+			// start backfill stream on each projector
+			_, err := client.InitialTopicRequest(
+				"backfill" /*topic*/, "default", /*pooln*/
+				"dataport" /*endpointType*/, instances)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}(client)
 	}
 
 	time.Sleep(1000 * time.Second)
