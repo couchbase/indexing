@@ -13,9 +13,12 @@ parser.add_argument('--kind', nargs=1, type=str, default="",
        help='kind of statistics')
 parser.add_argument('--params', dest='params', default="all",
     help='parameters to plot')
+parser.add_argument('--opaques', dest='opaques', default="",
+    help='graph for opaque tokens')
 parser.add_argument('logfile', nargs=1, help='logfile to parse')
 args = parser.parse_args()
-args.params = args.params.split(",")
+args.params = [ re.compile(p) for p in args.params.split(",") ]
+args.opaques = [ x.strip() for x in args.opaques.split(",") if x.strip() ]
 
 stats = []
 
@@ -23,6 +26,7 @@ def tryhandler(handler) :
     try :
         handler()
     except:
+        raise
         pass
 
 def normalizeJson(value) :
@@ -59,7 +63,7 @@ def exec_matchers(lines, matchers) :
 def graph_idxstats(stats) :
     x, params, scatters = {}, {}, []
     print("gathering data ...")
-    if len(args.params) == 1 and args.params[0] == "all" :
+    if len(args.params) == 1 and args.params[0].match("all") :
         for i, m in enumerate(stats) :
             for param, value in m.items() :
                 params.setdefault(param, []).append(int(value))
@@ -68,7 +72,7 @@ def graph_idxstats(stats) :
         for i, m in enumerate(stats) :
             for param_patt in args.params :
                 for param, value in m.items() :
-                    if re.compile(param_patt).match(param) :
+                    if param_patt.match(param) :
                         x.setdefault(param, []).append(i)
                         params.setdefault(param, []).append(m[param])
 
@@ -152,6 +156,34 @@ def graph_allocation(stats) :
     ])
     print(py.plot(data, filename='allocation-graph'))
 
+def graph_kvdata(opq, stats) :
+    hbs, evs, reqs, ends, ups, dels, exprs = [], [], [], [], [], [], []
+    smin, smax, savg = [], [], []
+    print("composing plot ...")
+    for i, m in enumerate(stats) :
+        hbs.append(m["hbCount"]); evs.append(m["eventCount"])
+        reqs.append(m["reqCount"]); ends.append(m["endCount"])
+        smin.append(m["snapStat.min"]); smax.append(m["snapStat.max"])
+        savg.append(m["snapStat.avg"])
+        ups.append(m["upsertCount"]); dels.append(m["deleteCount"])
+
+    x = list(range(1, len(hbs)+1))
+    mode, line = "lines+markers", Line(shape='spline')
+    name = "kvdata-%s-%s" % (opq, m["bucket"])
+    data = Data([
+        Scatter(x=x, y=hbs, mode=mode, name=name+"-heartbeat", line=line),
+        Scatter(x=x, y=evs, mode=mode, name=name+"-events", line=line),
+        Scatter(x=x, y=reqs, mode=mode, name=name+"-strmreq", line=line),
+        Scatter(x=x, y=ends, mode=mode, name=name+"-strmend", line=line),
+        Scatter(x=x, y=ups, mode=mode, name=name+"-upserts", line=line),
+        Scatter(x=x, y=dels, mode=mode, name=name+"-deletes", line=line),
+        Scatter(x=x, y=exprs, mode=mode, name=name+"-expires", line=line),
+        Scatter(x=x, y=smin, mode=mode, name=name+"-snapmin", line=line),
+        Scatter(x=x, y=smax, mode=mode, name=name+"-snapmax", line=line),
+        Scatter(x=x, y=savg, mode=mode, name=name+"-snapavg", line=line),
+    ])
+    print(py.plot(data, filename='kvdata-graph-%s'%opq))
+
 def kind_memstats(logfile):
     print("parsing lines ...")
     stats = []
@@ -183,7 +215,7 @@ def kind_dcplatency(logfile):
             if m : tryhandler(lambda : fn(m.group(), *m.groups()))
     graph_dcplatency(stats)
 
-def kind_idxstats() :
+def kind_idxstats(logfile) :
     print("parsing lines ...")
     stats = []
 
@@ -200,7 +232,7 @@ def kind_idxstats() :
         handler_periodicstats ],
     ]
     loglines = []
-    for line in open(args.logfile[0]).readlines() :
+    for line in open(logfile).readlines() :
         if re_log.match(line) :
             exec_matchers(loglines, matchers)
             loglines = []
@@ -208,9 +240,37 @@ def kind_idxstats() :
     exec_matchers(loglines, matchers)
     graph_idxstats(stats)
 
+def kind_kvdata(logfile):
+    print("parsing lines ...")
+    opqstats = {} # opaque -> stats
+    def handler_kvdata(line, opq, dstr):
+        opqstats.setdefault(opq, []).append(eval(dstr))
+
+    matchers = [
+      [ re.compile(r'.*\[Info\] KVDT.* (##[0-9a-z]*) stats (.*)'),
+        handler_kvdata ],
+    ]
+    for line in open(logfile).readlines() :
+        for regx, fn in matchers :
+            m = regx.match(line)
+            if m : tryhandler(lambda : fn(m.group(), *m.groups()))
+
+    if len(args.opaques) == 0 :
+        [ print("for %s - %s lines" % (opq, len(opqstats[opq])))
+          for opq in sorted(opqstats.keys()) ]
+    else :
+        [ graph_kvdata(opq, opqstats[opq]) for opq in args.opaques ]
+
+
+if len(args.kind) == 0 :
+    print("please provide --kind")
 if args.kind[0] == "dcplatency" :
     kind_dcplatency(args.logfile[0])
 elif args.kind[0] == "memstats" :
     kind_memstats(args.logfile[0])
 elif args.kind[0] == "idxstats" :
-    kind_idxstats()
+    kind_idxstats(args.logfile[0])
+elif args.kind[0] == "kvdata" :
+    kind_kvdata(args.logfile[0])
+
+#{"bucket":"default","hbCount":1,"eventCount":512,"reqCount":512,"endCount":0,"snapStat.min":0,"snapStat.max":0,"snapStat.avg":-9223372036854775808,"upsertCount":0,"deleteCount":0,"ainstCount":1,"dinstCount":0,"tsCount":0}
