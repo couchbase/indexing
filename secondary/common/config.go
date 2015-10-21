@@ -99,9 +99,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.memstatTick": ConfigValue{
-		60 * 1000, // in milli-second
-		"in milli-second, periodically log runtime memory-stats.",
-		60 * 1000,
+		1 * 60 * 1000, // in milli-second, 1 minute
+		"in milli-second, periodically log runtime memory-stats for projector.",
+		1 * 60 * 1000,
 		false, // mutable
 	},
 	// Projector feed settings
@@ -151,6 +151,12 @@ var SystemConfig = Config{
 			"changing this value does not affect existing feeds.",
 		2000,
 		false, // mutable
+	},
+	"projector.kvstatTick": ConfigValue{
+		5 * 60 * 1000, // 5 minutes
+		"tick, in milliseconds, to log kvdata statistics",
+		5 * 60 * 1000, // 5 minutes
+		false,         // mutable
 	},
 	"projector.watchInterval": ConfigValue{
 		5 * 60 * 1000, // 5 minutes
@@ -206,9 +212,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.dcp.latencyTick": ConfigValue{
-		1000, // 1 second
+		5 * 60 * 1000, // 5 minute
 		"in milliseconds, periodically log cumulative stats of dcp latency",
-		1000,
+		5 * 60 * 1000,
 		false, // mutable
 	},
 	// projector adminport parameters

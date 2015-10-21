@@ -79,6 +79,7 @@ type Feed struct {
 //    feedChanSize: channel size for feed's control path and back path
 //    mutationChanSize: channel size of projector's data path routine
 //    syncTimeout: timeout, in ms, for sending periodic Sync messages
+//    kvstatTick: timeout, in ms, for logging kvstats
 //    routerEndpointFactory: endpoint factory
 func NewFeed(
 	pooln, topic string, config c.Config, opaque uint16) (*Feed, error) {
@@ -1790,6 +1791,7 @@ func FeedConfigParams() []string {
 		"mutationChanSize",
 		"routerEndpointFactory",
 		"syncTimeout",
+		"kvstatTick",
 		// dcp configuration
 		"dcp.dataChanSize",
 		"dcp.genChanSize",
