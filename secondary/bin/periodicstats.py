@@ -15,6 +15,10 @@ parser.add_argument('--params', dest='params', default="all",
     help='parameters to plot')
 parser.add_argument('--opaques', dest='opaques', default="",
     help='graph for opaque tokens')
+parser.add_argument('--topic', dest='topic', default="",
+    help='graph for specified topic')
+parser.add_argument('--raddr', dest='raddr', default="",
+    help='graph for specified endpoint raddr')
 parser.add_argument('logfile', nargs=1, help='logfile to parse')
 args = parser.parse_args()
 args.params = [ re.compile(p) for p in args.params.split(",") ]
@@ -169,7 +173,7 @@ def graph_kvdata(opq, stats) :
 
     x = list(range(1, len(hbs)+1))
     mode, line = "lines+markers", Line(shape='spline')
-    name = "kvdata-%s-%s" % (opq, m["bucket"])
+    name = "%s" % opq
     data = Data([
         Scatter(x=x, y=hbs, mode=mode, name=name+"-heartbeat", line=line),
         Scatter(x=x, y=evs, mode=mode, name=name+"-events", line=line),
@@ -183,6 +187,33 @@ def graph_kvdata(opq, stats) :
         Scatter(x=x, y=savg, mode=mode, name=name+"-snapavg", line=line),
     ])
     print(py.plot(data, filename='kvdata-graph-%s'%opq))
+
+def graph_endp(topic, raddr, stats) :
+    muts, ups, dels, uds = [], [], [], []
+    syncs, begins, ends, snaps, fls = [], [], [], [], []
+    print("composing plot ...")
+    for i, m in enumerate(stats) :
+        muts.append(m["mutCount"]); ups.append(m["upsertCount"])
+        dels.append(m["deleteCount"]); uds.append(m["upsdelCount"])
+        syncs.append(m["syncCount"]); begins.append(m["beginCount"])
+        ends.append(m["endCount"])
+        snaps.append(m["snapCount"]); fls.append(m["flushCount"])
+
+    x = list(range(1, len(muts)+1))
+    mode, line = "lines+markers", Line(shape='spline')
+    name = "%s" % raddr
+    data = Data([
+        Scatter(x=x, y=muts, mode=mode, name=name+"-mutations", line=line),
+        Scatter(x=x, y=ups, mode=mode, name=name+"-upserts", line=line),
+        Scatter(x=x, y=dels, mode=mode, name=name+"-deletes", line=line),
+        Scatter(x=x, y=uds, mode=mode, name=name+"-upsdel", line=line),
+        Scatter(x=x, y=syncs, mode=mode, name=name+"-syncs", line=line),
+        Scatter(x=x, y=begins, mode=mode, name=name+"-begins", line=line),
+        Scatter(x=x, y=ends, mode=mode, name=name+"-ends", line=line),
+        Scatter(x=x, y=snaps, mode=mode, name=name+"-snaps", line=line),
+        Scatter(x=x, y=fls, mode=mode, name=name+"-flushes", line=line),
+    ])
+    print(py.plot(data, filename='endp-graph-%s-%s'%(topic, raddr)))
 
 def kind_memstats(logfile):
     print("parsing lines ...")
@@ -261,6 +292,28 @@ def kind_kvdata(logfile):
     else :
         [ graph_kvdata(opq, opqstats[opq]) for opq in args.opaques ]
 
+def kind_endp(logfile):
+    print("parsing lines ...")
+    allstats = {} # (topic, raddr) -> stat
+    def handler_endp(line, dstr):
+        d = eval(dstr)
+        allstats.setdefault((d["topic"], d["raddr"]), []).append(d)
+
+    matchers = [
+      [ re.compile(r'.*\[Info\] ENDP.* stats (.*)'),
+        handler_endp ],
+    ]
+    for line in open(logfile).readlines() :
+        for regx, fn in matchers :
+            m = regx.match(line)
+            if m : tryhandler(lambda : fn(m.group(), *m.groups()))
+
+    if args.topic == "" or args.raddr == "" :
+        [ print(k) for k in sorted(allstats.keys()) ]
+        return
+
+    graph_endp(args.topic, args.raddr, allstats[(args.topic, args.raddr)])
+
 
 if len(args.kind) == 0 :
     print("please provide --kind")
@@ -272,5 +325,7 @@ elif args.kind[0] == "idxstats" :
     kind_idxstats(args.logfile[0])
 elif args.kind[0] == "kvdata" :
     kind_kvdata(args.logfile[0])
+elif args.kind[0] == "endp" :
+    kind_endp(args.logfile[0])
 
 #{"bucket":"default","hbCount":1,"eventCount":512,"reqCount":512,"endCount":0,"snapStat.min":0,"snapStat.max":0,"snapStat.avg":-9223372036854775808,"upsertCount":0,"deleteCount":0,"ainstCount":1,"dinstCount":0,"tsCount":0}
