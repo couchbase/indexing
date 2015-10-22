@@ -303,6 +303,12 @@ var SystemConfig = Config{
 		1024 * 1024, // 1MB
 		true,        // immutable
 	},
+	"projector.dataport.statTick": ConfigValue{
+		5 * 60 * 1000, // 5 minutes
+		"tick, in milliseconds, to log endpoint statistics",
+		5 * 60 * 1000, // 5 minutes
+		false,         // mutable
+	},
 	// projector's adminport client, can be used by manager
 	"manager.projectorclient.retryInterval": ConfigValue{
 		16,
@@ -983,7 +989,7 @@ func (cv ConfigValue) Int() int {
 	} else if val, ok := cv.Value.(float64); ok {
 		return int(val)
 	}
-	panic(fmt.Errorf("not support Int() on %v", cv))
+	panic(fmt.Errorf("not support Int() on %#v", cv))
 }
 
 // Uint64 assumes config value is 64-bit integer and returns the same.

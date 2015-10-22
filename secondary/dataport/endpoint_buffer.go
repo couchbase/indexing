@@ -7,7 +7,7 @@ import "github.com/couchbase/indexing/secondary/transport"
 
 type endpointBuffers struct {
 	raddr string
-	vbs   map[string]*c.VbKeyVersions
+	vbs   map[string]*c.VbKeyVersions // uuid -> VbKeyVersions
 }
 
 func newEndpointBuffers(raddr string) *endpointBuffers {
@@ -18,7 +18,11 @@ func newEndpointBuffers(raddr string) *endpointBuffers {
 
 // addKeyVersions, add a mutation's keyversions to buffer.
 func (b *endpointBuffers) addKeyVersions(
-	bucket string, vbno uint16, vbuuid uint64, kv *c.KeyVersions) {
+	bucket string,
+	vbno uint16,
+	vbuuid uint64,
+	kv *c.KeyVersions,
+	endpoint *RouterEndpoint) {
 
 	if kv != nil && kv.Length() > 0 {
 		uuid := c.StreamID(bucket, vbno)
@@ -27,12 +31,33 @@ func (b *endpointBuffers) addKeyVersions(
 			b.vbs[uuid] = c.NewVbKeyVersions(bucket, vbno, vbuuid, nMuts)
 		}
 		b.vbs[uuid].AddKeyVersions(kv)
+		// update statistics
+		for _, cmd := range kv.Commands {
+			switch cmd {
+			case c.Upsert:
+				endpoint.upsertCount++
+			case c.Deletion:
+				endpoint.deleteCount++
+			case c.UpsertDeletion:
+				endpoint.upsdelCount++
+			case c.Sync:
+				endpoint.syncCount++
+			case c.StreamBegin:
+				endpoint.beginCount++
+			case c.StreamEnd:
+				endpoint.endCount++
+			case c.Snapshot:
+				endpoint.snapCount++
+			}
+		}
+		endpoint.mutCount++
 	}
 }
 
 // flush the buffers to the other end.
 func (b *endpointBuffers) flushBuffers(
-	conn net.Conn, pkt *transport.TransportPacket) error {
+	conn net.Conn,
+	pkt *transport.TransportPacket) error {
 
 	vbs := make([]*c.VbKeyVersions, 0, len(b.vbs))
 	for _, vb := range b.vbs {

@@ -385,6 +385,7 @@ loop:
 			}
 		}
 	}
+	logstats()
 }
 
 func (kvdata *KVData) scatterMutation(

@@ -1802,6 +1802,7 @@ func FeedConfigParams() []string {
 		"dataport.bufferSize",
 		"dataport.bufferTimeout",
 		"dataport.harakiriTimeout",
+		"dataport.statTick",
 		"dataport.maxPayload"}
 	return paramNames
 }
