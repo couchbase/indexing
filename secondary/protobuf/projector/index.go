@@ -149,7 +149,7 @@ func (ie *IndexEvaluator) StreamBeginData(
 	vbno uint16, vbuuid, seqno uint64) (data interface{}) {
 
 	bucket := ie.Bucket()
-	kv := c.NewKeyVersions(seqno, nil, 1)
+	kv := c.NewKeyVersions(seqno, nil, 1, 0 /*ctime*/)
 	kv.AddStreamBegin()
 	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 }
@@ -159,7 +159,7 @@ func (ie *IndexEvaluator) SyncData(
 	vbno uint16, vbuuid, seqno uint64) (data interface{}) {
 
 	bucket := ie.Bucket()
-	kv := c.NewKeyVersions(seqno, nil, 1)
+	kv := c.NewKeyVersions(seqno, nil, 1, 0 /*ctime*/)
 	kv.AddSync()
 	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 }
@@ -169,7 +169,7 @@ func (ie *IndexEvaluator) SnapshotData(
 	m *mc.DcpEvent, vbno uint16, vbuuid, seqno uint64) (data interface{}) {
 
 	bucket := ie.Bucket()
-	kv := c.NewKeyVersions(seqno, nil, 1)
+	kv := c.NewKeyVersions(seqno, nil, 1, m.Ctime)
 	kv.AddSnapshot(m.SnapshotType, m.SnapstartSeq, m.SnapendSeq)
 	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 }
@@ -179,7 +179,7 @@ func (ie *IndexEvaluator) StreamEndData(
 	vbno uint16, vbuuid, seqno uint64) (data interface{}) {
 
 	bucket := ie.Bucket()
-	kv := c.NewKeyVersions(seqno, nil, 1)
+	kv := c.NewKeyVersions(seqno, nil, 1, 0 /*ctime*/)
 	kv.AddStreamEnd()
 	return &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 }
@@ -239,7 +239,7 @@ func (ie *IndexEvaluator) TransformRoute(
 		for _, raddr := range raddrs {
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
 			if !ok {
-				kv := c.NewKeyVersions(seqno, m.Key, 4)
+				kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
 				kv.AddUpsert(uuid, nkey, okey)
 				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 			} else {
@@ -254,7 +254,7 @@ func (ie *IndexEvaluator) TransformRoute(
 		for _, raddr := range raddrs {
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
 			if !ok {
-				kv := c.NewKeyVersions(seqno, m.Key, 4)
+				kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
 				kv.AddUpsertDeletion(uuid, okey)
 				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 			} else {
@@ -269,7 +269,7 @@ func (ie *IndexEvaluator) TransformRoute(
 		for _, raddr := range raddrs {
 			dkv, ok := data[raddr].(*c.DataportKeyVersions)
 			if !ok {
-				kv := c.NewKeyVersions(seqno, m.Key, 4)
+				kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
 				kv.AddDeletion(uuid, okey)
 				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
 			} else {

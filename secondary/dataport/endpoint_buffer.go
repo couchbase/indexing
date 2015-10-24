@@ -1,6 +1,7 @@
 package dataport
 
 import "net"
+import "time"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
@@ -56,12 +57,18 @@ func (b *endpointBuffers) addKeyVersions(
 
 // flush the buffers to the other end.
 func (b *endpointBuffers) flushBuffers(
+	endpoint *RouterEndpoint,
 	conn net.Conn,
 	pkt *transport.TransportPacket) error {
 
 	vbs := make([]*c.VbKeyVersions, 0, len(b.vbs))
 	for _, vb := range b.vbs {
 		vbs = append(vbs, vb)
+		for _, kv := range vb.Kvs {
+			if kv.Ctime > 0 {
+				endpoint.prjLatency.Add(time.Now().UnixNano() - kv.Ctime)
+			}
+		}
 	}
 	b.vbs = make(map[string]*c.VbKeyVersions)
 

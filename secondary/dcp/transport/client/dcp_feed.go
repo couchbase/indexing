@@ -604,6 +604,7 @@ func (feed *DcpFeed) sendStreamEnd(outch chan<- *DcpEvent) {
 			VBuuid:  stream.Vbuuid,
 			Opcode:  transport.DCP_STREAMEND,
 			Opaque:  stream.AppOpaque,
+			Ctime:   time.Now().UnixNano(),
 		}
 		outch <- dcpEvent
 	}
@@ -725,6 +726,8 @@ type DcpEvent struct {
 	// failoverlog
 	FailoverLog *FailoverLog // Failover log containing vvuid and sequnce number
 	Error       error        // Error value in case of a failure
+	// stats
+	Ctime int64
 }
 
 func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
@@ -735,6 +738,7 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
 		Key:     rq.Key,
 		Value:   rq.Body,
 		Cas:     rq.Cas,
+		Ctime:   time.Now().UnixNano(),
 	}
 	// 16 LSBits are used by client library to encode vbucket number.
 	// 16 MSBits are left for application to multiplex on opaque value.

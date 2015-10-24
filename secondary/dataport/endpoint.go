@@ -60,6 +60,7 @@ type RouterEndpoint struct {
 	endCount    int64
 	snapCount   int64
 	flushCount  int64
+	prjLatency  *Average
 }
 
 // NewRouterEndpoint instantiate a new RouterEndpoint
@@ -84,6 +85,7 @@ func NewRouterEndpoint(
 		statTick:   time.Duration(config["statTick"].Int()),
 		bufferTm:   time.Duration(config["bufferTimeout"].Int()),
 		harakiriTm: time.Duration(config["harakiriTimeout"].Int()),
+		prjLatency: &Average{},
 	}
 	endpoint.ch = make(chan []interface{}, endpoint.keyChSize)
 	endpoint.conn = conn
@@ -181,8 +183,9 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 	}()
 
 	statSince := time.Now()
-	var stitems [11]string
+	var stitems [14]string
 	logstats := func() {
+		prjLatency := endpoint.prjLatency
 		stitems[0] = `"topic":"` + endpoint.topic + `"`
 		stitems[1] = `"raddr":"` + endpoint.raddr + `"`
 		stitems[2] = `"mutCount":` + strconv.Itoa(int(endpoint.mutCount))
@@ -194,6 +197,9 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 		stitems[8] = `"endCount":` + strconv.Itoa(int(endpoint.endCount))
 		stitems[9] = `"snapCount":` + strconv.Itoa(int(endpoint.snapCount))
 		stitems[10] = `"flushCount":` + strconv.Itoa(int(endpoint.flushCount))
+		stitems[11] = `"latency.min":` + strconv.Itoa(int(prjLatency.Min()))
+		stitems[12] = `"latency.max":` + strconv.Itoa(int(prjLatency.Max()))
+		stitems[13] = `"latency.avg":` + strconv.Itoa(int(prjLatency.Mean()))
 		statjson := strings.Join(stitems[:], ",")
 		fmsg := "%v stats {%v}\n"
 		logging.Infof(fmsg, endpoint.logPrefix, statjson)
@@ -209,7 +215,7 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 		fmsg := "%v sent %v mutations to %q\n"
 		logging.Tracef(fmsg, endpoint.logPrefix, messageCount, raddr)
 		if messageCount > 0 {
-			err = buffers.flushBuffers(endpoint.conn, endpoint.pkt)
+			err = buffers.flushBuffers(endpoint, endpoint.conn, endpoint.pkt)
 			if err != nil {
 				logging.Errorf("%v flushBuffers() %v\n", endpoint.logPrefix, err)
 			}

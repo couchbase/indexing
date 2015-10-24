@@ -491,6 +491,7 @@ func (kvdata *KVData) publishStreamEnd() error {
 			Status:  mcd.SUCCESS,
 			VBucket: vr.vbno,
 			Opaque:  vr.opaque,
+			Ctime:   time.Now().UnixNano(),
 		}
 		kvdata.feed.PostStreamEnd(kvdata.bucket, m)
 		vr.Event(m)
