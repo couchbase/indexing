@@ -191,6 +191,7 @@ def graph_kvdata(opq, stats) :
 def graph_endp(topic, raddr, stats) :
     muts, ups, dels, uds = [], [], [], []
     syncs, begins, ends, snaps, fls = [], [], [], [], []
+    lmin, lmax, lavg = [], [], []
     print("composing plot ...")
     for i, m in enumerate(stats) :
         muts.append(m["mutCount"]); ups.append(m["upsertCount"])
@@ -198,6 +199,8 @@ def graph_endp(topic, raddr, stats) :
         syncs.append(m["syncCount"]); begins.append(m["beginCount"])
         ends.append(m["endCount"])
         snaps.append(m["snapCount"]); fls.append(m["flushCount"])
+        lmin.append(m["latency.min"]); lmax.append(m["latency.max"])
+        lavg.append(m["latency.avg"])
 
     x = list(range(1, len(muts)+1))
     mode, line = "lines+markers", Line(shape='spline')
@@ -212,6 +215,9 @@ def graph_endp(topic, raddr, stats) :
         Scatter(x=x, y=ends, mode=mode, name=name+"-ends", line=line),
         Scatter(x=x, y=snaps, mode=mode, name=name+"-snaps", line=line),
         Scatter(x=x, y=fls, mode=mode, name=name+"-flushes", line=line),
+        Scatter(x=x, y=lmin, mode=mode, name=name+"-latency.min", line=line),
+        Scatter(x=x, y=lmax, mode=mode, name=name+"-latency.max", line=line),
+        Scatter(x=x, y=lavg, mode=mode, name=name+"-latency.avg", line=line),
     ])
     print(py.plot(data, filename='endp-graph-%s-%s'%(topic, raddr)))
 
