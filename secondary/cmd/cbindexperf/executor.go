@@ -7,6 +7,7 @@ import (
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
 	"io"
 	"math"
+	"os"
 	"sync"
 	"time"
 )
@@ -77,12 +78,18 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 	startTime := time.Now()
 	switch spec.Type {
 	case "All":
-		err = client.ScanAll(spec.DefnId, spec.Limit, cons, nil, callb)
+		uuid, _ := c.NewUUID()
+		requestID := os.Args[0] + uuid.Str()
+		err = client.ScanAll(spec.DefnId, requestID, spec.Limit, cons, nil, callb)
 	case "Range":
-		err = client.Range(spec.DefnId, spec.Low, spec.High,
+		uuid, _ := c.NewUUID()
+		requestID := os.Args[0] + uuid.Str()
+		err = client.Range(spec.DefnId, requestID, spec.Low, spec.High,
 			qclient.Inclusion(spec.Inclusion), false, spec.Limit, cons, nil, callb)
 	case "Lookup":
-		err = client.Lookup(spec.DefnId, spec.Lookups, false,
+		uuid, _ := c.NewUUID()
+		requestID := os.Args[0] + uuid.Str()
+		err = client.Lookup(spec.DefnId, requestID, spec.Lookups, false,
 			spec.Limit, cons, nil, callb)
 	}
 
