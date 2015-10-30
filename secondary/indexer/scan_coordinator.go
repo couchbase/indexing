@@ -69,6 +69,7 @@ type ScanRequest struct {
 	TimeoutCh   <-chan time.Time
 	CancelCh    <-chan interface{}
 
+	RequestId string
 	LogPrefix string
 }
 
@@ -141,6 +142,10 @@ func (r ScanRequest) String() string {
 
 	if r.Consistency != nil {
 		str += fmt.Sprintf(", consistency:%s", strings.ToLower(r.Consistency.String()))
+	}
+
+	if r.RequestId != "" {
+		str += fmt.Sprintf(", requestId:%v", r.RequestId)
 	}
 
 	return str
@@ -447,6 +452,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	switch req := protoReq.(type) {
 	case *protobuf.StatisticsRequest:
 		r.DefnID = req.GetDefnID()
+		r.RequestId = req.GetRequestId()
 		r.ScanType = StatsReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		setIndexParams()
@@ -457,6 +463,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	case *protobuf.CountRequest:
 		r.DefnID = req.GetDefnID()
+		r.RequestId = req.GetRequestId()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		setConsistency(cons, vector)
@@ -470,6 +477,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	case *protobuf.ScanRequest:
 		r.DefnID = req.GetDefnID()
+		r.RequestId = req.GetRequestId()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		setConsistency(cons, vector)
@@ -483,6 +491,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.Limit = req.GetLimit()
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
+		r.RequestId = req.GetRequestId()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
 		setConsistency(cons, vector)
@@ -610,7 +619,7 @@ func (s *scanCoordinator) respondWithError(conn net.Conn, req *ScanRequest, err 
 	}
 
 finish:
-	logging.Errorf("%s RESPONSE Failed with error (%s)", req.LogPrefix, err)
+	logging.Errorf("%s RESPONSE Failed with error (%s), requestId: %v", req.LogPrefix, err, req.RequestId)
 }
 
 func (s *scanCoordinator) handleError(prefix string, err error) {
@@ -622,7 +631,7 @@ func (s *scanCoordinator) handleError(prefix string, err error) {
 func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanRequest, err error) bool {
 	if err != nil {
 		logging.Infof("%s REQUEST %s", req.LogPrefix, req)
-		logging.Infof("%s RESPONSE status:(error = %s)", req.LogPrefix, err)
+		logging.Infof("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
 		s.handleError(req.LogPrefix, w.Error(err))
 		return true
 	}
@@ -702,17 +711,17 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	req.Stats.scanDuration.Add(scanTime.Nanoseconds())
 	req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
 
-	logging.LazyVerbose(func() string {
-		var status string
-		if err != nil {
-			status = fmt.Sprintf("(error = %s)", err)
-		} else {
-			status = "ok"
-		}
-
-		return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s",
-			req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status)
-	})
+	if err != nil {
+		status := fmt.Sprintf("(error = %s)", err)
+		logging.Errorf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
+			req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status, req.RequestId)
+	} else {
+		status := "ok"
+		logging.LazyVerbose(func() string {
+			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s",
+				req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status)
+		})
+	}
 }
 
 func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWriter,

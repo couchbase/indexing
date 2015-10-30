@@ -135,41 +135,41 @@ type GsiAccessor interface {
 
 	// LookupStatistics for a single secondary-key.
 	LookupStatistics(
-		defnID uint64, v common.SecondaryKey) (common.IndexStatistics, error)
+		defnID uint64, requestId string, v common.SecondaryKey) (common.IndexStatistics, error)
 
 	// RangeStatistics for index range.
 	RangeStatistics(
-		defnID uint64, low, high common.SecondaryKey,
+		defnID uint64, requestId string, low, high common.SecondaryKey,
 		inclusion Inclusion) (common.IndexStatistics, error)
 
 	// Lookup scan index between low and high.
 	Lookup(
-		defnID uint64, values []common.SecondaryKey,
+		defnID uint64, requestId string, values []common.SecondaryKey,
 		distinct bool, limit int64,
 		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
 
 	// Range scan index between low and high.
 	Range(
-		defnID uint64, low, high common.SecondaryKey,
+		defnID uint64, requestId string, low, high common.SecondaryKey,
 		inclusion Inclusion, distinct bool, limit int64,
 		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
 
 	// ScanAll for full table scan.
 	ScanAll(
-		defnID uint64, limit int64,
+		defnID uint64, requestId string, limit int64,
 		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
 
 	// CountLookup of all entries in index.
 	CountLookup(
-		defnID uint64,
+		defnID uint64, requestId string,
 		cons common.Consistency, vector *TsConsistency) (int64, error)
 
 	// CountRange of all entries in index.
 	CountRange(
-		defnID uint64,
+		defnID uint64, requestId string,
 		cons common.Consistency, vector *TsConsistency) (int64, error)
 }
 
@@ -340,7 +340,7 @@ func (c *GsiClient) DropIndex(defnID uint64) error {
 
 // LookupStatistics for a single secondary-key.
 func (c *GsiClient) LookupStatistics(
-	defnID uint64, value common.SecondaryKey) (common.IndexStatistics, error) {
+	defnID uint64, requestId string, value common.SecondaryKey) (common.IndexStatistics, error) {
 
 	return nil, ErrorNotImplemented
 
@@ -368,7 +368,7 @@ func (c *GsiClient) LookupStatistics(
 
 // RangeStatistics for index range.
 func (c *GsiClient) RangeStatistics(
-	defnID uint64, low, high common.SecondaryKey,
+	defnID uint64, requestId string, low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
 	return nil, ErrorNotImplemented
@@ -396,7 +396,7 @@ func (c *GsiClient) RangeStatistics(
 
 // Lookup scan index between low and high.
 func (c *GsiClient) Lookup(
-	defnID uint64, values []common.SecondaryKey,
+	defnID uint64, requestId string, values []common.SecondaryKey,
 	distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
@@ -426,7 +426,7 @@ func (c *GsiClient) Lookup(
 				return err, false
 			}
 			return qc.Lookup(
-				uint64(index.DefnId), values, distinct, limit, cons,
+				uint64(index.DefnId), requestId, values, distinct, limit, cons,
 				vector, callb)
 		})
 
@@ -444,7 +444,7 @@ func (c *GsiClient) Lookup(
 
 // Range scan index between low and high.
 func (c *GsiClient) Range(
-	defnID uint64, low, high common.SecondaryKey,
+	defnID uint64, requestId string, low, high common.SecondaryKey,
 	inclusion Inclusion, distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
@@ -483,12 +483,12 @@ func (c *GsiClient) Range(
 					h = []byte(high[0].(string))
 				}
 				return qc.RangePrimary(
-					uint64(index.DefnId), l, h, inclusion, distinct, limit,
+					uint64(index.DefnId), requestId, l, h, inclusion, distinct, limit,
 					cons, vector, callb)
 			}
 			// dealing with secondary index.
 			return qc.Range(
-				uint64(index.DefnId), low, high, inclusion, distinct, limit,
+				uint64(index.DefnId), requestId, low, high, inclusion, distinct, limit,
 				cons, vector, callb)
 		})
 
@@ -506,7 +506,7 @@ func (c *GsiClient) Range(
 
 // ScanAll for full table scan.
 func (c *GsiClient) ScanAll(
-	defnID uint64, limit int64,
+	defnID uint64, requestId string, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
 
@@ -534,7 +534,7 @@ func (c *GsiClient) ScanAll(
 			if err != nil {
 				return err, false
 			}
-			return qc.ScanAll(uint64(index.DefnId), limit, cons, vector, callb)
+			return qc.ScanAll(uint64(index.DefnId), requestId, limit, cons, vector, callb)
 		})
 
 	if err != nil { // callback with error
@@ -551,7 +551,7 @@ func (c *GsiClient) ScanAll(
 
 // CountLookup to count number entries for given set of keys.
 func (c *GsiClient) CountLookup(
-	defnID uint64, values []common.SecondaryKey,
+	defnID uint64, requestId string, values []common.SecondaryKey,
 	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
 	if c.bridge == nil {
@@ -573,7 +573,7 @@ func (c *GsiClient) CountLookup(
 			if err != nil {
 				return err, false
 			}
-			count, err = qc.CountLookup(uint64(index.DefnId), values, cons, vector)
+			count, err = qc.CountLookup(uint64(index.DefnId), requestId, values, cons, vector)
 			return err, false
 		})
 
@@ -584,7 +584,7 @@ func (c *GsiClient) CountLookup(
 
 // CountRange to count number entries in the given range.
 func (c *GsiClient) CountRange(
-	defnID uint64,
+	defnID uint64, requestId string,
 	low, high common.SecondaryKey,
 	inclusion Inclusion,
 	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
@@ -609,7 +609,7 @@ func (c *GsiClient) CountRange(
 				return err, false
 			}
 			count, err = qc.CountRange(
-				uint64(index.DefnId), low, high, inclusion, cons, vector)
+				uint64(index.DefnId), requestId, low, high, inclusion, cons, vector)
 			return err, false
 		})
 

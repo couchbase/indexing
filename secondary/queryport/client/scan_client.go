@@ -120,7 +120,7 @@ func (c *GsiScanClient) RangeStatistics(
 
 // Lookup scan index between low and high.
 func (c *GsiScanClient) Lookup(
-	defnID uint64, values []common.SecondaryKey,
+	defnID uint64, requestId string, values []common.SecondaryKey,
 	distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (error, bool) {
@@ -146,6 +146,7 @@ func (c *GsiScanClient) Lookup(
 
 	req := &protobuf.ScanRequest{
 		DefnID:   proto.Uint64(defnID),
+		RequestId: proto.String(requestId),
 		Span:     &protobuf.Span{Equals: equals},
 		Distinct: proto.Bool(distinct),
 		Limit:    proto.Int64(limit),
@@ -180,7 +181,7 @@ func (c *GsiScanClient) Lookup(
 
 // Range scan index between low and high.
 func (c *GsiScanClient) Range(
-	defnID uint64, low, high common.SecondaryKey, inclusion Inclusion,
+	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (error, bool) {
 
@@ -205,6 +206,7 @@ func (c *GsiScanClient) Range(
 
 	req := &protobuf.ScanRequest{
 		DefnID: proto.Uint64(defnID),
+		RequestId: proto.String(requestId),
 		Span: &protobuf.Span{
 			Range: &protobuf.Range{
 				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
@@ -242,7 +244,7 @@ func (c *GsiScanClient) Range(
 
 // Range scan index between low and high.
 func (c *GsiScanClient) RangePrimary(
-	defnID uint64, low, high []byte, inclusion Inclusion,
+	defnID uint64, requestId string, low, high []byte, inclusion Inclusion,
 	distinct bool, limit int64, cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (error, bool) {
 
@@ -257,6 +259,7 @@ func (c *GsiScanClient) RangePrimary(
 
 	req := &protobuf.ScanRequest{
 		DefnID: proto.Uint64(defnID),
+		RequestId: proto.String(requestId),
 		Span: &protobuf.Span{
 			Range: &protobuf.Range{
 				Low: low, High: high,
@@ -295,7 +298,7 @@ func (c *GsiScanClient) RangePrimary(
 
 // ScanAll for full table scan.
 func (c *GsiScanClient) ScanAll(
-	defnID uint64, limit int64,
+	defnID uint64, requestId string, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (error, bool) {
 
@@ -310,6 +313,7 @@ func (c *GsiScanClient) ScanAll(
 
 	req := &protobuf.ScanAllRequest{
 		DefnID: proto.Uint64(defnID),
+		RequestId: proto.String(requestId),
 		Limit:  proto.Int64(limit),
 		Cons:   proto.Uint32(uint32(cons)),
 	}
@@ -340,7 +344,7 @@ func (c *GsiScanClient) ScanAll(
 
 // CountLookup to count number entries for given set of keys.
 func (c *GsiScanClient) CountLookup(
-	defnID uint64, values []common.SecondaryKey,
+	defnID uint64, requestId string, values []common.SecondaryKey,
 	cons common.Consistency, vector *TsConsistency) (int64, error) {
 
 	// serialize match value.
@@ -355,6 +359,7 @@ func (c *GsiScanClient) CountLookup(
 
 	req := &protobuf.CountRequest{
 		DefnID: proto.Uint64(defnID),
+		RequestId: proto.String(requestId),
 		Span:   &protobuf.Span{Equals: equals},
 		Cons:   proto.Uint32(uint32(cons)),
 	}
@@ -376,7 +381,7 @@ func (c *GsiScanClient) CountLookup(
 
 // CountRange to count number entries in the given range.
 func (c *GsiScanClient) CountRange(
-	defnID uint64, low, high common.SecondaryKey, inclusion Inclusion,
+	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
 	cons common.Consistency, vector *TsConsistency) (int64, error) {
 
 	// serialize low and high values.
@@ -391,6 +396,7 @@ func (c *GsiScanClient) CountRange(
 
 	req := &protobuf.CountRequest{
 		DefnID: proto.Uint64(defnID),
+		RequestId: proto.String(requestId),
 		Span: &protobuf.Span{
 			Range: &protobuf.Range{
 				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
