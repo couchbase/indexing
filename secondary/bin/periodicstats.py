@@ -204,7 +204,7 @@ def graph_endp(topic, raddr, stats) :
 
     x = list(range(1, len(muts)+1))
     mode, line = "lines+markers", Line(shape='spline')
-    name = "%s" % raddr
+    name = "" # "%s" % raddr
     data = Data([
         Scatter(x=x, y=muts, mode=mode, name=name+"-mutations", line=line),
         Scatter(x=x, y=ups, mode=mode, name=name+"-upserts", line=line),
@@ -219,7 +219,7 @@ def graph_endp(topic, raddr, stats) :
         Scatter(x=x, y=lmax, mode=mode, name=name+"-latency.max", line=line),
         Scatter(x=x, y=lavg, mode=mode, name=name+"-latency.avg", line=line),
     ])
-    print(py.plot(data, filename='endp-graph-%s-%s'%(topic, raddr)))
+    print(py.plot(data, filename='endp-graph'))
 
 def kind_memstats(logfile):
     print("parsing lines ...")
