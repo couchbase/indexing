@@ -3474,7 +3474,8 @@ func NewSlice(id SliceId, indInst *common.IndexInst,
 	}
 	path := filepath.Join(storage_dir, IndexPath(indInst, id))
 
-	if indInst.Defn.Using == common.MemDB {
+	if indInst.Defn.Using == common.MemDB ||
+		indInst.Defn.Using == common.MemoryOptimized {
 		slice, err = NewMemDBSlice(path, id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
 	} else {
 		slice, err = NewForestDBSlice(path, id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
