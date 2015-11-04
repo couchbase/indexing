@@ -416,7 +416,8 @@ def indexperf(cluster, configfile):
     trycmd("rm -rf {f}".format(f=targetfile))
     put(configfile, targetfile)
     with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(pathcbp) :
-        trycmd(fmt_indexperf.format(f=targetfile,cluster=cluster,user=user2i,passw=passw2i))
+        trycmd(fmt_indexperf.format(f=targetfile,cluster=cluster,user=user2i,passw=passw2i),
+                v=True)
 
 #---- patching and building target
 
