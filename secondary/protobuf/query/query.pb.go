@@ -205,18 +205,18 @@ func (m *StatisticsRequest) GetDefnID() uint64 {
 	return 0
 }
 
-func (m *StatisticsRequest) GetRequestId() string {
-	if m != nil && m.RequestId != nil {
-		return *m.RequestId
-	}
-	return ""
-}
-
 func (m *StatisticsRequest) GetSpan() *Span {
 	if m != nil {
 		return m.Span
 	}
 	return nil
+}
+
+func (m *StatisticsRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
 }
 
 type StatisticsResponse struct {
@@ -266,13 +266,6 @@ func (m *ScanRequest) GetDefnID() uint64 {
 	return 0
 }
 
-func (m *ScanRequest) GetRequestId() string {
-	if m != nil && m.RequestId != nil {
-		return *m.RequestId
-	}
-	return ""
-}
-
 func (m *ScanRequest) GetSpan() *Span {
 	if m != nil {
 		return m.Span
@@ -308,6 +301,13 @@ func (m *ScanRequest) GetVector() *TsConsistency {
 	return nil
 }
 
+func (m *ScanRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
+}
+
 // Full table scan request from indexer.
 type ScanAllRequest struct {
 	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
@@ -329,13 +329,6 @@ func (m *ScanAllRequest) GetDefnID() uint64 {
 	return 0
 }
 
-func (m *ScanAllRequest) GetRequestId() string {
-	if m != nil && m.RequestId != nil {
-		return *m.RequestId
-	}
-	return ""
-}
-
 func (m *ScanAllRequest) GetLimit() int64 {
 	if m != nil && m.Limit != nil {
 		return *m.Limit
@@ -355,6 +348,13 @@ func (m *ScanAllRequest) GetVector() *TsConsistency {
 		return m.Vector
 	}
 	return nil
+}
+
+func (m *ScanAllRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
 }
 
 // Request by client to stop streaming the query results.
@@ -428,13 +428,6 @@ func (m *CountRequest) GetDefnID() uint64 {
 	return 0
 }
 
-func (m *CountRequest) GetRequestId() string {
-	if m != nil && m.RequestId != nil {
-		return *m.RequestId
-	}
-	return ""
-}
-
 func (m *CountRequest) GetSpan() *Span {
 	if m != nil {
 		return m.Span
@@ -454,6 +447,13 @@ func (m *CountRequest) GetVector() *TsConsistency {
 		return m.Vector
 	}
 	return nil
+}
+
+func (m *CountRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
 }
 
 // total number of entries in index.
