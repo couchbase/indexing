@@ -8,6 +8,8 @@ import "sort"
 import "github.com/couchbase/indexing/secondary/dcp"
 import "github.com/couchbase/indexing/secondary/logging"
 
+const DCPSEQNO_REQ_CHANSIZE = 20000
+
 // cache Bucket{} and DcpFeed{} objects, its underlying connections
 // to make Stats-Seqnos fast.
 var dcp_buckets_seqnos struct {
@@ -48,7 +50,7 @@ type vbSeqnosReader struct {
 func newVbSeqnosReader(kvfeeds map[string]*couchbase.DcpFeed) *vbSeqnosReader {
 	r := &vbSeqnosReader{
 		kvfeeds:   kvfeeds,
-		requestCh: make(chan vbSeqnosRequest, 5000),
+		requestCh: make(chan vbSeqnosRequest, DCPSEQNO_REQ_CHANSIZE),
 	}
 
 	go r.Routine()

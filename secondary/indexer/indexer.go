@@ -131,7 +131,7 @@ type kvRequest struct {
 func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx := &indexer{
-		wrkrRecvCh:          make(MsgChannel),
+		wrkrRecvCh:          make(MsgChannel, WORKER_RECV_QUEUE_LEN),
 		internalRecvCh:      make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		adminRecvCh:         make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		internalAdminRecvCh: make(MsgChannel),
