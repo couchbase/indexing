@@ -338,7 +338,16 @@ func (c ClusterInfoCache) GetLocalHostAddress() (string, error) {
 
 func (c ClusterInfoCache) validateCache() bool {
 
-	var hostList1, hostList2 []string
+	if len(c.nodes) != len(c.nodesvs) {
+		return false
+	}
+
+	//validation not required for single node setup(MB-16494)
+	if len(c.nodes) == 1 && len(c.nodesvs) == 1 {
+		return true
+	}
+
+	var hostList1 []string
 
 	for _, n := range c.nodes {
 		hostList1 = append(hostList1, n.Hostname)
@@ -351,15 +360,12 @@ func (c ClusterInfoCache) validateCache() bool {
 		if h == "" {
 			h = "127.0.0.1"
 		}
-		hostList2 = append(hostList2, net.JoinHostPort(h, fmt.Sprint(p)))
 
-		if hostList1[i] != hostList2[i] {
+		hp := net.JoinHostPort(h, fmt.Sprint(p))
+
+		if hostList1[i] != hp {
 			return false
 		}
-	}
-
-	if len(hostList1) != len(hostList2) {
-		return false
 	}
 
 	return true

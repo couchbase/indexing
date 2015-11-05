@@ -190,6 +190,7 @@ func (m *QueryPayload) GetStreamEnd() *StreamEndResponse {
 type StatisticsRequest struct {
 	DefnID           *uint64 `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
 	Span             *Span   `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
+	RequestId        *string `protobuf:"bytes,3,opt,name=requestId" json:"requestId,omitempty"`
 	XXX_unrecognized []byte  `json:"-"`
 }
 
@@ -209,6 +210,13 @@ func (m *StatisticsRequest) GetSpan() *Span {
 		return m.Span
 	}
 	return nil
+}
+
+func (m *StatisticsRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
 }
 
 type StatisticsResponse struct {
@@ -243,6 +251,7 @@ type ScanRequest struct {
 	Limit            *int64         `protobuf:"varint,4,req,name=limit" json:"limit,omitempty"`
 	Cons             *uint32        `protobuf:"varint,5,req,name=cons" json:"cons,omitempty"`
 	Vector           *TsConsistency `protobuf:"bytes,6,opt,name=vector" json:"vector,omitempty"`
+	RequestId        *string        `protobuf:"bytes,7,opt,name=requestId" json:"requestId,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -292,12 +301,20 @@ func (m *ScanRequest) GetVector() *TsConsistency {
 	return nil
 }
 
+func (m *ScanRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
+}
+
 // Full table scan request from indexer.
 type ScanAllRequest struct {
 	DefnID           *uint64        `protobuf:"varint,1,req,name=defnID" json:"defnID,omitempty"`
 	Limit            *int64         `protobuf:"varint,2,req,name=limit" json:"limit,omitempty"`
 	Cons             *uint32        `protobuf:"varint,3,req,name=cons" json:"cons,omitempty"`
 	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
+	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -331,6 +348,13 @@ func (m *ScanAllRequest) GetVector() *TsConsistency {
 		return m.Vector
 	}
 	return nil
+}
+
+func (m *ScanAllRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
 }
 
 // Request by client to stop streaming the query results.
@@ -389,6 +413,7 @@ type CountRequest struct {
 	Span             *Span          `protobuf:"bytes,2,req,name=span" json:"span,omitempty"`
 	Cons             *uint32        `protobuf:"varint,3,req,name=cons" json:"cons,omitempty"`
 	Vector           *TsConsistency `protobuf:"bytes,4,opt,name=vector" json:"vector,omitempty"`
+	RequestId        *string        `protobuf:"bytes,5,opt,name=requestId" json:"requestId,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
@@ -422,6 +447,13 @@ func (m *CountRequest) GetVector() *TsConsistency {
 		return m.Vector
 	}
 	return nil
+}
+
+func (m *CountRequest) GetRequestId() string {
+	if m != nil && m.RequestId != nil {
+		return *m.RequestId
+	}
+	return ""
 }
 
 // total number of entries in index.
