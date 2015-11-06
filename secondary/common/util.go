@@ -565,8 +565,8 @@ func SetNumCPUs(percent int) int {
 
 func IndexStatement(def IndexDefn) string {
 	var stmt string
-	primCreate := "CREATE PRIMARY INDEX %s ON %s"
-	secCreate := "CREATE INDEX %s ON %s(%s)"
+	primCreate := "CREATE PRIMARY INDEX `%s` ON `%s`"
+	secCreate := "CREATE INDEX `%s` ON `%s`(%s)"
 	where := " WHERE %s"
 	using := " USING GSI"
 
