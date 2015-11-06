@@ -421,6 +421,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	setConsistency := func(
 		cons common.Consistency, vector *protobuf.TsConsistency) {
 
+		var localErr error
+		defer func() {
+			if err == nil {
+				err = localErr
+			}
+		}()
 		r.Consistency = &cons
 		cfg := s.config.Load()
 		if cons == common.QueryConsistency && vector != nil {
@@ -430,11 +436,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				r.Ts.Seqnos[vbno] = vector.Seqnos[i]
 				r.Ts.Vbuuids[vbno] = vector.Vbuuids[i]
 			}
-
 		} else if cons == common.SessionConsistency {
-			r.Ts = common.NewTsVbuuid("", cfg["numVbuckets"].Int())
-			r.Ts.Seqnos = vector.Seqnos // full set of seqnos.
-			r.Ts.Crc64 = vector.GetCrc64()
+			cluster := cfg["clusterAddr"].String()
+			r.Ts = &common.TsVbuuid{}
+			r.Ts.Seqnos, localErr = common.BucketSeqnos(cluster, "default", r.Bucket)
+			r.Ts.Crc64 = 0
+			r.Ts.Bucket = r.Bucket
 		}
 	}
 
@@ -454,9 +461,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			r.isPrimary = indexInst.Defn.IsPrimary
 			r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
 			r.IndexInstId = indexInst.InstId
-			if r.Ts != nil {
-				r.Ts.Bucket = r.Bucket
-			}
+
 			if indexInst.State != common.INDEX_STATE_ACTIVE {
 				localErr = common.ErrIndexNotReady
 			} else {
@@ -482,10 +487,10 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.RequestId = req.GetRequestId()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
-		setConsistency(cons, vector)
 		r.ScanType = CountReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		setIndexParams()
+		setConsistency(cons, vector)
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
@@ -496,10 +501,10 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.RequestId = req.GetRequestId()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
-		setConsistency(cons, vector)
 		r.ScanType = ScanReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		setIndexParams()
+		setConsistency(cons, vector)
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
@@ -510,10 +515,10 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.RequestId = req.GetRequestId()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
-		setConsistency(cons, vector)
 		r.ScanType = ScanAllReq
 		r.Limit = req.GetLimit()
 		setIndexParams()
+		setConsistency(cons, vector)
 	default:
 		err = ErrUnsupportedRequest
 	}
