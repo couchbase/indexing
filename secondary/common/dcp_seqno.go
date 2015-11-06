@@ -202,11 +202,13 @@ func BucketSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error)
 	var reader *vbSeqnosReader
 
 	reader, err = func() (*vbSeqnosReader, error) {
-		dcp_buckets_seqnos.rw.Lock()
-		defer dcp_buckets_seqnos.rw.Unlock()
 
+		dcp_buckets_seqnos.rw.RLock()
 		reader, ok := dcp_buckets_seqnos.readerMap[bucketn]
+		dcp_buckets_seqnos.rw.RUnlock()
 		if !ok { // no {bucket,kvfeeds} found, create!
+			dcp_buckets_seqnos.rw.Lock()
+			defer dcp_buckets_seqnos.rw.Unlock()
 			if err = addDBSbucket(cluster, pooln, bucketn); err != nil {
 				return nil, err
 			}
