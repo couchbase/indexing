@@ -109,14 +109,14 @@ var SystemConfig = Config{
 	"projector.feedWaitStreamReqTimeout": ConfigValue{
 		300 * 1000,
 		"timeout, in milliseconds, to await a response for StreamRequest",
-		300 * 1000,
-		false, // mutable
+		300 * 1000, // 300s
+		false,      // mutable
 	},
 	"projector.feedWaitStreamEndTimeout": ConfigValue{
 		300 * 1000,
 		"timeout, in milliseconds, to await a response for StreamEnd",
-		300 * 1000,
-		false, // mutable
+		300 * 1000, // 300s
+		false,      // mutable
 	},
 	"projector.mutationChanSize": ConfigValue{
 		100,
@@ -275,7 +275,7 @@ var SystemConfig = Config{
 			"if not active, does not affect existing feeds, " +
 			"also refer to projector.adminport.readTimeout and " +
 			"indexer.dataport.tcpReadDeadline.",
-		300 * 1000, //10s
+		300 * 1000, //300s
 		false,      // mutable
 	},
 	"projector.dataport.maxPayload": ConfigValue{
@@ -328,7 +328,7 @@ var SystemConfig = Config{
 		"timeout, in milliseconds, while reading from socket, " +
 			"also refer to projector.adminport.readTimeout and " +
 			"projector.dataport.harakiriTimeout.",
-		300 * 1000, // 10s
+		300 * 1000, // 300s
 		false,      // mutable
 	},
 	// indexer queryport configuration
