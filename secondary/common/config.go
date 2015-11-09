@@ -115,14 +115,14 @@ var SystemConfig = Config{
 	"projector.feedWaitStreamReqTimeout": ConfigValue{
 		300 * 1000,
 		"timeout, in milliseconds, to await a response for StreamRequest",
-		300 * 1000,
-		false, // mutable
+		300 * 1000, // 300s
+		false,      // mutable
 	},
 	"projector.feedWaitStreamEndTimeout": ConfigValue{
 		300 * 1000,
 		"timeout, in milliseconds, to await a response for StreamEnd",
-		300 * 1000,
-		false, // mutable
+		300 * 1000, // 300s
+		false,      // mutable
 	},
 	"projector.mutationChanSize": ConfigValue{
 		100,
@@ -293,7 +293,7 @@ var SystemConfig = Config{
 			"if not active, does not affect existing feeds, " +
 			"also refer to projector.adminport.readTimeout and " +
 			"indexer.dataport.tcpReadDeadline.",
-		300 * 1000, //10s
+		300 * 1000, //300s
 		false,      // mutable
 	},
 	"projector.dataport.maxPayload": ConfigValue{
@@ -352,7 +352,7 @@ var SystemConfig = Config{
 		"timeout, in milliseconds, while reading from socket, " +
 			"also refer to projector.adminport.readTimeout and " +
 			"projector.dataport.harakiriTimeout.",
-		300 * 1000, // 10s
+		300 * 1000, // 300s
 		false,      // mutable
 	},
 	// indexer queryport configuration
@@ -447,6 +447,26 @@ var SystemConfig = Config{
 		1000,
 		"wait, in milliseconds, before restarting the ServicesNotifier",
 		1000,
+		true, // immutable
+	},
+	"queryport.client.logtick": ConfigValue{
+		60 * 1000, // 1 minutes
+		"tick, in milliseconds, to log queryport client's statistics",
+		60 * 1000,
+		true, // immutable
+	},
+	"queryport.client.load.randomWeight": ConfigValue{
+		0.1,
+		"random weightage between [0, 1.0) for random load-balancing, " +
+			"lower the value less likely for random load-balancing",
+		0.1,
+		true, // immutable
+	},
+	"queryport.client.load.equivalenceFactor": ConfigValue{
+		0.9,
+		"normalization factor on replica's avg-load to group them with " +
+			"least loaded replica.",
+		0.9,
 		true, // immutable
 	},
 	// projector's adminport client, can be used by indexer.
@@ -990,6 +1010,18 @@ func (cv ConfigValue) Int() int {
 		return int(val)
 	}
 	panic(fmt.Errorf("not support Int() on %#v", cv))
+}
+
+// Float64 assumes config value integer or float64.
+func (cv ConfigValue) Float64() float64 {
+	if val, ok := cv.Value.(float64); ok {
+		return val
+	} else if val, ok := cv.Value.(float32); ok {
+		return float64(val)
+	} else if val, ok := cv.Value.(int); ok {
+		return float64(val)
+	}
+	panic(fmt.Errorf("not support Float64() on %#v", cv))
 }
 
 // Uint64 assumes config value is 64-bit integer and returns the same.
