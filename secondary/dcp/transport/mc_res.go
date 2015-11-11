@@ -145,6 +145,10 @@ func (res *MCResponse) Transmit(w io.Writer) (n int, err error) {
 
 // Receive will fill this MCResponse with the data from this reader.
 func (res *MCResponse) Receive(r io.Reader, hdrBytes []byte) (int, error) {
+	return res.Receive2(r, hdrBytes, []byte(nil))
+}
+
+func (res *MCResponse) Receive2(r io.Reader, hdrBytes []byte, buf []byte) (int, error) {
 	if len(hdrBytes) < HDR_LEN {
 		hdrBytes = []byte{
 			0, 0, 0, 0, 0, 0, 0, 0,
@@ -170,7 +174,10 @@ func (res *MCResponse) Receive(r io.Reader, hdrBytes []byte) (int, error) {
 
 	bodyLen := int(binary.BigEndian.Uint32(hdrBytes[8:12])) - (klen + elen)
 
-	buf := make([]byte, klen+elen+bodyLen)
+	if len(buf) < klen+elen+bodyLen {
+		buf = make([]byte, klen+elen+bodyLen)
+	}
+
 	m, err := io.ReadFull(r, buf)
 	if err == nil {
 		res.Extras = buf[0:elen]

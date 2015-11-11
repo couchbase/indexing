@@ -6,9 +6,11 @@ import "fmt"
 import "sort"
 
 import "github.com/couchbase/indexing/secondary/dcp"
+import "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import "github.com/couchbase/indexing/secondary/logging"
 
-const DCPSEQNO_REQ_CHANSIZE = 20000
+const seqsReqChanSize = 20000
+const seqsBufSize = 64 * 1024
 
 // cache Bucket{} and DcpFeed{} objects, its underlying connections
 // to make Stats-Seqnos fast.
@@ -30,6 +32,16 @@ type vbSeqnosResponse struct {
 	err    error
 }
 
+type kvConn struct {
+	mc      *memcached.Client
+	seqsbuf []uint64
+	tmpbuf  []byte
+}
+
+func newKVConn(mc *memcached.Client) *kvConn {
+	return &kvConn{mc: mc, seqsbuf: make([]uint64, 1024), tmpbuf: make([]byte, seqsBufSize)}
+}
+
 type vbSeqnosRequest chan *vbSeqnosResponse
 
 func (ch *vbSeqnosRequest) Reply(response *vbSeqnosResponse) {
@@ -43,14 +55,14 @@ func (ch *vbSeqnosRequest) Response() ([]uint64, error) {
 
 // Bucket level seqnos reader for the cluster
 type vbSeqnosReader struct {
-	kvfeeds   map[string]*couchbase.DcpFeed
+	kvfeeds   map[string]*kvConn
 	requestCh chan vbSeqnosRequest
 }
 
-func newVbSeqnosReader(kvfeeds map[string]*couchbase.DcpFeed) *vbSeqnosReader {
+func newVbSeqnosReader(kvfeeds map[string]*kvConn) *vbSeqnosReader {
 	r := &vbSeqnosReader{
 		kvfeeds:   kvfeeds,
-		requestCh: make(chan vbSeqnosRequest, DCPSEQNO_REQ_CHANSIZE),
+		requestCh: make(chan vbSeqnosRequest, seqsReqChanSize),
 	}
 
 	go r.Routine()
@@ -89,7 +101,7 @@ func (r *vbSeqnosReader) Routine() {
 
 	// Cleanup all feeds
 	for _, kvfeed := range r.kvfeeds {
-		kvfeed.Close()
+		kvfeed.mc.Close()
 	}
 }
 
@@ -102,7 +114,7 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 		return err
 	}
 
-	kvfeeds := make(map[string]*couchbase.DcpFeed)
+	kvfeeds := make(map[string]*kvConn)
 
 	defer func() {
 		if err == nil {
@@ -110,7 +122,7 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 			dcp_buckets_seqnos.readerMap[bucketn] = newVbSeqnosReader(kvfeeds)
 		} else {
 			for _, kvfeed := range kvfeeds {
-				kvfeed.Close()
+				kvfeed.mc.Close()
 			}
 		}
 	}()
@@ -141,9 +153,8 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 	}
 
 	// make sure a feed is available for all kv-nodes
-	var kvfeed *couchbase.DcpFeed
+	var conn *memcached.Client
 
-	config := map[string]interface{}{"genChanSize": 1000, "dataChanSize": 10}
 	for kvaddr := range m {
 		uuid, _ := NewUUID()
 		name := uuid.Str()
@@ -153,14 +164,12 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 			return err
 		}
 		name = "getseqnos-" + name
-		kvfeed, err = bucket.StartDcpFeedOver(
-			couchbase.NewDcpFeedName(name), uint32(0), []string{kvaddr},
-			uint16(0xABBA), config)
+		conn, err = bucket.GetDcpConn(name, kvaddr)
 		if err != nil {
 			logging.Errorf("StartDcpFeedOver(): %v\n", err)
 			return err
 		}
-		kvfeeds[kvaddr] = kvfeed
+		kvfeeds[kvaddr] = newKVConn(conn)
 	}
 
 	logging.Infof("{bucket,feeds} %q created for dcp_seqno cache...\n", bucketn)
@@ -224,26 +233,27 @@ func BucketSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error)
 	return
 }
 
-func CollectSeqnos(kvfeeds map[string]*couchbase.DcpFeed) (l_seqnos []uint64, err error) {
+func CollectSeqnos(kvfeeds map[string]*kvConn) (l_seqnos []uint64, err error) {
 	var wg sync.WaitGroup
 
 	// Buffer for storing kv_seqs from each node
-	kv_seqnos_node := make([]map[uint16]uint64, len(kvfeeds))
+	kv_seqnos_node := make([][]uint64, len(kvfeeds))
 	errors := make([]error, len(kvfeeds))
 
 	i := 0
 	for _, feed := range kvfeeds {
 		wg.Add(1)
-		go func(index int, feed *couchbase.DcpFeed) {
+		go func(index int, feed *kvConn) {
 			defer wg.Done()
-			kv_seqnos_node[index], errors[index] = feed.DcpGetSeqnos()
+			kv_seqnos_node[index] = feed.seqsbuf
+			errors[index] = couchbase.GetSeqs(feed.mc, kv_seqnos_node[index], feed.tmpbuf)
 		}(i, feed)
 		i++
 	}
 
 	wg.Wait()
 
-	seqnos := make(map[uint16]uint64)
+	seqnos := kv_seqnos_node[0]
 	for i, kv_seqnos := range kv_seqnos_node {
 		err := errors[i]
 		if err != nil {
@@ -252,7 +262,8 @@ func CollectSeqnos(kvfeeds map[string]*couchbase.DcpFeed) (l_seqnos []uint64, er
 		}
 
 		for vbno, seqno := range kv_seqnos {
-			if prev, ok := seqnos[vbno]; !ok || prev < seqno {
+			prev := seqnos[vbno]
+			if prev < seqno {
 				seqnos[vbno] = seqno
 			}
 		}
