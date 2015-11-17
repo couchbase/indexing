@@ -90,6 +90,13 @@ func main() {
 
 	case "consistency":
 		doConsistency(cmdOptions.Server, maxvb, client)
+
+	case "bufferedscan":
+		err = doBufferedScan(cmdOptions.Server, client)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
+		}
+
 	}
 	client.Close()
 }
