@@ -604,12 +604,15 @@ func (fdb *fdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 }
 
 func (fdb *fdbSlice) setCommittedCount() {
+
+	t0 := time.Now()
 	mainDbInfo, err := fdb.main[0].Info()
 	if err == nil {
 		platform.StoreUint64(&fdb.committedCount, mainDbInfo.DocCount())
 	} else {
 		logging.Errorf("ForestDB setCommittedCount failed %v", err)
 	}
+	fdb.idxStats.Timings.stKVInfo.Put(time.Now().Sub(t0))
 }
 
 func (fdb *fdbSlice) GetCommittedCount() uint64 {
@@ -743,10 +746,12 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 
 	fdb.isDirty = false
 
+	t0 := time.Now()
 	mainDbInfo, err := fdb.main[0].Info()
 	if err != nil {
 		return nil, err
 	}
+	fdb.idxStats.Timings.stKVInfo.Put(time.Now().Sub(t0))
 
 	newSnapshotInfo := &fdbSnapshotInfo{
 		Ts:        ts,
@@ -756,18 +761,23 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 
 	//for non-primary index add info for back-index
 	if !fdb.isPrimary {
+		t0 := time.Now()
 		backDbInfo, err := fdb.back[0].Info()
 		if err != nil {
 			return nil, err
 		}
+		fdb.idxStats.Timings.stKVInfo.Put(time.Now().Sub(t0))
 		newSnapshotInfo.BackSeq = backDbInfo.LastSeqNum()
 	}
 
 	if commit {
+		t0 := time.Now()
 		metaDbInfo, err := fdb.meta.Info()
 		if err != nil {
 			return nil, err
 		}
+		fdb.idxStats.Timings.stKVInfo.Put(time.Now().Sub(t0))
+
 		//the next meta seqno after this update
 		newSnapshotInfo.MetaSeq = metaDbInfo.LastSeqNum() + 1
 		infos, err := fdb.getSnapshotsMeta()
@@ -1067,14 +1077,19 @@ func (fdb *fdbSlice) updateSnapshotsMeta(infos []SnapshotInfo) error {
 	fdb.metaLock.Lock()
 	defer fdb.metaLock.Unlock()
 
+	var t0 time.Time
 	val, err := json.Marshal(infos)
 	if err != nil {
 		goto handle_err
 	}
+
+	t0 = time.Now()
 	err = fdb.meta.SetKV(snapshotMetaListKey, val)
 	if err != nil {
 		goto handle_err
 	}
+	fdb.idxStats.Timings.stKVMetaSet.Put(time.Now().Sub(t0))
+
 	return nil
 
 handle_err:
@@ -1088,14 +1103,15 @@ func (fdb *fdbSlice) getSnapshotsMeta() ([]SnapshotInfo, error) {
 	fdb.metaLock.Lock()
 	defer fdb.metaLock.Unlock()
 
+	t0 := time.Now()
 	data, err := fdb.meta.GetKV(snapshotMetaListKey)
-
 	if err != nil {
 		if err == forestdb.RESULT_KEY_NOT_FOUND {
 			return []SnapshotInfo(nil), nil
 		}
 		return nil, err
 	}
+	fdb.idxStats.Timings.stKVMetaGet.Put(time.Now().Sub(t0))
 
 	err = json.Unmarshal(data, &tmp)
 	if err != nil {
