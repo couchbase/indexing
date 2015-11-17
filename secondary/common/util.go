@@ -569,6 +569,7 @@ func IndexStatement(def IndexDefn) string {
 	secCreate := "CREATE INDEX `%s` ON `%s`(%s)"
 	where := " WHERE %s"
 	using := " USING GSI"
+	with := " WITH({\"index_type\" : \"%s\"})"
 
 	if def.IsPrimary {
 		stmt = fmt.Sprintf(primCreate, def.Name, def.Bucket)
@@ -587,6 +588,7 @@ func IndexStatement(def IndexDefn) string {
 	}
 
 	stmt += using
+	stmt += fmt.Sprintf(with, def.Using)
 	return stmt
 }
 
