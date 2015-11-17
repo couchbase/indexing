@@ -52,6 +52,9 @@ type IndexTimingStats struct {
 	stKVGet          stats.TimingStat
 	stKVSet          stats.TimingStat
 	stKVDelete       stats.TimingStat
+	stKVInfo         stats.TimingStat
+	stKVMetaGet      stats.TimingStat
+	stKVMetaSet      stats.TimingStat
 }
 
 func (it *IndexTimingStats) Init() {
@@ -65,6 +68,9 @@ func (it *IndexTimingStats) Init() {
 	it.stKVSet.Init()
 	it.stIteratorNext.Init()
 	it.stKVDelete.Init()
+	it.stKVInfo.Init()
+	it.stKVMetaGet.Init()
+	it.stKVMetaSet.Init()
 }
 
 type IndexStats struct {
@@ -273,6 +279,9 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("timings/storage_set", s.Timings.stKVSet.Value())
 		addStat("timings/storage_iterator_next", s.Timings.stIteratorNext.Value())
 		addStat("timings/storage_del", s.Timings.stKVDelete.Value())
+		addStat("timings/storage_info", s.Timings.stKVInfo.Value())
+		addStat("timings/storage_meta_get", s.Timings.stKVMetaGet.Value())
+		addStat("timings/storage_meta_set", s.Timings.stKVMetaSet.Value())
 	}
 
 	for _, s := range is.buckets {
