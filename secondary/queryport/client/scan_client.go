@@ -145,12 +145,12 @@ func (c *GsiScanClient) Lookup(
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanRequest{
-		DefnID:   proto.Uint64(defnID),
+		DefnID:    proto.Uint64(defnID),
 		RequestId: proto.String(requestId),
-		Span:     &protobuf.Span{Equals: equals},
-		Distinct: proto.Bool(distinct),
-		Limit:    proto.Int64(limit),
-		Cons:     proto.Uint32(uint32(cons)),
+		Span:      &protobuf.Span{Equals: equals},
+		Distinct:  proto.Bool(distinct),
+		Limit:     proto.Int64(limit),
+		Cons:      proto.Uint32(uint32(cons)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -205,7 +205,7 @@ func (c *GsiScanClient) Range(
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanRequest{
-		DefnID: proto.Uint64(defnID),
+		DefnID:    proto.Uint64(defnID),
 		RequestId: proto.String(requestId),
 		Span: &protobuf.Span{
 			Range: &protobuf.Range{
@@ -258,7 +258,7 @@ func (c *GsiScanClient) RangePrimary(
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanRequest{
-		DefnID: proto.Uint64(defnID),
+		DefnID:    proto.Uint64(defnID),
 		RequestId: proto.String(requestId),
 		Span: &protobuf.Span{
 			Range: &protobuf.Range{
@@ -312,10 +312,10 @@ func (c *GsiScanClient) ScanAll(
 	conn, pkt := connectn.conn, connectn.pkt
 
 	req := &protobuf.ScanAllRequest{
-		DefnID: proto.Uint64(defnID),
+		DefnID:    proto.Uint64(defnID),
 		RequestId: proto.String(requestId),
-		Limit:  proto.Int64(limit),
-		Cons:   proto.Uint32(uint32(cons)),
+		Limit:     proto.Int64(limit),
+		Cons:      proto.Uint32(uint32(cons)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -358,10 +358,10 @@ func (c *GsiScanClient) CountLookup(
 	}
 
 	req := &protobuf.CountRequest{
-		DefnID: proto.Uint64(defnID),
+		DefnID:    proto.Uint64(defnID),
 		RequestId: proto.String(requestId),
-		Span:   &protobuf.Span{Equals: equals},
-		Cons:   proto.Uint32(uint32(cons)),
+		Span:      &protobuf.Span{Equals: equals},
+		Cons:      proto.Uint32(uint32(cons)),
 	}
 	if vector != nil {
 		req.Vector = protobuf.NewTsConsistency(
@@ -395,7 +395,7 @@ func (c *GsiScanClient) CountRange(
 	}
 
 	req := &protobuf.CountRequest{
-		DefnID: proto.Uint64(defnID),
+		DefnID:    proto.Uint64(defnID),
 		RequestId: proto.String(requestId),
 		Span: &protobuf.Span{
 			Range: &protobuf.Range{
