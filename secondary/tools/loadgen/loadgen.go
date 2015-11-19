@@ -286,7 +286,8 @@ func gendocs(
 		scope = scope.RebuildContext()
 		doc := evaluate("root", scope, nterms["s"]).(string)
 		key := makeKey(prodfile, idx, i+1)
-		buckets[bucketname].SetRaw(key, options.expiry, str2bytes(doc))
+		err := buckets[bucketname].SetRaw(key, options.expiry, str2bytes(doc))
+		mf(err, "error creating document")
 		gench <- [3]string{bucketname, key, doc}
 	}
 	fmsg := "generated %v docs for bucket %v, routine %v\n"
