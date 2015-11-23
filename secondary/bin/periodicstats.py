@@ -15,6 +15,8 @@ parser.add_argument('--params', dest='params', default="all",
     help='parameters to plot')
 parser.add_argument('--opaques', dest='opaques', default="",
     help='graph for opaque tokens')
+parser.add_argument('--buckets', dest='buckets', default="",
+    help='graph for buckets')
 parser.add_argument('--topic', dest='topic', default="",
     help='graph for specified topic')
 parser.add_argument('--raddr', dest='raddr', default="",
@@ -23,6 +25,7 @@ parser.add_argument('logfile', nargs=1, help='logfile to parse')
 args = parser.parse_args()
 args.params = [ re.compile(p) for p in args.params.split(",") ]
 args.opaques = [ x.strip() for x in args.opaques.split(",") if x.strip() ]
+args.buckets = [ x.strip() for x in args.buckets.split(",") if x.strip() ]
 
 stats = []
 
@@ -241,7 +244,7 @@ def kind_memstats(logfile):
 def kind_dcplatency(logfile):
     print("parsing lines ...")
     stats = []
-    handler_dcpstats = lambda line, dstr : stats.append(eval(dstr))
+    handler_dcpstats = lambda line, dstr : stats.append(eval(dstr.replace("NaN","None")))
     matchers = [
       [ re.compile(r'.*\[Info\].*dcp latency stats(.*)'),
         handler_dcpstats ],
@@ -279,12 +282,12 @@ def kind_idxstats(logfile) :
 
 def kind_kvdata(logfile):
     print("parsing lines ...")
-    opqstats = {} # opaque -> stats
-    def handler_kvdata(line, opq, dstr):
-        opqstats.setdefault(opq, []).append(eval(dstr))
+    opqstats = {} # opaque -> bucket -> stats
+    def handler_kvdata(line, bucket, opq, dstr):
+        opqstats.setdefault(opq, {}).setdefault(bucket, []).append(eval(dstr))
 
     matchers = [
-      [ re.compile(r'.*\[Info\] KVDT.* (##[0-9a-z]*) stats (.*)'),
+      [ re.compile(r'.*\[Info\] KVDT\[<-(.*)<-.* (##[0-9a-z]*) stats (.*)'),
         handler_kvdata ],
     ]
     for line in open(logfile).readlines() :
@@ -292,11 +295,13 @@ def kind_kvdata(logfile):
             m = regx.match(line)
             if m : tryhandler(lambda : fn(m.group(), *m.groups()))
 
-    if len(args.opaques) == 0 :
-        [ print("for %s - %s lines" % (opq, len(opqstats[opq])))
-          for opq in sorted(opqstats.keys()) ]
+    if len(args.opaques) == 0 or len(args.buckets) == 0 :
+        [ print("for {%s,%s} - %s lines" % (opq, bucket, len(opqstats[opq])))
+          for opq in sorted(opqstats.keys())
+          for bucket in sorted(opqstats[opq].keys()) ]
     else :
-        [ graph_kvdata(opq, opqstats[opq]) for opq in args.opaques ]
+        [ graph_kvdata(opq, opqstats[opq][bucket])
+          for opq in args.opaques for bucket in args.buckets ]
 
 def kind_endp(logfile):
     print("parsing lines ...")
