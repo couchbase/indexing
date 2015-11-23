@@ -133,7 +133,7 @@ govers = {
 }
 @task
 @parallel
-def setup(targetos="deb", gover="143"):
+def setup(targetos="deb", gover="151"):
     """setup target nodes in the cluster
     - install os level packages
     - create couchbase user
@@ -390,8 +390,7 @@ gunzip {comp}.log.*; cat `ls -1 {comp}.log* | sort -t. -nk3 -r` > \
 @parallel
 def log2i(target, comps=""):
     target = os.sep.join([target, env.host])
-    trycmd("mkdir -p {target}".format(target=target, host=env.host), op="local")
-    trycmd("rm -rf {target}".format(target=target))
+    trycmd("mkdir -p {target}".format(target=target), op="local")
     logpath = os.sep.join([installdir, "var", "lib", "couchbase", "logs"])
     with cd(logpath), lcd(target):
         for comp in comps.replace(";", ",").split(";") :
@@ -399,9 +398,54 @@ def log2i(target, comps=""):
             trycmd(fmt_log2i.format(comp=comp), op="sudo")
             trycmd("chown {user}:{group} {f}".format(user=env.user, group=env.user, f=fulllog), op="sudo")
             targetfile = os.sep.join([logpath, fulllog])
-            cmd = "scp -i {keyfile} {user}@{host}:{targetfile} .".format(
+            trycmd("gzip {targetfile}".format(targetfile=targetfile), op="sudo")
+            cmd = "scp -i {keyfile} {user}@{host}:{targetfile}.gz .".format(
                     keyfile=env.key_filename[0], user=env.user, host=env.host,
                     targetfile=targetfile)
+            trycmd(cmd, op="local")
+            trycmd("gunzip %s.gz" % os.path.basename(targetfile), op="local")
+
+@task
+@parallel
+def getprofiles(target, comps=""):
+    target = os.sep.join([target, env.host])
+    trycmd("mkdir -p {target}".format(target=target), op="local")
+    urlmprof = {
+        "projector": "http://%s:9999/debug/pprof/heap",
+        "indexer": "http://%s:9102/debug/pprof/heap",
+    }
+    urlpprof = {
+        "projector": "http://%s:9999/debug/pprof/profile",
+        "indexer": "http://%s:9102/debug/pprof/profile",
+    }
+    for comp in comps.replace(";", ",").split(";") :
+        ex = os.sep.join([installdir, "bin", comp])
+        with lcd(target), shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot) :
+            # get memory profile information
+            url = urlmprof[comp] % env.host
+            margs = [
+                ("-inuse_space", ex, url, "/tmp/%s.mprofi.svg"%comp),
+                ("-alloc_space", ex, url, "/tmp/%s.mprofa.svg"%comp),
+                ("-inuse_objects", ex, url, "/tmp/%s.mprofio.svg"%comp),
+                ("-alloc_objects", ex, url, "/tmp/%s.mprofao.svg"%comp),
+            ]
+            for arg in margs :
+                cmd = "go tool pprof %s -svg %s %s > %s" % arg
+                trycmd(cmd)
+                targetfile = arg[-1]
+                cmd = "scp -i {keyfile} {user}@{host}:{targetfile} .".format(
+                        keyfile=env.key_filename[0], user=env.user,
+                        host=env.host, targetfile=targetfile)
+                trycmd(cmd, op="local")
+            # get cpu profile information
+            url = urlpprof[comp] % env.host
+            parg = ( url, "/tmp/%s.pprof.svg"%comp)
+            cmd = "go tool pprof -svg %s > %s" % parg
+            trycmd(cmd)
+            targetfile = parg[-1]
+            cmd = "scp -i {keyfile} {user}@{host}:{targetfile} .".format(
+                    keyfile=env.key_filename[0], user=env.user,
+                    host=env.host, targetfile=targetfile)
             trycmd(cmd, op="local")
 
 fmt_indexperf = "\
