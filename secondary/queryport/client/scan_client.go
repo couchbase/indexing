@@ -71,7 +71,7 @@ func (c *GsiScanClient) LookupStatistics(
 		DefnID: proto.Uint64(defnID),
 		Span:   &protobuf.Span{Equals: [][]byte{val}},
 	}
-	resp, err := c.doRequestResponse(req)
+	resp, err := c.doRequestResponse(req, "")
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func (c *GsiScanClient) RangeStatistics(
 			},
 		},
 	}
-	resp, err := c.doRequestResponse(req)
+	resp, err := c.doRequestResponse(req, "")
 	if err != nil {
 		return nil, err
 	}
@@ -159,8 +159,8 @@ func (c *GsiScanClient) Lookup(
 
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v Lookup() request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, err)
+		fmsg := "%v Lookup(%v) request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, err)
 		healthy = false
 		return err, false
 	}
@@ -168,10 +168,10 @@ func (c *GsiScanClient) Lookup(
 	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb)
+		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
 		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v Lookup() response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, err)
+			fmsg := "%v Lookup(%s) response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, requestId, err)
 		} else { // partially succeeded
 			partial = true
 		}
@@ -222,8 +222,8 @@ func (c *GsiScanClient) Range(
 	}
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v Range() request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, err)
+		fmsg := "%v Range(%v) request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, err)
 		healthy = false
 		return err, false
 	}
@@ -231,10 +231,10 @@ func (c *GsiScanClient) Range(
 	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb)
+		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
 		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v Range() response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, err)
+			fmsg := "%v Range(%v) response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, requestId, err)
 		} else { // partial succeeded
 			partial = true
 		}
@@ -276,8 +276,8 @@ func (c *GsiScanClient) RangePrimary(
 	}
 	// ---> protobuf.ScanRequest
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v RangePrimary() request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, err)
+		fmsg := "%v RangePrimary(%v) request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, err)
 		healthy = false
 		return err, false
 	}
@@ -285,10 +285,10 @@ func (c *GsiScanClient) RangePrimary(
 	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb)
+		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
 		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v RangePrimary() response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, err)
+			fmsg := "%v RangePrimary(%v) response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, requestId, err)
 		} else {
 			partial = true
 		}
@@ -322,8 +322,8 @@ func (c *GsiScanClient) ScanAll(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v ScanAll() request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, err)
+		fmsg := "%v ScanAll(%v) request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, err)
 		healthy = false
 		return err, false
 	}
@@ -331,10 +331,10 @@ func (c *GsiScanClient) ScanAll(
 	cont, partial := true, false
 	for cont {
 		// <--- protobuf.ResponseStream
-		cont, healthy, err = c.streamResponse(conn, pkt, callb)
+		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
 		if err != nil { // if err, cont should have been set to false
-			fmsg := "%v ScanAll() response failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, err)
+			fmsg := "%v ScanAll(%v) response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, requestId, err)
 		} else {
 			partial = true
 		}
@@ -367,7 +367,7 @@ func (c *GsiScanClient) CountLookup(
 		req.Vector = protobuf.NewTsConsistency(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
-	resp, err := c.doRequestResponse(req)
+	resp, err := c.doRequestResponse(req, requestId)
 	if err != nil {
 		return 0, err
 	}
@@ -409,7 +409,7 @@ func (c *GsiScanClient) CountRange(
 			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
 	}
 
-	resp, err := c.doRequestResponse(req)
+	resp, err := c.doRequestResponse(req, requestId)
 	if err != nil {
 		return 0, err
 	}
@@ -425,7 +425,9 @@ func (c *GsiScanClient) Close() error {
 	return c.pool.Close()
 }
 
-func (c *GsiScanClient) doRequestResponse(req interface{}) (interface{}, error) {
+func (c *GsiScanClient) doRequestResponse(
+	req interface{}, requestId string) (interface{}, error) {
+
 	connectn, err := c.pool.Get()
 	if err != nil {
 		return nil, err
@@ -437,8 +439,8 @@ func (c *GsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 
 	// ---> protobuf.*Request
 	if err := c.sendRequest(conn, pkt, req); err != nil {
-		fmsg := "%v %T request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, req, err)
+		fmsg := "%v %T(%v) request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, req, requestId, err)
 		healthy = false
 		return nil, err
 	}
@@ -449,8 +451,8 @@ func (c *GsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 	// <--- protobuf.*Response
 	resp, err := pkt.Receive(conn)
 	if err != nil {
-		fmsg := "%v connection %v response %T transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, laddr, req, err)
+		fmsg := "%v req(%v) connection %v response %T transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, laddr, req, err)
 		healthy = false
 		return nil, err
 	}
@@ -458,8 +460,8 @@ func (c *GsiScanClient) doRequestResponse(req interface{}) (interface{}, error) 
 	conn.SetReadDeadline(time.Now().Add(timeoutMs))
 	// <--- protobuf.StreamEndResponse (skipped) TODO: knock this off.
 	if endResp, err := pkt.Receive(conn); err != nil {
-		fmsg := "%v connection %v response %T transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, laddr, req, err)
+		fmsg := "%v req(%v) connection %v response %T transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, laddr, req, err)
 		healthy = false
 		return nil, err
 	} else if endResp != nil {
@@ -480,7 +482,7 @@ func (c *GsiScanClient) sendRequest(
 func (c *GsiScanClient) streamResponse(
 	conn net.Conn,
 	pkt *transport.TransportPacket,
-	callb ResponseHandler) (cont bool, healthy bool, err error) {
+	callb ResponseHandler, requestId string) (cont bool, healthy bool, err error) {
 
 	var resp interface{}
 	var finish bool
@@ -495,17 +497,17 @@ func (c *GsiScanClient) streamResponse(
 		//callb(resp) // callback with error
 		cont, healthy = false, false
 		if err == io.EOF {
-			fmsg := "%v connection %q closed `%v` \n"
-			logging.Errorf(fmsg, c.logPrefix, laddr, err)
+			fmsg := "%v req(%v) connection %q closed `%v` \n"
+			logging.Errorf(fmsg, c.logPrefix, requestId, laddr, err)
 		} else {
-			fmsg := "%v connection %q response transport failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, laddr, err)
+			fmsg := "%v req(%v) connection %q response transport failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, requestId, laddr, err)
 		}
 
 	} else if resp == nil {
 		finish = true
-		fmsg := "%v connection %q received StreamEndResponse"
-		logging.Tracef(fmsg, c.logPrefix, laddr)
+		fmsg := "%v req(%v) connection %q received StreamEndResponse"
+		logging.Tracef(fmsg, c.logPrefix, requestId, laddr)
 		callb(&protobuf.StreamEndResponse{}) // callback most likely return true
 		cont, healthy = false, true
 
@@ -519,7 +521,8 @@ func (c *GsiScanClient) streamResponse(
 
 	var closeErr error
 	if cont == false && healthy == true && finish == false {
-		if closeErr, healthy = c.closeStream(conn, pkt); err == nil {
+		closeErr, healthy = c.closeStream(conn, pkt, requestId)
+		if err == nil {
 			err = closeErr
 		}
 	}
@@ -527,7 +530,8 @@ func (c *GsiScanClient) streamResponse(
 }
 
 func (c *GsiScanClient) closeStream(
-	conn net.Conn, pkt *transport.TransportPacket) (err error, healthy bool) {
+	conn net.Conn, pkt *transport.TransportPacket,
+	requestId string) (err error, healthy bool) {
 
 	var resp interface{}
 	laddr := conn.LocalAddr()
@@ -535,13 +539,13 @@ func (c *GsiScanClient) closeStream(
 	// request server to end the stream.
 	err = c.sendRequest(conn, pkt, &protobuf.EndStreamRequest{})
 	if err != nil {
-		fmsg := "%v closeStream() request transport failed `%v`\n"
-		logging.Errorf(fmsg, c.logPrefix, err)
+		fmsg := "%v closeStream(%v) request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, err)
 		healthy = false
 		return
 	}
-	fmsg := "%v connection %q transmitted protobuf.EndStreamRequest"
-	logging.Tracef(fmsg, c.logPrefix, laddr)
+	fmsg := "%v req(%v) connection %q transmitted protobuf.EndStreamRequest"
+	logging.Tracef(fmsg, c.logPrefix, requestId, laddr)
 
 	timeoutMs := c.readDeadline * time.Millisecond
 	// flush the connection until stream has ended.
@@ -551,12 +555,12 @@ func (c *GsiScanClient) closeStream(
 		if err != nil {
 			healthy = false
 			if err == io.EOF {
-				fmsg := "%v connection %q closed `%v`\n"
-				logging.Errorf(fmsg, c.logPrefix, laddr, err)
+				fmsg := "%v req(%v) connection %q closed `%v`\n"
+				logging.Errorf(fmsg, c.logPrefix, requestId, laddr, err)
 				return
 			}
-			fmsg := "%v connection %q response transport failed `%v`\n"
-			logging.Errorf(fmsg, c.logPrefix, laddr, err)
+			fmsg := "%v req(%v) connection %q response transport failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, requestId, laddr, err)
 			return
 
 		} else if resp == nil { // End of stream marker

@@ -3,6 +3,7 @@ package client
 import "time"
 import "unsafe"
 import "io"
+import "sync/atomic"
 import "fmt"
 
 import "github.com/couchbase/indexing/secondary/logging"
@@ -193,8 +194,8 @@ type GsiClient struct {
 	cluster      string
 	maxvb        int
 	config       common.Config
-	queryClients map[string]*GsiScanClient // queryport -> scan-client
-	bucketHash   unsafe.Pointer            // map[string]uint64 // bucket -> crc64
+	queryClients unsafe.Pointer // map[string(queryport)]*GsiScanClient
+	bucketHash   unsafe.Pointer // map[string]uint64 // bucket -> crc64
 }
 
 // NewGsiClient returns client to access GSI cluster.
@@ -419,7 +420,7 @@ func (c *GsiClient) Lookup(
 	begin := time.Now()
 
 	err = c.doScan(
-		defnID,
+		defnID, requestId,
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
@@ -467,7 +468,7 @@ func (c *GsiClient) Range(
 	begin := time.Now()
 
 	err = c.doScan(
-		defnID,
+		defnID, requestId,
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
@@ -528,7 +529,7 @@ func (c *GsiClient) ScanAll(
 	begin := time.Now()
 
 	err = c.doScan(
-		defnID,
+		defnID, requestId,
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
@@ -568,7 +569,8 @@ func (c *GsiClient) CountLookup(
 	begin := time.Now()
 
 	err = c.doScan(
-		defnID, func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+		defnID, requestId,
+		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
 			vector, err = c.getConsistency(cons, vector, index.Bucket)
@@ -603,7 +605,8 @@ func (c *GsiClient) CountRange(
 	begin := time.Now()
 
 	err = c.doScan(
-		defnID, func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+		defnID, requestId,
+		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
 			vector, err = c.getConsistency(cons, vector, index.Bucket)
@@ -634,31 +637,47 @@ func (c *GsiClient) Close() {
 		return
 	}
 	c.bridge.Close()
-	for _, queryClient := range c.queryClients {
-		queryClient.Close()
+	qcs := *((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
+	for _, qc := range qcs {
+		qc.Close()
 	}
 }
 
 func (c *GsiClient) updateScanClients() {
-	cache := make(map[string]bool)
+	newclients, staleclients := map[string]bool{}, map[string]bool{}
+	cache := map[string]bool{}
+	qcs := *((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
 	// add new indexer-nodes
 	for _, queryport := range c.bridge.GetScanports() {
 		cache[queryport] = true
-		if _, ok := c.queryClients[queryport]; !ok {
-			c.queryClients[queryport] = NewGsiScanClient(queryport, c.config)
+		if _, ok := qcs[queryport]; !ok {
+			newclients[queryport] = true
 		}
 	}
-	// forget removed indexer-nodes.
-	for queryport, queryClient := range c.queryClients {
+	// forget stale indexer-nodes.
+	for queryport, qc := range qcs {
 		if _, ok := cache[queryport]; !ok {
-			queryClient.Close()
-			delete(c.queryClients, queryport)
+			qc.Close()
+			staleclients[queryport] = true
 		}
+	}
+	if len(newclients) > 0 || len(staleclients) > 0 {
+		clients := make(map[string]*GsiScanClient)
+		for queryport, qc := range qcs {
+			if _, ok := staleclients[queryport]; ok {
+				continue
+			}
+			clients[queryport] = qc
+		}
+		for queryport := range newclients {
+			clients[queryport] = NewGsiScanClient(queryport, c.config)
+		}
+		atomic.StorePointer(&c.queryClients, unsafe.Pointer(&clients))
 	}
 }
 
 func (c *GsiClient) doScan(
-	defnID uint64,
+	defnID uint64, requestId string,
 	callb func(*GsiScanClient, *common.IndexDefn) (error, bool)) (err error) {
 
 	var qc *GsiScanClient
@@ -669,11 +688,13 @@ func (c *GsiClient) doScan(
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
-	evictRetry := 2 // c.config["settings.poolSize"].Int()
+	evictRetry := c.config["settings.poolSize"].Int()
 	for i := 0; true; {
+		qcs :=
+			*((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
 		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i); ok1 {
 			index := c.bridge.GetIndexDefn(targetDefnID)
-			if qc, ok2 = c.queryClients[queryport]; ok2 {
+			if qc, ok2 = qcs[queryport]; ok2 {
 				begin := time.Now()
 				scan_err, partial = callb(qc, index)
 				if c.isTimeit(scan_err) {
@@ -699,8 +720,8 @@ func (c *GsiClient) doScan(
 
 		if i = i + 1; i < retry {
 			logging.Warnf(
-				"Trying scan again for index %v (%v %v): %v ...\n",
-				targetDefnID, ok1, ok2, scan_err)
+				"Trying scan again for index %v (%v %v), reqId:%v : %v ...\n",
+				targetDefnID, ok1, ok2, requestId, scan_err)
 			c.updateScanClients()
 			time.Sleep(time.Duration(wait) * time.Millisecond)
 			continue
@@ -764,18 +785,18 @@ func (c *GsiClient) getBucketHash(bucketn string) (uint64, bool) {
 func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
 	var err error
 	c := &GsiClient{
-		cluster:      cluster,
-		config:       config,
-		queryClients: make(map[string]*GsiScanClient),
+		cluster: cluster,
+		config:  config,
 	}
 	platform.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
 	if c.bridge, err = newCbqClient(cluster); err != nil {
 		return nil, err
 	}
+	clients := make(map[string]*GsiScanClient)
 	for _, queryport := range c.bridge.GetScanports() {
-		queryClient := NewGsiScanClient(queryport, config)
-		c.queryClients[queryport] = queryClient
+		clients[queryport] = NewGsiScanClient(queryport, config)
 	}
+	atomic.StorePointer(&c.queryClients, unsafe.Pointer(&clients))
 	return c, nil
 }
 
@@ -785,7 +806,7 @@ func makeWithMetaProvider(
 	c = &GsiClient{
 		cluster:      cluster,
 		config:       config,
-		queryClients: make(map[string]*GsiScanClient),
+		queryClients: unsafe.Pointer(new(map[string]*GsiScanClient)),
 	}
 	platform.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
 	c.bridge, err = newMetaBridgeClient(cluster, config)
