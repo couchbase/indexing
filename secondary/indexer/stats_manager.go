@@ -55,6 +55,7 @@ type IndexTimingStats struct {
 	stKVInfo         stats.TimingStat
 	stKVMetaGet      stats.TimingStat
 	stKVMetaSet      stats.TimingStat
+	dcpSeqs          stats.TimingStat
 }
 
 func (it *IndexTimingStats) Init() {
@@ -71,12 +72,14 @@ func (it *IndexTimingStats) Init() {
 	it.stKVInfo.Init()
 	it.stKVMetaGet.Init()
 	it.stKVMetaSet.Init()
+	it.dcpSeqs.Init()
 }
 
 type IndexStats struct {
 	name, bucket string
 
 	scanDuration         stats.Int64Val
+	dcpSeqsDuration      stats.Int64Val
 	insertBytes          stats.Int64Val
 	numDocsPending       stats.Int64Val
 	scanWaitDuration     stats.Int64Val
@@ -269,6 +272,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
 		addStat("num_last_snapshot_reply", s.numLastSnapshotReply.Value())
 
+		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
 		addStat("timings/storage_commit", s.Timings.stCommit.Value())
 		addStat("timings/storage_new_iterator", s.Timings.stNewIterator.Value())

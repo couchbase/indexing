@@ -439,7 +439,11 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		} else if cons == common.SessionConsistency {
 			cluster := cfg["clusterAddr"].String()
 			r.Ts = &common.TsVbuuid{}
+			t0 := time.Now()
 			r.Ts.Seqnos, localErr = common.BucketSeqnos(cluster, "default", r.Bucket)
+			if localErr == nil {
+				r.Stats.Timings.dcpSeqs.Put(time.Since(t0))
+			}
 			r.Ts.Crc64 = 0
 			r.Ts.Bucket = r.Bucket
 		}
