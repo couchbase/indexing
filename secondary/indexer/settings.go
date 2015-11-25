@@ -18,6 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"io/ioutil"
 	"net/http"
+	"runtime/debug"
 	"time"
 )
 
@@ -61,6 +62,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 
 	http.HandleFunc("/settings", s.handleSettingsReq)
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
+	http.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
 	go func() {
 		for {
 			err := metakv.RunObserveChildren("/", s.metaKVCallback, s.cancelCh)
@@ -245,6 +247,16 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 	}
 
 	return nil
+}
+
+func (s *settingsManager) handleFreeMemoryReq(w http.ResponseWriter, r *http.Request) {
+	if !s.validateAuth(w, r) {
+		return
+	}
+
+	logging.Infof("Received force free memory request. Executing FreeOSMemory...")
+	debug.FreeOSMemory()
+	s.writeOk(w)
 }
 
 func setLogger(config common.Config) {
