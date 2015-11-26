@@ -215,7 +215,7 @@ func matchcomwrkr(bucketname string, un int, gench, updatech chan [3]string) {
 			lvdt := ranget(st, en)
 
 			doc := fmt.Sprintf(s, uid, vbyuid, count, lvdt)
-			key := fmt.Sprintf("pv::<%d>::<%d>", uid, vbyuid)
+			key := fmt.Sprintf("pv::%d::%d", uid, vbyuid)
 			err := buckets[bucketname].SetRaw(key, options.expiry, str2bytes(doc))
 			mf(err, "error creating document")
 			ch <- [3]string{bucketname, key, doc}
