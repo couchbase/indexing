@@ -355,8 +355,8 @@ def bucket_flush(buckets="",port="8091"):
 
 
 fmt_loadgen = "\
-GOMAXPROCS=%s go run ./loadgen.go -auth %s:%s -bagdir %s -count %s -par %s \
--buckets %s -prods %s -ratio %s -randkey=%s -prefix %s %s"
+go build; GOMAXPROCS=%s ./loadgen -auth %s:%s -count %s -par %s -ratio %s \
+-buckets %s -bagdir %s -prods %s -randkey=%s -prefix %s %s"
 @task
 @parallel
 def loadgen(

@@ -32,6 +32,7 @@ var options struct {
 	auth     string
 	buckets  []string // buckets to populate
 	prods    []string
+	worker   string
 	rn       int
 	un       int
 	dn       int
@@ -59,6 +60,8 @@ func argParse() string {
 		"Auth user and password")
 	flag.StringVar(&buckets, "buckets", "default",
 		"comma separated list of buckets")
+	flag.StringVar(&options.worker, "worker", "monster",
+		"worker type to use for generating the documents")
 	flag.StringVar(&prods, "prods", "users.prod",
 		"comma separated list of production files for each bucket")
 	flag.StringVar(&ratio, "ratio", "80,10,10",
@@ -99,7 +102,7 @@ func argParse() string {
 	}
 
 	args := flag.Args()
-	if len(args) < 1 || options.bagdir == "" {
+	if len(args) < 1 {
 		usage()
 		os.Exit(1)
 	}
@@ -159,12 +162,11 @@ func spawnWorkers(cluster string, rn, un, dn int) chan [3]string {
 		prodfile := options.prods[i]
 		updatech := make(chan [3]string, chsz)
 		updatechs[bucket] = updatech
-		for i := 0; i < options.parallel; i++ {
-			go gendocs(true, bucket, prodfile, i+1, options.count, gench)
-			if un > 0 {
-				updtcount := (options.count * un) / 100 * 2
-				go gendocs(false, bucket, prodfile, i+1, updtcount, updatech)
-			}
+		switch options.worker {
+		case "monster":
+			monsterwrkr(bucket, prodfile, un, gench, updatech)
+		case "matchcom":
+			matchcomwrkr(bucket, un, gench, updatech)
 		}
 	}
 
@@ -188,6 +190,46 @@ func spawnWorkers(cluster string, rn, un, dn int) chan [3]string {
 		}
 	}
 	return inch
+}
+
+func monsterwrkr(
+	bucket, prodfile string, un int, gench, updatech chan [3]string) {
+
+	for i := 0; i < options.parallel; i++ {
+		go gendocs(true, bucket, prodfile, i+1, options.count, gench)
+		if un > 0 {
+			updtcount := (options.count * un) / 100 * 2
+			go gendocs(false, bucket, prodfile, i+1, updtcount, updatech)
+		}
+	}
+}
+
+func matchcomwrkr(bucketname string, un int, gench, updatech chan [3]string) {
+	s := `{"Type":"pv","UserId":%d,"ViewedByUserId":%d,"Cnt":%d,"LastViewDt":%q}`
+	worker := func(idx, count int, ch chan [3]string) {
+		for i := 0; i < count; i++ {
+			uid := rand.Intn(3000000000) + 10000000
+			vbyuid := rand.Intn(3000000000) + 10000000
+			count := rand.Intn(100000) + 1
+			st, en := "2000-01-02T15:04:05Z", "2015-01-02T15:04:05Z"
+			lvdt := ranget(st, en)
+
+			doc := fmt.Sprintf(s, uid, vbyuid, count, lvdt)
+			key := fmt.Sprintf("pv::<%d>::<%d>", uid, vbyuid)
+			err := buckets[bucketname].SetRaw(key, options.expiry, str2bytes(doc))
+			mf(err, "error creating document")
+			ch <- [3]string{bucketname, key, doc}
+		}
+		fmsg := "generated %v docs for bucket %v, routine %v\n"
+		verbosef(fmsg, count, bucketname, idx)
+	}
+	for i := 0; i < options.parallel; i++ {
+		go worker(i+1, options.count, gench)
+		if un > 0 {
+			updtcount := (options.count * un) / 100 * 2
+			go worker(i+1, updtcount, updatech)
+		}
+	}
 }
 
 func doRead(inch, outch chan [3]string) {
