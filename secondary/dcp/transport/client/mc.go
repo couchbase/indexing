@@ -88,20 +88,6 @@ func (c *Client) Receive() (*transport.MCResponse, error) {
 	return resp, err
 }
 
-func (c *Client) ReceiveInBuf(res *transport.MCResponse, buf []byte) error {
-	if c.conn == nil {
-		return errNoConn
-	}
-	_, err := res.Receive2(c.conn, buf[:transport.HDR_LEN], buf[transport.HDR_LEN:])
-	if err == nil && res.Status != transport.SUCCESS {
-		err = res
-	}
-	if err != nil {
-		c.healthy = false
-	}
-	return err
-}
-
 // Get the value for a key.
 func (c *Client) Get(vb uint16, key string) (*transport.MCResponse, error) {
 	return c.Send(&transport.MCRequest{
