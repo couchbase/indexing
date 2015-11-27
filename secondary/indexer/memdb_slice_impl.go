@@ -96,7 +96,7 @@ type memdbSlice struct {
 
 	idxStats *IndexStats
 	sysconf  common.Config
-	confLock sync.Mutex
+	confLock sync.RWMutex
 
 	isPersistorActive int32
 }
@@ -605,15 +605,15 @@ func (mdb *memdbSlice) waitPersist() {
 		//every SLICE_COMMIT_POLL_INTERVAL milliseconds,
 		//check for outstanding mutations. If there are
 		//none, proceed with the commit.
-		mdb.confLock.Lock()
+		mdb.confLock.RLock()
 		commitPollInterval := mdb.sysconf["storage.commitPollInterval"].Uint64()
-		mdb.confLock.Unlock()
+		mdb.confLock.RUnlock()
 
-		ticker := time.NewTicker(time.Millisecond * time.Duration(commitPollInterval))
-		for _ = range ticker.C {
+		for {
 			if mdb.checkAllWorkersDone() {
 				break
 			}
+			time.Sleep(time.Millisecond * time.Duration(commitPollInterval))
 		}
 	}
 
