@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb"
 	"github.com/couchbase/indexing/secondary/platform"
+	"hash/crc32"
 	"io/ioutil"
 	"os"
 	"path"
@@ -41,6 +42,12 @@ func entryBytesFromDocId(docid []byte) []byte {
 	copy(entry, docid)
 	binary.LittleEndian.PutUint16(entry[l:l+2], uint16(l))
 	return entry
+}
+
+func vbucketFromEntryBytes(e []byte, numVbuckets int) int {
+	docid := docIdFromEntryBytes(e)
+	hash := crc32.ChecksumIEEE(docid)
+	return int((hash >> 16) & uint32(numVbuckets-1))
 }
 
 func byteItemDocIdCompare(a, b []byte) int {
@@ -66,7 +73,7 @@ type memdbSlice struct {
 	lock     sync.RWMutex
 
 	mainstore *memdb.MemDB
-	backstore *memdb.MemDB
+	backstore []*memdb.MemDB
 
 	main []*memdb.Writer
 	back []*memdb.Writer
@@ -144,13 +151,14 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 	}
 
 	if !isPrimary {
-		slice.backstore = memdb.New()
-		slice.backstore.SetKeyComparator(byteItemDocIdCompare)
-		slice.backstore.DisableSnapshots()
-		slice.backstore.IgnoreItemSize()
+		slice.backstore = make([]*memdb.MemDB, slice.numWriters)
 		slice.back = make([]*memdb.Writer, slice.numWriters)
 		for i := 0; i < slice.numWriters; i++ {
-			slice.back[i] = slice.backstore.NewWriter()
+			slice.backstore[i] = memdb.New()
+			slice.backstore[i].SetKeyComparator(byteItemDocIdCompare)
+			slice.backstore[i].DisableSnapshots()
+			slice.backstore[i].IgnoreItemSize()
+			slice.back[i] = slice.backstore[i].NewWriter()
 		}
 	}
 
@@ -526,7 +534,9 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	snapInfo := info.(*memdbSnapshotInfo)
 	mdb.mainstore.Reset()
 	if !mdb.isPrimary {
-		mdb.backstore.Reset()
+		for i := 0; i < mdb.numWriters; i++ {
+			mdb.backstore[i].Reset()
+		}
 	}
 
 	return mdb.loadSnapshot(snapInfo)
@@ -536,7 +546,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 	var wg sync.WaitGroup
 
 	var backIndexCallback memdb.ItemCallback
-	entryCh := make(chan *memdb.ItemEntry, 1000)
+	partShardCh := make([]chan *memdb.ItemEntry, mdb.numWriters)
 
 	logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v reading %v",
 		mdb.id, mdb.idxInstId, snapInfo.dataPath)
@@ -547,9 +557,10 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 	if !mdb.isPrimary {
 		for wId := 0; wId < mdb.numWriters; wId++ {
 			wg.Add(1)
+			partShardCh[wId] = make(chan *memdb.ItemEntry, 1000)
 			go func(i int, wg *sync.WaitGroup) {
 				defer wg.Done()
-				for entry := range entryCh {
+				for entry := range partShardCh[i] {
 					if !mdb.isPrimary {
 						itm := memdb.NewItem(entry.Item().Bytes())
 						n := mdb.back[i].Put2(itm)
@@ -560,14 +571,21 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 		}
 
 		backIndexCallback = func(e *memdb.ItemEntry) {
-			entryCh <- e
+			mdb.confLock.RLock()
+			numVbuckets := mdb.sysconf["numVbuckets"].Int()
+			mdb.confLock.RUnlock()
+
+			wId := vbucketFromEntryBytes(e.Item().Bytes(), numVbuckets) % mdb.numWriters
+			partShardCh[wId] <- e
 		}
 	}
 
 	snap, err := mdb.mainstore.LoadFromDisk(datadir, backIndexCallback)
 
 	if !mdb.isPrimary {
-		close(entryCh)
+		for wId := 0; wId < mdb.numWriters; wId++ {
+			close(partShardCh[wId])
+		}
 		wg.Wait()
 	}
 
@@ -587,7 +605,9 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 func (mdb *memdbSlice) RollbackToZero() error {
 	mdb.mainstore.Reset()
 	if !mdb.isPrimary {
-		mdb.backstore.Reset()
+		for i := 0; i < mdb.numWriters; i++ {
+			mdb.backstore[i].Reset()
+		}
 	}
 
 	mdb.cleanupOldSnapshotFiles(0)
@@ -749,7 +769,9 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 
 	logging.Infof("memdb main stats\n%s", mdb.mainstore.DumpStats())
 	if !mdb.isPrimary {
-		logging.Infof("memdb back stats\n%s", mdb.backstore.DumpStats())
+		for i := 0; i < mdb.numWriters; i++ {
+			logging.Infof("memdb back %d stats\n%s", i, mdb.backstore[i].DumpStats())
+		}
 	}
 	return sts, nil
 }
@@ -783,7 +805,9 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 func tryClosememdbSlice(mdb *memdbSlice) {
 	mdb.mainstore.Close()
 	if !mdb.isPrimary {
-		mdb.backstore.Close()
+		for i := 0; i < mdb.numWriters; i++ {
+			mdb.backstore[i].Close()
+		}
 	}
 }
 
