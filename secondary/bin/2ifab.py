@@ -204,23 +204,35 @@ def fix_dpkg():
 
 @task
 @parallel
-def cb_install(url=""):
-    """download the tar file from `url` and install"""
+def cb_install(tar="", debs=""):
+    """download the tar file from `tar` and install"""
     pp = pp_for_host(env.host)
 
-    if url == "" :
-        pp("error please provide a url")
-        return
+    if tar != "" :
+        installfile = url.split("/")[-1]
+        commands = [
+            ["rm -f couchbase-server* installer*", {}],
+            ["wget %s" % url, {}],
+            ["tar xvf %s" % installfile, {}],
+            ["dpkg -i couchbase-server_*", {"op":"sudo"}],
+        ]
+        with cd(pkgdir) :
+            all(map(lambda x: trycmd(x[0], **x[1]), commands))
 
-    installfile = url.split("/")[-1]
-    commands = [
-        ["rm -f couchbase-server* installer*", {}],
-        ["wget %s" % url, {}],
-        ["tar xvf %s" % installfile, {}],
-        ["dpkg -i couchbase-server_*", {"op":"sudo"}],
-    ]
-    with cd(pkgdir) :
-        all(map(lambda x: trycmd(x[0], **x[1]), commands))
+    elif debs != "" :
+        debs = debs.replace(";",",").split(",")
+        for deb in debs :
+            commands = [
+                ["rm -f couchbase-server* installer*", {}],
+                ["wget %s" % deb, {}],
+                ["dpkg -i couchbase-server*", {"op":"sudo"}],
+            ]
+            with cd(pkgdir) :
+                all(map(lambda x: trycmd(x[0], **x[1]), commands))
+
+    else :
+        pp("error please provide a tar or deb files")
+        return
 
 @task
 @parallel
@@ -355,14 +367,14 @@ def bucket_flush(buckets="",port="8091"):
 
 
 fmt_loadgen = "\
-go build; GOMAXPROCS=%s ./loadgen -auth %s:%s -count %s -par %s -ratio %s \
--buckets %s -bagdir %s -prods %s -randkey=%s -prefix %s %s"
+go build; GOMAXPROCS=%s ./loadgen -auth %s:%s -count %s -par %s -worker %s \
+-ratio %s -buckets %s -bagdir %s -prods %s -randkey=%s -prefix %s %s"
 @task
 @parallel
 def loadgen(
         cluster="localhost:9000", procs=32, count=100000, par=16,
-        buckets="default", prods="projects.prod", randkey=True, prefix="",
-        ratio="0;0;0") :
+        buckets="default", worker="monster", prods="projects.prod", randkey=True,
+        prefix="", ratio="0;0;0") :
     """genetate load over couchbase buckets"""
     repopath = os.sep.join(["src", "github.com", "couchbase", "indexing"])
     pathldgn = os.sep.join([goproj, repopath, "secondary", "tools", "loadgen"])
@@ -379,8 +391,8 @@ def loadgen(
         prefix = env.host
     with shell_env(PATH=shpath, GOPATH=gopath, GOROOT=goroot), cd(pathldgn) :
         params = (
-            procs, user2i, passw2i, bagdir, count, par, buckets, prodfiles,
-            ratio, randkey.lower(), prefix, cluster)
+            procs, user2i, passw2i, count, par, worker, ratio, buckets, bagdir,
+            prodfiles, randkey.lower(), prefix, cluster)
         trycmd(fmt_loadgen % params, op="run")
 
 fmt_log2i = """\
