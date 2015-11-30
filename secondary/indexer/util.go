@@ -95,14 +95,14 @@ func GetCurrentKVTs(cluster, pooln, bucketn string, numVbs int) (Timestamp, erro
 		logging.Errorf(fmsg, err)
 		return nil, err
 	}
-	if len(seqnos) != numVbs {
+	if len(seqnos) < numVbs {
 		fmsg := "BucketSeqnos(): got ts only for %v vbs"
 		return nil, fmt.Errorf(fmsg, len(seqnos))
 	}
 
 	ts := NewTimestamp(numVbs)
-	for i, seqno := range seqnos {
-		ts[i] = Seqno(seqno)
+	for i := 0; i < numVbs; i++ {
+		ts[i] = Seqno(seqnos[i])
 	}
 
 	elapsed := time.Since(start)
