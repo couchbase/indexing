@@ -529,13 +529,20 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		defer sm.muSnap.Unlock()
 		// Notify all scan waiters for indexes in this bucket
 		// and stream with error
+		stats := sm.stats.Get()
 		for idxInstId, waiters := range sm.waitersMap {
 			idxInst := sm.indexInstMap[idxInstId]
+			idxStats := stats.indexes[idxInst.InstId]
 			if idxInst.Defn.Bucket == bucket &&
 				idxInst.Stream == streamId {
 				for _, w := range waiters {
 					w.Error(ErrIndexRollback)
+					if idxStats != nil {
+						idxStats.numSnapshotWaiters.Add(-1)
+					}
 				}
+
+				delete(sm.waitersMap, idxInstId)
 			}
 		}
 	}()
