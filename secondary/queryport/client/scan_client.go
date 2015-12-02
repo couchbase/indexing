@@ -446,8 +446,7 @@ func (c *GsiScanClient) doRequestResponse(
 	}
 
 	laddr := conn.LocalAddr()
-	timeoutMs := c.readDeadline * time.Millisecond
-	conn.SetReadDeadline(time.Now().Add(timeoutMs))
+	c.trySetDeadline(conn, c.readDeadline)
 	// <--- protobuf.*Response
 	resp, err := pkt.Receive(conn)
 	if err != nil {
@@ -457,7 +456,7 @@ func (c *GsiScanClient) doRequestResponse(
 		return nil, err
 	}
 
-	conn.SetReadDeadline(time.Now().Add(timeoutMs))
+	c.trySetDeadline(conn, c.readDeadline)
 	// <--- protobuf.StreamEndResponse (skipped) TODO: knock this off.
 	if endResp, err := pkt.Receive(conn); err != nil {
 		fmsg := "%v req(%v) connection %v response %T transport failed `%v`\n"
@@ -474,8 +473,7 @@ func (c *GsiScanClient) doRequestResponse(
 func (c *GsiScanClient) sendRequest(
 	conn net.Conn, pkt *transport.TransportPacket, req interface{}) (err error) {
 
-	timeoutMs := c.writeDeadline * time.Millisecond
-	conn.SetWriteDeadline(time.Now().Add(timeoutMs))
+	c.trySetDeadline(conn, c.writeDeadline)
 	return pkt.Send(conn, req)
 }
 
@@ -488,8 +486,7 @@ func (c *GsiScanClient) streamResponse(
 	var finish bool
 
 	laddr := conn.LocalAddr()
-	timeoutMs := c.readDeadline * time.Millisecond
-	conn.SetReadDeadline(time.Now().Add(timeoutMs))
+	c.trySetDeadline(conn, c.readDeadline)
 	if resp, err = pkt.Receive(conn); err != nil {
 		//resp := &protobuf.ResponseStream{
 		//    Err: &protobuf.Error{Error: proto.String(err.Error())},
@@ -547,10 +544,9 @@ func (c *GsiScanClient) closeStream(
 	fmsg := "%v req(%v) connection %q transmitted protobuf.EndStreamRequest"
 	logging.Tracef(fmsg, c.logPrefix, requestId, laddr)
 
-	timeoutMs := c.readDeadline * time.Millisecond
 	// flush the connection until stream has ended.
 	for true {
-		conn.SetReadDeadline(time.Now().Add(timeoutMs))
+		c.trySetDeadline(conn, c.readDeadline)
 		resp, err = pkt.Receive(conn)
 		if err != nil {
 			healthy = false
@@ -568,4 +564,11 @@ func (c *GsiScanClient) closeStream(
 		}
 	}
 	return
+}
+
+func (c *GsiScanClient) trySetDeadline(conn net.Conn, deadline time.Duration) {
+	if deadline > time.Duration(0) {
+		timeoutMs := deadline * time.Millisecond
+		conn.SetReadDeadline(time.Now().Add(timeoutMs))
+	}
 }
