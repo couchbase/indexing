@@ -1161,7 +1161,7 @@ func TestWherClause_UpdateDocument(t *testing.T) {
 	i := 0
 	keysToBeUpdated := make(tc.KeyValues)
 	for key, value := range docs {
-		if i >= 500 {
+		if i >= 4000 {
 			break
 		}
 		json := value.(map[string]interface{})
