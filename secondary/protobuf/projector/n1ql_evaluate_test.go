@@ -71,7 +71,8 @@ func TestN1QLTransform150(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secKey, err := N1QLTransform([]byte("docid"), doc150, cExprs)
+	meta := make(map[string]interface{})
+	secKey, err := N1QLTransform([]byte("docid"), doc150, cExprs, meta)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +86,8 @@ func TestN1QLTransform2000(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secKey, err := N1QLTransform([]byte("docid"), doc2000, cExprs)
+	meta := make(map[string]interface{})
+	secKey, err := N1QLTransform([]byte("docid"), doc2000, cExprs, meta)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,14 +104,16 @@ func BenchmarkCompileN1QLExpression(b *testing.B) {
 
 func BenchmarkN1QLTransform150(b *testing.B) {
 	cExprs, _ := CompileN1QLExpression([]string{`age`})
+	meta := make(map[string]interface{})
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), doc150, cExprs)
+		N1QLTransform([]byte("docid"), doc150, cExprs, meta)
 	}
 }
 
 func BenchmarkN1QLTransform2000(b *testing.B) {
 	cExprs, _ := CompileN1QLExpression([]string{`age`})
+	meta := make(map[string]interface{})
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), doc2000, cExprs)
+		N1QLTransform([]byte("docid"), doc2000, cExprs, meta)
 	}
 }
