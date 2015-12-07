@@ -7,6 +7,8 @@ import "errors"
 import "strings"
 import "math/rand"
 import "time"
+import "unsafe"
+import "sync/atomic"
 import "encoding/json"
 
 import "github.com/couchbase/indexing/secondary/logging"
@@ -17,14 +19,7 @@ type metadataClient struct {
 	cluster  string
 	finch    chan bool
 	mdClient *mclient.MetadataProvider
-	rw       sync.RWMutex // protects all fields listed below
-	// sherlock topology management, multi-node & single-partition.
-	adminports map[string]common.IndexerId // book-keeping for cluster changes
-	topology   map[common.IndexerId]map[common.IndexDefnId]*mclient.IndexMetadata
-	// shelock load replicas.
-	replicas map[common.IndexDefnId][]common.IndexDefnId
-	// shelock load balancing.
-	loads map[common.IndexDefnId]*loadHeuristics // index -> loadHeuristics
+	indexers unsafe.Pointer // *indexTopology
 	// config
 	servicesNotifierRetryTm int
 	logtick                 time.Duration
@@ -32,16 +27,22 @@ type metadataClient struct {
 	equivalenceFactor       float64 // value between [0, 1.0)
 }
 
+// sherlock topology management, multi-node & single-partition.
+type indexTopology struct {
+	adminports map[string]common.IndexerId // book-keeping for cluster changes
+	topology   map[common.IndexerId][]*mclient.IndexMetadata
+	replicas   map[common.IndexDefnId][]common.IndexDefnId
+	rw         sync.RWMutex
+	loads      map[common.IndexDefnId]loadHeuristics
+}
+
 func newMetaBridgeClient(
 	cluster string, config common.Config) (c *metadataClient, err error) {
 
 	b := &metadataClient{
-		cluster:    cluster,
-		finch:      make(chan bool),
-		adminports: make(map[string]common.IndexerId),
-		loads:      make(map[common.IndexDefnId]*loadHeuristics),
+		cluster: cluster,
+		finch:   make(chan bool),
 	}
-	b.topology = make(map[common.IndexerId]map[common.IndexDefnId]*mclient.IndexMetadata)
 	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
 	b.logtick = time.Duration(config["logtick"].Int()) * time.Millisecond
 	b.randomWeight = config["load.randomWeight"].Float64()
@@ -63,7 +64,6 @@ func newMetaBridgeClient(
 		return nil, err
 	}
 
-	b.Refresh()
 	go b.watchClusterChanges() // will also update the indexer list
 	go b.logstats()
 	return b, nil
@@ -71,60 +71,29 @@ func newMetaBridgeClient(
 
 // Sync will update the indexer list.
 func (b *metadataClient) Sync() error {
-	err := b.updateIndexerList(true)
-	if err != nil {
+	if err := b.updateIndexerList(true); err != nil {
 		logging.Errorf("updateIndexerList(): %v\n", err)
+		return err
 	}
-	return err
+	return nil
 }
 
 // Refresh implement BridgeAccessor{} interface.
 func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
 	mindexes := b.mdClient.ListIndex()
-	indexes := make([]*mclient.IndexMetadata, 0, len(mindexes))
-	for _, mindex := range mindexes {
-		indexes = append(indexes, mindex)
+	if b.hasIndexesChanged(mindexes) {
+		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+		b.updateTopology(currmeta.adminports, false /*force*/)
 	}
-
-	b.rw.Lock()
-	defer b.rw.Unlock()
-
-	// b.adminports is the source of truth for list of indexers.
-	newtopo :=
-		make(map[common.IndexerId]map[common.IndexDefnId]*mclient.IndexMetadata)
-	for _, indexerID := range b.adminports {
-		newtopo[indexerID] = make(map[common.IndexDefnId]*mclient.IndexMetadata)
-	}
-	// gather topology of each index.
-	for _, index := range mindexes {
-		for _, instance := range index.Instances {
-			id := instance.IndexerId
-			if _, ok := newtopo[id]; ok {
-				newtopo[id][index.Definition.DefnId] = index
-			}
-		}
-	}
-
-	b.topology = newtopo
-	// compute replicas
-	b.replicas = b.computeReplicas()
-	// remove loads for indexes that is been deleted / gone-offline.
-	for defnId := range b.loads {
-		if _, ok := b.replicas[defnId]; !ok {
-			delete(b.loads, defnId)
-		}
-	}
-	return indexes, nil
+	return mindexes, nil
 }
 
 // Nodes implement BridgeAccessor{} interface.
 func (b *metadataClient) Nodes() ([]*IndexerService, error) {
-	b.rw.RLock()
-	defer b.rw.RUnlock()
-
 	// gather Indexer services
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	nodes := make(map[string]*IndexerService)
-	for indexerID := range b.topology {
+	for indexerID := range currmeta.topology {
 		if indexerID != common.INDEXER_ID_NIL {
 			a, q, err := b.mdClient.FindServiceForIndexer(indexerID)
 			if err == nil {
@@ -149,12 +118,10 @@ func (b *metadataClient) Nodes() ([]*IndexerService, error) {
 
 // GetIndexDefn implements BridgeAccessor{} interface.
 func (b *metadataClient) GetIndexDefn(defnID uint64) *common.IndexDefn {
-	b.rw.RLock()
-	defer b.rw.RUnlock()
-
-	for _, indexes := range b.topology {
-		for id, index := range indexes {
-			if defnID == uint64(id) {
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	for _, indexes := range currmeta.topology {
+		for _, index := range indexes {
+			if defnID == uint64(index.Definition.DefnId) {
 				return index.Definition
 			}
 		}
@@ -192,8 +159,6 @@ RETRY:
 		refreshCnt++
 		goto RETRY
 	}
-
-	b.Refresh() // refresh so that we too have IndexMetadata table.
 	return uint64(defnID), err
 }
 
@@ -214,18 +179,17 @@ func (b *metadataClient) BuildIndexes(defnIDs []uint64) error {
 func (b *metadataClient) DropIndex(defnID uint64) error {
 	err := b.mdClient.DropIndex(common.IndexDefnId(defnID))
 	if err == nil { // cleanup index local cache.
-		b.deleteIndex(defnID)
+		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+		b.updateTopology(currmeta.adminports, true /*force*/)
 	}
 	return err
 }
 
 // GetScanports implements BridgeAccessor{} interface.
 func (b *metadataClient) GetScanports() (queryports []string) {
-	b.rw.RLock()
-	defer b.rw.RUnlock()
-
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	queryports = make([]string, 0)
-	for indexerID := range b.topology {
+	for indexerID := range currmeta.topology {
 		if indexerID != common.INDEXER_ID_NIL {
 			_, queryport, err := b.mdClient.FindServiceForIndexer(indexerID)
 			if err == nil {
@@ -239,16 +203,13 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 
 // GetScanport implements BridgeAccessor{} interface.
 func (b *metadataClient) GetScanport(
-	defnID uint64,
-	retry int) (queryport string, targetDefnID uint64, ok bool) {
+	defnID uint64, retry int) (qp string, targetDefnID uint64, ok bool) {
 
-	b.rw.RLock()
-	defer b.rw.RUnlock()
-
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	if rand.Float64() < b.randomWeight {
 		var replicas [128]uint64
 		n := 0
-		for _, replicaID := range b.replicas[common.IndexDefnId(defnID)] {
+		for _, replicaID := range currmeta.replicas[common.IndexDefnId(defnID)] {
 			replicas[n] = uint64(replicaID)
 			n++
 		}
@@ -257,24 +218,25 @@ func (b *metadataClient) GetScanport(
 		targetDefnID = b.pickOptimal(defnID)
 	}
 
-	_, queryport, err :=
-		b.mdClient.FindServiceForIndex(common.IndexDefnId(targetDefnID))
+	_, qp, err := b.mdClient.FindServiceForIndex(common.IndexDefnId(targetDefnID))
 	if err != nil {
 		return "", 0, false
 	}
 	fmsg := "Scan port %s for index defnID %d of equivalent index defnId %d"
-	logging.Debugf(fmsg, queryport, targetDefnID, defnID)
-	return queryport, targetDefnID, true
+	logging.Debugf(fmsg, qp, targetDefnID, defnID)
+	return qp, targetDefnID, true
 }
 
 // Timeit implement BridgeAccessor{} interface.
 func (b *metadataClient) Timeit(defnID uint64, value float64) {
-	b.rw.Lock()
-	defer b.rw.Unlock()
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	currmeta.rw.Lock()
+	defer currmeta.rw.Unlock()
 
 	id := common.IndexDefnId(defnID)
-	if load, ok := b.loads[id]; !ok {
-		b.loads[id] = &loadHeuristics{avgLoad: value}
+	if load, ok := currmeta.loads[id]; !ok {
+		currmeta.loads[id] = loadHeuristics{avgLoad: value}
 	} else {
 		// compute incremental average.
 		load.avgLoad = (load.avgLoad + float64(value)) / 2.0
@@ -284,11 +246,8 @@ func (b *metadataClient) Timeit(defnID uint64, value float64) {
 // IsPrimary implement BridgeAccessor{} interface.
 func (b *metadataClient) IsPrimary(defnID uint64) bool {
 	b.Refresh()
-
-	b.rw.RLock()
-	defer b.rw.RUnlock()
-
-	for _, indexes := range b.topology {
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	for _, indexes := range currmeta.topology {
 		for _, index := range indexes {
 			if index.Definition.DefnId == common.IndexDefnId(defnID) {
 				return index.Definition.IsPrimary
@@ -300,12 +259,7 @@ func (b *metadataClient) IsPrimary(defnID uint64) bool {
 
 // IndexState implement BridgeAccessor{} interface.
 func (b *metadataClient) IndexState(defnID uint64) (common.IndexState, error) {
-
 	b.Refresh()
-
-	b.rw.RLock()
-	defer b.rw.RUnlock()
-
 	return b.indexState(defnID)
 }
 
@@ -322,14 +276,15 @@ func (b *metadataClient) Close() {
 //--------------------------------
 
 // compute a map of replicas for each index in 2i.
-func (b *metadataClient) computeReplicas() map[common.IndexDefnId][]common.IndexDefnId {
+func (b *metadataClient) computeReplicas(
+	topo map[common.IndexerId][]*mclient.IndexMetadata) map[common.IndexDefnId][]common.IndexDefnId {
 
 	replicaMap := make(map[common.IndexDefnId][]common.IndexDefnId)
-	for id1, indexes1 := range b.topology {
+	for id1, indexes1 := range topo {
 		for _, index1 := range indexes1 {
 			replicas := make([]common.IndexDefnId, 0)
 			replicas = append(replicas, index1.Definition.DefnId) // add itself
-			for id2, indexes2 := range b.topology {
+			for id2, indexes2 := range topo {
 				if id1 == id2 { // skip colocated indexes
 					continue
 				}
@@ -403,11 +358,15 @@ func (b *metadataClient) pickOptimal(defnID uint64) uint64 {
 	var actvReplicas [128]uint64
 	var loadList [128]float64
 	n := 0
-	for _, replicaID := range b.replicas[common.IndexDefnId(defnID)] {
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	for _, replicaID := range currmeta.replicas[common.IndexDefnId(defnID)] {
 		state, _ := b.indexState(uint64(replicaID))
 		if state == common.INDEX_STATE_ACTIVE {
 			actvReplicas[n] = uint64(replicaID)
-			if load, ok := b.loads[replicaID]; !ok {
+			currmeta.rw.RLock()
+			load, ok := currmeta.loads[replicaID]
+			currmeta.rw.RUnlock()
+			if !ok {
 				loadList[n] = 0.0
 			} else {
 				loadList[n] = load.avgLoad
@@ -426,7 +385,9 @@ func (b *metadataClient) pickOptimal(defnID uint64) uint64 {
 	// gather list of replicas with equivalent load
 	m := 0
 	for _, replicaID := range actvReplicas[:n] {
-		load, ok := b.loads[common.IndexDefnId(replicaID)]
+		currmeta.rw.RLock()
+		load, ok := currmeta.loads[common.IndexDefnId(replicaID)]
+		currmeta.rw.RUnlock()
 		if !ok || (load.avgLoad*b.equivalenceFactor <= leastLoad) {
 			replicas[m] = replicaID
 			m++
@@ -444,14 +405,15 @@ func (b *metadataClient) logstats() {
 	for {
 		<-tick
 		s := make([]string, 0, 16)
+		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 		func() {
-			b.rw.RLock()
-			defer b.rw.RUnlock()
-			logging.Infof("connected with %v indexers\n", len(b.topology))
-			for id, replicas := range b.replicas {
+			logging.Infof("connected with %v indexers\n", len(currmeta.topology))
+			for id, replicas := range currmeta.replicas {
 				logging.Infof("index %v has %v replicas\n", id, len(replicas))
 			}
-			for id, load := range b.loads {
+			currmeta.rw.RLock()
+			defer currmeta.rw.RUnlock()
+			for id, load := range currmeta.loads {
 				s = append(s, fmt.Sprintf(`"%v": %v`, id, load.avgLoad))
 			}
 			logging.Infof("client load stats {%v}", strings.Join(s, ","))
@@ -461,7 +423,8 @@ func (b *metadataClient) logstats() {
 
 // unprotected access to shared structures.
 func (b *metadataClient) indexState(defnID uint64) (common.IndexState, error) {
-	for _, indexes := range b.topology {
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	for _, indexes := range currmeta.topology {
 		for _, index := range indexes {
 			if index.Definition.DefnId == common.IndexDefnId(defnID) {
 				if index.Instances != nil && len(index.Instances) > 0 {
@@ -482,23 +445,9 @@ func (b *metadataClient) indexState(defnID uint64) (common.IndexState, error) {
 	return common.INDEX_STATE_ERROR, ErrorIndexNotFound
 }
 
-func (b *metadataClient) deleteIndex(defnID uint64) {
-	b.rw.Lock()
-	defer b.rw.Unlock()
-
-	id := common.IndexDefnId(defnID)
-	for indexerID, indexes := range b.topology {
-		delete(indexes, id)
-		b.topology[indexerID] = indexes
-	}
-	b.replicas = b.computeReplicas()
-	delete(b.loads, common.IndexDefnId(defnID))
-}
-
 // getNodes return the set of nodes hosting the specified set
 // of indexes
 func (b *metadataClient) getNodes(defnIDs []uint64) ([]string, bool) {
-
 	adminports := make([]string, 0)
 	for _, defnID := range defnIDs {
 		adminport, ok := b.getNode(defnID)
@@ -520,7 +469,6 @@ func (b *metadataClient) getNode(defnID uint64) (adminport string, ok bool) {
 }
 
 // update 2i cluster information,
-// IMPORTANT: make sure to call Refresh() after calling updateIndexerList()
 func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 	clusterURL, err := common.ClusterAuthUrl(b.cluster)
 	if err != nil {
@@ -543,20 +491,26 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 	logging.Infof(fmsg)
 	logging.Infof("Refreshed Indexer List: %v", adminports)
 
-	b.rw.Lock()
-	defer b.rw.Unlock()
+	var curradmns map[string]common.IndexerId
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+	if currmeta != nil {
+		curradmns = make(map[string]common.IndexerId)
+		for adminport, indexerId := range currmeta.adminports {
+			curradmns[adminport] = indexerId
+		}
+	}
 
 	if discardExisting {
-		for _, indexerID := range b.adminports {
+		for _, indexerID := range curradmns {
 			b.mdClient.UnwatchMetadata(indexerID)
 		}
-		b.adminports = nil
+		curradmns = nil
 	}
 
 	// watch all indexers
 	m := make(map[string]common.IndexerId)
 	for _, adminport := range adminports { // add new indexer-nodes if any
-		if indexerID, ok := b.adminports[adminport]; !ok {
+		if indexerID, ok := curradmns[adminport]; !ok {
 			// This adminport is provided by cluster manager.  Meta client will
 			// honor cluster manager to treat this adminport as a healthy node.
 			// If the indexer is unavail during initialization, WatchMetadata()
@@ -578,11 +532,11 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 		} else {
 			err = b.mdClient.UpdateServiceAddrForIndexer(indexerID, adminport)
 			m[adminport] = indexerID
-			delete(b.adminports, adminport)
+			delete(curradmns, adminport)
 		}
 	}
 	// delete indexer-nodes that got removed from cluster.
-	for _, indexerID := range b.adminports {
+	for _, indexerID := range curradmns {
 		// check if the indexerId exists in var "m".  In case the
 		// adminport changes for the same index node, there would
 		// be two adminport mapping to the same indexerId, one
@@ -598,7 +552,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 			b.mdClient.UnwatchMetadata(indexerID)
 		}
 	}
-	b.adminports = m
+	b.updateTopology(m, false /*force*/)
 	return err
 }
 
@@ -606,14 +560,136 @@ func (b *metadataClient) updateIndexer(
 	adminport string, newIndexerId, oldIndexerId common.IndexerId) {
 
 	func() {
-		b.rw.Lock()
-		defer b.rw.Unlock()
 		logging.Infof(
 			"Acknowledged that new indexer is registered.  Indexer = %v, id = %v",
 			adminport, newIndexerId)
-		b.adminports[adminport] = newIndexerId
+		adminports := make(map[string]common.IndexerId)
+		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+		for admnport, indexerId := range currmeta.adminports {
+			adminports[admnport] = indexerId
+		}
+		adminports[adminport] = newIndexerId
+		b.updateTopology(adminports, false /*force*/)
 	}()
-	b.Refresh()
+}
+
+// replicas:
+//		Refresh
+//		deleteIndex
+// loads:
+//		Refresh
+//		deleteIndex
+// topology:
+//		Refresh
+//		deleteIndex
+//
+//		Timeit for b.loads
+
+func (b *metadataClient) updateTopology(
+	adminports map[string]common.IndexerId, force bool) {
+
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	mindexes := b.mdClient.ListIndex()
+	// detect change in indexer cluster or indexes.
+	if force == false && currmeta != nil &&
+		(!b.hasIndexersChanged(adminports) && !b.hasIndexesChanged(mindexes)) {
+		return
+	}
+	// create a new topology.
+	newmeta := &indexTopology{
+		adminports: make(map[string]common.IndexerId),
+		topology:   make(map[common.IndexerId][]*mclient.IndexMetadata),
+		replicas:   make(map[common.IndexDefnId][]common.IndexDefnId),
+	}
+	// adminport
+	for adminport, indexerID := range adminports {
+		newmeta.adminports[adminport] = indexerID
+		newmeta.topology[indexerID] = make([]*mclient.IndexMetadata, 0, 16)
+	}
+	// topology
+	for _, mindex := range mindexes {
+		index := *mindex
+		for _, instance := range index.Instances {
+			indexes, ok := newmeta.topology[instance.IndexerId]
+			if !ok {
+				fmsg := "indexer node %v not available"
+				logging.Fatalf(fmsg, instance.IndexerId)
+				continue
+			}
+			newmeta.topology[instance.IndexerId] = append(indexes, &index)
+		}
+	}
+	// replicas
+	newmeta.replicas = b.computeReplicas(newmeta.topology)
+	// loads
+	newmeta.loads = make(map[common.IndexDefnId]loadHeuristics)
+	func() {
+		if currmeta != nil {
+			currmeta.rw.RLock()
+			defer currmeta.rw.RUnlock()
+
+			for indexId, load := range currmeta.loads {
+				if _, ok := newmeta.replicas[indexId]; ok {
+					newmeta.loads[indexId] = load
+				}
+			}
+		}
+	}()
+	atomic.StorePointer(&b.indexers, unsafe.Pointer(newmeta))
+}
+
+func (b *metadataClient) hasIndexersChanged(
+	adminports map[string]common.IndexerId) bool {
+
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	for adminport, indexerId := range adminports {
+		x, ok := currmeta.adminports[adminport]
+		if !ok || x != indexerId { // new indexer node detected.
+			return true
+		}
+	}
+	for adminport, indexerId := range currmeta.adminports {
+		x, ok := adminports[adminport]
+		if !ok || x != indexerId { // indexer node dropped out.
+			return true
+		}
+	}
+	return false
+}
+
+func (b *metadataClient) hasIndexesChanged(
+	mindexes []*mclient.IndexMetadata) bool {
+
+	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	for _, mindex := range mindexes {
+		_, ok := currmeta.replicas[mindex.Definition.DefnId]
+		if !ok { // new index detected.
+			return true
+		}
+	}
+
+	for _, iindexes := range currmeta.topology {
+	loop:
+		for _, index := range iindexes {
+			for _, mindex := range mindexes {
+				if mindex.Definition.DefnId == index.Definition.DefnId {
+					for _, ix := range index.Instances {
+						for _, iy := range mindex.Instances {
+							if ix.InstId == iy.InstId && ix.State != iy.State {
+								return true
+							}
+						}
+					}
+					continue loop
+				}
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // return adminports for all known indexers.
@@ -682,7 +758,6 @@ func (b *metadataClient) watchClusterChanges() {
 	// For observing node services config
 	ch := scn.GetNotifyCh()
 	for {
-		b.Refresh()
 		select {
 		case _, ok := <-ch:
 			if !ok {

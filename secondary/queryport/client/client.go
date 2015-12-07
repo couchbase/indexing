@@ -441,8 +441,8 @@ func (c *GsiClient) Lookup(
 		callb(resp)
 	}
 
-	fmsg := "Lookup %v - elapsed(%v) err(%v)"
-	logging.Verbosef(fmsg, defnID, time.Since(begin), err)
+	fmsg := "Lookup {%v,%v} - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
 	return
 }
 
@@ -508,8 +508,8 @@ func (c *GsiClient) Range(
 		callb(resp)
 	}
 
-	fmsg := "Range %v - elapsed(%v) err(%v)"
-	logging.Verbosef(fmsg, defnID, time.Since(begin), err)
+	fmsg := "Range {%v,%v} - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
 	return
 }
 
@@ -553,8 +553,8 @@ func (c *GsiClient) ScanAll(
 		callb(resp)
 	}
 
-	fmsg := "ScanAll %v - elapsed(%v) err(%v)"
-	logging.Verbosef(fmsg, defnID, time.Since(begin), err)
+	fmsg := "ScanAll {%v,%v} - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
 	return
 }
 
@@ -587,8 +587,8 @@ func (c *GsiClient) CountLookup(
 			return err, false
 		})
 
-	fmsg := "CountLookup %v - elapsed(%v) err(%v)"
-	logging.Verbosef(fmsg, defnID, time.Since(begin), err)
+	fmsg := "CountLookup {%v,%v} - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
 	return count, err
 }
 
@@ -624,8 +624,8 @@ func (c *GsiClient) CountRange(
 			return err, false
 		})
 
-	fmsg := "CountRange %v - elapsed(%v) err(%v)"
-	logging.Verbosef(fmsg, defnID, time.Since(begin), err)
+	fmsg := "CountRange {%v,%v} - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
 	return count, err
 }
 
