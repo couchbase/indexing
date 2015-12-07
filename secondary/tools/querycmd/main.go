@@ -61,6 +61,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
 		}
 
+	case "scanretry":
+		err = doScanRetry(cmdOptions.Server, client)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
+		}
+
 	case "mb14786":
 		err = doMB14786(cmdOptions.Server, client)
 		if err != nil {
