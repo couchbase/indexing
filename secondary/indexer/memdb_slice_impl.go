@@ -18,6 +18,8 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb"
+	"github.com/couchbase/indexing/secondary/memdb/nodetable"
+	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	"github.com/couchbase/indexing/secondary/platform"
 	"hash/crc32"
 	"io/ioutil"
@@ -27,6 +29,7 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"unsafe"
 )
 
 func docIdFromEntryBytes(e []byte) []byte {
@@ -50,11 +53,16 @@ func vbucketFromEntryBytes(e []byte, numVbuckets int) int {
 	return int((hash >> 16) & uint32(numVbuckets-1))
 }
 
-func byteItemDocIdCompare(a, b []byte) int {
-	docid1 := docIdFromEntryBytes(a)
-	docid2 := docIdFromEntryBytes(b)
+func hashDocId(entry []byte) uint32 {
+	return crc32.ChecksumIEEE(docIdFromEntryBytes(entry))
+}
 
-	return bytes.Compare(docid1, docid2)
+func nodeEquality(p unsafe.Pointer, entry []byte) bool {
+	node := (*skiplist.Node)(p)
+	docid1 := docIdFromEntryBytes(entry)
+	itm := (node.Item()).(*memdb.Item)
+	docid2 := docIdFromEntryBytes(itm.Bytes())
+	return bytes.Equal(docid1, docid2)
 }
 
 func byteItemCompare(a, b []byte) int {
@@ -73,10 +81,13 @@ type memdbSlice struct {
 	lock     sync.RWMutex
 
 	mainstore *memdb.MemDB
-	backstore []*memdb.MemDB
 
+	// MemDB writers
 	main []*memdb.Writer
-	back []*memdb.Writer
+
+	// One local table per writer
+	// Each table is only operated by the writer owner
+	back []*nodetable.NodeTable
 
 	idxDefnId common.IndexDefnId
 	idxInstId common.IndexInstId
@@ -151,14 +162,9 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 	}
 
 	if !isPrimary {
-		slice.backstore = make([]*memdb.MemDB, slice.numWriters)
-		slice.back = make([]*memdb.Writer, slice.numWriters)
+		slice.back = make([]*nodetable.NodeTable, slice.numWriters)
 		for i := 0; i < slice.numWriters; i++ {
-			slice.backstore[i] = memdb.New()
-			slice.backstore[i].SetKeyComparator(byteItemDocIdCompare)
-			slice.backstore[i].DisableSnapshots()
-			slice.backstore[i].IgnoreItemSize()
-			slice.back[i] = slice.backstore[i].NewWriter()
+			slice.back[i] = nodetable.New(hashDocId, nodeEquality)
 		}
 	}
 
@@ -282,41 +288,38 @@ func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) 
 	if entry == nil {
 		// Delete existing entries from main and back
 		lookupentry := entryBytesFromDocId(docid)
-
-		itm := memdb.NewItem(lookupentry)
 		t0 := time.Now()
-		n, found := mdb.back[workerId].Delete2(itm)
+		found, node := mdb.back[workerId].Remove(lookupentry)
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 		platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
 
 		if found {
 			t0 := time.Now()
-			mdb.main[workerId].DeleteNode(n.GetLink())
+			mdb.main[workerId].DeleteNode((*skiplist.Node)(node))
 			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 			platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
 		}
 
 	} else {
-		// 1. Replace existing back index entry
-		// 2. Delete old entry from main index
-		// 3. Insert new entry into main index
-		itm := memdb.NewItem(entry)
+		// 1. Insert entry into main index
+		// 2. Upsert into backindex with docid, mainnode pointer
+		// 3. Delete old entry from main index if back index had
+		// a previous mainnode pointer entry
 		t0 := time.Now()
-		n, updated := mdb.back[workerId].Upsert2(itm)
-		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-
-		if updated {
-			t0 = time.Now()
-			mdb.main[workerId].DeleteNode(n.GetLink())
-			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
-			platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
-		}
-		itm2 := memdb.NewItem(entry)
-		t0 = time.Now()
-		// Link back index entry with pointer to main index node
-		n.SetLink(mdb.main[workerId].Put2(itm2))
+		itm := memdb.NewItem(entry)
+		newNode := mdb.main[workerId].Put2(itm)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 		platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
+
+		// Insert succeeded. Failure means same entry already exist.
+		if newNode != nil {
+			if updated, oldNode := mdb.back[workerId].Update(entry, unsafe.Pointer(newNode)); updated {
+				t0 := time.Now()
+				mdb.main[workerId].DeleteNode((*skiplist.Node)(oldNode))
+				mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+				platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
+			}
+		}
 	}
 
 	mdb.isDirty = true
@@ -357,13 +360,12 @@ func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) {
 
 	// Delete entry from back and main index if present
 	t0 := time.Now()
-	itm := memdb.NewItem(lookupentry)
-	n, success := mdb.back[workerId].Delete2(itm)
+	success, node := mdb.back[workerId].Remove(lookupentry)
 	if success {
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 		platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		t0 = time.Now()
-		mdb.main[workerId].DeleteNode(n.GetLink())
+		mdb.main[workerId].DeleteNode((*skiplist.Node)(node))
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 	}
 	mdb.isDirty = true
@@ -535,7 +537,7 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	mdb.mainstore.Reset()
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
-			mdb.backstore[i].Reset()
+			mdb.back[i].Reset()
 		}
 	}
 
@@ -562,9 +564,8 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 				defer wg.Done()
 				for entry := range partShardCh[i] {
 					if !mdb.isPrimary {
-						itm := memdb.NewItem(entry.Item().Bytes())
-						n := mdb.back[i].Put2(itm)
-						n.SetLink(entry.Node())
+						entryBytes := entry.Item().Bytes()
+						mdb.back[i].Update(entryBytes, unsafe.Pointer(entry.Node()))
 					}
 				}
 			}(wId, &wg)
@@ -606,7 +607,7 @@ func (mdb *memdbSlice) RollbackToZero() error {
 	mdb.mainstore.Reset()
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
-			mdb.backstore[i].Reset()
+			mdb.back[i].Reset()
 		}
 	}
 
@@ -770,7 +771,7 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	logging.Infof("memdb main stats\n%s", mdb.mainstore.DumpStats())
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
-			logging.Infof("memdb back %d stats\n%s", i, mdb.backstore[i].DumpStats())
+			logging.Infof("memdb back %d stats\n%s", i, mdb.back[i].Stats())
 		}
 	}
 	return sts, nil
@@ -804,11 +805,13 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 
 func tryClosememdbSlice(mdb *memdbSlice) {
 	mdb.mainstore.Close()
-	if !mdb.isPrimary {
-		for i := 0; i < mdb.numWriters; i++ {
-			mdb.backstore[i].Close()
+	/*
+		if !mdb.isPrimary {
+			for i := 0; i < mdb.numWriters; i++ {
+				mdb.backstore[i].Close()
+			}
 		}
-	}
+	*/
 }
 
 func (mdb *memdbSlice) getCmdsCount() int {
