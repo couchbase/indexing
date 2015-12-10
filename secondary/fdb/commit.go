@@ -18,7 +18,8 @@ func (k *KVStore) SnapshotOpen(sn SeqNum) (*KVStore, error) {
 	k.Lock()
 	defer k.Unlock()
 
-	rv := KVStore{advLock: newAdvLock(), name: k.name}
+	rv := KVStore{name: k.name}
+	rv.advLock.Init()
 
 	Log.Tracef("fdb_snapshot_open call k:%p db:%v sn:%v", k, k.db, sn)
 	errNo := C.fdb_snapshot_open(k.db, &rv.db, C.fdb_seqnum_t(sn))
@@ -35,7 +36,8 @@ func (k *KVStore) SnapshotOpen(sn SeqNum) (*KVStore, error) {
 // it is possible not to retain lock.
 func (k *KVStore) SnapshotClone(sn SeqNum) (*KVStore, error) {
 
-	rv := KVStore{advLock: newAdvLock(), name: k.name}
+	rv := KVStore{name: k.name}
+	rv.advLock.Init()
 
 	Log.Tracef("fdb_snapshot_open call k:%p db:%v sn:%v", k, k.db, sn)
 	errNo := C.fdb_snapshot_open(k.db, &rv.db, C.fdb_seqnum_t(sn))

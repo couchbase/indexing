@@ -333,8 +333,8 @@ type statsManager struct {
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
-	supvMsgch MsgChannel, config common.Config) (statsManager, Message) {
-	s := statsManager{
+	supvMsgch MsgChannel, config common.Config) (*statsManager, Message) {
+	s := &statsManager{
 		supvCmdch:    supvCmdch,
 		supvMsgch:    supvMsgch,
 		lastStatTime: time.Unix(0, 0),

@@ -64,7 +64,7 @@ func main() {
 	up := strings.Split(*auth, ":")
 	_, err := cbauth.InternalRetryDefaultInit(*cluster, up[0], up[1])
 	if err != nil {
-		fmt.Println("Failed to initialize cbauth: %s\n", err)
+		fmt.Printf("Failed to initialize cbauth: %s\n", err)
 		os.Exit(1)
 	}
 

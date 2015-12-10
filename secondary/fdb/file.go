@@ -38,7 +38,8 @@ func Open(filename string, config *Config) (*File, error) {
 	dbname := C.CString(filename)
 	defer C.free(unsafe.Pointer(dbname))
 
-	rv := File{advLock: newAdvLock(), name: path.Base(filename)}
+	rv := File{name: path.Base(filename)}
+	rv.advLock.Init()
 	Log.Tracef("fdb_open call rv:%p dbname:%v conf:%v", &rv, dbname, config.config)
 	errNo := C.fdb_open(&rv.dbfile, dbname, config.config)
 	Log.Tracef("fdb_open ret rv:%p errNo:%v rv:%v", &rv, errNo, rv)
@@ -161,10 +162,10 @@ func (f *File) OpenKVStore(name string, config *KVStoreConfig) (*KVStore, error)
 	}
 
 	rv := KVStore{
-		advLock: newAdvLock(),
-		f:       f,
-		name:    fmt.Sprintf("%s/%s", f.name, name),
+		f:    f,
+		name: fmt.Sprintf("%s/%s", f.name, name),
 	}
+	rv.advLock.Init()
 
 	kvsname := C.CString(name)
 	defer C.free(unsafe.Pointer(kvsname))

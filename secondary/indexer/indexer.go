@@ -108,7 +108,7 @@ type indexer struct {
 	kvSender      KVSender          //handle to KVSender
 	cbqBridge     CbqBridge         //handle to CbqBridge
 	settingsMgr   settingsManager
-	statsMgr      statsManager
+	statsMgr      *statsManager
 	scanCoord     ScanCoordinator //handle to ScanCoordinator
 	config        common.Config
 
