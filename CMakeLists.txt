@@ -41,8 +41,8 @@ ENDIF ()
 GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/indexer
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   ${_forestdb_dep}
-  CGO_INCLUDE_DIRS "${FORESTDB_INCLUDE_DIR}"
-  CGO_LIBRARY_DIRS "${FORESTDB_LIBRARY_DIR}"
+  CGO_INCLUDE_DIRS "${FORESTDB_INCLUDE_DIR};${Platform_SOURCE_DIR}/include"
+  CGO_LIBRARY_DIRS "${FORESTDB_LIBRARY_DIR};${Platform_BINARY_DIR}"
   LDFLAGS "${_ldflags}"
   INSTALL_PATH bin OUTPUT indexer)
 

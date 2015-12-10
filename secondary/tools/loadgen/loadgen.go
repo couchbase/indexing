@@ -13,7 +13,11 @@ import "log"
 import "net/url"
 import "os"
 import "strings"
+import "strconv"
 import "time"
+import "reflect"
+import "unsafe"
+import "math/rand"
 
 import "github.com/couchbase/indexing/secondary/dcp"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -28,16 +32,26 @@ var options struct {
 	auth     string
 	buckets  []string // buckets to populate
 	prods    []string
+	worker   string
+	rn       int
+	un       int
+	dn       int
 	bagdir   string
+	randkey  bool
+	prefix   string
 	parallel int // number of parallel routines per bucket
 	count    int // number of documents to be generated per routine
 	expiry   int // set expiry for the document, in seconds
+	debug    bool
+	verbose  bool
 }
 
 var done = make(chan bool, 16)
 
 func argParse() string {
 	var buckets, prods string
+	var ratio string
+	var err error
 
 	seed := time.Now().UTC().Second()
 	flag.IntVar(&options.seed, "seed", seed,
@@ -46,21 +60,38 @@ func argParse() string {
 		"Auth user and password")
 	flag.StringVar(&buckets, "buckets", "default",
 		"comma separated list of buckets")
+	flag.StringVar(&options.worker, "worker", "monster",
+		"worker type to use for generating the documents")
 	flag.StringVar(&prods, "prods", "users.prod",
 		"comma separated list of production files for each bucket")
+	flag.StringVar(&ratio, "ratio", "80,10,10",
+		"percentage of reads, updates, deletes")
 	flag.StringVar(&options.bagdir, "bagdir", "",
 		"bagdirectory for production files.")
 	flag.IntVar(&options.parallel, "par", 1,
 		"number of parallel routines per bucket")
+	flag.StringVar(&options.prefix, "prefix", "",
+		"prefix to doc key")
+	flag.BoolVar(&options.randkey, "randkey", false,
+		"generate random key")
 	flag.IntVar(&options.count, "count", 0,
 		"number of documents to be generated per routine")
 	flag.IntVar(&options.expiry, "expiry", 0,
 		"expiry duration for a document (TTL)")
+	flag.BoolVar(&options.debug, "g", false,
+		"log in debug mode")
+	flag.BoolVar(&options.verbose, "v", false,
+		"log in verbose mode")
 
 	flag.Parse()
 
 	options.buckets = strings.Split(buckets, ",")
 	options.prods = strings.Split(prods, ",")
+	options.rn, err = strconv.Atoi(strings.Split(ratio, ",")[0])
+	mf(err, "invalid ratio")
+	options.un, err = strconv.Atoi(strings.Split(ratio, ",")[1])
+	mf(err, "invalid ratio")
+	options.dn, err = strconv.Atoi(strings.Split(ratio, ",")[2])
 
 	// the last production file is used for remaining bucket.
 	if pn, bn := len(options.prods), len(options.buckets); pn != bn {
@@ -71,7 +102,7 @@ func argParse() string {
 	}
 
 	args := flag.Args()
-	if len(args) < 1 || options.bagdir == "" {
+	if len(args) < 1 {
 		usage()
 		os.Exit(1)
 	}
@@ -92,43 +123,197 @@ func main() {
 	// setup cbauth
 	if options.auth != "" {
 		up := strings.Split(options.auth, ":")
-		if _, err := cbauth.InternalRetryDefaultInit(cluster, up[0], up[1]); err != nil {
+		_, err := cbauth.InternalRetryDefaultInit(cluster, up[0], up[1])
+		if err != nil {
 			logging.Fatalf("Failed to initialize cbauth: %s", err)
 		}
 	}
 
-	n := 0
-	for i, bucket := range options.buckets {
-		prodfile := options.prods[i]
-		n += loadBucket(cluster, bucket, prodfile, options.count)
+	// ratio based load, will start 100 routines and dice them up.
+	outch := spawnWorkers(cluster, options.rn, options.un, options.dn)
+
+	expected, n := 0, len(options.buckets)*options.parallel*options.count
+	for expected < n {
+		<-outch
+		expected++
 	}
-	for n > 0 {
-		<-done
-		n--
-	}
+	fmt.Println("Done..")
 }
 
-func loadBucket(cluster, bucket, prodfile string, count int) int {
-	u, err := url.Parse(cluster)
-	mf(err, "parse")
+var buckets = make(map[string]*couchbase.Bucket)
 
-	c, err := couchbase.Connect(u.String())
-	mf(err, "connect - "+u.String())
+func spawnWorkers(cluster string, rn, un, dn int) chan [3]string {
+	var inch, outch chan [3]string
 
-	p, err := c.GetPool("default")
-	mf(err, "pool")
-
-	bs := make([]*couchbase.Bucket, 0, options.parallel)
-	for i := 0; i < options.parallel; i++ {
+	updatechs := make(map[string]chan [3]string)
+	chsz := 10000
+	gench := make(chan [3]string, chsz)
+	for i, bucket := range options.buckets {
+		u, err := url.Parse(cluster)
+		mf(err, "parse")
+		c, err := couchbase.Connect(u.String())
+		mf(err, "connect - "+u.String())
+		p, err := c.GetPool("default")
+		mf(err, "pool")
 		b, err := p.GetBucket(bucket)
 		mf(err, "bucket")
-		bs = append(bs, b)
-		go genDocuments(b, prodfile, i+1, options.count)
+		buckets[bucket] = b
+
+		prodfile := options.prods[i]
+		updatech := make(chan [3]string, chsz)
+		updatechs[bucket] = updatech
+		switch options.worker {
+		case "monster":
+			monsterwrkr(bucket, prodfile, un, gench, updatech)
+		case "matchcom":
+			matchcomwrkr(bucket, un, gench, updatech)
+		}
 	}
-	return options.parallel
+
+	inch = gench
+	for i := 0; i < 100; i++ {
+		if rn > 0 {
+			outch = make(chan [3]string, chsz)
+			go doRead(inch, outch)
+			rn--
+			inch = outch
+		} else if un > 0 {
+			outch = make(chan [3]string, chsz)
+			go doUpdate(inch, outch, updatechs, un)
+			un--
+			inch = outch
+		} else if dn > 0 {
+			outch = make(chan [3]string, chsz)
+			go doDelete(inch, outch, dn)
+			dn--
+			inch = outch
+		}
+	}
+	return inch
 }
 
-func genDocuments(b *couchbase.Bucket, prodfile string, idx, n int) {
+func monsterwrkr(
+	bucket, prodfile string, un int, gench, updatech chan [3]string) {
+
+	for i := 0; i < options.parallel; i++ {
+		go gendocs(true, bucket, prodfile, i+1, options.count, gench)
+		if un > 0 {
+			updtcount := (options.count * un) / 100 * 2
+			go gendocs(false, bucket, prodfile, i+1, updtcount, updatech)
+		}
+	}
+}
+
+func matchcomwrkr(bucketname string, un int, gench, updatech chan [3]string) {
+	s := `{"Type":"pv","UserId":%d,"ViewedByUserId":%d,"Cnt":%d,"LastViewDt":%q}`
+	worker := func(idx, count int, ch chan [3]string) {
+		for i := 0; i < count; i++ {
+			uid := rand.Intn(3000000000) + 10000000
+			vbyuid := rand.Intn(3000000000) + 10000000
+			count := rand.Intn(100000) + 1
+			st, en := "2000-01-02T15:04:05Z", "2015-01-02T15:04:05Z"
+			lvdt := ranget(st, en)
+
+			doc := fmt.Sprintf(s, uid, vbyuid, count, lvdt)
+			key := fmt.Sprintf("pv::%d::%d", uid, vbyuid)
+			err := buckets[bucketname].SetRaw(key, options.expiry, str2bytes(doc))
+			mf(err, "error creating document")
+			ch <- [3]string{bucketname, key, doc}
+		}
+		fmsg := "generated %v docs for bucket %v, routine %v\n"
+		verbosef(fmsg, count, bucketname, idx)
+	}
+	for i := 0; i < options.parallel; i++ {
+		go worker(i+1, options.count, gench)
+		if un > 0 {
+			updtcount := (options.count * un) / 100 * 2
+			go worker(i+1, updtcount, updatech)
+		}
+	}
+}
+
+func doRead(inch, outch chan [3]string) {
+	counts := make(map[string]int)
+	for {
+		args, ok := <-inch
+		if ok == false {
+			break
+		}
+		bucketname := args[0]
+		key := args[1]
+		_, err := buckets[bucketname].GetRaw(key)
+		mf(err, "error reading document")
+		outch <- args
+		if _, ok := counts[bucketname]; !ok {
+			counts[bucketname] = 0
+		}
+		counts[bucketname]++
+	}
+	for bucketname, count := range counts {
+		verbosef("read %v documents in %q bucket\n", count, bucketname)
+	}
+	close(outch)
+}
+
+func doUpdate(
+	inch, outch chan [3]string,
+	updatechs map[string]chan [3]string, un int) {
+
+	counts := make(map[string]int)
+
+	for {
+		args, ok := <-inch
+		if ok == false {
+			break
+		} else if rand.Intn(100*un) < un {
+			bucketname := args[0]
+			key := args[1]
+			nargs := <-updatechs[bucketname]
+			doc := nargs[2]
+			err := buckets[bucketname].SetRaw(key, options.expiry, str2bytes(doc))
+			args[2] = doc
+			mf(err, "error updating document")
+			outch <- args
+			if _, ok := counts[bucketname]; !ok {
+				counts[bucketname] = 0
+			}
+			counts[bucketname]++
+		}
+	}
+	for bucketname, count := range counts {
+		verbosef("updated %v documents in %q bucket\n", count, bucketname)
+	}
+	close(outch)
+}
+
+func doDelete(inch chan [3]string, outch chan [3]string, dn int) {
+	counts := make(map[string]int)
+	for {
+		args, ok := <-inch
+		if ok == false {
+			break
+		} else if rand.Intn(100*dn) < dn {
+			bucketname := args[0]
+			key := args[1]
+			err := buckets[bucketname].Delete(key)
+			mf(err, "error deleting document")
+			if _, ok := counts[bucketname]; !ok {
+				counts[bucketname] = 0
+			}
+			counts[bucketname]++
+		}
+		outch <- args
+	}
+	for bucketname, count := range counts {
+		verbosef("deleted %v documents in %q bucket\n", count, bucketname)
+	}
+	close(outch)
+}
+
+func gendocs(
+	create bool,
+	bucketname, prodfile string, idx, count int, gench chan [3]string) {
+
 	// compile
 	text, err := ioutil.ReadFile(prodfile)
 	if err != nil {
@@ -139,18 +324,16 @@ func genDocuments(b *couchbase.Bucket, prodfile string, idx, n int) {
 	scope = monster.BuildContext(scope, seed, bagdir, prodfile)
 	nterms := scope["_nonterminals"].(mcommon.NTForms)
 	// evaluate
-	for i := 0; i < options.count; i++ {
+	for i := 0; i < count; i++ {
 		scope = scope.RebuildContext()
 		doc := evaluate("root", scope, nterms["s"]).(string)
 		key := makeKey(prodfile, idx, i+1)
-		err = b.SetRaw(key, options.expiry, []byte(doc))
-		if err != nil {
-			fmt.Printf("%T %v\n", err, err)
-		}
-		mf(err, "error setting document")
+		err := buckets[bucketname].SetRaw(key, options.expiry, str2bytes(doc))
+		mf(err, "error creating document")
+		gench <- [3]string{bucketname, key, doc}
 	}
-	fmt.Printf("routine %v generated %v documents for %q\n", idx, n, b.Name)
-	done <- true
+	fmsg := "generated %v docs for bucket %v, routine %v\n"
+	verbosef(fmsg, count, bucketname, idx)
 }
 
 func compile(s parsec.Scanner) parsec.ParsecNode {
@@ -163,7 +346,9 @@ func compile(s parsec.Scanner) parsec.ParsecNode {
 	return root
 }
 
-func evaluate(name string, scope mcommon.Scope, forms []*mcommon.Form) interface{} {
+func evaluate(
+	name string, scope mcommon.Scope, forms []*mcommon.Form) interface{} {
+
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("%v", r)
@@ -180,6 +365,39 @@ func mf(err error, msg string) {
 
 func makeKey(prodfile string, idx, i int) string {
 	fname := filepath.Base(prodfile)
-	uuid, _ := c.NewUUID()
-	return fmt.Sprintf("%s-%s-%v-%v", fname, uuid.Str(), idx, i+1)
+	if options.randkey {
+		uuid, _ := c.NewUUID()
+		return fmt.Sprintf("%v-%s-%s-%v-%v", options.prefix, fname, uuid.Str(), idx, i+1)
+	}
+	return fmt.Sprintf("%v-%s-%v-%v", options.prefix, fname, idx, i+1)
+}
+
+func bytes2str(bytes []byte) string {
+	if bytes == nil {
+		return ""
+	}
+	sl := (*reflect.SliceHeader)(unsafe.Pointer(&bytes))
+	st := &reflect.StringHeader{Data: sl.Data, Len: sl.Len}
+	return *(*string)(unsafe.Pointer(st))
+}
+
+func str2bytes(str string) []byte {
+	if str == "" {
+		return nil
+	}
+	st := (*reflect.StringHeader)(unsafe.Pointer(&str))
+	sl := &reflect.SliceHeader{Data: st.Data, Len: st.Len, Cap: st.Len}
+	return *(*[]byte)(unsafe.Pointer(sl))
+}
+
+func verbosef(fmsg string, args ...interface{}) {
+	if options.verbose || options.debug {
+		fmt.Printf(fmsg, args...)
+	}
+}
+
+func debugf(fmsg string, args ...interface{}) {
+	if options.debug {
+		fmt.Printf(fmsg, args...)
+	}
 }

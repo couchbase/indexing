@@ -11,7 +11,7 @@ func Application(config c.Config) {
 	s, err := NewServer(
 		"localhost:9990",
 		func(req interface{},
-			conn net.Conn, quitch <-chan interface{}) {
+			conn net.Conn, quitch <-chan bool) {
 			requestHandler(req, conn, quitch, killch)
 		},
 		config)
@@ -27,7 +27,7 @@ func Application(config c.Config) {
 func requestHandler(
 	req interface{},
 	conn net.Conn, // Write handle to the tcp socket
-	quitch <-chan interface{}, // client / connection might have quit (done)
+	quitch <-chan bool, // client / connection might have quit (done)
 	killch chan bool, // application is shutting down the server.
 ) {
 

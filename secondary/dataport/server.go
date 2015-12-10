@@ -529,7 +529,7 @@ func doReceive(
 	var blocked bool
 
 	epoc := time.Now()
-	tick := time.Tick(time.Minute * 5) // log every 5 minutes.
+	tick := time.Tick(time.Second * 5) // log every 5 second, if blocked
 loop:
 	for {
 		timeoutMs := readDeadline * time.Millisecond

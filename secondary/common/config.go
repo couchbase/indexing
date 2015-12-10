@@ -28,9 +28,14 @@ import "runtime"
 //      "projector.dataport.harakiriTimeout",
 //      "indexer.dataport.tcpReadDeadline",
 //
+// configurations for underprovisioned nodes,
+//		"projector.feedWaitStreamReqTimeout": 300 * 1000,
+//		"projector.feedWaitStreamEndTimeout": 300 * 1000,
+//		"projector.dataport.harakiriTimeout": 300 * 1000,
+//		"indexer.dataport.tcpReadDeadline": 300 * 1000
 
 // formula to compute the default CPU allocation for projector.
-var projector_maxCpuPercent = (1 + (runtime.NumCPU() / 6)) * 100
+var projector_maxCpuPercent = runtime.NumCPU() * 100
 
 // Threadsafe config holder object
 type ConfigHolder struct {
@@ -93,6 +98,12 @@ var SystemConfig = Config{
 		projector_maxCpuPercent,
 		false, // mutable
 	},
+	"projector.memstatTick": ConfigValue{
+		1 * 60 * 1000, // in milli-second, 1 minute
+		"in milli-second, periodically log runtime memory-stats for projector.",
+		1 * 60 * 1000,
+		false, // mutable
+	},
 	// Projector feed settings
 	"projector.routerEndpointFactory": ConfigValue{
 		RouterEndpointFactory(nil),
@@ -102,16 +113,16 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 	"projector.feedWaitStreamReqTimeout": ConfigValue{
-		10 * 1000,
+		300 * 1000,
 		"timeout, in milliseconds, to await a response for StreamRequest",
-		10 * 1000,
-		false, // mutable
+		300 * 1000, // 300s
+		false,      // mutable
 	},
 	"projector.feedWaitStreamEndTimeout": ConfigValue{
-		10 * 1000,
+		300 * 1000,
 		"timeout, in milliseconds, to await a response for StreamEnd",
-		10 * 1000,
-		false, // mutable
+		300 * 1000, // 300s
+		false,      // mutable
 	},
 	"projector.mutationChanSize": ConfigValue{
 		100,
@@ -140,6 +151,12 @@ var SystemConfig = Config{
 			"changing this value does not affect existing feeds.",
 		2000,
 		false, // mutable
+	},
+	"projector.kvstatTick": ConfigValue{
+		5 * 60 * 1000, // 5 minutes
+		"tick, in milliseconds, to log kvdata statistics",
+		5 * 60 * 1000, // 5 minutes
+		false,         // mutable
 	},
 	"projector.watchInterval": ConfigValue{
 		5 * 60 * 1000, // 5 minutes
@@ -192,6 +209,12 @@ var SystemConfig = Config{
 		"channel size for DCP's data path routines, " +
 			"changing this value does not affect existing feeds.",
 		10000,
+		false, // mutable
+	},
+	"projector.dcp.latencyTick": ConfigValue{
+		5 * 60 * 1000, // 5 minute
+		"in milliseconds, periodically log cumulative stats of dcp latency",
+		5 * 60 * 1000,
 		false, // mutable
 	},
 	// projector adminport parameters
@@ -265,13 +288,13 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"projector.dataport.harakiriTimeout": ConfigValue{
-		30 * 1000,
+		300 * 1000,
 		"timeout in milliseconds, after which endpoint will commit harakiri " +
 			"if not active, does not affect existing feeds, " +
 			"also refer to projector.adminport.readTimeout and " +
 			"indexer.dataport.tcpReadDeadline.",
-		30 * 1000, //10s
-		false,     // mutable
+		300 * 1000, //300s
+		false,      // mutable
 	},
 	"projector.dataport.maxPayload": ConfigValue{
 		1024 * 1024,
@@ -279,6 +302,12 @@ var SystemConfig = Config{
 			"router to downstream client, does not affect eixting feeds.",
 		1024 * 1024, // 1MB
 		true,        // immutable
+	},
+	"projector.dataport.statTick": ConfigValue{
+		5 * 60 * 1000, // 5 minutes
+		"tick, in milliseconds, to log endpoint statistics",
+		5 * 60 * 1000, // 5 minutes
+		false,         // mutable
 	},
 	// projector's adminport client, can be used by manager
 	"manager.projectorclient.retryInterval": ConfigValue{
@@ -307,9 +336,9 @@ var SystemConfig = Config{
 	},
 	// indexer dataport parameters
 	"indexer.dataport.genServerChanSize": ConfigValue{
-		10000,
+		1000000,
 		"request channel size of indexer dataport's gen-server routine",
-		10000,
+		1000000,
 		true, // immutable
 	},
 	"indexer.dataport.maxPayload": ConfigValue{
@@ -319,18 +348,18 @@ var SystemConfig = Config{
 		true,        // immutable
 	},
 	"indexer.dataport.tcpReadDeadline": ConfigValue{
-		30 * 1000,
+		300 * 1000,
 		"timeout, in milliseconds, while reading from socket, " +
 			"also refer to projector.adminport.readTimeout and " +
 			"projector.dataport.harakiriTimeout.",
-		30 * 1000, // 10s
-		true,      // immutable
+		300 * 1000, // 300s
+		false,      // mutable
 	},
 	// indexer queryport configuration
 	"indexer.queryport.maxPayload": ConfigValue{
-		1000 * 1024,
+		64 * 1024,
 		"maximum payload, in bytes, for receiving data from client",
-		1000 * 1024,
+		64 * 1024,
 		true, // immutable
 	},
 	"indexer.queryport.readDeadline": ConfigValue{
@@ -418,6 +447,26 @@ var SystemConfig = Config{
 		1000,
 		"wait, in milliseconds, before restarting the ServicesNotifier",
 		1000,
+		true, // immutable
+	},
+	"queryport.client.logtick": ConfigValue{
+		60 * 1000, // 1 minutes
+		"tick, in milliseconds, to log queryport client's statistics",
+		60 * 1000,
+		true, // immutable
+	},
+	"queryport.client.load.randomWeight": ConfigValue{
+		0.1,
+		"random weightage between [0, 1.0) for random load-balancing, " +
+			"lower the value less likely for random load-balancing",
+		0.1,
+		true, // immutable
+	},
+	"queryport.client.load.equivalenceFactor": ConfigValue{
+		0.9,
+		"normalization factor on replica's avg-load to group them with " +
+			"least loaded replica.",
+		0.9,
 		true, // immutable
 	},
 	// projector's adminport client, can be used by indexer.
@@ -512,9 +561,9 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 	"indexer.numSliceWriters": ConfigValue{
-		1,
+		runtime.NumCPU(),
 		"Number of Writer Threads for a Slice",
-		1,
+		runtime.NumCPU(),
 		true, // immutable
 	},
 
@@ -532,6 +581,58 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 
+	"indexer.stream_reader.syncBatchInterval": ConfigValue{
+		uint64(40),
+		"Batching Interval for sync messages generated by " +
+			"stream reader in millis",
+		uint64(40),
+		false, // mutable
+	},
+
+	"indexer.stream_reader.workerBuffer": ConfigValue{
+		uint64(0),
+		"Buffer Size for stream reader worker to hold mutations " +
+			"before being enqueued in mutation queue",
+		uint64(0),
+		false, // mutable
+	},
+
+	"indexer.stream_reader.mutationBuffer": ConfigValue{
+		uint64(20000),
+		"Buffer Size to hold incoming mutations from dataport",
+		uint64(20000),
+		false, // mutable
+	},
+
+	"indexer.storage.commitPollInterval": ConfigValue{
+		uint64(10),
+		"Time in milliseconds for a slice to poll for " +
+			"any outstanding writes before commit",
+		uint64(10),
+		false, // mutable
+	},
+
+	"indexer.mutation_queue.allocPollInterval": ConfigValue{
+		uint64(30),
+		"time in milliseconds to try for new alloc " +
+			"if mutation queue is full.",
+		uint64(30),
+		false, // mutable
+	},
+
+	"indexer.mutation_queue.dequeuePollInterval": ConfigValue{
+		uint64(1),
+		"time in milliseconds to wait before retrying the dequeue " +
+			"if mutations are not available in queue.",
+		uint64(1),
+		false, // mutable
+	},
+	"indexer.memstatTick": ConfigValue{
+		60 * 1000, // in milli-second
+		"in milli-second, periodically log runtime memory-stats.",
+		60 * 1000,
+		false, // mutable
+	},
 	// Indexer dynamic settings
 	"indexer.settings.compaction.check_period": ConfigValue{
 		30,
@@ -539,6 +640,7 @@ var SystemConfig = Config{
 		30,
 		false, // mutable
 	},
+
 	"indexer.settings.compaction.interval": ConfigValue{
 		"00:00,00:00",
 		"Compaction allowed interval",
@@ -907,7 +1009,19 @@ func (cv ConfigValue) Int() int {
 	} else if val, ok := cv.Value.(float64); ok {
 		return int(val)
 	}
-	panic(fmt.Errorf("not support Int() on %v", cv))
+	panic(fmt.Errorf("not support Int() on %#v", cv))
+}
+
+// Float64 assumes config value integer or float64.
+func (cv ConfigValue) Float64() float64 {
+	if val, ok := cv.Value.(float64); ok {
+		return val
+	} else if val, ok := cv.Value.(float32); ok {
+		return float64(val)
+	} else if val, ok := cv.Value.(int); ok {
+		return float64(val)
+	}
+	panic(fmt.Errorf("not support Float64() on %#v", cv))
 }
 
 // Uint64 assumes config value is 64-bit integer and returns the same.

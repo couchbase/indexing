@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/dcp/transport/client"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/platform"
 	"io"
@@ -357,7 +358,7 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 		if cancel != nil {
 			select {
 			case <-cancel:
-				return nil
+				break
 			default:
 			}
 		}
@@ -640,4 +641,14 @@ func GetBucket(endpoint, poolname, bucketname string) (*Bucket, error) {
 // Make hostnames comparable for terse-buckets info and old buckets info
 func normalizeHost(ch, h string) string {
 	return strings.Replace(h, "$HOST", ch, 1)
+}
+
+func (b *Bucket) GetDcpConn(name string, host string) (*memcached.Client, error) {
+	for _, sconn := range b.getConnPools() {
+		if sconn.host == host {
+			return sconn.GetDcpConn(name)
+		}
+	}
+
+	return nil, fmt.Errorf("no pool found")
 }

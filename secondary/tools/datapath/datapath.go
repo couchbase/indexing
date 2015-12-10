@@ -92,6 +92,7 @@ func main() {
 
 	maxvbs := c.SystemConfig["maxVbuckets"].Int()
 	dconf := c.SystemConfig.SectionConfig("indexer.dataport.", true)
+	dconf.SetValue("genServerChanSize", 1000000)
 
 	// start dataport servers.
 	for _, endpoint := range options.endpoints {
@@ -99,7 +100,7 @@ func main() {
 			endpoint, options.stat, options.timeout, maxvbs, dconf,
 			func(addr string, msg interface{}) bool { return true })
 	}
-	go dataport.Application(options.coordEndpoint, 0, 0, maxvbs, dconf, nil)
+	//go dataport.Application(options.coordEndpoint, 0, 0, maxvbs, dconf, nil)
 
 	for _, cluster := range clusters {
 		adminport := getProjectorAdminport(cluster, "default")
@@ -107,8 +108,7 @@ func main() {
 			config := c.SystemConfig.Clone()
 			config.SetValue("projector.clusterAddr", cluster)
 			config.SetValue("projector.adminport.listenAddr", adminport)
-			econf := c.SystemConfig.SectionConfig("projector.dataport.", true)
-			epfactory := NewEndpointFactory(cluster, maxvbs, econf)
+			epfactory := NewEndpointFactory(cluster, maxvbs)
 			config.SetValue("projector.routerEndpointFactory", epfactory)
 			projector.NewProjector(maxvbs, config) // start projector daemon
 		}
@@ -119,18 +119,20 @@ func main() {
 	}
 
 	// index instances for specified buckets.
-	instances := protobuf.ExampleIndexInstances(
+	instances := protobuf.ScaleDefault4i(
 		options.buckets, options.endpoints, options.coordEndpoint)
 
 	// start backfill stream on each projector
 	for _, client := range projectors {
-		// start backfill stream on each projector
-		_, err := client.InitialTopicRequest(
-			"backfill" /*topic*/, "default", /*pooln*/
-			"dataport" /*endpointType*/, instances)
-		if err != nil {
-			log.Fatal(err)
-		}
+		go func(client *projc.Client) {
+			// start backfill stream on each projector
+			_, err := client.InitialTopicRequest(
+				"backfill" /*topic*/, "default", /*pooln*/
+				"dataport" /*endpointType*/, instances)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}(client)
 	}
 
 	time.Sleep(1000 * time.Second)

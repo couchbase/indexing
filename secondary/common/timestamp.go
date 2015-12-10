@@ -123,10 +123,11 @@ func (ts *TsVbuuid) CheckCrc64(other *TsVbuuid) bool {
 	if ts == nil || other == nil {
 		return false
 	}
+
 	if ts.Bucket != other.Bucket {
 		return false
 	}
-	return ts.Crc64 == other.Crc64
+	return ts.Crc64 == 0 || other.Crc64 == 0 || ts.Crc64 == other.Crc64
 }
 
 // AsRecent will check whether timestamp `ts` is atleast as recent as

@@ -42,6 +42,12 @@ func init() {
 	kvaddress = clusterconfig.KVAddress
 	indexManagementAddress = clusterconfig.KVAddress
 	indexScanAddress = clusterconfig.KVAddress
+	if clusterconfig.IndexUsing != "" {
+		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
+		log.Printf("Using %v for creating indexes", clusterconfig.IndexUsing)
+		secondaryindex.IndexUsing = clusterconfig.IndexUsing
+	}
+
 	seed = 1
 	proddir, bagdir = tc.FetchMonsterToolPath()
 

@@ -271,6 +271,14 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			deferred = deferred2
 			wait = !deferred
 		}
+
+		if indexType, ok := plan["index_type"].(string); ok {
+			if c.IsValidIndexType(indexType) {
+				using = indexType
+			} else {
+				return c.IndexDefnId(0), errors.New("Fails to create index.  Invalid index_type parameter value specified."), false
+			}
+		}
 	}
 
 	logging.Debugf("MetadataProvider:CreateIndex(): deferred_build %v sync %v nodes %v", deferred, wait, nodes)

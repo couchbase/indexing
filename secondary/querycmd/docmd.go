@@ -290,11 +290,11 @@ func HandleCommand(
 		} else if cmd.Equal != nil {
 			equals := []c.SecondaryKey{cmd.Equal}
 			client.Lookup(
-				uint64(defnID), equals, false, limit,
+				uint64(defnID), "", equals, false, limit,
 				cons, nil, callb)
 		} else {
 			err = client.Range(
-				uint64(defnID), low, high, incl, false, limit,
+				uint64(defnID), "", low, high, incl, false, limit,
 				cons, nil, callb)
 		}
 		if err == nil {
@@ -320,7 +320,7 @@ func HandleCommand(
 			fmt.Fprintf(w, "Index state: {%v, %v} \n", state, err)
 		} else {
 			err = client.ScanAll(
-				uint64(defnID), limit, cons, nil, callb)
+				uint64(defnID), "", limit, cons, nil, callb)
 		}
 		if err == nil {
 			fmt.Fprintln(w, "Total number of entries: ", entries)
@@ -339,10 +339,10 @@ func HandleCommand(
 			state, err = client.IndexState(defnID)
 			fmt.Fprintf(w, "Index state: {%v, %v} \n", state, err)
 		} else if cmd.Equal != nil {
-			statsResp, err = client.LookupStatistics(uint64(defnID), equal)
+			statsResp, err = client.LookupStatistics(uint64(defnID), "", equal)
 		} else {
 			statsResp, err = client.RangeStatistics(
-				uint64(defnID), low, high, incl)
+				uint64(defnID), "", low, high, incl)
 		}
 		if err == nil {
 			fmt.Fprintln(w, "Stats: ", statsResp)
@@ -363,14 +363,14 @@ func HandleCommand(
 		} else if cmd.Equal != nil {
 			fmt.Fprintln(w, "CountLookup:")
 			equals := []c.SecondaryKey{cmd.Equal}
-			count, err := client.CountLookup(uint64(defnID), equals, cons, nil)
+			count, err := client.CountLookup(uint64(defnID), "", equals, cons, nil)
 			if err == nil {
 				fmt.Fprintf(w, "Index %q/%q has %v entries\n", bucket, iname, count)
 			}
 
 		} else {
 			fmt.Fprintln(w, "CountRange:")
-			count, err = client.CountRange(uint64(defnID), low, high, incl, cons, nil)
+			count, err = client.CountRange(uint64(defnID), "", low, high, incl, cons, nil)
 			if err == nil {
 				fmt.Fprintf(w, "Index %q/%q has %v entries\n", bucket, iname, count)
 			}

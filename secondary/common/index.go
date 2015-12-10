@@ -54,13 +54,6 @@ const (
 	SINGLE                 = "SINGLE"
 )
 
-type IndexType string
-
-const (
-	ForestDB = "forestdb"
-	MemDB    = "memdb"
-)
-
 type IndexState int
 
 const (
@@ -216,6 +209,8 @@ func (s StreamId) String() string {
 		return "CATCHUP_STREAM"
 	case INIT_STREAM:
 		return "INIT_STREAM"
+	case NIL_STREAM:
+		return "NIL_STREAM"
 	default:
 		return "INVALID_STREAM"
 	}
@@ -297,4 +292,21 @@ func (s IndexSnapType) String() string {
 		return "INVALID_SNAP_TYPE"
 	}
 
+}
+
+type IndexType string
+
+const (
+	ForestDB        = "forestdb"
+	MemDB           = "memdb"
+	MemoryOptimized = "memory_optimized"
+)
+
+func IsValidIndexType(t string) bool {
+	switch t {
+	case ForestDB, MemDB, MemoryOptimized:
+		return true
+	}
+
+	return false
 }

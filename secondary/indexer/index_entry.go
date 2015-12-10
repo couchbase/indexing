@@ -210,9 +210,8 @@ func (k *primaryKey) Compare(entry IndexEntry) int {
 
 // This function will be never called since do not support prefix equality
 // for primary keys.
-func (k *primaryKey) ComparePrefixFields(entry IndexEntry) int {
+func (k *primaryKey) ComparePrefixFields(entry IndexEntry) (r int) {
 	panic("prefix compare is not implemented for primary key")
-	return 0
 }
 
 func (k *primaryKey) Bytes() []byte {
@@ -225,7 +224,7 @@ func (k *primaryKey) String() string {
 
 type secondaryKey []byte
 
-func NewSecondaryKey(key []byte) (IndexKey, error) {
+func NewSecondaryKey(key []byte, buf []byte) (IndexKey, error) {
 	if isNilJsonKey(key) {
 		return &NilIndexKey{}, nil
 	}
@@ -235,7 +234,6 @@ func NewSecondaryKey(key []byte) (IndexKey, error) {
 	}
 
 	var err error
-	buf := make([]byte, 0, MAX_SEC_KEY_BUFFER_LEN)
 	if buf, err = jsonEncoder.Encode(key, buf); err != nil {
 		return nil, err
 	}

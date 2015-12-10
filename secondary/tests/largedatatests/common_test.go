@@ -6,6 +6,7 @@ import (
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/logging"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
 	"github.com/prataprc/monster/common"
@@ -34,6 +35,11 @@ func init() {
 	kvaddress = clusterconfig.KVAddress
 	indexManagementAddress = clusterconfig.KVAddress
 	indexScanAddress = clusterconfig.KVAddress
+	if clusterconfig.IndexUsing != "" {
+		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
+		log.Printf("Using %v for creating indexes", clusterconfig.IndexUsing)
+		secondaryindex.IndexUsing = clusterconfig.IndexUsing
+	}
 
 	// setup cbauth
 	if _, err := cbauth.InternalRetryDefaultInit(kvaddress, clusterconfig.Username, clusterconfig.Password); err != nil {

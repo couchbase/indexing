@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/memdb"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	"math/rand"
 	"net"
@@ -107,7 +108,7 @@ type indexer struct {
 	kvSender      KVSender          //handle to KVSender
 	cbqBridge     CbqBridge         //handle to CbqBridge
 	settingsMgr   settingsManager
-	statsMgr      statsManager
+	statsMgr      *statsManager
 	scanCoord     ScanCoordinator //handle to ScanCoordinator
 	config        common.Config
 
@@ -130,7 +131,7 @@ type kvRequest struct {
 func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx := &indexer{
-		wrkrRecvCh:          make(MsgChannel),
+		wrkrRecvCh:          make(MsgChannel, WORKER_RECV_QUEUE_LEN),
 		internalRecvCh:      make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		adminRecvCh:         make(MsgChannel, WORKER_MSG_QUEUE_LEN),
 		internalAdminRecvCh: make(MsgChannel),
@@ -624,6 +625,9 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		if newConfig["settings.memory_quota"].Uint64() !=
 			idx.config["settings.memory_quota"].Uint64() {
 			idx.stats.needsRestart.Set(true)
+		}
+		if cv, ok := newConfig["memstatTick"]; ok {
+			common.Memstatch <- int64(cv.Int())
 		}
 		idx.setProfilerOptions(newConfig)
 		idx.config = newConfig
@@ -1552,7 +1556,7 @@ func (idx *indexer) sendStreamUpdateForBuildIndex(instIdList []common.IndexInstI
 
 	stopCh := make(StopChannel)
 
-	if _, ok := idx.streamBucketRequestStopCh[buildStream][bucket]; !ok {
+	if _, ok := idx.streamBucketRequestStopCh[buildStream]; !ok {
 		idx.streamBucketRequestStopCh[buildStream] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[buildStream][bucket] = stopCh
@@ -2265,7 +2269,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 	//can be set to inactive.
 	idx.setStreamBucketState(streamId, bucket, STREAM_INACTIVE)
 
-	if _, ok := idx.streamBucketRequestStopCh[streamId][bucket]; !ok {
+	if _, ok := idx.streamBucketRequestStopCh[streamId]; !ok {
 		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
@@ -2410,7 +2414,7 @@ func (idx *indexer) stopBucketStream(streamId common.StreamId, bucket string) {
 		common.CrashOnError(respErr.cause)
 	}
 
-	if _, ok := idx.streamBucketRequestStopCh[streamId][bucket]; !ok {
+	if _, ok := idx.streamBucketRequestStopCh[streamId]; !ok {
 		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
@@ -2532,7 +2536,7 @@ func (idx *indexer) startBucketStream(streamId common.StreamId, bucket string,
 		common.CrashOnError(respErr.cause)
 	}
 
-	if _, ok := idx.streamBucketRequestStopCh[streamId][bucket]; !ok {
+	if _, ok := idx.streamBucketRequestStopCh[streamId]; !ok {
 		idx.streamBucketRequestStopCh[streamId] = make(BucketRequestStopCh)
 	}
 	idx.streamBucketRequestStopCh[streamId][bucket] = stopCh
@@ -3383,7 +3387,7 @@ func (idx *indexer) checkValidIndexInst(bucket string,
 				clientCh <- &MsgError{
 					err: Error{code: ERROR_INDEXER_UNKNOWN_INDEX,
 						severity: FATAL,
-						cause:    ErrIndexNotFound,
+						cause:    common.ErrIndexNotFound,
 						category: INDEXER}}
 			}
 			return false
@@ -3457,22 +3461,23 @@ func (idx *indexer) handleResetStats() {
 }
 
 func (idx *indexer) memoryUsed() int64 {
-	return int64(forestdb.BufferCacheUsed())
+	return int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse())
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst,
 	conf common.Config, stats *IndexerStats) (slice Slice, err error) {
+	// Default storage is forestdb
+	storage_dir := conf["storage_dir"].String()
+	os.Mkdir(storage_dir, 0755)
+	if _, e := os.Stat(storage_dir); e != nil {
+		common.CrashOnError(e)
+	}
+	path := filepath.Join(storage_dir, IndexPath(indInst, id))
 
-	if indInst.Defn.Using == common.MemDB {
-		slice, err = NewMemDBSlice(id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf)
+	if indInst.Defn.Using == common.MemDB ||
+		indInst.Defn.Using == common.MemoryOptimized {
+		slice, err = NewMemDBSlice(path, id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
 	} else {
-		// Default storage is forestdb
-		storage_dir := conf["storage_dir"].String()
-		os.Mkdir(storage_dir, 0755)
-		if _, e := os.Stat(storage_dir); e != nil {
-			common.CrashOnError(e)
-		}
-		path := filepath.Join(storage_dir, IndexPath(indInst, id))
 		slice, err = NewForestDBSlice(path, id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
 	}
 
@@ -3552,7 +3557,8 @@ func (idx *indexer) deleteIndexInstOnDeletedBucket(bucket string, streamId commo
 	// Only mark index inst as DELETED if it is actually got deleted in metadata.
 	for _, index := range idx.indexInstMap {
 		if index.Defn.Bucket == bucket &&
-			(streamId == common.NIL_STREAM || index.Stream == streamId) {
+			(streamId == common.NIL_STREAM || (index.Stream == streamId ||
+				index.Stream == common.NIL_STREAM)) {
 
 			instIdList = append(instIdList, index.InstId)
 			idx.stats.RemoveIndex(index.InstId)

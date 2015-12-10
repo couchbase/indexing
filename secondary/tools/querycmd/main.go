@@ -5,6 +5,7 @@ import "fmt"
 import "log"
 import "os"
 import "runtime"
+import "runtime/pprof"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -16,8 +17,15 @@ func usage(fset *flag.FlagSet) {
 }
 
 func main() {
-	logging.SetLogLevel(logging.Error)
+	logging.SetLogLevel(logging.Warn)
 	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	fd, err := os.Create("queryport.pprof")
+	if err != nil {
+		panic(err)
+	}
+	pprof.StartCPUProfile(fd)
+	defer pprof.StopCPUProfile()
 
 	cmdOptions, args, fset, err := querycmd.ParseArgs(os.Args[1:])
 	if err != nil {
@@ -61,6 +69,12 @@ func main() {
 
 	case "mb13339":
 		err = doMB13339(cmdOptions.Server, client)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
+		}
+
+	case "mb16115":
+		err = doMB16115(cmdOptions.Server, client)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
 		}

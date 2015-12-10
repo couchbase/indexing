@@ -114,9 +114,9 @@ func TestSecondaryIndexEntryMatch(t *testing.T) {
 	e3, _ := NewSecondaryIndexEntry([]byte(`["key1","key2","key3"]`), []byte("doc1"))
 	e4, _ := NewSecondaryIndexEntry([]byte(`["partialmatch"]`), []byte("doc1"))
 
-	k1, _ := NewSecondaryKey([]byte(`["key1"]`))
-	k2, _ := NewSecondaryKey([]byte(`["key1","key2"]`))
-	k3, _ := NewSecondaryKey([]byte(`["partial"]`))
+	k1, _ := NewSecondaryKey([]byte(`["key1"]`), make([]byte, 100))
+	k2, _ := NewSecondaryKey([]byte(`["key1","key2"]`), make([]byte, 100))
+	k3, _ := NewSecondaryKey([]byte(`["partial"]`), make([]byte, 100))
 
 	if k1.Compare(e1) != 0 {
 		t.Errorf("Expected match")

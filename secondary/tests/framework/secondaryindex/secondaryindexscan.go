@@ -22,7 +22,7 @@ func RangeWithClient(indexName, bucketName, server string, low, high []interface
 
 	start := time.Now()
 	connErr := client.Range(
-		defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
+		defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
 		consistency, vector,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
@@ -76,7 +76,7 @@ func Range(indexName, bucketName, server string, low, high []interface{}, inclus
 
 	start := time.Now()
 	connErr := client.Range(
-		defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
+		defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), distinct, limit,
 		consistency, vector,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
@@ -141,7 +141,7 @@ func Lookup(indexName, bucketName, server string, values []interface{}, distinct
 
 	start := time.Now()
 	connErr := client.Lookup(
-		defnID, []c.SecondaryKey{values}, distinct, limit,
+		defnID, "", []c.SecondaryKey{values}, distinct, limit,
 		consistency, vector,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
@@ -194,7 +194,7 @@ func ScanAll(indexName, bucketName, server string, limit int64, consistency c.Co
 
 	start := time.Now()
 	connErr := client.ScanAll(
-		defnID, limit,
+		defnID, "", limit,
 		consistency, vector,
 		func(response qc.ResponseReader) bool {
 			if err := response.Error(); err != nil {
@@ -254,7 +254,7 @@ func CountRange(indexName, bucketName, server string, low, high []interface{}, i
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	count, err := client.CountRange(defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), consistency, vector)
+	count, err := client.CountRange(defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion), consistency, vector)
 	if err != nil {
 		return 0, err
 	} else {
@@ -272,7 +272,7 @@ func CountLookup(indexName, bucketName, server string, values []interface{},
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	count, err := client.CountLookup(defnID, []c.SecondaryKey{values}, consistency, vector)
+	count, err := client.CountLookup(defnID, "", []c.SecondaryKey{values}, consistency, vector)
 	if err != nil {
 		return 0, err
 	} else {
@@ -289,7 +289,7 @@ func RangeStatistics(indexName, bucketName, server string, low, high []interface
 	defer client.Close()
 
 	defnID, _ := GetDefnID(client, bucketName, indexName)
-	statistics, err := client.RangeStatistics(defnID, c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
+	statistics, err := client.RangeStatistics(defnID, "", c.SecondaryKey(low), c.SecondaryKey(high), qc.Inclusion(inclusion))
 	if err != nil {
 		return err
 	} else {

@@ -529,13 +529,20 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 		defer sm.muSnap.Unlock()
 		// Notify all scan waiters for indexes in this bucket
 		// and stream with error
+		stats := sm.stats.Get()
 		for idxInstId, waiters := range sm.waitersMap {
 			idxInst := sm.indexInstMap[idxInstId]
+			idxStats := stats.indexes[idxInst.InstId]
 			if idxInst.Defn.Bucket == bucket &&
 				idxInst.Stream == streamId {
 				for _, w := range waiters {
 					w.Error(ErrIndexRollback)
+					if idxStats != nil {
+						idxStats.numSnapshotWaiters.Add(-1)
+					}
 				}
+
+				delete(sm.waitersMap, idxInstId)
 			}
 		}
 	}()
@@ -600,7 +607,7 @@ func (s *storageMgr) handleUpdateIndexInstMap(cmd Message) {
 		if inst, ok := s.indexInstMap[id]; !ok ||
 			inst.State == common.INDEX_STATE_DELETED {
 			for _, w := range ws {
-				w.Error(ErrIndexNotFound)
+				w.Error(common.ErrIndexNotFound)
 			}
 			delete(s.waitersMap, id)
 		}
@@ -675,7 +682,7 @@ func (s *storageMgr) handleGetIndexSnapshot(cmd Message) {
 	req := cmd.(*MsgIndexSnapRequest)
 	inst, found := s.indexInstMap[req.GetIndexId()]
 	if !found || inst.State == common.INDEX_STATE_DELETED {
-		req.respch <- ErrIndexNotFound
+		req.respch <- common.ErrIndexNotFound
 		return
 	}
 
@@ -812,7 +819,7 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	inst, ok := s.indexInstMap[req.GetInstId()]
 	stats := s.stats.Get()
 	if !ok || inst.State == common.INDEX_STATE_DELETED {
-		errch <- ErrIndexNotFound
+		errch <- common.ErrIndexNotFound
 		return
 	}
 

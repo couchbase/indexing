@@ -71,8 +71,8 @@ func simpleErrorFeeder(keych chan Key, valch chan Value, errch chan error) {
 }
 
 func verifyInvalidIndex(val queryclient.ResponseReader) bool {
-	if val.Error() != nil && val.Error().Error() != ErrIndexNotFound.Error() {
-		tst.Error("Unexpected response", val.Error(), ErrIndexNotFound)
+	if val.Error() != nil && val.Error().Error() != c.ErrIndexNotFound.Error() {
+		tst.Error("Unexpected response", val.Error(), c.ErrIndexNotFound)
 	}
 
 	return true

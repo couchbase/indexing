@@ -254,6 +254,9 @@ func TestRangeWithConcurrentAddMuts(t *testing.T) {
 	log.Printf("Setting initial JSON docs in KV")
 	kv.SetKeyValues(kvdocs, "default", "", clusterconfig.KVAddress)
 
+	e = secondaryindex.WaitTillAllIndexNodesActive(indexManagementAddress, 20)
+	FailTestIfError(e, "Error in WaitTillAllIndexNodesActive", t)
+
 	var indexName = "index_company"
 	var bucketName = "default"
 
@@ -279,6 +282,9 @@ func TestRangeWithConcurrentDelMuts(t *testing.T) {
 
 	log.Printf("Setting initial JSON docs in KV")
 	kv.SetKeyValues(kvdocs, "default", "", clusterconfig.KVAddress)
+
+	e := secondaryindex.WaitTillAllIndexNodesActive(indexManagementAddress, 20)
+	FailTestIfError(e, "Error in WaitTillAllIndexNodesActive", t)
 
 	var indexName = "index_company"
 	var bucketName = "default"
@@ -306,6 +312,9 @@ func TestScanWithConcurrentIndexOps(t *testing.T) {
 	log.Printf("Setting initial JSON docs in KV")
 	kv.SetKeyValues(kvdocs, "default", "", clusterconfig.KVAddress)
 
+	e := secondaryindex.WaitTillAllIndexNodesActive(indexManagementAddress, 20)
+	FailTestIfError(e, "Error in WaitTillAllIndexNodesActive", t)
+
 	var indexName = "index_company"
 	var bucketName = "default"
 
@@ -331,6 +340,9 @@ func TestConcurrentScans_SameIndex(t *testing.T) {
 
 	log.Printf("Setting initial JSON docs in KV")
 	kv.SetKeyValues(kvdocs, "default", "", clusterconfig.KVAddress)
+
+	e := secondaryindex.WaitTillAllIndexNodesActive(indexManagementAddress, 20)
+	FailTestIfError(e, "Error in WaitTillAllIndexNodesActive", t)
 
 	var indexName = "index_company"
 	var bucketName = "default"
@@ -366,6 +378,9 @@ func TestConcurrentScans_MultipleIndexes(t *testing.T) {
 	var index2 = "index_age"
 	var index3 = "index_firstname"
 	var bucketName = "default"
+
+	e := secondaryindex.WaitTillAllIndexNodesActive(indexManagementAddress, 20)
+	FailTestIfError(e, "Error in WaitTillAllIndexNodesActive", t)
 
 	log.Printf("Creating multiple indexes")
 	err := secondaryindex.CreateSecondaryIndex(index1, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)

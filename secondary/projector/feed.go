@@ -79,6 +79,7 @@ type Feed struct {
 //    feedChanSize: channel size for feed's control path and back path
 //    mutationChanSize: channel size of projector's data path routine
 //    syncTimeout: timeout, in ms, for sending periodic Sync messages
+//    kvstatTick: timeout, in ms, for logging kvstats
 //    routerEndpointFactory: endpoint factory
 func NewFeed(
 	pooln, topic string, config c.Config, opaque uint16) (*Feed, error) {
@@ -470,31 +471,35 @@ loop:
 		case msg = <-feed.backch:
 			if cmd, ok := msg[0].(*controlStreamRequest); ok {
 				reqTs, ok := feed.reqTss[cmd.bucket]
-				seqno, vbuuid, sStart, sEnd, err := reqTs.Get(cmd.vbno)
+				seqno, _, sStart, sEnd, err := reqTs.Get(cmd.vbno)
 				if err != nil {
-					fmsg := "%v ##%x backch flush %T: %v\n"
+					fmsg := "%v ##%x backch flush %v: %v\n"
 					logging.Fatalf(fmsg, prefix, cmd.opaque, cmd, err)
 
-				} else if ok {
+				}
+				if ok && reqTs != nil {
 					reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
 					feed.reqTss[cmd.bucket] = reqTs
-
-					if cmd.status == mcd.ROLLBACK {
-						fmsg := "%v ##%x backch flush rollback %T: %v\n"
-						logging.Infof(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
-						rollTs := feed.rollTss[cmd.bucket]
-						rollTs.Append(cmd.vbno, cmd.seqno, vbuuid, sStart, sEnd)
-
-					} else if cmd.status == mcd.SUCCESS {
-						fmsg := "%v ##%x backch flush success %T: %v\n"
-						logging.Infof(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
-						actTs := feed.actTss[cmd.bucket]
-						actTs.Append(cmd.vbno, seqno, vbuuid, sStart, sEnd)
-
-					} else {
-						fmsg := "%v ##%x backch flush error %T: %v\n"
-						logging.Errorf(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
+				}
+				if cmd.status == mcd.ROLLBACK {
+					fmsg := "%v ##%x backch flush rollback %T: %v\n"
+					logging.Infof(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
+					rollTs, ok := feed.rollTss[cmd.bucket]
+					if ok {
+						rollTs = rollTs.Append(cmd.vbno, cmd.seqno, cmd.vbuuid, sStart, sEnd)
+						feed.rollTss[cmd.bucket] = rollTs
 					}
+
+				} else if cmd.status == mcd.SUCCESS {
+					fmsg := "%v ##%x backch flush success %T: %v\n"
+					logging.Infof(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
+					actTs, _ := feed.actTss[cmd.bucket]
+					actTs = actTs.Append(cmd.vbno, seqno, cmd.vbuuid, sStart, sEnd)
+					feed.actTss[cmd.bucket] = actTs
+
+				} else {
+					fmsg := "%v ##%x backch flush error %T: %v\n"
+					logging.Errorf(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
 				}
 
 			} else if cmd, ok := msg[0].(*controlStreamEnd); ok {
@@ -1259,6 +1264,7 @@ func (feed *Feed) openFeeder(
 	dcpConfig := map[string]interface{}{
 		"genChanSize":  feed.config["dcp.genChanSize"].Int(),
 		"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
+		"latencyTick":  feed.config["dcp.latencyTick"].Int(),
 	}
 	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
 	if err != nil {
@@ -1785,15 +1791,18 @@ func FeedConfigParams() []string {
 		"mutationChanSize",
 		"routerEndpointFactory",
 		"syncTimeout",
+		"kvstatTick",
 		// dcp configuration
 		"dcp.dataChanSize",
 		"dcp.genChanSize",
+		"dcp.latencyTick",
 		// dataport
 		"dataport.remoteBlock",
 		"dataport.keyChanSize",
 		"dataport.bufferSize",
 		"dataport.bufferTimeout",
 		"dataport.harakiriTimeout",
+		"dataport.statTick",
 		"dataport.maxPayload"}
 	return paramNames
 }

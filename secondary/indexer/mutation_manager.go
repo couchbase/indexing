@@ -352,7 +352,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 			//init mutation queue
 			var queue MutationQueue
 			maxVbQueueLen := m.calcQueueLenFromMemQuota()
-			if queue = NewAtomicMutationQueue(m.numVbuckets, int64(maxVbQueueLen)); queue == nil {
+			if queue = NewAtomicMutationQueue(m.numVbuckets, int64(maxVbQueueLen), m.config); queue == nil {
 				m.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,
@@ -368,7 +368,8 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	cmdCh := make(MsgChannel)
 
 	reader, errMsg := CreateMutationStreamReader(streamId, bucketQueueMap, bucketFilter,
-		cmdCh, m.mutMgrRecvCh, DEFAULT_NUM_STREAM_READER_WORKERS, m.stats.Get())
+		cmdCh, m.mutMgrRecvCh, DEFAULT_NUM_STREAM_READER_WORKERS, m.stats.Get(),
+		m.config)
 
 	if reader == nil {
 		//send the error back on supv channel
@@ -439,7 +440,7 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 			//init mutation queue
 			var queue MutationQueue
 			maxVbQueueLen := m.calcQueueLenFromMemQuota()
-			if queue = NewAtomicMutationQueue(m.numVbuckets, int64(maxVbQueueLen)); queue == nil {
+			if queue = NewAtomicMutationQueue(m.numVbuckets, int64(maxVbQueueLen), m.config); queue == nil {
 				return &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,

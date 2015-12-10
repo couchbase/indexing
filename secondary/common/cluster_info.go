@@ -13,6 +13,7 @@ var (
 	ErrInvalidNodeId       = errors.New("Invalid NodeId")
 	ErrInvalidService      = errors.New("Invalid service")
 	ErrNodeNotBucketMember = errors.New("Node is not a member of bucket")
+	ErrValidationFailed    = errors.New("ClusterInfo Validation Failed")
 )
 
 const (
@@ -22,6 +23,7 @@ const (
 )
 
 const CLUSTER_INFO_INIT_RETRIES = 5
+const CLUSTER_INFO_VALIDATION_RETRIES = 10
 
 const BUCKET_UUID_NIL = ""
 
@@ -77,6 +79,8 @@ func (c *ClusterInfoCache) Fetch() error {
 				c.logPrefix, err, r)
 		}
 
+		vretry := 0
+	retry:
 		c.client, err = couchbase.Connect(c.url)
 		if err != nil {
 			return err
@@ -113,6 +117,19 @@ func (c *ClusterInfoCache) Fetch() error {
 		}
 		c.nodesvs = poolServs.NodesExt
 
+		if !c.validateCache() {
+			if vretry < CLUSTER_INFO_VALIDATION_RETRIES {
+				vretry++
+				logging.Infof("%vValidation Failed for cluster info.. Retrying(%d)",
+					c.logPrefix, vretry)
+				goto retry
+			} else {
+				logging.Infof("%vValidation Failed for cluster info.. %v",
+					c.logPrefix, c)
+				return ErrValidationFailed
+			}
+		}
+
 		return nil
 	}
 
@@ -120,7 +137,7 @@ func (c *ClusterInfoCache) Fetch() error {
 	return rh.Run()
 }
 
-func (c ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
+func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	for i, svs := range c.nodesvs {
 		if _, ok := svs.Services[srvc]; ok {
 			nids = append(nids, NodeId(i))
@@ -130,7 +147,7 @@ func (c ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	return
 }
 
-func (c ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err error) {
+func (c *ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err error) {
 	b, berr := c.pool.GetBucket(bucket)
 	if berr != nil {
 		err = berr
@@ -151,7 +168,7 @@ func (c ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err er
 //
 // Return UUID of a given bucket.
 //
-func (c ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
+func (c *ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
 
 	b, err := c.pool.GetBucket(bucket)
 	if err != nil {
@@ -172,7 +189,7 @@ func (c ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
 	return BUCKET_UUID_NIL
 }
 
-func (c ClusterInfoCache) GetCurrentNode() NodeId {
+func (c *ClusterInfoCache) GetCurrentNode() NodeId {
 	for i, node := range c.nodes {
 		if node.ThisNode {
 			return NodeId(i)
@@ -182,7 +199,7 @@ func (c ClusterInfoCache) GetCurrentNode() NodeId {
 	panic("Current node is not in active membership")
 }
 
-func (c ClusterInfoCache) IsNodeHealthy(nid NodeId) (bool, error) {
+func (c *ClusterInfoCache) IsNodeHealthy(nid NodeId) (bool, error) {
 	if int(nid) >= len(c.nodes) {
 		return false, ErrInvalidNodeId
 	}
@@ -190,7 +207,7 @@ func (c ClusterInfoCache) IsNodeHealthy(nid NodeId) (bool, error) {
 	return c.nodes[nid].Status == "healthy", nil
 }
 
-func (c ClusterInfoCache) GetNodeStatus(nid NodeId) (string, error) {
+func (c *ClusterInfoCache) GetNodeStatus(nid NodeId) (string, error) {
 	if int(nid) >= len(c.nodes) {
 		return "", ErrInvalidNodeId
 	}
@@ -198,7 +215,7 @@ func (c ClusterInfoCache) GetNodeStatus(nid NodeId) (string, error) {
 	return c.nodes[nid].Status, nil
 }
 
-func (c ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr string, err error) {
+func (c *ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr string, err error) {
 	var port int
 	var ok bool
 
@@ -228,7 +245,7 @@ func (c ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr strin
 	return
 }
 
-func (c ClusterInfoCache) GetVBuckets(nid NodeId, bucket string) (vbs []uint32, err error) {
+func (c *ClusterInfoCache) GetVBuckets(nid NodeId, bucket string) (vbs []uint32, err error) {
 	b, berr := c.pool.GetBucket(bucket)
 	if berr != nil {
 		err = berr
@@ -253,7 +270,7 @@ func (c ClusterInfoCache) GetVBuckets(nid NodeId, bucket string) (vbs []uint32, 
 	return
 }
 
-func (c ClusterInfoCache) findVBServerIndex(b *couchbase.Bucket, nid NodeId) (int, bool) {
+func (c *ClusterInfoCache) findVBServerIndex(b *couchbase.Bucket, nid NodeId) (int, bool) {
 	bnodes := b.Nodes()
 
 	for idx, n := range bnodes {
@@ -265,16 +282,16 @@ func (c ClusterInfoCache) findVBServerIndex(b *couchbase.Bucket, nid NodeId) (in
 	return 0, false
 }
 
-func (c ClusterInfoCache) sameNode(n1 couchbase.Node, n2 couchbase.Node) bool {
+func (c *ClusterInfoCache) sameNode(n1 couchbase.Node, n2 couchbase.Node) bool {
 	return n1.Hostname == n2.Hostname
 }
 
-func (c ClusterInfoCache) GetLocalServiceAddress(srvc string) (string, error) {
+func (c *ClusterInfoCache) GetLocalServiceAddress(srvc string) (string, error) {
 	node := c.GetCurrentNode()
 	return c.GetServiceAddress(node, srvc)
 }
 
-func (c ClusterInfoCache) GetLocalServicePort(srvc string) (string, error) {
+func (c *ClusterInfoCache) GetLocalServicePort(srvc string) (string, error) {
 	addr, err := c.GetLocalServiceAddress(srvc)
 	if err != nil {
 		return addr, err
@@ -288,7 +305,7 @@ func (c ClusterInfoCache) GetLocalServicePort(srvc string) (string, error) {
 	return net.JoinHostPort("", p), nil
 }
 
-func (c ClusterInfoCache) GetLocalServiceHost(srvc string) (string, error) {
+func (c *ClusterInfoCache) GetLocalServiceHost(srvc string) (string, error) {
 
 	addr, err := c.GetLocalServiceAddress(srvc)
 	if err != nil {
@@ -303,7 +320,7 @@ func (c ClusterInfoCache) GetLocalServiceHost(srvc string) (string, error) {
 	return h, nil
 }
 
-func (c ClusterInfoCache) GetLocalHostAddress() (string, error) {
+func (c *ClusterInfoCache) GetLocalHostAddress() (string, error) {
 
 	cUrl, err := url.Parse(c.url)
 	if err != nil {
@@ -317,4 +334,39 @@ func (c ClusterInfoCache) GetLocalHostAddress() (string, error) {
 	}
 
 	return net.JoinHostPort(h, p), nil
+}
+
+func (c *ClusterInfoCache) validateCache() bool {
+
+	if len(c.nodes) != len(c.nodesvs) {
+		return false
+	}
+
+	//validation not required for single node setup(MB-16494)
+	if len(c.nodes) == 1 && len(c.nodesvs) == 1 {
+		return true
+	}
+
+	var hostList1 []string
+
+	for _, n := range c.nodes {
+		hostList1 = append(hostList1, n.Hostname)
+	}
+
+	for i, svc := range c.nodesvs {
+		h := svc.Hostname
+		p := svc.Services["mgmt"]
+
+		if h == "" {
+			h = "127.0.0.1"
+		}
+
+		hp := net.JoinHostPort(h, fmt.Sprint(p))
+
+		if hostList1[i] != hp {
+			return false
+		}
+	}
+
+	return true
 }

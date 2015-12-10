@@ -552,7 +552,7 @@ func (si *secondaryIndex) Statistics(
 	defnID := si.defnID
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
-		pstats, err := client.LookupStatistics(defnID, seek)
+		pstats, err := client.LookupStatistics(defnID, requestId, seek)
 		if err != nil {
 			return nil, n1qlError(client, err)
 		}
@@ -561,7 +561,7 @@ func (si *secondaryIndex) Statistics(
 	low := values2SKey(span.Range.Low)
 	high := values2SKey(span.Range.High)
 	incl := n1ql2GsiInclusion[span.Range.Inclusion]
-	pstats, err := client.RangeStatistics(defnID, low, high, incl)
+	pstats, err := client.RangeStatistics(defnID, requestId, low, high, incl)
 	if err != nil {
 		return nil, n1qlError(client, err)
 	}
@@ -578,7 +578,7 @@ func (si *secondaryIndex) Count(span *datastore.Span,
 
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
-		count, e := client.CountLookup(si.defnID, []c.SecondaryKey{seek},
+		count, e := client.CountLookup(si.defnID, "", []c.SecondaryKey{seek},
 			n1ql2GsiConsistency[cons], vector2ts(vector))
 		if e != nil {
 			return 0, n1qlError(client, e)
@@ -588,7 +588,7 @@ func (si *secondaryIndex) Count(span *datastore.Span,
 	}
 	low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
 	incl := n1ql2GsiInclusion[span.Range.Inclusion]
-	count, e := client.CountRange(si.defnID, low, high, incl,
+	count, e := client.CountRange(si.defnID, "", low, high, incl,
 		n1ql2GsiConsistency[cons], vector2ts(vector))
 	if e != nil {
 		return 0, n1qlError(client, e)
@@ -621,7 +621,7 @@ func (si *secondaryIndex) Scan(
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
 		client.Lookup(
-			si.defnID, []c.SecondaryKey{seek}, distinct, limit,
+			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
 			makeResponsehandler(client, conn))
 
@@ -629,7 +629,7 @@ func (si *secondaryIndex) Scan(
 		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
 		incl := n1ql2GsiInclusion[span.Range.Inclusion]
 		client.Range(
-			si.defnID, low, high, incl, distinct, limit,
+			si.defnID, requestId, low, high, incl, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
 			makeResponsehandler(client, conn))
 	}
@@ -645,7 +645,7 @@ func (si *secondaryIndex) ScanEntries(
 
 	client := si.gsi.gsiClient
 	client.ScanAll(
-		si.defnID, limit,
+		si.defnID, requestId, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
 		makeResponsehandler(client, conn))
 }
@@ -702,9 +702,15 @@ func isStaleMetaError(err error) bool {
 }
 
 func n1qlError(client *qclient.GsiClient, err error) errors.Error {
-	if err.Error() == c.ErrScanTimedOut.Error() {
+	switch err.Error() {
+	case c.ErrScanTimedOut.Error():
 		return errors.NewCbIndexScanTimeoutError(err)
+	case qclient.ErrorIndexNotFound.Error():
+		return errors.NewCbIndexNotFoundError(err)
+	case qclient.ErrIndexNotFound.Error():
+		return errors.NewCbIndexNotFoundError(err)
 	}
+
 	return errors.NewError(err, client.DescribeError(err))
 }
 

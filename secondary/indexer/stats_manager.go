@@ -52,6 +52,10 @@ type IndexTimingStats struct {
 	stKVGet          stats.TimingStat
 	stKVSet          stats.TimingStat
 	stKVDelete       stats.TimingStat
+	stKVInfo         stats.TimingStat
+	stKVMetaGet      stats.TimingStat
+	stKVMetaSet      stats.TimingStat
+	dcpSeqs          stats.TimingStat
 }
 
 func (it *IndexTimingStats) Init() {
@@ -65,12 +69,17 @@ func (it *IndexTimingStats) Init() {
 	it.stKVSet.Init()
 	it.stIteratorNext.Init()
 	it.stKVDelete.Init()
+	it.stKVInfo.Init()
+	it.stKVMetaGet.Init()
+	it.stKVMetaSet.Init()
+	it.dcpSeqs.Init()
 }
 
 type IndexStats struct {
 	name, bucket string
 
 	scanDuration         stats.Int64Val
+	dcpSeqsDuration      stats.Int64Val
 	insertBytes          stats.Int64Val
 	numDocsPending       stats.Int64Val
 	scanWaitDuration     stats.Int64Val
@@ -263,6 +272,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
 		addStat("num_last_snapshot_reply", s.numLastSnapshotReply.Value())
 
+		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
 		addStat("timings/storage_commit", s.Timings.stCommit.Value())
 		addStat("timings/storage_new_iterator", s.Timings.stNewIterator.Value())
@@ -273,6 +283,9 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("timings/storage_set", s.Timings.stKVSet.Value())
 		addStat("timings/storage_iterator_next", s.Timings.stIteratorNext.Value())
 		addStat("timings/storage_del", s.Timings.stKVDelete.Value())
+		addStat("timings/storage_info", s.Timings.stKVInfo.Value())
+		addStat("timings/storage_meta_get", s.Timings.stKVMetaGet.Value())
+		addStat("timings/storage_meta_set", s.Timings.stKVMetaSet.Value())
 	}
 
 	for _, s := range is.buckets {
@@ -320,8 +333,8 @@ type statsManager struct {
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
-	supvMsgch MsgChannel, config common.Config) (statsManager, Message) {
-	s := statsManager{
+	supvMsgch MsgChannel, config common.Config) (*statsManager, Message) {
+	s := &statsManager{
 		supvCmdch:    supvCmdch,
 		supvMsgch:    supvMsgch,
 		lastStatTime: time.Unix(0, 0),

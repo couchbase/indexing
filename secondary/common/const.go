@@ -38,5 +38,11 @@ var ProtobufDataPathMinorNum byte = 1
 // ErrScanTimedOut from indexer
 var ErrScanTimedOut = errors.New("Index scan timed out")
 
+// Index not found
+var ErrIndexNotFound = errors.New("Index not found")
+
+// Index not ready
+var ErrIndexNotReady = errors.New("Index not ready for serving queries")
+
 // ErrClientCancel when query client cancels an ongoing scan request.
 var ErrClientCancel = errors.New("Client requested cancel")

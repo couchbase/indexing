@@ -16,6 +16,9 @@ const MAX_NUM_VBUCKETS = 1024
 //from workers
 const WORKER_MSG_QUEUE_LEN = 1000000
 
+// Intermediate message buffer channel size
+const WORKER_RECV_QUEUE_LEN = 10000
+
 // Default cluster address
 const DEFAULT_CLUSTER_ENDPOINT = "127.0.0.1:9000"
 
@@ -39,14 +42,6 @@ const DEFAULT_POOL = "default"
 //number of vbuckets
 const DEFAULT_NUM_STREAM_READER_WORKERS = 1
 
-//Buffer for each of stream reader worker to queue
-//up mutations before processing
-const MAX_STREAM_READER_WORKER_BUFFER = 0
-
-//Buffer for dataport to queue up mutations
-//before stream reader reads it
-const DATAPORT_MUTATION_BUFFER = 20000
-
 //Max number of snapshot to be retained per index.
 //Older snapshots are deleted.
 const MAX_SNAPSHOTS_PER_INDEX = 5
@@ -59,10 +54,6 @@ const DEFAULT_MAX_SLAB_MEMORY = DEFAULT_SLAB_SIZE * 1024
 //Internal Buffer Size for Each Slice to store incoming
 //requests
 const SLICE_COMMAND_BUFFER_SIZE = 20000
-
-//Time in milliseconds for a slice to poll for
-//any outstanding writes before commit
-const SLICE_COMMIT_POLL_INTERVAL = 10
 
 //Max Length of Secondary Key
 const MAX_SEC_KEY_LEN = 4096

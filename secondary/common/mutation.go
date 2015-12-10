@@ -185,15 +185,17 @@ type KeyVersions struct {
 	Keys      [][]byte // list of key-versions for each index
 	Oldkeys   [][]byte // previous key-versions, if available
 	Partnkeys [][]byte // partition key for each key-version
+	Ctime     int64
 }
 
 // NewKeyVersions return a reference KeyVersions for a single mutation.
-func NewKeyVersions(seqno uint64, docid []byte, maxCount int) *KeyVersions {
+func NewKeyVersions(seqno uint64, docid []byte, maxCount, ctime int64) *KeyVersions {
 	kv := &KeyVersions{Seqno: seqno, Docid: docid}
 	kv.Uuids = make([]uint64, 0, maxCount)
 	kv.Commands = make([]byte, 0, maxCount)
 	kv.Keys = make([][]byte, 0, maxCount)
 	kv.Oldkeys = make([][]byte, 0, maxCount)
+	kv.Ctime = ctime
 	return kv
 }
 

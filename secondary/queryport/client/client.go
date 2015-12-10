@@ -2,6 +2,8 @@ package client
 
 import "time"
 import "unsafe"
+import "io"
+import "fmt"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/indexing/secondary/platform"
@@ -135,41 +137,41 @@ type GsiAccessor interface {
 
 	// LookupStatistics for a single secondary-key.
 	LookupStatistics(
-		defnID uint64, v common.SecondaryKey) (common.IndexStatistics, error)
+		defnID uint64, requestId string, v common.SecondaryKey) (common.IndexStatistics, error)
 
 	// RangeStatistics for index range.
 	RangeStatistics(
-		defnID uint64, low, high common.SecondaryKey,
+		defnID uint64, requestId string, low, high common.SecondaryKey,
 		inclusion Inclusion) (common.IndexStatistics, error)
 
 	// Lookup scan index between low and high.
 	Lookup(
-		defnID uint64, values []common.SecondaryKey,
+		defnID uint64, requestId string, values []common.SecondaryKey,
 		distinct bool, limit int64,
 		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
 
 	// Range scan index between low and high.
 	Range(
-		defnID uint64, low, high common.SecondaryKey,
+		defnID uint64, requestId string, low, high common.SecondaryKey,
 		inclusion Inclusion, distinct bool, limit int64,
 		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
 
 	// ScanAll for full table scan.
 	ScanAll(
-		defnID uint64, limit int64,
+		defnID uint64, requestId string, limit int64,
 		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
 
 	// CountLookup of all entries in index.
 	CountLookup(
-		defnID uint64,
+		defnID uint64, requestId string,
 		cons common.Consistency, vector *TsConsistency) (int64, error)
 
 	// CountRange of all entries in index.
 	CountRange(
-		defnID uint64,
+		defnID uint64, requestId string,
 		cons common.Consistency, vector *TsConsistency) (int64, error)
 }
 
@@ -340,7 +342,7 @@ func (c *GsiClient) DropIndex(defnID uint64) error {
 
 // LookupStatistics for a single secondary-key.
 func (c *GsiClient) LookupStatistics(
-	defnID uint64, value common.SecondaryKey) (common.IndexStatistics, error) {
+	defnID uint64, requestId string, value common.SecondaryKey) (common.IndexStatistics, error) {
 
 	return nil, ErrorNotImplemented
 
@@ -368,7 +370,7 @@ func (c *GsiClient) LookupStatistics(
 
 // RangeStatistics for index range.
 func (c *GsiClient) RangeStatistics(
-	defnID uint64, low, high common.SecondaryKey,
+	defnID uint64, requestId string, low, high common.SecondaryKey,
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
 	return nil, ErrorNotImplemented
@@ -396,7 +398,7 @@ func (c *GsiClient) RangeStatistics(
 
 // Lookup scan index between low and high.
 func (c *GsiClient) Lookup(
-	defnID uint64, values []common.SecondaryKey,
+	defnID uint64, requestId string, values []common.SecondaryKey,
 	distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
@@ -426,7 +428,7 @@ func (c *GsiClient) Lookup(
 				return err, false
 			}
 			return qc.Lookup(
-				uint64(index.DefnId), values, distinct, limit, cons,
+				uint64(index.DefnId), requestId, values, distinct, limit, cons,
 				vector, callb)
 		})
 
@@ -444,7 +446,7 @@ func (c *GsiClient) Lookup(
 
 // Range scan index between low and high.
 func (c *GsiClient) Range(
-	defnID uint64, low, high common.SecondaryKey,
+	defnID uint64, requestId string, low, high common.SecondaryKey,
 	inclusion Inclusion, distinct bool, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
@@ -483,12 +485,12 @@ func (c *GsiClient) Range(
 					h = []byte(high[0].(string))
 				}
 				return qc.RangePrimary(
-					uint64(index.DefnId), l, h, inclusion, distinct, limit,
+					uint64(index.DefnId), requestId, l, h, inclusion, distinct, limit,
 					cons, vector, callb)
 			}
 			// dealing with secondary index.
 			return qc.Range(
-				uint64(index.DefnId), low, high, inclusion, distinct, limit,
+				uint64(index.DefnId), requestId, low, high, inclusion, distinct, limit,
 				cons, vector, callb)
 		})
 
@@ -506,7 +508,7 @@ func (c *GsiClient) Range(
 
 // ScanAll for full table scan.
 func (c *GsiClient) ScanAll(
-	defnID uint64, limit int64,
+	defnID uint64, requestId string, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
 
@@ -534,7 +536,7 @@ func (c *GsiClient) ScanAll(
 			if err != nil {
 				return err, false
 			}
-			return qc.ScanAll(uint64(index.DefnId), limit, cons, vector, callb)
+			return qc.ScanAll(uint64(index.DefnId), requestId, limit, cons, vector, callb)
 		})
 
 	if err != nil { // callback with error
@@ -551,7 +553,7 @@ func (c *GsiClient) ScanAll(
 
 // CountLookup to count number entries for given set of keys.
 func (c *GsiClient) CountLookup(
-	defnID uint64, values []common.SecondaryKey,
+	defnID uint64, requestId string, values []common.SecondaryKey,
 	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
 
 	if c.bridge == nil {
@@ -573,7 +575,7 @@ func (c *GsiClient) CountLookup(
 			if err != nil {
 				return err, false
 			}
-			count, err = qc.CountLookup(uint64(index.DefnId), values, cons, vector)
+			count, err = qc.CountLookup(uint64(index.DefnId), requestId, values, cons, vector)
 			return err, false
 		})
 
@@ -584,7 +586,7 @@ func (c *GsiClient) CountLookup(
 
 // CountRange to count number entries in the given range.
 func (c *GsiClient) CountRange(
-	defnID uint64,
+	defnID uint64, requestId string,
 	low, high common.SecondaryKey,
 	inclusion Inclusion,
 	cons common.Consistency, vector *TsConsistency) (count int64, err error) {
@@ -609,7 +611,7 @@ func (c *GsiClient) CountRange(
 				return err, false
 			}
 			count, err = qc.CountRange(
-				uint64(index.DefnId), low, high, inclusion, cons, vector)
+				uint64(index.DefnId), requestId, low, high, inclusion, cons, vector)
 			return err, false
 		})
 
@@ -663,34 +665,42 @@ func (c *GsiClient) doScan(
 	var ok1, ok2, partial bool
 	var queryport string
 	var targetDefnID uint64
+	var scan_err error
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
+	evictRetry := 2 // c.config["settings.poolSize"].Int()
 	for i := 0; true; {
 		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i); ok1 {
 			index := c.bridge.GetIndexDefn(targetDefnID)
 			if qc, ok2 = c.queryClients[queryport]; ok2 {
 				begin := time.Now()
-				err, partial = callb(qc, index)
-				if c.isTimeit(err) {
+				scan_err, partial = callb(qc, index)
+				if c.isTimeit(scan_err) {
 					c.bridge.Timeit(targetDefnID, float64(time.Since(begin)))
-					return err
+					return scan_err
 				}
-				if err != nil && partial {
+				if scan_err != nil && scan_err != io.EOF && partial {
 					// partially succeeded scans, we don't reset-hash and we
 					// don't retry
-					return err
+					return scan_err
+				} else if scan_err == io.EOF && evictRetry > 0 {
+					logging.Warnf("evict retry (%v)...\n", evictRetry)
+					evictRetry--
+					continue
 				} else { // TODO: make this error message precise
 					// reset the hash so that we do a full STATS for next
 					// query.
 					c.setBucketHash(index.Bucket, 0)
 				}
 			}
+			err = fmt.Errorf("%v from %v", scan_err, queryport)
 		}
+
 		if i = i + 1; i < retry {
 			logging.Warnf(
 				"Trying scan again for index %v (%v %v): %v ...\n",
-				targetDefnID, ok1, ok2, err)
+				targetDefnID, ok1, ok2, scan_err)
 			c.updateScanClients()
 			time.Sleep(time.Duration(wait) * time.Millisecond)
 			continue
@@ -716,36 +726,13 @@ func (c *GsiClient) getConsistency(
 	cons common.Consistency,
 	vector *TsConsistency, bucket string) (*TsConsistency, error) {
 
-	var err error
-
-	if cons == common.QueryConsistency && vector == nil {
-		return nil, ErrorExpectedTimestamp
-
-	} else if cons == common.SessionConsistency {
-		if hash64, ok := c.getBucketHash(bucket); ok && hash64 != 0 {
-			begin := time.Now()
-			fmsg := "Time taken by GET_SEQNOS call, %v CRC: %v\n"
-			defer func() { logging.Debugf(fmsg, time.Since(begin), hash64) }()
-			if vector, err = c.BucketSeqnos(bucket, hash64); err != nil {
-				return nil, err
-			}
-
-		} else {
-			begin := time.Now()
-			fmsg := "Time taken by STATS call, %v\n"
-			defer func() { logging.Debugf(fmsg, time.Since(begin)) }()
-			if vector, err = c.BucketTs(bucket); err != nil {
-				return nil, err
-			}
-			vector.Crc64 = common.HashVbuuid(vector.Vbuuids)
-			vector.Vbuuids = nil
-			c.setBucketHash(bucket, vector.Crc64)
-			logging.Debugf("STATS CRC: %v\n", vector.Crc64)
+	if cons == common.QueryConsistency {
+		if vector == nil {
+			return nil, ErrorExpectedTimestamp
 		}
-
-	} else if cons == common.AnyConsistency {
+		return vector, nil
+	} else if cons == common.SessionConsistency || cons == common.AnyConsistency {
 		vector = nil
-
 	} else {
 		return nil, ErrorInvalidConsistency
 	}

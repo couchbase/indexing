@@ -2,7 +2,10 @@ package client
 
 import "sync"
 import "fmt"
+import "sort"
 import "errors"
+import "strings"
+import "math/rand"
 import "time"
 import "encoding/json"
 
@@ -24,6 +27,9 @@ type metadataClient struct {
 	loads map[common.IndexDefnId]*loadHeuristics // index -> loadHeuristics
 	// config
 	servicesNotifierRetryTm int
+	logtick                 time.Duration
+	randomWeight            float64 // value between [0, 1.0)
+	equivalenceFactor       float64 // value between [0, 1.0)
 }
 
 func newMetaBridgeClient(
@@ -37,6 +43,9 @@ func newMetaBridgeClient(
 	}
 	b.topology = make(map[common.IndexerId]map[common.IndexDefnId]*mclient.IndexMetadata)
 	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
+	b.logtick = time.Duration(config["logtick"].Int()) * time.Millisecond
+	b.randomWeight = config["load.randomWeight"].Float64()
+	b.equivalenceFactor = config["load.equivalenceFactor"].Float64()
 	// initialize meta-data-provide.
 	uuid, err := common.NewUUID()
 	if err != nil {
@@ -56,6 +65,7 @@ func newMetaBridgeClient(
 
 	b.Refresh()
 	go b.watchClusterChanges() // will also update the indexer list
+	go b.logstats()
 	return b, nil
 }
 
@@ -235,11 +245,18 @@ func (b *metadataClient) GetScanport(
 	b.rw.RLock()
 	defer b.rw.RUnlock()
 
-	if retry == 0 {
-		targetDefnID = b.pickOptimal(defnID) // index under least load
+	if rand.Float64() < b.randomWeight {
+		var replicas [128]uint64
+		n := 0
+		for _, replicaID := range b.replicas[common.IndexDefnId(defnID)] {
+			replicas[n] = uint64(replicaID)
+			n++
+		}
+		targetDefnID = b.pickRandom(replicas[:n], defnID)
 	} else {
-		targetDefnID = b.roundRobin(defnID, retry)
+		targetDefnID = b.pickOptimal(defnID)
 	}
+
 	_, queryport, err :=
 		b.mdClient.FindServiceForIndex(common.IndexDefnId(targetDefnID))
 	if err != nil {
@@ -257,12 +274,10 @@ func (b *metadataClient) Timeit(defnID uint64, value float64) {
 
 	id := common.IndexDefnId(defnID)
 	if load, ok := b.loads[id]; !ok {
-		b.loads[id] = &loadHeuristics{avgLoad: value, count: 1}
+		b.loads[id] = &loadHeuristics{avgLoad: value}
 	} else {
 		// compute incremental average.
-		avg, n := load.avgLoad, load.count
-		load.avgLoad = (float64(n)*avg + float64(value)) / float64(n+1)
-		load.count = n + 1
+		load.avgLoad = (load.avgLoad + float64(value)) / 2.0
 	}
 }
 
@@ -285,30 +300,13 @@ func (b *metadataClient) IsPrimary(defnID uint64) bool {
 
 // IndexState implement BridgeAccessor{} interface.
 func (b *metadataClient) IndexState(defnID uint64) (common.IndexState, error) {
+
 	b.Refresh()
 
 	b.rw.RLock()
 	defer b.rw.RUnlock()
 
-	for _, indexes := range b.topology {
-		for _, index := range indexes {
-			if index.Definition.DefnId == common.IndexDefnId(defnID) {
-				if index.Instances != nil && len(index.Instances) > 0 {
-					state := index.Instances[0].State
-					if len(index.Instances) == 0 {
-						err := fmt.Errorf("no instance for %q", defnID)
-						return state, err
-					} else if index.Instances[0].Error != "" {
-						return state, errors.New(index.Instances[0].Error)
-					} else {
-						return state, nil
-					}
-				}
-				return common.INDEX_STATE_ERROR, ErrorInstanceNotFound
-			}
-		}
-	}
-	return common.INDEX_STATE_ERROR, ErrorIndexNotFound
+	return b.indexState(defnID)
 }
 
 // close this bridge, to be called when a new indexer is added or
@@ -380,41 +378,109 @@ func (b *metadataClient) equivalentIndex(
 // manage load statistics.
 type loadHeuristics struct {
 	avgLoad float64
-	count   uint64
+}
+
+// pick a random replica from the list.
+func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64) uint64 {
+	var actvReplicas [128]uint64
+	n := 0
+	for _, replicaID := range replicas {
+		state, _ := b.indexState(uint64(replicaID))
+		if state == common.INDEX_STATE_ACTIVE {
+			actvReplicas[n] = uint64(replicaID)
+			n++
+		}
+	}
+	if n > 0 {
+		return actvReplicas[rand.Intn(n*10)%n]
+	}
+	return defnID
 }
 
 // pick an optimal replica for the index `defnID` under least load.
 func (b *metadataClient) pickOptimal(defnID uint64) uint64 {
-	id := common.IndexDefnId(defnID)
-	optimalID, currLoad := id, 0.0
-	if load, ok := b.loads[id]; ok {
-		currLoad = load.avgLoad
-	}
-	for _, replicaID := range b.replicas[id] {
-		load, ok := b.loads[replicaID]
-		if !ok { // no load for this replica
-			return uint64(replicaID)
+	// gather active-replicas
+	var actvReplicas [128]uint64
+	var loadList [128]float64
+	n := 0
+	for _, replicaID := range b.replicas[common.IndexDefnId(defnID)] {
+		state, _ := b.indexState(uint64(replicaID))
+		if state == common.INDEX_STATE_ACTIVE {
+			actvReplicas[n] = uint64(replicaID)
+			if load, ok := b.loads[replicaID]; !ok {
+				loadList[n] = 0.0
+			} else {
+				loadList[n] = load.avgLoad
+			}
+			n++
 		}
-		if currLoad == 0.0 || load.avgLoad < currLoad {
-			// found an index under less load
-			optimalID, currLoad = replicaID, load.avgLoad
-		}
 	}
-	return uint64(optimalID)
-}
+	if n == 0 { // none are active
+		return defnID
+	}
+	// compute replica with least load.
+	sort.Float64s(loadList[:n])
+	leastLoad := loadList[0]
 
-func (b *metadataClient) roundRobin(defnID uint64, retry int) uint64 {
-	id := common.IndexDefnId(defnID)
-	replicas, ok := b.replicas[id]
-	if l := len(replicas); ok && l > 0 {
-		return uint64(replicas[retry%l])
+	var replicas [128]uint64
+	// gather list of replicas with equivalent load
+	m := 0
+	for _, replicaID := range actvReplicas[:n] {
+		load, ok := b.loads[common.IndexDefnId(replicaID)]
+		if !ok || (load.avgLoad*b.equivalenceFactor <= leastLoad) {
+			replicas[m] = replicaID
+			m++
+		}
 	}
-	return defnID
+	return b.pickRandom(replicas[:m], defnID)
 }
 
 //----------------
 // local functions
 //----------------
+
+func (b *metadataClient) logstats() {
+	tick := time.Tick(b.logtick)
+	for {
+		<-tick
+		s := make([]string, 0, 16)
+		func() {
+			b.rw.RLock()
+			defer b.rw.RUnlock()
+			logging.Infof("connected with %v indexers\n", len(b.topology))
+			for id, replicas := range b.replicas {
+				logging.Infof("index %v has %v replicas\n", id, len(replicas))
+			}
+			for id, load := range b.loads {
+				s = append(s, fmt.Sprintf(`"%v": %v`, id, load.avgLoad))
+			}
+			logging.Infof("client load stats {%v}", strings.Join(s, ","))
+		}()
+	}
+}
+
+// unprotected access to shared structures.
+func (b *metadataClient) indexState(defnID uint64) (common.IndexState, error) {
+	for _, indexes := range b.topology {
+		for _, index := range indexes {
+			if index.Definition.DefnId == common.IndexDefnId(defnID) {
+				if index.Instances != nil && len(index.Instances) > 0 {
+					state := index.Instances[0].State
+					if len(index.Instances) == 0 {
+						err := fmt.Errorf("no instance for %q", defnID)
+						return state, err
+					} else if index.Instances[0].Error != "" {
+						return state, errors.New(index.Instances[0].Error)
+					} else {
+						return state, nil
+					}
+				}
+				return common.INDEX_STATE_ERROR, ErrorInstanceNotFound
+			}
+		}
+	}
+	return common.INDEX_STATE_ERROR, ErrorIndexNotFound
+}
 
 func (b *metadataClient) deleteIndex(defnID uint64) {
 	b.rw.Lock()

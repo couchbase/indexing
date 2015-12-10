@@ -7,6 +7,7 @@ import (
 	qclient "github.com/couchbase/indexing/secondary/queryport/client"
 	"io"
 	"math"
+	"os"
 	"sync"
 	"time"
 )
@@ -17,6 +18,8 @@ var (
 		100000000, 300000000, 500000000, 1000000000, 2000000000, 3000000000,
 		5000000000, 10000000000,
 	}
+
+	clientBootTime = 5 // Seconds
 )
 
 type Job struct {
@@ -75,12 +78,18 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 	startTime := time.Now()
 	switch spec.Type {
 	case "All":
-		err = client.ScanAll(spec.DefnId, spec.Limit, cons, nil, callb)
+		uuid, _ := c.NewUUID()
+		requestID := os.Args[0] + uuid.Str()
+		err = client.ScanAll(spec.DefnId, requestID, spec.Limit, cons, nil, callb)
 	case "Range":
-		err = client.Range(spec.DefnId, spec.Low, spec.High,
+		uuid, _ := c.NewUUID()
+		requestID := os.Args[0] + uuid.Str()
+		err = client.Range(spec.DefnId, requestID, spec.Low, spec.High,
 			qclient.Inclusion(spec.Inclusion), false, spec.Limit, cons, nil, callb)
 	case "Lookup":
-		err = client.Lookup(spec.DefnId, spec.Lookups, false,
+		uuid, _ := c.NewUUID()
+		requestID := os.Args[0] + uuid.Str()
+		err = client.Lookup(spec.DefnId, requestID, spec.Lookups, false,
 			spec.Limit, cons, nil, callb)
 	}
 
@@ -149,6 +158,10 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		cfg.LatencyBuckets = defaultLatencyBuckets
 	}
 
+	if cfg.ClientBootTime == 0 {
+		cfg.ClientBootTime = clientBootTime
+	}
+
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 	config.SetValue("settings.poolSize", int(cfg.Concurrency))
 	client, err := qclient.NewGsiClient(cluster, config)
@@ -156,11 +169,6 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		return nil, err
 	}
 	defer client.Close()
-
-	indexes, err := client.Refresh()
-	if err != nil {
-		return nil, err
-	}
 
 	clients = make([]*qclient.GsiClient, cfg.Clients)
 	for i := 0; i < cfg.Clients; i++ {
@@ -172,6 +180,12 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		defer c.Close()
 		clients[i] = c
 
+	}
+
+	time.Sleep(time.Second * time.Duration(cfg.ClientBootTime))
+	indexes, err := client.Refresh()
+	if err != nil {
+		return nil, err
 	}
 
 	jobQ = make(chan *Job, cfg.Concurrency*1000)
