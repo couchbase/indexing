@@ -77,7 +77,7 @@ func (f *filter) Routine() error {
 		case ErrNoMoreItem:
 			f.CloseRead()
 			f.CloseWrite()
-			return nil
+			break
 		default:
 			f.CloseWithError(err)
 			return err
@@ -133,7 +133,7 @@ loop:
 	}
 
 	if i != s.count {
-		s.t.Errorf("Count: got %v, expected", i, s.count)
+		s.t.Errorf("Count: got %v, expected %d", i, s.count)
 	}
 
 	return nil

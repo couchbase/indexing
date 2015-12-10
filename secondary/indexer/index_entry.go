@@ -210,9 +210,8 @@ func (k *primaryKey) Compare(entry IndexEntry) int {
 
 // This function will be never called since do not support prefix equality
 // for primary keys.
-func (k *primaryKey) ComparePrefixFields(entry IndexEntry) int {
+func (k *primaryKey) ComparePrefixFields(entry IndexEntry) (r int) {
 	panic("prefix compare is not implemented for primary key")
-	return 0
 }
 
 func (k *primaryKey) Bytes() []byte {

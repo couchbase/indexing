@@ -357,7 +357,7 @@ func (c *Client) runObserveStreamingEndpoint(path string,
 		if cancel != nil {
 			select {
 			case <-cancel:
-				return nil
+				break
 			default:
 			}
 		}
