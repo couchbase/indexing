@@ -430,7 +430,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.Consistency = &cons
 		cfg := s.config.Load()
 		if cons == common.QueryConsistency && vector != nil {
-			r.Ts = common.NewTsVbuuid("", cfg["numVbuckets"].Int())
+			r.Ts = common.NewTsVbuuid(r.Bucket, cfg["numVbuckets"].Int())
 			// if vector == nil, it is similar to AnyConsistency
 			for i, vbno := range vector.Vbnos {
 				r.Ts.Seqnos[vbno] = vector.Seqnos[i]
@@ -604,8 +604,9 @@ func isSnapshotConsistent(
 			// in receiving a rollback.
 			// return nil, ErrVbuuidMismatch
 			return false
+		} else if cons == common.AnyConsistency {
+			return true
 		}
-		return true // AnyConsistency
 	}
 	return false
 }
