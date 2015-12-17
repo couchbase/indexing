@@ -878,7 +878,7 @@ func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, erro
 
 	snapResch := make(chan interface{}, 1)
 	snapReqMsg := &MsgIndexSnapRequest{
-		ts:        nil,
+		cons:      common.AnyConsistency,
 		respch:    snapResch,
 		idxInstId: instId,
 	}
