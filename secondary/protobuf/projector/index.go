@@ -232,35 +232,34 @@ func (ie *IndexEvaluator) TransformRoute(
 		// FIXME: TODO: where clause is not used to for optimizing out messages
 		// not passing the where clause. For this we need a gaurantee that
 		// where clause will be defined only on immutable fields.
-		//if where { // WHERE predicate
-		// NOTE: Upsert shall be targeted to indexer node hosting the
-		// key.
-		raddrs := instn.UpsertEndpoints(m, npkey, nkey, okey)
-		for _, raddr := range raddrs {
-			dkv, ok := data[raddr].(*c.DataportKeyVersions)
-			if !ok {
-				kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
-				kv.AddUpsert(uuid, nkey, okey)
-				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
-			} else {
-				dkv.Kv.AddUpsert(uuid, nkey, okey)
+		if where { // WHERE predicate, sent upsert only if where is true.
+			raddrs := instn.UpsertEndpoints(m, npkey, nkey, okey)
+			for _, raddr := range raddrs {
+				dkv, ok := data[raddr].(*c.DataportKeyVersions)
+				if !ok {
+					kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
+					kv.AddUpsert(uuid, nkey, okey)
+					dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+				} else {
+					dkv.Kv.AddUpsert(uuid, nkey, okey)
+				}
+				data[raddr] = dkv
 			}
-			data[raddr] = dkv
-		}
-		//}
-		// NOTE: UpsertDeletion shall be broadcasted if old-key is not
-		// available.
-		raddrs = instn.UpsertDeletionEndpoints(m, opkey, nkey, okey)
-		for _, raddr := range raddrs {
-			dkv, ok := data[raddr].(*c.DataportKeyVersions)
-			if !ok {
-				kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
-				kv.AddUpsertDeletion(uuid, okey)
-				dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
-			} else {
-				dkv.Kv.AddUpsertDeletion(uuid, okey)
+		} else { // if WHERE is false, broadcast upsertdelete.
+			// NOTE: downstream can use upsertdelete and immutable flag
+			// to optimize out back-index lookup.
+			raddrs := instn.UpsertDeletionEndpoints(m, opkey, nkey, okey)
+			for _, raddr := range raddrs {
+				dkv, ok := data[raddr].(*c.DataportKeyVersions)
+				if !ok {
+					kv := c.NewKeyVersions(seqno, m.Key, 4, m.Ctime)
+					kv.AddUpsertDeletion(uuid, okey)
+					dkv = &c.DataportKeyVersions{bucket, vbno, vbuuid, kv}
+				} else {
+					dkv.Kv.AddUpsertDeletion(uuid, okey)
+				}
+				data[raddr] = dkv
 			}
-			data[raddr] = dkv
 		}
 
 	case mcd.DCP_DELETION, mcd.DCP_EXPIRATION:

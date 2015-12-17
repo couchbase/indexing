@@ -218,6 +218,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %s already exist.", name)), false
 	}
 
+	var immutable bool = false
 	var deferred bool = false
 	var wait bool = true
 	var nodes []string = nil
@@ -280,6 +281,28 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 				return c.IndexDefnId(0), errors.New("Fails to create index.  Invalid index_type parameter value specified."), false
 			}
 		}
+
+		immutable2, ok := plan["immutable"].(bool)
+		if !ok {
+			immutable_str, ok := plan["immutable"].(string)
+			if ok {
+				var err error
+				immutable2, err = strconv.ParseBool(immutable_str)
+				if err != nil {
+					return c.IndexDefnId(0),
+						errors.New("Fails to create index.  Parameter Immutable must be a boolean value of (true or false)."),
+						false
+				}
+				immutable = immutable2
+
+			} else if _, ok := plan["immutable"]; ok {
+				return c.IndexDefnId(0),
+					errors.New("Fails to create index.  Parameter immutable must be a boolean value of (true or false)."),
+					false
+			}
+		} else {
+			immutable = immutable2
+		}
 	}
 
 	logging.Debugf("MetadataProvider:CreateIndex(): deferred_build %v sync %v nodes %v", deferred, wait, nodes)
@@ -336,6 +359,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		WhereExpr:       whereExpr,
 		Deferred:        deferred,
 		Nodes:           nodes,
+		Immutable:       immutable,
 		IsArrayIndex:    isArrayIndex}
 
 	content, err := c.MarshallIndexDefn(idxDefn)

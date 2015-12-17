@@ -385,6 +385,11 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 
 		case common.UpsertDeletion:
 
+			//skip UpsertDeletion if index has immutable partition
+			if idxInst.Defn.Immutable {
+				continue
+			}
+
 			var skipUpsertDeletion bool
 			//if Upsert has been processed for this IndexInstId,
 			//skip processing UpsertDeletion

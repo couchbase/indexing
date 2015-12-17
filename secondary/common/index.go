@@ -146,6 +146,7 @@ type IndexDefn struct {
 	PartitionKey    string          `json:"partitionKey,omitempty"`
 	WhereExpr       string          `json:"where,omitempty"`
 	Deferred        bool            `json:"deferred,omitempty"`
+	Immutable       bool            `json:"immutable,omitempty"`
 	Nodes           []string        `json:"nodes,omitempty"`
 	IsArrayIndex    bool            `json:"isArrayIndex,omitempty"`
 }

@@ -568,7 +568,6 @@ func IndexStatement(def IndexDefn) string {
 	primCreate := "CREATE PRIMARY INDEX `%s` ON `%s`"
 	secCreate := "CREATE INDEX `%s` ON `%s`(%s)"
 	where := " WHERE %s"
-	using := " USING GSI"
 	with := " WITH({\"index_type\" : \"%s\"})"
 
 	if def.IsPrimary {
@@ -587,8 +586,25 @@ func IndexStatement(def IndexDefn) string {
 		}
 	}
 
-	stmt += using
 	stmt += fmt.Sprintf(with, def.Using)
+
+	withExpr := ""
+	if def.Immutable {
+		withExpr += "\"immutable\"=true"
+	}
+
+	if def.Deferred {
+		if len(withExpr) != 0 {
+			withExpr += ","
+		}
+
+		withExpr += " \"defer_build\"=true"
+	}
+
+	if len(withExpr) != 0 {
+		stmt += fmt.Sprintf(" WITH { %s }", withExpr)
+	}
+
 	return stmt
 }
 

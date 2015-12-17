@@ -43,10 +43,10 @@ func (p *SinglePartition) Hosts(inst *IndexInst) []string {
 }
 
 // UpsertEndpoints implements Partition{} interface.
-// - not sent to coordinator-endpoint.
-// - UpsertDeletionEndpoint is implied for every UpsertEndpoint.
+// - sent only if where clause is true.
+// - UpsertDeletion is implied for every UpsertEndpoint.
 // - if `key` is empty downstream shall consider Upsert as NOOP
-//   and only apply UpsertDeletionEndpoint.
+//   and only apply UpsertDeletion.
 // - `partnKey` is ignored.
 // - for now, `oldKey` is ignored.
 func (p *SinglePartition) UpsertEndpoints(
@@ -56,11 +56,15 @@ func (p *SinglePartition) UpsertEndpoints(
 }
 
 // UpsertDeletionEndpoints implements Partition{} interface.
-// - always return an empty list.
+// - sent only if where clause is false.
+// - downstream can use immutable flag to opimtimize back-index lookup.
+// - `key` is always nil
+// - `partnKey` is ignored.
+// - for now, `oldKey` is ignored.
 func (p *SinglePartition) UpsertDeletionEndpoints(
 	inst *IndexInst, m *mc.DcpEvent, oldPartKey, key, oldKey []byte) []string {
 
-	return nil
+	return p.GetEndpoints()
 }
 
 // DeletionEndpoints implements Partition{} interface.
