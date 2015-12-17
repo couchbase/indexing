@@ -452,7 +452,10 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		datadir := filepath.Join(tmpdir, "data")
 		manifest := filepath.Join(tmpdir, "manifest.json")
 		os.RemoveAll(tmpdir)
-		err := mdb.mainstore.StoreToDisk(datadir, s.info.MainSnap, nil)
+		mdb.confLock.RLock()
+		concurrency := mdb.sysconf["settings.memdb.persistence_threads"].Int()
+		mdb.confLock.RUnlock()
+		err := mdb.mainstore.StoreToDisk(datadir, s.info.MainSnap, concurrency, nil)
 		if err == nil {
 			var fd *os.File
 			bs, err := json.Marshal(s.info)
@@ -581,7 +584,11 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 		}
 	}
 
-	snap, err := mdb.mainstore.LoadFromDisk(datadir, backIndexCallback)
+	mdb.confLock.RLock()
+	concurrency := mdb.sysconf["settings.memdb.recovery_threads"].Int()
+	mdb.confLock.RUnlock()
+
+	snap, err := mdb.mainstore.LoadFromDisk(datadir, concurrency, backIndexCallback)
 
 	if !mdb.isPrimary {
 		for wId := 0; wId < mdb.numWriters; wId++ {
