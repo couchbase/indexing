@@ -3,10 +3,12 @@ package memdb
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	"io"
+	"io/ioutil"
 	"math/rand"
 	"os"
 	"path"
@@ -17,6 +19,8 @@ import (
 )
 
 type KeyCompare func([]byte, []byte) int
+
+type VisitorCallback func(*Item, int) error
 
 type ItemEntry struct {
 	itm *Item
@@ -668,78 +672,204 @@ func (m *MemDB) GetSnapshots() []*Snapshot {
 	return snaps
 }
 
-func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, callb ItemCallback) error {
-	os.MkdirAll(dir, 0755)
-	datafile := path.Join(dir, "records.data")
-	w := newFileWriter(m.fileType)
-	if err := w.Open(datafile); err != nil {
-		return err
-	}
-	defer w.Close()
+func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concurrency int) error {
+	var wg sync.WaitGroup
 
-	itr := m.NewIterator(snap)
-	if itr == nil {
-		return errors.New("Invalid snapshot")
-	}
-	defer itr.Close()
+	var iters []*Iterator
+	var lastNodes []*skiplist.Node
 
-	for itr.SeekFirst(); itr.Valid(); itr.Next() {
-		n := itr.GetNode()
-		itm := itr.Get()
+	wch := make(chan int)
 
-		if err := w.WriteItem(itm); err != nil {
-			return err
+	iters = append(iters, m.NewIterator(snap))
+	iters[0].SeekFirst()
+	pivots := m.store.GetRangeSplitItems(shards)
+	for _, p := range pivots {
+		iter := m.NewIterator(snap)
+		iter.Seek(p.(*Item))
+
+		if iter.Valid() && (len(lastNodes) == 0 || iter.GetNode() != lastNodes[len(lastNodes)-1]) {
+			iters = append(iters, iter)
+			lastNodes = append(lastNodes, iter.GetNode())
+		} else {
+			iter.Close()
 		}
+	}
 
-		if callb != nil {
-			callb(&ItemEntry{itm: itm, n: n})
+	lastNodes = append(lastNodes, nil)
+	errors := make([]error, len(iters))
+
+	// Run workers
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(wg *sync.WaitGroup) {
+			defer wg.Done()
+
+			for shard := range wch {
+			loop:
+				for itr := iters[shard]; itr.Valid(); itr.Next() {
+					if itr.GetNode() == lastNodes[shard] {
+						break loop
+					}
+					if err := callb(itr.Get(), shard); err != nil {
+						errors[shard] = err
+						return
+					}
+				}
+			}
+		}(&wg)
+	}
+
+	// Provide work and wait
+	for shard := 0; shard < len(iters); shard++ {
+		wch <- shard
+	}
+	close(wch)
+
+	wg.Wait()
+
+	for _, itr := range iters {
+		itr.Close()
+	}
+
+	for _, err := range errors {
+		if err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-func (m *MemDB) LoadFromDisk(dir string, callb ItemCallback) (*Snapshot, error) {
-	var wg sync.WaitGroup
-	datafile := path.Join(dir, "records.data")
-	r := newFileReader(m.fileType)
-	if err := r.Open(datafile); err != nil {
-		return nil, err
+func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback ItemCallback) error {
+	var err error
+	datadir := path.Join(dir, "data")
+	os.MkdirAll(datadir, 0755)
+	shards := runtime.NumCPU()
+
+	writers := make([]FileWriter, shards)
+	files := make([]string, shards)
+	defer func() {
+		for _, w := range writers {
+			if w != nil {
+				w.Close()
+			}
+		}
+	}()
+
+	for shard := 0; shard < shards; shard++ {
+		w := newFileWriter(m.fileType)
+		file := fmt.Sprintf("shard-%d", shard)
+		datafile := path.Join(datadir, file)
+		if err := w.Open(datafile); err != nil {
+			return err
+		}
+
+		writers[shard] = w
+		files[shard] = file
 	}
 
-	defer r.Close()
+	visitorCallback := func(itm *Item, shard int) error {
+		w := writers[shard]
+		if err := w.WriteItem(itm); err != nil {
+			return err
+		}
 
-	ch := make(chan *Item, readerBufSize)
-	for i := 0; i < runtime.NumCPU(); i++ {
+		if itmCallback != nil {
+			itmCallback(&ItemEntry{itm: itm, n: nil})
+		}
+
+		return nil
+	}
+
+	if err = m.Visitor(snap, visitorCallback, shards, concurr); err == nil {
+		bs, _ := json.Marshal(files)
+		ioutil.WriteFile(path.Join(datadir, "files.json"), bs, 0660)
+	}
+
+	return err
+}
+
+func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snapshot, error) {
+	var wg sync.WaitGroup
+	datadir := path.Join(dir, "data")
+	var files []string
+
+	if bs, err := ioutil.ReadFile(path.Join(datadir, "files.json")); err != nil {
+		return nil, err
+	} else {
+		json.Unmarshal(bs, &files)
+	}
+
+	var nodeCallb skiplist.NodeCallback
+	wchan := make(chan int)
+	b := skiplist.NewBuilder()
+	segments := make([]*skiplist.Segment, len(files))
+	readers := make([]FileReader, len(files))
+	errors := make([]error, len(files))
+
+	if callb != nil {
+		nodeCallb = func(n *skiplist.Node) {
+			callb(&ItemEntry{itm: n.Item().(*Item), n: n})
+		}
+	}
+
+	defer func() {
+		for _, r := range readers {
+			if r != nil {
+				r.Close()
+			}
+		}
+	}()
+
+	for i, file := range files {
+		segments[i] = b.NewSegment()
+		segments[i].SetNodeCallback(nodeCallb)
+		r := newFileReader(m.fileType)
+		datafile := path.Join(datadir, file)
+		if err := r.Open(datafile); err != nil {
+			return nil, err
+		}
+
+		readers[i] = r
+	}
+
+	for i := 0; i < concurr; i++ {
 		wg.Add(1)
 		go func(wg *sync.WaitGroup) {
 			defer wg.Done()
-			w := m.NewWriter()
-			for itm := range ch {
-				n := w.Put2(itm)
-				if callb != nil {
-					callb(&ItemEntry{itm: itm, n: n})
+
+			for shard := range wchan {
+				r := readers[shard]
+			loop:
+				for {
+					itm, err := r.ReadItem()
+					if err != nil {
+						errors[shard] = err
+						return
+					}
+
+					if itm == nil {
+						break loop
+					}
+					segments[shard].Add(itm)
 				}
 			}
 		}(&wg)
 	}
 
-loop:
-	for {
-		itm, err := r.ReadItem()
+	for i, _ := range files {
+		wchan <- i
+	}
+	close(wchan)
+	wg.Wait()
+
+	for _, err := range errors {
 		if err != nil {
 			return nil, err
 		}
-
-		if itm == nil {
-			break loop
-		}
-		ch <- itm
 	}
 
-	close(ch)
-	wg.Wait()
-
+	m.store = b.Assemble(segments...)
 	snap := m.NewSnapshot()
 	return snap, nil
 }
