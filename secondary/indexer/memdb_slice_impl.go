@@ -475,14 +475,14 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		}
 
 		if err == nil {
-			logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v created ondisk snapshot %v. Took %v", mdb.id, mdb.IndexInstId, dir, time.Since(t0))
+			logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v created ondisk snapshot %v. Took %v", mdb.id, mdb.idxInstId, dir, time.Since(t0))
 		} else {
-			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v failed to create ondisk snapshot %v (error=%v)", mdb.id, mdb.IndexInstId, dir, err)
+			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v failed to create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, dir, err)
 			os.RemoveAll(tmpdir)
 			os.RemoveAll(dir)
 		}
 	} else {
-		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk snapshot. A snapshot writer is in progress.", mdb.id, mdb.IndexInstId)
+		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
 	}
 }
 
@@ -506,12 +506,13 @@ func (mdb *memdbSlice) getSnapshotManifests() []string {
 	return files
 }
 
-// Returns snapshot info list
+// Returns snapshot info list in reverse sorted order
 func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	var infos []SnapshotInfo
 
 	files := mdb.getSnapshotManifests()
-	for _, f := range files {
+	for i := len(files) - 1; i >= 0; i-- {
+		f := files[i]
 		info := &memdbSnapshotInfo{dataPath: path.Dir(f)}
 		fd, err := os.Open(f)
 		if err == nil {
