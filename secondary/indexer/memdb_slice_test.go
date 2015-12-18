@@ -167,6 +167,8 @@ func TestMemDBInsertionPerf(t *testing.T) {
 	fmt.Printf("Incr build: %d items took %v -> %v items/s\n", *N, dur2, float64(*N)/dur2.Seconds())
 	fmt.Println("Main Index:", slice.mainstore.DumpStats())
 	if !*isPrimary {
-		fmt.Println("Back Index:", slice.backstore.DumpStats())
+		for i := 0; i < slice.numWriters; i++ {
+			fmt.Println("Back Index", i, ":", slice.back[i].Stats())
+		}
 	}
 }

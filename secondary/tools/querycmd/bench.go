@@ -85,7 +85,7 @@ loop:
 		default:
 			l, h := c.SecondaryKey{[]byte("aaaa")}, c.SecondaryKey{[]byte("zzzz")}
 			err, _ := client.Range(
-				0xABBA /*defnID*/, l, h, 100, true, 1,
+				0xABBA /*defnID*/, "requestId", l, h, 100, true, 1,
 				c.AnyConsistency, nil,
 				func(val qclient.ResponseReader) bool {
 					switch v := val.(type) {
@@ -107,7 +107,7 @@ loop:
 }
 
 // FIXME: this function is broken.
-func serverCallb(req interface{}, conn net.Conn, quitch <-chan interface{}) {
+func serverCallb(req interface{}, conn net.Conn, quitch <-chan bool) {
 	var buf [1024]byte
 
 	switch req.(type) {

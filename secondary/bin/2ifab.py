@@ -209,10 +209,10 @@ def cb_install(tar="", debs=""):
     pp = pp_for_host(env.host)
 
     if tar != "" :
-        installfile = url.split("/")[-1]
+        installfile = tar.split("/")[-1]
         commands = [
             ["rm -f couchbase-server* installer*", {}],
-            ["wget %s" % url, {}],
+            ["wget %s" % tar, {}],
             ["tar xvf %s" % installfile, {}],
             ["dpkg -i couchbase-server_*", {"op":"sudo"}],
         ]
@@ -451,8 +451,8 @@ def getprofiles(target, comps=""):
                 trycmd(cmd, op="local")
             # get cpu profile information
             url = urlpprof[comp] % env.host
-            parg = ( url, "/tmp/%s.pprof.svg"%comp)
-            cmd = "go tool pprof -svg %s > %s" % parg
+            parg = ( ex, url, "/tmp/%s.pprof.svg"%comp)
+            cmd = "go tool pprof -svg %s %s > %s" % parg
             trycmd(cmd)
             targetfile = parg[-1]
             cmd = "scp -i {keyfile} {user}@{host}:{targetfile} .".format(
