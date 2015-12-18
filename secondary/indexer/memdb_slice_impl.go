@@ -581,6 +581,8 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 
 			wId := vbucketFromEntryBytes(e.Item().Bytes(), numVbuckets) % mdb.numWriters
 			partShardCh[wId] <- e
+
+			mdb.idxStats.numItemsRestored.Add(1)
 		}
 	}
 

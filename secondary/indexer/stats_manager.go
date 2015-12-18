@@ -108,6 +108,7 @@ type IndexStats struct {
 	sinceLastSnapshot    stats.Int64Val
 	numSnapshotWaiters   stats.Int64Val
 	numLastSnapshotReply stats.Int64Val
+	numItemsRestored     stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -154,6 +155,7 @@ func (s *IndexStats) Init() {
 	s.sinceLastSnapshot.Init()
 	s.numSnapshotWaiters.Init()
 	s.numLastSnapshotReply.Init()
+	s.numItemsRestored.Init()
 
 	s.Timings.Init()
 }
@@ -271,6 +273,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("since_last_snapshot", s.sinceLastSnapshot.Value())
 		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
 		addStat("num_last_snapshot_reply", s.numLastSnapshotReply.Value())
+		addStat("num_items_restored", s.numItemsRestored.Value())
 
 		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
