@@ -777,12 +777,16 @@ func (mdb *memdbSlice) Compact() error {
 func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 
-	logging.Infof("memdb main stats\n%s", mdb.mainstore.DumpStats())
+	var internalData []string
+
+	internalData = append(internalData, fmt.Sprintf("----MainStore----\n%s", mdb.mainstore.DumpStats()))
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
-			logging.Infof("memdb back %d stats\n%s", i, mdb.back[i].Stats())
+			internalData = append(internalData, fmt.Sprintf("\n----BackStore[%d]----\n%s", i, mdb.back[i].Stats()))
 		}
 	}
+
+	sts.InternalData = internalData
 	return sts, nil
 }
 
