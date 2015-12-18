@@ -447,15 +447,14 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		defer platform.StoreInt32(&mdb.isPersistorActive, 0)
 
 		t0 := time.Now()
-		dir := newSnapshotPath(mdb.path, true)
-		tmpdir := filepath.Join(mdb.path, "tmp")
-		datadir := filepath.Join(tmpdir, "data")
+		dir := newSnapshotPath(mdb.path)
+		tmpdir := filepath.Join(mdb.path, ".tmp")
 		manifest := filepath.Join(tmpdir, "manifest.json")
 		os.RemoveAll(tmpdir)
 		mdb.confLock.RLock()
 		concurrency := mdb.sysconf["settings.memdb.persistence_threads"].Int()
 		mdb.confLock.RUnlock()
-		err := mdb.mainstore.StoreToDisk(datadir, s.info.MainSnap, concurrency, nil)
+		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
 		if err == nil {
 			var fd *os.File
 			bs, err := json.Marshal(s.info)
@@ -475,11 +474,16 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			}
 		}
 
-		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v created ondisk snapshot %v. Took %v", mdb.id, mdb.IndexInstId, dir, time.Since(t0))
+		if err == nil {
+			logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v created ondisk snapshot %v. Took %v", mdb.id, mdb.IndexInstId, dir, time.Since(t0))
+		} else {
+			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v failed to create ondisk snapshot %v (error=%v)", mdb.id, mdb.IndexInstId, dir, err)
+			os.RemoveAll(tmpdir)
+			os.RemoveAll(dir)
+		}
 	} else {
 		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk snapshot. A snapshot writer is in progress.", mdb.id, mdb.IndexInstId)
 	}
-
 }
 
 func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
@@ -496,7 +500,7 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 }
 
 func (mdb *memdbSlice) getSnapshotManifests() []string {
-	pattern := fmt.Sprintf("*/manifest.json")
+	pattern := "*/manifest.json"
 	files, _ := filepath.Glob(filepath.Join(mdb.path, pattern))
 	sort.Strings(files)
 	return files
@@ -557,8 +561,6 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 		mdb.id, mdb.idxInstId, snapInfo.dataPath)
 
 	t0 := time.Now()
-	datadir := filepath.Join(snapInfo.dataPath, "data")
-
 	if !mdb.isPrimary {
 		for wId := 0; wId < mdb.numWriters; wId++ {
 			wg.Add(1)
@@ -590,7 +592,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 	concurrency := mdb.sysconf["settings.memdb.recovery_threads"].Int()
 	mdb.confLock.RUnlock()
 
-	snap, err := mdb.mainstore.LoadFromDisk(datadir, concurrency, backIndexCallback)
+	snap, err := mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
 
 	if !mdb.isPrimary {
 		for wId := 0; wId < mdb.numWriters; wId++ {
@@ -1110,25 +1112,7 @@ func (s *memdbSnapshot) iterEqualKeys(k IndexKey, it *memdb.Iterator,
 	return err
 }
 
-func newSnapshotPath(dirpath string, newVersion bool) string {
-	var version int = 0
-	pattern := fmt.Sprintf("snapshot.*")
-	files, _ := filepath.Glob(filepath.Join(dirpath, pattern))
-	sort.Strings(files)
-
-	// Pick the first file with highest version
-	if len(files) > 0 {
-		filename := filepath.Base(files[len(files)-1])
-		_, err := fmt.Sscanf(filename, "snapshot.%d", &version)
-		if err != nil {
-			panic(fmt.Sprintf("Invalid data file %s (%v)", files[0], err))
-		}
-	}
-
-	if newVersion {
-		version++
-	}
-
-	newFilename := fmt.Sprintf("snapshot.%010d", version)
-	return filepath.Join(dirpath, newFilename)
+func newSnapshotPath(dirpath string) string {
+	file := time.Now().Format("snapshot.2006-01-02.15:04:05.000")
+	return filepath.Join(dirpath, file)
 }
