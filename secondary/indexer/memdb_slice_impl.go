@@ -60,7 +60,7 @@ func hashDocId(entry []byte) uint32 {
 func nodeEquality(p unsafe.Pointer, entry []byte) bool {
 	node := (*skiplist.Node)(p)
 	docid1 := docIdFromEntryBytes(entry)
-	itm := (node.Item()).(*memdb.Item)
+	itm := (*memdb.Item)(node.Item())
 	docid2 := docIdFromEntryBytes(itm.Bytes())
 	return bytes.Equal(docid1, docid2)
 }

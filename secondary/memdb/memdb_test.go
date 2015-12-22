@@ -13,6 +13,7 @@ import "encoding/binary"
 func TestInsert(t *testing.T) {
 	db := New()
 	defer db.Close()
+
 	w := db.NewWriter()
 	for i := 0; i < 2000; i++ {
 		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
@@ -29,13 +30,13 @@ func TestInsert(t *testing.T) {
 
 	_ = w.NewSnapshot()
 
-	itr := w.NewIterator(snap)
 	count := 0
+	itr := db.NewIterator(snap)
 	itr.SeekFirst()
 	itr.Seek(NewItem([]byte(fmt.Sprintf("%010d", 1500))))
 	for ; itr.Valid(); itr.Next() {
 		expected := fmt.Sprintf("%010d", count+1500)
-		got := string(itr.Get().data)
+		got := string(itr.Get().Bytes())
 		count++
 		if got != expected {
 			t.Errorf("Expected %s, got %v", expected, got)
@@ -114,7 +115,7 @@ func TestGetPerf(t *testing.T) {
 	go doInsert(db, &wg, n, false, true)
 	wg.Wait()
 	snap := db.NewSnapshot()
-	VerifyCount(snap, n*runtime.GOMAXPROCS(0), t)
+	VerifyCount(snap, n, t)
 
 	t0 := time.Now()
 	total := n * runtime.GOMAXPROCS(0)
@@ -150,7 +151,7 @@ func TestLoadStoreDisk(t *testing.T) {
 	cfg := DefaultConfig()
 	db := NewWithConfig(cfg)
 	defer db.Close()
-	n := 10000000
+	n := 1000000
 	t0 := time.Now()
 	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
 		wg.Add(1)
