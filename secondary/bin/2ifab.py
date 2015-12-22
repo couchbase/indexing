@@ -373,7 +373,7 @@ go build; GOMAXPROCS=%s ./loadgen -auth %s:%s -count %s -par %s -worker %s \
 @parallel
 def loadgen(
         cluster="localhost:9000", procs=32, count=100000, par=16,
-        buckets="default", worker="monster", prods="projects.prod", randkey=True,
+        buckets="default", worker="monster", prods="projects.prod", randkey="True",
         prefix="", ratio="0;0;0") :
     """genetate load over couchbase buckets"""
     repopath = os.sep.join(["src", "github.com", "couchbase", "indexing"])
