@@ -153,20 +153,10 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
 	slice.isPrimary = isPrimary
+	slice.initStores()
 
-	slice.mainstore = memdb.New()
-	slice.mainstore.SetKeyComparator(byteItemCompare)
-	slice.main = make([]*memdb.Writer, slice.numWriters)
-	for i := 0; i < slice.numWriters; i++ {
-		slice.main[i] = slice.mainstore.NewWriter()
-	}
-
-	if !isPrimary {
-		slice.back = make([]*nodetable.NodeTable, slice.numWriters)
-		for i := 0; i < slice.numWriters; i++ {
-			slice.back[i] = nodetable.New(hashDocId, nodeEquality)
-		}
-	}
+	logging.Infof("MemDBSlice:NewMemDBSlice Created New Slice Id %v IndexInstId %v "+
+		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
@@ -174,12 +164,24 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 		go slice.handleCommandsWorker(i)
 	}
 
-	logging.Infof("MemDBSlice:NewMemDBSlice Created New Slice Id %v IndexInstId %v "+
-		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
-
 	slice.setCommittedCount()
-
 	return slice, nil
+}
+
+func (slice *memdbSlice) initStores() {
+	slice.mainstore = memdb.New()
+	slice.mainstore.SetKeyComparator(byteItemCompare)
+	slice.main = make([]*memdb.Writer, slice.numWriters)
+	for i := 0; i < slice.numWriters; i++ {
+		slice.main[i] = slice.mainstore.NewWriter()
+	}
+
+	if !slice.isPrimary {
+		slice.back = make([]*nodetable.NodeTable, slice.numWriters)
+		for i := 0; i < slice.numWriters; i++ {
+			slice.back[i] = nodetable.New(hashDocId, nodeEquality)
+		}
+	}
 }
 
 func (mdb *memdbSlice) IncrRef() {
@@ -538,17 +540,22 @@ func (mdb *memdbSlice) GetCommittedCount() uint64 {
 	return platform.LoadUint64(&mdb.committedCount)
 }
 
+func (mdb *memdbSlice) resetStores() {
+	mdb.mainstore.Close()
+	if !mdb.isPrimary {
+		for i := 0; i < mdb.numWriters; i++ {
+			mdb.back[i].Close()
+		}
+	}
+
+	mdb.initStores()
+}
+
 //Rollback slice to given snapshot. Return error if
 //not possible
 func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	snapInfo := info.(*memdbSnapshotInfo)
-	mdb.mainstore.Reset()
-	if !mdb.isPrimary {
-		for i := 0; i < mdb.numWriters; i++ {
-			mdb.back[i].Reset()
-		}
-	}
-
+	mdb.resetStores()
 	return mdb.loadSnapshot(snapInfo)
 }
 
@@ -616,13 +623,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
 func (mdb *memdbSlice) RollbackToZero() error {
-	mdb.mainstore.Reset()
-	if !mdb.isPrimary {
-		for i := 0; i < mdb.numWriters; i++ {
-			mdb.back[i].Reset()
-		}
-	}
-
+	mdb.resetStores()
 	mdb.cleanupOldSnapshotFiles(0)
 	return nil
 }
@@ -821,13 +822,11 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 
 func tryClosememdbSlice(mdb *memdbSlice) {
 	mdb.mainstore.Close()
-	/*
-		if !mdb.isPrimary {
-			for i := 0; i < mdb.numWriters; i++ {
-				mdb.backstore[i].Close()
-			}
+	if !mdb.isPrimary {
+		for i := 0; i < mdb.numWriters; i++ {
+			mdb.back[i].Close()
 		}
-	*/
+	}
 }
 
 func (mdb *memdbSlice) getCmdsCount() int {

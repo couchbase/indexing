@@ -352,20 +352,6 @@ func (m *MemDB) MemoryInUse() int64 {
 	return m.store.MemoryInUse() + m.snapshots.MemoryInUse() + m.gcsnapshots.MemoryInUse()
 }
 
-func (m *MemDB) Reset() {
-	m.Close()
-	m.store = skiplist.New()
-	m.snapshots = skiplist.New()
-	m.gcsnapshots = skiplist.New()
-	m.gcchan = make(chan *skiplist.Node, gcchanBufSize)
-	m.currSn = 1
-
-	m.initSizeFuns()
-	buf := dbInstances.MakeBuf()
-	defer dbInstances.FreeBuf(buf)
-	dbInstances.Insert(unsafe.Pointer(m), CompareMemDB, buf)
-}
-
 func (m *MemDB) Close() {
 	close(m.gcchan)
 	buf := dbInstances.MakeBuf()
