@@ -7,6 +7,10 @@ if [ "$WORKSPACE" = "" ]; then
   exit 2
 fi
 
+if [ "$INSTALL_PATH" = "" ]; then
+  INSTALL_PATH=/opt/couchbase
+fi
+
 if [ "$TS" = "" ]; then
   TS="adhoc"
 fi
@@ -107,9 +111,9 @@ export phase=functional
 mkdir -p "$WORKSPACE/go" 
 export GOROOT=/usr/local/go
 export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
-export C_INCLUDE_PATH=$WORKSPACE/platform/include/:$WORKSPACE/include
-export CGO_LDFLAGS="-L $WORKSPACE/install/lib"
-export LD_LIBRARY_PATH=$WORKSPACE/install/lib
+export C_INCLUDE_PATH=$WORKSPACE/platform/include/:/opt/couchbase/include/:$WORKSPACE/forestdb/include
+export CGO_LDFLAGS="-L $INSTALL_PATH/lib"
+export LD_LIBRARY_PATH=$INSTALL_PATH/lib
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests
 go get -t ./... 1>/dev/null 2>&1
