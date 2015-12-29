@@ -1786,6 +1786,7 @@ func FeedConfigParams() []string {
 		"clusterAddr",
 		"feedChanSize",
 		"backChanSize",
+		"vbucketWorkers",
 		"feedWaitStreamEndTimeout",
 		"feedWaitStreamReqTimeout",
 		"mutationChanSize",

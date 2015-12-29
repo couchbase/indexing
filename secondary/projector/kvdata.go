@@ -2,11 +2,11 @@
 //
 //               back-channel
 //     feed <---------------------*   NewKVData()
-//                StreamRequest   |     |            *---> vbucket
+//                StreamRequest   |     |            *---> worker
 //                    StreamEnd   |   (spawn)        |
-//                                |     |            *---> vbucket
+//                                |     |            *---> worker
 //                                |     |            |
-//        AddEngines() --*-----> runScatter ---------*---> vbucket
+//        AddEngines() --*-----> runScatter ---------*---> worker
 //                       |
 //     DeleteEngines() --*
 //                       |
@@ -30,12 +30,12 @@ import protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 // KVData captures an instance of data-path for single kv-node
 // from upstream connection.
 type KVData struct {
-	feed   *Feed
-	topic  string // immutable
-	bucket string // immutable
-	opaque uint16
-	vrs    map[uint16]*VbucketRoutine
-	config c.Config
+	feed    *Feed
+	topic   string // immutable
+	bucket  string // immutable
+	opaque  uint16
+	workers []*VbucketWorker
+	config  c.Config
 	// evaluators and subscribers
 	engines   map[uint64]*Engine
 	endpoints map[string]c.RouterEndpoint
@@ -76,17 +76,17 @@ func NewKVData(
 		opaque:    opaque,
 		topic:     feed.topic,
 		bucket:    bucket,
-		vrs:       make(map[uint16]*VbucketRoutine),
 		config:    config,
 		engines:   make(map[uint64]*Engine),
 		endpoints: make(map[string]c.RouterEndpoint),
 		// 16 is enough, there can't be more than that many out-standing
 		// control calls on this feed.
-		sbch:      make(chan []interface{}, 16),
-		finch:     make(chan bool),
-		logPrefix: fmt.Sprintf("KVDT[<-%v<-%v #%v]", bucket, cluster, topic),
-		snapStat:  &Average{},
+		sbch:     make(chan []interface{}, 16),
+		finch:    make(chan bool),
+		snapStat: &Average{},
 	}
+	fmsg := "KVDT[<-%v<-%v #%v]"
+	kvdata.logPrefix = fmt.Sprintf(fmsg, bucket, feed.cluster, feed.topic)
 	kvdata.syncTimeout = time.Duration(config["syncTimeout"].Int())
 	kvdata.syncTimeout *= time.Millisecond
 	kvdata.kvstatTick = time.Duration(config["kvstatTick"].Int())
@@ -97,6 +97,8 @@ func NewKVData(
 	for raddr, endpoint := range endpoints {
 		kvdata.endpoints[raddr] = endpoint
 	}
+	// start workers
+	kvdata.workers = kvdata.spawnWorkers(cluster, topic, bucket, config, opaque)
 	go kvdata.runScatter(reqTs, mutch)
 	logging.Infof("%v ##%x started ...\n", kvdata.logPrefix, opaque)
 	return kvdata
@@ -186,7 +188,6 @@ func (kvdata *KVData) Close() error {
 func (kvdata *KVData) runScatter(
 	ts *protobuf.TsVbuuid, mutch <-chan *mc.DcpEvent) {
 
-	// NOTE: panic will bubble up from vbucket-routine to kvdata.
 	defer func() {
 		if r := recover(); r != nil {
 			fmsg := "%v ##%x runScatter() crashed: %v\n"
@@ -194,6 +195,11 @@ func (kvdata *KVData) runScatter(
 			logging.Errorf("%s", logging.StackTrace())
 		}
 		kvdata.publishStreamEnd()
+		// shutdown workers
+		for _, worker := range kvdata.workers {
+			worker.Close()
+		}
+		kvdata.workers = nil
 		kvdata.feed.PostFinKVdata(kvdata.bucket)
 		close(kvdata.finch)
 		logging.Infof("%v ##%x ... stopped\n", kvdata.logPrefix, kvdata.opaque)
@@ -239,10 +245,6 @@ loop:
 			kvdata.scatterMutation(m, ts)
 
 		case <-heartBeat:
-			vrs := make([]*VbucketRoutine, 0, len(kvdata.vrs))
-			for _, vr := range kvdata.vrs {
-				vrs = append(vrs, vr)
-			}
 			heartBeat = nil
 			kvdata.hbCount++
 
@@ -251,8 +253,8 @@ loop:
 			go func() {
 				// during cleanup, as long as the vbucket-routines are
 				// shutdown this routine will eventually exit.
-				for _, vr := range vrs {
-					vr.SyncPulse()
+				for _, worker := range kvdata.workers {
+					worker.SyncPulse()
 				}
 				if err := kvdata.ReloadHeartbeat(); err != nil {
 					fmsg := "%v ##%x ReloadHeartbeat(): %v\n"
@@ -272,7 +274,7 @@ loop:
 			case kvCmdAddEngines:
 				opaque := msg[1].(uint16)
 				respch := msg[4].(chan []interface{})
-				if msg[2] != nil {
+				if msg[2] != nil { // collect engines
 					for uuid, engine := range msg[2].(map[uint64]*Engine) {
 						if _, ok := kvdata.engines[uuid]; !ok {
 							fmsg := "%v ##%x new engine added %v"
@@ -281,7 +283,7 @@ loop:
 						kvdata.engines[uuid] = engine
 					}
 				}
-				if msg[3] != nil {
+				if msg[3] != nil { // collect endpoints
 					rv := msg[3].(map[string]c.RouterEndpoint)
 					for raddr, endp := range rv {
 						fmsg := "%v ##%x updated endpoint %q"
@@ -291,13 +293,15 @@ loop:
 				}
 				curSeqnos := make(map[uint16]uint64)
 				if kvdata.engines != nil || kvdata.endpoints != nil {
-					engines, endpoints := kvdata.engines, kvdata.endpoints
-					for _, vr := range kvdata.vrs {
-						curSeqno, err := vr.AddEngines(opaque, engines, endpoints)
+					engns, endpts := kvdata.engines, kvdata.endpoints
+					for _, worker := range kvdata.workers {
+						cseqnos, err := worker.AddEngines(opaque, engns, endpts)
 						if err != nil {
 							panic(err)
 						}
-						curSeqnos[vr.vbno] = curSeqno
+						for vbno, cseqno := range cseqnos {
+							curSeqnos[vbno] = cseqno
+						}
 					}
 				}
 				kvdata.ainstCount++
@@ -307,8 +311,9 @@ loop:
 				opaque := msg[1].(uint16)
 				engineKeys := msg[2].([]uint64)
 				respch := msg[3].(chan []interface{})
-				for _, vr := range kvdata.vrs {
-					if err := vr.DeleteEngines(opaque, engineKeys); err != nil {
+				for _, worker := range kvdata.workers {
+					err := worker.DeleteEngines(opaque, engineKeys)
+					if err != nil {
 						panic(err)
 					}
 				}
@@ -335,12 +340,14 @@ loop:
 				stats.Set("delInsts", float64(kvdata.dinstCount))
 				stats.Set("tsCount", float64(kvdata.tsCount))
 				statVbuckets := make(map[string]interface{})
-				for i, vr := range kvdata.vrs {
-					stats, err := vr.GetStatistics()
-					if err != nil {
+				for _, worker := range kvdata.workers {
+					if stats, err := worker.GetStatistics(); err != nil {
 						panic(err)
+					} else {
+						for vbno_s, stat := range stats {
+							statVbuckets[vbno_s] = stat
+						}
 					}
-					statVbuckets[strconv.Itoa(int(i))] = stats
 				}
 				stats.Set("vbuckets", statVbuckets)
 				respch <- []interface{}{map[string]interface{}(stats)}
@@ -362,8 +369,8 @@ loop:
 						"%v ##%x kvstat-tick settings reloaded: %v\n",
 						kvdata.logPrefix, kvdata.opaque, kvdata.kvstatTick)
 				}
-				for _, vr := range kvdata.vrs {
-					if err := vr.ResetConfig(config); err != nil {
+				for _, worker := range kvdata.workers {
+					if err := worker.ResetConfig(config); err != nil {
 						panic(err)
 					}
 				}
@@ -376,9 +383,10 @@ loop:
 				respch <- []interface{}{nil}
 
 			case kvCmdClose:
-				for _, vr := range kvdata.vrs {
-					vr.Close()
+				for _, worker := range kvdata.workers {
+					worker.Close()
 				}
+				kvdata.workers = nil
 				respch := msg[1].(chan []interface{})
 				respch <- []interface{}{nil}
 				break loop
@@ -392,6 +400,7 @@ func (kvdata *KVData) scatterMutation(
 	m *mc.DcpEvent, ts *protobuf.TsVbuuid) (err error) {
 
 	vbno := m.VBucket
+	worker := kvdata.workers[int(vbno)%len(kvdata.workers)]
 
 	switch m.Opcode {
 	case mcd.DCP_STREAMREQ:
@@ -403,60 +412,38 @@ func (kvdata *KVData) scatterMutation(
 			fmsg := "%v ##%x StreamRequest %s: %v\n"
 			logging.Errorf(fmsg, kvdata.logPrefix, m.Opaque, m.Status, m)
 
-		} else if _, ok := kvdata.vrs[vbno]; ok {
-			fmsg := "%v ##%x duplicate OpStreamRequest: %v\n"
-			logging.Errorf(fmsg, kvdata.logPrefix, m.Opaque, m)
-
 		} else if m.VBuuid, _, err = m.FailoverLog.Latest(); err != nil {
 			panic(err)
 
 		} else {
 			fmsg := "%v ##%x StreamRequest: %v\n"
 			logging.Tracef(fmsg, kvdata.logPrefix, m.Opaque, m)
-			topic, bucket := kvdata.topic, kvdata.bucket
 			m.Seqno, _ = ts.SeqnoFor(vbno)
-			cluster, config := kvdata.feed.cluster, kvdata.config
-			vr := NewVbucketRoutine(
-				cluster, topic, bucket,
-				m.Opaque, vbno, m.VBuuid, m.Seqno, config)
-			_, err := vr.AddEngines(0xFFFF, kvdata.engines, kvdata.endpoints)
-			if err != nil {
+			if err := worker.Event(m); err != nil {
 				panic(err)
 			}
-			if vr.Event(m) != nil {
-				panic(err)
-			}
-			kvdata.vrs[vbno] = vr
 		}
 		kvdata.reqCount++
 		kvdata.feed.PostStreamRequest(kvdata.bucket, m)
 
 	case mcd.DCP_STREAMEND:
-		if vr, ok := kvdata.vrs[vbno]; !ok {
-			fmsg := "%v ##%x duplicate OpStreamEnd: %v\n"
-			logging.Errorf(fmsg, kvdata.logPrefix, m.Opaque, m)
-
-		} else if m.Status != mcd.SUCCESS {
+		if m.Status != mcd.SUCCESS {
 			fmsg := "%v ##%x StreamEnd %s: %v\n"
 			logging.Errorf(fmsg, kvdata.logPrefix, m.Opaque, m)
 
 		} else {
 			fmsg := "%v ##%x StreamEnd: %v\n"
 			logging.Tracef(fmsg, kvdata.logPrefix, m.Opaque, m)
-			if vr.Event(m) != nil {
+			if err := worker.Event(m); err != nil {
 				panic(err)
 			}
-			delete(kvdata.vrs, vbno)
 		}
 		kvdata.endCount++
 		kvdata.feed.PostStreamEnd(kvdata.bucket, m)
 
 	case mcd.DCP_SNAPSHOT:
-		if vr, ok := kvdata.vrs[vbno]; ok && (vr.Event(m) != nil) {
+		if worker.Event(m) != nil {
 			panic(err)
-		} else if !ok {
-			fmsg := "%v ##%x unknown vbucket: %v\n"
-			logging.Fatalf(fmsg, kvdata.logPrefix, m.Opaque, m)
 		}
 		snapwindow := int64(m.SnapendSeq - m.SnapstartSeq + 1)
 		if snapwindow > 50000 {
@@ -466,11 +453,8 @@ func (kvdata *KVData) scatterMutation(
 		kvdata.snapStat.Add(snapwindow)
 
 	case mcd.DCP_MUTATION, mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
-		if vr, ok := kvdata.vrs[vbno]; ok && (vr.Event(m) != nil) {
+		if err := worker.Event(m); err != nil {
 			panic(err)
-		} else if !ok {
-			fmsg := "%v ##%x unknown vbucket: %v\n"
-			logging.Fatalf(fmsg, kvdata.logPrefix, m.Opaque, m)
 		}
 		switch m.Opcode {
 		case mcd.DCP_MUTATION:
@@ -484,19 +468,35 @@ func (kvdata *KVData) scatterMutation(
 	return
 }
 
-func (kvdata *KVData) publishStreamEnd() error {
-	for _, vr := range kvdata.vrs {
-		m := &mc.DcpEvent{
-			Opcode:  mcd.DCP_STREAMEND,
-			Status:  mcd.SUCCESS,
-			VBucket: vr.vbno,
-			Opaque:  vr.opaque,
-			Ctime:   time.Now().UnixNano(),
-		}
-		kvdata.feed.PostStreamEnd(kvdata.bucket, m)
-		vr.Event(m)
+func (kvdata *KVData) spawnWorkers(
+	cluster, topic, bucket string,
+	config c.Config, opaque uint16) []*VbucketWorker {
+
+	nworkers := config["vbucketWorkers"].Int()
+	workers := make([]*VbucketWorker, nworkers)
+	for i := 0; i < nworkers; i++ {
+		workers[i] = NewVbucketWorker(i, cluster, topic, bucket, opaque, config)
 	}
-	return nil
+	return workers
+}
+
+func (kvdata *KVData) publishStreamEnd() {
+	for _, worker := range kvdata.workers {
+		vbuckets, err := worker.GetVbuckets()
+		if err != nil {
+			fmsg := "Error in worker.GetVbuckets(): %v"
+			logging.Errorf(fmsg, kvdata.logPrefix, err)
+		}
+		for _, v := range vbuckets {
+			m := &mc.DcpEvent{
+				Opcode:  mcd.DCP_STREAMEND,
+				Status:  mcd.SUCCESS,
+				VBucket: v.vbno,
+				Opaque:  v.opaque,
+			}
+			kvdata.feed.PostStreamEnd(kvdata.bucket, m)
+		}
+	}
 }
 
 func (kvdata *KVData) newStats() c.Statistics {

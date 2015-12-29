@@ -145,6 +145,12 @@ var SystemConfig = Config{
 		10000,
 		false, // mutable
 	},
+	"projector.vbucketWorkers": ConfigValue{
+		64,
+		"number of vbuckets to be handled by a single worker",
+		64,
+		true, // immutable
+	},
 	"projector.syncTimeout": ConfigValue{
 		2000,
 		"timeout, in milliseconds, for sending periodic Sync messages, " +
