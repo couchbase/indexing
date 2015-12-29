@@ -172,7 +172,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
 	}
 
-	logging.Infof("Indexer::NewIndexer Status INIT")
+	logging.Infof("Indexer::NewIndexer Status Bootstrap")
 	snapshotNotifych := make(chan IndexSnapshot, 100)
 
 	var res Message
@@ -235,6 +235,24 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
+	idx.setIndexerState(common.INDEXER_BOOTSTRAP)
+	idx.stats.indexerState.Set(int64(common.INDEXER_BOOTSTRAP))
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(nil)
+
+	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, nil, idx.statsMgrCmdCh, "statsMgr"); err != nil {
+		common.CrashOnError(err)
+	}
+
+	// Setup http server
+	addr := net.JoinHostPort("", idx.config["httpPort"].String())
+	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
+	go func() {
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			logging.Fatalf("indexer:: Error Starting Http Server: %v", err)
+			common.CrashOnError(err)
+		}
+	}()
+
 	//read persisted indexer state
 	if err := idx.bootstrap(snapshotNotifych); err != nil {
 		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
@@ -272,6 +290,14 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
+	if idx.getIndexerState() == common.INDEXER_BOOTSTRAP {
+		idx.setIndexerState(common.INDEXER_ACTIVE)
+		idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
+	}
+
+	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME}
+	<-idx.scanCoordCmdCh
+
 	logging.Infof("Indexer::NewIndexer Status %v", idx.getIndexerState())
 
 	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
@@ -279,16 +305,6 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		logging.Fatalf("Indexer::NewCompactionmanager Init Error", res)
 		return nil, res
 	}
-
-	// Setup http server
-	addr := net.JoinHostPort("", idx.config["httpPort"].String())
-	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
-	go func() {
-		if err := http.ListenAndServe(addr, nil); err != nil {
-			logging.Fatalf("indexer:: Error Starting Http Server: %v", err)
-			common.CrashOnError(err)
-		}
-	}()
 
 	go idx.monitorMemUsage()
 

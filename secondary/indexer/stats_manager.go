@@ -429,18 +429,15 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 			sync = true
 		}
 		stats := s.stats.Get()
-		t0 := time.Now()
-		s.tryUpdateStats(sync)
 
-		if stats == nil {
-			w.WriteHeader(500)
-			w.Write([]byte("Indexer not ready"))
-		} else {
-			bytes, _ := stats.MarshalJSON()
-			w.WriteHeader(200)
-			w.Write(bytes)
-			stats.statsResponse.Put(time.Since(t0))
+		t0 := time.Now()
+		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
+			s.tryUpdateStats(sync)
 		}
+		bytes, _ := stats.MarshalJSON()
+		w.WriteHeader(200)
+		w.Write(bytes)
+		stats.statsResponse.Put(time.Since(t0))
 	} else {
 		w.WriteHeader(400)
 		w.Write([]byte("Unsupported method"))
