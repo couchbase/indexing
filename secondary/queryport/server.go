@@ -18,6 +18,17 @@ import "github.com/couchbase/indexing/secondary/transport"
 type RequestHandler func(
 	req interface{}, conn net.Conn, quitch <-chan bool)
 
+type request struct {
+	r      interface{}
+	quitch chan bool
+}
+
+func newRequest(r interface{}) (req request) {
+	req.r = r
+	req.quitch = make(chan bool)
+	return
+}
+
 // Server handles queryport connections.
 type Server struct {
 	laddr string         // address to listen
@@ -130,29 +141,18 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}()
 
 	// start a receive routine.
-	quitch := make(chan bool)
-	rcvch := make(chan interface{}, s.streamChanSize)
-	go s.doReceive(conn, rcvch, quitch)
+	rcvch := make(chan request, s.streamChanSize)
+	go s.doReceive(conn, rcvch)
 
-loop:
 	for req := range rcvch {
-		if _, yes := req.(*protobuf.EndStreamRequest); yes { // skip
-			format := "%v connection %q skip protobuf.EndStreamRequest\n"
-			logging.Infof(format, s.logPrefix, raddr)
-			break loop
-		}
-		s.callb(req, conn, quitch) // blocking call
-		// End response should be only sent after monitor is shutdown
-		// otherwise it could lead to loss of next request coming through
-		// same connection.
-
+		s.callb(req.r, conn, req.quitch) // blocking call
 		transport.SendResponseEnd(conn)
 	}
 }
 
 // receive requests from remote, when this function returns
 // the connection is expected to be closed.
-func (s *Server) doReceive(conn net.Conn, rcvch chan<- interface{}, quitch chan bool) {
+func (s *Server) doReceive(conn net.Conn, rcvch chan<- request) {
 	raddr := conn.RemoteAddr()
 
 	// transport buffer for receiving
@@ -162,13 +162,15 @@ func (s *Server) doReceive(conn net.Conn, rcvch chan<- interface{}, quitch chan 
 
 	logging.Infof("%v connection %q doReceive() ...\n", s.logPrefix, raddr)
 
+	var currRequest request
+
 loop:
 	for {
 		// TODO: Fix read timeout correctly
 		// timeoutMs := s.readDeadline * time.Millisecond
 		// conn.SetReadDeadline(time.Now().Add(timeoutMs))
 
-		req, err := rpkt.Receive(conn)
+		reqMsg, err := rpkt.Receive(conn)
 		// TODO: handle close-connection and don't print error message.
 		if err != nil {
 			if err == io.EOF {
@@ -178,12 +180,15 @@ loop:
 			}
 			break loop
 		}
-		if _, yes := req.(*protobuf.EndStreamRequest); yes {
+
+		// This message indicates graceful shutdown of a prior request.
+		if _, yes := reqMsg.(*protobuf.EndStreamRequest); yes {
 			format := "%v connection %s client requested quit"
 			logging.Debugf(format, s.logPrefix, raddr)
-			quitch <- true
+			close(currRequest.quitch)
 		} else {
-			rcvch <- req
+			currRequest = newRequest(reqMsg)
+			rcvch <- currRequest
 		}
 	}
 	close(rcvch)
