@@ -192,6 +192,8 @@ type scanCoordinator struct {
 	config     common.ConfigHolder
 
 	stats IndexerStatsHolder
+
+	indexerState common.IndexerState
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -318,6 +320,12 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 
 	case CONFIG_SETTINGS_UPDATE:
 		s.handleConfigUpdate(cmd)
+
+	case INDEXER_PAUSE:
+		s.handleIndexerPause(cmd)
+
+	case INDEXER_RESUME:
+		s.handleIndexerResume(cmd)
 
 	default:
 		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
@@ -688,6 +696,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		return
 	}
 
+	if err := s.isScanAllowed(*req.Consistency); err != nil {
+		s.tryRespondWithError(w, req, err)
+		return
+	}
+
 	req.Stats.numRequests.Add(1)
 
 	t0 := time.Now()
@@ -873,6 +886,27 @@ func (s *scanCoordinator) handleConfigUpdate(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 }
 
+func (s *scanCoordinator) handleIndexerPause(cmd Message) {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.indexerState = common.INDEXER_PAUSED
+
+	s.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (s *scanCoordinator) handleIndexerResume(cmd Message) {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.indexerState = common.INDEXER_ACTIVE
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
 func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, error) {
 	var count uint64
 
@@ -952,4 +986,27 @@ func readDeallocSnapshot(ch chan interface{}) {
 
 		DestroyIndexSnapshot(is)
 	}
+}
+
+func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.indexerState == common.INDEXER_PAUSED {
+
+		cfg := s.config.Load()
+		allow_scan_when_paused := cfg["allow_scan_when_paused"].Bool()
+
+		if c != common.AnyConsistency {
+			return errors.New(fmt.Sprintf("Indexer Cannot Service %v Scan In Paused State", c.String()))
+		} else if !allow_scan_when_paused {
+			return errors.New(fmt.Sprintf("Indexer Cannot Service Scan In Paused State"))
+		} else {
+			return nil
+		}
+	}
+
+	return nil
+
 }

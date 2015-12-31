@@ -645,6 +645,45 @@ var SystemConfig = Config{
 		60 * 1000,
 		false, // mutable
 	},
+	"indexer.high_mem_mark": ConfigValue{
+		0.9,
+		"Fraction of memory_quota above which Indexer moves " +
+			"to paused state",
+		0.9,
+		false, // mutable
+	},
+	"indexer.low_mem_mark": ConfigValue{
+		0.8,
+		"Once Indexer goes to Paused state, it becomes Active " +
+			"only after mem_usage reaches below this fraction of memory_quota",
+		0.8,
+		false, // mutable
+	},
+	"indexer.pause_if_memory_full": ConfigValue{
+		true,
+		"Indexer goes to Paused when memory_quota is exhausted(memdb only)",
+		true,
+		false, // mutable
+	},
+	"indexer.min_oom_memory": ConfigValue{
+		uint64(256 * 1024 * 1024),
+		"Minimum memory_quota below which Indexer doesn't go to Paused state",
+		uint64(256 * 1024 * 1024),
+		false, // mutable
+	},
+	"indexer.allow_scan_when_paused": ConfigValue{
+		true,
+		"stale=ok scans are allowed when Indexer is in Paused state",
+		true,
+		false, // mutable
+	},
+	"indexer.force_gc_mem_frac": ConfigValue{
+		0.3,
+		"Fraction of memory_quota left after which GC is forced " +
+			"by Indexer. Only applies to memdb.",
+		0.3,
+		false, // mutable
+	},
 	// Indexer dynamic settings
 	"indexer.settings.compaction.check_period": ConfigValue{
 		30,
@@ -837,6 +876,12 @@ var SystemConfig = Config{
 		"Number of concurrent threads for rebuilding index from disk snapshot",
 		runtime.NumCPU(),
 		false,
+	},
+	"indexer.settings.storage_mode": ConfigValue{
+		"",
+		"Storage Type e.g. forestdb, memdb",
+		"",
+		false, // mutable
 	},
 	"projector.settings.log_level": ConfigValue{
 		"info",

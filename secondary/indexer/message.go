@@ -104,6 +104,10 @@ const (
 	INDEXER_BUCKET_NOT_FOUND
 	INDEXER_ROLLBACK
 	STREAM_REQUEST_DONE
+	INDEXER_PAUSE
+	INDEXER_RESUME
+	INDEXER_PREPARE_UNPAUSE
+	INDEXER_UNPAUSE
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -1116,6 +1120,18 @@ func (m *MsgResetStats) GetMsgType() MsgType {
 	return STATS_RESET
 }
 
+//INDEXER_PAUSE
+//INDEXER_RESUME
+//INDEXER_PREPARE_UNPAUSE
+//INDEXER_UNPAUSE
+type MsgIndexerState struct {
+	mType MsgType
+}
+
+func (m *MsgIndexerState) GetMsgType() MsgType {
+	return m.mType
+}
+
 //Helper function to return string for message type
 
 func (m MsgType) String() string {
@@ -1217,6 +1233,14 @@ func (m MsgType) String() string {
 		return "INDEXER_ROLLBACK"
 	case STREAM_REQUEST_DONE:
 		return "STREAM_REQUEST_DONE"
+	case INDEXER_PAUSE:
+		return "INDEXER_PAUSE"
+	case INDEXER_RESUME:
+		return "INDEXER_RESUME"
+	case INDEXER_PREPARE_UNPAUSE:
+		return "INDEXER_PREPARE_UNPAUSE"
+	case INDEXER_UNPAUSE:
+		return "INDEXER_UNPAUSE"
 
 	case SCAN_COORD_SHUTDOWN:
 		return "SCAN_COORD_SHUTDOWN"

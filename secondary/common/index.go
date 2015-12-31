@@ -97,6 +97,34 @@ func (s IndexState) String() string {
 	}
 }
 
+type IndexerState int
+
+const (
+	//Active(processing mutation and scan)
+	INDEXER_ACTIVE IndexerState = iota
+	//Paused(not processing mutation/scan)
+	INDEXER_PAUSED
+	INDEXER_PREPARE_UNPAUSE
+	//Initial Bootstrap
+	INDEXER_BOOTSTRAP
+)
+
+func (s IndexerState) String() string {
+
+	switch s {
+	case INDEXER_ACTIVE:
+		return "Active"
+	case INDEXER_PAUSED:
+		return "Paused"
+	case INDEXER_PREPARE_UNPAUSE:
+		return "PrepareUnpause"
+	case INDEXER_BOOTSTRAP:
+		return "Bootstrap"
+	default:
+		return "Invalid"
+	}
+}
+
 // Consistency definition for index-scan queries.
 type Consistency byte
 
@@ -296,6 +324,8 @@ func (s IndexSnapType) String() string {
 
 }
 
+//NOTE: This type needs to be in sync with
+//smStrMap in index/global.go
 type IndexType string
 
 const (

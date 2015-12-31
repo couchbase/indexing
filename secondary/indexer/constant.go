@@ -65,4 +65,6 @@ const MAX_SEC_KEY_BUFFER_LEN = MAX_SEC_KEY_LEN * 3
 
 const INDEXER_ID_KEY = "IndexerId"
 
+const INDEXER_STATE_KEY = "IndexerState"
+
 const MAX_KVWARMUP_RETRIES = 120

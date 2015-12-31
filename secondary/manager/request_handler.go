@@ -346,6 +346,12 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 							stateStr = "Ready"
 						}
 
+						if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
+							if indexerState == "Paused" {
+								stateStr = "Paused"
+							}
+						}
+
 						if len(errStr) != 0 {
 							stateStr = "Error"
 						}

@@ -64,6 +64,9 @@ type mutationStreamReader struct {
 	killch chan bool // kill chan for the main loop
 
 	stats IndexerStatsHolder
+
+	indexerState common.IndexerState
+	stateLock    sync.Mutex
 }
 
 //CreateMutationStreamReader creates a new mutation stream and starts
@@ -71,7 +74,7 @@ type mutationStreamReader struct {
 //In case returned MutationStreamReader is nil, Message will have the error msg.
 func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQueueMap,
 	bucketFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
-	numWorkers int, stats *IndexerStats, config common.Config) (MutationStreamReader, Message) {
+	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState) (MutationStreamReader, Message) {
 
 	//start a new mutation stream
 	streamMutch := make(chan interface{}, config["stream_reader.mutationBuffer"].Uint64())
@@ -114,6 +117,8 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 
 	r.stats.Set(stats)
 	r.initBucketFilter(bucketFilter)
+
+	r.indexerState = is
 
 	//start the main reader loop
 	go r.run()
@@ -285,6 +290,14 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 			}
 
 			r.logReaderStat()
+
+			if r.getIndexerState() != common.INDEXER_ACTIVE {
+				if mutk != nil {
+					mutk.Free()
+					mutk = nil
+				}
+				continue
+			}
 
 			//allocate new mutation first time
 			if mutk == nil {
@@ -459,6 +472,11 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		//start all workers again
 		r.startWorkers()
 
+		return &MsgSuccess{}
+
+	case INDEXER_PAUSE:
+		logging.Infof("MutationStreamReader::handleIndexerPause")
+		r.setIndexerState(common.INDEXER_PAUSED)
 		return &MsgSuccess{}
 
 	default:
@@ -733,4 +751,16 @@ func (r *mutationStreamReader) logReaderStat() {
 			"MutationCount %v", r.streamId, r.mutationCount)
 	}
 
+}
+
+func (r *mutationStreamReader) getIndexerState() common.IndexerState {
+	r.stateLock.Lock()
+	defer r.stateLock.Unlock()
+	return r.indexerState
+}
+
+func (r *mutationStreamReader) setIndexerState(is common.IndexerState) {
+	r.stateLock.Lock()
+	defer r.stateLock.Unlock()
+	r.indexerState = is
 }
