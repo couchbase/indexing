@@ -265,6 +265,9 @@ func GetSeqs(mc *memcached.Client, seqnos []uint64, buf []byte) error {
 		Opaque: 0,
 	}
 
+	rq.Extras = make([]byte, 4)
+	binary.BigEndian.PutUint32(rq.Extras, 1) // Only active vbuckets
+
 	if err := mc.Transmit(rq); err != nil {
 		return err
 	}
