@@ -327,6 +327,9 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 	case INDEXER_RESUME:
 		s.handleIndexerResume(cmd)
 
+	case INDEXER_BOOTSTRAP:
+		s.handleIndexerBootstrap(cmd)
+
 	default:
 		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
 		s.supvCmdch <- &MsgError{
@@ -354,6 +357,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	}
 
 	r.CancelCh = cancelCh
+
+	isBootstrapMode := s.isBootstrapMode()
 
 	isNil := func(k []byte) bool {
 		if len(k) == 0 || (!r.isPrimary && string(k) == "[]") {
@@ -488,6 +493,10 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.RequestId = req.GetRequestId()
 		r.ScanType = StatsReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
 		setIndexParams()
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
@@ -501,6 +510,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		vector := req.GetVector()
 		r.ScanType = CountReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
+
 		setIndexParams()
 		setConsistency(cons, vector)
 		fillRanges(
@@ -515,13 +530,19 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		vector := req.GetVector()
 		r.ScanType = ScanReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		r.Limit = req.GetLimit()
+
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
+
 		setIndexParams()
 		setConsistency(cons, vector)
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
-		r.Limit = req.GetLimit()
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
@@ -529,6 +550,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		vector := req.GetVector()
 		r.ScanType = ScanAllReq
 		r.Limit = req.GetLimit()
+
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
+
 		setIndexParams()
 		setConsistency(cons, vector)
 	default:
@@ -907,6 +934,16 @@ func (s *scanCoordinator) handleIndexerResume(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 }
 
+func (s *scanCoordinator) handleIndexerBootstrap(cmd Message) {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.indexerState = common.INDEXER_BOOTSTRAP
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
 func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, error) {
 	var count uint64
 
@@ -1008,5 +1045,18 @@ func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
 	}
 
 	return nil
+
+}
+
+func (s *scanCoordinator) isBootstrapMode() bool {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.indexerState == common.INDEXER_BOOTSTRAP {
+		return true
+	}
+
+	return false
 
 }

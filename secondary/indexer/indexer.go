@@ -243,6 +243,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		common.CrashOnError(err)
 	}
 
+	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_BOOTSTRAP}
+	<-idx.scanCoordCmdCh
+
 	// Setup http server
 	addr := net.JoinHostPort("", idx.config["httpPort"].String())
 	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
