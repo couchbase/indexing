@@ -3942,6 +3942,7 @@ func (idx *indexer) handleIndexerPause(msg Message) {
 	}
 
 	idx.setIndexerState(common.INDEXER_PAUSED)
+	idx.stats.indexerState.Set(int64(common.INDEXER_PAUSED))
 	logging.Infof("Indexer::handleIndexerPause Indexer State Changed to "+
 		"%v", idx.state)
 
@@ -3990,6 +3991,7 @@ func (idx *indexer) doPrepareUnpause() {
 func (idx *indexer) doUnpause() {
 
 	idx.setIndexerState(common.INDEXER_ACTIVE)
+	idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
 
 	msg := &MsgIndexerState{mType: INDEXER_RESUME}
 
