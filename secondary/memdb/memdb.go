@@ -12,7 +12,6 @@ import (
 	"math/rand"
 	"os"
 	"path"
-	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -75,66 +74,6 @@ func DefaultConfig() Config {
 	return cfg
 }
 
-type Item struct {
-	bornSn, deadSn uint32
-	dataPtr        unsafe.Pointer
-	dataLen        int
-}
-
-func (itm *Item) Encode(buf []byte, w io.Writer) error {
-	l := 2
-	if len(buf) < l {
-		return ErrNotEnoughSpace
-	}
-
-	binary.BigEndian.PutUint16(buf[0:2], uint16(itm.dataLen))
-	if _, err := w.Write(buf[0:2]); err != nil {
-		return err
-	}
-	if _, err := w.Write(itm.Bytes()); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (itm *Item) Decode(buf []byte, r io.Reader) error {
-	if _, err := io.ReadFull(r, buf[0:2]); err != nil {
-		return err
-	}
-	l := binary.BigEndian.Uint16(buf[0:2])
-	if l > 0 {
-		data := make([]byte, int(l))
-		_, err := io.ReadFull(r, data)
-		itm.dataLen = int(l)
-		itm.dataPtr = unsafe.Pointer(&data[0])
-		return err
-	}
-
-	return nil
-}
-
-func (itm *Item) Bytes() (bs []byte) {
-	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&bs))
-	hdr.Data = uintptr(itm.dataPtr)
-	hdr.Len = itm.dataLen
-	hdr.Cap = hdr.Len
-	return
-}
-
-func ItemSize(p unsafe.Pointer) int {
-	itm := (*Item)(p)
-	return int(unsafe.Sizeof(itm.bornSn)+unsafe.Sizeof(itm.deadSn)+
-		unsafe.Sizeof(itm.dataPtr)+unsafe.Sizeof(itm.dataLen)) + itm.dataLen
-}
-
-func NewItem(data []byte) *Item {
-	return &Item{
-		dataPtr: unsafe.Pointer(&data[0]),
-		dataLen: len(data),
-	}
-}
-
 func newInsertCompare(keyCmp KeyCompare) skiplist.CompareFn {
 	return func(this, that unsafe.Pointer) int {
 		var v int
@@ -152,6 +91,17 @@ func newIterCompare(keyCmp KeyCompare) skiplist.CompareFn {
 	return func(this, that unsafe.Pointer) int {
 		thisItem := (*Item)(this)
 		thatItem := (*Item)(that)
+		return keyCmp(thisItem.Bytes(), thatItem.Bytes())
+	}
+}
+
+func newExistCompare(keyCmp KeyCompare) skiplist.CompareFn {
+	return func(this, that unsafe.Pointer) int {
+		thisItem := (*Item)(this)
+		thatItem := (*Item)(that)
+		if thisItem.deadSn != 0 || thatItem.deadSn != 0 {
+			return 1
+		}
 		return keyCmp(thisItem.Bytes(), thatItem.Bytes())
 	}
 }
@@ -179,7 +129,7 @@ func (w *Writer) Put(x *Item) {
 func (w *Writer) Put2(x *Item) (n *skiplist.Node) {
 	var success bool
 	x.bornSn = w.getCurrSn()
-	n, success = w.store.Insert2(unsafe.Pointer(x), w.insCmp, w.buf, w.rand.Float32)
+	n, success = w.store.Insert2(unsafe.Pointer(x), w.insCmp, w.existCmp, w.buf, w.rand.Float32)
 	if success {
 		atomic.AddInt64(&w.count, 1)
 	}
@@ -269,9 +219,10 @@ func (w *Writer) GetNode(x *Item) *skiplist.Node {
 }
 
 type Config struct {
-	keyCmp  KeyCompare
-	insCmp  skiplist.CompareFn
-	iterCmp skiplist.CompareFn
+	keyCmp   KeyCompare
+	insCmp   skiplist.CompareFn
+	iterCmp  skiplist.CompareFn
+	existCmp skiplist.CompareFn
 
 	ignoreItemSize bool
 
@@ -282,6 +233,7 @@ func (cfg *Config) SetKeyComparator(cmp KeyCompare) {
 	cfg.keyCmp = cmp
 	cfg.insCmp = newInsertCompare(cmp)
 	cfg.iterCmp = newIterCompare(cmp)
+	cfg.existCmp = newExistCompare(cmp)
 }
 
 func (cfg *Config) SetFileType(t FileType) error {
