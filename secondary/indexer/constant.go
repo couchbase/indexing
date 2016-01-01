@@ -38,8 +38,7 @@ const DEFAULT_POOL = "default"
 
 //Default Number of Workers started by a stream reader
 //to processed incoming mutation. Max can be upto the
-//number of vbuckets and minimum must be equal to the
-//number of vbuckets
+//number of vbuckets and minimum must be 1
 const DEFAULT_NUM_STREAM_READER_WORKERS = 1
 
 //Max number of snapshot to be retained per index.
