@@ -661,14 +661,20 @@ func (mdb *memdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotIn
 	mdb.waitPersist()
 	mdb.isDirty = false
 
+	snap, err := mdb.mainstore.NewSnapshot()
+	if err == memdb.ErrMaxSnapshotsLimitReached {
+		logging.Warnf("Maximum snapshots limit reached for indexer. Restarting indexer...")
+		os.Exit(0)
+	}
+
 	newSnapshotInfo := &memdbSnapshotInfo{
 		Ts:        ts,
-		MainSnap:  mdb.mainstore.NewSnapshot(),
+		MainSnap:  snap,
 		Committed: commit,
 	}
 	mdb.setCommittedCount()
 
-	return newSnapshotInfo, nil
+	return newSnapshotInfo, err
 }
 
 //checkAllWorkersDone return true if all workers have

@@ -22,13 +22,13 @@ func TestInsert(t *testing.T) {
 	for i := 1750; i < 2000; i++ {
 		w.Delete(NewItem([]byte(fmt.Sprintf("%010d", i))))
 	}
-	snap := w.NewSnapshot()
+	snap, _ := w.NewSnapshot()
 
 	for i := 2000; i < 5000; i++ {
 		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
 	}
 
-	_ = w.NewSnapshot()
+	w.NewSnapshot()
 
 	count := 0
 	itr := db.NewIterator(snap)
@@ -60,7 +60,7 @@ func doInsert(db *MemDB, wg *sync.WaitGroup, n int, isRand bool, shouldSnap bool
 			val = i
 		}
 		if shouldSnap && i%100000 == 0 {
-			s := w.NewSnapshot()
+			s, _ := w.NewSnapshot()
 			s.Close()
 		}
 		buf := make([]byte, 8)
@@ -83,7 +83,8 @@ func TestInsertPerf(t *testing.T) {
 	}
 	wg.Wait()
 
-	VerifyCount(db.NewSnapshot(), n*runtime.GOMAXPROCS(0), t)
+	snap, _ := db.NewSnapshot()
+	VerifyCount(snap, n*runtime.GOMAXPROCS(0), t)
 	dur := time.Since(t0)
 	fmt.Printf("%d items took %v -> %v items/s snapshots_created %v live_snapshots %v\n",
 		total, dur, float64(total)/float64(dur.Seconds()), db.getCurrSn(), len(db.GetSnapshots()))
@@ -106,6 +107,57 @@ func doGet(t *testing.T, db *MemDB, snap *Snapshot, wg *sync.WaitGroup, n int) {
 	}
 }
 
+func TestInsertDuplicates(t *testing.T) {
+	db := New()
+	defer db.Close()
+
+	w := db.NewWriter()
+	for i := 0; i < 2000; i++ {
+		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
+	}
+
+	w.NewSnapshot()
+
+	// Duplicate
+	for i := 0; i < 2000; i++ {
+		key := fmt.Sprintf("%010d", i)
+		newNode := w.Put2(NewItem([]byte(key)))
+		if newNode != nil {
+			t.Errorf("Duplicate unexpected for %s", key)
+		}
+	}
+
+	for i := 1500; i < 2000; i++ {
+		w.Delete(NewItem([]byte(fmt.Sprintf("%010d", i))))
+	}
+	w.NewSnapshot()
+
+	for i := 1500; i < 5000; i++ {
+		key := fmt.Sprintf("%010d", i)
+		newNode := w.Put2(NewItem([]byte(key)))
+		if newNode == nil {
+			t.Errorf("Expected successful insert for %s", key)
+		}
+	}
+
+	snap, _ := w.NewSnapshot()
+	count := 0
+	itr := db.NewIterator(snap)
+	itr.SeekFirst()
+	for ; itr.Valid(); itr.Next() {
+		expected := fmt.Sprintf("%010d", count)
+		got := string(itr.Get().Bytes())
+		count++
+		if got != expected {
+			t.Errorf("Expected %s, got %v", expected, got)
+		}
+	}
+
+	if count != 5000 {
+		t.Errorf("Expected count = 5000, got %v", count)
+	}
+}
+
 func TestGetPerf(t *testing.T) {
 	var wg sync.WaitGroup
 	db := New()
@@ -114,7 +166,7 @@ func TestGetPerf(t *testing.T) {
 	wg.Add(1)
 	go doInsert(db, &wg, n, false, true)
 	wg.Wait()
-	snap := db.NewSnapshot()
+	snap, _ := db.NewSnapshot()
 	VerifyCount(snap, n, t)
 
 	t0 := time.Now()
@@ -159,8 +211,8 @@ func TestLoadStoreDisk(t *testing.T) {
 	}
 	wg.Wait()
 	fmt.Printf("Inserting %v items took %v\n", n, time.Since(t0))
-	snap := db.NewSnapshot()
-	snap = db.NewSnapshot()
+	snap, _ := db.NewSnapshot()
+	snap, _ = db.NewSnapshot()
 	fmt.Println(db.DumpStats())
 
 	t0 = time.Now()
@@ -202,7 +254,7 @@ func TestDelete(t *testing.T) {
 		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
 	}
 
-	snap1 := w.NewSnapshot()
+	snap1, _ := w.NewSnapshot()
 	got := CountItems(snap1)
 	if got != expected {
 		t.Errorf("Expected 2000, got %d", got)
@@ -216,9 +268,9 @@ func TestDelete(t *testing.T) {
 	for i := 0; i < expected; i++ {
 		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
 	}
-	snap2 := w.NewSnapshot()
+	snap2, _ := w.NewSnapshot()
 	snap1.Close()
-	snap3 := w.NewSnapshot()
+	snap3, _ := w.NewSnapshot()
 	snap2.Close()
 	time.Sleep(time.Second)
 
@@ -263,7 +315,7 @@ func TestGCPerf(t *testing.T) {
 			go doReplace(&wg, t, ws[i], i*perW, i*perW+perW)
 		}
 		wg.Wait()
-		curr := db.NewSnapshot()
+		curr, _ := db.NewSnapshot()
 		if last != nil {
 			last.Close()
 		}
@@ -295,7 +347,7 @@ func TestMemoryInUse(t *testing.T) {
 	for i := 0; i < 5000; i++ {
 		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
 	}
-	snap1 := w.NewSnapshot()
+	snap1, _ := w.NewSnapshot()
 
 	dumpStats()
 
@@ -304,7 +356,7 @@ func TestMemoryInUse(t *testing.T) {
 	}
 
 	snap1.Close()
-	snap2 := w.NewSnapshot()
+	snap2, _ := w.NewSnapshot()
 	w.NewSnapshot()
 	snap2.Close()
 	time.Sleep(time.Second)
@@ -324,7 +376,7 @@ func TestFullScan(t *testing.T) {
 	}
 	wg.Wait()
 	fmt.Printf("Inserting %v items took %v\n", n, time.Since(t0))
-	snap := db.NewSnapshot()
+	snap, _ := db.NewSnapshot()
 	VerifyCount(snap, n, t)
 	fmt.Println(db.DumpStats())
 
@@ -346,7 +398,7 @@ func TestVisitor(t *testing.T) {
 
 	wg.Add(1)
 	doInsert(db, &wg, n, false, false)
-	snap := db.NewSnapshot()
+	snap, _ := db.NewSnapshot()
 	fmt.Println(db.DumpStats())
 
 	var counts [shards]int64
@@ -399,7 +451,7 @@ func TestVisitorError(t *testing.T) {
 
 	wg.Add(1)
 	doInsert(db, &wg, n, false, false)
-	snap := db.NewSnapshot()
+	snap, _ := db.NewSnapshot()
 
 	errVisitor := fmt.Errorf("visitor failed")
 	callb := func(itm *Item, shard int) error {
