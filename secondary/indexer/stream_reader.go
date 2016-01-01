@@ -77,7 +77,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState) (MutationStreamReader, Message) {
 
 	//start a new mutation stream
-	streamMutch := make(chan interface{}, config["stream_reader.mutationBuffer"].Uint64())
+	streamMutch := make(chan interface{}, getMutationBufferSize(config))
 	dpconf := config.SectionConfig(
 		"dataport.", true /*trim*/)
 	stream, err := dataport.NewServer(
@@ -112,7 +112,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		bucketPrevSnapMap: make(map[string]*common.TsVbuuid),
 		bucketSyncDue:     make(map[string]bool),
 		killch:            make(chan bool),
-		syncBatchInterval: config["stream_reader.syncBatchInterval"].Uint64(),
+		syncBatchInterval: getSyncBatchInterval(config),
 	}
 
 	r.stats.Set(stats)
@@ -128,7 +128,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 
 	//init worker buffers
 	for w := 0; w < r.numWorkers; w++ {
-		r.workerch[w] = make(MutationChannel, config["stream_reader.workerBuffer"].Uint64())
+		r.workerch[w] = make(MutationChannel, getWorkerBufferSize(config))
 	}
 
 	//start stream workers
@@ -763,4 +763,34 @@ func (r *mutationStreamReader) setIndexerState(is common.IndexerState) {
 	r.stateLock.Lock()
 	defer r.stateLock.Unlock()
 	r.indexerState = is
+}
+
+func getSyncBatchInterval(config common.Config) uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return config["stream_reader.memdb.syncBatchInterval"].Uint64()
+	} else {
+		return config["stream_reader.fdb.syncBatchInterval"].Uint64()
+	}
+
+}
+
+func getMutationBufferSize(config common.Config) uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return config["stream_reader.memdb.mutationBuffer"].Uint64()
+	} else {
+		return config["stream_reader.fdb.mutationBuffer"].Uint64()
+	}
+
+}
+
+func getWorkerBufferSize(config common.Config) uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return config["stream_reader.memdb.workerBuffer"].Uint64()
+	} else {
+		return config["stream_reader.fdb.workerBuffer"].Uint64()
+	}
+
 }

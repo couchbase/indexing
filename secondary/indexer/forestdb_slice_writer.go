@@ -983,7 +983,7 @@ func (fdb *fdbSlice) waitPersist() {
 		//check for outstanding mutations. If there are
 		//none, proceed with the commit.
 		fdb.confLock.Lock()
-		commitPollInterval := fdb.sysconf["storage.commitPollInterval"].Uint64()
+		commitPollInterval := fdb.sysconf["storage.fdb.commitPollInterval"].Uint64()
 		fdb.confLock.Unlock()
 		ticker := time.NewTicker(time.Millisecond * time.Duration(commitPollInterval))
 		for _ = range ticker.C {

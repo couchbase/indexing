@@ -741,7 +741,7 @@ func (mdb *memdbSlice) waitPersist() {
 		//check for outstanding mutations. If there are
 		//none, proceed with the commit.
 		mdb.confLock.RLock()
-		commitPollInterval := mdb.sysconf["storage.commitPollInterval"].Uint64()
+		commitPollInterval := mdb.sysconf["storage.memdb.commitPollInterval"].Uint64()
 		mdb.confLock.RUnlock()
 
 		for {

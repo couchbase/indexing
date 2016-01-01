@@ -2009,10 +2009,10 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 			var snapPersistInterval uint64
 			var persistDuration time.Duration
 			if flushTs.GetSnapType() == common.INMEM_SNAP {
-				snapPersistInterval = tk.config["settings.persisted_snapshot.interval"].Uint64()
+				snapPersistInterval = tk.getPersistInterval()
 				persistDuration = time.Duration(snapPersistInterval) * time.Millisecond
 			} else {
-				snapPersistInterval = tk.config["settings.persisted_snapshot_init_build.interval"].Uint64()
+				snapPersistInterval = tk.getPersistIntervalInitBuild()
 				persistDuration = time.Duration(snapPersistInterval) * time.Millisecond
 			}
 
@@ -2025,7 +2025,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	} else if flushTs.IsSnapAligned() {
 		//for incremental build, snapshot only if ts is snap aligned
 		//set either in-mem or persist snapshot based on wall clock time
-		snapPersistInterval := tk.config["settings.persisted_snapshot.interval"].Uint64()
+		snapPersistInterval := tk.getPersistInterval()
 		persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 
 		if time.Since(lastPersistTime) > persistDuration {
@@ -2689,7 +2689,7 @@ func (tk *timekeeper) startTimer(streamId common.StreamId,
 
 	logging.Infof("Timekeeper::startTimer %v %v", streamId, bucket)
 
-	snapInterval := tk.config["settings.inmemory_snapshot.interval"].Uint64()
+	snapInterval := tk.getInMemSnapInterval()
 	ticker := time.NewTicker(time.Millisecond * time.Duration(snapInterval))
 	stopCh := tk.ss.streamBucketTimerStopCh[streamId][bucket]
 
@@ -2885,5 +2885,33 @@ func (tk *timekeeper) isIndexerPaused() bool {
 		return true
 	}
 	return false
+
+}
+
+func (tk *timekeeper) getPersistInterval() uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return tk.config["settings.persisted_snapshot.memdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.persisted_snapshot.interval"].Uint64()
+	}
+
+}
+func (tk *timekeeper) getPersistIntervalInitBuild() uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return tk.config["settings.persisted_snapshot_init_build.memdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.persisted_snapshot_init_build.interval"].Uint64()
+	}
+
+}
+func (tk *timekeeper) getInMemSnapInterval() uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return tk.config["settings.inmemory_snapshot.memdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.inmemory_snapshot.interval"].Uint64()
+	}
 
 }
