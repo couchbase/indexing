@@ -859,10 +859,10 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.largeSnapshotThreshold": ConfigValue{
-		uint64(200),
+		uint64(2000),
 		"Threshold For Considering a DCP Snapshot as Large. " +
 			"Must be less than maxVbQueueLength.",
-		uint64(200),
+		uint64(2000),
 		false, // mutable
 	},
 
