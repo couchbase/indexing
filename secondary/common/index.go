@@ -147,6 +147,7 @@ type IndexDefn struct {
 	WhereExpr       string          `json:"where,omitempty"`
 	Deferred        bool            `json:"deferred,omitempty"`
 	Nodes           []string        `json:"nodes,omitempty"`
+	IsArrayIndex    bool            `json:"isArrayIndex,omitempty"`
 }
 
 //IndexInst is an instance of an Index(aka replica)

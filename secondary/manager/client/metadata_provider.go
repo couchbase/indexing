@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"net"
@@ -298,6 +299,30 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			false
 	}
 
+	// Array index related information
+	isArrayIndex := false
+	isArrayDistinct := true // Default is true as we do not yet support duplicate entries
+	arrayExprCount := 0
+	for _, exp := range secExprs {
+		isArray, isDistinct, err := queryutil.IsArrayExpression(exp)
+		if err != nil {
+			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Error in parsing expression %v : %v", exp, err)), false
+		}
+		if isArray == true {
+			isArrayIndex = isArray
+			isArrayDistinct = isDistinct
+			arrayExprCount++
+		}
+	}
+
+	if isArrayDistinct == false {
+		return c.IndexDefnId(0), errors.New("Only DISTINCT array expression is supported for now. Please use ALL DISTINCT for array expression. Support for duplicate array items is currently being added."), false
+	}
+
+	if arrayExprCount > 1 {
+		return c.IndexDefnId(0), errors.New("Multiple expressions with ALL are found. Only one array expression is supported per index."), false
+	}
+
 	idxDefn := &c.IndexDefn{
 		DefnId:          defnID,
 		Name:            name,
@@ -310,7 +335,8 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		PartitionKey:    partnExpr,
 		WhereExpr:       whereExpr,
 		Deferred:        deferred,
-		Nodes:           nodes}
+		Nodes:           nodes,
+		IsArrayIndex:    isArrayIndex}
 
 	content, err := c.MarshallIndexDefn(idxDefn)
 	if err != nil {

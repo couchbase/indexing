@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/platform"
@@ -27,6 +28,8 @@ import (
 
 var (
 	snapshotMetaListKey = []byte("snapshots-list")
+	maxArrayLen         = common.SystemConfig["indexer.settings.max_array_length"].Int()
+	maxArrayKeyLen      = common.SystemConfig["indexer.settings.max_array_seckey_size"].Int()
 )
 
 //NewForestDBSlice initiailizes a new slice with forestdb backend.
@@ -35,7 +38,7 @@ var (
 //handle the synchronization. The only exception being Insert and
 //Delete can be called concurrently.
 //Returns error in case slice cannot be initialized.
-func NewForestDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
+func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, isPrimary bool,
 	sysconf common.Config, idxStats *IndexStats) (*fdbSlice, error) {
 
@@ -122,8 +125,16 @@ retry:
 	slice.path = path
 	slice.currfile = filepath
 	slice.idxInstId = idxInstId
-	slice.idxDefnId = idxDefnId
+	slice.idxDefnId = idxDefn.DefnId
+	slice.idxDefn = idxDefn
 	slice.id = sliceId
+
+	// Array related initialization
+	slice.arrBufPool = common.NewByteBufferPool((maxArrayKeyLen * 3) + MAX_DOCID_LEN + 2)
+	_, slice.isArrayDistinct, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
+	if err != nil {
+		return nil, err
+	}
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
 	slice.cmdCh = make(chan interface{}, sliceBufSize)
@@ -148,8 +159,9 @@ retry:
 
 //kv represents a key/value pair in storage format
 type indexItem struct {
-	key   []byte
-	docid []byte
+	key    []byte
+	rawKey []byte
+	docid  []byte
 }
 
 //fdbSlice represents a forestdb slice
@@ -184,6 +196,7 @@ type fdbSlice struct {
 
 	config *forestdb.Config
 
+	idxDefn   common.IndexDefn
 	idxDefnId common.IndexDefnId
 	idxInstId common.IndexInstId
 
@@ -212,6 +225,11 @@ type fdbSlice struct {
 	sysconf    common.Config
 	confLock   sync.Mutex
 	statFdLock sync.Mutex
+
+	// Array processing
+	arrBufPool        *common.BytesBufPool
+	arrayExprPosition int
+	isArrayDistinct   bool
 }
 
 func (fdb *fdbSlice) IncrRef() {
@@ -240,9 +258,9 @@ func (fdb *fdbSlice) DecrRef() {
 //Internally the request is buffered and executed async.
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
-func (fdb *fdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
+func (fdb *fdbSlice) Insert(key []byte, rawKey []byte, docid []byte, meta *MutationMeta) error {
 	fdb.idxStats.numFlushQueued.Add(1)
-	fdb.cmdCh <- &indexItem{key: key, docid: docid}
+	fdb.cmdCh <- &indexItem{key: key, rawKey: rawKey, docid: docid}
 	return fdb.fatalDbErr
 }
 
@@ -277,7 +295,7 @@ loop:
 			case *indexItem:
 				icmd = c.(*indexItem)
 				start = time.Now()
-				fdb.insert((*icmd).key, (*icmd).docid, workerId)
+				fdb.insert((*icmd).key, (*icmd).rawKey, (*icmd).docid, workerId)
 				elapsed = time.Since(start)
 				fdb.totalFlushTime += elapsed
 
@@ -310,12 +328,13 @@ loop:
 }
 
 //insert does the actual insert in forestdb
-func (fdb *fdbSlice) insert(key []byte, docid []byte, workerId int) {
-
+func (fdb *fdbSlice) insert(key []byte, rawKey []byte, docid []byte, workerId int) {
 	if fdb.isPrimary {
 		fdb.insertPrimaryIndex(key, docid, workerId)
-	} else {
+	} else if !fdb.idxDefn.IsArrayIndex {
 		fdb.insertSecIndex(key, docid, workerId)
+	} else {
+		fdb.insertSecArrayIndex(key, rawKey, docid, workerId)
 	}
 
 	fdb.logWriterStat()
@@ -432,13 +451,180 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 	fdb.isDirty = true
 }
 
+func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte, workerId int) {
+	var err error
+	var oldkey, oldRawKey []byte
+
+	/*
+		Adding support for simple and composite array indexing. No support for duplicates yet
+		1. If oldBytes equals newBytes, return. No mutation to process
+		2. OLD: Decode old key -> Convert to json obj -> Form cartesian product
+		   -> Json marshal each item -> Encode each old item
+		3. NEW: Convert new ket to json obj -> Form cartesian product of new key
+		   -> Json marshal each item -> Encode each new item
+		4. With list of old encoded and new encoded entries, find out diff
+		   of entries to be deleted and entries to be added
+		5. Delete each of "entries to be deleted" from main index
+		6. Insert each of "entries to be inserted" into main index
+		7. if newKey is nil, delete backindex entry, Else update back index entry to new key
+	*/
+
+	//check if the docid exists in the back index and Get old key from back index
+	if oldkey, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
+		fdb.checkFatalDbError(err)
+		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error locating "+
+			"backindex entry %v", fdb.id, fdb.idxInstId, err)
+		return
+	}
+
+	var oldIndexEntries, newIndexEntries [][]interface{}
+	var oldEntriesBytes, newEntriesBytes [][]byte
+	if oldkey != nil {
+		if bytes.Equal(oldkey, key) {
+			logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
+				"Doc Id %v. Key %v. Skipped.", fdb.id, fdb.idxInstId, string(docid), key)
+			return
+		}
+
+		buf := fdb.arrBufPool.Get()
+		defer fdb.arrBufPool.Put(buf)
+		oldKeyEntry := secondaryIndexEntry(oldkey)
+		if oldRawKey, err = oldKeyEntry.ReadSecKey(*buf); err != nil {
+			fdb.checkFatalDbError(err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error while"+
+				"reading back-index secondary key %v", fdb.id, fdb.idxInstId, err)
+			return
+		}
+		oldIndexEntries, err = SplitSecondaryArrayKey(oldRawKey, fdb.arrayExprPosition)
+		if err != nil {
+			fdb.checkFatalDbError(err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in retrieving "+
+				"compostite old secondary keys %v", fdb.id, fdb.idxInstId, err)
+			return
+		}
+
+		oldEntriesBytes = make([][]byte, len(oldIndexEntries))
+		for i, item := range oldIndexEntries {
+			var b []byte
+			if b, err = json.Marshal(item); err != nil {
+				fdb.checkFatalDbError(err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in marshalling old "+
+					"back index entries %v", fdb.id, fdb.idxInstId, err)
+				return
+			}
+			oldEntriesBytes[i] = b
+		}
+	}
+	if key != nil {
+		if newIndexEntries, err = SplitSecondaryArrayKey(rawKey, fdb.arrayExprPosition); err != nil {
+			fdb.checkFatalDbError(err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in creating "+
+				"compostite new secondary keys %v", fdb.id, fdb.idxInstId, err)
+			return
+		}
+		newEntriesBytes = make([][]byte, len(newIndexEntries))
+		for i, item := range newIndexEntries {
+			var b []byte
+			if b, err = json.Marshal(item); err != nil {
+				fdb.checkFatalDbError(err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in marshalling new "+
+					"index entries %v", fdb.id, fdb.idxInstId, err)
+				return
+			}
+			newEntriesBytes[i] = b
+		}
+	}
+
+	var indexEntriesToBeAdded, indexEntriesToBeDeleted [][]byte
+	if len(oldEntriesBytes) == 0 { // It is a new key. Nothing to delete
+		indexEntriesToBeDeleted = nil
+		indexEntriesToBeAdded = newEntriesBytes
+	} else if len(newEntriesBytes) == 0 { // New key is nil. Nothing to add
+		indexEntriesToBeAdded = nil
+		indexEntriesToBeDeleted = oldEntriesBytes
+	} else {
+		indexEntriesToBeAdded, indexEntriesToBeDeleted = CompareArrayEntryBytes(newEntriesBytes, oldEntriesBytes)
+	}
+
+	// Delete each of indexEntriesToBeDeleted from main index
+	for _, item := range indexEntriesToBeDeleted {
+		if item != nil { // nil item indicates it should not be deleted
+			var keyToBeDeleted []byte
+			if keyToBeDeleted, err = GetIndexEntryBytesFromKey(item, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
+				fdb.checkFatalDbError(err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytesFromKey for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
+				return
+			}
+			t0 := time.Now()
+			if err = fdb.main[workerId].DeleteKV(keyToBeDeleted); err != nil {
+				fdb.checkFatalDbError(err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
+					"entry from main index %v", fdb.id, fdb.idxInstId, err)
+				return
+			}
+			fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+			platform.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
+		}
+	}
+
+	// Insert each of indexEntriesToBeAdded into main index
+	for _, item := range indexEntriesToBeAdded {
+		if item != nil { // nil item indicates it should not be added
+			var keyToBeAdded []byte
+			if keyToBeAdded, err = GetIndexEntryBytesFromKey(item, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
+				fdb.checkFatalDbError(err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytesFromKey for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
+				return
+			}
+			t0 := time.Now()
+			//set in main index
+			if err = fdb.main[workerId].SetKV(keyToBeAdded, nil); err != nil {
+				fdb.checkFatalDbError(err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Main Index Set. "+
+					"Skipped Key %v. Error %v", fdb.id, fdb.idxInstId, key, err)
+				return
+			}
+			fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+			platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
+		}
+	}
+
+	// If a field value changed from "existing" to "missing" (ie, key = nil),
+	// we need to remove back index entry corresponding to the previous "existing" value.
+	if key == nil {
+		t0 := time.Now()
+		if err = fdb.back[workerId].DeleteKV(docid); err != nil {
+			fdb.checkFatalDbError(err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
+				"entry from back index %v", fdb.id, fdb.idxInstId, err)
+			return
+		}
+		fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+		platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
+	} else { //set the back index entry <docid, encodedkey>
+		t0 := time.Now()
+		if err = fdb.back[workerId].SetKV(docid, key); err != nil {
+			fdb.checkFatalDbError(err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in Back Index Set. "+
+				"Skipped Key %s. Value %v. Error %v", fdb.id, fdb.idxInstId, string(docid), key, err)
+			return
+		}
+		fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+		platform.AddInt64(&fdb.insert_bytes, int64(len(docid)+len(key)))
+	}
+
+	fdb.isDirty = true
+}
+
 //delete does the actual delete in forestdb
 func (fdb *fdbSlice) delete(docid []byte, workerId int) {
 
 	if fdb.isPrimary {
 		fdb.deletePrimaryIndex(docid, workerId)
-	} else {
+	} else if !fdb.idxDefn.IsArrayIndex {
 		fdb.deleteSecIndex(docid, workerId)
+	} else {
+		fdb.deleteSecArrayIndex(docid, workerId)
 	}
 
 	fdb.logWriterStat()
@@ -521,6 +707,82 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 	platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 	fdb.isDirty = true
 
+}
+
+func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) {
+
+	//logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
+	//	fdb.id, fdb.idxInstId, docid)
+
+	var olditm, oldRawKey []byte
+	var err error
+
+	if olditm, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
+		fdb.checkFatalDbError(err)
+		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error locating "+
+			"backindex entry for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
+		return
+	}
+
+	if olditm != nil {
+		oldKeyEntry := secondaryIndexEntry(olditm)
+		buf := fdb.arrBufPool.Get()
+		defer fdb.arrBufPool.Put(buf)
+		if oldRawKey, err = oldKeyEntry.ReadSecKey(*buf); err != nil {
+			fdb.checkFatalDbError(err)
+			logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v Error while reading back index secondary key %v", fdb.id, fdb.idxInstId, err)
+			return
+		}
+	} else {
+		logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v Received NIL Key for "+
+			"Doc Id %v. Skipped.", fdb.id, fdb.idxInstId, docid)
+		return
+	}
+
+	indexEntriesToBeDeleted, err := SplitSecondaryArrayKey(oldRawKey, fdb.arrayExprPosition)
+	if err != nil {
+		fdb.checkFatalDbError(err)
+		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error forming "+
+			" list of entries to be deleted %v", fdb.id, fdb.idxInstId, err)
+		return
+	}
+	var t0 time.Time
+	// Delete each of indexEntriesToBeDeleted from main index
+	for _, item := range indexEntriesToBeDeleted {
+		var b, keyToBeDeleted []byte
+		if b, err = json.Marshal(item); err != nil {
+			fdb.checkFatalDbError(err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error while marshalling entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
+			return
+		}
+		if keyToBeDeleted, err = GetIndexEntryBytesFromKey(b, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
+			fdb.checkFatalDbError(err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytesFromKey for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
+			return
+		}
+		t0 := time.Now()
+		if err = fdb.main[workerId].DeleteKV(keyToBeDeleted); err != nil {
+			fdb.checkFatalDbError(err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error deleting "+
+				"entry from main index %v", fdb.id, fdb.idxInstId, err)
+			return
+		}
+		fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+		platform.AddInt64(&fdb.delete_bytes, int64(len(keyToBeDeleted)))
+
+	}
+
+	//delete from the back index
+	t0 = time.Now()
+	if err = fdb.back[workerId].DeleteKV(docid); err != nil {
+		fdb.checkFatalDbError(err)
+		logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Error deleting "+
+			"entry from back index for Doc %s. Error %v", fdb.id, fdb.idxInstId, docid, err)
+		return
+	}
+	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
+	platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
+	fdb.isDirty = true
 }
 
 //getBackIndexEntry returns an existing back index entry

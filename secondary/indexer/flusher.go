@@ -423,7 +423,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
-		key, err := GetIndexEntryBytesFromKey(mut.key, docid, idxInst.Defn.IsPrimary)
+		key, err := GetIndexEntryBytesFromKey(mut.key, docid, idxInst.Defn.IsPrimary, idxInst.Defn.IsArrayIndex)
 		if err != nil {
 			logging.Errorf("Flusher::processUpsert Error indexing Key: %s "+
 				"docid: %s in Slice: %v. Error: %v. Skipped.",
@@ -436,9 +436,16 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 			return
 		}
 
-		if err := slice.Insert(key, docid, meta); err != nil {
-			logging.Errorf("Flusher::processUpsert Error Inserting Key: %s "+
-				"docid: %s in Slice: %v. Error: %v", mut.key, docid, slice.Id(), err)
+		if !idxInst.Defn.IsArrayIndex {
+			if err := slice.Insert(key, nil, docid, meta); err != nil {
+				logging.Errorf("Flusher::processUpsert Error Inserting Key: %s "+
+					"docid: %s in Slice: %v. Error: %v", mut.key, docid, slice.Id(), err)
+			}
+		} else {
+			if err := slice.Insert(key, mut.key, docid, meta); err != nil {
+				logging.Errorf("Flusher::processUpsert Error Inserting Key: %s "+
+					"docid: %s in Slice: %v. Error: %v", mut.key, docid, slice.Id(), err)
+			}
 		}
 	} else {
 		logging.Errorf("Flusher::processUpsert Partition Instance not found "+
@@ -519,7 +526,7 @@ func (f *flusher) GetQueueHWT(q MutationQueue) Timestamp {
 	return ts
 }
 
-func GetIndexEntryBytesFromKey(key []byte, docid []byte, isPrimary bool) ([]byte, error) {
+func GetIndexEntryBytesFromKey(key []byte, docid []byte, isPrimary bool, isarrayIndex bool) ([]byte, error) {
 	var entry IndexEntry
 	var err error
 
@@ -527,8 +534,16 @@ func GetIndexEntryBytesFromKey(key []byte, docid []byte, isPrimary bool) ([]byte
 		if entry, err = NewPrimaryIndexEntry(docid); err != nil {
 			return nil, err
 		}
-	} else {
+	} else if !isarrayIndex {
 		if entry, err = NewSecondaryIndexEntry(key, docid); err != nil {
+			if err == ErrSecKeyNil {
+				return nil, nil
+			}
+
+			return nil, err
+		}
+	} else {
+		if entry, err = NewSecondaryIndexEntryForArray(key, docid); err != nil {
 			if err == ErrSecKeyNil {
 				return nil, nil
 			}
