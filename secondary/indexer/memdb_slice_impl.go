@@ -578,7 +578,10 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 				for entry := range partShardCh[i] {
 					if !mdb.isPrimary {
 						entryBytes := entry.Item().Bytes()
-						mdb.back[i].Update(entryBytes, unsafe.Pointer(entry.Node()))
+						if updated, oldPtr := mdb.back[i].Update(entryBytes, unsafe.Pointer(entry.Node())); updated {
+							oldNode := (*skiplist.Node)(oldPtr)
+							entry.Node().SetLink(oldNode)
+						}
 					}
 				}
 			}(wId, &wg)
