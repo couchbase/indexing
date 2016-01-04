@@ -38,7 +38,9 @@ func doConsistency(
 	}
 
 	// Drop index
-	args := []string{"-type", "drop", "-bucket", "beer-sample", "-index", "index-city"}
+	args := []string{
+		"-type", "drop", "-bucket", "beer-sample", "-index", "index-city",
+	}
 	cmd, _, _, _ := querycmd.ParseArgs(args)
 	querycmd.HandleCommand(client, cmd, true, os.Stdout)
 

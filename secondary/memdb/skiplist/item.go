@@ -6,9 +6,11 @@ import (
 	"unsafe"
 )
 
-func compare(cmp CompareFn, this, that Item) int {
+func compare(cmp CompareFn, this, that unsafe.Pointer) int {
 	if this == nil {
 		return 1
+	} else if that == nil {
+		return -1
 	}
 
 	return cmp(this, that)
@@ -24,14 +26,14 @@ func (itm byteKeyItem) Size() int {
 	return len(itm)
 }
 
-func NewByteKeyItem(k []byte) Item {
+func NewByteKeyItem(k []byte) unsafe.Pointer {
 	itm := byteKeyItem(k)
-	return &itm
+	return unsafe.Pointer(&itm)
 }
 
-func CompareBytes(this Item, that Item) int {
-	thisItem := this.(*byteKeyItem)
-	thatItem := that.(*byteKeyItem)
+func CompareBytes(this, that unsafe.Pointer) int {
+	thisItem := (*byteKeyItem)(this)
+	thatItem := (*byteKeyItem)(that)
 	return bytes.Compare([]byte(*thisItem), []byte(*thatItem))
 }
 
@@ -45,8 +47,8 @@ func (itm intKeyItem) Size() int {
 	return int(unsafe.Sizeof(itm))
 }
 
-func CompareInt(this Item, that Item) int {
-	thisItem := this.(*intKeyItem)
-	thatItem := that.(*intKeyItem)
+func CompareInt(this, that unsafe.Pointer) int {
+	thisItem := (*intKeyItem)(this)
+	thatItem := (*intKeyItem)(that)
 	return int(*thisItem - *thatItem)
 }

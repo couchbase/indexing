@@ -60,7 +60,7 @@ func hashDocId(entry []byte) uint32 {
 func nodeEquality(p unsafe.Pointer, entry []byte) bool {
 	node := (*skiplist.Node)(p)
 	docid1 := docIdFromEntryBytes(entry)
-	itm := (node.Item()).(*memdb.Item)
+	itm := (*memdb.Item)(node.Item())
 	docid2 := docIdFromEntryBytes(itm.Bytes())
 	return bytes.Equal(docid1, docid2)
 }
@@ -153,20 +153,10 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
 	slice.isPrimary = isPrimary
+	slice.initStores()
 
-	slice.mainstore = memdb.New()
-	slice.mainstore.SetKeyComparator(byteItemCompare)
-	slice.main = make([]*memdb.Writer, slice.numWriters)
-	for i := 0; i < slice.numWriters; i++ {
-		slice.main[i] = slice.mainstore.NewWriter()
-	}
-
-	if !isPrimary {
-		slice.back = make([]*nodetable.NodeTable, slice.numWriters)
-		for i := 0; i < slice.numWriters; i++ {
-			slice.back[i] = nodetable.New(hashDocId, nodeEquality)
-		}
-	}
+	logging.Infof("MemDBSlice:NewMemDBSlice Created New Slice Id %v IndexInstId %v "+
+		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
 
 	for i := 0; i < slice.numWriters; i++ {
 		slice.stopCh[i] = make(DoneChannel)
@@ -174,12 +164,24 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefnId common.IndexDefnId,
 		go slice.handleCommandsWorker(i)
 	}
 
-	logging.Infof("MemDBSlice:NewMemDBSlice Created New Slice Id %v IndexInstId %v "+
-		"WriterThreads %v", sliceId, idxInstId, slice.numWriters)
-
 	slice.setCommittedCount()
-
 	return slice, nil
+}
+
+func (slice *memdbSlice) initStores() {
+	slice.mainstore = memdb.New()
+	slice.mainstore.SetKeyComparator(byteItemCompare)
+	slice.main = make([]*memdb.Writer, slice.numWriters)
+	for i := 0; i < slice.numWriters; i++ {
+		slice.main[i] = slice.mainstore.NewWriter()
+	}
+
+	if !slice.isPrimary {
+		slice.back = make([]*nodetable.NodeTable, slice.numWriters)
+		for i := 0; i < slice.numWriters; i++ {
+			slice.back[i] = nodetable.New(hashDocId, nodeEquality)
+		}
+	}
 }
 
 func (mdb *memdbSlice) IncrRef() {
@@ -447,12 +449,14 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		defer platform.StoreInt32(&mdb.isPersistorActive, 0)
 
 		t0 := time.Now()
-		dir := newSnapshotPath(mdb.path, true)
-		tmpdir := filepath.Join(mdb.path, "tmp")
-		datadir := filepath.Join(tmpdir, "data")
+		dir := newSnapshotPath(mdb.path)
+		tmpdir := filepath.Join(mdb.path, ".tmp")
 		manifest := filepath.Join(tmpdir, "manifest.json")
 		os.RemoveAll(tmpdir)
-		err := mdb.mainstore.StoreToDisk(datadir, s.info.MainSnap, nil)
+		mdb.confLock.RLock()
+		concurrency := mdb.sysconf["settings.memdb.persistence_threads"].Int()
+		mdb.confLock.RUnlock()
+		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
 		if err == nil {
 			var fd *os.File
 			bs, err := json.Marshal(s.info)
@@ -472,11 +476,16 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 			}
 		}
 
-		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v created ondisk snapshot %v. Took %v", mdb.id, mdb.IndexInstId, dir, time.Since(t0))
+		if err == nil {
+			logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v created ondisk snapshot %v. Took %v", mdb.id, mdb.idxInstId, dir, time.Since(t0))
+		} else {
+			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v failed to create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, dir, err)
+			os.RemoveAll(tmpdir)
+			os.RemoveAll(dir)
+		}
 	} else {
-		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk snapshot. A snapshot writer is in progress.", mdb.id, mdb.IndexInstId)
+		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
 	}
-
 }
 
 func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
@@ -493,18 +502,19 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 }
 
 func (mdb *memdbSlice) getSnapshotManifests() []string {
-	pattern := fmt.Sprintf("*/manifest.json")
+	pattern := "*/manifest.json"
 	files, _ := filepath.Glob(filepath.Join(mdb.path, pattern))
 	sort.Strings(files)
 	return files
 }
 
-// Returns snapshot info list
+// Returns snapshot info list in reverse sorted order
 func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	var infos []SnapshotInfo
 
 	files := mdb.getSnapshotManifests()
-	for _, f := range files {
+	for i := len(files) - 1; i >= 0; i-- {
+		f := files[i]
 		info := &memdbSnapshotInfo{dataPath: path.Dir(f)}
 		fd, err := os.Open(f)
 		if err == nil {
@@ -530,17 +540,22 @@ func (mdb *memdbSlice) GetCommittedCount() uint64 {
 	return platform.LoadUint64(&mdb.committedCount)
 }
 
+func (mdb *memdbSlice) resetStores() {
+	mdb.mainstore.Close()
+	if !mdb.isPrimary {
+		for i := 0; i < mdb.numWriters; i++ {
+			mdb.back[i].Close()
+		}
+	}
+
+	mdb.initStores()
+}
+
 //Rollback slice to given snapshot. Return error if
 //not possible
 func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	snapInfo := info.(*memdbSnapshotInfo)
-	mdb.mainstore.Reset()
-	if !mdb.isPrimary {
-		for i := 0; i < mdb.numWriters; i++ {
-			mdb.back[i].Reset()
-		}
-	}
-
+	mdb.resetStores()
 	return mdb.loadSnapshot(snapInfo)
 }
 
@@ -554,8 +569,6 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 		mdb.id, mdb.idxInstId, snapInfo.dataPath)
 
 	t0 := time.Now()
-	datadir := filepath.Join(snapInfo.dataPath, "data")
-
 	if !mdb.isPrimary {
 		for wId := 0; wId < mdb.numWriters; wId++ {
 			wg.Add(1)
@@ -578,10 +591,16 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 
 			wId := vbucketFromEntryBytes(e.Item().Bytes(), numVbuckets) % mdb.numWriters
 			partShardCh[wId] <- e
+
+			mdb.idxStats.numItemsRestored.Add(1)
 		}
 	}
 
-	snap, err := mdb.mainstore.LoadFromDisk(datadir, backIndexCallback)
+	mdb.confLock.RLock()
+	concurrency := mdb.sysconf["settings.memdb.recovery_threads"].Int()
+	mdb.confLock.RUnlock()
+
+	snap, err := mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
 
 	if !mdb.isPrimary {
 		for wId := 0; wId < mdb.numWriters; wId++ {
@@ -604,13 +623,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 //RollbackToZero rollbacks the slice to initial state. Return error if
 //not possible
 func (mdb *memdbSlice) RollbackToZero() error {
-	mdb.mainstore.Reset()
-	if !mdb.isPrimary {
-		for i := 0; i < mdb.numWriters; i++ {
-			mdb.back[i].Reset()
-		}
-	}
-
+	mdb.resetStores()
 	mdb.cleanupOldSnapshotFiles(0)
 	return nil
 }
@@ -648,14 +661,20 @@ func (mdb *memdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotIn
 	mdb.waitPersist()
 	mdb.isDirty = false
 
+	snap, err := mdb.mainstore.NewSnapshot()
+	if err == memdb.ErrMaxSnapshotsLimitReached {
+		logging.Warnf("Maximum snapshots limit reached for indexer. Restarting indexer...")
+		os.Exit(0)
+	}
+
 	newSnapshotInfo := &memdbSnapshotInfo{
 		Ts:        ts,
-		MainSnap:  mdb.mainstore.NewSnapshot(),
+		MainSnap:  snap,
 		Committed: commit,
 	}
 	mdb.setCommittedCount()
 
-	return newSnapshotInfo, nil
+	return newSnapshotInfo, err
 }
 
 //checkAllWorkersDone return true if all workers have
@@ -768,12 +787,16 @@ func (mdb *memdbSlice) Compact() error {
 func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	var sts StorageStatistics
 
-	logging.Infof("memdb main stats\n%s", mdb.mainstore.DumpStats())
+	var internalData []string
+
+	internalData = append(internalData, fmt.Sprintf("----MainStore----\n%s", mdb.mainstore.DumpStats()))
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
-			logging.Infof("memdb back %d stats\n%s", i, mdb.back[i].Stats())
+			internalData = append(internalData, fmt.Sprintf("\n----BackStore[%d]----\n%s", i, mdb.back[i].Stats()))
 		}
 	}
+
+	sts.InternalData = internalData
 	return sts, nil
 }
 
@@ -805,13 +828,11 @@ func tryDeletememdbSlice(mdb *memdbSlice) {
 
 func tryClosememdbSlice(mdb *memdbSlice) {
 	mdb.mainstore.Close()
-	/*
-		if !mdb.isPrimary {
-			for i := 0; i < mdb.numWriters; i++ {
-				mdb.backstore[i].Close()
-			}
+	if !mdb.isPrimary {
+		for i := 0; i < mdb.numWriters; i++ {
+			mdb.back[i].Close()
 		}
-	*/
+	}
 }
 
 func (mdb *memdbSlice) getCmdsCount() int {
@@ -1097,25 +1118,7 @@ func (s *memdbSnapshot) iterEqualKeys(k IndexKey, it *memdb.Iterator,
 	return err
 }
 
-func newSnapshotPath(dirpath string, newVersion bool) string {
-	var version int = 0
-	pattern := fmt.Sprintf("snapshot.*")
-	files, _ := filepath.Glob(filepath.Join(dirpath, pattern))
-	sort.Strings(files)
-
-	// Pick the first file with highest version
-	if len(files) > 0 {
-		filename := filepath.Base(files[len(files)-1])
-		_, err := fmt.Sscanf(filename, "snapshot.%d", &version)
-		if err != nil {
-			panic(fmt.Sprintf("Invalid data file %s (%v)", files[0], err))
-		}
-	}
-
-	if newVersion {
-		version++
-	}
-
-	newFilename := fmt.Sprintf("snapshot.%010d", version)
-	return filepath.Join(dirpath, newFilename)
+func newSnapshotPath(dirpath string) string {
+	file := time.Now().Format("snapshot.2006-01-02.15:04:05.000")
+	return filepath.Join(dirpath, file)
 }

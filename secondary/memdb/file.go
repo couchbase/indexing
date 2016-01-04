@@ -74,9 +74,7 @@ func (f *rawFileWriter) WriteItem(itm *Item) error {
 }
 
 func (f *rawFileWriter) Close() error {
-	terminator := &Item{
-		data: []byte(nil),
-	}
+	terminator := &Item{}
 
 	if err := f.WriteItem(terminator); err != nil {
 		return err
@@ -105,8 +103,8 @@ func (f *rawFileReader) Open(path string) error {
 
 func (f *rawFileReader) ReadItem() (*Item, error) {
 	itm := &Item{}
-	err := itm.Decode(f.buf, f.r)
-	if len(itm.data) == 0 {
+	itm, err := itm.Decode(f.buf, f.r)
+	if itm.dataLen == 0 {
 		itm = nil
 	}
 
@@ -189,7 +187,7 @@ func (f *forestdbFileReader) ReadItem() (*Item, error) {
 	f.iter.Next()
 	if err == nil {
 		rbuf := bytes.NewBuffer(doc.Key())
-		err = itm.Decode(f.buf, rbuf)
+		itm, err = itm.Decode(f.buf, rbuf)
 	}
 
 	return itm, err

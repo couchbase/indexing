@@ -759,6 +759,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 	var stats []IndexStorageStats
 	var err error
 	var sts StorageStatistics
+	var internalData []string
 
 	for idxInstId, partnMap := range s.indexPartnMap {
 
@@ -787,6 +788,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 				insertBytes += sts.InsertBytes
 				deleteBytes += sts.DeleteBytes
 				extraSnapDataSize += sts.ExtraSnapDataSize
+				internalData = append(internalData, sts.InternalData...)
 			}
 		}
 
@@ -800,6 +802,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 					InsertBytes:       insertBytes,
 					DeleteBytes:       deleteBytes,
 					ExtraSnapDataSize: extraSnapDataSize,
+					InternalData:      internalData,
 				},
 			}
 

@@ -469,6 +469,12 @@ var SystemConfig = Config{
 		0.9,
 		true, // immutable
 	},
+	"queryport.client.backfillLimit": ConfigValue{
+		100 * 1024 * 1024, // 100 MB
+		"limit in bytes to cap n1ql side backfilling",
+		100 * 1024 * 1024, // 100 MB
+		false,             // mutable
+	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
 		16,
@@ -801,6 +807,18 @@ var SystemConfig = Config{
 		"Skips InMem Snapshots When Indexer Is Backed Up",
 		true,
 		false, // mutable
+	},
+	"indexer.settings.memdb.persistence_threads": ConfigValue{
+		runtime.NumCPU() / 3,
+		"Number of concurrent threads scanning index for persistence",
+		runtime.NumCPU() / 3,
+		false,
+	},
+	"indexer.settings.memdb.recovery_threads": ConfigValue{
+		runtime.NumCPU(),
+		"Number of concurrent threads for rebuilding index from disk snapshot",
+		runtime.NumCPU(),
+		false,
 	},
 	"projector.settings.log_level": ConfigValue{
 		"info",

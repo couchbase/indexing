@@ -108,6 +108,7 @@ type IndexStats struct {
 	sinceLastSnapshot    stats.Int64Val
 	numSnapshotWaiters   stats.Int64Val
 	numLastSnapshotReply stats.Int64Val
+	numItemsRestored     stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -154,6 +155,7 @@ func (s *IndexStats) Init() {
 	s.sinceLastSnapshot.Init()
 	s.numSnapshotWaiters.Init()
 	s.numLastSnapshotReply.Init()
+	s.numItemsRestored.Init()
 
 	s.Timings.Init()
 }
@@ -271,6 +273,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("since_last_snapshot", s.sinceLastSnapshot.Value())
 		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
 		addStat("num_last_snapshot_reply", s.numLastSnapshotReply.Value())
+		addStat("num_items_restored", s.numItemsRestored.Value())
 
 		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
@@ -346,6 +349,7 @@ func NewStatsManager(supvCmdch MsgChannel,
 
 	http.HandleFunc("/stats", s.handleStatsReq)
 	http.HandleFunc("/stats/mem", s.handleMemStatsReq)
+	http.HandleFunc("/stats/storage", s.handleStorageStatsReq)
 	http.HandleFunc("/stats/reset", s.handleStatsResetReq)
 	go s.run()
 	go s.runStatsDumpLogger()
@@ -436,6 +440,36 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+func (s *statsManager) getStorageStats() string {
+	var result string
+	replych := make(chan []IndexStorageStats)
+	statReq := &MsgIndexStorageStats{respch: replych}
+	s.supvMsgch <- statReq
+	res := <-replych
+
+	for _, sts := range res {
+		result += fmt.Sprintf("==== Index Instance %d ====\n", sts.InstId)
+		for _, data := range sts.GetInternalData() {
+			result += data
+		}
+		result += "========\n"
+	}
+
+	return result
+}
+
+func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" || r.Method == "GET" {
+
+		w.WriteHeader(200)
+		w.Write([]byte(s.getStorageStats()))
+
+	} else {
+		w.WriteHeader(400)
+		w.Write([]byte("Unsupported method"))
+	}
+}
+
 func (s *statsManager) handleStatsResetReq(w http.ResponseWriter, r *http.Request) {
 	conf := s.config.Load()
 	valid, _ := common.IsAuthValid(r, conf["clusterAddr"].String())
@@ -496,7 +530,7 @@ func (s *statsManager) runStatsDumpLogger() {
 		stats := s.stats.Get()
 		if stats != nil {
 			bytes, _ := stats.MarshalJSON()
-			logging.Infof("PeriodicStats = %s", string(bytes))
+			logging.Infof("PeriodicStats = %s\n==== StorageStats ====\n%s", string(bytes), s.getStorageStats())
 		}
 
 		time.Sleep(time.Second * time.Duration(platform.LoadUint64(&s.statsLogDumpInterval)))

@@ -21,6 +21,8 @@ type StorageStatistics struct {
 	GetBytes    int64
 	InsertBytes int64
 	DeleteBytes int64
+
+	InternalData []string
 }
 
 type IndexWriter interface {

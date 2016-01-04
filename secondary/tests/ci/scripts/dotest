@@ -7,6 +7,10 @@ if [ "$WORKSPACE" = "" ]; then
   exit 2
 fi
 
+if [ "$INSTALL_PATH" = "" ]; then
+  INSTALL_PATH=/opt/couchbase
+fi
+
 if [ "$TS" = "" ]; then
   TS="adhoc"
 fi
@@ -107,10 +111,26 @@ export phase=functional
 mkdir -p "$WORKSPACE/go" 
 export GOROOT=/usr/local/go
 export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
+export C_INCLUDE_PATH=$WORKSPACE/platform/include/:/opt/couchbase/include/:$WORKSPACE/forestdb/include
+export CGO_LDFLAGS="-L $INSTALL_PATH/lib"
+export LD_LIBRARY_PATH=$INSTALL_PATH/lib
+
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests
 go get -t ./... 1>/dev/null 2>&1
 
+# Unit tests
+echo "</pre><h4>Unit tests</h4><pre>"
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb/skiplist
+GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/memdb
+GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/indexer
+GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
+
 # Go tests
+echo "</pre><h4>Functional tests</h4><pre>"
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/functionaltests
 go test -timeout 4h -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests

@@ -132,6 +132,10 @@ func (s IndexStorageStats) GetFragmentation() float64 {
 	return fragPercent
 }
 
+func (s IndexStorageStats) GetInternalData() []string {
+	return s.Stats.InternalData
+}
+
 type VbStatus Seqno
 
 const (

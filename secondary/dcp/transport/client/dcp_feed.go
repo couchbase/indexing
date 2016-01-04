@@ -410,6 +410,10 @@ func (feed *DcpFeed) doDcpGetSeqnos(
 		Opcode: transport.DCP_GET_SEQNO,
 		Opaque: opaqueGetseqno,
 	}
+
+	rq.Extras = make([]byte, 4)
+	binary.BigEndian.PutUint32(rq.Extras, 1) // Only active vbuckets
+
 	if err := feed.conn.Transmit(rq); err != nil {
 		fmsg := "%v ##%x doDcpGetSeqnos.Transmit(): %v"
 		logging.Errorf(fmsg, feed.logPrefix, rq.Opaque, err)
