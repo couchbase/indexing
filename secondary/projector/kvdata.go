@@ -205,6 +205,8 @@ func (kvdata *KVData) runScatter(
 		logging.Infof("%v ##%x ... stopped\n", kvdata.logPrefix, kvdata.opaque)
 	}()
 
+	vbseqnos := make([]uint64, 1024)
+
 	// stats
 	statSince := time.Now()
 	var stitems [15]string
@@ -228,6 +230,8 @@ func (kvdata *KVData) runScatter(
 		statjson := strings.Join(stitems[:], ",")
 		fmsg := "%v ##%v stats {%v}\n"
 		logging.Infof(fmsg, kvdata.logPrefix, kvdata.opaque, statjson)
+		fmsg = "%v ##%v vbseqnos %v\n"
+		logging.Infof(fmsg, kvdata.logPrefix, kvdata.opaque, vbseqnos)
 	}
 
 	heartBeat := time.After(kvdata.syncTimeout)
@@ -242,7 +246,7 @@ loop:
 				break loop
 			}
 			kvdata.eventCount++
-			kvdata.scatterMutation(m, ts)
+			vbseqnos[m.VBucket], _ = kvdata.scatterMutation(m, ts)
 
 		case <-heartBeat:
 			heartBeat = nil
@@ -397,7 +401,7 @@ loop:
 }
 
 func (kvdata *KVData) scatterMutation(
-	m *mc.DcpEvent, ts *protobuf.TsVbuuid) (err error) {
+	m *mc.DcpEvent, ts *protobuf.TsVbuuid) (seqno uint64, err error) {
 
 	vbno := m.VBucket
 	worker := kvdata.workers[int(vbno)%len(kvdata.workers)]
@@ -422,6 +426,7 @@ func (kvdata *KVData) scatterMutation(
 			if err := worker.Event(m); err != nil {
 				panic(err)
 			}
+			seqno = m.Seqno
 		}
 		kvdata.reqCount++
 		kvdata.feed.PostStreamRequest(kvdata.bucket, m)
@@ -453,6 +458,7 @@ func (kvdata *KVData) scatterMutation(
 		kvdata.snapStat.Add(snapwindow)
 
 	case mcd.DCP_MUTATION, mcd.DCP_DELETION, mcd.DCP_EXPIRATION:
+		seqno = m.Seqno
 		if err := worker.Event(m); err != nil {
 			panic(err)
 		}
