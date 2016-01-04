@@ -476,10 +476,11 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 	"queryport.client.backfillLimit": ConfigValue{
-		100 * 1024 * 1024, // 100 MB
-		"limit in bytes to cap n1ql side backfilling",
-		100 * 1024 * 1024, // 100 MB
-		false,             // mutable
+		0,
+		"limit in bytes to cap n1ql side backfilling, if ZERO backfill " +
+			"will be disabled.",
+		0,
+		false, // mutable
 	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{

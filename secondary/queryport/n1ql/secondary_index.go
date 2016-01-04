@@ -14,6 +14,9 @@ package n1ql
 import "fmt"
 import "os"
 import "sync"
+import "time"
+import "path"
+import "strings"
 import "encoding/gob"
 import "strconv"
 import "io/ioutil"
@@ -741,11 +744,13 @@ func makeResponsehandler(
 			skeys := make([]c.SecondaryKey, 0)
 			if err := dec.Decode(&skeys); err != nil {
 				l.Errorf("decoding from backfill %v: %v\n", name, err)
+				conn.Error(n1qlError(client, err))
 				return
 			}
 			pkeys := make([][]byte, 0)
 			if err := dec.Decode(&pkeys); err != nil {
 				l.Errorf("decoding from backfill %v: %v\n", name, err)
+				conn.Error(n1qlError(client, err))
 				return
 			}
 			l.Tracef("backfill read %v entries\n", len(skeys))
@@ -776,19 +781,23 @@ func makeResponsehandler(
 			return false
 		}
 		cp, ln := cap(entryChannel), len(entryChannel)
-		if *tmpfile == nil && ((cp - ln) < len(skeys)) {
+		if backfillLimit > 0 && *tmpfile == nil && ((cp - ln) < len(skeys)) {
 			*tmpfile, err = ioutil.TempFile("" /*dir*/, "scan-backfill")
 			name := (*tmpfile).Name()
 			l.Debugf("new backfill file ... %v\n", name)
 			if err != nil {
 				l.Errorf("creating backfill file %v : %v\n", name, err)
 				*tmpfile = nil
+				conn.Error(n1qlError(client, err))
+				return false
 			} else {
 				// encoder
 				enc = gob.NewEncoder(*tmpfile)
 				readfd, err = os.OpenFile(name, os.O_RDONLY, 0666)
 				if err != nil {
 					l.Errorf("reading backfill file %v: %v\n", name, err)
+					conn.Error(n1qlError(client, err))
+					return false
 				}
 				// decoder
 				dec = gob.NewDecoder(readfd)
@@ -797,7 +806,7 @@ func makeResponsehandler(
 		}
 
 		if *tmpfile != nil {
-			// whether temp-file is exhauseted the limit.
+			// whether temp-file is exhausted the limit.
 			if stat, err := (*tmpfile).Stat(); err != nil {
 				conn.Error(n1qlError(client, err))
 				return false
@@ -1014,4 +1023,34 @@ func getSingletonClient(
 		singletonClient = client
 	}
 	return singletonClient, nil
+}
+
+func init() {
+	file, err := ioutil.TempFile("" /*dir*/, "scan-backfill")
+	if err != nil {
+		return
+	}
+
+	dir := path.Dir(file.Name())
+	os.Remove(file.Name()) // remove this file.
+
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	conf, _ := c.GetSettingsConfig(c.SystemConfig)
+	scantm := conf["indexer.settings.scan_timeout"].Int() // in ms.
+
+	for _, file := range files {
+		fname := path.Join(dir, file.Name())
+		mtime := file.ModTime()
+		since := (time.Since(mtime).Seconds() * 1000) * 2 // twice the longest scan
+		fmt.Println(fname, since, scantm)
+		if strings.Contains(fname, "scan-backfill") && int(since) > scantm {
+			fmsg := "GSI client: removing old file %v last-modified @ %v"
+			l.Infof(fmsg, fname, mtime)
+			os.Remove(fname)
+		}
+	}
 }
