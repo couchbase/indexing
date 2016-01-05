@@ -96,7 +96,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 
 	// not useful to expose in sherlock
 	cmdOptions.ExprType = "N1QL"
-	cmdOptions.PartnStr = "partn"
+	cmdOptions.PartnStr = ""
 
 	if err := fset.Parse(arguments); err != nil {
 		return nil, nil, fset, err
