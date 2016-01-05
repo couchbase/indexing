@@ -314,7 +314,7 @@ func (c *GsiClient) CreateIndex(
 		"elapsed(%v) err(%v)"
 	logging.Infof(
 		fmsg, defnID, bucket, name, using, exprType, partnExpr, whereExpr,
-		secExprs, isPrimary, with, time.Since(begin), err)
+		secExprs, isPrimary, string(with), time.Since(begin), err)
 	return defnID, err
 }
 

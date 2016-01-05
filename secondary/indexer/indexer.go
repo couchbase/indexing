@@ -184,6 +184,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.stats = NewIndexerStats()
 
+	// Start indexer endpoints for CRUD  operations.
+	NewRestServer(idx.config["clusterAddr"].String())
+
 	// Read memquota setting
 	idx.stats.memoryQuota.Set(int64(idx.config["settings.memory_quota"].Uint64()))
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
