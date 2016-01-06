@@ -18,6 +18,8 @@ import "time"
 import "reflect"
 import "unsafe"
 import "math/rand"
+import "net/http"
+import _ "net/http/pprof"
 
 import "github.com/couchbase/indexing/secondary/dcp"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -119,6 +121,9 @@ func main() {
 	if !strings.HasPrefix(cluster, "http://") {
 		cluster = "http://" + cluster
 	}
+	go func() {
+		log.Println(http.ListenAndServe("localhost:9999", nil))
+	}()
 
 	// setup cbauth
 	if options.auth != "" {
@@ -359,7 +364,7 @@ func evaluate(
 
 func mf(err error, msg string) {
 	if err != nil {
-		log.Fatalf("%v: %v", msg, err)
+		log.Printf("%v: %v", msg, err)
 	}
 }
 
