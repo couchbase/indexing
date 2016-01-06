@@ -125,10 +125,10 @@ var SystemConfig = Config{
 		false,      // mutable
 	},
 	"projector.mutationChanSize": ConfigValue{
-		100,
+		500,
 		"channel size of projector's vbucket workers, " +
 			"changing this value does not affect existing feeds.",
-		100,
+		500,
 		false, // mutable
 	},
 	"projector.feedChanSize": ConfigValue{
