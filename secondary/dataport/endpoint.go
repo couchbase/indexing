@@ -206,8 +206,9 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 	}
 
 	raddr := endpoint.raddr
+	lastActiveTime := time.Now()
 	flushTimeout := time.Tick(endpoint.bufferTm)
-	harakiri := time.After(endpoint.harakiriTm)
+	harakiri := time.NewTimer(endpoint.harakiriTm)
 	buffers := newEndpointBuffers(raddr)
 
 	messageCount := 0
@@ -250,14 +251,15 @@ loop:
 				logging.Tracef("%v added %v keyversions <%v:%v:%v> to %q\n",
 					endpoint.logPrefix, kv.Length(), data.Vbno, kv.Seqno,
 					kv.Commands, buffers.raddr)
-				// reload harakiri
+
 				messageCount++ // count queued up mutations.
 				if messageCount > endpoint.bufferSize {
 					if err := flushBuffers(); err != nil {
 						break loop
 					}
 				}
-				harakiri = time.After(endpoint.harakiriTm)
+
+				lastActiveTime = time.Now()
 
 			case endpCmdResetConfig:
 				prefix := endpoint.logPrefix
@@ -281,7 +283,7 @@ loop:
 					endpoint.harakiriTm = time.Duration(cv.Int())
 					endpoint.harakiriTm *= time.Millisecond
 					if harakiri != nil { // load harakiri only when it is active
-						harakiri = time.After(endpoint.harakiriTm)
+						harakiri.Reset(endpoint.harakiriTm)
 						fmsg := "%v reloaded harakiriTm: %v\n"
 						logging.Infof(fmsg, prefix, endpoint.harakiriTm)
 					}
@@ -310,12 +312,15 @@ loop:
 			// little activity in the data-path. On the other hand,
 			// downstream can block for reasons independant of datapath,
 			// hence the precaution.
-			harakiri = time.After(endpoint.harakiriTm)
+			lastActiveTime = time.Now()
 
-		case <-harakiri:
-			logging.Infof("%v committed harakiri\n", endpoint.logPrefix)
-			flushBuffers()
-			break loop
+		case <-harakiri.C:
+			if time.Since(lastActiveTime) > endpoint.harakiriTm {
+				logging.Infof("%v committed harakiri\n", endpoint.logPrefix)
+				flushBuffers()
+				break loop
+			}
+			harakiri.Reset(endpoint.harakiriTm)
 		}
 	}
 	logstats()
