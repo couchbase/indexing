@@ -167,12 +167,13 @@ type GsiAccessor interface {
 
 	// CountLookup of all entries in index.
 	CountLookup(
-		defnID uint64, requestId string,
+		defnID uint64, requestId string, values []common.SecondaryKey,
 		cons common.Consistency, vector *TsConsistency) (int64, error)
 
 	// CountRange of all entries in index.
 	CountRange(
 		defnID uint64, requestId string,
+		low, high common.SecondaryKey, inclusion Inclusion,
 		cons common.Consistency, vector *TsConsistency) (int64, error)
 }
 
