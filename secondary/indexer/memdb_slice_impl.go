@@ -207,14 +207,12 @@ func (mdb *memdbSlice) DecrRef() {
 }
 
 func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
-	mdb.idxStats.flushQueueSize.Add(1)
 	mdb.idxStats.numFlushQueued.Add(1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexItem{key: key, docid: docid}
 	return mdb.fatalDbErr
 }
 
 func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
-	mdb.idxStats.flushQueueSize.Add(1)
 	mdb.idxStats.numFlushQueued.Add(1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- docid
 	return mdb.fatalDbErr
@@ -252,7 +250,7 @@ loop:
 					"Unknown Command %v", mdb.id, mdb.idxInstId, c)
 			}
 
-			mdb.idxStats.flushQueueSize.Add(-1)
+			mdb.idxStats.numItemsFlushed.Add(1)
 
 		case <-mdb.stopCh[workerId]:
 			mdb.stopCh[workerId] <- true

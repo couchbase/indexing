@@ -241,7 +241,6 @@ func (fdb *fdbSlice) DecrRef() {
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
-	fdb.idxStats.flushQueueSize.Add(1)
 	fdb.idxStats.numFlushQueued.Add(1)
 	fdb.cmdCh <- &indexItem{key: key, docid: docid}
 	return fdb.fatalDbErr
@@ -252,7 +251,6 @@ func (fdb *fdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error 
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Delete(docid []byte, meta *MutationMeta) error {
-	fdb.idxStats.flushQueueSize.Add(1)
 	fdb.idxStats.numFlushQueued.Add(1)
 	fdb.cmdCh <- docid
 	return fdb.fatalDbErr
@@ -295,7 +293,7 @@ loop:
 					"Unknown Command %v", fdb.id, fdb.idxInstId, c)
 			}
 
-			fdb.idxStats.flushQueueSize.Add(-1)
+			fdb.idxStats.numItemsFlushed.Add(1)
 
 		case <-fdb.stopCh[workerId]:
 			fdb.stopCh[workerId] <- true

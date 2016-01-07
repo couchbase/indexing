@@ -98,7 +98,7 @@ type IndexStats struct {
 	numCommits           stats.Int64Val
 	numSnapshots         stats.Int64Val
 	numCompactions       stats.Int64Val
-	flushQueueSize       stats.Int64Val
+	numItemsFlushed      stats.Int64Val
 	avgTsInterval        stats.Int64Val
 	avgTsItemsCount      stats.Int64Val
 	lastNumFlushQueued   stats.Int64Val
@@ -150,7 +150,7 @@ func (s *IndexStats) Init() {
 	s.numCommits.Init()
 	s.numSnapshots.Init()
 	s.numCompactions.Init()
-	s.flushQueueSize.Init()
+	s.numItemsFlushed.Init()
 	s.numFlushQueued.Init()
 	s.sinceLastSnapshot.Init()
 	s.numSnapshotWaiters.Init()
@@ -266,7 +266,8 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_commits", s.numCommits.Value())
 		addStat("num_snapshots", s.numSnapshots.Value())
 		addStat("num_compactions", s.numCompactions.Value())
-		addStat("flush_queue_size", s.flushQueueSize.Value())
+		addStat("flush_queue_size", postiveNum(s.numFlushQueued.Value()-s.numItemsFlushed.Value()))
+		addStat("num_items_flushed", s.numItemsFlushed.Value())
 		addStat("avg_scan_latency", scanLat)
 		addStat("avg_scan_wait_latency", waitLat)
 		addStat("num_flush_queued", s.numFlushQueued.Value())
@@ -535,4 +536,12 @@ func (s *statsManager) runStatsDumpLogger() {
 
 		time.Sleep(time.Second * time.Duration(platform.LoadUint64(&s.statsLogDumpInterval)))
 	}
+}
+
+func postiveNum(n int64) int64 {
+	if n < 0 {
+		return 0
+	}
+
+	return n
 }
