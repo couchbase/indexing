@@ -143,6 +143,8 @@ func (r *mutationStreamReader) Shutdown() {
 
 	logging.Infof("MutationStreamReader:Shutdown StreamReader %v", r.streamId)
 
+	close(r.killch)
+
 	//stop sync worker
 	close(r.syncStopCh)
 
@@ -216,7 +218,6 @@ func (r *mutationStreamReader) listenSupvCmd() {
 			r.supvCmdch <- msg
 		} else {
 			//supervisor channel closed. Shutdown stream reader.
-			close(r.killch)
 			r.Shutdown()
 			return
 
