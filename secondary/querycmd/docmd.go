@@ -80,7 +80,7 @@ func ParseArgs(arguments []string) (*Command, []string, *flag.FlagSet, error) {
 	fset.BoolVar(&cmdOptions.IsPrimary, "primary", false, "Is primary index")
 	fset.StringVar(&cmdOptions.With, "with", "", "index specific properties")
 	// options for build-indexes, drop-indexes
-	fset.StringVar(&bindexes, "indexes", "", "csv list of bucket.index to build")
+	fset.StringVar(&bindexes, "indexes", "", "csv list of bucket:index to build")
 	// options for Range, Statistics, Count
 	fset.StringVar(&low, "low", "[]", "Span.Range: [low]")
 	fset.StringVar(&high, "high", "[]", "Span.Range: [high]")
