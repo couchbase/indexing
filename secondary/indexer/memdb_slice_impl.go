@@ -475,14 +475,19 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		}
 
 		if err == nil {
-			logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v created ondisk snapshot %v. Took %v", mdb.id, mdb.idxInstId, dir, time.Since(t0))
+			dur := time.Since(t0)
+			logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v created ondisk"+
+				" snapshot %v. Took %v", mdb.id, mdb.idxInstId, dir, dur)
+			mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
 		} else {
-			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v failed to create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, dir, err)
+			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v failed to"+
+				" create ondisk snapshot %v (error=%v)", mdb.id, mdb.idxInstId, dir, err)
 			os.RemoveAll(tmpdir)
 			os.RemoveAll(dir)
 		}
 	} else {
-		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
+		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk"+
+			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
 	}
 }
 
@@ -617,6 +622,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 	dur := time.Since(t0)
 	logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v finished reading %v. Took %v",
 		mdb.id, mdb.idxInstId, snapInfo.dataPath, dur)
+	mdb.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
 
 	return err
 }

@@ -78,37 +78,39 @@ func (it *IndexTimingStats) Init() {
 type IndexStats struct {
 	name, bucket string
 
-	scanDuration         stats.Int64Val
-	dcpSeqsDuration      stats.Int64Val
-	insertBytes          stats.Int64Val
-	numDocsPending       stats.Int64Val
-	scanWaitDuration     stats.Int64Val
-	numDocsIndexed       stats.Int64Val
-	numRequests          stats.Int64Val
-	numCompletedRequests stats.Int64Val
-	numRowsReturned      stats.Int64Val
-	diskSize             stats.Int64Val
-	buildProgress        stats.Int64Val
-	numDocsQueued        stats.Int64Val
-	deleteBytes          stats.Int64Val
-	dataSize             stats.Int64Val
-	scanBytesRead        stats.Int64Val
-	getBytes             stats.Int64Val
-	itemsCount           stats.Int64Val
-	numCommits           stats.Int64Val
-	numSnapshots         stats.Int64Val
-	numCompactions       stats.Int64Val
-	numItemsFlushed      stats.Int64Val
-	avgTsInterval        stats.Int64Val
-	avgTsItemsCount      stats.Int64Val
-	lastNumFlushQueued   stats.Int64Val
-	lastTsTime           stats.Int64Val
-	numFlushQueued       stats.Int64Val
-	fragPercent          stats.Int64Val
-	sinceLastSnapshot    stats.Int64Val
-	numSnapshotWaiters   stats.Int64Val
-	numLastSnapshotReply stats.Int64Val
-	numItemsRestored     stats.Int64Val
+	scanDuration          stats.Int64Val
+	dcpSeqsDuration       stats.Int64Val
+	insertBytes           stats.Int64Val
+	numDocsPending        stats.Int64Val
+	scanWaitDuration      stats.Int64Val
+	numDocsIndexed        stats.Int64Val
+	numRequests           stats.Int64Val
+	numCompletedRequests  stats.Int64Val
+	numRowsReturned       stats.Int64Val
+	diskSize              stats.Int64Val
+	buildProgress         stats.Int64Val
+	numDocsQueued         stats.Int64Val
+	deleteBytes           stats.Int64Val
+	dataSize              stats.Int64Val
+	scanBytesRead         stats.Int64Val
+	getBytes              stats.Int64Val
+	itemsCount            stats.Int64Val
+	numCommits            stats.Int64Val
+	numSnapshots          stats.Int64Val
+	numCompactions        stats.Int64Val
+	numItemsFlushed       stats.Int64Val
+	avgTsInterval         stats.Int64Val
+	avgTsItemsCount       stats.Int64Val
+	lastNumFlushQueued    stats.Int64Val
+	lastTsTime            stats.Int64Val
+	numFlushQueued        stats.Int64Val
+	fragPercent           stats.Int64Val
+	sinceLastSnapshot     stats.Int64Val
+	numSnapshotWaiters    stats.Int64Val
+	numLastSnapshotReply  stats.Int64Val
+	numItemsRestored      stats.Int64Val
+	diskSnapStoreDuration stats.Int64Val
+	diskSnapLoadDuration  stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -156,6 +158,8 @@ func (s *IndexStats) Init() {
 	s.numSnapshotWaiters.Init()
 	s.numLastSnapshotReply.Init()
 	s.numItemsRestored.Init()
+	s.diskSnapStoreDuration.Init()
+	s.diskSnapLoadDuration.Init()
 
 	s.Timings.Init()
 }
@@ -275,6 +279,8 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
 		addStat("num_last_snapshot_reply", s.numLastSnapshotReply.Value())
 		addStat("num_items_restored", s.numItemsRestored.Value())
+		addStat("disk_store_duration", s.diskSnapStoreDuration.Value())
+		addStat("disk_load_duration", s.diskSnapLoadDuration.Value())
 
 		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
