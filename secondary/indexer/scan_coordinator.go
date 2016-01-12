@@ -350,6 +350,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	cfg := s.config.Load()
 	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
+	getseqsRetries := cfg["settings.scan_getseqnos_retries"].Int()
 
 	if timeout != 0 {
 		r.ExpiredTime = time.Now().Add(timeout)
@@ -453,7 +454,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			cluster := cfg["clusterAddr"].String()
 			r.Ts = &common.TsVbuuid{}
 			t0 := time.Now()
-			r.Ts.Seqnos, localErr = common.BucketSeqnos(cluster, "default", r.Bucket)
+			r.Ts.Seqnos, localErr = bucketSeqsWithRetry(getseqsRetries, r.LogPrefix, cluster, r.Bucket)
 			if localErr == nil {
 				r.Stats.Timings.dcpSeqs.Put(time.Since(t0))
 			}
@@ -1049,7 +1050,6 @@ func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
 }
 
 func (s *scanCoordinator) isBootstrapMode() bool {
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1058,5 +1058,19 @@ func (s *scanCoordinator) isBootstrapMode() bool {
 	}
 
 	return false
+}
 
+func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string) (seqnos []uint64, err error) {
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Errorf("%s BucketSeqnos(%s): failed with error (%v)...Retrying (%d)",
+				logPrefix, bucket, err, r)
+		}
+		seqnos, err = common.BucketSeqnos(cluster, "default", bucket)
+		return err
+	}
+
+	rh := common.NewRetryHelper(retries, time.Second, 1, fn)
+	err = rh.Run()
+	return
 }

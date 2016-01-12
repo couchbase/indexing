@@ -947,6 +947,12 @@ var SystemConfig = Config{
 		"",
 		false, // mutable
 	},
+	"indexer.settings.scan_getseqnos_retries": ConfigValue{
+		30,
+		"Max retries for DCP request",
+		30,
+		false,
+	},
 	"projector.settings.log_level": ConfigValue{
 		"info",
 		"Projector logging level",
