@@ -59,7 +59,7 @@ func mutationProducer(wg *sync.WaitGroup, s Slice, offset, n, id int, isRand boo
 
 		docid := []byte(fmt.Sprintf("docid-%d", docN))
 		key := []byte("[\"" + randString(rnd, keySize) + "\"]")
-		entry, err := GetIndexEntryBytesFromKey(key, docid, false)
+		entry, err := GetIndexEntryBytesFromKey(key, docid, false, false)
 		common.CrashOnError(err)
 
 		meta := NewMutationMeta()
@@ -79,7 +79,7 @@ func flushWorker(wg *sync.WaitGroup, stream chan *ientry, n int, slice Slice) {
 
 	for i := 0; i < n; i++ {
 		entry := <-stream
-		slice.Insert(entry.e, entry.docid, entry.m)
+		slice.Insert(entry.e, nil, entry.docid, entry.m)
 		entry.m.Free()
 	}
 }
@@ -123,9 +123,11 @@ func TestMemDBInsertionPerf(t *testing.T) {
 	stats.Init()
 	cfg := common.SystemConfig.SectionConfig("indexer.", true)
 	cfg.SetValue("numSliceWriters", nw)
-
+	idxDefn := common.IndexDefn{
+		DefnId:          common.IndexDefnId(0),
+		IsArrayIndex:    false}
 	slice, err := NewMemDBSlice("/tmp/mdbslice",
-		SliceId(0), common.IndexDefnId(0), common.IndexInstId(0), *isPrimary,
+		SliceId(0), idxDefn, common.IndexInstId(0), *isPrimary,
 		cfg, stats)
 	common.CrashOnError(err)
 
