@@ -288,21 +288,21 @@ func (fdb *fdbSlice) handleCommandsWorker(workerId int) {
 
 loop:
 	for {
+		var nmut int
 		select {
 		case c = <-fdb.cmdCh:
 			switch c.(type) {
-
 			case *indexItem:
 				icmd = c.(*indexItem)
 				start = time.Now()
-				fdb.insert((*icmd).key, (*icmd).rawKey, (*icmd).docid, workerId)
+				nmut = fdb.insert((*icmd).key, (*icmd).rawKey, (*icmd).docid, workerId)
 				elapsed = time.Since(start)
 				fdb.totalFlushTime += elapsed
 
 			case []byte:
 				dcmd = c.([]byte)
 				start = time.Now()
-				fdb.delete(dcmd, workerId)
+				nmut = fdb.delete(dcmd, workerId)
 				elapsed = time.Since(start)
 				fdb.totalFlushTime += elapsed
 
@@ -311,7 +311,7 @@ loop:
 					"Unknown Command %v", fdb.id, fdb.idxInstId, c)
 			}
 
-			fdb.idxStats.numItemsFlushed.Add(1)
+			fdb.idxStats.numItemsFlushed.Add(int64(nmut))
 
 		case <-fdb.stopCh[workerId]:
 			fdb.stopCh[workerId] <- true
@@ -324,23 +324,25 @@ loop:
 
 		}
 	}
-
 }
 
 //insert does the actual insert in forestdb
-func (fdb *fdbSlice) insert(key []byte, rawKey []byte, docid []byte, workerId int) {
+func (fdb *fdbSlice) insert(key []byte, rawKey []byte, docid []byte, workerId int) int {
+	var nmut int
+
 	if fdb.isPrimary {
-		fdb.insertPrimaryIndex(key, docid, workerId)
+		nmut = fdb.insertPrimaryIndex(key, docid, workerId)
 	} else if !fdb.idxDefn.IsArrayIndex {
-		fdb.insertSecIndex(key, docid, workerId)
+		nmut = fdb.insertSecIndex(key, docid, workerId)
 	} else {
-		fdb.insertSecArrayIndex(key, rawKey, docid, workerId)
+		nmut = fdb.insertSecArrayIndex(key, rawKey, docid, workerId)
 	}
 
 	fdb.logWriterStat()
+	return nmut
 }
 
-func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) {
+func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) (nmut int) {
 	var err error
 
 	logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", fdb.id, fdb.idxInstId, docid)
@@ -368,9 +370,11 @@ func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) 
 		platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
 		fdb.isDirty = true
 	}
+
+	return 1
 }
 
-func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
+func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) (nmut int) {
 	var err error
 	var oldkey []byte
 
@@ -449,9 +453,12 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) {
 	fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
 	fdb.isDirty = true
+
+	nmut = 1
+	return
 }
 
-func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte, workerId int) {
+func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte, workerId int) (nmut int) {
 	var err error
 	var oldkey, oldRawKey []byte
 
@@ -546,6 +553,8 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		indexEntriesToBeAdded, indexEntriesToBeDeleted = CompareArrayEntryBytes(newEntriesBytes, oldEntriesBytes)
 	}
 
+	nmut = len(indexEntriesToBeAdded) + len(indexEntriesToBeDeleted)
+
 	// Delete each of indexEntriesToBeDeleted from main index
 	for _, item := range indexEntriesToBeDeleted {
 		if item != nil { // nil item indicates it should not be deleted
@@ -614,24 +623,26 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	}
 
 	fdb.isDirty = true
+	return nmut
 }
 
 //delete does the actual delete in forestdb
-func (fdb *fdbSlice) delete(docid []byte, workerId int) {
+func (fdb *fdbSlice) delete(docid []byte, workerId int) int {
+	var nmut int
 
 	if fdb.isPrimary {
-		fdb.deletePrimaryIndex(docid, workerId)
+		nmut = fdb.deletePrimaryIndex(docid, workerId)
 	} else if !fdb.idxDefn.IsArrayIndex {
-		fdb.deleteSecIndex(docid, workerId)
+		nmut = fdb.deleteSecIndex(docid, workerId)
 	} else {
-		fdb.deleteSecArrayIndex(docid, workerId)
+		nmut = fdb.deleteSecArrayIndex(docid, workerId)
 	}
 
 	fdb.logWriterStat()
-
+	return nmut
 }
 
-func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
+func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int) {
 
 	//logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
 	//	fdb.id, fdb.idxInstId, docid)
@@ -658,9 +669,10 @@ func (fdb *fdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 	platform.AddInt64(&fdb.delete_bytes, int64(len(entry.Bytes())))
 	fdb.isDirty = true
 
+	return 1
 }
 
-func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
+func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) (nmut int) {
 
 	//logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
 	//	fdb.id, fdb.idxInstId, docid)
@@ -706,10 +718,10 @@ func (fdb *fdbSlice) deleteSecIndex(docid []byte, workerId int) {
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 	fdb.isDirty = true
-
+	return 1
 }
 
-func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) {
+func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) {
 
 	//logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
 	//	fdb.id, fdb.idxInstId, docid)
@@ -783,6 +795,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) {
 	fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 	platform.AddInt64(&fdb.delete_bytes, int64(len(docid)))
 	fdb.isDirty = true
+	return len(indexEntriesToBeDeleted)
 }
 
 //getBackIndexEntry returns an existing back index entry

@@ -244,21 +244,21 @@ func (mdb *memdbSlice) handleCommandsWorker(workerId int) {
 
 loop:
 	for {
+		var nmut int
 		select {
 		case c = <-mdb.cmdCh[workerId]:
 			switch c.(type) {
-
 			case *indexItem:
 				icmd = c.(*indexItem)
 				start = time.Now()
-				mdb.insert((*icmd).key, (*icmd).rawKey, (*icmd).docid, workerId)
+				nmut = mdb.insert((*icmd).key, (*icmd).rawKey, (*icmd).docid, workerId)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
 			case []byte:
 				dcmd = c.([]byte)
 				start = time.Now()
-				mdb.delete(dcmd, workerId)
+				nmut = mdb.delete(dcmd, workerId)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
@@ -267,7 +267,7 @@ loop:
 					"Unknown Command %v", mdb.id, mdb.idxInstId, c)
 			}
 
-			mdb.idxStats.numItemsFlushed.Add(1)
+			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
 
 		case <-mdb.stopCh[workerId]:
 			mdb.stopCh[workerId] <- true
@@ -280,19 +280,22 @@ loop:
 	}
 }
 
-func (mdb *memdbSlice) insert(entry []byte, rawKey []byte, docid []byte, workerId int) {
+func (mdb *memdbSlice) insert(entry []byte, rawKey []byte, docid []byte, workerId int) int {
+	var nmut int
+
 	if mdb.isPrimary {
-		mdb.insertPrimaryIndex(entry, docid, workerId)
+		nmut = mdb.insertPrimaryIndex(entry, docid, workerId)
 	} else if !mdb.idxDefn.IsArrayIndex {
-		mdb.insertSecIndex(entry, docid, workerId)
+		nmut = mdb.insertSecIndex(entry, docid, workerId)
 	} else {
-		mdb.insertSecArrayIndex(entry, rawKey, docid, workerId)
+		nmut = mdb.insertSecArrayIndex(entry, rawKey, docid, workerId)
 	}
 
 	mdb.logWriterStat()
+	return nmut
 }
 
-func (mdb *memdbSlice) insertPrimaryIndex(entry []byte, docid []byte, workerId int) {
+func (mdb *memdbSlice) insertPrimaryIndex(entry []byte, docid []byte, workerId int) int {
 	logging.Tracef("MemDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", mdb.id, mdb.idxInstId, docid)
 
 	t0 := time.Now()
@@ -301,9 +304,10 @@ func (mdb *memdbSlice) insertPrimaryIndex(entry []byte, docid []byte, workerId i
 	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 	platform.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 	mdb.isDirty = true
+	return 1
 }
 
-func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) {
+func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) int {
 	if entry == nil {
 		// Delete existing entries from main and back
 		lookupentry := entryBytesFromDocId(docid)
@@ -342,12 +346,15 @@ func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) 
 	}
 
 	mdb.isDirty = true
+	return 1
 }
 
-func (mdb *memdbSlice) insertSecArrayIndex(entry []byte, rawKey []byte, docid []byte, workerId int) {
+func (mdb *memdbSlice) insertSecArrayIndex(entry []byte, rawKey []byte, docid []byte, workerId int) int {
+	var nmut int
+
 	if entry == nil {
 		// Delete existing entries from main and back
-		mdb.deleteSecArrayIndex(docid, workerId)
+		nmut = mdb.deleteSecArrayIndex(docid, workerId)
 	} else {
 		newIndexEntries, err := SplitSecondaryArrayKey(rawKey, mdb.arrayExprPosition)
 		common.CrashOnError(err)
@@ -368,6 +375,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(entry []byte, rawKey []byte, docid []
 		oldEntriesBytes := list.Keys()
 
 		entryBytesToBeAdded, entryBytesToDeleted := CompareArrayEntryBytes(newEntriesBytes, oldEntriesBytes)
+		nmut = len(entryBytesToBeAdded) + len(entryBytesToDeleted)
 
 		// Delete each entry in entryBytesToDeleted
 		for _, item := range entryBytesToDeleted {
@@ -395,21 +403,25 @@ func (mdb *memdbSlice) insertSecArrayIndex(entry []byte, rawKey []byte, docid []
 		mdb.back[workerId].Update(lookupentry, unsafe.Pointer(list.Head()))
 	}
 	mdb.isDirty = true
+	return nmut
 }
 
-func (mdb *memdbSlice) delete(docid []byte, workerId int) {
+func (mdb *memdbSlice) delete(docid []byte, workerId int) int {
+	var nmut int
+
 	if mdb.isPrimary {
-		mdb.deletePrimaryIndex(docid, workerId)
+		nmut = mdb.deletePrimaryIndex(docid, workerId)
 	} else if !mdb.idxDefn.IsArrayIndex {
-		mdb.deleteSecIndex(docid, workerId)
+		nmut = mdb.deleteSecIndex(docid, workerId)
 	} else {
-		mdb.deleteSecArrayIndex(docid, workerId)
+		nmut = mdb.deleteSecArrayIndex(docid, workerId)
 	}
 
 	mdb.logWriterStat()
+	return nmut
 }
 
-func (mdb *memdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
+func (mdb *memdbSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int) {
 	if docid == nil {
 		common.CrashOnError(errors.New("Nil Primary Key"))
 		return
@@ -426,10 +438,11 @@ func (mdb *memdbSlice) deletePrimaryIndex(docid []byte, workerId int) {
 	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 	platform.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
 	mdb.isDirty = true
+	return 1
 
 }
 
-func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) {
+func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) int {
 	lookupentry := entryBytesFromDocId(docid)
 
 	// Delete entry from back and main index if present
@@ -443,9 +456,10 @@ func (mdb *memdbSlice) deleteSecIndex(docid []byte, workerId int) {
 		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
 	}
 	mdb.isDirty = true
+	return 1
 }
 
-func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) {
+func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) {
 	// Get old back index entry
 	lookupentry := entryBytesFromDocId(docid)
 	ptr := (*skiplist.Node)(mdb.back[workerId].Get(lookupentry))
@@ -466,6 +480,8 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) {
 	platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
 
 	mdb.isDirty = true
+
+	return len(oldEntriesBytes)
 }
 
 //checkFatalDbError checks if the error returned from DB
