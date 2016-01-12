@@ -84,6 +84,7 @@ type IndexStats struct {
 	numDocsPending        stats.Int64Val
 	scanWaitDuration      stats.Int64Val
 	numDocsIndexed        stats.Int64Val
+	numDocsProcessed      stats.Int64Val
 	numRequests           stats.Int64Val
 	numCompletedRequests  stats.Int64Val
 	numRowsReturned       stats.Int64Val
@@ -103,7 +104,7 @@ type IndexStats struct {
 	avgTsItemsCount       stats.Int64Val
 	lastNumFlushQueued    stats.Int64Val
 	lastTsTime            stats.Int64Val
-	numFlushQueued        stats.Int64Val
+	numDocsFlushQueued    stats.Int64Val
 	fragPercent           stats.Int64Val
 	sinceLastSnapshot     stats.Int64Val
 	numSnapshotWaiters    stats.Int64Val
@@ -133,6 +134,7 @@ func (s *IndexStats) Init() {
 	s.numDocsPending.Init()
 	s.scanWaitDuration.Init()
 	s.numDocsIndexed.Init()
+	s.numDocsProcessed.Init()
 	s.numRequests.Init()
 	s.numCompletedRequests.Init()
 	s.numRowsReturned.Init()
@@ -153,7 +155,7 @@ func (s *IndexStats) Init() {
 	s.numSnapshots.Init()
 	s.numCompactions.Init()
 	s.numItemsFlushed.Init()
-	s.numFlushQueued.Init()
+	s.numDocsFlushQueued.Init()
 	s.sinceLastSnapshot.Init()
 	s.numSnapshotWaiters.Init()
 	s.numLastSnapshotReply.Init()
@@ -269,6 +271,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_docs_pending", s.numDocsPending.Value())
 		addStat("scan_wait_duration", s.scanWaitDuration.Value())
 		addStat("num_docs_indexed", s.numDocsIndexed.Value())
+		addStat("num_docs_processed", s.numDocsProcessed.Value())
 		addStat("num_requests", s.numRequests.Value())
 		addStat("num_completed_requests", s.numCompletedRequests.Value())
 		addStat("num_rows_returned", s.numRowsReturned.Value())
@@ -286,11 +289,11 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_commits", s.numCommits.Value())
 		addStat("num_snapshots", s.numSnapshots.Value())
 		addStat("num_compactions", s.numCompactions.Value())
-		addStat("flush_queue_size", postiveNum(s.numFlushQueued.Value()-s.numItemsFlushed.Value()))
+		addStat("flush_queue_size", postiveNum(s.numDocsFlushQueued.Value()-s.numDocsIndexed.Value()))
 		addStat("num_items_flushed", s.numItemsFlushed.Value())
 		addStat("avg_scan_latency", scanLat)
 		addStat("avg_scan_wait_latency", waitLat)
-		addStat("num_flush_queued", s.numFlushQueued.Value())
+		addStat("num_flush_queued", s.numDocsFlushQueued.Value())
 		addStat("since_last_snapshot", s.sinceLastSnapshot.Value())
 		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
 		addStat("num_last_snapshot_reply", s.numLastSnapshotReply.Value())

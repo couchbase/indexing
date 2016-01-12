@@ -2622,7 +2622,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			}
 
 			if idxStats != nil {
-				idxStats.numDocsIndexed.Set(int64(flushedCount))
+				idxStats.numDocsProcessed.Set(int64(flushedCount))
 				idxStats.numDocsQueued.Set(int64(queued))
 				idxStats.numDocsPending.Set(int64(pending))
 				idxStats.buildProgress.Set(int64(v))

@@ -404,7 +404,7 @@ func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
 
 	// Compute avgTsItemsCount
 	last = idxStats.lastNumFlushQueued.Value()
-	curr = idxStats.numFlushQueued.Value()
+	curr = idxStats.numDocsFlushQueued.Value()
 	avg = idxStats.avgTsItemsCount.Value()
 
 	avg = common.ComputeAvg(avg, last, curr)

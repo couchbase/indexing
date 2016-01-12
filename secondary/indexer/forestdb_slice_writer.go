@@ -259,7 +259,7 @@ func (fdb *fdbSlice) DecrRef() {
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Insert(key []byte, rawKey []byte, docid []byte, meta *MutationMeta) error {
-	fdb.idxStats.numFlushQueued.Add(1)
+	fdb.idxStats.numDocsFlushQueued.Add(1)
 	fdb.cmdCh <- &indexItem{key: key, rawKey: rawKey, docid: docid}
 	return fdb.fatalDbErr
 }
@@ -269,7 +269,7 @@ func (fdb *fdbSlice) Insert(key []byte, rawKey []byte, docid []byte, meta *Mutat
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Delete(docid []byte, meta *MutationMeta) error {
-	fdb.idxStats.numFlushQueued.Add(1)
+	fdb.idxStats.numDocsFlushQueued.Add(1)
 	fdb.cmdCh <- docid
 	return fdb.fatalDbErr
 }
@@ -312,6 +312,7 @@ loop:
 			}
 
 			fdb.idxStats.numItemsFlushed.Add(int64(nmut))
+			fdb.idxStats.numDocsIndexed.Add(1)
 
 		case <-fdb.stopCh[workerId]:
 			fdb.stopCh[workerId] <- true

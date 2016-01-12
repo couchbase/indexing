@@ -224,13 +224,13 @@ func (mdb *memdbSlice) DecrRef() {
 }
 
 func (mdb *memdbSlice) Insert(key []byte, rawKey []byte, docid []byte, meta *MutationMeta) error {
-	mdb.idxStats.numFlushQueued.Add(1)
+	mdb.idxStats.numDocsFlushQueued.Add(1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexItem{key: key, rawKey: rawKey, docid: docid}
 	return mdb.fatalDbErr
 }
 
 func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
-	mdb.idxStats.numFlushQueued.Add(1)
+	mdb.idxStats.numDocsFlushQueued.Add(1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- docid
 	return mdb.fatalDbErr
 }
@@ -268,6 +268,7 @@ loop:
 			}
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
+			mdb.idxStats.numDocsIndexed.Add(1)
 
 		case <-mdb.stopCh[workerId]:
 			mdb.stopCh[workerId] <- true
