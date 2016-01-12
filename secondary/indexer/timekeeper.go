@@ -53,6 +53,8 @@ type timekeeper struct {
 	vbCheckerStopCh chan bool
 
 	lock sync.Mutex //lock to protect this structure
+
+	indexerState common.IndexerState
 }
 
 type InitialBuildInfo struct {
@@ -202,6 +204,15 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 
 	case INDEX_PROGRESS_STATS:
 		tk.handleStats(cmd)
+
+	case INDEXER_PAUSE:
+		tk.handleIndexerPause(cmd)
+
+	case INDEXER_PREPARE_UNPAUSE:
+		tk.handlePrepareUnpause(cmd)
+
+	case INDEXER_RESUME:
+		tk.handleIndexerResume(cmd)
 
 	default:
 		logging.Errorf("Timekeeper::handleSupvervisorCommands "+
@@ -844,6 +855,12 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleStreamBegin Received StreamBegin In "+
+			"Prepare Unpause State. Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
+		return
+	}
+
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, meta.bucket) == false {
 		logging.Warnf("Timekeeper::handleStreamBegin Received StreamBegin for "+
@@ -921,6 +938,12 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
+
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleStreamEnd Received StreamEnd In "+
+			"Prepare Unpause State. Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
+		return
+	}
 
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, meta.bucket) == false {
@@ -1147,6 +1170,12 @@ func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 
 func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, bucket string, vbList []Vbucket) {
 
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleStreamConnError Received ConnError In "+
+			"Prepare Unpause State. Bucket %v Stream %v. Ignored.", bucket, streamId)
+		return
+	}
+
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, bucket) == false {
 		logging.Warnf("Timekeeper::handleStreamConnError \n\tReceived ConnError for "+
@@ -1349,6 +1378,12 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	//as no flush would happen in case there are no more mutations.
 	tk.checkPendingStreamMerge(streamId, bucket)
 
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleStreamRequestDone Skip Repair Check In "+
+			"Prepare Unpause State. Bucket %v Stream %v.", bucket, streamId)
+		return
+	}
+
 	// Check if the stream needs repair for streamEnd and ConnErr
 	if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
 		tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
@@ -1411,6 +1446,12 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	//merge of an index in Catchup state, the merge needs to happen here,
 	//as no flush would happen in case there are no more mutations.
 	tk.checkPendingStreamMerge(streamId, bucket)
+
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleRecoveryDone Skip Repair Check In "+
+			"Prepare Unpause State. Bucket %v Stream %v.", bucket, streamId)
+		return
+	}
 
 	// Check if the stream needs repair
 	if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
@@ -1780,6 +1821,10 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	if tk.indexerState != common.INDEXER_ACTIVE {
+		return
+	}
+
 	if status, ok := tk.ss.streamBucketStatus[streamId][bucket]; !ok || status != STREAM_ACTIVE {
 		return
 	}
@@ -1964,10 +2009,10 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 			var snapPersistInterval uint64
 			var persistDuration time.Duration
 			if flushTs.GetSnapType() == common.INMEM_SNAP {
-				snapPersistInterval = tk.config["settings.persisted_snapshot.interval"].Uint64()
+				snapPersistInterval = tk.getPersistInterval()
 				persistDuration = time.Duration(snapPersistInterval) * time.Millisecond
 			} else {
-				snapPersistInterval = tk.config["settings.persisted_snapshot_init_build.interval"].Uint64()
+				snapPersistInterval = tk.getPersistIntervalInitBuild()
 				persistDuration = time.Duration(snapPersistInterval) * time.Millisecond
 			}
 
@@ -1980,7 +2025,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	} else if flushTs.IsSnapAligned() {
 		//for incremental build, snapshot only if ts is snap aligned
 		//set either in-mem or persist snapshot based on wall clock time
-		snapPersistInterval := tk.config["settings.persisted_snapshot.interval"].Uint64()
+		snapPersistInterval := tk.getPersistInterval()
 		persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 
 		if time.Since(lastPersistTime) > persistDuration {
@@ -2313,6 +2358,13 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	//wait on respCh
 	kvresp := <-restartMsg.(*MsgRestartVbuckets).GetResponseCh()
 
+	//if timekeeper has moved to prepare unpause state, ignore
+	//the response message as all streams are going to be
+	//restarted anyways
+	if tk.isIndexerPaused() {
+		return
+	}
+
 	streamId := restartMsg.(*MsgRestartVbuckets).GetStreamId()
 	bucket := restartMsg.(*MsgRestartVbuckets).GetBucket()
 
@@ -2637,7 +2689,7 @@ func (tk *timekeeper) startTimer(streamId common.StreamId,
 
 	logging.Infof("Timekeeper::startTimer %v %v", streamId, bucket)
 
-	snapInterval := tk.config["settings.inmemory_snapshot.interval"].Uint64()
+	snapInterval := tk.getInMemSnapInterval()
 	ticker := time.NewTicker(time.Millisecond * time.Duration(snapInterval))
 	stopCh := tk.ss.streamBucketTimerStopCh[streamId][bucket]
 
@@ -2736,4 +2788,130 @@ func (tk *timekeeper) calcSkipFactorForFastFlush(streamId common.StreamId,
 	} else {
 		return 0
 	}
+}
+
+func (tk *timekeeper) handleIndexerPause(cmd Message) {
+
+	logging.Infof("Timekeeper::handleIndexerPause")
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	tk.indexerState = common.INDEXER_PAUSED
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (tk *timekeeper) handlePrepareUnpause(cmd Message) {
+
+	logging.Infof("Timekeeper::handlePrepareUnpause")
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	tk.indexerState = common.INDEXER_PREPARE_UNPAUSE
+
+	go tk.doUnpause()
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (tk *timekeeper) handleIndexerResume(cmd Message) {
+
+	logging.Infof("Timekeeper::handleIndexerResume")
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	tk.indexerState = common.INDEXER_ACTIVE
+
+	//generate prepare init recovery for all stream/buckets
+	for s, bs := range tk.ss.streamBucketStatus {
+		for b, status := range bs {
+			if status != STREAM_INACTIVE {
+				tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+					streamId: s,
+					bucket:   b}
+			}
+		}
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (tk *timekeeper) doUnpause() {
+
+	//send unpause to indexer once there is no repair in progress
+	ticker := time.NewTicker(time.Second * 1)
+
+	for _ = range ticker.C {
+
+		if tk.checkAnyRepairPending() {
+			logging.Infof("Timekeeper::doUnpause Dropping Request to Unpause. " +
+				"Next Try In 1 Second...")
+			continue
+		}
+		break
+	}
+
+	tk.supvRespch <- &MsgIndexerState{mType: INDEXER_UNPAUSE}
+}
+
+func (tk *timekeeper) checkAnyRepairPending() bool {
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+	for s, bs := range tk.ss.streamBucketStatus {
+
+		for b, _ := range bs {
+			if tk.ss.streamBucketRepairStopCh[s][b] != nil {
+				return true
+			}
+		}
+	}
+
+	return false
+
+}
+
+func (tk *timekeeper) isIndexerPaused() bool {
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+	if tk.indexerState == common.INDEXER_PAUSED {
+		return true
+	}
+	return false
+
+}
+
+func (tk *timekeeper) getPersistInterval() uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return tk.config["settings.persisted_snapshot.memdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.persisted_snapshot.interval"].Uint64()
+	}
+
+}
+func (tk *timekeeper) getPersistIntervalInitBuild() uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return tk.config["settings.persisted_snapshot_init_build.memdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.persisted_snapshot_init_build.interval"].Uint64()
+	}
+
+}
+func (tk *timekeeper) getInMemSnapInterval() uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return tk.config["settings.inmemory_snapshot.memdb.interval"].Uint64()
+	} else {
+		return tk.config["settings.inmemory_snapshot.interval"].Uint64()
+	}
+
 }

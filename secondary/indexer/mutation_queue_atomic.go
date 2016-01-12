@@ -89,7 +89,7 @@ func NewAtomicMutationQueue(numVbuckets uint16, maxLenPerVb int64,
 		numVbuckets:         numVbuckets,
 		maxLen:              maxLenPerVb,
 		stopch:              make([]StopChannel, numVbuckets),
-		allocPollInterval:   config["mutation_queue.allocPollInterval"].Uint64(),
+		allocPollInterval:   getAllocPollInterval(config),
 		dequeuePollInterval: config["mutation_queue.dequeuePollInterval"].Uint64(),
 	}
 
@@ -388,6 +388,16 @@ func (q *atomicMutationQueue) Destroy() {
 		}()
 		q.dequeue(Vbucket(i), mutch)
 		close(mutch)
+	}
+
+}
+
+func getAllocPollInterval(config common.Config) uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return config["mutation_queue.memdb.allocPollInterval"].Uint64()
+	} else {
+		return config["mutation_queue.fdb.allocPollInterval"].Uint64()
 	}
 
 }

@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/pprof"
 	"strconv"
 	"strings"
@@ -55,10 +56,13 @@ var (
 	ErrIndexerInRecovery        = errors.New("Indexer In Recovery")
 	ErrKVConnect                = errors.New("Error Connecting KV")
 	ErrUnknownBucket            = errors.New("Unknown Bucket")
+	ErrIndexerNotActive         = errors.New("Indexer Not Active")
+	ErrInvalidMetadata          = errors.New("Invalid Metadata")
 )
 
 type indexer struct {
-	id string
+	id    string
+	state common.IndexerState
 
 	indexInstMap  common.IndexInstMap //map of indexInstId to IndexInst
 	indexPartnMap IndexPartnMap       //map of indexInstId to PartitionInst
@@ -113,8 +117,8 @@ type indexer struct {
 	scanCoord     ScanCoordinator //handle to ScanCoordinator
 	config        common.Config
 
-	kvlock    sync.Mutex //fine-grain lock for KVSender
-	stateLock sync.Mutex //lock to protect the bucketStatus map
+	kvlock    sync.Mutex   //fine-grain lock for KVSender
+	stateLock sync.RWMutex //lock to protect the bucketStatus map
 
 	stats *IndexerStats
 
@@ -168,7 +172,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		bucketCreateClientChMap:      make(map[string]MsgChannel),
 	}
 
-	logging.Infof("Indexer::NewIndexer Status INIT")
+	logging.Infof("Indexer::NewIndexer Status Bootstrap")
 	snapshotNotifych := make(chan IndexSnapshot, 100)
 
 	var res Message
@@ -231,10 +235,36 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
+	idx.setIndexerState(common.INDEXER_BOOTSTRAP)
+	idx.stats.indexerState.Set(int64(common.INDEXER_BOOTSTRAP))
+	msgUpdateIndexInstMap := idx.newIndexInstMsg(nil)
+
+	if err := idx.sendUpdatedIndexMapToWorker(msgUpdateIndexInstMap, nil, idx.statsMgrCmdCh, "statsMgr"); err != nil {
+		common.CrashOnError(err)
+	}
+
+	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_BOOTSTRAP}
+	<-idx.scanCoordCmdCh
+
+	// Setup http server
+	addr := net.JoinHostPort("", idx.config["httpPort"].String())
+	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
+	go func() {
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			logging.Fatalf("indexer:: Error Starting Http Server: %v", err)
+			common.CrashOnError(err)
+		}
+	}()
+
 	//read persisted indexer state
 	if err := idx.bootstrap(snapshotNotifych); err != nil {
 		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
 		return nil, &MsgError{err: Error{cause: err}}
+	}
+
+	//set storage mode
+	if GetStorageMode() == NOT_SET {
+		SetStorageModeStr(idx.config["settings.storage_mode"].String())
 	}
 
 	if !idx.enableManager {
@@ -263,7 +293,15 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
-	logging.Infof("Indexer::NewIndexer Status ACTIVE")
+	if idx.getIndexerState() == common.INDEXER_BOOTSTRAP {
+		idx.setIndexerState(common.INDEXER_ACTIVE)
+		idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
+	}
+
+	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME}
+	<-idx.scanCoordCmdCh
+
+	logging.Infof("Indexer::NewIndexer Status %v", idx.getIndexerState())
 
 	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
@@ -271,15 +309,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, res
 	}
 
-	// Setup http server
-	addr := net.JoinHostPort("", idx.config["httpPort"].String())
-	logging.PeriodicProfile(logging.Debug, addr, "goroutine")
-	go func() {
-		if err := http.ListenAndServe(addr, nil); err != nil {
-			logging.Fatalf("indexer:: Error Starting Http Server: %v", err)
-			common.CrashOnError(err)
-		}
-	}()
+	go idx.monitorMemUsage()
 
 	//start the main indexer loop
 	idx.run()
@@ -623,10 +653,18 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		cfgUpdate := msg.(*MsgConfigUpdate)
 		newConfig := cfgUpdate.GetConfig()
-		if newConfig["settings.memory_quota"].Uint64() !=
-			idx.config["settings.memory_quota"].Uint64() {
-			idx.stats.needsRestart.Set(true)
+
+		if GetStorageMode() == NOT_SET {
+			SetStorageModeStr(newConfig["settings.storage_mode"].String())
 		}
+
+		if GetStorageMode() == FORESTDB {
+			if newConfig["settings.memory_quota"].Uint64() !=
+				idx.config["settings.memory_quota"].Uint64() {
+				idx.stats.needsRestart.Set(true)
+			}
+		}
+
 		if cv, ok := newConfig["memstatTick"]; ok {
 			common.Memstatch <- int64(cv.Int())
 		}
@@ -648,6 +686,12 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 	case INDEXER_INIT_PREP_RECOVERY:
 		idx.handleInitPrepRecovery(msg)
+
+	case INDEXER_PREPARE_UNPAUSE:
+		idx.handlePrepareUnpause(msg)
+
+	case INDEXER_UNPAUSE:
+		idx.handleUnpause(msg)
 
 	case INDEXER_PREPARE_DONE:
 		idx.handlePrepareDone(msg)
@@ -699,6 +743,12 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case STATS_RESET:
 		idx.handleResetStats()
 
+	case INDEXER_PAUSE:
+		idx.handleIndexerPause(msg)
+
+	case INDEXER_RESUME:
+		idx.handleIndexerResume(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -745,6 +795,23 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	logging.Infof("Indexer::handleCreateIndex %v", indexInst)
 
+	is := idx.getIndexerState()
+	if is != common.INDEXER_ACTIVE {
+
+		errStr := fmt.Sprintf("Indexer Cannot Process Create Index In %v State", is)
+		logging.Errorf("Indexer::handleCreateIndex %v", errStr)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_NOT_ACTIVE,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
+	}
+
 	if !ValidateBucket(idx.config["clusterAddr"].String(), indexInst.Defn.Bucket, []string{indexInst.Defn.BucketUUID}) {
 		logging.Errorf("Indexer::handleCreateIndex \n\t Bucket %v Not Found")
 
@@ -783,6 +850,42 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	//check if this is duplicate index instance
 	if ok := idx.checkDuplicateIndex(indexInst, clientCh); !ok {
 		return
+	}
+
+	//validate storage mode with using specified in CreateIndex
+	if GetStorageMode() == NOT_SET {
+		if SetStorageModeStr(string(indexInst.Defn.Using)) {
+			logging.Infof("Indexer: Storage Mode Set %v", GetStorageMode())
+		} else {
+			errStr := fmt.Sprintf("Invalid Using Clause In Create Index %v", indexInst.Defn.Using)
+			logging.Errorf(errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+
+			}
+			return
+		}
+	} else {
+		if sm, ok := smStrMap[strings.ToLower(string(indexInst.Defn.Using))]; !ok || sm != GetStorageMode() {
+
+			errStr := fmt.Sprintf("Cannot Create Index with Using %v. Indexer "+
+				"Storage Mode %v", indexInst.Defn.Using, GetStorageMode())
+
+			logging.Errorf(errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+
+			}
+			return
+		}
 	}
 
 	idx.stats.AddIndex(indexInst.InstId, indexInst.Defn.Bucket, indexInst.Defn.Name)
@@ -833,6 +936,23 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		if clientCh != nil {
 			clientCh <- &MsgSuccess{}
 		}
+	}
+
+	is := idx.getIndexerState()
+	if is != common.INDEXER_ACTIVE {
+
+		errStr := fmt.Sprintf("Indexer Cannot Process Build Index In %v State", is)
+		logging.Errorf("Indexer::handleBuildIndex %v", errStr)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_NOT_ACTIVE,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
 	}
 
 	bucketIndexList := idx.groupIndexListByBucket(instIdList)
@@ -1012,6 +1132,22 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		return
 	}
 
+	is := idx.getIndexerState()
+	if is == common.INDEXER_PREPARE_UNPAUSE {
+		logging.Errorf("Indexer::handleDropIndex Cannot Process DropIndex "+
+			"In %v state", is)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_NOT_ACTIVE,
+					severity: FATAL,
+					cause:    ErrIndexerNotActive,
+					category: INDEXER}}
+
+		}
+		return
+	}
+
 	idx.stats.RemoveIndex(indexInst.InstId)
 	//if the index state is Created/Ready/Deleted, only data cleanup is
 	//required. No stream updates are required.
@@ -1138,6 +1274,23 @@ func (idx *indexer) handleInitPrepRecovery(msg Message) {
 	<-idx.tkCmdCh
 }
 
+func (idx *indexer) handlePrepareUnpause(msg Message) {
+
+	logging.Infof("Indexer::handlePrepareUnpause %v", idx.getIndexerState())
+
+	idx.tkCmdCh <- msg
+	<-idx.tkCmdCh
+
+}
+
+func (idx *indexer) handleUnpause(msg Message) {
+
+	logging.Infof("Indexer::handleUnpause %v", idx.getIndexerState())
+
+	idx.doUnpause()
+
+}
+
 func (idx *indexer) handlePrepareDone(msg Message) {
 
 	bucket := msg.(*MsgRecovery).GetBucket()
@@ -1221,6 +1374,13 @@ func (idx *indexer) handleKVStreamRepair(msg Message) {
 	bucket := msg.(*MsgKVStreamRepair).GetBucket()
 	streamId := msg.(*MsgKVStreamRepair).GetStreamId()
 	restartTs := msg.(*MsgKVStreamRepair).GetRestartTs()
+
+	is := idx.getIndexerState()
+	if is == common.INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Indexer::handleKVStreamRepair Skipped Repair "+
+			"In %v state", is)
+		return
+	}
 
 	//repair is not required for inactive bucket streams
 	if idx.getStreamBucketState(streamId, bucket) == STREAM_INACTIVE {
@@ -1368,6 +1528,13 @@ func (idx *indexer) handleBucketNotFound(msg Message) {
 
 	logging.Infof("Indexer::handleBucketNotFound StreamId %v Bucket %v",
 		streamId, bucket)
+
+	is := idx.getIndexerState()
+	if is == common.INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Indexer::handleBucketNotFound Skipped Bucket Cleanup "+
+			"In %v state", is)
+		return
+	}
 
 	//If stream is inactive, no cleanup is required.
 	//If stream is prepare_recovery, recovery will take care of
@@ -2744,6 +2911,44 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		common.CrashOnError(err)
 	}
 
+	if GetStorageMode() == MEMDB {
+		idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+			mType: CLUST_MGR_GET_LOCAL,
+			key:   INDEXER_STATE_KEY,
+		}
+
+		respMsg := <-idx.clustMgrAgentCmdCh
+		resp := respMsg.(*MsgClustMgrLocal)
+
+		val := resp.GetValue()
+		err := resp.GetError()
+
+		if err == nil {
+			if val == fmt.Sprintf("%s", common.INDEXER_PAUSED) {
+				idx.handleIndexerPause(&MsgIndexerState{mType: INDEXER_PAUSE})
+			}
+			logging.Infof("Indexer::bootstrap Recovered Indexer State %v", val)
+
+		} else if strings.Contains(err.Error(), "key not found") {
+			//if there is no IndexerState, nothing to do
+			logging.Infof("Indexer::bootstrap No Previous Indexer State Recovered")
+
+		} else {
+			logging.Fatalf("Indexer::bootstrap Error Fetching IndexerState From Local"+
+				"Meta Storage. Err %v", err)
+			common.CrashOnError(err)
+		}
+
+		//check if Paused state is required
+		memory_quota := idx.config["settings.memory_quota"].Uint64()
+		high_mem_mark := idx.config["high_mem_mark"].Float64()
+		mem_used := idx.memoryUsed()
+		if float64(mem_used) > (high_mem_mark * float64(memory_quota)) {
+			logging.Infof("Indexer::bootstrap MemoryUsed %v", mem_used)
+			idx.handleIndexerPause(&MsgIndexerState{mType: INDEXER_PAUSE})
+		}
+	}
+
 	// ready to process DDL
 	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_INDEXER_READY}
 	if err := idx.sendMsgToClusterMgr(msg); err != nil {
@@ -2859,6 +3064,20 @@ func (idx *indexer) initFromPersistedState() error {
 		idx.indexInstMap[inst.InstId] = inst
 		idx.indexPartnMap[inst.InstId] = partnInstMap
 
+		if GetStorageMode() == NOT_SET {
+			if SetStorageModeStr(string(inst.Defn.Using)) {
+				logging.Infof("Indexer: Storage Mode Set As %v", GetStorageMode())
+			} else {
+				logging.Fatalf("Invalid Using Clause in Index Defn Recovered %v", inst.Defn)
+				common.CrashOnError(ErrInvalidMetadata)
+			}
+		} else {
+			if sm, ok := smStrMap[strings.ToLower(string(inst.Defn.Using))]; !ok || sm != GetStorageMode() {
+				logging.Fatalf("Invalid Using Clause in Index Defn Recovered for "+
+					"Storage Mode %v %v", GetStorageMode(), inst.Defn)
+				common.CrashOnError(ErrInvalidMetadata)
+			}
+		}
 	}
 
 	return nil
@@ -3449,7 +3668,8 @@ func (idx *indexer) checkBucketExists(bucket string,
 func (idx *indexer) handleStats(cmd Message) {
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
-	idx.stats.memoryUsed.Set(idx.memoryUsed())
+	idx.stats.memoryUsed.Set(int64(idx.memoryUsed()))
+	idx.stats.memoryUsedStorage.Set(idx.memoryUsedStorage())
 	replych <- true
 }
 
@@ -3461,7 +3681,7 @@ func (idx *indexer) handleResetStats() {
 	}
 }
 
-func (idx *indexer) memoryUsed() int64 {
+func (idx *indexer) memoryUsedStorage() int64 {
 	return int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse()) + int64(nodetable.MemoryInUse())
 }
 
@@ -3477,9 +3697,9 @@ func NewSlice(id SliceId, indInst *common.IndexInst,
 
 	if indInst.Defn.Using == common.MemDB ||
 		indInst.Defn.Using == common.MemoryOptimized {
-		slice, err = NewMemDBSlice(path, id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
+		slice, err = NewMemDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
 	} else {
-		slice, err = NewForestDBSlice(path, id, indInst.Defn.DefnId, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
+		slice, err = NewForestDBSlice(path, id, indInst.Defn, indInst.InstId, indInst.Defn.IsPrimary, conf, stats.indexes[indInst.InstId])
 	}
 
 	return
@@ -3638,8 +3858,8 @@ func (idx *indexer) updateSliceWithConfig(config common.Config) {
 
 func (idx *indexer) getStreamBucketState(streamId common.StreamId, bucket string) StreamStatus {
 
-	idx.stateLock.Lock()
-	defer idx.stateLock.Unlock()
+	idx.stateLock.RLock()
+	defer idx.stateLock.RUnlock()
 	return idx.streamBucketStatus[streamId][bucket]
 
 }
@@ -3649,5 +3869,252 @@ func (idx *indexer) setStreamBucketState(streamId common.StreamId, bucket string
 	idx.stateLock.Lock()
 	defer idx.stateLock.Unlock()
 	idx.streamBucketStatus[streamId][bucket] = status
+
+}
+
+func (idx *indexer) getIndexerState() common.IndexerState {
+	idx.stateLock.RLock()
+	defer idx.stateLock.RUnlock()
+	return idx.state
+}
+
+func (idx *indexer) setIndexerState(s common.IndexerState) {
+	idx.stateLock.Lock()
+	defer idx.stateLock.Unlock()
+	idx.state = s
+}
+
+//monitor memory usage, if more than specified quota
+//generate message to pause Indexer
+func (idx *indexer) monitorMemUsage() {
+
+	logging.Infof("Indexer::monitorMemUsage started...")
+
+	var canResume bool
+	if idx.getIndexerState() == common.INDEXER_PAUSED {
+		canResume = true
+	}
+
+	ticker := time.NewTicker(time.Second * 5)
+	for _ = range ticker.C {
+
+		pause_if_oom := idx.config["pause_if_memory_full"].Bool()
+
+		if GetStorageMode() == MEMDB && pause_if_oom {
+
+			memory_quota := idx.config["settings.memory_quota"].Uint64()
+			high_mem_mark := idx.config["high_mem_mark"].Float64()
+			low_mem_mark := idx.config["low_mem_mark"].Float64()
+			min_oom_mem := idx.config["min_oom_memory"].Uint64()
+
+			if idx.needsGC() {
+				runtime.GC()
+			}
+
+			mem_used := idx.memoryUsed()
+			logging.Infof("Indexer::monitorMemUsage MemoryUsed %v", mem_used)
+
+			switch idx.state {
+
+			case common.INDEXER_ACTIVE:
+				if float64(mem_used) > (high_mem_mark*float64(memory_quota)) &&
+					!canResume && mem_used > min_oom_mem {
+					idx.internalRecvCh <- &MsgIndexerState{mType: INDEXER_PAUSE}
+					canResume = true
+				}
+
+			case common.INDEXER_PAUSED:
+				if float64(mem_used) < (low_mem_mark*float64(memory_quota)) && canResume {
+					idx.internalRecvCh <- &MsgIndexerState{mType: INDEXER_RESUME}
+					canResume = false
+				}
+			}
+		}
+	}
+
+}
+
+func (idx *indexer) handleIndexerPause(msg Message) {
+
+	logging.Infof("Indexer::handleIndexerPause")
+
+	if idx.state != common.INDEXER_ACTIVE {
+		logging.Infof("Indexer::handleIndexerPause Ignoring request to "+
+			"pause indexer in %v state", idx.state)
+		return
+	}
+
+	//Send message to index manager to update the internal state
+	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_SET_LOCAL,
+		key:   INDEXER_STATE_KEY,
+		value: fmt.Sprintf("%s", common.INDEXER_PAUSED),
+	}
+
+	respMsg := <-idx.clustMgrAgentCmdCh
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	errMsg := resp.GetError()
+	if errMsg != nil {
+		logging.Fatalf("Indexer::handleIndexerPause Unable to set IndexerState In Local"+
+			"Meta Storage. Err %v", errMsg)
+		common.CrashOnError(errMsg)
+	}
+
+	idx.setIndexerState(common.INDEXER_PAUSED)
+	idx.stats.indexerState.Set(int64(common.INDEXER_PAUSED))
+	logging.Infof("Indexer::handleIndexerPause Indexer State Changed to "+
+		"%v", idx.state)
+
+	//Notify Scan Coordinator
+	idx.scanCoordCmdCh <- msg
+	<-idx.scanCoordCmdCh
+
+	//Notify Timekeeper
+	idx.tkCmdCh <- msg
+	<-idx.tkCmdCh
+
+	//Notify Mutation Manager
+	idx.mutMgrCmdCh <- msg
+	<-idx.mutMgrCmdCh
+
+}
+
+func (idx *indexer) handleIndexerResume(msg Message) {
+
+	logging.Infof("Indexer::handleIndexerResume")
+
+	idx.setIndexerState(common.INDEXER_PREPARE_UNPAUSE)
+	go idx.doPrepareUnpause()
+
+}
+
+func (idx *indexer) doPrepareUnpause() {
+
+	ticker := time.NewTicker(time.Second * 1)
+
+	for _ = range ticker.C {
+
+		//check if indexer can be resumed i.e.
+		//no recovery, no pending stream request
+		if idx.checkAnyStreamRequestPending() ||
+			idx.checkRecoveryInProgress() {
+			logging.Infof("Indexer::doPrepareUnpause Dropping Request to Unpause Indexer. " +
+				"Next Try In 1 Second... ")
+			continue
+		}
+		idx.internalRecvCh <- &MsgIndexerState{mType: INDEXER_PREPARE_UNPAUSE}
+		return
+	}
+}
+
+func (idx *indexer) doUnpause() {
+
+	idx.setIndexerState(common.INDEXER_ACTIVE)
+	idx.stats.indexerState.Set(int64(common.INDEXER_ACTIVE))
+
+	msg := &MsgIndexerState{mType: INDEXER_RESUME}
+
+	//Notify Scan Coordinator
+	idx.scanCoordCmdCh <- msg
+	<-idx.scanCoordCmdCh
+
+	//Notify Mutation Manager
+	idx.mutMgrCmdCh <- msg
+	<-idx.mutMgrCmdCh
+
+	//Notify Timekeeper
+	idx.tkCmdCh <- msg
+	<-idx.tkCmdCh
+
+	//Notify Index Manager
+	//TODO Need to make sure the DDLs don't start getting
+	//processed before stream requests
+	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_SET_LOCAL,
+		key:   INDEXER_STATE_KEY,
+		value: fmt.Sprintf("%s", common.INDEXER_ACTIVE),
+	}
+
+	respMsg := <-idx.clustMgrAgentCmdCh
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	errMsg := resp.GetError()
+	if errMsg != nil {
+		logging.Fatalf("Indexer::handleIndexerResume Unable to set IndexerState In Local"+
+			"Meta Storage. Err %v", errMsg)
+		common.CrashOnError(errMsg)
+	}
+
+}
+
+func (idx *indexer) checkAnyStreamRequestPending() bool {
+
+	idx.stateLock.RLock()
+	defer idx.stateLock.RUnlock()
+
+	for s, bs := range idx.streamBucketStatus {
+
+		for b, _ := range bs {
+			if idx.checkStreamRequestPending(s, b) {
+				logging.Debugf("Indexer::checkStreamRequestPending %v %v", s, b)
+				return true
+			}
+		}
+	}
+
+	return false
+
+}
+
+func (idx *indexer) checkRecoveryInProgress() bool {
+
+	idx.stateLock.RLock()
+	defer idx.stateLock.RUnlock()
+
+	for s, bs := range idx.streamBucketStatus {
+
+		for b, status := range bs {
+			if status == STREAM_PREPARE_RECOVERY ||
+				status == STREAM_RECOVERY {
+				logging.Debugf("Indexer::checkRecoveryInProgress %v %v", s, b)
+				return true
+			}
+		}
+	}
+
+	return false
+
+}
+
+//memoryUsed returns the memory usage reported by
+//golang runtime + memory allocated by cgo
+//components(e.g. fdb buffercache)
+func (idx *indexer) memoryUsed() uint64 {
+
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
+	return mem_used
+
+}
+
+func (idx *indexer) needsGC() bool {
+
+	memQuota := idx.config["settings.memory_quota"].Uint64()
+	memUsed := idx.memoryUsed()
+
+	if memUsed >= memQuota {
+		return true
+	}
+
+	forceGcFrac := idx.config["force_gc_mem_frac"].Float64()
+	memQuotaFree := memQuota - memUsed
+
+	if float64(memQuotaFree) < forceGcFrac*float64(memQuota) {
+		return true
+	}
+
+	return false
 
 }

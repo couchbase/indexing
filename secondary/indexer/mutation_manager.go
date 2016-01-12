@@ -51,6 +51,8 @@ type mutationMgr struct {
 
 	flusherWaitGroup sync.WaitGroup
 
+	indexerState common.IndexerState
+
 	lock  sync.Mutex //lock to protect this structure
 	flock sync.Mutex //fine-grain lock for streamFlusherStopChMap
 
@@ -286,6 +288,12 @@ func (m *mutationMgr) handleSupervisorCommands(cmd Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		m.handleConfigUpdate(cmd)
 
+	case INDEXER_PAUSE:
+		m.handleIndexerPause(cmd)
+
+	case INDEXER_RESUME:
+		m.handleIndexerResume(cmd)
+
 	default:
 		logging.Fatalf("MutationMgr::handleSupervisorCommands Received Unknown Command %v", cmd)
 		common.CrashOnError(errors.New("Unknown Command On Supervisor Channel"))
@@ -369,7 +377,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 
 	reader, errMsg := CreateMutationStreamReader(streamId, bucketQueueMap, bucketFilter,
 		cmdCh, m.mutMgrRecvCh, DEFAULT_NUM_STREAM_READER_WORKERS, m.stats.Get(),
-		m.config)
+		m.config, m.indexerState)
 
 	if reader == nil {
 		//send the error back on supv channel
@@ -1071,4 +1079,40 @@ func (m *mutationMgr) calcQueueLenFromMemQuota() uint64 {
 		return maxVbLen
 	}
 
+}
+
+func (m *mutationMgr) handleIndexerPause(cmd Message) {
+
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	m.indexerState = common.INDEXER_PAUSED
+
+	for streamId, _ := range m.streamReaderMap {
+
+		respMsg := m.sendMsgToStreamReader(streamId, cmd)
+
+		if respMsg.GetMsgType() == MSG_SUCCESS {
+			logging.Errorf("MutationMgr::handleIndexerPause Stream "+
+				"%v Paused", streamId)
+		} else {
+			err := respMsg.(*MsgError).GetError()
+			logging.Errorf("MutationMgr::handleIndexerPause Fatal Error "+
+				"Pausing Stream %v %v", streamId, err)
+			common.CrashOnError(err.cause)
+		}
+
+	}
+	m.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (m *mutationMgr) handleIndexerResume(cmd Message) {
+
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	m.indexerState = common.INDEXER_ACTIVE
+
+	m.supvCmdch <- &MsgSuccess{}
 }

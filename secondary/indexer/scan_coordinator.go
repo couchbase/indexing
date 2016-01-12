@@ -192,6 +192,8 @@ type scanCoordinator struct {
 	config     common.ConfigHolder
 
 	stats IndexerStatsHolder
+
+	indexerState common.IndexerState
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -319,6 +321,15 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		s.handleConfigUpdate(cmd)
 
+	case INDEXER_PAUSE:
+		s.handleIndexerPause(cmd)
+
+	case INDEXER_RESUME:
+		s.handleIndexerResume(cmd)
+
+	case INDEXER_BOOTSTRAP:
+		s.handleIndexerBootstrap(cmd)
+
 	default:
 		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
 		s.supvCmdch <- &MsgError{
@@ -339,6 +350,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	cfg := s.config.Load()
 	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
+	getseqsRetries := cfg["settings.scan_getseqnos_retries"].Int()
 
 	if timeout != 0 {
 		r.ExpiredTime = time.Now().Add(timeout)
@@ -346,6 +358,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	}
 
 	r.CancelCh = cancelCh
+
+	isBootstrapMode := s.isBootstrapMode()
 
 	isNil := func(k []byte) bool {
 		if len(k) == 0 || (!r.isPrimary && string(k) == "[]") {
@@ -440,7 +454,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			cluster := cfg["clusterAddr"].String()
 			r.Ts = &common.TsVbuuid{}
 			t0 := time.Now()
-			r.Ts.Seqnos, localErr = common.BucketSeqnos(cluster, "default", r.Bucket)
+			r.Ts.Seqnos, localErr = bucketSeqsWithRetry(getseqsRetries, r.LogPrefix, cluster, r.Bucket)
 			if localErr == nil {
 				r.Stats.Timings.dcpSeqs.Put(time.Since(t0))
 			}
@@ -480,6 +494,10 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.RequestId = req.GetRequestId()
 		r.ScanType = StatsReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
 		setIndexParams()
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
@@ -493,6 +511,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		vector := req.GetVector()
 		r.ScanType = CountReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
+
 		setIndexParams()
 		setConsistency(cons, vector)
 		fillRanges(
@@ -507,13 +531,19 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		vector := req.GetVector()
 		r.ScanType = ScanReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		r.Limit = req.GetLimit()
+
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
+
 		setIndexParams()
 		setConsistency(cons, vector)
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
-		r.Limit = req.GetLimit()
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
@@ -521,6 +551,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		vector := req.GetVector()
 		r.ScanType = ScanAllReq
 		r.Limit = req.GetLimit()
+
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
+
 		setIndexParams()
 		setConsistency(cons, vector)
 	default:
@@ -685,6 +721,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	}
 
 	if s.tryRespondWithError(w, req, err) {
+		return
+	}
+
+	if err := s.isScanAllowed(*req.Consistency); err != nil {
+		s.tryRespondWithError(w, req, err)
 		return
 	}
 
@@ -873,6 +914,37 @@ func (s *scanCoordinator) handleConfigUpdate(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 }
 
+func (s *scanCoordinator) handleIndexerPause(cmd Message) {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.indexerState = common.INDEXER_PAUSED
+
+	s.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (s *scanCoordinator) handleIndexerResume(cmd Message) {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.indexerState = common.INDEXER_ACTIVE
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *scanCoordinator) handleIndexerBootstrap(cmd Message) {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.indexerState = common.INDEXER_BOOTSTRAP
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
 func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, error) {
 	var count uint64
 
@@ -952,4 +1024,53 @@ func readDeallocSnapshot(ch chan interface{}) {
 
 		DestroyIndexSnapshot(is)
 	}
+}
+
+func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.indexerState == common.INDEXER_PAUSED {
+
+		cfg := s.config.Load()
+		allow_scan_when_paused := cfg["allow_scan_when_paused"].Bool()
+
+		if c != common.AnyConsistency {
+			return errors.New(fmt.Sprintf("Indexer Cannot Service %v Scan In Paused State", c.String()))
+		} else if !allow_scan_when_paused {
+			return errors.New(fmt.Sprintf("Indexer Cannot Service Scan In Paused State"))
+		} else {
+			return nil
+		}
+	}
+
+	return nil
+
+}
+
+func (s *scanCoordinator) isBootstrapMode() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.indexerState == common.INDEXER_BOOTSTRAP {
+		return true
+	}
+
+	return false
+}
+
+func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string) (seqnos []uint64, err error) {
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Errorf("%s BucketSeqnos(%s): failed with error (%v)...Retrying (%d)",
+				logPrefix, bucket, err, r)
+		}
+		seqnos, err = common.BucketSeqnos(cluster, "default", bucket)
+		return err
+	}
+
+	rh := common.NewRetryHelper(retries, time.Second, 1, fn)
+	err = rh.Run()
+	return
 }

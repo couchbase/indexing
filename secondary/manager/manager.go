@@ -20,6 +20,7 @@ import (
 	"github.com/couchbase/indexing/secondary/manager/client"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -132,7 +133,13 @@ func NewIndexManagerInternal(
 	mgr.isClosed = false
 	mgr.addrProvider = addrProvider
 	totalQuota := config["settings.memory_quota"].Uint64()
-	mgr.quota = mgr.calcBufCacheFromMemQuota(totalQuota)
+	storageMode := config["settings.storage_mode"].String()
+
+	if strings.ToLower(storageMode) != "memdb" {
+		mgr.quota = mgr.calcBufCacheFromMemQuota(totalQuota)
+	} else {
+		mgr.quota = 1 * 1024 * 1024 //1 MB
+	}
 
 	// stream mgmt  - stream services will start if the indexer node becomes master
 	mgr.streamMgr = nil

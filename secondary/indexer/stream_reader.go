@@ -64,6 +64,9 @@ type mutationStreamReader struct {
 	killch chan bool // kill chan for the main loop
 
 	stats IndexerStatsHolder
+
+	indexerState common.IndexerState
+	stateLock    sync.Mutex
 }
 
 //CreateMutationStreamReader creates a new mutation stream and starts
@@ -71,10 +74,10 @@ type mutationStreamReader struct {
 //In case returned MutationStreamReader is nil, Message will have the error msg.
 func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQueueMap,
 	bucketFilter map[string]*common.TsVbuuid, supvCmdch MsgChannel, supvRespch MsgChannel,
-	numWorkers int, stats *IndexerStats, config common.Config) (MutationStreamReader, Message) {
+	numWorkers int, stats *IndexerStats, config common.Config, is common.IndexerState) (MutationStreamReader, Message) {
 
 	//start a new mutation stream
-	streamMutch := make(chan interface{}, config["stream_reader.mutationBuffer"].Uint64())
+	streamMutch := make(chan interface{}, getMutationBufferSize(config))
 	dpconf := config.SectionConfig(
 		"dataport.", true /*trim*/)
 	stream, err := dataport.NewServer(
@@ -109,11 +112,13 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		bucketPrevSnapMap: make(map[string]*common.TsVbuuid),
 		bucketSyncDue:     make(map[string]bool),
 		killch:            make(chan bool),
-		syncBatchInterval: config["stream_reader.syncBatchInterval"].Uint64(),
+		syncBatchInterval: getSyncBatchInterval(config),
 	}
 
 	r.stats.Set(stats)
 	r.initBucketFilter(bucketFilter)
+
+	r.indexerState = is
 
 	//start the main reader loop
 	go r.run()
@@ -123,7 +128,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 
 	//init worker buffers
 	for w := 0; w < r.numWorkers; w++ {
-		r.workerch[w] = make(MutationChannel, config["stream_reader.workerBuffer"].Uint64())
+		r.workerch[w] = make(MutationChannel, getWorkerBufferSize(config))
 	}
 
 	//start stream workers
@@ -137,6 +142,8 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 func (r *mutationStreamReader) Shutdown() {
 
 	logging.Infof("MutationStreamReader:Shutdown StreamReader %v", r.streamId)
+
+	close(r.killch)
 
 	//stop sync worker
 	close(r.syncStopCh)
@@ -211,7 +218,6 @@ func (r *mutationStreamReader) listenSupvCmd() {
 			r.supvCmdch <- msg
 		} else {
 			//supervisor channel closed. Shutdown stream reader.
-			close(r.killch)
 			r.Shutdown()
 			return
 
@@ -285,6 +291,14 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 			}
 
 			r.logReaderStat()
+
+			if r.getIndexerState() != common.INDEXER_ACTIVE {
+				if mutk != nil {
+					mutk.Free()
+					mutk = nil
+				}
+				continue
+			}
 
 			//allocate new mutation first time
 			if mutk == nil {
@@ -459,6 +473,11 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		//start all workers again
 		r.startWorkers()
 
+		return &MsgSuccess{}
+
+	case INDEXER_PAUSE:
+		logging.Infof("MutationStreamReader::handleIndexerPause")
+		r.setIndexerState(common.INDEXER_PAUSED)
 		return &MsgSuccess{}
 
 	default:
@@ -731,6 +750,48 @@ func (r *mutationStreamReader) logReaderStat() {
 	if (r.mutationCount%10000 == 0) || r.mutationCount == 1 {
 		logging.Infof("logReaderStat:: %v "+
 			"MutationCount %v", r.streamId, r.mutationCount)
+	}
+
+}
+
+func (r *mutationStreamReader) getIndexerState() common.IndexerState {
+	r.stateLock.Lock()
+	defer r.stateLock.Unlock()
+	return r.indexerState
+}
+
+func (r *mutationStreamReader) setIndexerState(is common.IndexerState) {
+	r.stateLock.Lock()
+	defer r.stateLock.Unlock()
+	r.indexerState = is
+}
+
+func getSyncBatchInterval(config common.Config) uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return config["stream_reader.memdb.syncBatchInterval"].Uint64()
+	} else {
+		return config["stream_reader.fdb.syncBatchInterval"].Uint64()
+	}
+
+}
+
+func getMutationBufferSize(config common.Config) uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return config["stream_reader.memdb.mutationBuffer"].Uint64()
+	} else {
+		return config["stream_reader.fdb.mutationBuffer"].Uint64()
+	}
+
+}
+
+func getWorkerBufferSize(config common.Config) uint64 {
+
+	if GetStorageMode() == MEMDB {
+		return config["stream_reader.memdb.workerBuffer"].Uint64()
+	} else {
+		return config["stream_reader.fdb.workerBuffer"].Uint64()
 	}
 
 }

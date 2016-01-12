@@ -18,6 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"io/ioutil"
 	"net/http"
+	"runtime"
 	"runtime/debug"
 	"time"
 )
@@ -63,6 +64,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	http.HandleFunc("/settings", s.handleSettingsReq)
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
 	http.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
+	http.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
 	go func() {
 		for {
 			err := metakv.RunObserveChildren("/", s.metaKVCallback, s.cancelCh)
@@ -256,6 +258,16 @@ func (s *settingsManager) handleFreeMemoryReq(w http.ResponseWriter, r *http.Req
 
 	logging.Infof("Received force free memory request. Executing FreeOSMemory...")
 	debug.FreeOSMemory()
+	s.writeOk(w)
+}
+
+func (s *settingsManager) handleForceGCReq(w http.ResponseWriter, r *http.Request) {
+	if !s.validateAuth(w, r) {
+		return
+	}
+
+	logging.Infof("Received force GC request. Executing GC...")
+	runtime.GC()
 	s.writeOk(w)
 }
 

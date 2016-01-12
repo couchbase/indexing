@@ -40,19 +40,36 @@ func N1QLTransform(
 	docval.SetAttachment("meta", meta)
 	for _, cExpr := range cExprs {
 		expr := cExpr.(qexpr.Expression)
-		key, err := expr.Evaluate(docval, context)
-		if err != nil {
-			return nil, err
+		scalar, vector, err := expr.EvaluateForIndex(docval, context)
+		isArray, _ := expr.IsArrayIndexKey()
+		if isArray == false {
+			key := scalar
+			if err != nil {
+				return nil, err
 
-		} else if key.Type() == qvalue.MISSING && skip {
-			return nil, nil
+			} else if key.Type() == qvalue.MISSING && skip {
+				return nil, nil
 
-		} else if key.Type() == qvalue.MISSING {
-			arrValue = append(arrValue, missing)
-			continue
+			} else if key.Type() == qvalue.MISSING {
+				arrValue = append(arrValue, missing)
+				continue
+			}
+			skip = false
+			arrValue = append(arrValue, key)
+		} else {
+			if err != nil {
+				return nil, err
+			} else if vector == nil && skip { // MISSING
+				return nil, nil
+			}
+			skip = false
+
+			array := make([]interface{}, 0, len(vector))
+			for _, item := range vector {
+				array = append(array, item.Actual())
+			}
+			arrValue = append(arrValue, qvalue.NewValue([]qvalue.Value(vector)))
 		}
-		skip = false
-		arrValue = append(arrValue, key)
 	}
 
 	if len(cExprs) == 1 && len(arrValue) == 1 && docid == nil {

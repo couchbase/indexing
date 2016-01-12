@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	ErrSecKeyNil     = errors.New("Secondary key array is empty")
-	ErrSecKeyTooLong = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", MAX_SEC_KEY_LEN))
-	ErrDocIdTooLong  = errors.New(fmt.Sprintf("DocID is too long (>%d)", MAX_DOCID_LEN))
+	ErrSecKeyNil          = errors.New("Secondary key array is empty")
+	ErrSecKeyTooLong      = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", MAX_SEC_KEY_LEN))
+	ErrArraySecKeyTooLong = errors.New(fmt.Sprintf("Secondary array key is too long (> %d)", maxArrayKeyLength))
+	ErrDocIdTooLong       = errors.New(fmt.Sprintf("DocID is too long (>%d)", MAX_DOCID_LEN))
 )
 
 // Special index keys
@@ -23,17 +24,26 @@ var (
 )
 
 var (
-	jsonEncoder *collatejson.Codec
-	encBufPool  *common.BytesBufPool
+	jsonEncoder     *collatejson.Codec
+	encBufPool      *common.BytesBufPool
+	arrayEncBufPool *common.BytesBufPool
 )
 
 const (
 	maxIndexEntrySize = MAX_SEC_KEY_BUFFER_LEN + MAX_DOCID_LEN + 2
 )
 
+var (
+	maxArrayLength          = common.SystemConfig["indexer.settings.max_array_length"].Int()
+	maxArrayKeyLength       = common.SystemConfig["indexer.settings.max_array_seckey_size"].Int()
+	maxArrayKeyBufferLength = maxArrayKeyLength * 3
+	maxArrayIndexEntrySize  = maxArrayKeyBufferLength + MAX_DOCID_LEN + 2
+)
+
 func init() {
 	jsonEncoder = collatejson.NewCodec(16)
 	encBufPool = common.NewByteBufferPool(maxIndexEntrySize)
+	arrayEncBufPool = common.NewByteBufferPool(maxArrayIndexEntrySize)
 }
 
 // Generic index entry abstraction (primary or secondary)
@@ -110,6 +120,35 @@ func NewSecondaryIndexEntry(key []byte, docid []byte) (*secondaryIndexEntry, err
 
 	poolBuf := encBufPool.Get()
 	defer encBufPool.Put(poolBuf)
+	if buf, err = jsonEncoder.Encode(key, (*poolBuf)[:0]); err != nil {
+		return nil, err
+	}
+
+	buf = append(buf, docid...)
+	buf = buf[:len(buf)+2]
+	offset := len(buf) - 2
+	binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(docid)))
+
+	buf = append([]byte(nil), buf[:len(buf)]...)
+	e := secondaryIndexEntry(buf)
+	return &e, nil
+}
+
+// This is a different method for key size check and to use array Buffer pool
+func NewSecondaryIndexEntryForArray(key []byte, docid []byte) (*secondaryIndexEntry, error) {
+	var err error
+	var buf []byte
+
+	if isNilJsonKey(key) {
+		return nil, ErrSecKeyNil
+	}
+
+	if isArraySecKeyLarge(key) {
+		return nil, ErrArraySecKeyTooLong
+	}
+
+	poolBuf := arrayEncBufPool.Get()
+	defer arrayEncBufPool.Put(poolBuf)
 	if buf, err = jsonEncoder.Encode(key, (*poolBuf)[:0]); err != nil {
 		return nil, err
 	}
@@ -301,6 +340,10 @@ func isNilJsonKey(k []byte) bool {
 
 func isSecKeyLarge(k []byte) bool {
 	return len(k) > MAX_SEC_KEY_LEN
+}
+
+func isArraySecKeyLarge(k []byte) bool {
+	return len(k) > maxArrayKeyLength
 }
 
 func isDocIdLarge(k []byte) bool {

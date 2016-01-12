@@ -17,6 +17,7 @@ import (
 	"github.com/couchbase/gometa/message"
 	"github.com/couchbase/gometa/protocol"
 	c "github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/logging"
 	"math"
 	"net"
@@ -217,6 +218,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %s already exist.", name)), false
 	}
 
+	var immutable bool = false
 	var deferred bool = false
 	var wait bool = true
 	var nodes []string = nil
@@ -279,6 +281,28 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 				return c.IndexDefnId(0), errors.New("Fails to create index.  Invalid index_type parameter value specified."), false
 			}
 		}
+
+		immutable2, ok := plan["immutable"].(bool)
+		if !ok {
+			immutable_str, ok := plan["immutable"].(string)
+			if ok {
+				var err error
+				immutable2, err = strconv.ParseBool(immutable_str)
+				if err != nil {
+					return c.IndexDefnId(0),
+						errors.New("Fails to create index.  Parameter Immutable must be a boolean value of (true or false)."),
+						false
+				}
+				immutable = immutable2
+
+			} else if _, ok := plan["immutable"]; ok {
+				return c.IndexDefnId(0),
+					errors.New("Fails to create index.  Parameter immutable must be a boolean value of (true or false)."),
+					false
+			}
+		} else {
+			immutable = immutable2
+		}
 	}
 
 	logging.Debugf("MetadataProvider:CreateIndex(): deferred_build %v sync %v nodes %v", deferred, wait, nodes)
@@ -298,6 +322,30 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 			false
 	}
 
+	// Array index related information
+	isArrayIndex := false
+	isArrayDistinct := true // Default is true as we do not yet support duplicate entries
+	arrayExprCount := 0
+	for _, exp := range secExprs {
+		isArray, isDistinct, err := queryutil.IsArrayExpression(exp)
+		if err != nil {
+			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Error in parsing expression %v : %v", exp, err)), false
+		}
+		if isArray == true {
+			isArrayIndex = isArray
+			isArrayDistinct = isDistinct
+			arrayExprCount++
+		}
+	}
+
+	if isArrayDistinct == false {
+		return c.IndexDefnId(0), errors.New("Only DISTINCT array expression is supported for now. Please use ALL DISTINCT for array expression. Support for duplicate array items is currently being added."), false
+	}
+
+	if arrayExprCount > 1 {
+		return c.IndexDefnId(0), errors.New("Multiple expressions with ALL are found. Only one array expression is supported per index."), false
+	}
+
 	idxDefn := &c.IndexDefn{
 		DefnId:          defnID,
 		Name:            name,
@@ -310,7 +358,9 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 		PartitionKey:    partnExpr,
 		WhereExpr:       whereExpr,
 		Deferred:        deferred,
-		Nodes:           nodes}
+		Nodes:           nodes,
+		Immutable:       immutable,
+		IsArrayIndex:    isArrayIndex}
 
 	content, err := c.MarshallIndexDefn(idxDefn)
 	if err != nil {
