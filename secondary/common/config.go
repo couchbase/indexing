@@ -683,6 +683,13 @@ var SystemConfig = Config{
 		uint64(1),
 		false, // mutable
 	},
+	"indexer.mutation_queue.resultChanSize": ConfigValue{
+		uint64(20),
+		"size of buffered result channel returned by " +
+			"mutation queue on dequeue",
+		uint64(20),
+		false, // mutable
+	},
 	"indexer.memstatTick": ConfigValue{
 		60 * 1000, // in milli-second
 		"in milli-second, periodically log runtime memory-stats.",
