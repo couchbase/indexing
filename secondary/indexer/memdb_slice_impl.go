@@ -152,9 +152,13 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.maxRollbacks = sysconf["settings.recovery.max_rollbacks"].Int()
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
+	if sliceBufSize < uint64(slice.numWriters) {
+		sliceBufSize = uint64(slice.numWriters)
+	}
+
 	slice.cmdCh = make([]chan interface{}, slice.numWriters)
 	for i := 0; i < slice.numWriters; i++ {
-		slice.cmdCh[i] = make(chan interface{}, sliceBufSize)
+		slice.cmdCh[i] = make(chan interface{}, sliceBufSize/uint64(slice.numWriters))
 	}
 	slice.workerDone = make([]chan bool, slice.numWriters)
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
@@ -218,7 +222,6 @@ func (mdb *memdbSlice) DecrRef() {
 		}
 	}
 }
-
 
 func (mdb *memdbSlice) Insert(key []byte, rawKey []byte, docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.numFlushQueued.Add(1)
