@@ -2942,7 +2942,7 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		//check if Paused state is required
 		memory_quota := idx.config["settings.memory_quota"].Uint64()
 		high_mem_mark := idx.config["high_mem_mark"].Float64()
-		mem_used := getIndexerMemUsage()
+		mem_used := idx.memoryUsed()
 		if float64(mem_used) > (high_mem_mark * float64(memory_quota)) {
 			logging.Infof("Indexer::bootstrap MemoryUsed %v", mem_used)
 			idx.handleIndexerPause(&MsgIndexerState{mType: INDEXER_PAUSE})
@@ -3668,7 +3668,8 @@ func (idx *indexer) checkBucketExists(bucket string,
 func (idx *indexer) handleStats(cmd Message) {
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
-	idx.stats.memoryUsed.Set(idx.memoryUsed())
+	idx.stats.memoryUsed.Set(int64(idx.memoryUsed()))
+	idx.stats.memoryUsedStorage.Set(idx.memoryUsedStorage())
 	replych <- true
 }
 
@@ -3680,7 +3681,7 @@ func (idx *indexer) handleResetStats() {
 	}
 }
 
-func (idx *indexer) memoryUsed() int64 {
+func (idx *indexer) memoryUsedStorage() int64 {
 	return int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse()) + int64(nodetable.MemoryInUse())
 }
 
@@ -3910,7 +3911,7 @@ func (idx *indexer) monitorMemUsage() {
 				runtime.GC()
 			}
 
-			mem_used := getIndexerMemUsage()
+			mem_used := idx.memoryUsed()
 			logging.Infof("Indexer::monitorMemUsage MemoryUsed %v", mem_used)
 
 			switch idx.state {
@@ -4086,11 +4087,14 @@ func (idx *indexer) checkRecoveryInProgress() bool {
 
 }
 
-func getIndexerMemUsage() uint64 {
+//memoryUsed returns the memory usage reported by
+//golang runtime + memory allocated by cgo
+//components(e.g. fdb buffercache)
+func (idx *indexer) memoryUsed() uint64 {
 
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	mem_used := ms.HeapInuse + ms.GCSys
+	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
 	return mem_used
 
 }
@@ -4098,7 +4102,7 @@ func getIndexerMemUsage() uint64 {
 func (idx *indexer) needsGC() bool {
 
 	memQuota := idx.config["settings.memory_quota"].Uint64()
-	memUsed := getIndexerMemUsage()
+	memUsed := idx.memoryUsed()
 
 	if memUsed >= memQuota {
 		return true
