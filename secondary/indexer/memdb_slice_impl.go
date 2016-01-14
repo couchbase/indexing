@@ -984,7 +984,7 @@ func (info *memdbSnapshotInfo) IsCommitted() bool {
 }
 
 func (info *memdbSnapshotInfo) String() string {
-	return fmt.Sprintf("SnapshotInfo: committed:%v", info.Committed)
+	return fmt.Sprintf("SnapshotInfo: count:%v committed:%v", info.MainSnap.Count(), info.Committed)
 }
 
 func (s *memdbSnapshot) Create() error {
