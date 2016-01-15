@@ -97,6 +97,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
 		}
 
+	case "cureprimary":
+		err = doCurePrimary(cmdOptions.Server, client)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error occured %v\n", err)
+		}
+
 	}
 	client.Close()
 }

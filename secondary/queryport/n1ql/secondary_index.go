@@ -1045,8 +1045,7 @@ func init() {
 	for _, file := range files {
 		fname := path.Join(dir, file.Name())
 		mtime := file.ModTime()
-		since := (time.Since(mtime).Seconds() * 1000) * 2 // twice the longest scan
-		fmt.Println(fname, since, scantm)
+		since := (time.Since(mtime).Seconds() * 1000) * 2 // twice the lng scan
 		if strings.Contains(fname, "scan-backfill") && int(since) > scantm {
 			fmsg := "GSI client: removing old file %v last-modified @ %v"
 			l.Infof(fmsg, fname, mtime)
