@@ -76,6 +76,7 @@ func DefaultConfig() Config {
 	var cfg Config
 	cfg.SetKeyComparator(defaultKeyCmp)
 	cfg.SetFileType(RawdbFile)
+	cfg.useMemoryMgmt = false
 	return cfg
 }
 
@@ -115,40 +116,44 @@ func defaultKeyCmp(this, that []byte) int {
 	return bytes.Compare(this, that)
 }
 
-//
-//compare item,sn
 type Writer struct {
 	rand   *rand.Rand
 	buf    *skiplist.ActionBuffer
-	iter   *skiplist.Iterator
 	gchead *skiplist.Node
 	gctail *skiplist.Node
 	next   *Writer
 	*MemDB
 }
 
-func (w *Writer) Put(x *Item) {
-	w.Put2(x)
+func (w *Writer) Put(bs []byte) {
+	w.Put2(bs)
 }
 
-func (w *Writer) Put2(x *Item) (n *skiplist.Node) {
+func (w *Writer) Put2(bs []byte) (n *skiplist.Node) {
 	var success bool
+	x := w.newItem(bs, w.useMemoryMgmt)
 	x.bornSn = w.getCurrSn()
 	n, success = w.store.Insert2(unsafe.Pointer(x), w.insCmp, w.existCmp, w.buf, w.rand.Float32)
 	if success {
 		atomic.AddInt64(&w.count, 1)
+	} else {
+		w.freeItem(x)
 	}
 	return
 }
 
 // Find first item, seek until dead=0, mark dead=sn
-func (w *Writer) Delete(x *Item) (success bool) {
-	_, success = w.Delete2(x)
+func (w *Writer) Delete(bs []byte) (success bool) {
+	_, success = w.Delete2(bs)
 	return
 }
 
-func (w *Writer) Delete2(x *Item) (n *skiplist.Node, success bool) {
-	n = w.GetNode(x)
+func (w *Writer) Delete2(bs []byte) (n *skiplist.Node, success bool) {
+	iter := w.store.NewIterator(w.iterCmp, w.buf)
+	defer iter.Close()
+
+	x := w.newItem(bs, false)
+	n = w.findLatestNode(iter, x)
 	if n != nil {
 		success = w.DeleteNode(n)
 	}
@@ -167,6 +172,9 @@ func (w *Writer) DeleteNode(x *skiplist.Node) (success bool) {
 	gotItem := (*Item)(x.Item())
 	if gotItem.bornSn == sn {
 		success = w.store.DeleteNode(x, w.insCmp, w.buf)
+
+		barrier := w.store.GetAccesBarrier()
+		barrier.FlushSession(unsafe.Pointer(x))
 		return
 	}
 
@@ -184,29 +192,24 @@ func (w *Writer) DeleteNode(x *skiplist.Node) (success bool) {
 	return
 }
 
-func (w *Writer) Get(x *Item) *Item {
-	n := w.GetNode(x)
-	if n != nil {
-		return (*Item)(n.Item())
-	}
-	return nil
-}
-
-func (w *Writer) GetNode(x *Item) *skiplist.Node {
+// FIXME: Fix the algorithm to use single skiplist.findPath to locate the latest
+// node. Already skiplist.Insert3 makes use of this technique to check if an entry
+// already exists to avoid duplicate insertion.
+func (w *Writer) findLatestNode(iter *skiplist.Iterator, x *Item) *skiplist.Node {
 	var curr *skiplist.Node
-	found := w.iter.Seek(unsafe.Pointer(x))
+	found := iter.Seek(unsafe.Pointer(x))
 	if !found {
 		return nil
 	}
 
 	// Seek until most recent item for key is found
-	curr = w.iter.GetNode()
+	curr = iter.GetNode()
 	for {
-		w.iter.Next()
-		if !w.iter.Valid() {
+		iter.Next()
+		if !iter.Valid() {
 			break
 		}
-		next := w.iter.GetNode()
+		next := iter.GetNode()
 		nxtItm := next.Item()
 		currItm := curr.Item()
 		if w.iterCmp(nxtItm, currItm) != 0 {
@@ -233,6 +236,10 @@ type Config struct {
 	ignoreItemSize bool
 
 	fileType FileType
+
+	useMemoryMgmt bool
+	mallocFun     skiplist.MallocFn
+	freeFun       skiplist.FreeFn
 }
 
 func (cfg *Config) SetKeyComparator(cmp KeyCompare) {
@@ -257,6 +264,14 @@ func (cfg *Config) IgnoreItemSize() {
 	cfg.ignoreItemSize = true
 }
 
+func (cfg *Config) UseMemoryMgmt(malloc skiplist.MallocFn, free skiplist.FreeFn) {
+	if runtime.GOARCH == "amd64" {
+		cfg.useMemoryMgmt = true
+		cfg.mallocFun = malloc
+		cfg.freeFun = free
+	}
+}
+
 type MemDB struct {
 	id           int
 	store        *skiplist.Skiplist
@@ -268,15 +283,18 @@ type MemDB struct {
 	leastUnrefSn uint32
 	count        int64
 
-	wlist  *Writer
-	gcchan chan *skiplist.Node
+	wlist    *Writer
+	gcchan   chan *skiplist.Node
+	freechan chan *skiplist.Node
+
+	shutdownWg1 sync.WaitGroup // GC workers
+	shutdownWg2 sync.WaitGroup // Free workers
 
 	Config
 }
 
 func NewWithConfig(cfg Config) *MemDB {
 	m := &MemDB{
-		store:       skiplist.New(),
 		snapshots:   skiplist.New(),
 		gcsnapshots: skiplist.New(),
 		currSn:      1,
@@ -285,13 +303,35 @@ func NewWithConfig(cfg Config) *MemDB {
 		id:          int(atomic.AddInt64(&dbInstancesCount, 1)),
 	}
 
+	m.freechan = make(chan *skiplist.Node, gcchanBufSize)
+	m.store = skiplist.NewWithConfig(m.newStoreConfig())
 	m.initSizeFuns()
+
 	buf := dbInstances.MakeBuf()
 	defer dbInstances.FreeBuf(buf)
 	dbInstances.Insert(unsafe.Pointer(m), CompareMemDB, buf)
 
 	return m
 
+}
+
+func (m *MemDB) newStoreConfig() skiplist.Config {
+	slCfg := skiplist.DefaultConfig()
+	if m.useMemoryMgmt {
+		slCfg.UseMemoryMgmt = true
+		slCfg.Malloc = m.mallocFun
+		slCfg.Free = m.freeFun
+		slCfg.BarrierDestructor = m.newBSDestructor()
+
+	}
+	return slCfg
+}
+
+func (m *MemDB) newBSDestructor() skiplist.BarrierSessionDestructor {
+	return func(ref unsafe.Pointer) {
+		freelist := (*skiplist.Node)(ref)
+		m.freechan <- freelist
+	}
 }
 
 func (m *MemDB) initSizeFuns() {
@@ -312,9 +352,41 @@ func (m *MemDB) MemoryInUse() int64 {
 
 func (m *MemDB) Close() {
 	close(m.gcchan)
+
 	buf := dbInstances.MakeBuf()
 	defer dbInstances.FreeBuf(buf)
 	dbInstances.Delete(unsafe.Pointer(m), CompareMemDB, buf)
+
+	if m.useMemoryMgmt {
+		buf := m.snapshots.MakeBuf()
+		defer m.snapshots.FreeBuf(buf)
+
+		m.shutdownWg1.Wait()
+		close(m.freechan)
+		m.shutdownWg2.Wait()
+
+		// Manually free up all nodes
+		iter := m.store.NewIterator(m.iterCmp, buf)
+		defer iter.Close()
+		var lastNode *skiplist.Node
+
+		iter.SeekFirst()
+		if iter.Valid() {
+			lastNode = iter.GetNode()
+			iter.Next()
+		}
+
+		for lastNode != nil {
+			m.freeItem((*Item)(lastNode.Item()))
+			m.store.FreeNode(lastNode)
+			lastNode = nil
+
+			if iter.Valid() {
+				lastNode = iter.GetNode()
+				iter.Next()
+			}
+		}
+	}
 }
 
 func (m *MemDB) getCurrSn() uint32 {
@@ -342,14 +414,18 @@ func (m *MemDB) NewWriter() *Writer {
 	w := &Writer{
 		rand:  rand.New(rand.NewSource(int64(rand.Int()))),
 		buf:   buf,
-		iter:  m.store.NewIterator(m.iterCmp, buf),
 		next:  m.wlist,
 		MemDB: m,
 	}
 
 	m.wlist = w
 
+	m.shutdownWg1.Add(1)
 	go m.collectionWorker()
+	if m.useMemoryMgmt {
+		m.shutdownWg2.Add(1)
+		go m.freeWorker()
+	}
 
 	return w
 }
@@ -415,7 +491,7 @@ func (s *Snapshot) Close() {
 		s.db.gcsnapshots.Insert(unsafe.Pointer(s), CompareSnapshot, buf)
 		s.db.setLeastUnrefSn()
 		if atomic.CompareAndSwapInt32(&s.db.isGCRunning, 0, 1) {
-			go s.db.GC()
+			s.db.GC()
 		}
 	}
 }
@@ -486,7 +562,8 @@ func (it *Iterator) SeekFirst() {
 	it.skipUnwanted()
 }
 
-func (it *Iterator) Seek(itm *Item) {
+func (it *Iterator) Seek(bs []byte) {
+	itm := it.snap.db.newItem(bs, false)
 	it.iter.Seek(unsafe.Pointer(itm))
 	it.skipUnwanted()
 }
@@ -495,8 +572,8 @@ func (it *Iterator) Valid() bool {
 	return it.iter.Valid()
 }
 
-func (it *Iterator) Get() *Item {
-	return (*Item)(it.iter.Get())
+func (it *Iterator) Get() []byte {
+	return (*Item)(it.iter.Get()).Bytes()
 }
 
 func (it *Iterator) GetNode() *skiplist.Node {
@@ -511,6 +588,7 @@ func (it *Iterator) Next() {
 func (it *Iterator) Close() {
 	it.snap.Close()
 	it.snap.db.store.FreeBuf(it.buf)
+	it.iter.Close()
 }
 
 func (m *MemDB) NewIterator(snap *Snapshot) *Iterator {
@@ -537,7 +615,24 @@ func (m *MemDB) collectionWorker() {
 		for n := gclist; n != nil; n = n.GClink {
 			m.store.DeleteNode(n, m.insCmp, buf)
 		}
+
+		barrier := m.store.GetAccesBarrier()
+		barrier.FlushSession(unsafe.Pointer(gclist))
 	}
+
+	m.shutdownWg1.Done()
+}
+
+func (m *MemDB) freeWorker() {
+	for freelist := range m.freechan {
+		for n := freelist; n != nil; n = n.GClink {
+			itm := (*Item)(n.Item())
+			m.freeItem(itm)
+			m.store.FreeNode(n)
+		}
+	}
+
+	m.shutdownWg2.Done()
 }
 
 func (m *MemDB) collectDead(sn uint32) {
@@ -595,18 +690,26 @@ func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concu
 
 	iters = append(iters, m.NewIterator(snap))
 	iters[0].SeekFirst()
-	pivots := m.store.GetRangeSplitItems(shards)
-	for _, p := range pivots {
-		iter := m.NewIterator(snap)
-		iter.Seek((*Item)(p))
 
-		if iter.Valid() && (len(lastNodes) == 0 || iter.GetNode() != lastNodes[len(lastNodes)-1]) {
-			iters = append(iters, iter)
-			lastNodes = append(lastNodes, iter.GetNode())
-		} else {
-			iter.Close()
+	func() {
+		barrier := m.store.GetAccesBarrier()
+		token := barrier.Acquire()
+		defer barrier.Release(token)
+
+		pivots := m.store.GetRangeSplitItems(shards)
+		for _, p := range pivots {
+			itm := (*Item)(p)
+			iter := m.NewIterator(snap)
+			iter.Seek(itm.Bytes())
+
+			if iter.Valid() && (len(lastNodes) == 0 || iter.GetNode() != lastNodes[len(lastNodes)-1]) {
+				iters = append(iters, iter)
+				lastNodes = append(lastNodes, iter.GetNode())
+			} else {
+				iter.Close()
+			}
 		}
-	}
+	}()
 
 	lastNodes = append(lastNodes, nil)
 	errors := make([]error, len(iters))
@@ -623,7 +726,9 @@ func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concu
 					if itr.GetNode() == lastNodes[shard] {
 						break loop
 					}
-					if err := callb(itr.Get(), shard); err != nil {
+
+					itm := (*Item)(itr.GetNode().Item())
+					if err := callb(itm, shard); err != nil {
 						errors[shard] = err
 						return
 					}
@@ -670,7 +775,7 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 	}()
 
 	for shard := 0; shard < shards; shard++ {
-		w := newFileWriter(m.fileType)
+		w := m.newFileWriter(m.fileType)
 		file := fmt.Sprintf("shard-%d", shard)
 		datafile := path.Join(datadir, file)
 		if err := w.Open(datafile); err != nil {
@@ -715,7 +820,7 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 
 	var nodeCallb skiplist.NodeCallback
 	wchan := make(chan int)
-	b := skiplist.NewBuilder()
+	b := skiplist.NewBuilderWithConfig(m.newStoreConfig())
 	b.SetItemSizeFunc(ItemSize)
 	segments := make([]*skiplist.Segment, len(files))
 	readers := make([]FileReader, len(files))
@@ -738,7 +843,7 @@ func (m *MemDB) LoadFromDisk(dir string, concurr int, callb ItemCallback) (*Snap
 	for i, file := range files {
 		segments[i] = b.NewSegment()
 		segments[i].SetNodeCallback(nodeCallb)
-		r := newFileReader(m.fileType)
+		r := m.newFileReader(m.fileType)
 		datafile := path.Join(datadir, file)
 		if err := r.Open(datafile); err != nil {
 			return nil, err

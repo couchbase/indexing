@@ -237,6 +237,17 @@ var node32 struct {
 	buf [33]NodeRef
 }
 
-func allocNode(l int) unsafe.Pointer {
-	return unsafe.Pointer(reflect.New(nodeTypes[l]).Pointer())
+func allocNode(itm unsafe.Pointer, level int, malloc MallocFn) *Node {
+	var block unsafe.Pointer
+	if malloc == nil {
+		block = unsafe.Pointer(reflect.New(nodeTypes[level]).Pointer())
+	} else {
+		block = malloc(int(nodeTypes[level].Size()))
+	}
+
+	n := (*Node)(block)
+	n.level = uint16(level)
+	n.itm = itm
+	n.GClink = nil
+	return n
 }

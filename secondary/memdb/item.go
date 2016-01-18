@@ -15,21 +15,35 @@ type Item struct {
 	dataLen uint32
 }
 
-func NewItem(data []byte) *Item {
-	itm := newItem(len(data))
+func (m *MemDB) newItem(data []byte, useMM bool) (itm *Item) {
+	l := len(data)
+	itm = m.allocItem(l, useMM)
 	copy(itm.Bytes(), data)
 	return itm
 }
 
-func newItem(l int) *Item {
-	blockSize := itemHeaderSize + uintptr(l)
-	block := make([]byte, blockSize)
-	itm := (*Item)(unsafe.Pointer(&block[0]))
-	itm.dataLen = uint32(l)
-	return itm
+func (m *MemDB) freeItem(itm *Item) {
+	if m.useMemoryMgmt {
+		m.freeFun(unsafe.Pointer(itm))
+	}
 }
 
-func (itm *Item) Encode(buf []byte, w io.Writer) error {
+func (m *MemDB) allocItem(l int, useMM bool) (itm *Item) {
+	blockSize := itemHeaderSize + uintptr(l)
+	if useMM {
+		itm = (*Item)(m.mallocFun(int(blockSize)))
+		itm.deadSn = 0
+		itm.bornSn = 0
+	} else {
+		block := make([]byte, blockSize)
+		itm = (*Item)(unsafe.Pointer(&block[0]))
+	}
+
+	itm.dataLen = uint32(l)
+	return
+}
+
+func (m *MemDB) EncodeItem(itm *Item, buf []byte, w io.Writer) error {
 	l := 2
 	if len(buf) < l {
 		return ErrNotEnoughSpace
@@ -46,25 +60,25 @@ func (itm *Item) Encode(buf []byte, w io.Writer) error {
 	return nil
 }
 
-func (x *Item) Decode(buf []byte, r io.Reader) (*Item, error) {
+func (m *MemDB) DecodeItem(buf []byte, r io.Reader) (*Item, error) {
 	if _, err := io.ReadFull(r, buf[0:2]); err != nil {
 		return nil, err
 	}
 
 	l := binary.BigEndian.Uint16(buf[0:2])
 	if l > 0 {
-		itm := newItem(int(l))
+		itm := m.allocItem(int(l), m.useMemoryMgmt)
 		data := itm.Bytes()
 		_, err := io.ReadFull(r, data)
 		return itm, err
 	}
 
-	return x, nil
+	return nil, nil
 }
 
 func (itm *Item) Bytes() (bs []byte) {
 	l := itm.dataLen
-	dataOffset := uintptr(unsafe.Pointer(itm)) + unsafe.Sizeof(Item{})
+	dataOffset := uintptr(unsafe.Pointer(itm)) + itemHeaderSize
 
 	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&bs))
 	hdr.Data = dataOffset

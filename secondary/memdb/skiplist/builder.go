@@ -21,7 +21,8 @@ func (s *Segment) SetNodeCallback(fn NodeCallback) {
 
 func (s *Segment) Add(itm unsafe.Pointer) {
 	itemLevel := s.builder.store.NewLevel(s.rand.Float32)
-	x := newNode(itm, itemLevel)
+	x := s.builder.store.newNode(itm, itemLevel)
+	atomic.AddInt64(&s.builder.store.stats.nodeAllocs, 1)
 	atomic.AddInt64(&s.builder.store.stats.levelNodesCount[itemLevel], 1)
 	atomic.AddInt64(&s.builder.store.usedBytes, int64(s.builder.store.Size(x)))
 
@@ -45,7 +46,7 @@ type Builder struct {
 }
 
 func (b *Builder) SetItemSizeFunc(fn ItemSizeFn) {
-	b.store.itemSize = fn
+	b.store.ItemSize = fn
 }
 
 func (b *Builder) NewSegment() *Segment {
@@ -87,5 +88,9 @@ func (b *Builder) Assemble(segments ...*Segment) *Skiplist {
 }
 
 func NewBuilder() *Builder {
-	return &Builder{store: New()}
+	return NewBuilderWithConfig(DefaultConfig())
+}
+
+func NewBuilderWithConfig(cfg Config) *Builder {
+	return &Builder{store: NewWithConfig(cfg)}
 }
