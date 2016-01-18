@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"strings"
 	"time"
 )
 
@@ -57,34 +58,58 @@ func (cd *compactionDaemon) ResetConfig(c common.Config) {
 }
 
 func (cd *compactionDaemon) needsCompaction(is IndexStorageStats, config common.Config) bool {
-	logging.Infof("CompactionDaemon: Checking fragmentation, %s", is.String())
 
-	interval := config["interval"].String()
-	isCompactionInterval := true
-	if interval != "00:00,00:00" {
-		var start_hr, start_min, end_hr, end_min int
-		n, err := fmt.Sscanf(interval, "%d:%d,%d:%d", &start_hr, &start_min, &end_hr, &end_min)
-		start_min += start_hr * 60
-		end_min += end_hr * 60
+	mode := strings.ToLower(config["compaction_mode"].String())
+	logging.Infof("CompactionDaemon: Checking fragmentation: %s, mode : %s", is.String(), mode)
 
-		if n == 4 && err == nil {
-			hr, min, _ := time.Now().Clock()
-			min += hr * 60
-
-			if min < start_min || min > end_min {
-				isCompactionInterval = false
+	if mode == "full" {
+		// if full compaction, then
+		// 1) check min_size
+		// 2) check min_frag
+		if uint64(is.Stats.DiskSize) > config["min_size"].Uint64() {
+			if is.GetFragmentation() >= float64(config["min_frag"].Int()) {
+				return true
 			}
 		}
-	}
+	} else {
+		// if circular compaction, then
+		// 1) check compaction interval
+		// 2) check the week of day
+		interval := config["interval"].String()
+		isCompactionInterval := true
+		if interval != "00:00,00:00" {
+			var start_hr, start_min, end_hr, end_min int
+			n, err := fmt.Sscanf(interval, "%d:%d,%d:%d", &start_hr, &start_min, &end_hr, &end_min)
+			start_min += start_hr * 60
+			end_min += end_hr * 60
 
-	if !isCompactionInterval {
-		logging.Infof("CompactionDaemon: Compaction attempt skipped since compaction interval is configured for %v", interval)
-		return false
-	}
+			if n == 4 && err == nil {
+				hr, min, _ := time.Now().Clock()
+				min += hr * 60
 
-	if uint64(is.Stats.DiskSize) > config["min_size"].Uint64() {
-		if is.GetFragmentation() >= float64(config["min_frag"].Int()) {
-			return true
+				if min < start_min || min > end_min {
+					isCompactionInterval = false
+				}
+			}
+		}
+
+		if !isCompactionInterval {
+			logging.Infof("CompactionDaemon: Compaction attempt skipped since compaction interval is configured for %v", interval)
+			return false
+		}
+
+		hasDaysOfWeek := false
+		days := config["days_of_week"].Strings()
+		today := strings.ToLower(time.Now().Weekday().String())
+		for _, day := range days {
+			if strings.ToLower(strings.TrimSpace(day)) == today {
+				return true
+			}
+			hasDaysOfWeek = true
+		}
+
+		if hasDaysOfWeek {
+			logging.Infof("CompactionDaemon: Compaction attempt skipped since compaction day is configured for %v", days)
 		}
 	}
 

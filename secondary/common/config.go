@@ -786,6 +786,24 @@ var SystemConfig = Config{
 		uint64(1024 * 1024 * 500),
 		false, // mutable
 	},
+	"indexer.settings.compaction.compaction_mode": ConfigValue{
+		"circular",
+		"compaction mode (circular, full)",
+		"circular",
+		false, // mutable
+	},
+	"indexer.settings.compaction.days_of_week": ConfigValue{
+		"",
+		"Days of the week to run full compaction (Sunday, Monday, ...)",
+		"",
+		false, // mutable
+	},
+	"indexer.settings.compaction.abort_exceed_interval": ConfigValue{
+		false,
+		"Abort full compaction if exceeding compaction interval",
+		false,
+		false, // mutable
+	},
 	"indexer.settings.persisted_snapshot.interval": ConfigValue{
 		uint64(5000), // keep in sync with index_settings_manager.erl
 		"Persisted snapshotting interval in milliseconds",

@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -70,8 +71,17 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	config.SetMaxWriterLockProb(uint8(prob))
 	walSize := sysconf["settings.wal_size"].Uint64()
 	config.SetWalThreshold(walSize)
+	kept_headers := sysconf["settings.recovery.max_rollbacks"].Int()
+	config.SetNumKeepingHeaders(uint8(kept_headers))
 	logging.Verbosef("NewForestDBSlice(): max writer lock prob %d", prob)
 	logging.Verbosef("NewForestDBSlice(): wal size %d", walSize)
+	logging.Verbosef("NewForestDBSlice(): num keeping headers %d", kept_headers)
+
+	mode := strings.ToLower(sysconf["settings.compaction.compaction_mode"].String())
+	if mode == "full" {
+		config.SetBlockReuseThreshold(uint8(0))
+		logging.Verbosef("NewForestDBSlice(): full compaction mode. Set Reuse Threshold to 0")
+	}
 
 	kvconfig := forestdb.DefaultKVStoreConfig()
 
@@ -1198,6 +1208,12 @@ func (fdb *fdbSlice) Compact() error {
 	fdb.setIsCompacting(true)
 	defer fdb.setIsCompacting(false)
 
+	if !fdb.canRunCompaction() {
+		logging.Infof("ForestDBSlice::Skip Compaction outside of compaction interval."+
+			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
+		return nil
+	}
+
 	//get oldest snapshot upto which compaction can be done
 	infos, err := fdb.getSnapshotsMeta()
 	if err != nil {
@@ -1248,6 +1264,10 @@ snaploop:
 			"Slice Id %v, IndexInstId %v, IndexDefnId %v", compactSeqNum, fdb.id,
 			fdb.idxInstId, fdb.idxDefnId)
 	}
+
+	donech := make(chan bool)
+	defer close(donech)
+	go fdb.cancelCompactionIfExpire(donech)
 
 	newpath := newFdbFile(fdb.path, true)
 	// Remove any existing files leftover due to a crash during last compaction attempt
@@ -1322,6 +1342,22 @@ func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {
 	defer fdb.confLock.Unlock()
 
 	fdb.sysconf = cfg
+
+	// update circular compaction setting in fdb
+	nmode := strings.ToLower(cfg["settings.compaction.compaction_mode"].String())
+	kept_headers := uint8(cfg["settings.recovery.max_rollbacks"].Int())
+	fconfig := forestdb.DefaultConfig()
+	reuse_threshold := uint8(fconfig.BlockReuseThreshold())
+
+	if nmode == "full" {
+		reuse_threshold = uint8(0)
+	}
+
+	if err := fdb.dbfile.SetBlockReuseParams(reuse_threshold, kept_headers); err != nil {
+		logging.Errorf("ForestDBSlice::UpdateConfig Error Changing Circular Compaction Params. Slice Id %v, "+
+			"IndexInstId %v, IndexDefnId %v ReuseThreshold %v KeepHeaders %v. Error %v",
+			fdb.id, fdb.idxInstId, fdb.idxDefnId, reuse_threshold, kept_headers, err)
+	}
 }
 
 func (fdb *fdbSlice) String() string {
@@ -1468,6 +1504,79 @@ func (fdb *fdbSlice) setIsCompacting(isCompacting bool) {
 	fdb.isCompacting = isCompacting
 }
 
+func (fdb *fdbSlice) cancelCompactionIfExpire(donech chan bool) {
+
+	ticker := time.NewTicker(time.Minute * time.Duration(5))
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-donech:
+			return
+		case <-ticker.C:
+			if !fdb.canRunCompaction() {
+				fdb.lock.Lock()
+				defer fdb.lock.Unlock()
+
+				if fdb.isCompacting {
+					fdb.cancelCompact()
+				}
+
+				return
+			}
+		}
+	}
+}
+
+func (fdb *fdbSlice) canRunCompaction() bool {
+
+	fdb.confLock.Lock()
+	defer fdb.confLock.Unlock()
+
+	mode := strings.ToLower(fdb.sysconf["settings.compaction.compaction_mode"].String())
+	abort := fdb.sysconf["settings.compaction.abort_exceed_interval"].Bool()
+	days := fdb.sysconf["settings.compaction.days_of_week"].Strings()
+	interval := fdb.sysconf["settings.compaction.interval"].String()
+
+	// No need to stop running compaction if in full compaction mode
+	if mode == "full" {
+		return true
+	}
+
+	// No need to stop compaction if it is ok to exceed time interval
+	if !abort {
+		return true
+	}
+
+	// check if compaction exceed day and time
+	today := strings.ToLower(time.Now().Weekday().String())
+	found := false
+	for _, day := range days {
+		if strings.ToLower(strings.TrimSpace(day)) == today {
+			found = true
+		}
+	}
+	expire := !found
+
+	if !expire {
+		var start_hr, start_min, end_hr, end_min int
+		n, err := fmt.Sscanf(interval, "%d:%d,%d:%d", &start_hr, &start_min, &end_hr, &end_min)
+		start_min += start_hr * 60
+		end_min += end_hr * 60
+
+		if n == 4 && err == nil {
+			hr, min, _ := time.Now().Clock()
+			min += hr * 60
+
+			if min < start_min || min > end_min {
+				expire = true
+			}
+		}
+	}
+
+	return !expire
+}
+
 func (fdb *fdbSlice) cancelCompact() {
 
 	logging.Infof("ForestDBSlice::cancelCompact Cancel Compaction Slice Id %v, "+
@@ -1485,6 +1594,6 @@ func (fdb *fdbSlice) cancelCompact() {
 	}
 	err = tempFd.CancelCompact()
 
-	logging.Infof("ForestDBSlice::Close Cancel Compaction Returns %v "+
+	logging.Infof("ForestDBSlice::Cancel Compaction Returns err %v "+
 		"Slice Id %v, IndexInstId %v ", err, fdb.id, fdb.idxInstId)
 }

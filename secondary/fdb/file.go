@@ -218,3 +218,21 @@ func Destroy(filename string, config *Config) error {
 	}
 	return nil
 }
+
+//
+// This function will not hold advisory lock.  According to Chiyoung, this simply sets the configs for a
+// given file instance inside ForestDB, therefore:
+// 1) it use the same file handle for writer
+// 2) does not have to pause writer or compactor
+// for reference: https://issues.couchbase.com/browse/MB-17384
+//
+func (f *File) SetBlockReuseParams(reuseThreshold uint8, numKeepHeaders uint8) error {
+
+	Log.Debugf("fdb_set_block_reusing_params call f:%p dbfile:%v reuseThreshold:%v numKeepHeaders:%v", f, f.dbfile, reuseThreshold, numKeepHeaders)
+	errNo := C.fdb_set_block_reusing_params(f.dbfile, C.size_t(reuseThreshold), C.size_t(numKeepHeaders))
+	Log.Tracef("fdb_set_block_reusing_params retn f:%p errNo:%v", f, errNo)
+	if errNo != RESULT_SUCCESS {
+		return Error(errNo)
+	}
+	return nil
+}
