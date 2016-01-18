@@ -135,7 +135,8 @@ func NewIndexManagerInternal(
 	totalQuota := config["settings.memory_quota"].Uint64()
 	storageMode := config["settings.storage_mode"].String()
 
-	if strings.ToLower(storageMode) != "memdb" {
+	if strings.ToLower(storageMode) != "memdb" &&
+		strings.ToLower(storageMode) != "memory_optimized" {
 		mgr.quota = mgr.calcBufCacheFromMemQuota(totalQuota)
 	} else {
 		mgr.quota = 1 * 1024 * 1024 //1 MB
