@@ -167,12 +167,13 @@ type GsiAccessor interface {
 
 	// CountLookup of all entries in index.
 	CountLookup(
-		defnID uint64, requestId string,
+		defnID uint64, requestId string, values []common.SecondaryKey,
 		cons common.Consistency, vector *TsConsistency) (int64, error)
 
 	// CountRange of all entries in index.
 	CountRange(
 		defnID uint64, requestId string,
+		low, high common.SecondaryKey, inclusion Inclusion,
 		cons common.Consistency, vector *TsConsistency) (int64, error)
 }
 
@@ -313,7 +314,7 @@ func (c *GsiClient) CreateIndex(
 		"elapsed(%v) err(%v)"
 	logging.Infof(
 		fmsg, defnID, bucket, name, using, exprType, partnExpr, whereExpr,
-		secExprs, isPrimary, with, time.Since(begin), err)
+		secExprs, isPrimary, string(with), time.Since(begin), err)
 	return defnID, err
 }
 
