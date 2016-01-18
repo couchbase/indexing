@@ -39,8 +39,9 @@ func (s StorageMode) String() string {
 //common/index.go
 var smStrMap = map[string]StorageMode{
 	"memdb":            MEMDB,
-	"forestdb":         FORESTDB,
 	"memory_optimized": MEMDB,
+	"forestdb":         FORESTDB,
+	"gsi":              FORESTDB, //default mode is forestdb
 }
 
 //Global Storage Mode
