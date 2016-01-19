@@ -67,3 +67,5 @@ const INDEXER_ID_KEY = "IndexerId"
 const INDEXER_STATE_KEY = "IndexerState"
 
 const MAX_KVWARMUP_RETRIES = 120
+
+const MAX_METAKV_RETRIES = 100
