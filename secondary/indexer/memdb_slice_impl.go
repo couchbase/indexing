@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb"
+	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	"github.com/couchbase/indexing/secondary/platform"
@@ -186,8 +187,13 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 }
 
 func (slice *memdbSlice) initStores() {
-	slice.mainstore = memdb.New()
-	slice.mainstore.SetKeyComparator(byteItemCompare)
+	cfg := memdb.DefaultConfig()
+	if slice.sysconf["memdb.useMemMgmt"].Bool() {
+		cfg.UseMemoryMgmt(mm.Malloc, mm.Free)
+	}
+
+	cfg.SetKeyComparator(byteItemCompare)
+	slice.mainstore = memdb.NewWithConfig(cfg)
 	slice.main = make([]*memdb.Writer, slice.numWriters)
 	for i := 0; i < slice.numWriters; i++ {
 		slice.main[i] = slice.mainstore.NewWriter()

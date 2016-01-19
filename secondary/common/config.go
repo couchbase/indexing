@@ -679,6 +679,12 @@ var SystemConfig = Config{
 		uint64(1),
 		false, // mutable
 	},
+	"indexer.memdb.useMemMgmt": ConfigValue{
+		false,
+		"Use jemalloc based manual memory management",
+		false,
+		false, // mutable
+	},
 
 	//end of memdb specific config
 
