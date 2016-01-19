@@ -58,8 +58,9 @@ func main() {
 	logging.SetLogLevel(logging.Level(*logLevel))
 	forestdb.Log = &logging.SystemLogger
 
-	// Setup Breakpad to catch forestDB fatal errors.
-	forestdb.InitBreakpadForFDB(*diagDir)
+	// Setup Breakpad - to catch forestDB fatal errors.
+	indexer.BreakpadInitialize(*diagDir)
+	forestdb.SetFatalErrorCallback(indexer.BreakpadGetWriteMinidumpAsUintptr())
 
 	// setup cbauth
 	if *auth != "" {
