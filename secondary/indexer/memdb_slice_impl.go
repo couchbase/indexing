@@ -300,8 +300,7 @@ func (mdb *memdbSlice) insertPrimaryIndex(entry []byte, docid []byte, workerId i
 	logging.Tracef("MemDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", mdb.id, mdb.idxInstId, docid)
 
 	t0 := time.Now()
-	itm := memdb.NewItem(entry)
-	mdb.main[workerId].Put(itm)
+	mdb.main[workerId].Put(entry)
 	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 	platform.AddInt64(&mdb.insert_bytes, int64(len(entry)))
 	mdb.isDirty = true
@@ -330,8 +329,7 @@ func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) 
 		// 3. Delete old entry from main index if back index had
 		// a previous mainnode pointer entry
 		t0 := time.Now()
-		itm := memdb.NewItem(entry)
-		newNode := mdb.main[workerId].Put2(itm)
+		newNode := mdb.main[workerId].Put2(entry)
 		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 		platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
 
@@ -390,8 +388,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(entry []byte, rawKey []byte, docid []
 		for _, entryItem := range entryBytesToBeAdded {
 			if entryItem != nil { // nil item indicates it should not be added
 				t0 := time.Now()
-				itm := memdb.NewItem(entryItem)
-				newNode := mdb.main[workerId].Put2(itm)
+				newNode := mdb.main[workerId].Put2(entryItem)
 				if newNode != nil { // Ignore if duplicate key
 					list.Add(newNode)
 					mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
@@ -434,7 +431,7 @@ func (mdb *memdbSlice) deletePrimaryIndex(docid []byte, workerId int) (nmut int)
 
 	// Delete from main index
 	t0 := time.Now()
-	itm := memdb.NewItem(entry.Bytes())
+	itm := entry.Bytes()
 	mdb.main[workerId].Delete(itm)
 	mdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 	platform.AddInt64(&mdb.delete_bytes, int64(len(entry.Bytes())))
@@ -1160,8 +1157,7 @@ func (s *memdbSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
 	if low.Bytes() == nil {
 		it.SeekFirst()
 	} else {
-		itm := memdb.NewItem(low.Bytes())
-		it.Seek(itm)
+		it.Seek(low.Bytes())
 
 		// Discard equal keys if low inclusion is requested
 		if inclusion == Neither || inclusion == High {
@@ -1175,7 +1171,7 @@ func (s *memdbSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
 
 loop:
 	for it.Valid() {
-		itm := it.Get().Bytes()
+		itm := it.Get()
 		entry = s.newIndexEntry(itm)
 
 		// Iterator has reached past the high key, no need to scan further
@@ -1227,7 +1223,7 @@ func (s *memdbSnapshot) iterEqualKeys(k IndexKey, it *memdb.Iterator,
 
 	var entry IndexEntry
 	for ; it.Valid(); it.Next() {
-		itm := it.Get().Bytes()
+		itm := it.Get()
 		entry = s.newIndexEntry(itm)
 		if cmpFn(k, entry) == 0 {
 			if callback != nil {
