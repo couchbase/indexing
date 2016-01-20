@@ -9,6 +9,7 @@ import "time"
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/logging"
 import "github.com/couchbase/cbauth"
+import "github.com/couchbase/indexing/secondary/dcp"
 
 var options struct {
 	maxVbs   int
