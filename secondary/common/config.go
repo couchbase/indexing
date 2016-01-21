@@ -800,11 +800,11 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.max_cpu_percent": ConfigValue{
-		400,
+		0,
 		"Maximum percent of CPU that indexer can use. " +
 			"EG, 200% in 4-core (400%) machine would set indexer to " +
-			"use 2 cores",
-		400,
+			"use 2 cores. 0 means use all available cores.",
+		0,
 		false, // mutable
 	},
 	"indexer.settings.log_level": ConfigValue{
