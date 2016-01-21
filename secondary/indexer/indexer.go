@@ -178,7 +178,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	var res Message
 	idx.settingsMgr, idx.config, res = NewSettingsManager(idx.settingsMgrCmdCh, idx.wrkrRecvCh, config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer settingsMgr Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer settingsMgr Init Error %+v", res)
 		return nil, res
 	}
 
@@ -197,28 +197,28 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer Mutation Manager Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer Mutation Manager Init Error %+v", res)
 		return nil, res
 	}
 
 	//Start KV Sender
 	idx.kvSender, res = NewKVSender(idx.kvSenderCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer KVSender Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer KVSender Init Error %+v", res)
 		return nil, res
 	}
 
 	//Start Timekeeper
 	idx.tk, res = NewTimekeeper(idx.tkCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer Timekeeper Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer Timekeeper Init Error %+v", res)
 		return nil, res
 	}
 
 	//Start Scan Coordinator
 	idx.scanCoord, res = NewScanCoordinator(idx.scanCoordCmdCh, idx.wrkrRecvCh, idx.config, snapshotNotifych)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer Scan Coordinator Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer Scan Coordinator Init Error %+v", res)
 		return nil, res
 	}
 
@@ -227,14 +227,14 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	if idx.enableManager {
 		idx.clustMgrAgent, res = NewClustMgrAgent(idx.clustMgrAgentCmdCh, idx.adminRecvCh, idx.config)
 		if res.GetMsgType() != MSG_SUCCESS {
-			logging.Fatalf("Indexer::NewIndexer ClusterMgrAgent Init Error", res)
+			logging.Fatalf("Indexer::NewIndexer ClusterMgrAgent Init Error %+v", res)
 			return nil, res
 		}
 	}
 
 	idx.statsMgr, res = NewStatsManager(idx.statsMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer statsMgr Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer statsMgr Init Error %+v", res)
 		return nil, res
 	}
 
@@ -261,7 +261,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	//read persisted indexer state
 	if err := idx.bootstrap(snapshotNotifych); err != nil {
-		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata.")
+		logging.Fatalf("Indexer::Unable to Bootstrap Indexer from Persisted Metadata %v", err)
 		return nil, &MsgError{err: Error{cause: err}}
 	}
 
@@ -274,7 +274,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		//Start CbqBridge
 		idx.cbqBridge, res = NewCbqBridge(idx.cbqBridgeCmdCh, idx.adminRecvCh, idx.indexInstMap, idx.config)
 		if res.GetMsgType() != MSG_SUCCESS {
-			logging.Fatalf("Indexer::NewIndexer CbqBridge Init Error", res)
+			logging.Fatalf("Indexer::NewIndexer CbqBridge Init Error %+v", res)
 			return nil, res
 		}
 	}
@@ -292,7 +292,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	//Start Admin port listener
 	idx.adminMgr, res = NewAdminManager(idx.adminMgrCmdCh, idx.adminRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewIndexer Admin Manager Init Error", res)
+		logging.Fatalf("Indexer::NewIndexer Admin Manager Init Error %+v", res)
 		return nil, res
 	}
 
@@ -308,7 +308,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
 	if res.GetMsgType() != MSG_SUCCESS {
-		logging.Fatalf("Indexer::NewCompactionmanager Init Error", res)
+		logging.Fatalf("Indexer::NewCompactionmanager Init Error %+v", res)
 		return nil, res
 	}
 
