@@ -140,7 +140,11 @@ func main() {
 }
 
 func getProjectorAdminport(cluster, pooln string) string {
-	cinfo, err := c.NewClusterInfoCache(c.ClusterUrl(cluster), pooln)
+	url, err := c.ClusterAuthUrl(cluster)
+	if err != nil {
+		log.Fatal(err)
+	}
+	cinfo, err := c.NewClusterInfoCache(url, pooln)
 	if err != nil {
 		log.Fatal(err)
 	}
