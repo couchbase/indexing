@@ -13,9 +13,7 @@ package forestdb
 //#cgo CFLAGS: -O0
 //#include <stdlib.h>
 //#include <libforestdb/forestdb.h>
-//#include "callbacks.h"
 import "C"
-import "unsafe"
 
 // KVStore handle
 type KVStore struct {
@@ -154,9 +152,9 @@ func (k *KVStore) Delete(doc *Doc) error {
 
 // Setup KVStore logging to be shown
 func (k *KVStore) setupLogging() {
-	cname := C.CString(k.name)
-	defer C.free(unsafe.Pointer(cname))
-	C.init_fdb_logging(k.db, cname)
+	// cname := C.CString(k.name)
+	// defer C.free(unsafe.Pointer(cname))
+	// C.init_fdb_logging(k.db, cname)
 }
 
 // Shutdown destroys all the resources (e.g., buffer cache, in-memory WAL indexes, daemon compaction thread, etc.) and then shutdown the ForestDB engine
@@ -177,7 +175,7 @@ func BufferCacheUsed() uint64 {
 
 // Invoke breakpad on forestdb fatal errors
 func InitBreakpadForFDB(diagdir string) {
-	cdir := C.CString(diagdir)
-	defer C.free(unsafe.Pointer(cdir))
-	C.init_fdb_breakpad(cdir)
+	// cdir := C.CString(diagdir)
+	// defer C.free(unsafe.Pointer(cdir))
+	// C.init_fdb_breakpad(cdir)
 }
