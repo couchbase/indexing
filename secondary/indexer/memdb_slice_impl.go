@@ -34,6 +34,17 @@ import (
 	"unsafe"
 )
 
+const (
+	opUpdate = iota
+	opDelete
+)
+
+type indexMutation struct {
+	op    int
+	keys  [][]byte
+	docid []byte
+}
+
 func docIdFromEntryBytes(e []byte) []byte {
 	offset := len(e) - 2
 	l := int(binary.LittleEndian.Uint16(e[offset : offset+2]))
@@ -102,7 +113,7 @@ type memdbSlice struct {
 	isSoftDeleted bool
 	isSoftClosed  bool
 
-	cmdCh  []chan interface{}
+	cmdCh  []chan *indexMutation
 	stopCh []DoneChannel
 
 	workerDone []chan bool
@@ -157,9 +168,9 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		sliceBufSize = uint64(slice.numWriters)
 	}
 
-	slice.cmdCh = make([]chan interface{}, slice.numWriters)
+	slice.cmdCh = make([]chan *indexMutation, slice.numWriters)
 	for i := 0; i < slice.numWriters; i++ {
-		slice.cmdCh[i] = make(chan interface{}, sliceBufSize/uint64(slice.numWriters))
+		slice.cmdCh[i] = make(chan *indexMutation, sliceBufSize/uint64(slice.numWriters))
 	}
 	slice.workerDone = make([]chan bool, slice.numWriters)
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
@@ -230,56 +241,69 @@ func (mdb *memdbSlice) DecrRef() {
 }
 
 func (mdb *memdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) error {
-	key, err := GetIndexEntryBytes(rawKey, docid, mdb.idxDefn.IsPrimary, mdb.idxDefn.IsArrayIndex)
-	if err != nil {
-		return err
+	mut := new(indexMutation)
+
+	if mdb.idxDefn.IsArrayIndex {
+		newIndexEntries, err := SplitSecondaryArrayKey(rawKey, mdb.arrayExprPosition)
+		common.CrashOnError(err)
+		mut.keys = make([][]byte, len(newIndexEntries))
+
+		for i, item := range newIndexEntries {
+			b, err := json.Marshal(item)
+			common.CrashOnError(err)
+			if mut.keys[i], err = GetIndexEntryBytes(b, docid, false, true); err != nil {
+				return err
+			}
+		}
+	} else {
+		key, err := GetIndexEntryBytes(rawKey, docid, mdb.idxDefn.IsPrimary, mdb.idxDefn.IsArrayIndex)
+		if err != nil {
+			return err
+		}
+
+		mut.keys = [][]byte{key}
 	}
 
 	mdb.idxStats.numDocsFlushQueued.Add(1)
-	if !mdb.idxDefn.IsArrayIndex {
-		rawKey = nil
-	}
 
-	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexItem{key: key, rawKey: rawKey, docid: docid}
+	mut.op = opUpdate
+	mut.docid = docid
+	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
 	return mdb.fatalDbErr
 }
 
 func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.numDocsFlushQueued.Add(1)
-	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- docid
+	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexMutation{op: opDelete, docid: docid}
 	return mdb.fatalDbErr
 }
 
 func (mdb *memdbSlice) handleCommandsWorker(workerId int) {
 	var start time.Time
 	var elapsed time.Duration
-	var c interface{}
-	var icmd *indexItem
-	var dcmd []byte
+	var icmd *indexMutation
 
 loop:
 	for {
 		var nmut int
 		select {
-		case c = <-mdb.cmdCh[workerId]:
-			switch c.(type) {
-			case *indexItem:
-				icmd = c.(*indexItem)
+		case icmd = <-mdb.cmdCh[workerId]:
+			switch icmd.op {
+			case opUpdate:
 				start = time.Now()
-				nmut = mdb.insert((*icmd).key, (*icmd).rawKey, (*icmd).docid, workerId)
+				nmut = mdb.insert(icmd.keys, icmd.docid, workerId)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
-			case []byte:
-				dcmd = c.([]byte)
+			case opDelete:
 				start = time.Now()
-				nmut = mdb.delete(dcmd, workerId)
+				nmut = mdb.delete(icmd.docid, workerId)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
 			default:
 				logging.Errorf("MemDBSlice::handleCommandsWorker \n\tSliceId %v IndexInstId %v Received "+
-					"Unknown Command %v", mdb.id, mdb.idxInstId, c)
+					"Unknown Command %v", mdb.id, mdb.idxInstId, icmd)
 			}
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
@@ -296,15 +320,15 @@ loop:
 	}
 }
 
-func (mdb *memdbSlice) insert(entry []byte, rawKey []byte, docid []byte, workerId int) int {
+func (mdb *memdbSlice) insert(entries [][]byte, docid []byte, workerId int) int {
 	var nmut int
 
 	if mdb.isPrimary {
-		nmut = mdb.insertPrimaryIndex(entry, docid, workerId)
+		nmut = mdb.insertPrimaryIndex(entries[0], docid, workerId)
 	} else if !mdb.idxDefn.IsArrayIndex {
-		nmut = mdb.insertSecIndex(entry, docid, workerId)
+		nmut = mdb.insertSecIndex(entries[0], docid, workerId)
 	} else {
-		nmut = mdb.insertSecArrayIndex(entry, rawKey, docid, workerId)
+		nmut = mdb.insertSecArrayIndex(entries, docid, workerId)
 	}
 
 	mdb.logWriterStat()
@@ -363,25 +387,13 @@ func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) 
 	return 1
 }
 
-func (mdb *memdbSlice) insertSecArrayIndex(entry []byte, rawKey []byte, docid []byte, workerId int) int {
+func (mdb *memdbSlice) insertSecArrayIndex(newEntriesBytes [][]byte, docid []byte, workerId int) int {
 	var nmut int
 
-	if entry == nil {
+	if len(newEntriesBytes) == 0 {
 		// Delete existing entries from main and back
 		nmut = mdb.deleteSecArrayIndex(docid, workerId)
 	} else {
-		newIndexEntries, err := SplitSecondaryArrayKey(rawKey, mdb.arrayExprPosition)
-		common.CrashOnError(err)
-		newEntriesBytes := make([][]byte, len(newIndexEntries))
-		i := 0
-		for _, item := range newIndexEntries {
-			b, err := json.Marshal(item)
-			common.CrashOnError(err)
-			entryBytes, err := GetIndexEntryBytes(b, docid, mdb.idxDefn.IsPrimary, mdb.idxDefn.IsArrayIndex)
-			newEntriesBytes[i] = entryBytes
-			i++
-		}
-
 		// Get old back index entry
 		lookupentry := entryBytesFromDocId(docid)
 		ptr := (*skiplist.Node)(mdb.back[workerId].Get(lookupentry))
@@ -407,7 +419,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(entry []byte, rawKey []byte, docid []
 				if newNode != nil { // Ignore if duplicate key
 					list.Add(newNode)
 					mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-					platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
+					platform.AddInt64(&mdb.insert_bytes, int64(len(entryItem)))
 				}
 			}
 		}
