@@ -74,8 +74,7 @@ func NewPrimaryIndexEntry(docid []byte) (primaryIndexEntry, error) {
 		return nil, ErrDocIdTooLong
 	}
 
-	buf := append([]byte(nil), docid...)
-	e := primaryIndexEntry(buf)
+	e := primaryIndexEntry(docid)
 	return &e, nil
 }
 
