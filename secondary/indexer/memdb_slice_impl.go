@@ -43,6 +43,8 @@ type indexMutation struct {
 	op    int
 	keys  [][]byte
 	docid []byte
+
+	bufPtr *[]byte
 }
 
 func docIdFromEntryBytes(e []byte) []byte {
@@ -244,6 +246,13 @@ func (mdb *memdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) e
 	mut := new(indexMutation)
 
 	if mdb.idxDefn.IsArrayIndex {
+		if isArraySecKeyLarge(rawKey) {
+			return ErrSecKeyTooLong
+		}
+
+		mut.bufPtr = arrayEncBufPool.Get()
+		buf := (*mut.bufPtr)[:0]
+
 		newIndexEntries, err := SplitSecondaryArrayKey(rawKey, mdb.arrayExprPosition)
 		common.CrashOnError(err)
 		mut.keys = make([][]byte, len(newIndexEntries))
@@ -251,24 +260,37 @@ func (mdb *memdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) e
 		for i, item := range newIndexEntries {
 			b, err := json.Marshal(item)
 			common.CrashOnError(err)
-			if mut.keys[i], err = GetIndexEntryBytes(b, docid, false, true); err != nil {
+			if mut.keys[i], err = GetIndexEntryBytes2(b, docid, false, false, buf); err != nil {
+				arrayEncBufPool.Put(mut.bufPtr)
 				return err
 			}
+
+			l := len(mut.keys[i])
+			buf = buf[l:l]
 		}
 	} else {
-		key, err := GetIndexEntryBytes(rawKey, docid, mdb.idxDefn.IsPrimary, mdb.idxDefn.IsArrayIndex)
+		var buf []byte
+
+		if !mdb.isPrimary {
+			mut.bufPtr = encBufPool.Get()
+			buf = (*mut.bufPtr)[:0]
+		}
+
+		key, err := GetIndexEntryBytes2(rawKey, docid, mdb.isPrimary, false, buf)
 		if err != nil {
+			if mut.bufPtr != nil {
+				encBufPool.Put(mut.bufPtr)
+			}
 			return err
 		}
 
 		mut.keys = [][]byte{key}
 	}
 
-	mdb.idxStats.numDocsFlushQueued.Add(1)
-
 	mut.op = opUpdate
 	mut.docid = docid
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
+	mdb.idxStats.numDocsFlushQueued.Add(1)
 	return mdb.fatalDbErr
 }
 
@@ -291,7 +313,7 @@ loop:
 			switch icmd.op {
 			case opUpdate:
 				start = time.Now()
-				nmut = mdb.insert(icmd.keys, icmd.docid, workerId)
+				nmut = mdb.insert(icmd, workerId)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
@@ -320,15 +342,17 @@ loop:
 	}
 }
 
-func (mdb *memdbSlice) insert(entries [][]byte, docid []byte, workerId int) int {
+func (mdb *memdbSlice) insert(mut *indexMutation, workerId int) int {
 	var nmut int
 
 	if mdb.isPrimary {
-		nmut = mdb.insertPrimaryIndex(entries[0], docid, workerId)
+		nmut = mdb.insertPrimaryIndex(mut.keys[0], mut.docid, workerId)
 	} else if !mdb.idxDefn.IsArrayIndex {
-		nmut = mdb.insertSecIndex(entries[0], docid, workerId)
+		defer encBufPool.Put(mut.bufPtr)
+		nmut = mdb.insertSecIndex(mut.keys[0], mut.docid, workerId)
 	} else {
-		nmut = mdb.insertSecArrayIndex(entries, docid, workerId)
+		defer arrayEncBufPool.Put(mut.bufPtr)
+		nmut = mdb.insertSecArrayIndex(mut.keys, mut.docid, workerId)
 	}
 
 	mdb.logWriterStat()
