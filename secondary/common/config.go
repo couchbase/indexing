@@ -685,6 +685,12 @@ var SystemConfig = Config{
 		false,
 		false, // mutable
 	},
+	"indexer.useMutationSyncPool": ConfigValue{
+		false,
+		"Use sync pool for mutations",
+		false,
+		false, // mutable
+	},
 
 	//end of memdb specific config
 
