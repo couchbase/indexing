@@ -230,7 +230,7 @@ func (mdb *memdbSlice) DecrRef() {
 }
 
 func (mdb *memdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) error {
-	key, err := GetIndexEntryBytesFromKey(rawKey, docid, mdb.idxDefn.IsPrimary, mdb.idxDefn.IsArrayIndex)
+	key, err := GetIndexEntryBytes(rawKey, docid, mdb.idxDefn.IsPrimary, mdb.idxDefn.IsArrayIndex)
 	if err != nil {
 		return err
 	}
@@ -239,6 +239,7 @@ func (mdb *memdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) e
 	if !mdb.idxDefn.IsArrayIndex {
 		rawKey = nil
 	}
+
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexItem{key: key, rawKey: rawKey, docid: docid}
 	return mdb.fatalDbErr
 }
@@ -376,7 +377,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(entry []byte, rawKey []byte, docid []
 		for _, item := range newIndexEntries {
 			b, err := json.Marshal(item)
 			common.CrashOnError(err)
-			entryBytes, err := GetIndexEntryBytesFromKey(b, docid, mdb.idxDefn.IsPrimary, mdb.idxDefn.IsArrayIndex)
+			entryBytes, err := GetIndexEntryBytes(b, docid, mdb.idxDefn.IsPrimary, mdb.idxDefn.IsArrayIndex)
 			newEntriesBytes[i] = entryBytes
 			i++
 		}

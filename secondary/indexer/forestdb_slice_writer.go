@@ -260,7 +260,7 @@ func (fdb *fdbSlice) DecrRef() {
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) error {
-	key, err := GetIndexEntryBytesFromKey(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex)
+	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex)
 	if err != nil {
 		return err
 	}
@@ -566,9 +566,9 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	for _, item := range indexEntriesToBeDeleted {
 		if item != nil { // nil item indicates it should not be deleted
 			var keyToBeDeleted []byte
-			if keyToBeDeleted, err = GetIndexEntryBytesFromKey(item, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
+			if keyToBeDeleted, err = GetIndexEntryBytes(item, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
 				fdb.checkFatalDbError(err)
-				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytesFromKey for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
 				return
 			}
 			t0 := time.Now()
@@ -587,9 +587,9 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	for _, item := range indexEntriesToBeAdded {
 		if item != nil { // nil item indicates it should not be added
 			var keyToBeAdded []byte
-			if keyToBeAdded, err = GetIndexEntryBytesFromKey(item, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
+			if keyToBeAdded, err = GetIndexEntryBytes(item, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
 				fdb.checkFatalDbError(err)
-				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytesFromKey for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
 				return
 			}
 			t0 := time.Now()
@@ -774,9 +774,9 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error while marshalling entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
-		if keyToBeDeleted, err = GetIndexEntryBytesFromKey(b, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
+		if keyToBeDeleted, err = GetIndexEntryBytes(b, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
 			fdb.checkFatalDbError(err)
-			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytesFromKey for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
 		t0 := time.Now()

@@ -516,32 +516,3 @@ func (f *flusher) GetQueueHWT(q MutationQueue) Timestamp {
 	}
 	return ts
 }
-
-func GetIndexEntryBytesFromKey(key []byte, docid []byte, isPrimary bool, isarrayIndex bool) ([]byte, error) {
-	var entry IndexEntry
-	var err error
-
-	if isPrimary {
-		if entry, err = NewPrimaryIndexEntry(docid); err != nil {
-			return nil, err
-		}
-	} else if !isarrayIndex {
-		if entry, err = NewSecondaryIndexEntry(key, docid); err != nil {
-			if err == ErrSecKeyNil {
-				return nil, nil
-			}
-
-			return nil, err
-		}
-	} else {
-		if entry, err = NewSecondaryIndexEntryForArray(key, docid); err != nil {
-			if err == ErrSecKeyNil {
-				return nil, nil
-			}
-
-			return nil, err
-		}
-	}
-
-	return entry.Bytes(), err
-}
