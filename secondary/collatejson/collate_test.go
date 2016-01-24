@@ -12,6 +12,7 @@ import "reflect"
 import "sort"
 import "strings"
 import "testing"
+import n1ql "github.com/couchbase/query/value"
 
 var testcases = []struct {
 	text string
@@ -277,4 +278,23 @@ func readLines(filename string, t *testing.T) [][]byte {
 		lines = append(lines, line)
 	}
 	return lines
+}
+
+func TestN1QLEncode(t *testing.T) {
+	codec := NewCodec(16)
+	var object interface{}
+	bs := []byte(`["hello", "test", true, [1,2,3], 1, 23.3, null, {"key" : 100}]`)
+	json.Unmarshal(bs, &object)
+	val := n1ql.NewValue(object)
+
+	jsonBytes, err1 := codec.Encode(bs, make([]byte, 0, 10000))
+	n1qlBytes, err2 := codec.EncodeN1QLValue(val, make([]byte, 0, 10000))
+
+	if err1 != nil || err2 != nil {
+		t.Fatalf("Unexpected errors %v, %v", err1, err2)
+	}
+
+	if !bytes.Equal(jsonBytes, n1qlBytes) {
+		t.Errorf("Expected json and n1ql encoded values to be the same")
+	}
 }
