@@ -28,7 +28,7 @@ type StorageStatistics struct {
 type IndexWriter interface {
 
 	//Persist a key/value pair
-	Insert(secKey []byte, rawSecKey []byte, docid []byte, meta *MutationMeta) error
+	Insert(rawSecKey []byte, docid []byte, meta *MutationMeta) error
 
 	//Delete a key/value pair by docId
 	Delete(docid []byte, meta *MutationMeta) error

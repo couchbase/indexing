@@ -428,8 +428,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
-		key, err := GetIndexEntryBytesFromKey(mut.key, docid, idxInst.Defn.IsPrimary, idxInst.Defn.IsArrayIndex)
-		if err != nil {
+		if err := slice.Insert(mut.key, docid, meta); err != nil {
 			logging.Errorf("Flusher::processUpsert Error indexing Key: %s "+
 				"docid: %s in Slice: %v. Error: %v. Skipped.",
 				mut.key, docid, slice.Id(), err)
@@ -437,19 +436,6 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta)
 			if err2 := slice.Delete(docid, meta); err2 != nil {
 				logging.Errorf("Flusher::processUpsert Error removing entry due to error %v Key: %s "+
 					"docid: %s in Slice: %v. Error: %v", err, mut.key, docid, slice.Id(), err2)
-			}
-			return
-		}
-
-		if !idxInst.Defn.IsArrayIndex {
-			if err := slice.Insert(key, nil, docid, meta); err != nil {
-				logging.Errorf("Flusher::processUpsert Error Inserting Key: %s "+
-					"docid: %s in Slice: %v. Error: %v", mut.key, docid, slice.Id(), err)
-			}
-		} else {
-			if err := slice.Insert(key, mut.key, docid, meta); err != nil {
-				logging.Errorf("Flusher::processUpsert Error Inserting Key: %s "+
-					"docid: %s in Slice: %v. Error: %v", mut.key, docid, slice.Id(), err)
 			}
 		}
 	} else {

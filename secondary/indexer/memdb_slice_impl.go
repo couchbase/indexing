@@ -229,8 +229,16 @@ func (mdb *memdbSlice) DecrRef() {
 	}
 }
 
-func (mdb *memdbSlice) Insert(key []byte, rawKey []byte, docid []byte, meta *MutationMeta) error {
+func (mdb *memdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) error {
+	key, err := GetIndexEntryBytesFromKey(rawKey, docid, mdb.idxDefn.IsPrimary, mdb.idxDefn.IsArrayIndex)
+	if err != nil {
+		return err
+	}
+
 	mdb.idxStats.numDocsFlushQueued.Add(1)
+	if !mdb.idxDefn.IsArrayIndex {
+		rawKey = nil
+	}
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexItem{key: key, rawKey: rawKey, docid: docid}
 	return mdb.fatalDbErr
 }
