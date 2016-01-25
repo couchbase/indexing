@@ -298,3 +298,31 @@ func TestN1QLEncode(t *testing.T) {
 		t.Errorf("Expected json and n1ql encoded values to be the same")
 	}
 }
+
+func TestArrayExplodeJoin(t *testing.T) {
+	codec := NewCodec(16)
+	e1, e2 := n1ql.NewValue("string"), n1ql.NewValue([]interface{}{1, 2, 3})
+	arrayBS1, _ := codec.EncodeN1QLValue(n1ql.NewValue([]interface{}{e1, e2}), make([]byte, 0, 1000))
+
+	elemBS1, _ := codec.EncodeN1QLValue(e1, make([]byte, 0, 10000))
+	elemBS2, _ := codec.EncodeN1QLValue(e2, make([]byte, 0, 10000))
+
+	array, err1 := codec.ExplodeArray(arrayBS1, make([]byte, 0, 10000))
+	arrayBS2, err2 := codec.JoinArray(array, make([]byte, 0, 10000))
+
+	if err1 != nil || err2 != nil {
+		t.Fatalf("Unexpected error %v %v", err1, err2)
+	}
+
+	if !bytes.Equal(arrayBS1, arrayBS2) {
+		t.Errorf("Unexpected mismatch")
+	}
+
+	if !bytes.Equal(array[0], elemBS1) {
+		t.Errorf("Unexpected mismatch")
+	}
+
+	if !bytes.Equal(array[1], elemBS2) {
+		t.Errorf("Unexpected mismatch")
+	}
+}
