@@ -217,6 +217,12 @@ var SystemConfig = Config{
 		10000,
 		false, // mutable
 	},
+	"projector.dcp.numConnections": ConfigValue{
+		4,
+		"connect with N concurrent DCP connection with KV",
+		4,
+		false, // mutable
+	},
 	"projector.dcp.latencyTick": ConfigValue{
 		5 * 60 * 1000, // 5 minute
 		"in milliseconds, periodically log cumulative stats of dcp latency",

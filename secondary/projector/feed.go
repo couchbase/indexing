@@ -1262,9 +1262,10 @@ func (feed *Feed) openFeeder(
 	}
 	name := newDCPConnectionName(bucket.Name, feed.topic, uuid.Uint64())
 	dcpConfig := map[string]interface{}{
-		"genChanSize":  feed.config["dcp.genChanSize"].Int(),
-		"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
-		"latencyTick":  feed.config["dcp.latencyTick"].Int(),
+		"genChanSize":    feed.config["dcp.genChanSize"].Int(),
+		"dataChanSize":   feed.config["dcp.dataChanSize"].Int(),
+		"numConnections": feed.config["dcp.numConnections"].Int(),
+		"latencyTick":    feed.config["dcp.latencyTick"].Int(),
 	}
 	kvaddr, err := feed.getLocalKVAddrs(pooln, bucketn, opaque)
 	if err != nil {
@@ -1328,8 +1329,9 @@ func (feed *Feed) bucketDetails(
 
 	// failover-logs
 	dcpConfig := map[string]interface{}{
-		"genChanSize":  feed.config["dcp.genChanSize"].Int(),
-		"dataChanSize": feed.config["dcp.dataChanSize"].Int(),
+		"genChanSize":    feed.config["dcp.genChanSize"].Int(),
+		"dataChanSize":   feed.config["dcp.dataChanSize"].Int(),
+		"numConnections": feed.config["dcp.numConnections"].Int(),
 	}
 	flogs, err := bucket.GetFailoverLogs(opaque, vbnos, dcpConfig)
 	if err != nil {
@@ -1796,6 +1798,7 @@ func FeedConfigParams() []string {
 		// dcp configuration
 		"dcp.dataChanSize",
 		"dcp.genChanSize",
+		"dcp.numConnections",
 		"dcp.latencyTick",
 		// dataport
 		"dataport.remoteBlock",

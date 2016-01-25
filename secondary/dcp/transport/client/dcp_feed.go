@@ -32,7 +32,8 @@ var ErrorInvalidFeed = errors.New("dcp.invalidFeed")
 // DcpFeed represents an DCP feed. A feed contains a connection to a single
 // host and multiple vBuckets
 type DcpFeed struct {
-	conn      *Client               // connection to DCP producer
+	conn      *Client // connection to DCP producer
+	name      string
 	outch     chan<- *DcpEvent      // Exported channel for receiving DCP events
 	vbstreams map[uint16]*DcpStream // vb->stream mapping
 	// genserver
@@ -54,6 +55,7 @@ func NewDcpFeed(
 	genChanSize := config["genChanSize"].(int)
 	dataChanSize := config["dataChanSize"].(int)
 	feed := &DcpFeed{
+		name:      name,
 		outch:     outch,
 		vbstreams: make(map[uint16]*DcpStream),
 		reqch:     make(chan []interface{}, genChanSize),
@@ -70,6 +72,10 @@ func NewDcpFeed(
 	go feed.doReceive(rcvch, mc)
 	logging.Infof("%v ##%x feed started ...", feed.logPrefix, opaque)
 	return feed, nil
+}
+
+func (feed *DcpFeed) Name() string {
+	return feed.name
 }
 
 // DcpOpen to connect with a DCP producer.

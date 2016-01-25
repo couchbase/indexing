@@ -76,8 +76,9 @@ func startFeed(cluster, name string) {
 
 	// get dcp feed for this bucket.
 	config := map[string]interface{}{
-		"genChanSize":  10000,
-		"dataChanSize": 10000,
+		"genChanSize":    10000,
+		"dataChanSize":   10000,
+		"numConnections": 4,
 	}
 	dcpFeed, err := bucket.StartDcpFeed(couchbase.NewDcpFeedName(name), uint32(0), 0xABCD, config)
 	if err != nil {
