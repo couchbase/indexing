@@ -41,10 +41,8 @@ const (
 
 type indexMutation struct {
 	op    int
-	keys  [][]byte
+	key   []byte
 	docid []byte
-
-	bufPtr *[]byte
 }
 
 func docIdFromEntryBytes(e []byte) []byte {
@@ -137,6 +135,9 @@ type memdbSlice struct {
 	// Array processing
 	arrayExprPosition int
 	isArrayDistinct   bool
+
+	encodeBuf [][]byte
+	arrayBuf  [][]byte
 }
 
 func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -170,9 +171,14 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 		sliceBufSize = uint64(slice.numWriters)
 	}
 
+	slice.encodeBuf = make([][]byte, slice.numWriters)
+	slice.arrayBuf = make([][]byte, slice.numWriters)
 	slice.cmdCh = make([]chan *indexMutation, slice.numWriters)
+
 	for i := 0; i < slice.numWriters; i++ {
 		slice.cmdCh[i] = make(chan *indexMutation, sliceBufSize/uint64(slice.numWriters))
+		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize)
+		slice.arrayBuf[i] = make([]byte, 0, maxArrayIndexEntrySize*maxArrayLength)
 	}
 	slice.workerDone = make([]chan bool, slice.numWriters)
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
@@ -242,53 +248,12 @@ func (mdb *memdbSlice) DecrRef() {
 	}
 }
 
-func (mdb *memdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) error {
-	mut := new(indexMutation)
-
-	if mdb.idxDefn.IsArrayIndex {
-		if isArraySecKeyLarge(rawKey) {
-			return ErrSecKeyTooLong
-		}
-
-		mut.bufPtr = arrayEncBufPool.Get()
-		buf := (*mut.bufPtr)[:0]
-
-		newIndexEntries, err := SplitSecondaryArrayKey(rawKey, mdb.arrayExprPosition)
-		common.CrashOnError(err)
-		mut.keys = make([][]byte, len(newIndexEntries))
-
-		for i, item := range newIndexEntries {
-			b, err := json.Marshal(item)
-			common.CrashOnError(err)
-			if mut.keys[i], err = GetIndexEntryBytes2(b, docid, false, false, buf); err != nil {
-				arrayEncBufPool.Put(mut.bufPtr)
-				return err
-			}
-
-			l := len(mut.keys[i])
-			buf = buf[l:l]
-		}
-	} else {
-		var buf []byte
-
-		if !mdb.isPrimary {
-			mut.bufPtr = encBufPool.Get()
-			buf = (*mut.bufPtr)[:0]
-		}
-
-		key, err := GetIndexEntryBytes2(rawKey, docid, mdb.isPrimary, false, buf)
-		if err != nil {
-			if mut.bufPtr != nil {
-				encBufPool.Put(mut.bufPtr)
-			}
-			return err
-		}
-
-		mut.keys = [][]byte{key}
+func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
+	mut := &indexMutation{
+		op:    opUpdate,
+		key:   key,
+		docid: docid,
 	}
-
-	mut.op = opUpdate
-	mut.docid = docid
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
 	mdb.idxStats.numDocsFlushQueued.Add(1)
 	return mdb.fatalDbErr
@@ -313,7 +278,7 @@ loop:
 			switch icmd.op {
 			case opUpdate:
 				start = time.Now()
-				nmut = mdb.insert(icmd, workerId)
+				nmut = mdb.insert(icmd.key, icmd.docid, workerId)
 				elapsed = time.Since(start)
 				mdb.totalFlushTime += elapsed
 
@@ -342,26 +307,30 @@ loop:
 	}
 }
 
-func (mdb *memdbSlice) insert(mut *indexMutation, workerId int) int {
+func (mdb *memdbSlice) insert(key []byte, docid []byte, workerId int) int {
 	var nmut int
 
 	if mdb.isPrimary {
-		nmut = mdb.insertPrimaryIndex(mut.keys[0], mut.docid, workerId)
-	} else if !mdb.idxDefn.IsArrayIndex {
-		defer encBufPool.Put(mut.bufPtr)
-		nmut = mdb.insertSecIndex(mut.keys[0], mut.docid, workerId)
+		nmut = mdb.insertPrimaryIndex(key, docid, workerId)
+	} else if len(key) == 0 {
+		nmut = mdb.delete(docid, workerId)
 	} else {
-		defer arrayEncBufPool.Put(mut.bufPtr)
-		nmut = mdb.insertSecArrayIndex(mut.keys, mut.docid, workerId)
+		if mdb.idxDefn.IsArrayIndex {
+			nmut = mdb.insertSecArrayIndex(key, docid, workerId)
+		} else {
+			nmut = mdb.insertSecIndex(key, docid, workerId)
+		}
 	}
 
 	mdb.logWriterStat()
 	return nmut
 }
 
-func (mdb *memdbSlice) insertPrimaryIndex(entry []byte, docid []byte, workerId int) int {
+func (mdb *memdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) int {
 	logging.Tracef("MemDBSlice::insert \n\tSliceId %v IndexInstId %v Set Key - %s", mdb.id, mdb.idxInstId, docid)
 
+	entry, err := NewPrimaryIndexEntry(docid)
+	common.CrashOnError(err)
 	t0 := time.Now()
 	mdb.main[workerId].Put(entry)
 	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
@@ -370,40 +339,31 @@ func (mdb *memdbSlice) insertPrimaryIndex(entry []byte, docid []byte, workerId i
 	return 1
 }
 
-func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) int {
-	if entry == nil {
-		// Delete existing entries from main and back
-		lookupentry := entryBytesFromDocId(docid)
-		t0 := time.Now()
-		found, node := mdb.back[workerId].Remove(lookupentry)
-		mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
-		platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
+func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) int {
+	// 1. Insert entry into main index
+	// 2. Upsert into backindex with docid, mainnode pointer
+	// 3. Delete old entry from main index if back index had
+	// a previous mainnode pointer entry
+	t0 := time.Now()
+	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
+		mdb.encodeBuf[workerId])
+	if err != nil {
+		logging.Errorf("MemDBSlice::insertSecIndex Slice Id %v IndexInstId %v "+
+			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
+		return mdb.deleteSecIndex(docid, workerId)
+	}
 
-		if found {
+	newNode := mdb.main[workerId].Put2(entry)
+	mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+	platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
+
+	// Insert succeeded. Failure means same entry already exist.
+	if newNode != nil {
+		if updated, oldNode := mdb.back[workerId].Update(entry, unsafe.Pointer(newNode)); updated {
 			t0 := time.Now()
-			mdb.main[workerId].DeleteNode((*skiplist.Node)(node))
+			mdb.main[workerId].DeleteNode((*skiplist.Node)(oldNode))
 			mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
-			platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
-		}
-
-	} else {
-		// 1. Insert entry into main index
-		// 2. Upsert into backindex with docid, mainnode pointer
-		// 3. Delete old entry from main index if back index had
-		// a previous mainnode pointer entry
-		t0 := time.Now()
-		newNode := mdb.main[workerId].Put2(entry)
-		mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-		platform.AddInt64(&mdb.insert_bytes, int64(len(docid)+len(entry)))
-
-		// Insert succeeded. Failure means same entry already exist.
-		if newNode != nil {
-			if updated, oldNode := mdb.back[workerId].Update(entry, unsafe.Pointer(newNode)); updated {
-				t0 := time.Now()
-				mdb.main[workerId].DeleteNode((*skiplist.Node)(oldNode))
-				mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
-				platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
-			}
+			platform.AddInt64(&mdb.delete_bytes, int64(len(docid)))
 		}
 	}
 
@@ -411,46 +371,58 @@ func (mdb *memdbSlice) insertSecIndex(entry []byte, docid []byte, workerId int) 
 	return 1
 }
 
-func (mdb *memdbSlice) insertSecArrayIndex(newEntriesBytes [][]byte, docid []byte, workerId int) int {
+func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId int) int {
 	var nmut int
+	newEntriesBytes, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
+		mdb.arrayBuf[workerId])
+	common.CrashOnError(err)
 
-	if len(newEntriesBytes) == 0 {
-		// Delete existing entries from main and back
-		nmut = mdb.deleteSecArrayIndex(docid, workerId)
-	} else {
-		// Get old back index entry
-		lookupentry := entryBytesFromDocId(docid)
-		ptr := (*skiplist.Node)(mdb.back[workerId].Get(lookupentry))
-		list := memdb.NewNodeList(ptr)
-		oldEntriesBytes := list.Keys()
-
-		entryBytesToBeAdded, entryBytesToDeleted := CompareArrayEntryBytes(newEntriesBytes, oldEntriesBytes)
-		nmut = len(entryBytesToBeAdded) + len(entryBytesToDeleted)
-
-		// Delete each entry in entryBytesToDeleted
-		for _, item := range entryBytesToDeleted {
-			if item != nil { // nil item indicates it should not be deleted
-				node := list.Remove(item)
-				mdb.main[workerId].DeleteNode(node)
-			}
-		}
-
-		// Insert each entry in entryBytesToBeAdded
-		for _, entryItem := range entryBytesToBeAdded {
-			if entryItem != nil { // nil item indicates it should not be added
-				t0 := time.Now()
-				newNode := mdb.main[workerId].Put2(entryItem)
-				if newNode != nil { // Ignore if duplicate key
-					list.Add(newNode)
-					mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
-					platform.AddInt64(&mdb.insert_bytes, int64(len(entryItem)))
-				}
-			}
-		}
-
-		// Update back index entry
-		mdb.back[workerId].Update(lookupentry, unsafe.Pointer(list.Head()))
+	l := len(newEntriesBytes)
+	if l > maxArrayLength {
+		logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
+			"Skipping docid:%s (Cannot index %d items)", mdb.Id, mdb.idxInstId, docid, l)
+		return mdb.deleteSecArrayIndex(docid, workerId)
 	}
+
+	// Get old back index entry
+	lookupentry := entryBytesFromDocId(docid)
+	ptr := (*skiplist.Node)(mdb.back[workerId].Get(lookupentry))
+	list := memdb.NewNodeList(ptr)
+	oldEntriesBytes := list.Keys()
+
+	entryBytesToBeAdded, entryBytesToDeleted := CompareArrayEntryBytes(newEntriesBytes, oldEntriesBytes)
+	nmut = len(entryBytesToBeAdded) + len(entryBytesToDeleted)
+
+	// Delete each entry in entryBytesToDeleted
+	for _, item := range entryBytesToDeleted {
+		if item != nil { // nil item indicates it should not be deleted
+			node := list.Remove(item)
+			mdb.main[workerId].DeleteNode(node)
+		}
+	}
+
+	// Insert each entry in entryBytesToBeAdded
+	for _, key := range entryBytesToBeAdded {
+		if key != nil { // nil item indicates it should not be added
+			t0 := time.Now()
+			entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
+				mdb.encodeBuf[workerId][:0])
+			if err != nil {
+				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
+					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
+				return mdb.deleteSecArrayIndex(docid, workerId)
+			}
+			newNode := mdb.main[workerId].Put2(entry)
+			if newNode != nil { // Ignore if duplicate key
+				list.Add(newNode)
+				mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
+				platform.AddInt64(&mdb.insert_bytes, int64(len(entry)))
+			}
+		}
+	}
+
+	// Update back index entry
+	mdb.back[workerId].Update(lookupentry, unsafe.Pointer(list.Head()))
 	mdb.isDirty = true
 	return nmut
 }

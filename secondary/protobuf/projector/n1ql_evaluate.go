@@ -31,9 +31,9 @@ var missing = qvalue.NewValue(string(collatejson.MissingLiteral))
 //      `nru`
 func N1QLTransform(
 	docid, doc []byte, cExprs []interface{},
-	meta map[string]interface{}) ([]byte, error) {
+	meta map[string]interface{}, encodeBuf []byte) ([]byte, error) {
 
-	arrValue := make([]qvalue.Value, 0, len(cExprs))
+	arrValue := make([]interface{}, 0, len(cExprs))
 	context := qexpr.NewIndexContext()
 	skip := true
 	docval := qvalue.NewAnnotatedValue(doc)
@@ -75,7 +75,7 @@ func N1QLTransform(
 	if len(cExprs) == 1 && len(arrValue) == 1 && docid == nil {
 		// used for partition-key evaluation and where predicate.
 		// Marshal partition-key and where as a basic JSON data-type.
-		return arrValue[0].MarshalJSON()
+		return qvalue.NewValue(arrValue[0]).MarshalJSON()
 
 	} else if len(arrValue) > 0 {
 		// The shape of the secondary key looks like,
@@ -87,11 +87,13 @@ func N1QLTransform(
 		//if docid != nil {
 		//    arrValue = append(arrValue, qvalue.NewValue(string(docid)))
 		//}
-		secKey := qvalue.NewValue(make([]interface{}, len(arrValue)))
-		for i, key := range arrValue {
-			secKey.SetIndex(i, key)
-		}
-		return secKey.MarshalJSON() // return as JSON array
+		return CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
 	}
 	return nil, nil
+}
+
+func CollateJSONEncode(val qvalue.Value, encodeBuf []byte) ([]byte, error) {
+	codec := collatejson.NewCodec(16)
+	encoded, err := codec.EncodeN1QLValue(val, encodeBuf[:0])
+	return append([]byte(nil), encoded...), err
 }

@@ -75,7 +75,7 @@ func NewPrimaryIndexEntry(docid []byte) (primaryIndexEntry, error) {
 	}
 
 	e := primaryIndexEntry(docid)
-	return &e, nil
+	return e, nil
 }
 
 func BytesToPrimaryIndexEntry(b []byte) (*primaryIndexEntry, error) {
@@ -120,8 +120,12 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, buf []byte) 
 		return nil, ErrSecKeyTooLong
 	}
 
-	if buf, err = jsonEncoder.Encode(key, buf); err != nil {
-		return nil, err
+	if key[0] == '[' { // JSON
+		if buf, err = jsonEncoder.Encode(key, buf); err != nil {
+			return nil, err
+		}
+	} else { // Encoded
+		buf = append(buf, key...)
 	}
 
 	buf = append(buf, docid...)
@@ -318,6 +322,10 @@ func isArraySecKeyLarge(k []byte) bool {
 
 func isDocIdLarge(k []byte) bool {
 	return len(k) > MAX_DOCID_LEN
+}
+
+func IndexEntrySize(key []byte, docid []byte) int {
+	return len(key) + len(docid) + 2
 }
 
 func GetIndexEntryBytes2(key []byte, docid []byte,

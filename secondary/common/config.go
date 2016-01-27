@@ -131,6 +131,12 @@ var SystemConfig = Config{
 		500,
 		false, // mutable
 	},
+	"projector.encodeBufSize": ConfigValue{
+		1024 * 1024,
+		"Collatejson encode buffer size",
+		1024 * 1024,
+		false, // mutable
+	},
 	"projector.feedChanSize": ConfigValue{
 		100,
 		"channel size for feed's control path, " +
@@ -1186,7 +1192,7 @@ func (cv ConfigValue) Int() int {
 	} else if val, ok := cv.Value.(float64); ok {
 		return int(val)
 	}
-	panic(fmt.Errorf("not support Int() on %#v", cv))
+	panic(fmt.Sprintf("not support Int() on %#v", cv))
 }
 
 // Float64 assumes config value integer or float64.
