@@ -667,10 +667,13 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 			}
 		*/
 
-		if GetStorageMode() == FORESTDB ||
-			GetStorageMode() == NOT_SET {
-			if newConfig["settings.memory_quota"].Uint64() !=
-				idx.config["settings.memory_quota"].Uint64() {
+		if newConfig["settings.memory_quota"].Uint64() !=
+			idx.config["settings.memory_quota"].Uint64() {
+
+			idx.stats.memoryQuota.Set(int64(newConfig["settings.memory_quota"].Uint64()))
+
+			if GetStorageMode() == FORESTDB ||
+				GetStorageMode() == NOT_SET {
 				idx.stats.needsRestart.Set(true)
 			}
 		}
