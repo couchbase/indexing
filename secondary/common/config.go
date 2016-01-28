@@ -753,10 +753,19 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.force_gc_mem_frac": ConfigValue{
-		0.3,
+		0.1,
 		"Fraction of memory_quota left after which GC is forced " +
 			"by Indexer. Only applies to memdb.",
-		0.3,
+		0.1,
+		false, // mutable
+	},
+	"indexer.mem_usage_check_interval": ConfigValue{
+		10,
+		"Time inteval in seconds after which Indexer will check " +
+			"for memory_usage and do Pause/Unpause if required." +
+			"This also determines how often GC is forced. Please see " +
+			"force_gc_mem_frac setting. Only applies to memdb.",
+		10,
 		false, // mutable
 	},
 

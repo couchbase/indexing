@@ -3908,8 +3908,9 @@ func (idx *indexer) monitorMemUsage() {
 		canResume = true
 	}
 
-	ticker := time.NewTicker(time.Second * 5)
-	for _ = range ticker.C {
+	monitorInterval := idx.config["mem_usage_check_interval"].Int()
+
+	for {
 
 		pause_if_oom := idx.config["pause_if_memory_full"].Bool()
 
@@ -3927,7 +3928,7 @@ func (idx *indexer) monitorMemUsage() {
 			mem_used := idx.memoryUsed()
 			logging.Infof("Indexer::monitorMemUsage MemoryUsed %v", mem_used)
 
-			switch idx.state {
+			switch idx.getIndexerState() {
 
 			case common.INDEXER_ACTIVE:
 				if float64(mem_used) > (high_mem_mark*float64(memory_quota)) &&
@@ -3943,6 +3944,8 @@ func (idx *indexer) monitorMemUsage() {
 				}
 			}
 		}
+
+		time.Sleep(time.Second * time.Duration(monitorInterval))
 	}
 
 }
@@ -3951,9 +3954,9 @@ func (idx *indexer) handleIndexerPause(msg Message) {
 
 	logging.Infof("Indexer::handleIndexerPause")
 
-	if idx.state != common.INDEXER_ACTIVE {
+	if idx.getIndexerState() != common.INDEXER_ACTIVE {
 		logging.Infof("Indexer::handleIndexerPause Ignoring request to "+
-			"pause indexer in %v state", idx.state)
+			"pause indexer in %v state", idx.getIndexerState())
 		return
 	}
 
@@ -3977,7 +3980,7 @@ func (idx *indexer) handleIndexerPause(msg Message) {
 	idx.setIndexerState(common.INDEXER_PAUSED)
 	idx.stats.indexerState.Set(int64(common.INDEXER_PAUSED))
 	logging.Infof("Indexer::handleIndexerPause Indexer State Changed to "+
-		"%v", idx.state)
+		"%v", idx.getIndexerState())
 
 	//Notify Scan Coordinator
 	idx.scanCoordCmdCh <- msg
