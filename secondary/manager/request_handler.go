@@ -171,7 +171,7 @@ func (m *requestHandlerContext) createIndexRequest(w http.ResponseWriter, r *htt
 	// convert request
 	request := m.convertIndexRequest(r)
 	if request == nil {
-		sendIndexResponseWithError(w, "Unable to convert request for create index")
+		sendIndexResponseWithError(http.StatusBadRequest, w, "Unable to convert request for create index")
 		return
 	}
 
@@ -180,7 +180,7 @@ func (m *requestHandlerContext) createIndexRequest(w http.ResponseWriter, r *htt
 	if indexDefn.DefnId == 0 {
 		defnId, err := common.NewIndexDefnId()
 		if err != nil {
-			sendIndexResponseWithError(w, fmt.Sprintf("Fail to generate index definition id %v", err))
+			sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("Fail to generate index definition id %v", err))
 			return
 		}
 		indexDefn.DefnId = defnId
@@ -195,7 +195,7 @@ func (m *requestHandlerContext) createIndexRequest(w http.ResponseWriter, r *htt
 		sendIndexResponse(w)
 	} else {
 		// report failure
-		sendIndexResponseWithError(w, fmt.Sprintf("%v", err))
+		sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
 	}
 }
 
@@ -208,7 +208,7 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 	// convert request
 	request := m.convertIndexRequest(r)
 	if request == nil {
-		sendIndexResponseWithError(w, "Unable to convert request for drop index")
+		sendIndexResponseWithError(http.StatusBadRequest, w, "Unable to convert request for drop index")
 		return
 	}
 
@@ -219,7 +219,7 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 		sendIndexResponse(w)
 	} else {
 		// report failure
-		sendIndexResponseWithError(w, fmt.Sprintf("%v", err))
+		sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
 	}
 }
 
@@ -257,13 +257,13 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
-		send(w, resp)
+		send(http.StatusOK, w, resp)
 	} else {
 		logging.Debugf("RequestHandler::handleIndexStatusRequest: failed nodes %v", failedNodes)
 		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_ERROR, Error: "Fail to retrieve cluster-wide metadata from index service",
 			Status: list, FailedNodes: failedNodes}
-		send(w, resp)
+		send(http.StatusInternalServerError, w, resp)
 	}
 }
 
@@ -405,11 +405,11 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 	meta, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap)
 	if err == nil {
 		resp := &BackupResponse{Code: RESP_SUCCESS, Result: *meta}
-		send(w, resp)
+		send(http.StatusOK, w, resp)
 	} else {
 		logging.Debugf("RequestHandler::handleIndexMetadataRequest: err %v", err)
 		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
-		send(w, resp)
+		send(http.StatusInternalServerError, w, resp)
 	}
 }
 
@@ -453,6 +453,7 @@ func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
 }
 
 func (m *requestHandlerContext) convertIndexMetadataRequest(r *http.Request) *ClusterIndexMetadata {
+	var check map[string]interface{}
 
 	meta := &ClusterIndexMetadata{}
 
@@ -463,6 +464,14 @@ func (m *requestHandlerContext) convertIndexMetadataRequest(r *http.Request) *Cl
 	}
 
 	logging.Debugf("requestHandler.convertIndexMetadataRequest(): input %v", string(buf.Bytes()))
+
+	if err := json.Unmarshal(buf.Bytes(), check); err != nil {
+		logging.Debugf("RequestHandler::convertIndexMetadataRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
+		return nil
+	} else if _, ok := check["metadata"]; !ok {
+		logging.Debugf("RequestHandler::convertIndexMetadataRequest: invalid shape of request body. Buf = %s, err %v", buf, err)
+		return nil
+	}
 
 	if err := json.Unmarshal(buf.Bytes(), meta); err != nil {
 		logging.Debugf("RequestHandler::convertIndexMetadataRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
@@ -484,7 +493,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 
 	meta, err := m.getLocalIndexMetadata()
 	if err == nil {
-		send(w, meta)
+		send(http.StatusOK, w, meta)
 	} else {
 		logging.Debugf("RequestHandler::handleLocalIndexMetadataRequest: err %v", err)
 		sendHttpError(w, " Unable to retrieve index metadata", http.StatusInternalServerError)
@@ -552,14 +561,14 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 
 	image := m.convertIndexMetadataRequest(r)
 	if image == nil {
-		send(w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to process request input"})
+		send(http.StatusBadRequest, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to process request input"})
 		return
 	}
 
 	indexerHostMap := make(map[common.IndexerId]string)
 	current, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap)
 	if err != nil {
-		send(w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to get the latest index metadata for restore"})
+		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to get the latest index metadata for restore"})
 		return
 	}
 
@@ -597,11 +606,11 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 	success := m.restoreIndex(current, context, indexerHostMap)
 
 	if success {
-		send(w, &RestoreResponse{Code: RESP_SUCCESS})
+		send(http.StatusOK, w, &RestoreResponse{Code: RESP_SUCCESS})
 		return
 	}
 
-	send(w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to restore metadata"})
+	send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to restore metadata"})
 }
 
 func (m *requestHandlerContext) findIndexToRestoreById(image *LocalIndexMetadata,
@@ -759,22 +768,23 @@ func (m *requestHandlerContext) findMinIndexer(indexerCountMap map[common.Indexe
 // Utility
 ///////////////////////////////////////////////////////
 
-func sendIndexResponseWithError(w http.ResponseWriter, msg string) {
+func sendIndexResponseWithError(status int, w http.ResponseWriter, msg string) {
 	res := &IndexResponse{Code: RESP_ERROR, Error: msg}
-	send(w, res)
+	send(status, w, res)
 }
 
 func sendIndexResponse(w http.ResponseWriter) {
 	result := &IndexResponse{Code: RESP_SUCCESS}
-	send(w, result)
+	send(http.StatusOK, w, result)
 }
 
-func send(w http.ResponseWriter, res interface{}) {
+func send(status int, w http.ResponseWriter, res interface{}) {
 
 	header := w.Header()
 	header["Content-Type"] = []string{"application/json"}
 
 	if buf, err := json.Marshal(res); err == nil {
+		w.WriteHeader(status)
 		logging.Tracef("RequestHandler::sendResponse: sending response back to caller. %v", string(buf))
 		w.Write(buf)
 	} else {
@@ -808,7 +818,7 @@ func doAuth(r *http.Request, w http.ResponseWriter, clusterUrl string) bool {
 
 	valid, err := common.IsAuthValid(r, clusterUrl)
 	if err != nil {
-		sendIndexResponseWithError(w, err.Error())
+		sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
 		return false
 	} else if valid == false {
 		w.WriteHeader(401)
