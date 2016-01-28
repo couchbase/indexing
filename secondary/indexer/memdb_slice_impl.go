@@ -113,7 +113,7 @@ type memdbSlice struct {
 	isSoftDeleted bool
 	isSoftClosed  bool
 
-	cmdCh  []chan *indexMutation
+	cmdCh  []chan indexMutation
 	stopCh []DoneChannel
 
 	workerDone []chan bool
@@ -173,10 +173,10 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 	slice.encodeBuf = make([][]byte, slice.numWriters)
 	slice.arrayBuf = make([][]byte, slice.numWriters)
-	slice.cmdCh = make([]chan *indexMutation, slice.numWriters)
+	slice.cmdCh = make([]chan indexMutation, slice.numWriters)
 
 	for i := 0; i < slice.numWriters; i++ {
-		slice.cmdCh[i] = make(chan *indexMutation, sliceBufSize/uint64(slice.numWriters))
+		slice.cmdCh[i] = make(chan indexMutation, sliceBufSize/uint64(slice.numWriters))
 		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize)
 		slice.arrayBuf[i] = make([]byte, 0, maxArrayIndexEntrySize*maxArrayLength)
 	}
@@ -249,7 +249,7 @@ func (mdb *memdbSlice) DecrRef() {
 }
 
 func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) error {
-	mut := &indexMutation{
+	mut := indexMutation{
 		op:    opUpdate,
 		key:   key,
 		docid: docid,
@@ -261,14 +261,14 @@ func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) erro
 
 func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.numDocsFlushQueued.Add(1)
-	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- &indexMutation{op: opDelete, docid: docid}
+	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- indexMutation{op: opDelete, docid: docid}
 	return mdb.fatalDbErr
 }
 
 func (mdb *memdbSlice) handleCommandsWorker(workerId int) {
 	var start time.Time
 	var elapsed time.Duration
-	var icmd *indexMutation
+	var icmd indexMutation
 
 loop:
 	for {
