@@ -657,9 +657,12 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		cfgUpdate := msg.(*MsgConfigUpdate)
 		newConfig := cfgUpdate.GetConfig()
 
-		if GetStorageMode() == NOT_SET {
-			SetStorageModeStr(newConfig["settings.storage_mode"].String())
-		}
+		//TODO Enable back once ns_server/ui side changes are ready
+		/*
+			if GetStorageMode() == NOT_SET {
+				SetStorageModeStr(newConfig["settings.storage_mode"].String())
+			}
+		*/
 
 		if GetStorageMode() == FORESTDB ||
 			GetStorageMode() == NOT_SET {
