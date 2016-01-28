@@ -265,10 +265,13 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, &MsgError{err: Error{cause: err}}
 	}
 
-	//set storage mode
-	if GetStorageMode() == NOT_SET {
-		SetStorageModeStr(idx.config["settings.storage_mode"].String())
-	}
+	//TODO Enable back once ns_server/ui side changes are ready
+	/*
+		//set storage mode
+		if GetStorageMode() == NOT_SET {
+			SetStorageModeStr(idx.config["settings.storage_mode"].String())
+		}
+	*/
 
 	if !idx.enableManager {
 		//Start CbqBridge
