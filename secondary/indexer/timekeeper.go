@@ -2361,7 +2361,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	//if timekeeper has moved to prepare unpause state, ignore
 	//the response message as all streams are going to be
 	//restarted anyways
-	if tk.isIndexerPaused() {
+	if tk.checkIndexerState(common.INDEXER_PREPARE_UNPAUSE) {
 		return
 	}
 
@@ -2877,11 +2877,11 @@ func (tk *timekeeper) checkAnyRepairPending() bool {
 
 }
 
-func (tk *timekeeper) isIndexerPaused() bool {
+func (tk *timekeeper) checkIndexerState(state common.IndexerState) bool {
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
-	if tk.indexerState == common.INDEXER_PAUSED {
+	if tk.indexerState == state {
 		return true
 	}
 	return false
