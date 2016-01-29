@@ -1004,6 +1004,9 @@ func (info *memdbSnapshotInfo) IsCommitted() bool {
 }
 
 func (info *memdbSnapshotInfo) String() string {
+	if info.MainSnap == nil {
+		return fmt.Sprintf("SnapInfo: file: %s", info.dataPath)
+	}
 	return fmt.Sprintf("SnapshotInfo: count:%v committed:%v", info.MainSnap.Count(), info.Committed)
 }
 
