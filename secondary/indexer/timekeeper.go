@@ -2106,6 +2106,10 @@ func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
 func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 	bucket string, flushTs *common.TsVbuuid) {
 
+	if tk.indexerState != common.INDEXER_ACTIVE {
+		return
+	}
+
 	if tk.hasInitStateIndex(streamId, bucket) {
 		return
 	}
