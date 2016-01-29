@@ -71,6 +71,7 @@ type atomicMutationQueue struct {
 
 	allocPollInterval   uint64 //poll interval for new allocs, if queue is full
 	dequeuePollInterval uint64 //poll interval for dequeue, if waiting for mutations
+	resultChanSize      uint64 //size of buffered result channel
 
 	free        []*node //free pointer per vbucket queue
 	stopch      []StopChannel
@@ -91,6 +92,7 @@ func NewAtomicMutationQueue(numVbuckets uint16, maxLenPerVb int64,
 		stopch:              make([]StopChannel, numVbuckets),
 		allocPollInterval:   getAllocPollInterval(config),
 		dequeuePollInterval: config["mutation_queue.dequeuePollInterval"].Uint64(),
+		resultChanSize:      config["mutation_queue.resultChanSize"].Uint64(),
 	}
 
 	var x uint16
@@ -162,7 +164,7 @@ func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys,
 func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (
 	<-chan *MutationKeys, error) {
 
-	datach := make(chan *MutationKeys)
+	datach := make(chan *MutationKeys, q.resultChanSize)
 
 	go q.dequeueUptoSeqno(vbucket, seqno, datach)
 

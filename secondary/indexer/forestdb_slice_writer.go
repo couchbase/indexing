@@ -206,6 +206,7 @@ type fdbSlice struct {
 	isPrimary     bool
 	isSoftDeleted bool
 	isSoftClosed  bool
+	isCompacting  bool
 
 	cmdCh  chan interface{} //internal channel to buffer commands
 	stopCh []DoneChannel    //internal channel to signal shutdown
@@ -1132,6 +1133,9 @@ func (fdb *fdbSlice) Close() {
 
 	if fdb.refCount > 0 {
 		fdb.isSoftClosed = true
+		if fdb.isCompacting {
+			go fdb.cancelCompact()
+		}
 	} else {
 		tryCloseFdbSlice(fdb)
 	}
@@ -1210,6 +1214,9 @@ func (fdb *fdbSlice) IsDirty() bool {
 func (fdb *fdbSlice) Compact() error {
 	fdb.IncrRef()
 	defer fdb.DecrRef()
+
+	fdb.setIsCompacting(true)
+	defer fdb.setIsCompacting(false)
 
 	//get oldest snapshot upto which compaction can be done
 	infos, err := fdb.getSnapshotsMeta()
@@ -1471,4 +1478,33 @@ func (fdb *fdbSlice) logWriterStat() {
 			count, len(fdb.cmdCh))
 	}
 
+}
+
+func (fdb *fdbSlice) setIsCompacting(isCompacting bool) {
+
+	fdb.lock.Lock()
+	defer fdb.lock.Unlock()
+
+	fdb.isCompacting = isCompacting
+}
+
+func (fdb *fdbSlice) cancelCompact() {
+
+	logging.Infof("ForestDBSlice::cancelCompact Cancel Compaction Slice Id %v, "+
+		"IndexInstId %v", fdb.id, fdb.idxInstId)
+
+	var tempFd *forestdb.File
+	var err error
+
+	//open a separate file handle for cancel compaction
+	config := forestdb.DefaultConfig()
+	if tempFd, err = forestdb.Open(fdb.currfile, config); err != nil {
+		logging.Errorf("ForestDBSlice::cancelCompact Error Opening DB %v %v", err,
+			fdb.idxInstId)
+		return
+	}
+	err = tempFd.CancelCompact()
+
+	logging.Infof("ForestDBSlice::Close Cancel Compaction Returns %v "+
+		"Slice Id %v, IndexInstId %v ", err, fdb.id, fdb.idxInstId)
 }

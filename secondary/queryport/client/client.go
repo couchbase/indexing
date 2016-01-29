@@ -479,21 +479,26 @@ func (c *GsiClient) Range(
 			}
 			if c.bridge.IsPrimary(uint64(index.DefnId)) {
 				var l, h []byte
+				var what string
 				// primary keys are plain sequence of binary.
 				if low != nil && len(low) > 0 {
-					l = []byte(low[0].(string))
+					if l, what = curePrimaryKey(low[0]); what == "after" {
+						return nil, true
+					}
 				}
 				if high != nil && len(high) > 0 {
-					h = []byte(high[0].(string))
+					if h, what = curePrimaryKey(high[0]); what == "before" {
+						return nil, true
+					}
 				}
 				return qc.RangePrimary(
-					uint64(index.DefnId), requestId, l, h, inclusion, distinct, limit,
-					cons, vector, callb)
+					uint64(index.DefnId), requestId, l, h, inclusion, distinct,
+					limit, cons, vector, callb)
 			}
 			// dealing with secondary index.
 			return qc.Range(
-				uint64(index.DefnId), requestId, low, high, inclusion, distinct, limit,
-				cons, vector, callb)
+				uint64(index.DefnId), requestId, low, high, inclusion, distinct,
+				limit, cons, vector, callb)
 		})
 
 	if err != nil { // callback with error
@@ -857,4 +862,21 @@ func (ts *TsConsistency) Override(
 	ts.Seqnos = append(ts.Seqnos, seqno)
 	ts.Vbuuids = append(ts.Vbuuids, vbuuid)
 	return ts
+}
+
+func curePrimaryKey(key interface{}) ([]byte, string) {
+	if key == nil {
+		return nil, "ok"
+	}
+	switch v := key.(type) {
+	case []byte:
+		return v, "ok"
+	case string:
+		return []byte(v), "ok"
+	case []interface{}:
+		return nil, "after"
+	case map[string]interface{}:
+		return nil, "after"
+	}
+	return nil, "before"
 }

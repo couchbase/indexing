@@ -109,8 +109,9 @@ func startBucket(cluster, bucketn string, kvaddrs []string) int {
 	mf(err, "bucket")
 
 	dcpConfig := map[string]interface{}{
-		"genChanSize":  10000,
-		"dataChanSize": 10000,
+		"genChanSize":    10000,
+		"dataChanSize":   10000,
+		"numConnections": 4,
 	}
 	dcpFeed, err := b.StartDcpFeedOver(
 		couchbase.NewDcpFeedName("rawupr"),

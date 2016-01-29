@@ -209,7 +209,7 @@ func (kvdata *KVData) runScatter(
 
 	// stats
 	statSince := time.Now()
-	var stitems [15]string
+	var stitems [16]string
 	logstats := func() {
 		snapStat := kvdata.snapStat
 		stitems[0] = `"topic":"` + kvdata.topic + `"`
@@ -218,15 +218,16 @@ func (kvdata *KVData) runScatter(
 		stitems[3] = `"eventCount":` + strconv.Itoa(int(kvdata.eventCount))
 		stitems[4] = `"reqCount":` + strconv.Itoa(int(kvdata.reqCount))
 		stitems[5] = `"endCount":` + strconv.Itoa(int(kvdata.endCount))
-		stitems[6] = `"snapStat.min":` + strconv.Itoa(int(snapStat.Min()))
-		stitems[7] = `"snapStat.max":` + strconv.Itoa(int(snapStat.Max()))
-		stitems[8] = `"snapStat.avg":` + strconv.Itoa(int(snapStat.Mean()))
-		stitems[9] = `"upsertCount":` + strconv.Itoa(int(kvdata.upsertCount))
-		stitems[10] = `"deleteCount":` + strconv.Itoa(int(kvdata.deleteCount))
-		stitems[11] = `"exprCount":` + strconv.Itoa(int(kvdata.exprCount))
-		stitems[12] = `"ainstCount":` + strconv.Itoa(int(kvdata.ainstCount))
-		stitems[13] = `"dinstCount":` + strconv.Itoa(int(kvdata.dinstCount))
-		stitems[14] = `"tsCount":` + strconv.Itoa(int(kvdata.tsCount))
+		stitems[6] = `"snapStat.samples":` + strconv.Itoa(int(snapStat.Count()))
+		stitems[7] = `"snapStat.min":` + strconv.Itoa(int(snapStat.Min()))
+		stitems[8] = `"snapStat.max":` + strconv.Itoa(int(snapStat.Max()))
+		stitems[9] = `"snapStat.avg":` + strconv.Itoa(int(snapStat.Mean()))
+		stitems[10] = `"upsertCount":` + strconv.Itoa(int(kvdata.upsertCount))
+		stitems[11] = `"deleteCount":` + strconv.Itoa(int(kvdata.deleteCount))
+		stitems[12] = `"exprCount":` + strconv.Itoa(int(kvdata.exprCount))
+		stitems[13] = `"ainstCount":` + strconv.Itoa(int(kvdata.ainstCount))
+		stitems[14] = `"dinstCount":` + strconv.Itoa(int(kvdata.dinstCount))
+		stitems[15] = `"tsCount":` + strconv.Itoa(int(kvdata.tsCount))
 		statjson := strings.Join(stitems[:], ",")
 		fmsg := "%v ##%v stats {%v}\n"
 		logging.Infof(fmsg, kvdata.logPrefix, kvdata.opaque, statjson)

@@ -21,7 +21,7 @@ type restServer struct {
 }
 
 func NewRestServer(cluster string) (*restServer, Message) {
-	log.Infof("%v starting RESTful services")
+	log.Infof("%v starting RESTful services", cluster)
 
 	// get the singleton-client
 	config, err := c.GetSettingsConfig(c.SystemConfig)

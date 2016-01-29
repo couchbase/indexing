@@ -984,7 +984,7 @@ func (info *memdbSnapshotInfo) IsCommitted() bool {
 }
 
 func (info *memdbSnapshotInfo) String() string {
-	return fmt.Sprintf("SnapshotInfo: committed:%v", info.Committed)
+	return fmt.Sprintf("SnapshotInfo: count:%v committed:%v", info.MainSnap.Count(), info.Committed)
 }
 
 func (s *memdbSnapshot) Create() error {
@@ -1153,6 +1153,7 @@ func (s *memdbSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
 	cmpFn CmpEntry, callback EntryCallback) error {
 	var entry IndexEntry
 	var err error
+	t0 := time.Now()
 	it := s.info.MainSnap.NewIterator()
 	defer it.Close()
 
@@ -1170,9 +1171,10 @@ func (s *memdbSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
 			}
 		}
 	}
+	s.slice.idxStats.Timings.stNewIterator.Put(time.Since(t0))
 
 loop:
-	for ; it.Valid(); it.Next() {
+	for it.Valid() {
 		itm := it.Get().Bytes()
 		entry = s.newIndexEntry(itm)
 
@@ -1185,6 +1187,10 @@ loop:
 		if err != nil {
 			return err
 		}
+
+		t0 := time.Now()
+		it.Next()
+		s.slice.idxStats.Timings.stIteratorNext.Put(time.Since(t0))
 	}
 
 	// Include equal keys if high inclusion is requested

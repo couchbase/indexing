@@ -72,8 +72,9 @@ func main() {
 
 	// Get failover log for a vbucket
 	dcpConfig := map[string]interface{}{
-		"genChanSize":  10000,
-		"dataChanSize": 10000,
+		"genChanSize":    10000,
+		"dataChanSize":   10000,
+		"numConnections": 4,
 	}
 	for options.repeat > 0 {
 		opaque := uint16(options.repeat)

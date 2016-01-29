@@ -298,8 +298,9 @@ func (p *Projector) doFailoverLog(
 	protoFlogs := make([]*protobuf.FailoverLog, 0, len(vbuckets))
 	vbnos := c.Vbno32to16(vbuckets)
 	dcpConfig := map[string]interface{}{
-		"genChanSize":  p.config["projector.dcp.genChanSize"].Int(),
-		"dataChanSize": p.config["projector.dcp.dataChanSize"].Int(),
+		"genChanSize":    p.config["projector.dcp.genChanSize"].Int(),
+		"dataChanSize":   p.config["projector.dcp.dataChanSize"].Int(),
+		"numConnections": p.config["projector.dcp.numConnections"].Int(),
 	}
 	flogs, err := bucket.GetFailoverLogs(opaque, vbnos, dcpConfig)
 	if err == nil {

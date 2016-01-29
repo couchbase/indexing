@@ -92,9 +92,7 @@ func (f *ForestDBIterator) Seek(key []byte) {
 		f.iter = nil
 	}
 	var err error
-	t0 := time.Now()
 	f.iter, err = f.db.IteratorInit(key, nil, forestdb.ITR_NONE|forestdb.ITR_NO_DELETES)
-	f.slice.idxStats.Timings.stNewIterator.Put(time.Now().Sub(t0))
 	if err != nil {
 		f.valid = false
 		return

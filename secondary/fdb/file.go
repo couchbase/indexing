@@ -108,6 +108,20 @@ func (f *File) CompactUpto(newfilename string, sm *SnapMarker) error {
 	return nil
 }
 
+//CancelCompact cancels in-progress compaction
+func (f *File) CancelCompact() error {
+	f.Lock()
+	defer f.Unlock()
+
+	Log.Tracef("fdb_cancel_compaction call f:%p dbfile:%v", f, f.dbfile)
+	errNo := C.fdb_cancel_compaction(f.dbfile)
+	Log.Tracef("fdb_cancel_compaction retn f:%p errNo:%v", f, errNo)
+	if errNo != RESULT_SUCCESS {
+		return Error(errNo)
+	}
+	return nil
+}
+
 // EstimateSpaceUsed returns the overall disk space actively used by the current database file
 func (f *File) EstimateSpaceUsed() int {
 	f.Lock()

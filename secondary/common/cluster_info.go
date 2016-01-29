@@ -226,6 +226,8 @@ func (c *ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr stri
 
 	node := c.nodesvs[nid]
 	if port, ok = node.Services[srvc]; !ok {
+		logging.Errorf("%vInvalid Service %v for node %v. Nodes %v \n NodeServices %v",
+			c.logPrefix, srvc, node, c.nodes, c.nodesvs)
 		err = ErrInvalidService
 		return
 	}

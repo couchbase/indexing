@@ -18,6 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"runtime"
 	"runtime/debug"
 	"time"
@@ -66,13 +67,18 @@ func NewSettingsManager(supvCmdch MsgChannel,
 	http.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
 	http.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
 	go func() {
-		for {
-			err := metakv.RunObserveChildren("/", s.metaKVCallback, s.cancelCh)
-			if err == nil {
-				return
-			} else {
-				logging.Errorf("IndexerSettingsManager: metakv notifier failed (%v)..Restarting", err)
+		fn := func(r int, err error) error {
+			if r > 0 {
+				logging.Errorf("IndexerSettingsManager: metakv notifier failed (%v)..Restarting %v", err, r)
 			}
+			err = metakv.RunObserveChildren("/", s.metaKVCallback, s.cancelCh)
+			return err
+		}
+		rh := common.NewRetryHelper(MAX_METAKV_RETRIES, time.Second, 2, fn)
+		err := rh.Run()
+		if err != nil {
+			logging.Fatalf("IndexerSettingsManager: metakv notifier failed even after max retries. Restarting indexer.")
+			os.Exit(1)
 		}
 	}()
 

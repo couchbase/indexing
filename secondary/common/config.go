@@ -217,6 +217,12 @@ var SystemConfig = Config{
 		10000,
 		false, // mutable
 	},
+	"projector.dcp.numConnections": ConfigValue{
+		4,
+		"connect with N concurrent DCP connection with KV",
+		4,
+		false, // mutable
+	},
 	"projector.dcp.latencyTick": ConfigValue{
 		5 * 60 * 1000, // 5 minute
 		"in milliseconds, periodically log cumulative stats of dcp latency",
@@ -683,6 +689,13 @@ var SystemConfig = Config{
 		uint64(1),
 		false, // mutable
 	},
+	"indexer.mutation_queue.resultChanSize": ConfigValue{
+		uint64(20),
+		"size of buffered result channel returned by " +
+			"mutation queue on dequeue",
+		uint64(20),
+		false, // mutable
+	},
 	"indexer.memstatTick": ConfigValue{
 		60 * 1000, // in milli-second
 		"in milli-second, periodically log runtime memory-stats.",
@@ -787,11 +800,11 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.max_cpu_percent": ConfigValue{
-		400,
+		0,
 		"Maximum percent of CPU that indexer can use. " +
 			"EG, 200% in 4-core (400%) machine would set indexer to " +
-			"use 2 cores",
-		400,
+			"use 2 cores. 0 means use all available cores.",
+		0,
 		false, // mutable
 	},
 	"indexer.settings.log_level": ConfigValue{

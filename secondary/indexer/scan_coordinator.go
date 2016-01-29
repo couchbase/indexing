@@ -72,7 +72,7 @@ type ScanRequest struct {
 
 	ScanId      uint64
 	ExpiredTime time.Time
-	TimeoutCh   <-chan time.Time
+	Timeout     *time.Timer
 	CancelCh    <-chan bool
 
 	RequestId string
@@ -107,7 +107,7 @@ func (c *CancelCb) Done() {
 func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
 	return &CancelCb{
 		done:    make(chan struct{}),
-		timeout: req.TimeoutCh,
+		timeout: req.Timeout.C,
 		cancel:  req.CancelCh,
 		callb:   callb,
 	}
@@ -170,6 +170,10 @@ func (r *ScanRequest) Done() {
 	}
 
 	r.keyBufList = nil
+
+	if r.Timeout != nil {
+		r.Timeout.Stop()
+	}
 }
 
 type ScanCoordinator interface {
@@ -354,7 +358,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	if timeout != 0 {
 		r.ExpiredTime = time.Now().Add(timeout)
-		r.TimeoutCh = time.After(timeout)
+		r.Timeout = time.NewTimer(timeout)
 	}
 
 	r.CancelCh = cancelCh
@@ -608,7 +612,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	var msg interface{}
 	select {
 	case msg = <-snapResch:
-	case <-r.TimeoutCh:
+	case <-r.Timeout.C:
 		go readDeallocSnapshot(snapResch)
 		msg = common.ErrScanTimedOut
 	}
