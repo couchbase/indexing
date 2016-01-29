@@ -87,7 +87,13 @@ func N1QLTransform(
 		//if docid != nil {
 		//    arrValue = append(arrValue, qvalue.NewValue(string(docid)))
 		//}
-		return CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
+		encoded, err := CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
+		if err != nil {
+			logging.Errorf("CollateJSONEncode: Unable to encode index field for docid: %s (err: %v)", docid, err)
+		}
+
+		return encoded, err
+
 	}
 	return nil, nil
 }

@@ -18,6 +18,7 @@ package collatejson
 import "bytes"
 import "encoding/json"
 import "errors"
+import "strings"
 import "sort"
 import "fmt"
 import "strconv"
@@ -586,6 +587,15 @@ func (codec *Codec) n1ql2code(val n1ql.Value, code []byte) ([]byte, error) {
 
 // Caller is responsible for providing sufficiently sized buffer
 // Otherwise it may panic
-func (codec *Codec) EncodeN1QLValue(val n1ql.Value, buf []byte) ([]byte, error) {
+func (codec *Codec) EncodeN1QLValue(val n1ql.Value, buf []byte) (bs []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if strings.Contains(fmt.Sprint(r), "slice bounds out of range") {
+				err = ErrorOutputLen
+			} else {
+				err = fmt.Errorf("%v", r)
+			}
+		}
+	}()
 	return codec.n1ql2code(val, buf)
 }
