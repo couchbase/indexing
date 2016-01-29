@@ -2431,9 +2431,10 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			logging.Errorf("Timekeeper::sendRestartMsg Bucket Not Found "+
 				"For Stream %v Bucket %v", streamId, bucket)
 
+			tk.lock.Lock()
 			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
-
 			tk.ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+			tk.lock.Unlock()
 
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 				streamId: streamId,
@@ -2441,7 +2442,9 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		} else {
 			logging.Errorf("Timekeeper::sendRestartMsg Error Response "+
 				"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
+			tk.lock.Lock()
 			tk.ss.markRestartVbError(streamId, bucket)
+			tk.lock.Unlock()
 			tk.repairStream(streamId, bucket)
 		}
 	}
