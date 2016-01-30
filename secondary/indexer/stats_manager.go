@@ -24,6 +24,12 @@ import (
 	"unsafe"
 )
 
+var uptime time.Time
+
+func init() {
+	uptime = time.Now()
+}
+
 type BucketStats struct {
 	bucket     string
 	indexCount int
@@ -239,6 +245,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
 	}
 
+	addStat("uptime", fmt.Sprintf("%s", time.Since(uptime)))
 	addStat("num_connections", is.numConnections.Value())
 	addStat("memory_quota", is.memoryQuota.Value())
 	addStat("memory_used", is.memoryUsed.Value())
