@@ -1,36 +1,8 @@
 CMAKE_MINIMUM_REQUIRED (VERSION 2.8)
 PROJECT (indexing)
 
-# This project is intended to be built as part of a Couchbase Server build,
-# but for nominal support building stand-alone, the following variables
-# need to be specified:
-#
-# CMAKE_MODULE_PATH - should contain a directory containing
-#      FindCouchbaseGo.cmake, eg. tlm/cmake/Modules
-#
-# CMAKE_INSTALL_PREFIX - should point to a directory where the bin/ output
-#      directory will be placed
-#
-# GODEPSDIR - should point to a Go workspace directory containing all
-#      transitive Go dependencies
-#
-# FORESTDB_INCLUDE_DIR - should point to where libforestdb/forestdb.h exists
-#
-# FORESTDB_LIBRARY_DIR - should point to where libforestdb.so resides
-#
-# Optionally:
-#
-# FORESTDB_TARGET - if set, assumed to the the CMake target name which
-# builds libforestdb.so; will set dependencies to ensure it is build
-# before attempting to compile indexer
-
 INCLUDE (FindCouchbaseGo)
 INCLUDE (FindCouchbaseJemalloc)
-
-SET (_forestdb_dep)
-IF (DEFINED FORESTDB_TARGET)
-  SET (_forestdb_dep DEPENDS ${FORESTDB_TARGET})
-ENDIF (DEFINED FORESTDB_TARGET)
 
 get_filename_component(JEMALLOC_LIB_DIR ${JEMALLOC_LIBRARIES} DIRECTORY)
 
@@ -52,7 +24,7 @@ ENDIF(JEMALLOC_FOUND)
 
 GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/indexer
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
-  ${_forestdb_dep}
+  DEPENDS forestdb breakpad_wrapper
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   LDFLAGS "${_ldflags}"
@@ -60,12 +32,13 @@ GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/in
 
 GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
- INSTALL_PATH bin OUTPUT projector)
+  INSTALL_PATH bin)
 
 GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
- INSTALL_PATH bin OUTPUT cbindex)
+  INSTALL_PATH bin)
 
 GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
- INSTALL_PATH bin OUTPUT cbindexperf)
+  INSTALL_PATH bin
+  GOVERSION 1.4.x)
