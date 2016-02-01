@@ -582,7 +582,7 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 		//It can be processed now.
 		found := tk.processPendingTS(streamId, bucket)
 
-		if !found {
+		if !found && !tk.ss.checkAnyAbortPending(streamId, bucket) {
 			//send message to stop running stream
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
 				streamId: streamId,
@@ -690,7 +690,7 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 		//It can be processed now.
 		found := tk.processPendingTS(streamId, bucket)
 
-		if !found {
+		if !found && !tk.ss.checkAnyAbortPending(streamId, bucket) {
 			//send message to stop running stream
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
 				streamId: streamId,
