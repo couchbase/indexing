@@ -6,11 +6,21 @@ INCLUDE (FindCouchbaseJemalloc)
 
 get_filename_component(JEMALLOC_LIB_DIR ${JEMALLOC_LIBRARIES} DIRECTORY)
 
+SET (_ldflags)
 IF (APPLE)
   # On OS X 10.11 (El Capitan) upwards we can no longer use DYLD_LIBRARY_PATH to locate
   # runtime dependancies. Instead add the location of forestdb etc to the actual
   # binary itself.
   SET (_ldflags "-extldflags '-Wl,-rpath,@executable_path/../lib'")
+ENDIF ()
+
+SET (_indexer_ldflags "${_ldflags}")
+IF (WIN32)
+  INCLUDE (PlatformIntrospection)
+  _DETERMINE_ARCH (_arch)
+  IF (NOT _arch STREQUAL x86)
+    SET (_indexer_ldflags "${_indexer_ldflags} -linkmode internal")
+  ENDIF ()
 ENDIF ()
 
 SET(CGO_INCLUDE_DIRS "${FORESTDB_INCLUDE_DIR};${Platform_SOURCE_DIR}/include")
@@ -27,7 +37,7 @@ GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/in
   DEPENDS forestdb breakpad_wrapper
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
-  LDFLAGS "${_ldflags}"
+  LDFLAGS "${_indexer_ldflags}"
   INSTALL_PATH bin OUTPUT indexer)
 
 GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
