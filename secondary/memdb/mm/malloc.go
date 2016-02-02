@@ -59,6 +59,6 @@ func Stats() string {
 	return s
 }
 
-func Size() uint64 {
-	return uint64(C.mm_size())
+func Size() int {
+	return int(C.mm_size())
 }

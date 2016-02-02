@@ -18,7 +18,6 @@ import (
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb"
-	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	"math/rand"
@@ -4102,16 +4101,12 @@ func (idx *indexer) checkRecoveryInProgress() bool {
 //golang runtime + memory allocated by cgo
 //components(e.g. fdb buffercache)
 func (idx *indexer) memoryUsed() uint64 {
+
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	mem_used := ms.HeapInuse + ms.GCSys
-	if GetStorageMode() == MEMDB {
-		mem_used += mm.Size()
-	} else {
-		forestdb.BufferCacheUsed()
-	}
-
+	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
 	return mem_used
+
 }
 
 func (idx *indexer) needsGC() bool {
