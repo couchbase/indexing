@@ -1,5 +1,5 @@
 #!/bin/bash
 
 cd
-~buildbot/bin/perfstat /var/www/sherlock*.htm > /tmp/timing.html
+~buildbot/bin/perfstat /var/www/sherlock-*-05.*.pass.html > /tmp/timing.html
 cat /tmp/timing.html > /var/www/sherlock-timing.html

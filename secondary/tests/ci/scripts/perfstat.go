@@ -290,7 +290,7 @@ func prettyLabel(fn filename) string {
 	return label
 }
 
-var reTimestamp = regexp.MustCompile(`.+-(.+)-(.+)\.htm`)
+var reTimestamp = regexp.MustCompile(`.+?-(.+?)-(.+?)\.(?:htm|pass\.html)`)
 
 func timestamp(fn filename) time.Time {
 	ets := time.Date(1970, time.January, 1, 0, 0, 0, 0, time.UTC)
@@ -299,7 +299,7 @@ func timestamp(fn filename) time.Time {
 		fmt.Println("Could not parse timestamp:", string(fn))
 		return ets
 	}
-	label := result[1] + ".2015 " + result[2]
+	label := result[1] + ".2016 " + result[2]
 	ts, err := time.Parse("02.01.2006 15.04", label)
 	if err != nil {
 		fmt.Println("Could not parse label:", label)
