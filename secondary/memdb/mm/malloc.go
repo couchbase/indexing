@@ -2,10 +2,6 @@ package mm
 
 /*
 #include "malloc.h"
-#ifdef JEMALLOC
-#cgo LDFLAGS: -ljemalloc
-#endif
-
 */
 import "C"
 
@@ -59,6 +55,15 @@ func Stats() string {
 	return s
 }
 
-func Size() int {
-	return int(C.mm_size())
+func Size() uint64 {
+	return uint64(C.mm_size())
+}
+
+func FreeOSMemory() error {
+	errCode := int(C.mm_free2os())
+	if errCode != 0 {
+		return fmt.Errorf("status: %d", errCode)
+	}
+
+	return nil
 }
