@@ -131,6 +131,12 @@ var SystemConfig = Config{
 		500,
 		false, // mutable
 	},
+	"projector.encodeBufSize": ConfigValue{
+		1024 * 1024,
+		"Collatejson encode buffer size",
+		1024 * 1024,
+		false, // mutable
+	},
 	"projector.feedChanSize": ConfigValue{
 		100,
 		"channel size for feed's control path, " +
@@ -679,6 +685,18 @@ var SystemConfig = Config{
 		uint64(1),
 		false, // mutable
 	},
+	"indexer.memdb.useMemMgmt": ConfigValue{
+		false,
+		"Use jemalloc based manual memory management",
+		false,
+		false, // mutable
+	},
+	"indexer.useMutationSyncPool": ConfigValue{
+		false,
+		"Use sync pool for mutations",
+		false,
+		false, // mutable
+	},
 
 	//end of memdb specific config
 
@@ -766,6 +784,24 @@ var SystemConfig = Config{
 		uint64(1024 * 1024 * 500),
 		"Compaction min file size",
 		uint64(1024 * 1024 * 500),
+		false, // mutable
+	},
+	"indexer.settings.compaction.compaction_mode": ConfigValue{
+		"circular",
+		"compaction mode (circular, full)",
+		"circular",
+		false, // mutable
+	},
+	"indexer.settings.compaction.days_of_week": ConfigValue{
+		"",
+		"Days of the week to run full compaction (Sunday, Monday, ...)",
+		"",
+		false, // mutable
+	},
+	"indexer.settings.compaction.abort_exceed_interval": ConfigValue{
+		false,
+		"Abort full compaction if exceeding compaction interval",
+		false,
 		false, // mutable
 	},
 	"indexer.settings.persisted_snapshot.interval": ConfigValue{
@@ -873,10 +909,10 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.largeSnapshotThreshold": ConfigValue{
-		uint64(2000),
+		uint64(200),
 		"Threshold For Considering a DCP Snapshot as Large. " +
 			"Must be less than maxVbQueueLength.",
-		uint64(2000),
+		uint64(200),
 		false, // mutable
 	},
 
@@ -1174,7 +1210,7 @@ func (cv ConfigValue) Int() int {
 	} else if val, ok := cv.Value.(float64); ok {
 		return int(val)
 	}
-	panic(fmt.Errorf("not support Int() on %#v", cv))
+	panic(fmt.Sprintf("not support Int() on %#v", cv))
 }
 
 // Float64 assumes config value integer or float64.

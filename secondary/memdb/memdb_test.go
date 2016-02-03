@@ -10,22 +10,31 @@ import "sync"
 import "runtime"
 import "encoding/binary"
 
+//import "github.com/t3rm1n4l/memdb/mm"
+
+var testConf Config
+
+func init() {
+	testConf = DefaultConfig()
+	//testConf.UseMemoryMgmt(mm.Malloc, mm.Free)
+}
+
 func TestInsert(t *testing.T) {
-	db := New()
+	db := NewWithConfig(testConf)
 	defer db.Close()
 
 	w := db.NewWriter()
 	for i := 0; i < 2000; i++ {
-		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
+		w.Put([]byte(fmt.Sprintf("%010d", i)))
 	}
 
 	for i := 1750; i < 2000; i++ {
-		w.Delete(NewItem([]byte(fmt.Sprintf("%010d", i))))
+		w.Delete([]byte(fmt.Sprintf("%010d", i)))
 	}
 	snap, _ := w.NewSnapshot()
 
 	for i := 2000; i < 5000; i++ {
-		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
+		w.Put([]byte(fmt.Sprintf("%010d", i)))
 	}
 
 	w.NewSnapshot()
@@ -33,10 +42,10 @@ func TestInsert(t *testing.T) {
 	count := 0
 	itr := db.NewIterator(snap)
 	itr.SeekFirst()
-	itr.Seek(NewItem([]byte(fmt.Sprintf("%010d", 1500))))
+	itr.Seek([]byte(fmt.Sprintf("%010d", 1500)))
 	for ; itr.Valid(); itr.Next() {
 		expected := fmt.Sprintf("%010d", count+1500)
-		got := string(itr.Get().Bytes())
+		got := string(itr.Get())
 		count++
 		if got != expected {
 			t.Errorf("Expected %s, got %v", expected, got)
@@ -65,14 +74,13 @@ func doInsert(db *MemDB, wg *sync.WaitGroup, n int, isRand bool, shouldSnap bool
 		}
 		buf := make([]byte, 8)
 		binary.BigEndian.PutUint64(buf, uint64(val))
-		// w.Put(NewItem([]byte(fmt.Sprintf("%025d", val))))
-		w.Put(NewItem(buf))
+		w.Put(buf)
 	}
 }
 
 func TestInsertPerf(t *testing.T) {
 	var wg sync.WaitGroup
-	db := New()
+	db := NewWithConfig(testConf)
 	defer db.Close()
 	n := 1000000
 	t0 := time.Now()
@@ -99,8 +107,7 @@ func doGet(t *testing.T, db *MemDB, snap *Snapshot, wg *sync.WaitGroup, n int) {
 	for i := 0; i < n; i++ {
 		val := rnd.Int() % n
 		binary.BigEndian.PutUint64(buf, uint64(val))
-		// itr.Seek(NewItem([]byte(fmt.Sprintf("%025d", val))))
-		itr.Seek(NewItem(buf))
+		itr.Seek(buf)
 		if !itr.Valid() {
 			t.Errorf("Expected to find %v", val)
 		}
@@ -108,12 +115,12 @@ func doGet(t *testing.T, db *MemDB, snap *Snapshot, wg *sync.WaitGroup, n int) {
 }
 
 func TestInsertDuplicates(t *testing.T) {
-	db := New()
+	db := NewWithConfig(testConf)
 	defer db.Close()
 
 	w := db.NewWriter()
 	for i := 0; i < 2000; i++ {
-		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
+		w.Put([]byte(fmt.Sprintf("%010d", i)))
 	}
 
 	w.NewSnapshot()
@@ -121,20 +128,20 @@ func TestInsertDuplicates(t *testing.T) {
 	// Duplicate
 	for i := 0; i < 2000; i++ {
 		key := fmt.Sprintf("%010d", i)
-		newNode := w.Put2(NewItem([]byte(key)))
+		newNode := w.Put2([]byte(key))
 		if newNode != nil {
 			t.Errorf("Duplicate unexpected for %s", key)
 		}
 	}
 
 	for i := 1500; i < 2000; i++ {
-		w.Delete(NewItem([]byte(fmt.Sprintf("%010d", i))))
+		w.Delete([]byte(fmt.Sprintf("%010d", i)))
 	}
 	w.NewSnapshot()
 
 	for i := 1500; i < 5000; i++ {
 		key := fmt.Sprintf("%010d", i)
-		newNode := w.Put2(NewItem([]byte(key)))
+		newNode := w.Put2([]byte(key))
 		if newNode == nil {
 			t.Errorf("Expected successful insert for %s", key)
 		}
@@ -146,7 +153,7 @@ func TestInsertDuplicates(t *testing.T) {
 	itr.SeekFirst()
 	for ; itr.Valid(); itr.Next() {
 		expected := fmt.Sprintf("%010d", count)
-		got := string(itr.Get().Bytes())
+		got := string(itr.Get())
 		count++
 		if got != expected {
 			t.Errorf("Expected %s, got %v", expected, got)
@@ -160,7 +167,7 @@ func TestInsertDuplicates(t *testing.T) {
 
 func TestGetPerf(t *testing.T) {
 	var wg sync.WaitGroup
-	db := New()
+	db := NewWithConfig(testConf)
 	defer db.Close()
 	n := 1000000
 	wg.Add(1)
@@ -200,8 +207,7 @@ func CountItems(snap *Snapshot) int {
 func TestLoadStoreDisk(t *testing.T) {
 	os.RemoveAll("db.dump")
 	var wg sync.WaitGroup
-	cfg := DefaultConfig()
-	db := NewWithConfig(cfg)
+	db := NewWithConfig(testConf)
 	defer db.Close()
 	n := 1000000
 	t0 := time.Now()
@@ -224,7 +230,7 @@ func TestLoadStoreDisk(t *testing.T) {
 	fmt.Printf("Storing to disk took %v\n", time.Since(t0))
 
 	snap.Close()
-	db = NewWithConfig(cfg)
+	db = NewWithConfig(testConf)
 	defer db.Close()
 	t0 = time.Now()
 	snap, err = db.LoadFromDisk("db.dump", 8, nil)
@@ -247,11 +253,11 @@ func TestLoadStoreDisk(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	expected := 10
-	db := New()
+	db := NewWithConfig(testConf)
 	defer db.Close()
 	w := db.NewWriter()
 	for i := 0; i < expected; i++ {
-		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
+		w.Put([]byte(fmt.Sprintf("%010d", i)))
 	}
 
 	snap1, _ := w.NewSnapshot()
@@ -262,11 +268,11 @@ func TestDelete(t *testing.T) {
 	fmt.Println(db.DumpStats())
 
 	for i := 0; i < expected; i++ {
-		w.Delete(NewItem([]byte(fmt.Sprintf("%010d", i))))
+		w.Delete([]byte(fmt.Sprintf("%010d", i)))
 	}
 
 	for i := 0; i < expected; i++ {
-		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
+		w.Put([]byte(fmt.Sprintf("%010d", i)))
 	}
 	snap2, _ := w.NewSnapshot()
 	snap1.Close()
@@ -287,8 +293,8 @@ func doReplace(wg *sync.WaitGroup, t *testing.T, w *Writer, start, end int) {
 	defer wg.Done()
 
 	for ; start < end; start++ {
-		w.Delete(NewItem([]byte(fmt.Sprintf("%010d", start))))
-		w.Put(NewItem([]byte(fmt.Sprintf("%010d", start))))
+		w.Delete([]byte(fmt.Sprintf("%010d", start)))
+		w.Put([]byte(fmt.Sprintf("%010d", start)))
 	}
 }
 
@@ -296,7 +302,7 @@ func TestGCPerf(t *testing.T) {
 	var wg sync.WaitGroup
 	var last *Snapshot
 
-	db := New()
+	db := NewWithConfig(testConf)
 	defer db.Close()
 	perW := 1000
 	iterations := 1000
@@ -337,7 +343,7 @@ func TestGCPerf(t *testing.T) {
 }
 
 func TestMemoryInUse(t *testing.T) {
-	db := New()
+	db := NewWithConfig(testConf)
 	defer db.Close()
 
 	dumpStats := func() {
@@ -345,14 +351,14 @@ func TestMemoryInUse(t *testing.T) {
 	}
 	w := db.NewWriter()
 	for i := 0; i < 5000; i++ {
-		w.Put(NewItem([]byte(fmt.Sprintf("%010d", i))))
+		w.Put([]byte(fmt.Sprintf("%010d", i)))
 	}
 	snap1, _ := w.NewSnapshot()
 
 	dumpStats()
 
 	for i := 0; i < 5000; i++ {
-		w.Delete(NewItem([]byte(fmt.Sprintf("%010d", i))))
+		w.Delete([]byte(fmt.Sprintf("%010d", i)))
 	}
 
 	snap1.Close()
@@ -365,8 +371,7 @@ func TestMemoryInUse(t *testing.T) {
 
 func TestFullScan(t *testing.T) {
 	var wg sync.WaitGroup
-	cfg := DefaultConfig()
-	db := NewWithConfig(cfg)
+	db := NewWithConfig(testConf)
 	defer db.Close()
 	n := 1000000
 	t0 := time.Now()
@@ -391,8 +396,7 @@ func TestVisitor(t *testing.T) {
 	const n = 1000000
 
 	var wg sync.WaitGroup
-	cfg := DefaultConfig()
-	db := NewWithConfig(cfg)
+	db := NewWithConfig(testConf)
 	defer db.Close()
 	expectedSum := int64((n - 1) * (n / 2))
 
@@ -445,8 +449,7 @@ func TestVisitor(t *testing.T) {
 func TestVisitorError(t *testing.T) {
 	const n = 100000
 	var wg sync.WaitGroup
-	cfg := DefaultConfig()
-	db := NewWithConfig(cfg)
+	db := NewWithConfig(testConf)
 	defer db.Close()
 
 	wg.Add(1)

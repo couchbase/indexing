@@ -217,7 +217,9 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if value, ok := params["with"]; ok && value != nil {
-		with, _ = json.Marshal(value.(map[string]interface{}))
+		if withstr, ok := value.(string); ok && withstr != "" {
+			with = []byte(withstr)
+		}
 	}
 
 	var partnExpr, whereExpr string

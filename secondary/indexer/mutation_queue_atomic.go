@@ -175,12 +175,9 @@ func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (
 func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 	datach chan *MutationKeys) {
 
-	//every dequeuePollInterval milliseconds, check for new mutations
-	ticker := time.NewTicker(time.Millisecond * time.Duration(q.dequeuePollInterval))
-
 	var dequeueSeq Seqno
 
-	for _ = range ticker.C {
+	for {
 		for platform.LoadPointer(&q.head[vbucket]) !=
 			platform.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
 
@@ -200,11 +197,11 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 
 			//once the seqno is reached, close the channel
 			if seqno <= dequeueSeq {
-				ticker.Stop()
 				close(datach)
 				return
 			}
 		}
+		time.Sleep(time.Millisecond * time.Duration(q.dequeuePollInterval))
 	}
 }
 

@@ -1093,7 +1093,7 @@ func (m *mutationMgr) handleIndexerPause(cmd Message) {
 		respMsg := m.sendMsgToStreamReader(streamId, cmd)
 
 		if respMsg.GetMsgType() == MSG_SUCCESS {
-			logging.Errorf("MutationMgr::handleIndexerPause Stream "+
+			logging.Infof("MutationMgr::handleIndexerPause Stream "+
 				"%v Paused", streamId)
 		} else {
 			err := respMsg.(*MsgError).GetError()

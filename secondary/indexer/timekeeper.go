@@ -2106,6 +2106,10 @@ func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
 func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 	bucket string, flushTs *common.TsVbuuid) {
 
+	if tk.indexerState != common.INDEXER_ACTIVE {
+		return
+	}
+
 	if tk.hasInitStateIndex(streamId, bucket) {
 		return
 	}
@@ -2361,7 +2365,7 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	//if timekeeper has moved to prepare unpause state, ignore
 	//the response message as all streams are going to be
 	//restarted anyways
-	if tk.isIndexerPaused() {
+	if tk.checkIndexerState(common.INDEXER_PREPARE_UNPAUSE) {
 		return
 	}
 
@@ -2427,9 +2431,10 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			logging.Errorf("Timekeeper::sendRestartMsg Bucket Not Found "+
 				"For Stream %v Bucket %v", streamId, bucket)
 
+			tk.lock.Lock()
 			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
-
 			tk.ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+			tk.lock.Unlock()
 
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 				streamId: streamId,
@@ -2437,7 +2442,9 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		} else {
 			logging.Errorf("Timekeeper::sendRestartMsg Error Response "+
 				"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
+			tk.lock.Lock()
 			tk.ss.markRestartVbError(streamId, bucket)
+			tk.lock.Unlock()
 			tk.repairStream(streamId, bucket)
 		}
 	}
@@ -2877,11 +2884,11 @@ func (tk *timekeeper) checkAnyRepairPending() bool {
 
 }
 
-func (tk *timekeeper) isIndexerPaused() bool {
+func (tk *timekeeper) checkIndexerState(state common.IndexerState) bool {
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
-	if tk.indexerState == common.INDEXER_PAUSED {
+	if tk.indexerState == state {
 		return true
 	}
 	return false

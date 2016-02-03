@@ -5,6 +5,11 @@ import (
 	"testing"
 )
 
+func newSKEntry(key, docid []byte) (secondaryIndexEntry, error) {
+	buf := make([]byte, 0, 4096*3)
+	return NewSecondaryIndexEntry(key, docid, false, buf)
+}
+
 func TestPrimaryIndexEntry(t *testing.T) {
 	buf := make([]byte, 0, 300)
 	pk1 := []byte("testkey")
@@ -52,7 +57,7 @@ func TestSecondaryIndexEntry(t *testing.T) {
 	sk2 := []byte(`["field1",]`)
 	sk3 := []byte(`[]`)
 
-	e, _ := NewSecondaryIndexEntry(sk1, docid)
+	e, _ := newSKEntry(sk1, docid)
 
 	buf, _ = e.ReadDocId(buf)
 	if !bytes.Equal(docid, buf) {
@@ -83,12 +88,12 @@ func TestSecondaryIndexEntry(t *testing.T) {
 		t.Errorf("Expected %v, received %v", string(e.Bytes()), string(e2.Bytes()))
 	}
 
-	_, err := NewSecondaryIndexEntry(sk2, docid)
+	_, err := newSKEntry(sk2, docid)
 	if err == nil {
 		t.Errorf("Expected error")
 	}
 
-	_, err = NewSecondaryIndexEntry(sk3, docid)
+	_, err = newSKEntry(sk3, docid)
 	if err != ErrSecKeyNil {
 		t.Errorf("Expected error")
 	}
@@ -99,70 +104,70 @@ func TestPrimaryIndexEntryMatch(t *testing.T) {
 	k1, _ := NewPrimaryKey([]byte("prefix"))
 	k2, _ := NewPrimaryKey([]byte("prefixmatch"))
 
-	if k1.Compare(e1) == 0 {
+	if k1.Compare(&e1) == 0 {
 		t.Errorf("Expected mismatch")
 	}
 
-	if k2.Compare(e1) != 0 {
+	if k2.Compare(&e1) != 0 {
 		t.Errorf("Expected match")
 	}
 }
 
 func TestSecondaryIndexEntryMatch(t *testing.T) {
-	e1, _ := NewSecondaryIndexEntry([]byte(`["key1"]`), []byte("doc1"))
-	e2, _ := NewSecondaryIndexEntry([]byte(`["key1","key2"]`), []byte("doc1"))
-	e3, _ := NewSecondaryIndexEntry([]byte(`["key1","key2","key3"]`), []byte("doc1"))
-	e4, _ := NewSecondaryIndexEntry([]byte(`["partialmatch"]`), []byte("doc1"))
+	e1, _ := newSKEntry([]byte(`["key1"]`), []byte("doc1"))
+	e2, _ := newSKEntry([]byte(`["key1","key2"]`), []byte("doc1"))
+	e3, _ := newSKEntry([]byte(`["key1","key2","key3"]`), []byte("doc1"))
+	e4, _ := newSKEntry([]byte(`["partialmatch"]`), []byte("doc1"))
 
 	k1, _ := NewSecondaryKey([]byte(`["key1"]`), make([]byte, 100))
 	k2, _ := NewSecondaryKey([]byte(`["key1","key2"]`), make([]byte, 100))
 	k3, _ := NewSecondaryKey([]byte(`["partial"]`), make([]byte, 100))
 
-	if k1.Compare(e1) != 0 {
+	if k1.Compare(&e1) != 0 {
 		t.Errorf("Expected match")
 	}
 
-	if k1.ComparePrefixFields(e1) != 0 {
+	if k1.ComparePrefixFields(&e1) != 0 {
 		t.Errorf("Expected match")
 	}
 
-	if k1.Compare(e2) == 0 {
+	if k1.Compare(&e2) == 0 {
 		t.Errorf("Expected mismatch")
 	}
 
-	if k1.ComparePrefixFields(e2) != 0 {
+	if k1.ComparePrefixFields(&e2) != 0 {
 		t.Errorf("Expected match")
 	}
 
-	if k1.ComparePrefixFields(e3) != 0 {
+	if k1.ComparePrefixFields(&e3) != 0 {
 		t.Errorf("Expected match")
 	}
 
-	if k2.Compare(e1) == 0 {
+	if k2.Compare(&e1) == 0 {
 		t.Errorf("Expected mismatch")
 	}
 
-	if k2.ComparePrefixFields(e1) == 0 {
+	if k2.ComparePrefixFields(&e1) == 0 {
 		t.Errorf("Expected mismatch")
 	}
 
-	if k2.Compare(e2) != 0 {
+	if k2.Compare(&e2) != 0 {
 		t.Errorf("Expected match")
 	}
 
-	if k2.ComparePrefixFields(e2) != 0 {
+	if k2.ComparePrefixFields(&e2) != 0 {
 		t.Errorf("Expected match")
 	}
 
-	if k2.Compare(e3) == 0 {
+	if k2.Compare(&e3) == 0 {
 		t.Errorf("Expected mismatch")
 	}
 
-	if k2.ComparePrefixFields(e3) != 0 {
+	if k2.ComparePrefixFields(&e3) != 0 {
 		t.Errorf("Expected match")
 	}
 
-	if k3.ComparePrefixFields(e4) == 0 {
+	if k3.ComparePrefixFields(&e4) == 0 {
 		t.Errorf("Expected mismatch")
 	}
 }

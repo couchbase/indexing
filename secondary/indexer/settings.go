@@ -56,12 +56,7 @@ func NewSettingsManager(supvCmdch MsgChannel,
 			}}
 	}
 
-	ncpu := common.SetNumCPUs(config["indexer.settings.max_cpu_percent"].Int())
-	logging.Infof("Setting maxcpus = %d", ncpu)
-
-	setBlockPoolSize(nil, config)
-	setLogger(config)
-
+	initGlobalSettings(nil, config)
 	http.HandleFunc("/settings", s.handleSettingsReq)
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
 	http.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
@@ -210,13 +205,8 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 		logging.Infof("New settings received: \n%s", string(value))
 		config := s.config.Clone()
 		config.Update(value)
-		setBlockPoolSize(s.config, config)
+		initGlobalSettings(s.config, config)
 		s.config = config
-
-		ncpu := common.SetNumCPUs(config["indexer.settings.max_cpu_percent"].Int())
-		logging.Infof("Setting maxcpus = %d", ncpu)
-
-		setLogger(config)
 
 		indexerConfig := s.config.SectionConfig("indexer.", true)
 		s.supvMsgch <- &MsgConfigUpdate{
@@ -300,4 +290,14 @@ func setBlockPoolSize(o, n common.Config) {
 			" - Only sizes higher than current size is allowed during runtime",
 			oldSz, newSz)
 	}
+}
+
+func initGlobalSettings(oldCfg, newCfg common.Config) {
+	setBlockPoolSize(oldCfg, newCfg)
+
+	ncpu := common.SetNumCPUs(newCfg["indexer.settings.max_cpu_percent"].Int())
+	logging.Infof("Setting maxcpus = %d", ncpu)
+
+	setLogger(newCfg)
+	useMutationSyncPool = newCfg["indexer.useMutationSyncPool"].Bool()
 }

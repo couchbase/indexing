@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -70,8 +71,17 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	config.SetMaxWriterLockProb(uint8(prob))
 	walSize := sysconf["settings.wal_size"].Uint64()
 	config.SetWalThreshold(walSize)
+	kept_headers := sysconf["settings.recovery.max_rollbacks"].Int()
+	config.SetNumKeepingHeaders(uint8(kept_headers))
 	logging.Verbosef("NewForestDBSlice(): max writer lock prob %d", prob)
 	logging.Verbosef("NewForestDBSlice(): wal size %d", walSize)
+	logging.Verbosef("NewForestDBSlice(): num keeping headers %d", kept_headers)
+
+	mode := strings.ToLower(sysconf["settings.compaction.compaction_mode"].String())
+	if mode == "full" {
+		config.SetBlockReuseThreshold(uint8(0))
+		logging.Verbosef("NewForestDBSlice(): full compaction mode. Set Reuse Threshold to 0")
+	}
 
 	kvconfig := forestdb.DefaultKVStoreConfig()
 
@@ -259,7 +269,12 @@ func (fdb *fdbSlice) DecrRef() {
 //Internally the request is buffered and executed async.
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
-func (fdb *fdbSlice) Insert(key []byte, rawKey []byte, docid []byte, meta *MutationMeta) error {
+func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) error {
+	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex)
+	if err != nil {
+		return err
+	}
+
 	fdb.idxStats.numDocsFlushQueued.Add(1)
 	fdb.cmdCh <- &indexItem{key: key, rawKey: rawKey, docid: docid}
 	return fdb.fatalDbErr
@@ -462,7 +477,7 @@ func (fdb *fdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) (nmu
 
 func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte, workerId int) (nmut int) {
 	var err error
-	var oldkey, oldRawKey []byte
+	var oldkey []byte
 
 	/*
 		Adding support for simple and composite array indexing. No support for duplicates yet
@@ -486,7 +501,6 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		return
 	}
 
-	var oldIndexEntries, newIndexEntries [][]interface{}
 	var oldEntriesBytes, newEntriesBytes [][]byte
 	if oldkey != nil {
 		if bytes.Equal(oldkey, key) {
@@ -495,52 +509,27 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			return
 		}
 
-		buf := fdb.arrBufPool.Get()
-		defer fdb.arrBufPool.Put(buf)
-		oldKeyEntry := secondaryIndexEntry(oldkey)
-		if oldRawKey, err = oldKeyEntry.ReadSecKey(*buf); err != nil {
-			fdb.checkFatalDbError(err)
-			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error while"+
-				"reading back-index secondary key %v", fdb.id, fdb.idxInstId, err)
-			return
-		}
-		oldIndexEntries, err = SplitSecondaryArrayKey(oldRawKey, fdb.arrayExprPosition)
+		tmpBufPtr := arrayEncBufPool.Get()
+		defer arrayEncBufPool.Put(tmpBufPtr)
+		oldEntriesBytes, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
+			(*tmpBufPtr)[:0])
+
 		if err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in retrieving "+
 				"compostite old secondary keys %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
-
-		oldEntriesBytes = make([][]byte, len(oldIndexEntries))
-		for i, item := range oldIndexEntries {
-			var b []byte
-			if b, err = json.Marshal(item); err != nil {
-				fdb.checkFatalDbError(err)
-				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in marshalling old "+
-					"back index entries %v", fdb.id, fdb.idxInstId, err)
-				return
-			}
-			oldEntriesBytes[i] = b
-		}
 	}
 	if key != nil {
-		if newIndexEntries, err = SplitSecondaryArrayKey(rawKey, fdb.arrayExprPosition); err != nil {
+		tmpBufPtr := arrayEncBufPool.Get()
+		defer arrayEncBufPool.Put(tmpBufPtr)
+		if newEntriesBytes, err = ArrayIndexItems(key, fdb.arrayExprPosition,
+			(*tmpBufPtr)[:0]); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in creating "+
 				"compostite new secondary keys %v", fdb.id, fdb.idxInstId, err)
 			return
-		}
-		newEntriesBytes = make([][]byte, len(newIndexEntries))
-		for i, item := range newIndexEntries {
-			var b []byte
-			if b, err = json.Marshal(item); err != nil {
-				fdb.checkFatalDbError(err)
-				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in marshalling new "+
-					"index entries %v", fdb.id, fdb.idxInstId, err)
-				return
-			}
-			newEntriesBytes[i] = b
 		}
 	}
 
@@ -561,9 +550,12 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	for _, item := range indexEntriesToBeDeleted {
 		if item != nil { // nil item indicates it should not be deleted
 			var keyToBeDeleted []byte
-			if keyToBeDeleted, err = GetIndexEntryBytesFromKey(item, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
+			tmpBufPtr := arrayEncBufPool.Get()
+			defer arrayEncBufPool.Put(tmpBufPtr)
+			if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, (*tmpBufPtr)[:0]); err != nil {
+				arrayEncBufPool.Put(tmpBufPtr)
 				fdb.checkFatalDbError(err)
-				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytesFromKey for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
 				return
 			}
 			t0 := time.Now()
@@ -582,9 +574,13 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	for _, item := range indexEntriesToBeAdded {
 		if item != nil { // nil item indicates it should not be added
 			var keyToBeAdded []byte
-			if keyToBeAdded, err = GetIndexEntryBytesFromKey(item, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
+			keyToBeAdded = item
+			tmpBufPtr := arrayEncBufPool.Get()
+			defer arrayEncBufPool.Put(tmpBufPtr)
+			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false, (*tmpBufPtr)[:0]); err != nil {
+				arrayEncBufPool.Put(tmpBufPtr)
 				fdb.checkFatalDbError(err)
-				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytesFromKey for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
 				return
 			}
 			t0 := time.Now()
@@ -728,7 +724,7 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 	//logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v. Delete Key - %s",
 	//	fdb.id, fdb.idxInstId, docid)
 
-	var olditm, oldRawKey []byte
+	var olditm []byte
 	var err error
 
 	if olditm, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
@@ -738,40 +734,34 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 		return
 	}
 
-	if olditm != nil {
-		oldKeyEntry := secondaryIndexEntry(olditm)
-		buf := fdb.arrBufPool.Get()
-		defer fdb.arrBufPool.Put(buf)
-		if oldRawKey, err = oldKeyEntry.ReadSecKey(*buf); err != nil {
-			fdb.checkFatalDbError(err)
-			logging.Errorf("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v Error while reading back index secondary key %v", fdb.id, fdb.idxInstId, err)
-			return
-		}
-	} else {
+	if olditm == nil {
 		logging.Tracef("ForestDBSlice::delete \n\tSliceId %v IndexInstId %v Received NIL Key for "+
 			"Doc Id %v. Skipped.", fdb.id, fdb.idxInstId, docid)
 		return
 	}
 
-	indexEntriesToBeDeleted, err := SplitSecondaryArrayKey(oldRawKey, fdb.arrayExprPosition)
+	tmpBufPtr := arrayEncBufPool.Get()
+	defer arrayEncBufPool.Put(tmpBufPtr)
+	indexEntriesToBeDeleted, err := ArrayIndexItems(olditm, fdb.arrayExprPosition,
+		(*tmpBufPtr)[:0])
+
 	if err != nil {
 		fdb.checkFatalDbError(err)
-		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error forming "+
-			" list of entries to be deleted %v", fdb.id, fdb.idxInstId, err)
+		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in retrieving "+
+			"compostite old secondary keys %v", fdb.id, fdb.idxInstId, err)
 		return
 	}
+
 	var t0 time.Time
 	// Delete each of indexEntriesToBeDeleted from main index
 	for _, item := range indexEntriesToBeDeleted {
-		var b, keyToBeDeleted []byte
-		if b, err = json.Marshal(item); err != nil {
+		var keyToBeDeleted []byte
+		tmpBufPtr := arrayEncBufPool.Get()
+		defer arrayEncBufPool.Put(tmpBufPtr)
+		if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, (*tmpBufPtr)[:0]); err != nil {
+			arrayEncBufPool.Put(tmpBufPtr)
 			fdb.checkFatalDbError(err)
-			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error while marshalling entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
-			return
-		}
-		if keyToBeDeleted, err = GetIndexEntryBytesFromKey(b, docid, fdb.isPrimary, fdb.idxDefn.IsArrayIndex); err != nil {
-			fdb.checkFatalDbError(err)
-			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytesFromKey for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
+			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
 			return
 		}
 		t0 := time.Now()
@@ -1218,6 +1208,12 @@ func (fdb *fdbSlice) Compact() error {
 	fdb.setIsCompacting(true)
 	defer fdb.setIsCompacting(false)
 
+	if !fdb.canRunCompaction() {
+		logging.Infof("ForestDBSlice::Skip Compaction outside of compaction interval."+
+			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
+		return nil
+	}
+
 	//get oldest snapshot upto which compaction can be done
 	infos, err := fdb.getSnapshotsMeta()
 	if err != nil {
@@ -1268,6 +1264,10 @@ snaploop:
 			"Slice Id %v, IndexInstId %v, IndexDefnId %v", compactSeqNum, fdb.id,
 			fdb.idxInstId, fdb.idxDefnId)
 	}
+
+	donech := make(chan bool)
+	defer close(donech)
+	go fdb.cancelCompactionIfExpire(donech)
 
 	newpath := newFdbFile(fdb.path, true)
 	// Remove any existing files leftover due to a crash during last compaction attempt
@@ -1342,6 +1342,22 @@ func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {
 	defer fdb.confLock.Unlock()
 
 	fdb.sysconf = cfg
+
+	// update circular compaction setting in fdb
+	nmode := strings.ToLower(cfg["settings.compaction.compaction_mode"].String())
+	kept_headers := uint8(cfg["settings.recovery.max_rollbacks"].Int())
+	fconfig := forestdb.DefaultConfig()
+	reuse_threshold := uint8(fconfig.BlockReuseThreshold())
+
+	if nmode == "full" {
+		reuse_threshold = uint8(0)
+	}
+
+	if err := fdb.dbfile.SetBlockReuseParams(reuse_threshold, kept_headers); err != nil {
+		logging.Errorf("ForestDBSlice::UpdateConfig Error Changing Circular Compaction Params. Slice Id %v, "+
+			"IndexInstId %v, IndexDefnId %v ReuseThreshold %v KeepHeaders %v. Error %v",
+			fdb.id, fdb.idxInstId, fdb.idxDefnId, reuse_threshold, kept_headers, err)
+	}
 }
 
 func (fdb *fdbSlice) String() string {
@@ -1488,6 +1504,79 @@ func (fdb *fdbSlice) setIsCompacting(isCompacting bool) {
 	fdb.isCompacting = isCompacting
 }
 
+func (fdb *fdbSlice) cancelCompactionIfExpire(donech chan bool) {
+
+	ticker := time.NewTicker(time.Minute * time.Duration(5))
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-donech:
+			return
+		case <-ticker.C:
+			if !fdb.canRunCompaction() {
+				fdb.lock.Lock()
+				defer fdb.lock.Unlock()
+
+				if fdb.isCompacting {
+					fdb.cancelCompact()
+				}
+
+				return
+			}
+		}
+	}
+}
+
+func (fdb *fdbSlice) canRunCompaction() bool {
+
+	fdb.confLock.Lock()
+	defer fdb.confLock.Unlock()
+
+	mode := strings.ToLower(fdb.sysconf["settings.compaction.compaction_mode"].String())
+	abort := fdb.sysconf["settings.compaction.abort_exceed_interval"].Bool()
+	days := fdb.sysconf["settings.compaction.days_of_week"].Strings()
+	interval := fdb.sysconf["settings.compaction.interval"].String()
+
+	// No need to stop running compaction if in full compaction mode
+	if mode == "full" {
+		return true
+	}
+
+	// No need to stop compaction if it is ok to exceed time interval
+	if !abort {
+		return true
+	}
+
+	// check if compaction exceed day and time
+	today := strings.ToLower(time.Now().Weekday().String())
+	found := false
+	for _, day := range days {
+		if strings.ToLower(strings.TrimSpace(day)) == today {
+			found = true
+		}
+	}
+	expire := !found
+
+	if !expire {
+		var start_hr, start_min, end_hr, end_min int
+		n, err := fmt.Sscanf(interval, "%d:%d,%d:%d", &start_hr, &start_min, &end_hr, &end_min)
+		start_min += start_hr * 60
+		end_min += end_hr * 60
+
+		if n == 4 && err == nil {
+			hr, min, _ := time.Now().Clock()
+			min += hr * 60
+
+			if min < start_min || min > end_min {
+				expire = true
+			}
+		}
+	}
+
+	return !expire
+}
+
 func (fdb *fdbSlice) cancelCompact() {
 
 	logging.Infof("ForestDBSlice::cancelCompact Cancel Compaction Slice Id %v, "+
@@ -1505,6 +1594,6 @@ func (fdb *fdbSlice) cancelCompact() {
 	}
 	err = tempFd.CancelCompact()
 
-	logging.Infof("ForestDBSlice::Close Cancel Compaction Returns %v "+
+	logging.Infof("ForestDBSlice::Cancel Compaction Returns err %v "+
 		"Slice Id %v, IndexInstId %v ", err, fdb.id, fdb.idxInstId)
 }

@@ -1792,6 +1792,7 @@ func FeedConfigParams() []string {
 		"feedWaitStreamEndTimeout",
 		"feedWaitStreamReqTimeout",
 		"mutationChanSize",
+		"encodeBufSize",
 		"routerEndpointFactory",
 		"syncTimeout",
 		"kvstatTick",

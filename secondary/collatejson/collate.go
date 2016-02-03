@@ -18,10 +18,12 @@ package collatejson
 import "bytes"
 import "encoding/json"
 import "errors"
+import "strings"
 import "sort"
 import "fmt"
 import "strconv"
 import "sync"
+import n1ql "github.com/couchbase/query/value"
 
 var bufPool *sync.Pool
 
@@ -496,4 +498,104 @@ func (m Missing) Equal(n string) bool {
 		return s == n
 	}
 	return false
+}
+
+func (codec *Codec) n1ql2code(val n1ql.Value, code []byte) ([]byte, error) {
+	var cs []byte
+	var err error
+
+	switch val.Type() {
+	case n1ql.NULL:
+		code = append(code, TypeNull, Terminator)
+	case n1ql.BOOLEAN:
+		act := val.Actual().(bool)
+		if act {
+			code = append(code, TypeTrue, Terminator)
+		} else {
+			code = append(code, TypeFalse, Terminator)
+		}
+	case n1ql.NUMBER:
+		act := val.Actual().(float64)
+		code = append(code, TypeNumber)
+		cs, err = codec.normalizeFloat(act, code[1:])
+		if err == nil {
+			code = code[:len(code)+len(cs)]
+			code = append(code, Terminator)
+		}
+	case n1ql.STRING:
+		code = append(code, TypeString)
+		act := val.Actual().(string)
+		cs = suffixEncodeString([]byte(act), code[1:])
+		code = code[:len(code)+len(cs)]
+		code = append(code, Terminator)
+	case n1ql.MISSING:
+		code = append(code, TypeMissing)
+		code = append(code, Terminator)
+	case n1ql.ARRAY:
+		act := val.Actual().([]interface{})
+		code = append(code, TypeArray)
+		if codec.arrayLenPrefix {
+			arrlen := Length(len(act))
+			if cs, err = codec.json2code(arrlen, code[1:]); err == nil {
+				code = code[:len(code)+len(cs)]
+			}
+		}
+		if err == nil {
+			for _, val := range act {
+				l := len(code)
+				cs, err = codec.n1ql2code(n1ql.NewValue(val), code[l:])
+				if err == nil {
+					code = code[:l+len(cs)]
+					continue
+				}
+				break
+			}
+			code = append(code, Terminator)
+		}
+	case n1ql.OBJECT:
+		act := val.Actual().(map[string]interface{})
+		code = append(code, TypeObj)
+		if codec.propertyLenPrefix {
+			proplen := Length(len(act))
+			if cs, err = codec.json2code(proplen, code[1:]); err == nil {
+				code = code[:len(code)+len(cs)]
+			}
+		}
+
+		if err == nil {
+			keys := codec.sortProps(val.Actual().(map[string]interface{}))
+			for _, key := range keys {
+				l := len(code)
+				// encode key
+				if cs, err = codec.n1ql2code(n1ql.NewValue(key), code[l:]); err != nil {
+					break
+				}
+				code = code[:l+len(cs)]
+				l = len(code)
+				// encode value
+				if cs, err = codec.n1ql2code(n1ql.NewValue(act[key]), code[l:]); err != nil {
+					break
+				}
+				code = code[:l+len(cs)]
+			}
+			code = append(code, Terminator)
+		}
+	}
+
+	return code, err
+}
+
+// Caller is responsible for providing sufficiently sized buffer
+// Otherwise it may panic
+func (codec *Codec) EncodeN1QLValue(val n1ql.Value, buf []byte) (bs []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if strings.Contains(fmt.Sprint(r), "slice bounds out of range") {
+				err = ErrorOutputLen
+			} else {
+				err = fmt.Errorf("%v", r)
+			}
+		}
+	}()
+	return codec.n1ql2code(val, buf)
 }

@@ -11,55 +11,80 @@ package indexer
 
 import (
 	"bytes"
-	"encoding/json"
+	"github.com/couchbase/indexing/secondary/collatejson"
+	"github.com/couchbase/indexing/secondary/common"
 )
-
-// Given raw Json bytes of a key and arrayPosition,
-// this method creates the product of array items with other items
-func SplitSecondaryArrayKey(rawKey []byte, arrayPosition int) ([][]interface{}, error) {
-	var secKeyObject []interface{}
-	if err := json.Unmarshal(rawKey, &secKeyObject); err != nil {
-		return nil, err
-	}
-	return SplitSecondaryArrayKey2(secKeyObject, arrayPosition), nil
-}
 
 // Given the input secondary key, this method creates the product of array items
 // with all other items in the composite secondary key
 // Example: if input key is [35, ["Dave", "Ann", "Pete"]] and arrayPos = 1, this generates the product as:
-// [30, "Dave"] , [30, "Ann"], [30, "Pete"]]
-func SplitSecondaryArrayKey2(secKeyObject []interface{}, arrayPosition int) [][]interface{} {
-	arrayIndexEntries := make([][]interface{}, 0, len(secKeyObject))
-
+// [30, "Dave"] , [30, "Ann"], [30, "Pete"]
+func splitSecondaryArrayKey(key []byte, arrayPos int, tmpBuf []byte) ([][][]byte, error) {
 	var arrayLen int
-	if arrayItem, ok := secKeyObject[arrayPosition].([]interface{}); ok {
+	var arrayItem [][]byte
+	var err2 error
+
+	codec := collatejson.NewCodec(16)
+	bufPtr := encBufPool.Get()
+	defer encBufPool.Put(bufPtr)
+	secKeyObject, err := codec.ExplodeArray(key, tmpBuf)
+	common.CrashOnError(err)
+
+	hasArray := false
+	insideArr := secKeyObject[arrayPos]
+	if arrayItem, err2 = codec.ExplodeArray(insideArr, tmpBuf); err2 == nil {
 		arrayLen = len(arrayItem)
+		hasArray = true
 	}
+
+	arrayIndexEntries := make([][][]byte, 0, len(secKeyObject))
 
 	// Handle empty array
 	if arrayLen == 0 {
-		element := make([]interface{}, len(secKeyObject))
+		element := make([][]byte, len(secKeyObject))
 		for i, item := range secKeyObject {
-			if i == arrayPosition {
+			if i == arrayPos {
 				element[i] = nil // Todo: Is it nil or Byte version of "[]" ?
 			} else {
 				element[i] = item
 			}
 		}
 		arrayIndexEntries = append(arrayIndexEntries, element)
-		return arrayIndexEntries
+		return arrayIndexEntries, nil
 	}
 
-	if elements, ok := secKeyObject[arrayPosition].([]interface{}); ok {
-		for _, element := range elements {
-			element2 := make([]interface{}, len(secKeyObject))
+	if hasArray {
+		for _, element := range arrayItem {
+			element2 := make([][]byte, len(secKeyObject))
 			copy(element2, secKeyObject)
-			element2[arrayPosition] = element
+			element2[arrayPos] = element
 			arrayIndexEntries = append(arrayIndexEntries, element2)
 		}
 	}
 
-	return arrayIndexEntries
+	return arrayIndexEntries, nil
+}
+
+func ArrayIndexItems(bs []byte, arrPos int, buf []byte) ([][]byte, error) {
+	var items [][]byte
+	var err error
+
+	itemArrays, err := splitSecondaryArrayKey(bs, arrPos, buf)
+	if err != nil {
+		return nil, err
+	}
+
+	codec := collatejson.NewCodec(16)
+	for _, arr := range itemArrays {
+		if bs, err = codec.JoinArray(arr, buf); err != nil {
+			return nil, err
+		}
+		items = append(items, bs)
+		l := len(bs)
+		buf = buf[l:l]
+	}
+
+	return items, nil
 }
 
 // Compare two arrays of byte arrays and find out diff of which byte entry needs to be deleted and which needs to be inserted

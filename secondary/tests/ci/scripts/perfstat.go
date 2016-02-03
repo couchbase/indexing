@@ -286,7 +286,7 @@ func (buf bytesBuffer) Printf(spec string, args ...interface{}) {
 
 func prettyLabel(fn filename) string {
 	ts := timestamp(fn)
-	label := ts.Format("Jan 2, 3pm")
+	label := ts.Format("Jan 2, 2006 3pm")
 	return label
 }
 
@@ -299,7 +299,7 @@ func timestamp(fn filename) time.Time {
 		fmt.Println("Could not parse timestamp:", string(fn))
 		return ets
 	}
-	label := result[1] + ".2016 " + result[2]
+	label := result[1] + " " + result[2]
 	ts, err := time.Parse("02.01.2006 15.04", label)
 	if err != nil {
 		fmt.Println("Could not parse label:", label)

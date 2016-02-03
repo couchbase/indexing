@@ -128,6 +128,14 @@ func (c *Config) CompactionBufferSizeMax() uint32 {
 	return uint32(c.config.compaction_buf_maxsize)
 }
 
+func (c *Config) NumKeepingHeaders() uint8 {
+	return uint8(c.config.num_keeping_headers)
+}
+
+func (c *Config) BlockReuseThreshold() uint8 {
+	return uint8(c.config.block_reusing_threshold)
+}
+
 func (c *Config) SetCompactionBufferSizeMax(s uint32) {
 	c.config.compaction_buf_maxsize = C.uint32_t(s)
 }
@@ -186,6 +194,14 @@ func (c *Config) MaxWriterLockProb() uint8 {
 
 func (c *Config) SetMaxWriterLockProb(s uint8) {
 	c.config.max_writer_lock_prob = C.size_t(s)
+}
+
+func (c *Config) SetNumKeepingHeaders(s uint8) {
+	c.config.num_keeping_headers = C.size_t(s)
+}
+
+func (c *Config) SetBlockReuseThreshold(s uint8) {
+	c.config.block_reusing_threshold = C.size_t(s)
 }
 
 // DefaultConfig gets the default ForestDB config

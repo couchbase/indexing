@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/platform"
 	"github.com/couchbase/indexing/secondary/stats"
 	"net/http"
@@ -22,6 +23,12 @@ import (
 	"time"
 	"unsafe"
 )
+
+var uptime time.Time
+
+func init() {
+	uptime = time.Now()
+}
 
 type BucketStats struct {
 	bucket     string
@@ -238,6 +245,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
 	}
 
+	addStat("uptime", fmt.Sprintf("%s", time.Since(uptime)))
 	addStat("num_connections", is.numConnections.Value())
 	addStat("memory_quota", is.memoryQuota.Value())
 	addStat("memory_used", is.memoryUsed.Value())
@@ -375,6 +383,7 @@ func NewStatsManager(supvCmdch MsgChannel,
 
 	http.HandleFunc("/stats", s.handleStatsReq)
 	http.HandleFunc("/stats/mem", s.handleMemStatsReq)
+	http.HandleFunc("/stats/storage/mm", s.handleStorageMMStatsReq)
 	http.HandleFunc("/stats/storage", s.handleStorageStatsReq)
 	http.HandleFunc("/stats/reset", s.handleStatsResetReq)
 	go s.run()
@@ -486,6 +495,18 @@ func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Requ
 
 		w.WriteHeader(200)
 		w.Write([]byte(s.getStorageStats()))
+
+	} else {
+		w.WriteHeader(400)
+		w.Write([]byte("Unsupported method"))
+	}
+}
+
+func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" || r.Method == "GET" {
+
+		w.WriteHeader(200)
+		w.Write([]byte(mm.Stats()))
 
 	} else {
 		w.WriteHeader(400)

@@ -24,9 +24,14 @@ type MutationMeta struct {
 }
 
 var mutMetaPool = sync.Pool{New: newMutationMeta}
+var useMutationSyncPool bool = false
 
 func NewMutationMeta() *MutationMeta {
-	return mutMetaPool.Get().(*MutationMeta)
+	if useMutationSyncPool {
+		return mutMetaPool.Get().(*MutationMeta)
+	}
+
+	return &MutationMeta{}
 }
 
 func newMutationMeta() interface{} {
@@ -43,7 +48,9 @@ func (m *MutationMeta) Clone() *MutationMeta {
 }
 
 func (m *MutationMeta) Free() {
-	mutMetaPool.Put(m)
+	if useMutationSyncPool {
+		mutMetaPool.Put(m)
+	}
 }
 
 func (m MutationMeta) String() string {
@@ -66,7 +73,11 @@ type MutationKeys struct {
 var mutkeysPool = sync.Pool{New: newMutationKeys}
 
 func NewMutationKeys() *MutationKeys {
-	return mutkeysPool.Get().(*MutationKeys)
+	if useMutationSyncPool {
+		return mutkeysPool.Get().(*MutationKeys)
+	}
+
+	return &MutationKeys{}
 }
 
 func newMutationKeys() interface{} {
@@ -74,13 +85,15 @@ func newMutationKeys() interface{} {
 }
 
 func (mk *MutationKeys) Free() {
-	mk.meta.Free()
-	mk.docid = mk.docid[:0]
-	for _, m := range mk.mut {
-		m.Free()
+	if useMutationSyncPool {
+		mk.meta.Free()
+		mk.docid = mk.docid[:0]
+		for _, m := range mk.mut {
+			m.Free()
+		}
+		mk.mut = mk.mut[:0]
+		mutkeysPool.Put(mk)
 	}
-	mk.mut = mk.mut[:0]
-	mutkeysPool.Put(mk)
 }
 
 type Mutation struct {
@@ -94,7 +107,11 @@ type Mutation struct {
 var mutPool = sync.Pool{New: newMutation}
 
 func NewMutation() *Mutation {
-	return mutPool.Get().(*Mutation)
+	if useMutationSyncPool {
+		return mutPool.Get().(*Mutation)
+	}
+
+	return &Mutation{}
 }
 
 func newMutation() interface{} {
@@ -102,8 +119,10 @@ func newMutation() interface{} {
 }
 
 func (m *Mutation) Free() {
-	m.key = m.key[:0]
-	m.oldkey = m.oldkey[:0]
-	m.partnkey = m.partnkey[:0]
-	mutPool.Put(m)
+	if useMutationSyncPool {
+		m.key = m.key[:0]
+		m.oldkey = m.oldkey[:0]
+		m.partnkey = m.partnkey[:0]
+		mutPool.Put(m)
+	}
 }

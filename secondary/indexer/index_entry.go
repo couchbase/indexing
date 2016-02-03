@@ -69,14 +69,13 @@ type IndexKey interface {
 // Raw docid bytes are stored as the key
 type primaryIndexEntry []byte
 
-func NewPrimaryIndexEntry(docid []byte) (*primaryIndexEntry, error) {
+func NewPrimaryIndexEntry(docid []byte) (primaryIndexEntry, error) {
 	if isDocIdLarge(docid) {
 		return nil, ErrDocIdTooLong
 	}
 
-	buf := append([]byte(nil), docid...)
-	e := primaryIndexEntry(buf)
-	return &e, nil
+	e := primaryIndexEntry(docid)
+	return e, nil
 }
 
 func BytesToPrimaryIndexEntry(b []byte) (*primaryIndexEntry, error) {
@@ -106,22 +105,27 @@ func (e *primaryIndexEntry) String() string {
 // [collate_json_encoded_sec_key][raw_docid_bytes][len_of_docid_2_bytes]
 type secondaryIndexEntry []byte
 
-func NewSecondaryIndexEntry(key []byte, docid []byte) (*secondaryIndexEntry, error) {
+func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, buf []byte) (secondaryIndexEntry, error) {
 	var err error
-	var buf []byte
 
 	if isNilJsonKey(key) {
 		return nil, ErrSecKeyNil
 	}
 
-	if isSecKeyLarge(key) {
+	if isArray {
+		if isArraySecKeyLarge(key) {
+			return nil, ErrArraySecKeyTooLong
+		}
+	} else if isSecKeyLarge(key) {
 		return nil, ErrSecKeyTooLong
 	}
 
-	poolBuf := encBufPool.Get()
-	defer encBufPool.Put(poolBuf)
-	if buf, err = jsonEncoder.Encode(key, (*poolBuf)[:0]); err != nil {
-		return nil, err
+	if key[0] == '[' { // JSON
+		if buf, err = jsonEncoder.Encode(key, buf); err != nil {
+			return nil, err
+		}
+	} else { // Encoded
+		buf = append(buf, key...)
 	}
 
 	buf = append(buf, docid...)
@@ -129,38 +133,8 @@ func NewSecondaryIndexEntry(key []byte, docid []byte) (*secondaryIndexEntry, err
 	offset := len(buf) - 2
 	binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(docid)))
 
-	buf = append([]byte(nil), buf[:len(buf)]...)
 	e := secondaryIndexEntry(buf)
-	return &e, nil
-}
-
-// This is a different method for key size check and to use array Buffer pool
-func NewSecondaryIndexEntryForArray(key []byte, docid []byte) (*secondaryIndexEntry, error) {
-	var err error
-	var buf []byte
-
-	if isNilJsonKey(key) {
-		return nil, ErrSecKeyNil
-	}
-
-	if isArraySecKeyLarge(key) {
-		return nil, ErrArraySecKeyTooLong
-	}
-
-	poolBuf := arrayEncBufPool.Get()
-	defer arrayEncBufPool.Put(poolBuf)
-	if buf, err = jsonEncoder.Encode(key, (*poolBuf)[:0]); err != nil {
-		return nil, err
-	}
-
-	buf = append(buf, docid...)
-	buf = buf[:len(buf)+2]
-	offset := len(buf) - 2
-	binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(docid)))
-
-	buf = append([]byte(nil), buf[:len(buf)]...)
-	e := secondaryIndexEntry(buf)
-	return &e, nil
+	return e, nil
 }
 
 func BytesToSecondaryIndexEntry(b []byte) (*secondaryIndexEntry, error) {
@@ -348,4 +322,49 @@ func isArraySecKeyLarge(k []byte) bool {
 
 func isDocIdLarge(k []byte) bool {
 	return len(k) > MAX_DOCID_LEN
+}
+
+func IndexEntrySize(key []byte, docid []byte) int {
+	return len(key) + len(docid) + 2
+}
+
+func GetIndexEntryBytes2(key []byte, docid []byte,
+	isPrimary bool, isArray bool, buf []byte) (bs []byte, err error) {
+
+	if isPrimary {
+		bs, err = NewPrimaryIndexEntry(docid)
+	} else {
+		bs, err = NewSecondaryIndexEntry(key, docid, isArray, buf)
+		if err == ErrSecKeyNil {
+			return nil, nil
+		}
+	}
+
+	return bs, err
+}
+
+func GetIndexEntryBytes(key []byte, docid []byte,
+	isPrimary bool, isArray bool) (entry []byte, err error) {
+
+	var bufPool *common.BytesBufPool
+	var bufPtr *[]byte
+	var buf []byte
+
+	if isArray {
+		bufPool = arrayEncBufPool
+	} else if !isPrimary {
+		bufPool = encBufPool
+	}
+
+	if bufPool != nil {
+		bufPtr = bufPool.Get()
+		buf = (*bufPtr)[:0]
+
+		defer func() {
+			bufPool.Put(bufPtr)
+		}()
+	}
+
+	entry, err = GetIndexEntryBytes2(key, docid, isPrimary, isArray, buf)
+	return append([]byte(nil), entry...), err
 }

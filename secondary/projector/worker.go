@@ -45,6 +45,8 @@ type VbucketWorker struct {
 	// config params
 	logPrefix   string
 	mutChanSize int
+
+	encodeBuf []byte
 }
 
 // NewVbucketWorker creates a new routine to handle this vbucket stream.
@@ -53,6 +55,7 @@ func NewVbucketWorker(
 	opaque uint16, config c.Config) *VbucketWorker {
 
 	mutChanSize := config["mutationChanSize"].Int()
+	encodeBufSize := config["encodeBufSize"].Int()
 
 	worker := &VbucketWorker{
 		id:        id,
@@ -66,6 +69,7 @@ func NewVbucketWorker(
 		endpoints: make(map[string]c.RouterEndpoint),
 		reqch:     make(chan []interface{}, mutChanSize),
 		finch:     make(chan bool),
+		encodeBuf: make([]byte, 0, encodeBufSize),
 	}
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
 	worker.logPrefix = fmt.Sprintf(fmsg, id, bucket, cluster, topic)
@@ -376,7 +380,7 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		// for each engine distribute transformations to endpoints.
 		fmsg := "%v ##%x TransformRoute: %v\n"
 		for _, engine := range worker.engines {
-			err := engine.TransformRoute(v.vbuuid, m, dataForEndpoints)
+			err := engine.TransformRoute(v.vbuuid, m, dataForEndpoints, worker.encodeBuf)
 			if err != nil {
 				logging.Errorf(fmsg, logPrefix, m.Opaque, err)
 			}
