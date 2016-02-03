@@ -30,6 +30,7 @@ IF(JEMALLOC_FOUND)
     SET (ENV{CGO_CFLAGS} "$ENV{CGO_CFLAGS} -DJEMALLOC=1")
     SET (CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS};${JEMALLOC_INCLUDE_DIR}")
     SET (CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS};${JEMALLOC_LIB_DIR}")
+    SET (TAGS "jemalloc")
 ENDIF(JEMALLOC_FOUND)
 
 GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/indexer
@@ -37,6 +38,7 @@ GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/in
   DEPENDS forestdb breakpad_wrapper
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
+  GOTAGS "${TAGS}"
   LDFLAGS "${_indexer_ldflags}"
   INSTALL_PATH bin OUTPUT indexer)
 
