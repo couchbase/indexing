@@ -15,6 +15,16 @@ if [ "$TS" = "" ]; then
   TS="adhoc"
 fi
 
+iid="`curl -s http://169.254.169.254/latest/meta-data/instance-id`"
+iname="`aws ec2 describe-tags --filters Name=resource-id,Values=$iid Name=key,Values=Name --out text | awk '{print $5}'`"
+if [[ $iname == *"memdb"* ]]; then
+  echo "Using storage type memdb"
+  storage=memdb
+else
+  echo "Using storage type fdb"
+  storage=fdb
+fi
+
 stop_cluster() {
   killall -ABRT indexer 1>/dev/null 2>&1
   killall -ABRT projector 1>/dev/null 2>&1
@@ -133,9 +143,9 @@ GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 # Go tests
 echo "</pre><h4>Functional tests</h4><pre>"
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/functionaltests
-go test -timeout 4h -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
+go test -timeout 4h -v -cbconfig ../config/buildtest_$storage.json 2>&1 | tee -a $WORKSPACE/test.log
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
-go test -timeout 8h -v -cbconfig ../config/build_validation.json 2>&1 | tee -a $WORKSPACE/test.log
+go test -timeout 8h -v -cbconfig ../config/buildtest_$storage.json 2>&1 | tee -a $WORKSPACE/test.log
 collects_logs
 stop_cluster
 
@@ -176,6 +186,8 @@ cd $WORKSPACE/forestdb
 git rev-parse HEAD > ~/forestdb.good
 cd $WORKSPACE/testrunner
 git rev-parse HEAD > ~/testrunner.good
+cd $WORKSPACE/ep-engine
+git rev-parse HEAD > ~/ep-engine.good
 
 echo "</pre><h4>Testing Succeeded</h4><pre>"
 if [ "$skiplist" != "" ]; then
