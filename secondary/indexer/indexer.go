@@ -18,6 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb"
+	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	"math/rand"
@@ -3923,6 +3924,7 @@ func (idx *indexer) monitorMemUsage() {
 
 			if idx.needsGC() {
 				runtime.GC()
+				mm.FreeOSMemory()
 			}
 
 			mem_used := idx.memoryUsed()

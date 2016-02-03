@@ -15,6 +15,7 @@ import (
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"io/ioutil"
 	"net/http"
@@ -254,6 +255,7 @@ func (s *settingsManager) handleFreeMemoryReq(w http.ResponseWriter, r *http.Req
 
 	logging.Infof("Received force free memory request. Executing FreeOSMemory...")
 	debug.FreeOSMemory()
+	mm.FreeOSMemory()
 	s.writeOk(w)
 }
 
