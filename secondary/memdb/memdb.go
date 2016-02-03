@@ -21,6 +21,7 @@ import (
 
 var (
 	ErrMaxSnapshotsLimitReached = fmt.Errorf("Maximum snapshots limit reached")
+	ErrShutdown                 = fmt.Errorf("MemDB instance has been shutdown")
 )
 
 type KeyCompare func([]byte, []byte) int
@@ -287,7 +288,8 @@ type MemDB struct {
 	gcchan   chan *skiplist.Node
 	freechan chan *skiplist.Node
 
-	shutdownWg1 sync.WaitGroup // GC workers
+	hasShutdown bool
+	shutdownWg1 sync.WaitGroup // GC workers and StoreToDisk task
 	shutdownWg2 sync.WaitGroup // Free workers
 
 	Config
@@ -351,6 +353,7 @@ func (m *MemDB) MemoryInUse() int64 {
 }
 
 func (m *MemDB) Close() {
+	m.hasShutdown = true
 	close(m.gcchan)
 
 	buf := dbInstances.MakeBuf()
@@ -759,6 +762,11 @@ func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concu
 }
 
 func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback ItemCallback) error {
+	if m.useMemoryMgmt {
+		m.shutdownWg1.Add(1)
+		defer m.shutdownWg1.Done()
+	}
+
 	var err error
 	datadir := path.Join(dir, "data")
 	os.MkdirAll(datadir, 0755)
@@ -787,6 +795,10 @@ func (m *MemDB) StoreToDisk(dir string, snap *Snapshot, concurr int, itmCallback
 	}
 
 	visitorCallback := func(itm *Item, shard int) error {
+		if m.hasShutdown {
+			return ErrShutdown
+		}
+
 		w := writers[shard]
 		if err := w.WriteItem(itm); err != nil {
 			return err
