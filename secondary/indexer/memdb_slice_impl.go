@@ -722,6 +722,12 @@ func (mdb *memdbSlice) resetStores() {
 //Rollback slice to given snapshot. Return error if
 //not possible
 func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
+
+	//before rollback make sure there are no mutations
+	//in the slice buffer. Timekeeper will make sure there
+	//are no flush workers before calling rollback.
+	mdb.waitPersist()
+
 	snapInfo := info.(*memdbSnapshotInfo)
 	mdb.resetStores()
 	return mdb.loadSnapshot(snapInfo)

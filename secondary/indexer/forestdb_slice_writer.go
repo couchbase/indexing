@@ -868,6 +868,11 @@ func (fdb *fdbSlice) GetCommittedCount() uint64 {
 //not possible
 func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 
+	//before rollback make sure there are no mutations
+	//in the slice buffer. Timekeeper will make sure there
+	//are no flush workers before calling rollback.
+	fdb.waitPersist()
+
 	//get the seqnum from snapshot
 	snapInfo := info.(*fdbSnapshotInfo)
 
