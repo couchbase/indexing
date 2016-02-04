@@ -231,7 +231,7 @@ type fdbSlice struct {
 
 	idxStats   *IndexStats
 	sysconf    common.Config
-	confLock   sync.Mutex
+	confLock   sync.RWMutex
 	statFdLock sync.Mutex
 
 	// Array processing
@@ -972,9 +972,9 @@ func (fdb *fdbSlice) waitPersist() {
 		//every SLICE_COMMIT_POLL_INTERVAL milliseconds,
 		//check for outstanding mutations. If there are
 		//none, proceed with the commit.
-		fdb.confLock.Lock()
+		fdb.confLock.RLock()
 		commitPollInterval := fdb.sysconf["storage.fdb.commitPollInterval"].Uint64()
-		fdb.confLock.Unlock()
+		fdb.confLock.RUnlock()
 		ticker := time.NewTicker(time.Millisecond * time.Duration(commitPollInterval))
 		for _ = range ticker.C {
 			if fdb.checkAllWorkersDone() {
@@ -1037,9 +1037,9 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 		sic := NewSnapshotInfoContainer(infos)
 		sic.Add(newSnapshotInfo)
 
-		fdb.confLock.Lock()
+		fdb.confLock.RLock()
 		maxRollbacks := fdb.sysconf["settings.recovery.max_rollbacks"].Int()
-		fdb.confLock.Unlock()
+		fdb.confLock.RUnlock()
 
 		if sic.Len() > maxRollbacks {
 			sic.RemoveOldest()
@@ -1515,8 +1515,8 @@ func (fdb *fdbSlice) cancelCompactionIfExpire(donech chan bool) {
 
 func (fdb *fdbSlice) canRunCompaction() bool {
 
-	fdb.confLock.Lock()
-	defer fdb.confLock.Unlock()
+	fdb.confLock.RLock()
+	defer fdb.confLock.RUnlock()
 
 	mode := strings.ToLower(fdb.sysconf["settings.compaction.compaction_mode"].String())
 	abort := fdb.sysconf["settings.compaction.abort_exceed_interval"].Bool()
