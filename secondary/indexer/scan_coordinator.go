@@ -81,38 +81,6 @@ type ScanRequest struct {
 	keyBufList []*[]byte
 }
 
-type CancelCb struct {
-	done    chan struct{}
-	timeout <-chan time.Time
-	cancel  <-chan bool
-	callb   func(error)
-}
-
-func (c *CancelCb) Run() {
-	go func() {
-		select {
-		case <-c.done:
-		case <-c.cancel:
-			c.callb(common.ErrClientCancel)
-		case <-c.timeout:
-			c.callb(common.ErrScanTimedOut)
-		}
-	}()
-}
-
-func (c *CancelCb) Done() {
-	close(c.done)
-}
-
-func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
-	return &CancelCb{
-		done:    make(chan struct{}),
-		timeout: req.Timeout.C,
-		cancel:  req.CancelCh,
-		callb:   callb,
-	}
-}
-
 func (r ScanRequest) String() string {
 	var incl, span string
 
@@ -159,6 +127,14 @@ func (r ScanRequest) String() string {
 	return str
 }
 
+func (r *ScanRequest) getTimeoutCh() <-chan time.Time {
+	if r.Timeout != nil {
+		return r.Timeout.C
+	}
+
+	return nil
+}
+
 func (r *ScanRequest) Done() {
 	// If the requested DefnID in invalid, stats object will not be populated
 	if r.Stats != nil {
@@ -174,6 +150,40 @@ func (r *ScanRequest) Done() {
 	if r.Timeout != nil {
 		r.Timeout.Stop()
 	}
+}
+
+type CancelCb struct {
+	done    chan struct{}
+	timeout <-chan time.Time
+	cancel  <-chan bool
+	callb   func(error)
+}
+
+func (c *CancelCb) Run() {
+	go func() {
+		select {
+		case <-c.done:
+		case <-c.cancel:
+			c.callb(common.ErrClientCancel)
+		case <-c.timeout:
+			c.callb(common.ErrScanTimedOut)
+		}
+	}()
+}
+
+func (c *CancelCb) Done() {
+	close(c.done)
+}
+
+func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
+	cb := &CancelCb{
+		done:    make(chan struct{}),
+		cancel:  req.CancelCh,
+		timeout: req.getTimeoutCh(),
+		callb:   callb,
+	}
+
+	return cb
 }
 
 type ScanCoordinator interface {
@@ -612,7 +622,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	var msg interface{}
 	select {
 	case msg = <-snapResch:
-	case <-r.Timeout.C:
+	case <-r.getTimeoutCh():
 		go readDeallocSnapshot(snapResch)
 		msg = common.ErrScanTimedOut
 	}
