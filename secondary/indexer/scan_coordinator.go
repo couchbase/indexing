@@ -727,6 +727,8 @@ func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanReq
 func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	cancelCh <-chan bool) {
 
+	ttime := time.Now()
+
 	req, err := s.newRequest(protoReq, cancelCh)
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() {
@@ -766,6 +768,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		return fmt.Sprintf("%s snapshot timestamp: %s",
 			req.LogPrefix, ScanTStoString(is.Timestamp()))
 	})
+
+	defer func() {
+		req.Stats.scanReqDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+	}()
+
 	s.processRequest(req, w, is, t0)
 }
 
