@@ -22,6 +22,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -207,7 +208,15 @@ type scanCoordinator struct {
 
 	stats IndexerStatsHolder
 
-	indexerState common.IndexerState
+	indexerState atomic.Value
+}
+
+func (s *scanCoordinator) getIndexerState() common.IndexerState {
+	return s.indexerState.Load().(common.IndexerState)
+}
+
+func (s *scanCoordinator) setIndexerState(state common.IndexerState) {
+	s.indexerState.Store(state)
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -929,33 +938,19 @@ func (s *scanCoordinator) handleConfigUpdate(cmd Message) {
 }
 
 func (s *scanCoordinator) handleIndexerPause(cmd Message) {
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.indexerState = common.INDEXER_PAUSED
-
+	s.setIndexerState(common.INDEXER_PAUSED)
 	s.supvCmdch <- &MsgSuccess{}
 
 }
 
 func (s *scanCoordinator) handleIndexerResume(cmd Message) {
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.indexerState = common.INDEXER_ACTIVE
+	s.setIndexerState(common.INDEXER_ACTIVE)
 
 	s.supvCmdch <- &MsgSuccess{}
 }
 
 func (s *scanCoordinator) handleIndexerBootstrap(cmd Message) {
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.indexerState = common.INDEXER_BOOTSTRAP
-
+	s.setIndexerState(common.INDEXER_BOOTSTRAP)
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -1041,12 +1036,7 @@ func readDeallocSnapshot(ch chan interface{}) {
 }
 
 func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.indexerState == common.INDEXER_PAUSED {
-
+	if s.getIndexerState() == common.INDEXER_PAUSED {
 		cfg := s.config.Load()
 		allow_scan_when_paused := cfg["allow_scan_when_paused"].Bool()
 
@@ -1060,18 +1050,10 @@ func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
 	}
 
 	return nil
-
 }
 
 func (s *scanCoordinator) isBootstrapMode() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.indexerState == common.INDEXER_BOOTSTRAP {
-		return true
-	}
-
-	return false
+	return s.getIndexerState() == common.INDEXER_BOOTSTRAP
 }
 
 func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string) (seqnos []uint64, err error) {
