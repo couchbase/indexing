@@ -21,6 +21,7 @@ import (
 	fdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"strings"
 	"time"
 	//"runtime/debug"
 )
@@ -264,6 +265,17 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 			" Please retry the operation at a later time (err=%v).", err)
 	}
 	defn.BucketUUID = bucketUUID
+
+	//if no index_type has been specified
+	if strings.ToLower(string(defn.Using)) == "gsi" {
+		if common.GetStorageMode() != common.NOT_SET {
+			//if there is a storage mode, default to that
+			defn.Using = common.IndexType(common.GetStorageMode().String())
+		} else {
+			//default to forestdb
+			defn.Using = "forestdb"
+		}
+	}
 
 	if err := m.repo.CreateIndex(defn); err != nil {
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)

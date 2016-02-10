@@ -2897,7 +2897,7 @@ func (tk *timekeeper) checkIndexerState(state common.IndexerState) bool {
 
 func (tk *timekeeper) getPersistInterval() uint64 {
 
-	if GetStorageMode() == MEMDB {
+	if common.GetStorageMode() == common.MEMDB {
 		return tk.config["settings.persisted_snapshot.memdb.interval"].Uint64()
 	} else {
 		return tk.config["settings.persisted_snapshot.interval"].Uint64()
@@ -2906,7 +2906,7 @@ func (tk *timekeeper) getPersistInterval() uint64 {
 }
 func (tk *timekeeper) getPersistIntervalInitBuild() uint64 {
 
-	if GetStorageMode() == MEMDB {
+	if common.GetStorageMode() == common.MEMDB {
 		return tk.config["settings.persisted_snapshot_init_build.memdb.interval"].Uint64()
 	} else {
 		return tk.config["settings.persisted_snapshot_init_build.interval"].Uint64()
@@ -2915,7 +2915,7 @@ func (tk *timekeeper) getPersistIntervalInitBuild() uint64 {
 }
 func (tk *timekeeper) getInMemSnapInterval() uint64 {
 
-	if GetStorageMode() == MEMDB {
+	if common.GetStorageMode() == common.MEMDB {
 		return tk.config["settings.inmemory_snapshot.memdb.interval"].Uint64()
 	} else {
 		return tk.config["settings.inmemory_snapshot.interval"].Uint64()

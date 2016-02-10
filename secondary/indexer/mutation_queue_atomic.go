@@ -393,7 +393,7 @@ func (q *atomicMutationQueue) Destroy() {
 
 func getAllocPollInterval(config common.Config) uint64 {
 
-	if GetStorageMode() == MEMDB {
+	if common.GetStorageMode() == common.MEMDB {
 		return config["mutation_queue.memdb.allocPollInterval"].Uint64()
 	} else {
 		return config["mutation_queue.fdb.allocPollInterval"].Uint64()

@@ -7,7 +7,7 @@
 //  either express or implied. See the License for the specific language governing permissions
 //  and limitations under the License.
 
-package indexer
+package common
 
 import (
 	"strings"
@@ -41,7 +41,6 @@ var smStrMap = map[string]StorageMode{
 	"memdb":            MEMDB,
 	"memory_optimized": MEMDB,
 	"forestdb":         FORESTDB,
-	"gsi":              FORESTDB, //default mode is forestdb
 }
 
 //Global Storage Mode
@@ -76,4 +75,11 @@ func SetStorageModeStr(mode string) bool {
 		return false
 	}
 
+}
+
+func IndexTypeToStorageMode(t IndexType) StorageMode {
+	if s, ok := smStrMap[strings.ToLower(string(t))]; ok {
+		return s
+	}
+	return NOT_SET
 }

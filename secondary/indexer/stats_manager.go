@@ -253,7 +253,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 	addStat("memory_used", is.memoryUsed.Value())
 	addStat("memory_used_storage", is.memoryUsedStorage.Value())
 	addStat("needs_restart", is.needsRestart.Value())
-	storageMode := fmt.Sprintf("%s", GetStorageMode())
+	storageMode := fmt.Sprintf("%s", common.GetStorageMode())
 	addStat("storage_mode", storageMode)
 
 	indexerState := common.IndexerState(is.indexerState.Value())
