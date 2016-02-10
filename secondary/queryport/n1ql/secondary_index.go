@@ -265,13 +265,13 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex(
 	}
 	defnID, err := gsi.gsiClient.CreateIndex(
 		name,
-		gsi.keyspace,       /*bucket-name*/
-		string(c.ForestDB), /*using, by default always forestdb*/
-		"N1QL",             /*exprType*/
-		"",                 /*partnStr*/
-		"",                 /*whereStr*/
-		nil,                /*secStrs*/
-		true,               /*isPrimary*/
+		gsi.keyspace, /*bucket-name*/
+		"GSI",        /*using*/
+		"N1QL",       /*exprType*/
+		"",           /*partnStr*/
+		"",           /*whereStr*/
+		nil,          /*secStrs*/
+		true,         /*isPrimary*/
 		withJSON)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreatePrimaryIndex()")
@@ -319,9 +319,9 @@ func (gsi *gsiKeyspace) CreateIndex(
 	}
 	defnID, err := gsi.gsiClient.CreateIndex(
 		name,
-		gsi.keyspace,       /*bucket-name*/
-		string(c.ForestDB), /*using, by default always forestdb*/
-		"N1QL",             /*exprType*/
+		gsi.keyspace, /*bucket-name*/
+		"GSI",        /*using*/
+		"N1QL",       /*exprType*/
 		partnStr, whereStr, secStrs,
 		false, /*isPrimary*/
 		withJSON)
