@@ -989,9 +989,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.settings.memdb.persistence_threads": ConfigValue{
-		runtime.NumCPU() / 3,
+		runtime.NumCPU() * 2,
 		"Number of concurrent threads scanning index for persistence",
-		runtime.NumCPU() / 3,
+		runtime.NumCPU() * 2,
 		false,
 	},
 	"indexer.settings.memdb.recovery_threads": ConfigValue{
