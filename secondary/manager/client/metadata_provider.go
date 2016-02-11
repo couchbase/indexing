@@ -324,22 +324,16 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 	// Array index related information
 	isArrayIndex := false
-	isArrayDistinct := true // Default is true as we do not yet support duplicate entries
 	arrayExprCount := 0
 	for _, exp := range secExprs {
-		isArray, isDistinct, err := queryutil.IsArrayExpression(exp)
+		isArray, _, err := queryutil.IsArrayExpression(exp)
 		if err != nil {
 			return c.IndexDefnId(0), errors.New(fmt.Sprintf("Error in parsing expression %v : %v", exp, err)), false
 		}
 		if isArray == true {
 			isArrayIndex = isArray
-			isArrayDistinct = isDistinct
 			arrayExprCount++
 		}
-	}
-
-	if isArrayDistinct == false {
-		return c.IndexDefnId(0), errors.New("Only DISTINCT array expression is supported for now. Please use ALL DISTINCT for array expression. Support for duplicate array items is currently being added."), false
 	}
 
 	if arrayExprCount > 1 {

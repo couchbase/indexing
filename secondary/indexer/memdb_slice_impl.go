@@ -48,9 +48,17 @@ type indexMutation struct {
 
 func docIdFromEntryBytes(e []byte) []byte {
 	offset := len(e) - 2
-	l := int(binary.LittleEndian.Uint16(e[offset : offset+2]))
-	offset -= l
-	return e[offset : offset+l]
+	l := binary.LittleEndian.Uint16(e[offset : offset+2])
+	// Length & 0111111 00000000
+	// as MSB of length is used to indicate presence of count
+	docidlen := int(l & 0x7fff)
+	offset = len(e) - 1
+	if (e[offset] & 0x80) == 0x80 { // if count is encoded
+		offset = len(e) - docidlen - 4
+	} else {
+		offset = len(e) - docidlen - 2
+	}
+	return e[offset : offset+docidlen]
 }
 
 func entryBytesFromDocId(docid []byte) []byte {
@@ -349,7 +357,7 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 	// a previous mainnode pointer entry
 	t0 := time.Now()
 	entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
-		mdb.encodeBuf[workerId])
+		1, mdb.encodeBuf[workerId])
 	if err != nil {
 		logging.Errorf("MemDBSlice::insertSecIndex Slice Id %v IndexInstId %v "+
 			"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
@@ -383,8 +391,8 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	}
 
 	var nmut int
-	newEntriesBytes, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
-		mdb.arrayBuf[workerId])
+	newEntriesBytes, newKeyCount, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
+		mdb.arrayBuf[workerId], mdb.isArrayDistinct)
 	common.CrashOnError(err)
 
 	// Get old back index entry
@@ -392,24 +400,33 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	ptr := (*skiplist.Node)(mdb.back[workerId].Get(lookupentry))
 	list := memdb.NewNodeList(ptr)
 	oldEntriesBytes := list.Keys()
+	oldKeyCount := make([]int, len(oldEntriesBytes))
+	for i,_ := range oldEntriesBytes {
+		e := secondaryIndexEntry(oldEntriesBytes[i])
+		oldKeyCount[i] = e.Count()
+		oldEntriesBytes[i] = oldEntriesBytes[i][:e.lenKey()]
+	}
 
-	entryBytesToBeAdded, entryBytesToDeleted := CompareArrayEntryBytes(newEntriesBytes, oldEntriesBytes)
+	entryBytesToBeAdded, entryBytesToDeleted := CompareArrayEntriesWithCount(newEntriesBytes, oldEntriesBytes, newKeyCount, oldKeyCount)
 	nmut = len(entryBytesToBeAdded) + len(entryBytesToDeleted)
 
 	// Delete each entry in entryBytesToDeleted
-	for _, item := range entryBytesToDeleted {
+	for i, item := range entryBytesToDeleted {
 		if item != nil { // nil item indicates it should not be deleted
-			node := list.Remove(item)
+			entry, err := NewSecondaryIndexEntry(item, docid, mdb.idxDefn.IsArrayIndex,
+				 oldKeyCount[i], mdb.encodeBuf[workerId][:0])
+			common.CrashOnError(err)
+			node := list.Remove(entry)
 			mdb.main[workerId].DeleteNode(node)
 		}
 	}
 
 	// Insert each entry in entryBytesToBeAdded
-	for _, key := range entryBytesToBeAdded {
+	for i, key := range entryBytesToBeAdded {
 		if key != nil { // nil item indicates it should not be added
 			t0 := time.Now()
-			entry, err := NewSecondaryIndexEntry(key, docid, false,
-				mdb.encodeBuf[workerId][:0])
+			entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
+				 newKeyCount[i], mdb.encodeBuf[workerId][:0])
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)

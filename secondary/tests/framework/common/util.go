@@ -22,6 +22,20 @@ func PrintScanResults(results ScanResponse, resultType string) {
 	}
 }
 
+func PrintArrayScanResults(results ArrayIndexScanResponse, resultType string) {
+	log.Printf("Count of %v is %d\n", resultType, len(results))
+	for key, value := range results {
+		log.Printf("Key: %v  Value: %v", key, value)
+	}
+}
+
+func PrintDocs(docs KeyValues) {
+	log.Printf("Count of %v is %d\n", "docs", len(docs))
+	for key, value := range docs {
+		log.Printf("Key: %v  Value: %v", key, value)
+	}
+}
+
 func HandleError(err error, msg string) {
 	if err != nil {
 		log.Panicf("%v: %v\n", msg, err)

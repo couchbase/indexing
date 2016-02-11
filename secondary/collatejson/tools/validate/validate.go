@@ -89,7 +89,7 @@ func validateInteger() {
 	fmt.Printf("standard sort took %v for %v items (%v compares)\n",
 		ts, options.items, raw.compares)
 	fmt.Printf("collatejson sort took %v for %v items\n",
-		timeIt(func() { sort.Sort(collatejson.ByteSlices(bints)) }), options.items)
+		timeIt(func() { sort.Sort(common.ByteSlices(bints)) }), options.items)
 
 	sort.IntSlice(ints).Sort()
 	for i, x := range ints {
@@ -126,7 +126,7 @@ func validateSD() {
 	fmt.Printf("standard sort took %v for %v items (%v compares)\n",
 		ts, options.items, raw.compares)
 	fmt.Printf("collatejson sort took %v for %v items\n",
-		timeIt(func() { sort.Sort(collatejson.ByteSlices(bfloats)) }), options.items)
+		timeIt(func() { sort.Sort(common.ByteSlices(bfloats)) }), options.items)
 
 	sort.Float64Slice(sds).Sort()
 	for i, sd := range sds {
@@ -163,7 +163,7 @@ func validateLD() {
 	fmt.Printf("standard sort took %v for %v items (%v compares)\n",
 		ts, options.items, raw.compares)
 	fmt.Printf("collatejson sort took %v for %v items\n",
-		timeIt(func() { sort.Sort(collatejson.ByteSlices(bfloats)) }), options.items)
+		timeIt(func() { sort.Sort(common.ByteSlices(bfloats)) }), options.items)
 
 	sort.Float64Slice(floats).Sort()
 	for i, x := range floats {
@@ -201,7 +201,7 @@ func validateFloats() {
 	fmt.Printf("standard sort took %v for %v items (%v compares)\n",
 		ts, options.items, raw.compares)
 	fmt.Printf("collatejson sort took %v for %v items\n",
-		timeIt(func() { sort.Sort(collatejson.ByteSlices(bfloats)) }), options.items)
+		timeIt(func() { sort.Sort(common.ByteSlices(bfloats)) }), options.items)
 
 	sort.Float64Slice(floats).Sort()
 	for i, x := range floats {
@@ -240,7 +240,7 @@ func validateJSON() {
 	fmt.Printf("standard sort took %v for %v items (%v compares)\n",
 		ts, options.items, raw.compares)
 	fmt.Printf("collatejson sort took %v for %v items\n",
-		timeIt(func() { sort.Sort(collatejson.ByteSlices(bjsons)) }), options.items)
+		timeIt(func() { sort.Sort(common.ByteSlices(bjsons)) }), options.items)
 
 	var one, two interface{}
 
