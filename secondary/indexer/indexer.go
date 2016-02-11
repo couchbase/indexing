@@ -4103,15 +4103,10 @@ func (idx *indexer) checkRecoveryInProgress() bool {
 //golang runtime + memory allocated by cgo
 //components(e.g. fdb buffercache)
 func (idx *indexer) memoryUsed() uint64 {
+
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	mem_used := ms.HeapInuse + ms.GCSys
-	if common.GetStorageMode() == common.MEMDB {
-		mem_used += mm.Size()
-	} else {
-		mem_used += forestdb.BufferCacheUsed()
-	}
-
+	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
 	return mem_used
 }
 
