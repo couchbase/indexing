@@ -104,8 +104,8 @@ Number of storage snapshots generated
 Average interval for snapshot generation
 
 ##### "default:first\_name32:num\_docs\_pending" : 0,
-Number of documents pending to be indexed
-
+Number of documents yet to be received from KV by
+the indexer.
 
 ##### "default:first\_name32:num\_rows\_returned" : 60,
 Total number rows returned so far by the indexer

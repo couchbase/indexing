@@ -22,6 +22,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -81,38 +82,6 @@ type ScanRequest struct {
 	keyBufList []*[]byte
 }
 
-type CancelCb struct {
-	done    chan struct{}
-	timeout <-chan time.Time
-	cancel  <-chan bool
-	callb   func(error)
-}
-
-func (c *CancelCb) Run() {
-	go func() {
-		select {
-		case <-c.done:
-		case <-c.cancel:
-			c.callb(common.ErrClientCancel)
-		case <-c.timeout:
-			c.callb(common.ErrScanTimedOut)
-		}
-	}()
-}
-
-func (c *CancelCb) Done() {
-	close(c.done)
-}
-
-func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
-	return &CancelCb{
-		done:    make(chan struct{}),
-		timeout: req.Timeout.C,
-		cancel:  req.CancelCh,
-		callb:   callb,
-	}
-}
-
 func (r ScanRequest) String() string {
 	var incl, span string
 
@@ -159,6 +128,14 @@ func (r ScanRequest) String() string {
 	return str
 }
 
+func (r *ScanRequest) getTimeoutCh() <-chan time.Time {
+	if r.Timeout != nil {
+		return r.Timeout.C
+	}
+
+	return nil
+}
+
 func (r *ScanRequest) Done() {
 	// If the requested DefnID in invalid, stats object will not be populated
 	if r.Stats != nil {
@@ -174,6 +151,40 @@ func (r *ScanRequest) Done() {
 	if r.Timeout != nil {
 		r.Timeout.Stop()
 	}
+}
+
+type CancelCb struct {
+	done    chan struct{}
+	timeout <-chan time.Time
+	cancel  <-chan bool
+	callb   func(error)
+}
+
+func (c *CancelCb) Run() {
+	go func() {
+		select {
+		case <-c.done:
+		case <-c.cancel:
+			c.callb(common.ErrClientCancel)
+		case <-c.timeout:
+			c.callb(common.ErrScanTimedOut)
+		}
+	}()
+}
+
+func (c *CancelCb) Done() {
+	close(c.done)
+}
+
+func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
+	cb := &CancelCb{
+		done:    make(chan struct{}),
+		cancel:  req.CancelCh,
+		timeout: req.getTimeoutCh(),
+		callb:   callb,
+	}
+
+	return cb
 }
 
 type ScanCoordinator interface {
@@ -197,7 +208,15 @@ type scanCoordinator struct {
 
 	stats IndexerStatsHolder
 
-	indexerState common.IndexerState
+	indexerState atomic.Value
+}
+
+func (s *scanCoordinator) getIndexerState() common.IndexerState {
+	return s.indexerState.Load().(common.IndexerState)
+}
+
+func (s *scanCoordinator) setIndexerState(state common.IndexerState) {
+	s.indexerState.Store(state)
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -612,7 +631,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	var msg interface{}
 	select {
 	case msg = <-snapResch:
-	case <-r.Timeout.C:
+	case <-r.getTimeoutCh():
 		go readDeallocSnapshot(snapResch)
 		msg = common.ErrScanTimedOut
 	}
@@ -708,6 +727,8 @@ func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanReq
 func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	cancelCh <-chan bool) {
 
+	ttime := time.Now()
+
 	req, err := s.newRequest(protoReq, cancelCh)
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() {
@@ -747,6 +768,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		return fmt.Sprintf("%s snapshot timestamp: %s",
 			req.LogPrefix, ScanTStoString(is.Timestamp()))
 	})
+
+	defer func() {
+		req.Stats.scanReqDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+	}()
+
 	s.processRequest(req, w, is, t0)
 }
 
@@ -919,33 +945,19 @@ func (s *scanCoordinator) handleConfigUpdate(cmd Message) {
 }
 
 func (s *scanCoordinator) handleIndexerPause(cmd Message) {
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.indexerState = common.INDEXER_PAUSED
-
+	s.setIndexerState(common.INDEXER_PAUSED)
 	s.supvCmdch <- &MsgSuccess{}
 
 }
 
 func (s *scanCoordinator) handleIndexerResume(cmd Message) {
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.indexerState = common.INDEXER_ACTIVE
+	s.setIndexerState(common.INDEXER_ACTIVE)
 
 	s.supvCmdch <- &MsgSuccess{}
 }
 
 func (s *scanCoordinator) handleIndexerBootstrap(cmd Message) {
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.indexerState = common.INDEXER_BOOTSTRAP
-
+	s.setIndexerState(common.INDEXER_BOOTSTRAP)
 	s.supvCmdch <- &MsgSuccess{}
 }
 
@@ -1031,12 +1043,7 @@ func readDeallocSnapshot(ch chan interface{}) {
 }
 
 func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.indexerState == common.INDEXER_PAUSED {
-
+	if s.getIndexerState() == common.INDEXER_PAUSED {
 		cfg := s.config.Load()
 		allow_scan_when_paused := cfg["allow_scan_when_paused"].Bool()
 
@@ -1050,18 +1057,10 @@ func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
 	}
 
 	return nil
-
 }
 
 func (s *scanCoordinator) isBootstrapMode() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.indexerState == common.INDEXER_BOOTSTRAP {
-		return true
-	}
-
-	return false
+	return s.getIndexerState() == common.INDEXER_BOOTSTRAP
 }
 
 func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string) (seqnos []uint64, err error) {

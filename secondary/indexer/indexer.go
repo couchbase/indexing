@@ -18,6 +18,7 @@ import (
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/memdb"
+	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	"math/rand"
@@ -265,13 +266,10 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, &MsgError{err: Error{cause: err}}
 	}
 
-	//TODO Enable back once ns_server/ui side changes are ready
-	/*
-		//set storage mode
-		if GetStorageMode() == NOT_SET {
-			SetStorageModeStr(idx.config["settings.storage_mode"].String())
-		}
-	*/
+	//set storage mode
+	if common.GetStorageMode() == common.NOT_SET {
+		common.SetStorageModeStr(idx.config["settings.storage_mode"].String())
+	}
 
 	if !idx.enableManager {
 		//Start CbqBridge
@@ -660,20 +658,17 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		cfgUpdate := msg.(*MsgConfigUpdate)
 		newConfig := cfgUpdate.GetConfig()
 
-		//TODO Enable back once ns_server/ui side changes are ready
-		/*
-			if GetStorageMode() == NOT_SET {
-				SetStorageModeStr(newConfig["settings.storage_mode"].String())
-			}
-		*/
+		if common.GetStorageMode() == common.NOT_SET {
+			common.SetStorageModeStr(newConfig["settings.storage_mode"].String())
+		}
 
 		if newConfig["settings.memory_quota"].Uint64() !=
 			idx.config["settings.memory_quota"].Uint64() {
 
 			idx.stats.memoryQuota.Set(int64(newConfig["settings.memory_quota"].Uint64()))
 
-			if GetStorageMode() == FORESTDB ||
-				GetStorageMode() == NOT_SET {
+			if common.GetStorageMode() == common.FORESTDB ||
+				common.GetStorageMode() == common.NOT_SET {
 				idx.stats.needsRestart.Set(true)
 			}
 		}
@@ -866,9 +861,9 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 	}
 
 	//validate storage mode with using specified in CreateIndex
-	if GetStorageMode() == NOT_SET {
-		if SetStorageModeStr(string(indexInst.Defn.Using)) {
-			logging.Infof("Indexer: Storage Mode Set %v", GetStorageMode())
+	if common.GetStorageMode() == common.NOT_SET {
+		if common.SetStorageModeStr(string(indexInst.Defn.Using)) {
+			logging.Infof("Indexer: Storage Mode Set %v", common.GetStorageMode())
 		} else {
 			errStr := fmt.Sprintf("Invalid Using Clause In Create Index %v", indexInst.Defn.Using)
 			logging.Errorf(errStr)
@@ -883,10 +878,10 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 			return
 		}
 	} else {
-		if sm, ok := smStrMap[strings.ToLower(string(indexInst.Defn.Using))]; !ok || sm != GetStorageMode() {
+		if common.IndexTypeToStorageMode(indexInst.Defn.Using) != common.GetStorageMode() {
 
 			errStr := fmt.Sprintf("Cannot Create Index with Using %v. Indexer "+
-				"Storage Mode %v", indexInst.Defn.Using, GetStorageMode())
+				"Storage Mode %v", indexInst.Defn.Using, common.GetStorageMode())
 
 			logging.Errorf(errStr)
 
@@ -2924,7 +2919,7 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		common.CrashOnError(err)
 	}
 
-	if GetStorageMode() == MEMDB {
+	if common.GetStorageMode() == common.MEMDB {
 		idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
 			mType: CLUST_MGR_GET_LOCAL,
 			key:   INDEXER_STATE_KEY,
@@ -3077,17 +3072,17 @@ func (idx *indexer) initFromPersistedState() error {
 		idx.indexInstMap[inst.InstId] = inst
 		idx.indexPartnMap[inst.InstId] = partnInstMap
 
-		if GetStorageMode() == NOT_SET {
-			if SetStorageModeStr(string(inst.Defn.Using)) {
-				logging.Infof("Indexer: Storage Mode Set As %v", GetStorageMode())
+		if common.GetStorageMode() == common.NOT_SET {
+			if common.SetStorageModeStr(string(inst.Defn.Using)) {
+				logging.Infof("Indexer: Storage Mode Set As %v", common.GetStorageMode())
 			} else {
 				logging.Fatalf("Invalid Using Clause in Index Defn Recovered %v", inst.Defn)
 				common.CrashOnError(ErrInvalidMetadata)
 			}
 		} else {
-			if sm, ok := smStrMap[strings.ToLower(string(inst.Defn.Using))]; !ok || sm != GetStorageMode() {
+			if common.IndexTypeToStorageMode(inst.Defn.Using) != common.GetStorageMode() {
 				logging.Fatalf("Invalid Using Clause in Index Defn Recovered for "+
-					"Storage Mode %v %v", GetStorageMode(), inst.Defn)
+					"Storage Mode %v %v", common.GetStorageMode(), inst.Defn)
 				common.CrashOnError(ErrInvalidMetadata)
 			}
 		}
@@ -3908,12 +3903,13 @@ func (idx *indexer) monitorMemUsage() {
 		canResume = true
 	}
 
-	ticker := time.NewTicker(time.Second * 5)
-	for _ = range ticker.C {
+	monitorInterval := idx.config["mem_usage_check_interval"].Int()
+
+	for {
 
 		pause_if_oom := idx.config["pause_if_memory_full"].Bool()
 
-		if GetStorageMode() == MEMDB && pause_if_oom {
+		if common.GetStorageMode() == common.MEMDB && pause_if_oom {
 
 			memory_quota := idx.config["settings.memory_quota"].Uint64()
 			high_mem_mark := idx.config["high_mem_mark"].Float64()
@@ -3922,12 +3918,13 @@ func (idx *indexer) monitorMemUsage() {
 
 			if idx.needsGC() {
 				runtime.GC()
+				mm.FreeOSMemory()
 			}
 
 			mem_used := idx.memoryUsed()
 			logging.Infof("Indexer::monitorMemUsage MemoryUsed %v", mem_used)
 
-			switch idx.state {
+			switch idx.getIndexerState() {
 
 			case common.INDEXER_ACTIVE:
 				if float64(mem_used) > (high_mem_mark*float64(memory_quota)) &&
@@ -3943,6 +3940,8 @@ func (idx *indexer) monitorMemUsage() {
 				}
 			}
 		}
+
+		time.Sleep(time.Second * time.Duration(monitorInterval))
 	}
 
 }
@@ -3951,9 +3950,9 @@ func (idx *indexer) handleIndexerPause(msg Message) {
 
 	logging.Infof("Indexer::handleIndexerPause")
 
-	if idx.state != common.INDEXER_ACTIVE {
+	if idx.getIndexerState() != common.INDEXER_ACTIVE {
 		logging.Infof("Indexer::handleIndexerPause Ignoring request to "+
-			"pause indexer in %v state", idx.state)
+			"pause indexer in %v state", idx.getIndexerState())
 		return
 	}
 
@@ -3977,7 +3976,7 @@ func (idx *indexer) handleIndexerPause(msg Message) {
 	idx.setIndexerState(common.INDEXER_PAUSED)
 	idx.stats.indexerState.Set(int64(common.INDEXER_PAUSED))
 	logging.Infof("Indexer::handleIndexerPause Indexer State Changed to "+
-		"%v", idx.state)
+		"%v", idx.getIndexerState())
 
 	//Notify Scan Coordinator
 	idx.scanCoordCmdCh <- msg
@@ -4109,7 +4108,6 @@ func (idx *indexer) memoryUsed() uint64 {
 	runtime.ReadMemStats(&ms)
 	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
 	return mem_used
-
 }
 
 func (idx *indexer) needsGC() bool {

@@ -25,6 +25,7 @@ import (
 	"github.com/couchbase/indexing/secondary/platform"
 	"hash/crc32"
 	"io/ioutil"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -81,6 +82,8 @@ func nodeEquality(p unsafe.Pointer, entry []byte) bool {
 func byteItemCompare(a, b []byte) int {
 	return bytes.Compare(a, b)
 }
+
+var totalMemDBItems = platform.NewAlignedInt64(0)
 
 type memdbSlice struct {
 	get_bytes, insert_bytes, delete_bytes platform.AlignedInt64
@@ -576,6 +579,8 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 }
 
 func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
+	var concurrency int = 1
+
 	defer s.Close()
 	if platform.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
 		defer platform.StoreInt32(&mdb.isPersistorActive, 0)
@@ -586,7 +591,13 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		manifest := filepath.Join(tmpdir, "manifest.json")
 		os.RemoveAll(tmpdir)
 		mdb.confLock.RLock()
-		concurrency := mdb.sysconf["settings.memdb.persistence_threads"].Int()
+		max_threads := mdb.sysconf["settings.memdb.persistence_threads"].Int()
+		total := platform.LoadInt64(&totalMemDBItems)
+		indexCount := mdb.GetCommittedCount()
+		if total > 0 {
+			concurrency = int(math.Floor(float64(max_threads)*float64(indexCount)/float64(total) + 0.5))
+		}
+
 		mdb.confLock.RUnlock()
 		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
 		if err == nil {
@@ -610,8 +621,8 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 
 		if err == nil {
 			dur := time.Since(t0)
-			logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v created ondisk"+
-				" snapshot %v. Took %v", mdb.id, mdb.idxInstId, dir, dur)
+			logging.Infof("MemDBSlice Slice Id %v, Threads %d, IndexInstId %v created ondisk"+
+				" snapshot %v. Took %v", mdb.id, concurrency, mdb.idxInstId, dir, dur)
 			mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
 		} else {
 			logging.Errorf("MemDBSlice Slice Id %v, IndexInstId %v failed to"+
@@ -670,7 +681,10 @@ func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 }
 
 func (mdb *memdbSlice) setCommittedCount() {
-	platform.StoreUint64(&mdb.committedCount, uint64(mdb.mainstore.ItemsCount()))
+	prev := mdb.committedCount
+	curr := mdb.mainstore.ItemsCount()
+	platform.AddInt64(&totalMemDBItems, int64(curr)-int64(prev))
+	platform.StoreUint64(&mdb.committedCount, uint64(curr))
 }
 
 func (mdb *memdbSlice) GetCommittedCount() uint64 {
@@ -840,6 +854,9 @@ func (mdb *memdbSlice) checkAllWorkersDone() bool {
 func (mdb *memdbSlice) Close() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
+
+	prev := mdb.committedCount
+	platform.AddInt64(&totalMemDBItems, -int64(prev))
 
 	logging.Infof("MemDBSlice::Close Closing Slice Id %v, IndexInstId %v, "+
 		"IndexDefnId %v", mdb.idxInstId, mdb.idxDefnId, mdb.id)

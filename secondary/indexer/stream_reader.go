@@ -768,7 +768,7 @@ func (r *mutationStreamReader) setIndexerState(is common.IndexerState) {
 
 func getSyncBatchInterval(config common.Config) uint64 {
 
-	if GetStorageMode() == MEMDB {
+	if common.GetStorageMode() == common.MEMDB {
 		return config["stream_reader.memdb.syncBatchInterval"].Uint64()
 	} else {
 		return config["stream_reader.fdb.syncBatchInterval"].Uint64()
@@ -778,7 +778,7 @@ func getSyncBatchInterval(config common.Config) uint64 {
 
 func getMutationBufferSize(config common.Config) uint64 {
 
-	if GetStorageMode() == MEMDB {
+	if common.GetStorageMode() == common.MEMDB {
 		return config["stream_reader.memdb.mutationBuffer"].Uint64()
 	} else {
 		return config["stream_reader.fdb.mutationBuffer"].Uint64()
@@ -788,7 +788,7 @@ func getMutationBufferSize(config common.Config) uint64 {
 
 func getWorkerBufferSize(config common.Config) uint64 {
 
-	if GetStorageMode() == MEMDB {
+	if common.GetStorageMode() == common.MEMDB {
 		return config["stream_reader.memdb.workerBuffer"].Uint64()
 	} else {
 		return config["stream_reader.fdb.workerBuffer"].Uint64()

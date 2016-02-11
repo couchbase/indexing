@@ -86,6 +86,7 @@ type IndexStats struct {
 	name, bucket string
 
 	scanDuration          stats.Int64Val
+	scanReqDuration       stats.Int64Val
 	dcpSeqsDuration       stats.Int64Val
 	insertBytes           stats.Int64Val
 	numDocsPending        stats.Int64Val
@@ -137,6 +138,7 @@ func (h *IndexerStatsHolder) Set(s *IndexerStats) {
 
 func (s *IndexStats) Init() {
 	s.scanDuration.Init()
+	s.scanReqDuration.Init()
 	s.insertBytes.Init()
 	s.numDocsPending.Init()
 	s.scanWaitDuration.Init()
@@ -251,7 +253,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 	addStat("memory_used", is.memoryUsed.Value())
 	addStat("memory_used_storage", is.memoryUsedStorage.Value())
 	addStat("needs_restart", is.needsRestart.Value())
-	storageMode := fmt.Sprintf("%s", GetStorageMode())
+	storageMode := fmt.Sprintf("%s", common.GetStorageMode())
 	addStat("storage_mode", storageMode)
 
 	indexerState := common.IndexerState(is.indexerState.Value())
@@ -263,18 +265,21 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 	addStat("timings/stats_response", is.statsResponse.Value())
 
 	for _, s := range is.indexes {
-		var scanLat, waitLat int64
+		var scanLat, waitLat, scanReqLat int64
 		reqs := s.numRequests.Value()
 
 		if reqs > 0 {
 			scanDur := s.scanDuration.Value()
 			waitDur := s.scanWaitDuration.Value()
+			scanReqDur := s.scanReqDuration.Value()
 			scanLat = scanDur / reqs
 			waitLat = waitDur / reqs
+			scanReqLat = scanReqDur / reqs
 		}
 
 		prefix = fmt.Sprintf("%s:%s:", s.bucket, s.name)
 		addStat("total_scan_duration", s.scanDuration.Value())
+		addStat("total_scan_request_duration", s.scanReqDuration.Value())
 		addStat("insert_bytes", s.insertBytes.Value())
 		addStat("num_docs_pending", s.numDocsPending.Value())
 		addStat("scan_wait_duration", s.scanWaitDuration.Value())
@@ -301,6 +306,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_items_flushed", s.numItemsFlushed.Value())
 		addStat("avg_scan_latency", scanLat)
 		addStat("avg_scan_wait_latency", waitLat)
+		addStat("avg_scan_request_latency", scanReqLat)
 		addStat("num_flush_queued", s.numDocsFlushQueued.Value())
 		addStat("since_last_snapshot", s.sinceLastSnapshot.Value())
 		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
