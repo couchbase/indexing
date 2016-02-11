@@ -42,12 +42,6 @@ func init() {
 	kvaddress = clusterconfig.KVAddress
 	indexManagementAddress = clusterconfig.KVAddress
 	indexScanAddress = clusterconfig.KVAddress
-	if clusterconfig.IndexUsing != "" {
-		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
-		log.Printf("Using %v for creating indexes", clusterconfig.IndexUsing)
-		secondaryindex.IndexUsing = clusterconfig.IndexUsing
-	}
-
 	seed = 1
 	proddir, bagdir = tc.FetchMonsterToolPath()
 
@@ -55,6 +49,18 @@ func init() {
 	if _, err := cbauth.InternalRetryDefaultInit(kvaddress, clusterconfig.Username, clusterconfig.Password); err != nil {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
 	}
+
+	if clusterconfig.IndexUsing != "" {
+		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
+		log.Printf("Using %v for creating indexes", clusterconfig.IndexUsing)
+		secondaryindex.IndexUsing = clusterconfig.IndexUsing
+
+		err := secondaryindex.ChangeIndexerSettings("indexer.settings.storage_mode", secondaryindex.IndexUsing, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Error in ChangeIndexerSettings")
+	}
+
+	time.Sleep(5 * time.Second)
+
 	secondaryindex.CheckCollation = true
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
 	tc.HandleError(e, "Error in DropAllSecondaryIndexes")
