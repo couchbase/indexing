@@ -122,34 +122,38 @@ loop:
 	for {
 		select {
 		case _, ok := <-cd.timer.C:
-			conf := cd.config.Load()
-			if ok {
-				replych := make(chan []IndexStorageStats)
-				statReq := &MsgIndexStorageStats{respch: replych}
-				cd.msgch <- statReq
-				stats = <-replych
 
-				for _, is := range stats {
-					if cd.needsCompaction(is, conf) {
-						errch := make(chan error)
-						compactReq := &MsgIndexCompact{
-							instId: is.InstId,
-							errch:  errch,
-						}
-						logging.Infof("CompactionDaemon: Compacting index instance:%v", is.InstId)
-						cd.msgch <- compactReq
-						err := <-errch
-						if err == nil {
-							logging.Infof("CompactionDaemon: Finished compacting index instance:%v", is.InstId)
-						} else {
-							logging.Errorf("CompactionDaemon: Index instance:%v Compaction failed with reason - %v", is.InstId, err)
+			if common.GetStorageMode() == common.FORESTDB {
+
+				conf := cd.config.Load()
+				if ok {
+					replych := make(chan []IndexStorageStats)
+					statReq := &MsgIndexStorageStats{respch: replych}
+					cd.msgch <- statReq
+					stats = <-replych
+
+					for _, is := range stats {
+						if cd.needsCompaction(is, conf) {
+							errch := make(chan error)
+							compactReq := &MsgIndexCompact{
+								instId: is.InstId,
+								errch:  errch,
+							}
+							logging.Infof("CompactionDaemon: Compacting index instance:%v", is.InstId)
+							cd.msgch <- compactReq
+							err := <-errch
+							if err == nil {
+								logging.Infof("CompactionDaemon: Finished compacting index instance:%v", is.InstId)
+							} else {
+								logging.Errorf("CompactionDaemon: Index instance:%v Compaction failed with reason - %v", is.InstId, err)
+							}
 						}
 					}
 				}
-			}
 
-			dur := time.Second * time.Duration(conf["check_period"].Int())
-			cd.timer.Reset(dur)
+				dur := time.Second * time.Duration(conf["check_period"].Int())
+				cd.timer.Reset(dur)
+			}
 
 		case <-cd.quitch:
 			cd.quitch <- true
