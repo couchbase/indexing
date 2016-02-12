@@ -681,7 +681,7 @@ func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 }
 
 func (mdb *memdbSlice) setCommittedCount() {
-	prev := mdb.committedCount
+	prev := platform.LoadUint64(&mdb.committedCount)
 	curr := mdb.mainstore.ItemsCount()
 	platform.AddInt64(&totalMemDBItems, int64(curr)-int64(prev))
 	platform.StoreUint64(&mdb.committedCount, uint64(curr))
@@ -855,7 +855,7 @@ func (mdb *memdbSlice) Close() {
 	mdb.lock.Lock()
 	defer mdb.lock.Unlock()
 
-	prev := mdb.committedCount
+	prev := platform.LoadUint64(&mdb.committedCount)
 	platform.AddInt64(&totalMemDBItems, -int64(prev))
 
 	logging.Infof("MemDBSlice::Close Closing Slice Id %v, IndexInstId %v, "+
