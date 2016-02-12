@@ -168,7 +168,10 @@ cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary
 )
 msg32="`cat /tmp/test32.log`"
 fail32=${msg32//[[:space:]]/}
-if [ "$fail32" != "" ]; then error_exit "Compile with 32-bit failed"; fi
+if [ "$fail32" != "" ]; then
+  echo "$msg32" >>$WORKSPACE/make.log
+  error_exit "Compile with 32-bit failed";
+fi
 
 chmod a+r /var/www/*
 
