@@ -216,6 +216,10 @@ func NewGsiClient(
 	return c, nil
 }
 
+func (c *GsiClient) Bridge() BridgeAccessor {
+	return c.bridge
+}
+
 // IndexState implements BridgeAccessor{} interface.
 func (c *GsiClient) IndexState(defnID uint64) (common.IndexState, error) {
 	if c.bridge == nil {
