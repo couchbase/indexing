@@ -155,6 +155,7 @@ repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' >> $WORKS
 
 echo "Testing 32-bit compilation"
 mkdir -p $WORKSPACE/test32
+cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary
 ( \
   GOOS=linux \
   GOARCH=386 \
@@ -167,7 +168,7 @@ mkdir -p $WORKSPACE/test32
 )
 msg32="`cat /tmp/test32.log`"
 fail32=${msg32//[[:space:]]/}
-if [ "$fail32" != "" ]; then error_exit "Compile with 32-bit failed" "$msg32"; fi
+if [ "$fail32" != "" ]; then error_exit "Compile with 32-bit failed"; fi
 
 chmod a+r /var/www/*
 
