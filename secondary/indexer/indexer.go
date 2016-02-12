@@ -1993,16 +1993,17 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 
 			partnInstMap[common.PartitionId(i)] = partnInst
 		} else {
-			logging.Errorf("Indexer::initPartnInstance Error creating slice %v. Abort.",
-				err)
+			errStr := fmt.Sprintf("Error creating slice %v", err)
+			logging.Errorf("Indexer::initPartnInstance %v. Abort.", errStr)
+			err1 := errors.New(errStr)
 
 			if respCh != nil {
 				respCh <- &MsgError{
 					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
 						severity: FATAL,
-						cause:    errors.New("Indexer Internal Error"),
+						cause:    err1,
 						category: INDEXER}}
-				return nil, err
+				return nil, err1
 			}
 		}
 	}
