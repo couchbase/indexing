@@ -18,10 +18,10 @@ var fmemsg = strings.Replace(`memstats {
 
 func MemstatLogger(tick int64) {
 	var ms runtime.MemStats
-	var tickTm <-chan time.Time
+	var tickTm *time.Ticker
 
 	if tick > 0 {
-		tickTm = time.Tick(time.Duration(tick) * time.Millisecond)
+		tickTm = time.NewTicker(time.Duration(tick) * time.Millisecond)
 	}
 	logging.Infof("MSAT starting with %v tick ...", tick)
 
@@ -30,7 +30,7 @@ func MemstatLogger(tick int64) {
 	for {
 		oldNumGC = ms.NumGC
 		select {
-		case <-tickTm:
+		case <-tickTm.C:
 			runtime.ReadMemStats(&ms)
 			logging.Infof(
 				fmemsg,
@@ -43,8 +43,9 @@ func MemstatLogger(tick int64) {
 				ms.NumGC)
 
 		case tick = <-Memstatch:
+			tickTm.Stop()
 			if tick > 0 {
-				tickTm = time.Tick(time.Duration(tick) * time.Millisecond)
+				tickTm = time.NewTicker(time.Duration(tick) * time.Millisecond)
 			}
 		}
 	}

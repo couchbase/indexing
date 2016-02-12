@@ -529,7 +529,11 @@ func doReceive(
 	var blocked bool
 
 	epoc := time.Now()
-	tick := time.Tick(time.Second * 5) // log every 5 second, if blocked
+	tick := time.NewTicker(time.Second * 5) // log every 5 second, if blocked
+	defer func() {
+		tick.Stop()
+	}()
+
 loop:
 	for {
 		timeoutMs := readDeadline * time.Millisecond
@@ -566,7 +570,7 @@ loop:
 				duration += time.Since(start)
 				blocked = false
 				select {
-				case <-tick:
+				case <-tick.C:
 					percent := float64(duration) / float64(time.Since(epoc))
 					fmsg := "%v DATP -> Indexer %f%% blocked"
 					logging.Infof(fmsg, prefix, percent)
