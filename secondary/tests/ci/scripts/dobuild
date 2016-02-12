@@ -153,5 +153,21 @@ echo "Actual Versions:" >> $WORKSPACE/versions.cfg
 cd $WORKSPACE
 repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' >> $WORKSPACE/versions.cfg
 
+echo "Testing 32-bit compilation"
+mkdir -p $WORKSPACE/test32
+( \
+  GOOS=linux \
+  GOARCH=386 \
+  GOPATH=$WORKSPACE/test32:$WORKSPACE/goproj:$WORKSPACE/godeps \
+  CGO_ENABLED=1 \
+  CGO_CFLAGS="-I $WORKSPACE/forestdb/include" \
+  go build ./cmd/... 2>&1 | \
+  grep -v 'cannot find -l' | \
+  grep -v 'ld returned' > /tmp/test32.log \
+)
+msg32="`cat /tmp/test32.log`"
+fail32=${msg32//[[:space:]]/}
+if [ "$fail32" != "" ]; then error_exit "Compile with 32-bit failed" "$msg32"; fi
+
 chmod a+r /var/www/*
 
