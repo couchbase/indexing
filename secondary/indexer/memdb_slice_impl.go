@@ -224,6 +224,10 @@ func (slice *memdbSlice) initStores() {
 		cfg.UseMemoryMgmt(mm.Malloc, mm.Free)
 	}
 
+	if slice.sysconf["memdb.useDeltaInterleaving"].Bool() {
+		cfg.UseDeltaInterleaving()
+	}
+
 	cfg.SetKeyComparator(byteItemCompare)
 	slice.mainstore = memdb.NewWithConfig(cfg)
 	slice.main = make([]*memdb.Writer, slice.numWriters)
@@ -583,7 +587,7 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	s.Open()
 	s.slice.IncrRef()
 	if s.committed {
-		s.Open()
+		s.info.MainSnap.Open()
 		go mdb.doPersistSnapshot(s)
 	}
 
@@ -600,7 +604,6 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	var concurrency int = 1
 
-	defer s.Close()
 	if platform.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
 		defer platform.StoreInt32(&mdb.isPersistorActive, 0)
 
@@ -652,6 +655,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	} else {
 		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk"+
 			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
+		s.Close()
 	}
 }
 
