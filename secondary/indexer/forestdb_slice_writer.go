@@ -29,8 +29,6 @@ import (
 
 var (
 	snapshotMetaListKey = []byte("snapshots-list")
-	maxArrayLen         = common.SystemConfig["indexer.settings.max_array_length"].Int()
-	maxArrayKeyLen      = common.SystemConfig["indexer.settings.max_array_seckey_size"].Int()
 )
 
 //NewForestDBSlice initiailizes a new slice with forestdb backend.
@@ -140,7 +138,6 @@ retry:
 	slice.id = sliceId
 
 	// Array related initialization
-	slice.arrBufPool = common.NewByteBufferPool((maxArrayKeyLen * 3) + MAX_DOCID_LEN + 2)
 	_, slice.isArrayDistinct, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
 	if err != nil {
 		return nil, err
@@ -238,7 +235,6 @@ type fdbSlice struct {
 	statFdLock sync.Mutex
 
 	// Array processing
-	arrBufPool        *common.BytesBufPool
 	arrayExprPosition int
 	isArrayDistinct   bool
 }

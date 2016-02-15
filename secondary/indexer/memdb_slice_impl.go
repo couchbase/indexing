@@ -181,7 +181,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	for i := 0; i < slice.numWriters; i++ {
 		slice.cmdCh[i] = make(chan indexMutation, sliceBufSize/uint64(slice.numWriters))
 		slice.encodeBuf[i] = make([]byte, 0, maxIndexEntrySize)
-		slice.arrayBuf[i] = make([]byte, 0, maxArrayIndexEntrySize*maxArrayLength)
+		slice.arrayBuf[i] = make([]byte, 0, maxArrayIndexEntrySize)
 	}
 	slice.workerDone = make([]chan bool, slice.numWriters)
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
@@ -375,17 +375,17 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 }
 
 func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId int) int {
+	if len(keys) > maxArrayKeyLength {
+		logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
+			"Skipping docid:%s (Array index key size is %v. Cannot array index key with size > %d)", mdb.Id, mdb.idxInstId,
+			docid, len(keys), maxArrayKeyLength)
+		return mdb.deleteSecArrayIndex(docid, workerId)
+	}
+
 	var nmut int
 	newEntriesBytes, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
 		mdb.arrayBuf[workerId])
 	common.CrashOnError(err)
-
-	l := len(newEntriesBytes)
-	if l > maxArrayLength {
-		logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
-			"Skipping docid:%s (Cannot index %d items)", mdb.Id, mdb.idxInstId, docid, l)
-		return mdb.deleteSecArrayIndex(docid, workerId)
-	}
 
 	// Get old back index entry
 	lookupentry := entryBytesFromDocId(docid)
@@ -408,7 +408,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	for _, key := range entryBytesToBeAdded {
 		if key != nil { // nil item indicates it should not be added
 			t0 := time.Now()
-			entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
+			entry, err := NewSecondaryIndexEntry(key, docid, false,
 				mdb.encodeBuf[workerId][:0])
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+

@@ -864,12 +864,6 @@ var SystemConfig = Config{
 		120000,
 		true, // immutable
 	},
-	"indexer.settings.max_array_length": ConfigValue{
-		100,
-		"Maximum number of elements allowed per array for array index",
-		100,
-		false, // mutable
-	},
 	"indexer.settings.max_array_seckey_size": ConfigValue{
 		10240,
 		"Maximum size of secondary index key size for array index",

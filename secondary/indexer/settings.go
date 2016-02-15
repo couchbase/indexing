@@ -302,4 +302,8 @@ func initGlobalSettings(oldCfg, newCfg common.Config) {
 
 	setLogger(newCfg)
 	useMutationSyncPool = newCfg["indexer.useMutationSyncPool"].Bool()
+	maxArrayKeyLength = newCfg["indexer.settings.max_array_seckey_size"].Int()
+	maxArrayKeyBufferLength = maxArrayKeyLength * 3
+	maxArrayIndexEntrySize = maxArrayKeyBufferLength + MAX_DOCID_LEN + 2
+	arrayEncBufPool = common.NewByteBufferPool(maxArrayIndexEntrySize)
 }

@@ -673,6 +673,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 			}
 		}
 
+		if newConfig["settings.max_array_seckey_size"].Int() !=
+			idx.config["settings.max_array_seckey_size"].Int() {
+			idx.stats.needsRestart.Set(true)
+		}
+
 		if cv, ok := newConfig["memstatTick"]; ok {
 			common.Memstatch <- int64(cv.Int())
 		}

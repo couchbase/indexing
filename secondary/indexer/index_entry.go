@@ -10,10 +10,9 @@ import (
 )
 
 var (
-	ErrSecKeyNil          = errors.New("Secondary key array is empty")
-	ErrSecKeyTooLong      = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", MAX_SEC_KEY_LEN))
-	ErrArraySecKeyTooLong = errors.New(fmt.Sprintf("Secondary array key is too long (> %d)", maxArrayKeyLength))
-	ErrDocIdTooLong       = errors.New(fmt.Sprintf("DocID is too long (>%d)", MAX_DOCID_LEN))
+	ErrSecKeyNil     = errors.New("Secondary key array is empty")
+	ErrSecKeyTooLong = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", MAX_SEC_KEY_LEN))
+	ErrDocIdTooLong  = errors.New(fmt.Sprintf("DocID is too long (>%d)", MAX_DOCID_LEN))
 )
 
 // Special index keys
@@ -34,7 +33,6 @@ const (
 )
 
 var (
-	maxArrayLength          = common.SystemConfig["indexer.settings.max_array_length"].Int()
 	maxArrayKeyLength       = common.SystemConfig["indexer.settings.max_array_seckey_size"].Int()
 	maxArrayKeyBufferLength = maxArrayKeyLength * 3
 	maxArrayIndexEntrySize  = maxArrayKeyBufferLength + MAX_DOCID_LEN + 2
@@ -43,7 +41,6 @@ var (
 func init() {
 	jsonEncoder = collatejson.NewCodec(16)
 	encBufPool = common.NewByteBufferPool(maxIndexEntrySize)
-	arrayEncBufPool = common.NewByteBufferPool(maxArrayIndexEntrySize)
 }
 
 // Generic index entry abstraction (primary or secondary)
@@ -114,7 +111,7 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, buf []byte) 
 
 	if isArray {
 		if isArraySecKeyLarge(key) {
-			return nil, ErrArraySecKeyTooLong
+			return nil, errors.New(fmt.Sprintf("Secondary array key is too long (> %d)", maxArrayKeyLength))
 		}
 	} else if isSecKeyLarge(key) {
 		return nil, ErrSecKeyTooLong
