@@ -17,10 +17,17 @@ echo '</pre><h3>Building</h3><pre>'
 > $WORKSPACE/versions.cfg
 > $WORKSPACE/make.log
 
+if [ ! -d /opt/mirror ]; then
+  mkdir -p /opt/mirror
+  cd /opt/mirror
+  repo init -u git://github.com/couchbase/manifest -b master -m toy/toy-2i-unstable.xml -g all --mirror 1>$WORKSPACE/make.log 2>&1
+  repo sync --jobs=8 1>$WORKSPACE/make.log 2>&1
+fi
+
 if [ ! -d $WORKSPACE/.repo ]; then
   mkdir -p $WORKSPACE
   cd $WORKSPACE
-  repo init -u git://github.com/couchbase/manifest  -b master  -m toy/toy-2i-unstable.xml -g all 1>$WORKSPACE/make.log 2>&1
+  repo init -u git://github.com/couchbase/manifest -b master -m toy/toy-2i-unstable.xml -g all --reference /opt/mirror 1>$WORKSPACE/make.log 2>&1
   test $? -eq 0 || error_exit "Repo Init"
 fi
 
@@ -30,7 +37,7 @@ if [ "$1" = "clean" ]; then
 fi
 
 echo "Updating tree"
-repo sync --jobs=8 1>$WORKSPACE/make.log 2>&1
+repo sync --jobs=16 1>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Updating tree"
 test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find voltron"
 
@@ -164,13 +171,14 @@ cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary
   CGO_CFLAGS="-I $WORKSPACE/forestdb/include" \
   go build ./cmd/... 2>&1 | \
   grep -v 'cannot find -l' | \
-  grep -v 'ld returned' > /tmp/test32.log \
+  grep -v 'ld returned' | \
+  grep -v '^#' > /tmp/test32.log \
 )
 msg32="`cat /tmp/test32.log`"
 fail32=${msg32//[[:space:]]/}
 if [ "$fail32" != "" ]; then
   echo "$msg32" >>$WORKSPACE/make.log
-  error_exit "Compile with 32-bit failed";
+  error_exit "Compile with 32-bit failed: $msg32";
 fi
 
 chmod a+r /var/www/*
