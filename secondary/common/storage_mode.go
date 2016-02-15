@@ -25,13 +25,13 @@ const (
 func (s StorageMode) String() string {
 	switch s {
 	case NOT_SET:
-		return "Not_Set"
+		return "not_set"
 	case MEMDB:
-		return "MemDB"
+		return "memory_optimized"
 	case FORESTDB:
-		return "ForestDB"
+		return "forestdb"
 	default:
-		return "Invalid"
+		return "invalid"
 	}
 }
 
