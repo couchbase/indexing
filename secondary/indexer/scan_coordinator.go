@@ -730,11 +730,14 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	ttime := time.Now()
 
 	req, err := s.newRequest(protoReq, cancelCh)
+
+	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() {
 		s.handleError(req.LogPrefix, w.Done())
 		req.Done()
 	}()
+	req.Stats.scanReqAllocDuration.Add(time.Now().Sub(atime).Nanoseconds())
 
 	logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
 
@@ -755,6 +758,8 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	}
 
 	req.Stats.numRequests.Add(1)
+
+	req.Stats.scanReqInitDuration.Add(time.Now().Sub(ttime).Nanoseconds())
 
 	t0 := time.Now()
 	is, err := s.getRequestedIndexSnapshot(req)

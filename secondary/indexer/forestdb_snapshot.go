@@ -76,7 +76,7 @@ func (s *fdbSnapshot) Create() error {
 	}
 
 	if s.committed {
-		s.slice.idxStats.Timings.stHandleOpen.Put(time.Now().Sub(t0))
+		s.slice.idxStats.Timings.stPersistSnapshotCreate.Put(time.Now().Sub(t0))
 	} else {
 		s.slice.idxStats.Timings.stSnapshotCreate.Put(time.Now().Sub(t0))
 	}
