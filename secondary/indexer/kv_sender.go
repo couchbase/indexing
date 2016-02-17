@@ -21,6 +21,7 @@ import (
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/golang/protobuf/proto"
+	"strings"
 	"time"
 )
 
@@ -1138,7 +1139,7 @@ func convertIndexInstToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
 func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 
 	using := protobuf.StorageType(
-		protobuf.StorageType_value[string(indexDefn.Using)]).Enum()
+		protobuf.StorageType_value[strings.ToLower(string(indexDefn.Using))]).Enum()
 	exprType := protobuf.ExprType(
 		protobuf.ExprType_value[string(indexDefn.ExprType)]).Enum()
 	partnScheme := protobuf.PartitionScheme(
