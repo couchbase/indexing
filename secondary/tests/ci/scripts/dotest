@@ -73,7 +73,7 @@ cd $WORKSPACE/testrunner
 (timeout 1h make simple-test 2>&1) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
 
 # Core dumps
-# export GOTRACEBACK=crash
+export GOTRACEBACK=crash
 ulimit -c unlimited
 sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
 perl -pi -e 's/num_files, 10/num_files, 50/' /opt/couchbase/etc/couchbase/static_config
