@@ -232,7 +232,7 @@ func (cp *connectionPool) StartDcpFeed(
 	return nil, err
 }
 
-func (cp *connectionPool) GetDcpConn(name string) (*memcached.Client, error) {
+func (cp *connectionPool) GetDcpConn(name DcpFeedName) (*memcached.Client, error) {
 	mc, err := cp.Get() // Don't call Return() on this
 	if err != nil {
 		return nil, err
@@ -240,7 +240,7 @@ func (cp *connectionPool) GetDcpConn(name string) (*memcached.Client, error) {
 
 	rq := &transport.MCRequest{
 		Opcode: transport.DCP_OPEN,
-		Key:    []byte(name),
+		Key:    []byte(string(name)),
 		Opaque: 0,
 	}
 	rq.Extras = make([]byte, 8)
