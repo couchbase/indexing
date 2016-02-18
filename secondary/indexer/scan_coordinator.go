@@ -739,7 +739,6 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		s.handleError(req.LogPrefix, w.Done())
 		req.Done()
 	}()
-	req.Stats.scanReqAllocDuration.Add(time.Now().Sub(atime).Nanoseconds())
 
 	logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
 
@@ -753,6 +752,8 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	if s.tryRespondWithError(w, req, err) {
 		return
 	}
+
+	req.Stats.scanReqAllocDuration.Add(time.Now().Sub(atime).Nanoseconds())
 
 	if err := s.isScanAllowed(*req.Consistency); err != nil {
 		s.tryRespondWithError(w, req, err)
