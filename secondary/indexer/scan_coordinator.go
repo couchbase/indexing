@@ -253,6 +253,8 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		return nil, errMsg
 	}
 
+	s.setIndexerState(common.INDEXER_BOOTSTRAP)
+
 	// main loop
 	go s.run()
 	go s.listenSnapshot()
