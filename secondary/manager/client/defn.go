@@ -28,6 +28,7 @@ const (
 	OPCODE_SERVICE_MAP                     = OPCODE_UPDATE_INDEX_INST + 1
 	OPCODE_DELETE_BUCKET                   = OPCODE_SERVICE_MAP + 1
 	OPCODE_INDEXER_READY                   = OPCODE_DELETE_BUCKET + 1
+	OPCODE_CLEANUP_INDEX                   = OPCODE_INDEXER_READY + 1
 )
 
 /////////////////////////////////////////////////////////////////////////

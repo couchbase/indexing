@@ -3189,6 +3189,7 @@ func (idx *indexer) validateIndexInstMap() {
 		if !isValidRecoveryState(index.State) {
 			logging.Warnf("Indexer::validateIndexInstMap \n\t State %v Not Recoverable. "+
 				"Not Recovering Index %v", index.State, index)
+			idx.cleanupIndexMetadata(index)
 			delete(idx.indexInstMap, instId)
 			continue
 		}
@@ -3492,6 +3493,12 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 func (idx *indexer) updateMetaInfoForDeleteBucket(bucket string, streamId common.StreamId) error {
 
 	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_DEL_BUCKET, bucket: bucket, streamId: streamId}
+	return idx.sendMsgToClusterMgr(msg)
+}
+
+func (idx *indexer) cleanupIndexMetadata(indexInst common.IndexInst) error {
+
+	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_CLEANUP_INDEX, indexList: []common.IndexInst{indexInst}}
 	return idx.sendMsgToClusterMgr(msg)
 }
 

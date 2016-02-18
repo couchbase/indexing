@@ -105,7 +105,8 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 		// they can get processed.  For client side, they will be queued
 		// up in the regular queue until indexer is ready.
 		if !m.indexerReady {
-			if op == client.OPCODE_UPDATE_INDEX_INST || op == client.OPCODE_DELETE_BUCKET {
+			if op == client.OPCODE_UPDATE_INDEX_INST || op == client.OPCODE_DELETE_BUCKET ||
+				op == client.OPCODE_CLEANUP_INDEX {
 				m.bootstraps <- req
 				return
 			}
@@ -202,6 +203,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		result, err = m.handleServiceMap(content)
 	case client.OPCODE_DELETE_BUCKET:
 		err = m.handleDeleteBucket(key, content)
+	case client.OPCODE_CLEANUP_INDEX:
+		err = m.handleCleanupIndex(key)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -403,6 +406,17 @@ func (m *LifecycleMgr) handleDeleteIndex(key string) error {
 	}
 
 	return m.DeleteIndex(id, true)
+}
+
+func (m *LifecycleMgr) handleCleanupIndex(key string) error {
+
+	id, err := indexDefnId(key)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleCleanupIndex() : deleteIndex fails. Reason = %v", err)
+		return err
+	}
+
+	return m.DeleteIndex(id, false)
 }
 
 func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool) error {
