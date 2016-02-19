@@ -13,6 +13,10 @@ func createSlice() *fdbSlice {
 	return slice
 }
 
+func copyBytes(bs []byte) []byte {
+	return append([]byte(nil), bs...)
+}
+
 func TestForestDBIterator(t *testing.T) {
 	defer os.RemoveAll("test")
 
@@ -63,10 +67,10 @@ func TestForestDBIterator(t *testing.T) {
 
 	for ; iter.Valid(); iter.Next() {
 		if firstKey == nil {
-			firstKey = iter.Key()
+			firstKey = copyBytes(iter.Key())
 		}
 		count++
-		lastKey = iter.Key()
+		lastKey = copyBytes(iter.Key())
 	}
 
 	if count != 10 {
@@ -131,10 +135,10 @@ func TestForestDBIteratorSeek(t *testing.T) {
 
 	for ; iter.Valid(); iter.Next() {
 		if firstKey == nil {
-			firstKey = iter.Key()
+			firstKey = copyBytes(iter.Key())
 		}
 		count++
-		lastKey = iter.Key()
+		lastKey = copyBytes(iter.Key())
 	}
 
 	if count != 7 {
