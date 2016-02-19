@@ -644,11 +644,13 @@ func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 
 	if topology != nil {
 		for _, defnRef := range topology.Definitions {
-			if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil {
-				if defn.BucketUUID != currentUUID {
-					return common.BUCKET_UUID_NIL,
-						errors.New("Bucket does not exist or temporarily unavailable for creating new index." +
-							" Please retry the operation at a later time.")
+			if state, _ := topology.GetStatusByDefn(common.IndexDefnId(defnRef.DefnId)); state != common.INDEX_STATE_DELETED {
+				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil {
+					if defn.BucketUUID != currentUUID {
+						return common.BUCKET_UUID_NIL,
+							errors.New("Bucket does not exist or temporarily unavailable for creating new index." +
+								" Please retry the operation at a later time.")
+					}
 				}
 			}
 		}
