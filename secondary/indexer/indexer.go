@@ -2003,8 +2003,8 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 						severity: FATAL,
 						cause:    err1,
 						category: INDEXER}}
-				return nil, err1
 			}
+			return nil, err1
 		}
 	}
 
