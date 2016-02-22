@@ -44,6 +44,8 @@ func main() {
 	diagDir := fset.String("diagDir", "./", "Directory for writing index diagnostic information")
 	enableManager := fset.Bool("enable_manager", true, "Enable Index Manager")
 	auth := fset.String("auth", "", "Auth user and password")
+	fset.String("nodeUUID", "", "UUID of the node")
+	fset.String("storageMode", "", "Storage mode of indexer (forestdb/memory_optimized)")
 
 	for i := 1; i < len(os.Args); i++ {
 		if err := fset.Parse(os.Args[i : i+1]); err != nil {
