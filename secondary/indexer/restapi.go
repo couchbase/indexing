@@ -209,7 +209,7 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if value, ok := params["exprType"]; ok && value != nil {
-		exprtype = value.(string)
+		exprtype = strings.ToLower(value.(string))
 	}
 
 	if value, ok := params["isPrimary"]; ok && value != nil {
