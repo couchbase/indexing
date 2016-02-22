@@ -774,14 +774,14 @@ func makeResponsehandler(
 				return
 			}
 			l.Tracef("backfill read %v entries\n", len(skeys))
-			if primed == false && len(entryChannel) > 0 && len(skeys) > 0 {
-				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
-			}
-			sendEntries(si, pkeys, skeys, conn)
 			if primed == false {
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
 			}
+			if len(entryChannel) > 0 && len(skeys) > 0 {
+				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
+			}
+			sendEntries(si, pkeys, skeys, conn)
 			ticktm = time.Now()
 		}
 	}
@@ -850,14 +850,14 @@ func makeResponsehandler(
 
 		} else {
 			l.Tracef("response cap:%v len:%v entries:%v\n", cp, ln, len(skeys))
-			if primed == false && len(entryChannel) > 0 && len(skeys) > 0 {
-				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
-			}
-			sendEntries(si, pkeys, skeys, conn)
 			if primed == false {
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
 			}
+			if len(entryChannel) > 0 && len(skeys) > 0 {
+				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
+			}
+			sendEntries(si, pkeys, skeys, conn)
 			ticktm = time.Now()
 		}
 		return true
