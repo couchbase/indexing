@@ -742,6 +742,8 @@ func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	//generate new stability timestamp
 	tsVbuuid := ss.streamBucketHWTMap[streamId][bucket].Copy()
 
+	tsVbuuid.SetSnapType(common.NO_SNAP)
+
 	ss.alignSnapBoundary(streamId, bucket, tsVbuuid)
 
 	//reset state for next TS
