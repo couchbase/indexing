@@ -38,6 +38,9 @@ type ClusterInfoCache struct {
 	logPrefix string
 	retries   int
 
+	useStaticPorts bool
+	servicePortMap map[string]string
+
 	client  couchbase.Client
 	pool    couchbase.Pool
 	nodes   []couchbase.Node
@@ -69,6 +72,13 @@ func (c *ClusterInfoCache) SetLogPrefix(p string) {
 
 func (c *ClusterInfoCache) SetMaxRetries(r int) {
 	c.retries = r
+}
+
+func (c *ClusterInfoCache) SetServicePorts(portMap map[string]string) {
+
+	c.useStaticPorts = true
+	c.servicePortMap = portMap
+
 }
 
 func (c *ClusterInfoCache) Fetch() error {
@@ -289,8 +299,24 @@ func (c *ClusterInfoCache) sameNode(n1 couchbase.Node, n2 couchbase.Node) bool {
 }
 
 func (c *ClusterInfoCache) GetLocalServiceAddress(srvc string) (string, error) {
-	node := c.GetCurrentNode()
-	return c.GetServiceAddress(node, srvc)
+
+	if c.useStaticPorts {
+
+		h, err := c.GetLocalHostname()
+		if err != nil {
+			return "", err
+		}
+
+		p, e := c.getStaticServicePort(srvc)
+		if e != nil {
+			return "", e
+		}
+		return net.JoinHostPort(h, p), nil
+
+	} else {
+		node := c.GetCurrentNode()
+		return c.GetServiceAddress(node, srvc)
+	}
 }
 
 func (c *ClusterInfoCache) GetLocalServicePort(srvc string) (string, error) {
@@ -328,14 +354,40 @@ func (c *ClusterInfoCache) GetLocalHostAddress() (string, error) {
 	if err != nil {
 		return "", errors.New("Unable to parse cluster url - " + err.Error())
 	}
+
 	_, p, _ := net.SplitHostPort(cUrl.Host)
 
-	h, err := c.GetLocalServiceHost(INDEX_ADMIN_SERVICE)
+	h, err := c.GetLocalHostname()
 	if err != nil {
 		return "", err
 	}
 
 	return net.JoinHostPort(h, p), nil
+
+}
+
+func (c *ClusterInfoCache) GetLocalHostname() (string, error) {
+
+	cUrl, err := url.Parse(c.url)
+	if err != nil {
+		return "", errors.New("Unable to parse cluster url - " + err.Error())
+	}
+
+	h, _, _ := net.SplitHostPort(cUrl.Host)
+
+	nid := c.GetCurrentNode()
+
+	if int(nid) >= len(c.nodesvs) {
+		return "", ErrInvalidNodeId
+	}
+
+	node := c.nodesvs[nid]
+	if node.Hostname == "" {
+		node.Hostname = h
+	}
+
+	return node.Hostname, nil
+
 }
 
 func (c *ClusterInfoCache) validateCache() bool {
@@ -371,4 +423,14 @@ func (c *ClusterInfoCache) validateCache() bool {
 	}
 
 	return true
+}
+
+func (c *ClusterInfoCache) getStaticServicePort(srvc string) (string, error) {
+
+	if p, ok := c.servicePortMap[srvc]; ok {
+		return p, nil
+	} else {
+		return "", ErrInvalidService
+	}
+
 }

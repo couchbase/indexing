@@ -40,6 +40,7 @@ type Indexer interface {
 
 var StreamAddrMap StreamAddressMap
 var StreamTopicName map[common.StreamId]string
+var ServiceAddrMap map[string]string
 
 type BucketIndexCountMap map[string]int
 type BucketFlushInProgressMap map[string]bool
@@ -194,6 +195,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.initStreamAddressMap()
 	idx.initStreamFlushMap()
+	idx.initServiceAddressMap()
 
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
@@ -2096,6 +2098,15 @@ func (idx *indexer) initStreamAddressMap() {
 	StreamAddrMap[common.MAINT_STREAM] = common.Endpoint(port2addr("streamMaintPort"))
 	StreamAddrMap[common.CATCHUP_STREAM] = common.Endpoint(port2addr("streamCatchupPort"))
 	StreamAddrMap[common.INIT_STREAM] = common.Endpoint(port2addr("streamInitPort"))
+}
+
+func (idx *indexer) initServiceAddressMap() {
+	ServiceAddrMap = make(map[string]string)
+
+	ServiceAddrMap[common.INDEX_ADMIN_SERVICE] = idx.config["adminPort"].String()
+	ServiceAddrMap[common.INDEX_SCAN_SERVICE] = idx.config["scanPort"].String()
+	ServiceAddrMap[common.INDEX_HTTP_SERVICE] = idx.config["httpPort"].String()
+
 }
 
 func (idx *indexer) initStreamTopicName() {
