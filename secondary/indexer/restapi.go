@@ -102,28 +102,28 @@ func (api *restServer) handleIndex(
 				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
 			}
 		} else if _, ok := q["lookup"]; ok {
-			if request.Method == "GET" {
+			if request.Method == "GET" || request.Method == "POST" {
 				api.doLookup(w, request)
 			} else {
 				msg := `invalid method, expected GET`
 				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
 			}
 		} else if _, ok := q["range"]; ok {
-			if request.Method == "GET" {
+			if request.Method == "GET" || request.Method == "POST" {
 				api.doRange(w, request)
 			} else {
 				msg := `invalid method, expected GET`
 				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
 			}
 		} else if _, ok := q["scanall"]; ok {
-			if request.Method == "GET" {
+			if request.Method == "GET" || request.Method == "POST" {
 				api.doScanall(w, request)
 			} else {
 				msg := `invalid method, expected GET`
 				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
 			}
 		} else if _, ok := q["count"]; ok {
-			if request.Method == "GET" {
+			if request.Method == "GET" || request.Method == "POST" {
 				api.doCount(w, request)
 			} else {
 				msg := `invalid method, expected GET`
