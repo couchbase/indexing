@@ -31,7 +31,7 @@ while true; do
   mv ${WORKSPACE}/versions.cfg /var/www/versions-$TS.cfg
   mv ${WORKSPACE}/installer.tar /var/www/installer-$TS.tar
   dowatch
-  dotiming
+  # dotiming
   sleep 600
 done
 

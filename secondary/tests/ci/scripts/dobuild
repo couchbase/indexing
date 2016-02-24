@@ -17,17 +17,10 @@ echo '</pre><h3>Building</h3><pre>'
 > $WORKSPACE/versions.cfg
 > $WORKSPACE/make.log
 
-if [ ! -d /opt/mirror ]; then
-  mkdir -p /opt/mirror
-  cd /opt/mirror
-  repo init -u git://github.com/couchbase/manifest -b master -m watson.xml -g all --mirror 1>>$WORKSPACE/make.log 2>&1
-  repo sync --jobs=8 1>>$WORKSPACE/make.log 2>&1
-fi
-
 if [ ! -d $WORKSPACE/.repo ]; then
   mkdir -p $WORKSPACE
   cd $WORKSPACE
-  repo init -u git://github.com/couchbase/manifest -b master -m watson.xml -g all --reference /opt/mirror 1>>$WORKSPACE/make.log 2>&1
+  repo init -u git://github.com/couchbase/manifest -b master -m watson.xml -g all 1>>$WORKSPACE/make.log 2>&1
   test $? -eq 0 || error_exit "Repo Init"
 fi
 
@@ -37,13 +30,14 @@ if [ "$1" = "clean" ]; then
 fi
 
 echo "Updating tree"
-repo sync --jobs=16 1>>$WORKSPACE/make.log 2>&1
+repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Updating tree"
 test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find voltron"
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
-git fetch -q couchbase
-echo -n "indexing: " && git checkout unstable
+echo "Switching indexing to unstable"
+git checkout unstable 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull unstable"
+git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull unstable"
 current="`git rev-parse HEAD`"
 test -f ~/indexing.good || (echo $current > ~/indexing.good)
 good="`cat ~/indexing.good`"
