@@ -33,7 +33,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	time.Sleep(5 * time.Second)
 
-	kvdocs := generateDocs(20000, "test.prod")
+	kvdocs := generateDocs(50000, "test.prod")
 	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)
 
 	// Disable backfill
@@ -107,6 +107,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 
 	log.Printf("limit=1,chsize=256; received %v items; took %v\n",
 		count, time.Since(now))
+	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) > 0 {
 		e := errors.New("Unexpected backfill file")
 		FailTestIfError(e, "TestBufferedScan_BackfillDisabled failed", t)
@@ -130,6 +131,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	}
 	log.Printf("limit=1000,chsize=256; received %v items; took %v\n",
 		count, time.Since(now))
+	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) > 0 {
 		e := errors.New("Unexpected backfill file")
 		FailTestIfError(e, "TestBufferedScan_BackfillDisabled failed", t)
@@ -207,12 +209,13 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	now := time.Now()
 	go doquery(int64(1), conn)
 	for range ch {
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 		count++
 	}
 
 	log.Printf("limit=1,chsize=256; received %v items; took %v\n",
 		count, time.Since(now))
+	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) > 0 {
 		e := errors.New("Unexpected backfill file")
 		FailTestIfError(e, "TestBufferedScan_BackfillEnabled failed", t)
@@ -237,6 +240,7 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	}
 	log.Printf("limit=1000,chsize=256; received %v items; took %v\n",
 		count, time.Since(now))
+	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) > 0 {
 		e := errors.New("Unexpected backfill file")
 		FailTestIfError(e, "TestBufferedScan_BackfillEnabled failed", t)
@@ -268,6 +272,7 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	}
 	log.Printf("limit=1000,chsize=256; received %v items; took %v\n",
 		count, time.Since(now))
+	time.Sleep(1 * time.Second)
 	if len(getbackfillFiles(backfillDir())) > 0 {
 		e := errors.New("Expected backfill file to be deleted")
 		FailTestIfError(e, "TestBufferedScan_BackfillEnabled failed", t)
@@ -276,34 +281,43 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	}
 
 	// ******* Case 4
-	// cap(ch) == 256 & limit 10000 & read slow,
+	// cap(ch) == 256 & limit 50000 & 2 concur request, read slow,
 	// file should be created and error out, and file is deleted
 	cleanbackfillFiles()
-	ctxt = &qcmdContext{}
-	conn, err = datastore.NewSizedIndexConnection(256, ctxt)
-	if err != nil {
-		FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed", t)
-	}
+	concur := 2
+	donech := make(chan *qcmdContext, concur)
+	for i := 0; i < concur; i++ {
+		go func(donech chan *qcmdContext) {
+			ctxt := &qcmdContext{}
+			conn, err := datastore.NewSizedIndexConnection(256, ctxt)
+			if err != nil {
+				FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed", t)
+			}
 
-	count, ch = 0, conn.EntryChannel()
-	go doquery(int64(10000), conn)
+			count, ch := 0, conn.EntryChannel()
+			go doquery(int64(50000), conn)
+			now := time.Now()
+			for range ch {
+				time.Sleep(1 * time.Millisecond)
+				count++
+			}
+			log.Printf("limit=1000,chsize=256; received %v items; took %v\n",
+				count, time.Since(now))
+			donech <- ctxt
+		}(donech)
+	}
+	// wait for it to complete
+	for i := 0; i < concur; i++ {
+		ctxt := <-donech
+		if ctxt.err == nil {
+			fmsg := "TestBufferedScan_BackfillEnabled expected error"
+			FailTestIfError(errors.New("expected"), fmsg, t)
+		}
+	}
 	time.Sleep(1 * time.Second)
-	if len(getbackfillFiles(backfillDir())) != 1 {
-		e := errors.New("Expected one backfill file")
-		FailTestIfError(e, "TestBufferedScan_BackfillEnabled failed", t)
-	}
-	now = time.Now()
-	for range ch {
-		time.Sleep(1 * time.Millisecond)
-		count++
-	}
-	log.Printf("limit=1000,chsize=256; received %v items; took %v\n",
-		count, time.Since(now))
 	if len(getbackfillFiles(backfillDir())) > 0 {
 		e := errors.New("Expected backfill file to be deleted")
 		FailTestIfError(e, "TestBufferedScan_BackfillEnabled failed", t)
-	} else if ctxt.err == nil {
-		FailTestIfError(ctxt.err, "TestBufferedScan_BackfillEnabled expected error", t)
 	}
 }
 
@@ -359,4 +373,11 @@ func backfillDir() string {
 	dir := path.Dir(file.Name())
 	os.Remove(file.Name()) // remove this file.
 	return dir
+}
+
+func process_response_delay(n int) {
+	count := float64(0)
+	for i := 0; i < n; i++ {
+		count *= float64(i)
+	}
 }
