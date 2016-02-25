@@ -474,7 +474,6 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 
-	fmt.Println("lala", equals, distinct, limit, cons, ts)
 	err = nil
 	e := api.client.Lookup(
 		uint64(index.Definition.DefnId), "", equals, distinct, limit, cons, ts,
