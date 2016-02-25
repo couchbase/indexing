@@ -253,6 +253,8 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		return nil, errMsg
 	}
 
+	s.setIndexerState(common.INDEXER_BOOTSTRAP)
+
 	// main loop
 	go s.run()
 	go s.listenSnapshot()
@@ -730,6 +732,8 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 	ttime := time.Now()
 
 	req, err := s.newRequest(protoReq, cancelCh)
+
+	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() {
 		s.handleError(req.LogPrefix, w.Done())
@@ -749,12 +753,16 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		return
 	}
 
+	req.Stats.scanReqAllocDuration.Add(time.Now().Sub(atime).Nanoseconds())
+
 	if err := s.isScanAllowed(*req.Consistency); err != nil {
 		s.tryRespondWithError(w, req, err)
 		return
 	}
 
 	req.Stats.numRequests.Add(1)
+
+	req.Stats.scanReqInitDuration.Add(time.Now().Sub(ttime).Nanoseconds())
 
 	t0 := time.Now()
 	is, err := s.getRequestedIndexSnapshot(req)

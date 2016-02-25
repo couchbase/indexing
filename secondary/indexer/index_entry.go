@@ -10,10 +10,9 @@ import (
 )
 
 var (
-	ErrSecKeyNil          = errors.New("Secondary key array is empty")
-	ErrSecKeyTooLong      = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", MAX_SEC_KEY_LEN))
-	ErrArraySecKeyTooLong = errors.New(fmt.Sprintf("Secondary array key is too long (> %d)", maxArrayKeyLength))
-	ErrDocIdTooLong       = errors.New(fmt.Sprintf("DocID is too long (>%d)", MAX_DOCID_LEN))
+	ErrSecKeyNil     = errors.New("Secondary key array is empty")
+	ErrSecKeyTooLong = errors.New(fmt.Sprintf("Secondary key is too long (> %d)", MAX_SEC_KEY_LEN))
+	ErrDocIdTooLong  = errors.New(fmt.Sprintf("DocID is too long (>%d)", MAX_DOCID_LEN))
 )
 
 // Special index keys
@@ -34,7 +33,6 @@ const (
 )
 
 var (
-	maxArrayLength          = common.SystemConfig["indexer.settings.max_array_length"].Int()
 	maxArrayKeyLength       = common.SystemConfig["indexer.settings.max_array_seckey_size"].Int()
 	maxArrayKeyBufferLength = maxArrayKeyLength * 3
 	maxArrayIndexEntrySize  = maxArrayKeyBufferLength + MAX_DOCID_LEN + 2
@@ -43,7 +41,6 @@ var (
 func init() {
 	jsonEncoder = collatejson.NewCodec(16)
 	encBufPool = common.NewByteBufferPool(maxIndexEntrySize)
-	arrayEncBufPool = common.NewByteBufferPool(maxArrayIndexEntrySize)
 }
 
 // Generic index entry abstraction (primary or secondary)
@@ -51,7 +48,7 @@ func init() {
 type IndexEntry interface {
 	ReadDocId([]byte) ([]byte, error)
 	ReadSecKey([]byte) ([]byte, error)
-
+	Count() int
 	Bytes() []byte
 	String() string
 }
@@ -92,6 +89,10 @@ func (e *primaryIndexEntry) ReadSecKey(buf []byte) ([]byte, error) {
 	return buf, nil
 }
 
+func (e *primaryIndexEntry) Count() int {
+	return 1
+}
+
 func (e *primaryIndexEntry) Bytes() []byte {
 	return []byte(*e)
 }
@@ -102,11 +103,13 @@ func (e *primaryIndexEntry) String() string {
 
 // Storage encoding for secondary index entry
 // Format:
-// [collate_json_encoded_sec_key][raw_docid_bytes][len_of_docid_2_bytes]
+// [collate_json_encoded_sec_key][raw_docid_bytes][optional_count_2_bytes][len_of_docid_2_bytes]
+// The MSB of right byte of docid length indicates whether count is encoded or not
 type secondaryIndexEntry []byte
 
-func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, buf []byte) (secondaryIndexEntry, error) {
+func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, buf []byte) (secondaryIndexEntry, error) {
 	var err error
+	var offset int
 
 	if isNilJsonKey(key) {
 		return nil, ErrSecKeyNil
@@ -114,7 +117,7 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, buf []byte) 
 
 	if isArray {
 		if isArraySecKeyLarge(key) {
-			return nil, ErrArraySecKeyTooLong
+			return nil, errors.New(fmt.Sprintf("Secondary array key is too long (> %d)", maxArrayKeyLength))
 		}
 	} else if isSecKeyLarge(key) {
 		return nil, ErrSecKeyTooLong
@@ -129,9 +132,19 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, buf []byte) 
 	}
 
 	buf = append(buf, docid...)
+
+	if count > 1 {
+		buf = buf[:len(buf)+2]
+		offset = len(buf) - 2
+		binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(count))
+	}
+
 	buf = buf[:len(buf)+2]
-	offset := len(buf) - 2
+	offset = len(buf) - 2
 	binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(len(docid)))
+	if count > 1 {
+		buf[offset+1] = byte(uint8(1) << 7)
+	}
 
 	e := secondaryIndexEntry(buf)
 	return e, nil
@@ -146,30 +159,58 @@ func (e *secondaryIndexEntry) lenDocId() int {
 	rbuf := []byte(*e)
 	offset := len(rbuf) - 2
 	l := binary.LittleEndian.Uint16(rbuf[offset : offset+2])
-	return int(l)
+	len := l & 0x7fff // Length & 0111111 11111111 (as MSB of length is used to indicate presence of count)
+	return int(len)
 }
 
 func (e *secondaryIndexEntry) lenKey() int {
+	if e.isCountEncoded() == true {
+		return len(*e) - e.lenDocId() - 4
+	}
 	return len(*e) - e.lenDocId() - 2
 }
 
-func (e secondaryIndexEntry) ReadDocId(buf []byte) ([]byte, error) {
-	doclen := e.lenDocId()
-	offset := len(e) - doclen - 2
-	buf = append(buf, e[offset:offset+doclen]...)
+func (e *secondaryIndexEntry) isCountEncoded() bool {
+	rbuf := []byte(*e)
+	offset := len(rbuf) - 1 // Decode length byte to see if count is encoded
+	return (rbuf[offset] & 0x80) == 0x80
+}
 
+func (e secondaryIndexEntry) ReadDocId(buf []byte) ([]byte, error) {
+	docidlen := e.lenDocId()
+	var offset int
+	if e.isCountEncoded() == true {
+		offset = len(e) - docidlen - 4
+	} else {
+		offset = len(e) - docidlen - 2
+	}
+	buf = append(buf, e[offset:offset+docidlen]...)
 	return buf, nil
+}
+
+func (e secondaryIndexEntry) Count() int {
+	rbuf := []byte(e)
+	if e.isCountEncoded() {
+		offset := len(rbuf) - 4
+		count := int(binary.LittleEndian.Uint16(rbuf[offset : offset+2]))
+		return count
+	} else {
+		return 1
+	}
 }
 
 func (e secondaryIndexEntry) ReadSecKey(buf []byte) ([]byte, error) {
 	var err error
+	var encoded []byte
 	doclen := e.lenDocId()
-
-	encoded := e[0 : len(e)-doclen-2]
+	if e.isCountEncoded() {
+		encoded = e[0 : len(e)-doclen-4]
+	} else {
+		encoded = e[0 : len(e)-doclen-2]
+	}
 	if buf, err = jsonEncoder.Decode(encoded, buf); err != nil {
 		return nil, err
 	}
-
 	return buf, nil
 }
 
@@ -329,12 +370,12 @@ func IndexEntrySize(key []byte, docid []byte) int {
 }
 
 func GetIndexEntryBytes2(key []byte, docid []byte,
-	isPrimary bool, isArray bool, buf []byte) (bs []byte, err error) {
+	isPrimary bool, isArray bool, count int, buf []byte) (bs []byte, err error) {
 
 	if isPrimary {
 		bs, err = NewPrimaryIndexEntry(docid)
 	} else {
-		bs, err = NewSecondaryIndexEntry(key, docid, isArray, buf)
+		bs, err = NewSecondaryIndexEntry(key, docid, isArray, count, buf)
 		if err == ErrSecKeyNil {
 			return nil, nil
 		}
@@ -344,7 +385,7 @@ func GetIndexEntryBytes2(key []byte, docid []byte,
 }
 
 func GetIndexEntryBytes(key []byte, docid []byte,
-	isPrimary bool, isArray bool) (entry []byte, err error) {
+	isPrimary bool, isArray bool, count int) (entry []byte, err error) {
 
 	var bufPool *common.BytesBufPool
 	var bufPtr *[]byte
@@ -365,6 +406,6 @@ func GetIndexEntryBytes(key []byte, docid []byte,
 		}()
 	}
 
-	entry, err = GetIndexEntryBytes2(key, docid, isPrimary, isArray, buf)
+	entry, err = GetIndexEntryBytes2(key, docid, isPrimary, isArray, count, buf)
 	return append([]byte(nil), entry...), err
 }

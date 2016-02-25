@@ -8,21 +8,15 @@ if [ "$WORKSPACE" = "" ]; then
 fi
 
 if [ "$INSTALL_PATH" = "" ]; then
-  INSTALL_PATH=/opt/couchbase
+  INSTALL_PATH="/opt/couchbase"
+fi
+
+if [ "$STORAGE" = "" ]; then
+  STORAGE="memdb"
 fi
 
 if [ "$TS" = "" ]; then
   TS="adhoc"
-fi
-
-iid="`curl -s http://169.254.169.254/latest/meta-data/instance-id`"
-iname="`aws ec2 describe-tags --filters Name=resource-id,Values=$iid Name=key,Values=Name --out text | awk '{print $5}'`"
-if [[ $iname == *"memdb"* ]]; then
-  echo "Using storage type memdb"
-  storage=memdb
-else
-  echo "Using storage type fdb"
-  storage=fdb
 fi
 
 stop_cluster() {
@@ -64,6 +58,8 @@ error_exit() {
 }
 
 # Setup workspace
+echo "Using storage type: $STORAGE"
+
 export phase=sanity
 stop_cluster
 rm -f $WORKSPACE/logs.tar.* $WORKSPACE/test.log $WORKSPACE/run.log /tmp/core-* $WORKSPACE/collects*.zip $WORKSPACE/collects*.tar
@@ -77,7 +73,7 @@ cd $WORKSPACE/testrunner
 (timeout 1h make simple-test 2>&1) | tee -a $WORKSPACE/test.log | egrep 'pass|fail|summary|ok$'
 
 # Core dumps
-# export GOTRACEBACK=crash
+export GOTRACEBACK=crash
 ulimit -c unlimited
 sudo bash -c "echo /tmp/core-%e.$TS.%p > /proc/sys/kernel/core_pattern"
 perl -pi -e 's/num_files, 10/num_files, 50/' /opt/couchbase/etc/couchbase/static_config
@@ -143,9 +139,9 @@ GOMAXPROCS=16 go test -timeout 4h -v 2>&1 | tee -a $WORKSPACE/test.log
 # Go tests
 echo "</pre><h4>Functional tests</h4><pre>"
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/functionaltests
-go test -timeout 4h -v -cbconfig ../config/buildtest_$storage.json 2>&1 | tee -a $WORKSPACE/test.log
+go test -timeout 4h -v -cbconfig ../config/buildtest_$STORAGE.json 2>&1 | tee -a $WORKSPACE/test.log
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary/tests/largedatatests
-go test -timeout 8h -v -cbconfig ../config/buildtest_$storage.json 2>&1 | tee -a $WORKSPACE/test.log
+go test -timeout 8h -v -cbconfig ../config/buildtest_$STORAGE.json 2>&1 | tee -a $WORKSPACE/test.log
 collects_logs
 stop_cluster
 
@@ -182,8 +178,10 @@ cd $WORKSPACE/goproj/src/github.com/couchbase/query
 git rev-parse HEAD > ~/query.good
 cd $WORKSPACE/goproj/src/github.com/couchbase/gometa
 git rev-parse HEAD > ~/gometa.good
-cd $WORKSPACE/forestdb
-git rev-parse HEAD > ~/forestdb.good
+if [ "$STORAGE" = "fdb" ]; then
+  cd $WORKSPACE/forestdb
+  git rev-parse HEAD > ~/forestdb.good
+fi
 cd $WORKSPACE/testrunner
 git rev-parse HEAD > ~/testrunner.good
 cd $WORKSPACE/ep-engine

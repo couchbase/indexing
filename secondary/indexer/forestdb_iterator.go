@@ -92,7 +92,9 @@ func (f *ForestDBIterator) Seek(key []byte) {
 		f.iter = nil
 	}
 	var err error
+	t0 := time.Now()
 	f.iter, err = f.db.IteratorInit(key, nil, forestdb.ITR_NONE|forestdb.ITR_NO_DELETES)
+	f.slice.idxStats.Timings.stNewIterator.Put(time.Now().Sub(t0))
 	if err != nil {
 		f.valid = false
 		return
@@ -131,19 +133,12 @@ func (f *ForestDBIterator) Get() {
 	}
 }
 
-func (f *ForestDBIterator) Current() ([]byte, []byte, bool) {
-	if f.valid {
-		return f.Key(), f.Value(), true
-	}
-	return nil, nil, false
-}
-
 func (f *ForestDBIterator) Key() []byte {
 	if f.valid && f.curr != nil {
 		if f.slice != nil {
 			platform.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Key())))
 		}
-		return f.curr.Key()
+		return f.curr.KeyNoCopy()
 	}
 	return nil
 }
@@ -153,7 +148,7 @@ func (f *ForestDBIterator) Value() []byte {
 		if f.slice != nil {
 			platform.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Body())))
 		}
-		return f.curr.Body()
+		return f.curr.BodyNoCopy()
 	}
 	return nil
 }
@@ -182,5 +177,6 @@ func (f *ForestDBIterator) Close() error {
 		return err
 	}
 	f.db = nil
+
 	return nil
 }

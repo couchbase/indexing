@@ -5,7 +5,7 @@
 //                            |
 //                         (spawn)
 //                            |
-//                            |  (flushTimeout || > bufferSize)
+//                            |  (flushTick || > bufferSize)
 //        Ping() -----*----> run -------------------------------> TCP
 //                    |       ^
 //        Send() -----*       | endpoint routine buffers messages,
@@ -207,7 +207,7 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 
 	raddr := endpoint.raddr
 	lastActiveTime := time.Now()
-	flushTimeout := time.Tick(endpoint.bufferTm)
+	flushTick := time.NewTicker(endpoint.bufferTm)
 	harakiri := time.NewTimer(endpoint.harakiriTm)
 	buffers := newEndpointBuffers(raddr)
 
@@ -277,7 +277,8 @@ loop:
 				if cv, ok := config["bufferTimeout"]; ok {
 					endpoint.bufferTm = time.Duration(cv.Int())
 					endpoint.bufferTm *= time.Millisecond
-					flushTimeout = time.Tick(endpoint.bufferTm)
+					flushTick.Stop()
+					flushTick = time.NewTicker(endpoint.bufferTm)
 				}
 				if cv, ok := config["harakiriTimeout"]; ok {
 					endpoint.harakiriTm = time.Duration(cv.Int())
@@ -303,7 +304,7 @@ loop:
 				break loop
 			}
 
-		case <-flushTimeout:
+		case <-flushTick.C:
 			if err := flushBuffers(); err != nil {
 				break loop
 			}

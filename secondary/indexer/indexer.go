@@ -673,6 +673,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 			}
 		}
 
+		if newConfig["settings.max_array_seckey_size"].Int() !=
+			idx.config["settings.max_array_seckey_size"].Int() {
+			idx.stats.needsRestart.Set(true)
+		}
+
 		if cv, ok := newConfig["memstatTick"]; ok {
 			common.Memstatch <- int64(cv.Int())
 		}
@@ -1988,16 +1993,17 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 
 			partnInstMap[common.PartitionId(i)] = partnInst
 		} else {
-			logging.Errorf("Indexer::initPartnInstance Error creating slice %v. Abort.",
-				err)
+			errStr := fmt.Sprintf("Error creating slice %v", err)
+			logging.Errorf("Indexer::initPartnInstance %v. Abort.", errStr)
+			err1 := errors.New(errStr)
 
 			if respCh != nil {
 				respCh <- &MsgError{
 					err: Error{code: ERROR_INDEXER_INTERNAL_ERROR,
 						severity: FATAL,
-						cause:    errors.New("Indexer Internal Error"),
+						cause:    err1,
 						category: INDEXER}}
-				return nil, err
+				return nil, err1
 			}
 		}
 	}
@@ -3184,6 +3190,7 @@ func (idx *indexer) validateIndexInstMap() {
 		if !isValidRecoveryState(index.State) {
 			logging.Warnf("Indexer::validateIndexInstMap \n\t State %v Not Recoverable. "+
 				"Not Recovering Index %v", index.State, index)
+			idx.cleanupIndexMetadata(index)
 			delete(idx.indexInstMap, instId)
 			continue
 		}
@@ -3487,6 +3494,12 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 func (idx *indexer) updateMetaInfoForDeleteBucket(bucket string, streamId common.StreamId) error {
 
 	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_DEL_BUCKET, bucket: bucket, streamId: streamId}
+	return idx.sendMsgToClusterMgr(msg)
+}
+
+func (idx *indexer) cleanupIndexMetadata(indexInst common.IndexInst) error {
+
+	msg := &MsgClustMgrUpdate{mType: CLUST_MGR_CLEANUP_INDEX, indexList: []common.IndexInst{indexInst}}
 	return idx.sendMsgToClusterMgr(msg)
 }
 

@@ -80,6 +80,11 @@ type gsiKeyspace struct {
 	indexes        map[uint64]*secondaryIndex // defnID -> index
 	primaryIndexes map[uint64]*secondaryIndex
 	logPrefix      string
+	scandur        int64
+	blockeddur     int64
+	throttledur    int64
+	primedur       int64
+	totalscans     int64
 }
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
@@ -119,6 +124,9 @@ func NewGSIIndexer(
 		return nil, err
 	}
 	l.Debugf("%v instantiated ...", gsi.logPrefix)
+
+	logtick := time.Duration(qconf["logtick"].Int()) * time.Millisecond
+	go gsi.logstats(logtick)
 	return gsi, nil
 }
 
@@ -654,13 +662,16 @@ func (si *secondaryIndex) Scan(
 	}()
 	defer close(backfillCh)
 
+	starttm := time.Now()
+
 	client, cnf := si.gsi.gsiClient, si.gsi.config
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
 		client.Lookup(
 			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeResponsehandler(client, conn, &tmpfile, backfillCh, syncCh, cnf))
+			makeResponsehandler(
+				si, client, conn, &tmpfile, backfillCh, syncCh, cnf))
 
 	} else {
 		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
@@ -668,8 +679,11 @@ func (si *secondaryIndex) Scan(
 		client.Range(
 			si.defnID, requestId, low, high, incl, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeResponsehandler(client, conn, &tmpfile, backfillCh, syncCh, cnf))
+			makeResponsehandler(
+				si, client, conn, &tmpfile, backfillCh, syncCh, cnf))
 	}
+	atomic.AddInt64(&si.gsi.totalscans, 1)
+	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 }
 
 // Scan implement PrimaryIndex{} interface.
@@ -697,11 +711,16 @@ func (si *secondaryIndex) ScanEntries(
 	}()
 	defer close(backfillCh)
 
+	starttm := time.Now()
+
 	client, cnf := si.gsi.gsiClient, si.gsi.config
 	client.ScanAll(
 		si.defnID, requestId, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		makeResponsehandler(client, conn, &tmpfile, backfillCh, syncCh, cnf))
+		makeResponsehandler(si, client, conn, &tmpfile, backfillCh, syncCh, cnf))
+
+	atomic.AddInt64(&si.gsi.totalscans, 1)
+	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 }
 
 //-------------------------------------
@@ -709,13 +728,13 @@ func (si *secondaryIndex) ScanEntries(
 //-------------------------------------
 
 func makeResponsehandler(
+	si *secondaryIndex,
 	client *qclient.GsiClient,
 	conn *datastore.IndexConnection,
 	tmpfile **os.File, backfillCh, syncCh chan bool,
 	config c.Config) qclient.ResponseHandler {
 
 	entryChannel := conn.EntryChannel()
-	stopChannel := conn.StopChannel()
 
 	var enc *gob.Encoder
 	var dec *gob.Decoder
@@ -723,6 +742,7 @@ func makeResponsehandler(
 	var backfillFin int64
 
 	backfillLimit := config["backfillLimit"].Int()
+	primed, starttm, ticktm := false, time.Now(), time.Now()
 
 	backfill := func() {
 		name := (*tmpfile).Name()
@@ -754,18 +774,15 @@ func makeResponsehandler(
 				return
 			}
 			l.Tracef("backfill read %v entries\n", len(skeys))
-			for i, skey := range skeys {
-				// Primary-key is mandatory.
-				e := &datastore.IndexEntry{PrimaryKey: string(pkeys[i])}
-				e.EntryKey = skey2Values(skey)
-				cp, ln := cap(entryChannel), len(entryChannel)
-				l.Tracef("current enqueued length: %d (max %d)\n", ln, cp)
-				select {
-				case entryChannel <- e:
-				case <-stopChannel:
-					return
-				}
+			if primed == false {
+				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
+				primed = true
 			}
+			if len(entryChannel) > 0 && len(skeys) > 0 {
+				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
+			}
+			sendEntries(si, pkeys, skeys, conn)
+			ticktm = time.Now()
 		}
 	}
 
@@ -833,17 +850,15 @@ func makeResponsehandler(
 
 		} else {
 			l.Tracef("response cap:%v len:%v entries:%v\n", cp, ln, len(skeys))
-			for i, skey := range skeys {
-				// Primary-key is mandatory.
-				e := &datastore.IndexEntry{PrimaryKey: string(pkeys[i])}
-				e.EntryKey = skey2Values(skey)
-				l.Tracef("current enqueued length: %d (max %d)\n", ln, cp)
-				select {
-				case entryChannel <- e:
-				case <-stopChannel:
-					return false
-				}
+			if primed == false {
+				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
+				primed = true
 			}
+			if len(entryChannel) > 0 && len(skeys) > 0 {
+				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
+			}
+			sendEntries(si, pkeys, skeys, conn)
+			ticktm = time.Now()
 		}
 		return true
 	}
@@ -1051,5 +1066,69 @@ func init() {
 			l.Infof(fmsg, fname, mtime)
 			os.Remove(fname)
 		}
+	}
+}
+
+func sendEntries(
+	si *secondaryIndex, pkeys [][]byte, skeys []c.SecondaryKey,
+	conn *datastore.IndexConnection) {
+
+	if len(skeys) == 0 {
+		return
+	}
+
+	var start time.Time
+	blockedtm, blocked := int64(0), false
+
+	entryChannel := conn.EntryChannel()
+	stopChannel := conn.StopChannel()
+
+	for i, skey := range skeys {
+		// Primary-key is mandatory.
+		e := &datastore.IndexEntry{PrimaryKey: string(pkeys[i])}
+		e.EntryKey = skey2Values(skey)
+		cp, ln := cap(entryChannel), len(entryChannel)
+		l.Tracef("current enqueued length: %d (max %d)\n", ln, cp)
+		if ln == cp {
+			start, blocked = time.Now(), true
+		}
+		select {
+		case entryChannel <- e:
+		case <-stopChannel:
+			return
+		}
+		if blocked {
+			blockedtm += int64(time.Since(start))
+			blocked = false
+		}
+	}
+	atomic.AddInt64(&si.gsi.blockeddur, blockedtm)
+	return
+}
+
+func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
+	tick := time.NewTicker(logtick)
+	defer func() {
+		tick.Stop()
+	}()
+
+	sofar := int64(0)
+	for {
+		<-tick.C
+		scandur := atomic.LoadInt64(&gsi.scandur)
+		blockeddur := atomic.LoadInt64(&gsi.blockeddur)
+		throttledur := atomic.LoadInt64(&gsi.throttledur)
+		primedur := atomic.LoadInt64(&gsi.primedur)
+		totalscans := atomic.LoadInt64(&gsi.totalscans)
+		if totalscans > sofar {
+			fmsg := `logstats %q {` +
+				`"gsi_scan_count":%v,"gsi_scan_duration":%v,` +
+				`"gsi_throttle_duration":%v,` +
+				`"gsi_prime_duration":%v,"gsi_blocked_duration":%v}`
+			l.Infof(
+				fmsg, gsi.keyspace, totalscans, scandur, throttledur,
+				primedur, blockeddur)
+		}
+		sofar = totalscans
 	}
 }

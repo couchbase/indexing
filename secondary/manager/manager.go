@@ -445,6 +445,12 @@ func (m *IndexManager) DeleteIndexForBucket(bucket string, streamId common.Strea
 	return m.requestServer.MakeAsyncRequest(client.OPCODE_DELETE_BUCKET, bucket, []byte{byte(streamId)})
 }
 
+func (m *IndexManager) CleanupIndex(defnId common.IndexDefnId) error {
+
+	logging.Debugf("IndexManager.CleanupIndex(): making request for cleaning up index")
+	return m.requestServer.MakeAsyncRequest(client.OPCODE_CLEANUP_INDEX, fmt.Sprintf("%v", defnId), nil)
+}
+
 func (m *IndexManager) NotifyIndexerReady() error {
 
 	logging.Debugf("IndexManager.NotifyIndexerReady(): making request to notify indexer is ready ")

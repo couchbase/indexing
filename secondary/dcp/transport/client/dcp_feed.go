@@ -171,12 +171,15 @@ func (feed *DcpFeed) genServer(
 	if val, ok := config["latencyTick"]; ok && val != nil {
 		latencyTick = int64(val.(int)) // in milli-seconds
 	}
-	latencyTm := time.Tick(time.Duration(latencyTick) * time.Millisecond)
+	latencyTm := time.NewTicker(time.Duration(latencyTick) * time.Millisecond)
+	defer func() {
+		latencyTm.Stop()
+	}()
 
 loop:
 	for {
 		select {
-		case <-latencyTm:
+		case <-latencyTm.C:
 			fmsg := "%v dcp latency stats %v\n"
 			logging.Infof(fmsg, prefix, feed.dcplatency)
 
@@ -898,7 +901,11 @@ func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 	var blocked bool
 
 	epoc := time.Now()
-	tick := time.Tick(time.Second * 5) // log every 5 second, if blocked.
+	tick := time.NewTicker(time.Second * 5) // log every 5 second, if blocked.
+	defer func() {
+		tick.Stop()
+	}()
+
 	for {
 		pkt := transport.MCRequest{} // always a new instance.
 		bytes, err := pkt.Receive(conn.conn, headerBuf[:])
@@ -924,7 +931,7 @@ func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 			duration += blockedTs
 			blocked = false
 			select {
-			case <-tick:
+			case <-tick.C:
 				percent := float64(duration) / float64(time.Since(epoc))
 				fmsg := "%v DCP-socket -> projector blocked %v (%f%%)"
 				logging.Infof(fmsg, feed.logPrefix, blockedTs, percent)

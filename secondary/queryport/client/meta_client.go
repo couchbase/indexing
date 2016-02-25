@@ -240,6 +240,7 @@ func (b *metadataClient) Timeit(defnID uint64, value float64) {
 	} else {
 		// compute incremental average.
 		load.avgLoad = (load.avgLoad + float64(value)) / 2.0
+		currmeta.loads[id] = load
 	}
 }
 

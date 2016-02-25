@@ -5,6 +5,10 @@ if [ "$WORKSPACE" = "" ]; then
   exit 2
 fi
 
+if [ "$STORAGE" = "memdb" ]; then
+  exit 0
+fi
+
 for i in {1..240}; do
   cd $WORKSPACE
   sleep 60

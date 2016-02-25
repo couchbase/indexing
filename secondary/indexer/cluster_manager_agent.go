@@ -156,6 +156,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_DEL_BUCKET:
 		c.handleDeleteBucket(cmd)
 
+	case CLUST_MGR_CLEANUP_INDEX:
+		c.handleCleanupIndex(cmd)
+
 	default:
 		logging.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
 	}
@@ -292,6 +295,18 @@ func (c *clustMgrAgent) handleDeleteBucket(cmd Message) {
 	streamId := cmd.(*MsgClustMgrUpdate).GetStreamId()
 
 	err := c.mgr.DeleteIndexForBucket(bucket, streamId)
+	common.CrashOnError(err)
+
+	c.supvCmdch <- &MsgSuccess{}
+}
+
+func (c *clustMgrAgent) handleCleanupIndex(cmd Message) {
+
+	logging.Infof("ClustMgr:handleCleanupIndex %v", cmd)
+
+	index := cmd.(*MsgClustMgrUpdate).GetIndexList()[0]
+
+	err := c.mgr.CleanupIndex(index.Defn.DefnId)
 	common.CrashOnError(err)
 
 	c.supvCmdch <- &MsgSuccess{}

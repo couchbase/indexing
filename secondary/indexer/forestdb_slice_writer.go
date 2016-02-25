@@ -29,8 +29,6 @@ import (
 
 var (
 	snapshotMetaListKey = []byte("snapshots-list")
-	maxArrayLen         = common.SystemConfig["indexer.settings.max_array_length"].Int()
-	maxArrayKeyLen      = common.SystemConfig["indexer.settings.max_array_seckey_size"].Int()
 )
 
 //NewForestDBSlice initiailizes a new slice with forestdb backend.
@@ -140,7 +138,6 @@ retry:
 	slice.id = sliceId
 
 	// Array related initialization
-	slice.arrBufPool = common.NewByteBufferPool((maxArrayKeyLen * 3) + MAX_DOCID_LEN + 2)
 	_, slice.isArrayDistinct, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
 	if err != nil {
 		return nil, err
@@ -234,11 +231,10 @@ type fdbSlice struct {
 
 	idxStats   *IndexStats
 	sysconf    common.Config
-	confLock   sync.Mutex
+	confLock   sync.RWMutex
 	statFdLock sync.Mutex
 
 	// Array processing
-	arrBufPool        *common.BytesBufPool
 	arrayExprPosition int
 	isArrayDistinct   bool
 }
@@ -270,7 +266,7 @@ func (fdb *fdbSlice) DecrRef() {
 //If forestdb has encountered any fatal error condition,
 //it will be returned as error.
 func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) error {
-	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex)
+	key, err := GetIndexEntryBytes(rawKey, docid, fdb.idxDefn.IsPrimary, fdb.idxDefn.IsArrayIndex, 1)
 	if err != nil {
 		return err
 	}
@@ -479,20 +475,6 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	var err error
 	var oldkey []byte
 
-	/*
-		Adding support for simple and composite array indexing. No support for duplicates yet
-		1. If oldBytes equals newBytes, return. No mutation to process
-		2. OLD: Decode old key -> Convert to json obj -> Form cartesian product
-		   -> Json marshal each item -> Encode each old item
-		3. NEW: Convert new ket to json obj -> Form cartesian product of new key
-		   -> Json marshal each item -> Encode each new item
-		4. With list of old encoded and new encoded entries, find out diff
-		   of entries to be deleted and entries to be added
-		5. Delete each of "entries to be deleted" from main index
-		6. Insert each of "entries to be inserted" into main index
-		7. if newKey is nil, delete backindex entry, Else update back index entry to new key
-	*/
-
 	//check if the docid exists in the back index and Get old key from back index
 	if oldkey, err = fdb.getBackIndexEntry(docid, workerId); err != nil {
 		fdb.checkFatalDbError(err)
@@ -502,6 +484,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	}
 
 	var oldEntriesBytes, newEntriesBytes [][]byte
+	var oldKeyCount, newKeyCount []int
 	if oldkey != nil {
 		if bytes.Equal(oldkey, key) {
 			logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Received Unchanged Key for "+
@@ -511,10 +494,8 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 
 		tmpBufPtr := arrayEncBufPool.Get()
 		defer arrayEncBufPool.Put(tmpBufPtr)
-		oldEntriesBytes, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
-			(*tmpBufPtr)[:0])
-
-		if err != nil {
+		if oldEntriesBytes, oldKeyCount, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
+			(*tmpBufPtr)[:0], fdb.isArrayDistinct); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in retrieving "+
 				"compostite old secondary keys %v", fdb.id, fdb.idxInstId, err)
@@ -524,8 +505,8 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	if key != nil {
 		tmpBufPtr := arrayEncBufPool.Get()
 		defer arrayEncBufPool.Put(tmpBufPtr)
-		if newEntriesBytes, err = ArrayIndexItems(key, fdb.arrayExprPosition,
-			(*tmpBufPtr)[:0]); err != nil {
+		if newEntriesBytes, newKeyCount, err = ArrayIndexItems(key, fdb.arrayExprPosition,
+			(*tmpBufPtr)[:0], fdb.isArrayDistinct); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in creating "+
 				"compostite new secondary keys %v", fdb.id, fdb.idxInstId, err)
@@ -541,19 +522,19 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		indexEntriesToBeAdded = nil
 		indexEntriesToBeDeleted = oldEntriesBytes
 	} else {
-		indexEntriesToBeAdded, indexEntriesToBeDeleted = CompareArrayEntryBytes(newEntriesBytes, oldEntriesBytes)
+		indexEntriesToBeAdded, indexEntriesToBeDeleted = CompareArrayEntriesWithCount(newEntriesBytes, oldEntriesBytes, newKeyCount, oldKeyCount)
 	}
 
 	nmut = len(indexEntriesToBeAdded) + len(indexEntriesToBeDeleted)
 
 	// Delete each of indexEntriesToBeDeleted from main index
-	for _, item := range indexEntriesToBeDeleted {
+	for i, item := range indexEntriesToBeDeleted {
 		if item != nil { // nil item indicates it should not be deleted
 			var keyToBeDeleted []byte
-			tmpBufPtr := arrayEncBufPool.Get()
-			defer arrayEncBufPool.Put(tmpBufPtr)
-			if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, (*tmpBufPtr)[:0]); err != nil {
-				arrayEncBufPool.Put(tmpBufPtr)
+			tmpBufPtr := encBufPool.Get()
+			defer encBufPool.Put(tmpBufPtr)
+			if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, oldKeyCount[i], (*tmpBufPtr)[:0]); err != nil {
+				encBufPool.Put(tmpBufPtr)
 				fdb.checkFatalDbError(err)
 				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
 				return
@@ -571,16 +552,15 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	}
 
 	// Insert each of indexEntriesToBeAdded into main index
-	for _, item := range indexEntriesToBeAdded {
+	for i, item := range indexEntriesToBeAdded {
 		if item != nil { // nil item indicates it should not be added
 			var keyToBeAdded []byte
-			keyToBeAdded = item
-			tmpBufPtr := arrayEncBufPool.Get()
-			defer arrayEncBufPool.Put(tmpBufPtr)
-			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false, (*tmpBufPtr)[:0]); err != nil {
-				arrayEncBufPool.Put(tmpBufPtr)
+			tmpBufPtr := encBufPool.Get()
+			defer encBufPool.Put(tmpBufPtr)
+			if keyToBeAdded, err = GetIndexEntryBytes2(item, docid, false, false, newKeyCount[i], (*tmpBufPtr)[:0]); err != nil {
+				encBufPool.Put(tmpBufPtr)
 				fdb.checkFatalDbError(err)
-				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
+				logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be added to main index %v", fdb.id, fdb.idxInstId, err)
 				return
 			}
 			t0 := time.Now()
@@ -742,8 +722,8 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 
 	tmpBufPtr := arrayEncBufPool.Get()
 	defer arrayEncBufPool.Put(tmpBufPtr)
-	indexEntriesToBeDeleted, err := ArrayIndexItems(olditm, fdb.arrayExprPosition,
-		(*tmpBufPtr)[:0])
+	indexEntriesToBeDeleted, keyCount, err := ArrayIndexItems(olditm, fdb.arrayExprPosition,
+		(*tmpBufPtr)[:0], fdb.isArrayDistinct)
 
 	if err != nil {
 		fdb.checkFatalDbError(err)
@@ -754,11 +734,11 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 
 	var t0 time.Time
 	// Delete each of indexEntriesToBeDeleted from main index
-	for _, item := range indexEntriesToBeDeleted {
+	for i, item := range indexEntriesToBeDeleted {
 		var keyToBeDeleted []byte
-		tmpBufPtr := arrayEncBufPool.Get()
-		defer arrayEncBufPool.Put(tmpBufPtr)
-		if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, (*tmpBufPtr)[:0]); err != nil {
+		tmpBufPtr := encBufPool.Get()
+		defer encBufPool.Put(tmpBufPtr)
+		if keyToBeDeleted, err = GetIndexEntryBytes2(item, docid, false, false, keyCount[i], (*tmpBufPtr)[:0]); err != nil {
 			arrayEncBufPool.Put(tmpBufPtr)
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error from GetIndexEntryBytes2 for entry to be deleted from main index %v", fdb.id, fdb.idxInstId, err)
@@ -888,6 +868,11 @@ func (fdb *fdbSlice) GetCommittedCount() uint64 {
 //not possible
 func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 
+	//before rollback make sure there are no mutations
+	//in the slice buffer. Timekeeper will make sure there
+	//are no flush workers before calling rollback.
+	fdb.waitPersist()
+
 	//get the seqnum from snapshot
 	snapInfo := info.(*fdbSnapshotInfo)
 
@@ -987,9 +972,9 @@ func (fdb *fdbSlice) waitPersist() {
 		//every SLICE_COMMIT_POLL_INTERVAL milliseconds,
 		//check for outstanding mutations. If there are
 		//none, proceed with the commit.
-		fdb.confLock.Lock()
+		fdb.confLock.RLock()
 		commitPollInterval := fdb.sysconf["storage.fdb.commitPollInterval"].Uint64()
-		fdb.confLock.Unlock()
+		fdb.confLock.RUnlock()
 		ticker := time.NewTicker(time.Millisecond * time.Duration(commitPollInterval))
 		for _ = range ticker.C {
 			if fdb.checkAllWorkersDone() {
@@ -1052,9 +1037,9 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 		sic := NewSnapshotInfoContainer(infos)
 		sic.Add(newSnapshotInfo)
 
-		fdb.confLock.Lock()
+		fdb.confLock.RLock()
 		maxRollbacks := fdb.sysconf["settings.recovery.max_rollbacks"].Int()
-		fdb.confLock.Unlock()
+		fdb.confLock.RUnlock()
 
 		if sic.Len() > maxRollbacks {
 			sic.RemoveOldest()
@@ -1530,8 +1515,8 @@ func (fdb *fdbSlice) cancelCompactionIfExpire(donech chan bool) {
 
 func (fdb *fdbSlice) canRunCompaction() bool {
 
-	fdb.confLock.Lock()
-	defer fdb.confLock.Unlock()
+	fdb.confLock.RLock()
+	defer fdb.confLock.RUnlock()
 
 	mode := strings.ToLower(fdb.sysconf["settings.compaction.compaction_mode"].String())
 	abort := fdb.sysconf["settings.compaction.abort_exceed_interval"].Bool()

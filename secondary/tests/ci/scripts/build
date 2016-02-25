@@ -9,29 +9,29 @@ while true; do
   (ls -t installer-*.tar | head -n 3; ls -t installer-*.tar) | sort | uniq -u | xargs -r rm
   export TS="`date +%d.%m.%Y-%H.%M`"
   export WORKSPACE="/opt/build"
-  echo '<html><head><meta http-equiv="refresh" content="3"></head><body><pre>' > /var/www/watson-current.html
-  chmod a+rx /var/www/watson-current.html
-  dobuild clean 1>>/var/www/watson-current.html 2>&1; rc=$?
-  test $rc -eq 0 && dotest 1>>/var/www/watson-current.html 2>&1; rc=$?
-  echo '</pre>' >> /var/www/watson-current.html
+  if [ "$STORAGE" = "memdb" ]; then export STORAGE="fdb"; else export STORAGE="memdb"; fi
+  echo '<html><head></head><body><pre>' > /var/www/gsi-current.html
+  chmod a+rx /var/www/gsi-current.html
+  dobuild clean 1>>/var/www/gsi-current.html 2>&1; rc=$?
+  test $rc -eq 0 && dotest 1>>/var/www/gsi-current.html 2>&1; rc=$?
+  echo '</pre>' >> /var/www/gsi-current.html
   if [ $rc -eq 0 ]; then status=pass; else status=fail; fi
-  echo '<pre>' >> /var/www/watson-current.html
+  echo '<pre>' >> /var/www/gsi-current.html
   gzip ${WORKSPACE}/logs.tar 2>&1 1>/dev/null
-  echo "Version: <a href='versions-$TS.cfg'>versions-$TS.cfg</a>" >> /var/www/watson-current.html
-  echo "Build Log: <a href='make-$TS.log'>make-$TS.log</a>" >> /var/www/watson-current.html
-  echo "Server Log: <a href='logs-$TS.tar.gz'>logs-$TS.tar.gz</a>" >> /var/www/watson-current.html
-  echo "Collect Info: <a href='collects-$TS.tar'>collects-$TS.tar</a>" >> /var/www/watson-current.html
-  echo "Install: <a href='installer-$TS.tar'>installer-$TS.tar</a>" >> /var/www/watson-current.html
-  sed 's/<meta [^>]*>//' /var/www/watson-current.html > /var/www/watson-$TS.$status.html
-  echo "</pre></body></html>" >> /var/www/watson-$TS.$status.html
-  echo "</pre><script>window.location.href='watson-$TS.$status.html'</script></body></html>" >> /var/www/watson-current.html
+  echo "Version: <a href='versions-$TS.cfg'>versions-$TS.cfg</a>" >> /var/www/gsi-current.html
+  echo "Build Log: <a href='make-$TS.log'>make-$TS.log</a>" >> /var/www/gsi-current.html
+  echo "Server Log: <a href='logs-$TS.tar.gz'>logs-$TS.tar.gz</a>" >> /var/www/gsi-current.html
+  echo "Collect Info: <a href='collects-$TS.tar'>collects-$TS.tar</a>" >> /var/www/gsi-current.html
+  echo "Install: <a href='installer-$TS.tar'>installer-$TS.tar</a>" >> /var/www/gsi-current.html
+  echo "</pre><h1>Finished</h1></body></html>" >> /var/www/gsi-current.html
+  cp  /var/www/gsi-current.html /var/www/gsi-${STORAGE/memdb/moi}-$TS.$status.html
   mv ${WORKSPACE}/make.log /var/www/make-$TS.log
   mv ${WORKSPACE}/logs.tar.gz /var/www/logs-$TS.tar.gz
   mv ${WORKSPACE}/collects.tar /var/www/collects-$TS.tar
   mv ${WORKSPACE}/versions.cfg /var/www/versions-$TS.cfg
   mv ${WORKSPACE}/installer.tar /var/www/installer-$TS.tar
   dowatch
-  dotiming
+  # dotiming
   sleep 600
 done
 

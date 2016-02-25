@@ -49,20 +49,21 @@ func (s *BucketStats) Init() {
 }
 
 type IndexTimingStats struct {
-	stCloneHandle    stats.TimingStat
-	stNewIterator    stats.TimingStat
-	stIteratorNext   stats.TimingStat
-	stSnapshotCreate stats.TimingStat
-	stSnapshotClose  stats.TimingStat
-	stHandleOpen     stats.TimingStat
-	stCommit         stats.TimingStat
-	stKVGet          stats.TimingStat
-	stKVSet          stats.TimingStat
-	stKVDelete       stats.TimingStat
-	stKVInfo         stats.TimingStat
-	stKVMetaGet      stats.TimingStat
-	stKVMetaSet      stats.TimingStat
-	dcpSeqs          stats.TimingStat
+	stCloneHandle           stats.TimingStat
+	stNewIterator           stats.TimingStat
+	stIteratorNext          stats.TimingStat
+	stSnapshotCreate        stats.TimingStat
+	stSnapshotClose         stats.TimingStat
+	stPersistSnapshotCreate stats.TimingStat
+	stScanPipelineIterate   stats.TimingStat
+	stCommit                stats.TimingStat
+	stKVGet                 stats.TimingStat
+	stKVSet                 stats.TimingStat
+	stKVDelete              stats.TimingStat
+	stKVInfo                stats.TimingStat
+	stKVMetaGet             stats.TimingStat
+	stKVMetaSet             stats.TimingStat
+	dcpSeqs                 stats.TimingStat
 }
 
 func (it *IndexTimingStats) Init() {
@@ -71,10 +72,11 @@ func (it *IndexTimingStats) Init() {
 	it.stNewIterator.Init()
 	it.stSnapshotCreate.Init()
 	it.stSnapshotClose.Init()
-	it.stHandleOpen.Init()
+	it.stPersistSnapshotCreate.Init()
 	it.stKVGet.Init()
 	it.stKVSet.Init()
 	it.stIteratorNext.Init()
+	it.stScanPipelineIterate.Init()
 	it.stKVDelete.Init()
 	it.stKVInfo.Init()
 	it.stKVMetaGet.Init()
@@ -87,6 +89,8 @@ type IndexStats struct {
 
 	scanDuration          stats.Int64Val
 	scanReqDuration       stats.Int64Val
+	scanReqInitDuration   stats.Int64Val
+	scanReqAllocDuration  stats.Int64Val
 	dcpSeqsDuration       stats.Int64Val
 	insertBytes           stats.Int64Val
 	numDocsPending        stats.Int64Val
@@ -139,6 +143,8 @@ func (h *IndexerStatsHolder) Set(s *IndexerStats) {
 func (s *IndexStats) Init() {
 	s.scanDuration.Init()
 	s.scanReqDuration.Init()
+	s.scanReqInitDuration.Init()
+	s.scanReqAllocDuration.Init()
 	s.insertBytes.Init()
 	s.numDocsPending.Init()
 	s.scanWaitDuration.Init()
@@ -265,16 +271,20 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 	addStat("timings/stats_response", is.statsResponse.Value())
 
 	for _, s := range is.indexes {
-		var scanLat, waitLat, scanReqLat int64
+		var scanLat, waitLat, scanReqLat, scanReqInitLat, scanReqAllocLat int64
 		reqs := s.numRequests.Value()
 
 		if reqs > 0 {
 			scanDur := s.scanDuration.Value()
 			waitDur := s.scanWaitDuration.Value()
 			scanReqDur := s.scanReqDuration.Value()
+			scanReqInitDur := s.scanReqInitDuration.Value()
+			scanReqAllocDur := s.scanReqAllocDuration.Value()
 			scanLat = scanDur / reqs
 			waitLat = waitDur / reqs
 			scanReqLat = scanReqDur / reqs
+			scanReqInitLat = scanReqInitDur / reqs
+			scanReqAllocLat = scanReqAllocDur / reqs
 		}
 
 		prefix = fmt.Sprintf("%s:%s:", s.bucket, s.name)
@@ -307,6 +317,8 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("avg_scan_latency", scanLat)
 		addStat("avg_scan_wait_latency", waitLat)
 		addStat("avg_scan_request_latency", scanReqLat)
+		addStat("avg_scan_request_init_latency", scanReqInitLat)
+		addStat("avg_scan_request_alloc_latency", scanReqAllocLat)
 		addStat("num_flush_queued", s.numDocsFlushQueued.Value())
 		addStat("since_last_snapshot", s.sinceLastSnapshot.Value())
 		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
@@ -321,10 +333,11 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("timings/storage_new_iterator", s.Timings.stNewIterator.Value())
 		addStat("timings/storage_snapshot_create", s.Timings.stSnapshotCreate.Value())
 		addStat("timings/storage_snapshot_close", s.Timings.stSnapshotClose.Value())
-		addStat("timings/storage_handle_open", s.Timings.stHandleOpen.Value())
+		addStat("timings/storage_persist_snapshot_create", s.Timings.stPersistSnapshotCreate.Value())
 		addStat("timings/storage_get", s.Timings.stKVGet.Value())
 		addStat("timings/storage_set", s.Timings.stKVSet.Value())
 		addStat("timings/storage_iterator_next", s.Timings.stIteratorNext.Value())
+		addStat("timings/scan_pipeline_iterate", s.Timings.stScanPipelineIterate.Value())
 		addStat("timings/storage_del", s.Timings.stKVDelete.Value())
 		addStat("timings/storage_info", s.Timings.stKVInfo.Value())
 		addStat("timings/storage_meta_get", s.Timings.stKVMetaGet.Value())

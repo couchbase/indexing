@@ -68,23 +68,20 @@ func (x *IndexState) UnmarshalJSON(data []byte) error {
 type StorageType int32
 
 const (
-	StorageType_View     StorageType = 1
-	StorageType_Llrb     StorageType = 2
-	StorageType_LevelDB  StorageType = 3
-	StorageType_ForestDB StorageType = 4
+	StorageType_forestdb         StorageType = 1
+	StorageType_memdb            StorageType = 2
+	StorageType_memory_optimized StorageType = 3
 )
 
 var StorageType_name = map[int32]string{
-	1: "View",
-	2: "Llrb",
-	3: "LevelDB",
-	4: "ForestDB",
+	1: "forestdb",
+	2: "memdb",
+	3: "memory_optimized",
 }
 var StorageType_value = map[string]int32{
-	"View":     1,
-	"Llrb":     2,
-	"LevelDB":  3,
-	"ForestDB": 4,
+	"forestdb":         1,
+	"memdb":            2,
+	"memory_optimized": 3,
 }
 
 func (x StorageType) Enum() *StorageType {
@@ -281,7 +278,7 @@ func (m *IndexDefn) GetUsing() StorageType {
 	if m != nil && m.Using != nil {
 		return *m.Using
 	}
-	return StorageType_View
+	return StorageType_forestdb
 }
 
 func (m *IndexDefn) GetExprType() ExprType {

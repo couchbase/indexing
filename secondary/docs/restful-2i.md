@@ -92,7 +92,7 @@ Body:
     { "name": "myindex",            // name of the index, as string
       "bucket": "default",          // name of the bucket, as string
       "using": "memdb",             // "forestdb", "memdb", as string
-      "exprType": "n1ql",           // "n1ql", as string
+      "exprType": "N1QL",           // "N1QL", as string
       "partnExpr": "",              // expression, as string
       "whereExpr": "type=\"user\"", // expression, as string
       "secExprs": ["age","city"],   // list of expressions, as array of string
@@ -104,7 +104,7 @@ Body:
 *optional fields:*
 
 * ``using`` (default is "memdb")
-* ``exprType`` (default is "n1ql")
+* ``exprType`` (default is "N1QL")
 * ``partnExpr`` (default is empty string)
 * ``whereExpr`` (default is empty string)
 * ``isPrimary`` (default is boolean)
@@ -271,7 +271,7 @@ Body:
         "using": "memdb",
         "bucketUUID": "23167657800098787", // unique bucket id, as string
         "isPrimary": false,                // whether index is primary as boolean
-        "exprType": "n1ql",
+        "exprType": "N1QL",
         "partitionScheme": "single",
         "secExprs": ["age","city"],     // list of expressions, as array of str
         "partitionKey": "",             // expression, as tring
@@ -462,7 +462,6 @@ Body:
 
 *optional fields:*
 
-* ``inclusion`` (default is "both")
 * ``stale`` (default is "ok")
 * ``timestamp`` (default is nil)
 

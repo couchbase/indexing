@@ -10,9 +10,13 @@ import "github.com/golang/protobuf/proto"
 // 1. stale feeds and shut them down.
 // 2. crashed routines and cleanup feeds.
 func (p *Projector) watcherDameon(watchInterval, staleTimeout int) {
-	watchTick := time.Tick(time.Duration(watchInterval) * time.Millisecond)
+	watchTick := time.NewTicker(time.Duration(watchInterval) * time.Millisecond)
+	defer func() {
+		watchTick.Stop()
+	}()
+
 	for {
-		<-watchTick
+		<-watchTick.C
 		topics := p.listTopics()
 		for _, topic := range topics {
 			feed, err := p.GetFeed(topic)

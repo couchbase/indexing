@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
+	"sort"
 )
 
 // Given the input secondary key, this method creates the product of array items
@@ -65,36 +66,68 @@ func splitSecondaryArrayKey(key []byte, arrayPos int, tmpBuf []byte) ([][][]byte
 	return arrayIndexEntries, nil
 }
 
-func ArrayIndexItems(bs []byte, arrPos int, buf []byte) ([][]byte, error) {
+func ArrayIndexItems(bs []byte, arrPos int, buf []byte, isDistinct bool) ([][]byte, []int, error) {
 	var items [][]byte
 	var err error
 
 	itemArrays, err := splitSecondaryArrayKey(bs, arrPos, buf)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	codec := collatejson.NewCodec(16)
 	for _, arr := range itemArrays {
 		if bs, err = codec.JoinArray(arr, buf); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		items = append(items, bs)
 		l := len(bs)
 		buf = buf[l:l]
 	}
 
-	return items, nil
+	if isDistinct {
+		keyCount := make([]int, len(items))
+		for i, _ := range items {
+			keyCount[i] = 1
+		}
+		return items, keyCount, nil
+	}
+
+	arrayKey := items
+	arrayItemsWithCount := make([][]byte, 0, len(arrayKey))
+	keyCount := make([]int, 0, len(arrayKey))
+	sort.Sort(common.ByteSlices(arrayKey))
+	// Compress and count
+	i := 0
+	for i < len(arrayKey) {
+		var count int
+		count = 1
+		j := i + 1
+		for ; j < len(arrayKey); j++ {
+			if bytes.Equal(arrayKey[i], arrayKey[j]) {
+				count++
+			} else {
+				break
+			}
+		}
+		arrayItemsWithCount = append(arrayItemsWithCount, arrayKey[i])
+		keyCount = append(keyCount, count)
+		i = j
+	}
+	return arrayItemsWithCount, keyCount, nil
 }
 
-// Compare two arrays of byte arrays and find out diff of which byte entry needs to be deleted and which needs to be inserted
-func CompareArrayEntryBytes(newKey, oldKey [][]byte) ([][]byte, [][]byte) {
-	// Find out all entries to be added
+// Compare two arrays of byte arrays
+// and find out diff of which byte entry
+// needs to be deleted and which needs to be inserted
+func CompareArrayEntriesWithCount(newKey, oldKey [][]byte, newKeyCount, oldKeyCount []int) ([][]byte, [][]byte) {
+	// Find out all entries to be added and deleted
 	for i := 0; i < len(newKey); i++ {
 		found := false
 		for j := 0; j < len(oldKey); j++ {
-			if bytes.Compare(newKey[i], oldKey[j]) == 0 {
-				// The item is present in both old and new. Mark the element in old as nil
+			if bytes.Compare(newKey[i], oldKey[j]) == 0 && newKeyCount[i] == oldKeyCount[j] {
+				// The item is present in both old and new with same counts
+				// Mark the element in old as nil
 				oldKey[j] = nil
 				found = true
 			}

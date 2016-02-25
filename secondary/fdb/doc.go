@@ -15,6 +15,7 @@ import "C"
 
 import (
 	"fmt"
+	"reflect"
 	"unsafe"
 )
 
@@ -87,6 +88,14 @@ func (d *Doc) Key() []byte {
 	return C.GoBytes(d.doc.key, C.int(d.doc.keylen))
 }
 
+func (d *Doc) KeyNoCopy() (s []byte) {
+	shdr := (*reflect.SliceHeader)(unsafe.Pointer(&s))
+	shdr.Data = uintptr(d.doc.key)
+	shdr.Len = int(d.doc.keylen)
+	shdr.Cap = shdr.Len
+	return
+}
+
 // Meta returns the document metadata
 func (d *Doc) Meta() []byte {
 	return C.GoBytes(d.doc.meta, C.int(d.doc.metalen))
@@ -95,6 +104,14 @@ func (d *Doc) Meta() []byte {
 // Body returns the document body
 func (d *Doc) Body() []byte {
 	return C.GoBytes(d.doc.body, C.int(d.doc.bodylen))
+}
+
+func (d *Doc) BodyNoCopy() (s []byte) {
+	shdr := (*reflect.SliceHeader)(unsafe.Pointer(&s))
+	shdr.Data = uintptr(d.doc.body)
+	shdr.Len = int(d.doc.bodylen)
+	shdr.Cap = shdr.Len
+	return
 }
 
 // SeqNum returns the document sequence number

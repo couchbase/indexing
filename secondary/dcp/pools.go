@@ -643,7 +643,7 @@ func normalizeHost(ch, h string) string {
 	return strings.Replace(h, "$HOST", ch, 1)
 }
 
-func (b *Bucket) GetDcpConn(name string, host string) (*memcached.Client, error) {
+func (b *Bucket) GetDcpConn(name DcpFeedName, host string) (*memcached.Client, error) {
 	for _, sconn := range b.getConnPools() {
 		if sconn.host == host {
 			return sconn.GetDcpConn(name)

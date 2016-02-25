@@ -40,15 +40,18 @@ GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/in
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
   LDFLAGS "${_indexer_ldflags}"
-  INSTALL_PATH bin OUTPUT indexer)
+  INSTALL_PATH bin OUTPUT indexer
+  GOVERSION 1.6)
 
 GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
-  INSTALL_PATH bin)
+  INSTALL_PATH bin
+  GOVERSION 1.6)
 
 GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindex
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
-  INSTALL_PATH bin)
+  INSTALL_PATH bin
+  GOVERSION 1.6)
 
 GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
