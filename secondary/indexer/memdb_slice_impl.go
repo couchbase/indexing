@@ -401,7 +401,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	list := memdb.NewNodeList(ptr)
 	oldEntriesBytes := list.Keys()
 	oldKeyCount := make([]int, len(oldEntriesBytes))
-	for i,_ := range oldEntriesBytes {
+	for i, _ := range oldEntriesBytes {
 		e := secondaryIndexEntry(oldEntriesBytes[i])
 		oldKeyCount[i] = e.Count()
 		oldEntriesBytes[i] = oldEntriesBytes[i][:e.lenKey()]
@@ -414,7 +414,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	for i, item := range entryBytesToDeleted {
 		if item != nil { // nil item indicates it should not be deleted
 			entry, err := NewSecondaryIndexEntry(item, docid, mdb.idxDefn.IsArrayIndex,
-				 oldKeyCount[i], mdb.encodeBuf[workerId][:0])
+				oldKeyCount[i], mdb.encodeBuf[workerId][:0])
 			common.CrashOnError(err)
 			node := list.Remove(entry)
 			mdb.main[workerId].DeleteNode(node)
@@ -426,7 +426,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 		if key != nil { // nil item indicates it should not be added
 			t0 := time.Now()
 			entry, err := NewSecondaryIndexEntry(key, docid, mdb.idxDefn.IsArrayIndex,
-				 newKeyCount[i], mdb.encodeBuf[workerId][:0])
+				newKeyCount[i], mdb.encodeBuf[workerId][:0])
 			if err != nil {
 				logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
 					"Skipping docid:%s (%v)", mdb.Id, mdb.idxInstId, docid, err)
@@ -978,6 +978,7 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 	}
 
 	sts.InternalData = internalData
+	sts.DataSize = mdb.mainstore.MemoryInUse()
 	return sts, nil
 }
 
