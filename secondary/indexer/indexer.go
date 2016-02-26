@@ -3941,7 +3941,10 @@ func (idx *indexer) monitorMemUsage() {
 			min_oom_mem := idx.config["min_oom_memory"].Uint64()
 
 			if idx.needsGC() {
+				start := time.Now()
 				runtime.GC()
+				elapsed := time.Since(start)
+				logging.Infof("Indexer::monitorMemUsage ManualGC Time Taken %v", elapsed)
 				mm.FreeOSMemory()
 			}
 
@@ -4129,7 +4132,12 @@ func (idx *indexer) checkRecoveryInProgress() bool {
 func (idx *indexer) memoryUsed() uint64 {
 
 	var ms runtime.MemStats
+
+	start := time.Now()
 	runtime.ReadMemStats(&ms)
+	elapsed := time.Since(start)
+	logging.Infof("Indexer::ReadMemstats Time Taken %v", elapsed)
+
 	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
 	return mem_used
 }
