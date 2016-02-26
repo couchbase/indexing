@@ -965,15 +965,15 @@ var SystemConfig = Config{
 	},
 	//memdb specific settings
 	"indexer.settings.persisted_snapshot.memdb.interval": ConfigValue{
-		uint64(60000), // keep in sync with index_settings_manager.erl
+		uint64(600000), // keep in sync with index_settings_manager.erl
 		"Persisted snapshotting interval in milliseconds",
-		uint64(60000),
+		uint64(600000),
 		false, // mutable
 	},
 	"indexer.settings.persisted_snapshot_init_build.memdb.interval": ConfigValue{
-		uint64(60000),
+		uint64(600000),
 		"Persisted snapshotting interval in milliseconds for initial build",
-		uint64(60000),
+		uint64(600000),
 		false, // mutable
 	},
 	"indexer.settings.inmemory_snapshot.memdb.interval": ConfigValue{
