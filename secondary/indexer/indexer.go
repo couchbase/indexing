@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"runtime/pprof"
 	"strconv"
 	"strings"
@@ -683,6 +684,12 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		if cv, ok := newConfig["memstatTick"]; ok {
 			common.Memstatch <- int64(cv.Int())
 		}
+
+		if percent, ok := newConfig["settings.gc_percent"]; ok && percent.Int() > 0 {
+			logging.Infof("Indexer: Setting GC percent to %v", percent.Int())
+			debug.SetGCPercent(percent.Int())
+		}
+
 		idx.setProfilerOptions(newConfig)
 		idx.config = newConfig
 		idx.compactMgrCmdCh <- msg

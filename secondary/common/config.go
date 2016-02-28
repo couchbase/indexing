@@ -85,6 +85,7 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 	"projector.clusterAddr": ConfigValue{
+
 		"localhost:9000",
 		"KV cluster's address to be used by projector",
 		"localhost:9000",
@@ -757,6 +758,13 @@ var SystemConfig = Config{
 		"Fraction of memory_quota left after which GC is forced " +
 			"by Indexer. Only applies to memdb.",
 		0.1,
+		false, // mutable
+	},
+	"indexer.settings.gc_percent": ConfigValue{
+		100,
+		"(GOGC) Ratio of current heap size over heap size from last GC." +
+			" Value must be positive integer.",
+		100,
 		false, // mutable
 	},
 	"indexer.mem_usage_check_interval": ConfigValue{
