@@ -607,6 +607,13 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 
+	"indexer.memstats_cache_timeout": ConfigValue{
+		uint64(60000),
+		"Memstats cache ttl in millis",
+		uint64(60000),
+		false, // mutable
+	},
+
 	//fdb specific config
 	"indexer.stream_reader.fdb.syncBatchInterval": ConfigValue{
 		uint64(40),

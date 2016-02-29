@@ -49,6 +49,13 @@ type BucketObserveFlushDoneMap map[string]MsgChannel
 type BucketRequestStopCh map[string]StopChannel
 type BucketRollbackTs map[string]*common.TsVbuuid
 
+//mem stats
+var (
+	gMemstatCache            runtime.MemStats
+	gMemstatCacheLastUpdated time.Time
+	gMemstatLock             sync.RWMutex
+)
+
 // Errors
 var (
 	ErrFatalComm                = errors.New("Fatal Internal Communication Error")
@@ -2974,7 +2981,7 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		//check if Paused state is required
 		memory_quota := idx.config["settings.memory_quota"].Uint64()
 		high_mem_mark := idx.config["high_mem_mark"].Float64()
-		mem_used := idx.memoryUsed()
+		mem_used := idx.memoryUsed(true)
 		if float64(mem_used) > (high_mem_mark * float64(memory_quota)) {
 			logging.Infof("Indexer::bootstrap MemoryUsed %v", mem_used)
 			idx.handleIndexerPause(&MsgIndexerState{mType: INDEXER_PAUSE})
@@ -3707,7 +3714,7 @@ func (idx *indexer) checkBucketExists(bucket string,
 func (idx *indexer) handleStats(cmd Message) {
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
-	idx.stats.memoryUsed.Set(int64(idx.memoryUsed()))
+	idx.stats.memoryUsed.Set(int64(idx.memoryUsed(false)))
 	idx.stats.memoryUsedStorage.Set(idx.memoryUsedStorage())
 	replych <- true
 }
@@ -3955,7 +3962,13 @@ func (idx *indexer) monitorMemUsage() {
 				mm.FreeOSMemory()
 			}
 
-			mem_used := idx.memoryUsed()
+			var mem_used uint64
+			if idx.getIndexerState() == common.INDEXER_PAUSED {
+				mem_used = idx.memoryUsed(true)
+			} else {
+				mem_used = idx.memoryUsed(false)
+			}
+
 			logging.Infof("Indexer::monitorMemUsage MemoryUsed %v", mem_used)
 
 			switch idx.getIndexerState() {
@@ -4136,23 +4149,55 @@ func (idx *indexer) checkRecoveryInProgress() bool {
 //memoryUsed returns the memory usage reported by
 //golang runtime + memory allocated by cgo
 //components(e.g. fdb buffercache)
-func (idx *indexer) memoryUsed() uint64 {
+func (idx *indexer) memoryUsed(forceRefresh bool) uint64 {
+
+	var ms runtime.MemStats
+
+	if forceRefresh {
+		idx.updateMemstats()
+		gMemstatCacheLastUpdated = time.Now()
+	}
+
+	gMemstatLock.RLock()
+	ms = gMemstatCache
+	gMemstatLock.RUnlock()
+
+	timeout := time.Millisecond * time.Duration(idx.config["memstats_cache_timeout"].Uint64())
+	if time.Since(gMemstatCacheLastUpdated) > timeout {
+		go idx.updateMemstats()
+		gMemstatCacheLastUpdated = time.Now()
+	}
+
+	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
+	return mem_used
+}
+
+func (idx *indexer) updateMemstats() {
 
 	var ms runtime.MemStats
 
 	start := time.Now()
 	runtime.ReadMemStats(&ms)
 	elapsed := time.Since(start)
+
+	gMemstatLock.Lock()
+	gMemstatCache = ms
+	gMemstatLock.Unlock()
+
 	logging.Infof("Indexer::ReadMemstats Time Taken %v", elapsed)
 
-	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
-	return mem_used
 }
 
 func (idx *indexer) needsGC() bool {
 
+	var memUsed uint64
 	memQuota := idx.config["settings.memory_quota"].Uint64()
-	memUsed := idx.memoryUsed()
+
+	if idx.getIndexerState() == common.INDEXER_PAUSED {
+		memUsed = idx.memoryUsed(true)
+	} else {
+		memUsed = idx.memoryUsed(false)
+	}
 
 	if memUsed >= memQuota {
 		return true
