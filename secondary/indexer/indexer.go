@@ -688,10 +688,6 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 			idx.stats.needsRestart.Set(true)
 		}
 
-		if cv, ok := newConfig["memstatTick"]; ok {
-			common.Memstatch <- int64(cv.Int())
-		}
-
 		if percent, ok := newConfig["settings.gc_percent"]; ok && percent.Int() > 0 {
 			logging.Infof("Indexer: Setting GC percent to %v", percent.Int())
 			debug.SetGCPercent(percent.Int())
