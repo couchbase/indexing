@@ -2923,7 +2923,7 @@ func (tk *timekeeper) getPersistInterval() uint64 {
 	if common.GetStorageMode() == common.MOI {
 		return tk.config["settings.persisted_snapshot.moi.interval"].Uint64()
 	} else {
-		return tk.config["settings.persisted_snapshot.interval"].Uint64()
+		return tk.config["settings.persisted_snapshot.fdb.interval"].Uint64()
 	}
 
 }
@@ -2932,7 +2932,7 @@ func (tk *timekeeper) getPersistIntervalInitBuild() uint64 {
 	if common.GetStorageMode() == common.MOI {
 		return tk.config["settings.persisted_snapshot_init_build.moi.interval"].Uint64()
 	} else {
-		return tk.config["settings.persisted_snapshot_init_build.interval"].Uint64()
+		return tk.config["settings.persisted_snapshot_init_build.fdb.interval"].Uint64()
 	}
 
 }
@@ -2941,7 +2941,7 @@ func (tk *timekeeper) getInMemSnapInterval() uint64 {
 	if common.GetStorageMode() == common.MOI {
 		return tk.config["settings.inmemory_snapshot.moi.interval"].Uint64()
 	} else {
-		return tk.config["settings.inmemory_snapshot.interval"].Uint64()
+		return tk.config["settings.inmemory_snapshot.fdb.interval"].Uint64()
 	}
 
 }

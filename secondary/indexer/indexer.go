@@ -708,74 +708,7 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		<-idx.storageMgrCmdCh
 
 	case CONFIG_SETTINGS_UPDATE:
-		cfgUpdate := msg.(*MsgConfigUpdate)
-		newConfig := cfgUpdate.GetConfig()
-
-		confStorageMode := strings.ToLower(newConfig["settings.storage_mode"].String())
-		if common.GetStorageMode() == common.NOT_SET {
-			if confStorageMode != "" {
-				if idx.canSetStorageMode(confStorageMode) {
-					if common.SetStorageModeStr(confStorageMode) {
-						logging.Infof("Indexer::ConfigUpdate Storage Mode Set %v", common.GetStorageMode())
-						idx.stats.needsRestart.Set(true)
-					} else {
-						logging.Infof("Indexer::ConfigUpdate Invalid Storage Mode %v", confStorageMode)
-					}
-				}
-			}
-
-		} else {
-			if confStorageMode != "" && confStorageMode != common.GetStorageMode().String() {
-				if idx.checkAnyValidIndex() {
-					logging.Warnf("Indexer::ConfigUpdate Ignore New Storage Mode %v. Already Set %v. Valid Indexes Found.",
-						confStorageMode, common.GetStorageMode())
-				} else {
-					if common.SetStorageModeStr(confStorageMode) {
-						logging.Infof("Indexer::ConfigUpdate Storage Mode Set %v", common.GetStorageMode())
-						idx.stats.needsRestart.Set(true)
-					} else {
-						logging.Infof("Indexer::ConfigUpdate Invalid Storage Mode %v", confStorageMode)
-					}
-				}
-			}
-		}
-
-		if newConfig["settings.memory_quota"].Uint64() !=
-			idx.config["settings.memory_quota"].Uint64() {
-
-			idx.stats.memoryQuota.Set(int64(newConfig["settings.memory_quota"].Uint64()))
-
-			if common.GetStorageMode() == common.FORESTDB ||
-				common.GetStorageMode() == common.NOT_SET {
-				idx.stats.needsRestart.Set(true)
-			}
-		}
-
-		if newConfig["settings.max_array_seckey_size"].Int() !=
-			idx.config["settings.max_array_seckey_size"].Int() {
-			idx.stats.needsRestart.Set(true)
-		}
-
-		if percent, ok := newConfig["settings.gc_percent"]; ok && percent.Int() > 0 {
-			logging.Infof("Indexer: Setting GC percent to %v", percent.Int())
-			debug.SetGCPercent(percent.Int())
-		}
-
-		idx.setProfilerOptions(newConfig)
-		idx.config = newConfig
-		idx.compactMgrCmdCh <- msg
-		<-idx.compactMgrCmdCh
-		idx.tkCmdCh <- msg
-		<-idx.tkCmdCh
-		idx.scanCoordCmdCh <- msg
-		<-idx.scanCoordCmdCh
-		idx.kvSenderCmdCh <- msg
-		<-idx.kvSenderCmdCh
-		idx.mutMgrCmdCh <- msg
-		<-idx.mutMgrCmdCh
-		idx.statsMgrCmdCh <- msg
-		<-idx.statsMgrCmdCh
-		idx.updateSliceWithConfig(newConfig)
+		idx.handleConfigUpdate(msg)
 
 	case INDEXER_INIT_PREP_RECOVERY:
 		idx.handleInitPrepRecovery(msg)
@@ -846,6 +779,79 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
 	}
+
+}
+
+func (idx *indexer) handleConfigUpdate(msg Message) {
+
+	cfgUpdate := msg.(*MsgConfigUpdate)
+	newConfig := cfgUpdate.GetConfig()
+
+	confStorageMode := strings.ToLower(newConfig["settings.storage_mode"].String())
+	if common.GetStorageMode() == common.NOT_SET {
+		if confStorageMode != "" {
+			if idx.canSetStorageMode(confStorageMode) {
+				if common.SetStorageModeStr(confStorageMode) {
+					logging.Infof("Indexer::ConfigUpdate Storage Mode Set %v", common.GetStorageMode())
+					idx.stats.needsRestart.Set(true)
+				} else {
+					logging.Infof("Indexer::ConfigUpdate Invalid Storage Mode %v", confStorageMode)
+				}
+			}
+		}
+
+	} else {
+		if confStorageMode != "" && confStorageMode != common.GetStorageMode().String() {
+			if idx.checkAnyValidIndex() {
+				logging.Warnf("Indexer::ConfigUpdate Ignore New Storage Mode %v. Already Set %v. Valid Indexes Found.",
+					confStorageMode, common.GetStorageMode())
+			} else {
+				if common.SetStorageModeStr(confStorageMode) {
+					logging.Infof("Indexer::ConfigUpdate Storage Mode Set %v", common.GetStorageMode())
+					idx.stats.needsRestart.Set(true)
+				} else {
+					logging.Infof("Indexer::ConfigUpdate Invalid Storage Mode %v", confStorageMode)
+				}
+			}
+		}
+	}
+
+	if newConfig["settings.memory_quota"].Uint64() !=
+		idx.config["settings.memory_quota"].Uint64() {
+
+		idx.stats.memoryQuota.Set(int64(newConfig["settings.memory_quota"].Uint64()))
+
+		if common.GetStorageMode() == common.FORESTDB ||
+			common.GetStorageMode() == common.NOT_SET {
+			idx.stats.needsRestart.Set(true)
+		}
+	}
+
+	if newConfig["settings.max_array_seckey_size"].Int() !=
+		idx.config["settings.max_array_seckey_size"].Int() {
+		idx.stats.needsRestart.Set(true)
+	}
+
+	if percent, ok := newConfig["settings.gc_percent"]; ok && percent.Int() > 0 {
+		logging.Infof("Indexer: Setting GC percent to %v", percent.Int())
+		debug.SetGCPercent(percent.Int())
+	}
+
+	idx.setProfilerOptions(newConfig)
+	idx.config = newConfig
+	idx.compactMgrCmdCh <- msg
+	<-idx.compactMgrCmdCh
+	idx.tkCmdCh <- msg
+	<-idx.tkCmdCh
+	idx.scanCoordCmdCh <- msg
+	<-idx.scanCoordCmdCh
+	idx.kvSenderCmdCh <- msg
+	<-idx.kvSenderCmdCh
+	idx.mutMgrCmdCh <- msg
+	<-idx.mutMgrCmdCh
+	idx.statsMgrCmdCh <- msg
+	<-idx.statsMgrCmdCh
+	idx.updateSliceWithConfig(newConfig)
 
 }
 
