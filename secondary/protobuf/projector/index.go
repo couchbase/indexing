@@ -96,14 +96,17 @@ type IndexEvaluator struct {
 	pkExpr   interface{}   // compiled expression
 	whExpr   interface{}   // compiled expression
 	instance *IndexInst
+	version  FeedVersion
 }
 
 // NewIndexEvaluator returns a reference to a new instance
 // of IndexEvaluator.
-func NewIndexEvaluator(instance *IndexInst) (*IndexEvaluator, error) {
+func NewIndexEvaluator(instance *IndexInst,
+	version FeedVersion) (*IndexEvaluator, error) {
+
 	var err error
 
-	ie := &IndexEvaluator{instance: instance}
+	ie := &IndexEvaluator{instance: instance, version: version}
 	// compile expressions once and reuse it many times.
 	defn := ie.instance.GetDefinition()
 	switch defn.GetExprType() {
@@ -186,13 +189,18 @@ func (ie *IndexEvaluator) StreamEndData(
 
 // TransformRoute implement Evaluator{} interface.
 func (ie *IndexEvaluator) TransformRoute(
-	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte) (err error) {
+	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{},
+	encodeBuf []byte) (err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			err = fmt.Errorf("%v", r)
 		}
 	}()
+
+	if ie.version < FeedVersion_watson {
+		encodeBuf = nil
+	}
 
 	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
 	instn := ie.instance

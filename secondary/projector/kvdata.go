@@ -70,7 +70,6 @@ func NewKVData(
 	mutch <-chan *mc.DcpEvent,
 	config c.Config) *KVData {
 
-	cluster, topic := feed.cluster, feed.topic
 	kvdata := &KVData{
 		feed:      feed,
 		opaque:    opaque,
@@ -98,7 +97,7 @@ func NewKVData(
 		kvdata.endpoints[raddr] = endpoint
 	}
 	// start workers
-	kvdata.workers = kvdata.spawnWorkers(cluster, topic, bucket, config, opaque)
+	kvdata.workers = kvdata.spawnWorkers(feed, bucket, config, opaque)
 	go kvdata.runScatter(reqTs, mutch)
 	logging.Infof("%v ##%x started ...\n", kvdata.logPrefix, opaque)
 	return kvdata
@@ -476,13 +475,13 @@ func (kvdata *KVData) scatterMutation(
 }
 
 func (kvdata *KVData) spawnWorkers(
-	cluster, topic, bucket string,
-	config c.Config, opaque uint16) []*VbucketWorker {
+	feed *Feed,
+	bucket string, config c.Config, opaque uint16) []*VbucketWorker {
 
 	nworkers := config["vbucketWorkers"].Int()
 	workers := make([]*VbucketWorker, nworkers)
 	for i := 0; i < nworkers; i++ {
-		workers[i] = NewVbucketWorker(i, cluster, topic, bucket, opaque, config)
+		workers[i] = NewVbucketWorker(i, feed, bucket, opaque, config)
 	}
 	return workers
 }

@@ -33,11 +33,12 @@ import "github.com/golang/protobuf/proto"
 
 // Feed is mutation stream - for maintenance, initial-load, catchup etc...
 type Feed struct {
-	cluster      string // immutable
-	pooln        string // immutable
-	topic        string // immutable
-	opaque       uint16 // opaque that created this feed.
-	endpointType string // immutable
+	cluster      string               // immutable
+	version      protobuf.FeedVersion // immutable
+	pooln        string               // immutable
+	topic        string               // immutable
+	opaque       uint16               // opaque that created this feed.
+	endpointType string               // immutable
 
 	// upstream
 	// reqTs, book-keeping on outstanding request posted to feeder.
@@ -683,6 +684,7 @@ func (feed *Feed) start(
 	req *protobuf.MutationTopicRequest, opaque uint16) (err error) {
 
 	feed.endpointType = req.GetEndpointType()
+	feed.version = req.GetVersion()
 
 	// update engines and endpoints
 	if err = feed.processSubscribers(opaque, req); err != nil { // :SideEffect:
