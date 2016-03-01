@@ -11,10 +11,17 @@ package indexer
 
 import (
 	"errors"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/platform"
 	"time"
 )
+
+var docBufPool *common.BytesBufPool
+
+func init() {
+	docBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN)
+}
 
 //ForestDBIterator taken from
 //https://github.com/couchbaselabs/bleve/blob/master/index/store/goforestdb/iterator.go
@@ -24,6 +31,7 @@ type ForestDBIterator struct {
 	valid bool
 	curr  *forestdb.Doc
 	iter  *forestdb.Iterator
+	doc   *[]byte
 }
 
 func newFDBSnapshotIterator(s Snapshot) (*ForestDBIterator, error) {
@@ -52,6 +60,7 @@ func newForestDBIterator(slice *fdbSlice, db *forestdb.KVStore,
 	rv := ForestDBIterator{
 		db:    dbInst,
 		slice: slice,
+		doc:   docBufPool.Get(),
 	}
 
 	if err != nil {
@@ -75,8 +84,7 @@ func (f *ForestDBIterator) SeekFirst() {
 	}
 
 	//pre-allocate doc
-	keybuf := make([]byte, MAX_SEC_KEY_BUFFER_LEN)
-	f.curr, err = forestdb.NewDoc(keybuf, nil, nil)
+	f.curr, err = forestdb.NewDoc(*f.doc, nil, nil)
 	if err != nil {
 		f.valid = false
 		return
@@ -101,8 +109,7 @@ func (f *ForestDBIterator) Seek(key []byte) {
 	}
 
 	//pre-allocate doc
-	keybuf := make([]byte, MAX_SEC_KEY_BUFFER_LEN)
-	f.curr, err = forestdb.NewDoc(keybuf, nil, nil)
+	f.curr, err = forestdb.NewDoc(*f.doc, nil, nil)
 	if err != nil {
 		f.valid = false
 		return
@@ -160,6 +167,12 @@ func (f *ForestDBIterator) Valid() bool {
 }
 
 func (f *ForestDBIterator) Close() error {
+
+	if f.doc != nil {
+		temp := f.doc
+		f.doc = nil
+		docBufPool.Put(temp)
+	}
 
 	//free the doc allocated by forestdb
 	if f.curr != nil {
