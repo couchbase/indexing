@@ -15,12 +15,23 @@ import (
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/platform"
 	"time"
+	"sync"
 )
 
 var docBufPool *common.BytesBufPool
 
 func init() {
 	docBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN)
+}
+
+var fdbSnapIterPool *sync.Pool
+
+func init() {
+	fdbSnapIterPool = &sync.Pool{
+		New: func() interface{} {
+			return &ForestDBIterator{}
+		},
+	}
 }
 
 //ForestDBIterator taken from
@@ -32,6 +43,22 @@ type ForestDBIterator struct {
 	curr  *forestdb.Doc
 	iter  *forestdb.Iterator
 	doc   *[]byte
+}
+
+func allocFDBSnapIterator(dbInst *forestdb.KVStore, slice *fdbSlice, doc *[]byte) *ForestDBIterator {
+	iter := fdbSnapIterPool.Get().(*ForestDBIterator)
+	iter.db = dbInst
+	iter.slice = slice
+	iter.doc = doc
+	iter.valid = false
+	iter.curr = nil
+	iter.iter = nil
+	return iter
+}
+
+func freeFDBSnapIterator(iter *ForestDBIterator) {
+	iter.valid = false
+	fdbSnapIterPool.Put(iter)
 }
 
 func newFDBSnapshotIterator(s Snapshot) (*ForestDBIterator, error) {
@@ -57,16 +84,12 @@ func newForestDBIterator(slice *fdbSlice, db *forestdb.KVStore,
 	dbInst, err := db.SnapshotClone(seq)
 	slice.idxStats.Timings.stCloneHandle.Put(time.Now().Sub(t0))
 
-	rv := ForestDBIterator{
-		db:    dbInst,
-		slice: slice,
-		doc:   docBufPool.Get(),
-	}
+	rv := allocFDBSnapIterator(dbInst, slice, docBufPool.Get())
 
 	if err != nil {
 		err = errors.New("ForestDB iterator: alloc failed " + err.Error())
 	}
-	return &rv, err
+	return rv, err
 }
 
 func (f *ForestDBIterator) SeekFirst() {
@@ -167,6 +190,7 @@ func (f *ForestDBIterator) Valid() bool {
 }
 
 func (f *ForestDBIterator) Close() error {
+	defer freeFDBSnapIterator(f)
 
 	if f.doc != nil {
 		temp := f.doc
