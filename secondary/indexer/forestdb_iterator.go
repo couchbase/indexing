@@ -135,20 +135,22 @@ func (f *ForestDBIterator) Get() {
 
 func (f *ForestDBIterator) Key() []byte {
 	if f.valid && f.curr != nil {
+		key := f.curr.KeyNoCopy()
 		if f.slice != nil {
-			platform.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Key())))
+			platform.AddInt64(&f.slice.get_bytes, int64(len(key)))
 		}
-		return f.curr.KeyNoCopy()
+		return key
 	}
 	return nil
 }
 
 func (f *ForestDBIterator) Value() []byte {
 	if f.valid && f.curr != nil {
+		body := f.curr.BodyNoCopy()
 		if f.slice != nil {
-			platform.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Body())))
+			platform.AddInt64(&f.slice.get_bytes, int64(len(body)))
 		}
-		return f.curr.BodyNoCopy()
+		return body
 	}
 	return nil
 }
