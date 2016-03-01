@@ -17,6 +17,8 @@ parser.add_argument('--opaques', dest='opaques', default="",
     help='graph for opaque tokens')
 parser.add_argument('--buckets', dest='buckets', default="",
     help='graph for buckets')
+parser.add_argument('--indexes', dest='indexes', default="",
+    help='graph for index')
 parser.add_argument('--topic', dest='topic', default="",
     help='graph for specified topic')
 parser.add_argument('--raddr', dest='raddr', default="",
@@ -224,6 +226,33 @@ def graph_endp(topic, raddr, stats) :
     ])
     print(py.plot(data, filename='endp-graph'))
 
+def graph_load(indexes, loadstats) :
+    mode, line = "lines+markers", Line(shape='spline')
+    for index in args.indexes.split(",") :
+        loads = loadstats[index]
+        x = list(range(1, len(loads)+1))
+        data = Data([
+            Scatter(x=x, y=loads, mode=mode, name=index, line=line),
+        ])
+    print(py.plot(data, filename='index-load'))
+
+def graph_gsi(buckets, gsistats) :
+    mode, line = "lines+markers", Line(shape='spline')
+    bk = buckets[0]
+    vs = gsistats[bk]
+    x = list(range(1, len(vs["gsi_scan_count"])+1))
+    a, b = vs["gsi_scan_count"], vs["gsi_scan_average"]
+    c, d = vs["gsi_prime_average"], vs["gsi_throttle_average"]
+    e = vs["gsi_blocked_average"]
+    data = Data([
+        Scatter(x=x, y=a, mode=mode, name=bk+"gsi_scan_count", line=line),
+        Scatter(x=x, y=b, mode=mode, name=bk+"gsi_scan_average", line=line),
+        Scatter(x=x, y=c, mode=mode, name=bk+"gsi_prime_average", line=line),
+        Scatter(x=x, y=d, mode=mode, name=bk+"gsi_throttle_average", line=line),
+        Scatter(x=x, y=e, mode=mode, name=bk+"gsi_blocked_average", line=line),
+    ])
+    print(py.plot(data, filename='gsi-stats'))
+
 def kind_memstats(logfile):
     print("parsing lines ...")
     stats = []
@@ -263,6 +292,7 @@ def kind_idxstats(logfile) :
         lines = [ line.strip("\n") for line in lines ]
         dstr = dstr.strip("\n")
         dstr = dstr + "".join(lines[1:])
+        dstr = dstr.split("}")[0] + "}"
         val = loadJson(dstr)
         stats.append(val)
 
@@ -325,6 +355,44 @@ def kind_endp(logfile):
 
     graph_endp(args.topic, args.raddr, allstats[(args.topic, args.raddr)])
 
+def kind_query(logfile):
+    print("parsing lines ...")
+    loadstats = {} # index -> stat
+    def handler_loadstats(line, dstr):
+        for index, value in eval(dstr).items() :
+            loadstats.setdefault(index, []).append(value)
+
+    gsistats = {} # bucket -> stat
+    def handler_logstats(line, bucket, dstr):
+        d = eval(dstr)
+        for key, value in d.items() :
+            key = key.replace("duration", "average")
+            value = value / d["gsi_scan_count"]
+            gsistats.setdefault(bucket, {}).setdefault(key, []).append(value)
+
+    matchers = [
+      [ re.compile(r'.*\[Info\] client load stats (.*)'),
+        handler_loadstats ],
+      [ re.compile(r'.*\[Info\].* logstats "(.*)" (.*)'),
+        handler_logstats ],
+    ]
+    for line in open(logfile).readlines() :
+        for regx, fn in matchers :
+            m = regx.match(line)
+            if m : tryhandler(lambda : fn(m.group(), *m.groups()))
+
+    if len(args.indexes) == 0 :
+        [ print(k) for k in sorted(loadstats.keys()) ]
+    else :
+        graph_load(args.indexes, loadstats)
+
+    if len(args.buckets) == 0 :
+        [ print(k) for k in sorted(gsistats.keys()) ]
+    else :
+        graph_gsi(args.buckets, gsistats)
+
+    return
+
 
 if len(args.kind) == 0 :
     print("please provide --kind")
@@ -338,5 +406,7 @@ elif args.kind[0] == "kvdata" :
     kind_kvdata(args.logfile[0])
 elif args.kind[0] == "endp" :
     kind_endp(args.logfile[0])
+elif args.kind[0] == "query" :
+    kind_query(args.logfile[0])
 
 #{"bucket":"default","hbCount":1,"eventCount":512,"reqCount":512,"endCount":0,"snapStat.min":0,"snapStat.max":0,"snapStat.avg":-9223372036854775808,"upsertCount":0,"deleteCount":0,"ainstCount":1,"dinstCount":0,"tsCount":0}
