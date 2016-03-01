@@ -175,11 +175,8 @@ func (f *File) OpenKVStore(name string, config *KVStoreConfig) (*KVStore, error)
 		config = DefaultKVStoreConfig()
 	}
 
-	rv := KVStore{
-		f:    f,
-		name: fmt.Sprintf("%s/%s", f.name, name),
-	}
-	rv.advLock.Init()
+	rv := allocKVStore(fmt.Sprintf("%s/%s", f.name, name))
+	rv.f = f
 
 	kvsname := C.CString(name)
 	defer C.free(unsafe.Pointer(kvsname))
@@ -190,7 +187,7 @@ func (f *File) OpenKVStore(name string, config *KVStoreConfig) (*KVStore, error)
 		return nil, Error(errNo)
 	}
 	rv.setupLogging()
-	return &rv, nil
+	return rv, nil
 }
 
 // OpenKVStore opens the default KVStore within the File
