@@ -827,7 +827,7 @@ func makeResponsehandler(
 
 		if *tmpfile != nil {
 			// whether temp-file is exhausted the limit.
-			cummsize := atomic.LoadInt64(&si.gsi.backfillSize)
+			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
 			if cummsize > backfillLimit {
 				fmsg := "backfill exceeded limit %v, %v"
 				err := fmt.Errorf(fmsg, backfillLimit, cummsize)
