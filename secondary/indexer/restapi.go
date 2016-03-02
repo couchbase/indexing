@@ -48,11 +48,31 @@ func NewRestServer(cluster string) (*restServer, Message) {
 	return restapi, nil
 }
 
+func (api *restServer) writeError(w http.ResponseWriter, err error) {
+	w.WriteHeader(http.StatusBadRequest)
+	w.Write([]byte(err.Error() + "\n"))
+}
+
+func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) bool {
+	valid, err := c.IsAuthValid(r, api.config["indexer.clusterAddr"].String())
+	if err != nil {
+		api.writeError(w, err)
+	} else if valid == false {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized\n"))
+	}
+	return valid
+}
+
 // GET  /api/indexes
 // POST /api/indexes?create=true
 // PUT  /api/indexes?build=true
 func (api *restServer) handleIndexes(
 	w http.ResponseWriter, request *http.Request) {
+
+	if !api.validateAuth(w, request) {
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
@@ -88,6 +108,10 @@ func (api *restServer) handleIndexes(
 //GET    /api/index/{id}?count=true
 func (api *restServer) handleIndex(
 	w http.ResponseWriter, request *http.Request) {
+
+	if !api.validateAuth(w, request) {
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
