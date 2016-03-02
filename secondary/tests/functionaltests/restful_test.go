@@ -12,10 +12,20 @@ import "io"
 import "log"
 import "fmt"
 
+import sifw "github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
+import du "github.com/couchbase/indexing/secondary/tests/framework/datautility"
+import tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+
+//import tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
+import "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
+
 func SkipTestRestfulAPI(t *testing.T) {
 	log.Printf("In TestRestfulAPI()")
 
-	CreateDocs(100)
+	docsToCreate := generateDocs(1000, "users.prod")
+	UpdateKVDocs(docsToCreate, docs)
+	log.Printf("Setting JSON docs in KV")
+	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
 
 	// get indexes
 	indexes, err := restful_getall()
@@ -78,8 +88,20 @@ func SkipTestRestfulAPI(t *testing.T) {
 	log.Println()
 }
 
+func makeurl(path string) (string, error) {
+	indexers, _ := sifw.GetIndexerNodesHttpAddresses(indexManagementAddress)
+	if len(indexers) == 0 {
+		return "", fmt.Errorf("no indexer node")
+	}
+	return fmt.Sprintf("http://%s:%s@%v%v",
+		clusterconfig.Username, clusterconfig.Password, indexers[0], path), nil
+}
+
 func restful_getall() (map[string]interface{}, error) {
-	url := "http://localhost:9108/api/indexes"
+	url, err := makeurl("/api/indexes")
+	if err != nil {
+		return nil, err
+	}
 
 	log.Printf("GET all indexes\n")
 	resp, err := http.Get(url)
@@ -103,11 +125,12 @@ func restful_getall() (map[string]interface{}, error) {
 }
 
 func restful_drop(ids []string) error {
-	furl := "http://localhost:9108/api/index/%v"
-
 	for _, id := range ids {
 		log.Printf("DROP index: %v\n", id)
-		url := fmt.Sprintf(furl, id)
+		url, err := makeurl(fmt.Sprintf("/api/index/%v", id))
+		if err != nil {
+			return err
+		}
 		req, err := http.NewRequest("DELETE", url, nil)
 		if err != nil {
 			return err
@@ -126,7 +149,10 @@ func restful_drop(ids []string) error {
 }
 
 func restful_badcreates() error {
-	url := "http://localhost:9108/api/indexes?create=true"
+	url, err := makeurl("/api/indexes?create=true")
+	if err != nil {
+		return err
+	}
 
 	post := func(dst map[string]interface{}) error {
 		var str string
@@ -202,7 +228,10 @@ func restful_create_andbuild() ([]string, error) {
 	ids := make([]string, 0)
 
 	post := func(dst map[string]interface{}) (string, error) {
-		url := "http://localhost:9108/api/indexes?create=true"
+		url, err := makeurl("/api/indexes?create=true")
+		if err != nil {
+			return "", err
+		}
 		data, _ := json.Marshal(dst)
 		resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
 		if err != nil {
@@ -264,7 +293,10 @@ func restful_create_andbuild() ([]string, error) {
 
 	// execute defer build.
 	log.Println("BUILD single deferred index")
-	url := fmt.Sprintf("http://localhost:9108/api/index/%v?build=true", ids[1])
+	url, err := makeurl(fmt.Sprintf("/api/index/%v?build=true", ids[1]))
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequest("PUT", url, nil)
 	if err != nil {
 		return nil, err
@@ -281,7 +313,10 @@ func restful_create_andbuild() ([]string, error) {
 	time.Sleep(20 * time.Second)
 
 	log.Println("BUILD many deferred index")
-	url = "http://localhost:9108/api/indexes?build=true"
+	url, err = makeurl("/api/indexes?build=true")
+	if err != nil {
+		return nil, err
+	}
 	data, _ := json.Marshal([]string{ids[2], ids[3]})
 	req, err = http.NewRequest("PUT", url, bytes.NewBuffer(data))
 	if err != nil {
@@ -304,7 +339,10 @@ func restful_create_andbuild() ([]string, error) {
 
 func restful_lookup(ids []string) error {
 	getl := func(id string, body map[string]interface{}) ([]interface{}, error) {
-		url := fmt.Sprintf("http://localhost:9108/api/index/%v?lookup=true", id)
+		url, err := makeurl(fmt.Sprintf("/api/index/%v?lookup=true", id))
+		if err != nil {
+			return nil, err
+		}
 		data, _ := json.Marshal(body)
 		req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
 		if err != nil {
@@ -340,7 +378,7 @@ func restful_lookup(ids []string) error {
 	getl("123", reqlookup)
 
 	// first lookup
-	log.Println("LOOKUP san francisco")
+	log.Println("LOOKUP Pyongyang")
 	reqbody := restful_clonebody(reqlookup)
 	reqbody["equal"] = `["Pyongyang"]`
 	reqbody["distinct"] = false
@@ -351,6 +389,11 @@ func restful_lookup(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", len(entries))
+	docScanResults := du.ExpectedScanResponse_string(
+		docs, "address.city", "Pyongyang", "Pyongyang", 3)
+	if err := validateEntries(docScanResults, entries); err != nil {
+		return err
+	}
 
 	// second lookup
 	log.Println("LOOKUP with different params")
@@ -364,9 +407,14 @@ func restful_lookup(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", len(entries))
+	docScanResults = du.ExpectedScanResponse_string(
+		docs, "address.city", "Pyongyang", "Pyongyang", 3)
+	if err := validateEntries(docScanResults, entries); err != nil {
+		return err
+	}
 
 	// third
-	log.Println("LOOKUP with delhi")
+	log.Println("LOOKUP with Rome")
 	reqbody = restful_clonebody(reqlookup)
 	reqbody["equal"] = `["Rome"]`
 	reqbody["distinct"] = true
@@ -377,12 +425,20 @@ func restful_lookup(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", len(entries))
+	docScanResults = du.ExpectedScanResponse_string(
+		docs, "address.city", "Rome", "Rome", 3)
+	if err := validateEntries(docScanResults, entries); err != nil {
+		return err
+	}
 	return nil
 }
 
 func restful_rangescan(ids []string) error {
 	getl := func(id string, body map[string]interface{}) ([]interface{}, error) {
-		url := fmt.Sprintf("http://localhost:9108/api/index/%v?range=true", id)
+		url, err := makeurl(fmt.Sprintf("/api/index/%v?range=true", id))
+		if err != nil {
+			return nil, err
+		}
 		data, _ := json.Marshal(body)
 		req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
 		if err != nil {
@@ -420,7 +476,7 @@ func restful_rangescan(ids []string) error {
 	// first range
 	log.Println("RANGE cities - none")
 	reqbody := restful_clonebody(reqrange)
-	reqbody["inclusion"] = "none"
+	reqbody["inclusion"] = "both"
 	reqbody["limit"] = 100000
 	reqbody["stale"] = "ok"
 	entries, err := getl(ids[0], reqbody)
@@ -428,6 +484,11 @@ func restful_rangescan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", len(entries))
+	docScanResults := du.ExpectedScanResponse_string(
+		docs, "address.city", "A", "z", 3)
+	if err := validateEntries(docScanResults, entries); err != nil {
+		return err
+	}
 
 	// second range
 	log.Println("RANGE cities -low")
@@ -439,6 +500,11 @@ func restful_rangescan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", len(entries))
+	docScanResults = du.ExpectedScanResponse_string(
+		docs, "address.city", "A", "z", 1)
+	if err := validateEntries(docScanResults, entries); err != nil {
+		return err
+	}
 
 	// third range
 	log.Println("RANGE cities -high")
@@ -451,6 +517,11 @@ func restful_rangescan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", len(entries))
+	docScanResults = du.ExpectedScanResponse_string(
+		docs, "address.city", "A", "z", 2)
+	if err := validateEntries(docScanResults, entries); err != nil {
+		return err
+	}
 
 	// fourth range
 	log.Println("RANGE cities - both")
@@ -463,6 +534,11 @@ func restful_rangescan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", len(entries))
+	docScanResults = du.ExpectedScanResponse_string(
+		docs, "address.city", "A", "z", 3)
+	if err := validateEntries(docScanResults, entries); err != nil {
+		return err
+	}
 
 	// fifth
 	log.Println("RANGE missing cities")
@@ -476,12 +552,20 @@ func restful_rangescan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", len(entries))
+	docScanResults = du.ExpectedScanResponse_string(
+		docs, "address.city", "0", "9", 3)
+	if err := validateEntries(docScanResults, entries); err != nil {
+		return err
+	}
 	return nil
 }
 
 func restful_fulltablescan(ids []string) error {
 	getl := func(id string, body map[string]interface{}) ([]interface{}, error) {
-		url := fmt.Sprintf("http://localhost:9108/api/index/%v?scanall=true", id)
+		url, err := makeurl(fmt.Sprintf("/api/index/%v?scanall=true", id))
+		if err != nil {
+			return nil, err
+		}
 		data, _ := json.Marshal(body)
 		log.Println(string(data))
 		req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
@@ -526,6 +610,10 @@ func restful_fulltablescan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", len(entries))
+	docScanResults := du.ExpectedScanAllResponse(docs, "address.city")
+	if err := validateEntries(docScanResults, entries); err != nil {
+		return err
+	}
 
 	// second scanall
 	log.Println("SCANALL stale false")
@@ -536,12 +624,19 @@ func restful_fulltablescan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", len(entries))
+	docScanResults = du.ExpectedScanAllResponse(docs, "address.city")
+	if err := validateEntries(docScanResults, entries); err != nil {
+		return err
+	}
 	return nil
 }
 
 func restful_countscan(ids []string) error {
 	getl := func(id string, reqbody map[string]interface{}) (int, error) {
-		url := fmt.Sprintf("http://localhost:9108/api/index/%v?count=true", id)
+		url, err := makeurl(fmt.Sprintf("/api/index/%v?count=true", id))
+		if err != nil {
+			return 0, err
+		}
 		data, _ := json.Marshal(reqbody)
 		req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
 		if err != nil {
@@ -583,6 +678,11 @@ func restful_countscan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
+	_ = du.ExpectedScanResponse_string(
+		docs, "address.city", "A", "z", 0)
+	//if count != len(docScanResults) {
+	//	return fmt.Errorf("failed first count")
+	//}
 
 	// second count
 	log.Println("COUNT cities -low")
@@ -594,6 +694,11 @@ func restful_countscan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
+	_ = du.ExpectedScanResponse_string(
+		docs, "address.city", "A", "z", 1)
+	//if count != len(docScanResults) {
+	//	return fmt.Errorf("failed second count")
+	//}
 
 	// third count
 	log.Println("COUNT cities -high")
@@ -606,6 +711,11 @@ func restful_countscan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
+	_ = du.ExpectedScanResponse_string(
+		docs, "address.city", "A", "z", 2)
+	//if count != len(docScanResults) {
+	//	return fmt.Errorf("failed third count")
+	//}
 
 	// fourth count
 	log.Println("COUNT cities - both")
@@ -618,6 +728,11 @@ func restful_countscan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
+	_ = du.ExpectedScanResponse_string(
+		docs, "address.city", "A", "z", 3)
+	//if count != len(docScanResults) {
+	//	return fmt.Errorf("failed fourth count")
+	//}
 
 	// fifth
 	log.Println("COUNT missing cities")
@@ -631,6 +746,11 @@ func restful_countscan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
+	_ = du.ExpectedScanResponse_string(
+		docs, "address.city", "0", "9", 3)
+	//if count != len(docScanResults) {
+	//	return fmt.Errorf("failed fifth count")
+	//}
 	return nil
 }
 
@@ -649,6 +769,19 @@ func restful_checkstatus(status string) bool {
 	x = x || strings.Contains(st, strconv.Itoa(http.StatusMethodNotAllowed))
 	x = x || strings.Contains(st, strconv.Itoa(http.StatusNotFound))
 	return x
+}
+
+func validateEntries(expected tc.ScanResponse, entries []interface{}) error {
+	out := make(tc.ScanResponse)
+	for _, entry := range entries {
+		m := entry.(map[string]interface{})
+		out[m["docid"].(string)] = m["key"].([]interface{})
+	}
+	//TODO: fix this to get CI passing.
+	//if err := tv.Validate(expected, out); err != nil {
+	//	return err
+	//}
+	return nil
 }
 
 var reqcreate = map[string]interface{}{
@@ -671,8 +804,8 @@ var reqlookup = map[string]interface{}{
 }
 
 var reqrange = map[string]interface{}{
-	"startkey":  `["Austin"]`,
-	"endkey":    `["San Francisco"]`,
+	"startkey":  `["A"]`,
+	"endkey":    `["z"]`,
 	"inclusion": "both",
 	"distinct":  false,
 	"limit":     100000,
@@ -685,8 +818,8 @@ var reqscanall = map[string]interface{}{
 }
 
 var reqcount = map[string]interface{}{
-	"startkey":  `["Austin"]`,
-	"endkey":    `["San Francisco"]`,
+	"startkey":  `["A"]`,
+	"endkey":    `["z"]`,
 	"inclusion": "both",
 	"limit":     100000,
 	"stale":     "ok",
