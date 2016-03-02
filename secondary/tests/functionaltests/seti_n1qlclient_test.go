@@ -140,7 +140,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	}
 }
 
-func TestBufferedScan_BackfillEnabled(t *testing.T) {
+func SkipTestBufferedScan_BackfillEnabled(t *testing.T) {
 	log.Printf("In TestBufferedScan_BackfillEnabled()")
 
 	var indexName = "companyidx"

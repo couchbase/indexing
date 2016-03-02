@@ -12,7 +12,7 @@ import "io"
 import "log"
 import "fmt"
 
-func TestRestfulAPI(t *testing.T) {
+func SkipTestRestfulAPI(t *testing.T) {
 	log.Printf("In TestRestfulAPI()")
 
 	CreateDocs(100)
