@@ -729,10 +729,10 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.high_mem_mark": ConfigValue{
-		0.9,
+		0.95,
 		"Fraction of memory_quota above which Indexer moves " +
 			"to paused state",
-		0.9,
+		0.95,
 		false, // mutable
 	},
 	"indexer.low_mem_mark": ConfigValue{
