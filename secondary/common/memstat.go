@@ -32,15 +32,7 @@ func MemstatLogger(tick int64) {
 		select {
 		case <-tickTm.C:
 			runtime.ReadMemStats(&ms)
-			logging.Infof(
-				fmemsg,
-				ms.Alloc, ms.TotalAlloc, ms.Sys, ms.Lookups, ms.Mallocs,
-				ms.Frees, ms.HeapAlloc, ms.HeapSys, ms.HeapIdle, ms.HeapInuse,
-				ms.HeapReleased, ms.HeapObjects,
-				ms.GCSys, ms.LastGC,
-				ms.PauseTotalNs,
-				reprList(newPauseNs(PauseNs[:], ms.PauseNs[:], oldNumGC, ms.NumGC)),
-				ms.NumGC)
+			PrintMemstats(&ms, PauseNs[:], oldNumGC)
 
 		case tick = <-Memstatch:
 			tickTm.Stop()
@@ -68,4 +60,18 @@ func reprList(pauseNs []uint64) string {
 		strs[i] = strconv.Itoa(int(x))
 	}
 	return "[" + strings.Join(strs, ", ") + "]"
+}
+
+func PrintMemstats(ms *runtime.MemStats, PauseNs []uint64, oldNumGC uint32) {
+
+	logging.Infof(
+		fmemsg,
+		ms.Alloc, ms.TotalAlloc, ms.Sys, ms.Lookups, ms.Mallocs,
+		ms.Frees, ms.HeapAlloc, ms.HeapSys, ms.HeapIdle, ms.HeapInuse,
+		ms.HeapReleased, ms.HeapObjects,
+		ms.GCSys, ms.LastGC,
+		ms.PauseTotalNs,
+		reprList(newPauseNs(PauseNs[:], ms.PauseNs[:], oldNumGC, ms.NumGC)),
+		ms.NumGC)
+
 }
