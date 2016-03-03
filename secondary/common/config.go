@@ -723,9 +723,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.memstatTick": ConfigValue{
-		60 * 1000, // in milli-second
-		"in milli-second, periodically log runtime memory-stats.",
-		60 * 1000,
+		60, // in second
+		"in second, periodically log runtime memory-stats.",
+		60,
 		false, // mutable
 	},
 	"indexer.high_mem_mark": ConfigValue{

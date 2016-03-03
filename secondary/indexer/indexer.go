@@ -324,6 +324,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	go idx.monitorMemUsage()
+	go idx.logMemstats()
 
 	//start the main indexer loop
 	idx.run()
@@ -4207,5 +4208,26 @@ func (idx *indexer) needsGC() bool {
 	}
 
 	return false
+
+}
+
+func (idx *indexer) logMemstats() {
+
+	var ms runtime.MemStats
+	var oldNumGC uint32
+	var PauseNs [256]uint64
+
+	for {
+
+		oldNumGC = ms.NumGC
+
+		gMemstatLock.RLock()
+		ms = gMemstatCache
+		gMemstatLock.RUnlock()
+
+		common.PrintMemstats(&ms, PauseNs[:], oldNumGC)
+
+		time.Sleep(time.Second * time.Duration(idx.config["memstatTick"].Int()))
+	}
 
 }
