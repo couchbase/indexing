@@ -788,7 +788,9 @@ func makeResponsehandler(
 			if len(entryChannel) > 0 && len(skeys) > 0 {
 				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
 			}
-			sendEntries(si, pkeys, skeys, conn)
+			if sendEntries(si, pkeys, skeys, conn) == "stop" {
+				return
+			}
 			ticktm = time.Now()
 		}
 	}
@@ -866,7 +868,9 @@ func makeResponsehandler(
 			if len(entryChannel) > 0 && len(skeys) > 0 {
 				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
 			}
-			sendEntries(si, pkeys, skeys, conn)
+			if sendEntries(si, pkeys, skeys, conn) == "stop" {
+				return false
+			}
 			ticktm = time.Now()
 		}
 		return true
@@ -1082,10 +1086,10 @@ func init() {
 
 func sendEntries(
 	si *secondaryIndex, pkeys [][]byte, skeys []c.SecondaryKey,
-	conn *datastore.IndexConnection) {
+	conn *datastore.IndexConnection) string {
 
 	if len(skeys) == 0 {
-		return
+		return "empty"
 	}
 
 	var start time.Time
@@ -1105,7 +1109,7 @@ func sendEntries(
 		select {
 		case entryChannel <- e:
 		case <-stopChannel:
-			return
+			return "stop"
 		}
 		if blocked {
 			blockedtm += int64(time.Since(start))
@@ -1113,7 +1117,7 @@ func sendEntries(
 		}
 	}
 	atomic.AddInt64(&si.gsi.blockeddur, blockedtm)
-	return
+	return "ok"
 }
 
 func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
