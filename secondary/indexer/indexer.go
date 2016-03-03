@@ -4048,6 +4048,7 @@ func (idx *indexer) handleIndexerResume(msg Message) {
 func (idx *indexer) doPrepareUnpause() {
 
 	ticker := time.NewTicker(time.Second * 1)
+	defer ticker.Stop()
 
 	for _ = range ticker.C {
 

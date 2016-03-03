@@ -993,6 +993,7 @@ func (w *watcher) waitForReady(readych chan bool, timeout int, killch chan bool)
 	if timeout > 0 {
 		// if there is a timeout
 		ticker := time.NewTicker(time.Duration(timeout) * time.Millisecond)
+		defer ticker.Stop()
 		select {
 		case <-readych:
 			return true, false
@@ -1038,10 +1039,12 @@ RETRY2:
 		ticker := time.NewTicker(time.Duration(500) * time.Millisecond)
 		select {
 		case <-killch:
+			ticker.Stop()
 			return false, true
 		case <-ticker.C:
 			// do nothing
 		}
+		ticker.Stop()
 		retry--
 		goto RETRY2
 	}
@@ -1066,6 +1069,8 @@ func (w *watcher) isAlive() bool {
 	w.pingch <- true
 
 	ticker := time.NewTicker(time.Duration(100) * time.Millisecond)
+	defer ticker.Stop()
+
 	select {
 	case <-w.alivech:
 		return true
