@@ -587,6 +587,20 @@ func (c *GsiClient) CountLookup(
 			if err != nil {
 				return err, false
 			}
+
+			if c.bridge.IsPrimary(uint64(index.DefnId)) {
+				equals := make([][]byte, 0, len(values))
+				// primary keys are plain sequence of binary.
+				for _, value := range values {
+					e, _ := curePrimaryKey(value[0])
+					equals = append(equals, e)
+				}
+
+				count, err = qc.CountLookupPrimary(
+					uint64(index.DefnId), requestId, equals, cons, vector)
+				return err, false
+			}
+
 			count, err = qc.CountLookup(uint64(index.DefnId), requestId, values, cons, vector)
 			return err, false
 		})
@@ -623,6 +637,25 @@ func (c *GsiClient) CountRange(
 			if err != nil {
 				return err, false
 			}
+			if c.bridge.IsPrimary(uint64(index.DefnId)) {
+				var l, h []byte
+				var what string
+				// primary keys are plain sequence of binary.
+				if low != nil && len(low) > 0 {
+					if l, what = curePrimaryKey(low[0]); what == "after" {
+						return nil, true
+					}
+				}
+				if high != nil && len(high) > 0 {
+					if h, what = curePrimaryKey(high[0]); what == "before" {
+						return nil, true
+					}
+				}
+				count, err = qc.CountRangePrimary(
+					uint64(index.DefnId), requestId, l, h, inclusion, cons, vector)
+				return err, false
+			}
+
 			count, err = qc.CountRange(
 				uint64(index.DefnId), requestId, low, high, inclusion, cons, vector)
 			return err, false
