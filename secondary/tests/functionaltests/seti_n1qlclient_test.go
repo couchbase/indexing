@@ -140,7 +140,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	}
 }
 
-func SkipTestBufferedScan_BackfillEnabled(t *testing.T) {
+func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	log.Printf("In TestBufferedScan_BackfillEnabled()")
 
 	var indexName = "companyidx"
@@ -148,7 +148,7 @@ func SkipTestBufferedScan_BackfillEnabled(t *testing.T) {
 	// Disable backfill
 	cv := c.SystemConfig["queryport.client.backfillLimit"]
 	actual := cv.Int()
-	c.SystemConfig.SetValue("queryport.client.backfillLimit", 100*1024)
+	c.SystemConfig.SetValue("queryport.client.backfillLimit", 1)
 	defer func() {
 		c.SystemConfig.SetValue("queryport.client.backfillLimit", actual)
 	}()
@@ -298,7 +298,7 @@ func SkipTestBufferedScan_BackfillEnabled(t *testing.T) {
 			go doquery(int64(50000), conn)
 			now := time.Now()
 			for range ch {
-				time.Sleep(1 * time.Millisecond)
+				time.Sleep(20 * time.Millisecond)
 				count++
 			}
 			log.Printf("limit=1000,chsize=256; received %v items; took %v\n",

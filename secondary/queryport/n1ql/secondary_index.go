@@ -35,6 +35,8 @@ import "github.com/couchbase/query/timestamp"
 import "github.com/couchbase/query/value"
 import qlog "github.com/couchbase/query/logging"
 
+const DONEREQUEST = 1
+
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(
 	fmt.Errorf("gsi.indexEmpty"), "Fatal null reference to index")
@@ -647,7 +649,8 @@ func (si *secondaryIndex) Scan(
 
 	entryChannel := conn.EntryChannel()
 	var tmpfile *os.File
-	backfillCh := make(chan bool, 100)
+	var backfillSync int64
+
 	syncCh := make(chan bool)
 
 	defer close(entryChannel)
@@ -664,7 +667,9 @@ func (si *secondaryIndex) Scan(
 			}
 		}
 	}()
-	defer close(backfillCh)
+	defer func() {
+		atomic.StoreInt64(&backfillSync, DONEREQUEST)
+	}()
 
 	starttm := time.Now()
 
@@ -675,7 +680,7 @@ func (si *secondaryIndex) Scan(
 			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
 			makeResponsehandler(
-				si, client, conn, &tmpfile, backfillCh, syncCh, cnf))
+				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 
 	} else {
 		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
@@ -684,7 +689,7 @@ func (si *secondaryIndex) Scan(
 			si.defnID, requestId, low, high, incl, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
 			makeResponsehandler(
-				si, client, conn, &tmpfile, backfillCh, syncCh, cnf))
+				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 	}
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
@@ -697,7 +702,8 @@ func (si *secondaryIndex) ScanEntries(
 
 	entryChannel := conn.EntryChannel()
 	var tmpfile *os.File
-	backfillCh := make(chan bool, 100)
+	var backfillSync int64
+
 	syncCh := make(chan bool)
 
 	defer close(entryChannel)
@@ -714,7 +720,9 @@ func (si *secondaryIndex) ScanEntries(
 			}
 		}
 	}()
-	defer close(backfillCh)
+	defer func() {
+		atomic.StoreInt64(&backfillSync, DONEREQUEST)
+	}()
 
 	starttm := time.Now()
 
@@ -722,7 +730,8 @@ func (si *secondaryIndex) ScanEntries(
 	client.ScanAll(
 		si.defnID, requestId, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		makeResponsehandler(si, client, conn, &tmpfile, backfillCh, syncCh, cnf))
+		makeResponsehandler(
+			si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
@@ -736,7 +745,7 @@ func makeResponsehandler(
 	si *secondaryIndex,
 	client *qclient.GsiClient,
 	conn *datastore.IndexConnection,
-	tmpfile **os.File, backfillCh, syncCh chan bool,
+	tmpfile **os.File, backfillSync *int64, syncCh chan bool,
 	config c.Config) qclient.ResponseHandler {
 
 	entryChannel := conn.EntryChannel()
@@ -744,7 +753,7 @@ func makeResponsehandler(
 	var enc *gob.Encoder
 	var dec *gob.Decoder
 	var readfd *os.File
-	var backfillFin int64
+	var backfillFin, backfillEntries int64
 
 	backfillLimit := int64(config["backfillLimit"].Int())
 	primed, starttm, ticktm := false, time.Now(), time.Now()
@@ -763,13 +772,26 @@ func makeResponsehandler(
 		}()
 		l.Debugf("%v started backfill for %v ...\n", lprefix, name)
 		for {
-			_, ok := <-backfillCh
-			if !ok {
+			if pending := atomic.LoadInt64(&backfillEntries); pending > 0 {
+				atomic.AddInt64(&backfillEntries, -1)
+			} else if done := atomic.LoadInt64(backfillSync); done == DONEREQUEST {
+				return
+			} else {
+				time.Sleep(1 * time.Millisecond)
+				continue
+			}
+			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
+			if cummsize > backfillLimit {
+				fmsg := "backfill exceeded limit %v, %v"
+				err := fmt.Errorf(fmsg, backfillLimit, cummsize)
+				conn.Error(n1qlError(client, err))
 				return
 			}
+
 			skeys := make([]c.SecondaryKey, 0)
 			if err := dec.Decode(&skeys); err != nil {
-				l.Errorf("%v decoding from backfill %v: %v\n", lprefix, name, err)
+				fmsg := "%v decoding from backfill %v: %v\n"
+				l.Errorf(fmsg, lprefix, name, err)
 				conn.Error(n1qlError(client, err))
 				return
 			}
@@ -856,7 +878,7 @@ func makeResponsehandler(
 				conn.Error(n1qlError(client, err))
 				return false
 			}
-			backfillCh <- true
+			atomic.AddInt64(&backfillEntries, 1)
 
 		} else {
 			fmsg := "%v response cap:%v len:%v entries:%v\n"
