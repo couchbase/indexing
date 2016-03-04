@@ -11,10 +11,28 @@ package indexer
 
 import (
 	"errors"
+	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/platform"
 	"time"
+	"sync"
 )
+
+var docBufPool *common.BytesBufPool
+
+func init() {
+	docBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN)
+}
+
+var fdbSnapIterPool *sync.Pool
+
+func init() {
+	fdbSnapIterPool = &sync.Pool{
+		New: func() interface{} {
+			return &ForestDBIterator{}
+		},
+	}
+}
 
 //ForestDBIterator taken from
 //https://github.com/couchbaselabs/bleve/blob/master/index/store/goforestdb/iterator.go
@@ -24,6 +42,23 @@ type ForestDBIterator struct {
 	valid bool
 	curr  *forestdb.Doc
 	iter  *forestdb.Iterator
+	doc   *[]byte
+}
+
+func allocFDBSnapIterator(dbInst *forestdb.KVStore, slice *fdbSlice, doc *[]byte) *ForestDBIterator {
+	iter := fdbSnapIterPool.Get().(*ForestDBIterator)
+	iter.db = dbInst
+	iter.slice = slice
+	iter.doc = doc
+	iter.valid = false
+	iter.curr = nil
+	iter.iter = nil
+	return iter
+}
+
+func freeFDBSnapIterator(iter *ForestDBIterator) {
+	iter.valid = false
+	fdbSnapIterPool.Put(iter)
 }
 
 func newFDBSnapshotIterator(s Snapshot) (*ForestDBIterator, error) {
@@ -49,15 +84,12 @@ func newForestDBIterator(slice *fdbSlice, db *forestdb.KVStore,
 	dbInst, err := db.SnapshotClone(seq)
 	slice.idxStats.Timings.stCloneHandle.Put(time.Now().Sub(t0))
 
-	rv := ForestDBIterator{
-		db:    dbInst,
-		slice: slice,
-	}
+	rv := allocFDBSnapIterator(dbInst, slice, docBufPool.Get())
 
 	if err != nil {
 		err = errors.New("ForestDB iterator: alloc failed " + err.Error())
 	}
-	return &rv, err
+	return rv, err
 }
 
 func (f *ForestDBIterator) SeekFirst() {
@@ -75,8 +107,7 @@ func (f *ForestDBIterator) SeekFirst() {
 	}
 
 	//pre-allocate doc
-	keybuf := make([]byte, MAX_SEC_KEY_BUFFER_LEN)
-	f.curr, err = forestdb.NewDoc(keybuf, nil, nil)
+	f.curr, err = forestdb.NewDoc(*f.doc, nil, nil)
 	if err != nil {
 		f.valid = false
 		return
@@ -101,8 +132,7 @@ func (f *ForestDBIterator) Seek(key []byte) {
 	}
 
 	//pre-allocate doc
-	keybuf := make([]byte, MAX_SEC_KEY_BUFFER_LEN)
-	f.curr, err = forestdb.NewDoc(keybuf, nil, nil)
+	f.curr, err = forestdb.NewDoc(*f.doc, nil, nil)
 	if err != nil {
 		f.valid = false
 		return
@@ -135,20 +165,22 @@ func (f *ForestDBIterator) Get() {
 
 func (f *ForestDBIterator) Key() []byte {
 	if f.valid && f.curr != nil {
+		key := f.curr.KeyNoCopy()
 		if f.slice != nil {
-			platform.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Key())))
+			platform.AddInt64(&f.slice.get_bytes, int64(len(key)))
 		}
-		return f.curr.KeyNoCopy()
+		return key
 	}
 	return nil
 }
 
 func (f *ForestDBIterator) Value() []byte {
 	if f.valid && f.curr != nil {
+		body := f.curr.BodyNoCopy()
 		if f.slice != nil {
-			platform.AddInt64(&f.slice.get_bytes, int64(len(f.curr.Body())))
+			platform.AddInt64(&f.slice.get_bytes, int64(len(body)))
 		}
-		return f.curr.BodyNoCopy()
+		return body
 	}
 	return nil
 }
@@ -158,6 +190,13 @@ func (f *ForestDBIterator) Valid() bool {
 }
 
 func (f *ForestDBIterator) Close() error {
+	defer freeFDBSnapIterator(f)
+
+	if f.doc != nil {
+		temp := f.doc
+		f.doc = nil
+		docBufPool.Put(temp)
+	}
 
 	//free the doc allocated by forestdb
 	if f.curr != nil {

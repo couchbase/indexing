@@ -48,11 +48,31 @@ func NewRestServer(cluster string) (*restServer, Message) {
 	return restapi, nil
 }
 
+func (api *restServer) writeError(w http.ResponseWriter, err error) {
+	w.WriteHeader(http.StatusBadRequest)
+	w.Write([]byte(err.Error() + "\n"))
+}
+
+func (api *restServer) validateAuth(w http.ResponseWriter, r *http.Request) bool {
+	valid, err := c.IsAuthValid(r, api.config["indexer.clusterAddr"].String())
+	if err != nil {
+		api.writeError(w, err)
+	} else if valid == false {
+		w.WriteHeader(401)
+		w.Write([]byte("401 Unauthorized\n"))
+	}
+	return valid
+}
+
 // GET  /api/indexes
 // POST /api/indexes?create=true
 // PUT  /api/indexes?build=true
 func (api *restServer) handleIndexes(
 	w http.ResponseWriter, request *http.Request) {
+
+	if !api.validateAuth(w, request) {
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
@@ -89,6 +109,10 @@ func (api *restServer) handleIndexes(
 func (api *restServer) handleIndex(
 	w http.ResponseWriter, request *http.Request) {
 
+	if !api.validateAuth(w, request) {
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
 	segs := strings.Split(request.URL.Path, "/")
@@ -102,28 +126,28 @@ func (api *restServer) handleIndex(
 				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
 			}
 		} else if _, ok := q["lookup"]; ok {
-			if request.Method == "GET" {
+			if request.Method == "GET" || request.Method == "POST" {
 				api.doLookup(w, request)
 			} else {
 				msg := `invalid method, expected GET`
 				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
 			}
 		} else if _, ok := q["range"]; ok {
-			if request.Method == "GET" {
+			if request.Method == "GET" || request.Method == "POST" {
 				api.doRange(w, request)
 			} else {
 				msg := `invalid method, expected GET`
 				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
 			}
 		} else if _, ok := q["scanall"]; ok {
-			if request.Method == "GET" {
+			if request.Method == "GET" || request.Method == "POST" {
 				api.doScanall(w, request)
 			} else {
 				msg := `invalid method, expected GET`
 				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
 			}
 		} else if _, ok := q["count"]; ok {
-			if request.Method == "GET" {
+			if request.Method == "GET" || request.Method == "POST" {
 				api.doCount(w, request)
 			} else {
 				msg := `invalid method, expected GET`
@@ -209,7 +233,7 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if value, ok := params["exprType"]; ok && value != nil {
-		exprtype = value.(string)
+		exprtype = strings.ToLower(value.(string))
 	}
 
 	if value, ok := params["isPrimary"]; ok && value != nil {
@@ -474,7 +498,6 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 
-	fmt.Println("lala", equals, distinct, limit, cons, ts)
 	err = nil
 	e := api.client.Lookup(
 		uint64(index.Definition.DefnId), "", equals, distinct, limit, cons, ts,

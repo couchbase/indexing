@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"runtime/pprof"
 	"strconv"
 	"strings"
@@ -40,12 +41,20 @@ type Indexer interface {
 
 var StreamAddrMap StreamAddressMap
 var StreamTopicName map[common.StreamId]string
+var ServiceAddrMap map[string]string
 
 type BucketIndexCountMap map[string]int
 type BucketFlushInProgressMap map[string]bool
 type BucketObserveFlushDoneMap map[string]MsgChannel
 type BucketRequestStopCh map[string]StopChannel
 type BucketRollbackTs map[string]*common.TsVbuuid
+
+//mem stats
+var (
+	gMemstatCache            runtime.MemStats
+	gMemstatCacheLastUpdated time.Time
+	gMemstatLock             sync.RWMutex
+)
 
 // Errors
 var (
@@ -194,6 +203,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	idx.initStreamAddressMap()
 	idx.initStreamFlushMap()
+	idx.initServiceAddressMap()
 
 	//Start Mutation Manager
 	idx.mutMgr, res = NewMutationManager(idx.mutMgrCmdCh, idx.wrkrRecvCh, idx.config)
@@ -314,6 +324,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	}
 
 	go idx.monitorMemUsage()
+	go idx.logMemstats()
 
 	//start the main indexer loop
 	idx.run()
@@ -678,9 +689,11 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 			idx.stats.needsRestart.Set(true)
 		}
 
-		if cv, ok := newConfig["memstatTick"]; ok {
-			common.Memstatch <- int64(cv.Int())
+		if percent, ok := newConfig["settings.gc_percent"]; ok && percent.Int() > 0 {
+			logging.Infof("Indexer: Setting GC percent to %v", percent.Int())
+			debug.SetGCPercent(percent.Int())
 		}
+
 		idx.setProfilerOptions(newConfig)
 		idx.config = newConfig
 		idx.compactMgrCmdCh <- msg
@@ -2003,8 +2016,8 @@ func (idx *indexer) initPartnInstance(indexInst common.IndexInst,
 						severity: FATAL,
 						cause:    err1,
 						category: INDEXER}}
-				return nil, err1
 			}
+			return nil, err1
 		}
 	}
 
@@ -2096,6 +2109,15 @@ func (idx *indexer) initStreamAddressMap() {
 	StreamAddrMap[common.MAINT_STREAM] = common.Endpoint(port2addr("streamMaintPort"))
 	StreamAddrMap[common.CATCHUP_STREAM] = common.Endpoint(port2addr("streamCatchupPort"))
 	StreamAddrMap[common.INIT_STREAM] = common.Endpoint(port2addr("streamInitPort"))
+}
+
+func (idx *indexer) initServiceAddressMap() {
+	ServiceAddrMap = make(map[string]string)
+
+	ServiceAddrMap[common.INDEX_ADMIN_SERVICE] = idx.config["adminPort"].String()
+	ServiceAddrMap[common.INDEX_SCAN_SERVICE] = idx.config["scanPort"].String()
+	ServiceAddrMap[common.INDEX_HTTP_SERVICE] = idx.config["httpPort"].String()
+
 }
 
 func (idx *indexer) initStreamTopicName() {
@@ -2956,7 +2978,7 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		//check if Paused state is required
 		memory_quota := idx.config["settings.memory_quota"].Uint64()
 		high_mem_mark := idx.config["high_mem_mark"].Float64()
-		mem_used := idx.memoryUsed()
+		mem_used := idx.memoryUsed(true)
 		if float64(mem_used) > (high_mem_mark * float64(memory_quota)) {
 			logging.Infof("Indexer::bootstrap MemoryUsed %v", mem_used)
 			idx.handleIndexerPause(&MsgIndexerState{mType: INDEXER_PAUSE})
@@ -3689,7 +3711,7 @@ func (idx *indexer) checkBucketExists(bucket string,
 func (idx *indexer) handleStats(cmd Message) {
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
-	idx.stats.memoryUsed.Set(int64(idx.memoryUsed()))
+	idx.stats.memoryUsed.Set(int64(idx.memoryUsed(false)))
 	idx.stats.memoryUsedStorage.Set(idx.memoryUsedStorage())
 	replych <- true
 }
@@ -3930,11 +3952,20 @@ func (idx *indexer) monitorMemUsage() {
 			min_oom_mem := idx.config["min_oom_memory"].Uint64()
 
 			if idx.needsGC() {
+				start := time.Now()
 				runtime.GC()
+				elapsed := time.Since(start)
+				logging.Infof("Indexer::monitorMemUsage ManualGC Time Taken %v", elapsed)
 				mm.FreeOSMemory()
 			}
 
-			mem_used := idx.memoryUsed()
+			var mem_used uint64
+			if idx.getIndexerState() == common.INDEXER_PAUSED {
+				mem_used = idx.memoryUsed(true)
+			} else {
+				mem_used = idx.memoryUsed(false)
+			}
+
 			logging.Infof("Indexer::monitorMemUsage MemoryUsed %v", mem_used)
 
 			switch idx.getIndexerState() {
@@ -4017,6 +4048,7 @@ func (idx *indexer) handleIndexerResume(msg Message) {
 func (idx *indexer) doPrepareUnpause() {
 
 	ticker := time.NewTicker(time.Second * 1)
+	defer ticker.Stop()
 
 	for _ = range ticker.C {
 
@@ -4115,18 +4147,55 @@ func (idx *indexer) checkRecoveryInProgress() bool {
 //memoryUsed returns the memory usage reported by
 //golang runtime + memory allocated by cgo
 //components(e.g. fdb buffercache)
-func (idx *indexer) memoryUsed() uint64 {
+func (idx *indexer) memoryUsed(forceRefresh bool) uint64 {
 
 	var ms runtime.MemStats
-	runtime.ReadMemStats(&ms)
+
+	if forceRefresh {
+		idx.updateMemstats()
+		gMemstatCacheLastUpdated = time.Now()
+	}
+
+	gMemstatLock.RLock()
+	ms = gMemstatCache
+	gMemstatLock.RUnlock()
+
+	timeout := time.Millisecond * time.Duration(idx.config["memstats_cache_timeout"].Uint64())
+	if time.Since(gMemstatCacheLastUpdated) > timeout {
+		go idx.updateMemstats()
+		gMemstatCacheLastUpdated = time.Now()
+	}
+
 	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
 	return mem_used
 }
 
+func (idx *indexer) updateMemstats() {
+
+	var ms runtime.MemStats
+
+	start := time.Now()
+	runtime.ReadMemStats(&ms)
+	elapsed := time.Since(start)
+
+	gMemstatLock.Lock()
+	gMemstatCache = ms
+	gMemstatLock.Unlock()
+
+	logging.Infof("Indexer::ReadMemstats Time Taken %v", elapsed)
+
+}
+
 func (idx *indexer) needsGC() bool {
 
+	var memUsed uint64
 	memQuota := idx.config["settings.memory_quota"].Uint64()
-	memUsed := idx.memoryUsed()
+
+	if idx.getIndexerState() == common.INDEXER_PAUSED {
+		memUsed = idx.memoryUsed(true)
+	} else {
+		memUsed = idx.memoryUsed(false)
+	}
 
 	if memUsed >= memQuota {
 		return true
@@ -4140,5 +4209,26 @@ func (idx *indexer) needsGC() bool {
 	}
 
 	return false
+
+}
+
+func (idx *indexer) logMemstats() {
+
+	var ms runtime.MemStats
+	var oldNumGC uint32
+	var PauseNs [256]uint64
+
+	for {
+
+		oldNumGC = ms.NumGC
+
+		gMemstatLock.RLock()
+		ms = gMemstatCache
+		gMemstatLock.RUnlock()
+
+		common.PrintMemstats(&ms, PauseNs[:], oldNumGC)
+
+		time.Sleep(time.Second * time.Duration(idx.config["memstatTick"].Int()))
+	}
 
 }

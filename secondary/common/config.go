@@ -85,6 +85,7 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 	"projector.clusterAddr": ConfigValue{
+
 		"localhost:9000",
 		"KV cluster's address to be used by projector",
 		"localhost:9000",
@@ -488,11 +489,11 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 	"queryport.client.backfillLimit": ConfigValue{
-		0,
-		"limit in bytes to cap n1ql side backfilling, if ZERO backfill " +
+		5 * 1024, // 5GB
+		"limit in mega-bytes to cap n1ql side backfilling, if ZERO backfill " +
 			"will be disabled.",
-		0,
-		false, // mutable
+		5 * 1024, // 5GB
+		false,    // mutable
 	},
 	// projector's adminport client, can be used by indexer.
 	"indexer.projectorclient.retryInterval": ConfigValue{
@@ -606,6 +607,13 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 
+	"indexer.memstats_cache_timeout": ConfigValue{
+		uint64(60000),
+		"Memstats cache ttl in millis",
+		uint64(60000),
+		false, // mutable
+	},
+
 	//fdb specific config
 	"indexer.stream_reader.fdb.syncBatchInterval": ConfigValue{
 		uint64(40),
@@ -715,16 +723,16 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.memstatTick": ConfigValue{
-		60 * 1000, // in milli-second
-		"in milli-second, periodically log runtime memory-stats.",
-		60 * 1000,
+		60, // in second
+		"in second, periodically log runtime memory-stats.",
+		60,
 		false, // mutable
 	},
 	"indexer.high_mem_mark": ConfigValue{
-		0.9,
+		0.95,
 		"Fraction of memory_quota above which Indexer moves " +
 			"to paused state",
-		0.9,
+		0.95,
 		false, // mutable
 	},
 	"indexer.low_mem_mark": ConfigValue{
@@ -757,6 +765,13 @@ var SystemConfig = Config{
 		"Fraction of memory_quota left after which GC is forced " +
 			"by Indexer. Only applies to memdb.",
 		0.1,
+		false, // mutable
+	},
+	"indexer.settings.gc_percent": ConfigValue{
+		100,
+		"(GOGC) Ratio of current heap size over heap size from last GC." +
+			" Value must be positive integer.",
+		100,
 		false, // mutable
 	},
 	"indexer.mem_usage_check_interval": ConfigValue{
@@ -965,15 +980,15 @@ var SystemConfig = Config{
 	},
 	//memdb specific settings
 	"indexer.settings.persisted_snapshot.memdb.interval": ConfigValue{
-		uint64(60000), // keep in sync with index_settings_manager.erl
+		uint64(600000), // keep in sync with index_settings_manager.erl
 		"Persisted snapshotting interval in milliseconds",
-		uint64(60000),
+		uint64(600000),
 		false, // mutable
 	},
 	"indexer.settings.persisted_snapshot_init_build.memdb.interval": ConfigValue{
-		uint64(60000),
+		uint64(600000),
 		"Persisted snapshotting interval in milliseconds for initial build",
-		uint64(60000),
+		uint64(600000),
 		false, // mutable
 	},
 	"indexer.settings.inmemory_snapshot.memdb.interval": ConfigValue{

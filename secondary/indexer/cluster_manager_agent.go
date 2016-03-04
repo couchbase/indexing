@@ -45,6 +45,7 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 	url, err := common.ClusterAuthUrl(cfg["clusterAddr"].String())
 	if err == nil {
 		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+		cinfo.SetServicePorts(ServiceAddrMap)
 	}
 	if err != nil {
 		logging.Errorf("ClustMgrAgent::Fail to init ClusterInfoCache : %v", err)

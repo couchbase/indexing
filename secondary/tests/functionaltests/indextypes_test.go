@@ -518,6 +518,33 @@ func TestBasicPrimaryIndex(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation of Primary Range", t)
+
+	// Count Range on primary index
+	docScanResults = datautility.ExpectedScanResponse_RangePrimary(docs, "User2", "User5", 3)
+	rangeCount, err := secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{"User2"}, []interface{}{"User5"}, 3, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	log.Printf("CountRange() expected and actual is:  %d and %d", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+
+	var lookupkey string
+	for k := range docs {
+		lookupkey = k
+		break
+	}
+	log.Printf("lookupkey for CountLookup() = %v", lookupkey)
+
+	// Count Lookup on primary index
+	docScanResults = datautility.ExpectedScanResponse_RangePrimary(docs, lookupkey, lookupkey, 3)
+	lookupCount, err := secondaryindex.CountLookup(indexName, bucketName, indexScanAddress, []interface{}{lookupkey}, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	if int64(len(docScanResults)) != lookupCount {
+		e := errors.New(fmt.Sprintf("Expected Lookup count %d does not match actual Range count %d: ", len(docScanResults), lookupCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+	log.Printf("CountLookup() = %v", lookupCount)
 }
 
 func TestBasicNullDataType(t *testing.T) {

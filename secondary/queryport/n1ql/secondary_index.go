@@ -85,6 +85,7 @@ type gsiKeyspace struct {
 	throttledur    int64
 	primedur       int64
 	totalscans     int64
+	backfillSize   int64
 }
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
@@ -127,6 +128,7 @@ func NewGSIIndexer(
 
 	logtick := time.Duration(qconf["logtick"].Int()) * time.Millisecond
 	go gsi.logstats(logtick)
+	go gsi.backfillMonitor(5 * time.Second)
 	return gsi, nil
 }
 
@@ -741,7 +743,7 @@ func makeResponsehandler(
 	var readfd *os.File
 	var backfillFin int64
 
-	backfillLimit := config["backfillLimit"].Int()
+	backfillLimit := int64(config["backfillLimit"].Int())
 	primed, starttm, ticktm := false, time.Now(), time.Now()
 
 	backfill := func() {
@@ -799,7 +801,8 @@ func makeResponsehandler(
 		}
 		cp, ln := cap(entryChannel), len(entryChannel)
 		if backfillLimit > 0 && *tmpfile == nil && ((cp - ln) < len(skeys)) {
-			*tmpfile, err = ioutil.TempFile("" /*dir*/, "scan-backfill")
+			prefix := "scan-backfill" + strconv.Itoa(os.Getpid())
+			*tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
 			name := (*tmpfile).Name()
 			l.Debugf("new backfill file ... %v\n", name)
 			if err != nil {
@@ -824,12 +827,10 @@ func makeResponsehandler(
 
 		if *tmpfile != nil {
 			// whether temp-file is exhausted the limit.
-			if stat, err := (*tmpfile).Stat(); err != nil {
-				conn.Error(n1qlError(client, err))
-				return false
-			} else if stat.Size() > int64(backfillLimit) {
-				fmsg := "backfill file %v exceeded limit %v"
-				err := fmt.Errorf(fmsg, (*tmpfile).Name(), backfillLimit)
+			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
+			if cummsize > backfillLimit {
+				fmsg := "backfill exceeded limit %v, %v"
+				err := fmt.Errorf(fmsg, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
 				return false
 			}
@@ -1040,16 +1041,18 @@ func getSingletonClient(
 	return singletonClient, nil
 }
 
+var n1ql_backfill_temp_dir string
+
 func init() {
 	file, err := ioutil.TempFile("" /*dir*/, "scan-backfill")
 	if err != nil {
 		return
 	}
 
-	dir := path.Dir(file.Name())
+	n1ql_backfill_temp_dir = path.Dir(file.Name())
 	os.Remove(file.Name()) // remove this file.
 
-	files, err := ioutil.ReadDir(dir)
+	files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
 	if err != nil {
 		return
 	}
@@ -1058,7 +1061,7 @@ func init() {
 	scantm := conf["indexer.settings.scan_timeout"].Int() // in ms.
 
 	for _, file := range files {
-		fname := path.Join(dir, file.Name())
+		fname := path.Join(n1ql_backfill_temp_dir, file.Name())
 		mtime := file.ModTime()
 		since := (time.Since(mtime).Seconds() * 1000) * 2 // twice the lng scan
 		if strings.Contains(fname, "scan-backfill") && int(since) > scantm {
@@ -1130,5 +1133,29 @@ func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
 				primedur, blockeddur)
 		}
 		sofar = totalscans
+	}
+}
+
+func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
+	tick := time.NewTicker(period)
+	defer func() {
+		tick.Stop()
+	}()
+
+	for {
+		<-tick.C
+		files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
+		if err != nil {
+			return
+		}
+
+		size := int64(0)
+		for _, file := range files {
+			fname := path.Join(n1ql_backfill_temp_dir, file.Name())
+			if strings.Contains(fname, "scan-backfill") {
+				size += int64(file.Size())
+			}
+		}
+		atomic.StoreInt64(&gsi.backfillSize, size)
 	}
 }

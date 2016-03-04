@@ -29,7 +29,7 @@ if [ "$1" = "clean" ]; then
   find . -maxdepth 1 -type d -and -not -name '.*' -exec rm -rf {} \;
 fi
 
-echo "Updating tree"
+echo "Updating tree for run $TS"
 repo sync --jobs=32 1>>$WORKSPACE/make.log 2>&1
 test $? -eq 0 || error_exit "Updating tree"
 test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find voltron"
@@ -58,6 +58,32 @@ echo -n "query is at <a href='https://github.com/couchbase/query/commit/$current
 if [ "$current" != "$good" ]; then
   echo
   git log --pretty='format: <a href="https://github.com/couchbase/query/commit/%H">%h</a> %s' HEAD...$good
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/couchdb
+current="`git rev-parse HEAD`"
+test -f ~/couchdb.good || (echo $current > ~/couchdb.good)
+good="`cat ~/couchdb.good`"
+echo -n "couchdb is at <a href='https://github.com/couchbase/couchdb/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/couchdb/commit/%H">%h</a> %s' HEAD...$good
+  echo
+else
+  echo "none"
+fi
+
+cd $WORKSPACE/couchstore
+current="`git rev-parse HEAD`"
+test -f ~/couchstore.good || (echo $current > ~/couchstore.good)
+good="`cat ~/couchstore.good`"
+echo -n "couchstore is at <a href='https://github.com/couchbase/couchstore/commit/$current'>${current:0:7}</a>, changes since last good build: "
+if [ "$current" != "$good" ]; then
+  echo
+  git log --pretty='format: <a href="https://github.com/couchbase/couchstore/commit/%H">%h</a> %s' HEAD...$good
   echo
 else
   echo "none"

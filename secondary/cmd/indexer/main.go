@@ -97,8 +97,6 @@ func main() {
 		common.CrashOnError(err)
 	}
 
-	go common.MemstatLogger(int64(config["indexer.memstatTick"].Int()))
-
 	_, msg := indexer.NewIndexer(config)
 
 	if msg.GetMsgType() != indexer.MSG_SUCCESS {

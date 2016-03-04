@@ -703,6 +703,7 @@ func (r *mutationStreamReader) syncWorker() {
 		case <-ticker.C:
 			r.maybeSendSync()
 		case <-r.syncStopCh:
+			ticker.Stop()
 			return
 		}
 	}

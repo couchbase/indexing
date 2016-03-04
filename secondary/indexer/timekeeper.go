@@ -2707,6 +2707,7 @@ func (tk *timekeeper) startTimer(streamId common.StreamId,
 				tk.generateNewStabilityTS(streamId, bucket)
 
 			case <-stopCh:
+				ticker.Stop()
 				return
 			}
 		}
@@ -2853,6 +2854,7 @@ func (tk *timekeeper) doUnpause() {
 
 	//send unpause to indexer once there is no repair in progress
 	ticker := time.NewTicker(time.Second * 1)
+	defer ticker.Stop()
 
 	for _ = range ticker.C {
 

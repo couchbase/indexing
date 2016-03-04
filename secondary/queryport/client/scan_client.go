@@ -379,6 +379,33 @@ func (c *GsiScanClient) CountLookup(
 	return countResp.GetCount(), nil
 }
 
+// CountLookup to count number entries for given set of keys for primary index
+func (c *GsiScanClient) CountLookupPrimary(
+	defnID uint64, requestId string, values [][]byte,
+	cons common.Consistency, vector *TsConsistency) (int64, error) {
+
+	req := &protobuf.CountRequest{
+		DefnID:    proto.Uint64(defnID),
+		RequestId: proto.String(requestId),
+		Span:      &protobuf.Span{Equals: values},
+		Cons:      proto.Uint32(uint32(cons)),
+	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
+	}
+	resp, err := c.doRequestResponse(req, requestId)
+	if err != nil {
+		return 0, err
+	}
+	countResp := resp.(*protobuf.CountResponse)
+	if countResp.GetErr() != nil {
+		err = errors.New(countResp.GetErr().GetError())
+		return 0, err
+	}
+	return countResp.GetCount(), nil
+}
+
 // CountRange to count number entries in the given range.
 func (c *GsiScanClient) CountRange(
 	defnID uint64, requestId string, low, high common.SecondaryKey, inclusion Inclusion,
@@ -400,6 +427,38 @@ func (c *GsiScanClient) CountRange(
 		Span: &protobuf.Span{
 			Range: &protobuf.Range{
 				Low: l, High: h, Inclusion: proto.Uint32(uint32(inclusion)),
+			},
+		},
+		Cons: proto.Uint32(uint32(cons)),
+	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
+	}
+
+	resp, err := c.doRequestResponse(req, requestId)
+	if err != nil {
+		return 0, err
+	}
+	countResp := resp.(*protobuf.CountResponse)
+	if countResp.GetErr() != nil {
+		err = errors.New(countResp.GetErr().GetError())
+		return 0, err
+	}
+	return countResp.GetCount(), nil
+}
+
+// CountRange to count number entries in the given range for primary index
+func (c *GsiScanClient) CountRangePrimary(
+	defnID uint64, requestId string, low, high []byte, inclusion Inclusion,
+	cons common.Consistency, vector *TsConsistency) (int64, error) {
+
+	req := &protobuf.CountRequest{
+		DefnID:    proto.Uint64(defnID),
+		RequestId: proto.String(requestId),
+		Span: &protobuf.Span{
+			Range: &protobuf.Range{
+				Low: low, High: high, Inclusion: proto.Uint32(uint32(inclusion)),
 			},
 		},
 		Cons: proto.Uint32(uint32(cons)),

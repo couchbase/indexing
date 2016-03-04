@@ -976,6 +976,8 @@ func (fdb *fdbSlice) waitPersist() {
 		commitPollInterval := fdb.sysconf["storage.fdb.commitPollInterval"].Uint64()
 		fdb.confLock.RUnlock()
 		ticker := time.NewTicker(time.Millisecond * time.Duration(commitPollInterval))
+		defer ticker.Stop()
+
 		for _ = range ticker.C {
 			if fdb.checkAllWorkersDone() {
 				break

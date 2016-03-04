@@ -21,6 +21,7 @@ import (
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/golang/protobuf/proto"
+	"net"
 	"strings"
 	"time"
 )
@@ -1192,13 +1193,12 @@ func addPartnInfoToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
 		err := cinfo.Fetch()
 		c.CrashOnError(err)
 
-		nid := cinfo.GetCurrentNode()
-		streamMaintAddr, err := cinfo.GetServiceAddress(nid, "indexStreamMaint")
+		host, err := cinfo.GetLocalHostname()
 		c.CrashOnError(err)
-		streamInitAddr, err := cinfo.GetServiceAddress(nid, "indexStreamInit")
-		c.CrashOnError(err)
-		streamCatchupAddr, err := cinfo.GetServiceAddress(nid, "indexStreamCatchup")
-		c.CrashOnError(err)
+
+		streamMaintAddr := net.JoinHostPort(host, cfg["streamMaintPort"].String())
+		streamInitAddr := net.JoinHostPort(host, cfg["streamInitPort"].String())
+		streamCatchupAddr := net.JoinHostPort(host, cfg["streamCatchupPort"].String())
 
 		var endpoints []string
 		for _, p := range partnDefn {

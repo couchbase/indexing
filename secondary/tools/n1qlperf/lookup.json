@@ -1,0 +1,16 @@
+{
+   "Concurrency" : 1,
+   "Clients": 1,
+   "ScanSpecs" : [
+      {
+         "Type" : "Lookup",
+         "Bucket" : "default",
+         "Id" : 7962660343139546135,
+         "Index" : "index_eyeColor",
+         "Lookups" : [ ["blue"] ],
+         "Limit" : 1,
+         "Repeat" : 100000,
+         "Consistency": false
+      }
+   ]
+}

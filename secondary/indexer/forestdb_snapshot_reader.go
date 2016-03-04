@@ -125,7 +125,9 @@ func (s *fdbSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
 	if err != nil {
 		return err
 	}
-	defer closeIterator(it)
+	defer func() {
+		go closeIterator(it)
+	}()
 
 	defer func() {
 		s.slice.idxStats.Timings.stScanPipelineIterate.Put(time.Now().Sub(ttime))
