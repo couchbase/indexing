@@ -105,16 +105,16 @@ func (x *StorageType) UnmarshalJSON(data []byte) error {
 type ExprType int32
 
 const (
-	ExprType_JavaScript ExprType = 1
+	ExprType_JAVASCRIPT ExprType = 1
 	ExprType_N1QL       ExprType = 2
 )
 
 var ExprType_name = map[int32]string{
-	1: "JavaScript",
+	1: "JAVASCRIPT",
 	2: "N1QL",
 }
 var ExprType_value = map[string]int32{
-	"JavaScript": 1,
+	"JAVASCRIPT": 1,
 	"N1QL":       2,
 }
 
@@ -285,7 +285,7 @@ func (m *IndexDefn) GetExprType() ExprType {
 	if m != nil && m.ExprType != nil {
 		return *m.ExprType
 	}
-	return ExprType_JavaScript
+	return ExprType_JAVASCRIPT
 }
 
 func (m *IndexDefn) GetSecExpressions() []string {

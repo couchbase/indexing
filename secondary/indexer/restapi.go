@@ -183,7 +183,7 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 	var secExprs []string
 	var with []byte
 
-	using, exprtype, with, isPrimary := "memdb", "n1ql", nil, false
+	using, exprtype, with, isPrimary := "memdb", "N1QL", nil, false
 
 	if value, ok := params["name"]; !ok {
 		msg := `missing field name`
@@ -233,7 +233,7 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if value, ok := params["exprType"]; ok && value != nil {
-		exprtype = strings.ToLower(value.(string))
+		exprtype = strings.ToUpper(value.(string))
 	}
 
 	if value, ok := params["isPrimary"]; ok && value != nil {
@@ -507,7 +507,11 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
 				return false
 			}
-			w.Write([]byte(api.makeEntries(skeys, pkeys)))
+			data, err := api.makeEntries(skeys, pkeys)
+			if err != nil {
+				w.Write([]byte(api.makeError(err)))
+			}
+			w.Write([]byte(data))
 			w.(http.Flusher).Flush()
 			return true
 		})
@@ -618,7 +622,11 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
 				return false
 			}
-			w.Write([]byte(api.makeEntries(skeys, pkeys)))
+			data, err := api.makeEntries(skeys, pkeys)
+			if err != nil {
+				w.Write([]byte(api.makeError(err)))
+			}
+			w.Write([]byte(data))
 			w.(http.Flusher).Flush()
 			return true
 		})
@@ -690,7 +698,11 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
 				return false
 			}
-			w.Write([]byte(api.makeEntries(skeys, pkeys)))
+			data, err := api.makeEntries(skeys, pkeys)
+			if err != nil {
+				w.Write([]byte(api.makeError(err)))
+			}
+			w.Write([]byte(data))
 			w.(http.Flusher).Flush()
 			return true
 		})
@@ -824,14 +836,18 @@ func (api *restServer) makeError(err error) string {
 }
 
 func (api *restServer) makeEntries(
-	skeys []c.SecondaryKey, pkeys [][]byte) string {
+	skeys []c.SecondaryKey, pkeys [][]byte) (string, error) {
 
 	entries := []string{}
 	for i, skey := range skeys {
-		s := fmt.Sprintf(`{"key":"%v","docid":"%v"}`, skey, string(pkeys[i]))
+		data, err := json.Marshal(skey)
+		if err != nil {
+			return "", err
+		}
+		s := fmt.Sprintf(`{"key":%v,"docid":"%v"}`, string(data), string(pkeys[i]))
 		entries = append(entries, s)
 	}
-	return "[" + strings.Join(entries, ",\n") + "]"
+	return "[" + strings.Join(entries, ",\n") + "]", nil
 }
 
 func urlPath2IndexId(path string) (uint64, error) {

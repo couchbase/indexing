@@ -109,8 +109,8 @@ func NewIndexEvaluator(instance *IndexInst,
 	ie := &IndexEvaluator{instance: instance, version: version}
 	// compile expressions once and reuse it many times.
 	defn := ie.instance.GetDefinition()
-	switch defn.GetExprType() {
-	case ExprType_JavaScript:
+	exprtype := defn.GetExprType()
+	switch exprtype {
 	case ExprType_N1QL:
 		// expressions to evaluate secondary-key
 		exprs := defn.GetSecExpressions()
@@ -138,6 +138,10 @@ func NewIndexEvaluator(instance *IndexInst,
 				ie.whExpr = cExprs[0]
 			}
 		}
+
+	default:
+		logging.Errorf("invalid expression type %v\n", exprtype)
+		return nil, fmt.Errorf("invalid expression type %v", exprtype)
 	}
 	return ie, nil
 }
@@ -298,7 +302,6 @@ func (ie *IndexEvaluator) evaluate(
 
 	exprType := defn.GetExprType()
 	switch exprType {
-	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		return N1QLTransform(docid, doc, ie.skExprs, meta, encodeBuf)
 	}
@@ -317,7 +320,6 @@ func (ie *IndexEvaluator) partitionKey(
 
 	exprType := defn.GetExprType()
 	switch exprType {
-	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		return N1QLTransform(nil, doc, []interface{}{ie.pkExpr}, meta, encodeBuf)
 	}
@@ -334,7 +336,6 @@ func (ie *IndexEvaluator) wherePredicate(
 	defn := ie.instance.GetDefinition()
 	exprType := defn.GetExprType()
 	switch exprType {
-	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
 		out, err := N1QLTransform(nil, doc, []interface{}{ie.whExpr}, meta, encodeBuf)

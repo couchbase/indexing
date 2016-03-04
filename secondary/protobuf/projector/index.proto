@@ -40,7 +40,7 @@ enum StorageType {
 
 // Type of expression used to evaluate document.
 enum ExprType {
-    JavaScript = 1;
+    JAVASCRIPT = 1;
     N1QL       = 2;
 }
 
