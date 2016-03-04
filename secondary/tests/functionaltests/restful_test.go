@@ -16,16 +16,19 @@ import sifw "github.com/couchbase/indexing/secondary/tests/framework/secondaryin
 import du "github.com/couchbase/indexing/secondary/tests/framework/datautility"
 import tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 
-//import tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
+import tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 import "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 
-func SkipTestRestfulAPI(t *testing.T) {
+func TestRestfulAPI(t *testing.T) {
 	log.Printf("In TestRestfulAPI()")
 
+	e := sifw.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
 	docsToCreate := generateDocs(1000, "users.prod")
-	UpdateKVDocs(docsToCreate, docs)
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+	UpdateKVDocs(docsToCreate, docs)
 
 	// get indexes
 	indexes, err := restful_getall()
@@ -407,8 +410,8 @@ func restful_lookup(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", len(entries))
-	docScanResults = du.ExpectedScanResponse_string(
-		docs, "address.city", "Pyongyang", "Pyongyang", 3)
+	docScanResults = du.ExpectedScanLimitResponse_string(
+		docs, "address.city", "Pyongyang", "Pyongyang", 3, 100)
 	if err := validateEntries(docScanResults, entries); err != nil {
 		return err
 	}
@@ -678,11 +681,11 @@ func restful_countscan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
-	_ = du.ExpectedScanResponse_string(
+	docScanResults := du.ExpectedScanResponse_string(
 		docs, "address.city", "A", "z", 0)
-	//if count != len(docScanResults) {
-	//	return fmt.Errorf("failed first count")
-	//}
+	if count != len(docScanResults) {
+		return fmt.Errorf("failed first count")
+	}
 
 	// second count
 	log.Println("COUNT cities -low")
@@ -694,11 +697,11 @@ func restful_countscan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
-	_ = du.ExpectedScanResponse_string(
+	docScanResults = du.ExpectedScanResponse_string(
 		docs, "address.city", "A", "z", 1)
-	//if count != len(docScanResults) {
-	//	return fmt.Errorf("failed second count")
-	//}
+	if count != len(docScanResults) {
+		return fmt.Errorf("failed second count")
+	}
 
 	// third count
 	log.Println("COUNT cities -high")
@@ -711,11 +714,11 @@ func restful_countscan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
-	_ = du.ExpectedScanResponse_string(
+	docScanResults = du.ExpectedScanResponse_string(
 		docs, "address.city", "A", "z", 2)
-	//if count != len(docScanResults) {
-	//	return fmt.Errorf("failed third count")
-	//}
+	if count != len(docScanResults) {
+		return fmt.Errorf("failed third count")
+	}
 
 	// fourth count
 	log.Println("COUNT cities - both")
@@ -728,11 +731,11 @@ func restful_countscan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
-	_ = du.ExpectedScanResponse_string(
+	docScanResults = du.ExpectedScanResponse_string(
 		docs, "address.city", "A", "z", 3)
-	//if count != len(docScanResults) {
-	//	return fmt.Errorf("failed fourth count")
-	//}
+	if count != len(docScanResults) {
+		return fmt.Errorf("failed fourth count")
+	}
 
 	// fifth
 	log.Println("COUNT missing cities")
@@ -746,11 +749,11 @@ func restful_countscan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
-	_ = du.ExpectedScanResponse_string(
+	docScanResults = du.ExpectedScanResponse_string(
 		docs, "address.city", "0", "9", 3)
-	//if count != len(docScanResults) {
-	//	return fmt.Errorf("failed fifth count")
-	//}
+	if count != len(docScanResults) {
+		return fmt.Errorf("failed fifth count")
+	}
 	return nil
 }
 
@@ -777,10 +780,9 @@ func validateEntries(expected tc.ScanResponse, entries []interface{}) error {
 		m := entry.(map[string]interface{})
 		out[m["docid"].(string)] = m["key"].([]interface{})
 	}
-	//TODO: fix this to get CI passing.
-	//if err := tv.Validate(expected, out); err != nil {
-	//	return err
-	//}
+	if err := tv.Validate(expected, out); err != nil {
+		return err
+	}
 	return nil
 }
 
