@@ -35,6 +35,8 @@ import "github.com/couchbase/query/timestamp"
 import "github.com/couchbase/query/value"
 import qlog "github.com/couchbase/query/logging"
 
+const DONEREQUEST = 1
+
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(
 	fmt.Errorf("gsi.indexEmpty"), "Fatal null reference to index")
@@ -105,7 +107,8 @@ func NewGSIIndexer(
 		indexes:        make(map[uint64]*secondaryIndex), // defnID -> index
 		primaryIndexes: make(map[uint64]*secondaryIndex),
 	}
-	gsi.logPrefix = fmt.Sprintf("GSIC[%s; %s]", namespace, keyspace)
+	tm := time.Now().UnixNano()
+	gsi.logPrefix = fmt.Sprintf("GSIC[%s/%s-%v]", namespace, keyspace, tm)
 
 	// get the singleton-client
 	conf, err := c.GetSettingsConfig(c.SystemConfig)
@@ -124,7 +127,7 @@ func NewGSIIndexer(
 		l.Errorf("%v Refresh() failed: %v", gsi.logPrefix, err)
 		return nil, err
 	}
-	l.Debugf("%v instantiated ...", gsi.logPrefix)
+	l.Infof("%v started ...", gsi.logPrefix)
 
 	logtick := time.Duration(qconf["logtick"].Int()) * time.Millisecond
 	go gsi.logstats(logtick)
@@ -646,7 +649,8 @@ func (si *secondaryIndex) Scan(
 
 	entryChannel := conn.EntryChannel()
 	var tmpfile *os.File
-	backfillCh := make(chan bool, 100)
+	var backfillSync int64
+
 	syncCh := make(chan bool)
 
 	defer close(entryChannel)
@@ -655,14 +659,17 @@ func (si *secondaryIndex) Scan(
 			<-syncCh
 			tmpfile.Close()
 			name := tmpfile.Name()
-			l.Debugf("removing backfill file %v ...\n", name)
+			fmsg := "%v removing backfill file %v ...\n"
+			l.Debugf(fmsg, si.gsi.logPrefix, name)
 			if err := os.Remove(name); err != nil {
-				fmsg := "remove backfill file %v unexpected failure: %v\n"
-				l.Errorf(fmsg, name, err)
+				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
+				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
 			}
 		}
 	}()
-	defer close(backfillCh)
+	defer func() {
+		atomic.StoreInt64(&backfillSync, DONEREQUEST)
+	}()
 
 	starttm := time.Now()
 
@@ -673,7 +680,7 @@ func (si *secondaryIndex) Scan(
 			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
 			makeResponsehandler(
-				si, client, conn, &tmpfile, backfillCh, syncCh, cnf))
+				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 
 	} else {
 		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
@@ -682,7 +689,7 @@ func (si *secondaryIndex) Scan(
 			si.defnID, requestId, low, high, incl, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
 			makeResponsehandler(
-				si, client, conn, &tmpfile, backfillCh, syncCh, cnf))
+				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 	}
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
@@ -695,7 +702,8 @@ func (si *secondaryIndex) ScanEntries(
 
 	entryChannel := conn.EntryChannel()
 	var tmpfile *os.File
-	backfillCh := make(chan bool, 100)
+	var backfillSync int64
+
 	syncCh := make(chan bool)
 
 	defer close(entryChannel)
@@ -704,14 +712,17 @@ func (si *secondaryIndex) ScanEntries(
 			<-syncCh
 			tmpfile.Close()
 			name := tmpfile.Name()
-			l.Debugf("removing backfill file %v ...\n", name)
+			fmsg := "%v removing backfill file %v ...\n"
+			l.Debugf(fmsg, si.gsi.logPrefix, name)
 			if err := os.Remove(name); err != nil {
-				fmsg := "remove backfill file %v unexpected failure: %v\n"
-				l.Errorf(fmsg, name, err)
+				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
+				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
 			}
 		}
 	}()
-	defer close(backfillCh)
+	defer func() {
+		atomic.StoreInt64(&backfillSync, DONEREQUEST)
+	}()
 
 	starttm := time.Now()
 
@@ -719,7 +730,8 @@ func (si *secondaryIndex) ScanEntries(
 	client.ScanAll(
 		si.defnID, requestId, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		makeResponsehandler(si, client, conn, &tmpfile, backfillCh, syncCh, cnf))
+		makeResponsehandler(
+			si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
@@ -733,7 +745,7 @@ func makeResponsehandler(
 	si *secondaryIndex,
 	client *qclient.GsiClient,
 	conn *datastore.IndexConnection,
-	tmpfile **os.File, backfillCh, syncCh chan bool,
+	tmpfile **os.File, backfillSync *int64, syncCh chan bool,
 	config c.Config) qclient.ResponseHandler {
 
 	entryChannel := conn.EntryChannel()
@@ -741,10 +753,11 @@ func makeResponsehandler(
 	var enc *gob.Encoder
 	var dec *gob.Decoder
 	var readfd *os.File
-	var backfillFin int64
+	var backfillFin, backfillEntries int64
 
 	backfillLimit := int64(config["backfillLimit"].Int())
 	primed, starttm, ticktm := false, time.Now(), time.Now()
+	lprefix := si.gsi.logPrefix
 
 	backfill := func() {
 		name := (*tmpfile).Name()
@@ -754,28 +767,42 @@ func makeResponsehandler(
 			}
 			close(syncCh)
 			atomic.AddInt64(&backfillFin, 1)
-			l.Debugf("finished backfill for %v ...\n", name)
+			l.Debugf("%v finished backfill for %v ...\n", lprefix, name)
 			recover() // need this because entryChannel() would have closed
 		}()
-		l.Debugf("started backfill for %v ...\n", name)
+		l.Debugf("%v started backfill for %v ...\n", lprefix, name)
 		for {
-			_, ok := <-backfillCh
-			if !ok {
+			if pending := atomic.LoadInt64(&backfillEntries); pending > 0 {
+				atomic.AddInt64(&backfillEntries, -1)
+			} else if done := atomic.LoadInt64(backfillSync); done == DONEREQUEST {
+				return
+			} else {
+				time.Sleep(1 * time.Millisecond)
+				continue
+			}
+			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
+			if cummsize > backfillLimit {
+				fmsg := "backfill exceeded limit %v, %v"
+				err := fmt.Errorf(fmsg, backfillLimit, cummsize)
+				conn.Error(n1qlError(client, err))
 				return
 			}
+
 			skeys := make([]c.SecondaryKey, 0)
 			if err := dec.Decode(&skeys); err != nil {
-				l.Errorf("decoding from backfill %v: %v\n", name, err)
+				fmsg := "%v decoding from backfill %v: %v\n"
+				l.Errorf(fmsg, lprefix, name, err)
 				conn.Error(n1qlError(client, err))
 				return
 			}
 			pkeys := make([][]byte, 0)
 			if err := dec.Decode(&pkeys); err != nil {
-				l.Errorf("decoding from backfill %v: %v\n", name, err)
+				fmsg := "%v decoding from backfill %v: %v\n"
+				l.Errorf(fmsg, lprefix, name, err)
 				conn.Error(n1qlError(client, err))
 				return
 			}
-			l.Tracef("backfill read %v entries\n", len(skeys))
+			l.Tracef("%v backfill read %v entries\n", lprefix, len(skeys))
 			if primed == false {
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
@@ -783,7 +810,9 @@ func makeResponsehandler(
 			if len(entryChannel) > 0 && len(skeys) > 0 {
 				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
 			}
-			sendEntries(si, pkeys, skeys, conn)
+			if sendEntries(si, pkeys, skeys, conn) == "stop" {
+				return
+			}
 			ticktm = time.Now()
 		}
 	}
@@ -804,9 +833,10 @@ func makeResponsehandler(
 			prefix := "scan-backfill" + strconv.Itoa(os.Getpid())
 			*tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
 			name := (*tmpfile).Name()
-			l.Debugf("new backfill file ... %v\n", name)
+			l.Debugf("%v new backfill file ... %v\n", lprefix, name)
 			if err != nil {
-				l.Errorf("creating backfill file %v : %v\n", name, err)
+				fmsg := "%v creating backfill file %v : %v\n"
+				l.Errorf(fmsg, lprefix, name, err)
 				*tmpfile = nil
 				conn.Error(n1qlError(client, err))
 				return false
@@ -815,7 +845,8 @@ func makeResponsehandler(
 				enc = gob.NewEncoder(*tmpfile)
 				readfd, err = os.OpenFile(name, os.O_RDONLY, 0666)
 				if err != nil {
-					l.Errorf("reading backfill file %v: %v\n", name, err)
+					fmsg := "%v reading backfill file %v: %v\n"
+					l.Errorf(fmsg, lprefix, name, err)
 					conn.Error(n1qlError(client, err))
 					return false
 				}
@@ -835,7 +866,7 @@ func makeResponsehandler(
 				return false
 			}
 
-			l.Tracef("backfill %v entries\n", len(skeys))
+			l.Tracef("%v backfill %v entries\n", lprefix, len(skeys))
 			if atomic.LoadInt64(&backfillFin) > 0 {
 				return false
 			}
@@ -847,10 +878,11 @@ func makeResponsehandler(
 				conn.Error(n1qlError(client, err))
 				return false
 			}
-			backfillCh <- true
+			atomic.AddInt64(&backfillEntries, 1)
 
 		} else {
-			l.Tracef("response cap:%v len:%v entries:%v\n", cp, ln, len(skeys))
+			fmsg := "%v response cap:%v len:%v entries:%v\n"
+			l.Tracef(fmsg, lprefix, cp, ln, len(skeys))
 			if primed == false {
 				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
 				primed = true
@@ -858,7 +890,9 @@ func makeResponsehandler(
 			if len(entryChannel) > 0 && len(skeys) > 0 {
 				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
 			}
-			sendEntries(si, pkeys, skeys, conn)
+			if sendEntries(si, pkeys, skeys, conn) == "stop" {
+				return false
+			}
 			ticktm = time.Now()
 		}
 		return true
@@ -1074,10 +1108,10 @@ func init() {
 
 func sendEntries(
 	si *secondaryIndex, pkeys [][]byte, skeys []c.SecondaryKey,
-	conn *datastore.IndexConnection) {
+	conn *datastore.IndexConnection) string {
 
 	if len(skeys) == 0 {
-		return
+		return "empty"
 	}
 
 	var start time.Time
@@ -1091,14 +1125,13 @@ func sendEntries(
 		e := &datastore.IndexEntry{PrimaryKey: string(pkeys[i])}
 		e.EntryKey = skey2Values(skey)
 		cp, ln := cap(entryChannel), len(entryChannel)
-		l.Tracef("current enqueued length: %d (max %d)\n", ln, cp)
 		if ln == cp {
 			start, blocked = time.Now(), true
 		}
 		select {
 		case entryChannel <- e:
 		case <-stopChannel:
-			return
+			return "stop"
 		}
 		if blocked {
 			blockedtm += int64(time.Since(start))
@@ -1106,7 +1139,7 @@ func sendEntries(
 		}
 	}
 	atomic.AddInt64(&si.gsi.blockeddur, blockedtm)
-	return
+	return "ok"
 }
 
 func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
@@ -1124,13 +1157,13 @@ func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
 		primedur := atomic.LoadInt64(&gsi.primedur)
 		totalscans := atomic.LoadInt64(&gsi.totalscans)
 		if totalscans > sofar {
-			fmsg := `logstats %q {` +
+			fmsg := `%v logstats %q {` +
 				`"gsi_scan_count":%v,"gsi_scan_duration":%v,` +
 				`"gsi_throttle_duration":%v,` +
 				`"gsi_prime_duration":%v,"gsi_blocked_duration":%v}`
 			l.Infof(
-				fmsg, gsi.keyspace, totalscans, scandur, throttledur,
-				primedur, blockeddur)
+				fmsg, gsi.logPrefix, gsi.keyspace, totalscans, scandur,
+				throttledur, primedur, blockeddur)
 		}
 		sofar = totalscans
 	}

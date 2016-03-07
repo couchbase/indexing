@@ -475,24 +475,24 @@ var SystemConfig = Config{
 		true, // immutable
 	},
 	"queryport.client.load.randomWeight": ConfigValue{
-		0.1,
+		0.9,
 		"random weightage between [0, 1.0) for random load-balancing, " +
 			"lower the value less likely for random load-balancing",
-		0.1,
+		0.9,
 		true, // immutable
 	},
 	"queryport.client.load.equivalenceFactor": ConfigValue{
-		0.9,
+		0.1,
 		"normalization factor on replica's avg-load to group them with " +
 			"least loaded replica.",
-		0.9,
+		0.1,
 		true, // immutable
 	},
 	"queryport.client.backfillLimit": ConfigValue{
-		0,
+		5 * 1024, // 5GB
 		"limit in mega-bytes to cap n1ql side backfilling, if ZERO backfill " +
 			"will be disabled.",
-		0,
+		5 * 1024, // 5GB
 		false,    // mutable
 	},
 	// projector's adminport client, can be used by indexer.
