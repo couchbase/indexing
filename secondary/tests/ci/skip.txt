@@ -1,2 +1,0 @@
-TestBufferedScan_BackfillEnabled
-TestRestfulAPI
