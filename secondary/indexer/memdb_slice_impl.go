@@ -28,6 +28,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -220,7 +221,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 func (slice *memdbSlice) initStores() {
 	cfg := memdb.DefaultConfig()
-	if slice.sysconf["memdb.useMemMgmt"].Bool() {
+	if slice.sysconf["memdb.useMemMgmt"].Bool() && runtime.GOOS != "windows" {
 		cfg.UseMemoryMgmt(mm.Malloc, mm.Free)
 	}
 

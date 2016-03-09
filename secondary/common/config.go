@@ -694,9 +694,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.memdb.useMemMgmt": ConfigValue{
-		false,
+		true,
 		"Use jemalloc based manual memory management",
-		false,
+		true,
 		false, // mutable
 	},
 	"indexer.memdb.useDeltaInterleaving": ConfigValue{
