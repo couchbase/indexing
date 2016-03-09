@@ -786,7 +786,6 @@ func validateEntries(expected tc.ScanResponse, entries []interface{}) error {
 var reqcreate = map[string]interface{}{
 	"name":      "myindex",
 	"bucket":    "default",
-	"using":     "memdb",
 	"exprType":  "N1QL",
 	"partnExpr": "",
 	"whereExpr": "",

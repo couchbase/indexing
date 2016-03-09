@@ -183,7 +183,7 @@ func (api *restServer) doCreate(w http.ResponseWriter, request *http.Request) {
 	var secExprs []string
 	var with []byte
 
-	using, exprtype, with, isPrimary := "memdb", "N1QL", nil, false
+	using, exprtype, with, isPrimary := "gsi", "N1QL", nil, false
 
 	if value, ok := params["name"]; !ok {
 		msg := `missing field name`
