@@ -624,7 +624,8 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
 		if err == nil {
 			var fd *os.File
-			bs, err := json.Marshal(s.info)
+			var bs []byte
+			bs, err = json.Marshal(s.info)
 			if err == nil {
 				fd, err = os.OpenFile(manifest, os.O_WRONLY|os.O_CREATE, 0755)
 				_, err = fd.Write(bs)
@@ -798,15 +799,17 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 		wg.Wait()
 	}
 
+	dur := time.Since(t0)
 	if err == nil {
 		snapInfo.MainSnap = snap
+		logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v finished reading %v. Took %v",
+			mdb.id, mdb.idxInstId, snapInfo.dataPath, dur)
+	} else {
+		logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to load snapshot %v error(%v).",
+			mdb.id, mdb.idxInstId, snapInfo.dataPath, err)
 	}
 
-	dur := time.Since(t0)
-	logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v finished reading %v. Took %v",
-		mdb.id, mdb.idxInstId, snapInfo.dataPath, dur)
 	mdb.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
-
 	return err
 }
 
@@ -1321,5 +1324,6 @@ func (s *memdbSnapshot) iterEqualKeys(k IndexKey, it *memdb.Iterator,
 
 func newSnapshotPath(dirpath string) string {
 	file := time.Now().Format("snapshot.2006-01-02.15:04:05.000")
+	file = strings.Replace(file, ":", "", -1)
 	return filepath.Join(dirpath, file)
 }
