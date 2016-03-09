@@ -27,9 +27,9 @@ import (
 	"io/ioutil"
 	"math"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -39,6 +39,8 @@ const (
 	opUpdate = iota
 	opDelete
 )
+
+const tmpDirName = ".tmp"
 
 type indexMutation struct {
 	op    int
@@ -604,7 +606,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 
 		t0 := time.Now()
 		dir := newSnapshotPath(mdb.path)
-		tmpdir := filepath.Join(mdb.path, ".tmp")
+		tmpdir := filepath.Join(mdb.path, tmpDirName)
 		manifest := filepath.Join(tmpdir, "manifest.json")
 		os.RemoveAll(tmpdir)
 		mdb.confLock.RLock()
@@ -659,7 +661,7 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 		toRemove := len(manifests) - keepn
 		manifests = manifests[:toRemove]
 		for _, m := range manifests {
-			dir := path.Dir(m)
+			dir := filepath.Dir(m)
 			logging.Infof("MemDBSlice Removing disk snapshot %v", dir)
 			os.RemoveAll(dir)
 		}
@@ -667,8 +669,14 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 }
 
 func (mdb *memdbSlice) getSnapshotManifests() []string {
+	var files []string
 	pattern := "*/manifest.json"
-	files, _ := filepath.Glob(filepath.Join(mdb.path, pattern))
+	all, _ := filepath.Glob(filepath.Join(mdb.path, pattern))
+	for _, f := range all {
+		if !strings.Contains(f, tmpDirName) {
+			files = append(files, f)
+		}
+	}
 	sort.Strings(files)
 	return files
 }
@@ -680,7 +688,7 @@ func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	files := mdb.getSnapshotManifests()
 	for i := len(files) - 1; i >= 0; i-- {
 		f := files[i]
-		info := &memdbSnapshotInfo{dataPath: path.Dir(f)}
+		info := &memdbSnapshotInfo{dataPath: filepath.Dir(f)}
 		fd, err := os.Open(f)
 		if err == nil {
 			defer fd.Close()
