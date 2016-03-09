@@ -170,10 +170,19 @@ func (endpoint *RouterEndpoint) WaitForExit() error {
 
 // run
 func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
+	flushTick := time.NewTicker(endpoint.bufferTm)
+	harakiri := time.NewTimer(endpoint.harakiriTm)
+
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			logging.Errorf("%v run() crashed: %v\n", endpoint.logPrefix, r)
 			logging.Errorf("%s", logging.StackTrace())
+		}
+		if flushTick != nil {
+			flushTick.Stop()
+		}
+		if harakiri != nil {
+			harakiri.Stop()
 		}
 		// close the connection
 		endpoint.conn.Close()
@@ -207,8 +216,6 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 
 	raddr := endpoint.raddr
 	lastActiveTime := time.Now()
-	flushTick := time.NewTicker(endpoint.bufferTm)
-	harakiri := time.NewTimer(endpoint.harakiriTm)
 	buffers := newEndpointBuffers(raddr)
 
 	messageCount := 0
