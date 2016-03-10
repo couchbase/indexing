@@ -18,7 +18,7 @@ type StorageMode byte
 
 const (
 	NOT_SET = iota
-	MEMDB
+	MOI
 	FORESTDB
 )
 
@@ -26,7 +26,7 @@ func (s StorageMode) String() string {
 	switch s {
 	case NOT_SET:
 		return "not_set"
-	case MEMDB:
+	case MOI:
 		return "memory_optimized"
 	case FORESTDB:
 		return "forestdb"
@@ -38,8 +38,8 @@ func (s StorageMode) String() string {
 //NOTE: This map needs to be in sync with IndexType in
 //common/index.go
 var smStrMap = map[string]StorageMode{
-	"memdb":            MEMDB,
-	"memory_optimized": MEMDB,
+	"memdb":            MOI,
+	"memory_optimized": MOI,
 	"forestdb":         FORESTDB,
 }
 
@@ -78,8 +78,13 @@ func SetStorageModeStr(mode string) bool {
 }
 
 func IndexTypeToStorageMode(t IndexType) StorageMode {
-	if s, ok := smStrMap[strings.ToLower(string(t))]; ok {
-		return s
+
+	switch strings.ToLower(string(t)) {
+	case MemDB, MemoryOptimized:
+		return MOI
+	case ForestDB:
+		return FORESTDB
+	default:
+		return NOT_SET
 	}
-	return NOT_SET
 }

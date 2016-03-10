@@ -2985,7 +2985,7 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		common.CrashOnError(err)
 	}
 
-	if common.GetStorageMode() == common.MEMDB {
+	if common.GetStorageMode() == common.MOI {
 		idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
 			mType: CLUST_MGR_GET_LOCAL,
 			key:   INDEXER_STATE_KEY,
@@ -3968,7 +3968,7 @@ func (idx *indexer) monitorMemUsage() {
 
 		pause_if_oom := idx.config["pause_if_memory_full"].Bool()
 
-		if common.GetStorageMode() == common.MEMDB && pause_if_oom {
+		if common.GetStorageMode() == common.MOI && pause_if_oom {
 
 			memory_quota := idx.config["settings.memory_quota"].Uint64()
 			high_mem_mark := idx.config["high_mem_mark"].Float64()
