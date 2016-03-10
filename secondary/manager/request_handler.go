@@ -291,6 +291,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 
 			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
 			if err != nil {
+				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr + "/getLocalIndexMetadata", err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
@@ -298,18 +299,21 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 			localMeta := new(LocalIndexMetadata)
 			status := convertResponse(resp, localMeta)
 			if status == RESP_ERROR {
+				logging.Debugf("RequestHandler::getIndexStatus: Error from convertResponse for localMeta: %v", err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
 
 			curl, err := cinfo.GetServiceAddress(nid, "mgmt")
 			if err != nil {
+				logging.Debugf("RequestHandler::getIndexStatus: Error from  GetServiceAddress (mgmt) for node id %v. Error = %v", nid, err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
 
 			resp, err = getWithAuth(addr + "/stats?async=true")
 			if err != nil {
+				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr + "/stats?async=true", err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
@@ -317,6 +321,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 			stats := new(common.Statistics)
 			status = convertResponse(resp, stats)
 			if status == RESP_ERROR {
+				logging.Debugf("RequestHandler::getIndexStatus: Error from convertResponse for stats: %v", err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
@@ -383,6 +388,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 				}
 			}
 		} else {
+			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress (indexHttp) for node id %v. Error = %v", nid, err)
 			failedNodes = append(failedNodes, addr)
 			continue
 		}
@@ -432,6 +438,7 @@ func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
 
 			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
 			if err != nil {
+				logging.Debugf("RequestHandler::getIndexMetadata: Error while retrieving %v with auth %v", addr + "/getLocalIndexMetadata", err)
 				return nil, errors.New(fmt.Sprintf("Fail to retrieve index definition from url %s", addr))
 			}
 
