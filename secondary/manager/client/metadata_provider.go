@@ -1342,19 +1342,20 @@ func (w *watcher) cleanupOnTimeout() {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
+	errormsg := "Request timed out. Index server may still be processing this request. Please check the status after sometime or retry."
 	current := time.Now().UnixNano()
 
 	for key, request := range w.pendingReqs {
 		if current-request.StartTime >= w.provider.timeout {
 			delete(w.pendingReqs, key)
-			w.signalError(request, "Request Timeout")
+			w.signalError(request, errormsg)
 		}
 	}
 
 	for key, request := range w.loggedReqs {
 		if current-request.StartTime >= w.provider.timeout {
 			delete(w.loggedReqs, key)
-			w.signalError(request, "Request Timeout")
+			w.signalError(request, errormsg)
 		}
 	}
 }
