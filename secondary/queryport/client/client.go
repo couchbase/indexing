@@ -351,27 +351,6 @@ func (c *GsiClient) LookupStatistics(
 	defnID uint64, requestId string, value common.SecondaryKey) (common.IndexStatistics, error) {
 
 	return nil, ErrorNotImplemented
-
-	// FIXME: this API is marked not-implemented because UniqueKeyCount
-	// is not yet available from indexer.
-	// Refer: https://issues.couchbase.com/browse/MB-13375
-	//
-	//if c.bridge == nil {
-	//    return nil, ErrorClientUninitialized
-	//}
-
-	//// check whether the index is present and available.
-	//if _, err := c.bridge.IndexState(defnID); err != nil {
-	//    return nil, err
-	//}
-
-	//var stats common.IndexStatistics
-	//var err error
-	//err = c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) error {
-	//    stats, err = qc.LookupStatistics(targetDefnID, value)
-	//    return err
-	//})
-	//return stats, err
 }
 
 // RangeStatistics for index range.
@@ -380,26 +359,6 @@ func (c *GsiClient) RangeStatistics(
 	inclusion Inclusion) (common.IndexStatistics, error) {
 
 	return nil, ErrorNotImplemented
-
-	// FIXME: this API is marked not-implemented because UniqueKeyCount
-	// is not yet available from indexer.
-	// Refer: https://issues.couchbase.com/browse/MB-13375
-	//
-	//if c.bridge == nil {
-	//    return nil, ErrorClientUninitialized
-	//}
-
-	//// check whether the index is present and available.
-	//if _, err := c.bridge.IndexState(defnID); err != nil {
-	//    return nil, err
-	//}
-	//var stats common.IndexStatistics
-	//var err error
-	//err = c.doScan(defnID, func(qc *GsiScanClient, targetDefnID uint64) error {
-	//    stats, err = qc.RangeStatistics(targetDefnID, low, high, inclusion)
-	//    return err
-	//})
-	//return stats, err
 }
 
 // Lookup scan index between low and high.

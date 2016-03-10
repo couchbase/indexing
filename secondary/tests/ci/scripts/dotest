@@ -37,6 +37,7 @@ stop_cluster() {
 
 collects_logs() {
   if [ "$phase" = "" ]; then phase=unknown; fi
+  shopt -s nullglob
   for ndir in $WORKSPACE/ns_server/data/n_*; do 
     ext="`basename $ndir`"
     /opt/couchbase/bin/cbcollect_info --initargs $ndir/initargs $WORKSPACE/collects-$ext.zip 1>/tmp/collect-$ext.log 2>&1

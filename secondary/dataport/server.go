@@ -256,7 +256,7 @@ func (s *Server) genServer(reqch chan []interface{}) {
 				case c.StreamBegin: // new vbucket stream(s) have started
 					avb = &activeVb{raddr: msg.raddr, bucket: bucket, vbno: vbno}
 					hostUuids = s.addUuids(keeper{id: avb}, hostUuids)
-					vbok = true
+					avbok, vbok = true, true
 
 				case c.StreamEnd: // vbucket stream(s) have finished
 					avb = &activeVb{raddr: msg.raddr, bucket: bucket, vbno: vbno}

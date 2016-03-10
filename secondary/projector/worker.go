@@ -30,6 +30,7 @@ import "github.com/couchbase/indexing/secondary/logging"
 // VbucketWorker is immutable structure defined for each vbucket.
 type VbucketWorker struct {
 	id       int
+	feed     *Feed
 	cluster  string
 	topic    string
 	bucket   string
@@ -51,7 +52,7 @@ type VbucketWorker struct {
 
 // NewVbucketWorker creates a new routine to handle this vbucket stream.
 func NewVbucketWorker(
-	id int, cluster, topic, bucket string,
+	id int, feed *Feed, bucket string,
 	opaque uint16, config c.Config) *VbucketWorker {
 
 	mutChanSize := config["mutationChanSize"].Int()
@@ -59,8 +60,9 @@ func NewVbucketWorker(
 
 	worker := &VbucketWorker{
 		id:        id,
-		cluster:   cluster,
-		topic:     topic,
+		feed:      feed,
+		cluster:   feed.cluster,
+		topic:     feed.topic,
 		bucket:    bucket,
 		opaque:    opaque,
 		config:    config,
@@ -72,7 +74,7 @@ func NewVbucketWorker(
 		encodeBuf: make([]byte, 0, encodeBufSize),
 	}
 	fmsg := "WRKR[%v<-%v<-%v #%v]"
-	worker.logPrefix = fmt.Sprintf(fmsg, id, bucket, cluster, topic)
+	worker.logPrefix = fmt.Sprintf(fmsg, id, bucket, feed.cluster, feed.topic)
 	worker.mutChanSize = mutChanSize
 	go worker.run(worker.reqch)
 	return worker

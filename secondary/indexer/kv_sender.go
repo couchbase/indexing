@@ -1142,7 +1142,7 @@ func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 	using := protobuf.StorageType(
 		protobuf.StorageType_value[strings.ToLower(string(indexDefn.Using))]).Enum()
 	exprType := protobuf.ExprType(
-		protobuf.ExprType_value[string(indexDefn.ExprType)]).Enum()
+		protobuf.ExprType_value[strings.ToUpper(string(indexDefn.ExprType))]).Enum()
 	partnScheme := protobuf.PartitionScheme(
 		protobuf.PartitionScheme_value[string(indexDefn.PartitionScheme)]).Enum()
 

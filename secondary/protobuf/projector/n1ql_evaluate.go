@@ -87,13 +87,19 @@ func N1QLTransform(
 		//if docid != nil {
 		//    arrValue = append(arrValue, qvalue.NewValue(string(docid)))
 		//}
-		encoded, err := CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
-		if err != nil {
-			logging.Errorf("CollateJSONEncode: Unable to encode index field for docid: %s (err: %v)", docid, err)
+		if encodeBuf != nil {
+			out, err := CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
+			if err != nil {
+				fmsg := "CollateJSONEncode: index field for docid: %s (err: %v)"
+				logging.Errorf(fmsg, docid, err)
+			}
+			return out, err // return as collated JSON array
 		}
-
-		return encoded, err
-
+		secKey := qvalue.NewValue(make([]interface{}, len(arrValue)))
+		for i, key := range arrValue {
+			secKey.SetIndex(i, key)
+		}
+		return secKey.MarshalJSON() // return as JSON array
 	}
 	return nil, nil
 }

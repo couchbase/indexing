@@ -11,6 +11,39 @@ import math "math"
 var _ = proto.Marshal
 var _ = math.Inf
 
+type FeedVersion int32
+
+const (
+	FeedVersion_sherlock FeedVersion = 1
+	FeedVersion_watson   FeedVersion = 2
+)
+
+var FeedVersion_name = map[int32]string{
+	1: "sherlock",
+	2: "watson",
+}
+var FeedVersion_value = map[string]int32{
+	"sherlock": 1,
+	"watson":   2,
+}
+
+func (x FeedVersion) Enum() *FeedVersion {
+	p := new(FeedVersion)
+	*p = x
+	return p
+}
+func (x FeedVersion) String() string {
+	return proto.EnumName(FeedVersion_name, int32(x))
+}
+func (x *FeedVersion) UnmarshalJSON(data []byte) error {
+	value, err := proto.UnmarshalJSONEnum(FeedVersion_value, data, "FeedVersion")
+	if err != nil {
+		return err
+	}
+	*x = FeedVersion(value)
+	return nil
+}
+
 // Requested by Coordinator/indexer to learn vbuckets
 // hosted by kvnodes.
 type VbmapRequest struct {
@@ -142,13 +175,16 @@ type MutationTopicRequest struct {
 	EndpointType  *string     `protobuf:"bytes,2,req,name=endpointType" json:"endpointType,omitempty"`
 	ReqTimestamps []*TsVbuuid `protobuf:"bytes,3,rep,name=reqTimestamps" json:"reqTimestamps,omitempty"`
 	// initial list of instances applicable for this topic
-	Instances        []*Instance `protobuf:"bytes,4,rep,name=instances" json:"instances,omitempty"`
-	XXX_unrecognized []byte      `json:"-"`
+	Instances        []*Instance  `protobuf:"bytes,4,rep,name=instances" json:"instances,omitempty"`
+	Version          *FeedVersion `protobuf:"varint,5,opt,name=version,enum=protobuf.FeedVersion,def=1" json:"version,omitempty"`
+	XXX_unrecognized []byte       `json:"-"`
 }
 
 func (m *MutationTopicRequest) Reset()         { *m = MutationTopicRequest{} }
 func (m *MutationTopicRequest) String() string { return proto.CompactTextString(m) }
 func (*MutationTopicRequest) ProtoMessage()    {}
+
+const Default_MutationTopicRequest_Version FeedVersion = FeedVersion_sherlock
 
 func (m *MutationTopicRequest) GetTopic() string {
 	if m != nil && m.Topic != nil {
@@ -176,6 +212,13 @@ func (m *MutationTopicRequest) GetInstances() []*Instance {
 		return m.Instances
 	}
 	return nil
+}
+
+func (m *MutationTopicRequest) GetVersion() FeedVersion {
+	if m != nil && m.Version != nil {
+		return *m.Version
+	}
+	return Default_MutationTopicRequest_Version
 }
 
 // Response back for
@@ -323,13 +366,16 @@ type AddBucketsRequest struct {
 	Topic         *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
 	ReqTimestamps []*TsVbuuid `protobuf:"bytes,2,rep,name=reqTimestamps" json:"reqTimestamps,omitempty"`
 	// list of instances applicable for buckets.
-	Instances        []*Instance `protobuf:"bytes,3,rep,name=instances" json:"instances,omitempty"`
-	XXX_unrecognized []byte      `json:"-"`
+	Instances        []*Instance  `protobuf:"bytes,3,rep,name=instances" json:"instances,omitempty"`
+	Version          *FeedVersion `protobuf:"varint,4,opt,name=version,enum=protobuf.FeedVersion,def=1" json:"version,omitempty"`
+	XXX_unrecognized []byte       `json:"-"`
 }
 
 func (m *AddBucketsRequest) Reset()         { *m = AddBucketsRequest{} }
 func (m *AddBucketsRequest) String() string { return proto.CompactTextString(m) }
 func (*AddBucketsRequest) ProtoMessage()    {}
+
+const Default_AddBucketsRequest_Version FeedVersion = FeedVersion_sherlock
 
 func (m *AddBucketsRequest) GetTopic() string {
 	if m != nil && m.Topic != nil {
@@ -350,6 +396,13 @@ func (m *AddBucketsRequest) GetInstances() []*Instance {
 		return m.Instances
 	}
 	return nil
+}
+
+func (m *AddBucketsRequest) GetVersion() FeedVersion {
+	if m != nil && m.Version != nil {
+		return *m.Version
+	}
+	return Default_AddBucketsRequest_Version
 }
 
 // DelBucketsRequest will shutdown vbucket-streams
@@ -382,14 +435,17 @@ func (m *DelBucketsRequest) GetBuckets() []string {
 // AddInstancesRequest to add index-instances to a topic.
 // Respond back with TimestampResponse
 type AddInstancesRequest struct {
-	Topic            *string     `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
-	Instances        []*Instance `protobuf:"bytes,2,rep,name=instances" json:"instances,omitempty"`
-	XXX_unrecognized []byte      `json:"-"`
+	Topic            *string      `protobuf:"bytes,1,req,name=topic" json:"topic,omitempty"`
+	Instances        []*Instance  `protobuf:"bytes,2,rep,name=instances" json:"instances,omitempty"`
+	Version          *FeedVersion `protobuf:"varint,3,opt,name=version,enum=protobuf.FeedVersion,def=1" json:"version,omitempty"`
+	XXX_unrecognized []byte       `json:"-"`
 }
 
 func (m *AddInstancesRequest) Reset()         { *m = AddInstancesRequest{} }
 func (m *AddInstancesRequest) String() string { return proto.CompactTextString(m) }
 func (*AddInstancesRequest) ProtoMessage()    {}
+
+const Default_AddInstancesRequest_Version FeedVersion = FeedVersion_sherlock
 
 func (m *AddInstancesRequest) GetTopic() string {
 	if m != nil && m.Topic != nil {
@@ -403,6 +459,13 @@ func (m *AddInstancesRequest) GetInstances() []*Instance {
 		return m.Instances
 	}
 	return nil
+}
+
+func (m *AddInstancesRequest) GetVersion() FeedVersion {
+	if m != nil && m.Version != nil {
+		return *m.Version
+	}
+	return Default_AddInstancesRequest_Version
 }
 
 // DelInstancesRequest to add index-instances to a topic.
@@ -510,4 +573,5 @@ func (m *Instances) GetInstances() []*Instance {
 }
 
 func init() {
+	proto.RegisterEnum("protobuf.FeedVersion", FeedVersion_name, FeedVersion_value)
 }

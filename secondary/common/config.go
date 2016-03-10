@@ -699,6 +699,12 @@ var SystemConfig = Config{
 		false,
 		false, // mutable
 	},
+	"indexer.memdb.useDeltaInterleaving": ConfigValue{
+		false,
+		"Use delta interleaving mode for on-disk snapshots",
+		false,
+		false, // mutable
+	},
 	"indexer.useMutationSyncPool": ConfigValue{
 		false,
 		"Use sync pool for mutations",

@@ -16,16 +16,19 @@ import sifw "github.com/couchbase/indexing/secondary/tests/framework/secondaryin
 import du "github.com/couchbase/indexing/secondary/tests/framework/datautility"
 import tc "github.com/couchbase/indexing/secondary/tests/framework/common"
 
-//import tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
+import tv "github.com/couchbase/indexing/secondary/tests/framework/validation"
 import "github.com/couchbase/indexing/secondary/tests/framework/kvutility"
 
-func SkipTestRestfulAPI(t *testing.T) {
+func TestRestfulAPI(t *testing.T) {
 	log.Printf("In TestRestfulAPI()")
 
+	e := sifw.DropAllSecondaryIndexes(indexManagementAddress)
+	FailTestIfError(e, "Error in DropAllSecondaryIndexes", t)
+
 	docsToCreate := generateDocs(1000, "users.prod")
-	UpdateKVDocs(docsToCreate, docs)
 	log.Printf("Setting JSON docs in KV")
 	kvutility.SetKeyValues(docsToCreate, "default", "", clusterconfig.KVAddress)
+	UpdateKVDocs(docsToCreate, docs)
 
 	// get indexes
 	indexes, err := restful_getall()
@@ -382,7 +385,7 @@ func restful_lookup(ids []string) error {
 	reqbody := restful_clonebody(reqlookup)
 	reqbody["equal"] = `["Pyongyang"]`
 	reqbody["distinct"] = false
-	reqbody["limit"] = 100000
+	reqbody["limit"] = 1000000
 	reqbody["stale"] = "ok"
 	entries, err := getl(ids[0], reqbody)
 	if err != nil {
@@ -396,11 +399,10 @@ func restful_lookup(ids []string) error {
 	}
 
 	// second lookup
-	log.Println("LOOKUP with different params")
+	log.Println("LOOKUP with stale as false")
 	reqbody = restful_clonebody(reqlookup)
 	reqbody["equal"] = `["Pyongyang"]`
 	reqbody["distinct"] = true
-	delete(reqbody, "limit")
 	reqbody["stale"] = "false"
 	entries, err = getl(ids[0], reqbody)
 	if err != nil {
@@ -418,7 +420,6 @@ func restful_lookup(ids []string) error {
 	reqbody = restful_clonebody(reqlookup)
 	reqbody["equal"] = `["Rome"]`
 	reqbody["distinct"] = true
-	delete(reqbody, "limit")
 	reqbody["stale"] = "false"
 	entries, err = getl(ids[0], reqbody)
 	if err != nil {
@@ -477,7 +478,7 @@ func restful_rangescan(ids []string) error {
 	log.Println("RANGE cities - none")
 	reqbody := restful_clonebody(reqrange)
 	reqbody["inclusion"] = "both"
-	reqbody["limit"] = 100000
+	reqbody["limit"] = 1000000
 	reqbody["stale"] = "ok"
 	entries, err := getl(ids[0], reqbody)
 	if err != nil {
@@ -494,7 +495,7 @@ func restful_rangescan(ids []string) error {
 	log.Println("RANGE cities -low")
 	reqbody = restful_clonebody(reqrange)
 	reqbody["inclusion"] = "low"
-	reqbody["limit"] = 100000
+	reqbody["limit"] = 1000000
 	entries, err = getl(ids[0], reqbody)
 	if err != nil {
 		return err
@@ -510,7 +511,7 @@ func restful_rangescan(ids []string) error {
 	log.Println("RANGE cities -high")
 	reqbody = restful_clonebody(reqrange)
 	reqbody["inclusion"] = "high"
-	reqbody["limit"] = 100000
+	reqbody["limit"] = 1000000
 	reqbody["stale"] = "ok"
 	entries, err = getl(ids[0], reqbody)
 	if err != nil {
@@ -527,7 +528,7 @@ func restful_rangescan(ids []string) error {
 	log.Println("RANGE cities - both")
 	reqbody = restful_clonebody(reqrange)
 	reqbody["inclusion"] = "both"
-	reqbody["limit"] = 100000
+	reqbody["limit"] = 1000000
 	reqbody["stale"] = "false"
 	entries, err = getl(ids[0], reqbody)
 	if err != nil {
@@ -545,7 +546,6 @@ func restful_rangescan(ids []string) error {
 	reqbody = restful_clonebody(reqrange)
 	reqbody["startkey"] = `["0"]`
 	reqbody["endkey"] = `["9"]`
-	delete(reqbody, "limit")
 	reqbody["stale"] = "false"
 	entries, err = getl(ids[0], reqbody)
 	if err != nil {
@@ -671,68 +671,68 @@ func restful_countscan(ids []string) error {
 	log.Println("COUNT cities - none")
 	reqbody := restful_clonebody(reqcount)
 	reqbody["inclusion"] = "none"
-	reqbody["limit"] = 100000
+	reqbody["limit"] = 1000000
 	reqbody["stale"] = "ok"
 	count, err := getl(ids[0], reqbody)
 	if err != nil {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
-	_ = du.ExpectedScanResponse_string(
+	docScanResults := du.ExpectedScanResponse_string(
 		docs, "address.city", "A", "z", 0)
-	//if count != len(docScanResults) {
-	//	return fmt.Errorf("failed first count")
-	//}
+	if count != len(docScanResults) {
+		return fmt.Errorf("failed first count")
+	}
 
 	// second count
 	log.Println("COUNT cities -low")
 	reqbody = restful_clonebody(reqcount)
 	reqbody["inclusion"] = "low"
-	reqbody["limit"] = 100000
+	reqbody["limit"] = 1000000
 	count, err = getl(ids[0], reqbody)
 	if err != nil {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
-	_ = du.ExpectedScanResponse_string(
+	docScanResults = du.ExpectedScanResponse_string(
 		docs, "address.city", "A", "z", 1)
-	//if count != len(docScanResults) {
-	//	return fmt.Errorf("failed second count")
-	//}
+	if count != len(docScanResults) {
+		return fmt.Errorf("failed second count")
+	}
 
 	// third count
 	log.Println("COUNT cities -high")
 	reqbody = restful_clonebody(reqcount)
 	reqbody["inclusion"] = "high"
-	reqbody["limit"] = 100000
+	reqbody["limit"] = 1000000
 	reqbody["stale"] = "ok"
 	count, err = getl(ids[0], reqbody)
 	if err != nil {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
-	_ = du.ExpectedScanResponse_string(
+	docScanResults = du.ExpectedScanResponse_string(
 		docs, "address.city", "A", "z", 2)
-	//if count != len(docScanResults) {
-	//	return fmt.Errorf("failed third count")
-	//}
+	if count != len(docScanResults) {
+		return fmt.Errorf("failed third count")
+	}
 
 	// fourth count
 	log.Println("COUNT cities - both")
 	reqbody = restful_clonebody(reqcount)
 	reqbody["inclusion"] = "both"
-	reqbody["limit"] = 100000
+	reqbody["limit"] = 1000000
 	reqbody["stale"] = "false"
 	count, err = getl(ids[0], reqbody)
 	if err != nil {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
-	_ = du.ExpectedScanResponse_string(
+	docScanResults = du.ExpectedScanResponse_string(
 		docs, "address.city", "A", "z", 3)
-	//if count != len(docScanResults) {
-	//	return fmt.Errorf("failed fourth count")
-	//}
+	if count != len(docScanResults) {
+		return fmt.Errorf("failed fourth count")
+	}
 
 	// fifth
 	log.Println("COUNT missing cities")
@@ -746,11 +746,11 @@ func restful_countscan(ids []string) error {
 		return err
 	}
 	log.Printf("number of entries %v\n", count)
-	_ = du.ExpectedScanResponse_string(
+	docScanResults = du.ExpectedScanResponse_string(
 		docs, "address.city", "0", "9", 3)
-	//if count != len(docScanResults) {
-	//	return fmt.Errorf("failed fifth count")
-	//}
+	if count != len(docScanResults) {
+		return fmt.Errorf("failed fifth count")
+	}
 	return nil
 }
 
@@ -777,17 +777,15 @@ func validateEntries(expected tc.ScanResponse, entries []interface{}) error {
 		m := entry.(map[string]interface{})
 		out[m["docid"].(string)] = m["key"].([]interface{})
 	}
-	//TODO: fix this to get CI passing.
-	//if err := tv.Validate(expected, out); err != nil {
-	//	return err
-	//}
+	if err := tv.Validate(expected, out); err != nil {
+		return err
+	}
 	return nil
 }
 
 var reqcreate = map[string]interface{}{
 	"name":      "myindex",
 	"bucket":    "default",
-	"using":     "memdb",
 	"exprType":  "N1QL",
 	"partnExpr": "",
 	"whereExpr": "",
@@ -799,7 +797,7 @@ var reqcreate = map[string]interface{}{
 var reqlookup = map[string]interface{}{
 	"equal":    `["a"]`,
 	"distinct": false,
-	"limit":    100000,
+	"limit":    1000000,
 	"stale":    "ok",
 }
 
@@ -808,12 +806,12 @@ var reqrange = map[string]interface{}{
 	"endkey":    `["z"]`,
 	"inclusion": "both",
 	"distinct":  false,
-	"limit":     100000,
+	"limit":     1000000,
 	"stale":     "ok",
 }
 
 var reqscanall = map[string]interface{}{
-	"limit": 100000,
+	"limit": 1000000,
 	"stale": "ok",
 }
 
@@ -821,6 +819,6 @@ var reqcount = map[string]interface{}{
 	"startkey":  `["A"]`,
 	"endkey":    `["z"]`,
 	"inclusion": "both",
-	"limit":     100000,
+	"limit":     1000000,
 	"stale":     "ok",
 }

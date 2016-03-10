@@ -3951,16 +3951,18 @@ func (idx *indexer) monitorMemUsage() {
 			low_mem_mark := idx.config["low_mem_mark"].Float64()
 			min_oom_mem := idx.config["min_oom_memory"].Uint64()
 
+			gcDone := false
 			if idx.needsGC() {
 				start := time.Now()
 				runtime.GC()
 				elapsed := time.Since(start)
 				logging.Infof("Indexer::monitorMemUsage ManualGC Time Taken %v", elapsed)
 				mm.FreeOSMemory()
+				gcDone = true
 			}
 
 			var mem_used uint64
-			if idx.getIndexerState() == common.INDEXER_PAUSED {
+			if idx.getIndexerState() == common.INDEXER_PAUSED || gcDone {
 				mem_used = idx.memoryUsed(true)
 			} else {
 				mem_used = idx.memoryUsed(false)

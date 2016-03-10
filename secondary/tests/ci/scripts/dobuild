@@ -41,7 +41,7 @@ git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull unstable"
 current="`git rev-parse HEAD`"
 test -f ~/indexing.good || (echo $current > ~/indexing.good)
 good="`cat ~/indexing.good`"
-echo -n "Indexing changes since last good build: "
+echo -n "indexing is at <a href='https://github.com/couchbase/indexing/commit/$current'>${current:0:7}</a>, changes since last good build: "
 if [ "$current" != "$good" ]; then
   echo
   git log --pretty='format: <a href="https://github.com/couchbase/indexing/commit/%H">%h</a> %s' HEAD...$good

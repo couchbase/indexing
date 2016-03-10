@@ -96,18 +96,21 @@ type IndexEvaluator struct {
 	pkExpr   interface{}   // compiled expression
 	whExpr   interface{}   // compiled expression
 	instance *IndexInst
+	version  FeedVersion
 }
 
 // NewIndexEvaluator returns a reference to a new instance
 // of IndexEvaluator.
-func NewIndexEvaluator(instance *IndexInst) (*IndexEvaluator, error) {
+func NewIndexEvaluator(instance *IndexInst,
+	version FeedVersion) (*IndexEvaluator, error) {
+
 	var err error
 
-	ie := &IndexEvaluator{instance: instance}
+	ie := &IndexEvaluator{instance: instance, version: version}
 	// compile expressions once and reuse it many times.
 	defn := ie.instance.GetDefinition()
-	switch defn.GetExprType() {
-	case ExprType_JavaScript:
+	exprtype := defn.GetExprType()
+	switch exprtype {
 	case ExprType_N1QL:
 		// expressions to evaluate secondary-key
 		exprs := defn.GetSecExpressions()
@@ -135,6 +138,10 @@ func NewIndexEvaluator(instance *IndexInst) (*IndexEvaluator, error) {
 				ie.whExpr = cExprs[0]
 			}
 		}
+
+	default:
+		logging.Errorf("invalid expression type %v\n", exprtype)
+		return nil, fmt.Errorf("invalid expression type %v", exprtype)
 	}
 	return ie, nil
 }
@@ -186,13 +193,18 @@ func (ie *IndexEvaluator) StreamEndData(
 
 // TransformRoute implement Evaluator{} interface.
 func (ie *IndexEvaluator) TransformRoute(
-	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{}, encodeBuf []byte) (err error) {
+	vbuuid uint64, m *mc.DcpEvent, data map[string]interface{},
+	encodeBuf []byte) (err error) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			err = fmt.Errorf("%v", r)
 		}
 	}()
+
+	if ie.version < FeedVersion_watson {
+		encodeBuf = nil
+	}
 
 	var npkey /*new-partition*/, opkey /*old-partition*/, nkey, okey []byte
 	instn := ie.instance
@@ -290,7 +302,6 @@ func (ie *IndexEvaluator) evaluate(
 
 	exprType := defn.GetExprType()
 	switch exprType {
-	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		return N1QLTransform(docid, doc, ie.skExprs, meta, encodeBuf)
 	}
@@ -309,7 +320,6 @@ func (ie *IndexEvaluator) partitionKey(
 
 	exprType := defn.GetExprType()
 	switch exprType {
-	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		return N1QLTransform(nil, doc, []interface{}{ie.pkExpr}, meta, encodeBuf)
 	}
@@ -326,7 +336,6 @@ func (ie *IndexEvaluator) wherePredicate(
 	defn := ie.instance.GetDefinition()
 	exprType := defn.GetExprType()
 	switch exprType {
-	case ExprType_JavaScript:
 	case ExprType_N1QL:
 		// TODO: can be optimized by using a custom N1QL-evaluator.
 		out, err := N1QLTransform(nil, doc, []interface{}{ie.whExpr}, meta, encodeBuf)

@@ -6,6 +6,11 @@ package protobuf;
 import "common.proto";
 import "index.proto";
 
+enum FeedVersion {
+    sherlock         = 1;
+    watson           = 2;
+}
+
 // Requested by Coordinator/indexer to learn vbuckets
 // hosted by kvnodes.
 message VbmapRequest {
@@ -40,7 +45,8 @@ message MutationTopicRequest {
     required string   endpointType  = 2; // settings to RouterEndpointFactory
     repeated TsVbuuid reqTimestamps = 3; // list of timestamps, per bucket
     // initial list of instances applicable for this topic
-    repeated Instance instances     = 4;
+    repeated Instance    instances  = 4;
+    optional FeedVersion version    = 5 [default=sherlock];
 }
 
 // Response back for
@@ -84,7 +90,8 @@ message AddBucketsRequest {
     required string   topic         = 1;
     repeated TsVbuuid reqTimestamps = 2; // per bucket timestamps
     // list of instances applicable for buckets.
-    repeated Instance instances     = 3;
+    repeated Instance    instances     = 3;
+    optional FeedVersion version   = 4 [default=sherlock];
 }
 
 // DelBucketsRequest will shutdown vbucket-streams
@@ -98,8 +105,9 @@ message DelBucketsRequest {
 // AddInstancesRequest to add index-instances to a topic.
 // Respond back with TimestampResponse
 message AddInstancesRequest {
-    required string   topic     = 1;
-    repeated Instance instances = 2; // instances to be added to this topic
+    required string      topic     = 1;
+    repeated Instance    instances = 2; // instances to be added to this topic
+    optional FeedVersion version   = 3 [default=sherlock];
 }
 
 // DelInstancesRequest to add index-instances to a topic.

@@ -27,9 +27,9 @@ import (
 	"io/ioutil"
 	"math"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -39,6 +39,8 @@ const (
 	opUpdate = iota
 	opDelete
 )
+
+const tmpDirName = ".tmp"
 
 type indexMutation struct {
 	op    int
@@ -220,6 +222,10 @@ func (slice *memdbSlice) initStores() {
 	cfg := memdb.DefaultConfig()
 	if slice.sysconf["memdb.useMemMgmt"].Bool() {
 		cfg.UseMemoryMgmt(mm.Malloc, mm.Free)
+	}
+
+	if slice.sysconf["memdb.useDeltaInterleaving"].Bool() {
+		cfg.UseDeltaInterleaving()
 	}
 
 	cfg.SetKeyComparator(byteItemCompare)
@@ -581,7 +587,7 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	s.Open()
 	s.slice.IncrRef()
 	if s.committed {
-		s.Open()
+		s.info.MainSnap.Open()
 		go mdb.doPersistSnapshot(s)
 	}
 
@@ -598,13 +604,12 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	var concurrency int = 1
 
-	defer s.Close()
 	if platform.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
 		defer platform.StoreInt32(&mdb.isPersistorActive, 0)
 
 		t0 := time.Now()
 		dir := newSnapshotPath(mdb.path)
-		tmpdir := filepath.Join(mdb.path, ".tmp")
+		tmpdir := filepath.Join(mdb.path, tmpDirName)
 		manifest := filepath.Join(tmpdir, "manifest.json")
 		os.RemoveAll(tmpdir)
 		mdb.confLock.RLock()
@@ -619,7 +624,8 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		err := mdb.mainstore.StoreToDisk(tmpdir, s.info.MainSnap, concurrency, nil)
 		if err == nil {
 			var fd *os.File
-			bs, err := json.Marshal(s.info)
+			var bs []byte
+			bs, err = json.Marshal(s.info)
 			if err == nil {
 				fd, err = os.OpenFile(manifest, os.O_WRONLY|os.O_CREATE, 0755)
 				_, err = fd.Write(bs)
@@ -650,6 +656,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	} else {
 		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk"+
 			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
+		s.Close()
 	}
 }
 
@@ -659,7 +666,7 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 		toRemove := len(manifests) - keepn
 		manifests = manifests[:toRemove]
 		for _, m := range manifests {
-			dir := path.Dir(m)
+			dir := filepath.Dir(m)
 			logging.Infof("MemDBSlice Removing disk snapshot %v", dir)
 			os.RemoveAll(dir)
 		}
@@ -667,8 +674,14 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 }
 
 func (mdb *memdbSlice) getSnapshotManifests() []string {
+	var files []string
 	pattern := "*/manifest.json"
-	files, _ := filepath.Glob(filepath.Join(mdb.path, pattern))
+	all, _ := filepath.Glob(filepath.Join(mdb.path, pattern))
+	for _, f := range all {
+		if !strings.Contains(f, tmpDirName) {
+			files = append(files, f)
+		}
+	}
 	sort.Strings(files)
 	return files
 }
@@ -680,7 +693,7 @@ func (mdb *memdbSlice) GetSnapshots() ([]SnapshotInfo, error) {
 	files := mdb.getSnapshotManifests()
 	for i := len(files) - 1; i >= 0; i-- {
 		f := files[i]
-		info := &memdbSnapshotInfo{dataPath: path.Dir(f)}
+		info := &memdbSnapshotInfo{dataPath: filepath.Dir(f)}
 		fd, err := os.Open(f)
 		if err == nil {
 			defer fd.Close()
@@ -786,15 +799,17 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 		wg.Wait()
 	}
 
+	dur := time.Since(t0)
 	if err == nil {
 		snapInfo.MainSnap = snap
+		logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v finished reading %v. Took %v",
+			mdb.id, mdb.idxInstId, snapInfo.dataPath, dur)
+	} else {
+		logging.Errorf("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v failed to load snapshot %v error(%v).",
+			mdb.id, mdb.idxInstId, snapInfo.dataPath, err)
 	}
 
-	dur := time.Since(t0)
-	logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v finished reading %v. Took %v",
-		mdb.id, mdb.idxInstId, snapInfo.dataPath, dur)
 	mdb.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
-
 	return err
 }
 
@@ -1309,5 +1324,6 @@ func (s *memdbSnapshot) iterEqualKeys(k IndexKey, it *memdb.Iterator,
 
 func newSnapshotPath(dirpath string) string {
 	file := time.Now().Format("snapshot.2006-01-02.15:04:05.000")
+	file = strings.Replace(file, ":", "", -1)
 	return filepath.Join(dirpath, file)
 }
