@@ -18,10 +18,10 @@ import (
 	"github.com/couchbase/indexing/secondary/common/queryutil"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/natsort"
 	"github.com/couchbase/indexing/secondary/platform"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1455,7 +1455,7 @@ func newFdbFile(dirpath string, newVersion bool) string {
 
 	pattern := fmt.Sprintf("data.fdb.*")
 	files, _ := filepath.Glob(filepath.Join(dirpath, pattern))
-	sort.Strings(files)
+	natsort.Strings(files)
 	// Pick the first file with least version
 	if len(files) > 0 {
 		filename := filepath.Base(files[0])
