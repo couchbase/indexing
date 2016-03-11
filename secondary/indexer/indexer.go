@@ -3749,7 +3749,11 @@ func (idx *indexer) handleResetStats() {
 }
 
 func (idx *indexer) memoryUsedStorage() int64 {
-	return int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse()) + int64(nodetable.MemoryInUse())
+	mem_used := int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse()) + int64(nodetable.MemoryInUse())
+	if common.GetStorageMode() == common.MOI {
+		mem_used += int64(mm.Size())
+	}
+	return mem_used
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst,
@@ -4193,6 +4197,10 @@ func (idx *indexer) memoryUsed(forceRefresh bool) uint64 {
 	}
 
 	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
+	if common.GetStorageMode() == common.MOI {
+		mem_used += mm.Size()
+	}
+
 	return mem_used
 }
 
