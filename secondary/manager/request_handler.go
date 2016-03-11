@@ -103,6 +103,7 @@ type IndexStatus struct {
 	IsPrimary  bool               `json:"isPrimary,omitempty"`
 	SecExprs   []string           `json:"secExprs,omitempty"`
 	WhereExpr  string             `json:"where,omitempty"`
+	IndexType  string             `json:"indexType,omitempty"`
 	Status     string             `json:"status,omitempty"`
 	Definition string             `json:"definition"`
 	Hosts      []string           `json:"hosts,omitempty"`
@@ -291,7 +292,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 
 			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
 			if err != nil {
-				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr + "/getLocalIndexMetadata", err)
+				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
@@ -313,7 +314,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 
 			resp, err = getWithAuth(addr + "/stats?async=true")
 			if err != nil {
-				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr + "/stats?async=true", err)
+				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/stats?async=true", err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
@@ -376,6 +377,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 							IsPrimary:  defn.IsPrimary,
 							SecExprs:   defn.SecExprs,
 							WhereExpr:  defn.WhereExpr,
+							IndexType:  string(defn.Using),
 							Status:     stateStr,
 							Error:      errStr,
 							Hosts:      []string{curl},
@@ -438,7 +440,7 @@ func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
 
 			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
 			if err != nil {
-				logging.Debugf("RequestHandler::getIndexMetadata: Error while retrieving %v with auth %v", addr + "/getLocalIndexMetadata", err)
+				logging.Debugf("RequestHandler::getIndexMetadata: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
 				return nil, errors.New(fmt.Sprintf("Fail to retrieve index definition from url %s", addr))
 			}
 
