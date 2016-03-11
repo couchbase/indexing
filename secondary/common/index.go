@@ -12,6 +12,7 @@ package common
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type IndexKey []byte
@@ -335,7 +336,7 @@ const (
 )
 
 func IsValidIndexType(t string) bool {
-	switch t {
+	switch strings.ToLower(t) {
 	case ForestDB, MemDB, MemoryOptimized:
 		return true
 	}

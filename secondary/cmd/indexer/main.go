@@ -45,7 +45,7 @@ func main() {
 	enableManager := fset.Bool("enable_manager", true, "Enable Index Manager")
 	auth := fset.String("auth", "", "Auth user and password")
 	fset.String("nodeUUID", "", "UUID of the node")
-	fset.String("storageMode", "", "Storage mode of indexer (forestdb/memory_optimized)")
+	storageMode := fset.String("storageMode", "", "Storage mode of indexer (forestdb/memory_optimized)")
 
 	for i := 1; i < len(os.Args); i++ {
 		if err := fset.Parse(os.Args[i : i+1]); err != nil {
@@ -95,6 +95,14 @@ func main() {
 
 	if err := os.MkdirAll(*diagDir, 0755); err != nil {
 		common.CrashOnError(err)
+	}
+
+	if *storageMode != "" {
+		if common.SetStorageModeStr(*storageMode) {
+			logging.Infof("Indexer::Main Storage Mode Set %v", common.GetStorageMode())
+		} else {
+			logging.Infof("Indexer::Main Invalid Storage Mode %v", *storageMode)
+		}
 	}
 
 	_, msg := indexer.NewIndexer(config)

@@ -14,6 +14,7 @@ import (
 	"log"
 	"runtime"
 	"testing"
+	"time"
 )
 
 const n1qperf = "n1qlperf"
@@ -49,11 +50,6 @@ func init() {
 	kvaddress = clusterconfig.KVAddress
 	indexManagementAddress = clusterconfig.KVAddress
 	indexScanAddress = clusterconfig.KVAddress
-	if clusterconfig.IndexUsing != "" {
-		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
-		log.Printf("Using %v for creating indexes", clusterconfig.IndexUsing)
-		secondaryindex.IndexUsing = clusterconfig.IndexUsing
-	}
 
 	if perftool == n1qperf {
 		usen1qlperf = true
@@ -67,6 +63,18 @@ func init() {
 	}
 
 	proddir, bagdir = tc.FetchMonsterToolPath()
+
+	if clusterconfig.IndexUsing != "" {
+		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
+		log.Printf("Using %v for creating indexes", clusterconfig.IndexUsing)
+		secondaryindex.IndexUsing = clusterconfig.IndexUsing
+
+		err := secondaryindex.ChangeIndexerSettings("indexer.settings.storage_mode", secondaryindex.IndexUsing, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Error in ChangeIndexerSettings")
+	}
+
+	time.Sleep(5 * time.Second)
+
 }
 
 func FailTestIfError(err error, msg string, t *testing.T) {

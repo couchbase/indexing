@@ -276,7 +276,16 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 			defn.Using = common.IndexType(common.GetStorageMode().String())
 		} else {
 			//default to forestdb
-			defn.Using = "forestdb"
+			defn.Using = common.ForestDB
+		}
+	} else {
+		if common.IsValidIndexType(string(defn.Using)) {
+			defn.Using = common.IndexType(strings.ToLower(string(defn.Using)))
+		} else {
+			err := fmt.Sprintf("LifecycleMgr.handleCreateIndex() : createIndex fails."+
+				"Reason = Unsupported Using Clause %v", string(defn.Using))
+			logging.Errorf(err)
+			return errors.New(err)
 		}
 	}
 

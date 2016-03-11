@@ -2,5 +2,5 @@
    "KVAddress": "127.0.0.1:9000",
    "Username": "Administrator",
    "Password": "asdasd",
-   "IndexUsing": "memdb"
+   "IndexUsing": "memory_optimized"
 }

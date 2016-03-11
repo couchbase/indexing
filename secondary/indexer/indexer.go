@@ -276,9 +276,26 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		return nil, &MsgError{err: Error{cause: err}}
 	}
 
-	//set storage mode
-	if common.GetStorageMode() == common.NOT_SET {
-		common.SetStorageModeStr(idx.config["settings.storage_mode"].String())
+	//based on bootstrap, validate the storage mode
+	if common.GetStorageMode() != common.NOT_SET {
+		if !idx.canSetStorageMode(common.GetStorageMode().String()) {
+			common.SetStorageMode(common.NOT_SET)
+			logging.Infof("Indexer::NewIndexer Storage Mode UnSet")
+		}
+	}
+
+	//if storageMode has changed in settings while bootstrap was in progress
+	//indexer needs to restart
+	confStorageMode := strings.ToLower(idx.config["settings.storage_mode"].String())
+	if confStorageMode != "" && common.GetStorageMode().String() != confStorageMode {
+		if idx.canSetStorageMode(confStorageMode) {
+			if common.SetStorageModeStr(confStorageMode) {
+				logging.Infof("Indexer::NewIndexer Storage Mode Set %v", common.GetStorageMode())
+				idx.stats.needsRestart.Set(true)
+			} else {
+				logging.Warnf("Indexer::NewIndexer Invalid Storage Mode %v. Ignored.", confStorageMode)
+			}
+		}
 	}
 
 	if !idx.enableManager {
@@ -669,8 +686,33 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 		cfgUpdate := msg.(*MsgConfigUpdate)
 		newConfig := cfgUpdate.GetConfig()
 
+		confStorageMode := strings.ToLower(newConfig["settings.storage_mode"].String())
 		if common.GetStorageMode() == common.NOT_SET {
-			common.SetStorageModeStr(newConfig["settings.storage_mode"].String())
+			if confStorageMode != "" {
+				if idx.canSetStorageMode(confStorageMode) {
+					if common.SetStorageModeStr(confStorageMode) {
+						logging.Infof("Indexer::ConfigUpdate Storage Mode Set %v", common.GetStorageMode())
+						idx.stats.needsRestart.Set(true)
+					} else {
+						logging.Infof("Indexer::ConfigUpdate Invalid Storage Mode %v", confStorageMode)
+					}
+				}
+			}
+
+		} else {
+			if confStorageMode != "" && confStorageMode != common.GetStorageMode().String() {
+				if idx.checkAnyValidIndex() {
+					logging.Warnf("Indexer::ConfigUpdate Ignore New Storage Mode %v. Already Set %v. Valid Indexes Found.",
+						confStorageMode, common.GetStorageMode())
+				} else {
+					if common.SetStorageModeStr(confStorageMode) {
+						logging.Infof("Indexer::ConfigUpdate Storage Mode Set %v", common.GetStorageMode())
+						idx.stats.needsRestart.Set(true)
+					} else {
+						logging.Infof("Indexer::ConfigUpdate Invalid Storage Mode %v", confStorageMode)
+					}
+				}
+			}
 		}
 
 		if newConfig["settings.memory_quota"].Uint64() !=
@@ -880,21 +922,17 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 	//validate storage mode with using specified in CreateIndex
 	if common.GetStorageMode() == common.NOT_SET {
-		if common.SetStorageModeStr(string(indexInst.Defn.Using)) {
-			logging.Infof("Indexer: Storage Mode Set %v", common.GetStorageMode())
-		} else {
-			errStr := fmt.Sprintf("Invalid Using Clause In Create Index %v", indexInst.Defn.Using)
-			logging.Errorf(errStr)
+		errStr := "Please Set Indexer Storage Mode Before Create Index"
+		logging.Errorf(errStr)
 
-			if clientCh != nil {
-				clientCh <- &MsgError{
-					err: Error{severity: FATAL,
-						cause:    errors.New(errStr),
-						category: INDEXER}}
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
 
-			}
-			return
 		}
+		return
 	} else {
 		if common.IndexTypeToStorageMode(indexInst.Defn.Using) != common.GetStorageMode() {
 
@@ -2947,7 +2985,7 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		common.CrashOnError(err)
 	}
 
-	if common.GetStorageMode() == common.MEMDB {
+	if common.GetStorageMode() == common.MOI {
 		idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
 			mType: CLUST_MGR_GET_LOCAL,
 			key:   INDEXER_STATE_KEY,
@@ -3100,20 +3138,6 @@ func (idx *indexer) initFromPersistedState() error {
 		idx.indexInstMap[inst.InstId] = inst
 		idx.indexPartnMap[inst.InstId] = partnInstMap
 
-		if common.GetStorageMode() == common.NOT_SET {
-			if common.SetStorageModeStr(string(inst.Defn.Using)) {
-				logging.Infof("Indexer: Storage Mode Set As %v", common.GetStorageMode())
-			} else {
-				logging.Fatalf("Invalid Using Clause in Index Defn Recovered %v", inst.Defn)
-				common.CrashOnError(ErrInvalidMetadata)
-			}
-		} else {
-			if common.IndexTypeToStorageMode(inst.Defn.Using) != common.GetStorageMode() {
-				logging.Fatalf("Invalid Using Clause in Index Defn Recovered for "+
-					"Storage Mode %v %v", common.GetStorageMode(), inst.Defn)
-				common.CrashOnError(ErrInvalidMetadata)
-			}
-		}
 	}
 
 	return nil
@@ -3725,7 +3749,11 @@ func (idx *indexer) handleResetStats() {
 }
 
 func (idx *indexer) memoryUsedStorage() int64 {
-	return int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse()) + int64(nodetable.MemoryInUse())
+	mem_used := int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse()) + int64(nodetable.MemoryInUse())
+	if common.GetStorageMode() == common.MOI {
+		mem_used += int64(mm.Size())
+	}
+	return mem_used
 }
 
 func NewSlice(id SliceId, indInst *common.IndexInst,
@@ -3944,7 +3972,7 @@ func (idx *indexer) monitorMemUsage() {
 
 		pause_if_oom := idx.config["pause_if_memory_full"].Bool()
 
-		if common.GetStorageMode() == common.MEMDB && pause_if_oom {
+		if common.GetStorageMode() == common.MOI && pause_if_oom {
 
 			memory_quota := idx.config["settings.memory_quota"].Uint64()
 			high_mem_mark := idx.config["high_mem_mark"].Float64()
@@ -4169,6 +4197,10 @@ func (idx *indexer) memoryUsed(forceRefresh bool) uint64 {
 	}
 
 	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
+	if common.GetStorageMode() == common.MOI {
+		mem_used += mm.Size()
+	}
+
 	return mem_used
 }
 
@@ -4233,4 +4265,33 @@ func (idx *indexer) logMemstats() {
 		time.Sleep(time.Second * time.Duration(idx.config["memstatTick"].Int()))
 	}
 
+}
+
+func (idx *indexer) checkAnyValidIndex() bool {
+
+	for _, inst := range idx.indexInstMap {
+
+		if inst.State == common.INDEX_STATE_ACTIVE ||
+			inst.State == common.INDEX_STATE_INITIAL ||
+			inst.State == common.INDEX_STATE_CATCHUP ||
+			inst.State == common.INDEX_STATE_CREATED {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (idx *indexer) canSetStorageMode(sm string) bool {
+
+	for _, inst := range idx.indexInstMap {
+
+		if common.IndexTypeToStorageMode(inst.Defn.Using).String() != sm &&
+			(inst.State != common.INDEX_STATE_DELETED || inst.State != common.INDEX_STATE_ERROR) {
+			logging.Warnf("Indexer::canSetStorageMode Cannot Set Storage Mode %v. Found Index %v", sm, inst)
+			return false
+		}
+	}
+
+	return true
 }

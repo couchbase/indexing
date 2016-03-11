@@ -28,6 +28,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -220,11 +221,11 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 func (slice *memdbSlice) initStores() {
 	cfg := memdb.DefaultConfig()
-	if slice.sysconf["memdb.useMemMgmt"].Bool() {
+	if slice.sysconf["moi.useMemMgmt"].Bool() && runtime.GOOS != "windows" {
 		cfg.UseMemoryMgmt(mm.Malloc, mm.Free)
 	}
 
-	if slice.sysconf["memdb.useDeltaInterleaving"].Bool() {
+	if slice.sysconf["moi.useDeltaInterleaving"].Bool() {
 		cfg.UseDeltaInterleaving()
 	}
 
@@ -613,7 +614,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		manifest := filepath.Join(tmpdir, "manifest.json")
 		os.RemoveAll(tmpdir)
 		mdb.confLock.RLock()
-		max_threads := mdb.sysconf["settings.memdb.persistence_threads"].Int()
+		max_threads := mdb.sysconf["settings.moi.persistence_threads"].Int()
 		total := platform.LoadInt64(&totalMemDBItems)
 		indexCount := mdb.GetCommittedCount()
 		if total > 0 {
@@ -787,7 +788,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 	}
 
 	mdb.confLock.RLock()
-	concurrency := mdb.sysconf["settings.memdb.recovery_threads"].Int()
+	concurrency := mdb.sysconf["settings.moi.recovery_threads"].Int()
 	mdb.confLock.RUnlock()
 
 	snap, err := mdb.mainstore.LoadFromDisk(snapInfo.dataPath, concurrency, backIndexCallback)
@@ -833,7 +834,7 @@ func (mdb *memdbSlice) waitPersist() {
 		//check for outstanding mutations. If there are
 		//none, proceed with the commit.
 		mdb.confLock.RLock()
-		commitPollInterval := mdb.sysconf["storage.memdb.commitPollInterval"].Uint64()
+		commitPollInterval := mdb.sysconf["storage.moi.commitPollInterval"].Uint64()
 		mdb.confLock.RUnlock()
 
 		for {
