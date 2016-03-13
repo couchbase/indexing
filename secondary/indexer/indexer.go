@@ -643,14 +643,22 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 		idx.streamBucketFlushInProgress[streamId][bucket] = true
 
-		idx.mutMgrCmdCh <- &MsgMutMgrFlushMutationQueue{
-			mType:     MUT_MGR_PERSIST_MUTATION_QUEUE,
-			bucket:    bucket,
-			ts:        ts,
-			streamId:  streamId,
-			changeVec: changeVec}
+		if ts.GetSnapType() == common.FORCE_COMMIT {
+			idx.storageMgrCmdCh <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
+				streamId: streamId,
+				bucket:   bucket,
+				ts:       ts}
+			<-idx.storageMgrCmdCh
+		} else {
+			idx.mutMgrCmdCh <- &MsgMutMgrFlushMutationQueue{
+				mType:     MUT_MGR_PERSIST_MUTATION_QUEUE,
+				bucket:    bucket,
+				ts:        ts,
+				streamId:  streamId,
+				changeVec: changeVec}
 
-		<-idx.mutMgrCmdCh
+			<-idx.mutMgrCmdCh
+		}
 
 	case MUT_MGR_ABORT_PERSIST:
 

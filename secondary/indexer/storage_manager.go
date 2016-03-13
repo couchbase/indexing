@@ -239,9 +239,12 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 	defer destroyIndexSnapMap(indexSnapMap)
 
 	var needsCommit bool
+	var forceCommit bool
 	snapType := tsVbuuid.GetSnapType()
 	if snapType == common.DISK_SNAP {
 		needsCommit = true
+	} else if snapType == common.FORCE_COMMIT {
+		forceCommit = true
 	}
 
 	var wg sync.WaitGroup
@@ -296,7 +299,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 						//and slice has some changes. Skip only in-memory snapshot
 						//in case of unchanged data.
 						if latestSnapshot == nil || (ts.GreaterThan(snapTs) &&
-							(slice.IsDirty() || needsCommit)) {
+							(slice.IsDirty() || needsCommit)) || forceCommit {
 
 							newTsVbuuid := tsVbuuid.Copy()
 							var err error
@@ -304,7 +307,11 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 							var newSnapshot Snapshot
 
 							logging.Tracef("StorageMgr::handleCreateSnapshot Creating New Snapshot "+
-								"Index: %v PartitionId: %v SliceId: %v Commit: %v", idxInstId, partnId, slice.Id(), needsCommit)
+								"Index: %v PartitionId: %v SliceId: %v Commit: %v Force: %v", idxInstId, partnId, slice.Id(), needsCommit, forceCommit)
+
+							if forceCommit {
+								needsCommit = forceCommit
+							}
 
 							snapCreateStart := time.Now()
 							if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {

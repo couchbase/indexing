@@ -308,6 +308,7 @@ const (
 	NO_SNAP IndexSnapType = iota
 	DISK_SNAP
 	INMEM_SNAP
+	FORCE_COMMIT
 )
 
 func (s IndexSnapType) String() string {
@@ -319,6 +320,8 @@ func (s IndexSnapType) String() string {
 		return "DISK_SNAP"
 	case INMEM_SNAP:
 		return "INMEM_SNAP"
+	case FORCE_COMMIT:
+		return "FORCE_COMMIT"
 	default:
 		return "INVALID_SNAP_TYPE"
 	}
