@@ -868,6 +868,8 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 			delete(m.streamFlusherStopChMap[streamId], bucket)
 		}()
 
+		stats.memoryUsedQueue.Set(platform.LoadInt64(&m.memUsed))
+
 		//send the response to supervisor
 		if msg.GetMsgType() == MSG_SUCCESS {
 			m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,

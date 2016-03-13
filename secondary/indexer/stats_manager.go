@@ -191,6 +191,7 @@ type IndexerStats struct {
 	memoryQuota       stats.Int64Val
 	memoryUsed        stats.Int64Val
 	memoryUsedStorage stats.Int64Val
+	memoryUsedQueue   stats.Int64Val
 	needsRestart      stats.BoolVal
 	statsResponse     stats.TimingStat
 	notFoundError     stats.Int64Val
@@ -205,6 +206,7 @@ func (s *IndexerStats) Init() {
 	s.memoryQuota.Init()
 	s.memoryUsed.Init()
 	s.memoryUsedStorage.Init()
+	s.memoryUsedQueue.Init()
 	s.needsRestart.Init()
 	s.statsResponse.Init()
 	s.indexerState.Init()
@@ -262,6 +264,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 	addStat("memory_quota", is.memoryQuota.Value())
 	addStat("memory_used", is.memoryUsed.Value())
 	addStat("memory_used_storage", is.memoryUsedStorage.Value())
+	addStat("memory_used_queue", is.memoryUsedQueue.Value())
 	addStat("needs_restart", is.needsRestart.Value())
 	storageMode := fmt.Sprintf("%s", common.GetStorageMode())
 	addStat("storage_mode", storageMode)
