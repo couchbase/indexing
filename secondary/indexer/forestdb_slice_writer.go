@@ -53,6 +53,7 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.get_bytes = platform.NewAlignedInt64(0)
 	slice.insert_bytes = platform.NewAlignedInt64(0)
 	slice.delete_bytes = platform.NewAlignedInt64(0)
+	slice.extraSnapDataSize = platform.NewAlignedInt64(0)
 	slice.flushedCount = platform.NewAlignedUint64(0)
 	slice.committedCount = platform.NewAlignedUint64(0)
 
@@ -177,6 +178,10 @@ type fdbSlice struct {
 	flushedCount platform.AlignedUint64
 	// persisted items count
 	committedCount platform.AlignedUint64
+
+	// Extra data overhead due to additional snapshots
+	// in the file. This is computed immediately after compaction.
+	extraSnapDataSize platform.AlignedInt64
 
 	path     string
 	currfile string
@@ -1183,33 +1188,45 @@ func (fdb *fdbSlice) IsDirty() bool {
 	return fdb.isDirty
 }
 
-func (fdb *fdbSlice) findCompactMarker(fd *forestdb.File) (*forestdb.SnapMarker, forestdb.SeqNum, *forestdb.SnapInfos, error) {
-	var snapMarker *forestdb.SnapMarker
-	var compactSeqNum forestdb.SeqNum
-	var snap *forestdb.SnapInfos
-	var err error
+func (fdb *fdbSlice) Compact() error {
+	fdb.IncrRef()
+	defer fdb.DecrRef()
 
+	fdb.setIsCompacting(true)
+	defer fdb.setIsCompacting(false)
+
+	if !fdb.canRunCompaction() {
+		logging.Infof("ForestDBSlice::Skip Compaction outside of compaction interval."+
+			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
+		return nil
+	}
+
+	//get oldest snapshot upto which compaction can be done
 	infos, err := fdb.getSnapshotsMeta()
 	if err != nil {
-		return snapMarker, compactSeqNum, snap, err
+		return err
 	}
 
 	sic := NewSnapshotInfoContainer(infos)
 
 	osnap := sic.GetOldest()
 	if osnap == nil {
-		return snapMarker, compactSeqNum, snap, errors.New("No snapshot found")
+		logging.Infof("ForestDBSlice::Compact No Snapshot Found. Skipped Compaction."+
+			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
+		return nil
 	}
 
 	mainSeq := osnap.(*fdbSnapshotInfo).MainSeq
 
 	//find the db snapshot lower than oldest snapshot
-
-	snap, err = fd.GetAllSnapMarkers()
+	snap, err := fdb.compactFd.GetAllSnapMarkers()
 	if err != nil {
-		return snapMarker, compactSeqNum, snap, err
+		return err
 	}
+	defer snap.FreeSnapMarkers()
 
+	var snapMarker *forestdb.SnapMarker
+	var compactSeqNum forestdb.SeqNum
 snaploop:
 	for _, s := range snap.SnapInfoList() {
 
@@ -1225,29 +1242,11 @@ snaploop:
 		}
 	}
 
-	return snapMarker, compactSeqNum, snap, nil
-}
-
-func (fdb *fdbSlice) Compact() error {
-	fdb.IncrRef()
-	defer fdb.DecrRef()
-
-	fdb.setIsCompacting(true)
-	defer fdb.setIsCompacting(false)
-
-	if !fdb.canRunCompaction() {
-		logging.Infof("ForestDBSlice::Skip Compaction outside of compaction interval."+
+	if snapMarker == nil {
+		logging.Infof("ForestDBSlice::Compact No Valid SnapMarker Found. Skipped Compaction."+
 			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 		return nil
-	}
-
-	snapMarker, compactSeqNum, snap, err := fdb.findCompactMarker(fdb.compactFd)
-	if err != nil {
-		logging.Infof("ForestDBSlice::Compact Error (%v). Skipped Compaction."+
-			"Slice Id %v, IndexInstId %v, IndexDefnId %v", err, fdb.id, fdb.idxInstId, fdb.idxDefnId)
-		return nil
 	} else {
-		defer snap.FreeSnapMarkers()
 		logging.Infof("ForestDBSlice::Compact Compacting upto SeqNum %v. "+
 			"Slice Id %v, IndexInstId %v, IndexDefnId %v", compactSeqNum, fdb.id,
 			fdb.idxInstId, fdb.idxDefnId)
@@ -1281,6 +1280,18 @@ func (fdb *fdbSlice) Compact() error {
 	}
 	fdb.statFdLock.Unlock()
 
+	/*
+		FIXME: Use correct accounting of extra snapshots size
+			diskSz, err := common.FileSize(fdb.currfile)
+			dataSz := int64(fdb.statFd.EstimateSpaceUsed())
+			var extraSnapDataSize int64
+			if diskSz > dataSz {
+				extraSnapDataSize = diskSz - dataSz
+			}
+
+			platform.StoreInt64(&fdb.extraSnapDataSize, extraSnapDataSize)
+	*/
+
 	return err
 }
 
@@ -1292,23 +1303,19 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 		return sts, err
 	}
 
-	fdb.statFdLock.Lock()
-	latestDataSize := int64(fdb.statFd.EstimateSpaceUsed())
+	// Compute approximate fragmentation percentage
+	// Since we keep multiple index snapshots after compaction, it is not
+	// trivial to compute fragmentation as ration of data size to disk size.
+	// Hence we compute approximate fragmentation by adding overhead data size
+	// caused by extra snapshots.
+	extraSnapDataSize := platform.LoadInt64(&fdb.extraSnapDataSize)
 
-	snapMarker, _, snap, err := fdb.findCompactMarker(fdb.statFd)
-	if err == nil {
-		sts.DataSize = int64(fdb.statFd.EstimateSpaceUsedFromMarker(snapMarker))
-		defer snap.FreeSnapMarkers()
-	} else {
-		logging.Errorf("ForestDBSlice::Statistics() Unable to compute data size. Error(%v)", err)
-		sts.DataSize = latestDataSize
-	}
+	fdb.statFdLock.Lock()
+	sts.DataSize = int64(fdb.statFd.EstimateSpaceUsed()) + extraSnapDataSize
 	fdb.statFdLock.Unlock()
 
 	sts.DiskSize = sz
-	if sts.DataSize > latestDataSize {
-		sts.ExtraSnapDataSize = sts.DataSize - latestDataSize
-	}
+	sts.ExtraSnapDataSize = extraSnapDataSize
 
 	sts.GetBytes = platform.LoadInt64(&fdb.get_bytes)
 	sts.InsertBytes = platform.LoadInt64(&fdb.insert_bytes)

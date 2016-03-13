@@ -133,17 +133,6 @@ func (f *File) EstimateSpaceUsed() int {
 	return rv
 }
 
-func (f *File) EstimateSpaceUsedFromMarker(sm *SnapMarker) int {
-	f.Lock()
-	defer f.Unlock()
-
-	Log.Tracef("fdb_estimate_space_used_from f:%p dbfile:%v", f, f.dbfile)
-	rv := int(C.fdb_estimate_space_used_from(f.dbfile, sm.marker))
-	Log.Tracef("fdb_estimate_space_used_from retn f:%p rv:%v", f, rv)
-
-	return rv
-}
-
 // DbInfo returns the information about a given database handle
 func (f *File) Info() (*FileInfo, error) {
 	f.Lock()
