@@ -13,6 +13,7 @@ import (
 	"errors"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/platform"
 	"sync"
 )
 
@@ -28,6 +29,9 @@ type BucketQueueMap map[string]IndexerMutationQueue
 type BucketStopChMap map[string]StopChannel
 
 type mutationMgr struct {
+	memUsed   platform.AlignedInt64 //memory used by queue
+	maxMemory platform.AlignedInt64 //max memory to be used
+
 	streamBucketQueueMap map[common.StreamId]BucketQueueMap
 	streamIndexQueueMap  map[common.StreamId]IndexQueueMap
 
@@ -89,6 +93,8 @@ func NewMutationManager(supvCmdch MsgChannel, supvRespch MsgChannel,
 		supvRespch:             supvRespch,
 		numVbuckets:            uint16(config["numVbuckets"].Int()),
 		config:                 config,
+		memUsed:                platform.NewAlignedInt64(0),
+		maxMemory:              platform.NewAlignedInt64(0),
 	}
 
 	//start Mutation Manager loop which listens to commands from its supervisor
@@ -359,8 +365,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			maxVbQueueLen := m.calcQueueLenFromMemQuota()
-			if queue = NewAtomicMutationQueue(m.numVbuckets, int64(maxVbQueueLen), m.config); queue == nil {
+			if queue = NewAtomicMutationQueue(m.numVbuckets, &m.maxMemory, &m.memUsed, m.config); queue == nil {
 				m.supvCmdch <- &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,
@@ -447,8 +452,7 @@ func (m *mutationMgr) addIndexListToExistingStream(streamId common.StreamId,
 		if _, ok := bucketQueueMap[i.Defn.Bucket]; !ok {
 			//init mutation queue
 			var queue MutationQueue
-			maxVbQueueLen := m.calcQueueLenFromMemQuota()
-			if queue = NewAtomicMutationQueue(m.numVbuckets, int64(maxVbQueueLen), m.config); queue == nil {
+			if queue = NewAtomicMutationQueue(m.numVbuckets, &m.maxMemory, &m.memUsed, m.config); queue == nil {
 				return &MsgError{
 					err: Error{code: ERROR_MUTATION_QUEUE_INIT,
 						severity: FATAL,
@@ -1049,35 +1053,20 @@ func (m *mutationMgr) handleConfigUpdate(cmd Message) {
 	cfgUpdate := cmd.(*MsgConfigUpdate)
 	m.config = cfgUpdate.GetConfig()
 
+	m.setMaxMemoryFromQuota()
+
 	m.supvCmdch <- &MsgSuccess{}
 }
 
 //Calculate mutation queue length from memory quota
-func (m *mutationMgr) calcQueueLenFromMemQuota() uint64 {
+func (m *mutationMgr) setMaxMemoryFromQuota() {
 
 	memQuota := m.config["settings.memory_quota"].Uint64()
-	maxVbLen := m.config["settings.maxVbQueueLength"].Uint64()
-	maxVbLenDef := m.config["settings.maxVbQueueLength"].DefaultVal.(uint64)
+	fracQueueMem := m.config["fracMutationQueueMem"].Float64()
 
-	//if there is a user specified value, use that
-	if maxVbLen != 0 {
-		logging.Infof("MutationMgr:: Set maxVbQueueLength %v", maxVbLen)
-		return maxVbLen
-	} else {
-		//Formula for calculation(see MB-14876)
-		//Below 2GB - 5000 per vbucket
-		//2GB to 4GB - 8000 per vbucket
-		//Above 4GB - 10000 per vbucket
-		if memQuota <= 2*1024*1024*1024 {
-			maxVbLen = 5000
-		} else if memQuota <= 4*1024*1024*1024 {
-			maxVbLen = 8000
-		} else {
-			maxVbLen = maxVbLenDef
-		}
-		logging.Infof("MutationMgr:: Set maxVbQueueLength %v", maxVbLen)
-		return maxVbLen
-	}
+	maxMem := int64(fracQueueMem * float64(memQuota))
+	platform.StoreInt64(&m.maxMemory, maxMem)
+	logging.Infof("MutationMgr::MaxQueueMemoryQuota %v", maxMem)
 
 }
 

@@ -791,6 +791,12 @@ var SystemConfig = Config{
 		0.1,
 		false, // mutable
 	},
+	"indexer.fracMutationQueueMem": ConfigValue{
+		0.4,
+		"Fraction of memory_quota allocated to Mutation Queue",
+		0.4,
+		false, // mutable
+	},
 	"indexer.settings.gc_percent": ConfigValue{
 		100,
 		"(GOGC) Ratio of current heap size over heap size from last GC." +
