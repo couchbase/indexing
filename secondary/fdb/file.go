@@ -21,6 +21,16 @@ import (
 	"unsafe"
 )
 
+const FDB_UNKNOWN_FILE_FORMAT = "Unkown"
+const FDB_V1_FILE_FORMAT = "ForestDB v1.x format"
+const FDB_V2_FILE_FORMAT = "ForestDB v2.x format"
+
+const (
+	FdbUnkownFileVersion uint8 = iota
+	FdbV1FileVersion
+	FdbV2FileVersion
+)
+
 // Database handle
 type File struct {
 	dbfile *C.fdb_file_handle
@@ -232,4 +242,41 @@ func (f *File) SetBlockReuseParams(reuseThreshold uint8, numKeepHeaders uint8) e
 		return Error(errNo)
 	}
 	return nil
+}
+
+func (f *File) GetFileVersion() uint8 {
+	f.Lock()
+	defer f.Unlock()
+
+	Log.Tracef("fdb_get_file_version call")
+	ptr := C.fdb_get_file_version(f.dbfile)
+	Log.Tracef("fdb_get_file_version retn")
+
+	if ptr != nil {
+		return FdbStringToFileVersion(C.GoString(ptr))
+	}
+
+	return FdbUnkownFileVersion
+}
+
+func FdbFileVersionToString(version uint8) string {
+
+	if version == FdbV1FileVersion {
+		return FDB_V1_FILE_FORMAT
+	} else if version == FdbV2FileVersion {
+		return FDB_V2_FILE_FORMAT
+	}
+
+	return FDB_UNKNOWN_FILE_FORMAT
+}
+
+func FdbStringToFileVersion(versionStr string) uint8 {
+
+	if versionStr == FDB_V1_FILE_FORMAT {
+		return FdbV1FileVersion
+	} else if versionStr == FDB_V2_FILE_FORMAT {
+		return FdbV2FileVersion
+	}
+
+	return FdbUnkownFileVersion
 }

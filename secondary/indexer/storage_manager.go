@@ -772,6 +772,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 		var dataSz, diskSz, extraSnapDataSize int64
 		var getBytes, insertBytes, deleteBytes int64
 		var nslices int64
+		var needUpgrade = false
 	loop:
 		for _, partnInst := range partnMap {
 			slices := partnInst.Sc.GetAllSlices()
@@ -789,12 +790,16 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 				deleteBytes += sts.DeleteBytes
 				extraSnapDataSize += sts.ExtraSnapDataSize
 				internalData = append(internalData, sts.InternalData...)
+
+				needUpgrade = needUpgrade || sts.NeedUpgrade
 			}
 		}
 
 		if err == nil {
 			stat := IndexStorageStats{
 				InstId: idxInstId,
+				Name: inst.Defn.Name,
+				Bucket: inst.Defn.Bucket,
 				Stats: StorageStatistics{
 					DataSize:          dataSz,
 					DiskSize:          diskSz,
@@ -802,6 +807,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 					InsertBytes:       insertBytes,
 					DeleteBytes:       deleteBytes,
 					ExtraSnapDataSize: extraSnapDataSize,
+					NeedUpgrade:       needUpgrade,
 					InternalData:      internalData,
 				},
 			}
