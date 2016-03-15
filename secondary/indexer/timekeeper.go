@@ -2362,15 +2362,18 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	//wait on respCh
 	kvresp := <-restartMsg.(*MsgRestartVbuckets).GetResponseCh()
 
+	streamId := restartMsg.(*MsgRestartVbuckets).GetStreamId()
+	bucket := restartMsg.(*MsgRestartVbuckets).GetBucket()
+
 	//if timekeeper has moved to prepare unpause state, ignore
 	//the response message as all streams are going to be
 	//restarted anyways
 	if tk.checkIndexerState(common.INDEXER_PREPARE_UNPAUSE) {
+		tk.lock.Lock()
+		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+		tk.lock.Unlock()
 		return
 	}
-
-	streamId := restartMsg.(*MsgRestartVbuckets).GetStreamId()
-	bucket := restartMsg.(*MsgRestartVbuckets).GetBucket()
 
 	switch kvresp.GetMsgType() {
 
