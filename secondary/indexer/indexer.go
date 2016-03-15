@@ -3750,9 +3750,6 @@ func (idx *indexer) handleResetStats() {
 
 func (idx *indexer) memoryUsedStorage() int64 {
 	mem_used := int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse()) + int64(nodetable.MemoryInUse())
-	if common.GetStorageMode() == common.MOI {
-		mem_used += int64(mm.Size())
-	}
 	return mem_used
 }
 
