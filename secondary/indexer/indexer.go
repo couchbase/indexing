@@ -332,6 +332,23 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME}
 	<-idx.scanCoordCmdCh
 
+	// Persist node uuid in Metadata store
+	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_SET_LOCAL,
+		key:   INDEXER_NODE_UUID,
+		value: idx.config["nodeuuid"].String(),
+	}
+
+	respMsg := <-idx.clustMgrAgentCmdCh
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	errMsg := resp.GetError()
+	if errMsg != nil {
+		logging.Fatalf("Indexer::NewIndexer Unable to set INDEXER_NODE_UUID In Local"+
+			"Meta Storage. Err %v", errMsg)
+		common.CrashOnError(errMsg)
+	}
+
 	logging.Infof("Indexer::NewIndexer Status %v", idx.getIndexerState())
 
 	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)

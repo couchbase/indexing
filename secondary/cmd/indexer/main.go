@@ -44,7 +44,7 @@ func main() {
 	diagDir := fset.String("diagDir", "./", "Directory for writing index diagnostic information")
 	enableManager := fset.Bool("enable_manager", true, "Enable Index Manager")
 	auth := fset.String("auth", "", "Auth user and password")
-	fset.String("nodeUUID", "", "UUID of the node")
+	nodeuuid := fset.String("nodeUUID", "", "UUID of the node")
 	storageMode := fset.String("storageMode", "", "Storage mode of indexer (forestdb/memory_optimized)")
 
 	for i := 1; i < len(os.Args); i++ {
@@ -87,6 +87,7 @@ func main() {
 	config.SetValue("indexer.streamMaintPort", *streamMaintPort)
 	config.SetValue("indexer.storage_dir", *storageDir)
 	config.SetValue("indexer.diagnostics_dir", *diagDir)
+	config.SetValue("indexer.nodeuuid", *nodeuuid)
 
 	storage_dir := config["indexer.storage_dir"].String()
 	if err := os.MkdirAll(storage_dir, 0755); err != nil {

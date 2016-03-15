@@ -586,6 +586,12 @@ var SystemConfig = Config{
 		"./",
 		true, // immutable
 	},
+	"indexer.nodeuuid": ConfigValue{
+		"",
+		"Indexer node UUID",
+		"",
+		true, // immutable
+	},
 	"indexer.numSliceWriters": ConfigValue{
 		runtime.NumCPU(),
 		"Number of Writer Threads for a Slice",
