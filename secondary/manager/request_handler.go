@@ -409,8 +409,10 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 		return
 	}
 
+	bucket := m.getBucket(r)
+
 	indexerHostMap := make(map[common.IndexerId]string)
-	meta, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap)
+	meta, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap, bucket)
 	if err == nil {
 		resp := &BackupResponse{Code: RESP_SUCCESS, Result: *meta}
 		send(http.StatusOK, w, resp)
@@ -422,7 +424,7 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 }
 
 func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
-	indexerHostMap map[common.IndexerId]string) (*ClusterIndexMetadata, error) {
+	indexerHostMap map[common.IndexerId]string, bucket string) (*ClusterIndexMetadata, error) {
 
 	if err := cinfo.Fetch(); err != nil {
 		return nil, err
@@ -438,7 +440,12 @@ func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 		if err == nil {
 
-			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
+			url := "/getLocalIndexMetadata"
+			if len(bucket) != 0 {
+				url += "?bucket=" + bucket
+			}
+
+			resp, err := getWithAuth(addr + url)
 			if err != nil {
 				logging.Debugf("RequestHandler::getIndexMetadata: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
 				return nil, errors.New(fmt.Sprintf("Fail to retrieve index definition from url %s", addr))
@@ -500,7 +507,9 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 		return
 	}
 
-	meta, err := m.getLocalIndexMetadata()
+	bucket := m.getBucket(r)
+
+	meta, err := m.getLocalIndexMetadata(bucket)
 	if err == nil {
 		send(http.StatusOK, w, meta)
 	} else {
@@ -509,7 +518,7 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 	}
 }
 
-func (m *requestHandlerContext) getLocalIndexMetadata() (meta *LocalIndexMetadata, err error) {
+func (m *requestHandlerContext) getLocalIndexMetadata(bucket string) (meta *LocalIndexMetadata, err error) {
 
 	repo := m.mgr.getMetadataRepo()
 
@@ -529,7 +538,9 @@ func (m *requestHandlerContext) getLocalIndexMetadata() (meta *LocalIndexMetadat
 	var defn *common.IndexDefn
 	_, defn, err = iter.Next()
 	for err == nil {
-		meta.IndexDefinitions = append(meta.IndexDefinitions, *defn)
+		if len(bucket) == 0 || bucket == defn.Bucket {
+			meta.IndexDefinitions = append(meta.IndexDefinitions, *defn)
+		}
 		_, defn, err = iter.Next()
 	}
 
@@ -542,7 +553,9 @@ func (m *requestHandlerContext) getLocalIndexMetadata() (meta *LocalIndexMetadat
 	var topology *IndexTopology
 	topology, err = iter1.Next()
 	for err == nil {
-		meta.IndexTopologies = append(meta.IndexTopologies, *topology)
+		if len(bucket) == 0 || bucket == topology.Bucket {
+			meta.IndexTopologies = append(meta.IndexTopologies, *topology)
+		}
 		topology, err = iter1.Next()
 	}
 
@@ -575,7 +588,7 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 	}
 
 	indexerHostMap := make(map[common.IndexerId]string)
-	current, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap)
+	current, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap, "")
 	if err != nil {
 		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to get the latest index metadata for restore"})
 		return
