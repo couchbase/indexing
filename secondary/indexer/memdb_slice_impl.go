@@ -221,7 +221,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 func (slice *memdbSlice) initStores() {
 	cfg := memdb.DefaultConfig()
-	if slice.sysconf["moi.useMemMgmt"].Bool() && runtime.GOOS != "windows" {
+	if slice.sysconf["moi.useMemMgmt"].Bool() {
 		cfg.UseMemoryMgmt(mm.Malloc, mm.Free)
 	}
 
