@@ -706,9 +706,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.moi.useDeltaInterleaving": ConfigValue{
-		false,
+		true,
 		"Use delta interleaving mode for on-disk snapshots",
-		false,
+		true,
 		false, // mutable
 	},
 	"indexer.useMutationSyncPool": ConfigValue{
