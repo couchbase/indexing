@@ -97,7 +97,7 @@ func (r ScanRequest) String() string {
 	}
 
 	if len(r.Keys) == 0 {
-		if r.ScanType == StatsReq || r.ScanType == ScanReq {
+		if r.ScanType == StatsReq || r.ScanType == ScanReq || r.ScanType == CountReq {
 			span = fmt.Sprintf("range (%s,%s %s)", r.Low, r.High, incl)
 		} else {
 			span = "all"
@@ -847,7 +847,7 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 		snap := s.Snapshot()
 		if len(req.Keys) > 0 {
 			r, err = snap.CountLookup(req.Keys, stopch)
-		} else if req.Low.Bytes() == nil && req.Low.Bytes() == nil {
+		} else if req.Low.Bytes() == nil && req.High.Bytes() == nil {
 			r, err = snap.CountTotal(stopch)
 		} else {
 			r, err = snap.CountRange(req.Low, req.High, req.Incl, stopch)
