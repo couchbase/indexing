@@ -85,8 +85,9 @@ func (r *vbSeqnosReader) Close() {
 
 func (r *vbSeqnosReader) GetSeqnos() (seqs []uint64, err error) {
 	defer func() {
-		recover()
-		err = errConnClosed
+		if r := recover(); r != nil {
+			err = errConnClosed
+		}
 	}()
 
 	req := make(vbSeqnosRequest, 1)
