@@ -13,6 +13,8 @@ import "github.com/couchbase/indexing/secondary/logging"
 const seqsReqChanSize = 20000
 const seqsBufSize = 64 * 1024
 
+var errConnClosed = errors.New("dcpSeqnos - conn closed already")
+
 // cache Bucket{} and DcpFeed{} objects, its underlying connections
 // to make Stats-Seqnos fast.
 var dcp_buckets_seqnos struct {
@@ -77,10 +79,16 @@ func (r *vbSeqnosReader) Close() {
 	close(r.requestCh)
 }
 
-func (r *vbSeqnosReader) GetSeqnos() ([]uint64, error) {
+func (r *vbSeqnosReader) GetSeqnos() (seqs []uint64, err error) {
+	defer func() {
+		recover()
+		err = errConnClosed
+	}()
+
 	req := make(vbSeqnosRequest, 1)
 	r.requestCh <- req
-	return req.Response()
+	seqs, err = req.Response()
+	return
 }
 
 // This routine is responsible for computing request batches on the fly
