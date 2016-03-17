@@ -5,6 +5,7 @@ import "time"
 import "fmt"
 import "sort"
 
+import "github.com/couchbase/indexing/secondary/stats"
 import "github.com/couchbase/indexing/secondary/dcp"
 import "github.com/couchbase/indexing/secondary/dcp/transport/client"
 import "github.com/couchbase/indexing/secondary/logging"
@@ -55,8 +56,9 @@ func (ch *vbSeqnosRequest) Response() ([]uint64, error) {
 
 // Bucket level seqnos reader for the cluster
 type vbSeqnosReader struct {
-	kvfeeds   map[string]*kvConn
-	requestCh chan vbSeqnosRequest
+	kvfeeds    map[string]*kvConn
+	requestCh  chan vbSeqnosRequest
+	seqsTiming stats.TimingStat
 }
 
 func newVbSeqnosReader(kvfeeds map[string]*kvConn) *vbSeqnosReader {
@@ -64,6 +66,8 @@ func newVbSeqnosReader(kvfeeds map[string]*kvConn) *vbSeqnosReader {
 		kvfeeds:   kvfeeds,
 		requestCh: make(chan vbSeqnosRequest, seqsReqChanSize),
 	}
+
+	r.seqsTiming.Init()
 
 	go r.Routine()
 	return r
@@ -84,11 +88,13 @@ func (r *vbSeqnosReader) GetSeqnos() ([]uint64, error) {
 func (r *vbSeqnosReader) Routine() {
 	for req := range r.requestCh {
 		l := len(r.requestCh)
+		t0 := time.Now()
 		seqnos, err := CollectSeqnos(r.kvfeeds)
 		response := &vbSeqnosResponse{
 			seqnos: seqnos,
 			err:    err,
 		}
+		r.seqsTiming.Put(time.Since(t0))
 		req.Reply(response)
 
 		// Read outstanding requests that can be served by
@@ -191,6 +197,16 @@ func delDBSbucket(bucketn string) {
 		reader.Close()
 	}
 	delete(dcp_buckets_seqnos.readerMap, bucketn)
+}
+
+func BucketSeqsTiming(bucket string) *stats.TimingStat {
+	dcp_buckets_seqnos.rw.RLock()
+	defer dcp_buckets_seqnos.rw.RUnlock()
+	if reader, ok := dcp_buckets_seqnos.readerMap[bucket]; ok {
+		return &reader.seqsTiming
+	}
+
+	return nil
 }
 
 // BucketSeqnos return list of {{vbno,seqno}..} for all vbuckets.
