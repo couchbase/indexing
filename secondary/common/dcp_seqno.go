@@ -4,6 +4,7 @@ import "sync"
 import "time"
 import "fmt"
 import "sort"
+import "errors"
 
 import "github.com/couchbase/indexing/secondary/stats"
 import "github.com/couchbase/indexing/secondary/dcp"
@@ -21,6 +22,7 @@ var dcp_buckets_seqnos struct {
 	rw        sync.RWMutex
 	numVbs    int
 	buckets   map[string]*couchbase.Bucket // bucket ->*couchbase.Bucket
+	errors    map[string]error             // bucket -> error
 	readerMap map[string]*vbSeqnosReader   // bucket->*vbSeqnosReader
 }
 
@@ -58,13 +60,15 @@ func (ch *vbSeqnosRequest) Response() ([]uint64, error) {
 
 // Bucket level seqnos reader for the cluster
 type vbSeqnosReader struct {
+	bucket     string
 	kvfeeds    map[string]*kvConn
 	requestCh  chan vbSeqnosRequest
 	seqsTiming stats.TimingStat
 }
 
-func newVbSeqnosReader(kvfeeds map[string]*kvConn) *vbSeqnosReader {
+func newVbSeqnosReader(bucket string, kvfeeds map[string]*kvConn) *vbSeqnosReader {
 	r := &vbSeqnosReader{
+		bucket:    bucket,
 		kvfeeds:   kvfeeds,
 		requestCh: make(chan vbSeqnosRequest, seqsReqChanSize),
 	}
@@ -103,6 +107,11 @@ func (r *vbSeqnosReader) Routine() {
 			err:    err,
 		}
 		r.seqsTiming.Put(time.Since(t0))
+		if err != nil {
+			dcp_buckets_seqnos.rw.Lock()
+			dcp_buckets_seqnos.errors[r.bucket] = err
+			dcp_buckets_seqnos.rw.Unlock()
+		}
 		req.Reply(response)
 
 		// Read outstanding requests that can be served by
@@ -133,7 +142,7 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 	defer func() {
 		if err == nil {
 			dcp_buckets_seqnos.buckets[bucketn] = bucket
-			dcp_buckets_seqnos.readerMap[bucketn] = newVbSeqnosReader(kvfeeds)
+			dcp_buckets_seqnos.readerMap[bucketn] = newVbSeqnosReader(bucketn, kvfeeds)
 		} else {
 			for _, kvfeed := range kvfeeds {
 				kvfeed.mc.Close()
@@ -190,21 +199,25 @@ func addDBSbucket(cluster, pooln, bucketn string) (err error) {
 	return nil
 }
 
-func delDBSbucket(bucketn string) {
+func delDBSbucket(bucketn string, checkErr bool) {
 	dcp_buckets_seqnos.rw.Lock()
 	defer dcp_buckets_seqnos.rw.Unlock()
 
-	bucket, ok := dcp_buckets_seqnos.buckets[bucketn]
-	if ok && bucket != nil {
-		bucket.Close()
-	}
-	delete(dcp_buckets_seqnos.buckets, bucketn)
+	if !checkErr || dcp_buckets_seqnos.errors[bucketn] != nil {
+		bucket, ok := dcp_buckets_seqnos.buckets[bucketn]
+		if ok && bucket != nil {
+			bucket.Close()
+		}
+		delete(dcp_buckets_seqnos.buckets, bucketn)
 
-	reader, ok := dcp_buckets_seqnos.readerMap[bucketn]
-	if ok && reader != nil {
-		reader.Close()
+		reader, ok := dcp_buckets_seqnos.readerMap[bucketn]
+		if ok && reader != nil {
+			reader.Close()
+		}
+		delete(dcp_buckets_seqnos.readerMap, bucketn)
+
+		delete(dcp_buckets_seqnos.errors, bucketn)
 	}
-	delete(dcp_buckets_seqnos.readerMap, bucketn)
 }
 
 func BucketSeqsTiming(bucket string) *stats.TimingStat {
@@ -228,7 +241,7 @@ func BucketSeqnos(cluster, pooln, bucketn string) (l_seqnos []uint64, err error)
 	// any type of error will cleanup the bucket and its kvfeeds.
 	defer func() {
 		if err != nil {
-			delDBSbucket(bucketn)
+			delDBSbucket(bucketn, true)
 		}
 	}()
 
@@ -357,7 +370,7 @@ func pollForDeletedBuckets() {
 			}
 		}()
 		for _, bucketn := range todels {
-			delDBSbucket(bucketn)
+			delDBSbucket(bucketn, false)
 		}
 	}
 }
