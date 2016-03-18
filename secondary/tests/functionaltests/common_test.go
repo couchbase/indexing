@@ -50,6 +50,12 @@ func init() {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
 	}
 
+	err := secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.moi.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.inmemory_snapshot.moi.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
 	if clusterconfig.IndexUsing != "" {
 		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
 		log.Printf("Using %v for creating indexes", clusterconfig.IndexUsing)
@@ -59,14 +65,7 @@ func init() {
 		tc.HandleError(err, "Error in ChangeIndexerSettings")
 	}
 
-	err := secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.moi.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
-	tc.HandleError(err, "Error in ChangeIndexerSettings")
-	err = secondaryindex.ChangeIndexerSettings("indexer.settings.inmemory_snapshot.moi.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
-	tc.HandleError(err, "Error in ChangeIndexerSettings")
-
-	log.Printf("Updated moi backup interval. Restarting indexer...")
-	tc.KillIndexer()
-	time.Sleep(60 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	secondaryindex.CheckCollation = true
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
