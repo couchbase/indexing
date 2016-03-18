@@ -28,7 +28,9 @@ var dcp_buckets_seqnos struct {
 
 func init() {
 	dcp_buckets_seqnos.buckets = make(map[string]*couchbase.Bucket)
+	dcp_buckets_seqnos.errors = make(map[string]error)
 	dcp_buckets_seqnos.readerMap = make(map[string]*vbSeqnosReader)
+
 	go pollForDeletedBuckets()
 }
 
