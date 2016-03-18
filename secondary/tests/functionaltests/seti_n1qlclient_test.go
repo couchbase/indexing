@@ -12,7 +12,7 @@ import (
 	qerrors "github.com/couchbase/query/errors"
 	qexpr "github.com/couchbase/query/expression"
 	qparser "github.com/couchbase/query/expression/parser"
-	"github.com/couchbase/query/value"
+	//"github.com/couchbase/query/value"
 	"io/ioutil"
 	"log"
 	"os"
@@ -25,7 +25,7 @@ import (
 func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	log.Printf("In TestBufferedScan_BackfillDisabled()")
 
-	var indexName = "companyidx"
+	var indexName = "addressidx"
 	var bucketName = "default"
 
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
@@ -33,7 +33,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	kvutility.FlushBucket(bucketName, "", clusterconfig.Username, clusterconfig.Password, kvaddress)
 	time.Sleep(5 * time.Second)
 
-	kvdocs := generateDocs(50000, "test.prod")
+	kvdocs := generateDocs(50000, "users.prod")
 	kvutility.SetKeyValues(kvdocs, bucketName, "", clusterconfig.KVAddress)
 
 	// Disable backfill
@@ -44,7 +44,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 		c.SystemConfig.SetValue("queryport.client.backfillLimit", actual)
 	}()
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"address"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	FailTestIfError(err, "Error in creating the index", t)
 
 	cluster, err := c.ClusterAuthUrl(indexManagementAddress)
@@ -56,7 +56,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillDisabled failed in creating n1ql client", t)
 	}
-	rangeKey := []string{`company`}
+	rangeKey := []string{`address`}
 	rangeExprs := make(qexpr.Expressions, 0)
 	for _, key := range rangeKey {
 		expr, err := qparser.Parse(key)
@@ -74,9 +74,9 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 	}
 
 	// query setup
-	low := value.Values{value.NewValue("A")}
-	high := value.Values{value.NewValue("zzzz")}
-	rng := datastore.Range{Low: low, High: high, Inclusion: datastore.BOTH}
+	//low := value.Values{value.NewValue("A")}
+	//high := value.Values{value.NewValue("zzzz")}
+	rng := datastore.Range{Low: nil, High: nil, Inclusion: datastore.BOTH}
 	span := &datastore.Span{Seek: nil, Range: rng}
 	doquery := func(limit int64, conn *datastore.IndexConnection) {
 		index.Scan(
@@ -143,7 +143,7 @@ func TestBufferedScan_BackfillDisabled(t *testing.T) {
 func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	log.Printf("In TestBufferedScan_BackfillEnabled()")
 
-	var indexName = "companyidx"
+	var indexName = "addressidx"
 
 	// Disable backfill
 	cv := c.SystemConfig["queryport.client.backfillLimit"]
@@ -162,7 +162,7 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	if err != nil {
 		FailTestIfError(err, "TestBufferedScan_BackfillEnabled failed in creating n1ql client", t)
 	}
-	rangeKey := []string{`company`}
+	rangeKey := []string{`address`}
 	rangeExprs := make(qexpr.Expressions, 0)
 	for _, key := range rangeKey {
 		expr, err := qparser.Parse(key)
@@ -180,9 +180,9 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	}
 
 	// query setup
-	low := value.Values{value.NewValue("A")}
-	high := value.Values{value.NewValue("zzzz")}
-	rng := datastore.Range{Low: low, High: high, Inclusion: datastore.BOTH}
+	//low := value.Values{value.NewValue("A")}
+	//high := value.Values{value.NewValue("zzzz")}
+	rng := datastore.Range{Low: nil, High: nil, Inclusion: datastore.BOTH}
 	span := &datastore.Span{Seek: nil, Range: rng}
 	doquery := func(limit int64, conn *datastore.IndexConnection) {
 		index.Scan(
@@ -267,7 +267,7 @@ func TestBufferedScan_BackfillEnabled(t *testing.T) {
 	}
 	now = time.Now()
 	for range ch {
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 		count++
 	}
 	log.Printf("limit=1000,chsize=256; received %v items; took %v\n",
