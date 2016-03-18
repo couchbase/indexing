@@ -59,7 +59,14 @@ func init() {
 		tc.HandleError(err, "Error in ChangeIndexerSettings")
 	}
 
-	time.Sleep(5 * time.Second)
+	err := secondaryindex.ChangeIndexerSettings("indexer.settings.persisted_snapshot_init_build.moi.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+	err = secondaryindex.ChangeIndexerSettings("indexer.settings.inmemory_snapshot.moi.interval", float64(60000), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	tc.HandleError(err, "Error in ChangeIndexerSettings")
+
+	log.Printf("Updated moi backup interval. Restarting indexer...")
+	tc.KillIndexer()
+	time.Sleep(60 * time.Second)
 
 	secondaryindex.CheckCollation = true
 	e := secondaryindex.DropAllSecondaryIndexes(indexManagementAddress)
@@ -83,7 +90,7 @@ func init() {
 	var indexName = "index_eyeColor"
 	var bucketName = "default"
 
-	err := secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"eyeColor"}, false, nil, true, defaultIndexActiveTimeout, nil)
+	err = secondaryindex.CreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"eyeColor"}, false, nil, true, defaultIndexActiveTimeout, nil)
 	tc.HandleError(err, "Error in creating the index")
 
 	// Populate the bucket now
