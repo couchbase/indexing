@@ -105,6 +105,8 @@ retry:
 	if slice.statFd, err = forestdb.Open(filepath, config); err != nil {
 		return nil, err
 	}
+	slice.fileVersion = slice.statFd.GetFileVersion()
+	logging.Infof("NewForestDBSlice(): file version %v", forestdb.FdbFileVersionToString(slice.fileVersion))
 
 	// ForestDB does not support multiwriters
 	slice.numWriters = 1
@@ -195,6 +197,8 @@ type fdbSlice struct {
 	//as we need to allow concurrent db updates to happen on existing file handle
 	//while compaction is running in the background.
 	compactFd *forestdb.File
+
+	fileVersion uint8
 
 	metaLock sync.Mutex
 	meta     *forestdb.KVStore   // handle for index meta
@@ -1278,6 +1282,8 @@ snaploop:
 	if fdb.statFd, err = forestdb.Open(fdb.currfile, config); err != nil {
 		return err
 	}
+	fdb.fileVersion = fdb.statFd.GetFileVersion()
+	logging.Infof("ForestDBSlice::Compact(): after compaction, file version %v", forestdb.FdbFileVersionToString(fdb.fileVersion))
 	fdb.statFdLock.Unlock()
 
 	/*
@@ -1312,6 +1318,7 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 
 	fdb.statFdLock.Lock()
 	sts.DataSize = int64(fdb.statFd.EstimateSpaceUsed()) + extraSnapDataSize
+	sts.NeedUpgrade = fdb.fileVersion < forestdb.FdbV2FileVersion
 	fdb.statFdLock.Unlock()
 
 	sts.DiskSize = sz

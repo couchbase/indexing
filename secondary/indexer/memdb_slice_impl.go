@@ -28,7 +28,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -221,7 +220,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 func (slice *memdbSlice) initStores() {
 	cfg := memdb.DefaultConfig()
-	if slice.sysconf["moi.useMemMgmt"].Bool() && runtime.GOOS != "windows" {
+	if slice.sysconf["moi.useMemMgmt"].Bool() {
 		cfg.UseMemoryMgmt(mm.Malloc, mm.Free)
 	}
 
@@ -749,8 +748,11 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 
 func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 	var wg sync.WaitGroup
-
 	var backIndexCallback memdb.ItemCallback
+	mdb.confLock.RLock()
+	numVbuckets := mdb.sysconf["numVbuckets"].Int()
+	mdb.confLock.RUnlock()
+
 	partShardCh := make([]chan *memdb.ItemEntry, mdb.numWriters)
 
 	logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v reading %v",
@@ -776,14 +778,8 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 		}
 
 		backIndexCallback = func(e *memdb.ItemEntry) {
-			mdb.confLock.RLock()
-			numVbuckets := mdb.sysconf["numVbuckets"].Int()
-			mdb.confLock.RUnlock()
-
 			wId := vbucketFromEntryBytes(e.Item().Bytes(), numVbuckets) % mdb.numWriters
 			partShardCh[wId] <- e
-
-			mdb.idxStats.numItemsRestored.Add(1)
 		}
 	}
 
@@ -811,6 +807,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 	}
 
 	mdb.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
+	mdb.idxStats.numItemsRestored.Set(mdb.mainstore.ItemsCount())
 	return err
 }
 

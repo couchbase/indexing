@@ -312,8 +312,10 @@ func restful_create_andbuild() ([]string, error) {
 	if restful_checkstatus(resp.Status) == true {
 		return nil, fmt.Errorf("restful_getall() status: %v", resp.Status)
 	}
-
-	time.Sleep(20 * time.Second)
+	err = waitforindexes(ids[:2], 300*time.Second)
+	if err != nil {
+		return nil, err
+	}
 
 	log.Println("BUILD many deferred index")
 	url, err = makeurl("/api/indexes?build=true")
@@ -334,8 +336,10 @@ func restful_create_andbuild() ([]string, error) {
 	if restful_checkstatus(resp.Status) == true {
 		return nil, fmt.Errorf("restful_getall() status: %v", resp.Status)
 	}
-
-	time.Sleep(40 * time.Second)
+	err = waitforindexes(ids, 300*time.Second)
+	if err != nil {
+		return nil, err
+	}
 
 	return ids, nil
 }
@@ -781,6 +785,54 @@ func validateEntries(expected tc.ScanResponse, entries []interface{}) error {
 		return err
 	}
 	return nil
+}
+
+func waitforindexes(ids []string, timeout time.Duration) error {
+	period := 1 * time.Second
+	for _, id := range ids {
+	loop:
+		for {
+			err, ok := waitforindex(id)
+			if err != nil {
+				return err
+			} else if !ok {
+				time.Sleep(period)
+				timeout -= period
+				if timeout <= 0 {
+					return fmt.Errorf("index %v not active", id)
+				}
+				continue
+			}
+			break loop
+		}
+	}
+	return nil
+}
+
+func waitforindex(id string) (error, bool) {
+	indexes, err := restful_getall()
+	if err != nil {
+		return err, false
+	}
+	indexi, ok := indexes[id]
+	if !ok {
+		return fmt.Errorf("index %d is not found", id), false
+	}
+
+	index := indexi.(map[string]interface{})
+	defn := index["definitions"].(map[string]interface{})
+	name := defn["name"].(string)
+	if insts := index["instances"].([]interface{}); len(insts) > 0 {
+		inst := insts[0].(map[string]interface{})
+		state := inst["state"]
+		log.Printf("index %v in %v\n", name, state)
+		if state == "INDEX_STATE_ACTIVE" {
+			return nil, true
+		}
+		return nil, false
+	} else {
+		return fmt.Errorf("instances not found for %v", name), false
+	}
 }
 
 var reqcreate = map[string]interface{}{

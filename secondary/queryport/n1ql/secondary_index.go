@@ -1078,6 +1078,10 @@ func getSingletonClient(
 var n1ql_backfill_temp_dir string
 
 func init() {
+	// register gob objects for complex composite keys.
+	gob.Register(map[string]interface{}{})
+	gob.Register([]interface{}{})
+
 	file, err := ioutil.TempFile("" /*dir*/, "scan-backfill")
 	if err != nil {
 		return

@@ -350,6 +350,9 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_mutations_queued", s.numMutationsQueued.Value())
 		addStat("ts_queue_size", s.tsQueueSize.Value())
 		addStat("num_nonalign_ts", s.numNonAlignTS.Value())
+		if st := common.BucketSeqsTiming(s.bucket); st != nil {
+			addStat("timings/dcp_getseqs", st.Value())
+		}
 	}
 
 	return json.Marshal(statsMap)

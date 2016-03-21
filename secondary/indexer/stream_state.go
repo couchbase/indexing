@@ -26,7 +26,7 @@ type StreamState struct {
 	streamBucketVbRefCountMap map[common.StreamId]BucketVbRefCountMap
 
 	streamBucketHWTMap           map[common.StreamId]BucketHWTMap
-	streamBucketInMemTsCountMap  map[common.StreamId]BucketInMemTsCountMap
+	streamBucketNeedsCommitMap   map[common.StreamId]BucketNeedsCommitMap
 	streamBucketNewTsReqdMap     map[common.StreamId]BucketNewTsReqdMap
 	streamBucketTsListMap        map[common.StreamId]BucketTsListMap
 	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
@@ -58,7 +58,7 @@ type BucketLastFlushedTsMap map[string]*common.TsVbuuid
 type BucketRestartTsMap map[string]*common.TsVbuuid
 type BucketOpenTsMap map[string]*common.TsVbuuid
 type BucketStartTimeMap map[string]uint64
-type BucketInMemTsCountMap map[string]uint64
+type BucketNeedsCommitMap map[string]bool
 type BucketNewTsReqdMap map[string]bool
 type BucketLastSnapMarker map[string]*common.TsVbuuid
 
@@ -86,7 +86,7 @@ func InitStreamState(config common.Config) *StreamState {
 	ss := &StreamState{
 		config:                                config,
 		streamBucketHWTMap:                    make(map[common.StreamId]BucketHWTMap),
-		streamBucketInMemTsCountMap:           make(map[common.StreamId]BucketInMemTsCountMap),
+		streamBucketNeedsCommitMap:            make(map[common.StreamId]BucketNeedsCommitMap),
 		streamBucketNewTsReqdMap:              make(map[common.StreamId]BucketNewTsReqdMap),
 		streamBucketTsListMap:                 make(map[common.StreamId]BucketTsListMap),
 		streamBucketFlushInProgressTsMap:      make(map[common.StreamId]BucketFlushInProgressTsMap),
@@ -123,8 +123,8 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketHWTMap := make(BucketHWTMap)
 	ss.streamBucketHWTMap[streamId] = bucketHWTMap
 
-	bucketInMemTsCountMap := make(BucketInMemTsCountMap)
-	ss.streamBucketInMemTsCountMap[streamId] = bucketInMemTsCountMap
+	bucketNeedsCommitMap := make(BucketNeedsCommitMap)
+	ss.streamBucketNeedsCommitMap[streamId] = bucketNeedsCommitMap
 
 	bucketNewTsReqdMap := make(BucketNewTsReqdMap)
 	ss.streamBucketNewTsReqdMap[streamId] = bucketNewTsReqdMap
@@ -204,7 +204,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 
 	numVbuckets := ss.config["numVbuckets"].Int()
 	ss.streamBucketHWTMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketInMemTsCountMap[streamId][bucket] = 0
+	ss.streamBucketNeedsCommitMap[streamId][bucket] = false
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
 	ss.streamBucketFlushInProgressTsMap[streamId][bucket] = nil
 	ss.streamBucketAbortInProgressMap[streamId][bucket] = false
@@ -243,7 +243,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	}
 
 	delete(ss.streamBucketHWTMap[streamId], bucket)
-	delete(ss.streamBucketInMemTsCountMap[streamId], bucket)
+	delete(ss.streamBucketNeedsCommitMap[streamId], bucket)
 	delete(ss.streamBucketNewTsReqdMap[streamId], bucket)
 	delete(ss.streamBucketTsListMap[streamId], bucket)
 	delete(ss.streamBucketFlushInProgressTsMap[streamId], bucket)
@@ -278,7 +278,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 
 	//delete this stream from internal maps
 	delete(ss.streamBucketHWTMap, streamId)
-	delete(ss.streamBucketInMemTsCountMap, streamId)
+	delete(ss.streamBucketNeedsCommitMap, streamId)
 	delete(ss.streamBucketNewTsReqdMap, streamId)
 	delete(ss.streamBucketTsListMap, streamId)
 	delete(ss.streamBucketFlushInProgressTsMap, streamId)
@@ -735,6 +735,34 @@ func (ss *StreamState) checkNewTSDue(streamId common.StreamId, bucket string) bo
 	return newTsReqd
 }
 
+func (ss *StreamState) checkCommitOverdue(streamId common.StreamId, bucket string) bool {
+
+	snapPersistInterval := ss.getPersistInterval()
+	persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
+
+	lastPersistTime := ss.streamBucketLastPersistTime[streamId][bucket]
+
+	if time.Since(lastPersistTime) > persistDuration {
+
+		bucketFlushInProgressTsMap := ss.streamBucketFlushInProgressTsMap[streamId]
+		bucketTsListMap := ss.streamBucketTsListMap[streamId]
+		bucketFlushEnabledMap := ss.streamBucketFlushEnabledMap[streamId]
+		bucketNeedsCommit := ss.streamBucketNeedsCommitMap[streamId]
+
+		//if there is no flush already in progress for this bucket
+		//no pending TS in list and flush is not disabled
+		tsList := bucketTsListMap[bucket]
+		if bucketFlushInProgressTsMap[bucket] == nil &&
+			bucketFlushEnabledMap[bucket] == true &&
+			tsList.Len() == 0 &&
+			bucketNeedsCommit[bucket] == true {
+			return true
+		}
+	}
+
+	return false
+}
+
 //gets the stability timestamp based on the current HWT
 func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	bucket string) *common.TsVbuuid {
@@ -869,6 +897,15 @@ func updateTsSeqNumToSnapshot(ts *common.TsVbuuid) {
 
 	for i, s := range ts.Snapshots {
 		ts.Seqnos[i] = s[1]
+	}
+
+}
+func (ss *StreamState) getPersistInterval() uint64 {
+
+	if common.GetStorageMode() == common.MOI {
+		return ss.config["settings.persisted_snapshot.moi.interval"].Uint64()
+	} else {
+		return ss.config["settings.persisted_snapshot.interval"].Uint64()
 	}
 
 }

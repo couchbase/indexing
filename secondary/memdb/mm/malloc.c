@@ -5,6 +5,8 @@
 #ifdef JEMALLOC
 #include <jemalloc/jemalloc.h>
 
+const char *je_malloc_conf = "narenas:2,lg_dirty_mult:5";
+
 void writecb(void *ref, const char *s) {
 	stats_buf *buf = (stats_buf *)(ref);
 	int len;
@@ -58,6 +60,11 @@ size_t mm_size() {
     size_t resident, sz;
     sz = sizeof(size_t);
 #ifdef JEMALLOC
+    // Force stats cache flush
+    uint64_t epoch = 1;
+    sz = sizeof(epoch);
+    je_mallctl("epoch", &epoch, &sz, &epoch, sz);
+
     je_mallctl("stats.resident", &resident, &sz, NULL, 0);
     return resident;
 #else

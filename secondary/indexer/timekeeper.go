@@ -1854,8 +1854,21 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			}
 
 		}
+	} else if tk.processPendingTS(streamId, bucket) {
+		//nothing to do
 	} else {
-		tk.processPendingTS(streamId, bucket)
+		if !tk.hasInitStateIndex(streamId, bucket) &&
+			tk.ss.checkCommitOverdue(streamId, bucket) {
+
+			tsVbuuid := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket].Copy()
+
+			if tsVbuuid.IsSnapAligned() {
+				logging.Infof("Timekeeper:: %v %v Forcing Overdue Commit", streamId, bucket)
+				tsVbuuid.SetSnapType(common.FORCE_COMMIT)
+				tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
+				tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
+			}
+		}
 	}
 
 }
@@ -1972,12 +1985,17 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 
 	tk.mayBeMakeSnapAligned(streamId, bucket, flushTs)
 
-	changeVec, noChange := tk.ss.computeTsChangeVec(streamId, bucket, flushTs)
-	if noChange {
-		return
+	var changeVec []bool
+	if flushTs.GetSnapType() != common.FORCE_COMMIT {
+		var noChange bool
+		changeVec, noChange = tk.ss.computeTsChangeVec(streamId, bucket, flushTs)
+		if noChange {
+			return
+		}
+		tk.setSnapshotType(streamId, bucket, flushTs)
 	}
 
-	tk.setSnapshotType(streamId, bucket, flushTs)
+	tk.setNeedsCommit(streamId, bucket, flushTs)
 
 	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = flushTs
 
@@ -2362,15 +2380,18 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	//wait on respCh
 	kvresp := <-restartMsg.(*MsgRestartVbuckets).GetResponseCh()
 
+	streamId := restartMsg.(*MsgRestartVbuckets).GetStreamId()
+	bucket := restartMsg.(*MsgRestartVbuckets).GetBucket()
+
 	//if timekeeper has moved to prepare unpause state, ignore
 	//the response message as all streams are going to be
 	//restarted anyways
 	if tk.checkIndexerState(common.INDEXER_PREPARE_UNPAUSE) {
+		tk.lock.Lock()
+		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+		tk.lock.Unlock()
 		return
 	}
-
-	streamId := restartMsg.(*MsgRestartVbuckets).GetStreamId()
-	bucket := restartMsg.(*MsgRestartVbuckets).GetBucket()
 
 	switch kvresp.GetMsgType() {
 
@@ -2921,6 +2942,19 @@ func (tk *timekeeper) getInMemSnapInterval() uint64 {
 		return tk.config["settings.inmemory_snapshot.moi.interval"].Uint64()
 	} else {
 		return tk.config["settings.inmemory_snapshot.interval"].Uint64()
+	}
+
+}
+
+func (tk *timekeeper) setNeedsCommit(streamId common.StreamId,
+	bucket string, flushTs *common.TsVbuuid) {
+
+	switch flushTs.GetSnapType() {
+
+	case common.INMEM_SNAP, common.NO_SNAP:
+		tk.ss.streamBucketNeedsCommitMap[streamId][bucket] = true
+	case common.DISK_SNAP, common.FORCE_COMMIT:
+		tk.ss.streamBucketNeedsCommitMap[streamId][bucket] = false
 	}
 
 }

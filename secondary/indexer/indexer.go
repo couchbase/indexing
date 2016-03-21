@@ -332,6 +332,23 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.scanCoordCmdCh <- &MsgIndexerState{mType: INDEXER_RESUME}
 	<-idx.scanCoordCmdCh
 
+	// Persist node uuid in Metadata store
+	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_SET_LOCAL,
+		key:   INDEXER_NODE_UUID,
+		value: idx.config["nodeuuid"].String(),
+	}
+
+	respMsg := <-idx.clustMgrAgentCmdCh
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	errMsg := resp.GetError()
+	if errMsg != nil {
+		logging.Fatalf("Indexer::NewIndexer Unable to set INDEXER_NODE_UUID In Local"+
+			"Meta Storage. Err %v", errMsg)
+		common.CrashOnError(errMsg)
+	}
+
 	logging.Infof("Indexer::NewIndexer Status %v", idx.getIndexerState())
 
 	idx.compactMgr, res = NewCompactionManager(idx.compactMgrCmdCh, idx.wrkrRecvCh, idx.config)
@@ -626,14 +643,22 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 
 		idx.streamBucketFlushInProgress[streamId][bucket] = true
 
-		idx.mutMgrCmdCh <- &MsgMutMgrFlushMutationQueue{
-			mType:     MUT_MGR_PERSIST_MUTATION_QUEUE,
-			bucket:    bucket,
-			ts:        ts,
-			streamId:  streamId,
-			changeVec: changeVec}
+		if ts.GetSnapType() == common.FORCE_COMMIT {
+			idx.storageMgrCmdCh <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
+				streamId: streamId,
+				bucket:   bucket,
+				ts:       ts}
+			<-idx.storageMgrCmdCh
+		} else {
+			idx.mutMgrCmdCh <- &MsgMutMgrFlushMutationQueue{
+				mType:     MUT_MGR_PERSIST_MUTATION_QUEUE,
+				bucket:    bucket,
+				ts:        ts,
+				streamId:  streamId,
+				changeVec: changeVec}
 
-		<-idx.mutMgrCmdCh
+			<-idx.mutMgrCmdCh
+		}
 
 	case MUT_MGR_ABORT_PERSIST:
 
@@ -3750,9 +3775,6 @@ func (idx *indexer) handleResetStats() {
 
 func (idx *indexer) memoryUsedStorage() int64 {
 	mem_used := int64(forestdb.BufferCacheUsed()) + int64(memdb.MemoryInUse()) + int64(nodetable.MemoryInUse())
-	if common.GetStorageMode() == common.MOI {
-		mem_used += int64(mm.Size())
-	}
 	return mem_used
 }
 

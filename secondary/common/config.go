@@ -586,6 +586,12 @@ var SystemConfig = Config{
 		"./",
 		true, // immutable
 	},
+	"indexer.nodeuuid": ConfigValue{
+		"",
+		"Indexer node UUID",
+		"",
+		true, // immutable
+	},
 	"indexer.numSliceWriters": ConfigValue{
 		runtime.NumCPU(),
 		"Number of Writer Threads for a Slice",
@@ -700,9 +706,9 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.moi.useDeltaInterleaving": ConfigValue{
-		false,
+		true,
 		"Use delta interleaving mode for on-disk snapshots",
-		false,
+		true,
 		false, // mutable
 	},
 	"indexer.useMutationSyncPool": ConfigValue{

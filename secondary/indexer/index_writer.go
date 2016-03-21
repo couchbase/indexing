@@ -22,6 +22,8 @@ type StorageStatistics struct {
 	InsertBytes int64
 	DeleteBytes int64
 
+	NeedUpgrade bool
+
 	InternalData []string
 }
 
