@@ -799,6 +799,7 @@ func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
 	dur := time.Since(t0)
 	if err == nil {
 		snapInfo.MainSnap = snap
+		mdb.setCommittedCount()
 		logging.Infof("MemDBSlice::loadSnapshot Slice Id %v, IndexInstId %v finished reading %v. Took %v",
 			mdb.id, mdb.idxInstId, snapInfo.dataPath, dur)
 	} else {
