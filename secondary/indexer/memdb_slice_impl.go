@@ -613,11 +613,12 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 		manifest := filepath.Join(tmpdir, "manifest.json")
 		os.RemoveAll(tmpdir)
 		mdb.confLock.RLock()
-		max_threads := mdb.sysconf["settings.moi.persistence_threads"].Int()
+		maxThreads := mdb.sysconf["settings.moi.persistence_threads"].Int()
 		total := platform.LoadInt64(&totalMemDBItems)
 		indexCount := mdb.GetCommittedCount()
+		// Compute number of workers to be used for taking backup
 		if total > 0 {
-			concurrency = int(math.Floor(float64(max_threads)*float64(indexCount)/float64(total) + 0.5))
+			concurrency = int(math.Ceil(float64(maxThreads) * float64(indexCount) / float64(total)))
 		}
 
 		mdb.confLock.RUnlock()
