@@ -94,7 +94,7 @@ type activeVb struct {
 type keeper map[string]*activeVb
 
 func (avb *activeVb) id() string {
-	return fmt.Sprintf("%v-%v-%v", avb.raddr, avb.bucket, avb.vbno)
+	return fmt.Sprintf("%v#%v#%v", avb.raddr, avb.bucket, avb.vbno)
 }
 
 func (hostUuids keeper) isActive(bucket string, vbno uint16) bool {

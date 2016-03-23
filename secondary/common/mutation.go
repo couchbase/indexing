@@ -40,7 +40,7 @@ type Payload struct {
 
 // StreamID is unique id for a vbucket across buckets.
 func StreamID(bucket string, vbno uint16) string {
-	return bucket + fmt.Sprintf("%v", vbno)
+	return bucket + fmt.Sprintf("#%v", vbno)
 }
 
 // NewStreamPayload returns a reference to payload, `nVb` provides the maximum
