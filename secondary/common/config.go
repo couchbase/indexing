@@ -990,6 +990,28 @@ var SystemConfig = Config{
 		true,
 		false, // mutable
 	},
+
+	//fdb specific settings
+	"indexer.settings.persisted_snapshot.fdb.interval": ConfigValue{
+		uint64(5000),
+		"Persisted snapshotting interval in milliseconds",
+		uint64(5000),
+		false, // mutable
+	},
+	"indexer.settings.persisted_snapshot_init_build.fdb.interval": ConfigValue{
+		uint64(5000),
+		"Persisted snapshotting interval in milliseconds for initial build",
+		uint64(5000),
+		false, // mutable
+	},
+	"indexer.settings.inmemory_snapshot.fdb.interval": ConfigValue{
+		uint64(200),
+		"InMemory snapshotting interval in milliseconds",
+		uint64(200),
+		false, // mutable
+	},
+	//end of fdb specific settings
+
 	//moi specific settings
 	"indexer.settings.persisted_snapshot.moi.interval": ConfigValue{
 		uint64(600000), // keep in sync with index_settings_manager.erl

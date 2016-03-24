@@ -569,7 +569,6 @@ func IndexStatement(def IndexDefn) string {
 	primCreate := "CREATE PRIMARY INDEX `%s` ON `%s`"
 	secCreate := "CREATE INDEX `%s` ON `%s`(%s)"
 	where := " WHERE %s"
-	with := " WITH({\"index_type\" : \"%s\"})"
 
 	if def.IsPrimary {
 		stmt = fmt.Sprintf(primCreate, def.Name, def.Bucket)
@@ -586,8 +585,6 @@ func IndexStatement(def IndexDefn) string {
 			stmt += fmt.Sprintf(where, def.WhereExpr)
 		}
 	}
-
-	stmt += fmt.Sprintf(with, def.Using)
 
 	withExpr := ""
 	if def.Immutable {
