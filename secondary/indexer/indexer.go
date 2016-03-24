@@ -3234,7 +3234,7 @@ func (idx *indexer) recoverInstMapFromFile() error {
 
 	//forestdb reports get in a non-existent key as an
 	//error, skip that
-	if err != nil && err != forestdb.RESULT_KEY_NOT_FOUND {
+	if err != nil && err != forestdb.FDB_RESULT_KEY_NOT_FOUND {
 		return err
 	}
 

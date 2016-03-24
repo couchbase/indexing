@@ -44,8 +44,8 @@ func TestForestDBCrud(t *testing.T) {
 		t.Error(err)
 	}
 	err = kvstore.Get(doc)
-	if err != RESULT_KEY_NOT_FOUND {
-		t.Errorf("expected %v, got %v", RESULT_KEY_NOT_FOUND, err)
+	if err != FDB_RESULT_KEY_NOT_FOUND {
+		t.Errorf("expected %v, got %v", FDB_RESULT_KEY_NOT_FOUND, err)
 	}
 	doc.Close()
 
@@ -116,7 +116,7 @@ func TestForestDBCrud(t *testing.T) {
 		t.Error(err)
 	}
 	err = kvstore.Get(doc)
-	if err != RESULT_KEY_NOT_FOUND {
+	if err != FDB_RESULT_KEY_NOT_FOUND {
 		t.Error(err)
 	}
 	doc.Close()
