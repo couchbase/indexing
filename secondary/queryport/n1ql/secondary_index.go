@@ -73,6 +73,15 @@ var n1ql2GsiConsistency = map[datastore.ScanConsistency]c.Consistency{
 
 // contains all index loaded via gsi cluster.
 type gsiKeyspace struct {
+	// for 8-byte alignment fot atomic access.
+	scandur        int64
+	blockeddur     int64
+	throttledur    int64
+	primedur       int64
+	totalscans     int64
+	backfillSize   int64
+	totalbackfills int64
+
 	rw             sync.RWMutex
 	clusterURL     string
 	namespace      string // aka pool
@@ -82,12 +91,6 @@ type gsiKeyspace struct {
 	indexes        map[uint64]*secondaryIndex // defnID -> index
 	primaryIndexes map[uint64]*secondaryIndex
 	logPrefix      string
-	scandur        int64
-	blockeddur     int64
-	throttledur    int64
-	primedur       int64
-	totalscans     int64
-	backfillSize   int64
 }
 
 // NewGSIIndexer manage new set of indexes under namespace->keyspace,
@@ -665,6 +668,7 @@ func (si *secondaryIndex) Scan(
 				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
 				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
 			}
+			atomic.AddInt64(&si.gsi.totalbackfills, 1)
 		}
 	}()
 	defer func() {
@@ -720,6 +724,7 @@ func (si *secondaryIndex) ScanEntries(
 				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
 				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
 			}
+			atomic.AddInt64(&si.gsi.totalbackfills, 1)
 		}
 	}()
 	defer func() {
@@ -1167,14 +1172,16 @@ func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
 		throttledur := atomic.LoadInt64(&gsi.throttledur)
 		primedur := atomic.LoadInt64(&gsi.primedur)
 		totalscans := atomic.LoadInt64(&gsi.totalscans)
+		totalbackfills := atomic.LoadInt64(&gsi.totalbackfills)
 		if totalscans > sofar {
 			fmsg := `%v logstats %q {` +
 				`"gsi_scan_count":%v,"gsi_scan_duration":%v,` +
 				`"gsi_throttle_duration":%v,` +
-				`"gsi_prime_duration":%v,"gsi_blocked_duration":%v}`
+				`"gsi_prime_duration":%v,"gsi_blocked_duration":%v,` +
+				`"gsi_totalbackfills":%v}`
 			l.Infof(
 				fmsg, gsi.logPrefix, gsi.keyspace, totalscans, scandur,
-				throttledur, primedur, blockeddur)
+				throttledur, primedur, blockeddur, totalbackfills)
 		}
 		sofar = totalscans
 	}
