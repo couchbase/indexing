@@ -659,8 +659,8 @@ func (si *secondaryIndex) Scan(
 			<-syncCh
 			tmpfile.Close()
 			name := tmpfile.Name()
-			fmsg := "%v removing backfill file %v ...\n"
-			l.Debugf(fmsg, si.gsi.logPrefix, name)
+			fmsg := "%v Scan(%v) removing backfill file %v ...\n"
+			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
 			if err := os.Remove(name); err != nil {
 				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
 				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
@@ -680,6 +680,7 @@ func (si *secondaryIndex) Scan(
 			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
 			makeResponsehandler(
+				requestId,
 				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 
 	} else {
@@ -689,6 +690,7 @@ func (si *secondaryIndex) Scan(
 			si.defnID, requestId, low, high, incl, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
 			makeResponsehandler(
+				requestId,
 				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 	}
 	atomic.AddInt64(&si.gsi.totalscans, 1)
@@ -712,8 +714,8 @@ func (si *secondaryIndex) ScanEntries(
 			<-syncCh
 			tmpfile.Close()
 			name := tmpfile.Name()
-			fmsg := "%v removing backfill file %v ...\n"
-			l.Debugf(fmsg, si.gsi.logPrefix, name)
+			fmsg := "%v ScanEntries(%v) removing backfill file %v ...\n"
+			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
 			if err := os.Remove(name); err != nil {
 				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
 				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
@@ -731,6 +733,7 @@ func (si *secondaryIndex) ScanEntries(
 		si.defnID, requestId, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
 		makeResponsehandler(
+			requestId,
 			si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 
 	atomic.AddInt64(&si.gsi.totalscans, 1)
@@ -742,6 +745,7 @@ func (si *secondaryIndex) ScanEntries(
 //-------------------------------------
 
 func makeResponsehandler(
+	requestId string,
 	si *secondaryIndex,
 	client *qclient.GsiClient,
 	conn *datastore.IndexConnection,
@@ -767,10 +771,13 @@ func makeResponsehandler(
 			}
 			close(syncCh)
 			atomic.AddInt64(&backfillFin, 1)
-			l.Debugf("%v finished backfill for %v ...\n", lprefix, name)
+			l.Debugf(
+				"%v %q finished backfill for %v ...\n",
+				lprefix, requestId, name)
 			recover() // need this because entryChannel() would have closed
 		}()
-		l.Debugf("%v started backfill for %v ...\n", lprefix, name)
+		l.Debugf(
+			"%v %q started backfill for %v ...\n", lprefix, requestId, name)
 		for {
 			if pending := atomic.LoadInt64(&backfillEntries); pending > 0 {
 				atomic.AddInt64(&backfillEntries, -1)
@@ -782,23 +789,23 @@ func makeResponsehandler(
 			}
 			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
 			if cummsize > backfillLimit {
-				fmsg := "backfill exceeded limit %v, %v"
-				err := fmt.Errorf(fmsg, backfillLimit, cummsize)
+				fmsg := "%q backfill exceeded limit %v, %v"
+				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
 				return
 			}
 
 			skeys := make([]c.SecondaryKey, 0)
 			if err := dec.Decode(&skeys); err != nil {
-				fmsg := "%v decoding from backfill %v: %v\n"
-				l.Errorf(fmsg, lprefix, name, err)
+				fmsg := "%v %q decoding from backfill %v: %v\n"
+				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
 				return
 			}
 			pkeys := make([][]byte, 0)
 			if err := dec.Decode(&pkeys); err != nil {
-				fmsg := "%v decoding from backfill %v: %v\n"
-				l.Errorf(fmsg, lprefix, name, err)
+				fmsg := "%v %q decoding from backfill %v: %v\n"
+				l.Errorf(fmsg, lprefix, requestId, name, err)
 				conn.Error(n1qlError(client, err))
 				return
 			}
@@ -833,10 +840,10 @@ func makeResponsehandler(
 			prefix := "scan-backfill" + strconv.Itoa(os.Getpid())
 			*tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
 			name := (*tmpfile).Name()
-			l.Debugf("%v new backfill file ... %v\n", lprefix, name)
+			l.Infof("%v %v new backfill file ... %v\n", lprefix, requestId, name)
 			if err != nil {
-				fmsg := "%v creating backfill file %v : %v\n"
-				l.Errorf(fmsg, lprefix, name, err)
+				fmsg := "%v %q creating backfill file %v : %v\n"
+				l.Errorf(fmsg, lprefix, requestId, name, err)
 				*tmpfile = nil
 				conn.Error(n1qlError(client, err))
 				return false
@@ -845,8 +852,8 @@ func makeResponsehandler(
 				enc = gob.NewEncoder(*tmpfile)
 				readfd, err = os.OpenFile(name, os.O_RDONLY, 0666)
 				if err != nil {
-					fmsg := "%v reading backfill file %v: %v\n"
-					l.Errorf(fmsg, lprefix, name, err)
+					fmsg := "%v %v reading backfill file %v: %v\n"
+					l.Errorf(fmsg, lprefix, requestId, name, err)
 					conn.Error(n1qlError(client, err))
 					return false
 				}
@@ -860,8 +867,8 @@ func makeResponsehandler(
 			// whether temp-file is exhausted the limit.
 			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
 			if cummsize > backfillLimit {
-				fmsg := "backfill exceeded limit %v, %v"
-				err := fmt.Errorf(fmsg, backfillLimit, cummsize)
+				fmsg := "%q backfill exceeded limit %v, %v"
+				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
 				conn.Error(n1qlError(client, err))
 				return false
 			}
