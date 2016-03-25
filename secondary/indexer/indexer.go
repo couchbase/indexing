@@ -3034,7 +3034,7 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 			}
 			logging.Infof("Indexer::bootstrap Recovered Indexer State %v", val)
 
-		} else if strings.Contains(err.Error(), "key not found") {
+		} else if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
 			//if there is no IndexerState, nothing to do
 			logging.Infof("Indexer::bootstrap No Previous Indexer State Recovered")
 
@@ -3090,7 +3090,7 @@ func (idx *indexer) genIndexerId() {
 
 		if err == nil {
 			idx.id = val
-		} else if strings.Contains(err.Error(), "key not found") {
+		} else if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
 			//if there is no IndexerId, generate and store in manager
 
 			id, err := common.NewUUID()
