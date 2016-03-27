@@ -791,10 +791,16 @@ var SystemConfig = Config{
 		0.1,
 		false, // mutable
 	},
-	"indexer.fracMutationQueueMem": ConfigValue{
+	"indexer.mutation_manager.fdb.fracMutationQueueMem": ConfigValue{
 		0.4,
 		"Fraction of memory_quota allocated to Mutation Queue",
 		0.4,
+		false, // mutable
+	},
+	"indexer.mutation_manager.moi.fracMutationQueueMem": ConfigValue{
+		0.1,
+		"Fraction of memory_quota allocated to Mutation Queue",
+		0.1,
 		false, // mutable
 	},
 	"indexer.settings.gc_percent": ConfigValue{

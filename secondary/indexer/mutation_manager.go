@@ -1064,7 +1064,7 @@ func (m *mutationMgr) handleConfigUpdate(cmd Message) {
 func (m *mutationMgr) setMaxMemoryFromQuota() {
 
 	memQuota := m.config["settings.memory_quota"].Uint64()
-	fracQueueMem := m.config["fracMutationQueueMem"].Float64()
+	fracQueueMem := getMutationQueueMemFrac(m.config)
 
 	maxMem := int64(fracQueueMem * float64(memQuota))
 	platform.StoreInt64(&m.maxMemory, maxMem)
@@ -1106,4 +1106,14 @@ func (m *mutationMgr) handleIndexerResume(cmd Message) {
 	m.indexerState = common.INDEXER_ACTIVE
 
 	m.supvCmdch <- &MsgSuccess{}
+}
+
+func getMutationQueueMemFrac(config common.Config) float64 {
+
+	if common.GetStorageMode() == common.MOI {
+		return config["mutation_manager.moi.fracMutationQueueMem"].Float64()
+	} else {
+		return config["mutation_manager.fdb.fracMutationQueueMem"].Float64()
+	}
+
 }
