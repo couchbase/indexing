@@ -52,7 +52,7 @@ type timekeeper struct {
 	stats           IndexerStatsHolder
 	vbCheckerStopCh chan bool
 
-	lock sync.Mutex //lock to protect this structure
+	lock sync.RWMutex //lock to protect this structure
 
 	indexerState common.IndexerState
 }
@@ -2343,6 +2343,13 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	if status := tk.ss.streamBucketStatus[streamId][bucket]; status == STREAM_INACTIVE {
+
+		logging.Infof("Timekeeper::repairStream Found Stream %v Bucket %v In "+
+			"State %v. Skipping Repair.", streamId, bucket, status)
+		return
+	}
+
 	//prepare repairTs with all vbs in STREAM_END, REPAIR status and
 	//send that to KVSender to repair
 	if repairTs, needRepair, connErrVbs := tk.ss.getRepairTsForBucket(streamId, bucket); needRepair {
@@ -2395,6 +2402,10 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 	switch kvresp.GetMsgType() {
 
+	case REPAIR_ABORT:
+		//nothing to do
+		logging.Infof("Timekeeper::sendRestartMsg Repair Aborted %v %v", streamId, bucket)
+
 	case MSG_SUCCESS:
 		//allow sufficient time for control messages to come in
 		//after projector has confirmed success
@@ -2404,6 +2415,17 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		tk.repairStream(streamId, bucket)
 
 	case INDEXER_ROLLBACK:
+
+		tk.lock.RLock()
+		status := tk.ss.streamBucketStatus[streamId][bucket]
+		tk.lock.RUnlock()
+
+		if status == STREAM_INACTIVE {
+			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
+				"State %v. Skipping Rollback.", streamId, bucket, status)
+			return
+		}
+
 		//if rollback msg, call initPrepareRecovery
 		logging.Infof("Timekeeper::sendRestartMsg Received Rollback Msg For "+
 			"%v %v. Sending Init Prepare.", streamId, bucket)
@@ -2419,6 +2441,13 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		tk.lock.Lock()
 		defer tk.lock.Unlock()
+
+		if status := tk.ss.streamBucketStatus[streamId][bucket]; status == STREAM_INACTIVE {
+
+			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
+				"State %v. Skipping Stream Repair.", streamId, bucket, status)
+			return
+		}
 
 		//reset timer for open stream
 		tk.ss.streamBucketOpenTsMap[streamId][bucket] = nil
@@ -2453,9 +2482,16 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 				"For Stream %v Bucket %v", streamId, bucket)
 
 			tk.lock.Lock()
-			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
-			tk.ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
-			tk.lock.Unlock()
+			defer tk.lock.Unlock()
+			if status := tk.ss.streamBucketStatus[streamId][bucket]; status == STREAM_INACTIVE {
+
+				logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
+					"State %v. Skipping Bucket Not Found.", streamId, bucket, status)
+				return
+			} else {
+				delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+				tk.ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+			}
 
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 				streamId: streamId,
@@ -2463,7 +2499,17 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		} else {
 			logging.Errorf("Timekeeper::sendRestartMsg Error Response "+
 				"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
+
 			tk.lock.Lock()
+			status := tk.ss.streamBucketStatus[streamId][bucket]
+
+			if status == STREAM_INACTIVE {
+				tk.lock.Unlock()
+				logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
+					"State %v. Skipping RestartVbucket Retry.", streamId, bucket, status)
+				return
+			}
+
 			tk.ss.markRestartVbError(streamId, bucket)
 			tk.lock.Unlock()
 			tk.repairStream(streamId, bucket)

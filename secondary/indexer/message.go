@@ -135,6 +135,7 @@ const (
 	INDEXER_STATS
 
 	STATS_RESET
+	REPAIR_ABORT
 )
 
 type Message interface {
@@ -937,6 +938,23 @@ func (m *MsgRollback) GetRollbackTs() *common.TsVbuuid {
 	return m.rollbackTs
 }
 
+type MsgRepairAbort struct {
+	streamId common.StreamId
+	bucket   string
+}
+
+func (m *MsgRepairAbort) GetMsgType() MsgType {
+	return REPAIR_ABORT
+}
+
+func (m *MsgRepairAbort) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgRepairAbort) GetBucket() string {
+	return m.bucket
+}
+
 type MsgIndexSnapRequest struct {
 	ts          *common.TsVbuuid
 	cons        common.Consistency
@@ -1204,6 +1222,8 @@ func (m MsgType) String() string {
 		return "TK_MERGE_STREAM_ACK"
 	case TK_GET_BUCKET_HWT:
 		return "TK_GET_BUCKET_HWT"
+	case REPAIR_ABORT:
+		return "REPAIR_ABORT"
 
 	case STORAGE_MGR_SHUTDOWN:
 		return "STORAGE_MGR_SHUTDOWN"

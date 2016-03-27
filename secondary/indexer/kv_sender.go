@@ -373,20 +373,23 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 	var rollbackTs *protobuf.TsVbuuid
 	topic := getTopicForStreamId(streamId)
 	rollback := false
+	aborted := false
 
 	fn := func(r int, err error) error {
 
 		for _, addr := range addrs {
-			ap := newProjClient(addr)
+			aborted = execWithStopCh(func() {
+				ap := newProjClient(addr)
 
-			if res, ret := k.sendRestartVbuckets(ap, topic, connErrVbs, protoRestartTs); ret != nil {
-				//retry for all errors
-				logging.Errorf("KVSender::restartVbuckets %v %v Error Received %v from %v",
-					streamId, restartTs.Bucket, ret, addr)
-				err = ret
-			} else {
-				rollbackTs = updateRollbackTsFromResponse(restartTs.Bucket, rollbackTs, res)
-			}
+				if res, ret := k.sendRestartVbuckets(ap, topic, connErrVbs, protoRestartTs); ret != nil {
+					//retry for all errors
+					logging.Errorf("KVSender::restartVbuckets %v %v Error Received %v from %v",
+						streamId, restartTs.Bucket, ret, addr)
+					err = ret
+				} else {
+					rollbackTs = updateRollbackTsFromResponse(restartTs.Bucket, rollbackTs, res)
+				}
+			}, stopCh)
 		}
 
 		if rollbackTs != nil && checkVbListInTS(protoRestartTs.GetVbnos(), rollbackTs) {
@@ -401,9 +404,12 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
 	err = rh.Run()
 
-	//if any of the requested vb is in rollback ts, send rollback
-	//msg to caller
-	if rollback {
+	if aborted {
+		respCh <- &MsgRepairAbort{streamId: streamId,
+			bucket: restartTs.Bucket}
+	} else if rollback {
+		//if any of the requested vb is in rollback ts, send rollback
+		//msg to caller
 		//convert from protobuf to native format
 		nativeTs := rollbackTs.ToTsVbuuid(numVbuckets)
 
@@ -1258,15 +1264,16 @@ func checkVbListInTS(vbList []uint32, ts *protobuf.TsVbuuid) bool {
 
 }
 
-func execWithStopCh(fn func(), stopCh StopChannel) {
+func execWithStopCh(fn func(), stopCh StopChannel) bool {
 
 	select {
 
 	case <-stopCh:
-		return
+		return true
 
 	default:
 		fn()
+		return false
 
 	}
 
