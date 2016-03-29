@@ -1494,6 +1494,7 @@ func (tk *timekeeper) prepareRecovery(streamId common.StreamId,
 			"Bucket %v State Changed to PREPARE_RECOVERY", streamId, bucket)
 
 		tk.ss.streamBucketStatus[streamId][bucket] = STREAM_PREPARE_RECOVERY
+
 		//The existing mutations for which stability TS has already been generated
 		//can be safely flushed before initiating recovery. This can reduce the duration
 		//of recovery.
@@ -2906,6 +2907,7 @@ func (tk *timekeeper) handleIndexerResume(cmd Message) {
 	for s, bs := range tk.ss.streamBucketStatus {
 		for b, status := range bs {
 			if status != STREAM_INACTIVE {
+				tk.ss.streamBucketFlushEnabledMap[s][b] = false
 				tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
 					streamId: s,
 					bucket:   b}
