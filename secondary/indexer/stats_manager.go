@@ -596,7 +596,11 @@ func (s *statsManager) runStatsDumpLogger() {
 		stats := s.stats.Get()
 		if stats != nil {
 			bytes, _ := stats.MarshalJSON()
-			logging.Infof("PeriodicStats = %s\n==== StorageStats ====\n%s", string(bytes), s.getStorageStats())
+			var storageStats string
+			if logging.IsEnabled(logging.Debug) {
+				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
+			}
+			logging.Infof("PeriodicStats = %s%s", string(bytes), storageStats)
 		}
 
 		time.Sleep(time.Second * time.Duration(platform.LoadUint64(&s.statsLogDumpInterval)))
