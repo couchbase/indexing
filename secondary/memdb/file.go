@@ -178,7 +178,7 @@ func (f *forestdbFileReader) Open(path string) error {
 func (f *forestdbFileReader) ReadItem() (*Item, error) {
 	itm := &Item{}
 	doc, err := f.iter.Get()
-	if err == forestdb.RESULT_ITERATOR_FAIL {
+	if err == forestdb.FDB_RESULT_ITERATOR_FAIL {
 		return nil, nil
 	}
 

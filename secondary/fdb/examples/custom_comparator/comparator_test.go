@@ -64,7 +64,7 @@ func TestForestCustomComparator(t *testing.T) {
 	if string(lastKey) != "c" {
 		t.Errorf("expected last key to be g, got %s", lastKey)
 	}
-	if err != forestdb.RESULT_ITERATOR_FAIL {
-		t.Errorf("expected %#v, got %#v", forestdb.RESULT_ITERATOR_FAIL, err)
+	if err != forestdb.FDB_RESULT_ITERATOR_FAIL {
+		t.Errorf("expected %#v, got %#v", forestdb.FDB_RESULT_ITERATOR_FAIL, err)
 	}
 }

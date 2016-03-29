@@ -614,7 +614,7 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 				logging.Debugf("LifecycleMgr.handleDeleteBucket() : Cannot find index instance %v.  Skip.", defnRef.DefnId)
 			}
 		}
-	} else if err != fdb.RESULT_KEY_NOT_FOUND {
+	} else if err != fdb.FDB_RESULT_KEY_NOT_FOUND {
 		result = err
 	}
 
@@ -647,7 +647,7 @@ func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 	}
 
 	topology, err := m.repo.GetTopologyByBucket(bucket)
-	if err != nil && err != fdb.RESULT_KEY_NOT_FOUND {
+	if err != nil && err != fdb.FDB_RESULT_KEY_NOT_FOUND {
 		return common.BUCKET_UUID_NIL, err
 	}
 

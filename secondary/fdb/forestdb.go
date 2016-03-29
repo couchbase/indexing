@@ -9,7 +9,7 @@ package forestdb
 //  either express or implied. See the License for the specific language governing permissions
 //  and limitations under the License.
 
-//#cgo LDFLAGS: -lforestdb -lbreakpad_wrapper
+//#cgo LDFLAGS: -lforestdb
 //#cgo CFLAGS: -O0
 //#include <stdlib.h>
 //#include <libforestdb/forestdb.h>
@@ -197,11 +197,4 @@ func Shutdown() error {
 // Buffer cache used by the forestdb global pool
 func BufferCacheUsed() uint64 {
 	return uint64(C.fdb_get_buffer_cache_used())
-}
-
-// Invoke breakpad on forestdb fatal errors
-func InitBreakpadForFDB(diagdir string) {
-	// cdir := C.CString(diagdir)
-	// defer C.free(unsafe.Pointer(cdir))
-	// C.init_fdb_breakpad(cdir)
 }

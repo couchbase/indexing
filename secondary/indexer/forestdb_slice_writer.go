@@ -85,7 +85,7 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 
 retry:
 	if slice.dbfile, err = forestdb.Open(filepath, config); err != nil {
-		if err == forestdb.RESULT_NO_DB_HEADERS {
+		if err == forestdb.FDB_RESULT_NO_DB_HEADERS {
 			logging.Warnf("NewForestDBSlice(): Open failed with no_db_header error...Resetting the forestdb file")
 			os.Remove(filepath)
 			goto retry
@@ -371,11 +371,11 @@ func (fdb *fdbSlice) insertPrimaryIndex(key []byte, docid []byte, workerId int) 
 		//skip
 		logging.Tracef("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Key %v Already Exists. "+
 			"Primary Index Update Skipped.", fdb.id, fdb.idxInstId, string(docid))
-	} else if err != nil && err != forestdb.RESULT_KEY_NOT_FOUND {
+	} else if err != nil && err != forestdb.FDB_RESULT_KEY_NOT_FOUND {
 		fdb.checkFatalDbError(err)
 		logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error locating "+
 			"mainindex entry %v", fdb.id, fdb.idxInstId, err)
-	} else if err == forestdb.RESULT_KEY_NOT_FOUND {
+	} else if err == forestdb.FDB_RESULT_KEY_NOT_FOUND {
 		//set in main index
 		t0 := time.Now()
 		if err = fdb.main[workerId].SetKV(key, nil); err != nil {
@@ -791,7 +791,7 @@ func (fdb *fdbSlice) getBackIndexEntry(docid []byte, workerId int) ([]byte, erro
 
 	//forestdb reports get in a non-existent key as an
 	//error, skip that
-	if err != nil && err != forestdb.RESULT_KEY_NOT_FOUND {
+	if err != nil && err != forestdb.FDB_RESULT_KEY_NOT_FOUND {
 		return nil, err
 	}
 
@@ -1397,7 +1397,7 @@ func (fdb *fdbSlice) getSnapshotsMeta() ([]SnapshotInfo, error) {
 	t0 := time.Now()
 	data, err := fdb.meta.GetKV(snapshotMetaListKey)
 	if err != nil {
-		if err == forestdb.RESULT_KEY_NOT_FOUND {
+		if err == forestdb.FDB_RESULT_KEY_NOT_FOUND {
 			return []SnapshotInfo(nil), nil
 		}
 		return nil, err

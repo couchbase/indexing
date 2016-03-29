@@ -187,7 +187,7 @@ func runTest(repo *manager.MetadataRepo, t *testing.T) {
 	for {
 		key, defn, err := iter.Next()
 		if err != nil {
-			if err != fdb.RESULT_ITERATOR_FAIL {
+			if err != fdb.FDB_RESULT_ITERATOR_FAIL {
 				logging.Infof("error during iteration %s", err.Error())
 			}
 			break

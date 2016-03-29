@@ -70,8 +70,8 @@ func TestForestDBIterator(t *testing.T) {
 	if string(lastKey) != "g" {
 		t.Errorf("expected lats key to be g, got %s", lastKey)
 	}
-	if err != RESULT_ITERATOR_FAIL {
-		t.Errorf("expected %#v, got %#v", RESULT_ITERATOR_FAIL, err)
+	if err != FDB_RESULT_ITERATOR_FAIL {
+		t.Errorf("expected %#v, got %#v", FDB_RESULT_ITERATOR_FAIL, err)
 	}
 
 }
@@ -133,8 +133,8 @@ func TestForestDBIteratorSeq(t *testing.T) {
 	if string(lastKey) != "g" {
 		t.Errorf("expected lats key to be g, got %s", lastKey)
 	}
-	if err != RESULT_ITERATOR_FAIL {
-		t.Errorf("expected %#v, got %#v", RESULT_ITERATOR_FAIL, err)
+	if err != FDB_RESULT_ITERATOR_FAIL {
+		t.Errorf("expected %#v, got %#v", FDB_RESULT_ITERATOR_FAIL, err)
 	}
 
 }
@@ -336,8 +336,8 @@ func TestForestDBIteratorOnSnapshot(t *testing.T) {
 	if string(lastKey) != "g" {
 		t.Errorf("expected lats key to be g, got %s", lastKey)
 	}
-	if err != RESULT_ITERATOR_FAIL {
-		t.Errorf("expected %#v, got %#v", RESULT_ITERATOR_FAIL, err)
+	if err != FDB_RESULT_ITERATOR_FAIL {
+		t.Errorf("expected %#v, got %#v", FDB_RESULT_ITERATOR_FAIL, err)
 	}
 
 }
@@ -407,8 +407,8 @@ func TestForestDBIteratorPreAlloc(t *testing.T) {
 	if string(lastKey) != "g" {
 		t.Errorf("expected lats key to be g, got %s", lastKey)
 	}
-	if err != RESULT_ITERATOR_FAIL {
-		t.Errorf("expected %#v, got %#v", RESULT_ITERATOR_FAIL, err)
+	if err != FDB_RESULT_ITERATOR_FAIL {
+		t.Errorf("expected %#v, got %#v", FDB_RESULT_ITERATOR_FAIL, err)
 	}
 
 }

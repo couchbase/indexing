@@ -35,7 +35,7 @@ ENDIF(JEMALLOC_FOUND)
 
 GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/indexer
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
-  DEPENDS forestdb breakpad_wrapper
+  DEPENDS forestdb
   CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
   CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
   GOTAGS "${TAGS}"
