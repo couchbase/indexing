@@ -41,12 +41,6 @@ type mutationStreamReader struct {
 	supvCmdch  MsgChannel //supervisor sends commands on this channel
 	supvRespch MsgChannel //channel to send any message to supervisor
 
-	numWorkers int // number of workers to process mutation stream
-
-	workerch      []MutationChannel //buffered channel for each worker
-	workerStopCh  []StopChannel     //stop channels of workers
-	workerWaitGrp sync.WaitGroup
-
 	syncStopCh StopChannel
 	syncLock   sync.Mutex
 
@@ -67,6 +61,9 @@ type mutationStreamReader struct {
 
 	indexerState common.IndexerState
 	stateLock    sync.Mutex
+
+	queueMapLock sync.RWMutex
+	stopch       StopChannel
 }
 
 //CreateMutationStreamReader creates a new mutation stream and starts
@@ -103,9 +100,6 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		streamMutch:       streamMutch,
 		supvCmdch:         supvCmdch,
 		supvRespch:        supvRespch,
-		numWorkers:        numWorkers,
-		workerch:          make([]MutationChannel, numWorkers),
-		workerStopCh:      make([]StopChannel, numWorkers),
 		syncStopCh:        make(StopChannel),
 		bucketQueueMap:    CopyBucketQueueMap(bucketQueueMap),
 		bucketFilterMap:   make(map[string]*common.TsVbuuid),
@@ -113,6 +107,7 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		bucketSyncDue:     make(map[string]bool),
 		killch:            make(chan bool),
 		syncBatchInterval: getSyncBatchInterval(config),
+		stopch:            make(StopChannel),
 	}
 
 	r.stats.Set(stats)
@@ -125,14 +120,6 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 	go r.listenSupvCmd()
 
 	go r.syncWorker()
-
-	//init worker buffers
-	for w := 0; w < r.numWorkers; w++ {
-		r.workerch[w] = make(MutationChannel, getWorkerBufferSize(config))
-	}
-
-	//start stream workers
-	r.startWorkers()
 
 	return r, &MsgSuccess{}
 }
@@ -148,11 +135,10 @@ func (r *mutationStreamReader) Shutdown() {
 	//stop sync worker
 	close(r.syncStopCh)
 
+	close(r.stopch)
+
 	//close the mutation stream
 	r.stream.Close()
-
-	//stop all workers
-	r.stopWorkers()
 
 }
 
@@ -355,30 +341,7 @@ func (r *mutationStreamReader) handleSingleKeyVersion(bucket string, vbucket Vbu
 
 	//place secKey in the right worker's queue
 	if mutk != nil {
-		r.workerch[int(vbucket)%r.numWorkers] <- mutk
-	}
-
-}
-
-//startMutationStreamWorker is the worker which processes mutation in a worker queue
-func (r *mutationStreamReader) startMutationStreamWorker(workerId int, stopch StopChannel) {
-
-	logging.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
-		"Started for Stream %v.", workerId, r.streamId)
-
-	defer r.workerWaitGrp.Done()
-
-	var mut *MutationKeys
-
-	for {
-		select {
-		case mut = <-r.workerch[workerId]:
-			r.handleSingleMutation(mut, stopch)
-		case <-stopch:
-			logging.Infof("MutationStreamReader::startMutationStreamWorker Stream Worker %v "+
-				"Stopped for Stream %v", workerId, r.streamId)
-			return
-		}
+		r.handleSingleMutation(mutk, r.stopch)
 	}
 
 }
@@ -389,6 +352,9 @@ func (r *mutationStreamReader) handleSingleMutation(mut *MutationKeys, stopch St
 	logging.LazyTrace(func() string {
 		return fmt.Sprintf("MutationStreamReader::handleSingleMutation received mutation %v", mut)
 	})
+
+	r.queueMapLock.RLock()
+	defer r.queueMapLock.RUnlock()
 
 	//based on the index, enqueue the mutation in the right queue
 	if q, ok := r.bucketQueueMap[mut.meta.bucket]; ok {
@@ -458,8 +424,11 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 	case STREAM_READER_UPDATE_QUEUE_MAP:
 
 		logging.Infof("MutationStreamReader::handleSupervisorCommands %v", cmd)
-		//stop all workers
-		r.stopWorkers()
+
+		close(r.stopch)
+
+		r.queueMapLock.Lock()
+		defer r.queueMapLock.Unlock()
 
 		//copy and store new bucketQueueMap
 		req := cmd.(*MsgUpdateBucketQueue)
@@ -470,8 +439,7 @@ func (r *mutationStreamReader) handleSupervisorCommands(cmd Message) Message {
 		bucketFilter := req.GetBucketFilter()
 		r.initBucketFilter(bucketFilter)
 
-		//start all workers again
-		r.startWorkers()
+		r.stopch = make(StopChannel)
 
 		return &MsgSuccess{}
 
@@ -517,35 +485,6 @@ func (r *mutationStreamReader) panicHandler() {
 				cause:    err}}
 		r.supvRespch <- msg
 	}
-}
-
-//startWorkers starts all stream workers and passes
-//a StopChannel to each worker
-func (r *mutationStreamReader) startWorkers() {
-
-	logging.Infof("MutationStreamReader::startWorkers Starting All Stream Workers %v", r.streamId)
-
-	//start worker goroutines to process incoming mutation concurrently
-	for w := 0; w < r.numWorkers; w++ {
-		r.workerWaitGrp.Add(1)
-		r.workerStopCh[w] = make(StopChannel)
-		go r.startMutationStreamWorker(w, r.workerStopCh[w])
-	}
-}
-
-//stopWorkers stops all stream workers. This call doesn't return till
-//all workers are stopped
-func (r *mutationStreamReader) stopWorkers() {
-
-	logging.Infof("MutationStreamReader::stopWorkers Stopping All Stream Workers %v", r.streamId)
-
-	//stop all workers
-	for _, ch := range r.workerStopCh {
-		close(ch)
-	}
-
-	//wait for all workers to finish
-	r.workerWaitGrp.Wait()
 }
 
 //initBucketFilter initializes the bucket filter
@@ -783,16 +722,6 @@ func getMutationBufferSize(config common.Config) uint64 {
 		return config["stream_reader.moi.mutationBuffer"].Uint64()
 	} else {
 		return config["stream_reader.fdb.mutationBuffer"].Uint64()
-	}
-
-}
-
-func getWorkerBufferSize(config common.Config) uint64 {
-
-	if common.GetStorageMode() == common.MOI {
-		return config["stream_reader.moi.workerBuffer"].Uint64()
-	} else {
-		return config["stream_reader.fdb.workerBuffer"].Uint64()
 	}
 
 }
