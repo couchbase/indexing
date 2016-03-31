@@ -324,7 +324,11 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *nod
 			if n != nil {
 				return n
 			}
-			if totalWait > 5000 {
+			if totalWait > 300000 { // 5mins
+				logging.Warnf("Indexer::MutationQueue Max Wait Period for Node "+
+					"Alloc Expired %v. Forcing Alloc. Vbucket %v", totalWait, vbucket)
+				return &node{}
+			} else if totalWait > 5000 {
 				logging.Warnf("Indexer::MutationQueue Waiting for Node "+
 					"Alloc for %v Milliseconds Vbucket %v", totalWait, vbucket)
 			}
