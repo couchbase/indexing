@@ -571,9 +571,9 @@ loop:
 				blocked = false
 				select {
 				case <-tick.C:
-					percent := float64(duration) / float64(time.Since(epoc))
+					ratio := float64(duration) / float64(time.Since(epoc))
 					fmsg := "%v DATP -> Indexer %f%% blocked"
-					logging.Infof(fmsg, prefix, percent)
+					logging.Infof(fmsg, prefix, ratio*100)
 				default:
 				}
 			}
