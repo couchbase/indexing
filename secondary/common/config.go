@@ -355,6 +355,12 @@ var SystemConfig = Config{
 	},
 	// indexer dataport parameters
 	"indexer.dataport.genServerChanSize": ConfigValue{
+		1024,
+		"request channel size of indexer dataport's gen-server routine",
+		1024,
+		true, // immutable
+	},
+	"indexer.dataport.dataChanSize": ConfigValue{
 		100000,
 		"request channel size of indexer dataport's gen-server routine",
 		100000,
