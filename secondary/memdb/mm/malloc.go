@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	Debug bool = true
+	Debug bool = false
 	mu    sync.Mutex
 )
 
