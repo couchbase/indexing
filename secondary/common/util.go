@@ -3,6 +3,7 @@ package common
 import "errors"
 import "fmt"
 import "io"
+import "path/filepath"
 import "net"
 import "net/url"
 import "os"
@@ -719,4 +720,15 @@ func Console(clusterAddr string, format string, v ...interface{}) error {
 	_, err = client.Do(req)
 
 	return err
+}
+
+func DiskUsage(dir string) (int64, error) {
+	var sz int64
+	err := filepath.Walk(dir, func(_ string, fi os.FileInfo, err error) error {
+		if !fi.IsDir() {
+			sz += fi.Size()
+		}
+		return err
+	})
+	return sz, err
 }
