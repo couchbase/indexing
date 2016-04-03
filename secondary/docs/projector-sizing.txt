@@ -1,0 +1,37 @@
+following are the arguments that can be adjusted for projector sizing:
+
+    "projector.dcp.dataChanSize": 10000,
+        channel size for DCP's data path routines,
+        changing this value does not affect existing feeds.
+
+    "projector.dcp.numConnections": 4,
+        connect with N concurrent DCP connection with KV.
+
+    "projector.mutationChanSize": 500,
+        channel size of projector's vbucket workers,
+        changing this value does not affect existing feeds.
+
+    "projector.vbucketWorkers": 64,
+        number of vbuckets to be handled by a single worker.
+
+    "projector.dataport.keyChanSize": 100000,
+        channel size of dataport endpoints data input,
+        does not affect existing feeds.
+
+To get an approximate estimation for projector sizing:
+
+    ((dataChanSize * numConnections) + dataChanSize) * (key_size + document_size)
+    +
+    (mutationChanSize * vbucketWorkers) * (key_size + document_size)
+    +
+    (keyChanSize * index_entry_size)
+
+For Example,
+
+with the above default configuration and following number:
+key_size: 64 bytes
+doc_size: 10 KBytes
+index_entry_size: 128 bytes
+
+projector memory consumption should be ~832MB for buffers, plus GC memory. GC
+memory shall vary between golang version.
