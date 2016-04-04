@@ -257,7 +257,7 @@ func (mdb *memdbSlice) DecrRef() {
 	mdb.refCount--
 	if mdb.refCount == 0 {
 		if mdb.isSoftClosed {
-			tryClosememdbSlice(mdb)
+			go tryClosememdbSlice(mdb)
 		}
 		if mdb.isSoftDeleted {
 			tryDeletememdbSlice(mdb)
@@ -674,6 +674,17 @@ func (mdb *memdbSlice) cleanupOldSnapshotFiles(keepn int) {
 	}
 }
 
+func (mdb *memdbSlice) diskSize() int64 {
+	var sz int64
+	snapdirs, _ := filepath.Glob(filepath.Join(mdb.path, "snapshot.*"))
+	for _, dir := range snapdirs {
+		s, _ := common.DiskUsage(dir)
+		sz += s
+	}
+
+	return sz
+}
+
 func (mdb *memdbSlice) getSnapshotManifests() []string {
 	var files []string
 	pattern := "*/manifest.json"
@@ -908,7 +919,7 @@ func (mdb *memdbSlice) Close() {
 	if mdb.refCount > 0 {
 		mdb.isSoftClosed = true
 	} else {
-		tryClosememdbSlice(mdb)
+		go tryClosememdbSlice(mdb)
 	}
 }
 
@@ -994,6 +1005,7 @@ func (mdb *memdbSlice) Statistics() (StorageStatistics, error) {
 
 	sts.InternalData = internalData
 	sts.DataSize = mdb.mainstore.MemoryInUse()
+	sts.DiskSize = mdb.diskSize()
 	return sts, nil
 }
 

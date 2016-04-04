@@ -130,6 +130,7 @@ const (
 
 type deltaWrContext struct {
 	state        int
+	closed       chan struct{}
 	notifyStatus chan error
 	sn           uint32
 	fw           FileWriter
@@ -139,6 +140,7 @@ type deltaWrContext struct {
 func (ctx *deltaWrContext) Init() {
 	ctx.state = dwStateInactive
 	ctx.notifyStatus = make(chan error)
+	ctx.closed = make(chan struct{})
 }
 
 type Writer struct {
@@ -602,6 +604,7 @@ func (m *MemDB) collectionWorker(w *Writer) {
 			w.doCheckpoint()
 		case gclist, ok := <-m.gcchan:
 			if !ok {
+				close(w.dwrCtx.closed)
 				return
 			}
 			for n := gclist; n != nil; n = n.GClink {
@@ -688,7 +691,6 @@ func (m *MemDB) ptrToItem(itmPtr unsafe.Pointer) *Item {
 
 func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concurrency int) error {
 	var wg sync.WaitGroup
-	var iters []*Iterator
 	var pivotItems []*Item
 
 	wch := make(chan int, shards)
@@ -740,8 +742,9 @@ func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concu
 				if itr == nil {
 					panic("iterator cannot be nil")
 				}
+				defer itr.Close()
+
 				itr.SetRefreshRate(m.refreshRate)
-				iters = append(iters, itr)
 				if startItem == nil {
 					itr.SeekFirst()
 				} else {
@@ -770,10 +773,6 @@ func (m *MemDB) Visitor(snap *Snapshot, callb VisitorCallback, shards int, concu
 	close(wch)
 
 	wg.Wait()
-
-	for _, itr := range iters {
-		itr.Close()
-	}
 
 	for _, err := range errors {
 		if err != nil {
@@ -805,10 +804,23 @@ func (m *MemDB) changeDeltaWrState(state int,
 			w.dwrCtx.fw = writers[id]
 		}
 
-		w.dwrCtx.notifyStatus <- nil
-		e := <-w.dwrCtx.notifyStatus
-		if e != nil {
-			err = e
+		// send
+		select {
+		case w.dwrCtx.notifyStatus <- nil:
+			break
+		case <-w.dwrCtx.closed:
+			return ErrShutdown
+		}
+
+		// receive
+		select {
+		case e := <-w.dwrCtx.notifyStatus:
+			if e != nil {
+				err = e
+			}
+			break
+		case <-w.dwrCtx.closed:
+			return ErrShutdown
 		}
 	}
 

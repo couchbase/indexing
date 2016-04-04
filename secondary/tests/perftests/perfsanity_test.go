@@ -65,8 +65,8 @@ func TestPerfInitialIndexBuild(t *testing.T) {
 	err := secondaryindex.N1QLCreateSecondaryIndex(indexName, bucketName, indexManagementAddress, "", []string{"company"}, false, nil, true, defaultIndexActiveTimeout)
 	FailTestIfError(err, "Error in creating the index", t)
 	elapsed := time.Since(start)
-	initialBuildtime := elapsed.Seconds()
-	log.Printf("Index build of %d user documents took %v (seconds)\n", numdocs, initialBuildtime)
+	initialBuildtime := elapsed.Nanoseconds()
+	log.Printf("PERFSTAT InitialBuild %v nanoseconds for %d documents\n", initialBuildtime, numdocs)
 
 	// Disabling Pass/Fail for now
 	/*if initialBuildtime > maxbuildtime {
@@ -195,11 +195,11 @@ func GetScanStats(summaryfile, statsfile string, t *testing.T) (Result, int64, i
 	log.Printf("ScanResults summary:")
 	log.Printf("Rows = %v", result.Rows)
 	// log.Printf("Duration = %v seconds", result.Duration)
-	log.Printf("Duration = %10.2f nanoseconds", result.Duration*1000000000)
-	log.Printf("Throughput = %v rows/sec", throughput)
-	log.Printf("Average Latency = %v nanoseconds\n", meanLatency)
-	log.Printf("95th Percentile Latency = %v nanoseconds\n", percentile95_ScanLatency)
-	log.Printf("80th Percentile Latency = %v nanoseconds\n", percentile80_ScanLatency)
+	log.Printf("PERFSTAT Duration %10.2f nanoseconds", result.Duration*1000000000)
+	log.Printf("PERFSTAT Throughput %v rows/sec", throughput)
+	log.Printf("PERFSTAT AverageLatency %v nanoseconds\n", meanLatency)
+	log.Printf("PERFSTAT 95thPercentileLatency %v nanoseconds\n", percentile95_ScanLatency)
+	log.Printf("PERFSTAT 80thPercentileLatency %v nanoseconds\n", percentile80_ScanLatency)
 	histogram := strings.Split(result.ScanResults[0].LatencyHisto, ", ")
 	var requests int64
 	requests = 0
