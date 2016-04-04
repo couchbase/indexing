@@ -688,7 +688,7 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 
 	if res, err := ap.MutationTopicRequest(topic, endpointType,
 		[]*protobuf.TsVbuuid{reqTimestamps}, instances); err != nil {
-		logging.Fatalf("KVSender::sendMutationTopicRequest Projector %v Topic %v %v \n\tUnexpected Error %v", ap,
+		logging.Errorf("KVSender::sendMutationTopicRequest Projector %v Topic %v %v \n\tUnexpected Error %v", ap,
 			topic, reqTimestamps.GetBucket(), err)
 
 		return res, err
@@ -741,7 +741,7 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 	}
 
 	if res, err := ap.RestartVbuckets(topic, []*protobuf.TsVbuuid{restartTs}); err != nil {
-		logging.Fatalf("KVSender::sendRestartVbuckets Unexpected Error During "+
+		logging.Errorf("KVSender::sendRestartVbuckets Unexpected Error During "+
 			"Restart Vbuckets Request for Projector %v Topic %v %v . Err %v.", ap,
 			topic, restartTs.GetBucket(), err)
 
@@ -766,7 +766,7 @@ func sendAddInstancesRequest(ap *projClient.Client,
 		ap, topic, instances)
 
 	if res, err := ap.AddInstances(topic, instances); err != nil {
-		logging.Fatalf("KVSender::sendAddInstancesRequest Unexpected Error During "+
+		logging.Errorf("KVSender::sendAddInstancesRequest Unexpected Error During "+
 			"Add Instances Request Projector %v Topic %v IndexInst %v. Err %v", ap,
 			topic, instances, err)
 
@@ -793,7 +793,7 @@ func sendDelInstancesRequest(ap *projClient.Client,
 		ap, topic, uuids)
 
 	if err := ap.DelInstances(topic, uuids); err != nil {
-		logging.Fatalf("KVSender::sendDelInstancesRequest Unexpected Error During "+
+		logging.Errorf("KVSender::sendDelInstancesRequest Unexpected Error During "+
 			"Del Instances Request Projector %v Topic %v Instances %v. Err %v", ap,
 			topic, uuids, err)
 
@@ -816,7 +816,7 @@ func sendDelBucketsRequest(ap *projClient.Client,
 		ap, topic, buckets)
 
 	if err := ap.DelBuckets(topic, buckets); err != nil {
-		logging.Fatalf("KVSender::sendDelBucketsRequest Unexpected Error During "+
+		logging.Errorf("KVSender::sendDelBucketsRequest Unexpected Error During "+
 			"Del Buckets Request Projector %v Topic %v Buckets %v. Err %v", ap,
 			topic, buckets, err)
 
@@ -835,7 +835,7 @@ func sendShutdownTopic(ap *projClient.Client,
 	logging.Infof("KVSender::sendShutdownTopic Projector %v Topic %v", ap, topic)
 
 	if err := ap.ShutdownTopic(topic); err != nil {
-		logging.Fatalf("KVSender::sendShutdownTopic Unexpected Error During "+
+		logging.Errorf("KVSender::sendShutdownTopic Unexpected Error During "+
 			"Shutdown Projector %v Topic %v. Err %v", ap, topic, err)
 
 		return err
@@ -943,7 +943,7 @@ func (k *kvSender) makeInitialTs(bucket string,
 
 	flogs, err := k.getFailoverLogs(bucket, vbnos)
 	if err != nil {
-		logging.Fatalf("KVSender::makeInitialTs Unexpected Error During Failover "+
+		logging.Errorf("KVSender::makeInitialTs Unexpected Error During Failover "+
 			"Log Request for Bucket %v. Err %v", bucket, err)
 		return nil, err
 	}
@@ -959,7 +959,7 @@ func (k *kvSender) makeRestartTsFromKV(bucket string,
 
 	flogs, err := k.getFailoverLogs(bucket, vbnos)
 	if err != nil {
-		logging.Fatalf("KVSender::makeRestartTS Unexpected Error During Failover "+
+		logging.Errorf("KVSender::makeRestartTS Unexpected Error During Failover "+
 			"Log Request for Bucket %v. Err %v", bucket, err)
 		return nil, err
 	}
