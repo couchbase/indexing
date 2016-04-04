@@ -73,6 +73,7 @@ type atomicMutationQueue struct {
 	allocPollInterval   uint64 //poll interval for new allocs, if queue is full
 	dequeuePollInterval uint64 //poll interval for dequeue, if waiting for mutations
 	resultChanSize      uint64 //size of buffered result channel
+	minQueueLen         uint64
 
 	free        []*node //free pointer per vbucket queue
 	stopch      []StopChannel
@@ -95,6 +96,7 @@ func NewAtomicMutationQueue(numVbuckets uint16, maxMemory *platform.AlignedInt64
 		allocPollInterval:   getAllocPollInterval(config),
 		dequeuePollInterval: config["mutation_queue.dequeuePollInterval"].Uint64(),
 		resultChanSize:      config["mutation_queue.resultChanSize"].Uint64(),
+		minQueueLen:         config["settings.minVbQueueLength"].Uint64(),
 	}
 
 	var x uint16
@@ -183,7 +185,7 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 	var totalWait int
 
 	for {
-		totalWait += 20 
+		totalWait += 20
 		if totalWait > 30000 {
 			if totalWait%5000 == 0 {
 				logging.Warnf("Indexer::MutationQueue Dequeue Waiting For "+
@@ -364,7 +366,9 @@ func (q *atomicMutationQueue) checkMemAndAlloc(vbucket Vbucket) *node {
 
 	currMem := platform.LoadInt64(q.memUsed)
 	maxMem := platform.LoadInt64(q.maxMemory)
-	if currMem < maxMem {
+	currLen := platform.LoadInt64(&q.size[vbucket])
+
+	if currMem < maxMem || currLen < int64(q.minQueueLen) {
 		//get node from freelist
 		n := q.popFreeList(vbucket)
 		if n != nil {
