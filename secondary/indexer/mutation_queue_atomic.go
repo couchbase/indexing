@@ -339,8 +339,10 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *nod
 					"Alloc Expired %v. Forcing Alloc. Vbucket %v", totalWait, vbucket)
 				return &node{}
 			} else if totalWait > 5000 {
-				logging.Warnf("Indexer::MutationQueue Waiting for Node "+
-					"Alloc for %v Milliseconds Vbucket %v", totalWait, vbucket)
+				if totalWait%3000 == 0 {
+					logging.Warnf("Indexer::MutationQueue Waiting for Node "+
+						"Alloc for %v Milliseconds Vbucket %v", totalWait, vbucket)
+				}
 			}
 
 		case <-q.stopch[vbucket]:
