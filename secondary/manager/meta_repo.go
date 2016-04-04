@@ -393,7 +393,7 @@ func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 	if exist != nil {
 		// TODO: should not return error if not found (should return nil)
 		return NewError(ERROR_META_IDX_DEFN_EXIST, NORMAL, METADATA_REPO, nil,
-			fmt.Sprintf("Index Definition '%s' already exist", defn.Name))
+			fmt.Sprintf("Index Definition '%s' already exists", defn.Name))
 	}
 
 	// marshall the defn

@@ -215,7 +215,7 @@ func (o *MetadataProvider) CreateIndexWithPlan(
 
 	// FindIndexByName will only return valid index
 	if o.FindIndexByName(name, bucket) != nil {
-		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %s already exist.", name)), false
+		return c.IndexDefnId(0), errors.New(fmt.Sprintf("Index %s already exists.", name)), false
 	}
 
 	var immutable bool = false
