@@ -129,9 +129,10 @@ type Server struct {
 	appch chan<- interface{} // backchannel to application
 
 	// gen-server management
-	conns map[string]*netConn // resolve <host:port> to conn. obj
-	reqch chan []interface{}
-	finch chan bool
+	conns  map[string]*netConn // resolve <host:port> to conn. obj
+	reqch  chan []interface{}
+	datach chan []interface{}
+	finch  chan bool
 
 	// config parameters
 	maxVbuckets  int
@@ -149,14 +150,16 @@ func NewServer(
 	appch chan<- interface{}) (s *Server, err error) {
 
 	genChSize := config["genServerChanSize"].Int()
+	dataChSize := config["dataChanSize"].Int()
 
 	s = &Server{
 		laddr: laddr,
 		appch: appch,
 		// Managing vbuckets and connections for all routers
-		reqch: make(chan []interface{}, genChSize),
-		finch: make(chan bool),
-		conns: make(map[string]*netConn),
+		reqch:  make(chan []interface{}, genChSize),
+		datach: make(chan []interface{}, dataChSize),
+		finch:  make(chan bool, 1),
+		conns:  make(map[string]*netConn),
 		// config parameters
 		maxVbuckets:  maxvbs,
 		genChSize:    genChSize,
@@ -169,7 +172,7 @@ func NewServer(
 		return nil, err
 	}
 	go listener(s.logPrefix, s.lis, s.reqch) // spawn daemon
-	go s.genServer(s.reqch)                  // spawn gen-server
+	go s.genServer(s.reqch, s.datach)        // spawn gen-server
 	logging.Infof("%v started ...", s.logPrefix)
 	return s, nil
 }
@@ -218,9 +221,7 @@ const (
 )
 
 // gen server routine for dataport server.
-func (s *Server) genServer(reqch chan []interface{}) {
-	var appmsg interface{}
-
+func (s *Server) genServer(reqch, datach chan []interface{}) {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%v gen-server crashed: %v\n", s.logPrefix, r)
@@ -288,31 +289,59 @@ func (s *Server) genServer(reqch chan []interface{}) {
 		return vbs
 	}
 
+	handlereq := func(cmd []interface{}) {
+		msg := cmd[0].(serverMessage)
+		switch msg.cmd {
+		case serverCmdNewConnection:
+			conn, raddr := msg.args[0].(net.Conn), msg.raddr
+			if _, ok := s.conns[raddr]; ok {
+				logging.Errorf("%v %q already active\n", s.logPrefix, raddr)
+				conn.Close()
+
+			} else { // connection accepted
+				worker := make(chan interface{}, s.maxVbuckets)
+				s.conns[raddr] = &netConn{
+					conn: conn, worker: worker,
+					tpkt: newTransportPkt(s.maxPayload),
+				}
+				n := len(s.conns)
+				fmsg := "%v new connection %q +%d\n"
+				logging.Infof(fmsg, s.logPrefix, raddr, n)
+				s.startWorker(raddr)
+			}
+
+		case serverCmdClose:
+			// before closing the dataport-server log a consolidated
+			// stats on the active-vbuckets.
+			s.logStats(hostUuids)
+			respch := cmd[1].(chan []interface{})
+			s.handleClose()
+			respch <- []interface{}{nil}
+		}
+	}
+
+	nicetoapp := func(msg interface{}) {
+		for {
+			select {
+			case <-s.finch:
+				return
+			case s.appch <- msg:
+				return
+			case cmd := <-s.reqch:
+				handlereq(cmd)
+			}
+		}
+	}
+
 loop:
 	for {
-		appmsg = nil
 		select {
 		case cmd := <-reqch:
-			msg := cmd[0].(serverMessage)
+			handlereq(cmd)
+
+		case datacmd := <-datach:
+			msg := datacmd[0].(serverMessage)
 			switch msg.cmd {
-			case serverCmdNewConnection:
-				conn, raddr := msg.args[0].(net.Conn), msg.raddr
-				if _, ok := s.conns[raddr]; ok {
-					logging.Errorf("%v %q already active\n", s.logPrefix, raddr)
-					conn.Close()
-
-				} else { // connection accepted
-					worker := make(chan interface{}, s.maxVbuckets)
-					s.conns[raddr] = &netConn{
-						conn: conn, worker: worker,
-						tpkt: newTransportPkt(s.maxPayload),
-					}
-					n := len(s.conns)
-					fmsg := "%v new connection %q +%d\n"
-					logging.Infof(fmsg, s.logPrefix, raddr, n)
-					s.startWorker(raddr)
-				}
-
 			case serverCmdVbmap:
 				vbmap := msg.args[0].(*protobuf.VbConnectionMap)
 				b, raddr := vbmap.GetBucket(), msg.raddr
@@ -323,26 +352,19 @@ loop:
 				s.startWorker(msg.raddr)
 
 			case serverCmdVbKeyVersions:
-				s.appch <- parseVbs(msg)
-
-			case serverCmdClose: // This execution path never panics !!
-				// before closing the dataport-server log a consolidated
-				// stats on the active-vbuckets.
-				s.logStats(hostUuids)
-				respch := cmd[1].(chan []interface{})
-				s.handleClose()
-				respch <- []interface{}{nil}
-				break loop
+				nicetoapp(parseVbs(msg))
 
 			case serverCmdError:
-				hostUuids, appmsg =
-					s.jumboErrorHandler(msg.raddr, hostUuids, msg.err)
+				var g interface{}
+				hostUuids, g = s.jumboErrorHandler(msg.raddr, hostUuids, msg.err)
+				if g != nil {
+					nicetoapp(g)
+					logging.Tracef("%v appmsg: %T:%+v\n", s.logPrefix, g, g)
+				}
 			}
 
-			if appmsg != nil {
-				s.appch <- appmsg
-				logging.Tracef("%v appmsg: %T:%+v\n", s.logPrefix, appmsg, appmsg)
-			}
+		case <-s.finch:
+			break loop
 		}
 	}
 }
@@ -377,7 +399,7 @@ func (s *Server) startWorker(raddr string) {
 		return
 	}
 	logging.Tracef("%v starting worker for connection %q\n", s.logPrefix, raddr)
-	go doReceive(s.logPrefix, nc, s.maxPayload, s.readDeadline, s.appch, s.reqch)
+	go doReceive(s.logPrefix, nc, s.maxPayload, s.readDeadline, s.datach)
 	nc.active = true
 }
 
@@ -516,8 +538,7 @@ func doReceive(
 	prefix string,
 	nc *netConn,
 	maxPayload int, readDeadline time.Duration,
-	appch chan<- interface{},
-	reqch chan<- []interface{}) {
+	datach chan<- []interface{}) {
 
 	conn, worker := nc.conn, nc.worker
 
@@ -541,27 +562,27 @@ loop:
 		msg.cmd, msg.err, msg.args = 0, nil, nil
 		if payload, err := pkt.Receive(conn); err != nil {
 			msg.cmd, msg.err = serverCmdError, err
-			reqch <- []interface{}{msg}
+			datach <- []interface{}{msg}
 			logging.Errorf("%v worker %q exit: %v\n", prefix, msg.raddr, err)
 			break loop
 
 		} else if vbmap, ok := payload.(*protobuf.VbConnectionMap); ok {
 			msg.cmd, msg.args = serverCmdVbmap, []interface{}{vbmap}
-			reqch <- []interface{}{msg}
+			datach <- []interface{}{msg}
 			fmsg := "%v worker %q exit: `serverCmdVbmap`\n"
 			logging.Tracef(fmsg, prefix, msg.raddr)
 			break loop
 
 		} else if vbs, ok := payload.([]*protobuf.VbKeyVersions); ok {
 			msg.cmd, msg.args = serverCmdVbKeyVersions, []interface{}{vbs}
-			if len(reqch) == cap(reqch) {
+			if len(datach) == cap(datach) {
 				start, blocked = time.Now(), true
 			}
 			select {
-			case reqch <- []interface{}{msg}:
+			case datach <- []interface{}{msg}:
 			case <-worker:
 				msg.cmd, msg.err = serverCmdError, ErrorWorkerKilled
-				reqch <- []interface{}{msg}
+				datach <- []interface{}{msg}
 				fmsg := "%v worker %q exit: %v\n"
 				logging.Errorf(fmsg, prefix, msg.raddr, msg.err)
 				break loop
@@ -580,7 +601,7 @@ loop:
 
 		} else {
 			msg.cmd, msg.err = serverCmdError, ErrorPayload
-			reqch <- []interface{}{msg}
+			datach <- []interface{}{msg}
 			logging.Errorf("%v worker %q exit: %v\n", prefix, msg.raddr, msg.err)
 			break loop
 		}

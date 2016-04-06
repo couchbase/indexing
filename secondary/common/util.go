@@ -318,6 +318,7 @@ func ExitOnStdinClose() {
 		_, err := os.Stdin.Read(buf)
 		if err != nil {
 			if err == io.EOF {
+				time.Sleep(1 * time.Second)
 				os.Exit(0)
 			}
 

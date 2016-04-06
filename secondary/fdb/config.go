@@ -17,6 +17,9 @@ import (
 	"unsafe"
 )
 
+import "github.com/couchbase/indexing/secondary/logging"
+import "github.com/couchbase/indexing/secondary/common"
+
 type OpenFlags uint32
 
 const (
@@ -208,6 +211,8 @@ func (c *Config) SetBlockReuseThreshold(s uint8) {
 func DefaultConfig() *Config {
 	Log.Tracef("fdb_get_default_config call")
 	config := C.fdb_get_default_config()
+	config.breakpad_minidump_dir = C.CString(common.SystemConfig["indexer.diagnostics_dir"].String())
+	logging.Debugf("DefaultConfig(): config.breakpad_minidump_dir %v", config.breakpad_minidump_dir)
 	Log.Tracef("fdb_get_default_config ret config:%v", config)
 	return &Config{
 		config: &config,
