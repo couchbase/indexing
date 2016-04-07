@@ -480,7 +480,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			r.Ts = &common.TsVbuuid{}
 			t0 := time.Now()
 			r.Ts.Seqnos, localErr = bucketSeqsWithRetry(getseqsRetries, r.LogPrefix, cluster, r.Bucket)
-			if localErr == nil {
+			if localErr == nil && r.Stats != nil {
 				r.Stats.Timings.dcpSeqs.Put(time.Since(t0))
 			}
 			r.Ts.Crc64 = 0
