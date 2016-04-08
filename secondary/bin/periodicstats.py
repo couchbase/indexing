@@ -123,6 +123,18 @@ def graph_pausetimes(stats) :
     ])
     print(py.plot(data, filename='gc-pause-time-graph'))
 
+def graph_numgc(stats) :
+    numgc = []
+    print("composing plot ...")
+    [ numgc.append(m["NumGC"]) for i, m in enumerate(stats) ]
+
+    x = list(range(1, len(numgc)+1))
+    mode, line = "lines+markers", Line(shape='spline')
+    data = Data([
+        Scatter(x=x, y=numgc, mode=mode, name="gc-numgc", line=line)
+    ])
+    print(py.plot(data, filename='gc-numgc-graph'))
+
 def graph_dcplatency(stats) :
     mins, maxs, mean, variance = [], [], [], []
     print("composing plot ...")
@@ -228,13 +240,15 @@ def graph_endp(topic, raddr, stats) :
 
 def graph_load(indexes, loadstats) :
     mode, line = "lines+markers", Line(shape='spline')
+    scatters = []
     for index in args.indexes.split(",") :
         loads = loadstats[index]
         x = list(range(1, len(loads)+1))
-        data = Data([
-            Scatter(x=x, y=loads, mode=mode, name=index, line=line),
-        ])
-    print(py.plot(data, filename='index-load'))
+        scatters.append(
+            Scatter(x=x, y=loads, mode=mode, name=index, line=line)
+        )
+    data = Data(scatters)
+    print(py.plot(data, filename='with patch concur > poolsize'))
 
 def graph_gsi(buckets, gsistats) :
     mode, line = "lines+markers", Line(shape='spline')
@@ -269,6 +283,7 @@ def kind_memstats(logfile):
     graph_allocation(stats)
     graph_count(stats)
     graph_pausetimes(stats)
+    graph_numgc(stats)
 
 def kind_dcplatency(logfile):
     print("parsing lines ...")
