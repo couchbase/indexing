@@ -2017,8 +2017,16 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	//for init build, if there is no snapshot option set
 	if tk.hasInitStateIndex(streamId, bucket) {
 		if flushTs.GetSnapType() == common.NO_SNAP {
+			isMergeCandidate := false
+
 			//if this TS is a merge candidate, generate in-mem snapshot
 			if tk.checkMergeCandidateTs(streamId, bucket, flushTs) {
+				flushTs.SetSnapType(common.INMEM_SNAP)
+				isMergeCandidate = true
+			}
+
+			// if storage type is MOI, then also generate snapshot during initial build.
+			if common.GetStorageMode() == common.MOI {
 				flushTs.SetSnapType(common.INMEM_SNAP)
 			}
 
@@ -2027,7 +2035,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 			//Otherwise use the persist interval for initial build.
 			var snapPersistInterval uint64
 			var persistDuration time.Duration
-			if flushTs.GetSnapType() == common.INMEM_SNAP {
+			if flushTs.GetSnapType() == common.INMEM_SNAP && isMergeCandidate {
 				snapPersistInterval = tk.getPersistInterval()
 				persistDuration = time.Duration(snapPersistInterval) * time.Millisecond
 			} else {
