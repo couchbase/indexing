@@ -3,10 +3,12 @@ package projector
 import "fmt"
 import "sync"
 import "io"
+import "time"
 import "os"
 import "net/http"
 import "strings"
 import "encoding/json"
+import "runtime"
 import "runtime/pprof"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
@@ -222,6 +224,13 @@ func (p *Projector) DelFeed(topic string) (err error) {
 	delete(p.topics, topic)
 	opaque := feed.GetOpaque()
 	logging.Infof("%v ##%x ... feed %q deleted\n", p.logPrefix, opaque, topic)
+
+	go func() { // GC
+		now := time.Now()
+		runtime.GC()
+		fmsg := "%v ##%x GC() took %v\n"
+		logging.Infof(fmsg, p.logPrefix, opaque, time.Since(now))
+	}()
 	return
 }
 
@@ -348,7 +357,7 @@ func (p *Projector) doMutationTopic(
 	defer p.releaseFeed(topic)
 	if feed == nil {
 		config := p.GetFeedConfig()
-		feed, err = NewFeed(p.pooln, topic, config, opaque)
+		feed, err = NewFeed(p.pooln, topic, p, config, opaque)
 		if err != nil {
 			fmsg := "%v ##%x unable to create feed %v\n"
 			logging.Errorf(fmsg, prefix, opaque, topic)

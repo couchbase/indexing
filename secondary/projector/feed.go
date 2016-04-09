@@ -39,6 +39,7 @@ type Feed struct {
 	topic        string               // immutable
 	opaque       uint16               // opaque that created this feed.
 	endpointType string               // immutable
+	projector    *Projector
 
 	// upstream
 	// reqTs, book-keeping on outstanding request posted to feeder.
@@ -83,16 +84,19 @@ type Feed struct {
 //    kvstatTick: timeout, in ms, for logging kvstats
 //    routerEndpointFactory: endpoint factory
 func NewFeed(
-	pooln, topic string, config c.Config, opaque uint16) (*Feed, error) {
+	pooln, topic string,
+	projector *Projector,
+	config c.Config, opaque uint16) (*Feed, error) {
 
 	epf := config["routerEndpointFactory"].Value.(c.RouterEndpointFactory)
 	chsize := config["feedChanSize"].Int()
 	backchsize := config["backChanSize"].Int()
 	feed := &Feed{
-		cluster: config["clusterAddr"].String(),
-		pooln:   pooln,
-		topic:   topic,
-		opaque:  opaque,
+		cluster:   config["clusterAddr"].String(),
+		pooln:     pooln,
+		topic:     topic,
+		opaque:    opaque,
+		projector: projector,
 
 		// upstream
 		reqTss:  make(map[string]*protobuf.TsVbuuid),
@@ -450,6 +454,7 @@ func (feed *Feed) genServer() {
 			logging.Errorf("%s", logging.StackTrace())
 			feed.shutdown(feed.opaque)
 		}
+		feed.projector.DelFeed(feed.topic)
 	}()
 
 	var msg []interface{}
