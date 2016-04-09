@@ -69,7 +69,7 @@ func NewDcpFeed(
 	feed.conn = mc
 	rcvch := make(chan []interface{}, dataChanSize)
 	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
-	go feed.doReceive(rcvch, mc)
+	go feed.doReceive(rcvch, feed.finch, mc)
 	logging.Infof("%v ##%x feed started ...", feed.logPrefix, opaque)
 	return feed, nil
 }
@@ -892,7 +892,8 @@ func computeLatency(stream *DcpStream) int64 {
 }
 
 // receive loop
-func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
+func (feed *DcpFeed) doReceive(
+	rcvch chan []interface{}, finch chan bool, conn *Client) {
 	defer close(rcvch)
 
 	var headerBuf [transport.HDR_LEN]byte
@@ -906,26 +907,31 @@ func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 		tick.Stop()
 	}()
 
+loop:
 	for {
 		pkt := transport.MCRequest{} // always a new instance.
 		bytes, err := pkt.Receive(conn.conn, headerBuf[:])
 		if err != nil && err == io.EOF {
 			logging.Infof("%v EOF received\n", feed.logPrefix)
-			break
+			break loop
 
 		} else if feed.isClosed() {
 			logging.Infof("%v doReceive(): connection closed\n", feed.logPrefix)
-			break
+			break loop
 
 		} else if err != nil {
 			logging.Errorf("%v doReceive(): %v\n", feed.logPrefix, err)
-			break
+			break loop
 		}
 		logging.Tracef("%v packet received %#v", feed.logPrefix, pkt)
 		if len(rcvch) == cap(rcvch) {
 			start, blocked = time.Now(), true
 		}
-		rcvch <- []interface{}{&pkt, bytes}
+		select {
+		case rcvch <- []interface{}{&pkt, bytes}:
+		case <-finch:
+			break loop
+		}
 		if blocked {
 			blockedTs := time.Since(start)
 			duration += blockedTs
