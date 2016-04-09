@@ -10,6 +10,7 @@ import "strings"
 import "encoding/json"
 import "runtime"
 import "runtime/pprof"
+import "runtime/debug"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -81,6 +82,12 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	reqch := make(chan ap.Request)
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
 
+	// set GOGC percent
+	gogc := pconfig["gogc"].Int()
+	oldGogc := debug.SetGCPercent(gogc)
+	fmsg := "%v changing GOGC percentage from %v to %v\n"
+	logging.Infof(fmsg, p.logPrefix, oldGogc, gogc)
+
 	watchInterval := config["projector.watchInterval"].Int()
 	staleTimeout := config["projector.staleTimeout"].Int()
 	go c.MemstatLogger(int64(config["projector.memstatTick"].Int()))
@@ -110,6 +117,12 @@ func (p *Projector) ResetConfig(config c.Config) {
 	}
 	if cv, ok := config["projector.maxCpuPercent"]; ok {
 		c.SetNumCPUs(cv.Int())
+	}
+	if cv, ok := config["projector.gogc"]; ok {
+		gogc := cv.Int()
+		oldGogc := debug.SetGCPercent(gogc)
+		fmsg := "%v changing GOGC percentage from %v to %v\n"
+		logging.Infof(fmsg, p.logPrefix, oldGogc, gogc)
 	}
 	if cv, ok := config["projector.memstatTick"]; ok {
 		c.Memstatch <- int64(cv.Int())
