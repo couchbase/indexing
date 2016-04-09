@@ -327,11 +327,11 @@ func (worker *VbucketWorker) updateEndpoints(
 var traceMutFormat = "%v ##%x DcpEvent %v:%v <<%v>>\n"
 
 func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
-	vbno, key := m.VBucket, string(m.Key)
+	vbno := m.VBucket
 	v, vbok := worker.vbuckets[vbno]
 	logPrefix := worker.logPrefix
 
-	logging.Tracef(traceMutFormat, logPrefix, m.Opaque, m.Seqno, m.Opcode, key)
+	logging.Tracef(traceMutFormat, logPrefix, m.Opaque, m.Seqno, m.Opcode, m.Key)
 
 	switch m.Opcode {
 	case mcd.DCP_STREAMREQ: // broadcast StreamBegin

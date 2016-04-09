@@ -752,11 +752,13 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
 		Opcode:  rq.Opcode,
 		VBucket: stream.Vbucket,
 		VBuuid:  stream.Vbuuid,
-		Key:     rq.Key,
-		Value:   rq.Body,
-		Cas:     rq.Cas,
 		Ctime:   time.Now().UnixNano(),
 	}
+	event.Key = make([]byte, len(rq.Key))
+	copy(event.Key, rq.Key)
+	event.Value = make([]byte, len(rq.Body))
+	copy(event.Value, rq.Body)
+
 	// 16 LSBits are used by client library to encode vbucket number.
 	// 16 MSBits are left for application to multiplex on opaque value.
 	event.Opaque = appOpaque(rq.Opaque)
