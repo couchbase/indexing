@@ -1270,10 +1270,6 @@ snaploop:
 		return err
 	}
 
-	if _, e := os.Stat(fdb.currfile); e == nil {
-		err = os.Remove(fdb.currfile)
-	}
-
 	fdb.currfile = newpath
 
 	config := forestdb.DefaultConfig()
