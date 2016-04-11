@@ -507,9 +507,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 			if indexInst.State != common.INDEX_STATE_ACTIVE {
 				localErr = common.ErrIndexNotReady
-			} else {
-				r.Stats = stats.indexes[r.IndexInstId]
 			}
+			r.Stats = stats.indexes[r.IndexInstId]
 		}
 	}
 
@@ -717,8 +716,15 @@ func (s *scanCoordinator) handleError(prefix string, err error) {
 
 func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanRequest, err error) bool {
 	if err != nil {
-		logging.Infof("%s REQUEST %s", req.LogPrefix, req)
-		logging.Infof("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
+		if err == common.ErrIndexNotReady && req.Stats != nil {
+			req.Stats.notReadyError.Add(1)
+		} else if err == common.ErrIndexNotFound {
+			stats := s.stats.Get()
+			stats.notFoundError.Add(1)
+		} else {
+			logging.Infof("%s REQUEST %s", req.LogPrefix, req)
+			logging.Infof("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
+		}
 		s.handleError(req.LogPrefix, w.Error(err))
 		return true
 	}

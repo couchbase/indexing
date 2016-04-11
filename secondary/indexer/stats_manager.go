@@ -124,6 +124,7 @@ type IndexStats struct {
 	numItemsRestored      stats.Int64Val
 	diskSnapStoreDuration stats.Int64Val
 	diskSnapLoadDuration  stats.Int64Val
+	notReadyError         stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -177,6 +178,7 @@ func (s *IndexStats) Init() {
 	s.numItemsRestored.Init()
 	s.diskSnapStoreDuration.Init()
 	s.diskSnapLoadDuration.Init()
+	s.notReadyError.Init()
 
 	s.Timings.Init()
 }
@@ -191,6 +193,7 @@ type IndexerStats struct {
 	memoryUsedStorage stats.Int64Val
 	needsRestart      stats.BoolVal
 	statsResponse     stats.TimingStat
+	notFoundError     stats.Int64Val
 
 	indexerState stats.Int64Val
 }
@@ -205,7 +208,7 @@ func (s *IndexerStats) Init() {
 	s.needsRestart.Init()
 	s.statsResponse.Init()
 	s.indexerState.Init()
-
+	s.notFoundError.Init()
 }
 
 func (s *IndexerStats) Reset() {
@@ -255,6 +258,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 
 	addStat("uptime", fmt.Sprintf("%s", time.Since(uptime)))
 	addStat("num_connections", is.numConnections.Value())
+	addStat("index_not_found_errcount", is.notFoundError.Value())
 	addStat("memory_quota", is.memoryQuota.Value())
 	addStat("memory_used", is.memoryUsed.Value())
 	addStat("memory_used_storage", is.memoryUsedStorage.Value())
@@ -326,6 +330,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_items_restored", s.numItemsRestored.Value())
 		addStat("disk_store_duration", s.diskSnapStoreDuration.Value())
 		addStat("disk_load_duration", s.diskSnapLoadDuration.Value())
+		addStat("not_ready_errcount", s.notReadyError.Value())
 
 		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
