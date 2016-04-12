@@ -69,7 +69,6 @@ func main() {
 		}
 	}
 
-	go platform.DumpOnSignal()
 	go common.ExitOnStdinClose()
 
 	config := common.SystemConfig

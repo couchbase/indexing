@@ -13,9 +13,6 @@ package platform
 
 import "syscall"
 
-func DumpOnSignal() {
-}
-
 // Hide console on windows without removing it unlike -H windowsgui.
 func HideConsole(hide bool) {
 	var k32 = syscall.NewLazyDLL("kernel32.dll")
