@@ -659,7 +659,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	} else {
 		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk"+
 			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
-		s.Close()
+		s.info.MainSnap.Close()
 	}
 }
 
