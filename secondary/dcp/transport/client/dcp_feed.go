@@ -310,6 +310,10 @@ func (feed *DcpFeed) handlePacket(
 		stream.Snapend = event.SnapendSeq
 		feed.stats.TotalSnapShot++
 		sendAck = true
+		if (stream.Snapend - stream.Snapstart) > 50000 {
+			fmsg := "%v ##%x DCP_SNAPSHOT for vb %d snapshot {%v,%v}\n"
+			logging.Infof(fmsg, prefix, stream.AppOpaque, vb, stream.Snapstart, stream.Snapend)
+		}
 		fmsg := "%v ##%x DCP_SNAPSHOT for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 

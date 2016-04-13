@@ -2005,11 +2005,39 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 
 	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = flushTs
 
+	monitor_ts := tk.config["timekeeper.monitor_flush"].Bool()
+
 	go func() {
 		tk.supvRespch <- &MsgTKStabilityTS{ts: flushTs,
 			bucket:    bucket,
 			streamId:  streamId,
 			changeVec: changeVec}
+
+		if monitor_ts {
+
+			var totalWait int
+			ticker := time.NewTicker(time.Second * 60)
+			for _ = range ticker.C {
+				tk.lock.Lock()
+
+				flushInProgress := tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket]
+				if flushTs.Equal(flushInProgress) {
+					totalWait += 60
+
+					if totalWait > 300 {
+						lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+						logging.Warnf("Timekeeper::flushMonitor Waiting For Flush "+
+							"to finish for %v seconds. FlushTs %v \n LastFlushTs %v", totalWait,
+							flushTs, lastFlushedTs)
+					}
+				} else {
+					tk.lock.Unlock()
+					return
+				}
+				tk.lock.Unlock()
+			}
+		}
+
 	}()
 }
 

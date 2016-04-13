@@ -801,6 +801,14 @@ var SystemConfig = Config{
 		10,
 		false, // mutable
 	},
+	"indexer.timekeeper.monitor_flush": ConfigValue{
+		true,
+		"Debug option to enable monitoring flush in timekeeper." +
+			"If a flush doesn't complete for 5mins, additional debug " +
+			"will be logged",
+		true,
+		false, // mutable
+	},
 
 	// Indexer dynamic settings
 	"indexer.settings.compaction.check_period": ConfigValue{

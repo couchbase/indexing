@@ -594,6 +594,16 @@ func (r *mutationStreamReader) updateSnapInFilter(meta *MutationMeta,
 	r.syncLock.Lock()
 	defer r.syncLock.Unlock()
 
+	if snapEnd < snapStart {
+		logging.Errorf("MutationStreamReader::updateSnapInFilter Bad Snapshot Received "+
+			"for %v %v %v %v-%v", meta.bucket, meta.vbucket, r.streamId, snapStart, snapEnd)
+	}
+
+	if snapEnd-snapStart > 50000 {
+		logging.Errorf("MutationStreamReader::updateSnapInFilter Huge Snapshot Received "+
+			"for %v %v %v %v-%v", meta.bucket, meta.vbucket, r.streamId, snapStart, snapEnd)
+	}
+
 	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
 		if snapEnd > filter.Snapshots[meta.vbucket][1] {
 
