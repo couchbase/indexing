@@ -25,15 +25,16 @@ type StreamState struct {
 	streamBucketVbStatusMap   map[common.StreamId]BucketVbStatusMap
 	streamBucketVbRefCountMap map[common.StreamId]BucketVbRefCountMap
 
-	streamBucketHWTMap           map[common.StreamId]BucketHWTMap
-	streamBucketNeedsCommitMap   map[common.StreamId]BucketNeedsCommitMap
-	streamBucketNewTsReqdMap     map[common.StreamId]BucketNewTsReqdMap
-	streamBucketTsListMap        map[common.StreamId]BucketTsListMap
-	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
-	streamBucketRestartTsMap     map[common.StreamId]BucketRestartTsMap
-	streamBucketOpenTsMap        map[common.StreamId]BucketOpenTsMap
-	streamBucketStartTimeMap     map[common.StreamId]BucketStartTimeMap
-	streamBucketLastSnapMarker   map[common.StreamId]BucketLastSnapMarker
+	streamBucketHWTMap            map[common.StreamId]BucketHWTMap
+	streamBucketNeedsCommitMap    map[common.StreamId]BucketNeedsCommitMap
+	streamBucketHasBuildCompTSMap map[common.StreamId]BucketHasBuildCompTSMap
+	streamBucketNewTsReqdMap      map[common.StreamId]BucketNewTsReqdMap
+	streamBucketTsListMap         map[common.StreamId]BucketTsListMap
+	streamBucketLastFlushedTsMap  map[common.StreamId]BucketLastFlushedTsMap
+	streamBucketRestartTsMap      map[common.StreamId]BucketRestartTsMap
+	streamBucketOpenTsMap         map[common.StreamId]BucketOpenTsMap
+	streamBucketStartTimeMap      map[common.StreamId]BucketStartTimeMap
+	streamBucketLastSnapMarker    map[common.StreamId]BucketLastSnapMarker
 
 	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
 
@@ -59,6 +60,7 @@ type BucketRestartTsMap map[string]*common.TsVbuuid
 type BucketOpenTsMap map[string]*common.TsVbuuid
 type BucketStartTimeMap map[string]uint64
 type BucketNeedsCommitMap map[string]bool
+type BucketHasBuildCompTSMap map[string]bool
 type BucketNewTsReqdMap map[string]bool
 type BucketLastSnapMarker map[string]*common.TsVbuuid
 
@@ -87,6 +89,7 @@ func InitStreamState(config common.Config) *StreamState {
 		config:                                config,
 		streamBucketHWTMap:                    make(map[common.StreamId]BucketHWTMap),
 		streamBucketNeedsCommitMap:            make(map[common.StreamId]BucketNeedsCommitMap),
+		streamBucketHasBuildCompTSMap:         make(map[common.StreamId]BucketHasBuildCompTSMap),
 		streamBucketNewTsReqdMap:              make(map[common.StreamId]BucketNewTsReqdMap),
 		streamBucketTsListMap:                 make(map[common.StreamId]BucketTsListMap),
 		streamBucketFlushInProgressTsMap:      make(map[common.StreamId]BucketFlushInProgressTsMap),
@@ -125,6 +128,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 
 	bucketNeedsCommitMap := make(BucketNeedsCommitMap)
 	ss.streamBucketNeedsCommitMap[streamId] = bucketNeedsCommitMap
+
+	bucketHasBuildCompTSMap := make(BucketHasBuildCompTSMap)
+	ss.streamBucketHasBuildCompTSMap[streamId] = bucketHasBuildCompTSMap
 
 	bucketNewTsReqdMap := make(BucketNewTsReqdMap)
 	ss.streamBucketNewTsReqdMap[streamId] = bucketNewTsReqdMap
@@ -205,6 +211,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	numVbuckets := ss.config["numVbuckets"].Int()
 	ss.streamBucketHWTMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamBucketNeedsCommitMap[streamId][bucket] = false
+	ss.streamBucketHasBuildCompTSMap[streamId][bucket] = false
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
 	ss.streamBucketFlushInProgressTsMap[streamId][bucket] = nil
 	ss.streamBucketAbortInProgressMap[streamId][bucket] = false
@@ -244,6 +251,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 
 	delete(ss.streamBucketHWTMap[streamId], bucket)
 	delete(ss.streamBucketNeedsCommitMap[streamId], bucket)
+	delete(ss.streamBucketHasBuildCompTSMap[streamId], bucket)
 	delete(ss.streamBucketNewTsReqdMap[streamId], bucket)
 	delete(ss.streamBucketTsListMap[streamId], bucket)
 	delete(ss.streamBucketFlushInProgressTsMap[streamId], bucket)
@@ -279,6 +287,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	//delete this stream from internal maps
 	delete(ss.streamBucketHWTMap, streamId)
 	delete(ss.streamBucketNeedsCommitMap, streamId)
+	delete(ss.streamBucketHasBuildCompTSMap, streamId)
 	delete(ss.streamBucketNewTsReqdMap, streamId)
 	delete(ss.streamBucketTsListMap, streamId)
 	delete(ss.streamBucketFlushInProgressTsMap, streamId)

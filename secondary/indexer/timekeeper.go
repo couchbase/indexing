@@ -1835,7 +1835,12 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 
 		//persist TS which completes the build
 		if tk.isBuildCompletionTs(streamId, bucket, tsVbuuid) {
-			tsVbuuid.SetSnapType(common.DISK_SNAP)
+
+			if hasTS, ok := tk.ss.streamBucketHasBuildCompTSMap[streamId][bucket]; !ok || !hasTS {
+				logging.Infof("timekeeper::generateNewStability: setting snapshot type as DISK_SNAP due to BuildCompletionTS")
+				tsVbuuid.SetSnapType(common.DISK_SNAP)
+				tk.ss.streamBucketHasBuildCompTSMap[streamId][bucket] = true
+			}
 		}
 
 		if tk.ss.canFlushNewTS(streamId, bucket) {
