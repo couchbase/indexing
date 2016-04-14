@@ -228,7 +228,7 @@ func (log *destination) IsEnabled(at LogLevel) bool {
 
 func (log *destination) printf(at LogLevel, format string, v ...interface{}) {
 	if log.IsEnabled(at) {
-		ts := time.Now().Format("2006-01-02T15:04:05.999-07:00")
+		ts := time.Now().Format("2006-01-02T15:04:05.000-07:00")
 		log.target.Printf(ts+" ["+at.String()+"] "+format, v...)
 	}
 }

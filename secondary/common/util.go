@@ -726,10 +726,19 @@ func Console(clusterAddr string, format string, v ...interface{}) error {
 func DiskUsage(dir string) (int64, error) {
 	var sz int64
 	err := filepath.Walk(dir, func(_ string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
 		if !fi.IsDir() {
 			sz += fi.Size()
 		}
-		return err
+		return nil
 	})
-	return sz, err
+
+	if err != nil {
+		return 0, err
+	}
+
+	return sz, nil
 }

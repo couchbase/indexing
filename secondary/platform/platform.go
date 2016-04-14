@@ -11,23 +11,5 @@
 
 package platform
 
-import (
-	_ "net/http/pprof"
-	"os"
-	"os/signal"
-	"runtime/pprof"
-	"syscall"
-)
-
-import "C"
-
-func DumpOnSignal() {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGUSR2)
-	for _ = range c {
-		pprof.Lookup("goroutine").WriteTo(os.Stderr, 1)
-	}
-}
-
 func HideConsole(_ bool) {
 }

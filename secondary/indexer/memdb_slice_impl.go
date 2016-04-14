@@ -414,7 +414,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 	}
 
 	entryBytesToBeAdded, entryBytesToDeleted := CompareArrayEntriesWithCount(newEntriesBytes, oldEntriesBytes, newKeyCount, oldKeyCount)
-	nmut = len(entryBytesToBeAdded) + len(entryBytesToDeleted)
+	nmut = 0
 
 	// Delete each entry in entryBytesToDeleted
 	for i, item := range entryBytesToDeleted {
@@ -424,6 +424,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 			common.CrashOnError(err)
 			node := list.Remove(entry)
 			mdb.main[workerId].DeleteNode(node)
+			nmut++
 		}
 	}
 
@@ -439,6 +440,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 				return mdb.deleteSecArrayIndex(docid, workerId)
 			}
 			newNode := mdb.main[workerId].Put2(entry)
+			nmut++
 			if newNode != nil { // Ignore if duplicate key
 				list.Add(newNode)
 				mdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
@@ -657,7 +659,7 @@ func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
 	} else {
 		logging.Infof("MemDBSlice Slice Id %v, IndexInstId %v Skipping ondisk"+
 			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
-		s.Close()
+		s.info.MainSnap.Close()
 	}
 }
 

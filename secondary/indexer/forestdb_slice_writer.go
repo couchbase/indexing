@@ -529,7 +529,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		indexEntriesToBeAdded, indexEntriesToBeDeleted = CompareArrayEntriesWithCount(newEntriesBytes, oldEntriesBytes, newKeyCount, oldKeyCount)
 	}
 
-	nmut = len(indexEntriesToBeAdded) + len(indexEntriesToBeDeleted)
+	nmut = 0
 
 	// Delete each of indexEntriesToBeDeleted from main index
 	for i, item := range indexEntriesToBeDeleted {
@@ -552,6 +552,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			}
 			fdb.idxStats.Timings.stKVDelete.Put(time.Now().Sub(t0))
 			platform.AddInt64(&fdb.delete_bytes, int64(len(oldkey)))
+			nmut++
 		}
 	}
 
@@ -577,6 +578,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			}
 			fdb.idxStats.Timings.stKVSet.Put(time.Now().Sub(t0))
 			platform.AddInt64(&fdb.insert_bytes, int64(len(key)))
+			nmut++
 		}
 	}
 
@@ -1266,10 +1268,6 @@ snaploop:
 	err = fdb.compactFd.CompactUpto(newpath, snapMarker)
 	if err != nil {
 		return err
-	}
-
-	if _, e := os.Stat(fdb.currfile); e == nil {
-		err = os.Remove(fdb.currfile)
 	}
 
 	fdb.currfile = newpath
