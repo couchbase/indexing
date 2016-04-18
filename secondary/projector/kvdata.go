@@ -228,9 +228,9 @@ func (kvdata *KVData) runScatter(
 		stitems[14] = `"dinstCount":` + strconv.Itoa(int(kvdata.dinstCount))
 		stitems[15] = `"tsCount":` + strconv.Itoa(int(kvdata.tsCount))
 		statjson := strings.Join(stitems[:], ",")
-		fmsg := "%v ##%v stats {%v}\n"
+		fmsg := "%v ##%x stats {%v}\n"
 		logging.Infof(fmsg, kvdata.logPrefix, kvdata.opaque, statjson)
-		fmsg = "%v ##%v vbseqnos %v\n"
+		fmsg = "%v ##%x vbseqnos %v\n"
 		logging.Infof(fmsg, kvdata.logPrefix, kvdata.opaque, vbseqnos)
 	}
 
