@@ -667,13 +667,11 @@ func (r *mutationStreamReader) maybeSendSync() {
 			prevSnap := common.NewTsVbuuidCached(bucket, len(r.bucketFilterMap[bucket].Seqnos))
 			prevSnap.CopyFrom(r.bucketPrevSnapMap[bucket])
 			r.bucketSyncDue[bucket] = false
-			go func(hwt *common.TsVbuuid, prevSnap *common.TsVbuuid, bucket string) {
-				r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,
-					streamId: r.streamId,
-					bucket:   bucket,
-					ts:       hwt,
-					prevSnap: prevSnap}
-			}(hwt, prevSnap, bucket)
+			r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,
+				streamId: r.streamId,
+				bucket:   bucket,
+				ts:       hwt,
+				prevSnap: prevSnap}
 		}
 	}
 }
