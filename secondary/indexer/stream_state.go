@@ -731,6 +731,12 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 			ts.Snapshots[i][0] = hwt.Snapshots[i][0]
 			ts.Snapshots[i][1] = hwt.Snapshots[i][1]
 			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
+
+		} else if hwt.Snapshots[i][1] < ts.Snapshots[i][1] {
+			// Catch any out of order Snapshot.   StreamReader should make sure that Snapshot is monotonic increasing
+			logging.Debugf("StreamState::updateHWT.  Recieved a snapshot marker older than current hwt snapshot. "+
+				"Bucket %v StreamId %v vbucket %v Current Snapshot %v-%v New Snapshot %v-%v",
+				bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], hwt.Snapshots[i][0], hwt.Snapshots[i][1])
 		}
 	}
 
@@ -808,10 +814,16 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 			//if seqno is between the snap boundary of last snap marker
 			//use that to align the TS
 			if ts.Seqnos[i] >= lastSnap.Snapshots[i][0] && ts.Seqnos[i] <= lastSnap.Snapshots[i][1] {
+				logging.Debugf("StreamState::alignSnapBoundary.  Align out-of-bound seqno to last snapshot. "+
+					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
+					bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+					lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1])
+
 				ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
 				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
 				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
 			}
+
 		} else if ts.Seqnos[i] != s[1] && (s[1]-s[0]) <= smallSnap {
 			//for small snapshots, if all the mutations have not been received for the
 			//snapshot, use the last snapshot marker to make it snap aligned.
@@ -822,6 +834,12 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 			ts.Vbuuids[i] = lastSnap.Vbuuids[i]
 		}
 
+		if !(ts.Seqnos[i] >= ts.Snapshots[i][0] && ts.Seqnos[i] <= ts.Snapshots[i][1]) {
+			logging.Warnf("StreamState::alignSnapBoundary.  TS falls out of snapshot boundary. "+
+				"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
+				bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+				lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1])
+		}
 	}
 }
 

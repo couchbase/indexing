@@ -605,6 +605,12 @@ func (r *mutationStreamReader) updateSnapInFilter(meta *MutationMeta,
 
 			filter.Snapshots[meta.vbucket][0] = snapStart
 			filter.Snapshots[meta.vbucket][1] = snapEnd
+
+			logging.Debugf("MutationStreamReader::updateSnapInFilter "+
+				"bucket %v Stream %v vb %v Snapshot %v-%v Prev Snapshot %v-%v Prev Snapshot vbuuid %v",
+				meta.bucket, r.streamId, meta.vbucket, snapStart, snapEnd, prevSnap.Snapshots[meta.vbucket][0],
+				prevSnap.Snapshots[meta.vbucket][1], prevSnap.Vbuuids[meta.vbucket])
+
 		} else {
 			logging.Errorf("MutationStreamReader::updateSnapInFilter Skipped "+
 				"Snapshot %v-%v for vb %v %v %v. Current Filter %v", snapStart,
