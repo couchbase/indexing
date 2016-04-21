@@ -2166,6 +2166,31 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 		}
 	}
 
+	// Seqno should be monotonically increasing when it comes to mutation queue.
+	// For pre-caution, if we detect a flushTS that is smaller than LastFlushTS,
+	// we should make it align with lastFlushTS to make sure indexer does not hang
+	// because it may be waiting for a seqno that never exist in mutation queue.
+	if lts, ok := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && lts != nil {
+
+		for i, s := range flushTs.Seqnos {
+			//if flushTs has a smaller seqno than lastFlushTs
+			if s < lts.Seqnos[i] {
+
+				logging.Warnf("Timekeeper::mayBeMakeSnapAligned.  Align seqno smaller than lastFlushTs. "+
+					"Bucket %v StreamId %v vbucket %v. CurrentTS: Snapshot %v-%v Seqno %v Vbuuid %v. "+
+					"LastFlushTS: Snapshot %v-%v Seqno %v Vbuuid %v.",
+					bucket, streamId, i,
+					flushTs.Snapshots[i][0], flushTs.Snapshots[i][1], flushTs.Seqnos[i], flushTs.Vbuuids[i],
+					lts.Snapshots[i][0], lts.Snapshots[i][1], lts.Seqnos[i], lts.Vbuuids[i])
+
+				flushTs.Seqnos[i] = lts.Seqnos[i]
+				flushTs.Vbuuids[i] = lts.Vbuuids[i]
+				flushTs.Snapshots[i][0] = lts.Snapshots[i][0]
+				flushTs.Snapshots[i][1] = lts.Snapshots[i][1]
+			}
+		}
+	}
+
 	if flushTs.CheckSnapAligned() {
 		flushTs.SetSnapAligned(true)
 	}
