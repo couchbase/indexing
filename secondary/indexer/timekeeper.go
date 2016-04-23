@@ -2157,10 +2157,12 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 		if s[1]-flushTs.Seqnos[i] < largeSnap &&
 			hwt.Seqnos[i] >= s[1] {
 
-			logging.Debugf("Timekeeper::mayBeMakeSnapAligned.  Align Seqno to Snap End for large snapshot. "+
-				"Bucket %v StreamId %v vbucket %v Snapshot %v-%v old Seqno %v new Seqno %v Vbuuid %v current HWT seqno %v",
-				bucket, streamId, i, flushTs.Snapshots[i][0], flushTs.Snapshots[i][1], flushTs.Seqnos[i], s[1],
-				flushTs.Vbuuids[i], hwt.Seqnos[i])
+			if flushTs.Seqnos[i] != s[1] {
+				logging.Debugf("Timekeeper::mayBeMakeSnapAligned.  Align Seqno to Snap End for large snapshot. "+
+					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v old Seqno %v new Seqno %v Vbuuid %v current HWT seqno %v",
+					bucket, streamId, i, flushTs.Snapshots[i][0], flushTs.Snapshots[i][1], flushTs.Seqnos[i], s[1],
+					flushTs.Vbuuids[i], hwt.Seqnos[i])
+			}
 
 			flushTs.Seqnos[i] = s[1]
 		}
