@@ -2026,9 +2026,10 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 
 					if totalWait > 300 {
 						lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+						hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
 						logging.Warnf("Timekeeper::flushMonitor Waiting For Flush "+
-							"to finish for %v seconds. FlushTs %v \n LastFlushTs %v", totalWait,
-							flushTs, lastFlushedTs)
+							"to finish for %v seconds. FlushTs %v \n LastFlushTs %v \n HWT %v", totalWait,
+							flushTs, lastFlushedTs, hwt)
 					}
 				} else {
 					tk.lock.Unlock()

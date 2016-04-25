@@ -560,6 +560,18 @@ func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool 
 	defer r.syncLock.Unlock()
 
 	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
+
+		if uint64(meta.seqno) < filter.Snapshots[meta.vbucket][0] ||
+			uint64(meta.seqno) > filter.Snapshots[meta.vbucket][1] {
+
+			logging.Warnf("MutationStreamReader::checkAndSetBucketFilter Out-of-bound Seqno. "+
+				"Snapshot %v-%v for vb %v %v %v. New seqno %v vbuuid %v.  Current Seqno %v vbuuid %v",
+				filter.Snapshots[meta.vbucket][0], filter.Snapshots[meta.vbucket][1],
+				meta.vbucket, meta.bucket, r.streamId,
+				uint64(meta.seqno), uint64(meta.vbuuid),
+				filter.Seqnos[meta.vbucket], filter.Vbuuids[meta.vbucket])
+		}
+
 		//the filter only checks if seqno of incoming mutation is greater than
 		//the existing filter. Also there should be a valid StreamBegin(vbuuid)
 		//for the vbucket. The vbuuid check is only to ensure that after stream
@@ -580,6 +592,7 @@ func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool 
 				meta.bucket, r.streamId, filter.Seqnos[meta.vbucket])
 			return false
 		}
+
 	} else {
 		logging.Errorf("MutationStreamReader::checkAndSetBucketFilter Missing"+
 			"bucket %v in Filter for Stream %v", meta.bucket, r.streamId)
