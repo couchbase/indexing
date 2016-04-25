@@ -802,11 +802,11 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 	"indexer.timekeeper.monitor_flush": ConfigValue{
-		true,
+		false,
 		"Debug option to enable monitoring flush in timekeeper." +
-			"If a flush doesn't complete for 5mins, additional debug " +
+			"If a flush doesn't complete for 5mins, additional debug info " +
 			"will be logged",
-		true,
+		false,
 		false, // mutable
 	},
 
