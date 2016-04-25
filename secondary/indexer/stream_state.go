@@ -25,15 +25,16 @@ type StreamState struct {
 	streamBucketVbStatusMap   map[common.StreamId]BucketVbStatusMap
 	streamBucketVbRefCountMap map[common.StreamId]BucketVbRefCountMap
 
-	streamBucketHWTMap           map[common.StreamId]BucketHWTMap
-	streamBucketNeedsCommitMap   map[common.StreamId]BucketNeedsCommitMap
-	streamBucketNewTsReqdMap     map[common.StreamId]BucketNewTsReqdMap
-	streamBucketTsListMap        map[common.StreamId]BucketTsListMap
-	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
-	streamBucketRestartTsMap     map[common.StreamId]BucketRestartTsMap
-	streamBucketOpenTsMap        map[common.StreamId]BucketOpenTsMap
-	streamBucketStartTimeMap     map[common.StreamId]BucketStartTimeMap
-	streamBucketLastSnapMarker   map[common.StreamId]BucketLastSnapMarker
+	streamBucketHWTMap            map[common.StreamId]BucketHWTMap
+	streamBucketNeedsCommitMap    map[common.StreamId]BucketNeedsCommitMap
+	streamBucketHasBuildCompTSMap map[common.StreamId]BucketHasBuildCompTSMap
+	streamBucketNewTsReqdMap      map[common.StreamId]BucketNewTsReqdMap
+	streamBucketTsListMap         map[common.StreamId]BucketTsListMap
+	streamBucketLastFlushedTsMap  map[common.StreamId]BucketLastFlushedTsMap
+	streamBucketRestartTsMap      map[common.StreamId]BucketRestartTsMap
+	streamBucketOpenTsMap         map[common.StreamId]BucketOpenTsMap
+	streamBucketStartTimeMap      map[common.StreamId]BucketStartTimeMap
+	streamBucketLastSnapMarker    map[common.StreamId]BucketLastSnapMarker
 
 	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
 
@@ -59,6 +60,7 @@ type BucketRestartTsMap map[string]*common.TsVbuuid
 type BucketOpenTsMap map[string]*common.TsVbuuid
 type BucketStartTimeMap map[string]uint64
 type BucketNeedsCommitMap map[string]bool
+type BucketHasBuildCompTSMap map[string]bool
 type BucketNewTsReqdMap map[string]bool
 type BucketLastSnapMarker map[string]*common.TsVbuuid
 
@@ -87,6 +89,7 @@ func InitStreamState(config common.Config) *StreamState {
 		config:                                config,
 		streamBucketHWTMap:                    make(map[common.StreamId]BucketHWTMap),
 		streamBucketNeedsCommitMap:            make(map[common.StreamId]BucketNeedsCommitMap),
+		streamBucketHasBuildCompTSMap:         make(map[common.StreamId]BucketHasBuildCompTSMap),
 		streamBucketNewTsReqdMap:              make(map[common.StreamId]BucketNewTsReqdMap),
 		streamBucketTsListMap:                 make(map[common.StreamId]BucketTsListMap),
 		streamBucketFlushInProgressTsMap:      make(map[common.StreamId]BucketFlushInProgressTsMap),
@@ -125,6 +128,9 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 
 	bucketNeedsCommitMap := make(BucketNeedsCommitMap)
 	ss.streamBucketNeedsCommitMap[streamId] = bucketNeedsCommitMap
+
+	bucketHasBuildCompTSMap := make(BucketHasBuildCompTSMap)
+	ss.streamBucketHasBuildCompTSMap[streamId] = bucketHasBuildCompTSMap
 
 	bucketNewTsReqdMap := make(BucketNewTsReqdMap)
 	ss.streamBucketNewTsReqdMap[streamId] = bucketNewTsReqdMap
@@ -205,6 +211,7 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 	numVbuckets := ss.config["numVbuckets"].Int()
 	ss.streamBucketHWTMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
 	ss.streamBucketNeedsCommitMap[streamId][bucket] = false
+	ss.streamBucketHasBuildCompTSMap[streamId][bucket] = false
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
 	ss.streamBucketFlushInProgressTsMap[streamId][bucket] = nil
 	ss.streamBucketAbortInProgressMap[streamId][bucket] = false
@@ -244,6 +251,7 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 
 	delete(ss.streamBucketHWTMap[streamId], bucket)
 	delete(ss.streamBucketNeedsCommitMap[streamId], bucket)
+	delete(ss.streamBucketHasBuildCompTSMap[streamId], bucket)
 	delete(ss.streamBucketNewTsReqdMap[streamId], bucket)
 	delete(ss.streamBucketTsListMap[streamId], bucket)
 	delete(ss.streamBucketFlushInProgressTsMap[streamId], bucket)
@@ -279,6 +287,7 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 	//delete this stream from internal maps
 	delete(ss.streamBucketHWTMap, streamId)
 	delete(ss.streamBucketNeedsCommitMap, streamId)
+	delete(ss.streamBucketHasBuildCompTSMap, streamId)
 	delete(ss.streamBucketNewTsReqdMap, streamId)
 	delete(ss.streamBucketTsListMap, streamId)
 	delete(ss.streamBucketFlushInProgressTsMap, streamId)
@@ -722,6 +731,12 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 			ts.Snapshots[i][0] = hwt.Snapshots[i][0]
 			ts.Snapshots[i][1] = hwt.Snapshots[i][1]
 			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
+
+		} else if hwt.Snapshots[i][1] < ts.Snapshots[i][1] {
+			// Catch any out of order Snapshot.   StreamReader should make sure that Snapshot is monotonic increasing
+			logging.Debugf("StreamState::updateHWT.  Recieved a snapshot marker older than current hwt snapshot. "+
+				"Bucket %v StreamId %v vbucket %v Current Snapshot %v-%v New Snapshot %v-%v",
+				bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], hwt.Snapshots[i][0], hwt.Snapshots[i][1])
 		}
 	}
 
@@ -799,10 +814,16 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 			//if seqno is between the snap boundary of last snap marker
 			//use that to align the TS
 			if ts.Seqnos[i] >= lastSnap.Snapshots[i][0] && ts.Seqnos[i] <= lastSnap.Snapshots[i][1] {
+				logging.Debugf("StreamState::alignSnapBoundary.  Align out-of-bound seqno to last snapshot. "+
+					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
+					bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+					lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1])
+
 				ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
 				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
 				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
 			}
+
 		} else if ts.Seqnos[i] != s[1] && (s[1]-s[0]) <= smallSnap {
 			//for small snapshots, if all the mutations have not been received for the
 			//snapshot, use the last snapshot marker to make it snap aligned.
@@ -813,6 +834,12 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 			ts.Vbuuids[i] = lastSnap.Vbuuids[i]
 		}
 
+		if !(ts.Seqnos[i] >= ts.Snapshots[i][0] && ts.Seqnos[i] <= ts.Snapshots[i][1]) {
+			logging.Warnf("StreamState::alignSnapBoundary.  TS falls out of snapshot boundary. "+
+				"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
+				bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+				lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1])
+		}
 	}
 }
 

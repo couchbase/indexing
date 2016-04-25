@@ -332,7 +332,13 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 			streamId, bucket, rollbackTs)
 		//convert from protobuf to native format
 		numVbuckets := k.config["numVbuckets"].Int()
-		nativeTs := rollbackTs.ToTsVbuuid(numVbuckets)
+		var nativeTs *c.TsVbuuid
+		if restartTsList != nil {
+			nativeTs = restartTsList.Union(rollbackTs).ToTsVbuuid(numVbuckets)
+		} else {
+			nativeTs = rollbackTs.ToTsVbuuid(numVbuckets)
+		}
+
 		respCh <- &MsgRollback{streamId: streamId,
 			bucket:     bucket,
 			rollbackTs: nativeTs}

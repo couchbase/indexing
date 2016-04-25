@@ -12,6 +12,7 @@ package indexer
 import (
 	"container/list"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // A helper data stucture for in-memory snapshot info list
@@ -148,16 +149,18 @@ func (sc *snapshotInfoContainer) GetEqualToTS(tsVbuuid *common.TsVbuuid) Snapsho
 //given TS or atleast equal. Returns nil if its not able to find any match
 func (sc *snapshotInfoContainer) GetOlderThanTS(tsVbuuid *common.TsVbuuid) SnapshotInfo {
 	ts := getSeqTsFromTsVbuuid(tsVbuuid)
+	logging.Infof("SnapshotContainer::GetOlderThanTS Snapshot List: %v", sc.List())
 	for e := sc.snapshotList.Front(); e != nil; e = e.Next() {
 		snapshot := e.Value.(SnapshotInfo)
 		snapTsVbuuid := snapshot.Timestamp()
 		snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
+		logging.Infof("SnapshotContainer::GetOlderThanTS Comparing with snapshot %v, snapTs = %v", snapshot, snapTs)
+
 		if ts.GreaterThanEqual(snapTs) {
 			return snapshot
-		} else {
-			break
 		}
 	}
 
+	logging.Infof("SnapshotContainer::GetOlderThanTS Returning nil as no matching snapshot found")
 	return nil
 }

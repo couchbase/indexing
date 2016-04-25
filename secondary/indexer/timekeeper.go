@@ -1835,7 +1835,12 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 
 		//persist TS which completes the build
 		if tk.isBuildCompletionTs(streamId, bucket, tsVbuuid) {
-			tsVbuuid.SetSnapType(common.DISK_SNAP)
+
+			if hasTS, ok := tk.ss.streamBucketHasBuildCompTSMap[streamId][bucket]; !ok || !hasTS {
+				logging.Infof("timekeeper::generateNewStability: setting snapshot type as DISK_SNAP due to BuildCompletionTS")
+				tsVbuuid.SetSnapType(common.DISK_SNAP)
+				tk.ss.streamBucketHasBuildCompTSMap[streamId][bucket] = true
+			}
 		}
 
 		if tk.ss.canFlushNewTS(streamId, bucket) {
@@ -2000,11 +2005,40 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 
 	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = flushTs
 
+	monitor_ts := tk.config["timekeeper.monitor_flush"].Bool()
+
 	go func() {
 		tk.supvRespch <- &MsgTKStabilityTS{ts: flushTs,
 			bucket:    bucket,
 			streamId:  streamId,
 			changeVec: changeVec}
+
+		if monitor_ts {
+
+			var totalWait int
+			ticker := time.NewTicker(time.Second * 60)
+			for _ = range ticker.C {
+				tk.lock.Lock()
+
+				flushInProgress := tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket]
+				if flushTs.Equal(flushInProgress) {
+					totalWait += 60
+
+					if totalWait > 300 {
+						lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+						hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
+						logging.Warnf("Timekeeper::flushMonitor Waiting For Flush "+
+							"to finish for %v seconds. FlushTs %v \n LastFlushTs %v \n HWT %v", totalWait,
+							flushTs, lastFlushedTs, hwt)
+					}
+				} else {
+					tk.lock.Unlock()
+					return
+				}
+				tk.lock.Unlock()
+			}
+		}
+
 	}()
 }
 
@@ -2151,7 +2185,40 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 		//and all mutations have been received till snapEnd
 		if s[1]-flushTs.Seqnos[i] < largeSnap &&
 			hwt.Seqnos[i] >= s[1] {
+
+			if flushTs.Seqnos[i] != s[1] {
+				logging.Debugf("Timekeeper::mayBeMakeSnapAligned.  Align Seqno to Snap End for large snapshot. "+
+					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v old Seqno %v new Seqno %v Vbuuid %v current HWT seqno %v",
+					bucket, streamId, i, flushTs.Snapshots[i][0], flushTs.Snapshots[i][1], flushTs.Seqnos[i], s[1],
+					flushTs.Vbuuids[i], hwt.Seqnos[i])
+			}
+
 			flushTs.Seqnos[i] = s[1]
+		}
+	}
+
+	// Seqno should be monotonically increasing when it comes to mutation queue.
+	// For pre-caution, if we detect a flushTS that is smaller than LastFlushTS,
+	// we should make it align with lastFlushTS to make sure indexer does not hang
+	// because it may be waiting for a seqno that never exist in mutation queue.
+	if lts, ok := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && lts != nil {
+
+		for i, s := range flushTs.Seqnos {
+			//if flushTs has a smaller seqno than lastFlushTs
+			if s < lts.Seqnos[i] {
+
+				logging.Warnf("Timekeeper::mayBeMakeSnapAligned.  Align seqno smaller than lastFlushTs. "+
+					"Bucket %v StreamId %v vbucket %v. CurrentTS: Snapshot %v-%v Seqno %v Vbuuid %v. "+
+					"LastFlushTS: Snapshot %v-%v Seqno %v Vbuuid %v.",
+					bucket, streamId, i,
+					flushTs.Snapshots[i][0], flushTs.Snapshots[i][1], flushTs.Seqnos[i], flushTs.Vbuuids[i],
+					lts.Snapshots[i][0], lts.Snapshots[i][1], lts.Seqnos[i], lts.Vbuuids[i])
+
+				flushTs.Seqnos[i] = lts.Seqnos[i]
+				flushTs.Vbuuids[i] = lts.Vbuuids[i]
+				flushTs.Snapshots[i][0] = lts.Snapshots[i][0]
+				flushTs.Snapshots[i][1] = lts.Snapshots[i][1]
+			}
 		}
 	}
 

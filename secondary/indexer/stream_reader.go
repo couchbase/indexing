@@ -560,6 +560,18 @@ func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool 
 	defer r.syncLock.Unlock()
 
 	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
+
+		if uint64(meta.seqno) < filter.Snapshots[meta.vbucket][0] ||
+			uint64(meta.seqno) > filter.Snapshots[meta.vbucket][1] {
+
+			logging.Warnf("MutationStreamReader::checkAndSetBucketFilter Out-of-bound Seqno. "+
+				"Snapshot %v-%v for vb %v %v %v. New seqno %v vbuuid %v.  Current Seqno %v vbuuid %v",
+				filter.Snapshots[meta.vbucket][0], filter.Snapshots[meta.vbucket][1],
+				meta.vbucket, meta.bucket, r.streamId,
+				uint64(meta.seqno), uint64(meta.vbuuid),
+				filter.Seqnos[meta.vbucket], filter.Vbuuids[meta.vbucket])
+		}
+
 		//the filter only checks if seqno of incoming mutation is greater than
 		//the existing filter. Also there should be a valid StreamBegin(vbuuid)
 		//for the vbucket. The vbuuid check is only to ensure that after stream
@@ -580,6 +592,7 @@ func (r *mutationStreamReader) checkAndSetBucketFilter(meta *MutationMeta) bool 
 				meta.bucket, r.streamId, filter.Seqnos[meta.vbucket])
 			return false
 		}
+
 	} else {
 		logging.Errorf("MutationStreamReader::checkAndSetBucketFilter Missing"+
 			"bucket %v in Filter for Stream %v", meta.bucket, r.streamId)
@@ -594,6 +607,16 @@ func (r *mutationStreamReader) updateSnapInFilter(meta *MutationMeta,
 	r.syncLock.Lock()
 	defer r.syncLock.Unlock()
 
+	if snapEnd < snapStart {
+		logging.Errorf("MutationStreamReader::updateSnapInFilter Bad Snapshot Received "+
+			"for %v %v %v %v-%v", meta.bucket, meta.vbucket, r.streamId, snapStart, snapEnd)
+	}
+
+	if snapEnd-snapStart > 50000 {
+		logging.Errorf("MutationStreamReader::updateSnapInFilter Huge Snapshot Received "+
+			"for %v %v %v %v-%v", meta.bucket, meta.vbucket, r.streamId, snapStart, snapEnd)
+	}
+
 	if filter, ok := r.bucketFilterMap[meta.bucket]; ok {
 		if snapEnd > filter.Snapshots[meta.vbucket][1] {
 
@@ -605,6 +628,12 @@ func (r *mutationStreamReader) updateSnapInFilter(meta *MutationMeta,
 
 			filter.Snapshots[meta.vbucket][0] = snapStart
 			filter.Snapshots[meta.vbucket][1] = snapEnd
+
+			logging.Debugf("MutationStreamReader::updateSnapInFilter "+
+				"bucket %v Stream %v vb %v Snapshot %v-%v Prev Snapshot %v-%v Prev Snapshot vbuuid %v",
+				meta.bucket, r.streamId, meta.vbucket, snapStart, snapEnd, prevSnap.Snapshots[meta.vbucket][0],
+				prevSnap.Snapshots[meta.vbucket][1], prevSnap.Vbuuids[meta.vbucket])
+
 		} else {
 			logging.Errorf("MutationStreamReader::updateSnapInFilter Skipped "+
 				"Snapshot %v-%v for vb %v %v %v. Current Filter %v", snapStart,
@@ -661,13 +690,11 @@ func (r *mutationStreamReader) maybeSendSync() {
 			prevSnap := common.NewTsVbuuidCached(bucket, len(r.bucketFilterMap[bucket].Seqnos))
 			prevSnap.CopyFrom(r.bucketPrevSnapMap[bucket])
 			r.bucketSyncDue[bucket] = false
-			go func(hwt *common.TsVbuuid, prevSnap *common.TsVbuuid, bucket string) {
-				r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,
-					streamId: r.streamId,
-					bucket:   bucket,
-					ts:       hwt,
-					prevSnap: prevSnap}
-			}(hwt, prevSnap, bucket)
+			r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,
+				streamId: r.streamId,
+				bucket:   bucket,
+				ts:       hwt,
+				prevSnap: prevSnap}
 		}
 	}
 }

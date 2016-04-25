@@ -176,8 +176,17 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 	datach chan *MutationKeys) {
 
 	var dequeueSeq Seqno
+	var totalWait int
 
 	for {
+		totalWait += 20 
+		if totalWait > 30000 {
+			if totalWait%5000 == 0 {
+				logging.Warnf("Indexer::MutationQueue Dequeue Waiting For "+
+					"Seqno %v Vbucket %v for %v ms. Last Dequeue %v", seqno,
+					vbucket, totalWait, dequeueSeq)
+			}
+		}
 		for platform.LoadPointer(&q.head[vbucket]) !=
 			platform.LoadPointer(&q.tail[vbucket]) { //if queue is nonempty
 

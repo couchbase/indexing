@@ -463,6 +463,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	streamId := cmd.(*MsgRollback).GetStreamId()
 	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
 	bucket := cmd.(*MsgRollback).GetBucket()
+	logging.Infof("StorageMgr::handleRollback rollbackTs is %v", rollbackTs)
 
 	var respTs *common.TsVbuuid
 
@@ -805,7 +806,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 		if err == nil {
 			stat := IndexStorageStats{
 				InstId: idxInstId,
-				Name: inst.Defn.Name,
+				Name:   inst.Defn.Name,
 				Bucket: inst.Defn.Bucket,
 				Stats: StorageStatistics{
 					DataSize:          dataSz,
