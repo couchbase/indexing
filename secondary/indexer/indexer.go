@@ -760,7 +760,8 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_STATS:
 		idx.handleStats(msg)
 
-	case MSG_ERROR:
+	case MSG_ERROR,
+		STREAM_READER_ERROR:
 		//crash for all errors by default
 		logging.Fatalf("Indexer::handleWorkerMsgs Fatal Error On Worker Channel %+v", msg)
 		err := msg.(*MsgError).GetError()
