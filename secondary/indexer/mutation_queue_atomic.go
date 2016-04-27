@@ -79,10 +79,12 @@ type atomicMutationQueue struct {
 	stopch      []StopChannel
 	numVbuckets uint16 //num vbuckets for the queue
 	isDestroyed bool
+
+	bucket string
 }
 
 //NewAtomicMutationQueue allocates a new Atomic Mutation Queue and initializes it
-func NewAtomicMutationQueue(numVbuckets uint16, maxMemory *platform.AlignedInt64,
+func NewAtomicMutationQueue(bucket string, numVbuckets uint16, maxMemory *platform.AlignedInt64,
 	memUsed *platform.AlignedInt64, config common.Config) *atomicMutationQueue {
 
 	q := &atomicMutationQueue{head: make([]unsafe.Pointer, numVbuckets),
@@ -97,6 +99,7 @@ func NewAtomicMutationQueue(numVbuckets uint16, maxMemory *platform.AlignedInt64
 		dequeuePollInterval: config["mutation_queue.dequeuePollInterval"].Uint64(),
 		resultChanSize:      config["mutation_queue.resultChanSize"].Uint64(),
 		minQueueLen:         config["settings.minVbQueueLength"].Uint64(),
+		bucket:              bucket,
 	}
 
 	var x uint16
@@ -189,8 +192,8 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 		if totalWait > 30000 {
 			if totalWait%5000 == 0 {
 				logging.Warnf("Indexer::MutationQueue Dequeue Waiting For "+
-					"Seqno %v Vbucket %v for %v ms. Last Dequeue %v", seqno,
-					vbucket, totalWait, dequeueSeq)
+					"Seqno %v Bucket %v Vbucket %v for %v ms. Last Dequeue %v", seqno,
+					q.bucket, vbucket, totalWait, dequeueSeq)
 			}
 		}
 		for platform.LoadPointer(&q.head[vbucket]) !=
@@ -338,12 +341,12 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *nod
 			}
 			if totalWait > 300000 { // 5mins
 				logging.Warnf("Indexer::MutationQueue Max Wait Period for Node "+
-					"Alloc Expired %v. Forcing Alloc. Vbucket %v", totalWait, vbucket)
+					"Alloc Expired %v. Forcing Alloc. Bucket %v Vbucket %v", totalWait, q.bucket, vbucket)
 				return &node{}
 			} else if totalWait > 5000 {
 				if totalWait%3000 == 0 {
 					logging.Warnf("Indexer::MutationQueue Waiting for Node "+
-						"Alloc for %v Milliseconds Vbucket %v", totalWait, vbucket)
+						"Alloc for %v Milliseconds Bucket %v Vbucket %v", totalWait, q.bucket, vbucket)
 				}
 			}
 
