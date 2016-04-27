@@ -35,3 +35,21 @@ index_entry_size: 128 bytes
 
 projector memory consumption should be ~832MB for buffers, plus GC memory. GC
 memory shall vary between golang version.
+
+Note that above calculation is for per bucket per indexer node. For example,
+if there are 5 buckets and 5 indexer node, with following index distribution
+
+    index1 on bucket A in indexer1
+    index2 on bucket B in indexer2
+    index3 on bucket C in indexer3
+    index4 on bucket D in indexer4
+    index5 on bucket D in indexer5
+    index6 on bucket E in indexer1
+    index7 on bucket E in indexer2
+    index8 on bucket E in indexer3
+    index9 on bucket E in indexer4
+    index10 on bucket E in indexer5
+
+then each projector should consume ~800MB * (3+2+5), plus GC memory. And the
+worst case consumption, if all indexer nodes host an index from all buckets,
+would be ~800MB * (5 * 5)

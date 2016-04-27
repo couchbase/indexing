@@ -190,7 +190,12 @@ type KeyVersions struct {
 
 // NewKeyVersions return a reference KeyVersions for a single mutation.
 func NewKeyVersions(seqno uint64, docid []byte, maxCount, ctime int64) *KeyVersions {
-	kv := &KeyVersions{Seqno: seqno, Docid: docid}
+	kv := &KeyVersions{Seqno: seqno}
+	if docid != nil {
+		kv.Docid = make([]byte, len(docid))
+		copy(kv.Docid, docid)
+	}
+
 	kv.Uuids = make([]uint64, 0, maxCount)
 	kv.Commands = make([]byte, 0, maxCount)
 	kv.Keys = make([][]byte, 0, maxCount)

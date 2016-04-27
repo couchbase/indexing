@@ -328,6 +328,12 @@ var SystemConfig = Config{
 		5 * 60 * 1000, // 5 minutes
 		false,         // mutable
 	},
+	"projector.gogc": ConfigValue{
+		100, // 100 percent
+		"set GOGC percent",
+		100,
+		false, // mutable
+	},
 	// projector's adminport client, can be used by manager
 	"manager.projectorclient.retryInterval": ConfigValue{
 		16,
