@@ -366,7 +366,6 @@ func (r *mutationStreamReader) maybeSendSync() {
 		hwt[bucket] = common.NewTsVbuuidCached(bucket, numVbuckets)
 		prevSnap[bucket] = common.NewTsVbuuidCached(bucket, numVbuckets)
 	}
-	r.queueMapLock.RUnlock()
 
 	for bucket, _ := range hwt {
 		needSync := false
@@ -392,15 +391,15 @@ func (r *mutationStreamReader) maybeSendSync() {
 			r.streamWorkers[i].lock.Unlock()
 		}
 		if needSync {
-			go func(hwt *common.TsVbuuid, prevSnap *common.TsVbuuid, bucket string) {
-				r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,
-					streamId: r.streamId,
-					bucket:   bucket,
-					ts:       hwt,
-					prevSnap: prevSnap}
-			}(hwt[bucket], prevSnap[bucket], bucket)
+			r.supvRespch <- &MsgBucketHWT{mType: STREAM_READER_HWT,
+				streamId: r.streamId,
+				bucket:   bucket,
+				ts:       hwt[bucket],
+				prevSnap: prevSnap[bucket]}
 		}
 	}
+
+	r.queueMapLock.RUnlock()
 
 }
 
