@@ -1194,14 +1194,14 @@ func (fdb *fdbSlice) IsDirty() bool {
 	return fdb.isDirty
 }
 
-func (fdb *fdbSlice) Compact() error {
+func (fdb *fdbSlice) Compact(abortTime time.Time) error {
 	fdb.IncrRef()
 	defer fdb.DecrRef()
 
 	fdb.setIsCompacting(true)
 	defer fdb.setIsCompacting(false)
 
-	if !fdb.canRunCompaction() {
+	if !fdb.canRunCompaction(abortTime) {
 		logging.Infof("ForestDBSlice::Skip Compaction outside of compaction interval."+
 			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
 		return nil
@@ -1260,7 +1260,7 @@ snaploop:
 
 	donech := make(chan bool)
 	defer close(donech)
-	go fdb.cancelCompactionIfExpire(donech)
+	go fdb.cancelCompactionIfExpire(abortTime, donech)
 
 	newpath := newFdbFile(fdb.path, true)
 	// Remove any existing files leftover due to a crash during last compaction attempt
@@ -1496,7 +1496,7 @@ func (fdb *fdbSlice) setIsCompacting(isCompacting bool) {
 	fdb.isCompacting = isCompacting
 }
 
-func (fdb *fdbSlice) cancelCompactionIfExpire(donech chan bool) {
+func (fdb *fdbSlice) cancelCompactionIfExpire(abortTime time.Time, donech chan bool) {
 
 	ticker := time.NewTicker(time.Minute * time.Duration(5))
 	defer ticker.Stop()
@@ -1506,7 +1506,7 @@ func (fdb *fdbSlice) cancelCompactionIfExpire(donech chan bool) {
 		case <-donech:
 			return
 		case <-ticker.C:
-			if !fdb.canRunCompaction() {
+			if !fdb.canRunCompaction(abortTime) {
 				fdb.lock.Lock()
 				defer fdb.lock.Unlock()
 
@@ -1520,14 +1520,14 @@ func (fdb *fdbSlice) cancelCompactionIfExpire(donech chan bool) {
 	}
 }
 
-func (fdb *fdbSlice) canRunCompaction() bool {
+func (fdb *fdbSlice) canRunCompaction(abortTime time.Time) bool {
 
 	fdb.confLock.RLock()
 	defer fdb.confLock.RUnlock()
 
+	// Once compaction starts, only need to find out if it past the end date.
 	mode := strings.ToLower(fdb.sysconf["settings.compaction.compaction_mode"].String())
 	abort := fdb.sysconf["settings.compaction.abort_exceed_interval"].Bool()
-	days := fdb.sysconf["settings.compaction.days_of_week"].Strings()
 	interval := fdb.sysconf["settings.compaction.interval"].String()
 
 	// No need to stop running compaction if in full compaction mode
@@ -1540,33 +1540,40 @@ func (fdb *fdbSlice) canRunCompaction() bool {
 		return true
 	}
 
-	// check if compaction exceed day and time
-	today := strings.ToLower(time.Now().Weekday().String())
-	found := false
-	for _, day := range days {
-		if strings.ToLower(strings.TrimSpace(day)) == today {
-			found = true
-		}
+	if abort && time.Now().After(abortTime) {
+		return false
 	}
-	expire := !found
 
-	if !expire {
-		var start_hr, start_min, end_hr, end_min int
-		n, err := fmt.Sscanf(interval, "%d:%d,%d:%d", &start_hr, &start_min, &end_hr, &end_min)
-		start_min += start_hr * 60
-		end_min += end_hr * 60
+	var start_hr, start_min, end_hr, end_min int
+	n, err := fmt.Sscanf(interval, "%d:%d,%d:%d", &start_hr, &start_min, &end_hr, &end_min)
+	start_min += start_hr * 60
+	end_min += end_hr * 60
 
-		if n == 4 && err == nil {
+	if n == 4 && err == nil {
+
+		if end_min != 0 {
 			hr, min, _ := time.Now().Clock()
 			min += hr * 60
 
-			if min < start_min || min > end_min {
-				expire = true
+			// At this point, we know we have past start time.
+			// If end time is next day from current time, add minutes.
+			// To know if end time is next day from current time,
+			// current time is larger than start time.
+			if start_min > end_min && min > start_min {
+				end_min += 24 * 60
 			}
+
+			if min > end_min {
+				return false
+			}
+
+		} else {
+			// if there is no end time, then allow compaction to continue.
+			logging.Errorf("ForestDBSlice::canRunCompaction.  Compaction setting misconfigured.  Allowing compaction to continue without abort.")
 		}
 	}
 
-	return !expire
+	return true
 }
 
 func (fdb *fdbSlice) cancelCompact() {

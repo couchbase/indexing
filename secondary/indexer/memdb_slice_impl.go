@@ -989,7 +989,7 @@ func (mdb *memdbSlice) IsDirty() bool {
 	return mdb.isDirty
 }
 
-func (mdb *memdbSlice) Compact() error {
+func (mdb *memdbSlice) Compact(abortTime time.Time) error {
 	return nil
 }
 

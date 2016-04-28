@@ -1015,8 +1015,9 @@ func (m *MsgStatsRequest) GetReplyChannel() chan bool {
 }
 
 type MsgIndexCompact struct {
-	instId common.IndexInstId
-	errch  chan error
+	instId    common.IndexInstId
+	errch     chan error
+	abortTime time.Time
 }
 
 func (m *MsgIndexCompact) GetMsgType() MsgType {
@@ -1029,6 +1030,10 @@ func (m *MsgIndexCompact) GetInstId() common.IndexInstId {
 
 func (m *MsgIndexCompact) GetErrorChannel() chan error {
 	return m.errch
+}
+
+func (m *MsgIndexCompact) GetAbortTime() time.Time {
+	return m.abortTime
 }
 
 //KV_STREAM_REPAIR
