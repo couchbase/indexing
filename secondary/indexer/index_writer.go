@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"time"
 )
 
 type StorageStatistics struct {
@@ -54,7 +55,7 @@ type IndexWriter interface {
 	Statistics() (StorageStatistics, error)
 
 	// Perform file compaction
-	Compact() error
+	Compact(abortTime time.Time) error
 
 	// Dealloc resources
 	Close()
