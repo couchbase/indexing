@@ -69,9 +69,11 @@ func (cd *compactionDaemon) ResetConfig(c common.Config) {
 	if abort && end_hr == 0 && end_min == 0 {
 		// if abort specified, but no end time.
 		common.Console(cd.clusterAddr, "Compaction setting misconfigured.  End time is not specified while allowing compaction to abort.")
+		logging.Errorf("Compaction setting misconfigured.  End time is not specified while allowing compaction to abort.")
 	} else if !abort && !(end_hr == 0 && end_min == 0) {
 		// if end_time specified, but no abort.
 		common.Console(cd.clusterAddr, "Compaction setting misconfigured.  End time is specified while not allowing compaction to abort.")
+		logging.Errorf("Compaction setting misconfigured.  End time is specified while not allowing compaction to abort.")
 	}
 
 	// force daemon to re-check start time for the next compaction
@@ -107,10 +109,36 @@ func (cd *compactionDaemon) needsCompaction(is IndexStorageStats, config common.
 
 		var start_hr, start_min, end_hr, end_min int
 		n, err := fmt.Sscanf(interval, "%d:%d,%d:%d", &start_hr, &start_min, &end_hr, &end_min)
-		start_min += start_hr * 60
-		end_min += end_hr * 60
 
 		if n == 4 && err == nil {
+
+			// validate parameters
+			if start_hr < 0 || start_hr > 23 {
+				common.Console(cd.clusterAddr, "Compaction setting misconfigured.  Invalid start hour %v.", start_hr)
+				logging.Errorf("Compaction setting misconfigured.  Invalid start hour %v.", start_hr)
+				return false
+			}
+
+			if end_hr < 0 || end_hr > 23 {
+				common.Console(cd.clusterAddr, "Compaction setting misconfigured.  Invalid end hour %v.", end_hr)
+				logging.Errorf("Compaction setting misconfigured.  Invalid end hour %v.", end_hr)
+				return false
+			}
+
+			if start_min < 0 || start_min > 59 {
+				common.Console(cd.clusterAddr, "Compaction setting misconfigured.  Invalid start min %v.", start_min)
+				logging.Errorf("Compaction setting misconfigured.  Invalid start min %v.", start_min)
+				return false
+			}
+
+			if end_min < 0 || end_min > 59 {
+				common.Console(cd.clusterAddr, "Compaction setting misconfigured.  Invalid end min %v.", end_min)
+				logging.Errorf("Compaction setting misconfigured.  Invalid end min %v.", end_min)
+				return false
+			}
+
+			start_min += start_hr * 60
+			end_min += end_hr * 60
 
 			// Instead of using current time, use the time when
 			// compaction check starts.
