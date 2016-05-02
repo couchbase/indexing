@@ -51,6 +51,9 @@ type IndexManager struct {
 	timekeeperStopCh         chan bool
 	timestampPersistInterval uint64
 
+	// bucket monitor
+	monitorKillch chan bool
+
 	mutex    sync.Mutex
 	isClosed bool
 }
@@ -193,6 +196,10 @@ func NewIndexManagerInternal(
 	// coordinator
 	mgr.coordinator = nil
 
+	// monitor bucket
+	mgr.monitorKillch = make(chan bool)
+	go mgr.monitorBucket(mgr.monitorKillch)
+
 	return mgr, nil
 }
 
@@ -260,6 +267,8 @@ func (m *IndexManager) Close() {
 	if m.repo != nil {
 		m.repo.Close()
 	}
+
+	close(m.monitorKillch)
 
 	m.isClosed = true
 }
@@ -478,6 +487,94 @@ func (m *IndexManager) SetTopologyByBucket(bucket string, topology *IndexTopolog
 func (m *IndexManager) GetGlobalTopology() (*GlobalTopology, error) {
 
 	return m.repo.GetGlobalTopology()
+}
+
+///////////////////////////////////////////////////////
+// public function - Bucket Monitor
+///////////////////////////////////////////////////////
+
+func (m *IndexManager) monitorBucket(killch chan bool) {
+
+	ticker := time.NewTicker(time.Second * 10)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			buckets, err := m.getBucketForCleanup()
+			if err == nil {
+				for _, bucket := range buckets {
+					logging.Infof("IndexManager.MonitorBucket(): making request for deleting defer index for bucket %v", bucket)
+					// Make sure it is making a synchronous request.  So if indexer main loop cannot proceed to delete the indexes
+					// (e.g. indexer is slow or blocked), it won't keep generating new request.
+					m.requestServer.MakeRequest(client.OPCODE_CLEANUP_DEFER_INDEX, bucket, []byte{})
+				}
+			}
+		case <-killch:
+			return
+		}
+	}
+}
+
+func (m *IndexManager) getBucketForCleanup() ([]string, error) {
+
+	var result []string = nil
+
+	// Get Global Topology
+	globalTop, err := m.GetGlobalTopology()
+	if err != nil {
+		return nil, err
+	}
+
+	// iterate through each bucket
+	for _, key := range globalTop.TopologyKeys {
+
+		bucket := getBucketFromTopologyKey(key)
+
+		// Get bucket UUID.  bucket uuid could be BUCKET_UUID_NIL for non-existent bucket.
+		currentUUID, err := m.lifecycleMgr.getBucketUUID(bucket)
+		if err != nil {
+			// If err != nil, then cannot connect to fetch bucket info.  Retry it at later time.
+			return nil, err
+		}
+
+		topology, err := m.repo.GetTopologyByBucket(bucket)
+		if err == nil {
+
+			definitions := make([]IndexDefnDistribution, len(topology.Definitions))
+			copy(definitions, topology.Definitions)
+
+			hasValidActiveIndex := false
+			hasInvalidDeferIndex := false
+
+			for _, defnRef := range definitions {
+
+				// Check for index with active stream.  If there is any index with active stream, all
+				// index in the bucket will be deleted when the stream is closed due to bucket delete.
+				if defnRef.Instances[0].State != uint32(common.INDEX_STATE_DELETED) &&
+					common.StreamId(defnRef.Instances[0].StreamId) != common.NIL_STREAM {
+					hasValidActiveIndex = true
+					break
+				}
+
+				// Check if this is a defer index from a non-existent bucket. If so, this could be a candidate
+				// for cleanup.
+				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil {
+					if defn.BucketUUID != currentUUID && defn.Deferred &&
+						defnRef.Instances[0].State != uint32(common.INDEX_STATE_DELETED) &&
+						common.StreamId(defnRef.Instances[0].StreamId) == common.NIL_STREAM {
+						hasInvalidDeferIndex = true
+					}
+				}
+			}
+
+			if !hasValidActiveIndex && hasInvalidDeferIndex {
+				result = append(result, bucket)
+			}
+		}
+	}
+
+	return result, nil
 }
 
 ///////////////////////////////////////////////////////
