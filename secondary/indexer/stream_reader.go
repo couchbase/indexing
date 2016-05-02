@@ -769,7 +769,8 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 	}
 
 	if filter, ok := w.bucketFilter[meta.bucket]; ok {
-		if snapEnd > filter.Snapshots[meta.vbucket][1] {
+		if snapEnd > filter.Snapshots[meta.vbucket][1] &&
+			filter.Vbuuids[meta.vbucket] != 0 {
 
 			//store the existing snap marker in prevSnap map
 			prevSnap := w.bucketPrevSnapMap[meta.bucket]
@@ -786,10 +787,10 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 				prevSnap.Snapshots[meta.vbucket][1], prevSnap.Vbuuids[meta.vbucket])
 
 		} else {
-			logging.Errorf("MutationStreamReader::updateSnapInFilter Skipped "+
-				"Snapshot %v-%v for vb %v %v %v. Current Filter %v", snapStart,
+			logging.Warnf("MutationStreamReader::updateSnapInFilter Skipped "+
+				"Snapshot %v-%v for vb %v %v %v. Current Filter %v vbuuid %v", snapStart,
 				snapEnd, meta.vbucket, meta.bucket, w.streamId,
-				filter.Snapshots[meta.vbucket][1])
+				filter.Snapshots[meta.vbucket][1], filter.Vbuuids[meta.vbucket])
 		}
 	} else {
 		logging.Errorf("MutationStreamReader::updateSnapInFilter Missing"+
