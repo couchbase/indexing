@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/memdb/skiplist"
 	"io"
 	"io/ioutil"
@@ -1143,4 +1144,9 @@ func MemoryInUse() (sz int64) {
 	}
 
 	return
+}
+
+func Debug(flag bool) {
+	skiplist.Debug = flag
+	mm.Debug = flag
 }

@@ -199,6 +199,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 
 	// Read memquota setting
 	idx.stats.memoryQuota.Set(int64(idx.config["settings.memory_quota"].Uint64()))
+	memdb.Debug(idx.config["settings.moi.debug"].Bool())
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
 	idx.initStreamAddressMap()
@@ -838,6 +839,7 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 		debug.SetGCPercent(percent.Int())
 	}
 
+	memdb.Debug(idx.config["settings.moi.debug"].Bool())
 	idx.setProfilerOptions(newConfig)
 	idx.config = newConfig
 	idx.compactMgrCmdCh <- msg

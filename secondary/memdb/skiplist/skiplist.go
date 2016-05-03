@@ -7,6 +7,8 @@ import (
 	"unsafe"
 )
 
+var Debug bool
+
 const MaxLevel = 32
 const p = 0.25
 
@@ -73,6 +75,9 @@ func NewWithConfig(cfg Config) *Skiplist {
 
 	if cfg.UseMemoryMgmt {
 		s.freeNode = func(n *Node) {
+			if Debug {
+				debugMarkFree(n)
+			}
 			cfg.Free(unsafe.Pointer(n))
 		}
 	} else {
