@@ -336,12 +336,12 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 				if topology := m.findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
 					state, errStr := topology.GetStatusByDefn(defn.DefnId)
 
-					if state != common.INDEX_STATE_DELETED && state != common.INDEX_STATE_NIL {
+					if state != common.INDEX_STATE_CREATED &&
+						state != common.INDEX_STATE_DELETED &&
+						state != common.INDEX_STATE_NIL {
 
 						stateStr := "Not Available"
 						switch state {
-						case common.INDEX_STATE_CREATED:
-							stateStr = "Created"
 						case common.INDEX_STATE_READY:
 							stateStr = "Created"
 						case common.INDEX_STATE_INITIAL:
