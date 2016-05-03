@@ -1109,6 +1109,12 @@ var SystemConfig = Config{
 		"./",
 		true, // immutable
 	},
+	"indexer.settings.moi.debug": ConfigValue{
+		false,
+		"Enable debug mode for moi storage engine",
+		false,
+		false, // mutable,
+	},
 }
 
 // NewConfig from another
