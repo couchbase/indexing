@@ -248,7 +248,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	vbnos, err := k.getAllVbucketsInCluster(bucket)
 	if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error in fetching vbuckets info %v",
-			streamId, restartTs.Bucket, err)
+			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,

@@ -791,6 +791,18 @@ var SystemConfig = Config{
 		0.1,
 		false, // mutable
 	},
+	"indexer.mutation_manager.fdb.fracMutationQueueMem": ConfigValue{
+		0.4,
+		"Fraction of memory_quota allocated to Mutation Queue",
+		0.4,
+		false, // mutable
+	},
+	"indexer.mutation_manager.moi.fracMutationQueueMem": ConfigValue{
+		0.1,
+		"Fraction of memory_quota allocated to Mutation Queue",
+		0.1,
+		false, // mutable
+	},
 	"indexer.settings.gc_percent": ConfigValue{
 		100,
 		"(GOGC) Ratio of current heap size over heap size from last GC." +
@@ -958,6 +970,15 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 
+	"indexer.settings.minVbQueueLength": ConfigValue{
+		uint64(100),
+		"Minimum Length of Mutation Queue Per Vbucket. This " +
+			"allocation is done per bucket. Must be greater " +
+			"than smallSnapshotThreshold.",
+		uint64(100),
+		false, // mutable
+	},
+
 	"indexer.settings.largeSnapshotThreshold": ConfigValue{
 		uint64(200),
 		"Threshold For Considering a DCP Snapshot as Large. " +
@@ -967,8 +988,9 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.smallSnapshotThreshold": ConfigValue{
-		uint64(30),
-		"Threshold For Considering a DCP Snapshot as Small.",
+		uint64(30), //please see minVbQueueLength before changing this
+		"Threshold For Considering a DCP Snapshot as Small. Must be" +
+			"smaller than minVbQueueLength.",
 		uint64(30),
 		false, // mutable
 	},

@@ -205,6 +205,8 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		err = m.handleDeleteBucket(key, content)
 	case client.OPCODE_CLEANUP_INDEX:
 		err = m.handleCleanupIndex(key)
+	case client.OPCODE_CLEANUP_DEFER_INDEX:
+		err = m.handleCleanupDeferIndexFromBucket(key)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -259,6 +261,9 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 
 	// Fetch bucket UUID.   This confirms that the bucket has existed, but it cannot confirm if the bucket
 	// is still existing in the cluster (due to race condition or network partitioned).
+	// Lifecycle manager is a singleton that ensures all metadata operation is serialized.  Therefore, a
+	// call to verifyBucket() here  will also make sure that all existing indexes belong to the same bucket UUID.
+	// To esnure verifyBucket can succeed, indexes from stale bucket must be cleaned up (eventually).
 	bucketUUID, err := m.verifyBucket(defn.Bucket)
 	if err != nil || bucketUUID == common.BUCKET_UUID_NIL {
 		if err == nil {
@@ -621,6 +626,53 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 	return result
 }
 
+//
+// Cleanup any defer index from invalid bucket.
+//
+func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
+
+	// Get bucket UUID.  bucket uuid could be BUCKET_UUID_NIL for non-existent bucket.
+	currentUUID, err := m.getBucketUUID(bucket)
+	if err != nil {
+		// If err != nil, then cannot connect to fetch bucket info.  Do not attempt to delete index.
+		return nil
+	}
+
+	topology, err := m.repo.GetTopologyByBucket(bucket)
+	if err == nil {
+
+		hasValidActiveIndex := false
+		for _, defnRef := range topology.Definitions {
+			// Check for index with active stream.  If there is any index with active stream, all
+			// index in the bucket will be deleted when the stream is closed due to bucket delete.
+			if defnRef.Instances[0].State != uint32(common.INDEX_STATE_DELETED) &&
+				common.StreamId(defnRef.Instances[0].StreamId) != common.NIL_STREAM {
+				hasValidActiveIndex = true
+				break
+			}
+		}
+
+		if !hasValidActiveIndex {
+			for _, defnRef := range topology.Definitions {
+				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil {
+					if defn.BucketUUID != currentUUID && defn.Deferred &&
+						defnRef.Instances[0].State != uint32(common.INDEX_STATE_DELETED) &&
+						common.StreamId(defnRef.Instances[0].StreamId) == common.NIL_STREAM {
+						if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), true); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// This function returns an error if it cannot connect for fetching bucket info.
+// It returns BUCKET_UUID_NIL (err == nil) if bucket does not exist.
+//
 func (m *LifecycleMgr) getBucketUUID(bucket string) (string, error) {
 
 	count := 0
@@ -639,6 +691,11 @@ RETRY:
 	return uuid, nil
 }
 
+// This function ensures:
+// 1) Bucket exists
+// 2) Existing Index Definition matches the UUID of exixisting bucket
+// 3) If bucket does not exist AND there is no existing definition, this returns common.BUCKET_UUID_NIL
+//
 func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 
 	currentUUID, err := m.getBucketUUID(bucket)
@@ -666,5 +723,6 @@ func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 	}
 
 	// topology is either nil or all index defn matches bucket UUID
+	// if topology is nil, then currentUUID == common.BUCKET_UUID_NIL
 	return currentUUID, nil
 }

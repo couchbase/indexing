@@ -47,6 +47,13 @@ func (m *MutationMeta) Clone() *MutationMeta {
 	return meta
 }
 
+func (m *MutationMeta) Size() int64 {
+
+	size := int64(len(m.bucket) + 20) //vbucket, vbuuid, seqno
+	return size
+
+}
+
 func (m *MutationMeta) Free() {
 	if useMutationSyncPool {
 		mutMetaPool.Put(m)
@@ -84,6 +91,17 @@ func newMutationKeys() interface{} {
 	return &MutationKeys{}
 }
 
+func (mk *MutationKeys) Size() int64 {
+
+	var size int64
+	size = mk.meta.Size()
+	size += int64(len(mk.docid))
+	for _, m := range mk.mut {
+		size += m.Size()
+	}
+	return size
+}
+
 func (mk *MutationKeys) Free() {
 	if useMutationSyncPool {
 		mk.meta.Free()
@@ -116,6 +134,16 @@ func NewMutation() *Mutation {
 
 func newMutation() interface{} {
 	return &Mutation{}
+}
+
+func (m *Mutation) Size() int64 {
+
+	var size int64
+	size = int64(len(m.key))
+	size += int64(len(m.partnkey))
+	size += 8 + 1 //instId + command
+	return size
+
 }
 
 func (m *Mutation) Free() {

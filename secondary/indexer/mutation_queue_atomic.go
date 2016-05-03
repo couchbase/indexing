@@ -64,35 +64,42 @@ type MutationQueue interface {
 //It provides safe concurrent read/write access across vbucket queues.
 
 type atomicMutationQueue struct {
-	head   []unsafe.Pointer        //head pointer per vbucket queue
-	tail   []unsafe.Pointer        //tail pointer per vbucket queue
-	size   []platform.AlignedInt64 //size of queue per vbucket
-	maxLen int64                   //max length of queue per vbucket
+	head      []unsafe.Pointer        //head pointer per vbucket queue
+	tail      []unsafe.Pointer        //tail pointer per vbucket queue
+	size      []platform.AlignedInt64 //size of queue per vbucket
+	memUsed   *platform.AlignedInt64  //memory used by queue
+	maxMemory *platform.AlignedInt64  //max memory to be used
 
 	allocPollInterval   uint64 //poll interval for new allocs, if queue is full
 	dequeuePollInterval uint64 //poll interval for dequeue, if waiting for mutations
 	resultChanSize      uint64 //size of buffered result channel
+	minQueueLen         uint64
 
 	free        []*node //free pointer per vbucket queue
 	stopch      []StopChannel
 	numVbuckets uint16 //num vbuckets for the queue
 	isDestroyed bool
+
+	bucket string
 }
 
 //NewAtomicMutationQueue allocates a new Atomic Mutation Queue and initializes it
-func NewAtomicMutationQueue(numVbuckets uint16, maxLenPerVb int64,
-	config common.Config) *atomicMutationQueue {
+func NewAtomicMutationQueue(bucket string, numVbuckets uint16, maxMemory *platform.AlignedInt64,
+	memUsed *platform.AlignedInt64, config common.Config) *atomicMutationQueue {
 
 	q := &atomicMutationQueue{head: make([]unsafe.Pointer, numVbuckets),
 		tail:                make([]unsafe.Pointer, numVbuckets),
 		free:                make([]*node, numVbuckets),
 		size:                make([]platform.AlignedInt64, numVbuckets),
 		numVbuckets:         numVbuckets,
-		maxLen:              maxLenPerVb,
+		maxMemory:           maxMemory,
+		memUsed:             memUsed,
 		stopch:              make([]StopChannel, numVbuckets),
 		allocPollInterval:   getAllocPollInterval(config),
 		dequeuePollInterval: config["mutation_queue.dequeuePollInterval"].Uint64(),
 		resultChanSize:      config["mutation_queue.resultChanSize"].Uint64(),
+		minQueueLen:         config["settings.minVbQueueLength"].Uint64(),
+		bucket:              bucket,
 	}
 
 	var x uint16
@@ -142,6 +149,8 @@ func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys,
 	n.mutation = mutation
 	n.next = nil
 
+	platform.AddInt64(q.memUsed, n.mutation.Size())
+
 	//point tail's next to new node
 	tail := (*node)(platform.LoadPointer(&q.tail[vbucket]))
 	tail.next = n
@@ -179,12 +188,12 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 	var totalWait int
 
 	for {
-		totalWait += 20 
+		totalWait += 20
 		if totalWait > 30000 {
 			if totalWait%5000 == 0 {
 				logging.Warnf("Indexer::MutationQueue Dequeue Waiting For "+
-					"Seqno %v Vbucket %v for %v ms. Last Dequeue %v", seqno,
-					vbucket, totalWait, dequeueSeq)
+					"Seqno %v Bucket %v Vbucket %v for %v ms. Last Dequeue %v", seqno,
+					q.bucket, vbucket, totalWait, dequeueSeq)
 			}
 		}
 		for platform.LoadPointer(&q.head[vbucket]) !=
@@ -199,6 +208,7 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 				//move head to next
 				platform.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
 				platform.AddInt64(&q.size[vbucket], -1)
+				platform.AddInt64(q.memUsed, -m.Size())
 				//send mutation to caller
 				dequeueSeq = m.meta.seqno
 				datach <- m
@@ -272,6 +282,7 @@ func (q *atomicMutationQueue) DequeueSingleElement(vbucket Vbucket) *MutationKey
 		//move head to next
 		platform.StorePointer(&q.head[vbucket], unsafe.Pointer(head.next))
 		platform.AddInt64(&q.size[vbucket], -1)
+		platform.AddInt64(q.memUsed, -m.Size())
 		return m
 	}
 	return nil
@@ -310,19 +321,12 @@ func (q *atomicMutationQueue) GetNumVbuckets() uint16 {
 //allocNode tries to get node from freelist, otherwise allocates a new node and returns
 func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *node {
 
-	//get node from freelist
-	n := q.popFreeList(vbucket)
+	n := q.checkMemAndAlloc(vbucket)
 	if n != nil {
 		return n
-	} else {
-		currLen := platform.LoadInt64(&q.size[vbucket])
-		if currLen < q.maxLen {
-			//allocate new node and return
-			return &node{}
-		}
 	}
 
-	//every allocPollInterval milliseconds, check for free nodes
+	//every allocPollInterval milliseconds, check for memory usage
 	ticker := time.NewTicker(time.Millisecond * time.Duration(q.allocPollInterval))
 	defer ticker.Stop()
 
@@ -331,17 +335,19 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *nod
 		select {
 		case <-ticker.C:
 			totalWait += q.allocPollInterval
-			n = q.popFreeList(vbucket)
+			n := q.checkMemAndAlloc(vbucket)
 			if n != nil {
 				return n
 			}
 			if totalWait > 300000 { // 5mins
 				logging.Warnf("Indexer::MutationQueue Max Wait Period for Node "+
-					"Alloc Expired %v. Forcing Alloc. Vbucket %v", totalWait, vbucket)
+					"Alloc Expired %v. Forcing Alloc. Bucket %v Vbucket %v", totalWait, q.bucket, vbucket)
 				return &node{}
 			} else if totalWait > 5000 {
-				logging.Warnf("Indexer::MutationQueue Waiting for Node "+
-					"Alloc for %v Milliseconds Vbucket %v", totalWait, vbucket)
+				if totalWait%3000 == 0 {
+					logging.Warnf("Indexer::MutationQueue Waiting for Node "+
+						"Alloc for %v Milliseconds Bucket %v Vbucket %v", totalWait, q.bucket, vbucket)
+				}
 			}
 
 		case <-q.stopch[vbucket]:
@@ -356,6 +362,27 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *nod
 	}
 
 	return nil
+
+}
+
+func (q *atomicMutationQueue) checkMemAndAlloc(vbucket Vbucket) *node {
+
+	currMem := platform.LoadInt64(q.memUsed)
+	maxMem := platform.LoadInt64(q.maxMemory)
+	currLen := platform.LoadInt64(&q.size[vbucket])
+
+	if currMem < maxMem || currLen < int64(q.minQueueLen) {
+		//get node from freelist
+		n := q.popFreeList(vbucket)
+		if n != nil {
+			return n
+		} else {
+			//allocate new node and return
+			return &node{}
+		}
+	} else {
+		return nil
+	}
 
 }
 
