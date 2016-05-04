@@ -3,6 +3,7 @@ package common
 import "errors"
 import "fmt"
 import "io"
+import "io/ioutil"
 import "path/filepath"
 import "net"
 import "net/url"
@@ -721,6 +722,90 @@ func Console(clusterAddr string, format string, v ...interface{}) error {
 	_, err = client.Do(req)
 
 	return err
+}
+
+func CopyFile(dest, source string) (err error) {
+	var sf, df *os.File
+
+	defer func() {
+		if sf != nil {
+			sf.Close()
+		}
+		if df != nil {
+			df.Close()
+		}
+	}()
+
+	if sf, err = os.Open(source); err != nil {
+		return err
+	} else if IsPathExist(dest) {
+		return nil
+	} else if df, err = os.Create(dest); err != nil {
+		return err
+	} else if _, err = io.Copy(df, sf); err != nil {
+		return err
+	}
+
+	var info os.FileInfo
+	if info, err = os.Stat(source); err != nil {
+		return err
+	} else if err = os.Chmod(dest, info.Mode()); err != nil {
+		return err
+	}
+	return
+}
+
+// CopyDir compose destination path based on source and,
+//   - if dest is file, and path is reachable, it is a no-op.
+//   - if dest is file, and path is not reachable, create and copy.
+//   - if dest is dir, and path is reachable, recurse into the dir.
+//   - if dest is dir, and path is not reachable, create and recurse into the dir.
+func CopyDir(dest, source string) error {
+	var created bool
+
+	if fi, err := os.Stat(source); err != nil {
+		return err
+	} else if !fi.IsDir() {
+		return fmt.Errorf("source not a directory")
+	} else if IsPathExist(dest) == false {
+		created = true
+		if err := os.MkdirAll(dest, fi.Mode()); err != nil {
+			return err
+		}
+	}
+
+	var err error
+	defer func() {
+		// if copy failed in the middle and directory was created by us, clean.
+		if err != nil && created {
+			os.RemoveAll(dest)
+		}
+	}()
+
+	var entries []os.FileInfo
+	if entries, err = ioutil.ReadDir(source); err != nil {
+		return err
+	} else {
+		for _, entry := range entries {
+			s := filepath.Join(source, entry.Name())
+			d := filepath.Join(dest, entry.Name())
+			if entry.IsDir() {
+				if err = CopyDir(d, s); err != nil {
+					return err
+				}
+			} else if err = CopyFile(d, s); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func IsPathExist(path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return !os.IsNotExist(err)
+	}
+	return true
 }
 
 func DiskUsage(dir string) (int64, error) {
