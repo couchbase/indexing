@@ -149,9 +149,9 @@ func (s *Skiplist) NewLevel(randFn func() float32) int {
 
 func (s *Skiplist) helpDelete(level int, prev, curr, next *Node, sts *Stats) bool {
 	success := prev.dcasNext(level, curr, next, false, false)
-	if success && level == curr.Level() {
+	if success && level == 0 {
 		sts.AddInt64(&sts.softDeletes, -1)
-		sts.AddInt64(&sts.levelNodesCount[level], -1)
+		sts.AddInt64(&sts.levelNodesCount[curr.Level()], -1)
 		sts.AddInt64(&sts.usedBytes, -int64(s.Size(curr)))
 	}
 	return success
@@ -230,16 +230,20 @@ retry:
 		}
 	}
 
-	x.setNext(0, buf.succs[0], false)
+	for i := 0; i <= int(itemLevel); i++ {
+		x.setNext(i, buf.succs[i], false)
+	}
+
+	// Now node is part of the skiplist
 	if !buf.preds[0].dcasNext(0, buf.succs[0], x, false, false) {
 		sts.AddUint64(&sts.insertConflicts, 1)
 		goto retry
 	}
 
+	// Add to optional index levels
 	for i := 1; i <= int(itemLevel); i++ {
 	fixThisLevel:
 		for {
-			x.setNext(i, buf.succs[i], false)
 			if buf.preds[i].dcasNext(i, buf.succs[i], x, false, false) {
 				break fixThisLevel
 			}
@@ -254,22 +258,20 @@ retry:
 }
 
 func (s *Skiplist) softDelete(delNode *Node, sts *Stats) bool {
-	var deleteMarked bool
+	var marked bool
 
 	targetLevel := delNode.Level()
 	for i := targetLevel; i >= 0; i-- {
 		next, deleted := delNode.getNext(i)
 		for !deleted {
-			deleteMarked = delNode.dcasNext(i, next, next, false, true)
+			if delNode.dcasNext(i, next, next, false, true) && i == 0 {
+				sts.AddInt64(&sts.softDeletes, 1)
+				marked = true
+			}
 			next, deleted = delNode.getNext(i)
 		}
 	}
-
-	if deleteMarked {
-		sts.AddInt64(&sts.softDeletes, 1)
-	}
-
-	return deleteMarked
+	return marked
 }
 
 func (s *Skiplist) Delete(itm unsafe.Pointer, cmp CompareFn,
