@@ -49,7 +49,8 @@ func (m *MutationMeta) Clone() *MutationMeta {
 
 func (m *MutationMeta) Size() int64 {
 
-	size := int64(len(m.bucket) + 20) //vbucket, vbuuid, seqno
+	size := int64(len(m.bucket))
+	size += 8 + 4 + 8 + 8 //fixed cost of members
 	return size
 
 }
@@ -99,6 +100,8 @@ func (mk *MutationKeys) Size() int64 {
 	for _, m := range mk.mut {
 		size += m.Size()
 	}
+
+	size += 8 + 16 + 16 //fixed cost of members
 	return size
 }
 
@@ -141,7 +144,8 @@ func (m *Mutation) Size() int64 {
 	var size int64
 	size = int64(len(m.key))
 	size += int64(len(m.partnkey))
-	size += 8 + 1 //instId + command
+	size += 8 + 1        //instId + command
+	size += 16 + 16 + 16 //fixed cost of members
 	return size
 
 }
