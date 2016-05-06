@@ -736,7 +736,8 @@ func (mdb *memdbSlice) GetCommittedCount() uint64 {
 }
 
 func (mdb *memdbSlice) resetStores() {
-	mdb.mainstore.Close()
+	// This is blocking call if snap refcounts != 0
+	go mdb.mainstore.Close()
 	if !mdb.isPrimary {
 		for i := 0; i < mdb.numWriters; i++ {
 			mdb.back[i].Close()

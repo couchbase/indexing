@@ -297,6 +297,10 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 					err = ret
 				} else {
 					activeTs = updateActiveTsFromResponse(bucket, activeTs, res)
+					if rollbackTs != nil {
+						logging.Infof("KVSender::openMutationStream %v %v Projector %v Rollback Received %v",
+							streamId, bucket, addr, rollbackTs)
+					}
 					rollbackTs = updateRollbackTsFromResponse(bucket, rollbackTs, res)
 				}
 			}, stopCh)
@@ -328,8 +332,6 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	err = rh.Run()
 
 	if rollbackTs != nil {
-		logging.Infof("KVSender::openMutationStream %v %v Rollback Received %v",
-			streamId, bucket, rollbackTs)
 		//convert from protobuf to native format
 		numVbuckets := k.config["numVbuckets"].Int()
 		var nativeTs *c.TsVbuuid

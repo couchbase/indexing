@@ -971,11 +971,11 @@ var SystemConfig = Config{
 	},
 
 	"indexer.settings.minVbQueueLength": ConfigValue{
-		uint64(100),
+		uint64(250),
 		"Minimum Length of Mutation Queue Per Vbucket. This " +
 			"allocation is done per bucket. Must be greater " +
 			"than smallSnapshotThreshold.",
-		uint64(100),
+		uint64(250),
 		false, // mutable
 	},
 

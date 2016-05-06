@@ -828,10 +828,15 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 			//for small snapshots, if all the mutations have not been received for the
 			//snapshot, use the last snapshot marker to make it snap aligned.
 			//this snapshot will get picked up in the next TS.
-			ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
-			ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
-			ts.Seqnos[i] = lastSnap.Snapshots[i][1]
-			ts.Vbuuids[i] = lastSnap.Vbuuids[i]
+
+			//Use lastSnap only if it is from the same branch(vbuuid matches) and
+			//HWT is already past the snapEnd of lastSnap
+			if ts.Seqnos[i] > lastSnap.Snapshots[i][1] && ts.Vbuuids[i] == lastSnap.Vbuuids[i] {
+				ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
+				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
+				ts.Seqnos[i] = lastSnap.Snapshots[i][1]
+				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
+			}
 		}
 
 		if !(ts.Seqnos[i] >= ts.Snapshots[i][0] && ts.Seqnos[i] <= ts.Snapshots[i][1]) {

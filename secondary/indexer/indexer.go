@@ -3265,6 +3265,40 @@ func (idx *indexer) validateIndexInstMap() {
 
 	for instId, index := range idx.indexInstMap {
 
+		//if an index has NIL_STREAM:
+		//for non-deferred index,this means the Indexer
+		//failed while processing the request, cleanup the index.
+		//for deferred index in CREATED state, update the state of the index
+		//to READY in manager, so that build index request can be processed.
+		if index.Stream == common.NIL_STREAM {
+			if index.Defn.Deferred {
+				if index.State == common.INDEX_STATE_CREATED {
+					logging.Warnf("Indexer::validateIndexInstMap State %v Stream %v Deferred %v Found. "+
+						"Updating State to Ready %v", index.State, index.Stream, index.Defn.Deferred, index)
+					index.State = common.INDEX_STATE_READY
+					idx.indexInstMap[instId] = index
+
+					if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{index.InstId}, true, false, false, false); err != nil {
+						common.CrashOnError(err)
+					}
+				}
+			} else {
+				logging.Warnf("Indexer::validateIndexInstMap State %v Stream %v Deferred %v Not Valid For Recovery. "+
+					"Cleanup Index %v", index.State, index.Stream, index.Defn.Deferred, index)
+				idx.cleanupIndexMetadata(index)
+				delete(idx.indexInstMap, instId)
+				continue
+			}
+
+		}
+
+		//for indexer, Ready state doesn't matter. Till build index is received,
+		//the index stays in Created state.
+		if index.State == common.INDEX_STATE_READY {
+			index.State = common.INDEX_STATE_CREATED
+			idx.indexInstMap[instId] = index
+		}
+
 		//only indexes in created, initial, catchup, active state
 		//are valid for recovery
 		if !isValidRecoveryState(index.State) {

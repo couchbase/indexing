@@ -230,19 +230,9 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			continue
 		}
 
-		//for indexer, Ready state doesn't matter. Till index build,
-		//the index stays in Created state.
-		var state common.IndexState
-		instState := common.IndexState(inst.State)
-		if instState == common.INDEX_STATE_READY {
-			state = common.INDEX_STATE_CREATED
-		} else {
-			state = instState
-		}
-
 		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
 			Defn:   idxDefn,
-			State:  state,
+			State:  common.IndexState(inst.State),
 			Stream: common.StreamId(inst.StreamId),
 		}
 
