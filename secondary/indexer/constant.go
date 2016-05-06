@@ -36,11 +36,6 @@ const INIT_TOPIC = "INIT_STREAM_TOPIC"
 //Default Pool Name
 const DEFAULT_POOL = "default"
 
-//Default Number of Workers started by a stream reader
-//to processed incoming mutation. Max can be upto the
-//number of vbuckets and minimum must be 1
-const DEFAULT_NUM_STREAM_READER_WORKERS = 32
-
 //Max number of snapshot to be retained per index.
 //Older snapshots are deleted.
 const MAX_SNAPSHOTS_PER_INDEX = 5

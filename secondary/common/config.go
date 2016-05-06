@@ -656,6 +656,13 @@ var SystemConfig = Config{
 		false, // mutable
 	},
 
+	"indexer.stream_reader.fdb.numWorkers": ConfigValue{
+		1,
+		"Number of stream reader workers to read from dataport",
+		1,
+		false, // mutable
+	},
+
 	"indexer.storage.fdb.commitPollInterval": ConfigValue{
 		uint64(10),
 		"Time in milliseconds for a slice to poll for " +
@@ -693,6 +700,13 @@ var SystemConfig = Config{
 		uint64(200000),
 		"Buffer Size to hold incoming mutations from dataport",
 		uint64(200000),
+		false, // mutable
+	},
+
+	"indexer.stream_reader.moi.numWorkers": ConfigValue{
+		32,
+		"Number of stream reader workers to read from dataport",
+		32,
 		false, // mutable
 	},
 

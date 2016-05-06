@@ -105,6 +105,8 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		config:            config,
 	}
 
+	logging.Infof("MutationStreamReader: Setting Stream Workers %v %v", r.streamId, numWorkers)
+
 	for i := 0; i < numWorkers; i++ {
 		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r, bucketFilter)
 		go r.streamWorkers[i].start()
