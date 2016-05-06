@@ -4045,7 +4045,7 @@ func (idx *indexer) monitorMemUsage() {
 			min_oom_mem := idx.config["min_oom_memory"].Uint64()
 
 			gcDone := false
-			if idx.needsGC() {
+			if idx.needsGCMoi() {
 				start := time.Now()
 				runtime.GC()
 				elapsed := time.Since(start)
@@ -4078,6 +4078,16 @@ func (idx *indexer) monitorMemUsage() {
 					canResume = false
 				}
 			}
+		} else if common.GetStorageMode() == common.FORESTDB {
+
+			if idx.needsGCFdb() {
+				start := time.Now()
+				runtime.GC()
+				elapsed := time.Since(start)
+				logging.Infof("Indexer::monitorMemUsage ManualGC Time Taken %v", elapsed)
+				mm.FreeOSMemory()
+			}
+
 		}
 
 		time.Sleep(time.Second * time.Duration(monitorInterval))
@@ -4285,7 +4295,7 @@ func (idx *indexer) updateMemstats() {
 
 }
 
-func (idx *indexer) needsGC() bool {
+func (idx *indexer) needsGCMoi() bool {
 
 	var memUsed uint64
 	memQuota := idx.config["settings.memory_quota"].Uint64()
@@ -4311,6 +4321,34 @@ func (idx *indexer) needsGC() bool {
 
 }
 
+func (idx *indexer) needsGCFdb() bool {
+
+	var memUsed uint64
+	memQuota := idx.config["settings.memory_quota"].Uint64()
+
+	//ignore till 1GB
+	ignoreThreshold := idx.config["min_oom_memory"].Uint64() * 4
+
+	memUsed = idx.memoryUsed(true)
+
+	if memUsed < ignoreThreshold {
+		return false
+	}
+
+	if memUsed >= memQuota {
+		return true
+	}
+
+	forceGcFrac := idx.config["force_gc_mem_frac"].Float64()
+	memQuotaFree := memQuota - memUsed
+
+	if float64(memQuotaFree) < forceGcFrac*float64(memQuota) {
+		return true
+	}
+
+	return false
+
+}
 func (idx *indexer) logMemstats() {
 
 	var ms runtime.MemStats
