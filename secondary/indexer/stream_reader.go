@@ -564,7 +564,7 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 
 			mut := NewMutation()
 			mut.uuid = common.IndexInstId(kv.GetUuids()[i])
-			mut.key = kv.GetKeys()[i]
+			mut.key = append(mut.key, kv.GetKeys()[i]...)
 			mut.command = byte(kv.GetCommands()[i])
 
 			mutk.mut = append(mutk.mut, mut)
