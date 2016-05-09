@@ -77,12 +77,12 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte, isDistinct bool) ([][]by
 
 	codec := collatejson.NewCodec(16)
 	for _, arr := range itemArrays {
-		if bs, err = codec.JoinArray(arr, buf); err != nil {
+		from := len(buf)
+		if buf, err = codec.JoinArray(arr, buf); err != nil {
 			return nil, nil, err
 		}
-		items = append(items, bs)
-		l := len(bs)
-		buf = buf[l:l]
+		l := len(buf)
+		items = append(items, buf[from:l])
 	}
 
 	if isDistinct {
