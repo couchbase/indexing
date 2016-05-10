@@ -1,0 +1,12 @@
+{
+    "ClusterAddr": "0:9000",
+    "Bucket": "default",
+    "NumDocs": 10000,
+    "DocIdLen": 25,
+    "FieldSize": 25,
+    "ArrayLen": 5,
+    "JunkFieldSize": 1,
+    "Iterations": 1,
+    "Threads": 8,
+    "DocsNumOffset": 0
+}

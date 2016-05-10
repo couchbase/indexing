@@ -105,6 +105,8 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		config:            config,
 	}
 
+	logging.Infof("MutationStreamReader: Setting Stream Workers %v %v", r.streamId, numWorkers)
+
 	for i := 0; i < numWorkers; i++ {
 		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r, bucketFilter)
 		go r.streamWorkers[i].start()
@@ -562,7 +564,7 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 
 			mut := NewMutation()
 			mut.uuid = common.IndexInstId(kv.GetUuids()[i])
-			mut.key = kv.GetKeys()[i]
+			mut.key = append(mut.key, kv.GetKeys()[i]...)
 			mut.command = byte(kv.GetCommands()[i])
 
 			mutk.mut = append(mutk.mut, mut)

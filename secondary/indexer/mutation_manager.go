@@ -381,7 +381,7 @@ func (m *mutationMgr) handleOpenStream(cmd Message) {
 	cmdCh := make(MsgChannel)
 
 	reader, errMsg := CreateMutationStreamReader(streamId, bucketQueueMap, bucketFilter,
-		cmdCh, m.mutMgrRecvCh, DEFAULT_NUM_STREAM_READER_WORKERS, m.stats.Get(),
+		cmdCh, m.mutMgrRecvCh, getNumStreamWorkers(m.config), m.stats.Get(),
 		m.config, m.indexerState)
 
 	if reader == nil {
@@ -1114,6 +1114,16 @@ func getMutationQueueMemFrac(config common.Config) float64 {
 		return config["mutation_manager.moi.fracMutationQueueMem"].Float64()
 	} else {
 		return config["mutation_manager.fdb.fracMutationQueueMem"].Float64()
+	}
+
+}
+
+func getNumStreamWorkers(config common.Config) int {
+
+	if common.GetStorageMode() == common.MOI {
+		return config["stream_reader.moi.numWorkers"].Int()
+	} else {
+		return config["stream_reader.fdb.numWorkers"].Int()
 	}
 
 }
