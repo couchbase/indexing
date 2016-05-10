@@ -650,9 +650,9 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.fdb.mutationBuffer": ConfigValue{
-		uint64(20000),
+		uint64(10000),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(20000),
+		uint64(10000),
 		false, // mutable
 	},
 
@@ -689,17 +689,17 @@ var SystemConfig = Config{
 	},
 
 	"indexer.stream_reader.moi.workerBuffer": ConfigValue{
-		uint64(100000),
+		uint64(30000),
 		"Buffer Size for stream reader worker to hold mutations " +
 			"before being enqueued in mutation queue",
-		uint64(100000),
+		uint64(30000),
 		false, // mutable
 	},
 
 	"indexer.stream_reader.moi.mutationBuffer": ConfigValue{
-		uint64(200000),
+		uint64(10000),
 		"Buffer Size to hold incoming mutations from dataport",
-		uint64(200000),
+		uint64(10000),
 		false, // mutable
 	},
 
