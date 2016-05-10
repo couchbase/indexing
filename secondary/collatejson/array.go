@@ -9,7 +9,7 @@ func (codec *Codec) ExplodeArray(code []byte, tmp []byte) ([][]byte, error) {
 	var ts []byte
 	var err error
 
-	var array [][]byte
+	array := make([][]byte, 0)
 
 	if codec.arrayLenPrefix {
 		return nil, ErrLenPrefixUnsupported
