@@ -403,8 +403,13 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 
 	// Get old back index entry
 	lookupentry := entryBytesFromDocId(docid)
-	ptr := (*skiplist.Node)(mdb.back[workerId].Get(lookupentry))
-	list := memdb.NewNodeList(ptr)
+
+	// Remove should be done before performing delete of nodes (SMR)
+	// Otherwise, by the time back update happens the pointing node
+	// may be freed and update operation may crash.
+	_, ptr := mdb.back[workerId].Remove(lookupentry)
+
+	list := memdb.NewNodeList((*skiplist.Node)(ptr))
 	oldEntriesBytes := list.Keys()
 	oldKeyCount := make([]int, len(oldEntriesBytes))
 	for i, _ := range oldEntriesBytes {
