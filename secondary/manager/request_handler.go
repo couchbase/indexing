@@ -587,6 +587,23 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 		return
 	}
 
+	//validate using clause with storage mode
+	for _, imeta := range image.Metadata {
+		for _, idefn := range imeta.IndexDefinitions {
+			if !common.IsValidIndexType(strings.ToLower(string(idefn.Using))) {
+				errStr := fmt.Sprintf("Invalid Using Clause %v. IndexDefnId %v.", idefn.Using, idefn.DefnId)
+				send(http.StatusBadRequest, w, &RestoreResponse{Code: RESP_ERROR, Error: errStr})
+				return
+			}
+			if common.IndexTypeToStorageMode(idefn.Using) != common.GetStorageMode() {
+				errStr := fmt.Sprintf("Indexer Storage Mode %v. Cannot Use %v for IndexDefnId %v.", common.GetStorageMode(),
+					idefn.Using, idefn.DefnId)
+				send(http.StatusBadRequest, w, &RestoreResponse{Code: RESP_ERROR, Error: errStr})
+				return
+			}
+		}
+	}
+
 	indexerHostMap := make(map[common.IndexerId]string)
 	current, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap, "")
 	if err != nil {
