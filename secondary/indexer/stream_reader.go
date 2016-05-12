@@ -105,14 +105,14 @@ func CreateMutationStreamReader(streamId common.StreamId, bucketQueueMap BucketQ
 		config:            config,
 	}
 
+	r.stats.Set(stats)
+
 	logging.Infof("MutationStreamReader: Setting Stream Workers %v %v", r.streamId, numWorkers)
 
 	for i := 0; i < numWorkers; i++ {
 		r.streamWorkers[i] = newStreamWorker(streamId, numWorkers, i, config, r, bucketFilter)
 		go r.streamWorkers[i].start()
 	}
-
-	r.stats.Set(stats)
 
 	r.indexerState = is
 
@@ -669,6 +669,12 @@ func (w *streamWorker) initBucketFilter(bucketFilter map[string]*common.TsVbuuid
 			}
 
 			w.bucketSyncDue[b] = false
+
+			//reset stat for bucket
+			stats := w.reader.stats.Get()
+			if rstats, ok := stats.buckets[b]; ok {
+				rstats.mutationQueueSize.Set(0)
+			}
 		}
 	}
 
