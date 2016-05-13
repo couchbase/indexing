@@ -2175,6 +2175,10 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 		return
 	}
 
+	if flushTs.HasDisableAlign() {
+		return
+	}
+
 	hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
 
 	largeSnap := tk.ss.config["settings.largeSnapshotThreshold"].Uint64()
