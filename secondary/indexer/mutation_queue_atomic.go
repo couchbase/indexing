@@ -192,7 +192,7 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 		if totalWait > 30000 {
 			if totalWait%5000 == 0 {
 				logging.Warnf("Indexer::MutationQueue Dequeue Waiting For "+
-					"Seqno %v Bucket %v Vbucket %v for %v ms. Last Dequeue %v", seqno,
+					"Seqno %v Bucket %v Vbucket %v for %v ms. Last Dequeue %v.", seqno,
 					q.bucket, vbucket, totalWait, dequeueSeq)
 			}
 		}
@@ -212,6 +212,16 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 				//send mutation to caller
 				dequeueSeq = m.meta.seqno
 				datach <- m
+			} else {
+				totalWait += 20
+				if totalWait > 30000 {
+					if totalWait%5000 == 0 {
+						logging.Warnf("Indexer::MutationQueue Dequeue Waiting For "+
+							"Seqno %v Bucket %v Vbucket %v for %v ms. Last Dequeue %v Head Seqno %v.", seqno,
+							q.bucket, vbucket, totalWait, dequeueSeq, m.meta.seqno)
+					}
+				}
+				time.Sleep(time.Millisecond * time.Duration(q.dequeuePollInterval))
 			}
 
 			//once the seqno is reached, close the channel
