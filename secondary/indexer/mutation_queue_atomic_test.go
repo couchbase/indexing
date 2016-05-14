@@ -130,7 +130,7 @@ func TestDequeueUptoSeqnoA(t *testing.T) {
 	q.Enqueue(m[2], 0, nil)
 	checkSizeA(t, q, 0, 3)
 
-	ch, err := q.DequeueUptoSeqno(0, 1)
+	ch, _, err := q.DequeueUptoSeqno(0, 1)
 
 	if err != nil {
 		t.Errorf("DequeueUptoSeqno returned error")
@@ -143,7 +143,7 @@ func TestDequeueUptoSeqnoA(t *testing.T) {
 	}
 	checkSizeA(t, q, 0, 2)
 
-	ch, err = q.DequeueUptoSeqno(0, 1)
+	ch, _, err = q.DequeueUptoSeqno(0, 1)
 	for p := range ch {
 		checkItemA(t, m[1], p)
 	}
@@ -153,14 +153,14 @@ func TestDequeueUptoSeqnoA(t *testing.T) {
 	m[3] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 		seqno: 3}}
 	q.Enqueue(m[3], 0, nil)
-	ch, err = q.DequeueUptoSeqno(0, 2)
+	ch, _, err = q.DequeueUptoSeqno(0, 2)
 	for p := range ch {
 		checkItemA(t, m[2], p)
 	}
 	checkSizeA(t, q, 0, 1)
 
 	//check if blocking is working
-	ch, err = q.DequeueUptoSeqno(0, 4)
+	ch, _, err = q.DequeueUptoSeqno(0, 4)
 
 	go func() {
 		time.Sleep(100 * time.Millisecond)
@@ -269,7 +269,7 @@ func TestDequeueUptoFreelistA(t *testing.T) {
 		q.Enqueue(m[i], 0, nil)
 		if (i+1)%10 == 0 {
 			checkSizeA(t, q, 0, 10)
-			retch, _ := q.DequeueUptoSeqno(0, Seqno(i))
+			retch, _, _ := q.DequeueUptoSeqno(0, Seqno(i))
 			j := 0
 			for d := range retch {
 				checkItemA(t, d, m[(i-9)+j])
@@ -295,7 +295,7 @@ func TestDequeueUptoFreelistMultVbA(t *testing.T) {
 		q.Enqueue(m[i], 1, nil)
 		if (i+1)%10 == 0 {
 			checkSizeA(t, q, 0, 10)
-			retch, _ := q.DequeueUptoSeqno(0, Seqno(i))
+			retch, _, _ := q.DequeueUptoSeqno(0, Seqno(i))
 			j := 0
 			for d := range retch {
 				checkItemA(t, d, m[(i-9)+j])
@@ -304,7 +304,7 @@ func TestDequeueUptoFreelistMultVbA(t *testing.T) {
 			checkSizeA(t, q, 0, 0)
 
 			checkSizeA(t, q, 1, 10)
-			retch, _ = q.DequeueUptoSeqno(1, Seqno(i))
+			retch, _, _ = q.DequeueUptoSeqno(1, Seqno(i))
 			j = 0
 			for d := range retch {
 				checkItemA(t, d, m[(i-9)+j])
@@ -335,7 +335,7 @@ func TestConcurrentEnqueueDequeueA(t *testing.T) {
 		if (i+1)%10 == 0 {
 			//time.Sleep(time.Second * 1)
 			//checkSizeA(t, q, 0, 10)
-			retch, _ := q.DequeueUptoSeqno(0, Seqno(i))
+			retch, _, _ := q.DequeueUptoSeqno(0, Seqno(i))
 			j := 0
 			for d := range retch {
 				checkItemA(t, d, m[(i-9)+j])
@@ -372,7 +372,7 @@ func TestConcurrentEnqueueDequeueA1(t *testing.T) {
 		if (i+1)%10 == 0 {
 			time.Sleep(time.Second * 1)
 			checkSizeA(t, q, 0, 10)
-			retch, _ := q.DequeueUptoSeqno(0, Seqno(i))
+			retch, _, _ := q.DequeueUptoSeqno(0, Seqno(i))
 			j := 0
 			for d := range retch {
 				checkItemA(t, d, m[(i-9)+j])
