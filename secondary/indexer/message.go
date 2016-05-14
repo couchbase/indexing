@@ -508,6 +508,7 @@ type MsgMutMgrFlushDone struct {
 	ts       *common.TsVbuuid
 	streamId common.StreamId
 	bucket   string
+	aborted  bool
 }
 
 func (m *MsgMutMgrFlushDone) GetMsgType() MsgType {
@@ -526,12 +527,17 @@ func (m *MsgMutMgrFlushDone) GetBucket() string {
 	return m.bucket
 }
 
+func (m *MsgMutMgrFlushDone) GetAborted() bool {
+	return m.aborted
+}
+
 func (m *MsgMutMgrFlushDone) String() string {
 
 	str := "\n\tMessage: MsgMutMgrFlushDone"
 	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	str += fmt.Sprintf("\n\tTS: %v", m.ts)
+	str += fmt.Sprintf("\n\tAborted: %v", m.aborted)
 	return str
 
 }

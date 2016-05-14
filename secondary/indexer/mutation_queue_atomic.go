@@ -30,7 +30,7 @@ type MutationQueue interface {
 	//dequeue a vbucket's mutation and keep sending on a channel until stop signal
 	Dequeue(vbucket Vbucket) (<-chan *MutationKeys, chan<- bool, error)
 	//dequeue a vbucket's mutation upto seqno(wait if not available)
-	DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (<-chan *MutationKeys, error)
+	DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (<-chan *MutationKeys, chan bool, error)
 	//dequeue single element for a vbucket and return
 	DequeueSingleElement(vbucket Vbucket) *MutationKeys
 
@@ -171,18 +171,19 @@ func (q *atomicMutationQueue) Enqueue(mutation *MutationKeys,
 //seqno (e.g. in case of multiple indexes)
 //It closes the mutation channel to indicate its done.
 func (q *atomicMutationQueue) DequeueUptoSeqno(vbucket Vbucket, seqno Seqno) (
-	<-chan *MutationKeys, error) {
+	<-chan *MutationKeys, chan bool, error) {
 
 	datach := make(chan *MutationKeys, q.resultChanSize)
+	errch := make(chan bool)
 
-	go q.dequeueUptoSeqno(vbucket, seqno, datach)
+	go q.dequeueUptoSeqno(vbucket, seqno, datach, errch)
 
-	return datach, nil
+	return datach, errch, nil
 
 }
 
 func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
-	datach chan *MutationKeys) {
+	datach chan *MutationKeys, errch chan bool) {
 
 	var dequeueSeq Seqno
 	var totalWait int
@@ -213,15 +214,11 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 				dequeueSeq = m.meta.seqno
 				datach <- m
 			} else {
-				totalWait += 20
-				if totalWait > 30000 {
-					if totalWait%5000 == 0 {
-						logging.Warnf("Indexer::MutationQueue Dequeue Waiting For "+
-							"Seqno %v Bucket %v Vbucket %v for %v ms. Last Dequeue %v Head Seqno %v.", seqno,
-							q.bucket, vbucket, totalWait, dequeueSeq, m.meta.seqno)
-					}
-				}
-				time.Sleep(time.Millisecond * time.Duration(q.dequeuePollInterval))
+				logging.Warnf("Indexer::MutationQueue Dequeue Aborted For "+
+					"Seqno %v Bucket %v Vbucket %v. Last Dequeue %v Head Seqno %v.", seqno,
+					q.bucket, vbucket, dequeueSeq, m.meta.seqno)
+				close(errch)
+				return
 			}
 
 			//once the seqno is reached, close the channel

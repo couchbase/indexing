@@ -877,7 +877,11 @@ func (m *mutationMgr) persistMutationQueue(q IndexerMutationQueue,
 				bucket:   bucket,
 				ts:       ts}
 		} else {
-			m.supvRespch <- msg
+			m.supvRespch <- &MsgMutMgrFlushDone{mType: MUT_MGR_FLUSH_DONE,
+				streamId: streamId,
+				bucket:   bucket,
+				ts:       ts,
+				aborted:  true}
 		}
 	}(m.config)
 

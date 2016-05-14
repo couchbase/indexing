@@ -202,6 +202,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	bucket := msgFlushDone.GetBucket()
 	tsVbuuid := msgFlushDone.GetTS()
 	streamId := msgFlushDone.GetStreamId()
+	flushWasAborted := msgFlushDone.GetAborted()
 
 	numVbuckets := s.config["numVbuckets"].Int()
 	snapType := tsVbuuid.GetSnapType()
@@ -214,7 +215,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 			streamId: streamId,
 			bucket:   bucket,
-			ts:       tsVbuuid}
+			ts:       tsVbuuid,
+			aborted:  flushWasAborted}
 		return
 	}
 
@@ -228,13 +230,14 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	stats := s.stats.Get()
 
 	go s.createSnapshotWorker(streamId, bucket, tsVbuuid, indexSnapMap,
-		numVbuckets, indexInstMap, indexPartnMap, stats)
+		numVbuckets, indexInstMap, indexPartnMap, stats, flushWasAborted)
 
 }
 
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket string,
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap, numVbuckets int,
-	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, stats *IndexerStats) {
+	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, stats *IndexerStats,
+	flushWasAborted bool) {
 
 	defer destroyIndexSnapMap(indexSnapMap)
 
@@ -279,6 +282,12 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 					sliceSnaps := make(map[SliceId]SliceSnapshot)
 					//create snapshot for all the slices
 					for _, slice := range sc.GetAllSlices() {
+
+						if flushWasAborted {
+							slice.IsDirty()
+							return
+						}
+
 						var latestSnapshot Snapshot
 						if lastIndexSnap.Partitions() != nil {
 							lastSliceSnap := lastPartnSnap.Slices()[slice.Id()]
@@ -392,7 +401,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 	s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 		streamId: streamId,
 		bucket:   bucket,
-		ts:       tsVbuuid}
+		ts:       tsVbuuid,
+		aborted:  flushWasAborted}
 
 }
 
