@@ -77,18 +77,20 @@ func (sc *snapshotInfoContainer) RemoveOldest() error {
 //which are more recent than the given timestamp. The snaphots
 //being removed are closed as well.
 func (sc *snapshotInfoContainer) RemoveRecentThanTS(tsVbuuid *common.TsVbuuid) error {
+	newList := list.New()
 	ts := getSeqTsFromTsVbuuid(tsVbuuid)
 	for e := sc.snapshotList.Front(); e != nil; e = e.Next() {
 		snapshot := e.Value.(SnapshotInfo)
 		snapTsVbuuid := snapshot.Timestamp()
 		snapTs := getSeqTsFromTsVbuuid(snapTsVbuuid)
-		if snapTs.GreaterThan(ts) {
-			sc.snapshotList.Remove(e)
+
+		if !snapTs.GreaterThan(ts) {
+			newList.PushBack(snapshot)
 		}
 	}
 
+	sc.snapshotList = newList
 	return nil
-
 }
 
 //RemoveAll discards all the snapshosts from container.
