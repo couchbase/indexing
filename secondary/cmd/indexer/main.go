@@ -104,21 +104,25 @@ func main() {
 		func() {
 			casefile, err := os.Open(storage_dir)
 			if err != nil {
+				logging.Errorf("os.Open(storage_dir): %v", err)
 				common.CrashOnError(err)
 			}
 			defer casefile.Close()
 			lowerfile, err := os.Open(lowcase_storage_dir)
 			if err != nil {
+				logging.Errorf("os.Open(lowcase_storage_dir): %v", err)
 				common.CrashOnError(err)
 			}
 			defer lowerfile.Close()
 
 			caseinfo, err := casefile.Stat()
 			if err != nil {
+				logging.Errorf("storage_dir.Stat(): %v", err)
 				common.CrashOnError(err)
 			}
 			lowerinfo, err := lowerfile.Stat()
 			if err != nil {
+				logging.Errorf("lowcase_storage_dir.Stat(): %v", err)
 				common.CrashOnError(err)
 			}
 			if os.SameFile(caseinfo, lowerinfo) == false {
