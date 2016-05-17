@@ -389,16 +389,27 @@ func (mdb *memdbSlice) insertSecIndex(key []byte, docid []byte, workerId int) in
 }
 
 func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId int) int {
-	if len(keys) > maxArrayKeyLength {
-		logging.Errorf("MemDBSlice::insertSecArrayIndex Slice Id %v IndexInstId %v "+
-			"Skipping docid:%s (Array index key size is %v. Cannot array index key with size > %d)", mdb.Id, mdb.idxInstId,
-			docid, len(keys), maxArrayKeyLength)
+	if len(keys) > maxArrayIndexEntrySize {
+		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key (size %v) too long (> %v). Skipped.",
+			docid, mdb.id, len(keys), maxArrayIndexEntrySize)
+		logging.Verbosef("MemDBSlice::insertSecArrayIndex Skipped docid: %s Key: %s", docid, string(keys))
 		return mdb.deleteSecArrayIndex(docid, workerId)
 	}
 
 	var nmut int
 	newEntriesBytes, newKeyCount, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
 		mdb.arrayBuf[workerId], mdb.isArrayDistinct)
+	if err == ErrArrayItemKeyTooLong {
+		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array item too long (> %v). Skipped.",
+			docid, mdb.id, maxIndexEntrySize)
+		logging.Verbosef("MemDBSlice::insertSecArrayIndex Skipped docid: %s Key: %s", docid, string(keys))
+		return mdb.deleteSecArrayIndex(docid, workerId)
+	} else if err == ErrArrayKeyTooLong {
+		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array key too long (> %v). Skipped.",
+			docid, mdb.id, maxArrayIndexEntrySize)
+		logging.Verbosef("MemDBSlice::insertSecArrayIndex Skipped docid: %s Key: %s", docid, string(keys))
+		return mdb.deleteSecArrayIndex(docid, workerId)
+	}
 	common.CrashOnError(err)
 
 	// Get old back index entry

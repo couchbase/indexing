@@ -115,19 +115,25 @@ func NewSecondaryIndexEntry(key []byte, docid []byte, isArray bool, count int, b
 		return nil, ErrSecKeyNil
 	}
 
-	if isArray {
-		if isArraySecKeyLarge(key) {
-			return nil, errors.New(fmt.Sprintf("Secondary array key is too long (> %d)", maxArrayKeyLength))
-		}
-	} else if isSecKeyLarge(key) {
-		return nil, ErrSecKeyTooLong
-	}
-
 	if key[0] == '[' { // JSON
+		if isArray {
+			if isArraySecKeyLarge(key) {
+				return nil, errors.New(fmt.Sprintf("Secondary array key is too long (> %d)", maxArrayKeyLength))
+			}
+		} else if isSecKeyLarge(key) {
+			return nil, ErrSecKeyTooLong
+		}
 		if buf, err = jsonEncoder.Encode(key, buf); err != nil {
 			return nil, err
 		}
 	} else { // Encoded
+		if isArray {
+			if len(key) > maxArrayIndexEntrySize {
+				return nil, errors.New(fmt.Sprintf("Encoded secondary array key is too long (> %d)", maxArrayIndexEntrySize))
+			}
+		} else if len(key) > maxIndexEntrySize {
+			return nil, errors.New(fmt.Sprintf("Encoded secondary key is too long (> %d)", maxIndexEntrySize))
+		}
 		buf = append(buf, key...)
 	}
 

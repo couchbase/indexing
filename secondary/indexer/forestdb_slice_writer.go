@@ -509,8 +509,21 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 	if key != nil {
 		tmpBufPtr := arrayEncBufPool.Get()
 		defer arrayEncBufPool.Put(tmpBufPtr)
-		if newEntriesBytes, newKeyCount, err = ArrayIndexItems(key, fdb.arrayExprPosition,
-			(*tmpBufPtr)[:0], fdb.isArrayDistinct); err != nil {
+		newEntriesBytes, newKeyCount, err = ArrayIndexItems(key, fdb.arrayExprPosition,
+			(*tmpBufPtr)[:0], fdb.isArrayDistinct)
+		if err == ErrArrayItemKeyTooLong {
+			logging.Errorf("ForestDBSlice::insert Error indexing docid: %s in Slice: %v. Error: Encoded array item too long (> %v). Skipped.",
+				docid, fdb.id, maxIndexEntrySize)
+			logging.Verbosef("ForestDBSlice::insert Skipped docid: %s Key: %s", docid, string(key))
+			fdb.deleteSecArrayIndex(docid, workerId)
+			return
+		} else if err == ErrArrayKeyTooLong {
+			logging.Errorf("ForestDBSlice::insert Error indexing docid: %s in Slice: %v. Error: Encoded array key too long (> %v). Skipped.",
+				docid, fdb.id, maxArrayIndexEntrySize)
+			logging.Verbosef("ForestDBSlice::insert Skipped docid: %s Key: %s", docid, string(key))
+			fdb.deleteSecArrayIndex(docid, workerId)
+			return
+		} else if err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in creating "+
 				"compostite new secondary keys %v", fdb.id, fdb.idxInstId, err)

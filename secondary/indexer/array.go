@@ -11,9 +11,16 @@ package indexer
 
 import (
 	"bytes"
+	"errors"
 	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/logging"
 	"sort"
+)
+
+var (
+	ErrArrayItemKeyTooLong = errors.New("Array item key too long")
+	ErrArrayKeyTooLong     = errors.New("Array to be indexed too long")
 )
 
 // Given the input secondary key, this method creates the product of array items
@@ -26,8 +33,6 @@ func splitSecondaryArrayKey(key []byte, arrayPos int, tmpBuf []byte) ([][][]byte
 	var err2 error
 
 	codec := collatejson.NewCodec(16)
-	bufPtr := encBufPool.Get()
-	defer encBufPool.Put(bufPtr)
 	secKeyObject, err := codec.ExplodeArray(key, tmpBuf)
 	common.CrashOnError(err)
 
@@ -82,6 +87,14 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte, isDistinct bool) ([][]by
 			return nil, nil, err
 		}
 		l := len(buf)
+		if (l - from) > maxIndexEntrySize {
+			logging.Errorf("Encoded array item key too long. Length of key = %v, Limit = %v", buf[from:l], maxIndexEntrySize)
+			return nil, nil, ErrArrayItemKeyTooLong
+		}
+		if l > maxArrayIndexEntrySize {
+			logging.Errorf("Encoded array key too long. Length of key = %v, Limit = %v", l, maxArrayIndexEntrySize)
+			return nil, nil, ErrArrayKeyTooLong
+		}
 		items = append(items, buf[from:l])
 	}
 
