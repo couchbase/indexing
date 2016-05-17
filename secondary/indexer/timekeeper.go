@@ -508,12 +508,31 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
+	flushWasAborted := cmd.(*MsgMutMgrFlushDone).GetAborted()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
 	bucketLastFlushedTsMap := tk.ss.streamBucketLastFlushedTsMap[streamId]
 	bucketFlushInProgressTsMap := tk.ss.streamBucketFlushInProgressTsMap[streamId]
+
+	if flushWasAborted {
+
+		logging.Infof("Timekeeper::handleFlushDone Flush Abort Received %v %v"+
+			"FlushTs %v", streamId, bucket, bucketFlushInProgressTsMap[bucket])
+
+		bucketFlushInProgressTsMap[bucket] = nil
+
+		tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
+		tsList.Init()
+
+		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+			streamId: streamId,
+			bucket:   bucket}
+
+		tk.supvCmdch <- &MsgSuccess{}
+		return
+	}
 
 	if _, ok := bucketFlushInProgressTsMap[bucket]; ok {
 		//store the last flushed TS
@@ -2172,6 +2191,10 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 	}
 
 	if tk.hasInitStateIndex(streamId, bucket) {
+		return
+	}
+
+	if flushTs.HasDisableAlign() {
 		return
 	}
 

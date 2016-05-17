@@ -177,7 +177,7 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, bucket s
 	var workerStopChannels []StopChannel
 
 	//create msg channel for workers to provide messages
-	workerMsgCh := make(MsgChannel)
+	workerMsgCh := make(MsgChannel, numVbuckets)
 
 	for i = 0; i < numVbuckets; i++ {
 		if ts == nil {
@@ -208,6 +208,7 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, bucket s
 		close(allWorkersDoneCh)
 	}()
 
+	workerAborted := false
 	//wait for upstream to signal stop or for all workers to signal done
 	//or workers to send any message
 	select {
@@ -225,16 +226,16 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, bucket s
 	case <-allWorkersDoneCh:
 
 		//handle any message from workers
-	case m, ok := <-workerMsgCh:
-		if ok {
-			//TODO identify the messages and handle
-			//For now, just relay back the message
-			msgch <- m
-		}
-		return
+	case <-workerMsgCh:
+		workerAborted = true
+		<-allWorkersDoneCh
 	}
 
-	msgch <- &MsgSuccess{}
+	if workerAborted {
+		msgch <- &MsgError{}
+	} else {
+		msgch <- &MsgSuccess{}
+	}
 }
 
 //flushSingleVbucket is the actual implementation which flushes the given queue
@@ -291,7 +292,7 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 			"%v till Seqno: %v for Stream: %v", vbucket, seqno, streamId)
 	})
 
-	mutch, err := q.DequeueUptoSeqno(vbucket, seqno)
+	mutch, errch, err := q.DequeueUptoSeqno(vbucket, seqno)
 	if err != nil {
 		//TODO
 	}
@@ -316,6 +317,10 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 					bucketStats.mutationQueueSize.Add(-1)
 				}
 			}
+		case <-errch:
+			workerMsgCh <- &MsgError{}
+			return
+
 		}
 	}
 }

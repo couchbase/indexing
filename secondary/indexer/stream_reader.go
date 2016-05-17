@@ -594,6 +594,7 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 			w.reader.supvRespch <- msg
 
 		case common.Snapshot:
+
 			//get snapshot information from message
 			w.snapType, w.snapStart, w.snapEnd = kv.Snapshot()
 
@@ -785,6 +786,15 @@ func (w *streamWorker) updateSnapInFilter(meta *MutationMeta,
 			prevSnap.Snapshots[meta.vbucket][0] = filter.Snapshots[meta.vbucket][0]
 			prevSnap.Snapshots[meta.vbucket][1] = filter.Snapshots[meta.vbucket][1]
 			prevSnap.Vbuuids[meta.vbucket] = filter.Vbuuids[meta.vbucket]
+			prevSnap.Seqnos[meta.vbucket] = filter.Seqnos[meta.vbucket]
+
+			if prevSnap.Snapshots[meta.vbucket][1] != filter.Seqnos[meta.vbucket] {
+				logging.Warnf("MutationStreamReader::updateSnapInFilter "+
+					"Bucket %v Stream %v vb %v Partial Snapshot %v-%v Seqno %v vbuuid %v", meta.bucket,
+					w.streamId, meta.vbucket, prevSnap.Snapshots[meta.vbucket][0],
+					prevSnap.Snapshots[meta.vbucket][1], filter.Seqnos[meta.vbucket],
+					prevSnap.Vbuuids[meta.vbucket])
+			}
 
 			filter.Snapshots[meta.vbucket][0] = snapStart
 			filter.Snapshots[meta.vbucket][1] = snapEnd

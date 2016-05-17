@@ -85,9 +85,57 @@ func main() {
 	config.SetValue("indexer.diagnostics_dir", *diagDir)
 	config.SetValue("indexer.nodeuuid", *nodeuuid)
 
+	// Prior to watson (4.5 version) storage_dir parameter was converted
+	// to lower case. Post watson, the plan is to keep the parameter
+	// case-sensitive. Following is the logic:
+	// - when indexer restarts with same storage_dir parameter it will be
+	// case-sensitive, so check wither lowercase(storage_dir) exist
+	// - if so, copy them to case-sensitive directory and remove
+	//   case-insensitive directory.
+	// - else, it is not an upgrade situation.
 	storage_dir := config["indexer.storage_dir"].String()
-	if err := os.MkdirAll(storage_dir, 0755); err != nil {
-		common.CrashOnError(err)
+	if common.IsPathExist(storage_dir) == false {
+		if err := os.MkdirAll(storage_dir, 0755); err != nil {
+			common.CrashOnError(err)
+		}
+	}
+	lowcase_storage_dir := strings.ToLower(storage_dir)
+	if common.IsPathExist(lowcase_storage_dir) {
+		func() {
+			casefile, err := os.Open(storage_dir)
+			if err != nil {
+				logging.Errorf("os.Open(storage_dir): %v", err)
+				common.CrashOnError(err)
+			}
+			defer casefile.Close()
+			lowerfile, err := os.Open(lowcase_storage_dir)
+			if err != nil {
+				logging.Errorf("os.Open(lowcase_storage_dir): %v", err)
+				common.CrashOnError(err)
+			}
+			defer lowerfile.Close()
+
+			caseinfo, err := casefile.Stat()
+			if err != nil {
+				logging.Errorf("storage_dir.Stat(): %v", err)
+				common.CrashOnError(err)
+			}
+			lowerinfo, err := lowerfile.Stat()
+			if err != nil {
+				logging.Errorf("lowcase_storage_dir.Stat(): %v", err)
+				common.CrashOnError(err)
+			}
+			if os.SameFile(caseinfo, lowerinfo) == false {
+				err := os.Rename(lowcase_storage_dir, storage_dir)
+				if err != nil {
+					fmsg := "renaming from %v to %v: %v"
+					logging.Fatalf(fmsg, lowcase_storage_dir, storage_dir, err)
+					fmsg = "reverting to lower-case storage_dir %v"
+					logging.Infof(fmsg, lowcase_storage_dir)
+					config.SetValue("storage_dir", lowcase_storage_dir)
+				}
+			}
+		}()
 	}
 
 	if err := os.MkdirAll(*diagDir, 0755); err != nil {

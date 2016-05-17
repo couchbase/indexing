@@ -303,18 +303,21 @@ func setSystemConfig(cfg *Config) {
 		"number simultaneous active connections connections in a pool",
 		int(cfg.Concurrency),
 		true, // immutable
+		false,
 	}
 	c.SystemConfig["queryport.client.readDeadline"] = c.ConfigValue{
 		0,
 		"timeout, in milliseconds, is timeout while reading from socket",
 		0,
-		true, // immutable
+		true,
+		false,
 	}
 	c.SystemConfig["queryport.client.writeDeadline"] = c.ConfigValue{
 		0,
 		"timeout, in milliseconds, is timeout while writing to socket",
 		0,
-		true, // immutable
+		true,
+		false,
 	}
 }
 

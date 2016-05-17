@@ -712,6 +712,7 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 	bucket string, hwt *common.TsVbuuid, prevSnap *common.TsVbuuid) {
 
 	ts := ss.streamBucketHWTMap[streamId][bucket]
+	partialSnap := false
 
 	for i, seq := range hwt.Seqnos {
 		//if seqno has incremented, update it
@@ -726,11 +727,20 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 			lastSnap.Snapshots[i][0] = prevSnap.Snapshots[i][0]
 			lastSnap.Snapshots[i][1] = prevSnap.Snapshots[i][1]
 			lastSnap.Vbuuids[i] = prevSnap.Vbuuids[i]
+			lastSnap.Seqnos[i] = prevSnap.Seqnos[i]
 
 			//store the new snap marker in hwt
 			ts.Snapshots[i][0] = hwt.Snapshots[i][0]
 			ts.Snapshots[i][1] = hwt.Snapshots[i][1]
 			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
+			if prevSnap.Seqnos[i] != prevSnap.Snapshots[i][1] {
+				logging.Warnf("StreamState::updateHWT Received Partial Last Snapshot in HWT "+
+					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v lastSnapSeqno %v",
+					bucket, streamId, i, hwt.Snapshots[i][0], hwt.Snapshots[i][1], hwt.Seqnos[i], ts.Vbuuids[i],
+					prevSnap.Snapshots[i][0], prevSnap.Snapshots[i][1], prevSnap.Seqnos[i])
+				partialSnap = true
+
+			}
 
 		} else if hwt.Snapshots[i][1] < ts.Snapshots[i][1] {
 			// Catch any out of order Snapshot.   StreamReader should make sure that Snapshot is monotonic increasing
@@ -738,6 +748,10 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 				"Bucket %v StreamId %v vbucket %v Current Snapshot %v-%v New Snapshot %v-%v",
 				bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], hwt.Snapshots[i][0], hwt.Snapshots[i][1])
 		}
+	}
+
+	if partialSnap {
+		ss.disableSnapAlignForPendingTs(streamId, bucket)
 	}
 
 	logging.LazyTrace(func() string {
@@ -811,17 +825,17 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 		//if seqno is not between snap boundary
 		if !(ts.Seqnos[i] >= s[0] && ts.Seqnos[i] <= s[1]) {
 
-			//if seqno is between the snap boundary of last snap marker
+			//if seqno matches with the SnapEnd of the lastSnapMarker
 			//use that to align the TS
-			if ts.Seqnos[i] >= lastSnap.Snapshots[i][0] && ts.Seqnos[i] <= lastSnap.Snapshots[i][1] {
-				logging.Debugf("StreamState::alignSnapBoundary.  Align out-of-bound seqno to last snapshot. "+
-					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
-					bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
-					lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1])
-
+			if ts.Seqnos[i] == lastSnap.Snapshots[i][1] {
 				ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
 				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
 				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
+			} else {
+				logging.Warnf("StreamState::alignSnapBoundary Received New Snapshot While Processing Incomplete "+
+					"Snapshot. Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
+					bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+					lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1])
 			}
 
 		} else if ts.Seqnos[i] != s[1] && (s[1]-s[0]) <= smallSnap {
@@ -830,13 +844,20 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 			//this snapshot will get picked up in the next TS.
 
 			//Use lastSnap only if it is from the same branch(vbuuid matches) and
-			//HWT is already past the snapEnd of lastSnap
-			if ts.Seqnos[i] > lastSnap.Snapshots[i][1] && ts.Vbuuids[i] == lastSnap.Vbuuids[i] {
+			//HWT is already past the snapEnd of lastSnap and its not partial
+			if ts.Seqnos[i] > lastSnap.Snapshots[i][1] && ts.Vbuuids[i] == lastSnap.Vbuuids[i] && (lastSnap.Seqnos[i] == lastSnap.Snapshots[i][1]) {
 				ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
 				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
 				ts.Seqnos[i] = lastSnap.Snapshots[i][1]
 				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
 			}
+			if lastSnap.Seqnos[i] != lastSnap.Snapshots[i][1] {
+				logging.Warnf("StreamState::alignSnapBoundary Received Partial Last Snapshot in HWT "+
+					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v lastSnapSeqno %v",
+					bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+					lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1], lastSnap.Seqnos[i])
+			}
+
 		}
 
 		if !(ts.Seqnos[i] >= ts.Snapshots[i][0] && ts.Seqnos[i] <= ts.Snapshots[i][1]) {
@@ -940,4 +961,19 @@ func (ss *StreamState) getPersistInterval() uint64 {
 		return ss.config["settings.persisted_snapshot.interval"].Uint64()
 	}
 
+}
+
+func (ss *StreamState) disableSnapAlignForPendingTs(streamId common.StreamId, bucket string) {
+
+	tsList := ss.streamBucketTsListMap[streamId][bucket]
+	disableCount := 0
+	for e := tsList.Front(); e != nil; e = e.Next() {
+		ts := e.Value.(*common.TsVbuuid)
+		ts.SetDisableAlign(true)
+		disableCount++
+	}
+	if disableCount > 0 {
+		logging.Infof("StreamState::disableSnapAlignForPendingTs Stream %v Bucket %v Disabled Snap Align for %v TS", streamId, bucket, disableCount)
+
+	}
 }
