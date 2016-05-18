@@ -534,15 +534,16 @@ func (mdb *memdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int
 	list := memdb.NewNodeList(ptr)
 	oldEntriesBytes := list.Keys()
 
+	t0 := time.Now()
+	mdb.back[workerId].Remove(lookupentry)
+	mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
+	platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
+
 	// Delete each entry in oldEntriesBytes
 	for _, item := range oldEntriesBytes {
 		node := list.Remove(item)
 		mdb.main[workerId].DeleteNode(node)
 	}
-	t0 := time.Now()
-	mdb.back[workerId].Remove(lookupentry)
-	mdb.idxStats.Timings.stKVDelete.Put(time.Since(t0))
-	platform.AddInt64(&mdb.delete_bytes, int64(len(lookupentry)))
 
 	mdb.isDirty = true
 
