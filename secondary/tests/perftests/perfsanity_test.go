@@ -195,7 +195,7 @@ func GetScanStats(summaryfile, statsfile string, t *testing.T) (Result, int64, i
 	log.Printf("ScanResults summary:")
 	log.Printf("Rows = %v", result.Rows)
 	// log.Printf("Duration = %v seconds", result.Duration)
-	log.Printf("PERFSTAT Duration %10.2f nanoseconds", result.Duration*1000000000)
+	// log.Printf("PERFSTAT Duration %10.2f nanoseconds", result.Duration*1000000000)
 	log.Printf("PERFSTAT Throughput %v rows/sec", throughput)
 	log.Printf("PERFSTAT AverageLatency %v nanoseconds\n", meanLatency)
 	log.Printf("PERFSTAT 95thPercentileLatency %v nanoseconds\n", percentile95_ScanLatency)
