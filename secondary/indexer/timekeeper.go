@@ -2648,6 +2648,7 @@ func (tk *timekeeper) startTimer(streamId common.StreamId,
 				tk.generateNewStabilityTS(streamId, bucket)
 
 			case <-stopCh:
+				defer ticker.Stop()
 				return
 			}
 		}

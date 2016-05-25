@@ -722,6 +722,7 @@ func (fdb *fdbSlice) waitPersist() {
 		//check for outstanding mutations. If there are
 		//none, proceed with the commit.
 		ticker := time.NewTicker(time.Millisecond * SLICE_COMMIT_POLL_INTERVAL)
+		defer ticker.Stop()
 		for _ = range ticker.C {
 			if fdb.checkAllWorkersDone() {
 				break

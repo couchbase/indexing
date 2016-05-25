@@ -678,6 +678,7 @@ func (r *mutationStreamReader) updateVbuuidInFilter(meta *MutationMeta) {
 func (r *mutationStreamReader) syncWorker() {
 
 	ticker := time.NewTicker(time.Millisecond * DEFAULT_SYNC_TIMEOUT)
+	defer ticker.Stop()
 
 	for {
 		select {

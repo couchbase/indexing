@@ -314,6 +314,7 @@ func (q *atomicMutationQueue) allocNode(vbucket Vbucket, appch StopChannel) *nod
 
 	//every ALLOC_POLL_INTERVAL milliseconds, check for free nodes
 	ticker := time.NewTicker(time.Millisecond * ALLOC_POLL_INTERVAL)
+	defer ticker.Stop()
 
 	var totalWait int
 	for {
