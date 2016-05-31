@@ -518,19 +518,7 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 	if flushWasAborted {
 
-		logging.Infof("Timekeeper::handleFlushDone Flush Abort Received %v %v"+
-			"FlushTs %v", streamId, bucket, bucketFlushInProgressTsMap[bucket])
-
-		bucketFlushInProgressTsMap[bucket] = nil
-
-		tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
-		tsList.Init()
-
-		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
-			streamId: streamId,
-			bucket:   bucket}
-
-		tk.supvCmdch <- &MsgSuccess{}
+		tk.processFlushAbort(streamId, bucket)
 		return
 	}
 
@@ -567,6 +555,51 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 		logging.Errorf("Timekeeper::handleFlushDone \n\tInvalid StreamId %v ", streamId)
 	}
 
+}
+
+func (tk *timekeeper) processFlushAbort(streamId common.StreamId, bucket string) {
+
+	bucketLastFlushedTsMap := tk.ss.streamBucketLastFlushedTsMap[streamId]
+	bucketFlushInProgressTsMap := tk.ss.streamBucketFlushInProgressTsMap[streamId]
+
+	logging.Infof("Timekeeper::processFlushAbort Flush Abort Received %v %v"+
+		"\nFlushTs %v \nLastFlushTs %v", streamId, bucket, bucketFlushInProgressTsMap[bucket],
+		bucketLastFlushedTsMap[bucket])
+
+	bucketFlushInProgressTsMap[bucket] = nil
+
+	tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
+	tsList.Init()
+
+	state := tk.ss.streamBucketStatus[streamId][bucket]
+
+	switch state {
+
+	case STREAM_ACTIVE, STREAM_RECOVERY:
+
+		logging.Infof("Timekeeper::processFlushAbort %v %v Generate InitPrepRecovery", streamId, bucket)
+		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+			streamId: streamId,
+			bucket:   bucket}
+
+	case STREAM_PREPARE_RECOVERY:
+
+		//send message to stop running stream
+		logging.Infof("Timekeeper::processFlushAbort %v %v Generate PrepareRecovery", streamId, bucket)
+		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
+			streamId: streamId,
+			bucket:   bucket}
+
+	case STREAM_INACTIVE:
+		logging.Errorf("Timekeeper::processFlushAbort Unexpected Flush Abort "+
+			"Received for Inactive StreamId %v bucket %v ", streamId, bucket)
+
+	default:
+		logging.Errorf("Timekeeper::processFlushAbort %v %v Invalid Stream State %v.", streamId, bucket, state)
+
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
 }
 
 func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
