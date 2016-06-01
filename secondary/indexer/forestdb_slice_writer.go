@@ -185,6 +185,8 @@ type fdbSlice struct {
 	// in the file. This is computed immediately after compaction.
 	extraSnapDataSize platform.AlignedInt64
 
+	qCount platform.AlignedInt64
+
 	path     string
 	currfile string
 	id       SliceId //slice id
@@ -276,6 +278,7 @@ func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) err
 	}
 
 	fdb.idxStats.numDocsFlushQueued.Add(1)
+	platform.AddInt64(&fdb.qCount, 1)
 	fdb.cmdCh <- &indexItem{key: key, rawKey: rawKey, docid: docid}
 	return fdb.fatalDbErr
 }
@@ -286,6 +289,7 @@ func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) err
 //it will be returned as error.
 func (fdb *fdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	fdb.idxStats.numDocsFlushQueued.Add(1)
+	platform.AddInt64(&fdb.qCount, 1)
 	fdb.cmdCh <- docid
 	return fdb.fatalDbErr
 }
@@ -329,6 +333,7 @@ loop:
 
 			fdb.idxStats.numItemsFlushed.Add(int64(nmut))
 			fdb.idxStats.numDocsIndexed.Add(1)
+			platform.AddInt64(&fdb.qCount, -1)
 
 		case <-fdb.stopCh[workerId]:
 			fdb.stopCh[workerId] <- true
@@ -892,6 +897,11 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 	//are no flush workers before calling rollback.
 	fdb.waitPersist()
 
+	qc := platform.LoadInt64(&fdb.qCount)
+	if qc > 0 {
+		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
+	}
+
 	//get the seqnum from snapshot
 	snapInfo := info.(*fdbSnapshotInfo)
 
@@ -1015,6 +1025,11 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 	fdb.waitPersist()
 	flushTime := time.Since(flushStart)
 
+	qc := platform.LoadInt64(&fdb.qCount)
+	if qc > 0 {
+		common.CrashOnError(errors.New("Slice Invariant Violation - commit with pending mutations"))
+	}
+
 	fdb.isDirty = false
 
 	t0 := time.Now()
@@ -1101,7 +1116,8 @@ func (fdb *fdbSlice) checkAllWorkersDone() bool {
 
 	//if there are mutations in the cmdCh, workers are
 	//not yet done
-	if len(fdb.cmdCh) > 0 {
+	qc := platform.LoadInt64(&fdb.qCount)
+	if qc > 0 {
 		return false
 	}
 

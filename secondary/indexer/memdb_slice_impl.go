@@ -99,6 +99,7 @@ type memdbSlice struct {
 	get_bytes, insert_bytes, delete_bytes platform.AlignedInt64
 	flushedCount                          platform.AlignedUint64
 	committedCount                        platform.AlignedUint64
+	qCount                                platform.AlignedInt64
 
 	path string
 	id   SliceId
@@ -271,6 +272,7 @@ func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) erro
 		key:   key,
 		docid: docid,
 	}
+	platform.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
 	mdb.idxStats.numDocsFlushQueued.Add(1)
 	return mdb.fatalDbErr
@@ -278,6 +280,7 @@ func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) erro
 
 func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.numDocsFlushQueued.Add(1)
+	platform.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- indexMutation{op: opDelete, docid: docid}
 	return mdb.fatalDbErr
 }
@@ -312,6 +315,7 @@ loop:
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
 			mdb.idxStats.numDocsIndexed.Add(1)
+			platform.AddInt64(&mdb.qCount, -1)
 
 		case <-mdb.stopCh[workerId]:
 			mdb.stopCh[workerId] <- true
@@ -773,6 +777,11 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	//are no flush workers before calling rollback.
 	mdb.waitPersist()
 
+	qc := platform.LoadInt64(&mdb.qCount)
+	if qc > 0 {
+		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
+	}
+
 	snapInfo := info.(*memdbSnapshotInfo)
 	mdb.resetStores()
 	return mdb.loadSnapshot(snapInfo)
@@ -883,6 +892,12 @@ func (mdb *memdbSlice) waitPersist() {
 func (mdb *memdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
 
 	mdb.waitPersist()
+
+	qc := platform.LoadInt64(&mdb.qCount)
+	if qc > 0 {
+		common.CrashOnError(errors.New("Slice Invariant Violation - commit with pending mutations"))
+	}
+
 	mdb.isDirty = false
 
 	snap, err := mdb.mainstore.NewSnapshot()
@@ -1065,12 +1080,8 @@ func tryClosememdbSlice(mdb *memdbSlice) {
 }
 
 func (mdb *memdbSlice) getCmdsCount() int {
-	c := 0
-	for i := 0; i < mdb.numWriters; i++ {
-		c += len(mdb.cmdCh[i])
-	}
-
-	return c
+	qc := platform.LoadInt64(&mdb.qCount)
+	return int(qc)
 }
 
 func (mdb *memdbSlice) logWriterStat() {
