@@ -265,32 +265,6 @@ func (c *MetadataRepo) GetIndexDefnByName(bucket string, name string) (*common.I
 }
 
 ///////////////////////////////////////////////////////
-//  Public Function : Stability Timestamp
-///////////////////////////////////////////////////////
-
-func (c *MetadataRepo) GetStabilityTimestamps() (*timestampListSerializable, error) {
-
-	lookupName := stabilityTimestampKey()
-	data, err := c.getMeta(lookupName)
-	if err != nil {
-		return nil, err
-	}
-
-	return unmarshallTimestampListSerializable(data)
-}
-
-func (c *MetadataRepo) SetStabilityTimestamps(timestamps *timestampListSerializable) error {
-
-	data, err := marshallTimestampListSerializable(timestamps)
-	if err != nil {
-		return err
-	}
-
-	lookupName := stabilityTimestampKey()
-	return c.setMeta(lookupName, data)
-}
-
-///////////////////////////////////////////////////////
 //  Public Function : Index Topology
 ///////////////////////////////////////////////////////
 
@@ -822,9 +796,7 @@ func findTypeFromKey(key string) MetadataKind {
 		return KIND_TOPOLOGY
 	} else if isGlobalTopologyKey(key) {
 		return KIND_GLOBAL_TOPOLOGY
-	} else if isStabilityTimestampKey(key) {
-		return KIND_STABILITY_TIMESTAMP
-	}
+	} 
 	return KIND_UNKNOWN
 }
 
@@ -929,18 +901,6 @@ func unmarshallGlobalTopology(data []byte) (*GlobalTopology, error) {
 	}
 
 	return topology, nil
-}
-
-///////////////////////////////////////////////////////
-// package local function : Stability Timestamp
-///////////////////////////////////////////////////////
-
-func stabilityTimestampKey() string {
-	return fmt.Sprintf("StabilityTimestamp")
-}
-
-func isStabilityTimestampKey(key string) bool {
-	return strings.Contains(key, "StabilityTimestamp")
 }
 
 ///////////////////////////////////////////////////////////

@@ -41,16 +41,6 @@ type IndexManager struct {
 	quota         uint64
 	addrProvider  common.ServiceAddressProvider
 
-	// stream management
-	streamMgr *StreamManager
-	admin     StreamAdmin
-
-	// timestamp management
-	timer                    *Timer
-	timestampCh              map[common.StreamId]chan *common.TsVbuuid
-	timekeeperStopCh         chan bool
-	timestampPersistInterval uint64
-
 	// bucket monitor
 	monitorKillch chan bool
 
@@ -119,7 +109,7 @@ type RequestServer interface {
 //
 func NewIndexManager(addrProvider common.ServiceAddressProvider, config common.Config) (mgr *IndexManager, err error) {
 
-	return NewIndexManagerInternal(addrProvider, NewProjectorAdmin(nil, nil, nil), config)
+	return NewIndexManagerInternal(addrProvider, config)
 }
 
 //
@@ -127,7 +117,6 @@ func NewIndexManager(addrProvider common.ServiceAddressProvider, config common.C
 //
 func NewIndexManagerInternal(
 	addrProvider common.ServiceAddressProvider,
-	admin StreamAdmin,
 	config common.Config) (mgr *IndexManager, err error) {
 
 	gometaL.Current = &logging.SystemLogger
@@ -143,15 +132,6 @@ func NewIndexManagerInternal(
 	} else {
 		mgr.quota = 1 * 1024 * 1024 //1 MB
 	}
-
-	// stream mgmt  - stream services will start if the indexer node becomes master
-	mgr.streamMgr = nil
-	mgr.admin = admin
-
-	// timestamp mgmt   - timestamp servcie will start if indexer node becomes master
-	mgr.timestampCh = make(map[common.StreamId]chan *common.TsVbuuid)
-	mgr.timer = nil
-	mgr.timekeeperStopCh = nil
 
 	// Initialize the event manager.  This is non-blocking.  The event manager can be
 	// called indirectly by watcher/meta-repo when new metadata changes are sent
@@ -249,8 +229,6 @@ func (m *IndexManager) Close() {
 	if m.isClosed {
 		return
 	}
-
-	m.stopMasterServiceNoLock()
 
 	if m.coordinator != nil {
 		m.coordinator.Terminate()
@@ -578,97 +556,6 @@ func (m *IndexManager) getBucketForCleanup() ([]string, error) {
 }
 
 ///////////////////////////////////////////////////////
-// public function - Timestamp Operation
-///////////////////////////////////////////////////////
-
-func (m *IndexManager) GetStabilityTimestampChannel(streamId common.StreamId) chan *common.TsVbuuid {
-
-	ch, ok := m.timestampCh[streamId]
-	if !ok {
-		ch = make(chan *common.TsVbuuid, TIMESTAMP_NOTIFY_CH_SIZE)
-		m.timestampCh[streamId] = ch
-	}
-
-	return ch
-}
-
-func (m *IndexManager) runTimestampKeeper() {
-
-	defer logging.Debugf("IndexManager.runTimestampKeeper() : terminate")
-
-	inboundch := m.timer.getOutputChannel()
-
-	persistTimestamp := true // save the first timestamp always
-	lastPersistTime := uint64(time.Now().UnixNano())
-
-	timestamps, err := m.repo.GetStabilityTimestamps()
-	if err != nil {
-		// TODO : Determine timestamp not exist versus forestdb error
-		logging.Errorf("IndexManager.runTimestampKeeper() : cannot get stability timestamp from repository. Create a new one.")
-		timestamps = createTimestampListSerializable()
-	}
-
-	for {
-		select {
-		case <-m.timekeeperStopCh:
-			return
-
-		case timestamp, ok := <-inboundch:
-
-			if !ok {
-				return
-			}
-
-			gometaC.SafeRun("IndexManager.runTimestampKeeper()",
-				func() {
-					timestamps.addTimestamp(timestamp)
-					persistTimestamp = persistTimestamp ||
-						uint64(time.Now().UnixNano())-lastPersistTime > m.timestampPersistInterval
-					if persistTimestamp {
-						if err := m.repo.SetStabilityTimestamps(timestamps); err != nil {
-							logging.Errorf("IndexManager.runTimestampKeeper() : cannot set stability timestamp into repository.")
-						} else {
-							logging.Debugf("IndexManager.runTimestampKeeper() : saved stability timestamp to repository")
-							persistTimestamp = false
-							lastPersistTime = uint64(time.Now().UnixNano())
-						}
-					}
-
-					data, err := marshallTimestampSerializable(timestamp)
-					if err != nil {
-						logging.Debugf(
-							"IndexManager.runTimestampKeeper(): error when marshalling timestamp. Ignore timestamp.  Error=%s",
-							err.Error())
-					} else {
-						m.coordinator.NewRequest(uint32(OPCODE_NOTIFY_TIMESTAMP), "Stability Timestamp", data)
-					}
-				})
-		}
-	}
-}
-
-func (m *IndexManager) notifyNewTimestamp(wrapper *timestampSerializable) {
-
-	logging.Debugf("IndexManager.notifyNewTimestamp(): receive new timestamp, notifying to listener")
-	streamId := common.StreamId(wrapper.StreamId)
-	timestamp, err := unmarshallTimestamp(wrapper.Timestamp)
-	if err != nil {
-		logging.Debugf("IndexManager.notifyNewTimestamp(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
-	} else {
-		ch, ok := m.timestampCh[streamId]
-		if ok {
-			if len(ch) < TIMESTAMP_NOTIFY_CH_SIZE {
-				ch <- timestamp
-			}
-		}
-	}
-}
-
-func (m *IndexManager) getTimer() *Timer {
-	return m.timer
-}
-
-///////////////////////////////////////////////////////
 // package local function
 ///////////////////////////////////////////////////////
 
@@ -696,64 +583,10 @@ func (m *IndexManager) notify(evtType EventType, obj interface{}) {
 }
 
 func (m *IndexManager) startMasterService() error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	admin := m.admin
-	if admin != nil {
-		// Initialize the timer.   The timer will be activated by the
-		// stream manager when the stream manager opens the stream
-		// during initialization.  The stream manager, in turn, is
-		// started when the coordinator becomes the master.   There
-		// is gorounine in index manager that will listen to the
-		// timer and broadcast the stability timestamp to all the
-		// listening node.   This goroutine will be started when
-		// the indexer node becomes the coordinator master.
-		m.timestampPersistInterval = TIMESTAMP_PERSIST_INTERVAL
-		m.timer = newTimer(m.repo)
-		m.timekeeperStopCh = make(chan bool)
-		go m.runTimestampKeeper()
-
-		monitor := NewStreamMonitor(m, m.timer)
-
-		// Initialize the stream manager.
-		admin.Initialize(monitor)
-
-		handler := NewMgrMutHandler(m, admin, monitor)
-		var err error
-		m.streamMgr, err = NewStreamManager(m, handler, admin, monitor)
-		if err != nil {
-			return err
-		}
-		m.streamMgr.StartHandlingTopologyChange()
-	}
-	return nil
+       return nil
 }
 
 func (m *IndexManager) stopMasterService() {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	m.stopMasterServiceNoLock()
-}
-
-func (m *IndexManager) stopMasterServiceNoLock() {
-
-	if m.streamMgr != nil {
-		m.streamMgr.Close()
-		m.streamMgr = nil
-	}
-
-	if m.timer != nil {
-		m.timer.stopAll()
-		m.timer = nil
-
-		// use timekeeperStopCh to close the timekeeper gorountime right away
-		if m.timekeeperStopCh != nil {
-			close(m.timekeeperStopCh)
-			m.timekeeperStopCh = nil
-		}
-	}
 }
 
 //Calculate forestdb  buffer cache from memory quota
@@ -771,58 +604,4 @@ func (m *IndexManager) calcBufCacheFromMemQuota(quota uint64) uint64 {
 		return uint64(0.6 * float64(quota))
 	}
 
-}
-
-///////////////////////////////////////////////////////
-// public function - for testing only
-///////////////////////////////////////////////////////
-
-func (m *IndexManager) GetStabilityTimestampForVb(streamId common.StreamId, bucket string, vb uint16) (uint64, bool) {
-
-	logging.Debugf("IndexManager.GetStabilityTimestampForVb() : get stability timestamp from repo")
-	savedTimestamps, err := m.repo.GetStabilityTimestamps()
-	if err == nil {
-		seqno, _, ok, err := savedTimestamps.findTimestamp(streamId, bucket, vb)
-		if ok && err == nil {
-			return seqno, true
-		}
-	} else {
-		logging.Errorf("IndexManager.GetStabilityTimestampForVb() : cannot get stability timestamp from repository.")
-	}
-
-	return 0, false
-}
-
-func (m *IndexManager) SetTimestampPersistenceInterval(elapsed uint64) {
-	m.timestampPersistInterval = elapsed
-}
-
-func (m *IndexManager) CleanupTopology() {
-
-	globalTop, err := m.GetGlobalTopology()
-	if err != nil {
-		logging.Errorf("IndexManager.CleanupTopology() : error %v.", err)
-		return
-	}
-
-	for _, key := range globalTop.TopologyKeys {
-		if err := m.repo.deleteMeta(key); err != nil {
-			logging.Errorf("IndexManager.CleanupTopology() : error %v.", err)
-		}
-	}
-
-	key := globalTopologyKey()
-	if err := m.repo.deleteMeta(key); err != nil {
-		logging.Errorf("IndexManager.CleanupTopology() : error %v.", err)
-	}
-}
-
-func (m *IndexManager) CleanupStabilityTimestamp() {
-
-	m.stopMasterServiceNoLock()
-
-	key := stabilityTimestampKey()
-	if err := m.repo.deleteMeta(key); err != nil {
-		logging.Errorf("IndexManager.CleanupStabilityTimestamp() : error %v.", err)
-	}
 }
