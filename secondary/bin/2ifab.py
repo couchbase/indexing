@@ -129,11 +129,13 @@ def new_user(user, passw, group) :
 govers = {
     "133": "https://storage.googleapis.com/golang/go1.3.3.linux-amd64.tar.gz",
     "143": "https://storage.googleapis.com/golang/go1.4.3.linux-amd64.tar.gz",
+    "142": "https://storage.googleapis.com/golang/go1.4.2.linux-amd64.tar.gz",
     "151": "https://storage.googleapis.com/golang/go1.5.1.linux-amd64.tar.gz",
+    "162": "https://storage.googleapis.com/golang/go1.6.2.linux-amd64.tar.gz",
 }
 @task
 @parallel
-def setup(targetos="deb", gover="151"):
+def setup(targetos="deb", gover="162"):
     """setup target nodes in the cluster
     - install os level packages
     - create couchbase user
