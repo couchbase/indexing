@@ -827,8 +827,10 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 
 	if err != nil {
 		status := fmt.Sprintf("(error = %s)", err)
-		logging.Errorf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
-			req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status, req.RequestId)
+		logging.LazyVerbose(func() string {
+			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
+				req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status, req.RequestId)
+		})
 	} else {
 		status := "ok"
 		logging.LazyVerbose(func() string {
