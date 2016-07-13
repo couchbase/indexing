@@ -182,6 +182,8 @@ func (nt *NodeTable) Remove(key []byte) (success bool, nptr unsafe.Pointer) {
 				delete(nt.slowHT, res.hash)
 				nt.fastHT[res.hash] = encodePointer(decodePointer(nt.fastHT[res.hash]), false)
 				nt.conflicts--
+			} else {
+				nt.slowHT[res.hash] = newSlowValue
 			}
 		}
 	}
