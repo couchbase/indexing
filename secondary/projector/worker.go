@@ -404,13 +404,15 @@ func (worker *VbucketWorker) handleEvent(m *mc.DcpEvent) *Vbucket {
 		}
 
 	case mcd.DCP_STREAMEND:
-		if data := v.makeStreamEndData(worker.engines); data != nil {
-			worker.broadcast2Endpoints(data)
-		} else {
-			fmsg := "%v ##%x StreamEnd NOT PUBLISHED vb %v\n"
-			logging.Errorf(fmsg, logPrefix, worker.opaque, v.vbno)
+		if vbok {
+			if data := v.makeStreamEndData(worker.engines); data != nil {
+				worker.broadcast2Endpoints(data)
+			} else {
+				fmsg := "%v ##%x StreamEnd NOT PUBLISHED vb %v\n"
+				logging.Errorf(fmsg, logPrefix, worker.opaque, v.vbno)
+			}
+			delete(worker.vbuckets, vbno)
 		}
-		delete(worker.vbuckets, vbno)
 	}
 	return v
 }
