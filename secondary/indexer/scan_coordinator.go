@@ -721,6 +721,9 @@ func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanReq
 		} else if err == common.ErrIndexNotFound {
 			stats := s.stats.Get()
 			stats.notFoundError.Add(1)
+		} else if err == common.ErrIndexerInBootstrap || err == common.ErrClientCancel {
+			logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
+			logging.Verbosef("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
 		} else {
 			logging.Infof("%s REQUEST %s", req.LogPrefix, req)
 			logging.Infof("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
