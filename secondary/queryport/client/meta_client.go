@@ -517,7 +517,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 		for _, indexerID := range curradmns {
 			b.mdClient.UnwatchMetadata(indexerID)
 		}
-		curradmns = nil
+		curradmns = make(map[string]common.IndexerId)
 	}
 
 	// watch all indexers
