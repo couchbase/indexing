@@ -29,6 +29,7 @@ type metadataClient struct {
 
 // sherlock topology management, multi-node & single-partition.
 type indexTopology struct {
+	version    uint64
 	adminports map[string]common.IndexerId // book-keeping for cluster changes
 	topology   map[common.IndexerId][]*mclient.IndexMetadata
 	replicas   map[common.IndexDefnId][]common.IndexDefnId
@@ -80,10 +81,10 @@ func (b *metadataClient) Sync() error {
 
 // Refresh implement BridgeAccessor{} interface.
 func (b *metadataClient) Refresh() ([]*mclient.IndexMetadata, error) {
-	mindexes := b.mdClient.ListIndex()
-	if b.hasIndexesChanged(mindexes) {
+	mindexes, version := b.mdClient.ListIndex()
+	if b.hasIndexesChanged(mindexes, version) {
 		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
-		b.updateTopology(currmeta.adminports, false /*force*/)
+		b.safeupdate(currmeta.adminports, false)
 	}
 	return mindexes, nil
 }
@@ -180,7 +181,7 @@ func (b *metadataClient) DropIndex(defnID uint64) error {
 	err := b.mdClient.DropIndex(common.IndexDefnId(defnID))
 	if err == nil { // cleanup index local cache.
 		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
-		b.updateTopology(currmeta.adminports, true /*force*/)
+		b.safeupdate(currmeta.adminports, true /*force*/)
 	}
 	return err
 }
@@ -572,7 +573,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 			b.mdClient.UnwatchMetadata(indexerID)
 		}
 	}
-	b.updateTopology(m, false /*force*/)
+	b.safeupdate(m, false /*force*/)
 	return err
 }
 
@@ -589,7 +590,7 @@ func (b *metadataClient) updateIndexer(
 			adminports[admnport] = indexerId
 		}
 		adminports[adminport] = newIndexerId
-		b.updateTopology(adminports, false /*force*/)
+		b.safeupdate(adminports, false /*force*/)
 	}()
 }
 
@@ -606,18 +607,20 @@ func (b *metadataClient) updateIndexer(
 //		Timeit for b.loads
 
 func (b *metadataClient) updateTopology(
-	adminports map[string]common.IndexerId, force bool) {
+	adminports map[string]common.IndexerId, force bool) *indexTopology {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 
-	mindexes := b.mdClient.ListIndex()
+	mindexes, version := b.mdClient.ListIndex()
 	// detect change in indexer cluster or indexes.
 	if force == false && currmeta != nil &&
-		(!b.hasIndexersChanged(adminports) && !b.hasIndexesChanged(mindexes)) {
-		return
+		(!b.hasIndexersChanged(adminports) &&
+			!b.hasIndexesChanged(mindexes, version)) {
+		return currmeta
 	}
 	// create a new topology.
 	newmeta := &indexTopology{
+		version:    version,
 		adminports: make(map[string]common.IndexerId),
 		topology:   make(map[common.IndexerId][]*mclient.IndexMetadata),
 		replicas:   make(map[common.IndexDefnId][]common.IndexDefnId),
@@ -656,7 +659,33 @@ func (b *metadataClient) updateTopology(
 			}
 		}
 	}()
-	atomic.StorePointer(&b.indexers, unsafe.Pointer(newmeta))
+	return newmeta
+}
+
+func (b *metadataClient) safeupdate(
+	adminports map[string]common.IndexerId, force bool) {
+
+	var currmeta, newmeta *indexTopology
+
+	done := false
+	for done == false {
+		currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
+		newmeta = b.updateTopology(adminports, force)
+		if currmeta == nil {
+			atomic.StorePointer(&b.indexers, unsafe.Pointer(newmeta))
+			logging.Infof("initialized currmeta %v\n", newmeta.version)
+			return
+		} else if newmeta.version <= currmeta.version {
+			fmsg := "skip newmeta %v <= %v\n"
+			logging.Infof(fmsg, newmeta.version, currmeta.version)
+			return
+		}
+		oldptr := unsafe.Pointer(currmeta)
+		newptr := unsafe.Pointer(newmeta)
+		done = atomic.CompareAndSwapPointer(&b.indexers, oldptr, newptr)
+	}
+	fmsg := "switched currmeta from %v -> %v\n"
+	logging.Infof(fmsg, currmeta.version, newmeta.version)
 }
 
 func (b *metadataClient) hasIndexersChanged(
@@ -680,9 +709,15 @@ func (b *metadataClient) hasIndexersChanged(
 }
 
 func (b *metadataClient) hasIndexesChanged(
-	mindexes []*mclient.IndexMetadata) bool {
+	mindexes []*mclient.IndexMetadata, version uint64) bool {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+
+	if currmeta.version < version {
+		fmsg := "metadata provider version changed %v -> %v\n"
+		logging.Infof(fmsg, currmeta.version, version)
+		return true
+	}
 
 	for _, mindex := range mindexes {
 		_, ok := currmeta.replicas[mindex.Definition.DefnId]

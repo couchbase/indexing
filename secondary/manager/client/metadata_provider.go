@@ -45,6 +45,7 @@ type metadataRepo struct {
 	definitions map[c.IndexDefnId]*c.IndexDefn
 	instances   map[c.IndexDefnId]*IndexInstDistribution
 	indices     map[c.IndexDefnId]*IndexMetadata
+	version     uint64
 	mutex       sync.RWMutex
 }
 
@@ -509,9 +510,9 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 	return nil
 }
 
-func (o *MetadataProvider) ListIndex() []*IndexMetadata {
+func (o *MetadataProvider) ListIndex() ([]*IndexMetadata, uint64) {
 
-	indices := o.repo.listDefn()
+	indices, version := o.repo.listDefn()
 	result := make([]*IndexMetadata, 0, len(indices))
 
 	for _, meta := range indices {
@@ -520,12 +521,12 @@ func (o *MetadataProvider) ListIndex() []*IndexMetadata {
 		}
 	}
 
-	return result
+	return result, version
 }
 
 func (o *MetadataProvider) FindIndex(id c.IndexDefnId) *IndexMetadata {
 
-	indices := o.repo.listDefn()
+	indices, _ := o.repo.listDefn()
 	if meta, ok := indices[id]; ok {
 		if o.isValidIndexFromActiveIndexer(meta) {
 			return meta
@@ -574,7 +575,7 @@ func (o *MetadataProvider) UpdateServiceAddrForIndexer(id c.IndexerId, adminport
 
 func (o *MetadataProvider) FindIndexByName(name string, bucket string) *IndexMetadata {
 
-	indices := o.repo.listDefn()
+	indices, _ := o.repo.listDefn()
 	for _, meta := range indices {
 		if o.isValidIndexFromActiveIndexer(meta) {
 			if meta.Definition.Name == name && meta.Definition.Bucket == bucket {
@@ -676,7 +677,7 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 
 func (o *MetadataProvider) findIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadata {
 
-	indices := o.repo.listDefn()
+	indices, _ := o.repo.listDefn()
 	if meta, ok := indices[id]; ok {
 		return meta
 	}
@@ -806,10 +807,11 @@ func newMetadataRepo() *metadataRepo {
 	return &metadataRepo{
 		definitions: make(map[c.IndexDefnId]*c.IndexDefn),
 		instances:   make(map[c.IndexDefnId]*IndexInstDistribution),
-		indices:     make(map[c.IndexDefnId]*IndexMetadata)}
+		indices:     make(map[c.IndexDefnId]*IndexMetadata),
+		version:     uint64(0)}
 }
 
-func (r *metadataRepo) listDefn() map[c.IndexDefnId]*IndexMetadata {
+func (r *metadataRepo) listDefn() (map[c.IndexDefnId]*IndexMetadata, uint64) {
 
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -822,7 +824,7 @@ func (r *metadataRepo) listDefn() map[c.IndexDefnId]*IndexMetadata {
 		}
 	}
 
-	return result
+	return result, r.version
 }
 
 func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
@@ -837,6 +839,7 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 	if ok {
 		r.updateIndexMetadataNoLock(defn.DefnId, inst)
 	}
+	r.version++
 }
 
 func (r *metadataRepo) hasDefnIgnoreStatus(indexerId c.IndexerId, defnId c.IndexDefnId) bool {
@@ -899,6 +902,8 @@ func (r *metadataRepo) removeDefn(defnId c.IndexDefnId) {
 	delete(r.definitions, defnId)
 	delete(r.instances, defnId)
 	delete(r.indices, defnId)
+
+	r.version++
 }
 
 func (r *metadataRepo) updateTopology(topology *IndexTopology) {
@@ -913,6 +918,8 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology) {
 			r.updateIndexMetadataNoLock(defnId, &instRef)
 		}
 	}
+
+	r.version++
 }
 
 func (r *metadataRepo) unmarshallAndAddDefn(content []byte) error {
