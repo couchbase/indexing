@@ -158,12 +158,15 @@ func (feed *DcpFeed) genServer(
 	}()
 
 	prefix := feed.logPrefix
-	inactivityTick := time.Tick(1 * 60 * time.Second) // 1 minute
+	inactivityTick := time.NewTicker(1 * 60 * time.Second) // 1 minute
+	defer func() {
+		inactivityTick.Stop()
+	}()
 
 loop:
 	for {
 		select {
-		case <-inactivityTick:
+		case <-inactivityTick.C:
 			now := time.Now().UnixNano()
 			for _, stream := range feed.vbstreams {
 				strm_seqno := stream.Seqno
@@ -876,7 +879,11 @@ func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 	var blocked bool
 
 	epoc := time.Now()
-	tick := time.Tick(time.Minute * 5) // log every 5 minutes.
+	tick := time.NewTicker(time.Minute * 5) // log every 5 minutes.
+	defer func() {
+		tick.Stop()
+	}()
+
 	for {
 		pkt := transport.MCRequest{} // always a new instance.
 		bytes, err := pkt.Receive(conn.conn, headerBuf[:])
@@ -901,7 +908,7 @@ func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 			duration += time.Since(start)
 			blocked = false
 			select {
-			case <-tick:
+			case <-tick.C:
 				percent := float64(duration) / float64(time.Since(epoc))
 				fmsg := "%v DCP-socket -> projector %f%% blocked"
 				logging.Infof(fmsg, feed.logPrefix, percent)
