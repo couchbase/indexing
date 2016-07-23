@@ -440,9 +440,13 @@ func (b *metadataClient) pickOptimal(defnID uint64) uint64 {
 //----------------
 
 func (b *metadataClient) logstats() {
-	tick := time.Tick(b.logtick)
+	tick := time.NewTicker(b.logtick)
+	defer func() {
+		tick.Stop()
+	}()
+
 	for {
-		<-tick
+		<-tick.C
 		s := make([]string, 0, 16)
 		func() {
 			b.rw.RLock()
@@ -456,6 +460,13 @@ func (b *metadataClient) logstats() {
 			}
 			logging.Infof("client load stats {%v}", strings.Join(s, ","))
 		}()
+		select {
+		case _, ok := <-b.finch:
+			if !ok {
+				break loop
+			}
+		default:
+		}
 	}
 }
 
