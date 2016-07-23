@@ -5,7 +5,7 @@
 //                            |
 //                         (spawn)
 //                            |
-//                            |  (flushTimeout || > bufferSize)
+//                            |  (flushTick || > bufferSize)
 //        Ping() -----*----> run -------------------------------> TCP
 //                    |       ^
 //        Send() -----*       | endpoint routine buffers messages,
@@ -150,10 +150,19 @@ func (endpoint *RouterEndpoint) WaitForExit() error {
 
 // run
 func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
+	flushTick := time.NewTicker(endpoint.bufferTm * time.Millisecond)
+	harakiri := time.NewTimer(endpoint.harakiriTm * time.Millisecond)
+
 	defer func() { // panic safe
 		if r := recover(); r != nil {
 			logging.Errorf("%v run() crashed: %v\n", endpoint.logPrefix, r)
 			logging.Errorf("%s", logging.StackTrace())
+		}
+		if flushTick != nil {
+			flushTick.Stop()
+		}
+		if harakiri != nil {
+			harakiri.Stop()
 		}
 		// close the connection
 		endpoint.conn.Close()
@@ -164,8 +173,6 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 
 	raddr := endpoint.raddr
 
-	flushTimeout := time.Tick(endpoint.bufferTm * time.Millisecond)
-	harakiri := time.After(endpoint.harakiriTm * time.Millisecond)
 	buffers := newEndpointBuffers(raddr)
 
 	messageCount := int64(0)
@@ -214,7 +221,7 @@ loop:
 						break loop
 					}
 				}
-				harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
+				harakiri.Reset(endpoint.harakiriTm * time.Millisecond)
 
 			case endpCmdResetConfig:
 				prefix := endpoint.logPrefix
@@ -227,12 +234,13 @@ loop:
 				}
 				if cv, ok := config["bufferTimeout"]; ok {
 					endpoint.bufferTm = time.Duration(cv.Int())
-					flushTimeout = time.Tick(endpoint.bufferTm * time.Millisecond)
+					flushTick.Stop()
+					flushTick = time.NewTicker(endpoint.bufferTm * time.Millisecond)
 				}
 				if cv, ok := config["harakiriTimeout"]; ok {
 					endpoint.harakiriTm = time.Duration(cv.Int())
 					if harakiri != nil { // load harakiri only when it is active
-						harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
+						harakiri.Reset(endpoint.harakiriTm * time.Millisecond)
 						fmsg := "%v reloaded harakiriTm: %v\n"
 						logging.Infof(fmsg, prefix, endpoint.harakiriTm)
 					}
@@ -254,7 +262,7 @@ loop:
 				break loop
 			}
 
-		case <-flushTimeout:
+		case <-flushTick.C:
 			if err := flushBuffers(); err != nil {
 				break loop
 			}
@@ -263,9 +271,9 @@ loop:
 			// little activity in the data-path. On the other hand,
 			// downstream can block for reasons independant of datapath,
 			// hence the precaution.
-			harakiri = time.After(endpoint.harakiriTm * time.Millisecond)
+			harakiri.Reset(endpoint.harakiriTm * time.Millisecond)
 
-		case <-harakiri:
+		case <-harakiri.C:
 			logging.Infof("%v committed harakiri\n", endpoint.logPrefix)
 			flushBuffers()
 			break loop

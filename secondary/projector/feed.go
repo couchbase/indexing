@@ -452,9 +452,12 @@ func (feed *Feed) genServer() {
 
 	var msg []interface{}
 
-	timeout := time.Tick(1000 * time.Millisecond)
+	timeout := time.NewTicker(1000 * time.Millisecond)
 	ctrlMsg := "%v ##%x control channel has %v messages"
 	prefix := feed.logPrefix
+	defer func() {
+		timeout.Stop()
+	}()
 
 loop:
 	for {
@@ -541,7 +544,7 @@ loop:
 				logging.Fatalf(fmsg, prefix, feed.opaque, msg[0], msg[0])
 			}
 
-		case <-timeout:
+		case <-timeout.C:
 			if len(feed.backch) > 0 { // can happend during rebalance.
 				logging.Warnf(ctrlMsg, prefix, feed.opaque, len(feed.backch))
 			}
