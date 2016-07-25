@@ -445,6 +445,7 @@ func (b *metadataClient) logstats() {
 		tick.Stop()
 	}()
 
+loop:
 	for {
 		<-tick.C
 		s := make([]string, 0, 16)
