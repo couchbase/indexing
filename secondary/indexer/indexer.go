@@ -3050,6 +3050,14 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		//check if Paused state is required
 		memory_quota := idx.config["settings.memory_quota"].Uint64()
 		high_mem_mark := idx.config["high_mem_mark"].Float64()
+
+		//free memory after bootstrap before deciding to pause
+		start := time.Now()
+		debug.FreeOSMemory()
+		elapsed := time.Since(start)
+		logging.Infof("Indexer::bootstrap ManualGC Time Taken %v", elapsed)
+		mm.FreeOSMemory()
+
 		mem_used := idx.memoryUsed(true)
 		if float64(mem_used) > (high_mem_mark * float64(memory_quota)) {
 			logging.Infof("Indexer::bootstrap MemoryUsed %v", mem_used)
@@ -4047,7 +4055,7 @@ func (idx *indexer) monitorMemUsage() {
 			gcDone := false
 			if idx.needsGCMoi() {
 				start := time.Now()
-				runtime.GC()
+				debug.FreeOSMemory()
 				elapsed := time.Since(start)
 				logging.Infof("Indexer::monitorMemUsage ManualGC Time Taken %v", elapsed)
 				mm.FreeOSMemory()
@@ -4082,7 +4090,7 @@ func (idx *indexer) monitorMemUsage() {
 
 			if idx.needsGCFdb() {
 				start := time.Now()
-				runtime.GC()
+				debug.FreeOSMemory()
 				elapsed := time.Since(start)
 				logging.Infof("Indexer::monitorMemUsage ManualGC Time Taken %v", elapsed)
 				mm.FreeOSMemory()
@@ -4271,7 +4279,7 @@ func (idx *indexer) memoryUsed(forceRefresh bool) uint64 {
 		gMemstatCacheLastUpdated = time.Now()
 	}
 
-	mem_used := ms.HeapInuse + ms.GCSys + forestdb.BufferCacheUsed()
+	mem_used := ms.HeapInuse + ms.HeapIdle - ms.HeapReleased + ms.GCSys + forestdb.BufferCacheUsed()
 	if common.GetStorageMode() == common.MOI {
 		mem_used += mm.Size()
 	}
