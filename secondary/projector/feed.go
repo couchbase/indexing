@@ -550,7 +550,6 @@ loop:
 			}
 		}
 	}
-	timeout = nil
 }
 
 // "ok"    - command handled.
