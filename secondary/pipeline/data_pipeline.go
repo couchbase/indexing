@@ -91,6 +91,7 @@ func (w *ItemWriter) CloseWrite() error {
 	if w.wblock == nil {
 	} else if w.wr.IsEmpty() {
 		PutBlock(w.wblock)
+		w.wblock = nil
 	} else {
 		w.sendBlock()
 	}
@@ -112,14 +113,16 @@ func (w *ItemWriter) CloseWithError(err error) {
 		return
 	}
 
+	w.closed = true
+
 	if w.wblock != nil {
 		PutBlock(w.wblock)
+		w.wblock = nil
 	}
 
 	select {
 	case w.wchan <- err:
 		close(w.wchan)
-		w.closed = true
 	case <-w.killch:
 	}
 }
@@ -208,6 +211,7 @@ func (r *ItemReader) ReadItem() ([]byte, error) {
 func (r *ItemReader) CloseRead() error {
 	if r.rblock != nil {
 		PutBlock(r.rblock)
+		r.rblock = nil
 	}
 
 	return nil

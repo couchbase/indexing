@@ -721,6 +721,12 @@ func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanReq
 		} else if err == common.ErrIndexNotFound {
 			stats := s.stats.Get()
 			stats.notFoundError.Add(1)
+		} else if err == common.ErrIndexerInBootstrap || err == common.ErrClientCancel {
+			logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
+			logging.Verbosef("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
+			if err == common.ErrClientCancel {
+				req.Stats.clientCancelError.Add(1)
+			}
 		} else {
 			logging.Infof("%s REQUEST %s", req.LogPrefix, req)
 			logging.Infof("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
@@ -824,8 +830,10 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 
 	if err != nil {
 		status := fmt.Sprintf("(error = %s)", err)
-		logging.Errorf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
-			req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status, req.RequestId)
+		logging.LazyVerbose(func() string {
+			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
+				req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status, req.RequestId)
+		})
 	} else {
 		status := "ok"
 		logging.LazyVerbose(func() string {
