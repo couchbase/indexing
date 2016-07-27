@@ -520,6 +520,8 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 		return fmt.Sprintf("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
 	})
 
+	state := w.reader.getIndexerState()
+
 	for i, cmd := range kv.GetCommands() {
 
 		//based on the type of command take appropriate action
@@ -545,7 +547,7 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 
 			w.reader.logReaderStat()
 
-			if w.reader.getIndexerState() != common.INDEXER_ACTIVE {
+			if state != common.INDEXER_ACTIVE {
 				if mutk != nil {
 					mutk.Free()
 					mutk = nil
