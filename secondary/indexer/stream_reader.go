@@ -825,6 +825,12 @@ func (w *streamWorker) updateVbuuidInFilter(meta *MutationMeta) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 
+	if meta.vbuuid == 0 {
+		logging.Fatalf("MutationStreamReader::updateVbuuidInFilter Received vbuuid %v "+
+			"bucket %v vb %v Stream %v. This vbucket will not be processed!!!", meta.vbuuid,
+			meta.bucket, meta.vbucket, w.streamId)
+	}
+
 	if filter, ok := w.bucketFilter[meta.bucket]; ok {
 		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)
 	} else {
