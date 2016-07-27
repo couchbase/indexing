@@ -756,7 +756,7 @@ func (w *streamWorker) checkAndSetBucketFilter(meta *MutationMeta) bool {
 		}
 
 	} else {
-		logging.Errorf("MutationStreamReader::checkAndSetBucketFilter Missing"+
+		logging.Debugf("MutationStreamReader::checkAndSetBucketFilter Missing"+
 			"bucket %v in Filter for Stream %v", meta.bucket, w.streamId)
 		return false
 	}
