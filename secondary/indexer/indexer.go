@@ -3058,7 +3058,7 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 		logging.Infof("Indexer::bootstrap ManualGC Time Taken %v", elapsed)
 		mm.FreeOSMemory()
 
-		mem_used := idx.memoryUsed(true)
+		mem_used, _ := idx.memoryUsed(true)
 		if float64(mem_used) > (high_mem_mark * float64(memory_quota)) {
 			logging.Infof("Indexer::bootstrap MemoryUsed %v", mem_used)
 			idx.handleIndexerPause(&MsgIndexerState{mType: INDEXER_PAUSE})
@@ -3811,7 +3811,9 @@ func (idx *indexer) checkBucketExists(bucket string,
 func (idx *indexer) handleStats(cmd Message) {
 	req := cmd.(*MsgStatsRequest)
 	replych := req.GetReplyChannel()
-	idx.stats.memoryUsed.Set(int64(idx.memoryUsed(false)))
+	total, idle := idx.memoryUsed(false)
+	used := total - idle
+	idx.stats.memoryUsed.Set(int64(used))
 	idx.stats.memoryUsedStorage.Set(idx.memoryUsedStorage())
 	replych <- true
 }
@@ -4063,13 +4065,14 @@ func (idx *indexer) monitorMemUsage() {
 			}
 
 			var mem_used uint64
+			var idle uint64
 			if idx.getIndexerState() == common.INDEXER_PAUSED || gcDone {
-				mem_used = idx.memoryUsed(true)
+				mem_used, idle = idx.memoryUsed(true)
 			} else {
-				mem_used = idx.memoryUsed(false)
+				mem_used, idle = idx.memoryUsed(false)
 			}
 
-			logging.Infof("Indexer::monitorMemUsage MemoryUsed %v", mem_used)
+			logging.Infof("Indexer::monitorMemUsage MemoryUsed Total %v Idle %v", mem_used, idle)
 
 			switch idx.getIndexerState() {
 
@@ -4260,7 +4263,7 @@ func (idx *indexer) checkRecoveryInProgress() bool {
 //memoryUsed returns the memory usage reported by
 //golang runtime + memory allocated by cgo
 //components(e.g. fdb buffercache)
-func (idx *indexer) memoryUsed(forceRefresh bool) uint64 {
+func (idx *indexer) memoryUsed(forceRefresh bool) (uint64, uint64) {
 
 	var ms runtime.MemStats
 
@@ -4284,7 +4287,9 @@ func (idx *indexer) memoryUsed(forceRefresh bool) uint64 {
 		mem_used += mm.Size()
 	}
 
-	return mem_used
+	idle := ms.HeapIdle - ms.HeapReleased
+
+	return mem_used, idle
 }
 
 func (idx *indexer) updateMemstats() {
@@ -4309,9 +4314,9 @@ func (idx *indexer) needsGCMoi() bool {
 	memQuota := idx.config["settings.memory_quota"].Uint64()
 
 	if idx.getIndexerState() == common.INDEXER_PAUSED {
-		memUsed = idx.memoryUsed(true)
+		memUsed, _ = idx.memoryUsed(true)
 	} else {
-		memUsed = idx.memoryUsed(false)
+		memUsed, _ = idx.memoryUsed(false)
 	}
 
 	if memUsed >= memQuota {
@@ -4337,7 +4342,7 @@ func (idx *indexer) needsGCFdb() bool {
 	//ignore till 1GB
 	ignoreThreshold := idx.config["min_oom_memory"].Uint64() * 4
 
-	memUsed = idx.memoryUsed(true)
+	memUsed, _ = idx.memoryUsed(true)
 
 	if memUsed < ignoreThreshold {
 		return false
