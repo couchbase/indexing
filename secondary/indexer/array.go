@@ -71,7 +71,8 @@ func splitSecondaryArrayKey(key []byte, arrayPos int, tmpBuf []byte) ([][][]byte
 	return arrayIndexEntries, nil
 }
 
-func ArrayIndexItems(bs []byte, arrPos int, buf []byte, isDistinct bool) ([][]byte, []int, error) {
+func ArrayIndexItems(bs []byte, arrPos int, buf []byte,
+	isDistinct, checkSize bool) ([][]byte, []int, error) {
 	var items [][]byte
 	var err error
 
@@ -87,11 +88,11 @@ func ArrayIndexItems(bs []byte, arrPos int, buf []byte, isDistinct bool) ([][]by
 			return nil, nil, err
 		}
 		l := len(buf)
-		if (l - from) > maxIndexEntrySize {
+		if checkSize && (l-from) > maxIndexEntrySize {
 			logging.Errorf("Encoded array item key too long. Length of key = %v, Limit = %v", buf[from:l], maxIndexEntrySize)
 			return nil, nil, ErrArrayItemKeyTooLong
 		}
-		if l > maxArrayIndexEntrySize {
+		if checkSize && l > maxArrayIndexEntrySize {
 			logging.Errorf("Encoded array key too long. Length of key = %v, Limit = %v", l, maxArrayIndexEntrySize)
 			return nil, nil, ErrArrayKeyTooLong
 		}

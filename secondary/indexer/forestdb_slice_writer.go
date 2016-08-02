@@ -501,10 +501,19 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			return
 		}
 
-		tmpBufPtr := arrayEncBufPool.Get()
-		defer arrayEncBufPool.Put(tmpBufPtr)
+		var tmpBuf []byte
+		// If old key is larger than max array limit, always handle it
+		if len(oldkey) > maxArrayIndexEntrySize {
+			// Allocate thrice the size of old key for array explosion
+			tmpBuf = make([]byte, 0, len(oldkey)*3)
+		} else {
+			tmpBufPtr := arrayEncBufPool.Get()
+			defer arrayEncBufPool.Put(tmpBufPtr)
+			tmpBuf = (*tmpBufPtr)[:0]
+		}
+
 		if oldEntriesBytes, oldKeyCount, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
-			(*tmpBufPtr)[:0], fdb.isArrayDistinct); err != nil {
+			tmpBuf, fdb.isArrayDistinct, false); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in retrieving "+
 				"compostite old secondary keys %v", fdb.id, fdb.idxInstId, err)
@@ -515,7 +524,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		tmpBufPtr := arrayEncBufPool.Get()
 		defer arrayEncBufPool.Put(tmpBufPtr)
 		newEntriesBytes, newKeyCount, err = ArrayIndexItems(key, fdb.arrayExprPosition,
-			(*tmpBufPtr)[:0], fdb.isArrayDistinct)
+			(*tmpBufPtr)[:0], fdb.isArrayDistinct, true)
 		if err == ErrArrayItemKeyTooLong {
 			logging.Errorf("ForestDBSlice::insert Error indexing docid: %s in Slice: %v. Error: Encoded array item too long (> %v). Skipped.",
 				docid, fdb.id, maxIndexEntrySize)
@@ -744,10 +753,19 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 		return
 	}
 
-	tmpBufPtr := arrayEncBufPool.Get()
-	defer arrayEncBufPool.Put(tmpBufPtr)
+	var tmpBuf []byte
+	// If old key is larger than max array limit, always handle it
+	if len(olditm) > maxArrayIndexEntrySize {
+		// Allocate thrice the size of old key for array explosion
+		tmpBuf = make([]byte, 0, len(olditm)*3)
+	} else {
+		tmpBufPtr := arrayEncBufPool.Get()
+		defer arrayEncBufPool.Put(tmpBufPtr)
+		tmpBuf = (*tmpBufPtr)[:0]
+	}
+
 	indexEntriesToBeDeleted, keyCount, err := ArrayIndexItems(olditm, fdb.arrayExprPosition,
-		(*tmpBufPtr)[:0], fdb.isArrayDistinct)
+		tmpBuf, fdb.isArrayDistinct, false)
 
 	if err != nil {
 		fdb.checkFatalDbError(err)

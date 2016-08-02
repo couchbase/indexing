@@ -459,6 +459,58 @@ func ExpectedArrayScanResponse_string(docs tc.KeyValues, jsonPath string, low, h
 					}
 				}
 			}
+		case []string:
+			arrayItems := json[fields[i]].([]string)
+			sortedArray := make([]string, len(arrayItems))
+			for i, arrayItem := range arrayItems {
+				sortedArray[i] = arrayItem
+			}
+			sort.Strings(sortedArray)
+			compressedArray := make([]string, len(arrayItems))
+			if isDistinct {
+				i := 0
+				for i < len(sortedArray) {
+					j := i + 1
+					for ; j < len(sortedArray); j++ {
+						if sortedArray[i] != sortedArray[j] {
+							compressedArray = append(compressedArray, sortedArray[i])
+							break
+						}
+					}
+
+					if j == len(sortedArray) {
+						compressedArray = append(compressedArray, sortedArray[i])
+						break
+					}
+					i = j
+				}
+				sortedArray = compressedArray
+			}
+
+			for _, item := range sortedArray {
+				switch inclusion {
+				case 0:
+					if item > low && item < high {
+						results[k] = append(results[k], []interface{}{item})
+					}
+				case 1:
+					if item >= low && item < high {
+						results[k] = append(results[k], []interface{}{item})
+					}
+				case 2:
+					if item > low && item <= high {
+						results[k] = append(results[k], []interface{}{item})
+					}
+				case 3:
+					if item >= low && item <= high {
+						results[k] = append(results[k], []interface{}{item})
+					}
+				default:
+					if item > low && item < high {
+						results[k] = append(results[k], []interface{}{item})
+					}
+				}
+			}
 
 		default:
 		}

@@ -402,7 +402,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 
 	var nmut int
 	newEntriesBytes, newKeyCount, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
-		mdb.arrayBuf[workerId], mdb.isArrayDistinct)
+		mdb.arrayBuf[workerId], mdb.isArrayDistinct, true)
 	if err == ErrArrayItemKeyTooLong {
 		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array item too long (> %v). Skipped.",
 			docid, mdb.id, maxIndexEntrySize)
