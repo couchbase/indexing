@@ -65,13 +65,6 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 
 	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
 
-	callb := func(cfg c.Config) {
-		logging.Infof("%v settings notifier from metakv\n", p.logPrefix)
-		cfg.LogConfig(p.logPrefix)
-		p.ResetConfig(cfg)
-	}
-	c.SetupSettingsNotifier(callb, make(chan struct{}))
-
 	cluster := p.clusterAddr
 	if !strings.HasPrefix(p.clusterAddr, "http://") {
 		cluster = "http://" + cluster
@@ -93,6 +86,14 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	go c.MemstatLogger(int64(config["projector.memstatTick"].Int()))
 	go p.mainAdminPort(reqch)
 	go p.watcherDameon(watchInterval, staleTimeout)
+
+	callb := func(cfg c.Config) {
+		logging.Infof("%v settings notifier from metakv\n", p.logPrefix)
+		cfg.LogConfig(p.logPrefix)
+		p.ResetConfig(cfg)
+	}
+	c.SetupSettingsNotifier(callb, make(chan struct{}))
+
 	logging.Infof("%v started ...\n", p.logPrefix)
 	return p
 }
@@ -101,7 +102,7 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 func (p *Projector) GetConfig() c.Config {
 	p.rw.Lock()
 	defer p.rw.Unlock()
-	return p.config
+	return p.config.Clone()
 }
 
 // ResetConfig accepts a full-set or subset of global configuration
@@ -317,12 +318,13 @@ func (p *Projector) doFailoverLog(
 	}
 	defer bucket.Close()
 
+	config := p.GetConfig()
 	protoFlogs := make([]*protobuf.FailoverLog, 0, len(vbuckets))
 	vbnos := c.Vbno32to16(vbuckets)
 	dcpConfig := map[string]interface{}{
-		"genChanSize":    p.config["projector.dcp.genChanSize"].Int(),
-		"dataChanSize":   p.config["projector.dcp.dataChanSize"].Int(),
-		"numConnections": p.config["projector.dcp.numConnections"].Int(),
+		"genChanSize":    config["projector.dcp.genChanSize"].Int(),
+		"dataChanSize":   config["projector.dcp.dataChanSize"].Int(),
+		"numConnections": config["projector.dcp.numConnections"].Int(),
 	}
 	flogs, err := bucket.GetFailoverLogs(opaque, vbnos, dcpConfig)
 	if err == nil {

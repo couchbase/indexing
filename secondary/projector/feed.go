@@ -1208,6 +1208,7 @@ func (feed *Feed) shutdown(opaque uint16) error {
 			logging.Errorf("%s", logging.StackTrace())
 		}
 	}
+	defer recovery()
 
 	// close upstream
 	for _, feeder := range feed.feeders {

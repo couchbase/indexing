@@ -14,14 +14,14 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/platform"
-	"time"
 	"sync"
+	"time"
 )
 
 var docBufPool *common.BytesBufPool
 
 func init() {
-	docBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN)
+	docBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN + MAX_DOCID_LEN + 2)
 }
 
 var fdbSnapIterPool *sync.Pool
