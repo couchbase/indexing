@@ -129,7 +129,7 @@ func (o *MetadataProvider) WatchMetadata(indexAdminPort string, callback watcher
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
 
-	logging.Debugf("MetadataProvider.WatchMetadata(): indexer %v", indexAdminPort)
+	logging.Infof("MetadataProvider.WatchMetadata(): indexer %v", indexAdminPort)
 
 	for _, watcher := range o.watchers {
 		if watcher.getAdminAddr() == indexAdminPort {
@@ -192,6 +192,9 @@ func (o *MetadataProvider) UnwatchMetadata(indexerId c.IndexerId) {
 		watcher.close()
 		watcher.cleanupIndices(o.repo)
 	}
+
+	// increment version when unwatch metadata
+	o.repo.incrementVersion()
 }
 
 func (o *MetadataProvider) CheckIndexerStatus() []IndexerStatus {
@@ -654,6 +657,9 @@ func (o *MetadataProvider) addWatcherNoLock(watcher *watcher, tempIndexerId c.In
 		oldWatcher.close()
 	}
 	o.watchers[indexerId] = watcher
+
+	// increment version whenever a watcher is registered
+	o.repo.incrementVersion()
 }
 
 func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
@@ -918,6 +924,14 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology) {
 			r.updateIndexMetadataNoLock(defnId, &instRef)
 		}
 	}
+
+	r.version++
+}
+
+func (r *metadataRepo) incrementVersion() {
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
 
 	r.version++
 }
