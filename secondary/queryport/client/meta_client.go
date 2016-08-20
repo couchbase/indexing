@@ -25,6 +25,8 @@ type metadataClient struct {
 	logtick                 time.Duration
 	randomWeight            float64 // value between [0, 1.0)
 	equivalenceFactor       float64 // value between [0, 1.0)
+
+	topoChangeLock sync.Mutex
 }
 
 // sherlock topology management, multi-node & single-partition.
@@ -484,6 +486,7 @@ func (b *metadataClient) getNode(defnID uint64) (adminport string, ok bool) {
 
 // update 2i cluster information,
 func (b *metadataClient) updateIndexerList(discardExisting bool) error {
+
 	clusterURL, err := common.ClusterAuthUrl(b.cluster)
 	if err != nil {
 		return err
@@ -495,6 +498,26 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 	if err := cinfo.Fetch(); err != nil {
 		return err
 	}
+
+	// UpdateIndexerList is synchronous, except for async callback from WatchMetadata() -- when indexer is
+	// not responding fast enough.
+	// TopoChangeLock is to protect the updates to index topology made by async callack.   Index topology contains
+	// the assignment between admniport and indexerId -- which is udpated by async callback.   Metadata version cannot
+	// enforce serializability of such assigment update, since it is not part of metadata tracked by metadataProvider.
+	//
+	// The adminport-indexerId assignment is used to figure out difference in topology so that gsiClient can call
+	// WatchMetadata and UnwatchMetadata properly.   Corruption of such assignment can cause a lot of issue.
+	//
+	// The lock is to protect race condition in such case
+	// 1) make sure that updateIndexerList() is finished before any its callback is invoked.
+	//    This is to ensure async callback does not lose its work.
+	// 2) make sure that the async callback is called sequentially so their changes on adminport-indexerId are accumulative.
+	//    This is to ensure async callback does not lose its work.
+	// 3) if there are consecutive topology changes by ns-server, make sure that async callback will not save a stale
+	//    adminport-indexerId assignment by overwriting the assignment created by second topology changes.
+	b.topoChangeLock.Lock()
+	defer b.topoChangeLock.Unlock()
+
 	// populate indexers' adminport and queryport
 	adminports, err := getIndexerAdminports(cinfo)
 	if err != nil {
@@ -573,7 +596,7 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 			b.mdClient.UnwatchMetadata(indexerID)
 		}
 	}
-	b.safeupdate(m, false /*force*/)
+	b.safeupdate(m, true /*force*/)
 	return err
 }
 
@@ -581,16 +604,27 @@ func (b *metadataClient) updateIndexer(
 	adminport string, newIndexerId, oldIndexerId common.IndexerId) {
 
 	func() {
-		logging.Infof(
-			"Acknowledged that new indexer is registered.  Indexer = %v, id = %v",
-			adminport, newIndexerId)
+		b.topoChangeLock.Lock()
+		defer b.topoChangeLock.Unlock()
+
 		adminports := make(map[string]common.IndexerId)
 		currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 		for admnport, indexerId := range currmeta.adminports {
 			adminports[admnport] = indexerId
 		}
-		adminports[adminport] = newIndexerId
-		b.safeupdate(adminports, false /*force*/)
+
+		// UpdateIndexer is a async call.  When this is invoked, currmeta.adminports may be different.
+		if _, ok := adminports[adminport]; ok {
+			logging.Infof(
+				"Acknowledged that new indexer is registered.  Indexer = %v, id = %v",
+				adminport, newIndexerId)
+			adminports[adminport] = newIndexerId
+			b.safeupdate(adminports, true /*force*/)
+		} else {
+			logging.Infof(
+				"New indexer registration is skipped.  Indexer may have been rebalanced out (unwatch).  Indexer = %v, id = %v",
+				adminport, newIndexerId)
+		}
 	}()
 }
 
@@ -675,6 +709,12 @@ func (b *metadataClient) safeupdate(
 			atomic.StorePointer(&b.indexers, unsafe.Pointer(newmeta))
 			logging.Infof("initialized currmeta %v\n", newmeta.version)
 			return
+		} else if force {
+			if newmeta.version < currmeta.version {
+				fmsg := "skip newmeta %v <= %v\n"
+				logging.Infof(fmsg, newmeta.version, currmeta.version)
+				return
+			}
 		} else if newmeta.version <= currmeta.version {
 			fmsg := "skip newmeta %v <= %v\n"
 			logging.Infof(fmsg, newmeta.version, currmeta.version)

@@ -182,6 +182,9 @@ func (o *MetadataProvider) UnwatchMetadata(indexerId c.IndexerId) {
 		killch, ok := o.pendings[indexerId]
 		if ok {
 			delete(o.pendings, indexerId)
+			// notify retryHelper to terminate.  This is for
+			// watcher that is still waiting to complete
+			// handshake with indexer.
 			killch <- true
 		}
 		return
@@ -637,6 +640,15 @@ func (o *MetadataProvider) retryHelper(watcher *watcher, readych chan bool, inde
 	func() {
 		o.mutex.Lock()
 		defer o.mutex.Unlock()
+
+		// make sure watcher is still active. Unwatch metadata could have
+		// been called just after watcher.notifyReady has finished.
+		if _, ok := o.pendings[tempIndexerId]; !ok {
+			watcher.close()
+			watcher.cleanupIndices(o.repo)
+			return
+		}
+
 		o.addWatcherNoLock(watcher, tempIndexerId)
 	}()
 
@@ -1286,6 +1298,13 @@ func (w *watcher) cleanupIndices(repo *metadataRepo) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
+	// CleanupIndices may not necessarily remove all indcies
+	// from the repository for this watcher, since there may
+	// be new messages still in flight from gometa.   Even so,
+	// repoistory will filter out any watcher that has been
+	// terminated. So there is no functional issue.
+	// TODO: It is actually possible to wait for gometa to
+	// stop, before cleaning up the indices.
 	for defnId, _ := range w.indices {
 		repo.removeDefn(defnId)
 	}
