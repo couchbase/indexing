@@ -129,7 +129,7 @@ func (o *MetadataProvider) WatchMetadata(indexAdminPort string, callback watcher
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
 
-	logging.Debugf("MetadataProvider.WatchMetadata(): indexer %v", indexAdminPort)
+	logging.Infof("MetadataProvider.WatchMetadata(): indexer %v", indexAdminPort)
 
 	for _, watcher := range o.watchers {
 		if watcher.getAdminAddr() == indexAdminPort {
@@ -182,6 +182,9 @@ func (o *MetadataProvider) UnwatchMetadata(indexerId c.IndexerId) {
 		killch, ok := o.pendings[indexerId]
 		if ok {
 			delete(o.pendings, indexerId)
+			// notify retryHelper to terminate.  This is for
+			// watcher that is still waiting to complete
+			// handshake with indexer.
 			killch <- true
 		}
 		return
@@ -192,6 +195,9 @@ func (o *MetadataProvider) UnwatchMetadata(indexerId c.IndexerId) {
 		watcher.close()
 		watcher.cleanupIndices(o.repo)
 	}
+
+	// increment version when unwatch metadata
+	o.repo.incrementVersion()
 }
 
 func (o *MetadataProvider) CheckIndexerStatus() []IndexerStatus {
@@ -634,6 +640,15 @@ func (o *MetadataProvider) retryHelper(watcher *watcher, readych chan bool, inde
 	func() {
 		o.mutex.Lock()
 		defer o.mutex.Unlock()
+
+		// make sure watcher is still active. Unwatch metadata could have
+		// been called just after watcher.notifyReady has finished.
+		if _, ok := o.pendings[tempIndexerId]; !ok {
+			watcher.close()
+			watcher.cleanupIndices(o.repo)
+			return
+		}
+
 		o.addWatcherNoLock(watcher, tempIndexerId)
 	}()
 
@@ -654,6 +669,9 @@ func (o *MetadataProvider) addWatcherNoLock(watcher *watcher, tempIndexerId c.In
 		oldWatcher.close()
 	}
 	o.watchers[indexerId] = watcher
+
+	// increment version whenever a watcher is registered
+	o.repo.incrementVersion()
 }
 
 func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
@@ -918,6 +936,14 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology) {
 			r.updateIndexMetadataNoLock(defnId, &instRef)
 		}
 	}
+
+	r.version++
+}
+
+func (r *metadataRepo) incrementVersion() {
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
 
 	r.version++
 }
@@ -1272,6 +1298,13 @@ func (w *watcher) cleanupIndices(repo *metadataRepo) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
+	// CleanupIndices may not necessarily remove all indcies
+	// from the repository for this watcher, since there may
+	// be new messages still in flight from gometa.   Even so,
+	// repoistory will filter out any watcher that has been
+	// terminated. So there is no functional issue.
+	// TODO: It is actually possible to wait for gometa to
+	// stop, before cleaning up the indices.
 	for defnId, _ := range w.indices {
 		repo.removeDefn(defnId)
 	}
