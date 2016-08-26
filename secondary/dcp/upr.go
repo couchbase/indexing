@@ -351,6 +351,8 @@ func (feed *DcpFeed) dcpRequestStream(
 		fmsg := "%v ##%x notFound master node for vbucket %d\n"
 		logging.Errorf(fmsg, prefix, opaque, vb)
 		return ErrorInvalidVbucket
+	} else if len(feed.nodeFeeds[master]) == 0 {
+		return ErrorInvalidVbucket
 	}
 
 	var err error
