@@ -999,7 +999,7 @@ var SystemConfig = Config{
 		"Days of the week to run full compaction (Sunday, Monday, ...)",
 		"",
 		false, // mutable
-		false, // case-insensitive
+		true,  // case-sensitive
 	},
 	"indexer.settings.compaction.abort_exceed_interval": ConfigValue{
 		false,
