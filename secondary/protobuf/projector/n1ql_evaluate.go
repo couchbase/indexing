@@ -59,8 +59,22 @@ func N1QLTransform(
 		} else {
 			if err != nil {
 				return nil, err
-			} else if vector == nil && skip { // MISSING
+			} else if vector == nil { //nil is ERROR condition
+				logging.Warnf("vector from EvaluateForIndex() is nil for docid %v. Skipping the document.", string(docid))
 				return nil, nil
+			}
+
+			if skip { //array is leading
+				if len(vector) == 0 { //array is empty
+					return nil, nil
+				}
+				if len(vector) == 1 && vector[0].Type() == qvalue.MISSING { //array is missing
+					return nil, nil
+				}
+			} else if !skip {
+				if len(vector) == 0 { //array is non-leading and is empty
+					vector = []qvalue.Value{missing}
+				}
 			}
 			skip = false
 
