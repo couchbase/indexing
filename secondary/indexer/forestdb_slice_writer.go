@@ -69,7 +69,7 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	config.SetMaxWriterLockProb(uint8(prob))
 	walSize := sysconf["settings.wal_size"].Uint64()
 	config.SetWalThreshold(walSize)
-	kept_headers := sysconf["settings.recovery.max_rollbacks"].Int()
+	kept_headers := sysconf["settings.recovery.max_rollbacks"].Int() + 1 //MB-20753
 	config.SetNumKeepingHeaders(uint8(kept_headers))
 	logging.Verbosef("NewForestDBSlice(): max writer lock prob %d", prob)
 	logging.Verbosef("NewForestDBSlice(): wal size %d", walSize)
@@ -1285,9 +1285,9 @@ snaploop:
 
 		cm := s.GetKvsCommitMarkers()
 		for _, c := range cm {
-			//if seqNum of "main" kvs is less than or equal to oldest snapshot seqnum
+			//if seqNum of "main" kvs is less than the oldest snapshot seqnum
 			//it is safe to compact upto that snapshot
-			if c.GetKvStoreName() == "main" && c.GetSeqNum() <= mainSeq {
+			if c.GetKvStoreName() == "main" && c.GetSeqNum() < mainSeq {
 				snapMarker = s.GetSnapMarker()
 				compactSeqNum = c.GetSeqNum()
 				break snaploop
@@ -1396,7 +1396,7 @@ func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {
 
 	// update circular compaction setting in fdb
 	nmode := strings.ToLower(cfg["settings.compaction.compaction_mode"].String())
-	kept_headers := uint8(cfg["settings.recovery.max_rollbacks"].Int())
+	kept_headers := uint8(cfg["settings.recovery.max_rollbacks"].Int() + 1) //MB-20753
 	fconfig := forestdb.DefaultConfig()
 	reuse_threshold := uint8(fconfig.BlockReuseThreshold())
 
