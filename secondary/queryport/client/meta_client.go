@@ -535,6 +535,13 @@ func (b *metadataClient) updateIndexerList(discardExisting bool) error {
 			// to be down, such that the metadata client can stop the
 			// background watcher.
 			fn := func(ad string, n_id common.IndexerId, o_id common.IndexerId) {
+				// following time.Sleep() ensures that bootstrap initialization
+				// completes before other async activities into metadataClient{}
+				currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
+				for currmeta == nil {
+					time.Sleep(10 * time.Millisecond)
+					currmeta = (*indexTopology)(atomic.LoadPointer(&b.indexers))
+				}
 				b.updateIndexer(ad, n_id, o_id)
 			}
 
