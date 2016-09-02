@@ -749,6 +749,7 @@ type DcpEvent struct {
 
 func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
 	event := &DcpEvent{
+		Cas:     rq.Cas,
 		Opcode:  rq.Opcode,
 		VBucket: stream.Vbucket,
 		VBuuid:  stream.Vbuuid,
