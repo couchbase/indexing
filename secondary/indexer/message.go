@@ -89,6 +89,7 @@ const (
 	CLUST_MGR_SET_LOCAL
 	CLUST_MGR_DEL_BUCKET
 	CLUST_MGR_INDEXER_READY
+	CLUST_MGR_CLEANUP_INDEX
 
 	//CBQ_BRIDGE_SHUTDOWN
 	CBQ_BRIDGE_SHUTDOWN
@@ -104,6 +105,11 @@ const (
 	INDEXER_BUCKET_NOT_FOUND
 	INDEXER_ROLLBACK
 	STREAM_REQUEST_DONE
+	INDEXER_PAUSE
+	INDEXER_RESUME
+	INDEXER_PREPARE_UNPAUSE
+	INDEXER_UNPAUSE
+	INDEXER_BOOTSTRAP
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -129,6 +135,7 @@ const (
 	INDEXER_STATS
 
 	STATS_RESET
+	REPAIR_ABORT
 )
 
 type Message interface {
@@ -501,6 +508,7 @@ type MsgMutMgrFlushDone struct {
 	ts       *common.TsVbuuid
 	streamId common.StreamId
 	bucket   string
+	aborted  bool
 }
 
 func (m *MsgMutMgrFlushDone) GetMsgType() MsgType {
@@ -519,12 +527,17 @@ func (m *MsgMutMgrFlushDone) GetBucket() string {
 	return m.bucket
 }
 
+func (m *MsgMutMgrFlushDone) GetAborted() bool {
+	return m.aborted
+}
+
 func (m *MsgMutMgrFlushDone) String() string {
 
 	str := "\n\tMessage: MsgMutMgrFlushDone"
 	str += fmt.Sprintf("\n\tStream: %v", m.streamId)
 	str += fmt.Sprintf("\n\tBucket: %v", m.bucket)
 	str += fmt.Sprintf("\n\tTS: %v", m.ts)
+	str += fmt.Sprintf("\n\tAborted: %v", m.aborted)
 	return str
 
 }
@@ -931,6 +944,23 @@ func (m *MsgRollback) GetRollbackTs() *common.TsVbuuid {
 	return m.rollbackTs
 }
 
+type MsgRepairAbort struct {
+	streamId common.StreamId
+	bucket   string
+}
+
+func (m *MsgRepairAbort) GetMsgType() MsgType {
+	return REPAIR_ABORT
+}
+
+func (m *MsgRepairAbort) GetStreamId() common.StreamId {
+	return m.streamId
+}
+
+func (m *MsgRepairAbort) GetBucket() string {
+	return m.bucket
+}
+
 type MsgIndexSnapRequest struct {
 	ts          *common.TsVbuuid
 	cons        common.Consistency
@@ -991,8 +1021,9 @@ func (m *MsgStatsRequest) GetReplyChannel() chan bool {
 }
 
 type MsgIndexCompact struct {
-	instId common.IndexInstId
-	errch  chan error
+	instId    common.IndexInstId
+	errch     chan error
+	abortTime time.Time
 }
 
 func (m *MsgIndexCompact) GetMsgType() MsgType {
@@ -1005,6 +1036,10 @@ func (m *MsgIndexCompact) GetInstId() common.IndexInstId {
 
 func (m *MsgIndexCompact) GetErrorChannel() chan error {
 	return m.errch
+}
+
+func (m *MsgIndexCompact) GetAbortTime() time.Time {
+	return m.abortTime
 }
 
 //KV_STREAM_REPAIR
@@ -1116,6 +1151,19 @@ func (m *MsgResetStats) GetMsgType() MsgType {
 	return STATS_RESET
 }
 
+//INDEXER_PAUSE
+//INDEXER_RESUME
+//INDEXER_PREPARE_UNPAUSE
+//INDEXER_UNPAUSE
+//INDEXER_BOOTSTRAP
+type MsgIndexerState struct {
+	mType MsgType
+}
+
+func (m *MsgIndexerState) GetMsgType() MsgType {
+	return m.mType
+}
+
 //Helper function to return string for message type
 
 func (m MsgType) String() string {
@@ -1185,6 +1233,8 @@ func (m MsgType) String() string {
 		return "TK_MERGE_STREAM_ACK"
 	case TK_GET_BUCKET_HWT:
 		return "TK_GET_BUCKET_HWT"
+	case REPAIR_ABORT:
+		return "REPAIR_ABORT"
 
 	case STORAGE_MGR_SHUTDOWN:
 		return "STORAGE_MGR_SHUTDOWN"
@@ -1217,6 +1267,16 @@ func (m MsgType) String() string {
 		return "INDEXER_ROLLBACK"
 	case STREAM_REQUEST_DONE:
 		return "STREAM_REQUEST_DONE"
+	case INDEXER_PAUSE:
+		return "INDEXER_PAUSE"
+	case INDEXER_RESUME:
+		return "INDEXER_RESUME"
+	case INDEXER_PREPARE_UNPAUSE:
+		return "INDEXER_PREPARE_UNPAUSE"
+	case INDEXER_UNPAUSE:
+		return "INDEXER_UNPAUSE"
+	case INDEXER_BOOTSTRAP:
+		return "INDEXER_BOOTSTRAP"
 
 	case SCAN_COORD_SHUTDOWN:
 		return "SCAN_COORD_SHUTDOWN"
@@ -1260,6 +1320,12 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_GET_LOCAL"
 	case CLUST_MGR_SET_LOCAL:
 		return "CLUST_MGR_SET_LOCAL"
+	case CLUST_MGR_DEL_BUCKET:
+		return "CLUST_MGR_DEL_BUCKET"
+	case CLUST_MGR_INDEXER_READY:
+		return "CLUST_MGR_INDEXER_READY"
+	case CLUST_MGR_CLEANUP_INDEX:
+		return "CLUST_MGR_CLEANUP_INDEX"
 
 	case CBQ_CREATE_INDEX_DDL:
 		return "CBQ_CREATE_INDEX_DDL"

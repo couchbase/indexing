@@ -137,6 +137,7 @@ func (d *IndexScanDecoder) Routine() error {
 	defer d.CloseRead()
 
 	var sk, docid []byte
+	var count int
 	tmpBuf := p.GetBlock()
 	defer p.PutBlock(tmpBuf)
 
@@ -153,16 +154,19 @@ loop:
 		}
 
 		t := (*tmpBuf)[:0]
+		count = 1
 		if d.p.req.isPrimary {
 			sk, docid = piSplitEntry(row, t)
 		} else {
-			sk, docid = siSplitEntry(row, t)
+			sk, docid, count = siSplitEntry(row, t)
 		}
 
 		d.p.bytesRead += uint64(len(sk) + len(docid))
-		err = d.WriteItem(sk, docid)
-		if err != nil {
-			break
+		for i := 0; i < count; i++ {
+			err = d.WriteItem(sk, docid)
+			if err != nil {
+				break
+			}
 		}
 	}
 
@@ -229,10 +233,12 @@ func piSplitEntry(entry []byte, tmp []byte) ([]byte, []byte) {
 	return sk, docid[len(sk):]
 }
 
-func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte) {
+func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
 	e := secondaryIndexEntry(entry)
 	sk, err := e.ReadSecKey(tmp)
 	c.CrashOnError(err)
 	docid, err := e.ReadDocId(sk)
-	return sk, docid[len(sk):]
+	c.CrashOnError(err)
+	count := e.Count()
+	return sk, docid[len(sk):], count
 }

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"time"
 )
 
 var (
@@ -117,12 +118,20 @@ func (s *fdbSnapshot) All(callb EntryCallback) error {
 func (s *fdbSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
 	cmpFn CmpEntry, callback EntryCallback) error {
 
+	ttime := time.Now()
+
 	var entry IndexEntry
 	it, err := newFDBSnapshotIterator(s)
 	if err != nil {
 		return err
 	}
-	defer closeIterator(it)
+	defer func() {
+		go closeIterator(it)
+	}()
+
+	defer func() {
+		s.slice.idxStats.Timings.stScanPipelineIterate.Put(time.Now().Sub(ttime))
+	}()
 
 	if low.Bytes() == nil {
 		it.SeekFirst()

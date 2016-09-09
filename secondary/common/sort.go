@@ -2,7 +2,7 @@
 
 // sorting interface for byte-slice.
 
-package collatejson
+package common
 
 import "bytes"
 

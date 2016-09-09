@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/platform"
 	"github.com/couchbase/indexing/secondary/stats"
 	"net/http"
@@ -22,6 +23,12 @@ import (
 	"time"
 	"unsafe"
 )
+
+var uptime time.Time
+
+func init() {
+	uptime = time.Now()
+}
 
 type BucketStats struct {
 	bucket     string
@@ -42,19 +49,21 @@ func (s *BucketStats) Init() {
 }
 
 type IndexTimingStats struct {
-	stCloneHandle    stats.TimingStat
-	stNewIterator    stats.TimingStat
-	stIteratorNext   stats.TimingStat
-	stSnapshotCreate stats.TimingStat
-	stSnapshotClose  stats.TimingStat
-	stHandleOpen     stats.TimingStat
-	stCommit         stats.TimingStat
-	stKVGet          stats.TimingStat
-	stKVSet          stats.TimingStat
-	stKVDelete       stats.TimingStat
-	stKVInfo         stats.TimingStat
-	stKVMetaGet      stats.TimingStat
-	stKVMetaSet      stats.TimingStat
+	stCloneHandle           stats.TimingStat
+	stNewIterator           stats.TimingStat
+	stIteratorNext          stats.TimingStat
+	stSnapshotCreate        stats.TimingStat
+	stSnapshotClose         stats.TimingStat
+	stPersistSnapshotCreate stats.TimingStat
+	stScanPipelineIterate   stats.TimingStat
+	stCommit                stats.TimingStat
+	stKVGet                 stats.TimingStat
+	stKVSet                 stats.TimingStat
+	stKVDelete              stats.TimingStat
+	stKVInfo                stats.TimingStat
+	stKVMetaGet             stats.TimingStat
+	stKVMetaSet             stats.TimingStat
+	dcpSeqs                 stats.TimingStat
 }
 
 func (it *IndexTimingStats) Init() {
@@ -63,48 +72,60 @@ func (it *IndexTimingStats) Init() {
 	it.stNewIterator.Init()
 	it.stSnapshotCreate.Init()
 	it.stSnapshotClose.Init()
-	it.stHandleOpen.Init()
+	it.stPersistSnapshotCreate.Init()
 	it.stKVGet.Init()
 	it.stKVSet.Init()
 	it.stIteratorNext.Init()
+	it.stScanPipelineIterate.Init()
 	it.stKVDelete.Init()
 	it.stKVInfo.Init()
 	it.stKVMetaGet.Init()
 	it.stKVMetaSet.Init()
+	it.dcpSeqs.Init()
 }
 
 type IndexStats struct {
 	name, bucket string
 
-	scanDuration         stats.Int64Val
-	insertBytes          stats.Int64Val
-	numDocsPending       stats.Int64Val
-	scanWaitDuration     stats.Int64Val
-	numDocsIndexed       stats.Int64Val
-	numRequests          stats.Int64Val
-	numCompletedRequests stats.Int64Val
-	numRowsReturned      stats.Int64Val
-	diskSize             stats.Int64Val
-	buildProgress        stats.Int64Val
-	numDocsQueued        stats.Int64Val
-	deleteBytes          stats.Int64Val
-	dataSize             stats.Int64Val
-	scanBytesRead        stats.Int64Val
-	getBytes             stats.Int64Val
-	itemsCount           stats.Int64Val
-	numCommits           stats.Int64Val
-	numSnapshots         stats.Int64Val
-	numCompactions       stats.Int64Val
-	flushQueueSize       stats.Int64Val
-	avgTsInterval        stats.Int64Val
-	avgTsItemsCount      stats.Int64Val
-	lastNumFlushQueued   stats.Int64Val
-	lastTsTime           stats.Int64Val
-	numFlushQueued       stats.Int64Val
-	fragPercent          stats.Int64Val
-	sinceLastSnapshot    stats.Int64Val
-	numSnapshotWaiters   stats.Int64Val
-	numLastSnapshotReply stats.Int64Val
+	scanDuration          stats.Int64Val
+	scanReqDuration       stats.Int64Val
+	scanReqInitDuration   stats.Int64Val
+	scanReqAllocDuration  stats.Int64Val
+	dcpSeqsDuration       stats.Int64Val
+	insertBytes           stats.Int64Val
+	numDocsPending        stats.Int64Val
+	scanWaitDuration      stats.Int64Val
+	numDocsIndexed        stats.Int64Val
+	numDocsProcessed      stats.Int64Val
+	numRequests           stats.Int64Val
+	numCompletedRequests  stats.Int64Val
+	numRowsReturned       stats.Int64Val
+	diskSize              stats.Int64Val
+	buildProgress         stats.Int64Val
+	numDocsQueued         stats.Int64Val
+	deleteBytes           stats.Int64Val
+	dataSize              stats.Int64Val
+	scanBytesRead         stats.Int64Val
+	getBytes              stats.Int64Val
+	itemsCount            stats.Int64Val
+	numCommits            stats.Int64Val
+	numSnapshots          stats.Int64Val
+	numCompactions        stats.Int64Val
+	numItemsFlushed       stats.Int64Val
+	avgTsInterval         stats.Int64Val
+	avgTsItemsCount       stats.Int64Val
+	lastNumFlushQueued    stats.Int64Val
+	lastTsTime            stats.Int64Val
+	numDocsFlushQueued    stats.Int64Val
+	fragPercent           stats.Int64Val
+	sinceLastSnapshot     stats.Int64Val
+	numSnapshotWaiters    stats.Int64Val
+	numLastSnapshotReply  stats.Int64Val
+	numItemsRestored      stats.Int64Val
+	diskSnapStoreDuration stats.Int64Val
+	diskSnapLoadDuration  stats.Int64Val
+	notReadyError         stats.Int64Val
+	clientCancelError     stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -123,10 +144,14 @@ func (h *IndexerStatsHolder) Set(s *IndexerStats) {
 
 func (s *IndexStats) Init() {
 	s.scanDuration.Init()
+	s.scanReqDuration.Init()
+	s.scanReqInitDuration.Init()
+	s.scanReqAllocDuration.Init()
 	s.insertBytes.Init()
 	s.numDocsPending.Init()
 	s.scanWaitDuration.Init()
 	s.numDocsIndexed.Init()
+	s.numDocsProcessed.Init()
 	s.numRequests.Init()
 	s.numCompletedRequests.Init()
 	s.numRowsReturned.Init()
@@ -146,11 +171,16 @@ func (s *IndexStats) Init() {
 	s.numCommits.Init()
 	s.numSnapshots.Init()
 	s.numCompactions.Init()
-	s.flushQueueSize.Init()
-	s.numFlushQueued.Init()
+	s.numItemsFlushed.Init()
+	s.numDocsFlushQueued.Init()
 	s.sinceLastSnapshot.Init()
 	s.numSnapshotWaiters.Init()
 	s.numLastSnapshotReply.Init()
+	s.numItemsRestored.Init()
+	s.diskSnapStoreDuration.Init()
+	s.diskSnapLoadDuration.Init()
+	s.notReadyError.Init()
+	s.clientCancelError.Init()
 
 	s.Timings.Init()
 }
@@ -159,11 +189,16 @@ type IndexerStats struct {
 	indexes map[common.IndexInstId]*IndexStats
 	buckets map[string]*BucketStats
 
-	numConnections stats.Int64Val
-	memoryQuota    stats.Int64Val
-	memoryUsed     stats.Int64Val
-	needsRestart   stats.BoolVal
-	statsResponse  stats.TimingStat
+	numConnections    stats.Int64Val
+	memoryQuota       stats.Int64Val
+	memoryUsed        stats.Int64Val
+	memoryUsedStorage stats.Int64Val
+	memoryUsedQueue   stats.Int64Val
+	needsRestart      stats.BoolVal
+	statsResponse     stats.TimingStat
+	notFoundError     stats.Int64Val
+
+	indexerState stats.Int64Val
 }
 
 func (s *IndexerStats) Init() {
@@ -172,8 +207,12 @@ func (s *IndexerStats) Init() {
 	s.numConnections.Init()
 	s.memoryQuota.Init()
 	s.memoryUsed.Init()
+	s.memoryUsedStorage.Init()
+	s.memoryUsedQueue.Init()
 	s.needsRestart.Init()
 	s.statsResponse.Init()
+	s.indexerState.Init()
+	s.notFoundError.Init()
 }
 
 func (s *IndexerStats) Reset() {
@@ -221,29 +260,50 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		statsMap[fmt.Sprintf("%s%s", prefix, k)] = v
 	}
 
+	addStat("uptime", fmt.Sprintf("%s", time.Since(uptime)))
 	addStat("num_connections", is.numConnections.Value())
+	addStat("index_not_found_errcount", is.notFoundError.Value())
 	addStat("memory_quota", is.memoryQuota.Value())
 	addStat("memory_used", is.memoryUsed.Value())
+	addStat("memory_used_storage", is.memoryUsedStorage.Value())
+	addStat("memory_used_queue", is.memoryUsedQueue.Value())
 	addStat("needs_restart", is.needsRestart.Value())
+	storageMode := fmt.Sprintf("%s", common.GetStorageMode())
+	addStat("storage_mode", storageMode)
+
+	indexerState := common.IndexerState(is.indexerState.Value())
+	if indexerState == common.INDEXER_PREPARE_UNPAUSE {
+		indexerState = common.INDEXER_PAUSED
+	}
+	addStat("indexer_state", fmt.Sprintf("%s", indexerState))
+
 	addStat("timings/stats_response", is.statsResponse.Value())
 
 	for _, s := range is.indexes {
-		var scanLat, waitLat int64
+		var scanLat, waitLat, scanReqLat, scanReqInitLat, scanReqAllocLat int64
 		reqs := s.numRequests.Value()
 
 		if reqs > 0 {
 			scanDur := s.scanDuration.Value()
 			waitDur := s.scanWaitDuration.Value()
+			scanReqDur := s.scanReqDuration.Value()
+			scanReqInitDur := s.scanReqInitDuration.Value()
+			scanReqAllocDur := s.scanReqAllocDuration.Value()
 			scanLat = scanDur / reqs
 			waitLat = waitDur / reqs
+			scanReqLat = scanReqDur / reqs
+			scanReqInitLat = scanReqInitDur / reqs
+			scanReqAllocLat = scanReqAllocDur / reqs
 		}
 
 		prefix = fmt.Sprintf("%s:%s:", s.bucket, s.name)
 		addStat("total_scan_duration", s.scanDuration.Value())
+		addStat("total_scan_request_duration", s.scanReqDuration.Value())
 		addStat("insert_bytes", s.insertBytes.Value())
 		addStat("num_docs_pending", s.numDocsPending.Value())
 		addStat("scan_wait_duration", s.scanWaitDuration.Value())
 		addStat("num_docs_indexed", s.numDocsIndexed.Value())
+		addStat("num_docs_processed", s.numDocsProcessed.Value())
 		addStat("num_requests", s.numRequests.Value())
 		addStat("num_completed_requests", s.numCompletedRequests.Value())
 		addStat("num_rows_returned", s.numRowsReturned.Value())
@@ -261,23 +321,34 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_commits", s.numCommits.Value())
 		addStat("num_snapshots", s.numSnapshots.Value())
 		addStat("num_compactions", s.numCompactions.Value())
-		addStat("flush_queue_size", s.flushQueueSize.Value())
+		addStat("flush_queue_size", postiveNum(s.numDocsFlushQueued.Value()-s.numDocsIndexed.Value()))
+		addStat("num_items_flushed", s.numItemsFlushed.Value())
 		addStat("avg_scan_latency", scanLat)
 		addStat("avg_scan_wait_latency", waitLat)
-		addStat("num_flush_queued", s.numFlushQueued.Value())
+		addStat("avg_scan_request_latency", scanReqLat)
+		addStat("avg_scan_request_init_latency", scanReqInitLat)
+		addStat("avg_scan_request_alloc_latency", scanReqAllocLat)
+		addStat("num_flush_queued", s.numDocsFlushQueued.Value())
 		addStat("since_last_snapshot", s.sinceLastSnapshot.Value())
 		addStat("num_snapshot_waiters", s.numSnapshotWaiters.Value())
 		addStat("num_last_snapshot_reply", s.numLastSnapshotReply.Value())
+		addStat("num_items_restored", s.numItemsRestored.Value())
+		addStat("disk_store_duration", s.diskSnapStoreDuration.Value())
+		addStat("disk_load_duration", s.diskSnapLoadDuration.Value())
+		addStat("not_ready_errcount", s.notReadyError.Value())
+		addStat("client_cancel_errcount", s.clientCancelError.Value())
 
+		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
 		addStat("timings/storage_commit", s.Timings.stCommit.Value())
 		addStat("timings/storage_new_iterator", s.Timings.stNewIterator.Value())
 		addStat("timings/storage_snapshot_create", s.Timings.stSnapshotCreate.Value())
 		addStat("timings/storage_snapshot_close", s.Timings.stSnapshotClose.Value())
-		addStat("timings/storage_handle_open", s.Timings.stHandleOpen.Value())
+		addStat("timings/storage_persist_snapshot_create", s.Timings.stPersistSnapshotCreate.Value())
 		addStat("timings/storage_get", s.Timings.stKVGet.Value())
 		addStat("timings/storage_set", s.Timings.stKVSet.Value())
 		addStat("timings/storage_iterator_next", s.Timings.stIteratorNext.Value())
+		addStat("timings/scan_pipeline_iterate", s.Timings.stScanPipelineIterate.Value())
 		addStat("timings/storage_del", s.Timings.stKVDelete.Value())
 		addStat("timings/storage_info", s.Timings.stKVInfo.Value())
 		addStat("timings/storage_meta_get", s.Timings.stKVMetaGet.Value())
@@ -290,6 +361,9 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("num_mutations_queued", s.numMutationsQueued.Value())
 		addStat("ts_queue_size", s.tsQueueSize.Value())
 		addStat("num_nonalign_ts", s.numNonAlignTS.Value())
+		if st := common.BucketSeqsTiming(s.bucket); st != nil {
+			addStat("timings/dcp_getseqs", st.Value())
+		}
 	}
 
 	return json.Marshal(statsMap)
@@ -329,8 +403,8 @@ type statsManager struct {
 }
 
 func NewStatsManager(supvCmdch MsgChannel,
-	supvMsgch MsgChannel, config common.Config) (statsManager, Message) {
-	s := statsManager{
+	supvMsgch MsgChannel, config common.Config) (*statsManager, Message) {
+	s := &statsManager{
 		supvCmdch:    supvCmdch,
 		supvMsgch:    supvMsgch,
 		lastStatTime: time.Unix(0, 0),
@@ -342,6 +416,8 @@ func NewStatsManager(supvCmdch MsgChannel,
 
 	http.HandleFunc("/stats", s.handleStatsReq)
 	http.HandleFunc("/stats/mem", s.handleMemStatsReq)
+	http.HandleFunc("/stats/storage/mm", s.handleStorageMMStatsReq)
+	http.HandleFunc("/stats/storage", s.handleStorageStatsReq)
 	http.HandleFunc("/stats/reset", s.handleStatsResetReq)
 	go s.run()
 	go s.runStatsDumpLogger()
@@ -401,18 +477,15 @@ func (s *statsManager) handleStatsReq(w http.ResponseWriter, r *http.Request) {
 			sync = true
 		}
 		stats := s.stats.Get()
-		t0 := time.Now()
-		s.tryUpdateStats(sync)
 
-		if stats == nil {
-			w.WriteHeader(500)
-			w.Write([]byte("Indexer not ready"))
-		} else {
-			bytes, _ := stats.MarshalJSON()
-			w.WriteHeader(200)
-			w.Write(bytes)
-			stats.statsResponse.Put(time.Since(t0))
+		t0 := time.Now()
+		if common.IndexerState(stats.indexerState.Value()) != common.INDEXER_BOOTSTRAP {
+			s.tryUpdateStats(sync)
 		}
+		bytes, _ := stats.MarshalJSON()
+		w.WriteHeader(200)
+		w.Write(bytes)
+		stats.statsResponse.Put(time.Since(t0))
 	} else {
 		w.WriteHeader(400)
 		w.Write([]byte("Unsupported method"))
@@ -426,6 +499,48 @@ func (s *statsManager) handleMemStatsReq(w http.ResponseWriter, r *http.Request)
 		bytes, _ := json.Marshal(stats)
 		w.WriteHeader(200)
 		w.Write(bytes)
+	} else {
+		w.WriteHeader(400)
+		w.Write([]byte("Unsupported method"))
+	}
+}
+
+func (s *statsManager) getStorageStats() string {
+	var result string
+	replych := make(chan []IndexStorageStats)
+	statReq := &MsgIndexStorageStats{respch: replych}
+	s.supvMsgch <- statReq
+	res := <-replych
+
+	for _, sts := range res {
+		result += fmt.Sprintf("==== Index Instance %d ====\n", sts.InstId)
+		for _, data := range sts.GetInternalData() {
+			result += data
+		}
+		result += "========\n"
+	}
+
+	return result
+}
+
+func (s *statsManager) handleStorageStatsReq(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" || r.Method == "GET" {
+
+		w.WriteHeader(200)
+		w.Write([]byte(s.getStorageStats()))
+
+	} else {
+		w.WriteHeader(400)
+		w.Write([]byte("Unsupported method"))
+	}
+}
+
+func (s *statsManager) handleStorageMMStatsReq(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" || r.Method == "GET" {
+
+		w.WriteHeader(200)
+		w.Write([]byte(mm.Stats()))
+
 	} else {
 		w.WriteHeader(400)
 		w.Write([]byte("Unsupported method"))
@@ -492,9 +607,21 @@ func (s *statsManager) runStatsDumpLogger() {
 		stats := s.stats.Get()
 		if stats != nil {
 			bytes, _ := stats.MarshalJSON()
-			logging.Infof("PeriodicStats = %s", string(bytes))
+			var storageStats string
+			if logging.IsEnabled(logging.Debug) {
+				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
+			}
+			logging.Infof("PeriodicStats = %s%s", string(bytes), storageStats)
 		}
 
 		time.Sleep(time.Second * time.Duration(platform.LoadUint64(&s.statsLogDumpInterval)))
 	}
+}
+
+func postiveNum(n int64) int64 {
+	if n < 0 {
+		return 0
+	}
+
+	return n
 }

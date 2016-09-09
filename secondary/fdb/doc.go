@@ -15,7 +15,9 @@ import "C"
 
 import (
 	"fmt"
+	"reflect"
 	"unsafe"
+	"sync"
 )
 
 type SeqNum uint64
@@ -24,6 +26,28 @@ type SeqNum uint64
 type Doc struct {
 	doc   *C.fdb_doc
 	freed bool
+}
+
+var fdbDocPool *sync.Pool
+
+func init() {
+	fdbDocPool = &sync.Pool{
+		New: func() interface{} {
+			return &Doc{}
+		},
+	}
+}
+
+func allocDoc() *Doc {
+	rv := fdbDocPool.Get().(*Doc)
+	rv.doc = nil
+	rv.freed = false
+
+	return rv
+}
+
+func freeDoc(doc *Doc) {
+	fdbDocPool.Put(doc)
 }
 
 // NewDoc creates a new FDB_DOC instance on heap with a given key, its metadata, and its doc body
@@ -46,7 +70,7 @@ func NewDoc(key, meta, body []byte) (*Doc, error) {
 	lenm := len(meta)
 	lenb := len(body)
 
-	rv := Doc{}
+	rv := allocDoc()
 
 	Log.Tracef("fdb_doc_create call k:%p doc:%v m:%v b:%v", k, rv.doc, m, b)
 	errNo := C.fdb_doc_create(&rv.doc,
@@ -55,7 +79,7 @@ func NewDoc(key, meta, body []byte) (*Doc, error) {
 	if errNo != RESULT_SUCCESS {
 		return nil, Error(errNo)
 	}
-	return &rv, nil
+	return rv, nil
 }
 
 // Update a FDB_DOC instance with a given metadata and body
@@ -87,6 +111,14 @@ func (d *Doc) Key() []byte {
 	return C.GoBytes(d.doc.key, C.int(d.doc.keylen))
 }
 
+func (d *Doc) KeyNoCopy() (s []byte) {
+	shdr := (*reflect.SliceHeader)(unsafe.Pointer(&s))
+	shdr.Data = uintptr(d.doc.key)
+	shdr.Len = int(d.doc.keylen)
+	shdr.Cap = shdr.Len
+	return
+}
+
 // Meta returns the document metadata
 func (d *Doc) Meta() []byte {
 	return C.GoBytes(d.doc.meta, C.int(d.doc.metalen))
@@ -95,6 +127,14 @@ func (d *Doc) Meta() []byte {
 // Body returns the document body
 func (d *Doc) Body() []byte {
 	return C.GoBytes(d.doc.body, C.int(d.doc.bodylen))
+}
+
+func (d *Doc) BodyNoCopy() (s []byte) {
+	shdr := (*reflect.SliceHeader)(unsafe.Pointer(&s))
+	shdr.Data = uintptr(d.doc.body)
+	shdr.Len = int(d.doc.bodylen)
+	shdr.Cap = shdr.Len
+	return
 }
 
 // SeqNum returns the document sequence number
@@ -125,6 +165,7 @@ func (d *Doc) Close() error {
 		Log.Errorf("%v", err)
 		return err
 	}
+	defer freeDoc(d)
 	Log.Tracef("fdb_doc_free call d:%p doc:%v", d, d.doc)
 	errNo := C.fdb_doc_free(d.doc)
 	Log.Tracef("fdb_doc_free retn d:%p errNo:%v", d, errNo)

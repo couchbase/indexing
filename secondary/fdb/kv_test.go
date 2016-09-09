@@ -34,8 +34,8 @@ func TestForestDBKVCrud(t *testing.T) {
 	if val != nil {
 		t.Error("expected nil value")
 	}
-	if err != RESULT_KEY_NOT_FOUND {
-		t.Errorf("expected %v, got %v", RESULT_KEY_NOT_FOUND, err)
+	if err != FDB_RESULT_KEY_NOT_FOUND {
+		t.Errorf("expected %v, got %v", FDB_RESULT_KEY_NOT_FOUND, err)
 	}
 
 	// put a new key
@@ -76,7 +76,7 @@ func TestForestDBKVCrud(t *testing.T) {
 
 	// look it up again
 	val, err = kvstore.GetKV([]byte("key1"))
-	if err != RESULT_KEY_NOT_FOUND {
+	if err != FDB_RESULT_KEY_NOT_FOUND {
 		t.Error(err)
 	}
 	if val != nil {

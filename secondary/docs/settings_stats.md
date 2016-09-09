@@ -104,8 +104,8 @@ Number of storage snapshots generated
 Average interval for snapshot generation
 
 ##### "default:first\_name32:num\_docs\_pending" : 0,
-Number of documents pending to be indexed
-
+Number of documents yet to be received from KV by
+the indexer.
 
 ##### "default:first\_name32:num\_rows\_returned" : 60,
 Total number rows returned so far by the indexer
@@ -116,7 +116,20 @@ Number of documents queued in indexer, but not indexed yet
 
 
 ##### "default:first\_name32:num\_docs\_indexed" : 62308,
-Total number of docs indexed so far by the indexer
+Total number of docs indexed so far by the indexer from the
+time indexer has restarted.
+
+
+##### "default:first\_name32:num\_items\_flushed" : 62308,
+Total number of item mutations applied in the index. For
+array indexes, one document mutation may lead to multiple
+items to be updated.
+
+
+##### "default:first\_name32:num\_docs\_processed" : 62308,
+Total number of docs processed by the indexer with respect
+to the bucket. This stat is computed based on latest
+kv sequence numbers seen by the indexer for all vbuckets.
 
 
 ##### "default:first\_name32:disk\_size" : 13127680,

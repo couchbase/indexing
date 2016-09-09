@@ -40,7 +40,7 @@ func argParse() string {
 	logging.Infof("Parsing the args")
 
 	for i := 1; i < len(os.Args); i++ {
-		if err := fset.Parse(os.Args[i:i+1]); err != nil {
+		if err := fset.Parse(os.Args[i : i+1]); err != nil {
 			if strings.Contains(err.Error(), "flag provided but not defined") {
 				logging.Warnf("Ignoring the unspecified argument error: %v", err)
 			} else {

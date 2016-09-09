@@ -14,6 +14,7 @@ func (p *Projector) watcherDameon(watchInterval, staleTimeout int) {
 	defer func() {
 		watchTick.Stop()
 	}()
+
 	for {
 		<-watchTick.C
 		topics := p.listTopics()

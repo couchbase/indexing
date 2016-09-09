@@ -202,6 +202,7 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	bucket := msgFlushDone.GetBucket()
 	tsVbuuid := msgFlushDone.GetTS()
 	streamId := msgFlushDone.GetStreamId()
+	flushWasAborted := msgFlushDone.GetAborted()
 
 	numVbuckets := s.config["numVbuckets"].Int()
 	snapType := tsVbuuid.GetSnapType()
@@ -214,7 +215,8 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 		s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 			streamId: streamId,
 			bucket:   bucket,
-			ts:       tsVbuuid}
+			ts:       tsVbuuid,
+			aborted:  flushWasAborted}
 		return
 	}
 
@@ -228,20 +230,24 @@ func (s *storageMgr) handleCreateSnapshot(cmd Message) {
 	stats := s.stats.Get()
 
 	go s.createSnapshotWorker(streamId, bucket, tsVbuuid, indexSnapMap,
-		numVbuckets, indexInstMap, indexPartnMap, stats)
+		numVbuckets, indexInstMap, indexPartnMap, stats, flushWasAborted)
 
 }
 
 func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket string,
 	tsVbuuid *common.TsVbuuid, indexSnapMap IndexSnapMap, numVbuckets int,
-	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, stats *IndexerStats) {
+	indexInstMap common.IndexInstMap, indexPartnMap IndexPartnMap, stats *IndexerStats,
+	flushWasAborted bool) {
 
 	defer destroyIndexSnapMap(indexSnapMap)
 
 	var needsCommit bool
+	var forceCommit bool
 	snapType := tsVbuuid.GetSnapType()
 	if snapType == common.DISK_SNAP {
 		needsCommit = true
+	} else if snapType == common.FORCE_COMMIT {
+		forceCommit = true
 	}
 
 	var wg sync.WaitGroup
@@ -276,6 +282,12 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 					sliceSnaps := make(map[SliceId]SliceSnapshot)
 					//create snapshot for all the slices
 					for _, slice := range sc.GetAllSlices() {
+
+						if flushWasAborted {
+							slice.IsDirty()
+							return
+						}
+
 						var latestSnapshot Snapshot
 						if lastIndexSnap.Partitions() != nil {
 							lastSliceSnap := lastPartnSnap.Slices()[slice.Id()]
@@ -296,7 +308,7 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 						//and slice has some changes. Skip only in-memory snapshot
 						//in case of unchanged data.
 						if latestSnapshot == nil || (ts.GreaterThan(snapTs) &&
-							(slice.IsDirty() || needsCommit)) {
+							(slice.IsDirty() || needsCommit)) || forceCommit {
 
 							newTsVbuuid := tsVbuuid.Copy()
 							var err error
@@ -304,7 +316,11 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 							var newSnapshot Snapshot
 
 							logging.Tracef("StorageMgr::handleCreateSnapshot Creating New Snapshot "+
-								"Index: %v PartitionId: %v SliceId: %v Commit: %v", idxInstId, partnId, slice.Id(), needsCommit)
+								"Index: %v PartitionId: %v SliceId: %v Commit: %v Force: %v", idxInstId, partnId, slice.Id(), needsCommit, forceCommit)
+
+							if forceCommit {
+								needsCommit = forceCommit
+							}
 
 							snapCreateStart := time.Now()
 							if info, err = slice.NewSnapshot(newTsVbuuid, needsCommit); err != nil {
@@ -385,7 +401,8 @@ func (s *storageMgr) createSnapshotWorker(streamId common.StreamId, bucket strin
 	s.supvRespch <- &MsgMutMgrFlushDone{mType: STORAGE_SNAP_DONE,
 		streamId: streamId,
 		bucket:   bucket,
-		ts:       tsVbuuid}
+		ts:       tsVbuuid,
+		aborted:  flushWasAborted}
 
 }
 
@@ -404,7 +421,7 @@ func (s *storageMgr) updateSnapIntervalStat(idxStats *IndexStats) {
 
 	// Compute avgTsItemsCount
 	last = idxStats.lastNumFlushQueued.Value()
-	curr = idxStats.numFlushQueued.Value()
+	curr = idxStats.numDocsFlushQueued.Value()
 	avg = idxStats.avgTsItemsCount.Value()
 
 	avg = common.ComputeAvg(avg, last, curr)
@@ -456,6 +473,7 @@ func (sm *storageMgr) handleRollback(cmd Message) {
 	streamId := cmd.(*MsgRollback).GetStreamId()
 	rollbackTs := cmd.(*MsgRollback).GetRollbackTs()
 	bucket := cmd.(*MsgRollback).GetBucket()
+	logging.Infof("StorageMgr::handleRollback rollbackTs is %v", rollbackTs)
 
 	var respTs *common.TsVbuuid
 
@@ -745,7 +763,9 @@ func (s *storageMgr) handleStats(cmd Message) {
 		if idxStats != nil {
 			idxStats.diskSize.Set(st.Stats.DiskSize)
 			idxStats.dataSize.Set(st.Stats.DataSize)
-			idxStats.fragPercent.Set(int64(st.GetFragmentation()))
+			if common.GetStorageMode() != common.MOI {
+				idxStats.fragPercent.Set(int64(st.GetFragmentation()))
+			}
 			idxStats.getBytes.Set(st.Stats.GetBytes)
 			idxStats.insertBytes.Set(st.Stats.InsertBytes)
 			idxStats.deleteBytes.Set(st.Stats.DeleteBytes)
@@ -759,6 +779,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 	var stats []IndexStorageStats
 	var err error
 	var sts StorageStatistics
+	var internalData []string
 
 	for idxInstId, partnMap := range s.indexPartnMap {
 
@@ -771,6 +792,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 		var dataSz, diskSz, extraSnapDataSize int64
 		var getBytes, insertBytes, deleteBytes int64
 		var nslices int64
+		var needUpgrade = false
 	loop:
 		for _, partnInst := range partnMap {
 			slices := partnInst.Sc.GetAllSlices()
@@ -787,12 +809,17 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 				insertBytes += sts.InsertBytes
 				deleteBytes += sts.DeleteBytes
 				extraSnapDataSize += sts.ExtraSnapDataSize
+				internalData = append(internalData, sts.InternalData...)
+
+				needUpgrade = needUpgrade || sts.NeedUpgrade
 			}
 		}
 
 		if err == nil {
 			stat := IndexStorageStats{
 				InstId: idxInstId,
+				Name:   inst.Defn.Name,
+				Bucket: inst.Defn.Bucket,
 				Stats: StorageStatistics{
 					DataSize:          dataSz,
 					DiskSize:          diskSz,
@@ -800,6 +827,8 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 					InsertBytes:       insertBytes,
 					DeleteBytes:       deleteBytes,
 					ExtraSnapDataSize: extraSnapDataSize,
+					NeedUpgrade:       needUpgrade,
+					InternalData:      internalData,
 				},
 			}
 
@@ -814,6 +843,7 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 	req := cmd.(*MsgIndexCompact)
 	errch := req.GetErrorChannel()
+	abortTime := req.GetAbortTime()
 	var slices []Slice
 
 	inst, ok := s.indexInstMap[req.GetInstId()]
@@ -838,7 +868,7 @@ func (s *storageMgr) handleIndexCompaction(cmd Message) {
 	// Perform file compaction without blocking storage manager main loop
 	go func() {
 		for _, slice := range slices {
-			err := slice.Compact()
+			err := slice.Compact(abortTime)
 			slice.DecrRef()
 			if err != nil {
 				errch <- err

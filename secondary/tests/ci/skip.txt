@@ -1,10 +1,1 @@
-xdcr.uniXDCR.unidirectional.load_with_ops
-xdcr.uniXDCR.unidirectional.load_with_failover
-TestIndexerSettings
-TestRestoreDefaultSettings
-TestStat_ItemsCount
-TestDefaultCompactionBehavior
-TestLowFragmentation
-TestHighFragmentation
-TestHighCompactionMinSize
-TestCompactionDiskMinSize
+memcapable.WarmUpMemcachedTest.do_warmup_100k

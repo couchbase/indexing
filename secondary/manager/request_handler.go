@@ -103,6 +103,7 @@ type IndexStatus struct {
 	IsPrimary  bool               `json:"isPrimary,omitempty"`
 	SecExprs   []string           `json:"secExprs,omitempty"`
 	WhereExpr  string             `json:"where,omitempty"`
+	IndexType  string             `json:"indexType,omitempty"`
 	Status     string             `json:"status,omitempty"`
 	Definition string             `json:"definition"`
 	Hosts      []string           `json:"hosts,omitempty"`
@@ -171,7 +172,7 @@ func (m *requestHandlerContext) createIndexRequest(w http.ResponseWriter, r *htt
 	// convert request
 	request := m.convertIndexRequest(r)
 	if request == nil {
-		sendIndexResponseWithError(w, "Unable to convert request for create index")
+		sendIndexResponseWithError(http.StatusBadRequest, w, "Unable to convert request for create index")
 		return
 	}
 
@@ -180,7 +181,7 @@ func (m *requestHandlerContext) createIndexRequest(w http.ResponseWriter, r *htt
 	if indexDefn.DefnId == 0 {
 		defnId, err := common.NewIndexDefnId()
 		if err != nil {
-			sendIndexResponseWithError(w, fmt.Sprintf("Fail to generate index definition id %v", err))
+			sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("Fail to generate index definition id %v", err))
 			return
 		}
 		indexDefn.DefnId = defnId
@@ -195,7 +196,7 @@ func (m *requestHandlerContext) createIndexRequest(w http.ResponseWriter, r *htt
 		sendIndexResponse(w)
 	} else {
 		// report failure
-		sendIndexResponseWithError(w, fmt.Sprintf("%v", err))
+		sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
 	}
 }
 
@@ -208,7 +209,7 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 	// convert request
 	request := m.convertIndexRequest(r)
 	if request == nil {
-		sendIndexResponseWithError(w, "Unable to convert request for drop index")
+		sendIndexResponseWithError(http.StatusBadRequest, w, "Unable to convert request for drop index")
 		return
 	}
 
@@ -219,7 +220,7 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 		sendIndexResponse(w)
 	} else {
 		// report failure
-		sendIndexResponseWithError(w, fmt.Sprintf("%v", err))
+		sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
 	}
 }
 
@@ -257,13 +258,13 @@ func (m *requestHandlerContext) handleIndexStatusRequest(w http.ResponseWriter, 
 	if err == nil && len(failedNodes) == 0 {
 		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_SUCCESS, Status: list}
-		send(w, resp)
+		send(http.StatusOK, w, resp)
 	} else {
 		logging.Debugf("RequestHandler::handleIndexStatusRequest: failed nodes %v", failedNodes)
 		sort.Sort(indexStatusSorter(list))
 		resp := &IndexStatusResponse{Code: RESP_ERROR, Error: "Fail to retrieve cluster-wide metadata from index service",
 			Status: list, FailedNodes: failedNodes}
-		send(w, resp)
+		send(http.StatusInternalServerError, w, resp)
 	}
 }
 
@@ -291,6 +292,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 
 			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
 			if err != nil {
+				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
@@ -298,18 +300,21 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 			localMeta := new(LocalIndexMetadata)
 			status := convertResponse(resp, localMeta)
 			if status == RESP_ERROR {
+				logging.Debugf("RequestHandler::getIndexStatus: Error from convertResponse for localMeta: %v", err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
 
 			curl, err := cinfo.GetServiceAddress(nid, "mgmt")
 			if err != nil {
+				logging.Debugf("RequestHandler::getIndexStatus: Error from  GetServiceAddress (mgmt) for node id %v. Error = %v", nid, err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
 
 			resp, err = getWithAuth(addr + "/stats?async=true")
 			if err != nil {
+				logging.Debugf("RequestHandler::getIndexStatus: Error while retrieving %v with auth %v", addr+"/stats?async=true", err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
@@ -317,6 +322,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 			stats := new(common.Statistics)
 			status = convertResponse(resp, stats)
 			if status == RESP_ERROR {
+				logging.Debugf("RequestHandler::getIndexStatus: Error from convertResponse for stats: %v", err)
 				failedNodes = append(failedNodes, addr)
 				continue
 			}
@@ -330,12 +336,12 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 				if topology := m.findTopologyByBucket(localMeta.IndexTopologies, defn.Bucket); topology != nil {
 					state, errStr := topology.GetStatusByDefn(defn.DefnId)
 
-					if state != common.INDEX_STATE_DELETED && state != common.INDEX_STATE_NIL {
+					if state != common.INDEX_STATE_CREATED &&
+						state != common.INDEX_STATE_DELETED &&
+						state != common.INDEX_STATE_NIL {
 
 						stateStr := "Not Available"
 						switch state {
-						case common.INDEX_STATE_CREATED:
-							stateStr = "Created"
 						case common.INDEX_STATE_READY:
 							stateStr = "Created"
 						case common.INDEX_STATE_INITIAL:
@@ -344,6 +350,14 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 							stateStr = "Building"
 						case common.INDEX_STATE_ACTIVE:
 							stateStr = "Ready"
+						}
+
+						if indexerState, ok := stats.ToMap()["indexer_state"]; ok {
+							if indexerState == "Paused" {
+								stateStr = "Paused"
+							} else if indexerState == "Bootstrap" {
+								stateStr = "Bootstrap"
+							}
 						}
 
 						if len(errStr) != 0 {
@@ -363,6 +377,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 							IsPrimary:  defn.IsPrimary,
 							SecExprs:   defn.SecExprs,
 							WhereExpr:  defn.WhereExpr,
+							IndexType:  string(defn.Using),
 							Status:     stateStr,
 							Error:      errStr,
 							Hosts:      []string{curl},
@@ -375,6 +390,7 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 				}
 			}
 		} else {
+			logging.Debugf("RequestHandler::getIndexStatus: Error from GetServiceAddress (indexHttp) for node id %v. Error = %v", nid, err)
 			failedNodes = append(failedNodes, addr)
 			continue
 		}
@@ -393,20 +409,22 @@ func (m *requestHandlerContext) handleIndexMetadataRequest(w http.ResponseWriter
 		return
 	}
 
+	bucket := m.getBucket(r)
+
 	indexerHostMap := make(map[common.IndexerId]string)
-	meta, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap)
+	meta, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap, bucket)
 	if err == nil {
 		resp := &BackupResponse{Code: RESP_SUCCESS, Result: *meta}
-		send(w, resp)
+		send(http.StatusOK, w, resp)
 	} else {
 		logging.Debugf("RequestHandler::handleIndexMetadataRequest: err %v", err)
 		resp := &BackupResponse{Code: RESP_ERROR, Error: err.Error()}
-		send(w, resp)
+		send(http.StatusInternalServerError, w, resp)
 	}
 }
 
 func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
-	indexerHostMap map[common.IndexerId]string) (*ClusterIndexMetadata, error) {
+	indexerHostMap map[common.IndexerId]string, bucket string) (*ClusterIndexMetadata, error) {
 
 	if err := cinfo.Fetch(); err != nil {
 		return nil, err
@@ -422,8 +440,14 @@ func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
 		if err == nil {
 
-			resp, err := getWithAuth(addr + "/getLocalIndexMetadata")
+			url := "/getLocalIndexMetadata"
+			if len(bucket) != 0 {
+				url += "?bucket=" + bucket
+			}
+
+			resp, err := getWithAuth(addr + url)
 			if err != nil {
+				logging.Debugf("RequestHandler::getIndexMetadata: Error while retrieving %v with auth %v", addr+"/getLocalIndexMetadata", err)
 				return nil, errors.New(fmt.Sprintf("Fail to retrieve index definition from url %s", addr))
 			}
 
@@ -445,6 +469,7 @@ func (m *requestHandlerContext) getIndexMetadata(cinfo *common.ClusterInfoCache,
 }
 
 func (m *requestHandlerContext) convertIndexMetadataRequest(r *http.Request) *ClusterIndexMetadata {
+	var check map[string]interface{}
 
 	meta := &ClusterIndexMetadata{}
 
@@ -455,6 +480,14 @@ func (m *requestHandlerContext) convertIndexMetadataRequest(r *http.Request) *Cl
 	}
 
 	logging.Debugf("requestHandler.convertIndexMetadataRequest(): input %v", string(buf.Bytes()))
+
+	if err := json.Unmarshal(buf.Bytes(), &check); err != nil {
+		logging.Debugf("RequestHandler::convertIndexMetadataRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
+		return nil
+	} else if _, ok := check["metadata"]; !ok {
+		logging.Debugf("RequestHandler::convertIndexMetadataRequest: invalid shape of request body. Buf = %s, err %v", buf, err)
+		return nil
+	}
 
 	if err := json.Unmarshal(buf.Bytes(), meta); err != nil {
 		logging.Debugf("RequestHandler::convertIndexMetadataRequest: unable to unmarshall request body. Buf = %s, err %v", buf, err)
@@ -474,16 +507,18 @@ func (m *requestHandlerContext) handleLocalIndexMetadataRequest(w http.ResponseW
 		return
 	}
 
-	meta, err := m.getLocalIndexMetadata()
+	bucket := m.getBucket(r)
+
+	meta, err := m.getLocalIndexMetadata(bucket)
 	if err == nil {
-		send(w, meta)
+		send(http.StatusOK, w, meta)
 	} else {
 		logging.Debugf("RequestHandler::handleLocalIndexMetadataRequest: err %v", err)
 		sendHttpError(w, " Unable to retrieve index metadata", http.StatusInternalServerError)
 	}
 }
 
-func (m *requestHandlerContext) getLocalIndexMetadata() (meta *LocalIndexMetadata, err error) {
+func (m *requestHandlerContext) getLocalIndexMetadata(bucket string) (meta *LocalIndexMetadata, err error) {
 
 	repo := m.mgr.getMetadataRepo()
 
@@ -503,7 +538,9 @@ func (m *requestHandlerContext) getLocalIndexMetadata() (meta *LocalIndexMetadat
 	var defn *common.IndexDefn
 	_, defn, err = iter.Next()
 	for err == nil {
-		meta.IndexDefinitions = append(meta.IndexDefinitions, *defn)
+		if len(bucket) == 0 || bucket == defn.Bucket {
+			meta.IndexDefinitions = append(meta.IndexDefinitions, *defn)
+		}
 		_, defn, err = iter.Next()
 	}
 
@@ -516,7 +553,9 @@ func (m *requestHandlerContext) getLocalIndexMetadata() (meta *LocalIndexMetadat
 	var topology *IndexTopology
 	topology, err = iter1.Next()
 	for err == nil {
-		meta.IndexTopologies = append(meta.IndexTopologies, *topology)
+		if len(bucket) == 0 || bucket == topology.Bucket {
+			meta.IndexTopologies = append(meta.IndexTopologies, *topology)
+		}
 		topology, err = iter1.Next()
 	}
 
@@ -544,14 +583,31 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 
 	image := m.convertIndexMetadataRequest(r)
 	if image == nil {
-		send(w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to process request input"})
+		send(http.StatusBadRequest, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to process request input"})
 		return
 	}
 
+	//validate using clause with storage mode
+	for _, imeta := range image.Metadata {
+		for _, idefn := range imeta.IndexDefinitions {
+			if !common.IsValidIndexType(strings.ToLower(string(idefn.Using))) {
+				errStr := fmt.Sprintf("Invalid Using Clause %v. IndexDefnId %v.", idefn.Using, idefn.DefnId)
+				send(http.StatusBadRequest, w, &RestoreResponse{Code: RESP_ERROR, Error: errStr})
+				return
+			}
+			if common.IndexTypeToStorageMode(idefn.Using) != common.GetStorageMode() {
+				errStr := fmt.Sprintf("Indexer Storage Mode %v. Cannot Use %v for IndexDefnId %v.", common.GetStorageMode(),
+					idefn.Using, idefn.DefnId)
+				send(http.StatusBadRequest, w, &RestoreResponse{Code: RESP_ERROR, Error: errStr})
+				return
+			}
+		}
+	}
+
 	indexerHostMap := make(map[common.IndexerId]string)
-	current, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap)
+	current, err := m.getIndexMetadata(m.mgr.getServiceAddrProvider().(*common.ClusterInfoCache), indexerHostMap, "")
 	if err != nil {
-		send(w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to get the latest index metadata for restore"})
+		send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to get the latest index metadata for restore"})
 		return
 	}
 
@@ -589,11 +645,11 @@ func (m *requestHandlerContext) handleRestoreIndexMetadataRequest(w http.Respons
 	success := m.restoreIndex(current, context, indexerHostMap)
 
 	if success {
-		send(w, &RestoreResponse{Code: RESP_SUCCESS})
+		send(http.StatusOK, w, &RestoreResponse{Code: RESP_SUCCESS})
 		return
 	}
 
-	send(w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to restore metadata"})
+	send(http.StatusInternalServerError, w, &RestoreResponse{Code: RESP_ERROR, Error: "Unable to restore metadata"})
 }
 
 func (m *requestHandlerContext) findIndexToRestoreById(image *LocalIndexMetadata,
@@ -751,22 +807,23 @@ func (m *requestHandlerContext) findMinIndexer(indexerCountMap map[common.Indexe
 // Utility
 ///////////////////////////////////////////////////////
 
-func sendIndexResponseWithError(w http.ResponseWriter, msg string) {
+func sendIndexResponseWithError(status int, w http.ResponseWriter, msg string) {
 	res := &IndexResponse{Code: RESP_ERROR, Error: msg}
-	send(w, res)
+	send(status, w, res)
 }
 
 func sendIndexResponse(w http.ResponseWriter) {
 	result := &IndexResponse{Code: RESP_SUCCESS}
-	send(w, result)
+	send(http.StatusOK, w, result)
 }
 
-func send(w http.ResponseWriter, res interface{}) {
+func send(status int, w http.ResponseWriter, res interface{}) {
 
 	header := w.Header()
 	header["Content-Type"] = []string{"application/json"}
 
 	if buf, err := json.Marshal(res); err == nil {
+		w.WriteHeader(status)
 		logging.Tracef("RequestHandler::sendResponse: sending response back to caller. %v", string(buf))
 		w.Write(buf)
 	} else {
@@ -800,7 +857,7 @@ func doAuth(r *http.Request, w http.ResponseWriter, clusterUrl string) bool {
 
 	valid, err := common.IsAuthValid(r, clusterUrl)
 	if err != nil {
-		sendIndexResponseWithError(w, err.Error())
+		sendIndexResponseWithError(http.StatusInternalServerError, w, err.Error())
 		return false
 	} else if valid == false {
 		w.WriteHeader(401)

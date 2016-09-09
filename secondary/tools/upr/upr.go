@@ -1,26 +1,24 @@
 // Tool receives raw events from dcp-client.
 package main
 
-import (
-	"flag"
-	"fmt"
-	"log"
-	"os"
-	"strings"
-	"time"
+import "flag"
+import "fmt"
+import "os"
+import "strings"
+import "time"
 
-	"github.com/couchbase/cbauth"
-	"github.com/couchbase/indexing/secondary/common"
-	"github.com/couchbase/indexing/secondary/dcp"
-	mcd "github.com/couchbase/indexing/secondary/dcp/transport"
-	mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
-	"github.com/couchbase/indexing/secondary/logging"
-)
+import "github.com/couchbase/cbauth"
+import "github.com/couchbase/indexing/secondary/common"
+import "github.com/couchbase/indexing/secondary/dcp"
+import mcd "github.com/couchbase/indexing/secondary/dcp/transport"
+import mc "github.com/couchbase/indexing/secondary/dcp/transport/client"
+import "github.com/couchbase/indexing/secondary/logging"
 
 var options struct {
 	buckets    []string // buckets to connect with
 	maxVbno    int      // maximum number of vbuckets
-	stats      int      // periodic timeout(ms) to print stats, 0 will disable
+	kvaddrs    []string
+	stats      int // periodic timeout(ms) to print stats, 0 will disable
 	printflogs bool
 	auth       string
 	info       bool
@@ -33,9 +31,12 @@ var rch = make(chan []interface{}, 10000)
 
 func argParse() string {
 	var buckets string
+	var kvaddrs string
 
 	flag.StringVar(&buckets, "buckets", "default",
 		"buckets to listen")
+	flag.StringVar(&kvaddrs, "kvaddrs", "",
+		"list of kv-nodes to connect")
 	flag.IntVar(&options.maxVbno, "maxvb", 1024,
 		"maximum number of vbuckets")
 	flag.IntVar(&options.stats, "stats", 1000,
@@ -61,6 +62,10 @@ func argParse() string {
 	} else {
 		logging.SetLogLevel(logging.Info)
 	}
+	if kvaddrs == "" {
+		logging.Fatalf("please provided -kvaddrs")
+	}
+	options.kvaddrs = strings.Split(kvaddrs, ",")
 
 	args := flag.Args()
 	if len(args) < 1 {
@@ -87,12 +92,12 @@ func main() {
 	}
 
 	for _, bucket := range options.buckets {
-		go startBucket(cluster, bucket)
+		go startBucket(cluster, bucket, options.kvaddrs)
 	}
 	receive()
 }
 
-func startBucket(cluster, bucketn string) int {
+func startBucket(cluster, bucketn string, kvaddrs []string) int {
 	defer func() {
 		if r := recover(); r != nil {
 			logging.Errorf("%s:\n%s\n", r, logging.StackTrace())
@@ -104,10 +109,13 @@ func startBucket(cluster, bucketn string) int {
 	mf(err, "bucket")
 
 	dcpConfig := map[string]interface{}{
-		"genChanSize":  10000,
-		"dataChanSize": 10000,
+		"genChanSize":    10000,
+		"dataChanSize":   10000,
+		"numConnections": 4,
 	}
-	dcpFeed, err := b.StartDcpFeed(couchbase.NewDcpFeedName("rawupr"), uint32(0), 0xABCD, dcpConfig)
+	dcpFeed, err := b.StartDcpFeedOver(
+		couchbase.NewDcpFeedName("rawupr"),
+		uint32(0), options.kvaddrs, 0xABCD, dcpConfig)
 	mf(err, "- upr")
 
 	vbnos := listOfVbnos(options.maxVbno)
@@ -144,7 +152,7 @@ func startDcp(dcpFeed *couchbase.DcpFeed, flogs couchbase.FailoverLog) {
 
 func mf(err error, msg string) {
 	if err != nil {
-		log.Fatalf("%v: %v", msg, err)
+		logging.Fatalf("%v: %v", msg, err)
 	}
 }
 

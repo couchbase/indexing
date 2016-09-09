@@ -12,6 +12,7 @@ package common
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type IndexKey []byte
@@ -54,13 +55,6 @@ const (
 	SINGLE                 = "SINGLE"
 )
 
-type IndexType string
-
-const (
-	ForestDB = "forestdb"
-	MemDB    = "memdb"
-)
-
 type IndexState int
 
 const (
@@ -101,6 +95,34 @@ func (s IndexState) String() string {
 		return "INDEX_STATE_ERROR"
 	default:
 		return "INDEX_STATE_UNKNOWN"
+	}
+}
+
+type IndexerState int
+
+const (
+	//Active(processing mutation and scan)
+	INDEXER_ACTIVE IndexerState = iota
+	//Paused(not processing mutation/scan)
+	INDEXER_PAUSED
+	INDEXER_PREPARE_UNPAUSE
+	//Initial Bootstrap
+	INDEXER_BOOTSTRAP
+)
+
+func (s IndexerState) String() string {
+
+	switch s {
+	case INDEXER_ACTIVE:
+		return "Active"
+	case INDEXER_PAUSED:
+		return "Paused"
+	case INDEXER_PREPARE_UNPAUSE:
+		return "PrepareUnpause"
+	case INDEXER_BOOTSTRAP:
+		return "Bootstrap"
+	default:
+		return "Invalid"
 	}
 }
 
@@ -153,7 +175,9 @@ type IndexDefn struct {
 	PartitionKey    string          `json:"partitionKey,omitempty"`
 	WhereExpr       string          `json:"where,omitempty"`
 	Deferred        bool            `json:"deferred,omitempty"`
+	Immutable       bool            `json:"immutable,omitempty"`
 	Nodes           []string        `json:"nodes,omitempty"`
+	IsArrayIndex    bool            `json:"isArrayIndex,omitempty"`
 }
 
 //IndexInst is an instance of an Index(aka replica)
@@ -284,6 +308,7 @@ const (
 	NO_SNAP IndexSnapType = iota
 	DISK_SNAP
 	INMEM_SNAP
+	FORCE_COMMIT
 )
 
 func (s IndexSnapType) String() string {
@@ -295,8 +320,29 @@ func (s IndexSnapType) String() string {
 		return "DISK_SNAP"
 	case INMEM_SNAP:
 		return "INMEM_SNAP"
+	case FORCE_COMMIT:
+		return "FORCE_COMMIT"
 	default:
 		return "INVALID_SNAP_TYPE"
 	}
 
+}
+
+//NOTE: This type needs to be in sync with
+//smStrMap in index/global.go
+type IndexType string
+
+const (
+	ForestDB        = "forestdb"
+	MemDB           = "memdb"
+	MemoryOptimized = "memory_optimized"
+)
+
+func IsValidIndexType(t string) bool {
+	switch strings.ToLower(t) {
+	case ForestDB, MemDB, MemoryOptimized:
+		return true
+	}
+
+	return false
 }

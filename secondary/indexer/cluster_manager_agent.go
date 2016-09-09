@@ -45,6 +45,7 @@ func NewClustMgrAgent(supvCmdch MsgChannel, supvRespch MsgChannel, cfg common.Co
 	url, err := common.ClusterAuthUrl(cfg["clusterAddr"].String())
 	if err == nil {
 		cinfo, err = common.NewClusterInfoCache(url, DEFAULT_POOL)
+		cinfo.SetServicePorts(ServiceAddrMap)
 	}
 	if err != nil {
 		logging.Errorf("ClustMgrAgent::Fail to init ClusterInfoCache : %v", err)
@@ -156,6 +157,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_DEL_BUCKET:
 		c.handleDeleteBucket(cmd)
 
+	case CLUST_MGR_CLEANUP_INDEX:
+		c.handleCleanupIndex(cmd)
+
 	default:
 		logging.Errorf("ClusterMgrAgent::handleSupvervisorCommands Unknown Message %v", cmd)
 	}
@@ -226,19 +230,9 @@ func (c *clustMgrAgent) handleGetGlobalTopology(cmd Message) {
 			continue
 		}
 
-		//for indexer, Ready state doesn't matter. Till index build,
-		//the index stays in Created state.
-		var state common.IndexState
-		instState := common.IndexState(inst.State)
-		if instState == common.INDEX_STATE_READY {
-			state = common.INDEX_STATE_CREATED
-		} else {
-			state = instState
-		}
-
 		idxInst := common.IndexInst{InstId: common.IndexInstId(inst.InstId),
 			Defn:   idxDefn,
-			State:  state,
+			State:  common.IndexState(inst.State),
 			Stream: common.StreamId(inst.StreamId),
 		}
 
@@ -292,6 +286,18 @@ func (c *clustMgrAgent) handleDeleteBucket(cmd Message) {
 	streamId := cmd.(*MsgClustMgrUpdate).GetStreamId()
 
 	err := c.mgr.DeleteIndexForBucket(bucket, streamId)
+	common.CrashOnError(err)
+
+	c.supvCmdch <- &MsgSuccess{}
+}
+
+func (c *clustMgrAgent) handleCleanupIndex(cmd Message) {
+
+	logging.Infof("ClustMgr:handleCleanupIndex %v", cmd)
+
+	index := cmd.(*MsgClustMgrUpdate).GetIndexList()[0]
+
+	err := c.mgr.CleanupIndex(index.Defn.DefnId)
 	common.CrashOnError(err)
 
 	c.supvCmdch <- &MsgSuccess{}

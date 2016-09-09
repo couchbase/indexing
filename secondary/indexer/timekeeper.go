@@ -52,7 +52,9 @@ type timekeeper struct {
 	stats           IndexerStatsHolder
 	vbCheckerStopCh chan bool
 
-	lock sync.Mutex //lock to protect this structure
+	lock sync.RWMutex //lock to protect this structure
+
+	indexerState common.IndexerState
 }
 
 type InitialBuildInfo struct {
@@ -202,6 +204,15 @@ func (tk *timekeeper) handleSupervisorCommands(cmd Message) {
 
 	case INDEX_PROGRESS_STATS:
 		tk.handleStats(cmd)
+
+	case INDEXER_PAUSE:
+		tk.handleIndexerPause(cmd)
+
+	case INDEXER_PREPARE_UNPAUSE:
+		tk.handlePrepareUnpause(cmd)
+
+	case INDEXER_RESUME:
+		tk.handleIndexerResume(cmd)
 
 	default:
 		logging.Errorf("Timekeeper::handleSupvervisorCommands "+
@@ -497,12 +508,19 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 	streamId := cmd.(*MsgMutMgrFlushDone).GetStreamId()
 	bucket := cmd.(*MsgMutMgrFlushDone).GetBucket()
+	flushWasAborted := cmd.(*MsgMutMgrFlushDone).GetAborted()
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
 	bucketLastFlushedTsMap := tk.ss.streamBucketLastFlushedTsMap[streamId]
 	bucketFlushInProgressTsMap := tk.ss.streamBucketFlushInProgressTsMap[streamId]
+
+	if flushWasAborted {
+
+		tk.processFlushAbort(streamId, bucket)
+		return
+	}
 
 	if _, ok := bucketFlushInProgressTsMap[bucket]; ok {
 		//store the last flushed TS
@@ -539,6 +557,51 @@ func (tk *timekeeper) handleFlushDone(cmd Message) {
 
 }
 
+func (tk *timekeeper) processFlushAbort(streamId common.StreamId, bucket string) {
+
+	bucketLastFlushedTsMap := tk.ss.streamBucketLastFlushedTsMap[streamId]
+	bucketFlushInProgressTsMap := tk.ss.streamBucketFlushInProgressTsMap[streamId]
+
+	logging.Infof("Timekeeper::processFlushAbort Flush Abort Received %v %v"+
+		"\nFlushTs %v \nLastFlushTs %v", streamId, bucket, bucketFlushInProgressTsMap[bucket],
+		bucketLastFlushedTsMap[bucket])
+
+	bucketFlushInProgressTsMap[bucket] = nil
+
+	tsList := tk.ss.streamBucketTsListMap[streamId][bucket]
+	tsList.Init()
+
+	state := tk.ss.streamBucketStatus[streamId][bucket]
+
+	switch state {
+
+	case STREAM_ACTIVE, STREAM_RECOVERY:
+
+		logging.Infof("Timekeeper::processFlushAbort %v %v Generate InitPrepRecovery", streamId, bucket)
+		tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+			streamId: streamId,
+			bucket:   bucket}
+
+	case STREAM_PREPARE_RECOVERY:
+
+		//send message to stop running stream
+		logging.Infof("Timekeeper::processFlushAbort %v %v Generate PrepareRecovery", streamId, bucket)
+		tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
+			streamId: streamId,
+			bucket:   bucket}
+
+	case STREAM_INACTIVE:
+		logging.Errorf("Timekeeper::processFlushAbort Unexpected Flush Abort "+
+			"Received for Inactive StreamId %v bucket %v ", streamId, bucket)
+
+	default:
+		logging.Errorf("Timekeeper::processFlushAbort %v %v Invalid Stream State %v.", streamId, bucket, state)
+
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+}
+
 func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 
 	logging.LazyTrace(func() string {
@@ -571,7 +634,7 @@ func (tk *timekeeper) handleFlushDoneMaintStream(cmd Message) {
 		//It can be processed now.
 		found := tk.processPendingTS(streamId, bucket)
 
-		if !found {
+		if !found && !tk.ss.checkAnyAbortPending(streamId, bucket) {
 			//send message to stop running stream
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
 				streamId: streamId,
@@ -679,7 +742,7 @@ func (tk *timekeeper) handleFlushDoneInitStream(cmd Message) {
 		//It can be processed now.
 		found := tk.processPendingTS(streamId, bucket)
 
-		if !found {
+		if !found && !tk.ss.checkAnyAbortPending(streamId, bucket) {
 			//send message to stop running stream
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_PREPARE_RECOVERY,
 				streamId: streamId,
@@ -844,6 +907,12 @@ func (tk *timekeeper) handleStreamBegin(cmd Message) {
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleStreamBegin Received StreamBegin In "+
+			"Prepare Unpause State. Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
+		return
+	}
+
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, meta.bucket) == false {
 		logging.Warnf("Timekeeper::handleStreamBegin Received StreamBegin for "+
@@ -921,6 +990,12 @@ func (tk *timekeeper) handleStreamEnd(cmd Message) {
 
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
+
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleStreamEnd Received StreamEnd In "+
+			"Prepare Unpause State. Bucket %v Stream %v. Ignored.", meta.bucket, streamId)
+		return
+	}
 
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, meta.bucket) == false {
@@ -1147,6 +1222,12 @@ func (tk *timekeeper) repairMissingStreamBegin(streamId common.StreamId) {
 
 func (tk *timekeeper) handleStreamConnErrorInternal(streamId common.StreamId, bucket string, vbList []Vbucket) {
 
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleStreamConnError Received ConnError In "+
+			"Prepare Unpause State. Bucket %v Stream %v. Ignored.", bucket, streamId)
+		return
+	}
+
 	//check if bucket is active in stream
 	if tk.checkBucketActiveInStream(streamId, bucket) == false {
 		logging.Warnf("Timekeeper::handleStreamConnError \n\tReceived ConnError for "+
@@ -1349,6 +1430,12 @@ func (tk *timekeeper) handleStreamRequestDone(cmd Message) {
 	//as no flush would happen in case there are no more mutations.
 	tk.checkPendingStreamMerge(streamId, bucket)
 
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleStreamRequestDone Skip Repair Check In "+
+			"Prepare Unpause State. Bucket %v Stream %v.", bucket, streamId)
+		return
+	}
+
 	// Check if the stream needs repair for streamEnd and ConnErr
 	if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
 		tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
@@ -1412,6 +1499,12 @@ func (tk *timekeeper) handleRecoveryDone(cmd Message) {
 	//as no flush would happen in case there are no more mutations.
 	tk.checkPendingStreamMerge(streamId, bucket)
 
+	if tk.indexerState == INDEXER_PREPARE_UNPAUSE {
+		logging.Warnf("Timekeeper::handleRecoveryDone Skip Repair Check In "+
+			"Prepare Unpause State. Bucket %v Stream %v.", bucket, streamId)
+		return
+	}
+
 	// Check if the stream needs repair
 	if stopCh, ok := tk.ss.streamBucketRepairStopCh[streamId][bucket]; !ok || stopCh == nil {
 		tk.ss.streamBucketRepairStopCh[streamId][bucket] = make(StopChannel)
@@ -1453,6 +1546,7 @@ func (tk *timekeeper) prepareRecovery(streamId common.StreamId,
 			"Bucket %v State Changed to PREPARE_RECOVERY", streamId, bucket)
 
 		tk.ss.streamBucketStatus[streamId][bucket] = STREAM_PREPARE_RECOVERY
+
 		//The existing mutations for which stability TS has already been generated
 		//can be safely flushed before initiating recovery. This can reduce the duration
 		//of recovery.
@@ -1780,6 +1874,10 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	if tk.indexerState != common.INDEXER_ACTIVE {
+		return
+	}
+
 	if status, ok := tk.ss.streamBucketStatus[streamId][bucket]; !ok || status != STREAM_ACTIVE {
 		return
 	}
@@ -1789,7 +1887,12 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 
 		//persist TS which completes the build
 		if tk.isBuildCompletionTs(streamId, bucket, tsVbuuid) {
-			tsVbuuid.SetSnapType(common.DISK_SNAP)
+
+			if hasTS, ok := tk.ss.streamBucketHasBuildCompTSMap[streamId][bucket]; !ok || !hasTS {
+				logging.Infof("timekeeper::generateNewStability: setting snapshot type as DISK_SNAP due to BuildCompletionTS")
+				tsVbuuid.SetSnapType(common.DISK_SNAP)
+				tk.ss.streamBucketHasBuildCompTSMap[streamId][bucket] = true
+			}
 		}
 
 		if tk.ss.canFlushNewTS(streamId, bucket) {
@@ -1809,8 +1912,21 @@ func (tk *timekeeper) generateNewStabilityTS(streamId common.StreamId,
 			}
 
 		}
+	} else if tk.processPendingTS(streamId, bucket) {
+		//nothing to do
 	} else {
-		tk.processPendingTS(streamId, bucket)
+		if !tk.hasInitStateIndex(streamId, bucket) &&
+			tk.ss.checkCommitOverdue(streamId, bucket) {
+
+			tsVbuuid := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket].Copy()
+
+			if tsVbuuid.IsSnapAligned() {
+				logging.Infof("Timekeeper:: %v %v Forcing Overdue Commit", streamId, bucket)
+				tsVbuuid.SetSnapType(common.FORCE_COMMIT)
+				tk.ss.streamBucketLastPersistTime[streamId][bucket] = time.Now()
+				tk.sendNewStabilityTS(tsVbuuid, bucket, streamId)
+			}
+		}
 	}
 
 }
@@ -1927,20 +2043,54 @@ func (tk *timekeeper) sendNewStabilityTS(flushTs *common.TsVbuuid, bucket string
 
 	tk.mayBeMakeSnapAligned(streamId, bucket, flushTs)
 
-	changeVec, noChange := tk.ss.computeTsChangeVec(streamId, bucket, flushTs)
-	if noChange {
-		return
+	var changeVec []bool
+	if flushTs.GetSnapType() != common.FORCE_COMMIT {
+		var noChange bool
+		changeVec, noChange = tk.ss.computeTsChangeVec(streamId, bucket, flushTs)
+		if noChange {
+			return
+		}
+		tk.setSnapshotType(streamId, bucket, flushTs)
 	}
 
-	tk.setSnapshotType(streamId, bucket, flushTs)
+	tk.setNeedsCommit(streamId, bucket, flushTs)
 
 	tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket] = flushTs
+
+	monitor_ts := tk.config["timekeeper.monitor_flush"].Bool()
 
 	go func() {
 		tk.supvRespch <- &MsgTKStabilityTS{ts: flushTs,
 			bucket:    bucket,
 			streamId:  streamId,
 			changeVec: changeVec}
+
+		if monitor_ts {
+
+			var totalWait int
+			ticker := time.NewTicker(time.Second * 60)
+			for _ = range ticker.C {
+				tk.lock.Lock()
+
+				flushInProgress := tk.ss.streamBucketFlushInProgressTsMap[streamId][bucket]
+				if flushTs.Equal(flushInProgress) {
+					totalWait += 60
+
+					if totalWait > 300 {
+						lastFlushedTs := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]
+						hwt := tk.ss.streamBucketHWTMap[streamId][bucket]
+						logging.Warnf("Timekeeper::flushMonitor Waiting For Flush "+
+							"to finish for %v seconds. FlushTs %v \n LastFlushTs %v \n HWT %v", totalWait,
+							flushTs, lastFlushedTs, hwt)
+					}
+				} else {
+					tk.lock.Unlock()
+					return
+				}
+				tk.lock.Unlock()
+			}
+		}
+
 	}()
 }
 
@@ -1953,8 +2103,16 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	//for init build, if there is no snapshot option set
 	if tk.hasInitStateIndex(streamId, bucket) {
 		if flushTs.GetSnapType() == common.NO_SNAP {
+			isMergeCandidate := false
+
 			//if this TS is a merge candidate, generate in-mem snapshot
 			if tk.checkMergeCandidateTs(streamId, bucket, flushTs) {
+				flushTs.SetSnapType(common.INMEM_SNAP)
+				isMergeCandidate = true
+			}
+
+			// if storage type is MOI, then also generate snapshot during initial build.
+			if common.GetStorageMode() == common.MOI {
 				flushTs.SetSnapType(common.INMEM_SNAP)
 			}
 
@@ -1963,11 +2121,11 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 			//Otherwise use the persist interval for initial build.
 			var snapPersistInterval uint64
 			var persistDuration time.Duration
-			if flushTs.GetSnapType() == common.INMEM_SNAP {
-				snapPersistInterval = tk.config["settings.persisted_snapshot.interval"].Uint64()
+			if flushTs.GetSnapType() == common.INMEM_SNAP && isMergeCandidate {
+				snapPersistInterval = tk.getPersistInterval()
 				persistDuration = time.Duration(snapPersistInterval) * time.Millisecond
 			} else {
-				snapPersistInterval = tk.config["settings.persisted_snapshot_init_build.interval"].Uint64()
+				snapPersistInterval = tk.getPersistIntervalInitBuild()
 				persistDuration = time.Duration(snapPersistInterval) * time.Millisecond
 			}
 
@@ -1980,7 +2138,7 @@ func (tk *timekeeper) setSnapshotType(streamId common.StreamId, bucket string,
 	} else if flushTs.IsSnapAligned() {
 		//for incremental build, snapshot only if ts is snap aligned
 		//set either in-mem or persist snapshot based on wall clock time
-		snapPersistInterval := tk.config["settings.persisted_snapshot.interval"].Uint64()
+		snapPersistInterval := tk.getPersistInterval()
 		persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
 
 		if time.Since(lastPersistTime) > persistDuration {
@@ -2061,7 +2219,15 @@ func (tk *timekeeper) checkMergeCandidateTs(streamId common.StreamId,
 func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 	bucket string, flushTs *common.TsVbuuid) {
 
+	if tk.indexerState != common.INDEXER_ACTIVE {
+		return
+	}
+
 	if tk.hasInitStateIndex(streamId, bucket) {
+		return
+	}
+
+	if flushTs.HasDisableAlign() {
 		return
 	}
 
@@ -2075,7 +2241,40 @@ func (tk *timekeeper) mayBeMakeSnapAligned(streamId common.StreamId,
 		//and all mutations have been received till snapEnd
 		if s[1]-flushTs.Seqnos[i] < largeSnap &&
 			hwt.Seqnos[i] >= s[1] {
+
+			if flushTs.Seqnos[i] != s[1] {
+				logging.Debugf("Timekeeper::mayBeMakeSnapAligned.  Align Seqno to Snap End for large snapshot. "+
+					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v old Seqno %v new Seqno %v Vbuuid %v current HWT seqno %v",
+					bucket, streamId, i, flushTs.Snapshots[i][0], flushTs.Snapshots[i][1], flushTs.Seqnos[i], s[1],
+					flushTs.Vbuuids[i], hwt.Seqnos[i])
+			}
+
 			flushTs.Seqnos[i] = s[1]
+		}
+	}
+
+	// Seqno should be monotonically increasing when it comes to mutation queue.
+	// For pre-caution, if we detect a flushTS that is smaller than LastFlushTS,
+	// we should make it align with lastFlushTS to make sure indexer does not hang
+	// because it may be waiting for a seqno that never exist in mutation queue.
+	if lts, ok := tk.ss.streamBucketLastFlushedTsMap[streamId][bucket]; ok && lts != nil {
+
+		for i, s := range flushTs.Seqnos {
+			//if flushTs has a smaller seqno than lastFlushTs
+			if s < lts.Seqnos[i] {
+
+				logging.Warnf("Timekeeper::mayBeMakeSnapAligned.  Align seqno smaller than lastFlushTs. "+
+					"Bucket %v StreamId %v vbucket %v. CurrentTS: Snapshot %v-%v Seqno %v Vbuuid %v. "+
+					"LastFlushTS: Snapshot %v-%v Seqno %v Vbuuid %v.",
+					bucket, streamId, i,
+					flushTs.Snapshots[i][0], flushTs.Snapshots[i][1], flushTs.Seqnos[i], flushTs.Vbuuids[i],
+					lts.Snapshots[i][0], lts.Snapshots[i][1], lts.Seqnos[i], lts.Vbuuids[i])
+
+				flushTs.Seqnos[i] = lts.Seqnos[i]
+				flushTs.Vbuuids[i] = lts.Vbuuids[i]
+				flushTs.Snapshots[i][0] = lts.Snapshots[i][0]
+				flushTs.Snapshots[i][1] = lts.Snapshots[i][1]
+			}
 		}
 	}
 
@@ -2276,6 +2475,13 @@ func (tk *timekeeper) repairStream(streamId common.StreamId,
 	tk.lock.Lock()
 	defer tk.lock.Unlock()
 
+	if status := tk.ss.streamBucketStatus[streamId][bucket]; status == STREAM_INACTIVE {
+
+		logging.Infof("Timekeeper::repairStream Found Stream %v Bucket %v In "+
+			"State %v. Skipping Repair.", streamId, bucket, status)
+		return
+	}
+
 	//prepare repairTs with all vbs in STREAM_END, REPAIR status and
 	//send that to KVSender to repair
 	if repairTs, needRepair, connErrVbs := tk.ss.getRepairTsForBucket(streamId, bucket); needRepair {
@@ -2316,7 +2522,21 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 	streamId := restartMsg.(*MsgRestartVbuckets).GetStreamId()
 	bucket := restartMsg.(*MsgRestartVbuckets).GetBucket()
 
+	//if timekeeper has moved to prepare unpause state, ignore
+	//the response message as all streams are going to be
+	//restarted anyways
+	if tk.checkIndexerState(common.INDEXER_PREPARE_UNPAUSE) {
+		tk.lock.Lock()
+		delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+		tk.lock.Unlock()
+		return
+	}
+
 	switch kvresp.GetMsgType() {
+
+	case REPAIR_ABORT:
+		//nothing to do
+		logging.Infof("Timekeeper::sendRestartMsg Repair Aborted %v %v", streamId, bucket)
 
 	case MSG_SUCCESS:
 		//allow sufficient time for control messages to come in
@@ -2327,6 +2547,17 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		tk.repairStream(streamId, bucket)
 
 	case INDEXER_ROLLBACK:
+
+		tk.lock.RLock()
+		status := tk.ss.streamBucketStatus[streamId][bucket]
+		tk.lock.RUnlock()
+
+		if status == STREAM_INACTIVE {
+			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
+				"State %v. Skipping Rollback.", streamId, bucket, status)
+			return
+		}
+
 		//if rollback msg, call initPrepareRecovery
 		logging.Infof("Timekeeper::sendRestartMsg Received Rollback Msg For "+
 			"%v %v. Sending Init Prepare.", streamId, bucket)
@@ -2342,6 +2573,13 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 
 		tk.lock.Lock()
 		defer tk.lock.Unlock()
+
+		if status := tk.ss.streamBucketStatus[streamId][bucket]; status == STREAM_INACTIVE {
+
+			logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
+				"State %v. Skipping Stream Repair.", streamId, bucket, status)
+			return
+		}
 
 		//reset timer for open stream
 		tk.ss.streamBucketOpenTsMap[streamId][bucket] = nil
@@ -2375,9 +2613,17 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 			logging.Errorf("Timekeeper::sendRestartMsg Bucket Not Found "+
 				"For Stream %v Bucket %v", streamId, bucket)
 
-			delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+			tk.lock.Lock()
+			defer tk.lock.Unlock()
+			if status := tk.ss.streamBucketStatus[streamId][bucket]; status == STREAM_INACTIVE {
 
-			tk.ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+				logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
+					"State %v. Skipping Bucket Not Found.", streamId, bucket, status)
+				return
+			} else {
+				delete(tk.ss.streamBucketRepairStopCh[streamId], bucket)
+				tk.ss.streamBucketStatus[streamId][bucket] = STREAM_INACTIVE
+			}
 
 			tk.supvRespch <- &MsgRecovery{mType: INDEXER_BUCKET_NOT_FOUND,
 				streamId: streamId,
@@ -2385,7 +2631,19 @@ func (tk *timekeeper) sendRestartMsg(restartMsg Message) {
 		} else {
 			logging.Errorf("Timekeeper::sendRestartMsg Error Response "+
 				"from KV %v For Request %v. Retrying RestartVbucket.", kvresp, restartMsg)
+
+			tk.lock.Lock()
+			status := tk.ss.streamBucketStatus[streamId][bucket]
+
+			if status == STREAM_INACTIVE {
+				tk.lock.Unlock()
+				logging.Infof("Timekeeper::sendRestartMsg Found Stream %v Bucket %v In "+
+					"State %v. Skipping RestartVbucket Retry.", streamId, bucket, status)
+				return
+			}
+
 			tk.ss.markRestartVbError(streamId, bucket)
+			tk.lock.Unlock()
 			tk.repairStream(streamId, bucket)
 		}
 	}
@@ -2570,7 +2828,7 @@ func (tk *timekeeper) handleStats(cmd Message) {
 			}
 
 			if idxStats != nil {
-				idxStats.numDocsIndexed.Set(int64(flushedCount))
+				idxStats.numDocsProcessed.Set(int64(flushedCount))
 				idxStats.numDocsQueued.Set(int64(queued))
 				idxStats.numDocsPending.Set(int64(pending))
 				idxStats.buildProgress.Set(int64(v))
@@ -2637,7 +2895,7 @@ func (tk *timekeeper) startTimer(streamId common.StreamId,
 
 	logging.Infof("Timekeeper::startTimer %v %v", streamId, bucket)
 
-	snapInterval := tk.config["settings.inmemory_snapshot.interval"].Uint64()
+	snapInterval := tk.getInMemSnapInterval()
 	ticker := time.NewTicker(time.Millisecond * time.Duration(snapInterval))
 	stopCh := tk.ss.streamBucketTimerStopCh[streamId][bucket]
 
@@ -2648,7 +2906,7 @@ func (tk *timekeeper) startTimer(streamId common.StreamId,
 				tk.generateNewStabilityTS(streamId, bucket)
 
 			case <-stopCh:
-				defer ticker.Stop()
+				ticker.Stop()
 				return
 			}
 		}
@@ -2737,4 +2995,145 @@ func (tk *timekeeper) calcSkipFactorForFastFlush(streamId common.StreamId,
 	} else {
 		return 0
 	}
+}
+
+func (tk *timekeeper) handleIndexerPause(cmd Message) {
+
+	logging.Infof("Timekeeper::handleIndexerPause")
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	tk.indexerState = common.INDEXER_PAUSED
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (tk *timekeeper) handlePrepareUnpause(cmd Message) {
+
+	logging.Infof("Timekeeper::handlePrepareUnpause")
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	tk.indexerState = common.INDEXER_PREPARE_UNPAUSE
+
+	go tk.doUnpause()
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (tk *timekeeper) handleIndexerResume(cmd Message) {
+
+	logging.Infof("Timekeeper::handleIndexerResume")
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+
+	tk.indexerState = common.INDEXER_ACTIVE
+
+	//generate prepare init recovery for all stream/buckets
+	for s, bs := range tk.ss.streamBucketStatus {
+		for b, status := range bs {
+			if status != STREAM_INACTIVE {
+				tk.ss.streamBucketFlushEnabledMap[s][b] = false
+				tk.supvRespch <- &MsgRecovery{mType: INDEXER_INIT_PREP_RECOVERY,
+					streamId: s,
+					bucket:   b}
+			}
+		}
+	}
+
+	tk.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (tk *timekeeper) doUnpause() {
+
+	//send unpause to indexer once there is no repair in progress
+	ticker := time.NewTicker(time.Second * 1)
+	defer ticker.Stop()
+
+	for _ = range ticker.C {
+
+		if tk.checkAnyRepairPending() {
+			logging.Infof("Timekeeper::doUnpause Dropping Request to Unpause. " +
+				"Next Try In 1 Second...")
+			continue
+		}
+		break
+	}
+
+	tk.supvRespch <- &MsgIndexerState{mType: INDEXER_UNPAUSE}
+}
+
+func (tk *timekeeper) checkAnyRepairPending() bool {
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+	for s, bs := range tk.ss.streamBucketStatus {
+
+		for b, _ := range bs {
+			if tk.ss.streamBucketRepairStopCh[s][b] != nil {
+				return true
+			}
+		}
+	}
+
+	return false
+
+}
+
+func (tk *timekeeper) checkIndexerState(state common.IndexerState) bool {
+
+	tk.lock.Lock()
+	defer tk.lock.Unlock()
+	if tk.indexerState == state {
+		return true
+	}
+	return false
+
+}
+
+func (tk *timekeeper) getPersistInterval() uint64 {
+
+	if common.GetStorageMode() == common.MOI {
+		return tk.config["settings.persisted_snapshot.moi.interval"].Uint64()
+	} else {
+		return tk.config["settings.persisted_snapshot.fdb.interval"].Uint64()
+	}
+
+}
+func (tk *timekeeper) getPersistIntervalInitBuild() uint64 {
+
+	if common.GetStorageMode() == common.MOI {
+		return tk.config["settings.persisted_snapshot_init_build.moi.interval"].Uint64()
+	} else {
+		return tk.config["settings.persisted_snapshot_init_build.fdb.interval"].Uint64()
+	}
+
+}
+func (tk *timekeeper) getInMemSnapInterval() uint64 {
+
+	if common.GetStorageMode() == common.MOI {
+		return tk.config["settings.inmemory_snapshot.moi.interval"].Uint64()
+	} else {
+		return tk.config["settings.inmemory_snapshot.fdb.interval"].Uint64()
+	}
+
+}
+
+func (tk *timekeeper) setNeedsCommit(streamId common.StreamId,
+	bucket string, flushTs *common.TsVbuuid) {
+
+	switch flushTs.GetSnapType() {
+
+	case common.INMEM_SNAP, common.NO_SNAP:
+		tk.ss.streamBucketNeedsCommitMap[streamId][bucket] = true
+	case common.DISK_SNAP, common.FORCE_COMMIT:
+		tk.ss.streamBucketNeedsCommitMap[streamId][bucket] = false
+	}
+
 }

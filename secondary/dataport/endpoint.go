@@ -21,6 +21,8 @@ package dataport
 import "fmt"
 import "net"
 import "time"
+import "strconv"
+import "strings"
 
 import c "github.com/couchbase/indexing/secondary/common"
 import "github.com/couchbase/indexing/secondary/transport"
@@ -41,12 +43,24 @@ type RouterEndpoint struct {
 	bufferSize int           // size of buffer to wait till flush
 	bufferTm   time.Duration // timeout to flush endpoint-buffer
 	harakiriTm time.Duration // timeout after which endpoint commits harakiri
+	statTick   time.Duration // timeout for logging statistics
 	// gen-server
 	ch    chan []interface{} // carries control commands
 	finch chan bool
 	// downstream
 	pkt  *transport.TransportPacket
 	conn net.Conn
+	// statistics
+	mutCount    int64
+	upsertCount int64
+	deleteCount int64
+	upsdelCount int64
+	syncCount   int64
+	beginCount  int64
+	endCount    int64
+	snapCount   int64
+	flushCount  int64
+	prjLatency  *Average
 }
 
 // NewRouterEndpoint instantiate a new RouterEndpoint
@@ -68,8 +82,10 @@ func NewRouterEndpoint(
 		keyChSize:  config["keyChanSize"].Int(),
 		block:      config["remoteBlock"].Bool(),
 		bufferSize: config["bufferSize"].Int(),
+		statTick:   time.Duration(config["statTick"].Int()),
 		bufferTm:   time.Duration(config["bufferTimeout"].Int()),
 		harakiriTm: time.Duration(config["harakiriTimeout"].Int()),
+		prjLatency: &Average{},
 	}
 	endpoint.ch = make(chan []interface{}, endpoint.keyChSize)
 	endpoint.conn = conn
@@ -79,6 +95,10 @@ func NewRouterEndpoint(
 	endpoint.pkt = transport.NewTransportPacket(maxPayload, flags)
 	endpoint.pkt.SetEncoder(transport.EncodingProtobuf, protobufEncode)
 	endpoint.pkt.SetDecoder(transport.EncodingProtobuf, protobufDecode)
+
+	endpoint.statTick *= time.Millisecond
+	endpoint.bufferTm *= time.Millisecond
+	endpoint.harakiriTm *= time.Millisecond
 
 	endpoint.logPrefix = fmt.Sprintf(
 		"ENDP[<-(%v,%4x)<-%v #%v]",
@@ -150,8 +170,8 @@ func (endpoint *RouterEndpoint) WaitForExit() error {
 
 // run
 func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
-	flushTick := time.NewTicker(endpoint.bufferTm * time.Millisecond)
-	harakiri := time.NewTimer(endpoint.harakiriTm * time.Millisecond)
+	flushTick := time.NewTicker(endpoint.bufferTm)
+	harakiri := time.NewTimer(endpoint.harakiriTm)
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -171,25 +191,49 @@ func (endpoint *RouterEndpoint) run(ch chan []interface{}) {
 		logging.Infof("%v ... stopped\n", endpoint.logPrefix)
 	}()
 
-	raddr := endpoint.raddr
+	statSince := time.Now()
+	var stitems [14]string
+	logstats := func() {
+		prjLatency := endpoint.prjLatency
+		stitems[0] = `"topic":"` + endpoint.topic + `"`
+		stitems[1] = `"raddr":"` + endpoint.raddr + `"`
+		stitems[2] = `"mutCount":` + strconv.Itoa(int(endpoint.mutCount))
+		stitems[3] = `"upsertCount":` + strconv.Itoa(int(endpoint.upsertCount))
+		stitems[4] = `"deleteCount":` + strconv.Itoa(int(endpoint.deleteCount))
+		stitems[5] = `"upsdelCount":` + strconv.Itoa(int(endpoint.upsertCount))
+		stitems[6] = `"syncCount":` + strconv.Itoa(int(endpoint.syncCount))
+		stitems[7] = `"beginCount":` + strconv.Itoa(int(endpoint.beginCount))
+		stitems[8] = `"endCount":` + strconv.Itoa(int(endpoint.endCount))
+		stitems[9] = `"snapCount":` + strconv.Itoa(int(endpoint.snapCount))
+		stitems[10] = `"flushCount":` + strconv.Itoa(int(endpoint.flushCount))
+		stitems[11] = `"latency.min":` + strconv.Itoa(int(prjLatency.Min()))
+		stitems[12] = `"latency.max":` + strconv.Itoa(int(prjLatency.Max()))
+		stitems[13] = `"latency.avg":` + strconv.Itoa(int(prjLatency.Mean()))
+		statjson := strings.Join(stitems[:], ",")
+		fmsg := "%v stats {%v}\n"
+		logging.Infof(fmsg, endpoint.logPrefix, statjson)
+	}
 
+	raddr := endpoint.raddr
+	lastActiveTime := time.Now()
 	buffers := newEndpointBuffers(raddr)
 
-	messageCount := int64(0)
-	flushCount := int64(0)
-	mutationCount := int64(0)
-
+	messageCount := 0
 	flushBuffers := func() (err error) {
-		logging.Tracef("%v sent %v mutations to %q\n",
-			endpoint.logPrefix, mutationCount, raddr)
-		if mutationCount > 0 {
-			flushCount++
-			err = buffers.flushBuffers(endpoint.conn, endpoint.pkt)
+		fmsg := "%v sent %v mutations to %q\n"
+		logging.Tracef(fmsg, endpoint.logPrefix, messageCount, raddr)
+		if messageCount > 0 {
+			err = buffers.flushBuffers(endpoint, endpoint.conn, endpoint.pkt)
 			if err != nil {
 				logging.Errorf("%v flushBuffers() %v\n", endpoint.logPrefix, err)
 			}
+			endpoint.flushCount++
 		}
-		mutationCount = 0
+		messageCount = 0
+		if time.Since(statSince) > endpoint.statTick {
+			logstats()
+			statSince = time.Now()
+		}
 		return
 	}
 
@@ -209,19 +253,20 @@ loop:
 				}
 
 				kv := data.Kv
-				buffers.addKeyVersions(data.Bucket, data.Vbno, data.Vbuuid, kv)
+				buffers.addKeyVersions(
+					data.Bucket, data.Vbno, data.Vbuuid, kv, endpoint)
 				logging.Tracef("%v added %v keyversions <%v:%v:%v> to %q\n",
 					endpoint.logPrefix, kv.Length(), data.Vbno, kv.Seqno,
 					kv.Commands, buffers.raddr)
-				messageCount++ // count cummulative mutations
-				// reload harakiri
-				mutationCount++ // count queued up mutations.
-				if mutationCount > int64(endpoint.bufferSize) {
+
+				messageCount++ // count queued up mutations.
+				if messageCount > endpoint.bufferSize {
 					if err := flushBuffers(); err != nil {
 						break loop
 					}
 				}
-				harakiri.Reset(endpoint.harakiriTm * time.Millisecond)
+
+				lastActiveTime = time.Now()
 
 			case endpCmdResetConfig:
 				prefix := endpoint.logPrefix
@@ -232,15 +277,21 @@ loop:
 				if cv, ok := config["bufferSize"]; ok {
 					endpoint.bufferSize = cv.Int()
 				}
+				if cv, ok := config["statTick"]; ok {
+					endpoint.statTick = time.Duration(cv.Int())
+					endpoint.statTick *= time.Millisecond
+				}
 				if cv, ok := config["bufferTimeout"]; ok {
 					endpoint.bufferTm = time.Duration(cv.Int())
+					endpoint.bufferTm *= time.Millisecond
 					flushTick.Stop()
-					flushTick = time.NewTicker(endpoint.bufferTm * time.Millisecond)
+					flushTick = time.NewTicker(endpoint.bufferTm)
 				}
 				if cv, ok := config["harakiriTimeout"]; ok {
 					endpoint.harakiriTm = time.Duration(cv.Int())
+					endpoint.harakiriTm *= time.Millisecond
 					if harakiri != nil { // load harakiri only when it is active
-						harakiri.Reset(endpoint.harakiriTm * time.Millisecond)
+						harakiri.Reset(endpoint.harakiriTm)
 						fmsg := "%v reloaded harakiriTm: %v\n"
 						logging.Infof(fmsg, prefix, endpoint.harakiriTm)
 					}
@@ -248,11 +299,9 @@ loop:
 				respch := msg[2].(chan []interface{})
 				respch <- []interface{}{nil}
 
-			case endpCmdGetStatistics:
+			case endpCmdGetStatistics: // TODO: this is defunct now.
 				respch := msg[1].(chan []interface{})
 				stats := endpoint.newStats()
-				stats.Set("messageCount", float64(messageCount))
-				stats.Set("flushCount", float64(flushCount))
 				respch <- []interface{}{map[string]interface{}(stats)}
 
 			case endpCmdClose:
@@ -271,21 +320,22 @@ loop:
 			// little activity in the data-path. On the other hand,
 			// downstream can block for reasons independant of datapath,
 			// hence the precaution.
-			harakiri.Reset(endpoint.harakiriTm * time.Millisecond)
+			lastActiveTime = time.Now()
 
 		case <-harakiri.C:
-			logging.Infof("%v committed harakiri\n", endpoint.logPrefix)
-			flushBuffers()
-			break loop
+			if time.Since(lastActiveTime) > endpoint.harakiriTm {
+				logging.Infof("%v committed harakiri\n", endpoint.logPrefix)
+				flushBuffers()
+				break loop
+			}
+			harakiri.Reset(endpoint.harakiriTm)
 		}
 	}
+	logstats()
 }
 
 func (endpoint *RouterEndpoint) newStats() c.Statistics {
-	m := map[string]interface{}{
-		"messageCount": float64(0),
-		"flushCount":   float64(0),
-	}
+	m := map[string]interface{}{}
 	stats, _ := c.NewStatistics(m)
 	return stats
 }

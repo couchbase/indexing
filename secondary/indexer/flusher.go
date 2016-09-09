@@ -177,7 +177,7 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, bucket s
 	var workerStopChannels []StopChannel
 
 	//create msg channel for workers to provide messages
-	workerMsgCh := make(MsgChannel)
+	workerMsgCh := make(MsgChannel, numVbuckets)
 
 	for i = 0; i < numVbuckets; i++ {
 		if ts == nil {
@@ -208,6 +208,7 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, bucket s
 		close(allWorkersDoneCh)
 	}()
 
+	workerAborted := false
 	//wait for upstream to signal stop or for all workers to signal done
 	//or workers to send any message
 	select {
@@ -225,16 +226,16 @@ func (f *flusher) flushQueue(q MutationQueue, streamId common.StreamId, bucket s
 	case <-allWorkersDoneCh:
 
 		//handle any message from workers
-	case m, ok := <-workerMsgCh:
-		if ok {
-			//TODO identify the messages and handle
-			//For now, just relay back the message
-			msgch <- m
-		}
-		return
+	case <-workerMsgCh:
+		workerAborted = true
+		<-allWorkersDoneCh
 	}
 
-	msgch <- &MsgSuccess{}
+	if workerAborted {
+		msgch <- &MsgError{}
+	} else {
+		msgch <- &MsgSuccess{}
+	}
 }
 
 //flushSingleVbucket is the actual implementation which flushes the given queue
@@ -291,7 +292,7 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 			"%v till Seqno: %v for Stream: %v", vbucket, seqno, streamId)
 	})
 
-	mutch, err := q.DequeueUptoSeqno(vbucket, seqno)
+	mutch, errch, err := q.DequeueUptoSeqno(vbucket, seqno)
 	if err != nil {
 		//TODO
 	}
@@ -316,6 +317,10 @@ func (f *flusher) flushSingleVbucketUptoSeqno(q MutationQueue, streamId common.S
 					bucketStats.mutationQueueSize.Add(-1)
 				}
 			}
+		case <-errch:
+			workerMsgCh <- &MsgError{}
+			return
+
 		}
 	}
 }
@@ -378,12 +383,17 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 		case common.Upsert:
 			processedUpserts = append(processedUpserts, mut.uuid)
 
-			f.processUpsert(mut, mutk.docid)
+			f.processUpsert(mut, mutk.docid, mutk.meta)
 
 		case common.Deletion:
-			f.processDelete(mut, mutk.docid)
+			f.processDelete(mut, mutk.docid, mutk.meta)
 
 		case common.UpsertDeletion:
+
+			//skip UpsertDeletion if index has immutable partition
+			if idxInst.Defn.Immutable {
+				continue
+			}
 
 			var skipUpsertDeletion bool
 			//if Upsert has been processed for this IndexInstId,
@@ -397,7 +407,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 			if skipUpsertDeletion {
 				continue
 			} else {
-				f.processDelete(mut, mutk.docid)
+				f.processDelete(mut, mutk.docid, mutk.meta)
 			}
 
 		default:
@@ -407,7 +417,7 @@ func (f *flusher) flush(mutk *MutationKeys, streamId common.StreamId) {
 	}
 }
 
-func (f *flusher) processUpsert(mut *Mutation, docid []byte) {
+func (f *flusher) processUpsert(mut *Mutation, docid []byte, meta *MutationMeta) {
 
 	idxInst, _ := f.indexInstMap[mut.uuid]
 
@@ -423,22 +433,15 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte) {
 
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
-		key, err := GetIndexEntryBytesFromKey(mut.key, docid, idxInst.Defn.IsPrimary)
-		if err != nil {
+		if err := slice.Insert(mut.key, docid, meta); err != nil {
 			logging.Errorf("Flusher::processUpsert Error indexing Key: %s "+
 				"docid: %s in Slice: %v. Error: %v. Skipped.",
 				mut.key, docid, slice.Id(), err)
 
-			if err2 := slice.Delete(docid); err2 != nil {
+			if err2 := slice.Delete(docid, meta); err2 != nil {
 				logging.Errorf("Flusher::processUpsert Error removing entry due to error %v Key: %s "+
 					"docid: %s in Slice: %v. Error: %v", err, mut.key, docid, slice.Id(), err2)
 			}
-			return
-		}
-
-		if err := slice.Insert(key, docid); err != nil {
-			logging.Errorf("Flusher::processUpsert Error Inserting Key: %s "+
-				"docid: %s in Slice: %v. Error: %v", mut.key, docid, slice.Id(), err)
 		}
 	} else {
 		logging.Errorf("Flusher::processUpsert Partition Instance not found "+
@@ -447,7 +450,7 @@ func (f *flusher) processUpsert(mut *Mutation, docid []byte) {
 
 }
 
-func (f *flusher) processDelete(mut *Mutation, docid []byte) {
+func (f *flusher) processDelete(mut *Mutation, docid []byte, meta *MutationMeta) {
 
 	idxInst, _ := f.indexInstMap[mut.uuid]
 
@@ -463,7 +466,7 @@ func (f *flusher) processDelete(mut *Mutation, docid []byte) {
 
 	if partnInst := partnInstMap[partnId]; ok {
 		slice := partnInst.Sc.GetSliceByIndexKey(common.IndexKey(mut.key))
-		if err := slice.Delete(docid); err != nil {
+		if err := slice.Delete(docid, meta); err != nil {
 			logging.Errorf("Flusher::processDelete Error Deleting DocId: %v "+
 				"from Slice: %v", docid, slice.Id())
 		}
@@ -517,25 +520,4 @@ func (f *flusher) GetQueueHWT(q MutationQueue) Timestamp {
 		}
 	}
 	return ts
-}
-
-func GetIndexEntryBytesFromKey(key []byte, docid []byte, isPrimary bool) ([]byte, error) {
-	var entry IndexEntry
-	var err error
-
-	if isPrimary {
-		if entry, err = NewPrimaryIndexEntry(docid); err != nil {
-			return nil, err
-		}
-	} else {
-		if entry, err = NewSecondaryIndexEntry(key, docid); err != nil {
-			if err == ErrSecKeyNil {
-				return nil, nil
-			}
-
-			return nil, err
-		}
-	}
-
-	return entry.Bytes(), err
 }

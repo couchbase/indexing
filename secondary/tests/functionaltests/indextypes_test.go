@@ -518,6 +518,33 @@ func TestBasicPrimaryIndex(t *testing.T) {
 	FailTestIfError(err, "Error in scan", t)
 	err = tv.Validate(docScanResults, scanResults)
 	FailTestIfError(err, "Error in scan result validation of Primary Range", t)
+
+	// Count Range on primary index
+	docScanResults = datautility.ExpectedScanResponse_RangePrimary(docs, "User2", "User5", 3)
+	rangeCount, err := secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{"User2"}, []interface{}{"User5"}, 3, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	log.Printf("CountRange() expected and actual is:  %d and %d", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+
+	var lookupkey string
+	for k := range docs {
+		lookupkey = k
+		break
+	}
+	log.Printf("lookupkey for CountLookup() = %v", lookupkey)
+
+	// Count Lookup on primary index
+	docScanResults = datautility.ExpectedScanResponse_RangePrimary(docs, lookupkey, lookupkey, 3)
+	lookupCount, err := secondaryindex.CountLookup(indexName, bucketName, indexScanAddress, []interface{}{lookupkey}, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	if int64(len(docScanResults)) != lookupCount {
+		e := errors.New(fmt.Sprintf("Expected Lookup count %d does not match actual Range count %d: ", len(docScanResults), lookupCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+	log.Printf("CountLookup() = %v", lookupCount)
 }
 
 func TestBasicNullDataType(t *testing.T) {
@@ -723,6 +750,55 @@ func TestCountRange(t *testing.T) {
 	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{40}, []interface{}{50}, 3, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in CountRange: ", t)
 	log.Printf("Count of expected and actual Range are: %d and %d", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+
+	// nil and null tests
+	// []interface{}{}  =>  "[]"   =>  nil
+	// []interface{}{nil} =>   [null]
+	// nil => null
+
+	// low is nil.  key <= 30
+	log.Printf("Testing CountRange() for key <= val")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", -1000, 30, 2) // simulate low = nil
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{}, []interface{}{30}, 2, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	log.Printf("Count of expected and actual CountRange for key <= 30 are: %d and %d", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+
+	// high is nil . key >= 25
+	log.Printf("Testing CountRange() for key >= val")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 25, 5000, 1) // simulate high = nil
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{25}, []interface{}{}, 1, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	log.Printf("Count of expected and actual CountRange for key >= 25 are: %d and %d", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+
+	// low is null.  key > null and key <= 30
+	log.Printf("Testing CountRange() for null < key <= val")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", -1000, 30, 2) // simulate low = null
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{nil}, []interface{}{30}, 2, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	log.Printf("Count of expected and actual CountRange for key > null && key <= 30 are: %d and %d", len(docScanResults), rangeCount)
+	if int64(len(docScanResults)) != rangeCount {
+		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
+		FailTestIfError(e, "Error in CountRange: ", t)
+	}
+
+	// high is null . key >= 25 and key < null
+	log.Printf("Testing CountRange() for val <= key < null ")
+	docScanResults = datautility.ExpectedScanResponse_float64(docs, "age", 25, -1000, 1) // simulate high = null
+	rangeCount, err = secondaryindex.CountRange(indexName, bucketName, indexScanAddress, []interface{}{25}, []interface{}{nil}, 1, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in CountRange: ", t)
+	log.Printf("Count of expected and actual CountRange for key >= 25 && key < null are: %d and %d", len(docScanResults), rangeCount)
 	if int64(len(docScanResults)) != rangeCount {
 		e := errors.New(fmt.Sprintf("Expected Range count %d does not match actual Range count %d: ", len(docScanResults), rangeCount))
 		FailTestIfError(e, "Error in CountRange: ", t)

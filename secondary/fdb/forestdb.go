@@ -9,11 +9,12 @@ package forestdb
 //  either express or implied. See the License for the specific language governing permissions
 //  and limitations under the License.
 
-//#cgo LDFLAGS: -lforestdb -lbreakpad_wrapper
+//#cgo LDFLAGS: -lforestdb
 //#cgo CFLAGS: -O0
 //#include <stdlib.h>
 //#include <libforestdb/forestdb.h>
 import "C"
+import "sync"
 
 // KVStore handle
 type KVStore struct {
@@ -23,10 +24,35 @@ type KVStore struct {
 	name string
 }
 
+var kvHandlePool *sync.Pool
+
+func init() {
+	kvHandlePool = &sync.Pool{
+		New: func() interface{} {
+			return &KVStore{}
+		},
+	}
+}
+
+func allocKVStore(name string) *KVStore {
+	rv := kvHandlePool.Get().(*KVStore)
+	rv.name = name
+	rv.db = nil
+	rv.f = nil
+	rv.advLock.Init()
+
+	return rv
+}
+
+func freeKVStore(kv *KVStore) {
+	kvHandlePool.Put(kv)
+}
+
 // Close the KVStore and release related resources.
 func (k *KVStore) Close() error {
 	k.Lock()
 	defer k.Unlock()
+	defer freeKVStore(k)
 
 	Log.Tracef("fdb_kvs_close call k:%p db:%v", k, k.db)
 	errNo := C.fdb_kvs_close(k.db)
@@ -171,11 +197,4 @@ func Shutdown() error {
 // Buffer cache used by the forestdb global pool
 func BufferCacheUsed() uint64 {
 	return uint64(C.fdb_get_buffer_cache_used())
-}
-
-// Invoke breakpad on forestdb fatal errors
-func InitBreakpadForFDB(diagdir string) {
-	// cdir := C.CString(diagdir)
-	// defer C.free(unsafe.Pointer(cdir))
-	// C.init_fdb_breakpad(cdir)
 }

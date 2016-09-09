@@ -17,6 +17,9 @@ import (
 	"unsafe"
 )
 
+import "github.com/couchbase/indexing/secondary/logging"
+import "github.com/couchbase/indexing/secondary/common"
+
 type OpenFlags uint32
 
 const (
@@ -128,6 +131,14 @@ func (c *Config) CompactionBufferSizeMax() uint32 {
 	return uint32(c.config.compaction_buf_maxsize)
 }
 
+func (c *Config) NumKeepingHeaders() uint8 {
+	return uint8(c.config.num_keeping_headers)
+}
+
+func (c *Config) BlockReuseThreshold() uint8 {
+	return uint8(c.config.block_reusing_threshold)
+}
+
 func (c *Config) SetCompactionBufferSizeMax(s uint32) {
 	c.config.compaction_buf_maxsize = C.uint32_t(s)
 }
@@ -188,10 +199,20 @@ func (c *Config) SetMaxWriterLockProb(s uint8) {
 	c.config.max_writer_lock_prob = C.size_t(s)
 }
 
+func (c *Config) SetNumKeepingHeaders(s uint8) {
+	c.config.num_keeping_headers = C.size_t(s)
+}
+
+func (c *Config) SetBlockReuseThreshold(s uint8) {
+	c.config.block_reusing_threshold = C.size_t(s)
+}
+
 // DefaultConfig gets the default ForestDB config
 func DefaultConfig() *Config {
 	Log.Tracef("fdb_get_default_config call")
 	config := C.fdb_get_default_config()
+	config.breakpad_minidump_dir = C.CString(common.SystemConfig["indexer.diagnostics_dir"].String())
+	logging.Debugf("DefaultConfig(): config.breakpad_minidump_dir %v", config.breakpad_minidump_dir)
 	Log.Tracef("fdb_get_default_config ret config:%v", config)
 	return &Config{
 		config: &config,

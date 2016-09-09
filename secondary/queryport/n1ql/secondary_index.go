@@ -12,8 +12,15 @@
 package n1ql
 
 import "fmt"
+import "os"
 import "sync"
+import "time"
+import "path"
+import "strings"
+import "encoding/gob"
 import "strconv"
+import "io/ioutil"
+import "sync/atomic"
 
 import l "github.com/couchbase/indexing/secondary/logging"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -27,6 +34,8 @@ import "github.com/couchbase/query/expression/parser"
 import "github.com/couchbase/query/timestamp"
 import "github.com/couchbase/query/value"
 import qlog "github.com/couchbase/query/logging"
+
+const DONEREQUEST = 1
 
 // ErrorIndexEmpty is index not initialized.
 var ErrorIndexEmpty = errors.NewError(
@@ -43,10 +52,10 @@ var n1ql2GsiInclusion = map[datastore.Inclusion]qclient.Inclusion{
 	datastore.BOTH:    qclient.Both,
 }
 var gsi2N1QLState = map[c.IndexState]datastore.IndexState{
-	c.INDEX_STATE_CREATED: datastore.PENDING,
-	c.INDEX_STATE_READY:   datastore.PENDING,
-	c.INDEX_STATE_INITIAL: datastore.PENDING,
-	c.INDEX_STATE_CATCHUP: datastore.PENDING,
+	c.INDEX_STATE_CREATED: datastore.PENDING, // might also be DEFERRED
+	c.INDEX_STATE_READY:   datastore.PENDING, // might also be DEFERRED
+	c.INDEX_STATE_INITIAL: datastore.BUILDING,
+	c.INDEX_STATE_CATCHUP: datastore.BUILDING,
 	c.INDEX_STATE_ACTIVE:  datastore.ONLINE,
 	c.INDEX_STATE_DELETED: datastore.OFFLINE,
 	c.INDEX_STATE_ERROR:   datastore.OFFLINE,
@@ -64,11 +73,21 @@ var n1ql2GsiConsistency = map[datastore.ScanConsistency]c.Consistency{
 
 // contains all index loaded via gsi cluster.
 type gsiKeyspace struct {
+	// for 8-byte alignment fot atomic access.
+	scandur        int64
+	blockeddur     int64
+	throttledur    int64
+	primedur       int64
+	totalscans     int64
+	backfillSize   int64
+	totalbackfills int64
+
 	rw             sync.RWMutex
 	clusterURL     string
 	namespace      string // aka pool
 	keyspace       string // aka bucket
 	gsiClient      *qclient.GsiClient
+	config         c.Config
 	indexes        map[uint64]*secondaryIndex // defnID -> index
 	primaryIndexes map[uint64]*secondaryIndex
 	logPrefix      string
@@ -91,21 +110,31 @@ func NewGSIIndexer(
 		indexes:        make(map[uint64]*secondaryIndex), // defnID -> index
 		primaryIndexes: make(map[uint64]*secondaryIndex),
 	}
-	gsi.logPrefix = fmt.Sprintf("GSIC[%s; %s]", namespace, keyspace)
+	tm := time.Now().UnixNano()
+	gsi.logPrefix = fmt.Sprintf("GSIC[%s/%s-%v]", namespace, keyspace, tm)
 
 	// get the singleton-client
-	client, err := getSingletonClient(clusterURL)
+	conf, err := c.GetSettingsConfig(c.SystemConfig)
+	if err != nil {
+		return nil, errors.NewError(err, "GSI config instantiation failed")
+	}
+	qconf := conf.SectionConfig("queryport.client.", true /*trim*/)
+	client, err := getSingletonClient(clusterURL, qconf)
 	if err != nil {
 		l.Errorf("%v GSI instantiation failed: %v", gsi.logPrefix, err)
 		return nil, errors.NewError(err, "GSI client instantiation failed")
 	}
-	gsi.gsiClient = client
+	gsi.gsiClient, gsi.config = client, qconf
 	// refresh indexes for this service->namespace->keyspace
 	if err := gsi.Refresh(); err != nil {
 		l.Errorf("%v Refresh() failed: %v", gsi.logPrefix, err)
 		return nil, err
 	}
-	l.Debugf("%v instantiated ...", gsi.logPrefix)
+	l.Infof("%v started ...", gsi.logPrefix)
+
+	logtick := time.Duration(qconf["logtick"].Int()) * time.Millisecond
+	go gsi.logstats(logtick)
+	go gsi.backfillMonitor(5 * time.Second)
 	return gsi, nil
 }
 
@@ -252,13 +281,13 @@ func (gsi *gsiKeyspace) CreatePrimaryIndex(
 	}
 	defnID, err := gsi.gsiClient.CreateIndex(
 		name,
-		gsi.keyspace,       /*bucket-name*/
-		string(c.ForestDB), /*using, by default always forestdb*/
-		"N1QL",             /*exprType*/
-		"",                 /*partnStr*/
-		"",                 /*whereStr*/
-		nil,                /*secStrs*/
-		true,               /*isPrimary*/
+		gsi.keyspace, /*bucket-name*/
+		"GSI",        /*using*/
+		"N1QL",       /*exprType*/
+		"",           /*partnStr*/
+		"",           /*whereStr*/
+		nil,          /*secStrs*/
+		true,         /*isPrimary*/
 		withJSON)
 	if err != nil {
 		return nil, errors.NewError(err, "GSI CreatePrimaryIndex()")
@@ -306,9 +335,9 @@ func (gsi *gsiKeyspace) CreateIndex(
 	}
 	defnID, err := gsi.gsiClient.CreateIndex(
 		name,
-		gsi.keyspace,       /*bucket-name*/
-		string(c.ForestDB), /*using, by default always forestdb*/
-		"N1QL",             /*exprType*/
+		gsi.keyspace, /*bucket-name*/
+		"GSI",        /*using*/
+		"N1QL",       /*exprType*/
 		partnStr, whereStr, secStrs,
 		false, /*isPrimary*/
 		withJSON)
@@ -469,6 +498,11 @@ func newSecondaryIndexFromMetaData(
 		err:       instn.Error,
 		deferred:  indexDefn.Deferred,
 	}
+	if indexDefn.Deferred &&
+		(instn.State == c.INDEX_STATE_CREATED ||
+			instn.State == c.INDEX_STATE_READY) {
+		si.state = datastore.DEFERRED
+	}
 	return si, nil
 }
 
@@ -570,7 +604,9 @@ func (si *secondaryIndex) Statistics(
 
 // Count implement Index{} interface.
 func (si *secondaryIndex) Count(span *datastore.Span,
-	cons datastore.ScanConsistency, vector timestamp.Vector) (int64, errors.Error) {
+	cons datastore.ScanConsistency,
+	vector timestamp.Vector) (int64, errors.Error) {
+
 	if si == nil {
 		return 0, ErrorIndexEmpty
 	}
@@ -615,15 +651,41 @@ func (si *secondaryIndex) Scan(
 	conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
-	defer close(entryChannel)
+	var tmpfile *os.File
+	var backfillSync int64
 
-	client := si.gsi.gsiClient
+	syncCh := make(chan bool)
+
+	defer close(entryChannel)
+	defer func() { // cleanup tmpfile
+		if tmpfile != nil {
+			<-syncCh
+			tmpfile.Close()
+			name := tmpfile.Name()
+			fmsg := "%v Scan(%v) removing backfill file %v ...\n"
+			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
+			if err := os.Remove(name); err != nil {
+				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
+				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
+			}
+			atomic.AddInt64(&si.gsi.totalbackfills, 1)
+		}
+	}()
+	defer func() {
+		atomic.StoreInt64(&backfillSync, DONEREQUEST)
+	}()
+
+	starttm := time.Now()
+
+	client, cnf := si.gsi.gsiClient, si.gsi.config
 	if span.Seek != nil {
 		seek := values2SKey(span.Seek)
 		client.Lookup(
 			si.defnID, requestId, []c.SecondaryKey{seek}, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeResponsehandler(client, conn))
+			makeResponsehandler(
+				requestId,
+				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 
 	} else {
 		low, high := values2SKey(span.Range.Low), values2SKey(span.Range.High)
@@ -631,8 +693,12 @@ func (si *secondaryIndex) Scan(
 		client.Range(
 			si.defnID, requestId, low, high, incl, distinct, limit,
 			n1ql2GsiConsistency[cons], vector2ts(vector),
-			makeResponsehandler(client, conn))
+			makeResponsehandler(
+				requestId,
+				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 	}
+	atomic.AddInt64(&si.gsi.totalscans, 1)
+	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 }
 
 // Scan implement PrimaryIndex{} interface.
@@ -641,13 +707,42 @@ func (si *secondaryIndex) ScanEntries(
 	vector timestamp.Vector, conn *datastore.IndexConnection) {
 
 	entryChannel := conn.EntryChannel()
-	defer close(entryChannel)
+	var tmpfile *os.File
+	var backfillSync int64
 
-	client := si.gsi.gsiClient
+	syncCh := make(chan bool)
+
+	defer close(entryChannel)
+	defer func() {
+		if tmpfile != nil {
+			<-syncCh
+			tmpfile.Close()
+			name := tmpfile.Name()
+			fmsg := "%v ScanEntries(%v) removing backfill file %v ...\n"
+			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
+			if err := os.Remove(name); err != nil {
+				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
+				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
+			}
+			atomic.AddInt64(&si.gsi.totalbackfills, 1)
+		}
+	}()
+	defer func() {
+		atomic.StoreInt64(&backfillSync, DONEREQUEST)
+	}()
+
+	starttm := time.Now()
+
+	client, cnf := si.gsi.gsiClient, si.gsi.config
 	client.ScanAll(
 		si.defnID, requestId, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
-		makeResponsehandler(client, conn))
+		makeResponsehandler(
+			requestId,
+			si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
+
+	atomic.AddInt64(&si.gsi.totalscans, 1)
+	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 }
 
 //-------------------------------------
@@ -655,38 +750,164 @@ func (si *secondaryIndex) ScanEntries(
 //-------------------------------------
 
 func makeResponsehandler(
-	client *qclient.GsiClient, conn *datastore.IndexConnection) qclient.ResponseHandler {
+	requestId string,
+	si *secondaryIndex,
+	client *qclient.GsiClient,
+	conn *datastore.IndexConnection,
+	tmpfile **os.File, backfillSync *int64, syncCh chan bool,
+	config c.Config) qclient.ResponseHandler {
 
 	entryChannel := conn.EntryChannel()
-	stopChannel := conn.StopChannel()
+
+	var enc *gob.Encoder
+	var dec *gob.Decoder
+	var readfd *os.File
+	var backfillFin, backfillEntries int64
+
+	backfillLimit := int64(config["backfillLimit"].Int())
+	primed, starttm, ticktm := false, time.Now(), time.Now()
+	lprefix := si.gsi.logPrefix
+
+	backfill := func() {
+		name := (*tmpfile).Name()
+		defer func() {
+			if readfd != nil {
+				readfd.Close()
+			}
+			close(syncCh)
+			atomic.AddInt64(&backfillFin, 1)
+			l.Debugf(
+				"%v %q finished backfill for %v ...\n",
+				lprefix, requestId, name)
+			recover() // need this because entryChannel() would have closed
+		}()
+		l.Debugf(
+			"%v %q started backfill for %v ...\n", lprefix, requestId, name)
+		for {
+			if pending := atomic.LoadInt64(&backfillEntries); pending > 0 {
+				atomic.AddInt64(&backfillEntries, -1)
+			} else if done := atomic.LoadInt64(backfillSync); done == DONEREQUEST {
+				return
+			} else {
+				time.Sleep(1 * time.Millisecond)
+				continue
+			}
+			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
+			if cummsize > backfillLimit {
+				fmsg := "%q backfill exceeded limit %v, %v"
+				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
+				conn.Error(n1qlError(client, err))
+				return
+			}
+
+			skeys := make([]c.SecondaryKey, 0)
+			if err := dec.Decode(&skeys); err != nil {
+				fmsg := "%v %q decoding from backfill %v: %v\n"
+				l.Errorf(fmsg, lprefix, requestId, name, err)
+				conn.Error(n1qlError(client, err))
+				return
+			}
+			pkeys := make([][]byte, 0)
+			if err := dec.Decode(&pkeys); err != nil {
+				fmsg := "%v %q decoding from backfill %v: %v\n"
+				l.Errorf(fmsg, lprefix, requestId, name, err)
+				conn.Error(n1qlError(client, err))
+				return
+			}
+			l.Tracef("%v backfill read %v entries\n", lprefix, len(skeys))
+			if primed == false {
+				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
+				primed = true
+			}
+			if len(entryChannel) > 0 && len(skeys) > 0 {
+				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
+			}
+			if sendEntries(si, pkeys, skeys, conn) == "stop" {
+				return
+			}
+			ticktm = time.Now()
+		}
+	}
 
 	return func(data qclient.ResponseReader) bool {
-
-		if err := data.Error(); err != nil {
+		err := data.Error()
+		if err != nil {
 			conn.Error(n1qlError(client, err))
 			return false
 		}
 		skeys, pkeys, err := data.GetEntries()
-		if err == nil {
-			for i, skey := range skeys {
-				// Primary-key is mandatory.
-				e := &datastore.IndexEntry{
-					PrimaryKey: string(pkeys[i]),
-				}
-				e.EntryKey = skey2Values(skey)
-
-				fmsg := "current enqueued length: %d (max %d)\n"
-				l.Tracef(fmsg, len(entryChannel), cap(entryChannel))
-				select {
-				case entryChannel <- e:
-				case <-stopChannel:
+		if err != nil {
+			conn.Error(n1qlError(client, err))
+			return false
+		}
+		cp, ln := cap(entryChannel), len(entryChannel)
+		if backfillLimit > 0 && *tmpfile == nil && ((cp - ln) < len(skeys)) {
+			prefix := "scan-backfill" + strconv.Itoa(os.Getpid())
+			*tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
+			name := (*tmpfile).Name()
+			l.Infof("%v %v new backfill file ... %v\n", lprefix, requestId, name)
+			if err != nil {
+				fmsg := "%v %q creating backfill file %v : %v\n"
+				l.Errorf(fmsg, lprefix, requestId, name, err)
+				*tmpfile = nil
+				conn.Error(n1qlError(client, err))
+				return false
+			} else {
+				// encoder
+				enc = gob.NewEncoder(*tmpfile)
+				readfd, err = os.OpenFile(name, os.O_RDONLY, 0666)
+				if err != nil {
+					fmsg := "%v %v reading backfill file %v: %v\n"
+					l.Errorf(fmsg, lprefix, requestId, name, err)
+					conn.Error(n1qlError(client, err))
 					return false
 				}
+				// decoder
+				dec = gob.NewDecoder(readfd)
+				go backfill()
 			}
-			return true
 		}
-		conn.Error(n1qlError(client, err))
-		return false
+
+		if *tmpfile != nil {
+			// whether temp-file is exhausted the limit.
+			cummsize := atomic.LoadInt64(&si.gsi.backfillSize) / (1024 * 1024)
+			if cummsize > backfillLimit {
+				fmsg := "%q backfill exceeded limit %v, %v"
+				err := fmt.Errorf(fmsg, requestId, backfillLimit, cummsize)
+				conn.Error(n1qlError(client, err))
+				return false
+			}
+
+			l.Tracef("%v backfill %v entries\n", lprefix, len(skeys))
+			if atomic.LoadInt64(&backfillFin) > 0 {
+				return false
+			}
+			if err := enc.Encode(skeys); err != nil {
+				conn.Error(n1qlError(client, err))
+				return false
+			}
+			if err := enc.Encode(pkeys); err != nil {
+				conn.Error(n1qlError(client, err))
+				return false
+			}
+			atomic.AddInt64(&backfillEntries, 1)
+
+		} else {
+			fmsg := "%v response cap:%v len:%v entries:%v\n"
+			l.Tracef(fmsg, lprefix, cp, ln, len(skeys))
+			if primed == false {
+				atomic.AddInt64(&si.gsi.primedur, int64(time.Since(starttm)))
+				primed = true
+			}
+			if len(entryChannel) > 0 && len(skeys) > 0 {
+				atomic.AddInt64(&si.gsi.throttledur, int64(time.Since(ticktm)))
+			}
+			if sendEntries(si, pkeys, skeys, conn) == "stop" {
+				return false
+			}
+			ticktm = time.Now()
+		}
+		return true
 	}
 }
 
@@ -850,17 +1071,13 @@ func guard2Vbuuid(guard string) uint64 {
 var muclient sync.Mutex
 var singletonClient *qclient.GsiClient
 
-func getSingletonClient(clusterURL string) (*qclient.GsiClient, error) {
+func getSingletonClient(
+	clusterURL string, qconf c.Config) (*qclient.GsiClient, error) {
+
 	muclient.Lock()
 	defer muclient.Unlock()
 	if singletonClient == nil {
 		l.Debugf("creating singleton for URL %v", clusterURL)
-		conf, err := c.GetSettingsConfig(c.SystemConfig)
-		if err != nil {
-			return nil, err
-		}
-
-		qconf := conf.SectionConfig("queryport.client.", true /*trim*/)
 		client, err := qclient.NewGsiClient(clusterURL, qconf)
 		if err != nil {
 			return nil, fmt.Errorf("in NewGsiClient(): %v", err)
@@ -868,4 +1085,128 @@ func getSingletonClient(clusterURL string) (*qclient.GsiClient, error) {
 		singletonClient = client
 	}
 	return singletonClient, nil
+}
+
+var n1ql_backfill_temp_dir string
+
+func init() {
+	// register gob objects for complex composite keys.
+	gob.Register(map[string]interface{}{})
+	gob.Register([]interface{}{})
+
+	file, err := ioutil.TempFile("" /*dir*/, "scan-backfill")
+	if err != nil {
+		return
+	}
+
+	n1ql_backfill_temp_dir = path.Dir(file.Name())
+	os.Remove(file.Name()) // remove this file.
+
+	files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
+	if err != nil {
+		return
+	}
+
+	conf, _ := c.GetSettingsConfig(c.SystemConfig)
+	scantm := conf["indexer.settings.scan_timeout"].Int() // in ms.
+
+	for _, file := range files {
+		fname := path.Join(n1ql_backfill_temp_dir, file.Name())
+		mtime := file.ModTime()
+		since := (time.Since(mtime).Seconds() * 1000) * 2 // twice the lng scan
+		if strings.Contains(fname, "scan-backfill") && int(since) > scantm {
+			fmsg := "GSI client: removing old file %v last-modified @ %v"
+			l.Infof(fmsg, fname, mtime)
+			os.Remove(fname)
+		}
+	}
+}
+
+func sendEntries(
+	si *secondaryIndex, pkeys [][]byte, skeys []c.SecondaryKey,
+	conn *datastore.IndexConnection) string {
+
+	if len(skeys) == 0 {
+		return "empty"
+	}
+
+	var start time.Time
+	blockedtm, blocked := int64(0), false
+
+	entryChannel := conn.EntryChannel()
+	stopChannel := conn.StopChannel()
+
+	for i, skey := range skeys {
+		// Primary-key is mandatory.
+		e := &datastore.IndexEntry{PrimaryKey: string(pkeys[i])}
+		e.EntryKey = skey2Values(skey)
+		cp, ln := cap(entryChannel), len(entryChannel)
+		if ln == cp {
+			start, blocked = time.Now(), true
+		}
+		select {
+		case entryChannel <- e:
+		case <-stopChannel:
+			return "stop"
+		}
+		if blocked {
+			blockedtm += int64(time.Since(start))
+			blocked = false
+		}
+	}
+	atomic.AddInt64(&si.gsi.blockeddur, blockedtm)
+	return "ok"
+}
+
+func (gsi *gsiKeyspace) logstats(logtick time.Duration) {
+	tick := time.NewTicker(logtick)
+	defer func() {
+		tick.Stop()
+	}()
+
+	sofar := int64(0)
+	for {
+		<-tick.C
+		scandur := atomic.LoadInt64(&gsi.scandur)
+		blockeddur := atomic.LoadInt64(&gsi.blockeddur)
+		throttledur := atomic.LoadInt64(&gsi.throttledur)
+		primedur := atomic.LoadInt64(&gsi.primedur)
+		totalscans := atomic.LoadInt64(&gsi.totalscans)
+		totalbackfills := atomic.LoadInt64(&gsi.totalbackfills)
+		if totalscans > sofar {
+			fmsg := `%v logstats %q {` +
+				`"gsi_scan_count":%v,"gsi_scan_duration":%v,` +
+				`"gsi_throttle_duration":%v,` +
+				`"gsi_prime_duration":%v,"gsi_blocked_duration":%v,` +
+				`"gsi_totalbackfills":%v}`
+			l.Infof(
+				fmsg, gsi.logPrefix, gsi.keyspace, totalscans, scandur,
+				throttledur, primedur, blockeddur, totalbackfills)
+		}
+		sofar = totalscans
+	}
+}
+
+func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
+	tick := time.NewTicker(period)
+	defer func() {
+		tick.Stop()
+	}()
+
+	for {
+		<-tick.C
+		files, err := ioutil.ReadDir(n1ql_backfill_temp_dir)
+		if err != nil {
+			return
+		}
+
+		size := int64(0)
+		for _, file := range files {
+			fname := path.Join(n1ql_backfill_temp_dir, file.Name())
+			if strings.Contains(fname, "scan-backfill") {
+				size += int64(file.Size())
+			}
+		}
+		atomic.StoreInt64(&gsi.backfillSize, size)
+	}
 }

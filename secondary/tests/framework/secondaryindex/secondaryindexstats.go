@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type IndexProperties struct {
@@ -148,29 +149,39 @@ func ChangeIndexerSettings(configKey string, configValue interface{}, serverUser
 		if err != nil {
 			return err
 		}
-		nresp, err := client.Do(oreq)
-		if err != nil {
-			return err
-		}
-		nbody, err := ioutil.ReadAll(nresp.Body)
-		if err != nil {
-			return err
-		}
+		retry, ok := 10, false
+		for ; retry > 0; retry-- {
+			time.Sleep(1 * time.Second)
+			nresp, err := client.Do(oreq)
+			if err != nil {
+				log.Printf("Error client.Do(GET): %v. Retrying", err)
+				continue
+			}
+			nbody, err := ioutil.ReadAll(nresp.Body)
+			if err != nil {
+				log.Printf("Error ioutil.ReadAll(): %v. Retrying", err)
+				continue
+			}
 
-		var responseSettings map[string]interface{}
-		err = json.Unmarshal(nbody, &responseSettings)
-		if err != nil {
-			return err
+			var responseSettings map[string]interface{}
+			err = json.Unmarshal(nbody, &responseSettings)
+			if err != nil {
+				log.Printf("Error json.Unmarshal(): %v. Retrying", err)
+				continue
+			}
+
+			log.Printf("Type of settings value is %v", reflect.TypeOf(responseSettings[configKey]).String())
+			log.Printf("Type of config value that was updated is %v", reflect.TypeOf(configValue).String())
+			log.Printf("After updation, Setting  is %v = %v", configKey, responseSettings[configKey])
+
+			if responseSettings[configKey] == configValue {
+				log.Printf("Settings updated %v = %v", configKey, responseSettings[configKey])
+				ok = true
+				break
+			}
 		}
-
-		log.Printf("Type of settings value is %v", reflect.TypeOf(responseSettings[configKey]).String())
-		log.Printf("Type of config value that was updated is %v", reflect.TypeOf(configValue).String())
-		log.Printf("After updation, Setting  is %v = %v", configKey, responseSettings[configKey])
-
-		if responseSettings[configKey] != configValue {
+		if ok == false {
 			return errors.New("Settings not updated correctly")
-		} else {
-			log.Printf("Settings updated %v = %v", configKey, responseSettings[configKey])
 		}
 		//pretty = strings.Replace(string(nbody), ",\"", ",\n\"", -1)
 		//log.Printf("New Settings:\n%s\n", string(pretty))

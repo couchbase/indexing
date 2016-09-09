@@ -15,14 +15,20 @@ import (
 	"github.com/couchbase/cbauth/metakv"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/pipeline"
 	"io/ioutil"
 	"net/http"
+	"os"
+	"runtime"
+	"runtime/debug"
+	"strings"
 	"time"
 )
 
 const (
 	indexCompactonMetaPath = common.IndexingMetaDir + "triggerCompaction"
+	compactionDaysSetting  = "indexer.settings.compaction.days_of_week"
 )
 
 // Implements dynamic settings management for indexer
@@ -53,22 +59,24 @@ func NewSettingsManager(supvCmdch MsgChannel,
 			}}
 	}
 
-	ncpu := common.SetNumCPUs(config["indexer.settings.max_cpu_percent"].Int())
-	logging.Infof("Setting maxcpus = %d", ncpu)
-
-	setBlockPoolSize(nil, config)
-	setLogger(config)
-
+	initGlobalSettings(nil, config)
 	http.HandleFunc("/settings", s.handleSettingsReq)
 	http.HandleFunc("/triggerCompaction", s.handleCompactionTrigger)
+	http.HandleFunc("/settings/runtime/freeMemory", s.handleFreeMemoryReq)
+	http.HandleFunc("/settings/runtime/forceGC", s.handleForceGCReq)
 	go func() {
-		for {
-			err := metakv.RunObserveChildren("/", s.metaKVCallback, s.cancelCh)
-			if err == nil {
-				return
-			} else {
-				logging.Errorf("IndexerSettingsManager: metakv notifier failed (%v)..Restarting", err)
+		fn := func(r int, err error) error {
+			if r > 0 {
+				logging.Errorf("IndexerSettingsManager: metakv notifier failed (%v)..Restarting %v", err, r)
 			}
+			err = metakv.RunObserveChildren("/", s.metaKVCallback, s.cancelCh)
+			return err
+		}
+		rh := common.NewRetryHelper(MAX_METAKV_RETRIES, time.Second, 2, fn)
+		err := rh.Run()
+		if err != nil {
+			logging.Fatalf("IndexerSettingsManager: metakv notifier failed even after max retries. Restarting indexer.")
+			os.Exit(1)
 		}
 	}()
 
@@ -113,6 +121,12 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
 
+		err := validateSettings(bytes)
+		if err != nil {
+			s.writeError(w, err)
+			return
+		}
+
 		config := s.config.FilterConfig(".settings.")
 		current, rev, err := metakv.Get(common.IndexingSettingsMetaPath)
 		if err == nil {
@@ -134,13 +148,23 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		s.writeOk(w)
+
 	} else if r.Method == "GET" {
 		settingsConfig, err := common.GetSettingsConfig(s.config)
 		if err != nil {
 			s.writeError(w, err)
 			return
 		}
+		// handle ?internal=ok
+		if query := r.URL.Query(); query != nil {
+			param, ok := query["internal"]
+			if ok && len(param) > 0 && param[0] == "ok" {
+				s.writeJson(w, settingsConfig.Json())
+				return
+			}
+		}
 		s.writeJson(w, settingsConfig.FilterConfig(".settings.").Json())
+
 	} else {
 		s.writeError(w, errors.New("Unsupported method"))
 		return
@@ -188,15 +212,19 @@ loop:
 func (s *settingsManager) metaKVCallback(path string, value []byte, rev interface{}) error {
 	if path == common.IndexingSettingsMetaPath {
 		logging.Infof("New settings received: \n%s", string(value))
+
+		upgradedConfig, upgraded := tryUpgradeConfig(value)
+		if upgraded {
+			if err := metakv.Set(common.IndexingSettingsMetaPath, upgradedConfig, rev); err != nil {
+				return err
+			}
+			return nil
+		}
+
 		config := s.config.Clone()
 		config.Update(value)
-		setBlockPoolSize(s.config, config)
+		initGlobalSettings(s.config, config)
 		s.config = config
-
-		ncpu := common.SetNumCPUs(config["indexer.settings.max_cpu_percent"].Int())
-		logging.Infof("Setting maxcpus = %d", ncpu)
-
-		setLogger(config)
 
 		indexerConfig := s.config.SectionConfig("indexer.", true)
 		s.supvMsgch <- &MsgConfigUpdate{
@@ -237,6 +265,27 @@ func (s *settingsManager) metaKVCallback(path string, value []byte, rev interfac
 	return nil
 }
 
+func (s *settingsManager) handleFreeMemoryReq(w http.ResponseWriter, r *http.Request) {
+	if !s.validateAuth(w, r) {
+		return
+	}
+
+	logging.Infof("Received force free memory request. Executing FreeOSMemory...")
+	debug.FreeOSMemory()
+	mm.FreeOSMemory()
+	s.writeOk(w)
+}
+
+func (s *settingsManager) handleForceGCReq(w http.ResponseWriter, r *http.Request) {
+	if !s.validateAuth(w, r) {
+		return
+	}
+
+	logging.Infof("Received force GC request. Executing GC...")
+	runtime.GC()
+	s.writeOk(w)
+}
+
 func setLogger(config common.Config) {
 	logLevel := config["indexer.settings.log_level"].String()
 	level := logging.Level(logLevel)
@@ -260,4 +309,82 @@ func setBlockPoolSize(o, n common.Config) {
 			" - Only sizes higher than current size is allowed during runtime",
 			oldSz, newSz)
 	}
+}
+
+func initGlobalSettings(oldCfg, newCfg common.Config) {
+	setBlockPoolSize(oldCfg, newCfg)
+
+	ncpu := common.SetNumCPUs(newCfg["indexer.settings.max_cpu_percent"].Int())
+	logging.Infof("Setting maxcpus = %d", ncpu)
+
+	setLogger(newCfg)
+	useMutationSyncPool = newCfg["indexer.useMutationSyncPool"].Bool()
+	maxArrayKeyLength = newCfg["indexer.settings.max_array_seckey_size"].Int()
+	maxArrayKeyBufferLength = maxArrayKeyLength * 3
+	maxArrayIndexEntrySize = maxArrayKeyBufferLength + MAX_DOCID_LEN + 2
+	arrayEncBufPool = common.NewByteBufferPool(maxArrayIndexEntrySize)
+}
+
+func validateSettings(value []byte) error {
+	newConfig, err := common.NewConfig(value)
+	if err != nil {
+		return err
+	}
+	if val, ok := newConfig[compactionDaysSetting]; ok {
+		for _, day := range val.Strings() {
+			if !isValidDay(day) {
+				msg := "Index circular compaction days_of_week is case-sensitive " +
+					"and must have zero or more comma-separated values of " +
+					"Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday"
+				return errors.New(msg)
+			}
+		}
+	}
+
+	// ToDo: Validate other settings
+	return nil
+}
+
+func isValidDay(day string) bool {
+	validDays := []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+	for _, validDay := range validDays {
+		if day == validDay {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidDaysOfWeek(value []byte) bool {
+	conf, _ := common.NewConfig(value)
+	if val, ok := conf[compactionDaysSetting]; ok {
+		for _, day := range val.Strings() {
+			if !isValidDay(day) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Try upgrading the config and fix any issues in config values
+// Return true if upgraded, else false
+func tryUpgradeConfig(value []byte) ([]byte, bool) {
+	conf, _ := common.NewConfig(value)
+	if val, ok := conf[compactionDaysSetting]; ok {
+		if !isValidDaysOfWeek(value) {
+			conf.SetValue(compactionDaysSetting, strings.Title(val.String()))
+			if isValidDaysOfWeek(conf.Json()) {
+				return conf.Json(), true
+			} else {
+				logging.Errorf("%v has invalid value %v. Setting it to empty value. "+
+					"Update the setting to a valid value.",
+					compactionDaysSetting, val.String())
+				conf.SetValue(compactionDaysSetting, "")
+				return conf.Json(), true
+			}
+		}
+	}
+
+	return value, false
 }

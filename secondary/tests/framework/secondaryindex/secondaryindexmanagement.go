@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+var IndexUsing = "gsi"
+
 func CreateClient(server, serviceAddr string) (*qc.GsiClient, error) {
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 	client, err := qc.NewGsiClient(server, config)
@@ -64,12 +66,11 @@ func CreateSecondaryIndex(
 			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
 		}
 	}
-	using := "gsi"
 	exprType := "N1QL"
 	partnExp := ""
 
 	start := time.Now()
-	defnID, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
+	defnID, err := client.CreateIndex(indexName, bucketName, IndexUsing, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
 	if err == nil {
 		log.Printf("Created the secondary index %v. Waiting for it become active", indexName)
 		e := WaitTillIndexActive(defnID, client, indexActiveTimeoutSeconds)
@@ -114,11 +115,10 @@ func CreateSecondaryIndexAsync(
 			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
 		}
 	}
-	using := "gsi"
 	exprType := "N1QL"
 	partnExp := ""
 
-	_, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
+	_, err := client.CreateIndex(indexName, bucketName, IndexUsing, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
 	if err == nil {
 		log.Printf("Created the secondary index %v", indexName)
 		return nil
@@ -212,6 +212,40 @@ func WaitTillIndexActive(defnID uint64, client *qc.GsiClient, indexActiveTimeout
 			return nil
 		} else {
 			time.Sleep(1 * time.Second)
+		}
+	}
+	return nil
+}
+
+func WaitTillAllIndexNodesActive(server string, indexerActiveTimeoutSeconds int64) error {
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return e
+	}
+	
+	start := time.Now()
+	for {
+		elapsed := time.Since(start)
+		if elapsed.Seconds() >= float64(indexerActiveTimeoutSeconds) {
+			err := errors.New(fmt.Sprintf("Indexer(s) did not become online after %d seconds", indexerActiveTimeoutSeconds))
+			return err
+		}
+		indexers, e := client.Nodes()
+		if e != nil {
+			log.Printf("Error while fetching Nodes() %v", e)
+			return e
+		}
+		
+		allIndexersActive := true
+		for _, indexer := range indexers {
+			if indexer.Status != "online" {
+				allIndexersActive = false
+			}
+		}
+		
+		if allIndexersActive == true {
+			log.Printf("All indexers are active")
+			return nil
 		}
 	}
 	return nil

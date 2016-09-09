@@ -1,8 +1,10 @@
 package protobuf
 
 import (
+	"bytes"
 	"compress/bzip2"
 	"encoding/json"
+	"github.com/couchbase/indexing/secondary/collatejson"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 var testdata = "../../tests/testdata"
 var usersBzip2 = filepath.Join(testdata, "users.json.bz2")
 var projectsBzip2 = filepath.Join(testdata, "projects.json.bz2")
+var buf = make([]byte, 0, 10000)
 
 var doc150 = []byte(`{ "type": "user", "first-name": "Daniel", "last-name": "Fred", "age": 32, "emailid": "Daniel@gmail.com", "city": "Kathmandu", "gender": "female" }`)
 var doc2000 = []byte(
@@ -71,12 +74,14 @@ func TestN1QLTransform150(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secKey, err := N1QLTransform([]byte("docid"), doc150, cExprs)
+	meta := make(map[string]interface{})
+	secKey, err := N1QLTransform([]byte("docid"), doc150, cExprs, meta, buf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(secKey) != `["Kathmandu",32,"docid"]` {
-		t.Fatalf("evaluation failed %v", string(secKey))
+
+	if !bytes.Equal(secKey, encodeJSON(`["Kathmandu",32]`)) {
+		t.Fatalf("evaluation failed %v", decodeCollateJSON(secKey))
 	}
 }
 
@@ -85,12 +90,14 @@ func TestN1QLTransform2000(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secKey, err := N1QLTransform([]byte("docid"), doc2000, cExprs)
+	meta := make(map[string]interface{})
+	secKey, err := N1QLTransform([]byte("docid"), doc2000, cExprs, meta, buf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(secKey) != `["Kathmandu",63,"docid"]` {
-		t.Fatalf("evaluation failed %v", string(secKey))
+
+	if !bytes.Equal(secKey, encodeJSON(`["Kathmandu",63]`)) {
+		t.Fatalf("evaluation failed %v %v", decodeCollateJSON(secKey))
 	}
 }
 
@@ -102,14 +109,28 @@ func BenchmarkCompileN1QLExpression(b *testing.B) {
 
 func BenchmarkN1QLTransform150(b *testing.B) {
 	cExprs, _ := CompileN1QLExpression([]string{`age`})
+	meta := make(map[string]interface{})
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), doc150, cExprs)
+		N1QLTransform([]byte("docid"), doc150, cExprs, meta, buf)
 	}
 }
 
 func BenchmarkN1QLTransform2000(b *testing.B) {
 	cExprs, _ := CompileN1QLExpression([]string{`age`})
+	meta := make(map[string]interface{})
 	for i := 0; i < b.N; i++ {
-		N1QLTransform([]byte("docid"), doc2000, cExprs)
+		N1QLTransform([]byte("docid"), doc2000, cExprs, meta, buf)
 	}
+}
+
+func encodeJSON(s string) []byte {
+	codec := collatejson.NewCodec(16)
+	out, _ := codec.Encode([]byte(s), make([]byte, 0, 10000))
+	return out
+}
+
+func decodeCollateJSON(bs []byte) string {
+	codec := collatejson.NewCodec(16)
+	out, _ := codec.Decode(bs, make([]byte, 0, 10000))
+	return string(out)
 }

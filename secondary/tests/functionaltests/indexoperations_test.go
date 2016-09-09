@@ -320,3 +320,19 @@ func TestCreateIndexNonExistentBucket(t *testing.T) {
 		log.Printf("Index create failed as expected with error: %v", err)
 	}
 }
+
+func TestScanWithNoTimeout(t *testing.T) {
+	log.Printf("Create an index on empty bucket, populate the bucket and Run a scan on the index")
+	var indexName = "index_eyeColor"
+	var bucketName = "default"
+
+	err := secondaryindex.ChangeIndexerSettings("indexer.settings.scan_timeout", float64(0), clusterconfig.Username, clusterconfig.Password, kvaddress)
+	FailTestIfError(err, "Error in ChangeIndexerSettings", t)
+
+	CreateDocs(100)
+	docScanResults := datautility.ExpectedScanResponse_string(docs, "eyeColor", "b", "c", 3)
+	scanResults, err := secondaryindex.Range(indexName, bucketName, indexScanAddress, []interface{}{"b"}, []interface{}{"c"}, 3, true, defaultlimit, c.SessionConsistency, nil)
+	FailTestIfError(err, "Error in scan", t)
+	err = tv.Validate(docScanResults, scanResults)
+	FailTestIfError(err, "Error in scan result validation: ", t)
+}

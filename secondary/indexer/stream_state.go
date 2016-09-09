@@ -25,15 +25,16 @@ type StreamState struct {
 	streamBucketVbStatusMap   map[common.StreamId]BucketVbStatusMap
 	streamBucketVbRefCountMap map[common.StreamId]BucketVbRefCountMap
 
-	streamBucketHWTMap           map[common.StreamId]BucketHWTMap
-	streamBucketInMemTsCountMap  map[common.StreamId]BucketInMemTsCountMap
-	streamBucketNewTsReqdMap     map[common.StreamId]BucketNewTsReqdMap
-	streamBucketTsListMap        map[common.StreamId]BucketTsListMap
-	streamBucketLastFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
-	streamBucketRestartTsMap     map[common.StreamId]BucketRestartTsMap
-	streamBucketOpenTsMap        map[common.StreamId]BucketOpenTsMap
-	streamBucketStartTimeMap     map[common.StreamId]BucketStartTimeMap
-	streamBucketLastSnapMarker   map[common.StreamId]BucketLastSnapMarker
+	streamBucketHWTMap            map[common.StreamId]BucketHWTMap
+	streamBucketNeedsCommitMap    map[common.StreamId]BucketNeedsCommitMap
+	streamBucketHasBuildCompTSMap map[common.StreamId]BucketHasBuildCompTSMap
+	streamBucketNewTsReqdMap      map[common.StreamId]BucketNewTsReqdMap
+	streamBucketTsListMap         map[common.StreamId]BucketTsListMap
+	streamBucketLastFlushedTsMap  map[common.StreamId]BucketLastFlushedTsMap
+	streamBucketRestartTsMap      map[common.StreamId]BucketRestartTsMap
+	streamBucketOpenTsMap         map[common.StreamId]BucketOpenTsMap
+	streamBucketStartTimeMap      map[common.StreamId]BucketStartTimeMap
+	streamBucketLastSnapMarker    map[common.StreamId]BucketLastSnapMarker
 
 	streamBucketLastSnapAlignFlushedTsMap map[common.StreamId]BucketLastFlushedTsMap
 
@@ -58,7 +59,8 @@ type BucketLastFlushedTsMap map[string]*common.TsVbuuid
 type BucketRestartTsMap map[string]*common.TsVbuuid
 type BucketOpenTsMap map[string]*common.TsVbuuid
 type BucketStartTimeMap map[string]uint64
-type BucketInMemTsCountMap map[string]uint64
+type BucketNeedsCommitMap map[string]bool
+type BucketHasBuildCompTSMap map[string]bool
 type BucketNewTsReqdMap map[string]bool
 type BucketLastSnapMarker map[string]*common.TsVbuuid
 
@@ -86,7 +88,8 @@ func InitStreamState(config common.Config) *StreamState {
 	ss := &StreamState{
 		config:                                config,
 		streamBucketHWTMap:                    make(map[common.StreamId]BucketHWTMap),
-		streamBucketInMemTsCountMap:           make(map[common.StreamId]BucketInMemTsCountMap),
+		streamBucketNeedsCommitMap:            make(map[common.StreamId]BucketNeedsCommitMap),
+		streamBucketHasBuildCompTSMap:         make(map[common.StreamId]BucketHasBuildCompTSMap),
 		streamBucketNewTsReqdMap:              make(map[common.StreamId]BucketNewTsReqdMap),
 		streamBucketTsListMap:                 make(map[common.StreamId]BucketTsListMap),
 		streamBucketFlushInProgressTsMap:      make(map[common.StreamId]BucketFlushInProgressTsMap),
@@ -123,8 +126,11 @@ func (ss *StreamState) initNewStream(streamId common.StreamId) {
 	bucketHWTMap := make(BucketHWTMap)
 	ss.streamBucketHWTMap[streamId] = bucketHWTMap
 
-	bucketInMemTsCountMap := make(BucketInMemTsCountMap)
-	ss.streamBucketInMemTsCountMap[streamId] = bucketInMemTsCountMap
+	bucketNeedsCommitMap := make(BucketNeedsCommitMap)
+	ss.streamBucketNeedsCommitMap[streamId] = bucketNeedsCommitMap
+
+	bucketHasBuildCompTSMap := make(BucketHasBuildCompTSMap)
+	ss.streamBucketHasBuildCompTSMap[streamId] = bucketHasBuildCompTSMap
 
 	bucketNewTsReqdMap := make(BucketNewTsReqdMap)
 	ss.streamBucketNewTsReqdMap[streamId] = bucketNewTsReqdMap
@@ -204,7 +210,8 @@ func (ss *StreamState) initBucketInStream(streamId common.StreamId,
 
 	numVbuckets := ss.config["numVbuckets"].Int()
 	ss.streamBucketHWTMap[streamId][bucket] = common.NewTsVbuuid(bucket, numVbuckets)
-	ss.streamBucketInMemTsCountMap[streamId][bucket] = 0
+	ss.streamBucketNeedsCommitMap[streamId][bucket] = false
+	ss.streamBucketHasBuildCompTSMap[streamId][bucket] = false
 	ss.streamBucketNewTsReqdMap[streamId][bucket] = false
 	ss.streamBucketFlushInProgressTsMap[streamId][bucket] = nil
 	ss.streamBucketAbortInProgressMap[streamId][bucket] = false
@@ -243,7 +250,8 @@ func (ss *StreamState) cleanupBucketFromStream(streamId common.StreamId,
 	}
 
 	delete(ss.streamBucketHWTMap[streamId], bucket)
-	delete(ss.streamBucketInMemTsCountMap[streamId], bucket)
+	delete(ss.streamBucketNeedsCommitMap[streamId], bucket)
+	delete(ss.streamBucketHasBuildCompTSMap[streamId], bucket)
 	delete(ss.streamBucketNewTsReqdMap[streamId], bucket)
 	delete(ss.streamBucketTsListMap[streamId], bucket)
 	delete(ss.streamBucketFlushInProgressTsMap[streamId], bucket)
@@ -278,7 +286,8 @@ func (ss *StreamState) resetStreamState(streamId common.StreamId) {
 
 	//delete this stream from internal maps
 	delete(ss.streamBucketHWTMap, streamId)
-	delete(ss.streamBucketInMemTsCountMap, streamId)
+	delete(ss.streamBucketNeedsCommitMap, streamId)
+	delete(ss.streamBucketHasBuildCompTSMap, streamId)
 	delete(ss.streamBucketNewTsReqdMap, streamId)
 	delete(ss.streamBucketTsListMap, streamId)
 	delete(ss.streamBucketFlushInProgressTsMap, streamId)
@@ -703,6 +712,7 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 	bucket string, hwt *common.TsVbuuid, prevSnap *common.TsVbuuid) {
 
 	ts := ss.streamBucketHWTMap[streamId][bucket]
+	partialSnap := false
 
 	for i, seq := range hwt.Seqnos {
 		//if seqno has incremented, update it
@@ -717,12 +727,31 @@ func (ss *StreamState) updateHWT(streamId common.StreamId,
 			lastSnap.Snapshots[i][0] = prevSnap.Snapshots[i][0]
 			lastSnap.Snapshots[i][1] = prevSnap.Snapshots[i][1]
 			lastSnap.Vbuuids[i] = prevSnap.Vbuuids[i]
+			lastSnap.Seqnos[i] = prevSnap.Seqnos[i]
 
 			//store the new snap marker in hwt
 			ts.Snapshots[i][0] = hwt.Snapshots[i][0]
 			ts.Snapshots[i][1] = hwt.Snapshots[i][1]
 			ss.streamBucketNewTsReqdMap[streamId][bucket] = true
+			if prevSnap.Seqnos[i] != prevSnap.Snapshots[i][1] {
+				logging.Warnf("StreamState::updateHWT Received Partial Last Snapshot in HWT "+
+					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v lastSnapSeqno %v",
+					bucket, streamId, i, hwt.Snapshots[i][0], hwt.Snapshots[i][1], hwt.Seqnos[i], ts.Vbuuids[i],
+					prevSnap.Snapshots[i][0], prevSnap.Snapshots[i][1], prevSnap.Seqnos[i])
+				partialSnap = true
+
+			}
+
+		} else if hwt.Snapshots[i][1] < ts.Snapshots[i][1] {
+			// Catch any out of order Snapshot.   StreamReader should make sure that Snapshot is monotonic increasing
+			logging.Debugf("StreamState::updateHWT.  Recieved a snapshot marker older than current hwt snapshot. "+
+				"Bucket %v StreamId %v vbucket %v Current Snapshot %v-%v New Snapshot %v-%v",
+				bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], hwt.Snapshots[i][0], hwt.Snapshots[i][1])
 		}
+	}
+
+	if partialSnap {
+		ss.disableSnapAlignForPendingTs(streamId, bucket)
 	}
 
 	logging.LazyTrace(func() string {
@@ -735,12 +764,42 @@ func (ss *StreamState) checkNewTSDue(streamId common.StreamId, bucket string) bo
 	return newTsReqd
 }
 
+func (ss *StreamState) checkCommitOverdue(streamId common.StreamId, bucket string) bool {
+
+	snapPersistInterval := ss.getPersistInterval()
+	persistDuration := time.Duration(snapPersistInterval) * time.Millisecond
+
+	lastPersistTime := ss.streamBucketLastPersistTime[streamId][bucket]
+
+	if time.Since(lastPersistTime) > persistDuration {
+
+		bucketFlushInProgressTsMap := ss.streamBucketFlushInProgressTsMap[streamId]
+		bucketTsListMap := ss.streamBucketTsListMap[streamId]
+		bucketFlushEnabledMap := ss.streamBucketFlushEnabledMap[streamId]
+		bucketNeedsCommit := ss.streamBucketNeedsCommitMap[streamId]
+
+		//if there is no flush already in progress for this bucket
+		//no pending TS in list and flush is not disabled
+		tsList := bucketTsListMap[bucket]
+		if bucketFlushInProgressTsMap[bucket] == nil &&
+			bucketFlushEnabledMap[bucket] == true &&
+			tsList.Len() == 0 &&
+			bucketNeedsCommit[bucket] == true {
+			return true
+		}
+	}
+
+	return false
+}
+
 //gets the stability timestamp based on the current HWT
 func (ss *StreamState) getNextStabilityTS(streamId common.StreamId,
 	bucket string) *common.TsVbuuid {
 
 	//generate new stability timestamp
 	tsVbuuid := ss.streamBucketHWTMap[streamId][bucket].Copy()
+
+	tsVbuuid.SetSnapType(common.NO_SNAP)
 
 	ss.alignSnapBoundary(streamId, bucket, tsVbuuid)
 
@@ -766,23 +825,47 @@ func (ss *StreamState) alignSnapBoundary(streamId common.StreamId,
 		//if seqno is not between snap boundary
 		if !(ts.Seqnos[i] >= s[0] && ts.Seqnos[i] <= s[1]) {
 
-			//if seqno is between the snap boundary of last snap marker
+			//if seqno matches with the SnapEnd of the lastSnapMarker
 			//use that to align the TS
-			if ts.Seqnos[i] >= lastSnap.Snapshots[i][0] && ts.Seqnos[i] <= lastSnap.Snapshots[i][1] {
+			if ts.Seqnos[i] == lastSnap.Snapshots[i][1] {
 				ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
 				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
 				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
+			} else {
+				logging.Warnf("StreamState::alignSnapBoundary Received New Snapshot While Processing Incomplete "+
+					"Snapshot. Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
+					bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+					lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1])
 			}
+
 		} else if ts.Seqnos[i] != s[1] && (s[1]-s[0]) <= smallSnap {
 			//for small snapshots, if all the mutations have not been received for the
 			//snapshot, use the last snapshot marker to make it snap aligned.
 			//this snapshot will get picked up in the next TS.
-			ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
-			ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
-			ts.Seqnos[i] = lastSnap.Snapshots[i][1]
-			ts.Vbuuids[i] = lastSnap.Vbuuids[i]
+
+			//Use lastSnap only if it is from the same branch(vbuuid matches) and
+			//HWT is already past the snapEnd of lastSnap and its not partial
+			if ts.Seqnos[i] > lastSnap.Snapshots[i][1] && ts.Vbuuids[i] == lastSnap.Vbuuids[i] && (lastSnap.Seqnos[i] == lastSnap.Snapshots[i][1]) {
+				ts.Snapshots[i][0] = lastSnap.Snapshots[i][0]
+				ts.Snapshots[i][1] = lastSnap.Snapshots[i][1]
+				ts.Seqnos[i] = lastSnap.Snapshots[i][1]
+				ts.Vbuuids[i] = lastSnap.Vbuuids[i]
+			}
+			if lastSnap.Seqnos[i] != lastSnap.Snapshots[i][1] {
+				logging.Warnf("StreamState::alignSnapBoundary Received Partial Last Snapshot in HWT "+
+					"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v lastSnapSeqno %v",
+					bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+					lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1], lastSnap.Seqnos[i])
+			}
+
 		}
 
+		if !(ts.Seqnos[i] >= ts.Snapshots[i][0] && ts.Seqnos[i] <= ts.Snapshots[i][1]) {
+			logging.Warnf("StreamState::alignSnapBoundary.  TS falls out of snapshot boundary. "+
+				"Bucket %v StreamId %v vbucket %v Snapshot %v-%v Seqno %v Vbuuid %v lastSnap %v-%v",
+				bucket, streamId, i, ts.Snapshots[i][0], ts.Snapshots[i][1], ts.Seqnos[i], ts.Vbuuids[i],
+				lastSnap.Snapshots[i][0], lastSnap.Snapshots[i][1])
+		}
 	}
 }
 
@@ -869,4 +952,28 @@ func updateTsSeqNumToSnapshot(ts *common.TsVbuuid) {
 		ts.Seqnos[i] = s[1]
 	}
 
+}
+func (ss *StreamState) getPersistInterval() uint64 {
+
+	if common.GetStorageMode() == common.MOI {
+		return ss.config["settings.persisted_snapshot.moi.interval"].Uint64()
+	} else {
+		return ss.config["settings.persisted_snapshot.interval"].Uint64()
+	}
+
+}
+
+func (ss *StreamState) disableSnapAlignForPendingTs(streamId common.StreamId, bucket string) {
+
+	tsList := ss.streamBucketTsListMap[streamId][bucket]
+	disableCount := 0
+	for e := tsList.Front(); e != nil; e = e.Next() {
+		ts := e.Value.(*common.TsVbuuid)
+		ts.SetDisableAlign(true)
+		disableCount++
+	}
+	if disableCount > 0 {
+		logging.Infof("StreamState::disableSnapAlignForPendingTs Stream %v Bucket %v Disabled Snap Align for %v TS", streamId, bucket, disableCount)
+
+	}
 }

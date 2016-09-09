@@ -1161,7 +1161,7 @@ func TestWherClause_UpdateDocument(t *testing.T) {
 	i := 0
 	keysToBeUpdated := make(tc.KeyValues)
 	for key, value := range docs {
-		if i >= 500 {
+		if i >= 4000 {
 			break
 		}
 		json := value.(map[string]interface{})
@@ -1308,11 +1308,10 @@ func CreateIndexThread(wg *sync.WaitGroup, t *testing.T, indexName, bucketName, 
 			secExprs = append(secExprs, expression.NewStringer().Visit(expr))
 		}
 	}
-	using := "gsi"
 	exprType := "N1QL"
 	partnExp := ""
 
-	_, err := client.CreateIndex(indexName, bucketName, using, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
+	_, err := client.CreateIndex(indexName, bucketName, secondaryindex.IndexUsing, exprType, partnExp, whereExpr, secExprs, isPrimary, with)
 	if err != nil {
 		if strings.Contains(err.Error(), "Terminate Request due to client termination") {
 			log.Printf("Create Index call failed as expected due to error : %v", err)

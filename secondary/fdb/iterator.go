@@ -14,6 +14,7 @@ package forestdb
 import "C"
 
 import (
+	"sync"
 	"unsafe"
 )
 
@@ -45,6 +46,28 @@ const (
 type Iterator struct {
 	iter *C.fdb_iterator
 	db   *KVStore
+}
+
+var fdbIterPool *sync.Pool
+
+func init() {
+	fdbIterPool = &sync.Pool{
+		New: func() interface{} {
+			return &Iterator{}
+		},
+	}
+}
+
+func allocIterator(db *KVStore) *Iterator {
+	rv := fdbIterPool.Get().(*Iterator)
+	rv.iter = nil
+	rv.db = db
+
+	return rv
+}
+
+func freeIterator(iter *Iterator) {
+	fdbIterPool.Put(iter)
 }
 
 // Prev advances the iterator backwards
@@ -177,6 +200,7 @@ func (i *Iterator) SeekMax() error {
 func (i *Iterator) Close() error {
 	i.db.Lock()
 	defer i.db.Unlock()
+	defer freeIterator(i)
 
 	Log.Tracef("fdb_iterator_close call i:%p iter:%v", i, i.iter)
 	errNo := C.fdb_iterator_close(i.iter)
@@ -205,14 +229,14 @@ func (k *KVStore) IteratorInit(startKey, endKey []byte, opt IteratorOpt) (*Itera
 		ek = unsafe.Pointer(&endKey[0])
 	}
 
-	rv := Iterator{db: k}
+	rv := allocIterator(k)
 	Log.Tracef("fdb_iterator_init call k:%p db:%v sk:%v ek:%v opt:%v", k, k.db, sk, ek, opt)
 	errNo := C.fdb_iterator_init(k.db, &rv.iter, sk, C.size_t(lensk), ek, C.size_t(lenek), C.fdb_iterator_opt_t(opt))
 	Log.Tracef("fdb_iterator_init retn k:%p rv:%v", k, rv.iter)
 	if errNo != RESULT_SUCCESS {
 		return nil, Error(errNo)
 	}
-	return &rv, nil
+	return rv, nil
 }
 
 // IteratorSequenceInit create an iterator to traverse a ForestDB snapshot by sequence number range
@@ -220,12 +244,12 @@ func (k *KVStore) IteratorSequenceInit(startSeq, endSeq SeqNum, opt IteratorOpt)
 	k.Lock()
 	defer k.Unlock()
 
-	rv := Iterator{db: k}
+	rv := allocIterator(k)
 	Log.Tracef("fdb_iterator_sequence_init call k:%p db:%v sseq:%v eseq:%v opt:%v", k, k.db, startSeq, endSeq, opt)
 	errNo := C.fdb_iterator_sequence_init(k.db, &rv.iter, C.fdb_seqnum_t(startSeq), C.fdb_seqnum_t(endSeq), C.fdb_iterator_opt_t(opt))
 	Log.Tracef("fdb_iterator_sequence_init retn k:%p rv:%v", k, rv.iter)
 	if errNo != RESULT_SUCCESS {
 		return nil, Error(errNo)
 	}
-	return &rv, nil
+	return rv, nil
 }

@@ -21,6 +21,8 @@ import (
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
 	protobuf "github.com/couchbase/indexing/secondary/protobuf/projector"
 	"github.com/golang/protobuf/proto"
+	"net"
+	"strings"
 	"time"
 )
 
@@ -246,7 +248,7 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	vbnos, err := k.getAllVbucketsInCluster(bucket)
 	if err != nil {
 		logging.Errorf("KVSender::openMutationStream %v %v Error in fetching vbuckets info %v",
-			streamId, restartTs.Bucket, err)
+			streamId, bucket, err)
 		respCh <- &MsgError{
 			err: Error{code: ERROR_KVSENDER_STREAM_REQUEST_ERROR,
 				severity: FATAL,
@@ -295,6 +297,10 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 					err = ret
 				} else {
 					activeTs = updateActiveTsFromResponse(bucket, activeTs, res)
+					if rollbackTs != nil {
+						logging.Infof("KVSender::openMutationStream %v %v Projector %v Rollback Received %v",
+							streamId, bucket, addr, rollbackTs)
+					}
 					rollbackTs = updateRollbackTsFromResponse(bucket, rollbackTs, res)
 				}
 			}, stopCh)
@@ -326,11 +332,15 @@ func (k *kvSender) openMutationStream(streamId c.StreamId, indexInstList []c.Ind
 	err = rh.Run()
 
 	if rollbackTs != nil {
-		logging.Infof("KVSender::openMutationStream %v %v Rollback Received %v",
-			streamId, bucket, rollbackTs)
 		//convert from protobuf to native format
 		numVbuckets := k.config["numVbuckets"].Int()
-		nativeTs := rollbackTs.ToTsVbuuid(numVbuckets)
+		var nativeTs *c.TsVbuuid
+		if restartTsList != nil {
+			nativeTs = restartTsList.Union(rollbackTs).ToTsVbuuid(numVbuckets)
+		} else {
+			nativeTs = rollbackTs.ToTsVbuuid(numVbuckets)
+		}
+
 		respCh <- &MsgRollback{streamId: streamId,
 			bucket:     bucket,
 			rollbackTs: nativeTs}
@@ -371,20 +381,23 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 	var rollbackTs *protobuf.TsVbuuid
 	topic := getTopicForStreamId(streamId)
 	rollback := false
+	aborted := false
 
 	fn := func(r int, err error) error {
 
 		for _, addr := range addrs {
-			ap := newProjClient(addr)
+			aborted = execWithStopCh(func() {
+				ap := newProjClient(addr)
 
-			if res, ret := k.sendRestartVbuckets(ap, topic, connErrVbs, protoRestartTs); ret != nil {
-				//retry for all errors
-				logging.Errorf("KVSender::restartVbuckets %v %v Error Received %v from %v",
-					streamId, restartTs.Bucket, ret, addr)
-				err = ret
-			} else {
-				rollbackTs = updateRollbackTsFromResponse(restartTs.Bucket, rollbackTs, res)
-			}
+				if res, ret := k.sendRestartVbuckets(ap, topic, connErrVbs, protoRestartTs); ret != nil {
+					//retry for all errors
+					logging.Errorf("KVSender::restartVbuckets %v %v Error Received %v from %v",
+						streamId, restartTs.Bucket, ret, addr)
+					err = ret
+				} else {
+					rollbackTs = updateRollbackTsFromResponse(restartTs.Bucket, rollbackTs, res)
+				}
+			}, stopCh)
 		}
 
 		if rollbackTs != nil && checkVbListInTS(protoRestartTs.GetVbnos(), rollbackTs) {
@@ -399,9 +412,12 @@ func (k *kvSender) restartVbuckets(streamId c.StreamId, restartTs *c.TsVbuuid,
 	rh := c.NewRetryHelper(MAX_KV_REQUEST_RETRY, time.Second, BACKOFF_FACTOR, fn)
 	err = rh.Run()
 
-	//if any of the requested vb is in rollback ts, send rollback
-	//msg to caller
-	if rollback {
+	if aborted {
+		respCh <- &MsgRepairAbort{streamId: streamId,
+			bucket: restartTs.Bucket}
+	} else if rollback {
+		//if any of the requested vb is in rollback ts, send rollback
+		//msg to caller
 		//convert from protobuf to native format
 		nativeTs := rollbackTs.ToTsVbuuid(numVbuckets)
 
@@ -680,7 +696,7 @@ func (k *kvSender) sendMutationTopicRequest(ap *projClient.Client, topic string,
 
 	if res, err := ap.MutationTopicRequest(topic, endpointType,
 		[]*protobuf.TsVbuuid{reqTimestamps}, instances); err != nil {
-		logging.Fatalf("KVSender::sendMutationTopicRequest Projector %v Topic %v %v \n\tUnexpected Error %v", ap,
+		logging.Errorf("KVSender::sendMutationTopicRequest Projector %v Topic %v %v \n\tUnexpected Error %v", ap,
 			topic, reqTimestamps.GetBucket(), err)
 
 		return res, err
@@ -733,7 +749,7 @@ func (k *kvSender) sendRestartVbuckets(ap *projClient.Client,
 	}
 
 	if res, err := ap.RestartVbuckets(topic, []*protobuf.TsVbuuid{restartTs}); err != nil {
-		logging.Fatalf("KVSender::sendRestartVbuckets Unexpected Error During "+
+		logging.Errorf("KVSender::sendRestartVbuckets Unexpected Error During "+
 			"Restart Vbuckets Request for Projector %v Topic %v %v . Err %v.", ap,
 			topic, restartTs.GetBucket(), err)
 
@@ -758,7 +774,7 @@ func sendAddInstancesRequest(ap *projClient.Client,
 		ap, topic, instances)
 
 	if res, err := ap.AddInstances(topic, instances); err != nil {
-		logging.Fatalf("KVSender::sendAddInstancesRequest Unexpected Error During "+
+		logging.Errorf("KVSender::sendAddInstancesRequest Unexpected Error During "+
 			"Add Instances Request Projector %v Topic %v IndexInst %v. Err %v", ap,
 			topic, instances, err)
 
@@ -785,7 +801,7 @@ func sendDelInstancesRequest(ap *projClient.Client,
 		ap, topic, uuids)
 
 	if err := ap.DelInstances(topic, uuids); err != nil {
-		logging.Fatalf("KVSender::sendDelInstancesRequest Unexpected Error During "+
+		logging.Errorf("KVSender::sendDelInstancesRequest Unexpected Error During "+
 			"Del Instances Request Projector %v Topic %v Instances %v. Err %v", ap,
 			topic, uuids, err)
 
@@ -808,7 +824,7 @@ func sendDelBucketsRequest(ap *projClient.Client,
 		ap, topic, buckets)
 
 	if err := ap.DelBuckets(topic, buckets); err != nil {
-		logging.Fatalf("KVSender::sendDelBucketsRequest Unexpected Error During "+
+		logging.Errorf("KVSender::sendDelBucketsRequest Unexpected Error During "+
 			"Del Buckets Request Projector %v Topic %v Buckets %v. Err %v", ap,
 			topic, buckets, err)
 
@@ -827,7 +843,7 @@ func sendShutdownTopic(ap *projClient.Client,
 	logging.Infof("KVSender::sendShutdownTopic Projector %v Topic %v", ap, topic)
 
 	if err := ap.ShutdownTopic(topic); err != nil {
-		logging.Fatalf("KVSender::sendShutdownTopic Unexpected Error During "+
+		logging.Errorf("KVSender::sendShutdownTopic Unexpected Error During "+
 			"Shutdown Projector %v Topic %v. Err %v", ap, topic, err)
 
 		return err
@@ -935,7 +951,7 @@ func (k *kvSender) makeInitialTs(bucket string,
 
 	flogs, err := k.getFailoverLogs(bucket, vbnos)
 	if err != nil {
-		logging.Fatalf("KVSender::makeInitialTs Unexpected Error During Failover "+
+		logging.Errorf("KVSender::makeInitialTs Unexpected Error During Failover "+
 			"Log Request for Bucket %v. Err %v", bucket, err)
 		return nil, err
 	}
@@ -951,7 +967,7 @@ func (k *kvSender) makeRestartTsFromKV(bucket string,
 
 	flogs, err := k.getFailoverLogs(bucket, vbnos)
 	if err != nil {
-		logging.Fatalf("KVSender::makeRestartTS Unexpected Error During Failover "+
+		logging.Errorf("KVSender::makeRestartTS Unexpected Error During Failover "+
 			"Log Request for Bucket %v. Err %v", bucket, err)
 		return nil, err
 	}
@@ -1138,9 +1154,9 @@ func convertIndexInstToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
 func convertIndexDefnToProtobuf(indexDefn c.IndexDefn) *protobuf.IndexDefn {
 
 	using := protobuf.StorageType(
-		protobuf.StorageType_value[string(indexDefn.Using)]).Enum()
+		protobuf.StorageType_value[strings.ToLower(string(indexDefn.Using))]).Enum()
 	exprType := protobuf.ExprType(
-		protobuf.ExprType_value[string(indexDefn.ExprType)]).Enum()
+		protobuf.ExprType_value[strings.ToUpper(string(indexDefn.ExprType))]).Enum()
 	partnScheme := protobuf.PartitionScheme(
 		protobuf.PartitionScheme_value[string(indexDefn.PartitionScheme)]).Enum()
 
@@ -1191,13 +1207,12 @@ func addPartnInfoToProtoInst(cfg c.Config, cinfo *c.ClusterInfoCache,
 		err := cinfo.Fetch()
 		c.CrashOnError(err)
 
-		nid := cinfo.GetCurrentNode()
-		streamMaintAddr, err := cinfo.GetServiceAddress(nid, "indexStreamMaint")
+		host, err := cinfo.GetLocalHostname()
 		c.CrashOnError(err)
-		streamInitAddr, err := cinfo.GetServiceAddress(nid, "indexStreamInit")
-		c.CrashOnError(err)
-		streamCatchupAddr, err := cinfo.GetServiceAddress(nid, "indexStreamCatchup")
-		c.CrashOnError(err)
+
+		streamMaintAddr := net.JoinHostPort(host, cfg["streamMaintPort"].String())
+		streamInitAddr := net.JoinHostPort(host, cfg["streamInitPort"].String())
+		streamCatchupAddr := net.JoinHostPort(host, cfg["streamCatchupPort"].String())
 
 		var endpoints []string
 		for _, p := range partnDefn {
@@ -1257,15 +1272,16 @@ func checkVbListInTS(vbList []uint32, ts *protobuf.TsVbuuid) bool {
 
 }
 
-func execWithStopCh(fn func(), stopCh StopChannel) {
+func execWithStopCh(fn func(), stopCh StopChannel) bool {
 
 	select {
 
 	case <-stopCh:
-		return
+		return true
 
 	default:
 		fn()
+		return false
 
 	}
 

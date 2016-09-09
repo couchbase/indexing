@@ -18,6 +18,10 @@ var (
 		100000000, 300000000, 500000000, 1000000000, 2000000000, 3000000000,
 		5000000000, 10000000000,
 	}
+
+	clientBootTime = 5 // Seconds
+
+	requestCounter = platform.NewAlignedUint64(0)
 )
 
 type Job struct {
@@ -74,19 +78,17 @@ func RunJob(client *qclient.GsiClient, job *Job, aggrQ chan *JobResult) {
 	}
 
 	startTime := time.Now()
+	uuid := fmt.Sprintf("%d", platform.AddUint64(&requestCounter, 1))
 	switch spec.Type {
 	case "All":
-		uuid, _ := c.NewUUID()
-		requestID := os.Args[0] + uuid.Str()
+		requestID := os.Args[0] + uuid
 		err = client.ScanAll(spec.DefnId, requestID, spec.Limit, cons, nil, callb)
 	case "Range":
-		uuid, _ := c.NewUUID()
-		requestID := os.Args[0] + uuid.Str()
+		requestID := os.Args[0] + uuid
 		err = client.Range(spec.DefnId, requestID, spec.Low, spec.High,
 			qclient.Inclusion(spec.Inclusion), false, spec.Limit, cons, nil, callb)
 	case "Lookup":
-		uuid, _ := c.NewUUID()
-		requestID := os.Args[0] + uuid.Str()
+		requestID := os.Args[0] + uuid
 		err = client.Lookup(spec.DefnId, requestID, spec.Lookups, false,
 			spec.Limit, cons, nil, callb)
 	}
@@ -156,18 +158,20 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		cfg.LatencyBuckets = defaultLatencyBuckets
 	}
 
+	if cfg.ClientBootTime == 0 {
+		cfg.ClientBootTime = clientBootTime
+	}
+
 	config := c.SystemConfig.SectionConfig("queryport.client.", true)
 	config.SetValue("settings.poolSize", int(cfg.Concurrency))
+	config.SetValue("readDeadline", 0)
+	config.SetValue("writeDeadline", 0)
+
 	client, err := qclient.NewGsiClient(cluster, config)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
-
-	indexes, err := client.Refresh()
-	if err != nil {
-		return nil, err
-	}
 
 	clients = make([]*qclient.GsiClient, cfg.Clients)
 	for i := 0; i < cfg.Clients; i++ {
@@ -179,6 +183,12 @@ func RunCommands(cluster string, cfg *Config, statsW io.Writer) (*Result, error)
 		defer c.Close()
 		clients[i] = c
 
+	}
+
+	time.Sleep(time.Second * time.Duration(cfg.ClientBootTime))
+	indexes, err := client.Refresh()
+	if err != nil {
+		return nil, err
 	}
 
 	jobQ = make(chan *Job, cfg.Concurrency*1000)

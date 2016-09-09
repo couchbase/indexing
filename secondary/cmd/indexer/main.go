@@ -31,22 +31,24 @@ func main() {
 
 	fset := flag.NewFlagSet("indexer", flag.ContinueOnError)
 
-	logLevel          := fset.String("loglevel", "Info", "Log Level - Silent, Fatal, Error, Info, Debug, Trace")
-	numVbuckets       := fset.Int("vbuckets", indexer.MAX_NUM_VBUCKETS, "Number of vbuckets configured in Couchbase")
-	cluster           := fset.String("cluster", indexer.DEFAULT_CLUSTER_ENDPOINT, "Couchbase cluster address")
-	adminPort         := fset.String("adminPort", "9100", "Index ddl and status port")
-	scanPort          := fset.String("scanPort", "9101", "Index scanner port")
-	httpPort          := fset.String("httpPort", "9102", "Index http mgmt port")
-	streamInitPort    := fset.String("streamInitPort", "9103", "Index initial stream port")
+	logLevel := fset.String("loglevel", "Info", "Log Level - Silent, Fatal, Error, Info, Debug, Trace")
+	numVbuckets := fset.Int("vbuckets", indexer.MAX_NUM_VBUCKETS, "Number of vbuckets configured in Couchbase")
+	cluster := fset.String("cluster", indexer.DEFAULT_CLUSTER_ENDPOINT, "Couchbase cluster address")
+	adminPort := fset.String("adminPort", "9100", "Index ddl and status port")
+	scanPort := fset.String("scanPort", "9101", "Index scanner port")
+	httpPort := fset.String("httpPort", "9102", "Index http mgmt port")
+	streamInitPort := fset.String("streamInitPort", "9103", "Index initial stream port")
 	streamCatchupPort := fset.String("streamCatchupPort", "9104", "Index catchup stream port")
-	streamMaintPort   := fset.String("streamMaintPort", "9105", "Index maintenance stream port")
-	storageDir        := fset.String("storageDir", "./", "Index file storage directory path")
-	diagDir           := fset.String("diagDir", "./", "Directory for writing index diagnostic information")
-	enableManager     := fset.Bool("enable_manager", true, "Enable Index Manager")
-	auth              := fset.String("auth", "", "Auth user and password")
+	streamMaintPort := fset.String("streamMaintPort", "9105", "Index maintenance stream port")
+	storageDir := fset.String("storageDir", "./", "Index file storage directory path")
+	diagDir := fset.String("diagDir", "./", "Directory for writing index diagnostic information")
+	enableManager := fset.Bool("enable_manager", true, "Enable Index Manager")
+	auth := fset.String("auth", "", "Auth user and password")
+	nodeuuid := fset.String("nodeUUID", "", "UUID of the node")
+	storageMode := fset.String("storageMode", "", "Storage mode of indexer (forestdb/memory_optimized)")
 
 	for i := 1; i < len(os.Args); i++ {
-		if err := fset.Parse(os.Args[i:i+1]); err != nil {
+		if err := fset.Parse(os.Args[i : i+1]); err != nil {
 			if strings.Contains(err.Error(), "flag provided but not defined") {
 				logging.Warnf("Ignoring the unspecified argument error: %v", err)
 			} else {
@@ -58,9 +60,6 @@ func main() {
 	logging.SetLogLevel(logging.Level(*logLevel))
 	forestdb.Log = &logging.SystemLogger
 
-	// Setup Breakpad to catch forestDB fatal errors.
-	forestdb.InitBreakpadForFDB(*diagDir)
-
 	// setup cbauth
 	if *auth != "" {
 		up := strings.Split(*auth, ":")
@@ -70,7 +69,6 @@ func main() {
 		}
 	}
 
-	go platform.DumpOnSignal()
 	go common.ExitOnStdinClose()
 
 	config := common.SystemConfig
@@ -85,14 +83,71 @@ func main() {
 	config.SetValue("indexer.streamMaintPort", *streamMaintPort)
 	config.SetValue("indexer.storage_dir", *storageDir)
 	config.SetValue("indexer.diagnostics_dir", *diagDir)
+	config.SetValue("indexer.nodeuuid", *nodeuuid)
 
+	// Prior to watson (4.5 version) storage_dir parameter was converted
+	// to lower case. Post watson, the plan is to keep the parameter
+	// case-sensitive. Following is the logic:
+	// - when indexer restarts with same storage_dir parameter it will be
+	// case-sensitive, so check wither lowercase(storage_dir) exist
+	// - if so, copy them to case-sensitive directory and remove
+	//   case-insensitive directory.
+	// - else, it is not an upgrade situation.
 	storage_dir := config["indexer.storage_dir"].String()
-	if err := os.MkdirAll(storage_dir, 0755); err != nil {
-		common.CrashOnError(err)
+	if common.IsPathExist(storage_dir) == false {
+		if err := os.MkdirAll(storage_dir, 0755); err != nil {
+			common.CrashOnError(err)
+		}
+	}
+	lowcase_storage_dir := strings.ToLower(storage_dir)
+	if common.IsPathExist(lowcase_storage_dir) {
+		func() {
+			casefile, err := os.Open(storage_dir)
+			if err != nil {
+				logging.Errorf("os.Open(storage_dir): %v", err)
+				common.CrashOnError(err)
+			}
+			defer casefile.Close()
+			lowerfile, err := os.Open(lowcase_storage_dir)
+			if err != nil {
+				logging.Errorf("os.Open(lowcase_storage_dir): %v", err)
+				common.CrashOnError(err)
+			}
+			defer lowerfile.Close()
+
+			caseinfo, err := casefile.Stat()
+			if err != nil {
+				logging.Errorf("storage_dir.Stat(): %v", err)
+				common.CrashOnError(err)
+			}
+			lowerinfo, err := lowerfile.Stat()
+			if err != nil {
+				logging.Errorf("lowcase_storage_dir.Stat(): %v", err)
+				common.CrashOnError(err)
+			}
+			if os.SameFile(caseinfo, lowerinfo) == false {
+				err := os.Rename(lowcase_storage_dir, storage_dir)
+				if err != nil {
+					fmsg := "renaming from %v to %v: %v"
+					logging.Fatalf(fmsg, lowcase_storage_dir, storage_dir, err)
+					fmsg = "reverting to lower-case storage_dir %v"
+					logging.Infof(fmsg, lowcase_storage_dir)
+					config.SetValue("storage_dir", lowcase_storage_dir)
+				}
+			}
+		}()
 	}
 
 	if err := os.MkdirAll(*diagDir, 0755); err != nil {
 		common.CrashOnError(err)
+	}
+
+	if *storageMode != "" {
+		if common.SetStorageModeStr(*storageMode) {
+			logging.Infof("Indexer::Main Storage Mode Set %v", common.GetStorageMode())
+		} else {
+			logging.Infof("Indexer::Main Invalid Storage Mode %v", *storageMode)
+		}
 	}
 
 	_, msg := indexer.NewIndexer(config)

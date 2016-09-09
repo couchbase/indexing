@@ -42,7 +42,8 @@ func SendResponseEnd(conn transporter) error {
 
 func Receive(conn transporter, buf []byte) (flags TransportFlag, payload []byte, err error) {
 	// transport de-framing
-	if err = fullRead(conn, buf[:pktDataOffset]); err != nil {
+	bufHeader := safeBufSlice(buf, pktDataOffset)
+	if err = fullRead(conn, bufHeader); err != nil {
 		if err == io.EOF {
 			logging.Tracef("receiving packet: %v\n", err)
 		} else {
@@ -51,16 +52,13 @@ func Receive(conn transporter, buf []byte) (flags TransportFlag, payload []byte,
 		return
 	}
 	a, b := pktLenOffset, pktLenOffset+pktLenSize
-	pktlen := binary.BigEndian.Uint32(buf[a:b])
+	pktlen := binary.BigEndian.Uint32(bufHeader[a:b])
 
 	a, b = pktFlagOffset, pktFlagOffset+pktFlagSize
-	flags = TransportFlag(binary.BigEndian.Uint16(buf[a:b]))
-	if maxLen := uint32(len(buf)); pktlen > maxLen {
-		logging.Errorf("receiving packet length %v > %v\n", pktlen, maxLen)
-		err = ErrorPacketOverflow
-		return
-	}
-	if err = fullRead(conn, buf[:pktlen]); err != nil {
+	flags = TransportFlag(binary.BigEndian.Uint16(bufHeader[a:b]))
+
+	bufPkt := safeBufSlice(buf, int(pktlen))
+	if err = fullRead(conn, bufPkt); err != nil {
 		if err == io.EOF {
 			logging.Tracef("receiving packet: %v\n", err)
 		} else {
@@ -69,5 +67,13 @@ func Receive(conn transporter, buf []byte) (flags TransportFlag, payload []byte,
 		return
 	}
 
-	return flags, buf[:pktlen], err
+	return flags, bufPkt, err
+}
+
+func safeBufSlice(b []byte, l int) []byte {
+	if cap(b) >= l {
+		return b[:l]
+	}
+
+	return make([]byte, l)
 }

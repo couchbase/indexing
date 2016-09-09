@@ -61,6 +61,7 @@ func newFilter() *filter {
 }
 
 func (f *filter) Routine() error {
+loop:
 	for {
 		select {
 		case err := <-f.errch:
@@ -77,7 +78,7 @@ func (f *filter) Routine() error {
 		case ErrNoMoreItem:
 			f.CloseRead()
 			f.CloseWrite()
-			return nil
+			break loop
 		default:
 			f.CloseWithError(err)
 			return err
@@ -133,7 +134,7 @@ loop:
 	}
 
 	if i != s.count {
-		s.t.Errorf("Count: got %v, expected", i, s.count)
+		s.t.Errorf("Count: got %v, expected %d", i, s.count)
 	}
 
 	return nil

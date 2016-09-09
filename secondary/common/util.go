@@ -3,6 +3,8 @@ package common
 import "errors"
 import "fmt"
 import "io"
+import "io/ioutil"
+import "path/filepath"
 import "net"
 import "net/url"
 import "os"
@@ -14,6 +16,7 @@ import "hash/crc64"
 import "reflect"
 import "unsafe"
 import "regexp"
+import "time"
 
 import "github.com/couchbase/cbauth"
 import "github.com/couchbase/indexing/secondary/dcp"
@@ -316,6 +319,7 @@ func ExitOnStdinClose() {
 		_, err := os.Stdin.Read(buf)
 		if err != nil {
 			if err == io.EOF {
+				time.Sleep(1 * time.Second)
 				os.Exit(0)
 			}
 
@@ -568,7 +572,6 @@ func IndexStatement(def IndexDefn) string {
 	primCreate := "CREATE PRIMARY INDEX `%s` ON `%s`"
 	secCreate := "CREATE INDEX `%s` ON `%s`(%s)"
 	where := " WHERE %s"
-	using := " USING GSI"
 
 	if def.IsPrimary {
 		stmt = fmt.Sprintf(primCreate, def.Name, def.Bucket)
@@ -586,7 +589,23 @@ func IndexStatement(def IndexDefn) string {
 		}
 	}
 
-	stmt += using
+	withExpr := ""
+	if def.Immutable {
+		withExpr += "\"immutable\"=true"
+	}
+
+	if def.Deferred {
+		if len(withExpr) != 0 {
+			withExpr += ","
+		}
+
+		withExpr += " \"defer_build\"=true"
+	}
+
+	if len(withExpr) != 0 {
+		stmt += fmt.Sprintf(" WITH { %s }", withExpr)
+	}
+
 	return stmt
 }
 
@@ -679,4 +698,132 @@ func ComputeAvg(lastAvg, lastValue, currValue int64) int64 {
 	}
 
 	return (diff + lastAvg) / 2
+}
+
+// Write to the admin console
+func Console(clusterAddr string, format string, v ...interface{}) error {
+	msg := fmt.Sprintf(format, v...)
+	values := url.Values{"message": {msg}, "logLevel": {"info"}, "component": {"indexing"}}
+	reader := strings.NewReader(values.Encode())
+
+	if !strings.HasPrefix(clusterAddr, "http://") {
+		clusterAddr = "http://" + clusterAddr
+	}
+	clusterAddr += "/_log"
+
+	req, err := http.NewRequest("POST", clusterAddr, reader)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	cbauth.SetRequestAuthVia(req, nil)
+
+	client := http.Client{Timeout: time.Duration(10 * time.Second)}
+	_, err = client.Do(req)
+
+	return err
+}
+
+func CopyFile(dest, source string) (err error) {
+	var sf, df *os.File
+
+	defer func() {
+		if sf != nil {
+			sf.Close()
+		}
+		if df != nil {
+			df.Close()
+		}
+	}()
+
+	if sf, err = os.Open(source); err != nil {
+		return err
+	} else if IsPathExist(dest) {
+		return nil
+	} else if df, err = os.Create(dest); err != nil {
+		return err
+	} else if _, err = io.Copy(df, sf); err != nil {
+		return err
+	}
+
+	var info os.FileInfo
+	if info, err = os.Stat(source); err != nil {
+		return err
+	} else if err = os.Chmod(dest, info.Mode()); err != nil {
+		return err
+	}
+	return
+}
+
+// CopyDir compose destination path based on source and,
+//   - if dest is file, and path is reachable, it is a no-op.
+//   - if dest is file, and path is not reachable, create and copy.
+//   - if dest is dir, and path is reachable, recurse into the dir.
+//   - if dest is dir, and path is not reachable, create and recurse into the dir.
+func CopyDir(dest, source string) error {
+	var created bool
+
+	if fi, err := os.Stat(source); err != nil {
+		return err
+	} else if !fi.IsDir() {
+		return fmt.Errorf("source not a directory")
+	} else if IsPathExist(dest) == false {
+		created = true
+		if err := os.MkdirAll(dest, fi.Mode()); err != nil {
+			return err
+		}
+	}
+
+	var err error
+	defer func() {
+		// if copy failed in the middle and directory was created by us, clean.
+		if err != nil && created {
+			os.RemoveAll(dest)
+		}
+	}()
+
+	var entries []os.FileInfo
+	if entries, err = ioutil.ReadDir(source); err != nil {
+		return err
+	} else {
+		for _, entry := range entries {
+			s := filepath.Join(source, entry.Name())
+			d := filepath.Join(dest, entry.Name())
+			if entry.IsDir() {
+				if err = CopyDir(d, s); err != nil {
+					return err
+				}
+			} else if err = CopyFile(d, s); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func IsPathExist(path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return !os.IsNotExist(err)
+	}
+	return true
+}
+
+func DiskUsage(dir string) (int64, error) {
+	var sz int64
+	err := filepath.Walk(dir, func(_ string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !fi.IsDir() {
+			sz += fi.Size()
+		}
+		return nil
+	})
+
+	if err != nil {
+		return 0, err
+	}
+
+	return sz, nil
 }

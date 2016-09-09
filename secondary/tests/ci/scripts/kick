@@ -7,4 +7,5 @@ pkill -e -f cluster_
 pkill -e -f /opt/
 killall beam.smp epmd
 killall python
-
+killall -9 memcached.json
+killall -9 memcached

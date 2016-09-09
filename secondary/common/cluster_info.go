@@ -38,6 +38,9 @@ type ClusterInfoCache struct {
 	logPrefix string
 	retries   int
 
+	useStaticPorts bool
+	servicePortMap map[string]string
+
 	client  couchbase.Client
 	pool    couchbase.Pool
 	nodes   []couchbase.Node
@@ -69,6 +72,13 @@ func (c *ClusterInfoCache) SetLogPrefix(p string) {
 
 func (c *ClusterInfoCache) SetMaxRetries(r int) {
 	c.retries = r
+}
+
+func (c *ClusterInfoCache) SetServicePorts(portMap map[string]string) {
+
+	c.useStaticPorts = true
+	c.servicePortMap = portMap
+
 }
 
 func (c *ClusterInfoCache) Fetch() error {
@@ -137,7 +147,7 @@ func (c *ClusterInfoCache) Fetch() error {
 	return rh.Run()
 }
 
-func (c ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
+func (c *ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	for i, svs := range c.nodesvs {
 		if _, ok := svs.Services[srvc]; ok {
 			nids = append(nids, NodeId(i))
@@ -147,7 +157,7 @@ func (c ClusterInfoCache) GetNodesByServiceType(srvc string) (nids []NodeId) {
 	return
 }
 
-func (c ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err error) {
+func (c *ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err error) {
 	b, berr := c.pool.GetBucket(bucket)
 	if berr != nil {
 		err = berr
@@ -168,7 +178,7 @@ func (c ClusterInfoCache) GetNodesByBucket(bucket string) (nids []NodeId, err er
 //
 // Return UUID of a given bucket.
 //
-func (c ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
+func (c *ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
 
 	b, err := c.pool.GetBucket(bucket)
 	if err != nil {
@@ -189,7 +199,7 @@ func (c ClusterInfoCache) GetBucketUUID(bucket string) (uuid string) {
 	return BUCKET_UUID_NIL
 }
 
-func (c ClusterInfoCache) GetCurrentNode() NodeId {
+func (c *ClusterInfoCache) GetCurrentNode() NodeId {
 	for i, node := range c.nodes {
 		if node.ThisNode {
 			return NodeId(i)
@@ -199,7 +209,7 @@ func (c ClusterInfoCache) GetCurrentNode() NodeId {
 	panic("Current node is not in active membership")
 }
 
-func (c ClusterInfoCache) IsNodeHealthy(nid NodeId) (bool, error) {
+func (c *ClusterInfoCache) IsNodeHealthy(nid NodeId) (bool, error) {
 	if int(nid) >= len(c.nodes) {
 		return false, ErrInvalidNodeId
 	}
@@ -207,7 +217,7 @@ func (c ClusterInfoCache) IsNodeHealthy(nid NodeId) (bool, error) {
 	return c.nodes[nid].Status == "healthy", nil
 }
 
-func (c ClusterInfoCache) GetNodeStatus(nid NodeId) (string, error) {
+func (c *ClusterInfoCache) GetNodeStatus(nid NodeId) (string, error) {
 	if int(nid) >= len(c.nodes) {
 		return "", ErrInvalidNodeId
 	}
@@ -215,7 +225,7 @@ func (c ClusterInfoCache) GetNodeStatus(nid NodeId) (string, error) {
 	return c.nodes[nid].Status, nil
 }
 
-func (c ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr string, err error) {
+func (c *ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr string, err error) {
 	var port int
 	var ok bool
 
@@ -226,6 +236,8 @@ func (c ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr strin
 
 	node := c.nodesvs[nid]
 	if port, ok = node.Services[srvc]; !ok {
+		logging.Errorf("%vInvalid Service %v for node %v. Nodes %v \n NodeServices %v",
+			c.logPrefix, srvc, node, c.nodes, c.nodesvs)
 		err = ErrInvalidService
 		return
 	}
@@ -245,7 +257,7 @@ func (c ClusterInfoCache) GetServiceAddress(nid NodeId, srvc string) (addr strin
 	return
 }
 
-func (c ClusterInfoCache) GetVBuckets(nid NodeId, bucket string) (vbs []uint32, err error) {
+func (c *ClusterInfoCache) GetVBuckets(nid NodeId, bucket string) (vbs []uint32, err error) {
 	b, berr := c.pool.GetBucket(bucket)
 	if berr != nil {
 		err = berr
@@ -270,7 +282,7 @@ func (c ClusterInfoCache) GetVBuckets(nid NodeId, bucket string) (vbs []uint32, 
 	return
 }
 
-func (c ClusterInfoCache) findVBServerIndex(b *couchbase.Bucket, nid NodeId) (int, bool) {
+func (c *ClusterInfoCache) findVBServerIndex(b *couchbase.Bucket, nid NodeId) (int, bool) {
 	bnodes := b.Nodes()
 
 	for idx, n := range bnodes {
@@ -282,16 +294,32 @@ func (c ClusterInfoCache) findVBServerIndex(b *couchbase.Bucket, nid NodeId) (in
 	return 0, false
 }
 
-func (c ClusterInfoCache) sameNode(n1 couchbase.Node, n2 couchbase.Node) bool {
+func (c *ClusterInfoCache) sameNode(n1 couchbase.Node, n2 couchbase.Node) bool {
 	return n1.Hostname == n2.Hostname
 }
 
-func (c ClusterInfoCache) GetLocalServiceAddress(srvc string) (string, error) {
-	node := c.GetCurrentNode()
-	return c.GetServiceAddress(node, srvc)
+func (c *ClusterInfoCache) GetLocalServiceAddress(srvc string) (string, error) {
+
+	if c.useStaticPorts {
+
+		h, err := c.GetLocalHostname()
+		if err != nil {
+			return "", err
+		}
+
+		p, e := c.getStaticServicePort(srvc)
+		if e != nil {
+			return "", e
+		}
+		return net.JoinHostPort(h, p), nil
+
+	} else {
+		node := c.GetCurrentNode()
+		return c.GetServiceAddress(node, srvc)
+	}
 }
 
-func (c ClusterInfoCache) GetLocalServicePort(srvc string) (string, error) {
+func (c *ClusterInfoCache) GetLocalServicePort(srvc string) (string, error) {
 	addr, err := c.GetLocalServiceAddress(srvc)
 	if err != nil {
 		return addr, err
@@ -305,7 +333,7 @@ func (c ClusterInfoCache) GetLocalServicePort(srvc string) (string, error) {
 	return net.JoinHostPort("", p), nil
 }
 
-func (c ClusterInfoCache) GetLocalServiceHost(srvc string) (string, error) {
+func (c *ClusterInfoCache) GetLocalServiceHost(srvc string) (string, error) {
 
 	addr, err := c.GetLocalServiceAddress(srvc)
 	if err != nil {
@@ -320,23 +348,49 @@ func (c ClusterInfoCache) GetLocalServiceHost(srvc string) (string, error) {
 	return h, nil
 }
 
-func (c ClusterInfoCache) GetLocalHostAddress() (string, error) {
+func (c *ClusterInfoCache) GetLocalHostAddress() (string, error) {
 
 	cUrl, err := url.Parse(c.url)
 	if err != nil {
 		return "", errors.New("Unable to parse cluster url - " + err.Error())
 	}
+
 	_, p, _ := net.SplitHostPort(cUrl.Host)
 
-	h, err := c.GetLocalServiceHost(INDEX_ADMIN_SERVICE)
+	h, err := c.GetLocalHostname()
 	if err != nil {
 		return "", err
 	}
 
 	return net.JoinHostPort(h, p), nil
+
 }
 
-func (c ClusterInfoCache) validateCache() bool {
+func (c *ClusterInfoCache) GetLocalHostname() (string, error) {
+
+	cUrl, err := url.Parse(c.url)
+	if err != nil {
+		return "", errors.New("Unable to parse cluster url - " + err.Error())
+	}
+
+	h, _, _ := net.SplitHostPort(cUrl.Host)
+
+	nid := c.GetCurrentNode()
+
+	if int(nid) >= len(c.nodesvs) {
+		return "", ErrInvalidNodeId
+	}
+
+	node := c.nodesvs[nid]
+	if node.Hostname == "" {
+		node.Hostname = h
+	}
+
+	return node.Hostname, nil
+
+}
+
+func (c *ClusterInfoCache) validateCache() bool {
 
 	if len(c.nodes) != len(c.nodesvs) {
 		return false
@@ -369,4 +423,14 @@ func (c ClusterInfoCache) validateCache() bool {
 	}
 
 	return true
+}
+
+func (c *ClusterInfoCache) getStaticServicePort(srvc string) (string, error) {
+
+	if p, ok := c.servicePortMap[srvc]; ok {
+		return p, nil
+	} else {
+		return "", ErrInvalidService
+	}
+
 }

@@ -21,6 +21,7 @@ import (
 	fdb "github.com/couchbase/indexing/secondary/fdb"
 	"github.com/couchbase/indexing/secondary/logging"
 	"github.com/couchbase/indexing/secondary/manager/client"
+	"strings"
 	"time"
 	//"runtime/debug"
 )
@@ -104,7 +105,8 @@ func (m *LifecycleMgr) OnNewRequest(fid string, request protocol.RequestMsg) {
 		// they can get processed.  For client side, they will be queued
 		// up in the regular queue until indexer is ready.
 		if !m.indexerReady {
-			if op == client.OPCODE_UPDATE_INDEX_INST || op == client.OPCODE_DELETE_BUCKET {
+			if op == client.OPCODE_UPDATE_INDEX_INST || op == client.OPCODE_DELETE_BUCKET ||
+				op == client.OPCODE_CLEANUP_INDEX {
 				m.bootstraps <- req
 				return
 			}
@@ -201,6 +203,10 @@ func (m *LifecycleMgr) dispatchRequest(request *requestHolder, factory *message.
 		result, err = m.handleServiceMap(content)
 	case client.OPCODE_DELETE_BUCKET:
 		err = m.handleDeleteBucket(key, content)
+	case client.OPCODE_CLEANUP_INDEX:
+		err = m.handleCleanupIndex(key)
+	case client.OPCODE_CLEANUP_DEFER_INDEX:
+		err = m.handleCleanupDeferIndexFromBucket(key)
 	}
 
 	logging.Debugf("LifecycleMgr.dispatchRequest () : send response for requestId %d, op %d, len(result) %d", reqId, op, len(result))
@@ -249,12 +255,15 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 
 		state, _ := topology.GetStatusByDefn(existDefn.DefnId)
 		if state != common.INDEX_STATE_NIL && state != common.INDEX_STATE_DELETED {
-			return errors.New(fmt.Sprintf("Index %s.%s already exist", defn.Bucket, defn.Name))
+			return errors.New(fmt.Sprintf("Index %s.%s already exists", defn.Bucket, defn.Name))
 		}
 	}
 
 	// Fetch bucket UUID.   This confirms that the bucket has existed, but it cannot confirm if the bucket
 	// is still existing in the cluster (due to race condition or network partitioned).
+	// Lifecycle manager is a singleton that ensures all metadata operation is serialized.  Therefore, a
+	// call to verifyBucket() here  will also make sure that all existing indexes belong to the same bucket UUID.
+	// To esnure verifyBucket can succeed, indexes from stale bucket must be cleaned up (eventually).
 	bucketUUID, err := m.verifyBucket(defn.Bucket)
 	if err != nil || bucketUUID == common.BUCKET_UUID_NIL {
 		if err == nil {
@@ -264,6 +273,26 @@ func (m *LifecycleMgr) CreateIndex(defn *common.IndexDefn) error {
 			" Please retry the operation at a later time (err=%v).", err)
 	}
 	defn.BucketUUID = bucketUUID
+
+	//if no index_type has been specified
+	if strings.ToLower(string(defn.Using)) == "gsi" {
+		if common.GetStorageMode() != common.NOT_SET {
+			//if there is a storage mode, default to that
+			defn.Using = common.IndexType(common.GetStorageMode().String())
+		} else {
+			//default to forestdb
+			defn.Using = common.ForestDB
+		}
+	} else {
+		if common.IsValidIndexType(string(defn.Using)) {
+			defn.Using = common.IndexType(strings.ToLower(string(defn.Using)))
+		} else {
+			err := fmt.Sprintf("LifecycleMgr.handleCreateIndex() : createIndex fails."+
+				"Reason = Unsupported Using Clause %v", string(defn.Using))
+			logging.Errorf(err)
+			return errors.New(err)
+		}
+	}
 
 	if err := m.repo.CreateIndex(defn); err != nil {
 		logging.Errorf("LifecycleMgr.handleCreateIndex() : createIndex fails. Reason = %v", err)
@@ -391,6 +420,17 @@ func (m *LifecycleMgr) handleDeleteIndex(key string) error {
 	}
 
 	return m.DeleteIndex(id, true)
+}
+
+func (m *LifecycleMgr) handleCleanupIndex(key string) error {
+
+	id, err := indexDefnId(key)
+	if err != nil {
+		logging.Errorf("LifecycleMgr.handleCleanupIndex() : deleteIndex fails. Reason = %v", err)
+		return err
+	}
+
+	return m.DeleteIndex(id, false)
 }
 
 func (m *LifecycleMgr) DeleteIndex(id common.IndexDefnId, notify bool) error {
@@ -579,13 +619,60 @@ func (m *LifecycleMgr) handleDeleteBucket(bucket string, content []byte) error {
 				logging.Debugf("LifecycleMgr.handleDeleteBucket() : Cannot find index instance %v.  Skip.", defnRef.DefnId)
 			}
 		}
-	} else if err != fdb.RESULT_KEY_NOT_FOUND {
+	} else if err != fdb.FDB_RESULT_KEY_NOT_FOUND {
 		result = err
 	}
 
 	return result
 }
 
+//
+// Cleanup any defer index from invalid bucket.
+//
+func (m *LifecycleMgr) handleCleanupDeferIndexFromBucket(bucket string) error {
+
+	// Get bucket UUID.  bucket uuid could be BUCKET_UUID_NIL for non-existent bucket.
+	currentUUID, err := m.getBucketUUID(bucket)
+	if err != nil {
+		// If err != nil, then cannot connect to fetch bucket info.  Do not attempt to delete index.
+		return nil
+	}
+
+	topology, err := m.repo.GetTopologyByBucket(bucket)
+	if err == nil {
+
+		hasValidActiveIndex := false
+		for _, defnRef := range topology.Definitions {
+			// Check for index with active stream.  If there is any index with active stream, all
+			// index in the bucket will be deleted when the stream is closed due to bucket delete.
+			if defnRef.Instances[0].State != uint32(common.INDEX_STATE_DELETED) &&
+				common.StreamId(defnRef.Instances[0].StreamId) != common.NIL_STREAM {
+				hasValidActiveIndex = true
+				break
+			}
+		}
+
+		if !hasValidActiveIndex {
+			for _, defnRef := range topology.Definitions {
+				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil {
+					if defn.BucketUUID != currentUUID && defn.Deferred &&
+						defnRef.Instances[0].State != uint32(common.INDEX_STATE_DELETED) &&
+						common.StreamId(defnRef.Instances[0].StreamId) == common.NIL_STREAM {
+						if err := m.DeleteIndex(common.IndexDefnId(defn.DefnId), true); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// This function returns an error if it cannot connect for fetching bucket info.
+// It returns BUCKET_UUID_NIL (err == nil) if bucket does not exist.
+//
 func (m *LifecycleMgr) getBucketUUID(bucket string) (string, error) {
 
 	count := 0
@@ -604,6 +691,11 @@ RETRY:
 	return uuid, nil
 }
 
+// This function ensures:
+// 1) Bucket exists
+// 2) Existing Index Definition matches the UUID of exixisting bucket
+// 3) If bucket does not exist AND there is no existing definition, this returns common.BUCKET_UUID_NIL
+//
 func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 
 	currentUUID, err := m.getBucketUUID(bucket)
@@ -612,22 +704,25 @@ func (m *LifecycleMgr) verifyBucket(bucket string) (string, error) {
 	}
 
 	topology, err := m.repo.GetTopologyByBucket(bucket)
-	if err != nil && err != fdb.RESULT_KEY_NOT_FOUND {
+	if err != nil && err != fdb.FDB_RESULT_KEY_NOT_FOUND {
 		return common.BUCKET_UUID_NIL, err
 	}
 
 	if topology != nil {
 		for _, defnRef := range topology.Definitions {
-			if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil {
-				if defn.BucketUUID != currentUUID {
-					return common.BUCKET_UUID_NIL,
-						errors.New("Bucket does not exist or temporarily unavailable for creating new index." +
-							" Please retry the operation at a later time.")
+			if state, _ := topology.GetStatusByDefn(common.IndexDefnId(defnRef.DefnId)); state != common.INDEX_STATE_DELETED {
+				if defn, err := m.repo.GetIndexDefnById(common.IndexDefnId(defnRef.DefnId)); err == nil {
+					if defn.BucketUUID != currentUUID {
+						return common.BUCKET_UUID_NIL,
+							errors.New("Bucket does not exist or temporarily unavailable for creating new index." +
+								" Please retry the operation at a later time.")
+					}
 				}
 			}
 		}
 	}
 
 	// topology is either nil or all index defn matches bucket UUID
+	// if topology is nil, then currentUUID == common.BUCKET_UUID_NIL
 	return currentUUID, nil
 }

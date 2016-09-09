@@ -22,6 +22,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,6 +34,12 @@ var (
 	ErrUnsupportedRequest = errors.New("Unsupported query request")
 	ErrVbuuidMismatch     = errors.New("Mismatch in session vbuuids")
 )
+
+var secKeyBufPool *common.BytesBufPool
+
+func init() {
+	secKeyBufPool = common.NewByteBufferPool(MAX_SEC_KEY_BUFFER_LEN)
+}
 
 type ScanReqType string
 
@@ -66,43 +73,13 @@ type ScanRequest struct {
 
 	ScanId      uint64
 	ExpiredTime time.Time
-	TimeoutCh   <-chan time.Time
-	CancelCh    <-chan interface{}
+	Timeout     *time.Timer
+	CancelCh    <-chan bool
 
 	RequestId string
 	LogPrefix string
-}
 
-type CancelCb struct {
-	done    chan struct{}
-	timeout <-chan time.Time
-	cancel  <-chan interface{}
-	callb   func(error)
-}
-
-func (c *CancelCb) Run() {
-	go func() {
-		select {
-		case <-c.done:
-		case <-c.cancel:
-			c.callb(common.ErrClientCancel)
-		case <-c.timeout:
-			c.callb(common.ErrScanTimedOut)
-		}
-	}()
-}
-
-func (c *CancelCb) Done() {
-	close(c.done)
-}
-
-func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
-	return &CancelCb{
-		done:    make(chan struct{}),
-		timeout: req.TimeoutCh,
-		cancel:  req.CancelCh,
-		callb:   callb,
-	}
+	keyBufList []*[]byte
 }
 
 func (r ScanRequest) String() string {
@@ -120,7 +97,7 @@ func (r ScanRequest) String() string {
 	}
 
 	if len(r.Keys) == 0 {
-		if r.ScanType == StatsReq || r.ScanType == ScanReq {
+		if r.ScanType == StatsReq || r.ScanType == ScanReq || r.ScanType == CountReq {
 			span = fmt.Sprintf("range (%s,%s %s)", r.Low, r.High, incl)
 		} else {
 			span = "all"
@@ -151,11 +128,63 @@ func (r ScanRequest) String() string {
 	return str
 }
 
+func (r *ScanRequest) getTimeoutCh() <-chan time.Time {
+	if r.Timeout != nil {
+		return r.Timeout.C
+	}
+
+	return nil
+}
+
 func (r *ScanRequest) Done() {
 	// If the requested DefnID in invalid, stats object will not be populated
 	if r.Stats != nil {
 		r.Stats.numCompletedRequests.Add(1)
 	}
+
+	for _, buf := range r.keyBufList {
+		secKeyBufPool.Put(buf)
+	}
+
+	r.keyBufList = nil
+
+	if r.Timeout != nil {
+		r.Timeout.Stop()
+	}
+}
+
+type CancelCb struct {
+	done    chan struct{}
+	timeout <-chan time.Time
+	cancel  <-chan bool
+	callb   func(error)
+}
+
+func (c *CancelCb) Run() {
+	go func() {
+		select {
+		case <-c.done:
+		case <-c.cancel:
+			c.callb(common.ErrClientCancel)
+		case <-c.timeout:
+			c.callb(common.ErrScanTimedOut)
+		}
+	}()
+}
+
+func (c *CancelCb) Done() {
+	close(c.done)
+}
+
+func NewCancelCallback(req *ScanRequest, callb func(error)) *CancelCb {
+	cb := &CancelCb{
+		done:    make(chan struct{}),
+		cancel:  req.CancelCh,
+		timeout: req.getTimeoutCh(),
+		callb:   callb,
+	}
+
+	return cb
 }
 
 type ScanCoordinator interface {
@@ -178,6 +207,16 @@ type scanCoordinator struct {
 	config     common.ConfigHolder
 
 	stats IndexerStatsHolder
+
+	indexerState atomic.Value
+}
+
+func (s *scanCoordinator) getIndexerState() common.IndexerState {
+	return s.indexerState.Load().(common.IndexerState)
+}
+
+func (s *scanCoordinator) setIndexerState(state common.IndexerState) {
+	s.indexerState.Store(state)
 }
 
 // NewScanCoordinator returns an instance of scanCoordinator or err message
@@ -213,6 +252,8 @@ func NewScanCoordinator(supvCmdch MsgChannel, supvMsgch MsgChannel,
 		}
 		return nil, errMsg
 	}
+
+	s.setIndexerState(common.INDEXER_BOOTSTRAP)
 
 	// main loop
 	go s.run()
@@ -305,6 +346,15 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 	case CONFIG_SETTINGS_UPDATE:
 		s.handleConfigUpdate(cmd)
 
+	case INDEXER_PAUSE:
+		s.handleIndexerPause(cmd)
+
+	case INDEXER_RESUME:
+		s.handleIndexerResume(cmd)
+
+	case INDEXER_BOOTSTRAP:
+		s.handleIndexerBootstrap(cmd)
+
 	default:
 		logging.Errorf("ScanCoordinator: Received Unknown Command %v", cmd)
 		s.supvCmdch <- &MsgError{
@@ -316,7 +366,7 @@ func (s *scanCoordinator) handleSupvervisorCommands(cmd Message) {
 }
 
 func (s *scanCoordinator) newRequest(protoReq interface{},
-	cancelCh <-chan interface{}) (r *ScanRequest, err error) {
+	cancelCh <-chan bool) (r *ScanRequest, err error) {
 
 	var indexInst *common.IndexInst
 	r = new(ScanRequest)
@@ -325,13 +375,16 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 
 	cfg := s.config.Load()
 	timeout := time.Millisecond * time.Duration(cfg["settings.scan_timeout"].Int())
+	getseqsRetries := cfg["settings.scan_getseqnos_retries"].Int()
 
 	if timeout != 0 {
 		r.ExpiredTime = time.Now().Add(timeout)
-		r.TimeoutCh = time.After(timeout)
+		r.Timeout = time.NewTimer(timeout)
 	}
 
 	r.CancelCh = cancelCh
+
+	isBootstrapMode := s.isBootstrapMode()
 
 	isNil := func(k []byte) bool {
 		if len(k) == 0 || (!r.isPrimary && string(k) == "[]") {
@@ -348,7 +401,9 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		if r.isPrimary {
 			return NewPrimaryKey(k)
 		} else {
-			return NewSecondaryKey(k)
+			buf := secKeyBufPool.Get()
+			r.keyBufList = append(r.keyBufList, buf)
+			return NewSecondaryKey(k, *buf)
 		}
 	}
 
@@ -405,20 +460,31 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	setConsistency := func(
 		cons common.Consistency, vector *protobuf.TsConsistency) {
 
+		var localErr error
+		defer func() {
+			if err == nil {
+				err = localErr
+			}
+		}()
 		r.Consistency = &cons
 		cfg := s.config.Load()
 		if cons == common.QueryConsistency && vector != nil {
-			r.Ts = common.NewTsVbuuid("", cfg["numVbuckets"].Int())
+			r.Ts = common.NewTsVbuuid(r.Bucket, cfg["numVbuckets"].Int())
 			// if vector == nil, it is similar to AnyConsistency
 			for i, vbno := range vector.Vbnos {
 				r.Ts.Seqnos[vbno] = vector.Seqnos[i]
 				r.Ts.Vbuuids[vbno] = vector.Vbuuids[i]
 			}
-
 		} else if cons == common.SessionConsistency {
-			r.Ts = common.NewTsVbuuid("", cfg["numVbuckets"].Int())
-			r.Ts.Seqnos = vector.Seqnos // full set of seqnos.
-			r.Ts.Crc64 = vector.GetCrc64()
+			cluster := cfg["clusterAddr"].String()
+			r.Ts = &common.TsVbuuid{}
+			t0 := time.Now()
+			r.Ts.Seqnos, localErr = bucketSeqsWithRetry(getseqsRetries, r.LogPrefix, cluster, r.Bucket)
+			if localErr == nil && r.Stats != nil {
+				r.Stats.Timings.dcpSeqs.Put(time.Since(t0))
+			}
+			r.Ts.Crc64 = 0
+			r.Ts.Bucket = r.Bucket
 		}
 	}
 
@@ -438,14 +504,11 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			r.isPrimary = indexInst.Defn.IsPrimary
 			r.IndexName, r.Bucket = indexInst.Defn.Name, indexInst.Defn.Bucket
 			r.IndexInstId = indexInst.InstId
-			if r.Ts != nil {
-				r.Ts.Bucket = r.Bucket
-			}
+
 			if indexInst.State != common.INDEX_STATE_ACTIVE {
 				localErr = common.ErrIndexNotReady
-			} else {
-				r.Stats = stats.indexes[r.IndexInstId]
 			}
+			r.Stats = stats.indexes[r.IndexInstId]
 		}
 	}
 
@@ -455,6 +518,10 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.RequestId = req.GetRequestId()
 		r.ScanType = StatsReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
 		setIndexParams()
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
@@ -466,10 +533,16 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.RequestId = req.GetRequestId()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
-		setConsistency(cons, vector)
 		r.ScanType = CountReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
+
 		setIndexParams()
+		setConsistency(cons, vector)
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
@@ -480,24 +553,36 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.RequestId = req.GetRequestId()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
-		setConsistency(cons, vector)
 		r.ScanType = ScanReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
+		r.Limit = req.GetLimit()
+
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
+
 		setIndexParams()
+		setConsistency(cons, vector)
 		fillRanges(
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
-		r.Limit = req.GetLimit()
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
 		cons := common.Consistency(req.GetCons())
 		vector := req.GetVector()
-		setConsistency(cons, vector)
 		r.ScanType = ScanAllReq
 		r.Limit = req.GetLimit()
+
+		if isBootstrapMode {
+			err = common.ErrIndexerInBootstrap
+			return
+		}
+
 		setIndexParams()
+		setConsistency(cons, vector)
 	default:
 		err = ErrUnsupportedRequest
 	}
@@ -547,7 +632,7 @@ func (s *scanCoordinator) getRequestedIndexSnapshot(r *ScanRequest) (snap IndexS
 	var msg interface{}
 	select {
 	case msg = <-snapResch:
-	case <-r.TimeoutCh:
+	case <-r.getTimeoutCh():
 		go readDeallocSnapshot(snapResch)
 		msg = common.ErrScanTimedOut
 	}
@@ -579,8 +664,9 @@ func isSnapshotConsistent(
 			// in receiving a rollback.
 			// return nil, ErrVbuuidMismatch
 			return false
+		} else if cons == common.AnyConsistency {
+			return true
 		}
-		return true // AnyConsistency
 	}
 	return false
 }
@@ -630,8 +716,18 @@ func (s *scanCoordinator) handleError(prefix string, err error) {
 
 func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanRequest, err error) bool {
 	if err != nil {
-		logging.Infof("%s REQUEST %s", req.LogPrefix, req)
-		logging.Infof("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
+		if err == common.ErrIndexNotReady && req.Stats != nil {
+			req.Stats.notReadyError.Add(1)
+		} else if err == common.ErrIndexNotFound {
+			stats := s.stats.Get()
+			stats.notFoundError.Add(1)
+		} else if err == common.ErrIndexerInBootstrap {
+			logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
+			logging.Verbosef("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
+		} else {
+			logging.Infof("%s REQUEST %s", req.LogPrefix, req)
+			logging.Infof("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
+		}
 		s.handleError(req.LogPrefix, w.Error(err))
 		return true
 	}
@@ -640,9 +736,13 @@ func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanReq
 }
 
 func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
-	cancelCh <-chan interface{}) {
+	cancelCh <-chan bool) {
+
+	ttime := time.Now()
 
 	req, err := s.newRequest(protoReq, cancelCh)
+
+	atime := time.Now()
 	w := NewProtoWriter(req.ScanType, conn)
 	defer func() {
 		s.handleError(req.LogPrefix, w.Done())
@@ -662,7 +762,16 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		return
 	}
 
+	req.Stats.scanReqAllocDuration.Add(time.Now().Sub(atime).Nanoseconds())
+
+	if err := s.isScanAllowed(*req.Consistency); err != nil {
+		s.tryRespondWithError(w, req, err)
+		return
+	}
+
 	req.Stats.numRequests.Add(1)
+
+	req.Stats.scanReqInitDuration.Add(time.Now().Sub(ttime).Nanoseconds())
 
 	t0 := time.Now()
 	is, err := s.getRequestedIndexSnapshot(req)
@@ -676,6 +785,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		return fmt.Sprintf("%s snapshot timestamp: %s",
 			req.LogPrefix, ScanTStoString(is.Timestamp()))
 	})
+
+	defer func() {
+		req.Stats.scanReqDuration.Add(time.Now().Sub(ttime).Nanoseconds())
+	}()
+
 	s.processRequest(req, w, is, t0)
 }
 
@@ -713,8 +827,14 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 
 	if err != nil {
 		status := fmt.Sprintf("(error = %s)", err)
-		logging.Errorf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
-			req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status, req.RequestId)
+		logging.LazyVerbose(func() string {
+			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
+				req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status, req.RequestId)
+		})
+
+		if err == common.ErrClientCancel {
+			req.Stats.clientCancelError.Add(1)
+		}
 	} else {
 		status := "ok"
 		logging.LazyVerbose(func() string {
@@ -742,7 +862,7 @@ func (s *scanCoordinator) handleCountRequest(req *ScanRequest, w ScanResponseWri
 		snap := s.Snapshot()
 		if len(req.Keys) > 0 {
 			r, err = snap.CountLookup(req.Keys, stopch)
-		} else if req.Low.Bytes() == nil && req.Low.Bytes() == nil {
+		} else if req.Low.Bytes() == nil && req.High.Bytes() == nil {
 			r, err = snap.CountTotal(stopch)
 		} else {
 			r, err = snap.CountRange(req.Low, req.High, req.Incl, stopch)
@@ -847,12 +967,29 @@ func (s *scanCoordinator) handleConfigUpdate(cmd Message) {
 	s.supvCmdch <- &MsgSuccess{}
 }
 
+func (s *scanCoordinator) handleIndexerPause(cmd Message) {
+	s.setIndexerState(common.INDEXER_PAUSED)
+	s.supvCmdch <- &MsgSuccess{}
+
+}
+
+func (s *scanCoordinator) handleIndexerResume(cmd Message) {
+	s.setIndexerState(common.INDEXER_ACTIVE)
+
+	s.supvCmdch <- &MsgSuccess{}
+}
+
+func (s *scanCoordinator) handleIndexerBootstrap(cmd Message) {
+	s.setIndexerState(common.INDEXER_BOOTSTRAP)
+	s.supvCmdch <- &MsgSuccess{}
+}
+
 func (s *scanCoordinator) getItemsCount(instId common.IndexInstId) (uint64, error) {
 	var count uint64
 
 	snapResch := make(chan interface{}, 1)
 	snapReqMsg := &MsgIndexSnapRequest{
-		ts:        nil,
+		cons:      common.AnyConsistency,
 		respch:    snapResch,
 		idxInstId: instId,
 	}
@@ -926,4 +1063,40 @@ func readDeallocSnapshot(ch chan interface{}) {
 
 		DestroyIndexSnapshot(is)
 	}
+}
+
+func (s *scanCoordinator) isScanAllowed(c common.Consistency) error {
+	if s.getIndexerState() == common.INDEXER_PAUSED {
+		cfg := s.config.Load()
+		allow_scan_when_paused := cfg["allow_scan_when_paused"].Bool()
+
+		if c != common.AnyConsistency {
+			return errors.New(fmt.Sprintf("Indexer Cannot Service %v Scan In Paused State", c.String()))
+		} else if !allow_scan_when_paused {
+			return errors.New(fmt.Sprintf("Indexer Cannot Service Scan In Paused State"))
+		} else {
+			return nil
+		}
+	}
+
+	return nil
+}
+
+func (s *scanCoordinator) isBootstrapMode() bool {
+	return s.getIndexerState() == common.INDEXER_BOOTSTRAP
+}
+
+func bucketSeqsWithRetry(retries int, logPrefix, cluster, bucket string) (seqnos []uint64, err error) {
+	fn := func(r int, err error) error {
+		if r > 0 {
+			logging.Errorf("%s BucketSeqnos(%s): failed with error (%v)...Retrying (%d)",
+				logPrefix, bucket, err, r)
+		}
+		seqnos, err = common.BucketSeqnos(cluster, "default", bucket)
+		return err
+	}
+
+	rh := common.NewRetryHelper(retries, time.Second, 1, fn)
+	err = rh.Run()
+	return
 }

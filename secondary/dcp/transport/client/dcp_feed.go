@@ -32,7 +32,8 @@ var ErrorInvalidFeed = errors.New("dcp.invalidFeed")
 // DcpFeed represents an DCP feed. A feed contains a connection to a single
 // host and multiple vBuckets
 type DcpFeed struct {
-	conn      *Client               // connection to DCP producer
+	conn      *Client // connection to DCP producer
+	name      string
 	outch     chan<- *DcpEvent      // Exported channel for receiving DCP events
 	vbstreams map[uint16]*DcpStream // vb->stream mapping
 	// genserver
@@ -43,6 +44,7 @@ type DcpFeed struct {
 	toAckBytes  uint32   // bytes client has read
 	maxAckBytes uint32   // Max buffer control ack bytes
 	stats       DcpStats // Stats for dcp client
+	dcplatency  *Average
 }
 
 // NewDcpFeed creates a new DCP Feed.
@@ -53,21 +55,27 @@ func NewDcpFeed(
 	genChanSize := config["genChanSize"].(int)
 	dataChanSize := config["dataChanSize"].(int)
 	feed := &DcpFeed{
+		name:      name,
 		outch:     outch,
 		vbstreams: make(map[uint16]*DcpStream),
 		reqch:     make(chan []interface{}, genChanSize),
 		finch:     make(chan bool),
 		// TODO: would be nice to add host-addr as part of prefix.
-		logPrefix: fmt.Sprintf("DCPT[%s]", name),
+		logPrefix:  fmt.Sprintf("DCPT[%s]", name),
+		dcplatency: &Average{},
 	}
 
 	mc.Hijack()
 	feed.conn = mc
 	rcvch := make(chan []interface{}, dataChanSize)
-	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch)
-	go feed.doReceive(rcvch, mc)
+	go feed.genServer(opaque, feed.reqch, feed.finch, rcvch, config)
+	go feed.doReceive(rcvch, feed.finch, mc)
 	logging.Infof("%v ##%x feed started ...", feed.logPrefix, opaque)
 	return feed, nil
+}
+
+func (feed *DcpFeed) Name() string {
+	return feed.name
 }
 
 // DcpOpen to connect with a DCP producer.
@@ -143,8 +151,9 @@ const (
 )
 
 func (feed *DcpFeed) genServer(
-	opaque uint16,
-	reqch chan []interface{}, finch chan bool, rcvch chan []interface{}) {
+	opaque uint16, reqch chan []interface{}, finch chan bool,
+	rcvch chan []interface{},
+	config map[string]interface{}) {
 
 	defer func() { // panic safe
 		if r := recover(); r != nil {
@@ -158,28 +167,21 @@ func (feed *DcpFeed) genServer(
 	}()
 
 	prefix := feed.logPrefix
-	inactivityTick := time.NewTicker(1 * 60 * time.Second) // 1 minute
+	latencyTick := int64(10 * 1000) // in milli-seconds
+	if val, ok := config["latencyTick"]; ok && val != nil {
+		latencyTick = int64(val.(int)) // in milli-seconds
+	}
+	latencyTm := time.NewTicker(time.Duration(latencyTick) * time.Millisecond)
 	defer func() {
-		inactivityTick.Stop()
+		latencyTm.Stop()
 	}()
 
 loop:
 	for {
 		select {
-		case <-inactivityTick.C:
-			now := time.Now().UnixNano()
-			for _, stream := range feed.vbstreams {
-				strm_seqno := stream.Seqno
-				if stream.Snapend == 0 || strm_seqno == stream.Snapend {
-					continue
-				}
-				delta := (now - stream.LastSeen) / 1000000000 // in Seconds
-				if stream.LastSeen != 0 && delta > 10 /*seconds*/ {
-					fmsg := "%v ##%x event for vb %v lastSeen %vSec before\n"
-					logging.Warnf(
-						fmsg, prefix, stream.AppOpaque, stream.Vbucket, delta)
-				}
-			}
+		case <-latencyTm.C:
+			fmsg := "%v dcp latency stats %v\n"
+			logging.Infof(fmsg, prefix, feed.dcplatency)
 
 		case msg := <-reqch:
 			cmd := msg[0].(byte)
@@ -273,6 +275,7 @@ func (feed *DcpFeed) handlePacket(
 	sendAck := false
 	prefix := feed.logPrefix
 	stream := feed.vbstreams[vb]
+	defer func() { feed.dcplatency.Add(computeLatency(stream)) }()
 	if stream == nil {
 		fmsg := "%v spurious %v for %d: %#v\n"
 		logging.Fatalf(fmsg, prefix, pkt.Opcode, vb, pkt)
@@ -307,6 +310,10 @@ func (feed *DcpFeed) handlePacket(
 		stream.Snapend = event.SnapendSeq
 		feed.stats.TotalSnapShot++
 		sendAck = true
+		if (stream.Snapend - stream.Snapstart) > 50000 {
+			fmsg := "%v ##%x DCP_SNAPSHOT for vb %d snapshot {%v,%v}\n"
+			logging.Infof(fmsg, prefix, stream.AppOpaque, vb, stream.Snapstart, stream.Snapend)
+		}
 		fmsg := "%v ##%x DCP_SNAPSHOT for vb %d\n"
 		logging.Debugf(fmsg, prefix, stream.AppOpaque, vb)
 
@@ -416,6 +423,10 @@ func (feed *DcpFeed) doDcpGetSeqnos(
 		Opcode: transport.DCP_GET_SEQNO,
 		Opaque: opaqueGetseqno,
 	}
+
+	rq.Extras = make([]byte, 4)
+	binary.BigEndian.PutUint32(rq.Extras, 1) // Only active vbuckets
+
 	if err := feed.conn.Transmit(rq); err != nil {
 		fmsg := "%v ##%x doDcpGetSeqnos.Transmit(): %v"
 		logging.Errorf(fmsg, feed.logPrefix, rq.Opaque, err)
@@ -610,6 +621,7 @@ func (feed *DcpFeed) sendStreamEnd(outch chan<- *DcpEvent) {
 			VBuuid:  stream.Vbuuid,
 			Opcode:  transport.DCP_STREAMEND,
 			Opaque:  stream.AppOpaque,
+			Ctime:   time.Now().UnixNano(),
 		}
 		outch <- dcpEvent
 	}
@@ -731,6 +743,8 @@ type DcpEvent struct {
 	// failoverlog
 	FailoverLog *FailoverLog // Failover log containing vvuid and sequnce number
 	Error       error        // Error value in case of a failure
+	// stats
+	Ctime int64
 }
 
 func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
@@ -738,10 +752,13 @@ func newDcpEvent(rq *transport.MCRequest, stream *DcpStream) *DcpEvent {
 		Opcode:  rq.Opcode,
 		VBucket: stream.Vbucket,
 		VBuuid:  stream.Vbuuid,
-		Key:     rq.Key,
-		Value:   rq.Body,
-		Cas:     rq.Cas,
+		Ctime:   time.Now().UnixNano(),
 	}
+	event.Key = make([]byte, len(rq.Key))
+	copy(event.Key, rq.Key)
+	event.Value = make([]byte, len(rq.Body))
+	copy(event.Value, rq.Body)
+
 	// 16 LSBits are used by client library to encode vbucket number.
 	// 16 MSBits are left for application to multiplex on opaque value.
 	event.Opaque = appOpaque(rq.Opaque)
@@ -869,8 +886,20 @@ func parseGetSeqnos(body []byte) (map[uint16]uint64, error) {
 	return seqnos, nil
 }
 
+func computeLatency(stream *DcpStream) int64 {
+	now := time.Now().UnixNano()
+	strm_seqno := stream.Seqno
+	if stream.Snapend == 0 || strm_seqno == stream.Snapend {
+		return 0
+	}
+	delta := now - stream.LastSeen
+	stream.LastSeen = now
+	return delta
+}
+
 // receive loop
-func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
+func (feed *DcpFeed) doReceive(
+	rcvch chan []interface{}, finch chan bool, conn *Client) {
 	defer close(rcvch)
 
 	var headerBuf [transport.HDR_LEN]byte
@@ -879,39 +908,45 @@ func (feed *DcpFeed) doReceive(rcvch chan []interface{}, conn *Client) {
 	var blocked bool
 
 	epoc := time.Now()
-	tick := time.NewTicker(time.Minute * 5) // log every 5 minutes.
+	tick := time.NewTicker(time.Second * 5) // log every 5 second, if blocked.
 	defer func() {
 		tick.Stop()
 	}()
 
+loop:
 	for {
 		pkt := transport.MCRequest{} // always a new instance.
 		bytes, err := pkt.Receive(conn.conn, headerBuf[:])
 		if err != nil && err == io.EOF {
 			logging.Infof("%v EOF received\n", feed.logPrefix)
-			break
+			break loop
 
 		} else if feed.isClosed() {
 			logging.Infof("%v doReceive(): connection closed\n", feed.logPrefix)
-			break
+			break loop
 
 		} else if err != nil {
 			logging.Errorf("%v doReceive(): %v\n", feed.logPrefix, err)
-			break
+			break loop
 		}
 		logging.Tracef("%v packet received %#v", feed.logPrefix, pkt)
 		if len(rcvch) == cap(rcvch) {
 			start, blocked = time.Now(), true
 		}
-		rcvch <- []interface{}{&pkt, bytes}
+		select {
+		case rcvch <- []interface{}{&pkt, bytes}:
+		case <-finch:
+			break loop
+		}
 		if blocked {
-			duration += time.Since(start)
+			blockedTs := time.Since(start)
+			duration += blockedTs
 			blocked = false
 			select {
 			case <-tick.C:
 				percent := float64(duration) / float64(time.Since(epoc))
-				fmsg := "%v DCP-socket -> projector %f%% blocked"
-				logging.Infof(fmsg, feed.logPrefix, percent)
+				fmsg := "%v DCP-socket -> projector blocked %v (%f%%)"
+				logging.Infof(fmsg, feed.logPrefix, blockedTs, percent)
 			default:
 			}
 		}

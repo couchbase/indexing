@@ -241,6 +241,7 @@ func NewMutationTopicRequest(
 		EndpointType:  proto.String(endpointType),
 		ReqTimestamps: make([]*TsVbuuid, 0),
 		Instances:     instances,
+		Version:       FeedVersion_watson.Enum(),
 	}
 }
 
@@ -277,7 +278,7 @@ func (req *MutationTopicRequest) Append(reqTs *TsVbuuid) *MutationTopicRequest {
 
 // GetEvaluators impelement Subscriber{} interface
 func (req *MutationTopicRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {
-	return getEvaluators(req.GetInstances())
+	return getEvaluators(req.GetInstances(), req.GetVersion())
 }
 
 // GetRouters impelement Subscriber{} interface
@@ -554,6 +555,7 @@ func NewAddBucketsRequest(
 		Topic:         proto.String(topic),
 		ReqTimestamps: make([]*TsVbuuid, 0),
 		Instances:     instances,
+		Version:       FeedVersion_watson.Enum(),
 	}
 }
 
@@ -592,7 +594,7 @@ func (req *AddBucketsRequest) Decode(data []byte) (err error) {
 
 // GetEvaluators impelement Subscriber{} interface
 func (req *AddBucketsRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {
-	return getEvaluators(req.GetInstances())
+	return getEvaluators(req.GetInstances(), req.GetVersion())
 }
 
 // GetRouters impelement Subscriber{} interface
@@ -647,6 +649,7 @@ func NewAddInstancesRequest(
 	return &AddInstancesRequest{
 		Topic:     proto.String(topic),
 		Instances: instances,
+		Version:   FeedVersion_watson.Enum(),
 	}
 }
 
@@ -672,7 +675,7 @@ func (req *AddInstancesRequest) Decode(data []byte) (err error) {
 
 // GetEvaluators impelement Subscriber{} interface
 func (req *AddInstancesRequest) GetEvaluators() (map[uint64]c.Evaluator, error) {
-	return getEvaluators(req.GetInstances())
+	return getEvaluators(req.GetInstances(), req.GetVersion())
 }
 
 // GetRouters impelement Subscriber{} interface
@@ -781,12 +784,14 @@ func (req *ShutdownTopicRequest) Decode(data []byte) (err error) {
 //-- local functions
 
 // TODO: add other types of engines
-func getEvaluators(instances []*Instance) (map[uint64]c.Evaluator, error) {
+func getEvaluators(instances []*Instance,
+	version FeedVersion) (map[uint64]c.Evaluator, error) {
+
 	engines := make(map[uint64]c.Evaluator)
 	for _, instance := range instances {
 		uuid := instance.GetUuid()
 		if val := instance.GetIndexInstance(); val != nil {
-			ie, err := NewIndexEvaluator(val)
+			ie, err := NewIndexEvaluator(val, version)
 			if err != nil {
 				return nil, err
 			}

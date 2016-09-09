@@ -1,6 +1,14 @@
 package common
 
 import "testing"
+import "os"
+import "reflect"
+import "strings"
+import "path/filepath"
+import "fmt"
+import "io/ioutil"
+
+var _ = fmt.Sprintf("dummy")
 
 func TestExcludeStrings(t *testing.T) {
 	a := []string{"1", "2", "3", "4"}
@@ -132,6 +140,145 @@ func TestEquivalentIP(t *testing.T) {
 	raddr, raddr1, err = EquivalentIP(a, b)
 	if raddr != "127.0.0.1:8091" || raddr1 != "127.0.0.1:8091" || err != nil {
 		t.Fatal("failed EquivalentIP")
+	}
+}
+
+func TestCopyDir(t *testing.T) {
+	tmpdir := os.TempDir()
+
+	// On mac/windows this srcdir and destdir are same.
+	srcdir1 := strings.ToLower(filepath.Join(tmpdir, "SRC"))
+	destdir1 := filepath.Join(tmpdir, "SRC")
+	defer func() {
+		if err := os.RemoveAll(srcdir1); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(destdir1); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// create source tree
+	dir1 := filepath.Join(srcdir1, "d")
+	file1 := filepath.Join(dir1, "f")
+	if err := os.MkdirAll(dir1, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if err := ioutil.WriteFile(file1, []byte("hello world"), 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	// Copy to an same destination.
+	CopyDir(destdir1, srcdir1)
+	if es, err := ioutil.ReadDir(destdir1); err != nil {
+		t.Fatal(err)
+	} else if len(es) != 1 {
+		t.Fatalf("expected %v, got %v", 1, len(es))
+	} else if es[0].Name() != "d" {
+		t.Fatalf("expected %v, got %v", "d", es[0].Name())
+	} else if es, err = ioutil.ReadDir(dir1); err != nil {
+		t.Fatal(err)
+	} else if len(es) != 1 {
+		t.Fatalf("expected %v, got %v", 1, len(es))
+	} else if es[0].Name() != "f" {
+		t.Fatalf("expected %v, got %v", "f", es[0].Name())
+	}
+	destfile1 := filepath.Join(destdir1, "d", "f")
+	if data, err := ioutil.ReadFile(destfile1); err != nil {
+		t.Fatal(err)
+	} else if ref := "hello world"; string(data) != ref {
+		t.Fatalf("expected %q, got %q", ref, string(data))
+	}
+
+	// On mac/windows/linux this srcdir and destdir are different.
+	srcdir2 := strings.ToLower(filepath.Join(tmpdir, "SOURCE"))
+	destdir2 := filepath.Join(tmpdir, "DEST")
+	defer func() {
+		if err := os.RemoveAll(srcdir2); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(destdir2); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// create source tree
+	dir1 = filepath.Join(srcdir2, "d")
+	file1 = filepath.Join(dir1, "f")
+	if err := os.MkdirAll(dir1, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if err := ioutil.WriteFile(file1, []byte("hello world"), 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	CopyDir(destdir2, srcdir2)
+	if es, err := ioutil.ReadDir(destdir2); err != nil {
+		t.Fatal(err)
+	} else if len(es) != 1 {
+		t.Fatalf("expected %v, got %v", 1, len(es))
+	} else if es[0].Name() != "d" {
+		t.Fatalf("expected %v, got %v", "d", es[0].Name())
+	} else if es, err = ioutil.ReadDir(dir1); err != nil {
+		t.Fatal(err)
+	} else if len(es) != 1 {
+		t.Fatalf("expected %v, got %v", 1, len(es))
+	} else if es[0].Name() != "f" {
+		t.Fatalf("expected %v, got %v", "f", es[0].Name())
+	}
+	destfile1 = filepath.Join(destdir2, "d", "f")
+	if data, err := ioutil.ReadFile(destfile1); err != nil {
+		t.Fatal(err)
+	} else if ref := "hello world"; string(data) != ref {
+		t.Fatalf("expected %v, got %v", ref, string(data))
+	}
+
+	// add a directory and file.
+	dir2 := filepath.Join(srcdir2, "dr")
+	file2 := filepath.Join(dir1, "fl")
+	if err := os.MkdirAll(dir2, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if err := ioutil.WriteFile(file1, []byte("good bye"), 0666); err != nil {
+		t.Fatal(err)
+	}
+	if err := ioutil.WriteFile(file2, []byte("third world"), 0666); err != nil {
+		t.Fatal(err)
+	}
+
+	CopyDir(destdir2, srcdir2)
+	es, err := ioutil.ReadDir(destdir2)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(es) != 2 {
+		t.Fatalf("expected %v, got %v", 2, len(es))
+	}
+	ref, names := []string{"d", "dr"}, []string{es[0].Name(), es[1].Name()}
+	if !reflect.DeepEqual(ref, names) {
+		t.Fatalf("expected %v, got %v", ref, names)
+	} else if es, err = ioutil.ReadDir(dir1); err != nil {
+		t.Fatal(err)
+	} else if len(es) != 2 {
+		t.Fatalf("expected %v, got %v", 1, len(es))
+	}
+	ref, names = []string{"f", "fl"}, []string{es[0].Name(), es[1].Name()}
+	if !reflect.DeepEqual(ref, names) {
+		t.Fatalf("expected %v, got %v", ref, names)
+	} else if es, err := ioutil.ReadDir(dir2); err != nil {
+		t.Fatal(err)
+	} else if len(es) > 0 {
+		t.Fatalf("expected %v, got %v", 0, len(es))
+	}
+	destfile1 = filepath.Join(destdir2, "d", "f")
+	destfile2 := filepath.Join(destdir2, "d", "fl")
+	if data, err := ioutil.ReadFile(destfile1); err != nil {
+		t.Fatal(err)
+	} else if ref := "hello world"; string(data) != ref {
+		t.Fatalf("expected %v, got %v", ref, string(data))
+	} else if data, err := ioutil.ReadFile(destfile2); err != nil {
+		t.Fatal(err)
+	} else if ref := "third world"; string(data) != ref {
+		t.Fatalf("expected %v, got %v", ref, string(data))
 	}
 }
 

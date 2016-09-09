@@ -21,6 +21,16 @@ import (
 	"unsafe"
 )
 
+const FDB_UNKNOWN_FILE_FORMAT = "Unkown"
+const FDB_V1_FILE_FORMAT = "ForestDB v1.x format"
+const FDB_V2_FILE_FORMAT = "ForestDB v2.x format"
+
+const (
+	FdbUnkownFileVersion uint8 = iota
+	FdbV1FileVersion
+	FdbV2FileVersion
+)
+
 // Database handle
 type File struct {
 	dbfile *C.fdb_file_handle
@@ -38,7 +48,8 @@ func Open(filename string, config *Config) (*File, error) {
 	dbname := C.CString(filename)
 	defer C.free(unsafe.Pointer(dbname))
 
-	rv := File{advLock: newAdvLock(), name: path.Base(filename)}
+	rv := File{name: path.Base(filename)}
+	rv.advLock.Init()
 	Log.Tracef("fdb_open call rv:%p dbname:%v conf:%v", &rv, dbname, config.config)
 	errNo := C.fdb_open(&rv.dbfile, dbname, config.config)
 	Log.Tracef("fdb_open ret rv:%p errNo:%v rv:%v", &rv, errNo, rv)
@@ -107,6 +118,20 @@ func (f *File) CompactUpto(newfilename string, sm *SnapMarker) error {
 	return nil
 }
 
+//CancelCompact cancels in-progress compaction
+func (f *File) CancelCompact() error {
+	f.Lock()
+	defer f.Unlock()
+
+	Log.Tracef("fdb_cancel_compaction call f:%p dbfile:%v", f, f.dbfile)
+	errNo := C.fdb_cancel_compaction(f.dbfile)
+	Log.Tracef("fdb_cancel_compaction retn f:%p errNo:%v", f, errNo)
+	if errNo != RESULT_SUCCESS {
+		return Error(errNo)
+	}
+	return nil
+}
+
 // EstimateSpaceUsed returns the overall disk space actively used by the current database file
 func (f *File) EstimateSpaceUsed() int {
 	f.Lock()
@@ -160,11 +185,8 @@ func (f *File) OpenKVStore(name string, config *KVStoreConfig) (*KVStore, error)
 		config = DefaultKVStoreConfig()
 	}
 
-	rv := KVStore{
-		advLock: newAdvLock(),
-		f:       f,
-		name:    fmt.Sprintf("%s/%s", f.name, name),
-	}
+	rv := allocKVStore(fmt.Sprintf("%s/%s", f.name, name))
+	rv.f = f
 
 	kvsname := C.CString(name)
 	defer C.free(unsafe.Pointer(kvsname))
@@ -175,7 +197,7 @@ func (f *File) OpenKVStore(name string, config *KVStoreConfig) (*KVStore, error)
 		return nil, Error(errNo)
 	}
 	rv.setupLogging()
-	return &rv, nil
+	return rv, nil
 }
 
 // OpenKVStore opens the default KVStore within the File
@@ -202,4 +224,59 @@ func Destroy(filename string, config *Config) error {
 		return Error(errNo)
 	}
 	return nil
+}
+
+//
+// This function will not hold advisory lock.  According to Chiyoung, this simply sets the configs for a
+// given file instance inside ForestDB, therefore:
+// 1) it use the same file handle for writer
+// 2) does not have to pause writer or compactor
+// for reference: https://issues.couchbase.com/browse/MB-17384
+//
+func (f *File) SetBlockReuseParams(reuseThreshold uint8, numKeepHeaders uint8) error {
+
+	Log.Debugf("fdb_set_block_reusing_params call f:%p dbfile:%v reuseThreshold:%v numKeepHeaders:%v", f, f.dbfile, reuseThreshold, numKeepHeaders)
+	errNo := C.fdb_set_block_reusing_params(f.dbfile, C.size_t(reuseThreshold), C.size_t(numKeepHeaders))
+	Log.Tracef("fdb_set_block_reusing_params retn f:%p errNo:%v", f, errNo)
+	if errNo != RESULT_SUCCESS {
+		return Error(errNo)
+	}
+	return nil
+}
+
+func (f *File) GetFileVersion() uint8 {
+	f.Lock()
+	defer f.Unlock()
+
+	Log.Tracef("fdb_get_file_version call")
+	ptr := C.fdb_get_file_version(f.dbfile)
+	Log.Tracef("fdb_get_file_version retn")
+
+	if ptr != nil {
+		return FdbStringToFileVersion(C.GoString(ptr))
+	}
+
+	return FdbUnkownFileVersion
+}
+
+func FdbFileVersionToString(version uint8) string {
+
+	if version == FdbV1FileVersion {
+		return FDB_V1_FILE_FORMAT
+	} else if version == FdbV2FileVersion {
+		return FDB_V2_FILE_FORMAT
+	}
+
+	return FDB_UNKNOWN_FILE_FORMAT
+}
+
+func FdbStringToFileVersion(versionStr string) uint8 {
+
+	if versionStr == FDB_V1_FILE_FORMAT {
+		return FdbV1FileVersion
+	} else if versionStr == FDB_V2_FILE_FORMAT {
+		return FdbV2FileVersion
+	}
+
+	return FdbUnkownFileVersion
 }

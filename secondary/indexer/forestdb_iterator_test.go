@@ -6,6 +6,17 @@ import (
 	"testing"
 )
 
+func createSlice() *fdbSlice {
+	slice := &fdbSlice{}
+	slice.idxStats = &IndexStats{}
+	slice.idxStats.Init()
+	return slice
+}
+
+func copyBytes(bs []byte) []byte {
+	return append([]byte(nil), bs...)
+}
+
 func TestForestDBIterator(t *testing.T) {
 	defer os.RemoveAll("test")
 
@@ -42,7 +53,7 @@ func TestForestDBIterator(t *testing.T) {
 	}
 	lastSeqNum := info.LastSeqNum()
 
-	iter, err := newForestDBIterator(nil, kvstore, lastSeqNum)
+	iter, err := newForestDBIterator(createSlice(), kvstore, lastSeqNum)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,10 +67,10 @@ func TestForestDBIterator(t *testing.T) {
 
 	for ; iter.Valid(); iter.Next() {
 		if firstKey == nil {
-			firstKey = iter.Key()
+			firstKey = copyBytes(iter.Key())
 		}
 		count++
-		lastKey = iter.Key()
+		lastKey = copyBytes(iter.Key())
 	}
 
 	if count != 10 {
@@ -110,7 +121,7 @@ func TestForestDBIteratorSeek(t *testing.T) {
 	}
 	lastSeqNum := info.LastSeqNum()
 
-	iter, err := newForestDBIterator(nil, kvstore, lastSeqNum)
+	iter, err := newForestDBIterator(createSlice(), kvstore, lastSeqNum)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,10 +135,10 @@ func TestForestDBIteratorSeek(t *testing.T) {
 
 	for ; iter.Valid(); iter.Next() {
 		if firstKey == nil {
-			firstKey = iter.Key()
+			firstKey = copyBytes(iter.Key())
 		}
 		count++
-		lastKey = iter.Key()
+		lastKey = copyBytes(iter.Key())
 	}
 
 	if count != 7 {

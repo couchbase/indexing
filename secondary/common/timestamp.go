@@ -24,14 +24,15 @@ type TsVbFull struct {
 // TsVbuuid is logical clock for full set of vbuckets along with branch value
 // and last seen snapshot.
 type TsVbuuid struct {
-	Bucket      string
-	Seqnos      []uint64
-	Vbuuids     []uint64
-	Crc64       uint64
-	Snapshots   [][2]uint64
-	SnapType    IndexSnapType
-	LargeSnap   bool
-	SnapAligned bool
+	Bucket       string
+	Seqnos       []uint64
+	Vbuuids      []uint64
+	Crc64        uint64
+	Snapshots    [][2]uint64
+	SnapType     IndexSnapType
+	LargeSnap    bool
+	SnapAligned  bool
+	DisableAlign bool
 }
 
 // NewTsVbuuid returns reference to new instance of TsVbuuid.
@@ -123,10 +124,11 @@ func (ts *TsVbuuid) CheckCrc64(other *TsVbuuid) bool {
 	if ts == nil || other == nil {
 		return false
 	}
+
 	if ts.Bucket != other.Bucket {
 		return false
 	}
-	return ts.Crc64 == other.Crc64
+	return ts.Crc64 == 0 || other.Crc64 == 0 || ts.Crc64 == other.Crc64
 }
 
 // AsRecent will check whether timestamp `ts` is atleast as recent as
@@ -196,6 +198,14 @@ func (ts *TsVbuuid) HasLargeSnapshot() bool {
 //SetLargeSnapshot sets the largeSnap flag
 func (ts *TsVbuuid) SetLargeSnapshot(largeSnap bool) {
 	ts.LargeSnap = largeSnap
+}
+
+func (ts *TsVbuuid) HasDisableAlign() bool {
+	return ts.DisableAlign
+}
+
+func (ts *TsVbuuid) SetDisableAlign(disable bool) {
+	ts.DisableAlign = disable
 }
 
 func (ts *TsVbuuid) GetCrc64() uint64 {

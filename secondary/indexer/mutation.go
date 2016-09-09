@@ -24,9 +24,14 @@ type MutationMeta struct {
 }
 
 var mutMetaPool = sync.Pool{New: newMutationMeta}
+var useMutationSyncPool bool = false
 
 func NewMutationMeta() *MutationMeta {
-	return mutMetaPool.Get().(*MutationMeta)
+	if useMutationSyncPool {
+		return mutMetaPool.Get().(*MutationMeta)
+	}
+
+	return &MutationMeta{}
 }
 
 func newMutationMeta() interface{} {
@@ -42,8 +47,18 @@ func (m *MutationMeta) Clone() *MutationMeta {
 	return meta
 }
 
+func (m *MutationMeta) Size() int64 {
+
+	size := int64(len(m.bucket))
+	size += 8 + 4 + 8 + 8 //fixed cost of members
+	return size
+
+}
+
 func (m *MutationMeta) Free() {
-	mutMetaPool.Put(m)
+	if useMutationSyncPool {
+		mutMetaPool.Put(m)
+	}
 }
 
 func (m MutationMeta) String() string {
@@ -66,21 +81,40 @@ type MutationKeys struct {
 var mutkeysPool = sync.Pool{New: newMutationKeys}
 
 func NewMutationKeys() *MutationKeys {
-	return mutkeysPool.Get().(*MutationKeys)
+	if useMutationSyncPool {
+		return mutkeysPool.Get().(*MutationKeys)
+	}
+
+	return &MutationKeys{}
 }
 
 func newMutationKeys() interface{} {
 	return &MutationKeys{}
 }
 
-func (mk *MutationKeys) Free() {
-	mk.meta.Free()
-	mk.docid = mk.docid[:0]
+func (mk *MutationKeys) Size() int64 {
+
+	var size int64
+	size = mk.meta.Size()
+	size += int64(len(mk.docid))
 	for _, m := range mk.mut {
-		m.Free()
+		size += m.Size()
 	}
-	mk.mut = mk.mut[:0]
-	mutkeysPool.Put(mk)
+
+	size += 8 + 16 + 16 //fixed cost of members
+	return size
+}
+
+func (mk *MutationKeys) Free() {
+	if useMutationSyncPool {
+		mk.meta.Free()
+		mk.docid = mk.docid[:0]
+		for _, m := range mk.mut {
+			m.Free()
+		}
+		mk.mut = mk.mut[:0]
+		mutkeysPool.Put(mk)
+	}
 }
 
 type Mutation struct {
@@ -94,16 +128,33 @@ type Mutation struct {
 var mutPool = sync.Pool{New: newMutation}
 
 func NewMutation() *Mutation {
-	return mutPool.Get().(*Mutation)
+	if useMutationSyncPool {
+		return mutPool.Get().(*Mutation)
+	}
+
+	return &Mutation{}
 }
 
 func newMutation() interface{} {
 	return &Mutation{}
 }
 
+func (m *Mutation) Size() int64 {
+
+	var size int64
+	size = int64(len(m.key))
+	size += int64(len(m.partnkey))
+	size += 8 + 1        //instId + command
+	size += 16 + 16 + 16 //fixed cost of members
+	return size
+
+}
+
 func (m *Mutation) Free() {
-	m.key = m.key[:0]
-	m.oldkey = m.oldkey[:0]
-	m.partnkey = m.partnkey[:0]
-	mutPool.Put(m)
+	if useMutationSyncPool {
+		m.key = m.key[:0]
+		m.oldkey = m.oldkey[:0]
+		m.partnkey = m.partnkey[:0]
+		mutPool.Put(m)
+	}
 }

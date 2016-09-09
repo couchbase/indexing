@@ -2,8 +2,11 @@ package couchbase
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
+	"encoding/binary"
+	"github.com/couchbase/indexing/secondary/dcp/transport"
 	"github.com/couchbase/indexing/secondary/dcp/transport/client"
 )
 
@@ -227,4 +230,70 @@ func (cp *connectionPool) StartDcpFeed(
 	}
 	mc.Close()
 	return nil, err
+}
+
+func (cp *connectionPool) GetDcpConn(name DcpFeedName) (*memcached.Client, error) {
+	mc, err := cp.Get() // Don't call Return() on this
+	if err != nil {
+		return nil, err
+	}
+
+	rq := &transport.MCRequest{
+		Opcode: transport.DCP_OPEN,
+		Key:    []byte(string(name)),
+		Opaque: 0,
+	}
+	rq.Extras = make([]byte, 8)
+	binary.BigEndian.PutUint32(rq.Extras[:4], 0)
+	binary.BigEndian.PutUint32(rq.Extras[4:], 1) // we are consumer
+	if err := mc.Transmit(rq); err != nil {
+		return nil, err
+	}
+
+	_, err = mc.Receive()
+	if err != nil {
+		return nil, err
+	}
+
+	return mc, nil
+}
+
+func GetSeqs(mc *memcached.Client, seqnos []uint64, buf []byte) error {
+	res := &transport.MCResponse{}
+	rq := &transport.MCRequest{
+		Opcode: transport.DCP_GET_SEQNO,
+		Opaque: 0,
+	}
+
+	rq.Extras = make([]byte, 4)
+	binary.BigEndian.PutUint32(rq.Extras, 1) // Only active vbuckets
+
+	if err := mc.Transmit(rq); err != nil {
+		return err
+	}
+
+	if err := mc.ReceiveInBuf(res, buf); err != nil {
+		return err
+	}
+
+	if res.Status != transport.SUCCESS {
+		return fmt.Errorf("failed %d", res.Status)
+	}
+
+	if len(res.Body)%10 != 0 {
+		fmsg := "invalid body length %v, in get-seqnos\n"
+		err := fmt.Errorf(fmsg, len(res.Body))
+		return err
+	}
+	for i := 0; i < 1024; i++ {
+		seqnos[i] = 0
+	}
+
+	for i := 0; i < len(res.Body); i += 10 {
+		vbno := int(binary.BigEndian.Uint16(res.Body[i : i+2]))
+		seqno := binary.BigEndian.Uint64(res.Body[i+2 : i+10])
+		seqnos[vbno] = seqno
+	}
+
+	return nil
 }

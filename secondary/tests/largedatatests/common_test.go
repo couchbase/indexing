@@ -6,6 +6,7 @@ import (
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/logging"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"github.com/couchbase/indexing/secondary/tests/framework/secondaryindex"
 	"github.com/prataprc/goparsec"
 	"github.com/prataprc/monster"
 	"github.com/prataprc/monster/common"
@@ -13,6 +14,7 @@ import (
 	"log"
 	"runtime"
 	"testing"
+	"time"
 )
 
 var seed int
@@ -39,6 +41,17 @@ func init() {
 	if _, err := cbauth.InternalRetryDefaultInit(kvaddress, clusterconfig.Username, clusterconfig.Password); err != nil {
 		log.Fatalf("Failed to initialize cbauth: %s", err)
 	}
+
+	if clusterconfig.IndexUsing != "" {
+		// Set clusterconfig.IndexUsing only if it is specified in config file. Else let it default to gsi
+		log.Printf("Using %v for creating indexes", clusterconfig.IndexUsing)
+		secondaryindex.IndexUsing = clusterconfig.IndexUsing
+
+		err := secondaryindex.ChangeIndexerSettings("indexer.settings.storage_mode", secondaryindex.IndexUsing, clusterconfig.Username, clusterconfig.Password, kvaddress)
+		tc.HandleError(err, "Error in ChangeIndexerSettings")
+	}
+
+	time.Sleep(5 * time.Second)
 
 	proddir, bagdir = tc.FetchMonsterToolPath()
 }

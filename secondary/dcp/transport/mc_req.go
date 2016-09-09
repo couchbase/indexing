@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+
+	"github.com/couchbase/indexing/secondary/logging"
 )
 
 // The maximum reasonable body length to expect.
@@ -165,7 +167,21 @@ func (req *MCRequest) Receive(r io.Reader, hdrBytes []byte) (int, error) {
 		req.Extras = buf[0:elen]
 		req.Key = buf[elen : klen+elen]
 		req.Body = buf[klen+elen:]
+		if isSnapEndOpen(req) {
+			fmsg := "open snapshot %#v hdrBytes:%v buf:%v"
+			logging.Errorf(fmsg, req, hdrBytes, buf)
+		}
 	}
 
 	return n, err
+}
+
+func isSnapEndOpen(req *MCRequest) bool {
+	if req.Opcode == DCP_SNAPSHOT {
+		snapend := binary.BigEndian.Uint64(req.Extras[8:16])
+		if snapend == 0xFFFFFFFFFFFFFFFF {
+			return true
+		}
+	}
+	return false
 }

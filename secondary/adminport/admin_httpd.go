@@ -201,7 +201,7 @@ func (s *httpServer) Start() (err error) {
 		}
 	}()
 
-	logging.PeriodicProfile(logging.Trace, s.srv.Addr, "goroutine")
+	logging.PeriodicProfile(logging.Debug, s.srv.Addr, "goroutine")
 	return
 }
 
@@ -233,7 +233,9 @@ func (s *httpServer) systemHandler(w http.ResponseWriter, r *http.Request) {
 
 	logging.Infof("%s Request %q\n", s.logPrefix, r.URL.Path)
 
+	s.mu.Lock()
 	stats := s.statsMessages[r.URL.Path]
+	s.mu.Unlock()
 
 	defer func() {
 		s.mu.Lock()

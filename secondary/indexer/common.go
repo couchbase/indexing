@@ -107,6 +107,8 @@ func (m MutationSnapshot) CanProcess() bool {
 // Represents storage stats for an index instance
 type IndexStorageStats struct {
 	InstId common.IndexInstId
+	Name   string
+	Bucket string
 	Stats  StorageStatistics
 }
 
@@ -121,7 +123,7 @@ func (s IndexStorageStats) GetFragmentation() float64 {
 	var fragPercent float64
 
 	var wastedSpace int64
-	if s.Stats.DiskSize > s.Stats.DataSize {
+	if s.Stats.DataSize != 0 && s.Stats.DiskSize > s.Stats.DataSize {
 		wastedSpace = s.Stats.DiskSize - s.Stats.DataSize
 	}
 
@@ -130,6 +132,10 @@ func (s IndexStorageStats) GetFragmentation() float64 {
 	}
 
 	return fragPercent
+}
+
+func (s IndexStorageStats) GetInternalData() []string {
+	return s.Stats.InternalData
 }
 
 type VbStatus Seqno

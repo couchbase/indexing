@@ -11,6 +11,7 @@ package indexer
 
 import (
 	"github.com/couchbase/indexing/secondary/common"
+	"time"
 )
 
 type StorageStatistics struct {
@@ -21,15 +22,19 @@ type StorageStatistics struct {
 	GetBytes    int64
 	InsertBytes int64
 	DeleteBytes int64
+
+	NeedUpgrade bool
+
+	InternalData []string
 }
 
 type IndexWriter interface {
 
 	//Persist a key/value pair
-	Insert(secKey []byte, docid []byte) error
+	Insert(key []byte, docid []byte, meta *MutationMeta) error
 
 	//Delete a key/value pair by docId
-	Delete(docid []byte) error
+	Delete(docid []byte, meta *MutationMeta) error
 
 	// Create commited commited snapshot or inmemory snapshot
 	NewSnapshot(*common.TsVbuuid, bool) (SnapshotInfo, error)
@@ -50,7 +55,7 @@ type IndexWriter interface {
 	Statistics() (StorageStatistics, error)
 
 	// Perform file compaction
-	Compact() error
+	Compact(abortTime time.Time) error
 
 	// Dealloc resources
 	Close()

@@ -1,14 +1,22 @@
 package indexer
 
 import (
+	"github.com/couchbase/indexing/secondary/common"
+	"github.com/couchbase/indexing/secondary/platform"
 	"reflect"
 	"testing"
 	"time"
 )
 
+var memUsed platform.AlignedInt64
+var maxMemory platform.AlignedInt64
+
 func TestBasicsA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1, 10)
+	maxMemory = 100 * 1024 * 1024
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
 
 	if q == nil {
 		t.Errorf("expected new queue allocation to work")
@@ -57,7 +65,10 @@ func checkItemA(t *testing.T, m1 *MutationKeys, m2 *MutationKeys) {
 
 func TestSizeA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1, 10000)
+	maxMemory = 100 * 1024 * 1024
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
 
 	m := make([]*MutationKeys, 10000)
 	for i := 0; i < 10000; i++ {
@@ -77,7 +88,10 @@ func TestSizeA(t *testing.T) {
 
 func TestSizeWithFreelistA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1, 10000)
+	maxMemory = 100 * 1024 * 1024
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
 
 	m := make([]*MutationKeys, 10000)
 	for i := 0; i < 10000; i++ {
@@ -97,7 +111,10 @@ func TestSizeWithFreelistA(t *testing.T) {
 
 func TestDequeueUptoSeqnoA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1, 100)
+	maxMemory = 100 * 1024 * 1024
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
 
 	m := make([]*MutationKeys, 10)
 	//multiple items with dup seqno
@@ -113,7 +130,7 @@ func TestDequeueUptoSeqnoA(t *testing.T) {
 	q.Enqueue(m[2], 0, nil)
 	checkSizeA(t, q, 0, 3)
 
-	ch, err := q.DequeueUptoSeqno(0, 1)
+	ch, _, err := q.DequeueUptoSeqno(0, 1)
 
 	if err != nil {
 		t.Errorf("DequeueUptoSeqno returned error")
@@ -126,7 +143,7 @@ func TestDequeueUptoSeqnoA(t *testing.T) {
 	}
 	checkSizeA(t, q, 0, 2)
 
-	ch, err = q.DequeueUptoSeqno(0, 1)
+	ch, _, err = q.DequeueUptoSeqno(0, 1)
 	for p := range ch {
 		checkItemA(t, m[1], p)
 	}
@@ -136,14 +153,14 @@ func TestDequeueUptoSeqnoA(t *testing.T) {
 	m[3] = &MutationKeys{meta: &MutationMeta{vbucket: 0,
 		seqno: 3}}
 	q.Enqueue(m[3], 0, nil)
-	ch, err = q.DequeueUptoSeqno(0, 2)
+	ch, _, err = q.DequeueUptoSeqno(0, 2)
 	for p := range ch {
 		checkItemA(t, m[2], p)
 	}
 	checkSizeA(t, q, 0, 1)
 
 	//check if blocking is working
-	ch, err = q.DequeueUptoSeqno(0, 4)
+	ch, _, err = q.DequeueUptoSeqno(0, 4)
 
 	go func() {
 		time.Sleep(100 * time.Millisecond)
@@ -169,7 +186,10 @@ func TestDequeueUptoSeqnoA(t *testing.T) {
 
 func TestDequeueA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1, 100)
+	maxMemory = 100 * 1024 * 1024
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
 
 	mut := make([]*MutationKeys, 10)
 	for i := 0; i < 10; i++ {
@@ -200,7 +220,10 @@ func TestDequeueA(t *testing.T) {
 
 func TestMultipleVbucketsA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(3, 100)
+	maxMemory = 100 * 1024 * 1024
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+
+	q := NewAtomicMutationQueue("default", 3, &maxMemory, &memUsed, conf)
 
 	mut := make([]*MutationKeys, 15)
 	for i := 0; i < 15; i++ {
@@ -234,7 +257,10 @@ func TestMultipleVbucketsA(t *testing.T) {
 
 func TestDequeueUptoFreelistA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1, 100)
+	maxMemory = 100 * 1024 * 1024
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
 
 	m := make([]*MutationKeys, 100)
 	for i := 0; i < 100; i++ {
@@ -243,7 +269,7 @@ func TestDequeueUptoFreelistA(t *testing.T) {
 		q.Enqueue(m[i], 0, nil)
 		if (i+1)%10 == 0 {
 			checkSizeA(t, q, 0, 10)
-			retch, _ := q.DequeueUptoSeqno(0, Seqno(i))
+			retch, _, _ := q.DequeueUptoSeqno(0, Seqno(i))
 			j := 0
 			for d := range retch {
 				checkItemA(t, d, m[(i-9)+j])
@@ -256,7 +282,10 @@ func TestDequeueUptoFreelistA(t *testing.T) {
 
 func TestDequeueUptoFreelistMultVbA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(2, 100)
+	maxMemory = 100 * 1024 * 1024
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+
+	q := NewAtomicMutationQueue("default", 2, &maxMemory, &memUsed, conf)
 
 	m := make([]*MutationKeys, 100)
 	for i := 0; i < 100; i++ {
@@ -266,7 +295,7 @@ func TestDequeueUptoFreelistMultVbA(t *testing.T) {
 		q.Enqueue(m[i], 1, nil)
 		if (i+1)%10 == 0 {
 			checkSizeA(t, q, 0, 10)
-			retch, _ := q.DequeueUptoSeqno(0, Seqno(i))
+			retch, _, _ := q.DequeueUptoSeqno(0, Seqno(i))
 			j := 0
 			for d := range retch {
 				checkItemA(t, d, m[(i-9)+j])
@@ -275,7 +304,7 @@ func TestDequeueUptoFreelistMultVbA(t *testing.T) {
 			checkSizeA(t, q, 0, 0)
 
 			checkSizeA(t, q, 1, 10)
-			retch, _ = q.DequeueUptoSeqno(1, Seqno(i))
+			retch, _, _ = q.DequeueUptoSeqno(1, Seqno(i))
 			j = 0
 			for d := range retch {
 				checkItemA(t, d, m[(i-9)+j])
@@ -287,7 +316,10 @@ func TestDequeueUptoFreelistMultVbA(t *testing.T) {
 }
 func TestConcurrentEnqueueDequeueA(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1, 100)
+	maxMemory = 100 * 1024 * 1024
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
 
 	m := make([]*MutationKeys, 100)
 	go func() {
@@ -303,7 +335,7 @@ func TestConcurrentEnqueueDequeueA(t *testing.T) {
 		if (i+1)%10 == 0 {
 			//time.Sleep(time.Second * 1)
 			//checkSizeA(t, q, 0, 10)
-			retch, _ := q.DequeueUptoSeqno(0, Seqno(i))
+			retch, _, _ := q.DequeueUptoSeqno(0, Seqno(i))
 			j := 0
 			for d := range retch {
 				checkItemA(t, d, m[(i-9)+j])
@@ -320,7 +352,11 @@ func TestConcurrentEnqueueDequeueA(t *testing.T) {
 
 func TestConcurrentEnqueueDequeueA1(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1, 10)
+	maxMemory = 1
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+	conf.SetValue("settings.minVbQueueLength", 10)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
 
 	m := make([]*MutationKeys, 100)
 	go func() {
@@ -336,7 +372,7 @@ func TestConcurrentEnqueueDequeueA1(t *testing.T) {
 		if (i+1)%10 == 0 {
 			time.Sleep(time.Second * 1)
 			checkSizeA(t, q, 0, 10)
-			retch, _ := q.DequeueUptoSeqno(0, Seqno(i))
+			retch, _, _ := q.DequeueUptoSeqno(0, Seqno(i))
 			j := 0
 			for d := range retch {
 				checkItemA(t, d, m[(i-9)+j])
@@ -353,7 +389,12 @@ func TestConcurrentEnqueueDequeueA1(t *testing.T) {
 
 func TestEnqueueAppCh(t *testing.T) {
 
-	q := NewAtomicMutationQueue(1, 10)
+	maxMemory = 1
+	conf := common.SystemConfig.SectionConfig("indexer.", true /*trim*/)
+	conf.SetValue("settings.minVbQueueLength", 10)
+
+	q := NewAtomicMutationQueue("default", 1, &maxMemory, &memUsed, conf)
+
 	appch := make(StopChannel)
 
 	m := make([]*MutationKeys, 20)
@@ -377,6 +418,7 @@ func TestEnqueueAppCh(t *testing.T) {
 
 }
 
+/*
 func BenchmarkEnqueueA(b *testing.B) {
 
 	q := NewAtomicMutationQueue(1, int64(b.N))
@@ -440,3 +482,4 @@ func BenchmarkSingleVbucketA(b *testing.B) {
 	}
 	stop <- true
 }
+*/

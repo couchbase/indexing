@@ -3,11 +3,14 @@ package projector
 import "fmt"
 import "sync"
 import "io"
+import "time"
 import "os"
 import "net/http"
 import "strings"
 import "encoding/json"
+import "runtime"
 import "runtime/pprof"
+import "runtime/debug"
 
 import ap "github.com/couchbase/indexing/secondary/adminport"
 import c "github.com/couchbase/indexing/secondary/common"
@@ -62,13 +65,6 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 
 	p.logPrefix = fmt.Sprintf("PROJ[%s]", p.adminport)
 
-	callb := func(cfg c.Config) {
-		logging.Infof("%v settings notifier from metakv\n", p.logPrefix)
-		cfg.LogConfig(p.logPrefix)
-		p.ResetConfig(cfg)
-	}
-	c.SetupSettingsNotifier(callb, make(chan struct{}))
-
 	cluster := p.clusterAddr
 	if !strings.HasPrefix(p.clusterAddr, "http://") {
 		cluster = "http://" + cluster
@@ -79,10 +75,25 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 	reqch := make(chan ap.Request)
 	p.admind = ap.NewHTTPServer(apConfig, reqch)
 
+	// set GOGC percent
+	gogc := pconfig["gogc"].Int()
+	oldGogc := debug.SetGCPercent(gogc)
+	fmsg := "%v changing GOGC percentage from %v to %v\n"
+	logging.Infof(fmsg, p.logPrefix, oldGogc, gogc)
+
 	watchInterval := config["projector.watchInterval"].Int()
 	staleTimeout := config["projector.staleTimeout"].Int()
+	go c.MemstatLogger(int64(config["projector.memstatTick"].Int()))
 	go p.mainAdminPort(reqch)
 	go p.watcherDameon(watchInterval, staleTimeout)
+
+	callb := func(cfg c.Config) {
+		logging.Infof("%v settings notifier from metakv\n", p.logPrefix)
+		cfg.LogConfig(p.logPrefix)
+		p.ResetConfig(cfg)
+	}
+	c.SetupSettingsNotifier(callb, make(chan struct{}))
+
 	logging.Infof("%v started ...\n", p.logPrefix)
 	return p
 }
@@ -91,7 +102,7 @@ func NewProjector(maxvbs int, config c.Config) *Projector {
 func (p *Projector) GetConfig() c.Config {
 	p.rw.Lock()
 	defer p.rw.Unlock()
-	return p.config
+	return p.config.Clone()
 }
 
 // ResetConfig accepts a full-set or subset of global configuration
@@ -107,6 +118,15 @@ func (p *Projector) ResetConfig(config c.Config) {
 	}
 	if cv, ok := config["projector.maxCpuPercent"]; ok {
 		c.SetNumCPUs(cv.Int())
+	}
+	if cv, ok := config["projector.gogc"]; ok {
+		gogc := cv.Int()
+		oldGogc := debug.SetGCPercent(gogc)
+		fmsg := "%v changing GOGC percentage from %v to %v\n"
+		logging.Infof(fmsg, p.logPrefix, oldGogc, gogc)
+	}
+	if cv, ok := config["projector.memstatTick"]; ok {
+		c.Memstatch <- int64(cv.Int())
 	}
 	p.config = p.config.Override(config)
 
@@ -218,6 +238,13 @@ func (p *Projector) DelFeed(topic string) (err error) {
 	delete(p.topics, topic)
 	opaque := feed.GetOpaque()
 	logging.Infof("%v ##%x ... feed %q deleted\n", p.logPrefix, opaque, topic)
+
+	go func() { // GC
+		now := time.Now()
+		runtime.GC()
+		fmsg := "%v ##%x GC() took %v\n"
+		logging.Infof(fmsg, p.logPrefix, opaque, time.Since(now))
+	}()
 	return
 }
 
@@ -291,11 +318,13 @@ func (p *Projector) doFailoverLog(
 	}
 	defer bucket.Close()
 
+	config := p.GetConfig()
 	protoFlogs := make([]*protobuf.FailoverLog, 0, len(vbuckets))
 	vbnos := c.Vbno32to16(vbuckets)
 	dcpConfig := map[string]interface{}{
-		"genChanSize":  p.config["projector.dcp.genChanSize"].Int(),
-		"dataChanSize": p.config["projector.dcp.dataChanSize"].Int(),
+		"genChanSize":    config["projector.dcp.genChanSize"].Int(),
+		"dataChanSize":   config["projector.dcp.dataChanSize"].Int(),
+		"numConnections": config["projector.dcp.numConnections"].Int(),
 	}
 	flogs, err := bucket.GetFailoverLogs(opaque, vbnos, dcpConfig)
 	if err == nil {
@@ -343,7 +372,7 @@ func (p *Projector) doMutationTopic(
 	defer p.releaseFeed(topic)
 	if feed == nil {
 		config := p.GetFeedConfig()
-		feed, err = NewFeed(p.pooln, topic, config, opaque)
+		feed, err = NewFeed(p.pooln, topic, p, config, opaque)
 		if err != nil {
 			fmsg := "%v ##%x unable to create feed %v\n"
 			logging.Errorf(fmsg, prefix, opaque, topic)

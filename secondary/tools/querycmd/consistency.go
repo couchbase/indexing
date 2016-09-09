@@ -38,7 +38,9 @@ func doConsistency(
 	}
 
 	// Drop index
-	args := []string{"-type", "drop", "-bucket", "beer-sample", "-index", "index-city"}
+	args := []string{
+		"-type", "drop", "-bucket", "beer-sample", "-index", "index-city",
+	}
 	cmd, _, _, _ := querycmd.ParseArgs(args)
 	querycmd.HandleCommand(client, cmd, true, os.Stdout)
 
@@ -125,7 +127,7 @@ func queryConsistency(
 	fmt.Println("Scan: QueryConsistency ...")
 	go func() {
 		client.Lookup(
-			uint64(defnID), equals, false, 10, common.QueryConsistency, ts,
+			uint64(defnID), "requestId", equals, false, 10, common.QueryConsistency, ts,
 			func(res qclient.ResponseReader) bool {
 				if res.Error() != nil {
 					log.Fatalf("Error: %v", res)
@@ -151,7 +153,7 @@ func sessionConsistency(
 	go func() {
 		fmt.Println("Scan: SessionConsistency ...")
 		client.Lookup(
-			uint64(defnID), equals, false, 10, common.SessionConsistency, nil,
+			uint64(defnID), "requestId", equals, false, 10, common.SessionConsistency, nil,
 			func(res qclient.ResponseReader) bool {
 				if res.Error() != nil {
 					log.Fatalf("Error: %v", res)
@@ -175,7 +177,7 @@ func anyConsistency(
 	// Scan with AnyConsistency
 	fmt.Println("Scan: AnyConsistency ...")
 	client.Lookup(
-		uint64(defnID), equals, false, 10, common.AnyConsistency, nil,
+		uint64(defnID), "requestId", equals, false, 10, common.AnyConsistency, nil,
 		func(res qclient.ResponseReader) bool {
 			if res.Error() != nil {
 				log.Fatalf("Error: %v", res)

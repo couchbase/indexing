@@ -33,15 +33,14 @@ enum IndexState {
 
 // List of possible index storage algorithms.
 enum StorageType {
-    View    = 1;
-    Llrb    = 2;
-    LevelDB = 3;
-    ForestDB = 4;
+    forestdb         = 1;
+    memdb            = 2;
+    memory_optimized = 3;
 }
 
 // Type of expression used to evaluate document.
 enum ExprType {
-    JavaScript = 1;
+    JAVASCRIPT = 1;
     N1QL       = 2;
 }
 
