@@ -779,7 +779,6 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 	var stats []IndexStorageStats
 	var err error
 	var sts StorageStatistics
-	var internalData []string
 
 	for idxInstId, partnMap := range s.indexPartnMap {
 
@@ -789,6 +788,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 			continue
 		}
 
+		var internalData []string
 		var dataSz, diskSz, extraSnapDataSize int64
 		var getBytes, insertBytes, deleteBytes int64
 		var nslices int64

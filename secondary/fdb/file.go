@@ -259,6 +259,21 @@ func (f *File) GetFileVersion() uint8 {
 	return FdbUnkownFileVersion
 }
 
+func (f *File) GetLatencyStats() (string, error) {
+	var statString string
+	var i C.fdb_latency_stat_type
+	for i = 0; i < C.FDB_LATENCY_NUM_STATS; i++ {
+		var stat C.fdb_latency_stat
+		errNo := C.fdb_get_latency_stats(f.dbfile, &stat, i)
+		if errNo != RESULT_SUCCESS {
+			return statString, Error(errNo)
+		}
+
+		statString += fmt.Sprintf("%v:\t%v\t%v\t%v\t%v \n", C.GoString(C.fdb_latency_stat_name(i)), stat.lat_min, stat.lat_avg, stat.lat_max, stat.lat_count)
+	}
+	return statString, nil
+}
+
 func FdbFileVersionToString(version uint8) string {
 
 	if version == FdbV1FileVersion {

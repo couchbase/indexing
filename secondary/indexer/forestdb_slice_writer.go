@@ -1373,6 +1373,18 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 	sts.InsertBytes = platform.LoadInt64(&fdb.insert_bytes)
 	sts.DeleteBytes = platform.LoadInt64(&fdb.delete_bytes)
 
+	if logging.IsEnabled(logging.Timing) {
+		fdb.statFdLock.Lock()
+		latencystats, err := fdb.statFd.GetLatencyStats()
+		fdb.statFdLock.Unlock()
+		if err != nil {
+			return sts, err
+		}
+		var internalData []string
+		internalData = append(internalData, latencystats)
+		sts.InternalData = internalData
+	}
+
 	return sts, nil
 }
 
