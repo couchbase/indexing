@@ -1280,6 +1280,7 @@ func (fdb *fdbSlice) Compact(abortTime time.Time) error {
 
 	var snapMarker *forestdb.SnapMarker
 	var compactSeqNum forestdb.SeqNum
+	var leastCmSeq forestdb.SeqNum
 snaploop:
 	for _, s := range snap.SnapInfoList() {
 
@@ -1292,12 +1293,16 @@ snaploop:
 				compactSeqNum = c.GetSeqNum()
 				break snaploop
 			}
+			if leastCmSeq == 0 || leastCmSeq > c.GetSeqNum() {
+				leastCmSeq = c.GetSeqNum()
+			}
 		}
 	}
 
 	if snapMarker == nil {
 		logging.Infof("ForestDBSlice::Compact No Valid SnapMarker Found. Skipped Compaction."+
-			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
+			"Slice Id %v, IndexInstId %v, IndexDefnId %v MetaSeq %v LeastCmSeq %v", fdb.id, fdb.idxInstId, fdb.idxDefnId,
+			metaSeq, leastCmSeq)
 		return nil
 	} else {
 		logging.Infof("ForestDBSlice::Compact Compacting upto SeqNum %v. "+
