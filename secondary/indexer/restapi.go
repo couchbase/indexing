@@ -507,12 +507,15 @@ func (api *restServer) doLookup(w http.ResponseWriter, request *http.Request) {
 			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
 				return false
 			}
-			data, err := api.makeEntries(skeys, pkeys)
-			if err != nil {
-				w.Write([]byte(api.makeError(err)))
+			//nil means no more data
+			if skeys != nil {
+				data, err := api.makeEntries(skeys, pkeys)
+				if err != nil {
+					w.Write([]byte(api.makeError(err)))
+				}
+				w.Write([]byte(data))
+				w.(http.Flusher).Flush()
 			}
-			w.Write([]byte(data))
-			w.(http.Flusher).Flush()
 			return true
 		})
 	if err == nil {
@@ -622,12 +625,15 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
 				return false
 			}
-			data, err := api.makeEntries(skeys, pkeys)
-			if err != nil {
-				w.Write([]byte(api.makeError(err)))
+			//nil means no more data
+			if skeys != nil {
+				data, err := api.makeEntries(skeys, pkeys)
+				if err != nil {
+					w.Write([]byte(api.makeError(err)))
+				}
+				w.Write([]byte(data))
+				w.(http.Flusher).Flush()
 			}
-			w.Write([]byte(data))
-			w.(http.Flusher).Flush()
 			return true
 		})
 	if err == nil {
@@ -698,12 +704,15 @@ func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
 				return false
 			}
-			data, err := api.makeEntries(skeys, pkeys)
-			if err != nil {
-				w.Write([]byte(api.makeError(err)))
+			//nil means no more data
+			if skeys != nil {
+				data, err := api.makeEntries(skeys, pkeys)
+				if err != nil {
+					w.Write([]byte(api.makeError(err)))
+				}
+				w.Write([]byte(data))
+				w.(http.Flusher).Flush()
 			}
-			w.Write([]byte(data))
-			w.(http.Flusher).Flush()
 			return true
 		})
 	if err == nil {
