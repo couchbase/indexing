@@ -1269,7 +1269,7 @@ func (fdb *fdbSlice) Compact(abortTime time.Time) error {
 		return nil
 	}
 
-	mainSeq := osnap.(*fdbSnapshotInfo).MainSeq
+	metaSeq := osnap.(*fdbSnapshotInfo).MetaSeq
 
 	//find the db snapshot lower than oldest snapshot
 	snap, err := fdb.compactFd.GetAllSnapMarkers()
@@ -1285,9 +1285,9 @@ snaploop:
 
 		cm := s.GetKvsCommitMarkers()
 		for _, c := range cm {
-			//if seqNum of "main" kvs is less than the oldest snapshot seqnum
+			//if seqNum of "default" kvs is less than the oldest snapshot seqnum
 			//it is safe to compact upto that snapshot
-			if c.GetKvStoreName() == "main" && c.GetSeqNum() < mainSeq {
+			if c.GetKvStoreName() == "" && c.GetSeqNum() < metaSeq {
 				snapMarker = s.GetSnapMarker()
 				compactSeqNum = c.GetSeqNum()
 				break snaploop
