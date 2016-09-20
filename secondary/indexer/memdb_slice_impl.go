@@ -1187,7 +1187,7 @@ func (s *memdbSnapshot) StatCountTotal() (uint64, error) {
 }
 
 func (s *memdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
-	return s.CountRange(MinIndexKey, MaxIndexKey, Both, stopch)
+	return uint64(s.info.MainSnap.Count()), nil
 }
 
 func (s *memdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,
