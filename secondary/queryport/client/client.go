@@ -114,7 +114,8 @@ type BridgeAccessor interface {
 	// equivalent index.
 	GetScanport(
 		defnID uint64,
-		retry int) (queryport string, targetDefnID uint64, ok bool)
+		retry int,
+		excludes map[uint64]bool) (queryport string, targetDefnID uint64, ok bool)
 
 	// GetIndex will return the index-definition structure for defnID.
 	GetIndexDefn(defnID uint64) *common.IndexDefn
@@ -687,6 +688,7 @@ func (c *GsiClient) doScan(
 	var queryport string
 	var targetDefnID uint64
 	var scan_err error
+	var excludes map[uint64]bool
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
@@ -694,7 +696,7 @@ func (c *GsiClient) doScan(
 	for i := 0; true; {
 		qcs :=
 			*((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
-		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i); ok1 {
+		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i, excludes); ok1 {
 			index := c.bridge.GetIndexDefn(targetDefnID)
 			if qc, ok2 = qcs[queryport]; ok2 {
 				begin := time.Now()
@@ -720,7 +722,25 @@ func (c *GsiClient) doScan(
 			err = fmt.Errorf("%v from %v", scan_err, queryport)
 		}
 
+		// If there is an error coming from indexer that cannot serve the scan request
+		// (including io error), then exclude this defnID and retry with another replica.
+		// If we exhaust all the replica, then GetScanport() will return ok1=false.
+		if ok1 && ok2 {
+			if excludes == nil {
+				excludes = make(map[uint64]bool)
+			}
+			excludes[targetDefnID] = true
+
+			logging.Warnf(
+				"Scan failed with error for index %v.  Trying scan again with replica, reqId:%v : %v ...\n",
+				targetDefnID, requestId, scan_err)
+			continue
+		}
+
+		// If we cannot find a valid scansport, then retry up to retryScanport by refreshing
+		// the clients.
 		if i = i + 1; i < retry {
+			excludes = nil
 			logging.Warnf(
 				"Trying scan again for index %v (%v %v), reqId:%v : %v ...\n",
 				targetDefnID, ok1, ok2, requestId, scan_err)
