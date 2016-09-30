@@ -121,6 +121,7 @@ func (s *Server) listener() {
 			if e, ok := err.(*net.OpError); ok && e.Op != "accept" {
 				panic(err)
 			}
+			logging.Errorf("%v Accept(): %v\n", s.logPrefix, err)
 			break
 		}
 	}
