@@ -212,7 +212,8 @@ func (b *cbqClient) GetScanports() (queryports []string) {
 // GetScanport implement BridgeAccessor{} interface.
 func (b *cbqClient) GetScanport(
 	defnID uint64,
-	retry int) (queryport string, targetDefnID uint64, ok bool) {
+	retry int,
+	excludes map[uint64]bool) (queryport string, targetDefnID uint64, ok bool) {
 
 	return b.queryport, defnID, true
 }

@@ -41,13 +41,22 @@ func N1QLTransform(
 	for _, cExpr := range cExprs {
 		expr := cExpr.(qexpr.Expression)
 		scalar, vector, err := expr.EvaluateForIndex(docval, context)
+		if err != nil {
+			exprstr := qexpr.NewStringer().Visit(expr)
+			fmsg := "EvaluateForIndex(%q) for docid %v, err: %v skip document"
+			logging.Errorf(fmsg, exprstr, string(docid), err)
+			return nil, nil
+		}
 		isArray, _ := expr.IsArrayIndexKey()
 		if isArray == false {
+			if scalar == nil { //nil is ERROR condition
+				exprstr := qexpr.NewStringer().Visit(expr)
+				fmsg := "EvaluateForIndex(%q) scalar=nil, skip document %v"
+				logging.Errorf(fmsg, exprstr, string(docid))
+				return nil, nil
+			}
 			key := scalar
-			if err != nil {
-				return nil, err
-
-			} else if key.Type() == qvalue.MISSING && skip {
+			if key.Type() == qvalue.MISSING && skip {
 				return nil, nil
 
 			} else if key.Type() == qvalue.MISSING {
@@ -57,10 +66,10 @@ func N1QLTransform(
 			skip = false
 			arrValue = append(arrValue, key)
 		} else {
-			if err != nil {
-				return nil, err
-			} else if vector == nil { //nil is ERROR condition
-				logging.Warnf("vector from EvaluateForIndex() is nil for docid %v. Skipping the document.", string(docid))
+			if vector == nil { //nil is ERROR condition
+				exprstr := qexpr.NewStringer().Visit(expr)
+				fmsg := "EvaluateForIndex(%q) vector=nil, skip document %v"
+				logging.Errorf(fmsg, exprstr, string(docid))
 				return nil, nil
 			}
 
@@ -104,8 +113,9 @@ func N1QLTransform(
 		if encodeBuf != nil {
 			out, err := CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
 			if err != nil {
-				fmsg := "CollateJSONEncode: index field for docid: %s (err: %v)"
+				fmsg := "CollateJSONEncode: index field for docid: %s (err: %v) skip document"
 				logging.Errorf(fmsg, docid, err)
+				return nil, nil
 			}
 			return out, err // return as collated JSON array
 		}
