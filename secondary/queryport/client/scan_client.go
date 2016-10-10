@@ -22,6 +22,7 @@ import "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbase/indexing/secondary/transport"
 import "github.com/golang/protobuf/proto"
+import "github.com/couchbase/indexing/secondary/platform"
 
 // GsiScanClient for scan operations.
 type GsiScanClient struct {
@@ -59,7 +60,7 @@ func NewGsiScanClient(queryport string, config common.Config) (*GsiScanClient, e
 	logging.Infof("%v started ...\n", c.logPrefix)
 
 	if version, err := c.Helo(); err == nil || err == io.EOF {
-		c.serverVersion = version
+		platform.StoreUint32(&c.serverVersion, version)
 	} else {
 		c.pool.Close()
 		return nil, fmt.Errorf("%s: unable to obtain server version", queryport)
@@ -68,8 +69,18 @@ func NewGsiScanClient(queryport string, config common.Config) (*GsiScanClient, e
 	return c, nil
 }
 
+func (c *GsiScanClient) RefreshServerVersion() {
+	// refresh the version ONLY IF there is no error, so we absolutely
+	// know we have right version.
+	if version, err := c.Helo(); err == nil {
+		if version != platform.LoadUint32(&c.serverVersion) {
+			platform.StoreUint32(&c.serverVersion, version)
+		}
+	}
+}
+
 func (c *GsiScanClient) NeedSessionConsVector() bool {
-	return c.serverVersion == 0
+	return platform.LoadUint32(&c.serverVersion) == 0
 }
 
 func (c *GsiScanClient) Helo() (uint32, error) {

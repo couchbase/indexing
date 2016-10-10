@@ -198,6 +198,7 @@ type GsiClient struct {
 	config       common.Config
 	queryClients unsafe.Pointer // map[string(queryport)]*GsiScanClient
 	bucketHash   unsafe.Pointer // map[string]uint64 // bucket -> crc64
+	metaCh       chan bool      // listen to metadata changes
 }
 
 // NewGsiClient returns client to access GSI cluster.
@@ -670,6 +671,7 @@ func (c *GsiClient) updateScanClients() {
 			if _, ok := staleclients[queryport]; ok {
 				continue
 			}
+			qc.RefreshServerVersion()
 			clients[queryport] = qc
 		}
 		for queryport := range newclients {
@@ -679,6 +681,7 @@ func (c *GsiClient) updateScanClients() {
 				logging.Errorf("Unable to initialize gsi scanclient (%v)", err)
 			}
 		}
+
 		atomic.StorePointer(&c.queryClients, unsafe.Pointer(&clients))
 	}
 }
@@ -729,7 +732,7 @@ func (c *GsiClient) doScan(
 		// If there is an error coming from indexer that cannot serve the scan request
 		// (including io error), then exclude this defnID and retry with another replica.
 		// If we exhaust all the replica, then GetScanport() will return ok1=false.
-		if ok1 && ok2 {
+		if ok1 && ok2 && evictRetry > 0 {
 			if excludes == nil {
 				excludes = make(map[uint64]bool)
 			}
@@ -862,14 +865,25 @@ func makeWithMetaProvider(
 		cluster:      cluster,
 		config:       config,
 		queryClients: unsafe.Pointer(new(map[string]*GsiScanClient)),
+		metaCh:       make(chan bool, 1),
 	}
 	platform.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
-	c.bridge, err = newMetaBridgeClient(cluster, config)
+	c.bridge, err = newMetaBridgeClient(cluster, config, c.metaCh)
 	if err != nil {
 		return nil, err
 	}
 	c.updateScanClients()
+	go c.listenMetaChange()
 	return c, nil
+}
+
+func (c *GsiClient) listenMetaChange() {
+	for {
+		select {
+		case <-c.metaCh:
+			c.updateScanClients()
+		}
+	}
 }
 
 //--------------------------

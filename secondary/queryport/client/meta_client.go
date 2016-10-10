@@ -27,6 +27,7 @@ type metadataClient struct {
 	equivalenceFactor       float64 // value between [0, 1.0)
 
 	topoChangeLock sync.Mutex
+	metaCh         chan bool
 }
 
 // sherlock topology management, multi-node & single-partition.
@@ -40,11 +41,12 @@ type indexTopology struct {
 }
 
 func newMetaBridgeClient(
-	cluster string, config common.Config) (c *metadataClient, err error) {
+	cluster string, config common.Config, metaCh chan bool) (c *metadataClient, err error) {
 
 	b := &metadataClient{
 		cluster: cluster,
 		finch:   make(chan bool),
+		metaCh:  metaCh,
 	}
 	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
 	b.logtick = time.Duration(config["logtick"].Int()) * time.Millisecond
@@ -736,6 +738,14 @@ func (b *metadataClient) safeupdate(
 		oldptr := unsafe.Pointer(currmeta)
 		newptr := unsafe.Pointer(newmeta)
 		done = atomic.CompareAndSwapPointer(&b.indexers, oldptr, newptr)
+
+		// metaCh should never close
+		if b.metaCh != nil {
+			select {
+			case b.metaCh <- true:
+			default:
+			}
+		}
 	}
 	fmsg := "switched currmeta from %v -> %v\n"
 	logging.Infof(fmsg, currmeta.version, newmeta.version)
