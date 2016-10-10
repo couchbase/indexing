@@ -389,7 +389,7 @@ func (c *GsiClient) Lookup(
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
-			vector, err = c.getConsistency(cons, vector, index.Bucket)
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 			if err != nil {
 				return err, false
 			}
@@ -437,7 +437,7 @@ func (c *GsiClient) Range(
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
-			vector, err = c.getConsistency(cons, vector, index.Bucket)
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 			if err != nil {
 				return err, false
 			}
@@ -503,7 +503,7 @@ func (c *GsiClient) ScanAll(
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
-			vector, err = c.getConsistency(cons, vector, index.Bucket)
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 			if err != nil {
 				return err, false
 			}
@@ -543,7 +543,7 @@ func (c *GsiClient) CountLookup(
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
-			vector, err = c.getConsistency(cons, vector, index.Bucket)
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 			if err != nil {
 				return err, false
 			}
@@ -593,7 +593,7 @@ func (c *GsiClient) CountRange(
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
-			vector, err = c.getConsistency(cons, vector, index.Bucket)
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 			if err != nil {
 				return err, false
 			}
@@ -673,7 +673,11 @@ func (c *GsiClient) updateScanClients() {
 			clients[queryport] = qc
 		}
 		for queryport := range newclients {
-			clients[queryport] = NewGsiScanClient(queryport, c.config)
+			if qc, err := NewGsiScanClient(queryport, c.config); err == nil {
+				clients[queryport] = qc
+			} else {
+				logging.Errorf("Unable to initialize gsi scanclient (%v)", err)
+			}
 		}
 		atomic.StorePointer(&c.queryClients, unsafe.Pointer(&clients))
 	}
@@ -766,7 +770,7 @@ func (c *GsiClient) isTimeit(err error) bool {
 }
 
 func (c *GsiClient) getConsistency(
-	cons common.Consistency,
+	qc *GsiScanClient, cons common.Consistency,
 	vector *TsConsistency, bucket string) (*TsConsistency, error) {
 
 	if cons == common.QueryConsistency {
@@ -774,7 +778,34 @@ func (c *GsiClient) getConsistency(
 			return nil, ErrorExpectedTimestamp
 		}
 		return vector, nil
-	} else if cons == common.SessionConsistency || cons == common.AnyConsistency {
+	} else if cons == common.SessionConsistency {
+		var err error
+		// Server version is old (cb 4.0.x)
+		if qc.NeedSessionConsVector() {
+			if hash64, ok := c.getBucketHash(bucket); ok && hash64 != 0 {
+				begin := time.Now()
+				fmsg := "Time taken by GET_SEQNOS call, %v CRC: %v\n"
+				defer func() { logging.Debugf(fmsg, time.Since(begin), hash64) }()
+				if vector, err = c.BucketSeqnos(bucket, hash64); err != nil {
+					return nil, err
+				}
+
+			} else {
+				begin := time.Now()
+				fmsg := "Time taken by STATS call, %v\n"
+				defer func() { logging.Debugf(fmsg, time.Since(begin)) }()
+				if vector, err = c.BucketTs(bucket); err != nil {
+					return nil, err
+				}
+				vector.Crc64 = common.HashVbuuid(vector.Vbuuids)
+				vector.Vbuuids = nil
+				c.setBucketHash(bucket, vector.Crc64)
+				logging.Debugf("STATS CRC: %v\n", vector.Crc64)
+			}
+		} else {
+			vector = nil
+		}
+	} else if cons == common.AnyConsistency {
 		vector = nil
 	} else {
 		return nil, ErrorInvalidConsistency
@@ -816,7 +847,9 @@ func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
 	}
 	clients := make(map[string]*GsiScanClient)
 	for _, queryport := range c.bridge.GetScanports() {
-		clients[queryport] = NewGsiScanClient(queryport, config)
+		if qc, err := NewGsiScanClient(queryport, config); err == nil {
+			clients[queryport] = qc
+		}
 	}
 	atomic.StorePointer(&c.queryClients, unsafe.Pointer(&clients))
 	return c, nil

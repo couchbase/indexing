@@ -29,6 +29,17 @@ message QueryPayload {
     optional CountResponse      countResponse     = 8;
     optional EndStreamRequest   endStream         = 9;
     optional StreamEndResponse  streamEnd         = 10;
+    optional HeloRequest        heloRequest       = 11;
+    optional HeloResponse       heloResponse      = 12;
+}
+
+// Get current server version/capabilities
+message HeloRequest {
+    required uint32 version = 1;
+}
+
+message HeloResponse {
+    required uint32 version = 1;
 }
 
 // Get Index statistics. StatisticsResponse is returned back from indexer.
