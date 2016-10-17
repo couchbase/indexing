@@ -353,3 +353,27 @@ func IsValidIndexType(t string) bool {
 
 	return false
 }
+
+func IsEquivalentIndex(d1, d2 *IndexDefn) bool {
+
+	if d1.Using != d1.Using ||
+		d1.Bucket != d2.Bucket ||
+		d1.IsPrimary != d2.IsPrimary ||
+		d1.ExprType != d2.ExprType ||
+		d1.PartitionScheme != d2.PartitionScheme ||
+		d1.PartitionKey != d2.PartitionKey ||
+		d1.WhereExpr != d2.WhereExpr {
+
+		return false
+	}
+
+	for _, s1 := range d1.SecExprs {
+		for _, s2 := range d2.SecExprs {
+			if s1 != s2 {
+				return false
+			}
+		}
+	}
+
+	return true
+}
