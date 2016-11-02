@@ -22,6 +22,7 @@ import "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbase/indexing/secondary/transport"
 import "github.com/golang/protobuf/proto"
+import "github.com/couchbase/indexing/secondary/platform"
 
 // GsiScanClient for scan operations.
 type GsiScanClient struct {
@@ -36,9 +37,11 @@ type GsiScanClient struct {
 	cpTimeout          time.Duration
 	cpAvailWaitTimeout time.Duration
 	logPrefix          string
+
+	serverVersion uint32
 }
 
-func NewGsiScanClient(queryport string, config common.Config) *GsiScanClient {
+func NewGsiScanClient(queryport string, config common.Config) (*GsiScanClient, error) {
 	t := time.Duration(config["connPoolAvailWaitTimeout"].Int())
 	c := &GsiScanClient{
 		queryport:          queryport,
@@ -55,7 +58,42 @@ func NewGsiScanClient(queryport string, config common.Config) *GsiScanClient {
 		queryport, c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
 		c.cpAvailWaitTimeout)
 	logging.Infof("%v started ...\n", c.logPrefix)
-	return c
+
+	if version, err := c.Helo(); err == nil || err == io.EOF {
+		platform.StoreUint32(&c.serverVersion, version)
+	} else {
+		c.pool.Close()
+		return nil, fmt.Errorf("%s: unable to obtain server version", queryport)
+	}
+
+	return c, nil
+}
+
+func (c *GsiScanClient) RefreshServerVersion() {
+	// refresh the version ONLY IF there is no error, so we absolutely
+	// know we have right version.
+	if version, err := c.Helo(); err == nil {
+		if version != platform.LoadUint32(&c.serverVersion) {
+			platform.StoreUint32(&c.serverVersion, version)
+		}
+	}
+}
+
+func (c *GsiScanClient) NeedSessionConsVector() bool {
+	return platform.LoadUint32(&c.serverVersion) == 0
+}
+
+func (c *GsiScanClient) Helo() (uint32, error) {
+	req := &protobuf.HeloRequest{
+		Version: proto.Uint32(uint32(protobuf.ProtobufVersion())),
+	}
+
+	resp, err := c.doRequestResponse(req, "")
+	if err != nil {
+		return 0, err
+	}
+	heloResp := resp.(*protobuf.HeloResponse)
+	return heloResp.GetVersion(), nil
 }
 
 // LookupStatistics for a single secondary-key.
