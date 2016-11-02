@@ -56,4 +56,4 @@ GoInstall (TARGET cbindex PACKAGE github.com/couchbase/indexing/secondary/cmd/cb
 GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexperf
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   INSTALL_PATH bin
-  GOVERSION 1.4.x)
+  GOVERSION 1.7.3)
