@@ -782,9 +782,27 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
 	}
 
-	snapInfo := info.(*memdbSnapshotInfo)
+	target := info.(*memdbSnapshotInfo)
+
+	// Remove all the disk snapshots which were created after rollback snapshot
+	snapInfos, err := mdb.GetSnapshots()
+	if err != nil {
+		return err
+	}
+
+	for _, snapInfo := range snapInfos {
+		si := snapInfo.(*memdbSnapshotInfo)
+		if si.dataPath == target.dataPath {
+			break
+		}
+
+		if err := os.RemoveAll(si.dataPath); err != nil {
+			return err
+		}
+	}
+
 	mdb.resetStores()
-	return mdb.loadSnapshot(snapInfo)
+	return nil
 }
 
 func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
