@@ -69,7 +69,7 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	config.SetMaxWriterLockProb(uint8(prob))
 	walSize := sysconf["settings.wal_size"].Uint64()
 	config.SetWalThreshold(walSize)
-	kept_headers := sysconf["settings.recovery.max_rollbacks"].Int()
+	kept_headers := sysconf["settings.recovery.max_rollbacks"].Int() + 1 //MB-20753
 	config.SetNumKeepingHeaders(uint8(kept_headers))
 	logging.Verbosef("NewForestDBSlice(): max writer lock prob %d", prob)
 	logging.Verbosef("NewForestDBSlice(): wal size %d", walSize)
@@ -1269,7 +1269,7 @@ func (fdb *fdbSlice) Compact(abortTime time.Time) error {
 		return nil
 	}
 
-	mainSeq := osnap.(*fdbSnapshotInfo).MainSeq
+	metaSeq := osnap.(*fdbSnapshotInfo).MetaSeq
 
 	//find the db snapshot lower than oldest snapshot
 	snap, err := fdb.compactFd.GetAllSnapMarkers()
@@ -1280,24 +1280,29 @@ func (fdb *fdbSlice) Compact(abortTime time.Time) error {
 
 	var snapMarker *forestdb.SnapMarker
 	var compactSeqNum forestdb.SeqNum
+	var leastCmSeq forestdb.SeqNum
 snaploop:
 	for _, s := range snap.SnapInfoList() {
 
 		cm := s.GetKvsCommitMarkers()
 		for _, c := range cm {
-			//if seqNum of "main" kvs is less than or equal to oldest snapshot seqnum
+			//if seqNum of "default" kvs is less than the oldest snapshot seqnum
 			//it is safe to compact upto that snapshot
-			if c.GetKvStoreName() == "main" && c.GetSeqNum() <= mainSeq {
+			if c.GetKvStoreName() == "" && c.GetSeqNum() < metaSeq {
 				snapMarker = s.GetSnapMarker()
 				compactSeqNum = c.GetSeqNum()
 				break snaploop
+			}
+			if leastCmSeq == 0 || leastCmSeq > c.GetSeqNum() {
+				leastCmSeq = c.GetSeqNum()
 			}
 		}
 	}
 
 	if snapMarker == nil {
 		logging.Infof("ForestDBSlice::Compact No Valid SnapMarker Found. Skipped Compaction."+
-			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
+			"Slice Id %v, IndexInstId %v, IndexDefnId %v MetaSeq %v LeastCmSeq %v", fdb.id, fdb.idxInstId, fdb.idxDefnId,
+			metaSeq, leastCmSeq)
 		return nil
 	} else {
 		logging.Infof("ForestDBSlice::Compact Compacting upto SeqNum %v. "+
@@ -1373,6 +1378,18 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 	sts.InsertBytes = platform.LoadInt64(&fdb.insert_bytes)
 	sts.DeleteBytes = platform.LoadInt64(&fdb.delete_bytes)
 
+	if logging.IsEnabled(logging.Timing) {
+		fdb.statFdLock.Lock()
+		latencystats, err := fdb.statFd.GetLatencyStats()
+		fdb.statFdLock.Unlock()
+		if err != nil {
+			return sts, err
+		}
+		var internalData []string
+		internalData = append(internalData, latencystats)
+		sts.InternalData = internalData
+	}
+
 	return sts, nil
 }
 
@@ -1384,7 +1401,7 @@ func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {
 
 	// update circular compaction setting in fdb
 	nmode := strings.ToLower(cfg["settings.compaction.compaction_mode"].String())
-	kept_headers := uint8(cfg["settings.recovery.max_rollbacks"].Int())
+	kept_headers := uint8(cfg["settings.recovery.max_rollbacks"].Int() + 1) //MB-20753
 	fconfig := forestdb.DefaultConfig()
 	reuse_threshold := uint8(fconfig.BlockReuseThreshold())
 

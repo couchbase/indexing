@@ -48,6 +48,7 @@ const (
 	CountReq               = "count"
 	ScanReq                = "scan"
 	ScanAllReq             = "scanAll"
+	HeloReq                = "helo"
 )
 
 type ScanRequest struct {
@@ -513,6 +514,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	}
 
 	switch req := protoReq.(type) {
+	case *protobuf.HeloRequest:
+		r.ScanType = HeloReq
 	case *protobuf.StatisticsRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
@@ -749,6 +752,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		req.Done()
 	}()
 
+	if req.ScanType == HeloReq {
+		s.handleHeloRequest(req, w)
+		return
+	}
+
 	logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
 
 	if req.Consistency != nil {
@@ -804,6 +812,11 @@ func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
 	case StatsReq:
 		s.handleStatsRequest(req, w, is)
 	}
+}
+
+func (s *scanCoordinator) handleHeloRequest(req *ScanRequest, w ScanResponseWriter) {
+	err := w.Helo()
+	s.handleError(req.LogPrefix, err)
 }
 
 func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWriter,

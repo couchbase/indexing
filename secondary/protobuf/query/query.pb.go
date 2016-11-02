@@ -12,6 +12,8 @@ It has these top-level messages:
 	Error
 	TsConsistency
 	QueryPayload
+	HeloRequest
+	HeloResponse
 	StatisticsRequest
 	StatisticsResponse
 	ScanRequest
@@ -109,6 +111,8 @@ type QueryPayload struct {
 	CountResponse     *CountResponse      `protobuf:"bytes,8,opt,name=countResponse" json:"countResponse,omitempty"`
 	EndStream         *EndStreamRequest   `protobuf:"bytes,9,opt,name=endStream" json:"endStream,omitempty"`
 	StreamEnd         *StreamEndResponse  `protobuf:"bytes,10,opt,name=streamEnd" json:"streamEnd,omitempty"`
+	HeloRequest       *HeloRequest        `protobuf:"bytes,11,opt,name=heloRequest" json:"heloRequest,omitempty"`
+	HeloResponse      *HeloResponse       `protobuf:"bytes,12,opt,name=heloResponse" json:"heloResponse,omitempty"`
 	XXX_unrecognized  []byte              `json:"-"`
 }
 
@@ -184,6 +188,53 @@ func (m *QueryPayload) GetStreamEnd() *StreamEndResponse {
 		return m.StreamEnd
 	}
 	return nil
+}
+
+func (m *QueryPayload) GetHeloRequest() *HeloRequest {
+	if m != nil {
+		return m.HeloRequest
+	}
+	return nil
+}
+
+func (m *QueryPayload) GetHeloResponse() *HeloResponse {
+	if m != nil {
+		return m.HeloResponse
+	}
+	return nil
+}
+
+// Get current server version/capabilities
+type HeloRequest struct {
+	Version          *uint32 `protobuf:"varint,1,req,name=version" json:"version,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *HeloRequest) Reset()         { *m = HeloRequest{} }
+func (m *HeloRequest) String() string { return proto.CompactTextString(m) }
+func (*HeloRequest) ProtoMessage()    {}
+
+func (m *HeloRequest) GetVersion() uint32 {
+	if m != nil && m.Version != nil {
+		return *m.Version
+	}
+	return 0
+}
+
+type HeloResponse struct {
+	Version          *uint32 `protobuf:"varint,1,req,name=version" json:"version,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
+}
+
+func (m *HeloResponse) Reset()         { *m = HeloResponse{} }
+func (m *HeloResponse) String() string { return proto.CompactTextString(m) }
+func (*HeloResponse) ProtoMessage()    {}
+
+func (m *HeloResponse) GetVersion() uint32 {
+	if m != nil && m.Version != nil {
+		return *m.Version
+	}
+	return 0
 }
 
 // Get Index statistics. StatisticsResponse is returned back from indexer.

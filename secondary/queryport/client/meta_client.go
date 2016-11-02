@@ -27,6 +27,7 @@ type metadataClient struct {
 	equivalenceFactor       float64 // value between [0, 1.0)
 
 	topoChangeLock sync.Mutex
+	metaCh         chan bool
 }
 
 // sherlock topology management, multi-node & single-partition.
@@ -40,11 +41,12 @@ type indexTopology struct {
 }
 
 func newMetaBridgeClient(
-	cluster string, config common.Config) (c *metadataClient, err error) {
+	cluster string, config common.Config, metaCh chan bool) (c *metadataClient, err error) {
 
 	b := &metadataClient{
 		cluster: cluster,
 		finch:   make(chan bool),
+		metaCh:  metaCh,
 	}
 	b.servicesNotifierRetryTm = config["servicesNotifierRetryTm"].Int()
 	b.logtick = time.Duration(config["logtick"].Int()) * time.Millisecond
@@ -206,7 +208,7 @@ func (b *metadataClient) GetScanports() (queryports []string) {
 
 // GetScanport implements BridgeAccessor{} interface.
 func (b *metadataClient) GetScanport(
-	defnID uint64, retry int) (qp string, targetDefnID uint64, ok bool) {
+	defnID uint64, retry int, excludes map[uint64]bool) (qp string, targetDefnID uint64, ok bool) {
 
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	if rand.Float64() < b.randomWeight {
@@ -216,9 +218,13 @@ func (b *metadataClient) GetScanport(
 			replicas[n] = uint64(replicaID)
 			n++
 		}
-		targetDefnID = b.pickRandom(replicas[:n], defnID)
+		targetDefnID, ok = b.pickRandom(replicas[:n], defnID, excludes)
 	} else {
-		targetDefnID = b.pickOptimal(defnID)
+		targetDefnID, ok = b.pickOptimal(defnID, excludes)
+	}
+
+	if !ok {
+		return "", 0, false
 	}
 
 	_, qp, err := b.mdClient.FindServiceForIndex(common.IndexDefnId(targetDefnID))
@@ -340,24 +346,30 @@ type loadHeuristics struct {
 }
 
 // pick a random replica from the list.
-func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64) uint64 {
+func (b *metadataClient) pickRandom(replicas []uint64, defnID uint64, excludes map[uint64]bool) (uint64, bool) {
 	var actvReplicas [128]uint64
 	n := 0
 	for _, replicaID := range replicas {
 		state, _ := b.indexState(uint64(replicaID))
-		if state == common.INDEX_STATE_ACTIVE {
+		if state == common.INDEX_STATE_ACTIVE && (excludes == nil || !excludes[uint64(replicaID)]) {
 			actvReplicas[n] = uint64(replicaID)
 			n++
 		}
 	}
+
 	if n > 0 {
-		return actvReplicas[rand.Intn(n*10)%n]
+		return actvReplicas[rand.Intn(n*10)%n], true
 	}
-	return defnID
+
+	if excludes == nil || !excludes[uint64(defnID)] {
+		return defnID, true
+	}
+
+	return uint64(0), false
 }
 
 // pick an optimal replica for the index `defnID` under least load.
-func (b *metadataClient) pickOptimal(defnID uint64) uint64 {
+func (b *metadataClient) pickOptimal(defnID uint64, excludes map[uint64]bool) (uint64, bool) {
 	// gather active-replicas
 	var actvReplicas [128]uint64
 	var loadList [128]float64
@@ -365,7 +377,7 @@ func (b *metadataClient) pickOptimal(defnID uint64) uint64 {
 	currmeta := (*indexTopology)(atomic.LoadPointer(&b.indexers))
 	for _, replicaID := range currmeta.replicas[common.IndexDefnId(defnID)] {
 		state, _ := b.indexState(uint64(replicaID))
-		if state == common.INDEX_STATE_ACTIVE {
+		if state == common.INDEX_STATE_ACTIVE && (excludes == nil || !excludes[uint64(replicaID)]) {
 			actvReplicas[n] = uint64(replicaID)
 			currmeta.rw.RLock()
 			load, ok := currmeta.loads[replicaID]
@@ -379,7 +391,10 @@ func (b *metadataClient) pickOptimal(defnID uint64) uint64 {
 		}
 	}
 	if n == 0 { // none are active
-		return defnID
+		if excludes == nil || !excludes[uint64(defnID)] {
+			return defnID, true
+		}
+		return uint64(0), false
 	}
 	// compute replica with least load.
 	sort.Float64s(loadList[:n])
@@ -397,7 +412,7 @@ func (b *metadataClient) pickOptimal(defnID uint64) uint64 {
 			m++
 		}
 	}
-	return b.pickRandom(replicas[:m], defnID)
+	return b.pickRandom(replicas[:m], defnID, excludes)
 }
 
 //----------------
@@ -723,6 +738,14 @@ func (b *metadataClient) safeupdate(
 		oldptr := unsafe.Pointer(currmeta)
 		newptr := unsafe.Pointer(newmeta)
 		done = atomic.CompareAndSwapPointer(&b.indexers, oldptr, newptr)
+
+		// metaCh should never close
+		if b.metaCh != nil {
+			select {
+			case b.metaCh <- true:
+			default:
+			}
+		}
 	}
 	fmsg := "switched currmeta from %v -> %v\n"
 	logging.Infof(fmsg, currmeta.version, newmeta.version)

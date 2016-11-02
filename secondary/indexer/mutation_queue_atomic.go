@@ -189,7 +189,7 @@ func (q *atomicMutationQueue) dequeueUptoSeqno(vbucket Vbucket, seqno Seqno,
 	var totalWait int
 
 	for {
-		totalWait += 20
+		totalWait += int(q.dequeuePollInterval)
 		if totalWait > 30000 {
 			if totalWait%5000 == 0 {
 				logging.Warnf("Indexer::MutationQueue Dequeue Waiting For "+

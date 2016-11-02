@@ -52,6 +52,12 @@ func ProtobufEncodeInBuf(payload interface{}, buf []byte) (data []byte, err erro
 	case *StreamEndResponse:
 		pl.StreamEnd = val
 
+	case *HeloRequest:
+		pl.HeloRequest = val
+
+	case *HeloResponse:
+		pl.HeloResponse = val
+
 	default:
 		return nil, ErrorMissingPayload
 	}
@@ -99,6 +105,10 @@ func ProtobufDecode(data []byte) (value interface{}, err error) {
 	} else if val := pl.GetEndStream(); val != nil {
 		return val, nil
 	} else if val := pl.GetStreamEnd(); val != nil {
+		return val, nil
+	} else if val := pl.GetHeloRequest(); val != nil {
+		return val, nil
+	} else if val := pl.GetHeloResponse(); val != nil {
 		return val, nil
 	}
 	return nil, ErrorMissingPayload
