@@ -1148,7 +1148,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
-
+	"indexer.settings.moi.recovery.max_rollbacks": ConfigValue{
+		2,
+		"Maximum number of committed rollback points",
+		2,
+		false, // mutable
+		false, // case-insensitive
+	},
 	"indexer.settings.recovery.max_rollbacks": ConfigValue{
 		5, // keep in sync with index_settings_manager.erl
 		"Maximum number of committed rollback points",

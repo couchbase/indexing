@@ -178,7 +178,7 @@ func NewMemDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.idxDefn = idxDefn
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
-	slice.maxRollbacks = sysconf["settings.recovery.max_rollbacks"].Int()
+	slice.maxRollbacks = sysconf["settings.moi.recovery.max_rollbacks"].Int()
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
 	if sliceBufSize < uint64(slice.numWriters) {
