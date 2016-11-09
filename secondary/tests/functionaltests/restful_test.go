@@ -367,15 +367,16 @@ func restful_lookup(ids []string) error {
 			var result interface{}
 			if err := dec.Decode(&result); err != nil && err != io.EOF {
 				return nil, err
-			}
-			if _, ok := result.(string); ok {
-				err := fmt.Errorf("ERROR chunk: %v\n", result)
-				return nil, err
-			} else if result != nil {
-				log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
-				entries = append(entries, result.([]interface{})...)
-			} else {
+			} else if result == nil {
 				break
+			}
+			switch resval := result.(type) {
+			case []interface{}:
+				log.Printf("GOT CHUNK: %v\n", len(resval))
+				entries = append(entries, resval...)
+			default:
+				err := fmt.Errorf("ERROR CHUNK: %v\n", result)
+				return nil, err
 			}
 		}
 		return entries, nil
