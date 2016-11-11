@@ -567,21 +567,21 @@ func (o *MetadataProvider) FindIndex(id c.IndexDefnId) *IndexMetadata {
 	return nil
 }
 
-func (o *MetadataProvider) FindServiceForIndex(id c.IndexDefnId) (adminport string, queryport string, err error) {
+func (o *MetadataProvider) FindServiceForIndex(id c.IndexDefnId) (adminport string, queryport string, httpaddr string, err error) {
 
 	// find index -- this method will not return the index if the index is in DELETED
 	// status (but defn exists).
 	meta := o.FindIndex(id)
 	if meta == nil {
-		return "", "", errors.New(fmt.Sprintf("Index does not exist."))
+		return "", "", "", errors.New(fmt.Sprintf("Index does not exist."))
 	}
 
 	watcher, err := o.findWatcherByDefnIdIgnoreStatus(id)
 	if err != nil {
-		return "", "", errors.New(fmt.Sprintf("Cannot locate cluster node hosting Index %s.", meta.Definition.Name))
+		return "", "", "", errors.New(fmt.Sprintf("Cannot locate cluster node hosting Index %s.", meta.Definition.Name))
 	}
 
-	return watcher.getAdminAddr(), watcher.getScanAddr(), nil
+	return watcher.getAdminAddr(), watcher.getScanAddr(), watcher.getHttpAddr(), nil
 }
 
 func (o *MetadataProvider) FindServiceForIndexer(id c.IndexerId) (adminport string, queryport string, err error) {
@@ -1354,6 +1354,18 @@ func (w *watcher) getScanAddr() string {
 	}
 
 	return w.serviceMap.ScanAddr
+}
+
+func (w *watcher) getHttpAddr() string {
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if w.serviceMap == nil {
+		panic("Index node metadata is not initialized")
+	}
+
+	return w.serviceMap.HttpAddr
 }
 
 func (w *watcher) addDefn(defnId c.IndexDefnId) {

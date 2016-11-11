@@ -87,6 +87,7 @@ const (
 	CLUST_MGR_GET_GLOBAL_TOPOLOGY
 	CLUST_MGR_GET_LOCAL
 	CLUST_MGR_SET_LOCAL
+	CLUST_MGR_DEL_LOCAL
 	CLUST_MGR_DEL_BUCKET
 	CLUST_MGR_INDEXER_READY
 	CLUST_MGR_CLEANUP_INDEX
@@ -110,6 +111,11 @@ const (
 	INDEXER_PREPARE_UNPAUSE
 	INDEXER_UNPAUSE
 	INDEXER_BOOTSTRAP
+	INDEXER_SET_LOCAL_META
+	INDEXER_GET_LOCAL_META
+	INDEXER_DEL_LOCAL_META
+	INDEXER_CHECK_DDL_IN_PROGRESS
+	INDEXER_UPDATE_RSTATE
 
 	//SCAN COORDINATOR
 	SCAN_COORD_SHUTDOWN
@@ -1109,11 +1115,13 @@ func (m *MsgClustMgrTopology) GetInstMap() common.IndexInstMap {
 
 //CLUST_MGR_GET_LOCAL
 //CLUST_MGR_SET_LOCAL
+//CLUST_MGR_DEL_LOCAL
 type MsgClustMgrLocal struct {
-	mType MsgType
-	key   string
-	value string
-	err   error
+	mType  MsgType
+	key    string
+	value  string
+	err    error
+	respch MsgChannel
 }
 
 func (m *MsgClustMgrLocal) GetMsgType() MsgType {
@@ -1130,6 +1138,10 @@ func (m *MsgClustMgrLocal) GetValue() string {
 
 func (m *MsgClustMgrLocal) GetError() error {
 	return m.err
+}
+
+func (m *MsgClustMgrLocal) GetRespCh() MsgChannel {
+	return m.respch
 }
 
 type MsgConfigUpdate struct {
@@ -1162,6 +1174,40 @@ type MsgIndexerState struct {
 
 func (m *MsgIndexerState) GetMsgType() MsgType {
 	return m.mType
+}
+
+type MsgCheckDDLInProgress struct {
+	respCh chan bool
+}
+
+func (m *MsgCheckDDLInProgress) GetMsgType() MsgType {
+	return INDEXER_CHECK_DDL_IN_PROGRESS
+}
+
+func (m *MsgCheckDDLInProgress) GetRespCh() chan bool {
+	return m.respCh
+}
+
+type MsgUpdateIndexRState struct {
+	instId common.IndexInstId
+	respch chan bool
+	rstate common.RebalanceState
+}
+
+func (m *MsgUpdateIndexRState) GetMsgType() MsgType {
+	return INDEXER_UPDATE_RSTATE
+}
+
+func (m *MsgUpdateIndexRState) GetInstId() common.IndexInstId {
+	return m.instId
+}
+
+func (m *MsgUpdateIndexRState) GetRespCh() chan bool {
+	return m.respch
+}
+
+func (m *MsgUpdateIndexRState) GetRState() common.RebalanceState {
+	return m.rstate
 }
 
 //Helper function to return string for message type
@@ -1277,6 +1323,16 @@ func (m MsgType) String() string {
 		return "INDEXER_UNPAUSE"
 	case INDEXER_BOOTSTRAP:
 		return "INDEXER_BOOTSTRAP"
+	case INDEXER_SET_LOCAL_META:
+		return "INDEXER_SET_LOCAL_META"
+	case INDEXER_GET_LOCAL_META:
+		return "INDEXER_GET_LOCAL_META"
+	case INDEXER_DEL_LOCAL_META:
+		return "INDEXER_DEL_LOCAL_META"
+	case INDEXER_CHECK_DDL_IN_PROGRESS:
+		return "INDEXER_CHECK_DDL_IN_PROGRESS"
+	case INDEXER_UPDATE_RSTATE:
+		return "INDEXER_UPDATE_RSTATE"
 
 	case SCAN_COORD_SHUTDOWN:
 		return "SCAN_COORD_SHUTDOWN"
@@ -1320,6 +1376,8 @@ func (m MsgType) String() string {
 		return "CLUST_MGR_GET_LOCAL"
 	case CLUST_MGR_SET_LOCAL:
 		return "CLUST_MGR_SET_LOCAL"
+	case CLUST_MGR_DEL_LOCAL:
+		return "CLUST_MGR_DEL_LOCAL"
 	case CLUST_MGR_DEL_BUCKET:
 		return "CLUST_MGR_DEL_BUCKET"
 	case CLUST_MGR_INDEXER_READY:

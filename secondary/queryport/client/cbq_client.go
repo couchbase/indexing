@@ -176,6 +176,11 @@ func (b *cbqClient) BuildIndexes(defnID []uint64) error {
 	panic("cbqClient does not implement build-indexes")
 }
 
+// MoveIndexes implement BridgeAccessor{} interface.
+func (b *cbqClient) MoveIndexes(defnID []uint64, plan map[string]interface{}) error {
+	panic("cbqClient does not implement build-indexes")
+}
+
 // DropIndex implement BridgeAccessor{} interface.
 func (b *cbqClient) DropIndex(defnID uint64) error {
 	var resp *http.Response

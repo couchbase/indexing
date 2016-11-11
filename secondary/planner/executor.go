@@ -110,22 +110,12 @@ type IndexSpec struct {
 // Integration with Rebalancer
 /////////////////////////////////////////////////////////////
 
-type TransferToken struct {
-	MasterId  string
-	SourceId  string
-	DestId    string
-	RebalId   string
-	State     string
-	InstId    common.IndexInstId
-	IndexInst common.IndexInst
-}
-
-func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool) (map[string]*TransferToken, error) {
+func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool) (map[string]*common.TransferToken, error) {
 	return ExecuteRebalanceInternal(clusterUrl, topologyChange, masterId, false, false, ejectOnly)
 }
 
 func ExecuteRebalanceInternal(clusterUrl string,
-	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool) (map[string]*TransferToken, error) {
+	topologyChange service.TopologyChange, masterId string, addNode bool, detail bool, ejectOnly bool) (map[string]*common.TransferToken, error) {
 
 	plan, err := RetrievePlanFromCluster(clusterUrl)
 	if err != nil {
@@ -170,22 +160,24 @@ func ExecuteRebalanceInternal(clusterUrl string,
 	return genTransferToken(p.Result, masterId, topologyChange), nil
 }
 
-func genTransferToken(solution *Solution, masterId string, topologyChange service.TopologyChange) map[string]*TransferToken {
+func genTransferToken(solution *Solution, masterId string, topologyChange service.TopologyChange) map[string]*common.TransferToken {
 
-	tokens := make(map[string]*TransferToken)
+	tokens := make(map[string]*common.TransferToken)
 
 	for _, indexer := range solution.Placement {
 		for _, index := range indexer.Indexes {
 			if index.initialNode.NodeId != indexer.NodeId {
-				token := &TransferToken{
+				token := &common.TransferToken{
 					MasterId:  masterId,
 					SourceId:  index.initialNode.NodeUUID,
 					DestId:    indexer.NodeUUID,
 					RebalId:   topologyChange.ID,
-					State:     "TransferTokenCreated",
+					State:     common.TransferTokenCreated,
 					InstId:    index.InstId,
 					IndexInst: *index.Instance,
 				}
+
+				token.IndexInst.Defn.InstVersion++
 
 				ustr, _ := common.NewUUID()
 				ttid := fmt.Sprintf("TransferToken%s", ustr.Str())

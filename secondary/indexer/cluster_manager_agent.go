@@ -154,6 +154,9 @@ func (c *clustMgrAgent) handleSupvervisorCommands(cmd Message) {
 	case CLUST_MGR_SET_LOCAL:
 		c.handleSetLocalValue(cmd)
 
+	case CLUST_MGR_DEL_LOCAL:
+		c.handleDelLocalValue(cmd)
+
 	case CLUST_MGR_DEL_BUCKET:
 		c.handleDeleteBucket(cmd)
 
@@ -176,6 +179,8 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 	updatedState := common.INDEX_STATE_NIL
 	updatedStream := common.NIL_STREAM
 	updatedError := ""
+	//TODO is this ok?
+	updatedRState := common.REBAL_ACTIVE
 
 	for _, index := range indexList {
 		if updatedFields.state {
@@ -187,11 +192,14 @@ func (c *clustMgrAgent) handleUpdateTopologyForIndex(cmd Message) {
 		if updatedFields.err {
 			updatedError = index.Error
 		}
+		if updatedFields.rstate {
+			updatedRState = index.RState
+		}
 
 		updatedBuildTs := index.BuildTs
 
 		err := c.mgr.UpdateIndexInstance(index.Defn.Bucket, index.Defn.DefnId,
-			updatedState, updatedStream, updatedError, updatedBuildTs)
+			updatedState, updatedStream, updatedError, updatedBuildTs, updatedRState)
 		common.CrashOnError(err)
 	}
 
@@ -273,6 +281,22 @@ func (c *clustMgrAgent) handleSetLocalValue(cmd Message) {
 		mType: CLUST_MGR_SET_LOCAL,
 		key:   key,
 		value: val,
+		err:   err,
+	}
+
+}
+
+func (c *clustMgrAgent) handleDelLocalValue(cmd Message) {
+
+	key := cmd.(*MsgClustMgrLocal).GetKey()
+
+	logging.Infof("ClustMgr:handleDelLocalValue Key %v", key)
+
+	err := c.mgr.DeleteLocalValue(key)
+
+	c.supvCmdch <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_DEL_LOCAL,
+		key:   key,
 		err:   err,
 	}
 
@@ -371,6 +395,10 @@ func (meta *metaNotifier) OnIndexCreate(indexDefn *common.IndexDefn) error {
 		Defn:  *indexDefn,
 		State: common.INDEX_STATE_CREATED,
 		Pc:    pc,
+	}
+
+	if idxInst.Defn.InstVersion != 0 {
+		idxInst.RState = common.REBAL_PENDING
 	}
 
 	respCh := make(MsgChannel)

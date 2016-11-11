@@ -16,6 +16,7 @@ import (
 	"github.com/couchbase/cbauth"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
+	"github.com/couchbase/indexing/secondary/manager/client"
 	"io"
 	"math"
 	"net/http"
@@ -38,12 +39,15 @@ type RequestType string
 const (
 	CREATE RequestType = "create"
 	DROP   RequestType = "drop"
+	BUILD  RequestType = "build"
 )
 
 type IndexRequest struct {
-	Version uint64           `json:"version,omitempty"`
-	Type    RequestType      `json:"type,omitempty"`
-	Index   common.IndexDefn `json:"index,omitempty"`
+	Version  uint64                 `json:"version,omitempty"`
+	Type     RequestType            `json:"type,omitempty"`
+	Index    common.IndexDefn       `json:"index,omitempty"`
+	IndexIds client.IndexIdList     `json:indexIds,omitempty"`
+	Plan     map[string]interface{} `json:plan,omitempty"`
 }
 
 type IndexResponse struct {
@@ -150,6 +154,7 @@ func registerRequestHandler(mgr *IndexManager, clusterUrl string) {
 
 		http.HandleFunc("/createIndex", handlerContext.createIndexRequest)
 		http.HandleFunc("/dropIndex", handlerContext.dropIndexRequest)
+		http.HandleFunc("/buildIndex", handlerContext.buildIndexRequest)
 		http.HandleFunc("/getLocalIndexMetadata", handlerContext.handleLocalIndexMetadataRequest)
 		http.HandleFunc("/getIndexMetadata", handlerContext.handleIndexMetadataRequest)
 		http.HandleFunc("/restoreIndexMetadata", handlerContext.handleRestoreIndexMetadataRequest)
@@ -217,6 +222,30 @@ func (m *requestHandlerContext) dropIndexRequest(w http.ResponseWriter, r *http.
 	// call the index manager to handle the DDL
 	indexDefn := request.Index
 	if err := m.mgr.HandleDeleteIndexDDL(indexDefn.DefnId); err == nil {
+		// No error, return success
+		sendIndexResponse(w)
+	} else {
+		// report failure
+		sendIndexResponseWithError(http.StatusInternalServerError, w, fmt.Sprintf("%v", err))
+	}
+}
+
+func (m *requestHandlerContext) buildIndexRequest(w http.ResponseWriter, r *http.Request) {
+
+	if !doAuth(r, w, m.clusterUrl) {
+		return
+	}
+
+	// convert request
+	request := m.convertIndexRequest(r)
+	if request == nil {
+		sendIndexResponseWithError(http.StatusBadRequest, w, "Unable to convert request for build index")
+		return
+	}
+
+	// call the index manager to handle the DDL
+	indexIds := request.IndexIds
+	if err := m.mgr.HandleBuildIndexDDL(indexIds); err == nil {
 		// No error, return success
 		sendIndexResponse(w)
 	} else {
@@ -351,6 +380,12 @@ func (m *requestHandlerContext) getIndexStatus(cinfo *common.ClusterInfoCache, b
 							stateStr = "Building"
 						case common.INDEX_STATE_ACTIVE:
 							stateStr = "Ready"
+						}
+
+						rstate := topology.GetRStatusByDefn(defn.DefnId)
+
+						if rstate == common.REBAL_PENDING && state != common.INDEX_STATE_READY {
+							stateStr = "Replicating"
 						}
 
 						if indexerState, ok := stats.ToMap()["indexer_state"]; ok {

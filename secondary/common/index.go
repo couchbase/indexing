@@ -185,6 +185,9 @@ type IndexDefn struct {
 	Immutable       bool            `json:"immutable,omitempty"`
 	Nodes           []string        `json:"nodes,omitempty"`
 	IsArrayIndex    bool            `json:"isArrayIndex,omitempty"`
+
+	// transient field (not part of index metadata)
+	InstVersion int `json:"instanceVersion,omitempty"`
 }
 
 //IndexInst is an instance of an Index(aka replica)
@@ -192,10 +195,12 @@ type IndexInst struct {
 	InstId  IndexInstId
 	Defn    IndexDefn
 	State   IndexState
+	RState  RebalanceState
 	Stream  StreamId
 	Pc      PartitionContainer
 	Error   string
 	BuildTs []uint64
+	Version int
 }
 
 //IndexInstMap is a map from IndexInstanceId to IndexInstance
@@ -208,6 +213,7 @@ func (idx IndexDefn) String() string {
 	str += fmt.Sprintf("Using: %v ", idx.Using)
 	str += fmt.Sprintf("Bucket: %v ", idx.Bucket)
 	str += fmt.Sprintf("IsPrimary: %v ", idx.IsPrimary)
+	str += fmt.Sprintf("InstVersion: %v ", idx.InstVersion)
 	str += fmt.Sprintf("\n\t\tSecExprs: %v ", idx.SecExprs)
 	str += fmt.Sprintf("\n\t\tPartitionScheme: %v ", idx.PartitionScheme)
 	str += fmt.Sprintf("PartitionKey: %v ", idx.PartitionKey)
@@ -215,12 +221,36 @@ func (idx IndexDefn) String() string {
 	return str
 
 }
+
+// This function makes a copy of index definition, excluding any transient
+// field.  It is a shallow copy (e.g. does not clone field 'Nodes').
+func (idx IndexDefn) Clone() *IndexDefn {
+	return &IndexDefn{
+		DefnId:          idx.DefnId,
+		Name:            idx.Name,
+		Using:           idx.Using,
+		Bucket:          idx.Bucket,
+		BucketUUID:      idx.BucketUUID,
+		IsPrimary:       idx.IsPrimary,
+		SecExprs:        idx.SecExprs,
+		ExprType:        idx.ExprType,
+		PartitionScheme: idx.PartitionScheme,
+		PartitionKey:    idx.PartitionKey,
+		WhereExpr:       idx.WhereExpr,
+		Deferred:        idx.Deferred,
+		Immutable:       idx.Immutable,
+		Nodes:           idx.Nodes,
+		IsArrayIndex:    idx.IsArrayIndex,
+	}
+}
+
 func (idx IndexInst) String() string {
 
 	str := "\n"
 	str += fmt.Sprintf("\tInstId: %v\n", idx.InstId)
 	str += fmt.Sprintf("\tDefn: %v\n", idx.Defn)
 	str += fmt.Sprintf("\tState: %v\n", idx.State)
+	str += fmt.Sprintf("\tRState: %v\n", idx.RState)
 	str += fmt.Sprintf("\tStream: %v\n", idx.Stream)
 	str += fmt.Sprintf("\tPartitionContainer: %v", idx.Pc)
 	return str
@@ -254,6 +284,25 @@ func (s StreamId) String() string {
 	}
 }
 
+type RebalanceState int
+
+const (
+	REBAL_ACTIVE RebalanceState = iota
+	REBAL_PENDING
+)
+
+func (s RebalanceState) String() string {
+
+	switch s {
+	case REBAL_ACTIVE:
+		return "RebalActive"
+	case REBAL_PENDING:
+		return "RebalPending"
+	default:
+		return "Invalid"
+	}
+}
+
 func (idx IndexInstMap) String() string {
 
 	str := "\n"
@@ -263,6 +312,7 @@ func (idx IndexInstMap) String() string {
 		str += fmt.Sprintf("Bucket: %v ", index.Defn.Bucket)
 		str += fmt.Sprintf("State: %v ", index.State)
 		str += fmt.Sprintf("Stream: %v ", index.Stream)
+		str += fmt.Sprintf("RState: %v ", index.RState)
 		str += "\n"
 	}
 	return str

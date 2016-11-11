@@ -10,6 +10,12 @@ import "time"
 import "unsafe"
 import "sync/atomic"
 import "encoding/json"
+import "net/http"
+import "bytes"
+import "io/ioutil"
+import "io"
+
+import "github.com/couchbase/cbauth"
 
 import "github.com/couchbase/indexing/secondary/logging"
 import common "github.com/couchbase/indexing/secondary/common"
@@ -169,7 +175,7 @@ RETRY:
 
 // BuildIndexes implements BridgeAccessor{} interface.
 func (b *metadataClient) BuildIndexes(defnIDs []uint64) error {
-	_, ok := b.getNodes(defnIDs)
+	_, _, ok := b.getNodes(defnIDs)
 	if !ok {
 		return ErrorIndexNotFound
 	}
@@ -178,6 +184,42 @@ func (b *metadataClient) BuildIndexes(defnIDs []uint64) error {
 		ids[i] = common.IndexDefnId(id)
 	}
 	return b.mdClient.BuildIndexes(ids)
+}
+
+// MoveIndexes implements BridgeAccessor{} interface.
+func (b *metadataClient) MoveIndexes(defnIDs []uint64, planJSON map[string]interface{}) error {
+
+	_, httpPorts, ok := b.getNodes(defnIDs)
+	if !ok {
+		return ErrorIndexNotFound
+	}
+
+	idList := IndexIdList{DefnIds: defnIDs}
+	ir := IndexRequest{IndexIds: idList, Plan: planJSON}
+	body, err := json.Marshal(&ir)
+	if err != nil {
+		return err
+	}
+
+	bodybuf := bytes.NewBuffer(body)
+
+	url := "/moveIndex"
+	resp, err := postWithAuth(httpPorts[0]+url, "application/json", bodybuf)
+	defer resp.Body.Close()
+	if err != nil {
+		return err
+	}
+
+	response := new(IndexResponse)
+	bytes, _ := ioutil.ReadAll(resp.Body)
+	if err := json.Unmarshal(bytes, &response); err != nil {
+		return err
+	}
+	if response.Code == RESP_ERROR {
+		return errors.New(response.Error)
+	}
+
+	return nil
 }
 
 // DropIndex implements BridgeAccessor{} interface.
@@ -227,7 +269,7 @@ func (b *metadataClient) GetScanport(
 		return "", 0, false
 	}
 
-	_, qp, err := b.mdClient.FindServiceForIndex(common.IndexDefnId(targetDefnID))
+	_, qp, _, err := b.mdClient.FindServiceForIndex(common.IndexDefnId(targetDefnID))
 	if err != nil {
 		return "", 0, false
 	}
@@ -478,25 +520,27 @@ func (b *metadataClient) indexState(defnID uint64) (common.IndexState, error) {
 
 // getNodes return the set of nodes hosting the specified set
 // of indexes
-func (b *metadataClient) getNodes(defnIDs []uint64) ([]string, bool) {
+func (b *metadataClient) getNodes(defnIDs []uint64) ([]string, []string, bool) {
 	adminports := make([]string, 0)
+	httpports := make([]string, 0)
 	for _, defnID := range defnIDs {
-		adminport, ok := b.getNode(defnID)
+		adminport, httpport, ok := b.getNode(defnID)
 		if !ok {
-			return nil, false
+			return nil, nil, false
 		}
 		adminports = append(adminports, adminport)
+		httpports = append(httpports, httpport)
 	}
-	return adminports, true
+	return adminports, httpports, true
 }
 
 // getNode hosting index with `defnID`.
-func (b *metadataClient) getNode(defnID uint64) (adminport string, ok bool) {
-	aport, _, err := b.mdClient.FindServiceForIndex(common.IndexDefnId(defnID))
+func (b *metadataClient) getNode(defnID uint64) (adminport string, httpport string, ok bool) {
+	aport, _, hport, err := b.mdClient.FindServiceForIndex(common.IndexDefnId(defnID))
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
-	return aport, true
+	return aport, hport, true
 }
 
 // update 2i cluster information,
@@ -890,4 +934,25 @@ func (b *metadataClient) watchClusterChanges() {
 			return
 		}
 	}
+}
+
+func postWithAuth(url string, bodyType string, body io.Reader) (*http.Response, error) {
+
+	if !strings.HasPrefix(url, "http://") {
+		url = "http://" + url
+	}
+
+	req, err := http.NewRequest("POST", url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", bodyType)
+	err = cbauth.SetRequestAuthVia(req, nil)
+	if err != nil {
+		logging.Errorf("Error setting auth %v", err)
+		return nil, err
+	}
+
+	client := http.Client{Timeout: time.Duration(10 * time.Second)}
+	return client.Do(req)
 }

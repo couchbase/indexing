@@ -375,6 +375,8 @@ func (c *MetadataRepo) CreateIndex(defn *common.IndexDefn) error {
 			fmt.Sprintf("Index Definition '%s' already exists", defn.Name))
 	}
 
+	defn = (*defn).Clone()
+
 	// marshall the defn
 	data, err := common.MarshallIndexDefn(defn)
 	if err != nil {
@@ -931,8 +933,14 @@ func (m *MetadataRepo) addIndexToTopology(defn *common.IndexDefn, id common.Inde
 		return err
 	}
 
+	rState := uint32(common.REBAL_ACTIVE)
+	if defn.InstVersion != 0 {
+		rState = uint32(common.REBAL_PENDING)
+	}
+
 	topology.AddIndexDefinition(defn.Bucket, defn.Name, uint64(defn.DefnId),
-		uint64(id), uint32(common.INDEX_STATE_CREATED), string(indexerId))
+		uint64(id), uint32(common.INDEX_STATE_CREATED), string(indexerId),
+		uint64(defn.InstVersion), rState)
 
 	// Add a reference of the bucket-level topology to the global topology.
 	// If it fails later to create bucket-level topology, it will have

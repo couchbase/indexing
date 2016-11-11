@@ -12,6 +12,7 @@ package indexer
 import (
 	"bytes"
 	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
@@ -21,7 +22,7 @@ import (
 	"github.com/couchbase/indexing/secondary/memdb/mm"
 	"github.com/couchbase/indexing/secondary/memdb/nodetable"
 	projClient "github.com/couchbase/indexing/secondary/projector/client"
-	"math/rand"
+	//	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -29,7 +30,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"runtime/pprof"
-	"strconv"
+	//	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,7 @@ type indexer struct {
 	storageMgrCmdCh    MsgChannel //channel to send commands to storage manager
 	tkCmdCh            MsgChannel //channel to send commands to timekeeper
 	adminMgrCmdCh      MsgChannel //channel to send commands to admin port manager
+	rebalMgrCmdCh      MsgChannel //channel to send commands to rebalance manager
 	compactMgrCmdCh    MsgChannel //channel to send commands to compaction manager
 	clustMgrAgentCmdCh MsgChannel //channel to send messages to index coordinator
 	kvSenderCmdCh      MsgChannel //channel to send messages to kv sender
@@ -119,6 +121,7 @@ type indexer struct {
 	compactMgr    CompactionManager //handle to compaction manager
 	mutMgr        MutationManager   //handle to mutation manager
 	adminMgr      AdminManager      //handle to admin port manager
+	rebalMgr      RebalanceMgr      //handle to rebalance manager
 	clustMgrAgent ClustMgrAgent     //handle to ClustMgrAgent
 	kvSender      KVSender          //handle to KVSender
 	cbqBridge     CbqBridge         //handle to CbqBridge
@@ -134,6 +137,9 @@ type indexer struct {
 
 	enableManager bool
 	cpuProfFd     *os.File
+
+	rebalanceRunning bool
+	rebalanceToken   *RebalanceToken
 }
 
 type kvRequest struct {
@@ -158,6 +164,7 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 		storageMgrCmdCh:    make(MsgChannel),
 		tkCmdCh:            make(MsgChannel),
 		adminMgrCmdCh:      make(MsgChannel),
+		rebalMgrCmdCh:      make(MsgChannel),
 		compactMgrCmdCh:    make(MsgChannel),
 		clustMgrAgentCmdCh: make(MsgChannel),
 		kvSenderCmdCh:      make(MsgChannel),
@@ -322,6 +329,13 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	idx.adminMgr, res = NewAdminManager(idx.adminMgrCmdCh, idx.adminRecvCh)
 	if res.GetMsgType() != MSG_SUCCESS {
 		logging.Fatalf("Indexer::NewIndexer Admin Manager Init Error %+v", res)
+		return nil, res
+	}
+
+	//Start Rebalance Manager
+	idx.rebalMgr, res = NewRebalanceMgr(idx.rebalMgrCmdCh, idx.wrkrRecvCh, idx.config, idx.rebalanceRunning, idx.rebalanceToken)
+	if res.GetMsgType() != MSG_SUCCESS {
+		logging.Fatalf("Indexer::NewIndexer Rebalance Manager Init Error %+v", res)
 		return nil, res
 	}
 
@@ -777,6 +791,21 @@ func (idx *indexer) handleWorkerMsgs(msg Message) {
 	case INDEXER_RESUME:
 		idx.handleIndexerResume(msg)
 
+	case CLUST_MGR_SET_LOCAL:
+		idx.handleSetLocalMeta(msg)
+
+	case CLUST_MGR_GET_LOCAL:
+		idx.handleGetLocalMeta(msg)
+
+	case CLUST_MGR_DEL_LOCAL:
+		idx.handleDelLocalMeta(msg)
+
+	case INDEXER_CHECK_DDL_IN_PROGRESS:
+		idx.handleCheckDDLInProgress(msg)
+
+	case INDEXER_UPDATE_RSTATE:
+		idx.handleUpdateIndexRState(msg)
+
 	default:
 		logging.Fatalf("Indexer::handleWorkerMsgs Unknown Message %+v", msg)
 		common.CrashOnError(errors.New("Unknown Msg On Worker Channel"))
@@ -854,6 +883,8 @@ func (idx *indexer) handleConfigUpdate(msg Message) {
 	<-idx.mutMgrCmdCh
 	idx.statsMgrCmdCh <- msg
 	<-idx.statsMgrCmdCh
+	idx.rebalMgrCmdCh <- msg
+	<-idx.rebalMgrCmdCh
 	idx.updateSliceWithConfig(newConfig)
 
 }
@@ -926,6 +957,23 @@ func (idx *indexer) handleCreateIndex(msg Message) {
 
 		}
 		return
+	}
+
+	if (idx.rebalanceRunning || idx.rebalanceToken != nil) && (indexInst.Defn.InstVersion == 0) {
+
+		errStr := fmt.Sprintf("Indexer Cannot Process Create Index - Rebalance In Progress")
+		logging.Errorf("Indexer::handleCreateIndex %v", errStr)
+
+		if clientCh != nil {
+			clientCh <- &MsgError{
+				err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
+					severity: FATAL,
+					cause:    errors.New(errStr),
+					category: INDEXER}}
+
+		}
+		return
+
 	}
 
 	initState := idx.getStreamBucketState(common.INIT_STREAM, indexInst.Defn.Bucket)
@@ -1053,6 +1101,35 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		return
 	}
 
+	if idx.rebalanceRunning || idx.rebalanceToken != nil {
+
+		notClone := false
+		for _, instIdList := range instIdList {
+			index, ok := idx.indexInstMap[instIdList]
+			if ok {
+				if index.Defn.InstVersion == 0 {
+					notClone = true
+				}
+			}
+		}
+
+		if notClone {
+			errStr := fmt.Sprintf("Indexer Cannot Process Build Index - Rebalance In Progress")
+			logging.Errorf("Indexer::handleBuildIndex %v", errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+
+			}
+			return
+		}
+
+	}
+
 	bucketIndexList := idx.groupIndexListByBucket(instIdList)
 	errMap := make(map[common.IndexInstId]error)
 
@@ -1150,6 +1227,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		buildState = common.INDEX_STATE_INITIAL
 
 		idx.bulkUpdateState(instIdList, buildState)
+		idx.bulkUpdateRState(instIdList)
 
 		logging.Infof("Indexer::handleBuildIndex \n\tAdded Index: %v to Stream: %v State: %v",
 			instIdList, buildStream, buildState)
@@ -1181,7 +1259,7 @@ func (idx *indexer) handleBuildIndex(msg Message) {
 		//store updated state and streamId in meta store
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(instIdList, true,
-				true, false, true); err != nil {
+				true, false, true, true); err != nil {
 				common.CrashOnError(err)
 			}
 		} else {
@@ -1245,6 +1323,27 @@ func (idx *indexer) handleDropIndex(msg Message) {
 		}
 		return
 	}
+
+	//TODO needs to be revisited as InstVersion is not a deterministic version to check
+	//if the drop is coming from user or not
+	/*
+		if (idx.rebalanceRunning || idx.rebalanceToken != nil) && (indexInst.Defn.InstVersion == 0) {
+
+			errStr := fmt.Sprintf("Indexer Cannot Process Drop Index - Rebalance In Progress")
+			logging.Errorf("Indexer::handleDropIndex %v", errStr)
+
+			if clientCh != nil {
+				clientCh <- &MsgError{
+					err: Error{code: ERROR_INDEXER_REBALANCE_IN_PROGRESS,
+						severity: FATAL,
+						cause:    errors.New(errStr),
+						category: INDEXER}}
+
+			}
+			return
+
+		}
+	*/
 
 	idx.stats.RemoveIndex(indexInst.InstId)
 	//if the index state is Created/Ready/Deleted, only data cleanup is
@@ -1588,7 +1687,7 @@ func (idx *indexer) handleMergeStreamAck(msg Message) {
 				instIdList = append(instIdList, inst.InstId)
 			}
 
-			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false); err != nil {
+			if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -2126,6 +2225,7 @@ func (idx *indexer) distributeIndexMapsToWorkers(msgUpdateIndexInstMap Message,
 		"statsMgr"); err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -2279,6 +2379,44 @@ func (idx *indexer) checkDuplicateInitialBuildRequest(bucket string,
 	return true
 }
 
+func (idx *indexer) handleCheckDDLInProgress(msg Message) {
+
+	ddlMsg := msg.(*MsgCheckDDLInProgress)
+	respCh := ddlMsg.GetRespCh()
+
+	ddlInProgress := false
+	for _, index := range idx.indexInstMap {
+
+		if (index.State == common.INDEX_STATE_INITIAL ||
+			index.State == common.INDEX_STATE_CATCHUP) ||
+			idx.checkStreamRequestPending(common.INIT_STREAM, index.Defn.Bucket) {
+			ddlInProgress = true
+		}
+	}
+
+	respCh <- ddlInProgress
+
+	return
+}
+
+func (idx *indexer) handleUpdateIndexRState(msg Message) {
+
+	updateMsg := msg.(*MsgUpdateIndexRState)
+	respCh := updateMsg.GetRespCh()
+	instId := updateMsg.GetInstId()
+	rstate := updateMsg.GetRState()
+
+	inst := idx.indexInstMap[instId]
+	inst.RState = rstate
+	idx.indexInstMap[instId] = inst
+
+	if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{instId}, false, false, false, false, true); err != nil {
+		common.CrashOnError(err)
+	}
+
+	respCh <- true
+}
+
 //TODO If this function gets error before its finished, the state
 //can be inconsistent. This needs to be fixed.
 func (idx *indexer) handleInitialBuildDone(msg Message) {
@@ -2320,6 +2458,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 				index.State = common.INDEX_STATE_CATCHUP
 			} else {
 				index.State = common.INDEX_STATE_ACTIVE
+				index.RState = common.REBAL_ACTIVE
 			}
 			indexList = append(indexList, index)
 			instIdList = append(instIdList, index.InstId)
@@ -2345,7 +2484,7 @@ func (idx *indexer) handleInitialBuildDone(msg Message) {
 		common.CrashOnError(err)
 	}
 
-	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false); err != nil {
+	if err := idx.updateMetaInfoForIndexList(instIdList, true, true, false, false, true); err != nil {
 		common.CrashOnError(err)
 	}
 
@@ -2499,6 +2638,7 @@ func (idx *indexer) handleMergeInitStream(msg Message) {
 			index.State == common.INDEX_STATE_CATCHUP {
 
 			index.State = common.INDEX_STATE_ACTIVE
+			index.RState = common.REBAL_ACTIVE
 			index.Stream = common.MAINT_STREAM
 			indexList = append(indexList, index)
 			bucketUUIDList = append(bucketUUIDList, index.Defn.BucketUUID)
@@ -2995,6 +3135,8 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 	//close any old streams with projector
 	idx.closeAllStreams()
 
+	idx.recoverRebalanceState()
+
 	//recover indexes from local metadata
 	if err := idx.initFromPersistedState(); err != nil {
 		return err
@@ -3083,6 +3225,59 @@ func (idx *indexer) bootstrap(snapshotNotifych chan IndexSnapshot) error {
 	return nil
 }
 
+func (idx *indexer) recoverRebalanceState() {
+
+	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_GET_LOCAL,
+		key:   RebalanceRunning,
+	}
+
+	respMsg := <-idx.clustMgrAgentCmdCh
+	resp := respMsg.(*MsgClustMgrLocal)
+
+	val := resp.GetValue()
+	err := resp.GetError()
+
+	if err == nil {
+		idx.rebalanceRunning = true
+	} else if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+		idx.rebalanceRunning = false
+	} else {
+		logging.Fatalf("Indexer::recoverRebalanceState Error Fetching RebalanceRunning From Local "+
+			"Meta Storage. Err %v", err)
+		idx.rebalanceRunning = false
+	}
+
+	idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
+		mType: CLUST_MGR_GET_LOCAL,
+		key:   RebalanceTokenTag,
+	}
+
+	respMsg = <-idx.clustMgrAgentCmdCh
+	resp = respMsg.(*MsgClustMgrLocal)
+
+	val = resp.GetValue()
+	err = resp.GetError()
+
+	if err == nil {
+		var rebalToken RebalanceToken
+		err = json.Unmarshal([]byte(val), &rebalToken)
+		if err != nil {
+			logging.Errorf("Indexer::recoverRebalanceState Error Unmarshalling RebalanceToken %v", err)
+			common.CrashOnError(err)
+		}
+		idx.rebalanceToken = &rebalToken
+	} else if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
+		idx.rebalanceToken = nil
+	} else {
+		logging.Fatalf("Indexer::recoverRebalanceState Error Fetching RebalanceToken From Local "+
+			"Meta Storage. Err %v", err)
+		idx.rebalanceToken = nil
+	}
+
+	logging.Infof("Indexer::recoverRebalanceState RebalanceRunning %v RebalanceToken %v", idx.rebalanceRunning, idx.rebalanceToken)
+}
+
 func (idx *indexer) genIndexerId() {
 
 	if idx.enableManager {
@@ -3104,13 +3299,14 @@ func (idx *indexer) genIndexerId() {
 		} else if strings.Contains(err.Error(), forestdb.FDB_RESULT_KEY_NOT_FOUND.Error()) {
 			//if there is no IndexerId, generate and store in manager
 
-			id, err := common.NewUUID()
-			if err == nil {
-				idx.id = id.Str()
-			} else {
-				idx.id = strconv.Itoa(rand.Int())
-			}
+			//id, err := common.NewUUID()
+			//if err == nil {
+			//	idx.id = id.Str()
+			//} else {
+			//	idx.id = strconv.Itoa(rand.Int())
+			//}
 
+			idx.id = idx.config["nodeuuid"].String()
 			idx.clustMgrAgentCmdCh <- &MsgClustMgrLocal{
 				mType: CLUST_MGR_SET_LOCAL,
 				key:   INDEXER_ID_KEY,
@@ -3286,7 +3482,7 @@ func (idx *indexer) validateIndexInstMap() {
 					index.State = common.INDEX_STATE_READY
 					idx.indexInstMap[instId] = index
 
-					if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{index.InstId}, true, false, false, false); err != nil {
+					if err := idx.updateMetaInfoForIndexList([]common.IndexInstId{index.InstId}, true, false, false, false, true); err != nil {
 						common.CrashOnError(err)
 					}
 				}
@@ -3416,7 +3612,7 @@ func (idx *indexer) checkMissingMaintBucket() {
 
 		if idx.enableManager {
 			if err := idx.updateMetaInfoForIndexList(updatedList,
-				true, true, false, false); err != nil {
+				true, true, false, false, true); err != nil {
 				common.CrashOnError(err)
 			}
 		}
@@ -3571,7 +3767,8 @@ func (idx *indexer) checkStreamRequestPending(streamId common.StreamId, bucket s
 }
 
 func (idx *indexer) updateMetaInfoForBucket(bucket string,
-	updateState bool, updateStream bool, updateError bool) error {
+	updateState bool, updateStream bool, updateError bool,
+	updateRState bool) error {
 
 	var instIdList []common.IndexInstId
 	for _, inst := range idx.indexInstMap {
@@ -3582,7 +3779,7 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 
 	if len(instIdList) != 0 {
 		return idx.updateMetaInfoForIndexList(instIdList, updateState,
-			updateStream, updateError, false)
+			updateStream, updateError, false, updateRState)
 	} else {
 		return nil
 	}
@@ -3590,7 +3787,8 @@ func (idx *indexer) updateMetaInfoForBucket(bucket string,
 }
 
 func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
-	updateState bool, updateStream bool, updateError bool, updateBuildTs bool) error {
+	updateState bool, updateStream bool, updateError bool,
+	updateBuildTs bool, updateRState bool) error {
 
 	var indexList []common.IndexInst
 	for _, instId := range instIdList {
@@ -3602,6 +3800,7 @@ func (idx *indexer) updateMetaInfoForIndexList(instIdList []common.IndexInstId,
 		stream:  updateStream,
 		err:     updateError,
 		buildTs: updateBuildTs,
+		rstate:  updateRState,
 	}
 
 	msg := &MsgClustMgrUpdate{
@@ -3660,6 +3859,61 @@ func (idx *indexer) sendMsgToClusterMgr(msg Message) error {
 	return nil
 }
 
+func (idx *indexer) handleSetLocalMeta(msg Message) {
+
+	idx.clustMgrAgentCmdCh <- msg
+	respMsg := <-idx.clustMgrAgentCmdCh
+
+	key := msg.(*MsgClustMgrLocal).GetKey()
+	value := msg.(*MsgClustMgrLocal).GetValue()
+
+	respch := msg.(*MsgClustMgrLocal).GetRespCh()
+	err := respMsg.(*MsgClustMgrLocal).GetError()
+
+	if err == nil {
+		if key == RebalanceRunning {
+			idx.rebalanceRunning = true
+		} else if key == RebalanceTokenTag {
+			var rebalToken RebalanceToken
+			if err := json.Unmarshal([]byte(value), &rebalToken); err == nil {
+				idx.rebalanceToken = &rebalToken
+			}
+		}
+	}
+
+	respch <- respMsg
+}
+
+func (idx *indexer) handleGetLocalMeta(msg Message) {
+
+	idx.clustMgrAgentCmdCh <- msg
+	respMsg := <-idx.clustMgrAgentCmdCh
+	respch := msg.(*MsgClustMgrLocal).GetRespCh()
+	respch <- respMsg
+
+}
+
+func (idx *indexer) handleDelLocalMeta(msg Message) {
+
+	idx.clustMgrAgentCmdCh <- msg
+	respMsg := <-idx.clustMgrAgentCmdCh
+
+	key := msg.(*MsgClustMgrLocal).GetKey()
+
+	respch := msg.(*MsgClustMgrLocal).GetRespCh()
+	err := respMsg.(*MsgClustMgrLocal).GetError()
+
+	if err == nil {
+		if key == RebalanceRunning {
+			idx.rebalanceRunning = false
+		} else if key == RebalanceTokenTag {
+			idx.rebalanceToken = nil
+		}
+	}
+
+	respch <- respMsg
+}
+
 func (idx *indexer) bulkUpdateError(instIdList []common.IndexInstId,
 	errStr string) {
 
@@ -3677,6 +3931,19 @@ func (idx *indexer) bulkUpdateState(instIdList []common.IndexInstId,
 	for _, instId := range instIdList {
 		idxInst := idx.indexInstMap[instId]
 		idxInst.State = state
+		idx.indexInstMap[instId] = idxInst
+	}
+}
+
+func (idx *indexer) bulkUpdateRState(instIdList []common.IndexInstId) {
+
+	for _, instId := range instIdList {
+		idxInst := idx.indexInstMap[instId]
+		if idxInst.Defn.InstVersion != 0 {
+			idxInst.RState = common.REBAL_PENDING
+		} else {
+			idxInst.RState = common.REBAL_ACTIVE
+		}
 		idx.indexInstMap[instId] = idxInst
 	}
 }

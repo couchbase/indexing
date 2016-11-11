@@ -50,6 +50,7 @@ type topologyChange struct {
 	StreamId  uint32   `json:"steamId,omitempty"`
 	Error     string   `json:"error,omitempty"`
 	BuildTime []uint64 `json:"buildTime,omitempty"`
+	RState    uint32   `json:"rState,omitempty"`
 }
 
 func NewLifecycleMgr(addrProvider common.ServiceAddressProvider, notifier MetadataNotifier, clusterURL string) *LifecycleMgr {
@@ -465,11 +466,11 @@ func (m *LifecycleMgr) handleTopologyChange(content []byte) error {
 	}
 
 	return m.UpdateIndexInstance(change.Bucket, common.IndexDefnId(change.DefnId), common.IndexState(change.State),
-		common.StreamId(change.StreamId), change.Error, change.BuildTime)
+		common.StreamId(change.StreamId), change.Error, change.BuildTime, change.RState)
 }
 
 func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDefnId, state common.IndexState,
-	streamId common.StreamId, errStr string, buildTime []uint64) error {
+	streamId common.StreamId, errStr string, buildTime []uint64, rState uint32) error {
 
 	topology, err := m.repo.GetTopologyByBucket(bucket)
 	if err != nil {
@@ -477,7 +478,8 @@ func (m *LifecycleMgr) UpdateIndexInstance(bucket string, defnId common.IndexDef
 		return err
 	}
 
-	changed := false
+	changed := topology.UpdateRebalanceStateForIndexInstByDefn(common.IndexDefnId(defnId), common.RebalanceState(rState))
+
 	if state != common.INDEX_STATE_NIL {
 		changed = topology.UpdateStateForIndexInstByDefn(common.IndexDefnId(defnId), common.IndexState(state)) || changed
 	}
