@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/couchbase/indexing/secondary/dcp"
 	"github.com/couchbase/indexing/secondary/logging"
+	"strings"
 	"sync"
 	"time"
 )
@@ -62,7 +63,7 @@ func (instance *serviceNotifierInstance) getNotifyCallback(t NotificationType) f
 			select {
 			case w <- notifMsg:
 			case <-time.After(notifyWaitTimeout):
-				logging.Warnf("servicesChangeNotifier: Consumer for %v took too long to read notification, making the consumer invalid", instance.clusterUrl)
+				logging.Warnf("servicesChangeNotifier: Consumer for %v took too long to read notification, making the consumer invalid", instance.DebugStr())
 				close(w)
 				delete(instance.waiters, id)
 			}
@@ -77,7 +78,7 @@ func (instance *serviceNotifierInstance) RunPoolObserver() {
 	poolCallback := instance.getNotifyCallback(PoolChangeNotification)
 	err := instance.client.RunObservePool(instance.pool, poolCallback, nil)
 	if err != nil {
-		logging.Warnf("servicesChangeNotifier: Connection terminated for pool notifier instance of %s, %s (%v)", instance.clusterUrl, instance.pool, err)
+		logging.Warnf("servicesChangeNotifier: Connection terminated for pool notifier instance of %s, %s (%v)", instance.DebugStr(), instance.pool, err)
 	}
 	instance.cleanup()
 }
@@ -86,7 +87,7 @@ func (instance *serviceNotifierInstance) RunServicesObserver() {
 	servicesCallback := instance.getNotifyCallback(ServiceChangeNotification)
 	err := instance.client.RunObserveNodeServices(instance.pool, servicesCallback, nil)
 	if err != nil {
-		logging.Warnf("servicesChangeNotifier: Connection terminated for services notifier instance of %s, %s (%v)", instance.clusterUrl, instance.pool, err)
+		logging.Warnf("servicesChangeNotifier: Connection terminated for services notifier instance of %s, %s (%v)", instance.DebugStr(), instance.pool, err)
 	}
 	instance.cleanup()
 }
@@ -105,6 +106,16 @@ func (instance *serviceNotifierInstance) cleanup() {
 	}
 	delete(singletonServicesContainer.notifiers, instance.id)
 	singletonServicesContainer.Unlock()
+}
+
+func (instance *serviceNotifierInstance) DebugStr() string {
+	debugStr := instance.client.BaseURL.Scheme + "://"
+	cred := strings.Split(instance.client.BaseURL.User.String(), ":")
+	user := cred[0]
+	debugStr += user + "@"
+	debugStr += instance.client.BaseURL.Host
+	return debugStr
+
 }
 
 type Notification struct {
@@ -138,7 +149,6 @@ func NewServicesChangeNotifier(clusterUrl, pool string) (*ServicesChangeNotifier
 	id := clusterUrl + "-" + pool
 
 	if _, ok := singletonServicesContainer.notifiers[id]; !ok {
-		logging.Infof("servicesChangeNotifier: Creating new notifier instance for %s, %s", clusterUrl, pool)
 		client, err := couchbase.Connect(clusterUrl)
 		if err != nil {
 			return nil, err
@@ -151,6 +161,7 @@ func NewServicesChangeNotifier(clusterUrl, pool string) (*ServicesChangeNotifier
 			valid:      true,
 			waiters:    make(map[int]chan Notification),
 		}
+		logging.Infof("servicesChangeNotifier: Creating new notifier instance for %s, %s", instance.DebugStr(), pool)
 
 		singletonServicesContainer.notifiers[id] = instance
 		go instance.RunPoolObserver()
