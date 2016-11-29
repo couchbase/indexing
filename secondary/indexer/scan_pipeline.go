@@ -10,7 +10,9 @@
 package indexer
 
 import (
+	"bytes"
 	"errors"
+	"github.com/couchbase/indexing/secondary/collatejson"
 	c "github.com/couchbase/indexing/secondary/common"
 	p "github.com/couchbase/indexing/secondary/pipeline"
 )
@@ -88,44 +90,58 @@ func (s *IndexScanSource) Routine() error {
 	var err error
 	defer s.CloseWrite()
 
+	r := s.p.req
+	var currentSpan Span
+	buf := secKeyBufPool.Get()
+	r.keyBufList = append(r.keyBufList, buf)
+
 	fn := func(entry []byte) error {
-		s.p.rowsRead++
-		wrErr := s.WriteItem(entry)
-		if wrErr != nil {
-			return wrErr
+
+		skipRow := false
+		if currentSpan.SpanType == FilterRangeReq {
+			skipRow, err = filterScanRow(entry, currentSpan, (*buf)[:0])
+			if err != nil {
+				return err
+			}
 		}
 
-		if s.p.rowsRead == uint64(s.p.req.Limit) {
-			return ErrLimitReached
+		if !skipRow {
+			s.p.rowsRead++
+
+			wrErr := s.WriteItem(entry)
+			if wrErr != nil {
+				return wrErr
+			}
+
+			if s.p.rowsRead == uint64(s.p.req.Limit) {
+				return ErrLimitReached
+			}
 		}
 
 		return nil
 	}
 
-	r := s.p.req
-loop:
-	for _, snap := range GetSliceSnapshots(s.is) {
-		if r.ScanType == ScanAllReq {
-			err = snap.Snapshot().All(fn)
-		} else {
-			if len(r.Keys) > 0 {
-				for _, k := range r.Keys {
-					if err = snap.Snapshot().Lookup(k, fn); err != nil {
-						break
-					}
-				}
-			} else {
-				err = snap.Snapshot().Range(r.Low, r.High, r.Incl, fn)
-			}
-		}
+	sliceSnapshots := GetSliceSnapshots(s.is)
 
-		switch err {
-		case nil:
-		case p.ErrSupervisorKill, ErrLimitReached:
-			break loop
-		default:
-			s.CloseWithError(err)
-			break loop
+loop:
+	for _, span := range r.Spans {
+		currentSpan = span
+		for _, snap := range sliceSnapshots {
+			if span.SpanType == AllReq {
+				err = snap.Snapshot().All(fn)
+			} else if span.SpanType == LookupReq {
+				err = snap.Snapshot().Lookup(span.Equals, fn)
+			} else if span.SpanType == RangeReq || span.SpanType == FilterRangeReq {
+				err = snap.Snapshot().Range(span.Low, span.High, span.Incl, fn)
+			}
+			switch err {
+			case nil:
+			case p.ErrSupervisorKill, ErrLimitReached:
+				break loop
+			default:
+				s.CloseWithError(err)
+				break loop
+			}
 		}
 	}
 
@@ -241,4 +257,51 @@ func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
 	c.CrashOnError(err)
 	count := e.Count()
 	return sk, docid[len(sk):], count
+}
+
+// Return true if the row needs to be skipped based on the filter
+func filterScanRow(key []byte, span Span, buf []byte) (bool, error) {
+
+	// Filter composite indexes (Spock)
+	// The number of compositekeys >= number ranges in the span
+	// Compare each composite key if it belongs to its corresponding range
+	codec := collatejson.NewCodec(16)
+	compositekeys, err := codec.ExplodeArray(key, buf)
+	if err != nil {
+		return false, err
+	}
+
+	if len(span.Ranges) > len(compositekeys) {
+		// There cannot be more ranges than number of composite keys
+		err = errors.New("There are more ranges than number of composite elements in the index")
+		return false, err
+	}
+
+	for i, rng := range span.Ranges {
+		ck := compositekeys[i]
+
+		if rng.Inclusion == Neither {
+			// if ck > low and ck < high
+			if !(bytes.Compare(ck, rng.Low.Bytes()) > 0 && bytes.Compare(ck, rng.High.Bytes()) < 0) {
+				return true, nil
+			}
+		} else if rng.Inclusion == Low {
+			// if ck >= low and ck < high
+			if !(bytes.Compare(ck, rng.Low.Bytes()) >= 0 && bytes.Compare(ck, rng.High.Bytes()) < 0) {
+				return true, nil
+			}
+		} else if rng.Inclusion == High {
+			// if ck > low and ck <= high
+			if !(bytes.Compare(ck, rng.Low.Bytes()) > 0 && bytes.Compare(ck, rng.High.Bytes()) <= 0) {
+				return true, nil
+			}
+		} else if rng.Inclusion == Both {
+			// if ck >= low and ck <= high
+			if !(bytes.Compare(ck, rng.Low.Bytes()) >= 0 && bytes.Compare(ck, rng.High.Bytes()) <= 0) {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
 }

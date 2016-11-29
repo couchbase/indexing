@@ -56,13 +56,17 @@ message StatisticsResponse {
 
 // Scan request to indexer.
 message ScanRequest {
-    required uint64        defnID    = 1;
-    required Span          span      = 2;
-    required bool          distinct  = 3;
-    required int64         limit     = 4;
-    required uint32        cons      = 5;
-    optional TsConsistency vector    = 6;
-    optional string        requestId = 7;
+    required uint64        	defnID    		= 1;
+    required Span          	span      		= 2;
+    required bool          	distinct  		= 3;
+    required int64         	limit     		= 4;
+    required uint32        	cons      		= 5;
+    optional TsConsistency 	vector    		= 6;
+    optional string        	requestId 		= 7;
+    repeated NewSpan       	spans     		= 8;
+    optional IndexProjection  indexprojection	= 9;
+	optional bool				reverse			= 10;
+	optional int64				offset			= 11;
 }
 
 // Full table scan request from indexer.
@@ -114,6 +118,16 @@ message Range {
     optional bytes  low       = 1;
     optional bytes  high      = 2;
     required uint32 inclusion = 3;
+}
+
+message NewSpan {
+    repeated Range  ranges  = 1;
+    repeated bytes  equals = 2;
+}
+
+message IndexProjection {
+	repeated int64  EntryKeys     = 1;
+	optional bool   PrimaryKey    = 2;
 }
 
 message IndexEntry {

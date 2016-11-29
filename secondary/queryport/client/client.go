@@ -41,6 +41,24 @@ type Remoteaddr string
 // Inclusion specifier for range queries.
 type Inclusion uint32
 
+type Spans []*Span
+
+type Span struct {
+	Seek   common.SecondaryKey
+	Ranges []*Range
+}
+
+type Range struct {
+	Low       interface{}
+	High      interface{}
+	Inclusion Inclusion
+}
+
+type IndexProjection struct {
+	EntryKeys  []int64
+	PrimaryKey bool
+}
+
 const (
 	// Neither does not include low-key and high-key
 	Neither Inclusion = iota
@@ -163,6 +181,13 @@ type GsiAccessor interface {
 	// ScanAll for full table scan.
 	ScanAll(
 		defnID uint64, requestId string, limit int64,
+		cons common.Consistency, vector *TsConsistency,
+		callb ResponseHandler) error
+
+	// Scans for multiple scans with composite index filters
+	Scans(
+		defnID uint64, requestId string, spans Spans,
+		reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
 
@@ -519,6 +544,56 @@ func (c *GsiClient) ScanAll(
 	}
 
 	fmsg := "ScanAll {%v,%v} - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
+	return
+}
+
+func (c *GsiClient) Scans(
+	defnID uint64, requestId string, spans Spans, reverse,
+	distinct bool, projection *IndexProjection, offset, limit int64,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) (err error) {
+
+	if c.bridge == nil {
+		return ErrorClientUninitialized
+	}
+
+	// check whether the index is present and available.
+	if _, err = c.bridge.IndexState(defnID); err != nil {
+		protoResp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(protoResp)
+		return
+	}
+
+	begin := time.Now()
+
+	err = c.doScan(
+		defnID, requestId,
+		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+			var err error
+
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
+			if err != nil {
+				return err, false
+			}
+
+			// TODO: Handle RangePrimary
+
+			return qc.Scans(
+				uint64(index.DefnId), requestId, spans, reverse, distinct,
+				projection, offset, limit, cons, vector, callb)
+		})
+
+	if err != nil { // callback with error
+		resp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(resp)
+	}
+
+	fmsg := "Scans {%v,%v} - elapsed(%v) err(%v)"
 	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
 	return
 }

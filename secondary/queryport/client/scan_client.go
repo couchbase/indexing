@@ -380,6 +380,112 @@ func (c *GsiScanClient) ScanAll(
 	return err, partial
 }
 
+func (c *GsiScanClient) Scans(
+	defnID uint64, requestId string, spans Spans,
+	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) (error, bool) {
+
+	// serialize spans
+	protoSpans := make([]*protobuf.NewSpan, len(spans))
+	for i, span := range spans {
+		if span != nil {
+			var equals [][]byte
+			var ranges []*protobuf.Range
+
+			// If Seek is there, then do not marshall Range
+			if len(span.Seek) > 0 {
+				equals = make([][]byte, len(span.Seek))
+				for i, seek := range span.Seek {
+					s, err := json.Marshal(seek)
+					if err != nil {
+						return err, false
+					}
+					equals[i] = s
+				}
+			} else {
+				ranges = make([]*protobuf.Range, len(span.Ranges))
+				if span.Ranges != nil {
+					for j, r := range span.Ranges {
+						l, err := json.Marshal(r.Low)
+						if err != nil {
+							return err, false
+						}
+						h, err := json.Marshal(r.High)
+						if err != nil {
+							return err, false
+						}
+						rn := &protobuf.Range{
+							Low: l, High: h, Inclusion: proto.Uint32(uint32(r.Inclusion)),
+						}
+
+						ranges[j] = rn
+					}
+				}
+			}
+			s := &protobuf.NewSpan{
+				Ranges: ranges,
+				Equals: equals,
+			}
+			protoSpans[i] = s
+		}
+	}
+
+	//IndexProjection
+	protoProjection := &protobuf.IndexProjection{
+		EntryKeys:  projection.EntryKeys,
+		PrimaryKey: proto.Bool(projection.PrimaryKey),
+	}
+
+	connectn, err := c.pool.Get()
+	if err != nil {
+		return err, false
+	}
+	healthy := true
+	defer func() { c.pool.Return(connectn, healthy) }()
+
+	conn, pkt := connectn.conn, connectn.pkt
+
+	req := &protobuf.ScanRequest{
+		DefnID: proto.Uint64(defnID),
+		Span: &protobuf.Span{
+			Range: nil,
+		},
+		RequestId:       proto.String(requestId),
+		Distinct:        proto.Bool(distinct),
+		Limit:           proto.Int64(limit),
+		Cons:            proto.Uint32(uint32(cons)),
+		Spans:           protoSpans,
+		Indexprojection: protoProjection,
+		Reverse:         proto.Bool(reverse),
+		Offset:          proto.Int64(offset),
+	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
+	}
+	// ---> protobuf.ScanRequest
+	if err := c.sendRequest(conn, pkt, req); err != nil {
+		fmsg := "%v Range(%v) request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, err)
+		healthy = false
+		return err, false
+	}
+
+	cont, partial := true, false
+	for cont {
+		// <--- protobuf.ResponseStream
+		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
+		if err != nil { // if err, cont should have been set to false
+			fmsg := "%v Scans(%v) response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, requestId, err)
+		} else { // partial succeeded
+			partial = true
+		}
+	}
+	return err, partial
+}
+
 // CountLookup to count number entries for given set of keys.
 func (c *GsiScanClient) CountLookup(
 	defnID uint64, requestId string, values []common.SecondaryKey,

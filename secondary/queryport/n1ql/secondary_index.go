@@ -644,7 +644,7 @@ func (si *secondaryIndex) Drop(requestId string) errors.Error {
 	return nil
 }
 
-// Scan implement Index{} interface.
+// Scan implement old Index{} interface.
 func (si *secondaryIndex) Scan(
 	requestId string, span *datastore.Span, distinct bool, limit int64,
 	cons datastore.ScanConsistency, vector timestamp.Vector,
@@ -697,6 +697,56 @@ func (si *secondaryIndex) Scan(
 				requestId,
 				si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
 	}
+	atomic.AddInt64(&si.gsi.totalscans, 1)
+	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
+}
+
+// Scan implement NewIndex{} interface.
+func (si *secondaryIndex) NewScan(
+	requestId string, spans datastore.NewSpans, reverse, distinct bool,
+	projection *datastore.IndexProjection, offset, limit int64,
+	cons datastore.ScanConsistency, vector timestamp.Vector,
+	conn *datastore.IndexConnection) {
+
+	entryChannel := conn.EntryChannel()
+	var tmpfile *os.File
+	var backfillSync int64
+
+	syncCh := make(chan bool)
+
+	defer close(entryChannel)
+	defer func() { // cleanup tmpfile
+		if tmpfile != nil {
+			<-syncCh
+			tmpfile.Close()
+			name := tmpfile.Name()
+			fmsg := "%v Scan(%v) removing backfill file %v ...\n"
+			l.Infof(fmsg, si.gsi.logPrefix, requestId, name)
+			if err := os.Remove(name); err != nil {
+				fmsg := "%v remove backfill file %v unexpected failure: %v\n"
+				l.Errorf(fmsg, si.gsi.logPrefix, name, err)
+			}
+			atomic.AddInt64(&si.gsi.totalbackfills, 1)
+		}
+	}()
+	defer func() {
+		atomic.StoreInt64(&backfillSync, DONEREQUEST)
+	}()
+
+	starttm := time.Now()
+
+	client, cnf := si.gsi.gsiClient, si.gsi.config
+
+	gsispans := n1qlspanstogsi(spans)
+	gsiprojection := n1qlprojectiontogsi(projection)
+	client.Scans(
+		si.defnID, requestId, gsispans, reverse, distinct,
+		gsiprojection, offset, limit,
+		n1ql2GsiConsistency[cons], vector2ts(vector),
+		makeResponsehandler(
+			requestId,
+			si, client, conn, &tmpfile, &backfillSync, syncCh, cnf))
+
 	atomic.AddInt64(&si.gsi.totalscans, 1)
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 }
@@ -1209,4 +1259,40 @@ func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
 		}
 		atomic.StoreInt64(&gsi.backfillSize, size)
 	}
+}
+
+func n1qlspanstogsi(spans datastore.NewSpans) qclient.Spans {
+	sp := make(qclient.Spans, len(spans))
+	for i, s := range spans {
+		if len(s.Seek) > 0 {
+			sp[i].Seek = values2SKey(s.Seek)
+		} else {
+			sp[i].Ranges = n1qlrangestogsi(s.Ranges)
+		}
+	}
+	return sp
+}
+
+func n1qlrangestogsi(ranges []*datastore.NewRange) []*qclient.Range {
+	rn := make([]*qclient.Range, len(ranges))
+	for _, r := range ranges {
+		l := r.Low.Actual()
+		h := r.High.Actual()
+		incl := n1ql2GsiInclusion[r.Inclusion]
+		rng := &qclient.Range{Low: l, High: h, Inclusion: incl}
+		rn = append(rn, rng)
+	}
+	return rn
+}
+
+func n1qlprojectiontogsi(projection *datastore.IndexProjection) *qclient.IndexProjection {
+	entrykeys := make([]int64, len(projection.EntryKeys))
+	for _, key := range projection.EntryKeys {
+		entrykeys = append(entrykeys, int64(key))
+	}
+	proj := &qclient.IndexProjection{
+		EntryKeys:  entrykeys,
+		PrimaryKey: projection.PrimaryKey,
+	}
+	return proj
 }

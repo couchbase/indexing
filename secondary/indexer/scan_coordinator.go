@@ -12,6 +12,7 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
@@ -72,6 +73,12 @@ type ScanRequest struct {
 	Limit     int64
 	isPrimary bool
 
+	// New parameters for spock
+	Spans           []Span
+	Indexprojection *protobuf.IndexProjection
+	Reverse         bool
+	Offset          int64
+
 	ScanId      uint64
 	ExpiredTime time.Time
 	Timeout     *time.Timer
@@ -81,6 +88,35 @@ type ScanRequest struct {
 	LogPrefix string
 
 	keyBufList []*[]byte
+}
+
+type Span struct {
+	Low      IndexKey  // Overall Low for a Span. Computed from composite filters (Ranges)
+	High     IndexKey  // Overall High for a Span. Computed from composite filters (Ranges)
+	Incl     Inclusion // Overall Inclusion for a Span
+	SpanType SpanReqType
+	Ranges   []Range
+	Equals   IndexKey
+}
+
+type SpanReqType string
+
+// RangeReq is a span which is Range on the entire index
+// without composite index filtering
+// FilterRangeReq is a span request which needs composite
+// index filtering
+const (
+	AllReq         SpanReqType = "scanAll"
+	LookupReq                  = "lookup"
+	RangeReq                   = "range"       // Range with no filtering
+	FilterRangeReq             = "filterRange" // Range with filtering
+)
+
+// Range for a single field in composite index
+type Range struct {
+	Low       IndexKey
+	High      IndexKey
+	Inclusion Inclusion
 }
 
 func (r ScanRequest) String() string {
@@ -458,6 +494,184 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}
 	}
 
+	areRangesNil := func(protoSpan *protobuf.NewSpan) bool {
+		areRangesNil := true
+		for _, rng := range protoSpan.Ranges {
+			if !isNil(rng.Low) || !isNil(rng.High) {
+				areRangesNil = false
+				break
+			}
+		}
+		return areRangesNil
+	}
+
+	// Compute the overall low, high for a span
+	// based on composite filter ranges
+	fillSpanLowHigh := func(span *Span) error {
+		var lows, highs [][]byte
+		var l, h []byte
+		var e error
+		joinLowKey, joinHighKey := true, true
+
+		if span.Ranges[0].Low == MinIndexKey {
+			span.Low = MinIndexKey
+			joinLowKey = false
+		}
+		if span.Ranges[0].High == MaxIndexKey {
+			span.High = MaxIndexKey
+			joinHighKey = false
+		}
+
+		codec := collatejson.NewCodec(16)
+		if joinLowKey {
+			for _, r := range span.Ranges {
+				if r.Low == MinIndexKey {
+					break
+				}
+				lows = append(lows, r.Low.Bytes())
+			}
+			buf1 := secKeyBufPool.Get()
+			r.keyBufList = append(r.keyBufList, buf1)
+
+			if l, e = codec.JoinArray(lows, (*buf1)[:0]); e != nil {
+				e = fmt.Errorf("Error in forming low key %s", e)
+				return e
+			}
+			lowKey := secondaryKey(l)
+			span.Low = &lowKey
+		}
+		if joinHighKey {
+			for _, r := range span.Ranges {
+				if r.High == MaxIndexKey {
+					break
+				}
+				highs = append(highs, r.High.Bytes())
+			}
+			buf2 := secKeyBufPool.Get()
+			r.keyBufList = append(r.keyBufList, buf2)
+
+			if h, e = codec.JoinArray(highs, (*buf2)[:0]); e != nil {
+				e = fmt.Errorf("Error in forming high key %s", e)
+				return e
+			}
+
+			highKey := secondaryKey(h)
+			span.High = &highKey
+		}
+
+		// TODO: Calculate the right inclusion
+		// Right now using Both inclusion
+		return nil
+	}
+
+	fillSpanEquals := func(protoSpan *protobuf.NewSpan, span *Span) error {
+		var e error
+		equals := make([][]byte, len(protoSpan.Equals))
+		for _, k := range protoSpan.Equals {
+			var key IndexKey
+			if key, e = newKey(k); e != nil {
+				e = fmt.Errorf("Invalid equal key %s (%s)", string(k), e)
+				return e
+			}
+			equals = append(equals, key.Bytes())
+		}
+		codec := collatejson.NewCodec(16)
+		buf1 := secKeyBufPool.Get()
+		r.keyBufList = append(r.keyBufList, buf1)
+		var equalsKey []byte
+		if equalsKey, e = codec.JoinArray(equals, (*buf1)[:0]); e != nil {
+			e = fmt.Errorf("Error in forming equals key %s", e)
+			return e
+		}
+		eqKey := secondaryKey(equalsKey)
+		span.Equals = &eqKey
+		span.SpanType = LookupReq
+		return nil
+	}
+
+	fillSpans := func(protoSpans []*protobuf.NewSpan) {
+		var l, h IndexKey
+
+		var localErr error
+		defer func() {
+			if err == nil {
+				err = localErr
+			}
+		}()
+
+		// For Upgrade
+		if len(protoSpans) == 0 {
+			r.Spans = make([]Span, 1)
+			if len(r.Keys) > 0 {
+				r.Spans[0].Equals = r.Keys[0] //TODO fix for multiple Keys needed?
+				r.Spans[0].SpanType = LookupReq
+			} else {
+				r.Spans[0].Low = r.Low
+				r.Spans[0].High = r.High
+				r.Spans[0].Incl = r.Incl
+				r.Spans[0].SpanType = RangeReq
+			}
+			return
+		}
+
+		r.Spans = make([]Span, len(protoSpans))
+		for i, protoSpan := range protoSpans {
+
+			if len(protoSpan.Equals) != 0 {
+				//Encode the equals keys
+				if localErr = fillSpanEquals(protoSpan, &r.Spans[i]); localErr != nil {
+					return
+				}
+				continue
+			}
+
+			// If there are no ranges in span, it is ScanAll
+			if len(protoSpan.Ranges) == 0 {
+				r.Spans[i].SpanType = AllReq
+				continue
+			}
+
+			// if all span ranges are (nil, nil), it is ScanAll
+			if areRangesNil(protoSpan) {
+				r.Spans[i].SpanType = AllReq
+				continue
+			}
+
+			// Encode Ranges
+			for _, rng := range protoSpan.Ranges {
+				if l, localErr = newLowKey(rng.Low); localErr != nil {
+					localErr = fmt.Errorf("Invalid low key %s (%s)", string(rng.Low), localErr)
+					return
+				}
+
+				if h, localErr = newHighKey(rng.High); localErr != nil {
+					localErr = fmt.Errorf("Invalid high key %s (%s)", string(rng.High), localErr)
+					return
+				}
+
+				rangespan := Range{
+					Low:       l,
+					High:      h,
+					Inclusion: Inclusion(rng.GetInclusion()),
+				}
+				r.Spans[i].Ranges = append(r.Spans[i].Ranges, rangespan)
+			}
+
+			if localErr = fillSpanLowHigh(&r.Spans[i]); localErr != nil {
+				return
+			}
+
+			// if there is a single range, then do a range scan without filtering
+			if len(protoSpan.Ranges) == 1 {
+				r.Spans[i].SpanType = RangeReq
+				r.Spans[i].Incl = r.Spans[i].Ranges[0].Inclusion
+			} else {
+				r.Spans[i].SpanType = FilterRangeReq
+				r.Spans[i].Incl = Both
+			}
+		}
+	}
+
 	setConsistency := func(
 		cons common.Consistency, vector *protobuf.TsConsistency) {
 
@@ -559,7 +773,9 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.ScanType = ScanReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Limit = req.GetLimit()
-
+		r.Reverse = req.GetReverse()
+		r.Indexprojection = req.GetIndexprojection()
+		r.Offset = req.GetOffset()
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
 			return
@@ -571,6 +787,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
+		fillSpans(req.GetSpans())
+
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
@@ -578,6 +796,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		vector := req.GetVector()
 		r.ScanType = ScanAllReq
 		r.Limit = req.GetLimit()
+		r.Spans = make([]Span, 1)
+		r.Spans[0].SpanType = AllReq
 
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
