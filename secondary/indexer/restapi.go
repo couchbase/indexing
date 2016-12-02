@@ -139,6 +139,13 @@ func (api *restServer) handleIndex(
 				msg := `invalid method, expected GET`
 				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
 			}
+		} else if _, ok := q["multiscan"]; ok {
+			if request.Method == "GET" || request.Method == "POST" {
+				api.doMultiScan(w, request)
+			} else {
+				msg := `invalid method, expected GET`
+				http.Error(w, jsonstr(msg), http.StatusMethodNotAllowed)
+			}
 		} else if _, ok := q["scanall"]; ok {
 			if request.Method == "GET" || request.Method == "POST" {
 				api.doScanall(w, request)
@@ -644,6 +651,129 @@ func (api *restServer) doRange(w http.ResponseWriter, request *http.Request) {
 	}
 }
 
+//GET    /api/index/{id}?multiscan=true
+func (api *restServer) doMultiScan(w http.ResponseWriter, request *http.Request) {
+	index, errmsg := api.getIndex(request.URL.Path)
+	if errmsg != "" && strings.Contains(errmsg, "not found") {
+		http.Error(w, errmsg, http.StatusNotFound)
+		return
+	} else if errmsg != "" {
+		http.Error(w, errmsg, http.StatusBadRequest)
+		return
+	}
+
+	var params map[string]interface{}
+	var ts *qclient.TsConsistency
+	distinct, limit, offset, stale, reverse := false, int64(100), int64(0), "ok", false
+
+	bytes, err := ioutil.ReadAll(request.Body)
+	if err := json.Unmarshal(bytes, &params); err != nil {
+		msg := "invalid request body, unmarshal failed %v"
+		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+		return
+	}
+
+	value, ok := params["scans"]
+	if !ok {
+		msg := "missing field ``scans``"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
+	}
+	scansParam := []byte(value.(string))
+
+	value, ok = params["projection"]
+	if !ok {
+		msg := "missing field ``projection``"
+		http.Error(w, jsonstr(msg), http.StatusBadRequest)
+		return
+	}
+	projectionParam := []byte(value.(string))
+
+	if value, ok = params["reverse"]; ok && value != nil {
+		reverse = value.(bool)
+	}
+
+	if value, ok = params["stale"]; ok && value != nil {
+		stale = value.(string)
+	}
+
+	if value, ok = params["distinct"]; ok && value != nil {
+		distinct = value.(bool)
+	}
+
+	if value, ok = params["offset"]; ok && value != nil {
+		offset = int64(value.(float64))
+	}
+
+	if value, ok = params["limit"]; ok && value != nil {
+		limit = int64(value.(float64))
+	}
+
+	if value, ok = params["timestamp"]; stale == "partial" {
+		if !ok {
+			msg := `missing field timestamp for stale="partial"`
+			http.Error(w, jsonstr(msg), http.StatusBadRequest)
+			return
+		}
+		ts, err = vector2tsconsistency(value.(map[string][]string))
+		if err != nil {
+			msg := "invalid timestamp, ParseUint failed %v"
+			http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+			return
+		}
+	}
+
+	scans, err := getScans(scansParam)
+	if err != nil {
+		msg := "invalid scans: %v"
+		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+		return
+	}
+
+	projection, err := getProjection(projectionParam)
+	if err != nil {
+		msg := "invalid projection: %v"
+		http.Error(w, jsonstr(msg, err), http.StatusBadRequest)
+		return
+	}
+
+	cons := stale2consistency(stale)
+
+	var skeys []c.SecondaryKey
+	var pkeys [][]byte
+
+	w.WriteHeader(http.StatusOK)
+
+	err = nil
+	e := api.client.MultiScan(
+		uint64(index.Definition.DefnId), "", scans, reverse,
+		distinct, &projection, offset, limit,
+		cons, ts,
+		func(res qclient.ResponseReader) bool {
+			if err = res.Error(); err != nil {
+				return false
+			} else if skeys, pkeys, err = res.GetEntries(); err != nil {
+				return false
+			}
+			//nil means no more data
+			if skeys != nil {
+				data, err := api.makeEntries(skeys, pkeys)
+				if err != nil {
+					w.Write([]byte(api.makeError(err)))
+				}
+				w.Write([]byte(data))
+				w.(http.Flusher).Flush()
+			}
+			return true
+		})
+	if err == nil {
+		err = e
+	}
+	if err != nil {
+		w.Write([]byte(api.makeError(err)))
+	}
+}
+
 //GET    /api/index/{id}?scanall=true
 func (api *restServer) doScanall(w http.ResponseWriter, request *http.Request) {
 	index, errmsg := api.getIndex(request.URL.Path)
@@ -898,6 +1028,22 @@ func equal2Key(arg []byte) ([]interface{}, error) {
 		return nil, err
 	}
 	return key, nil
+}
+
+func getScans(arg []byte) (qclient.Scans, error) {
+	var scans qclient.Scans
+	if err := json.Unmarshal(arg, &scans); err != nil {
+		return nil, err
+	}
+	return scans, nil
+}
+
+func getProjection(arg []byte) (qclient.IndexProjection, error) {
+	var proj qclient.IndexProjection
+	if err := json.Unmarshal(arg, &proj); err != nil {
+		return proj, err
+	}
+	return proj, nil
 }
 
 var mstale2consistency = map[string]c.Consistency{
