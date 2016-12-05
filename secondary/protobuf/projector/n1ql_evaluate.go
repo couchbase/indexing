@@ -28,7 +28,7 @@ var missing = qvalue.NewValue(string(collatejson.MissingLiteral))
 // key as JSON object.
 // `meta` supplies a dictionary of,
 //      `id`, `byseqno`, `revseqno`, `flags`, `expiry`, `locktime`,
-//      `nru`
+//      `nru`, `cas`
 func N1QLTransform(
 	docid, doc []byte, cExprs []interface{},
 	meta map[string]interface{}, encodeBuf []byte) ([]byte, error) {
