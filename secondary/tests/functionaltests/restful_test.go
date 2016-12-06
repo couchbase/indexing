@@ -372,7 +372,7 @@ func restful_lookup(ids []string) error {
 			}
 			switch resval := result.(type) {
 			case []interface{}:
-				log.Printf("GOT CHUNK: %v\n", len(resval))
+				// log.Printf("GOT CHUNK: %v\n", len(resval))
 				entries = append(entries, resval...)
 			default:
 				err := fmt.Errorf("ERROR CHUNK: %v\n", result)
@@ -467,7 +467,7 @@ func restful_rangescan(ids []string) error {
 				err := fmt.Errorf("ERROR chunk: %v\n", result)
 				return nil, err
 			} else if result != nil {
-				log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
+				// log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
 				entries = append(entries, result.([]interface{})...)
 			} else {
 				break
@@ -594,7 +594,7 @@ func restful_fulltablescan(ids []string) error {
 				err := fmt.Errorf("ERROR chunk: %v\n", result)
 				return nil, err
 			} else if result != nil {
-				log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
+				// log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
 				entries = append(entries, result.([]interface{})...)
 			} else {
 				break
