@@ -41,14 +41,14 @@ type Remoteaddr string
 // Inclusion specifier for range queries.
 type Inclusion uint32
 
-type Spans []*Span
+type Scans []*Scan
 
-type Span struct {
+type Scan struct {
 	Seek   common.SecondaryKey
-	Ranges []*Range
+	Filter []*CompositeElementFilter
 }
 
-type Range struct {
+type CompositeElementFilter struct {
 	Low       interface{}
 	High      interface{}
 	Inclusion Inclusion
@@ -184,9 +184,9 @@ type GsiAccessor interface {
 		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
 
-	// Scans for multiple scans with composite index filters
-	Scans(
-		defnID uint64, requestId string, spans Spans,
+	// Multiple scans with composite index filters
+	MultiScan(
+		defnID uint64, requestId string, scans Scans,
 		reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
@@ -548,8 +548,8 @@ func (c *GsiClient) ScanAll(
 	return
 }
 
-func (c *GsiClient) Scans(
-	defnID uint64, requestId string, spans Spans, reverse,
+func (c *GsiClient) MultiScan(
+	defnID uint64, requestId string, scans Scans, reverse,
 	distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (err error) {
@@ -581,8 +581,8 @@ func (c *GsiClient) Scans(
 
 			// TODO: Handle RangePrimary
 
-			return qc.Scans(
-				uint64(index.DefnId), requestId, spans, reverse, distinct,
+			return qc.MultiScan(
+				uint64(index.DefnId), requestId, scans, reverse, distinct,
 				projection, offset, limit, cons, vector, callb)
 		})
 

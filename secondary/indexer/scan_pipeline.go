@@ -91,15 +91,15 @@ func (s *IndexScanSource) Routine() error {
 	defer s.CloseWrite()
 
 	r := s.p.req
-	var currentSpan Span
+	var currentScan Scan
 	buf := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, buf)
 
 	fn := func(entry []byte) error {
 
 		skipRow := false
-		if currentSpan.SpanType == FilterRangeReq {
-			skipRow, err = filterScanRow(entry, currentSpan, (*buf)[:0])
+		if currentScan.ScanType == FilterRangeReq {
+			skipRow, err = filterScanRow(entry, currentScan, (*buf)[:0])
 			if err != nil {
 				return err
 			}
@@ -124,15 +124,15 @@ func (s *IndexScanSource) Routine() error {
 	sliceSnapshots := GetSliceSnapshots(s.is)
 
 loop:
-	for _, span := range r.Spans {
-		currentSpan = span
+	for _, scan := range r.Scans {
+		currentScan = scan
 		for _, snap := range sliceSnapshots {
-			if span.SpanType == AllReq {
+			if scan.ScanType == AllReq {
 				err = snap.Snapshot().All(fn)
-			} else if span.SpanType == LookupReq {
-				err = snap.Snapshot().Lookup(span.Equals, fn)
-			} else if span.SpanType == RangeReq || span.SpanType == FilterRangeReq {
-				err = snap.Snapshot().Range(span.Low, span.High, span.Incl, fn)
+			} else if scan.ScanType == LookupReq {
+				err = snap.Snapshot().Lookup(scan.Equals, fn)
+			} else if scan.ScanType == RangeReq || scan.ScanType == FilterRangeReq {
+				err = snap.Snapshot().Range(scan.Low, scan.High, scan.Incl, fn)
 			}
 			switch err {
 			case nil:
@@ -260,7 +260,7 @@ func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
 }
 
 // Return true if the row needs to be skipped based on the filter
-func filterScanRow(key []byte, span Span, buf []byte) (bool, error) {
+func filterScanRow(key []byte, scan Scan, buf []byte) (bool, error) {
 
 	// Filter composite indexes (Spock)
 	// The number of compositekeys >= number ranges in the span
@@ -271,33 +271,33 @@ func filterScanRow(key []byte, span Span, buf []byte) (bool, error) {
 		return false, err
 	}
 
-	if len(span.Ranges) > len(compositekeys) {
+	if len(scan.Filters) > len(compositekeys) {
 		// There cannot be more ranges than number of composite keys
 		err = errors.New("There are more ranges than number of composite elements in the index")
 		return false, err
 	}
 
-	for i, rng := range span.Ranges {
+	for i, filter := range scan.Filters {
 		ck := compositekeys[i]
 
-		if rng.Inclusion == Neither {
+		if filter.Inclusion == Neither {
 			// if ck > low and ck < high
-			if !(bytes.Compare(ck, rng.Low.Bytes()) > 0 && bytes.Compare(ck, rng.High.Bytes()) < 0) {
+			if !(bytes.Compare(ck, filter.Low.Bytes()) > 0 && bytes.Compare(ck, filter.High.Bytes()) < 0) {
 				return true, nil
 			}
-		} else if rng.Inclusion == Low {
+		} else if filter.Inclusion == Low {
 			// if ck >= low and ck < high
-			if !(bytes.Compare(ck, rng.Low.Bytes()) >= 0 && bytes.Compare(ck, rng.High.Bytes()) < 0) {
+			if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0 && bytes.Compare(ck, filter.High.Bytes()) < 0) {
 				return true, nil
 			}
-		} else if rng.Inclusion == High {
+		} else if filter.Inclusion == High {
 			// if ck > low and ck <= high
-			if !(bytes.Compare(ck, rng.Low.Bytes()) > 0 && bytes.Compare(ck, rng.High.Bytes()) <= 0) {
+			if !(bytes.Compare(ck, filter.Low.Bytes()) > 0 && bytes.Compare(ck, filter.High.Bytes()) <= 0) {
 				return true, nil
 			}
-		} else if rng.Inclusion == Both {
+		} else if filter.Inclusion == Both {
 			// if ck >= low and ck <= high
-			if !(bytes.Compare(ck, rng.Low.Bytes()) >= 0 && bytes.Compare(ck, rng.High.Bytes()) <= 0) {
+			if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0 && bytes.Compare(ck, filter.High.Bytes()) <= 0) {
 				return true, nil
 			}
 		}

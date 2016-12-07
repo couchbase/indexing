@@ -737,10 +737,10 @@ func (si *secondaryIndex) NewScan(
 
 	client, cnf := si.gsi.gsiClient, si.gsi.config
 
-	gsispans := n1qlspanstogsi(spans)
+	gsiscans := n1qlspanstogsi(spans)
 	gsiprojection := n1qlprojectiontogsi(projection)
-	client.Scans(
-		si.defnID, requestId, gsispans, reverse, distinct,
+	client.MultiScan(
+		si.defnID, requestId, gsiscans, reverse, distinct,
 		gsiprojection, offset, limit,
 		n1ql2GsiConsistency[cons], vector2ts(vector),
 		makeResponsehandler(
@@ -1261,28 +1261,28 @@ func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
 	}
 }
 
-func n1qlspanstogsi(spans datastore.NewSpans) qclient.Spans {
-	sp := make(qclient.Spans, len(spans))
+func n1qlspanstogsi(spans datastore.NewSpans) qclient.Scans {
+	sc := make(qclient.Scans, len(spans))
 	for i, s := range spans {
 		if len(s.Seek) > 0 {
-			sp[i].Seek = values2SKey(s.Seek)
+			sc[i].Seek = values2SKey(s.Seek)
 		} else {
-			sp[i].Ranges = n1qlrangestogsi(s.Ranges)
+			sc[i].Filter = n1qlrangestogsi(s.Ranges)
 		}
 	}
-	return sp
+	return sc
 }
 
-func n1qlrangestogsi(ranges []*datastore.NewRange) []*qclient.Range {
-	rn := make([]*qclient.Range, len(ranges))
+func n1qlrangestogsi(ranges []*datastore.NewRange) []*qclient.CompositeElementFilter {
+	fl := make([]*qclient.CompositeElementFilter, len(ranges))
 	for _, r := range ranges {
 		l := r.Low.Actual()
 		h := r.High.Actual()
 		incl := n1ql2GsiInclusion[r.Inclusion]
-		rng := &qclient.Range{Low: l, High: h, Inclusion: incl}
-		rn = append(rn, rng)
+		filter := &qclient.CompositeElementFilter{Low: l, High: h, Inclusion: incl}
+		fl = append(fl, filter)
 	}
-	return rn
+	return fl
 }
 
 func n1qlprojectiontogsi(projection *datastore.IndexProjection) *qclient.IndexProjection {

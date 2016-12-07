@@ -25,7 +25,8 @@ It has these top-level messages:
 	CountResponse
 	Span
 	Range
-	NewSpan
+	CompositeElementFilter
+	Scan
 	IndexProjection
 	IndexEntry
 	IndexStatistics
@@ -305,7 +306,7 @@ type ScanRequest struct {
 	Cons             *uint32          `protobuf:"varint,5,req,name=cons" json:"cons,omitempty"`
 	Vector           *TsConsistency   `protobuf:"bytes,6,opt,name=vector" json:"vector,omitempty"`
 	RequestId        *string          `protobuf:"bytes,7,opt,name=requestId" json:"requestId,omitempty"`
-	Spans            []*NewSpan       `protobuf:"bytes,8,rep,name=spans" json:"spans,omitempty"`
+	Scans            []*Scan          `protobuf:"bytes,8,rep,name=scans" json:"scans,omitempty"`
 	Indexprojection  *IndexProjection `protobuf:"bytes,9,opt,name=indexprojection" json:"indexprojection,omitempty"`
 	Reverse          *bool            `protobuf:"varint,10,opt,name=reverse" json:"reverse,omitempty"`
 	Offset           *int64           `protobuf:"varint,11,opt,name=offset" json:"offset,omitempty"`
@@ -365,9 +366,9 @@ func (m *ScanRequest) GetRequestId() string {
 	return ""
 }
 
-func (m *ScanRequest) GetSpans() []*NewSpan {
+func (m *ScanRequest) GetScans() []*Scan {
 	if m != nil {
-		return m.Spans
+		return m.Scans
 	}
 	return nil
 }
@@ -622,24 +623,56 @@ func (m *Range) GetInclusion() uint32 {
 	return 0
 }
 
-type NewSpan struct {
-	Ranges           []*Range `protobuf:"bytes,1,rep,name=ranges" json:"ranges,omitempty"`
-	Equals           [][]byte `protobuf:"bytes,2,rep,name=equals" json:"equals,omitempty"`
-	XXX_unrecognized []byte   `json:"-"`
+type CompositeElementFilter struct {
+	Low              []byte  `protobuf:"bytes,1,opt,name=low" json:"low,omitempty"`
+	High             []byte  `protobuf:"bytes,2,opt,name=high" json:"high,omitempty"`
+	Inclusion        *uint32 `protobuf:"varint,3,req,name=inclusion" json:"inclusion,omitempty"`
+	XXX_unrecognized []byte  `json:"-"`
 }
 
-func (m *NewSpan) Reset()         { *m = NewSpan{} }
-func (m *NewSpan) String() string { return proto.CompactTextString(m) }
-func (*NewSpan) ProtoMessage()    {}
+func (m *CompositeElementFilter) Reset()         { *m = CompositeElementFilter{} }
+func (m *CompositeElementFilter) String() string { return proto.CompactTextString(m) }
+func (*CompositeElementFilter) ProtoMessage()    {}
 
-func (m *NewSpan) GetRanges() []*Range {
+func (m *CompositeElementFilter) GetLow() []byte {
 	if m != nil {
-		return m.Ranges
+		return m.Low
 	}
 	return nil
 }
 
-func (m *NewSpan) GetEquals() [][]byte {
+func (m *CompositeElementFilter) GetHigh() []byte {
+	if m != nil {
+		return m.High
+	}
+	return nil
+}
+
+func (m *CompositeElementFilter) GetInclusion() uint32 {
+	if m != nil && m.Inclusion != nil {
+		return *m.Inclusion
+	}
+	return 0
+}
+
+type Scan struct {
+	Filters          []*CompositeElementFilter `protobuf:"bytes,1,rep,name=filters" json:"filters,omitempty"`
+	Equals           [][]byte                  `protobuf:"bytes,2,rep,name=equals" json:"equals,omitempty"`
+	XXX_unrecognized []byte                    `json:"-"`
+}
+
+func (m *Scan) Reset()         { *m = Scan{} }
+func (m *Scan) String() string { return proto.CompactTextString(m) }
+func (*Scan) ProtoMessage()    {}
+
+func (m *Scan) GetFilters() []*CompositeElementFilter {
+	if m != nil {
+		return m.Filters
+	}
+	return nil
+}
+
+func (m *Scan) GetEquals() [][]byte {
 	if m != nil {
 		return m.Equals
 	}

@@ -380,23 +380,23 @@ func (c *GsiScanClient) ScanAll(
 	return err, partial
 }
 
-func (c *GsiScanClient) Scans(
-	defnID uint64, requestId string, spans Spans,
+func (c *GsiScanClient) MultiScan(
+	defnID uint64, requestId string, scans Scans,
 	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
 	cons common.Consistency, vector *TsConsistency,
 	callb ResponseHandler) (error, bool) {
 
-	// serialize spans
-	protoSpans := make([]*protobuf.NewSpan, len(spans))
-	for i, span := range spans {
-		if span != nil {
+	// serialize scans
+	protoScans := make([]*protobuf.Scan, len(scans))
+	for i, scan := range scans {
+		if scan != nil {
 			var equals [][]byte
-			var ranges []*protobuf.Range
+			var filters []*protobuf.CompositeElementFilter
 
 			// If Seek is there, then do not marshall Range
-			if len(span.Seek) > 0 {
-				equals = make([][]byte, len(span.Seek))
-				for i, seek := range span.Seek {
+			if len(scan.Seek) > 0 {
+				equals = make([][]byte, len(scan.Seek))
+				for i, seek := range scan.Seek {
 					s, err := json.Marshal(seek)
 					if err != nil {
 						return err, false
@@ -404,30 +404,30 @@ func (c *GsiScanClient) Scans(
 					equals[i] = s
 				}
 			} else {
-				ranges = make([]*protobuf.Range, len(span.Ranges))
-				if span.Ranges != nil {
-					for j, r := range span.Ranges {
-						l, err := json.Marshal(r.Low)
+				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
+				if scan.Filter != nil {
+					for j, f := range scan.Filter {
+						l, err := json.Marshal(f.Low)
 						if err != nil {
 							return err, false
 						}
-						h, err := json.Marshal(r.High)
+						h, err := json.Marshal(f.High)
 						if err != nil {
 							return err, false
 						}
-						rn := &protobuf.Range{
-							Low: l, High: h, Inclusion: proto.Uint32(uint32(r.Inclusion)),
+						fl := &protobuf.CompositeElementFilter{
+							Low: l, High: h, Inclusion: proto.Uint32(uint32(f.Inclusion)),
 						}
 
-						ranges[j] = rn
+						filters[j] = fl
 					}
 				}
 			}
-			s := &protobuf.NewSpan{
-				Ranges: ranges,
-				Equals: equals,
+			s := &protobuf.Scan{
+				Filters: filters,
+				Equals:  equals,
 			}
-			protoSpans[i] = s
+			protoScans[i] = s
 		}
 	}
 
@@ -455,7 +455,7 @@ func (c *GsiScanClient) Scans(
 		Distinct:        proto.Bool(distinct),
 		Limit:           proto.Int64(limit),
 		Cons:            proto.Uint32(uint32(cons)),
-		Spans:           protoSpans,
+		Scans:           protoScans,
 		Indexprojection: protoProjection,
 		Reverse:         proto.Bool(reverse),
 		Offset:          proto.Int64(offset),

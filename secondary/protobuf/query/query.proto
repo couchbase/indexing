@@ -63,7 +63,7 @@ message ScanRequest {
     required uint32        	cons      		= 5;
     optional TsConsistency 	vector    		= 6;
     optional string        	requestId 		= 7;
-    repeated NewSpan       	spans     		= 8;
+    repeated Scan        	scans 		        = 8;
     optional IndexProjection  indexprojection	= 9;
 	optional bool				reverse			= 10;
 	optional int64				offset			= 11;
@@ -120,9 +120,15 @@ message Range {
     required uint32 inclusion = 3;
 }
 
-message NewSpan {
-    repeated Range  ranges  = 1;
-    repeated bytes  equals = 2;
+message CompositeElementFilter {
+    optional bytes  low       = 1;
+    optional bytes  high      = 2;
+    required uint32 inclusion = 3;
+}
+
+message Scan {
+    repeated CompositeElementFilter  filters  = 1;
+    repeated bytes                   equals   = 2;
 }
 
 message IndexProjection {

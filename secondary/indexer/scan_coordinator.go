@@ -74,9 +74,10 @@ type ScanRequest struct {
 	isPrimary bool
 
 	// New parameters for spock
-	Spans           []Span
+	Scans           []Scan
 	Indexprojection *protobuf.IndexProjection
 	Reverse         bool
+	Distinct        bool
 	Offset          int64
 
 	ScanId      uint64
@@ -90,30 +91,30 @@ type ScanRequest struct {
 	keyBufList []*[]byte
 }
 
-type Span struct {
+type Scan struct {
 	Low      IndexKey  // Overall Low for a Span. Computed from composite filters (Ranges)
 	High     IndexKey  // Overall High for a Span. Computed from composite filters (Ranges)
 	Incl     Inclusion // Overall Inclusion for a Span
-	SpanType SpanReqType
-	Ranges   []Range
+	ScanType ScanFilterType
+	Filters  []CompositeElementFilter
 	Equals   IndexKey
 }
 
-type SpanReqType string
+type ScanFilterType string
 
 // RangeReq is a span which is Range on the entire index
 // without composite index filtering
 // FilterRangeReq is a span request which needs composite
 // index filtering
 const (
-	AllReq         SpanReqType = "scanAll"
-	LookupReq                  = "lookup"
-	RangeReq                   = "range"       // Range with no filtering
-	FilterRangeReq             = "filterRange" // Range with filtering
+	AllReq         ScanFilterType = "scanAll"
+	LookupReq                     = "lookup"
+	RangeReq                      = "range"       // Range with no filtering
+	FilterRangeReq                = "filterRange" // Range with filtering
 )
 
 // Range for a single field in composite index
-type Range struct {
+type CompositeElementFilter struct {
 	Low       IndexKey
 	High      IndexKey
 	Inclusion Inclusion
@@ -494,41 +495,41 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}
 	}
 
-	areRangesNil := func(protoSpan *protobuf.NewSpan) bool {
-		areRangesNil := true
-		for _, rng := range protoSpan.Ranges {
-			if !isNil(rng.Low) || !isNil(rng.High) {
-				areRangesNil = false
+	areFiltersNil := func(protoScan *protobuf.Scan) bool {
+		areFiltersNil := true
+		for _, filter := range protoScan.Filters {
+			if !isNil(filter.Low) || !isNil(filter.High) {
+				areFiltersNil = false
 				break
 			}
 		}
-		return areRangesNil
+		return areFiltersNil
 	}
 
-	// Compute the overall low, high for a span
+	// Compute the overall low, high for a scan
 	// based on composite filter ranges
-	fillSpanLowHigh := func(span *Span) error {
+	fillScanLowHigh := func(scan *Scan) error {
 		var lows, highs [][]byte
 		var l, h []byte
 		var e error
 		joinLowKey, joinHighKey := true, true
 
-		if span.Ranges[0].Low == MinIndexKey {
-			span.Low = MinIndexKey
+		if scan.Filters[0].Low == MinIndexKey {
+			scan.Low = MinIndexKey
 			joinLowKey = false
 		}
-		if span.Ranges[0].High == MaxIndexKey {
-			span.High = MaxIndexKey
+		if scan.Filters[0].High == MaxIndexKey {
+			scan.High = MaxIndexKey
 			joinHighKey = false
 		}
 
 		codec := collatejson.NewCodec(16)
 		if joinLowKey {
-			for _, r := range span.Ranges {
-				if r.Low == MinIndexKey {
+			for _, f := range scan.Filters {
+				if f.Low == MinIndexKey {
 					break
 				}
-				lows = append(lows, r.Low.Bytes())
+				lows = append(lows, f.Low.Bytes())
 			}
 			buf1 := secKeyBufPool.Get()
 			r.keyBufList = append(r.keyBufList, buf1)
@@ -538,14 +539,14 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 				return e
 			}
 			lowKey := secondaryKey(l)
-			span.Low = &lowKey
+			scan.Low = &lowKey
 		}
 		if joinHighKey {
-			for _, r := range span.Ranges {
-				if r.High == MaxIndexKey {
+			for _, f := range scan.Filters {
+				if f.High == MaxIndexKey {
 					break
 				}
-				highs = append(highs, r.High.Bytes())
+				highs = append(highs, f.High.Bytes())
 			}
 			buf2 := secKeyBufPool.Get()
 			r.keyBufList = append(r.keyBufList, buf2)
@@ -556,7 +557,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			}
 
 			highKey := secondaryKey(h)
-			span.High = &highKey
+			scan.High = &highKey
 		}
 
 		// TODO: Calculate the right inclusion
@@ -564,10 +565,10 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		return nil
 	}
 
-	fillSpanEquals := func(protoSpan *protobuf.NewSpan, span *Span) error {
+	fillScanEquals := func(protoScan *protobuf.Scan, scan *Scan) error {
 		var e error
-		equals := make([][]byte, len(protoSpan.Equals))
-		for _, k := range protoSpan.Equals {
+		equals := make([][]byte, len(protoScan.Equals))
+		for _, k := range protoScan.Equals {
 			var key IndexKey
 			if key, e = newKey(k); e != nil {
 				e = fmt.Errorf("Invalid equal key %s (%s)", string(k), e)
@@ -584,12 +585,12 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			return e
 		}
 		eqKey := secondaryKey(equalsKey)
-		span.Equals = &eqKey
-		span.SpanType = LookupReq
+		scan.Equals = &eqKey
+		scan.ScanType = LookupReq
 		return nil
 	}
 
-	fillSpans := func(protoSpans []*protobuf.NewSpan) {
+	fillScans := func(protoScans []*protobuf.Scan) {
 		var l, h IndexKey
 
 		var localErr error
@@ -600,74 +601,75 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}()
 
 		// For Upgrade
-		if len(protoSpans) == 0 {
-			r.Spans = make([]Span, 1)
+		if len(protoScans) == 0 {
+			r.Scans = make([]Scan, 1)
 			if len(r.Keys) > 0 {
-				r.Spans[0].Equals = r.Keys[0] //TODO fix for multiple Keys needed?
-				r.Spans[0].SpanType = LookupReq
+				r.Scans[0].Equals = r.Keys[0] //TODO fix for multiple Keys needed?
+				r.Scans[0].ScanType = LookupReq
 			} else {
-				r.Spans[0].Low = r.Low
-				r.Spans[0].High = r.High
-				r.Spans[0].Incl = r.Incl
-				r.Spans[0].SpanType = RangeReq
+				r.Scans[0].Low = r.Low
+				r.Scans[0].High = r.High
+				r.Scans[0].Incl = r.Incl
+				r.Scans[0].ScanType = RangeReq
 			}
 			return
 		}
 
-		r.Spans = make([]Span, len(protoSpans))
-		for i, protoSpan := range protoSpans {
+		r.Scans = make([]Scan, len(protoScans))
+		for i, protoScan := range protoScans {
 
-			if len(protoSpan.Equals) != 0 {
+			if len(protoScan.Equals) != 0 {
 				//Encode the equals keys
-				if localErr = fillSpanEquals(protoSpan, &r.Spans[i]); localErr != nil {
+				if localErr = fillScanEquals(protoScan, &r.Scans[i]); localErr != nil {
 					return
 				}
 				continue
 			}
 
-			// If there are no ranges in span, it is ScanAll
-			if len(protoSpan.Ranges) == 0 {
-				r.Spans[i].SpanType = AllReq
+			// If there are no filters in scan, it is ScanAll
+			if len(protoScan.Filters) == 0 {
+				r.Scans[i].ScanType = AllReq
 				continue
 			}
 
-			// if all span ranges are (nil, nil), it is ScanAll
-			if areRangesNil(protoSpan) {
-				r.Spans[i].SpanType = AllReq
+			// if all scan filters are (nil, nil), it is ScanAll
+			if areFiltersNil(protoScan) {
+				r.Scans[i].ScanType = AllReq
 				continue
 			}
 
-			// Encode Ranges
-			for _, rng := range protoSpan.Ranges {
-				if l, localErr = newLowKey(rng.Low); localErr != nil {
-					localErr = fmt.Errorf("Invalid low key %s (%s)", string(rng.Low), localErr)
+			// Encode Filters
+			for _, fl := range protoScan.Filters {
+				if l, localErr = newLowKey(fl.Low); localErr != nil {
+					localErr = fmt.Errorf("Invalid low key %s (%s)", string(fl.Low), localErr)
 					return
 				}
 
-				if h, localErr = newHighKey(rng.High); localErr != nil {
-					localErr = fmt.Errorf("Invalid high key %s (%s)", string(rng.High), localErr)
+				if h, localErr = newHighKey(fl.High); localErr != nil {
+					localErr = fmt.Errorf("Invalid high key %s (%s)", string(fl.High), localErr)
 					return
 				}
 
-				rangespan := Range{
+				filter := CompositeElementFilter{
 					Low:       l,
 					High:      h,
-					Inclusion: Inclusion(rng.GetInclusion()),
+					Inclusion: Inclusion(fl.GetInclusion()),
 				}
-				r.Spans[i].Ranges = append(r.Spans[i].Ranges, rangespan)
+				r.Scans[i].Filters = append(r.Scans[i].Filters, filter)
 			}
 
-			if localErr = fillSpanLowHigh(&r.Spans[i]); localErr != nil {
+			if localErr = fillScanLowHigh(&r.Scans[i]); localErr != nil {
 				return
 			}
 
-			// if there is a single range, then do a range scan without filtering
-			if len(protoSpan.Ranges) == 1 {
-				r.Spans[i].SpanType = RangeReq
-				r.Spans[i].Incl = r.Spans[i].Ranges[0].Inclusion
+			// if there is a single composite element filter,
+			// then do a range scan without filtering
+			if len(protoScan.Filters) == 1 {
+				r.Scans[i].ScanType = RangeReq
+				r.Scans[i].Incl = r.Scans[i].Filters[0].Inclusion
 			} else {
-				r.Spans[i].SpanType = FilterRangeReq
-				r.Spans[i].Incl = Both
+				r.Scans[i].ScanType = FilterRangeReq
+				r.Scans[i].Incl = Both
 			}
 		}
 	}
@@ -787,7 +789,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
-		fillSpans(req.GetSpans())
+		fillScans(req.GetScans())
 
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
@@ -796,8 +798,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		vector := req.GetVector()
 		r.ScanType = ScanAllReq
 		r.Limit = req.GetLimit()
-		r.Spans = make([]Span, 1)
-		r.Spans[0].SpanType = AllReq
+		r.Scans = make([]Scan, 1)
+		r.Scans[0].ScanType = AllReq
 
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
