@@ -261,47 +261,56 @@ func siSplitEntry(entry []byte, tmp []byte) ([]byte, []byte, int) {
 
 // Return true if the row needs to be skipped based on the filter
 func filterScanRow(key []byte, scan Scan, buf []byte) (bool, error) {
-
-	// Filter composite indexes (Spock)
-	// The number of compositekeys >= number ranges in the span
-	// Compare each composite key if it belongs to its corresponding range
 	codec := collatejson.NewCodec(16)
 	compositekeys, err := codec.ExplodeArray(key, buf)
 	if err != nil {
 		return false, err
 	}
 
-	if len(scan.Filters) > len(compositekeys) {
-		// There cannot be more ranges than number of composite keys
-		err = errors.New("There are more ranges than number of composite elements in the index")
-		return false, err
+	var filtermatch bool
+	for _, filtercollection := range scan.Filters {
+		if len(filtercollection.CompositeFilters) > len(compositekeys) {
+			// There cannot be more ranges than number of composite keys
+			err = errors.New("There are more ranges than number of composite elements in the index")
+			return false, err
+		}
+		filtermatch = applyFilter(compositekeys, filtercollection.CompositeFilters)
+		if filtermatch {
+			return false, nil
+		}
 	}
 
-	for i, filter := range scan.Filters {
-		ck := compositekeys[i]
+	return true, nil
+}
 
-		if filter.Inclusion == Neither {
+// Return true if filter matches the composite keys
+func applyFilter(compositekeys [][]byte, compositefilters []CompositeElementFilter) bool {
+
+	for i, filter := range compositefilters {
+		ck := compositekeys[i]
+		switch filter.Inclusion {
+		case Neither:
 			// if ck > low and ck < high
 			if !(bytes.Compare(ck, filter.Low.Bytes()) > 0 && bytes.Compare(ck, filter.High.Bytes()) < 0) {
-				return true, nil
+				return false
 			}
-		} else if filter.Inclusion == Low {
+		case Low:
 			// if ck >= low and ck < high
 			if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0 && bytes.Compare(ck, filter.High.Bytes()) < 0) {
-				return true, nil
+				return false
 			}
-		} else if filter.Inclusion == High {
+		case High:
 			// if ck > low and ck <= high
 			if !(bytes.Compare(ck, filter.Low.Bytes()) > 0 && bytes.Compare(ck, filter.High.Bytes()) <= 0) {
-				return true, nil
+				return false
 			}
-		} else if filter.Inclusion == Both {
+		case Both:
 			// if ck >= low and ck <= high
 			if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0 && bytes.Compare(ck, filter.High.Bytes()) <= 0) {
-				return true, nil
+				return false
 			}
 		}
 	}
 
-	return false, nil
+	return true
 }

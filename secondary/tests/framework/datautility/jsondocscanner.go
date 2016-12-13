@@ -1,7 +1,12 @@
 package datautility
 
 import (
+	"bytes"
+	"encoding/json"
+	c "github.com/couchbase/indexing/secondary/common"
+	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	tc "github.com/couchbase/indexing/secondary/tests/framework/common"
+	"log"
 	"reflect"
 	"sort"
 	"strings"
@@ -518,3 +523,145 @@ func ExpectedArrayScanResponse_string(docs tc.KeyValues, jsonPath string, low, h
 
 	return results
 }
+
+func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, scans qc.Scans, isScanAll bool) tc.ScanResponse {
+	results := make(tc.ScanResponse)
+	var json map[string]interface{}
+	var f string
+	var i int
+
+	for k, v := range docs {
+		var compositeValues []interface{}
+		for _, compositeFieldPath := range compositeFieldPaths {
+
+			fields := strings.Split(compositeFieldPath, ".")
+			// Access the nested field
+			json = v.(map[string]interface{})
+			for i = 0; i < len(fields)-1; i++ {
+				f = fields[i]
+				switch json[f].(type) {
+				case map[string]interface{}:
+					json = json[f].(map[string]interface{})
+				default:
+					break
+				}
+			}
+			compositeValues = append(compositeValues, json[fields[i]])
+		}
+
+		if isScanAll {
+			results[k] = compositeValues
+			continue
+		}
+
+		skipDoc := true
+		for _, scan := range scans {
+			if scan.Seek != nil { // Equals
+				if isEqual(scan.Seek, compositeValues) {
+					skipDoc = false
+					break
+				}
+			} else { // Composite filtering
+				if applyFilters(compositeValues, scan.Filter) {
+					skipDoc = false
+					break
+				}
+			}
+		}
+
+		if !skipDoc {
+			results[k] = compositeValues
+		}
+	}
+
+	return results
+}
+
+func isEqual(seek c.SecondaryKey, values []interface{}) bool {
+	for i, eqVal := range seek {
+		if eqVal != values[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func applyFilters(compositekeys []interface{}, compositefilters []*qc.CompositeElementFilter) bool {
+	var err error
+	var low, high, ck []byte
+	for i, filter := range compositefilters {
+		ck, err = json.Marshal(compositekeys[i])
+		if err != nil {
+			log.Printf("Error in marshalling value %v", compositekeys[i])
+			tc.HandleError(err, "Error in applyFilters")
+		}
+
+		low, err = json.Marshal(filter.Low)
+		if err != nil {
+			log.Printf("Error in low value %v", filter.Low)
+			tc.HandleError(err, "Error in applyFilters")
+		}
+
+		high, err = json.Marshal(filter.High)
+		if err != nil {
+			log.Printf("Error in low value %v", filter.High)
+			tc.HandleError(err, "Error in applyFilters")
+		}
+
+		switch filter.Inclusion {
+		case 0:
+			// if ck > low and ck < high
+			if !(bytes.Compare(ck, low) > 0 && bytes.Compare(ck, high) < 0) {
+				return false
+			}
+		case 1:
+			// if ck >= low and ck < high
+			if !(bytes.Compare(ck, low) >= 0 && bytes.Compare(ck, high) < 0) {
+				return false
+			}
+		case 2:
+			// if ck > low and ck <= high
+			if !(bytes.Compare(ck, low) > 0 && bytes.Compare(ck, high) <= 0) {
+				return false
+			}
+		case 3:
+			// if ck >= low and ck <= high
+			if !(bytes.Compare(ck, low) >= 0 && bytes.Compare(ck, high) <= 0) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+/*func applyFilter(compositekeys [][]byte, compositefilters []CompositeElementFilter) bool {
+
+	for i, filter := range compositefilters {
+		ck := compositekeys[i]
+		switch filter.Inclusion {
+		case Neither:
+			// if ck > low and ck < high
+			if !(bytes.Compare(ck, filter.Low.Bytes()) > 0 && bytes.Compare(ck, filter.High.Bytes()) < 0) {
+				return false
+			}
+		case Low:
+			// if ck >= low and ck < high
+			if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0 && bytes.Compare(ck, filter.High.Bytes()) < 0) {
+				return false
+			}
+		case High:
+			// if ck > low and ck <= high
+			if !(bytes.Compare(ck, filter.Low.Bytes()) > 0 && bytes.Compare(ck, filter.High.Bytes()) <= 0) {
+				return false
+			}
+		case Both:
+			// if ck >= low and ck <= high
+			if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0 && bytes.Compare(ck, filter.High.Bytes()) <= 0) {
+				return false
+			}
+		}
+	}
+
+	return true
+}*/
