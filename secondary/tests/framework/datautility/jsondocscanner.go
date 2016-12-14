@@ -524,11 +524,14 @@ func ExpectedArrayScanResponse_string(docs tc.KeyValues, jsonPath string, low, h
 	return results
 }
 
-func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, scans qc.Scans, isScanAll bool) tc.ScanResponse {
+func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, scans qc.Scans,
+	reverse, distinct bool, offset, limit int64, isScanAll bool) tc.ScanResponse {
+
 	results := make(tc.ScanResponse)
 	var json map[string]interface{}
 	var f string
 	var i int
+	offsetCount := int64(0)
 
 	for k, v := range docs {
 		var compositeValues []interface{}
@@ -550,7 +553,11 @@ func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, 
 		}
 
 		if isScanAll {
-			results[k] = compositeValues
+			if offsetCount >= offset {
+				results[k] = compositeValues
+			} else {
+				offsetCount++
+			}
 			continue
 		}
 
@@ -570,7 +577,11 @@ func ExpectedMultiScanResponse(docs tc.KeyValues, compositeFieldPaths []string, 
 		}
 
 		if !skipDoc {
-			results[k] = compositeValues
+			if offsetCount >= offset {
+				results[k] = compositeValues
+			} else {
+				offsetCount++
+			}
 		}
 	}
 

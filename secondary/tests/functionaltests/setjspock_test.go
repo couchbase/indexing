@@ -1,6 +1,8 @@
 package functionaltests
 
 import (
+	"errors"
+	"fmt"
 	c "github.com/couchbase/indexing/secondary/common"
 	qc "github.com/couchbase/indexing/secondary/queryport/client"
 	//tc "github.com/couchbase/indexing/secondary/tests/framework/common"
@@ -12,6 +14,8 @@ import (
 	"testing"
 	"time"
 )
+
+var offset int64
 
 func TestScansSetup(t *testing.T) {
 	log.Printf("In TestSpansSetup()")
@@ -45,45 +49,87 @@ func TestScansSetup(t *testing.T) {
 }
 
 func TestScansScenarios(t *testing.T) {
-	log.Printf("In TestSpans()")
+	log.Printf("In TestScansScenarios()")
 
 	log.Printf("\n\n--------- Composite Index with 2 fields ---------")
 
-	runMultiScan(getScanAllNoFilter(), true, "ScanAllNoFilter", t)
-	runMultiScan(getScanAllFilterNil(), true, "ScanAllFilterNil", t)
-	runMultiScan(getScanAll_AllFiltersNil(), true, "ScanAll_AllFiltersNil", t)
+	runMultiScan(getScanAllNoFilter(), true, true, 0, defaultlimit, true, false, "ScanAllNoFilter", t)
+	runMultiScan(getScanAllFilterNil(), true, true, 0, defaultlimit, true, false, "ScanAllFilterNil", t)
+	runMultiScan(getScanAll_AllFiltersNil(), true, true, 0, defaultlimit, true, false, "ScanAll_AllFiltersNil", t)
 
-	runMultiScan(getSingleSeek(), false, "SingleSeek", t)
-	runMultiScan(getMultipleSeek(), false, "MultipleSeek", t)
+	runMultiScan(getSingleSeek(), true, true, 0, defaultlimit, false, false, "SingleSeek", t)
+	runMultiScan(getMultipleSeek(), true, true, 0, defaultlimit, false, false, "MultipleSeek", t)
 
-	runMultiScan(getSimpleRange(), false, "SimpleRange", t)
-	runMultiScan(getNonOverlappingRanges(), false, "NonOverlappingRanges", t)
-	runMultiScan(getOverlappingRanges(), false, "OverlappingRanges", t)
+	runMultiScan(getSimpleRange(), true, true, 0, defaultlimit, false, false, "SimpleRange", t)
+	runMultiScan(getNonOverlappingRanges(), true, true, 0, defaultlimit, false, false, "NonOverlappingRanges", t)
+	runMultiScan(getOverlappingRanges(), true, true, 0, defaultlimit, false, false, "OverlappingRanges", t)
 
-	runMultiScan(getNonOverlappingFilters(), false, "NonOverlappingFilters", t)
-	runMultiScan(getOverlappingFilters(), false, "OverlappingFilters", t)
-	runMultiScan(getBoundaryFilters(), false, "BoundaryFilters", t)
+	runMultiScan(getNonOverlappingFilters(), true, true, 0, defaultlimit, false, false, "NonOverlappingFilters", t)
+	runMultiScan(getOverlappingFilters(), true, true, 0, defaultlimit, false, false, "OverlappingFilters", t)
+	runMultiScan(getBoundaryFilters(), true, true, 0, defaultlimit, false, false, "BoundaryFilters", t)
 
-	runMultiScan(getSeekAndFilters_NonOverlapping(), false, "SeekAndFilters_NonOverlapping", t)
-	runMultiScan(getSeekAndFilters_Overlapping(), false, "SeekAndFilters_Overlapping", t)
+	runMultiScan(getSeekAndFilters_NonOverlapping(), true, true, 0, defaultlimit, false, false, "SeekAndFilters_NonOverlapping", t)
+	runMultiScan(getSeekAndFilters_Overlapping(), true, true, 0, defaultlimit, false, false, "SeekAndFilters_Overlapping", t)
 
 	log.Printf("\n\n--------- Simple Index with 1 field ---------")
 	var index2 = "index_company"
 	fields := []string{"company"}
-	runMultiScanWithIndex(index2, fields, getSingleIndexSimpleRange(), false, "SingleIndexSimpleRange", t)
-	runMultiScanWithIndex(index2, fields, getSingleIndex_SimpleRanges_NonOverlapping(), false, "SingleIndex_SimpleRanges_NonOverlapping", t)
-	runMultiScanWithIndex(index2, fields, getSingleIndex_SimpleRanges_Overlapping(), false, "SingleIndex_SimpleRanges_Overlapping", t)
+	runMultiScanWithIndex(index2, fields, getSingleIndexSimpleRange(), true, true, 0, defaultlimit, false, false, "SingleIndexSimpleRange", t)
+	runMultiScanWithIndex(index2, fields, getSingleIndex_SimpleRanges_NonOverlapping(), true, true, 0, defaultlimit, false, false, "SingleIndex_SimpleRanges_NonOverlapping", t)
+	runMultiScanWithIndex(index2, fields, getSingleIndex_SimpleRanges_Overlapping(), true, true, 0, defaultlimit, false, false, "SingleIndex_SimpleRanges_Overlapping", t)
 
 	log.Printf("\n\n--------- Composite Index with 3 fields ---------")
 	var index3 = "index_company_name_age"
 	fields = []string{"company", "name", "age"}
-	runMultiScanWithIndex(index3, fields, getScanAllNoFilter(), true, "ScanAllNoFilter", t)
-	runMultiScanWithIndex(index3, fields, getScanAllFilterNil(), true, "ScanAllFilterNil", t)
-	runMultiScanWithIndex(index3, fields, getScanAll_AllFiltersNil(), true, "ScanAll_AllFiltersNil", t)
+	runMultiScanWithIndex(index3, fields, getScanAllNoFilter(), true, true, 0, defaultlimit, true, false, "ScanAllNoFilter", t)
+	runMultiScanWithIndex(index3, fields, getScanAllFilterNil(), true, true, 0, defaultlimit, true, false, "ScanAllFilterNil", t)
+	runMultiScanWithIndex(index3, fields, getScanAll_AllFiltersNil(), true, true, 0, defaultlimit, true, false, "ScanAll_AllFiltersNil", t)
 
-	runMultiScanWithIndex(index3, fields, get3FieldsSingleSeek(), false, "3FieldsSingleSeek", t)
-	runMultiScanWithIndex(index3, fields, get3FieldsMultipleSeeks(), false, "3FieldsMultipleSeeks", t)
-	runMultiScanWithIndex(index3, fields, get3FieldsMultipleSeeks_Identical(), false, "3FieldsMultipleSeeks_Identical", t)
+	runMultiScanWithIndex(index3, fields, get3FieldsSingleSeek(), true, true, 0, defaultlimit, false, false, "3FieldsSingleSeek", t)
+	runMultiScanWithIndex(index3, fields, get3FieldsMultipleSeeks(), true, true, 0, defaultlimit, false, false, "3FieldsMultipleSeeks", t)
+	runMultiScanWithIndex(index3, fields, get3FieldsMultipleSeeks_Identical(), true, true, 0, defaultlimit, false, false, "3FieldsMultipleSeeks_Identical", t)
+}
+
+func TestScansOffset(t *testing.T) {
+	log.Printf("In TestScansOffset()")
+
+	log.Printf("\n\n--------- Composite Index with 2 fields ---------")
+
+	runMultiScan(getScanAllNoFilter(), true, true, 8453, defaultlimit, true, true, "ScanAllNoFilter", t)
+	runMultiScan(getScanAllFilterNil(), true, true, 1, defaultlimit, true, true, "ScanAllFilterNil", t)
+	runMultiScan(getScanAll_AllFiltersNil(), true, true, 10002, defaultlimit, true, true, "ScanAll_AllFiltersNil", t)
+
+	runMultiScan(getSingleSeek(), true, true, 1, defaultlimit, false, true, "SingleSeek", t)
+	runMultiScan(getMultipleSeek(), true, true, 1, defaultlimit, false, true, "MultipleSeek", t)
+
+	runMultiScan(getSimpleRange(), true, true, 2273, defaultlimit, false, true, "SimpleRange", t)
+	runMultiScan(getNonOverlappingRanges(), true, true, 1111, defaultlimit, false, true, "NonOverlappingRanges", t)
+	runMultiScan(getOverlappingRanges(), true, true, 100, defaultlimit, false, true, "OverlappingRanges", t)
+
+	runMultiScan(getNonOverlappingFilters(), true, true, 340, defaultlimit, false, true, "NonOverlappingFilters", t)
+	runMultiScan(getOverlappingFilters(), true, true, 1213, defaultlimit, false, true, "OverlappingFilters", t)
+	runMultiScan(getBoundaryFilters(), true, true, 399, defaultlimit, false, true, "BoundaryFilters", t)
+
+	runMultiScan(getSeekAndFilters_NonOverlapping(), true, true, 121, defaultlimit, false, true, "SeekAndFilters_NonOverlapping", t)
+	runMultiScan(getSeekAndFilters_Overlapping(), true, true, 254, defaultlimit, false, true, "SeekAndFilters_Overlapping", t)
+
+	log.Printf("\n\n--------- Simple Index with 1 field ---------")
+	var index2 = "index_company"
+	fields := []string{"company"}
+	runMultiScanWithIndex(index2, fields, getSingleIndexSimpleRange(), true, true, 1273, defaultlimit, false, true, "SingleIndexSimpleRange", t)
+	runMultiScanWithIndex(index2, fields, getSingleIndex_SimpleRanges_NonOverlapping(), true, true, 140, defaultlimit, false, true, "SingleIndex_SimpleRanges_NonOverlapping", t)
+	runMultiScanWithIndex(index2, fields, getSingleIndex_SimpleRanges_Overlapping(), true, true, 6000, defaultlimit, false, true, "SingleIndex_SimpleRanges_Overlapping", t)
+
+	log.Printf("\n\n--------- Composite Index with 3 fields ---------")
+	var index3 = "index_company_name_age"
+	fields = []string{"company", "name", "age"}
+	runMultiScanWithIndex(index3, fields, getScanAllNoFilter(), true, true, 100000, defaultlimit, true, true, "ScanAllNoFilter", t)
+	runMultiScanWithIndex(index3, fields, getScanAllFilterNil(), true, true, 0, defaultlimit, true, true, "ScanAllFilterNil", t)
+	runMultiScanWithIndex(index3, fields, getScanAll_AllFiltersNil(), true, true, 1002, defaultlimit, true, true, "ScanAll_AllFiltersNil", t)
+
+	runMultiScanWithIndex(index3, fields, get3FieldsSingleSeek(), true, true, 0, defaultlimit, false, true, "3FieldsSingleSeek", t)
+	runMultiScanWithIndex(index3, fields, get3FieldsMultipleSeeks(), true, true, 1, defaultlimit, false, true, "3FieldsMultipleSeeks", t)
+	runMultiScanWithIndex(index3, fields, get3FieldsMultipleSeeks_Identical(), true, true, 1, defaultlimit, false, true, "3FieldsMultipleSeeks_Identical", t)
 }
 
 func SkipTestScansRestAPI(t *testing.T) {
@@ -121,28 +167,48 @@ func SkipTestScansRestAPI(t *testing.T) {
 	log.Printf("number of entries %v\n", len(entries))
 }
 
-func runMultiScan(scans qc.Scans, isScanAll bool, scenario string, t *testing.T) {
+func runMultiScan(scans qc.Scans, reverse, distinct bool, offset, limit int64,
+	isScanAll bool, validateOnlyCount bool, scenario string, t *testing.T) {
 	var indexName = "index_companyname"
 	var bucketName = "default"
 	log.Printf("\n--- %v ---", scenario)
 
-	docScanResults := datautility.ExpectedMultiScanResponse(docs, []string{"company", "name"}, scans, isScanAll)
-	scanResults, err := secondaryindex.Scans(indexName, bucketName, "127.0.0.1:9000", scans, true, true, 10, 100000000000, c.SessionConsistency, nil)
+	docScanResults := datautility.ExpectedMultiScanResponse(docs, []string{"company", "name"}, scans, reverse, distinct, offset, limit, isScanAll)
+	scanResults, err := secondaryindex.Scans(indexName, bucketName, "127.0.0.1:9000", scans, reverse, distinct, offset, limit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
+	if validateOnlyCount {
+		log.Printf("Validating only count")
+		if len(scanResults) != len(docScanResults) {
+			msg := fmt.Sprintf("Length of expected results %v is not equal to length of scan results", len(docScanResults), len(scanResults))
+			FailTestIfError(errors.New(msg), "Error in scan result validation", t)
+		}
+	} else {
+		log.Printf("Validating everything")
+		err = tv.Validate(docScanResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
 }
 
-func runMultiScanWithIndex(indexName string, fields []string, scans qc.Scans, isScanAll bool, scenario string, t *testing.T) {
+func runMultiScanWithIndex(indexName string, fields []string, scans qc.Scans,
+	reverse, distinct bool, offset, limit int64,
+	isScanAll bool, validateOnlyCount bool, scenario string, t *testing.T) {
 	var bucketName = "default"
 	log.Printf("\n--- %v ---", scenario)
 
-	docScanResults := datautility.ExpectedMultiScanResponse(docs, fields, scans, isScanAll)
-	scanResults, err := secondaryindex.Scans(indexName, bucketName, "127.0.0.1:9000", scans, true, true, 10, 100000000000, c.SessionConsistency, nil)
+	docScanResults := datautility.ExpectedMultiScanResponse(docs, fields, scans, reverse, distinct, offset, limit, isScanAll)
+	scanResults, err := secondaryindex.Scans(indexName, bucketName, "127.0.0.1:9000", scans, reverse, distinct, offset, limit, c.SessionConsistency, nil)
 	FailTestIfError(err, "Error in scan", t)
-	//tc.PrintScanResults(docScanResults, "docScanResults")
-	err = tv.Validate(docScanResults, scanResults)
-	FailTestIfError(err, "Error in scan result validation", t)
+	if validateOnlyCount {
+		log.Printf("Validating only count")
+		if len(scanResults) != len(docScanResults) {
+			msg := fmt.Sprintf("Length of expected results %v is not equal to length of scan results", len(docScanResults), len(scanResults))
+			FailTestIfError(errors.New(msg), "Error in scan result validation", t)
+		}
+	} else {
+		log.Printf("Validating everything")
+		err = tv.Validate(docScanResults, scanResults)
+		FailTestIfError(err, "Error in scan result validation", t)
+	}
 }
 
 func getScanAllNoFilter() qc.Scans {

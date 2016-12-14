@@ -26,8 +26,8 @@ type ScanPipeline struct {
 	object p.Pipeline
 	req    *ScanRequest
 
-	rowsRead  uint64
-	bytesRead uint64
+	rowsReturned uint64
+	bytesRead    uint64
 }
 
 func (p *ScanPipeline) Cancel(err error) {
@@ -38,8 +38,8 @@ func (p *ScanPipeline) Execute() error {
 	return p.object.Execute()
 }
 
-func (p ScanPipeline) RowsRead() uint64 {
-	return p.rowsRead
+func (p ScanPipeline) RowsReturned() uint64 {
+	return p.rowsReturned
 }
 
 func (p ScanPipeline) BytesRead() uint64 {
@@ -92,6 +92,7 @@ func (s *IndexScanSource) Routine() error {
 
 	r := s.p.req
 	var currentScan Scan
+	offset := int64(0)
 	buf := secKeyBufPool.Get()
 	r.keyBufList = append(r.keyBufList, buf)
 
@@ -106,16 +107,21 @@ func (s *IndexScanSource) Routine() error {
 		}
 
 		if !skipRow {
-			s.p.rowsRead++
+			if offset >= r.Offset {
+				s.p.rowsReturned++
 
-			wrErr := s.WriteItem(entry)
-			if wrErr != nil {
-				return wrErr
+				wrErr := s.WriteItem(entry)
+				if wrErr != nil {
+					return wrErr
+				}
+
+				if s.p.rowsReturned == uint64(s.p.req.Limit) {
+					return ErrLimitReached
+				}
+			} else {
+				offset++
 			}
 
-			if s.p.rowsRead == uint64(s.p.req.Limit) {
-				return ErrLimitReached
-			}
 		}
 
 		return nil

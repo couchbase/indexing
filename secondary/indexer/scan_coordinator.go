@@ -1200,7 +1200,7 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 	err := scanPipeline.Execute()
 	scanTime := time.Now().Sub(t0)
 
-	req.Stats.numRowsReturned.Add(int64(scanPipeline.RowsRead()))
+	req.Stats.numRowsReturned.Add(int64(scanPipeline.RowsReturned()))
 	req.Stats.scanBytesRead.Add(int64(scanPipeline.BytesRead()))
 	req.Stats.scanDuration.Add(scanTime.Nanoseconds())
 	req.Stats.scanWaitDuration.Add(waitTime.Nanoseconds())
@@ -1209,7 +1209,7 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 		status := fmt.Sprintf("(error = %s)", err)
 		logging.LazyVerbose(func() string {
 			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
-				req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status, req.RequestId)
+				req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status, req.RequestId)
 		})
 
 		if err == common.ErrClientCancel {
@@ -1219,7 +1219,7 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 		status := "ok"
 		logging.LazyVerbose(func() string {
 			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s",
-				req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status)
+				req.LogPrefix, scanPipeline.RowsReturned(), waitTime, scanTime, status)
 		})
 	}
 }
