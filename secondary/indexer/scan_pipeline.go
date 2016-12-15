@@ -288,26 +288,56 @@ func applyFilter(compositekeys [][]byte, compositefilters []CompositeElementFilt
 
 	for i, filter := range compositefilters {
 		ck := compositekeys[i]
+		checkLow := (filter.Low != MinIndexKey)
+		checkHigh := (filter.High != MaxIndexKey)
 		switch filter.Inclusion {
 		case Neither:
 			// if ck > low and ck < high
-			if !(bytes.Compare(ck, filter.Low.Bytes()) > 0 && bytes.Compare(ck, filter.High.Bytes()) < 0) {
-				return false
+			if checkLow {
+				if !(bytes.Compare(ck, filter.Low.Bytes()) > 0) {
+					return false
+				}
+			}
+			if checkHigh {
+				if !(bytes.Compare(ck, filter.High.Bytes()) < 0) {
+					return false
+				}
 			}
 		case Low:
 			// if ck >= low and ck < high
-			if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0 && bytes.Compare(ck, filter.High.Bytes()) < 0) {
-				return false
+			if checkLow {
+				if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0) {
+					return false
+				}
+			}
+			if checkHigh {
+				if !(bytes.Compare(ck, filter.High.Bytes()) < 0) {
+					return false
+				}
 			}
 		case High:
 			// if ck > low and ck <= high
-			if !(bytes.Compare(ck, filter.Low.Bytes()) > 0 && bytes.Compare(ck, filter.High.Bytes()) <= 0) {
-				return false
+			if checkLow {
+				if !(bytes.Compare(ck, filter.Low.Bytes()) > 0) {
+					return false
+				}
+			}
+			if checkHigh {
+				if !(bytes.Compare(ck, filter.High.Bytes()) <= 0) {
+					return false
+				}
 			}
 		case Both:
 			// if ck >= low and ck <= high
-			if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0 && bytes.Compare(ck, filter.High.Bytes()) <= 0) {
-				return false
+			if checkLow {
+				if !(bytes.Compare(ck, filter.Low.Bytes()) >= 0) {
+					return false
+				}
+			}
+			if checkHigh {
+				if !(bytes.Compare(ck, filter.High.Bytes()) <= 0) {
+					return false
+				}
 			}
 		}
 	}

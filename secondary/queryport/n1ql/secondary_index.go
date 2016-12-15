@@ -701,9 +701,9 @@ func (si *secondaryIndex) Scan(
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 }
 
-// Scan implement NewIndex{} interface.
-func (si *secondaryIndex) NewScan(
-	requestId string, spans datastore.NewSpans, reverse, distinct bool,
+// Scan implement Index2 interface.
+func (si *secondaryIndex) Scan2(
+	requestId string, spans datastore.Spans2, reverse, distinct bool,
 	projection *datastore.IndexProjection, offset, limit int64,
 	cons datastore.ScanConsistency, vector timestamp.Vector,
 	conn *datastore.IndexConnection) {
@@ -1261,7 +1261,7 @@ func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
 	}
 }
 
-func n1qlspanstogsi(spans datastore.NewSpans) qclient.Scans {
+func n1qlspanstogsi(spans datastore.Spans2) qclient.Scans {
 	sc := make(qclient.Scans, len(spans))
 	for i, s := range spans {
 		if len(s.Seek) > 0 {
@@ -1273,11 +1273,22 @@ func n1qlspanstogsi(spans datastore.NewSpans) qclient.Scans {
 	return sc
 }
 
-func n1qlrangestogsi(ranges []*datastore.NewRange) []*qclient.CompositeElementFilter {
+func n1qlrangestogsi(ranges []*datastore.Range2) []*qclient.CompositeElementFilter {
 	fl := make([]*qclient.CompositeElementFilter, len(ranges))
 	for _, r := range ranges {
-		l := r.Low.Actual()
-		h := r.High.Actual()
+		var l, h interface{}
+		if r.Low == nil {
+			l = c.MinUnbounded
+		} else {
+			l = r.Low.Actual()
+		}
+
+		if r.High == nil {
+			h = c.MaxUnbounded
+		} else {
+			h = r.High.Actual()
+		}
+
 		incl := n1ql2GsiInclusion[r.Inclusion]
 		filter := &qclient.CompositeElementFilter{Low: l, High: h, Inclusion: incl}
 		fl = append(fl, filter)

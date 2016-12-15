@@ -151,7 +151,19 @@ func (ip IndexPoints) Swap(i, j int) {
 	ip[i], ip[j] = ip[j], ip[i]
 }
 
+// TODO: Replace the below comparisons with
+// IndexKey to IndexKey comparison method
+// which needs to be added
 func (ip IndexPoints) Less(i, j int) bool {
+	if ip[i].Value == MinIndexKey {
+		return true
+	} else if ip[i].Value == MaxIndexKey {
+		return false
+	} else if ip[j].Value == MinIndexKey {
+		return false
+	} else if ip[j].Value == MaxIndexKey {
+		return true
+	}
 	return (bytes.Compare(ip[i].Value.Bytes(), ip[j].Value.Bytes()) < 0)
 }
 

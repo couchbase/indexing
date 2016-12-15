@@ -20,6 +20,8 @@ type restServer struct {
 	config  c.Config
 }
 
+const UnboundedLiteral = "~[]{}UnboundedTruenilNA~"
+
 func NewRestServer(cluster string) (*restServer, Message) {
 	log.Infof("%v starting RESTful services", cluster)
 
@@ -1034,6 +1036,16 @@ func getScans(arg []byte) (qclient.Scans, error) {
 	var scans qclient.Scans
 	if err := json.Unmarshal(arg, &scans); err != nil {
 		return nil, err
+	}
+	for _, sc := range scans {
+		for _, filter := range sc.Filter {
+			if filter.Low == UnboundedLiteral {
+				filter.Low = c.MinUnbounded
+			}
+			if filter.High == UnboundedLiteral {
+				filter.High = c.MaxUnbounded
+			}
+		}
 	}
 	return scans, nil
 }

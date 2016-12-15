@@ -407,14 +407,21 @@ func (c *GsiScanClient) MultiScan(
 				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
 				if scan.Filter != nil {
 					for j, f := range scan.Filter {
-						l, err := json.Marshal(f.Low)
-						if err != nil {
-							return err, false
+						var l, h []byte
+						var err error
+						if f.Low != common.MinUnbounded { // Do not encode if unbounded
+							l, err = json.Marshal(f.Low)
+							if err != nil {
+								return err, false
+							}
 						}
-						h, err := json.Marshal(f.High)
-						if err != nil {
-							return err, false
+						if f.High != common.MaxUnbounded { // Do not encode if unbounded
+							h, err = json.Marshal(f.High)
+							if err != nil {
+								return err, false
+							}
 						}
+
 						fl := &protobuf.CompositeElementFilter{
 							Low: l, High: h, Inclusion: proto.Uint32(uint32(f.Inclusion)),
 						}
