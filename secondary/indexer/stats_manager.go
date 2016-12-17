@@ -34,6 +34,7 @@ type BucketStats struct {
 	bucket     string
 	indexCount int
 
+	numRollbacks       stats.Int64Val
 	mutationQueueSize  stats.Int64Val
 	numMutationsQueued stats.Int64Val
 
@@ -42,6 +43,7 @@ type BucketStats struct {
 }
 
 func (s *BucketStats) Init() {
+	s.numRollbacks.Init()
 	s.mutationQueueSize.Init()
 	s.numMutationsQueued.Init()
 	s.tsQueueSize.Init()
@@ -361,6 +363,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 
 	for _, s := range is.buckets {
 		prefix = fmt.Sprintf("%s:", s.bucket)
+		addStat("num_rollbacks", s.numRollbacks.Value())
 		addStat("mutation_queue_size", s.mutationQueueSize.Value())
 		addStat("num_mutations_queued", s.numMutationsQueued.Value())
 		addStat("ts_queue_size", s.tsQueueSize.Value())
