@@ -301,14 +301,14 @@ func plan(config *RunConfig, plan *Plan, indexes []*IndexUsage) (*SAPlanner, *Ru
 
 	// update runtime stats
 	s := &RunStats{}
-	setIndexPlacementStats(s, indexes)
+	setIndexPlacementStats(s, indexes, false)
 
 	// create a solution
 	if plan != nil {
 		// create a solution from plan
 		var movedIndex, movedData uint64
 		solution, constraint, initialIndexes, movedIndex, movedData = solutionFromPlan(CommandPlan, config, sizing, plan)
-		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, movedIndex, movedData)
+		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, movedIndex, movedData, false)
 
 	} else {
 		// create an empty solution
@@ -378,13 +378,13 @@ func rebalance(config *RunConfig, plan *Plan, indexes []*IndexUsage, deletedNode
 		// create an initial solution from plan
 		var movedIndex, movedData uint64
 		solution, constraint, initialIndexes, movedIndex, movedData = solutionFromPlan(CommandRebalance, config, sizing, plan)
-		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, movedIndex, movedData)
+		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, movedIndex, movedData, true)
 
 	} else {
 		// create an initial solution
 		initialIndexes = indexes
 		solution, constraint = initialSolution(config, sizing, initialIndexes)
-		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, 0, 0)
+		setInitialLayoutStats(s, config, constraint, solution, initialIndexes, 0, 0, false)
 	}
 
 	// change topology before rebalancing
@@ -521,7 +521,7 @@ func DefaultRunConfig() *RunConfig {
 // Indexer Nodes Generation
 /////////////////////////////////////////////////////////////
 
-func indexerNodes(constraint ConstraintMethod, indexes []*IndexUsage, sizing SizingMethod, isLive bool) []*IndexerNode {
+func indexerNodes(constraint ConstraintMethod, indexes []*IndexUsage, sizing SizingMethod, useLive bool) []*IndexerNode {
 
 	rs := rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -529,22 +529,22 @@ func indexerNodes(constraint ConstraintMethod, indexes []*IndexUsage, sizing Siz
 
 	total := uint64(0)
 	for _, index := range indexes {
-		total += index.GetMemTotal()
+		total += index.GetMemTotal(useLive)
 	}
 
 	numOfIndexers := int(total / quota)
 	var indexers []*IndexerNode
 	for i := 0; i < numOfIndexers; i++ {
 		nodeId := strconv.FormatUint(uint64(rs.Uint32()), 10)
-		indexers = append(indexers, newIndexerNode(nodeId, sizing, isLive))
+		indexers = append(indexers, newIndexerNode(nodeId, sizing))
 	}
 
 	return indexers
 }
 
-func indexerNode(rs *rand.Rand, prefix string, sizing SizingMethod, isLive bool) *IndexerNode {
+func indexerNode(rs *rand.Rand, prefix string, sizing SizingMethod) *IndexerNode {
 	nodeId := strconv.FormatUint(uint64(rs.Uint32()), 10)
-	return newIndexerNode(prefix+nodeId, sizing, isLive)
+	return newIndexerNode(prefix+nodeId, sizing)
 }
 
 //////////////////////////////////////////////////////////////
@@ -560,13 +560,13 @@ func initialSolution(config *RunConfig,
 	maxCpuUse := config.MaxCpuUse
 	maxMemUse := config.MaxMemUse
 
-	memQuota, cpuQuota := computeQuota(config, sizing, indexes)
+	memQuota, cpuQuota := computeQuota(config, sizing, indexes, false)
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
 	indexers := indexerNodes(constraint, indexes, sizing, false)
 
-	r := newSolution(constraint, sizing, indexers, false)
+	r := newSolution(constraint, sizing, indexers, false, false)
 
 	placement := newRandomPlacement(indexes, config.AllowSwap)
 	placement.InitialPlace(r, indexes)
@@ -583,11 +583,11 @@ func emptySolution(config *RunConfig,
 	maxCpuUse := config.MaxCpuUse
 	maxMemUse := config.MaxMemUse
 
-	memQuota, cpuQuota := computeQuota(config, sizing, indexes)
+	memQuota, cpuQuota := computeQuota(config, sizing, indexes, false)
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, ([]*IndexerNode)(nil), false)
+	r := newSolution(constraint, sizing, ([]*IndexerNode)(nil), false, false)
 
 	return r, constraint
 }
@@ -615,9 +615,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 		}
 	}
 
-	setCommandInIndexers(command, plan.Placement)
-
-	memQuota, cpuQuota := computeQuota(config, sizing, indexes)
+	memQuota, cpuQuota := computeQuota(config, sizing, indexes, plan.IsLive && command == CommandRebalance)
 
 	if config.MemQuota == -1 && plan.MemQuota != 0 {
 		memQuota = uint64(float64(plan.MemQuota) * memQuotaFactor)
@@ -629,7 +627,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 
 	constraint := newIndexerConstraint(memQuota, cpuQuota, resize, maxNumNode, maxCpuUse, maxMemUse)
 
-	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive)
+	r := newSolution(constraint, sizing, plan.Placement, plan.IsLive, command == CommandRebalance)
 	r.calculateSize() // in case sizing formula changes
 
 	if shuffle != 0 {
@@ -646,7 +644,7 @@ func solutionFromPlan(command CommandType, config *RunConfig, sizing SizingMetho
 	return r, constraint, indexes, movedIndex, movedData
 }
 
-func computeQuota(config *RunConfig, sizing SizingMethod, indexes []*IndexUsage) (uint64, uint64) {
+func computeQuota(config *RunConfig, sizing SizingMethod, indexes []*IndexUsage, useLive bool) (uint64, uint64) {
 
 	memQuotaFactor := config.MemQuotaFactor
 	cpuQuotaFactor := config.CpuQuotaFactor
@@ -654,7 +652,7 @@ func computeQuota(config *RunConfig, sizing SizingMethod, indexes []*IndexUsage)
 	memQuota := uint64(config.MemQuota)
 	cpuQuota := uint64(config.CpuQuota)
 
-	imemQuota, icpuQuota := sizing.ComputeMinQuota(indexes)
+	imemQuota, icpuQuota := sizing.ComputeMinQuota(indexes, useLive)
 
 	if config.MemQuota == -1 {
 		memQuota = imemQuota
@@ -728,14 +726,12 @@ func changeTopology(config *RunConfig, solution *Solution, deletedNodes []string
 		rs := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 		for i := 0; i < config.AddNode; i++ {
-			indexer := indexerNode(rs, "newNode-", solution.getSizingMethod(), solution.isLive)
+			indexer := indexerNode(rs, "newNode-", solution.getSizingMethod())
 			solution.Placement = append(solution.Placement, indexer)
 			inNodeIds = append(inNodeIds, indexer.String())
 		}
 		logging.Tracef("Nodes to be added: %v", inNodeIds)
 	}
-
-	setCommandInIndexers(CommandRebalance, solution.Placement)
 
 	return outIndexes, nil
 }
@@ -747,8 +743,8 @@ func changeTopology(config *RunConfig, solution *Solution, deletedNodes []string
 //
 // Set stats for index to be placed
 //
-func setIndexPlacementStats(s *RunStats, indexes []*IndexUsage) {
-	s.AvgIndexSize, s.StdDevIndexSize = computeIndexMemStats(indexes)
+func setIndexPlacementStats(s *RunStats, indexes []*IndexUsage, useLive bool) {
+	s.AvgIndexSize, s.StdDevIndexSize = computeIndexMemStats(indexes, useLive)
 	s.AvgIndexCpu, s.StdDevIndexCpu = computeIndexCpuStats(indexes)
 	s.IndexCount = uint64(len(indexes))
 }
@@ -762,11 +758,12 @@ func setInitialLayoutStats(s *RunStats,
 	solution *Solution,
 	initialIndexes []*IndexUsage,
 	movedIndex uint64,
-	movedData uint64) {
+	movedData uint64,
+	useLive bool) {
 
 	s.Initial_avgIndexerSize, s.Initial_stdDevIndexerSize = solution.ComputeMemUsage()
 	s.Initial_avgIndexerCpu, s.Initial_stdDevIndexerCpu = solution.ComputeCpuUsage()
-	s.Initial_avgIndexSize, s.Initial_stdDevIndexSize = computeIndexMemStats(initialIndexes)
+	s.Initial_avgIndexSize, s.Initial_stdDevIndexSize = computeIndexMemStats(initialIndexes, useLive)
 	s.Initial_avgIndexCpu, s.Initial_stdDevIndexCpu = computeIndexCpuStats(initialIndexes)
 	s.Initial_indexCount = uint64(len(initialIndexes))
 	s.Initial_indexerCount = uint64(len(solution.Placement))
@@ -866,7 +863,7 @@ func savePlan(output string, solution *Solution, constraint ConstraintMethod) er
 		Placement: solution.Placement,
 		MemQuota:  constraint.GetMemQuota(),
 		CpuQuota:  constraint.GetCpuQuota(),
-		IsLive:    solution.isLive,
+		IsLive:    solution.isLiveData,
 	}
 
 	data, err := json.MarshalIndent(plan, "", "	")

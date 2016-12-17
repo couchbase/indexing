@@ -78,10 +78,10 @@ func formatTimeStr(time uint64) string {
 //
 // This function calculates the load of indexer as percentage of quota
 //
-func computeIndexerUsage(constraint ConstraintMethod, indexer *IndexerNode) float64 {
+func computeIndexerUsage(s *Solution, indexer *IndexerNode) float64 {
 
-	memUsage := float64(indexer.GetMemTotal()) / float64(constraint.GetMemQuota())
-	cpuUsage := float64(indexer.CpuUsage) / float64(constraint.GetCpuQuota())
+	memUsage := float64(indexer.GetMemTotal(s.UseLiveData())) / float64(s.constraint.GetMemQuota())
+	cpuUsage := float64(indexer.CpuUsage) / float64(s.constraint.GetCpuQuota())
 
 	return memUsage + cpuUsage
 }
@@ -89,14 +89,14 @@ func computeIndexerUsage(constraint ConstraintMethod, indexer *IndexerNode) floa
 //
 // This function calculates the free resource of indexer as percentage of quota
 //
-func computeIndexerFreeQuota(constraint ConstraintMethod, indexer *IndexerNode) float64 {
+func computeIndexerFreeQuota(s *Solution, indexer *IndexerNode) float64 {
 
-	memUsage := (float64(constraint.GetMemQuota()) - float64(indexer.GetMemTotal())) / float64(constraint.GetMemQuota())
+	memUsage := (float64(s.constraint.GetMemQuota()) - float64(indexer.GetMemTotal(s.UseLiveData()))) / float64(s.constraint.GetMemQuota())
 	if memUsage < 0 {
 		memUsage = 0
 	}
 
-	cpuUsage := (float64(constraint.GetCpuQuota()) - float64(indexer.CpuUsage)) / float64(constraint.GetCpuQuota())
+	cpuUsage := (float64(s.constraint.GetCpuQuota()) - float64(indexer.CpuUsage)) / float64(s.constraint.GetCpuQuota())
 	if cpuUsage < 0 {
 		cpuUsage = 0
 	}
@@ -107,10 +107,10 @@ func computeIndexerFreeQuota(constraint ConstraintMethod, indexer *IndexerNode) 
 //
 // This function calculates the load of index as percentage of quota
 //
-func computeIndexUsage(constraint ConstraintMethod, index *IndexUsage) float64 {
+func computeIndexUsage(s *Solution, index *IndexUsage) float64 {
 
-	memUsage := float64(index.GetMemTotal()) / float64(constraint.GetMemQuota())
-	cpuUsage := float64(index.CpuUsage) / float64(constraint.GetCpuQuota())
+	memUsage := float64(index.GetMemTotal(s.UseLiveData())) / float64(s.constraint.GetMemQuota())
+	cpuUsage := float64(index.CpuUsage) / float64(s.constraint.GetCpuQuota())
 
 	return memUsage + cpuUsage
 }
@@ -146,7 +146,7 @@ func hasIndex(indexer *IndexerNode, candidate *IndexUsage) bool {
 //
 // Compute the loads on a list of nodes
 //
-func computeLoads(constraint ConstraintMethod, indexers []*IndexerNode) ([]int64, int64) {
+func computeLoads(s *Solution, indexers []*IndexerNode) ([]int64, int64) {
 
 	loads := ([]int64)(nil)
 	total := int64(0)
@@ -155,7 +155,7 @@ func computeLoads(constraint ConstraintMethod, indexers []*IndexerNode) ([]int64
 	if len(indexers) > 0 {
 		loads = make([]int64, len(indexers))
 		for i, indexer := range indexers {
-			loads[i] = int64(computeIndexerUsage(constraint, indexer) * 100)
+			loads[i] = int64(computeIndexerUsage(s, indexer) * 100)
 			total += loads[i]
 		}
 	}
@@ -196,7 +196,7 @@ func sortNodeByUsage(s *Solution) []*IndexerNode {
 		max := i
 		for j := i + 1; j < numOfIndexers; j++ {
 
-			if computeIndexerUsage(s.constraint, result[j]) > computeIndexerUsage(s.constraint, result[max]) {
+			if computeIndexerUsage(s, result[j]) > computeIndexerUsage(s, result[max]) {
 				max = j
 			}
 		}
@@ -223,7 +223,7 @@ func sortIndexByUsage(s *Solution, indexes []*IndexUsage) []*IndexUsage {
 	for i, _ := range result {
 		max := i
 		for j := i + 1; j < numOfIndexes; j++ {
-			if computeIndexUsage(s.constraint, result[j]) > computeIndexUsage(s.constraint, result[max]) {
+			if computeIndexUsage(s, result[j]) > computeIndexUsage(s, result[max]) {
 				max = j
 			}
 		}
@@ -288,19 +288,19 @@ func hasMatchingNode(indexerId string, indexers []*IndexerNode) bool {
 //
 // compute Index memory stats
 //
-func computeIndexMemStats(indexes []*IndexUsage) (float64, float64) {
+func computeIndexMemStats(indexes []*IndexUsage, useLive bool) (float64, float64) {
 
 	// Compute mean memory usage
 	var meanMemUsage float64
 	for _, index := range indexes {
-		meanMemUsage += float64(index.GetMemUsage())
+		meanMemUsage += float64(index.GetMemUsage(useLive))
 	}
 	meanMemUsage = meanMemUsage / float64(len(indexes))
 
 	// compute memory variance
 	var varianceMemUsage float64
 	for _, index := range indexes {
-		v := float64(index.GetMemUsage()) - meanMemUsage
+		v := float64(index.GetMemUsage(useLive)) - meanMemUsage
 		varianceMemUsage += v * v
 	}
 	varianceMemUsage = varianceMemUsage / float64(len(indexes))
@@ -457,14 +457,41 @@ func shuffleIndex(rs *rand.Rand, indexes []*IndexUsage) []*IndexUsage {
 }
 
 //
-// Prepare initial solution
+// Validate solution
 //
-func setCommandInIndexers(command CommandType, indexers []*IndexerNode) {
+func ValidateSolution(s *Solution) error {
 
-	for _, indexer := range indexers {
-		indexer.command = command
+	for _, indexer := range s.Placement {
+		totalMem := uint64(0)
+		totalOverhead := uint64(0)
+		totalCpu := uint64(0)
+
 		for _, index := range indexer.Indexes {
-			index.command = command
+			totalMem += index.GetMemUsage(s.UseLiveData())
+			totalOverhead += index.GetMemOverhead(s.UseLiveData())
+			totalCpu += index.CpuUsage
+		}
+
+		if !s.UseLiveData() {
+			totalOverhead += 100 * 1024 * 1024
+		}
+
+		if indexer.GetMemUsage(s.UseLiveData()) != totalMem {
+			return errors.New("validation fails: memory usage of indexer does not match sum of index memory use")
+		}
+
+		if indexer.CpuUsage != totalCpu {
+			return errors.New("validation fails: cpu usage of indexer does not match sum of index cpu use")
+		}
+
+		if indexer.GetMemOverhead(s.UseLiveData()) != totalOverhead {
+			return errors.New("validation fails: memory overhead of indexer does not match sum of index memory overhead")
+		}
+
+		if indexer.GetMemTotal(s.UseLiveData()) != indexer.GetMemUsage(s.UseLiveData())+indexer.GetMemOverhead(s.UseLiveData()) {
+			return errors.New("validation fails: total indexer memory does not match sum of indexer memory usage + overhead")
 		}
 	}
+
+	return nil
 }

@@ -108,7 +108,6 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 			logging.Errorf("Planner::getIndexLayout: Error from initializing indexer node. Error = %v", err)
 			return nil, err
 		}
-		node.IsLive = true
 
 		// obtain the admin port for the indexer node
 		addr, err := cinfo.GetServiceAddress(nid, common.INDEX_HTTP_SERVICE)
@@ -169,7 +168,6 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 				// update internal info
 				index.Definition = defn
 				index.initialNode = node
-				index.IsLive = true
 
 				node.Indexes = append(node.Indexes, index)
 			}
@@ -461,7 +459,7 @@ func createIndexerNode(cinfo *common.ClusterInfoCache, nid common.NodeId) (*Inde
 	}
 
 	sizing := newMOISizingMethod()
-	return newIndexerNode(host, sizing, true), nil
+	return newIndexerNode(host, sizing), nil
 }
 
 //

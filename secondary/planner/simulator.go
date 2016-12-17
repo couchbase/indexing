@@ -170,6 +170,13 @@ func (t *simulator) RunSimulation(count int, config *RunConfig, command CommandT
 			return err
 		}
 
+		if err := ValidateSolution(p.Result); err != nil {
+			if detail {
+				p.Result.PrintLayout()
+			}
+			return err
+		}
+
 		numOfIndexers += float64(len(p.Result.Placement))
 
 		cost += p.Score

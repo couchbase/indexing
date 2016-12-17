@@ -48,24 +48,28 @@ func usage() {
     cbindexplan -command=rebalance -plan="saved-plan.json" -allowUnpin
     cbindexplan -command=rebalance -plan="saved-plan.json" -addNode=1
     `)
-	fmt.Fprintln(os.Stderr, `Note:
-1) It is recommended to run cbindexplan on the node that is running the indexer process.
+	fmt.Fprintln(os.Stderr, `Usage Note:
+1) cbindexplan should only be used with MOI clsuter.
+2) When running cbindexplan, it may complain that the memory quota or cpu quota is not sufficient when pointing to a live cluster.
+   This is because cbindexplan can recalculate index size using the MOI sizing formula.   In this case, use -memQuota and -cpuQuota
+   to override the clsuter setup during planning.
     `)
-	fmt.Fprintln(os.Stderr, `Placement:
-1) cbindexplan is a planning tool for index placement and rebalancing. This does not actual create or rebalance index, but it allows
-   user to plan on how to place index, or how to move the index to get a better resource utilization.
+	fmt.Fprintln(os.Stderr, `Placement Note:
+1) cbindexplan is a planning recommendation tool for index placement and rebalancing. This does not actual create or rebalance index,
+   but it provides recommednation to user on how to place index, or how to move the index to get a better resource utilization.
 2) New indexes (to be replaced) are specified using a json file.   Example of index json file is under
-   https://github.com/couchbase/indexing/tree/master/secondary/planner/sample/index.json
-3) cbindexplan can plan placement with an initial set of indexes (without specifying a -cluster or -plan option).  This will provide
-   produce a layout of indexes for optimzing resource utilization.
-4) cbindexplan can plan placement of new indexes on a live clsuter (when using the -cluster option).  User can optionally save
+   https://github.com/couchbase/indexing/blob/master/secondary/cmd/cbindexplan/sample/index.json
+3) cbindexplan can recommend placement with just given an initial set of indexes (using -indexes option).  This will provide
+   produce a layout of indexes which optimzie resource distribution. User can optionally save the outcome into a plan file
+   (when specifying -output option).
+4) cbindexplan can recommend placement of new indexes on a live clsuter (when using the -cluster option).  User can optionally save
    the outcome into a plan file (when specifying -output option).
-5) cbindexplan can plan placement of new indexes on top of a saved plan (when using the -plan option).
+5) cbindexplan can recommend placement of new indexes on top of a saved plan (when using the -plan option).
 6) For placement, cbindexplan can generate create-index and build-index statmeents for new indexes when using -ddl option.
 7) For placement, cbindexplan will recalculate the size for all indexes using MOI sizing equation.   Besides new indexes to be replaced,
    cbindexplan will also recaculate size for indexes retrived from a saved plan or live cluster before placement algorithm is run.
     `)
-	fmt.Fprintln(os.Stderr, `Rebalancing:
+	fmt.Fprintln(os.Stderr, `Rebalancing Note:
 1) cbindex can be used to simulate index rebalancing by using the rebalance command.   When rebalancing from a live cluster, cbindexplan
    will estimate index size from indexer stats.  The estimate live index size will be used for rebalancing algorithm.
 2) For rebalancing, if an index is pinned to a node (when index is created with with-nodes option), rebalancing algorithm will not move
