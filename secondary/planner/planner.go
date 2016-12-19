@@ -1723,13 +1723,36 @@ func (p *RandomPlacement) Validate(s *Solution) error {
 	for _, index := range p.indexes {
 
 		if index.GetMemTotal(s.UseLiveData()) > memQuota || index.CpuUsage > cpuQuota {
-			return errors.New(fmt.Sprintf("Cannot place index exceeding quota. Index=%v Bucket=%v Memory=%v Cpu=%v MemoryQuota=%v CpuQuota=%v",
+			return errors.New(fmt.Sprintf("Index exceeding quota. Index=%v Bucket=%v Memory=%v Cpu=%v MemoryQuota=%v CpuQuota=%v",
 				index.Name, index.Bucket, index.GetMemTotal(s.UseLiveData()), index.CpuUsage, s.getConstraintMethod().GetMemQuota(),
 				s.getConstraintMethod().GetCpuQuota()))
 		}
 
 		if !s.getConstraintMethod().CanAddNode(s) && s.findNumEquivalentIndex(index) > len(s.Placement) {
-			return errors.New(fmt.Sprintf("Cannot place index with more replica (or equivalent index) than indexer nodes. Index=%v Bucket=%v",
+			return errors.New(fmt.Sprintf("Index has more replica (or equivalent index) than indexer nodes. Index=%v Bucket=%v",
+				index.Name, index.Bucket))
+		}
+
+		found := false
+		for _, indexer := range s.Placement {
+			freeMem := s.getConstraintMethod().GetMemQuota()
+			freeCpu := s.getConstraintMethod().GetCpuQuota()
+
+			for _, index2 := range indexer.Indexes {
+				if !p.isEligibleIndex(index2) {
+					freeMem -= index2.GetMemTotal(s.UseLiveData())
+					freeCpu -= index2.CpuUsage
+				}
+			}
+
+			if freeMem >= index.GetMemTotal(s.UseLiveData()) && freeCpu >= index.CpuUsage {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return errors.New(fmt.Sprintf("Cannot find an indexer with enough free memory or cpu for index. Index=%v Bucket=%v",
 				index.Name, index.Bucket))
 		}
 	}
@@ -1829,7 +1852,7 @@ func (p *RandomPlacement) randomMoveByLoad(s *Solution, checkConstraint bool) (b
 		return false, false
 	}
 
-	// Find a set of candidates (indexer node) that has movable index
+	// Find a set of candidates (indexer node) that has eligible index
 	// From the set of candidates, find those that are under resource constraint.
 	// Compute the loads for every constrained candidate
 	candidates := p.findCandidates(s)
