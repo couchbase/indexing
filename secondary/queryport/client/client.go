@@ -41,6 +41,24 @@ type Remoteaddr string
 // Inclusion specifier for range queries.
 type Inclusion uint32
 
+type Scans []*Scan
+
+type Scan struct {
+	Seek   common.SecondaryKey
+	Filter []*CompositeElementFilter
+}
+
+type CompositeElementFilter struct {
+	Low       interface{}
+	High      interface{}
+	Inclusion Inclusion
+}
+
+type IndexProjection struct {
+	EntryKeys  []int64
+	PrimaryKey bool
+}
+
 const (
 	// Neither does not include low-key and high-key
 	Neither Inclusion = iota
@@ -114,7 +132,8 @@ type BridgeAccessor interface {
 	// equivalent index.
 	GetScanport(
 		defnID uint64,
-		retry int) (queryport string, targetDefnID uint64, ok bool)
+		retry int,
+		excludes map[uint64]bool) (queryport string, targetDefnID uint64, ok bool)
 
 	// GetIndex will return the index-definition structure for defnID.
 	GetIndexDefn(defnID uint64) *common.IndexDefn
@@ -165,6 +184,13 @@ type GsiAccessor interface {
 		cons common.Consistency, vector *TsConsistency,
 		callb ResponseHandler) error
 
+	// Multiple scans with composite index filters
+	MultiScan(
+		defnID uint64, requestId string, scans Scans,
+		reverse, distinct bool, projection *IndexProjection, offset, limit int64,
+		cons common.Consistency, vector *TsConsistency,
+		callb ResponseHandler) error
+
 	// CountLookup of all entries in index.
 	CountLookup(
 		defnID uint64, requestId string, values []common.SecondaryKey,
@@ -197,6 +223,7 @@ type GsiClient struct {
 	config       common.Config
 	queryClients unsafe.Pointer // map[string(queryport)]*GsiScanClient
 	bucketHash   unsafe.Pointer // map[string]uint64 // bucket -> crc64
+	metaCh       chan bool      // listen to metadata changes
 }
 
 // NewGsiClient returns client to access GSI cluster.
@@ -388,7 +415,7 @@ func (c *GsiClient) Lookup(
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
-			vector, err = c.getConsistency(cons, vector, index.Bucket)
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 			if err != nil {
 				return err, false
 			}
@@ -436,7 +463,7 @@ func (c *GsiClient) Range(
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
-			vector, err = c.getConsistency(cons, vector, index.Bucket)
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 			if err != nil {
 				return err, false
 			}
@@ -502,7 +529,7 @@ func (c *GsiClient) ScanAll(
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
-			vector, err = c.getConsistency(cons, vector, index.Bucket)
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 			if err != nil {
 				return err, false
 			}
@@ -517,6 +544,56 @@ func (c *GsiClient) ScanAll(
 	}
 
 	fmsg := "ScanAll {%v,%v} - elapsed(%v) err(%v)"
+	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
+	return
+}
+
+func (c *GsiClient) MultiScan(
+	defnID uint64, requestId string, scans Scans, reverse,
+	distinct bool, projection *IndexProjection, offset, limit int64,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) (err error) {
+
+	if c.bridge == nil {
+		return ErrorClientUninitialized
+	}
+
+	// check whether the index is present and available.
+	if _, err = c.bridge.IndexState(defnID); err != nil {
+		protoResp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(protoResp)
+		return
+	}
+
+	begin := time.Now()
+
+	err = c.doScan(
+		defnID, requestId,
+		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
+			var err error
+
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
+			if err != nil {
+				return err, false
+			}
+
+			// TODO: Handle RangePrimary
+
+			return qc.MultiScan(
+				uint64(index.DefnId), requestId, scans, reverse, distinct,
+				projection, offset, limit, cons, vector, callb)
+		})
+
+	if err != nil { // callback with error
+		resp := &protobuf.ResponseStream{
+			Err: &protobuf.Error{Error: proto.String(err.Error())},
+		}
+		callb(resp)
+	}
+
+	fmsg := "Scans {%v,%v} - elapsed(%v) err(%v)"
 	logging.Verbosef(fmsg, defnID, requestId, time.Since(begin), err)
 	return
 }
@@ -542,7 +619,7 @@ func (c *GsiClient) CountLookup(
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
-			vector, err = c.getConsistency(cons, vector, index.Bucket)
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 			if err != nil {
 				return err, false
 			}
@@ -592,7 +669,7 @@ func (c *GsiClient) CountRange(
 		func(qc *GsiScanClient, index *common.IndexDefn) (error, bool) {
 			var err error
 
-			vector, err = c.getConsistency(cons, vector, index.Bucket)
+			vector, err = c.getConsistency(qc, cons, vector, index.Bucket)
 			if err != nil {
 				return err, false
 			}
@@ -669,11 +746,17 @@ func (c *GsiClient) updateScanClients() {
 			if _, ok := staleclients[queryport]; ok {
 				continue
 			}
+			qc.RefreshServerVersion()
 			clients[queryport] = qc
 		}
 		for queryport := range newclients {
-			clients[queryport] = NewGsiScanClient(queryport, c.config)
+			if qc, err := NewGsiScanClient(queryport, c.config); err == nil {
+				clients[queryport] = qc
+			} else {
+				logging.Errorf("Unable to initialize gsi scanclient (%v)", err)
+			}
 		}
+
 		atomic.StorePointer(&c.queryClients, unsafe.Pointer(&clients))
 	}
 }
@@ -687,6 +770,7 @@ func (c *GsiClient) doScan(
 	var queryport string
 	var targetDefnID uint64
 	var scan_err error
+	var excludes map[uint64]bool
 
 	wait := c.config["retryIntervalScanport"].Int()
 	retry := c.config["retryScanPort"].Int()
@@ -694,7 +778,7 @@ func (c *GsiClient) doScan(
 	for i := 0; true; {
 		qcs :=
 			*((*map[string]*GsiScanClient)(atomic.LoadPointer(&c.queryClients)))
-		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i); ok1 {
+		if queryport, targetDefnID, ok1 = c.bridge.GetScanport(defnID, i, excludes); ok1 {
 			index := c.bridge.GetIndexDefn(targetDefnID)
 			if qc, ok2 = qcs[queryport]; ok2 {
 				begin := time.Now()
@@ -720,7 +804,25 @@ func (c *GsiClient) doScan(
 			err = fmt.Errorf("%v from %v", scan_err, queryport)
 		}
 
+		// If there is an error coming from indexer that cannot serve the scan request
+		// (including io error), then exclude this defnID and retry with another replica.
+		// If we exhaust all the replica, then GetScanport() will return ok1=false.
+		if ok1 && ok2 && evictRetry > 0 {
+			if excludes == nil {
+				excludes = make(map[uint64]bool)
+			}
+			excludes[targetDefnID] = true
+
+			logging.Warnf(
+				"Scan failed with error for index %v.  Trying scan again with replica, reqId:%v : %v ...\n",
+				targetDefnID, requestId, scan_err)
+			continue
+		}
+
+		// If we cannot find a valid scansport, then retry up to retryScanport by refreshing
+		// the clients.
 		if i = i + 1; i < retry {
+			excludes = nil
 			logging.Warnf(
 				"Trying scan again for index %v (%v %v), reqId:%v : %v ...\n",
 				targetDefnID, ok1, ok2, requestId, scan_err)
@@ -746,7 +848,7 @@ func (c *GsiClient) isTimeit(err error) bool {
 }
 
 func (c *GsiClient) getConsistency(
-	cons common.Consistency,
+	qc *GsiScanClient, cons common.Consistency,
 	vector *TsConsistency, bucket string) (*TsConsistency, error) {
 
 	if cons == common.QueryConsistency {
@@ -754,7 +856,34 @@ func (c *GsiClient) getConsistency(
 			return nil, ErrorExpectedTimestamp
 		}
 		return vector, nil
-	} else if cons == common.SessionConsistency || cons == common.AnyConsistency {
+	} else if cons == common.SessionConsistency {
+		var err error
+		// Server version is old (cb 4.0.x)
+		if qc.NeedSessionConsVector() {
+			if hash64, ok := c.getBucketHash(bucket); ok && hash64 != 0 {
+				begin := time.Now()
+				fmsg := "Time taken by GET_SEQNOS call, %v CRC: %v\n"
+				defer func() { logging.Debugf(fmsg, time.Since(begin), hash64) }()
+				if vector, err = c.BucketSeqnos(bucket, hash64); err != nil {
+					return nil, err
+				}
+
+			} else {
+				begin := time.Now()
+				fmsg := "Time taken by STATS call, %v\n"
+				defer func() { logging.Debugf(fmsg, time.Since(begin)) }()
+				if vector, err = c.BucketTs(bucket); err != nil {
+					return nil, err
+				}
+				vector.Crc64 = common.HashVbuuid(vector.Vbuuids)
+				vector.Vbuuids = nil
+				c.setBucketHash(bucket, vector.Crc64)
+				logging.Debugf("STATS CRC: %v\n", vector.Crc64)
+			}
+		} else {
+			vector = nil
+		}
+	} else if cons == common.AnyConsistency {
 		vector = nil
 	} else {
 		return nil, ErrorInvalidConsistency
@@ -796,7 +925,9 @@ func makeWithCbq(cluster string, config common.Config) (*GsiClient, error) {
 	}
 	clients := make(map[string]*GsiScanClient)
 	for _, queryport := range c.bridge.GetScanports() {
-		clients[queryport] = NewGsiScanClient(queryport, config)
+		if qc, err := NewGsiScanClient(queryport, config); err == nil {
+			clients[queryport] = qc
+		}
 	}
 	atomic.StorePointer(&c.queryClients, unsafe.Pointer(&clients))
 	return c, nil
@@ -809,14 +940,25 @@ func makeWithMetaProvider(
 		cluster:      cluster,
 		config:       config,
 		queryClients: unsafe.Pointer(new(map[string]*GsiScanClient)),
+		metaCh:       make(chan bool, 1),
 	}
 	platform.StorePointer(&c.bucketHash, (unsafe.Pointer)(new(map[string]uint64)))
-	c.bridge, err = newMetaBridgeClient(cluster, config)
+	c.bridge, err = newMetaBridgeClient(cluster, config, c.metaCh)
 	if err != nil {
 		return nil, err
 	}
 	c.updateScanClients()
+	go c.listenMetaChange()
 	return c, nil
+}
+
+func (c *GsiClient) listenMetaChange() {
+	for {
+		select {
+		case <-c.metaCh:
+			c.updateScanClients()
+		}
+	}
 }
 
 //--------------------------

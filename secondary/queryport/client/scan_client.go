@@ -22,6 +22,7 @@ import "github.com/couchbase/indexing/secondary/common"
 import protobuf "github.com/couchbase/indexing/secondary/protobuf/query"
 import "github.com/couchbase/indexing/secondary/transport"
 import "github.com/golang/protobuf/proto"
+import "github.com/couchbase/indexing/secondary/platform"
 
 // GsiScanClient for scan operations.
 type GsiScanClient struct {
@@ -36,9 +37,11 @@ type GsiScanClient struct {
 	cpTimeout          time.Duration
 	cpAvailWaitTimeout time.Duration
 	logPrefix          string
+
+	serverVersion uint32
 }
 
-func NewGsiScanClient(queryport string, config common.Config) *GsiScanClient {
+func NewGsiScanClient(queryport string, config common.Config) (*GsiScanClient, error) {
 	t := time.Duration(config["connPoolAvailWaitTimeout"].Int())
 	c := &GsiScanClient{
 		queryport:          queryport,
@@ -55,7 +58,42 @@ func NewGsiScanClient(queryport string, config common.Config) *GsiScanClient {
 		queryport, c.poolSize, c.poolOverflow, c.maxPayload, c.cpTimeout,
 		c.cpAvailWaitTimeout)
 	logging.Infof("%v started ...\n", c.logPrefix)
-	return c
+
+	if version, err := c.Helo(); err == nil || err == io.EOF {
+		platform.StoreUint32(&c.serverVersion, version)
+	} else {
+		c.pool.Close()
+		return nil, fmt.Errorf("%s: unable to obtain server version", queryport)
+	}
+
+	return c, nil
+}
+
+func (c *GsiScanClient) RefreshServerVersion() {
+	// refresh the version ONLY IF there is no error, so we absolutely
+	// know we have right version.
+	if version, err := c.Helo(); err == nil {
+		if version != platform.LoadUint32(&c.serverVersion) {
+			platform.StoreUint32(&c.serverVersion, version)
+		}
+	}
+}
+
+func (c *GsiScanClient) NeedSessionConsVector() bool {
+	return platform.LoadUint32(&c.serverVersion) == 0
+}
+
+func (c *GsiScanClient) Helo() (uint32, error) {
+	req := &protobuf.HeloRequest{
+		Version: proto.Uint32(uint32(protobuf.ProtobufVersion())),
+	}
+
+	resp, err := c.doRequestResponse(req, "")
+	if err != nil {
+		return 0, err
+	}
+	heloResp := resp.(*protobuf.HeloResponse)
+	return heloResp.GetVersion(), nil
 }
 
 // LookupStatistics for a single secondary-key.
@@ -336,6 +374,119 @@ func (c *GsiScanClient) ScanAll(
 			fmsg := "%v ScanAll(%v) response failed `%v`\n"
 			logging.Errorf(fmsg, c.logPrefix, requestId, err)
 		} else {
+			partial = true
+		}
+	}
+	return err, partial
+}
+
+func (c *GsiScanClient) MultiScan(
+	defnID uint64, requestId string, scans Scans,
+	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) (error, bool) {
+
+	// serialize scans
+	protoScans := make([]*protobuf.Scan, len(scans))
+	for i, scan := range scans {
+		if scan != nil {
+			var equals [][]byte
+			var filters []*protobuf.CompositeElementFilter
+
+			// If Seek is there, then do not marshall Range
+			if len(scan.Seek) > 0 {
+				equals = make([][]byte, len(scan.Seek))
+				for i, seek := range scan.Seek {
+					s, err := json.Marshal(seek)
+					if err != nil {
+						return err, false
+					}
+					equals[i] = s
+				}
+			} else {
+				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
+				if scan.Filter != nil {
+					for j, f := range scan.Filter {
+						var l, h []byte
+						var err error
+						if f.Low != common.MinUnbounded { // Do not encode if unbounded
+							l, err = json.Marshal(f.Low)
+							if err != nil {
+								return err, false
+							}
+						}
+						if f.High != common.MaxUnbounded { // Do not encode if unbounded
+							h, err = json.Marshal(f.High)
+							if err != nil {
+								return err, false
+							}
+						}
+
+						fl := &protobuf.CompositeElementFilter{
+							Low: l, High: h, Inclusion: proto.Uint32(uint32(f.Inclusion)),
+						}
+
+						filters[j] = fl
+					}
+				}
+			}
+			s := &protobuf.Scan{
+				Filters: filters,
+				Equals:  equals,
+			}
+			protoScans[i] = s
+		}
+	}
+
+	//IndexProjection
+	protoProjection := &protobuf.IndexProjection{
+		EntryKeys:  projection.EntryKeys,
+		PrimaryKey: proto.Bool(projection.PrimaryKey),
+	}
+
+	connectn, err := c.pool.Get()
+	if err != nil {
+		return err, false
+	}
+	healthy := true
+	defer func() { c.pool.Return(connectn, healthy) }()
+
+	conn, pkt := connectn.conn, connectn.pkt
+
+	req := &protobuf.ScanRequest{
+		DefnID: proto.Uint64(defnID),
+		Span: &protobuf.Span{
+			Range: nil,
+		},
+		RequestId:       proto.String(requestId),
+		Distinct:        proto.Bool(distinct),
+		Limit:           proto.Int64(limit),
+		Cons:            proto.Uint32(uint32(cons)),
+		Scans:           protoScans,
+		Indexprojection: protoProjection,
+		Reverse:         proto.Bool(reverse),
+		Offset:          proto.Int64(offset),
+	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
+	}
+	// ---> protobuf.ScanRequest
+	if err := c.sendRequest(conn, pkt, req); err != nil {
+		fmsg := "%v Range(%v) request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, err)
+		healthy = false
+		return err, false
+	}
+
+	cont, partial := true, false
+	for cont {
+		// <--- protobuf.ResponseStream
+		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
+		if err != nil { // if err, cont should have been set to false
+			fmsg := "%v Scans(%v) response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, requestId, err)
+		} else { // partial succeeded
 			partial = true
 		}
 	}

@@ -4,6 +4,7 @@ import sys
 import re
 import json
 import argparse
+import datetime
 
 import plotly.plotly as py
 from plotly.graph_objs import *
@@ -92,8 +93,9 @@ def graph_idxstats(stats) :
         s = Scatter(x=x[param], y=value, mode=mode, name=param, line=line)
         scatters.append(s)
     data = Data(scatters)
+    name = 'indexer-graph-%s' % datetime.datetime.now().microsecond
     if len(data) > 0 :
-        print(py.plot(data, filename='indexer-graph'))
+        print(py.plot(data, filename=name))
     else :
         print("warn: no data to plot !!")
 

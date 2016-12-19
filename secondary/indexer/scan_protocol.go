@@ -24,6 +24,7 @@ type ScanResponseWriter interface {
 	RawBytes([]byte) error
 	Row(pk, sk []byte) error
 	Done() error
+	Helo() error
 }
 
 type protoResponseWriter struct {
@@ -84,6 +85,14 @@ func (w *protoResponseWriter) Stats(rows, unique uint64, min, max []byte) error 
 			KeyMin:          min,
 			KeyMax:          max,
 		},
+	}
+
+	return protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)
+}
+
+func (w *protoResponseWriter) Helo() error {
+	res := &protobuf.HeloResponse{
+		Version: proto.Uint32(INDEXER_VERSION),
 	}
 
 	return protobuf.EncodeAndWrite(w.conn, *w.encBuf, res)

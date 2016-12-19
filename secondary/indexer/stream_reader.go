@@ -520,6 +520,8 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 		return fmt.Sprintf("MutationStreamReader::handleSingleKeyVersion received KeyVersions %v", kv)
 	})
 
+	state := w.reader.getIndexerState()
+
 	for i, cmd := range kv.GetCommands() {
 
 		//based on the type of command take appropriate action
@@ -545,7 +547,7 @@ func (w *streamWorker) handleSingleKeyVersion(bucket string, vbucket Vbucket, vb
 
 			w.reader.logReaderStat()
 
-			if w.reader.getIndexerState() != common.INDEXER_ACTIVE {
+			if state != common.INDEXER_ACTIVE {
 				if mutk != nil {
 					mutk.Free()
 					mutk = nil
@@ -754,7 +756,7 @@ func (w *streamWorker) checkAndSetBucketFilter(meta *MutationMeta) bool {
 		}
 
 	} else {
-		logging.Errorf("MutationStreamReader::checkAndSetBucketFilter Missing"+
+		logging.Debugf("MutationStreamReader::checkAndSetBucketFilter Missing"+
 			"bucket %v in Filter for Stream %v", meta.bucket, w.streamId)
 		return false
 	}
@@ -822,6 +824,12 @@ func (w *streamWorker) updateVbuuidInFilter(meta *MutationMeta) {
 
 	w.lock.Lock()
 	defer w.lock.Unlock()
+
+	if meta.vbuuid == 0 {
+		logging.Fatalf("MutationStreamReader::updateVbuuidInFilter Received vbuuid %v "+
+			"bucket %v vb %v Stream %v. This vbucket will not be processed!!!", meta.vbuuid,
+			meta.bucket, meta.vbucket, w.streamId)
+	}
 
 	if filter, ok := w.bucketFilter[meta.bucket]; ok {
 		filter.Vbuuids[meta.vbucket] = uint64(meta.vbuuid)

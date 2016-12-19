@@ -361,5 +361,6 @@ func dcpEvent2Meta(m *mc.DcpEvent) map[string]interface{} {
 		"expiry":   m.Expiry,
 		"locktime": m.LockTime,
 		"nru":      m.Nru,
+		"cas":      m.Cas,
 	}
 }

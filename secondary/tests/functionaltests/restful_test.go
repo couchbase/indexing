@@ -367,15 +367,16 @@ func restful_lookup(ids []string) error {
 			var result interface{}
 			if err := dec.Decode(&result); err != nil && err != io.EOF {
 				return nil, err
-			}
-			if _, ok := result.(string); ok {
-				err := fmt.Errorf("ERROR chunk: %v\n", result)
-				return nil, err
-			} else if result != nil {
-				log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
-				entries = append(entries, result.([]interface{})...)
-			} else {
+			} else if result == nil {
 				break
+			}
+			switch resval := result.(type) {
+			case []interface{}:
+				// log.Printf("GOT CHUNK: %v\n", len(resval))
+				entries = append(entries, resval...)
+			default:
+				err := fmt.Errorf("ERROR CHUNK: %v\n", result)
+				return nil, err
 			}
 		}
 		return entries, nil
@@ -466,7 +467,7 @@ func restful_rangescan(ids []string) error {
 				err := fmt.Errorf("ERROR chunk: %v\n", result)
 				return nil, err
 			} else if result != nil {
-				log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
+				// log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
 				entries = append(entries, result.([]interface{})...)
 			} else {
 				break
@@ -593,7 +594,7 @@ func restful_fulltablescan(ids []string) error {
 				err := fmt.Errorf("ERROR chunk: %v\n", result)
 				return nil, err
 			} else if result != nil {
-				log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
+				// log.Printf("GOT CHUNK: %v\n", len(result.([]interface{})))
 				entries = append(entries, result.([]interface{})...)
 			} else {
 				break
@@ -835,6 +836,43 @@ func waitforindex(id string) (error, bool) {
 	}
 }
 
+func getscans(id string, body map[string]interface{}) ([]interface{}, error) {
+	url, err := makeurl(fmt.Sprintf("/api/index/%v?multiscan=true", id))
+	if err != nil {
+		return nil, err
+	}
+	data, _ := json.Marshal(body)
+	req, err := http.NewRequest("GET", url, bytes.NewBuffer(data))
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("getscans status : %v\n", resp.Status)
+
+	dec := json.NewDecoder(resp.Body)
+	entries := make([]interface{}, 0)
+	for {
+		var result interface{}
+		if err := dec.Decode(&result); err != nil && err != io.EOF {
+			return nil, err
+		} else if result == nil {
+			break
+		}
+		switch resval := result.(type) {
+		case []interface{}:
+			// log.Printf("GOT CHUNK: %v\n", len(resval))
+			entries = append(entries, resval...)
+		default:
+			err := fmt.Errorf("ERROR CHUNK: %v\n", result)
+			return nil, err
+		}
+	}
+	return entries, nil
+}
+
 var reqcreate = map[string]interface{}{
 	"name":      "myindex",
 	"bucket":    "default",
@@ -873,4 +911,14 @@ var reqcount = map[string]interface{}{
 	"inclusion": "both",
 	"limit":     1000000,
 	"stale":     "ok",
+}
+
+var reqscans = map[string]interface{}{
+	"scans":      `[{"Seek":null,"Filter":[{"Low":"D","High":"F","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]},{"Seek":null,"Filter":[{"Low":"S","High":"V","Inclusion":3},{"Low":"A","High":"C","Inclusion":3}]}]`,
+	"projection": `{"EntryKeys":[0],"PrimaryKey":false}`,
+	"distinct":   false,
+	"limit":      1000000,
+	"reverse":    false,
+	"offset":     int64(0),
+	"stale":      "ok",
 }

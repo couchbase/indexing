@@ -45,6 +45,7 @@ type metadataRepo struct {
 	definitions map[c.IndexDefnId]*c.IndexDefn
 	instances   map[c.IndexDefnId]*IndexInstDistribution
 	indices     map[c.IndexDefnId]*IndexMetadata
+	version     uint64
 	mutex       sync.RWMutex
 }
 
@@ -128,7 +129,7 @@ func (o *MetadataProvider) WatchMetadata(indexAdminPort string, callback watcher
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
 
-	logging.Debugf("MetadataProvider.WatchMetadata(): indexer %v", indexAdminPort)
+	logging.Infof("MetadataProvider.WatchMetadata(): indexer %v", indexAdminPort)
 
 	for _, watcher := range o.watchers {
 		if watcher.getAdminAddr() == indexAdminPort {
@@ -181,6 +182,9 @@ func (o *MetadataProvider) UnwatchMetadata(indexerId c.IndexerId) {
 		killch, ok := o.pendings[indexerId]
 		if ok {
 			delete(o.pendings, indexerId)
+			// notify retryHelper to terminate.  This is for
+			// watcher that is still waiting to complete
+			// handshake with indexer.
 			killch <- true
 		}
 		return
@@ -191,6 +195,9 @@ func (o *MetadataProvider) UnwatchMetadata(indexerId c.IndexerId) {
 		watcher.close()
 		watcher.cleanupIndices(o.repo)
 	}
+
+	// increment version when unwatch metadata
+	o.repo.incrementVersion()
 }
 
 func (o *MetadataProvider) CheckIndexerStatus() []IndexerStatus {
@@ -509,9 +516,9 @@ func (o *MetadataProvider) BuildIndexes(defnIDs []c.IndexDefnId) error {
 	return nil
 }
 
-func (o *MetadataProvider) ListIndex() []*IndexMetadata {
+func (o *MetadataProvider) ListIndex() ([]*IndexMetadata, uint64) {
 
-	indices := o.repo.listDefn()
+	indices, version := o.repo.listDefn()
 	result := make([]*IndexMetadata, 0, len(indices))
 
 	for _, meta := range indices {
@@ -520,12 +527,12 @@ func (o *MetadataProvider) ListIndex() []*IndexMetadata {
 		}
 	}
 
-	return result
+	return result, version
 }
 
 func (o *MetadataProvider) FindIndex(id c.IndexDefnId) *IndexMetadata {
 
-	indices := o.repo.listDefn()
+	indices, _ := o.repo.listDefn()
 	if meta, ok := indices[id]; ok {
 		if o.isValidIndexFromActiveIndexer(meta) {
 			return meta
@@ -574,7 +581,7 @@ func (o *MetadataProvider) UpdateServiceAddrForIndexer(id c.IndexerId, adminport
 
 func (o *MetadataProvider) FindIndexByName(name string, bucket string) *IndexMetadata {
 
-	indices := o.repo.listDefn()
+	indices, _ := o.repo.listDefn()
 	for _, meta := range indices {
 		if o.isValidIndexFromActiveIndexer(meta) {
 			if meta.Definition.Name == name && meta.Definition.Bucket == bucket {
@@ -633,6 +640,15 @@ func (o *MetadataProvider) retryHelper(watcher *watcher, readych chan bool, inde
 	func() {
 		o.mutex.Lock()
 		defer o.mutex.Unlock()
+
+		// make sure watcher is still active. Unwatch metadata could have
+		// been called just after watcher.notifyReady has finished.
+		if _, ok := o.pendings[tempIndexerId]; !ok {
+			watcher.close()
+			watcher.cleanupIndices(o.repo)
+			return
+		}
+
 		o.addWatcherNoLock(watcher, tempIndexerId)
 	}()
 
@@ -653,6 +669,9 @@ func (o *MetadataProvider) addWatcherNoLock(watcher *watcher, tempIndexerId c.In
 		oldWatcher.close()
 	}
 	o.watchers[indexerId] = watcher
+
+	// increment version whenever a watcher is registered
+	o.repo.incrementVersion()
 }
 
 func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
@@ -676,7 +695,7 @@ func (o *MetadataProvider) startWatcher(addr string) (*watcher, chan bool) {
 
 func (o *MetadataProvider) findIndexIgnoreStatus(id c.IndexDefnId) *IndexMetadata {
 
-	indices := o.repo.listDefn()
+	indices, _ := o.repo.listDefn()
 	if meta, ok := indices[id]; ok {
 		return meta
 	}
@@ -806,10 +825,11 @@ func newMetadataRepo() *metadataRepo {
 	return &metadataRepo{
 		definitions: make(map[c.IndexDefnId]*c.IndexDefn),
 		instances:   make(map[c.IndexDefnId]*IndexInstDistribution),
-		indices:     make(map[c.IndexDefnId]*IndexMetadata)}
+		indices:     make(map[c.IndexDefnId]*IndexMetadata),
+		version:     uint64(0)}
 }
 
-func (r *metadataRepo) listDefn() map[c.IndexDefnId]*IndexMetadata {
+func (r *metadataRepo) listDefn() (map[c.IndexDefnId]*IndexMetadata, uint64) {
 
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -822,7 +842,7 @@ func (r *metadataRepo) listDefn() map[c.IndexDefnId]*IndexMetadata {
 		}
 	}
 
-	return result
+	return result, r.version
 }
 
 func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
@@ -837,6 +857,7 @@ func (r *metadataRepo) addDefn(defn *c.IndexDefn) {
 	if ok {
 		r.updateIndexMetadataNoLock(defn.DefnId, inst)
 	}
+	r.version++
 }
 
 func (r *metadataRepo) hasDefnIgnoreStatus(indexerId c.IndexerId, defnId c.IndexDefnId) bool {
@@ -899,6 +920,8 @@ func (r *metadataRepo) removeDefn(defnId c.IndexDefnId) {
 	delete(r.definitions, defnId)
 	delete(r.instances, defnId)
 	delete(r.indices, defnId)
+
+	r.version++
 }
 
 func (r *metadataRepo) updateTopology(topology *IndexTopology) {
@@ -913,6 +936,16 @@ func (r *metadataRepo) updateTopology(topology *IndexTopology) {
 			r.updateIndexMetadataNoLock(defnId, &instRef)
 		}
 	}
+
+	r.version++
+}
+
+func (r *metadataRepo) incrementVersion() {
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	r.version++
 }
 
 func (r *metadataRepo) unmarshallAndAddDefn(content []byte) error {
@@ -1265,6 +1298,13 @@ func (w *watcher) cleanupIndices(repo *metadataRepo) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
+	// CleanupIndices may not necessarily remove all indcies
+	// from the repository for this watcher, since there may
+	// be new messages still in flight from gometa.   Even so,
+	// repoistory will filter out any watcher that has been
+	// terminated. So there is no functional issue.
+	// TODO: It is actually possible to wait for gometa to
+	// stop, before cleaning up the indices.
 	for defnId, _ := range w.indices {
 		repo.removeDefn(defnId)
 	}

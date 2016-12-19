@@ -999,7 +999,7 @@ var SystemConfig = Config{
 		"Days of the week to run full compaction (Sunday, Monday, ...)",
 		"",
 		false, // mutable
-		false, // case-insensitive
+		true,  // case-sensitive
 	},
 	"indexer.settings.compaction.abort_exceed_interval": ConfigValue{
 		false,
@@ -1361,10 +1361,10 @@ func (config Config) Override(others ...Config) Config {
 			} else {
 				ocv.Value = cv.Value
 			}
-			config[key] = ocv
+			newconfig[key] = ocv
 		}
 	}
-	return config
+	return newconfig
 }
 
 // OverrideForce will clone `config` object and update parameters with

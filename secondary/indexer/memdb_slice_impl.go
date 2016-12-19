@@ -99,6 +99,7 @@ type memdbSlice struct {
 	get_bytes, insert_bytes, delete_bytes platform.AlignedInt64
 	flushedCount                          platform.AlignedUint64
 	committedCount                        platform.AlignedUint64
+	qCount                                platform.AlignedInt64
 
 	path string
 	id   SliceId
@@ -271,6 +272,7 @@ func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) erro
 		key:   key,
 		docid: docid,
 	}
+	platform.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- mut
 	mdb.idxStats.numDocsFlushQueued.Add(1)
 	return mdb.fatalDbErr
@@ -278,6 +280,7 @@ func (mdb *memdbSlice) Insert(key []byte, docid []byte, meta *MutationMeta) erro
 
 func (mdb *memdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	mdb.idxStats.numDocsFlushQueued.Add(1)
+	platform.AddInt64(&mdb.qCount, 1)
 	mdb.cmdCh[int(meta.vbucket)%mdb.numWriters] <- indexMutation{op: opDelete, docid: docid}
 	return mdb.fatalDbErr
 }
@@ -312,6 +315,7 @@ loop:
 
 			mdb.idxStats.numItemsFlushed.Add(int64(nmut))
 			mdb.idxStats.numDocsIndexed.Add(1)
+			platform.AddInt64(&mdb.qCount, -1)
 
 		case <-mdb.stopCh[workerId]:
 			mdb.stopCh[workerId] <- true
@@ -398,7 +402,7 @@ func (mdb *memdbSlice) insertSecArrayIndex(keys []byte, docid []byte, workerId i
 
 	var nmut int
 	newEntriesBytes, newKeyCount, err := ArrayIndexItems(keys, mdb.arrayExprPosition,
-		mdb.arrayBuf[workerId], mdb.isArrayDistinct)
+		mdb.arrayBuf[workerId], mdb.isArrayDistinct, true)
 	if err == ErrArrayItemKeyTooLong {
 		logging.Errorf("MemDBSlice::insertSecArrayIndex Error indexing docid: %s in Slice: %v. Error: Encoded array item too long (> %v). Skipped.",
 			docid, mdb.id, maxIndexEntrySize)
@@ -773,9 +777,32 @@ func (mdb *memdbSlice) Rollback(info SnapshotInfo) error {
 	//are no flush workers before calling rollback.
 	mdb.waitPersist()
 
-	snapInfo := info.(*memdbSnapshotInfo)
+	qc := platform.LoadInt64(&mdb.qCount)
+	if qc > 0 {
+		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
+	}
+
+	target := info.(*memdbSnapshotInfo)
+
+	// Remove all the disk snapshots which were created after rollback snapshot
+	snapInfos, err := mdb.GetSnapshots()
+	if err != nil {
+		return err
+	}
+
+	for _, snapInfo := range snapInfos {
+		si := snapInfo.(*memdbSnapshotInfo)
+		if si.dataPath == target.dataPath {
+			break
+		}
+
+		if err := os.RemoveAll(si.dataPath); err != nil {
+			return err
+		}
+	}
+
 	mdb.resetStores()
-	return mdb.loadSnapshot(snapInfo)
+	return nil
 }
 
 func (mdb *memdbSlice) loadSnapshot(snapInfo *memdbSnapshotInfo) error {
@@ -883,6 +910,12 @@ func (mdb *memdbSlice) waitPersist() {
 func (mdb *memdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo, error) {
 
 	mdb.waitPersist()
+
+	qc := platform.LoadInt64(&mdb.qCount)
+	if qc > 0 {
+		common.CrashOnError(errors.New("Slice Invariant Violation - commit with pending mutations"))
+	}
+
 	mdb.isDirty = false
 
 	snap, err := mdb.mainstore.NewSnapshot()
@@ -1065,12 +1098,8 @@ func tryClosememdbSlice(mdb *memdbSlice) {
 }
 
 func (mdb *memdbSlice) getCmdsCount() int {
-	c := 0
-	for i := 0; i < mdb.numWriters; i++ {
-		c += len(mdb.cmdCh[i])
-	}
-
-	return c
+	qc := platform.LoadInt64(&mdb.qCount)
+	return int(qc)
 }
 
 func (mdb *memdbSlice) logWriterStat() {
@@ -1176,7 +1205,7 @@ func (s *memdbSnapshot) StatCountTotal() (uint64, error) {
 }
 
 func (s *memdbSnapshot) CountTotal(stopch StopChannel) (uint64, error) {
-	return s.CountRange(MinIndexKey, MaxIndexKey, Both, stopch)
+	return uint64(s.info.MainSnap.Count()), nil
 }
 
 func (s *memdbSnapshot) CountRange(low, high IndexKey, inclusion Inclusion,

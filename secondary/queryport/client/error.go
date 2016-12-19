@@ -34,7 +34,7 @@ var ErrIndexNotReady = fmt.Errorf("Index not ready for serving queries")
 
 var errorDescriptions = map[string]string{
 	ErrorProtocol.Error():            "fatal protocol error with server",
-	ErrorNoHost.Error():              "indexer host is down or unavailable",
+	ErrorNoHost.Error():              "All indexer replica is down or unavailable or unable to process request",
 	ErrorIndexNotFound.Error():       "index deleted or node hosting the index is down",
 	ErrorInstanceNotFound.Error():    "no instance available for the index",
 	ErrorClientUninitialized.Error(): "gsi client is not initialized",

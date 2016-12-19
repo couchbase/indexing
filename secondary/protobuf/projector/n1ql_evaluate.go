@@ -28,7 +28,7 @@ var missing = qvalue.NewValue(string(collatejson.MissingLiteral))
 // key as JSON object.
 // `meta` supplies a dictionary of,
 //      `id`, `byseqno`, `revseqno`, `flags`, `expiry`, `locktime`,
-//      `nru`
+//      `nru`, `cas`
 func N1QLTransform(
 	docid, doc []byte, cExprs []interface{},
 	meta map[string]interface{}, encodeBuf []byte) ([]byte, error) {
@@ -41,13 +41,22 @@ func N1QLTransform(
 	for _, cExpr := range cExprs {
 		expr := cExpr.(qexpr.Expression)
 		scalar, vector, err := expr.EvaluateForIndex(docval, context)
+		if err != nil {
+			exprstr := qexpr.NewStringer().Visit(expr)
+			fmsg := "EvaluateForIndex(%q) for docid %v, err: %v skip document"
+			logging.Errorf(fmsg, exprstr, string(docid), err)
+			return nil, nil
+		}
 		isArray, _ := expr.IsArrayIndexKey()
 		if isArray == false {
+			if scalar == nil { //nil is ERROR condition
+				exprstr := qexpr.NewStringer().Visit(expr)
+				fmsg := "EvaluateForIndex(%q) scalar=nil, skip document %v"
+				logging.Errorf(fmsg, exprstr, string(docid))
+				return nil, nil
+			}
 			key := scalar
-			if err != nil {
-				return nil, err
-
-			} else if key.Type() == qvalue.MISSING && skip {
+			if key.Type() == qvalue.MISSING && skip {
 				return nil, nil
 
 			} else if key.Type() == qvalue.MISSING {
@@ -57,10 +66,24 @@ func N1QLTransform(
 			skip = false
 			arrValue = append(arrValue, key)
 		} else {
-			if err != nil {
-				return nil, err
-			} else if vector == nil && skip { // MISSING
+			if vector == nil { //nil is ERROR condition
+				exprstr := qexpr.NewStringer().Visit(expr)
+				fmsg := "EvaluateForIndex(%q) vector=nil, skip document %v"
+				logging.Errorf(fmsg, exprstr, string(docid))
 				return nil, nil
+			}
+
+			if skip { //array is leading
+				if len(vector) == 0 { //array is empty
+					return nil, nil
+				}
+				if len(vector) == 1 && vector[0].Type() == qvalue.MISSING { //array is missing
+					return nil, nil
+				}
+			} else if !skip {
+				if len(vector) == 0 { //array is non-leading and is empty
+					vector = []qvalue.Value{missing}
+				}
 			}
 			skip = false
 
@@ -90,8 +113,9 @@ func N1QLTransform(
 		if encodeBuf != nil {
 			out, err := CollateJSONEncode(qvalue.NewValue(arrValue), encodeBuf)
 			if err != nil {
-				fmsg := "CollateJSONEncode: index field for docid: %s (err: %v)"
+				fmsg := "CollateJSONEncode: index field for docid: %s (err: %v) skip document"
 				logging.Errorf(fmsg, docid, err)
+				return nil, nil
 			}
 			return out, err // return as collated JSON array
 		}

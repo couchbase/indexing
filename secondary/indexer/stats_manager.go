@@ -125,6 +125,7 @@ type IndexStats struct {
 	diskSnapStoreDuration stats.Int64Val
 	diskSnapLoadDuration  stats.Int64Val
 	notReadyError         stats.Int64Val
+	clientCancelError     stats.Int64Val
 
 	Timings IndexTimingStats
 }
@@ -179,6 +180,7 @@ func (s *IndexStats) Init() {
 	s.diskSnapStoreDuration.Init()
 	s.diskSnapLoadDuration.Init()
 	s.notReadyError.Init()
+	s.clientCancelError.Init()
 
 	s.Timings.Init()
 }
@@ -334,6 +336,7 @@ func (is IndexerStats) MarshalJSON() ([]byte, error) {
 		addStat("disk_store_duration", s.diskSnapStoreDuration.Value())
 		addStat("disk_load_duration", s.diskSnapLoadDuration.Value())
 		addStat("not_ready_errcount", s.notReadyError.Value())
+		addStat("client_cancel_errcount", s.clientCancelError.Value())
 
 		addStat("timings/dcp_getseqs", s.Timings.dcpSeqs.Value())
 		addStat("timings/storage_clone_handle", s.Timings.stCloneHandle.Value())
@@ -606,6 +609,8 @@ func (s *statsManager) runStatsDumpLogger() {
 			bytes, _ := stats.MarshalJSON()
 			var storageStats string
 			if logging.IsEnabled(logging.Debug) {
+				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
+			} else if common.GetStorageMode() == common.FORESTDB && logging.IsEnabled(logging.Timing) {
 				storageStats = fmt.Sprintf("\n==== StorageStats ====\n%s", s.getStorageStats())
 			}
 			logging.Infof("PeriodicStats = %s%s", string(bytes), storageStats)

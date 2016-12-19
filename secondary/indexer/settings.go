@@ -22,11 +22,13 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"time"
 )
 
 const (
 	indexCompactonMetaPath = common.IndexingMetaDir + "triggerCompaction"
+	compactionDaysSetting  = "indexer.settings.compaction.days_of_week"
 )
 
 // Implements dynamic settings management for indexer
@@ -119,6 +121,12 @@ func (s *settingsManager) handleSettingsReq(w http.ResponseWriter, r *http.Reque
 	if r.Method == "POST" {
 		bytes, _ := ioutil.ReadAll(r.Body)
 
+		err := validateSettings(bytes)
+		if err != nil {
+			s.writeError(w, err)
+			return
+		}
+
 		config := s.config.FilterConfig(".settings.")
 		current, rev, err := metakv.Get(common.IndexingSettingsMetaPath)
 		if err == nil {
@@ -204,6 +212,15 @@ loop:
 func (s *settingsManager) metaKVCallback(path string, value []byte, rev interface{}) error {
 	if path == common.IndexingSettingsMetaPath {
 		logging.Infof("New settings received: \n%s", string(value))
+
+		upgradedConfig, upgraded := tryUpgradeConfig(value)
+		if upgraded {
+			if err := metakv.Set(common.IndexingSettingsMetaPath, upgradedConfig, rev); err != nil {
+				return err
+			}
+			return nil
+		}
+
 		config := s.config.Clone()
 		config.Update(value)
 		initGlobalSettings(s.config, config)
@@ -306,4 +323,68 @@ func initGlobalSettings(oldCfg, newCfg common.Config) {
 	maxArrayKeyBufferLength = maxArrayKeyLength * 3
 	maxArrayIndexEntrySize = maxArrayKeyBufferLength + MAX_DOCID_LEN + 2
 	arrayEncBufPool = common.NewByteBufferPool(maxArrayIndexEntrySize)
+}
+
+func validateSettings(value []byte) error {
+	newConfig, err := common.NewConfig(value)
+	if err != nil {
+		return err
+	}
+	if val, ok := newConfig[compactionDaysSetting]; ok {
+		for _, day := range val.Strings() {
+			if !isValidDay(day) {
+				msg := "Index circular compaction days_of_week is case-sensitive " +
+					"and must have zero or more comma-separated values of " +
+					"Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday"
+				return errors.New(msg)
+			}
+		}
+	}
+
+	// ToDo: Validate other settings
+	return nil
+}
+
+func isValidDay(day string) bool {
+	validDays := []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
+	for _, validDay := range validDays {
+		if day == validDay {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidDaysOfWeek(value []byte) bool {
+	conf, _ := common.NewConfig(value)
+	if val, ok := conf[compactionDaysSetting]; ok {
+		for _, day := range val.Strings() {
+			if !isValidDay(day) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Try upgrading the config and fix any issues in config values
+// Return true if upgraded, else false
+func tryUpgradeConfig(value []byte) ([]byte, bool) {
+	conf, _ := common.NewConfig(value)
+	if val, ok := conf[compactionDaysSetting]; ok {
+		if !isValidDaysOfWeek(value) {
+			conf.SetValue(compactionDaysSetting, strings.Title(val.String()))
+			if isValidDaysOfWeek(conf.Json()) {
+				return conf.Json(), true
+			} else {
+				logging.Errorf("%v has invalid value %v. Setting it to empty value. "+
+					"Update the setting to a valid value.",
+					compactionDaysSetting, val.String())
+				conf.SetValue(compactionDaysSetting, "")
+				return conf.Json(), true
+			}
+		}
+	}
+
+	return value, false
 }

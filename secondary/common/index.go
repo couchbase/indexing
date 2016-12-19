@@ -26,6 +26,13 @@ const INDEXER_ID_NIL = IndexerId("")
 // simple-key shall be shaped as [ val ]
 type SecondaryKey []interface{}
 
+type Unbounded int
+
+const (
+	MinUnbounded Unbounded = -1
+	MaxUnbounded           = 1
+)
+
 // IndexStatistics captures statistics for a range or a single key.
 type IndexStatistics interface {
 	Count() (int64, error)

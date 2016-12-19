@@ -484,7 +484,6 @@ loop:
 				if err != nil {
 					fmsg := "%v ##%x backch flush %v: %v\n"
 					logging.Fatalf(fmsg, prefix, cmd.opaque, cmd, err)
-
 				}
 				if ok && reqTs != nil {
 					reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
@@ -495,16 +494,20 @@ loop:
 					logging.Infof(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
 					rollTs, ok := feed.rollTss[cmd.bucket]
 					if ok {
-						rollTs = rollTs.Append(cmd.vbno, cmd.seqno, cmd.vbuuid, sStart, sEnd)
+						rollTs = rollTs.Append(
+							cmd.vbno, cmd.seqno, cmd.vbuuid, sStart, sEnd)
 						feed.rollTss[cmd.bucket] = rollTs
 					}
 
 				} else if cmd.status == mcd.SUCCESS {
 					fmsg := "%v ##%x backch flush success %T: %v\n"
 					logging.Infof(fmsg, prefix, cmd, cmd.opaque, cmd.Repr())
-					actTs, _ := feed.actTss[cmd.bucket]
-					actTs = actTs.Append(cmd.vbno, seqno, cmd.vbuuid, sStart, sEnd)
-					feed.actTss[cmd.bucket] = actTs
+					actTs, ok := feed.actTss[cmd.bucket]
+					if ok {
+						actTs = actTs.Append(
+							cmd.vbno, seqno, cmd.vbuuid, sStart, sEnd)
+						feed.actTss[cmd.bucket] = actTs
+					}
 
 				} else {
 					fmsg := "%v ##%x backch flush error %T: %v\n"
@@ -514,37 +517,35 @@ loop:
 			} else if cmd, ok := msg[0].(*controlStreamEnd); ok {
 				fmsg := "%v ##%x backch flush %T: %v\n"
 				logging.Infof(fmsg, prefix, cmd.opaque, cmd, cmd.Repr())
-				reqTs := feed.reqTss[cmd.bucket]
-				reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
-				feed.reqTss[cmd.bucket] = reqTs
-
-				actTs := feed.actTss[cmd.bucket]
-				actTs = actTs.FilterByVbuckets([]uint16{cmd.vbno})
-				feed.actTss[cmd.bucket] = actTs
-
-				rollTs := feed.rollTss[cmd.bucket]
-				rollTs = rollTs.FilterByVbuckets([]uint16{cmd.vbno})
-				feed.rollTss[cmd.bucket] = rollTs
+				reqTs, ok := feed.reqTss[cmd.bucket]
+				if ok {
+					reqTs = reqTs.FilterByVbuckets([]uint16{cmd.vbno})
+					feed.reqTss[cmd.bucket] = reqTs
+				}
+				actTs, ok := feed.actTss[cmd.bucket]
+				if ok {
+					actTs = actTs.FilterByVbuckets([]uint16{cmd.vbno})
+					feed.actTss[cmd.bucket] = actTs
+				}
+				rollTs, ok := feed.rollTss[cmd.bucket]
+				if ok {
+					rollTs = rollTs.FilterByVbuckets([]uint16{cmd.vbno})
+					feed.rollTss[cmd.bucket] = rollTs
+				}
 
 			} else if cmd, ok := msg[0].(*controlFinKVData); ok {
 				fmsg := "%v ##%x backch flush %T -- %v\n"
 				logging.Infof(fmsg, prefix, feed.opaque, cmd, cmd.Repr())
-				actTs, ok := feed.actTss[cmd.bucket]
-				if ok && actTs != nil && actTs.Len() == 0 { // bucket is done
-					fmsg = "%v ##%x self deleting bucket\n"
-					logging.Infof(fmsg, prefix, feed.opaque)
-					feed.cleanupBucket(cmd.bucket, false)
-
-				} else if actTs != nil && actTs.Len() == 0 {
-					fmsg = "%v ##%x FinKVData before StreamEnds %v\n"
-					logging.Fatalf(fmsg, prefix, feed.opaque, actTs)
-
-				} else {
+				_, ok := feed.actTss[cmd.bucket]
+				if ok == false {
 					// Note: bucket could have gone because of a downstream
 					// delBucket() request.
 					fmsg := "%v ##%x FinKVData can't find bucket %q\n"
 					logging.Warnf(fmsg, prefix, feed.opaque, cmd.bucket)
 				}
+				fmsg = "%v ##%x self deleting bucket\n"
+				logging.Infof(fmsg, prefix, feed.opaque)
+				feed.cleanupBucket(cmd.bucket, false)
 
 			} else {
 				fmsg := "%v ##%x backch flush %T: %v\n"
@@ -1208,6 +1209,7 @@ func (feed *Feed) shutdown(opaque uint16) error {
 			logging.Errorf("%s", logging.StackTrace())
 		}
 	}
+	defer recovery()
 
 	// close upstream
 	for _, feeder := range feed.feeders {

@@ -31,7 +31,6 @@ import (
 const (
 	OPCODE_ADD_IDX_DEFN common.OpCode = iota
 	OPCODE_DEL_IDX_DEFN
-	OPCODE_NOTIFY_TIMESTAMP
 )
 
 type Coordinator struct {
@@ -597,16 +596,6 @@ func (c *Coordinator) LogProposal(proposal protocol.ProposalMsg) error {
 		case OPCODE_DEL_IDX_DEFN:
 			success := c.deleteIndex(proposal.GetKey())
 			logging.Debugf("Coordinator.LogProposal(): (deleteIndex) success = %s", success)
-		}
-	}
-
-	switch common.OpCode(proposal.GetOpCode()) {
-	case OPCODE_NOTIFY_TIMESTAMP:
-		timestamp, err := unmarshallTimestampSerializable(proposal.GetContent())
-		if err == nil {
-			c.idxMgr.notifyNewTimestamp(timestamp)
-		} else {
-			logging.Debugf("Coordinator.LogProposal(): error when unmarshalling timestamp. Ignore timestamp.  Error=%s", err.Error())
 		}
 	}
 

@@ -10,8 +10,10 @@
 package indexer
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"github.com/couchbase/indexing/secondary/collatejson"
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	p "github.com/couchbase/indexing/secondary/pipeline"
@@ -20,6 +22,7 @@ import (
 	"github.com/couchbase/indexing/secondary/queryport"
 	"github.com/golang/protobuf/proto"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,6 +51,7 @@ const (
 	CountReq               = "count"
 	ScanReq                = "scan"
 	ScanAllReq             = "scanAll"
+	HeloReq                = "helo"
 )
 
 type ScanRequest struct {
@@ -71,6 +75,13 @@ type ScanRequest struct {
 	Limit     int64
 	isPrimary bool
 
+	// New parameters for spock
+	Scans           []Scan
+	Indexprojection *protobuf.IndexProjection
+	Reverse         bool
+	Distinct        bool
+	Offset          int64
+
 	ScanId      uint64
 	ExpiredTime time.Time
 	Timeout     *time.Timer
@@ -80,6 +91,80 @@ type ScanRequest struct {
 	LogPrefix string
 
 	keyBufList []*[]byte
+}
+
+// Revisit Scan in the end
+type Scan struct {
+	Low      IndexKey  // Overall Low for a Span. Computed from composite filters (Ranges)
+	High     IndexKey  // Overall High for a Span. Computed from composite filters (Ranges)
+	Incl     Inclusion // Overall Inclusion for a Span
+	ScanType ScanFilterType
+	Filters  []Filter // A collection qualifying filters
+	Equals   IndexKey // TODO: Remove Equals
+}
+
+type Filter struct {
+	// If composite index has n keys,
+	// it will have <= n CompositeElementFilters
+	CompositeFilters []CompositeElementFilter
+	Low              IndexKey
+	High             IndexKey
+	Inclusion        Inclusion
+	ScanType         ScanFilterType
+}
+
+type ScanFilterType string
+
+// RangeReq is a span which is Range on the entire index
+// without composite index filtering
+// FilterRangeReq is a span request which needs composite
+// index filtering
+const (
+	AllReq         ScanFilterType = "scanAll"
+	LookupReq                     = "lookup"
+	RangeReq                      = "range"       // Range with no filtering
+	FilterRangeReq                = "filterRange" // Range with filtering
+)
+
+// Range for a single field in composite index
+type CompositeElementFilter struct {
+	Low       IndexKey
+	High      IndexKey
+	Inclusion Inclusion
+}
+
+// A point in index and the corresponding filter
+// the point belongs to either as high or low
+type IndexPoint struct {
+	Value    IndexKey
+	FilterId int
+}
+
+// Implements sort Interface
+type IndexPoints []IndexPoint
+
+func (ip IndexPoints) Len() int {
+	return len(ip)
+}
+
+func (ip IndexPoints) Swap(i, j int) {
+	ip[i], ip[j] = ip[j], ip[i]
+}
+
+// TODO: Replace the below comparisons with
+// IndexKey to IndexKey comparison method
+// which needs to be added
+func (ip IndexPoints) Less(i, j int) bool {
+	if ip[i].Value == MinIndexKey {
+		return true
+	} else if ip[i].Value == MaxIndexKey {
+		return false
+	} else if ip[j].Value == MinIndexKey {
+		return false
+	} else if ip[j].Value == MaxIndexKey {
+		return true
+	}
+	return (bytes.Compare(ip[i].Value.Bytes(), ip[j].Value.Bytes()) < 0)
 }
 
 func (r ScanRequest) String() string {
@@ -457,6 +542,283 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		}
 	}
 
+	getScanAll := func() Scan {
+		s := Scan{
+			ScanType: AllReq,
+		}
+		return s
+	}
+
+	areFiltersNil := func(protoScan *protobuf.Scan) bool {
+		areFiltersNil := true
+		for _, filter := range protoScan.Filters {
+			if !isNil(filter.Low) || !isNil(filter.High) {
+				areFiltersNil = false
+				break
+			}
+		}
+		return areFiltersNil
+	}
+
+	// Compute the overall low, high for a Filter
+	// based on composite filter ranges
+	fillFilterLowHigh := func(compFilters []CompositeElementFilter, filter *Filter) error {
+		var lows, highs [][]byte
+		var l, h []byte
+		var e error
+		joinLowKey, joinHighKey := true, true
+
+		if compFilters[0].Low == MinIndexKey {
+			filter.Low = MinIndexKey
+			joinLowKey = false
+		}
+		if compFilters[0].High == MaxIndexKey {
+			filter.High = MaxIndexKey
+			joinHighKey = false
+		}
+
+		codec := collatejson.NewCodec(16)
+		if joinLowKey {
+			for _, f := range compFilters {
+				if f.Low == MinIndexKey {
+					break
+				}
+				lows = append(lows, f.Low.Bytes())
+			}
+			buf1 := secKeyBufPool.Get()
+			r.keyBufList = append(r.keyBufList, buf1)
+
+			if l, e = codec.JoinArray(lows, (*buf1)[:0]); e != nil {
+				e = fmt.Errorf("Error in forming low key %s", e)
+				return e
+			}
+			lowKey := secondaryKey(l)
+			filter.Low = &lowKey
+		}
+		if joinHighKey {
+			for _, f := range compFilters {
+				if f.High == MaxIndexKey {
+					break
+				}
+				highs = append(highs, f.High.Bytes())
+			}
+			buf2 := secKeyBufPool.Get()
+			r.keyBufList = append(r.keyBufList, buf2)
+
+			if h, e = codec.JoinArray(highs, (*buf2)[:0]); e != nil {
+				e = fmt.Errorf("Error in forming high key %s", e)
+				return e
+			}
+
+			highKey := secondaryKey(h)
+			filter.High = &highKey
+		}
+
+		// TODO: Calculate the right inclusion
+		// Right now using Both inclusion
+		return nil
+	}
+
+	fillFilterEquals := func(protoScan *protobuf.Scan, filter *Filter) error {
+		var e error
+		var equals [][]byte
+		for _, k := range protoScan.Equals {
+			var key IndexKey
+			if key, e = newKey(k); e != nil {
+				e = fmt.Errorf("Invalid equal key %s (%s)", string(k), e)
+				return e
+			}
+			equals = append(equals, key.Bytes())
+		}
+		codec := collatejson.NewCodec(16)
+		buf1 := secKeyBufPool.Get()
+		r.keyBufList = append(r.keyBufList, buf1)
+		var equalsKey []byte
+		if equalsKey, e = codec.JoinArray(equals, (*buf1)[:0]); e != nil {
+			e = fmt.Errorf("Error in forming equals key %s", e)
+			return e
+		}
+		eqKey := secondaryKey(equalsKey)
+		var compFilters []CompositeElementFilter
+		for _, k := range equals {
+			ek := secondaryKey(k)
+			fl := CompositeElementFilter{
+				Low:       &ek,
+				High:      &ek,
+				Inclusion: Both,
+			}
+			compFilters = append(compFilters, fl)
+		}
+
+		filter.Low = &eqKey
+		filter.High = &eqKey
+		filter.Inclusion = Both
+		filter.CompositeFilters = compFilters
+		filter.ScanType = LookupReq
+		return nil
+	}
+
+	// Create scans from sorted Index Points
+	// Iterate over sorted points and keep track of applicable filters
+	// between overlapped regions
+	composeScans := func(points []IndexPoint, filters []Filter) []Scan {
+		var scans []Scan
+		filtersMap := make(map[int]bool)
+		var filtersList []int
+		var low IndexKey
+		for _, p := range points {
+			if len(filtersMap) == 0 {
+				low = p.Value
+			}
+			filterid := p.FilterId
+			if _, present := filtersMap[filterid]; present {
+				delete(filtersMap, filterid)
+				if len(filtersMap) == 0 { // Empty filtersMap indicates end of overlapping region
+					if len(scans) > 0 &&
+						bytes.Compare(scans[len(scans)-1].High.Bytes(), low.Bytes()) == 0 {
+						// If high of previous scan == low of next scan, then
+						// merge the filters instead of creating a new scan
+						for _, fl := range filtersList {
+							scans[len(scans)-1].Filters = append(scans[len(scans)-1].Filters, filters[fl])
+						}
+						scans[len(scans)-1].High = p.Value
+						filtersList = nil
+					} else {
+						scan := Scan{
+							Low:      low,
+							High:     p.Value,
+							Incl:     Both,
+							ScanType: FilterRangeReq,
+						}
+						for _, fl := range filtersList {
+							scan.Filters = append(scan.Filters, filters[fl])
+						}
+
+						if len(scan.Filters) == 1 && scan.Filters[0].ScanType == LookupReq {
+							scan.Equals = low
+							scan.ScanType = LookupReq
+						}
+
+						if len(scan.Filters) == 1 && len(scan.Filters[0].CompositeFilters) == 1 {
+							scan.Incl = scan.Filters[0].CompositeFilters[0].Inclusion
+							scan.ScanType = RangeReq
+						}
+
+						scans = append(scans, scan)
+						filtersList = nil
+					}
+				}
+			} else {
+				filtersMap[filterid] = true
+				filtersList = append(filtersList, filterid)
+			}
+		}
+		return scans
+	}
+
+	fillScans := func(protoScans []*protobuf.Scan) {
+		var l, h IndexKey
+		var localErr error
+		defer func() {
+			if err == nil {
+				err = localErr
+			}
+		}()
+
+		// For Upgrade
+		if len(protoScans) == 0 {
+			r.Scans = make([]Scan, 1)
+			if len(r.Keys) > 0 {
+				r.Scans[0].Equals = r.Keys[0] //TODO fix for multiple Keys needed?
+				r.Scans[0].ScanType = LookupReq
+			} else {
+				r.Scans[0].Low = r.Low
+				r.Scans[0].High = r.High
+				r.Scans[0].Incl = r.Incl
+				r.Scans[0].ScanType = RangeReq
+			}
+			return
+		}
+
+		// Array of Filters
+		var filters []Filter
+		var points []IndexPoint
+
+		for _, protoScan := range protoScans {
+
+			if len(protoScan.Equals) != 0 {
+				//Encode the equals keys
+				var filter Filter
+				if localErr = fillFilterEquals(protoScan, &filter); localErr != nil {
+					return
+				}
+				filters = append(filters, filter)
+
+				p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
+				p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
+				points = append(points, p1, p2)
+				continue
+			}
+
+			// If there are no filters in scan, it is ScanAll
+			if len(protoScan.Filters) == 0 {
+				r.Scans = make([]Scan, 1)
+				r.Scans[0] = getScanAll()
+				return
+			}
+
+			// if all scan filters are (nil, nil), it is ScanAll
+			if areFiltersNil(protoScan) {
+				r.Scans = make([]Scan, 1)
+				r.Scans[0] = getScanAll()
+				return
+			}
+
+			var compFilters []CompositeElementFilter
+			// Encode Filters
+			for _, fl := range protoScan.Filters {
+				if l, localErr = newLowKey(fl.Low); localErr != nil {
+					localErr = fmt.Errorf("Invalid low key %s (%s)", string(fl.Low), localErr)
+					return
+				}
+
+				if h, localErr = newHighKey(fl.High); localErr != nil {
+					localErr = fmt.Errorf("Invalid high key %s (%s)", string(fl.High), localErr)
+					return
+				}
+
+				compfil := CompositeElementFilter{
+					Low:       l,
+					High:      h,
+					Inclusion: Inclusion(fl.GetInclusion()),
+				}
+				compFilters = append(compFilters, compfil)
+			}
+
+			filter := Filter{
+				CompositeFilters: compFilters,
+				Inclusion:        Both,
+			}
+
+			if localErr = fillFilterLowHigh(compFilters, &filter); localErr != nil {
+				return
+			}
+
+			filters = append(filters, filter)
+
+			p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
+			p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
+			points = append(points, p1, p2)
+
+			// TODO: Does single Composite Element Filter
+			// mean no filtering? Revisit single CEF
+		}
+
+		// Sort Index Points
+		sort.Sort(IndexPoints(points))
+		r.Scans = composeScans(points, filters)
+	}
+
 	setConsistency := func(
 		cons common.Consistency, vector *protobuf.TsConsistency) {
 
@@ -513,6 +875,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 	}
 
 	switch req := protoReq.(type) {
+	case *protobuf.HeloRequest:
+		r.ScanType = HeloReq
 	case *protobuf.StatisticsRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
@@ -556,7 +920,9 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.ScanType = ScanReq
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Limit = req.GetLimit()
-
+		r.Reverse = req.GetReverse()
+		r.Indexprojection = req.GetIndexprojection()
+		r.Offset = req.GetOffset()
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
 			return
@@ -568,6 +934,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 			req.GetSpan().GetRange().GetLow(),
 			req.GetSpan().GetRange().GetHigh(),
 			req.GetSpan().GetEquals())
+		fillScans(req.GetScans())
+
 	case *protobuf.ScanAllRequest:
 		r.DefnID = req.GetDefnID()
 		r.RequestId = req.GetRequestId()
@@ -575,6 +943,8 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		vector := req.GetVector()
 		r.ScanType = ScanAllReq
 		r.Limit = req.GetLimit()
+		r.Scans = make([]Scan, 1)
+		r.Scans[0].ScanType = AllReq
 
 		if isBootstrapMode {
 			err = common.ErrIndexerInBootstrap
@@ -721,7 +1091,7 @@ func (s *scanCoordinator) tryRespondWithError(w ScanResponseWriter, req *ScanReq
 		} else if err == common.ErrIndexNotFound {
 			stats := s.stats.Get()
 			stats.notFoundError.Add(1)
-		} else if err == common.ErrIndexerInBootstrap || err == common.ErrClientCancel {
+		} else if err == common.ErrIndexerInBootstrap {
 			logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
 			logging.Verbosef("%s RESPONSE status:(error = %s), requestId: %v", req.LogPrefix, err, req.RequestId)
 		} else {
@@ -748,6 +1118,11 @@ func (s *scanCoordinator) serverCallback(protoReq interface{}, conn net.Conn,
 		s.handleError(req.LogPrefix, w.Done())
 		req.Done()
 	}()
+
+	if req.ScanType == HeloReq {
+		s.handleHeloRequest(req, w)
+		return
+	}
 
 	logging.Verbosef("%s REQUEST %s", req.LogPrefix, req)
 
@@ -806,6 +1181,11 @@ func (s *scanCoordinator) processRequest(req *ScanRequest, w ScanResponseWriter,
 	}
 }
 
+func (s *scanCoordinator) handleHeloRequest(req *ScanRequest, w ScanResponseWriter) {
+	err := w.Helo()
+	s.handleError(req.LogPrefix, err)
+}
+
 func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWriter,
 	is IndexSnapshot, t0 time.Time) {
 	waitTime := time.Now().Sub(t0)
@@ -831,6 +1211,10 @@ func (s *scanCoordinator) handleScanRequest(req *ScanRequest, w ScanResponseWrit
 			return fmt.Sprintf("%s RESPONSE rows:%d, waitTime:%v, totalTime:%v, status:%s, requestId:%s",
 				req.LogPrefix, scanPipeline.RowsRead(), waitTime, scanTime, status, req.RequestId)
 		})
+
+		if err == common.ErrClientCancel {
+			req.Stats.clientCancelError.Add(1)
+		}
 	} else {
 		status := "ok"
 		logging.LazyVerbose(func() string {

@@ -73,8 +73,8 @@ func (cp *connectionPool) defaultMkConn(host string) (*connection, error) {
 func (cp *connectionPool) Close() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			logging.Errorf("%v Close() crashed: %v\n", cp.logPrefix, r)
-			logging.Errorf("%s", logging.StackTrace())
+			logging.Verbosef("%v Close() crashed: %v\n", cp.logPrefix, r)
+			logging.Verbosef("%s", logging.StackTrace())
 		}
 	}()
 	close(cp.connections)

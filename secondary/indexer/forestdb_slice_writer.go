@@ -69,7 +69,7 @@ func NewForestDBSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	config.SetMaxWriterLockProb(uint8(prob))
 	walSize := sysconf["settings.wal_size"].Uint64()
 	config.SetWalThreshold(walSize)
-	kept_headers := sysconf["settings.recovery.max_rollbacks"].Int()
+	kept_headers := sysconf["settings.recovery.max_rollbacks"].Int() + 1 //MB-20753
 	config.SetNumKeepingHeaders(uint8(kept_headers))
 	logging.Verbosef("NewForestDBSlice(): max writer lock prob %d", prob)
 	logging.Verbosef("NewForestDBSlice(): wal size %d", walSize)
@@ -185,6 +185,8 @@ type fdbSlice struct {
 	// in the file. This is computed immediately after compaction.
 	extraSnapDataSize platform.AlignedInt64
 
+	qCount platform.AlignedInt64
+
 	path     string
 	currfile string
 	id       SliceId //slice id
@@ -276,6 +278,7 @@ func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) err
 	}
 
 	fdb.idxStats.numDocsFlushQueued.Add(1)
+	platform.AddInt64(&fdb.qCount, 1)
 	fdb.cmdCh <- &indexItem{key: key, rawKey: rawKey, docid: docid}
 	return fdb.fatalDbErr
 }
@@ -286,6 +289,7 @@ func (fdb *fdbSlice) Insert(rawKey []byte, docid []byte, meta *MutationMeta) err
 //it will be returned as error.
 func (fdb *fdbSlice) Delete(docid []byte, meta *MutationMeta) error {
 	fdb.idxStats.numDocsFlushQueued.Add(1)
+	platform.AddInt64(&fdb.qCount, 1)
 	fdb.cmdCh <- docid
 	return fdb.fatalDbErr
 }
@@ -329,6 +333,7 @@ loop:
 
 			fdb.idxStats.numItemsFlushed.Add(int64(nmut))
 			fdb.idxStats.numDocsIndexed.Add(1)
+			platform.AddInt64(&fdb.qCount, -1)
 
 		case <-fdb.stopCh[workerId]:
 			fdb.stopCh[workerId] <- true
@@ -496,10 +501,19 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 			return
 		}
 
-		tmpBufPtr := arrayEncBufPool.Get()
-		defer arrayEncBufPool.Put(tmpBufPtr)
+		var tmpBuf []byte
+		// If old key is larger than max array limit, always handle it
+		if len(oldkey) > maxArrayIndexEntrySize {
+			// Allocate thrice the size of old key for array explosion
+			tmpBuf = make([]byte, 0, len(oldkey)*3)
+		} else {
+			tmpBufPtr := arrayEncBufPool.Get()
+			defer arrayEncBufPool.Put(tmpBufPtr)
+			tmpBuf = (*tmpBufPtr)[:0]
+		}
+
 		if oldEntriesBytes, oldKeyCount, err = ArrayIndexItems(oldkey, fdb.arrayExprPosition,
-			(*tmpBufPtr)[:0], fdb.isArrayDistinct); err != nil {
+			tmpBuf, fdb.isArrayDistinct, false); err != nil {
 			fdb.checkFatalDbError(err)
 			logging.Errorf("ForestDBSlice::insert \n\tSliceId %v IndexInstId %v Error in retrieving "+
 				"compostite old secondary keys %v", fdb.id, fdb.idxInstId, err)
@@ -510,7 +524,7 @@ func (fdb *fdbSlice) insertSecArrayIndex(key []byte, rawKey []byte, docid []byte
 		tmpBufPtr := arrayEncBufPool.Get()
 		defer arrayEncBufPool.Put(tmpBufPtr)
 		newEntriesBytes, newKeyCount, err = ArrayIndexItems(key, fdb.arrayExprPosition,
-			(*tmpBufPtr)[:0], fdb.isArrayDistinct)
+			(*tmpBufPtr)[:0], fdb.isArrayDistinct, true)
 		if err == ErrArrayItemKeyTooLong {
 			logging.Errorf("ForestDBSlice::insert Error indexing docid: %s in Slice: %v. Error: Encoded array item too long (> %v). Skipped.",
 				docid, fdb.id, maxIndexEntrySize)
@@ -739,10 +753,19 @@ func (fdb *fdbSlice) deleteSecArrayIndex(docid []byte, workerId int) (nmut int) 
 		return
 	}
 
-	tmpBufPtr := arrayEncBufPool.Get()
-	defer arrayEncBufPool.Put(tmpBufPtr)
+	var tmpBuf []byte
+	// If old key is larger than max array limit, always handle it
+	if len(olditm) > maxArrayIndexEntrySize {
+		// Allocate thrice the size of old key for array explosion
+		tmpBuf = make([]byte, 0, len(olditm)*3)
+	} else {
+		tmpBufPtr := arrayEncBufPool.Get()
+		defer arrayEncBufPool.Put(tmpBufPtr)
+		tmpBuf = (*tmpBufPtr)[:0]
+	}
+
 	indexEntriesToBeDeleted, keyCount, err := ArrayIndexItems(olditm, fdb.arrayExprPosition,
-		(*tmpBufPtr)[:0], fdb.isArrayDistinct)
+		tmpBuf, fdb.isArrayDistinct, false)
 
 	if err != nil {
 		fdb.checkFatalDbError(err)
@@ -892,6 +915,11 @@ func (fdb *fdbSlice) Rollback(info SnapshotInfo) error {
 	//are no flush workers before calling rollback.
 	fdb.waitPersist()
 
+	qc := platform.LoadInt64(&fdb.qCount)
+	if qc > 0 {
+		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
+	}
+
 	//get the seqnum from snapshot
 	snapInfo := info.(*fdbSnapshotInfo)
 
@@ -1015,6 +1043,11 @@ func (fdb *fdbSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotInfo
 	fdb.waitPersist()
 	flushTime := time.Since(flushStart)
 
+	qc := platform.LoadInt64(&fdb.qCount)
+	if qc > 0 {
+		common.CrashOnError(errors.New("Slice Invariant Violation - commit with pending mutations"))
+	}
+
 	fdb.isDirty = false
 
 	t0 := time.Now()
@@ -1101,7 +1134,8 @@ func (fdb *fdbSlice) checkAllWorkersDone() bool {
 
 	//if there are mutations in the cmdCh, workers are
 	//not yet done
-	if len(fdb.cmdCh) > 0 {
+	qc := platform.LoadInt64(&fdb.qCount)
+	if qc > 0 {
 		return false
 	}
 
@@ -1235,7 +1269,7 @@ func (fdb *fdbSlice) Compact(abortTime time.Time) error {
 		return nil
 	}
 
-	mainSeq := osnap.(*fdbSnapshotInfo).MainSeq
+	metaSeq := osnap.(*fdbSnapshotInfo).MetaSeq
 
 	//find the db snapshot lower than oldest snapshot
 	snap, err := fdb.compactFd.GetAllSnapMarkers()
@@ -1246,24 +1280,29 @@ func (fdb *fdbSlice) Compact(abortTime time.Time) error {
 
 	var snapMarker *forestdb.SnapMarker
 	var compactSeqNum forestdb.SeqNum
+	var leastCmSeq forestdb.SeqNum
 snaploop:
 	for _, s := range snap.SnapInfoList() {
 
 		cm := s.GetKvsCommitMarkers()
 		for _, c := range cm {
-			//if seqNum of "main" kvs is less than or equal to oldest snapshot seqnum
+			//if seqNum of "default" kvs is less than the oldest snapshot seqnum
 			//it is safe to compact upto that snapshot
-			if c.GetKvStoreName() == "main" && c.GetSeqNum() <= mainSeq {
+			if c.GetKvStoreName() == "" && c.GetSeqNum() < metaSeq {
 				snapMarker = s.GetSnapMarker()
 				compactSeqNum = c.GetSeqNum()
 				break snaploop
+			}
+			if leastCmSeq == 0 || leastCmSeq > c.GetSeqNum() {
+				leastCmSeq = c.GetSeqNum()
 			}
 		}
 	}
 
 	if snapMarker == nil {
 		logging.Infof("ForestDBSlice::Compact No Valid SnapMarker Found. Skipped Compaction."+
-			"Slice Id %v, IndexInstId %v, IndexDefnId %v", fdb.id, fdb.idxInstId, fdb.idxDefnId)
+			"Slice Id %v, IndexInstId %v, IndexDefnId %v MetaSeq %v LeastCmSeq %v", fdb.id, fdb.idxInstId, fdb.idxDefnId,
+			metaSeq, leastCmSeq)
 		return nil
 	} else {
 		logging.Infof("ForestDBSlice::Compact Compacting upto SeqNum %v. "+
@@ -1339,6 +1378,18 @@ func (fdb *fdbSlice) Statistics() (StorageStatistics, error) {
 	sts.InsertBytes = platform.LoadInt64(&fdb.insert_bytes)
 	sts.DeleteBytes = platform.LoadInt64(&fdb.delete_bytes)
 
+	if logging.IsEnabled(logging.Timing) {
+		fdb.statFdLock.Lock()
+		latencystats, err := fdb.statFd.GetLatencyStats()
+		fdb.statFdLock.Unlock()
+		if err != nil {
+			return sts, err
+		}
+		var internalData []string
+		internalData = append(internalData, latencystats)
+		sts.InternalData = internalData
+	}
+
 	return sts, nil
 }
 
@@ -1350,7 +1401,7 @@ func (fdb *fdbSlice) UpdateConfig(cfg common.Config) {
 
 	// update circular compaction setting in fdb
 	nmode := strings.ToLower(cfg["settings.compaction.compaction_mode"].String())
-	kept_headers := uint8(cfg["settings.recovery.max_rollbacks"].Int())
+	kept_headers := uint8(cfg["settings.recovery.max_rollbacks"].Int() + 1) //MB-20753
 	fconfig := forestdb.DefaultConfig()
 	reuse_threshold := uint8(fconfig.BlockReuseThreshold())
 

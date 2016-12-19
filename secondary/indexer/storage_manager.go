@@ -763,7 +763,9 @@ func (s *storageMgr) handleStats(cmd Message) {
 		if idxStats != nil {
 			idxStats.diskSize.Set(st.Stats.DiskSize)
 			idxStats.dataSize.Set(st.Stats.DataSize)
-			idxStats.fragPercent.Set(int64(st.GetFragmentation()))
+			if common.GetStorageMode() != common.MOI {
+				idxStats.fragPercent.Set(int64(st.GetFragmentation()))
+			}
 			idxStats.getBytes.Set(st.Stats.GetBytes)
 			idxStats.insertBytes.Set(st.Stats.InsertBytes)
 			idxStats.deleteBytes.Set(st.Stats.DeleteBytes)
@@ -777,7 +779,6 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 	var stats []IndexStorageStats
 	var err error
 	var sts StorageStatistics
-	var internalData []string
 
 	for idxInstId, partnMap := range s.indexPartnMap {
 
@@ -787,6 +788,7 @@ func (s *storageMgr) getIndexStorageStats() []IndexStorageStats {
 			continue
 		}
 
+		var internalData []string
 		var dataSz, diskSz, extraSnapDataSize int64
 		var getBytes, insertBytes, deleteBytes int64
 		var nslices int64
