@@ -10,6 +10,8 @@
 package indexer
 
 import (
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/couchbase/indexing/secondary/common"
@@ -18,11 +20,13 @@ import (
 	"github.com/couchbase/indexing/secondary/platform"
 	"github.com/t3rm1n4l/nitro/plasma"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
 type plasmaSlice struct {
+	newBorn                               bool
 	get_bytes, insert_bytes, delete_bytes platform.AlignedInt64
 	flushedCount                          platform.AlignedUint64
 	committedCount                        platform.AlignedUint64
@@ -83,12 +87,14 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	idxInstId common.IndexInstId, isPrimary bool,
 	sysconf common.Config, idxStats *IndexStats) (*plasmaSlice, error) {
 
-	info, err := os.Stat(path)
-	if err != nil || err == nil && info.IsDir() {
+	slice := &plasmaSlice{}
+
+	_, err := os.Stat(path)
+	if err != nil {
 		os.Mkdir(path, 0777)
+		slice.newBorn = true
 	}
 
-	slice := &plasmaSlice{}
 	slice.idxStats = idxStats
 
 	slice.get_bytes = platform.NewAlignedInt64(0)
@@ -103,7 +109,8 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.idxDefn = idxDefn
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
-	slice.maxRollbacks = sysconf["settings.recovery.max_rollbacks"].Int()
+	// slice.maxRollbacks = sysconf["settings.recovery.max_rollbacks"].Int()
+	slice.maxRollbacks = 2
 
 	sliceBufSize := sysconf["settings.sliceBufSize"].Uint64()
 	if sliceBufSize < uint64(slice.numWriters) {
@@ -124,7 +131,9 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.stopCh = make([]DoneChannel, slice.numWriters)
 
 	slice.isPrimary = isPrimary
-	slice.initStores()
+	if err := slice.initStores(); err != nil {
+		return nil, err
+	}
 
 	// Array related initialization
 	_, slice.isArrayDistinct, slice.arrayExprPosition, err = queryutil.GetArrayExpressionPosition(idxDefn.SecExprs)
@@ -145,23 +154,68 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	return slice, nil
 }
 
-func (slice *plasmaSlice) initStores() {
+func (slice *plasmaSlice) initStores() error {
+	var err error
 	cfg := plasma.DefaultConfig()
 
-	slice.mainstore, _ = plasma.New(cfg)
+	cfg.File = filepath.Join(slice.path, "mainIndex")
+	slice.mainstore, err = plasma.New(cfg)
+	if err != nil {
+		return fmt.Errorf("Unable to initialize %s, err = %v", cfg.File, err)
+	}
 	slice.main = make([]*plasma.Writer, slice.numWriters)
 	for i := 0; i < slice.numWriters; i++ {
 		slice.main[i] = slice.mainstore.NewWriter()
 	}
 
 	if !slice.isPrimary {
-		cfg := plasma.DefaultConfig()
-		slice.backstore, _ = plasma.New(cfg)
+		cfg.File = filepath.Join(slice.path, "docIndex")
+		slice.backstore, err = plasma.New(cfg)
+		if err != nil {
+			return fmt.Errorf("Unable to initialize %s, err = %v", cfg.File, err)
+		}
 		slice.back = make([]*plasma.Writer, slice.numWriters)
 		for i := 0; i < slice.numWriters; i++ {
 			slice.back[i] = slice.backstore.NewWriter()
 		}
 	}
+
+	if !slice.newBorn {
+		err = slice.doRecovery()
+	}
+
+	return err
+}
+
+func cmpRPMeta(a, b []byte) int {
+	av := binary.BigEndian.Uint64(a[:8])
+	bv := binary.BigEndian.Uint64(b[:8])
+	return int(av - bv)
+}
+
+func (mdb *plasmaSlice) doRecovery() error {
+	snaps, err := mdb.GetSnapshots()
+	if err != nil {
+		return err
+	}
+
+	if len(snaps) == 0 {
+		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v Unable to find recovery point. Resetting store ..",
+			mdb.id, mdb.idxInstId)
+		mdb.resetStores()
+	} else {
+		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v Recovering from recovery point ..",
+			mdb.id, mdb.idxInstId)
+		t0 := time.Now()
+		err := mdb.restore(snaps[0])
+		dur := time.Since(t0)
+		mdb.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
+		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v Recovered data from recovery point (took %v)",
+			mdb.id, mdb.idxInstId, dur)
+		return err
+	}
+
+	return nil
 }
 
 func (mdb *plasmaSlice) IncrRef() {
@@ -393,11 +447,10 @@ func (mdb *plasmaSlice) checkFatalDbError(err error) {
 }
 
 type plasmaSnapshotInfo struct {
-	Ts       *common.TsVbuuid
-	MainSnap *plasma.Snapshot `json:"-"`
+	Ts        *common.TsVbuuid
+	Committed bool
 
-	Committed bool `json:"-"`
-	dataPath  string
+	mRP, bRP *plasma.RecoveryPoint
 }
 
 type plasmaSnapshot struct {
@@ -405,7 +458,11 @@ type plasmaSnapshot struct {
 	idxDefnId common.IndexDefnId
 	idxInstId common.IndexInstId
 	ts        *common.TsVbuuid
-	info      *plasmaSnapshotInfo
+	info      SnapshotInfo
+
+	MainSnap *plasma.Snapshot
+	BackSnap *plasma.Snapshot
+
 	committed bool
 
 	refCount int32
@@ -420,15 +477,26 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	s := &plasmaSnapshot{slice: mdb,
 		idxDefnId: mdb.idxDefnId,
 		idxInstId: mdb.idxInstId,
-		info:      info.(*plasmaSnapshotInfo),
+		info:      info,
 		ts:        snapInfo.Timestamp(),
 		committed: info.IsCommitted(),
+		MainSnap:  mdb.mainstore.NewSnapshot(),
+	}
+
+	if !mdb.isPrimary {
+		s.BackSnap = mdb.backstore.NewSnapshot()
 	}
 
 	s.Open()
 	s.slice.IncrRef()
+
 	if s.committed {
-		// run persister
+		s.MainSnap.Open()
+		if !mdb.isPrimary {
+			s.BackSnap.Open()
+		}
+
+		go mdb.doPersistSnapshot(s)
 	}
 
 	logging.Infof("plasmaSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
@@ -437,9 +505,130 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	return s, nil
 }
 
-// Returns snapshot info list in reverse sorted order
+func (mdb *plasmaSlice) doPersistSnapshot(s *plasmaSnapshot) {
+	var wg sync.WaitGroup
+
+	if platform.CompareAndSwapInt32(&mdb.isPersistorActive, 0, 1) {
+		defer platform.StoreInt32(&mdb.isPersistorActive, 0)
+
+		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Creating recovery point ...", mdb.id, mdb.idxInstId)
+		t0 := time.Now()
+
+		meta, err := json.Marshal(s.ts)
+		common.CrashOnError(err)
+		timeHdr := make([]byte, 8)
+		binary.BigEndian.PutUint64(timeHdr, uint64(time.Now().UnixNano()))
+		meta = append(timeHdr, meta...)
+
+		wg.Add(1)
+		go func() {
+			mdb.mainstore.CreateRecoveryPoint(s.MainSnap, meta)
+			wg.Done()
+		}()
+
+		if !mdb.isPrimary {
+			mdb.backstore.CreateRecoveryPoint(s.BackSnap, meta)
+		}
+		wg.Wait()
+
+		dur := time.Since(t0)
+		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Created recovery point (took %v)",
+			mdb.id, mdb.idxInstId, dur)
+		mdb.idxStats.diskSnapStoreDuration.Set(int64(dur / time.Millisecond))
+
+		// Cleanup old recovery points
+		mRPs := mdb.mainstore.GetRecoveryPoints()
+		if len(mRPs) > mdb.maxRollbacks {
+			for i := 0; i < len(mRPs)-mdb.maxRollbacks; i++ {
+				mdb.mainstore.RemoveRecoveryPoint(mRPs[i])
+			}
+		}
+
+		if !mdb.isPrimary {
+			bRPs := mdb.backstore.GetRecoveryPoints()
+			if len(bRPs) > mdb.maxRollbacks {
+				for i := 0; i < len(bRPs)-mdb.maxRollbacks; i++ {
+					mdb.backstore.RemoveRecoveryPoint(bRPs[i])
+				}
+			}
+		}
+	} else {
+		logging.Infof("PlasmaSlice Slice Id %v, IndexInstId %v Skipping ondisk"+
+			" snapshot. A snapshot writer is in progress.", mdb.id, mdb.idxInstId)
+		s.MainSnap.Close()
+		s.BackSnap.Close()
+	}
+}
+
 func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
-	return nil, nil
+	var mRPs, bRPs []*plasma.RecoveryPoint
+	var minRP, maxRP []byte
+
+	getRPs := func(rpts []*plasma.RecoveryPoint) []*plasma.RecoveryPoint {
+		var newRpts []*plasma.RecoveryPoint
+		for _, rp := range rpts {
+			if cmpRPMeta(rp.Meta(), minRP) < 0 {
+				continue
+			}
+
+			if cmpRPMeta(rp.Meta(), maxRP) > 0 {
+				break
+			}
+
+			newRpts = append(newRpts, rp)
+		}
+
+		return newRpts
+	}
+
+	// Find out the common recovery points between mainIndex and backIndex
+	mRPs = mdb.mainstore.GetRecoveryPoints()
+	logging.Errorf("mainstore %d", len(mRPs))
+	if len(mRPs) > 0 {
+		minRP = mRPs[0].Meta()
+		maxRP = mRPs[len(mRPs)-1].Meta()
+	}
+
+	if !mdb.isPrimary {
+		bRPs = mdb.backstore.GetRecoveryPoints()
+		logging.Errorf("backstore %d", len(bRPs))
+		if len(bRPs) > 0 {
+			if cmpRPMeta(bRPs[0].Meta(), minRP) > 0 {
+				minRP = bRPs[0].Meta()
+			}
+
+			if cmpRPMeta(bRPs[len(bRPs)-1].Meta(), maxRP) < 0 {
+				maxRP = bRPs[len(bRPs)-1].Meta()
+			}
+		}
+
+		bRPs = getRPs(bRPs)
+	}
+
+	mRPs = getRPs(mRPs)
+
+	if !mdb.isPrimary && len(mRPs) != len(bRPs) {
+		return nil, nil
+	}
+
+	var infos []SnapshotInfo
+	for i := len(mRPs) - 1; i >= 0; i-- {
+		info := &plasmaSnapshotInfo{
+			mRP: mRPs[i],
+		}
+
+		if err := json.Unmarshal(info.mRP.Meta()[8:], &info.Ts); err != nil {
+			return nil, fmt.Errorf("Unable to decode snapshot meta err %v", err)
+		}
+
+		if !mdb.isPrimary {
+			info.bRP = bRPs[i]
+		}
+
+		infos = append(infos, info)
+	}
+
+	return infos, nil
 }
 
 func (mdb *plasmaSlice) setCommittedCount() {
@@ -462,17 +651,34 @@ func (mdb *plasmaSlice) resetStores() {
 		mdb.backstore.Close()
 	}
 
+	os.RemoveAll(mdb.path)
+	mdb.newBorn = true
 	mdb.initStores()
 }
 
-//Rollback slice to given snapshot. Return error if
-//not possible
-func (mdb *plasmaSlice) Rollback(info SnapshotInfo) error {
-
-	//before rollback make sure there are no mutations
-	//in the slice buffer. Timekeeper will make sure there
-	//are no flush workers before calling rollback.
+func (mdb *plasmaSlice) Rollback(o SnapshotInfo) error {
 	mdb.waitPersist()
+	qc := platform.LoadInt64(&mdb.qCount)
+	if qc > 0 {
+		common.CrashOnError(errors.New("Slice Invariant Violation - rollback with pending mutations"))
+	}
+
+	return mdb.restore(o)
+}
+
+func (mdb *plasmaSlice) restore(o SnapshotInfo) error {
+	info := o.(*plasmaSnapshotInfo)
+	if s, err := mdb.mainstore.Rollback(info.mRP); err != nil {
+		s.Close()
+		return err
+	}
+
+	if !mdb.isPrimary {
+		s, err := mdb.backstore.Rollback(info.bRP)
+		s.Close()
+		return err
+	}
+
 	return nil
 }
 
@@ -522,10 +728,8 @@ func (mdb *plasmaSlice) NewSnapshot(ts *common.TsVbuuid, commit bool) (SnapshotI
 
 	mdb.isDirty = false
 
-	snap := mdb.mainstore.NewSnapshot()
 	newSnapshotInfo := &plasmaSnapshotInfo{
 		Ts:        ts,
-		MainSnap:  snap,
 		Committed: commit,
 	}
 	mdb.setCommittedCount()
@@ -643,6 +847,15 @@ func (mdb *plasmaSlice) Compact(abortTime time.Time) error {
 
 func (mdb *plasmaSlice) Statistics() (StorageStatistics, error) {
 	var sts StorageStatistics
+
+	var internalData []string
+
+	internalData = append(internalData, fmt.Sprintf("----MainStore----\n%s", mdb.mainstore.GetStats()))
+	if !mdb.isPrimary {
+		internalData = append(internalData, fmt.Sprintf("\n----BackStore----\n%s", mdb.backstore.GetStats()))
+	}
+
+	sts.InternalData = internalData
 	return sts, nil
 }
 
@@ -705,9 +918,6 @@ func (info *plasmaSnapshotInfo) IsCommitted() bool {
 }
 
 func (info *plasmaSnapshotInfo) String() string {
-	if info.MainSnap == nil {
-		return fmt.Sprintf("SnapInfo: file: %s", info.dataPath)
-	}
 	return fmt.Sprintf("SnapshotInfo: count:%v committed:%v", 0, info.Committed)
 }
 
@@ -743,7 +953,6 @@ func (s *plasmaSnapshot) Timestamp() *common.TsVbuuid {
 	return s.ts
 }
 
-//Close the snapshot
 func (s *plasmaSnapshot) Close() error {
 
 	count := platform.AddInt32(&s.refCount, int32(-1))
@@ -754,14 +963,17 @@ func (s *plasmaSnapshot) Close() error {
 		return errors.New("Snapshot Already Closed")
 
 	} else if count == 0 {
-		go s.Destroy()
+		s.Destroy()
 	}
 
 	return nil
 }
 
 func (s *plasmaSnapshot) Destroy() {
-	s.info.MainSnap.Close()
+	s.MainSnap.Close()
+	if s.BackSnap != nil {
+		s.BackSnap.Close()
+	}
 
 	defer s.slice.DecrRef()
 }
@@ -878,7 +1090,7 @@ func (s *plasmaSnapshot) Iterate(low, high IndexKey, inclusion Inclusion,
 	var entry IndexEntry
 	var err error
 	t0 := time.Now()
-	it := s.info.MainSnap.NewIterator()
+	it := s.MainSnap.NewIterator()
 	defer it.Close()
 
 	if low.Bytes() == nil {
