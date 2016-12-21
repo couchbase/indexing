@@ -58,6 +58,7 @@ type IndexResponse struct {
 
 type LocalIndexMetadata struct {
 	IndexerId        string             `json:"indexerId,omitempty"`
+	NodeUUID         string             `json:"nodeUUID,omitempty"`
 	IndexTopologies  []IndexTopology    `json:"topologies,omitempty"`
 	IndexDefinitions []common.IndexDefn `json:"definitions,omitempty"`
 }
@@ -528,6 +529,12 @@ func (m *requestHandlerContext) getLocalIndexMetadata(bucket string) (meta *Loca
 		return nil, err
 	}
 	meta.IndexerId = string(indexerId)
+
+	nodeUUID, err := repo.GetLocalNodeUUID()
+	if err != nil {
+		return nil, err
+	}
+	meta.NodeUUID = string(nodeUUID)
 
 	iter, err := repo.NewIterator()
 	if err != nil {

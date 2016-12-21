@@ -1,0 +1,32 @@
+{
+"name" 		: "Medium Workload (200-500M)",
+"comment"   : "",
+"workload" 	: [
+	{
+		"name" 		: "bucket1",
+		"replica" 	: 3,
+		"workload" 	: [
+		{
+			"name" 				: "small",
+			"minNumDoc" 		: 200000000,
+			"maxNumDoc" 		: 500000000,   
+			"minDocKeySize" 	: 20, 
+			"maxDocKeySize" 	: 200,
+			"minSecKeySize" 	: 20,
+			"maxSecKeySize" 	: 200,
+			"minArrKeySize" 	: 0,
+			"maxArrKeySize" 	: 0,
+			"minArrSize"    	: 0,
+			"maxArrSize"    	: 0,
+			"minMutationRate"  	: 10000,
+			"maxMutationRate"  	: 100000,
+			"minScanRate"      	: 1000,
+			"maxScanRate"      	: 10000
+		}],
+		"distribution" 	: [100]
+	}],
+"distribution"   	: [100],
+"minNumIndex"   : 10,
+"maxNumIndex"   : 10 
+}
+

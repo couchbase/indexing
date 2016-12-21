@@ -57,3 +57,13 @@ GoInstall (TARGET cbindexperf PACKAGE github.com/couchbase/indexing/secondary/cm
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
   INSTALL_PATH bin
   GOVERSION 1.7.3)
+
+GoInstall (TARGET cbindexplan PACKAGE github.com/couchbase/indexing/secondary/cmd/cbindexplan
+  GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
+  DEPENDS forestdb
+  CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
+  CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
+  GOTAGS "${TAGS}"
+  LDFLAGS "${_indexer_ldflags}"
+  INSTALL_PATH bin OUTPUT cbindexplan
+  GOVERSION 1.6.3)

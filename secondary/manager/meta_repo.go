@@ -135,7 +135,7 @@ func NewLocalMetadataRepo(msgAddr string,
 		globalTopo: nil}
 
 	if err := repo.loadDefn(); err != nil {
-		return nil, nil,  err
+		return nil, nil, err
 	}
 
 	if err := repo.loadTopology(); err != nil {
@@ -148,6 +148,11 @@ func NewLocalMetadataRepo(msgAddr string,
 func (c *MetadataRepo) GetLocalIndexerId() (common.IndexerId, error) {
 	val, err := c.GetLocalValue("IndexerId")
 	return common.IndexerId(val), err
+}
+
+func (c *MetadataRepo) GetLocalNodeUUID() (string, error) {
+	val, err := c.GetLocalValue("IndexerNodeUUID")
+	return string(val), err
 }
 
 func (c *MetadataRepo) RegisterNotifier(notifier MetadataNotifier) {
@@ -796,7 +801,7 @@ func findTypeFromKey(key string) MetadataKind {
 		return KIND_TOPOLOGY
 	} else if isGlobalTopologyKey(key) {
 		return KIND_GLOBAL_TOPOLOGY
-	} 
+	}
 	return KIND_UNKNOWN
 }
 
