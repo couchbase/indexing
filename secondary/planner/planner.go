@@ -194,6 +194,7 @@ type Solution struct {
 	sizing      SizingMethod
 	isLiveData  bool
 	useLiveData bool
+	initialPlan bool
 
 	// placement of indexes	in nodes
 	Placement []*IndexerNode `json:"placement,omitempty"`
@@ -355,6 +356,7 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 	move := uint64(0)
 	iteration := uint64(0)
 	positiveMove := uint64(0)
+	initialPlan := solution.initialPlan
 
 	temperature := p.initialTemperature(command, old_cost)
 	startTemp := temperature
@@ -402,6 +404,11 @@ func (p *SAPlanner) planSingleRun(command CommandType, solution *Solution) (*Sol
 		}
 
 		temperature = temperature * Alpha
+
+		if command == CommandPlan && initialPlan {
+			// adjust temperature based on score for faster convergence
+			temperature = temperature * old_cost
+		}
 	}
 
 	p.ElapseTime = uint64(time.Now().Sub(startTime).Nanoseconds())
@@ -600,6 +607,7 @@ func newSolution(constraint ConstraintMethod, sizing SizingMethod, indexers []*I
 		// create at least one indexer if none exist
 		nodeId := strconv.FormatUint(uint64(rand.Uint32()), 10)
 		r.addNewNode(nodeId)
+		r.initialPlan = true
 	} else {
 		// initialize placement from the current set of indexers
 		for i, _ := range indexers {
@@ -721,6 +729,7 @@ func (s *Solution) clone() *Solution {
 		Placement:   ([]*IndexerNode)(nil),
 		isLiveData:  s.isLiveData,
 		useLiveData: s.useLiveData,
+		initialPlan: s.initialPlan,
 	}
 
 	for _, node := range s.Placement {

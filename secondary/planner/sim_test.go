@@ -79,7 +79,7 @@ func init() {
 	flag.IntVar(&gCpuQuota, "cpuQuota", -1, "cpu quota per indexer node")
 
 	// cluster size
-	flag.BoolVar(&gResize, "resize", true, "allow new node to be dynamcially added to cluster while running the planner")
+	flag.BoolVar(&gResize, "resize", false, "allow new node to be dynamcially added to cluster while running the planner")
 	flag.IntVar(&gMaxNumNode, "maxNumNode", int(math.MaxInt16), "max number of indexer node to use during simulation")
 	flag.IntVar(&gAddNode, "addNode", 0, "number of indexer to add before running the planner")
 	flag.IntVar(&gDeleteNode, "deleteNode", 0, "number of indexer to delete before running the planner")
@@ -150,8 +150,11 @@ func TestSimulation(t *testing.T) {
 		printPlanSummary(plan)
 	}
 
-	if gCommand == CommandRebalance {
-		gResize = false
+	if !gResize {
+		if gCommand == string(CommandPlan) && plan == nil {
+			// initial placement
+			gResize = true
+		}
 	}
 
 	config := &RunConfig{

@@ -16,6 +16,7 @@ import (
 	"github.com/couchbase/indexing/secondary/common"
 	"github.com/couchbase/indexing/secondary/logging"
 	"io/ioutil"
+	"math"
 	"math/rand"
 	"strconv"
 	"time"
@@ -158,6 +159,7 @@ func (t *simulator) RunSimulation(count int, config *RunConfig, command CommandT
 	var needRetry uint64
 
 	detail := config.Detail
+	scores := make([]float64, count)
 
 	for i := 0; i < count; i++ {
 		p, s, err := t.RunSingleTest(config, command, spec, plan, indexSpecs)
@@ -179,6 +181,7 @@ func (t *simulator) RunSimulation(count int, config *RunConfig, command CommandT
 
 		numOfIndexers += float64(len(p.Result.Placement))
 
+		scores[i] = p.Score
 		cost += p.Score
 		duration += p.ElapseTime
 		elapsedTime += p.ElapseTime
@@ -240,8 +243,19 @@ func (t *simulator) RunSimulation(count int, config *RunConfig, command CommandT
 		}
 	}
 
+	// calculate score variance
+	scorev := float64(0)
+	scorem := cost / float64(count)
+	for i := 0; i < count; i++ {
+		v := scores[i] - scorem
+		scorev += v * v
+	}
+	scorev = scorev / float64(count)
+	scorev = math.Sqrt(scorev)
+
 	logging.Infof("Aggregated Simulation Result for with No. of Run = %v", count)
 	logging.Infof("\taverage score: %v", cost/float64(count))
+	logging.Infof("\tstd dev score: %v (%.2f%%)", scorev, scorev/cost*100)
 	logging.Infof("\taverage duration: %v", formatTimeStr(duration/uint64(count)))
 	logging.Infof("\taverage convergence time: %v", formatTimeStr(convergenceTime/uint64(count)))
 	logging.Infof("\taverage no. of moves: %v", move/uint64(count))
