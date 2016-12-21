@@ -844,6 +844,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.plasma.disablePersistence": ConfigValue{
+		false,
+		"Disable persistence",
+		false,
+		false,
+		false,
+	},
 
 	//end of moi specific config
 

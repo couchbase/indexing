@@ -81,6 +81,8 @@ type plasmaSlice struct {
 
 	encodeBuf [][]byte
 	arrayBuf  [][]byte
+
+	hasPersistence bool
 }
 
 func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
@@ -109,6 +111,7 @@ func NewPlasmaSlice(path string, sliceId SliceId, idxDefn common.IndexDefn,
 	slice.idxDefn = idxDefn
 	slice.id = sliceId
 	slice.numWriters = sysconf["numSliceWriters"].Int()
+	slice.hasPersistence = !sysconf["plasma.disablePersistence"].Bool()
 	// slice.maxRollbacks = sysconf["settings.recovery.max_rollbacks"].Int()
 	slice.maxRollbacks = 2
 
@@ -158,7 +161,10 @@ func (slice *plasmaSlice) initStores() error {
 	var err error
 	cfg := plasma.DefaultConfig()
 
-	cfg.File = filepath.Join(slice.path, "mainIndex")
+	if slice.hasPersistence {
+		cfg.File = filepath.Join(slice.path, "mainIndex")
+	}
+
 	slice.mainstore, err = plasma.New(cfg)
 	if err != nil {
 		return fmt.Errorf("Unable to initialize %s, err = %v", cfg.File, err)
@@ -169,7 +175,10 @@ func (slice *plasmaSlice) initStores() error {
 	}
 
 	if !slice.isPrimary {
-		cfg.File = filepath.Join(slice.path, "docIndex")
+		if slice.hasPersistence {
+			cfg.File = filepath.Join(slice.path, "docIndex")
+		}
+
 		slice.backstore, err = plasma.New(cfg)
 		if err != nil {
 			return fmt.Errorf("Unable to initialize %s, err = %v", cfg.File, err)
@@ -490,7 +499,7 @@ func (mdb *plasmaSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	s.Open()
 	s.slice.IncrRef()
 
-	if s.committed {
+	if s.committed && mdb.hasPersistence {
 		s.MainSnap.Open()
 		if !mdb.isPrimary {
 			s.BackSnap.Open()
