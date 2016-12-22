@@ -165,6 +165,7 @@ func (slice *plasmaSlice) initStores() error {
 		cfg.File = filepath.Join(slice.path, "mainIndex")
 	}
 
+	t0 := time.Now()
 	slice.mainstore, err = plasma.New(cfg)
 	if err != nil {
 		return fmt.Errorf("Unable to initialize %s, err = %v", cfg.File, err)
@@ -190,7 +191,15 @@ func (slice *plasmaSlice) initStores() error {
 	}
 
 	if !slice.newBorn {
+		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v Recovering from recovery point ..",
+			slice.id, slice.idxInstId)
 		err = slice.doRecovery()
+		dur := time.Since(t0)
+		if err == nil {
+			slice.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
+			logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v Warmup took %v",
+				slice.id, slice.idxInstId, dur)
+		}
 	}
 
 	return err
@@ -213,14 +222,7 @@ func (mdb *plasmaSlice) doRecovery() error {
 			mdb.id, mdb.idxInstId)
 		mdb.resetStores()
 	} else {
-		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v Recovering from recovery point ..",
-			mdb.id, mdb.idxInstId)
-		t0 := time.Now()
 		err := mdb.restore(snaps[0])
-		dur := time.Since(t0)
-		mdb.idxStats.diskSnapLoadDuration.Set(int64(dur / time.Millisecond))
-		logging.Infof("plasmaSlice::doRecovery SliceId %v IndexInstId %v Recovered data from recovery point (took %v)",
-			mdb.id, mdb.idxInstId, dur)
 		return err
 	}
 
@@ -592,7 +594,6 @@ func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
 
 	// Find out the common recovery points between mainIndex and backIndex
 	mRPs = mdb.mainstore.GetRecoveryPoints()
-	logging.Errorf("mainstore %d", len(mRPs))
 	if len(mRPs) > 0 {
 		minRP = mRPs[0].Meta()
 		maxRP = mRPs[len(mRPs)-1].Meta()
@@ -600,7 +601,6 @@ func (mdb *plasmaSlice) GetSnapshots() ([]SnapshotInfo, error) {
 
 	if !mdb.isPrimary {
 		bRPs = mdb.backstore.GetRecoveryPoints()
-		logging.Errorf("backstore %d", len(bRPs))
 		if len(bRPs) > 0 {
 			if cmpRPMeta(bRPs[0].Meta(), minRP) > 0 {
 				minRP = bRPs[0].Meta()
