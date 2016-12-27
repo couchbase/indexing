@@ -604,6 +604,7 @@ type memdbSnapshot struct {
 // Snapshot info is obtained from NewSnapshot() or GetSnapshots() API
 // Returns error if snapshot handle cannot be created.
 func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
+	var err error
 	snapInfo := info.(*memdbSnapshotInfo)
 
 	s := &memdbSnapshot{slice: mdb,
@@ -622,13 +623,13 @@ func (mdb *memdbSlice) OpenSnapshot(info SnapshotInfo) (Snapshot, error) {
 	}
 
 	if s.info.MainSnap == nil {
-		mdb.loadSnapshot(s.info)
+		err = mdb.loadSnapshot(s.info)
 	}
 
 	logging.Infof("MemDBSlice::OpenSnapshot SliceId %v IndexInstId %v Creating New "+
 		"Snapshot %v", mdb.id, mdb.idxInstId, snapInfo)
 
-	return s, nil
+	return s, err
 }
 
 func (mdb *memdbSlice) doPersistSnapshot(s *memdbSnapshot) {
