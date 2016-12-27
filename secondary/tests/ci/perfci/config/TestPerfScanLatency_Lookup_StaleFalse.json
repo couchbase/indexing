@@ -1,0 +1,17 @@
+{
+   "Concurrency" : 10,
+   "Clients": 1,
+   "ScanSpecs" : [
+      {
+         "Type" : "Lookup",
+         "Bucket" : "default",
+         "Id" : 3,
+         "Index" : "index_company",
+         "Lookups" : [ ["WARETEL"] ],
+         "Limit" : 1,
+         "Repeat" : 1000,
+         "Consistency": true,
+         "NInterval": 1
+      }
+   ]
+}
