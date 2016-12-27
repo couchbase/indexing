@@ -20,7 +20,7 @@ echo '</pre><h3>Building</h3><pre>'
 if [ ! -d $WORKSPACE/.repo ]; then
   mkdir -p $WORKSPACE
   cd $WORKSPACE
-  repo init -u git://github.com/couchbase/manifest -b master -m watson.xml -g all 1>>$WORKSPACE/make.log 2>&1
+  repo init -u git://github.com/couchbase/manifest -b master -m couchbase-server/spock.xml -g all 1>>$WORKSPACE/make.log 2>&1
   test $? -eq 0 || error_exit "Repo Init"
 fi
 
@@ -36,8 +36,8 @@ test $WORKSPACE/cbbuild && test $WORKSPACE/voltron || error_exit "Unable to find
 
 cd $WORKSPACE/goproj/src/github.com/couchbase/indexing
 echo "Switching indexing to unstable"
-git checkout unstable 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull unstable"
-git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull unstable"
+git checkout unstable 1>>$WORKSPACE/make.log 2>&1 || error_exit "git checkout unstable"
+git pull 1>>$WORKSPACE/make.log 2>&1 || error_exit "git pull"
 current="`git rev-parse HEAD`"
 test -f ~/indexing.good || (echo $current > ~/indexing.good)
 good="`cat ~/indexing.good`"
@@ -143,7 +143,7 @@ cd build
 echo "Building main product"
 cmake -D CMAKE_INSTALL_PREFIX=/opt/couchbase \
       -D CMAKE_PREFIX_PATH=/opt/couchbase \
-      -D CMAKE_BUILD_TYPE=Debug \
+      -D CMAKE_BUILD_TYPE=RelWithDebInfo \
       -D PRODUCT_VERSION=${PRODUCT_VERSION} \
       -D BUILD_ENTERPRISE=TRUE \
       -D CB_DOWNLOAD_DEPS=1 \
@@ -158,49 +158,28 @@ cd $WORKSPACE
 repo manifest -r > current.xml
 repo manifest -r > manifest.xml
 
-cd $WORKSPACE/voltron
-make PRODUCT_VERSION=${PRODUCT_VERSION} LICENSE=LICENSE-enterprise.txt \
-     BUILD_DIR=$WORKSPACE \
-     TOPDIR=$WORKSPACE/voltron build-filter overlay 1>>$WORKSPACE/make.log 2>&1
-test $? -eq 0 || error_exit "Make overlay"
+#cd $WORKSPACE/voltron
+#make PRODUCT_VERSION=${PRODUCT_VERSION} LICENSE=LICENSE-enterprise.txt \
+#     BUILD_DIR=$WORKSPACE \
+#     TOPDIR=$WORKSPACE/voltron build-filter overlay 1>>$WORKSPACE/make.log 2>&1
+#test $? -eq 0 || error_exit "Make overlay"
 
-cd $WORKSPACE/voltron
-cp -R server-overlay-deb/common/* /opt/couchbase
-PRODUCT_VERSION=${PRODUCT_VERSION} LD_LIBRARY_PATH=/opt/couchbase/lib \
-   ./server-deb.rb /opt/couchbase couchbase-server couchbase server 1.0.0 1>>$WORKSPACE/make.log 2>&1
-test $? -eq 0 || error_exit "Packaging installer"
+#cd $WORKSPACE/voltron
+#cp -R server-overlay-deb/common/* /opt/couchbase
+#PRODUCT_VERSION=${PRODUCT_VERSION} LD_LIBRARY_PATH=/opt/couchbase/lib \
+#   ./server-deb.rb /opt/couchbase couchbase-server couchbase server 1.0.0 1>>$WORKSPACE/make.log 2>&1
+#test $? -eq 0 || error_exit "Packaging installer"
 
-cd $WORKSPACE/voltron/build/deb/
-tar cf $WORKSPACE/installer.tar couchbase*.deb 1>/dev/null 2>&1
+#cd $WORKSPACE/voltron/build/deb/
+#tar cf $WORKSPACE/installer.tar couchbase*.deb 1>/dev/null 2>&1
 
 echo "Base Manifest:" >> $WORKSPACE/versions.cfg
-cd $WORKSPACE/voltron/build/deb/couchbase-server_${RELEASE}-${BLD_NUM}/opt/couchbase
-cat manifest.xml >> $WORKSPACE/versions.cfg
+#cd $WORKSPACE/voltron/build/deb/couchbase-server_${RELEASE}-${BLD_NUM}/opt/couchbase
+#cat manifest.xml >> $WORKSPACE/versions.cfg
 
 echo "Actual Versions:" >> $WORKSPACE/versions.cfg
 cd $WORKSPACE
 repo forall -c 'echo "$REPO_PROJECT `git log --oneline HEAD...HEAD^`"' >> $WORKSPACE/versions.cfg
-
-echo "Testing 32-bit compilation"
-mkdir -p $WORKSPACE/test32
-cd $WORKSPACE/goproj/src/github.com/couchbase/indexing/secondary
-( \
-  GOOS=linux \
-  GOARCH=386 \
-  GOPATH=$WORKSPACE/test32:$WORKSPACE/goproj:$WORKSPACE/godeps \
-  CGO_ENABLED=1 \
-  CGO_CFLAGS="-I $WORKSPACE/forestdb/include" \
-  go build ./cmd/... 2>&1 | \
-  grep -v 'cannot find -l' | \
-  grep -v 'ld returned' | \
-  grep -v '^#' > /tmp/test32.log \
-)
-msg32="`cat /tmp/test32.log`"
-fail32=${msg32//[[:space:]]/}
-if [ "$fail32" != "" ]; then
-  echo "$msg32" >>$WORKSPACE/make.log
-  error_exit "Compile with 32-bit failed: $msg32";
-fi
 
 chmod a+r /var/www/*
 
