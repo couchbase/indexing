@@ -894,15 +894,20 @@ func makeResponsehandler(
 		if backfillLimit > 0 && *tmpfile == nil && ((cp - ln) < len(skeys)) {
 			prefix := "scan-backfill" + strconv.Itoa(os.Getpid())
 			*tmpfile, err = ioutil.TempFile(n1ql_backfill_temp_dir, prefix)
-			name := (*tmpfile).Name()
-			l.Infof("%v %v new backfill file ... %v\n", lprefix, requestId, name)
+			name := ""
+			if *tmpfile != nil {
+				name = (*tmpfile).Name()
+			}
 			if err != nil {
 				fmsg := "%v %q creating backfill file %v : %v\n"
 				l.Errorf(fmsg, lprefix, requestId, name, err)
 				*tmpfile = nil
 				conn.Error(n1qlError(client, err))
 				return false
+
 			} else {
+				fmsg := "%v %v new backfill file ... %v\n"
+				l.Infof(fmsg, lprefix, requestId, name)
 				// encoder
 				enc = gob.NewEncoder(*tmpfile)
 				readfd, err = os.OpenFile(name, os.O_RDONLY, 0666)

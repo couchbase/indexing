@@ -136,7 +136,7 @@ func (b *Bucket) StartDcpFeed(
 // configuration parameters,
 //      "genChanSize", buffer channel size for control path.
 //      "dataChanSize", buffer channel size for data path.
-//      "numConnections", buffer channel size for data path.
+//      "numConnections", number of connections with DCP for local vbuckets.
 func (b *Bucket) StartDcpFeedOver(
 	name DcpFeedName,
 	sequence uint32,

@@ -222,7 +222,7 @@ func WaitTillAllIndexNodesActive(server string, indexerActiveTimeoutSeconds int6
 	if e != nil {
 		return e
 	}
-	
+
 	start := time.Now()
 	for {
 		elapsed := time.Since(start)
@@ -235,14 +235,14 @@ func WaitTillAllIndexNodesActive(server string, indexerActiveTimeoutSeconds int6
 			log.Printf("Error while fetching Nodes() %v", e)
 			return e
 		}
-		
+
 		allIndexersActive := true
 		for _, indexer := range indexers {
 			if indexer.Status != "online" {
 				allIndexersActive = false
 			}
 		}
-		
+
 		if allIndexersActive == true {
 			log.Printf("All indexers are active")
 			return nil
@@ -386,4 +386,28 @@ func DropSecondaryIndexByID(indexDefnID uint64, server string) error {
 	}
 	log.Printf("Index dropped")
 	return nil
+}
+
+func BuildAllSecondaryIndexes(server string, indexActiveTimeoutSeconds int64) error {
+	log.Printf("In BuildAllSecondaryIndexes()")
+	client, e := CreateClient(server, "2itest")
+	if e != nil {
+		return e
+	}
+	defer client.Close()
+
+	indexes, err := client.Refresh()
+	tc.HandleError(err, "Error while listing the secondary indexes")
+	for i, index := range indexes {
+		defn := index.Definition
+		log.Printf("Building index %v %v", i, defn.Name)
+		state, _ := client.IndexState(uint64(defn.DefnId))
+		if state == c.INDEX_STATE_ACTIVE {
+			continue
+		}
+		err = BuildIndex(defn.Name, defn.Bucket, server, indexActiveTimeoutSeconds)
+		log.Printf("Built index %v %v", i, defn.Name)
+	}
+
+	return err
 }

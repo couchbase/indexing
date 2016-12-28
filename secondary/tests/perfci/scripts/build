@@ -1,6 +1,7 @@
 #!/bin/bash
 export PATH=$PATH:~/bin
 
+export STORAGE="memdb"
 while true; do
   cd /var/www
   (ls -t logs-*.tar* | head -n 30; ls -t logs-*.tar*) | sort | uniq -u | xargs -r rm
@@ -9,7 +10,6 @@ while true; do
   (ls -t installer-*.tar | head -n 3; ls -t installer-*.tar) | sort | uniq -u | xargs -r rm
   export TS="`date +%d.%m.%Y-%H.%M`"
   export WORKSPACE="/opt/build"
-  if [ "$STORAGE" = "memdb" ]; then export STORAGE="fdb"; else export STORAGE="memdb"; fi
   echo '<html><head></head><body><pre>' > /var/www/gsi-current.html
   chmod a+rx /var/www/gsi-current.html
   dobuild clean 1>>/var/www/gsi-current.html 2>&1; rc=$?
@@ -31,6 +31,7 @@ while true; do
   mv ${WORKSPACE}/versions.cfg /var/www/versions-$TS.cfg
   mv ${WORKSPACE}/installer.tar /var/www/installer-$TS.tar
   dowatch
+  dotiming
   sleep 600
 done
 

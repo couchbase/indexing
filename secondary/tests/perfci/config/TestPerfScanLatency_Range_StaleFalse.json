@@ -1,0 +1,22 @@
+{
+   "Concurrency" : 10,
+   "Clients": 1,
+   "ScanSpecs" : [
+      {
+         "Type" : "Range",
+         "Bucket" : "default",
+         "Id" : 4,
+         "Index" : "index_company",
+         "Low" : [
+                "E"
+             ],
+		  "High" : [
+                "P"
+             ],
+         "Limit" : 1000000000,
+         "Repeat" : 1000,
+         "Consistency": true,
+         "NInterval": 1
+      }
+   ]
+}
