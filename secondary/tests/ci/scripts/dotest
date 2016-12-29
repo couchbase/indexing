@@ -121,7 +121,7 @@ mkdir -p "$WORKSPACE/go"
 export GOROOT=$HOME/.cbdepscache/exploded/x86_64/go-1.6/go
 export GOPATH=$WORKSPACE/go:$WORKSPACE/godeps:$WORKSPACE/goproj
 export PATH=$PATH:$GOROOT/bin
-export C_INCLUDE_PATH=$WORKSPACE/platform/include/:/opt/couchbase/include/:$WORKSPACE/forestdb/include:$WORKSPACE/tlm/deps/curl.exploded/include
+export C_INCLUDE_PATH=$WORKSPACE/platform/include/:/opt/couchbase/include/:$WORKSPACE/forestdb/include:$WORKSPACE/build/tlm/deps/curl.exploded/include
 export CGO_LDFLAGS="-L $INSTALL_PATH/lib"
 export LD_LIBRARY_PATH=$INSTALL_PATH/lib
 
