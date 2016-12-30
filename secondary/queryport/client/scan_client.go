@@ -439,9 +439,131 @@ func (c *GsiScanClient) MultiScan(
 	}
 
 	//IndexProjection
-	protoProjection := &protobuf.IndexProjection{
-		EntryKeys:  projection.EntryKeys,
-		PrimaryKey: proto.Bool(projection.PrimaryKey),
+	var protoProjection *protobuf.IndexProjection
+	if projection != nil {
+		protoProjection = &protobuf.IndexProjection{
+			EntryKeys:  projection.EntryKeys,
+			PrimaryKey: proto.Bool(projection.PrimaryKey),
+		}
+	}
+
+	connectn, err := c.pool.Get()
+	if err != nil {
+		return err, false
+	}
+	healthy := true
+	defer func() { c.pool.Return(connectn, healthy) }()
+
+	conn, pkt := connectn.conn, connectn.pkt
+
+	req := &protobuf.ScanRequest{
+		DefnID: proto.Uint64(defnID),
+		Span: &protobuf.Span{
+			Range: nil,
+		},
+		RequestId:       proto.String(requestId),
+		Distinct:        proto.Bool(distinct),
+		Limit:           proto.Int64(limit),
+		Cons:            proto.Uint32(uint32(cons)),
+		Scans:           protoScans,
+		Indexprojection: protoProjection,
+		Reverse:         proto.Bool(reverse),
+		Offset:          proto.Int64(offset),
+	}
+	if vector != nil {
+		req.Vector = protobuf.NewTsConsistency(
+			vector.Vbnos, vector.Seqnos, vector.Vbuuids, vector.Crc64)
+	}
+	// ---> protobuf.ScanRequest
+	if err := c.sendRequest(conn, pkt, req); err != nil {
+		fmsg := "%v Range(%v) request transport failed `%v`\n"
+		logging.Errorf(fmsg, c.logPrefix, requestId, err)
+		healthy = false
+		return err, false
+	}
+
+	cont, partial := true, false
+	for cont {
+		// <--- protobuf.ResponseStream
+		cont, healthy, err = c.streamResponse(conn, pkt, callb, requestId)
+		if err != nil { // if err, cont should have been set to false
+			fmsg := "%v Scans(%v) response failed `%v`\n"
+			logging.Errorf(fmsg, c.logPrefix, requestId, err)
+		} else { // partial succeeded
+			partial = true
+		}
+	}
+	return err, partial
+}
+
+func (c *GsiScanClient) MultiScanPrimary(
+	defnID uint64, requestId string, scans Scans,
+	reverse, distinct bool, projection *IndexProjection, offset, limit int64,
+	cons common.Consistency, vector *TsConsistency,
+	callb ResponseHandler) (error, bool) {
+	var what string
+	// serialize scans
+	protoScans := make([]*protobuf.Scan, len(scans))
+	for i, scan := range scans {
+		if scan != nil {
+			var equals [][]byte
+			var filters []*protobuf.CompositeElementFilter
+
+			// If Seek is there, then ignore Range
+			if len(scan.Seek) > 0 {
+				equals = make([][]byte, 1)
+				var k []byte
+				key := scan.Seek[0]
+				if key != nil {
+					if k, what = curePrimaryKey(key); what == "after" {
+						return nil, true
+					}
+				}
+				equals[0] = k
+
+			} else {
+				filters = make([]*protobuf.CompositeElementFilter, len(scan.Filter))
+				if scan.Filter != nil {
+					for j, f := range scan.Filter {
+						var l, h []byte
+						if f.Low != common.MinUnbounded { // Ignore if unbounded
+							if f.Low != nil {
+								if l, what = curePrimaryKey(f.Low); what == "after" {
+									return nil, true
+								}
+							}
+						}
+						if f.High != common.MaxUnbounded { // Ignore if unbounded
+							if f.High != nil {
+								if h, what = curePrimaryKey(f.High); what == "before" {
+									return nil, true
+								}
+							}
+						}
+
+						fl := &protobuf.CompositeElementFilter{
+							Low: l, High: h, Inclusion: proto.Uint32(uint32(f.Inclusion)),
+						}
+
+						filters[j] = fl
+					}
+				}
+			}
+			s := &protobuf.Scan{
+				Filters: filters,
+				Equals:  equals,
+			}
+			protoScans[i] = s
+		}
+	}
+
+	//IndexProjection
+	var protoProjection *protobuf.IndexProjection
+	if projection != nil {
+		protoProjection = &protobuf.IndexProjection{
+			EntryKeys:  projection.EntryKeys,
+			PrimaryKey: proto.Bool(projection.PrimaryKey),
+		}
 	}
 
 	connectn, err := c.pool.Get()

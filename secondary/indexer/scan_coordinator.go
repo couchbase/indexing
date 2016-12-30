@@ -704,6 +704,10 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 							scan.ScanType = RangeReq
 						}
 
+						if r.isPrimary {
+							scan.ScanType = RangeReq
+						}
+
 						scans = append(scans, scan)
 						filtersList = nil
 					}
@@ -744,39 +748,40 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		var filters []Filter
 		var points []IndexPoint
 
-		for _, protoScan := range protoScans {
+		if r.isPrimary {
+			for _, protoScan := range protoScans {
+				if len(protoScan.Equals) != 0 {
+					var filter Filter
+					var key IndexKey
+					if key, localErr = newKey(protoScan.Equals[0]); localErr != nil {
+						localErr = fmt.Errorf("Invalid equal key %s (%s)", string(protoScan.Equals[0]), localErr)
+						return
+					}
+					filter.Low = key
+					filter.High = key
+					filters = append(filters, filter)
 
-			if len(protoScan.Equals) != 0 {
-				//Encode the equals keys
-				var filter Filter
-				if localErr = fillFilterEquals(protoScan, &filter); localErr != nil {
+					p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
+					p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
+					points = append(points, p1, p2)
+					continue
+				}
+
+				// If there are no filters in scan, it is ScanAll
+				if len(protoScan.Filters) == 0 {
+					r.Scans = make([]Scan, 1)
+					r.Scans[0] = getScanAll()
 					return
 				}
-				filters = append(filters, filter)
 
-				p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
-				p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
-				points = append(points, p1, p2)
-				continue
-			}
+				// if all scan filters are (nil, nil), it is ScanAll
+				if areFiltersNil(protoScan) {
+					r.Scans = make([]Scan, 1)
+					r.Scans[0] = getScanAll()
+					return
+				}
 
-			// If there are no filters in scan, it is ScanAll
-			if len(protoScan.Filters) == 0 {
-				r.Scans = make([]Scan, 1)
-				r.Scans[0] = getScanAll()
-				return
-			}
-
-			// if all scan filters are (nil, nil), it is ScanAll
-			if areFiltersNil(protoScan) {
-				r.Scans = make([]Scan, 1)
-				r.Scans[0] = getScanAll()
-				return
-			}
-
-			var compFilters []CompositeElementFilter
-			// Encode Filters
-			for _, fl := range protoScan.Filters {
+				fl := protoScan.Filters[0]
 				if l, localErr = newLowKey(fl.Low); localErr != nil {
 					localErr = fmt.Errorf("Invalid low key %s (%s)", string(fl.Low), localErr)
 					return
@@ -786,32 +791,87 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 					localErr = fmt.Errorf("Invalid high key %s (%s)", string(fl.High), localErr)
 					return
 				}
-
-				compfil := CompositeElementFilter{
-					Low:       l,
-					High:      h,
-					Inclusion: Inclusion(fl.GetInclusion()),
+				filter := Filter{
+					CompositeFilters: nil,
+					Inclusion:        Inclusion(fl.GetInclusion()),
+					Low:              l,
+					High:             h,
 				}
-				compFilters = append(compFilters, compfil)
+				filters = append(filters, filter)
+				p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
+				p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
+				points = append(points, p1, p2)
 			}
+		} else {
+			for _, protoScan := range protoScans {
 
-			filter := Filter{
-				CompositeFilters: compFilters,
-				Inclusion:        Both,
+				if len(protoScan.Equals) != 0 {
+					//Encode the equals keys
+					var filter Filter
+					if localErr = fillFilterEquals(protoScan, &filter); localErr != nil {
+						return
+					}
+					filters = append(filters, filter)
+
+					p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
+					p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
+					points = append(points, p1, p2)
+					continue
+				}
+
+				// If there are no filters in scan, it is ScanAll
+				if len(protoScan.Filters) == 0 {
+					r.Scans = make([]Scan, 1)
+					r.Scans[0] = getScanAll()
+					return
+				}
+
+				// if all scan filters are (nil, nil), it is ScanAll
+				if areFiltersNil(protoScan) {
+					r.Scans = make([]Scan, 1)
+					r.Scans[0] = getScanAll()
+					return
+				}
+
+				var compFilters []CompositeElementFilter
+				// Encode Filters
+				for _, fl := range protoScan.Filters {
+					if l, localErr = newLowKey(fl.Low); localErr != nil {
+						localErr = fmt.Errorf("Invalid low key %s (%s)", string(fl.Low), localErr)
+						return
+					}
+
+					if h, localErr = newHighKey(fl.High); localErr != nil {
+						localErr = fmt.Errorf("Invalid high key %s (%s)", string(fl.High), localErr)
+						return
+					}
+
+					compfil := CompositeElementFilter{
+						Low:       l,
+						High:      h,
+						Inclusion: Inclusion(fl.GetInclusion()),
+					}
+					compFilters = append(compFilters, compfil)
+				}
+
+				filter := Filter{
+					CompositeFilters: compFilters,
+					Inclusion:        Both,
+				}
+
+				if localErr = fillFilterLowHigh(compFilters, &filter); localErr != nil {
+					return
+				}
+
+				filters = append(filters, filter)
+
+				p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
+				p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
+				points = append(points, p1, p2)
+
+				// TODO: Does single Composite Element Filter
+				// mean no filtering? Revisit single CEF
 			}
-
-			if localErr = fillFilterLowHigh(compFilters, &filter); localErr != nil {
-				return
-			}
-
-			filters = append(filters, filter)
-
-			p1 := IndexPoint{Value: filter.Low, FilterId: len(filters) - 1}
-			p2 := IndexPoint{Value: filter.High, FilterId: len(filters) - 1}
-			points = append(points, p1, p2)
-
-			// TODO: Does single Composite Element Filter
-			// mean no filtering? Revisit single CEF
 		}
 
 		// Sort Index Points

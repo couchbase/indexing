@@ -701,9 +701,9 @@ func (si *secondaryIndex) Scan(
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 }
 
-// Scan implement Index2 interface.
+// Scan2 implement Index2 interface.
 func (si *secondaryIndex) Scan2(
-	requestId string, spans datastore.Spans2, reverse, distinct bool,
+	requestId string, spans datastore.Spans2, reverse, distinct, ordered bool,
 	projection *datastore.IndexProjection, offset, limit int64,
 	cons datastore.ScanConsistency, vector timestamp.Vector,
 	conn *datastore.IndexConnection) {
@@ -1269,6 +1269,7 @@ func (gsi *gsiKeyspace) backfillMonitor(period time.Duration) {
 func n1qlspanstogsi(spans datastore.Spans2) qclient.Scans {
 	sc := make(qclient.Scans, len(spans))
 	for i, s := range spans {
+		sc[i] = &qclient.Scan{}
 		if len(s.Seek) > 0 {
 			sc[i].Seek = values2SKey(s.Seek)
 		} else {
@@ -1279,7 +1280,7 @@ func n1qlspanstogsi(spans datastore.Spans2) qclient.Scans {
 }
 
 func n1qlrangestogsi(ranges []*datastore.Range2) []*qclient.CompositeElementFilter {
-	fl := make([]*qclient.CompositeElementFilter, len(ranges))
+	fl := make([]*qclient.CompositeElementFilter, 0, len(ranges))
 	for _, r := range ranges {
 		var l, h interface{}
 		if r.Low == nil {
@@ -1302,7 +1303,11 @@ func n1qlrangestogsi(ranges []*datastore.Range2) []*qclient.CompositeElementFilt
 }
 
 func n1qlprojectiontogsi(projection *datastore.IndexProjection) *qclient.IndexProjection {
-	entrykeys := make([]int64, len(projection.EntryKeys))
+	if projection == nil {
+		return nil
+	}
+
+	entrykeys := make([]int64, 0, len(projection.EntryKeys))
 	for _, key := range projection.EntryKeys {
 		entrykeys = append(entrykeys, int64(key))
 	}
