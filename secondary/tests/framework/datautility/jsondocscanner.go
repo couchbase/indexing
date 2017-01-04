@@ -665,6 +665,9 @@ func applyFilters(compositekeys []interface{}, compositefilters []*qc.CompositeE
 	var err error
 	var low, high, ck []byte
 	for i, filter := range compositefilters {
+		checkLow := (filter.Low != c.MinUnbounded)
+		checkHigh := (filter.High != c.MaxUnbounded)
+
 		ck, err = json.Marshal(compositekeys[i])
 		if err != nil {
 			log.Printf("Error in marshalling value %v", compositekeys[i])
@@ -686,23 +689,51 @@ func applyFilters(compositekeys []interface{}, compositefilters []*qc.CompositeE
 		switch filter.Inclusion {
 		case 0:
 			// if ck > low and ck < high
-			if !(bytes.Compare(ck, low) > 0 && bytes.Compare(ck, high) < 0) {
-				return false
+			if checkLow {
+				if bytes.Compare(ck, low) <= 0 {
+					return false
+				}
+			}
+			if checkHigh {
+				if bytes.Compare(ck, high) >= 0 {
+					return false
+				}
 			}
 		case 1:
 			// if ck >= low and ck < high
-			if !(bytes.Compare(ck, low) >= 0 && bytes.Compare(ck, high) < 0) {
-				return false
+			if checkLow {
+				if bytes.Compare(ck, low) < 0 {
+					return false
+				}
+			}
+			if checkHigh {
+				if bytes.Compare(ck, high) >= 0 {
+					return false
+				}
 			}
 		case 2:
 			// if ck > low and ck <= high
-			if !(bytes.Compare(ck, low) > 0 && bytes.Compare(ck, high) <= 0) {
-				return false
+			if checkLow {
+				if bytes.Compare(ck, low) <= 0 {
+					return false
+				}
+			}
+			if checkHigh {
+				if bytes.Compare(ck, high) > 0 {
+					return false
+				}
 			}
 		case 3:
 			// if ck >= low and ck <= high
-			if !(bytes.Compare(ck, low) >= 0 && bytes.Compare(ck, high) <= 0) {
-				return false
+			if checkLow {
+				if bytes.Compare(ck, low) < 0 {
+					return false
+				}
+			}
+			if checkHigh {
+				if bytes.Compare(ck, high) > 0 {
+					return false
+				}
 			}
 		}
 	}
