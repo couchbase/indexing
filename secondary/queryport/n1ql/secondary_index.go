@@ -751,6 +751,23 @@ func (si *secondaryIndex) Scan2(
 	atomic.AddInt64(&si.gsi.scandur, int64(time.Since(starttm)))
 }
 
+// RangeKey2 implements Index2{} interface.
+func (si *secondaryIndex) RangeKey2() datastore.IndexKeys {
+	if si != nil && si.secExprs != nil {
+		idxkeys := make(datastore.IndexKeys, 0, len(si.secExprs))
+		for _, exprS := range si.secExprs {
+			expr, _ := parser.Parse(exprS)
+			idxkey := &datastore.IndexKey{
+				Expr: expr,
+				Desc: false,
+			}
+			idxkeys = append(idxkeys, idxkey)
+		}
+		return idxkeys
+	}
+	return nil
+}
+
 // Scan implement PrimaryIndex{} interface.
 func (si *secondaryIndex) ScanEntries(
 	requestId string, limit int64, cons datastore.ScanConsistency,

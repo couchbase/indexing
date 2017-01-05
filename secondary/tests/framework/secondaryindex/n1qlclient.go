@@ -14,6 +14,7 @@ import (
 	"github.com/couchbase/query/value"
 	"log"
 	"strconv"
+	"time"
 )
 
 // Creates an index and waits for it to become active
@@ -56,15 +57,20 @@ func N1QLRange(indexName, bucketName, server string, low, high []interface{}, in
 		return nil, err
 	}
 
+	var start time.Time
 	go func() {
 		l, h := skey2qkey(low), skey2qkey(high)
 		rng := datastore.Range{Low: l, High: h, Inclusion: datastore.Inclusion(inclusion)}
 		span := &datastore.Span{Seek: nil, Range: rng}
 		cons := getConsistency(consistency)
+		start = time.Now()
 		index.Scan(requestid, span, false, limit, cons, nil, conn)
 	}()
 
-	return getresultsfromchannel(conn.EntryChannel()), nil
+	results := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
+	elapsed := time.Since(start)
+	tc.LogPerfStat("Range", elapsed)
+	return results, nil
 }
 
 func N1QLLookup(indexName, bucketName, server string, values []interface{},
@@ -85,15 +91,20 @@ func N1QLLookup(indexName, bucketName, server string, values []interface{},
 		return nil, err
 	}
 
+	var start time.Time
 	go func() {
 		l, h := skey2qkey(values), skey2qkey(values)
 		rng := datastore.Range{Low: l, High: h, Inclusion: datastore.BOTH}
 		span := &datastore.Span{Seek: nil, Range: rng}
 		cons := getConsistency(consistency)
+		start = time.Now()
 		index.Scan(requestid, span, false, limit, cons, nil, conn)
 	}()
 
-	return getresultsfromchannel(conn.EntryChannel()), nil
+	results := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
+	elapsed := time.Since(start)
+	tc.LogPerfStat("Lookup", elapsed)
+	return results, nil
 }
 
 func N1QLScanAll(indexName, bucketName, server string, limit int64,
@@ -114,14 +125,19 @@ func N1QLScanAll(indexName, bucketName, server string, limit int64,
 		return nil, err
 	}
 
+	var start time.Time
 	go func() {
 		rng := datastore.Range{Low: nil, High: nil, Inclusion: datastore.BOTH}
 		span := &datastore.Span{Seek: nil, Range: rng}
 		cons := getConsistency(consistency)
+		start = time.Now()
 		index.Scan(requestid, span, false, limit, cons, nil, conn)
 	}()
 
-	return getresultsfromchannel(conn.EntryChannel()), nil
+	results := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
+	elapsed := time.Since(start)
+	tc.LogPerfStat("ScanAll", elapsed)
+	return results, nil
 }
 
 func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, distinct bool,
@@ -142,6 +158,7 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 		return nil, err
 	}
 
+	var start time.Time
 	go func() {
 		spans2 := make(datastore.Spans2, len(scans))
 		for i, scan := range scans {
@@ -155,14 +172,18 @@ func N1QLScans(indexName, bucketName, server string, scans qc.Scans, reverse, di
 		cons := getConsistency(consistency)
 		ordered := true
 		if useScan2 {
+			start = time.Now()
 			index2.Scan2(requestid, spans2, reverse, distinct, ordered, nil,
 				offset, limit, cons, nil, conn)
 		} else {
-			log.Fatalf("Indexer does not suppor Scan2")
+			log.Fatalf("Indexer does not support Index2 API. Cannot call Scan2 method.")
 		}
 	}()
 
-	return getresultsfromchannel(conn.EntryChannel()), nil
+	results := getresultsfromchannel(conn.EntryChannel(), index.IsPrimary())
+	elapsed := time.Since(start)
+	tc.LogPerfStat("MultiScan", elapsed)
+	return results, nil
 }
 
 func filtertoranges2(filters []*qc.CompositeElementFilter) datastore.Ranges2 {
@@ -195,13 +216,17 @@ func getConsistency(consistency c.Consistency) datastore.ScanConsistency {
 	return cons
 }
 
-func getresultsfromchannel(ch datastore.EntryChannel) tc.ScanResponse {
+func getresultsfromchannel(ch datastore.EntryChannel, isprimary bool) tc.ScanResponse {
 	scanResults := make(tc.ScanResponse)
 	ok := true
 	for ok {
 		entry, ok := <-ch
 		if ok {
-			scanResults[entry.PrimaryKey] = values2SKey(entry.EntryKey)
+			if isprimary {
+				scanResults[entry.PrimaryKey] = nil
+			} else {
+				scanResults[entry.PrimaryKey] = values2SKey(entry.EntryKey)
+			}
 		} else {
 			break
 		}
@@ -213,6 +238,9 @@ func interfaceton1qlvalue(key interface{}) value.Value {
 	if s, ok := key.(string); ok && collatejson.MissingLiteral.Equal(s) {
 		return value.NewMissingValue()
 	} else {
+		if key == c.MinUnbounded || key == c.MaxUnbounded {
+			return nil
+		}
 		return value.NewValue(key)
 	}
 }

@@ -76,6 +76,13 @@ func TestMultiScanScenarios(t *testing.T) {
 	runMultiScan(getSeekAndFilters_NonOverlapping(), false, false, 0, defaultlimit, false, false, "SeekAndFilters_NonOverlapping", t)
 	runMultiScan(getSeekAndFilters_Overlapping(), false, false, 0, defaultlimit, false, false, "SeekAndFilters_Overlapping", t)
 
+	// low-high unbounded , low>high
+	runMultiScan(getSimpleRangeLowUnbounded(), false, false, 0, defaultlimit, false, false, "SimpleRangeLowUnbounded", t)
+	runMultiScan(getSimpleRangeHighUnbounded(), false, false, 0, defaultlimit, false, false, "SimpleRangeHighUnbounded", t)
+	runMultiScan(getSimpleRangeMultipleUnbounded(), false, false, 0, defaultlimit, false, false, "SimpleRangeMultipleUnbounded", t)
+	runMultiScan(getFiltersWithUnbounded(), false, false, 0, defaultlimit, false, false, "FiltersWithUnbounded", t)
+	//runMultiScan(getFiltersLowGreaterThanHigh(), false, false, 0, defaultlimit, false, false, "FiltersLowGreaterThanHigh", t)
+
 	log.Printf("\n\n--------- Simple Index with 1 field ---------")
 	var index2 = "index_company"
 	fields := []string{"company"}
@@ -93,6 +100,7 @@ func TestMultiScanScenarios(t *testing.T) {
 	runMultiScanWithIndex(index3, fields, get3FieldsSingleSeek(), false, false, 0, defaultlimit, false, false, "3FieldsSingleSeek", t)
 	runMultiScanWithIndex(index3, fields, get3FieldsMultipleSeeks(), false, false, 0, defaultlimit, false, false, "3FieldsMultipleSeeks", t)
 	runMultiScanWithIndex(index3, fields, get3FieldsMultipleSeeks_Identical(), false, false, 0, defaultlimit, false, false, "3FieldsMultipleSeeks_Identical", t)
+
 }
 
 func TestMultiScanOffset(t *testing.T) {
@@ -117,6 +125,13 @@ func TestMultiScanOffset(t *testing.T) {
 
 	runMultiScan(getSeekAndFilters_NonOverlapping(), false, false, 121, defaultlimit, false, true, "SeekAndFilters_NonOverlapping", t)
 	runMultiScan(getSeekAndFilters_Overlapping(), false, false, 254, defaultlimit, false, true, "SeekAndFilters_Overlapping", t)
+
+	// low-high unbounded , low>high
+	runMultiScan(getSimpleRangeLowUnbounded(), false, false, 0, defaultlimit, false, false, "SimpleRangeLowUnbounded", t)
+	runMultiScan(getSimpleRangeHighUnbounded(), false, false, 0, defaultlimit, false, false, "SimpleRangeHighUnbounded", t)
+	runMultiScan(getSimpleRangeMultipleUnbounded(), false, false, 0, defaultlimit, false, false, "SimpleRangeMultipleUnbounded", t)
+	runMultiScan(getFiltersWithUnbounded(), false, false, 0, defaultlimit, false, false, "FiltersWithUnbounded", t)
+	//runMultiScan(getFiltersLowGreaterThanHigh(), false, false, 0, defaultlimit, false, false, "FiltersLowGreaterThanHigh", t)
 
 	log.Printf("\n\n--------- Simple Index with 1 field ---------")
 	var index2 = "index_company"
@@ -167,6 +182,13 @@ func SkipTestScansDistinct(t *testing.T) {
 
 	runMultiScan(getSeekAndFilters_NonOverlapping(), false, true, 0, defaultlimit, false, false, "SeekAndFilters_NonOverlapping", t)
 	runMultiScan(getSeekAndFilters_Overlapping(), false, true, 0, defaultlimit, false, false, "SeekAndFilters_Overlapping", t)
+
+	// low-high unbounded , low>high
+	runMultiScan(getSimpleRangeLowUnbounded(), false, false, 0, defaultlimit, false, false, "SimpleRangeLowUnbounded", t)
+	runMultiScan(getSimpleRangeHighUnbounded(), false, false, 0, defaultlimit, false, false, "SimpleRangeHighUnbounded", t)
+	runMultiScan(getSimpleRangeMultipleUnbounded(), false, false, 0, defaultlimit, false, false, "SimpleRangeMultipleUnbounded", t)
+	runMultiScan(getFiltersWithUnbounded(), false, false, 0, defaultlimit, false, false, "FiltersWithUnbounded", t)
+	//runMultiScan(getFiltersLowGreaterThanHigh(), false, false, 0, defaultlimit, false, false, "FiltersLowGreaterThanHigh", t)
 
 	log.Printf("\n\n--------- Simple Index with 1 field ---------")
 	var index2 = "index_company"
@@ -449,6 +471,65 @@ func getSeekAndFilters_Overlapping() qc.Scans {
 	return scans
 }
 
+func getSimpleRangeLowUnbounded() qc.Scans {
+	scans := make(qc.Scans, 1)
+	filter1 := make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: "N", Inclusion: qc.Inclusion(uint32(1))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	return scans
+}
+
+func getSimpleRangeHighUnbounded() qc.Scans {
+	scans := make(qc.Scans, 1)
+	filter1 := make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "P", High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(1))}
+	scans[0] = &qc.Scan{Filter: filter1}
+	return scans
+}
+
+func getSimpleRangeMultipleUnbounded() qc.Scans {
+	scans := make(qc.Scans, 2)
+	filter1 := make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: "N", Inclusion: qc.Inclusion(uint32(1))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	filter2 := make([]*qc.CompositeElementFilter, 1)
+	filter2[0] = &qc.CompositeElementFilter{Low: "D", High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(1))}
+	scans[1] = &qc.Scan{Filter: filter2}
+	return scans
+}
+
+func getFiltersWithUnbounded() qc.Scans {
+	scans := make(qc.Scans, 2)
+	filter1 := make([]*qc.CompositeElementFilter, 2)
+	filter1[0] = &qc.CompositeElementFilter{Low: "E", High: "L", Inclusion: qc.Inclusion(uint32(0))}
+	filter1[1] = &qc.CompositeElementFilter{Low: c.MinUnbounded, High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(1))}
+
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	filter2 := make([]*qc.CompositeElementFilter, 2)
+	filter2[0] = &qc.CompositeElementFilter{Low: "P", High: "T", Inclusion: qc.Inclusion(uint32(2))}
+	filter2[1] = &qc.CompositeElementFilter{Low: "Q", High: c.MaxUnbounded, Inclusion: qc.Inclusion(uint32(3))}
+	scans[1] = &qc.Scan{Filter: filter2}
+	return scans
+
+	return scans
+}
+
+func getFiltersLowGreaterThanHigh() qc.Scans {
+	scans := make(qc.Scans, 2)
+	filter1 := make([]*qc.CompositeElementFilter, 1)
+	filter1[0] = &qc.CompositeElementFilter{Low: "L", High: "E", Inclusion: qc.Inclusion(uint32(0))}
+	scans[0] = &qc.Scan{Filter: filter1}
+
+	filter2 := make([]*qc.CompositeElementFilter, 2)
+	filter2[0] = &qc.CompositeElementFilter{Low: "P", High: "T", Inclusion: qc.Inclusion(uint32(2))}
+	filter2[1] = &qc.CompositeElementFilter{Low: "Q", High: "Z", Inclusion: qc.Inclusion(uint32(3))}
+	scans[1] = &qc.Scan{Filter: filter2}
+
+	return scans
+}
+
 func getSingleIndexSimpleRange() qc.Scans {
 	scans := make(qc.Scans, 1)
 	filter1 := make([]*qc.CompositeElementFilter, 1)
@@ -531,6 +612,8 @@ func getPrimaryRange() qc.Scans {
 }
 
 // Test Cases -
+
+// Primary index - Seek with nil
 
 // Nil Span: Caused error
 
