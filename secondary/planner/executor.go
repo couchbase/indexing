@@ -117,7 +117,7 @@ type TransferToken struct {
 	RebalId   string
 	State     string
 	InstId    common.IndexInstId
-	IndexDefn common.IndexDefn
+	IndexInst common.IndexInst
 }
 
 func ExecuteRebalance(clusterUrl string, topologyChange service.TopologyChange, masterId string, ejectOnly bool) (map[string]*TransferToken, error) {
@@ -184,7 +184,7 @@ func genTransferToken(solution *Solution, masterId string, topologyChange servic
 					RebalId:   topologyChange.ID,
 					State:     "TransferTokenCreated",
 					InstId:    index.InstId,
-					IndexDefn: *index.Definition,
+					IndexInst: *index.Instance,
 				}
 
 				ustr, _ := common.NewUUID()
@@ -447,8 +447,8 @@ func genCreateIndexDDL(ddl string, solution *Solution) error {
 		buckets := make(map[string][]*IndexUsage)
 
 		for _, index := range indexer.Indexes {
-			if index.initialNode == nil && index.Definition != nil {
-				buckets[index.Definition.Bucket] = append(buckets[index.Definition.Bucket], index)
+			if index.initialNode == nil && index.Instance != nil {
+				buckets[index.Instance.Defn.Bucket] = append(buckets[index.Instance.Defn.Bucket], index)
 			}
 		}
 
@@ -456,18 +456,18 @@ func genCreateIndexDDL(ddl string, solution *Solution) error {
 			var stmts string
 
 			for _, index := range indexes {
-				index.Definition.Nodes = make([]string, 1)
-				index.Definition.Nodes[0] = indexer.NodeId
-				index.Definition.Deferred = true
+				index.Instance.Defn.Nodes = make([]string, 1)
+				index.Instance.Defn.Nodes[0] = indexer.NodeId
+				index.Instance.Defn.Deferred = true
 
-				stmt := common.IndexStatement(*index.Definition) + "\n"
+				stmt := common.IndexStatement(index.Instance.Defn) + "\n"
 
 				stmts += stmt
 			}
 
 			buildStmt := fmt.Sprintf("BUILD INDEX ON %v(", bucket)
 			for i := 0; i < len(indexes); i++ {
-				buildStmt += indexes[i].Definition.Name
+				buildStmt += indexes[i].Instance.Defn.Name
 				if i < len(indexes)-1 {
 					buildStmt += ","
 				}
@@ -816,14 +816,15 @@ func indexUsageFromSpec(sizing SizingMethod, spec *IndexSpec) ([]*IndexUsage, er
 			index.Name = fmt.Sprintf("%v_%v", spec.Name, i)
 		}
 
-		index.Definition = &common.IndexDefn{}
-		index.Definition.Name = index.Name
-		index.Definition.Bucket = spec.Bucket
-		index.Definition.IsPrimary = spec.IsPrimary
-		index.Definition.SecExprs = spec.SecExprs
-		index.Definition.WhereExpr = spec.WhereExpr
-		index.Definition.Immutable = spec.Immutable
-		index.Definition.IsArrayIndex = spec.IsArrayIndex
+		index.Instance = &common.IndexInst{}
+		index.Instance.InstId = index.InstId
+		index.Instance.Defn.Name = index.Name
+		index.Instance.Defn.Bucket = spec.Bucket
+		index.Instance.Defn.IsPrimary = spec.IsPrimary
+		index.Instance.Defn.SecExprs = spec.SecExprs
+		index.Instance.Defn.WhereExpr = spec.WhereExpr
+		index.Instance.Defn.Immutable = spec.Immutable
+		index.Instance.Defn.IsArrayIndex = spec.IsArrayIndex
 
 		index.NumOfDocs = spec.NumDoc
 		index.AvgDocKeySize = spec.DocKeySize

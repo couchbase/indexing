@@ -183,7 +183,8 @@ type IndexUsage struct {
 	ActualKeySize     uint64 `json:"actualKeySize"`
 
 	// input: index definition (optional)
-	Definition *common.IndexDefn `json:"definition,omitempty"`
+	//Definition *common.IndexDefn `json:"definition,omitempty"`
+	Instance *common.IndexInst `json:"instance,omitempty"`
 
 	// input: node where index initially placed (optional)
 	initialNode *IndexerNode
@@ -1013,9 +1014,9 @@ func (s *Solution) findNumEquivalentIndex(u *IndexUsage) int {
 
 			} else {
 				// check equivalent index
-				if index.Definition != nil &&
-					u.Definition != nil &&
-					common.IsEquivalentIndex(index.Definition, u.Definition) {
+				if index.Instance != nil &&
+					u.Instance != nil &&
+					common.IsEquivalentIndex(&index.Instance.Defn, &u.Instance.Defn) {
 
 					count++
 				}
@@ -1206,9 +1207,9 @@ func (c *IndexerConstraint) CanAddIndex(s *Solution, n *IndexerNode, u *IndexUsa
 		}
 
 		// check equivalent index
-		if index.Definition != nil &&
-			u.Definition != nil &&
-			common.IsEquivalentIndex(index.Definition, u.Definition) {
+		if index.Instance != nil &&
+			u.Instance != nil &&
+			common.IsEquivalentIndex(&index.Instance.Defn, &u.Instance.Defn) {
 			return AvailabilityViolation
 		}
 	}
@@ -1271,9 +1272,9 @@ func (c *IndexerConstraint) CanSwapIndex(sol *Solution, n *IndexerNode, s *Index
 		}
 
 		// check equivalent index
-		if index.Definition != nil &&
-			s.Definition != nil &&
-			common.IsEquivalentIndex(index.Definition, s.Definition) {
+		if index.Instance != nil &&
+			s.Instance != nil &&
+			common.IsEquivalentIndex(&index.Instance.Defn, &s.Instance.Defn) {
 			return AvailabilityViolation
 		}
 	}
@@ -1370,9 +1371,9 @@ func (c *IndexerConstraint) SatisfyNodeConstraint(s *Solution, n *IndexerNode, e
 			}
 
 			// check equivalent index
-			if n.Indexes[i].Definition != nil &&
-				n.Indexes[j].Definition != nil &&
-				common.IsEquivalentIndex(n.Indexes[i].Definition, n.Indexes[j].Definition) {
+			if n.Indexes[i].Instance != nil &&
+				n.Indexes[j].Instance != nil &&
+				common.IsEquivalentIndex(&n.Indexes[i].Instance.Defn, &n.Indexes[j].Instance.Defn) {
 				return false
 			}
 		}

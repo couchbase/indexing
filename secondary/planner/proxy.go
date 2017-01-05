@@ -166,8 +166,14 @@ func getIndexLayout(clusterUrl string) ([]*IndexerNode, error) {
 				index.IsMOI = (defn.Using == common.IndexType(common.MemoryOptimized) || defn.Using == common.IndexType(common.MemDB))
 
 				// update internal info
-				index.Definition = defn
 				index.initialNode = node
+				index.Instance = &common.IndexInst{
+					InstId: common.IndexInstId(inst.InstId),
+					Defn:   *defn,
+					State:  common.IndexState(inst.State),
+					Stream: common.StreamId(inst.StreamId),
+					Error:  inst.Error,
+				}
 
 				node.Indexes = append(node.Indexes, index)
 			}

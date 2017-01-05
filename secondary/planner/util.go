@@ -400,9 +400,9 @@ func violateHA(indexers []*IndexerNode) bool {
 				}
 
 				// check equivalent index
-				if n.Indexes[i].Definition != nil &&
-					n.Indexes[j].Definition != nil &&
-					common.IsEquivalentIndex(n.Indexes[i].Definition, n.Indexes[j].Definition) {
+				if n.Indexes[i].Instance != nil &&
+					n.Indexes[j].Instance != nil &&
+					common.IsEquivalentIndex(&n.Indexes[i].Instance.Defn, &n.Indexes[j].Instance.Defn) {
 					return false
 				}
 			}
