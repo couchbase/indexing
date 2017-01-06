@@ -981,6 +981,7 @@ func (s *scanCoordinator) newRequest(protoReq interface{},
 		r.Incl = Inclusion(req.GetSpan().GetRange().GetInclusion())
 		r.Limit = req.GetLimit()
 		r.Reverse = req.GetReverse()
+		r.Distinct = req.GetDistinct()
 		r.Indexprojection = req.GetIndexprojection()
 		r.Offset = req.GetOffset()
 		if isBootstrapMode {

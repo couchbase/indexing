@@ -100,7 +100,6 @@ func TestMultiScanScenarios(t *testing.T) {
 	runMultiScanWithIndex(index3, fields, get3FieldsSingleSeek(), false, false, 0, defaultlimit, false, false, "3FieldsSingleSeek", t)
 	runMultiScanWithIndex(index3, fields, get3FieldsMultipleSeeks(), false, false, 0, defaultlimit, false, false, "3FieldsMultipleSeeks", t)
 	runMultiScanWithIndex(index3, fields, get3FieldsMultipleSeeks_Identical(), false, false, 0, defaultlimit, false, false, "3FieldsMultipleSeeks_Identical", t)
-
 }
 
 func TestMultiScanOffset(t *testing.T) {
@@ -160,7 +159,7 @@ func TestMultiScanPrimaryIndex(t *testing.T) {
 	runMultiScanForPrimaryIndex(index4, getScanAllNoFilter(), false, false, 0, defaultlimit, true, false, "PrimaryScanAllNoFilter", t)
 }
 
-func SkipTestScansDistinct(t *testing.T) {
+func TestMultiScanDistinct(t *testing.T) {
 	log.Printf("In TestScansDistinct()")
 
 	log.Printf("\n\n--------- Composite Index with 2 fields ---------")
@@ -634,3 +633,6 @@ func getPrimaryRange() qc.Scans {
 // Inclusions variations
 
 // Low > high scenarios
+
+// Out of order non-overlapping
+// out of order overlapping
