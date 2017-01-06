@@ -186,10 +186,14 @@ func (p *Projector) GetFeedConfig() c.Config {
 // GetFeed object for `topic`.
 // - return ErrorTopicMissing if topic is not started.
 func (p *Projector) GetFeed(topic string) (*Feed, error) {
-	p.rw.RLock()
-	defer p.rw.RUnlock()
+	getfeed := func() (*Feed, bool) {
+		p.rw.RLock()
+		defer p.rw.RUnlock()
+		feed, ok := p.topics[topic]
+		return feed, ok
+	}
 
-	if feed, ok := p.topics[topic]; ok {
+	if feed, ok := getfeed(); ok {
 		if err := feed.Ping(); err != nil {
 			return nil, err
 		}
