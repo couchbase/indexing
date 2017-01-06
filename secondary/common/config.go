@@ -936,6 +936,13 @@ var SystemConfig = Config{
 		false, // mutable
 		false, // case-insensitive
 	},
+	"indexer.mutation_manager.maxQueueMem": ConfigValue{
+		uint64(512 * 1024 * 1024),
+		"Max memory used by the mutation queue",
+		uint64(512 * 1024 * 1024),
+		false,
+		false,
+	},
 	"indexer.settings.gc_percent": ConfigValue{
 		100,
 		"(GOGC) Ratio of current heap size over heap size from last GC." +

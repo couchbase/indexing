@@ -1071,6 +1071,11 @@ func (m *mutationMgr) setMaxMemoryFromQuota() {
 	fracQueueMem := getMutationQueueMemFrac(m.config)
 
 	maxMem := int64(fracQueueMem * float64(memQuota))
+	maxMemHard := int64(m.config["mutation_manager.maxQueueMem"].Uint64())
+	if maxMem > maxMemHard {
+		maxMem = maxMemHard
+	}
+
 	platform.StoreInt64(&m.maxMemory, maxMem)
 	logging.Infof("MutationMgr::MaxQueueMemoryQuota %v", maxMem)
 

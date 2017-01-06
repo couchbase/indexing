@@ -206,7 +206,9 @@ func NewIndexer(config common.Config) (Indexer, Message) {
 	NewRestServer(idx.config["clusterAddr"].String())
 
 	// Read memquota setting
-	idx.stats.memoryQuota.Set(int64(idx.config["settings.memory_quota"].Uint64()))
+	memQuota := int64(idx.config["settings.memory_quota"].Uint64())
+	idx.stats.memoryQuota.Set(memQuota)
+	plasma.SetMemoryQuota(int64(float64(memQuota) * PLASMA_MEMQUOTA_FRAC))
 	memdb.Debug(idx.config["settings.moi.debug"].Bool())
 	logging.Infof("Indexer::NewIndexer Starting with Vbuckets %v", idx.config["numVbuckets"].Int())
 
