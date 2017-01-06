@@ -43,7 +43,7 @@ GoInstall (TARGET indexer PACKAGE github.com/couchbase/indexing/secondary/cmd/in
   GOTAGS "${TAGS}"
   LDFLAGS "${_indexer_ldflags}"
   INSTALL_PATH bin OUTPUT indexer
-  GOVERSION 1.6.3)
+  GOVERSION 1.7.3)
 
 GoInstall (TARGET projector PACKAGE github.com/couchbase/indexing/secondary/cmd/projector
   GOPATH "${PROJECT_SOURCE_DIR}/../../../.." "${GODEPSDIR}"
